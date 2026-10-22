@@ -2,6 +2,42 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "redis-high-throughput": {
+    "links": [
+      "redis-basics",
+      "valkey-vs-redis",
+      "redis-cluster",
+      "connection-pool",
+      "redis-memory-eviction",
+      "caching-strategies",
+      "cache-invalidation",
+      "tail-latency"
+    ],
+    "mentions": [
+      "linux-processes-signals",
+      "ds-hash-map",
+      "event-loop",
+      "vpc-basics"
+    ]
+  },
+  "valkey-vs-redis": {
+    "links": [
+      "redis-basics",
+      "redis-replication-sentinel",
+      "redis-high-throughput",
+      "redis-persistence-ha",
+      "caching-strategies"
+    ],
+    "mentions": [
+      "nginx-basics",
+      "db-migration-tools",
+      "ds-hash-map",
+      "transactional-outbox",
+      "osi-in-practice",
+      "db-replication-sharding",
+      "dns"
+    ]
+  },
   "spring-boot-observability": {
     "links": [
       "observability-basics",
@@ -10410,6 +10446,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics"
     ],
     "mentions": [
+      "valkey-vs-redis",
       "vpc-basics"
     ]
   },
@@ -11885,7 +11922,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer",
       "event-loop",
       "redis-persistence-ha",
-      "caching-strategies"
+      "caching-strategies",
+      "valkey-vs-redis"
     ],
     "mentions": [
       "redis-cluster",

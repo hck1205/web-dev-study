@@ -452,6 +452,7 @@ import { REALTIME_COMMUNICATION } from "./realtime-communication";
 import { RECURSION_BACKTRACKING } from "./recursion-backtracking";
 import { REDIS_BASICS } from "./redis-basics";
 import { REDIS_CLUSTER } from "./redis-cluster";
+import { REDIS_HIGH_THROUGHPUT } from "./redis-high-throughput";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
@@ -617,6 +618,7 @@ import { TYPESCRIPT_IN_REACT } from "./typescript-in-react";
 import { TYPESCRIPT_ROADMAP } from "./typescript-roadmap";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
+import { VALKEY_VS_REDIS } from "./valkey-vs-redis";
 import { VECTOR_DB } from "./vector-db";
 import { VELERO_BACKUP } from "./velero-backup";
 import { VIEW_TRANSITIONS_SHARED_ELEMENT } from "./view-transitions-shared-element";
@@ -1094,6 +1096,7 @@ export const QUESTION_SETS = [
   RECURSION_BACKTRACKING,
   REDIS_BASICS,
   REDIS_CLUSTER,
+  REDIS_HIGH_THROUGHPUT,
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
   REDIS_REPLICATION_SENTINEL,
@@ -1259,6 +1262,7 @@ export const QUESTION_SETS = [
   TYPESCRIPT_ROADMAP,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
+  VALKEY_VS_REDIS,
   VECTOR_DB,
   VELERO_BACKUP,
   VIEW_TRANSITIONS_SHARED_ELEMENT,

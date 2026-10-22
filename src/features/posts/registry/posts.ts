@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "redis-high-throughput",
+    title: "Redis 처리량 끌어올리기: 왕복, 시스템 콜, 파이프라인, I/O 스레드",
+    summary: "Redis 한 대가 시간을 어디에 쓰는지 strace와 INFO cpu로 쪼개고, 파이프라인 깊이, 1ms 왕복 뒤의 반복문과 MGET, 연결 수와 재연결, I/O 스레드가 듣는 조건, 큰 값과 핫 키, CLIENT TRACKING, 샤딩을 실제 redis-benchmark 숫자로 따라간다.",
+    topic: "programming/database/redis",
+    tags: ["Redis", "Performance", "Database", "Cache", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["Redis 파이프라이닝", "redis-benchmark", "CLIENT TRACKING", "io-threads"],
+  },
+  {
+    slug: "valkey-vs-redis",
+    title: "Valkey와 Redis: 갈라진 이유, 달라진 것, 옮기는 순서",
+    summary: "2024년 라이선스 변경으로 Redis 7.2.4에서 갈라진 Valkey가 무엇을 바꿨는지 두 서버를 나란히 띄워 확인한다. INFO 필드, 갈라진 뒤 생긴 명령, lazyfree 기본값, 한쪽으로만 넘어가는 RDB, 레플리카로 붙여 무중단으로 옮기는 순서와 되돌리기 어려운 지점을 다룬다.",
+    topic: "programming/database/redis",
+    tags: ["Redis", "Database", "Cache", "AWS", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["Valkey", "SSPL", "extended-redis-compatibility"],
+  },
+  {
     slug: "spring-boot-observability",
     title: "스프링 부트 관측 가능성: Micrometer Observation, Prometheus 지표, OTLP trace",
     summary: "주문 ID 태그 하나로 /actuator/prometheus가 241줄에서 1040줄이 된 장면에서 출발해 Observation API가 지표·trace·로그를 함께 만드는 방식, 태그와 히스토그램이 시계열을 늘리는 계산, OTLP로 span 내보내기와 기본 10% 샘플링, 로그와 exemplar의 traceId, JVM 대시보드에 올릴 지표를 Spring Boot 4.1로 확인한다.",

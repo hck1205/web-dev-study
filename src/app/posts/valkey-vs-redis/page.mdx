@@ -1,0 +1,531 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("valkey-vs-redis");
+
+AWS 콘솔에서 ElastiCache 클러스터를 만들려는데 엔진 목록 맨 위에 Redis가 아니라 Valkey가 있다. 가격도 조금 싸다. 인프라 쪽에서는 다음 분기에 캐시를 전부 Valkey로 옮기자는 말이 나온다. 앱 개발자 입장에서 궁금한 건 셋이다. 코드를 고쳐야 하나, 데이터는 그대로 옮겨지나, 문제가 생기면 되돌릴 수 있나.
+
+이 글은 그 세 가지를 직접 돌려서 확인한다. Redis가 왜 둘로 갈라졌는지(라이선스), 갈라진 뒤 무엇이 달라졌는지(명령, 기본값, 파일 형식), 실제로 옮기는 순서와 되돌리기 어려운 지점을 본다. Redis가 무엇이고 왜 빠른지는 [Redis 기본 글](/posts/redis-basics)에, 복제 원리는 [복제와 Sentinel 글](/posts/redis-replication-sentinel)에 있으니 여기서는 링크만 건다. 처리량을 끌어올리는 쪽 이야기는 [Redis 처리량 글](/posts/redis-high-throughput)에서 이어진다.
+
+실험 환경은 Ubuntu 24.04 LTS다. Redis는 우분투 패키지 그대로인 7.0.15이고, Valkey는 깃허브에서 9.0.6 태그를 받아 소스로 빌드했다(`make -j4`로 1분 21초 걸렸다). 둘 다 같은 기계에서 서로 다른 포트로 띄웠다.
+
+```bash
+# Valkey 9.0.6 소스 빌드 (TLS 없이). 결과물은 src/valkey-server, src/valkey-cli, src/valkey-benchmark
+git clone --depth 1 --branch 9.0.6 https://github.com/valkey-io/valkey.git
+cd valkey && make -j4 BUILD_TLS=no
+
+# Redis 7.0.15는 19601번, Valkey 9.0.6은 19602번 포트에 띄운다
+redis-server --port 19601 --bind 127.0.0.1 --save "" --daemonize yes
+./src/valkey-server --port 19602 --bind 127.0.0.1 --save "" --daemonize yes
+```
+
+## 라이선스가 바뀐 2년
+
+Redis는 처음부터 BSD 3조항 라이선스였다. 누구나 가져다 고치고 팔아도 되는, 가장 느슨한 축에 드는 오픈 소스 라이선스다. 클라우드 업체들은 이걸 관리형 서비스로 만들어 팔았고, Redis를 만드는 회사(Redis Ltd.)는 그 수익을 나눠 갖지 못했다.
+
+2024년 3월 20일, Redis는 7.4부터 RSALv2(Redis Source Available License)와 SSPLv1(Server Side Public License) 중 하나를 고르는 이중 라이선스로 바꾼다고 발표했다. 소스는 공개하지만 OSI가 인정하는 오픈 소스는 아니다. 일주일 뒤인 3월 28일, Linux Foundation이 바뀌기 직전 버전인 7.2.4를 갈라 Valkey를 만든다고 발표했다. AWS, Google Cloud, Oracle, Ericsson, Snap이 이름을 올렸고 라이선스는 BSD 3조항 그대로다.
+
+그 뒤로 두 프로젝트는 각자 버전을 냈다. 아래 그림에서 다음을 누르면 연도순으로 따라간다. 날짜는 두 저장소의 릴리스 노트와 태그, AWS 발표문에서 확인한 것이다.
+
+<AlgoTrace
+  caption="두 프로젝트의 버전과 라이선스"
+  memoryLabel="그 시점의 선택지"
+  cells={["24.01 7.2.4", "24.03 발표", "24.04 VK 7.2.5", "24.07 7.4", "24.09 VK 8.0", "24.10 ElastiCache", "25.05 8.0", "25.10 VK 9.0"]}
+  steps={[
+    { caption: "2024년 1월부터 2025년 10월까지 여덟 장면을 본다. VK는 Valkey다." },
+    { pointer: 0, memory: ["Redis 7.2.4 · BSD-3"], caption: "Redis 7.2.4가 나온다. BSD 라이선스로 나온 마지막 Redis 줄기다." },
+    { pointer: 1, memory: ["Redis 7.4+ · RSALv2/SSPLv1", "Valkey 예고 · BSD-3"], caption: "3월 20일 Redis가 라이선스 변경을 발표하고, 28일 Linux Foundation이 7.2.4를 가른 Valkey를 발표한다." },
+    { pointer: 2, found: [2], memory: ["Redis 7.2 · BSD-3", "Valkey 7.2.5 · BSD-3"], caption: "Valkey의 첫 정식 버전 7.2.5가 나온다. 이름만 바꾼 Redis 7.2와 거의 같다." },
+    { pointer: 3, memory: ["Redis 7.4 · RSALv2/SSPLv1", "Valkey 7.2 · BSD-3"], caption: "Redis 7.4가 새 라이선스로 나온다. 여기서부터 두 코드가 실제로 갈라진다." },
+    { pointer: 4, found: [4], memory: ["Redis 7.4 · RSALv2/SSPLv1", "Valkey 8.0 · BSD-3"], caption: "Valkey 8.0. 비동기 I/O 스레드, 복제용 연결 이중화, 슬롯별 지표가 들어간다." },
+    { pointer: 5, memory: ["Redis 7.4 · RSALv2/SSPLv1", "Valkey 8.0 · BSD-3", "ElastiCache for Valkey"], caption: "10월 8일 AWS가 ElastiCache와 MemoryDB에 Valkey 엔진을 연다." },
+    { pointer: 6, found: [6], memory: ["Redis 8 · RSALv2/SSPLv1/AGPLv3", "Valkey 8.1 · BSD-3"], caption: "Redis 8.0이 AGPLv3를 세 번째 선택지로 추가한다. 다시 OSI 오픈 소스로 쓸 수 있게 됐다." },
+    { pointer: 7, found: [7], memory: ["Redis 8.x · RSALv2/SSPLv1/AGPLv3", "Valkey 9.0 · BSD-3"], caption: "Valkey 9.0. 원자적 슬롯 이동, 해시 필드 만료, 클러스터의 여러 DB가 들어간다." },
+  ]}
+/>
+
+라이선스 글자가 실제로 무엇을 막는지가 중요하다. 셋 다 "내 회사 서버에 띄워서 내 서비스의 캐시로 쓰는 것"은 막지 않는다. 문제가 되는 건 Redis 자체를 남에게 서비스로 파는 경우다. RSALv2는 Redis를 관리형 DB 서비스처럼 남에게 제공하는 것을 금지하고, SSPL은 그렇게 하려면 서비스를 돌리는 데 쓴 관리 도구까지 소스를 공개하라고 요구한다. AGPLv3는 수정한 코드를 네트워크로 서비스하면 그 수정분의 소스를 사용자에게 공개해야 한다.
+
+그래서 이 변경으로 정면으로 영향을 받은 쪽은 클라우드 업체였고, 그들이 Valkey를 밀었다. 보통 회사의 앱 개발자가 느끼는 차이는 대개 두 가지다. 법무팀이 사내 오픈 소스 정책상 SSPL을 금지해 두었거나, Redis를 고쳐서 제품에 넣어 배포하는 경우다. 법률 해석은 계약과 배포 방식에 따라 달라지니, 제품에 넣는다면 그 시점 라이선스 원문(Redis 저장소의 `LICENSE.txt`)을 법무팀과 함께 본다. 저장소의 파일은 지금 이렇게 시작한다.
+
+```text
+Starting with Redis 8, Redis Open Source is moving to a tri-licensing model with all new Redis code
+contributions governed by the updated Redis Software Grant and Contributor License Agreement.
+After this release, contributions are subject to your choice of: (a) the Redis Source Available License v2
+(RSALv2);or (b) the Server Side Public License v1 (SSPLv1); or (c) the GNU Affero General Public License v3 (AGPLv3).
+Redis Open Source 7.2 and prior releases remain subject to the BSDv3 clause license as referenced
+in the REDISCONTRIBUTIONS.txt file.
+```
+
+마지막 줄이 실무에서 쓸모 있다. 우분투 24.04의 `redis-server` 패키지(7.0.15)처럼 7.2 이하는 계속 BSD다.
+
+## 갈라진 뒤 각자 더한 것
+
+포크한 지 2년이 넘으면 이름만 다른 같은 프로그램이 아니다. 아래 그림은 두 갈래가 각자 무엇을 더했는지 보여 준다. 화살표를 따라 흐르는 점이 시간 순서다.
+
+<ConceptDiagram
+  caption="같은 뿌리에서 나와 각자 다른 것을 더했다"
+  width={400}
+  height={320}
+  nodes={[
+    { id: "root", label: "Redis 7.2.4", sub: "BSD-3, 2024.01", x: 200, y: 40, w: 130 },
+    { id: "r74", label: "Redis 7.4", sub: "해시 필드 만료", x: 95, y: 130, w: 130 },
+    { id: "r8", label: "Redis 8", sub: "JSON·검색·벡터 내장", x: 95, y: 230, w: 140 },
+    { id: "v8", label: "Valkey 8.0", sub: "비동기 I/O 스레드", x: 305, y: 120, w: 130 },
+    { id: "v81", label: "Valkey 8.1", sub: "새 해시 테이블", x: 305, y: 200, w: 130 },
+    { id: "v9", label: "Valkey 9.0", sub: "원자적 슬롯 이동", x: 305, y: 280, w: 130 },
+  ]}
+  edges={[
+    { from: "root", to: "r74", label: "RSAL/SSPL" },
+    { from: "r74", to: "r8", label: "+AGPL" },
+    { from: "root", to: "v8", label: "BSD 유지" },
+    { from: "v8", to: "v81" },
+    { from: "v81", to: "v9" },
+  ]}
+/>
+
+Redis 쪽은 따로 받던 모듈을 본체에 넣는 방향으로 갔다. 8.0 릴리스 노트를 보면 RediSearch(질의 엔진), RedisJSON, RedisTimeSeries, RedisBloom 계열 자료구조와 벡터 셋(베타)이 모두 기본 배포에 들어갔고, 새 I/O 스레드 구현과 `HGETDEL`, `HGETEX`, `HSETEX` 같은 해시 명령이 추가됐다.
+
+Valkey 쪽은 서버 내부를 다듬는 데 힘을 썼다. 8.0에서 비동기 I/O 스레드와 메모리 프리페치, 전체 동기화를 RDB 전송과 명령 스트림 두 연결로 나누는 dual channel 복제, 슬롯별 키 수·CPU·네트워크를 보여 주는 `CLUSTER SLOT-STATS`가 들어갔다. 8.1은 키를 담는 사전(dict)을 메모리를 덜 쓰는 새 해시 테이블로 바꾸고 `SET ... IFEQ`(값이 같을 때만 덮어쓰기)를 더했다. 9.0은 슬롯을 통째로 옮기는 원자적 슬롯 이동, 해시 필드 단위 만료, 클러스터 모드에서 0번 외의 DB 사용, `DELIFEQ`를 넣었다.
+
+두 프로젝트 모두 성능 개선 수치를 발표하지만, 그 숫자는 각자 고른 장비와 부하에서 나온 것이다. 이 글을 쓰는 기계(4 vCPU, 다른 작업과 함께 쓰는 서버)에서 같은 설정으로 `redis-benchmark -t set,get -c 100 --threads 2`를 두 번씩 돌린 SET 결과는 Redis 7.0.15가 초당 128,816과 124,937, Valkey 9.0.6이 124,766과 128,783이었다. 실행마다 흔들리는 폭이 둘의 차이보다 크다. 비교하려면 내 장비와 내 명령 비율로 다시 재야 한다. 재는 방법은 [처리량 글](/posts/redis-high-throughput)에 있다.
+
+## 두 서버에 같은 질문을 던지면
+
+클라이언트 라이브러리는 서버와 RESP라는 같은 프로토콜로 말한다. Valkey는 이 프로토콜을 그대로 쓰기 때문에 ioredis, Jedis, Lettuce, redis-py 같은 기존 라이브러리가 접속 주소만 바꾸면 붙는다. 실제로 두 서버에 RESP3 인사(`HELLO 3`)를 보내 보면 답이 이렇다.
+
+```bash
+# 프로토콜 3으로 인사하고 서버 정보를 받는다
+redis-cli -p 19601 HELLO 3
+redis-cli -p 19602 HELLO 3
+```
+
+```text
+server redis
+version 7.0.15
+proto 3
+id 4
+mode standalone
+role master
+modules
+```
+
+```text
+server valkey
+version 9.0.6
+proto 3
+id 3
+mode standalone
+role master
+modules
+```
+
+`server` 값만 다르다. 문제는 버전을 보고 기능을 켜고 끄는 코드다. `INFO server`를 보면 Valkey가 일부러 남겨 둔 값이 있다.
+
+```bash
+# 서버 정보의 앞부분
+redis-cli -p 19602 INFO server | head -8
+```
+
+```text
+# Server
+redis_version:7.2.4
+server_name:valkey
+valkey_version:9.0.6
+valkey_release_stage:ga
+redis_git_sha1:a100149d
+redis_git_dirty:0
+redis_build_id:8b544011460ce10b
+```
+
+아래 그림에서 줄을 하나씩 누르면 무엇을 봐야 하는지 나온다.
+
+<UrlAnatomy
+  caption="Valkey 9.0.6의 INFO server 앞부분"
+  separator=""
+  joiner="  "
+  params={[
+    { key: "redis_version", value: "7.2.4", title: "고정된 호환 버전", description: "Valkey는 이 값을 포크 시점인 7.2.4로 고정해 둔다. 버전 문자열을 보고 기능을 고르는 옛 라이브러리가 Redis 7.2로 여기고 정상 동작하게 하려는 것이다. 대신 이 값만 보면 실제 버전을 모른다.", required: true },
+    { key: "server_name", value: "valkey", title: "어느 서버인가", description: "Redis에는 이 줄이 없다. 서버 종류를 가리려면 이 줄의 유무와 값을 본다." },
+    { key: "valkey_version", value: "9.0.6", title: "실제 버전", description: "기능 판단은 이 값으로 한다. 예를 들어 DELIFEQ는 9.0부터 있다. redis_version만 보고 7.2로 판단하면 새 기능을 쓰지 않는다.", required: true },
+    { key: "server_mode", value: "standalone", title: "이름이 바뀐 필드", description: "Redis는 redis_mode라는 이름을 쓴다. Valkey 기본 설정에서는 server_mode로만 나와서, redis_mode를 파싱하던 모니터링 스크립트는 빈 값을 받는다." },
+  ]}
+/>
+
+마지막 줄이 실제로 걸리기 쉬운 곳이다. 대시보드나 헬스 체크 스크립트가 `INFO`에서 `redis_mode`를 찾아 standalone인지 cluster인지 가르고 있었다면, Valkey로 바꾼 날 그 값이 비어 버린다. Valkey에는 이런 경우를 위한 설정 `extended-redis-compatibility`가 있다. 켜면 Redis 시절 이름으로 답한다.
+
+```bash
+# 기본값 확인 → 켜기 → 다시 확인
+redis-cli -p 19602 CONFIG GET extended-redis-compatibility
+redis-cli -p 19602 CONFIG SET extended-redis-compatibility yes
+redis-cli -p 19602 HELLO 3 | head -2
+redis-cli -p 19602 INFO server | grep -E "mode|server_name"
+```
+
+```text
+extended-redis-compatibility
+no
+OK
+server redis
+version 7.2.4
+server_name:valkey
+redis_mode:standalone
+```
+
+켜면 `HELLO`가 `server redis`, `version 7.2.4`로 답하고 `INFO`에는 `redis_mode`가 돌아온다. 옮기는 동안의 임시방편으로는 쓸 만하지만, 그동안 실제 버전은 가려진다. 스크립트를 고친 뒤에는 끈다.
+
+## 2024년 뒤에 생긴 명령은 서로 모른다
+
+7.2.4까지의 명령은 양쪽이 같다. 그 뒤에 각자 더한 명령은 상대에게 없다. Valkey 9.0.6에 차례로 보내 봤다.
+
+```bash
+# Valkey 9.0.6 (19602번). --no-raw는 응답에 (nil), (integer) 같은 형식을 붙여 보여 준다
+alias vk='redis-cli --no-raw -p 19602'
+vk SET lock:order:1 token-abc
+vk SET lock:order:1 token-xyz IFEQ token-wrong   # 값이 다르니 덮어쓰지 않는다
+vk GET lock:order:1
+vk DELIFEQ lock:order:1 token-abc                # 값이 같을 때만 지운다
+vk HSETEX sess:1 EX 60 FIELDS 1 cart 3           # 필드에 60초 만료를 건다
+vk HTTL sess:1 FIELDS 1 cart
+vk HGETDEL sess:1 FIELDS 1 cart                  # Redis 8의 명령
+vk JSON.SET doc '$' '{}'                         # Redis 8에 내장된 JSON
+```
+
+```text
+OK
+(nil)
+"token-abc"
+(integer) 1
+(integer) 1
+1) (integer) 60
+(error) ERR unknown command 'HGETDEL', with args beginning with: 'sess:1' 'FIELDS' '1' 'cart'
+(error) ERR unknown command 'JSON.SET', with args beginning with: 'doc' '$' '{}'
+```
+
+`DELIFEQ`는 분산 락을 풀 때 쓰던 Lua 스크립트("값이 내 토큰이면 지운다")를 명령 하나로 바꾼 것이다. 편하지만 이걸 쓰는 순간 Redis로 그대로 옮길 수는 없다. 반대로 Redis 7.0.15에 `DELIFEQ`와 `HSETEX`를 보내면 둘 다 `ERR unknown command`다. 같은 기능이 양쪽에 따로 생기면서 이름이 갈린 경우도 있다. Redis 저장소의 명령 정의를 보면 8.4.0에서 `SET`에 `IFEQ`·`IFNE` 같은 옵션이 붙고, 값이 같을 때 지우는 일은 `DELIFEQ`가 아니라 `DELEX`라는 새 명령이 맡는다. `SET ... IFEQ`는 Valkey 8.1 이상과 Redis 8.4 이상에서 함께 쓸 수 있지만, 조건부 삭제는 서버마다 다른 명령을 불러야 한다. Redis 8에서 JSON이나 질의 엔진(`FT.SEARCH`)을 쓰고 있었다면 Valkey에는 따로 모듈(valkey-json, valkey-search 등)을 붙여야 하고, 명령과 동작이 완전히 같은지는 모듈 버전마다 확인해야 한다.
+
+그래서 옮기기 전에 할 일은 "우리 앱이 실제로 보내는 명령 목록"을 뽑는 것이다. `INFO commandstats`가 서버가 켜진 뒤 실행된 명령을 종류별로 세어 준다.
+
+```bash
+# 실행된 적 있는 명령과 횟수 (cmdstat_<명령>:calls=...)
+redis-cli -p 19601 INFO commandstats | cut -d, -f1
+```
+
+```text
+# Commandstats
+cmdstat_set:calls=1
+cmdstat_rpush:calls=1
+cmdstat_zadd:calls=1
+cmdstat_xadd:calls=1
+cmdstat_hgetall:calls=1
+cmdstat_get:calls=1
+cmdstat_hset:calls=1
+```
+
+예제 키 몇 개를 넣고 읽은 뒤라 목록이 짧다. 운영 서버에서는 며칠 돌아간 뒤(또는 `CONFIG RESETSTAT` 후 일정 기간 뒤)에 뽑아야 드물게 쓰는 명령까지 잡힌다. 클러스터라면 노드마다 뽑아 합친다.
+
+이 목록에 7.2.4 이후에만 있는 명령(예: `HGETDEL`, `FT.*`, `JSON.*`)이 있으면 그 기능부터 대안을 정한다.
+
+## 같은 DEL인데 한쪽만 멈춘다
+
+명령 이름이 같아도 기본 설정이 다르면 동작이 다르다. 가장 눈에 띄는 건 지우기다. 원소 200만 개짜리 셋을 만들고 `DEL`로 지워 봤다.
+
+```bash
+# 200만 개짜리 셋을 만든다 (Lua 안에서 SADD 200만 번, 그동안 서버는 다른 요청을 못 받는다)
+redis-cli -p 19601 EVAL "for i=1,2000000 do redis.call('SADD',KEYS[1],i) end return redis.call('SCARD',KEYS[1])" 1 big:set
+redis-cli -p 19601 MEMORY USAGE big:set
+# 지우는 데 걸린 시간
+time redis-cli -p 19601 DEL big:set
+redis-cli -p 19601 SLOWLOG GET 1 | head -4
+```
+
+```text
+2000000
+83977328
+1
+
+real	0m0.855s
+```
+
+```text
+6
+1792633053
+847113
+DEL
+```
+
+Redis 7.0.15에서는 약 80MB짜리 키 하나를 지우는 데 0.85초가 걸렸다. 느린 명령 기록(`SLOWLOG`)의 세 번째 값이 실행 시간(µs)인데 847,113, 즉 847ms다. 그동안 메인 스레드는 메모리를 돌려주느라 다른 모든 요청을 세워 둔다. 같은 일을 Valkey 9.0.6에 하면 이렇다.
+
+```text
+1
+
+real	0m0.005s
+```
+
+5ms에 끝났다. 이유는 설정 기본값에 있다.
+
+```bash
+redis-cli --no-raw -p 19601 CONFIG GET lazyfree-lazy-user-del
+redis-cli --no-raw -p 19602 CONFIG GET lazyfree-lazy-user-del
+```
+
+```text
+1) "lazyfree-lazy-user-del"
+2) "no"
+1) "lazyfree-lazy-user-del"
+2) "yes"
+```
+
+Valkey는 8.0부터 `lazyfree-lazy-*` 다섯 개 설정의 기본값을 모두 `yes`로 바꿨다. `DEL`도 `UNLINK`처럼 키를 키 공간에서 떼어 낸 뒤 실제 메모리 반환은 백그라운드 스레드(`bio_lazy_free`)에 맡긴다. Redis는 8.x의 `redis.conf`에서도 `no`가 기본이다. Redis에서 큰 키를 지울 때는 `UNLINK`를 쓰라는 조언이 여기서 나온다. Redis 7.0.15에서 같은 셋을 `UNLINK`로 지우면 0.010초였다.
+
+이런 기본값 차이는 좋은 쪽이어도 조심할 게 있다. Valkey에서 큰 키를 마구 지워도 멈추지 않으니, 그 코드를 그대로 Redis 쪽 환경(로컬 개발용 Docker 이미지 등)에서 돌리면 그쪽만 멈춘다. 그리고 메모리가 바로 줄지 않는다. `DEL` 직후 `used_memory`를 보고 "안 지워졌다"고 오해하기 쉽다. 이 밖에 Valkey 8.0은 `repl-backlog-size` 기본값을 1MB에서 10MB로 올렸고, 9.0은 들어오고 나가는 연결에 `TCP_NODELAY`를 기본으로 켠다. 옮길 때는 양쪽의 `CONFIG GET *`을 뽑아 차이를 비교해 두는 게 안전하다.
+
+```bash
+# 두 서버의 설정 전체를 정렬해서 비교한다
+redis-cli -p 19601 CONFIG GET '*' | paste - - | sort > redis.conf.txt
+redis-cli -p 19602 CONFIG GET '*' | paste - - | sort > valkey.conf.txt
+diff redis.conf.txt valkey.conf.txt | grep '^[<>]' | grep -E "lazyfree|repl-backlog-size"
+```
+
+```text
+< lazyfree-lazy-eviction	no
+< lazyfree-lazy-expire	no
+< lazyfree-lazy-server-del	no
+< lazyfree-lazy-user-del	no
+< lazyfree-lazy-user-flush	no
+> lazyfree-lazy-eviction	yes
+> lazyfree-lazy-expire	yes
+> lazyfree-lazy-server-del	yes
+> lazyfree-lazy-user-del	yes
+> lazyfree-lazy-user-flush	yes
+< repl-backlog-size	1048576
+> repl-backlog-size	10485760
+```
+
+`<`가 Redis 7.0.15, `>`가 Valkey 9.0.6이다. 이 기계에서 설정 항목은 Redis가 192개, Valkey가 234개였고 값이나 이름이 다른 Valkey 쪽 줄이 59개 나왔다. 하나씩 읽어 보고 의도한 차이인지 확인한다.
+
+## RDB 파일은 한쪽으로만 넘어간다
+
+데이터를 옮기는 가장 단순한 방법은 RDB 스냅샷 파일(`dump.rdb`)을 복사하는 것이다. RDB가 무엇인지는 [영속성 글](/posts/redis-persistence-ha)에 있다. Redis 7.0.15에서 키 다섯 개를 넣고 `SAVE`한 파일을 Valkey 9.0.6 데이터 디렉터리에 넣고 띄웠다.
+
+```bash
+# Redis에서 저장한 파일을 Valkey 디렉터리로 복사하고 띄운다
+cp r1/dump.rdb v3/
+./src/valkey-server --port 19603 --dir $PWD/v3 --save "" --daemonize yes --logfile $PWD/v3/log
+grep -E "RDB|DB loaded" v3/log | tail -3
+redis-cli -p 19603 DBSIZE
+```
+
+```text
+22772:M 22 Oct 2026 01:27:04.146 * RDB memory usage when created 1.07 Mb
+22772:M 22 Oct 2026 01:27:04.146 * Done loading RDB, keys loaded: 5, keys expired: 0.
+22772:M 22 Oct 2026 01:27:04.146 * DB loaded from disk: 0.000 seconds
+5
+```
+
+잘 읽힌다. 이제 반대로, Valkey가 저장한 파일을 Redis 7.0.15에 넣어 본다.
+
+```bash
+redis-cli -p 19603 SAVE
+head -c 9 v3/dump.rdb; echo     # Valkey가 쓴 파일의 첫 9바이트
+head -c 9 r1/dump.rdb; echo     # Redis가 쓴 파일의 첫 9바이트
+cp v3/dump.rdb r4/ && redis-server --port 19604 --dir $PWD/r4 --save "" --daemonize yes --logfile $PWD/r4/log
+tail -2 r4/log
+```
+
+```text
+VALKEY080
+REDIS0010
+23062:M 22 Oct 2026 01:27:11.785 # Wrong signature trying to load DB from file
+23062:M 22 Oct 2026 01:27:11.785 # Fatal error loading the DB: Invalid argument. Exiting.
+```
+
+파일 머리말부터 다르다. Redis는 `REDIS`와 네 자리 RDB 버전(여기선 10)으로 시작하는데, Valkey 9.0은 `VALKEY080`(RDB 버전 80)으로 쓴다. Redis는 이 머리말을 모르니 읽지 못하고 프로세스가 아예 종료된다.
+
+이게 되돌리기 계획에서 가장 중요한 사실이다. Redis에서 Valkey로는 파일이든 복제든 넘어가지만, Valkey 9로 넘어가서 한 번이라도 쓰기를 받은 뒤에는 그 데이터를 RDB로 Redis에 되돌릴 수 없다. 되돌릴 길을 남기려면 옛 Redis를 따로 살려 두고 앱이 양쪽에 쓰게 하거나, 키를 `SCAN`으로 읽어 다시 쓰는 도구(RIOT 같은 마이그레이션 도구, 또는 직접 짠 스크립트)를 준비해 둔다. 캐시라면 그냥 비운 채로 되돌리는 것도 방법이다. Redis 7.4 이후가 쓴 RDB를 Valkey가 읽을 수 있는지도 버전 조합마다 다르다. Valkey 8.1에 RDB 버전 검사를 느슨하게 하는 `rdb-version-check` 설정이 생긴 것도 이 때문이다. 실제 조합으로 한 번 띄워 보고 결정한다.
+
+## 멈추지 않고 옮기는 순서
+
+파일 복사는 저장한 순간 뒤의 쓰기를 잃는다. 서비스를 멈추지 않으려면 Valkey를 Redis의 레플리카로 붙여 실시간으로 따라오게 한 뒤 넘어간다. Redis 7.0.15를 프라이머리로, Valkey 9.0.6을 레플리카로 붙여 봤다.
+
+```bash
+# Valkey(19603)를 Redis(19601)의 레플리카로 만든다
+redis-cli -p 19603 REPLICAOF 127.0.0.1 19601
+# 몇 초 뒤 Redis에 쓰고 Valkey에서 읽어 본다
+redis-cli -p 19601 SET after:replica hello
+redis-cli -p 19603 GET after:replica
+redis-cli -p 19603 INFO replication | sed -n 2,5p
+```
+
+```text
+OK
+OK
+hello
+role:slave
+master_host:127.0.0.1
+master_port:19601
+master_link_status:up
+```
+
+Valkey 로그에는 이 과정이 단계별로 찍힌다.
+
+```text
+22772:S 22 Oct 2026 01:27:18.177 * Connecting to PRIMARY 127.0.0.1:19601
+22772:S 22 Oct 2026 01:27:18.177 * PRIMARY <-> REPLICA sync started
+22772:S 22 Oct 2026 01:27:18.177 * Trying a partial resynchronization (request b4b577a47149b99dfeba4c28dd7c8f8849ef071f:1).
+22772:S 22 Oct 2026 01:27:24.243 * PRIMARY <-> REPLICA sync: Flushing old data
+22772:S 22 Oct 2026 01:27:24.243 * Loading RDB produced by Redis version 7.0.15
+22772:S 22 Oct 2026 01:27:24.243 * Done loading RDB, keys loaded: 6, keys expired: 0.
+22772:S 22 Oct 2026 01:27:24.243 * PRIMARY <-> REPLICA sync: Finished with success
+```
+
+부분 동기화를 먼저 시도했다가 기록이 맞지 않아 전체 동기화로 넘어갔고, 연결부터 끝까지 6초가 걸렸다. 데이터는 몇 개 안 되는데 6초인 건 Redis 쪽 `repl-diskless-sync-delay` 기본값 5초 때문이다. 다른 레플리카가 붙을지 5초 기다렸다가 한꺼번에 보낸다. 아래 그림에서 다음을 누르면 이 순서를 따라간다.
+
+<SequenceDiagram
+  caption="Redis 프라이머리에 Valkey 레플리카를 붙일 때"
+  actors={[
+    { id: "vk", label: "Valkey 9" },
+    { id: "rd", label: "Redis 7.0" },
+    { id: "app", label: "앱 서버" },
+  ]}
+  steps={[
+    { from: "vk", to: "rd", label: "PSYNC id 1", title: "부분 동기화부터 청한다", detail: "Valkey는 자기 기록으로 이어 받을 수 있는지 먼저 묻는다. 처음 붙는 사이라 기록이 맞지 않는다." },
+    { from: "rd", to: "rd", label: "5초 대기 후 fork", title: "전체 동기화를 준비한다", detail: "repl-diskless-sync-delay 5초를 기다린 뒤 자식 프로세스가 RDB를 만들어 소켓으로 바로 흘린다." },
+    { from: "rd", to: "vk", label: "RDB 스트림", title: "스냅샷이 넘어간다", detail: "Valkey는 옛 데이터를 지우고 RDB를 메모리에 올린다. Redis 7.0이 만든 RDB는 Valkey가 읽을 수 있다.", payload: "Loading RDB produced by Redis version 7.0.15\nDone loading RDB, keys loaded: 6" },
+    { from: "app", to: "rd", label: "SET after:replica", title: "그동안의 쓰기는 버퍼에 쌓인다", detail: "스냅샷을 보내는 사이에 들어온 쓰기는 레플리카 출력 버퍼에 모였다가 뒤따라간다." },
+    { from: "rd", to: "vk", label: "명령 스트림", title: "이후로는 실시간으로 따라온다", detail: "master_link_status가 up이 되면 Redis에 쓴 값이 거의 바로 Valkey에서 읽힌다." },
+  ]}
+/>
+
+따라오기 시작했으면 앱을 넘긴다. 전체 순서를 그림으로 보면 이렇다.
+
+<NetworkTopology
+  caption="레플리카로 따라오게 한 뒤 쓰기를 넘긴다"
+  width={400}
+  height={270}
+  zones={[
+    { id: "old", label: "기존 Redis", x: 10, y: 140, w: 180, h: 120, tone: "edge" },
+    { id: "new", label: "새 Valkey", x: 210, y: 140, w: 180, h: 120, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", sub: "주문 서버", x: 200, y: 50, icon: "server" },
+    { id: "rd", label: "redis 7.0", sub: "프라이머리", x: 100, y: 205, icon: "db" },
+    { id: "vk", label: "valkey 9", sub: "레플리카 → 승격", x: 300, y: 205, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "rd" },
+    { from: "rd", to: "vk", label: "복제" },
+    { from: "app", to: "vk", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "rd"], packet: "SET", title: "지금은 Redis가 모든 쓰기를 받는다", detail: "옮기기 전에 INFO commandstats로 앱이 쓰는 명령을 뽑고, CONFIG GET으로 두 서버의 설정 차이를 확인해 둔다." },
+    { path: ["rd", "vk"], packet: "RDB", title: "Valkey를 레플리카로 붙인다", detail: "REPLICAOF로 전체 동기화를 받고 명령 스트림을 따라온다. 메모리가 큰 서버면 fork와 전송 시간을 미리 계산한다." },
+    { path: ["app", "vk"], packet: "GET", title: "읽기 일부를 먼저 보낸다", detail: "레플리카에서 읽어도 되는 기능부터 Valkey로 돌려 응답 형식과 지연을 비교한다. 복제 지연만큼 옛 값이 섞일 수 있다." },
+    { path: ["app", "rd"], packet: "SET", blocked: true, title: "쓰기를 잠깐 멈추고 승격한다", detail: "앱의 쓰기를 막거나 Redis를 읽기 전용으로 바꾼 뒤, 복제 오프셋이 같아지면 Valkey에 REPLICAOF NO ONE을 보낸다." },
+    { path: ["app", "vk"], packet: "SET", title: "앱이 Valkey로 쓴다", detail: "접속 주소(DNS, 설정)를 바꾼다. 이 순간부터 Valkey에만 있는 데이터가 생기고, RDB로는 Redis에 되돌릴 수 없다." },
+  ]}
+/>
+
+넘기는 순간에 쓰기를 잃지 않으려면 "Redis 쪽 마지막 쓰기가 Valkey에 도착했다"를 확인하고 승격해야 한다. 프라이머리의 `master_repl_offset`과 레플리카의 `slave_repl_offset`이 같아지는지 본다. 이 몇 초의 쓰기 정지를 견딜 수 없다면 앱이 두 곳에 같이 쓰는 기간을 두는 수밖에 없는데, 그만큼 코드가 복잡해진다. 캐시처럼 잃어도 되는 데이터라면 이 과정을 다 생략하고 빈 Valkey로 시작해 캐시가 다시 차게 두는 것이 가장 단순하다. 다만 그 사이 DB로 몰리는 요청은 [캐시 전략 글](/posts/caching-strategies)의 스탬피드 대책으로 막는다.
+
+Sentinel이나 Cluster로 운영 중이라면 같은 원리를 노드마다 반복한다. Valkey는 `redis-sentinel`이라는 이름으로 실행해도 Sentinel 모드로 뜨게 해 두었다(8.0 릴리스 노트). 다만 Redis와 Valkey 노드를 한 클러스터에 오래 섞어 두는 건 권하지 않는다. 버전이 갈라진 뒤의 클러스터 버스 메시지나 슬롯 이동 방식까지 맞는다는 보장이 없다.
+
+## 관리형 서비스에서 엔진을 바꿀 때
+
+직접 운영하지 않고 클라우드에 맡긴다면 일이 훨씬 줄어든다. AWS는 2024년 10월 8일 ElastiCache와 MemoryDB에 Valkey 엔진을 열면서, 발표 시점 기준으로 ElastiCache Serverless는 33%, 노드 기반은 20% 싸게 책정했다고 밝혔다. 기존 Redis OSS 엔진에서 Valkey로 콘솔이나 API로 업그레이드하는 경로를 제공하고, 같은 노드 계열의 예약 인스턴스 할인도 이어진다고 했다. 가격은 바뀔 수 있으니 고를 때 현재 가격표를 다시 본다. Google Cloud의 Memorystore에도 Valkey 엔진이 있다.
+
+관리형에서 엔진을 바꿀 때도 명령 목록, `INFO` 필드 이름, 기본 설정값은 똑같이 확인한다. 바꾼 뒤 Redis 엔진으로 내려오는 길이 있는지도 그 시점의 AWS 문서에서 미리 본다. 없다고 보고 계획하는 편이 안전하다. 반대로 Redis Ltd.의 Redis Cloud를 쓰면 Redis 8의 내장 JSON·검색·벡터 기능을 바로 쓸 수 있다. 이 기능을 이미 쓰고 있다면 Valkey로 옮기는 비용이 크게 늘어난다.
+
+## 옮기고 나서 터지는 증상들
+
+실제로 옮긴 뒤 나오는 문제는 대부분 서버가 아니라 그 주변에서 생긴다. 증상별로 어디를 볼지 적어 둔다.
+
+대시보드의 "모드" 칸이 비거나 헬스 체크가 실패한다. `INFO`의 `redis_mode`를 파싱하고 있을 가능성이 크다. `server_mode`도 읽게 고치거나, 임시로 `extended-redis-compatibility yes`를 켠다.
+
+라이브러리가 새 기능을 안 쓴다. 클라이언트가 `redis_version`(7.2.4로 고정)을 보고 기능을 고르고 있다. 실제 버전은 `valkey_version`이다. Valkey가 만든 클라이언트(Valkey GLIDE)나 최신 라이브러리는 이걸 알지만, 오래된 버전은 모를 수 있다.
+
+`ERR unknown command`가 로그에 찍힌다. 앱이 Redis 7.4 이후 명령이나 모듈 명령을 쓰고 있다. 옮기기 전에 `INFO commandstats`로 찾았어야 할 것들이다.
+
+백업 복원 연습에서 프로세스가 바로 죽는다. 로그에 `Wrong signature`가 있으면 파일을 만든 쪽과 읽는 쪽이 맞지 않는다. Valkey 9가 만든 파일은 Redis가 읽지 못한다.
+
+`DEL` 뒤에 메모리가 바로 안 줄어든다. Valkey의 lazyfree 기본값 때문에 반환이 백그라운드로 미뤄졌다. 몇 초 뒤 다시 보거나 `INFO memory`의 `lazyfree_pending_objects`를 본다.
+
+아래 코드에서 `INFO server` 응답을 읽어 서버 종류, 실제 버전, 모드를 돌려주는 함수를 직접 짜 볼 수 있다. Redis와 Valkey, 호환 설정을 켠 Valkey를 모두 바르게 읽어야 한다.
+
+<CodePlayground
+  caption="Redis와 Valkey의 INFO server를 같은 모양으로 읽기"
+  functionName="parseServerInfo"
+  initialCode={`function parseServerInfo(text) {
+  // text: INFO server 응답 문자열 (줄바꿈은 \\r\\n 또는 \\n)
+  // 반환: { server, version, mode, redisCompat }
+  //   server: server_name이 있으면 그 값, 없으면 "redis"
+  //   version: 실제 버전 (valkey_version 우선, 없으면 redis_version)
+  //   mode: server_mode 또는 redis_mode
+  //   redisCompat: redis_version 값
+  // 값이 없으면 null
+  return { server: "redis", version: null, mode: null, redisCompat: null };
+}`}
+  solution={`function parseServerInfo(text) {
+  const info = {};
+  for (const line of text.split(/\\r?\\n/)) {
+    if (!line || line.startsWith("#")) continue;
+    const i = line.indexOf(":");
+    if (i < 0) continue;
+    info[line.slice(0, i)] = line.slice(i + 1);
+  }
+  return {
+    server: info.server_name || "redis",
+    version: info.valkey_version || info.redis_version || null,
+    mode: info.server_mode || info.redis_mode || null,
+    redisCompat: info.redis_version || null,
+  };
+}`}
+  tests={[
+    { label: "Redis 7.0.15", args: ["# Server\r\nredis_version:7.0.15\r\nredis_mode:standalone\r\nos:Linux"], expected: { server: "redis", version: "7.0.15", mode: "standalone", redisCompat: "7.0.15" } },
+    { label: "Valkey 9.0.6 기본", args: ["# Server\r\nredis_version:7.2.4\r\nserver_name:valkey\r\nvalkey_version:9.0.6\r\nserver_mode:standalone"], expected: { server: "valkey", version: "9.0.6", mode: "standalone", redisCompat: "7.2.4" } },
+    { label: "Valkey 호환 모드", args: ["# Server\r\nredis_version:7.2.4\r\nserver_name:valkey\r\nvalkey_version:9.0.6\r\nredis_mode:cluster"], expected: { server: "valkey", version: "9.0.6", mode: "cluster", redisCompat: "7.2.4" } },
+    { label: "\\n 줄바꿈", args: ["# Server\nredis_version:8.0.0\nredis_mode:sentinel\nos:Linux 6.8.0 x86_64"], expected: { server: "redis", version: "8.0.0", mode: "sentinel", redisCompat: "8.0.0" } },
+    { label: "빈 응답", args: [""], expected: { server: "redis", version: null, mode: null, redisCompat: null } },
+  ]}
+/>
+
+## 무엇을 기준으로 고르나
+
+새로 시작하는 서비스이고 Redis 7.2 수준의 기능(문자열, 해시, 리스트, 셋, 정렬된 셋, 스트림, Pub/Sub, Lua)만 쓴다면 어느 쪽을 골라도 코드는 같다. 그때는 라이선스 정책, 쓰는 클라우드가 무엇을 싸게 주는지, 운영팀이 익숙한 쪽으로 정하면 된다. BSD만 허용하는 사내 정책이 있다면 Valkey나 Redis 7.2 이하가 남는다.
+
+Redis 8에 내장된 JSON, 질의 엔진, 벡터 셋, 시계열을 쓰고 싶다면 Redis가 편하다. Valkey에도 모듈이 있지만 같은 명령을 같은 방식으로 지원하는지 하나씩 확인해야 한다. 반대로 Valkey의 원자적 슬롯 이동이나 `DELIFEQ`, 해시 필드 만료 같은 9.0 기능에 기대기 시작하면 Redis로 돌아가기 어렵다.
+
+어느 쪽이든 갈라진 뒤의 기능을 쓰는 순간 그쪽에 묶인다. 옮길 생각이 있는 동안에는 7.2.4의 공통 기능 안에서 코드를 짜고, 버전 판단은 `redis_version` 하나에 기대지 않는 것이 가장 싸게 선택지를 남기는 방법이다.
+
+## 면접에서 나올 만한 질문
+
+### Valkey는 왜 생겼나요?
+
+2024년 3월 Redis가 7.4부터 BSD 대신 RSALv2와 SSPLv1 중 고르는 소스 공개 라이선스로 바꾼다고 발표했기 때문이다. 이 라이선스는 Redis를 남에게 관리형 서비스로 파는 일을 제한해서 클라우드 업체가 직접 영향을 받았다. 그래서 Linux Foundation이 마지막 BSD 버전인 7.2.4를 갈라 Valkey를 만들었고 AWS, Google Cloud, Oracle 등이 참여했다. Redis는 2025년 Redis 8부터 AGPLv3를 세 번째 선택지로 추가했다.
+
+### 우리 회사가 Redis 8을 사내 캐시로 쓰면 라이선스 문제가 있나요?
+
+자기 서비스의 캐시로 띄워 쓰는 것만으로는 세 라이선스 모두 대개 문제가 되지 않는다. 걸리는 건 Redis 자체를 남에게 서비스로 제공하거나, 고친 Redis를 제품에 넣어 배포하는 경우다. AGPLv3를 고르면 수정한 코드를 네트워크로 서비스할 때 그 소스를 공개할 의무가 생긴다. 최종 판단은 배포 방식과 사내 정책에 따라 법무팀과 원문으로 한다.
+
+### Redis를 Valkey로 바꾸면 앱 코드를 고쳐야 하나요?
+
+7.2.4까지 있던 명령만 쓴다면 같은 RESP 프로토콜이라 접속 주소만 바꾸면 된다. 고칠 곳은 주변에서 나온다. Redis 7.4 이후나 Redis 8 내장 모듈의 명령은 Valkey에 없고, `INFO`의 `redis_mode`가 `server_mode`로 바뀌어 모니터링 파싱이 깨질 수 있다. 옮기기 전에 `INFO commandstats`로 실제 쓰는 명령을 뽑고 두 서버의 `CONFIG GET *`을 비교한다.
+
+### Valkey의 INFO에 redis_version이 7.2.4로 나오는 이유는요?
+
+버전 문자열을 보고 기능을 켜고 끄는 기존 클라이언트가 Valkey를 Redis 7.2로 보고 정상 동작하게 하려는 것이다. 그래서 이 값만 보면 실제 버전을 모른다. 실제 버전은 `valkey_version`에 있고, 서버 종류는 `server_name`으로 가린다. 버전에 따라 분기하는 코드라면 두 필드를 함께 본다.
+
+### 데이터를 무중단으로 옮기려면 어떻게 하나요?
+
+Valkey를 기존 Redis의 레플리카로 붙여 전체 동기화 뒤 실시간으로 따라오게 한다. 읽기 일부를 먼저 보내 응답과 지연을 비교하고, 쓰기를 잠깐 멈춘 뒤 복제 오프셋이 같아지면 `REPLICAOF NO ONE`으로 승격하고 앱 주소를 바꾼다. 캐시처럼 잃어도 되는 데이터라면 빈 Valkey로 시작하고 스탬피드만 막는 쪽이 더 단순하다.
+
+### 옮긴 뒤 문제가 생기면 Redis로 되돌릴 수 있나요?
+
+쓰기를 받기 시작한 뒤에는 쉽지 않다. 실험에서 Valkey 9.0.6이 저장한 RDB는 머리말이 `VALKEY080`이라 Redis 7.0.15가 `Wrong signature`를 내며 종료했다. Redis에서 Valkey로는 넘어가지만 그 반대는 막혀 있으니, 되돌릴 길이 필요하면 옛 Redis를 살려 두고 이중 쓰기를 하거나 키를 다시 쓰는 도구를 준비한다. 캐시라면 비운 채로 되돌리는 것도 방법이다.
+
+### 같은 DEL인데 Valkey에서는 빠르고 Redis에서는 서버가 멈췄습니다. 왜 그런가요?
+
+기본 설정이 다르다. Valkey는 8.0부터 `lazyfree-lazy-user-del`을 비롯한 lazyfree 설정 기본값이 `yes`라서 `DEL`도 메모리 반환을 백그라운드 스레드에 넘긴다. Redis는 기본이 `no`라 메인 스레드가 직접 반환하고, 실험에서 200만 개짜리 셋을 지우는 데 847ms 동안 멈췄다. Redis에서는 큰 키를 `UNLINK`로 지우거나 같은 설정을 켠다.
+
+### 두 서버 중 무엇이 더 빠른가요?
+
+발표된 숫자는 각자 고른 장비와 부하의 결과라 그대로 믿기 어렵고, 내 환경에서 다시 재야 한다. 이 글의 4 vCPU 공용 서버에서는 같은 설정의 SET 처리량이 두 서버 모두 초당 12만~13만 사이였고, 실행마다 흔들리는 폭이 둘의 차이보다 컸다. 차이는 I/O 스레드처럼 코어를 여럿 쓰는 설정에서 주로 나오는데, 그것도 남는 코어가 있을 때 이야기다. 결정은 성능보다 라이선스, 필요한 기능, 클라우드 가격으로 하는 경우가 많다.
