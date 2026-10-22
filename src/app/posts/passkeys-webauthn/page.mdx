@@ -1,0 +1,477 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("passkeys-webauthn");
+
+비밀번호에 OTP까지 걸어 둔 계정이 털렸다는 이야기를 들으면 처음엔 의아하다. 두 번 확인했는데 어떻게? 사정을 들어 보면 대개 같은 장면이다. 진짜와 똑같이 생긴 로그인 페이지에 비밀번호를 넣고, 이어서 휴대폰에 뜬 여섯 자리 숫자도 넣었다. 가짜 페이지 뒤의 공격자는 그 두 값을 받는 즉시 진짜 사이트에 그대로 넣었다. 비밀번호도 OTP도 "사람이 읽고 옮겨 적을 수 있는 값"이라서 생긴 일이다.
+
+패스키(passkey)는 이 장면을 구조로 막는다. 사용자가 옮겨 적는 값이 아예 없고, 브라우저가 지금 열린 사이트의 주소를 서명 안에 넣어 버린다. 이 글은 패스키를 떠받치는 웹 표준 WebAuthn의 등록과 로그인 과정을 로컬 서버와 크로미움의 가상 인증기(DevTools 프로토콜의 `WebAuthn` 도메인)로 직접 돌려 보며 따라간다. 서버 쪽은 `@simplewebauthn/server` 13, 브라우저는 Playwright가 띄운 크로미움 141이다.
+
+로그인 상태를 유지하는 방법은 [쿠키와 세션](/posts/cookie-session-login)과 [토큰 로그인](/posts/token-login)에, 여섯 자리 숫자를 만드는 원리는 [TOTP 2단계 인증](/posts/mfa-totp)에 있다. 이 글은 "로그인하는 그 순간"에 무엇을 증명하는지를 다룬다.
+
+## 비밀번호는 서버와 나눠 가진 비밀이다
+
+비밀번호 로그인은 서버와 사용자가 같은 비밀을 알고 있다는 데 기댄다. 서버는 해시로 바꿔 두지만, 로그인할 때마다 사용자는 원문을 서버에 보낸다. 그래서 세 군데서 샌다. 서버 DB가 털리면 해시가 나가고, 사용자가 다른 사이트에 같은 비밀번호를 쓰면 거기서 나가고, 가짜 페이지에 직접 입력하면 그 자리에서 나간다.
+
+WebAuthn은 나눠 가진 비밀을 공개 키 한 쌍으로 바꾼다. 개인 키는 사용자 기기의 인증기(휴대폰의 보안 칩, 노트북의 TPM, 보안 키) 안에서 만들어지고 밖으로 나오지 않는다. 서버는 공개 키만 저장한다. 공개 키는 털려도 그걸로 로그인할 수 없다. 로그인은 서버가 낸 무작위 문제(challenge)에 개인 키로 서명해서 보여 주는 일이 된다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="개인 키는 인증기 밖으로 나오지 않는다. 서버가 가진 건 공개 키와 '어느 사이트용 열쇠인지'뿐이다."
+  nodes={[
+    { id: "auth", label: "인증기", sub: "개인 키 보관", x: 80, y: 60 },
+    { id: "browser", label: "브라우저", sub: "origin 확인", x: 210, y: 150 },
+    { id: "server", label: "서버(RP)", sub: "공개 키 보관", x: 330, y: 60 },
+    { id: "user", label: "사용자", sub: "지문·PIN", x: 80, y: 220 },
+    { id: "site", label: "rpId", sub: "localhost", x: 330, y: 220 },
+  ]}
+  edges={[
+    { from: "server", to: "browser", label: "challenge" },
+    { from: "browser", to: "auth", label: "rpId+해시" },
+    { from: "user", to: "auth", label: "본인 확인", dashed: true },
+    { from: "auth", to: "browser", label: "서명" },
+    { from: "browser", to: "server", label: "서명+origin" },
+    { from: "site", to: "auth", label: "열쇠 묶임", dashed: true, arrow: "none" },
+  ]}
+/>
+
+용어 몇 개만 짚고 간다. 서버 쪽은 RP(Relying Party, 신원 확인을 믿고 쓰는 쪽)라고 부르고, RP가 자기 이름으로 쓰는 도메인이 rpId다. 지문이나 PIN으로 "기기 주인이 맞다"를 확인하는 걸 사용자 확인(UV, user verification), 그냥 버튼을 눌렀다는 확인을 사용자 존재(UP, user presence)라고 한다. 패스키는 이 공개 키 자격 증명 중에서 사용자 이름 없이 꺼내 쓸 수 있는 것(discoverable credential)을 부르는 이름이다.
+
+## 등록하면 기기 안에서 열쇠 한 쌍이 생긴다
+
+등록은 WebAuthn 명세에서 의식(ceremony)이라고 부르는 정해진 순서로 진행된다. 아래 그림에서 다음을 누르면 한 단계씩 넘어간다.
+
+<SequenceDiagram
+  caption="등록 의식. 서버는 끝까지 개인 키를 보지 못한다."
+  actors={[
+    { id: "server", label: "서버" },
+    { id: "browser", label: "브라우저" },
+    { id: "auth", label: "인증기" },
+  ]}
+  steps={[
+    {
+      from: "server",
+      to: "browser",
+      label: "등록 옵션",
+      title: "서버가 옵션과 challenge를 준다",
+      detail: "한 번만 쓸 무작위 challenge, rpId, 사용자 id, 받아들일 서명 알고리즘 목록을 보낸다. challenge는 세션에 저장해 둔다.",
+      payload: "rp: { id: \"localhost\" }\nchallenge: \"kxF1tawDRwffe7g8...\"\npubKeyCredParams: [-8, -7, -257]",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "rpId 검사",
+      title: "브라우저가 rpId를 지금 주소와 맞춰 본다",
+      detail: "rpId가 현재 도메인이거나 그 상위 도메인이어야 한다. 아니면 인증기를 부르기도 전에 SecurityError로 끝난다.",
+    },
+    {
+      from: "browser",
+      to: "auth",
+      label: "create",
+      title: "인증기에게 열쇠를 만들라고 한다",
+      detail: "rpId의 해시와 clientDataJSON의 해시를 넘긴다. clientDataJSON에는 challenge와 지금 origin이 들어 있다.",
+    },
+    {
+      from: "auth",
+      to: "auth",
+      label: "키 쌍 생성",
+      title: "사용자를 확인하고 키 쌍을 만든다",
+      detail: "지문이나 PIN을 받은 뒤 이 rpId 전용 키 쌍을 만든다. 개인 키는 여기 남는다.",
+    },
+    {
+      from: "auth",
+      to: "browser",
+      label: "공개 키",
+      title: "공개 키와 자격 증명 id를 돌려준다",
+      detail: "authenticatorData 안에 공개 키, 자격 증명 id, 플래그, 카운터가 담겨 나온다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "attestation",
+      title: "서버가 검증하고 공개 키를 저장한다",
+      detail: "challenge가 저장한 값과 같은지, origin이 내 사이트인지, rpId 해시가 맞는지, UV 플래그가 켜졌는지 본 뒤 공개 키를 계정에 붙인다.",
+      payload: "{ fmt: \"none\", counter: 1,\n  credentialDeviceType: \"singleDevice\" }",
+    },
+  ]}
+/>
+
+서버가 보낸 옵션을 그대로 찍어 보면 이렇다. `residentKey: "required"`가 "사용자 이름 없이 꺼낼 수 있게 인증기에 저장해 달라"는 요청이고, `userVerification: "required"`가 지문이나 PIN을 꼭 받으라는 요청이다.
+
+```text
+REG OPTIONS {"challenge":"kxF1tawDRwffe7g8EJ4XC_YDedFJxXMwlIWjIJG-ItQ","rp":{"name":"Demo","id":"localhost"},"user":{"id":"JvZVVCjAeWpv5CrAL8j30rE_jGmlAabwXb2dVnHTvqQ","name":"mina","displayName":""},"pubKeyCredParams":[{"alg":-8,"type":"public-key"},{"alg":-7,"type":"public-key"},{"alg":-257,"type":"public-key"}],"authenticatorSelection":{"residentKey":"required","userVerification":"required","requireResidentKey":true},"attestation":"none"}
+```
+
+`pubKeyCredParams`의 숫자는 COSE 알고리즘 번호다. -8은 Ed25519, -7은 ES256(P-256 ECDSA), -257은 RS256이다. 인증기는 이 목록에서 자기가 지원하는 것을 앞에서부터 고른다. 크로미움 가상 인증기는 -8을 골랐다. 실제 기기는 ES256만 지원하는 경우가 많아서, 서버가 -7을 목록에서 빼면 등록이 실패하는 기기가 생긴다. `user.id`는 이메일 같은 개인 정보가 아니라 무작위 바이트로 만든다. 인증기에 저장되고 로그인 때 그대로 돌아오기 때문이다.
+
+브라우저가 인증기 응답과 함께 넘긴 clientDataJSON을 풀어 보면, 서버가 준 challenge와 지금 페이지의 origin이 그대로 들어 있다.
+
+```text
+REG clientDataJSON: {"type":"webauthn.create","challenge":"kxF1tawDRwffe7g8EJ4XC_YDedFJxXMwlIWjIJG-ItQ","origin":"http://localhost:18900","crossOrigin":false}
+REG result: {"verified":true}
+REG VERIFIED {"fmt":"none","aaguid":"01020304-0506-0708-0102-030405060708","credentialId":"3BMJeTeQgMudwlenYi4jk7uBKdlGMFKOIiZ_6N6pkJw","publicKeyBytes":42,"counter":1,"credentialDeviceType":"singleDevice","credentialBackedUp":false}
+```
+
+origin은 자바스크립트가 정하는 값이 아니다. 브라우저가 지금 열린 페이지를 보고 적는다. 이 한 줄이 뒤에서 볼 피싱 방어의 바탕이다. `fmt: "none"`은 인증기가 "나는 어느 제조사의 어떤 기기다"라는 증명(attestation)을 붙이지 않았다는 뜻이다. 일반 서비스는 `none`으로 충분하다. 회사가 지급한 보안 키만 허용해야 하는 경우에만 attestation을 받아 제조사 인증서와 AAGUID(인증기 모델 번호)를 검사한다. 위의 `01020304-...`는 가상 인증기의 가짜 값이다.
+
+같은 기기로 같은 계정에 한 번 더 등록하려 하면 브라우저가 막는다. 서버가 옵션의 `excludeCredentials`에 이미 등록한 자격 증명 id를 넣어 보냈기 때문이다.
+
+```text
+REG again: InvalidStateError: The authenticator was previously registered
+```
+
+## 로그인은 challenge에 서명하는 일이다
+
+로그인도 같은 모양이다. 다른 점은 키를 새로 만들지 않고, 저장된 개인 키로 서명만 한다는 것이다.
+
+<SequenceDiagram
+  caption="인증 의식. 사용자 이름을 묻지 않고 시작할 수 있다."
+  actors={[
+    { id: "server", label: "서버" },
+    { id: "browser", label: "브라우저" },
+    { id: "auth", label: "인증기" },
+  ]}
+  steps={[
+    {
+      from: "server",
+      to: "browser",
+      label: "challenge",
+      title: "서버가 새 challenge를 준다",
+      detail: "allowCredentials를 비워 두면 누가 로그인하는지 모르는 상태로 시작한다. 인증기가 이 rpId의 패스키 목록을 보여 준다.",
+      payload: "{ rpId: \"localhost\",\n  challenge: \"p0dhdg2o9Yfy...\",\n  allowCredentials: [],\n  userVerification: \"required\" }",
+    },
+    {
+      from: "browser",
+      to: "auth",
+      label: "get",
+      title: "브라우저가 rpId와 해시를 넘긴다",
+      detail: "여기서도 rpId가 지금 도메인과 맞아야 한다. clientDataJSON에는 type이 webauthn.get으로 바뀌어 들어간다.",
+    },
+    {
+      from: "auth",
+      to: "auth",
+      label: "서명",
+      title: "본인을 확인하고 서명한다",
+      detail: "서명 대상은 authenticatorData와 clientDataJSON 해시를 이은 바이트다. 카운터를 하나 올린다.",
+    },
+    {
+      from: "auth",
+      to: "browser",
+      label: "assertion",
+      title: "서명과 사용자 id를 돌려준다",
+      detail: "등록 때 저장한 user.id가 userHandle로 돌아온다. 서버는 이걸로 어느 계정인지 안다.",
+    },
+    {
+      from: "browser",
+      to: "server",
+      label: "검증",
+      title: "서버가 공개 키로 서명을 확인한다",
+      detail: "challenge, origin, rpId 해시, 플래그를 확인하고 저장된 공개 키로 서명을 검증한다. 카운터도 갱신한다.",
+      payload: "{ user: \"mina\", oldCounter: 1,\n  newCounter: 2, userVerified: true }",
+    },
+  ]}
+/>
+
+실제로 세 번 로그인한 로그다. 사용자 이름은 한 번도 보내지 않았는데 서버가 `mina`를 찾았다. 응답에 실린 자격 증명 id와 userHandle로 계정을 찾은 것이다.
+
+```text
+AUTH OPTIONS {"rpId":"localhost","challenge":"p0dhdg2o9YfyxqquSd-La5sVzcunh1CZ3X-4q5qOHFw","allowCredentials":[],"timeout":60000,"userVerification":"required"}
+AUTH VERIFIED {"user":"mina","oldCounter":1,"newCounter":2,"userVerified":true}
+AUTH VERIFIED {"user":"mina","oldCounter":2,"newCounter":3,"userVerified":true}
+AUTH VERIFIED {"user":"mina","oldCounter":3,"newCounter":4,"userVerified":true}
+```
+
+## 서명된 바이트를 뜯어보면
+
+서버가 검증하는 authenticatorData는 앞 37바이트가 고정된 구조다. 로그인 응답에서 이 부분을 잘라 읽었다. 조각을 누르면 각 부분의 뜻이 나온다.
+
+<UrlAnatomy
+  caption="authenticatorData 앞 37바이트"
+  separator=""
+  joiner=" | "
+  params={[
+    {
+      key: "rpIdHash",
+      display: "49960de5…9763 (32B)",
+      title: "rpId의 SHA-256",
+      description: "인증기가 이 열쇠를 어느 rpId용으로 만들었는지를 해시로 적는다. 서버는 자기 rpId의 해시와 같은지 비교한다. localhost의 SHA-256을 node로 계산하면 정확히 이 값이 나온다.",
+      code: "49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763",
+      required: true,
+    },
+    {
+      key: "flags",
+      display: "flags (1B)",
+      title: "비트마다 의미가 있는 1바이트",
+      description: "0번 비트 UP(눌렀다), 2번 UV(본인 확인), 3번 BE(백업 가능), 4번 BS(백업됨), 6번 AT(등록 때 공개 키 포함). 기기에 묶인 열쇠는 00000101, 동기화 패스키처럼 만든 열쇠는 00011101이 나왔다.",
+      code: "00000101  UP=1 UV=1 BE=0 BS=0\n00011101  UP=1 UV=1 BE=1 BS=1",
+      required: true,
+    },
+    {
+      key: "signCount",
+      display: "signCount (4B)",
+      title: "서명할 때마다 오르는 카운터",
+      description: "빅 엔디언 32비트 정수다. 서버는 저장한 값보다 커졌는지 본다. 복제된 인증기를 찾아내려는 장치인데, 동기화 패스키는 0을 계속 보내는 경우가 많다.",
+      code: "00 00 00 02  → 2",
+      required: true,
+    },
+  ]}
+/>
+
+서명 자체는 이 authenticatorData 뒤에 clientDataJSON의 SHA-256을 이어 붙인 바이트에 대한 것이다. 그래서 서명 하나가 "어느 rpId용 열쇠로(rpIdHash), 본인 확인을 거쳐(flags), 이 challenge를 받아, 이 origin에서" 만들어졌다는 걸 한꺼번에 보증한다. 어느 하나를 바꾸면 서명이 맞지 않는다.
+
+플래그를 직접 읽어 보자. 아래 함수는 authenticatorData 바이트 배열을 받아 플래그와 카운터를 꺼낸다. 비트 연산과 빅 엔디언 읽기만 하면 된다.
+
+<CodePlayground
+  caption="authenticatorData에서 플래그와 signCount 읽기"
+  functionName="readAuthData"
+  initialCode={`// bytes: 숫자 배열. 0~31은 rpIdHash, 32는 flags, 33~36은 signCount(빅 엔디언)
+function readAuthData(bytes) {
+  const flags = bytes[32];
+  return {
+    up: false,
+    uv: false,
+    be: false,
+    bs: false,
+    at: false,
+    signCount: 0,
+  };
+}`}
+  solution={`function readAuthData(bytes) {
+  const flags = bytes[32];
+  // << 24는 부호 있는 32비트가 되므로 >>> 0으로 부호 없는 값으로 돌린다
+  const signCount = ((bytes[33] << 24) >>> 0) + (bytes[34] << 16) + (bytes[35] << 8) + bytes[36];
+  return {
+    up: (flags & 0x01) !== 0,
+    uv: (flags & 0x04) !== 0,
+    be: (flags & 0x08) !== 0,
+    bs: (flags & 0x10) !== 0,
+    at: (flags & 0x40) !== 0,
+    signCount,
+  };
+}`}
+  tests={[
+    { label: "기기에 묶인 열쇠, 두 번째 서명", args: [[...Array(32).fill(0), 0x05, 0, 0, 0, 2]], expected: { up: true, uv: true, be: false, bs: false, at: false, signCount: 2 } },
+    { label: "백업된 패스키", args: [[...Array(32).fill(0), 0x1d, 0, 0, 0, 2]], expected: { up: true, uv: true, be: true, bs: true, at: false, signCount: 2 } },
+    { label: "등록 응답(AT 켜짐)", args: [[...Array(32).fill(0), 0x45, 0, 0, 0, 1]], expected: { up: true, uv: true, be: false, bs: false, at: true, signCount: 1 } },
+    { label: "본인 확인 없이 누르기만", args: [[...Array(32).fill(0), 0x01, 0, 0, 1, 0]], expected: { up: true, uv: false, be: false, bs: false, at: false, signCount: 256 } },
+    { label: "카운터 최댓값", args: [[...Array(32).fill(0), 0x05, 0xff, 0xff, 0xff, 0xff]], expected: { up: true, uv: true, be: false, bs: false, at: false, signCount: 4294967295 } },
+  ]}
+/>
+
+마지막 테스트에서 `bytes[33] << 24`를 그대로 쓰면 음수가 나온다. 자바스크립트의 비트 연산은 32비트 부호 있는 정수로 계산하기 때문이다. 실제 서버 코드에서는 `DataView.getUint32`로 읽는 편이 안전하다.
+
+## 가짜 사이트에서는 열쇠가 나오지 않는다
+
+이제 처음 장면으로 돌아간다. 공격자가 `evil.localhost:18901`에 똑같이 생긴 로그인 페이지를 띄웠다고 하자. 크로미움은 `*.localhost`도 보안 컨텍스트로 보기 때문에 실험용 가짜 사이트로 쓰기 좋다. 아래 그림에서 다음을 누르면 세 가지 시도가 차례로 나온다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="가짜 사이트가 진짜 사이트의 열쇠를 꺼내려 할 때"
+  zones={[
+    { id: "device", label: "사용자 기기", x: 10, y: 20, w: 170, h: 210, tone: "private" },
+    { id: "net", label: "인터넷", x: 200, y: 20, w: 190, h: 210, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "auth", label: "인증기", sub: "rpId=localhost", x: 60, y: 190, icon: "lock" },
+    { id: "browser", label: "브라우저", x: 120, y: 80, icon: "client" },
+    { id: "real", label: "진짜 사이트", sub: "localhost", x: 320, y: 70, icon: "server" },
+    { id: "evil", label: "가짜 사이트", sub: "evil.localhost", x: 320, y: 180, icon: "server" },
+  ]}
+  links={[
+    { from: "browser", to: "auth" },
+    { from: "browser", to: "real" },
+    { from: "browser", to: "evil" },
+    { from: "evil", to: "real", dashed: true, label: "중계" },
+  ]}
+  steps={[
+    {
+      path: ["real", "browser", "auth", "browser", "real"],
+      packet: "서명",
+      title: "진짜 사이트에서는 열쇠가 나온다",
+      detail: "rpId가 지금 도메인과 같으니 인증기가 서명하고, 서버는 origin과 rpId 해시를 확인한다.",
+    },
+    {
+      path: ["evil", "browser"],
+      packet: "rpId=localhost",
+      blocked: true,
+      title: "남의 rpId를 대면 브라우저가 거절한다",
+      detail: "evil.localhost는 localhost의 하위 도메인이 아니다. 브라우저가 인증기를 부르기 전에 SecurityError를 낸다.",
+      payload: "SecurityError: The relying party ID is not a registrable\ndomain suffix of, nor equal to the current domain.",
+    },
+    {
+      path: ["evil", "browser", "auth"],
+      packet: "rpId=evil",
+      blocked: true,
+      title: "자기 rpId로 물으면 열쇠가 없다",
+      detail: "인증기에는 evil.localhost용 열쇠가 없다. 사용자에게 고를 패스키 목록이 비어 있고 NotAllowedError로 끝난다.",
+    },
+    {
+      path: ["evil", "real"],
+      packet: "origin=evil",
+      blocked: true,
+      title: "응답을 중계해도 서버가 거른다",
+      detail: "가짜 사이트에서 만든 응답의 clientDataJSON에는 evil origin이 박혀 있다. 진짜 서버는 origin이 다르다며 거절한다.",
+      payload: "Unexpected registration response origin\n\"http://evil.localhost:18901\",\nexpected \"http://localhost:18900\"",
+    },
+  ]}
+/>
+
+실제로 가짜 사이트에서 돌린 결과다.
+
+```text
+EVIL rpId=localhost: SecurityError: The relying party ID is not a registrable domain suffix of, nor equal to the current domain. Subsequently, an attempt to fetch the .well-known/webauthn resource of the claimed RP ID failed.
+EVIL rpId=default: NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.
+EVIL relay to real server: {"error":"Unexpected registration response origin \"http://evil.localhost:18901\", expected \"http://localhost:18900\""}
+```
+
+OTP와 비교하면 차이가 분명하다. OTP는 숫자가 어느 사이트에 입력되는지 모른다. 사람이 가짜 페이지에 옮겨 적으면 공격자가 30초 안에 진짜 사이트에 넣으면 그만이다. 패스키는 사람이 옮겨 적는 값이 없고, 브라우저가 origin을 확인하고, 그 origin이 서명 안에 들어간다. 사용자가 속아서 가짜 페이지에 들어가도 줄 수 있는 게 없다. 피싱에 강하다(phishing-resistant)는 말은 이 구조를 가리킨다.
+
+첫 번째 에러 메시지 끝의 `.well-known/webauthn`은 관련 출처 요청(Related Origin Requests)이다. `example.com`과 `example.co.kr`처럼 등록 가능한 도메인이 다른 사이트들이 한 rpId를 같이 쓰도록, rpId 쪽 서버가 `/.well-known/webauthn`에 허용할 origin 목록을 올려 두는 방식이다. 크롬 계열은 128부터 지원하고, 다른 브라우저의 지원 범위는 버전마다 확인해야 한다.
+
+## 같은 응답을 두 번 보내면
+
+서명된 응답을 누가 가로채서 다시 보내면 어떻게 될까. 서버는 두 겹으로 막는다. 첫째, challenge는 한 번 쓰면 지운다. 같은 응답을 다시 보내면 서버에는 이미 그 challenge가 없다. 둘째, 혹시 challenge를 지우지 않는 실수가 있어도 카운터가 막는다. 두 경우를 일부러 만들어 봤다.
+
+```text
+LOGIN2 + replay: ... "replay":{"error":"Unexpected authentication response challenge \"FO2lTK_9uwcDlcR2iFj95aowqOxrHzC_vg6v5-Pmt4c\", expected \"consumed\""}
+LOGIN3 keepChallenge + replay: ... "replay":{"error":"Response counter value 4 was lower than expected 4"}
+```
+
+카운터가 하는 일을 서버 입장에서 따라가 보면 이렇다. 칸은 차례로 도착한 응답의 signCount이고, 오른쪽은 서버가 저장해 둔 값이다.
+
+<AlgoTrace
+  caption="서버가 signCount를 확인하는 순서"
+  memoryLabel="저장된 카운터"
+  cells={["등록 1", "로그인 2", "로그인 3", "로그인 4", "재전송 4", "복제 3"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "등록 응답의 카운터 1을 저장한다." },
+    { pointer: 1, found: [1], memory: ["2"], caption: "2는 1보다 크다. 통과하고 2로 바꾼다." },
+    { pointer: 2, found: [1, 2], memory: ["3"], caption: "3도 통과한다. 저장 값이 3이 된다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["4"], caption: "4까지 정상적으로 올라왔다." },
+    { pointer: 4, found: [1, 2, 3], memory: ["4"], caption: "같은 4가 또 왔다. 커지지 않았으니 거절한다." },
+    { pointer: 5, found: [1, 2, 3], memory: ["4", "경고"], caption: "더 작은 값은 열쇠가 복제됐다는 신호일 수 있다. 거절하고 기록을 남긴다." },
+  ]}
+/>
+
+카운터는 보조 장치로만 본다. 명세는 카운터를 지원하지 않는 인증기가 늘 0을 보내도 되게 해 두었고, 여러 기기에 동기화되는 패스키는 기기마다 카운터를 맞출 수 없으니 0을 보내는 구현이 흔하다. 저장 값과 받은 값이 둘 다 0이면 비교를 건너뛰는 게 보통이다. 재전송을 막는 주된 장치는 어디까지나 일회용 challenge다. challenge는 세션이나 짧은 수명의 저장소에 두고, 검증이 끝나면 성공이든 실패든 지운다.
+
+## 기기에 묶인 열쇠와 동기화되는 열쇠
+
+패스키라는 이름이 널리 쓰이기 전에는 WebAuthn 자격 증명이 대부분 한 기기에 묶여 있었다. 보안 키를 잃어버리면 그 열쇠도 끝이었다. 지금 "패스키"라고 부르는 것의 상당수는 애플 iCloud 키체인, 구글 비밀번호 관리자 같은 곳을 통해 같은 계정의 여러 기기로 동기화된다. 휴대폰을 바꿔도 패스키가 따라온다.
+
+서버는 이 차이를 앞에서 본 BE·BS 플래그로 안다. 가상 인증기에 백업 가능 옵션을 켜고 등록했더니 결과가 이렇게 바뀌었다.
+
+```text
+REG VERIFIED {"fmt":"none",...,"credentialDeviceType":"singleDevice","credentialBackedUp":false}
+REG VERIFIED {"fmt":"none",...,"credentialDeviceType":"multiDevice","credentialBackedUp":true}
+LOGIN synced-like: {...,"flags":"00011101","counter":2,...}
+```
+
+<ConceptDiagram
+  width={400}
+  height={230}
+  caption="동기화 패스키는 계정의 키체인을 타고 퍼진다. 보안 키 안의 열쇠는 그 기기를 떠나지 않는다."
+  nodes={[
+    { id: "phone", label: "휴대폰", sub: "BE=1 BS=1", x: 80, y: 60 },
+    { id: "laptop", label: "노트북", sub: "같은 계정", x: 80, y: 180 },
+    { id: "cloud", label: "키체인", sub: "종단 암호화", x: 210, y: 120 },
+    { id: "key", label: "보안 키", sub: "BE=0", x: 330, y: 60 },
+    { id: "rp", label: "서버", sub: "공개 키들", x: 330, y: 180 },
+  ]}
+  edges={[
+    { from: "phone", to: "cloud", label: "동기화", arrow: "both" },
+    { from: "cloud", to: "laptop", label: "동기화", arrow: "both" },
+    { from: "laptop", to: "rp", label: "서명" },
+    { from: "key", to: "rp", label: "서명" },
+  ]}
+/>
+
+어느 쪽이 낫다고 잘라 말하기는 어렵다. 동기화 패스키는 기기를 잃어도 계정을 되찾기 쉬워서 일반 사용자에게 맞는다. 대신 열쇠의 안전이 클라우드 계정의 안전에 기대게 된다. 기기에 묶인 열쇠는 복제가 안 되니 관리자 계정이나 사내 시스템처럼 위험이 큰 곳에 맞는다. 대신 잃어버리면 다른 등록 수단이 꼭 있어야 한다. 서버 입장에서 할 수 있는 일은 BE·BS를 기록해 두고, 백업되지 않은 패스키 하나만 가진 사용자에게 "다른 기기에도 하나 더 등록하라"고 권하는 정도다.
+
+## 사용자 이름 칸에서 바로 고르기
+
+패스키를 붙여도 사용자가 버튼을 찾아 누르지 않으면 쓰이지 않는다. 그래서 브라우저는 로그인 폼의 자동 완성 목록에 패스키를 함께 보여 주는 조건부 UI(conditional mediation)를 지원한다. 입력 칸에 `autocomplete="username webauthn"`을 붙이고, 페이지가 열릴 때 `mediation: "conditional"`로 `navigator.credentials.get`을 걸어 둔다. 사용자가 칸을 누르면 저장된 패스키가 목록에 뜬다.
+
+```js
+// 로그인 페이지가 열리면 바로 걸어 둔다. 사용자가 고를 때까지 기다린다
+if (await PublicKeyCredential.isConditionalMediationAvailable?.()) {
+  const options = await fetch("/auth/options", { method: "POST" }).then((r) => r.json());
+  const assertion = await navigator.credentials.get({
+    mediation: "conditional",
+    publicKey: PublicKeyCredential.parseRequestOptionsFromJSON(options),
+  });
+  // assertion을 서버로 보내 검증한다
+}
+```
+
+크로미움 141에서는 `isConditionalMediationAvailable()`이 `true`였고 `parseRequestOptionsFromJSON`도 있었다. 다만 이 함수는 비교적 새 API라 지원하지 않는 브라우저가 있어서, 실무에서는 `@simplewebauthn/browser`처럼 base64url 변환을 대신 해 주는 라이브러리를 쓰는 경우가 많다. 이 데모도 그 라이브러리로 돌렸다.
+
+## 붙이기 전에 정할 것들
+
+rpId는 한 번 정하면 바꾸기 어렵다. 등록된 열쇠가 모두 그 rpId에 묶여 있어서다. `login.example.com`을 rpId로 잡으면 `app.example.com`에서는 그 열쇠를 못 쓴다. 보통은 등록 가능한 도메인(`example.com`)을 rpId로 둔다. 그러면 하위 도메인 어디서든 쓸 수 있다. 서버는 반대로 허용할 origin 목록을 명시해서 검사한다.
+
+계정 복구는 패스키 도입에서 가장 약한 고리가 되기 쉽다. 패스키를 잃었을 때 이메일 링크 하나로 복구된다면, 공격자도 패스키 대신 이메일을 노리면 된다. 계정마다 패스키를 여러 개 등록할 수 있게 하고, 복구 경로에도 그만큼의 확인을 둔다. 비밀번호를 당장 없애지 못한다면, 패스키로 로그인한 사용자에게는 비밀번호 로그인을 꺼 둘 선택지를 주는 것도 방법이다.
+
+서버에 저장할 것은 많지 않다. 자격 증명 id, 공개 키, 카운터, transports, BE·BS, 만든 시각과 마지막 사용 시각, 사용자가 붙인 이름("회사 노트북") 정도다. 사용자가 설정 화면에서 패스키 목록을 보고 하나씩 지울 수 있어야 한다. 기기를 잃어버렸을 때 그 열쇠만 끊는 수단이 된다.
+
+`userVerification`은 `required`와 `preferred` 중에서 고른다. `preferred`는 지문 센서가 없는 보안 키도 받아 주지만, 그러면 열쇠를 가진 사람이면 누구나 로그인된다. 패스키를 비밀번호 대신 단독으로 쓴다면 `required`로 두고 서버도 UV 플래그를 확인한다. 이번 데모에서 가상 인증기의 본인 확인을 끄자 브라우저 단계에서 바로 실패했다.
+
+```text
+LOGIN no-UV threw: page.evaluate: NotAllowedError: The operation either timed out or was not allowed. See: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client.
+```
+
+## 패스키 로그인이 안 될 때 보는 곳
+
+브라우저 에러는 일부러 뭉뚱그려져 있다. 사용자가 취소했든, 시간이 지났든, 열쇠가 없든 대부분 `NotAllowedError`로 나온다. 어떤 사이트에 패스키가 있는지를 페이지가 캐내지 못하게 하려는 개인 정보 보호 설계다. 그래서 원인은 이름이 다른 에러부터 좁힌다.
+
+`SecurityError`는 거의 항상 rpId 문제다. 지금 주소와 rpId가 맞지 않거나, IP 주소로 접속했다. 개발 중에 `127.0.0.1`로 열면 이렇게 나온다. `localhost`로 열어야 한다.
+
+```text
+127.0.0.1 secure: true
+SecurityError: This is an invalid domain.
+```
+
+`InvalidStateError`는 등록 때 이미 그 인증기에 같은 계정의 열쇠가 있다는 뜻이다(`excludeCredentials`). 에러가 아니라 "이미 등록됐다"는 안내로 처리하면 된다.
+
+브라우저는 성공했는데 서버 검증이 실패한다면 서버 로그의 메시지를 본다. origin 불일치가 가장 흔하다. 로드 밸런서 뒤에서 서버가 기대 origin을 `http://`로 잡았거나, 포트가 붙은 개발 주소를 그대로 운영 설정에 남겼거나, 웹뷰처럼 origin이 다른 앱에서 불렀을 때다. challenge 불일치는 세션 쿠키가 옵션 요청과 검증 요청 사이에 바뀌었을 때 나온다. 여러 서버에 세션이 나뉘어 있거나, 탭 두 개에서 동시에 로그인을 시작했을 때다.
+
+로컬에서 재현할 때는 크롬 개발자 도구의 WebAuthn 패널을 쓴다. 이 글의 데모처럼 가상 인증기를 붙이고, 사용자 확인을 켰다 끄고, 저장된 자격 증명과 카운터를 볼 수 있다. 같은 기능을 자동화 테스트에서는 DevTools 프로토콜의 `WebAuthn.addVirtualAuthenticator`로 쓴다.
+
+## 정리하며
+
+패스키는 로그인을 "비밀을 보여 주기"에서 "challenge에 서명하기"로 바꾼다. 서버에는 공개 키만 남고, 브라우저는 rpId와 origin을 확인하고, 그 값이 서명 안에 들어가서 가짜 사이트에서는 쓸 수 있는 응답이 나오지 않는다. 남는 숙제는 기술보다 운영 쪽이다. rpId를 잘 고르고, 복구 경로를 약하게 두지 않고, 여러 개의 패스키를 관리할 화면을 만든다. 여러 회사 앱을 한 번의 로그인으로 묶는 이야기는 [SSO: SAML과 OIDC](/posts/sso-saml-oidc)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 패스키는 비밀번호와 무엇이 다른가요?
+
+비밀번호는 서버와 사용자가 같은 비밀을 나눠 갖고, 로그인할 때마다 그 비밀을 보낸다. 패스키는 기기 안에서 만든 공개 키 쌍을 쓰고, 서버에는 공개 키만 저장한다. 로그인은 서버가 낸 challenge에 개인 키로 서명하는 일이라 서버가 털려도 로그인에 쓸 비밀이 나가지 않고, 사이트마다 열쇠가 따로라 재사용 문제도 없다.
+
+### 패스키가 피싱에 강한 이유는 무엇인가요?
+
+브라우저가 rpId를 지금 도메인과 대조하고, 현재 origin을 clientDataJSON에 적어 서명 대상에 넣기 때문이다. 가짜 사이트는 진짜 rpId로 열쇠를 꺼낼 수 없고, 응답을 중계해도 origin이 달라 서버가 거절한다. OTP처럼 사람이 옮겨 적는 값이 없어서 사용자가 속아도 넘겨줄 것이 없다.
+
+### 등록과 로그인에서 서버는 각각 무엇을 검증하나요?
+
+둘 다 challenge가 자기가 발급한 값인지, origin이 허용 목록에 있는지, authenticatorData의 rpIdHash가 자기 rpId의 해시인지, UP·UV 플래그가 정책에 맞는지 본다. 등록에서는 공개 키와 자격 증명 id를 꺼내 저장하고, 필요하면 attestation을 검사한다. 로그인에서는 저장된 공개 키로 서명을 검증하고 카운터를 갱신한다.
+
+### challenge를 매번 새로 만들고 한 번만 쓰는 이유는요?
+
+서명된 응답을 다시 보내는 재전송을 막기 위해서다. challenge는 서명 대상에 들어가므로, 서버가 쓴 challenge를 지워 두면 같은 응답은 다시 통과하지 못한다. 실패한 시도에서도 지워야 하고, 세션에 묶어 다른 사용자의 challenge와 섞이지 않게 한다.
+
+### signCount는 무엇이고, 0이 오면 어떻게 하나요?
+
+인증기가 서명할 때마다 올리는 카운터로, 저장 값보다 작거나 같으면 복제된 열쇠일 수 있다는 신호로 본다. 다만 명세가 카운터 미지원을 허용하고, 동기화 패스키는 0을 계속 보내는 경우가 많다. 둘 다 0이면 비교를 건너뛰고, 재전송 방어는 일회용 challenge에 맡긴다.
+
+### 동기화 패스키와 기기에 묶인 패스키는 언제 무엇을 고르나요?
+
+일반 사용자 서비스는 기기를 바꿔도 따라오는 동기화 패스키가 복구 부담이 적어 맞는다. 관리자 계정처럼 위험이 큰 곳은 복제되지 않는 보안 키 같은 기기 묶음 열쇠를 요구하고, 필요하면 attestation으로 모델을 제한한다. 서버는 BE·BS 플래그로 둘을 구분해 정책에 쓸 수 있다.
+
+### rpId는 어떻게 정하고, 잘못 정하면 무슨 일이 생기나요?
+
+보통 등록 가능한 도메인(`example.com`)으로 정해 하위 도메인 어디서든 쓸 수 있게 한다. `login.example.com`처럼 좁게 잡으면 다른 하위 도메인에서 그 열쇠를 못 쓰고, 이미 등록된 열쇠는 rpId에 묶여 있어 나중에 바꾸면 모두 다시 등록해야 한다. IP 주소는 rpId가 될 수 없어서 개발할 때도 `localhost`를 쓴다.
+
+### 패스키를 도입해도 계정이 털릴 수 있는 경로는요?
+
+가장 흔한 건 복구 경로다. 패스키를 잃었을 때 이메일 링크나 SMS로 쉽게 복구되면 공격자는 그쪽을 노린다. 비밀번호 로그인을 그대로 열어 두는 것도 같은 문제다. 로그인 뒤의 세션 쿠키를 훔치는 공격은 패스키와 무관하니 [XSS](/posts/xss) 방어와 세션 관리는 따로 챙긴다.

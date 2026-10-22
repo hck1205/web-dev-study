@@ -2,6 +2,108 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "owasp-top-10-map": {
+    "links": [
+      "authn-vs-authz",
+      "csrf",
+      "cors",
+      "ssrf",
+      "web-security-headers",
+      "nginx-https-performance",
+      "iam-basics",
+      "security-groups-nacl",
+      "k8s-security-context",
+      "k8s-rbac",
+      "postgres-roles-security",
+      "dependency-hell",
+      "semantic-versioning",
+      "github-actions-docker-ecr",
+      "git-large-files-secrets",
+      "https-tls",
+      "encryption-in-transit",
+      "encryption-at-rest",
+      "secrets-management",
+      "jwt-key-rotation",
+      "sql-injection",
+      "xss",
+      "rate-limiting-in-practice",
+      "idempotency-key",
+      "ddos-protection",
+      "cookie-session-login",
+      "token-login",
+      "oauth",
+      "mfa-totp",
+      "passkeys-webauthn",
+      "sso-saml-oidc",
+      "zero-trust-architecture",
+      "dockerfile-image-layers",
+      "structured-logging",
+      "centralized-logging-pipeline",
+      "debugging-with-logs",
+      "k8s-audit-logging",
+      "frontend-error-tracking",
+      "timeouts",
+      "circuit-breaker",
+      "express-middleware",
+      "ids-ips",
+      "waf"
+    ],
+    "mentions": []
+  },
+  "web-security-headers": {
+    "links": [
+      "nginx-https-performance",
+      "xss",
+      "cors",
+      "thread-safety",
+      "owasp-top-10-map"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "what-happens-google-com"
+    ]
+  },
+  "sso-saml-oidc": {
+    "links": [
+      "oauth",
+      "jwt-key-rotation",
+      "passkeys-webauthn",
+      "csrf"
+    ],
+    "mentions": [
+      "cookie-session-login",
+      "html-form-http",
+      "token-login",
+      "sli-slo",
+      "db-modeling-normalization"
+    ]
+  },
+  "mfa-totp": {
+    "links": [
+      "passkeys-webauthn",
+      "encryption-at-rest",
+      "clock-skew",
+      "rate-limiting-in-practice",
+      "sso-saml-oidc"
+    ],
+    "mentions": [
+      "cookie-session-login",
+      "oauth",
+      "db-modeling-normalization"
+    ]
+  },
+  "passkeys-webauthn": {
+    "links": [
+      "cookie-session-login",
+      "token-login",
+      "mfa-totp",
+      "sso-saml-oidc",
+      "xss"
+    ],
+    "mentions": [
+      "base64"
+    ]
+  },
   "stream-processing": {
     "links": [
       "sd-ad-click-stream-windows",
@@ -1647,6 +1749,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "k8s-architecture",
       "event-loop",
+      "web-security-headers",
       "js-pure-functions",
       "osi-in-practice",
       "http-status-codes"
@@ -3666,6 +3769,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "realtime-communication",
+      "web-security-headers",
       "js-function-forms",
       "clock-skew"
     ]
@@ -5150,6 +5254,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rollback-strategy",
       "local-k8s-kind-minikube",
       "eks-cluster-basics",
+      "sso-saml-oidc",
       "k8s-hpa",
       "webhooks"
     ]
@@ -5916,7 +6021,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "local-k8s-kind-minikube",
       "k8s-architecture",
       "token-login",
-      "linux-files-permissions"
+      "linux-files-permissions",
+      "sso-saml-oidc"
     ]
   },
   "kubectl-apply-ssa": {
@@ -6398,6 +6504,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "docker-container-basics",
       "latency-bandwidth-throughput",
+      "sso-saml-oidc",
       "vpc-basics",
       "webhooks"
     ]
@@ -6580,7 +6687,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-architecture",
-      "http-status-codes"
+      "http-status-codes",
+      "sso-saml-oidc"
     ]
   },
   "secrets-management": {
@@ -6742,6 +6850,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl"
     ],
     "mentions": [
+      "owasp-top-10-map",
       "csrf",
       "race-conditions",
       "layer-ip-addressing",
@@ -6758,6 +6867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-roles-security"
     ],
     "mentions": [
+      "owasp-top-10-map",
       "upper-layers-session-presentation-app"
     ]
   },
@@ -6769,6 +6879,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "owasp-top-10-map",
       "sql-injection",
       "bundler-basics"
     ]
@@ -6782,6 +6893,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "token-login"
     ],
     "mentions": [
+      "owasp-top-10-map",
       "what-happens-google-com"
     ]
   },
@@ -7226,6 +7338,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "web-security-headers",
       "ds-linked-list",
       "consistency-models",
       "go-concurrency-basics",
@@ -7660,6 +7773,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-kv-store-versioning",
       "security-groups-nacl",
       "redis-basics",
+      "mfa-totp",
       "udp-and-quic",
       "dns",
       "token-login"
@@ -8080,6 +8194,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "layer-ip-addressing",
       "db-type-key-value",
+      "sso-saml-oidc",
       "vpc-basics",
       "dns",
       "webhooks"
@@ -8188,8 +8303,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ids-ips"
     ],
     "mentions": [
+      "passkeys-webauthn",
       "high-availability",
       "authn-vs-authz",
+      "sso-saml-oidc",
       "https-tls",
       "vpc-basics",
       "token-login"
@@ -8207,6 +8324,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "waf",
+      "owasp-top-10-map",
       "vpc-subnets-route-tables",
       "reverse-proxy-lb-api-gateway",
       "layer-ip-addressing",
@@ -9064,6 +9182,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-lifecycle",
       "iptables-nat",
+      "owasp-top-10-map",
       "vpc-subnets-route-tables",
       "docker-container-basics",
       "realtime-communication",
@@ -9265,6 +9384,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks",
       "what-happens-google-com",
       "ipv6-basics",
+      "sso-saml-oidc",
       "pattern-abstract-factory",
       "dns"
     ]
@@ -10082,6 +10202,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-network-policy",
       "timeouts",
+      "owasp-top-10-map",
       "docker-container-basics",
       "realtime-communication",
       "reverse-proxy-lb-api-gateway",
@@ -11226,6 +11347,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "linux-processes-signals",
       "event-loop",
+      "web-security-headers",
       "linux-files-permissions",
       "http-status-codes",
       "what-happens-google-com",
@@ -11272,6 +11394,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "edge-caching",
       "cookie-session-login",
+      "web-security-headers",
       "security-groups-nacl",
       "what-happens-google-com",
       "image-optimization",

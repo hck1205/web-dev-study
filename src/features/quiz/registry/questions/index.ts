@@ -339,6 +339,7 @@ import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
+import { MFA_TOTP } from "./mfa-totp";
 import { MICRO_FRONTEND_INTEGRATION_PATTERNS } from "./micro-frontend-integration-patterns";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
@@ -375,9 +376,11 @@ import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
+import { OWASP_TOP_10_MAP } from "./owasp-top-10-map";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
 import { PARALLAX_SCROLLYTELLING } from "./parallax-scrollytelling";
+import { PASSKEYS_WEBAUTHN } from "./passkeys-webauthn";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -568,6 +571,7 @@ import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { SSO_SAML_OIDC } from "./sso-saml-oidc";
 import { SSRF } from "./ssrf";
 import { STREAM_PROCESSING } from "./stream-processing";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
@@ -605,6 +609,7 @@ import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WAF } from "./waf";
 import { WEB_FONT_OPTIMIZATION } from "./web-font-optimization";
+import { WEB_SECURITY_HEADERS } from "./web-security-headers";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -957,6 +962,7 @@ export const QUESTION_SETS = [
   MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
   METRICS_TYPES,
+  MFA_TOTP,
   MICRO_FRONTEND_INTEGRATION_PATTERNS,
   MICRO_FRONTENDS,
   MICROSERVICES,
@@ -993,9 +999,11 @@ export const QUESTION_SETS = [
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
+  OWASP_TOP_10_MAP,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
   PARALLAX_SCROLLYTELLING,
+  PASSKEYS_WEBAUTHN,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -1186,6 +1194,7 @@ export const QUESTION_SETS = [
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  SSO_SAML_OIDC,
   SSRF,
   STREAM_PROCESSING,
   STREAMING_SSR_SUSPENSE,
@@ -1223,6 +1232,7 @@ export const QUESTION_SETS = [
   VPN_IPSEC_WIREGUARD,
   WAF,
   WEB_FONT_OPTIMIZATION,
+  WEB_SECURITY_HEADERS,
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,
