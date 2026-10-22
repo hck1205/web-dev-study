@@ -21,6 +21,7 @@ import { BACKEND_ENGINEER_ROADMAP } from "./backend-engineer-roadmap";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
+import { BASH_SCRIPTING } from "./bash-scripting";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
 import { BINARY_SEARCH } from "./binary-search";
@@ -325,6 +326,7 @@ import { LIGHTHOUSE_EXPLAINED } from "./lighthouse-explained";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
 import { LINUX_NAMESPACES_CGROUPS } from "./linux-namespaces-cgroups";
+import { LINUX_NETWORK_TUNING } from "./linux-network-tuning";
 import { LINUX_PERFORMANCE_TRIAGE } from "./linux-performance-triage";
 import { LINUX_PROCESSES_SIGNALS } from "./linux-processes-signals";
 import { LINUX_SYSTEMD_SYSTEMCTL } from "./linux-systemd-systemctl";
@@ -573,6 +575,7 @@ import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { SSH_IN_PRACTICE } from "./ssh-in-practice";
 import { SSO_SAML_OIDC } from "./sso-saml-oidc";
 import { SSRF } from "./ssrf";
 import { STREAM_PROCESSING } from "./stream-processing";
@@ -647,6 +650,7 @@ export const QUESTION_SETS = [
   BACKPRESSURE,
   BACKUP_STRATEGY,
   BASE64,
+  BASH_SCRIPTING,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
   BINARY_SEARCH,
@@ -951,6 +955,7 @@ export const QUESTION_SETS = [
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
   LINUX_NAMESPACES_CGROUPS,
+  LINUX_NETWORK_TUNING,
   LINUX_PERFORMANCE_TRIAGE,
   LINUX_PROCESSES_SIGNALS,
   LINUX_SYSTEMD_SYSTEMCTL,
@@ -1199,6 +1204,7 @@ export const QUESTION_SETS = [
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  SSH_IN_PRACTICE,
   SSO_SAML_OIDC,
   SSRF,
   STREAM_PROCESSING,

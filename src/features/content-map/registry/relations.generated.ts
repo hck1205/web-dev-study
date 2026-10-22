@@ -2,6 +2,61 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "linux-network-tuning": {
+    "links": [
+      "tcp-connection-lifecycle",
+      "ports-and-sockets",
+      "linux-namespaces-cgroups",
+      "rate-limiting-in-practice",
+      "connection-pool",
+      "linux-systemd-systemctl",
+      "iptables-basics",
+      "k8s-kube-proxy-modes",
+      "network-monitoring"
+    ],
+    "mentions": [
+      "iptables-nat",
+      "vpc-subnets-route-tables",
+      "k8s-architecture",
+      "sd-start-single-server",
+      "sql-batch-timeout-pool",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "bash-scripting": {
+    "links": [
+      "cron-jobs",
+      "backup-strategy",
+      "linux-processes-signals",
+      "linux-systemd-systemctl",
+      "iac-basics"
+    ],
+    "mentions": [
+      "ansible-network-automation",
+      "postgres-operations"
+    ]
+  },
+  "ssh-in-practice": {
+    "links": [
+      "git-remote-collaboration",
+      "linux-systemd-systemctl",
+      "iptables-basics",
+      "linux-files-permissions",
+      "tcp-connection-lifecycle",
+      "linux-processes-signals",
+      "ports-and-sockets"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "vpc-subnets-route-tables",
+      "ansible-network-automation",
+      "autoscaling",
+      "iptables-nat",
+      "cookie-session-login",
+      "dns"
+    ]
+  },
   "linux-performance-triage": {
     "links": [
       "monitoring-basics",
@@ -1267,7 +1322,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-resources",
-      "linux-namespaces-cgroups"
+      "linux-namespaces-cgroups",
+      "bash-scripting"
     ]
   },
   "claude-code-fundamentals-map": {
@@ -2554,6 +2610,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sd-queue-logging-automation",
       "db-type-key-value",
+      "bash-scripting",
       "stream-processing",
       "sd-start-single-server",
       "autoscaling",
@@ -6398,6 +6455,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "helm-dependencies-oci-gitops",
       "grpc",
+      "bash-scripting",
       "js-truthy-falsy-typeof",
       "linux-files-permissions",
       "local-k8s-kind-minikube",
@@ -6445,6 +6503,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-api-objects",
+      "bash-scripting",
       "disaster-recovery",
       "rollback-strategy",
       "security-groups-nacl",
@@ -6709,6 +6768,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multi-region"
     ],
     "mentions": [
+      "bash-scripting",
       "sd-object-storage-architecture",
       "postgres-architecture",
       "on-call"
@@ -6774,6 +6834,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-architecture",
+      "bash-scripting",
       "git-staging-area",
       "sql-batch-timeout-pool",
       "high-availability",
@@ -7530,6 +7591,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics"
     ],
     "mentions": [
+      "bash-scripting",
       "yaml-for-k8s",
       "vpc-subnets-route-tables",
       "iptables-basics",
@@ -7760,6 +7822,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "what-happens-google-com",
+      "linux-network-tuning",
       "local-custom-domain",
       "event-loop",
       "ports-and-sockets",
@@ -8046,6 +8109,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-lifecycle",
       "k8s-storageclass-snapshots",
+      "bash-scripting",
       "k8s-pod-basics",
       "git-undo",
       "argocd-basics",
@@ -8081,6 +8145,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "external-secrets",
       "github-actions-docker-ecr",
       "k8s-storageclass-snapshots",
+      "bash-scripting",
       "vpc-subnets-route-tables",
       "docker-container-basics",
       "k8s-cri-cni-csi",
@@ -8106,6 +8171,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-troubleshooting",
       "eks-cluster-basics",
+      "bash-scripting",
       "terraform-basics",
       "token-login"
     ]
@@ -8301,6 +8367,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "dependency-hell",
       "db-type-key-value",
+      "bash-scripting",
       "security-groups-nacl",
       "eks-cluster-basics",
       "vpc-basics"
@@ -8332,6 +8399,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dockerfile-image-layers",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
+      "bash-scripting",
       "client-data-cache"
     ]
   },
@@ -8347,6 +8415,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
+      "bash-scripting",
       "osi-in-practice",
       "client-data-cache"
     ]
@@ -8361,6 +8430,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-multicontainer",
       "k8s-architecture",
+      "bash-scripting",
       "linux-systemd-systemctl"
     ]
   },
@@ -9900,6 +9970,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "linux-processes-signals",
       "kubernetes-ingress",
+      "bash-scripting",
       "batch-processing",
       "local-k8s-kind-minikube"
     ]
@@ -10074,6 +10145,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "encryption-in-transit",
       "postgres-operations",
+      "bash-scripting",
       "security-groups-nacl",
       "sql-batch-timeout-pool",
       "ipv6-basics",
@@ -10180,6 +10252,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "secrets-management",
+      "bash-scripting",
       "build-caching",
       "linux-files-permissions",
       "git-staging-area",
@@ -10194,6 +10267,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branch-merge"
     ],
     "mentions": [
+      "bash-scripting",
       "db-modeling-normalization"
     ]
   },
@@ -10460,6 +10534,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "what-happens-google-com",
       "timeouts",
+      "linux-network-tuning",
       "vpc-subnets-route-tables",
       "browser-fetch",
       "iptables-basics",
@@ -10519,6 +10594,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume",
       "iptables-nat",
       "udp-and-quic",
+      "linux-network-tuning",
       "network-troubleshooting-by-layer",
       "upper-layers-session-presentation-app"
     ],
@@ -11534,6 +11610,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "osi-in-practice",
       "iptables-basics",
+      "bash-scripting",
       "http-versions",
       "security-groups-nacl",
       "ports-and-sockets",
@@ -11729,6 +11806,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rest-api-design",
       "fp-composition-pipe",
       "k8s-security-context",
+      "bash-scripting",
       "grpc",
       "linux-processes-signals",
       "udp-and-quic"
@@ -11745,6 +11823,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-compose",
       "k8s-architecture",
       "k8s-pod-troubleshooting",
+      "bash-scripting",
       "dns"
     ]
   },

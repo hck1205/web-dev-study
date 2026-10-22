@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "linux-network-tuning",
+    title: "리눅스 네트워크 한도 넘겨 보기: accept 큐, 임시 포트, 파일 디스크립터, conntrack",
+    summary: "네트워크 네임스페이스 안에서 accept 큐, 임시 포트와 TIME_WAIT, 파일 디스크립터, conntrack 표를 차례로 넘쳐 보고 고치기 전후 숫자를 비교한다. 1초 지연, sys CPU 급증, 응답 없는 연결, table full이 각각 어느 한도인지 지표로 가리고, sysctl을 파일로 남기는 법과 컨테이너에서 값이 다른 이유까지 본다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Network", "TCP/IP", "Performance", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["somaxconn", "tcp_tw_reuse", "LimitNOFILE", "nf_conntrack_max", "sysctl 튜닝"],
+  },
+  {
+    slug: "bash-scripting",
+    title: "bash 스크립트가 실패를 숨기지 않게: set -euo pipefail, 따옴표, trap, shellcheck",
+    summary: "pg_dump가 실패했는데 20바이트 백업이 남고 종료 코드 0으로 끝난 스크립트에서 출발해 종료 코드, pipefail, set -e가 물러나는 자리, 따옴표와 배열, stdout과 stderr 나누기, trap으로 뒷정리하기를 본다. 임시 파일과 flock으로 고친 백업 스크립트와 shellcheck 결과를 실제로 돌려 확인한다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "DevOps", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["pipefail", "shellcheck", "셸 스크립트", "PIPESTATUS"],
+  },
+  {
+    slug: "ssh-in-practice",
+    title: "SSH 실전: 키와 known_hosts, ProxyJump, 터널, sshd_config",
+    summary: "키가 비밀번호 대신 서명으로 로그인하는 원리부터 known_hosts 경고, config 파일의 처음 값 우선 규칙, ProxyJump로 배스천 건너기, -L·-R·-D 터널, authorized_keys 옵션, sshd_config 다듬기까지 직접 띄운 sshd로 확인한다. Permission denied (publickey)를 만났을 때 클라이언트와 서버 로그를 읽는 순서도 정리한다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Security", "Network", "DevOps", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["ProxyJump", "known_hosts", "sshd_config", "SSH 터널", "ssh-agent"],
+  },
+  {
     slug: "linux-performance-triage",
     title: "리눅스 성능 점검 60초: uptime부터 perf까지 열 줄로 범인 좁히기",
     summary: "API가 느리다는 알림을 받고 서버에 들어가 uptime, dmesg, vmstat, mpstat, pidstat, iostat, free, sar, top을 차례로 치며 단일 스레드 node와 fsync 많은 작업을 찾아낸다. PSI로 기다린 시간을 보고, perf로 범인 함수까지 내려가는 순서와 점검할 때 흔한 실수를 정리한다.",
