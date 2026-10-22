@@ -1,0 +1,312 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("typescript-roadmap");
+
+주문 화면 파일 하나를 `tsc`로 검사했더니 에러가 여섯 줄 나왔다. 줄마다 코드가 다르다.
+
+```tsx
+import type { ReactNode } from "react";
+
+interface User { id: number; name: string; email: string }
+interface Options { timeout?: number; retry?: number }
+declare const users: User[];
+
+const opts: Options = { timout: 3000 };
+
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+getProp(users[0], "emial");
+
+function findName(id: number) {
+  return users.find((u) => u.id === id).name;
+}
+
+type Preview = Pick<User, "nmae">;
+
+function total(items) {
+  return items.length;
+}
+
+function Panel({ children }: { children: ReactNode }) {
+  return <section>{children}</section>;
+}
+export const page = <Panel>{users[0]}</Panel>;
+```
+
+TypeScript 5.9.3, `--strict`로 검사한 결과다.
+
+```text
+checkout.tsx(7,25): error TS2561: Object literal may only specify known properties, but 'timout' does not exist in type 'Options'. Did you mean to write 'timeout'?
+checkout.tsx(12,19): error TS2345: Argument of type '"emial"' is not assignable to parameter of type 'keyof User'.
+checkout.tsx(15,10): error TS2532: Object is possibly 'undefined'.
+checkout.tsx(18,27): error TS2344: Type '"nmae"' does not satisfy the constraint 'keyof User'.
+checkout.tsx(20,16): error TS7006: Parameter 'items' implicitly has an 'any' type.
+checkout.tsx(27,28): error TS2322: Type 'User' is not assignable to type 'ReactNode'.
+```
+
+객체 리터럴에만 걸리는 검사(TS2561), 제네릭 제약(TS2345), `undefined` 좁히기(TS2532), 유틸리티 타입의 키 제약(TS2344), strict 옵션이 켠 암묵적 `any` 검사(TS7006), React의 children 타입(TS2322). 여섯 줄이 각각 다른 규칙에서 나왔다. 에러 메시지만 검색하면 그때그때 고치고 끝나지만, 어느 규칙인지 알면 같은 종류의 에러가 다시 나지 않게 설계를 바꿀 수 있다.
+
+이 블로그의 TypeScript 글은 여섯 편이다. 이 글은 새 개념을 설명하지 않는다. 글마다 어떤 질문에 답하는지 한두 문장으로 적고, 읽는 순서와 에러에서 거꾸로 찾아가는 길을 놓았다. 자바스크립트 쪽 지도는 [자바스크립트 로드맵](/posts/javascript-roadmap)에 따로 있다. TypeScript는 자바스크립트에 타입을 얹은 언어라, 런타임 동작(클로저, `this`, 비동기)은 그쪽 글이 답한다.
+
+## 타입은 어디에서 일하고 어디에서 사라지나
+
+글을 고르기 전에 TypeScript가 코드의 어느 구간에 있는지부터 보자. 아래 그림에서 다음을 누르면 `.ts` 파일 하나가 화면에 닿기까지의 길을 따라간다.
+
+<NetworkTopology
+  width={400}
+  height={270}
+  caption="타입 검사와 변환은 다른 도구가 하고, 브라우저에는 타입이 도착하지 않는다"
+  zones={[
+    { id: "dev", label: "개발과 CI", x: 10, y: 15, w: 260, h: 240, tone: "private" },
+    { id: "run", label: "실행", x: 285, y: 15, w: 105, h: 240, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "src", label: "app.ts", sub: "타입 + 코드", x: 70, y: 70, icon: "client", w: 96 },
+    { id: "cfg", label: "tsconfig", sub: "규칙", x: 70, y: 195, icon: "lock", w: 96 },
+    { id: "tsc", label: "tsc", sub: "검사만", x: 200, y: 70, icon: "firewall", w: 90 },
+    { id: "bundler", label: "번들러", sub: "타입 지우기", x: 200, y: 195, icon: "router", w: 96 },
+    { id: "js", label: "app.js", sub: "타입 없음", x: 337, y: 195, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "src", to: "tsc" },
+    { from: "cfg", to: "tsc", dashed: true },
+    { from: "src", to: "bundler" },
+    { from: "bundler", to: "js" },
+  ]}
+  steps={[
+    { path: ["cfg", "tsc"], packet: "strict", title: "규칙을 먼저 읽는다", detail: "어떤 파일을 검사할지, 얼마나 엄격하게 볼지, import를 어떻게 찾을지를 tsconfig가 정한다.", payload: "tsconfig-strict" },
+    { path: ["src", "tsc"], packet: "check", title: "검사기가 모양을 맞춰 본다", detail: "구조적 타이핑, 제네릭 추론, 좁히기, 유틸리티 타입 계산이 모두 여기서 일어난다. 결과는 에러 목록뿐이다." },
+    { path: ["src", "bundler"], packet: "strip", title: "변환은 다른 도구가 한다", detail: "Next.js, Vite 같은 번들러는 파일 하나씩 타입을 지운다. 검사는 하지 않는다. 그래서 isolatedModules가 필요하다." },
+    { path: ["bundler", "js"], packet: "app.js", title: "실행되는 건 타입 없는 자바스크립트다", detail: "API 응답, JSON.parse, localStorage처럼 바깥에서 오는 값은 타입이 보장하지 못한다. 경계에서 직접 확인한다." },
+  ]}
+/>
+
+이 그림에서 두 가지를 기억하면 대부분의 오해가 풀린다. 첫째, 에디터의 빨간 줄과 `tsc --noEmit`은 같은 검사기다. 빌드가 통과했다고 타입이 맞는 게 아니라, CI에서 `tsc`를 따로 돌려야 타입이 맞는지 안다. 번들러는 타입이 틀려도 자바스크립트를 만들어 낸다. 둘째, 타입은 실행할 때 없다. `if (x instanceof User)`는 클래스에서만 되고, `interface`로는 런타임 검사를 할 수 없다.
+
+## 글끼리 기대는 순서
+
+여섯 편은 아래 순서로 서로를 전제한다. 화살표 방향이 "이걸 알아야 저게 읽힌다"다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="타입 시스템 기초가 바닥이고, React 글이 나머지를 모두 쓴다"
+  nodes={[
+    { id: "basics", label: "타입 시스템 기초", sub: "모양 · 리터럴", x: 200, y: 35, w: 140 },
+    { id: "generics", label: "제네릭", sub: "타입 매개변수", x: 80, y: 130, w: 120 },
+    { id: "narrow", label: "타입 좁히기", sub: "유니온 · 가드", x: 320, y: 130, w: 120 },
+    { id: "util", label: "유틸리티 타입", sub: "매핑 · 조건부", x: 80, y: 235, w: 120 },
+    { id: "react", label: "React에서 TS", sub: "props · 이벤트", x: 320, y: 235, w: 120 },
+    { id: "cfg", label: "tsconfig", sub: "strict · 해석", x: 200, y: 235, w: 100 },
+  ]}
+  edges={[
+    { from: "basics", to: "generics" },
+    { from: "basics", to: "narrow" },
+    { from: "generics", to: "util" },
+    { from: "generics", to: "react" },
+    { from: "narrow", to: "react" },
+    { from: "basics", to: "cfg", dashed: true },
+  ]}
+/>
+
+처음 배운다면 타입 시스템 기초, 제네릭, 타입 좁히기, 유틸리티 타입, tsconfig, React 순으로 읽는다. 이미 실무에서 쓰고 있다면 아래 각 절의 첫 문장만 보고 낯선 것부터 펴도 된다. 모든 글이 실제 버그 하나로 시작하고, 출력은 직접 돌린 `tsc` 결과이며, `## 면접에서 나올 만한 질문`으로 끝난다.
+
+## 모양으로 비교하는 타입
+
+[타입 시스템 기초](/posts/ts-type-system-basics)는 "왜 순서를 바꿔 넘긴 사용자 ID와 주문 ID가 에러 없이 통과하나"에 답한다. TypeScript는 이름이 아니라 모양으로 타입을 비교한다(구조적 타이핑). 그래서 둘 다 `string`이면 구분하지 못하고, 구분이 필요하면 브랜드 타입을 쓴다. 객체 리터럴에만 걸리는 초과 속성 검사가 처음 장면의 TS2561을 냈다. `any`, `unknown`, `never`를 집합으로 보는 법, `let`과 `const`가 리터럴을 다르게 넓히는 이유, `type`과 `interface` 중 무엇을 쓸지, 컴파일 뒤에 타입이 사라지므로 경계에서 값을 확인해야 한다는 점까지 다룬다.
+
+## 들어간 타입과 나오는 타입을 잇기
+
+[제네릭](/posts/ts-generics)은 "`any[]`로 받은 함수가 왜 문자열에 `toFixed`를 부르게 놔두나"에 답한다. 타입 매개변수는 호출하는 순간 인자에서 추론되고, `extends`로 할 수 있는 일을 제한한다. 처음 장면의 TS2345(`"emial"`은 `keyof User`가 아니다)가 그 제약이다. 후보가 여럿일 때 추론이 고르는 규칙, `NoInfer`(5.4)와 `const` 타입 매개변수(5.0), 반환 타입에만 쓰인 제네릭이 사실상 `as`와 같은 이유, 제네릭 컴포넌트와 훅, `.tsx`의 `<T,>` 문법까지 본다.
+
+## 조건문이 타입을 줄인다
+
+[타입 좁히기](/posts/ts-narrowing)는 "결제 상태를 하나 추가했는데 화면에 왜 undefined가 찍히나"에 답한다. 검사기는 `if`, `switch`, 이른 반환을 따라가며 변수의 타입을 줄인다. `typeof`, `in`, `instanceof`, 판별 유니온, 직접 만든 타입 가드와 단언 함수가 그 도구다. 처음 장면의 TS2532(`find`의 결과가 `undefined`일 수 있다)를 고치는 방법이 여기 있다. 콜백과 재할당에서 좁힌 것이 풀리는 경우, `never`로 빠진 갈래를 찾는 완전성 검사, `filter(Boolean)`과 5.5의 추론된 타입 서술어도 다룬다.
+
+## 타입으로 타입을 만들기
+
+[유틸리티 타입과 매핑된 타입](/posts/ts-utility-mapped-types)은 "필드를 추가했는데 왜 수정 폼 타입은 그대로였나"에 답한다. 원본 타입 하나에서 `Partial`, `Pick`, `Omit`, `Record`로 나머지를 뽑아내면 원본이 바뀔 때 어긋난 곳이 에러로 드러난다. 처음 장면의 TS2344는 `Pick`이 키를 검사한 결과다(`Omit`은 검사하지 않는다는 함정도 거기서 본다). 그 유틸리티를 만드는 재료인 매핑된 타입, 분배 조건부 타입, `infer`, 템플릿 리터럴 타입, 그리고 검사만 하고 넓히지 않는 `satisfies`를 다룬다. 타입이 너무 영리해져 TS2589가 나는 경계도 있다.
+
+## 검사의 강도와 실행 환경 맞추기
+
+[tsconfig와 strict 옵션](/posts/tsconfig-strict)은 "타입을 다 붙였는데 왜 `find` 결과로 운영에서 터졌나"에 답한다. `strict`는 아홉 개 검사의 묶음이고, 처음 장면의 TS7006(`noImplicitAny`)이 그중 하나다. strict 밖의 `noUncheckedIndexedAccess`를 이 블로그 저장소에 켜면 에러가 몇 개 나는지도 셌다. 검사기가 실제 실행 환경과 같은 규칙을 쓰게 하는 `moduleResolution`(bundler와 nodenext), 파일 단위 변환기를 위한 `isolatedModules`, 시간을 아끼는 대신 무엇을 놓치는지 보여 주는 `skipLibCheck`, 큰 저장소의 프로젝트 참조까지 실제 출력으로 본다.
+
+## 컴포넌트에 타입 붙이기
+
+[React에서 TypeScript 쓰기](/posts/typescript-in-react)는 "로직은 그대로인데 왜 `useState(null)`에서 에러가 나나"에 답한다. 상태, props, children, 이벤트, ref, 기본 요소를 감싸는 래퍼, 서로 배타적인 props, 제네릭 컴포넌트, Context와 커스텀 훅이 차례로 나온다. 처음 장면의 TS2322(`User`는 `ReactNode`가 아니다)는 React가 런타임에 "Objects are not valid as a React child"로 낼 에러를 미리 본 것이다. `@types/react` 19에서 바뀐 `useRef`와 `ref` prop도 짚는다.
+
+## 다른 글 속의 TypeScript
+
+TypeScript를 주제로 하지 않는 글에도 TypeScript 절이 있다. 필요할 때 이어서 읽는다.
+
+- [var, let, const](/posts/js-var-let-const): `const`로 선언하면 리터럴 타입이 남고 `let`은 넓어지는 이유를 변수 쪽에서 본다.
+- [ES 모듈](/posts/js-es-modules): TypeScript와 번들러가 import·export를 어떻게 바꿔 쓰는지, `require(esm)`과 만나는 자리.
+- [호이스팅과 TDZ](/posts/js-hoisting-tdz): 선언 전에 쓰는 코드를 TypeScript와 ESLint로 미리 잡는 법.
+- [커링과 부분 적용](/posts/js-currying-partial)과 [compose와 pipe](/posts/fp-composition-pipe): 함수를 조합할 때 타입을 잇는 오버로드와 재귀 타입.
+- [디자인 패턴 개요](/posts/design-patterns-overview): 패턴 글의 예제는 대부분 TypeScript로 썼다. 인터페이스와 제네릭이 실제 설계에서 어떻게 쓰이는지 볼 수 있다.
+
+## 에러 코드에서 글 찾기
+
+일하다 만난 에러에서 거꾸로 찾아갈 때 쓰는 길이다. 에러 메시지의 `TS` 번호는 규칙마다 정해져 있어서, 번호만 봐도 어느 글을 펼지 대략 정할 수 있다. 아래 그림에서 tsc 출력 한 줄을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="tsc 에러 한 줄 읽기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "file", display: "checkout.tsx", title: "파일", description: "명령을 실행한 폴더를 기준으로 한 상대 경로다. 모노레포 루트에서 돌리면 패키지 경로까지 붙는다." },
+    { key: "pos", display: "(12,19)", title: "줄과 열", description: "1부터 센다. 에러가 걸린 표현식의 시작 위치라, 고칠 곳은 그보다 앞(선언부)일 때가 많다." },
+    { key: "level", display: ": error ", title: "심각도", description: "명령줄 tsc는 error만 낸다. 경고 단계가 없어서, 검사를 끄거나 켜는 건 tsconfig 옵션으로 한다." },
+    { key: "code", display: "TS2345", title: "에러 번호", description: "규칙마다 고정된 번호다. 검색할 때 메시지보다 번호가 정확하다. 대략 1000번대는 문법, 2000번대는 타입 검사, 5000번대는 옵션, 7000번대는 암묵적 any 계열이다.", required: true },
+    { key: "msg", display: ": Argument of type '\"emial\"'…", title: "메시지", description: "들여 쓴 다음 줄들이 이유를 한 단계씩 더 자세히 말한다. 맨 아래 줄이 가장 구체적인 원인이다." },
+  ]}
+/>
+
+에러 번호와 글을 짝지으면 이렇다. 처음 장면의 여섯 줄을 차례로 짚어 본다.
+
+<AlgoTrace
+  caption="에러 번호 하나에 먼저 펼 글 하나"
+  memoryLabel="먼저 펼 글"
+  cells={["TS2561", "TS2345", "TS2532", "TS2344", "TS7006", "TS2322"]}
+  steps={[
+    { caption: "처음 장면의 에러 여섯 줄을 번호만 보고 분류한다.", memory: [] },
+    { pointer: 0, caption: "객체 리터럴에 없는 속성. 초과 속성 검사다.", memory: ["타입 시스템 기초"] },
+    { pointer: 1, caption: "인자가 keyof User에 맞지 않는다. 제네릭 제약이다.", memory: ["타입 시스템 기초", "제네릭"] },
+    { pointer: 2, caption: "undefined일 수 있다. 좁히기로 처리한다.", memory: ["타입 시스템 기초", "제네릭", "타입 좁히기"] },
+    { pointer: 3, caption: "Pick의 키 제약. 유틸리티 타입 쪽이다.", memory: ["타입 시스템 기초", "제네릭", "타입 좁히기", "유틸리티 타입"] },
+    { pointer: 4, caption: "암묵적 any. strict 옵션이 켠 검사다.", memory: ["타입 시스템 기초", "제네릭", "타입 좁히기", "유틸리티 타입", "tsconfig"] },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], caption: "2322는 흔한 번호라 메시지를 본다. ReactNode가 보이면 React 글이다.", memory: ["타입 시스템 기초", "제네릭", "타입 좁히기", "유틸리티 타입", "tsconfig", "React에서 TS"] },
+  ]}
+/>
+
+그림에 다 못 넣은 번호는 문장으로 둔다.
+
+TS18046(`'err' is of type 'unknown'`)은 `catch`의 변수나 `unknown`으로 받은 값을 확인 없이 쓴 것이다. `unknown`을 다루는 법은 타입 시스템 기초에, `catch`가 `unknown`이 된 이유는 tsconfig 글의 `useUnknownInCatchVariables`에 있다.
+
+TS18047, TS18048(`possibly 'null'`, `possibly 'undefined'`)은 타입 좁히기다. 같은 에러가 갑자기 수십 개 늘었다면 누군가 `noUncheckedIndexedAccess`를 켰는지 tsconfig부터 본다.
+
+TS2339(`Property 'x' does not exist on type`)가 유니온 타입에서 나면 좁히지 않고 한쪽에만 있는 속성을 읽은 것이다. 구조 분해의 `...rest`가 좁히기를 끊은 경우는 React 글에 예가 있다.
+
+TS2307, TS2835(`Cannot find module`, `need explicit file extensions`)는 거의 항상 `moduleResolution` 문제다. `tsc --traceResolution`으로 해석 과정을 본다.
+
+TS1205, TS1484(`export type`, `type-only import`)는 `isolatedModules`나 `verbatimModuleSyntax`가 켜진 프로젝트다. 고치는 법은 정해져 있다. `type`을 붙인다.
+
+TS2589(`excessively deep`)나 에디터가 몇 초씩 멈추는 증상은 너무 영리한 타입이다. 유틸리티 타입 글의 마지막 절을 본다.
+
+TS2786(`cannot be used as a JSX component`)은 컴포넌트가 그릴 수 없는 값을 돌려주거나, `@types/react`가 두 버전 설치되어 서로 다른 `ReactNode`를 보는 경우다. 뒤쪽이면 `pnpm why @types/react`로 확인한다.
+
+## 자바스크립트 프로젝트를 옮기는 순서
+
+기존 자바스크립트 코드에 TypeScript를 들이는 일은 한 번에 끝나지 않는다. 아래는 흔히 밟는 순서이고, 단계마다 어느 글이 필요한지 붙였다.
+
+<SequenceDiagram
+  caption="JS 저장소에 타입을 들이는 순서: 검사부터 켜고, 강도는 나중에 올린다"
+  actors={[
+    { id: "repo", label: "저장소" },
+    { id: "tsc", label: "tsc" },
+    { id: "ci", label: "CI" },
+  ]}
+  steps={[
+    { from: "repo", to: "tsc", label: "allowJs", title: "JS 그대로 검사에 넣는다", detail: "tsconfig에 allowJs와 checkJs를 켜거나, 파일 맨 위에 // @ts-check를 단다. 파일 이름은 아직 안 바꾼다.", payload: "tsconfig-strict: 기존 코드에 strict를 켜는 순서" },
+    { from: "repo", to: "repo", label: ".js → .ts", title: "경계부터 이름을 바꾼다", detail: "API 클라이언트, 공용 유틸처럼 여러 곳이 쓰는 파일부터 옮긴다. 타입을 원본 하나에서 뽑아 쓴다.", payload: "ts-type-system-basics, ts-utility-mapped-types" },
+    { from: "tsc", to: "repo", label: "strict 하나씩", title: "검사를 하나씩 올린다", detail: "noImplicitAny, strictNullChecks 순으로 켜고, 켤 때마다 에러를 0으로 만든다. 남은 건 @ts-expect-error로 표시한다." },
+    { from: "repo", to: "ci", label: "tsc --noEmit", title: "CI에서 따로 검사한다", detail: "번들러는 타입이 틀려도 빌드한다. 타입 검사를 별도 단계로 두고, @ts-expect-error 수를 기록해 늘어나면 실패시킨다." },
+    { from: "ci", to: "repo", label: "경계 검사", title: "바깥 값은 런타임에 확인한다", detail: "API 응답과 JSON.parse 결과는 unknown으로 받고 좁히거나 스키마로 검증한다. 타입이 대신해 주지 못하는 자리다.", payload: "ts-narrowing: 직접 만드는 타입 가드" },
+  ]}
+/>
+
+흔한 실수는 순서를 거꾸로 하는 것이다. 처음부터 `strict`를 켜고 파일 이름을 한꺼번에 바꾸면 에러가 수천 개 나서, 결국 `any`와 `as`로 덮고 끝난다. 그렇게 들어온 `any`는 검사를 끈 구멍이라 나중에 찾아 메우기가 더 어렵다. 반대로 `strict` 없이 오래 머무르면 처음 tsconfig 글의 장면처럼 타입을 다 붙이고도 `undefined`로 터진다.
+
+## 연습: tsc 출력에서 읽을 글 고르기
+
+위 짝을 코드로 옮겨 보자. `tsc` 출력 전체를 문자열로 받아, 펼칠 글의 slug를 처음 나온 순서대로 중복 없이 돌려주는 함수다. 규칙 표 `RULES`는 주어져 있다. 줄마다 `error TS번호: 메시지`를 찾고(들여 쓴 이어지는 줄은 건너뛴다), 표에서 위에서부터 첫 번째로 맞는 규칙을 고른다. 규칙에 `when`이 있으면 메시지에 그 말이 들어 있어야 맞는다. 맞는 규칙이 없는 번호는 이 글(`"typescript-roadmap"`)로 보낸다. 타입은 실행할 때 지워진다.
+
+<CodePlayground
+  caption="postsForErrors: tsc 출력에서 펼칠 글 목록 만들기"
+  language="typescript"
+  functionName="postsForErrors"
+  initialCode={`type Rule = { codes: number[]; slug: string; when?: string };
+
+const RULES: Rule[] = [
+  { codes: [2322], when: "ReactNode", slug: "typescript-in-react" },
+  { codes: [2786, 2747], slug: "typescript-in-react" },
+  { codes: [2322, 2353, 2561, 18046], slug: "ts-type-system-basics" },
+  { codes: [2345, 2558], slug: "ts-generics" },
+  { codes: [2532, 18047, 18048, 2339], slug: "ts-narrowing" },
+  { codes: [2344, 2589, 2590, 1360], slug: "ts-utility-mapped-types" },
+  { codes: [7006, 7030, 2307, 2835, 1205, 1484, 2564], slug: "tsconfig-strict" },
+];
+
+function postsForErrors(output: string): string[] {
+  // 줄마다 "error TS번호: 메시지"를 찾고, 처음 나온 순서대로 중복 없이 slug를 모은다
+  return [];
+}`}
+  solution={`type Rule = { codes: number[]; slug: string; when?: string };
+
+const RULES: Rule[] = [
+  { codes: [2322], when: "ReactNode", slug: "typescript-in-react" },
+  { codes: [2786, 2747], slug: "typescript-in-react" },
+  { codes: [2322, 2353, 2561, 18046], slug: "ts-type-system-basics" },
+  { codes: [2345, 2558], slug: "ts-generics" },
+  { codes: [2532, 18047, 18048, 2339], slug: "ts-narrowing" },
+  { codes: [2344, 2589, 2590, 1360], slug: "ts-utility-mapped-types" },
+  { codes: [7006, 7030, 2307, 2835, 1205, 1484, 2564], slug: "tsconfig-strict" },
+];
+
+function postsForErrors(output: string): string[] {
+  const result: string[] = [];
+  for (const line of output.split("\\n")) {
+    const m = line.match(/error TS(\\d+): (.*)$/);
+    if (!m) continue;
+    const code = Number(m[1]);
+    const message = m[2] ?? "";
+    const rule = RULES.find((r) => r.codes.includes(code) && (!r.when || message.includes(r.when)));
+    const slug = rule ? rule.slug : "typescript-roadmap";
+    if (!result.includes(slug)) result.push(slug);
+  }
+  return result;
+}`}
+  tests={[
+    { label: "처음 장면의 여섯 에러", args: ["checkout.tsx(7,25): error TS2561: Object literal may only specify known properties, but 'timout' does not exist in type 'Options'. Did you mean to write 'timeout'?\ncheckout.tsx(12,19): error TS2345: Argument of type '\"emial\"' is not assignable to parameter of type 'keyof User'.\ncheckout.tsx(15,10): error TS2532: Object is possibly 'undefined'.\ncheckout.tsx(18,27): error TS2344: Type '\"nmae\"' does not satisfy the constraint 'keyof User'.\ncheckout.tsx(20,16): error TS7006: Parameter 'items' implicitly has an 'any' type.\ncheckout.tsx(27,28): error TS2322: Type 'User' is not assignable to type 'ReactNode'."], expected: ["ts-type-system-basics", "ts-generics", "ts-narrowing", "ts-utility-mapped-types", "tsconfig-strict", "typescript-in-react"] },
+    { label: "같은 글은 한 번만", args: ["a.ts(1,1): error TS18048: 'user' is possibly 'undefined'.\nb.ts(2,2): error TS2532: Object is possibly 'undefined'."], expected: ["ts-narrowing"] },
+    { label: "메시지로 갈리는 2322", args: ["x.tsx(3,4): error TS2322: Type '{ a: number; }' is not assignable to type 'ReactNode'.\ny.ts(1,1): error TS2322: Type 'string' is not assignable to type 'number'."], expected: ["typescript-in-react", "ts-type-system-basics"] },
+    { label: "모듈 해석", args: ["src/app.ts(3,23): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './util.js'?"], expected: ["tsconfig-strict"] },
+    { label: "이어지는 줄은 건너뛴다", args: ["m.ts(9,7): error TS2322: Type '(e: MouseEvent) => void' is not assignable to type 'Handler'.\n  Types of parameters 'e' and 'e' are incompatible.\n    Type 'MouseEvent | KeyboardEvent' is not assignable to type 'MouseEvent'."], expected: ["ts-type-system-basics"] },
+    { label: "모르는 코드는 이 글", args: ["z.ts(1,1): error TS9999: Something new.\nz.ts(2,1): error TS1234: Another."], expected: ["typescript-roadmap"] },
+    { label: "빈 출력", args: [""], expected: [] },
+    { label: "에러 없음", args: ["Found 0 errors."], expected: [] },
+  ]}
+/>
+
+세 번째 테스트가 이 방식의 한계와 쓸모를 함께 보여 준다. TS2322는 "할당할 수 없다"는 가장 흔한 번호라 번호만으로는 원인을 가리기 어렵다. 메시지에 `ReactNode`가 있으면 React 쪽 문제고, 없으면 일반적인 할당 문제다. 실제로 에러를 읽을 때도 번호로 범위를 좁히고, 들여 쓴 마지막 줄에서 구체적인 원인을 찾는 순서가 빠르다.
+
+## 여섯 줄로 돌아가서
+
+처음 파일의 에러 여섯 줄은 서로 다른 여섯 규칙에서 나왔다. 모양으로 비교하는 타입, 호출마다 정해지는 타입 매개변수, 조건문을 따라 줄어드는 타입, 원본에서 계산해 내는 타입, 검사의 강도를 정하는 설정, React가 기대하는 타입. 이 지도는 그 규칙을 순서대로 읽는 길과 에러 번호에서 거꾸로 찾는 길을 함께 놓았다. 각 글을 읽고 나서 처음 출력의 줄마다 "어느 규칙이 왜 이 에러를 냈고, 같은 에러가 다시 안 나게 하려면 무엇을 바꿔야 하는지"를 자기 말로 말할 수 있으면 된다.
+
+## 면접에서 나올 만한 질문
+
+### TypeScript를 쓰는 이유는 무엇인가요?
+
+실행하기 전에 값의 모양이 맞는지 검사해서, `undefined`의 속성을 읽거나 없는 필드를 쓰는 종류의 버그를 컴파일 단계에서 잡기 위해서다. 타입이 문서 역할도 해서 함수가 무엇을 받고 돌려주는지 코드만 보고 알 수 있고, 리팩터링할 때 영향받는 곳을 에러로 알려 준다. 다만 런타임에는 타입이 없으니 바깥에서 들어오는 값은 따로 검증해야 한다.
+
+### TypeScript의 타입은 런타임에 남나요?
+
+남지 않는다. 컴파일러나 번들러가 타입을 지우고 자바스크립트만 내보내므로, `interface`로 `instanceof` 검사를 할 수 없고 API 응답이 타입과 다르게 와도 알 수 없다. 그래서 경계에서는 `unknown`으로 받고 타입 가드나 스키마 검증으로 확인한다. `enum`처럼 값을 만들어 내는 일부 문법만 예외로 런타임 코드가 생긴다.
+
+### 빌드는 성공했는데 타입 에러가 있을 수 있나요?
+
+있다. Next.js나 Vite 같은 번들러는 파일 하나씩 타입을 지우기만 하고 검사하지 않으므로, 타입이 틀려도 자바스크립트를 만든다. 타입 검사는 `tsc --noEmit`을 CI의 별도 단계로 돌려야 보장된다. 파일 단위 변환이 안전하도록 `isolatedModules`를 켜는 것도 같은 이유다.
+
+### any와 unknown은 어떻게 다른가요?
+
+둘 다 어떤 값이든 받지만, `any`는 검사를 꺼서 아무 연산이나 허용하고 `unknown`은 확인하기 전에는 아무 연산도 허용하지 않는다. `any`는 한 번 들어오면 연산 결과도 `any`가 되어 퍼지고, `unknown`은 좁혀야만 쓸 수 있어 안전하다. 바깥 데이터나 `catch`의 에러처럼 모양을 모르는 값은 `unknown`으로 받는다.
+
+### 기존 JS 프로젝트를 TypeScript로 옮긴다면 어떤 순서로 하나요?
+
+`allowJs`와 `checkJs`로 지금 코드부터 검사에 넣고, 여러 곳이 쓰는 경계 파일부터 `.ts`로 바꾼다. 그다음 `noImplicitAny`, `strictNullChecks` 순으로 strict 플래그를 하나씩 켜며 에러를 0으로 만들고, 남은 것은 `@ts-expect-error`로 표시해 수를 줄여 간다. CI에 `tsc --noEmit`을 따로 두고 예외 주석 수가 늘지 않게 막는다. 한 번에 strict를 켜면 `any`와 `as`로 덮고 끝나기 쉽다.
+
+### 타입 에러 메시지가 길 때 어떻게 읽나요?
+
+첫 줄의 TS 번호로 어떤 규칙인지 범위를 정하고, 들여 쓴 줄을 따라 내려가 맨 아래 줄에서 가장 구체적인 원인을 찾는다. 위치는 에러가 드러난 곳이라 실제로 고칠 곳은 선언부나 타입 정의일 때가 많다. 메시지가 유틸리티 타입이 겹겹이 쌓여 읽기 어렵다면 그 결과를 이름 있는 타입으로 적어 두는 것도 방법이다.

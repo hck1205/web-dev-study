@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 608편 · 토픽 87개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 612편 · 토픽 87개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -635,7 +635,7 @@
 - 길이: 467줄
 - 소제목: 원 네 개와 규칙 하나 / 호출은 밖에서 안으로 갔다가 다시 밖으로 / 원을 건너는 데이터는 그 원의 모양으로 / 프레젠터가 따로 있는 이유 / 시간도 바깥에서 들어온다 / 의존 규칙을 사람 대신 검사기가 지킨다 / 폴더 이름이 업무를 말하게 / 헥사고날, 어니언과 나란히 놓으면 / 화면 쪽에서 원을 그리면 / 파일이 늘어나는 값을 따져 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: hexagonal-architecture, layered-architecture, modular-monolith, ddd-bounded-context, js-pure-functions, cqrs
-- 키워드 백링크 →: http-status-codes
+- 키워드 백링크 →: tsconfig-strict, http-status-codes
 - 이 글로 오는 글 ←: architecture-patterns-overview, hexagonal-architecture, layered-architecture, pattern-facade
 
 #### `cqrs` — CQRS: 바꾸는 모델과 읽는 모델을 나누는 이유
@@ -1508,7 +1508,7 @@
 - 소제목: 같은 주문을 여러 모양으로 저장하기 / 무엇으로 찾는지가 먼저다 / 빠른 이유는 저마다 하나씩 / 질문 여섯 개로 서점의 저장소 고르기 / 원본에서 사본으로 흘러가는 길 / 시리즈 지도 / 모양과 질문을 먼저 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-architecture-by-scale, db-consistency-cap, db-type-relational, db-type-key-value, db-type-wide-column, db-type-graph, db-type-time-series, db-type-columnar-olap, db-type-newsql, db-type-embedded, mongodb-document-model, elasticsearch-inverted-index, vector-db, redis-basics, postgres-getting-started
 - 키워드 백링크 →: db-index, sd-mq-storage-partitions, scaling-horizontal-vertical
-- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series, distributed-transactions-2pc, js-shallow-deep-copy, opensearch-cluster-operations, pattern-prototype, sd-proximity-service, sd-sharding-intro, sd-split-web-and-db, sql-vs-nosql, system-design-concepts-map
+- 이 글로 오는 글 ←: db-consistency-cap, db-keys-denormalization, db-type-columnar-olap, db-type-embedded, db-type-key-value, db-type-newsql, db-type-relational, db-type-time-series, distributed-transactions-2pc, js-shallow-deep-copy, opensearch-cluster-operations, pattern-prototype, sd-proximity-service, sd-sharding-intro, sd-split-web-and-db, sql-vs-nosql, system-design-concepts-map, ts-utility-mapped-types
 
 ### Programming › Database › MySQL (`programming/database/mysql`)
 
@@ -2201,7 +2201,7 @@
 - 소제목: 반복되는 문제에 붙인 이름 / 스물세 개를 세 갈래로 나눈 기준 / 두 문장으로 줄이면 / 이미 매일 쓰고 있는 패턴 / 함수가 있으면 사라지는 패턴도 있다 / 패턴을 꺼내기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: pattern-singleton, pattern-factory-method, pattern-abstract-factory, pattern-builder, pattern-prototype, pattern-adapter, pattern-bridge, pattern-composite, pattern-decorator, pattern-facade, pattern-flyweight, pattern-proxy, pattern-chain-of-responsibility, pattern-command, pattern-interpreter, pattern-iterator, pattern-mediator, pattern-memento, pattern-observer, pattern-state, pattern-strategy, pattern-template-method, pattern-visitor, mvc-pattern, resilience-patterns
 - 키워드 백링크 →: sql-batch-timeout-pool, js-closures
-- 이 글로 오는 글 ←: js-classes, pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-interpreter, pattern-mediator, pattern-observer, pattern-prototype, pattern-proxy, pattern-singleton, pattern-state, pattern-strategy, pattern-template-method
+- 이 글로 오는 글 ←: js-classes, pattern-abstract-factory, pattern-adapter, pattern-bridge, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-composite, pattern-decorator, pattern-facade, pattern-factory-method, pattern-flyweight, pattern-interpreter, pattern-mediator, pattern-observer, pattern-prototype, pattern-proxy, pattern-singleton, pattern-state, pattern-strategy, pattern-template-method, typescript-roadmap
 
 ### Programming › Design Patterns › Behavioral (`programming/design-patterns/behavioral`)
 
@@ -2415,7 +2415,7 @@
 - 길이: 420줄
 - 소제목: 세트 안에 세트가 들어오던 날 / 하나와 묶음이 같은 질문에 답한다 / 계산은 잎에서 시작해 위로 올라온다 / add를 어디에 둘 것인가 / 클래스 없이 트리 하나와 fold 하나 / 매일 쓰는 트리들 / 트리가 그래프가 되는 순간 / 데코레이터와 같은 모양, 다른 목적 / 직접 만들어 보는 세트 계산 / 컴포지트가 과한 경우 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-patterns-overview, pattern-visitor, pattern-decorator, pattern-chain-of-responsibility, pattern-iterator
-- 키워드 백링크 →: js-execution-context, ds-graph-bfs-dfs, ts-narrowing
+- 키워드 백링크 →: js-execution-context, typescript-in-react, ds-graph-bfs-dfs, ts-narrowing
 - 이 글로 오는 글 ←: design-patterns-overview, pattern-builder, pattern-chain-of-responsibility, pattern-command, pattern-decorator, pattern-interpreter, pattern-visitor
 
 #### `pattern-decorator` — 데코레이터 패턴: 같은 모양으로 감싸 기능을 겹쳐 붙이기
@@ -2496,8 +2496,8 @@
 - 길이: 646줄
 - 소제목: 관리자 화면을 열자 useState가 null이다 / 저장소가 셋이면 버튼 하나에 PR이 셋 / 작업 공간을 선언한다 / workspace 프로토콜은 레지스트리에 묻지 않는다 / 설치하면 폴더 사이에 링크가 생긴다 / 공용 패키지를 빌드할까, 소스로 둘까 / exports에 없는 경로는 열리지 않는다 / tsconfig paths로 지름길을 내면 / React가 두 벌 들어가는 순간 / 버전을 하나로 묶을지, 패키지마다 따로 올릴지 / 경로마다 주인을 정한다 / 모노레포에서 자주 밟는 것들 / 같은 지도 위에서 일한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: monorepo-build-cache, micro-frontends, dependency-hell, js-es-modules, semantic-versioning, git-branching-strategy
-- 키워드 백링크 →: build-caching, http-caching-cdn, api-versioning, js-hoisting-tdz, microservices
-- 이 글로 오는 글 ←: build-caching, ci-cd-basics, dependency-hell, git-branching-strategy, git-remote-collaboration, micro-frontends, modular-monolith, module-federation-deep-dive, monorepo-build-cache, semantic-versioning
+- 키워드 백링크 →: build-caching, tsconfig-strict, http-caching-cdn, api-versioning, js-hoisting-tdz, microservices
+- 이 글로 오는 글 ←: build-caching, ci-cd-basics, dependency-hell, git-branching-strategy, git-remote-collaboration, micro-frontends, modular-monolith, module-federation-deep-dive, monorepo-build-cache, semantic-versioning, tsconfig-strict, typescript-roadmap
 
 #### `micro-frontend-integration-patterns` — 마이크로 프런트엔드 조합 방식 직접 만들어 보기: 서버 조합, iframe, Web Components, single-spa
 
@@ -2540,7 +2540,7 @@
 - 길이: 621줄
 - 소제목: 분석 패키지 한 줄에 작업 열네 개 / 패키지 그래프에서 작업 그래프로 / 그래프가 정하는 실행 순서 / 바뀐 것과 그 위쪽만 고르기 / 기준 커밋을 잘못 고르면 테스트가 통과해 버린다 / 얕은 clone에서는 기준을 찾지 못한다 / 캐시가 그래프를 만나면 / 다섯 가지 방법으로 재 본 CI 시간 / 해시를 흔드는 파일들 / 앱 하나만 이미지로 만들 때 / Nx는 같은 일을 어떻게 하나 / 모노레포가 오히려 짐이 될 때 / 지도를 정확히 그리면 덜 돈다 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-monorepo, build-caching, dockerfile-image-layers, git-branching-strategy, micro-frontends
-- 키워드 백링크 →: github-actions-docker-ecr, git-branch-merge, dependency-hell, git-remote-collaboration
+- 키워드 백링크 →: github-actions-docker-ecr, git-branch-merge, tsconfig-strict, dependency-hell, git-remote-collaboration
 - 이 글로 오는 글 ←: bundler-basics, frontend-monorepo, sd-music-streaming, sd-video-upload-transcoding
 
 ### Programming › Frontend › CSS (`programming/frontend/css`)
@@ -2598,9 +2598,9 @@
 - 키워드: 자바스크립트 로드맵, 자바스크립트 학습 순서
 - 길이: 432줄
 - 소제목: 클릭 한 번이 열두 장을 지나간다 / 장끼리 기대는 순서 / 01 변수와 스코프 / 02 데이터 타입 / 03 함수 1: 만들고 넘기고 기억하기 / 04 함수 2: 조합과 재사용 / 05 배열 / 06 객체와 구조 분해 / 07 복사와 불변성 / 08 최신 문법 / 09 this, 프로토타입, 객체 지향 / 10 비동기 / 11 자바스크립트가 실행되는 방식 / 12 브라우저, DOM, 이벤트 / React에서 다시 만나는 자리 / 이 증상이면 이 글부터 / 증상 문장에서 첫 글 고르기 / 다 읽지 않아도 된다 / 면접에서 나올 만한 질문
-- 직접 링크 →: k8s-learning-roadmap, networking-essentials-map, js-var-let-const, js-scope-lexical, js-hoisting-tdz, js-primitive-vs-reference, js-equality-coercion, js-truthy-falsy-typeof, js-function-forms, js-first-class-callbacks, js-closures, js-iife-module-pattern, js-currying-partial, js-pure-functions, js-memoization, js-array-transform, js-array-mutation, js-object-methods, js-destructuring, js-spread-rest, js-shallow-deep-copy, js-immutability-react, js-template-literals, js-optional-chaining-nullish, js-short-circuit, js-es-modules, js-this-binding, js-call-apply-bind, js-prototype-chain, js-classes, js-strict-mode, js-callback-hell, js-promises, js-async-await, js-promise-combinators, js-execution-context, event-loop, js-microtask-macrotask, js-timers-accuracy, garbage-collection, js-memory-leak, dom-basics, event-propagation, event-delegation, debounce-throttle, browser-fetch, abort-controller, browser-storage, cors, react-rerender, client-data-cache
+- 직접 링크 →: k8s-learning-roadmap, networking-essentials-map, typescript-roadmap, js-var-let-const, js-scope-lexical, js-hoisting-tdz, js-primitive-vs-reference, js-equality-coercion, js-truthy-falsy-typeof, js-function-forms, js-first-class-callbacks, js-closures, js-iife-module-pattern, js-currying-partial, js-pure-functions, js-memoization, js-array-transform, js-array-mutation, js-object-methods, js-destructuring, js-spread-rest, js-shallow-deep-copy, js-immutability-react, js-template-literals, js-optional-chaining-nullish, js-short-circuit, js-es-modules, js-this-binding, js-call-apply-bind, js-prototype-chain, js-classes, js-strict-mode, js-callback-hell, js-promises, js-async-await, js-promise-combinators, js-execution-context, event-loop, js-microtask-macrotask, js-timers-accuracy, garbage-collection, js-memory-leak, dom-basics, event-propagation, event-delegation, debounce-throttle, browser-fetch, abort-controller, browser-storage, cors, react-rerender, client-data-cache
 - 키워드 백링크 →: core-web-vitals
-- 이 글로 오는 글 ←: backend-engineer-roadmap
+- 이 글로 오는 글 ←: backend-engineer-roadmap, typescript-roadmap
 
 #### `js-memory-leak` — 자바스크립트 메모리 누수 찾기
 
@@ -2713,7 +2713,7 @@
 - 소제목: 내보낸 것은 값이 아니라 변수다 / default는 이름이 default인 내보내기일 뿐이다 / 실행하기 전에 연결부터 한다 / 브라우저는 import를 만날 때마다 한 번 더 요청한다 / Node에서 두 시스템이 만나는 자리 / TypeScript와 번들러가 바꿔 쓰는 코드 / React 코드에서 모듈 경계를 만나는 순간 / 모듈 오류를 만났을 때 읽는 순서 / 정적인 그래프가 주는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-iife-module-pattern, code-splitting, pattern-singleton, js-hoisting-tdz, js-async-await, rendering-ssr
 - 키워드 백링크 →: rendering-strategies, http-versions, js-strict-mode, js-destructuring, cors
-- 이 글로 오는 글 ←: browser-rendering-pipeline, bundler-basics, code-splitting, event-loop, frontend-monorepo, islands-resumability, javascript-roadmap, js-async-await, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-strict-mode, js-this-binding, js-var-let-const, micro-frontends, module-federation-deep-dive, pattern-flyweight, pattern-singleton
+- 이 글로 오는 글 ←: browser-rendering-pipeline, bundler-basics, code-splitting, event-loop, frontend-monorepo, islands-resumability, javascript-roadmap, js-async-await, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-strict-mode, js-this-binding, js-var-let-const, micro-frontends, module-federation-deep-dive, pattern-flyweight, pattern-singleton, tsconfig-strict, typescript-roadmap
 
 #### `js-hoisting-tdz` — 호이스팅과 TDZ: 선언 전에 이름을 쓰면 생기는 일
 
@@ -2724,7 +2724,7 @@
 - 소제목: 실행 전에 이름부터 등록한다 / 선언마다 초기화하는 시점이 다르다 / 오류 문구로 원인을 가른다 / TDZ는 위치가 아니라 시간이다 / 바깥 이름이 있어도 TDZ가 이긴다 / 블록 안의 함수 선언은 모드마다 다르다 / 순환 import가 TDZ를 부른다 / React 파일에서 만나는 경우 / 도구로 미리 잡기 / 다시 formatPrice로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-var-let-const, js-scope-lexical, js-execution-context, js-strict-mode, js-es-modules
 - 키워드 백링크 →: js-function-forms, code-splitting
-- 이 글로 오는 글 ←: bundler-basics, dependency-hell, frontend-monorepo, javascript-roadmap, js-classes, js-es-modules, js-execution-context, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const
+- 이 글로 오는 글 ←: bundler-basics, dependency-hell, frontend-monorepo, javascript-roadmap, js-classes, js-es-modules, js-execution-context, js-function-forms, js-scope-lexical, js-truthy-falsy-typeof, js-var-let-const, typescript-in-react, typescript-roadmap
 
 #### `js-optional-chaining-nullish` — 옵셔널 체이닝과 ??: 어디서 멈추고 무엇을 없음으로 보나
 
@@ -2778,7 +2778,7 @@
 - 소제목: 백틱 안의 값은 문자열로 바뀐다 / 줄바꿈과 들여쓰기는 그대로 들어간다 / 태그 함수는 조각과 값을 따로 받는다 / 같은 자리의 strings는 한 번만 만들어진다 / 쿼리를 문자열로 만들면 생기는 일 / HTML에 끼워 넣을 때도 같은 원리다 / 태그가 쓰이는 다른 자리 / 이스케이프를 해석하지 않은 원본, raw / React 코드에서 템플릿 문자열을 만나는 자리 / 템플릿이 위험해지는 순간 / 조각은 믿고 값은 의심한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-short-circuit, js-optional-chaining-nullish, js-equality-coercion, xss
 - 키워드 백링크 →: hydration, graphql-basics, rendering-strategies
-- 이 글로 오는 글 ←: javascript-roadmap, js-equality-coercion, js-short-circuit
+- 이 글로 오는 글 ←: javascript-roadmap, js-equality-coercion, js-short-circuit, ts-utility-mapped-types, typescript-roadmap
 
 #### `js-truthy-falsy-typeof` — truthy·falsy와 typeof, null·undefined·NaN 가려내기
 
@@ -2800,7 +2800,7 @@
 - 소제목: var는 함수 하나에 상자 하나다 / let은 반복마다 새 i를 만든다 / 같은 이름을 두 번 선언하면 / 전역에서 var는 window의 속성이 된다 / const가 막는 것은 재할당뿐이다 / 무엇을 기본으로 쓸까 / TypeScript에서는 타입까지 달라진다 / React 컴포넌트 안의 const / 오래된 var를 let으로 바꿀 때 / 다시 세 번의 3으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-scope-lexical, js-hoisting-tdz, js-closures, js-iife-module-pattern, js-es-modules, js-object-methods, js-primitive-vs-reference, js-immutability-react, react-rerender
 - 키워드 백링크 →: js-function-forms
-- 이 글로 오는 글 ←: javascript-roadmap, js-closures, js-hoisting-tdz, js-iife-module-pattern, js-primitive-vs-reference, js-scope-lexical
+- 이 글로 오는 글 ←: javascript-roadmap, js-closures, js-hoisting-tdz, js-iife-module-pattern, js-primitive-vs-reference, js-scope-lexical, typescript-roadmap
 
 ### Programming › Frontend › JavaScript › Browser & DOM (`programming/frontend/javascript/browser`)
 
@@ -2824,7 +2824,7 @@
 - 소제목: 문자열만 받는 상자 / 저장소 네 가지의 자리 / 쓰는 동안 화면이 멈춘다 / 5MB는 바이트가 아니라 글자 수다 / 다른 탭이 바꾼 값을 듣는 storage 이벤트 / sessionStorage는 탭마다 따로 산다 / 출처마다 칸이 나뉘고 쿠키는 다르게 나뉜다 / 쿠키는 저장소이면서 요청 헤더다 / XSS 하나면 localStorage는 통째로 읽힌다 / 크고 구조가 있는 데이터는 IndexedDB / React에서 저장소 값을 읽을 때 / 현장에서 저장소 문제를 만나는 순간 / 저장된 값을 안전하게 꺼내기 / 다시 알림 토글로 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, cookie-session-login, token-login, debounce-throttle, csrf, xss, js-shallow-deep-copy, react-rerender
 - 키워드 백링크 →: json-crud-http, http-versions, event-loop, binary-search, what-happens-google-com
-- 이 글로 오는 글 ←: client-data-cache, frontend-browser-cache, javascript-roadmap, js-shallow-deep-copy, pattern-memento, token-login, transactional-outbox, ts-generics
+- 이 글로 오는 글 ←: client-data-cache, frontend-browser-cache, javascript-roadmap, js-shallow-deep-copy, pattern-memento, token-login, transactional-outbox, ts-generics, typescript-roadmap
 
 #### `debounce-throttle` — 디바운스와 스로틀: 멈춘 뒤 한 번, 움직이는 동안 일정하게
 
@@ -2867,7 +2867,7 @@
 - 소제목: 클릭 하나가 내려갔다가 올라온다 / target과 currentTarget / 막는 방법은 세 가지이고 막는 대상이 다르다 / 거품을 타지 않는 이벤트 / passive 리스너가 스크롤을 지킨다 / React가 이벤트를 받는 자리 / 클릭이 안 먹을 때 보는 순서 / 직접 만들어 보는 디스패치 순서 / 다시 드롭다운으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: dom-basics, event-delegation, debounce-throttle, js-memory-leak, core-web-vitals
 - 키워드 백링크 →: browser-fetch, micro-frontend-integration-patterns, js-function-forms
-- 이 글로 오는 글 ←: abort-controller, debounce-throttle, dom-basics, event-delegation, javascript-roadmap, scroll-patterns-overview
+- 이 글로 오는 글 ←: abort-controller, debounce-throttle, dom-basics, event-delegation, javascript-roadmap, scroll-patterns-overview, typescript-in-react
 
 ### Programming › Frontend › JavaScript › Functions (`programming/frontend/javascript/functions`)
 
@@ -2880,7 +2880,7 @@
 - 소제목: 수학의 합성은 오른쪽부터 읽는다 / 이어 붙일 수 있는 함수의 조건 / 중간값을 엿보는 tap / 비동기 단계가 섞이면 값 대신 Promise가 흐른다 / 메서드 체이닝으로 충분할 때 / TypeScript에서 pipe의 타입 / 표준에 들어오려는 파이프라인 연산자 / 연습: pipe와 compose 직접 만들기 / 다시 검색어로 / 면접에서 나올 만한 질문
 - 직접 링크 →: functional-programming-basics, js-currying-partial, js-async-await, js-promise-combinators, fp-functors-monads-js, code-splitting, fp-in-react
 - 키워드 백링크 →: pattern-decorator, js-function-forms
-- 이 글로 오는 글 ←: claude-code-project-structure, docker-compose, docker-container-basics, docker-network-drivers, fp-functors-monads-js, fp-in-react, functional-programming-basics, helm-dependencies-oci-gitops, js-currying-partial, local-custom-domain, pattern-chain-of-responsibility
+- 이 글로 오는 글 ←: claude-code-project-structure, docker-compose, docker-container-basics, docker-network-drivers, fp-functors-monads-js, fp-in-react, functional-programming-basics, helm-dependencies-oci-gitops, js-currying-partial, local-custom-domain, pattern-chain-of-responsibility, typescript-roadmap
 
 #### `fp-functors-monads-js` — 펑터와 모나드: map과 flatMap으로 실패를 다루기
 
@@ -2922,7 +2922,7 @@
 - 길이: 482줄
 - 소제목: 함수는 태어난 자리를 기억한다 / 호출이 끝나도 상자는 남는다 / 값이 아니라 변수를 잡는다 / 반복문 안에서 만든 함수 / 엔진이 실제로 남기는 것 / 클로저로 만드는 것들 / React 컴포넌트에서 오래된 값을 보는 이유 / 현장에서 오래된 값을 찾는 순서 / 연습: 숨긴 상태를 가진 카운터 / 멈춘 타이머가 알려 준 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, debounce-throttle, js-classes, react-rerender
-- 이 글로 오는 글 ←: abort-controller, debounce-throttle, design-patterns-overview, ds-graph-bfs-dfs, event-delegation, fp-in-react, functional-programming-basics, go-concurrency-basics, islands-resumability, javascript-roadmap, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sql-cte-recursive, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: abort-controller, debounce-throttle, design-patterns-overview, ds-graph-bfs-dfs, event-delegation, fp-in-react, functional-programming-basics, go-concurrency-basics, islands-resumability, javascript-roadmap, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-command, pattern-interpreter, pattern-strategy, sql-cte-recursive, sqld-top-n-hierarchical-pivot, typescript-roadmap
 
 #### `js-currying-partial` — 커링과 부분 적용: 인자는 지금, 실행은 나중에
 
@@ -2932,8 +2932,8 @@
 - 길이: 564줄
 - 소제목: 인자를 나눠 받는 두 가지 방법 / 범용 curry는 이렇게 동작한다 / 인자 배열을 같이 쓰면 두 번째 호출이 망가진다 / fn.length를 믿으면 생기는 일 / lodash의 placeholder로 빈자리 남기기 / bind로 하는 부분 적용과 this / 데이터를 마지막 인자에 두는 이유 / 함수가 늘어나는 만큼 드는 비용 / TypeScript에서 커링 타입 잡기 / React에서 커링한 핸들러가 memo를 깬다 / 연습: curry 직접 만들기 / 다시 버튼 목록으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-first-class-callbacks, js-closures, js-call-apply-bind, react-rerender
-- 키워드 백링크 →: fp-composition-pipe, js-function-forms, js-spread-rest, js-destructuring
-- 이 글로 오는 글 ←: fp-composition-pipe, hexagonal-architecture, javascript-roadmap, js-call-apply-bind, js-closures, js-first-class-callbacks, js-spread-rest
+- 키워드 백링크 →: fp-composition-pipe, js-function-forms, js-spread-rest, ts-utility-mapped-types, js-destructuring
+- 이 글로 오는 글 ←: fp-composition-pipe, hexagonal-architecture, javascript-roadmap, js-call-apply-bind, js-closures, js-first-class-callbacks, js-spread-rest, typescript-roadmap
 
 #### `js-first-class-callbacks` — 일급 함수와 콜백: 함수를 넘기면 따라가는 것들
 
@@ -2955,7 +2955,7 @@
 - 소제목: 함수를 만드는 문법들 / 정의보다 위에서 부를 수 있는 함수 / 화살표 함수가 갖지 않는 것 / 이름 있는 함수 표현식을 쓰는 자리 / 매개변수 자리에서 일어나는 일 / arguments 객체와 나머지 매개변수 / React 컴포넌트에서 만나는 함수 모양 / 어떤 모양을 고를까 / 연습: 기본값 규칙 흉내 내기 / 기계적인 변환이 깨뜨린 두 줄 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-first-class-callbacks, js-closures, js-hoisting-tdz, js-this-binding, js-call-apply-bind, js-optional-chaining-nullish, js-spread-rest, js-strict-mode, js-destructuring
 - 키워드 백링크 →: js-classes, js-es-modules, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: event-propagation, fp-composition-pipe, functional-programming-basics, javascript-roadmap, js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-execution-context, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-adapter, react-rerender, ts-generics, ts-narrowing
+- 이 글로 오는 글 ←: event-propagation, fp-composition-pipe, functional-programming-basics, javascript-roadmap, js-array-transform, js-async-await, js-call-apply-bind, js-callback-hell, js-classes, js-closures, js-currying-partial, js-execution-context, js-first-class-callbacks, js-hoisting-tdz, js-iife-module-pattern, js-immutability-react, js-memory-leak, js-promises, js-scope-lexical, js-spread-rest, js-strict-mode, js-this-binding, js-timers-accuracy, js-var-let-const, pattern-adapter, react-rerender, ts-generics, ts-narrowing, tsconfig-strict, typescript-in-react
 
 #### `js-iife-module-pattern` — IIFE와 모듈 패턴: 모듈 시스템이 없던 시절의 스코프
 
@@ -2988,7 +2988,7 @@
 - 소제목: 같은 입력에 같은 결과, 그리고 흔적 없음 / 숨은 입력은 테스트를 시간에 묶는다 / 숨은 출력은 두 번째 호출에서 드러난다 / 안에서 고치는 건 괜찮다 / 계산은 안쪽, 입출력은 바깥쪽 / 순수하면 얻는 것들 / React가 순수함을 요구하는 세 자리 / 연습: 결제 계산을 순수하게 / 배송비가 한 줄로 돌아오기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, js-shallow-deep-copy, js-immutability-react, js-spread-rest, hexagonal-architecture, js-memoization, message-queue-basics, saga-pattern
 - 키워드 백링크 →: json-crud-http, js-strict-mode, test-pyramid-unit-tests, js-es-modules, http-methods
-- 이 글로 오는 글 ←: abort-controller, bullmq-job-queue, clean-architecture, cors, event-sourcing, express-middleware, fp-in-react, frontend-browser-cache, functional-programming-basics, http-methods, javascript-roadmap, js-array-mutation, js-array-transform, js-destructuring, js-immutability-react, js-memoization, js-primitive-vs-reference, js-short-circuit, message-delivery-semantics, message-queue-basics, mvc-pattern, pattern-mediator, pattern-state, react-rerender, resource-hints-loading, schema-versioning, sqld-set-operators, test-pyramid-unit-tests, ts-narrowing
+- 이 글로 오는 글 ←: abort-controller, bullmq-job-queue, clean-architecture, cors, event-sourcing, express-middleware, fp-in-react, frontend-browser-cache, functional-programming-basics, http-methods, javascript-roadmap, js-array-mutation, js-array-transform, js-destructuring, js-immutability-react, js-memoization, js-primitive-vs-reference, js-short-circuit, message-delivery-semantics, message-queue-basics, mvc-pattern, pattern-mediator, pattern-state, react-rerender, resource-hints-loading, schema-versioning, sqld-set-operators, test-pyramid-unit-tests, ts-narrowing, tsconfig-strict
 
 ### Programming › Frontend › JavaScript › Objects & Arrays (`programming/frontend/javascript/objects`)
 
@@ -3023,7 +3023,7 @@
 - 소제목: 꺼내 담는 일을 한 줄로 / 기본값은 undefined일 때만 들어간다 / 배열 패턴은 이터레이터를 돈다 / 매개변수 자리에서 바로 꺼내기 / 이미 있는 변수에 담을 때 생기는 두 가지 함정 / React 코드 곳곳의 구조 분해 / 반복문과 콜백에서 쓰는 패턴 / TypeScript에서 콜론의 뜻이 겹친다 / 옵션 정규화 함수 만들기 / 패턴이 하는 일을 순서대로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-spread-rest, js-optional-chaining-nullish, react-rerender, js-memoization, js-object-methods
 - 키워드 백링크 →: client-data-cache, pattern-iterator, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: javascript-roadmap, js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, pattern-proxy, ts-generics, ts-narrowing, ts-type-system-basics
+- 이 글로 오는 글 ←: javascript-roadmap, js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, pattern-proxy, ts-generics, ts-narrowing, ts-type-system-basics, tsconfig-strict, typescript-in-react, typescript-roadmap
 
 #### `js-immutability-react` — React 상태를 불변으로 바꾸기: 중첩 업데이트와 Immer
 
@@ -3091,7 +3091,7 @@
 - 소제목: 클래스를 벗기면 함수와 프로토타입이 나온다 / 함수 생성자와 다른 점 / 필드는 인스턴스에, 메서드는 프로토타입에 / 하위 클래스는 부모가 먼저 만든다 / super가 찾아가는 곳 / static은 클래스 쪽 체인을 탄다 / 정말로 숨기는 #private / 필드 선언은 대입이 아니다 / 내장 객체 상속하기 / React에 남은 클래스 / 연습: 계좌 클래스 만들기 / 문법 아래에서 일어나는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-prototype-chain, js-this-binding, design-patterns-overview, js-hoisting-tdz, js-function-forms
 - 키워드 백링크 →: pattern-factory-method, js-strict-mode
-- 이 글로 오는 글 ←: frontend-error-tracking, javascript-roadmap, js-call-apply-bind, js-closures, js-function-forms, js-object-methods, js-prototype-chain, js-strict-mode, js-this-binding
+- 이 글로 오는 글 ←: frontend-error-tracking, javascript-roadmap, js-call-apply-bind, js-closures, js-function-forms, js-object-methods, js-prototype-chain, js-strict-mode, js-this-binding, tsconfig-strict
 
 #### `js-prototype-chain` — 프로토타입 체인: 없는 속성은 위로 물어본다
 
@@ -3112,8 +3112,8 @@
 - 길이: 506줄
 - 소제목: 조용한 실패를 에러로 바꾸는 모드 / 어디서 켜지고 어디서 꺼지나 / 지시어 하나가 남의 코드까지 바꾼다 / 에러로 바뀌는 조용한 실패들 / 파싱 단계에서 막히는 문법 / arguments가 매개변수를 따라 바뀌지 않는다 / 이름만 비슷한 두 strict / 오래된 코드를 엄격 모드로 옮길 때 / 연습: 엄격 모드라면 이 대입이 성공할까 / 실수를 늦게 알 이유가 없다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-scope-lexical, js-iife-module-pattern, js-object-methods, js-this-binding, js-function-forms, abort-controller, js-prototype-chain
-- 키워드 백링크 →: js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
-- 이 글로 오는 글 ←: build-caching, javascript-roadmap, js-array-mutation, js-call-apply-bind, js-classes, js-es-modules, js-execution-context, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-memory-leak, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-this-binding, k8s-crd, pattern-flyweight
+- 키워드 백링크 →: tsconfig-strict, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
+- 이 글로 오는 글 ←: build-caching, javascript-roadmap, js-array-mutation, js-call-apply-bind, js-classes, js-es-modules, js-execution-context, js-function-forms, js-hoisting-tdz, js-iife-module-pattern, js-memory-leak, js-object-methods, js-prototype-chain, js-pure-functions, js-scope-lexical, js-this-binding, k8s-crd, pattern-flyweight, tsconfig-strict
 
 #### `js-this-binding` — this 바인딩: 부르는 방식이 this를 정한다
 
@@ -3124,7 +3124,7 @@
 - 소제목: this는 함수가 아니라 호출에 붙는다 / 네 가지 규칙 / 규칙끼리 부딪히면 / 점이 사라지는 자리들 / 받는 쪽이 this를 정해 주는 API / 파일 맨 위의 this / React 클래스 컴포넌트에서 사라지던 this / 에러 메시지에서 호출 자리까지 / 연습: 메서드를 한꺼번에 묶기 / 호출 자리를 먼저 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-call-apply-bind, js-function-forms, js-prototype-chain, js-strict-mode, react-rerender, js-closures
 - 키워드 백링크 →: js-object-methods, js-execution-context, event-delegation, js-classes, js-es-modules, js-destructuring, js-primitive-vs-reference
-- 이 글로 오는 글 ←: javascript-roadmap, js-call-apply-bind, js-callback-hell, js-classes, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-scope-lexical, js-strict-mode
+- 이 글로 오는 글 ←: javascript-roadmap, js-call-apply-bind, js-callback-hell, js-classes, js-first-class-callbacks, js-function-forms, js-prototype-chain, js-scope-lexical, js-strict-mode, tsconfig-strict
 
 ### Programming › Frontend › Performance (`programming/frontend/performance`)
 
@@ -3271,7 +3271,7 @@
 - 소제목: 렌더와 커밋은 다른 일이다 / 다시 렌더링되는 이유는 따로 있다 / 이전 트리와 짝을 맞추는 규칙 / 내용이 같아도 다른 객체 / memo와 useMemo, useCallback이 듣는 경우 / 상태는 내리고 내용은 올린다 / context는 값이 바뀌면 구독자를 전부 깨운다 / 여러 번 바꿔도 렌더링은 한 번 / 급한 업데이트와 미뤄도 되는 업데이트 / 고치기 전에 잰다 / React Compiler가 대신해 주는 것 / 렌더링이 멈추지 않을 때 남는 흔적 / 처음 검색창으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, rendering-strategies
 - 키워드 백링크 →: core-web-vitals, js-memoization, js-function-forms, js-pure-functions, debounce-throttle, js-primitive-vs-reference
-- 이 글로 오는 글 ←: browser-storage, client-data-cache, css-performance, debounce-throttle, dom-basics, ds-linked-list, ds-stack-queue-deque, event-delegation, fp-in-react, frontend-performance-map, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-microtask-macrotask, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, module-federation-deep-dive, pattern-bridge, pattern-decorator, pattern-observer, rendering-performance-optimization, rendering-strategies
+- 이 글로 오는 글 ←: browser-storage, client-data-cache, css-performance, debounce-throttle, dom-basics, ds-linked-list, ds-stack-queue-deque, event-delegation, fp-in-react, frontend-performance-map, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-currying-partial, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-immutability-react, js-memoization, js-microtask-macrotask, js-optional-chaining-nullish, js-primitive-vs-reference, js-scope-lexical, js-shallow-deep-copy, js-this-binding, js-var-let-const, local-k8s-kind-minikube, module-federation-deep-dive, pattern-bridge, pattern-decorator, pattern-observer, rendering-performance-optimization, rendering-strategies, typescript-in-react
 
 ### Programming › Frontend › Rendering (`programming/frontend/rendering`)
 
@@ -3382,7 +3382,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, lighthouse-explained, lossy-counting, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, browser-rendering-pipeline, client-data-cache, code-splitting, css-performance, frontend-error-tracking, frontend-performance-map, functional-programming-basics, global-rollout-localization, html-form-http, http-streaming-sse, hydration, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-prototype-chain, js-template-literals, lazy-loading-strategies, loading-patterns, micro-frontend-integration-patterns, nextjs-static-dynamic-rendering, pattern-observer, performance-metrics-measurement, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, sd-mq-replication, streaming-ssr-suspense, system-design-study-path
+- 이 글로 오는 글 ←: ab-testing, browser-rendering-pipeline, client-data-cache, code-splitting, css-performance, frontend-error-tracking, frontend-performance-map, functional-programming-basics, global-rollout-localization, html-form-http, http-streaming-sse, hydration, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-prototype-chain, js-template-literals, lazy-loading-strategies, loading-patterns, micro-frontend-integration-patterns, nextjs-static-dynamic-rendering, pattern-observer, performance-metrics-measurement, react-rerender, react-server-components, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, sd-mq-replication, streaming-ssr-suspense, system-design-study-path, typescript-in-react
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -3404,9 +3404,9 @@
 - 키워드: 타입 매개변수, 제네릭 제약, NoInfer, const 타입 매개변수
 - 길이: 513줄
 - 소제목: any를 쓰면 입력과 출력이 따로 논다 / 타입 매개변수는 호출하는 순간 정해진다 / 후보가 여럿이면 검사기가 고른다 / extends로 할 수 있는 일을 정한다 / 키 이름을 타입으로 받는다 / 기본값과 추론을 막는 NoInfer / 반환에만 쓰인 제네릭은 as와 같다 / 컴포넌트와 훅에 타입 매개변수를 단다 / 제네릭이 필요 없는 자리 / 직접 해 보기: 키로 묶는 groupBy / 들어간 것과 나온 것을 잇는 이름 / 면접에서 나올 만한 질문
-- 직접 링크 →: ts-type-system-basics, ts-narrowing
+- 직접 링크 →: ts-type-system-basics, ts-utility-mapped-types, typescript-in-react, ts-narrowing
 - 키워드 백링크 →: browser-storage, js-function-forms, js-destructuring
-- 이 글로 오는 글 ←: ts-narrowing, ts-type-system-basics
+- 이 글로 오는 글 ←: ts-narrowing, ts-type-system-basics, ts-utility-mapped-types, typescript-in-react, typescript-roadmap
 
 #### `ts-narrowing` — TypeScript 타입 좁히기: 조건문이 타입을 줄이는 방법과 빠진 갈래 찾기
 
@@ -3415,9 +3415,9 @@
 - 키워드: 타입 좁히기, 판별 유니온, 타입 가드, 완전성 검사, 단언 함수
 - 길이: 575줄
 - 소제목: 검사기는 코드의 갈림길을 따라간다 / typeof, in, instanceof가 좁히는 범위 / 다시 할당하면 좁힌 것이 풀린다 / 공통 태그 하나로 갈래를 나누는 판별 유니온 / 빠진 갈래를 컴파일러가 찾게 하기 / 직접 만드는 타입 가드 / 통과하지 못하면 던지는 단언 함수 / React 상태와 액션을 갈래로 나눈다 / 직접 해 보기: 결제 상태 문구 / 조건문이 곧 타입 선언이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ts-type-system-basics, ts-generics, js-truthy-falsy-typeof, js-prototype-chain, fp-in-react
+- 직접 링크 →: ts-type-system-basics, ts-generics, js-truthy-falsy-typeof, js-prototype-chain, tsconfig-strict, typescript-in-react, fp-in-react, ts-utility-mapped-types, typescript-roadmap
 - 키워드 백링크 →: json-crud-http, js-function-forms, js-pure-functions, js-destructuring
-- 이 글로 오는 글 ←: js-truthy-falsy-typeof, pattern-composite, pattern-interpreter, pattern-state, pattern-visitor, ts-generics, ts-type-system-basics
+- 이 글로 오는 글 ←: js-truthy-falsy-typeof, pattern-composite, pattern-interpreter, pattern-state, pattern-visitor, ts-generics, ts-type-system-basics, ts-utility-mapped-types, tsconfig-strict, typescript-in-react, typescript-roadmap
 
 #### `ts-type-system-basics` — TypeScript 타입 시스템 기초: 모양으로 비교하고, 리터럴만 따로 검사하고, 컴파일 뒤엔 사라진다
 
@@ -3426,9 +3426,53 @@
 - 키워드: 구조적 타이핑, 초과 속성 검사, 브랜드 타입, 타입 넓히기
 - 길이: 579줄
 - 소제목: 이름이 달라도 모양이 같으면 같은 타입이다 / 문자열 두 개를 구분하는 브랜드 타입 / 객체 리터럴에만 걸리는 검사 / 집합으로 보는 any, unknown, never / let은 넓히고 const는 좁힌다 / 추론에 맡길 곳과 적어 줄 곳 / type과 interface 중 무엇을 쓰나 / 컴파일이 끝나면 타입은 사라진다 / JSX 속성도 같은 규칙으로 검사한다 / 직접 해 보기: unknown을 숫자로 바꾸기 / 모양, 집합, 경계 / 면접에서 나올 만한 질문
-- 직접 링크 →: ts-generics, ts-narrowing
+- 직접 링크 →: ts-generics, ts-narrowing, ts-utility-mapped-types, tsconfig-strict, typescript-in-react, typescript-roadmap
 - 키워드 백링크 →: js-prototype-chain, js-destructuring
-- 이 글로 오는 글 ←: schema-versioning, ts-generics, ts-narrowing
+- 이 글로 오는 글 ←: schema-versioning, ts-generics, ts-narrowing, ts-utility-mapped-types, tsconfig-strict, typescript-in-react, typescript-roadmap
+
+#### `ts-utility-mapped-types` — TypeScript 유틸리티 타입과 매핑된 타입: 원본 하나에서 타입을 뽑아내는 법
+
+- 요약: User에 필드를 추가했는데 손으로 베낀 폼 타입만 그대로였던 장면에서 출발해 Partial·Pick·Omit·Record와 그 재료인 매핑된 타입, 분배 조건부 타입, infer, 템플릿 리터럴 타입을 실제 tsc 출력으로 열어 본다. 오타를 잡지 못하는 Omit, 유니온에서 뭉개지는 필드, 넓히지 않는 satisfies, TS2589가 나는 경계까지 다룬다.
+- 태그: TypeScript, JavaScript, React
+- 키워드: 유틸리티 타입, 매핑된 타입, 조건부 타입, 템플릿 리터럴 타입
+- 길이: 574줄
+- 소제목: 원본 하나에서 뽑아내는 다섯 가지 모양 / Partial을 열어 보면 키를 도는 반복문이다 / 타입에 if를 거는 조건부 타입 / 안쪽 타입을 꺼내는 infer / 문자열도 타입으로 조립한다 / satisfies로 검사만 받기 / 타입이 너무 영리해지면 / React 코드에서 자주 만나는 조합 / 연습: 라우트 매칭 함수 만들기 / 다시 role이 빠진 폼으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: ts-type-system-basics, ts-generics, ts-narrowing, tsconfig-strict, typescript-in-react
+- 키워드 백링크 →: js-template-literals, db-types-overview
+- 이 글로 오는 글 ←: js-currying-partial, ts-generics, ts-narrowing, ts-type-system-basics, typescript-in-react, typescript-roadmap
+
+#### `tsconfig-strict` — tsconfig와 strict 옵션: 검사의 강도와 실행 환경 맞추기
+
+- 요약: 타입을 다 붙였는데 find 결과의 undefined로 운영에서 터진 코드에서 출발해 strict가 켜는 아홉 개 검사와 strict 밖의 noUncheckedIndexedAccess 등을 실제 tsc 에러로 하나씩 본다. moduleResolution의 bundler와 nodenext, isolatedModules, skipLibCheck가 숨기는 것, 프로젝트 참조, 기존 코드에 strict를 켜는 순서까지 다룬다.
+- 태그: TypeScript, JavaScript, Node.js, Troubleshooting
+- 키워드: tsconfig, strictNullChecks, noUncheckedIndexedAccess, moduleResolution, isolatedModules
+- 길이: 695줄
+- 소제목: strict 한 줄이 켜는 검사들 / 플래그마다 잡아내는 버그 / strict를 켜도 통과하는 코드 / import 문자열을 파일로 바꾸는 규칙 / 파일 하나만 보고 변환하는 도구들 / skipLibCheck가 건너뛰는 것 / 저장소가 커지면 프로젝트를 나눈다 / 이 블로그의 tsconfig 읽기 / 이미 있는 코드에 strict를 켜는 순서 / 연습: 환경 변수에서 포트 읽기 / 다시 find가 돌려준 undefined로 / 면접에서 나올 만한 질문
+- 직접 링크 →: ts-type-system-basics, ts-narrowing, js-this-binding, js-es-modules, frontend-monorepo, typescript-in-react
+- 키워드 백링크 →: js-classes, js-function-forms, js-strict-mode, js-pure-functions, js-destructuring
+- 이 글로 오는 글 ←: clean-architecture, frontend-monorepo, js-strict-mode, monorepo-build-cache, ts-narrowing, ts-type-system-basics, ts-utility-mapped-types, typescript-roadmap
+
+#### `typescript-in-react` — React에서 TypeScript 쓰기: 상태, props, 이벤트, ref의 타입
+
+- 요약: 로직은 그대로인데 useState(null)에서 에러가 난 컴포넌트에서 출발해 props와 children, 이벤트의 target과 currentTarget, null로 시작하는 ref, 기본 요소를 감싸는 래퍼, 서로 배타적인 props, 제네릭 컴포넌트, Context와 커스텀 훅의 타입을 실제 tsc 출력으로 따라간다. @types/react 19에서 바뀐 useRef와 ref prop도 짚는다.
+- 태그: TypeScript, React, Frontend
+- 키워드: ComponentProps, ReactNode, 이벤트 핸들러 타입, 판별 props
+- 길이: 606줄
+- 소제목: 초기값이 타입을 정한다 / props 타입을 적는 자리 / children에 들어갈 수 있는 것 / 이벤트 객체의 타입은 어디서 오나 / ref는 처음엔 비어 있다 / 기본 요소를 감싸는 컴포넌트 / 같이 와야 하는 props, 같이 오면 안 되는 props / 어떤 값이든 받는 목록 컴포넌트 / Context와 커스텀 훅이 돌려주는 타입 / 연습: 조건부 클래스 이름을 합치는 cx / 다시 null로 시작한 상태로 / 면접에서 나올 만한 질문
+- 직접 링크 →: ts-generics, ts-narrowing, ts-utility-mapped-types, react-rerender, ts-type-system-basics, event-propagation, typescript-roadmap
+- 키워드 백링크 →: rendering-strategies, js-function-forms, js-destructuring, js-hoisting-tdz
+- 이 글로 오는 글 ←: pattern-composite, ts-generics, ts-narrowing, ts-type-system-basics, ts-utility-mapped-types, tsconfig-strict, typescript-roadmap
+
+#### `typescript-roadmap` — TypeScript 로드맵: 에러 한 화면에서 여섯 글로
+
+- 요약: 파일 하나에서 나온 tsc 에러 여섯 줄이 각각 다른 규칙에서 나왔다는 데서 출발해 이 블로그의 TypeScript 글을 읽는 순서로 엮고, 에러 번호에서 먼저 펼 글을 찾는 길과 JS 저장소를 옮기는 순서를 정리한다.
+- 태그: TypeScript, JavaScript, React
+- 키워드: TypeScript 로드맵, TypeScript 학습 순서, tsc 에러 코드
+- 길이: 313줄
+- 소제목: 타입은 어디에서 일하고 어디에서 사라지나 / 글끼리 기대는 순서 / 모양으로 비교하는 타입 / 들어간 타입과 나오는 타입을 잇기 / 조건문이 타입을 줄인다 / 타입으로 타입을 만들기 / 검사의 강도와 실행 환경 맞추기 / 컴포넌트에 타입 붙이기 / 다른 글 속의 TypeScript / 에러 코드에서 글 찾기 / 자바스크립트 프로젝트를 옮기는 순서 / 연습: tsc 출력에서 읽을 글 고르기 / 여섯 줄로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: javascript-roadmap, ts-type-system-basics, ts-generics, ts-narrowing, ts-utility-mapped-types, tsconfig-strict, typescript-in-react, js-var-let-const, js-es-modules, js-hoisting-tdz, js-currying-partial, fp-composition-pipe, design-patterns-overview
+- 키워드 백링크 →: browser-storage, json-crud-http, js-template-literals, js-destructuring, frontend-monorepo, js-closures
+- 이 글로 오는 글 ←: javascript-roadmap, ts-narrowing, ts-type-system-basics, typescript-in-react
 
 ### Programming › In Practice (`programming/in-practice`)
 
@@ -3810,7 +3854,7 @@
 - 소제목: JSON은 자바스크립트 객체가 아니다 / stringify가 조용히 바꾸는 값 / 날짜는 문자열로 와서 문자열로 남는다 / 큰 숫자 ID는 문자열로 보낸다 / 할 일 하나의 일생 / 목록은 감싸서 준다 / 하나를 달라고 했는데 없으면 404 / 만들 때는 201과 Location / PUT은 빠진 필드를 기본값으로 만든다 / PATCH에서 null은 지우라는 뜻이다 / 지운 걸 또 지우면 / 형식이 다르면 415 / 문법은 400, 내용은 422 / 동시에 고치면 412 / res.json()이 터지는 응답들 / 폼으로 보낼 때와 무엇이 다른가 / 다시 빈 req.body로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-methods, http-message, browser-fetch, rest-api-design, http-status-codes, html-form-http
 - 키워드 백링크 →: cors, js-prototype-chain, optimistic-locking, loading-patterns, upper-layers-session-presentation-app, api-versioning, client-data-cache, resilience-patterns, http-caching-cdn
-- 이 글로 오는 글 ←: backend-engineer-roadmap, browser-fetch, browser-storage, cors, db-modeling-normalization, fp-in-react, http-methods, http-streaming-sse, js-callback-hell, js-memoization, js-object-methods, js-prototype-chain, js-pure-functions, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sd-unique-id-generator, sql-views-materialized, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, ts-narrowing, upper-layers-session-presentation-app, xss
+- 이 글로 오는 글 ←: backend-engineer-roadmap, browser-fetch, browser-storage, cors, db-modeling-normalization, fp-in-react, http-methods, http-streaming-sse, js-callback-hell, js-memoization, js-object-methods, js-prototype-chain, js-pure-functions, js-truthy-falsy-typeof, k8s-serviceaccount-tokens, pattern-prototype, pattern-proxy, pattern-template-method, postgres-functions-triggers, realtime-communication, sd-unique-id-generator, sql-views-materialized, sqld-entity-attribute-relationship, sqld-rollup-cube-grouping-sets, terraform-basics, ts-narrowing, typescript-roadmap, upper-layers-session-presentation-app, xss
 
 ### Programming › Network › Infrastructure (`programming/network/infrastructure`)
 
@@ -7096,6 +7140,7 @@
 - 매달린 Try → `sd-wallet-transfer`
 - 매칭 엔진 → `sd-stock-exchange-order-book`
 - 매크로태스크 → `js-microtask-macrotask`
+- 매핑된 타입 → `ts-utility-mapped-types`
 - 맵 매칭 → `sd-maps-location-eta`
 - 머클 트리 → `merkle-tree`
 - 머티리얼라이즈드 뷰 → `postgres-reporting-sql`
@@ -7458,6 +7503,7 @@
 - 유명인 문제 → `sd-news-feed-publishing`
 - 유비쿼터스 언어 → `ddd-bounded-context`
 - 유클리드 거리 → `pythagorean-theorem`
+- 유틸리티 타입 → `ts-utility-mapped-types`
 - 유한 상태 기계 → `pattern-state`
 - 윤초 → `clock-skew`
 - 음악 스트리밍 → `sd-music-streaming`
@@ -7476,6 +7522,7 @@
 - 이벤트 위임 → `event-delegation`
 - 이벤트 저장소 → `event-sourcing`
 - 이벤트 캡처링 → `event-propagation`
+- 이벤트 핸들러 타입 → `typescript-in-react`
 - 이분 탐색 → `binary-search`
 - 이상 점수 → `waf`
 - 이전 페이지 커서 → `api-pagination-sorting`
@@ -7581,6 +7628,7 @@
 - 제로 트러스트 → `zero-trust-architecture`
 - 제품군 → `pattern-abstract-factory`
 - 조건부 집계 → `sql-case-when`
+- 조건부 타입 → `ts-utility-mapped-types`
 - 조정 루프 → `iac-basics`
 - 좀비 프로세스 → `linux-processes-signals`
 - 종료 코드 137 → `docker-commands-workflow`
@@ -7739,6 +7787,7 @@
 - 테스트 피라미드 → `test-pyramid-unit-tests`
 - 템플릿 데이터베이스 → `integration-tests-real-db`
 - 템플릿 리터럴 → `js-template-literals`
+- 템플릿 리터럴 타입 → `ts-utility-mapped-types`
 - 템플릿 메서드 → `pattern-template-method`
 - 토큰 인트로스펙션 → `api-gateway-use-cases`
 - 툼스톤 → `db-type-wide-column`
@@ -7767,6 +7816,7 @@
 - 파티션 배정 전략 → `sd-mq-consumer-groups`
 - 파티션 키 → `sd-mq-storage-partitions`
 - 판별 유니온 → `ts-narrowing`
+- 판별 props → `typescript-in-react`
 - 패럴랙스 → `parallax-scrollytelling`
 - 패킷 캡처 → `packet-capture-tcpdump`
 - 팩토리 메서드 → `pattern-factory-method`
@@ -8044,6 +8094,7 @@
 - Command 패턴 → `pattern-command`
 - commit-msg 훅 → `git-tips-advanced`
 - commonLabels → `kustomize-basics`
+- ComponentProps → `typescript-in-react`
 - compose → `fp-composition-pipe`
 - compose.yaml → `docker-compose`
 - Composite 패턴 → `pattern-composite`
@@ -8392,6 +8443,7 @@
 - IS DISTINCT FROM → `sql-select-where-null`
 - IsLooselyEqual → `js-equality-coercion`
 - ISM 정책 → `opensearch-cluster-operations`
+- isolatedModules → `tsconfig-strict`
 - ISR → `rendering-strategies`
 - Iterator 패턴 → `pattern-iterator`
 - IteratorClose → `js-destructuring`
@@ -8521,6 +8573,7 @@
 - ModSecurity → `waf`
 - Module Federation → `micro-frontends`
 - modulepreload → `js-es-modules`
+- moduleResolution → `tsconfig-strict`
 - MongoDB → `mongodb-document-model`
 - MOVED → `redis-cluster`
 - MSS 클램핑 → `layer-mtu-fragmentation`
@@ -8576,6 +8629,7 @@
 - Non-EQUI JOIN → `sqld-joins`
 - NOT EXISTS → `sqld-subquery-set-operators`
 - NOT VALID → `zero-downtime-migrations`
+- noUncheckedIndexedAccess → `tsconfig-strict`
 - nsenter → `linux-namespaces-cgroups`
 - nsswitch.conf → `hosts-file`
 - null 병합 연산자 → `js-optional-chaining-nullish`
@@ -8723,6 +8777,7 @@
 - RDS Proxy → `serverless-limits`
 - React.lazy → `lazy-loading-strategies`
 - React.memo → `react-rerender`
+- ReactNode → `typescript-in-react`
 - read-modify-write → `race-conditions`
 - read-your-writes → `db-consistency-cap`
 - ReadableStream → `http-streaming-sse`
@@ -8903,6 +8958,7 @@
 - STP → `router-vs-switch`
 - Strategy 패턴 → `pattern-strategy`
 - strict mode → `js-strict-mode`
+- strictNullChecks → `tsconfig-strict`
 - strictVersion → `module-federation-deep-dive`
 - String.raw → `js-template-literals`
 - structuredClone → `pattern-prototype`
@@ -8988,6 +9044,8 @@
 - truthy → `js-truthy-falsy-typeof`
 - try_files → `nginx-basics`
 - Try-Confirm-Cancel → `sd-wallet-transfer`
+- tsc 에러 코드 → `typescript-roadmap`
+- tsconfig → `tsconfig-strict`
 - TSO → `packet-encapsulation`
 - tstzrange → `postgres-data-types`
 - tsvector → `postgres-jsonb-search`
@@ -8996,6 +9054,8 @@
 - Turborepo → `build-caching`
 - TURN 서버 → `nat-traversal`
 - typeof null → `js-truthy-falsy-typeof`
+- TypeScript 로드맵 → `typescript-roadmap`
+- TypeScript 학습 순서 → `typescript-roadmap`
 - UAT → `sit-uat-testing`
 - UDP → `udp-and-quic`
 - UdpRcvbufErrors → `udp-and-quic`
@@ -9101,7 +9161,7 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (33%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 이름을, 스칼라)
+- `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (32%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 스칼라)
 - `mysql-innodb-basics` ↔ `pessimistic-locking` (30%: 테이블, update가, 잠금은, 행이, 잠금, 대기를, 좁혀, 가는)
 - `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
@@ -9110,11 +9170,11 @@
 - `javascript-roadmap` ↔ `k8s-learning-roadmap` (27%: 01, 02, 03, 04, 05, 06, 07, 증상이면)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (27%: 글에서, 사원, 테이블, sqld, 시험, 포인트, oracle)
+- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (26%: 서브쿼리, 느려지는, sqld, 시험, 포인트)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `server-sent-events` ↔ `long-polling` (25%: 붙잡는, 장애를, 만났을, 가장, nginx, 깊게, 재연결)
 - `sd-sharding-intro` ↔ `db-sharding` (24%: 늘려도, 담기, 샤딩, 키를, 샤드를, 샤드)
-- `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (24%: 서브쿼리, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-null-functions` (24%: 행을, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-type-conversion` (24%: 예제, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-window-functions` (24%: 행을, sqld, 시험, 포인트)
@@ -9139,13 +9199,28 @@
 - `sd-news-feed-retrieval` ↔ `sd-news-feed-publishing` (20%: 피드, 글이, 넣으면, 글을, 문의가, 오면, 뉴스)
 - `streaming-ssr-suspense` ↔ `rendering-strategies` (20%: ssr, next.js, rendering, 스트리밍, ssr과, 준비된, 부분부터)
 - `lighthouse-explained` ↔ `core-web-vitals` (19%: 실험실, 점수와, 실제, 사용자, core, web, vitals)
-- `sd-capacity-estimation` ↔ `sd-latency-numbers` (19%: 계산해, 자주, 실수, 수백만, 사용자로, 키우기)
 - `sql-aggregation-pitfalls` ↔ `sqld-group-by-having` (19%: 세는, 행이, 행을, group, 집계, by)
+- `count-min-sketch` ↔ `lossy-counting` (19%: lossy, 데이터로, 세는, data, structure, probabilistic)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `typescript-roadmap` ↔ `typescript-in-react`
+- `typescript-roadmap` ↔ `ts-narrowing`
+- `typescript-roadmap` ↔ `ts-type-system-basics`
+- `typescript-roadmap` ↔ `javascript-roadmap`
+- `typescript-in-react` ↔ `ts-utility-mapped-types`
+- `typescript-in-react` ↔ `ts-narrowing`
+- `typescript-in-react` ↔ `ts-generics`
+- `typescript-in-react` ↔ `ts-type-system-basics`
+- `tsconfig-strict` ↔ `ts-narrowing`
+- `tsconfig-strict` ↔ `ts-type-system-basics`
+- `tsconfig-strict` ↔ `frontend-monorepo`
+- `tsconfig-strict` ↔ `js-strict-mode`
+- `ts-utility-mapped-types` ↔ `ts-narrowing`
+- `ts-utility-mapped-types` ↔ `ts-generics`
+- `ts-utility-mapped-types` ↔ `ts-type-system-basics`
 - `recursion-backtracking` ↔ `dynamic-programming`
 - `recursion-backtracking` ↔ `ds-graph-bfs-dfs`
 - `binary-search` ↔ `sorting-algorithms`

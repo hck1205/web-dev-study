@@ -2,6 +2,78 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "typescript-roadmap": {
+    "links": [
+      "javascript-roadmap",
+      "ts-type-system-basics",
+      "ts-generics",
+      "ts-narrowing",
+      "ts-utility-mapped-types",
+      "tsconfig-strict",
+      "typescript-in-react",
+      "js-var-let-const",
+      "js-es-modules",
+      "js-hoisting-tdz",
+      "js-currying-partial",
+      "fp-composition-pipe",
+      "design-patterns-overview"
+    ],
+    "mentions": [
+      "browser-storage",
+      "json-crud-http",
+      "js-template-literals",
+      "js-destructuring",
+      "frontend-monorepo",
+      "js-closures"
+    ]
+  },
+  "typescript-in-react": {
+    "links": [
+      "ts-generics",
+      "ts-narrowing",
+      "ts-utility-mapped-types",
+      "react-rerender",
+      "ts-type-system-basics",
+      "event-propagation",
+      "typescript-roadmap"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "js-function-forms",
+      "js-destructuring",
+      "js-hoisting-tdz"
+    ]
+  },
+  "tsconfig-strict": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-narrowing",
+      "js-this-binding",
+      "js-es-modules",
+      "frontend-monorepo",
+      "typescript-in-react"
+    ],
+    "mentions": [
+      "js-classes",
+      "js-function-forms",
+      "js-strict-mode",
+      "js-pure-functions",
+      "js-destructuring"
+    ]
+  },
+  "ts-utility-mapped-types": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-generics",
+      "ts-narrowing",
+      "tsconfig-strict",
+      "typescript-in-react"
+    ],
+    "mentions": [
+      "js-template-literals",
+      "db-types-overview"
+    ]
+  },
   "recursion-backtracking": {
     "links": [
       "js-execution-context",
@@ -51,7 +123,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ts-generics",
       "js-truthy-falsy-typeof",
       "js-prototype-chain",
-      "fp-in-react"
+      "tsconfig-strict",
+      "typescript-in-react",
+      "fp-in-react",
+      "ts-utility-mapped-types",
+      "typescript-roadmap"
     ],
     "mentions": [
       "json-crud-http",
@@ -63,6 +139,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "ts-generics": {
     "links": [
       "ts-type-system-basics",
+      "ts-utility-mapped-types",
+      "typescript-in-react",
       "ts-narrowing"
     ],
     "mentions": [
@@ -74,7 +152,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "ts-type-system-basics": {
     "links": [
       "ts-generics",
-      "ts-narrowing"
+      "ts-narrowing",
+      "ts-utility-mapped-types",
+      "tsconfig-strict",
+      "typescript-in-react",
+      "typescript-roadmap"
     ],
     "mentions": [
       "js-prototype-chain",
@@ -342,6 +424,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "github-actions-docker-ecr",
       "git-branch-merge",
+      "tsconfig-strict",
       "dependency-hell",
       "git-remote-collaboration"
     ]
@@ -357,6 +440,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "build-caching",
+      "tsconfig-strict",
       "http-caching-cdn",
       "api-versioning",
       "js-hoisting-tdz",
@@ -2467,6 +2551,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "k8s-learning-roadmap",
       "networking-essentials-map",
+      "typescript-roadmap",
       "js-var-let-const",
       "js-scope-lexical",
       "js-hoisting-tdz",
@@ -3691,6 +3776,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-prototype-chain"
     ],
     "mentions": [
+      "tsconfig-strict",
       "js-classes",
       "js-es-modules",
       "js-destructuring",
@@ -3938,6 +4024,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cqrs"
     ],
     "mentions": [
+      "tsconfig-strict",
       "http-status-codes"
     ]
   },
@@ -4062,6 +4149,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "fp-composition-pipe",
       "js-function-forms",
       "js-spread-rest",
+      "ts-utility-mapped-types",
       "js-destructuring"
     ]
   },
@@ -8527,6 +8615,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-execution-context",
+      "typescript-in-react",
       "ds-graph-bfs-dfs",
       "ts-narrowing"
     ]

@@ -1,0 +1,694 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("tsconfig-strict");
+
+자바스크립트 프로젝트를 TypeScript로 옮기면서 tsconfig에 `strict`를 넣지 않았다. 빌드도 통과했고 타입도 다 붙였다. 그런데 운영에서 이런 코드가 터졌다.
+
+```ts
+interface User { id: number; name: string }
+const users: User[] = [{ id: 1, name: "kim" }];
+
+function greet(id: number) {
+  const user = users.find((u) => u.id === id);
+  return user.name.toUpperCase();
+}
+console.log(greet(1));
+console.log(greet(2));
+```
+
+TypeScript 5.9로 옵션 없이 검사하면 에러가 0개다. Node 22로 돌리면 두 번째 호출에서 멈춘다(경로와 스택 일부는 생략했다).
+
+```text
+KIM
+  return user.name.toUpperCase();
+              ^
+
+TypeError: Cannot read properties of undefined (reading 'name')
+```
+
+같은 파일에 `--strict`를 붙이면 컴파일 단계에서 잡힌다.
+
+```text
+find.ts(6,10): error TS18048: 'user' is possibly 'undefined'.
+```
+
+`find`는 못 찾으면 `undefined`를 돌려준다. strict가 꺼져 있으면 TypeScript는 `undefined`와 `null`을 모든 타입에 몰래 섞어 넣은 것으로 보고, 그 가능성을 검사하지 않는다. 타입을 붙였는데도 가장 흔한 런타임 에러가 그대로 통과한 이유다.
+
+<SequenceDiagram
+  caption="strict가 꺼져 있으면 undefined가 검사를 지나 런타임까지 간다"
+  actors={[
+    { id: "code", label: "코드" },
+    { id: "tsc", label: "tsc" },
+    { id: "rt", label: "런타임" },
+  ]}
+  steps={[
+    { from: "code", to: "tsc", label: "users.find()", title: "반환 타입을 묻는다", detail: "strict가 꺼져 있으면 find의 반환 타입은 User | undefined가 아니라 그냥 User로 보인다." },
+    { from: "tsc", to: "code", label: "에러 0개", title: "검사를 통과한다", detail: "user.name 접근을 막을 근거가 없다." },
+    { from: "code", to: "rt", label: "greet(2)", title: "없는 id로 부른다", detail: "find가 undefined를 돌려주고 .name을 읽는 순간 터진다.", payload: "TypeError: Cannot read properties of undefined (reading 'name')" },
+    { from: "tsc", to: "code", label: "TS18048", title: "strict를 켜면", detail: "strictNullChecks가 undefined를 별도 타입으로 다뤄 접근 전에 확인하라고 한다.", payload: "'user' is possibly 'undefined'." },
+    { from: "code", to: "code", label: "if (!user)", title: "처리할 곳이 드러난다", detail: "못 찾았을 때 무엇을 할지(예외, 기본값, 404)를 코드로 정하게 된다." },
+  ]}
+/>
+
+이 글은 tsconfig의 검사 옵션을 하나씩 실제 에러와 함께 본다. strict가 켜는 플래그들, strict 밖에 있는 더 엄격한 검사, 그리고 검사 결과를 좌우하는 `moduleResolution`, `isolatedModules`, `skipLibCheck`, 프로젝트 참조까지 다룬다. 출력은 TypeScript 5.9.3과 Node.js 22.22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 타입 자체의 규칙은 [타입 시스템 기초](/posts/ts-type-system-basics)에서, `undefined`가 섞인 타입을 안전하게 좁히는 법은 [타입 좁히기](/posts/ts-narrowing)에서 다룬다.
+
+## strict 한 줄이 켜는 검사들
+
+`strict: true`는 옵션 하나가 아니라 여러 옵션을 한 번에 켜는 묶음이다. `strict: true`만 적은 tsconfig를 `tsc --showConfig`로 펼쳐 보면 무엇이 켜지는지 나온다.
+
+```text
+{
+    "compilerOptions": {
+        "strict": true,
+        "noImplicitAny": true,
+        "noImplicitThis": true,
+        "strictNullChecks": true,
+        "strictFunctionTypes": true,
+        "strictBindCallApply": true,
+        "strictPropertyInitialization": true,
+        "strictBuiltinIteratorReturn": true,
+        "alwaysStrict": true,
+        "useUnknownInCatchVariables": true
+    },
+    "files": [
+        "./a.ts"
+    ]
+}
+```
+
+5.9 기준으로 아홉 개다. 이 목록은 버전마다 늘어 왔다. `useUnknownInCatchVariables`는 4.4에서, `strictBuiltinIteratorReturn`은 5.6에서 들어왔다. 그래서 TypeScript를 올렸더니 코드는 그대로인데 새 에러가 생기는 일이 있다. strict 묶음에 새 검사가 들어오면 이미 `strict: true`인 프로젝트에도 바로 켜지기 때문이다. 하나만 끄고 싶으면 `"strict": true, "strictNullChecks": false`처럼 뒤에서 개별 옵션을 덮어쓴다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="strict의 검사는 세 갈래로 묶인다. 화살표 끝은 각 갈래가 잡는 대표 버그다"
+  nodes={[
+    { id: "strict", label: "strict: true", sub: "alwaysStrict 포함", x: 200, y: 35, w: 140 },
+    { id: "nullish", label: "없을 수 있는 값", sub: "NullChecks 외 2개", x: 70, y: 140, w: 124 },
+    { id: "unknown", label: "모르는 타입", sub: "ImplicitAny 외 2개", x: 200, y: 140, w: 124 },
+    { id: "fn", label: "함수 호출", sub: "FunctionTypes 외 1개", x: 330, y: 140, w: 124 },
+    { id: "b1", label: "find() 결과", sub: "undefined.name", x: 70, y: 250, w: 118 },
+    { id: "b2", label: "catch (err)", sub: "err.message", x: 200, y: 250, w: 118 },
+    { id: "b3", label: "콜백 매개변수", sub: "e.clientX", x: 330, y: 250, w: 118 },
+  ]}
+  edges={[
+    { from: "strict", to: "nullish" },
+    { from: "strict", to: "unknown" },
+    { from: "strict", to: "fn" },
+    { from: "nullish", to: "b1", dashed: true },
+    { from: "unknown", to: "b2", dashed: true },
+    { from: "fn", to: "b3", dashed: true },
+  ]}
+/>
+
+## 플래그마다 잡아내는 버그
+
+아래 코드는 strict 없이 검사하면 에러가 하나도 없다. 각 블록이 플래그 하나를 건드리게 만들었다.
+
+```ts
+// noImplicitAny
+function total(items) {
+  return items.reduce((sum, it) => sum + it.price, 0);
+}
+
+// strictFunctionTypes
+type Handler = (e: MouseEvent | KeyboardEvent) => void;
+const onMouse = (e: MouseEvent) => console.log(e.clientX);
+const h: Handler = onMouse;
+
+// strictBindCallApply
+function setPrice(id: number, price: number) {}
+setPrice.call(null, 1, "1000");
+
+// strictPropertyInitialization
+class Cart {
+  items: string[];
+  owner: string;
+  constructor() {
+    this.items = [];
+  }
+}
+
+// noImplicitThis
+const counter = {
+  n: 0,
+  start() {
+    setTimeout(function () {
+      this.n++;
+    }, 100);
+  },
+};
+
+// useUnknownInCatchVariables
+try {
+  JSON.parse("{");
+} catch (err) {
+  console.log(err.message);
+}
+
+// strictBuiltinIteratorReturn
+const it = new Set([1, 2]).values();
+const r = it.next();
+if (r.done) {
+  const v: number = r.value;
+}
+```
+
+`--strict`를 붙이면 이렇게 나온다.
+
+```text
+flags.ts(2,16): error TS7006: Parameter 'items' implicitly has an 'any' type.
+flags.ts(3,24): error TS7006: Parameter 'sum' implicitly has an 'any' type.
+flags.ts(3,29): error TS7006: Parameter 'it' implicitly has an 'any' type.
+flags.ts(9,7): error TS2322: Type '(e: MouseEvent) => void' is not assignable to type 'Handler'.
+  Types of parameters 'e' and 'e' are incompatible.
+    Type 'MouseEvent | KeyboardEvent' is not assignable to type 'MouseEvent'.
+      Type 'KeyboardEvent' is missing the following properties from type 'MouseEvent': button, buttons, clientX, clientY, and 14 more.
+flags.ts(13,24): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+flags.ts(18,3): error TS2564: Property 'owner' has no initializer and is not definitely assigned in the constructor.
+flags.ts(29,7): error TS2683: 'this' implicitly has type 'any' because it does not have a type annotation.
+flags.ts(38,15): error TS18046: 'err' is of type 'unknown'.
+flags.ts(45,9): error TS2322: Type 'undefined' is not assignable to type 'number'.
+```
+
+하나씩 짚어 보자.
+
+`noImplicitAny`는 타입을 추론할 수 없는 자리에 조용히 `any`를 넣지 말고 에러를 내라는 옵션이다. 꺼져 있으면 `items`가 `any`가 되고, 거기서 나온 `sum`, `it`도 줄줄이 `any`가 된다. `any`는 검사를 끄는 타입이라 한 번 들어오면 퍼진다. 이 옵션이 꺼진 프로젝트는 타입을 썼어도 상당 부분이 검사 밖에 있다.
+
+`strictNullChecks`는 처음 본 그 옵션이다. 켜면 `null`과 `undefined`가 독립된 타입이 되고, `string`에는 `undefined`가 들어갈 수 없다. `find`, `Map.get`, `querySelector`, 선택 필드처럼 "없을 수도 있다"를 돌려주는 API가 모두 `| undefined`나 `| null`을 달고 나온다. strict의 아홉 개 중 실제 버그를 가장 많이 잡는 것이 이것이다.
+
+`strictFunctionTypes`는 함수 매개변수를 반대 방향으로 검사한다. `Handler`는 키보드 이벤트도 넘길 수 있는 자리인데, 거기에 마우스 이벤트만 다루는 함수를 넣으면 키보드 이벤트가 왔을 때 `e.clientX`가 `undefined`가 된다. 꺼져 있으면 양방향 아무 쪽이나 맞으면 통과시킨다. 메서드 문법(`handle(e: Event): void`)으로 선언한 타입에는 이 검사가 적용되지 않는다는 예외가 있다. 배열의 `push` 같은 메서드 때문에 남겨 둔 구멍이다.
+
+`strictBindCallApply`는 `call`, `apply`, `bind`의 인자를 원래 함수 시그니처로 검사한다. 꺼져 있으면 이 셋은 `any`를 받는다.
+
+`strictPropertyInitialization`은 클래스 필드가 생성자에서 값을 받지 않으면 에러를 낸다. 프레임워크가 나중에 값을 채워 주는 필드라면 `owner!: string`처럼 확정 할당 단언을 붙여 "내가 보장한다"고 적는다. 이 옵션은 `strictNullChecks`가 같이 켜져 있어야 동작한다.
+
+`noImplicitThis`는 `this`의 타입을 알 수 없을 때 에러를 낸다. 예제의 `function () { this.n++ }`은 `setTimeout`이 부르는 일반 함수라 실행할 때 `this`가 `counter`가 아니다. 화살표 함수로 바꾸면 바깥 `this`를 쓰니 에러가 사라진다. `this`가 정해지는 규칙은 [this 바인딩](/posts/js-this-binding) 글에서 다룬다.
+
+`useUnknownInCatchVariables`는 `catch (err)`의 `err`를 `any` 대신 `unknown`으로 둔다. 자바스크립트는 `throw "문자열"`도, `throw 42`도 허용하니 `err.message`가 있다고 장담할 수 없다. `err instanceof Error ? err.message : String(err)`처럼 확인한 뒤 쓴다.
+
+`strictBuiltinIteratorReturn`은 내장 이터레이터의 `next()`가 끝났을 때(`done: true`) 돌려주는 값을 `any`가 아닌 `undefined`로 본다. `alwaysStrict`는 출력 파일마다 `"use strict"`를 넣고 자바스크립트 엄격 모드 규칙으로 파싱한다. ES 모듈은 원래 엄격 모드라 모듈만 쓰는 프로젝트에서는 거의 체감이 없다.
+
+## strict를 켜도 통과하는 코드
+
+strict가 전부는 아니다. 아래 코드는 `--strict`에서 에러가 0개다.
+
+```ts
+// noUncheckedIndexedAccess
+const ports: Record<string, number> = { web: 3000 };
+ports.api.toFixed();
+const list = [1, 2, 3];
+list[5].toFixed();
+for (const n of list) n.toFixed();
+
+// exactOptionalPropertyTypes
+interface Options { timeout?: number }
+const opts: Options = { timeout: undefined };
+
+// noImplicitOverride
+class Base { save() {} }
+class Child extends Base { save() {} }
+
+// noImplicitReturns
+function label(code: number) {
+  if (code === 200) return "ok";
+}
+
+// noFallthroughCasesInSwitch
+function color(s: "a" | "b") {
+  switch (s) {
+    case "a":
+      console.log("a");
+    case "b":
+      return "b";
+  }
+}
+
+// noPropertyAccessFromIndexSignature
+const env: { [key: string]: string | undefined } = {};
+env.PORT;
+```
+
+strict 밖에 있는 옵션들을 함께 켜면 이렇게 된다.
+
+```text
+extra.ts(3,1): error TS18048: 'ports.api' is possibly 'undefined'.
+extra.ts(3,7): error TS4111: Property 'api' comes from an index signature, so it must be accessed with ['api'].
+extra.ts(5,1): error TS2532: Object is possibly 'undefined'.
+extra.ts(10,7): error TS2375: Type '{ timeout: undefined; }' is not assignable to type 'Options' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'timeout' are incompatible.
+    Type 'undefined' is not assignable to type 'number'.
+extra.ts(14,28): error TS4114: This member must have an 'override' modifier because it overrides a member in the base class 'Base'.
+extra.ts(17,10): error TS7030: Not all code paths return a value.
+extra.ts(24,5): error TS7029: Fallthrough case in switch.
+extra.ts(33,5): error TS4111: Property 'PORT' comes from an index signature, so it must be accessed with ['PORT'].
+```
+
+가장 효과가 큰 건 `noUncheckedIndexedAccess`다. strict만으로는 `list[5]`의 타입이 `number`라서, 배열 범위를 벗어난 접근이나 레코드에 없는 키 접근이 그대로 통과한다. 이 옵션을 켜면 인덱스로 읽은 값에 `| undefined`가 붙는다. `for...of`로 도는 원소(`n`)에는 붙지 않는다. 그 자리는 값이 있다는 걸 컴파일러가 알기 때문이다.
+
+이 옵션이 strict에 들어가지 않은 이유는 비용이다. 이 블로그 저장소에 켜 보면 이렇게 된다(이 글을 쓰는 시점 기준).
+
+```bash
+# 저장소 전체를 검사한다. incremental 파일을 건드리지 않게 끈다
+node node_modules/typescript/bin/tsc --noEmit -p . --incremental false --noUncheckedIndexedAccess
+```
+
+```text
+src/common/components/mdx/algo-trace/algo-trace.ts(10,42): error TS2532: Object is possibly 'undefined'.
+src/common/components/mdx/algo-trace/algo-trace.ts(12,57): error TS18048: 'step' is possibly 'undefined'.
+src/common/components/mdx/algo-trace/algo-trace.view.tsx(19,27): error TS18048: 'step' is possibly 'undefined'.
+...
+```
+
+strict만으로는 0개였는데 이 옵션 하나로 24개 파일에서 119개가 나왔다. 대부분 `steps[index]`처럼 "범위 안이라는 걸 나는 아는" 접근이다. 그래서 새 프로젝트라면 처음부터 켜고, 오래된 프로젝트라면 켤지 말지 따져 볼 옵션이다. 켜면 `arr[i]!`처럼 단언을 다는 대신 `arr.at(i)`나 구조 분해 기본값, 앞의 길이 검사로 바꾸는 편이 낫다.
+
+`exactOptionalPropertyTypes`는 "필드가 없다"와 "필드에 `undefined`가 들어 있다"를 구분한다. `{ timeout?: number }`에 `timeout: undefined`를 넣으면 에러다. `Object.keys`나 `in` 연산자, 스프레드로 기본값을 덮을 때 두 경우가 다르게 동작하니 구분하는 게 맞지만, React props처럼 `undefined`를 넘기는 코드가 많은 곳에서는 에러가 많이 난다. 같은 저장소에서 20개 파일, 26개였다.
+
+`noImplicitOverride`는 부모 메서드를 덮을 때 `override`를 쓰게 한다. 부모에서 메서드 이름이 바뀌면 자식의 `override`가 에러를 내서, 덮어쓴 줄 알았던 메서드가 사실은 새 메서드가 된 상황을 잡는다. `noImplicitReturns`와 `noFallthroughCasesInSwitch`는 이름 그대로다. `noPropertyAccessFromIndexSignature`는 인덱스 시그니처로 들어온 키를 `env.PORT`가 아닌 `env["PORT"]`로 쓰게 해서, 선언된 필드인지 아무 키인지를 코드에서 구분하게 만든다.
+
+## import 문자열을 파일로 바꾸는 규칙
+
+`import { format } from "date-kit/format"`를 만나면 TypeScript는 그 문자열이 어느 `.d.ts` 파일인지 찾아야 한다. 그 규칙이 `moduleResolution`이다. 규칙이 실제 실행 환경(Node, 번들러)과 다르면 검사는 통과하는데 실행이 안 되거나, 그 반대가 된다.
+
+`exports` 필드를 쓰는 작은 패키지를 만들어 확인해 보자.
+
+```json
+{
+  "name": "date-kit",
+  "type": "module",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./format": { "types": "./dist/format.d.ts", "import": "./dist/format.js" }
+  }
+}
+```
+
+```ts
+// src/app.ts
+import { now } from "date-kit";
+import { format } from "date-kit/format";
+import { twice } from "./util";
+console.log(format(now()), twice(2));
+```
+
+세 가지 설정으로 검사하면 결과가 다 다르다(경로 앞부분은 생략했다).
+
+```text
+## --module esnext --moduleResolution bundler
+(에러 없음)
+
+## --module nodenext --moduleResolution nodenext
+src/app.ts(3,23): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './util.js'?
+
+## --module commonjs --moduleResolution node10
+src/app.ts(1,21): error TS2307: Cannot find module 'date-kit' or its corresponding type declarations.
+  There are types at '.../node_modules/date-kit/dist/index.d.ts', but this result could not be resolved under your current 'moduleResolution' setting. Consider updating to 'node16', 'nodenext', or 'bundler'.
+src/app.ts(2,24): error TS2307: Cannot find module 'date-kit/format' or its corresponding type declarations.
+  There are types at '.../node_modules/date-kit/dist/format.d.ts', but this result could not be resolved under your current 'moduleResolution' setting. Consider updating to 'node16', 'nodenext', or 'bundler'.
+```
+
+아래 그림에서 단계를 넘기면 같은 import가 설정에 따라 어디까지 가는지 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={260}
+  caption="같은 import 문자열도 해석 규칙에 따라 도착하는 파일이 다르다"
+  zones={[
+    { id: "mine", label: "내 코드", x: 10, y: 20, w: 120, h: 220 },
+    { id: "lib", label: "node_modules/date-kit", x: 145, y: 20, w: 245, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "app.ts", x: 70, y: 80, icon: "client", w: 90 },
+    { id: "util", label: "util.ts", x: 70, y: 190, icon: "server", w: 90 },
+    { id: "pkg", label: "package.json", sub: "exports", x: 215, y: 130, icon: "gateway", w: 110 },
+    { id: "dts", label: "format.d.ts", sub: "types", x: 330, y: 80, icon: "container", w: 100 },
+    { id: "js", label: "format.js", sub: "import", x: 330, y: 190, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "app", to: "pkg" },
+    { from: "app", to: "util" },
+    { from: "pkg", to: "dts" },
+    { from: "pkg", to: "js", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "pkg", "dts"], packet: "date-kit/format", title: "bundler는 exports를 읽는다", detail: "package.json의 exports에서 types 조건에 맞는 ./dist/format.d.ts를 고른다.", payload: "Matched 'exports' condition 'types'." },
+    { path: ["app", "util"], packet: "./util", title: "확장자 없는 상대 경로도 찾는다", detail: "번들러처럼 .ts, .tsx, /index를 붙여 가며 찾아 준다." },
+    { path: ["app", "util"], packet: "./util", blocked: true, title: "nodenext는 확장자를 요구한다", detail: "Node의 ESM 규칙 그대로라 실행될 파일 이름 ./util.js를 써야 한다.", payload: "error TS2835" },
+    { path: ["app", "pkg"], packet: "date-kit", blocked: true, title: "node10은 exports를 모른다", detail: "main, types 필드와 폴더 구조만 본다. exports에만 경로를 적은 패키지는 못 찾는다.", payload: "error TS2307" },
+    { path: ["pkg", "js"], packet: "import", title: "실행할 때는 다른 조건을 쓴다", detail: "Node나 번들러는 같은 exports에서 import 조건의 .js를 고른다. 타입과 실행 파일이 짝이 맞아야 한다." },
+  ]}
+/>
+
+`--traceResolution`을 붙이면 해석 과정을 한 줄씩 볼 수 있다. "Cannot find module"이 났는데 파일이 분명히 있을 때 가장 먼저 쓰는 도구다.
+
+```text
+======== Resolving module 'date-kit/format' from './src/app.ts'. ========
+Explicitly specified module resolution kind: 'Bundler'.
+Resolving in CJS mode with conditions 'import', 'types'.
+...
+Entering conditional exports.
+Matched 'exports' condition 'types'.
+Using 'exports' subpath './format' with target './dist/format.d.ts'.
+File './node_modules/date-kit/dist/format.d.ts' exists - use it as a name resolution result.
+```
+
+무엇을 고를지는 "이 코드를 누가 실행하나"로 정한다.
+
+| 설정 | 실행하는 쪽 | 특징 |
+|---|---|---|
+| `bundler` (5.0부터) | Vite, webpack, Next.js 같은 번들러 | `exports`를 읽고, 상대 경로에 확장자를 안 써도 된다 |
+| `node16` / `nodenext` | Node가 직접 실행하는 코드, npm에 올리는 라이브러리 | Node 규칙 그대로. ESM 파일에서 상대 경로는 `.js` 확장자 필수 |
+| `node10` (예전 이름 `node`) | 오래된 CommonJS 프로젝트 | `exports`를 모른다. 새 프로젝트에는 쓰지 않는다 |
+
+`bundler`를 Node가 직접 돌리는 서버 코드에 쓰면 함정이 있다. 위 예제는 `bundler`로 검사하면 에러가 없지만, 그대로 Node에서 실행하면 확장자 없는 `./util`을 못 찾는다.
+
+```text
+Error [ERR_MODULE_NOT_FOUND]: Cannot find module '.../src/util' imported from .../src/app.ts
+```
+
+검사기에게 "번들러가 알아서 찾아 준다"고 말해 놓고 번들러 없이 실행한 것이다. 라이브러리를 만든다면 `nodenext`로 검사해야 Node 사용자와 번들러 사용자 모두에서 동작한다. ES 모듈과 CommonJS가 만나는 자리의 더 자세한 이야기는 [ES 모듈](/posts/js-es-modules) 글에 있다.
+
+## 파일 하나만 보고 변환하는 도구들
+
+요즘 TypeScript 코드를 실제로 자바스크립트로 바꾸는 건 대부분 `tsc`가 아니다. esbuild, SWC, Babel, Vite, Next.js의 컴파일러, 그리고 Node 22의 타입 제거 기능이 그 일을 한다. 이 도구들은 빠르게 돌려고 파일을 하나씩 따로 변환한다. 다른 파일을 열어 보지 않으니 "이 이름이 타입인가 값인가"를 모른다.
+
+```ts
+// types.ts
+export interface User { id: number; name: string }
+export const VERSION = 1;
+
+// index.ts
+export { User, VERSION } from "./types.ts";
+
+// main.ts
+import { User, VERSION } from "./index.ts";
+const u: User = { id: 1, name: "kim" };
+console.log(u.name, VERSION);
+```
+
+`tsc`는 세 파일을 다 읽으니 에러가 없다. 하지만 Node 22로 그대로 실행하면 이렇게 된다.
+
+```text
+export { User, VERSION } from "./types.ts";
+         ^^^^
+SyntaxError: The requested module './types.ts' does not provide an export named 'User'
+```
+
+<SequenceDiagram
+  caption="파일 하나만 보는 변환기는 다시 내보낸 이름이 타입인지 모른다"
+  actors={[
+    { id: "idx", label: "index.ts" },
+    { id: "tr", label: "변환기" },
+    { id: "types", label: "types.ts" },
+  ]}
+  steps={[
+    { from: "idx", to: "tr", label: "파일 하나", title: "index.ts만 받는다", detail: "esbuild, SWC, Node의 타입 제거는 다른 파일을 열지 않는다.", payload: "export { User, VERSION } from \"./types.ts\";" },
+    { from: "tr", to: "tr", label: "User는 값?", title: "판단할 근거가 없다", detail: "User가 interface라는 사실은 types.ts에 있다. 모르니 문장을 그대로 남긴다." },
+    { from: "tr", to: "types", label: "import User", title: "실행할 때 값을 찾는다", detail: "타입은 지워졌으니 types.ts에는 User라는 값이 없다." },
+    { from: "types", to: "idx", label: "SyntaxError", title: "모듈 연결 단계에서 실패한다", detail: "실행 전 링크 단계라 첫 줄도 돌지 못한다.", payload: "does not provide an export named 'User'" },
+    { from: "idx", to: "idx", label: "export type", title: "타입이라고 적어 준다", detail: "export type { User }로 쓰면 변환기가 그 줄을 지워도 된다는 걸 안다." },
+  ]}
+/>
+
+`isolatedModules`는 이렇게 파일 하나만 봐서는 안전하게 변환할 수 없는 코드를 `tsc`가 미리 에러로 알려 주게 한다. `verbatimModuleSyntax`(5.0부터)는 한 걸음 더 나가서, 타입을 가져오는 import에도 `type`을 쓰게 한다.
+
+```text
+## --isolatedModules
+index.ts(1,10): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+
+## --verbatimModuleSyntax
+index.ts(1,10): error TS1205: Re-exporting a type when 'verbatimModuleSyntax' is enabled requires using 'export type'.
+main.ts(1,10): error TS1484: 'User' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
+```
+
+`verbatimModuleSyntax`는 `type`이 붙은 import는 지우고 나머지는 적힌 그대로 남긴다는 단순한 규칙이다. 부수 효과가 있는 모듈(`import "./polyfill"`)이 타입만 쓴다는 이유로 사라지는 일을 막아 준다.
+
+변환 자체가 필요한 문법도 있다. `enum`은 값을 만들어 내는 문법이라 타입만 지우는 Node 22의 기본 모드는 실행을 거부한다.
+
+```text
+export enum Status { Idle, Loading }
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError [ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX]: TypeScript enum is not supported in strip-only mode
+```
+
+5.8에서 생긴 `erasableSyntaxOnly`를 켜면 `tsc`가 이런 문법(`enum`, `namespace`, 생성자 매개변수 프로퍼티)을 미리 TS1294로 막는다. Node로 `.ts`를 바로 실행할 계획이라면 같이 켜 둘 만하다. 번들러 프로젝트라면 `isolatedModules`만으로 충분하다. Next.js가 만들어 주는 tsconfig는 이걸 켜 두고, Vite 템플릿도 같은 목적의 옵션(`isolatedModules`나 `verbatimModuleSyntax`)을 켠다.
+
+## skipLibCheck가 건너뛰는 것
+
+`skipLibCheck: true`는 모든 `.d.ts` 파일의 검사를 건너뛴다. 왜 거의 모든 템플릿이 이걸 켜 두는지는 숫자로 보면 안다. React 컴포넌트 하나짜리 파일을 `--extendedDiagnostics`로 검사했다.
+
+```text
+## skipLibCheck 끔
+Files:                          68
+Lines of Library:            51126
+Lines of Definitions:        27226
+Lines of TypeScript:             6
+Instantiations:              86215
+Check time:                  2.46s
+Total time:                  3.37s
+
+## skipLibCheck 켬
+Files:                         68
+Instantiations:              1009
+Check time:                 0.12s
+Total time:                 1.11s
+```
+
+내 코드는 6줄인데 `@types/react`와 표준 라이브러리 선언 7만 줄 남짓을 검사하느라 시간이 들었다. 세 번 돌려 보면 끈 쪽 검사 시간은 1.9~2.5초, 켠 쪽은 0.12~0.16초였다. 의존성이 많을수록 차이가 커진다.
+
+대신 잃는 것이 있다. "라이브러리"만 건너뛰는 게 아니라 내가 쓴 `.d.ts`도 건너뛴다.
+
+```ts
+// env.d.ts
+declare const APP_VERSION: string;
+interface Window { analytics: Analytics }
+
+// legacy.d.ts
+declare const APP_VERSION: number;
+```
+
+```text
+## skipLibCheck 끔
+env.d.ts(1,15): error TS2451: Cannot redeclare block-scoped variable 'APP_VERSION'.
+env.d.ts(2,31): error TS2304: Cannot find name 'Analytics'.
+legacy.d.ts(1,15): error TS2451: Cannot redeclare block-scoped variable 'APP_VERSION'.
+
+## skipLibCheck 켬
+(에러 없음)
+```
+
+같은 전역을 두 번, 다른 타입으로 선언했고 없는 타입 이름까지 썼는데 아무 말이 없다. 없는 이름은 검사 없이 `any`처럼 흘러가 버린다. 같은 일이 `node_modules` 안에서도 생긴다. `@types/react`가 두 버전 설치되어 서로 충돌해도 조용히 넘어가고, 증상은 엉뚱한 곳에서 이상한 타입 에러로 나타난다. 그래서 켜 두되, 전역 선언용 `.d.ts`는 줄이고 `.ts` 파일의 `declare global`로 옮기거나, CI에서 가끔 `--skipLibCheck false`로 한 번 돌려 보는 방법을 쓴다. 의존성 중복은 `pnpm why @types/react`로 확인한다.
+
+## 저장소가 커지면 프로젝트를 나눈다
+
+파일이 수천 개가 되면 `tsc` 한 번이 수십 초가 걸리고, 에디터도 느려진다. 프로젝트 참조(project references)는 저장소를 여러 tsconfig로 나누고, 그 사이 의존 방향을 적어 둔 뒤 바뀐 쪽만 다시 검사하게 하는 기능이다. 공용 패키지 하나와 앱 하나로 만들어 봤다.
+
+```json
+// packages/shared/tsconfig.json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "composite": true, "rootDir": "src", "outDir": "dist" },
+  "include": ["src"]
+}
+
+// packages/app/tsconfig.json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist" },
+  "include": ["src"],
+  "references": [{ "path": "../shared" }]
+}
+
+// tsconfig.json (루트)
+{ "files": [], "references": [{ "path": "packages/shared" }, { "path": "packages/app" }] }
+```
+
+`composite`는 "다른 프로젝트가 나를 참조할 수 있다"는 표시다. 켜면 `declaration`이 강제되고, 빌드 정보가 `.tsbuildinfo` 파일에 남는다. 참조하는 쪽은 상대의 소스가 아니라 빌드된 `.d.ts`를 읽는다. 그래서 공용 패키지를 빌드하지 않고 앱만 검사하면 이렇게 된다.
+
+```text
+src/main.ts(1,21): error TS2307: Cannot find module '@demo/shared' or its corresponding type declarations.
+```
+
+프로젝트 참조를 쓸 때 "모듈을 못 찾는다"가 나면 대부분 이 경우다. `tsc -p`가 아니라 `tsc -b`(build 모드)로 돌려야 참조한 프로젝트부터 순서대로 빌드한다.
+
+```bash
+# 참조 순서대로 빌드하고, 각 프로젝트를 왜 다시 빌드하는지 보여 준다
+npx tsc -b --verbose
+```
+
+```text
+12:23:12 AM - Projects in this build: 
+    * packages/shared/tsconfig.json
+    * packages/app/tsconfig.json
+    * tsconfig.json
+
+12:23:12 AM - Project 'packages/shared/tsconfig.json' is out of date because output file 'packages/shared/tsconfig.tsbuildinfo' does not exist
+
+12:23:12 AM - Building project 'packages/shared/tsconfig.json'...
+
+12:23:13 AM - Project 'packages/app/tsconfig.json' is out of date because output file 'packages/app/tsconfig.tsbuildinfo' does not exist
+
+12:23:13 AM - Building project 'packages/app/tsconfig.json'...
+```
+
+첫 빌드는 1.27초, 아무것도 안 바꾸고 다시 돌리면 0.09초였다. 앱 파일만 고치고 다시 돌리면 공용 패키지는 "is up to date"로 건너뛰고 앱만 빌드한다. 예제가 작아서 차이가 작지만, 공용 패키지가 크고 앱이 여러 개인 모노레포에서는 이 건너뛰기가 CI 시간을 크게 줄인다. 같은 이유로 의존 방향을 tsconfig에 적어 두면 앱에서 공용 패키지로만 import할 수 있고 반대 방향은 막힌다. 모노레포 구성 전체는 [프론트엔드 모노레포](/posts/frontend-monorepo) 글에서 다룬다. 단점도 있다. tsconfig가 늘어나 관리할 것이 많아지고, 공용 패키지를 고친 뒤 빌드를 잊으면 앱 쪽 에디터가 예전 `.d.ts`를 본다.
+
+## 이 블로그의 tsconfig 읽기
+
+이 블로그의 tsconfig는 Next.js 앱의 전형적인 모습이다. 조각을 눌러 보면 각 옵션이 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="Next.js 앱의 tsconfig를 옵션별로 읽기"
+  base="compilerOptions:"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "target", value: "ES2022", display: "target: ES2022", title: "출력 문법 수준", description: "어느 버전 문법으로 내보낼지 정한다. noEmit이라 실제 출력은 Next.js 컴파일러가 하고, 여기서는 사용할 수 있는 문법의 기준이 된다." },
+    { key: "strict", value: "true", display: "strict: true", title: "아홉 개 검사 묶음", description: "앞에서 본 검사를 모두 켠다. noUncheckedIndexedAccess는 켜지 않았다.", required: true },
+    { key: "noEmit", value: "true", display: "noEmit: true", title: "검사만 한다", description: "tsc는 타입 검사기로만 쓰고 자바스크립트 파일을 만들지 않는다. 변환은 번들러 몫이다." },
+    { key: "moduleResolution", value: "bundler", display: "moduleResolution: bundler", title: "번들러 규칙으로 찾는다", description: "Next.js가 번들링하니 확장자 없는 import와 exports 필드를 번들러처럼 해석한다." },
+    { key: "isolatedModules", value: "true", display: "isolatedModules: true", title: "파일 단위 변환 대비", description: "Next.js 컴파일러가 파일을 하나씩 변환하므로, 그렇게 변환할 수 없는 코드를 미리 막는다." },
+    { key: "skipLibCheck", value: "true", display: "skipLibCheck: true", title: ".d.ts 검사 생략", description: "의존성 선언 파일 검사를 건너뛰어 검사 시간을 줄인다. 직접 쓴 .d.ts도 건너뛴다." },
+    { key: "jsx", value: "react-jsx", display: "jsx: react-jsx", title: "새 JSX 변환", description: "파일마다 import React를 쓰지 않아도 되는 React 17 이후의 변환 방식으로 검사한다." },
+    { key: "paths", value: "@/*", display: "paths: @/*", title: "경로 별칭", description: "@/common/... 같은 import를 ./src/로 바꿔 찾는다. 별칭은 타입 검사용이라 번들러에도 같은 설정이 있어야 한다. Next.js는 tsconfig의 paths를 읽어 맞춰 준다." },
+  ]}
+/>
+
+`"incremental": true`도 들어 있다. 마지막 검사 결과를 `tsconfig.tsbuildinfo`에 저장해 두고 다음 검사에서 바뀐 파일만 다시 본다. 이 저장소에서 `--incremental false`로 전체를 검사하면 5.7초쯤 걸렸다.
+
+## 이미 있는 코드에 strict를 켜는 순서
+
+오래된 프로젝트에 `strict: true`를 한 번에 켜면 에러가 수백, 수천 개 나와 손을 못 댄다. 플래그를 하나씩 켜고, 켤 때마다 에러를 0으로 만든 뒤 다음으로 가는 편이 현실적이다. 순서는 효과가 크고 고치기 쉬운 것부터다.
+
+아래 장바구니 파일로 실제로 하나씩 켜 봤다. 옵션 없이 검사하면 에러가 0개다.
+
+```ts
+interface Item { id: number; name: string; price: number; coupon?: string }
+
+export class Cart {
+  items: Item[];
+  owner: string;
+  constructor() { this.items = []; }
+
+  add(item) { this.items.push(item); }
+  find(id: number) { return this.items.find((i) => i.id === id); }
+  priceOf(id: number) { return this.find(id).price; }
+  couponLabel(id: number) { return this.find(id)?.coupon.toUpperCase(); }
+  total() { return this.items.reduce((s, i) => s + i.price, 0); }
+}
+
+export function parse(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error(e.message);
+    return null;
+  }
+}
+
+export function byName(list, keyword) {
+  return list.filter((x) => x.name.includes(keyword));
+}
+
+const el = document.querySelector("#total");
+el.textContent = String(new Cart().total());
+
+export function onlyMouse(cb: (e: MouseEvent) => void) {
+  const h: (e: Event) => void = cb;
+  window.addEventListener("click", h);
+}
+```
+
+<AlgoTrace
+  caption="장바구니 파일에 플래그를 하나씩 더하며 센 에러 수"
+  memoryLabel="새로 나온 에러"
+  cells={["없음", "any", "null", "함수", "필드", "catch"]}
+  steps={[
+    { pointer: 0, caption: "옵션 없이 검사한다. 에러 0개. 버그가 없다는 뜻이 아니라 검사를 안 한다는 뜻이다.", memory: [] },
+    { pointer: 1, caption: "noImplicitAny를 켠다. item, list, keyword, x 네 개가 암묵적 any로 걸린다. 누적 4개.", memory: ["TS7006 ×4"] },
+    { pointer: 2, caption: "strictNullChecks를 더한다. find 결과 두 곳과 querySelector 결과가 걸린다. 누적 7개.", memory: ["TS7006 ×4", "TS2532 ×2", "TS18047"] },
+    { pointer: 3, caption: "strictFunctionTypes를 더한다. MouseEvent만 받는 함수를 Event 자리에 넣은 곳이 걸린다. 누적 8개.", memory: ["TS7006 ×4", "TS2532 ×2", "TS18047", "TS2322"] },
+    { pointer: 4, caption: "strictPropertyInitialization을 더한다. 생성자에서 owner를 안 채웠다. 누적 9개.", memory: ["TS7006 ×4", "TS2532 ×2", "TS18047", "TS2322", "TS2564"] },
+    { pointer: 5, caption: "useUnknownInCatchVariables를 더한다. e.message를 바로 읽었다. 누적 10개, strict를 통째로 켠 것과 같다.", memory: ["TS7006 ×4", "TS2532 ×2", "TS18047", "TS2322", "TS2564", "TS18046"] },
+    { found: [1, 2, 3, 4, 5], caption: "10개 중 실제로 런타임에 터질 수 있는 곳은 null 관련 3개와 catch 1개, 이벤트 1개다.", memory: ["TS7006 ×4", "TS2532 ×2", "TS18047", "TS2322", "TS2564", "TS18046"] },
+  ]}
+/>
+
+`couponLabel`의 에러가 눈여겨볼 만하다. `this.find(id)?.coupon.toUpperCase()`는 `?.`를 썼으니 안전해 보이지만, `coupon` 자체가 선택 필드라 `coupon`이 없는 상품에서 터진다. strictNullChecks가 이런 반쪽짜리 처리를 찾아 준다.
+
+규모가 크면 몇 가지 도구를 더 쓴다.
+
+- 플래그 하나를 켤 때 새 에러가 난 줄에 `// @ts-expect-error`를 일괄로 달고, 그 수를 줄여 가는 방식이 흔하다. `@ts-ignore`보다 `@ts-expect-error`가 낫다. `@ts-ignore`는 아래 줄을 영원히 덮지만, `@ts-expect-error`는 그 줄이 고쳐지면 "Unused '@ts-expect-error' directive"(TS2578) 에러를 내서 주석을 지우라고 알려 준다.
+- 자바스크립트 파일을 섞어 두는 동안에는 `allowJs`와 `checkJs`, 파일 맨 위 `// @ts-check`로 JS 파일부터 검사에 넣을 수 있다.
+- 에러 수를 CI에서 기록해 두고 늘어나면 실패시키면, 새 코드가 빚을 더하지 않는다.
+
+## 연습: 환경 변수에서 포트 읽기
+
+`noUncheckedIndexedAccess`와 `noPropertyAccessFromIndexSignature`를 켠 프로젝트라고 생각하고, `process.env` 같은 객체에서 포트를 읽는 함수를 만들어 보자. 규칙은 이렇다. `PORT`가 없거나 빈 문자열이면 기본값 3000, 앞뒤 공백은 무시, 숫자만으로 된 1~65535 범위의 정수가 아니면 `null`. `Number("0x1F90")`이 8080이 된다는 점을 조심한다. 타입은 실행할 때 지워진다.
+
+<CodePlayground
+  caption="readPort: 없으면 3000, 잘못된 값이면 null"
+  language="typescript"
+  functionName="readPort"
+  initialCode={`function readPort(env: Record<string, string | undefined>): number | null {
+  // env["PORT"]는 string | undefined다
+  return 3000;
+}`}
+  solution={`function readPort(env: Record<string, string | undefined>): number | null {
+  const raw = env["PORT"]?.trim();
+  if (raw === undefined || raw === "") return 3000;
+  if (!/^\\d+$/.test(raw)) return null;
+  const port = Number(raw);
+  return port >= 1 && port <= 65535 ? port : null;
+}`}
+  tests={[
+    { label: "정상 값", args: [{ PORT: "8080" }], expected: 8080 },
+    { label: "없음", args: [{}], expected: 3000 },
+    { label: "빈 문자열", args: [{ PORT: "" }], expected: 3000 },
+    { label: "앞뒤 공백", args: [{ PORT: " 8080 " }], expected: 8080 },
+    { label: "숫자가 아님", args: [{ PORT: "abc" }], expected: null },
+    { label: "16진수 표기", args: [{ PORT: "0x1F90" }], expected: null },
+    { label: "소수", args: [{ PORT: "8080.5" }], expected: null },
+    { label: "0번 포트", args: [{ PORT: "0" }], expected: null },
+    { label: "범위 초과", args: [{ PORT: "65536" }], expected: null },
+    { label: "최댓값", args: [{ PORT: "65535" }], expected: 65535 },
+  ]}
+/>
+
+`env.PORT`가 아니라 `env["PORT"]`로 읽고, 그 결과가 `string | undefined`라서 `?.trim()`으로 받는 데까지가 옵션이 강제하는 부분이다. 나머지 범위 검사는 타입이 대신해 주지 못한다. 실무에서는 이런 검사를 zod 같은 스키마 라이브러리로 앱 시작 시점에 한 번에 하고, 실패하면 바로 프로세스를 끝내는 경우가 많다.
+
+## 다시 find가 돌려준 undefined로
+
+처음 버그는 타입이 없어서가 아니라 검사가 꺼져 있어서 생겼다. `strict`는 아홉 개 검사의 묶음이고, 그중 `strictNullChecks`와 `noImplicitAny`가 가장 많은 구멍을 막는다. 그 밖의 `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`는 효과와 비용을 따져 고른다. 검사 옵션만큼 중요한 건 검사기가 실제 실행 환경과 같은 규칙을 쓰게 하는 것이다. 코드를 누가 실행하는지에 맞춰 `moduleResolution`을 고르고, 파일 단위 변환기를 쓰면 `isolatedModules`를 켜고, `skipLibCheck`가 무엇을 건너뛰는지 알고 쓴다. 다음은 이 설정 위에서 React 컴포넌트를 타이핑하는 [React에서 TypeScript 쓰기](/posts/typescript-in-react)다.
+
+## 면접에서 나올 만한 질문
+
+### strict: true를 켜면 무엇이 달라지나요?
+
+여러 검사 옵션이 한 번에 켜진다. 5.9 기준으로 noImplicitAny, strictNullChecks, strictFunctionTypes, strictBindCallApply, strictPropertyInitialization, strictBuiltinIteratorReturn, noImplicitThis, useUnknownInCatchVariables, alwaysStrict 아홉 개다. 그중 효과가 가장 큰 건 null과 undefined를 별도 타입으로 다루는 strictNullChecks다. 묶음에 새 검사가 추가되면 TypeScript를 올리는 것만으로 새 에러가 생길 수 있다.
+
+### strictNullChecks가 꺼져 있으면 무슨 일이 생기나요?
+
+null과 undefined가 모든 타입에 들어갈 수 있는 값으로 취급되어, 없을 수 있는 값을 확인하지 않고 써도 통과한다. 예를 들어 `Array.prototype.find`의 결과가 그냥 `User`로 보여서 못 찾았을 때 `.name`을 읽다 런타임 TypeError가 난다. 켜면 `User | undefined`가 되어 접근 전에 확인하라는 에러가 난다.
+
+### noUncheckedIndexedAccess는 왜 strict에 포함되지 않았나요?
+
+인덱스 접근마다 `| undefined`가 붙어서 맞는 코드에도 에러가 많이 나기 때문이다. 이 블로그 저장소에 켜 보니 strict에서 0개이던 에러가 119개로 늘었고, 대부분 범위 안이라는 걸 아는 접근이었다. 그래도 배열 범위 밖 접근이나 레코드에 없는 키 같은 실제 버그를 잡으니 새 프로젝트에서는 켜는 것을 권한다. 켜면 단언(`!`)보다 `at()`, 길이 검사, 기본값으로 처리하는 편이 낫다.
+
+### moduleResolution의 bundler와 nodenext는 언제 각각 쓰나요?
+
+코드를 누가 실행하는지로 정한다. Vite, webpack, Next.js처럼 번들러가 처리하는 앱은 `bundler`를 쓰고, Node가 직접 실행하거나 npm에 배포하는 라이브러리는 `nodenext`를 쓴다. `nodenext`는 Node 규칙 그대로라 ESM에서 상대 경로에 `.js` 확장자를 요구한다. 번들러 없이 Node로 돌리는 코드에 `bundler`를 쓰면 검사는 통과하고 실행 시점에 모듈을 못 찾는다.
+
+### isolatedModules는 왜 필요한가요?
+
+esbuild, SWC, Babel, Node의 타입 제거처럼 파일을 하나씩 따로 변환하는 도구는 다른 파일을 보지 않아서, 다시 내보내는 이름이 타입인지 값인지 모른다. 그래서 `export { User } from "./types"`를 그대로 남기고, 실행할 때 없는 값을 찾다 SyntaxError가 난다. isolatedModules를 켜면 tsc가 이런 코드를 미리 에러로 알려 주고 `export type`을 쓰게 한다. verbatimModuleSyntax는 import까지 같은 규칙으로 맞춘다.
+
+### skipLibCheck를 켜면 무엇을 잃나요?
+
+모든 `.d.ts` 파일의 검사를 건너뛰므로 검사 시간은 크게 줄지만, 선언 파일 사이의 충돌과 오류가 숨는다. node_modules만이 아니라 직접 쓴 전역 선언 `.d.ts`도 건너뛰어서, 같은 전역을 다른 타입으로 두 번 선언하거나 없는 타입 이름을 써도 아무 말이 없다. 그래서 켜 두되 전역 선언을 `.ts` 파일로 옮기거나, 가끔 끄고 한 번 검사해 보는 식으로 보완한다.
+
+### 프로젝트 참조는 어떤 문제를 풀고, 쓸 때 흔한 실수는 무엇인가요?
+
+큰 저장소를 여러 tsconfig로 나누고 의존 방향을 적어 두어, 바뀐 프로젝트만 다시 검사하게 하고 잘못된 방향의 import를 막는다. 참조되는 쪽은 `composite`를 켜고, 참조하는 쪽은 소스가 아니라 빌드된 `.d.ts`를 읽는다. 그래서 `tsc -b` 대신 `tsc -p`로 한 프로젝트만 돌리거나 공용 패키지 빌드를 잊으면 "Cannot find module"이나 예전 타입을 보는 문제가 생긴다.

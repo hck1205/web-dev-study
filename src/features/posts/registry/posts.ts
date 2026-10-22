@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "typescript-roadmap",
+    title: "TypeScript 로드맵: 에러 한 화면에서 여섯 글로",
+    summary: "파일 하나에서 나온 tsc 에러 여섯 줄이 각각 다른 규칙에서 나왔다는 데서 출발해 이 블로그의 TypeScript 글을 읽는 순서로 엮고, 에러 번호에서 먼저 펼 글을 찾는 길과 JS 저장소를 옮기는 순서를 정리한다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "JavaScript", "React"],
+    date: "2026-10-25",
+    keywords: ["TypeScript 로드맵", "TypeScript 학습 순서", "tsc 에러 코드"],
+  },
+  {
+    slug: "typescript-in-react",
+    title: "React에서 TypeScript 쓰기: 상태, props, 이벤트, ref의 타입",
+    summary: "로직은 그대로인데 useState(null)에서 에러가 난 컴포넌트에서 출발해 props와 children, 이벤트의 target과 currentTarget, null로 시작하는 ref, 기본 요소를 감싸는 래퍼, 서로 배타적인 props, 제네릭 컴포넌트, Context와 커스텀 훅의 타입을 실제 tsc 출력으로 따라간다. @types/react 19에서 바뀐 useRef와 ref prop도 짚는다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "React", "Frontend"],
+    date: "2026-10-25",
+    keywords: ["ComponentProps", "ReactNode", "이벤트 핸들러 타입", "판별 props"],
+  },
+  {
+    slug: "tsconfig-strict",
+    title: "tsconfig와 strict 옵션: 검사의 강도와 실행 환경 맞추기",
+    summary: "타입을 다 붙였는데 find 결과의 undefined로 운영에서 터진 코드에서 출발해 strict가 켜는 아홉 개 검사와 strict 밖의 noUncheckedIndexedAccess 등을 실제 tsc 에러로 하나씩 본다. moduleResolution의 bundler와 nodenext, isolatedModules, skipLibCheck가 숨기는 것, 프로젝트 참조, 기존 코드에 strict를 켜는 순서까지 다룬다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "JavaScript", "Node.js", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["tsconfig", "strictNullChecks", "noUncheckedIndexedAccess", "moduleResolution", "isolatedModules"],
+  },
+  {
+    slug: "ts-utility-mapped-types",
+    title: "TypeScript 유틸리티 타입과 매핑된 타입: 원본 하나에서 타입을 뽑아내는 법",
+    summary: "User에 필드를 추가했는데 손으로 베낀 폼 타입만 그대로였던 장면에서 출발해 Partial·Pick·Omit·Record와 그 재료인 매핑된 타입, 분배 조건부 타입, infer, 템플릿 리터럴 타입을 실제 tsc 출력으로 열어 본다. 오타를 잡지 못하는 Omit, 유니온에서 뭉개지는 필드, 넓히지 않는 satisfies, TS2589가 나는 경계까지 다룬다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "JavaScript", "React"],
+    date: "2026-10-25",
+    keywords: ["유틸리티 타입", "매핑된 타입", "조건부 타입", "템플릿 리터럴 타입"],
+  },
+  {
     slug: "recursion-backtracking",
     title: "재귀와 백트래킹: 고르고, 들어가고, 되돌리기",
     summary: "모든 부분집합이 빈 배열로 나온 버그에서 출발해 재귀와 백트래킹의 뼈대, 부분집합·조합·순열, 중복 처리, 가지치기, N-Queens를 직접 짜고 잰다. 답이 너무 많을 때의 메모리, 동적 계획법과의 경계, 정규식 엔진 속 백트래킹까지 다룬다.",

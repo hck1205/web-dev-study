@@ -586,6 +586,10 @@ import { TRANSACTIONAL_OUTBOX } from "./transactional-outbox";
 import { TS_GENERICS } from "./ts-generics";
 import { TS_NARROWING } from "./ts-narrowing";
 import { TS_TYPE_SYSTEM_BASICS } from "./ts-type-system-basics";
+import { TS_UTILITY_MAPPED_TYPES } from "./ts-utility-mapped-types";
+import { TSCONFIG_STRICT } from "./tsconfig-strict";
+import { TYPESCRIPT_IN_REACT } from "./typescript-in-react";
+import { TYPESCRIPT_ROADMAP } from "./typescript-roadmap";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
@@ -1197,6 +1201,10 @@ export const QUESTION_SETS = [
   TS_GENERICS,
   TS_NARROWING,
   TS_TYPE_SYSTEM_BASICS,
+  TS_UTILITY_MAPPED_TYPES,
+  TSCONFIG_STRICT,
+  TYPESCRIPT_IN_REACT,
+  TYPESCRIPT_ROADMAP,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,
