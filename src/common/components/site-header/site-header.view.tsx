@@ -2,6 +2,7 @@
 
 import { SITE } from "@/common/config/site";
 import { ChevronDownIcon, CloseIcon, Container, IconButton, MenuIcon } from "@/common/design-system";
+import { EasyModeToggle } from "../easy-mode-toggle";
 import { NavTree } from "../nav-tree";
 import { ThemeToggle } from "../theme-toggle";
 import { useSiteHeader } from "./site-header";
@@ -60,6 +61,7 @@ export function SiteHeader({ items, actions }: SiteHeaderProps) {
           </DesktopNav>
 
           {actions}
+          <EasyModeToggle />
           <ThemeToggle />
           <MobileOnly>
             <IconButton label={menuOpen ? "메뉴 닫기" : "메뉴 열기"} aria-expanded={menuOpen} onClick={toggleMenu}>
