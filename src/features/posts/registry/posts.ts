@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "spring-boot-observability",
+    title: "스프링 부트 관측 가능성: Micrometer Observation, Prometheus 지표, OTLP trace",
+    summary: "주문 ID 태그 하나로 /actuator/prometheus가 241줄에서 1040줄이 된 장면에서 출발해 Observation API가 지표·trace·로그를 함께 만드는 방식, 태그와 히스토그램이 시계열을 늘리는 계산, OTLP로 span 내보내기와 기본 10% 샘플링, 로그와 exemplar의 traceId, JVM 대시보드에 올릴 지표를 Spring Boot 4.1로 확인한다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Observability", "Performance", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["Micrometer", "Observation API", "Micrometer Tracing", "max-uri-tags"],
+  },
+  {
+    slug: "spring-boot-on-kubernetes",
+    title: "쿠버네티스 위의 스프링 부트: 프로브 그룹, 우아한 종료, 컨테이너 속 JVM",
+    summary: "배포 때마다 섞이는 502, 결제사가 느려지자 줄줄이 재시작한 Pod, 1코어에서 느려진 시작을 Spring Boot 4.1로 재현한다. 액추에이터 liveness·readiness 그룹, 우아한 종료와 preStop·유예 시간 맞추기, JVM이 CPU 한도를 읽는 법과 throttling, 레이어드 jar와 CDS, HPA가 JVM을 오해하는 순간을 다룬다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Kubernetes", "Docker", "Performance"],
+    date: "2026-10-26",
+    keywords: ["우아한 종료", "레이어드 jar", "ActiveProcessorCount", "CPU throttling"],
+  },
+  {
     slug: "spring-boot-4-migration",
     title: "Spring Boot 4 마이그레이션: 3.5 앱을 4.1로 올리며 깨진 것들",
     summary: "3.5.16 앱의 부모 버전만 4.1.1로 바꿨을 때 나온 컴파일·테스트 오류를 원인별로 고치고, properties migrator와 OpenRewrite 레시피의 실제 결과를 본다. 모듈로 쪼개진 자동 구성, Jackson 3, @MockitoBean, API 버전 관리, HTTP 서비스 클라이언트, 내장 @Retryable도 직접 돌려 본다.",

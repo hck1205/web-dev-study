@@ -2,11 +2,59 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "spring-boot-observability": {
+    "links": [
+      "observability-basics",
+      "metrics-types",
+      "distributed-tracing",
+      "prometheus-basics",
+      "spring-boot-on-kubernetes",
+      "db-type-time-series",
+      "spring-boot-4-migration",
+      "structured-logging",
+      "grafana-dashboards",
+      "java-jvm-memory-gc"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "grpc",
+      "centralized-logging-pipeline",
+      "sql-batch-timeout-pool",
+      "http-status-codes",
+      "sli-slo"
+    ]
+  },
+  "spring-boot-on-kubernetes": {
+    "links": [
+      "k8s-pod-probes",
+      "k8s-pod-lifecycle",
+      "java-jvm-memory-gc",
+      "spring-ioc-di",
+      "spring-boot-auto-configuration",
+      "spring-boot-4-migration",
+      "dockerfile-image-layers",
+      "k8s-hpa",
+      "spring-boot-observability",
+      "k8s-deploy-pipeline-eks"
+    ],
+    "mentions": [
+      "k8s-service-types",
+      "curl-for-debugging",
+      "iptables-nat",
+      "docker-commands-workflow",
+      "k8s-architecture",
+      "health-checks",
+      "resilience-patterns",
+      "kubernetes-ingress",
+      "rolling-deployment"
+    ]
+  },
   "spring-boot-4-migration": {
     "links": [
       "spring-boot-auto-configuration",
       "spring-ioc-di",
       "api-versioning",
+      "spring-boot-on-kubernetes",
       "retries"
     ],
     "mentions": [
@@ -35,7 +83,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-strategy",
       "pattern-proxy",
       "acid-transactions",
-      "pattern-singleton"
+      "pattern-singleton",
+      "spring-boot-on-kubernetes"
     ],
     "mentions": [
       "sql-batch-timeout-pool"
@@ -8610,6 +8659,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
+      "spring-boot-on-kubernetes",
       "bash-scripting",
       "osi-in-practice",
       "client-data-cache"
@@ -9447,6 +9497,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-in-practice"
     ],
     "mentions": [
+      "spring-boot-observability",
       "retries",
       "osi-in-practice",
       "sql-batch-timeout-pool",

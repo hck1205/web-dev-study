@@ -555,6 +555,8 @@ export const QUESTION_COUNTS: Record<string, number> = {
   "spring-animation": 6,
   "spring-boot-4-migration": 7,
   "spring-boot-auto-configuration": 7,
+  "spring-boot-observability": 7,
+  "spring-boot-on-kubernetes": 7,
   "spring-ioc-di": 6,
   "sql-aggregation-pitfalls": 7,
   "sql-basics": 6,

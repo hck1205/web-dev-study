@@ -552,6 +552,8 @@ import { SORTING_ALGORITHMS } from "./sorting-algorithms";
 import { SPRING_ANIMATION } from "./spring-animation";
 import { SPRING_BOOT_4_MIGRATION } from "./spring-boot-4-migration";
 import { SPRING_BOOT_AUTO_CONFIGURATION } from "./spring-boot-auto-configuration";
+import { SPRING_BOOT_OBSERVABILITY } from "./spring-boot-observability";
+import { SPRING_BOOT_ON_KUBERNETES } from "./spring-boot-on-kubernetes";
 import { SPRING_IOC_DI } from "./spring-ioc-di";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
@@ -1192,6 +1194,8 @@ export const QUESTION_SETS = [
   SPRING_ANIMATION,
   SPRING_BOOT_4_MIGRATION,
   SPRING_BOOT_AUTO_CONFIGURATION,
+  SPRING_BOOT_OBSERVABILITY,
+  SPRING_BOOT_ON_KUBERNETES,
   SPRING_IOC_DI,
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
