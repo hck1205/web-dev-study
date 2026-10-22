@@ -1,0 +1,541 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("page-cache-disk-io");
+
+디스크가 얼마나 빠른지 보려고 `dd`로 512MiB를 써 봤다. 4.5GB/s가 나왔다. 이 가상 디스크는 그렇게 빠르지 않다. 같은 명령에 `conv=fsync` 하나를 붙이자 1.1GB/s로 떨어졌다.
+
+```bash
+# 그냥 쓰기, 끝에 fsync, 캐시를 건너뛰는 O_DIRECT
+dd if=/dev/zero of=w.bin bs=1M count=512
+dd if=/dev/zero of=w.bin bs=1M count=512 conv=fsync
+dd if=/dev/zero of=w.bin bs=1M count=512 oflag=direct
+```
+
+```text
+536870912 bytes (537 MB, 512 MiB) copied, 0.118578 s, 4.5 GB/s
+536870912 bytes (537 MB, 512 MiB) copied, 0.499517 s, 1.1 GB/s
+536870912 bytes (537 MB, 512 MiB) copied, 0.721553 s, 744 MB/s
+```
+
+첫 번째 `dd`는 디스크에 쓴 게 아니다. 커널의 페이지 캐시에 복사하고 "다 썼다"는 답을 받았을 뿐이다. 실제 디스크 쓰기는 30초쯤 뒤에 커널이 알아서 했다. 이 차이를 모르면 벤치마크 숫자를 잘못 읽고, DB가 커밋을 왜 느리게 하는지 이해하지 못하고, 정전 뒤에 설정 파일이 0바이트가 되는 일을 겪는다.
+
+이 글은 파일을 읽고 쓸 때 데이터가 지나는 길을 따라간다. 페이지 캐시, 더러운 페이지와 writeback, `fsync`가 실제로 약속하는 것, 캐시를 건너뛰는 `O_DIRECT`, 파일 시스템 저널, 그리고 `iostat -x`로 디스크 상태를 읽는 법이다. 실습은 Ubuntu 24.04 사용자 공간에 6.18 커널을 올린 가상 머신에서, virtio 디스크(`vda`, ext4) 위의 작은 파일로 했다. 22.04도 명령과 동작은 같다. `iostat`은 `sysstat`, `fio`는 `fio` 패키지에 있다.
+
+이 글은 [가상 메모리와 페이징](/posts/virtual-memory-paging)의 다음 이야기다. 거기서 파일을 `mmap`했을 때 major fault가 나는 걸 봤는데, 그 파일 내용이 머무르는 곳이 여기서 말하는 페이지 캐시다.
+
+## 쓰기는 메모리에 복사하면 끝난다
+
+프로그램이 `write()`를 부르면 커널은 데이터를 그 파일의 페이지 캐시 페이지에 복사하고, 그 페이지에 "디스크와 내용이 다르다"는 표시(dirty)를 붙인 뒤 바로 돌아온다. 디스크는 아직 건드리지 않았다. 그래서 `write()`는 메모리 복사 속도로 끝나고, 앞의 4.5GB/s도 그 숫자다.
+
+`dd`가 끝나자마자 `/proc/meminfo`를 보면 더러운 페이지가 쌓여 있다.
+
+```bash
+dd if=/dev/zero of=w1.bin bs=1M count=512
+grep -E "^(Dirty|Writeback):" /proc/meminfo    # 바로
+sync                                           # 모두 디스크로 내린다
+grep -E "^(Dirty|Writeback):" /proc/meminfo
+```
+
+```text
+Dirty:            778244 kB
+Writeback:             0 kB
+Dirty:                24 kB
+Writeback:             0 kB
+```
+
+`Dirty`가 760MiB다. 내 512MiB에 같은 머신의 다른 작업이 쓴 몫이 더해졌다. `Writeback`은 지금 디스크로 가는 중인 양이다. `sync`는 모든 더러운 페이지를 내리고 끝날 때까지 기다려서, 끝나면 `Dirty`가 거의 0이 된다.
+
+같은 `dd`가 늘 4.5GB/s인 건 아니었다. 세 번 돌렸을 때 첫 번째는 315MB/s, 다음 두 번은 4.3GB/s와 4.5GB/s였다. 버퍼 쓰기 속도는 커널이 빈 페이지를 얼마나 빨리 내주는지, 이미 쌓인 더러운 페이지가 얼마인지에 따라 흔들린다. 이 VM에서 첫 바퀴가 느렸던 원인은 끝까지 가리지 못했다. 디스크 속도를 잴 때 캐시를 낀 숫자를 믿으면 안 되는 이유가 하나 더 생긴 셈이다.
+
+## 읽은 파일은 남는 메모리에 남는다
+
+읽기도 페이지 캐시를 지난다. `read()`가 오면 커널은 먼저 캐시에서 찾는다. 있으면(hit) 메모리 복사로 끝나고, 없으면(miss) 디스크에서 읽어 캐시에 넣은 뒤 복사한다. 읽어 온 페이지는 메모리가 필요해질 때까지 그대로 남는다. 다음에 같은 파일을 읽는 프로세스는 디스크를 건드리지 않는다.
+
+파일 하나가 캐시에 얼마나 올라와 있는지는 `fincore`(`util-linux-extra` 패키지)로 본다. 256MiB 파일을 두 번 읽고, GNU `dd`의 `iflag=nocache`로 그 파일의 캐시만 비웠다. 머신 전체 캐시를 비우는 `echo 3 > /proc/sys/vm/drop_caches`는 같은 서버의 다른 서비스까지 차가운 캐시로 만들기 때문에 쓰지 않았다.
+
+```bash
+fincore rr.dat                                       # 캐시에 얼마나 있나
+dd if=rr.dat of=/dev/null bs=1M                      # 첫 번째 읽기
+fincore rr.dat
+dd if=rr.dat of=/dev/null bs=1M                      # 두 번째 읽기
+dd if=rr.dat of=/dev/null iflag=nocache count=0      # 이 파일의 캐시만 버린다
+fincore rr.dat
+```
+
+```text
+RES PAGES  SIZE FILE
+ 0B     0  256M rr.dat
+268435456 bytes (268 MB, 256 MiB) copied, 0.602195 s, 446 MB/s
+  RES PAGES  SIZE FILE
+ 256M 65536  256M rr.dat
+268435456 bytes (268 MB, 256 MiB) copied, 0.0344116 s, 7.8 GB/s
+0 bytes copied, 0.000788793 s, 0.0 kB/s
+RES PAGES  SIZE FILE
+ 0B     0  256M rr.dat
+```
+
+첫 번째는 디스크에서 446MB/s, 두 번째는 캐시에서 7.8GB/s다. 17배 차이다. 첫 번째 읽기가 끝나자 256MiB, 65,536페이지가 전부 캐시에 올라와 있었다.
+
+`free`의 `buff/cache`가 이 캐시다. 리눅스는 남는 메모리를 놀리지 않고 캐시로 쓰다가, 프로그램이 메모리를 달라고 하면 깨끗한 캐시부터 버려서 내준다. 그래서 "free가 거의 0인데 괜찮은가"에 대한 답은 대개 괜찮다는 것이다. 볼 숫자는 `available`이다. [PostgreSQL 글](/posts/postgres-architecture)에서 `shared_buffers`가 128MB인 DB가 생각보다 빨랐던 것도, 그 아래에서 OS 페이지 캐시가 수십 GB를 받쳐 주고 있었기 때문이다.
+
+순차로 읽으면 커널은 요청보다 앞쪽을 미리 읽어 둔다(readahead). 장치별 기본 크기는 `/sys/block/<장치>/queue/read_ahead_kb`에 있고, 이 디스크는 128KiB였다. 프로그램이 `posix_fadvise()`로 "순차로 읽는다"(`POSIX_FADV_SEQUENTIAL`), "무작위로 읽는다"(`POSIX_FADV_RANDOM`), "다시 안 읽는다"(`POSIX_FADV_DONTNEED`)를 알려 주면 커널이 그에 맞춰 미리 읽기와 캐시 유지를 조절한다. 백업 도구가 큰 파일을 훑으면서 서비스의 뜨거운 캐시를 밀어내지 않게 하려면 `DONTNEED`를 쓴다.
+
+아래 그림은 데이터가 지나는 길이다. 다음을 누르면 경우마다 패킷이 어디까지 가는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="파일 I/O가 지나는 길. 버퍼 쓰기와 캐시 hit는 커널 메모리에서 끝나고, 디스크까지 가는 건 miss, writeback, fsync, O_DIRECT다."
+  zones={[
+    { id: "user", label: "사용자 공간", x: 10, y: 10, w: 380, h: 70, tone: "edge" },
+    { id: "kernel", label: "커널", x: 10, y: 95, w: 380, h: 110, tone: "private" },
+    { id: "dev", label: "장치", x: 10, y: 220, w: 380, h: 70, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "app", label: "앱", sub: "write/read", x: 200, y: 48, icon: "client" },
+    { id: "pc", label: "페이지 캐시", sub: "dirty 표시", x: 105, y: 155, icon: "server" },
+    { id: "blk", label: "블록 계층", sub: "I/O 스케줄러", x: 295, y: 155, icon: "switch" },
+    { id: "disk", label: "디스크", sub: "vda", x: 200, y: 258, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "pc" },
+    { from: "pc", to: "blk" },
+    { from: "blk", to: "disk" },
+    { from: "app", to: "blk", dashed: true, label: "O_DIRECT" },
+  ]}
+  steps={[
+    { path: ["app", "pc"], packet: "write", title: "버퍼 쓰기", detail: "페이지 캐시에 복사하고 dirty 표시를 붙인 뒤 바로 돌아온다. 디스크는 아직 그대로다.", payload: "write() = 4µs 안팎" },
+    { path: ["app", "pc"], packet: "read", highlight: ["pc"], title: "읽기 hit", detail: "캐시에 있으면 메모리 복사로 끝난다. 두 번째 읽기가 7.8GB/s였던 이유다." },
+    { path: ["app", "pc", "blk", "disk"], packet: "read", title: "읽기 miss", detail: "캐시에 없으면 블록 계층을 거쳐 디스크에서 읽고, 캐시에 넣은 뒤 앱에 복사한다. 순차 읽기면 앞쪽을 미리 읽는다." },
+    { path: ["pc", "blk", "disk"], packet: "flush", title: "writeback", detail: "커널의 flusher 스레드가 오래됐거나 너무 많이 쌓인 더러운 페이지를 내려 보낸다. 앱은 모른다." },
+    { path: ["pc", "blk", "disk"], packet: "fsync", highlight: ["app"], title: "fsync", detail: "이 파일의 더러운 페이지를 내리고, 장치 캐시까지 비우라고 한 뒤 끝날 때까지 앱을 기다리게 한다." },
+    { path: ["app", "blk", "disk"], packet: "O_DIRECT", title: "O_DIRECT", detail: "페이지 캐시를 건너뛰고 앱 버퍼에서 바로 블록 계층으로 간다. 캐시 이득도 없고, 정렬 규칙을 지켜야 한다." },
+  ]}
+/>
+
+## 더러운 페이지는 30초 뒤에 내려간다
+
+더러운 페이지를 언제 디스크로 내릴지는 커널의 flusher 스레드(`kworker/u*:*-flush-<장치>`)가 정한다. 기준은 시간과 양 두 가지다.
+
+```bash
+# 이 머신의 값 (Ubuntu 기본값과 같다)
+sysctl vm.dirty_expire_centisecs vm.dirty_writeback_centisecs vm.dirty_background_ratio vm.dirty_ratio
+```
+
+```text
+vm.dirty_expire_centisecs = 3000
+vm.dirty_writeback_centisecs = 500
+vm.dirty_background_ratio = 10
+vm.dirty_ratio = 20
+```
+
+flusher는 5초(`500` 센티초)마다 깨어나서 30초(`3000`)보다 오래된 더러운 페이지를 내린다. 512MiB를 쓰고 5초마다 `Dirty`를 찍어 보면 그대로 보인다.
+
+```bash
+sync; dd if=/dev/zero of=wb.bin bs=1M count=512
+for t in 0 5 10 15 20 25 30 35 40; do
+  printf "t=%2ss " $t; grep -E "^(Dirty|Writeback):" /proc/meminfo | tr -s ' ' | tr '\n' ' '; echo; sleep 5
+done
+```
+
+```text
+t= 0s Dirty: 540956 kB Writeback: 0 kB 
+t= 5s Dirty: 541508 kB Writeback: 0 kB 
+t=10s Dirty: 541848 kB Writeback: 0 kB 
+t=15s Dirty: 542164 kB Writeback: 0 kB 
+t=20s Dirty: 542280 kB Writeback: 0 kB 
+t=25s Dirty: 542104 kB Writeback: 56 kB 
+t=30s Dirty: 123532 kB Writeback: 12 kB 
+t=35s Dirty: 904 kB Writeback: 4 kB 
+t=40s Dirty: 908 kB Writeback: 0 kB 
+```
+
+25초까지 530MiB가 메모리에만 있다가, 30초 경계를 넘자 한 번에 내려갔다. 이 25초 동안 전원이 나갔다면 `dd`가 "다 썼다"고 한 512MiB는 사라진다. `write()`의 성공은 "커널이 받았다"는 뜻이지 "디스크에 있다"는 뜻이 아니다.
+
+양 쪽 기준은 비율이다. 더러운 페이지가 "쓸 수 있는 메모리"(빈 메모리와 회수 가능한 페이지 캐시를 합친 것, 대략 `MemAvailable`)의 10%를 넘으면 flusher가 30초를 기다리지 않고 백그라운드에서 내리기 시작한다. 20%를 넘으면 그때부터는 쓰는 프로세스 자신이 `write()` 안에서 멈춰 기다린다. 커널이 계산한 실제 문턱값은 `/proc/vmstat`에 페이지 수로 나온다.
+
+```bash
+grep -E "nr_dirty|nr_writeback" /proc/vmstat
+```
+
+```text
+nr_dirty 2534
+nr_writeback 0
+nr_dirty_threshold 648207
+nr_dirty_background_threshold 323707
+```
+
+4KiB 페이지로 계산하면 백그라운드 문턱이 1.23GiB, 멈춤 문턱이 2.47GiB다. 앞의 512MiB는 어느 쪽에도 닿지 않아서 30초 시간 기준으로만 내려갔다. 아래 그림은 쓰기가 디스크보다 빠를 때 이 두 문턱을 차례로 넘는 모습이다. 숫자는 이 머신의 문턱값이다.
+
+<AlgoTrace
+  caption="더러운 페이지가 쌓이며 두 문턱을 넘는 순서 (문턱값은 이 머신의 /proc/vmstat)"
+  cells={["0", "0.5G", "1.23G", "2G", "2.47G"]}
+  memoryLabel="Dirty"
+  steps={[
+    { pointer: 0, memory: ["write() 시작"], caption: "앱이 디스크보다 빠르게 쓴다. write()는 캐시에 복사하고 바로 돌아온다." },
+    { pointer: 1, memory: ["512MiB"], caption: "아직 백그라운드 문턱 아래다. 30초가 지나야 flusher가 내린다." },
+    { pointer: 2, memory: ["1.23GiB", "flusher 시작"], caption: "background 문턱을 넘었다. flusher가 시간을 기다리지 않고 내리기 시작한다. 앱은 계속 빠르다." },
+    { pointer: 3, memory: ["2GiB", "flusher 바쁨"], caption: "쓰기가 내려가는 속도보다 빠르면 Dirty는 계속 오른다." },
+    { pointer: 4, found: [4], memory: ["2.47GiB", "write() 멈춤"], caption: "dirty 문턱에 닿았다. 이제 앱의 write()가 커널 안에서 잠들며 디스크 속도에 맞춰진다." },
+  ]}
+/>
+
+마지막 단계에서 앱은 `balance_dirty_pages()`라는 커널 함수에서 잠든다. `ps`의 `wchan`에 이 이름이 보이고, 상태는 `D`다. 같은 디스크를 쓰는 다른 프로세스까지 함께 느려진다. 큰 배치 작업이 로그를 쏟아 낼 때 웹 서버 응답이 같이 튀는 게 이 모습이다. 프로세스 상태 `D`를 읽는 법은 [프로세스와 시그널 글](/posts/linux-processes-signals)에 있다.
+
+비율 기준은 램이 클수록 문제가 된다. 램 256GiB 서버라면 20%는 50GiB다. 그만큼 쌓였다가 한꺼번에 내려가면 몇 분 동안 디스크가 꽉 차고, 그 사이 `fsync`를 부르는 DB는 앞에 줄 선 50GiB를 기다린다. 그래서 큰 서버에서는 `vm.dirty_background_bytes`와 `vm.dirty_bytes`로 절대값을 주는 편이다(예: 256MiB와 1GiB에서 시작해 디스크 속도를 보며 조정). `_bytes`를 정하면 같은 이름의 `_ratio`는 0이 되고 무시된다. 이 실습에서는 호스트를 다른 작업과 함께 써서 값을 바꾸지 않았다.
+
+## fsync가 돌려주는 약속
+
+데이터가 정말 디스크에 있어야 하는 순간이 있다. DB의 커밋, 결제 기록, 메시지 큐의 확인 응답이 그렇다. 이때 쓰는 게 `fsync(fd)`다. 그 파일의 더러운 페이지와 메타데이터(크기, 블록 위치)를 디스크로 내리고, 디스크의 휘발성 쓰기 캐시까지 비우라는 명령(FLUSH)을 보낸 뒤, 다 끝나야 돌아온다.
+
+<SequenceDiagram
+  caption="write 뒤에 fsync를 부를 때. write는 3단계에서 끝나고, 디스크에 닿는 일은 fsync가 기다려 준다."
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "pc", label: "페이지 캐시" },
+    { id: "fs", label: "ext4 저널" },
+    { id: "disk", label: "디스크" },
+  ]}
+  steps={[
+    { from: "app", to: "pc", label: "write()", title: "캐시에 복사", detail: "데이터를 페이지 캐시에 넣고 dirty 표시를 한다." },
+    { from: "pc", to: "app", label: "15 bytes", title: "바로 성공", detail: "디스크와 상관없이 돌아온다. 여기서 전원이 나가면 이 데이터는 없다.", payload: "write(3, ...) = 15 <0.000043>" },
+    { from: "app", to: "pc", label: "fsync()", title: "내려 달라고 한다", detail: "이 파일의 더러운 페이지를 지금 내리라고 요청하고, 앱은 기다린다." },
+    { from: "pc", to: "disk", label: "데이터 블록", title: "데이터를 먼저", detail: "data=ordered 모드에서는 데이터 블록을 먼저 디스크에 쓴다." },
+    { from: "fs", to: "disk", label: "저널 커밋", title: "메타데이터를 저널에", detail: "파일 크기와 블록 위치 변경을 저널에 쓰고 커밋 블록으로 마무리한다." },
+    { from: "fs", to: "disk", label: "FLUSH", title: "장치 캐시 비우기", detail: "디스크 안의 휘발성 쓰기 캐시도 비우게 한다. 전원이 나가도 남아야 하니까." },
+    { from: "disk", to: "app", label: "0", title: "이제 돌아온다", detail: "모든 쓰기가 끝나야 fsync가 0을 돌려준다. 이 시간이 커밋 지연이 된다.", payload: "fsync(3) = 0 <0.000714>" },
+  ]}
+/>
+
+이 기다림이 얼마나 비싼지 4KiB를 5,000번 쓰면서 재 봤다. `oflag=dsync`는 `write()`마다 `fdatasync()`를 붙인 것과 같다.
+
+```bash
+dd if=/dev/zero of=s.bin bs=4k count=5000                # 캐시에만
+dd if=/dev/zero of=s.bin bs=4k count=5000 oflag=dsync    # 쓸 때마다 동기화
+```
+
+```text
+20480000 bytes (20 MB, 20 MiB) copied, 0.0129251 s, 1.6 GB/s
+20480000 bytes (20 MB, 20 MiB) copied, 0.764602 s, 26.8 MB/s
+```
+
+같은 20MB가 60배 느려졌다. 한 번에 153µs씩이다. `fio`로 DB의 WAL처럼 4KiB를 쓰고 매번 `fsync`하는 부하를 5초 돌리면 분포까지 나온다.
+
+```bash
+fio --name=walike --filename=fio.dat --size=64M --rw=write --bs=4k \
+    --fsync=1 --runtime=5 --time_based --ioengine=sync
+```
+
+```text
+  write: IOPS=7250, BW=28.3MiB/s (29.7MB/s)(142MiB/5001msec); 0 zone resets
+    clat (nsec): min=1738, max=525881, avg=3543.30, stdev=7090.08
+  fsync/fdatasync/sync_file_range:
+    sync (usec): min=61, max=2978, avg=133.21, stdev=67.00
+    sync percentiles (usec):
+     | 99.00th=[  318], 99.50th=[  375], 99.90th=[  824], 99.95th=[ 1221],
+```
+
+`write()` 자체(`clat`)는 평균 3.5µs인데 `fsync`는 평균 133µs, 99%가 318µs, 최악은 3ms다. 한 번 쓰고 한 번 기다리면 초당 7,250번이 한계다. DB가 커밋마다 `fsync`를 부르면 커밋 처리량이 이 숫자에 묶인다. 그래서 DB는 여러 트랜잭션의 커밋을 모아 `fsync` 한 번으로 처리하는 그룹 커밋을 하고, PostgreSQL의 `synchronous_commit = off`처럼 일부를 잃는 대신 기다림을 건너뛰는 손잡이도 둔다([PostgreSQL 내부 구조 글](/posts/postgres-architecture)에서 같은 차이를 pgbench로 쟀다).
+
+비슷한 호출이 몇 개 있다.
+
+- `fdatasync(fd)`: 데이터를 읽는 데 필요 없는 메타데이터(수정 시각 같은)는 건너뛴다. 파일 크기가 바뀌었으면 크기는 함께 내린다. 미리 크기를 잡아 둔 파일에 덮어쓰는 WAL에 잘 맞는다.
+- `O_SYNC`, `O_DSYNC`: 파일을 열 때 주면 `write()`마다 `fsync`, `fdatasync`를 한 것처럼 동작한다.
+- `sync()`, `syncfs()`: 시스템 전체, 또는 파일 시스템 하나를 통째로 내린다. 앱이 자기 데이터를 지키려고 쓰기엔 너무 넓다.
+
+`fsync`가 실패하면 어떻게 될까. 리눅스는 쓰기 오류가 난 페이지를 "깨끗하다"고 표시하고 버릴 수 있어서, 같은 `fsync`를 다시 불러 성공해도 데이터가 디스크에 있다는 보장이 없다. 2018년에 PostgreSQL 쪽에서 이 문제가 크게 논의된 뒤, PostgreSQL은 `fsync` 실패를 재시도하지 않고 PANIC으로 죽은 뒤 WAL로 복구하도록 바꿨다(2019년 초 릴리스부터, `data_sync_retry` 기본값 off). 앱도 `fsync` 실패를 "다시 해 보면 되는 오류"로 다루면 안 된다는 교훈이다.
+
+## 파일을 안전하게 바꿔 쓰는 순서
+
+설정 파일이나 상태 파일을 덮어쓸 때 흔히 이렇게 한다. 파일을 `O_TRUNC`로 열어 비우고, 새 내용을 쓴다. 이 사이에 전원이 나가면 파일은 빈 채로 남는다. 비우는 메타데이터 변경은 저널에 먼저 들어가고, 새 데이터는 아직 캐시에 있었기 때문이다.
+
+안전한 순서는 새 파일에 다 쓰고, 이름을 한 번에 바꾸는 것이다. `rename()`은 같은 파일 시스템 안에서 원자적이라, 다른 프로세스는 옛 파일 아니면 새 파일만 본다. 다만 전원이 나가는 경우까지 지키려면 두 번의 `fsync`가 필요하다.
+
+```python
+import os
+
+def atomic_save(path, data: bytes):
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)              # 1. 새 내용을 디스크에
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)          # 2. 이름을 한 번에 바꾼다
+    dfd = os.open(os.path.dirname(os.path.abspath(path)), os.O_RDONLY)
+    try:
+        os.fsync(dfd)             # 3. 디렉터리 항목(이름 바뀜)도 디스크에
+    finally:
+        os.close(dfd)
+
+atomic_save("config.json", b'{"version": 2}\n')
+```
+
+`strace`로 실제 시스템 콜을 보면 순서가 그대로 나온다(디렉터리 경로는 `<dir>`로 줄였다).
+
+```bash
+strace -T -e trace=openat,write,fsync,rename python3 save.py
+```
+
+```text
+openat(AT_FDCWD, "config.json.tmp", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 3 <0.000031>
+write(3, "{\"version\": 2}\n", 15)      = 15 <0.000043>
+fsync(3)                                = 0 <0.000714>
+rename("config.json.tmp", "config.json") = 0 <0.000020>
+openat(AT_FDCWD, "<dir>", O_RDONLY|O_CLOEXEC) = 3 <0.000012>
+fsync(3)                                = 0 <0.000655>
+```
+
+`write()`는 43µs, 첫 `fsync`는 714µs다. 1번 `fsync`를 빼면 이름은 새 파일을 가리키는데 내용은 아직 디스크에 없는 상태가 생길 수 있다. 3번을 빼면 이름이 바뀐 사실이 디스크에 없어서, 재부팅 뒤 옛 파일이 돌아올 수 있다. 옛 파일이 돌아오는 건 깨진 건 아니라서 3번을 생략하는 프로그램도 많지만, "저장했다"고 응답한 뒤라면 약속을 어긴 것이다.
+
+아래 그림은 각 단계 직후에 전원이 나갔을 때 재부팅 뒤 `config.json`이 무엇인지를 따라간다.
+
+<AlgoTrace
+  caption="단계마다 전원이 나가면 재부팅 뒤 config.json은 무엇인가"
+  cells={["write", "fsync", "rename", "dir fsync"]}
+  memoryLabel="재부팅 뒤"
+  steps={[
+    { pointer: 0, memory: ["config.json = v1", "tmp는 캐시에만"], caption: "새 내용은 페이지 캐시에만 있다. 죽으면 tmp는 비었거나 없고, config.json은 옛 내용 그대로다." },
+    { pointer: 1, memory: ["config.json = v1", "tmp = v2 (디스크)"], caption: "tmp의 내용이 디스크에 있다. 아직 이름은 안 바뀌었으니 읽는 쪽은 여전히 v1을 본다." },
+    { pointer: 2, memory: ["config.json = v1 또는 v2"], caption: "이름 바꾸기는 원자적이라 섞인 상태는 없다. 하지만 디렉터리 변경이 디스크에 안 갔으면 v1이 돌아올 수 있다." },
+    { pointer: 3, found: [3], memory: ["config.json = v2"], caption: "디렉터리까지 내렸다. 이제 어떤 순간에 죽어도 v2다. 여기서 저장했다고 응답한다." },
+  ]}
+/>
+
+ext4에는 `auto_da_alloc`라는 안전장치가 기본으로 켜져 있다. 기존 파일 위로 `rename`하거나 `O_TRUNC`로 비울 때, 새 데이터의 블록 할당을 앞당겨 빈 파일이 남는 경우를 줄여 준다. 2009년 즈음 ext4로 바꾼 데스크톱에서 설정 파일이 0바이트가 되는 일이 잦아서 들어간 장치다. 다른 파일 시스템에는 없고 보장도 아니니, 직접 `fsync`하는 순서를 지키는 쪽이 맞다.
+
+## 캐시를 건너뛰는 O_DIRECT
+
+`O_DIRECT`로 파일을 열면 읽기와 쓰기가 페이지 캐시를 거치지 않고 앱 버퍼와 디스크 사이를 바로 오간다. 처음 장면의 세 번째 `dd`가 그것이다. 쓰고 나서 `fincore`로 보면 캐시에 아무것도 없다.
+
+```bash
+dd if=/dev/zero of=d.bin bs=4096 count=10 oflag=direct; fincore d.bin
+dd if=/dev/zero of=d.bin bs=1000 count=10 oflag=direct    # 크기가 정렬되지 않았다
+```
+
+```text
+40960 bytes (41 kB, 40 KiB) copied, 0.000419153 s, 97.7 MB/s
+RES PAGES SIZE FILE
+ 0B     0  40K d.bin
+dd: error writing 'd.bin': Invalid argument
+1+0 records in
+0+0 records out
+```
+
+1000바이트 단위로 쓰자 `EINVAL`이 났다. `O_DIRECT`는 파일 오프셋, 길이, 메모리 버퍼 주소를 장치의 논리 블록 크기(이 디스크는 `/sys/block/vda/queue/logical_block_size`가 512) 배수로 맞춰야 한다. 파일 시스템에 따라 더 큰 단위를 요구하기도 해서, 6.1 이상 커널은 `statx()`의 `STATX_DIOALIGN`으로 그 파일의 정렬 조건을 알려 준다.
+
+캐시를 건너뛰면 무엇이 좋은가. 자기 캐시를 따로 갖는 프로그램은 같은 데이터를 두 번 캐시하지 않게 된다. MySQL InnoDB가 `innodb_flush_method = O_DIRECT`로 버퍼 풀을 램의 대부분으로 잡는 게 이 선택이다. 데이터가 캐시를 오염시키지 않고, 언제 디스크로 가는지 앱이 정한다. 대신 미리 읽기도, 쓰기 모으기도 앱이 직접 해야 하고, 작은 I/O를 그대로 내보내면 오히려 느리다. 그래서 `O_DIRECT`는 DB처럼 I/O를 직접 설계한 프로그램의 도구이고, 일반 앱이 "빨라 보여서" 켤 옵션은 아니다. `O_DIRECT`만으로는 장치 캐시까지 비워 주지 않으니, 지속성이 필요하면 여전히 `fsync`나 `O_DSYNC`를 함께 쓴다.
+
+## 저널은 메타데이터를 먼저 적어 둔다
+
+파일 하나를 늘려 쓰는 데도 디스크의 여러 곳이 바뀐다. 데이터 블록, 블록 할당 비트맵, inode의 크기와 블록 목록. 이 중 일부만 쓰고 전원이 나가면 파일 시스템이 앞뒤가 맞지 않게 된다. 예전에는 재부팅 때 `fsck`가 디스크 전체를 훑어 고쳤고, 큰 디스크에서는 몇십 분이 걸렸다.
+
+저널링 파일 시스템은 바꿀 내용을 먼저 저널이라는 작은 영역에 순서대로 적고, 커밋 표시를 한 다음 제자리에 반영한다. 죽었다 살아나면 저널에서 커밋된 것만 다시 적용하고 커밋 안 된 건 버린다. 몇 초 안에 끝난다. DB의 WAL과 같은 생각이다.
+
+ext4는 무엇을 저널에 넣느냐로 세 모드가 있다.
+
+- `data=ordered`(기본): 메타데이터만 저널에 넣되, 그 파일의 데이터 블록을 먼저 쓴 다음 메타데이터를 커밋한다. 그래서 크기가 늘었는데 내용이 쓰레기인 파일은 생기지 않는다.
+- `data=writeback`: 순서를 지키지 않는다. 빠르지만 크래시 뒤 파일 끝에 예전 블록의 내용이 보일 수 있다.
+- `data=journal`: 데이터까지 저널에 넣는다. 가장 안전하고 모든 데이터를 두 번 쓴다.
+
+XFS는 메타데이터만 저널에 넣고, 여러 변경을 메모리에서 모아 한 번에 로그로 쓰는 지연 로깅으로 메타데이터가 많은 작업에 강하다. RHEL 계열은 XFS가 기본이고, Ubuntu 설치 기본은 ext4다.
+
+이 VM의 루트 디스크는 이상하게도 저널 없이 마운트되어 있었다(`dmesg`에 `mounted filesystem ... r/w without journal`). 그래서 300MB짜리 이미지 파일에 ext4를 만들어 loop 장치로 마운트하고, 4KiB를 500번 `O_DSYNC`로 써 본 뒤 저널 통계를 봤다.
+
+```bash
+truncate -s 300M ext4.img && mkfs.ext4 -q ext4.img
+sudo mount -o loop ext4.img mnt
+grep -E "data=|commit=" /proc/fs/ext4/loop0/options
+dd if=/dev/zero of=mnt/j.bin bs=4k count=500 oflag=dsync
+cat /proc/fs/jbd2/loop0-8/info
+```
+
+```text
+commit=5
+data=ordered
+2048000 bytes (2.0 MB, 2.0 MiB) copied, 0.430908 s, 4.8 MB/s
+500 transactions (500 requested), each up to 1365 blocks
+average: 
+  0ms waiting for transaction
+  0ms request delay
+  0ms running transaction
+  0ms transaction was being locked
+  0ms flushing data (in ordered mode)
+  0ms logging transaction
+  1363us average transaction commit time
+  2 handles per transaction
+  3 blocks per transaction
+  5 logged blocks per transaction
+```
+
+쓰기 500번에 저널 트랜잭션이 정확히 500개다. 파일 끝에 덧붙이면 크기가 바뀌니, 동기 쓰기마다 메타데이터 커밋이 하나씩 생긴 것이다. 트랜잭션마다 저널에 5블록을 쓰고, 커밋에 평균 1.36ms가 걸렸다(loop 장치라 아래 파일까지 한 번 더 거쳐서 `vda`보다 느리다). 미리 크기를 잡아 둔 파일에 덮어쓰면 이 메타데이터 커밋이 없어진다. DB가 WAL 파일을 미리 만들어 두고 재사용하는 이유 중 하나다. `commit=5`는 동기 쓰기가 없어도 5초마다 저널을 커밋한다는 뜻이다.
+
+## iostat -x 한 줄 읽기
+
+디스크가 바쁜지는 `iostat -x`로 본다. 4KiB 무작위 읽기를 `O_DIRECT`로, 동시에 한 개씩(큐 깊이 1)과 32개씩 내보내면서 찍었다.
+
+```bash
+# 2초 간격, 부팅 이후 누적(첫 보고)은 건너뛴다(-y), vda만
+iostat -dxy vda 2 2 &
+fio --name=rr --filename=rr.dat --size=256M --rw=randread --bs=4k --direct=1 \
+    --ioengine=libaio --iodepth=32 --runtime=6 --time_based
+```
+
+```text
+Device            r/s     rkB/s   rrqm/s  %rrqm r_await rareq-sz     w/s     wkB/s   wrqm/s  %wrqm w_await wareq-sz     d/s     dkB/s   drqm/s  %drqm d_await dareq-sz     f/s f_await  aqu-sz  %util
+vda           137320.00 549280.00     0.00   0.00    0.08     4.00    0.50    128.00     0.00   0.00    0.00   256.00    0.00      0.00     0.00   0.00    0.00     0.00    0.00    0.00   10.68  99.00
+```
+
+칸이 많지만 볼 것은 몇 개다. 조각을 누르면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="iostat -x의 vda 한 줄 (큐 깊이 32, 4KiB 무작위 읽기). 요청 수, 크기, 기다린 시간, 대기열 길이를 함께 본다."
+  separator=" "
+  joiner="  "
+  params={[
+    { key: "dev", display: "vda", title: "장치", description: "블록 장치 이름. LVM이나 RAID를 쓰면 dm-0, md0처럼 위층 장치와 실제 디스크가 따로 나온다." },
+    { key: "rs", display: "r/s 137320", title: "초당 읽기 요청", description: "합쳐진 뒤 장치로 나간 읽기 요청 수다. 클라우드 디스크의 IOPS 한도와 비교하는 숫자다.", required: true },
+    { key: "rkb", display: "rkB/s 549280", title: "초당 읽은 양", description: "537MiB/s. 처리량 한도(MB/s)와 비교한다. IOPS와 처리량 중 어느 한도에 먼저 닿는지 본다." },
+    { key: "await", display: "r_await 0.08", title: "읽기 평균 시간 (ms)", description: "요청이 블록 계층에 들어와 끝날 때까지의 평균. 대기열에서 기다린 시간이 포함된다. SSD에서 수 ms를 넘기 시작하면 줄이 길다는 신호다.", required: true },
+    { key: "rq", display: "rareq-sz 4.00", title: "평균 요청 크기 (KiB)", description: "4KiB 무작위 읽기다. 같은 MB/s라도 요청이 작으면 IOPS 한도에 먼저 닿는다." },
+    { key: "f", display: "f/s 0.00", title: "초당 flush", description: "fsync가 장치 캐시를 비우라고 보낸 요청. f_await와 함께 커밋 지연의 원인을 볼 때 쓴다." },
+    { key: "aqu", display: "aqu-sz 10.68", title: "평균 대기열 길이", description: "장치에 동시에 걸려 있던 요청 수의 평균. 장치가 병렬로 처리할 수 있는 수보다 계속 크면 포화다.", required: true },
+    { key: "util", display: "%util 99.00", title: "바빴던 시간 비율", description: "요청이 하나라도 걸려 있던 시간의 비율. 요청을 병렬로 처리하는 SSD, NVMe, 클라우드 디스크에서는 100%여도 더 받을 수 있다." },
+  ]}
+/>
+
+큐 깊이 1일 때의 같은 줄은 `r/s 24596.00`, `r_await 0.03`, `aqu-sz 0.84`, `%util 70.60`이었다. 요청을 한 번에 하나씩 보내도 `%util`이 70%다. 그런데 32개씩 보내자 IOPS가 5.6배인 137k로 올랐고 `%util`은 99%가 됐다. `%util`이 70%일 때 디스크는 전혀 꽉 차 있지 않았다는 뜻이다. `%util`은 "요청이 하나라도 걸려 있던 시간"을 재므로, 동시에 여러 요청을 처리하는 장치에서는 포화를 말해 주지 못한다. 포화는 `aqu-sz`와 `await`가 함께 오르는지로 판단한다.
+
+`fio`가 직접 잰 평균 지연은 큐 깊이 32에서 230µs였다. `iostat`의 `r_await` 0.08ms보다 길다. `iostat`은 블록 계층 안에서 보낸 시간만 재기 때문에, 그 위에서 요청을 내고 완료를 거둬 가는 데 든 시간은 빠진다. 이 VM은 다른 작업 때문에 CPU도 바빴다. 앱이 느끼는 지연과 디스크 지연이 다를 수 있으니 둘 다 본다.
+
+## 디스크가 느리다는 말을 들었을 때
+
+"저장이 느리다", "가끔 응답이 수 초씩 튄다"는 말을 들으면 이 순서로 좁힌다.
+
+```bash
+# 1. 디스크가 포화인가: await, aqu-sz, IOPS·MB/s를 한도와 비교
+iostat -dxyz 1 5
+
+# 2. 누가 I/O를 하고 있나 (프로세스별 kB_rd/s, kB_wr/s, iodelay)
+pidstat -d 1 5
+
+# 3. 디스크를 기다리며 멈춘 프로세스가 있나
+ps -eo pid,stat,wchan:32,cmd | awk '$2 ~ /^D/'
+
+# 4. 더러운 페이지가 문턱 가까이 쌓였나
+grep -E "^(Dirty|Writeback):" /proc/meminfo; grep -E "nr_dirty" /proc/vmstat
+
+# 5. I/O를 기다린 시간 비율 (PSI)
+cat /proc/pressure/io
+```
+
+증상과 원인이 이렇게 이어지는 경우가 많다.
+
+- `await`가 수십 ms이고 `aqu-sz`가 크다: 디스크 한도에 닿았다. 클라우드 블록 디스크는 크기나 설정에 따라 IOPS와 처리량 한도가 정해져 있으니 `r/s + w/s`와 `rkB/s + wkB/s`를 그 숫자와 비교한다. 한도에 붙어 있으면 더 큰 등급의 디스크나 I/O를 줄이는 쪽이 답이다.
+- `w/s`는 적은데 `f/s`가 많고 `f_await`가 길다: `fsync`가 많다. 작은 쓰기마다 `fsync`하는 로거나, 커밋을 하나씩 하는 배치를 찾는다.
+- 몇 분마다 쓰기가 치솟고 그때 응답이 튄다: 더러운 페이지가 쌓였다 한꺼번에 내려가는 모습이다. DB라면 체크포인트, 아니라면 dirty 문턱을 의심한다.
+- `D` 상태 프로세스의 `wchan`이 `balance_dirty_pages`다: dirty 문턱에 걸려 쓰기가 멈췄다.
+- 디스크는 한가한데 앱이 느리다: 캐시 hit로 돌던 읽기가 캐시에서 밀려나 디스크로 가기 시작했을 수 있다. 같은 서버의 큰 배치나 백업이 캐시를 밀어냈는지 본다.
+
+흔한 실수도 있다.
+
+- 캐시를 낀 `dd`나 `cp` 시간으로 디스크 성능을 말한다. 디스크를 재려면 `fio --direct=1`이나 `conv=fsync`를 쓰고, 실제 부하와 비슷한 블록 크기와 큐 깊이로 잰다.
+- 측정하겠다고 운영 서버에서 `drop_caches`를 쓴다. 그 서버의 모든 서비스가 차가운 캐시로 디스크를 두드리기 시작한다. 파일 하나만 비우려면 `dd iflag=nocache count=0`이나 `posix_fadvise`를 쓴다.
+- `%util` 100%를 보고 디스크를 바꾼다. SSD와 클라우드 디스크에서는 `await`와 대기열이 함께 오를 때만 포화다.
+- `write()`가 성공했으니 저장됐다고 응답한다. 잃으면 안 되는 데이터라면 `fsync`가 끝난 뒤에 응답한다.
+
+## 직접 iostat을 계산해 본다
+
+`iostat`은 `/proc/diskstats`를 두 번 읽어 차이를 계산할 뿐이다. 한 줄의 앞 세 칸은 장치 번호와 이름이고, 그 뒤로 읽기 완료 수(4번째 칸), 합쳐진 읽기, 읽은 섹터(512바이트 단위), 읽기에 쓴 ms, 쓰기 완료 수(8번째), 합쳐진 쓰기, 쓴 섹터, 쓰기에 쓴 ms, 진행 중인 요청, I/O를 한 ms(13번째), 가중 ms(14번째) 순이다. 두 줄과 간격(ms)을 받아 `iostat -x`의 주요 칸을 소수 둘째 자리까지 계산하는 함수를 만들어 본다. 첫 번째 테스트는 `fio`가 돌 때 1초 간격으로 실제로 읽은 두 줄이다.
+
+<CodePlayground
+  caption="/proc/diskstats 두 줄로 iostat -x 계산하기"
+  functionName="diskDelta"
+  initialCode={`function diskDelta(prevLine, curLine, intervalMs) {
+  // 공백으로 나눈 칸: [0]주번호 [1]부번호 [2]이름 [3]읽기 완료 [5]읽은 섹터 [6]읽기 ms
+  // [7]쓰기 완료 [9]쓴 섹터 [10]쓰기 ms [12]I/O한 ms [13]가중 ms
+  // r_await = 읽기 ms 차이 / 읽기 수 차이, util = I/O한 ms / 간격 * 100
+  // 결과는 소수 둘째 자리에서 반올림한다
+  return { r_s: 0, rkB_s: 0, r_await: 0, w_s: 0, wkB_s: 0, w_await: 0, aqu_sz: 0, util: 0 };
+}`}
+  solution={`function diskDelta(prevLine, curLine, intervalMs) {
+  const p = prevLine.trim().split(/\\s+/).map(Number);
+  const c = curLine.trim().split(/\\s+/).map(Number);
+  const d = (i) => c[i] - p[i];
+  const sec = intervalMs / 1000;
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const reads = d(3), writes = d(7);
+  return {
+    r_s: r2(reads / sec),
+    rkB_s: r2(d(5) / 2 / sec),
+    r_await: r2(reads ? d(6) / reads : 0),
+    w_s: r2(writes / sec),
+    wkB_s: r2(d(9) / 2 / sec),
+    w_await: r2(writes ? d(10) / writes : 0),
+    aqu_sz: r2(d(13) / intervalMs),
+    util: r2((d(12) / intervalMs) * 100),
+  };
+}`}
+  tests={[
+    {
+      label: "fio 중 vda, 1초",
+      args: [
+        " 254       0 vda 1416720 74193 14903538 635847 804225 460159 45318680 671590 8 343364 1513149 483058 417 119253832 153094 266106 52616",
+        " 254       0 vda 1471699 74193 15343370 638215 827917 460161 45508312 672688 0 344168 1516614 483058 417 119253832 153094 266106 52616",
+        1000,
+      ],
+      expected: { r_s: 54979, rkB_s: 219916, r_await: 0.04, w_s: 23692, wkB_s: 94816, w_await: 0.05, aqu_sz: 3.47, util: 80.4 },
+    },
+    {
+      label: "읽기만, 2초",
+      args: ["8 0 sda 100 0 800 50 10 0 80 20 0 100 70", "8 0 sda 300 0 2400 250 10 0 80 20 0 1100 1070", 2000],
+      expected: { r_s: 100, rkB_s: 400, r_await: 1, w_s: 0, wkB_s: 0, w_await: 0, aqu_sz: 0.5, util: 50 },
+    },
+    {
+      label: "변화 없음",
+      args: ["8 0 sda 100 0 800 50 10 0 80 20 0 100 70", "8 0 sda 100 0 800 50 10 0 80 20 0 100 70", 1000],
+      expected: { r_s: 0, rkB_s: 0, r_await: 0, w_s: 0, wkB_s: 0, w_await: 0, aqu_sz: 0, util: 0 },
+    },
+  ]}
+/>
+
+첫 테스트의 결과를 읽어 보면, 1초 동안 읽기 5만 5천 번과 쓰기 2만 4천 번을 평균 0.04~0.05ms에 처리했고, 대기열에는 평균 3.5개가 걸려 있었고, 80%의 시간 동안 요청이 하나 이상 있었다.
+
+## 디스크에 닿았다는 말의 무게
+
+`write()`는 커널에 맡겼다는 뜻이고, 디스크에 닿는 건 30초 뒤의 writeback이나 내가 부른 `fsync`다. 페이지 캐시는 읽기를 수십 배 빠르게 하고 쓰기를 모아 주지만, 그 사이의 데이터는 전원 한 번에 사라질 수 있다. 그래서 잃으면 안 되는 데이터는 `fsync`가 끝난 뒤에 "저장했다"고 말하고, 파일을 바꿀 때는 새 파일에 쓰고 `fsync`, `rename`, 디렉터리 `fsync` 순서를 지킨다. 디스크가 느리다는 말을 들으면 캐시를 낀 숫자가 아니라 `iostat`의 `await`와 대기열, `fsync` 빈도, 더러운 페이지의 양을 본다. 여러 자원을 한 번에 훑는 순서는 [리눅스 성능 점검 글](/posts/linux-performance-triage)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 페이지 캐시는 무엇이고 왜 있나요?
+
+파일 내용을 메모리에 붙잡아 두는 커널의 캐시다. 디스크보다 수십 배 빠른 메모리에서 반복 읽기를 처리하고, 쓰기는 메모리에 모아 뒀다가 한꺼번에 내려서 작은 쓰기를 줄인다. 남는 메모리를 쓰다가 프로그램이 메모리를 달라고 하면 깨끗한 페이지부터 버리니, `free`가 작아도 `available`이 넉넉하면 괜찮다. 실험에서 같은 256MiB를 디스크에서 446MB/s, 캐시에서 7.8GB/s로 읽었다.
+
+### write()가 성공하면 데이터는 디스크에 있나요?
+
+아니다. 페이지 캐시에 복사하고 dirty 표시를 붙인 뒤 돌아온 것이다. 실제 디스크 쓰기는 flusher가 30초(`dirty_expire_centisecs`)보다 오래된 페이지를 내릴 때나, 더러운 페이지가 문턱을 넘었을 때, 앱이 `fsync`를 부를 때 일어난다. 실험에서 512MiB가 25초 동안 메모리에만 있었다. 그 사이 전원이 나가면 사라진다.
+
+### fsync는 정확히 무엇을 보장하나요? fdatasync와 차이는?
+
+그 파일의 데이터와 메타데이터를 디스크에 내리고 장치의 휘발성 캐시까지 비운 뒤 돌아온다는 보장이다. 돌아온 뒤에는 전원이 나가도 남는다. `fdatasync`는 수정 시각처럼 데이터를 읽는 데 필요 없는 메타데이터를 건너뛰어 조금 싸다. 다만 새로 만든 파일이나 이름 변경을 지키려면 그 파일이 든 디렉터리도 `fsync`해야 한다.
+
+### 설정 파일을 안전하게 덮어쓰려면 어떻게 하나요?
+
+같은 디렉터리에 임시 파일을 만들어 새 내용을 쓰고 `fsync`, 원래 이름으로 `rename`, 디렉터리를 `fsync`한다. `rename`은 원자적이라 읽는 쪽은 옛 파일이나 새 파일만 보고, 두 번의 `fsync`가 전원 장애에도 그 결과를 지킨다. 원래 파일을 `O_TRUNC`로 열어 바로 쓰면 그 사이에 죽었을 때 빈 파일이 남는다.
+
+### O_DIRECT는 언제 쓰나요? 쓰면 fsync가 필요 없나요?
+
+자기 캐시를 가진 DB처럼 같은 데이터를 OS 캐시에 또 두고 싶지 않고, I/O 시점과 크기를 직접 관리하는 프로그램이 쓴다. 대신 버퍼와 오프셋, 길이를 블록 크기에 맞춰야 하고(안 맞으면 `EINVAL`), 미리 읽기와 쓰기 모으기의 도움을 못 받는다. `O_DIRECT`는 캐시만 건너뛸 뿐 장치 캐시를 비우지 않으니 지속성에는 여전히 `fsync`나 `O_DSYNC`가 필요하다.
+
+### dirty_ratio를 넘으면 무슨 일이 일어나나요? 큰 서버에서는 어떻게 설정하나요?
+
+쓰는 프로세스가 `write()` 안의 `balance_dirty_pages()`에서 멈춰, 디스크가 따라올 때까지 기다린다. 그 전에 `dirty_background_ratio`를 넘으면 flusher가 미리 내리기 시작한다. 비율은 램이 클수록 수십 GB가 되어 한꺼번에 내려갈 때 지연이 튀니, 큰 서버에서는 `dirty_background_bytes`와 `dirty_bytes`로 절대값을 주고 디스크 속도에 맞춰 조정한다.
+
+### iostat에서 %util이 100%면 디스크가 포화인가요?
+
+꼭 그렇지 않다. `%util`은 요청이 하나라도 걸려 있던 시간의 비율이라, 여러 요청을 동시에 처리하는 SSD나 클라우드 디스크에서는 100%여도 더 받을 수 있다. 실험에서 큐 깊이 1일 때 `%util` 70%에 25k IOPS였고, 32로 올리자 137k IOPS가 나왔다. 포화는 `await`와 `aqu-sz`가 함께 오르는지, IOPS와 처리량이 한도에 붙었는지로 판단한다.
+
+### 저널링 파일 시스템은 무엇을 지켜 주나요? 데이터도 지켜 주나요?
+
+크래시 뒤에도 파일 시스템 구조(메타데이터)가 앞뒤가 맞게 해 준다. 바꿀 메타데이터를 저널에 먼저 쓰고 커밋한 뒤 반영하니, 복구 때 저널만 다시 적용하면 된다. ext4 기본 `data=ordered`는 데이터 블록을 먼저 쓰고 메타데이터를 커밋해서 쓰레기 내용이 보이는 파일은 막지만, `fsync`하지 않은 최근 데이터가 남는다는 보장은 없다. 데이터의 지속성은 여전히 앱이 `fsync`로 챙긴다.

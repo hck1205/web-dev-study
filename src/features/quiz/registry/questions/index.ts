@@ -325,6 +325,7 @@ import { LIGHTHOUSE_EXPLAINED } from "./lighthouse-explained";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
 import { LINUX_NAMESPACES_CGROUPS } from "./linux-namespaces-cgroups";
+import { LINUX_PERFORMANCE_TRIAGE } from "./linux-performance-triage";
 import { LINUX_PROCESSES_SIGNALS } from "./linux-processes-signals";
 import { LINUX_SYSTEMD_SYSTEMCTL } from "./linux-systemd-systemctl";
 import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
@@ -379,6 +380,7 @@ import { OSI_IN_PRACTICE } from "./osi-in-practice";
 import { OWASP_TOP_10_MAP } from "./owasp-top-10-map";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
+import { PAGE_CACHE_DISK_IO } from "./page-cache-disk-io";
 import { PARALLAX_SCROLLYTELLING } from "./parallax-scrollytelling";
 import { PASSKEYS_WEBAUTHN } from "./passkeys-webauthn";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
@@ -602,6 +604,7 @@ import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-pr
 import { VECTOR_DB } from "./vector-db";
 import { VELERO_BACKUP } from "./velero-backup";
 import { VIEW_TRANSITIONS_SHARED_ELEMENT } from "./view-transitions-shared-element";
+import { VIRTUAL_MEMORY_PAGING } from "./virtual-memory-paging";
 import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
@@ -948,6 +951,7 @@ export const QUESTION_SETS = [
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
   LINUX_NAMESPACES_CGROUPS,
+  LINUX_PERFORMANCE_TRIAGE,
   LINUX_PROCESSES_SIGNALS,
   LINUX_SYSTEMD_SYSTEMCTL,
   LOAD_BALANCER_BASICS,
@@ -1002,6 +1006,7 @@ export const QUESTION_SETS = [
   OWASP_TOP_10_MAP,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
+  PAGE_CACHE_DISK_IO,
   PARALLAX_SCROLLYTELLING,
   PASSKEYS_WEBAUTHN,
   PATTERN_ABSTRACT_FACTORY,
@@ -1225,6 +1230,7 @@ export const QUESTION_SETS = [
   VECTOR_DB,
   VELERO_BACKUP,
   VIEW_TRANSITIONS_SHARED_ELEMENT,
+  VIRTUAL_MEMORY_PAGING,
   VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,

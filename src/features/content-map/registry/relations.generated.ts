@@ -2,6 +2,54 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "linux-performance-triage": {
+    "links": [
+      "monitoring-basics",
+      "virtual-memory-paging",
+      "page-cache-disk-io",
+      "linux-processes-signals",
+      "event-loop",
+      "tcp-reliability-congestion",
+      "packet-capture-tcpdump",
+      "osi-in-practice"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "linux-namespaces-cgroups",
+      "pattern-prototype",
+      "redis-basics"
+    ]
+  },
+  "page-cache-disk-io": {
+    "links": [
+      "virtual-memory-paging",
+      "postgres-architecture",
+      "linux-processes-signals",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "mysql-innodb-basics",
+      "sd-kv-store-write-read-path",
+      "message-queue-basics",
+      "acid-transactions"
+    ]
+  },
+  "virtual-memory-paging": {
+    "links": [
+      "sd-latency-numbers",
+      "page-cache-disk-io",
+      "redis-persistence-ha",
+      "k8s-pod-resources",
+      "linux-namespaces-cgroups",
+      "linux-performance-triage",
+      "garbage-collection",
+      "java-jvm-memory-gc"
+    ],
+    "mentions": [
+      "ds-hash-map",
+      "redis-basics"
+    ]
+  },
   "owasp-top-10-map": {
     "links": [
       "authn-vs-authz",
@@ -157,6 +205,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "elasticsearch-inverted-index",
       "mysql-replication-online-ddl",
+      "page-cache-disk-io",
       "postgres-architecture",
       "db-replication-sharding",
       "db-type-wide-column",
@@ -1035,6 +1084,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-leaderboard-sorted-set"
     ],
     "mentions": [
+      "page-cache-disk-io",
       "ds-linked-list",
       "redis-basics"
     ]
@@ -1532,6 +1582,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-basics",
+      "page-cache-disk-io",
       "distributed-transactions-2pc",
       "sd-kv-store-write-read-path",
       "postgres-operations"
@@ -1960,6 +2011,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "exponential-backoff-jitter",
       "redis-cluster",
+      "page-cache-disk-io",
       "ds-linked-list",
       "js-memoization",
       "redis-basics",
@@ -1981,6 +2033,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "message-delivery-semantics",
+      "page-cache-disk-io",
       "consistency-models",
       "redis-basics",
       "db-partitioning",
@@ -2277,6 +2330,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "event-loop",
+      "page-cache-disk-io",
       "kafka-basics"
     ]
   },
@@ -2306,6 +2360,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "event-driven-architecture",
       "db-type-wide-column",
+      "page-cache-disk-io",
       "sd-kv-store-write-read-path"
     ]
   },
@@ -2522,6 +2577,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "js-memory-leak",
       "db-type-embedded",
+      "page-cache-disk-io",
       "http-caching-cdn"
     ]
   },
@@ -2537,6 +2593,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "merkle-tree"
     ],
     "mentions": [
+      "page-cache-disk-io",
       "tail-latency",
       "vpc-basics"
     ]
@@ -2623,6 +2680,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-key-value",
+      "page-cache-disk-io",
       "sd-start-single-server"
     ]
   },
@@ -3174,6 +3232,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-embedded",
+      "page-cache-disk-io",
       "sd-leaderboard-sorted-set",
       "db-type-relational",
       "binary-search",
@@ -3317,6 +3376,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing",
       "tcp-reliability-congestion",
       "redis-basics",
+      "virtual-memory-paging",
       "sql-query-rewrite"
     ]
   },
@@ -3516,6 +3576,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "timeouts"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "db-type-wide-column",
       "db-architecture-by-scale",
       "high-availability",
@@ -3545,6 +3606,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "backup-strategy"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "sd-interview-framework",
       "high-availability",
       "sd-object-storage-architecture",
@@ -3886,6 +3948,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "mysql-innodb-basics",
       "mongodb-document-model",
+      "page-cache-disk-io",
       "sd-start-single-server",
       "redis-basics",
       "resilience-patterns",
@@ -5184,6 +5247,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "dynamic-programming",
       "db-type-key-value",
+      "linux-performance-triage",
       "dns",
       "webhooks"
     ]
@@ -5768,6 +5832,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "k8s-architecture",
       "cron-jobs",
+      "page-cache-disk-io",
       "velero-backup",
       "local-k8s-kind-minikube",
       "grpc"
@@ -5825,6 +5890,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-hpa"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "garbage-collection",
       "k8s-pod-basics",
       "linux-namespaces-cgroups",
@@ -6352,6 +6418,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "k8s-pod-basics",
       "docker-commands-workflow",
       "k8s-cri-cni-csi",
@@ -6359,6 +6426,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "k8s-architecture",
       "packet-capture-tcpdump",
+      "page-cache-disk-io",
       "sql-aggregation-pitfalls",
       "osi-in-practice",
       "layer-ip-routing-icmp"
@@ -6438,6 +6506,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "kubernetes-ingress",
       "cilium-ebpf",
+      "page-cache-disk-io",
       "osi-in-practice",
       "high-availability"
     ]
@@ -6657,6 +6726,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "docker-container-basics",
       "db-replication-sharding",
+      "page-cache-disk-io",
       "sd-object-storage-architecture",
       "sd-start-single-server",
       "osi-in-practice",
@@ -7152,7 +7222,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "structured-logging",
       "network-monitoring",
       "alerting",
-      "sli-slo"
+      "sli-slo",
+      "linux-performance-triage"
     ],
     "mentions": [
       "prometheus-basics",
@@ -7708,6 +7779,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-architecture",
       "db-type-key-value",
+      "page-cache-disk-io",
       "kafka-basics"
     ]
   },
@@ -8256,6 +8328,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-grep-awk-sed"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "dockerfile-image-layers",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
@@ -8478,6 +8551,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "failover",
       "network-partitions",
+      "page-cache-disk-io",
       "dhcp",
       "rolling-deployment",
       "kafka-basics",
@@ -8523,6 +8597,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "zero-downtime-migrations",
       "network-partitions",
+      "page-cache-disk-io",
       "kafka-basics",
       "db-types-overview",
       "postgres-getting-started",
@@ -9774,11 +9849,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "java-jvm-memory-gc",
+      "virtual-memory-paging",
       "go-concurrency-basics",
       "k8s-pod-basics",
       "docker-commands-workflow",
       "linux-namespaces-cgroups",
       "k8s-architecture",
+      "page-cache-disk-io",
       "local-k8s-kind-minikube"
     ]
   },
@@ -9926,6 +10003,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration"
     ],
     "mentions": [
+      "page-cache-disk-io",
       "autoscaling",
       "react-server-components",
       "redis-basics",
@@ -10262,6 +10340,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "postgres-mvcc-vacuum",
       "db-architecture-by-scale",
+      "page-cache-disk-io",
       "postgres-getting-started"
     ]
   },
@@ -10684,6 +10763,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mysql-innodb-basics",
       "sd-start-single-server",
       "sqld-window-functions",
+      "page-cache-disk-io",
       "api-versioning",
       "kafka-basics",
       "db-index-pitfalls",
@@ -10761,6 +10841,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "ds-hash-map",
       "sqld-top-n-hierarchical-pivot",
+      "page-cache-disk-io",
       "scaling-horizontal-vertical",
       "postgres-architecture",
       "postgres-jsonb-search",
@@ -10787,6 +10868,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "raft-consensus",
       "ds-hash-map",
+      "page-cache-disk-io",
       "sd-mq-storage-partitions",
       "leader-election",
       "dns"
@@ -10843,7 +10925,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
+      "virtual-memory-paging",
       "sd-mq-storage-partitions",
+      "page-cache-disk-io",
       "mysql-innodb-basics",
       "db-type-relational",
       "acid-transactions"
@@ -10875,8 +10959,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "pessimistic-locking",
+      "virtual-memory-paging",
       "db-migration-tools",
       "db-architecture-by-scale",
+      "page-cache-disk-io",
       "ds-hash-map",
       "linux-files-permissions",
       "db-type-relational",
@@ -11258,6 +11344,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "mysql-innodb-basics",
       "sd-start-single-server",
+      "page-cache-disk-io",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "sql-batch-timeout-pool",
@@ -11297,6 +11384,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rabbitmq-basics",
       "db-type-key-value",
       "message-delivery-semantics",
+      "page-cache-disk-io",
       "db-type-relational",
       "db-type-graph",
       "http-caching-cdn",
@@ -11394,6 +11482,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "edge-caching",
       "cookie-session-login",
+      "page-cache-disk-io",
       "web-security-headers",
       "security-groups-nacl",
       "what-happens-google-com",
@@ -11410,6 +11499,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "ds-hash-map",
       "ds-linked-list",
       "sd-leaderboard-sorted-set",
@@ -11425,6 +11515,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "virtual-memory-paging",
+      "page-cache-disk-io",
       "sd-start-single-server",
       "dns"
     ]
@@ -11630,6 +11722,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow"
     ],
     "mentions": [
+      "virtual-memory-paging",
       "linux-namespaces-cgroups",
       "k8s-pod-resources",
       "iptables-basics",

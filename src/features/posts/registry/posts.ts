@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "linux-performance-triage",
+    title: "리눅스 성능 점검 60초: uptime부터 perf까지 열 줄로 범인 좁히기",
+    summary: "API가 느리다는 알림을 받고 서버에 들어가 uptime, dmesg, vmstat, mpstat, pidstat, iostat, free, sar, top을 차례로 치며 단일 스레드 node와 fsync 많은 작업을 찾아낸다. PSI로 기다린 시간을 보고, perf로 범인 함수까지 내려가는 순서와 점검할 때 흔한 실수를 정리한다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Performance", "Troubleshooting", "Observability", "DevOps"],
+    date: "2026-10-25",
+    keywords: ["60초 점검", "vmstat", "mpstat", "pidstat", "PSI"],
+  },
+  {
+    slug: "page-cache-disk-io",
+    title: "페이지 캐시와 디스크 I/O: dirty 페이지, fsync, O_DIRECT, iostat",
+    summary: "dd가 4.5GB/s를 찍었는데 디스크는 그렇게 빠르지 않다는 데서 출발해, 페이지 캐시와 30초 뒤의 writeback, dirty 문턱, fsync가 실제로 약속하는 것, 파일을 안전하게 바꿔 쓰는 순서, O_DIRECT의 정렬 규칙, ext4 저널을 실측으로 본다. iostat -x 한 줄을 읽는 법과 %util의 함정도 다룬다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Performance", "Troubleshooting", "Database"],
+    date: "2026-10-25",
+    keywords: ["페이지 캐시", "fsync", "O_DIRECT", "dirty_ratio", "iostat"],
+  },
+  {
+    slug: "virtual-memory-paging",
+    title: "가상 메모리와 페이징: 페이지 테이블, TLB, page fault, overcommit, OOM killer",
+    summary: "256MiB 한도 cgroup에서 1GiB malloc이 성공하고 채우다 죽는 장면에서 출발해, 주소 공간과 4단 페이지 테이블, TLB와 huge page, minor·major fault, copy-on-write, overcommit 모드를 실제 출력으로 따라간다. 스왑 없이도 생기는 thrashing과 OOM killer가 누구를 고르는지, 커널 로그로 어느 한도였는지 읽는 법까지 다룬다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "Performance", "Troubleshooting", "Kubernetes"],
+    date: "2026-10-25",
+    keywords: ["페이지 테이블", "TLB", "page fault", "overcommit", "OOM killer"],
+  },
+  {
     slug: "owasp-top-10-map",
     title: "OWASP Top 10 지도: 열 칸을 내 서비스에 얹어 보기",
     summary: "OWASP Top 10 2025년 판의 열 칸을 요청 경로 위에 얹고, 일부러 구멍을 낸 앱을 점검하고 고쳐 보며 각 칸을 이 블로그의 보안 글과 연결했다. 2021년 판에서 바뀐 점과 제보를 받은 날의 순서도 담았다.",
