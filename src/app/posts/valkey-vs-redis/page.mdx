@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("valkey-vs-redis");
 
+<EasyIntro>
+  클라우드에서 캐시 서버를 만들려는데 목록 맨 위에 Redis가 아니라 Valkey라는 이름이 있고 값도 조금 싸다. 2024년에 Redis가 사용 규칙, 그러니까 라이선스를 바꾸자, 그 직전 버전을 가져다 누구나 자유롭게 쓰도록 따로 만든 것이 Valkey다.
+
+  둘은 같은 요리법 공책에서 갈라져 나온 두 가게와 비슷하다. 갈라지기 전까지 적힌 요리는 양쪽이 똑같아서, 기존 프로그램은 주소만 바꾸면 대부분 그대로 붙는다. 하지만 그 뒤에 각자 새로 적은 요리는 상대 가게에 없고, 같은 요리라도 기본 간이 달라서 큰 데이터를 지울 때 한쪽만 서버가 멈추기도 한다.
+
+  옮길 때 가장 조심할 점은 되돌아가는 길이다. Redis에서 Valkey로는 데이터 파일이 그대로 넘어가지만, 최신 Valkey가 저장한 파일은 예전 Redis가 읽지 못한다. 그래서 옮기기 전에 우리 프로그램이 실제로 쓰는 명령 목록부터 뽑아 본다.
+</EasyIntro>
+
 AWS 콘솔에서 ElastiCache 클러스터를 만들려는데 엔진 목록 맨 위에 Redis가 아니라 Valkey가 있다. 가격도 조금 싸다. 인프라 쪽에서는 다음 분기에 캐시를 전부 Valkey로 옮기자는 말이 나온다. 앱 개발자 입장에서 궁금한 건 셋이다. 코드를 고쳐야 하나, 데이터는 그대로 옮겨지나, 문제가 생기면 되돌릴 수 있나.
 
 이 글은 그 세 가지를 직접 돌려서 확인한다. Redis가 왜 둘로 갈라졌는지(라이선스), 갈라진 뒤 무엇이 달라졌는지(명령, 기본값, 파일 형식), 실제로 옮기는 순서와 되돌리기 어려운 지점을 본다. Redis가 무엇이고 왜 빠른지는 [Redis 기본 글](/posts/redis-basics)에, 복제 원리는 [복제와 Sentinel 글](/posts/redis-replication-sentinel)에 있으니 여기서는 링크만 건다. 처리량을 끌어올리는 쪽 이야기는 [Redis 처리량 글](/posts/redis-high-throughput)에서 이어진다.
