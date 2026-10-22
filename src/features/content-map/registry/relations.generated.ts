@@ -2,6 +2,52 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "image-optimization": {
+    "links": [
+      "core-web-vitals",
+      "resource-hints-loading",
+      "lazy-loading-strategies"
+    ],
+    "mentions": [
+      "loading-patterns",
+      "pattern-proxy"
+    ]
+  },
+  "resource-hints-loading": {
+    "links": [
+      "code-splitting",
+      "frontend-browser-cache",
+      "core-web-vitals",
+      "browser-rendering-pipeline",
+      "image-optimization",
+      "http-versions",
+      "what-happens-google-com",
+      "http-status-codes",
+      "bundler-basics"
+    ],
+    "mentions": [
+      "https-tls",
+      "js-pure-functions",
+      "cors",
+      "dns"
+    ]
+  },
+  "bundler-basics": {
+    "links": [
+      "code-splitting",
+      "js-es-modules",
+      "js-iife-module-pattern",
+      "js-optional-chaining-nullish",
+      "frontend-error-tracking",
+      "module-federation-deep-dive",
+      "build-caching",
+      "monorepo-build-cache",
+      "resource-hints-loading"
+    ],
+    "mentions": [
+      "js-hoisting-tdz"
+    ]
+  },
   "frontend-performance-map": {
     "links": [
       "lazy-loading-strategies",
@@ -9,10 +55,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-browser-cache",
       "http-caching-cdn",
       "client-data-cache",
+      "bundler-basics",
       "code-splitting",
+      "image-optimization",
       "web-font-optimization",
       "css-performance",
       "data-fetching-optimization",
+      "resource-hints-loading",
       "rendering-strategies",
       "streaming-ssr-suspense",
       "http-versions",
@@ -58,10 +107,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "data-fetching-optimization",
       "frontend-performance-map",
       "scroll-triggered-intersection-observer",
+      "image-optimization",
       "hydration",
       "rendering-performance-optimization",
       "islands-resumability",
-      "core-web-vitals"
+      "core-web-vitals",
+      "resource-hints-loading"
     ],
     "mentions": [
       "browser-rendering-pipeline",
@@ -91,7 +142,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "module-federation-deep-dive": {
     "links": [
       "micro-frontends",
-      "micro-frontend-integration-patterns"
+      "micro-frontend-integration-patterns",
+      "resource-hints-loading"
     ],
     "mentions": [
       "frontend-monorepo",
@@ -143,6 +195,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "resource-hints-loading",
       "http-versions",
       "dns"
     ]
@@ -288,7 +341,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "observability-basics",
       "browser-fetch",
       "rendering-strategies",
-      "http-status-codes"
+      "http-status-codes",
+      "bundler-basics"
     ]
   },
   "rendering-performance-optimization": {
@@ -312,6 +366,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-performance-optimization",
       "streaming-ssr-suspense",
       "core-web-vitals",
+      "resource-hints-loading",
       "css-performance",
       "dom-basics",
       "animation-performance",
@@ -3755,7 +3810,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender",
       "client-data-cache"
     ],
-    "mentions": []
+    "mentions": [
+      "bundler-basics"
+    ]
   },
   "js-template-literals": {
     "links": [
@@ -4225,7 +4282,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ds-linked-list",
-      "js-strict-mode"
+      "js-strict-mode",
+      "bundler-basics"
     ]
   },
   "js-array-transform": {
@@ -6365,7 +6423,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
-      "sql-injection"
+      "sql-injection",
+      "bundler-basics"
     ]
   },
   "csrf": {
@@ -10846,6 +10905,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "security-groups-nacl",
       "what-happens-google-com",
+      "image-optimization",
       "first-page-from-power-on",
       "udp-and-quic",
       "dns"
@@ -10964,6 +11024,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
+      "resource-hints-loading",
       "realtime-communication",
       "js-pure-functions",
       "pattern-proxy",
@@ -11194,6 +11255,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "reverse-proxy-lb-api-gateway",
       "kubernetes-ingress",
       "base64",
+      "image-optimization",
       "first-page-from-power-on",
       "db-modeling-normalization"
     ]
@@ -11353,6 +11415,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "code-splitting"
     ],
     "mentions": [
+      "resource-hints-loading",
       "https-tls",
       "browser-fetch",
       "http-methods",
@@ -11427,8 +11490,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop"
     ],
     "mentions": [
+      "resource-hints-loading",
       "browser-rendering-pipeline",
       "ab-testing",
+      "image-optimization",
       "loading-patterns",
       "pattern-proxy",
       "cors",
@@ -11437,6 +11502,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "code-splitting": {
     "links": [
+      "bundler-basics",
       "core-web-vitals"
     ],
     "mentions": [

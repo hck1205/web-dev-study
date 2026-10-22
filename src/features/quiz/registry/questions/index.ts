@@ -29,6 +29,7 @@ import { BROWSER_RENDERING_PIPELINE } from "./browser-rendering-pipeline";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { BULLMQ_JOB_QUEUE } from "./bullmq-job-queue";
+import { BUNDLER_BASICS } from "./bundler-basics";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
 import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
@@ -200,6 +201,7 @@ import { IAC_BASICS } from "./iac-basics";
 import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
+import { IMAGE_OPTIMIZATION } from "./image-optimization";
 import { INTEGRATION_TESTS_REAL_DB } from "./integration-tests-real-db";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
@@ -437,6 +439,7 @@ import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
 import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
+import { RESOURCE_HINTS_LOADING } from "./resource-hints-loading";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { REVERSE_PROXY_LB_API_GATEWAY } from "./reverse-proxy-lb-api-gateway";
@@ -626,6 +629,7 @@ export const QUESTION_SETS = [
   BROWSER_STORAGE,
   BUILD_CACHING,
   BULLMQ_JOB_QUEUE,
+  BUNDLER_BASICS,
   CACHE_INVALIDATION,
   CACHE_WRITE_POLICIES,
   CACHING_CONCEPTS_MAP,
@@ -797,6 +801,7 @@ export const QUESTION_SETS = [
   IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
+  IMAGE_OPTIMIZATION,
   INTEGRATION_TESTS_REAL_DB,
   IPTABLES_BASICS,
   IPTABLES_NAT,
@@ -1034,6 +1039,7 @@ export const QUESTION_SETS = [
   RENDERING_SSR,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
+  RESOURCE_HINTS_LOADING,
   REST_API_DESIGN,
   RETRIES,
   REVERSE_PROXY_LB_API_GATEWAY,

@@ -1,0 +1,373 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("resource-hints-loading");
+
+성능 리뷰에서 "히어로 이미지에 `fetchpriority="high"`를 붙이자", "CDN에 `preconnect`를 걸자"는 말이 나왔다. 붙이고 배포했는데 LCP는 그대로다. 개발자 도구 Network 탭을 열어 보니 이미지 요청이 여전히 늦게 출발하고, CDN 연결은 두 번 열려 있다.
+
+힌트는 브라우저에게 하는 부탁이다. 브라우저가 이미 하려던 일이면 아무 효과가 없고, 조건이 하나 어긋나면 무시되거나 오히려 두 번 받는다. 그래서 힌트를 붙이기 전에 브라우저가 원래 무엇을 언제 어떤 순서로 받는지부터 알아야 한다.
+
+태그 문법과 preload·prefetch의 기본 차이는 [코드 스플리팅](/posts/code-splitting)과 [프런트엔드 캐시](/posts/frontend-browser-cache)에서, LCP 이미지 속성은 [Core Web Vitals](/posts/core-web-vitals)에서 정리했다. 이 글은 그 힌트들이 실제로 무엇을 바꾸는지 Chromium 141에서 하나씩 재 본다. 요청 시각은 Resource Timing과 CDP(Chrome DevTools Protocol)의 Network 이벤트로 찍었고, 서버는 로컬 Node 22에 일부러 지연을 넣었다.
+
+## 브라우저가 매기는 다섯 단계 우선순위
+
+브라우저는 모든 요청에 우선순위를 붙인다. 한 페이지에 흔히 나오는 리소스를 다 넣고 CDP의 `Network.requestWillBeSent`에 실린 `initialPriority`와, 나중에 바뀐 값(`Network.resourceChangedPriority`)을 찍었다. 화면은 390×844다.
+
+```html
+<link rel="stylesheet" href="/a.css">
+<link rel="preload" href="/font.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/late.js" as="script">
+<link rel="modulepreload" href="/dep.js">
+<link rel="prefetch" href="/next-page.js">
+<script src="/sync.js"></script>
+<script src="/defer.js" defer></script>
+<script src="/async.js" async></script>
+<script type="module" src="/module.js"></script>
+<!-- body -->
+<img src="/hero.jpg" width="800" height="400">
+<img src="/hero-high.jpg" width="800" height="400" fetchpriority="high">
+<div style="height:3000px"></div>
+<img src="/below.jpg" width="800" height="400">
+<img src="/lazy.jpg" width="800" height="400" loading="lazy">
+<script>fetch("/api.json"); fetch("/api-low.json", { priority: "low" });</script>
+```
+
+```text
+/                Document    VeryHigh
+/a.css           Stylesheet  VeryHigh
+/font.woff2      Font        High
+/late.js         Script      High
+/dep.js          Script      High
+/sync.js         Script      High
+/defer.js        Script      Low
+/async.js        Script      Low
+/module.js       Script      High
+/hero.jpg        Image       Medium   -> High
+/hero-high.jpg   Image       High
+/below.jpg       Image       Medium
+/next-page.js    Other       VeryLow
+/api.json        Fetch       High
+/api-low.json    Fetch       Low
+/favicon.ico     Other       High
+```
+
+CDP의 `VeryHigh`, `VeryLow`는 개발자 도구 화면에서 Highest, Lowest로 보인다. 몇 가지가 눈에 띈다.
+
+HTML과 `<head>`의 CSS가 가장 높다. CSS는 다 받기 전까지 화면을 그리지 않으니(렌더링 차단) 가장 급하다. `defer`와 `async` 스크립트는 Low다. 파싱을 막지 않는 대신 급하지도 않다고 보는 것이다. 모듈 스크립트는 `defer`처럼 동작하지만 High로 나갔다.
+
+이미지는 Medium으로 출발했다. 레이아웃을 해 봐야 화면 안에 있는지 알 수 있어서다. 레이아웃 뒤 화면 안에 든 `hero.jpg`만 High로 올라갔고, 3000px 아래의 `below.jpg`는 Medium에 남았다. `fetchpriority="high"`를 붙인 이미지는 처음부터 High다. 이미지의 처음 값은 크롬 버전마다 조금씩 달라서(앞쪽 몇 개의 큰 이미지는 Low 대신 Medium으로 올려 주는 규칙이 있다) 정확한 값보다 "레이아웃 전에는 모른다"는 점을 기억해 두면 된다.
+
+`loading="lazy"` 이미지는 아예 목록에 없다. 화면 근처에 오지 않았으니 요청을 만들지 않았다. `prefetch`는 VeryLow라 지금 페이지와 다투지 않는다. `fetch()`도 `priority: "low"`를 주면 Low로 내려간다.
+
+## 늦게 발견되면 늦게 출발한다
+
+우선순위보다 먼저 따질 것이 있다. 브라우저가 그 리소스의 존재를 언제 아느냐다. HTML을 받는 동안 프리로드 스캐너가 앞질러 읽으면서 `<img src>`, `<link href>`, `<script src>` 주소를 찾아 미리 요청한다. 반대로 CSS 안의 `background-image`, 자바스크립트가 만든 `<img>`는 그 파일을 받아서 해석해야 비로소 보인다. 스캐너와 파싱 순서 자체는 [브라우저 렌더링 파이프라인](/posts/browser-rendering-pipeline)에서 다룬다.
+
+CSS·JS·이미지 모두 300ms씩 늦게 응답하는 서버를 두고, 같은 1200×600 히어로 이미지를 다섯 가지로 넣었다. 세 번 재서 가운데값이다.
+
+```text
+img-in-html     hero start   21 ms  end  326 ms  LCP  344 ms
+css-background  hero start  318 ms  end  623 ms  LCP  636 ms
+js-inserted     hero start  322 ms  end  625 ms  LCP  652 ms
+js + preload    hero start   12 ms  end  323 ms  LCP  348 ms
+css + preload   hero start   11 ms  end  319 ms  LCP  348 ms
+```
+
+HTML에 `<img>`로 쓰면 21ms에 출발한다. CSS 배경이나 JS로 넣으면 그 파일을 받는 300ms를 고스란히 기다린 뒤에야 출발해서 LCP가 두 배가 됐다. 여기에 `<link rel="preload" as="image">`를 더하면 HTML에 쓴 것과 똑같아진다. 아래 그림에서 CSS 배경 경우를 따라가 보자.
+
+<SequenceDiagram
+  caption="CSS 배경 이미지는 CSS를 받아야 보인다"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "br", to: "srv", label: "GET /", title: "HTML을 받는다", detail: "HTML 안에는 a.css 주소만 있다. 이미지 주소는 아직 어디에도 없다." },
+    { from: "br", to: "srv", label: "GET a.css", title: "스캐너가 CSS를 찾아 요청한다", detail: "CSS는 렌더링을 막으니 가장 높은 우선순위로 나간다. 서버가 300ms 뒤에 응답한다." },
+    { from: "srv", to: "br", label: "a.css (300ms)", title: "CSS를 받아 해석한다", detail: ".hero의 background:url(/hero.jpg)를 이제야 읽는다. 그 요소가 실제로 그려질 것을 확인하고 나서 요청한다." },
+    { from: "br", to: "srv", label: "GET hero.jpg", title: "318ms에 출발한다", detail: "HTML에 img로 썼다면 21ms에 이미 출발했을 요청이다. 발견이 늦은 만큼 그대로 늦다." },
+    { from: "srv", to: "br", label: "hero.jpg", title: "LCP 636ms", detail: "img로 쓴 경우의 344ms보다 두 배 가까이 늦다. preload를 하나 더하면 348ms로 돌아온다." },
+  ]}
+/>
+
+이 실험이 힌트를 고르는 첫 번째 기준이다. preload는 "늦게 발견되는 것"을 일찍 알리는 장치다. 이미 HTML에 `<img src>`로 있는 이미지에 preload를 더해도 출발 시각은 거의 그대로다. 실험 표의 첫 줄과 넷째 줄이 9ms 차이인 것처럼 말이다.
+
+## 출발은 했는데 줄을 선다
+
+같은 순간에 발견해도 바로 나가지 못할 때가 있다. HTTP/1.1에서 크롬은 출처 하나에 연결을 여섯 개까지만 연다. 일곱 번째 요청부터는 연결이 빌 때까지 브라우저 안에서 기다린다. 썸네일 16장을 HTML 위쪽에, 380KB 히어로를 맨 아래에 두고 대역폭을 초당 4Mbit, 지연 100ms로 묶었다. 다섯 번 재서 가운데값이다. `sent`는 Resource Timing의 `requestStart`, 요청이 실제로 연결에 실린 시각이다.
+
+```text
+기본                 hero start 115 sent 556 end 2015 LCP 2036 hero.jpg
+fetchpriority=high hero start 114 sent 115 end 1956 LCP 1976 hero.jpg
+hero에 lazy         hero start 119 sent 1042 end 2021 LCP 2040 hero.jpg
+```
+
+세 경우 모두 115ms 무렵에 요청을 만들었다(`start`). 차이는 줄을 선 시간이다. 기본은 앞의 썸네일들에게 연결을 내주고 556ms에야 나갔고, `fetchpriority="high"`는 줄 맨 앞으로 끼어들어 115ms에 바로 나갔다. 아래 그림이 그 줄서기다.
+
+<AlgoTrace
+  caption="연결 여섯 개를 두고 요청이 줄을 선다"
+  memoryLabel="연결 6개"
+  cells={["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7", "…", "hero"]}
+  steps={[
+    { pointer: 0, memory: ["t0", "t1", "t2", "t3", "t4", "t5"], caption: "HTML 순서대로 썸네일 여섯 장이 연결을 하나씩 차지한다." },
+    { pointer: 6, memory: ["t0", "t1", "t2", "t3", "t4", "t5"], caption: "t6부터는 자리가 없다. 요청은 만들어졌지만 브라우저 안에서 기다린다." },
+    { pointer: 9, memory: ["t0", "t1", "t2", "t3", "t4", "t5"], caption: "히어로도 같은 Medium이라 순서대로 뒤에 선다. 556ms에야 자리가 난다." },
+    { pointer: 9, found: [9], memory: ["hero", "t0", "t1", "t2", "t3", "t4"], caption: "fetchpriority=high를 붙이면 처음부터 High다. 첫 자리를 받아 115ms에 출발한다." },
+    { pointer: 7, found: [9], memory: ["hero", "t0", "t1", "t2", "t3", "t4"], caption: "남은 썸네일은 히어로 뒤로 밀린다. 순서만 바뀌었을 뿐 받을 양은 같다." },
+  ]}
+/>
+
+그런데 LCP는 2036ms에서 1976ms로 60ms만 줄었다. 출발은 440ms 당겼는데 효과가 작은 이유는 대역폭이다. 우선순위는 순서를 바꿀 뿐이고, 이미 출발한 썸네일 다운로드를 멈추지는 않는다. 히어로는 여전히 썸네일과 4Mbit를 나눠 쓴다. 이 페이지에서 더 효과가 큰 쪽은 받을 양 자체를 줄이는 일이다. 히어로를 AVIF로 바꾸고 화면 폭에 맞는 크기를 주는 이야기는 [이미지 최적화](/posts/image-optimization)에서 잰다.
+
+히어로를 HTML 맨 위로 옮겨서 다시 쟀더니 기본 상태에서도 125ms에 바로 나갔고, `fetchpriority="high"`를 붙여도 132ms로 차이가 없었다. 줄 맨 앞에 이미 서 있으면 끼어들 필요가 없다. 반대로 실수 하나는 분명히 보였다. 히어로에 `loading="lazy"`를 붙이면 레이아웃이 끝날 때까지 요청을 미뤄서 1042ms에야 나갔다.
+
+HTTP/2와 HTTP/3에서는 연결 하나로 여러 요청을 동시에 보내니 이 여섯 칸 줄은 없다. 대신 브라우저가 요청마다 우선순위 신호를 서버에 보내고, 서버나 CDN이 그 신호대로 응답 순서와 대역폭을 나눈다. 서버가 신호를 무시하면 `fetchpriority`의 효과도 줄어든다. 프로토콜별 차이는 [HTTP 버전 글](/posts/http-versions)에 있다.
+
+이 줄서기를 직접 계산해 보자. 요청마다 발견 시각(`at`), 걸리는 시간(`dur`), 우선순위(`prio`, 클수록 먼저)가 있다. 연결이 `slots`개일 때 각 요청이 실제로 출발하는 시각을 입력 순서대로 돌려준다. 같은 우선순위면 먼저 발견한 것, 그것도 같으면 입력 순서가 먼저다.
+
+<CodePlayground
+  caption="연결 수와 우선순위로 출발 시각 구하기"
+  functionName="startTimes"
+  initialCode={`function startTimes(requests, slots) {
+  // requests: [{ id, at, dur, prio }, ...]
+  // 1. 시각 t에 끝난 요청의 연결을 비운다
+  // 2. 발견됐고 아직 안 나간 요청을 prio 높은 순, at 빠른 순, 입력 순으로 고른다
+  // 3. 빈 연결만큼 출발시키고, 다음 사건(끝나는 시각 또는 새로 발견되는 시각)으로 넘어간다
+  return requests.map(() => 0);
+}`}
+  solution={`function startTimes(requests, slots) {
+  const start = requests.map(() => null);
+  let running = [];
+  let t = 0;
+  let done = 0;
+  while (done < requests.length) {
+    running = running.filter((end) => end > t);
+    const waiting = requests
+      .map((r, i) => i)
+      .filter((i) => start[i] === null && requests[i].at <= t)
+      .sort((x, y) => requests[y].prio - requests[x].prio || requests[x].at - requests[y].at || x - y);
+    while (running.length < slots && waiting.length > 0) {
+      const i = waiting.shift();
+      start[i] = t;
+      running.push(t + requests[i].dur);
+      done++;
+    }
+    const next = [...running, ...requests.filter((r, i) => start[i] === null).map((r) => r.at)].filter((x) => x > t);
+    if (next.length === 0) break;
+    t = Math.min(...next);
+  }
+  return start;
+}`}
+  tests={[
+    { args: [[{ id: "a", at: 0, dur: 100, prio: 1 }, { id: "b", at: 0, dur: 100, prio: 1 }, { id: "c", at: 0, dur: 100, prio: 1 }], 2], expected: [0, 0, 100], label: "연결 2개, 셋째는 기다린다" },
+    { args: [[{ id: "t1", at: 0, dur: 100, prio: 1 }, { id: "t2", at: 0, dur: 100, prio: 1 }, { id: "t3", at: 0, dur: 100, prio: 1 }, { id: "hero", at: 0, dur: 100, prio: 1 }], 2], expected: [0, 0, 100, 100], label: "hero가 같은 우선순위" },
+    { args: [[{ id: "t1", at: 0, dur: 100, prio: 1 }, { id: "t2", at: 0, dur: 100, prio: 1 }, { id: "t3", at: 0, dur: 100, prio: 1 }, { id: "hero", at: 0, dur: 100, prio: 3 }], 2], expected: [0, 100, 100, 0], label: "hero에 fetchpriority=high" },
+    { args: [[{ id: "css", at: 0, dur: 300, prio: 4 }, { id: "hero", at: 300, dur: 300, prio: 3 }], 6], expected: [0, 300], label: "CSS 배경: 늦게 발견" },
+    { args: [[{ id: "a", at: 0, dur: 50, prio: 1 }, { id: "b", at: 10, dur: 50, prio: 3 }, { id: "c", at: 20, dur: 50, prio: 2 }], 1], expected: [0, 50, 100], label: "연결 1개, 높은 것부터" },
+    { args: [[{ id: "a", at: 0, dur: 100, prio: 1 }, { id: "b", at: 250, dur: 100, prio: 1 }], 1], expected: [0, 250], label: "빈 시간이 있어도 발견 전엔 못 나간다" },
+  ]}
+/>
+
+넷째 테스트가 앞 절의 CSS 배경 경우다. 연결이 여섯 개 남아 있어도 300ms 전에는 히어로를 모르니 출발할 수 없다. 우선순위는 줄 안의 순서를 바꾸고, preload는 줄에 서는 시각을 바꾼다. 둘은 다른 문제를 푼다.
+
+## 연결을 미리 열어 두는 값
+
+다른 출처(CDN, 이미지 서버, API 서버)에서 처음 받을 때는 DNS 조회, TCP 연결, TLS 핸드셰이크가 먼저다. 먼 서버라면 왕복 몇 번에 수백 ms가 든다. `preconnect`는 이 준비를 미리 해 두라는 힌트다.
+
+로컬에서는 연결 비용이 거의 0이라 그대로는 잴 수 없다. 그래서 CDN 앞에 프록시를 하나 두고, 새 연결이 생긴 뒤 300ms 동안은 요청을 서버로 넘기지 않게 했다. 먼 서버에 연결하는 비용을 흉내 낸 것이다. 페이지는 400ms 뒤에 응답하는 `app.js`가 CDN 이미지를 넣는다. 이미지가 늦게 발견되는 전형적인 SPA 모양이다.
+
+```text
+none             img start 467 ms  waiting 302 ms  end 775 ms  CDN 연결 수 1
+dns-prefetch     img start 426 ms  waiting 301 ms  end 729 ms  CDN 연결 수 1
+preconnect       img start 430 ms  waiting 2 ms  end 436 ms  CDN 연결 수 1
+preconnect-cors  img start 436 ms  waiting 301 ms  end 741 ms  CDN 연결 수 2
+```
+
+힌트가 없으면 이미지 요청이 나간 뒤 300ms를 기다린다. `preconnect`를 걸면 페이지가 열리자마자 연결을 만들어 두었다가 그대로 써서 대기가 2ms로 줄었다. 이 실험의 `dns-prefetch`는 효과가 없다. 연결 비용만 흉내 냈고 DNS 조회 비용은 넣지 않았기 때문이다. 실제로는 DNS 조회 몫만큼 줄어든다.
+
+마지막 줄이 처음 장면의 "연결이 두 번 열린" 경우다. `preconnect`에 `crossorigin`을 붙였더니 연결이 두 개 생기고 이득은 사라졌다. 아래 그림에서 왜 그런지 보자.
+
+<NetworkTopology
+  width={420}
+  height={240}
+  caption="preconnect의 crossorigin은 실제 요청과 맞아야 한다"
+  zones={[{ id: "cdnz", label: "다른 출처 CDN", x: 250, y: 20, w: 160, h: 200, tone: "edge" }]}
+  nodes={[
+    { id: "br", label: "브라우저", sub: "localhost", x: 70, y: 120, icon: "client" },
+    { id: "c1", label: "연결 A", sub: "CORS 모드", x: 330, y: 70, icon: "lock", w: 100 },
+    { id: "c2", label: "연결 B", sub: "no-cors 모드", x: 330, y: 170, icon: "lock", w: 100 },
+  ]}
+  links={[
+    { from: "br", to: "c1", label: "preconnect" },
+    { from: "br", to: "c2", label: "img" },
+  ]}
+  steps={[
+    { path: ["br", "c1"], packet: "TCP+TLS", title: "힌트가 연결을 미리 연다", detail: "crossorigin이 붙은 preconnect는 쿠키 없이 보내는 CORS 요청용 연결을 연다. 페이지가 열린 직후다." },
+    { path: ["br", "c1"], packet: "img?", blocked: true, title: "img 요청은 이 연결을 못 쓴다", detail: "crossorigin 없는 img는 쿠키를 함께 보내는 요청이다. 크롬은 쿠키를 보내는 요청과 안 보내는 요청의 연결을 섞지 않는다." },
+    { path: ["br", "c2"], packet: "TCP+TLS", title: "새 연결을 처음부터 연다", detail: "결국 300ms를 다시 기다린다. CDN 연결 수가 2로 찍힌 이유다." },
+    { path: ["br", "c2"], packet: "GET", highlight: ["cdnz"], title: "맞추면 연결 하나로 끝난다", detail: "img, CSS, 일반 script면 crossorigin 없이, 폰트와 fetch, crossorigin이 붙은 script면 crossorigin을 붙여 건다. 둘 다 쓰면 두 개 다 건다." },
+  ]}
+/>
+
+`preconnect`를 아껴 써야 하는 이유도 이 실험에 있다. 연결을 만드는 데는 브라우저와 서버 양쪽에 비용이 들고, 크롬은 쓰이지 않은 연결을 10초쯤 뒤에 닫는다. 곧 쓰는 출처 두세 개에만 걸고, 나머지는 DNS 조회만 미리 하는 `dns-prefetch`로 둔다. 둘을 함께 적어 두면 `preconnect`를 모르는 오래된 브라우저도 DNS만큼은 챙긴다.
+
+측정에서 하나 더 걸린 게 있다. Playwright의 기본 컨텍스트(시크릿 창처럼 쓰고 버리는 프로필)에서는 `preconnect`가 아예 일어나지 않아서 네 경우가 모두 300ms를 기다렸다. 일반 프로필(`launchPersistentContext`)로 띄워야 위 결과가 나왔다. 자동화 도구로 힌트 효과를 잴 때는 브라우저 프로필 종류부터 확인한다.
+
+## 스크립트 하나가 첫 화면을 붙잡는 시간
+
+`<head>`의 스크립트는 우선순위 표에서 High였다. 그보다 더 큰 영향은 파싱을 멈추는 것이다. 500ms 늦게 응답하는 분석 스크립트 하나를 `<head>`에 넣고 세 가지로 쟀다. FCP는 첫 글자가 그려진 시각, DCL은 HTML 파싱이 끝난 시각이다.
+
+```text
+sync   {"FCP":544,"DCL":523,"scriptRan":523}
+defer  {"FCP":28,"DCL":512,"scriptRan":512}
+async  {"FCP":40,"DCL":20,"scriptRan":517}
+```
+
+그냥 넣으면 스크립트가 올 때까지 본문이 하나도 안 보여서 FCP가 544ms다. `defer`나 `async`를 붙이면 본문이 28~40ms에 먼저 그려진다. 둘의 차이는 DCL에서 보인다. `defer`는 스크립트를 실행한 뒤에 파싱 완료(DCL)를 알리고, `async`는 받는 대로 실행하니 DCL과 상관없다. 순서가 중요한 앱 코드는 `defer`, 남과 상관없는 분석 코드는 `async`가 맞다. 세 방식의 정의는 [주소창에 google.com을 치면 일어나는 일](/posts/what-happens-google-com)에 있다.
+
+## 서버가 먼저 귀띔하기
+
+HTML을 만드는 데 서버가 500ms를 쓴다면, 그 사이 브라우저는 아무것도 못 받는다. `103 Early Hints`는 최종 응답 전에 "어차피 이 CSS는 필요할 것"이라는 `Link` 헤더만 먼저 보내는 응답이다. 헤더 한 줄을 조각내 보자.
+
+<UrlAnatomy
+  caption="103 응답에 실리는 Link 헤더"
+  base="Link:"
+  separator=" "
+  joiner="; "
+  params={[
+    { key: "url", display: "</style.css>", title: "받을 주소", description: "꺾쇠 괄호 안에 주소를 쓴다. 쉼표로 여러 개를 이어 쓸 수 있다.", required: true },
+    { key: "rel", value: "preload", title: "할 일", description: "preload면 받기 시작하고, preconnect면 연결만 연다. 크롬 계열은 103에서 이 두 가지를 처리한다. 다른 브라우저는 지원 범위가 다르다.", required: true },
+    { key: "as", value: "style", title: "종류", description: "link 태그의 as와 같다. 틀리면 최종 HTML의 실제 요청과 짝이 맞지 않아 두 번 받는다." },
+  ]}
+/>
+
+Node 22의 `http2` 서버에서 `res.writeEarlyHints()`로 103을 보내고 500ms 뒤에 HTML을 보내게 한 다음, Chromium으로 열었다.
+
+```text
+/plain  {"proto":"h2","htmlResponseStart":507,"cssStart":524,"cssEnd":731,"cssInitiator":"link","fhs":507}
+/eh     {"proto":"h2","htmlResponseStart":4,"cssStart":510,"cssEnd":715,"cssInitiator":"link","fhs":504}
+```
+
+103은 도착했다. 내비게이션의 `responseStart`가 507ms에서 4ms로 당겨졌고, 최종 응답 헤더 시각인 `finalResponseHeadersStart`(`fhs`)는 504ms 그대로다. 크롬은 103을 받은 시각을 `responseStart`로 잡는다는 뜻이다. 103을 켜면 TTFB 그래프가 갑자기 좋아져 보이는데, 실제 서버 처리 시간이 줄어든 건 아니다. TTFB를 감시하고 있다면 `finalResponseHeadersStart`도 함께 본다.
+
+그런데 이 headless 환경에서는 CSS가 103 시점에 출발하지 않고 HTML을 받은 뒤(510ms)에 나갔다. 프로필과 인증서 조건을 바꿔 봐도 같았고, 원인은 끝까지 확인하지 못했다. 크롬 계열은 HTTP/2 이상의 페이지 이동에서 103의 preload를 처리한다고 알려져 있지만, 실제 효과는 CDN의 103 지원 여부와 실사용자 데이터로 확인하는 게 맞다. 103을 만든 배경과 서버 푸시와의 관계는 [HTTP 상태 코드](/posts/http-status-codes)에서 다뤘다.
+
+## 다음 페이지를 미리 받아 두면
+
+지금 페이지가 아니라 다음 페이지를 미리 받는 방법도 쟀다. 링크 하나가 있는 페이지에서 400ms 늦게 응답하는 `/b`로 이동한다. Speculation Rules의 `prefetch`는 다음 문서를 미리 받아 두고, `prerender`는 보이지 않는 곳에서 렌더링까지 해 둔다.
+
+```text
+a-none       클릭 전 /b 요청 0  클릭→화면 526ms {"activationStart":0,"deliveryType":"","wasPrerendering":false}
+a-prefetch   클릭 전 /b 요청 1  클릭→화면 100ms {"activationStart":0,"deliveryType":"navigational-prefetch","wasPrerendering":false}
+a-prerender  클릭 전 /b 요청 0  클릭→화면 527ms {"activationStart":0,"deliveryType":"","wasPrerendering":false}
+```
+
+`prefetch`는 클릭 전에 `/b`를 한 번 받아 두었고, 클릭에서 제목이 보이기까지 526ms가 100ms로 줄었다. 도착한 페이지의 `deliveryType`이 `navigational-prefetch`로 찍혀서, 미리 받은 응답을 썼는지 페이지 안에서 확인할 수 있다. `Cache-Control: no-store`를 준 응답도 이 방식으로는 미리 받아졌다. HTTP 캐시가 아니라 따로 둔 저장소에 잠깐 들고 있기 때문이다.
+
+`prerender`는 이 headless Chromium에서 시작되지 않았다(`/b` 요청 0). 크롬은 메모리 상태, 절약 모드, 설정에 따라 prerender를 건너뛸 수 있다. 그래서 prerender를 걸어 두더라도 안 될 때를 기준으로 페이지를 만든다. 실제로 prerender됐는지는 `activationStart`가 0보다 큰지로 판단한다. 아래 그림은 prefetch가 된 경우의 흐름이다.
+
+<SequenceDiagram
+  caption="다음 글을 미리 받아 두었다가 클릭에 바로 쓴다"
+  actors={[
+    { id: "page", label: "지금 페이지" },
+    { id: "store", label: "prefetch 저장소" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "page", to: "srv", label: "GET /b", title: "규칙을 읽고 미리 요청한다", detail: "eagerness가 immediate라 규칙을 읽자마자 받는다. moderate면 링크에 포인터를 잠깐 올렸을 때 시작한다." },
+    { from: "srv", to: "store", label: "200 (400ms)", title: "응답을 따로 들고 있는다", detail: "HTTP 캐시가 아니라 이 이동을 위해 잠깐 들고 있는 저장소다. 일정 시간이 지나면 버린다." },
+    { from: "page", to: "store", label: "click", title: "사용자가 링크를 누른다", detail: "브라우저는 같은 주소의 미리 받은 응답이 있는지 먼저 본다." },
+    { from: "store", to: "page", label: "/b 문서", title: "네트워크 없이 바로 그린다", detail: "클릭에서 화면까지 526ms가 100ms가 됐다. 도착한 페이지의 deliveryType은 navigational-prefetch다." },
+  ]}
+/>
+
+미리 받기는 진짜 요청이다. 사용자가 안 누르면 서버 부하와 데이터 요금만 쓴 셈이고, 로그에는 아무도 안 본 페이지의 조회가 남는다. 로그아웃처럼 GET에 부수 효과가 있는 주소는 규칙에서 빼고, 조회수 집계는 실제로 보였을 때만 센다. 이 주의점은 [프런트엔드 캐시 글의 미리 받기 부분](/posts/frontend-browser-cache)에 정리했다.
+
+## preload를 잘못 쓰면 콘솔이 알려 준다
+
+preload는 실수해도 페이지가 깨지지 않아서 오래 방치되기 쉽다. 대신 크롬은 콘솔에 경고를 남긴다. Pretendard 폰트(766KB)로 세 가지 실수를 만들고 콘솔과 요청 수를 찍었다(favicon 404 줄은 뺐다).
+
+```text
+== no-cors {"/no-cors":1,"/p.woff2":2}
+[warning] A preload for 'http://localhost:18719/p.woff2' is found, but is not used because the request credentials mode does not match. Consider taking a look at crossorigin attribute.
+[warning] The resource http://localhost:18719/p.woff2 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
+== ok {"/ok":1,"/p.woff2":1}
+== unused {"/unused":1,"/p.woff2":1,"/chart.js":1}
+[warning] The resource http://localhost:18719/chart.js was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
+== no-as {"/no-as":1,"/p.woff2":1}
+[warning] <link rel=preload> must have a valid `as` value
+```
+
+첫 번째는 폰트 preload에서 `crossorigin`을 뺀 경우다. 폰트는 같은 출처여도 CORS 모드로 요청하는데 preload는 일반 모드로 받아서 짝이 안 맞는다. 766KB를 두 번 받았다(`/p.woff2: 2`). 두 번째는 쓰지 않을 `chart.js`를 preload한 경우다. 받긴 받았지만 load 후 몇 초 안에 안 쓰여서 경고가 떴다. 그동안 정말 급한 리소스와 대역폭을 다퉜다는 뜻이다. 세 번째는 `as`를 빠뜨린 경우로, 아예 받지 않고 무시한다.
+
+이 경고들은 운영 페이지에서도 똑같이 뜬다. 배포 전 체크리스트에 "콘솔에 preload 경고가 없는지"를 넣어 두면 대부분 걸러진다. 프레임워크가 자동으로 넣은 preload가 경고를 내는 경우도 있다. 라우트가 바뀌었는데 예전 청크를 preload하고 있다면 빌드 설정을 봐야 한다.
+
+## 어떤 힌트를 언제 쓰나
+
+지금까지 잰 것을 "그 리소스가 언제 필요한가"로 묶으면 이렇다.
+
+<ConceptDiagram
+  width={420}
+  height={250}
+  caption="필요한 시점에 따라 힌트가 갈린다"
+  nodes={[
+    { id: "now", label: "지금 페이지에 필요", x: 80, y: 40, w: 140 },
+    { id: "late", label: "늦게 발견됨", sub: "CSS 배경·JS가 넣음", x: 80, y: 125, w: 140 },
+    { id: "queue", label: "줄 뒤에 섬", sub: "같은 우선순위 다수", x: 80, y: 210, w: 140 },
+    { id: "preload", label: "preload", sub: "as · crossorigin", x: 300, y: 125, w: 130 },
+    { id: "fp", label: "fetchpriority", sub: "high 한두 개", x: 300, y: 210, w: 130 },
+    { id: "origin", label: "preconnect", sub: "곧 쓰는 다른 출처", x: 300, y: 40, w: 130 },
+  ]}
+  edges={[
+    { from: "now", to: "late" },
+    { from: "now", to: "queue" },
+    { from: "late", to: "preload", label: "발견 시각" },
+    { from: "queue", to: "fp", label: "줄 순서" },
+    { from: "now", to: "origin", label: "연결 준비" },
+  ]}
+/>
+
+다음 페이지에 필요한 것은 `prefetch`(파일 하나)나 Speculation Rules(문서째)로 받는다. 지금 필요 없는 것은 `loading="lazy"`, `defer`, `fetch(..., { priority: "low" })`로 뒤로 미룬다.
+
+| 문제 | 증상 (Network 탭) | 힌트 |
+|---|---|---|
+| 늦게 발견됨 | 요청 시작이 CSS·JS 응답 직후 | `preload`, 가능하면 HTML에 직접 |
+| 줄 서기 | Queueing 시간이 김, 같은 출처 요청 다수 | `fetchpriority="high"`, 나머지는 lazy·low |
+| 연결 비용 | 다른 출처 첫 요청에 Initial connection·SSL 칸이 김 | `preconnect`(crossorigin 맞추기), 나머지는 `dns-prefetch` |
+| 파싱 차단 | FCP가 스크립트 응답 시각 뒤 | `defer`·`async` |
+| 다음 이동이 느림 | 클릭 뒤 문서 요청부터 시작 | `prefetch`, Speculation Rules |
+
+현장에서는 힌트를 붙이기 전에 크롬 개발자 도구 Network 탭에서 LCP 리소스를 골라 Timing 탭을 연다. Queueing이 길면 줄 서기, Stalled 뒤 Initial connection이 길면 연결 비용, 요청 시작 자체가 늦으면 발견 문제다. 원인에 맞는 힌트 하나를 붙이고 같은 조건에서 다시 잰다. 힌트가 늘수록 서로 대역폭을 다투니 "붙였더니 좋아졌다"를 확인한 것만 남긴다.
+
+## 힌트는 순서를 바꿀 뿐이다
+
+브라우저는 리소스를 발견한 순간에, 매긴 우선순위대로, 열린 연결 위에서 받는다. preload는 발견 시각을, fetchpriority는 줄 안의 순서를, preconnect는 연결 준비를 앞당긴다. 어느 것도 받을 양을 줄이지는 않는다. 그래서 힌트로 해결이 안 되는 느림은 결국 덜 보내는 쪽으로 간다. 이미지 바이트를 줄이는 방법은 [이미지 최적화](/posts/image-optimization)에서, 번들이 만들어지는 과정은 [번들러 기초](/posts/bundler-basics)에서 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### preload와 fetchpriority는 무엇이 다른가요?
+
+preload는 브라우저가 늦게 알게 될 리소스를 일찍 알려서 요청 시작 시각을 앞당긴다. fetchpriority는 이미 발견된 요청의 우선순위를 바꿔 줄 안에서의 순서를 바꾼다. CSS 배경 이미지가 늦게 출발하는 문제는 preload로, 썸네일 뒤에 줄 선 히어로 문제는 fetchpriority로 푼다. HTML에 `<img src>`로 이미 있는 이미지에 preload를 더해도 출발 시각은 거의 그대로다.
+
+### 크롬은 리소스 우선순위를 어떻게 정하나요?
+
+리소스 종류와 위치로 정한다. HTML과 `<head>`의 CSS가 가장 높고, 일반 스크립트와 폰트 preload가 High, `defer`·`async` 스크립트는 Low, prefetch는 Lowest다. 이미지는 레이아웃 전에는 화면 안인지 몰라서 낮게 출발하고, 레이아웃 뒤 화면 안에 들면 High로 올라간다. 정확한 값은 버전마다 조금씩 달라서 개발자 도구의 Priority 열로 확인한다.
+
+### fetchpriority="high"를 붙였는데 LCP가 별로 안 좋아졌습니다. 왜 그럴까요?
+
+우선순위는 순서만 바꾸고 대역폭을 늘리지는 않기 때문이다. 실험에서 히어로의 출발은 556ms에서 115ms로 당겨졌지만, 썸네일과 대역폭을 나눠 써서 LCP는 60ms만 줄었다. 이미 줄 맨 앞에 있는 이미지라면 효과가 없다. 이럴 때는 이미지 크기를 줄이거나, 같이 받는 다른 리소스를 lazy로 미루는 쪽이 효과가 크다.
+
+### preconnect에 crossorigin은 언제 붙이나요?
+
+실제 요청이 CORS 모드일 때 붙인다. 폰트, `fetch`, `crossorigin` 속성이 있는 script가 여기에 해당하고, 일반 img와 CSS는 붙이지 않는다. 크롬은 쿠키를 함께 보내는 연결과 안 보내는 연결을 나눠 쓰기 때문에, 모드가 다르면 미리 연 연결을 못 쓰고 새로 연다. 실험에서 crossorigin을 잘못 붙이자 연결이 두 개 열리고 이득이 사라졌다.
+
+### preload를 남발하면 어떤 문제가 생기나요?
+
+정말 급한 리소스와 대역폭을 다툰다. preload는 높은 우선순위로 바로 받으니, 쓰지 않을 파일이나 나중에 써도 되는 파일까지 걸면 CSS와 LCP 이미지가 늦어진다. 크롬은 load 후 몇 초 안에 안 쓰인 preload에 경고를 남기고, `as`가 없으면 무시하며, 폰트에 crossorigin이 없으면 두 번 받는다. 콘솔 경고를 배포 전 확인 항목에 넣는다.
+
+### 103 Early Hints는 무엇이고, 무엇을 조심해야 하나요?
+
+서버가 최종 응답을 만드는 동안 `Link` 헤더로 preload나 preconnect할 리소스를 먼저 알려 주는 임시 응답이다. 서버 처리 시간이 긴 페이지에서 그 시간 동안 CSS나 폰트를 받게 한다. 크롬은 103이 도착한 시각을 내비게이션 `responseStart`로 잡아서, 켜는 순간 TTFB가 좋아져 보인다. 실제 서버 시간은 `finalResponseHeadersStart`로 따로 본다.
+
+### Speculation Rules의 prefetch와 prerender는 어떻게 다르고, 무엇을 조심하나요?
+
+prefetch는 다음 문서의 응답만 미리 받아 두고, prerender는 보이지 않는 곳에서 렌더링과 스크립트 실행까지 해 둔다. 실험에서 prefetch만으로도 클릭에서 화면까지 526ms가 100ms가 됐다. 둘 다 진짜 요청이라 부수 효과가 있는 GET 주소는 빼고, 조회 집계는 실제로 보였을 때만 센다. prerender는 브라우저 상태에 따라 건너뛸 수 있으니 안 될 때를 기준으로 만든다.

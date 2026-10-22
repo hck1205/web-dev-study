@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "image-optimization",
+    title: "이미지 최적화: 포맷, 반응형 크기, 자리 잡기",
+    summary: "사진 한 장을 JPEG·WebP·AVIF와 네 가지 폭으로 바꿔 바이트와 변환 시간을 재고, 브라우저가 srcset과 sizes로 어떤 파일을 고르는지 Chromium에서 확인한다. picture와 Accept 협상, width·height로 CLS 막기, loading=lazy의 실제 범위, 디코딩 메모리까지 다룬다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "Browser", "Core Web Vitals", "CDN", "Frontend"],
+    date: "2026-10-25",
+    keywords: ["srcset", "AVIF", "WebP", "반응형 이미지"],
+  },
+  {
+    slug: "resource-hints-loading",
+    title: "리소스 힌트와 로딩 순서: preload, preconnect, fetchpriority를 재 보기",
+    summary: "브라우저가 리소스를 언제 발견하고 어떤 우선순위로 줄 세워 받는지 Chromium에서 재고, preload·fetchpriority·preconnect·defer·103 Early Hints·Speculation Rules가 실제로 무엇을 바꾸는지 확인한다. crossorigin 불일치, 남는 preload 같은 흔한 실수도 콘솔 경고로 본다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "Browser", "HTTP", "Core Web Vitals", "Frontend"],
+    date: "2026-10-25",
+    keywords: ["preconnect", "fetchpriority", "리소스 우선순위", "Early Hints"],
+  },
+  {
+    slug: "bundler-basics",
+    title: "번들러 기초: import 한 줄이 dist 파일이 되기까지",
+    summary: "번들러가 경로를 찾고, 코드를 고쳐 쓰고, 모듈을 펼쳐 묶고, 줄이고, source map을 남기는 과정을 실제 빌드 결과로 따라간다. 묶지 않는 개발 서버와 프로덕션 빌드의 차이, 트랜스파일과 폴리필, 여섯 번들러의 빌드 시간을 함께 잰다.",
+    topic: "programming/frontend/performance",
+    tags: ["JavaScript", "Performance", "Frontend"],
+    date: "2026-10-25",
+    keywords: ["트랜스파일", "폴리필", "browserslist", "Rolldown"],
+  },
+  {
     slug: "frontend-performance-map",
     title: "프런트엔드 성능 지도: 재고, 덜 보내고, 일찍 보내고, 덜 그리고, 덜 실행하기",
     summary: "노트북에서 260ms인 페이지가 느린 휴대폰 조건에서 4.2초가 되는 장면에서 출발해, 망과 CPU 제한을 하나씩 켜서 지표가 무엇에 묶였는지 가르고 다섯 손잡이를 꺼내는 순서를 정리한다. 증상별로 먼저 볼 곳, 성능 예산, 점검 목록을 주제별 글로 이어 준다.",
