@@ -17,6 +17,7 @@ import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview
 import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
+import { AWS_EC2_UBUNTU_SERVER_SETUP } from "./aws-ec2-ubuntu-server-setup";
 import { BACKEND_ENGINEER_ROADMAP } from "./backend-engineer-roadmap";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
@@ -65,6 +66,9 @@ import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { COUNT_MIN_SKETCH } from "./count-min-sketch";
+import { CPU_CACHE_HIERARCHY } from "./cpu-cache-hierarchy";
+import { CPU_INSTRUCTION_CYCLE } from "./cpu-instruction-cycle";
+import { CPU_PIPELINING_BRANCH_PREDICTION } from "./cpu-pipelining-branch-prediction";
 import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
@@ -226,6 +230,8 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JAVA_JVM_MEMORY_GC } from "./java-jvm-memory-gc";
 import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
+import { JENKINS_ARGOCD_PUSH_PULL } from "./jenkins-argocd-push-pull";
+import { JENKINS_ON_KUBERNETES } from "./jenkins-on-kubernetes";
 import { JENKINS_PIPELINE_BASICS } from "./jenkins-pipeline-basics";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
@@ -347,6 +353,7 @@ import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { LOCAL_K8S_KIND_MINIKUBE } from "./local-k8s-kind-minikube";
 import { LOGGING_TOOLS_OVERVIEW } from "./logging-tools-overview";
+import { LOGIC_GATES_ALU } from "./logic-gates-alu";
 import { LONG_POLLING } from "./long-polling";
 import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
@@ -668,6 +675,7 @@ export const QUESTION_SETS = [
   ARGOCD_BASICS,
   AUTHN_VS_AUTHZ,
   AUTOSCALING,
+  AWS_EC2_UBUNTU_SERVER_SETUP,
   BACKEND_ENGINEER_ROADMAP,
   BACKPRESSURE,
   BACKUP_STRATEGY,
@@ -716,6 +724,9 @@ export const QUESTION_SETS = [
   CORE_WEB_VITALS,
   CORS,
   COUNT_MIN_SKETCH,
+  CPU_CACHE_HIERARCHY,
+  CPU_INSTRUCTION_CYCLE,
+  CPU_PIPELINING_BRANCH_PREDICTION,
   CQRS,
   CRDT,
   CRON_JOBS,
@@ -877,6 +888,8 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JAVA_JVM_MEMORY_GC,
   JAVASCRIPT_ROADMAP,
+  JENKINS_ARGOCD_PUSH_PULL,
+  JENKINS_ON_KUBERNETES,
   JENKINS_PIPELINE_BASICS,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
@@ -998,6 +1011,7 @@ export const QUESTION_SETS = [
   LOCAL_CUSTOM_DOMAIN,
   LOCAL_K8S_KIND_MINIKUBE,
   LOGGING_TOOLS_OVERVIEW,
+  LOGIC_GATES_ALU,
   LONG_POLLING,
   LOSSY_COUNTING,
   MERKLE_TREE,

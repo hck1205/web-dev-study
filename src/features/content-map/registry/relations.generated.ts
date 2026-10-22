@@ -2,6 +2,125 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "cpu-pipelining-branch-prediction": {
+    "links": [
+      "cpu-instruction-cycle",
+      "cpu-cache-hierarchy"
+    ],
+    "mentions": [
+      "web-security-headers",
+      "ds-linked-list"
+    ]
+  },
+  "cpu-cache-hierarchy": {
+    "links": [
+      "cpu-instruction-cycle",
+      "virtual-memory-paging",
+      "sd-latency-numbers",
+      "ds-array-matrix",
+      "ds-linked-list",
+      "thread-safety",
+      "scaling-horizontal-vertical",
+      "cpu-pipelining-branch-prediction"
+    ],
+    "mentions": [
+      "ds-hash-map",
+      "db-type-relational"
+    ]
+  },
+  "cpu-instruction-cycle": {
+    "links": [
+      "logic-gates-alu",
+      "cpu-cache-hierarchy",
+      "cpu-pipelining-branch-prediction",
+      "virtual-memory-paging"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "ds-hash-map"
+    ]
+  },
+  "logic-gates-alu": {
+    "links": [
+      "cpu-instruction-cycle"
+    ],
+    "mentions": []
+  },
+  "aws-ec2-ubuntu-server-setup": {
+    "links": [
+      "ssh-in-practice",
+      "linux-systemd-systemctl",
+      "security-groups-nacl",
+      "nginx-https-performance",
+      "linux-files-permissions",
+      "iptables-basics",
+      "nginx-reverse-proxy",
+      "ssrf"
+    ],
+    "mentions": [
+      "virtual-memory-paging",
+      "terraform-basics",
+      "ansible-network-automation",
+      "proxy-reverse-proxy",
+      "page-cache-disk-io",
+      "sd-start-single-server",
+      "js-memory-leak",
+      "dockerfile-image-layers",
+      "layer-ip-addressing",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "jenkins-on-kubernetes": {
+    "links": [
+      "jenkins-pipeline-basics",
+      "jenkins-argocd-push-pull",
+      "k8s-pod-scheduling",
+      "k8s-pod-resources",
+      "k8s-pod-security-admission",
+      "build-caching",
+      "k8s-network-policy"
+    ],
+    "mentions": [
+      "k8s-secret",
+      "k8s-pod-troubleshooting",
+      "k8s-pod-lifecycle",
+      "k8s-pv-pvc",
+      "k8s-statefulset",
+      "dockerfile-image-layers",
+      "k8s-daemonset",
+      "realtime-communication",
+      "k8s-security-context",
+      "helm-basics",
+      "kubernetes-ingress",
+      "vpc-basics",
+      "github-actions-docker-ecr",
+      "eks-cluster-basics"
+    ]
+  },
+  "jenkins-argocd-push-pull": {
+    "links": [
+      "k8s-deploy-pipeline-eks",
+      "argocd-basics",
+      "gitops-argocd-vs-flux",
+      "jenkins-on-kubernetes",
+      "helm-release-lifecycle",
+      "ci-cd-basics",
+      "kustomize-basics",
+      "rollback-strategy"
+    ],
+    "mentions": [
+      "k8s-pod-troubleshooting",
+      "jenkins-pipeline-basics",
+      "git-branch-merge",
+      "cache-write-policies",
+      "git-undo",
+      "helm-dependencies-oci-gitops",
+      "github-actions-docker-ecr",
+      "vpc-basics",
+      "webhooks"
+    ]
+  },
   "falco-runtime-security": {
     "links": [
       "cis-benchmark-kube-bench",
@@ -569,6 +688,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map"
     ],
     "mentions": [
+      "cpu-pipelining-branch-prediction",
       "rendering-strategies",
       "what-happens-google-com"
     ]
@@ -1273,6 +1393,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "observability-basics",
       "browser-fetch",
+      "cpu-instruction-cycle",
       "rendering-strategies",
       "http-status-codes",
       "bundler-basics"
@@ -1547,6 +1668,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-leaderboard-sorted-set"
     ],
     "mentions": [
+      "cpu-instruction-cycle",
       "page-cache-disk-io",
       "ds-linked-list",
       "redis-basics"
@@ -1612,6 +1734,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-memoization",
       "big-o-notation",
+      "cpu-cache-hierarchy",
       "sorting-algorithms",
       "js-array-mutation",
       "redis-basics"
@@ -1630,6 +1753,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "data-structures-overview"
     ],
     "mentions": [
+      "cpu-cache-hierarchy",
       "js-prototype-chain",
       "js-memoization"
     ]
@@ -1909,6 +2033,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "alerting"
     ],
     "mentions": [
+      "aws-ec2-ubuntu-server-setup",
       "k8s-daemonset",
       "k8s-pod-resources",
       "docker-container-basics",
@@ -1945,6 +2070,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "realtime-communication",
       "docker-container-basics",
+      "jenkins-on-kubernetes",
       "proxy-reverse-proxy",
       "eks-cluster-basics"
     ]
@@ -2795,6 +2921,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "event-loop",
+      "cpu-cache-hierarchy",
       "page-cache-disk-io",
       "kafka-basics"
     ]
@@ -3061,7 +3188,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "page-cache-disk-io",
       "tail-latency",
-      "vpc-basics"
+      "vpc-basics",
+      "cpu-pipelining-branch-prediction"
     ]
   },
   "sd-object-storage-architecture": {
@@ -4298,6 +4426,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "realtime-communication",
       "web-security-headers",
+      "cpu-pipelining-branch-prediction",
       "js-function-forms",
       "clock-skew"
     ]
@@ -4325,6 +4454,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-closures"
     ],
     "mentions": [
+      "cpu-instruction-cycle",
       "js-function-forms",
       "js-strict-mode"
     ]
@@ -5786,6 +5916,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kustomize-basics"
     ],
     "mentions": [
+      "jenkins-argocd-push-pull",
       "helm-chart-templates",
       "kubernetes-ingress",
       "git-undo",
@@ -5961,6 +6092,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-multicontainer",
       "dockerfile-image-layers",
       "iptables-basics",
+      "jenkins-on-kubernetes",
       "cilium-ebpf",
       "sdn-vxlan-overlay",
       "osi-in-practice",
@@ -7750,6 +7882,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-partitions",
       "sd-object-storage-architecture",
       "sd-start-single-server",
+      "cpu-cache-hierarchy",
       "sql-batch-timeout-pool",
       "redis-basics",
       "go-concurrency-basics",
@@ -8084,6 +8217,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "graphql-basics",
       "kubernetes-ingress",
+      "logic-gates-alu",
       "http-status-codes",
       "k8s-hpa",
       "dns",
@@ -8839,6 +8973,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "blue-green-deployment",
       "k8s-pod-basics",
+      "aws-ec2-ubuntu-server-setup",
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
@@ -9316,6 +9451,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "dhcp",
       "layer-ip-routing-icmp",
+      "aws-ec2-ubuntu-server-setup",
       "vpc-basics",
       "udp-and-quic",
       "dns"
@@ -10585,7 +10721,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "sql-batch-timeout-pool",
       "ipv6-basics",
-      "layer-ip-addressing"
+      "layer-ip-addressing",
+      "aws-ec2-ubuntu-server-setup"
     ]
   },
   "redis-cluster": {
@@ -10804,6 +10941,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "encryption-in-transit",
       "grpc",
       "layer-ip-routing-icmp",
+      "aws-ec2-ubuntu-server-setup",
       "first-page-from-power-on",
       "udp-and-quic"
     ]
@@ -11049,6 +11187,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "ipv6-basics",
       "layer-ip-routing-icmp",
+      "aws-ec2-ubuntu-server-setup",
       "dns"
     ]
   },
@@ -11238,6 +11377,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mysql-innodb-basics",
       "kafka-basics",
       "db-replication-sharding",
+      "cpu-pipelining-branch-prediction",
       "acid-transactions",
       "db-index-design"
     ]
@@ -11944,6 +12084,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "blue-green-deployment",
+      "aws-ec2-ubuntu-server-setup",
       "linux-systemd-systemctl",
       "realtime-communication",
       "proxy-reverse-proxy",
@@ -12211,6 +12352,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sdn-vxlan-overlay",
       "redis-basics",
       "ipv6-basics",
+      "aws-ec2-ubuntu-server-setup",
       "udp-and-quic",
       "dns"
     ]
@@ -12251,6 +12393,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-scripting",
       "grpc",
       "linux-processes-signals",
+      "aws-ec2-ubuntu-server-setup",
       "udp-and-quic"
     ]
   },
@@ -12315,6 +12458,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "ipv6-basics",
       "layer-ip-routing-icmp",
+      "aws-ec2-ubuntu-server-setup",
       "udp-and-quic",
       "layer-link-ethernet-arp",
       "dns"
@@ -12342,6 +12486,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dhcp",
       "grpc",
       "ipv6-basics",
+      "aws-ec2-ubuntu-server-setup",
       "udp-and-quic",
       "dns"
     ]
