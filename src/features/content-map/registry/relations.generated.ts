@@ -2,6 +2,49 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "digital-signatures-certificates": {
+    "links": [
+      "https-tls",
+      "k8s-certificates-pki",
+      "public-key-key-exchange",
+      "hash-hmac-password-hashing",
+      "encryption-in-transit"
+    ],
+    "mentions": [
+      "what-happens-google-com"
+    ]
+  },
+  "hash-hmac-password-hashing": {
+    "links": [
+      "passkeys-webauthn",
+      "mfa-totp",
+      "git-internals-basics",
+      "merkle-tree",
+      "webhooks",
+      "secrets-management"
+    ],
+    "mentions": []
+  },
+  "public-key-key-exchange": {
+    "links": [
+      "symmetric-encryption-aes",
+      "https-tls",
+      "encryption-in-transit",
+      "digital-signatures-certificates",
+      "encryption-at-rest"
+    ],
+    "mentions": []
+  },
+  "symmetric-encryption-aes": {
+    "links": [
+      "https-tls",
+      "encryption-in-transit",
+      "encryption-at-rest",
+      "public-key-key-exchange",
+      "hash-hmac-password-hashing"
+    ],
+    "mentions": []
+  },
   "fe-sd-news-feed": {
     "links": [
       "sd-news-feed-publishing",
@@ -149,6 +192,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "vpc-subnets-route-tables",
       "ansible-network-automation",
+      "public-key-key-exchange",
       "autoscaling",
       "iptables-nat",
       "cookie-session-login",
@@ -249,7 +293,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ids-ips",
       "waf"
     ],
-    "mentions": []
+    "mentions": [
+      "hash-hmac-password-hashing"
+    ]
   },
   "web-security-headers": {
     "links": [
@@ -302,7 +348,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "xss"
     ],
     "mentions": [
-      "base64"
+      "base64",
+      "digital-signatures-certificates"
     ]
   },
   "stream-processing": {
@@ -4302,6 +4349,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "what-happens-google-com",
+      "symmetric-encryption-aes",
       "first-page-from-power-on",
       "layer-link-ethernet-arp",
       "vlan-basics",
@@ -7780,6 +7828,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-advanced-sql",
+      "hash-hmac-password-hashing",
       "resilience-patterns",
       "layer-ip-addressing",
       "what-happens-google-com",
@@ -7960,6 +8009,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bloom-filter"
     ],
     "mentions": [
+      "digital-signatures-certificates",
       "db-type-wide-column",
       "db-type-key-value",
       "sd-kv-store-versioning",
@@ -9166,6 +9216,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "cron-jobs",
       "kubernetes-ingress",
+      "symmetric-encryption-aes",
       "encryption-at-rest",
       "linux-files-permissions",
       "local-k8s-kind-minikube",
@@ -9624,6 +9675,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "public-key-key-exchange",
       "webhooks",
       "what-happens-google-com",
       "ipv6-basics",
@@ -9694,6 +9746,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "elasticsearch-inverted-index",
       "base64",
+      "hash-hmac-password-hashing",
       "db-index-design"
     ]
   },
@@ -11657,9 +11710,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "edge-caching",
       "cookie-session-login",
       "page-cache-disk-io",
+      "public-key-key-exchange",
       "web-security-headers",
       "security-groups-nacl",
       "what-happens-google-com",
+      "symmetric-encryption-aes",
       "image-optimization",
       "first-page-from-power-on",
       "udp-and-quic",
@@ -12055,6 +12110,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway"
     ],
     "mentions": [
+      "digital-signatures-certificates",
       "kubernetes-ingress",
       "nginx-basics",
       "zero-trust-architecture",
@@ -12063,7 +12119,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks",
       "service-mesh",
       "http-versions",
+      "public-key-key-exchange",
       "encryption-in-transit",
+      "symmetric-encryption-aes",
       "first-page-from-power-on",
       "udp-and-quic",
       "http-methods"
@@ -12437,6 +12495,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-versions",
+      "digital-signatures-certificates",
       "sd-email-protocols",
       "cdn-edge-anycast",
       "sql-batch-timeout-pool",

@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "digital-signatures-certificates",
+    title: "전자 서명과 인증서: 서명 하나에서 신뢰 사슬까지",
+    summary: "자체 인증서를 테스트하다 만난 unable to get local issuer certificate 오류에서 출발해 RSA-PSS·ECDSA·Ed25519 서명을 직접 만들고, 루트·중간·리프 체인을 openssl로 세워 검증·파손시켜 본다. 폐기와 Certificate Transparency까지 다룬다.",
+    topic: "programming/security/cryptography",
+    tags: ["Security", "TLS", "Node.js"],
+    date: "2026-10-26",
+    keywords: ["전자 서명", "Ed25519", "RSA-PSS", "ECDSA nonce 재사용", "Certificate Transparency"],
+  },
+  {
+    slug: "hash-hmac-password-hashing",
+    title: "해시, HMAC, 비밀번호 저장: 빠른 해시가 독이 되는 자리",
+    summary: "유출된 SHA-256 비밀번호가 몇 분 만에 풀린 훈련에서 출발해 해시의 성질, 길이 확장 공격과 HMAC, scrypt·bcrypt·Argon2id의 솔트와 비용 파라미터, 상수 시간 비교를 node:crypto·openssl 실제 값으로 따라간다.",
+    topic: "programming/security/cryptography",
+    tags: ["Security", "Node.js", "Authentication"],
+    date: "2026-10-26",
+    keywords: ["비밀번호 해싱", "scrypt", "길이 확장 공격", "상수 시간 비교", "Argon2id"],
+  },
+  {
+    slug: "public-key-key-exchange",
+    title: "공개 키와 키 교환: RSA, 디피-헬먼, 그리고 ECDHE를 쓰는 이유",
+    summary: "처음 만나는 두 쪽이 열쇠를 보내지 않고 같은 비밀을 갖는 법을 X25519로 직접 돌려 본다. 작은 수로 RSA와 디피-헬먼을 계산하고, 하이브리드 암호화와 ECDHE 전방향 안전성, 포스트 양자 하이브리드까지 openssl 출력으로 본다.",
+    topic: "programming/security/cryptography",
+    tags: ["Security", "TLS", "Node.js"],
+    date: "2026-10-26",
+    keywords: ["디피-헬먼", "ECDHE", "하이브리드 암호화", "X25519", "포스트 양자 하이브리드"],
+  },
+  {
+    slug: "symmetric-encryption-aes",
+    title: "대칭 암호와 AES 모드: ECB·CBC·CTR·GCM이 각각 보장하는 것",
+    summary: "쿠폰 암호문 뒷부분이 똑같이 찍힌 버그에서 출발해 ECB 펭귄과 블록 재배치, CBC 비트 뒤집기, CTR 키스트림, GCM의 AEAD와 nonce 재사용을 node:crypto 실제 출력으로 따라간다. 모드가 곧 보안이라는 결론으로 모은다.",
+    topic: "programming/security/cryptography",
+    tags: ["Security", "Node.js"],
+    date: "2026-10-26",
+    keywords: ["AES 모드", "ECB 펭귄", "GCM 인증 태그", "패딩 오라클", "AEAD"],
+  },
+  {
     slug: "fe-sd-news-feed",
     title: "뉴스 피드 화면 설계: 가상화, 미리 부르기, 사진 자리, 새 글 띠",
     summary: "뉴스 피드를 휴대폰 화면 쪽에서 설계한다. 응답 모양과 커서, 5,000개 목록의 가상화, 바닥에 닿기 전 다음 페이지, 사진 크기와 CLS, 새 글과 스크롤 앵커링, 뒤로 가기 위치 복원, 낙관적 좋아요와 관측 지표를 실제로 잰다.",

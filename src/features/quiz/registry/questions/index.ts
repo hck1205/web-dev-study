@@ -105,6 +105,7 @@ import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
 import { DHCP } from "./dhcp";
+import { DIGITAL_SIGNATURES_CERTIFICATES } from "./digital-signatures-certificates";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -188,6 +189,7 @@ import { GRAPH_RAG } from "./graph-rag";
 import { GRAPHQL_BASICS } from "./graphql-basics";
 import { GREEDY_ALGORITHMS } from "./greedy-algorithms";
 import { GRPC } from "./grpc";
+import { HASH_HMAC_PASSWORD_HASHING } from "./hash-hmac-password-hashing";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
 import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
@@ -432,6 +434,7 @@ import { PRODUCTION_INCIDENTS } from "./production-incidents";
 import { PROMETHEUS_BASICS } from "./prometheus-basics";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
+import { PUBLIC_KEY_KEY_EXCHANGE } from "./public-key-key-exchange";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
@@ -585,6 +588,7 @@ import { SSRF } from "./ssrf";
 import { STREAM_PROCESSING } from "./stream-processing";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
+import { SYMMETRIC_ENCRYPTION_AES } from "./symmetric-encryption-aes";
 import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
 import { SYSTEM_DESIGN_STUDY_PATH } from "./system-design-study-path";
 import { TAIL_LATENCY } from "./tail-latency";
@@ -738,6 +742,7 @@ export const QUESTION_SETS = [
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
   DHCP,
+  DIGITAL_SIGNATURES_CERTIFICATES,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -821,6 +826,7 @@ export const QUESTION_SETS = [
   GRAPHQL_BASICS,
   GREEDY_ALGORITHMS,
   GRPC,
+  HASH_HMAC_PASSWORD_HASHING,
   HEALTH_CHECKS,
   HELM_BASICS,
   HELM_CHART_TEMPLATES,
@@ -1065,6 +1071,7 @@ export const QUESTION_SETS = [
   PROMETHEUS_BASICS,
   PROXY_REVERSE_PROXY,
   PUB_SUB,
+  PUBLIC_KEY_KEY_EXCHANGE,
   PYTHAGOREAN_THEOREM,
   QUADTREE,
   RABBITMQ_BASICS,
@@ -1218,6 +1225,7 @@ export const QUESTION_SETS = [
   STREAM_PROCESSING,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
+  SYMMETRIC_ENCRYPTION_AES,
   SYSTEM_DESIGN_CONCEPTS_MAP,
   SYSTEM_DESIGN_STUDY_PATH,
   TAIL_LATENCY,

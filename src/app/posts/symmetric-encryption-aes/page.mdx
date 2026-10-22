@@ -1,0 +1,339 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("symmetric-encryption-aes");
+
+쿠폰 코드를 서버에서 암호화해 발급하는 코드를 리뷰하다 이상한 걸 봤다. 1번 쿠폰과 2번 쿠폰의 암호문을 나란히 찍어 보니 뒷부분이 글자 하나 안 틀리고 똑같았다.
+
+```text
+coupon:000000001   47f43b9b74191754a8beee25ae038d75 c8b807ff5a50b94c50e4f5aedebd78e1 079c3f7d1059ccbdcb198a51f09c80c8
+coupon:000000002   92bf7c097a1dbdac0ef7916e81491ba0 c8b807ff5a50b94c50e4f5aedebd78e1 079c3f7d1059ccbdcb198a51f09c80c8
+```
+
+앞 16바이트(쿠폰 번호가 든 블록)만 다르고 나머지는 판박이다. 평문의 `|user=alice|exp=2026-12-31` 부분이 같으니 암호문도 같아진 것이다. 암호화를 분명히 했는데 평문이 같으면 암호문도 같다면, 그 암호는 뭔가를 숨기지 못하고 있다. 이 장면은 AES 자체의 문제가 아니라 AES를 **어떻게 이어 붙이느냐**(모드)의 문제다. 모드를 하나씩 바꿔 가며 같은 쿠폰을 암호화해 보면 왜 그런지 보인다.
+
+전송 구간 전체를 TLS로 감싸는 이야기는 [HTTPS는 무엇을 지켜 주나](/posts/https-tls)와 [전송 구간 암호화](/posts/encryption-in-transit)에, 디스크와 DB 컬럼을 암호화해 저장하는 이야기는 [저장 데이터 암호화](/posts/encryption-at-rest)에 있다. 이 글은 그 글들이 "AES-256-GCM", "CBC" 같은 이름으로 부르고 넘어간 대칭 암호 안쪽을 연다. 여기서 쓴 node:crypto 출력은 모두 이 컨테이너(Node 22, OpenSSL 3.0.13)에서 실제로 돌린 값이다.
+
+## 같은 키로 잠그고 같은 키로 연다
+
+대칭 암호는 잠글 때와 열 때 같은 키를 쓰는 방식이다. 상자 하나에 자물쇠 하나, 그 열쇠를 주고받는 두 사람이 똑같이 가진다. 비대칭(공개 키) 암호와 대비되는 이름이고, 둘을 어떻게 섞는지는 [공개 키와 키 교환](/posts/public-key-key-exchange) 글에서 다룬다. 여기서는 열쇠를 이미 나눠 가졌다고 보고, 그 열쇠로 데이터를 어떻게 잠그는지만 본다.
+
+대칭 암호는 크게 블록 암호와 스트림 암호로 나뉜다. 블록 암호는 정해진 크기(AES는 16바이트) 덩어리를 통째로 섞는다. 스트림 암호는 키에서 무한히 긴 키스트림을 뽑아 평문에 한 바이트씩 XOR한다. 오늘 쓰는 건 사실상 AES 하나와, 그 짝으로 쓰는 ChaCha20 정도다. 3DES나 RC4 같은 옛 암호는 현역에서 빠졌다.
+
+AES는 2001년 NIST가 공모로 고른 블록 암호다(원래 이름은 Rijndael). 키 길이는 128·192·256비트, 블록은 항상 128비트(16바이트)다. 입력 16바이트를 4×4 바이트 격자에 놓고, 바이트를 치환하고(SubBytes) 행을 밀고(ShiftRows) 열을 섞고(MixColumns) 라운드 키를 XOR하는 과정을 여러 라운드 반복한다. 128비트 키면 10라운드, 256비트면 14라운드다. 요지는 입력 한 비트만 바뀌어도 출력의 절반 가까이가 바뀌도록(확산·혼돈) 충분히 섞는다는 것이다.
+
+그런데 AES가 한 번에 다루는 건 딱 16바이트다. 쿠폰 문자열은 그보다 길다. 긴 데이터를 16바이트씩 잘라 AES를 여러 번 부를 때, 그 블록들을 어떻게 엮느냐가 운용 모드다. 맨 앞 장면은 가장 단순한 모드에서 나왔다.
+
+## 블록을 따로따로 잠그면 무늬가 남는다
+
+ECB(Electronic Codebook)는 블록마다 독립적으로 AES를 돌린다. 같은 평문 블록은 언제나 같은 암호문 블록이 된다. 그래서 쿠폰의 공통 꼬리가 같은 암호문으로 찍혔다.
+
+```js
+import { createCipheriv } from "node:crypto";
+const key = Buffer.from("000102030405060708090a0b0c0d0e0f", "hex"); // 데모용 고정 키
+const enc = (s) => {
+  const c = createCipheriv("aes-128-ecb", key, null); // ECB는 IV가 없다
+  return Buffer.concat([c.update(s), c.final()]);
+};
+const blocks = (b) => b.toString("hex").match(/.{32}/g).join(" ");
+for (const id of ["coupon:000000001", "coupon:000000002"]) {
+  console.log(id, blocks(enc(`${id}|user=alice|exp=2026-12-31`)));
+}
+```
+
+위 코드의 출력이 글 첫머리의 표다. 두 번째·세 번째 블록이 완전히 같다.
+
+<AlgoTrace
+  caption="같은 평문 블록은 같은 암호문 블록이 된다"
+  memoryLabel="암호문"
+  cells={["coupon:0000000", "1|user=alice|e", "xp=2026-12-31"]}
+  steps={[
+    { pointer: 0, memory: ["47f43b9b…"], caption: "1번 쿠폰의 첫 블록. 쿠폰 번호가 들어 있어 쿠폰마다 다르다." },
+    { pointer: 1, memory: ["47f43b9b…", "c8b807ff…"], caption: "둘째 블록은 user=alice 부분이다." },
+    { pointer: 2, found: [1, 2], memory: ["47f43b9b…", "c8b807ff…", "079c3f7d…"], caption: "2번 쿠폰도 둘째·셋째 블록 평문이 같아 암호문 c8b807ff…, 079c3f7d…가 그대로 다시 나온다." },
+  ]}
+/>
+
+유명한 "ECB 펭귄"이 이 성질을 보여 준다. 펭귄 그림을 ECB로 암호화하면 색만 바뀔 뿐 펭귄 윤곽이 그대로 비친다. 같은 색 픽셀 덩어리가 같은 암호문 덩어리가 되기 때문이다. 암호화했는데 원본의 모양이 남는다.
+
+무늬만 새는 게 아니다. 블록이 독립적이라 잘라 붙일 수 있다. 서버가 이메일을 받아 `email=…&role=user`를 ECB로 암호화해 토큰으로 돌려준다고 하자. 공격자는 키를 모르지만, 블록 하나가 통째로 `admin`+패딩이 되도록 이메일 길이를 맞춰 토큰 하나를 받고, `role=`이 블록 경계에 오도록 길이를 맞춰 토큰을 하나 더 받는다. 그다음 두 토큰의 블록을 오려 붙이면 된다.
+
+<SequenceDiagram
+  caption="키 없이 멀쩡한 블록만 재배치해 권한을 올린다"
+  actors={[
+    { id: "atk", label: "공격자" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "atk", to: "srv", label: "토큰 요청 1", title: "admin 블록을 만든다", detail: "블록 하나가 통째로 admin+패딩이 되도록 이메일 길이를 맞춰 토큰을 받는다.", payload: "email=xxxxxxxxxxadmin…" },
+    { from: "atk", to: "srv", label: "토큰 요청 2", title: "role= 경계를 맞춘다", detail: "role= 이 블록 끝에 오도록 길이를 맞춰 토큰을 하나 더 받는다.", payload: "email=mallory@attacker.com" },
+    { from: "atk", to: "atk", label: "블록 재배치", title: "두 토큰을 오려 붙인다", detail: "토큰2의 앞 두 블록에 토큰1의 admin 블록을 이어 붙인다. 키는 필요 없다." },
+    { from: "atk", to: "srv", label: "위조 토큰", title: "서버가 복호화한다", detail: "서버는 블록을 그대로 복호화해 role=admin을 읽는다.", payload: "email=mallory@attacker.com&role=admin" },
+  ]}
+/>
+
+```text
+t2      7820f3eeb248fd8689e77a31c7ecd157 c62bbdada5838c5155e82c7c963749cb 021a4a609f401e7e8c30cb1ef7ce46d3
+t1      8522120dea975b8f90866c249918236a f4f0de65a2d1deef1ffea25e937067c9 f16cc540fbc12e39bbaa7935033b1566
+forged  7820f3eeb248fd8689e77a31c7ecd157 c62bbdada5838c5155e82c7c963749cb f4f0de65a2d1deef1ffea25e937067c9
+decrypt "email=mallory@attacker.com&role=admin"
+```
+
+forged는 t2의 앞 두 블록에 t1의 둘째 블록(`admin`이 든 블록)을 이어 붙인 것이다. 서버가 복호화하면 `role=admin`이 나온다. 암호문을 위조한 게 아니라 멀쩡한 블록들을 재배치했을 뿐이다. ECB를 실무에서 쓰지 않는 이유가 이것이다. 블록 사이에 아무 연결이 없다.
+
+## 앞 블록을 다음 블록에 섞는다
+
+CBC(Cipher Block Chaining)는 블록을 사슬로 묶는다. 각 평문 블록을 AES에 넣기 전에 바로 앞 암호문 블록과 XOR한다. 첫 블록은 앞이 없으니 IV(초기화 벡터)라는 무작위 16바이트와 XOR한다. 이러면 같은 평문도 IV가 다르면 완전히 다른 암호문이 된다.
+
+<ConceptDiagram
+  width={440}
+  height={210}
+  caption="앞 암호문 블록이 다음 블록 암호화에 섞여 들어간다"
+  nodes={[
+    { id: "iv", label: "IV", sub: "무작위", x: 70, y: 40, w: 90 },
+    { id: "p1", label: "평문 1", sub: "", x: 70, y: 150, w: 90 },
+    { id: "c1", label: "암호문 1", sub: "AES(IV⊕P1)", x: 230, y: 95, w: 110 },
+    { id: "p2", label: "평문 2", sub: "", x: 230, y: 185, w: 100 },
+    { id: "c2", label: "암호문 2", sub: "AES(C1⊕P2)", x: 390, y: 95, w: 110 },
+  ]}
+  edges={[
+    { from: "iv", to: "c1", label: "⊕" },
+    { from: "p1", to: "c1", label: "⊕" },
+    { from: "c1", to: "c2", label: "앞 블록 섞음" },
+    { from: "p2", to: "c2", label: "⊕" },
+  ]}
+/>
+
+```js
+import { createCipheriv } from "node:crypto";
+const key = Buffer.from("000102030405060708090a0b0c0d0e0f", "hex");
+const enc = (iv, s) => {
+  const c = createCipheriv("aes-128-cbc", key, iv);
+  return Buffer.concat([c.update(s), c.final()]);
+};
+const msg = "coupon:000000001|user=alice|exp=2026-12-31";
+const hex = (b) => b.toString("hex").match(/.{32}/g).join(" ");
+console.log(hex(enc(Buffer.from("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf", "hex"), msg)));
+console.log(hex(enc(Buffer.from("b0b1b2b3b4b5b6b7b8b9babbbcbdbebf", "hex"), msg)));
+```
+
+```text
+d8bfbcf1311f0aeeef77d18586c1bb2b a87737406e024722122e83590638820f dc5db9c5605ad1847df8f1b335105a77
+e44f263c0ab083ceced1f91fe828ca3c 2792d80749926db157afe3734d71068f 5b03748291f1beda751812fbe7eb06fa
+```
+
+같은 쿠폰인데 IV만 바꿨더니 모든 블록이 달라졌다. IV는 비밀이 아니어도 되지만(암호문 앞에 그냥 붙여 보낸다) **예측할 수 없어야** 하고 매번 새로 뽑아야 한다. 고정 IV를 쓰면 ECB의 "같은 평문 → 같은 암호문" 문제가 첫 블록에서 되살아난다.
+
+CBC에는 또 하나, 블록을 꽉 채워야 한다는 제약이 있다. 평문 길이가 16의 배수가 아니면 PKCS#7 패딩으로 채운다. 모자란 바이트 수 n을 값 n으로 n개 채우고, 딱 떨어지면 16짜리 블록을 통째로 더 붙인다. 아래는 `hello`(5바이트)를 CBC로 암호화한 뒤 패딩을 풀지 않고 들여다본 결과다.
+
+```text
+68656c6c6f 0b0b0b0b0b0b0b0b0b0b0b
+```
+
+`68 65 6c 6c 6f`가 `hello`이고 뒤의 `0b`(11) 열한 개가 패딩이다. 복호화할 때는 마지막 바이트를 보고 그만큼 떼어 낸다.
+
+## 패딩이 맞는지 알려 주면 그게 샌다
+
+CBC의 패딩은 유명한 공격의 발판이 된다. 복호화하는 쪽이 "패딩이 맞다/틀리다"를 공격자에게 구분해서 알려 주면, 공격자는 키 없이 암호문을 한 바이트씩 풀 수 있다. 이게 패딩 오라클(padding oracle)이다.
+
+구조만 짚으면 이렇다. 공격자는 암호문 앞 블록의 바이트를 조금씩 바꿔 서버에 던진다. CBC 복호화는 "앞 암호문 블록 XOR AES 복호화 결과"가 평문이 되므로, 앞 블록을 조작하면 마지막 블록의 평문 바이트를 통제할 수 있다. 마지막 바이트가 유효한 패딩(`0x01`)이 되도록 맞추면 서버가 "패딩 OK"를 돌려주고, 그 순간 공격자는 AES 복호화 중간값을 알게 된다. 그 값에서 원래 평문 바이트가 역산된다. 이 과정을 바이트마다 반복하면 블록 전체가 풀린다. TLS에서 CBC를 노린 Lucky Thirteen, POODLE이 이 계열이다.
+
+막는 방법은 "패딩 틀림"과 "복호화 후 내용 틀림"을 겉으로 구분하지 않는 것이지만, 실무에서 더 확실한 답은 패딩 자체가 없고 위조를 암호가 직접 잡아내는 모드로 가는 것이다. 그게 뒤에 나오는 GCM이다.
+
+## 암호문을 바꾸면 평문이 원하는 대로 바뀐다
+
+패딩을 안 건드려도 CBC는 또 샌다. CBC 복호화에서 첫 블록 평문은 `AES복호화(C1) XOR IV`다. 공격자가 IV의 어떤 바이트를 뒤집으면 그 자리 평문 바이트가 정확히 같은 만큼 뒤집힌다. 키가 전혀 필요 없다. 세션 토큰 `role=user…`의 IV 몇 바이트를 고쳐 `role=root…`로 바꿔 봤다.
+
+```text
+iv     a0a1a2a3a4a5a6a7a8a9aaabacadaeaf
+evilIv a0a1a2a3a4a2baadaea9aaabacadaeaf
+decrypt "role=root;uid=1001;exp=2026-12-31"
+```
+
+IV 다섯 바이트만 고쳤는데 평문 `user`가 `root`로 바뀌었다. 복호화는 오류 하나 없이 성공한다. CBC는 **기밀성만** 준다. 내용이 바뀌지 않았다는 보장(무결성)은 주지 않는다. 그래서 CBC를 쓰려면 반드시 따로 MAC을 붙여야 하고, 그 MAC을 "암호화한 다음 암호문에" 거는 순서(Encrypt-then-MAC)를 지켜야 한다. 순서를 틀리면 위 패딩 오라클류가 되살아난다. 이 순서 문제를 애초에 없앤 것이 AEAD다.
+
+## 블록 암호를 스트림처럼 쓰기
+
+CTR(Counter) 모드는 AES를 블록 암호가 아니라 스트림 암호처럼 쓴다. 평문을 AES에 넣지 않는다. 대신 카운터(nonce+증가값)를 AES로 암호화해 키스트림을 만들고, 그걸 평문에 XOR한다.
+
+```js
+import { createCipheriv } from "node:crypto";
+const key = Buffer.from("000102030405060708090a0b0c0d0e0f", "hex");
+const iv = Buffer.from("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff", "hex");
+const e = (s) => {
+  const x = createCipheriv("aes-128-ctr", key, iv);
+  return Buffer.concat([x.update(s), x.final()]);
+};
+console.log("ct(hello) ", e("hello").toString("hex"));        // 0ec2ab845b (5바이트)
+console.log("keystream ", e(Buffer.alloc(5)).toString("hex")); // 66a7c7e834
+```
+
+```text
+ct(hello)  0ec2ab845b
+keystream  66a7c7e834
+```
+
+평문 길이만큼만 키스트림을 쓰므로 패딩이 필요 없다. 암호문 길이 = 평문 길이다. 블록 사이가 독립적이라 병렬 처리와 임의 위치 접근이 쉽다. 디스크 암호화의 XTS, 뒤에 볼 GCM이 모두 CTR 계열이다. 아래는 `hello`가 어떻게 키스트림과 XOR되어 암호문이 되는지다.
+
+<AlgoTrace
+  caption="평문을 AES에 넣지 않고 키스트림과 XOR한다"
+  memoryLabel="키스트림"
+  cells={["h", "e", "l", "l", "o"]}
+  steps={[
+    { memory: ["AES(iv) = 66a7c7e834"], caption: "카운터(iv)를 AES로 암호화해 키스트림 66a7c7e834를 만든다. 평문은 아직 손대지 않았다." },
+    { pointer: 0, memory: ["68 ^ 66 = 0e"], caption: "평문 h(0x68)를 키스트림 첫 바이트 0x66과 XOR하면 암호문 0x0e." },
+    { pointer: 2, memory: ["6c ^ c7 = ab"], caption: "같은 방식으로 한 바이트씩. l(0x6c) ^ 0xc7 = 0xab." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["ct = 0ec2ab845b"], caption: "다섯 바이트를 다 XOR하면 암호문 0ec2ab845b. 복호화는 같은 키스트림을 다시 XOR하면 끝난다." },
+  ]}
+/>
+
+CTR의 급소는 키스트림 재사용이다. 같은 키와 같은 카운터로 두 번 암호화하면 키스트림이 같다. 두 암호문을 XOR하면 키스트림이 지워지고 두 평문의 XOR이 드러난다. 한쪽 평문을 알면 다른 쪽이 그대로 나온다. 같은 실수가 GCM에서 더 치명적이라, 그 실측은 [저장 데이터 암호화의 nonce 재사용](/posts/encryption-at-rest#gcm에서-nonce를-다시-쓰면) 글에서 직접 평문을 복원해 본다. 여기서는 "nonce는 키마다 한 번만"이라는 규칙만 들고 간다.
+
+## 잠그면서 위조까지 잡는다
+
+AEAD(Authenticated Encryption with Associated Data)는 기밀성과 무결성을 한 번에 준다. 암호화하면 인증 태그가 함께 나오고, 복호화할 때 태그가 맞지 않으면 평문을 한 글자도 내주지 않고 실패한다. 오늘 기본값은 AES-GCM이다. GCM은 CTR로 암호화하면서 GHASH라는 함수로 태그를 계산한다.
+
+연관 데이터(AAD)는 암호화하지는 않지만 태그 계산에는 넣는 값이다. 버전 번호나 사용자 ID처럼 "암호문과 묶여 있어야 하지만 내용은 공개여도 되는" 꼬리표를 여기 넣는다. AAD가 한 글자만 달라도 태그 검증이 실패한다.
+
+```js
+import { createCipheriv, createDecipheriv } from "node:crypto";
+const key = Buffer.from("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff", "hex");
+const iv = Buffer.from("cafebabefacedbaddecaf888", "hex"); // GCM nonce는 96비트 권장
+const aad = Buffer.from("user:42|v1");
+const c = createCipheriv("aes-256-gcm", key, iv);
+c.setAAD(aad);
+const ct = Buffer.concat([c.update("card=4111111111111111", "utf8"), c.final()]);
+const tag = c.getAuthTag();
+console.log("ct ", ct.toString("hex"), `(${ct.length} bytes)`);
+console.log("tag", tag.toString("hex"));
+
+function open(ctIn, tagIn, aadIn) {
+  const d = createDecipheriv("aes-256-gcm", key, iv);
+  d.setAAD(aadIn); d.setAuthTag(tagIn);
+  return Buffer.concat([d.update(ctIn), d.final()]).toString();
+}
+const bad = Buffer.from(ct); bad[5] ^= 0x01; // 암호문 한 비트 변조
+try { open(bad, tag, aad); } catch (e) { console.log("tampered:", e.message); }
+try { open(ct, tag, Buffer.from("user:43|v1")); } catch (e) { console.log("wrong aad:", e.message); }
+```
+
+```text
+ct  e9c2d242974e7e2a773a6cec4a2cb80e3c11f160ee (21 bytes)
+tag 074bd4067ef42130d6100a163595788b
+tampered: Unsupported state or unable to authenticate data
+wrong aad: Unsupported state or unable to authenticate data
+```
+
+CBC에서 비트를 뒤집어 평문을 바꾸던 공격이 여기서는 통하지 않는다. 한 비트만 건드려도 `final()`에서 던진다. 암호문 길이가 평문과 같은 21바이트인 것도 CTR 계열이라 패딩이 없어서다. GCM으로 무언가를 저장하려면 이 네 조각을 함께 보관한다.
+
+<UrlAnatomy
+  caption="AES-GCM 출력 한 묶음"
+  base="gcm"
+  separator=" :: "
+  joiner=" :: "
+  params={[
+    { key: "iv", display: "iv (12B)", title: "nonce", description: "암호화에 쓴 96비트 nonce. 비밀은 아니지만 키마다 유일해야 한다. 재사용하면 기밀성과 인증이 함께 깨진다.", code: "cafebabefacedbaddecaf888", required: true },
+    { key: "ct", display: "ct (21B)", title: "암호문", description: "CTR로 암호화한 본문. 길이가 평문과 같다.", code: "e9c2d242974e7e2a773a6cec4a2cb80e3c11f160ee", required: true },
+    { key: "tag", display: "tag (16B)", title: "인증 태그", description: "GHASH로 계산한 무결성 태그. 암호문이나 AAD가 한 비트만 바뀌어도 검증이 실패한다.", code: "074bd4067ef42130d6100a163595788b", required: true },
+    { key: "aad", display: "aad", title: "연관 데이터", description: "암호화하지 않지만 태그 계산에 넣는 꼬리표. 버전·사용자 ID처럼 암호문과 묶여야 하는 공개 값을 둔다.", code: "user:42|v1" },
+  ]}
+/>
+
+조심할 함정이 둘 있다. 첫째, node:crypto는 `final()`에서 태그를 검증한다. `update()`가 돌려주는 평문은 **아직 검증 전**이다. 변조된 암호문도 `update()`만 부르면 평문 비슷한 게 나온다.
+
+```text
+update only : card=5111111111111111
+```
+
+변조한 첫 바이트만 틀리고 나머지는 멀쩡해 보인다. 그래서 `update()` 결과를 `final()` 호출 전에 쓰면 안 된다. 반드시 `final()`까지 성공한 뒤에 평문을 쓴다.
+
+둘째, 태그를 짧게 자르면 위조가 쉬워진다. node:crypto는 GCM에서 4·8·12·13·14·15·16바이트 태그만 받고, 그보다 짧으면 거부한다.
+
+<Callout kind="warning">
+GCM에서 같은 키로 같은 nonce를 두 번 쓰면 기밀성만 깨지는 게 아니라 인증 키(H)까지 노출되어 **이후 메시지를 위조**할 수 있다. nonce는 키마다 유일해야 한다. 무작위 96비트 nonce는 한 키로 약 2³²개를 넘기면 충돌 확률이 무시할 수 없어지니, 그쯤에서 키를 바꾸거나 카운터 기반 nonce를 쓴다.
+</Callout>
+
+## 패딩을 손으로 풀어 본다
+
+CBC·ECB 복호화 마지막에 PKCS#7 패딩을 떼어 내는 함수를 직접 짜 보면 패딩 검증이 왜 까다로운지 손에 잡힌다. 마지막 바이트 n을 읽고, 끝 n개가 모두 n인지 확인한 뒤 잘라 낸다. 하나라도 어긋나면 유효하지 않은 패딩이다. 아래 테스트의 기대값은 모두 node로 실제 돌려 확인했다.
+
+<CodePlayground
+  caption="PKCS#7 패딩 풀기"
+  functionName="unpad"
+  initialCode={`function unpad(bytes, blockSize) {
+  // bytes: 복호화된 바이트 배열, blockSize: 블록 크기(보통 16)
+  // 유효한 패딩이면 패딩을 뗀 배열, 아니면 null을 반환한다
+  return bytes;
+}`}
+  solution={`function unpad(bytes, blockSize) {
+  if (bytes.length === 0 || bytes.length % blockSize !== 0) return null;
+  const n = bytes[bytes.length - 1];
+  if (n < 1 || n > blockSize) return null;
+  for (let i = bytes.length - n; i < bytes.length; i++) {
+    if (bytes[i] !== n) return null;
+  }
+  return bytes.slice(0, bytes.length - n);
+}`}
+  tests={[
+    { label: "hello + 패딩 11", args: [[104, 101, 108, 108, 111, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11], 16], expected: [104, 101, 108, 108, 111] },
+    { label: "패딩 4 (8바이트 블록)", args: [[1, 2, 3, 4, 4, 4, 4, 4], 8], expected: [1, 2, 3, 4] },
+    { label: "블록 통째 패딩", args: [[1, 2, 3, 4, 5, 6, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8], 8], expected: [1, 2, 3, 4, 5, 6, 7, 8] },
+    { label: "패딩 바이트가 안 맞음", args: [[1, 2, 3, 4, 5, 6, 2, 3], 8], expected: null },
+    { label: "마지막이 0", args: [[1, 2, 3, 4, 5, 6, 7, 0], 8], expected: null },
+    { label: "n이 블록보다 큼", args: [[1, 2, 3, 4, 5, 6, 7, 9], 8], expected: null },
+    { label: "블록 배수가 아님", args: [[1, 2, 3], 8], expected: null },
+  ]}
+/>
+
+이 "유효/무효" 판정 결과를 공격자에게 응답 차이로 흘리면 앞의 패딩 오라클이 된다. GCM을 쓰면 애초에 이 함수가 없다.
+
+## 모드를 고르는 기준과 속도
+
+정리하면 ECB는 쓰지 않는다. 기밀성과 무결성이 함께 필요하면(거의 항상) AES-GCM이나 ChaCha20-Poly1305 같은 AEAD를 쓴다. CBC는 레거시 호환이 아니면 새로 고르지 않고, 쓰더라도 Encrypt-then-MAC을 붙인다. CTR은 날것으로 쓰기보다 GCM의 구성 요소로 만난다.
+
+속도도 선택에 들어간다. 이 컨테이너(AES-NI 지원)에서 `openssl speed`로 16KB 블록을 잰 처리량이다.
+
+```text
+AES-128-GCM        14496546.82k
+ChaCha20-Poly1305   3235397.63k
+AES-128-CBC         1410990.08k
+```
+
+AES-NI가 있는 CPU에서는 AES-GCM이 압도적으로 빠르다. 반대로 AES 전용 명령어가 없는 저가 모바일·IoT에서는 소프트웨어로도 빠른 ChaCha20-Poly1305가 유리하다. TLS 1.3이 두 암호를 모두 두고, 클라이언트가 자기 기기에 맞는 쪽을 앞세우게 한 이유다([HTTPS 글의 본문은 대칭키로 빠르게](/posts/https-tls#본문은-대칭키로-빠르게)).
+
+<Callout kind="note">
+키를 "비밀번호 문자열"에서 바로 만들지 않는다. `createCipheriv`에는 16·32바이트 키가 그대로 들어가야 한다. 사람이 외우는 암호에서 키를 뽑으려면 scrypt나 Argon2 같은 키 유도 함수를 거친다. 그 이야기는 [해시와 HMAC, 비밀번호 저장](/posts/hash-hmac-password-hashing) 글에서 다룬다.
+</Callout>
+
+## 모드가 곧 보안이다
+
+AES는 거의 깨지지 않지만, 그 AES로 무엇을 보장하느냐는 전적으로 모드가 정한다. ECB는 무늬와 블록 재배치를 허용하고, CBC는 기밀성만 주고 변조를 못 막으며, CTR은 nonce를 재사용하면 무너진다. 그래서 실무의 기본 답은 하나로 모인다. 직접 모드를 조립하지 말고 AEAD(AES-GCM 또는 ChaCha20-Poly1305)를 쓰고, nonce를 키마다 유일하게 관리하는 것. 더 깊은 키 교환과 저장 키 관리는 이어지는 [공개 키와 키 교환](/posts/public-key-key-exchange), [저장 데이터 암호화](/posts/encryption-at-rest) 글로 넘어간다.
+
+## 면접에서 나올 만한 질문
+
+### ECB 모드를 쓰면 안 되는 이유는 무엇인가요?
+
+ECB는 같은 평문 블록을 항상 같은 암호문 블록으로 바꾼다. 그래서 암호화해도 반복되는 패턴(ECB 펭귄)이 그대로 드러나고, 블록이 서로 독립적이라 공격자가 암호문 블록을 오려 붙여 의미 있는 다른 메시지를 만들 수 있다. 기밀성도 무결성도 제대로 주지 못해서 실무에서 쓰지 않는다.
+
+### CBC에서 IV는 왜 필요하고 어떤 조건을 지켜야 하나요?
+
+IV는 첫 블록을 암호화 전에 XOR해서 같은 평문이라도 매번 다른 암호문이 나오게 한다. 비밀일 필요는 없어서 암호문 앞에 그냥 붙여 보내지만, 예측 불가능하게 매번 새로 뽑아야 한다. 고정 IV나 예측 가능한 IV를 쓰면 같은 평문이 같은 암호문이 되는 ECB류 누수가 첫 블록에서 되살아난다.
+
+### CBC는 왜 무결성을 주지 못하나요?
+
+CBC 복호화에서 평문 블록은 앞 암호문 블록(첫 블록은 IV)과 XOR한 결과라서, 공격자가 암호문이나 IV의 바이트를 뒤집으면 대응하는 평문 바이트가 정확히 그만큼 뒤집힌다. 키 없이 평문을 조작할 수 있고 복호화는 오류 없이 성공한다. 그래서 CBC를 쓰려면 Encrypt-then-MAC으로 MAC을 따로 걸어야 하고, 이 과정을 안 틀리게 하는 게 AEAD다.
+
+### AEAD(예: AES-GCM)가 CBC+MAC보다 나은 점은 무엇인가요?
+
+AEAD는 암호화와 무결성 검증을 한 알고리즘이 함께 처리해서, MAC을 어떤 순서로 붙일지 고민할 필요가 없다. 복호화 시 태그가 맞지 않으면 평문을 전혀 내주지 않아 패딩 오라클 같은 공격의 발판이 사라진다. 연관 데이터(AAD)로 암호화하지 않는 꼬리표까지 함께 묶어 검증할 수 있다.
+
+### AES-GCM에서 가장 조심해야 할 실수는 무엇인가요?
+
+같은 키로 같은 nonce를 두 번 쓰는 것이다. GCM은 내부가 CTR이라 nonce가 겹치면 키스트림이 같아져 평문이 드러날 뿐 아니라, 인증 키까지 노출되어 이후 메시지를 위조할 수 있다. 무작위 96비트 nonce는 한 키당 약 2³²개 근처에서 키를 교체하고, 그 이상 쓸 때는 카운터 기반 nonce로 유일성을 보장한다.
+
+### node:crypto로 GCM을 쓸 때 update가 돌려준 평문을 바로 쓰면 왜 위험한가요?
+
+node:crypto는 `final()`에서 태그를 검증하기 때문에, `update()`가 내놓는 평문은 아직 위조 여부가 확인되지 않은 값이다. 변조된 암호문도 `update()`만 부르면 평문 비슷한 바이트가 나온다. 반드시 `final()`까지 예외 없이 끝난 뒤에 평문을 사용해야 한다.
+
+### 서버 CPU에 따라 AES-GCM과 ChaCha20-Poly1305를 어떻게 고르나요?
+
+AES-NI 같은 하드웨어 가속이 있는 서버·PC에서는 AES-GCM이 가장 빠르다. 이 컨테이너 측정에서도 AES-128-GCM이 ChaCha20-Poly1305보다 네 배가량 빨랐다. 반대로 AES 전용 명령어가 없는 저가 모바일·IoT에서는 소프트웨어로만 돌려도 빠른 ChaCha20-Poly1305가 유리해서, TLS 1.3은 둘 다 두고 클라이언트가 선호를 앞세우게 한다.

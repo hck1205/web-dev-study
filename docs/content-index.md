@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 630편 · 토픽 92개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 634편 · 토픽 92개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -335,8 +335,8 @@
 - 길이: 382줄
 - 소제목: 해시를 쌓아 올린 나무 / 루트가 다르면 다른 가지만 따라 내려간다 / 블록 하나가 들어 있다는 짧은 증명 / Git의 tree 객체도 머클 트리다 / 복제본 수리: Cassandra repair / 인증서 투명성과 블록체인 / 직접 만들 때 생기는 구멍 / 대안과 고르는 기준 / 해시 하나가 아래 전체를 대신한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: eventual-consistency, git-internals-basics, rsync-algorithm, bloom-filter
-- 키워드 백링크 →: db-type-wide-column, db-type-key-value, sd-kv-store-versioning, build-caching
-- 이 글로 오는 글 ←: eventual-consistency, fault-tolerance, git-internals-basics, rsync-algorithm, sd-kv-store-failure-handling, sd-kv-store-write-read-path, sd-object-storage-durability, system-design-study-path
+- 키워드 백링크 →: digital-signatures-certificates, db-type-wide-column, db-type-key-value, sd-kv-store-versioning, build-caching
+- 이 글로 오는 글 ←: eventual-consistency, fault-tolerance, git-internals-basics, hash-hmac-password-hashing, rsync-algorithm, sd-kv-store-failure-handling, sd-kv-store-write-read-path, sd-object-storage-durability, system-design-study-path
 
 #### `operational-transform` — Operational Transformation: 동시 편집을 위치 변환으로 맞추기
 
@@ -501,7 +501,7 @@
 - 길이: 616줄
 - 소제목: 데이터가 그대로인데 페이지가 겹친다 / 정렬 키 끝에는 유일한 열을 붙인다 / 인덱스 순서와 테이블 순서가 다르면 OFFSET은 더 비싸다 / 정렬 방향이 섞이면 행 비교를 못 쓴다 / NULL이 섞인 열로 정렬하면 행이 사라진다 / 이전 페이지로 돌아가기 / 커서에 담을 것과 지킬 것 / 직접 짜 보는 커서 비교 / 전체 개수와 페이지 번호가 꼭 필요할 때 / 목록이 이상하다는 문의가 오면 / 페이지는 정렬이 정해져야 잘린다 / 면접에서 나올 만한 질문
 - 직접 링크 →: rest-api-design, sql-query-rewrite
-- 키워드 백링크 →: elasticsearch-inverted-index, base64, db-index-design
+- 키워드 백링크 →: elasticsearch-inverted-index, base64, hash-hmac-password-hashing, db-index-design
 - 이 글로 오는 글 ←: api-styles-overview, batch-processing, data-fetching-optimization, fe-sd-news-feed, frontend-system-design-interview, sd-news-feed-retrieval, sorting-algorithms, sql-query-rewrite, system-design-concepts-map
 
 #### `api-styles-overview` — API 스타일 한눈에 보기: REST, RPC, GraphQL과 웹훅, WebSocket, HTTP 스트리밍
@@ -611,8 +611,8 @@
 - 길이: 391줄
 - 소제목: 묻지 않아도 알려 주는 HTTP 요청 / 누가 보냈는지 서명으로 확인한다 / 받는 쪽 서버를 직접 띄워 공격해 본다 / 처리를 끝내고 응답하면 세 번 처리된다 / 순서는 보장되지 않는다 / 보내는 쪽이 되면 SSRF를 막는다 / 웹훅이 이상할 때 보는 순서 / 받는 쪽은 의심하고, 보내는 쪽은 조심한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: retries, idempotency-key, realtime-communication, clock-skew, timeouts, message-queue-basics, dead-letter-queue, ssrf, exponential-backoff-jitter
-- 키워드 백링크 →: postgres-advanced-sql, resilience-patterns, layer-ip-addressing, what-happens-google-com, ipv6-basics, vpc-basics, http-methods, dns
-- 이 글로 오는 글 ←: alerting, api-styles-overview, api-versioning, architecture-patterns-overview, argocd-basics, bullmq-job-queue, cold-starts, cron-jobs, db-performance-map, ddos-protection, eks-cluster-basics, enterprise-system-integration, first-page-from-power-on, gitops-argocd-vs-flux, http-versions, https-tls, jenkins-pipeline-basics, k8s-admission-control, k8s-audit-logging, k8s-batch-kueue, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-security-admission, k8s-rbac, k8s-serviceaccount-tokens, kubectl-apply-ssa, kubernetes-ingress, on-call, postgres-jsonb-search, sd-metrics-collection, sd-metrics-storage-alerting, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-limits, sit-uat-testing, sql-interview-problems, ssrf, system-design-study-path, transactional-outbox, vpn-ipsec-wireguard, what-happens-google-com
+- 키워드 백링크 →: postgres-advanced-sql, hash-hmac-password-hashing, resilience-patterns, layer-ip-addressing, what-happens-google-com, ipv6-basics, vpc-basics, http-methods, dns
+- 이 글로 오는 글 ←: alerting, api-styles-overview, api-versioning, architecture-patterns-overview, argocd-basics, bullmq-job-queue, cold-starts, cron-jobs, db-performance-map, ddos-protection, eks-cluster-basics, enterprise-system-integration, first-page-from-power-on, gitops-argocd-vs-flux, hash-hmac-password-hashing, http-versions, https-tls, jenkins-pipeline-basics, k8s-admission-control, k8s-audit-logging, k8s-batch-kueue, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-feature-maturity, k8s-job-cronjob, k8s-learning-roadmap, k8s-namespace, k8s-operators, k8s-pod-security-admission, k8s-rbac, k8s-serviceaccount-tokens, kubectl-apply-ssa, kubernetes-ingress, on-call, postgres-jsonb-search, sd-metrics-collection, sd-metrics-storage-alerting, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-limits, sit-uat-testing, sql-interview-problems, ssrf, system-design-study-path, transactional-outbox, vpn-ipsec-wireguard, what-happens-google-com
 
 ### Programming › Backend › Architecture (`programming/backend/architecture`)
 
@@ -803,7 +803,7 @@
 - 소제목: 두 번째 요소가 막는 것 / 처음 한 번 비밀을 나눠 갖는다 / 시계를 숫자로 바꾸는 계산 / 서버가 받아 줄 범위를 정한다 / 휴대폰을 잃었을 때를 먼저 만든다 / 문자 메시지 코드가 약한 자리 / 푸시 승인과 반복 요청 / 숫자 코드로는 못 막는 피싱 / 2단계 인증을 붙일 때 흔히 놓치는 것 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: passkeys-webauthn, encryption-at-rest, clock-skew, rate-limiting-in-practice, sso-saml-oidc
 - 키워드 백링크 →: cookie-session-login, oauth, db-modeling-normalization
-- 이 글로 오는 글 ←: clock-skew, owasp-top-10-map, passkeys-webauthn
+- 이 글로 오는 글 ←: clock-skew, hash-hmac-password-hashing, owasp-top-10-map, passkeys-webauthn
 
 #### `oauth` — OAuth 2.0, 비밀번호 대신 열쇠를 빌려주는 규칙
 
@@ -823,8 +823,8 @@
 - 길이: 478줄
 - 소제목: 비밀번호는 서버와 나눠 가진 비밀이다 / 등록하면 기기 안에서 열쇠 한 쌍이 생긴다 / 로그인은 challenge에 서명하는 일이다 / 서명된 바이트를 뜯어보면 / 가짜 사이트에서는 열쇠가 나오지 않는다 / 같은 응답을 두 번 보내면 / 기기에 묶인 열쇠와 동기화되는 열쇠 / 사용자 이름 칸에서 바로 고르기 / 붙이기 전에 정할 것들 / 패스키 로그인이 안 될 때 보는 곳 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: cookie-session-login, token-login, mfa-totp, sso-saml-oidc, xss
-- 키워드 백링크 →: base64
-- 이 글로 오는 글 ←: mfa-totp, owasp-top-10-map, sso-saml-oidc, zero-trust-architecture
+- 키워드 백링크 →: base64, digital-signatures-certificates
+- 이 글로 오는 글 ←: hash-hmac-password-hashing, mfa-totp, owasp-top-10-map, sso-saml-oidc, zero-trust-architecture
 
 #### `sso-saml-oidc` — SSO: SAML과 OIDC로 로그인을 한곳에 모으기
 
@@ -1153,7 +1153,7 @@
 - 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, merkle-tree, git-troubleshooting, git-stash-reflog
 - 키워드 백링크 →: github-actions-docker-ecr, git-tips-advanced, git-branching-strategy, git-large-files-secrets, sd-object-storage-architecture, build-caching
-- 이 글로 오는 글 ←: build-caching, git-branch-merge, git-features-map, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
+- 이 글로 오는 글 ←: build-caching, git-branch-merge, git-features-map, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, hash-hmac-password-hashing, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
 
 #### `git-large-files-secrets` — 커밋에 들어가면 안 되는 것: 큰 파일, 비밀 값, 줄바꿈, 권한
 
@@ -3741,7 +3741,7 @@
 - 길이: 451줄
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
-- 키워드 백링크 →: http-versions, sd-email-protocols, cdn-edge-anycast, sql-batch-timeout-pool, udp-and-quic, ipv6-basics
+- 키워드 백링크 →: http-versions, digital-signatures-certificates, sd-email-protocols, cdn-edge-anycast, sql-batch-timeout-pool, udp-and-quic, ipv6-basics
 - 이 글로 오는 글 ←: authn-vs-authz, backend-engineer-roadmap, bloom-filter, blue-green-deployment, browser-fetch, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, cdn-edge-anycast, ci-cd-basics, cilium-ebpf, circuit-breaker, clock-skew, core-web-vitals, css-performance, curl-for-debugging, db-performance-map, db-replication-sharding, db-type-key-value, db-type-wide-column, ddos-protection, debugging-with-logs, devops-networking-roadmap, dhcp, disaster-recovery, distributed-lock, docker-compose, docker-network-drivers, docker-network-volume, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, eventual-consistency, exponential-backoff-jitter, failover, first-page-from-power-on, frontend-as-distributed-system, gateway, grpc, high-availability, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iac-basics, ids-ips, iptables-basics, iptables-nat, ipv6-basics, js-memoization, js-memory-leak, k8s-api-objects, k8s-batch-kueue, k8s-certificates-pki, k8s-certifications, k8s-coredns, k8s-gateway-api, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-operators, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-service-types, k8s-statefulset, kafka-vs-rabbitmq-replay, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leader-election, linux-network-tuning, load-balancer-basics, local-custom-domain, logging-tools-overview, lossy-counting, module-federation-deep-dive, monitoring-basics, multi-region, network-flow-logs, network-layers-overview, network-monitoring, network-partitions, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, nodejs-server-runtime, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, pattern-facade, pattern-proxy, percentile-latency, performance-metrics-measurement, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, pub-sub, rabbitmq-basics, redis-basics, redis-memory-eviction, redis-persistence-ha, release-cutover-hypercare, resource-hints-loading, router-vs-switch, scaling-horizontal-vertical, sd-cache-and-cdn-tier, sd-chat-presence, sd-email-protocols, sd-hotel-inventory-scaling, sd-load-balancer-stateless, sd-maps-location-eta, sd-multi-datacenter, sd-proximity-service, sd-split-web-and-db, sd-start-single-server, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, secrets-management, security-groups-nacl, service-discovery, sli-slo, ssh-in-practice, ssrf, stream-processing, system-design-concepts-map, system-design-study-path, timeouts, udp-and-quic, upper-layers-session-presentation-app, velero-backup, vlan-basics, vpc-basics, vpc-peering-transit-privatelink, vpn-ipsec-wireguard, waf, web-font-optimization, webhooks, what-happens-google-com, youtube-url-to-video
 
 #### `first-page-from-power-on` — Wi-Fi에 붙은 노트북이 첫 페이지를 받기까지: DHCP부터 HTTP까지 패킷으로 따라가기
@@ -3841,7 +3841,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: browser-rendering-pipeline, network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, webhooks, http-versions, cdn-edge-anycast, http-status-codes, ipv6-basics, first-page-from-power-on, udp-and-quic
-- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, cookie-session-login, core-web-vitals, csrf, curl-for-debugging, devops-networking-roadmap, dns, eks-cluster-basics, encryption-in-transit, first-page-from-power-on, frontend-browser-cache, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, local-custom-domain, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, ports-and-sockets, proxy-reverse-proxy, resource-hints-loading, reverse-proxy-lb-api-gateway, tcp-connection-lifecycle, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, web-security-headers, webhooks, youtube-url-to-video
+- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, cookie-session-login, core-web-vitals, csrf, curl-for-debugging, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, first-page-from-power-on, frontend-browser-cache, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, local-custom-domain, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, ports-and-sockets, proxy-reverse-proxy, resource-hints-loading, reverse-proxy-lb-api-gateway, tcp-connection-lifecycle, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, web-security-headers, webhooks, youtube-url-to-video
 
 #### `youtube-url-to-video` — youtube.com을 입력하고 영상이 나오기까지
 
@@ -4066,7 +4066,7 @@
 - 길이: 523줄
 - 소제목: 남의 길 위에 내 전용 통로를 낸다 / 패킷 안에 패킷을 넣는다 / IPsec은 두 단계로 나뉜다 / IPsec이 안 붙을 때 나오는 세 가지 메시지 / NAT를 지나는 법 / WireGuard는 설정할 게 거의 없다 / AllowedIPs가 라우팅과 방화벽을 겸한다 / 무엇을 터널로 보낼 것인가 / 무엇을 고를까 / 현장에서 VPN을 들여다보는 순서 / 결국 감싸고, 열쇠를 나누고, 무엇을 넣을지 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: layer-mtu-fragmentation, sdn-vxlan-overlay, udp-and-quic, layer-ip-routing-icmp, zero-trust-architecture
-- 키워드 백링크 →: browser-fetch, webhooks, what-happens-google-com, ipv6-basics, sso-saml-oidc, pattern-abstract-factory, dns
+- 키워드 백링크 →: browser-fetch, public-key-key-exchange, webhooks, what-happens-google-com, ipv6-basics, sso-saml-oidc, pattern-abstract-factory, dns
 - 이 글로 오는 글 ←: devops-networking-roadmap, dhcp, docker-network-drivers, layer-mtu-fragmentation, networking-essentials-map, packet-encapsulation, sdn-vxlan-overlay, udp-and-quic, zero-trust-architecture
 
 ### Programming › Network › OSI · TCP/IP (`programming/network/layers`)
@@ -4167,7 +4167,7 @@
 - 길이: 395줄
 - 소제목: 요청 하나가 만든 17개의 프레임 / 요청 프레임 한 장을 바이트로 뜯기 / 캡처에 찍히지 않는 24바이트 / 큰 파일은 얼마나 효율적인가 / tcpdump에 MTU보다 큰 패킷이 찍힐 때 / 한 겹 더 씌우면 줄어드는 자리 / 프로토콜을 바꾸면 달라지는 몫 / 현장에서 바이트를 세야 할 때 / 3393바이트의 내역 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, packet-capture-tcpdump, https-tls, layer-mtu-fragmentation, sdn-vxlan-overlay, vpn-ipsec-wireguard, ipv6-basics, udp-and-quic, networking-essentials-map
-- 키워드 백링크 →: what-happens-google-com, first-page-from-power-on, layer-link-ethernet-arp, vlan-basics, http-versions, tcp-reliability-congestion, layer-ip-routing-icmp, vpc-basics, dns
+- 키워드 백링크 →: what-happens-google-com, symmetric-encryption-aes, first-page-from-power-on, layer-link-ethernet-arp, vlan-basics, http-versions, tcp-reliability-congestion, layer-ip-routing-icmp, vpc-basics, dns
 - 이 글로 오는 글 ←: base64, browser-rendering-pipeline, db-type-newsql, latency-bandwidth-throughput, network-flow-logs, networking-essentials-map, sd-video-streaming-cost, service-mesh, upper-layers-session-presentation-app
 
 #### `ports-and-sockets` — 포트와 소켓: 프로세스까지 찾아가는 마지막 주소
@@ -4380,7 +4380,7 @@
 - 길이: 691줄
 - 소제목: 비밀번호 대신 서명으로 증명한다 / 접속 한 번에 오가는 것 / 키는 ed25519로, passphrase는 agent에게 / 처음 보는 서버의 지문 / 긴 명령을 config 파일 한 장으로 / 배스천을 건너 들어간다 / agent 포워딩을 쉽게 켜지 않는다 / 터널 세 가지: -L, -R, -D / authorized_keys 한 줄로 키의 권한을 줄인다 / sshd_config를 단단하게 / Permission denied (publickey)를 만났을 때 / 느리고 자주 끊길 때 / 키, 지문, 채널 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-remote-collaboration, linux-systemd-systemctl, iptables-basics, linux-files-permissions, tcp-connection-lifecycle, linux-processes-signals, ports-and-sockets
-- 키워드 백링크 →: browser-fetch, vpc-subnets-route-tables, ansible-network-automation, autoscaling, iptables-nat, cookie-session-login, dns
+- 키워드 백링크 →: browser-fetch, vpc-subnets-route-tables, ansible-network-automation, public-key-key-exchange, autoscaling, iptables-nat, cookie-session-login, dns
 
 #### `virtual-memory-paging` — 가상 메모리와 페이징: 페이지 테이블, TLB, page fault, overcommit, OOM killer
 
@@ -4437,7 +4437,7 @@
 - 소제목: 반납한 디스크와 SQL 인젝션은 다른 문제다 / 자물쇠를 거는 층과 키를 쥔 사람 / 디스크 통째로: LUKS와 dm-crypt / 패스프레이즈를 바꿔도 데이터는 다시 암호화되지 않는다 / 데이터베이스 안에서: TDE와 컬럼 암호화 / 암호화한 컬럼은 찾을 수 없다 / 봉투 암호화: 데이터 키와 마스터 키 / GCM에서 nonce를 다시 쓰면 / 키 교체와 재암호화 / 저장 암호화가 막지 못하는 것 / 클라우드에서 체크박스를 켜기 전에 확인할 것 / 결국 키가 어디 있느냐 / 면접에서 나올 만한 질문
 - 직접 링크 →: encryption-in-transit, sql-injection, iam-basics, secrets-management, backup-strategy
 - 키워드 백링크 →: postgres-mvcc-vacuum, mysql-innodb-basics, linux-files-permissions, optimistic-locking, vpc-basics, db-modeling-normalization
-- 이 글로 오는 글 ←: backup-strategy, encryption-in-transit, k8s-audit-logging, k8s-etcd-backup, k8s-secret, mfa-totp, owasp-top-10-map, sd-email-storage-search, sd-object-storage-durability
+- 이 글로 오는 글 ←: backup-strategy, encryption-in-transit, k8s-audit-logging, k8s-etcd-backup, k8s-secret, mfa-totp, owasp-top-10-map, public-key-key-exchange, sd-email-storage-search, sd-object-storage-durability, symmetric-encryption-aes
 
 #### `encryption-in-transit` — 전송 구간 암호화: 내부 TLS, mTLS, 재암호화와 인증서 자동 교체
 
@@ -4448,7 +4448,7 @@
 - 소제목: 내부 구간이 평문이면 생기는 일 / DB 드라이버의 "암호화됨"은 확인이 아니다 / 내부 CA를 만들고 서비스에 신분증을 준다 / 인증서가 없을 때 실제로 나는 오류 / 인증은 통과했는데 403이 나는 이유 / 중간에서 풀고 다시 잠그기 / 인증서를 사람이 갈아 끼우지 않는다 / CA를 바꿀 때는 겹쳐서 믿는다 / 현장에서 TLS 오류를 좁히는 순서 / 내부도 바깥처럼 / 면접에서 나올 만한 질문
 - 직접 링크 →: https-tls, encryption-at-rest, zero-trust-architecture, service-mesh, kubernetes-ingress
 - 키워드 백링크 →: nginx-basics, nginx-reverse-proxy, k8s-configmap, k8s-architecture, packet-capture-tcpdump, reverse-proxy-lb-api-gateway, authn-vs-authz, linux-processes-signals, kafka-basics, redis-basics, what-happens-google-com, first-page-from-power-on, vpc-basics, layer-link-ethernet-arp, dns
-- 이 글로 오는 글 ←: connection-pool, devops-networking-roadmap, encryption-at-rest, https-tls, k8s-certificates-pki, osi-in-practice, owasp-top-10-map, postgres-connections-pg-hba, sd-split-web-and-db
+- 이 글로 오는 글 ←: connection-pool, devops-networking-roadmap, digital-signatures-certificates, encryption-at-rest, https-tls, k8s-certificates-pki, osi-in-practice, owasp-top-10-map, postgres-connections-pg-hba, public-key-key-exchange, sd-split-web-and-db, symmetric-encryption-aes
 
 #### `https-tls` — HTTPS는 무엇을 지켜 주나: TLS 1.3
 
@@ -4458,8 +4458,8 @@
 - 길이: 476줄
 - 소제목: 자물쇠가 약속하는 세 가지 / 암호화해도 보이는 것 / 인증서 한 장 뜯어보기 / 믿음은 루트에서 내려온다 / 브라우저가 인증서를 검사하는 순서 / 인증서를 자동으로 받는 방법: ACME / TLS 1.3 핸드셰이크 한 단계씩 / 키를 보내지 않고 같은 키를 만든다 / 본문은 대칭키로 빠르게 / 다시 올 때는 0-RTT, 대신 재전송을 조심 / TLS를 어디서 끝낼까 / 서버끼리도 서로 확인한다: mTLS / 자주 마주치는 인증서 오류 / 자물쇠 하나에 들어 있는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: dns, local-custom-domain, what-happens-google-com, resilience-patterns, gateway
-- 키워드 백링크 →: kubernetes-ingress, nginx-basics, zero-trust-architecture, nginx-https-performance, reverse-proxy-lb-api-gateway, webhooks, service-mesh, http-versions, encryption-in-transit, first-page-from-power-on, udp-and-quic, http-methods
-- 이 글로 오는 글 ←: api-gateway-use-cases, authn-vs-authz, base64, cilium-ebpf, cold-starts, connection-pool, curl-for-debugging, ddos-protection, devops-networking-roadmap, encryption-in-transit, first-page-from-power-on, gateway, http-message, http-status-codes, http-versions, ids-ips, k8s-certificates-pki, k8s-gateway-api, k8s-learning-roadmap, kubernetes-ingress, latency-bandwidth-throughput, layer-mtu-fragmentation, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, osi-in-practice, owasp-top-10-map, packet-capture-tcpdump, packet-encapsulation, pattern-facade, proxy-reverse-proxy, resource-hints-loading, reverse-proxy-lb-api-gateway, sd-notification-system, service-mesh, udp-and-quic, upper-layers-session-presentation-app, waf, what-happens-google-com, youtube-url-to-video, zero-trust-architecture
+- 키워드 백링크 →: digital-signatures-certificates, kubernetes-ingress, nginx-basics, zero-trust-architecture, nginx-https-performance, reverse-proxy-lb-api-gateway, webhooks, service-mesh, http-versions, public-key-key-exchange, encryption-in-transit, symmetric-encryption-aes, first-page-from-power-on, udp-and-quic, http-methods
+- 이 글로 오는 글 ←: api-gateway-use-cases, authn-vs-authz, base64, cilium-ebpf, cold-starts, connection-pool, curl-for-debugging, ddos-protection, devops-networking-roadmap, digital-signatures-certificates, encryption-in-transit, first-page-from-power-on, gateway, http-message, http-status-codes, http-versions, ids-ips, k8s-certificates-pki, k8s-gateway-api, k8s-learning-roadmap, kubernetes-ingress, latency-bandwidth-throughput, layer-mtu-fragmentation, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, osi-in-practice, owasp-top-10-map, packet-capture-tcpdump, packet-encapsulation, pattern-facade, proxy-reverse-proxy, public-key-key-exchange, resource-hints-loading, reverse-proxy-lb-api-gateway, sd-notification-system, service-mesh, symmetric-encryption-aes, udp-and-quic, upper-layers-session-presentation-app, waf, what-happens-google-com, youtube-url-to-video, zero-trust-architecture
 
 #### `iam-basics` — IAM 기본: 거부가 이기는 정책 판정과 역할 빌리기
 
@@ -4491,6 +4491,7 @@
 - 길이: 449줄
 - 소제목: 열 칸은 어떻게 정해지나 / 요청 하나가 지나는 길에 칸을 얹어 보면 / 일부러 구멍을 낸 앱을 점검해 본다 / A01 접근 제어: 남의 것을 열 수 있나 / A02 설정 실수: 기본값과 열어 둔 문 / A03 공급망: 내가 쓰지 않은 코드 / A04 암호화 실패: 지켜야 할 것을 평문으로 / A05 주입: 데이터가 코드가 될 때 / A06 설계: 코드는 맞는데 규칙이 틀렸다 / A07 인증 실패: 누구인지 잘못 믿었다 / A08 무결성 실패: 받은 것이 그것인가 / A09 로깅과 알림: 아무도 몰랐다 / A10 예외 상황 처리: 실패했을 때 어느 쪽으로 넘어지나 / 제보를 받은 날 어디서부터 보나 / 열 칸을 한 번에 다 보지 않는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: authn-vs-authz, csrf, cors, ssrf, web-security-headers, nginx-https-performance, iam-basics, security-groups-nacl, k8s-security-context, k8s-rbac, postgres-roles-security, dependency-hell, semantic-versioning, github-actions-docker-ecr, git-large-files-secrets, https-tls, encryption-in-transit, encryption-at-rest, secrets-management, jwt-key-rotation, sql-injection, xss, rate-limiting-in-practice, idempotency-key, ddos-protection, cookie-session-login, token-login, oauth, mfa-totp, passkeys-webauthn, sso-saml-oidc, zero-trust-architecture, dockerfile-image-layers, structured-logging, centralized-logging-pipeline, debugging-with-logs, k8s-audit-logging, frontend-error-tracking, timeouts, circuit-breaker, express-middleware, ids-ips, waf
+- 키워드 백링크 →: hash-hmac-password-hashing
 - 이 글로 오는 글 ←: csrf, ids-ips, load-balancer-basics, osi-in-practice, sql-injection, ssrf, web-security-headers, xss
 
 #### `secrets-management` — 비밀 관리: 비밀 값은 어디로 새고, 어떻게 짧게 빌려 쓰나
@@ -4502,7 +4503,7 @@
 - 소제목: 비밀 값이 지나가는 길 / 지운 커밋에도 남아 있다 / 무작위해 보이는 문자열을 찾는 법 / 환경 변수는 생각보다 많이 보인다 / CI 로그와 이미지 / 비밀을 한곳에 모으는 저장소 / 쓸 때마다 새로 만드는 비밀번호 / 빌려준 비밀에는 기한이 있다 / 저장소에 들어가려면 무엇을 내미나 / AWS Secrets Manager와 SOPS는 어디에 서나 / 키가 샜다는 연락을 받았을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, k8s-secret, helm-values-secrets, external-secrets, dockerfile-image-layers, github-actions-docker-ecr, iam-basics, eks-cluster-basics
 - 키워드 백링크 →: k8s-architecture, bash-scripting, git-staging-area, sql-batch-timeout-pool, high-availability, db-type-key-value, dns, token-login
-- 이 글로 오는 글 ←: dependency-hell, encryption-at-rest, external-secrets, git-large-files-secrets, git-undo, gitops-argocd-vs-flux, iac-basics, iam-basics, jwt-key-rotation, k8s-learning-roadmap, owasp-top-10-map
+- 이 글로 오는 글 ←: dependency-hell, encryption-at-rest, external-secrets, git-large-files-secrets, git-undo, gitops-argocd-vs-flux, hash-hmac-password-hashing, iac-basics, iam-basics, jwt-key-rotation, k8s-learning-roadmap, owasp-top-10-map
 
 #### `sql-injection` — SQL 주입: 이어 붙인 문자열이 쿼리가 될 때
 
@@ -4569,6 +4570,49 @@
 - 직접 링크 →: vpn-ipsec-wireguard, service-mesh, oauth, proxy-reverse-proxy, security-groups-nacl, k8s-network-policy, network-flow-logs, ids-ips
 - 키워드 백링크 →: passkeys-webauthn, high-availability, authn-vs-authz, sso-saml-oidc, https-tls, vpc-basics, token-login
 - 이 글로 오는 글 ←: authn-vs-authz, devops-networking-roadmap, encryption-in-transit, https-tls, ids-ips, network-flow-logs, owasp-top-10-map, service-mesh, vpn-ipsec-wireguard
+
+### Programming › Security › Cryptography (`programming/security/cryptography`)
+
+#### `digital-signatures-certificates` — 전자 서명과 인증서: 서명 하나에서 신뢰 사슬까지
+
+- 요약: 자체 인증서를 테스트하다 만난 unable to get local issuer certificate 오류에서 출발해 RSA-PSS·ECDSA·Ed25519 서명을 직접 만들고, 루트·중간·리프 체인을 openssl로 세워 검증·파손시켜 본다. 폐기와 Certificate Transparency까지 다룬다.
+- 태그: Security, TLS, Node.js
+- 키워드: 전자 서명, Ed25519, RSA-PSS, ECDSA nonce 재사용, Certificate Transparency
+- 길이: 290줄
+- 소제목: 거꾸로 쓰는 자물쇠 / 서명마다 달라지는 값과 그 함정 / 인증서는 서명된 공개 키다 / 사슬을 손으로 만들고 끊어 본다 / 체인 검증 규칙을 코드로 / 서명이 맞아도 남는 문제 / 서명 하나가 받치는 신뢰 / 면접에서 나올 만한 질문
+- 직접 링크 →: https-tls, k8s-certificates-pki, public-key-key-exchange, hash-hmac-password-hashing, encryption-in-transit
+- 키워드 백링크 →: what-happens-google-com
+- 이 글로 오는 글 ←: dns, https-tls, merkle-tree, passkeys-webauthn, public-key-key-exchange
+
+#### `hash-hmac-password-hashing` — 해시, HMAC, 비밀번호 저장: 빠른 해시가 독이 되는 자리
+
+- 요약: 유출된 SHA-256 비밀번호가 몇 분 만에 풀린 훈련에서 출발해 해시의 성질, 길이 확장 공격과 HMAC, scrypt·bcrypt·Argon2id의 솔트와 비용 파라미터, 상수 시간 비교를 node:crypto·openssl 실제 값으로 따라간다.
+- 태그: Security, Node.js, Authentication
+- 키워드: 비밀번호 해싱, scrypt, 길이 확장 공격, 상수 시간 비교, Argon2id
+- 길이: 254줄
+- 소제목: 한 방향으로만 가는 계산 / 비밀 하나를 섞어야 위조를 막는다 / 빠른 해시가 비밀번호에서는 독이다 / 맞는지 비교할 때도 시간이 샌다 / 자리마다 맞는 해시가 다르다 / 면접에서 나올 만한 질문
+- 직접 링크 →: passkeys-webauthn, mfa-totp, git-internals-basics, merkle-tree, webhooks, secrets-management
+- 이 글로 오는 글 ←: api-pagination-sorting, digital-signatures-certificates, owasp-top-10-map, symmetric-encryption-aes, webhooks
+
+#### `public-key-key-exchange` — 공개 키와 키 교환: RSA, 디피-헬먼, 그리고 ECDHE를 쓰는 이유
+
+- 요약: 처음 만나는 두 쪽이 열쇠를 보내지 않고 같은 비밀을 갖는 법을 X25519로 직접 돌려 본다. 작은 수로 RSA와 디피-헬먼을 계산하고, 하이브리드 암호화와 ECDHE 전방향 안전성, 포스트 양자 하이브리드까지 openssl 출력으로 본다.
+- 태그: Security, TLS, Node.js
+- 키워드: 디피-헬먼, ECDHE, 하이브리드 암호화, X25519, 포스트 양자 하이브리드
+- 길이: 260줄
+- 소제목: 한쪽으로만 쉬운 자물쇠 / 소수 두 개로 시작하는 RSA / 큰 데이터는 RSA로 직접 암호화하지 않는다 / 열쇠를 보내지 않고 같은 열쇠를 만든다 / 타원곡선으로 더 짧고 빠르게 / 모듈러 거듭제곱을 손으로 따라가기 / 양자 컴퓨터가 깨는 것과 그 대비 / 보내지 말고, 같이 만들라 / 면접에서 나올 만한 질문
+- 직접 링크 →: symmetric-encryption-aes, https-tls, encryption-in-transit, digital-signatures-certificates, encryption-at-rest
+- 이 글로 오는 글 ←: digital-signatures-certificates, https-tls, nginx-https-performance, ssh-in-practice, symmetric-encryption-aes, vpn-ipsec-wireguard
+
+#### `symmetric-encryption-aes` — 대칭 암호와 AES 모드: ECB·CBC·CTR·GCM이 각각 보장하는 것
+
+- 요약: 쿠폰 암호문 뒷부분이 똑같이 찍힌 버그에서 출발해 ECB 펭귄과 블록 재배치, CBC 비트 뒤집기, CTR 키스트림, GCM의 AEAD와 nonce 재사용을 node:crypto 실제 출력으로 따라간다. 모드가 곧 보안이라는 결론으로 모은다.
+- 태그: Security, Node.js
+- 키워드: AES 모드, ECB 펭귄, GCM 인증 태그, 패딩 오라클, AEAD
+- 길이: 340줄
+- 소제목: 같은 키로 잠그고 같은 키로 연다 / 블록을 따로따로 잠그면 무늬가 남는다 / 앞 블록을 다음 블록에 섞는다 / 패딩이 맞는지 알려 주면 그게 샌다 / 암호문을 바꾸면 평문이 원하는 대로 바뀐다 / 블록 암호를 스트림처럼 쓰기 / 잠그면서 위조까지 잡는다 / 패딩을 손으로 풀어 본다 / 모드를 고르는 기준과 속도 / 모드가 곧 보안이다 / 면접에서 나올 만한 질문
+- 직접 링크 →: https-tls, encryption-in-transit, encryption-at-rest, public-key-key-exchange, hash-hmac-password-hashing
+- 이 글로 오는 글 ←: https-tls, k8s-secret, nginx-https-performance, packet-encapsulation, public-key-key-exchange
 
 ### Programming › Server/Infra › CI/CD (`programming/server-infra/ci-cd`)
 
@@ -4944,7 +4988,7 @@
 - 길이: 693줄
 - 소제목: base64는 암호가 아니다 / ConfigMap과 무엇이 다른가 / stringData와 last-applied에 남는 평문 / 값이 지나가고 머무는 곳 / etcd에는 평문으로 들어간다 / API 서버가 etcd에 쓰기 전에 암호화하기 / 누가 Secret을 읽을 수 있나 / 환경 변수로 넣을까, 파일로 넣을까 / 레지스트리 인증 imagePullSecrets / 클러스터 밖에 원본을 두는 방법 / 비밀 값이 새는 길과 새고 난 뒤 / Secret이 지켜 주는 것과 아닌 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-configmap, base64, db-type-key-value, k8s-namespace, k8s-pod-troubleshooting, helm-values-secrets, helm-basics, k8s-pv-pvc
-- 키워드 백링크 →: kubectl-apply-ssa, external-secrets, k8s-cri-cni-csi, grpc, k8s-architecture, cron-jobs, kubernetes-ingress, encryption-at-rest, linux-files-permissions, local-k8s-kind-minikube, github-actions-docker-ecr, eks-cluster-basics
+- 키워드 백링크 →: kubectl-apply-ssa, external-secrets, k8s-cri-cni-csi, grpc, k8s-architecture, cron-jobs, kubernetes-ingress, symmetric-encryption-aes, encryption-at-rest, linux-files-permissions, local-k8s-kind-minikube, github-actions-docker-ecr, eks-cluster-basics
 - 이 글로 오는 글 ←: ci-cd-basics, eks-cluster-basics, external-secrets, helm-values-secrets, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-configmap, k8s-cri-cni-csi, k8s-deploy-pipeline-eks, k8s-etcd-backup, k8s-learning-roadmap, k8s-namespace, k8s-pod-troubleshooting, k8s-project-structure, k8s-pv-pvc, k8s-rbac, kubectl-apply-ssa, kustomize-basics, secrets-management, yaml-for-k8s
 
 #### `k8s-storageclass-snapshots` — StorageClass와 VolumeSnapshot: 디스크를 고르고, 찍고, 되살리기
@@ -5219,7 +5263,7 @@
 - 소제목: 클러스터 안의 연결은 모두 서로를 확인한다 / CA 세 개와 인증서 열 개 / 인증서 한 장 읽기 / kwok은 인증서 한 장으로 다 한다 / 만료일을 미리 보는 명령 / 1년 뒤 아침에 일어나는 일 / 갱신하기 / kubelet은 스스로 갱신한다 / 사람에게 인증서 발급하기 / Pod에 인증서를 나눠 주는 새 API / 1년짜리 신분증 열 장 / 면접에서 나올 만한 질문
 - 직접 링크 →: local-k8s-kind-minikube, https-tls, encryption-in-transit, k8s-architecture, k8s-rbac, k8s-secret, k8s-serviceaccount-tokens, k8s-cluster-upgrade, k8s-etcd-backup, kubeconfig-contexts
 - 키워드 백링크 →: k8s-hpa, kubectl-essentials, kubernetes-ingress, service-mesh, what-happens-google-com, layer-ip-addressing, db-type-key-value, eks-cluster-basics, dns
-- 이 글로 오는 글 ←: k8s-admission-control, k8s-api-aggregation-schedulers, k8s-certifications, k8s-learning-roadmap, k8s-rbac
+- 이 글로 오는 글 ←: digital-signatures-certificates, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-certifications, k8s-learning-roadmap, k8s-rbac
 
 #### `k8s-cluster-upgrade` — 클러스터 업그레이드: 버전 차이 규칙과 올리는 순서
 
@@ -5602,7 +5646,7 @@
 - 길이: 864줄
 - 소제목: 인증서는 certbot에게 맡긴다 / HTTP는 HTTPS로 돌려보낸다 / TLS 버전과 암호, HTTP2 켜기 / 압축은 텍스트에만 / 정적 파일 캐시 헤더 / 업스트림 응답을 nginx에 저장하기 / 요청 수를 제한한다 / 보안 헤더와 숨길 것 / 바깥에서 확인하기 / HTTPS를 붙인 뒤에 걸려 오는 전화 / 앞단에서 한 번에 처리한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: nginx-reverse-proxy, https-tls, http-caching-cdn, nginx-basics, http-versions, iptables-basics, network-troubleshooting-by-layer
-- 키워드 백링크 →: edge-caching, cookie-session-login, page-cache-disk-io, web-security-headers, security-groups-nacl, what-happens-google-com, image-optimization, first-page-from-power-on, udp-and-quic, dns
+- 키워드 백링크 →: edge-caching, cookie-session-login, page-cache-disk-io, public-key-key-exchange, web-security-headers, security-groups-nacl, what-happens-google-com, symmetric-encryption-aes, image-optimization, first-page-from-power-on, udp-and-quic, dns
 - 이 글로 오는 글 ←: data-fetching-optimization, ddos-protection, edge-caching, https-tls, nginx-basics, nginx-reverse-proxy, owasp-top-10-map, rate-limiting-algorithms, rate-limiting-in-practice, web-security-headers
 
 #### `nginx-reverse-proxy` — Nginx 리버스 프록시와 로드 밸런싱
@@ -7181,6 +7225,7 @@
 - 기본 거부 정책 → `k8s-network-policy`
 - 기본값 매개변수 → `js-function-forms`
 - 기여 요인 → `postmortems`
+- 길이 확장 공격 → `hash-hmac-password-hashing`
 - 깊은 복사 → `pattern-prototype`
 - 깊은 헬스 체크 → `health-checks`
 - 깊이 우선 탐색 → `ds-graph-bfs-dfs`
@@ -7280,6 +7325,7 @@
 - 디바이스 플러그인 → `k8s-gpu-dra`
 - 디스크 버퍼 → `centralized-logging-pipeline`
 - 디자인 패턴 → `design-patterns-overview`
+- 디피-헬먼 → `public-key-key-exchange`
 - 라벨 셀렉터 → `k8s-labels-selectors`
 - 라우팅 타일 → `sd-maps-tiles-routing`
 - 라우팅 테이블 → `layer-ip-routing-icmp`
@@ -7485,6 +7531,7 @@
 - 비관적 잠금 → `db-locking-deadlock`
 - 비난 없는 포스트모템 → `postmortems`
 - 비동기 이터레이터 → `pattern-iterator`
+- 비밀번호 해싱 → `hash-hmac-password-hashing`
 - 비식별 관계 → `sqld-entity-attribute-relationship`
 - 비잔틴 장애 → `fault-tolerance`
 - 비제어 컴포넌트 → `frontend-state-architecture`
@@ -7508,6 +7555,7 @@
 - 삭제 마커 → `sd-object-storage-versioning-multipart`
 - 상관 서브쿼리 → `sqld-correlated-subquery`
 - 상속보다 합성 → `design-patterns-overview`
+- 상수 시간 비교 → `hash-hmac-password-hashing`
 - 상수 접기 → `sql-case-when`
 - 상태 배치 → `frontend-state-architecture`
 - 상태 있는 채팅 서버 → `sd-chat-connections`
@@ -7824,6 +7872,7 @@
 - 전방향 안전성 → `https-tls`
 - 전송 구간 암호화 → `encryption-in-transit`
 - 전이 테이블 → `postgres-functions-triggers`
+- 전자 서명 → `digital-signatures-certificates`
 - 전체 재동기화 → `sd-file-sync-conflicts`
 - 전파 지연 → `latency-bandwidth-throughput`
 - 점수 구간 샤딩 → `sd-leaderboard-scaling`
@@ -8037,6 +8086,7 @@
 - 파티션 키 → `sd-mq-storage-partitions`
 - 판별 유니온 → `ts-narrowing`
 - 판별 props → `typescript-in-react`
+- 패딩 오라클 → `symmetric-encryption-aes`
 - 패럴랙스 → `parallax-scrollytelling`
 - 패스키 → `passkeys-webauthn`
 - 패킷 캡처 → `packet-capture-tcpdump`
@@ -8054,6 +8104,7 @@
 - 펜싱 토큰 → `distributed-lock`
 - 편집 거리 → `dynamic-programming`
 - 평균 메모리 접근 시간 → `caching-concepts-map`
+- 포스트 양자 하이브리드 → `public-key-key-exchange`
 - 포스트모템 → `postmortems`
 - 포워드 인증 → `api-gateway-use-cases`
 - 포워드 프록시 → `proxy-reverse-proxy`
@@ -8107,6 +8158,7 @@
 - 하이드레이션 → `rendering-strategies`
 - 하이드레이션 불일치 → `hydration`
 - 하이브리드 검색 → `rag-retrieval-quality`
+- 하이브리드 암호화 → `public-key-key-exchange`
 - 하이퍼케어 → `release-cutover-hypercare`
 - 하트비트 기준 시간 → `sd-chat-presence`
 - 하트비트 카운터 → `sd-kv-store-failure-handling`
@@ -8174,6 +8226,8 @@
 - AdminNetworkPolicy → `k8s-network-policy`
 - advanceTimersByTimeAsync → `js-microtask-macrotask`
 - advisory lock → `pessimistic-locking`
+- AEAD → `symmetric-encryption-aes`
+- AES 모드 → `symmetric-encryption-aes`
 - affected 빌드 → `monorepo-build-cache`
 - aggregated ClusterRole → `k8s-rbac`
 - AggregateError → `js-promise-combinators`
@@ -8211,6 +8265,7 @@
 - ApplicationSet → `argocd-basics`
 - AppProject → `argocd-basics`
 - Argo Rollouts → `canary-release`
+- Argon2id → `hash-hmac-password-hashing`
 - arguments 객체 → `js-function-forms`
 - ARP → `layer-link-ethernet-arp`
 - AssumeRole → `iam-basics`
@@ -8276,6 +8331,7 @@
 - CDC → `cdc-change-data-capture`
 - cert-manager → `kubernetes-ingress`
 - certbot → `nginx-https-performance`
+- Certificate Transparency → `digital-signatures-certificates`
 - CertificateSigningRequest → `k8s-certificates-pki`
 - certSANs → `k8s-certificates-pki`
 - CGNAT → `nat-traversal`
@@ -8445,7 +8501,11 @@
 - eager loading → `n-plus-one-queries`
 - Early Hints → `resource-hints-loading`
 - eBPF → `cilium-ebpf`
+- ECB 펭귄 → `symmetric-encryption-aes`
+- ECDHE → `public-key-key-exchange`
+- ECDSA nonce 재사용 → `digital-signatures-certificates`
 - ECR → `github-actions-docker-ecr`
+- Ed25519 → `digital-signatures-certificates`
 - EKS → `eks-cluster-basics`
 - EKS Pod Identity → `eks-cluster-basics`
 - Elasticsearch → `elasticsearch-inverted-index`
@@ -8531,6 +8591,7 @@
 - gang scheduling → `k8s-api-aggregation-schedulers`
 - gaps and islands → `sql-interview-problems`
 - Gateway API → `gateway`
+- GCM 인증 태그 → `symmetric-encryption-aes`
 - GCRA → `rate-limiting-algorithms`
 - gcTime → `client-data-cache`
 - generate_series → `postgres-reporting-sql`
@@ -9097,6 +9158,7 @@
 - rpId → `passkeys-webauthn`
 - RPO → `disaster-recovery`
 - RRF → `rag-retrieval-quality`
+- RSA-PSS → `digital-signatures-certificates`
 - RSC payload → `react-server-components`
 - rsync 알고리즘 → `rsync-algorithm`
 - RTBH → `ddos-protection`
@@ -9119,6 +9181,7 @@
 - Screaming Architecture → `clean-architecture`
 - scroll-snap-type → `css-sticky-scroll-snap`
 - ScrollTimeline → `scroll-driven-animations`
+- scrypt → `hash-hmac-password-hashing`
 - SDN → `sdn-vxlan-overlay`
 - Sealed Secrets → `external-secrets`
 - search_after → `elasticsearch-inverted-index`
@@ -9419,6 +9482,7 @@
 - X-Cache-Status → `edge-caching`
 - X-Forwarded-For → `proxy-reverse-proxy`
 - x-kubernetes-validations → `k8s-crd`
+- X25519 → `public-key-key-exchange`
 - XAUTOCLAIM → `pub-sub`
 - XDP → `cilium-ebpf`
 - xDS → `service-mesh`
@@ -9481,6 +9545,12 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `digital-signatures-certificates` ↔ `public-key-key-exchange`
+- `digital-signatures-certificates` ↔ `https-tls`
+- `hash-hmac-password-hashing` ↔ `webhooks`
+- `public-key-key-exchange` ↔ `symmetric-encryption-aes`
+- `public-key-key-exchange` ↔ `https-tls`
+- `symmetric-encryption-aes` ↔ `https-tls`
 - `fe-sd-news-feed` ↔ `frontend-as-distributed-system`
 - `fe-sd-news-feed` ↔ `frontend-system-design-interview`
 - `frontend-as-distributed-system` ↔ `frontend-state-architecture`

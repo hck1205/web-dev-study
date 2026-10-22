@@ -1,0 +1,289 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("digital-signatures-certificates");
+
+내부 서비스에 자체 인증서를 붙이고 테스트하다 curl에서 익숙한 오류를 다시 만났다.
+
+```text
+error 20 at 0 depth lookup: unable to get local issuer certificate
+error leaf.crt: verification failed
+```
+
+[HTTPS 글](/posts/https-tls)에서 이 오류를 "믿음의 사슬이 끊겼다"고만 짚고 넘어갔다. 이번엔 그 사슬을 openssl로 직접 만들어 보고, 사슬의 연결 고리인 **전자 서명**이 어떻게 만들어지고 검증되는지 바닥까지 본다. HTTPS 글이 TLS 핸드셰이크 안에서 인증서를 "검사한다"고만 한 부분, [쿠버네티스 인증서](/posts/k8s-certificates-pki) 글이 CA 여러 개를 "운영한다"고 한 부분의 안쪽이다. 서명 알고리즘(RSA-PSS, ECDSA, Ed25519)의 차이와 고르는 기준, 그리고 서명이 맞아도 남는 폐기·투명성 문제까지 이 컨테이너(OpenSSL 3.0.13)의 실제 출력으로 따라간다.
+
+## 거꾸로 쓰는 자물쇠
+
+[공개 키 암호](/posts/public-key-key-exchange)에서 공개 키로 잠그고 개인 키로 여는 걸 봤다. 전자 서명은 그걸 거꾸로 쓴다. 개인 키로 "잠그고"(서명하고) 공개 키로 "여는"(검증하는) 것이다. 나만 가진 개인 키로만 만들 수 있고, 누구나 가진 공개 키로 확인할 수 있는 값. 이게 서명이다.
+
+실제로는 메시지 전체에 서명하지 않는다. 먼저 메시지를 [해시](/posts/hash-hmac-password-hashing)해 지문을 만들고, 그 지문에 개인 키 연산을 건다. 그래서 메시지가 한 글자만 바뀌어도 지문이 달라져 서명이 안 맞는다. 세 가지 알고리즘으로 같은 메시지에 서명하고 검증해 봤다.
+
+```bash
+echo -n "transfer 100 to alice" > msg.txt
+# RSA-PSS
+openssl dgst -sha256 -sigopt rsa_padding_mode:pss -sign rsa.pem -out rsa.sig msg.txt
+openssl dgst -sha256 -sigopt rsa_padding_mode:pss -verify rsa_pub.pem -signature rsa.sig msg.txt
+# ECDSA (P-256)
+openssl dgst -sha256 -sign ec.pem -out ec.sig msg.txt
+# Ed25519 (해시가 알고리즘에 포함되어 rawin)
+openssl pkeyutl -sign -inkey ed.pem -rawin -in msg.txt -out ed.sig
+```
+
+```text
+Verified OK                      # RSA-PSS
+Verified OK                      # ECDSA
+Signature Verified Successfully  # Ed25519
+```
+
+메시지를 `transfer 900 to alice`로 바꿔 같은 서명으로 검증하면 바로 깨진다.
+
+```text
+Signature Verification Failure
+```
+
+서명자와 검증자가 하는 일은 이렇게 나뉜다.
+
+<SequenceDiagram
+  caption="개인 키로 만들고, 공개 키로 확인한다"
+  actors={[
+    { id: "s", label: "서명자" },
+    { id: "v", label: "검증자" },
+  ]}
+  steps={[
+    { from: "s", to: "s", label: "해시", title: "메시지를 해시한다", detail: "메시지 전체 대신 지문을 만든다. 메시지가 한 글자만 달라도 지문이 바뀐다.", payload: "h = SHA-256(msg)" },
+    { from: "s", to: "s", label: "서명", title: "지문에 개인 키 연산", detail: "지문에 개인 키로 서명값을 만든다. 이 값은 개인 키 주인만 만들 수 있다.", payload: "sig = sign(priv, h)" },
+    { from: "s", to: "v", label: "msg + sig", title: "메시지와 서명을 보낸다", detail: "검증자는 서명자의 공개 키를 이미 안다(또는 인증서로 받는다)." },
+    { from: "v", to: "v", label: "검증", title: "공개 키로 확인한다", detail: "받은 메시지를 다시 해시하고, 공개 키로 서명이 그 지문과 맞는지 본다. 틀리면 거부한다.", payload: "verify(pub, h, sig)?" },
+  ]}
+/>
+
+서명값의 크기가 알고리즘마다 다르다.
+
+```text
+rsa: 256 bytes    (RSA-2048)
+ec:   71 bytes    (ECDSA P-256, DER 인코딩)
+ed:   64 bytes    (Ed25519)
+```
+
+RSA 서명은 크고 느리다. 타원곡선 쪽(ECDSA, Ed25519)은 짧고 빠르다. 그래서 새 인증서는 대부분 ECDSA P-256이나 Ed25519로 간다. RSA는 호환성 때문에 아직 넓게 쓰인다.
+
+## 서명마다 달라지는 값과 그 함정
+
+ECDSA로 같은 메시지를 두 번 서명하면 서명값이 다르다. 서명할 때마다 무작위 값(nonce, k)을 하나 뽑아 섞기 때문이다.
+
+```text
+ECDSA sig1: 3045022100b9a773ba094694ee744a5b8d77fd39...
+ECDSA sig2: 3046022100bba3c9503a493b300b1ade5e297b8a...
+Ed25519 두 번 서명 동일: yes
+ECDSA 두 번 서명 동일: no
+```
+
+이 nonce가 ECDSA의 급소다. 서로 다른 두 메시지를 **같은 nonce로** 서명하면, 두 서명값에서 개인 키가 대수적으로 역산된다. 2010년 플레이스테이션3 서명 키가 이렇게 통째로 털렸다. 난수 생성기가 약하거나 nonce를 재사용하면 바로 당한다. 그래서 요즘 구현은 nonce를 난수가 아니라 개인 키와 메시지 해시에서 결정적으로 뽑는다(RFC 6979). Ed25519는 이 결정적 방식이 알고리즘에 내장돼 있어서, 같은 메시지는 늘 같은 서명이 나오고 nonce 재사용 사고 자체가 설계상 불가능하다. 새로 고를 때 Ed25519가 안전한 기본값으로 꼽히는 이유다.
+
+RSA 서명에서는 옛 방식(PKCS#1 v1.5)보다 무작위 솔트를 섞는 RSA-PSS가 권장된다. 위 예에서 `rsa_padding_mode:pss`를 준 게 그것이다.
+
+<ConceptDiagram
+  width={420}
+  height={190}
+  caption="서명은 개인 키로 만들고 공개 키로 검증한다"
+  nodes={[
+    { id: "msg", label: "메시지", sub: "해시로 지문", x: 80, y: 50, w: 120 },
+    { id: "sign", label: "서명 생성", sub: "개인 키", x: 240, y: 50, w: 130 },
+    { id: "sig", label: "서명값", sub: "64~256B", x: 240, y: 150, w: 130 },
+    { id: "vf", label: "검증", sub: "공개 키", x: 390, y: 100, w: 110 },
+  ]}
+  edges={[
+    { from: "msg", to: "sign", label: "지문" },
+    { from: "sign", to: "sig", label: "개인 키로" },
+    { from: "sig", to: "vf", label: "공개 키로" },
+    { from: "msg", to: "vf", label: "지문 일치?", dashed: true },
+  ]}
+/>
+
+## 인증서는 서명된 공개 키다
+
+서명을 알면 인증서가 무엇인지 분명해진다. 인증서(X.509)는 "이 공개 키는 이 이름(도메인)의 것"이라는 문장에 CA가 서명한 것이다. 리프 인증서를 직접 발급해 주요 필드를 뽑아 봤다.
+
+```text
+subject = CN = shop.example.com        # 누구의 키인가
+issuer  = CN = Demo Issuing CA          # 누가 서명했나
+notBefore = Oct 22 01:21:21 2026 GMT    # 유효 기간 시작
+notAfter  = Jan 20 01:21:21 2027 GMT    # 90일 뒤 만료
+Basic Constraints: CA:FALSE             # 이 인증서로 남을 발급 못 함
+Key Usage: Digital Signature
+Subject Alternative Name: DNS:shop.example.com
+Signature Algorithm: ecdsa-with-SHA256  # 발급자가 ECDSA로 서명
+```
+
+각 필드가 왜 거기 있는지는 [HTTPS 글의 인증서 뜯어보기](/posts/https-tls#인증서-한-장-뜯어보기)에서 자세히 봤으니 여기서는 서명과 체인에 집중한다. 핵심은 `issuer`와 `Signature Algorithm`이다. 이 인증서의 서명은 `Demo Issuing CA`의 공개 키로 검증된다. 그 `Demo Issuing CA` 인증서의 서명은 또 그 위 발급자의 공개 키로 검증된다. 이렇게 거슬러 올라가는 게 체인이다.
+
+<UrlAnatomy
+  caption="리프 인증서에서 체인으로 이어지는 필드"
+  base="leaf"
+  separator=" | "
+  joiner=" | "
+  params={[
+    { key: "subject", display: "subject=shop.example.com", title: "이 키의 주인", description: "이 인증서가 보증하는 이름. 브라우저는 주소창 호스트가 SAN과 맞는지 본다.", required: true },
+    { key: "issuer", display: "issuer=Demo Issuing CA", title: "서명한 CA", description: "이 이름의 인증서를 찾아 그 공개 키로 리프의 서명을 검증한다. 체인의 다음 칸을 가리키는 포인터다.", required: true },
+    { key: "sig", display: "sig=ecdsa-with-SHA256", title: "발급자의 서명", description: "리프의 모든 필드를 해시해 발급자 개인 키로 서명한 값. 필드 하나만 바꿔도 검증이 깨진다.", required: true },
+    { key: "bc", display: "CA:FALSE", title: "발급 권한 없음", description: "이 인증서로는 다른 인증서를 발급할 수 없다. 리프가 또 리프를 발급하는 걸 막는다.", required: true },
+  ]}
+/>
+
+## 사슬을 손으로 만들고 끊어 본다
+
+루트 CA, 중간 CA, 리프를 openssl로 직접 만들어 체인을 검증했다. 중간 인증서를 신뢰하지 않는(untrusted) 재료로 주고, 루트만 신뢰 저장소에 둔다.
+
+```bash
+openssl verify -CAfile root.crt -untrusted inter.crt leaf.crt
+# leaf.crt: OK
+```
+
+`OK`가 나오는 건 openssl이 leaf → inter → root로 서명을 이어 검증하고 마지막이 신뢰하는 root에 닿았기 때문이다.
+
+<NetworkTopology
+  width={440}
+  height={200}
+  caption="리프에서 서명을 거슬러 올라가 신뢰 루트에 닿으면 통과한다"
+  zones={[{ id: "store", label: "신뢰 저장소", x: 300, y: 20, w: 130, h: 70, tone: "private" }]}
+  nodes={[
+    { id: "leaf", label: "leaf", sub: "shop.example", x: 70, y: 120, icon: "lock" },
+    { id: "inter", label: "inter CA", sub: "Issuing", x: 220, y: 120, icon: "gateway" },
+    { id: "root", label: "root CA", sub: "믿는 루트", x: 365, y: 55, icon: "server" },
+  ]}
+  links={[
+    { from: "leaf", to: "inter", label: "issuer" },
+    { from: "inter", to: "root", label: "issuer" },
+  ]}
+  steps={[
+    { path: ["leaf", "inter"], packet: "verify", title: "리프 서명을 중간 공개 키로", detail: "리프의 issuer가 inter를 가리킨다. inter의 공개 키로 리프 서명을 검증한다." },
+    { path: ["inter", "root"], packet: "verify", title: "중간 서명을 루트 공개 키로", detail: "inter의 issuer는 root. root의 공개 키로 inter 서명을 검증한다." },
+    { path: ["root"], highlight: ["store"], title: "루트가 신뢰 저장소에 있다", detail: "마지막 root가 미리 믿는 루트와 같으면 사슬이 닿은 것이다. 검증 통과." },
+  ]}
+/>
+
+중간 인증서를 빼면 글 첫머리의 오류가 난다.
+
+```bash
+openssl verify -CAfile root.crt leaf.crt
+# error 20: unable to get local issuer certificate
+```
+
+리프의 발급자(inter)를 찾을 수 없어 사슬이 끊긴다. curl과 Node가 "믿을 수 없다"고 한 것도 이것이다. 서버가 리프만 보내고 중간 인증서를 빠뜨리면, 브라우저는 캐시에 중간이 있어 넘어가도 curl은 멈춘다. 실무에서 "브라우저는 되는데 curl만 안 되는" 인증서 오류의 단골 원인이다. 서버가 리프와 중간을 **함께**(full chain) 보내야 한다. 리프와 중간을 한 파일로 묶으면 다시 통과한다.
+
+```bash
+cat leaf.crt inter.crt > fullchain.pem   # 리프 먼저, 그다음 중간
+openssl verify -CAfile root.crt -untrusted fullchain.pem leaf.crt
+# leaf.crt: OK
+```
+
+Nginx의 `ssl_certificate`에는 이 `fullchain.pem`을 지정한다(루트는 넣지 않는다). 순서는 리프가 맨 위, 그 위로 중간들을 쌓는다.
+
+CA가 아닌 인증서로는 남을 발급하지 못한다는 것도 확인했다. 중간에 `pathlen:0`을 박아 두면 그 아래로 또 중간 CA를 만들 수 없다.
+
+```bash
+openssl verify -CAfile root.crt -untrusted inter.crt -untrusted sub.crt evil.crt
+# error 25 at 2 depth: path length constraint exceeded
+```
+
+중간 CA가 몰래 또 하위 CA를 만들어 아무 도메인 인증서나 찍어 내는 걸 이 제약이 막는다.
+
+## 체인 검증 규칙을 코드로
+
+체인 검증이 실제로 보는 규칙은 네 가지로 추려진다. 유효 기간 안인가, issuer가 바로 위 인증서의 subject와 이어지는가, 위 인증서가 CA인가, 맨 위가 신뢰하는 루트인가. 아래는 그 규칙을 한 칸씩 적용하는 과정이다.
+
+<AlgoTrace
+  caption="리프부터 한 칸씩 올라가며 규칙을 적용한다"
+  memoryLabel="판정"
+  cells={["leaf", "inter CA", "root CA"]}
+  steps={[
+    { pointer: 0, memory: ["기간 OK", "issuer=inter"], caption: "리프: 유효 기간 안이고, issuer가 바로 위 inter의 subject와 이어진다. inter가 CA인지도 본다." },
+    { pointer: 1, memory: ["기간 OK", "issuer=root", "CA:TRUE"], caption: "중간: 기간 OK, issuer가 root와 이어지고, Basic Constraints가 CA:TRUE라 발급 권한이 있다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["신뢰 루트 도달"], caption: "루트: 신뢰 저장소에 있는 루트와 같다. 사슬이 닿았으니 통과." },
+  ]}
+/>
+
+이 규칙을 직접 짜 보면 openssl이 하는 일이 손에 잡힌다. 기대값은 모두 node로 확인했다.
+
+<CodePlayground
+  caption="인증서 체인 검증 규칙"
+  functionName="validateChain"
+  initialCode={`function validateChain(chain, trustedCN, now) {
+  // chain: [leaf, intermediate, root] 순서. 각 항목은
+  //   { subject, issuer, isCA, notBefore, notAfter }
+  // trustedCN: 신뢰 저장소에 있는 루트의 subject
+  // now: 현재 시각(숫자)
+  // 통과면 "ok", 아니면 문제를 설명하는 문자열을 반환
+  return "ok";
+}`}
+  solution={`function validateChain(chain, trustedCN, now) {
+  for (let i = 0; i < chain.length; i++) {
+    const c = chain[i];
+    if (now < c.notBefore || now > c.notAfter) return "expired:" + c.subject;
+    const parent = chain[i + 1];
+    if (parent) {
+      if (c.issuer !== parent.subject) return "broken-link:" + c.subject;
+      if (!parent.isCA) return "issuer-not-ca:" + parent.subject;
+    } else {
+      if (c.issuer !== trustedCN) return "untrusted-root:" + c.issuer;
+    }
+  }
+  return "ok";
+}`}
+  tests={[
+    { label: "정상 체인", args: [[{ subject: "shop", issuer: "IntCA", isCA: false, notBefore: 10, notAfter: 100 }, { subject: "IntCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 200 }, { subject: "RootCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 300 }], "RootCA", 50], expected: "ok" },
+    { label: "리프 만료", args: [[{ subject: "shop", issuer: "IntCA", isCA: false, notBefore: 10, notAfter: 100 }, { subject: "IntCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 200 }, { subject: "RootCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 300 }], "RootCA", 150], expected: "expired:shop" },
+    { label: "발급자 불일치", args: [[{ subject: "shop", issuer: "Other", isCA: false, notBefore: 10, notAfter: 100 }, { subject: "IntCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 200 }, { subject: "RootCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 300 }], "RootCA", 50], expected: "broken-link:shop" },
+    { label: "발급자가 CA 아님", args: [[{ subject: "shop", issuer: "IntCA", isCA: false, notBefore: 10, notAfter: 100 }, { subject: "IntCA", issuer: "RootCA", isCA: false, notBefore: 0, notAfter: 200 }, { subject: "RootCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 300 }], "RootCA", 50], expected: "issuer-not-ca:IntCA" },
+    { label: "믿지 않는 루트", args: [[{ subject: "shop", issuer: "IntCA", isCA: false, notBefore: 10, notAfter: 100 }, { subject: "IntCA", issuer: "RootCA", isCA: true, notBefore: 0, notAfter: 200 }, { subject: "RootCA", issuer: "Unknown", isCA: true, notBefore: 0, notAfter: 300 }], "RootCA", 50], expected: "untrusted-root:Unknown" },
+  ]}
+/>
+
+실제 검증은 여기에 서명 자체의 암호 검증, 이름(SAN) 일치, 폐기 확인, 키 용도(Key Usage) 검사가 더 붙는다. 하지만 "포인터를 따라 올라가 신뢰 루트에 닿는다"는 뼈대는 이게 전부다.
+
+## 서명이 맞아도 남는 문제
+
+체인이 깔끔하게 검증돼도 두 가지가 더 남는다. 폐기와 오발급이다.
+
+개인 키가 유출된 인증서는 만료 전이라도 못 쓰게 막아야 한다(폐기). 전통적으로 CA가 폐기 목록을 올리는 CRL, 하나씩 물어보는 OCSP를 썼다. OCSP는 접속마다 CA에 물어 느리고 사생활이 샌다. 그래서 서버가 OCSP 응답을 미리 받아 핸드셰이크에 붙이는 OCSP 스테이플링이 나왔지만, 응답이 늦으면 대부분 그냥 통과시켜(soft-fail) 실효성이 늘 의심받았다. 지금 흐름은 두 갈래다. 브라우저가 폐기 정보를 미리 모아 내려받거나(크롬 CRLSet, 파이어폭스 CRLite), 아예 인증서 수명을 짧게 해 폐기가 덜 필요하게 만드는 쪽이다.
+
+인증서 수명은 계속 줄고 있다. CA/브라우저 포럼 결정으로 공개 인증서 최대 수명이 단계적으로 47일까지 내려가는 방향인데, 날짜와 단계는 확정·조정이 이어지는 중이라 운영에서 쓰는 CA 공지로 확인해야 한다. 분명한 건 사람이 손으로 갱신하는 운영은 끝났다는 것이고, 그래서 [ACME 자동 갱신](/posts/encryption-in-transit#인증서를-사람이-갈아-끼우지-않는다)이 기본이 됐다.
+
+오발급은 CA가 실수나 해킹으로 엉뚱한 사람에게 내 도메인 인증서를 찍어 주는 경우다. 체인 검증은 다 통과하므로 서명만으로는 못 잡는다. Certificate Transparency(CT)가 이걸 막는다. 공개 CA가 발급하는 모든 인증서를 누구나 볼 수 있는 추가 전용 로그에 올리게 하고, 인증서에 로그에 올렸다는 영수증(SCT)을 붙인다. 크롬·사파리는 SCT가 없으면 거부한다. 발급을 막지는 못해도 몰래 발급하는 건 막는다. 도메인 주인은 crt.sh 같은 도구로 내 도메인에 모르는 인증서가 떴는지 감시할 수 있다.
+
+<Callout kind="warning">
+자체 CA로 사내 서비스를 운영할 때, 루트나 중간 CA의 개인 키가 유출되면 그 CA를 믿는 모든 클라이언트가 위조 인증서에 속는다. 루트 키는 오프라인에 두고 중간 CA로만 발급하며(루트가 털리면 신뢰 저장소를 갈아야 하는 대형 사고다), 발급 로그를 남긴다. 쿠버네티스가 CA를 여러 개로 나눠 두는 이유도 [여기](/posts/k8s-certificates-pki#클러스터-안의-연결은-모두-서로를-확인한다)에 있다.
+</Callout>
+
+## 서명 하나가 받치는 신뢰
+
+전자 서명은 "이 값은 개인 키 주인만 만들 수 있다"는 한 가지 보장이다. 인증서는 그 보장을 공개 키와 이름에 걸어 둔 문서이고, 체인은 그 보장을 신뢰 루트까지 이어 붙인 것이다. 검증이 보는 건 네 가지로 압축된다. 유효 기간, 발급자 연결, CA 권한, 신뢰 루트 도달. 알고리즘은 nonce 사고가 구조적으로 없는 Ed25519나 결정적 ECDSA, RSA라면 PSS를 고른다. 그리고 서명이 맞아도 폐기와 오발급은 CT·짧은 수명·자동 갱신으로 따로 막는다. 이 서명과 인증서가 TLS 안에서 실제로 어떻게 오가는지는 [HTTPS 글](/posts/https-tls)로 돌아가면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 전자 서명은 어떻게 만들고 검증하나요?
+
+메시지를 해시해 지문을 만든 다음, 그 지문에 서명자의 개인 키 연산을 걸어 서명값을 얻는다. 검증하는 쪽은 같은 메시지를 해시하고 서명자의 공개 키로 서명을 확인해 둘이 맞는지 본다. 개인 키 주인만 만들 수 있고 공개 키로 누구나 확인할 수 있어서, 메시지의 출처와 무결성을 동시에 보장한다.
+
+### RSA-PSS, ECDSA, Ed25519는 어떻게 고르나요?
+
+새로 고른다면 Ed25519가 안전한 기본값이다. 서명이 64바이트로 짧고 빠르며, nonce를 결정적으로 뽑는 방식이 알고리즘에 내장돼 재사용 사고가 구조적으로 불가능하다. ECDSA도 짧고 빠르지만 nonce 관리(RFC 6979 결정적 방식)가 중요하고, RSA는 서명이 크고 느리지만 호환성이 넓으며 쓸 때는 PKCS#1 v1.5보다 PSS를 쓴다.
+
+### ECDSA에서 nonce를 재사용하면 왜 치명적인가요?
+
+서로 다른 두 메시지를 같은 nonce로 서명하면 두 서명값에서 개인 키가 대수적으로 역산된다. 플레이스테이션3 서명 키가 이렇게 유출됐다. 그래서 nonce는 난수 품질이 중요하고, 요즘은 개인 키와 메시지 해시에서 결정적으로 뽑아(RFC 6979) 재사용을 원천 차단한다. Ed25519는 이 결정적 방식이 기본이다.
+
+### 인증서 체인 검증은 무엇을 확인하나요?
+
+리프에서 시작해 각 인증서의 issuer를 따라 위로 올라가며, 바로 위 인증서의 공개 키로 아래 서명을 검증한다. 각 단계에서 유효 기간이 맞는지, 발급자가 CA 권한(Basic Constraints CA:TRUE)이 있는지, pathlen 제약을 어기지 않는지 보고, 마지막이 신뢰 저장소의 루트에 닿아야 한다. 여기에 이름(SAN) 일치와 폐기 확인이 더해진다.
+
+### 서버가 리프 인증서만 보내고 중간 인증서를 빠뜨리면 어떤 일이 생기나요?
+
+리프의 발급자(중간 CA)를 찾을 수 없어 체인이 끊기고, openssl이나 curl은 "unable to get local issuer certificate" 오류로 거부한다. 브라우저는 과거에 받은 중간 인증서를 캐시해 둬서 넘어가기도 해, "브라우저는 되는데 curl만 안 되는" 혼란이 생긴다. 서버는 리프와 중간을 함께(full chain) 보내야 한다.
+
+### 체인 검증을 통과해도 남는 위험과 그 대비책은?
+
+폐기와 오발급이 남는다. 개인 키가 유출된 인증서는 만료 전에 막아야 해서 CRL/OCSP, OCSP 스테이플링, 브라우저의 폐기 정보 선다운로드(CRLSet, CRLite), 그리고 수명을 짧게 해 폐기 필요를 줄이는 방향을 쓴다. CA가 엉뚱하게 발급한 인증서는 체인이 멀쩡해 서명으로 못 잡으므로, Certificate Transparency 로그와 SCT로 몰래 발급을 드러낸다.
+
+### 인증서 수명이 짧아지는 흐름이 운영에 주는 영향은?
+
+공개 인증서 최대 수명이 단계적으로 짧아지는 방향이라(최종적으로 47일 수준이 거론되지만 날짜와 단계는 조정 중이다), 사람이 손으로 갱신하는 방식은 더 이상 유지되지 않는다. 그래서 ACME 기반 자동 발급·갱신이 기본이 되고, 갱신 실패를 미리 알리는 모니터링과 만료 전 충분한 여유를 둔 갱신 주기가 중요해진다. 수명이 짧을수록 폐기가 덜 필요해지는 이점도 있다.
