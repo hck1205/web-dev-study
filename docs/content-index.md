@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 655편 · 토픽 92개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 657편 · 토픽 92개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -88,7 +88,7 @@
 - 소제목: 한 번 찾고 끝내지 않는 검색 / 스텁 에이전트로 돌려 본 네 번의 검색 / 어느 도구로 갈지 고르는 라우터 / 스스로 채점하고 고쳐 찾기 / 멈출 조건을 정해 두지 않으면 / 호출 수가 곱해진다 / 웹 결과가 지시를 내릴 때 / 한 단계씩 남기는 추적 / 에이전트가 필요 없는 질문 / 면접에서 나올 만한 질문
 - 직접 링크 →: graph-rag, rag-classic-pipeline, rag-retrieval-quality, rag-patterns-overview, distributed-tracing
 - 키워드 백링크 →: observability-basics, kafka-basics, vector-db, on-call
-- 이 글로 오는 글 ←: graph-rag, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality
+- 이 글로 오는 글 ←: graph-rag, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, spring-ai-agents
 
 #### `graph-rag` — GraphRAG, 흩어진 문서를 관계로 잇는 검색
 
@@ -110,7 +110,7 @@
 - 소제목: 모델이 모르는 것을 어떻게 알려 주나 / 질문이 오기 전에 해 두는 일 / 어디서 자르느냐가 답을 바꾼다 / 질문이 들어오면 일어나는 일 / 프롬프트 한 장을 뜯어 보기 / 한 번 찾아서는 닿지 않는 질문 / 낡은 문서가 1등을 할 때 / 문서가 명령을 품고 있을 때 / 많이 붙이면 해결될까 / 답이 이상하다는 제보를 받았을 때 / 다음에 볼 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db, rag-retrieval-quality, graph-rag, agentic-rag
 - 키워드 백링크 →: kafka-basics
-- 이 글로 오는 글 ←: agentic-rag, claude-code-extensions, graph-rag, rag-patterns-overview, rag-retrieval-quality, vector-db
+- 이 글로 오는 글 ←: agentic-rag, claude-code-extensions, graph-rag, rag-patterns-overview, rag-retrieval-quality, spring-ai-agents, vector-db
 
 #### `rag-retrieval-quality` — RAG 검색 품질, 감으로 고치지 않고 재 보기
 
@@ -491,7 +491,7 @@
 - 길이: 636줄
 - 소제목: 열 가지를 한 프로세스에 몰아 둔 실험실 / 101번째 요청이 입구에서 끝난다 / 토큰은 인증 서비스에 묻고 답을 잠깐 기억한다 / 갈 곳을 고르고, 같은 서비스 여럿에 나눈다 / 암호는 입구에서 풀고 안쪽엔 적어서 보낸다 / 느린 상품 조회를 입구에서 받아 준다 / 옛 앱이 보내는 XML을 새 서비스의 JSON으로 / 경로의 v1과 v2가 다른 서비스로 간다 / 망가진 재고 서비스 앞에서 문을 닫는다 / 모든 요청이 한 줄씩 남긴다 / 입구가 대신 못 하는 일 / 입구에 몰아넣은 대가 / 지금 단계에서 켤 것과 미룰 것 / 열 가지를 질문 몇 개로 줄이면 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway, reverse-proxy-lb-api-gateway, rate-limiting-algorithms, rate-limiting-in-practice, token-login, jwt-key-rotation, load-balancing-algorithms, https-tls, http-caching-cdn, api-versioning, circuit-breaker, structured-logging, distributed-tracing, authn-vs-authz, idempotency-key, tail-latency, high-availability
-- 키워드 백링크 →: rest-api-design, proxy-reverse-proxy, http-methods, resilience-patterns, service-mesh, build-caching, vpc-basics, osi-in-practice, redis-basics, http-status-codes, what-happens-google-com, oauth
+- 키워드 백링크 →: spring-cloud-vs-kubernetes, rest-api-design, proxy-reverse-proxy, http-methods, resilience-patterns, service-mesh, build-caching, vpc-basics, osi-in-practice, redis-basics, http-status-codes, what-happens-google-com, oauth
 
 #### `api-pagination-sorting` — 페이지와 정렬: 동점, 섞인 방향, NULL, 커서
 
@@ -513,7 +513,7 @@
 - 소제목: 누가 먼저 말을 거는가 / 묻고 답하는 세 가지 / 먼저 말하는 세 가지 / 여섯 가지를 같은 잣대로 / 한 서비스가 여섯 가지를 다 쓴다 / 상황별로 고르기 / 잘못 골랐을 때 보이는 증상 / 다시 기능 목록으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: event-driven-architecture, message-queue-basics, rest-api-design, api-pagination-sorting, grpc, graphql-basics, webhooks, websocket-deep-dive, http-streaming-sse, realtime-communication, api-versioning, rate-limiting-in-practice, microservices, idempotency-key, sd-chat-connections
 - 키워드 백링크 →: server-sent-events, osi-in-practice, rabbitmq-basics, http-versions, kafka-basics, http-status-codes, ssrf, sql-query-rewrite, gateway
-- 이 글로 오는 글 ←: graphql-basics, js-promises
+- 이 글로 오는 글 ←: graphql-basics, js-promises, spring-ai-agents
 
 #### `api-versioning` — API 버전 관리: 고칠 수 없는 클라이언트와의 약속 바꾸기
 
@@ -568,7 +568,7 @@
 - 소제목: .proto 한 장이 계약이 된다 / 26바이트로 줄어든 주문 / 호출 하나는 스트림 하나 / 묻고 답하는 것만 있는 게 아니다 / 기한을 넘기면 끊고, 서버도 그만둔다 / 상태 코드는 HTTP 200 안에 있다 / 연결이 오래 사니 로드 밸런서가 할 일이 없다 / 브라우저에서는 바로 못 부른다 / REST, GraphQL과 고르는 기준 / 현장에서 gRPC 호출이 실패할 때 / 계약, 바이트, 연결 / 면접에서 나올 만한 질문
 - 직접 링크 →: rest-api-design, http-versions, api-versioning, timeouts, retries, service-mesh, load-balancing-algorithms
 - 키워드 백링크 →: k8s-service-types, iptables-nat, osi-in-practice, iptables-basics, graphql-basics, kubernetes-ingress, logic-gates-alu, http-status-codes, k8s-hpa, dns, gateway
-- 이 글로 오는 글 ←: api-styles-overview, api-versioning, backpressure, blue-green-deployment, curl-for-debugging, docker-container-basics, gateway, graphql-basics, hexagonal-architecture, http-streaming-sse, iptables-nat, k8s-architecture, k8s-cri-cni-csi, k8s-gateway-api, k8s-gpu-dra, k8s-learning-roadmap, k8s-secret, k8s-service-types, k8s-storageclass-snapshots, load-balancer-basics, load-balancing-algorithms, microservices, modular-monolith, observability-basics, osi-in-practice, otel-collector-pipeline, pattern-bridge, pattern-proxy, resilience-patterns, rest-api-design, retries, reverse-proxy-lb-api-gateway, schema-versioning, sd-maps-tiles-routing, service-discovery, service-mesh, spring-boot-observability, system-design-concepts-map, tail-latency, tcp-reliability-congestion, timeouts, upper-layers-session-presentation-app, yaml-for-k8s
+- 이 글로 오는 글 ←: api-styles-overview, api-versioning, backpressure, blue-green-deployment, curl-for-debugging, docker-container-basics, gateway, graphql-basics, hexagonal-architecture, http-streaming-sse, iptables-nat, k8s-architecture, k8s-cri-cni-csi, k8s-gateway-api, k8s-gpu-dra, k8s-learning-roadmap, k8s-secret, k8s-service-types, k8s-storageclass-snapshots, load-balancer-basics, load-balancing-algorithms, microservices, modular-monolith, observability-basics, osi-in-practice, otel-collector-pipeline, pattern-bridge, pattern-proxy, resilience-patterns, rest-api-design, retries, reverse-proxy-lb-api-gateway, schema-versioning, sd-maps-tiles-routing, service-discovery, service-mesh, spring-boot-observability, spring-cloud-vs-kubernetes, system-design-concepts-map, tail-latency, tcp-reliability-congestion, timeouts, upper-layers-session-presentation-app, yaml-for-k8s
 
 #### `http-streaming-sse` — HTTP 스트리밍 깊게 보기: chunked 바이트, NDJSON, fetch 스트림 읽기, 배압
 
@@ -1010,6 +1010,17 @@
 
 ### Programming › Backend › Spring (`programming/backend/spring`)
 
+#### `spring-ai-agents` — Spring AI로 에이전트 만들기: 도구 호출 루프를 스텁 모델로 열어 보기
+
+- 요약: OpenAI 호환 스텁 서버를 직접 띄워 Spring AI 2.0의 ChatClient가 보내는 요청을 그대로 찍어 본다. 구조화 출력, 도구 호출 루프, 어드바이저 순서, 대화 메모리, RAG, MCP를 실제 로그로 따라가고, 멈추지 않는 루프와 권한 검사, 타임아웃·재시도의 함정을 짚는다.
+- 태그: Spring, Java, AI, LLM, Backend
+- 키워드: Spring AI, ChatClient, 도구 호출 루프, ToolContext
+- 길이: 617줄
+- 소제목: 요청 한 번에 들어가는 것 / 문자열이 아니라 객체로 받고 싶을 때 / 도구를 부르는 건 모델이 아니다 / 어드바이저 순서가 루프의 안과 밖을 가른다 / 대화를 기억하는 건 모델이 아니다 / 찾은 문서를 붙여 주는 어드바이저 / 다른 서버의 도구를 빌려 쓰기: MCP / 모델이 그만두지 않으면 / 도구가 실패하거나 남의 주문을 건드리려 할 때 / 모델 API가 느리거나 503을 줄 때 / 운영에서 보는 숫자 / 루프를 쥔 쪽이 책임도 진다 / 면접에서 나올 만한 질문
+- 직접 링크 →: agentic-rag, spring-boot-auto-configuration, spring-boot-4-migration, rag-classic-pipeline, timeouts, circuit-breaker, spring-boot-observability, spring-cloud-vs-kubernetes
+- 키워드 백링크 →: api-styles-overview, resilience-patterns, redis-basics, vector-db
+- 이 글로 오는 글 ←: spring-cloud-vs-kubernetes
+
 #### `spring-boot-4-migration` — Spring Boot 4 마이그레이션: 3.5 앱을 4.1로 올리며 깨진 것들
 
 - 요약: 3.5.16 앱의 부모 버전만 4.1.1로 바꿨을 때 나온 컴파일·테스트 오류를 원인별로 고치고, properties migrator와 OpenRewrite 레시피의 실제 결과를 본다. 모듈로 쪼개진 자동 구성, Jackson 3, @MockitoBean, API 버전 관리, HTTP 서비스 클라이언트, 내장 @Retryable도 직접 돌려 본다.
@@ -1019,7 +1030,7 @@
 - 소제목: 4.0에서 바뀐 바닥 / 3.5에서 먼저 경고를 본다 / 숫자 하나 바꿨더니 아홉 줄 / 패키지가 옮겨 간 자동 구성 클래스 / Jackson 3은 패키지부터 다르다 / 테스트 쪽이 가장 많이 깨진다 / 설정 키는 migrator가 찾는다 / OpenRewrite에 맡겨 본 결과 / 4.0에서 새로 생긴 것 몇 가지 / 올리기 전에 확인할 목록 / 버전 숫자보다 큰 변화 / 면접에서 나올 만한 질문
 - 직접 링크 →: spring-boot-auto-configuration, spring-ioc-di, api-versioning, spring-boot-on-kubernetes, retries
 - 키워드 백링크 →: rest-api-design, js-classes, db-migration-tools
-- 이 글로 오는 글 ←: spring-boot-auto-configuration, spring-boot-observability, spring-boot-on-kubernetes, spring-ioc-di
+- 이 글로 오는 글 ←: spring-ai-agents, spring-boot-auto-configuration, spring-boot-observability, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, spring-ioc-di
 
 #### `spring-boot-auto-configuration` — Spring Boot 자동 구성: 만든 적 없는 빈은 어디서 오나
 
@@ -1030,7 +1041,7 @@
 - 소제목: 스타터 jar에는 코드가 없다 / 자동 구성 목록은 파일 한 장에 적혀 있다 / 조건 평가 리포트로 "왜"를 읽는다 / 내 빈을 두면 자동 구성이 물러난다 / 같은 키가 여러 곳에 있으면 누가 이기나 / 설정값을 타입으로 묶고 시작할 때 검사한다 / 프로필은 설정 묶음을 고르는 스위치다 / 자동 구성을 하나 직접 만든다 / 3.x와 4.x에서 클래스 이름이 다르다 / 자동 구성이 이상할 때 보는 순서 / 알아서 해 주는 것의 정체 / 면접에서 나올 만한 질문
 - 직접 링크 →: spring-ioc-di, spring-boot-4-migration, secrets-management
 - 키워드 백링크 →: rolling-deployment, sql-batch-timeout-pool
-- 이 글로 오는 글 ←: spring-boot-4-migration, spring-boot-on-kubernetes, spring-ioc-di
+- 이 글로 오는 글 ←: spring-ai-agents, spring-boot-4-migration, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, spring-ioc-di
 
 #### `spring-boot-observability` — 스프링 부트 관측 가능성: Micrometer Observation, Prometheus 지표, OTLP trace
 
@@ -1041,7 +1052,7 @@
 - 소제목: 카운터 한 줄이 시계열 수백 개가 된다 / 계측 한 번에 신호가 셋 나온다 / 프로메테우스 엔드포인트 한 줄 읽기 / 주문 ID를 태그로 넣으면 / 히스토그램은 칸 수만큼 시계열을 늘린다 / trace를 OTLP로 내보낸다 / 로그 한 줄에 traceId / 지표의 튄 점에서 trace로 / JVM 대시보드에 올릴 것 / 1040줄을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: observability-basics, metrics-types, distributed-tracing, prometheus-basics, spring-boot-on-kubernetes, db-type-time-series, otel-collector-pipeline, spring-boot-4-migration, structured-logging, grafana-dashboards, grafana-tempo-tracing, java-jvm-memory-gc
 - 키워드 백링크 →: elasticsearch-inverted-index, grpc, centralized-logging-pipeline, sql-batch-timeout-pool, http-status-codes, sli-slo
-- 이 글로 오는 글 ←: circuit-breaker, spring-boot-on-kubernetes
+- 이 글로 오는 글 ←: circuit-breaker, spring-ai-agents, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes
 
 #### `spring-boot-on-kubernetes` — 쿠버네티스 위의 스프링 부트: 프로브 그룹, 우아한 종료, 컨테이너 속 JVM
 
@@ -1050,9 +1061,20 @@
 - 키워드: 우아한 종료, 레이어드 jar, ActiveProcessorCount, CPU throttling
 - 길이: 647줄
 - 소제목: 배포할 때마다 502가 몇 개씩 섞인다 / 액추에이터가 프로브 두 개를 따로 만든다 / 결제사가 느려졌다고 Pod를 죽이면 안 된다 / 설정 키 여섯 개 / SIGTERM을 받은 스프링이 하는 일 / 포트가 닫히는 순간과 목록에서 빠지는 순간 / 관리 포트를 나누면 보이는 것 / JVM은 CPU 한도를 어떻게 읽나 / 1코어에서 5초, 0.5코어에서 10초 / 이미지를 층으로 나눠 굽는다 / 시작을 빠르게 하는 방법들 / HPA가 JVM을 오해하는 순간 / 배포 중 502를 다시 보면 / 면접에서 나올 만한 질문
-- 직접 링크 →: k8s-pod-probes, k8s-pod-lifecycle, java-jvm-memory-gc, spring-ioc-di, spring-boot-auto-configuration, spring-boot-4-migration, dockerfile-image-layers, k8s-hpa, spring-boot-observability, k8s-deploy-pipeline-eks
+- 직접 링크 →: k8s-pod-probes, k8s-pod-lifecycle, java-jvm-memory-gc, spring-ioc-di, spring-boot-auto-configuration, spring-boot-4-migration, spring-cloud-vs-kubernetes, dockerfile-image-layers, k8s-hpa, spring-boot-observability, k8s-deploy-pipeline-eks
 - 키워드 백링크 →: k8s-service-types, curl-for-debugging, iptables-nat, docker-commands-workflow, k8s-architecture, health-checks, resilience-patterns, kubernetes-ingress, rolling-deployment
-- 이 글로 오는 글 ←: linux-processes-signals, spring-boot-4-migration, spring-boot-observability, spring-ioc-di
+- 이 글로 오는 글 ←: linux-processes-signals, spring-boot-4-migration, spring-boot-observability, spring-cloud-vs-kubernetes, spring-ioc-di
+
+#### `spring-cloud-vs-kubernetes` — Spring Cloud와 쿠버네티스: 무엇을 넘기고 무엇을 남기나
+
+- 요약: Eureka, Config Server, Gateway, LoadBalancer가 풀던 문제를 쿠버네티스의 Service, ConfigMap, Ingress와 짝지어 보고, 재고 서비스 두 대 중 한 대가 망가질 때 Resilience4j 서킷 브레이커가 실제로 어떻게 움직이는지 돌려 본다. readiness에 브레이커를 넣으면 생기는 연쇄 장애까지 다룬다.
+- 태그: Spring, Java, Kubernetes, MSA, Resilience
+- 키워드: Spring Cloud, Resilience4j, Spring Cloud LoadBalancer, configtree
+- 길이: 478줄
+- 소제목: Spring Cloud가 처음 풀던 문제 / 쿠버네티스가 가져간 일 / 이름으로 부르는 두 가지 방법 / 설정은 파일로 받는다 / 게이트웨이는 겹친다 / 서킷 브레이커가 앱에 남는 이유 / 두 대 중 한 대만 망가졌을 때 / 반열림에서 다시 걸리는 이유 / 느려지면 타임아웃이 먼저다 / 회로가 열렸다고 Pod를 빼면 안 된다 / 직접 세어 보는 실패율 / 옮길 때 실제로 하는 일 / 플랫폼이 할 일과 호출자가 할 일 / 면접에서 나올 만한 질문
+- 직접 링크 →: microservices, service-discovery, k8s-service-types, k8s-coredns, spring-boot-auto-configuration, k8s-configmap, argocd-basics, k8s-secret, secrets-management, gateway, k8s-gateway-api, resilience-patterns, circuit-breaker, service-mesh, timeouts, spring-boot-4-migration, spring-boot-on-kubernetes, spring-boot-observability, spring-ai-agents
+- 키워드 백링크 →: iptables-nat, k8s-architecture, kubernetes-ingress, autoscaling, osi-in-practice, cilium-ebpf, grpc, k8s-hpa, dns
+- 이 글로 오는 글 ←: api-gateway-use-cases, circuit-breaker, gateway, k8s-configmap, resilience-patterns, service-mesh, spring-ai-agents, spring-boot-on-kubernetes
 
 #### `spring-ioc-di` — IoC 컨테이너와 DI: 빈은 어떻게 만들어지고 왜 프록시로 건네지나
 
@@ -1553,7 +1575,7 @@
 - 길이: 369줄
 - 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / pgvector를 붙였는데 결과가 이상할 때 / 정리 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: rag-retrieval-quality, pythagorean-theorem, db-index-design, rag-classic-pipeline, db-modeling-normalization
-- 이 글로 오는 글 ←: agentic-rag, db-architecture-by-scale, db-types-overview, elasticsearch-inverted-index, graph-rag, pythagorean-theorem, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, sd-music-streaming
+- 이 글로 오는 글 ←: agentic-rag, db-architecture-by-scale, db-types-overview, elasticsearch-inverted-index, graph-rag, pythagorean-theorem, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, sd-music-streaming, spring-ai-agents
 
 ### Programming › Database › DB Types (`programming/database/db-types`)
 
@@ -1836,7 +1858,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies, valkey-vs-redis
 - 키워드 백링크 →: redis-cluster, distributed-lock, ds-hash-map, ds-linked-list, sd-leaderboard-sorted-set, sd-start-single-server, pub-sub, db-type-relational, kafka-basics, db-transaction-isolation, mysql-innodb-basics, acid-transactions, dns
-- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, api-gateway-use-cases, api-scaling-ladder, backend-engineer-roadmap, batch-processing, bloom-filter, blue-green-deployment, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, circuit-breaker, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, cookie-session-login, count-min-sketch, cqrs, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-performance-map, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, ds-binary-tree-bst, ds-linked-list, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, js-memoization, k8s-service-types, linux-performance-triage, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, monolith-architecture, multi-region, n-plus-one-queries, network-partitions, nginx-reverse-proxy, nodejs-server-runtime, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-high-throughput, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, reverse-proxy-lb-api-gateway, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-music-streaming, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, service-discovery, sql-vs-nosql, system-design-concepts-map, system-design-study-path, tcp-reliability-congestion, valkey-vs-redis, virtual-memory-paging, vpc-subnets-route-tables, websocket-deep-dive
+- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, api-gateway-use-cases, api-scaling-ladder, backend-engineer-roadmap, batch-processing, bloom-filter, blue-green-deployment, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, circuit-breaker, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, cookie-session-login, count-min-sketch, cqrs, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-performance-map, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, ds-binary-tree-bst, ds-linked-list, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, js-memoization, k8s-service-types, linux-performance-triage, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, monolith-architecture, multi-region, n-plus-one-queries, network-partitions, nginx-reverse-proxy, nodejs-server-runtime, optimistic-locking, pattern-command, pattern-singleton, pattern-strategy, ports-and-sockets, pub-sub, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-high-throughput, redis-memory-eviction, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, reverse-proxy-lb-api-gateway, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-music-streaming, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, service-discovery, spring-ai-agents, sql-vs-nosql, system-design-concepts-map, system-design-study-path, tcp-reliability-congestion, valkey-vs-redis, virtual-memory-paging, vpc-subnets-route-tables, websocket-deep-dive
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -3831,7 +3853,7 @@
 - 소제목: 에러 메시지는 어느 층이 말했는지 알려 준다 / 같은 메시지가 다른 층에서 나오기도 한다 / 로드 밸런서는 어느 층에서 나누느냐로 고른다 / 방화벽도 층마다 따로 있다 / 헬스 체크는 어느 층까지 물어보나 / TLS를 어디서 풀지 정한다 / 타임아웃은 안쪽으로 갈수록 짧게 / 클라우드 제품 이름을 층으로 읽는다 / 네트워크 탓이라고 말하기 전에 모을 것 / 층 번호는 질문을 좁히는 말이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, http-status-codes, nginx-reverse-proxy, iptables-basics, dns, layer-link-ethernet-arp, proxy-reverse-proxy, tcp-connection-lifecycle, ports-and-sockets, resilience-patterns, https-tls, upper-layers-session-presentation-app, iptables-nat, kubernetes-ingress, gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: k8s-network-policy, timeouts, owasp-top-10-map, docker-container-basics, realtime-communication, reverse-proxy-lb-api-gateway, sd-start-single-server, service-mesh, http-versions, security-groups-nacl, what-happens-google-com, encryption-in-transit, grpc, layer-ip-routing-icmp, aws-ec2-ubuntu-server-setup, first-page-from-power-on, udp-and-quic
-- 이 글로 오는 글 ←: api-gateway-use-cases, api-scaling-ladder, api-styles-overview, autoscaling, caching-strategies, cdn-edge-anycast, centralized-logging-pipeline, ci-cd-basics, cilium-ebpf, circuit-breaker, cis-benchmark-kube-bench, claude-code-extensions, consistent-hashing, curl-for-debugging, deadlocks, devops-networking-roadmap, disaster-recovery, event-loop, express-middleware, failover, fault-tolerance, gateway, grpc, health-checks, high-availability, http-status-codes, iac-basics, integration-tests-real-db, iptables-nat, java-jvm-memory-gc, k8s-architecture, k8s-audit-logging, k8s-cri-cni-csi, k8s-kube-proxy-modes, k8s-network-policy, k8s-pod-multicontainer, k8s-service-types, kubernetes-ingress, linux-grep-awk-sed, linux-namespaces-cgroups, linux-performance-triage, linux-processes-signals, load-balancer-basics, load-balancing-algorithms, logging-tools-overview, long-polling, monolith-architecture, multi-region, network-flow-logs, network-layers-overview, network-troubleshooting-by-layer, networking-essentials-map, nginx-reverse-proxy, nodejs-server-runtime, on-call, otel-collector-pipeline, packet-capture-tcpdump, postmortems, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, rendering-ssr, resilience-patterns, reverse-proxy-lb-api-gateway, rolling-deployment, sd-autocomplete-trie, sd-chat-connections, sd-load-balancer-stateless, sd-multi-datacenter, seccomp-apparmor, service-discovery, service-mesh, sli-slo, system-design-concepts-map, upper-layers-session-presentation-app, valkey-vs-redis, what-happens-google-com
+- 이 글로 오는 글 ←: api-gateway-use-cases, api-scaling-ladder, api-styles-overview, autoscaling, caching-strategies, cdn-edge-anycast, centralized-logging-pipeline, ci-cd-basics, cilium-ebpf, circuit-breaker, cis-benchmark-kube-bench, claude-code-extensions, consistent-hashing, curl-for-debugging, deadlocks, devops-networking-roadmap, disaster-recovery, event-loop, express-middleware, failover, fault-tolerance, gateway, grpc, health-checks, high-availability, http-status-codes, iac-basics, integration-tests-real-db, iptables-nat, java-jvm-memory-gc, k8s-architecture, k8s-audit-logging, k8s-cri-cni-csi, k8s-kube-proxy-modes, k8s-network-policy, k8s-pod-multicontainer, k8s-service-types, kubernetes-ingress, linux-grep-awk-sed, linux-namespaces-cgroups, linux-performance-triage, linux-processes-signals, load-balancer-basics, load-balancing-algorithms, logging-tools-overview, long-polling, monolith-architecture, multi-region, network-flow-logs, network-layers-overview, network-troubleshooting-by-layer, networking-essentials-map, nginx-reverse-proxy, nodejs-server-runtime, on-call, otel-collector-pipeline, packet-capture-tcpdump, postmortems, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, rendering-ssr, resilience-patterns, reverse-proxy-lb-api-gateway, rolling-deployment, sd-autocomplete-trie, sd-chat-connections, sd-load-balancer-stateless, sd-multi-datacenter, seccomp-apparmor, service-discovery, service-mesh, sli-slo, spring-cloud-vs-kubernetes, system-design-concepts-map, upper-layers-session-presentation-app, valkey-vs-redis, what-happens-google-com
 
 #### `packet-capture-tcpdump` — tcpdump로 계층을 눈으로 보기
 
@@ -3866,7 +3888,7 @@
 - 소제목: 전화번호부 한 권으로는 버틸 수 없었다 / 도메인 이름은 오른쪽부터 읽는다 / 이름 하나를 찾기까지 / 캐시와 TTL이 만드는 시차 / 레코드는 이름에 붙은 꼬리표다 / 도메인 꼭대기에는 CNAME을 걸 수 없다 / UDP로 묻다가 TCP로 넘어갈 때 / 질의를 감추는 DoT와 DoH / 답이 진짜인지 확인하는 DNSSEC / 전파된다는 말의 오해 / dig로 직접 확인하기 / 자주 만나는 장애 / 처음 질문으로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, hosts-file
 - 키워드 백링크 →: http-versions, digital-signatures-certificates, sd-email-protocols, cdn-edge-anycast, sql-batch-timeout-pool, udp-and-quic, ipv6-basics
-- 이 글로 오는 글 ←: authn-vs-authz, aws-ec2-ubuntu-server-setup, backend-engineer-roadmap, bloom-filter, blue-green-deployment, browser-fetch, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, cdn-edge-anycast, ci-cd-basics, cilium-ebpf, circuit-breaker, clock-skew, core-web-vitals, css-performance, curl-for-debugging, db-performance-map, db-replication-sharding, db-type-key-value, db-type-wide-column, ddos-protection, debugging-with-logs, devops-networking-roadmap, dhcp, disaster-recovery, distributed-lock, docker-compose, docker-network-drivers, docker-network-volume, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, eventual-consistency, exponential-backoff-jitter, failover, first-page-from-power-on, frontend-as-distributed-system, gateway, grpc, high-availability, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iac-basics, ids-ips, iptables-basics, iptables-nat, ipv6-basics, js-memoization, js-memory-leak, k8s-api-objects, k8s-batch-kueue, k8s-certificates-pki, k8s-certifications, k8s-coredns, k8s-gateway-api, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-operators, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-service-types, k8s-statefulset, kafka-vs-rabbitmq-replay, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leader-election, linux-network-tuning, load-balancer-basics, local-custom-domain, logging-tools-overview, lossy-counting, module-federation-deep-dive, monitoring-basics, multi-region, network-flow-logs, network-layers-overview, network-monitoring, network-partitions, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, nodejs-server-runtime, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, pattern-facade, pattern-proxy, percentile-latency, performance-metrics-measurement, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, pub-sub, rabbitmq-basics, redis-basics, redis-memory-eviction, redis-persistence-ha, release-cutover-hypercare, resource-hints-loading, router-vs-switch, scaling-horizontal-vertical, sd-cache-and-cdn-tier, sd-chat-presence, sd-email-protocols, sd-hotel-inventory-scaling, sd-load-balancer-stateless, sd-maps-location-eta, sd-multi-datacenter, sd-proximity-service, sd-split-web-and-db, sd-start-single-server, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, secrets-management, security-groups-nacl, service-discovery, sli-slo, ssh-in-practice, ssrf, stream-processing, system-design-concepts-map, system-design-study-path, timeouts, udp-and-quic, upper-layers-session-presentation-app, valkey-vs-redis, velero-backup, vlan-basics, vpc-basics, vpc-peering-transit-privatelink, vpn-ipsec-wireguard, waf, web-font-optimization, webhooks, what-happens-google-com, youtube-url-to-video
+- 이 글로 오는 글 ←: authn-vs-authz, aws-ec2-ubuntu-server-setup, backend-engineer-roadmap, bloom-filter, blue-green-deployment, browser-fetch, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, cdn-edge-anycast, ci-cd-basics, cilium-ebpf, circuit-breaker, clock-skew, core-web-vitals, css-performance, curl-for-debugging, db-performance-map, db-replication-sharding, db-type-key-value, db-type-wide-column, ddos-protection, debugging-with-logs, devops-networking-roadmap, dhcp, disaster-recovery, distributed-lock, docker-compose, docker-network-drivers, docker-network-volume, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, eventual-consistency, exponential-backoff-jitter, failover, first-page-from-power-on, frontend-as-distributed-system, gateway, grpc, high-availability, hosts-file, http-caching-cdn, http-status-codes, http-versions, https-tls, iac-basics, ids-ips, iptables-basics, iptables-nat, ipv6-basics, js-memoization, js-memory-leak, k8s-api-objects, k8s-batch-kueue, k8s-certificates-pki, k8s-certifications, k8s-coredns, k8s-gateway-api, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-operators, k8s-pod-scheduling, k8s-pod-troubleshooting, k8s-service-types, k8s-statefulset, kafka-vs-rabbitmq-replay, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leader-election, linux-network-tuning, load-balancer-basics, local-custom-domain, logging-tools-overview, lossy-counting, module-federation-deep-dive, monitoring-basics, multi-region, network-flow-logs, network-layers-overview, network-monitoring, network-partitions, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, nodejs-server-runtime, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, pattern-facade, pattern-proxy, percentile-latency, performance-metrics-measurement, ports-and-sockets, postgres-roles-security, proxy-reverse-proxy, pub-sub, rabbitmq-basics, redis-basics, redis-memory-eviction, redis-persistence-ha, release-cutover-hypercare, resource-hints-loading, router-vs-switch, scaling-horizontal-vertical, sd-cache-and-cdn-tier, sd-chat-presence, sd-email-protocols, sd-hotel-inventory-scaling, sd-load-balancer-stateless, sd-maps-location-eta, sd-multi-datacenter, sd-proximity-service, sd-split-web-and-db, sd-start-single-server, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, secrets-management, security-groups-nacl, service-discovery, sli-slo, spring-cloud-vs-kubernetes, ssh-in-practice, ssrf, stream-processing, system-design-concepts-map, system-design-study-path, timeouts, udp-and-quic, upper-layers-session-presentation-app, valkey-vs-redis, velero-backup, vlan-basics, vpc-basics, vpc-peering-transit-privatelink, vpn-ipsec-wireguard, waf, web-font-optimization, webhooks, what-happens-google-com, youtube-url-to-video
 
 #### `first-page-from-power-on` — Wi-Fi에 붙은 노트북이 첫 페이지를 받기까지: DHCP부터 HTTP까지 패킷으로 따라가기
 
@@ -4103,7 +4125,7 @@
 - 소제목: 커널에 작은 프로그램을 끼워 넣는다 / 검증기가 먼저 읽는다 / 맵에 상태를 두고 바깥에서 읽는다 / 패킷이 지나는 길목: XDP, tc, 소켓 / Cilium은 이 길목들에 무엇을 거나 / kube-proxy 없이 Service를 푸는 법 / IP 대신 identity로 정책을 건다 / Hubble로 흐름을 본다 / 언제 Cilium을 고르나 / 현장에서 eBPF 데이터패스를 의심할 때 / 규칙 목록에서 프로그램과 맵으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-kube-proxy-modes, k8s-network-policy, service-mesh, k8s-cni-pod-network
 - 키워드 백링크 →: k8s-service-types, iptables-nat, k8s-daemonset, linux-namespaces-cgroups, iptables-basics, k8s-coredns, packet-capture-tcpdump, db-type-key-value, sdn-vxlan-overlay, osi-in-practice, ddos-protection, layer-ip-routing-icmp, https-tls, udp-and-quic, layer-mtu-fragmentation, dns
-- 이 글로 오는 글 ←: ddos-protection, devops-networking-roadmap, falco-runtime-security, gateway, iptables-nat, k8s-architecture, k8s-certifications, k8s-cni-pod-network, k8s-cri-cni-csi, k8s-daemonset, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-service-types, local-k8s-kind-minikube, sdn-vxlan-overlay, service-mesh
+- 이 글로 오는 글 ←: ddos-protection, devops-networking-roadmap, falco-runtime-security, gateway, iptables-nat, k8s-architecture, k8s-certifications, k8s-cni-pod-network, k8s-cri-cni-csi, k8s-daemonset, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-service-types, local-k8s-kind-minikube, sdn-vxlan-overlay, service-mesh, spring-cloud-vs-kubernetes
 
 #### `load-balancer-basics` — 로드 밸런서 기본: 헬스 체크, 드레이닝, 세션 고정, 이중화
 
@@ -4417,7 +4439,7 @@
 - 소제목: 주소를 바꿔 쓰는 세 가지 방법 / 바꾼 주소는 conntrack이 기억한다 / 먼저 포워딩을 켠다 / 내부망을 인터넷에 내보내는 게이트웨이 / 바깥 포트를 내부 서버로 넘기는 포트 포워딩 / 같은 서버 안에서 포트만 바꾸는 REDIRECT / Docker가 만드는 규칙 / 쿠버네티스 Service는 nat 규칙 묶음이다 / NAT가 안 될 때 따라가는 순서 / 주소를 바꾸고 기억하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-basics, kubernetes-ingress, nat-traversal
 - 키워드 백링크 →: k8s-kube-proxy-modes, k8s-service-types, vpc-subnets-route-tables, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, ds-hash-map, reverse-proxy-lb-api-gateway, cilium-ebpf, http-versions, sql-batch-timeout-pool, what-happens-google-com, dhcp, grpc, ipv6-basics, aws-ec2-ubuntu-server-setup, udp-and-quic, dns
-- 이 글로 오는 글 ←: ansible-network-automation, blue-green-deployment, cilium-ebpf, curl-for-debugging, devops-networking-roadmap, docker-compose, docker-container-basics, docker-network-drivers, docker-network-volume, express-middleware, first-page-from-power-on, grpc, iptables-basics, ipv6-basics, k8s-architecture, k8s-audit-logging, k8s-cluster-upgrade, k8s-cni-pod-network, k8s-coredns, k8s-cri-cni-csi, k8s-daemonset, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-service-types, k8s-statefulset, kubectl-essentials, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, linux-network-tuning, load-balancer-basics, load-balancing-algorithms, local-k8s-kind-minikube, nat-traversal, network-layers-overview, networking-essentials-map, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, router-vs-switch, service-discovery, service-mesh, spring-boot-on-kubernetes, ssh-in-practice, udp-and-quic, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables
+- 이 글로 오는 글 ←: ansible-network-automation, blue-green-deployment, cilium-ebpf, curl-for-debugging, devops-networking-roadmap, docker-compose, docker-container-basics, docker-network-drivers, docker-network-volume, express-middleware, first-page-from-power-on, grpc, iptables-basics, ipv6-basics, k8s-architecture, k8s-audit-logging, k8s-cluster-upgrade, k8s-cni-pod-network, k8s-coredns, k8s-cri-cni-csi, k8s-daemonset, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-service-types, k8s-statefulset, kubectl-essentials, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, linux-network-tuning, load-balancer-basics, load-balancing-algorithms, local-k8s-kind-minikube, nat-traversal, network-layers-overview, networking-essentials-map, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, router-vs-switch, service-discovery, service-mesh, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, ssh-in-practice, udp-and-quic, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables
 
 #### `linux-files-permissions` — 리눅스 파일 권한: rwx, umask, 특수 비트, ACL, 컨테이너 UID
 
@@ -4639,7 +4661,7 @@
 - 소제목: 비밀 값이 지나가는 길 / 지운 커밋에도 남아 있다 / 무작위해 보이는 문자열을 찾는 법 / 환경 변수는 생각보다 많이 보인다 / CI 로그와 이미지 / 비밀을 한곳에 모으는 저장소 / 쓸 때마다 새로 만드는 비밀번호 / 빌려준 비밀에는 기한이 있다 / 저장소에 들어가려면 무엇을 내미나 / AWS Secrets Manager와 SOPS는 어디에 서나 / 키가 샜다는 연락을 받았을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, k8s-secret, helm-values-secrets, external-secrets, dockerfile-image-layers, github-actions-docker-ecr, iam-basics, eks-cluster-basics
 - 키워드 백링크 →: k8s-architecture, bash-scripting, git-staging-area, sql-batch-timeout-pool, high-availability, db-type-key-value, dns, token-login
-- 이 글로 오는 글 ←: dependency-hell, encryption-at-rest, external-secrets, git-large-files-secrets, git-undo, gitops-argocd-vs-flux, hash-hmac-password-hashing, iac-basics, iam-basics, jwt-key-rotation, k8s-learning-roadmap, owasp-top-10-map, spring-boot-auto-configuration
+- 이 글로 오는 글 ←: dependency-hell, encryption-at-rest, external-secrets, git-large-files-secrets, git-undo, gitops-argocd-vs-flux, hash-hmac-password-hashing, iac-basics, iam-basics, jwt-key-rotation, k8s-learning-roadmap, owasp-top-10-map, spring-boot-auto-configuration, spring-cloud-vs-kubernetes
 
 #### `sql-injection` — SQL 주입: 이어 붙인 문자열이 쿼리가 될 때
 
@@ -4873,7 +4895,7 @@
 - 소제목: ArgoCD는 세 부품이 나눠서 일한다 / Application 한 장과 AppProject 한 장 / Synced와 Healthy는 다른 질문이다 / 손으로 고친 것을 되돌리는 selfHeal / git에서 지운 것은 prune이 있어야 지워진다 / 순서가 필요할 때: sync wave와 hook / 고친 커밋을 올렸는데 예전 커밋만 재시도한다 / 남이 바꾸는 필드는 ignoreDifferences로 비켜 준다 / 앱이 많아지면: app-of-apps와 ApplicationSet / ArgoCD가 이상할 때 보는 순서 / git이 원본이라는 말의 범위 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-deploy-pipeline-eks, helm-dependencies-oci-gitops, gitops-argocd-vs-flux, k8s-rbac, k8s-pod-probes, prometheus-basics, rollback-strategy, kubectl-apply-ssa, k8s-hpa, k8s-pod-troubleshooting
 - 키워드 백링크 →: k8s-crd, k8s-pv-pvc, k8s-deployment, kubernetes-ingress, k8s-statefulset, k8s-pod-basics, git-undo, k8s-daemonset, k8s-api-objects, k8s-configmap, docker-container-basics, cron-jobs, helm-basics, k8s-labels-selectors, resilience-patterns, local-k8s-kind-minikube, webhooks
-- 이 글로 오는 글 ←: gitops-argocd-vs-flux, grafana-dashboards, helm-dependencies-oci-gitops, jenkins-argocd-push-pull, k8s-deploy-pipeline-eks, k8s-learning-roadmap
+- 이 글로 오는 글 ←: gitops-argocd-vs-flux, grafana-dashboards, helm-dependencies-oci-gitops, jenkins-argocd-push-pull, k8s-deploy-pipeline-eks, k8s-learning-roadmap, spring-cloud-vs-kubernetes
 
 #### `gitops-argocd-vs-flux` — GitOps 도구 비교: ArgoCD와 Flux는 같은 약속을 어떻게 다르게 지키나
 
@@ -5079,8 +5101,8 @@
 - 길이: 485줄
 - 소제목: 입구를 하나로 모으기 / 로드 밸런서, 리버스 프록시와 무엇이 다른가 / 게이트웨이가 너무 똑똑해지면 / 쿠버네티스의 입구, Ingress로는 부족했던 것 / 리소스를 역할별로 나눈 Gateway API / HTTPRoute 뜯어보기 / 헤더로 고르고 비율로 나누기 / 네임스페이스를 넘어 참조하기 / Ingress에서 옮겨 갈 때 / 게이트웨이를 사이에 두고 로그가 엇갈릴 때 / 입구 하나, 규칙은 여러 사람이 / 면접에서 나올 만한 질문
 - 직접 링크 →: kubernetes-ingress, k8s-gateway-api, resilience-patterns
-- 키워드 백링크 →: rate-limiting-in-practice, canary-release, k8s-network-policy, osi-in-practice, docker-container-basics, proxy-reverse-proxy, reverse-proxy-lb-api-gateway, cilium-ebpf, token-login, redis-basics, what-happens-google-com, grpc, https-tls, udp-and-quic, http-methods, dns
-- 이 글로 오는 글 ←: api-gateway-use-cases, api-scaling-ladder, api-styles-overview, authn-vs-authz, canary-release, data-fetching-optimization, devops-networking-roadmap, distributed-tracing, fe-sd-news-feed, frontend-system-design-interview, graphql-basics, grpc, http-methods, http-status-codes, https-tls, k8s-admission-control, k8s-certifications, k8s-deployment, k8s-gateway-api, k8s-learning-roadmap, k8s-network-policy, k8s-storageclass-snapshots, kubernetes-ingress, microservices, mvc-pattern, network-layers-overview, nginx-reverse-proxy, osi-in-practice, pattern-facade, proxy-reverse-proxy, rate-limiting-in-practice, resilience-patterns, rest-api-design, reverse-proxy-lb-api-gateway, sd-hotel-double-booking, sd-interview-framework, sd-rate-limiter-design, service-mesh, system-design-concepts-map
+- 키워드 백링크 →: rate-limiting-in-practice, canary-release, k8s-network-policy, spring-cloud-vs-kubernetes, osi-in-practice, docker-container-basics, proxy-reverse-proxy, reverse-proxy-lb-api-gateway, cilium-ebpf, token-login, redis-basics, what-happens-google-com, grpc, https-tls, udp-and-quic, http-methods, dns
+- 이 글로 오는 글 ←: api-gateway-use-cases, api-scaling-ladder, api-styles-overview, authn-vs-authz, canary-release, data-fetching-optimization, devops-networking-roadmap, distributed-tracing, fe-sd-news-feed, frontend-system-design-interview, graphql-basics, grpc, http-methods, http-status-codes, https-tls, k8s-admission-control, k8s-certifications, k8s-deployment, k8s-gateway-api, k8s-learning-roadmap, k8s-network-policy, k8s-storageclass-snapshots, kubernetes-ingress, microservices, mvc-pattern, network-layers-overview, nginx-reverse-proxy, osi-in-practice, pattern-facade, proxy-reverse-proxy, rate-limiting-in-practice, resilience-patterns, rest-api-design, reverse-proxy-lb-api-gateway, sd-hotel-double-booking, sd-interview-framework, sd-rate-limiter-design, service-mesh, spring-cloud-vs-kubernetes, system-design-concepts-map
 
 #### `kubernetes-ingress` — Kubernetes Ingress: 로드 밸런서 하나로 여러 서비스 열기
 
@@ -5091,7 +5113,7 @@
 - 소제목: 서비스마다 로드 밸런서를 달면 / 규칙과 규칙을 실행하는 쪽 / 매니페스트 한 줄씩 읽기 / 경로가 겹치면 누가 이기나 / 요청 하나가 Pod에 닿기까지 / HTTPS는 컨트롤러에서 끝난다 / 어노테이션이 자꾸 늘어난다 / 502, 503, 413을 만났을 때 / Ingress가 하는 일, 다시 / 면접에서 나올 만한 질문
 - 직접 링크 →: gateway, network-troubleshooting-by-layer, packet-capture-tcpdump
 - 키워드 백링크 →: k8s-service-types, k8s-pod-probes, proxy-reverse-proxy, iptables-nat, osi-in-practice, docker-container-basics, https-tls, k8s-admission-control, k8s-pod-lifecycle, reverse-proxy-lb-api-gateway, service-mesh, http-status-codes, what-happens-google-com, cors, first-page-from-power-on, dns, webhooks
-- 이 글로 오는 글 ←: argocd-basics, canary-release, cookie-session-login, curl-for-debugging, devops-networking-roadmap, docker-compose, eks-cluster-basics, encryption-in-transit, external-secrets, gateway, gitops-argocd-vs-flux, grpc, helm-basics, helm-release-lifecycle, http-message, https-tls, iptables-nat, jenkins-on-kubernetes, k8s-admission-control, k8s-api-objects, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-gateway-api, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-operators, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, k8s-project-structure, k8s-secret, k8s-service-types, kubectl-essentials, osi-in-practice, prometheus-basics, reverse-proxy-lb-api-gateway, service-mesh, spring-boot-on-kubernetes, velero-backup
+- 이 글로 오는 글 ←: argocd-basics, canary-release, cookie-session-login, curl-for-debugging, devops-networking-roadmap, docker-compose, eks-cluster-basics, encryption-in-transit, external-secrets, gateway, gitops-argocd-vs-flux, grpc, helm-basics, helm-release-lifecycle, http-message, https-tls, iptables-nat, jenkins-on-kubernetes, k8s-admission-control, k8s-api-objects, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-gateway-api, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-operators, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, k8s-project-structure, k8s-secret, k8s-service-types, kubectl-essentials, osi-in-practice, prometheus-basics, reverse-proxy-lb-api-gateway, service-mesh, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, velero-backup
 
 #### `local-k8s-kind-minikube` — 로컬 쿠버네티스 고르기: kind, minikube, k3d, kwok
 
@@ -5125,8 +5147,8 @@
 - 길이: 594줄
 - 소제목: 이미지 하나를 여러 환경에서 쓰려면 / ConfigMap을 만드는 세 가지 방법 / Pod에 넣는 두 가지 길 / 없는 ConfigMap을 가리키면 Pod가 뜨지 않는다 / 환경 변수는 컨테이너가 뜰 때 한 번만 읽힌다 / 마운트한 파일은 늦게 바뀐다 / subPath로 꽂은 파일은 끝까지 그대로다 / 설정이 바뀌면 Pod를 다시 띄우게 하기 / immutable로 잠그기 / 1MiB를 넘으면 만들어지지 않는다 / 설정이 안 먹을 때 보는 순서 / ConfigMap은 언제 무엇을 읽나 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-namespace, k8s-secret, k8s-pod-multicontainer, helm-chart-templates, k8s-pv-pvc
-- 키워드 백링크 →: k8s-pod-basics, helm-dependencies-oci-gitops, k8s-architecture, helm-basics, latency-bandwidth-throughput, sd-email-protocols, local-k8s-kind-minikube, db-type-key-value
-- 이 글로 오는 글 ←: argocd-basics, ci-cd-basics, eks-cluster-basics, encryption-in-transit, external-secrets, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-etcd-backup, k8s-gpu-dra, k8s-learning-roadmap, k8s-namespace, k8s-node-autoscaling-karpenter, k8s-pod-multicontainer, k8s-pod-troubleshooting, k8s-project-structure, k8s-pv-pvc, k8s-secret, k8s-storageclass-snapshots, kubectl-apply-ssa, kubectl-essentials, kustomize-basics, optimistic-locking, rollback-strategy, velero-backup, yaml-for-k8s
+- 키워드 백링크 →: spring-cloud-vs-kubernetes, k8s-pod-basics, helm-dependencies-oci-gitops, k8s-architecture, helm-basics, latency-bandwidth-throughput, sd-email-protocols, local-k8s-kind-minikube, db-type-key-value
+- 이 글로 오는 글 ←: argocd-basics, ci-cd-basics, eks-cluster-basics, encryption-in-transit, external-secrets, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-chart-templates, helm-dependencies-oci-gitops, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-etcd-backup, k8s-gpu-dra, k8s-learning-roadmap, k8s-namespace, k8s-node-autoscaling-karpenter, k8s-pod-multicontainer, k8s-pod-troubleshooting, k8s-project-structure, k8s-pv-pvc, k8s-secret, k8s-storageclass-snapshots, kubectl-apply-ssa, kubectl-essentials, kustomize-basics, optimistic-locking, rollback-strategy, spring-cloud-vs-kubernetes, velero-backup, yaml-for-k8s
 
 #### `k8s-pv-pvc` — PV와 PVC: Pod보다 오래 사는 디스크
 
@@ -5148,7 +5170,7 @@
 - 소제목: base64는 암호가 아니다 / ConfigMap과 무엇이 다른가 / stringData와 last-applied에 남는 평문 / 값이 지나가고 머무는 곳 / etcd에는 평문으로 들어간다 / API 서버가 etcd에 쓰기 전에 암호화하기 / 누가 Secret을 읽을 수 있나 / 환경 변수로 넣을까, 파일로 넣을까 / 레지스트리 인증 imagePullSecrets / 클러스터 밖에 원본을 두는 방법 / 비밀 값이 새는 길과 새고 난 뒤 / Secret이 지켜 주는 것과 아닌 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-configmap, base64, db-type-key-value, k8s-namespace, k8s-pod-troubleshooting, helm-values-secrets, helm-basics, k8s-pv-pvc
 - 키워드 백링크 →: kubectl-apply-ssa, external-secrets, k8s-cri-cni-csi, grpc, k8s-architecture, cron-jobs, kubernetes-ingress, symmetric-encryption-aes, encryption-at-rest, linux-files-permissions, local-k8s-kind-minikube, github-actions-docker-ecr, eks-cluster-basics
-- 이 글로 오는 글 ←: ci-cd-basics, eks-cluster-basics, external-secrets, helm-values-secrets, jenkins-on-kubernetes, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-configmap, k8s-cri-cni-csi, k8s-deploy-pipeline-eks, k8s-etcd-backup, k8s-learning-roadmap, k8s-namespace, k8s-pod-troubleshooting, k8s-project-structure, k8s-pv-pvc, k8s-rbac, kubectl-apply-ssa, kustomize-basics, secrets-management, yaml-for-k8s
+- 이 글로 오는 글 ←: ci-cd-basics, eks-cluster-basics, external-secrets, helm-values-secrets, jenkins-on-kubernetes, k8s-architecture, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-configmap, k8s-cri-cni-csi, k8s-deploy-pipeline-eks, k8s-etcd-backup, k8s-learning-roadmap, k8s-namespace, k8s-pod-troubleshooting, k8s-project-structure, k8s-pv-pvc, k8s-rbac, kubectl-apply-ssa, kustomize-basics, secrets-management, spring-cloud-vs-kubernetes, yaml-for-k8s
 
 #### `k8s-storageclass-snapshots` — StorageClass와 VolumeSnapshot: 디스크를 고르고, 찍고, 되살리기
 
@@ -5196,7 +5218,7 @@
 - 소제목: 모든 부품은 API 서버하고만 이야기한다 / kubectl apply 한 줄이 지나가는 길 / watch 하나로 상태가 흘러간다 / etcd에는 무엇이 어떻게 들어 있나 / 부품을 하나씩 멈춰 보면 / 리더는 Lease 하나로 정한다 / cloud-controller-manager가 없으면 생기는 일 / 현장에서 어느 부품을 의심할까 / 부품은 각자 자기 오브젝트만 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-api-objects, k8s-controllers-reconcile, kubectl-apply-ssa, k8s-pod-scheduling, k8s-pod-lifecycle, optimistic-locking, k8s-secret, raft-consensus, k8s-etcd-backup, leader-election, eks-cluster-basics, k8s-service-types, k8s-cni-pod-network, iptables-nat
 - 키워드 백링크 →: k8s-pod-basics, local-k8s-kind-minikube, grpc, iptables-basics, health-checks, db-type-key-value, kubernetes-ingress, cilium-ebpf, page-cache-disk-io, osi-in-practice, high-availability
-- 이 글로 오는 글 ←: autoscaling, cis-benchmark-kube-bench, cron-jobs, devops-networking-roadmap, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, exponential-backoff-jitter, express-middleware, external-secrets, fault-tolerance, health-checks, helm-chart-templates, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-cni-pod-network, k8s-configmap, k8s-controllers-reconcile, k8s-coredns, k8s-crd, k8s-cri-cni-csi, k8s-daemonset, k8s-deploy-pipeline-eks, k8s-etcd-backup, k8s-feature-maturity, k8s-gpu-dra, k8s-hpa, k8s-in-place-resize, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-node-autoscaling-karpenter, k8s-node-maintenance, k8s-operators, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-troubleshooting, k8s-pv-pvc, k8s-rbac, k8s-secret, k8s-security-context, k8s-service-types, k8s-serviceaccount-tokens, k8s-statefulset, k8s-storageclass-snapshots, k8s-vpa, kubeconfig-contexts, kubectl-essentials, leader-election, linux-files-permissions, linux-namespaces-cgroups, linux-network-tuning, linux-systemd-systemctl, local-k8s-kind-minikube, pattern-bridge, pattern-singleton, prometheus-basics, raft-consensus, seccomp-apparmor, secrets-management, service-discovery, service-mesh, spring-boot-on-kubernetes, velero-backup, yaml-for-k8s
+- 이 글로 오는 글 ←: autoscaling, cis-benchmark-kube-bench, cron-jobs, devops-networking-roadmap, dockerfile-image-layers, eks-cluster-basics, encryption-in-transit, exponential-backoff-jitter, express-middleware, external-secrets, fault-tolerance, health-checks, helm-chart-templates, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-audit-logging, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-cni-pod-network, k8s-configmap, k8s-controllers-reconcile, k8s-coredns, k8s-crd, k8s-cri-cni-csi, k8s-daemonset, k8s-deploy-pipeline-eks, k8s-etcd-backup, k8s-feature-maturity, k8s-gpu-dra, k8s-hpa, k8s-in-place-resize, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-node-autoscaling-karpenter, k8s-node-maintenance, k8s-operators, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-multicontainer, k8s-pod-probes, k8s-pod-resources, k8s-pod-troubleshooting, k8s-pv-pvc, k8s-rbac, k8s-secret, k8s-security-context, k8s-service-types, k8s-serviceaccount-tokens, k8s-statefulset, k8s-storageclass-snapshots, k8s-vpa, kubeconfig-contexts, kubectl-essentials, leader-election, linux-files-permissions, linux-namespaces-cgroups, linux-network-tuning, linux-systemd-systemctl, local-k8s-kind-minikube, pattern-bridge, pattern-singleton, prometheus-basics, raft-consensus, seccomp-apparmor, secrets-management, service-discovery, service-mesh, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, velero-backup, yaml-for-k8s
 
 #### `k8s-controllers-reconcile` — 컨트롤러와 reconcile: 이벤트가 아니라 상태를 보고 움직인다
 
@@ -5354,7 +5376,7 @@
 - 소제목: Pod가 받는 resolv.conf / 이름 하나에 질의 여덟 개 / CoreDNS가 답을 만드는 법 / 가끔 5초씩 늦는 이름 풀이 / 노드마다 캐시를 둔다 / CoreDNS가 스스로 죽는 경우 / 이름 하나 뒤의 질의들 / 면접에서 나올 만한 질문
 - 직접 링크 →: dns, k8s-service-types, k8s-network-policy, k8s-cni-pod-network
 - 키워드 백링크 →: k8s-architecture, k8s-kube-proxy-modes, k8s-statefulset, iptables-nat, k8s-daemonset, iptables-basics, ipv6-basics, packet-capture-tcpdump, race-conditions, local-k8s-kind-minikube, udp-and-quic
-- 이 글로 오는 글 ←: cilium-ebpf, container-supply-chain-security, curl-for-debugging, devops-networking-roadmap, docker-network-volume, eks-cluster-basics, k8s-certifications, k8s-cluster-upgrade, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-node-autoscaling-karpenter, k8s-service-types, k8s-statefulset, network-monitoring, service-discovery
+- 이 글로 오는 글 ←: cilium-ebpf, container-supply-chain-security, curl-for-debugging, devops-networking-roadmap, docker-network-volume, eks-cluster-basics, k8s-certifications, k8s-cluster-upgrade, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-node-autoscaling-karpenter, k8s-service-types, k8s-statefulset, network-monitoring, service-discovery, spring-cloud-vs-kubernetes
 
 #### `k8s-gateway-api` — Gateway API 운영: CRD 채널부터 status 조건, ingress-nginx에서 옮기기까지
 
@@ -5365,7 +5387,7 @@
 - 소제목: Ingress는 멈췄고 Gateway API는 따로 나온다 / CRD를 누가 설치하나 / 라우트 종류마다 성숙도가 다르다 / API 서버가 먼저 거절하는 것들 / 붙었는지는 status가 말한다 / 가중치로 나눌 때 비는 몫 / ReferenceGrant가 막는 것 / ingress-nginx에서 옮기기 / Gateway가 붙지 않을 때 보는 순서 / 입구를 바꾸는 일은 설치와 상태 읽기부터 / 면접에서 나올 만한 질문
 - 직접 링크 →: kubernetes-ingress, gateway, k8s-service-types
 - 키워드 백링크 →: k8s-admission-control, https-tls, helm-basics, service-mesh, api-versioning, http-status-codes, what-happens-google-com, local-k8s-kind-minikube, grpc, cors, first-page-from-power-on, dns
-- 이 글로 오는 글 ←: gateway, k8s-certifications, k8s-learning-roadmap, reverse-proxy-lb-api-gateway
+- 이 글로 오는 글 ←: gateway, k8s-certifications, k8s-learning-roadmap, reverse-proxy-lb-api-gateway, spring-cloud-vs-kubernetes
 
 #### `k8s-kube-proxy-modes` — kube-proxy 모드: iptables 체인이 nftables 맵으로 바뀌는 이유
 
@@ -5398,7 +5420,7 @@
 - 소제목: Service는 이름, 가상 IP, 엔드포인트 목록이다 / 포트 세 개가 각자 다른 곳을 가리킨다 / ClusterIP: 어느 장치에도 없는 주소 / NodePort: 모든 노드에 같은 문을 연다 / LoadBalancer: 바깥 로드 밸런서를 붙이는 약속 / headless와 ExternalName: 가상 IP 없이 이름만 / 클러스터 안에서도 가까운 Pod로 / 트래픽 정책을 직접 따져 보기 / Service에 붙는데 응답이 이상할 때 / 타입은 층, 정책은 출발지 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-nat, k8s-pod-lifecycle, kubernetes-ingress, k8s-network-policy, k8s-cni-pod-network, k8s-coredns
 - 키워드 백링크 →: k8s-architecture, k8s-statefulset, k8s-daemonset, db-type-wide-column, iptables-basics, k8s-kube-proxy-modes, local-k8s-kind-minikube, centralized-logging-pipeline, http-versions, kafka-basics, security-groups-nacl, vpc-basics, osi-in-practice, redis-basics, dns, what-happens-google-com, cilium-ebpf, grpc, layer-ip-routing-icmp, first-page-from-power-on, udp-and-quic, layer-link-ethernet-arp
-- 이 글로 오는 글 ←: cilium-ebpf, curl-for-debugging, devops-networking-roadmap, grpc, iptables-nat, k8s-architecture, k8s-batch-kueue, k8s-certifications, k8s-cni-pod-network, k8s-coredns, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-gateway-api, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, k8s-statefulset, kubectl-essentials, kubernetes-ingress, local-k8s-kind-minikube, network-flow-logs, packet-capture-tcpdump, service-discovery, service-mesh, spring-boot-on-kubernetes, velero-backup
+- 이 글로 오는 글 ←: cilium-ebpf, curl-for-debugging, devops-networking-roadmap, grpc, iptables-nat, k8s-architecture, k8s-batch-kueue, k8s-certifications, k8s-cni-pod-network, k8s-coredns, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-gateway-api, k8s-job-cronjob, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-pod-lifecycle, k8s-pod-probes, k8s-pod-troubleshooting, k8s-statefulset, kubectl-essentials, kubernetes-ingress, local-k8s-kind-minikube, network-flow-logs, packet-capture-tcpdump, service-discovery, service-mesh, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, velero-backup
 
 #### `service-mesh` — 서비스 메시: 사이드카가 가로채고, 컨트롤 플레인이 설정을 밀어 준다
 
@@ -5408,8 +5430,8 @@
 - 길이: 545줄
 - 소제목: 라이브러리 대신 옆에 프록시를 둔 이유 / 데이터 플레인과 컨트롤 플레인 / 앱 모르게 끼어드는 iptables / 인증서에 서비스 이름을 적는다 / 가중치로 트래픽을 옮긴다 / 재시도가 곱해진다 / 프록시 두 개가 더하는 시간 / 사이드카 없이 메시를 만드는 방식 / 메시가 있으면 로그를 다시 읽어야 한다 / 메시를 들일지 정하는 기준 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-pod-multicontainer, https-tls, gateway, iptables-nat, zero-trust-architecture, resilience-patterns, idempotency-key, circuit-breaker, service-discovery
-- 키워드 백링크 →: k8s-service-types, iptables-basics, packet-encapsulation, k8s-architecture, packet-capture-tcpdump, kubernetes-ingress, cilium-ebpf, retries, tail-latency, osi-in-practice, http-status-codes, grpc, http-methods
-- 이 글로 오는 글 ←: api-gateway-use-cases, authn-vs-authz, canary-release, cilium-ebpf, circuit-breaker, curl-for-debugging, devops-networking-roadmap, distributed-tracing, encryption-in-transit, grpc, helm-release-lifecycle, https-tls, idempotency-key, ids-ips, k8s-certificates-pki, k8s-certifications, k8s-deployment, k8s-gateway-api, k8s-learning-roadmap, k8s-network-policy, k8s-pod-multicontainer, kubernetes-ingress, load-balancing-algorithms, osi-in-practice, resilience-patterns, retries, reverse-proxy-lb-api-gateway, service-discovery, vpc-peering-transit-privatelink, zero-trust-architecture
+- 키워드 백링크 →: k8s-service-types, spring-cloud-vs-kubernetes, iptables-basics, packet-encapsulation, k8s-architecture, packet-capture-tcpdump, kubernetes-ingress, cilium-ebpf, retries, tail-latency, osi-in-practice, http-status-codes, grpc, http-methods
+- 이 글로 오는 글 ←: api-gateway-use-cases, authn-vs-authz, canary-release, cilium-ebpf, circuit-breaker, curl-for-debugging, devops-networking-roadmap, distributed-tracing, encryption-in-transit, grpc, helm-release-lifecycle, https-tls, idempotency-key, ids-ips, k8s-certificates-pki, k8s-certifications, k8s-deployment, k8s-gateway-api, k8s-learning-roadmap, k8s-network-policy, k8s-pod-multicontainer, kubernetes-ingress, load-balancing-algorithms, osi-in-practice, resilience-patterns, retries, reverse-proxy-lb-api-gateway, service-discovery, spring-cloud-vs-kubernetes, vpc-peering-transit-privatelink, zero-trust-architecture
 
 ### Programming › Server/Infra › Kubernetes › Operations (`programming/server-infra/kubernetes/operations`)
 
@@ -5749,7 +5771,7 @@
 - 소제목: 15초마다 재고 replicas를 고친다 / 메트릭이 오는 길 / 공식은 한 줄이다 / 부하를 올려 보면 / 줄일 때는 5분을 기다린다 / behavior로 속도를 정한다 / requests가 없으면 계산할 수 없다 / 갓 뜬 Pod와 준비 안 된 Pod는 어떻게 세나 / 메트릭 여러 개와 앱이 내는 메트릭 / 0개까지 줄일 수 있나 / 함께 쓰면 부딪히는 것들 / HPA가 안 움직일 때 보는 순서 / 공식 하나, 브레이크 셋 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-deployment, k8s-namespace, k8s-pod-resources, k8s-pod-multicontainer, k8s-node-autoscaling-karpenter, eks-cluster-basics, k8s-vpa
 - 키워드 백링크 →: k8s-architecture, k8s-statefulset, k8s-api-aggregation-schedulers, k8s-pod-basics, cron-jobs, helm-basics, cold-starts, kafka-basics, local-k8s-kind-minikube
-- 이 글로 오는 글 ←: argocd-basics, autoscaling, bullmq-job-queue, eks-cluster-basics, gitops-argocd-vs-flux, grpc, helm-release-lifecycle, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-in-place-resize, k8s-learning-roadmap, k8s-node-autoscaling-karpenter, k8s-pod-disruption-budget, k8s-project-structure, k8s-statefulset, k8s-vpa, kubectl-apply-ssa, kustomize-basics, local-k8s-kind-minikube, spring-boot-on-kubernetes
+- 이 글로 오는 글 ←: argocd-basics, autoscaling, bullmq-job-queue, eks-cluster-basics, gitops-argocd-vs-flux, grpc, helm-release-lifecycle, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certificates-pki, k8s-certifications, k8s-cluster-upgrade, k8s-controllers-reconcile, k8s-crd, k8s-deploy-pipeline-eks, k8s-deployment, k8s-feature-maturity, k8s-in-place-resize, k8s-learning-roadmap, k8s-node-autoscaling-karpenter, k8s-pod-disruption-budget, k8s-project-structure, k8s-statefulset, k8s-vpa, kubectl-apply-ssa, kustomize-basics, local-k8s-kind-minikube, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes
 
 #### `k8s-in-place-resize` — 재시작 없는 Pod 리소스 변경: resize 하위 리소스와 resizePolicy
 
@@ -6186,7 +6208,7 @@
 - 소제목: 늘리는 데 걸리는 시간이 먼저다 / 반응형, 예약형, 예측형 / 스파이크와 늘어나는 속도의 경주 / 무엇을 보고 늘리나 / 줄일 때는 천천히 / AWS Auto Scaling 그룹에 걸어 보면 / 쿠버네티스에서는 두 층이 따로 늘어난다 / 0까지 줄이면 첫 요청이 기다린다 / 오토스케일링이 도와주지 못할 때 / 정책보다 반응 시간 / 면접에서 나올 만한 질문
 - 직접 링크 →: scaling-horizontal-vertical, k8s-hpa, k8s-node-autoscaling-karpenter, garbage-collection, k8s-vpa, cold-starts, db-replication-sharding, db-sharding, rate-limiting-in-practice, backpressure
 - 키워드 백링크 →: k8s-architecture, k8s-pod-lifecycle, event-loop, vpc-basics, osi-in-practice, sql-batch-timeout-pool, message-queue-basics
-- 이 글로 오는 글 ←: api-scaling-ladder, backpressure, blue-green-deployment, cloud-cost-optimization, cold-starts, connection-pool, cron-jobs, ddos-protection, eks-cluster-basics, fastapi-basics, feature-flags, high-availability, k8s-certifications, k8s-etcd-backup, k8s-learning-roadmap, k8s-node-autoscaling-karpenter, message-queue-basics, nodejs-server-runtime, rendering-ssg-isr, rolling-deployment, scaling-horizontal-vertical, sd-capacity-estimation, sd-load-balancer-stateless, sd-metrics-collection, sd-multi-datacenter, sd-queue-logging-automation, sd-rate-limiter-design, service-discovery, ssh-in-practice, system-design-concepts-map
+- 이 글로 오는 글 ←: api-scaling-ladder, backpressure, blue-green-deployment, cloud-cost-optimization, cold-starts, connection-pool, cron-jobs, ddos-protection, eks-cluster-basics, fastapi-basics, feature-flags, high-availability, k8s-certifications, k8s-etcd-backup, k8s-learning-roadmap, k8s-node-autoscaling-karpenter, message-queue-basics, nodejs-server-runtime, rendering-ssg-isr, rolling-deployment, scaling-horizontal-vertical, sd-capacity-estimation, sd-load-balancer-stateless, sd-metrics-collection, sd-multi-datacenter, sd-queue-logging-automation, sd-rate-limiter-design, service-discovery, spring-cloud-vs-kubernetes, ssh-in-practice, system-design-concepts-map
 
 #### `cache-invalidation` — 캐시 무효화: 퍼지, ban, 태그, 그리고 지운 뒤 다시 들어오는 옛 값
 
@@ -6240,8 +6262,8 @@
 - 길이: 536줄
 - 소제목: 세 상태와 두 개의 질문 / 몇 건 중의 실패율인가: 건수 창과 시간 창 / 실패보다 느림을 먼저 센다 / 반열림에서는 몇 개를 보내 보나 / 일부러 망가지는 서버 앞에 세워 보기 / 브레이커는 의존성마다 따로 둔다 / 헬스 체크, 아웃라이어 감지와 무엇이 다른가 / 재시도와 타임아웃 사이 어디에 끼우나 / 폴백은 무엇을 돌려주나 / 열린 회로를 현장에서 알아채는 법 / 상태 기계를 직접 짜 보기 / 숫자를 고르기 전에 트래픽부터 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, load-balancer-basics, service-mesh, idempotency-key, connection-pool, rate-limiting-in-practice
-- 키워드 백링크 →: spring-boot-observability, retries, osi-in-practice, sql-batch-timeout-pool, redis-basics, dns
-- 이 글로 오는 글 ←: api-gateway-use-cases, chaos-engineering, connection-pool, enterprise-system-integration, fault-tolerance, health-checks, owasp-top-10-map, pattern-proxy, pattern-state, resilience-patterns, sd-notification-reliability, service-mesh, tail-latency
+- 키워드 백링크 →: spring-cloud-vs-kubernetes, spring-boot-observability, retries, osi-in-practice, sql-batch-timeout-pool, redis-basics, dns
+- 이 글로 오는 글 ←: api-gateway-use-cases, chaos-engineering, connection-pool, enterprise-system-integration, fault-tolerance, health-checks, owasp-top-10-map, pattern-proxy, pattern-state, resilience-patterns, sd-notification-reliability, service-mesh, spring-ai-agents, spring-cloud-vs-kubernetes, tail-latency
 
 #### `clock-skew` — 시계 어긋남: 벽시계, 단조 시계, 그리고 시계 없이 순서 정하기
 
@@ -6395,7 +6417,7 @@
 - 소제목: 한 덩어리가 버거워지는 순간 / 쪼개면 공짜가 아닌 것들 / 어디서 자를 것인가 / 데이터베이스도 서비스마다 / 부를 것인가, 알릴 것인가 / 트랜잭션이 서비스 경계를 넘을 때 / 결국에는 맞춰지는 데이터 / 입구는 게이트웨이와 BFF에 맡긴다 / 쪼개지 않는 편이 나은 경우 / 조금씩 옮기기, 스트랭글러 피그 / 쪼갠 뒤 처음 받는 장애 문의 / 쪼개는 건 결국 경계를 정하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, distributed-tracing, distributed-transactions-2pc, saga-pattern, gateway, microservices-decomposition
 - 키워드 백링크 →: db-architecture-by-scale, grpc, modular-monolith, serverless-architecture, observability-basics, ddd-bounded-context, db-type-columnar-olap, cdc-change-data-capture, rabbitmq-basics, client-data-cache, monolith-architecture, event-driven-architecture, pub-sub, db-index-design, http-versions, js-memory-leak, transactional-outbox, kafka-basics, cqrs, acid-transactions, http-methods, on-call
-- 이 글로 오는 글 ←: api-styles-overview, architecture-patterns-overview, backend-engineer-roadmap, db-architecture-by-scale, db-locking-deadlock, db-sharding, ddd-bounded-context, distributed-transactions-2pc, event-driven-architecture, frontend-monorepo, k8s-certifications, message-queue-basics, micro-frontend-integration-patterns, micro-frontends, microservices-decomposition, modular-monolith, monitoring-basics, monolith-architecture, pattern-command, pattern-facade, rest-api-design, saga-pattern, sd-hotel-inventory-scaling, sd-notification-reliability, sd-sharding-intro, system-design-concepts-map, test-pyramid-unit-tests, transactional-outbox
+- 이 글로 오는 글 ←: api-styles-overview, architecture-patterns-overview, backend-engineer-roadmap, db-architecture-by-scale, db-locking-deadlock, db-sharding, ddd-bounded-context, distributed-transactions-2pc, event-driven-architecture, frontend-monorepo, k8s-certifications, message-queue-basics, micro-frontend-integration-patterns, micro-frontends, microservices-decomposition, modular-monolith, monitoring-basics, monolith-architecture, pattern-command, pattern-facade, rest-api-design, saga-pattern, sd-hotel-inventory-scaling, sd-notification-reliability, sd-sharding-intro, spring-cloud-vs-kubernetes, system-design-concepts-map, test-pyramid-unit-tests, transactional-outbox
 
 #### `network-partitions` — 네트워크 분할: 끊긴 회선이 두 프라이머리를 만드는 과정
 
@@ -6438,8 +6460,8 @@
 - 길이: 414줄
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: timeouts, retries, exponential-backoff-jitter, idempotency-key, circuit-breaker, gateway
-- 키워드 백링크 →: client-data-cache, tail-latency, service-mesh, latency-bandwidth-throughput, backpressure, osi-in-practice, sql-batch-timeout-pool, grpc, http-methods
-- 이 글로 오는 글 ←: acid-transactions, api-gateway-use-cases, argocd-basics, backend-engineer-roadmap, batch-processing, browser-fetch, caching-concepts-map, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, gateway, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, java-jvm-memory-gc, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, opensearch-cluster-operations, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, sd-hotel-inventory-scaling, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-architecture, serverless-limits, service-mesh, spring-boot-on-kubernetes, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, webhooks
+- 키워드 백링크 →: client-data-cache, tail-latency, spring-cloud-vs-kubernetes, service-mesh, latency-bandwidth-throughput, backpressure, osi-in-practice, sql-batch-timeout-pool, grpc, http-methods
+- 이 글로 오는 글 ←: acid-transactions, api-gateway-use-cases, argocd-basics, backend-engineer-roadmap, batch-processing, browser-fetch, caching-concepts-map, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, gateway, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, java-jvm-memory-gc, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, message-delivery-semantics, message-queue-basics, microservices, nginx-reverse-proxy, opensearch-cluster-operations, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, rest-api-design, retries, sd-hotel-inventory-scaling, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-architecture, serverless-limits, service-mesh, spring-ai-agents, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, webhooks
 
 #### `retries` — 재시도는 공짜가 아니다: 무엇을, 몇 번, 어디서 다시 보내나
 
@@ -6494,7 +6516,7 @@
 - 소제목: 목록을 누가 들고 있나 / 등록은 누가 하나 / 살아 있는 동안만 남는 등록 / 살아 있다는 것과 일할 수 있다는 것 / DNS로 찾으면 캐시가 끼어든다 / 목록에서 고르는 규칙 짜 보기 / 목록이 틀렸을 때 생기는 증상 / 어떤 방식을 고를까 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-service-types, k8s-coredns, dns, service-mesh, distributed-lock, k8s-pod-lifecycle, load-balancer-basics
 - 키워드 백링크 →: nodejs-server-runtime, iptables-nat, browser-fetch, iptables-basics, hosts-file, reverse-proxy-lb-api-gateway, k8s-architecture, autoscaling, osi-in-practice, sql-batch-timeout-pool, grpc, db-type-key-value, redis-basics, udp-and-quic
-- 이 글로 오는 글 ←: alerting, devops-networking-roadmap, monitoring-basics, prometheus-basics, sd-chat-connections, sd-metrics-collection, sd-nearby-friends, service-mesh
+- 이 글로 오는 글 ←: alerting, devops-networking-roadmap, monitoring-basics, prometheus-basics, sd-chat-connections, sd-metrics-collection, sd-nearby-friends, service-mesh, spring-cloud-vs-kubernetes
 
 #### `sql-vs-nosql` — SQL vs NoSQL: 조인을 언제 하느냐의 선택
 
@@ -6549,7 +6571,7 @@
 - 소제목: 요청 하나에 기다림이 여섯 번 있다 / 연결이 안 될 때는 커널이 2분 넘게 기다린다 / 읽기 타임아웃은 전체 시간이 아니다 / 계층마다 걸려 있는 한도 / 앞에서 포기해도 뒤에서는 계속 일한다 / 바깥이 안쪽보다 길어야 한다 / 남은 시간을 넘겨주는 데드라인 전파 / keep-alive 유휴 시간이 어긋나면 생기는 502 / 값을 고르는 순서 / 504와 끝나지 않는 요청을 만났을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, retries, exponential-backoff-jitter, nginx-reverse-proxy, chaos-engineering, sql-batch-timeout-pool
 - 키워드 백링크 →: browser-fetch, reverse-proxy-lb-api-gateway, packet-capture-tcpdump, deadlocks, what-happens-google-com, grpc, postgres-getting-started, dns
-- 이 글로 오는 글 ←: chaos-engineering, curl-for-debugging, deadlocks, debugging-with-logs, devops-networking-roadmap, distributed-tracing, enterprise-system-integration, exponential-backoff-jitter, fastapi-basics, fault-tolerance, go-concurrency-basics, grpc, high-availability, http-streaming-sse, js-promise-combinators, long-polling, micro-frontend-integration-patterns, network-partitions, osi-in-practice, owasp-top-10-map, pattern-decorator, pattern-proxy, production-incidents, resilience-patterns, retries, sd-split-web-and-db, sd-web-crawler-architecture, serverless-limits, tail-latency, tcp-connection-lifecycle, webhooks, websocket-deep-dive
+- 이 글로 오는 글 ←: chaos-engineering, curl-for-debugging, deadlocks, debugging-with-logs, devops-networking-roadmap, distributed-tracing, enterprise-system-integration, exponential-backoff-jitter, fastapi-basics, fault-tolerance, go-concurrency-basics, grpc, high-availability, http-streaming-sse, js-promise-combinators, long-polling, micro-frontend-integration-patterns, network-partitions, osi-in-practice, owasp-top-10-map, pattern-decorator, pattern-proxy, production-incidents, resilience-patterns, retries, sd-split-web-and-db, sd-web-crawler-architecture, serverless-limits, spring-ai-agents, spring-cloud-vs-kubernetes, tail-latency, tcp-connection-lifecycle, webhooks, websocket-deep-dive
 
 ### Programming › System Design › 기초부터 차근차근 (`programming/system-design/fundamentals`)
 
@@ -7539,6 +7561,7 @@
 - 데코레이터 패턴 → `pattern-decorator`
 - 델타 동기화 → `sd-file-sync-block-upload`
 - 델타 전송 → `rsync-algorithm`
+- 도구 호출 루프 → `spring-ai-agents`
 - 도메인 샤딩 → `http-versions`
 - 도착 예정 시간 → `sd-maps-location-eta`
 - 독이 든 메시지 → `dead-letter-queue`
@@ -8608,6 +8631,7 @@
 - cgroups → `docker-container-basics`
 - Chain of Responsibility → `pattern-chain-of-responsibility`
 - Changesets → `semantic-versioning`
+- ChatClient → `spring-ai-agents`
 - check-expiration → `k8s-certificates-pki`
 - check-then-act → `race-conditions`
 - cherry-pick → `git-tips-advanced`
@@ -8659,6 +8683,7 @@
 - ConditionalOnMissingBean → `spring-boot-auto-configuration`
 - ConfigMap → `k8s-configmap`
 - configMapGenerator → `k8s-configmap`
+- configtree → `spring-cloud-vs-kubernetes`
 - conftest → `terraform-network-iac`
 - connect 타임아웃 → `timeouts`
 - CONNECT 터널 → `proxy-reverse-proxy`
@@ -9437,6 +9462,7 @@
 - requestAnimationFrame → `js-timers-accuracy`
 - require(esm) → `js-es-modules`
 - rerere → `git-merge-conflict`
+- Resilience4j → `spring-cloud-vs-kubernetes`
 - resize 하위 리소스 → `k8s-in-place-resize`
 - resizePolicy → `k8s-in-place-resize`
 - ResourceClaim → `k8s-gpu-dra`
@@ -9567,7 +9593,10 @@
 - SPIFFE → `service-mesh`
 - split_clients → `canary-release`
 - SPOF → `high-availability`
+- Spring AI → `spring-ai-agents`
 - Spring Boot 4 → `spring-boot-4-migration`
+- Spring Cloud → `spring-cloud-vs-kubernetes`
+- Spring Cloud LoadBalancer → `spring-cloud-vs-kubernetes`
 - Spring Modulith → `modular-monolith`
 - SQL 로드맵 → `sql-study-path`
 - SQL 주입 → `sql-injection`
@@ -9675,6 +9704,7 @@
 - TOCTOU → `race-conditions`
 - TokenRequest → `k8s-serviceaccount-tokens`
 - toleration → `k8s-pod-scheduling`
+- ToolContext → `spring-ai-agents`
 - TooManyRequestsException → `serverless-limits`
 - topologySpreadConstraints → `k8s-pod-scheduling`
 - ToPrimitive → `js-equality-coercion`
@@ -9835,9 +9865,9 @@
 - `javascript-roadmap` ↔ `k8s-learning-roadmap` (27%: 01, 02, 03, 04, 05, 06, 07, 증상이면)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (26%: 테이블, sqld, 시험, 포인트, oracle)
+- `server-sent-events` ↔ `long-polling` (25%: 붙잡는, 장애를, 만났을, 가장, nginx, 깊게, 재연결)
 - `sqld-correlated-subquery` ↔ `sqld-subquery-set-operators` (25%: 서브쿼리, 느려지는, sqld, 시험, 포인트)
 - `sd-db-replication-intro` ↔ `db-replication-sharding` (24%: 복제본은, 대로, 방금, 보인다, 죽으면, 이어받나, 복제는, db)
-- `server-sent-events` ↔ `long-polling` (24%: 붙잡는, 장애를, 만났을, 가장, nginx, 깊게, 재연결)
 - `sqld-set-operators` ↔ `sqld-null-functions` (24%: 행을, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-type-conversion` (24%: 예제, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-window-functions` (24%: 행을, sqld, 시험, 포인트)
@@ -9869,6 +9899,13 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `spring-cloud-vs-kubernetes` ↔ `spring-ai-agents`
+- `spring-cloud-vs-kubernetes` ↔ `spring-boot-on-kubernetes`
+- `spring-cloud-vs-kubernetes` ↔ `service-mesh`
+- `spring-cloud-vs-kubernetes` ↔ `k8s-configmap`
+- `spring-cloud-vs-kubernetes` ↔ `circuit-breaker`
+- `spring-cloud-vs-kubernetes` ↔ `resilience-patterns`
+- `spring-cloud-vs-kubernetes` ↔ `gateway`
 - `cpu-pipelining-branch-prediction` ↔ `cpu-cache-hierarchy`
 - `cpu-pipelining-branch-prediction` ↔ `cpu-instruction-cycle`
 - `cpu-pipelining-branch-prediction` ↔ `web-security-headers`

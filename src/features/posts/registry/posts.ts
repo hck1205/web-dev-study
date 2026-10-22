@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "spring-cloud-vs-kubernetes",
+    title: "Spring Cloud와 쿠버네티스: 무엇을 넘기고 무엇을 남기나",
+    summary: "Eureka, Config Server, Gateway, LoadBalancer가 풀던 문제를 쿠버네티스의 Service, ConfigMap, Ingress와 짝지어 보고, 재고 서비스 두 대 중 한 대가 망가질 때 Resilience4j 서킷 브레이커가 실제로 어떻게 움직이는지 돌려 본다. readiness에 브레이커를 넣으면 생기는 연쇄 장애까지 다룬다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Kubernetes", "MSA", "Resilience"],
+    date: "2026-10-26",
+    keywords: ["Spring Cloud", "Resilience4j", "Spring Cloud LoadBalancer", "configtree"],
+  },
+  {
+    slug: "spring-ai-agents",
+    title: "Spring AI로 에이전트 만들기: 도구 호출 루프를 스텁 모델로 열어 보기",
+    summary: "OpenAI 호환 스텁 서버를 직접 띄워 Spring AI 2.0의 ChatClient가 보내는 요청을 그대로 찍어 본다. 구조화 출력, 도구 호출 루프, 어드바이저 순서, 대화 메모리, RAG, MCP를 실제 로그로 따라가고, 멈추지 않는 루프와 권한 검사, 타임아웃·재시도의 함정을 짚는다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "AI", "LLM", "Backend"],
+    date: "2026-10-26",
+    keywords: ["Spring AI", "ChatClient", "도구 호출 루프", "ToolContext"],
+  },
+  {
     slug: "cpu-pipelining-branch-prediction",
     title: "파이프라인과 분기 예측: 정렬된 배열이 더 빠른 이유",
     summary: "정렬만 했는데 같은 루프가 다섯 배 빨라지는 데서 출발해, 5단계 파이프라인과 해저드, 2비트 카운터와 이력 기반 분기 예측, 예측 실패 비용, cmov로 분기 없애기, 비순차 실행과 ROB, Spectre, SIMD를 C와 Node 실측으로 따라간다.",

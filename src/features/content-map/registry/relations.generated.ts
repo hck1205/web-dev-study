@@ -2,6 +2,58 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "spring-cloud-vs-kubernetes": {
+    "links": [
+      "microservices",
+      "service-discovery",
+      "k8s-service-types",
+      "k8s-coredns",
+      "spring-boot-auto-configuration",
+      "k8s-configmap",
+      "argocd-basics",
+      "k8s-secret",
+      "secrets-management",
+      "gateway",
+      "k8s-gateway-api",
+      "resilience-patterns",
+      "circuit-breaker",
+      "service-mesh",
+      "timeouts",
+      "spring-boot-4-migration",
+      "spring-boot-on-kubernetes",
+      "spring-boot-observability",
+      "spring-ai-agents"
+    ],
+    "mentions": [
+      "iptables-nat",
+      "k8s-architecture",
+      "kubernetes-ingress",
+      "autoscaling",
+      "osi-in-practice",
+      "cilium-ebpf",
+      "grpc",
+      "k8s-hpa",
+      "dns"
+    ]
+  },
+  "spring-ai-agents": {
+    "links": [
+      "agentic-rag",
+      "spring-boot-auto-configuration",
+      "spring-boot-4-migration",
+      "rag-classic-pipeline",
+      "timeouts",
+      "circuit-breaker",
+      "spring-boot-observability",
+      "spring-cloud-vs-kubernetes"
+    ],
+    "mentions": [
+      "api-styles-overview",
+      "resilience-patterns",
+      "redis-basics",
+      "vector-db"
+    ]
+  },
   "cpu-pipelining-branch-prediction": {
     "links": [
       "cpu-instruction-cycle",
@@ -326,6 +378,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-ioc-di",
       "spring-boot-auto-configuration",
       "spring-boot-4-migration",
+      "spring-cloud-vs-kubernetes",
       "dockerfile-image-layers",
       "k8s-hpa",
       "spring-boot-observability",
@@ -1456,6 +1509,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "high-availability"
     ],
     "mentions": [
+      "spring-cloud-vs-kubernetes",
       "rest-api-design",
       "proxy-reverse-proxy",
       "http-methods",
@@ -9085,6 +9139,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-service-types",
+      "spring-cloud-vs-kubernetes",
       "iptables-basics",
       "packet-encapsulation",
       "k8s-architecture",
@@ -9650,6 +9705,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pv-pvc"
     ],
     "mentions": [
+      "spring-cloud-vs-kubernetes",
       "k8s-pod-basics",
       "helm-dependencies-oci-gitops",
       "k8s-architecture",
@@ -9817,6 +9873,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-in-practice"
     ],
     "mentions": [
+      "spring-cloud-vs-kubernetes",
       "spring-boot-observability",
       "retries",
       "osi-in-practice",
@@ -12915,6 +12972,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "tail-latency",
+      "spring-cloud-vs-kubernetes",
       "service-mesh",
       "latency-bandwidth-throughput",
       "backpressure",
@@ -12989,6 +13047,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-in-practice",
       "canary-release",
       "k8s-network-policy",
+      "spring-cloud-vs-kubernetes",
       "osi-in-practice",
       "docker-container-basics",
       "proxy-reverse-proxy",
