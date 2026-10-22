@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("sql-select-where-null");
 
+<EasyIntro>
+  방금 이름을 붙인 계산 결과로 행을 거르려 했더니 그런 열이 없다는 에러가 나고, 전화번호가 없는 회원을 찾으려고 등호로 NULL과 비교했더니 에러도 없이 0행이 나오는 일이 있다. 둘 다 SQL이 문장을 읽는 순서와 NULL을 다루는 방식을 알면 이상하지 않다.
+
+  SELECT 문장은 적은 순서가 아니라 테이블을 읽고, 행을 거르고, 묶고, 묶음을 거르고, 보여 줄 값을 계산하고, 정렬하고, 자르는 순서로 처리된다. 보여 줄 값에 붙인 이름은 거르는 단계보다 뒤에 생기니 거르는 조건에서는 쓸 수 없다.
+
+  NULL은 값이 아니라 모른다는 표시다. 모르는 값과 무엇을 비교해도 답은 참도 거짓도 아닌 모름이고, 거르는 단계는 참인 행만 남기니 모름인 행은 조용히 버려진다. 그래서 NULL은 등호가 아니라 NULL인지 묻는 전용 표현으로 확인하고, 목록에 없는 값을 찾는 조건은 목록에 NULL이 하나라도 섞이면 결과가 통째로 비어 버린다.
+</EasyIntro>
+
 부가세를 붙인 가격이 1만 원 넘는 상품만 보려고 `SELECT name, price * 1.1 AS with_tax FROM products WHERE with_tax > 10000`을 쳤다. `column "with_tax" does not exist`가 돌아온다. 바로 앞에서 `AS with_tax`로 이름을 붙였는데 없다고 한다. 전화번호 없는 회원을 찾으려고 친 `WHERE phone = NULL`은 에러도 없이 0행을 낸다. 둘 다 SQL이 문장을 읽는 순서와 NULL을 다루는 방식을 모르면 이상해 보인다.
 
 테이블을 만들고 행을 넣는 과정은 [SQL 기본 명령어 글](/posts/sql-basics)에서 했다. 이 글은 그 테이블에서 원하는 행만 골라 읽는다. 기준은 Ubuntu 24.04의 PostgreSQL 16(16.15)이고, SQLD가 Oracle과 SQL Server 기준으로 묻는 차이는 그때그때 짚는다. 두 DB의 동작은 직접 돌려 보지 못해 글로만 적었다.
