@@ -1,0 +1,253 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("hash-hmac-password-hashing");
+
+사용자 테이블이 통째로 유출됐다는 가정으로 모의 훈련을 했다. 비밀번호 칸을 열어 보니 `5e884898da...` 같은 SHA-256 해시가 들어 있었다. "해시라서 안전하다"고 적힌 문서를 믿었는데, 공격자 역할을 맡은 팀이 흔한 비밀번호 목록을 SHA-256으로 돌려 맞춰 보는 데 몇 분이면 끝냈다.
+
+문제는 해시를 썼다는 게 아니라 **어떤** 해시를 썼느냐다. SHA-256은 빠르라고 만든 해시이고, 비밀번호 저장은 느려야 안전한 자리다. 이 글은 해시가 무엇을 보장하는지부터, 그걸 변조 방지에 쓸 때 왜 그냥 붙이면 안 되고 HMAC을 써야 하는지, 비밀번호는 왜 scrypt·bcrypt·Argon2 같은 "느린 해시"로 저장하는지까지 node:crypto·openssl 실제 출력으로 따라간다. 모든 해시값은 이 컨테이너(Node 22, OpenSSL 3.0.13)에서 계산한 값이다. 비밀번호를 아예 없애는 방향은 [패스키와 WebAuthn](/posts/passkeys-webauthn)에, 두 번째 요소를 더하는 이야기는 [MFA와 TOTP](/posts/mfa-totp)에 있다.
+
+## 한 방향으로만 가는 계산
+
+해시 함수는 아무 길이의 입력을 정해진 길이의 지문으로 바꾼다. SHA-256은 늘 32바이트를 내놓는다. 좋은 암호 해시는 세 가지를 지킨다. 같은 입력은 항상 같은 출력을 주고, 출력에서 입력을 되돌릴 수 없으며(역상 저항), 같은 출력을 내는 다른 입력을 찾기 어렵다(충돌 저항).
+
+```text
+sha256("")      = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+```
+
+<ConceptDiagram
+  width={420}
+  height={170}
+  caption="앞으로는 쉽고 뒤로는 막혀 있다"
+  nodes={[
+    { id: "in", label: "입력", sub: "아무 길이", x: 80, y: 85, w: 120 },
+    { id: "h", label: "SHA-256", sub: "섞기", x: 210, y: 85, w: 110 },
+    { id: "out", label: "32바이트", sub: "지문", x: 350, y: 85, w: 120 },
+  ]}
+  edges={[
+    { from: "in", to: "h", label: "쉽다" },
+    { from: "h", to: "out", label: "쉽다" },
+    { from: "out", to: "in", label: "막힘", dashed: true },
+  ]}
+/>
+
+입력이 한 글자만 달라도 출력은 절반 가까이 바뀐다(눈사태 효과). `hello`와 `hellp`를 해시하면 256비트 중 131비트가 다르다.
+
+<AlgoTrace
+  caption="한 글자 차이가 해시 절반을 흔든다"
+  memoryLabel="다른 비트"
+  cells={["h", "e", "l", "l", "o→p"]}
+  steps={[
+    { pointer: 4, caption: "입력에서 마지막 한 글자만 o에서 p로 바꾼다. 한 비트 차이다." },
+    { pointer: 4, found: [4], memory: ["131 / 256 비트"], caption: "그런데 두 해시는 256비트 중 131비트가 서로 다르다. 입력의 작은 변화가 출력 전체로 퍼진다." },
+  ]}
+/>
+
+이 성질 덕분에 해시는 "같은 파일인가"를 확인하는 데 쓰인다. 큰 데이터를 통째로 비교하는 대신 지문만 맞춰 보면 된다([Git의 객체 해시](/posts/git-internals-basics), [머클 트리](/posts/merkle-tree)가 이걸 쓴다). 하지만 "내용이 안 바뀌었나"를 확인하는 데는 해시만으로 부족하다. 공격자가 내용을 바꾸고 해시도 다시 계산해 붙이면 그만이기 때문이다.
+
+## 비밀 하나를 섞어야 위조를 막는다
+
+변조를 막으려면 공격자가 모르는 비밀 키를 해시에 섞어야 한다. 그래야 키 없이는 맞는 지문을 만들 수 없다. 그런데 `sha256(키 + 메시지)`처럼 순진하게 이어 붙이면 길이 확장 공격(length extension)에 당한다.
+
+SHA-256은 입력을 블록으로 잘라 순서대로 섞고, 마지막 내부 상태를 출력으로 내놓는다. 그런데 그 출력이 곧 "거기까지 처리한 내부 상태"다. 공격자는 키를 몰라도, `sha256(키+메시지)` 값과 메시지 길이만 알면 그 상태에서 이어서 계산해 `sha256(키+메시지+패딩+추가내용)`의 올바른 해시를 만들 수 있다. 키를 한 번도 안 봤는데 "키로 서명된 것처럼 보이는" 새 메시지가 나온다.
+
+<SequenceDiagram
+  caption="순진한 MAC은 키 없이도 뒤에 덧붙일 수 있다"
+  actors={[
+    { id: "s", label: "서버" },
+    { id: "a", label: "공격자" },
+  ]}
+  steps={[
+    { from: "s", to: "a", label: "msg, tag", title: "서버가 메시지와 태그를 보낸다", detail: "tag = sha256(key + msg). 공격자는 key를 모른다.", payload: "msg=amount=100\ntag=sha256(key+msg)" },
+    { from: "a", to: "a", label: "상태 복원", title: "공격자가 태그에서 내부 상태를 읽는다", detail: "SHA-256 출력이 곧 거기까지의 내부 상태라, 공격자는 그 상태에서 계산을 이어 갈 수 있다." },
+    { from: "a", to: "s", label: "msg', tag'", title: "뒤에 덧붙여 새 태그를 만든다", detail: "key를 몰라도 msg 뒤에 패딩과 &admin=1을 붙인 새 메시지의 올바른 태그를 만든다. 서버는 통과시킨다.", payload: "msg'=amount=100…&admin=1\ntag'=valid" },
+  ]}
+/>
+
+HMAC은 이 틈을 구조로 막는다. 키를 두 번, 안쪽과 바깥쪽으로 나눠 해시한다. 대략 `H((key⊕opad) + H((key⊕ipad) + msg))` 꼴이다. 바깥 해시가 한 번 더 감싸서, 내부 상태를 이어받아 덧붙이는 공격이 통하지 않는다.
+
+<ConceptDiagram
+  width={440}
+  height={200}
+  caption="안쪽 해시를 바깥 해시가 한 번 더 감싼다"
+  nodes={[
+    { id: "ikey", label: "key ⊕ ipad", sub: "안쪽 키", x: 80, y: 45, w: 120 },
+    { id: "msg", label: "메시지", sub: "", x: 80, y: 150, w: 120 },
+    { id: "inner", label: "안쪽 해시", sub: "H(ikey+msg)", x: 250, y: 95, w: 120 },
+    { id: "okey", label: "key ⊕ opad", sub: "바깥 키", x: 250, y: 185, w: 120 },
+    { id: "outer", label: "바깥 해시", sub: "최종 태그", x: 400, y: 95, w: 110 },
+  ]}
+  edges={[
+    { from: "ikey", to: "inner" },
+    { from: "msg", to: "inner" },
+    { from: "inner", to: "outer", label: "감쌈" },
+    { from: "okey", to: "outer" },
+  ]}
+/>
+
+node와 openssl로 같은 HMAC을 계산해 값이 일치하는지 확인했다.
+
+```js
+import { createHmac } from "node:crypto";
+const tag = createHmac("sha256", "super-secret-key")
+  .update("amount=100&to=alice")
+  .digest("hex");
+// 9ad009af614fcc83a923eb9ea35d9b9d96768c35c0feb206e86c14748f478b34
+```
+
+```text
+$ echo -n "amount=100&to=alice" | openssl dgst -sha256 -hmac "super-secret-key"
+SHA2-256(stdin)= 9ad009af614fcc83a923eb9ea35d9b9d96768c35c0feb206e86c14748f478b34
+```
+
+웹훅 서명이 이 HMAC을 그대로 쓴다. 보내는 쪽과 받는 쪽이 비밀 키를 나눠 갖고 본문으로 HMAC을 계산해 맞춰 본다([웹훅 서명 검증](/posts/webhooks)에 받는 쪽 서버를 띄워 확인하는 예가 있다). SHA-3 계열은 구조가 달라 길이 확장에 애초에 면역이지만, 지금 가장 흔한 건 HMAC-SHA256이다.
+
+## 빠른 해시가 비밀번호에서는 독이다
+
+비밀번호 저장으로 돌아오자. 여기서 해시의 좋은 성질(빠름)이 정확히 약점이 된다. 공격자가 유출된 해시를 손에 쥐면, 흔한 비밀번호를 하나씩 해시해 맞는 걸 찾는다(오프라인 대입). 해시가 빠를수록 초당 더 많이 시도한다.
+
+이 컨테이너 한 코어에서 SHA-256을 재 봤다.
+
+```text
+SHA-256 100만 회: 1673 ms   → 초당 약 60만 회 (CPU 한 코어)
+```
+
+CPU 한 코어로도 초당 수십만 회다. GPU를 쓰면 SHA-256은 초당 수십억 회 수준으로 올라간다. 여덟 자리 비밀번호 공간쯤은 금방 훑는다. 그래서 비밀번호는 일부러 느리게 만든 해시로 저장한다.
+
+두 가지를 섞는다. 먼저 사용자마다 다른 무작위 값(솔트)을 비밀번호에 붙여 해시한다. 솔트가 다르면 같은 비밀번호도 저장값이 달라져서, 공격자가 미리 계산해 둔 표(레인보우 테이블)를 못 쓰고 사용자마다 따로 공격해야 한다. 그다음 계산을 일부러 비싸게(느리게) 만든다. scrypt·bcrypt·Argon2가 이 일을 한다.
+
+```js
+import { scryptSync, randomBytes, timingSafeEqual } from "node:crypto";
+function hashPw(pw) {
+  const salt = randomBytes(16); // 사용자마다 새로
+  const dk = scryptSync(pw, salt, 32, { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
+  return `scrypt$N=32768,r=8,p=1$${salt.toString("base64")}$${dk.toString("base64")}`;
+}
+console.log(hashPw("correct horse battery staple"));
+console.log(hashPw("correct horse battery staple")); // 같은 비번, 다른 저장값
+```
+
+```text
+scrypt$N=32768,r=8,p=1$oZp5+kU12yXTzFuffXz1GA==$28QU3pt+uSrpK3puSf0MYuINPRium31/D5zoSKofBec=
+scrypt$N=32768,r=8,p=1$ACZdOmfWtCtV2ghLTzHLKA==$C8OIyQmjpdWMzvmd2GCvNnzg5p33bgMHNRB+zWthSC8=
+```
+
+같은 비밀번호인데 솔트가 달라 저장값이 전혀 다르다. 저장 문자열에는 알고리즘, 비용 파라미터, 솔트, 해시가 다 들어간다. 검증할 때 이 값들을 다시 읽어 쓰기 때문이다. 로그인은 저장 문자열에서 솔트·파라미터를 꺼내 입력 비밀번호를 같은 방식으로 돌린 뒤, 결과를 상수 시간 비교로 맞춰 본다.
+
+```js
+function verify(pw, stored) {
+  const [, params, saltB, dkB] = stored.split("$");
+  const o = Object.fromEntries(params.split(",").map((s) => s.split("=")));
+  const salt = Buffer.from(saltB, "base64"), dk = Buffer.from(dkB, "base64");
+  const got = scryptSync(pw, salt, dk.length, { N: +o.N, r: +o.r, p: +o.p, maxmem: 64 * 1024 * 1024 });
+  return timingSafeEqual(got, dk); // 아래 상수 시간 비교 참고
+}
+```
+
+```text
+맞는 비번: true
+틀린 비번: false
+```
+
+비밀번호 자체는 어디에도 저장하지 않는다. 저장한 건 솔트와 느린 해시 결과뿐이라, DB를 봐도 원래 비밀번호는 나오지 않는다.
+
+<UrlAnatomy
+  caption="저장된 비밀번호 해시 한 줄 뜯어보기"
+  base="scrypt"
+  separator="$"
+  joiner="$"
+  params={[
+    { key: "params", display: "N=32768,r=8,p=1", title: "비용 파라미터", description: "scrypt의 작업량. N은 메모리·시간 비용, r은 블록 크기, p는 병렬도다. 이 컨테이너에서 N=32768이면 한 번 계산에 약 97ms가 걸렸다. 하드웨어가 빨라지면 이 숫자를 올린다.", required: true },
+    { key: "salt", display: "oZp5+kU12y…", title: "솔트", description: "사용자마다 다른 무작위 16바이트. 같은 비밀번호도 저장값이 달라지게 해서 레인보우 테이블과 한꺼번에 공격하기를 막는다. 비밀이 아니라 해시와 함께 저장한다.", required: true },
+    { key: "hash", display: "28QU3pt+uSr…", title: "유도된 키", description: "비밀번호+솔트를 느린 함수로 돌린 결과. 로그인 때 입력 비밀번호를 같은 솔트·파라미터로 돌려 이 값과 비교한다.", required: true },
+  ]}
+/>
+
+비용 파라미터를 올리면 계산이 느려진다. 이 컨테이너에서 scrypt의 N을 바꿔 가며 재 봤다.
+
+```text
+N=4096    12.0 ms
+N=16384   49.3 ms
+N=32768   96.7 ms
+N=65536  212.0 ms
+```
+
+로그인 한 번에 50~100ms 정도 걸리게 맞추는 게 흔한 기준이다. 사용자는 거의 못 느끼지만 공격자의 초당 시도 횟수는 수십만에서 열 몇 번으로 떨어진다. bcrypt는 `cost`(라운드 수, 보통 12 이상), Argon2id는 메모리(예: 19MiB 이상)·시간·병렬도를 파라미터로 받는다. 요즘 새로 만들면 메모리를 많이 쓰게 하는 Argon2id가 GPU·ASIC 대량 공격에 더 강해 권장된다. bcrypt는 입력을 72바이트에서 자르는 제약이 있어 긴 비밀번호나 이모지에서 조심해야 한다.
+
+<Callout kind="note">
+솔트 위에 서버만 아는 고정 비밀(페퍼)을 한 겹 더 두기도 한다. 솔트는 해시 옆에 저장하지만 페퍼는 DB 밖(앱 설정이나 HSM)에 둔다. DB만 유출되면 페퍼가 없어 대입이 더 어려워진다. 다만 [비밀 관리](/posts/secrets-management)가 그만큼 중요해지고, 페퍼를 바꾸면 기존 해시를 못 쓰니 교체 설계가 필요하다.
+</Callout>
+
+## 맞는지 비교할 때도 시간이 샌다
+
+검증 단계에도 함정이 있다. 저장된 해시나 HMAC 태그를 `===`로 비교하면, 문자열 비교가 첫 글자가 다른 순간 멈춘다. 공격자가 응답 시간을 아주 많이 재면 맞는 앞부분을 한 글자씩 알아낼 수 있다(타이밍 공격). 특히 HMAC 태그 검증처럼 공격자가 값을 마음대로 보낼 수 있는 곳에서 위험하다.
+
+그래서 어디서 달라지든 같은 시간이 걸리는 상수 시간 비교를 쓴다. node:crypto의 `timingSafeEqual`이 그 함수인데, 길이가 다르면 예외를 던지므로 먼저 길이를 거른다.
+
+```text
+crypto.timingSafeEqual(Buffer.from("ab"), Buffer.from("abc"))
+// → Input buffers must have the same byte length
+```
+
+원리는 간단하다. 두 값을 끝까지 다 보면서 바이트마다 XOR한 걸 누적하고, 마지막에 0인지 본다. 중간에 끊지 않는다. 직접 짜 보자. 기대값은 모두 node로 확인했다.
+
+<CodePlayground
+  caption="상수 시간 문자열 비교"
+  functionName="constantTimeEqual"
+  initialCode={`function constantTimeEqual(a, b) {
+  // 첫 다른 글자에서 멈추지 말고, 끝까지 보면서 차이를 누적한다
+  return a === b;
+}`}
+  solution={`function constantTimeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}`}
+  tests={[
+    { label: "같은 값", args: ["abc123", "abc123"], expected: true },
+    { label: "마지막 글자만 다름", args: ["abc123", "abc124"], expected: false },
+    { label: "길이가 다름", args: ["abc", "abcd"], expected: false },
+    { label: "빈 문자열", args: ["", ""], expected: true },
+    { label: "서명 비교", args: ["sha256=9ad0", "sha256=9ad0"], expected: true },
+    { label: "첫 글자만 다름", args: ["Xbc123", "abc123"], expected: false },
+  ]}
+/>
+
+길이가 같을 때 이 함수의 실행 시간은 어디서 틀리든 거의 같다. 길이 비교로 빠져나가는 부분이 신경 쓰이면, 두 값을 먼저 HMAC으로 한 번 더 돌려 길이를 고정한 뒤 비교하기도 한다.
+
+## 자리마다 맞는 해시가 다르다
+
+해시 하나로 다 되지 않는다. 자리마다 쓰는 게 다르다. 파일이 같은지 확인하는 무결성 검사에는 빠른 SHA-256이 맞다. 키로 메시지를 묶어 위조를 막을 때는 SHA-256을 그냥 붙이지 말고 HMAC-SHA256을 쓴다. 사람이 외우는 비밀번호를 저장할 때는 느린 해시(scrypt·bcrypt·Argon2id)에 사용자별 솔트를 섞고 비용 파라미터를 하드웨어에 맞춰 올린다. 그리고 해시·태그를 비교할 때는 상수 시간 비교로 타이밍 누수를 막는다. 비밀번호를 쓰지 않는 로그인으로 가면 이 저장 문제 자체가 사라지는데, 그게 [패스키](/posts/passkeys-webauthn) 글이다.
+
+## 면접에서 나올 만한 질문
+
+### 암호 해시 함수가 지켜야 하는 성질은 무엇인가요?
+
+같은 입력에 같은 출력을 주는 결정성, 출력에서 입력을 되돌릴 수 없는 역상 저항, 같은 출력을 내는 다른 입력을 찾기 어려운 충돌 저항이다. 여기에 입력 한 비트만 바뀌어도 출력이 절반 가까이 달라지는 눈사태 효과가 더해진다. 이 성질들이 무결성 검사와 지문 비교를 가능하게 한다.
+
+### 비밀번호를 SHA-256으로 저장하면 왜 위험한가요?
+
+SHA-256은 빠르라고 만든 해시라 공격자가 유출된 해시에 대고 흔한 비밀번호를 초당 수억 번(GPU) 대입할 수 있다. 이 컨테이너 한 코어로도 초당 수십만 회가 나온다. 비밀번호 저장은 느려야 안전한 자리라, scrypt·bcrypt·Argon2id처럼 일부러 비싸게 만든 함수에 사용자별 솔트를 섞어 저장해야 한다.
+
+### 솔트는 무엇을 막고, 비밀로 해야 하나요?
+
+솔트는 사용자마다 다른 무작위 값으로, 같은 비밀번호라도 저장값이 달라지게 한다. 그래서 미리 계산한 레인보우 테이블을 무력화하고, 공격자가 사용자마다 따로 공격하게 만든다. 솔트는 비밀이 아니어서 해시와 함께 저장하고, 비밀로 두고 싶은 값은 DB 밖에 두는 페퍼로 따로 관리한다.
+
+### sha256(key + message) 대신 HMAC을 쓰는 이유는?
+
+순진하게 키와 메시지를 이어 붙인 해시는 길이 확장 공격에 취약하다. SHA-256 출력이 곧 거기까지의 내부 상태라, 공격자가 키를 몰라도 그 상태에서 이어 계산해 메시지 뒤에 내용을 덧붙인 유효한 태그를 만들 수 있다. HMAC은 키를 안쪽·바깥쪽 두 번 섞어 이 틈을 구조적으로 막는다.
+
+### scrypt나 Argon2의 비용 파라미터는 어떻게 정하나요?
+
+로그인 한 번에 걸리는 시간이 사용자가 거의 못 느끼면서(보통 50~100ms) 공격자의 초당 시도 횟수는 크게 떨어지도록 맞춘다. 이 컨테이너에서 scrypt는 N=32768일 때 약 97ms였다. 하드웨어가 빨라지면 이 값을 올리고, Argon2id는 특히 메모리 비용을 충분히(수십 MiB) 줘서 GPU·ASIC 대량 공격을 어렵게 한다.
+
+### 해시나 태그를 비교할 때 ===를 쓰면 안 되는 이유는?
+
+문자열 비교는 첫 글자가 다른 순간 멈춰서, 응답 시간을 많이 측정하면 맞는 앞부분을 한 글자씩 알아낼 수 있다(타이밍 공격). 특히 공격자가 값을 마음대로 보낼 수 있는 HMAC 태그 검증에서 위험하다. 그래서 어디서 달라지든 같은 시간이 걸리는 상수 시간 비교(timingSafeEqual)를 쓴다.
+
+### bcrypt와 Argon2id 중 새 서비스에는 무엇을 권하나요?
+
+메모리를 많이 쓰게 하는 Argon2id가 GPU·ASIC 대량 공격에 더 강해 요즘 권장된다. bcrypt는 오래 검증됐고 널리 쓰이지만 입력을 72바이트에서 잘라 긴 비밀번호나 이모지에서 조심해야 한다. 둘 다 사용자별 솔트와 충분한 비용 파라미터를 전제로 하며, 레거시 호환이 필요하면 bcrypt, 새로 고르면 Argon2id가 무난하다.

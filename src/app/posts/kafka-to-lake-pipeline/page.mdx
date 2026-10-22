@@ -1,0 +1,423 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("kafka-to-lake-pipeline");
+
+같은 날, 같은 클릭 테이블인데 대시보드 두 개의 숫자가 다르다. 하나는 80,000건, 다른 하나는 84,998건이다. 둘 다 레이크의 `clicks` 폴더를 읽는다. 차이는 하나가 테이블의 루트 경로를, 다른 하나가 날짜 폴더 `dt=2026-10-21`을 직접 읽는다는 것뿐이다. 그리고 다음 날 아침에는 어제 광고비 리포트를 다시 뽑았더니 숫자가 늘어 있다.
+
+둘 다 이 글에서 직접 만든 장면이다. Kafka 토픽의 클릭을 Spark Structured Streaming으로 레이크에 쌓고, 중간에 프로세스를 `kill -9`로 죽였다 살리고, 하루가 지난 뒤 늦은 클릭과 형식이 바뀐 클릭을 흘려 봤다. 이 글은 Kafka에서 레이크까지 이어지는 파이프라인 전체를 다룬다. 들어온 이벤트를 파일로 바꾸는 두 가지 길, 마이크로배치가 커밋되는 순서, 정확히 한 번이 지켜지는 범위와 깨지는 자리, 작은 파일, 늦은 데이터, 스키마 변경이다.
+
+환경은 Ubuntu 24.04, JDK 21, Kafka 4.1.2(KRaft 브로커 한 대, 파티션 3), PySpark 4.0.1과 `spark-sql-kafka-0-10` 커넥터다. 레이크는 로컬 폴더로 대신했다. 이 글은 시리즈의 마지막 조각을 잇는다. 레이크의 파일과 테이블 포맷은 [데이터 레이크와 HDFS](/posts/data-lake-hdfs)에, Spark의 stage와 셔플은 [Spark 기초](/posts/spark-basics)에, 매일 도는 배치의 데이터 구간과 백필은 [Airflow](/posts/airflow-orchestration)에 있다. Kafka 자체는 [Kafka 기초](/posts/kafka-basics)에, 전달 보장의 일반론은 [메시지 전달 보장](/posts/message-delivery-semantics)에, 이벤트 시간과 워터마크는 [광고 클릭 집계 ①](/posts/sd-ad-click-stream-windows)에 있다.
+
+## 받는 쪽과 쌓는 쪽을 끊어 놓는다
+
+광고 서버가 클릭을 받자마자 레이크에 파일로 쓰면 어떨까. 서버마다 몇 초에 한 번 작은 파일을 만들고, 레이크가 느려지면 광고 서버도 느려진다. 그래서 가운데에 Kafka를 둔다. 광고 서버는 Kafka에 던지고 끝내고, 레이크로 옮기는 일은 따로 도는 작업이 자기 속도로 한다. Kafka가 며칠치를 보관하니, 옮기는 작업이 몇 시간 멈춰도 데이터는 잃지 않고 밀릴 뿐이다.
+
+그 뒤는 층으로 나뉜다. 스트리밍 작업이 Kafka의 이벤트를 거의 그대로 raw 층에 몇 초 단위로 쌓는다. 매일 한 번 Airflow가 배치를 돌려 raw의 하루치를 중복 없이 정리해 clean 층에 큰 파일로 다시 쓰고, 그 위에서 집계(mart)를 만든다. 아래 그림에서 다음을 누르면 클릭 하나가 지나는 길이 보인다.
+
+<NetworkTopology
+  caption="클릭 하나가 Kafka에서 레이크의 clean 층까지 가는 길"
+  width={400}
+  height={280}
+  zones={[
+    { id: "rt", label: "몇 초 단위", x: 8, y: 20, w: 384, h: 110, tone: "edge" },
+    { id: "daily", label: "하루 한 번", x: 8, y: 150, w: 384, h: 115, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "광고 서버", sub: "produce", x: 50, y: 80, icon: "server" },
+    { id: "kafka", label: "Kafka", sub: "clicks ×3", x: 150, y: 80, icon: "switch" },
+    { id: "ss", label: "Spark 스트림", sub: "5초 트리거", x: 250, y: 80, icon: "container" },
+    { id: "raw", label: "raw/clicks", sub: "작은 파일", x: 345, y: 80, icon: "db" },
+    { id: "af", label: "Airflow", sub: "구간 [21일,22일)", x: 90, y: 210, icon: "router" },
+    { id: "batch", label: "Spark 배치", sub: "중복 제거", x: 215, y: 210, icon: "container" },
+    { id: "clean", label: "clean/clicks", sub: "큰 파일", x: 335, y: 210, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "kafka" },
+    { from: "kafka", to: "ss" },
+    { from: "ss", to: "raw" },
+    { from: "af", to: "batch" },
+    { from: "raw", to: "batch" },
+    { from: "batch", to: "clean" },
+  ]}
+  steps={[
+    { path: ["app", "kafka"], packet: "c0080000", title: "광고 서버는 던지고 끝낸다", detail: "click_id를 키로 보낸다. acks=all이라 브로커가 받았다고 답하면 광고 서버의 일은 끝이다." },
+    { path: ["kafka", "ss"], packet: "offset 26664", title: "스트리밍 작업이 꺼내 간다", detail: "5초마다 각 파티션에서 지난번 다음 오프셋부터 읽는다. 어디까지 읽었는지는 Kafka가 아니라 체크포인트 폴더에 적는다." },
+    { path: ["ss", "raw"], packet: "parquet", title: "raw 층에 몇 초 단위로 쌓인다", detail: "이벤트 시각으로 dt를 정해 날짜 폴더에 Parquet 파일을 쓴다. 배치마다 파일이 생겨 작다." },
+    { path: ["af", "batch"], packet: "dt=2026-10-21", title: "하루가 닫히면 배치를 시킨다", detail: "Airflow가 21일 구간이 끝난 뒤 그날을 정리하는 Spark 배치를 띄운다." },
+    { path: ["raw", "batch", "clean"], packet: "80,200행", title: "중복을 지우고 큰 파일로", detail: "raw의 하루치를 click_id로 중복 제거하고 파일 하나로 다시 써서, 그 날짜 파티션을 통째로 갈아 끼운다." },
+  ]}
+/>
+
+이 모양은 스트림과 배치를 둘 다 쓰는 쪽이다. 스트림 하나로 모든 걸 다시 계산하는 카파 아키텍처와 둘을 나란히 두는 람다 아키텍처의 차이는 [광고 클릭 집계 ②](/posts/sd-ad-click-exactly-once)에서 다뤘다. 여기서는 레이크 적재라는 한 가지 일에 집중한다.
+
+## Kafka를 파일로 바꾸는 두 가지 길
+
+Kafka에서 객체 저장소나 HDFS로 옮기는 길은 크게 둘이다.
+
+하나는 Kafka Connect의 싱크 커넥터다. 코드를 짜지 않고 설정만으로 토픽을 S3에 쓴다. 이 실험에서는 돌려 보지 않았고, 설정은 아래와 같은 모양이다(예시, Confluent S3 싱크 커넥터 기준).
+
+```json
+{
+  "name": "clicks-s3-sink",
+  "config": {
+    "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+    "topics": "clicks",
+    "s3.bucket.name": "acme-lake",
+    "format.class": "io.confluent.connect.s3.format.parquet.ParquetFormat",
+    "flush.size": "50000",
+    "rotate.interval.ms": "600000",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "path.format": "'dt'=YYYY-MM-dd",
+    "partition.duration.ms": "86400000",
+    "timestamp.extractor": "RecordField",
+    "timestamp.field": "event_time",
+    "locale": "ko_KR",
+    "timezone": "UTC"
+  }
+}
+```
+
+`flush.size`(몇 건마다)와 `rotate.interval.ms`(몇 초마다)가 파일 크기를 정한다. 파일 이름에 파티션과 시작 오프셋을 넣어서, 같은 구간을 다시 쓰면 같은 이름으로 덮어쓴다. 그래서 커넥터가 죽었다 살아도 중복 파일이 생기지 않게 만들 수 있다(파티셔너와 설정이 결정적일 때만이다). 변환은 단순한 필드 조작 정도만 된다. 이 커넥터의 라이선스는 Apache가 아니라 Confluent Community License라서, 쓰는 환경에서 조건을 확인해야 한다.
+
+다른 하나는 Spark Structured Streaming이나 Flink 같은 스트림 처리 엔진이다. JSON을 풀고, 형식을 검사하고, 다른 표와 조인하고, 테이블 포맷(Delta, Iceberg)으로 바로 쓰는 일까지 코드로 한다. 대신 작업을 운영해야 한다. 이 글의 실험은 이쪽이다.
+
+| | Kafka Connect 싱크 | Spark Structured Streaming |
+|---|---|---|
+| 만드는 법 | 설정(JSON) | 코드 |
+| 변환 | 단일 메시지 변환(SMT) 정도 | 조인, 집계, 검증 등 무엇이든 |
+| 중복 없이 쓰기 | 결정적 파일 이름으로 덮어쓰기 | 체크포인트 + 싱크 커밋 로그 |
+| 진행 위치 | Kafka 소비자 그룹 오프셋 | 체크포인트 폴더 |
+| 어울리는 곳 | 토픽을 그대로 옮기는 raw 적재 | 정리, 검증, 테이블 포맷 적재 |
+
+## 마이크로배치 하나가 커밋되는 순서
+
+스트리밍 작업은 이렇게 짰다. 5초마다 깨어나 최대 5천 건을 읽고, JSON을 정해 둔 스키마로 풀어, 이벤트 시각의 날짜로 폴더를 나눠 쓴다.
+
+```python
+raw = (spark.readStream.format("kafka")
+       .option("kafka.bootstrap.servers", "127.0.0.1:19780")
+       .option("subscribe", "clicks")
+       .option("startingOffsets", "earliest")
+       .option("maxOffsetsPerTrigger", "5000")
+       .load())
+clicks = (raw.select(F.from_json(F.col("value").cast("string"), schema).alias("v"), "partition", "offset")
+          .select("v.*", "partition", "offset")
+          .withColumn("dt", F.to_date("event_time")))
+q = (clicks.writeStream.format("parquet")
+     .option("path", "work/lake2/clicks")
+     .option("checkpointLocation", "work/ck/clicks")
+     .partitionBy("dt")
+     .trigger(processingTime="5 seconds")
+     .start())
+```
+
+클릭 2만 건을 넣고 45초 돌린 뒤 체크포인트 폴더를 열어 봤다.
+
+```bash
+ls work/ck/clicks work/ck/clicks/offsets work/ck/clicks/commits
+cat work/ck/clicks/offsets/1      # 1번 배치가 읽을 범위
+cat work/ck/clicks/commits/1      # 1번 배치가 끝났다는 표시
+head -c 300 work/lake2/clicks/_spark_metadata/1   # 1번 배치가 쓴 파일 목록
+```
+
+```text
+work/ck/clicks:
+commits  metadata  offsets  sources
+
+work/ck/clicks/commits:
+0  1  2  3  4
+
+work/ck/clicks/offsets:
+0  1  2  3  4
+v1
+{"batchWatermarkMs":0,"batchTimestampMs":1792640263456,"conf":{"spark.sql.streaming.stateStore.providerClass":"org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider",…,"spark.sql.shuffle.partitions":"2",…}}
+{"clicks":{"0":3330,"1":3310,"2":3358}}
+v1
+{"nextBatchWatermarkMs":0}
+v1
+{"path":"file:///…/work/lake2/clicks/dt=2026-10-21/part-00000-a4de4c25-d3ff-4106-87a7-bbd051f6109b.c000.snappy.parquet","size":27107,"isDir":false,"modificationTime":1792640263995,"blockReplication":1,"blockSize":33554432,"action":"add"}
+```
+
+`offsets/1`의 마지막 줄이 "1번 배치는 파티션 0을 3330, 1을 3310, 2를 3358까지 읽는다"는 약속이다. 각 줄을 눌러 보면 무엇이 들어 있는지 나온다.
+
+<UrlAnatomy
+  caption="체크포인트의 offsets/1 파일을 조각으로 읽기"
+  separator=""
+  joiner=" ⏎ "
+  params={[
+    { key: "v1", display: "v1", title: "형식 버전", description: "체크포인트 파일 형식의 버전이다. Spark 버전을 크게 올릴 때 이 형식이 바뀌면 옛 체크포인트를 못 읽는 경우가 있어, 업그레이드 노트에서 확인한다." },
+    { key: "batchWatermarkMs", value: "0", display: "batchWatermarkMs: 0", title: "이 배치의 워터마크", description: "이벤트 시간 기준으로 '이보다 늦은 것은 버린다'는 선이다. 이 작업은 집계나 조인 같은 상태 연산이 없어서 워터마크를 쓰지 않았고 0이다." },
+    { key: "conf", display: "conf: {…}", title: "바꾸면 안 되는 설정", description: "셔플 파티션 수처럼 상태 저장 방식과 묶인 설정을 박아 둔다. 다시 시작할 때 코드의 설정이 아니라 여기 값을 쓴다. 상태가 있는 작업에서 셔플 파티션 수를 바꾸려면 체크포인트를 새로 시작해야 한다." },
+    { key: "clicks", display: "{\"clicks\":{\"0\":3330,\"1\":3310,\"2\":3358}}", title: "읽을 끝 오프셋", description: "토픽 파티션마다 이 배치가 어디까지 읽을지다. 앞 배치의 끝부터 여기까지가 이 배치의 몫이고, 다시 실행해도 같은 범위를 읽는다.", required: true },
+  ]}
+/>
+
+한 배치의 순서는 이렇다. 아래 그림에서 다음을 누르면 차례로 보인다.
+
+<SequenceDiagram
+  caption="마이크로배치 N: 범위를 먼저 적고, 파일을 쓰고, 목록을 적고, 끝났다고 적는다"
+  actors={[
+    { id: "drv", label: "Spark 드라이버" },
+    { id: "ck", label: "체크포인트" },
+    { id: "k", label: "Kafka" },
+    { id: "lake", label: "레이크 폴더" },
+  ]}
+  steps={[
+    { from: "drv", to: "k", label: "end offsets?", title: "읽을 수 있는 끝을 묻는다", detail: "파티션마다 지금 마지막 오프셋을 묻고, maxOffsetsPerTrigger 안에서 이번 범위를 정한다." },
+    { from: "drv", to: "ck", label: "offsets/N", title: "범위부터 적는다", detail: "실행하기 전에 범위를 먼저 기록한다(write-ahead log). 중간에 죽어도 다시 시작하면 같은 범위를 다시 읽는다.", payload: "{\"clicks\":{\"0\":3330,\"1\":3310,\"2\":3358}}" },
+    { from: "drv", to: "k", label: "fetch", title: "그 범위만 읽는다", detail: "익스큐터가 파티션별로 정해진 오프셋 사이를 가져온다." },
+    { from: "drv", to: "lake", label: "part-*.parquet", title: "데이터 파일을 쓴다", detail: "날짜 폴더 아래에 UUID가 붙은 새 파일을 쓴다. 이 순간에는 아직 테이블의 일부가 아니다." },
+    { from: "drv", to: "lake", label: "_spark_metadata/N", title: "쓴 파일 목록을 적는다", detail: "싱크의 커밋이다. 루트 경로로 읽는 쪽은 이 목록에 있는 파일만 테이블로 본다." },
+    { from: "drv", to: "ck", label: "commits/N", title: "끝났다고 적는다", detail: "다음에 시작할 때 N+1부터 하면 된다는 표시다. 이게 없으면 N을 다시 실행한다." },
+  ]}
+/>
+
+## 실행 중에 kill -9를 날려 봤다
+
+클릭 3만 건을 더 넣고, 6번 배치의 범위가 적힌 직후에 드라이버 JVM과 Python 프로세스를 `kill -9`로 죽였다.
+
+```text
+sent 30000 (normal) c0020000..c0049999
+killed java 25459 python 25455 at 03:39:06.298
+offsets: 0 1 2 3 4 5 6
+commits: 0 1 2 3 4 5
+metadata: 0 1 2 3 4 5 6
+```
+
+6번 배치는 범위(`offsets/6`)도 적었고 파일 목록(`_spark_metadata/6`)도 적었는데, 끝났다는 표시(`commits/6`)를 남기기 전에 죽었다. 다시 시작하면 Spark는 `commits`의 마지막이 5이니 6번을 다시 실행한다. `offsets/6`에 적힌 같은 범위를 다시 읽는다. 그런데 파일 싱크는 자기 커밋 로그에 6번이 이미 있는 걸 보고 이번 쓰기를 건너뛴다. 실행은 두 번, 결과는 한 번이다. 다시 시작해 끝까지 돌린 뒤 루트 경로로 세었다.
+
+```text
+루트 경로(_spark_metadata 사용): 50000 행, 중복 click_id 0
+```
+
+보낸 5만 건이 정확히 한 번씩 들어 있다. 아래 그림은 죽기 전후의 배치 진행을 따라간다.
+
+<AlgoTrace
+  caption="죽었다 살아난 스트리밍 작업이 같은 배치를 다시 실행하고, 싱크가 중복 쓰기를 거른다"
+  memoryLabel="체크포인트 · 싱크 로그의 마지막 번호"
+  cells={["batch 4", "batch 5", "batch 6", "batch 7", "batch 8"]}
+  steps={[
+    { pointer: 1, found: [0, 1], caption: "5번까지 정상으로 끝났다. 범위, 파일 목록, 완료 표시가 모두 5까지 있다.", memory: ["offsets 5", "metadata 5", "commits 5"] },
+    { pointer: 2, caption: "6번 범위를 적고, 파일을 쓰고, 파일 목록까지 적었다.", memory: ["offsets 6", "metadata 6", "commits 5"] },
+    { pointer: 2, caption: "kill -9. 완료 표시 commits/6이 남지 않았다.", memory: ["offsets 6", "metadata 6", "commits 5 ✕"] },
+    { pointer: 2, caption: "다시 시작하면 commits 5 다음인 6번을 같은 범위로 다시 실행한다. 싱크 로그에 6이 이미 있으니 쓰기는 건너뛴다.", memory: ["offsets 6", "metadata 6 (그대로)", "commits 6"] },
+    { pointer: 4, found: [0, 1, 2, 3, 4], caption: "7번부터 평소처럼 이어 간다. 루트로 세면 5만 건, 중복 0이다.", memory: ["offsets 11", "metadata 11", "commits 11"] },
+  ]}
+/>
+
+## 폴더를 직접 읽으면 중복이 보인다
+
+처음 장면의 84,998은 여기서 나온다. 클릭 3만 건을 더 넣고, 이번에는 파일을 쓰는 도중을 노려 두 번 죽였다. 그리고 같은 데이터를 두 방식으로 읽었다.
+
+```text
+루트 경로(_spark_metadata 사용): 80000 행, 중복 click_id 0
+파티션 폴더 직접: 84998 행, 중복 click_id 4998 , 파일 60
+```
+
+죽은 배치가 쓰다 만, 또는 다 쓰고도 목록에 올리지 못한 파일이 폴더에 남았다. 다시 실행된 배치는 같은 범위를 새 UUID 이름의 파일로 다시 썼다. 루트 경로로 읽으면 Spark가 `_spark_metadata`의 목록만 읽어서 남은 파일을 무시한다. 날짜 폴더를 직접 읽으면 그 폴더에는 `_spark_metadata`가 없으니 파일을 전부 읽고, 4,998건이 두 번 세어진다.
+
+정확히 한 번이 지켜지는 범위가 여기서 분명해진다. Spark의 파일 싱크가 보장하는 것은 "싱크 로그를 아는 리더가 루트로 읽을 때"까지다. 하위 폴더를 읽는 도구, Spark가 아닌 엔진(Hive 외부 테이블, Trino의 일반 Hive 커넥터, `aws s3 cp`로 내려받은 파일)은 이 로그를 모른다. 그래서 다른 엔진도 읽을 레이크라면 스트림 싱크를 처음부터 Delta나 Iceberg 같은 [테이블 포맷](/posts/data-lake-hdfs)으로 쓰는 편이 안전하다. 커밋 로그가 표준이라 어느 엔진이든 같은 파일 목록을 본다. 남은 파일은 배치가 정리해 줄 수도 있다. 다음 절의 일일 배치는 루트로 읽고 `click_id`로 한 번 더 중복을 지운다.
+
+바깥 DB로 쓰는 `foreachBatch`라면 사정이 또 다르다. 같은 배치 번호가 다시 실행될 수 있으니, 받는 쪽에서 `batchId`나 이벤트 키로 거르거나 upsert로 써야 한다. 이건 [메시지 전달 보장](/posts/message-delivery-semantics)의 인박스 테이블과 같은 생각이다.
+
+진행 위치가 Kafka에 없다는 것도 운영에서 걸린다. Structured Streaming은 소비자 그룹에 오프셋을 커밋하지 않고 체크포인트에만 적는다. 그래서 늘 쓰던 랙 확인 명령이 아무것도 보여 주지 않는다.
+
+```bash
+# 소비자 그룹 목록: 비어 있다
+kafka-consumer-groups.sh --bootstrap-server 127.0.0.1:19780 --list
+# 토픽의 끝 오프셋
+kafka-get-offsets.sh --bootstrap-server 127.0.0.1:19780 --topic clicks
+# 스트리밍 작업이 마지막으로 잡은 범위
+tail -1 work/ck/clicks/offsets/$(ls work/ck/clicks/offsets | sort -n | tail -1)
+```
+
+```text
+clicks:0:26670
+clicks:1:26868
+clicks:2:26762
+{"clicks":{"0":26670,"1":26868,"2":26762}}
+```
+
+그룹 목록은 빈 줄 하나였고, 끝 오프셋과 체크포인트가 같으니 랙은 0이다. 랙은 이 둘의 차이로 직접 계산하거나, 쿼리 진행 정보(`lastProgress`의 소스별 시작·끝 오프셋과 처리율)를 지표 시스템으로 내보내 본다. 랙의 일반적인 의미와 알람 기준은 [Kafka 기초](/posts/kafka-basics)에 있다. 체크포인트 폴더를 지우면 진행 위치도 사라진다는 것도 기억해 둔다. `startingOffsets=earliest`면 처음부터 다시 읽어 전부 중복이 되고, `latest`면 그 사이 데이터를 건너뛴다. 체크포인트는 데이터만큼 소중하게 백업하고, 지울 때는 무엇을 각오하는지 알고 지운다.
+
+## 5초마다 파일이 생긴다
+
+8만 건을 적재한 뒤 날짜 폴더를 봤다.
+
+```text
+files 60 min 1859 median 26912 max 27952
+```
+
+파일 60개, 중간값 27KB다. 5초 트리거에 셔플 파티션 2라서 배치마다 파일이 두 개씩 생긴다. 하루로 늘이면 날짜 폴더 하나에 파일 3만 개가 넘는다. [작은 파일 문제](/posts/data-lake-hdfs)가 스트리밍에서는 기본으로 따라온다.
+
+손잡이는 셋이다. 트리거 간격을 늘리면 파일이 커지지만 데이터가 레이크에 보이기까지 그만큼 늦어진다. 분석용 raw 적재라면 1~10분으로 잡는 경우가 많다. 쓰기 전에 파티션 수를 줄인다(`coalesce`). 그리고 정기적으로 다시 쓴다. Airflow가 매일 부르는 배치를 붙였다.
+
+```python
+# 스트림이 쌓은 raw에서 하루치를 골라 중복을 지우고 큰 파일로 다시 쓴다
+spark = session("daily-clean", **{"spark.sql.sources.partitionOverwriteMode": "dynamic"})
+raw = spark.read.parquet("work/lake2/clicks").filter(F.col("dt") == day)   # 루트로 읽는다
+clean = raw.dropDuplicates(["click_id"]).drop("partition", "offset")
+clean.coalesce(1).write.mode("overwrite").partitionBy("dt").parquet("work/clean/clicks")
+```
+
+```text
+2026-10-21 raw 63 clean 617297
+2026-10-20 raw 3 clean 2094
+```
+
+21일 raw 파일 63개(남은 파일 포함)가 clean에서는 617KB짜리 파일 하나, 80,200행이 됐다. `partitionOverwriteMode=dynamic`이라서 21일을 쓰는 동안 20일 폴더는 건드리지 않는다. 이 설정 없이 `overwrite`하면 clean 테이블 전체가 지워지고 21일만 남는다. 이 배치는 Airflow의 [데이터 구간](/posts/airflow-orchestration)에서 `day`를 받으니, 백필로 다시 돌려도 그날만 같은 결과로 갈아 끼운다.
+
+raw를 테이블 포맷으로 쌓는다면 같은 일을 테이블 안에서 한다. Delta의 `OPTIMIZE`, Iceberg의 `rewrite_data_files`가 작은 파일을 합쳐 새 스냅숏으로 커밋하고, 스트리밍 쓰기는 그동안에도 계속된다. 둘이 같은 파티션을 동시에 바꾸면 커밋 충돌이 날 수 있어서, 컴팩션은 이미 닫힌 날짜 파티션에 거는 것이 보통이다.
+
+## 늦게 온 클릭은 이미 닫힌 날로 간다
+
+21일 배치가 끝난 뒤, 이벤트 시각이 20일 23시 58분인 클릭 100건이 늦게 들어왔다. 휴대폰이 비행기 모드였다가 다음 날 켜진 상황 같은 것이다. 스트리밍 작업은 이벤트 시각으로 `dt`를 정하니 이 클릭은 20일 폴더로 간다.
+
+```text
++----------+-----+-------+---------+
+|        dt| rows|   cost|null_cost|
++----------+-----+-------+---------+
+|2026-10-20|  100|  10000|        0|
+|2026-10-21|80200|8010000|      100|
++----------+-----+-------+---------+
+```
+
+```text
++--------+-------------------+----+----------+---------+------+
+|click_id|event_time         |cost|dt        |partition|offset|
++--------+-------------------+----+----------+---------+------+
+|c0080000|2026-10-20 23:58:00|100 |2026-10-20|2        |26664 |
+```
+
+20일 폴더가 다시 열렸다. 20일 리포트를 이미 보냈다면 그 숫자는 이제 틀렸다. 다음 날 리포트를 다시 뽑으면 숫자가 늘어 있던 처음 장면이 이것이다. `dt`를 받은 시각으로 정하면 폴더는 안 열리지만, 그 클릭이 21일 광고비로 잘못 잡힌다. 어느 쪽이든 늦은 데이터는 어딘가를 틀리게 만든다. 고를 수 있는 것은 어디를 틀리게 둘지, 그리고 얼마나 기다렸다가 닫을지다.
+
+<ConceptDiagram
+  caption="늦은 데이터를 다루는 세 가지 선택"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "late", label: "늦은 클릭", sub: "20일 23:58 발생", x: 200, y: 40, w: 130 },
+    { id: "wait", label: "기다렸다 닫기", sub: "자정 + N시간", x: 75, y: 160, w: 120 },
+    { id: "rerun", label: "다시 계산", sub: "열린 날짜 백필", x: 200, y: 200, w: 120 },
+    { id: "drop", label: "받은 날로 셈", sub: "처리 시간 기준", x: 325, y: 160, w: 120 },
+  ]}
+  edges={[
+    { from: "late", to: "wait", label: "정확성↑ 지연↑" },
+    { from: "late", to: "rerun", label: "숫자가 바뀐다" },
+    { from: "late", to: "drop", label: "날짜가 틀린다" },
+  ]}
+/>
+
+기다렸다 닫는 방법은 Airflow 쪽에서 쉽다. 하루 배치를 자정이 아니라 자정 2시간 뒤에 돌리거나, 그 시각을 조건으로 센서를 둔다. 2시간 안에 오는 늦은 클릭은 다 잡히고, 리포트는 그만큼 늦어진다. 다시 계산하는 방법은 배치가 끝난 뒤 열린 날짜를 찾아 그 날짜만 백필(`--reprocess-behavior completed`)한다. 멱등한 배치라면 몇 번을 돌려도 괜찮다. 보통은 둘을 섞는다. N시간 기다려 1차 숫자를 내고, 며칠 안에 들어온 늦은 데이터는 주기적으로 다시 계산해 고치며, 그보다 늦은 건 정책으로 버리거나 따로 모은다.
+
+아래에서 어떤 날짜를 다시 돌려야 하는지 고르는 함수를 만들어 볼 수 있다. 날짜 D의 배치는 D+1일 0시에서 `waitHours` 시간 뒤에 돈다고 친다. 그보다 늦게 도착한 이벤트의 날짜가 다시 돌릴 대상이다.
+
+<CodePlayground
+  caption="늦은 데이터 때문에 다시 계산할 날짜 고르기"
+  functionName="partitionsToRerun"
+  initialCode={`// arrivals: [{ eventTime: "2026-10-20T23:58:00Z", arrivedAt: "2026-10-21T03:10:00Z" }, ...]
+// 날짜 D(eventTime의 UTC 날짜)의 배치는 D+1일 00:00Z에서 waitHours 시간 뒤에 돈다.
+// arrivedAt이 그 시각보다 뒤인 이벤트의 날짜를 중복 없이 오름차순으로 돌려준다.
+function partitionsToRerun(arrivals, waitHours) {
+  return [];
+}`}
+  solution={`function partitionsToRerun(arrivals, waitHours) {
+  const out = new Set();
+  for (const a of arrivals) {
+    const dt = a.eventTime.slice(0, 10);
+    const close = new Date(dt + "T00:00:00Z").getTime() + (24 + waitHours) * 3600 * 1000;
+    if (new Date(a.arrivedAt).getTime() > close) out.add(dt);
+  }
+  return [...out].sort();
+}`}
+  tests={[
+    {
+      label: "2시간 기다려도 03:10 도착은 늦다",
+      args: [[
+        { eventTime: "2026-10-20T23:58:00Z", arrivedAt: "2026-10-21T00:30:00Z" },
+        { eventTime: "2026-10-20T23:59:00Z", arrivedAt: "2026-10-21T03:10:00Z" },
+        { eventTime: "2026-10-19T12:00:00Z", arrivedAt: "2026-10-21T09:00:00Z" },
+        { eventTime: "2026-10-21T08:00:00Z", arrivedAt: "2026-10-21T08:00:05Z" },
+      ], 2],
+      expected: ["2026-10-19", "2026-10-20"],
+    },
+    {
+      label: "48시간 기다리면 다시 돌릴 날이 없다",
+      args: [[
+        { eventTime: "2026-10-20T23:59:00Z", arrivedAt: "2026-10-21T03:10:00Z" },
+        { eventTime: "2026-10-19T12:00:00Z", arrivedAt: "2026-10-21T09:00:00Z" },
+      ], 48],
+      expected: [],
+    },
+    { label: "1시간 기다리면 00:30 도착은 제때다", args: [[{ eventTime: "2026-10-20T23:58:00Z", arrivedAt: "2026-10-21T00:30:00Z" }], 1], expected: [] },
+    { label: "기다리지 않으면 00:30도 늦다", args: [[{ eventTime: "2026-10-20T23:58:00Z", arrivedAt: "2026-10-21T00:30:00Z" }], 0], expected: ["2026-10-20"] },
+    { label: "빈 입력", args: [[], 2], expected: [] },
+  ]}
+/>
+
+워터마크는 여기서 오해하기 쉽다. 이 작업처럼 상태 없이 파일로 쓰기만 하는 스트림에서 워터마크는 아무것도 버리지 않는다. 워터마크가 늦은 이벤트를 버리는 것은 이벤트 시간 창으로 집계하거나 스트림끼리 조인할 때, 상태를 언제 지울지 정하는 용도다. 그 설계는 [광고 클릭 집계 ①](/posts/sd-ad-click-stream-windows)에 있다. 시간대도 함정이다. `to_date`는 `spark.sql.session.timeZone`(기본값은 JVM 시간대)으로 날짜를 자른다. 이 실험은 UTC 서버라 23:58Z가 20일이 됐지만, 한국 시간으로 도는 클러스터라면 같은 클릭이 21일 08:58이 되어 21일 폴더로 간다. 날짜 경계를 어느 시간대로 자를지는 리포트를 보는 사람과 맞춰서 명시한다.
+
+## 형식이 바뀐 날은 조용히 틀린다
+
+광고 서버 팀이 배포를 했다. 클릭에 `device` 필드가 새로 붙었고, 실수로 `cost`가 숫자 대신 문자열 `"100"`으로 나갔다. 각각 100건을 흘려 보냈다. 스트리밍 작업은 실패하지 않았다.
+
+```text
+['click_id', 'ad_id', 'event_time', 'cost', 'partition', 'offset', 'dt']
++--------+-------------------+----+----------+---------+------+
+|click_id|event_time         |cost|dt        |partition|offset|
++--------+-------------------+----+----------+---------+------+
+|c0080100|2026-10-21 15:24:00|100 |2026-10-21|0        |26603 |
+|c0080200|2026-10-21 05:57:00|NULL|2026-10-21|0        |26634 |
+```
+
+새 필드 `device`는 열 목록에 없다. `from_json`은 스키마에 없는 필드를 버린다. 문자열이 된 `cost`는 `NULL`이 됐다. 위 날짜별 표의 `null_cost 100`이 그 100건이다. 오류가 나지 않으니 아무도 모르고, 다음 날 광고비 합계가 100건만큼 모자란다. 기본 파싱 모드(PERMISSIVE)가 레코드를 통째로 버리지 않고 안 맞는 필드만 비우는 덕분에 작업은 살았지만, 그만큼 조용히 틀린다.
+
+막는 방법은 층마다 다르다. 생산자 쪽에서는 JSON 대신 Avro나 Protobuf로 스키마를 정하고, 스키마 레지스트리가 호환되지 않는 변경(필드 타입 바꾸기)을 등록 단계에서 거부하게 한다. 호환 규칙과 레지스트리는 [스키마 버전 관리](/posts/schema-versioning)에 있다. raw 층에서는 원본 `value`를 문자열 그대로 함께 저장해 두면, 스키마를 고친 뒤 원본에서 다시 풀 수 있다. 파싱 단계에서는 필수 필드가 `NULL`인 레코드를 따로 떼어 격리 테이블(데드 레터)로 보내고 그 수를 지표로 낸다. `null_cost`가 0이 아닌 순간 알람이 오게 해 두면 이번 사고는 몇 분 만에 잡힌다. 새 필드는 스키마에 열을 추가해 받는데, 테이블 포맷이라면 열 추가는 옛 파일을 고치지 않고 메타데이터만 바꾸는 가벼운 변경이다.
+
+## 파이프라인이 늦거나 숫자가 틀릴 때
+
+증상별로 보는 순서를 정리한다.
+
+레이크에 최신 데이터가 안 보이면 먼저 스트리밍 작업이 살아 있는지, 마지막 배치 번호가 늘고 있는지 본다. 체크포인트의 `commits` 마지막 번호와 시각이 가장 빠른 확인이다. 살아 있는데 늦으면 토픽 끝 오프셋과 체크포인트 오프셋의 차이로 랙을 본다. 랙이 계속 늘면 배치 하나가 트리거 간격보다 오래 걸리는 것이다. Spark UI의 Structured Streaming 탭에서 처리율(Processed Rows/sec)이 입력률(Input Rows/sec)보다 낮은지 보고, `maxOffsetsPerTrigger`, 익스큐터 수, Kafka 파티션 수(병렬성의 상한)를 손본다.
+
+숫자가 두 배이거나 조금 많으면 누가 어떤 경로로 읽는지 본다. 날짜 폴더를 직접 읽는 도구가 있으면 위에서 본 남은 파일이 섞인다. 숫자가 적으면 파싱에서 `NULL`이 된 필드, 스키마에 없어 버려진 필드, 워터마크로 버려진 늦은 이벤트, `failOnDataLoss=false`로 건너뛴 오프셋을 차례로 의심한다. 마지막 것은 Kafka 보관 기간이 지나 데이터가 지워진 뒤에 작업이 다시 시작한 경우다. 기본값 `true`면 작업이 실패해서 알 수 있고, `false`면 조용히 건너뛴다. 어제 숫자가 오늘 바뀌었다면 늦은 데이터가 닫힌 날짜 폴더를 다시 연 것이다.
+
+배포할 때의 실수도 같은 줄기다. 스트리밍 쿼리의 로직을 크게 바꾸고(집계 키 변경, 상태 연산 추가) 같은 체크포인트로 다시 시작하면 시작이 실패하거나 상태가 맞지 않는다. 그럴 때는 새 체크포인트와 새 출력 경로로 시작하고, 시작 오프셋을 옛 체크포인트의 마지막 범위에 맞춰 주거나 겹치는 구간을 배치로 정리한다.
+
+## 오프셋과 파일 목록을 같은 리듬으로 적는다
+
+Kafka에서 레이크로 가는 파이프라인의 정확성은 "어디까지 읽었나"와 "어떤 파일이 테이블인가"를 함께 적는 데서 나온다. Spark는 범위를 먼저 적고, 파일을 쓰고, 파일 목록을 적고, 끝났다고 적는다. 그래서 죽었다 살아나도 결과는 한 번이다. 다만 그 보장은 목록을 읽는 리더에게만 통하고, 늦은 데이터와 스키마 변경은 이 보장 바깥에서 숫자를 바꾼다. 파이프라인을 설계할 때는 raw는 받은 그대로 몇 분 단위로 쌓고, 하루가 충분히 닫힌 뒤 멱등한 배치로 정리하고, 늦은 날짜는 다시 돌릴 수 있게 해 둔다. 그리고 `NULL` 비율과 랙을 지표로 지켜본다.
+
+## 면접에서 나올 만한 질문
+
+### Kafka와 레이크 사이에 스트리밍 작업을 두는 이유는 무엇인가요?
+
+생산자와 저장소를 떼어 놓기 위해서다. 광고 서버는 Kafka에 던지고 끝내고, 적재 작업은 자기 속도로 읽는다. 적재 작업이 멈춰도 Kafka 보관 기간 안에서는 데이터를 잃지 않고 밀릴 뿐이다. 파일 크기, 형식 검사, 날짜 파티션 같은 레이크 쪽 규칙도 이 작업이 한곳에서 맡는다.
+
+### Structured Streaming은 Kafka에서 파일까지 어떻게 정확히 한 번을 지키나요?
+
+배치 범위를 체크포인트의 offsets에 먼저 적고, 파일을 쓴 뒤 싱크 로그(`_spark_metadata`)에 파일 목록을 적고, 마지막에 commits를 적는다. 중간에 죽으면 같은 범위로 그 배치를 다시 실행하고, 싱크는 로그에 이미 있는 배치의 쓰기를 건너뛴다. 실험에서 6번 배치 도중 kill -9를 해도 5만 건이 중복 없이 남았다. 실행은 최소 한 번이고, 결과가 한 번인 것이다.
+
+### 그 정확히 한 번이 깨지는 경우는요?
+
+싱크 로그를 모르는 리더가 하위 폴더를 직접 읽으면 깨진다. 실험에서 날짜 폴더를 직접 읽자 죽은 배치가 남긴 파일까지 세어 4,998건이 중복됐다. `foreachBatch`로 바깥 DB에 쓰면 같은 배치가 다시 실행될 수 있어서 받는 쪽이 batchId나 키로 걸러야 한다. 체크포인트를 지우면 진행 위치도 사라진다.
+
+### Kafka Connect 싱크와 Spark Structured Streaming 중 무엇을 고르나요?
+
+토픽을 그대로 옮기는 raw 적재라면 설정만으로 되는 Kafka Connect 싱크가 운영이 단순하다. 형식 검사, 조인, 테이블 포맷으로 쓰기처럼 변환이 필요하면 스트림 처리 엔진이 맞다. 진행 위치도 다른데, Connect는 소비자 그룹 오프셋에, Structured Streaming은 체크포인트에 적어서 랙을 보는 방법이 달라진다.
+
+### 스트리밍 적재에서 작은 파일 문제는 어떻게 다루나요?
+
+트리거마다 파일이 생기니 트리거 간격과 쓰기 파티션 수로 파일 크기를 조절하고, 닫힌 날짜 파티션을 주기적으로 다시 쓴다. 실험에서 5초 트리거는 27KB 파일을 60개 만들었고, 일일 배치가 이를 617KB 파일 하나로 합쳤다. 테이블 포맷이라면 OPTIMIZE나 rewrite_data_files로 같은 일을 커밋 단위로 한다.
+
+### 늦게 도착한 데이터는 어떻게 처리하나요?
+
+이벤트 시각으로 파티션을 정하면 이미 닫힌 날짜가 다시 열리고, 받은 시각으로 정하면 날짜가 틀린다. 보통 이벤트 시각을 쓰고, 하루 배치를 자정 뒤 N시간 기다렸다 돌리며, 그 뒤에 열린 날짜는 멱등한 배치로 다시 계산한다. 상태 없는 파일 적재에서는 워터마크가 아무것도 버리지 않는다는 점도 짚는다. 날짜를 자르는 시간대는 명시한다.
+
+### 생산자가 필드 타입을 바꾸면 어떻게 되나요?
+
+JSON을 `from_json`으로 풀면 작업은 멈추지 않고 그 필드만 NULL이 된다. 실험에서 문자열이 된 cost 100건이 NULL로 들어가 광고비가 조용히 모자랐다. 스키마 레지스트리로 호환되지 않는 변경을 생산 단계에서 막고, raw에 원본 값을 남겨 다시 풀 수 있게 하고, 필수 필드의 NULL 비율을 지표와 알람으로 지켜본다.
+
+### Structured Streaming 작업의 랙은 어떻게 보나요?
+
+소비자 그룹에 오프셋을 커밋하지 않아서 `kafka-consumer-groups`로는 보이지 않는다. 토픽의 끝 오프셋과 체크포인트의 마지막 offsets 범위를 비교하거나, 쿼리 진행 정보의 오프셋과 처리율을 지표로 내보내 본다. 처리율이 입력률보다 계속 낮으면 배치당 처리량이나 병렬성을 늘려야 한다.

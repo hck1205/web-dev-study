@@ -1,0 +1,574 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ts-narrowing");
+
+결제 내역 화면에 상태 문구를 보여 주는 함수가 있다. 결제 상태는 유니온 타입으로 정해 두었고, 최근에 부분 환불(`partially_refunded`)이 새로 생겨 타입에 하나를 추가했다.
+
+```ts
+type PaymentStatus = "paid" | "failed" | "refunded" | "partially_refunded";
+
+function statusLabel(status: PaymentStatus) {
+  switch (status) {
+    case "paid": return "결제 완료";
+    case "failed": return "결제 실패";
+    case "refunded": return "환불 완료";
+  }
+}
+
+console.log(`[${statusLabel("partially_refunded")}]`);
+```
+
+`tsc --strict`는 조용하고, 화면에는 빈 칸이 생긴다.
+
+```text
+[undefined]
+```
+
+타입에 상태를 추가했으니 검사기가 "이 `switch`가 새 상태를 처리하지 않는다"고 알려 줄 것 같았다. 그런데 반환 타입을 적지 않았으니 검사기는 이 함수가 `string | undefined`를 돌려준다고 추론하고 넘어간다. 빠진 갈래를 찾게 하려면 검사기가 `switch`의 각 갈래에서 `status`가 어떤 타입인지 따라가는 방식, 곧 타입 좁히기(narrowing)를 알아야 한다.
+
+이 글은 TypeScript 시리즈의 세 번째 글이다. `unknown`과 유니온이 왜 필요한지는 [타입 시스템 기초](/posts/ts-type-system-basics)에서, 타입 매개변수는 [제네릭](/posts/ts-generics)에서 다뤘다. 여기서는 조건문이 타입을 줄이는 원리, 판별 유니온, 직접 만드는 타입 가드와 단언 함수, 그리고 빠진 경우를 컴파일 오류로 만드는 완전성 검사를 본다. 런타임에서 `typeof`와 `Array.isArray`가 무엇을 돌려주는지는 [truthy·falsy와 typeof 글](/posts/js-truthy-falsy-typeof)에 정리해 두었다. 예제는 TypeScript 5.9와 `--strict`로 검사했고, 버전마다 달라진 동작은 따로 밝혔다.
+
+## 검사기는 코드의 갈림길을 따라간다
+
+TypeScript는 변수마다 "지금 이 위치에서 가능한 타입"을 따로 기억한다. `if`, `return`, `switch`, `&&`, `||`, 삼항 연산자처럼 코드가 갈라지는 곳을 지날 때마다 그 타입을 줄이거나 넓힌다. 이걸 제어 흐름 분석(control flow analysis)이라고 한다.
+
+```ts
+function format(value: string | number | null, digits?: number) {
+  if (value === null) return "-";
+  if (typeof value === "number") {
+    return value.toFixed(digits);   // value: number
+  }
+  return value.trim();              // value: string
+}
+```
+
+선언된 타입은 `string | number | null` 하나지만, 줄마다 실제로 쓰이는 타입은 다르다. 아래 그림에서 다음을 누르며 각 줄을 지날 때 `value`의 타입이 어떻게 줄어드는지 보자.
+
+<AlgoTrace
+  caption="갈림길을 지날 때마다 value의 타입이 줄어든다"
+  memoryLabel="이 위치의 value 타입"
+  cells={["시작", "=== null", "return \"-\"", "typeof number", "toFixed", "trim"]}
+  steps={[
+    { pointer: 0, memory: ["string", "number", "null"], caption: "선언된 타입 그대로 세 갈래가 모두 가능하다." },
+    { pointer: 1, memory: ["string", "number", "null"], caption: "value === null을 만난다. 참이면 null, 거짓이면 나머지 둘로 갈린다." },
+    { pointer: 2, found: [2], memory: ["string", "number"], caption: "null 갈래는 여기서 return한다. 이 줄을 지난 코드에는 null이 남지 않는다." },
+    { pointer: 3, memory: ["string", "number"], caption: "typeof value === \"number\"로 다시 갈린다." },
+    { pointer: 4, found: [2, 4], memory: ["number"], caption: "참인 블록 안에서 value는 number다. toFixed를 쓸 수 있다. 이 블록도 return으로 끝난다." },
+    { pointer: 5, found: [2, 4, 5], memory: ["string"], caption: "남은 것은 string뿐이다. 따로 검사하지 않아도 trim을 쓸 수 있다." },
+  ]}
+/>
+
+어떤 위치에서 타입이 무엇으로 좁혀졌는지 궁금하면 편집기에서 변수에 마우스를 올리면 된다. 편집기가 없는 CI 로그나 리뷰에서는 일부러 틀린 타입에 대입해 오류 메시지로 확인하는 요령이 있다.
+
+```ts
+function peek(value: string | number | null, e: unknown) {
+  if (typeof e === "object") { const t1: boolean = e; }
+  if (e && typeof e === "object") { const t2: boolean = e; }
+  if (value == null) return;
+  const t3: boolean = value;
+}
+```
+
+```text
+peek.ts(2,38): error TS2322: Type 'object | null' is not assignable to type 'boolean'.
+  Type 'null' is not assignable to type 'boolean'.
+peek.ts(3,43): error TS2322: Type 'object' is not assignable to type 'boolean'.
+peek.ts(5,9): error TS2322: Type 'string | number' is not assignable to type 'boolean'.
+  Type 'string' is not assignable to type 'boolean'.
+```
+
+`typeof e === "object"`만으로는 `object | null`이다. 런타임에서 `typeof null`이 `"object"`인 것을 검사기도 그대로 반영한다. 앞에 `e &&`를 붙이면 참으로 취급되는 값만 남으니 `null`이 빠진다. `value == null`은 `null`과 `undefined`를 한 번에 거른다.
+
+참·거짓으로 좁힐 때는 런타임의 falsy 규칙이 그대로 따라온다.
+
+```ts
+function show(count: number | undefined) {
+  if (!count) return "없음";         // 0도 여기로 온다
+  return `${count}개`;
+}
+console.log(show(0), show(undefined), show(3));
+```
+
+```text
+없음 없음 3개
+```
+
+검사기는 이 코드를 정상으로 본다. `!count` 뒤에서 `count`는 `number`로 좁혀졌고 타입으로는 틀린 데가 없다. 하지만 수량 0이 "없음"으로 찍힌다. 좁히기는 타입을 안전하게 만들 뿐, 조건이 의도와 맞는지는 판단하지 않는다. `undefined`만 거르려면 `count === undefined`를 쓴다.
+
+## typeof, in, instanceof가 좁히는 범위
+
+좁히기에 쓰는 연산자마다 알아보는 범위가 다르다.
+
+```ts
+type Cat = { meow(): void };
+type Dog = { bark(): void };
+function speak(pet: Cat | Dog) {
+  if ("meow" in pet) pet.meow();
+  else pet.bark();
+}
+
+function errorMessage(e: unknown) {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return JSON.stringify(e);
+}
+console.log(errorMessage(new TypeError("boom")), errorMessage("plain"), errorMessage({ code: 1 }));
+```
+
+```text
+boom plain {"code":1}
+```
+
+`typeof`는 원시 타입(`string`, `number`, `bigint`, `boolean`, `symbol`, `undefined`)과 `function`, `object`를 가른다. 배열과 `null`이 `object`에 섞인다는 약점이 그대로 있다. 배열은 `Array.isArray`로 좁힌다.
+
+`"meow" in pet`은 그 속성이 있는 유니온 멤버만 남긴다. 여기서 조심할 점이 하나 있다. 구조적 타이핑에서는 속성이 더 있어도 그 타입이 될 수 있어서, `Dog` 값에 `meow` 속성이 우연히 붙어 있으면 런타임에는 `Cat` 갈래로 들어간다. 검사기는 "선언된 유니온 멤버 중 `meow`가 있는 것"만 보고 판단한다. 멤버끼리 겹치는 속성이 많은 유니온이라면 뒤에서 볼 판별 태그가 더 확실하다. `unknown`에 `in`을 쓰면(TypeScript 4.9부터) `object & Record<"meow", unknown>`처럼 "그 속성이 있다는 것만 아는 객체"로 좁혀진다.
+
+`instanceof`는 프로토타입 체인으로 판단하니 클래스로 만든 값에만 쓸 수 있다. 인터페이스나 `type`은 런타임에 없으니 `instanceof User`는 쓸 수 없다. 다른 iframe이나 Node `vm`에서 만든 값은 `instanceof`가 `false`가 되는 문제도 런타임과 같다. 클래스와 프로토타입의 관계는 [프로토타입 체인 글](/posts/js-prototype-chain)에서 다룬다.
+
+## 다시 할당하면 좁힌 것이 풀린다
+
+좁힌 타입은 그 변수에 다른 값이 들어올 수 있는 순간 풀린다. 그래서 콜백 안에서 바깥 변수를 쓸 때 문제가 생긴다. 콜백은 나중에 실행되는데, 그 사이에 변수가 바뀌었을 수 있기 때문이다.
+
+```ts
+function search(query: string | null, items: string[]) {
+  if (query === null) return [];
+
+  const a = items.filter((it) => it.includes(query));   // 매개변수: 좁힘 유지
+
+  let q: string | null = query;
+  q = q.trim() || null;
+  if (q === null) return [];
+  const b = items.filter((it) => it.includes(q));       // 이후 재할당 없음: 5.4부터 유지
+
+  let r: string | null = query;
+  const c = items.filter((it) => it.includes(r));       // 아래에서 다시 할당한다
+  r = null;
+  return [a, b, c];
+}
+```
+
+TypeScript 5.9의 결과는 이렇다.
+
+```text
+cfa.ts(12,46): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+```
+
+같은 파일을 TypeScript 5.3.3으로 검사하면 오류가 하나 더 나온다.
+
+```text
+t/cfa.ts(9,46): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+t/cfa.ts(12,46): error TS2345: Argument of type 'string | null' is not assignable to parameter of type 'string'.
+  Type 'null' is not assignable to type 'string'.
+```
+
+다시 할당하지 않는 매개변수 `query`는 두 버전 모두 콜백 안에서도 좁힌 타입이 유지됐다. `let`인 `q`는 5.3까지는 콜백 안에서 좁힘이 풀렸고, 5.4부터는 "콜백을 만든 뒤에 다시 할당하는 곳이 없으면" 유지된다. `r`처럼 콜백을 만든 뒤에 할당이 있으면 지금도 풀린다. 아래 그림에서 세 변수가 각각 어떻게 판단되는지 보자.
+
+<AlgoTrace
+  caption="콜백 안에서 좁힌 타입이 유지되는지는 그 뒤의 할당이 정한다"
+  memoryLabel="콜백 안에서의 타입"
+  cells={["query (매개변수)", "q (let)", "r (let)"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["query: string"], caption: "query는 null 검사 뒤 어디에서도 다시 할당하지 않는다. 콜백 안에서도 string이다." },
+    { pointer: 1, memory: ["query: string", "q: ?"], caption: "q는 let이고 위에서 한 번 다시 할당했다. 그 할당은 null 검사보다 앞이다." },
+    { pointer: 1, found: [0, 1], memory: ["query: string", "q: string"], caption: "콜백을 만든 뒤로는 할당이 없다. 5.4부터는 string으로 유지되고, 5.3까지는 여기서 풀렸다." },
+    { pointer: 2, found: [0, 1], memory: ["query: string", "q: string", "r: string | null"], caption: "r은 콜백을 만든 다음 줄에서 null을 넣는다. 콜백이 언제 돌지 모르니 좁힘이 풀린다." },
+  ]}
+/>
+
+이런 오류를 만나면 콜백 바깥에서 `const`에 담아 넘기는 것이 가장 확실하다. `const target = q;` 다음에 콜백에서 `target`을 쓰면 버전과 상관없이 좁힌 타입이 유지된다.
+
+반대로 검사기가 너무 믿어서 생기는 구멍도 있다. 객체 속성으로 좁힌 타입은 중간에 함수를 불러도 풀리지 않는다.
+
+```ts
+type Session = { user: { name: string } | null };
+const session: Session = { user: { name: "kim" } };
+
+function logout() { session.user = null; }
+
+function greet() {
+  if (session.user !== null) {
+    logout();
+    return session.user.name;   // 검사기는 여전히 not null로 본다
+  }
+  return "guest";
+}
+console.log(greet());
+```
+
+`tsc`는 오류 없이 통과하고, 실행하면 터진다.
+
+```text
+TypeError: Cannot read properties of null (reading 'name')
+```
+
+함수를 부를 때마다 모든 속성의 좁힘을 풀면 거의 모든 코드가 오류가 되기 때문에, TypeScript는 일부러 이 경우를 검사하지 않는다. 공유 상태(전역 스토어, 모듈 변수, `this`의 필드)를 좁힌 뒤 다른 함수를 부른다면, 좁힌 값을 지역 `const`에 먼저 꺼내 두는 습관이 이 구멍을 막는다.
+
+## 공통 태그 하나로 갈래를 나누는 판별 유니온
+
+API 요청 상태를 담는 타입을 흔히 이렇게 만든다.
+
+```ts
+type LooseState = { loading: boolean; data?: string[]; error?: Error };
+const s1: LooseState = { loading: true, data: ["a"], error: new Error("x") };  // 말이 안 되는 조합도 통과
+function show(s: LooseState) {
+  if (!s.loading && !s.error) return s.data.join(", ");
+}
+```
+
+```text
+bad-state.ts(4,38): error TS18048: 's.data' is possibly 'undefined'.
+```
+
+불리언 하나와 선택 속성 둘로는 "로딩 중인데 데이터도 에러도 있다" 같은 불가능한 상태를 막지 못한다. 로딩도 아니고 에러도 없으면 데이터가 있다는 사실을 검사기가 알 길이 없어서, 맞는 코드에도 `data`가 `undefined`일 수 있다고 한다.
+
+상태마다 갈래를 따로 만들고, 모든 갈래에 같은 이름의 리터럴 속성(태그)을 붙이면 둘 다 해결된다. 이걸 판별 유니온(discriminated union)이라고 한다.
+
+```ts
+type FetchState<T> =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "success"; data: T }
+  | { status: "error"; error: Error };
+
+function render(state: FetchState<string[]>) {
+  if (state.status === "success") return state.data.join(", ");
+  if (state.status === "error") return state.error.message;
+  return state.data;
+}
+
+function count(state: FetchState<string[]>) {
+  const { status } = state;
+  if (status === "success") return state.data.length;   // 구조 분해한 태그로도 좁혀진다
+  return 0;
+}
+```
+
+```text
+du.ts(10,16): error TS2339: Property 'data' does not exist on type '{ status: "idle"; } | { status: "loading"; }'.
+  Property 'data' does not exist on type '{ status: "idle"; }'.
+```
+
+`status === "success"`를 확인한 블록 안에서는 `data`가 확실히 있고, 앞의 두 `if`를 지난 마지막 줄에서는 `idle`과 `loading`만 남아서 `data`가 없다고 정확히 알려 준다. `count`처럼 태그를 구조 분해해 꺼낸 `const`로 비교해도 좁혀진다(TypeScript 4.4부터). 아래 그림은 태그 값 하나가 어느 갈래와 그 속성을 고르는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="status 값 하나가 갈래 하나와 그 갈래의 속성을 고른다"
+  nodes={[
+    { id: "tag", label: "status", sub: "판별 태그", x: 70, y: 125, w: 100 },
+    { id: "idle", label: "\"idle\"", sub: "속성 없음", x: 230, y: 30, w: 110 },
+    { id: "loading", label: "\"loading\"", sub: "속성 없음", x: 230, y: 95, w: 110 },
+    { id: "success", label: "\"success\"", sub: "data: T", x: 230, y: 160, w: 110 },
+    { id: "error", label: "\"error\"", sub: "error: Error", x: 230, y: 225, w: 110 },
+    { id: "ui", label: "화면", x: 360, y: 125, w: 70 },
+  ]}
+  edges={[
+    { from: "tag", to: "idle" },
+    { from: "tag", to: "loading" },
+    { from: "tag", to: "success" },
+    { from: "tag", to: "error" },
+    { from: "success", to: "ui", label: "data" },
+    { from: "error", to: "ui", label: "message", dashed: true },
+  ]}
+/>
+
+태그로 쓸 수 있는 건 리터럴 타입(`"success"`, `404`, `true`)이나 `null`·`undefined`다. `status: string`처럼 넓은 타입이면 좁힐 수 없다. 서버 응답을 판별 유니온으로 받고 싶다면 서버도 같은 태그를 보내 주어야 하니, API를 설계할 때 `{ ok: true, data } | { ok: false, error }` 같은 모양을 먼저 맞춰 두면 클라이언트 코드가 단순해진다.
+
+## 빠진 갈래를 컴파일러가 찾게 하기
+
+처음의 `statusLabel`로 돌아가자. 판별 유니온의 갈래를 모두 처리하면, 남은 자리의 타입은 아무것도 없는 `never`가 된다. 이 성질을 거꾸로 쓰면 "빠진 갈래가 있으면 오류"를 만들 수 있다.
+
+```ts
+type PaymentStatus = "paid" | "failed" | "refunded" | "partially_refunded";
+
+function statusLabel(status: PaymentStatus): string {
+  switch (status) {
+    case "paid": return "결제 완료";
+    case "failed": return "결제 실패";
+    case "refunded": return "환불 완료";
+    default: {
+      const unhandled: never = status;
+      throw new Error(`처리하지 않은 상태: ${unhandled}`);
+    }
+  }
+}
+```
+
+```text
+intro2.ts(9,13): error TS2322: Type '"partially_refunded"' is not assignable to type 'never'.
+```
+
+`default`에 도달한 `status`는 처리하지 않은 `"partially_refunded"`다. 그 값을 `never` 변수에 넣으려 하니 오류가 나고, 메시지에 빠진 갈래 이름이 그대로 찍힌다. 새 상태를 추가하면 이 함수를 쓰는 모든 `switch`가 컴파일 오류로 바뀌어서, 고칠 곳 목록을 컴파일러가 대신 만들어 준다. 이 패턴을 완전성 검사(exhaustiveness check)라고 부른다. `throw`는 타입 밖에서 온 값(옛 버전 앱이 받은 새 상태 같은 경우)을 런타임에서 잡는 두 번째 그물이다.
+
+아래 그림은 상태 값이 `switch`의 갈래로 흘러가는 모습이다. 마지막 단계에서 새 상태가 `default`의 `never`에 막힌다.
+
+<NetworkTopology
+  width={400}
+  height={240}
+  caption="처리하지 않은 상태는 default의 never에서 멈춘다"
+  zones={[
+    { id: "sw", label: "switch (status)", x: 120, y: 15, w: 270, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "in", label: "status", sub: "PaymentStatus", x: 55, y: 120, icon: "client", w: 96 },
+    { id: "paid", label: "case paid", x: 200, y: 50, icon: "server", w: 100 },
+    { id: "failed", label: "case failed", x: 320, y: 50, icon: "server", w: 100 },
+    { id: "refunded", label: "case refunded", x: 200, y: 185, icon: "server", w: 110 },
+    { id: "def", label: "default", sub: "never", x: 320, y: 185, icon: "firewall", w: 100 },
+  ]}
+  links={[
+    { from: "in", to: "paid" },
+    { from: "in", to: "failed" },
+    { from: "in", to: "refunded" },
+    { from: "in", to: "def" },
+  ]}
+  steps={[
+    { path: ["in", "paid"], packet: "\"paid\"", title: "첫 갈래", detail: "case \"paid\" 안에서 status는 \"paid\"로 좁혀진다. 남은 후보에서 \"paid\"가 빠진다." },
+    { path: ["in", "failed"], packet: "\"failed\"", title: "두 번째 갈래", detail: "같은 방식으로 \"failed\"가 빠진다. 남은 후보는 \"refunded\" | \"partially_refunded\"다." },
+    { path: ["in", "refunded"], packet: "\"refunded\"", title: "세 번째 갈래", detail: "\"refunded\"까지 빠지면 default에 남는 후보는 \"partially_refunded\" 하나다." },
+    { path: ["in", "def"], packet: "partial…", blocked: true, title: "never에 넣을 수 없다", detail: "남은 후보가 있으니 const unhandled: never = status가 TS2322로 막힌다. 새 상태를 처리하는 case를 넣으면 남은 후보가 never가 되어 통과한다.", payload: "Type '\"partially_refunded\"' is not assignable to type 'never'." },
+  ]}
+/>
+
+`default` 블록을 쓰지 않아도 그물을 칠 수 있다. 처음 코드에 반환 타입 `: string`만 적어도 오류가 난다.
+
+```text
+intro3.ts(3,46): error TS2366: Function lacks ending return statement and return type does not include 'undefined'.
+```
+
+반환 타입 없이 `noImplicitReturns` 옵션을 켜도 잡힌다.
+
+```text
+intro.ts(3,10): error TS7030: Not all code paths return a value.
+```
+
+두 방법 모두 "어떤 경로가 값을 돌려주지 않는다"까지만 알려 준다. 어느 상태가 빠졌는지까지 메시지에 나오는 건 `never` 대입 쪽이다. 반환값이 없는 `switch`(상태별로 부수 효과만 일으키는 코드)라면 `never` 패턴만 동작한다. TypeScript 4.9부터는 변수를 만들지 않고 `status satisfies never;` 한 줄로 쓸 수도 있다. 이 옵션들이 `strict`에 포함되는지는 [tsconfig strict 옵션 글](/posts/tsconfig-strict)에서 정리한다.
+
+## 직접 만드는 타입 가드
+
+`typeof`나 `in`을 여러 줄 엮은 검사를 함수로 빼면, 그 함수를 부르는 쪽에서는 좁히기가 일어나지 않는다. 반환 타입이 그냥 `boolean`이기 때문이다. 반환 타입을 `value is User`로 적으면 "이 함수가 `true`를 돌려주면 `value`는 `User`다"라는 약속이 된다. 이런 함수를 사용자 정의 타입 가드(type guard), 반환 타입을 타입 서술어(type predicate)라고 한다.
+
+<UrlAnatomy
+  caption="타입 가드 시그니처 읽기"
+  base="function isUser"
+  separator=""
+  joiner=""
+  params={[
+    { key: "param", display: "(value: unknown)", title: "무엇이든 받는다", description: "가드는 보통 unknown이나 넓은 유니온을 받는다. 이미 User라면 확인할 필요가 없으니까.", required: true },
+    { key: "colon", display: ": ", title: "반환 타입 자리", description: "여기에 boolean 대신 타입 서술어를 쓴다. 런타임에는 그냥 true나 false를 돌려준다." },
+    { key: "pred", display: "value is User", title: "타입 서술어", description: "true면 호출부의 인자가 User로, false면 User를 뺀 나머지로 좁혀진다. 이 이름은 매개변수 이름과 같아야 한다.", code: "if (isUser(raw)) {\n  raw.name // raw: User\n}", required: true },
+  ]}
+/>
+
+```ts
+type User = { id: number; name: string };
+
+function isUser(value: unknown): value is User {
+  return typeof value === "object" && value !== null
+    && "id" in value && typeof value.id === "number"
+    && "name" in value && typeof value.name === "string";
+}
+
+function isUserLie(value: unknown): value is User {
+  return typeof value === "object" && value !== null && "id" in value;   // name은 안 봤다
+}
+
+const raw: unknown = JSON.parse('{"id":1,"nickname":"kim"}');
+if (isUser(raw)) console.log("isUser:", raw.name.toUpperCase());
+else console.log("isUser: 아니다");
+if (isUserLie(raw)) console.log("isUserLie:", raw.name.toUpperCase());
+```
+
+두 함수 모두 `tsc`를 통과한다. 실행 결과는 다르다.
+
+```text
+isUser: 아니다
+TypeError: Cannot read properties of undefined (reading 'toUpperCase')
+```
+
+`isUserLie`는 `id`만 보고 `true`를 돌려줬고, `raw.name`은 `undefined`라서 `toUpperCase`를 읽다 멈췄다. 검사기는 타입 가드의 본문이 서술어와 맞는지 확인하지 않는다. `value is User`는 `as User`와 같은 무게의 약속이다. 아래 그림은 거짓말하는 가드가 오류를 어디로 옮기는지 보여 준다.
+
+<SequenceDiagram
+  caption="가드가 true를 돌려주면 검사기는 본문을 다시 보지 않는다"
+  actors={[
+    { id: "call", label: "호출부" },
+    { id: "guard", label: "isUserLie" },
+    { id: "chk", label: "검사기" },
+  ]}
+  steps={[
+    { from: "call", to: "guard", label: "raw: unknown", title: "응답을 가드에 넘긴다", detail: "서버가 name 대신 nickname을 보냈다. raw의 타입은 아직 unknown이다.", payload: "{ \"id\": 1, \"nickname\": \"kim\" }" },
+    { from: "guard", to: "guard", label: "\"id\" in value", title: "id만 확인한다", detail: "객체이고 id가 있으니 true를 돌려준다. name은 보지 않았다." },
+    { from: "guard", to: "chk", label: "true", title: "서술어를 믿는다", detail: "반환 타입이 value is User이니, true인 갈래에서 raw를 User로 좁힌다. 본문이 정말 그걸 확인했는지는 따지지 않는다." },
+    { from: "chk", to: "call", label: "raw: User", title: "오류가 사용하는 곳으로 밀려난다", detail: "raw.name.toUpperCase()가 컴파일을 통과하고, 런타임에 TypeError가 난다. 원인은 가드인데 증상은 화면 코드에서 보인다." },
+  ]}
+/>
+
+그래서 타입 가드는 짧고 한 가지만 확인하게 만들고, 테스트를 따로 둔다. 타입이 커질수록 손으로 쓴 가드와 타입 정의가 어긋나기 쉬우니, 응답 검증처럼 큰 모양을 다룰 때는 스키마에서 가드와 타입을 함께 만들어 주는 검증 라이브러리를 쓰는 편이 안전하다.
+
+TypeScript 5.5부터는 간단한 가드를 검사기가 직접 추론한다. 배열에서 `undefined`를 걸러 내는 흔한 코드가 그 예다.
+
+```ts
+type Product = { sku: string; price: number };
+const found: (Product | undefined)[] = [{ sku: "A1", price: 1000 }, undefined];
+
+const list = found.filter((p) => p !== undefined);
+const total = list.reduce((sum, p) => sum + p.price, 0);
+
+const list2 = found.filter(Boolean);
+const total2 = list2.reduce((sum, p) => sum + p.price, 0);
+```
+
+TypeScript 5.9에서는 `filter(Boolean)` 쪽만 오류다.
+
+```text
+filter.ts(8,47): error TS18048: 'p' is possibly 'undefined'.
+```
+
+5.3.3에서는 두 줄 모두 오류였다.
+
+```text
+../old/t/filter.ts(5,45): error TS18048: 'p' is possibly 'undefined'.
+../old/t/filter.ts(8,47): error TS18048: 'p' is possibly 'undefined'.
+```
+
+5.5부터 `(p) => p !== undefined` 같은 화살표 함수는 반환 타입이 `p is Product`로 추론된다. `Boolean`은 `(value?: unknown) => boolean`으로 선언된 내장 함수라 서술어가 없어서 지금도 좁히지 못한다. 옛 코드에 남아 있는 `.filter((p): p is Product => !!p)` 같은 명시적 서술어는 5.5 이상에서는 지워도 된다.
+
+## 통과하지 못하면 던지는 단언 함수
+
+타입 가드는 `if`와 함께 쓴다. 조건이 틀리면 그냥 예외를 던지고 싶을 때는 단언 함수(assertion function)를 쓴다. 반환 타입 자리에 `asserts 조건` 또는 `asserts value is 타입`을 적으면, 함수가 정상적으로 돌아온 다음 줄부터 좁혀진다(TypeScript 3.7부터).
+
+```ts
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+function assertIsString(value: unknown): asserts value is string {
+  if (typeof value !== "string") throw new TypeError(`문자열이 아니다: ${typeof value}`);
+}
+
+const el = document.querySelector<HTMLInputElement>("#email");
+assert(el, "#email 입력칸이 없다");
+el.value = "";                 // 여기부터 el: HTMLInputElement
+
+const env: unknown = process.env.API_URL;
+assertIsString(env);
+env.toUpperCase();             // 여기부터 env: string
+
+const assertNum = (v: unknown): asserts v is number => {
+  if (typeof v !== "number") throw new Error("숫자가 아니다");
+};
+assertNum(1);
+```
+
+```text
+asserts.ts(20,1): error TS2775: Assertions require every name in the call target to be declared with an explicit type annotation.
+```
+
+앞의 두 단언은 잘 동작하는데, 화살표 함수로 만든 `assertNum`은 호출하는 줄에서 TS2775가 난다. 단언 함수는 호출되는 이름에 타입이 명시적으로 적혀 있어야 한다. 변수의 타입을 추론에 맡기면 검사기가 제어 흐름을 분석하는 도중에 그 타입을 알아내야 하는데, 이 순환을 피하려고 정한 규칙이다. `const assertNum: (v: unknown) => asserts v is number = (v) => { ... }`처럼 변수에 타입을 적거나 `function` 선언으로 바꾸면 통과한다.
+
+단언 함수는 "여기 오면 반드시 이래야 한다"는 불변 조건에 쓴다. 필수 DOM 요소, 필수 환경 변수, 테스트의 전제 조건이 그런 자리다. 사용자 입력처럼 틀릴 수 있는 값을 검사할 때는 예외 대신 결과를 돌려주는 타입 가드나 파서가 흐름을 다루기 쉽다.
+
+## React 상태와 액션을 갈래로 나눈다
+
+React 코드에서 좁히기가 가장 많이 쓰이는 곳은 `useReducer`의 액션과 요청 상태다. 액션을 판별 유니온으로 만들면 `type`마다 필요한 값이 다르다는 사실을 타입이 기억한다.
+
+```tsx
+import { useReducer } from "react";
+
+type CartItem = { sku: string; qty: number };
+type Action =
+  | { type: "add"; sku: string }
+  | { type: "remove"; sku: string }
+  | { type: "setQty"; sku: string; qty: number }
+  | { type: "clear" };
+
+function cartReducer(items: CartItem[], action: Action): CartItem[] {
+  switch (action.type) {
+    case "add":
+      return [...items, { sku: action.sku, qty: 1 }];
+    case "remove":
+      return items.filter((it) => it.sku !== action.sku);
+    case "setQty":
+      return items.map((it) => (it.sku === action.sku ? { ...it, qty: action.qty } : it));
+    default:
+      action satisfies never;
+      return items;
+  }
+}
+
+export function Cart() {
+  const [items, dispatch] = useReducer(cartReducer, []);
+  dispatch({ type: "setQty", sku: "A1" });
+  return <p>{items.length}</p>;
+}
+```
+
+```text
+reducer.tsx(19,14): error TS1360: Type '{ type: "clear"; }' does not satisfy the expected type 'never'.
+reducer.tsx(26,12): error TS2345: Argument of type '{ type: "setQty"; sku: string; }' is not assignable to parameter of type 'Action'.
+  Property 'qty' is missing in type '{ type: "setQty"; sku: string; }' but required in type '{ type: "setQty"; sku: string; qty: number; }'.
+```
+
+한 번의 검사로 두 실수가 잡혔다. 리듀서에서 `clear`를 처리하지 않았고, 컴포넌트에서 `setQty`를 보내면서 `qty`를 빠뜨렸다. 리듀서 안에서 `action.qty`를 쓸 수 있는 건 `case "setQty"` 갈래뿐이라, 다른 액션에 `qty`가 있다고 착각하는 실수도 막힌다.
+
+요청 상태도 앞의 `FetchState`처럼 만들면 렌더링이 상태별로 깔끔하게 나뉜다. `if (state.status === "loading") return <Spinner />;`처럼 이른 반환을 이어 쓰면 아래로 갈수록 남은 갈래가 줄어서, 마지막 줄에서는 `success`만 남아 `state.data`를 그대로 쓴다. 컴포넌트 props를 판별 유니온으로 만드는 방법(링크 버튼과 일반 버튼처럼 서로 다른 속성 묶음)은 [React에서 TypeScript 쓰기](/posts/typescript-in-react)에서 이어 간다. 리듀서가 왜 순수 함수여야 하는지는 [React의 함수형 사고 글](/posts/fp-in-react)에 있다.
+
+## 직접 해 보기: 결제 상태 문구
+
+처음의 결제 화면을 판별 유니온으로 다시 만들어 보자. 상태마다 필요한 값이 다르다. 실패에는 사유, 부분 환불에는 환불 금액이 붙는다. 처음 코드는 `paid`만 처리하고 빈 문자열을 돌려준다. 나머지 갈래를 채우고, `default`에 `never` 검사를 넣어 보자. 아래 연습 칸은 타입을 지우고 실행하니, 완전성 검사가 동작하는지는 같은 코드를 편집기나 `tsc`에서 확인한다.
+
+<CodePlayground
+  caption="describePayment: 판별 유니온과 완전성 검사"
+  language="typescript"
+  functionName="describePayment"
+  initialCode={`type Payment =\n  | { status: "paid"; amount: number }\n  | { status: "failed"; reason: string }\n  | { status: "refunded"; amount: number }\n  | { status: "partially_refunded"; amount: number; refunded: number };\n\nfunction describePayment(p: Payment): string {\n  switch (p.status) {\n    case "paid":\n      return \`결제 완료: \${p.amount}원\`;\n    // 나머지 상태를 채운다. default에서 never로 빠진 경우를 잡아 보자\n  }\n  return "";\n}`}
+  solution={`type Payment =\n  | { status: "paid"; amount: number }\n  | { status: "failed"; reason: string }\n  | { status: "refunded"; amount: number }\n  | { status: "partially_refunded"; amount: number; refunded: number };\n\nfunction describePayment(p: Payment): string {\n  switch (p.status) {\n    case "paid":\n      return \`결제 완료: \${p.amount}원\`;\n    case "failed":\n      return \`결제 실패: \${p.reason}\`;\n    case "refunded":\n      return \`환불 완료: \${p.amount}원\`;\n    case "partially_refunded":\n      return \`부분 환불: \${p.refunded}/\${p.amount}원\`;\n    default: {\n      const unhandled: never = p;\n      throw new Error(\`처리하지 않은 결제 상태: \${JSON.stringify(unhandled)}\`);\n    }\n  }\n}`}
+  tests={[
+    { label: "paid", args: [{ status: "paid", amount: 12000 }], expected: "결제 완료: 12000원" },
+    { label: "failed", args: [{ status: "failed", reason: "한도 초과" }], expected: "결제 실패: 한도 초과" },
+    { label: "refunded", args: [{ status: "refunded", amount: 12000 }], expected: "환불 완료: 12000원" },
+    { label: "partially_refunded", args: [{ status: "partially_refunded", amount: 12000, refunded: 3000 }], expected: "부분 환불: 3000/12000원" },
+  ]}
+/>
+
+풀이에서 `case "failed"` 안에 `p.amount`를 써 보면 `tsc`가 막는다. 실패 갈래에는 금액이 없기 때문이다. 처음 코드의 `return ""`은 갈래가 빠져도 컴파일을 통과시키는 역할을 하니, 풀이처럼 `switch`가 모든 경로를 끝내게 만들고 지운다.
+
+## 조건문이 곧 타입 선언이다
+
+좁히기는 런타임 검사(`typeof`, `in`, `===`, 직접 만든 가드)와 컴파일 타임 타입을 잇는 다리다. 검사기는 조건문을 읽어 각 위치의 타입을 줄이고, 판별 태그가 있으면 갈래를 정확히 나누고, 다 처리한 자리에 `never`를 남긴다. 그 `never`를 이용하면 새 상태가 생겼을 때 고칠 곳을 컴파일러가 찾아 준다. 반대로 가드와 단언 함수의 본문, 함수 호출 뒤의 속성, `filter(Boolean)`처럼 검사기가 믿거나 놓치는 자리는 따로 기억해 둔다. 타입을 변형하는 도구(`Exclude`, `Extract`, 조건부 타입)는 [유틸리티·매핑 타입 글](/posts/ts-utility-mapped-types)에서, 전체 학습 순서는 [TypeScript 로드맵](/posts/typescript-roadmap)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 타입 좁히기란 무엇인가
+
+선언된 넓은 타입을, 코드의 특정 위치에서 조건문이 확인한 만큼 더 구체적인 타입으로 줄이는 것이다. 검사기가 `if`, `return`, `switch`, `&&` 같은 갈림길을 따라가며 위치마다 가능한 타입을 기억하는 제어 흐름 분석으로 동작한다. `typeof`, `===`, `in`, `instanceof`, 참·거짓 검사, 사용자 정의 타입 가드가 좁히는 수단이다.
+
+### typeof x === "object"로 확인했는데 왜 null 오류가 나나
+
+런타임에서 `typeof null`이 `"object"`라서 검사기도 그 블록의 타입을 `object | null`로 본다. `x !== null`을 함께 쓰거나 `x && typeof x === "object"`로 null을 먼저 걸러야 한다. 배열도 `object`에 섞이니 배열은 `Array.isArray`로 따로 좁힌다.
+
+### 판별 유니온은 무엇이고 왜 쓰나
+
+모든 갈래에 같은 이름의 리터럴 속성(태그)을 두고, 그 값으로 갈래를 구분하는 유니온이다. 불리언 플래그와 선택 속성을 섞은 타입은 불가능한 조합을 허용하고 데이터가 있다는 사실도 표현하지 못하는데, 판별 유니온은 태그를 확인하면 그 갈래의 속성만 정확히 쓰게 한다. 요청 상태, 리듀서 액션, API 결과 타입에 많이 쓴다.
+
+### switch에서 빠진 경우를 컴파일 오류로 만들려면
+
+`default`에서 값을 `never` 타입 변수에 넣거나 `value satisfies never`를 쓴다. 모든 갈래를 처리하면 남은 타입이 `never`라 통과하고, 빠진 갈래가 있으면 그 이름이 오류 메시지에 찍힌다. 반환 타입을 명시하거나 `noImplicitReturns`를 켜도 경로 누락은 잡히지만 어느 갈래인지는 알려 주지 않는다.
+
+### 사용자 정의 타입 가드를 쓸 때 주의할 점은
+
+`value is User` 서술어는 검사기가 본문을 확인하지 않는 약속이라 `as User`와 같은 무게다. 본문이 일부 속성만 확인해도 통과하고, 틀린 가드의 결과는 그 가드를 쓰는 곳에서 런타임 오류로 나타난다. 가드는 짧게 만들고 테스트를 두며, 큰 모양은 스키마 검증 라이브러리로 가드와 타입을 함께 만든다.
+
+### 단언 함수와 타입 가드는 어떻게 다른가
+
+타입 가드는 불리언을 돌려주고 `if`의 참 갈래에서 좁히며, 단언 함수는 조건이 틀리면 예외를 던지고 정상으로 돌아온 다음 줄부터 좁힌다. 단언 함수는 호출하는 이름에 타입이 명시돼 있어야 해서, 타입을 적지 않은 화살표 함수 변수로 만들면 TS2775가 난다. 반드시 성립해야 하는 불변 조건에는 단언, 틀릴 수 있는 입력에는 가드가 어울린다.
+
+### 콜백 안에서 좁힌 타입이 풀리는 이유는
+
+콜백은 나중에 실행되므로 그 사이에 변수가 다시 할당될 수 있기 때문이다. 다시 할당하지 않는 `const`와 매개변수는 유지되고, `let`은 TypeScript 5.4부터 콜백을 만든 뒤에 할당이 없을 때만 유지된다. 확실하게 하려면 좁힌 값을 `const`에 담아 콜백에 넘긴다.
+
+### filter(Boolean)으로 undefined를 걸렀는데 타입이 안 줄어드는 이유는
+
+`Boolean`은 서술어 없이 `boolean`을 돌려주는 함수로 선언되어 있어서 `filter`가 결과 타입을 좁힐 근거가 없다. TypeScript 5.5부터는 `(p) => p !== undefined` 같은 화살표 함수의 서술어를 검사기가 추론하므로 그렇게 쓰면 `Product[]`가 된다. 그보다 오래된 버전에서는 `(p): p is Product => p !== undefined`처럼 서술어를 직접 적는다.

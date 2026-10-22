@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-performance-triage");
+
+"API 응답이 평소의 세 배다"라는 알림이 왔다. 대시보드는 CPU 사용률 80% 언저리만 보여 주고, 무엇이 그 80%를 쓰는지는 말해 주지 않는다. 서버에 SSH로 들어왔다. 이제 무엇부터 칠까.
+
+여기서 아무 명령이나 치기 시작하면 시간만 간다. `top`을 띄워 놓고 숫자가 바뀌는 걸 구경하다 보면 5분이 지나 있다. Brendan Gregg가 Netflix에서 정리한 "60초 안에 리눅스 성능 분석하기"는 이 첫 1분을 위한 순서다. 명령 열 개를 정해진 순서로 치면서 CPU, 메모리, 디스크, 네트워크 중 어디가 넘치는지, 그리고 누가 그러는지까지 좁힌다. 무엇을 잴지의 틀(자원마다 사용률, 포화, 오류를 묻는 USE)은 [모니터링 기본 글](/posts/monitoring-basics)에 있고, 이 글은 그 틀을 서버 안에서 명령으로 채우는 쪽이다.
+
+실습은 Ubuntu 24.04 사용자 공간에 6.18 커널이 올라간 4코어 가상 머신에서 했다. `mpstat`, `pidstat`, `iostat`, `sar`는 `sysstat` 패키지에 있다(`sudo apt install sysstat`, RHEL 계열은 `sudo dnf install sysstat`). 상황을 만들려고 세 가지를 함께 띄웠다. JSON을 계속 직렬화하는 node 스크립트(`report.js`, 단일 스레드), 4KiB를 쓸 때마다 `fsync`하는 `fio` 작업(백업 흉내), 그리고 작은 HTTP 서버와 그걸 계속 두드리는 `curl` 반복문이다. 이 VM은 다른 작업과 함께 쓰는 머신이라 내가 띄우지 않은 프로세스도 출력에 보인다. 현장의 서버도 대개 그렇다.
+
+이 글은 앞의 두 글, [가상 메모리와 페이징](/posts/virtual-memory-paging)과 [페이지 캐시와 디스크 I/O](/posts/page-cache-disk-io)에서 본 숫자들을 한 번에 훑는 순서다. 각 숫자의 자세한 뜻은 그 글들에 있다.
+
+## 1분 동안 치는 열 줄
+
+순서는 이렇다. 앞의 것일수록 넓게 보고, 뒤로 갈수록 범위를 좁힌다.
+
+```bash
+uptime                 # 1. 부하가 오르는 중인가, 내리는 중인가
+sudo dmesg -T | tail   # 2. 커널이 이미 남긴 경고 (OOM, I/O 오류, 연결 거절)
+vmstat 1 5             # 3. CPU 대기열, 막힌 프로세스, 스왑, CPU 시간 나눔
+mpstat -P ALL 1 3      # 4. 코어별로 고르게 쓰는가
+pidstat 1 3            # 5. 누가 CPU를 쓰는가
+iostat -xz 1 3         # 6. 디스크가 넘치는가
+free -m                # 7. 메모리가 실제로 모자란가
+sar -n DEV 1 3         # 8. 네트워크 처리량
+sar -n TCP,ETCP 1 3    # 9. TCP 연결 수와 재전송
+top                    # 10. 위에서 본 것을 한 화면으로 다시 확인
+```
+
+아래 그림은 이번 상황에서 열 줄을 차례로 치며 메모를 쌓아 간 순서다. 숫자는 모두 아래 출력에서 왔다.
+
+<AlgoTrace
+  caption="열 줄을 차례로 치며 범인을 좁혀 가기 (이번 실습의 실측 값)"
+  cells={["uptime", "dmesg", "vmstat", "mpstat", "pidstat", "iostat", "free", "sar DEV", "sar TCP", "top"]}
+  memoryLabel="메모"
+  steps={[
+    { pointer: 0, memory: ["load 2.46, 4코어"], caption: "부하 2.46. 4코어라 숫자만으로는 넘치지 않는다. 오르는지 내리는지부터 본다." },
+    { pointer: 1, memory: ["load 2.46", "OOM 흔적 1건 (예전)"], caption: "커널 로그에 20분 전 cgroup OOM이 있다. 지금 일과는 시각이 맞지 않는다." },
+    { pointer: 2, memory: ["r 3~13, b 1~2", "wa 4~18%"], caption: "실행 대기열이 코어 수를 오가고, 디스크를 기다리는 프로세스(b)가 있다. CPU와 디스크 둘 다 후보다." },
+    { pointer: 3, memory: ["CPU2 98% usr", "CPU3 iowait 24%"], caption: "코어 하나가 꽉 찼다. 단일 스레드 하나가 한 코어를 다 먹는 모양이다." },
+    { pointer: 4, found: [4], memory: ["node 637 98%", "fio 652 %wait 24"], caption: "범인 후보가 이름을 갖는다. 98%짜리 node가 둘, 디스크를 쓰는 fio가 하나다." },
+    { pointer: 5, found: [5], memory: ["vda w/s 9.9k", "f/s 4.5k"], caption: "쓰기의 절반 가까이가 flush다. 작은 쓰기마다 fsync하는 작업이 디스크를 붙잡고 있다." },
+    { pointer: 6, memory: ["available 15GiB"], caption: "메모리는 넉넉하다. 후보에서 지운다." },
+    { pointer: 7, memory: ["lo 1.5k pkt/s", "eth0 한가"], caption: "네트워크는 루프백 요청뿐이다. 바깥 회선은 조용하다." },
+    { pointer: 8, memory: ["retrans 0"], caption: "재전송이 없다. 네트워크도 지운다." },
+    { pointer: 9, found: [4, 5], memory: ["CPU: node", "디스크: fio fsync"], caption: "top으로 다시 확인한다. 남은 후보는 단일 스레드 node와 fsync 많은 fio, 둘이다." },
+  ]}
+/>
+
+## 부하가 오르는 중인가 내리는 중인가
+
+```bash
+uptime
+```
+
+```text
+ 00:49:43 up  1:17,  0 user,  load average: 2.46, 2.70, 3.45
+```
+
+세 숫자는 1분, 5분, 15분 지수 이동 평균이다. 보는 건 크기보다 방향이다. 1분 값이 15분 값보다 크면 부하가 오르는 중이고, 작으면 이미 지나가는 중이다. 여기서는 2.46 < 3.45라 15분 전에 더 바빴다. 장애가 이미 끝나 가는 중이라면, 지금 서버를 붙잡고 볼 것보다 지나간 기록(`sar`의 과거 파일, 모니터링 그래프)을 볼 차례다.
+
+리눅스의 load average는 CPU에서 돌거나 돌 차례를 기다리는 프로세스(`R`)에 더해 디스크나 NFS를 기다리는 프로세스(`D`)도 센다. 그래서 load가 높다고 CPU가 바쁜 건 아니다. 무엇을 세는지 그림으로 보면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={270}
+  caption="리눅스 load average가 세는 것. CPU 사용률은 R 중 실제로 도는 것만 반영한다."
+  nodes={[
+    { id: "run", label: "R 실행 중", sub: "코어 위에서 돈다", x: 80, y: 50, w: 130, h: 46 },
+    { id: "rq", label: "R 대기", sub: "코어를 기다린다", x: 80, y: 140, w: 130, h: 46 },
+    { id: "d", label: "D 잠듦", sub: "디스크·NFS 대기", x: 80, y: 230, w: 130, h: 46 },
+    { id: "load", label: "load average", sub: "셋을 더해 평균", x: 300, y: 140, w: 140, h: 50 },
+    { id: "cpu", label: "CPU 사용률", sub: "도는 시간만", x: 300, y: 50, w: 140, h: 46 },
+  ]}
+  edges={[
+    { from: "run", to: "load" },
+    { from: "rq", to: "load" },
+    { from: "d", to: "load", label: "리눅스만" },
+    { from: "run", to: "cpu" },
+  ]}
+/>
+
+D 상태와 load average의 관계, CPU는 노는데 load만 높은 서버를 따라가는 법은 [프로세스와 시그널 글](/posts/linux-processes-signals)에 있다. 여기서는 숫자를 코어 수(`nproc`)와 함께 머리에 넣고 넘어간다.
+
+## 커널이 먼저 써 둔 것
+
+```bash
+sudo dmesg -T | tail
+```
+
+```text
+[Thu Oct 22 00:28:57 2026] oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),cpuset=/,mems_allowed=0,oom_memcg=/lx2oom,task_memcg=/lx2oom,task=hog,pid=4331,uid=0
+[Thu Oct 22 00:28:57 2026] Memory cgroup out of memory: Killed process 4331 (hog) total-vm:1051280kB, anon-rss:261504kB, file-rss:1556kB, shmem-rss:0kB, UID:0 pgtables:560kB oom_score_adj:0
+[Thu Oct 22 00:36:16 2026] loop0: detected capacity change from 0 to 614400
+[Thu Oct 22 00:36:16 2026] EXT4-fs (loop0): mounted filesystem cf119a79-41ac-487e-a1ba-7da16c60547e r/w with ordered data mode. Quota mode: none.
+[Thu Oct 22 00:39:33 2026] EXT4-fs (loop0): unmounting filesystem cf119a79-41ac-487e-a1ba-7da16c60547e.
+```
+
+두 번째 명령이 커널 로그인 이유는 간단하다. 성능 문제의 몇몇 원인은 커널이 이미 이름을 붙여 남겨 두기 때문이다. OOM kill, 디스크 I/O 오류(`blk_update_request: I/O error`), 파일 시스템이 읽기 전용으로 바뀐 기록, `TCP: request_sock_TCP: Possible SYN flooding`, `nf_conntrack: table full, dropping packet` 같은 줄이 보이면 그쪽부터 간다. 이번 로그의 OOM은 20분 전 다른 실험의 흔적이고([가상 메모리 글](/posts/virtual-memory-paging)에서 일부러 만든 것이다), 시각이 지금 장애와 맞지 않으니 넘어간다. `-T`를 붙이면 부팅 후 초 대신 벽시계 시각이 나와서 장애 시각과 맞춰 보기 쉽다. 일반 사용자는 `dmesg`가 막혀 있을 수 있으니 `sudo`를 붙이거나 `journalctl -k`를 쓴다.
+
+## vmstat 한 줄에 서버 전체가 있다
+
+```bash
+vmstat 1 5
+```
+
+```text
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 3  0      0 10767192 1122124 3768416    0    0  1813  5920 4577   22 44  6 47  2  1  0
+ 3  2      0 10814308 1122124 3707860    0    0     0 29380 28114 44904 40 23 17 18  1  0
+13  0      0 10732328 1122124 3715668    0    0     0 16012 12906 23813 70 20  2  8  1  0
+ 4  0      0 10672332 1122124 3726212    0    0     0 11496 9997 17842 71 16  9  4  0  0
+ 4  1      0 10630436 1122124 3753916    0    0     0 28692 27967 37888 59 23  5 12  1  0
+```
+
+첫 줄은 부팅 이후 평균이라 지금 상태가 아니다. 둘째 줄부터 1초씩의 값이다. 한 줄을 조각내 보면 이렇다. 조각을 누르면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="vmstat 1의 둘째 줄. r과 b, si·so, us·sy·wa·st를 먼저 본다."
+  separator=" "
+  joiner="  "
+  params={[
+    { key: "r", display: "r 3", title: "실행 대기열", description: "CPU에서 돌거나 돌 차례를 기다리는 프로세스 수. 코어 수(4)보다 계속 크면 CPU가 포화다. 셋째 줄은 13이었다.", required: true },
+    { key: "b", display: "b 2", title: "막힌 프로세스", description: "끊을 수 없는 잠(D 상태), 대개 디스크 I/O를 기다리는 프로세스 수. 0이 아닌 값이 이어지면 디스크나 NFS를 본다.", required: true },
+    { key: "free", display: "free 10814308", title: "빈 메모리 (KiB)", description: "아무도 안 쓰는 메모리. 작아도 괜찮다. 실제 여유는 free -m의 available로 본다." },
+    { key: "si", display: "si 0 so 0", title: "스왑 입출력", description: "초당 스왑에서 읽고 쓴 양. 0이 아니면 메모리가 모자라 익명 메모리가 디스크를 오간다는 뜻이다.", required: true },
+    { key: "bo", display: "bo 29380", title: "블록 쓰기 (KiB/s)", description: "블록 장치로 나간 양. bi는 읽은 양이다. 디스크 쪽 자세한 건 iostat으로 넘긴다." },
+    { key: "cs", display: "in 28114 cs 44904", title: "인터럽트와 문맥 교환", description: "초당 횟수. 평소 값과 비교한다. 갑자기 몇 배로 늘면 스레드가 잠깐씩 깨는 일(락 경합, 작은 I/O)이 많다." },
+    { key: "us", display: "us 40 sy 23", title: "사용자·커널 시간", description: "us는 앱 코드, sy는 커널 안에서 쓴 비율. sy가 크면 시스템 콜, I/O, 프로세스 생성이 많다는 뜻이다." },
+    { key: "wa", display: "id 17 wa 18", title: "놀기·I/O 대기", description: "wa는 할 일 없이 노는데 마침 I/O를 기다리는 작업이 있던 시간. CPU 시간의 한 종류일 뿐, 디스크 포화를 직접 재지는 않는다." },
+    { key: "st", display: "st 1", title: "빼앗긴 시간", description: "가상 머신에서 하이퍼바이저가 다른 손님에게 CPU를 준 시간. 꾸준히 몇 %를 넘으면 같은 호스트의 이웃이 시끄럽다." },
+  ]}
+/>
+
+이번 상황을 읽으면 이렇다. `r`이 3에서 13까지 오가니 4코어를 넘는 순간이 있다. `b`가 0이 아닌 줄이 있고 `wa`가 4~18%다. 디스크를 기다리는 일이 있다. `sy`가 16~23%로 높은 건 `curl` 반복문이 초당 백 번 넘게 프로세스를 만들고 `fio`가 쓸 때마다 시스템 콜을 부르기 때문이다. `si`/`so`는 0이라 메모리는 깨끗하다. 이 한 줄로 후보가 CPU와 디스크 둘로 좁혀졌다.
+
+`wa`를 읽을 때는 조심한다. CPU가 다른 일로 바쁘면 I/O를 기다리는 작업이 있어도 `wa`로 잡히지 않는다. 그래서 `wa`가 낮다고 디스크가 괜찮다는 뜻은 아니고, 디스크는 6번의 `iostat`에서 따로 본다.
+
+## 코어 하나만 뜨거운가
+
+```bash
+mpstat -P ALL 1 3
+```
+
+```text
+Average:     CPU    %usr   %nice    %sys %iowait    %irq   %soft  %steal  %guest  %gnice   %idle
+Average:     all   61.48    0.00   17.07   10.43    0.00    4.04    0.93    0.00    0.00    6.06
+Average:       0   76.25    0.00   11.71    4.01    0.00    0.33    1.00    0.00    0.00    6.69
+Average:       1   38.78    0.00   30.27   13.61    0.00    0.34    0.68    0.00    0.00   16.33
+Average:       2   98.01    0.00    0.33    0.00    0.00    0.00    1.66    0.00    0.00    0.00
+Average:       3   31.63    0.00   26.53   24.49    0.00   15.65    0.34    0.00    0.00    1.36
+```
+
+전체 평균(`all`)만 보면 사용자 시간 61%라 아직 여유가 있어 보인다. 코어별로 보면 2번이 `%usr` 98%로 꽉 찼다. 한 코어만 붙어 있는 모양은 단일 스레드 병목의 신호다. node의 이벤트 루프, Redis의 명령 처리, 락 하나를 잡고 도는 스레드가 이렇게 보인다. 코어를 더 붙여도 이런 병목은 풀리지 않는다. 그 스레드가 하는 일을 줄이거나 나눠야 한다. node라면 무거운 계산이 이벤트 루프를 붙잡는 이야기가 [이벤트 루프 글](/posts/event-loop)에 있다.
+
+3번 코어는 `%soft`가 15%다. 소프트 인터럽트 처리 시간인데, 여기서는 루프백으로 오가는 패킷 처리로 보인다. 네트워크 패킷이 많은 서버에서 `%soft`가 코어 하나에만 몰리면 NIC 수신 큐가 한 코어로만 들어오는 것이고, RSS(Receive Side Scaling)나 RPS로 나눈다.
+
+## 누가 그 시간을 쓰나
+
+```bash
+pidstat 1 3            # 프로세스별 CPU
+pidstat -d 1 3         # 프로세스별 디스크 I/O
+```
+
+```text
+Average:        0     12661   98.68    0.00    0.00    0.33   98.68     -  node
+Average:        0       637   98.35    0.00    0.00    0.00   98.35     -  node
+Average:        0       652    1.65   18.15    0.00   24.09   19.80     -  fio
+Average:        0        55    0.00    9.24    0.00    0.00    9.24     -  kworker/3:1H+kblockd
+Average:        0       639    4.29    3.30    0.00    3.30    7.59     -  python3
+Average:        0        98    5.61    0.33    0.00    1.98    5.94     -  claude
+Average:        0       656    0.66    1.98    0.00    0.33    2.64     -  bash
+
+Average:      UID       PID   kB_rd/s   kB_wr/s kB_ccwr/s iodelay  Command
+Average:        0       652      0.00  29211.92      0.00       0  fio
+Average:        0     12616      0.00    512.58      0.00       0  bash
+Average:        0     16100      0.00      1.32      0.00       0  bash
+Average:        0     16110      0.00   3189.40      0.00       0  python3
+```
+
+CPU 쪽 칸은 UID, PID, `%usr`, `%system`, `%guest`, `%wait`, `%CPU`, CPU 번호, 이름 순이다. 출력을 `%CPU`로 정렬해 위 몇 줄만 남겼다. 98%짜리 node가 둘이다. 637이 내가 띄운 `report.js`이고, 12661은 같은 VM에서 다른 작업이 띄운 node다. 둘 다 `%system`이 0이고 `%usr`만 98%라 순수하게 JavaScript를 계산하고 있다. `top`과 달리 `pidstat`은 몇 초씩 지나간 값을 계속 쌓아 줘서, 잠깐 떴다 사라지는 프로세스까지 기록으로 남는다.
+
+`%wait`는 실행할 준비가 됐는데 CPU를 못 받아 기다린 시간의 비율이다. `fio`가 24%다. `r`이 코어 수를 넘는 순간마다 누군가는 이렇게 기다린다. `%wait`가 큰 프로세스가 지연에 민감한 서비스라면 그게 응답이 늦어지는 직접 이유가 된다.
+
+디스크 쪽(`-d`)에서는 `fio`가 초당 29MB를 쓰고 있다. 여기서 범인 후보 둘이 이름을 얻었다. CPU의 node, 디스크의 fio.
+
+## 디스크가 넘치는가
+
+```bash
+iostat -xz 1 3
+```
+
+```text
+avg-cpu:  %user   %nice %system %iowait  %steal   %idle
+          44.14    0.03    6.25    1.95    0.66   46.97
+
+Device            r/s     rkB/s ... w/s     wkB/s ... d/s     dkB/s ... f/s f_await  aqu-sz  %util
+vda            345.52   1767.56 ... 536.45   5983.41 ... 111.20  13727.14 ... 222.74    0.09    0.36   9.05
+
+avg-cpu:  %user   %nice %system %iowait  %steal   %idle
+          42.64    0.00   24.62   27.92    0.51    4.31
+
+Device            r/s     rkB/s ... w/s     wkB/s ... d/s     dkB/s ... f/s f_await  aqu-sz  %util
+vda              4.95     19.80 ... 9905.94  21687.13 ... 5334.65 122645.54 ... 4484.16    0.09    1.79  83.96
+```
+
+칸이 길어서 대기 시간과 병합 칸은 `...`로 줄였다(원래 출력의 `w_await`는 0.08, `r_await`는 0.20이었다). `-z`는 아무 일도 안 한 장치를 빼 준다. 첫 보고는 `vmstat`처럼 부팅 이후 평균이라 버리고, 둘째 보고부터 읽는다.
+
+`w/s`가 9,906인데 `f/s`가 4,484다. 쓰기 두 번에 flush가 한 번꼴이다. 4KiB씩 쓰고 매번 `fsync`하는 `fio` 작업의 모습 그대로다. 쓰기 크기(`wkB/s ÷ w/s`)가 2KiB 남짓으로 작은 것도 같은 이야기다. `d/s`는 discard(TRIM) 요청인데, 이 루트 파일 시스템은 `discard` 옵션으로 마운트되어 있어서 파일을 지울 때마다 장치에 discard가 나간다. 같은 VM의 다른 작업이 파일을 지운 몫으로 보인다.
+
+`%util`이 84%라도 이 virtio 디스크는 요청을 병렬로 처리하니 포화라고 단정하지 않는다. 대기 시간이 0.1ms 안팎으로 짧고 `aqu-sz`도 1.8이다. 디스크 자체는 아직 버티고 있고, 문제는 `fsync`를 너무 자주 부르는 쓰는 쪽의 패턴이다. 각 칸을 읽는 법과 `%util`의 함정은 [페이지 캐시와 디스크 I/O 글](/posts/page-cache-disk-io)에서 실측과 함께 다뤘다.
+
+## 메모리와 네트워크는 지운다
+
+```bash
+free -m
+sar -n DEV 1 3
+sar -n TCP,ETCP 1 3
+```
+
+```text
+               total        used        free      shared  buff/cache   available
+Mem:           16093        1013       10967          43        4477       15079
+Swap:              0           0           0
+
+Average:        IFACE   rxpck/s   txpck/s    rxkB/s    txkB/s   rxcmp/s   txcmp/s  rxmcst/s   %ifutil
+Average:           lo   1570.76   1570.76    104.05    104.05      0.00      0.00      0.00      0.00
+Average:         ifb0      0.00      0.00      0.00      0.00      0.00      0.00      0.00      0.00
+Average:         ifb1      0.00      0.00      0.00      0.00      0.00      0.00      0.00      0.00
+Average:         eth0     36.21     36.21      5.15     11.07      0.00      0.00      0.00      0.00
+
+Average:     active/s passive/s    iseg/s    oseg/s
+Average:       137.00    137.00   1677.67   1677.67
+Average:     atmptf/s  estres/s retrans/s isegerr/s   orsts/s
+Average:         0.00      0.00      0.00      0.00      0.00
+```
+
+메모리는 `available`이 16GiB 중 15GiB다. `vmstat`의 `si`/`so`도 0이었으니 지운다. 메모리 압박이 있었다면 `sar -B`의 `majflt/s`와 `pgscand/s`를 이어서 본다([가상 메모리 글](/posts/virtual-memory-paging)).
+
+네트워크는 인터페이스별로 초당 패킷과 kB를 본다. 루프백(`lo`)의 초당 1,571패킷은 `curl` 반복문이고, 바깥 회선 `eth0`은 초당 36패킷으로 조용하다. 회선 대역폭과 비교해 `rxkB/s`/`txkB/s`가 한도 가까이 붙어 있으면 그게 포화다. `%ifutil`은 이 가상 NIC가 속도를 알려 주지 않아 0으로 나왔다.
+
+TCP 쪽은 `active/s`(내가 연 연결), `passive/s`(받은 연결), `retrans/s`(재전송)를 본다. 초당 137개 연결을 열고 받는 건 `curl`이 요청마다 새 연결을 맺어서다. 연결을 재사용하지 않는 클라이언트가 있으면 이 숫자가 요청 수와 같아진다. `retrans/s`는 0이다. 재전송이 늘면 패킷 손실이나 혼잡이 있다는 뜻이고, 그때는 [TCP 신뢰성과 혼잡 제어 글](/posts/tcp-reliability-congestion)과 [tcpdump 글](/posts/packet-capture-tcpdump)로 넘어간다. `atmptf/s`(연결 시도 실패)나 `orsts/s`(보낸 RST)가 튀면 상대가 연결을 거절하고 있는지 본다.
+
+## top으로 다시 맞춰 본다
+
+```bash
+top -b -n 1 | head -14
+```
+
+```text
+top - 00:50:04 up  1:17,  0 user,  load average: 3.14, 2.84, 3.48
+Tasks: 122 total,   5 running, 115 sleeping,   0 stopped,   2 zombie
+%Cpu(s): 60.0 us, 17.5 sy,  0.0 ni, 10.0 id,  7.5 wa,  0.0 hi,  5.0 si,  0.0 st 
+MiB Mem :  16093.2 total,  11306.3 free,   1253.5 used,   3898.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  14839.7 avail Mem 
+
+  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  637 root      20   0 1013128  51708  41764 R 100.0   0.3   1:01.40 node
+17507 root      20   0 1128488 171796  43048 R 100.0   1.0   0:03.96 node
+  639 root      20   0   99008  18636  10344 S  20.0   0.1   0:05.04 python3
+   15 root      20   0       0      0      0 I  10.0   0.0   0:02.94 rcu_preempt
+   76 root       0 -20       0      0      0 I  10.0   0.0   0:03.57 kworker/1:1H-kblockd
+   81 64321     20   0    7324   2992   2344 S  10.0   0.0   0:00.33 6
+  652 root      20   0  258200   7172   1752 R  10.0   0.0   0:12.51 fio
+```
+
+`top`을 마지막에 두는 이유는, 앞에서 좁혀 온 그림이 맞는지 한 화면으로 확인하는 용도이기 때문이다. 637 node가 100%로 맨 위다. 몇 초 전 `pidstat`에 있던 다른 작업의 node(12661)는 없고, 대신 PID 17507인 node가 올라와 있다. 짧게 떴다 사라지는 프로세스는 `top` 한 화면으로는 놓치기 쉽다. 앞의 `pidstat`처럼 시간 간격을 두고 쌓아 보는 도구가 필요한 이유다.
+
+`top`의 `%CPU`는 코어 하나를 100으로 센다. 4코어 서버에서 400%까지 나올 수 있고, 멀티 스레드 프로세스가 250%면 코어 두 개 반을 쓰는 것이다. `top` 안에서 `1`을 누르면 코어별, `H`를 누르면 스레드별로 바뀐다. 단일 스레드 병목을 찾을 때는 `H`로 어느 스레드가 100%인지 본다.
+
+## 기다린 시간을 한 파일로 본다: PSI
+
+열 줄 목록이 만들어진 2015년 뒤에 리눅스에 들어온 게 PSI(Pressure Stall Information, 커널 4.20 이상)다. 자원 때문에 일이 멈춘 시간의 비율을 CPU, 메모리, I/O별로 한 파일씩 보여 준다. 사용률이 아니라 포화를 바로 잰다는 점에서 USE의 S 칸에 딱 맞는다.
+
+```bash
+for r in cpu io memory; do echo "== $r"; cat /proc/pressure/$r; done
+```
+
+```text
+== cpu
+some avg10=11.29 avg60=7.10 avg300=10.14 total=898363510
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+== io
+some avg10=19.49 avg60=11.08 avg300=4.52 total=172328865
+full avg10=15.82 avg60=9.04 avg300=3.62 total=106230354
+== memory
+some avg10=0.00 avg60=0.00 avg300=0.00 total=24133
+full avg10=0.00 avg60=0.00 avg300=0.00 total=23975
+```
+
+`some`은 최소 한 작업이 그 자원을 기다리며 멈춘 시간의 비율, `full`은 실행할 수 있는 작업 전부가 멈춘 시간의 비율이다. `avg10`/`avg60`/`avg300`은 10초, 1분, 5분 평균이고 단위는 %다. 지난 10초 동안 19.5%의 시간에 누군가 I/O를 기다렸고, 15.8%의 시간에는 모두가 I/O에 막혀 있었다. CPU는 11%의 시간에 누군가 코어를 기다렸다. 메모리는 0이다. 열 줄을 다 친 결론과 같은 그림이 파일 세 개에 들어 있다. 쿠버네티스 노드나 systemd의 cgroup 디렉터리마다 같은 이름의 파일(`cpu.pressure` 등, cgroup v2)이 있어서 컨테이너 단위로도 볼 수 있다.
+
+## 뜨거운 함수까지 내려간다
+
+어느 프로세스인지 알았으면, 그 프로세스가 어느 함수에서 시간을 쓰는지 볼 차례다. `perf`(`linux-tools-$(uname -r)` 패키지)로 1초에 99번씩 스택을 찍는다. node는 JIT으로 만든 코드라 그냥은 이름이 안 나오므로, `--perf-basic-prof`로 띄워 함수 이름 표를 `/tmp/perf-<PID>.map`에 남기게 했다.
+
+```bash
+# 99Hz로 5초 동안 637번 프로세스의 스택을 모은다
+sudo perf record -F 99 -g -p 637 -o perf.data -- sleep 5
+
+# 자기 시간(self) 기준으로 함수 순위
+sudo perf report -i perf.data --stdio --no-children -g none --sort symbol | head
+```
+
+```text
+[ perf record: Woken up 1 times to write data ]
+[ perf record: Captured and wrote 0.151 MB perf.data (495 samples) ]
+    10.71%  [.] v8::internal::JsonParser<unsigned char>::ScanJsonString(bool)
+     8.48%  [.] v8::internal::JsonStringifier::Result v8::internal::JsonStringifier::Serialize_<false>(v8::int
+     7.88%  [.] v8::internal::MaybeHandle<v8::internal::Object> v8::internal::JsonParser<unsigned char>::Parse
+     5.66%  [.] v8::internal::Handle<v8::internal::Object> v8::internal::JSDataObjectBuilder::BuildFromIterato
+     5.66%  [.] v8::internal::Handle<v8::internal::String> v8::internal::StringTable::LookupKey<v8::internal::
+     5.66%  [.] v8::internal::JsonParser<unsigned char>::MakeString(v8::internal::JsonString const&, v8::inter
+     5.25%  [.] v8::internal::JsonStringifier::Result v8::internal::JsonStringifier::Serialize_<true>(v8::inte
+```
+
+긴 함수 이름은 110자에서 잘랐다. 5초에 495개 샘플이다(99Hz × 5초). 위 순위는 V8 안쪽의 JSON 파서와 직렬화기가 차지한다. 호출 스택(`-g`를 켜고 본 출력)을 따라 올라가면 그 위에 `JS:*renderReport .../report.js:2:22`가 있다. `*`는 V8이 최적화 컴파일한 함수라는 표시다. "CPU 100%"가 "`renderReport` 안의 `JSON.parse(JSON.stringify(...))`"까지 좁혀졌다. 이 정도면 고칠 곳이 보인다. 깊은 복사가 정말 필요한지, 필요하다면 `structuredClone`이나 필요한 필드만 복사하는 쪽으로 바꿀지 정하면 된다.
+
+이 샘플을 불꽃 그래프(flame graph)로 그리면 넓은 칸이 오래 걸린 함수다. 운영 서버에서 `perf record`는 99Hz 정도면 부담이 작지만, `-g`로 스택을 모으면 샘플 파일이 커지니 짧게 찍는다. 이 VM은 하드웨어 성능 카운터를 넘겨주지 않아서 `perf`가 소프트웨어 시계(`task-clock`)로 샘플링했다. 물리 서버에서는 기본으로 `cycles` 이벤트를 쓴다.
+
+알림에서 함수 이름까지 내려온 길을 한 번에 그리면 이렇다.
+
+<SequenceDiagram
+  caption="알림에서 함수 이름까지. 질문 하나에 명령 하나씩, 답이 다음 질문을 정한다."
+  actors={[
+    { id: "me", label: "나" },
+    { id: "k", label: "커널 지표" },
+    { id: "p", label: "프로세스" },
+    { id: "perf", label: "perf" },
+  ]}
+  steps={[
+    { from: "me", to: "k", label: "vmstat 1", title: "어느 자원인가", detail: "r이 코어 수를 넘나들고 b와 wa가 있다. CPU와 디스크가 후보다." },
+    { from: "k", to: "me", label: "CPU2 98%", title: "코어별로 보니", detail: "mpstat에서 한 코어만 꽉 찼다. 단일 스레드를 의심한다." },
+    { from: "me", to: "p", label: "pidstat", title: "누구인가", detail: "node 637이 %usr 98%, fio 652가 디스크를 쓰며 %wait 24%다.", payload: "637  98.35  node\n652  19.80  fio" },
+    { from: "me", to: "perf", label: "perf record", title: "어느 함수인가", detail: "99Hz로 5초 동안 637의 스택을 모은다. 495개 샘플이다." },
+    { from: "perf", to: "me", label: "renderReport", title: "답이 나왔다", detail: "JSON 파서와 직렬화기가 위를 차지하고, 그 위에 renderReport가 있다. 깊은 복사를 줄이는 게 고칠 곳이다." },
+    { from: "me", to: "k", label: "iostat -xz", title: "디스크 쪽도", detail: "쓰기 두 번에 flush 한 번이다. fsync를 덜 부르게 모으는 쪽이 고칠 곳이다." },
+  ]}
+/>
+
+## 증상마다 먼저 보는 칸
+
+이번 상황은 CPU와 디스크였지만 다른 날에는 다른 줄이 빛난다. 자주 만나는 모습을 정리하면 이렇다.
+
+| 증상 | 먼저 보는 곳 | 그다음 |
+|---|---|---|
+| CPU 포화 | `vmstat` r이 코어 수보다 계속 큼, PSI cpu some | `pidstat`으로 누구인지, `perf`로 어느 함수인지 |
+| 단일 스레드 병목 | `mpstat`에서 한 코어만 100% | `top -H`로 스레드, 이벤트 루프·락 의심 |
+| 디스크 포화·fsync 과다 | `vmstat` b, `iostat` await·aqu-sz·f/s | `pidstat -d`, D 상태 프로세스의 wchan |
+| 메모리 압박 | `vmstat` si·so, `sar -B` majflt·pgscand, PSI memory | `dmesg`의 OOM, 프로세스별 RSS |
+| 네트워크 | `sar -n DEV` 처리량, `sar -n TCP,ETCP` retrans | `ss -ti`, tcpdump |
+| 이웃이 시끄러운 VM | `vmstat`·`mpstat`의 st | 인스턴스 유형, 호스트 이동 |
+
+이 표의 앞 칸이 "60초"에 들어가는 숫자이고, 뒤 칸은 그 숫자가 가리키는 곳을 파고드는 다음 단계다. 계층별로 네트워크 장애를 좁히는 순서는 [OSI 7계층을 현장에서 쓰는 글](/posts/osi-in-practice)에서 따로 다룬다.
+
+열 줄을 서버의 어느 부분에 대는지 그림으로 보면 이렇다. 다음을 누르면 명령마다 들여다보는 곳이 밝아진다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="60초 점검의 명령들이 들여다보는 곳. 위에서 아래로, 넓은 데서 좁은 데로 간다."
+  zones={[
+    { id: "proc", label: "프로세스", x: 10, y: 10, w: 380, h: 75, tone: "edge" },
+    { id: "kern", label: "커널", x: 10, y: 100, w: 380, h: 90, tone: "private" },
+    { id: "hw", label: "장치", x: 10, y: 205, w: 380, h: 85, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "app", label: "node 637", sub: "renderReport", x: 120, y: 50, icon: "server" },
+    { id: "fio", label: "fio 652", sub: "fsync마다", x: 290, y: 50, icon: "container" },
+    { id: "sched", label: "스케줄러", sub: "실행 대기열", x: 80, y: 148, icon: "switch" },
+    { id: "vm", label: "메모리", sub: "캐시·회수", x: 200, y: 148, icon: "router" },
+    { id: "blk", label: "블록 계층", sub: "I/O 대기열", x: 320, y: 148, icon: "switch" },
+    { id: "cpu", label: "CPU 4코어", sub: "CPU2 98%", x: 80, y: 252, icon: "server" },
+    { id: "nic", label: "NIC", sub: "eth0, lo", x: 200, y: 252, icon: "internet" },
+    { id: "disk", label: "vda", sub: "f/s 4.5k", x: 320, y: 252, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "sched" },
+    { from: "sched", to: "cpu" },
+    { from: "fio", to: "blk" },
+    { from: "blk", to: "disk" },
+    { from: "app", to: "vm", dashed: true },
+    { from: "vm", to: "nic", dashed: true },
+  ]}
+  steps={[
+    { path: ["sched", "cpu"], packet: "vmstat", highlight: ["vm", "blk"], title: "vmstat: 커널 전체", detail: "실행 대기열(r), 막힌 프로세스(b), 스왑, CPU 시간 나눔을 한 줄로 본다. 어느 쪽이 수상한지 고르는 단계다." },
+    { path: ["cpu"], packet: "mpstat", title: "mpstat: 코어별", detail: "평균에 묻힌 뜨거운 코어를 찾는다. CPU2만 98%였다." },
+    { path: ["app", "sched", "cpu"], packet: "pidstat", title: "pidstat: 누가", detail: "그 CPU 시간을 쓴 프로세스와 CPU를 기다린 시간(%wait)을 본다. node 637이 이름을 얻었다." },
+    { path: ["fio", "blk", "disk"], packet: "iostat", title: "iostat: 디스크", detail: "장치별 요청 수, 대기 시간, 대기열, flush를 본다. fio의 fsync가 쓰기 절반을 flush로 만들었다." },
+    { path: ["vm"], packet: "free", title: "free: 메모리", detail: "available이 15GiB다. 메모리는 후보에서 지운다." },
+    { path: ["nic"], packet: "sar -n", title: "sar -n: 네트워크", detail: "처리량과 TCP 재전송을 본다. 바깥 회선은 조용하고 재전송은 0이다." },
+    { path: ["app"], packet: "perf", title: "perf: 함수까지", detail: "범인 프로세스의 스택을 찍어 JSON.parse와 stringify가 시간을 쓰는 걸 확인한다." },
+  ]}
+/>
+
+## 점검하다 자주 하는 실수
+
+- 첫 줄을 읽는다. `vmstat`, `iostat`, `mpstat`의 첫 보고는 부팅 이후 평균이다. 지금을 보려면 간격을 주고 둘째 보고부터 읽는다(`iostat -y`는 첫 보고를 생략한다).
+- 평균만 본다. 4코어 평균 61%는 한 코어가 98%인 걸 숨겼다. `mpstat -P ALL`과 `top`의 `1`을 습관처럼 본다.
+- `wa`로 디스크를 판단한다. `wa`는 CPU 시간의 한 갈래라, CPU가 바쁘면 I/O 대기가 있어도 작게 나온다. 디스크는 `iostat`과 `b` 칸, PSI io로 본다.
+- `top`만 띄워 놓고 바라본다. 짧게 떴다 사라지는 프로세스는 한 화면에 잡히지 않는다. 이번에도 몇 초 사이에 다른 작업의 node가 다른 PID로 바뀌어 있었다. `pidstat` 1초 간격 기록이나 `sar`의 과거 기록이 더 많은 걸 말해 준다.
+- 장애가 끝난 뒤에 들어와서 "아무 이상 없다"고 결론 낸다. `uptime`의 1분 값이 15분 값보다 작으면 이미 지나간 것이다. `sysstat`의 수집(`/etc/default/sysstat`에서 `ENABLED="true"`, 10분 간격 기본)을 미리 켜 두면 `sar -f /var/log/sysstat/sa<일>`로 지난 시각을 되돌려 볼 수 있다.
+- 원인을 고치기 전에 프로세스를 재시작한다. 증상은 사라지지만 `perf`로 볼 기회도 함께 사라진다. 급하면 먼저 1분짜리 기록(`pidstat`, `iostat`, `perf record`)을 남기고 재시작한다.
+
+## 직접 vmstat 한 줄을 읽어 본다
+
+`vmstat 1`의 한 줄과 코어 수를 받아, 이 글에서 본 기준으로 의심할 곳을 돌려주는 함수를 만들어 본다. 칸 순서는 `r b swpd free buff cache si so bi bo in cs us sy id wa st gu`다. 기준은 이렇게 잡는다. `r`이 코어 수보다 크면 `"cpu-saturated"`, `b`가 0보다 크면 `"blocked"`, `si + so`가 0보다 크면 `"swapping"`, `wa`가 10 이상이면 `"io-wait"`, `st`가 5 이상이면 `"steal"`, `sy`가 30 이상이면 `"kernel-heavy"`를 이 순서대로 담고, 하나도 없으면 `["ok"]`다. 앞의 세 테스트는 이 실습에서 실제로 찍힌 줄이고, 마지막은 여러 기준을 한꺼번에 넘게 만든 가상의 줄이다.
+
+<CodePlayground
+  caption="vmstat 한 줄로 의심할 곳 고르기"
+  functionName="triage"
+  initialCode={`function triage(line, nproc) {
+  // line: "r b swpd free buff cache si so bi bo in cs us sy id wa st gu"
+  const hints = [];
+  return hints.length ? hints : ["ok"];
+}`}
+  solution={`function triage(line, nproc) {
+  const v = line.trim().split(/\\s+/).map(Number);
+  const [r, b, , , , , si, so, , , , , us, sy, id, wa, st] = v;
+  const hints = [];
+  if (r > nproc) hints.push("cpu-saturated");
+  if (b > 0) hints.push("blocked");
+  if (si + so > 0) hints.push("swapping");
+  if (wa >= 10) hints.push("io-wait");
+  if (st >= 5) hints.push("steal");
+  if (sy >= 30) hints.push("kernel-heavy");
+  return hints.length ? hints : ["ok"];
+}`}
+  tests={[
+    { label: "한가한 서버", args: [" 0  0      0 9914164 1099224 4585100    0    0     0     0  422  336  1  0 99  0  0  0", 4], expected: ["ok"] },
+    { label: "fio fsync 중", args: [" 2  1      0 10036884 1099860 4513036    0    0     0 29932 27722 39862 37 23 23 15  1  0", 4], expected: ["blocked", "io-wait"] },
+    { label: "빌드가 몰린 때", args: ["16  0      0 9657308 1025892 3597812    0    0     0 38192 2400 4621 94  4  1  0  1  0", 4], expected: ["cpu-saturated"] },
+    { label: "가상의 최악", args: [" 3  0 524288 81234 1024 90112  120  340  900  1200 3000 5000 20 35 10 25 10  0", 2], expected: ["cpu-saturated", "swapping", "io-wait", "steal", "kernel-heavy"] },
+  ]}
+/>
+
+## 1분 뒤에 손에 쥐는 것
+
+열 줄을 다 쳤을 때 손에 남는 건 "어느 자원이, 누구 때문에"라는 두 단어다. 이번에는 "CPU, 단일 스레드 node의 JSON 복사"와 "디스크, 쓸 때마다 fsync하는 작업"이었다. 순서가 중요한 건 넓게 보고 좁혀 가기 때문이다. `uptime`과 `dmesg`로 시간과 이미 남은 증거를, `vmstat`으로 서버 전체를, `mpstat`과 `pidstat`으로 코어와 프로세스를, `iostat`·`free`·`sar`로 나머지 자원을 지우고, 마지막에 `perf`로 함수까지 내려간다. 각 숫자가 왜 그렇게 움직이는지는 [가상 메모리 글](/posts/virtual-memory-paging)과 [페이지 캐시 글](/posts/page-cache-disk-io)에서, 지표를 미리 모아 두는 쪽은 [모니터링 기본 글](/posts/monitoring-basics)에서 이어서 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 서버가 느리다는 연락을 받으면 무엇부터 보나요?
+
+넓은 데서 좁은 데로 정해진 순서로 본다. `uptime`으로 부하의 방향, `dmesg`로 커널이 남긴 OOM이나 I/O 오류, `vmstat 1`로 실행 대기열·막힌 프로세스·스왑·CPU 시간 나눔을 보고, `mpstat -P ALL`, `pidstat`, `iostat -xz`, `free -m`, `sar -n DEV`, `sar -n TCP,ETCP`로 자원과 프로세스를 좁힌 뒤 `top`으로 확인한다. 1분 안에 "어느 자원이, 누구 때문에"까지 가는 게 목표이고, 그다음에 `perf` 같은 도구로 함수까지 내려간다.
+
+### load average가 8인데 CPU 사용률은 30%입니다. 어떻게 해석하나요?
+
+리눅스 load average는 CPU를 쓰거나 기다리는 `R` 프로세스뿐 아니라 디스크나 NFS를 기다리는 `D` 프로세스도 센다. 그래서 CPU가 놀아도 I/O에 막힌 프로세스가 많으면 load가 높다. `vmstat`의 `b` 칸과 `ps`의 `D` 상태 프로세스, 그 `wchan`을 보고, `iostat -x`의 대기 시간과 대기열로 디스크 쪽인지 확인한다. 코어 수와 함께 1·5·15분 값의 방향도 본다.
+
+### vmstat에서 무엇을 먼저 보나요? 첫 줄은 왜 버리나요?
+
+`r`(실행 대기열, 코어 수와 비교), `b`(I/O에 막힌 프로세스), `si`/`so`(스왑 입출력), `us`/`sy`/`wa`/`st`(CPU 시간 나눔)를 먼저 본다. 첫 줄은 부팅 이후 평균이라 지금 상태가 아니어서 간격을 주고 둘째 줄부터 읽는다. `st`가 꾸준히 몇 % 넘으면 가상 머신의 이웃이 CPU를 가져가고 있다는 뜻이다.
+
+### iowait가 낮으면 디스크는 문제가 없나요?
+
+아니다. iowait는 CPU가 놀면서 마침 I/O를 기다리는 작업이 있던 시간이라, CPU가 다른 일로 바쁘면 I/O 대기가 있어도 작게 나온다. 디스크는 `iostat -x`의 `await`, `aqu-sz`, `f/s`와 `vmstat`의 `b`, `/proc/pressure/io`로 직접 본다. iowait는 CPU 시간의 한 갈래일 뿐 디스크 포화를 재는 지표가 아니다.
+
+### 전체 CPU 사용률은 60%인데 응답이 느립니다. 무엇을 의심하나요?
+
+평균이 한 코어의 포화를 숨기고 있을 수 있다. `mpstat -P ALL`에서 한 코어만 100%면 단일 스레드 병목이고, node의 이벤트 루프나 Redis, 락을 잡은 스레드가 흔한 원인이다. `top -H`나 `pidstat -t`로 어느 스레드인지 찾고, `perf record`로 그 스레드가 어느 함수에서 시간을 쓰는지 본다. 이 경우 코어를 늘려도 나아지지 않는다.
+
+### PSI는 무엇이고 기존 지표와 무엇이 다른가요?
+
+커널 4.20부터 있는 Pressure Stall Information으로, CPU·메모리·I/O 때문에 작업이 멈춘 시간의 비율을 `/proc/pressure/*`에 보여 준다. 사용률이 아니라 "기다리느라 잃은 시간"을 직접 재서 포화를 판단하기 좋다. `some`은 일부 작업이, `full`은 모든 작업이 멈춘 비율이고, cgroup v2에서는 컨테이너마다 같은 파일이 있어 쿠버네티스나 systemd-oomd 같은 도구가 이 값을 보고 판단한다.
+
+### 범인 프로세스를 찾은 뒤에는 어떻게 원인 함수까지 가나요?
+
+`perf record -F 99 -g -p <PID>`로 짧게 스택을 샘플링하고 `perf report`나 불꽃 그래프로 본다. JIT을 쓰는 런타임은 심볼 표가 필요해서 node는 `--perf-basic-prof`, JVM은 별도 에이전트 같은 준비가 있어야 함수 이름이 나온다. 이번 실습에서는 495개 샘플 중 위쪽을 V8의 JSON 파서와 직렬화기가 차지했고, 스택 위에서 `renderReport`가 나와 고칠 곳이 정해졌다.
+
+### 장애가 이미 지나간 뒤 원인을 찾으려면?
+
+지나간 시각의 기록이 있어야 한다. `sysstat` 수집을 켜 두면 `sar -f /var/log/sysstat/sa<일>`로 그 시각의 CPU, 메모리, 디스크, 네트워크를 되돌려 볼 수 있고, `dmesg -T`나 `journalctl -k --since`로 커널 로그를 시각에 맞춰 본다. 평소에 Prometheus 같은 모니터링으로 같은 지표를 모아 두는 게 근본적인 답이다. 장애 중이라면 재시작하기 전에 1분짜리 기록부터 남긴다.

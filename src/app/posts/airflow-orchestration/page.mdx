@@ -1,0 +1,399 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("airflow-orchestration");
+
+크론에 두 줄이 걸려 있다. 새벽 2시에 Spark로 하루치 클릭을 집계하고, 3시에 그 결과로 광고주 리포트를 보낸다. 3시면 집계가 끝났으리라 믿는다. 어느 날 원본 파일이 늦게 도착해 집계가 3시 20분에 끝났고, 리포트는 3시에 빈 표를 보냈다. 다음 날에는 집계가 중간에 실패했는데 아무도 몰랐다. 그 주 금요일에는 지난 일주일을 다시 계산해 달라는 요청이 왔고, 누군가 날짜를 손으로 바꿔 가며 일곱 번 돌렸다.
+
+이 문제들은 하나로 묶인다. 작업 사이의 순서, 실패했을 때의 재시도, 날짜를 넣어 과거를 다시 돌리는 일, 그리고 지금 무엇이 어디까지 돌았는지 보는 일이다. 워크플로 오케스트레이터가 이걸 맡고, 데이터 파이프라인에서는 Apache Airflow가 가장 널리 쓰인다. 이 글은 Airflow 3.3.2(Python 3.13)를 `airflow standalone`으로 띄워 DAG, 센서, 재시도, 데이터 구간, 백필, XCom을 직접 돌려 본다. standalone은 SQLite와 LocalExecutor를 쓰는 개발용 구성이라 운영에는 PostgreSQL 같은 메타데이터 DB와 별도 실행기를 둔다.
+
+크론 자체의 함정(시간대, 겹치는 실행, 레플리카마다 도는 문제)은 [크론 잡](/posts/cron-jobs)에, 한 번 돌 때 죽은 자리에서 이어 가는 배치 내부 설계는 [배치 처리](/posts/batch-processing)에 있다. Airflow가 순서를 잡아 주는 일감인 Spark 작업은 [Spark 기초](/posts/spark-basics)에서, 그 일감이 읽고 쓰는 레이크는 [데이터 레이크와 HDFS](/posts/data-lake-hdfs)에서 다뤘다.
+
+## 크론 두 줄 대신 의존 관계 그래프
+
+Airflow에서 작업 묶음은 DAG(Directed Acyclic Graph)다. 방향이 있고 되돌아오는 길이 없는 그래프라서, "A가 끝나야 B"를 따라가면 언젠가 끝난다. DAG 안의 칸 하나가 태스크고, 태스크가 무슨 일을 할지 정하는 틀이 오퍼레이터다. `BashOperator`는 셸 명령을, `PythonOperator`나 `@task` 함수는 Python 코드를, `SparkSubmitOperator`나 `KubernetesPodOperator`는 바깥 시스템에 일을 시킨다.
+
+실험에 쓴 DAG다. 원본이 다 도착했다는 표시 파일(`_SUCCESS`)을 기다리고, 광고별 비용을 집계해 SQLite에 쓰고, 요약을 리포트로 보낸다.
+
+```python
+# airflow/dags/clicks_daily.py 일부
+from datetime import timedelta
+import pendulum
+from airflow.sdk import dag, task
+from airflow.timetables.interval import CronDataIntervalTimetable
+
+@dag(dag_id="clicks_daily",
+     schedule=CronDataIntervalTimetable("0 0 * * *", timezone="UTC"),
+     start_date=pendulum.datetime(2026, 10, 15, tz="UTC"),
+     catchup=False, max_active_runs=2,
+     default_args={"retries": 2, "retry_delay": timedelta(seconds=5)})
+def pipeline():
+    @task.sensor(poke_interval=5, timeout=120, mode="reschedule")
+    def wait_raw(data_interval_start=None):
+        day = data_interval_start.strftime("%Y-%m-%d")
+        return os.path.exists(f"{BASE}/raw/dt={day}/_SUCCESS")
+
+    @task
+    def aggregate(data_interval_start=None):
+        ...  # 그날 원본을 읽어 광고별 비용을 더하고 DB에 쓴다
+        return {"dt": day, "ads": len(cost), "cost": sum(cost.values())}
+
+    @task
+    def report(summary, ti=None):
+        if ti.try_number == 1:          # 알림 API가 첫 시도에 시간 초과로 실패했다고 치자
+            raise TimeoutError("notify API timed out")
+        print(f"report try={ti.try_number} summary={summary}")
+
+    wait_raw() >> (s := aggregate())
+    report(s)
+```
+
+`>>`가 순서다. `report(s)`처럼 앞 태스크의 반환값을 넘기면 그것도 의존 관계가 된다. 함수 이름 위의 `@task` 방식을 TaskFlow라고 부르고, Airflow 3에서는 DAG 작성용 공개 API가 `airflow.sdk`로 모였다.
+
+Airflow는 몇 개의 프로세스로 나뉜다. 어느 것이 멈추면 어떤 증상이 나는지가 이 구조에서 나오니 한 번 보고 간다.
+
+<ConceptDiagram
+  caption="Airflow 3의 구성 요소: 파싱, 스케줄링, 실행이 따로 돈다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "files", label: "DAG 파일", sub: "dags/*.py", x: 70, y: 45, w: 110 },
+    { id: "proc", label: "dag-processor", sub: "30초마다 파싱", x: 210, y: 45, w: 120 },
+    { id: "db", label: "메타데이터 DB", sub: "실행·상태·XCom", x: 340, y: 130, w: 110 },
+    { id: "sched", label: "scheduler", sub: "실행 만들기·큐", x: 70, y: 130, w: 110 },
+    { id: "worker", label: "worker", sub: "태스크 실행", x: 90, y: 215, w: 110 },
+    { id: "api", label: "api-server", sub: "UI·실행 API", x: 240, y: 215, w: 110 },
+  ]}
+  edges={[
+    { from: "files", to: "proc", label: "읽기" },
+    { from: "proc", to: "db", label: "직렬화한 DAG" },
+    { from: "sched", to: "db", arrow: "both" },
+    { from: "sched", to: "worker", label: "실행할 태스크" },
+    { from: "worker", to: "api", label: "상태·XCom" },
+    { from: "api", to: "db", arrow: "both" },
+  ]}
+/>
+
+dag-processor가 DAG 파일을 읽어 구조를 DB에 저장하고, scheduler가 그걸 보고 실행(DAG run)과 태스크 인스턴스를 만들어 실행기에 넘긴다. Airflow 3부터 태스크는 메타데이터 DB에 직접 붙지 않고 api-server의 실행 API를 거쳐 상태와 XCom을 보고한다. 위 실험 로그에도 `airflow.api_fastapi.execution_api.routes.task_instances`가 찍혔다. 센서를 미뤄 두는 triggerer도 따로 돈다. 이 밖에 실행기(LocalExecutor, CeleryExecutor, KubernetesExecutor)가 태스크를 어디서 돌릴지 정한다.
+
+## 10월 21일 작업은 22일에 돈다
+
+Airflow를 처음 쓰는 사람이 가장 많이 헷갈리는 부분이 날짜다. "매일 자정"인 DAG를 켰더니 22일 실행인데 이름이 21일이다. 실제로 켰을 때 생긴 실행이다(시스템 시각 10월 22일 03시 24분).
+
+```bash
+# DAG를 켜면(unpause) 스케줄러가 실행을 만든다
+airflow dags unpause clicks_daily
+airflow dags list-runs clicks_daily
+```
+
+```text
+dag_id       | run_id                               | state   | run_after                 | logical_date              | start_date
+=============+======================================+=========+===========================+===========================+=================================
+clicks_daily | scheduled__2026-10-22T00:00:00+00:00 | running | 2026-10-22T00:00:00+00:00 | 2026-10-21T00:00:00+00:00 | 2026-10-22T03:24:05.489947+00:00
+```
+
+`CronDataIntervalTimetable`은 실행 하나가 시간 구간 하나를 맡는다고 본다. 이 실행의 데이터 구간은 21일 0시부터 22일 0시까지다. 21일 하루치 데이터는 21일이 끝나야 다 모이니까, 실행은 구간이 끝난 22일 0시 이후(`run_after`)에 돈다. 그리고 실행의 이름표인 `logical_date`는 구간의 시작, 21일이다. 태스크는 "오늘"이 아니라 이 구간을 보고 일한다. 위 DAG가 `datetime.now()` 대신 `data_interval_start`로 폴더를 고른 이유다. 아래 그림에서 다음을 누르면 날짜가 어떻게 맞물리는지 보인다.
+
+<AlgoTrace
+  caption="데이터 구간과 실행 시각: 구간이 끝나야 그 구간을 처리한다"
+  memoryLabel="이 순간 Airflow가 아는 것"
+  cells={["10-19", "10-20", "10-21", "10-22 00:00", "10-22 03:24"]}
+  steps={[
+    { pointer: 2, caption: "10월 21일 내내 클릭이 쌓인다. 21일 구간의 실행은 아직 만들어지지 않는다.", memory: ["구간 [21일, 22일) 진행 중"] },
+    { pointer: 3, caption: "22일 0시, 구간이 닫힌다. 이제 21일 데이터를 처리할 실행을 만들 수 있다(run_after).", memory: ["구간 [21일, 22일) 닫힘", "run_after = 22일 0시"] },
+    { pointer: 4, found: [2], caption: "DAG를 켠 03:24에 실행이 생겼다. 이름표 logical_date는 구간 시작인 21일이다.", memory: ["logical_date = 21일", "data_interval_start = 21일", "data_interval_end = 22일"] },
+    { pointer: 2, found: [2], caption: "태스크는 data_interval_start로 dt=2026-10-21 폴더를 읽는다. 언제 돌든, 다시 돌리든 같은 폴더다.", memory: ["읽을 폴더: dt=2026-10-21"] },
+  ]}
+/>
+
+Airflow 3에서 바뀐 것이 있다. `schedule="@daily"`처럼 크론 문자열만 주면 기본으로 `CronTriggerTimetable`이 쓰인다(`[scheduler] create_cron_data_intervals = False`가 기본값). 이건 구간 없이 "이 시각에 실행한다"만 안다. 같은 날짜로 두 timetable을 `airflow dags test`로 돌려 컨텍스트 값을 찍어 봤다.
+
+```text
+[@daily] logical_date=2026-10-25 00:00:00+00:00 data_interval_start=2026-10-25 00:00:00+00:00 data_interval_end=2026-10-25 00:00:00+00:00 ds=2026-10-25
+[CronDataIntervalTimetable] logical_date=2026-10-25 00:00:00+00:00 data_interval_start=2026-10-24 00:00:00+00:00 data_interval_end=2026-10-25 00:00:00+00:00 ds=2026-10-25
+```
+
+`@daily`는 구간의 시작과 끝이 같다. 그러니 이 DAG에서 `data_interval_start`로 "어제 하루"를 고르면 오늘 0시가 나와 한 칸 밀린다. 반대로 `CronDataIntervalTimetable`을 손으로 실행(`dags test`, 수동 트리거)하면 그 시각에서 끝나는 구간을 잡는다. 25일을 줬더니 구간이 24~25일이 됐다. 스케줄러가 만든 실행에서는 `logical_date`가 구간 시작인데, 수동 실행에서는 끝 쪽이 된다. Airflow 2에서 3으로 올릴 때 하루치 숫자가 하루 밀렸다면 이 기본값 변경부터 확인한다. 팀 안에서는 "태스크 안에서는 언제나 `data_interval_start`와 `data_interval_end`로 범위를 정한다, timetable은 명시적으로 쓴다"는 규칙 하나로 정리하는 편이 덜 헷갈린다.
+
+`catchup`도 기본값이 바뀌었다. Airflow 3의 `catchup_by_default`는 `False`다. 시작 날짜를 석 달 전으로 잡고 DAG를 켜도 지난 석 달을 한꺼번에 돌리지 않고 가장 최근 구간 하나만 돌린다. 위 실험도 15일 시작인데 21일 실행 하나만 생겼다. 과거를 채우는 일은 뒤에서 볼 백필이 맡는다.
+
+## 원본이 오기 전에 시작하지 않게
+
+처음 장면의 첫 문제는 "3시면 끝났겠지"였다. 시각 대신 조건을 기다리게 하는 것이 센서다. 실험에서는 21일 폴더에 `_SUCCESS`를 일부러 만들지 않고 DAG를 켰다. 센서 태스크는 `up_for_reschedule` 상태로 기다렸다.
+
+```text
+clicks_daily | 2026-10-21T00:00:00+00:00 | wait_raw  | up_for_reschedule | 2026-10-22T03:24:37.914303+00:00 | 2026-10-22T03:24:38.009133+00:00
+clicks_daily | 2026-10-21T00:00:00+00:00 | aggregate |                   |                                  |
+clicks_daily | 2026-10-21T00:00:00+00:00 | report    |                   |                                  |
+```
+
+03:24:40에 표시 파일을 만들었다. 센서 로그에는 5초 간격의 확인이 남았다(앞 시각만 남기고 줄였다).
+
+```text
+03:24:05 info ::group::Pre Execute
+03:24:09 info Rescheduling task, marking task as UP_FOR_RESCHEDULE
+03:24:15 info ::group::Pre Execute
+03:24:15 info Rescheduling task, marking task as UP_FOR_RESCHEDULE
+…
+03:24:37 info ::group::Pre Execute
+03:24:38 info Rescheduling task, marking task as UP_FOR_RESCHEDULE
+03:24:43 info ::group::Pre Execute
+03:24:43 info Success criteria met. Exiting.
+```
+
+`mode="reschedule"`이 중요하다. 기본값인 `poke` 모드는 센서가 실행 슬롯 하나를 잡은 채 잠들었다 깨기를 반복한다. 원본이 몇 시간 늦는 날 센서 수십 개가 슬롯을 다 잡으면, 정작 돌아야 할 태스크가 줄을 선다. `reschedule`은 확인할 때만 슬롯을 쓰고 기다리는 동안 내려놓는다. 더 나아가 지연 가능한(deferrable) 센서는 기다리는 일을 triggerer 프로세스의 비동기 루프에 넘겨, 수천 개를 기다려도 슬롯을 쓰지 않는다.
+
+<NetworkTopology
+  caption="센서가 기다리는 세 가지 방식: 슬롯을 잡고 있나, 내려놓나, 넘기나"
+  width={400}
+  height={260}
+  zones={[
+    { id: "slots", label: "worker 슬롯", x: 10, y: 20, w: 180, h: 225, tone: "edge" },
+    { id: "trig", label: "triggerer", x: 230, y: 130, w: 160, h: 115, tone: "private" },
+  ]}
+  nodes={[
+    { id: "poke", label: "poke 센서", sub: "자면서 슬롯 점유", x: 100, y: 70, icon: "server" },
+    { id: "resch", label: "reschedule", sub: "확인 때만 점유", x: 100, y: 190, icon: "server" },
+    { id: "sch", label: "scheduler", sub: "다시 큐에 넣기", x: 310, y: 60, icon: "router" },
+    { id: "loop", label: "async 루프", sub: "수천 개 대기", x: 310, y: 190, icon: "container" },
+  ]}
+  links={[
+    { from: "poke", to: "sch" },
+    { from: "resch", to: "sch" },
+    { from: "resch", to: "loop", dashed: true },
+    { from: "loop", to: "sch" },
+  ]}
+  steps={[
+    { path: ["poke"], highlight: ["slots"], title: "poke: 잠든 채 자리를 잡는다", detail: "poke_interval마다 깨어 확인하고 다시 잔다. 그동안 이 슬롯에서는 다른 태스크가 돌 수 없다." },
+    { path: ["resch", "sch"], packet: "UP_FOR_RESCHEDULE", title: "reschedule: 확인하고 자리를 비운다", detail: "조건이 아니면 상태를 바꾸고 끝난다. 스케줄러가 5초 뒤 다시 큐에 넣는다. 실험 로그의 반복이 이것이다." },
+    { path: ["sch", "resch"], packet: "다시 실행", title: "다음 확인 때 다시 슬롯을 받는다", detail: "확인하는 몇십 밀리초만 슬롯을 쓴다. 대신 매번 프로세스를 띄우는 비용이 있어 아주 짧은 간격에는 맞지 않는다." },
+    { path: ["resch", "loop"], packet: "defer", title: "deferrable: 기다림을 넘긴다", detail: "태스크는 트리거를 남기고 슬롯을 비운다. triggerer의 비동기 루프 하나가 많은 트리거를 함께 지켜본다." },
+    { path: ["loop", "sch"], packet: "event", title: "조건이 맞으면 깨운다", detail: "트리거가 이벤트를 내면 스케줄러가 태스크를 다시 큐에 넣고, 태스크는 이어서 끝난다." },
+  ]}
+/>
+
+센서에는 꼭 `timeout`을 준다. 안 주면 기본값이 7일이라 원본이 영영 안 오는 날 일주일 동안 기다린다. 늦으면 실패시키고 알림을 받는 편이 낫다.
+
+## 실패하면 다시, 단 같은 결과로
+
+리포트 태스크는 첫 시도에서 일부러 시간 초과를 냈다. `retries=2`, `retry_delay=5초`라서 이렇게 흘렀다. 로그는 JSON 줄로 남는데, 시각과 수준과 메시지만 뽑았고 오류 줄은 `error_detail`에서 예외 종류와 메시지만 남겼다.
+
+```text
+== attempt=1.log
+03:24:45 info ::endgroup::
+03:24:45 error Task failed with exception
+    "exc_type":"TimeoutError","exc_value":"notify API timed out"
+== attempt=2.log
+03:24:51 info report try=2 summary={'dt': '2026-10-21', 'ads': 5, 'cost': 115450}
+03:24:51 info Done. Returned value was: None
+```
+
+시도마다 로그 파일이 따로 남는다. 경로 자체가 실행의 주소다. 조각을 눌러 보면 각 부분이 무엇인지 나온다.
+
+<UrlAnatomy
+  caption="태스크 로그 경로 하나를 조각으로 읽기"
+  base="logs"
+  separator="/"
+  joiner="/"
+  params={[
+    { key: "dag_id", value: "clicks_daily", title: "DAG", description: "DAG 파일 이름이 아니라 @dag의 dag_id다. 같은 파일에 DAG가 여럿이면 폴더도 여럿이다.", required: true },
+    { key: "run_id", value: "scheduled__2026-10-22T00:00:00+00:00", title: "실행", description: "만든 방식(scheduled, manual, backfill)과 시각이 들어간다. Airflow 3.3에서 스케줄 실행의 run_id에는 logical_date(21일)가 아니라 run_after(22일)가 붙었다. 날짜로 로그를 찾을 때 하루 어긋나 보이는 이유다." },
+    { key: "task_id", value: "report", title: "태스크", description: "@task 함수 이름이 기본 task_id가 된다." },
+    { key: "attempt=2.log", display: "attempt=2.log", title: "시도 번호", description: "재시도마다 새 파일이다. 실패 원인은 마지막 파일이 아니라 첫 실패 파일에 있을 때가 많다. reschedule 센서는 다시 큐에 들어가도 시도 번호가 늘지 않아 한 파일에 이어 적혔다." },
+  ]}
+/>
+
+재시도는 같은 태스크를 처음부터 다시 돌린다. 그래서 태스크가 반쯤 쓰고 죽었다가 다시 돌면 어떻게 되는지가 중요하다. 같은 집계를 두 방식으로 쓰는 DAG 둘을 만들었다. `clicks_daily`는 그날 행을 지우고 다시 넣고(한 트랜잭션), `clicks_daily_append`는 그냥 덧붙인다. 20일 실행을 한 번 돌리고, `aggregate` 태스크만 지워(clear) 다시 돌렸다.
+
+```bash
+# 20일 실행의 aggregate 태스크 상태를 지워 다시 돌게 한다
+airflow tasks clear clicks_daily        -s 2026-10-20 -e 2026-10-20 -t aggregate -y
+airflow tasks clear clicks_daily_append -s 2026-10-20 -e 2026-10-20 -t aggregate -y
+```
+
+```text
+== 처음 실행 뒤
+  ad_cost_daily (5, 113950)
+  ad_cost_append (5, 113950)
+== aggregate만 지우고 다시 돌린 뒤
+  ad_cost_daily (5, 113950)
+  ad_cost_append (10, 227900)
+```
+
+괄호 안은 20일 행 수와 비용 합계다. 덧붙이는 쪽은 다시 돌릴 때마다 광고비가 두 배가 된다. Airflow는 "다시 돌려도 된다"를 전제로 설계된 도구다. 재시도, clear, 백필이 다 같은 태스크를 다시 돌린다. 그래서 태스크는 멱등해야 한다. 같은 구간으로 몇 번을 돌려도 결과가 같아야 한다. 방법은 대개 셋 중 하나다. 그 구간의 결과를 지우고 다시 쓴다(위 방식), 파티션을 통째로 갈아 끼운다(Spark의 동적 파티션 덮어쓰기, [테이블 포맷](/posts/data-lake-hdfs)의 조건부 덮어쓰기), 키로 upsert한다. 쓰기 방식별 장단점은 [배치 처리](/posts/batch-processing)의 멱등 쓰기 절에 있다.
+
+바깥으로 나가는 부수 효과는 지울 수가 없다. 위 리포트 태스크가 메일을 보낸 직후 죽으면 재시도에서 메일이 두 번 간다. 이런 태스크는 보낸 기록을 남겨 두고 확인하거나, 받는 쪽이 중복을 거르도록 [멱등성 키](/posts/idempotency-key)를 붙인다. 재시도 횟수도 무작정 늘리지 않는다. 코드 버그나 잘못된 입력은 몇 번을 돌려도 실패하니, 재시도는 네트워크 시간 초과 같은 일시적 실패를 위한 것이다. `retry_exponential_backoff=True`를 주면 간격이 점점 벌어진다.
+
+한 실행의 흐름을 처음부터 끝까지 보면 이렇다.
+
+<SequenceDiagram
+  caption="21일 실행 하나: 기다리고, 집계하고, 한 번 실패한 뒤 끝난다"
+  actors={[
+    { id: "sch", label: "scheduler" },
+    { id: "w", label: "worker" },
+    { id: "api", label: "api-server" },
+    { id: "fs", label: "원본 폴더" },
+  ]}
+  steps={[
+    { from: "sch", to: "w", label: "wait_raw", title: "센서부터 보낸다", detail: "구간 [21일, 22일)의 실행을 만들고 첫 태스크를 큐에 넣는다." },
+    { from: "w", to: "fs", label: "_SUCCESS?", title: "표시 파일이 없다", detail: "False를 돌려주고 UP_FOR_RESCHEDULE로 끝난다. 5초마다 이 일을 되풀이했다." },
+    { from: "w", to: "api", label: "success", title: "03:24:43 조건이 맞는다", detail: "표시 파일이 생긴 다음 확인에서 센서가 성공한다." },
+    { from: "sch", to: "w", label: "aggregate", title: "집계를 돌린다", detail: "21일 폴더를 읽어 광고별 비용을 더하고, 그날 행을 지운 뒤 다시 넣는다." },
+    { from: "w", to: "api", label: "XCom", title: "반환값이 XCom이 된다", detail: "작은 요약을 메타데이터 DB에 남긴다. 다음 태스크가 이걸 받는다.", payload: "{\"dt\": \"2026-10-21\", \"ads\": 5, \"cost\": 115450}" },
+    { from: "sch", to: "w", label: "report try 1", title: "리포트가 실패한다", detail: "TimeoutError. retries가 남아 있어 up_for_retry가 되고 5초를 기다린다." },
+    { from: "sch", to: "w", label: "report try 2", title: "두 번째 시도에 성공한다", detail: "03:24:51에 끝났다. 실행 전체가 success가 된다." },
+  ]}
+/>
+
+## 지난 일주일을 다시 계산해 달라는 요청
+
+집계 로직을 고쳤거나, 원본이 뒤늦게 고쳐져 들어오면 과거 구간을 다시 돌려야 한다. 이것이 백필이다. Airflow 3에서는 백필이 스케줄러가 관리하는 일이 됐고, `airflow backfill create`로 만든다. 먼저 무엇이 만들어질지 본다.
+
+```bash
+# 15일부터 21일까지 무엇을 돌릴지 미리 본다
+airflow backfill create --dag-id clicks_daily --from-date 2026-10-15 --to-date 2026-10-21 --dry-run
+```
+
+```text
+Performing dry run of backfill.
+Printing params:
+    - dag_id = clicks_daily
+    - from_date = 2026-10-15 00:00:00+00:00
+    - to_date = 2026-10-21 00:00:00+00:00
+    - max_active_runs = None
+    - reverse = False
+    - dag_run_conf = None
+    - reprocess_behavior = None
+    - run_on_latest_version = True
+Runs to be attempted:
+| logical_date              | partition_key   | partition_date   |
++===========================+=================+==================+
+| 2026-10-15 00:00:00+00:00 |                 |                  |
+| 2026-10-16 00:00:00+00:00 |                 |                  |
+…
+| 2026-10-20 00:00:00+00:00 |                 |                  |
+```
+
+일곱 날을 요청했는데 여섯 개만 나왔다. 21일은 이미 성공한 실행이 있기 때문이다. `--reprocess-behavior`의 기본값 `none`은 이미 있는 날짜를 건드리지 않는다. `failed`는 실패한 날짜만, `completed`는 성공한 날짜까지 다시 돌린다. 실제로 만든 뒤의 실행 목록이다(열 일부만 남겼다).
+
+```text
+ scheduled__2026-10-22T00:00:00+00:00 | success | 2026-10-21T00:00:00+00:00 | 2026-10-22T03:24:05.489947+00:00
+ backfill__2026-10-21T00:00:00+00:00  | success | 2026-10-20T00:00:00+00:00 | 2026-10-22T03:26:12.837324+00:00
+ backfill__2026-10-20T00:00:00+00:00  | success | 2026-10-19T00:00:00+00:00 | 2026-10-22T03:26:12.836864+00:00
+ …
+ backfill__2026-10-16T00:00:00+00:00  | success | 2026-10-15T00:00:00+00:00 | 2026-10-22T03:26:12.835194+00:00
+```
+
+여섯 실행의 시작 시각이 모두 03:26:12.83x다. DAG에는 `max_active_runs=2`를 줬지만 백필 실행은 그 값에 묶이지 않고 한꺼번에 시작했다. 백필은 자기 `--max-active-runs`를 따로 받는다(이 버전의 동작이고, 버전마다 기본값이 달라질 수 있다). 하루치가 작아서 문제가 없었지만, 하루치가 Spark 클러스터를 한 시간씩 쓰는 작업이면 1년 백필이 365개를 동시에 띄우려 한다. 백필에는 늘 `--max-active-runs`를 준다. 두 번째 열 run_id의 날짜가 logical_date보다 하루 뒤인 것도 앞에서 본 그 차이다.
+
+아래에서 백필이 만들 날짜를 고르는 규칙을 직접 짜 볼 수 있다. 실제 Airflow는 실행 중인 날짜를 건너뛰는 등 조건이 더 있지만, 뼈대는 이렇다.
+
+<CodePlayground
+  caption="백필이 돌릴 날짜 고르기"
+  functionName="backfillDates"
+  initialCode={`// from, to: "YYYY-MM-DD" (둘 다 포함, UTC 하루 단위)
+// existing: { "2026-10-17": "success", "2026-10-18": "failed" } 처럼 이미 있는 실행
+// reprocess: "none" | "failed" | "completed"
+//   none: 실행이 없는 날짜만
+//   failed: 없는 날짜 + 실패한 날짜
+//   completed: 범위의 모든 날짜
+// 돌릴 날짜를 오름차순 배열로 돌려준다.
+function backfillDates(from, to, existing, reprocess) {
+  return [];
+}`}
+  solution={`function backfillDates(from, to, existing, reprocess) {
+  const out = [];
+  const end = new Date(to + "T00:00:00Z");
+  for (let d = new Date(from + "T00:00:00Z"); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const day = d.toISOString().slice(0, 10);
+    const state = existing[day];
+    if (state === undefined || reprocess === "completed" || (reprocess === "failed" && state === "failed")) {
+      out.push(day);
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { args: ["2026-10-15", "2026-10-19", { "2026-10-17": "success", "2026-10-18": "failed" }, "none"], expected: ["2026-10-15", "2026-10-16", "2026-10-19"], label: "none: 빈 날짜만" },
+    { args: ["2026-10-15", "2026-10-19", { "2026-10-17": "success", "2026-10-18": "failed" }, "failed"], expected: ["2026-10-15", "2026-10-16", "2026-10-18", "2026-10-19"], label: "failed: 실패한 날 포함" },
+    { args: ["2026-10-15", "2026-10-19", { "2026-10-17": "success", "2026-10-18": "failed" }, "completed"], expected: ["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"], label: "completed: 전부" },
+    { args: ["2026-10-30", "2026-11-02", {}, "none"], expected: ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02"], label: "달이 바뀌어도" },
+    { args: ["2026-10-20", "2026-10-19", {}, "none"], expected: [], label: "거꾸로 준 범위" },
+  ]}
+/>
+
+백필이 안전하려면 앞의 멱등성이 먼저다. 덧붙이는 태스크를 `completed`로 백필하면 지난 일주일이 전부 두 배가 된다. 그리고 태스크가 구간 값만 보고 일해야 한다. 태스크 안에서 `datetime.now()`로 날짜를 고르면, 15일 백필이 오늘 데이터를 일곱 번 다시 계산한다.
+
+## 태스크 사이에 넘기는 것은 이름표만
+
+`aggregate`가 돌려준 요약은 XCom으로 저장됐다. 메타데이터 DB를 직접 열어 봤다.
+
+```text
+('clicks_daily', 'aggregate', 'return_value', '{"dt": "2026-10-21", "ads": 5, "cost": 115450}')
+```
+
+XCom은 태스크 사이에 작은 값을 넘기는 장치이고, 기본 구현은 메타데이터 DB의 테이블 한 줄이다. 그래서 DataFrame이나 수십 MB짜리 목록을 반환값으로 넘기면 DB가 무거워지고, 스케줄러와 UI까지 느려진다. 큰 데이터는 레이크나 객체 저장소에 쓰고, XCom에는 그 경로와 행 수 같은 이름표만 넘긴다. 꼭 반환값을 크게 써야 하면 값을 객체 저장소에 두는 XCom 백엔드(common-io 제공자의 object storage 백엔드 같은 것)로 바꾼다.
+
+같은 맥락에서 Airflow는 계산하는 곳이 아니다. 워커에서 pandas로 수 GB를 돌리면 워커가 메모리를 다 쓰고, 다른 DAG의 태스크까지 같이 느려진다. 무거운 계산은 Spark나 데이터 웨어하우스에 시키고, Airflow는 "언제, 어떤 순서로, 실패하면 어떻게"만 맡게 한다.
+
+## DAG 파일은 30초마다 다시 읽힌다
+
+dag-processor는 DAG 폴더의 파일을 주기적으로 다시 실행해 구조를 읽는다. 이 버전의 기본값은 파일마다 30초(`[dag_processor] min_file_process_interval`)이고, 새 파일을 찾는 폴더 훑기는 300초(`refresh_interval`)다. 이 설정에서 흔한 실수 몇 가지가 나온다.
+
+DAG 파일 맨 위에 API 호출이나 DB 쿼리를 두면 30초마다 돈다. 태스크 수를 정하려고 DB에서 테이블 목록을 읽는 코드가 대표적이다. 바깥 시스템이 느려지면 파싱이 시간 초과로 실패해 DAG가 UI에서 사라진다. 이런 일은 태스크 안으로 옮기고, 개수가 실행마다 달라지면 동적 태스크 매핑(`.expand()`)을 쓴다.
+
+`start_date=datetime.now()`처럼 움직이는 시작 날짜를 주면 파싱할 때마다 시작이 바뀌어 실행이 영영 안 생긴다. 시작 날짜는 고정된 과거 날짜로 둔다. 시간대가 없는 datetime도 피한다. 위 예제처럼 `pendulum.datetime(..., tz="UTC")`로 시간대를 붙인다.
+
+새 DAG는 꺼진 채 등록된다(`dags_are_paused_at_creation = True`). 배포하고 실행이 안 생긴다고 찾아보면 그냥 꺼져 있는 경우가 많다. 가져오기 오류가 있으면 DAG 목록에 아예 안 나온다.
+
+```bash
+# 파싱에 실패한 DAG 파일과 오류
+airflow dags list-import-errors
+# 특정 실행의 태스크 상태
+airflow tasks states-for-dag-run clicks_daily "scheduled__2026-10-22T00:00:00+00:00"
+```
+
+## 태스크가 queued에서 멈춰 있을 때
+
+현장에서 "DAG가 안 돈다"는 말은 몇 갈래로 나뉜다. 어디서 멈췄는지에 따라 보는 곳이 다르다.
+
+실행 자체가 안 생겼다면 DAG가 꺼져 있거나, 파싱 오류로 등록되지 않았거나, 구간이 아직 닫히지 않았다. `CronDataIntervalTimetable`의 하루 DAG는 그날 자정이 아니라 다음 날 자정에 돈다는 걸 잊고 "오늘 실행이 없다"고 찾는 일이 흔하다. 실행은 생겼는데 태스크가 `scheduled`나 `queued`에서 오래 머물면 자리가 없는 것이다. 설치 전체의 동시 실행 상한 `parallelism`(기본 32), DAG별 `max_active_tasks`(기본 16), 풀(pool)의 슬롯, 실행기의 워커 수를 본다. poke 모드 센서가 슬롯을 다 잡고 있는 경우가 여기에 들어간다. `running`인데 끝나지 않으면 태스크 로그를 열고, 바깥 시스템(Spark, DB)에서 그 작업이 실제로 도는지 본다. 이런 태스크에는 `execution_timeout`을 줘서 무한히 기다리지 않게 한다.
+
+실패 알림만 오고 원인을 모르겠으면 첫 시도의 로그부터 본다. 마지막 시도는 앞 시도가 반쯤 남긴 상태 때문에 다른 이유로 실패하기도 한다. 결과 숫자가 이상하면 태스크가 구간 값을 쓰는지, 다시 돌렸을 때 덧붙이는지, 같은 구간이 동시에 두 번 돌지 않았는지(수동 실행과 백필이 겹쳤는지) 확인한다.
+
+## 시각이 아니라 구간과 조건으로
+
+Airflow는 작업 사이의 순서, 기다릴 조건, 재시도, 과거 구간 다시 돌리기를 한곳에 모은다. 그 전제는 두 가지다. 태스크는 "지금"이 아니라 실행이 맡은 데이터 구간을 보고 일하고, 같은 구간으로 몇 번을 다시 돌려도 결과가 같다. 이 둘이 지켜지면 재시도도, clear도, 백필도 안전한 버튼이 된다. Kafka에서 받은 데이터를 레이크에 쌓고 이 DAG로 매일 정리하는 전체 흐름은 [Kafka에서 레이크까지](/posts/kafka-to-lake-pipeline)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 크론 대신 Airflow를 쓰는 이유는 무엇인가요?
+
+작업 사이의 의존 관계, 실패 시 재시도, 과거 구간 백필, 실행 이력과 로그를 한곳에서 다루기 위해서다. 크론은 정해진 시각에 명령을 띄울 뿐이라 앞 작업이 늦거나 실패해도 뒤 작업이 그냥 돈다. Airflow는 DAG로 순서를 정하고, 센서로 조건을 기다리고, 실행마다 상태를 남긴다.
+
+### logical_date와 data interval은 어떻게 다른가요?
+
+data interval은 실행 하나가 맡는 데이터의 시간 범위이고, logical_date는 그 실행의 이름표다. `CronDataIntervalTimetable`의 하루 DAG에서 21일 실행은 [21일, 22일) 구간을 맡고, 구간이 닫힌 22일 0시 이후에 돈다. 태스크는 실행 시각이 아니라 이 구간으로 읽을 범위를 정해야 백필과 재실행이 맞는다. Airflow 3에서 크론 문자열만 주면 구간 없는 `CronTriggerTimetable`이 기본이라 이 차이를 알고 써야 한다.
+
+### 태스크를 멱등하게 만들어야 하는 이유는요?
+
+재시도, clear, 백필이 모두 같은 태스크를 다시 돌리기 때문이다. 실험에서 덧붙이는 방식은 한 번 다시 돌리자 광고비가 두 배가 됐고, 그날 행을 지우고 다시 쓰는 방식은 그대로였다. 구간 결과를 지우고 쓰기, 파티션 갈아 끼우기, 키로 upsert 중 하나로 만든다. 메일이나 결제처럼 되돌릴 수 없는 부수 효과는 중복 확인을 따로 둔다.
+
+### 센서의 poke 모드와 reschedule 모드, deferrable은 어떻게 다른가요?
+
+poke는 기다리는 내내 워커 슬롯을 잡고, reschedule은 확인할 때만 슬롯을 쓰고 사이에는 내려놓는다. deferrable은 기다림을 triggerer의 비동기 루프에 넘겨 슬롯을 전혀 쓰지 않는다. 오래 기다리는 센서가 많으면 poke가 슬롯을 다 잡아 다른 태스크가 queued에 멈춘다. 어느 모드든 `timeout`을 줘야 한다.
+
+### XCom으로 큰 데이터를 넘기면 안 되는 이유는요?
+
+기본 XCom은 메타데이터 DB의 행이라 큰 값이 쌓이면 DB와 스케줄러, UI가 함께 느려진다. 큰 데이터는 레이크나 객체 저장소에 쓰고 XCom에는 경로와 행 수 같은 이름표만 넘긴다. 꼭 필요하면 값을 객체 저장소에 두는 XCom 백엔드로 바꾼다.
+
+### 백필할 때 조심할 점은요?
+
+먼저 태스크가 멱등하고 구간 값만 쓰는지 확인한다. 그다음 `--dry-run`으로 만들어질 실행을 보고, `--max-active-runs`로 동시에 도는 수를 묶는다. 실험에서는 DAG의 `max_active_runs=2`와 상관없이 여섯 실행이 한꺼번에 시작했다. 이미 있는 날짜를 다시 돌릴지는 `--reprocess-behavior`로 정한다.
+
+### 태스크가 queued 상태에서 움직이지 않으면 무엇을 보나요?
+
+실행할 자리가 없는 경우가 대부분이다. `parallelism`, DAG의 `max_active_tasks`, 풀 슬롯, 실행기의 워커 수를 보고, poke 모드 센서가 슬롯을 잡고 있지 않은지 본다. 스케줄러가 살아 있는지도 헬스 체크로 확인한다. 워커가 태스크를 받았는데 시작을 못 하면 워커 로그에서 DAG 파싱이나 실행 API 연결 오류를 찾는다.
+
+### DAG 파일 맨 위에 DB 조회를 넣으면 무슨 문제가 생기나요?
+
+dag-processor가 DAG 파일을 주기적으로 다시 실행하기 때문에 그 조회도 매번 돈다. 이 버전 기본값으로 파일마다 30초다. 바깥 시스템이 느려지면 파싱이 시간 초과로 실패해 DAG가 목록에서 사라질 수 있다. 실행마다 달라지는 값은 태스크 안에서 읽고, 태스크 수가 그 값에 따라 달라지면 동적 태스크 매핑을 쓴다.

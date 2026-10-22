@@ -393,7 +393,7 @@ server {
 }
 ```
 
-앱 코드의 HTTP 클라이언트와 DB 드라이버도 커넥션 풀을 쓰게 한다. 그다음이 임시 포트 범위 넓히기(`ip_local_port_range = 1024 65535`처럼, 서버가 듣는 포트와 겹치지 않게 주의), 뒤쪽 서버의 IP나 포트를 늘려 목적지를 나누기, 나가는 연결에 TIME-WAIT 포트 재사용을 허락하는 `net.ipv4.tcp_tw_reuse=1`이다. `tcp_tw_reuse`는 TCP 타임스탬프로 옛 패킷을 걸러 낼 수 있을 때만 재사용한다.
+앱 코드의 HTTP 클라이언트와 DB 드라이버도 커넥션 풀을 쓰게 한다. 그다음이 임시 포트 범위 넓히기(`ip_local_port_range = 1024 65535`처럼, 서버가 듣는 포트와 겹치지 않게 주의), 뒤쪽 서버의 IP나 포트를 늘려 목적지를 나누기, 나가는 연결에 TIME-WAIT 포트 재사용을 허락하는 `net.ipv4.tcp_tw_reuse=1`이다. `tcp_tw_reuse`는 TCP 타임스탬프로 옛 패킷을 걸러 낼 수 있을 때만 재사용한다. 포트가 반쯤 찼을 때 `connect()`가 먼저 느려지는 모습과 `tcp_tw_reuse` 값별 처리량은 [네트워크 한도 실험 글](/posts/linux-network-tuning)에서 직접 재 봤다.
 
 같은 계산은 NAT에도 적용된다. 사설망의 서버 수백 대가 NAT 게이트웨이의 공인 IP 하나로 같은 외부 API에 나가면, 그 공인 IP의 포트를 나눠 쓴다. AWS NAT 게이트웨이는 목적지 하나당 동시 연결 55,000개까지라서, 넘으면 `ErrorPortAllocation` 지표가 오른다.
 

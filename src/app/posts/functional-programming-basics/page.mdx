@@ -1,0 +1,416 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("functional-programming-basics");
+
+주문 리포트에 "취소 주문은 빼 달라"는 요구가 들어왔다. 반복문 안에 `continue` 한 줄을 넣었고, 테스트 데이터로 돌려 보니 개수는 맞는데 합계가 이상하다.
+
+```js
+function report(orders) {
+  let total = 0;
+  let count = 0;
+  let max = null;
+  for (const o of orders) {
+    total += o.total;
+    if (o.status === "cancelled") continue; // 새 요구사항: 취소 주문은 뺀다
+    count++;
+    if (max === null || o.total > max.total) max = o;
+  }
+  return { total, count, avg: total / count, max: max.id };
+}
+
+console.log(report([
+  { id: 1, user: "kim", total: 12000, status: "paid" },
+  { id: 2, user: "lee", total: 8000, status: "cancelled" },
+  { id: 3, user: "park", total: 30000, status: "paid" },
+  { id: 4, user: "kim", total: 5000, status: "paid" },
+]));
+```
+
+Node 22에서 돌린 결과다.
+
+```text
+{ total: 55000, count: 3, avg: 18333.333333333332, max: 3 }
+```
+
+결제된 주문은 12,000 + 30,000 + 5,000 = 47,000원인데 55,000원이 나왔다. `continue`가 `total +=` 아래에 들어가서 취소 주문 8,000원이 합계에는 들어가고 개수에서만 빠졌다. 반복문 하나가 합계, 개수, 최댓값, 거르기를 동시에 하고 있어서 새 줄을 어디에 넣느냐에 따라 결과가 달라진다.
+
+이 글은 이런 코드를 "함수형으로 바꿔 보라"는 말이 정확히 무엇을 바꾸라는 뜻인지 본다. 함수형 프로그래밍을 이루는 생각들이 어떻게 맞물리는지, 자바스크립트에서는 어디까지 통하고 어디서 비싸지는지가 중심이다. 출력은 모두 Node.js 22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 함수를 값으로 넘기는 바탕은 [일급 함수와 콜백](/posts/js-first-class-callbacks), 같은 입력에 같은 결과를 내는 함수는 [순수 함수와 부수 효과](/posts/js-pure-functions), 값을 고치지 않고 새로 만드는 법은 [불변성과 React](/posts/js-immutability-react), 함수를 이어 붙이는 법은 [compose와 pipe](/posts/fp-composition-pipe), 실패할 수 있는 값을 다루는 법은 [map과 flatMap으로 보는 펑터와 모나드](/posts/fp-functors-monads-js), React에 적용하는 법은 [React 안의 함수형](/posts/fp-in-react)에서 이어진다. 여기서는 그 조각들의 지도를 그린다.
+
+## 변수 세 개가 한 반복문을 나눠 쓴다
+
+버그가 난 반복문을 한 바퀴씩 따라가면 문제가 보인다. 아래 그림에서 다음을 누르면 주문 하나를 볼 때마다 변수 세 개가 어떻게 바뀌는지 나온다.
+
+<AlgoTrace
+  caption="한 바퀴에 네 가지 일을 하는 반복문"
+  memoryLabel="변수"
+  cells={["#1 12000", "#2 8000 취소", "#3 30000", "#4 5000"]}
+  steps={[
+    { pointer: 0, memory: ["total 12000", "count 1", "max #1"], caption: "첫 주문. 합계에 더하고, 취소가 아니니 개수와 최댓값도 바뀐다." },
+    { pointer: 1, memory: ["total 20000", "count 1", "max #1"], caption: "취소 주문. 합계에는 이미 더한 뒤에 continue를 만난다." },
+    { pointer: 2, memory: ["total 50000", "count 2", "max #3"], caption: "세 번째 주문이 최댓값이 된다." },
+    { pointer: 3, memory: ["total 55000", "count 3", "max #3"], caption: "끝. 개수는 결제 주문만 셌는데 합계는 전부 더했다." },
+  ]}
+/>
+
+변수 하나하나는 단순하다. 문제는 네 가지 일이 한 줄 순서에 묶여 있다는 점이다. "취소를 빼라"는 요구는 사실 "앞으로 할 모든 계산의 입력을 바꿔라"는 뜻인데, 반복문 구조에서는 그 뜻을 줄 위치로 표현해야 한다. 한 줄 위에 넣으면 맞고, 한 줄 아래에 넣으면 틀린다.
+
+같은 계산을 단계별 함수로 나누면 이렇게 된다.
+
+```js
+const paidOnly = (orders) => orders.filter((o) => o.status !== "cancelled");
+const sumTotal = (list) => list.reduce((s, o) => s + o.total, 0);
+const maxByTotal = (list) => list.reduce((m, o) => (m === null || o.total > m.total ? o : m), null);
+
+function report(orders) {
+  const paid = paidOnly(orders);
+  const total = sumTotal(paid);
+  return { total, count: paid.length, avg: total / paid.length, max: maxByTotal(paid).id };
+}
+```
+
+```text
+{ total: 47000, count: 3, avg: 15666.666666666666, max: 3 }
+```
+
+"취소를 뺀다"가 `paidOnly`라는 이름을 가진 한 단계가 됐다. 그 뒤의 계산은 모두 `paid`만 본다. 거르기를 빠뜨리거나 순서를 잘못 둘 자리가 없어졌다.
+
+## 어떻게 대신 무엇을 쓴다
+
+처음 코드처럼 "변수를 만들고, 하나씩 꺼내 보고, 조건이 맞으면 값을 바꿔라"를 차례로 적는 방식을 명령형(imperative)이라고 한다. 컴퓨터에게 일하는 순서를 지시한다. 고친 코드처럼 "결제된 주문들의 합계"처럼 결과가 무엇인지를 적는 방식을 선언형(declarative)이라고 한다. 반복을 어떻게 돌지는 `filter`, `reduce`가 맡는다.
+
+선언형 코드는 SQL과 닮았다. `SELECT SUM(total) FROM orders WHERE status <> 'cancelled'`는 어떤 순서로 행을 읽을지 말하지 않는다. CSS도, React의 JSX도 같다. "이 상태일 때 화면은 이렇다"만 쓰고 DOM을 어떤 순서로 고칠지는 React가 정한다.
+
+아래 그림은 고친 `report`에서 데이터가 지나가는 길이다. 다음을 누르면 단계마다 무엇이 넘어가는지 보인다.
+
+<NetworkTopology
+  caption="거르기가 맨 앞 한 곳에 있다"
+  width={400}
+  height={240}
+  zones={[
+    { id: "calc", label: "paid만 보는 계산", x: 150, y: 20, w: 170, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "in", label: "orders", sub: "4건", x: 40, y: 120, icon: "db", w: 70 },
+    { id: "f", label: "paidOnly", sub: "filter", x: 105, y: 120, icon: "firewall", w: 80 },
+    { id: "sum", label: "sumTotal", sub: "reduce", x: 235, y: 55, icon: "router", w: 100 },
+    { id: "len", label: "length", sub: "개수", x: 235, y: 120, icon: "router", w: 100 },
+    { id: "max", label: "maxByTotal", sub: "reduce", x: 235, y: 185, icon: "router", w: 100 },
+    { id: "out", label: "report", sub: "결과 객체", x: 360, y: 120, icon: "container", w: 70 },
+  ]}
+  links={[
+    { from: "in", to: "f" },
+    { from: "f", to: "sum" },
+    { from: "f", to: "len" },
+    { from: "f", to: "max" },
+    { from: "sum", to: "out" },
+    { from: "len", to: "out" },
+    { from: "max", to: "out" },
+  ]}
+  steps={[
+    { path: ["in", "f"], packet: "4건", title: "입력을 먼저 고른다", detail: "취소 주문을 뺀 새 배열 paid를 만든다. 원래 orders는 그대로다." },
+    { path: ["f", "sum", "out"], packet: "3건", title: "합계", detail: "sumTotal은 paid만 받는다. 취소 주문이 섞일 길이 없다.", payload: "47000" },
+    { path: ["f", "len", "out"], packet: "3건", title: "개수", detail: "같은 paid의 길이다. 합계와 개수가 같은 입력을 본다는 게 코드에 드러난다.", payload: "3" },
+    { path: ["f", "max", "out"], packet: "3건", title: "최댓값", detail: "세 계산은 서로의 변수를 건드리지 않는다. 순서를 바꿔도 결과가 같다.", payload: "max: 3" },
+  ]}
+/>
+
+선언형이 늘 짧은 건 아니다. 이 예에서는 오히려 줄 수가 비슷하다. 달라진 건 줄마다 하는 일이 하나라는 점, 그리고 각 줄이 다른 줄의 변수를 고치지 않는다는 점이다. 그래서 줄의 순서를 바꾸거나 한 줄을 지워도 나머지의 의미가 그대로 남는다.
+
+## 함수형을 이루는 다섯 가지 습관
+
+함수형 프로그래밍(functional programming)은 "프로그램을 값을 받아 값을 돌려주는 함수들의 조합으로 만든다"는 생각이다. 문법 하나가 아니라 몇 가지 습관이 맞물린 묶음이고, 하나만 지켜서는 효과가 잘 안 난다. 그림의 화살표는 "이게 있어야 저게 된다"는 뜻이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="습관 다섯 개가 서로를 받친다"
+  nodes={[
+    { id: "first", label: "함수도 값", sub: "넘기고 돌려준다", x: 90, y: 50, w: 130 },
+    { id: "pure", label: "순수 함수", sub: "같은 입력, 같은 결과", x: 300, y: 50, w: 140 },
+    { id: "immut", label: "불변 데이터", sub: "고치지 않고 새로", x: 300, y: 150, w: 130 },
+    { id: "comp", label: "합성", sub: "작은 함수를 잇는다", x: 90, y: 150, w: 130 },
+    { id: "edge", label: "효과는 가장자리", sub: "입출력을 바깥에", x: 200, y: 250, w: 150 },
+  ]}
+  edges={[
+    { from: "first", to: "comp", label: "넘길 수 있어야" },
+    { from: "immut", to: "pure", label: "인자를 안 고친다" },
+    { from: "pure", to: "comp", label: "믿고 잇는다" },
+    { from: "pure", to: "edge", label: "나머지를 모은다" },
+    { from: "comp", to: "edge", dashed: true },
+  ]}
+/>
+
+하나씩 짧게 짚고, 자세한 건 각 글로 넘긴다.
+
+함수도 값이다. 변수에 담고, 인자로 넘기고, 함수에서 돌려준다. `filter`에 조건 함수를 넘길 수 있는 이유이고, 자바스크립트는 처음부터 이걸 지원했다. [일급 함수와 콜백](/posts/js-first-class-callbacks)에서 다룬다.
+
+순수 함수를 기본으로 쓴다. 결과가 인자에만 달려 있고, 결과를 돌려주는 것 말고는 흔적을 남기지 않는다. 테스트, 캐시, 재실행이 안전해지는 근거다. [순수 함수와 부수 효과](/posts/js-pure-functions)에서 숨은 입력과 출력을 찾는 법까지 본다.
+
+데이터는 고치지 않고 새로 만든다. 받은 배열에 `push`하지 않고, 바꾼 사본을 돌려준다. 순수 함수가 되려면 인자를 고치지 않아야 하니 둘은 붙어 다닌다. React에서 이게 왜 필수인지는 [불변성과 React](/posts/js-immutability-react)에서 본다.
+
+작은 함수를 이어서 큰 함수를 만든다. 위의 `report`는 `paidOnly`와 `sumTotal`을 이었다. 이어 붙이는 도구(`pipe`, `compose`)와 디버깅은 [compose와 pipe](/posts/fp-composition-pipe)에서 다룬다.
+
+부수 효과는 가장자리로 민다. DB 조회, 네트워크, 시각 읽기, 로그는 바깥 껍데기에서만 하고 가운데는 계산만 한다. 프로그램은 결국 무언가를 저장하고 보여 주려고 존재하니 효과를 없애는 게 아니라 모으는 것이다. 이 구조는 [순수 함수 글의 결제 핸들러 예](/posts/js-pure-functions#계산은-안쪽-입출력은-바깥쪽)에 있다.
+
+## 문장 대신 식으로 쓰기
+
+함수형 코드에서 눈에 띄는 또 하나의 차이는 문(statement)보다 식(expression)을 많이 쓴다는 점이다. 문은 "무언가를 하라"이고 식은 "값이 된다"이다. `if`는 문이라 값을 돌려주지 않는다. 그래서 `if`로 값을 고르려면 변수를 먼저 만들고 나중에 다시 대입해야 한다.
+
+```js
+// 문: 변수를 먼저 만들고 가지마다 대입한다
+let label;
+if (order.status === "paid") label = "결제 완료";
+else if (order.status === "cancelled") label = "취소";
+else label = "대기";
+
+// 식: 값이 되는 표현으로 바로 만든다
+const LABELS = { paid: "결제 완료", cancelled: "취소" };
+const label2 = LABELS[order.status] ?? "대기";
+```
+
+`let`이 사라지면 "이 변수는 어디서 또 바뀌나"를 찾을 일이 없다. `const`로 만든 이름은 그 줄에서 정해진 뜻이 끝까지 간다. 가지가 많고 각 가지가 여러 줄이면 `if` 문을 그대로 두고 그 전체를 함수로 빼서 `return`하는 게 낫다. 삼항 연산자를 세 겹씩 겹치면 식이라도 읽기 어렵다.
+
+React의 JSX가 `map`과 삼항 연산자, `&&`로 가득한 것도 이 때문이다. JSX의 중괄호 안에는 식만 들어간다. `for`와 `if`를 쓸 수 없으니 목록은 `map`, 조건은 삼항으로 쓴다. 이 제약이 컴포넌트를 "props를 받아 화면을 돌려주는 식"으로 만든다.
+
+## 데이터와 동작을 떼어 두면 생기는 일
+
+객체지향은 데이터와 그 데이터를 다루는 메서드를 한 객체에 묶는다. 함수형은 데이터는 평범한 객체와 배열로 두고, 동작은 그 데이터를 받는 함수로 따로 둔다. 이 차이는 데이터를 어딘가로 보낼 때 드러난다.
+
+```js
+class Cart {
+  constructor(items) { this.items = items; }
+  total() { return this.items.reduce((s, i) => s + i.price * i.qty, 0); }
+}
+const cart = new Cart([{ price: 3000, qty: 2 }]);
+const viaJson = JSON.parse(JSON.stringify(cart)); // 서버 응답, localStorage
+const viaClone = structuredClone(cart);           // Web Worker, postMessage
+console.log(cart.total());
+console.log(viaJson instanceof Cart, typeof viaJson.total);
+console.log(viaClone instanceof Cart, typeof viaClone.total);
+
+const cartData = { items: [{ price: 3000, qty: 2 }] };
+const cartTotal = (c) => c.items.reduce((s, i) => s + i.price * i.qty, 0);
+console.log(cartTotal(JSON.parse(JSON.stringify(cartData))), cartTotal(structuredClone(cartData)));
+```
+
+```text
+6000
+false undefined
+false undefined
+6000 6000
+```
+
+클래스 인스턴스는 JSON이나 `structuredClone`을 지나면 프로토타입을 잃고 평범한 객체가 된다. `total` 메서드가 사라졌으니 받은 쪽에서 `viaJson.total()`을 부르면 `TypeError`다. 데이터와 함수를 떼어 둔 쪽은 어디를 지나와도 같은 함수로 계산된다.
+
+아래 그림에서 다음을 누르면 장바구니가 워커로 넘어갔다 돌아오는 길에 무엇을 잃는지 보인다.
+
+<SequenceDiagram
+  caption="보낼 수 있는 건 데이터뿐이다"
+  actors={[
+    { id: "main", label: "메인 스레드" },
+    { id: "wire", label: "직렬화" },
+    { id: "worker", label: "워커" },
+  ]}
+  steps={[
+    { from: "main", to: "wire", label: "postMessage(cart)", title: "인스턴스를 보낸다", detail: "Cart 인스턴스에는 items 데이터와 프로토타입 링크가 있다." },
+    { from: "wire", to: "wire", label: "복제", title: "데이터 속성만 복사한다", detail: "structured clone은 자기 속성의 값만 복사한다. 프로토타입은 따라가지 않는다.", payload: "{ items: [{ price: 3000, qty: 2 }] }" },
+    { from: "wire", to: "worker", label: "평범한 객체", title: "메서드가 없다", detail: "워커가 받은 건 Cart가 아니다. total()을 부르면 TypeError가 난다.", payload: "typeof data.total // 'undefined'" },
+    { from: "worker", to: "worker", label: "cartTotal(data)", title: "함수는 받는 쪽에 있다", detail: "계산 함수를 워커 코드에 두면 평범한 데이터로 그대로 계산한다.", payload: "6000" },
+  ]}
+/>
+
+Redux가 상태를 평범한 객체로만 두라고 하는 이유, 서버 컴포넌트에서 클라이언트 컴포넌트로 클래스 인스턴스나 함수를 props로 넘길 수 없는 이유가 같은 줄기다([서버 컴포넌트](/posts/react-server-components)). 보내고, 저장하고, 비교할 수 있는 건 데이터다.
+
+그렇다고 객체지향이 틀린 건 아니다. 둘은 바꾸기 쉬운 방향이 다르다. 결제 수단마다 클래스를 두면 새 결제 수단(새 종류)을 추가하기는 쉽지만, 모든 수단에 "환불 가능 여부" 같은 새 동작을 넣으려면 클래스를 전부 고쳐야 한다. 데이터와 함수로 나누면 반대로, 새 동작은 함수 하나로 끝나지만 새 종류가 생기면 그 데이터를 다루는 함수를 전부 찾아가 가지를 하나씩 더해야 한다. 종류가 자주 늘어나는 곳(플러그인, 결제 수단)은 객체 쪽이, 동작이 자주 늘어나는 곳(주문 데이터에 대한 리포트, 검증, 변환)은 함수 쪽이 편하다. 실제 코드는 둘을 섞는다. 바깥 경계는 클래스로 감싸고 안쪽 계산은 순수 함수로 두는 식이다.
+
+## 자바스크립트가 함수형을 강제하지 않는 곳
+
+Haskell 같은 언어는 값을 고칠 수 없고 부수 효과가 타입에 드러난다. 자바스크립트는 함수형 스타일을 쓸 수 있게 해 줄 뿐 지켜 주지는 않는다. 그래서 몇 군데에서 직접 조심해야 한다.
+
+첫째, 값은 기본적으로 고칠 수 있다. `const`는 이름을 다시 대입하지 못하게 할 뿐 안의 객체는 고칠 수 있다. `Object.freeze`도 겉만 얼린다.
+
+```js
+const config = Object.freeze({ retry: 3, endpoints: { api: "/api" } });
+config.retry = 5;               // 조용히 무시된다 (strict 모드면 TypeError)
+config.endpoints.api = "/hacked"; // 안쪽 객체는 얼지 않았다
+console.log(config);
+```
+
+```text
+{ retry: 3, endpoints: { api: '/hacked' } }
+```
+
+strict 모드에서 `config.retry = 5`를 하면 `TypeError: Cannot assign to read only property 'retry' of object '#<Object>'`가 난다. 얼리는 단계별 차이는 [객체 메서드](/posts/js-object-methods)에, 얕음의 이유는 [원시값과 참조값](/posts/js-primitive-vs-reference)에 있다. 언어 차원의 불변 자료형을 넣자는 Record & Tuple 제안(`#{ }`, `#[ ]`)은 오래 논의되다 2025년에 철회됐다. 당분간은 규칙과 도구(TypeScript의 `readonly`, Immer, 린트)로 지킨다.
+
+둘째, 표준 배열 메서드 중 일부는 원본을 고친다. `sort`, `reverse`, `splice`가 그렇다. ES2023부터 사본을 돌려주는 `toSorted`, `toReversed`, `toSpliced`, `with`가 생겼다(Node 20, 크롬 110 이후). 목록은 [배열을 바꾸는 메서드](/posts/js-array-mutation)에 있다.
+
+셋째, 재귀가 반복문을 대신하지 못한다. 함수형 언어는 반복을 재귀로 쓰고 꼬리 호출 최적화로 스택을 아낀다. ES2015 명세에도 이 규칙이 있지만 V8은 구현하지 않았다. 같은 꼬리 재귀 함수를 Node 22와, 사파리와 같은 JavaScriptCore 엔진을 쓰는 Bun 1.4에서 원소 100만 개로 돌렸다.
+
+```js
+// ES 모듈 파일이라 strict 모드다
+const sumTail = (xs, i = 0, acc = 0) => (i === xs.length ? acc : sumTail(xs, i + 1, acc + xs[i]));
+const xs = Array.from({ length: 1_000_000 }, (_, i) => i + 1);
+try { console.log(sumTail(xs)); } catch (e) { console.log(`${e.constructor.name}: ${e.message}`); }
+```
+
+버전을 먼저 찍고 같은 파일을 두 런타임으로 실행했다.
+
+```text
+node v22.22.0
+RangeError: Maximum call stack size exceeded
+bun 1.4.2
+500000500000
+```
+
+같은 코드가 엔진에 따라 돌기도 하고 터지기도 한다. 크롬과 Node.js를 대상으로 하는 코드라면 깊이를 알 수 없는 데이터에는 재귀를 쓰지 않는다. 스택이 몇 칸까지 버티는지, 재귀를 트램펄린이나 명시적 스택으로 바꾸는 법은 [실행 컨텍스트와 콜 스택](/posts/js-execution-context)에서 다룬다. 배열을 훑는 일이라면 `reduce`나 `for...of`가 정답이다.
+
+## 함수형으로 쓰면 비싸지는 곳
+
+새로 만들기를 습관처럼 하면 비용이 생긴다. 이미 다른 글에서 잰 숫자들이 있으니 크기만 옮겨 둔다.
+
+`filter().map().reduce()` 체인은 단계마다 중간 배열을 만든다. 원소 100만 개에서 `for` 문보다 몇 배 느렸지만, 수천 개 목록에서는 1ms도 차이가 안 났다([배열 변환 메서드](/posts/js-array-transform#체인이-길어지면-배열도-늘어난다)). `reduce` 안에서 누산기를 `{ ...acc, [k]: v }`로 매번 펼치면 복사량이 원소 수의 제곱이 되어 1만 개에 수십 초가 걸렸다([전개와 나머지 문법](/posts/js-spread-rest)). 누산기는 `reduce`가 막 만든 값이라 바깥에서 아무도 보지 않으니 직접 고쳐도 순수함이 깨지지 않는다. 순수함은 바깥에서 본 성질이다.
+
+비용은 디버깅에서도 생긴다. 이름 없는 화살표 함수를 이어 붙이면 에러가 난 단계의 이름이 스택에 남지 않는다. 같은 일을 이름 없는 람다와 이름 붙은 함수로 한 번씩 하고, 에러의 `stack` 앞 세 줄을 찍었다(경로는 줄였다).
+
+```js
+const rows = [{ price: "1,200" }, { price: null }];
+const top3 = (e) => console.log(e.stack.split("\n").slice(0, 3).join("\n"));
+
+try { rows.map((r) => r.price).map((p) => p.replace(",", "")).map(Number); } catch (e) { top3(e); }
+
+const pickPrice = (r) => r.price;
+const stripComma = (p) => p.replace(",", "");
+try { rows.map(pickPrice).map(stripComma).map(Number); } catch (e) { top3(e); }
+```
+
+```text
+TypeError: Cannot read properties of null (reading 'replace')
+    at …/report.js:4:45
+    at Array.map (<anonymous>)
+TypeError: Cannot read properties of null (reading 'replace')
+    at stripComma (…/report.js:7:29)
+    at Array.map (<anonymous>)
+```
+
+첫 번째는 한 줄에 화살표가 세 개라 `4:45`라는 열 번호로 어느 것인지 짐작해야 한다. 운영 환경에서는 압축된 코드라 열 번호가 더 쓸모없어진다. 단계가 두세 개를 넘으면 함수에 이름을 붙인다. 이름이 곧 문서이고 스택 트레이스의 길잡이다.
+
+아래 식을 조각으로 나눠 보면 이름 붙은 단계가 각각 무엇을 맡는지 보인다. 조각을 누르면 설명이 나온다.
+
+<UrlAnatomy
+  caption="이름 붙은 단계로 읽는 식"
+  base="orders"
+  separator=""
+  joiner=""
+  params={[
+    { key: "filter", display: ".filter(isPaid)", title: "무엇을 남기나", description: "결제된 주문만 남긴 새 배열을 만든다. 원래 orders는 그대로다.", required: true },
+    { key: "map", display: ".map(toAmount)", title: "무엇으로 바꾸나", description: "주문 객체를 금액 숫자로 바꾼다. 한 원소를 받아 한 값을 돌려주는 함수다." },
+    { key: "reduce", display: ".reduce(add, 0)", title: "어떻게 모으나", description: "숫자들을 하나로 접는다. 시작값 0이 있어서 빈 배열도 0이 된다.", code: "const add = (a, b) => a + b;" },
+  ]}
+/>
+
+## 함수형으로 바꿔 달라는 리뷰를 받았을 때
+
+그 말이 "반복문을 전부 `reduce`로 바꿔라"는 뜻인 경우는 드물다. 실제로 고칠 것은 대개 이 순서다.
+
+1. 받은 인자를 고치는 곳을 없앤다. `sort`, `push`, 속성 대입이 인자에 걸려 있으면 사본을 만든다. 버그가 가장 많이 숨는 곳이다.
+2. 함수 안에서 `Date.now()`, 전역 설정, 싱글턴을 읽는 곳을 인자로 뺀다. 테스트가 쉬워진다.
+3. 한 반복문이 여러 일을 하면 일마다 나눈다. 처음 리포트가 이 경우였다.
+4. 나눈 단계에 이름을 붙인다. 짧은 람다를 줄줄이 쓰는 것보다 함수 이름이 많은 코드가 낫다.
+
+흔한 실수는 반대쪽에서 나온다. 모든 것을 `reduce` 하나로 접어서 누산기에 객체 다섯 개를 들고 다니면 명령형 반복문보다 읽기 어렵다. `forEach` 안에서 바깥 배열에 `push`하는 건 반복문을 메서드로 바꿔 썼을 뿐 함수형이 아니다. 작은 프로젝트에 Ramda나 fp-ts를 들이면 팀원이 라이브러리의 관례부터 배워야 한다. 바닐라 자바스크립트의 `map`, `filter`, `reduce`, 화살표 함수, 스프레드만으로도 이 글의 습관은 거의 다 지킬 수 있다.
+
+반대로 함수형 습관이 확실히 이득인 곳도 있다. 금액 계산, 권한 판단, 폼 검증, 데이터 변환처럼 규칙이 많고 경계값 테스트가 필요한 곳이다. 입력과 출력만으로 표를 만들어 테스트할 수 있어서다. 반면 DOM을 직접 다루는 애니메이션, 큰 버퍼를 다루는 바이너리 처리, 초당 수만 번 도는 루프는 제자리에서 고치는 명령형 코드가 맞다. 그런 코드도 함수 하나 안에 가둬서 바깥에서는 순수하게 보이게 만들 수 있다.
+
+## React는 이 습관 위에 서 있다
+
+React 컴포넌트는 "props와 state를 받아 화면 설명을 돌려주는 함수"다. 렌더링은 순수해야 하고, 상태는 불변으로 바꾸고, DOM을 고치거나 요청을 보내는 일은 이벤트 핸들러와 effect, 즉 가장자리에서 한다. 위의 다섯 습관이 그대로 React의 규칙이 된 셈이다. 그래서 React에서 이상한 버그가 날 때 이 습관 중 하나가 깨진 경우가 많다. 렌더링 중에 props를 고치거나, 다른 상태에서 계산할 수 있는 값을 effect로 동기화하거나, 셀렉터가 매번 새 객체를 돌려주는 식이다. 그 사례들은 [React 안의 함수형](/posts/fp-in-react)에서 이어 간다.
+
+## 연습: 리포트를 다시 짜기
+
+아래 `summarize`는 처음의 버그가 그대로 들어 있다. 취소 주문을 빼고 합계, 개수, 평균, 가장 큰 주문의 id를 돌려주게 고친다. 주문이 하나도 없거나 전부 취소면 평균은 0, `top`은 `null`이다. 처음 코드라면 `0 / 0`이 `NaN`이 되고 `max.id`에서 에러가 난다. 인자로 받은 배열은 고치지 않는다.
+
+<CodePlayground
+  caption="취소 주문을 빼는 리포트"
+  functionName="summarize"
+  initialCode={`function summarize(orders) {
+  let total = 0;
+  let count = 0;
+  let max = null;
+  for (const o of orders) {
+    total += o.total;
+    if (o.status === "cancelled") continue;
+    count++;
+    if (max === null || o.total > max.total) max = o;
+  }
+  return { total, count, avg: total / count, top: max.id };
+}`}
+  solution={`const isPaid = (o) => o.status !== "cancelled";
+const add = (sum, o) => sum + o.total;
+const bigger = (m, o) => (m === null || o.total > m.total ? o : m);
+
+function summarize(orders) {
+  const paid = orders.filter(isPaid);
+  const total = paid.reduce(add, 0);
+  const top = paid.reduce(bigger, null);
+  return {
+    total,
+    count: paid.length,
+    avg: paid.length === 0 ? 0 : total / paid.length,
+    top: top === null ? null : top.id,
+  };
+}`}
+  tests={[
+    {
+      label: "취소 1건 포함",
+      args: [[{ id: 1, total: 12000, status: "paid" }, { id: 2, total: 8000, status: "cancelled" }, { id: 3, total: 30000, status: "paid" }, { id: 4, total: 5000, status: "paid" }]],
+      expected: { total: 47000, count: 3, avg: 15666.666666666666, top: 3 },
+    },
+    {
+      label: "가장 큰 주문이 취소",
+      args: [[{ id: 1, total: 1000, status: "paid" }, { id: 2, total: 9000, status: "cancelled" }]],
+      expected: { total: 1000, count: 1, avg: 1000, top: 1 },
+    },
+    { label: "빈 배열", args: [[]], expected: { total: 0, count: 0, avg: 0, top: null } },
+    {
+      label: "전부 취소",
+      args: [[{ id: 7, total: 3000, status: "cancelled" }]],
+      expected: { total: 0, count: 0, avg: 0, top: null },
+    },
+  ]}
+/>
+
+## 다시 취소 주문으로
+
+처음 버그는 `continue` 한 줄의 위치 문제였지만, 원인은 네 가지 계산이 변수 셋을 함께 고치는 구조였다. 거르기를 이름 있는 첫 단계로 빼자 나머지 계산은 모두 같은 입력을 보게 됐고, 줄 순서가 의미를 바꾸지 못하게 됐다. 함수형 프로그래밍은 이런 구조를 습관으로 만드는 방법이다. 자바스크립트는 그 습관을 지켜 주지 않으니, 고치지 않기와 이름 붙이기는 직접 챙기고, 재귀와 대량 복사처럼 비싼 곳은 재 보고 고른다.
+
+## 면접에서 나올 만한 질문
+
+### 함수형 프로그래밍이란 무엇인가요?
+
+프로그램을 값을 받아 값을 돌려주는 함수들의 조합으로 만드는 방식이다. 함수를 값처럼 넘기고, 순수 함수를 기본으로 쓰고, 데이터를 고치지 않고 새로 만들고, 작은 함수를 합성하고, 부수 효과를 가장자리로 모으는 습관이 묶여 있다. 목표는 코드의 각 부분을 따로 이해하고 테스트할 수 있게 만드는 것이다.
+
+### 명령형 코드와 선언형 코드는 어떻게 다른가요?
+
+명령형은 결과를 얻는 순서를 지시하고, 선언형은 결과가 무엇인지를 적는다. `for` 문으로 변수를 만들고 조건마다 값을 바꾸는 게 명령형이고, `filter`와 `reduce`로 "결제된 주문의 합계"를 쓰는 게 선언형이다. SQL, CSS, React의 JSX가 선언형의 예다. 선언형은 반복의 세부를 라이브러리나 엔진에 맡기는 대신 그 비용을 직접 통제하기 어렵다.
+
+### 함수형과 객체지향 중 무엇이 낫나요?
+
+어느 쪽이 낫다기보다 바꾸기 쉬운 방향이 다르다. 객체지향은 새 종류(클래스)를 추가하기 쉽고, 데이터와 함수를 나누는 함수형은 새 동작(함수)을 추가하기 쉽다. 또 평범한 데이터는 JSON, `postMessage`, 서버 컴포넌트 경계를 지나도 그대로라서 보내고 비교하기 편하다. 실무에서는 경계는 객체로, 안쪽 계산은 순수 함수로 섞어 쓴다.
+
+### 자바스크립트는 함수형 언어인가요?
+
+함수형 스타일을 지원하는 다중 패러다임 언어다. 일급 함수와 클로저가 있어서 함수형으로 쓸 수 있지만, 값이 기본적으로 가변이고 `Object.freeze`는 얕으며 `sort` 같은 메서드는 원본을 고친다. 꼬리 호출 최적화도 명세에는 있지만 V8에는 없어서 깊은 재귀는 크롬과 Node.js에서 스택 오버플로가 난다. 불변성과 순수함은 언어가 아니라 팀의 규칙과 도구로 지킨다.
+
+### 함수형 스타일의 성능 비용은 무엇인가요?
+
+새 배열과 객체를 자주 만드는 할당 비용, 그리고 GC 부담이다. 체인의 중간 배열은 수천 개 수준에서는 무시할 만하지만 100만 개에서는 `for` 문과 몇 배 차이가 났다. 더 큰 문제는 `reduce` 안에서 누산기를 매번 펼쳐 복사하는 패턴으로, 복사량이 원소 수의 제곱이 된다. 함수 안에서 막 만든 값은 직접 고쳐도 바깥에서 보면 순수하니, 측정한 뒤 그 경로만 바꾼다.
+
+### 꼬리 재귀로 바꾸면 스택 오버플로를 피할 수 있나요?
+
+크롬과 Node.js에서는 아니다. ES2015 명세에 proper tail calls가 있지만 V8은 구현하지 않았고, JavaScriptCore를 쓰는 사파리와 Bun에서만 꼬리 호출이 스택을 쌓지 않는다. 실제로 같은 함수가 Bun에서는 100만 개를 더했고 Node 22에서는 `RangeError`가 났다. 깊이를 모르는 데이터는 반복문이나 명시적 스택으로 처리한다.
+
+### 함수형 체인을 디버깅하기 어려운 이유와 대책은요?
+
+이름 없는 람다가 이어지면 스택 트레이스에 함수 이름이 남지 않고 한 줄 안의 열 번호로만 구분된다. 중간값을 보려고 해도 변수가 없어 중단점을 걸 자리가 마땅치 않다. 단계에 이름을 붙이면 스택 첫 줄에 그 이름이 찍히고, 중간값은 이름 붙은 변수로 받거나 `tap` 같은 도구로 엿본다. 한 반복문에 일을 몰아넣지 않는 것과 람다에 이름을 붙이는 것은 같은 원칙에서 나온다.

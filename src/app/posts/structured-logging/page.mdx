@@ -18,7 +18,7 @@ export const metadata = getPostMetadata("structured-logging");
 
 이 글은 로그를 이렇게 남길 때 정할 것들(필드, 레벨, 요청을 잇는 ID, 개인정보 가리기, 고르기와 비용)과 남긴 로그를 jq와 Loki의 LogQL로 묻는 법을 실습으로 따라간다.
 
-이 주제의 다른 글: 지표·로그·trace의 역할을 나누는 [관측 가능성 기본](/posts/observability-basics), 로그와 trace를 trace_id로 잇는 장면이 나오는 [분산 추적](/posts/distributed-tracing), 숫자로 지켜볼 것을 정하는 [모니터링 기본](/posts/monitoring-basics). 이 글은 로그 한 줄을 어떻게 쓰고 어떻게 읽느냐에만 집중한다.
+이 주제의 다른 글: 지표·로그·trace의 역할을 나누는 [관측 가능성 기본](/posts/observability-basics), 로그와 trace를 trace_id로 잇는 장면이 나오는 [분산 추적](/posts/distributed-tracing), 숫자로 지켜볼 것을 정하는 [모니터링 기본](/posts/monitoring-basics). 이 글은 로그 한 줄을 어떻게 쓰고 어떻게 읽느냐에만 집중한다. 이렇게 남긴 로그로 버그 하나를 재현까지 쫓아가는 과정은 [로그로 버그 추적하기](/posts/debugging-with-logs)에 있다.
 
 실습 환경은 Ubuntu 24.04, Node.js 22, `pino` 10.4.0, Loki 3.5.3(`logcli` 3.5.3), jq 1.7이다. 앱은 주문·검색 API이고 요청마다 로그 한 줄을 남긴다.
 

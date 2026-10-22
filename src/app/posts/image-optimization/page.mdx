@@ -1,0 +1,389 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("image-optimization");
+
+상품 상세 페이지의 LCP가 모바일에서만 나쁘다. Network 탭을 열어 보니 390px 폭 화면에 가로 2725px짜리 원본 JPEG 829KB가 그대로 내려온다. 디자이너가 올린 사진을 그대로 `<img src>`에 넣었고, CSS로 `width: 100%`를 줘서 화면에서는 멀쩡해 보였다. 브라우저는 화면에 보이는 크기가 아니라 파일 크기만큼 받는다.
+
+이미지는 대개 페이지 바이트의 가장 큰 몫이고, LCP 요소인 경우도 많다. 그래서 이미지를 줄이는 건 "덜 보내기" 중에서도 효과가 가장 확실한 쪽이다. 이 글은 한 장의 사진을 포맷별, 크기별로 직접 바꿔 바이트를 재고, 브라우저가 `srcset` 후보 중 무엇을 고르는지, 자리를 안 잡으면 화면이 얼마나 밀리는지를 Chromium 141에서 확인한다.
+
+LCP 이미지에 붙이는 속성과 LCP 네 조각은 [Core Web Vitals](/posts/core-web-vitals)에서, `fetchpriority`와 preload가 실제로 요청 순서를 어떻게 바꾸는지는 [리소스 힌트와 로딩 순서](/posts/resource-hints-loading)에서 쟀다. 여기서는 이미지 파일 자체를 다룬다. 변환은 Node 22와 sharp 0.35(libvips 8.18, mozjpeg, libwebp 1.6, aom 3.15)로 했다.
+
+## 같은 사진을 세 포맷으로
+
+원형 톱으로 나무를 자르는 2725×2225 사진 한 장(원본 JPEG 829KB)을 네 가지 폭으로 줄이고, 각각 JPEG(mozjpeg 품질 75), WebP(품질 75), AVIF(품질 50)로 저장했다. 품질 숫자는 포맷마다 뜻이 달라서 그대로 비교할 수 없다. 그래서 1200px 결과를 원본과 비교한 PSNR(원본과 얼마나 다른지 재는 값, 클수록 원본에 가깝다)도 함께 쟀다. 이 설정에서는 36.4~36.7dB로 비슷하게 나와서 화질을 맞춘 비교로 볼 수 있다.
+
+```js
+import sharp from "sharp";
+
+const base = sharp("photo.jpg").resize(1200); // 가로 1200px로 줄인다
+await base.clone().jpeg({ quality: 75, mozjpeg: true }).toFile("p-1200.jpg");
+await base.clone().webp({ quality: 75 }).toFile("p-1200.webp");
+await base.clone().avif({ quality: 50 }).toFile("p-1200.avif");
+```
+
+```text
+원본 829183 bytes
+400 | jpeg 16.8KB 34ms psnr - | webp 13.8KB 34ms psnr - | avif 9.3KB 794ms psnr -
+800 | jpeg 54.4KB 77ms psnr - | webp 43.6KB 95ms psnr - | avif 30.0KB 2381ms psnr -
+1200 | jpeg 108.7KB 138ms psnr 36.7 | webp 81.5KB 154ms psnr 36.4 | avif 58.6KB 4675ms psnr 36.4
+1600 | jpeg 173.2KB 232ms psnr - | webp 121.8KB 260ms psnr - | avif 91.9KB 7578ms psnr -
+```
+
+비슷한 화질에서 WebP는 JPEG보다 25% 안팎, AVIF는 45% 안팎 작았다. 그런데 이 표에서 더 큰 차이는 세로줄이 아니라 가로줄에 있다. 처음 장면의 829KB 원본을 390px 화면 2배 밀도에 맞는 800px JPEG로만 바꿔도 54KB다. 포맷을 바꾸기 전에 크기부터 맞추는 게 먼저다.
+
+시간 열도 봐야 한다. AVIF는 1200px 한 장을 만드는 데 4.7초가 걸렸다. JPEG의 30배가 넘는다. 사용자가 요청할 때마다 서버에서 그때 변환하면 첫 요청이 몇 초씩 걸리고 CPU가 남아나지 않는다. 그래서 AVIF는 빌드 때 미리 만들거나, 한 번 만든 결과를 오래 캐시하는 이미지 CDN에 맡긴다.
+
+## 사진이 아니면 답이 바뀐다
+
+같은 실험을 Chromium으로 찍은 800×600 관리 화면 스크린샷(글자와 단색 상자가 대부분인 이미지)에 했다.
+
+```text
+png(원본 스크린샷) 38.2KB
+png 압축     15.6KB
+webp 무손실   5.6KB
+webp q75   15.2KB
+avif q50   9.4KB
+avif 무손실   55.5KB
+jpeg q75   28.2KB
+```
+
+사진에서 가장 작던 AVIF가 무손실로 저장하면 55.5KB로 가장 크고, WebP 무손실이 5.6KB로 가장 작다. JPEG는 28.2KB인데도 글자 가장자리에 얼룩이 생긴다. JPEG는 색이 부드럽게 변하는 사진을 잘 줄이도록 만든 방식이라, 경계가 날카로운 글자와 단색 면에서는 손해를 본다. "png 압축"은 색 수를 256개 이하로 줄인 팔레트 PNG라서 색이 많은 화면에서는 띠가 보일 수 있다.
+
+로고와 아이콘처럼 도형으로 그릴 수 있는 건 처음부터 SVG로 둔다. 크기와 상관없이 선명하고 대개 가장 작다. 움직이는 GIF는 같은 장면을 mp4나 webm 영상으로 바꾸면 몇 분의 일로 줄어든다.
+
+<ConceptDiagram
+  width={420}
+  height={250}
+  caption="이미지 종류에 따라 포맷이 갈린다"
+  nodes={[
+    { id: "photo", label: "사진", sub: "부드러운 색 변화", x: 75, y: 40, w: 120 },
+    { id: "ui", label: "스크린샷·UI", sub: "글자·단색 면", x: 75, y: 105, w: 120 },
+    { id: "icon", label: "로고·아이콘", sub: "도형", x: 75, y: 170, w: 120 },
+    { id: "anim", label: "움직이는 그림", x: 75, y: 230, w: 120, h: 34 },
+    { id: "avif", label: "AVIF · WebP", sub: "JPEG 대체 이미지", x: 320, y: 40, w: 150 },
+    { id: "lossless", label: "WebP 무손실", sub: "또는 PNG", x: 320, y: 105, w: 150 },
+    { id: "svg", label: "SVG", x: 320, y: 170, w: 150, h: 34 },
+    { id: "video", label: "mp4 · webm", sub: "GIF 대신", x: 320, y: 230, w: 150, h: 34 },
+  ]}
+  edges={[
+    { from: "photo", to: "avif", label: "45% 작게" },
+    { from: "ui", to: "lossless", label: "5.6KB" },
+    { from: "icon", to: "svg" },
+    { from: "anim", to: "video" },
+  ]}
+/>
+
+## 화면에 맞는 크기를 브라우저가 고르게
+
+크기를 맞추라고 해도 화면은 390px 폰, 820px 태블릿, 1280px 노트북으로 제각각이고, 같은 390px이라도 화소 밀도(DPR)가 2배, 3배로 다르다. 서버가 하나를 정해 줄 수 없으니 후보를 여러 개 주고 브라우저에게 고르게 한다. 그게 `srcset`과 `sizes`다.
+
+```html
+<img
+  srcset="/p-400.jpg 400w, /p-800.jpg 800w, /p-1200.jpg 1200w, /p-1600.jpg 1600w"
+  sizes="(min-width: 1024px) 720px, 100vw"
+  src="/p-800.jpg"
+  width="800" height="653"
+  alt="원형 톱으로 나무를 자르는 모습">
+```
+
+`400w`는 "이 파일의 실제 가로 픽셀이 400"이라는 뜻이다. `sizes`는 "이 이미지가 화면에서 차지할 CSS 폭"을 알려 준다. 화면이 1024px 이상이면 720px, 아니면 화면 폭 전체(100vw)다. 브라우저는 `sizes`로 얻은 폭에 DPR을 곱해서 필요한 픽셀 수를 정하고, 그 이상인 후보 중 가장 작은 것을 고른다. 390px 3배 화면을 따라가 보자.
+
+<AlgoTrace
+  caption="390px, DPR 3 화면에서 후보 고르기"
+  memoryLabel="계산"
+  cells={["400w", "800w", "1200w", "1600w"]}
+  steps={[
+    { memory: ["화면 390px"], caption: "sizes를 위에서부터 본다. 390px은 1024px보다 작으니 마지막 값 100vw를 쓴다." },
+    { memory: ["화면 390px", "칸 390px", "×3 = 1170px"], caption: "칸 폭 390px에 화소 밀도 3을 곱한다. 화면에 1170개의 실제 픽셀이 필요하다." },
+    { pointer: 0, memory: ["화면 390px", "칸 390px", "×3 = 1170px"], caption: "400w는 1170보다 작다. 늘려 그리면 흐릿해진다." },
+    { pointer: 1, memory: ["화면 390px", "칸 390px", "×3 = 1170px"], caption: "800w도 모자란다." },
+    { pointer: 2, found: [2], memory: ["화면 390px", "칸 390px", "×3 = 1170px", "1200w 선택"], caption: "1200w가 처음으로 1170 이상이다. 이걸 받는다. 1600w까지 갈 필요는 없다." },
+  ]}
+/>
+
+실제로 Chromium의 화면 크기와 DPR을 바꿔 가며 어떤 파일을 받는지 찍었다. `sizes`를 준 경우와 뺀 경우를 비교했다. 페이지의 본문 칸은 최대 720px이다.
+
+```text
+== sizes="(min-width: 1024px) 720px, 100vw"
+  390×844 @3x   실제 칸 390px sizes 값  390px ×DPR 1170 → p-1200.jpg
+  390×844 @2x   실제 칸 390px sizes 값  390px ×DPR  780 → p-800.jpg
+  820×1180 @2x  실제 칸 720px sizes 값  820px ×DPR 1640 → p-1600.jpg
+  1280×800 @1x  실제 칸 720px sizes 값  720px ×DPR  720 → p-800.jpg
+  1280×800 @2x  실제 칸 720px sizes 값  720px ×DPR 1440 → p-1600.jpg
+== sizes 없음
+  390×844 @3x   실제 칸 390px sizes 값  390px ×DPR 1170 → p-1200.jpg
+  390×844 @2x   실제 칸 390px sizes 값  390px ×DPR  780 → p-800.jpg
+  820×1180 @2x  실제 칸 720px sizes 값  820px ×DPR 1640 → p-1600.jpg
+  1280×800 @1x  실제 칸 720px sizes 값 1280px ×DPR 1280 → p-1600.jpg
+  1280×800 @2x  실제 칸 720px sizes 값 1280px ×DPR 2560 → p-1600.jpg
+```
+
+`sizes`를 빼면 브라우저는 100vw로 가정한다. 1280px 노트북의 본문 칸은 720px인데 1280px로 계산해서 54KB짜리 800px 대신 173KB짜리 1600px를 받았다. 세 배를 받은 것이다. 브라우저가 `sizes`를 믿는 이유는 이미지 요청이 레이아웃보다 먼저 나가기 때문이다. HTML을 읽는 순간에는 CSS로 칸이 몇 px이 될지 모르니, 개발자가 알려 준 값으로 계산한다. `sizes`가 실제 레이아웃과 어긋나면 그만큼 크거나 흐린 이미지를 받는다.
+
+태블릿 줄에도 같은 어긋남이 있다. 실제 칸은 720px이지만 `sizes`는 1024px 미만을 100vw(820px)라고 했다. 이 페이지라면 `sizes="(min-width: 768px) 720px, 100vw"`가 더 정확하다. 개발자 도구에서 이미지에 마우스를 올리면 "Rendered size"와 "Intrinsic size"가 나오니 둘이 크게 다르면 `sizes`부터 본다.
+
+이 계산을 직접 짜 보자. `sizes`는 `(min-width: Npx) 길이` 조건과 마지막 기본 길이로만 이루어지고, 길이는 `px`나 `vw`라고 하자. 모자라는 후보밖에 없으면 가장 큰 것을 고른다. 테스트 앞쪽 일곱 개는 위 Chromium 결과 그대로다.
+
+<CodePlayground
+  caption="srcset과 sizes로 받을 파일 고르기"
+  functionName="pickSrc"
+  initialCode={`function pickSrc(srcset, sizes, viewportWidth, dpr) {
+  // srcset: "a.jpg 400w, b.jpg 800w"
+  // sizes: "(min-width: 1024px) 720px, 100vw" 또는 "" (없으면 100vw)
+  // 1. sizes에서 이 화면의 칸 폭(px)을 구한다
+  // 2. 칸 폭 × dpr 이상인 후보 중 가장 작은 것, 없으면 가장 큰 것
+  return "";
+}`}
+  solution={`function pickSrc(srcset, sizes, viewportWidth, dpr) {
+  const toPx = (len) => (len.endsWith("vw") ? (parseFloat(len) * viewportWidth) / 100 : parseFloat(len));
+  let slot = viewportWidth;
+  if (sizes) {
+    for (const part of sizes.split(",").map((s) => s.trim())) {
+      const m = part.match(/^\\(min-width:\\s*(\\d+)px\\)\\s+(.+)$/);
+      if (m) {
+        if (viewportWidth >= Number(m[1])) { slot = toPx(m[2]); break; }
+      } else { slot = toPx(part); break; }
+    }
+  }
+  const need = slot * dpr;
+  const cands = srcset
+    .split(",")
+    .map((s) => s.trim().split(/\\s+/))
+    .map(([url, w]) => ({ url, w: parseInt(w, 10) }))
+    .sort((a, b) => a.w - b.w);
+  return (cands.find((c) => c.w >= need) ?? cands[cands.length - 1]).url;
+}`}
+  tests={[
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "(min-width: 1024px) 720px, 100vw", 390, 3], expected: "p-1200.jpg", label: "390px @3x" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "(min-width: 1024px) 720px, 100vw", 390, 2], expected: "p-800.jpg", label: "390px @2x" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "(min-width: 1024px) 720px, 100vw", 820, 2], expected: "p-1600.jpg", label: "820px @2x" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "(min-width: 1024px) 720px, 100vw", 1280, 1], expected: "p-800.jpg", label: "1280px @1x" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "(min-width: 1024px) 720px, 100vw", 1280, 2], expected: "p-1600.jpg", label: "1280px @2x" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "", 1280, 1], expected: "p-1600.jpg", label: "sizes 없음, 1280px" },
+    { args: ["p-400.jpg 400w, p-800.jpg 800w, p-1200.jpg 1200w, p-1600.jpg 1600w", "", 390, 2], expected: "p-800.jpg", label: "sizes 없음, 390px" },
+    { args: ["b.jpg 800w, a.jpg 400w", "50vw", 1000, 1], expected: "b.jpg", label: "순서가 섞인 srcset" },
+    { args: ["s.jpg 300w, m.jpg 600w", "(min-width: 600px) 300px, (min-width: 400px) 50vw, 100vw", 500, 2], expected: "m.jpg", label: "조건 여러 개" },
+  ]}
+/>
+
+실제 브라우저는 여기에 몇 가지를 더한다. 이미 캐시에 더 큰 후보가 있으면 그걸 쓰기도 하고, 데이터 절약 모드에서는 더 작은 것을 고를 수 있다. 명세는 고르는 방법을 브라우저에 맡겨 두었다. 그래서 "정확히 이 파일을 받게" 하는 장치가 아니라 "이 범위 안에서 알맞게 고르라"는 장치로 이해하면 된다.
+
+후보 폭은 몇 개를 두면 될까. 너무 촘촘하면 캐시가 쪼개지고 변환 비용이 늘고, 너무 성기면 필요보다 훨씬 큰 파일을 받는다. Next.js의 `next/image`는 기본으로 640, 750, 828, 1080, 1200, 1920, 2048, 3840px(`deviceSizes`)과 작은 아이콘용 32~384px(`imageSizes`) 단계를 쓴다. 대부분의 사이트는 이 정도 간격이면 충분하다.
+
+## 포맷은 picture로, 또는 서버가 고른다
+
+AVIF를 모르는 브라우저도 있으니 포맷도 후보로 준다. `<picture>`의 `<source>`는 위에서부터 `type`을 아는 첫 번째 것을 쓰고, 아무것도 모르면 안쪽 `<img>`로 내려간다.
+
+```html
+<picture>
+  <source type="image/avif" srcset="/p-400.avif 400w, /p-800.avif 800w, /p-1200.avif 1200w, /p-1600.avif 1600w" sizes="(min-width: 1024px) 720px, 100vw">
+  <source type="image/webp" srcset="/p-400.webp 400w, /p-800.webp 800w, /p-1200.webp 1200w, /p-1600.webp 1600w" sizes="(min-width: 1024px) 720px, 100vw">
+  <img srcset="/p-400.jpg 400w, /p-800.jpg 800w, /p-1200.jpg 1200w, /p-1600.jpg 1600w" sizes="(min-width: 1024px) 720px, 100vw" src="/p-800.jpg" width="800" height="653" alt="원형 톱으로 나무를 자르는 모습">
+</picture>
+```
+
+```text
+  390×844 @3x   → p-1200.avif 58.6KB
+  390×844 @2x   → p-800.avif 30.0KB
+  820×1180 @2x  → p-1600.avif 91.9KB
+  1280×800 @1x  → p-800.avif 30.0KB
+  1280×800 @2x  → p-1600.avif 91.9KB
+```
+
+크기 고르기는 그대로이고 포맷만 AVIF로 바뀌었다. 390px 2배 화면 기준으로 처음 장면의 829KB가 30KB가 됐다. 스타일, `alt`, `width`·`height`는 안쪽 `<img>`에 준다. `<picture>`는 고르기만 하고 그려지는 건 `<img>`다.
+
+다른 방법은 서버가 고르는 것이다. Chromium은 이미지를 요청할 때 이런 `Accept` 헤더를 보낸다.
+
+```text
+img Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8
+```
+
+이미지 CDN은 이 헤더를 보고 같은 주소에 AVIF나 WebP를 골라 준다. HTML에는 `<img src>` 하나만 두면 된다. 아래 그림이 그 흐름이다.
+
+<SequenceDiagram
+  caption="이미지 CDN이 Accept를 보고 포맷을 고른다"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "cdn", label: "이미지 CDN" },
+    { id: "origin", label: "원본 저장소" },
+  ]}
+  steps={[
+    { from: "br", to: "cdn", label: "GET ?w=828", title: "폭과 함께 요청한다", detail: "srcset의 후보 주소마다 폭 값이 들어 있다. Accept에 image/avif가 있다.", payload: "GET /img/hero.jpg?w=828&q=75\nAccept: image/avif,image/webp,..." },
+    { from: "cdn", to: "origin", label: "원본 요청", title: "처음이면 원본을 가져온다", detail: "이 폭과 포맷 조합이 캐시에 없다. 원본 사진 한 장만 저장해 두면 된다." },
+    { from: "origin", to: "cdn", label: "829KB JPEG", title: "줄이고 바꾼다", detail: "828px로 줄이고 AVIF로 바꾼다. 이 첫 변환이 몇 초 걸릴 수 있다." },
+    { from: "cdn", to: "br", label: "AVIF", title: "Vary: Accept로 따로 캐시한다", detail: "같은 주소라도 Accept가 다르면 다른 파일이다. Vary가 없으면 AVIF를 모르는 브라우저에 AVIF가 갈 수 있다.", payload: "200 OK\nContent-Type: image/avif\nVary: Accept\nCache-Control: public, max-age=31536000" },
+    { from: "br", to: "cdn", label: "다른 사용자", title: "다음부터는 캐시에서 준다", detail: "같은 폭, 같은 포맷 요청은 변환 없이 바로 나간다. 그래서 첫 요청만 느리다." },
+  ]}
+/>
+
+Next.js의 `next/image`도 이 방식이다. 주소를 조각내 보자.
+
+<UrlAnatomy
+  caption="next/image가 만드는 주소"
+  base="/_next/image"
+  params={[
+    { key: "url", value: "%2Fhero.jpg", title: "원본 주소", description: "인코딩된 원본 경로다. 외부 주소는 next.config의 remotePatterns에 허용한 곳만 쓸 수 있다. 아무 주소나 받으면 남의 이미지를 내 서버 CPU로 변환해 주는 셈이 된다.", required: true },
+    { key: "w", value: "828", title: "폭", description: "deviceSizes·imageSizes에 있는 값만 받는다. 아무 숫자나 받으면 w=1, w=2, …로 캐시를 무한히 만들 수 있기 때문이다.", required: true },
+    { key: "q", value: "75", title: "품질", description: "Next.js 16의 기본 qualities는 [75] 하나다. 다른 값을 쓰려면 설정에 미리 적어 둔다. 포맷은 주소가 아니라 Accept 헤더로 정하고, 기본 formats는 image/webp만 들어 있어서 AVIF는 따로 켠다.", required: true },
+  ]}
+/>
+
+16.4 기준 기본 설정에서 변환 결과의 캐시 기간(`minimumCacheTTL`)은 14400초, 4시간이다. 배포마다 원본 이미지 주소가 바뀌지 않는 정적 사진이라면 이 값을 늘리거나, 미리 변환한 파일을 정적 자산으로 두는 편이 서버 부담이 적다. 서버리스 환경에서 이미지 변환은 실행 시간과 메모리를 꽤 쓰니 요금표도 같이 본다.
+
+## 자리를 안 잡으면 글이 밀린다
+
+크기와 포맷을 맞춰도 이미지는 HTML보다 늦게 도착한다. 그동안 브라우저가 이미지 높이를 모르면 0으로 그렸다가, 이미지가 오면 그만큼 아래 글을 밀어낸다. 제목, 이미지(500ms 늦게 옴), 본문 순서의 페이지를 390px 화면에서 세 가지로 쟀다.
+
+```html
+<!-- 크기 정보 없음 -->
+<img src="/slow.jpg" style="width:100%">
+<!-- width·height 속성 -->
+<img src="/slow.jpg" width="800" height="653" style="width:100%;height:auto">
+<!-- CSS aspect-ratio -->
+<img src="/slow.jpg" style="width:100%;aspect-ratio:800/653">
+```
+
+```text
+/no-dims  {"shifts":1,"cls":0.2287}
+/dims     {"shifts":0,"cls":0}
+/aspect   {"shifts":0,"cls":0}
+```
+
+이미지 하나로 CLS가 0.2287이다. 좋음 기준 0.1의 두 배가 넘고, 나쁨 기준 0.25에 거의 닿았다. `width`와 `height` 속성만 적어도 0이 됐다. 브라우저는 이 두 숫자로 가로세로 비율을 알고, CSS에서 `width: 100%; height: auto`를 줘도 비율대로 자리를 잡아 둔다. 아래 그림에서 두 경우를 비교해 보자.
+
+<GeometryMorph
+  width={360}
+  height={300}
+  caption="이미지가 도착할 때 본문이 움직이는가"
+  shapes={[
+    { id: "title", tone: "muted" },
+    { id: "slot", tone: "outline" },
+    { id: "img", tone: "series1" },
+    { id: "text", tone: "series2" },
+  ]}
+  steps={[
+    {
+      title: "크기 정보가 없다",
+      detail: "브라우저는 이미지 높이를 0으로 보고 제목 바로 밑에 본문을 그린다. 사용자는 본문을 읽기 시작한다.",
+      shapes: {
+        title: [[20, 20], [200, 20], [200, 44], [20, 44]],
+        text: [[20, 56], [340, 56], [340, 140], [20, 140]],
+      },
+      labels: [{ x: 180, y: 100, text: "본문", tone: "text" }],
+      focus: ["text"],
+    },
+    {
+      title: "500ms 뒤 이미지가 온다",
+      detail: "이미지 높이만큼 본문이 아래로 밀린다. 읽던 줄을 놓치고, 누르려던 버튼이 사라진다. 이 한 번이 CLS 0.2287이었다.",
+      shapes: {
+        title: [[20, 20], [200, 20], [200, 44], [20, 44]],
+        img: [[20, 56], [340, 56], [340, 200], [20, 200]],
+        text: [[20, 212], [340, 212], [340, 296], [20, 296]],
+      },
+      labels: [{ x: 180, y: 130, text: "이미지", tone: "text" }, { x: 180, y: 256, text: "밀린 본문", tone: "text" }],
+      focus: ["text"],
+    },
+    {
+      title: "width·height가 있으면 자리부터 잡는다",
+      detail: "800×653이라는 비율로 빈자리를 먼저 만든다. 본문은 처음부터 이미지 아래에 그려진다.",
+      shapes: {
+        title: [[20, 20], [200, 20], [200, 44], [20, 44]],
+        slot: [[20, 56], [340, 56], [340, 200], [20, 200]],
+        text: [[20, 212], [340, 212], [340, 296], [20, 296]],
+      },
+      labels: [{ x: 180, y: 130, text: "빈자리", tone: "text" }],
+      focus: ["slot"],
+    },
+    {
+      title: "이미지가 와도 아무것도 안 움직인다",
+      detail: "자리 안에 그림만 채워진다. 레이아웃 이동은 0번, CLS 0이다.",
+      shapes: {
+        title: [[20, 20], [200, 20], [200, 44], [20, 44]],
+        slot: [[20, 56], [340, 56], [340, 200], [20, 200]],
+        img: [[20, 56], [340, 56], [340, 200], [20, 200]],
+        text: [[20, 212], [340, 212], [340, 296], [20, 296]],
+      },
+      labels: [{ x: 180, y: 130, text: "이미지", tone: "text" }],
+      focus: ["img"],
+    },
+  ]}
+/>
+
+`width`·`height`에는 실제 표시 크기가 아니라 비율을 맞출 숫자를 적는다. 파일 하나의 가로세로 픽셀을 그대로 적으면 된다. `srcset` 후보들이 모두 같은 비율이어야 이 숫자 하나로 맞는다. 화면마다 다른 비율로 자른 이미지(아트 디렉션)를 `<picture>`의 `<source media>`로 바꿔 끼운다면, `<source>`마다 `width`·`height`를 따로 적는다. 최신 크롬 계열과 파이어폭스, 사파리는 `<source>`의 크기 속성을 지원하지만 오래된 브라우저에서는 CSS `aspect-ratio`로 한 번 더 받쳐 두는 게 안전하다. CLS 계산 방식 자체는 [Core Web Vitals](/posts/core-web-vitals)에서 다뤘다.
+
+## 보이지 않는 이미지는 나중에
+
+긴 목록이나 글 아래쪽 사진은 사용자가 거기까지 내려오지 않으면 받을 필요가 없다. `loading="lazy"`를 주면 브라우저가 화면에 가까워질 때까지 요청을 미룬다. 아래 그림처럼 화면에 다가오는 것만 받는다.
+
+<LoadingDemo patterns={["lazy-loading", "blur-up"]} caption="화면에 가까워질 때 받고, 흐린 미리보기로 자리를 채운다" />
+
+높이 292px 이미지 20장을 쌓은 페이지를 390×844 화면에서 열고, 처음과 스크롤할 때 요청된 장 수를 셌다.
+
+```text
+lazy 이미지 높이 292 px, 처음 요청 8 장: 0,1,2,3,4,5,6,7
+scrollY 1000 → 누적 11 장
+scrollY 2000 → 누적 15 장
+scrollY 3000 → 누적 18 장
+```
+
+화면에 보이는 건 3장인데 처음에 8장을 받았다. 크롬은 화면 아래 일정 거리까지 미리 받는다. 8번째 이미지가 2044px에서 시작하니 화면 끝(844px)보다 1200px쯤 아래까지 받은 셈이다. 크롬은 빠른 연결에서 1250px, 느린 연결에서 2500px을 기준으로 쓴다고 알려져 있다. 스크롤하면 그만큼 앞서서 다음 장들을 받는다. 그래서 사용자가 보통 속도로 스크롤하면 빈칸을 거의 보지 못한다.
+
+흔한 실수는 모든 이미지에 일괄로 `lazy`를 붙이는 것이다. 첫 화면의 LCP 이미지까지 레이아웃이 끝난 뒤로 미뤄진다. [리소스 힌트 글](/posts/resource-hints-loading)의 실험에서 히어로에 `lazy`를 붙이자 요청이 1042ms에야 나갔다. 첫 화면에 보이는 이미지는 빼고, 나머지에만 붙인다. 컴포넌트 단위로 지연 로딩을 설계하는 이야기는 [지연 로딩 전략](/posts/lazy-loading-strategies)에서 이어 간다.
+
+blur-up은 아주 작은(몇십 바이트~수백 바이트) 흐린 미리보기를 HTML에 넣어 두었다가 진짜 이미지로 바꾸는 방법이다. 빈 회색 상자보다 덜 어색하고, `next/image`의 `placeholder="blur"`가 이 방식이다. 크롬은 112부터 화면 면적에 비해 정보량이 아주 적은(픽셀당 비트 수가 낮은) 이미지를 LCP 후보에서 빼서, 크게 늘린 흐린 미리보기는 대개 LCP로 잡히지 않는다. LCP는 진짜 이미지가 그려진 시각으로 잡힌다.
+
+## 받은 다음에 드는 비용
+
+전송 바이트만 줄이면 끝일 것 같지만 이미지는 받은 뒤에 한 번 더 커진다. 화면에 그리려면 압축을 풀어 픽셀마다 4바이트(RGBA)로 메모리에 둔다. 위 사진의 1600×1306은 8,358,400바이트, 약 8MB다. 원본 2725×2225라면 24,252,500바이트, 약 24MB다. 전송은 829KB였는데 메모리에서는 30배다.
+
+이미지가 수십 장 있는 무한 스크롤 피드에서 원본 크기를 그대로 쓰면 저가형 폰에서 탭이 메모리 부족으로 다시 로드되는 일이 생긴다. 크기를 맞추는 일은 네트워크뿐 아니라 메모리와 디코딩 시간도 줄인다.
+
+`decoding="async"`는 "이 이미지의 디코딩을 기다리느라 다른 내용을 늦게 그리지 말라"는 힌트다. 요즘 크롬 계열은 대부분의 이미지를 원래 메인 스레드 밖에서 디코딩해서 체감 효과가 크지 않은 경우가 많다. 자바스크립트로 이미지를 바꿔 끼울 때 깜빡임이 싫다면 `await img.decode()`로 디코딩이 끝난 뒤에 넣는다.
+
+## 운영에서 이미지를 의심하는 순간
+
+이미지 문제는 증상이 지표로 먼저 온다. 볼 곳을 순서대로 적는다.
+
+LCP가 모바일에서만 나쁘면 LCP 요소가 이미지인지부터 본다. 개발자 도구 Network 탭에서 Img로 거르고 Size 열을 정렬하면 가장 무거운 이미지가 위로 온다. 그 이미지에 마우스를 올려 Rendered size와 Intrinsic size를 비교한다. 390px 칸에 2725px 원본이 들어가 있다면 처음 장면이다. `srcset`이 있는데도 큰 파일이 온다면 `sizes`가 실제 칸보다 큰지 본다.
+
+CLS가 나쁘면 개발자 도구 Performance 패널의 Layout shifts 줄이나 `layout-shift` 기록의 `sources`에서 밀린 요소를 찾는다. 바로 위에 `width`·`height` 없는 `<img>`, 광고 칸, 늦게 오는 배너가 있는 경우가 대부분이다.
+
+이미지 CDN을 붙인 뒤 일부 사용자에게 이미지가 깨진다면 응답 헤더의 `Vary: Accept`를 확인한다. 앞단 캐시가 AVIF 응답을 AVIF를 모르는 브라우저에게도 돌려주고 있을 수 있다. 첫 요청만 유난히 느리다면 변환이 캐시되기 전이라 그렇다. AVIF는 변환 비용이 크니, 자주 쓰는 크기는 배포 때 미리 데워 두거나 빌드 때 만든다.
+
+## 바이트를 줄이는 순서
+
+이미지 최적화는 결국 "필요한 만큼만 보내기"다. 먼저 화면 칸에 맞는 크기로 줄이고(`srcset`, `sizes`), 그다음 이미지 종류에 맞는 포맷을 고르고(AVIF·WebP·SVG, `<picture>`나 CDN), 자리를 미리 잡고(`width`·`height`), 보이지 않는 건 미룬다(`loading="lazy"`). 이 순서대로 해도 LCP 이미지가 늦게 출발한다면 그때 [preload와 fetchpriority](/posts/resource-hints-loading)를 꺼낸다.
+
+## 면접에서 나올 만한 질문
+
+### JPEG, WebP, AVIF는 어떻게 고르나요?
+
+사진은 AVIF가 가장 작고 WebP가 그다음이며, JPEG는 대체용으로 둔다. 같은 화질(PSNR 약 36dB)에서 WebP는 JPEG보다 25%, AVIF는 45% 안팎 작았다. 다만 AVIF는 변환이 30배 넘게 느려서 미리 만들거나 CDN 캐시에 맡긴다. 글자와 단색이 많은 스크린샷은 WebP 무손실이나 PNG, 로고는 SVG가 맞다.
+
+### srcset과 sizes는 어떻게 동작하나요?
+
+`srcset`은 후보 파일과 실제 가로 픽셀을, `sizes`는 이미지가 화면에서 차지할 CSS 폭을 알려 준다. 브라우저는 `sizes`로 얻은 폭에 DPR을 곱해 필요한 픽셀을 구하고, 그 이상인 후보 중 작은 것을 고른다. 390px DPR 3 화면이면 1170px이 필요해서 1200w를 받았다. 이미지 요청은 레이아웃보다 먼저 나가서, 브라우저는 실제 칸 대신 `sizes`를 믿는다.
+
+### sizes를 빼면 어떻게 되나요?
+
+`sizes`가 없으면 100vw로 가정한다. 본문 칸이 720px인 1280px 노트북에서 1280px로 계산해 54KB 대신 173KB를 받았다. 화면 전체 폭을 쓰지 않는 이미지라면 `sizes`를 반드시 적고, 레이아웃이 바뀔 때 함께 고친다.
+
+### picture와 Accept 헤더 협상은 어떻게 다른가요?
+
+`<picture>`는 HTML에 포맷별 후보를 적어 두고 브라우저가 아는 첫 `type`을 고르게 한다. Accept 협상은 HTML에는 주소 하나만 두고, 이미지 CDN이 요청의 `Accept` 헤더를 보고 AVIF나 WebP를 골라 준다. 협상 방식은 응답에 `Vary: Accept`가 있어야 중간 캐시가 포맷을 섞지 않는다. 화면마다 다른 비율로 자른 이미지를 바꿔 끼우는 아트 디렉션은 `<picture>`의 `media`로만 할 수 있다.
+
+### 이미지 때문에 CLS가 생기는 이유와 막는 방법은요?
+
+브라우저가 이미지 높이를 모르면 0으로 그렸다가 이미지가 오면 그만큼 아래 내용을 밀기 때문이다. 실험에서 이미지 하나로 CLS가 0.2287이었다. `width`와 `height` 속성을 적으면 브라우저가 비율로 자리를 먼저 잡아서 0이 됐다. CSS `aspect-ratio`도 같은 효과가 있다.
+
+### loading="lazy"는 어떻게 동작하고, 무엇을 조심하나요?
+
+화면에서 일정 거리 안에 들어올 때까지 요청을 미룬다. 390×844 화면에서 20장 중 처음에는 8장만 받았고, 화면 아래 1200px쯤까지를 미리 받았다. LCP 이미지에 붙이면 레이아웃이 끝날 때까지 요청이 늦어지니 첫 화면 이미지에는 붙이지 않는다.
+
+### 이미지 CDN을 쓸 때 조심할 점은요?
+
+변환 주소에 아무 폭이나 원본 주소를 받으면 캐시가 무한히 늘거나 남의 이미지를 대신 변환해 주는 서버가 된다. 그래서 허용 폭 목록과 원본 출처 목록을 둔다. 포맷을 Accept로 고른다면 `Vary: Accept`를 확인하고, AVIF처럼 변환이 느린 포맷은 첫 요청이 느리니 미리 데우거나 빌드 때 만든다.
+
+### 전송 크기 말고 이미지가 드는 비용은 무엇인가요?
+
+디코딩한 픽셀이 차지하는 메모리와 디코딩 시간이다. 이미지는 픽셀마다 4바이트로 풀리니 2725×2225 사진은 전송 829KB가 메모리에서 약 24MB가 된다. 이미지가 많은 피드에서 원본 크기를 쓰면 저가형 기기에서 탭이 메모리 부족으로 다시 로드될 수 있다. 화면 크기에 맞춰 줄이면 이 비용도 함께 준다.

@@ -1,0 +1,503 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-performance");
+
+글 하나를 여는 데 모바일에서 흰 화면이 0.8초쯤 이어진다. HTML은 15ms 만에 왔고 자바스크립트도 거의 없다. Lighthouse를 돌리면 "렌더링 차단 리소스 제거" 항목에 `app.css` 하나가 올라와 있다. 260KB짜리 스타일시트인데, 이 페이지가 실제로 쓰는 규칙은 그중 몇 줄뿐이다.
+
+CSS는 자바스크립트보다 덜 의심받는다. 그런데 첫 화면을 늦추는 일, 클래스 하나 바꿨는데 화면이 버벅이는 일, 번들이 커지는 일에 모두 CSS가 끼어 있을 수 있다. 이 글은 CSS가 비용을 내는 지점을 하나씩 실제로 재 보면서 정리한다. 측정은 Chromium 141(Playwright로 실행), 390px 모바일 화면 기준이고, 숫자는 내 실험 환경의 값이라 절대값보다 차이를 보면 된다.
+
+HTML 파싱부터 합성까지 렌더링 단계 전체는 [브라우저 렌더링 파이프라인](/posts/browser-rendering-pipeline)에서, 레이아웃과 페인트를 줄이는 기법은 [렌더링 성능 최적화](/posts/rendering-performance-optimization)에서 다룬다. 여기서는 그중 CSS가 책임지는 부분만 본다. 폰트 파일은 따로 [웹 폰트 최적화](/posts/web-font-optimization)에 썼다.
+
+## 스타일시트 하나가 첫 화면을 붙잡는다
+
+브라우저는 `<head>`의 `<link rel="stylesheet">`를 다 받고 해석하기 전까지 화면을 그리지 않는다. 스타일 없이 먼저 그렸다가 CSS가 오면 다시 그리면, 사용자는 맨 HTML이 번쩍 보였다가 모양이 바뀌는 화면(FOUC, Flash of Unstyled Content)을 보게 된다. 브라우저는 그걸 피하려고 기다리는 쪽을 골랐다. 이걸 렌더링 차단(render-blocking)이라고 한다.
+
+자바스크립트와 달리 파싱은 막지 않는다. HTML 파서는 CSS를 기다리지 않고 DOM을 계속 만든다. 다만 그 뒤에 나오는 일반 `<script>`는 CSS가 올 때까지 실행을 미룬다. 스크립트가 `getComputedStyle` 같은 걸로 스타일을 물어볼 수 있기 때문이다. 그래서 느린 CSS는 그림뿐 아니라 뒤따르는 스크립트까지 늦춘다.
+
+아래 그림에서 다음을 누르면 CSS가 800ms 걸리는 페이지가 첫 화면을 그리기까지의 순서가 진행된다.
+
+<SequenceDiagram
+  caption="DOM은 일찍 끝나도 CSSOM이 없으면 그리지 못한다"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "sv", label: "서버" },
+    { id: "sc", label: "화면" },
+  ]}
+  steps={[
+    {
+      from: "br",
+      to: "sv",
+      label: "GET /article",
+      title: "HTML을 요청한다",
+      detail: "로컬 서버라 HTML은 거의 바로 온다.",
+    },
+    {
+      from: "sv",
+      to: "br",
+      label: "HTML",
+      title: "head에서 스타일시트를 만난다",
+      detail: "프리로드 스캐너가 link를 보고 app.css를 바로 요청한다. 우선순위는 가장 높은 VeryHigh다.",
+      payload: "<link rel=\"stylesheet\" href=\"/app.css\">",
+    },
+    {
+      from: "br",
+      to: "sv",
+      label: "GET app.css",
+      title: "파싱은 계속한다",
+      detail: "파서는 멈추지 않고 본문 DOM을 끝까지 만든다. 요청은 9ms에 떠났다.",
+    },
+    {
+      from: "br",
+      to: "br",
+      label: "DOM 완성",
+      title: "그릴 준비가 반만 됐다",
+      detail: "DOM은 다 있는데 CSSOM이 없다. 어떤 글자를 어떤 크기로 어디에 둘지 모르니 화면은 흰색 그대로다.",
+    },
+    {
+      from: "sv",
+      to: "br",
+      label: "app.css",
+      title: "813ms에 CSS가 도착한다",
+      detail: "규칙 2,808개를 해석해 CSSOM을 만든다. 해석 자체는 1.3ms면 끝났다. 기다린 시간이 거의 전부다.",
+    },
+    {
+      from: "br",
+      to: "sc",
+      label: "첫 그리기",
+      title: "이제야 FCP",
+      detail: "스타일 계산, 레이아웃, 페인트를 거쳐 848ms에 첫 내용이 그려진다.",
+    },
+  ]}
+/>
+
+실제로 쟀다. 서버가 CSS를 800ms 늦게 주게 하고 같은 페이지를 다섯 번씩 열어 FCP(First Contentful Paint, 첫 내용이 그려진 시각)의 중앙값을 냈다. 리소스 줄은 `performance.getEntriesByType("resource")`에서, 우선순위는 CDP의 `Network.requestWillBeSent`에서 꺼냈다.
+
+```text
+blocking.html: FCP median 848ms (runs: 840, 844, 848, 848, 848) load 824ms
+   /app.css     start   10ms  end  820ms  priority VeryHigh
+```
+
+FCP가 CSS 도착 시각(820ms)에 딱 붙어 있다. CSS가 늦으면 그만큼 첫 화면이 늦다. CSS 해석 시간도 트레이스로 봤는데 `ParseAuthorStyleSheet` 1.38ms였다. 260KB를 해석하는 비용보다 네트워크로 받는 시간이 수백 배 크다. 느린 휴대폰에서는 해석도 몇 배 느려지지만, 첫 화면에서 먼저 줄일 것은 받는 시간이다.
+
+## 첫 화면에 필요한 규칙만 먼저 보내기
+
+그렇다고 CSS를 늦게 붙이면 FOUC가 난다. 그래서 나온 방법이 크리티컬 CSS다. 첫 화면(스크롤하지 않고 보이는 부분)을 그리는 데 필요한 규칙만 HTML의 `<style>`에 직접 넣고, 나머지 전체 시트는 렌더링을 막지 않게 늦게 붙인다.
+
+늦게 붙이는 데는 오래된 요령이 하나 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="화면에 안 맞는 media로 받아 두고, 다 받으면 바꾼다"
+  base={`<link rel="stylesheet"`}
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "href",
+      value: "\"/app.css\"",
+      title: "전체 스타일시트",
+      description: "평소처럼 전체 시트를 가리킨다. 캐시가 되는 주소여야 한다. 아래에서 캐시가 안 되면 두 번 받는 걸 확인한다.",
+      required: true,
+    },
+    {
+      key: "media",
+      value: "\"print\"",
+      title: "지금 화면과 안 맞는 조건",
+      description: "media가 지금 환경과 맞지 않는 시트는 렌더링을 막지 않는다. 브라우저는 낮은 우선순위로 받아만 둔다.",
+      required: true,
+    },
+    {
+      key: "onload",
+      value: "\"this.media='all'\"",
+      title: "다 받으면 적용한다",
+      description: "로드가 끝나면 media를 all로 바꿔 시트를 켠다. 이 순간 스타일 재계산이 한 번 일어난다. 자바스크립트가 꺼진 환경을 위해 noscript 안에 평범한 link를 하나 더 둔다.",
+      code: "<noscript><link rel=\"stylesheet\" href=\"/app.css\"></noscript>",
+      required: true,
+    },
+  ]}
+/>
+
+페이지를 바꿔 가며 같은 방식으로 쟀다. `critical.html`은 첫 화면 규칙 8개를 `<style>`에 넣고 전체 시트를 위 요령으로 붙인 것이다. `critical-cache.html`은 같은 구조에서 CSS 응답에 `Cache-Control: max-age=600`만 붙였다. `print-only.html`은 크리티컬 CSS 옆에 `media="print"`와 `media="(min-width: 1024px)"` 시트를 하나씩 둔 것이다.
+
+```text
+blocking.html: FCP median 848ms (runs: 840, 844, 848, 848, 848) load 824ms
+   /app.css     start   10ms  end  820ms  priority VeryHigh
+critical.html: FCP median 40ms (runs: 28, 32, 40, 48, 60) load 1634ms
+   /app.css     start   12ms  end  818ms  priority VeryLow,VeryHigh
+   /app.css     start  822ms  end 1632ms  priority VeryLow,VeryHigh
+critical-cache.html: FCP median 44ms (runs: 40, 40, 44, 52, 52) load 841ms
+   /app.css     start   25ms  end  835ms  priority VeryLow
+print-only.html: FCP median 48ms (runs: 28, 36, 48, 64, 76) load 831ms
+   /print.css   start   14ms  end  824ms  priority VeryLow
+   /wide.css    start   15ms  end  826ms  priority VeryLow
+```
+
+FCP가 848ms에서 40ms대로 내려왔다. 그런데 `critical.html`을 보면 `app.css`를 두 번 받았다. 첫 요청은 `VeryLow`로 받아 두었는데, `onload`에서 media를 바꾸자 같은 주소를 `VeryHigh`로 다시 요청했다. 실험 서버가 `Cache-Control: no-store`로 응답해서 받아 둔 걸 재사용하지 못한 것이다. 캐시를 허락한 `critical-cache.html`은 한 번만 받았다. 정적 CSS에 `no-store`를 거는 일은 드물지만, CDN이나 프록시 설정 실수로 캐시가 막혀 있으면 이 요령이 오히려 CSS를 두 번 받게 만든다. 적용한 뒤에는 Network 패널에서 같은 주소가 두 줄 찍히지 않는지 본다.
+
+크리티컬 CSS에는 대가가 있다. HTML에 넣은 규칙은 페이지마다 다시 내려가고 따로 캐시되지 않는다. 그래서 양을 작게 유지한다. 흔히 말하는 기준은 "압축 후 14KB 안쪽"인데, TCP가 연결 초기에 확인 응답 없이 보낼 수 있는 양(초기 혼잡 윈도 10세그먼트, 약 14.6KB)에서 나온 경험칙이다. HTTP/3이나 서버 설정에 따라 달라지니 절대 기준은 아니다. 또 첫 화면 기준은 기기 크기마다 다르다. 모바일 기준으로 뽑으면 데스크톱에서 아래쪽이 잠깐 맨 HTML로 보일 수 있다.
+
+직접 뽑기는 어려워서 도구를 쓴다. `critical` 같은 패키지는 헤드리스 브라우저로 페이지를 열어 첫 화면에 걸리는 규칙을 골라 준다. Google이 만들던 Critters는 보관 처리됐고, 지금은 그 포크인 Beasties가 이어 간다. Next.js에도 CSS를 HTML에 넣는 실험 옵션(`experimental.inlineCss`)이 있는데, 첫 화면만 골라 넣는 게 아니라 전체를 넣는 방식이라 CSS가 작은 사이트에 맞는다. 옵션 이름과 동작은 버전마다 바뀔 수 있어 쓰기 전에 문서를 확인한다.
+
+## media가 맞지 않는 시트는 받기만 한다
+
+위 출력에서 `print-only.html`이 하나 더 보여 준다. 인쇄용 시트와 1024px 이상에서만 쓰는 시트가 있어도 390px 화면의 FCP는 48ms다. 두 파일 모두 받긴 받았다. 우선순위가 `VeryLow`였을 뿐이다.
+
+```html
+<!-- 화면 폭과 상관없이 늘 렌더링을 막는다 -->
+<link rel="stylesheet" href="/all.css" />
+<!-- 인쇄할 때만 쓴다. 화면 렌더링은 막지 않는다 -->
+<link rel="stylesheet" href="/print.css" media="print" />
+<!-- 지금 화면이 1024px 미만이면 막지 않는다. 창을 키우면 그때 적용된다 -->
+<link rel="stylesheet" href="/wide.css" media="(min-width: 1024px)" />
+```
+
+한 파일 안에 `@media print { ... }`로 넣은 규칙은 이 혜택을 못 받는다. 파일 단위로 판단하기 때문이다. 인쇄용 규칙이 크다면 따로 떼서 `media="print"`로 붙이는 게 낫다. 반대로 작은 미디어 쿼리 규칙을 파일로 잘게 나누면 요청 수만 늘어난다. 파일을 나눌지는 그 규칙이 얼마나 크고, 첫 화면에 필요한지로 정한다.
+
+## @import는 요청을 한 줄로 세운다
+
+CSS 안의 `@import`는 편하지만 비용이 숨어 있다. `a.css`가 `b.css`를 import하고, `b.css`가 다시 `c.css`를 import한다면, 브라우저는 `a.css`를 다 받아 읽어 봐야 `b.css`가 필요하다는 걸 안다. 아래 그림에서 요청이 어떻게 이어지는지 보자. 파일마다 응답에 300ms가 걸린다.
+
+<NetworkTopology
+  width={400}
+  height={230}
+  caption="@import는 앞 파일을 다 읽어야 다음 파일을 알게 된다"
+  zones={[
+    { id: "page", label: "브라우저", x: 10, y: 20, w: 120, h: 190, tone: "neutral" },
+    { id: "srv", label: "정적 서버", x: 160, y: 20, w: 230, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "html", label: "HTML 파서", sub: "link 1개", x: 70, y: 115, icon: "client", w: 96 },
+    { id: "a", label: "a.css", sub: "@import b", x: 275, y: 55, icon: "server", w: 96 },
+    { id: "b", label: "b.css", sub: "@import c", x: 275, y: 115, icon: "server", w: 96 },
+    { id: "c", label: "c.css", sub: "본문 규칙", x: 275, y: 175, icon: "server", w: 96 },
+  ]}
+  links={[
+    { from: "html", to: "a" },
+    { from: "html", to: "b", dashed: true },
+    { from: "html", to: "c", dashed: true },
+  ]}
+  steps={[
+    { path: ["html", "a"], packet: "GET a.css", title: "HTML에는 a.css 하나만 있다", detail: "프리로드 스캐너가 찾을 수 있는 건 HTML에 적힌 a.css뿐이다. 8ms에 요청한다." },
+    { path: ["a", "html"], packet: "a.css", title: "312ms, a.css를 읽고서야 b.css를 안다", detail: "@import는 파일 안에 있으니 받아서 해석해 봐야 보인다. 그동안 b.css 요청은 시작도 못 했다." },
+    { path: ["html", "b"], packet: "GET b.css", title: "두 번째 요청이 출발한다", detail: "313ms에 b.css를 요청한다. 앞 요청이 끝난 직후다." },
+    { path: ["b", "html"], packet: "b.css", title: "618ms, 또 하나가 나온다", detail: "b.css 안에 c.css를 부르는 @import가 있다. 한 단계가 더 생긴다." },
+    { path: ["html", "c"], packet: "GET c.css", title: "세 번째 요청", detail: "619ms에 c.css를 요청해 922ms에 받는다. 이 셋이 다 와야 그릴 수 있다." },
+    { path: ["html"], highlight: ["a", "b", "c"], title: "948ms에 첫 그리기", detail: "같은 세 파일을 HTML에 link 세 개로 나란히 적으면 셋이 9ms에 함께 떠나서 FCP가 336ms다." },
+  ]}
+/>
+
+실제 측정값이다. `import.html`은 위 그림처럼 한 줄로 이어 붙였고, `parallel.html`은 같은 크기의 파일 세 개를 `<link>`로 나란히 적었다.
+
+```text
+import.html: FCP median 948ms (runs: 940, 944, 948, 952, 1020) load 923ms
+   /a.css       start    8ms  end  312ms  priority VeryHigh
+   /b.css       start  313ms  end  618ms  priority VeryHigh
+   /c.css       start  619ms  end  922ms  priority VeryHigh
+parallel.html: FCP median 336ms (runs: 328, 336, 336, 340, 340) load 321ms
+   /a2.css      start    9ms  end  317ms  priority VeryHigh
+   /b2.css      start    9ms  end  318ms  priority VeryHigh
+   /c.css       start    9ms  end  319ms  priority VeryHigh
+```
+
+`start` 열이 계단을 그대로 보여 준다. 실무에서 `@import`가 섞여 들어오는 경로는 대개 두 가지다. 하나는 외부 폰트나 아이콘 CSS를 `@import url(https://...)`로 부르는 경우이고, 다른 하나는 테마 CSS를 손으로 이어 붙인 경우다. 번들러(Sass, PostCSS, Vite, webpack의 css-loader)를 거치는 `@import`는 빌드할 때 하나로 합쳐져서 이 문제가 없다. 그러니 배포된 CSS 파일 안에 `@import`가 남아 있는지 보면 된다. 외부 CSS라면 HTML에 `<link>`로 옮기고, 그 출처에 `preconnect`를 걸어 연결을 미리 열어 둔다.
+
+## 안 쓰는 규칙은 얼마나 되나
+
+처음 장면의 260KB로 돌아가자. 이 실험용 시트는 본문 규칙 8개에 버튼·카드·모달 같은 컴포넌트 규칙과 여백 유틸리티 2,800개를 섞어 만든 것이다. 디자인 시스템 CSS를 통째로 넣은 사이트를 흉내 냈다. Playwright의 CSS 커버리지(크롬 개발자 도구의 Coverage 탭과 같은 CDP 기능)로 페이지를 열었을 때 실제로 쓰인 바이트를 셌다.
+
+```js
+await page.coverage.startCSSCoverage();
+await page.goto("http://localhost:18650/blocking.html", { waitUntil: "load" });
+const cov = await page.coverage.stopCSSCoverage();
+for (const entry of cov) {
+  const used = entry.ranges.reduce((s, r) => s + r.end - r.start, 0);
+  console.log(`${new URL(entry.url).pathname}: total ${entry.text.length} bytes, used ${used} bytes`);
+}
+```
+
+```text
+/app.css: total 260061 bytes, used 528 bytes (0.2%)
+```
+
+같은 시트를 PurgeCSS로 이 HTML에 나오는 선택자만 남기고 걸렀다.
+
+```text
+before: 260061 bytes (gzip 28702)
+after : 537 bytes (gzip 313)
+```
+
+실험용 시트라 극단적이지만 방향은 실제 사이트도 같다. gzip이 텍스트를 잘 줄여 주니 전송량 차이는 생각보다 작아 보일 수 있다. 그래도 브라우저는 압축을 푼 260KB를 전부 해석해서 CSSOM에 올리고, 요소마다 맞는 규칙을 찾을 때 이 규칙들을 후보로 들고 다닌다.
+
+커버리지 숫자를 그대로 믿으면 안 되는 이유도 있다. 커버리지는 지금 열린 페이지, 지금 상태에서 쓰인 것만 센다. 호버하거나 모달을 열어야 쓰이는 규칙, 다른 라우트의 규칙, 다크 모드 규칙은 0%로 나온다. 그래서 "안 쓰는 CSS를 지운다"는 보통 손으로 지우는 게 아니라 빌드 도구가 소스를 훑어 쓰인 클래스만 남기는 방식으로 한다. Tailwind가 소스 파일에서 클래스 이름을 찾아 필요한 유틸리티만 만드는 것도 같은 생각이다.
+
+이 방식에는 잘 알려진 함정이 있다. 소스에서 클래스 이름을 문자열로 찾기 때문에, 이름을 런타임에 조립하면 못 찾는다.
+
+```js
+// button.js: 이름을 조립한다
+export function Button({ variant }) {
+  return `<button class="btn--${variant}">저장</button>`;
+}
+```
+
+```js
+// button-safe.js: 전체 이름이 소스에 그대로 있다
+const VARIANT = { primary: "btn--primary", danger: "btn--danger" };
+export function Button({ variant }) {
+  return `<button class="${VARIANT[variant]}">저장</button>`;
+}
+```
+
+두 파일을 각각 PurgeCSS의 `content`로 주고 `.btn--primary`, `.btn--danger`, `.btn--ghost` 세 규칙을 걸렀다.
+
+```text
+purge2/button.js       -> (empty)
+purge2/button-safe.js  -> .btn--primary{background:blue}.btn--danger{background:red}
+```
+
+첫 번째는 세 규칙이 다 지워졌다. 개발 서버에서는 멀쩡하다가 프로덕션 빌드에서만 버튼 색이 빠지는 장애가 이렇게 생긴다. React 컴포넌트에서 `` className={`btn--${variant}`} `` 같은 코드를 쓰고 있다면 위처럼 완성된 이름을 매핑 객체에 두거나, 도구의 safelist에 등록한다.
+
+## 선택자는 오른쪽부터 맞춰 본다
+
+CSS 성능 얘기에 단골로 나오는 조언이 "선택자를 짧게 써라"다. 이유를 알려면 브라우저가 선택자를 어떻게 맞추는지 봐야 한다.
+
+브라우저는 선택자를 왼쪽이 아니라 오른쪽부터 읽는다. `.sidebar ul li a`라면 먼저 "이 요소가 `a`인가"를 보고, 맞으면 부모 쪽으로 올라가며 `li`, `ul`, `.sidebar`를 찾는다. 왼쪽부터 읽으면 `.sidebar` 아래의 모든 자손을 훑어 내려가야 하지만, 오른쪽부터 읽으면 요소 하나에서 시작해 조상 몇 개만 확인하면 된다. 아래 그림에서 `<a>` 하나가 이 선택자에 맞는지 확인하는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption=".sidebar ul li a 를 요소 a에서 시작해 위로 확인한다"
+  memoryLabel="맞춘 조각"
+  cells={["a", "li", "ul", "div.menu", "nav.sidebar", "body"]}
+  steps={[
+    { pointer: 0, memory: ["a"], caption: "맨 오른쪽 조각 a부터 본다. 이 요소는 a라서 후보가 된다." },
+    { pointer: 1, memory: ["a", "li"], caption: "부모로 올라간다. 다음 조각 li와 맞는다." },
+    { pointer: 2, memory: ["a", "li", "ul"], caption: "그 위가 ul이다. 이것도 맞는다." },
+    { pointer: 3, memory: ["a", "li", "ul"], caption: "찾는 건 .sidebar인데 div.menu다. 띄어쓰기는 자손 결합자라 바로 위가 아니어도 되니 더 올라간다." },
+    { pointer: 4, found: [0, 1, 2, 4], memory: ["a", "li", "ul", ".sidebar"], caption: "nav.sidebar에서 마지막 조각까지 맞았다. 이 규칙을 a에 적용한다." },
+  ]}
+/>
+
+여기에 브라우저의 최적화가 두 겹 더 있다. 먼저 규칙을 맨 오른쪽 조각(id, 클래스, 태그)별로 미리 나눠 둔다. `a`로 끝나는 규칙은 `a` 요소만 검사하니 `div`나 `span`은 이 규칙을 아예 보지 않는다. 그리고 Blink는 조상들의 태그·클래스·id를 블룸 필터라는 작은 집합에 담아 둔다. 조상 중에 `.sidebar`가 확실히 없으면 올라가 보지도 않고 탈락시킨다.
+
+그래서 요즘 브라우저에서 선택자 모양 자체가 병목인 경우는 드물다. 요소 2만 개(행 5,000개 × 자식 3개)짜리 페이지에서 단순한 클래스 규칙 300개와, `:not`, `:nth-child`, `~`, 속성 선택자, `:is`를 섞은 복잡한 규칙 300개를 각각 넣고 전체 스타일을 다시 계산하게 했다.
+
+```text
+simple selectors, toggle <body>    median 7.40ms  elementCount 5000
+complex selectors, toggle <body>   median 8.10ms  elementCount 5000
+```
+
+같은 일을 시켰을 때 7.4ms와 8.1ms다. 선택자를 다듬어서 얻는 건 이 정도다. 반면 같은 페이지에서 무엇을 바꾸느냐에 따라 숫자는 열 배 가까이 움직였다. 다음 절의 이야기다.
+
+## 클래스 하나가 다시 계산하게 만드는 범위
+
+스타일 재계산(Recalculate Style)의 비용은 대략 "다시 계산해야 하는 요소 수 × 요소 하나에 맞춰 볼 규칙 수"다. 앞 절은 뒤쪽을 다뤘고, 실제로 크게 흔들리는 건 앞쪽이다.
+
+클래스를 바꿀 때 브라우저가 모든 요소를 다시 계산하지는 않는다. Blink는 스타일시트를 읽을 때 "이 클래스가 바뀌면 누구를 다시 봐야 하나"를 무효화 집합(invalidation set)으로 미리 정리해 둔다. `.theme-dark .row`라는 규칙이 있으면 "`theme-dark`가 바뀌면 그 아래의 `.row`만 다시 본다"가 된다. 그래서 바뀌는 범위는 선택자가 정한다.
+
+같은 2만 개짜리 페이지에서 바꾸는 대상과 규칙을 달리하며 쟀다. 시간은 클래스를 바꾸고 `getComputedStyle`로 계산을 강제한 구간을 21번 잰 중앙값이고, `elementCount`는 CDP 트레이스의 `UpdateLayoutTree` 이벤트에 찍힌, 실제로 다시 계산한 요소 수다.
+
+```text
+simple selectors, toggle <body>    median 7.40ms  elementCount 5000
+simple selectors, toggle one row   median 0.00ms  elementCount 0
+complex selectors, toggle <body>   median 8.10ms  elementCount 5000
+complex selectors, toggle one row  median 0.00ms  elementCount 0
+simple, .row.selected on one row   median 0.00ms  elementCount 1
+.theme-dark * , toggle <body>      median 53.90ms  elementCount 20002
+:has() on body, select one row     median 10.90ms  elementCount 5000
+```
+
+줄마다 읽어 보면 이렇다.
+
+- `body`에 `theme-dark`를 붙이면 `.row` 5,000개만 다시 계산한다. 규칙이 `.theme-dark .row`라서다.
+- 행 하나에 `theme-dark`를 붙이면 0개다. 행 아래에는 `.row`가 없으니 볼 게 없다.
+- `.row.selected` 규칙이 있을 때 행 하나에 `selected`를 붙이면 그 행 1개만 계산한다. 목록에서 선택 상태를 그 행에 붙이는 게 싼 이유다.
+- 규칙을 `.theme-dark *`로 쓰면 2만 개 전부, 53.9ms가 걸렸다. 한 프레임 예산(약 16.7ms)을 세 번 넘긴다.
+- `body:has(.row.selected) .row`처럼 `:has()`로 위에서 아래를 내려다보는 규칙은 행 하나를 선택해도 5,000개를 다시 본다. 아래의 변화가 위의 조건을 바꾸고, 그 조건이 다시 모든 행에 걸리기 때문이다.
+
+CSS 변수(사용자 지정 속성)도 같은 눈으로 본다. 변수는 상속되기 때문에 `:root`에서 바꾸면 그 아래 전체가 영향을 받을 수 있다. 같은 페이지에서 `:root`의 `--row-bg`를 바꿔 봤다.
+
+```text
+--row-bg on :root, used by .row          24.8ms elementCount 15003
+--row-bg on :root, not used              17.6ms elementCount 3
+--row-bg on <main>                       33.4ms elementCount 15001
+```
+
+`.row`가 그 변수를 쓰면 1만 5천 개를 다시 계산했고, 아무 규칙도 그 변수를 쓰지 않으면 3개에서 끝났다. 시간 열은 트레이스를 켠 채 한 번만 잰 값이라 흔들림이 크니 `elementCount`를 보면 된다. 다크 모드 전환처럼 원래 화면 전체가 바뀌는 일이라면 이 비용은 감수할 만하다. 문제는 마우스 움직임이나 스크롤마다 `:root`의 변수를 바꾸는 코드다. 그런 값은 실제로 쓰는 요소에 가까운 곳에 둔다.
+
+React에서는 이 차이가 상태를 어디에 두느냐로 나타난다. 선택된 행을 최상위 컨텍스트에 두고 `body`나 최상위 `div`의 클래스를 바꾸는 구조보다, 행 컴포넌트가 자기 `className`만 바꾸는 구조가 리렌더링도 스타일 재계산도 좁다. 리렌더링 범위는 [리렌더링이 일어나는 이유](/posts/react-rerender)에서 따로 다뤘다.
+
+개발자 도구로는 이렇게 확인한다. Performance 패널에서 녹화한 뒤 보라색 "Recalculate Style" 막대를 누르면 "Elements affected"에 다시 계산한 요소 수가 나온다. 숫자가 DOM 전체와 비슷하면 바뀐 클래스가 너무 위쪽에 붙었거나 `*`, `:has()` 같은 넓은 규칙이 걸려 있는지 본다. 최근 크롬은 Performance 패널 설정에서 선택자 통계(CSS selector stats)를 켜면 어느 선택자가 시간을 많이 썼는지도 보여 준다. 재계산 뒤에 따라오는 레이아웃과 페인트를 줄이는 방법은 [렌더링 성능 최적화](/posts/rendering-performance-optimization)로 넘긴다.
+
+## 런타임 CSS-in-JS가 렌더링마다 하는 일
+
+Emotion이나 styled-components 같은 런타임 CSS-in-JS는 스타일을 자바스크립트 안에 쓰고, 브라우저에서 실행될 때 CSS를 만든다. 컴포넌트와 스타일이 한 파일에 있고 props로 스타일을 바꾸기 쉽다. 이 블로그도 Emotion을 쓴다. 대신 그 편의는 렌더링 때마다 실행되는 코드로 값을 낸다.
+
+<SequenceDiagram
+  caption="props가 스타일에 들어가면 값이 바뀔 때마다 새 규칙이 생긴다"
+  actors={[
+    { id: "cp", label: "컴포넌트" },
+    { id: "em", label: "Emotion" },
+    { id: "st", label: "스타일시트" },
+    { id: "br", label: "브라우저" },
+  ]}
+  steps={[
+    { from: "cp", to: "em", label: "props.hue = 12", title: "렌더링할 때 스타일을 넘긴다", detail: "템플릿 안의 함수에 props를 넣어 CSS 문자열을 완성한다. 행 1,000개면 이 일이 1,000번이다." },
+    { from: "em", to: "em", label: "직렬화·해시", title: "문자열을 해시해 클래스 이름을 만든다", detail: "완성된 CSS 텍스트를 해시해 css-1q2w3e 같은 이름을 얻는다. 같은 해시가 캐시에 있으면 여기서 끝난다." },
+    { from: "em", to: "st", label: "insertRule", title: "처음 보는 스타일이면 규칙을 넣는다", detail: "hue가 행마다 다르면 해시도 다르니 규칙이 행 수만큼 쌓인다. 실험에서는 647개가 됐다." },
+    { from: "st", to: "br", label: "시트 변경", title: "브라우저가 스타일을 다시 본다", detail: "시트에 규칙이 들어오면 브라우저는 영향받는 요소의 스타일을 다시 계산한다." },
+    { from: "em", to: "cp", label: "className", title: "이름을 붙여 커밋한다", detail: "React가 DOM에 className을 반영한다. 값이 바뀔 때마다 위 과정을 다시 돈다." },
+  ]}
+/>
+
+React 19와 Emotion 11로 행 1,000개짜리 목록을 세 가지로 만들어 쟀다. 휴대폰을 흉내 내려고 CDP로 CPU를 4배 느리게 했고, 일곱 번 잰 중앙값이다. `mount`는 처음 그릴 때, `update`는 모든 행의 색이 바뀌게 다시 그릴 때의 시간(`flushSync`로 감싼 구간)이다.
+
+```jsx
+// emotion: props를 스타일 안에 넣는다
+const Row = styled.div`
+  display: flex; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #ddd;
+  color: ${(p) => `hsl(${p.hue} 60% 35%)`};
+  font-weight: ${(p) => (p.active ? 700 : 400)};
+`;
+
+// emotion-var: 바뀌는 값만 CSS 변수로 뺀다
+//   color: hsl(var(--hue) 60% 35%);   <Row style={{ "--hue": hue }} />
+
+// static: 미리 만든 CSS 파일 + className + CSS 변수
+<div className={active ? "row row--active" : "row"} style={{ "--hue": hue }} />
+```
+
+```text
+emotion      js 214467 B (gzip 69554 B)  mount 204.1ms  update 90.9ms  cssRules 647  <style> 1
+emotion-var  js 214473 B (gzip 69556 B)  mount 164.1ms  update 96.8ms  cssRules 3  <style> 1
+static       js 187815 B (gzip 58939 B)  mount 88.5ms  update 51.3ms  cssRules 3  <style> 1
+```
+
+세 가지가 보인다. 첫째, 정적 CSS가 처음 그리기에서 두 배 넘게 빨랐다(88.5ms 대 204.1ms). 둘째, 바뀌는 값을 CSS 변수로 빼면 규칙이 647개에서 3개로 줄고 처음 그리기도 40ms 줄었다. 그래도 정적 CSS보다는 느리다. 렌더링마다 스타일을 직렬화하고 해시하는 일은 그대로 남기 때문이다. 셋째, 라이브러리 자체가 gzip 기준 약 10.6KB를 번들에 더한다.
+
+이 차이가 늘 문제가 되지는 않는다. 행 수십 개짜리 화면에서는 몇 ms 차이라 개발 편의가 더 크다. 문제가 되는 건 긴 목록, 자주 다시 그리는 화면(드래그, 실시간 데이터), 느린 기기다. 그리고 서버 렌더링 환경에서 하나 더 있다. 런타임 CSS-in-JS는 React 컨텍스트와 클라이언트 실행에 기대기 때문에 Next.js App Router의 서버 컴포넌트에서는 바로 쓸 수 없고, 클라이언트 컴포넌트로 감싸야 한다.
+
+대안은 빌드할 때 CSS를 뽑아내는 방식이다. vanilla-extract, Linaria, Panda CSS, StyleX 같은 도구는 스타일을 자바스크립트나 타입스크립트로 쓰되 빌드 결과는 평범한 `.css` 파일이다. 런타임 비용이 없고 서버 컴포넌트와도 맞는다. 대신 props로 아무 값이나 넣을 수는 없고, 바뀌는 값은 위의 `static`처럼 미리 정한 변형(variant)과 CSS 변수로 표현해야 한다. CSS Modules나 Tailwind도 같은 쪽에 선다. 이미 런타임 CSS-in-JS를 쓰는 프로젝트라면 먼저 `emotion-var`처럼 값이 자주 바뀌는 속성만 CSS 변수로 빼는 것으로 규칙 폭증부터 막는다.
+
+## 명시도 싸움을 @layer로 끝내기
+
+성능만큼 자주 부딪히는 문제가 유지 보수다. 외부 라이브러리 CSS가 `#app .card .title`처럼 명시도(specificity, 선택자의 우선순위 점수) 높은 선택자를 쓰면, 내 `.title`로는 덮을 수 없다. 그래서 `!important`를 붙이고, 그걸 다시 덮으려고 또 `!important`를 붙인다.
+
+명시도는 (id 수, 클래스·속성·가상 클래스 수, 태그·가상 요소 수)를 앞자리부터 비교한다. `#nav .item a:hover`는 id 1개, 클래스 1개와 가상 클래스 1개, 태그 1개라 (1, 2, 1)이다. `:where()` 안의 것은 0으로 치고, `:is()`, `:not()`, `:has()`는 괄호 안에서 가장 센 선택자의 점수를 쓴다. 직접 계산기를 짜 보자. 결합자(`>`, `+`, `~`, 공백)는 점수가 없다.
+
+<CodePlayground
+  caption="선택자의 명시도 계산하기"
+  functionName="specificity"
+  initialCode={`function specificity(selector) {\n  // [id 수, 클래스·속성·가상 클래스 수, 태그·가상 요소 수]\n  // :where(...)는 0, :is/:not/:has(...)는 괄호 안에서 가장 센 것\n  return [0, 0, 0];\n}`}
+  solution={`function specificity(selector) {\n  const s = selector;\n  let a = 0, b = 0, c = 0, i = 0;\n  const isName = (ch) => /[A-Za-z0-9_-]/.test(ch);\n  const readName = () => {\n    const start = i;\n    while (i < s.length && isName(s[i])) i++;\n    return s.slice(start, i);\n  };\n  const readParens = () => {\n    let depth = 0;\n    const start = i + 1;\n    for (; i < s.length; i++) {\n      if (s[i] === "(") depth++;\n      else if (s[i] === ")" && --depth === 0) break;\n    }\n    i++;\n    return s.slice(start, i - 1);\n  };\n  const splitList = (list) => {\n    const parts = [];\n    let depth = 0, cur = "";\n    for (const ch of list) {\n      if (ch === "(") depth++;\n      if (ch === ")") depth--;\n      if (ch === "," && depth === 0) { parts.push(cur); cur = ""; }\n      else cur += ch;\n    }\n    parts.push(cur);\n    return parts.map((p) => p.trim());\n  };\n  while (i < s.length) {\n    const ch = s[i];\n    if (ch === "#") { i++; readName(); a++; }\n    else if (ch === ".") { i++; readName(); b++; }\n    else if (ch === "[") { while (s[i] !== "]") i++; i++; b++; }\n    else if (ch === ":" && s[i + 1] === ":") { i += 2; readName(); c++; }\n    else if (ch === ":") {\n      i++;\n      const name = readName();\n      if (s[i] === "(") {\n        const inner = readParens();\n        if (name === "where") continue;\n        if (name === "is" || name === "not" || name === "has") {\n          const best = splitList(inner).map(specificity)\n            .sort((x, y) => y[0] - x[0] || y[1] - x[1] || y[2] - x[2])[0];\n          a += best[0]; b += best[1]; c += best[2];\n          continue;\n        }\n      }\n      b++;\n    }\n    else if (/[A-Za-z]/.test(ch)) { readName(); c++; }\n    else i++;\n  }\n  return [a, b, c];\n}`}
+  tests={[
+    { label: "a", args: ["a"], expected: [0, 0, 1] },
+    { label: ".btn", args: [".btn"], expected: [0, 1, 0] },
+    { label: "#nav .item a:hover", args: ["#nav .item a:hover"], expected: [1, 2, 1] },
+    { label: "ul li::before", args: ["ul li::before"], expected: [0, 0, 3] },
+    { label: "속성 + 가상 클래스", args: ["input[type=\"text\"]:focus"], expected: [0, 2, 1] },
+    { label: "*", args: ["*"], expected: [0, 0, 0] },
+    { label: ":where(#app) .title", args: [":where(#app) .title"], expected: [0, 1, 0] },
+    { label: ":is(#a, .b) span", args: [":is(#a, .b) span"], expected: [1, 0, 1] },
+    { label: "결합자", args: ["div > p + .x ~ span"], expected: [0, 1, 3] },
+    { label: ":not(.a.b) p", args: [":not(.a.b) p"], expected: [0, 2, 1] },
+    { label: "li:nth-child(2n+1)", args: ["li:nth-child(2n+1)"], expected: [0, 1, 1] },
+  ]}
+/>
+
+`:where()`의 점수가 0인 것은 라이브러리를 만들 때 쓸모 있다. 기본 스타일을 `:where(.btn)`으로 쓰면 쓰는 쪽이 `.btn` 하나로 쉽게 덮는다.
+
+캐스케이드 레이어(`@layer`)는 이 싸움을 명시도보다 앞 단계에서 끝낸다. 크롬 99, 파이어폭스 97, 사파리 15.4부터 지원한다. 규칙이 충돌하면 브라우저는 아래 순서로 비교하고, 앞 단계에서 갈리면 뒤는 보지 않는다.
+
+<ConceptDiagram
+  caption="레이어 순서가 명시도보다 먼저다"
+  width={400}
+  height={270}
+  nodes={[
+    { id: "imp", label: "출처·!important", sub: "작성자, 사용자, 브라우저", x: 130, y: 30, w: 170 },
+    { id: "layer", label: "@layer 순서", sub: "나중에 선언한 레이어가 이긴다", x: 130, y: 100, w: 190 },
+    { id: "spec", label: "명시도", sub: "(id, 클래스, 태그)", x: 130, y: 170, w: 170 },
+    { id: "order", label: "나중에 쓴 규칙", sub: "같으면 뒤가 이긴다", x: 130, y: 240, w: 170 },
+    { id: "unl", label: "레이어 밖 규칙", sub: "모든 레이어보다 셈", x: 325, y: 100, w: 130 },
+  ]}
+  edges={[
+    { from: "imp", to: "layer", label: "같으면" },
+    { from: "layer", to: "spec", label: "같으면" },
+    { from: "spec", to: "order", label: "같으면" },
+    { from: "unl", to: "layer", dashed: true },
+  ]}
+/>
+
+크롬에서 직접 확인했다.
+
+```html
+<style>
+  @layer reset, vendor, components, utilities;
+  @layer vendor { #app .card .title { color: red; } }
+  @layer components { .title { color: blue; } }
+  @layer utilities { .text-green { color: green; } }
+  .note { color: purple; }
+  @layer utilities { #app .card .note { color: green; } }
+  @layer vendor { .badge { color: red !important; } }
+  @layer utilities { .badge { color: green !important; } }
+</style>
+<div id="app"><div class="card">
+  <h2 class="title">제목</h2>
+  <h2 class="title text-green">제목2</h2>
+  <span class="badge">새 글</span>
+  <p class="note">메모</p>
+</div></div>
+```
+
+```text
+title             -> rgb(0, 0, 255)
+title text-green  -> rgb(0, 128, 0)
+badge             -> rgb(255, 0, 0)
+note              -> rgb(128, 0, 128)
+```
+
+`.title`은 명시도가 (1, 2, 1)인 vendor 규칙을 (0, 1, 0)짜리 components 규칙이 이겨서 파란색이다. `.note`는 레이어 밖에 쓴 `.note`가 utilities 레이어의 (1, 2, 0) 규칙을 이겨 보라색이다. 레이어에 넣지 않은 규칙이 가장 세다. 처음 도입할 때 자주 놀라는 부분이다. 기존 CSS를 그대로 두고 새 코드만 레이어에 넣으면 새 코드가 다 진다. 그래서 외부 CSS를 `@import url(vendor.css) layer(vendor);`처럼 낮은 레이어에 넣고 내 코드를 그 위 레이어나 레이어 밖에 두는 순서로 옮긴다.
+
+`.badge`는 반대로 빨간색이다. `!important`끼리 붙으면 레이어 순서가 뒤집혀서 먼저 선언한 레이어가 이긴다. reset 레이어의 `!important`가 아무리 늦은 레이어로도 덮이지 않게 하려는 설계다. 레이어를 도입하면서 `!important`를 그대로 두면 오히려 덮기 어려워진다.
+
+## 현장에서 CSS를 의심하는 순서
+
+CSS 문제는 증상으로 구분하면 찾기 쉽다.
+
+첫 화면이 늦다면 Network 패널에서 우선순위 열을 켜고 `Highest`(CDP로는 `VeryHigh`)인 CSS를 본다. 그 CSS의 응답이 끝나는 시각과 FCP가 붙어 있으면 범인이다. Lighthouse의 "렌더링 차단 리소스 제거" 항목도 같은 것을 가리킨다. 파일이 크면 Coverage 탭으로 쓰는 비율을 보고, 요청이 계단처럼 이어지면 `@import`를 찾는다. 외부 CSS가 낀 경우는 DNS와 연결 시간이 더해지니 `preconnect`나 자체 호스팅을 고려한다.
+
+상호작용이 버벅인다면 Performance 패널에서 그 순간을 녹화한다. 보라색 "Recalculate Style" 막대가 길고 영향받은 요소 수가 DOM 전체에 가깝다면, 최상위 요소의 클래스나 `:root`의 CSS 변수를 바꾸는 코드, `*`나 `:has()`가 들어간 넓은 규칙을 찾는다. 막대가 짧은데 노란색 스크립트가 길고 그 안에 CSS-in-JS 라이브러리 함수가 보이면 런타임 스타일 생성이 원인이다. 개발자 도구 Elements 패널에서 `<style>` 태그 안의 규칙 수가 스크롤할 때마다 늘어난다면 props가 스타일에 그대로 들어가고 있다는 신호다.
+
+배포 후에만 스타일이 깨진다면 안 쓰는 CSS 제거 단계를 의심한다. 클래스 이름을 문자열로 조립했는지, 외부 데이터(CMS 본문)에 들어 있는 클래스를 소스 스캔이 못 보는지 확인한다.
+
+흔한 실수를 정리하면 이렇다. 크리티컬 CSS 요령을 쓰면서 캐시를 막아 같은 파일을 두 번 받는다. 크리티컬 CSS를 키워서 HTML이 무거워지고 캐시 이점을 잃는다. 인쇄용 규칙을 메인 시트에 섞어 둔다. 레이어를 도입하면서 기존 코드는 레이어 밖에 남겨 새 코드가 지게 만든다. 반대로 선택자 길이를 줄이는 리팩터링에 시간을 쓰는 건 대개 우선순위가 낮다.
+
+## 면접에서 나올 만한 질문
+
+### CSS가 렌더링 차단 리소스인 이유는?
+
+스타일 없이 먼저 그렸다가 바꾸면 사용자에게 맨 HTML이 번쩍 보이는 FOUC가 생기기 때문에, 브라우저는 head의 스타일시트가 다 올 때까지 그리기를 미룬다. HTML 파싱 자체는 막지 않지만 그 뒤의 일반 스크립트는 CSSOM이 준비될 때까지 실행을 기다린다. 그래서 느린 CSS는 FCP와 스크립트 실행을 함께 늦춘다.
+
+### 크리티컬 CSS는 무엇이고 단점은?
+
+첫 화면을 그리는 데 필요한 규칙만 HTML에 인라인하고 나머지는 렌더링을 막지 않게 늦게 붙이는 방법이다. 실험에서 FCP가 848ms에서 44ms로 줄었다. 단점은 인라인한 규칙이 페이지마다 다시 내려가고 캐시되지 않는다는 것, 기기 크기마다 첫 화면이 달라 경계가 흐리다는 것이다. 늦게 붙이는 시트가 캐시되지 않으면 같은 파일을 두 번 받는 함정도 있다.
+
+### media 속성을 붙인 link는 다운로드도 안 하나?
+
+받기는 받는다. 지금 환경과 맞지 않는 media의 시트는 렌더링을 막지 않고 낮은 우선순위로 받아 둘 뿐이다. 크롬에서 media="print" 시트의 우선순위는 VeryLow였고 FCP에 영향이 없었다. 같은 파일 안의 @media 블록은 이 혜택이 없어서, 큰 인쇄용 규칙은 파일로 떼는 게 낫다.
+
+### CSS의 @import를 피하라는 이유는?
+
+import한 파일은 부모 파일을 다 받아 해석해야 존재를 알 수 있어서 요청이 직렬로 이어진다. 300ms짜리 파일 세 개를 import로 이으면 FCP가 948ms, link 세 개로 나란히 두면 336ms였다. 번들러가 빌드할 때 합치는 import는 상관없고, 배포된 CSS에 남은 import나 외부 URL import가 문제다.
+
+### 복잡한 선택자는 성능에 얼마나 나쁜가?
+
+요즘 브라우저에서는 대개 병목이 아니다. 브라우저는 선택자를 오른쪽부터 맞추고, 규칙을 오른쪽 조각별로 나눠 두고, 조상 검사를 블룸 필터로 걸러서 대부분의 규칙을 빨리 탈락시킨다. 요소 2만 개에서 복잡한 규칙과 단순한 규칙의 전체 재계산 차이는 7.4ms와 8.1ms였다. 더 크게 영향을 주는 건 몇 개의 요소를 다시 계산하게 만드느냐다.
+
+### 클래스 하나를 바꿨는데 스타일 재계산이 길다. 무엇을 보나?
+
+Performance 패널의 Recalculate Style에서 영향받은 요소 수를 본다. 브라우저는 무효화 집합으로 바뀐 클래스와 관련된 요소만 다시 계산하는데, 최상위 요소에 클래스를 붙이고 `.theme-dark *` 같은 규칙을 쓰면 전체가 대상이 된다. 실험에서 같은 변경이 5,000개에서 20,002개, 7ms에서 54ms로 커졌다. 상태 클래스는 실제로 바뀌는 요소 가까이에 붙이고, `:root` 변수를 자주 바꾸지 않는다.
+
+### 런타임 CSS-in-JS의 성능 비용은 어디서 오나?
+
+렌더링할 때마다 스타일을 직렬화하고 해시해서 클래스 이름을 만들고, 처음 보는 스타일이면 규칙을 시트에 넣는 일에서 온다. props 값이 스타일에 그대로 들어가면 값마다 규칙이 생겨 1,000행에서 647개가 쌓였다. 바뀌는 값을 CSS 변수로 빼면 규칙 폭증은 막지만, 빌드 시점에 CSS를 뽑는 방식보다는 여전히 느렸다. 서버 컴포넌트에서 쓰기 어렵다는 제약도 있다.
+
+### @layer를 쓰면 명시도 문제가 어떻게 풀리나?
+
+레이어 순서가 명시도보다 먼저 비교되기 때문에, 낮은 레이어의 (1, 2, 1) 선택자도 높은 레이어의 (0, 1, 0) 선택자에 진다. 외부 CSS를 낮은 레이어에 넣으면 내 코드는 단순한 선택자로 덮을 수 있다. 레이어 밖의 규칙은 모든 레이어를 이기고, !important끼리는 순서가 뒤집혀 먼저 선언한 레이어가 이긴다. 이 두 가지를 알고 써야 한다.

@@ -1,0 +1,415 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("web-font-optimization");
+
+글을 열면 첫 문단이 뜨고, 1초쯤 지나 글자 모양이 한 번 바뀌면서 아래 내용이 위로 훅 당겨진다. 느린 지하철 와이파이에서는 아예 글자가 없는 빈 줄만 한참 보이기도 한다. Network 패널을 열어 보면 원인은 폰트 파일 하나다. 2MB가 넘는 한글 폰트가 받아질 때까지 브라우저가 글자를 숨기거나, 다른 폰트로 그렸다가 바꿔 끼운다.
+
+웹 폰트는 디자인에서 빼기 어렵다. 대신 언제 받기 시작하는지, 받는 동안 무엇을 보여 줄지, 얼마나 받을지는 고를 수 있다. 이 글은 한글 폰트 Pretendard를 가지고 그 세 가지를 실제로 재 본다. 측정은 Chromium 141(Playwright로 실행), 390px 화면 기준이고, 폰트 파일은 이 블로그가 쓰는 `pretendard` 1.3.9 패키지에 든 것을 그대로 썼다.
+
+CSS 파일 자체의 렌더링 차단과 크리티컬 CSS는 [CSS 성능](/posts/css-performance)에서, CLS를 세는 규칙은 [Core Web Vitals](/posts/core-web-vitals)에서 다뤘다. 여기서는 폰트에만 집중한다.
+
+## 한글 폰트가 무거운 이유
+
+영문 폰트는 대소문자와 숫자, 기호를 합쳐 수백 글리프면 된다. 한글은 조합 가능한 현대 한글 음절만 11,172자다. 자주 쓰는 글자만 모은 KS X 1001 완성형도 2,350자다. 글자 수가 수십 배라 파일도 수십 배다.
+
+fontTools로 패키지에 든 파일을 열어 글리프 수를 셌다.
+
+```text
+PretendardVariable.woff2 glyphs 14757 cmap 14336 hangul 11172 upm 2048 hhea asc/desc/gap 1950 -494 0 axes [('wght', 45.0, 930.0)]
+Pretendard-Regular.woff2 glyphs 14716 cmap 14336 hangul 11172 upm 2048 hhea asc/desc/gap 1950 -494 0 axes -
+Pretendard-Regular.subset.woff2 glyphs 4381 cmap 3728 hangul 2780 upm 2048 hhea asc/desc/gap 1950 -494 0 axes -
+```
+
+파일 크기는 이렇다(`ls -l`의 바이트 수).
+
+```text
+6739336  PretendardVariable.ttf          가변 폰트 원본
+2057688  PretendardVariable.woff2        가변 폰트, woff2 압축
+ 765892  Pretendard-Regular.woff2        굵기 하나(400)
+ 778432  Pretendard-Medium.woff2         굵기 하나(500)
+ 791156  Pretendard-Bold.woff2           굵기 하나(700)
+ 267096  Pretendard-Regular.subset.woff2 한글 2,780자만 남긴 것
+```
+
+먼저 형식부터 정리된다. woff2는 폰트 데이터를 Brotli로 압축한 웹 전용 형식이고, 지금 쓰는 브라우저는 모두 지원한다. 같은 가변 폰트가 TTF로는 6.7MB, woff2로는 2.06MB다. 웹에 TTF나 OTF를 그대로 올릴 이유는 없다.
+
+다음은 가변 폰트(variable font)다. 가변 폰트는 굵기 같은 축을 파일 하나에 담아서, `font-weight`를 45부터 930까지 아무 값으로나 쓸 수 있게 한다. 위 출력의 `axes [('wght', 45.0, 930.0)]`가 그 축이다. 굵기 셋(400·500·700)을 정적 파일로 받으면 2,335,480바이트이고 가변 폰트 하나는 2,057,688바이트다. 굵기를 셋 이상 쓰면 가변 폰트가 이득이고, 하나만 쓴다면 정적 파일 하나(766KB)가 훨씬 가볍다. 쓰는 굵기를 먼저 세어 보는 게 순서다.
+
+마지막 줄이 이 글의 나머지 절반이다. 필요한 글자만 남기면(서브셋) 크기가 확 준다. 이건 뒤에서 자세히 본다.
+
+## 폰트는 CSS를 읽은 뒤에야 발견된다
+
+폰트 요청은 이미지보다 늦게 시작한다. 브라우저는 `@font-face`를 읽었다고 바로 받지 않는다. 그 폰트를 쓰는 요소가 실제로 화면에 있고 그 글자를 그려야 한다는 걸 스타일 계산에서 확인한 뒤에야 요청한다. 쓰지도 않을 폰트를 받지 않으려는 설계인데, 그만큼 발견이 늦다. 아래 그림에서 다음을 누르면 그 순서가 진행된다.
+
+<SequenceDiagram
+  caption="HTML, CSS, 스타일 계산을 다 거쳐야 폰트 요청이 나간다"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "sv", label: "서버" },
+    { id: "sc", label: "화면" },
+  ]}
+  steps={[
+    { from: "br", to: "sv", label: "GET /article", title: "HTML을 받는다", detail: "HTML에는 스타일시트 링크만 있다. 폰트 주소는 아직 어디에도 없다." },
+    { from: "br", to: "sv", label: "GET ext.css", title: "CSS를 요청한다", detail: "13ms에 요청이 나간다. 이 CSS 안에 @font-face가 들어 있다." },
+    { from: "sv", to: "br", label: "@font-face", title: "317ms, 폰트 규칙을 읽는다", detail: "PV라는 폰트가 /f/sub-one.woff2에 있다는 걸 이제 안다. 하지만 아직 요청하지 않는다." },
+    { from: "br", to: "br", label: "스타일 계산", title: "누가 이 폰트를 쓰는지 확인한다", detail: "body가 PV를 쓰고 그 안에 그릴 한글이 있다는 게 확인되면 그때 요청한다." },
+    { from: "br", to: "sv", label: "GET woff2", title: "319ms에야 폰트 요청", detail: "CSS 응답이 끝난 직후다. 폰트 응답에 200ms가 걸려 531ms에 도착한다." },
+    { from: "sv", to: "sc", label: "웹 폰트", title: "글자를 다시 그린다", detail: "preload를 걸었다면 12ms에 요청이 나가서 217ms에 이미 도착해 있었다." },
+  ]}
+/>
+
+실제로 쟀다. CSS 응답에 300ms, 폰트 응답에 200ms가 걸리게 하고 리소스 타이밍을 꺼냈다. `disc-preload.html`은 `<head>`에 폰트 preload를 하나 더 둔 것이다.
+
+```html
+<link rel="preload" href="/f/sub-one.woff2" as="font" type="font/woff2" crossorigin />
+```
+
+```text
+disc-none
+   /ext.css 13→317ms
+   /f/sub-one.woff2 319→531ms
+disc-preload
+   /f/sub-one.woff2 12→217ms
+   /ext.css 13→317ms
+```
+
+preload가 폰트 요청을 CSS와 나란히 세웠다. 폰트 도착이 531ms에서 217ms로 당겨졌다. 실제 사이트라면 CSS 앞에 HTML 응답 시간과 연결 시간이 더 붙으니 차이는 더 커진다.
+
+여기서 `crossorigin`은 빼면 안 된다. 폰트는 같은 출처에서 받더라도 CORS 모드로 요청된다. preload에 `crossorigin`이 없으면 preload는 일반 모드로 받아서, 정작 폰트를 쓸 때 모드가 안 맞아 재사용하지 못한다. 빼고 돌려 봤다.
+
+```text
+disc-preload-nocors
+   /f/sub-one.woff2 11→217ms
+   /ext.css 12→316ms
+   /f/sub-one.woff2 318→526ms
+   console: warning: A preload for 'http://localhost:18651/f/sub-one.woff2?delay=200' is found, but is not used because the request credentials mode does not match. Consider taking a look at crossorigin attribute.
+   warning: The resource http://localhost:18651/f/sub-one.woff2?delay=200 was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.
+```
+
+같은 파일을 두 번 받았고, 두 번째 요청은 preload가 없을 때와 같은 318ms에 나갔다. preload는 효과 없이 대역폭만 썼다. 콘솔에 이 경고가 보이면 `crossorigin`부터 확인한다.
+
+preload는 첫 화면 본문에 쓰는 폰트 한두 개에만 건다. 굵기마다, 서브셋마다 걸면 HTML·CSS·LCP 이미지와 대역폭을 다툰다. 그리고 뒤에서 볼 것처럼 크롬은 preload된 폰트를 첫 그리기 전에 잠깐 기다리기도 해서 FCP가 늦어질 수 있다.
+
+## 받는 동안 글자를 어떻게 보여 줄까
+
+폰트가 아직 없을 때 브라우저가 할 수 있는 일은 둘이다. 글자를 투명하게 그려 두고 기다리거나(FOIT, Flash of Invisible Text), 시스템 대체 폰트로 먼저 보여 주고 나중에 바꿔 끼우는 것(FOUT, Flash of Unstyled Text)이다. `@font-face`의 `font-display`가 이걸 고른다.
+
+`font-display`는 두 기간으로 정의된다. 블록 기간에는 글자를 투명하게 그리고 기다린다. 그 뒤 교체 기간에는 대체 폰트로 보여 주다가 폰트가 오면 바꾼다. 교체 기간도 지나면 폰트가 와도 바꾸지 않는다. 아래 그림은 `fallback`(블록 약 100ms, 교체 약 3초)에서 폰트가 1.5초에 도착하는 경우다.
+
+<AlgoTrace
+  caption="font-display: fallback에서 1.5초에 폰트가 도착하면"
+  memoryLabel="화면의 글자"
+  cells={["0ms", "100ms", "1.5s", "3s 이후"]}
+  steps={[
+    { pointer: 0, memory: ["투명"], caption: "폰트 요청이 나간다. 블록 기간이라 글자 자리는 잡아 두고 보이지 않게 그린다." },
+    { pointer: 1, memory: ["대체 폰트"], caption: "100ms가 지나도 폰트가 없다. 대체 폰트로 글자를 보여 준다. 실험에서 LCP가 132ms였다." },
+    { pointer: 2, found: [2], memory: ["웹 폰트"], caption: "1.5초에 도착했다. 아직 교체 기간이니 바꿔 끼운다. 글자 폭이 달라 문단이 짧아지고 아래가 당겨진다." },
+    { pointer: 3, memory: ["대체 폰트"], caption: "만약 3초가 지나서 왔다면 바꾸지 않는다. 이 페이지는 끝까지 대체 폰트로 남고, 다음 방문 때 캐시에서 쓴다." },
+  ]}
+/>
+
+값은 네 가지(`auto` 포함 다섯)다. 기간 길이는 명세가 권장하는 값이고, 크롬과 파이어폭스는 이를 따른다. `auto`는 브라우저 기본값인데 크롬과 파이어폭스는 `block`처럼 동작한다.
+
+| 값 | 블록 기간 | 교체 기간 | 1.5초 걸린 폰트에서 본 것 |
+|---|---|---|---|
+| `block` | 약 3초 | 무한 | 글자가 1.56초 동안 안 보였다 |
+| `swap` | 거의 0 | 무한 | 대체 폰트로 바로 보였다가 바뀌었다 |
+| `fallback` | 약 100ms | 약 3초 | 0.13초에 대체 폰트, 1.5초에 교체 |
+| `optional` | 약 100ms | 없음 | 대체 폰트로 끝까지 갔다 |
+
+표의 오른쪽 열은 실제 측정에서 왔다. 폰트 응답이 1.5초 걸리게 하고, 각 값으로 같은 글(제목과 문단 셋, 그 아래 120px 회색 상자)을 열었다. LCP는 PerformanceObserver로, CLS는 `layout-shift` 항목을 더해서, 마지막 줄은 회색 상자의 위쪽 위치다.
+
+```text
+fd-block                  font 22→1537    FCP   36  LCP [1560ms P]  CLS 0.1281  box top 662
+fd-swap                   font 31→1549    FCP   64  LCP [64ms P]  CLS 0.1281  box top 662
+fd-fallback               font 20→1533    FCP   40  LCP [132ms P]  CLS 0.1281  box top 662
+fd-optional               font 15→1521    FCP   44  LCP [44ms P]  CLS 0  box top 798
+fd-swap-fast              font 35→51      FCP   56  LCP [56ms P]  CLS 0.1281  box top 662
+```
+
+몇 가지가 눈에 띈다. `block`은 FCP가 36ms로 찍혔지만 LCP는 1,560ms다. 투명한 글자는 LCP 후보가 되지 않기 때문이다. FCP만 보고 있으면 사용자가 1.5초 동안 빈 화면을 본 걸 놓친다.
+
+`swap`과 `fallback`은 글자를 일찍 보여 주는 대신 CLS 0.1281을 냈다. 좋음 기준 0.1을 넘는다. 대체 폰트의 한글이 더 넓어서 문단 줄 수가 많았고, 웹 폰트로 바뀌자 회색 상자가 798px에서 662px로 136px 올라갔다.
+
+`fd-swap-fast`는 폰트가 51ms 만에 왔는데도 CLS가 똑같이 생겼다. 대체 폰트로 이미 한 번 그린 뒤에 도착했기 때문이다. "폰트가 빠르면 swap이어도 괜찮다"는 생각은 틀렸다. 빠르든 느리든 먼저 그린 뒤에 오면 밀린다.
+
+`optional`은 CLS가 0이지만 회색 상자가 798px, 즉 끝까지 대체 폰트였다. 폰트는 받아서 캐시에 넣어 두고, 다음 페이지부터 쓴다.
+
+## 대체 폰트를 웹 폰트 크기에 맞추기
+
+swap을 쓰면서 밀림을 없애는 방법이 있다. 대체 폰트를 웹 폰트와 같은 크기로 보이게 조정해 두면, 바꿔 끼워도 줄 수가 같아서 아무것도 움직이지 않는다. `@font-face`의 `size-adjust`가 글리프 크기를 비율로 키우거나 줄인다.
+
+비율은 재서 구한다. 같은 한글 문장을 16px로 두 폰트에 그려 너비를 쟀다.
+
+```text
+{
+  pv: 387.640625,
+  sans: 447.125,
+  wqy: 449.578125,
+  noto: 444,
+  liberation: 447.125
+}
+```
+
+`pv`가 Pretendard, `wqy`가 이 실험 환경에 깔린 한글 폰트(WenQuanYi Zen Hei)다. `sans`, `noto`, `liberation`은 각각 `sans-serif`, 설치되지 않은 Noto Sans KR, 한글이 없는 Liberation Sans를 지정한 것인데, 한글은 결국 시스템 대체 폰트로 그려져서 너비가 비슷하게 나왔다. 387.64 ÷ 449.58 = 0.862이니 대체 폰트를 86.2%로 줄이면 된다. 실제 사용자의 대체 폰트는 운영체제마다 다르다. macOS·iOS는 Apple SD Gothic Neo, 윈도는 맑은 고딕, 안드로이드는 Noto Sans CJK 계열이라 각각 재서 `local()`로 따로 정의하는 게 정확하다.
+
+```css
+/* 대체 폰트를 웹 폰트 크기에 맞춘 가짜 폰트 */
+@font-face {
+  font-family: "PV Fallback";
+  src: local("WenQuanYi Zen Hei");
+  size-adjust: 86.2%;
+}
+body {
+  font-family: "PV", "PV Fallback", sans-serif;
+}
+```
+
+```text
+fd-swap-adjusted          font 13→1521    FCP   32  LCP [32ms P]  CLS 0  box top 662
+```
+
+FCP는 swap과 같이 빠르고, CLS는 0이고, 회색 상자는 처음부터 662px에 있었다. 아래 그림에서 세 경우를 비교해 보자.
+
+<GeometryMorph
+  caption="390px 화면을 0.3배로 줄여 그렸다. 회색 상자가 문단 바로 아래에 있다"
+  width={320}
+  height={280}
+  shapes={[{ id: "screen", tone: "outline" }, { id: "text", tone: "series1" }, { id: "box", tone: "muted" }]}
+  steps={[
+    {
+      title: "대체 폰트로 먼저 그린다",
+      detail: "대체 폰트의 한글이 더 넓어서 줄이 많다. 회색 상자는 798px에서 시작한다.",
+      shapes: { screen: [[102, 10], [219, 10], [219, 263], [102, 263]], text: [[107, 15], [214, 15], [214, 249], [107, 249]], box: [[107, 249], [214, 249], [214, 263], [107, 263]] },
+      labels: [{ x: 50, y: 130, text: "대체 폰트", tone: "series1", size: "sm" }, { x: 268, y: 254, text: "798px", size: "sm" }],
+      focus: ["text"],
+    },
+    {
+      title: "웹 폰트로 바뀌며 밀린다",
+      detail: "문단이 짧아지고 상자가 136px 위로 올라간다. 이 움직임 하나가 CLS 0.1281이다.",
+      shapes: { screen: [[102, 10], [219, 10], [219, 263], [102, 263]], text: [[107, 15], [214, 15], [214, 209], [107, 209]], box: [[107, 209], [214, 209], [214, 245], [107, 245]] },
+      labels: [{ x: 50, y: 110, text: "웹 폰트", tone: "series1", size: "sm" }, { x: 268, y: 226, text: "136px 위로", tone: "accent", size: "sm" }],
+      focus: ["box"],
+    },
+    {
+      title: "크기를 맞춘 대체 폰트",
+      detail: "size-adjust 86.2%로 그린 대체 폰트는 처음부터 웹 폰트와 같은 줄 수다. 바뀌어도 상자는 662px에 그대로 있다.",
+      shapes: { screen: [[102, 10], [219, 10], [219, 263], [102, 263]], text: [[107, 15], [214, 15], [214, 209], [107, 209]], box: [[107, 209], [214, 209], [214, 245], [107, 245]] },
+      labels: [{ x: 50, y: 110, text: "맞춘 대체", tone: "series1", size: "sm" }, { x: 268, y: 226, text: "CLS 0", size: "sm" }],
+      focus: ["text", "box"],
+    },
+  ]}
+/>
+
+이 실험은 `line-height: 1.7`처럼 줄 높이를 숫자로 고정해서 너비만 맞추면 됐다. `line-height: normal`을 쓰면 줄 높이가 폰트의 ascent·descent 값으로 정해져서, 폰트가 바뀔 때 줄 높이도 바뀐다. 그때는 `ascent-override`, `descent-override`, `line-gap-override`로 대체 폰트의 세로 치수도 맞춘다. 위 fontTools 출력에서 Pretendard는 unitsPerEm 2048에 ascent 1950, descent 494라 각각 1em의 95.2%, 24.1%다. 크롬과 파이어폭스는 이 속성들을 지원하고, 사파리는 버전에 따라 지원 범위가 달라서 사파리에서는 너비만 맞고 높이는 안 맞을 수 있다.
+
+Next.js의 `next/font`는 이 계산을 자동으로 해서 대체 폰트용 `@font-face`를 만들어 준다. 그런데 기준이 되는 대체 폰트가 Arial이나 Times New Roman 같은 라틴 폰트다. 한글에는 그대로 통하지 않는다는 걸 직접 확인했다. Liberation Sans(Arial과 같은 치수의 폰트)에 `size-adjust: 50%`를 주고 영문과 한글의 너비를 쟀다.
+
+```text
+Latin  Hello World     plain 82.4px  size-adjust 50% 41.2px
+Hangul 안녕하세요 세계        plain 116.5px  size-adjust 50% 114.2px
+```
+
+영문은 정확히 절반이 됐지만 한글은 거의 그대로다. Liberation Sans에 한글 글리프가 없어서 한글은 그다음 시스템 폰트로 넘어가고, 그 폰트에는 `size-adjust`가 걸리지 않기 때문이다. 공백 하나만 줄었다. 한글 사이트에서 밀림을 막으려면 대체용 `@font-face`의 `local()`에 한글이 있는 폰트를 넣어야 한다.
+
+## 첫 방문은 대체 폰트로 끝내는 optional
+
+`optional`은 다른 방향의 답이다. 블록 기간 100ms 안에 폰트가 준비되면 쓰고, 아니면 그 페이지에서는 포기한다. 교체가 없으니 밀림도 없다. 대신 첫 방문자는 대체 폰트로 읽는다. 본문 가독성이 디자인보다 중요한 블로그나 문서 사이트에 어울린다.
+
+그런데 폰트가 빨리 와도 못 쓰는 경우가 있었다.
+
+```text
+fd-optional-fast          font 130→151    FCP  168  LCP [168ms P]  CLS 0  box top 798
+fd-optional-fast-preload  font 13→19      FCP   52  LCP [52ms P]  CLS 0  box top 662
+fd-swap-preload           font 10→1513    FCP  132  LCP [132ms P]  CLS 0.1281  box top 662
+```
+
+지연 없이 폰트를 주는데도 `fd-optional-fast`는 대체 폰트로 끝났다(상자 798px). 폰트 요청이 스타일 계산 뒤에야 나가고, 받은 woff2를 해석할 시간도 필요해서 첫 그리기에 맞추지 못한 것이다. 같은 페이지에 preload만 더하자 폰트가 19ms에 도착해 웹 폰트로 그려졌다. `optional`은 preload와 짝을 지어야 제 몫을 한다.
+
+세 번째 줄은 반대쪽 비용이다. 느린 폰트를 preload하면 `swap`인데도 FCP가 64ms에서 132ms로 늦어졌다. 크롬이 preload된 폰트를 첫 그리기 전에 잠깐 기다리기 때문이다. 이 실험에서는 약 100ms였다. 이 대기 동작은 브라우저와 버전에 따라 다르니, preload를 넣은 뒤에는 FCP가 늦어지지 않았는지 꼭 다시 잰다.
+
+## 필요한 글자만 받는 unicode-range
+
+한글 폰트를 가볍게 만드는 가장 큰 수단은 글자 수를 줄이는 것이다. 방법은 둘이다. 내가 쓰는 글자만 남긴 파일을 직접 만들거나(정적 서브셋), 폰트를 여러 조각으로 나누고 브라우저가 필요한 조각만 받게 하는 것(동적 서브셋)이다.
+
+동적 서브셋의 열쇠가 `unicode-range`다. 이 블로그가 쓰는 Pretendard 동적 서브셋 CSS의 `@font-face` 하나를 조각내 보자.
+
+<UrlAnatomy
+  caption="pretendardvariable-dynamic-subset.css의 [1]번 조각"
+  base="@font-face {"
+  separator=" "
+  joiner="; "
+  params={[
+    { key: "font-family", value: "'Pretendard Variable'", title: "같은 이름 92번", description: "92개의 @font-face가 모두 같은 이름을 쓴다. 브라우저 입장에서는 폰트 하나가 92조각으로 나뉘어 있는 셈이다.", required: true },
+    { key: "font-weight", value: "45 920", title: "굵기 범위", description: "가변 폰트라 굵기 하나가 아니라 범위를 적는다. 이 범위 안의 font-weight는 모두 이 파일로 그린다.", required: true },
+    { key: "font-display", value: "swap", title: "교체 방식", description: "패키지 기본값은 swap이다. 대체 폰트로 먼저 보이고, 조각이 도착할 때마다 그 글자들이 바뀐다." },
+    { key: "src", value: "url(...subset.1.woff2)", title: "이 조각의 파일", description: "92개 파일은 8KB부터 44KB까지, 가운데 값이 약 35KB다. 다 합치면 2,957,724바이트로 통짜 파일보다 크다." },
+    { key: "unicode-range", value: "U+d723-d728, ...", title: "이 조각이 맡은 글자", description: "페이지에 이 범위의 글자가 하나라도 있을 때만 이 파일을 받는다. 한글은 자주 쓰는 정도에 따라 여러 조각에 흩어져 있다.", code: "unicode-range: U+d723-d728, U+d72a-d733, U+d735-d748, ... U+f900-f909, U+f90b-f92e;", required: true },
+  ]}
+/>
+
+브라우저는 페이지에 그릴 글자를 하나씩 보고, 그 글자가 들어 있는 조각만 요청한다.
+
+<ConceptDiagram
+  caption="'CSS 성능'을 그리는 데 필요한 조각만 받는다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "txt", label: "CSS 성능", sub: "C S 공백 성 능", x: 200, y: 30, w: 130 },
+    { id: "br", label: "브라우저", sub: "글자마다 범위 확인", x: 200, y: 105, w: 150 },
+    { id: "s0", label: "[0] 라틴", sub: "U+0000-00FF", x: 55, y: 205, w: 96 },
+    { id: "s1", label: "[1] 가~", sub: "U+AC00-B9FF", x: 155, y: 205, w: 96 },
+    { id: "s2", label: "[2] 먀~", sub: "U+BA00-C7FF", x: 255, y: 205, w: 96 },
+    { id: "s3", label: "[3] 저~", sub: "U+C800-D7A3", x: 350, y: 205, w: 90 },
+  ]}
+  edges={[
+    { from: "txt", to: "br" },
+    { from: "br", to: "s0", label: "C S" },
+    { from: "br", to: "s1", label: "능" },
+    { from: "br", to: "s2", label: "성" },
+    { from: "br", to: "s3", dashed: true, arrow: "none" },
+  ]}
+/>
+
+그림의 조각 범위는 설명하려고 단순하게 나눈 것이다. 실제 Pretendard는 글자를 쓰는 빈도로 묶어서 92조각에 나눴다. 구글 폰트가 한중일 폰트를 수십~백여 개 조각으로 나누는 것과 같은 방식이다. Chromium에서 같은 CSS로 세 페이지를 열어 실제로 받은 폰트 파일을 셌다.
+
+```text
+ds-en.html     font files  1  bytes    37996  @font-face 92 (loaded 1)
+ds-ko.html     font files 13  bytes   339812  @font-face 92 (loaded 13)
+ds-full.html   font files 21  bytes   569268  @font-face 92 (loaded 21)
+full-ko.html   font files  1  bytes  2057688  @font-face 1 (loaded 1)
+```
+
+영문 두 문장만 있는 페이지는 조각 1개, 38KB만 받았다. [CSS 성능](/posts/css-performance) 글의 첫 세 문단(638자)은 13개, 340KB를 받았다. 그 글 전체를 넣으면 21개, 569KB다. 통짜 파일 2.06MB에 비하면 많이 줄었지만, 문단 세 개에 340KB는 적은 양이 아니다. 자주 쓰는 글자가 여러 조각에 흩어져 있어서 짧은 글도 조각을 여럿 건드린다. 요청 수가 13개로 늘어나는 것도 비용이다. HTTP/2 이상에서는 한 연결로 나란히 받으니 큰 문제는 아니지만, 조각이 도착하는 순서대로 글자가 바뀌어서 swap일 때 여러 번 깜빡일 수 있다.
+
+정적 서브셋은 반대 방향이다. 내 콘텐츠에 실제로 나오는 글자만 남긴다. 위 `css-performance` 글에 나오는 한글을 세어 보니 495자였고, 이 블로그의 글 585개 전체에 나오는 한글은 1,228자였다. fontTools의 `pyftsubset`으로 그 글자와 ASCII만 남겼다.
+
+```bash
+# 가변 폰트에서 one.txt에 든 글자만 남긴다
+pyftsubset PretendardVariable.woff2 --text-file=one.txt --flavor=woff2 --layout-features='*' --output-file=sub-one.woff2
+```
+
+```text
+126888  sub-one.woff2          가변, 한 글의 495자
+ 52960  sub-one-regular.woff2  Regular 하나, 같은 495자
+249180  sub-all.woff2          가변, 블로그 전체 1,228자
+```
+
+블로그 전체 글자를 다 담아도 가변 폰트 249KB다. 동적 서브셋으로 긴 글 하나를 읽을 때 받은 569KB보다 작다. 대신 새 글에 처음 나오는 글자가 생기면 다시 만들어야 하고, 댓글·검색어처럼 사용자가 입력하는 글자는 미리 알 수 없다. 서브셋에 없는 글자는 대체 폰트로 그려져서 한 단어 안에서 글꼴이 섞여 보인다. 그래서 콘텐츠가 정해진 사이트(랜딩 페이지, 빌드할 때 글이 정해지는 정적 블로그)는 정적 서브셋, 사용자 입력이 많은 서비스는 동적 서브셋이나 KS X 1001 서브셋(위의 267KB 파일)이 맞다. 둘을 섞는 방법도 있다. 제목용 굵은 폰트는 제목 글자만으로 서브셋하고, 본문은 동적 서브셋을 쓴다.
+
+브라우저가 조각을 고르는 규칙을 직접 짜 보자. 글자와 각 조각의 `unicode-range` 문자열을 받아, 받아야 할 조각의 번호를 오름차순으로 돌려준다. 범위는 `U+0000-00FF`(구간), `U+0131`(한 글자), `U+4??`(물음표 자리는 0~F 아무거나) 세 모양이 쉼표로 섞여 있다.
+
+<CodePlayground
+  caption="unicode-range로 받을 조각 고르기"
+  functionName="subsetsToLoad"
+  initialCode={`function subsetsToLoad(text, ranges) {\n  // ranges[i]: "U+0000-00FF, U+0131" 같은 i번 조각의 범위\n  // text에 나오는 글자가 하나라도 걸리는 조각 번호를 오름차순으로\n  return [];\n}`}
+  solution={`function subsetsToLoad(text, ranges) {\n  const parsed = ranges.map((r) =>\n    r.split(",").map((part) => {\n      const v = part.trim().replace(/^U\\+/i, "");\n      if (v.includes("?")) {\n        return [parseInt(v.replace(/\\?/g, "0"), 16), parseInt(v.replace(/\\?/g, "F"), 16)];\n      }\n      const [lo, hi = lo] = v.split("-");\n      return [parseInt(lo, 16), parseInt(hi, 16)];\n    })\n  );\n  const need = new Set();\n  for (const ch of text) {\n    const cp = ch.codePointAt(0);\n    parsed.forEach((spans, i) => {\n      if (spans.some(([lo, hi]) => cp >= lo && cp <= hi)) need.add(i);\n    });\n  }\n  return [...need].sort((a, b) => a - b);\n}`}
+  tests={[
+    { label: "영문만", args: ["Hello", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [0] },
+    { label: "가나다", args: ["가나다", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [1] },
+    { label: "CSS 성능", args: ["CSS 성능", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [0, 1, 2] },
+    { label: "폰트 최적화", args: ["폰트 최적화", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [0, 3] },
+    { label: "빈 문자열", args: ["", ["U+0000-00FF", "U+AC00-B9FF"]], expected: [] },
+    { label: "이모지는 아무 조각에도 없다", args: ["😀", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [] },
+    { label: "물음표 범위 U+4??", args: ["Ѐ", ["U+0000-00FF", "U+AC00-B9FF", "U+BA00-C7FF", "U+C800-D7A3", "U+4??"]], expected: [4] },
+    { label: "쉼표로 나열된 범위", args: ["Hi there", ["U+0020, U+0041-005A", "U+0061-007A"]], expected: [0, 1] },
+  ]}
+/>
+
+이모지 테스트는 실무와도 이어진다. 폰트에 없는 글자는 어떤 조각도 받지 않고 시스템 폰트로 그린다. 그래서 `unicode-range`는 낭비 없이 동작한다. `ch.codePointAt`을 쓰고 `for...of`로 도는 이유도 이모지 때문이다. 인덱스로 돌면 이모지 하나가 두 개의 서로게이트 코드로 쪼개진다.
+
+## 직접 호스팅과 폰트 CDN
+
+구글 폰트 같은 폰트 CDN은 CSS 한 줄로 서브셋과 형식 처리를 다 해 준다. 다만 요청 경로가 길어진다. 아래 그림에서 다음을 누르며 비교해 보자.
+
+<NetworkTopology
+  width={400}
+  height={240}
+  caption="폰트 CDN은 출처 두 개를 더 거친다"
+  zones={[
+    { id: "own", label: "내 출처", x: 150, y: 15, w: 240, h: 70, tone: "private" },
+    { id: "cdn", label: "폰트 CDN", x: 150, y: 100, w: 240, h: 125, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "br", label: "브라우저", x: 60, y: 120, icon: "client", w: 90 },
+    { id: "site", label: "내 서버", sub: "HTML·폰트", x: 270, y: 50, icon: "server", w: 100 },
+    { id: "css", label: "googleapis", sub: "CSS", x: 270, y: 135, icon: "server", w: 110 },
+    { id: "file", label: "gstatic", sub: "woff2", x: 270, y: 195, icon: "server", w: 100 },
+  ]}
+  links={[
+    { from: "br", to: "site" },
+    { from: "br", to: "css" },
+    { from: "br", to: "file" },
+  ]}
+  steps={[
+    { path: ["br", "site"], packet: "GET /", title: "HTML을 받는다", detail: "head에 fonts.googleapis.com의 CSS 링크가 있다." },
+    { path: ["br", "css"], packet: "GET css2", title: "새 출처라 연결부터 연다", detail: "DNS 조회, TCP, TLS를 새로 한다. 이 CSS도 렌더링을 막는다." },
+    { path: ["css", "br"], packet: "@font-face", title: "CSS 안에 폰트 주소가 있다", detail: "실제 파일은 또 다른 출처인 fonts.gstatic.com에 있다." },
+    { path: ["br", "file"], packet: "GET woff2", title: "또 새 연결을 연다", detail: "preconnect를 걸지 않았다면 여기서 연결 시간이 한 번 더 든다. 폰트는 CORS 모드라 preconnect에도 crossorigin이 필요하다." },
+    { path: ["br", "site"], packet: "GET woff2", highlight: ["own"], title: "직접 호스팅하면", detail: "HTML을 받은 연결을 그대로 쓴다. preload로 CSS와 나란히 받을 수도 있다." },
+  ]}
+/>
+
+예전에는 "여러 사이트가 같은 구글 폰트를 쓰니 사용자 브라우저에 이미 캐시돼 있을 것"이 CDN의 장점이었다. 지금은 아니다. 크롬은 86부터, 사파리는 그보다 먼저 HTTP 캐시를 최상위 사이트별로 나눠서, 다른 사이트에서 받은 폰트 파일을 내 사이트에서 재사용하지 않는다. 남는 장점은 편의와 자동 서브셋이다. 그래서 성능만 보면 직접 호스팅이 대개 낫다. 이 블로그도 `layout.tsx`에서 `pretendard` 패키지의 동적 서브셋 CSS를 import해서, 빌드할 때 CSS와 폰트 파일이 같은 출처로 나간다.
+
+CDN을 계속 쓴다면 두 출처에 미리 연결을 열어 둔다.
+
+```html
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+```
+
+폰트를 다른 출처에 직접 올릴 때(이미지 CDN, S3 같은 저장소)는 CORS 헤더를 빼먹기 쉽다. 폰트는 CORS 모드라서 `Access-Control-Allow-Origin` 없이 받으면 막힌다. 다른 포트의 서버에서 헤더 없이 줘 봤다.
+
+```text
+console: error: Access to font at 'http://127.0.0.1:18652/f/sub-one.woff2?nocors=1' from origin 'http://localhost:18651' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+error: Failed to load resource: net::ERR_FAILED
+```
+
+이미지나 CSS는 같은 조건에서 잘 받아지니, "폰트만 안 나온다"는 증상이면 이 헤더부터 본다.
+
+## 폰트 문제를 현장에서 좁히는 법
+
+증상별로 확인할 곳이 다르다.
+
+글자가 한참 안 보인다면 `font-display`가 빠져서 `auto`(블록 최대 3초)로 동작하는지 본다. 직접 쓴 `@font-face`뿐 아니라 아이콘 폰트나 외부 CSS의 `@font-face`도 확인한다. 구글 폰트는 URL에 `&display=swap`을 붙여야 `swap`이 들어간다.
+
+로딩 중에 글이 밀린다면 Performance 패널의 Layout Shifts 줄에서 밀린 시각이 폰트 응답이 끝난 시각과 겹치는지 본다. 겹치면 대체 폰트 크기 맞추기나 `optional`을 고려한다. 한글 사이트에서 `next/font`를 쓰는데도 밀린다면 대체 폰트 기준이 라틴 폰트라 한글에는 효과가 없는 경우다.
+
+어떤 폰트로 그려졌는지는 Elements 패널에서 요소를 고른 뒤 Computed 탭 맨 아래의 Rendered Fonts에서 볼 수 있다. 웹 폰트 이름 옆에 "Network resource", 시스템 폰트면 "Local file"로 나온다. 한 문단에 둘이 섞여 있으면 서브셋에 빠진 글자가 있다는 뜻이다.
+
+굵은 제목이 뭉개져 보인다면 그 굵기의 파일이 없어서 브라우저가 가짜 굵게(faux bold)를 만든 것이다. 정적 폰트를 400만 받고 700을 쓰면 생긴다. 굵기 파일을 추가하거나 가변 폰트를 쓰고, 가짜 굵게를 막으려면 `font-synthesis: none`을 준다.
+
+Network 패널의 Font 필터에서 같은 파일이 두 번 보이면 preload의 `crossorigin`을, 파일이 수십 개면 동적 서브셋을, 한 파일이 MB 단위면 woff2 변환과 서브셋을 본다.
+
+`local()`을 웹 폰트 `src`의 첫 번째에 두는 것도 조심한다. 사용자 컴퓨터에 같은 이름의 오래된 버전이 깔려 있으면 그걸 쓰게 돼서 글자 모양이나 굵기 범위가 달라진다. `local()`은 위에서처럼 대체 폰트를 정의할 때 쓰는 게 안전하다.
+
+## 면접에서 나올 만한 질문
+
+### FOIT와 FOUT의 차이는? font-display는 어떻게 고르나?
+
+FOIT는 폰트가 올 때까지 글자를 투명하게 숨기는 것이고, FOUT는 대체 폰트로 먼저 보여 주고 나중에 바꾸는 것이다. font-display는 블록 기간과 교체 기간의 길이로 둘 사이를 고른다. 본문은 빨리 읽히는 게 중요하니 swap이나 optional을 쓰고, 아이콘 폰트처럼 대체 글자가 엉뚱한 의미가 되는 경우만 block을 쓴다. 기본값 auto는 크롬·파이어폭스에서 최대 3초 블록이라 명시하는 게 좋다.
+
+### swap을 쓰면 왜 CLS가 생기고, 어떻게 막나?
+
+대체 폰트와 웹 폰트의 글자 폭이 다르면 바꿔 끼울 때 줄바꿈이 달라져 아래 내용이 밀린다. 실험에서 폰트가 51ms 만에 와도 이미 대체 폰트로 그린 뒤라 CLS 0.1281이 났다. 대체 폰트에 size-adjust(필요하면 ascent·descent override)를 줘서 웹 폰트와 같은 크기로 맞추면 CLS가 0이 됐다. 아니면 optional로 첫 방문에는 교체하지 않는다.
+
+### font-display: optional의 장단점은?
+
+블록 기간 약 100ms 안에 준비된 경우에만 웹 폰트를 쓰고 교체는 하지 않아서, FOIT도 밀림도 없다. 대신 첫 방문자는 대체 폰트로 보게 되고, 폰트는 캐시에 넣었다가 다음 페이지부터 쓴다. preload 없이 쓰면 폰트가 늦게 발견돼서 빨리 와도 놓치는 경우가 많았고, preload를 함께 걸자 첫 방문에도 웹 폰트로 그려졌다.
+
+### 폰트 preload에 crossorigin을 꼭 붙이는 이유는?
+
+폰트는 같은 출처에서도 CORS 모드로 요청되기 때문이다. crossorigin이 없는 preload는 다른 모드로 받아서 실제 폰트 요청이 그걸 재사용하지 못하고 한 번 더 받는다. 크롬은 "credentials mode does not match" 경고를 남긴다. 또 preload는 첫 화면 본문 폰트 한두 개에만 걸어야 다른 중요한 리소스와 대역폭을 다투지 않는다.
+
+### 한글 웹 폰트를 가볍게 하는 방법은?
+
+woff2로 바꾸고, 쓰는 굵기만 받고, 글자 수를 줄인다. 글자 수 줄이기는 콘텐츠의 글자만 남기는 정적 서브셋과, 폰트를 unicode-range 조각으로 나눠 필요한 조각만 받는 동적 서브셋이 있다. 정적 서브셋은 가장 작지만 새 글자나 사용자 입력을 못 담고, 동적 서브셋은 무엇이든 담지만 짧은 글에도 여러 조각과 수백 KB를 받을 수 있다. 실험에서 블로그 전체 1,228자 서브셋이 249KB, 동적 서브셋으로 긴 글 하나가 569KB였다.
+
+### 가변 폰트는 언제 이득인가?
+
+굵기 축을 파일 하나에 담아서 여러 굵기를 쓸 때 이득이다. Pretendard에서 정적 굵기 셋이 2.34MB, 가변 폰트 하나가 2.06MB였다. 굵기를 하나만 쓰면 정적 파일(766KB)이 훨씬 작으니 쓰는 굵기 수를 먼저 센다. 가변 폰트는 중간 굵기나 굵기 애니메이션도 쓸 수 있다.
+
+### 구글 폰트 CDN과 직접 호스팅 중 무엇이 빠른가?
+
+대개 직접 호스팅이다. CDN은 CSS용 출처와 파일용 출처에 새 연결을 열어야 하고 그 CSS도 렌더링을 막는다. 예전의 장점이던 사이트 간 캐시 공유는 크롬 86 이후 캐시 분할로 사라졌다. CDN을 쓴다면 두 출처에 preconnect를 걸고 display=swap을 붙인다. 직접 올릴 때 다른 출처라면 Access-Control-Allow-Origin 헤더를 빠뜨리지 않는다.

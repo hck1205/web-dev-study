@@ -1,0 +1,643 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("lighthouse-explained");
+
+같은 페이지에 Lighthouse를 여섯 번 연달아 돌렸다. 코드도 서버도 그대로인데 성능 점수가 42, 42, 43, 28, 42, 51로 나왔다. 28이 나온 회차를 PR 코멘트에 붙이면 "성능이 망가졌다"는 이야기가 되고, 51이 나온 회차를 붙이면 "조금 나아졌다"가 된다.
+
+점수를 믿으려면 이 숫자가 어디서 나오는지 알아야 한다. Lighthouse가 페이지를 어떤 조건으로 여는지, 느린 폰을 어떻게 흉내 내는지, 다섯 개의 시간을 어떤 식으로 0~100 사이 숫자 하나로 접는지를 차례로 본다. LCP·INP·CLS가 각각 무엇을 재는지와 실험실·현장 데이터의 차이는 [Core Web Vitals](/posts/core-web-vitals) 글에서 다뤘으니, 여기서는 Lighthouse라는 측정 도구 자체에 집중한다. 지표 하나하나를 브라우저 API로 직접 재고 고치는 이야기는 [성능 지표는 어떻게 재나](/posts/performance-metrics-measurement)로 이어진다.
+
+이 글의 숫자는 모두 npm으로 설치한 Lighthouse 13.5.0, Chromium 141(헤드리스), Node 22에서 직접 돌려 얻었다. 측정 대상은 일부러 느리게 만든 로컬 페이지(`/bad`)와 그걸 고친 페이지(`/good`)다. `/bad`는 800ms 늦게 오는 CSS, `<head>`에서 400ms 동안 메인 스레드를 붙잡는 동기 스크립트, `loading="lazy"`가 붙은 크기 없는 히어로 이미지, 1.2초 뒤에 끼어드는 배너를 갖고 있다.
+
+## Lighthouse가 페이지를 여는 순서
+
+Lighthouse는 Node 프로그램이다. 크롬을 직접 띄우거나 이미 떠 있는 크롬에 붙어서, 크롬 개발자 도구가 쓰는 것과 같은 통로인 CDP(Chrome DevTools Protocol)로 명령을 보낸다. 페이지를 열고, 그동안 브라우저 안에서 일어난 일을 기록(trace)으로 받아 와서, 그 기록을 분석해 점수를 낸다. 아래 그림에서 다음을 누르면 한 번의 실행이 진행된다.
+
+<SequenceDiagram
+  caption="Lighthouse 한 번 실행: 열고, 기록하고, 계산한다"
+  actors={[
+    { id: "lh", label: "Lighthouse" },
+    { id: "chrome", label: "Chrome" },
+    { id: "server", label: "페이지 서버" },
+  ]}
+  steps={[
+    {
+      from: "lh",
+      to: "chrome",
+      label: "CDP 연결",
+      title: "크롬에 붙는다",
+      detail: "원격 디버깅 포트로 크롬에 연결한다. CLI는 chrome-launcher로 크롬을 직접 띄우고, 개발자 도구의 Lighthouse 패널은 지금 열린 크롬을 쓴다.",
+    },
+    {
+      from: "lh",
+      to: "chrome",
+      label: "화면 흉내",
+      title: "모바일 기기처럼 꾸민다",
+      detail: "기본 설정은 모바일이다. 화면을 412×823, 화소 비율 1.75로 바꾸고 User-Agent도 안드로이드 폰 것으로 바꾼다.",
+      payload: "screenEmulation: { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75 }",
+    },
+    {
+      from: "lh",
+      to: "chrome",
+      label: "캐시 비우기",
+      title: "처음 온 사람처럼 만든다",
+      detail: "브라우저 캐시와 그 출처의 Service Worker, Cache Storage 같은 저장소를 지운다. 그래서 기본 측정은 항상 첫 방문 기준이다.",
+    },
+    {
+      from: "chrome",
+      to: "server",
+      label: "GET /bad",
+      title: "페이지를 연다",
+      detail: "기본 방식(simulate)에서는 이때 네트워크와 CPU를 늦추지 않는다. 내 컴퓨터의 실제 속도로 연다.",
+    },
+    {
+      from: "chrome",
+      to: "lh",
+      label: "trace, 네트워크 로그",
+      title: "기록을 넘겨받는다",
+      detail: "메인 스레드에서 돈 작업, 그려진 프레임, 모든 요청의 시작·끝 시각이 담긴 기록이다. 화면 스크린샷도 일정 간격으로 함께 받는다.",
+    },
+    {
+      from: "lh",
+      to: "lh",
+      label: "Lantern",
+      title: "느린 폰이었다면 몇 초였을지 계산한다",
+      detail: "기록에서 요청과 작업의 의존 관계 그래프를 만들고, 그 그래프를 RTT 150ms, 1.6Mbps, CPU 4배 느린 조건에서 다시 돌려 본다. 보고서의 시간은 이 계산 값이다.",
+    },
+    {
+      from: "lh",
+      to: "lh",
+      label: "감사, 점수",
+      title: "항목을 검사하고 점수를 낸다",
+      detail: "지표 다섯 개를 각각 0~1 점수로 바꾸고 가중 평균한다. 개선 힌트(Insights)와 진단(Diagnostics) 항목도 같은 기록에서 뽑는다.",
+    },
+  ]}
+/>
+
+4번과 6번 단계가 이 글의 절반이다. 기본 설정에서 Lighthouse는 페이지를 느리게 열지 않는다. 빠르게 열어 놓고, 느렸다면 어땠을지를 계산한다. 이 차이를 모르면 보고서의 숫자와 화면에서 본 체감이 왜 다른지 설명할 수 없다.
+
+명령줄에서는 이렇게 돌린다. 설치한 폴더에서 `npx`로 부르면 되고, 크롬 위치는 `CHROME_PATH` 환경 변수로 알려 준다. 리눅스 서버나 컨테이너처럼 화면이 없는 곳에서는 헤드리스로 띄운다.
+
+```bash
+npm i -D lighthouse
+
+# 성능 항목만, 결과는 JSON으로
+CHROME_PATH=/opt/pw-browsers/chromium npx lighthouse http://127.0.0.1:18850/bad \
+  --only-categories=performance \
+  --output=json --output-path=out/bad-1.json \
+  --chrome-flags="--headless=new --no-sandbox"
+```
+
+`--no-sandbox`는 root로 도는 컨테이너에서 크롬이 뜨지 않을 때만 붙인다. 평소 개발 PC에서는 빼는 게 맞다. 명령의 옵션을 눌러 보면 각각 무엇을 바꾸는지 나온다.
+
+<UrlAnatomy
+  caption="자주 쓰는 Lighthouse CLI 옵션"
+  base="lighthouse <url>"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "--only-categories",
+      value: "performance",
+      title: "성능만 본다",
+      description: "접근성, 권장사항, SEO 감사를 건너뛴다. 실행 시간이 줄고 JSON도 작아진다. 성능 회귀만 잡는 CI라면 이것만 켜도 된다.",
+    },
+    {
+      key: "--preset",
+      value: "desktop",
+      title: "데스크톱 기준으로 바꾼다",
+      description: "화면 1350×940, CPU 감속 없음, RTT 40ms·10Mbps 네트워크로 바꾸고, 점수 곡선도 데스크톱용으로 바꾼다. 빼면 모바일이 기본이다.",
+    },
+    {
+      key: "--throttling-method",
+      value: "simulate",
+      title: "느린 환경을 어떻게 만들지",
+      description: "simulate(기본)는 빠르게 열고 계산으로 늦춘다. devtools는 크롬에 실제로 네트워크·CPU 제한을 걸고 연다. provided는 아무것도 안 건다.",
+    },
+    {
+      key: "--output",
+      value: "json",
+      title: "결과 형식",
+      description: "html은 사람이 보는 보고서, json은 스크립트로 읽는 원본이다. 둘 다 원하면 --output=json --output=html처럼 두 번 쓴다.",
+    },
+    {
+      key: "--chrome-flags",
+      value: "\"--headless=new\"",
+      title: "크롬에 넘길 플래그",
+      description: "화면 없는 서버에서는 헤드리스로 띄운다. 확장 프로그램이 없는 깨끗한 프로필로 뜨는 것도 CLI의 장점이다.",
+    },
+  ]}
+/>
+
+## 세 가지 측정 방식
+
+Lighthouse는 무엇을 재느냐에 따라 세 방식으로 돈다. 보통 말하는 "Lighthouse 돌리기"는 첫 번째인 navigation이다.
+
+<ConceptDiagram
+  caption="측정 방식마다 잴 수 있는 것이 다르다"
+  width={560}
+  height={300}
+  nodes={[
+    { id: "nav", label: "navigation", sub: "페이지 열기", x: 100, y: 60, w: 150 },
+    { id: "span", label: "timespan", sub: "구간 기록", x: 100, y: 150, w: 150 },
+    { id: "snap", label: "snapshot", sub: "지금 상태", x: 100, y: 240, w: 150 },
+    { id: "load", label: "점수 5지표", sub: "FCP SI LCP TBT CLS", x: 430, y: 60, w: 210 },
+    { id: "inter", label: "TBT CLS INP", sub: "상호작용 구간", x: 430, y: 150, w: 210 },
+    { id: "dom", label: "DOM 감사", sub: "시간 지표 없음", x: 430, y: 240, w: 210 },
+  ]}
+  edges={[
+    { from: "nav", to: "load", label: "로딩" },
+    { from: "span", to: "inter", label: "클릭·스크롤" },
+    { from: "snap", to: "dom", label: "모달·메뉴" },
+  ]}
+/>
+
+navigation은 빈 탭에서 URL을 열고 로딩이 잦아들 때까지 기록한다. 처음 화면이 뜨는 과정을 재니 로딩 지표 다섯 개와 점수가 나온다. 대신 아무것도 누르지 않으니 INP는 없다.
+
+timespan은 기록 버튼을 누르고 멈출 때까지의 구간을 잰다. 그 사이에 버튼을 누르거나 스크롤하면 INP와 그 구간의 TBT, CLS가 나온다. snapshot은 지금 화면의 DOM을 한 번 검사한다. 모달을 연 상태의 접근성을 볼 때처럼 시간과 상관없는 감사만 돈다.
+
+세 방식을 한 번에 엮는 걸 user flow라고 한다. Node API에서 Puppeteer로 페이지를 조작하며 단계를 나눈다.
+
+```js
+import puppeteer from "puppeteer-core";
+import { startFlow } from "lighthouse";
+
+const browser = await puppeteer.launch({ executablePath: "/opt/pw-browsers/chromium", headless: "new" });
+const page = await browser.newPage();
+const flow = await startFlow(page, {
+  config: { extends: "lighthouse:default", settings: { onlyCategories: ["performance"] } },
+});
+
+await flow.navigate("http://127.0.0.1:18850/bad"); // 1. 페이지 열기
+await flow.startTimespan(); // 2. 구간 기록 시작
+await page.click("#buy"); //    200ms 걸리는 클릭 핸들러
+await new Promise((r) => setTimeout(r, 1000));
+await flow.endTimespan();
+await flow.snapshot(); // 3. 지금 상태 검사
+
+const result = await flow.createFlowResult();
+```
+
+단계마다 점수와 점수에 들어간 지표를 꺼내 보면 이렇게 나온다.
+
+```text
+navigation score 35 | weighted: first-contentful-paint=10 largest-contentful-paint=25 total-blocking-time=30 cumulative-layout-shift=25 speed-index=10
+    total-blocking-time 1,150 ms
+    cumulative-layout-shift 0.224
+    largest-contentful-paint 6.2 s
+timespan   score 97 | weighted: total-blocking-time=30 cumulative-layout-shift=25
+    interaction-to-next-paint 220 ms
+    total-blocking-time 160 ms
+    cumulative-layout-shift 0
+snapshot   score 0 | weighted:
+```
+
+timespan 줄이 재미있다. 클릭 하나가 220ms 걸려 INP 기준(200ms)을 넘겼는데 점수는 97이다. 이 버전의 timespan 점수는 TBT와 CLS만 가중치를 갖고, INP는 가중치가 0이라 점수에 안 들어간다. 구간 점수는 "나빠졌다/좋아졌다"를 보는 용도로만 쓰고, INP는 숫자 자체를 본다. snapshot의 0점은 가중치 있는 항목이 하나도 없어서 찍힌 값이라 의미가 없다.
+
+timespan과 snapshot은 페이지를 다시 열 수 없으니 계산으로 늦추는 simulate가 불가능하다. Lighthouse 코드에도 timespan이면 `simulate`를 `devtools`로 바꾸는 분기가 있고, 위 실행의 timespan 단계도 `throttlingMethod`가 `devtools`로 기록되어 있었다.
+
+## 느린 폰을 흉내 내는 세 가지 방법
+
+모바일 기본값은 설치된 Lighthouse의 설정 파일(`core/config/constants.js`와 Lantern 상수)에 그대로 적혀 있다. 이름은 `mobileSlow4G`다.
+
+```text
+mobileSlow4G: {
+  rttMs: 150,
+  throughputKbps: 1.6 * 1024,
+  requestLatencyMs: 150 * 3.75,
+  downloadThroughputKbps: 1.6 * 1024 * 0.9,
+  uploadThroughputKbps: 750 * 0.9,
+  cpuSlowdownMultiplier: 4,
+}
+```
+
+`rttMs`와 `throughputKbps`는 simulate가 계산에 쓰는 값이고, `requestLatencyMs`와 `downloadThroughputKbps`는 devtools 방식이 크롬에 실제로 거는 값이다. 같은 조건을 만들려고 보정 계수(3.75, 0.9)를 곱해 둔 것이다. 브라우저의 네트워크 제한은 요청 단위로 지연을 더하는 방식이라, 연결 수준의 RTT를 흉내 내려면 더 큰 값을 넣어야 비슷해진다.
+
+세 방법으로 같은 `/bad`를 재 봤다. simulate와 devtools는 다섯 번씩 돌렸고, 가운데 값에 가까운 회차를 옮겼다.
+
+```text
+                 점수  FCP    SI     LCP    TBT    CLS
+simulate          42  3741   5993   4416   625   0.299
+devtools          47  2984   4822   7721   202   0.341
+provided          76  2291   2346   2303   201   0.341
+```
+
+devtools는 실제로 느린 네트워크에서 여니 이미지가 오래 걸려 LCP가 7.7초로 가장 길다. 그런데 TBT는 simulate의 3분의 1이다. 이유를 알면 두 방식의 성격이 보인다.
+
+simulate는 관찰한 작업 시간에 CPU 배수 4를 그대로 곱한다. 보고서의 `long-tasks` 항목을 보면 400ms짜리 스크립트가 1645ms, 250ms짜리 타이머 작업이 1001ms로 늘어나 있다. devtools 방식은 크롬의 CPU 감속을 실제로 건다. 그런데 이 데모의 긴 작업은 `performance.now()`를 보며 정해진 시간만큼 도는 루프라서 CPU가 느려져도 길어지지 않는다. Playwright로 CPU 4배 감속을 걸고 두 종류의 루프를 재면 차이가 바로 보인다.
+
+```text
+rate 1 {"timeLoop":100,"fixedWork":47}
+rate 4 {"timeLoop":100,"fixedWork":194}
+```
+
+정해진 양의 계산(`fixedWork`)은 47ms가 194ms로 4배 늘었고, 시간을 채우는 루프(`timeLoop`)는 그대로 100ms다. 실제 앱의 코드는 대부분 일의 양이 정해져 있으니 둘 다 늘어난다. 데모를 만들 때 이런 루프로 "무거운 스크립트"를 흉내 내면 throttling 방식에 따라 결론이 뒤집힐 수 있다는 것도 함께 알아 둔다.
+
+아래 그림은 `/good` 페이지의 TBT 280ms가 어떻게 나왔는지 따라간다. 이 페이지는 FCP 뒤에 30ms짜리 작업 네 개를 돌린다.
+
+<AlgoTrace
+  caption="30ms 작업 네 개가 TBT 280ms가 되는 과정 (simulate)"
+  memoryLabel="막힌 시간"
+  cells={["30ms", "30ms", "30ms", "30ms"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["120-50=70"],
+      caption: "내 컴퓨터에서 30ms였던 작업을 CPU 4배 감속으로 120ms로 본다. 50ms를 넘은 70ms가 막힌 시간이다.",
+    },
+    {
+      pointer: 1,
+      memory: ["70", "70"],
+      caption: "두 번째 작업도 똑같이 120ms가 되고 70ms를 더한다.",
+    },
+    {
+      pointer: 2,
+      memory: ["70", "70", "70"],
+      caption: "세 번째. 원래 30ms라 긴 작업도 아니었는데, 느린 폰 기준으로는 긴 작업이 된다.",
+    },
+    {
+      pointer: 3,
+      memory: ["70", "70", "70", "70"],
+      caption: "네 번째까지 더한다.",
+    },
+    {
+      found: [0, 1, 2, 3],
+      memory: ["TBT 280ms"],
+      caption: "70 × 4 = 280ms. 보고서의 long-tasks에도 120ms짜리 light.js 작업이 네 개 찍혀 있다. FCP 전에 끝난 83ms 작업은 TBT 구간 밖이라 빠졌다.",
+    },
+  ]}
+/>
+
+내 노트북에서는 긴 작업이 하나도 없던 페이지가 Lighthouse에서는 TBT 280ms를 받는다. Lighthouse가 기준으로 삼는 건 내 노트북이 아니라 중저가 안드로이드 폰이기 때문이다. 이 페이지의 점수가 94에서 멈춘 것도 이 280ms 때문이다.
+
+세 방법을 고르는 기준은 이렇다. simulate는 빠르고 회차 사이 편차가 작아서 CI 기본값으로 좋다. 대신 계산 모델이라 Service Worker가 응답을 가로채는 페이지처럼 특이한 로딩이나, 요청 순서가 매번 달라지는 페이지에서는 실제와 어긋날 수 있다. devtools는 실제로 느리게 열어서 직관적이지만 오래 걸리고 측정하는 기계의 부하에 더 흔들린다. provided는 측정 환경이 이미 느린 경우, 예를 들어 진짜 저가 폰을 연결했거나 네트워크 제한을 OS 수준에서 걸어 둔 경우에 쓴다.
+
+## 다섯 개의 시간을 점수 하나로
+
+성능 점수는 지표 다섯 개의 가중 평균이다. 가중치는 설치한 버전의 `default-config.js`에 이렇게 적혀 있다.
+
+```text
+{id: 'first-contentful-paint', weight: 10, group: 'metrics', acronym: 'FCP'},
+{id: 'largest-contentful-paint', weight: 25, group: 'metrics', acronym: 'LCP'},
+{id: 'total-blocking-time', weight: 30, group: 'metrics', acronym: 'TBT'},
+{id: 'cumulative-layout-shift', weight: 25, group: 'metrics', acronym: 'CLS'},
+{id: 'speed-index', weight: 10, group: 'metrics', acronym: 'SI'},
+{id: 'interaction-to-next-paint', weight: 0, group: 'metrics', acronym: 'INP'},
+```
+
+TBT가 30으로 가장 크다. 메인 스레드를 막는 자바스크립트가 점수에 가장 크게 영향을 준다는 뜻이다. INP는 목록에 있지만 가중치가 0이다. navigation 측정에서는 아무도 누르지 않으니 INP를 잴 수 없고, TBT가 그 자리를 대신한다. Lighthouse CI가 묶어 쓰는 12.6.1의 설정에도 같은 숫자가 들어 있다. 버전이 바뀌면 가중치도 바뀔 수 있으니, 쓰는 버전의 `default-config.js`나 보고서 JSON의 `auditRefs`에서 직접 확인한다.
+
+지표 값은 바로 더할 수 없다. 단위가 밀리초와 비율로 다르니, 먼저 각 지표를 0~1 사이 점수로 바꾼다. 이때 쓰는 게 로그 정규 분포 곡선이다. 지표마다 두 개의 기준점이 있다. 값이 `p10`이면 0.9점, `median`이면 0.5점이 되도록 곡선을 맞춘다. 원래는 HTTP Archive에 쌓인 실제 사이트들의 분포에서 뽑은 값이라, `p10`은 "상위 10% 사이트 수준", `median`은 "중간 사이트 수준"에 가깝다.
+
+```text
+               모바일 p10   모바일 median   데스크톱 p10   데스크톱 median
+FCP             1800          3000            934            1600
+Speed Index     3387          5800           1311            2300
+LCP             2500          4000           1200            2400
+TBT              200           600            150             350
+CLS              0.1           0.25           0.1             0.25
+```
+
+모바일 LCP의 `p10`이 2.5초라서 Core Web Vitals의 "좋음" 기준과 같다. 그래서 LCP가 정확히 2.5초면 0.9점이다. 곡선은 꼬리가 길어서 기준을 조금 넘을 때는 점수가 빠르게 떨어지다가, 아주 나쁜 쪽에서는 천천히 0으로 다가간다. 4.4초와 8초는 둘 다 낮은 점수지만 차이가 생각보다 작다.
+
+JSON에서 지표 하나를 열어 보면 곡선의 기준점이 같이 들어 있다.
+
+```text
+{
+  "id": "largest-contentful-paint",
+  "score": 0.39,
+  "scoringOptions": {
+    "p10": 2500,
+    "median": 4000
+  },
+  "numericValue": 4415.8146,
+  "numericUnit": "millisecond",
+  "displayValue": "4.4 s"
+}
+```
+
+이 계산을 직접 다시 짜서 Lighthouse 점수와 맞춰 봤다. 곡선 식은 Lighthouse의 `shared/statistics.js`와 같은 방법을 따랐다. 오차 함수(erf)를 근사식으로 계산하고, 0.9 이상 점수에는 작은 보너스를 더한 뒤 소수 둘째 자리에서 버린다.
+
+```js
+function logNormalScore({ p10, median }, value) {
+  if (value <= 0) return 1;
+  const z = (Math.log(value / median) * 0.9061938024368232) / -Math.log(p10 / median);
+  let s = (1 - erf(z)) / 2;
+  if (value <= p10) s = Math.max(0.9, s); // 구간 경계를 지킨다
+  else if (value <= median) s = Math.min(Math.max(0.5, s), 0.89);
+  else s = Math.min(s, 0.49);
+  if (s > 0.9) s += 0.05 * (s - 0.9); // 90점 이상은 살짝 올려 준다
+  return Math.floor(s * 100) / 100;
+}
+```
+
+```text
+out/bad-1.json {"parts":{"FCP":0.28,"SI":0.46,"LCP":0.39,"TBT":0.48,"CLS":0.4},"score":42}
+out/good-1.json {"parts":{"FCP":1,"SI":1,"LCP":1,"TBT":0.79,"CLS":1},"score":94}
+```
+
+두 페이지 모두 Lighthouse가 낸 점수(42, 94)와 정확히 같다. 아래 그림에서 `/bad`의 지표 점수가 가중치를 곱해 쌓이는 과정을 보자.
+
+<AlgoTrace
+  caption="/bad 페이지의 점수 42가 쌓이는 과정"
+  memoryLabel="가중합"
+  cells={["FCP 0.28", "SI 0.46", "LCP 0.39", "TBT 0.48", "CLS 0.40"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["2.8"],
+      caption: "FCP 3.7초는 0.28점이다. 가중치 10을 곱해 2.8을 쌓는다.",
+    },
+    {
+      pointer: 1,
+      memory: ["2.8", "4.6"],
+      caption: "Speed Index 6.0초는 0.46점. 10을 곱해 4.6이다.",
+    },
+    {
+      pointer: 2,
+      memory: ["2.8", "4.6", "9.75"],
+      caption: "LCP 4.4초는 median 4초를 넘어서 0.39점. 가중치 25라 9.75다.",
+    },
+    {
+      pointer: 3,
+      memory: ["2.8", "4.6", "9.75", "14.4"],
+      caption: "TBT 625ms는 0.48점. 가중치가 30으로 가장 커서 여기서 가장 많이 잃는다.",
+    },
+    {
+      pointer: 4,
+      memory: ["2.8", "4.6", "9.75", "14.4", "10"],
+      caption: "CLS 0.299는 0.40점. 가중치 25로 10을 더한다.",
+    },
+    {
+      found: [0, 1, 2, 3, 4],
+      memory: ["41.55 → 42"],
+      caption: "합 41.55를 가중치 합 100으로 나누고 반올림해 42점이다. TBT를 0.9점까지 올리면 12.6점이 늘어난다.",
+    },
+  ]}
+/>
+
+마지막 단계가 실무에서 쓸모 있다. 어떤 지표를 고치면 점수가 얼마나 오르는지 미리 셈할 수 있다. `/bad`라면 TBT와 CLS가 가중치도 크고 점수도 낮아서 가장 남는 장사다. 같은 계산을 직접 짜 보자. 인자는 다섯 지표의 값이고, 모바일 곡선과 가중치를 쓴다. `erf`는 미리 넣어 두었다.
+
+<CodePlayground
+  caption="Lighthouse 성능 점수 직접 계산하기"
+  functionName="perfScore"
+  initialCode={`function perfScore(m) {\n  // m: { FCP, SI, LCP, TBT, CLS } (ms, CLS는 비율)\n  const curves = {\n    FCP: { p10: 1800, median: 3000, weight: 10 },\n    SI: { p10: 3387, median: 5800, weight: 10 },\n    LCP: { p10: 2500, median: 4000, weight: 25 },\n    TBT: { p10: 200, median: 600, weight: 30 },\n    CLS: { p10: 0.1, median: 0.25, weight: 25 },\n  };\n  // 1) 지표마다 로그 정규 곡선으로 0~1 점수 (소수 둘째 자리 버림)\n  // 2) 가중 평균 × 100을 반올림\n  return 0;\n}\n\nfunction erf(x) {\n  const sign = Math.sign(x);\n  x = Math.abs(x);\n  const t = 1 / (1 + 0.3275911 * x);\n  const y = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));\n  return sign * (1 - y * Math.exp(-x * x));\n}`}
+  solution={`function perfScore(m) {\n  const curves = {\n    FCP: { p10: 1800, median: 3000, weight: 10 },\n    SI: { p10: 3387, median: 5800, weight: 10 },\n    LCP: { p10: 2500, median: 4000, weight: 25 },\n    TBT: { p10: 200, median: 600, weight: 30 },\n    CLS: { p10: 0.1, median: 0.25, weight: 25 },\n  };\n  let sum = 0;\n  let total = 0;\n  for (const key of Object.keys(curves)) {\n    const { p10, median, weight } = curves[key];\n    const value = m[key];\n    let s;\n    if (value <= 0) {\n      s = 1;\n    } else {\n      const z = (Math.log(value / median) * 0.9061938024368232) / -Math.log(p10 / median);\n      s = (1 - erf(z)) / 2;\n      if (value <= p10) s = Math.max(0.9, s);\n      else if (value <= median) s = Math.min(Math.max(0.5, s), 0.89);\n      else s = Math.min(s, 0.49);\n      if (s > 0.9) s += 0.05 * (s - 0.9);\n      s = Math.floor(s * 100) / 100;\n    }\n    sum += s * weight;\n    total += weight;\n  }\n  return Math.round((sum / total) * 100);\n}\n\nfunction erf(x) {\n  const sign = Math.sign(x);\n  x = Math.abs(x);\n  const t = 1 / (1 + 0.3275911 * x);\n  const y = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));\n  return sign * (1 - y * Math.exp(-x * x));\n}`}
+  tests={[
+    { label: "/bad 1회차", args: [{ FCP: 3741, SI: 5993, LCP: 4416, TBT: 625, CLS: 0.299 }], expected: 42 },
+    { label: "/bad 4회차", args: [{ FCP: 3635, SI: 4724, LCP: 6161, TBT: 1150, CLS: 0.341 }], expected: 28 },
+    { label: "/bad 6회차", args: [{ FCP: 3627, SI: 3663, LCP: 4302, TBT: 625, CLS: 0.224 }], expected: 51 },
+    { label: "/good", args: [{ FCP: 640, SI: 833, LCP: 1354, TBT: 292, CLS: 0 }], expected: 94 },
+    { label: "모두 p10", args: [{ FCP: 1800, SI: 3387, LCP: 2500, TBT: 200, CLS: 0.1 }], expected: 90 },
+    { label: "모두 median", args: [{ FCP: 3000, SI: 5800, LCP: 4000, TBT: 600, CLS: 0.25 }], expected: 50 },
+    { label: "모두 0", args: [{ FCP: 0, SI: 0, LCP: 0, TBT: 0, CLS: 0 }], expected: 100 },
+  ]}
+/>
+
+"모두 p10" 테스트에서 경계 처리를 빼먹으면 89가 나온다. 근사식이 p10에서 0.8999…를 내기 때문이다. Lighthouse도 이 문제 때문에 구간마다 점수를 묶어 둔다.
+
+데스크톱은 곡선이 다르다. `/bad`를 `--preset=desktop`으로 쟀더니 94점이 나왔는데, 같은 값을 모바일 곡선에 넣으면 97점, 데스크톱 곡선에 넣으면 94점이다. 데스크톱 점수와 모바일 점수는 같은 자로 잰 숫자가 아니니 서로 비교하지 않는다.
+
+## 같은 페이지가 28점과 51점을 오간다
+
+처음 장면의 여섯 번을 지표까지 펼쳐 보면 이렇다. 같은 기계에서 연달아 돌렸다.
+
+```text
+bad-1.json   42 FCP 3741 SI 5993 LCP 4416 TBT 625 CLS 0.299
+bad-2.json   42 FCP 3689 SI 4762 LCP 4364 TBT 625 CLS 0.341
+bad-3.json   43 FCP 3674 SI 4655 LCP 4349 TBT 625 CLS 0.341
+bad-4.json   28 FCP 3635 SI 4724 LCP 6161 TBT 1150 CLS 0.341
+bad-5.json   42 FCP 3701 SI 4770 LCP 4376 TBT 625 CLS 0.341
+bad-6.json   51 FCP 3627 SI 3663 LCP 4302 TBT 625 CLS 0.224
+good-1~6     94 94 94 94 94 94
+```
+
+`/good`는 여섯 번 모두 94다. 흔들리는 건 `/bad`뿐이고, 흔들리는 지표도 정해져 있다. CLS는 0.224, 0.299, 0.341 세 가지 값이 나왔다. CLS는 simulate에서도 계산하지 않고 실제로 관찰한 값을 쓰는데, 이 페이지는 1.2초 타이머로 배너를 넣고 lazy 이미지는 레이아웃이 끝난 뒤 요청한다. 둘 중 무엇이 먼저 자리를 잡느냐에 따라 밀린 양이 매번 다르다. 4회차는 250ms 타이머 작업이 다른 시점에 잡히면서 TBT가 1150ms로 뛰었고, Lantern이 그 기록으로 그래프를 만들다 보니 LCP까지 6.2초가 됐다.
+
+정리하면 점수 편차의 큰 원인은 페이지 자체의 비결정성이다. 타이머와 네트워크 응답이 경주하는 코드, 광고와 A/B 테스트 스크립트, 응답 시간이 들쭉날쭉한 API가 있으면 결과도 그만큼 흔들린다. 그다음 원인은 측정하는 기계다. 보고서의 `environment.benchmarkIndex`는 Lighthouse가 측정 직전에 잰 기계 성능 점수인데, 같은 컨테이너에서도 1937, 2217, 2590처럼 회차마다 달랐다. 다른 프로세스가 CPU를 쓰는 CI 러너라면 더 흔들린다.
+
+줄이는 방법은 몇 가지로 정해져 있다.
+
+- 한 번 돌린 숫자로 판단하지 않는다. 3~5회 돌려 가운데 값(median)을 본다. Lighthouse CI의 `numberOfRuns`가 이 일을 한다.
+- 측정 기계를 고정한다. 같은 러너 타입, 다른 작업과 겹치지 않는 시간, 같은 Lighthouse 버전이다. 버전이 바뀌면 곡선이나 지표 정의가 바뀔 수 있다.
+- 페이지의 외부 변수를 줄인다. 실험실 측정용 환경에서는 광고·채팅 위젯을 끄거나, 고정된 응답을 주는 API를 쓴다.
+- 점수보다 지표를 본다. 점수는 곡선을 거친 값이라 기준점 근처에서 작은 변화가 크게 보인다. "LCP 4.3초 → 4.4초"가 "점수 43 → 42"보다 정직하다.
+
+## 보고서에서 먼저 볼 곳
+
+점수 아래에는 고칠 거리가 두 묶음으로 나온다. 13.5.0의 JSON에서 `/bad`의 성능 카테고리를 묶음별로 세면 metrics 5, insights 17, diagnostics 12, hidden 15다. 예전 보고서에는 "Opportunities"라는 묶음이 따로 있었지만, 버전이 올라오면서 크롬 개발자 도구 Performance 패널의 인사이트와 같은 항목들로 바뀌었다. 블로그 글이나 사내 문서의 화면이 지금 보고서와 다르면 버전부터 확인한다.
+
+`/bad`에서 통과하지 못한 항목만 꺼내면 이렇다. 마지막 칸은 그 항목을 고쳤을 때 줄어든다고 추정한 지표다.
+
+```text
+insights cache-insight | Use efficient cache lifetimes | Est savings of 610 KiB | {"FCP":0,"LCP":0}
+insights image-delivery-insight | Improve image delivery | Est savings of 718 KiB | {"FCP":0,"LCP":0}
+insights lcp-discovery-insight | LCP request discovery |  | {"LCP":0}
+insights render-blocking-insight | Render-blocking requests | Est savings of 2,860 ms | {"FCP":2850,"LCP":0}
+diagnostics unminified-javascript | Minify JavaScript | Est savings of 195 KiB | {"FCP":1050,"LCP":1200}
+diagnostics bootup-time | Reduce JavaScript execution time | 2.7 s | {"TBT":1150}
+diagnostics unsized-images | Image elements do not have explicit `width` and `height` |  | {"CLS":0}
+```
+
+순서를 정할 때는 이 추정치를 그대로 믿기보다 "점수에서 어디를 잃었나"와 맞춰 본다. 앞의 계산대로 `/bad`는 TBT와 CLS에서 가장 많이 잃었으니 `bootup-time`과 `unsized-images`, 그다음 FCP를 막는 `render-blocking-insight`가 먼저다. 캐시 수명 항목은 첫 방문만 재는 Lighthouse 점수에는 영향이 없다고 스스로 적어 두었다(`"FCP":0`). 재방문 사용자에게는 중요한 항목이지만 점수를 올리려고 먼저 손댈 일은 아니다.
+
+LCP 관련 인사이트는 원인을 꽤 직접적으로 짚는다. `lcp-discovery-insight`는 체크리스트 세 개를 모두 실패로 표시했다.
+
+```text
+fetchpriority=high should be applied        false
+Request is discoverable in initial document false
+LCP resources should not use loading=lazy   false
+<img id="hero" src="/hero-big.png" loading="lazy" alt="상품">
+```
+
+`lcp-breakdown-insight`는 LCP를 TTFB, 리소스 로드 지연, 로드 시간, 렌더 지연으로 나눠 준다. 각 조각의 의미는 [Core Web Vitals](/posts/core-web-vitals) 글에서 본 것과 같다. 주의할 건 숫자의 출처다.
+
+```text
+timeToFirstByte        9
+resourceLoadDelay   2197
+resourceLoadDuration  13
+elementRenderDelay   994
+```
+
+합이 3213ms인데, 보고서의 LCP는 4416ms였다. 인사이트는 시뮬레이션 전에 실제로 관찰한 기록에서 나왔기 때문이다. JSON의 `metrics` 항목에 있는 `observedLargestContentfulPaint`가 정확히 3213이다. TTFB 9ms, 이미지 다운로드 13ms라는 숫자는 로컬 서버라서 나온 값이고, 느린 폰에서 그만큼 빠르다는 뜻이 아니다. 조각 사이의 비율로 "어디가 이상한가"를 보는 데 쓰고, 절대값은 지표 칸의 숫자를 본다.
+
+자바스크립트가 얼마나 무거운지는 보고서 위쪽의 "View Treemap" 버튼으로 본다. 번들 안의 모듈별 크기와 사용되지 않은 바이트를 사각형 크기로 보여 주는 화면이다. 원본 데이터는 JSON의 `script-treemap-data` 항목에 있다. `/bad`에서는 `heavy.js` 200,078바이트 하나가 거의 전부였다. 소스맵이 함께 배포되어 있으면 모듈 단위까지 쪼개 보여 준다. 번들 크기를 줄이는 방법은 [번들 쪼개기](/posts/code-splitting)와 [번들러는 무엇을 하나](/posts/bundler-basics)에서 다룬다.
+
+## PR마다 Lighthouse를 돌린다
+
+점수를 가끔 손으로 재면 언제 나빠졌는지 모른다. Lighthouse CI(LHCI)는 PR마다 같은 조건으로 여러 번 재고, 정한 기준을 넘으면 CI를 실패시킨다. 아래 그림에서 다음을 누르면 PR 하나가 지나가는 길이 보인다.
+
+<NetworkTopology
+  caption="PR 하나가 Lighthouse CI를 지나가는 길"
+  width={640}
+  height={300}
+  zones={[
+    { id: "ci", label: "CI 러너", x: 150, y: 20, w: 330, h: 260, tone: "private" },
+  ]}
+  nodes={[
+    { id: "dev", label: "PR push", icon: "client", x: 70, y: 150 },
+    { id: "build", label: "빌드·서버", sub: "next start", icon: "server", x: 230, y: 80 },
+    { id: "collect", label: "lhci collect", sub: "3회 측정", icon: "container", x: 400, y: 80 },
+    { id: "assert", label: "lhci assert", sub: "기준 검사", icon: "firewall", x: 400, y: 220 },
+    { id: "store", label: "리포트 저장소", sub: "LHCI server", icon: "db", x: 570, y: 220 },
+    { id: "merge", label: "merge", icon: "gateway", x: 230, y: 220 },
+  ]}
+  links={[
+    { from: "dev", to: "build" },
+    { from: "build", to: "collect" },
+    { from: "collect", to: "assert" },
+    { from: "assert", to: "merge" },
+    { from: "assert", to: "store", dashed: true },
+  ]}
+  steps={[
+    {
+      path: ["dev", "build"],
+      packet: "commit",
+      title: "PR이 올라오면 빌드하고 띄운다",
+      detail: "개발 서버가 아니라 프로덕션 빌드를 띄워야 한다. 압축 안 된 개발 번들을 재면 의미 없는 숫자가 나온다.",
+    },
+    {
+      path: ["build", "collect"],
+      packet: "×3",
+      title: "같은 URL을 여러 번 잰다",
+      detail: "numberOfRuns만큼 Lighthouse를 돌려 결과를 .lighthouseci 폴더에 모은다.",
+    },
+    {
+      path: ["collect", "assert"],
+      packet: "LHR",
+      title: "기준과 비교한다",
+      detail: "점수 하한, 지표 상한, 리소스 크기 상한을 검사한다. error는 CI를 실패시키고 warn은 경고만 남긴다.",
+    },
+    {
+      path: ["assert", "merge"],
+      packet: "LCP 4.2s",
+      blocked: true,
+      title: "기준을 넘으면 막는다",
+      detail: "LCP가 2.5초를 넘었으니 이 PR은 상태 체크에서 실패한다. 어느 지표가 몇이었는지가 로그에 남는다.",
+    },
+    {
+      path: ["assert", "store"],
+      packet: "report",
+      title: "결과를 남긴다",
+      detail: "임시 공개 저장소, 파일 시스템, 직접 띄운 LHCI 서버 중 하나에 올린다. 서버를 쓰면 커밋별 추이를 그래프로 본다.",
+    },
+  ]}
+/>
+
+설정은 `lighthouserc.json` 하나다. 데모에서는 로컬 서버의 두 페이지를 세 번씩 쟀다. 아래 설정에서 크롬 경로와 헤드리스 플래그 같은 환경 설정 줄은 뺐다.
+
+```json
+{
+  "ci": {
+    "collect": {
+      "url": ["http://127.0.0.1:18850/good", "http://127.0.0.1:18850/bad"],
+      "numberOfRuns": 3,
+      "settings": { "onlyCategories": ["performance"] }
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["error", { "minScore": 0.9 }],
+        "largest-contentful-paint": ["error", { "maxNumericValue": 2500 }],
+        "cumulative-layout-shift": ["error", { "maxNumericValue": 0.1 }],
+        "total-blocking-time": ["warn", { "maxNumericValue": 200 }]
+      }
+    },
+    "upload": { "target": "filesystem", "outputDir": "./lhci-report" }
+  }
+}
+```
+
+```bash
+npm i -D @lhci/cli
+npx lhci autorun   # collect → assert → upload를 차례로 실행
+```
+
+`npx lhci autorun`을 돌리면 이렇게 나온다(색 코드는 지웠다).
+
+```text
+1 result(s) for http://127.0.0.1:18850/good :
+
+  ⚠️  total-blocking-time warning for maxNumericValue assertion
+        expected: <=200
+           found: 280
+      all values: 297, 280, 280
+
+4 result(s) for http://127.0.0.1:18850/bad :
+
+  ✘  categories.performance failure for minScore assertion
+        expected: >=0.9
+           found: 0.54
+      all values: 0.5, 0.54, 0.36
+
+  ✘  largest-contentful-paint failure for maxNumericValue assertion
+        expected: <=2500
+           found: 4245.9378
+      all values: 4326.0378, 4245.9378, 6169.9216
+
+Assertion failed. Exiting with status code 1.
+```
+
+`found` 값을 잘 봐야 한다. 점수는 세 번 중 가장 좋은 0.54, LCP도 가장 좋은 4245ms가 찍혔다. LHCI 단언의 기본 집계 방식이 `optimistic`이라서 그렇다. 소스(`@lhci/utils`의 `assertions.js`)를 보면 `aggregationMethod`의 기본값이 `'optimistic'`이고, 상한 검사에는 최솟값을, 하한 검사에는 최댓값을 고른다. 한 번이라도 기준을 통과하면 통과로 보는 셈이다. 편차 때문에 CI가 괜히 빨개지는 걸 막는 대신, 가끔 나빠지는 회귀는 놓친다. 가운데 값으로 보려면 단언마다 `"aggregationMethod": "median"`을 준다. 같은 기록에 median으로 다시 검사하면 점수가 0.5로 찍힌다.
+
+번들 크기 예산도 같은 단언으로 건다. 리소스 종류별 합계를 담은 `resource-summary` 항목을 쓴다.
+
+```json
+"resource-summary:script:size": ["error", { "maxNumericValue": 102400 }]
+```
+
+```text
+  ✘  resource-summary.script.size failure for maxNumericValue assertion
+        expected: <=102400
+           found: 200279
+```
+
+시간 지표는 흔들리지만 바이트 수는 흔들리지 않는다. CI에서 확실하게 막고 싶은 건 크기 예산으로, 시간 지표는 warn으로 추이를 보는 식으로 나누면 덜 시끄럽다.
+
+하나 더 확인할 게 있다. 설치한 `@lhci/cli` 0.15.1은 Lighthouse를 자체 의존성으로 들고 오는데, 그 버전이 12.6.1이었다. 같은 폴더에 따로 설치한 CLI는 13.5.0이다. 로컬에서 `npx lighthouse`로 잰 숫자와 CI 숫자가 미묘하게 다르다면 Lighthouse 버전부터 맞춰 본다. 보고서 JSON의 `lighthouseVersion`에 적혀 있다.
+
+## 실험실 점수와 실제 사용자
+
+Lighthouse는 정해진 조건에서 첫 방문 한 번을 재는 도구다. 실제 사용자의 기기, 캐시가 찬 재방문, 로그인 상태, 클릭 반응은 모른다. 현장의 숫자는 크롬 사용자 데이터를 모은 CrUX나 직접 모으는 RUM에서 나온다. PageSpeed Insights는 두 가지를 한 화면에 보여 주는데, 위쪽이 CrUX의 28일치 현장 데이터이고 아래쪽이 구글 서버에서 돌린 Lighthouse 결과다. 트래픽이 적은 페이지는 위쪽이 비어 있을 수 있다. 둘이 어긋날 때 무엇을 믿어야 하는지는 [Core Web Vitals](/posts/core-web-vitals) 글에서 이야기했다.
+
+정리하면 역할이 나뉜다. 현장 데이터로 "실제로 문제인가"를 판단하고, Lighthouse로 "무엇 때문인가"를 찾고 "고친 뒤 나아졌나"를 같은 조건에서 비교한다. 현장 데이터를 직접 모으는 방법은 [성능 지표는 어떻게 재나](/posts/performance-metrics-measurement)에서 이어 간다.
+
+## 점수를 잘못 읽는 흔한 경우
+
+`/bad`를 데스크톱 프리셋으로 재면 94점이다. 모바일로는 42점이던 페이지다. 데스크톱은 CPU 감속이 없고 네트워크도 빠르다. 점수 곡선은 오히려 더 엄격하지만, 측정값 자체가 훨씬 작게 나와서 점수가 높다. 사용자의 대부분이 모바일인 서비스에서 데스크톱 점수만 보고 "충분히 빠르다"고 하면 이런 착시가 생긴다.
+
+개발자 도구의 Lighthouse 패널로 잴 때는 확장 프로그램이 같이 돈다. 광고 차단기나 React DevTools가 스크립트를 주입하면 TBT가 늘거나 줄어든다. 시크릿 창이나 확장 없는 프로필에서 재거나, CLI를 쓴다. 다른 탭이 많이 열려 있어도 CPU를 나눠 쓰니 결과가 흔들린다.
+
+개발 서버를 재는 것도 흔한 실수다. `next dev`나 Vite 개발 서버는 압축하지 않은 코드, 모듈별 요청, 개발용 경고 코드를 보낸다. 측정은 항상 프로덕션 빌드에 한다.
+
+localhost를 재면 TTFB가 거의 0이고 CDN, 압축, HTTP/2 설정이 빠진다. 위 인사이트의 TTFB 9ms가 그 예다. 서버와 네트워크 쪽 문제를 보려면 실제 배포된 주소를 재야 한다.
+
+마지막으로 100점을 쫓는 일이다. 곡선 꼭대기는 거의 평평해서 94에서 100으로 가는 데 드는 노력에 비해 사용자가 느끼는 차이는 작다. `/good`의 남은 6점은 FCP 뒤에 도는 30ms 작업 네 개 때문인데, 실제 기기에서 이게 문제인지는 현장 INP를 보고 정할 일이다. 점수는 회귀를 잡는 경보로 쓰고, 목표는 현장 지표의 p75로 둔다.
+
+## 면접에서 나올 만한 질문
+
+### Lighthouse 성능 점수는 어떻게 계산되나요?
+
+지표 다섯 개를 각각 0~1 점수로 바꾼 뒤 가중 평균한다. 설치한 13.5.0 기준 가중치는 FCP 10, Speed Index 10, LCP 25, TBT 30, CLS 25다. 지표 점수는 HTTP Archive 분포에서 뽑은 두 기준점(p10이면 0.9점, median이면 0.5점)으로 맞춘 로그 정규 곡선에서 읽는다. 모바일과 데스크톱은 기준점이 달라서 점수끼리 비교하면 안 된다.
+
+### Lighthouse는 왜 INP 대신 TBT를 점수에 쓰나요?
+
+기본 측정인 navigation은 페이지를 열기만 하고 아무것도 누르지 않아서 INP를 잴 수 없다. TBT는 FCP 이후 메인 스레드가 50ms를 넘겨 막힌 시간의 합이라, 사용자가 그때 눌렀다면 얼마나 기다렸을지를 대신 보여 준다. 그래서 가중치도 30으로 가장 크다. 실제 클릭의 INP는 timespan 측정이나 현장 데이터로 본다.
+
+### simulate와 devtools throttling은 어떻게 다른가요?
+
+simulate는 페이지를 빠르게 연 뒤 기록에서 의존 그래프를 만들고, 느린 네트워크와 CPU 4배 감속 조건에서 Lantern으로 다시 계산한다. 빠르고 편차가 작아 기본값이다. devtools는 크롬에 네트워크·CPU 제한을 실제로 걸고 연다. 직관적이지만 오래 걸리고 측정 기계 부하에 더 흔들린다. timespan처럼 다시 열 수 없는 측정은 devtools 방식으로 바뀐다.
+
+### 같은 페이지인데 Lighthouse 점수가 매번 달라요. 왜 그렇고 어떻게 다루나요?
+
+대부분 페이지 자체의 비결정성 때문이다. 타이머와 네트워크 응답이 경주하거나, 광고·A/B 스크립트, 들쭉날쭉한 API가 있으면 관찰한 기록이 달라지고 시뮬레이션 결과도 갈린다. 측정 기계의 CPU 상태도 영향을 준다. 3~5회 돌려 가운데 값을 보고, 같은 러너와 같은 Lighthouse 버전으로 고정하고, 점수보다 지표 값의 추이를 본다.
+
+### Lighthouse CI에서 단언이 통과했는데 실제로는 느려진 경우가 있었습니다. 왜일까요?
+
+LHCI 단언의 기본 집계 방식이 optimistic이라 여러 번 잰 값 중 가장 좋은 값으로 검사하기 때문일 수 있다. 세 번 중 한 번만 좋아도 통과한다. 단언에 `aggregationMethod: "median"`을 주면 가운데 값으로 검사한다. 시간 지표는 흔들리니 warn으로 추이를 보고, 번들 크기처럼 흔들리지 않는 값은 `resource-summary` 단언으로 error를 거는 식으로 나누는 게 좋다.
+
+### Lighthouse 점수는 좋은데 사용자 지표가 나쁜 이유는요?
+
+Lighthouse는 정해진 기기·네트워크로 첫 방문 한 번을 잰 실험실 값이고, 실제 사용자는 더 느린 기기, 재방문, 로그인 상태, 클릭을 겪는다. 특히 INP는 실험실에서 재지 못한다. 데스크톱 프리셋이나 확장 프로그램이 켜진 브라우저, localhost에서 잰 점수라면 더 크게 어긋난다. 판단은 현장 p75로 하고, Lighthouse는 원인을 찾고 고친 뒤 비교하는 데 쓴다.
+
+### 보고서의 LCP 분해 숫자를 더해도 LCP 값이 안 나옵니다.
+
+인사이트는 시뮬레이션 전의 관찰 기록에서 계산하고, 지표 칸의 LCP는 Lantern이 계산한 값이라서다. JSON의 `observedLargestContentfulPaint`와 분해 합이 같다. 그래서 분해는 어느 조각이 비정상적으로 큰지 비율로 보고, 절대값은 지표 칸을 본다. 로컬에서 재면 TTFB와 다운로드 시간이 거의 0으로 나오는 것도 같은 이유다.

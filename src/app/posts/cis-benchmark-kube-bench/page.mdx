@@ -1,0 +1,533 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cis-benchmark-kube-bench");
+
+보안 점검 요청서에 숫자 하나가 적혀 온다. "kube-bench 결과 FAIL 32건, 다음 분기까지 0건으로." 결과 파일을 열면 `[FAIL]`이 줄줄이 붙은 영어 문장이 60줄 넘게 이어진다. 파일 권한, 플래그 이름, etcd 인증서. 무엇부터 고쳐야 하는지, 0건이 정말 목표가 맞는지는 적혀 있지 않다.
+
+이 글은 그 결과 파일을 읽는 법에서 시작한다. CIS Kubernetes Benchmark가 무엇을 재는지, kube-bench가 항목 하나를 어떻게 판정하는지, 흔한 FAIL을 실제로 고쳐서 PASS로 바꾸는 과정, 그리고 고치면 오히려 클러스터가 죽는 항목까지 본다. 실습은 Ubuntu 24.04 호스트에서 kwok의 바이너리 런타임으로 진짜 kube-apiserver·etcd·kube-controller-manager·kube-scheduler 프로세스(v1.33.0)를 띄우고 kube-bench v0.16.0을 돌렸다. kwok 노드는 가짜라 kubelet이 없어서, kubelet 항목의 출력은 따로 표시한다.
+
+CKS 시험 범위 안에서 이 글은 "클러스터 설정" 영역의 CIS 벤치마크를 맡는다. 시험 전체 구성은 [쿠버네티스 자격증](/posts/k8s-certifications)에 있고, 같은 시리즈로 [seccomp와 AppArmor 프로필](/posts/seccomp-apparmor), [컨테이너 공급망 보안](/posts/container-supply-chain-security), [Falco 런타임 탐지](/posts/falco-runtime-security)가 이어진다.
+
+## 점검표를 누가 만들고 무엇을 재나
+
+CIS(Center for Internet Security)는 운영체제, 데이터베이스, 클라우드, 쿠버네티스 같은 제품마다 "안전하게 설정하려면 이 값이어야 한다"는 권고 목록을 만들어 PDF로 낸다. 업계 사람들이 모여 합의로 정하고, 각 항목에 근거와 확인 방법, 고치는 방법이 붙는다. 보안 인증 심사나 고객사 점검에서 "CIS 기준을 따르나"를 묻는 이유가 이것이다. 누가 정했는지 설명할 수 있는 기준이기 때문이다.
+
+쿠버네티스 벤치마크는 노드 위의 파일과 프로세스 인자를 본다. 장마다 대상이 다르다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="CIS Kubernetes Benchmark의 장과 점검 대상"
+  nodes={[
+    { id: "cp", label: "컨트롤 플레인 노드", sub: "1장", x: 210, y: 40, w: 160 },
+    { id: "files", label: "1.1 설정 파일", sub: "권한·소유자", x: 70, y: 130, w: 120 },
+    { id: "api", label: "1.2 API 서버", sub: "플래그", x: 210, y: 130, w: 110 },
+    { id: "kcm", label: "1.3·1.4", sub: "kcm·스케줄러", x: 350, y: 130, w: 110 },
+    { id: "etcd", label: "2장 etcd", sub: "TLS·인증", x: 70, y: 240, w: 110 },
+    { id: "node", label: "4장 워커 노드", sub: "kubelet", x: 210, y: 240, w: 120 },
+    { id: "pol", label: "5장 정책", sub: "RBAC·PSS", x: 350, y: 240, w: 110 },
+  ]}
+  edges={[
+    { from: "cp", to: "files" },
+    { from: "cp", to: "api" },
+    { from: "cp", to: "kcm" },
+    { from: "api", to: "etcd", label: "클라이언트 인증서" },
+    { from: "api", to: "node", label: "kubelet 호출" },
+    { from: "api", to: "pol", dashed: true, label: "API로 확인" },
+  ]}
+/>
+
+3장(인증·로깅)은 대부분 사람이 문서를 보고 판단하는 항목이라 kube-bench 기본 대상에 없다. 1·2·4장은 노드에 들어가 `ps`와 `stat`으로 확인할 수 있고, 5장은 API 객체를 봐야 해서 거의 전부 수동 확인이다.
+
+항목마다 붙는 꼬리표 두 개를 먼저 알아야 결과를 읽을 수 있다. 하나는 Automated와 Manual이다. 명령 하나로 판정할 수 있으면 Automated, 사람이 상황을 보고 정해야 하면 Manual이다. 예전 판에서는 Scored와 Not Scored라고 불렀다. 다른 하나는 프로필 수준이다. Level 1은 서비스에 큰 영향 없이 대부분의 환경에 적용할 수 있는 항목, Level 2는 보안이 더 중요한 환경에서 기능을 일부 포기하고라도 거는 항목이다. 점검 요청서가 "FAIL 0건"을 말할 때는 보통 Level 1의 Automated 항목을 뜻한다고 범위를 먼저 맞추는 게 좋다.
+
+벤치마크는 쿠버네티스 버전마다 따로 나온다. kube-bench v0.16.0에 들어 있는 대응표를 보면 쿠버네티스 1.32부터 1.34까지는 CIS 1.12를 쓴다. 관리형 서비스는 컨트롤 플레인 노드에 들어갈 수 없으니 EKS, GKE, AKS용 벤치마크가 따로 있고, 1장 대부분이 빠진 채 노드와 정책만 본다.
+
+```bash
+# kube-bench에 들어 있는 벤치마크 판과 버전 대응표
+ls cfg/ | tr '\n' ' '
+grep -E '"1\.3[0-9]"' cfg/config.yaml
+```
+
+```text
+ack-1.0 aks-1.0 aks-1.7 aks-1.8 cis-1.10 cis-1.11 cis-1.12 cis-1.20 cis-1.23 cis-1.24 cis-1.24-microk8s cis-1.5 cis-1.6 cis-1.6-k3s cis-1.7 cis-1.8 cis-1.9 config.yaml eks-1.0.1 eks-1.1.0 eks-1.2.0 eks-1.5.0 eks-1.7.0 eks-1.8.0 eks-stig-kubernetes-v1r6 gke-1.0 gke-1.2.0 gke-1.6.0 gke-1.8.0 gke-1.9.0 k3s-cis-1.23 k3s-cis-1.24 k3s-cis-1.7 k3s-cis-1.8 k3s-cis-1.9 rh-0.7 rh-1.0 rh-1.4 rh-1.8 rh-1.9 rke-cis-1.23 rke-cis-1.24 rke-cis-1.7 rke2-cis-1.23 rke2-cis-1.24 rke2-cis-1.7 rke2-cis-1.8 rke2-cis-1.9 tkgi-1.2.53
+  "1.30": "cis-1.11"
+  "1.31": "cis-1.11"
+  "1.32": "cis-1.12"
+  "1.33": "cis-1.12"
+  "1.34": "cis-1.12"
+```
+
+한 번은 v0.13.0으로 먼저 돌렸는데, 그 판에는 1.33 항목이 없어서 kube-bench가 한 칸 아래인 1.32를 찾아 cis-1.11을 골랐다. 클러스터를 올린 뒤 kube-bench를 그대로 두면 옛 기준으로 점수를 매긴다. 결과 파일 위에 어느 판으로 쟀는지 적어 두는 이유다.
+
+## kube-bench가 한 항목을 판정하는 법
+
+kube-bench는 Aqua Security가 만든 오픈 소스 도구로, CIS 문서의 항목을 YAML로 옮겨 놓고 하나씩 실행한다. 판정은 생각보다 단순하다. 항목마다 셸 명령(audit)을 돌리고, 출력에서 플래그나 값을 찾아 비교한다. 아래 그림에서 다음을 누르면 `1.2.15 --profiling` 항목 하나가 판정되는 순서를 따라간다.
+
+<SequenceDiagram
+  caption="kube-bench가 1.2.15를 판정하는 순서"
+  actors={[
+    { id: "kb", label: "kube-bench" },
+    { id: "api", label: "API 서버" },
+    { id: "cfg", label: "cfg 파일" },
+    { id: "host", label: "노드 셸" },
+  ]}
+  steps={[
+    { from: "kb", to: "api", label: "GET /version", title: "버전부터 묻는다", detail: "kubeconfig로 API 서버 버전을 읽는다. 실패하면 kubectl version이나 kubelet --version으로 넘어간다.", payload: "Kubernetes version: \"1.33\" to Benchmark version: \"cis-1.12\"" },
+    { from: "kb", to: "cfg", label: "master.yaml", title: "판에 맞는 점검표를 연다", detail: "cfg/cis-1.12/master.yaml에서 항목 정의를 읽는다. $apiserverbin 같은 변수는 config.yaml에서 실제 이름으로 바뀐다." },
+    { from: "kb", to: "host", label: "ps -ef | grep", title: "audit 명령을 돌린다", detail: "항목에 적힌 셸 명령을 그대로 실행한다. 플래그 항목은 대부분 프로세스 목록을 grep하는 한 줄이다.", payload: "/bin/ps -ef | grep kube-apiserver | grep -v grep" },
+    { from: "host", to: "kb", label: "명령줄 출력", title: "출력에서 플래그를 찾는다", detail: "출력 한 줄에서 --profiling=값을 찾는다. 없으면 '없음'으로 본다." },
+    { from: "kb", to: "kb", label: "eq false?", title: "비교해서 판정한다", detail: "기대값과 같으면 PASS, 다르거나 없으면 FAIL이다. Manual 항목은 틀려도 WARN으로 적는다." },
+  ]}
+/>
+
+항목 정의를 열어 보면 그 순서가 그대로 적혀 있다. 조각을 누르면 각 필드가 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="cis-1.12/master.yaml의 항목 하나"
+  base="- id: 1.2.15"
+  separator=" "
+  joiner=" · "
+  params={[
+    { key: "text", value: "\"--profiling ... false\"", title: "결과 줄에 찍히는 문장", description: "CIS 문서의 항목 제목을 그대로 옮긴 것이다. 끝의 (Automated)·(Manual)이 판정 방식이다." },
+    { key: "audit", value: "ps -ef | grep $apiserverbin", title: "실제로 돌리는 셸 명령", description: "kube-bench는 이 명령의 출력만 본다. 프로세스가 컨테이너 안에 있어도 hostPID로 보이기만 하면 된다.", required: true, code: "/bin/ps -ef | grep kube-apiserver | grep -v grep" },
+    { key: "flag", value: "--profiling", title: "출력에서 찾을 이름", description: "명령줄에서 이 이름 뒤의 값을 꺼낸다. 파일 권한 항목은 permissions 같은 이름을 쓴다." },
+    { key: "op", value: "eq · false", title: "비교 연산", description: "eq(같다), has(쉼표 목록에 포함), bitmask(권한이 이보다 좁다), set(있다·없다) 같은 연산이 있다.", required: true },
+    { key: "remediation", value: "--profiling=false", title: "고치는 방법", description: "kubeadm 기준 경로로 적혀 있다. 다른 설치 도구라면 경로를 바꿔 읽는다." },
+    { key: "scored", value: "true", title: "점수에 들어가나", description: "true면 실패 시 FAIL, false면 실패해도 WARN으로 적는다." },
+  ]}
+/>
+
+이게 kube-bench를 읽을 때 알아야 할 거의 전부다. kube-bench는 클러스터의 실제 동작을 시험하지 않는다. 프로세스 명령줄과 파일 속성을 문자열로 본다. 그래서 동작은 안전한데 FAIL이 나오기도 하고, 동작은 위험한데 PASS가 나오기도 한다. 뒤에서 둘 다 실제로 나온다.
+
+## 기본값으로 띄운 컨트롤 플레인을 재 보면
+
+kwok이 기본 인자로 띄운 컨트롤 플레인에 kube-bench를 돌렸다. 노드에 직접 설치한 바이너리를 쓸 때는 이렇게 실행한다.
+
+```bash
+# kube-bench 바이너리와 cfg 디렉터리를 받아 컨트롤 플레인 노드에서 실행 (root 필요)
+sudo ./kube-bench run --targets master --config-dir ./cfg --config ./cfg/config.yaml > kb1.txt
+grep -E '^\[(PASS|FAIL|WARN)\] 1\.2\.(1[4-9]|30) ' kb1.txt
+tail -5 kb1.txt
+```
+
+```text
+[FAIL] 1.2.14 Ensure that the admission control plugin NodeRestriction is set (Automated)
+[FAIL] 1.2.15 Ensure that the --profiling argument is set to false (Automated)
+[FAIL] 1.2.16 Ensure that the --audit-log-path argument is set (Automated)
+[FAIL] 1.2.17 Ensure that the --audit-log-maxage argument is set to 30 or as appropriate (Automated)
+[FAIL] 1.2.18 Ensure that the --audit-log-maxbackup argument is set to 10 or as appropriate (Automated)
+[FAIL] 1.2.19 Ensure that the --audit-log-maxsize argument is set to 100 or as appropriate (Automated)
+[FAIL] 1.2.30 Ensure that the --service-account-extend-token-expiration parameter is set to false (Automated)
+== Summary total ==
+15 checks PASS
+32 checks FAIL
+13 checks WARN
+0 checks INFO
+```
+
+출력은 세 덩어리다. 위에 항목별 `[PASS]`·`[FAIL]`·`[WARN]`, 가운데 `== Remediations master ==` 아래 실패 항목마다 고치는 방법, 마지막에 개수. 32건 중 19건이 1.1절, 즉 파일 권한이었다. 그런데 이 클러스터에는 `/etc/kubernetes/manifests`가 아예 없다. kubeadm이 아닌 kwok이 띄웠기 때문이다. 왜 FAIL이 되는지는 JSON 출력이 알려 준다.
+
+```bash
+# 항목 하나만 JSON으로: 어떤 명령을 돌려 무엇을 받았나
+sudo ./kube-bench run --targets master --check 1.1.1 --json | jq '.Controls[0].tests[0].results[0] | {audit, actual_value, expected_result}'
+```
+
+```text
+{
+  "audit": "/bin/sh -c 'if test -e /etc/kubernetes/manifests/kube-apiserver.yaml; then stat -c permissions=%a /etc/kubernetes/manifests/kube-apiserver.yaml; fi'",
+  "actual_value": "",
+  "expected_result": "'permissions' is present"
+}
+```
+
+파일이 없으니 출력이 비고, 기대한 `permissions`가 없어 FAIL이다. kubeadm 클러스터에서는 이 파일들이 이미 600으로 만들어져 대부분 PASS가 나온다. 반대로 k3s, RKE2처럼 경로가 다른 배포판에 기본 cis 판을 돌리면 이런 거짓 FAIL이 쏟아진다. `--benchmark k3s-cis-1.8`처럼 배포판에 맞는 판을 고르는 게 결과를 읽기 전에 할 일이다.
+
+같은 결과를 실제 위험으로 읽으면 이렇다. 아래 그림은 기본 설정 클러스터를 밖에서 두드릴 때 열려 있는 문들이다. 다음을 누르면 경로가 하나씩 그려진다.
+
+<NetworkTopology
+  caption="FAIL 항목이 실제로 열어 두는 길"
+  width={440}
+  height={320}
+  zones={[
+    { id: "net", label: "클러스터 네트워크", x: 110, y: 20, w: 320, h: 290, tone: "private" },
+    { id: "cp", label: "컨트롤 플레인", x: 130, y: 45, w: 280, h: 120, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "atk", label: "Pod 안 공격자", x: 55, y: 230, icon: "client" },
+    { id: "api", label: "API 서버", sub: ":6443", x: 200, y: 105, icon: "server" },
+    { id: "etcd", label: "etcd", sub: ":2379", x: 340, y: 105, icon: "db" },
+    { id: "kubelet", label: "kubelet", sub: ":10250", x: 200, y: 250, icon: "server" },
+    { id: "pod", label: "다른 Pod", x: 340, y: 250, icon: "container" },
+  ]}
+  links={[
+    { from: "atk", to: "api" },
+    { from: "atk", to: "etcd", dashed: true },
+    { from: "atk", to: "kubelet" },
+    { from: "api", to: "etcd" },
+    { from: "kubelet", to: "pod" },
+  ]}
+  steps={[
+    { path: ["atk", "api"], packet: "GET /debug", title: "프로파일링 엔드포인트", detail: "--profiling이 켜져 있으면 /debug/pprof가 열린다. 권한이 있는 사용자라면 힙 덤프로 메모리 내용을 읽고, 무거운 프로파일로 부하를 줄 수 있다. 1.2.15다." },
+    { path: ["atk", "etcd"], packet: "GET /v3", title: "인증서 없는 etcd", detail: "2.1·2.2가 FAIL이면 etcd가 평문이거나 클라이언트 인증서를 묻지 않는다. 포트에 닿기만 하면 Secret을 포함한 모든 키를 읽는다." },
+    { path: ["atk", "kubelet", "pod"], packet: "exec", title: "익명으로 받는 kubelet", detail: "kubelet의 anonymous-auth가 true이고 인가가 AlwaysAllow면 10250 포트로 노드의 아무 컨테이너에서나 명령을 실행한다. 4.2.1·4.2.2다." },
+    { path: ["atk", "kubelet"], packet: "PATCH node", blocked: true, title: "NodeRestriction이 막는 길", detail: "kubelet 자격 증명을 훔쳐도 NodeRestriction이 켜져 있으면 자기 노드와 그 노드의 Pod 말고는 고치지 못한다. 1.2.14가 켜는 플러그인이다." },
+  ]}
+/>
+
+kubelet API가 무엇을 할 수 있는지는 공식 문서에 표로 있다. `/exec`, `/run` 같은 경로는 인가에서 `nodes/proxy`로 묶이고, 문서는 이 권한이 "노드에서 도는 아무 컨테이너에서 명령을 실행할 수 있는 API까지 포함한다"고 경고한다. 기본 설정의 kubelet은 다른 인증에 걸리지 않은 요청을 `system:anonymous`로 받고, 인가 기본값은 `AlwaysAllow`다. kubeadm은 kubelet 설정 파일에 이 둘을 꺼 두지만, 손으로 설치한 노드나 오래된 설치 스크립트는 그대로인 경우가 있다. 4장 항목을 먼저 보는 이유다.
+
+## 플래그 몇 줄로 FAIL 여섯 개를 지운다
+
+플래그 항목은 대부분 인자 하나로 고친다. kubeadm 클러스터라면 `/etc/kubernetes/manifests/kube-apiserver.yaml`의 `command:` 목록에 줄을 더하고, kubelet이 파일 변화를 감지해 API 서버를 다시 띄운다.
+
+<Callout kind="warning" title="정적 Pod 매니페스트를 고치기 전에">
+API 서버 매니페스트에 오타 하나가 있으면 API 서버가 뜨지 않고, kubectl도 같이 멈춘다. 고치기 전에 원본을 매니페스트 디렉터리 밖에 복사해 둔다. 디렉터리 안에 `.bak`으로 두면 kubelet이 그 파일까지 Pod로 읽으려 할 수 있다. 되돌릴 때는 복사본을 제자리에 덮어쓰고 `crictl ps`로 컨테이너가 다시 뜨는지 본다. 컨트롤 플레인이 여러 대면 한 대씩 바꾸고 확인한다.
+</Callout>
+
+```bash
+# 1) 바꾸기 전: 원본을 디렉터리 밖에 보관
+sudo cp /etc/kubernetes/manifests/kube-apiserver.yaml /root/kube-apiserver.yaml.orig
+
+# 2) 변경: command 목록에 플래그를 더한다 (vi로 직접 편집)
+#    - --profiling=false
+#    - --enable-admission-plugins=NodeRestriction
+#    - --service-account-extend-token-expiration=false
+sudo vi /etc/kubernetes/manifests/kube-apiserver.yaml
+
+# 3) 동작 확인: 컨테이너가 새로 떴는지, 오류가 없는지
+sudo crictl ps --name kube-apiserver
+sudo journalctl -u kubelet --since "5 min ago" | grep -i apiserver | tail
+
+# 4) 되돌리기: 원본을 덮어쓴다
+sudo cp /root/kube-apiserver.yaml.orig /etc/kubernetes/manifests/kube-apiserver.yaml
+```
+
+실습에서는 kwok 설정 파일로 같은 인자를 API 서버, 컨트롤러 매니저, 스케줄러에 넣고 클러스터를 다시 띄웠다.
+
+```yaml
+# kwok-hardened.yaml: 컴포넌트마다 인자를 더한다
+kind: KwokctlConfiguration
+apiVersion: config.kwok.x-k8s.io/v1alpha1
+componentsPatches:
+- name: kube-apiserver
+  extraArgs:
+  - { key: profiling, value: "false" }
+  - { key: enable-admission-plugins, value: NodeRestriction }
+  - { key: anonymous-auth, value: "false" }
+  - { key: service-account-extend-token-expiration, value: "false" }
+- name: kube-controller-manager
+  extraArgs:
+  - { key: profiling, value: "false" }
+  - { key: use-service-account-credentials, value: "true" }
+  - { key: bind-address, value: 127.0.0.1 }
+- name: kube-scheduler
+  extraArgs:
+  - { key: profiling, value: "false" }
+  - { key: bind-address, value: 127.0.0.1 }
+```
+
+```bash
+# 고치기 전과 후의 판정만 비교
+diff <(grep -E '^\[(PASS|FAIL|WARN)\]' kb1.txt) <(grep -E '^\[(PASS|FAIL|WARN)\]' kb2.txt)
+```
+
+```text
+22c22
+< [WARN] 1.2.1 Ensure that the --anonymous-auth argument is set to false (Manual)
+---
+> [PASS] 1.2.1 Ensure that the --anonymous-auth argument is set to false (Manual)
+35,36c35,36
+< [FAIL] 1.2.14 Ensure that the admission control plugin NodeRestriction is set (Automated)
+< [FAIL] 1.2.15 Ensure that the --profiling argument is set to false (Automated)
+---
+> [PASS] 1.2.14 Ensure that the admission control plugin NodeRestriction is set (Automated)
+> [PASS] 1.2.15 Ensure that the --profiling argument is set to false (Automated)
+51c51
+< [FAIL] 1.2.30 Ensure that the --service-account-extend-token-expiration parameter is set to false (Automated)
+---
+> [PASS] 1.2.30 Ensure that the --service-account-extend-token-expiration parameter is set to false (Automated)
+53,54c53,54
+< [FAIL] 1.3.2 Ensure that the --profiling argument is set to false (Automated)
+< [FAIL] 1.3.3 Ensure that the --use-service-account-credentials argument is set to true (Automated)
+---
+> [PASS] 1.3.2 Ensure that the --profiling argument is set to false (Automated)
+> [PASS] 1.3.3 Ensure that the --use-service-account-credentials argument is set to true (Automated)
+59c59
+< [FAIL] 1.4.1 Ensure that the --profiling argument is set to false (Automated)
+---
+> [PASS] 1.4.1 Ensure that the --profiling argument is set to false (Automated)
+```
+
+PASS가 15에서 22로 늘고 FAIL이 32에서 26으로 줄었다. 항목마다 의미가 다르다.
+
+`--use-service-account-credentials=true`는 컨트롤러 매니저 안의 컨트롤러들이 하나의 강한 자격 증명을 같이 쓰지 않고, 컨트롤러마다 따로 만든 ServiceAccount로 API를 부르게 한다. 컨트롤러 하나가 뚫려도 그 컨트롤러 권한만큼만 피해가 난다. `--service-account-extend-token-expiration=false`는 1시간짜리로 요청한 토큰이 옛 클라이언트 호환을 위해 1년까지 늘어나는 동작을 끈다. 이 동작이 왜 있는지는 [ServiceAccount 토큰](/posts/k8s-serviceaccount-tokens#1시간짜리-토큰이-1년을-사는-이유)에 있고, 끄기 전에 토큰을 다시 읽지 않는 오래된 클라이언트 라이브러리가 없는지 먼저 본다.
+
+1.2.16~1.2.19(감사 로그)는 플래그만 넣어서는 안 된다. 정책 파일과 로그를 쓸 볼륨이 같이 필요하고, 무엇을 얼마나 남길지 정해야 한다. 그 설계는 [감사 로그](/posts/k8s-audit-logging)에서 다룬다. 2장의 etcd TLS와 1.2.23·1.2.26(API 서버가 etcd에 인증서로 붙기)은 kubeadm이 기본으로 해 주는 일이고, 손으로 설치했다면 [인증서 글](/posts/k8s-certificates-pki)의 etcd CA 부분을 따라 만든다.
+
+파일 권한 항목은 `chmod` 한 줄이다. 실습에서는 kube-bench가 볼 경로를 바꿔 놓고 644 파일을 600으로 바꿔 봤다.
+
+```bash
+stat -c '%a %n' /etc/kubernetes/manifests/kube-apiserver.yaml
+sudo ./kube-bench run --targets master --check 1.1.1 --noremediations --nototals --nosummary | grep 1.1.1
+sudo chmod 600 /etc/kubernetes/manifests/kube-apiserver.yaml
+sudo ./kube-bench run --targets master --check 1.1.1 --noremediations --nototals --nosummary | grep 1.1.1
+```
+
+```text
+644 /etc/kubernetes/manifests/kube-apiserver.yaml
+[FAIL] 1.1.1 Ensure that the API server pod specification file permissions are set to 600 or more restrictive (Automated)
+[PASS] 1.1.1 Ensure that the API server pod specification file permissions are set to 600 or more restrictive (Automated)
+```
+
+etcd 데이터 디렉터리(1.1.11)도 같다. kwok이 만든 디렉터리는 750이었고 `chmod 700` 뒤 PASS로 바뀌었다. 바로 다음 항목 1.1.12(소유자 `etcd:etcd`)는 kubeadm 클러스터에서도 흔히 FAIL로 남는다. kubeadm의 etcd는 정적 Pod 안에서 root로 돌아서 `etcd` 사용자가 노드에 없기 때문이다. 이런 항목은 고치는 게 아니라 "이 환경에는 해당하지 않음"으로 기록할 대상이다.
+
+## 점검기는 첫 번째 플래그를 읽는다
+
+FAIL 두 개는 고쳤는데도 남았다. 컨트롤러 매니저와 스케줄러의 `--bind-address`다. 프로세스 명령줄을 보면 이유가 나온다.
+
+```bash
+# 스케줄러의 명령줄에서 bind-address만, 그리고 실제로 듣는 주소
+ps -eo args | grep '[k]ube-scheduler' | tr ' ' '\n' | grep bind
+ss -ltnp | grep kube-scheduler
+```
+
+```text
+--bind-address=0.0.0.0
+--bind-address=127.0.0.1
+LISTEN 0      4096       127.0.0.1:32762      0.0.0.0:*    users:(("kube-scheduler",pid=3320,fd=3))
+```
+
+kwok이 기본으로 넣는 `--bind-address=0.0.0.0` 뒤에 내가 더한 값이 붙었다. 쿠버네티스 컴포넌트의 플래그 파서는 같은 플래그가 두 번 오면 뒤의 값을 쓴다. 그래서 스케줄러는 실제로 127.0.0.1에서만 듣는다. kube-bench는 명령줄에서 처음 만난 값을 읽어 0.0.0.0으로 판정했다. 아래 그림은 같은 명령줄을 두 쪽이 다르게 읽는 과정이다.
+
+<AlgoTrace
+  caption="같은 명령줄, 다른 결론"
+  cells={["kube-scheduler", "--bind-address=0.0.0.0", "--secure-port=32762", "--profiling=false", "--bind-address=127.0.0.1"]}
+  memoryLabel="읽은 값"
+  steps={[
+    { pointer: 0, memory: [], caption: "프로세스 이름부터 읽는다. kube-bench의 audit도, 스케줄러의 파서도 여기서 시작한다." },
+    { pointer: 1, memory: ["kube-bench: 0.0.0.0", "파서: 0.0.0.0"], caption: "첫 bind-address. kube-bench는 여기서 값을 찾았으니 더 보지 않는다." },
+    { pointer: 2, memory: ["kube-bench: 0.0.0.0", "파서: 0.0.0.0"], caption: "다른 플래그는 bind-address와 상관없다." },
+    { pointer: 3, memory: ["kube-bench: 0.0.0.0", "파서: 0.0.0.0"], caption: "profiling=false도 읽고 지나간다." },
+    { pointer: 4, found: [4], memory: ["kube-bench: 0.0.0.0", "파서: 127.0.0.1"], caption: "두 번째 bind-address. 파서는 값을 덮어쓴다. 프로세스는 127.0.0.1에서 듣는데 점검 결과는 FAIL이다." },
+  ]}
+/>
+
+현장에서도 같은 일이 생긴다. Helm 차트나 설치 도구가 기본 인자를 넣고, 사람이 `extraArgs`로 같은 플래그를 더 넣으면 명령줄에 둘이 남는다. 지금 이 경우는 동작이 안전하고 점검만 틀렸지만, 순서가 반대면 점검은 PASS인데 실제로는 위험한 값으로 돈다. 플래그를 고친 뒤에는 kube-bench만 믿지 말고 `ss -ltnp`나 `curl`로 실제 동작을 한 번 확인한다. 같은 플래그가 두 번 나오면 원래 쪽을 지우는 게 맞는 해결이다.
+
+아래 편집기에서 kube-bench의 플래그 판정을 직접 짜 볼 수 있다. 명령줄 문자열에서 처음 나오는 플래그 값을 찾아 연산에 따라 `"PASS"`나 `"FAIL"`을 돌려준다.
+
+<CodePlayground
+  caption="kube-bench식 플래그 판정"
+  functionName="checkFlag"
+  initialCode={`// op: "eq" 값이 같다, "has" 쉼표 목록에 포함, "set" value가 true면 있어야, false면 없어야 PASS
+// 같은 플래그가 여러 번 나오면 처음 것만 본다 (kube-bench처럼)
+function checkFlag(cmdline, flag, op, value) {
+  return "FAIL";
+}`}
+  solution={`function checkFlag(cmdline, flag, op, value) {
+  let found;
+  for (const part of cmdline.split(/\\s+/)) {
+    if (part === flag) { found = ""; break; }
+    if (part.startsWith(flag + "=")) { found = part.slice(flag.length + 1); break; }
+  }
+  const present = found !== undefined;
+  if (op === "set") return present === value ? "PASS" : "FAIL";
+  if (!present) return "FAIL";
+  if (op === "eq") return found === String(value) ? "PASS" : "FAIL";
+  if (op === "has") return found.split(",").includes(value) ? "PASS" : "FAIL";
+  return "FAIL";
+}`}
+  tests={[
+    { label: "profiling=false", args: ["kube-apiserver --profiling=false --bind-address=0.0.0.0", "--profiling", "eq", "false"], expected: "PASS" },
+    { label: "NodeRestriction 포함", args: ["kube-apiserver --enable-admission-plugins=NamespaceLifecycle,NodeRestriction", "--enable-admission-plugins", "has", "NodeRestriction"], expected: "PASS" },
+    { label: "AlwaysPullImages 없음", args: ["kube-apiserver --enable-admission-plugins=NamespaceLifecycle,NodeRestriction", "--enable-admission-plugins", "has", "AlwaysPullImages"], expected: "FAIL" },
+    { label: "첫 값만 본다", args: ["kube-scheduler --bind-address=0.0.0.0 --bind-address=127.0.0.1", "--bind-address", "eq", "127.0.0.1"], expected: "FAIL" },
+    { label: "token-auth-file 없어야", args: ["kube-apiserver --profiling=false", "--token-auth-file", "set", false], expected: "PASS" },
+    { label: "token-auth-file 있음", args: ["kube-apiserver --token-auth-file=/etc/t.csv", "--token-auth-file", "set", false], expected: "FAIL" },
+    { label: "비슷한 이름에 속지 않기", args: ["kube-apiserver --profiling-extra=1", "--profiling", "eq", "false"], expected: "FAIL" },
+  ]}
+/>
+
+## 고치면 클러스터가 멈추는 항목
+
+1.2.1 `--anonymous-auth=false`는 Manual 항목이다. 그냥 켜면 안 되는 이유가 있다. API 서버는 익명 요청에 `/livez`, `/readyz`, `/healthz`를 보여 주는데, kubeadm이 만든 API 서버 정적 Pod의 프로브와 바깥 로드 밸런서의 헬스 체크가 바로 이 경로를 인증서 없이 부른다. 익명을 통째로 끄면 이렇게 된다.
+
+```bash
+# anonymous-auth=false로 띄운 API 서버를 인증 없이 두드린다
+curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:19310/livez
+```
+
+```text
+401
+```
+
+kubelet의 HTTP 프로브는 200~399만 성공으로 친다. 401이 이어지면 kubelet이 API 서버 컨테이너를 계속 재시작하고, 로드 밸런서는 모든 컨트롤 플레인을 빼 버린다. 1.32부터 베타로 기본 켜진(1.34에서 GA) `AuthenticationConfiguration`의 `anonymous` 설정을 쓰면 익명을 헬스 체크 경로에만 남길 수 있다.
+
+```yaml
+# authn.yaml: 익명은 헬스 체크 세 경로에만 (1.33은 v1beta1, 1.34부터 v1)
+apiVersion: apiserver.config.k8s.io/v1beta1
+kind: AuthenticationConfiguration
+anonymous:
+  enabled: true
+  conditions:
+  - path: /livez
+  - path: /readyz
+  - path: /healthz
+```
+
+```bash
+# --authentication-config=authn.yaml로 띄운 뒤 경로별 응답 코드
+for p in /livez /readyz /version /api/v1/namespaces; do
+  printf '%-22s %s\n' $p "$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:19310$p)"
+done
+```
+
+```text
+/livez                 200
+/readyz                200
+/version               401
+/api/v1/namespaces     401
+```
+
+헬스 체크는 살고, 버전 정보와 API는 막혔다. 1.33의 API 서버에 `apiserver.config.k8s.io/v1`으로 적었더니 `no kind "AuthenticationConfiguration" is registered for version "apiserver.config.k8s.io/v1"`을 내고 뜨지 않았다. 판 이름도 클러스터 버전에 맞춰야 한다. 그리고 이 설정 파일을 쓰면 `--anonymous-auth` 플래그는 같이 쓸 수 없어서, kube-bench는 여전히 1.2.1을 WARN으로 적는다.
+
+```text
+[WARN] 1.2.1 Ensure that the --anonymous-auth argument is set to false (Manual)
+```
+
+더 안전하게 고쳤는데 점검표는 바뀌지 않는다. 점검표의 목적을 이해하고 같은 위험을 다른 방법으로 막았다면, 그 근거를 적어 예외로 남기는 게 맞다.
+
+비슷한 항목이 몇 개 더 있다. 1.2.11 `AlwaysPullImages`는 Pod를 띄울 때마다 레지스트리에서 이미지를 다시 확인하게 해서, 노드에 캐시된 남의 비공개 이미지를 자격 증명 없이 쓰는 걸 막는다. 대신 레지스트리가 잠깐 멈추면 새 Pod가 전부 `ImagePullBackOff`에 걸린다. 1.2.9 `EventRateLimit`은 설정 파일 없이 켜면 API 서버가 뜨지 않는다. 실습에서 플러그인 이름만 넣었더니 API 서버 로그에 이 줄을 남기고 멈췄다.
+
+```text
+E1022 01:34:00.212609    1385 run.go:72] "command failed" err="failed to apply admission: couldn't init admission plugin \"EventRateLimit\": limits: Invalid value: []eventratelimit.Limit(nil): must not be empty"
+```
+
+`--admission-control-config-file`로 제한값을 담은 파일을 함께 줘야 한다. 1.2.4·1.2.5(API 서버가 kubelet 인증서를 검증)는 kubelet의 서빙 인증서가 기본으로 자체 서명이라 kubeadm도 켜 두지 않는다. kubelet에 `serverTLSBootstrap: true`를 주고 CSR을 승인하는 흐름을 먼저 갖춰야 한다.
+
+## 노드 쪽은 kubelet 설정 파일에서
+
+4장은 워커 노드마다 돌린다. 실습 환경에는 진짜 kubelet이 없어서 아래 설정은 실행하지 않았고, 점검 항목의 이름은 kube-bench v0.16.0의 `cis-1.12/node.yaml`에서 옮겼다.
+
+```bash
+# 4.2절 항목 목록 (node.yaml에서 id와 문장만)
+grep -E '^\s+- id: 4\.|^\s+text:' cfg/cis-1.12/node.yaml | paste - - | sed 's/ \+/ /g' \
+  | grep -E 'id: 4\.2\.(1|2|3|4|5|10|13|14)\s'
+```
+
+```text
+ - id: 4.2.1	 text: "Ensure that the --anonymous-auth argument is set to false (Automated)"
+ - id: 4.2.2	 text: "Ensure that the --authorization-mode argument is not set to AlwaysAllow (Automated)"
+ - id: 4.2.3	 text: "Ensure that the --client-ca-file argument is set as appropriate (Automated)"
+ - id: 4.2.4	 text: "Verify that if defined, the --read-only-port argument is set to 0 (Manual)"
+ - id: 4.2.5	 text: "Ensure that the --streaming-connection-idle-timeout argument is not set to 0 (Manual)"
+ - id: 4.2.10	 text: "Ensure that the --rotate-certificates argument is not set to false (Automated)"
+ - id: 4.2.13	 text: "Ensure that a limit is set on pod PIDs (Manual)"
+ - id: 4.2.14	 text: "Ensure that the --seccomp-default parameter is set to true (Manual)"
+```
+
+플래그 이름으로 적혀 있지만 요즘 kubelet은 `/var/lib/kubelet/config.yaml`의 `KubeletConfiguration`으로 설정한다. kube-bench도 플래그가 없으면 이 파일의 같은 필드를 찾는다. 항목을 필드로 옮기면 이렇다.
+
+```yaml
+# /var/lib/kubelet/config.yaml 중 4.2절에 해당하는 부분
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+authentication:
+  anonymous:
+    enabled: false          # 4.2.1 익명 요청은 401
+  webhook:
+    enabled: true           # 토큰을 API 서버의 TokenReview로 확인
+  x509:
+    clientCAFile: /etc/kubernetes/pki/ca.crt   # 4.2.3
+authorization:
+  mode: Webhook             # 4.2.2 SubjectAccessReview로 API 서버에 물어본다
+readOnlyPort: 0             # 4.2.4 인증 없는 10255 포트를 닫는다
+rotateCertificates: true    # 4.2.10 클라이언트 인증서 자동 갱신
+podPidsLimit: 4096          # 4.2.13 포크 폭탄 하나가 노드를 멈추지 않게
+seccompDefault: true        # 4.2.14 모든 Pod 기본 seccomp를 RuntimeDefault로
+```
+
+```bash
+# 바꾼 뒤 kubelet 재시작과 확인 (노드마다)
+sudo systemctl restart kubelet
+sudo systemctl status kubelet --no-pager | head -5
+# 익명으로 kubelet API를 두드리면 401이어야 한다
+curl -sk -o /dev/null -w '%{http_code}\n' https://127.0.0.1:10250/pods
+```
+
+`seccompDefault: true`는 Pod에 seccomp를 적지 않은 경우의 기본을 바꾼다. 막히는 시스템 콜을 쓰는 앱이 있으면 그 노드에서만 깨지므로, 노드 풀 하나에 먼저 켜 보고 넓힌다. 어떤 앱이 깨지는지 미리 찾는 방법은 [seccomp와 AppArmor 프로필](/posts/seccomp-apparmor)에서 다룬다.
+
+## 클러스터 안에서 Job으로 돌리기
+
+노드에 하나씩 들어가 바이너리를 돌리는 대신, 저장소의 `job.yaml`을 Job으로 띄우는 방법이 있다. kube-bench는 노드의 프로세스와 파일을 봐야 하므로 Pod가 `hostPID: true`로 노드의 프로세스 목록을 보고, `/etc/kubernetes`, `/var/lib/kubelet`, `/var/lib/etcd` 같은 경로를 hostPath로 읽기 전용 마운트한다.
+
+```bash
+# 워커 노드 점검 Job (컨트롤 플레인을 보려면 nodeSelector와 toleration을 더한다)
+kubectl apply -f https://raw.githubusercontent.com/aquasecurity/kube-bench/main/job.yaml
+kubectl wait --for=condition=complete job/kube-bench --timeout=120s
+kubectl logs job/kube-bench > node-report.txt
+```
+
+이 Pod 자체가 강한 권한이다. hostPID로 노드의 모든 프로세스 인자를 보는데, 거기에는 플래그로 넘긴 비밀값이 섞여 있을 수 있다. 점검이 끝나면 Job을 지우고, Pod Security Admission이 `restricted`인 네임스페이스에서는 뜨지 않으니 점검용 네임스페이스를 따로 둔다. 관리형 클러스터는 `job-eks.yaml`, `job-gke.yaml`처럼 플랫폼별 Job을 쓴다.
+
+CI나 정기 점검에 걸 때 쓰는 옵션은 셋이다.
+
+```bash
+# 1.2절만, 예외로 인정한 항목은 건너뛰고, FAIL이 있으면 종료 코드 2
+sudo ./kube-bench run --targets master --group 1.2 --skip 1.2.1,1.2.4,1.2.5 \
+  --exit-code 2 --noremediations --noresults
+echo "exit=$?"
+```
+
+```text
+== Summary master ==
+11 checks PASS
+9 checks FAIL
+7 checks WARN
+3 checks INFO
+...
+exit=2
+```
+
+`--skip`으로 뺀 세 항목은 사라지지 않고 INFO로 바뀌어 남는다. 예외로 둔 항목이 기록에서도 보이도록 한 동작이다. `--json`이나 `--junit`으로 내보내면 대시보드나 CI 테스트 리포트로 바로 가져갈 수 있다.
+
+## 점검표를 쓰는 순서
+
+결과 파일 하나를 받았을 때 보는 순서를 정리하면 이렇다. 어느 판으로 쟀는지(버전 대응, 배포판 전용 판)를 먼저 확인한다. 1.1절 FAIL이 무더기면 경로가 맞는지 JSON의 `audit`과 `actual_value`로 본다. 그다음 위험이 큰 순서로 고친다. 밖에서 닿을 수 있는 문(kubelet 익명·인가, etcd 인증서, 프로파일링)이 먼저고, 감사 로그와 암호화처럼 설계가 필요한 항목은 따로 계획을 세운다. 고친 뒤에는 실제 동작을 `ss`, `curl`로 확인하고, 점검표와 다르게 막은 항목은 근거를 적어 `--skip` 목록으로 관리한다.
+
+"FAIL 0건"보다 중요한 건 남은 FAIL마다 이유를 말할 수 있는 상태다. 점검표는 문자열을 보고, 공격자는 동작을 본다.
+
+## 면접에서 나올 만한 질문
+
+### CIS Kubernetes Benchmark는 무엇이고 kube-bench는 무엇을 하나요?
+
+CIS 벤치마크는 쿠버네티스 컴포넌트를 안전하게 설정하는 권고 목록이고, kube-bench는 그 항목을 YAML로 옮겨 노드에서 자동으로 확인하는 도구다. 항목마다 셸 명령을 돌려 프로세스 인자나 파일 권한을 읽고, 기대값과 비교해 PASS, FAIL, WARN을 낸다. 컨트롤 플레인, etcd, 워커 노드, 정책 장으로 나뉘고 쿠버네티스 버전마다 판이 다르다.
+
+### Automated와 Manual, Level 1과 Level 2는 어떻게 다른가요?
+
+Automated는 명령으로 판정할 수 있는 항목이고, Manual은 환경을 보고 사람이 정해야 하는 항목이라 kube-bench가 WARN으로 적는다. Level 1은 대부분의 환경에서 큰 부작용 없이 켤 수 있는 항목, Level 2는 기능이나 운영 편의를 일부 포기하는 더 강한 항목이다. 점검 목표를 정할 때 보통 Level 1 Automated를 기준으로 범위를 맞춘다.
+
+### kube-bench 결과가 FAIL인데 실제로는 안전할 수 있나요? 반대도요?
+
+둘 다 있다. kube-bench는 명령줄 문자열을 보기 때문에, 같은 플래그가 두 번 있으면 첫 값을 읽지만 프로세스는 마지막 값을 쓴다. 안전한 값이 뒤에 오면 FAIL인데 안전하고, 위험한 값이 뒤에 오면 PASS인데 위험하다. AuthenticationConfiguration으로 익명을 헬스 체크에만 남기는 것처럼 다른 방법으로 막은 경우도 WARN으로 남는다. 그래서 고친 뒤에는 `ss`나 `curl`로 실제 동작을 확인한다.
+
+### API 서버의 --anonymous-auth=false를 그냥 켜면 왜 문제가 되나요?
+
+헬스 체크가 인증 없이 `/livez`, `/readyz`를 부르기 때문이다. 익명을 통째로 끄면 이 요청이 401을 받고, kubelet 프로브는 실패로 보고 API 서버를 재시작하며, 로드 밸런서는 컨트롤 플레인을 빼 버린다. 1.32 이후에는 AuthenticationConfiguration의 anonymous conditions로 익명을 헬스 체크 경로에만 허용하는 방법이 있다.
+
+### kubelet에서 가장 먼저 확인할 설정은 무엇인가요?
+
+익명 인증과 인가 모드다. 기본값은 익명 요청을 받고 인가가 AlwaysAllow라서, 10250 포트에 닿기만 하면 그 노드의 컨테이너에서 명령을 실행할 수 있다. `authentication.anonymous.enabled: false`, `authorization.mode: Webhook`으로 바꾸고, 읽기 전용 포트를 0으로 닫는다. kubeadm은 이걸 기본으로 해 주지만 손으로 설치한 노드는 확인해야 한다.
+
+### NodeRestriction 어드미션 플러그인은 무엇을 막나요?
+
+kubelet 자격 증명으로 할 수 있는 수정을 자기 노드와 그 노드에 배치된 Pod로 좁힌다. 노드 하나가 뚫려 kubelet 인증서를 훔쳐도 다른 노드 객체의 라벨을 바꾸거나 다른 노드의 Pod를 건드리지 못한다. Node 인가 모드와 같이 써야 의미가 있고, kubeadm은 기본으로 켠다.
+
+### 관리형 쿠버네티스(EKS, GKE)에서는 CIS 점검을 어떻게 하나요?
+
+컨트롤 플레인 노드에 들어갈 수 없으니 1장 대부분은 클라우드 사업자가 책임진다. 대신 EKS, GKE, AKS 전용 벤치마크가 있어서 워커 노드와 정책 장만 본다. kube-bench도 `job-eks.yaml`, `--benchmark gke-1.6.0` 같은 플랫폼 전용 설정을 쓴다. 컨트롤 플레인 쪽은 감사 로그를 켜는 설정, 엔드포인트 공개 범위처럼 사업자가 열어 둔 옵션을 따로 확인한다.
+
+### 정적 Pod 매니페스트를 수정할 때 주의할 점은요?
+
+kubelet이 디렉터리를 보고 있다가 바뀌면 바로 다시 띄우기 때문에, 오타 하나로 API 서버가 내려간다. 원본은 매니페스트 디렉터리 밖에 복사해 두고, 바꾼 뒤 `crictl ps`와 kubelet 로그로 컨테이너가 다시 떴는지 본다. 여러 대면 한 대씩 바꾸고, 문제가 생기면 복사본을 덮어써서 되돌린다.

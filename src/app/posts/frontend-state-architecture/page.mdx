@@ -1,0 +1,337 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-state-architecture");
+
+상품 목록에서 카테고리를 "shoes"로 골랐다. 상품 하나를 눌러 상세를 보고 뒤로 가기를 눌렀더니 필터가 "all"로 돌아가 있다. 같은 화면 주소를 동료에게 보냈더니 동료 화면에는 필터 없는 목록이 뜬다. 코드에는 버그가 없다. `useState`에 넣은 값이 컴포넌트와 함께 사라졌을 뿐이다. 필터는 처음부터 주소에 있어야 했다.
+
+프런트엔드에서 "상태 관리"를 이야기하면 대개 어떤 라이브러리를 쓸지로 흘러간다. 그런데 위 버그는 라이브러리를 바꿔서 풀리지 않는다. 상태마다 원본이 사는 곳이 따로 있고, 그 자리를 잘못 고른 게 원인이라서다. 이 글은 상태를 다섯 종류로 나누고, 종류마다 어디에 두는지, 잘못 두면 어떤 증상이 나는지 작은 React 앱으로 재 본다.
+
+이 주제의 다른 글과 나눈 몫은 이렇다. 설계 면접에서 상태 이야기가 나오는 자리는 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)에, 탭 여러 개와 오프라인처럼 브라우저 밖과 상태를 맞추는 문제는 [분산 시스템으로서의 프런트엔드](/posts/frontend-as-distributed-system)에 있다. 서버에서 빌려 온 데이터를 캐시하는 방법 자체는 [화면 데이터 캐시](/posts/client-data-cache)에서 다뤘으니 여기서는 그 자리만 짚는다. 예제는 React 19 앱을 esbuild로 묶어 Chromium 141(Playwright, 헤드리스)에서 돌렸고, 출력은 찍힌 그대로다.
+
+## 상태마다 원본이 사는 곳이 다르다
+
+"이 값의 원본은 어디에 있나"를 먼저 물으면 상태가 다섯 갈래로 나뉜다.
+
+- 서버 상태: 원본이 서버 DB에 있다. 브라우저가 가진 건 사본이고, 언제든 낡을 수 있다. 상품 목록, 사용자 프로필.
+- URL 상태: 원본이 주소창에 있다. 새로고침, 뒤로 가기, 링크 공유를 견뎌야 하는 값이다. 필터, 정렬, 페이지 번호, 지금 보는 탭.
+- 폼 상태: 사용자가 입력하는 중인 값이다. 제출하기 전까지는 어디에도 확정되지 않은 초안이다.
+- 화면 상태: 한 컴포넌트의 일시적인 모습이다. 드롭다운이 열렸는지, 마우스가 올라가 있는지.
+- 앱 전역 상태: 여러 화면이 함께 보는 클라이언트 값이다. 테마, 장바구니 개수처럼 서버와 별개로 이 기기에서 정해지는 것.
+
+여기에 하나가 더 붙는다. 다른 상태에서 계산할 수 있는 값이다. 이건 상태가 아니다. 저장하지 않고 그때그때 계산한다. 아래 그림은 각 상태가 어디서 오고 어디로 흐르는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="상태마다 원본이 다른 곳에 있다. 컴포넌트는 그 원본을 읽어 그린다"
+  nodes={[
+    { id: "db", label: "서버 DB", sub: "서버 상태 원본", x: 70, y: 40 },
+    { id: "url", label: "주소창", sub: "URL 상태 원본", x: 200, y: 40 },
+    { id: "store", label: "앱 저장소", sub: "테마·장바구니", x: 330, y: 40 },
+    { id: "cache", label: "쿼리 캐시", sub: "서버 상태 사본", x: 70, y: 150 },
+    { id: "comp", label: "컴포넌트", sub: "화면 상태 useState", x: 200, y: 175 },
+    { id: "form", label: "폼 초안", sub: "제출 전 값", x: 330, y: 150 },
+    { id: "derived", label: "계산한 값", sub: "저장하지 않음", x: 200, y: 280 },
+  ]}
+  edges={[
+    { from: "db", to: "cache", label: "응답" },
+    { from: "cache", to: "comp" },
+    { from: "url", to: "comp", label: "읽기" },
+    { from: "store", to: "comp", label: "구독" },
+    { from: "form", to: "db", label: "제출", dashed: true },
+    { from: "comp", to: "derived", label: "렌더링 중 계산" },
+  ]}
+/>
+
+라이브러리는 이 구분 다음에 고른다. 서버 상태에는 TanStack Query나 SWR 같은 캐시가 맞고, URL 상태에는 라우터가 이미 저장소다. 폼에는 폼 라이브러리나 브라우저의 기본 폼이 있다. 화면 상태는 `useState`로 충분하다. 남는 건 앱 전역 상태뿐인데, 막상 나눠 보면 이 칸에 들어갈 값이 생각보다 적다. 이 블로그도 앱 전역 상태는 테마, 검색창 열림 여부, 즐겨찾기 정도라서 Jotai atom 몇 개로 끝난다.
+
+## 필터를 컴포넌트 안에 두면 뒤로 가기에 사라진다
+
+처음 장면을 그대로 만들었다. 목록 화면의 카테고리 필터를 한 번은 `useState`에, 한 번은 주소의 쿼리 문자열에 두고, 같은 순서로 움직였다. 필터를 고르고, 상품을 열고, 뒤로 가고, 새로고침했다. 주소의 `s`와 `mode`는 실험 앱이 시나리오를 고르는 파라미터다.
+
+```jsx
+// 상태에 둔 쪽: 목록 컴포넌트가 사라지면 값도 사라진다
+function ProductList() {
+  const [cat, setCat] = useState("all");
+  // ...
+}
+
+// 주소에 둔 쪽: 값을 읽고 쓰는 곳이 주소창이다
+function ProductList({ url, nav }) {
+  const cat = url.searchParams.get("cat") ?? "all";
+  const setCat = (c) => {
+    const sp = new URLSearchParams(url.search);
+    c === "all" ? sp.delete("cat") : sp.set("cat", c); // 기본값은 주소에서 뺀다
+    nav(`/products?${sp}`);
+  };
+  // ...
+}
+```
+
+```text
+== state
+필터 선택: list cat=shoes  (주소 /products?s=filter&mode=state)
+상품 열기: detail 7
+뒤로 가기: list cat=all
+새로고침: list cat=all
+== url
+필터 선택: list cat=shoes  (주소 /products?s=filter&mode=url&cat=shoes)
+상품 열기: detail 7
+뒤로 가기: list cat=shoes
+새로고침: list cat=shoes
+```
+
+상태에 둔 쪽은 상세로 가는 순간 목록 컴포넌트가 화면에서 빠지면서 `useState` 값도 버려졌다. 뒤로 가면 컴포넌트가 새로 만들어지고 초기값 "all"로 시작한다. 주소에 둔 쪽은 컴포넌트가 몇 번 새로 만들어지든 주소에서 다시 읽으니 그대로다. 링크를 공유해도 같은 화면이 뜬다. 아래 그림에서 다음을 누르면 뒤로 가기 한 번에 두 방식이 어떻게 갈리는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="뒤로 가기는 주소를 되돌린다. 주소에 없는 값은 되돌릴 방법이 없다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "hist", label: "history" },
+    { id: "list", label: "목록 화면" },
+  ]}
+  steps={[
+    { from: "user", to: "list", label: "cat=shoes 선택", title: "필터를 고른다", detail: "주소에 두는 쪽은 이때 history에 /products?cat=shoes를 쌓는다. 상태에 두는 쪽은 주소가 그대로다." },
+    { from: "user", to: "hist", label: "push /products/7", title: "상품을 연다", detail: "라우터가 상세 화면으로 바꾸면서 목록 컴포넌트를 화면에서 뺀다. useState 값은 이때 버려진다." },
+    { from: "user", to: "hist", label: "back", title: "뒤로 간다", detail: "브라우저가 앞 주소로 돌아가고 popstate 이벤트를 보낸다." },
+    { from: "hist", to: "list", label: "popstate", title: "목록이 새로 만들어진다", detail: "목록 컴포넌트가 처음부터 다시 그려진다. 주소에 둔 쪽은 cat=shoes를 읽고, 상태에 둔 쪽은 초기값 all로 시작한다." },
+    { from: "user", to: "list", label: "새로고침", title: "새로고침도 같다", detail: "자바스크립트 메모리가 통째로 사라진다. 남는 건 주소와 저장소뿐이다." },
+  ]}
+/>
+
+주소에 넣을 때 하나 더 정해야 하는 게 있다. 바꿀 때마다 기록을 쌓을지(`pushState`) 지금 칸을 바꿔 쓸지(`replaceState`)다. 필터를 다섯 번 바꾸고 `history.length`를 쟀다.
+
+```text
+== pushState: 필터 다섯 번 바꾼 뒤 history.length 2 → 7
+== replaceState: 필터 다섯 번 바꾼 뒤 history.length 2 → 2
+```
+
+`pushState`로 쌓으면 사용자가 목록을 벗어나려고 뒤로 가기를 눌렀을 때 필터를 하나씩 되감느라 다섯 번을 눌러야 한다. 반대로 `replaceState`만 쓰면 "방금 필터 전으로 돌아가고 싶다"는 뒤로 가기가 통하지 않는다. 흔한 선택은 이렇다. 페이지 번호나 탭처럼 사용자가 "다른 화면"으로 느끼는 변화는 쌓고, 검색어 입력이나 가격 슬라이더처럼 연속으로 바뀌는 값은 바꿔 쓴다. Next.js의 `router.replace`, React Router의 `setSearchParams(next, { replace: true })`가 이 자리다. 라우터와 History API의 동작은 [CSR과 SPA](/posts/rendering-csr-spa)에서 다뤘다.
+
+## 주소에 넣을 것과 넣지 않을 것
+
+모든 걸 주소에 넣을 수는 없다. 주소에는 "이 화면을 다시 만들기 위해 필요한 최소한"만 둔다. 아래 주소의 조각을 하나씩 눌러 보면 각 조각이 왜 거기 있는지 나온다.
+
+<UrlAnatomy
+  caption="목록 화면을 다시 만드는 데 필요한 것만 주소에 둔다"
+  base="/products"
+  params={[
+    { key: "cat", value: "shoes", title: "카테고리", description: "이 값이 다르면 다른 화면이다. 공유하면 같은 목록이 떠야 하니 주소에 둔다.", required: true },
+    { key: "min", value: "30000", title: "가격 하한", description: "슬라이더를 끌 때마다 바뀌는 값이다. replaceState로 바꿔 쓰고, 요청은 손을 뗀 뒤에 보낸다." },
+    { key: "sort", value: "price_asc", title: "정렬", description: "기본 정렬이면 주소에서 뺀다. 같은 화면이 주소 두 개로 나뉘면 캐시 키도, 분석 집계도 갈라진다." },
+    { key: "page", value: "2", title: "페이지", description: "사용자가 다른 화면으로 느끼는 변화라서 pushState로 쌓는다. 무한 스크롤이면 페이지 대신 커서를 쓰고 주소에 남기지 않는 경우가 많다." },
+  ]}
+/>
+
+주소에 두지 않는 것도 분명하다. 토큰이나 개인정보는 주소에 넣지 않는다. 주소는 브라우저 기록, 서버 접근 로그, 다른 사이트로 가는 `Referer`에 남는다. 드롭다운이 열렸는지 같은 화면 상태도 넣지 않는다. 링크를 받은 사람이 드롭다운이 열린 화면을 볼 이유가 없다. 모달은 애매하다. 상품 상세를 모달로 띄우는데 그 모달을 공유할 수 있어야 한다면 주소에 넣고, 확인 대화 상자라면 넣지 않는다.
+
+주소에 넣는 값은 같은 화면이면 같은 문자열이 되게 만든다. 기본값을 빼고 키를 정렬하면 `?sort=new&cat=shoes`와 `?cat=shoes`가 같은 주소가 된다. 데이터를 받을 때 이 문자열을 그대로 쿼리 키로 쓰면 캐시도 하나로 모인다. 아래에서 직접 만들어 보자. 필터 객체와 기본값을 받아, 기본값과 빈 값을 빼고 키를 정렬한 쿼리 문자열을 돌려주는 함수다. 배열은 정렬해서 쉼표로 잇는다.
+
+<CodePlayground
+  caption="필터를 같은 주소로 만들기"
+  functionName="toSearch"
+  initialCode={`function toSearch(filters, defaults) {
+  // 기본값과 빈 값은 빼고, 키는 정렬하고,
+  // 배열은 정렬해 쉼표로 잇는다
+  return "";
+}`}
+  solution={`function toSearch(filters, defaults) {
+  const sp = new URLSearchParams();
+  for (const key of Object.keys(filters).sort()) {
+    let value = filters[key];
+    if (Array.isArray(value)) value = [...value].sort().join(",");
+    if (value === undefined || value === null || value === "") continue;
+    if (key in defaults && String(defaults[key]) === String(value)) continue;
+    sp.set(key, String(value));
+  }
+  return sp.toString();
+}`}
+  tests={[
+    { label: "기본값은 뺀다", args: [{ cat: "shoes", sort: "new", page: 1 }, { sort: "new", page: 1 }], expected: "cat=shoes" },
+    { label: "키를 정렬한다", args: [{ page: 2, cat: "shoes", min: 30000 }, { page: 1 }], expected: "cat=shoes&min=30000&page=2" },
+    { label: "빈 값은 빼고 인코딩", args: [{ q: "운동화 260", cat: "" }, {}], expected: "q=%EC%9A%B4%EB%8F%99%ED%99%94+260" },
+    { label: "배열은 정렬해 잇는다", args: [{ brand: ["nike", "adidas"] }, {}], expected: "brand=adidas%2Cnike" },
+    { label: "아무것도 없으면 빈 문자열", args: [{}, {}], expected: "" },
+  ]}
+/>
+
+세 번째 테스트에서 공백이 `+`로 바뀐 것에 주의한다. `URLSearchParams`는 폼 인코딩 규칙을 따라서 공백을 `%20`이 아니라 `+`로 쓴다. 서버가 이 규칙으로 읽는지 한 번 확인해 둔다. 이 규칙은 [HTML form은 어떻게 HTTP 요청이 되나](/posts/html-form-http)에 정리했다.
+
+## 같은 상품이 두 곳에 살면 어긋난다
+
+목록에서 상품을 고르면 옆에 상세를 띄우는 화면이다. 고른 상품을 상태에 넣는 방법이 둘 있다. 상품 객체를 통째로 넣거나, id만 넣고 목록에서 찾아 쓰거나. 상품 1을 고른 뒤 목록을 다시 받아 왔는데 가격이 59,000원에서 49,000원으로 내렸다고 하자.
+
+```jsx
+const [selectedObj, setSelectedObj] = useState(null); // 객체를 복사해 둔다
+const [selectedId, setSelectedId] = useState(null);   // id만 둔다
+const selected = mode === "id" ? items.find((i) => i.id === selectedId) : selectedObj;
+```
+
+```text
+== object: 선택 직후 "운동화 59000" → 목록 갱신 뒤 목록 "운동화 49000", 상세 "운동화 59000"
+== id: 선택 직후 "운동화 59000" → 목록 갱신 뒤 목록 "운동화 49000", 상세 "운동화 49000"
+```
+
+객체를 넣은 쪽은 목록과 상세가 다른 가격을 보여 준다. 고르는 순간의 사본을 따로 들고 있으니 원본이 바뀐 걸 모른다. id만 둔 쪽은 상세가 늘 목록에서 찾아 쓰니 어긋날 수가 없다. 규칙은 하나다. 같은 데이터는 한 곳에만 두고, 다른 곳은 그걸 가리키는 키만 갖는다.
+
+데이터가 커지면 이 규칙을 저장소 구조로 만든다. 같은 작성자가 글 열 개에 나온다면, 글마다 작성자 객체를 넣지 않고 작성자를 id로 한 번만 저장하고 글은 `authorId`만 갖게 한다. DB의 정규화와 같은 생각이라 상태 정규화라고 부른다. 바꾸는 방법과 Immer는 [React 상태를 불변으로 바꾸기](/posts/js-immutability-react)에 있다. 서버 상태를 TanStack Query로 다룬다면 쿼리 키가 그 "한 곳" 역할을 하니, 받은 데이터를 다시 전역 저장소에 복사하지 않는 게 같은 규칙의 다른 모습이다.
+
+## 계산할 수 있는 값은 저장하지 않는다
+
+목록 2,000개를 카테고리로 거르는 화면이다. 거른 결과를 상태에 넣고 effect로 맞추는 방법과, 렌더링할 때 그냥 계산하는 방법을 비교했다. 카테고리 버튼을 한 번 누르고 렌더링 횟수와, 카테고리와 목록이 서로 안 맞는 채로 렌더링된 횟수를 셌다.
+
+```jsx
+// 저장하는 쪽: 카테고리가 바뀐 뒤 effect가 한 번 더 상태를 바꾼다
+const [filtered, setFiltered] = useState(() => ALL.filter((x) => x.cat === "shoes"));
+useEffect(() => { setFiltered(ALL.filter((x) => x.cat === cat)); }, [cat]);
+
+// 계산하는 쪽
+const list = ALL.filter((x) => x.cat === cat);
+```
+
+```text
+== effect: 클릭 한 번에 렌더링 2번, 카테고리와 목록이 어긋난 렌더링 1번, 화면 bags:667
+== computed: 클릭 한 번에 렌더링 1번, 카테고리와 목록이 어긋난 렌더링 0번, 화면 bags:667
+```
+
+결과 화면은 같지만 저장하는 쪽은 렌더링을 두 번 했고, 그중 한 번은 카테고리는 "bags"인데 목록은 아직 "shoes"인 상태로 그렸다. 이 어긋난 한 번은 화면에 잠깐 비치거나, 그 값을 쓰는 다른 effect가 엉뚱한 요청을 보내는 원인이 된다. 계산이 무거우면 `useMemo`로 감싸면 되지 상태로 옮길 이유는 아니다. props를 state에 복사하는 실수와 메모 셀렉터는 [React 안의 함수형](/posts/fp-in-react)에서 자세히 다뤘다.
+
+## 전역 저장소 하나에 다 넣으면 다 같이 깨어난다
+
+사용자 이름, 테마, 장바구니 개수를 객체 하나로 묶어 Context로 내려보냈다. 장바구니에 상품을 세 번 담고, 어느 컴포넌트가 몇 번 다시 그려졌는지 셌다. 비교 대상은 같은 객체를 바깥 저장소에 두고 `useSyncExternalStore`에 셀렉터를 붙여 필요한 칸만 구독하는 방식이다. 세 컴포넌트 모두 `memo`로 감쌌다.
+
+```jsx
+// Context: 값 객체가 바뀌면 이 Context를 읽는 모든 컴포넌트가 다시 그린다
+const Header = memo(() => { const user = useContext(Ctx).state.user; /* ... */ });
+
+// 셀렉터: 고른 값이 그대로면 다시 그리지 않는다
+const useStore = (sel) => useSyncExternalStore(store.sub, () => sel(store.get()));
+const Header = memo(() => { const user = useStore((s) => s.user); /* ... */ });
+```
+
+```text
+== context: 장바구니 +1 세 번 → 배지 3, 렌더링 {"Header(user)":3,"ThemeToggle(theme)":3,"CartBadge(cartCount)":3}
+== selector: 장바구니 +1 세 번 → 배지 3, 렌더링 {"CartBadge(cartCount)":3}
+```
+
+Context 쪽은 장바구니 숫자만 바뀌었는데 사용자 이름과 테마를 그리는 컴포넌트까지 세 번씩 다시 그렸다. `memo`도 막지 못한다. `memo`는 props를 비교하는데, Context 값이 바뀌면 props와 상관없이 그 Context를 읽는 컴포넌트를 다시 그리기 때문이다. 셀렉터 쪽은 배지만 그렸다. 아래 그림에서 다음을 누르면 같은 변경이 두 방식에서 어디까지 퍼지는지 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={240}
+  caption="값 하나가 바뀌었을 때 Context는 전부에게, 셀렉터는 구독한 곳에만 알린다"
+  zones={[
+    { id: "ctx", label: "Context 하나", x: 10, y: 15, w: 185, h: 210, tone: "edge" },
+    { id: "sel", label: "저장소 + 셀렉터", x: 205, y: 15, w: 185, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "p", label: "Provider", sub: "cart +1", x: 100, y: 60, icon: "server", w: 90 },
+    { id: "h1", label: "Header", x: 45, y: 175, icon: "client", w: 70 },
+    { id: "t1", label: "Theme", x: 100, y: 130, icon: "client", w: 70 },
+    { id: "c1", label: "Cart", x: 155, y: 175, icon: "client", w: 70 },
+    { id: "s", label: "store", sub: "cart +1", x: 295, y: 60, icon: "db", w: 90 },
+    { id: "h2", label: "Header", x: 240, y: 175, icon: "client", w: 70 },
+    { id: "t2", label: "Theme", x: 295, y: 130, icon: "client", w: 70 },
+    { id: "c2", label: "Cart", x: 350, y: 175, icon: "client", w: 70 },
+  ]}
+  links={[
+    { from: "p", to: "h1" }, { from: "p", to: "t1" }, { from: "p", to: "c1" },
+    { from: "s", to: "h2", dashed: true }, { from: "s", to: "t2", dashed: true }, { from: "s", to: "c2" },
+  ]}
+  steps={[
+    { path: ["p", "h1"], packet: "새 값", highlight: ["t1", "c1"], title: "Context는 새 객체를 내려보낸다", detail: "장바구니만 바뀌었어도 값 객체가 새로 만들어지니 이 Context를 읽는 세 컴포넌트가 모두 다시 그린다." },
+    { path: ["p", "c1"], packet: "새 값", highlight: ["h1", "t1"], title: "memo로도 막지 못한다", detail: "memo는 props만 비교한다. Context 구독은 그 바깥에서 일어난다. 실험에서 세 컴포넌트가 세 번씩 그렸다." },
+    { path: ["s", "h2"], packet: "kim", blocked: true, title: "셀렉터는 고른 값을 비교한다", detail: "Header가 고른 값은 사용자 이름이다. 그대로이니 다시 그리지 않는다." },
+    { path: ["s", "t2"], packet: "light", blocked: true, title: "테마도 그대로다", detail: "ThemeToggle도 건너뛴다." },
+    { path: ["s", "c2"], packet: "3", title: "바뀐 값을 고른 곳만 그린다", detail: "CartBadge만 세 번 그렸다. Zustand, Redux의 useSelector, Jotai의 atom이 모두 이런 식으로 구독 범위를 좁힌다." },
+  ]}
+/>
+
+이 결과를 "Context를 쓰지 말라"로 읽으면 안 된다. 테마나 로그인 사용자처럼 거의 바뀌지 않는 값은 Context로 충분하다. 문제는 자주 바뀌는 값과 드물게 바뀌는 값을 한 객체에 묶었을 때다. 고치는 방법은 Context를 값마다 나누거나, 셀렉터가 있는 저장소로 옮기는 것이다.
+
+더 먼저 할 일은 값을 위로 올리지 않는 것이다. 드롭다운의 열림 상태를 전역 저장소에 두면 드롭다운 하나를 열 때마다 저장소를 구독하는 모든 곳이 비교를 한다. 상태는 그 값을 쓰는 컴포넌트들의 가장 가까운 공통 부모에 둔다. 두 형제가 같이 쓸 때만 부모로 올리고, 멀리 떨어진 화면들이 같이 쓸 때만 저장소로 올린다. 다시 그리는 범위와 `memo`의 동작은 [React는 언제 다시 그리나](/posts/react-rerender)에 있다.
+
+## 폼 상태는 제출하기 전까지 초안이다
+
+칸이 30개인 설정 폼이다. 흔히 하는 대로 폼 전체 값을 객체 하나의 상태로 두고 칸마다 `value`와 `onChange`를 연결했다. 첫 칸에 "hello"를 쳤을 때 칸 컴포넌트가 몇 번 그려졌는지 셌다. 세 가지로 비교했다. 칸에 `memo`를 붙였지만 `onChange`를 칸마다 인라인 함수로 넘긴 것, 같은 `onChange`를 `useCallback`으로 고정한 것, 아예 상태 없이 브라우저가 값을 들고 있게 한 비제어 폼이다.
+
+```text
+== controlled: 30칸 폼의 첫 칸에 5글자 → {"FormApp":5,"Field":150}
+== memo: 30칸 폼의 첫 칸에 5글자 → {"FormApp":5,"Field":5}
+== uncontrolled: 30칸 폼의 첫 칸에 5글자 → {}, 제출할 때 읽은 f0="hello"
+```
+
+첫 번째는 글자 하나에 30칸이 모두 다시 그려져 다섯 글자에 150번이다. `memo`를 붙였어도 렌더링마다 새 `onChange` 함수가 내려가니 비교가 늘 실패한다. 함수를 고정하면 값이 바뀐 첫 칸만 그려져 5번이다. 비제어 폼은 React가 아무것도 그리지 않았고, 제출할 때 `FormData`로 값을 읽었다. 칸 30개는 이 정도로 끝나지만, 칸마다 검증 메시지와 서식이 붙은 수백 칸짜리 폼이면 첫 번째 방식에서 타자가 눈에 띄게 늦어진다. React Hook Form 같은 라이브러리가 비제어 입력과 칸별 구독을 기본으로 삼는 이유가 이것이다.
+
+폼 상태에서 구조로 정할 것은 성능보다 경계다. 폼에 처음 채우는 값은 서버 상태에서 오지만, 사용자가 고치기 시작하면 그건 초안이다. 초안을 서버 캐시에 바로 써 넣으면, 저장하지 않고 나간 값이 다른 화면에 보인다. 반대로 고치는 동안 서버 데이터가 새로 오면 사용자가 친 값을 덮어쓴다. 폼을 열 때 서버 값을 한 번 복사해 초안을 만들고, 제출에 성공하면 캐시를 무효화하는 순서로 둘을 나눈다. "저장하지 않은 변경이 있다"는 표시는 초안과 처음 값을 비교해 계산한다. 이것도 저장할 값이 아니라 계산할 값이다.
+
+작성 중인 긴 글처럼 잃으면 아까운 초안은 `sessionStorage`나 `localStorage`에 잠깐 써 둔다. 탭을 실수로 닫아도 되살릴 수 있다. 저장소마다의 수명과 한도는 [브라우저 저장소](/posts/browser-storage)에 있다.
+
+## 값 하나의 자리를 고르는 순서
+
+새 상태가 생길 때 던지는 질문은 순서가 있다. 앞의 질문에서 답이 나오면 거기서 멈춘다. 아래 그림은 값 네 개가 이 질문을 차례로 지나며 자리를 찾는 과정이다.
+
+<AlgoTrace
+  caption="질문을 위에서부터 던지고, 처음 '예'가 나온 곳에 둔다"
+  memoryLabel="정해진 자리"
+  cells={["계산 가능?", "원본이 서버?", "공유·새로고침?", "입력 중 초안?", "여러 화면?", "그 외"]}
+  steps={[
+    { pointer: 0, memory: ["필터된 목록 → 계산"], caption: "필터된 목록은 목록과 필터에서 계산된다. 저장하지 않는다." },
+    { pointer: 1, memory: ["필터된 목록 → 계산", "상품 목록 → 쿼리 캐시"], caption: "상품 목록은 원본이 서버에 있다. 쿼리 캐시에 사본으로 둔다." },
+    { pointer: 2, memory: ["필터된 목록 → 계산", "상품 목록 → 쿼리 캐시", "카테고리 → 주소"], caption: "카테고리는 계산할 수 없고 서버 값도 아니다. 공유와 새로고침을 견뎌야 하니 주소에 둔다." },
+    { pointer: 3, memory: ["상품 목록 → 쿼리 캐시", "카테고리 → 주소", "배송지 입력 → 폼 초안"], caption: "배송지 입력은 제출 전의 초안이다. 폼 상태로 둔다." },
+    { pointer: 5, found: [5], memory: ["카테고리 → 주소", "배송지 입력 → 폼 초안", "드롭다운 열림 → useState"], caption: "드롭다운 열림은 앞의 질문 모두에 '아니오'다. 그 컴포넌트의 useState로 끝난다." },
+  ]}
+/>
+
+다섯째 질문 "여러 화면이 같이 쓰나"까지 와야 전역 저장소가 등장한다. 순서를 거꾸로, 즉 "일단 전역 저장소에 넣고 본다"로 시작하면 앞에서 본 증상이 모두 생긴다. 서버 데이터를 저장소에 복사하면 낡은 사본이 생기고, 주소에 있어야 할 값은 뒤로 가기에 사라지고, 화면 상태 하나가 바뀔 때마다 앱 전체가 비교를 한다.
+
+## 증상으로 거꾸로 찾아가기
+
+현장에서는 증상이 먼저 온다. 증상마다 의심할 자리가 정해져 있다.
+
+"뒤로 가기를 누르면 필터나 스크롤 위치가 초기화된다"면 그 값이 주소에 없거나, 목록 데이터가 캐시되지 않아 다시 받는 동안 높이가 0이 된 것이다. 앞의 것은 URL 상태로 옮기고, 뒤의 것은 쿼리 캐시를 확인한다.
+
+"목록과 상세의 숫자가 다르다", "수정했는데 다른 화면에는 옛 값이 보인다"면 같은 데이터가 두 곳에 산다. 전역 저장소에 서버 응답을 복사해 둔 곳이 있는지, 상태에 객체를 통째로 넣은 곳이 있는지 찾는다. React DevTools에서 컴포넌트의 상태를 열어 객체가 들어 있으면 의심한다.
+
+"타자를 치면 화면이 버벅인다"면 React DevTools Profiler의 "Highlight updates"를 켜고 친다. 입력창 하나를 칠 때 화면 전체가 번쩍인다면 폼 상태가 너무 위에 있거나, 자주 바뀌는 값이 큰 Context에 섞여 있다.
+
+"새로 고친 값이 한 프레임 동안 옛 값으로 보였다가 바뀐다"면 계산할 값을 effect로 맞추고 있을 가능성이 높다. effect 안에서 `setState`를 부르는 곳을 찾는다.
+
+"탭 두 개를 열어 두면 한쪽이 옛 상태다"는 이 글의 범위를 넘어선다. 상태가 기기의 다른 탭과 서버라는 바깥 노드와 함께 살 때의 문제라서, [분산 시스템으로서의 프런트엔드](/posts/frontend-as-distributed-system)에서 이어 간다.
+
+상태 관리는 라이브러리 고르기가 아니라 자리 고르기다. 원본이 서버에 있으면 캐시에, 주소창이 원본이어야 하면 주소에, 초안은 폼에, 나머지는 쓰는 곳 가까이에 둔다. 계산할 수 있으면 저장하지 않는다. 이 자리만 맞으면 전역 저장소에 남는 값은 몇 개 되지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### 프런트엔드 상태를 어떻게 분류하나요?
+
+원본이 어디 있는지로 나눈다. 서버 DB가 원본인 서버 상태, 주소창이 원본인 URL 상태, 제출 전 초안인 폼 상태, 한 컴포넌트의 일시적인 화면 상태, 여러 화면이 같이 보는 앱 전역 상태다. 여기에 다른 상태에서 계산할 수 있는 값이 있는데, 이건 저장하지 않고 렌더링할 때 계산한다. 종류마다 맞는 도구가 다르니 라이브러리는 분류 다음에 고른다.
+
+### 필터나 정렬 값은 왜 URL에 두나요?
+
+새로고침, 뒤로 가기, 링크 공유를 견뎌야 하는 값이기 때문이다. 실험에서 useState에 둔 필터는 상세로 갔다 돌아오자 목록 컴포넌트가 새로 만들어지면서 초기값으로 돌아갔고, 주소에 둔 필터는 그대로였다. 같은 화면이 같은 주소가 되도록 기본값은 빼고 키를 정렬하면 캐시 키와 분석 집계도 하나로 모인다. 토큰이나 개인정보는 기록과 로그에 남으니 주소에 넣지 않는다.
+
+### pushState와 replaceState는 언제 각각 쓰나요?
+
+사용자가 다른 화면으로 느끼는 변화는 pushState로 쌓고, 연속으로 바뀌는 값은 replaceState로 바꿔 쓴다. 실험에서 필터를 다섯 번 바꾸자 pushState는 history가 다섯 칸 늘어 뒤로 가기를 다섯 번 눌러야 목록을 벗어났다. 페이지 번호나 탭은 쌓고, 검색어 입력이나 슬라이더는 바꿔 쓰는 게 흔한 선택이다.
+
+### 선택한 항목을 상태에 객체로 넣으면 왜 문제가 되나요?
+
+고르는 순간의 사본을 따로 들고 있게 되어 원본이 바뀌어도 모른다. 실험에서 목록을 다시 받아 가격이 내렸는데 상세는 옛 가격을 보여 줬다. id만 상태에 두고 원본에서 찾아 쓰면 어긋날 수 없다. 데이터가 커지면 같은 객체를 id로 한 번만 저장하는 정규화로 이어진다.
+
+### 파생 값을 useEffect로 상태에 맞추면 안 되는 이유는요?
+
+렌더링이 한 번 더 일어나고, 그 사이 한 번은 원본과 파생 값이 어긋난 채로 그려진다. 실험에서 카테고리를 바꾸자 effect 방식은 두 번 렌더링했고 그중 한 번은 카테고리와 목록이 달랐다. 렌더링 중에 계산하고, 무거우면 useMemo로 감싼다.
+
+### Context 하나에 전역 상태를 다 넣으면 어떤 문제가 생기나요?
+
+값 객체의 한 칸만 바뀌어도 그 Context를 읽는 모든 컴포넌트가 다시 그린다. memo는 props만 비교하니 막지 못한다. 실험에서 장바구니 숫자만 바꿨는데 사용자 이름과 테마 컴포넌트까지 세 번씩 그렸고, useSyncExternalStore에 셀렉터를 붙인 저장소는 배지만 그렸다. 자주 바뀌는 값은 Context를 나누거나 셀렉터가 있는 저장소로 옮기고, 그 전에 상태를 쓰는 곳 가까이에 두는 것부터 한다.
+
+### 큰 폼에서 타자가 느려지는 이유와 해결 방법은요?
+
+폼 전체 값을 상위 상태 하나에 두고 칸마다 인라인 onChange를 넘기면 글자 하나에 모든 칸이 다시 그린다. 실험에서 30칸 폼에 다섯 글자를 치자 칸 렌더링이 150번이었다. onChange를 고정하고 memo를 붙이면 5번, 비제어 입력으로 두고 제출할 때 FormData로 읽으면 0번이었다. React Hook Form이 비제어 입력을 기본으로 삼는 이유다.
+
+### 서버에서 받은 데이터로 폼을 채울 때 주의할 점은요?
+
+폼을 열 때 서버 값을 복사해 초안을 만들고, 고치는 동안에는 초안만 바꾼다. 초안을 서버 캐시에 바로 써 넣으면 저장하지 않은 값이 다른 화면에 보이고, 반대로 고치는 중에 새 서버 데이터가 오면 입력을 덮어쓴다. 제출에 성공하면 캐시를 무효화해 다시 받는다. "저장하지 않은 변경 있음"은 초안과 처음 값을 비교해 계산한다.

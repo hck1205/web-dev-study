@@ -1,0 +1,604 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("elk-stack-basics");
+
+nginx 접근 로그를 Elasticsearch에 넣고 Kibana를 열었다. 문서는 다 들어왔는데, 상태 코드 500만 골라 볼 방법이 없다. 문서마다 필드가 둘뿐이다.
+
+```text
+"_source" : {
+  "@timestamp" : "2026-10-22T03:14:49.113505789Z",
+  "message" : "10.20.1.11 - - [22/Oct/2026:00:00:00 +0900] \"GET /api/orders/3235 HTTP/1.1\" 200 6191 \"-\" \"Mozilla/5.0 (iPhone; ...)\" 0.047"
+}
+```
+
+게다가 `@timestamp`는 로그가 찍힌 시각(한국 시간 자정)이 아니라 Elasticsearch가 받은 시각이다. 어젯밤 장애 시간대로 범위를 잡으면 이 로그는 하나도 안 걸린다. 한 줄 문자열을 필드로 쪼개고, 시간을 바로잡고, 필드마다 맞는 타입을 주고, 쌓이는 인덱스를 날짜와 크기에 맞춰 넘기고 지우는 일까지가 Elastic 스택에서 로그를 다루는 일이다.
+
+이 글은 그 일을 Elastic 스택의 장치로 따라간다. 수집 쪽(Beats, Logstash, Elastic Agent)이 각각 무엇을 맡는지, Elasticsearch 안에서 문서를 고치는 ingest pipeline, 로그용 인덱스의 기본 틀인 데이터 스트림과 인덱스 템플릿, 시간이 지나면 인덱스를 넘기고 지우는 ILM, 그리고 ES|QL로 묻기까지다. 로그 파이프라인의 칸 나누기와 수집기, 색인형과 레이블형 저장소의 크기 비교는 [중앙 로그 파이프라인 글](/posts/centralized-logging-pipeline)에서, 역색인과 분석기, 샤드는 [Elasticsearch 역색인 글](/posts/elasticsearch-inverted-index)에서 다뤘다. 노드 역할, 샤드 수 정하기, OpenSearch의 ISM은 [OpenSearch 클러스터 운영 글](/posts/opensearch-cluster-operations)에 있다. 여기서는 그 글들에 없는 Elastic 쪽 장치만 본다.
+
+실습은 Ubuntu 24.04에서 Elasticsearch 9.5.5 공식 이미지(Docker Hub)를 노드 하나로 띄워서 했다. 보안은 끄고(`xpack.security.enabled=false`), 라이선스는 기본인 basic이다. 로그는 nginx combined 형식에 응답 시간을 덧붙인 2만 줄(2.8MB, 2026년 10월 22일 0시부터 한국 시간)을 스크립트로 만들었다. Elasticsearch 출력은 모두 실제로 찍힌 것이고, Filebeat·Logstash·Kibana는 띄우지 않아 그 설정은 예시로 표시했다.
+
+## 누가 읽고, 누가 쪼개고, 누가 보여 주나
+
+ELK는 Elasticsearch, Logstash, Kibana의 머리글자다. 지금은 수집기가 늘어서 Elastic 스택이라고 부른다. 각 부품이 맡는 일은 이렇다.
+
+- Beats(Filebeat 등): 서버마다 두는 가벼운 수집기. 파일 끝을 따라 읽고(어디까지 읽었는지 기억한다), 보내다 막히면 기다린다. Go로 만들어 가볍다.
+- Logstash: 중앙에서 무겁게 가공하는 자리. 입력(Beats, Kafka, 파일) → 필터(grok, mutate, geoip) → 출력(Elasticsearch, S3)의 파이프라인이다. JVM이라 메모리를 많이 쓰고, 디스크 큐를 켜면 버퍼 역할도 한다.
+- Elastic Agent와 Fleet: Beats 여러 개를 하나로 묶은 에이전트를 Kibana의 Fleet 화면에서 정책으로 관리한다. 통합(integration) 패키지를 고르면 수집 설정, ingest pipeline, 인덱스 템플릿, 대시보드가 한꺼번에 깔린다.
+- Elasticsearch: 저장하고 찾는다. ingest 역할 노드가 문서를 넣기 전에 파이프라인을 돌릴 수 있어서, 간단한 가공은 Logstash 없이 여기서 한다.
+- Kibana: 보여 준다. Discover(로그 훑기), 대시보드, 알림, Fleet 관리 화면이 있다.
+
+예전에는 Filebeat → Logstash → Elasticsearch가 기본 모양이었다. 요즘은 Filebeat나 Elastic Agent가 Elasticsearch로 바로 보내고 가공은 ingest pipeline에 맡기는 구성이 많다. Logstash는 여러 목적지로 갈라 보내거나, Kafka에서 읽거나, Elasticsearch 밖의 데이터를 붙이는 복잡한 가공이 필요할 때 둔다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="로그 한 줄이 Kibana 화면에 오기까지 (두 갈래)"
+  zones={[
+    { id: "node", label: "app server", x: 8, y: 14, w: 120, h: 190, tone: "private" },
+    { id: "es", label: "Elasticsearch", x: 230, y: 14, w: 162, h: 190, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "ng", label: "nginx", sub: "access.log", x: 68, y: 56, icon: "server" },
+    { id: "fb", label: "Filebeat", sub: "or Agent", x: 68, y: 150, icon: "container" },
+    { id: "ls", label: "Logstash", sub: "선택", x: 178, y: 240, icon: "router" },
+    { id: "ip", label: "pipeline", sub: "ingest node", x: 310, y: 56, icon: "switch", w: 100 },
+    { id: "ds", label: "data stream", sub: "logs-nginx-*", x: 310, y: 150, icon: "db", w: 110 },
+    { id: "kb", label: "Kibana", x: 330, y: 250, icon: "client" },
+  ]}
+  links={[
+    { from: "ng", to: "fb" },
+    { from: "fb", to: "ip", label: "_bulk" },
+    { from: "fb", to: "ls", dashed: true },
+    { from: "ls", to: "ip", dashed: true },
+    { from: "ip", to: "ds" },
+    { from: "kb", to: "ds", dashed: true },
+  ]}
+  steps={[
+    { path: ["ng", "fb"], packet: "line", title: "파일 끝을 따라 읽는다", detail: "Filebeat가 로그 파일의 마지막 위치를 기억하며 새 줄을 읽는다. 재시작해도 이어서 읽는다." },
+    { path: ["fb", "ip"], packet: "_bulk", title: "묶어서 바로 보낸다", detail: "줄마다 message 필드 하나짜리 문서를 만들어 _bulk로 보낸다. 쪼개는 일은 Elasticsearch가 한다." },
+    { path: ["ip", "ds"], packet: "fields", title: "넣기 전에 쪼갠다", detail: "인덱스에 걸린 기본 파이프라인이 message를 필드로 나누고, 로그 시각을 @timestamp로 옮긴다. 그다음 데이터 스트림의 지금 쓰기 인덱스에 들어간다." },
+    { path: ["fb", "ls", "ip"], packet: "events", title: "Logstash를 거치는 갈래", detail: "여러 목적지로 갈라 보내거나, Kafka에서 읽거나, 무거운 가공이 필요하면 중간에 둔다. 운영할 JVM이 하나 늘어난다." },
+    { path: ["kb", "ds"], packet: "query", highlight: ["kb"], title: "Kibana가 묻는다", detail: "데이터 뷰(logs-*)와 시간 필드로 범위를 잡아 묻는다. 시간 필드가 틀리면 로그가 화면에서 사라진다." },
+  ]}
+/>
+
+Filebeat 설정은 이 정도다(예시, 실습에서는 `_bulk`를 직접 보냈다).
+
+```yaml
+# filebeat.yml (예시)
+filebeat.inputs:
+  - type: filestream
+    id: nginx-access
+    paths: [/var/log/nginx/access.log]
+output.elasticsearch:
+  hosts: ["https://es.internal:9200"]
+  index: "logs-nginx-default"     # 데이터 스트림 이름
+  pipeline: "nginx-dissect"       # 인덱스 기본 파이프라인을 쓸 거면 생략한다
+```
+
+## 넣기 전에 쪼갠다: ingest pipeline
+
+ingest pipeline은 프로세서를 차례로 돌리는 목록이다. nginx 줄을 쪼개는 파이프라인을 만들었다.
+
+```json
+PUT _ingest/pipeline/nginx-dissect
+{
+  "processors": [
+    { "dissect": { "field": "message",
+        "pattern": "%{source.ip} - - [%{_tmp.ts}] \"%{http.request.method} %{url.path} HTTP/%{http.version}\" %{http.response.status_code} %{http.response.body.bytes} \"%{http.request.referrer}\" \"%{user_agent.original}\" %{nginx.request_time}" } },
+    { "convert": { "field": "http.response.status_code", "type": "long" } },
+    { "convert": { "field": "http.response.body.bytes", "type": "long" } },
+    { "convert": { "field": "nginx.request_time", "type": "float" } },
+    { "date": { "field": "_tmp.ts", "formats": ["dd/MMM/yyyy:HH:mm:ss Z"], "target_field": "@timestamp" } },
+    { "remove": { "field": "_tmp" } }
+  ],
+  "on_failure": [
+    { "set": { "field": "error.message", "value": "{{ _ingest.on_failure_message }}" } },
+    { "set": { "field": "event.kind", "value": "pipeline_error" } }
+  ]
+}
+```
+
+필드 이름은 ECS(Elastic Common Schema)를 따랐다. `source.ip`, `http.response.status_code`, `url.path`처럼 Elastic이 정해 둔 이름을 쓰면 기본 템플릿이 알맞은 타입을 주고, 다른 팀의 로그와 같은 이름으로 묻을 수 있다. OpenTelemetry의 시맨틱 컨벤션과 이름이 거의 같아지는 중이다.
+
+dissect 패턴 하나를 조각내 보면 읽는 법이 보인다.
+
+<UrlAnatomy
+  caption="dissect 패턴의 앞부분: %{키}는 다음 글자가 나올 때까지 잘라 담는다"
+  base=""
+  separator=""
+  joiner=" "
+  params={[
+    { key: "ip", display: "%{source.ip}", title: "첫 칸", description: "줄 처음부터 다음 구분자(공백 하나)까지를 source.ip에 담는다. 10.20.1.11이 들어간다.", required: true },
+    { key: "lit", display: "- -", title: "그대로 맞춰야 하는 글자", description: "%{} 밖의 글자는 줄에 똑같이 있어야 한다. 하나라도 다르면 dissect가 실패하고 on_failure로 간다." },
+    { key: "ts", display: "[%{_tmp.ts}]", title: "대괄호 사이", description: "[ 와 ] 사이를 잘라 _tmp.ts에 담는다. 나중에 date 프로세서가 읽고 remove가 지운다. 22/Oct/2026:00:00:00 +0900이 들어간다.", required: true },
+    { key: "req", display: "\"%{http.request.method} %{url.path} HTTP/%{http.version}\"", title: "요청 줄", description: "따옴표 안을 공백으로 나눈다. 정규식이 아니라 구분자로만 자르니 grok보다 빠르지만, 형식이 조금만 달라도 엉뚱하게 잘린다.", code: "GET /api/orders/3235 HTTP/1.1" },
+  ]}
+/>
+
+파이프라인은 실제 문서를 넣기 전에 `_simulate`로 시험한다. 첫 줄과 일부러 형식을 조금 바꾼 줄(바이트가 `-`, 경로에 쿼리 문자열)을 넣었다.
+
+```bash
+# 파이프라인 시험: 문서는 저장하지 않는다
+curl -s -XPOST '127.0.0.1:19592/_ingest/pipeline/nginx-dissect/_simulate?pretty' \
+  -H 'Content-Type: application/json' -d @sim.json
+```
+
+```text
+"_source" : {
+  "@timestamp" : "2026-10-21T15:00:00.000Z",
+  "nginx" : { "request_time" : 0.047 },
+  "http" : { "request" : { "method" : "GET", "referrer" : "-" }, "version" : "1.1",
+             "response" : { "body" : { "bytes" : 6191 }, "status_code" : 200 } },
+  "source" : { "ip" : "10.20.1.11" },
+  "url" : { "path" : "/api/orders/3235" },
+  ...
+}
+---
+"_source" : {
+  "_tmp" : { "ts" : "22/Oct/2026:00:00:01 +0900" },
+  "nginx" : { "request_time" : "0.004" },
+  "http" : { ... "response" : { "body" : { "bytes" : "-" }, "status_code" : 200 } },
+  "url" : { "path" : "/api/cart?x=1" },
+  "error" : { "message" : "For input string: \\\"-\\\"" },
+  "event" : { "kind" : "pipeline_error" },
+  ...
+}
+```
+
+첫 줄은 기대한 대로다. `@timestamp`가 `2026-10-21T15:00:00Z`인 건 한국 시간 0시를 UTC로 바꿨기 때문이다. Elasticsearch는 늘 UTC로 저장하고 Kibana가 브라우저 시간대로 보여 준다.
+
+두 번째 줄에서 배울 게 많다. nginx는 본문이 없으면 바이트 자리에 `-`를 찍는다. 두 번째 `convert`가 실패하자 on_failure로 넘어갔고, 그 뒤의 프로세서(세 번째 convert, date, remove)는 돌지 않았다. 그래서 `_tmp`가 남았고, 응답 시간은 문자열이고, `@timestamp`는 로그 시각으로 바뀌지 않았다. on_failure가 있으니 문서는 버려지지 않고 오류 표시를 단 채 들어간다. 문서를 잃지 않는 대신 "오류 표시가 붙은 문서"를 따로 찾아보는 습관이 필요하다. 그리고 `url.path`에 쿼리 문자열까지 들어갔다. 경로로 묶어 세는 질의가 쪼개진다. 고치는 방법은 둘 다 간단하다. `convert`에 `"if": "ctx.http?.response?.body?.bytes != '-'"`처럼 조건을 달고, `url.original`에 통째로 담은 뒤 `uri_parts` 프로세서로 경로와 쿼리를 나눈다.
+
+## grok과 dissect, 같은 일을 다른 비용으로
+
+grok은 정규식 패턴(`%{IPORHOST:source.ip}`, `%{HTTPDATE:...}`)으로 줄을 맞춘다. 형식이 들쭉날쭉해도 맞추기 쉽고 패턴을 여러 개 줄 수 있다. dissect는 구분자로만 자른다. 같은 2만 줄을 두 파이프라인으로 각각 넣고 노드의 ingest 통계를 봤다.
+
+```bash
+# 파이프라인과 프로세서마다 처리한 수, 걸린 시간, 실패 수
+curl -s '127.0.0.1:19592/_nodes/stats/ingest?filter_path=nodes.*.ingest.pipelines.nginx-*'
+```
+
+```text
+nginx-dissect {'count': 20002, 'time_in_millis': 181, 'failed': 0}
+    dissect {'count': 20002, 'time_in_millis': 58, 'failed': 0}
+    convert {'count': 20002, 'time_in_millis': 11, 'failed': 0}
+    convert {'count': 20002, 'time_in_millis': 6, 'failed': 1}
+    convert {'count': 20001, 'time_in_millis': 5, 'failed': 0}
+    date {'count': 20001, 'time_in_millis': 69, 'failed': 0}
+    remove {'count': 20001, 'time_in_millis': 9, 'failed': 0}
+nginx-grok {'count': 20000, 'time_in_millis': 541, 'failed': 0}
+    grok {'count': 20000, 'time_in_millis': 321, 'failed': 0}
+    date {'count': 20000, 'time_in_millis': 180, 'failed': 0}
+    remove {'count': 20000, 'time_in_millis': 20, 'failed': 0}
+```
+
+(dissect 쪽 숫자에는 앞의 `_simulate` 두 건이 섞여 있다.) 이 머신에서 한 번 잰 값이라 정확한 배수는 믿지 않는다. 그래도 grok이 321ms, dissect가 58ms로 자르는 데만 다섯 배쯤 차이가 났다. 하루 수억 줄이면 ingest 노드의 CPU가 이 차이만큼 든다. 형식이 고정된 로그(nginx, 앱이 직접 만든 형식)는 dissect, 줄마다 모양이 다른 로그는 grok, 처음부터 JSON으로 찍을 수 있으면 `json` 프로세서 하나로 끝내는 게 가장 싸다. 앱 로그를 JSON으로 찍는 법은 [구조화 로그 글](/posts/structured-logging)에 있다.
+
+통계에서 볼 곳이 하나 더 있다. 프로세서 `convert`의 `failed`는 1인데 파이프라인 전체의 `failed`는 0이다. on_failure가 처리했기 때문이다. 파이프라인 통계만 보면 실패가 없어 보인다. 알림을 걸 거라면 프로세서 단위 실패 수나 `event.kind: pipeline_error`인 문서 수를 센다.
+
+dissect가 하는 일을 직접 구현해 보면 왜 빠르고 왜 깨지기 쉬운지 보인다. 패턴의 `%{키}` 사이 글자를 줄에서 차례로 찾아 자른다. 맞지 않으면 `null`이다.
+
+<CodePlayground
+  caption="dissect 흉내 내기"
+  functionName="dissect"
+  initialCode={`function dissect(pattern, line) {
+  // pattern: "%{ip} - - [%{ts}] ..." 처럼 %{키}와 그대로 맞출 글자로 이루어진다
+  // 키마다 다음 글자(구분자)가 나올 때까지 잘라 담는다. 마지막 키는 줄 끝까지
+  // 구분자를 못 찾거나 글자가 다르면 null
+  return null;
+}`}
+  solution={`function dissect(pattern, line) {
+  const parts = pattern.split(/%\\{([^}]+)\\}/); // [글자, 키, 글자, 키, ..., 글자]
+  if (!line.startsWith(parts[0])) return null;
+  let pos = parts[0].length;
+  const out = {};
+  for (let i = 1; i < parts.length; i += 2) {
+    const lit = parts[i + 1];
+    let end;
+    if (lit === "") {
+      if (i + 2 < parts.length) return null; // 키가 붙어 있는 패턴은 다루지 않는다
+      end = line.length;
+    } else {
+      end = line.indexOf(lit, pos);
+      if (end === -1) return null;
+    }
+    out[parts[i]] = line.slice(pos, end);
+    pos = end + lit.length;
+  }
+  return pos === line.length ? out : null;
+}`}
+  tests={[
+    {
+      label: "nginx 줄 앞부분",
+      args: ['%{ip} - - [%{ts}] "%{method} %{path} %{proto}" %{status} %{bytes}', '10.20.1.11 - - [22/Oct/2026:00:00:00 +0900] "GET /api/orders/3235 HTTP/1.1" 200 6191'],
+      expected: { ip: "10.20.1.11", ts: "22/Oct/2026:00:00:00 +0900", method: "GET", path: "/api/orders/3235", proto: "HTTP/1.1", status: "200", bytes: "6191" },
+    },
+    {
+      label: "마지막 키는 나머지를 다 가진다",
+      args: ["%{a},%{b}", "x,y,z"],
+      expected: { a: "x", b: "y,z" },
+    },
+    {
+      label: "구분자는 처음 나온 자리에서 자른다",
+      args: ["%{level}: %{msg}", "ERROR: disk full: /var"],
+      expected: { level: "ERROR", msg: "disk full: /var" },
+    },
+    {
+      label: "형식이 다르면 실패",
+      args: ["[%{ts}] %{msg}", "no bracket"],
+      expected: null,
+    },
+  ]}
+/>
+
+## 로그는 데이터 스트림에 쌓인다
+
+글 처음에 `logs-nginx-default`라는 이름으로 문서를 넣었을 때, 인덱스를 만든 적이 없는데도 들어갔다. Elasticsearch에 기본으로 깔린 `logs` 인덱스 템플릿이 `logs-*-*` 이름을 잡아 데이터 스트림을 만들었기 때문이다.
+
+```text
+GET _index_template/logs
+{"index_patterns": ["logs-*-*"], "composed_of": ["logs@mappings", "logs@settings", "logs@custom", "ecs@mappings"], "priority": 100, "data_stream": {"hidden": false, "allow_custom_routing": false}}
+```
+
+데이터 스트림은 이름 하나 뒤에 실제 인덱스(backing index) 여러 개를 숨긴 것이다. 쓰기는 늘 가장 최근 인덱스 하나로 가고, 읽기는 전부를 대상으로 한다. 로그처럼 추가만 하고 고치지 않는 시계열 데이터에 맞춘 틀이라, 문서마다 `@timestamp`가 있어야 하고 `_bulk`에서는 `create`만 된다. 이름은 `{type}-{dataset}-{namespace}` 규칙을 따른다. `logs-nginx-default`라면 종류는 로그, 데이터셋은 nginx, 네임스페이스는 default(환경이나 팀 구분에 쓴다)다.
+
+```text
+GET _data_stream/logs-nginx-default
+"index_name": ".ds-logs-nginx-default-2026.10.22-000001",
+"template": "logs",
+"ilm_policy": "logs",
+"index_mode": "logsdb",
+"status": "YELLOW",
+```
+
+기본 템플릿이 붙인 설정도 봤다.
+
+```text
+index.codec = best_compression
+index.default_pipeline = logs@default-pipeline
+index.lifecycle.name = logs
+index.logsdb.sort_on_host_name = true
+index.mapping.ignore_malformed = true
+index.mapping.source.mode = STORED
+index.mode = logsdb
+index.number_of_replicas = 1
+index.number_of_shards = 1
+```
+
+`logs@default-pipeline`은 `@timestamp`가 없으면 받은 시각을 넣고, `logs@custom`이라는 파이프라인이 있으면 부르는 파이프라인이다. 처음 문서의 `@timestamp`가 받은 시각이었던 이유가 이것이다. 상태가 YELLOW인 건 복제본 1개를 둘 다른 노드가 없어서다. 노드 하나짜리 실습이라 생긴 일이다. `index.mode = logsdb`는 9.x의 `logs-*-*`에 기본으로 켜지는 로그 전용 모드다. 호스트 이름과 시각으로 정렬해 저장하고 압축률을 올린다. 기본 정책 `logs`는 30일이나 프라이머리 샤드 50GB에 넘기기(rollover)만 하고 지우지는 않는다.
+
+```text
+GET _ilm/policy/logs
+{"hot": {"min_age": "0ms", "actions": {"rollover": {"max_age": "30d", "max_primary_shard_size": "50gb"}}}}
+```
+
+기본값에 기대면 로그는 영원히 쌓인다. 데이터셋마다 템플릿과 정책을 따로 둔다.
+
+## 템플릿은 조각을 겹쳐 만든다
+
+인덱스 템플릿은 여러 컴포넌트 템플릿(설정과 매핑 조각)을 순서대로 겹친다. 뒤의 조각이 앞을 덮는다. 기본 조각 셋 위에 nginx 전용 조각 둘을 얹었다.
+
+```json
+PUT _component_template/nginx@settings
+{ "template": { "settings": {
+    "index.default_pipeline": "nginx-dissect",
+    "index.lifecycle.name": "logs-nginx",
+    "index.number_of_replicas": 0 } } }
+
+PUT _component_template/nginx@mappings
+{ "template": { "mappings": { "properties": {
+    "http": { "properties": { "response": { "properties": {
+      "status_code": { "type": "long" },
+      "body": { "properties": { "bytes": { "type": "long" } } } } } } },
+    "nginx": { "properties": { "request_time": { "type": "float" } } } } } } }
+
+PUT _index_template/logs-nginx
+{ "index_patterns": ["logs-nginx-*"], "data_stream": {}, "priority": 200,
+  "composed_of": ["logs@mappings", "logs@settings", "ecs@mappings", "nginx@settings", "nginx@mappings"] }
+```
+
+`logs-nginx-default`는 `logs`(100)와 `logs-nginx`(200) 두 템플릿에 다 맞는다. 인덱스 하나에는 우선순위가 가장 높은 템플릿 하나만 적용된다. 두 템플릿을 합치는 게 아니라서, 기본 조각을 쓰고 싶으면 위처럼 `composed_of`에 다시 적는다. 결과는 인덱스를 만들기 전에 미리 볼 수 있다.
+
+```text
+POST _index_template/_simulate_index/logs-nginx-default
+{'default_pipeline': 'nginx-dissect', 'lifecycle': {'name': 'logs-nginx'}, 'mode': 'logsdb', 'number_of_replicas': '0', 'codec': 'best_compression'}
+overlapping [{'name': 'logs', 'index_patterns': ['logs-*-*']}, {'name': 'logs-otel@template', 'index_patterns': ['logs-*.otel-*']}]
+```
+
+`overlapping`에 겹치는 템플릿이 나온다. 우선순위가 같은 템플릿 둘이 겹치면 만들 때 오류가 나니, 팀마다 템플릿을 만드는 조직에서는 우선순위 대역을 정해 둔다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="템플릿 조각, 정책, 파이프라인이 데이터 스트림 하나에 모인다"
+  nodes={[
+    { id: "c1", label: "logs@settings", sub: "logsdb, 압축", x: 70, y: 40, w: 120 },
+    { id: "c2", label: "ecs@mappings", sub: "ECS 타입", x: 70, y: 100, w: 120 },
+    { id: "c3", label: "nginx@*", sub: "파이프라인·매핑", x: 70, y: 160, w: 120 },
+    { id: "it", label: "logs-nginx", sub: "priority 200", x: 220, y: 100, w: 110 },
+    { id: "pl", label: "nginx-dissect", sub: "ingest pipeline", x: 220, y: 220, w: 120 },
+    { id: "ilm", label: "logs-nginx", sub: "ILM 정책", x: 340, y: 220, w: 100 },
+    { id: "ds", label: "data stream", sub: ".ds-…-00000N", x: 340, y: 100, w: 110 },
+  ]}
+  edges={[
+    { from: "c1", to: "it" },
+    { from: "c2", to: "it" },
+    { from: "c3", to: "it" },
+    { from: "it", to: "ds", label: "새 인덱스마다" },
+    { from: "pl", to: "ds", label: "넣을 때", dashed: true },
+    { from: "ilm", to: "ds", label: "시간이 지나면", dashed: true },
+  ]}
+/>
+
+템플릿은 인덱스를 만드는 순간에만 적용된다는 점이 중요하다. 이미 있는 backing index는 템플릿을 고쳐도 그대로다. 그 차이가 어떤 사고를 만드는지 직접 봤다.
+
+## 인덱스마다 타입이 다르면 질의가 깨진다
+
+`nginx@mappings` 조각을 만들기 전, 데이터 스트림이 한 번 넘어가서 새 인덱스(`000002`)가 막 생긴 상태였다. 다른 앱이 같은 데이터 스트림에 상태 코드를 문자열 `"OK"`로 보냈다.
+
+```bash
+# 파이프라인을 건너뛰고 구조화된 문서를 바로 넣는다
+curl -s -XPOST '127.0.0.1:19592/logs-nginx-default/_doc?pipeline=_none&refresh=true' -H 'Content-Type: application/json' \
+  -d '{"@timestamp":"2026-10-22T01:00:00Z","message":"legacy app","http":{"response":{"status_code":"OK"}}}'
+```
+
+문서는 오류 없이 들어갔다. 그런데 매핑을 보니 인덱스마다 타입이 달랐다.
+
+```text
+.ds-logs-nginx-default-2026.10.22-000001 {"type": "long"}
+.ds-logs-nginx-default-2026.10.22-000002 {"type": "keyword", "ignore_above": 1024}
+```
+
+새 인덱스에는 아직 이 필드가 없었고, 처음 들어온 값이 문자열이라 동적 매핑이 keyword로 정했다. 그러자 5xx를 세던 질의가 깨졌다.
+
+```text
+FROM logs-nginx-default | WHERE http.response.status_code >= 500 | STATS n = COUNT(*)
+{"error":{"root_cause":[{"type":"verification_exception","reason":"Found 1 problem\nline 1:33: Cannot use field [http.response.status_code] due to ambiguities being mapped as [2] incompatible types: [keyword] in [.ds-logs-nginx-default-2026.10.22-000002], [long] in [.ds-logs-nginx-default-2026.10.22-000001]"}], ...,"status":400}
+```
+
+Kibana에서는 같은 일이 데이터 뷰의 "필드 타입 충돌" 경고로 보이고, 그 필드로 집계하는 패널이 비거나 오류를 낸다. 하루에 한 번 넘어가는 데이터 스트림이라면 "어제까지 되던 대시보드가 오늘 깨졌다"는 모양으로 나타난다.
+
+질의 쪽에서 당장 피하려면 ES|QL에서 타입을 명시해 바꾼다.
+
+```text
+FROM logs-nginx-default | EVAL status = TO_LONG(http.response.status_code) | WHERE status >= 500 | STATS n = COUNT(*)
+620
+```
+
+근본 처리는 명시적 매핑이다. `nginx@mappings`를 템플릿에 넣고 데이터 스트림을 손으로 한 번 넘긴 뒤 같은 문서를 다시 보냈다.
+
+```text
+POST logs-nginx-default/_rollover
+{"old_index":".ds-logs-nginx-default-2026.10.22-000002","new_index":".ds-logs-nginx-default-2026.10.22-000003","rolled_over":true, ...}
+
+새 문서 → {"_index":".ds-logs-nginx-default-2026.10.22-000003","_ignored":["http.response.status_code"]}
+
+.ds-logs-nginx-default-2026.10.22-000001 {"type": "long"}
+.ds-logs-nginx-default-2026.10.22-000002 {"type": "keyword", "ignore_above": 1024}
+.ds-logs-nginx-default-2026.10.22-000003 {"type": "long"}
+```
+
+새 인덱스에서는 필드가 long으로 정해져 있으니, `"OK"`는 `logs@settings`의 `ignore_malformed: true` 덕분에 문서를 거절하지 않고 그 필드만 무시했다(`_ignored`에 이름이 남는다). 원래 값은 `_source`에 남아 있다. 이미 keyword로 굳은 `000002`는 고칠 수 없고, 보관 기간이 지나 지워질 때까지 남는다. 바로 없애야 한다면 reindex로 새로 쓰는 수밖에 없다. 로그에 쓰는 필드 이름과 타입은 처음부터 템플릿에 적어 두고, 적지 않은 필드가 마구 생기지 않게 막는 법(매핑 폭발)은 [OpenSearch 운영 글](/posts/opensearch-cluster-operations)의 매핑 절을 따른다.
+
+## ILM: 넘기고, 줄이고, 지운다
+
+ILM(Index Lifecycle Management)은 인덱스가 나이를 먹으면서 거칠 단계(hot, warm, cold, frozen, delete)와 단계마다 할 일을 정책으로 적는다. 실습에서 흐름을 보려고 시간을 줄인 정책을 썼다. ILM이 정책을 확인하는 주기도 기본 10분에서 5초로 줄였다.
+
+```json
+PUT _cluster/settings
+{ "persistent": { "indices.lifecycle.poll_interval": "5s" } }
+
+PUT _ilm/policy/logs-nginx
+{ "policy": { "phases": {
+    "hot":    { "actions": { "rollover": { "max_docs": 5000, "max_primary_shard_size": "50gb" } } },
+    "warm":   { "min_age": "2m", "actions": { "forcemerge": { "max_num_segments": 1 }, "readonly": {} } },
+    "delete": { "min_age": "6m", "actions": { "delete": {} } } } } }
+```
+
+2만 줄을 5천 줄씩 네 번 보냈다. 넘기기 조건이 5천 건이니 인덱스가 넷 생길 것 같지만 아니었다.
+
+```text
+03:16:09 bulk 시작
+errors False items 5000 .ds-logs-nginx-default-2026.10.22-000001
+errors False items 5000 .ds-logs-nginx-default-2026.10.22-000001
+errors False items 5000 .ds-logs-nginx-default-2026.10.22-000001
+errors False items 5000 .ds-logs-nginx-default-2026.10.22-000001
+
+03:16:19
+index                                    docs.count store.size
+.ds-logs-nginx-default-2026.10.22-000001      20000      1.9mb
+.ds-logs-nginx-default-2026.10.22-000002          0       227b
+```
+
+ILM은 조건을 주기적으로 확인할 뿐 문서가 들어올 때마다 보지 않는다. 다음 확인 때 2만 건이 조건을 넘었다는 걸 알고 넘겼다. 기본 주기 10분이라면 그 사이에 들어온 만큼 더 커진다. `max_primary_shard_size: 50gb`가 샤드를 정확히 50GB로 자른다는 뜻이 아니다. 넘긴 직후의 상태는 이랬다.
+
+```text
+GET .ds-logs-nginx-*/_ilm/explain
+".ds-logs-nginx-default-2026.10.22-000001": { "age": "695ms", "phase": "hot", "action": "complete", "step": "complete" }
+".ds-logs-nginx-default-2026.10.22-000002": { "age": "649ms", "phase": "new", "action": "complete", "step": "complete" }
+```
+
+`000001`은 만들어진 지 10초가 지났는데 나이가 0.7초다. 넘겨진 인덱스의 나이는 넘긴 시각부터 센다. warm의 `min_age: 2m`은 "만든 지 2분"이 아니라 "넘긴 지 2분"이다. 그래서 보관 기간 30일을 원하면 delete의 min_age에 "넘기기까지 걸리는 최대 시간"을 더해 생각한다. 30일마다 넘기고 30일 뒤에 지우면, 가장 오래된 문서는 60일 가까이 남는다.
+
+<AlgoTrace
+  caption="backing index 000001의 일생 (실습 시각, UTC)"
+  memoryLabel="000001의 상태"
+  cells={["03:16:09", "03:16:19", "03:18:43", "03:22:37"]}
+  steps={[
+    { memory: ["hot", "쓰기 인덱스"], caption: "2만 건이 모두 000001로 들어간다. ILM은 아직 조건을 확인하지 않았다." },
+    { pointer: 0, memory: ["hot", "쓰기 인덱스", "20000건"], caption: "넘기기 조건(5천 건)을 이미 넘었지만, 다음 확인 주기까지 기다린다." },
+    { pointer: 1, found: [1], memory: ["hot 완료", "읽기 전용 아님", "나이 0초부터"], caption: "rollover. 000002가 새 쓰기 인덱스가 되고 000001의 나이는 지금부터 센다." },
+    { pointer: 2, found: [1, 2], memory: ["warm", "세그먼트 1개", "쓰기 금지"], caption: "넘긴 지 2분. forcemerge로 세그먼트를 하나로 합치고 쓰기를 막는다. 검색은 그대로 된다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["삭제됨"], caption: "넘긴 지 6분. 인덱스가 통째로 지워진다. 문서 하나씩 지우는 것보다 훨씬 싸다." },
+  ]}
+/>
+
+warm 단계가 끝난 뒤 확인했다.
+
+```text
+03:18:43
+.ds-logs-nginx-default-2026.10.22-000001 {'age': '2.4m', 'phase': 'warm', 'action': 'complete'}
+segments: _2                         (합치기 전에는 _0, _1 두 개였다)
+{'index.blocks.write': 'true'}
+```
+
+그리고 6분이 지나자 `000001`이 사라지고 데이터 스트림에는 `000002`, `000003`만 남았다. 2만 건이 한꺼번에 지워져 남은 문서는 손으로 넣은 2건이다. 지우는 단위가 인덱스라서, 데이터 스트림에서는 "어제 로그 중 일부만 지우기" 같은 일이 비싸다. 개인정보 삭제 요청처럼 문서 단위로 지워야 하는 데이터는 처음부터 로그 저장소에 넣지 않는 편이 낫다.
+
+warm·cold 단계는 노드에 `data_hot`, `data_warm` 같은 역할을 주고, 단계마다 그 노드로 샤드를 옮기는 식으로 쓴다(ILM이 `migrate` 동작을 자동으로 넣는다). frozen 단계는 스냅샷 저장소의 데이터를 필요할 때만 읽는 searchable snapshot을 쓰는데, 이 기능은 유료 라이선스에 묶여 있다. OpenSearch의 ISM은 같은 일을 하는 다른 구현이다. 상태와 전이를 적는 방식만 다르니, ISM을 쓴다면 [OpenSearch 운영 글](/posts/opensearch-cluster-operations)의 롤오버 절을 본다.
+
+ILM이 멈추는 흔한 경우도 재현해 봤다. 데이터 스트림이 아닌 평범한 인덱스에 넘기기가 들어간 정책을 붙이면 이렇게 된다.
+
+```text
+GET app-logs-000001/_ilm/explain
+"phase": "hot", "action": "rollover", "step": "ERROR", "failed_step": "check-rollover-ready",
+"step_info": { "reason": "setting [index.lifecycle.rollover_alias] for index [app-logs-000001] is empty or not defined" }
+```
+
+평범한 인덱스는 어느 이름으로 넘길지(쓰기 별칭)를 알려 줘야 한다. 이 상태로 두면 인덱스 하나가 끝없이 커진다. 정기적으로 `_ilm/explain?only_errors=true`를 확인하고, 원인을 고친 뒤 `_ilm/retry`로 다시 돌린다.
+
+## 같은 2만 줄, 저장 방식마다 다른 크기
+
+같은 2만 문서(원본 로그 2.8MB)를 매핑은 같게, 저장 설정만 바꿔 넣고 세그먼트를 하나로 합친 뒤 크기를 쟀다.
+
+```text
+index            docs.count pri.store.size(KB)
+cmp-standard          20000           2708     기본 (LZ4 압축)
+cmp-best              20000           1925     index.codec: best_compression
+cmp-logsdb            20000           1815     index.mode: logsdb
+cmp-logsdb-nomsg      20000           1139     logsdb + 파싱 뒤 message 필드 삭제
+```
+
+`best_compression`만으로 29% 줄었고, logsdb는 거기서 조금 더 줄었다. Elastic이 logsdb로 크게 줄어든다고 소개하는 수치는 `_source`를 저장하지 않고 필드 값에서 되살리는 synthetic source가 켜졌을 때 이야기다. 이 클러스터는 basic 라이선스였고 `index.mapping.source.mode`가 `STORED`였다. 라이선스 등급마다 이 기능이 다르니 쓰는 배포판과 등급에서 직접 확인해야 한다.
+
+가장 크게 줄인 건 설정이 아니라 `message` 삭제였다. 필드로 다 쪼갠 뒤에도 원문을 남기면 같은 내용을 두 번 저장하는 셈이다. 파싱이 안정됐다면 원문은 지우고, 파싱에 실패한 문서만 원문을 남기는 식으로 나눈다. 다만 원문이 없으면 나중에 파싱 규칙을 고쳐 다시 넣을 수가 없으니, 원문은 S3 같은 싼 저장소에 따로 두는 구성도 흔하다.
+
+샤드 크기는 여기서 반복하지 않는다. 시계열 로그는 프라이머리 샤드를 10~50GB 사이로 맞추는 게 Elastic의 안내이고, 데이터 스트림에서는 `max_primary_shard_size`로 그 크기에 넘기면 된다. 하루 로그가 1GB인 데이터셋을 날마다 넘기면 작은 샤드가 수백 개 쌓인다. 크기로 넘기는 편이 낫다. 자세한 계산은 [OpenSearch 운영 글](/posts/opensearch-cluster-operations)에 있다.
+
+## ES|QL과 KQL로 묻기
+
+Kibana의 검색창에서 쓰는 KQL은 거르기만 하는 짧은 문법이다(예시).
+
+```text
+http.response.status_code >= 500 and not url.path : "/healthz"
+```
+
+ES|QL은 파이프(`|`)로 잇는 질의 언어로, 거르고 계산하고 묶는 일을 한 줄에 한다. `_query` API로 바로 돌렸다.
+
+```bash
+curl -s -XPOST '127.0.0.1:19592/_query?format=txt' -H 'Content-Type: application/json' -d '{"query":"FROM logs-nginx-default | WHERE http.response.status_code >= 500 | STATS errors = COUNT(*), p95 = PERCENTILE(nginx.request_time, 95) BY http.response.status_code | SORT errors DESC"}'
+```
+
+```text
+    errors     |       p95       |http.response.status_code
+---------------+-----------------+-------------------------
+394            |2.87505007982254 |500
+226            |2.903749942779541|502
+```
+
+경로에 ID가 들어가 있으면 그대로 묶을 수 없으니 질의 안에서 고쳐 묶는다.
+
+```text
+FROM logs-nginx-default | WHERE http.response.status_code >= 500
+  | EVAL route = REPLACE(url.path, "/[0-9]+$", "/:id")
+  | STATS errors = COUNT(*) BY route | SORT errors DESC | LIMIT 5
+
+    errors     |      route
+---------------+-----------------
+105            |/api/orders/:id
+98             |/api/products/:id
+97             |/healthz
+89             |/api/orders
+86             |/api/cart
+```
+
+`/healthz`가 5xx 3위다. 쿠버네티스 탐침이 부르는 경로라 사용자 오류율 계산에서는 빼야 한다. 시간대별로 나누면 이렇다.
+
+```text
+FROM logs-nginx-default | WHERE http.response.status_code >= 500
+  | STATS n = COUNT(*) BY bucket = BUCKET(@timestamp, 15 minutes) | SORT bucket | LIMIT 5
+
+       n       |         bucket
+---------------+------------------------
+120            |2026-10-21T15:00:00.000Z
+134            |2026-10-21T15:15:00.000Z
+123            |2026-10-21T15:30:00.000Z
+```
+
+(다섯 줄 중 셋만 옮겼다.) 시간 칸이 UTC 15시부터 시작한다. 파이프라인이 `@timestamp`를 로그 시각으로 바로잡았기 때문이다. 처음처럼 받은 시각으로 남았다면 2만 줄이 모두 같은 몇 초에 몰렸을 것이다. 작은 함정 하나도 있었다. `STATS first = MIN(@timestamp)`처럼 `first`를 이름으로 쓰면 `parsing_exception`이 난다. 예약어라서다.
+
+## Loki와 비교하면
+
+ELK 대신 Loki를 고르는 팀도 많다. 색인형과 레이블형의 크기와 질의 비용 차이는 [중앙 로그 파이프라인 글](/posts/centralized-logging-pipeline)에서 같은 로그로 재 봤으니, 여기서는 고를 때 따지는 것만 적는다.
+
+| | Elasticsearch | Loki |
+|---|---|---|
+| 찾아보기 | 필드마다 (역색인, 열 저장) | 레이블 몇 개만 |
+| 강한 질의 | 아무 필드로 거르기, 집계, 본문 검색 | 레이블로 좁힌 뒤 훑기 |
+| 저장 | 노드의 로컬 디스크(단계별 이동) | 객체 저장소 |
+| 운영 부담 | 샤드, 매핑, JVM 힙 | 레이블 카디널리티, 질의 범위 |
+| 가공 | ingest pipeline, Logstash | 수집기(Alloy, Promtail 등)에서 |
+
+필드로 자주 묻고 집계하는 로그(접근 로그, 감사 로그, 보안 이벤트)는 Elasticsearch가 맞고, 대부분 시간 범위와 서비스로 좁혀 훑어보는 앱 로그는 Loki가 싸다. 둘을 같이 두고 로그 종류별로 나눠 보내는 조직도 있다.
+
+## Kibana에 로그가 안 보일 때
+
+"보냈는데 안 보인다"는 문의를 받으면 앞에서부터 지운다.
+
+- 시간 범위가 맞나: `@timestamp`가 받은 시각이거나 시간대가 틀려 다른 시간대에 들어가 있을 수 있다. 시간 범위를 넓혀 `message`로 찾아본다.
+- 파이프라인이 실패했나: `event.kind: pipeline_error`나 `error.message`가 있는 문서를 찾고, `_nodes/stats/ingest`에서 프로세서별 `failed`를 본다.
+- 필드 타입이 충돌하나: 데이터 뷰의 경고, `_field_caps`, 인덱스별 매핑을 본다.
+- 거절당했나: `_bulk` 응답의 `errors: true`와 항목별 `error`. 수집기 로그에 `mapper_parsing_exception`이나 `es_rejected_execution_exception`(쓰기 큐 넘침)이 있는지 본다.
+- 쓰기가 막혔나: 디스크가 flood stage를 넘으면 인덱스가 읽기 전용이 된다([역색인 글의 클러스터 상태 절](/posts/elasticsearch-inverted-index)).
+- ILM이 멈췄나: `_ilm/explain?only_errors=true`.
+
+<SequenceDiagram
+  caption="_bulk 한 번이 들어가기까지 거치는 검사"
+  actors={[
+    { id: "fb", label: "Filebeat" },
+    { id: "co", label: "coordinating" },
+    { id: "ig", label: "ingest" },
+    { id: "pr", label: "primary shard" },
+  ]}
+  steps={[
+    { from: "fb", to: "co", label: "_bulk (5000)", title: "묶음으로 보낸다", detail: "줄마다 create 동작과 문서 한 쌍이다. 응답은 묶음 전체가 아니라 항목마다 성공·실패를 돌려준다." },
+    { from: "co", to: "ig", label: "default_pipeline", title: "파이프라인을 돌린다", detail: "인덱스 템플릿이 정한 기본 파이프라인을 돌린다. 실패하면 on_failure가 받거나, 없으면 그 문서만 거절한다.", payload: "event.kind: pipeline_error" },
+    { from: "ig", to: "co", label: "@timestamp", title: "시각을 확인한다", detail: "데이터 스트림은 @timestamp가 꼭 있어야 한다. 파이프라인이 로그 시각을 옮겨 넣었는지가 여기서 갈린다." },
+    { from: "co", to: "pr", label: "write index", title: "지금 쓰기 인덱스로", detail: "데이터 스트림의 가장 최근 backing index로 간다. 그 인덱스의 매핑과 다른 타입이면 거절하거나(ignore_malformed가 없을 때) 그 필드만 무시한다." },
+    { from: "pr", to: "fb", label: "items[]", title: "항목별 결과", detail: "errors가 false여도 _ignored가 붙은 문서가 있을 수 있다. errors가 true면 실패한 항목만 다시 보낸다.", payload: "errors False items 5000" },
+  ]}
+/>
+
+## 다시 message 한 줄 앞에서
+
+처음의 문서는 `message` 하나와 받은 시각뿐이었다. 기본 `logs` 템플릿이 데이터 스트림을 만들고 받은 시각을 넣어 줬지만, 쪼개고 시간을 바로잡는 건 우리 몫이었다. dissect 파이프라인으로 필드를 나누고, 컴포넌트 템플릿으로 타입을 못 박고, ILM으로 넘기고 지우는 시점을 정하자 같은 2만 줄이 ES|QL 한 줄로 경로별 5xx를 세는 데이터가 됐다. Elastic 스택에서 로그를 다룬다는 건 결국 들어오기 전(파이프라인), 만들어질 때(템플릿), 나이를 먹으며(ILM) 세 시점에 규칙을 거는 일이다.
+
+## 면접에서 나올 만한 질문
+
+### Beats, Logstash, Elastic Agent, ingest pipeline은 각각 언제 쓰나요?
+
+Beats와 Elastic Agent는 서버마다 두는 가벼운 수집기로 파일을 따라 읽어 보낸다. Agent는 Beats를 하나로 묶고 Fleet에서 정책으로 관리하는 쪽이다. 단순한 쪼개기와 변환은 Elasticsearch의 ingest pipeline으로 충분하고, 여러 목적지로 갈라 보내거나 Kafka에서 읽거나 무거운 가공이 필요할 때 Logstash를 중간에 둔다. 단계가 늘수록 운영할 것도 늘어난다.
+
+### grok과 dissect는 어떻게 고르나요?
+
+dissect는 구분자로만 잘라서 빠르고, grok은 정규식으로 맞춰서 형식이 들쭉날쭉해도 다룰 수 있다. 실습에서 같은 2만 줄을 자르는 데 grok이 321ms, dissect가 58ms였다(한 번 잰 값). 형식이 고정된 로그는 dissect, 모양이 제각각이면 grok, 앱이 JSON을 찍을 수 있으면 json 프로세서가 가장 싸다.
+
+### 데이터 스트림은 일반 인덱스와 무엇이 다른가요?
+
+이름 하나 뒤에 backing index 여러 개를 두고, 쓰기는 가장 최근 인덱스로만 가고 읽기는 전체를 대상으로 한다. 추가만 하는 시계열 데이터용이라 `@timestamp`가 필수이고 `_bulk`에서는 create만 된다. 넘기기를 쓰기 별칭 없이 할 수 있어서, 평범한 인덱스에 rollover 정책을 붙였을 때 생기는 rollover_alias 오류가 없다.
+
+### 인덱스 템플릿을 고쳤는데 필드 타입 충돌이 계속됩니다. 왜인가요?
+
+템플릿은 인덱스를 만드는 순간에만 적용되고 이미 있는 backing index는 그대로다. 실습에서도 템플릿에 long을 적은 뒤 새 인덱스는 long이 됐지만, 그 전에 keyword로 굳은 인덱스는 남아 ES|QL 질의가 incompatible types 오류를 냈다. 템플릿을 고친 뒤 rollover로 새 인덱스를 만들고, 옛 인덱스는 보관 기간이 지나 지워지길 기다리거나 reindex한다. 그 사이 질의는 TO_LONG처럼 타입을 명시해 피한다.
+
+### ILM의 min_age는 언제부터 세나요? 보관 기간을 정할 때 주의할 점은?
+
+넘기기가 있는 정책에서는 넘긴 시각부터 센다. 실습에서도 rollover 직후 나이가 0초부터 다시 시작했다. 그래서 30일마다 넘기고 delete min_age를 30일로 두면 가장 오래된 문서는 60일 가까이 남는다. 그리고 ILM은 조건을 주기적으로(기본 10분) 확인하니 넘기기 조건보다 인덱스가 커질 수 있다.
+
+### logsdb 모드를 켜면 저장 공간이 얼마나 줄어드나요?
+
+`_source`를 저장하지 않고 되살리는 synthetic source가 켜졌을 때 크게 줄어들고, 그 기능은 라이선스 등급에 따라 쓸 수 없을 수 있다. basic 라이선스로 띄운 실습에서는 source가 STORED였고, 같은 2만 문서가 기본 2,708KB, best_compression 1,925KB, logsdb 1,815KB였다. 파싱 뒤 원문 message를 지우자 1,139KB가 되어 그게 가장 컸다.
+
+### ES와 Loki 중 무엇을 고르나요?
+
+필드로 자주 거르고 집계하는 로그(접근, 감사, 보안)는 필드마다 찾아보기가 있는 Elasticsearch가 맞다. 대부분 서비스와 시간으로 좁혀 훑어보는 앱 로그는 레이블만 색인하고 객체 저장소에 두는 Loki가 싸다. Elasticsearch는 샤드·매핑·힙을, Loki는 레이블 카디널리티와 넓은 범위 질의 비용을 관리해야 한다.

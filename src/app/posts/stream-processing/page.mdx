@@ -1,0 +1,335 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("stream-processing");
+
+주문 이벤트를 Kafka에서 읽어 "회원별 누적 주문 수"를 세는 컨슈머가 있다. 메모리의 `Map`에 회원 번호별로 더하고, 결과를 대시보드로 보낸다. 주문이 늘어 컨슈머를 두 대로 늘렸더니, 같은 회원이 대시보드에 두 줄로 나오고 숫자가 둘로 갈렸다. 한 대는 u7이 1건, 다른 한 대는 u7이 3건이라고 한다. 실제로는 4건이다.
+
+코드는 하나도 안 바꿨다. 바뀐 건 "같은 회원의 주문이 어느 컨슈머로 가나"다. 들어오는 대로 하나씩 처리하는 스트림 처리에서, 처리하는 쪽이 무언가를 기억해야 하는 순간부터 이런 문제가 생긴다. 이 글은 그 기억, 즉 상태를 다룬다. 상태를 어느 작업자에 두는지, 두 흐름을 잇는 조인이 무엇을 기억해야 하는지, 작업자가 죽으면 상태를 어떻게 되살리는지, 그리고 Kafka Streams와 Flink 같은 엔진이 이걸 어떻게 맡아 주는지다.
+
+같은 주제의 다른 글과 나눠 맡는다. 이벤트 시간, 워터마크, 텀블링과 슬라이딩 윈도는 [광고 클릭 집계 ①](/posts/sd-ad-click-stream-windows)에, 다시 처리해도 한 번만 세는 법과 스냅샷 복구는 [광고 클릭 집계 ②](/posts/sd-ad-click-exactly-once)에 있다. 파티션, 오프셋, 소비자 그룹은 [Kafka 기초](/posts/kafka-basics)에 있다. 아래 실험은 모두 Node 22로 만든 작은 흉내 엔진에서 돌렸다. 실제 엔진의 이름과 설정은 그 옆에 적는다.
+
+## 기억할 것이 있는 단계와 없는 단계
+
+스트림 처리는 이벤트가 지나가는 단계(연산자)를 이어 붙인 것이다. 단계는 두 종류로 나뉜다.
+
+기억할 것이 없는 단계는 이벤트 하나만 보고 일을 끝낸다. 형식이 틀린 주문 버리기(filter), 금액을 원화로 바꾸기(map), 주문 하나를 상품 줄 여러 개로 펴기(flatMap)가 그렇다. 어느 작업자가 처리해도 결과가 같고, 작업자가 죽어도 다시 읽으면 그만이다. 늘리기도 쉽다.
+
+기억할 것이 있는 단계는 앞에서 본 이벤트를 들고 있어야 한다. 회원별 누적 합계, 1분 칸의 클릭 수, 최근 10분 안에 본 주문 번호(중복 거르기), 결제를 기다리는 주문(조인)이 그렇다. 이 들고 있는 것을 상태(state)라고 부른다. 스트림 처리에서 어려운 일은 거의 다 상태에서 나온다. 같은 키의 상태는 한곳에 있어야 하고, 작업자가 죽어도 잃으면 안 되고, 끝없이 커지면 안 된다.
+
+## 같은 키는 같은 작업자에게
+
+처음 장면을 재현했다. 주문 8건이 `order_id`를 키로 파티션 두 개에 나뉘어 들어온다. 작업자는 파티션마다 하나씩, 둘이다.
+
+```js
+// repartition.js 일부: 작업자마다 자기 파티션의 주문을 회원별로 센다
+function countPerWorker(ps) {
+  return ps.map((events) => {
+    const st = new Map();
+    for (const e of events) st.set(e.user, (st.get(e.user) || 0) + 1);
+    return Object.fromEntries(st);
+  });
+}
+```
+
+```text
+input partitions (key = orderId): 102,104,106,108 | 101,103,105,107
+count without repartition: [{"u8":2,"u7":1,"u9":1},{"u7":3,"u9":1}]
+after repartition (key = user): 102:u8,106:u8 | 101:u7,103:u7,104:u7,105:u9,107:u7,108:u9
+count with repartition:    [{"u8":2},{"u7":4,"u9":2}]
+```
+
+`order_id`로 나뉜 채 세면 u7이 두 작업자에 1건, 3건으로 흩어진다. 둘 다 틀린 답을 자신 있게 낸다. 회원 번호로 다시 나눠(repartition) 보내면 u7의 주문 4건이 한 작업자에 모여 정답이 된다. 상태를 쓰는 단계 앞에서는 키가 그 상태의 키와 같아야 한다.
+
+<NetworkTopology
+  caption="키를 바꾸는 단계 앞에서 다시 나눠 보낸다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "in", label: "order_id로 나뉨", x: 8, y: 20, w: 120, h: 220, tone: "edge" },
+    { id: "out", label: "user로 나뉨", x: 262, y: 20, w: 130, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "p0", label: "part 0", sub: "102,104…", x: 68, y: 80, icon: "db" },
+    { id: "p1", label: "part 1", sub: "101,103…", x: 68, y: 180, icon: "db" },
+    { id: "rk", label: "re-key", sub: "key = user", x: 195, y: 130, icon: "switch" },
+    { id: "w0", label: "worker 0", sub: "u8", x: 327, y: 80, icon: "server" },
+    { id: "w1", label: "worker 1", sub: "u7, u9", x: 327, y: 180, icon: "server" },
+  ]}
+  links={[
+    { from: "p0", to: "rk" },
+    { from: "p1", to: "rk" },
+    { from: "rk", to: "w0" },
+    { from: "rk", to: "w1" },
+  ]}
+  steps={[
+    { path: ["p0", "rk", "w1"], packet: "104 u7", title: "파티션 0의 u7 주문", detail: "order_id로는 파티션 0에 있었다. 회원 번호로 다시 해시하면 worker 1로 간다." },
+    { path: ["p1", "rk", "w1"], packet: "101 u7", title: "파티션 1의 u7 주문도 같은 곳", detail: "어느 파티션에서 왔든 u7은 worker 1로 모인다. 그래서 worker 1이 u7을 혼자 센다." },
+    { path: ["p0", "rk", "w0"], packet: "102 u8", title: "u8은 worker 0으로", detail: "키마다 정해진 작업자가 하나다. u8의 상태는 worker 0에만 있다." },
+    { path: ["w1"], packet: "u7=4", title: "정답이 한곳에서 나온다", detail: "다시 나누기 전에는 1과 3으로 갈려 있던 u7이 4가 됐다." },
+  ]}
+/>
+
+다시 나누는 데는 비용이 든다. 모든 이벤트가 네트워크를 한 번 더 건넌다. Kafka Streams는 키를 바꾼 뒤 상태를 쓰는 단계가 오면 중간 토픽(이름이 `-repartition`으로 끝난다)을 자동으로 만들어 거기에 다시 썼다가 읽는다. 브로커의 디스크와 네트워크를 그만큼 더 쓴다. Flink는 `keyBy`에서 작업자끼리 네트워크로 바로 주고받는다(셔플). 그래서 키를 바꾸는 단계는 될 수 있으면 앞쪽에 한 번만 둔다. 처음부터 상태의 키로 파티션해서 넣어 주면 다시 나눌 필요가 없다. 반대로 키 하나에 이벤트가 몰리면 그 키를 맡은 작업자 하나만 바빠진다. 키를 쪼개 세고 다시 합치는 방법은 [광고 클릭 집계 ②](/posts/sd-ad-click-exactly-once)의 핫스팟 절에 있다.
+
+## 스트림과 테이블은 한 데이터의 두 모습
+
+회원별 누적 주문 수를 생각해 보자. 주문이 들어올 때마다 "u7 = 1", "u7 = 2", "u7 = 3"이 차례로 바뀐다. 이 바뀌는 순간들을 이어 놓으면 스트림이고, 지금 이 순간의 값만 모아 보면 테이블이다. 스트림을 키별로 쌓으면 테이블이 되고, 테이블이 바뀔 때마다 내보내면 다시 스트림이 된다. 이걸 스트림과 테이블의 이중성이라고 한다.
+
+<ConceptDiagram
+  caption="스트림을 쌓으면 테이블, 테이블의 변경을 흘리면 스트림"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "stream", label: "주문 스트림", sub: "u7 주문, u8 주문…", x: 80, y: 60, w: 130 },
+    { id: "table", label: "회원별 합계 테이블", sub: "u7=4, u8=2", x: 320, y: 60, w: 140 },
+    { id: "log", label: "체인지로그", sub: "u7=1, u7=2, …", x: 320, y: 170, w: 130 },
+    { id: "cdc", label: "DB 테이블", sub: "CDC로 흘려보냄", x: 80, y: 170, w: 130 },
+  ]}
+  edges={[
+    { from: "stream", to: "table", label: "키별로 쌓기" },
+    { from: "table", to: "log", label: "바뀔 때마다" },
+    { from: "log", to: "table", label: "다시 쌓으면 복원", dashed: true },
+    { from: "cdc", to: "stream", label: "변경을 이벤트로" },
+  ]}
+/>
+
+이 생각이 실무에서 쓰이는 곳이 셋이다. 첫째, 운영 DB의 테이블도 변경을 흘려보내면 스트림이 된다. [CDC](/posts/cdc-change-data-capture)가 하는 일이 이것이고, 그 스트림을 받아 다시 쌓으면 다른 곳에 같은 테이블이 생긴다. 둘째, 작업자가 들고 있는 상태 테이블도 바뀔 때마다 로그로 남겨 두면 죽어도 그 로그를 다시 쌓아 되살릴 수 있다. 뒤에서 직접 해 본다. 셋째, 키별 최신 값만 필요한 로그는 Kafka의 컴팩션(키마다 마지막 값만 남기기)으로 크기를 줄일 수 있다. 컴팩션은 [Kafka 기초](/posts/kafka-basics)의 보관 절에 있다. Kafka Streams는 이 두 모습을 `KStream`과 `KTable`이라는 타입으로 나눠 쓰게 한다.
+
+## 주문에 회원 등급을 붙이는 조인
+
+주문 스트림에 회원 등급을 붙여 골드 회원이면 10% 할인 금액을 계산한다고 하자. 회원 등급은 CDC로 들어오는 테이블이다. 주문이 올 때마다 그 회원의 등급을 테이블에서 찾아 붙이는 스트림-테이블 조인이다.
+
+함정은 두 입력의 도착 순서다. u7이 시각 100에 골드가 됐고, 시각 105에 주문했다. 그런데 회원 등급 변경이 늦게 도착해서 주문이 먼저 들어왔다. 처리 순서대로 조인하면 이렇게 된다.
+
+```js
+// table_join.js 일부: 주문이 도착한 순간의 테이블 값을 본다
+for (const e of arrivals) {
+  if (e.src === "users") { table.set(e.user, e.tier); continue; }
+  const tier = table.get(e.user);
+  console.log(`order ${e.orderId} t=${e.t} ${e.user} tier=${tier} discount=${e.amount * discount(tier)}`);
+}
+```
+
+```text
+processing-order join
+  order 201 t=105 u7 tier=basic discount=0
+  order 202 t=110 u8 tier=gold discount=2000
+  order 203 t=120 u7 tier=gold discount=3000
+```
+
+시각 105의 주문 201은 골드가 된 뒤의 주문인데 basic으로 붙어 할인이 0원이다. 조인이 "주문이 일어난 시각의 등급"이 아니라 "주문이 도착한 순간 테이블에 있던 등급"을 봤기 때문이다. Kafka Streams의 스트림-테이블 조인이 기본으로 이렇게 동작한다. 아래 그림에서 다음을 누르면 순서가 보인다.
+
+<SequenceDiagram
+  caption="등급 변경보다 주문이 먼저 도착하면 옛 등급이 붙는다"
+  actors={[
+    { id: "users", label: "회원 변경" },
+    { id: "orders", label: "주문" },
+    { id: "join", label: "조인" },
+    { id: "out", label: "결과" },
+  ]}
+  steps={[
+    { from: "users", to: "join", label: "u7 basic", title: "처음 등급이 들어온다", detail: "테이블에 u7 = basic이 있다." },
+    { from: "orders", to: "join", label: "201 t=105", title: "주문이 먼저 도착한다", detail: "u7이 시각 105에 주문했다. 골드 변경은 아직 오는 중이다." },
+    { from: "join", to: "out", label: "basic, 0원", title: "지금 테이블 값으로 붙인다", detail: "조인은 도착 순간의 테이블을 본다. 할인이 빠진다.", payload: "{ orderId: 201, tier: \"basic\", discount: 0 }" },
+    { from: "users", to: "join", label: "u7 gold t=100", title: "늦게 온 등급 변경", detail: "시각 100의 변경이 이제야 도착한다. 이미 나간 결과는 고쳐지지 않는다." },
+  ]}
+/>
+
+이벤트 시각으로 맞추려면 테이블을 버전으로 보관하고, 테이블 쪽이 주문 시각까지 왔다고 확신할 때까지 주문을 기다리게 한다. 테이블 쪽 워터마크가 그 확신이다. 같은 입력으로 돌렸다.
+
+```text
+event-time (temporal) join
+  still waiting: 201, 202, 203 (table watermark 100)
+  users t=130 arrives -> table watermark 130
+  order 201 t=105 u7 tier=gold discount=5000  (emitted after table watermark 130)
+  order 202 t=110 u8 tier=gold discount=2000  (emitted after table watermark 130)
+  order 203 t=120 u7 tier=gold discount=3000  (emitted after table watermark 130)
+```
+
+주문 201이 골드로 붙어 5,000원이 할인됐다. 대신 세 주문 모두 테이블 쪽에 시각 130의 변경이 들어올 때까지 나오지 못했다. 회원 등급은 자주 바뀌지 않으니 테이블 쪽 워터마크가 잘 안 움직인다. 정확성을 얻은 대가가 지연이고, 조용한 입력이 워터마크를 붙잡는 문제는 [광고 클릭 집계 ①](/posts/sd-ad-click-stream-windows)의 워터마크 함정과 같다. 엔진들은 조용한 입력을 계산에서 빼는 설정(Flink의 idleness)으로 푼다.
+
+Flink SQL에서는 이 조인을 `FOR SYSTEM_TIME AS OF` 문법의 시간 조인(temporal join)으로 쓴다. Kafka Streams는 3.5부터 버전 저장소(versioned store)를 쓰면 스트림-테이블 조인이 이벤트 시각 기준으로 옛 버전을 찾는다. 어느 쪽이든 "주문 시각의 값이 필요한가, 처리 시각의 값이면 되는가"를 먼저 정한다. 추천 화면에 붙이는 등급이라면 처리 시각으로 충분하고, 돈이 걸린 할인이라면 이벤트 시각이 맞다. 아예 주문을 만드는 쪽이 그 순간의 등급을 이벤트에 실어 보내면 조인 자체가 필요 없다.
+
+## 두 스트림을 이으면 기다리는 동안 상태가 쌓인다
+
+이번에는 주문 스트림과 결제 스트림을 `order_id`로 잇는다. "주문 뒤 10분 안에 결제가 오면 짝, 안 오면 미결제로 알림." 테이블과 달리 양쪽 다 끝없는 흐름이라, 짝이 올 때까지 한쪽을 들고 있어야 한다. 얼마나 오래 들고 있을지가 창의 크기다.
+
+1시간 동안 주문 10만 건을 만들었다. 95%는 5분 안에, 3%는 5분에서 15분 사이에 결제되고, 2%는 결제되지 않는다. 창 크기를 바꿔 가며 돌렸다.
+
+```js
+// window_join.js 일부: 결제를 기다리는 주문을 들고 있다가, 창이 지나면 미결제로 내보낸다
+for (const e of events) {
+  for (const [id, t] of waiting) { if (t + windowSec < e.t) { waiting.delete(id); expired++; } else break; }
+  if (e.type === "order") waiting.set(e.id, e.t);
+  else if (waiting.has(e.id)) { waiting.delete(e.id); matched++; }
+  else latePay++;
+  peak = Math.max(peak, waiting.size);
+}
+```
+
+```text
+window  300s  matched 94702  expired-unpaid 5298  late payments 3216  peak state 5322 orders
+window  600s  matched 96381  expired-unpaid 3619  late payments 1537  peak state 5748 orders
+window  900s  matched 97918  expired-unpaid 2082  late payments 0  peak state 6006 orders
+window 1800s  matched 97918  expired-unpaid 2082  late payments 0  peak state 6549 orders
+```
+
+창이 5분이면 결제가 늦은 3,216건이 미결제로 잘못 알림이 나가고, 그 뒤에 온 결제는 짝을 못 찾는다. 15분이면 늦은 결제가 0이 되고 진짜 미결제 2,082건(약 2%)만 남는다. 30분으로 늘려도 맞히는 수는 같고 들고 있는 상태만 커진다. 상태의 대부분은 짝을 찾지 못한 주문이다. 이 실험에서는 몇천 건이지만, 하루치 주문을 하루 창으로 들고 있으면 작업자 메모리가 버티지 못한다. 창은 실제 결제 지연 분포를 보고, 놓치는 비율과 상태 크기 사이에서 고른다.
+
+<AlgoTrace
+  caption="창 60초: 짝이 오면 지우고, 창이 지나면 미결제로 내보낸다"
+  cells={["주문 a t0", "주문 b t10", "결제 b t40", "주문 c t50", "결제 a t65", "결제 c t100"]}
+  memoryLabel="결제를 기다리는 주문"
+  steps={[
+    { pointer: 0, memory: ["a (~60)"], caption: "주문 a가 들어온다. 60초까지 기다린다." },
+    { pointer: 1, memory: ["a (~60)", "b (~70)"], caption: "주문 b도 기다린다." },
+    { pointer: 2, found: [1, 2], memory: ["a (~60)"], caption: "b의 결제가 30초 만에 왔다. 짝을 내보내고 b를 지운다." },
+    { pointer: 3, memory: ["a (~60)", "c (~110)"], caption: "주문 c가 들어온다." },
+    { pointer: 4, memory: ["c (~110)"], caption: "시각 65. a의 창이 지났으니 미결제로 내보낸다. 이제 온 a의 결제는 짝이 없다." },
+    { pointer: 5, found: [3, 5], memory: [], caption: "c의 결제가 50초 만에 왔다. 짝이다. 기다리는 주문이 없다." },
+  ]}
+/>
+
+직접 짜 보자. 시각 순서로 정렬된 주문과 결제를 받아, 창 안에 짝을 찾은 주문 번호(짝을 찾은 순서)와 미결제로 내보낸 주문 번호(내보낸 순서)를 돌려준다. 이벤트를 처리하기 전에, 주문 시각 + 창이 지금 시각보다 작은 주문부터 내보낸다. 끝까지 남은 주문도 미결제다. 틀 코드는 창을 무시한다.
+
+<CodePlayground
+  caption="창 안에서 주문과 결제 잇기"
+  functionName="joinWithin"
+  initialCode={`// events: [{ type: "order" | "pay", t, id }] 시각 순서대로
+function joinWithin(events, windowSec) {
+  const waiting = new Map();
+  const matched = [];
+  for (const e of events) {
+    if (e.type === "order") waiting.set(e.id, e.t);
+    else if (waiting.has(e.id)) { waiting.delete(e.id); matched.push(e.id); }
+  }
+  return { matched, expired: [] };
+}`}
+  solution={`function joinWithin(events, windowSec) {
+  const waiting = new Map();          // id -> 주문 시각 (들어온 순서 = 시각 순서)
+  const matched = [], expired = [];
+  for (const e of events) {
+    for (const [id, t] of waiting) {  // 창이 지난 주문부터 내보낸다
+      if (t + windowSec < e.t) { waiting.delete(id); expired.push(id); } else break;
+    }
+    if (e.type === "order") waiting.set(e.id, e.t);
+    else if (waiting.has(e.id)) { waiting.delete(e.id); matched.push(e.id); }
+  }
+  expired.push(...waiting.keys());
+  return { matched, expired };
+}`}
+  tests={[
+    { label: "창 안의 결제", args: [[{ type: "order", t: 0, id: "a" }, { type: "pay", t: 30, id: "a" }], 60], expected: { matched: ["a"], expired: [] } },
+    { label: "늦은 결제", args: [[{ type: "order", t: 0, id: "a" }, { type: "pay", t: 90, id: "a" }], 60], expected: { matched: [], expired: ["a"] } },
+    { label: "섞인 흐름", args: [[{ type: "order", t: 0, id: "a" }, { type: "order", t: 10, id: "b" }, { type: "pay", t: 40, id: "b" }, { type: "order", t: 50, id: "c" }, { type: "pay", t: 65, id: "a" }, { type: "pay", t: 100, id: "c" }], 60], expected: { matched: ["b", "c"], expired: ["a"] } },
+    { label: "창 끝에 딱 맞는 결제", args: [[{ type: "order", t: 0, id: "a" }, { type: "pay", t: 60, id: "a" }], 60], expected: { matched: ["a"], expired: [] } },
+    { label: "주문 없는 결제", args: [[{ type: "pay", t: 5, id: "x" }, { type: "order", t: 10, id: "y" }], 60], expected: { matched: [], expired: ["y"] } },
+  ]}
+/>
+
+Flink의 DataStream API에서는 이걸 interval join이라고 부르고, Kafka Streams에서는 `JoinWindows`를 준 스트림-스트림 조인이다. 엔진은 창이 지난 상태를 알아서 지운다. 창이 없는 조인(예: 회원별 모든 주문을 영원히 기억)은 상태가 끝없이 커지니, 엔진이 허락하더라도 상태 수명(Flink의 state TTL, Kafka Streams의 보관 기간)을 꼭 건다.
+
+## 작업자가 죽으면 상태는 어디서 돌아오나
+
+작업자 메모리의 상태는 작업자와 함께 사라진다. 그래서 엔진은 상태를 메모리 밖 어딘가에 남긴다. 방법은 크게 둘이다.
+
+Kafka Streams는 상태가 바뀔 때마다 그 변경을 체인지로그 토픽에 쓴다. 작업자가 죽으면 그 파티션을 넘겨받은 작업자가 체인지로그를 처음부터 다시 읽어 상태를 다시 쌓는다. Flink는 주기적으로 모든 작업자의 상태를 한 시점에 맞춰 떠서 객체 저장소에 두는 체크포인트를 쓰고, 죽으면 마지막 체크포인트를 불러온 뒤 그 시점의 입력 오프셋부터 다시 읽는다. 체크포인트와 오프셋을 짝으로 남기는 원리는 [광고 클릭 집계 ②](/posts/sd-ad-click-exactly-once)의 스냅샷 절에 있다. 여기서는 체인지로그 쪽을 직접 해 봤다.
+
+회원 1만 명의 누적 주문 금액을 상태로 들고, 바뀔 때마다 체인지로그 파일에 "회원, 새 값" 한 줄을 쓴다. 주문 100만 건을 처리하다 80만 건째에 `process.exit(1)`로 프로세스를 죽였다. 그리고 새 프로세스에서 체인지로그를 다시 읽어 상태를 복원했다. 키마다 마지막 값만 남긴(컴팩션한) 로그로도 복원해 봤다.
+
+```bash
+node changelog.js run; echo "exit code $?"   # 80만 건째에 죽는다
+node changelog.js restore                     # 체인지로그로 복원
+```
+
+```text
+crash at order 800000, u42 = 2256000
+exit code 1
+replay full changelog: 800,000 lines -> 10,000 keys in 325 ms, u42 = 2256000
+replay compacted log:   10,000 lines -> 10,000 keys in 4 ms, u42 = 2256000
+changelog 10.7 MB, compacted 0.14 MB
+```
+
+죽기 직전 u42의 값 2,256,000이 그대로 돌아왔다. 다만 키는 1만 개인데 체인지로그는 80만 줄이라 다시 쌓는 데 325ms가 걸렸다. 컴팩션한 로그는 1만 줄, 4ms다. 실제 시스템에서는 이 차이가 몇 초와 몇십 분의 차이가 된다. 그래서 Kafka Streams의 체인지로그 토픽은 기본으로 컴팩션 토픽이다. 그래도 상태가 수십 GB면 복원에 시간이 걸린다. 그 사이 그 파티션은 처리가 멈추고 랙이 쌓인다.
+
+<AlgoTrace
+  caption="체인지로그를 다시 쌓아 상태를 되살린다"
+  cells={["218 u42=49000", "2969 u7=31000", "26516 u7=77000", "31081 u42=74000", "끝 u42=2256000"]}
+  memoryLabel="새 작업자의 상태"
+  steps={[
+    { pointer: 0, memory: ["u42=49000"], caption: "새 작업자가 체인지로그를 처음부터 읽는다. 218번째 줄에 u42가 처음 나온다." },
+    { pointer: 1, memory: ["u42=49000", "u7=31000"], caption: "키마다 마지막으로 읽은 값을 들고 간다." },
+    { pointer: 2, memory: ["u42=49000", "u7=77000"], caption: "같은 키의 새 값이 오면 앞의 값은 필요 없다. 컴팩션이 지우는 줄이 이런 것이다." },
+    { pointer: 3, memory: ["u42=74000", "u7=77000"], caption: "u42도 새 값으로 덮어쓴다." },
+    { pointer: 4, found: [4], memory: ["u42=2256000", "u7=2008000"], caption: "80만 줄을 끝까지 읽으면 죽기 직전의 상태와 같다. 그다음 입력 오프셋부터 처리를 이어 간다." },
+  ]}
+/>
+
+복원 시간을 줄이는 장치가 몇 가지 있다. Kafka Streams는 대기 복제본(`num.standby.replicas`, 기본 0)을 두면 다른 작업자가 체인지로그를 미리 따라 읽고 있다가 바로 넘겨받는다. 작업자의 로컬 디스크에 상태가 남아 있으면 처음부터가 아니라 남은 부분만 읽는다. 그래서 컨테이너를 다시 띄울 때 디스크를 유지하는지가 복원 시간을 크게 바꾼다. Kubernetes라면 StatefulSet과 영구 볼륨을 쓰는 이유다.
+
+상태를 어디에 두는지도 고른다. 작은 상태는 힙 메모리에 두면 가장 빠르다(Flink의 HashMapStateBackend). 메모리보다 큰 상태는 작업자 로컬 디스크의 임베디드 키-값 저장소에 둔다. Kafka Streams의 기본 영구 저장소와 Flink의 EmbeddedRocksDBStateBackend가 RocksDB를 쓴다. 디스크에 두면 메모리보다 훨씬 큰 상태를 들 수 있지만, 읽고 쓸 때마다 직렬화 비용이 들고 RocksDB의 메모리와 디스크를 따로 튜닝해야 한다. Flink는 RocksDB를 쓸 때 바뀐 부분만 올리는 증분 체크포인트를 켤 수 있어서 큰 상태의 체크포인트 비용을 줄인다.
+
+## 느린 단계가 앞을 막는 방식
+
+조인 뒤의 DB 쓰기가 느려지면 앞 단계는 어떻게 될까. 엔진마다 다르다.
+
+Flink는 단계 사이를 네트워크 버퍼로 잇고, 받는 쪽이 비어 있는 버퍼 수만큼만 보내라고 알려 주는 방식(크레딧 기반 흐름 제어)을 쓴다. 뒤가 느리면 앞이 보내지 못하고 멈추고, 그게 거슬러 올라가 소스가 Kafka에서 덜 읽는다. 웹 UI에서 연산자마다 backpressured 비율이 보이고, 그 비율이 높은 연산자 바로 뒤의 연산자가 병목이다. 백프레셔가 길게 걸리면 체크포인트 표식(barrier)도 버퍼에 막혀 체크포인트가 시간 초과로 실패하기 시작한다.
+
+Kafka Streams는 작업자 하나가 읽고, 처리하고, 쓰는 일을 한 스레드에서 차례로 한다. 뒤가 느리면 그냥 덜 읽는다. 그 결과는 입력 토픽의 컨슈머 랙으로 드러난다. 어느 쪽이든 결국 가장 느린 곳이 전체 속도를 정한다. 일반적인 백프레셔의 원리는 [백프레셔](/posts/backpressure)에 있다.
+
+## Kafka Streams, Flink, 그냥 컨슈머
+
+같은 일을 할 수 있는 선택지가 여럿이라 비교가 필요하다.
+
+| 선택 | 어떻게 돈다 | 잘 맞는 곳 | 치르는 것 |
+|---|---|---|---|
+| 직접 짠 컨슈머 | 앱 안의 Kafka 컨슈머 루프 | 상태 없는 변환, 이벤트 하나에 일 하나 | 상태, 재분배, 복원, 정확히 한 번을 직접 만든다 |
+| Kafka Streams | 앱 안에 넣는 자바 라이브러리 | 입력과 출력이 다 Kafka이고 팀이 이미 Kafka를 운영할 때 | Kafka 밖의 입력이 어렵고, 중간 토픽이 브로커 부하를 늘린다 |
+| Flink | 별도 클러스터(JobManager, TaskManager) | 큰 상태, 복잡한 이벤트 시간 처리, Kafka 밖의 소스와 싱크 | 클러스터 운영과 체크포인트 저장소가 필요하다 |
+| Spark Structured Streaming | 짧은 배치를 이어 붙이는 방식 | 이미 Spark로 배치를 하는 팀, 몇 초 지연이 괜찮을 때 | 이벤트마다 처리하는 것보다 지연이 크다 |
+
+Kafka Streams는 별도 클러스터가 없다는 점이 가장 크다. 일반 서비스처럼 배포하고, 인스턴스를 늘리면 소비자 그룹 리밸런싱으로 파티션과 상태가 나뉜다. Flink는 더 많은 일을 하지만 운영할 부품이 많다. SQL로 스트림 처리를 쓰는 방법(Flink SQL, ksqlDB)도 있어서, 조인과 집계 정도라면 코드 없이 시작하기도 한다. 상태 없는 변환만 한다면 엔진 없이 컨슈머 하나로 충분하다. 처음 장면의 회원별 합계처럼 상태가 생기는 순간이 엔진을 검토할 때다.
+
+## 스트림 작업이 아플 때 보이는 증상
+
+배포 직후 몇 분 동안 랙이 치솟았다가 서서히 줄어든다면 상태 복원이다. Kafka Streams라면 로그에 상태 저장소 복원(restoration) 메시지와 남은 오프셋이 찍힌다. 매 배포마다 반복된다면 로컬 상태 디렉터리가 컨테이너와 함께 지워지고 있는지 본다.
+
+작업자 하나만 CPU가 높고 그 파티션의 랙만 쌓인다면 키 쏠림이다. 키별 이벤트 수를 세어 상위 몇 개를 본다. 하나가 압도적이면 그 키를 쪼개 나눠 세고 다시 합친다.
+
+결과가 몇 분째 안 나오는데 에러도 없다면 워터마크가 멈춘 것이다. 위의 조인 실험처럼 입력 하나가 조용해지면 이벤트 시간 조인과 윈도가 전부 기다린다.
+
+메모리나 디스크가 시간에 비례해 계속 늘어난다면 지워지지 않는 상태가 있다. 창 없는 조인, TTL 없는 중복 거르기, 끝나지 않는 세션 윈도가 흔한 원인이다. Flink라면 체크포인트 크기 추이가, Kafka Streams라면 RocksDB 디렉터리 크기가 같이 늘어난다.
+
+## 상태를 키로 나누고, 로그로 지킨다
+
+스트림 처리에서 어려운 일은 상태에서 나온다. 상태를 쓰는 단계 앞에서는 같은 키가 같은 작업자에 모이도록 다시 나누고, 스트림-테이블 조인은 처리 시각의 값을 볼지 이벤트 시각의 값을 볼지 정하며, 두 스트림을 잇는 조인은 창으로 상태의 수명을 묶는다. 상태는 체인지로그나 체크포인트로 메모리 밖에 남겨 두고, 복원에 걸리는 시간까지 운영의 일부로 본다. 변경을 스트림으로 만드는 앞단은 [CDC](/posts/cdc-change-data-capture)에, 결과를 쌓아 분석하는 뒷단은 [스타 스키마](/posts/olap-star-schema)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 상태가 있는 스트림 처리와 없는 처리는 무엇이 다른가요?
+
+상태가 없는 단계는 이벤트 하나만 보고 끝나서 어느 작업자가 처리해도 같고 늘리기 쉽다. 상태가 있는 단계는 합계, 윈도, 조인, 중복 거르기처럼 앞에서 본 이벤트를 들고 있어야 한다. 그래서 같은 키를 한 작업자에 모아야 하고, 작업자가 죽어도 상태를 되살릴 수 있어야 하며, 상태가 끝없이 커지지 않게 수명을 정해야 한다.
+
+### 집계하기 전에 다시 파티셔닝(repartition)이 필요한 이유는요?
+
+입력이 집계 키와 다른 키로 나뉘어 있으면 같은 키의 이벤트가 여러 작업자에 흩어져 각자 일부만 센다. 실험에서 u7이 두 작업자에 1건과 3건으로 갈렸다. 집계 키로 다시 해시해 보내면 한 작업자에 모인다. Kafka Streams는 중간 토픽을, Flink는 네트워크 셔플을 쓰고 둘 다 비용이 드니 키 바꾸기는 한 번만 앞쪽에 둔다.
+
+### 스트림과 테이블의 이중성이란 무엇인가요?
+
+스트림을 키별로 쌓으면 테이블이 되고, 테이블의 변경을 차례로 흘리면 스트림이 된다는 뜻이다. CDC가 DB 테이블을 스트림으로 만들고, 스트림 처리 엔진은 상태 테이블의 변경을 체인지로그로 남겨 복원에 쓴다. 키별 최신 값만 필요하니 체인지로그는 컴팩션으로 줄인다.
+
+### 스트림-테이블 조인에서 옛 값이 붙는 이유와 막는 법은요?
+
+기본 조인은 이벤트가 도착한 순간 테이블에 있던 값을 본다. 테이블 변경이 이벤트보다 늦게 도착하면 이벤트 시각으로는 이미 바뀐 값인데 옛 값이 붙는다. 테이블을 버전으로 보관하고 테이블 쪽 워터마크가 이벤트 시각을 넘을 때까지 기다리는 시간 조인으로 막는다. 대신 그만큼 늦게 나오고, 테이블이 조용하면 오래 기다린다.
+
+### 두 스트림을 조인할 때 창 크기는 어떻게 정하나요?
+
+창은 한쪽을 기다리며 들고 있는 시간이라 정확성과 상태 크기를 맞바꾼다. 실험에서 5분 창은 늦은 결제 3,216건을 놓쳤고, 15분이면 0건이 됐으며, 30분으로 늘려도 맞히는 수는 같고 상태만 커졌다. 실제 지연 분포를 재서 놓치는 비율이 감당할 만한 지점을 고른다.
+
+### 작업자가 죽으면 상태는 어떻게 복구되나요?
+
+Kafka Streams는 상태 변경을 컴팩션된 체인지로그 토픽에 쓰고, 넘겨받은 작업자가 그걸 다시 읽어 상태를 쌓는다. Flink는 주기적인 체크포인트를 불러오고 그 시점의 오프셋부터 다시 읽는다. 복원 시간이 길면 그동안 처리가 멈추니, 대기 복제본이나 로컬 상태 보존, 증분 체크포인트로 줄인다.
+
+### Kafka Streams와 Flink 중 무엇을 고르나요?
+
+입력과 출력이 모두 Kafka이고 별도 클러스터를 운영하고 싶지 않다면 Kafka Streams가 가볍다. 앱처럼 배포하고 소비자 그룹으로 확장한다. 상태가 아주 크거나, 이벤트 시간 처리가 복잡하거나, Kafka 밖의 소스와 싱크가 많다면 Flink가 맞다. 상태 없는 변환뿐이라면 엔진 없이 컨슈머로 충분하다.

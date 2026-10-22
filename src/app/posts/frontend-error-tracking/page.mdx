@@ -1,0 +1,519 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-error-tracking");
+
+"쿠폰 버튼을 눌러도 아무 일이 없다"는 문의가 들어왔다. 내 브라우저에서는 잘 된다. 서버 로그를 열어 보니 쿠폰 API는 호출된 적조차 없다. 에러는 사용자의 브라우저 안에서 났고, 거기서 끝났다. 서버는 끝까지 모른다.
+
+사용자에게 콘솔을 열어 캡처해 달라고 부탁해 받은 줄은 이랬다.
+
+```text
+TypeError: Cannot read properties of undefined (reading 'FALL10')
+    at jo (http://localhost:18800/assets/app-CJLDKWDF.js:10:2133)
+    at onClick (http://localhost:18800/assets/app-CJLDKWDF.js:10:2280)
+```
+
+`jo`라는 함수, 10번째 줄 2133번째 칸. 압축된 번들 안의 위치라서 이 줄만으로는 어느 코드인지 알 수 없다. 프런트엔드 에러 추적은 이 두 문제를 푸는 일이다. 사용자 브라우저에서 난 에러를 빠짐없이 모으고, 압축된 위치를 원래 소스의 줄로 되돌린다.
+
+이 글은 작은 에러 수집 SDK와 수집 서버를 직접 만들어 Chromium에서 에러를 일으키고, 무엇이 잡히고 무엇이 새는지, 소스맵으로 스택을 어떻게 되돌리는지를 따라간다. 실습 환경은 Node.js 22, Chromium 141(Playwright로 실행), esbuild 0.25.10, React 19.2, `source-map` 0.7.6이다.
+
+이 주제의 다른 글: 모은 에러와 서버 로그를 요청 ID로 이어 버그를 재현하는 과정은 [로그로 버그 추적하기](/posts/debugging-with-logs), 상황마다 어느 화면을 열어야 하는지는 [로그 도구 지도](/posts/logging-tools-overview)에 있다. Promise 거부가 `unhandledrejection`이 되는 과정은 [Promise](/posts/js-promises), 배포 직후 쏟아지는 청크 에러의 원인과 대응은 [코드 스플리팅](/posts/code-splitting)에서 다뤘다. 여기서는 반복하지 않고 수집 쪽만 본다.
+
+## 에러가 브라우저 밖으로 나가는 길
+
+서버라면 처리되지 않은 예외는 프로세스 로그에 남는다. 브라우저에는 그런 자리가 없다. 콘솔은 사용자의 탭 안에만 있고, 탭을 닫으면 사라진다. 그래서 페이지 안에 작은 코드(SDK)를 넣어 에러를 듣고, 맥락을 붙여, 수집 서버로 보낸다.
+
+아래 그림에서 다음을 누르면 에러 한 건이 사용자 브라우저에서 개발자 화면까지 가는 길이 보인다.
+
+<SequenceDiagram
+  caption="쿠폰 버튼 에러 한 건이 원래 소스 줄이 되기까지"
+  actors={[
+    { id: "app", label: "앱 코드" },
+    { id: "sdk", label: "수집 SDK" },
+    { id: "col", label: "수집 서버" },
+    { id: "map", label: "비공개 맵" },
+    { id: "dev", label: "개발자" },
+  ]}
+  steps={[
+    { from: "app", to: "sdk", label: "throw TypeError", title: "아무도 잡지 않은 에러", detail: "클릭 핸들러에서 던진 에러가 끝까지 잡히지 않으면 window에 error 이벤트가 온다. SDK는 그 이벤트를 듣고 있다." },
+    { from: "sdk", to: "sdk", label: "맥락 붙이기", title: "보내기 전에 붙이고 가린다", detail: "릴리스 이름, 사용자 ID, 직전 행동 기록(브레드크럼)을 붙인다. URL과 메시지의 이메일·토큰은 이 자리에서 지운다.", payload: '{"release":"web@1.4.2","user":"u_1042","url":"/?email=[email]"}' },
+    { from: "sdk", to: "col", label: "sendBeacon", title: "페이지가 닫혀도 보낸다", detail: "sendBeacon은 탭을 닫는 순간에도 브라우저가 대신 보내 준다. 응답은 기다리지 않는다." },
+    { from: "col", to: "map", label: "web@1.4.2 맵", title: "릴리스로 맵을 고른다", detail: "이벤트의 release와 파일 이름으로 그 빌드의 소스맵을 찾는다. 맵은 공개 서버가 아니라 수집 서버만 갖고 있다." },
+    { from: "map", to: "col", label: "app.jsx:42:25", title: "압축된 위치를 원래 줄로", detail: "app-CJLDKWDF.js의 10번째 줄 2133번째 칸이 src/app.jsx의 42번째 줄 25번째 칸이라고 알려 준다." },
+    { from: "col", to: "dev", label: "묶어서 알림", title: "같은 에러끼리 묶는다", detail: "에러 이름, 숫자를 지운 메시지, 첫 원본 프레임으로 지문을 만든다. 같은 지문은 한 건으로 묶고 몇 명이 겪었는지 센다." },
+  ]}
+/>
+
+실습 SDK는 100줄이 안 된다. 상용 도구도 뼈대는 같다. 에러를 듣는 자리, 붙이는 맥락, 보내는 방법, 서버에서 되돌리고 묶는 과정이다. 하나씩 본다.
+
+## 다섯 가지 에러, 잡는 자리가 다르다
+
+브라우저에서 나는 에러는 어디서 났느냐에 따라 도착하는 이벤트가 다르다. 하나만 들으면 나머지는 조용히 샌다.
+
+```js
+function onError(e) {
+  if (e.error || e.message) {
+    // 스크립트 실행 중 던진 에러 (동기 코드, 이벤트 핸들러, setTimeout 콜백)
+    capture(e.error || new Error(e.message), { kind: "onerror", filename: e.filename, lineno: e.lineno, colno: e.colno });
+  } else if (e.target && e.target !== window) {
+    // img, script, link 로드 실패: error 이벤트가 버블링되지 않아 캡처 단계에서만 받는다
+    const el = e.target;
+    capture(new Error("resource failed: " + el.tagName.toLowerCase()), { kind: "resource", src: el.src || el.href });
+  }
+}
+function onRejection(e) { capture(e.reason, { kind: "unhandledrejection" }); }
+
+window.addEventListener("error", onError, true);          // 세 번째 인자 true = 캡처 단계
+window.addEventListener("unhandledrejection", onRejection);
+```
+
+`window.onerror = fn`으로 등록하는 옛 방식은 리소스 로드 실패를 받지 못한다. 이미지의 `error` 이벤트는 그 `<img>`에서 끝나고 위로 올라오지 않기 때문이다. `addEventListener`의 캡처 단계로 등록해야 `window`가 내려가는 길에서 먼저 본다.
+
+실습 앱에는 에러를 다섯 군데 심었다. 장바구니 응답에 `price: null`인 상품이 섞여 렌더링 중에 터지고, 쿠폰 버튼 핸들러는 없는 객체를 읽고, 저장 버튼은 500 응답에 `throw`하지만 `catch`가 없다. 배너 이미지는 404이고, 편집기 청크는 배포로 지워졌다. 아래 그림은 각 에러가 어느 자리에서 잡혔는지 보여 준다.
+
+<AlgoTrace
+  caption="실습 앱의 에러 다섯 개와 잡은 자리"
+  memoryLabel="수집된 것"
+  cells={["렌더 중 throw", "클릭 핸들러", "then 안 throw", "img 404", "청크 실패"]}
+  steps={[
+    { pointer: 0, memory: ["경계"], caption: "렌더링 중 에러는 React 에러 경계가 먼저 잡는다. window까지 가지 않으니 경계에서 직접 보내야 한다." },
+    { pointer: 1, memory: ["경계", "error"], caption: "이벤트 핸들러의 에러는 경계가 못 잡는다. 아무도 잡지 않아 window의 error 이벤트로 온다." },
+    { pointer: 2, memory: ["경계", "error", "rejection"], caption: "then 콜백에서 던지면 예외가 아니라 Promise 거부다. catch가 없으니 unhandledrejection으로 온다." },
+    { pointer: 3, memory: ["경계", "error", "rejection", "캡처"], caption: "이미지 404는 버블링되지 않는다. 캡처 단계 리스너만 받는다. e.error가 없고 e.target이 img다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["경계", "error", "rejection", "캡처", "rejection"], caption: "import()가 실패하면 그 Promise가 거부된다. 핸들러에서 catch를 안 했으니 이것도 unhandledrejection이다." },
+  ]}
+/>
+
+Chromium에서 버튼을 차례로 눌렀을 때 수집 서버가 받은 이벤트다(한 줄씩 줄였다).
+
+```text
+{"kind":"resource","release":"web@1.4.2","user":"u_1042","fp":"resource: /img/banner-missing.png",...}
+{"kind":"react","release":"web@1.4.2","user":"u_1042","fp":"TypeError: Cannot read properties of null (reading 'toLocaleString') @ src/app.jsx:9:21",...}
+{"kind":"onerror","release":"web@1.4.2","user":"u_1042","fp":"TypeError: Cannot read properties of undefined (reading 'FALL10') @ src/app.jsx:42:25",...}
+{"kind":"unhandledrejection","release":"web@1.4.2","user":"u_1042","fp":"Error: save failed: <n> @ src/app.jsx:51:112",...}
+{"kind":"unhandledrejection","release":"web@1.4.2","user":"u_1042","fp":"TypeError: Failed to fetch dynamically imported module: http://localhost:<n>/assets/editor-BYQAFAVK.js @ ",...}
+```
+
+마지막 줄의 청크 에러는 스택이 비어 있어서 지문 뒤쪽이 비었다. 이런 에러는 메시지로 묶어야 하는데, 메시지에 해시가 든 파일 이름이 있어서 배포마다 다른 그룹이 생긴다. 지문을 만들 때 해시 부분도 지우는 게 맞다. 이 에러가 배포 직후에 몰리는 이유는 코드 스플리팅 글에 있다.
+
+## 번들보다 먼저 난 에러는 놓친다
+
+처음 만든 SDK는 배너 이미지 404를 한 번도 보내지 않았다. 리스너 코드에는 문제가 없었다. 순서가 문제였다.
+
+```bash
+# head의 인라인 버퍼 없이 빌드하고 같은 페이지를 연다
+NO_EARLY=1 node build.mjs > /dev/null
+node server.mjs > server-noearly.log &
+node run.mjs load-cart > /dev/null; cat server-noearly.log
+```
+
+```text
+collector on 18800
+{"kind":"react","release":"web@1.4.2","user":"u_1042","fp":"TypeError: Cannot read properties of null (reading 'toLocaleString') @ src/app.jsx:9:21","url":"http://localhost:18800/?email=[email]"}
+```
+
+`<script type="module">`은 문서를 다 읽은 뒤에 실행된다. 그 사이 이미지는 이미 요청을 보냈고 404를 받았다. 리스너가 붙기 전에 지나간 이벤트는 다시 오지 않는다. 번들이 커서 받는 데 오래 걸리거나, 번들 자체를 받지 못한 경우(그게 가장 큰 장애다)에도 똑같이 아무것도 안 남는다.
+
+고친 방법은 `<head>`에 아주 짧은 인라인 스크립트를 넣어 이벤트를 쌓아 두고, SDK가 뜰 때 한꺼번에 처리하는 것이다.
+
+```html
+<script>
+  window.__early = [];
+  addEventListener("error", function (e) { window.__early && __early.push(e); }, true);
+  addEventListener("unhandledrejection", function (e) { window.__early && __early.push(e); });
+</script>
+```
+
+```js
+export function install() {
+  for (const e of window.__early || []) e.type === "error" ? onError(e) : onRejection(e);
+  window.__early = null; // 이후로는 쌓지 않는다
+  window.addEventListener("error", onError, true);
+  window.addEventListener("unhandledrejection", onRejection);
+}
+```
+
+처음에는 `window.__early && `를 빼먹었다. SDK가 `__early`를 `null`로 바꾼 뒤에도 인라인 리스너는 살아 있어서, 다음 에러 때 `null.push`로 또 에러가 났다. 그 에러의 스택에는 페이지 주소가 통째로 실려 왔다.
+
+```text
+TypeError: Cannot read properties of null (reading 'push')
+    at http://localhost:18800/?email=kim@example.com:1:182
+```
+
+인라인 스크립트의 위치는 페이지 URL로 찍힌다. 메시지와 URL 필드만 가려 두면 스택으로 이메일이 샌다. 그래서 실습 SDK는 스택에도 같은 가리기 함수를 거친다. 상용 SDK가 `<head>` 맨 위에 짧은 로더 스니펫을 넣으라고 안내하는 것도 이 순서 문제 때문이다.
+
+## 다른 출처 스크립트는 "Script error."만 남긴다
+
+CDN에서 받는 위젯이나 광고 스크립트에서 난 에러는 내용이 지워진다. 다른 포트(다른 출처)에서 에러를 던지는 스크립트를 받아 `error` 이벤트를 찍어 봤다. 두 번째 줄은 `<script crossorigin="anonymous">`로 받고, 서버가 `Access-Control-Allow-Origin: *`를 준 경우다.
+
+```text
+xo1: message="Script error." filename="" lineno=0 error=null
+xo2: message="Uncaught Error: widget init failed" filename="http://localhost:18801/widget.js?cors=1" lineno=1 error="Error: widget init failed\n    at initWidget (http://localhost:18801/widget.js?cors=1:1:30)\n    at http://localhost:18801/widget.js?cors=1:2:1"
+```
+
+브라우저는 다른 출처 스크립트의 에러 내용을 페이지에 넘기지 않는다. 에러 메시지에 그 출처의 비밀(로그인한 사용자 이름 같은)이 실릴 수 있어서다. 내용을 보려면 두 쪽이 다 동의해야 한다. 페이지는 `crossorigin` 속성으로 CORS 요청을 하고, 스크립트 서버는 허용 헤더를 준다. 정적 파일을 별도 CDN 도메인에서 내려주는 구성이라면 내 번들도 다른 출처라서, 이걸 빼먹으면 대시보드가 "Script error."로 가득 찬다. 헤더 쪽 규칙은 [CORS](/posts/cors) 글에 있다.
+
+`crossorigin`을 붙였는데 서버가 헤더를 안 주면 스크립트 자체가 막힌다. 순서는 CDN 헤더 먼저, 속성 나중이다.
+
+## React가 잡은 에러는 window까지 오지 않는다
+
+렌더링 중 에러는 위의 `error` 리스너에 오지 않을 수 있다. 에러 경계가 잡아서 대체 화면을 보여 주면 그 에러는 "처리된" 것이기 때문이다. 경계에서 직접 보내야 한다. 에러 경계는 React 19에서도 클래스로만 만든다([클래스 글](/posts/js-classes)).
+
+```jsx
+class ErrorBoundary extends React.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    capture(error, { kind: "react", componentStack: info.componentStack }); // 경계에서 직접 보낸다
+  }
+  render() {
+    return this.state.error ? <p id="fallback">장바구니를 불러오지 못했다</p> : this.props.children;
+  }
+}
+```
+
+React 19부터는 `createRoot`에 `onCaughtError`(경계가 잡은 에러), `onUncaughtError`(경계가 없어 화면이 통째로 사라진 에러), `onRecoverableError`(하이드레이션 불일치처럼 React가 스스로 복구한 에러)를 줄 수 있다. 경계마다 보내는 코드를 넣는 대신 루트 한 곳에서 받을 수 있다. 하이드레이션 쪽 에러가 어떻게 보고되는지는 [하이드레이션](/posts/hydration) 글에 있다.
+
+에러 경계가 못 잡는 것도 알아 둔다. 이벤트 핸들러, `setTimeout`, Promise 안의 에러, 경계 자신의 에러다. 실습의 쿠폰 버튼과 저장 버튼이 그래서 `window` 쪽 리스너로 왔다.
+
+경계가 함께 넘겨 준 `componentStack`은 어느 컴포넌트 안에서 났는지 알려 주는데, 운영 빌드에서는 이것도 압축된 이름이다.
+
+```text
+"\n    at Qo (http://localhost:18800/assets/app-CJLDKWDF.js:10:1371)\n    at ul (<anonymous>)\n    at div (<anonymous>)\n    at ro (http://localhost:18800/assets/app-CJLDKWDF.js:10:1828)\n    at ri (http://localhost:18800/assets/app-CJLDKWDF.js:10:1436)\n    at div (<anonymous>)\n    at Zo (<anonymous>)"
+```
+
+`Qo`가 무엇인지 알려면 이것도 소스맵을 거쳐야 한다. 세 프레임을 맵에 물어봤다.
+
+```text
+1371 ../../src/app.jsx 12 19 function CartRow({ item }) {
+1828 ../../src/app.jsx 28 28   const [items, setItems] = useState(null);
+1436 ../../src/app.jsx 16 0 class ErrorBoundary extends React.Component {
+```
+
+`Qo`는 `CartRow`, `ro`는 `Cart`, `ri`는 `ErrorBoundary`다. 컴포넌트 스택도 함께 되돌려야 "장바구니 줄 하나에서 났다"까지 읽힌다.
+
+## 압축된 위치를 원래 줄로 되돌리기
+
+스택의 한 줄은 이렇게 생겼다. 크롬 계열(V8) 형식이다. 파이어폭스(SpiderMonkey)와 사파리는 `함수@주소:줄:칸` 꼴로 쓴다.
+
+<UrlAnatomy
+  caption="크롬 계열 스택 프레임 한 줄 (실습 값)"
+  base="    at "
+  separator=""
+  joiner=""
+  params={[
+    { key: "fn", display: "jo ", title: "함수 이름", description: "압축기가 바꾼 이름이다. applyCoupon이 jo가 됐다. 빌드마다 바뀌어서 이 이름으로 에러를 묶으면 배포마다 다른 그룹이 생긴다." },
+    { key: "file", display: "(http://localhost:18800/assets/app-CJLDKWDF.js", title: "파일", description: "해시가 붙은 번들 파일이다. 이 이름으로 그 빌드의 소스맵(app-CJLDKWDF.js.map)을 찾는다.", required: true },
+    { key: "line", display: ":10", title: "줄", description: "압축된 파일은 몇 줄밖에 없다. 이 파일은 67줄이고, 앱 코드 전체가 10번째 줄 하나에 들어 있다.", required: true },
+    { key: "col", display: ":2133)", title: "칸", description: "그 줄의 몇 번째 글자인지다. 1부터 센다. source-map 라이브러리는 칸을 0부터 세니 1을 빼서 넘긴다.", required: true },
+  ]}
+/>
+
+소스맵은 "압축된 파일의 몇째 줄 몇째 칸은 원본 어느 파일의 몇째 줄 몇째 칸"이라는 대응표다. 빌드 도구가 압축하면서 함께 만든다. 수집 서버는 이벤트를 받으면 스택을 줄마다 쪼개 맵에 묻는다.
+
+```js
+import { SourceMapConsumer } from "source-map";
+
+const consumer = await new SourceMapConsumer(JSON.parse(fs.readFileSync(`maps/${release}/${file}.map`, "utf8")));
+const pos = consumer.originalPositionFor({ line: 10, column: 2133 - 1 }); // 칸은 0부터
+// pos = { source: "../../src/app.jsx", line: 42, column: 24, name: ... }
+const code = consumer.sourceContentFor(pos.source).split("\n")[pos.line - 1]; // 원본 줄까지 꺼낸다
+```
+
+수집 서버가 실제로 되돌린 결과다. `raw`가 브라우저가 보낸 스택, `mapped`가 맵을 거친 위치와 원본 줄이다.
+
+```text
+  raw:   TypeError: Cannot read properties of undefined (reading 'FALL10')
+             at jo (http://localhost:18800/assets/app-CJLDKWDF.js:10:2133)
+             at onClick (http://localhost:18800/assets/app-CJLDKWDF.js:10:2280)
+  mapped:
+    src/app.jsx:42:25  <- app-CJLDKWDF.js:10:2133
+        | const coupon = window.coupons[code];
+    src/app.jsx:50:42  <- app-CJLDKWDF.js:10:2280
+        | <button id="coupon" onClick={() => applyCoupon("FALL10")}>쿠폰</button>
+    node_modules/react-dom/cjs/react-dom-client.production.js:12317:13  <- app-CJLDKWDF.js:8:126906
+```
+
+`window.coupons`가 없다. 쿠폰 목록을 전역에 넣는 스크립트가 이 사용자에게는 실행되지 않은 것이다. 이제 무엇을 볼지 알 수 있다.
+
+하나 조심할 점이 있다. 맵이 돌려주는 `name`은 그 위치에 있는 식별자 이름이지 그 위치를 감싼 함수 이름이 아니다. 처음 만든 서버는 이 값을 함수 이름으로 찍었다가, 13번째 줄(`CartRow` 안)을 `formatPrice`라고 보여 줬다. 그 줄에서 `formatPrice`를 호출하고 있어서다. 그래서 실습 서버는 이름 대신 원본 줄 내용을 보여 준다. 감싼 함수 이름까지 정확히 되살리려면 원본 소스를 파싱해야 하고, 상용 도구는 그 일까지 한다.
+
+스택 한 줄을 쪼개는 함수를 직접 만들어 보자. 크롬 형식(이름 있는 것과 없는 것)과 파이어폭스 형식을 모두 읽고, 위치가 없는 줄(`<anonymous>`, 에러 메시지 줄)에는 `null`을 돌려준다.
+
+<CodePlayground
+  caption="스택 프레임 한 줄 파싱하기"
+  functionName="parseFrame"
+  initialCode={`// 돌려줄 값: { fn, file, line, col } 또는 null. 이름이 없으면 fn은 null
+function parseFrame(line) {
+  return null;
+}`}
+  solution={`function parseFrame(line) {
+  const s = line.trim();
+  let m = s.match(/^at (?:(.+?) \\()?(.+?):(\\d+):(\\d+)\\)?$/);
+  if (!m) m = s.match(/^(?:(.*?)@)?(.+?):(\\d+):(\\d+)$/);
+  if (!m) return null;
+  return { fn: m[1] || null, file: m[2], line: Number(m[3]), col: Number(m[4]) };
+}`}
+  tests={[
+    { label: "크롬, 이름 있음", args: ["    at jo (http://localhost:18800/assets/app-CJLDKWDF.js:10:2133)"], expected: { fn: "jo", file: "http://localhost:18800/assets/app-CJLDKWDF.js", line: 10, col: 2133 } },
+    { label: "크롬, 익명 함수", args: ["    at http://localhost:18800/assets/app-CJLDKWDF.js:10:2422"], expected: { fn: null, file: "http://localhost:18800/assets/app-CJLDKWDF.js", line: 10, col: 2422 } },
+    { label: "파이어폭스 형식", args: ["applyCoupon@http://localhost:18800/assets/app-CJLDKWDF.js:10:2133"], expected: { fn: "applyCoupon", file: "http://localhost:18800/assets/app-CJLDKWDF.js", line: 10, col: 2133 } },
+    { label: "파이어폭스, 익명", args: ["@http://localhost:18800/assets/app-CJLDKWDF.js:10:2422"], expected: { fn: null, file: "http://localhost:18800/assets/app-CJLDKWDF.js", line: 10, col: 2422 } },
+    { label: "위치 없는 프레임", args: ["    at ul (<anonymous>)"], expected: null },
+    { label: "메시지 줄", args: ["TypeError: Cannot read properties of null (reading 'toLocaleString')"], expected: null },
+  ]}
+/>
+
+## 소스맵은 수집 서버만 갖는다
+
+빌드 결과를 보면 맵 파일이 번들보다 훨씬 크다.
+
+```text
+dist/assets/app-CJLDKWDF.js 196879
+dist/assets/chunk-FW4363Y4.js 544
+dist/assets/editor-BYQAFAVK.js 89
+maps/web@1.4.2/app-CJLDKWDF.js.map 923771
+maps/web@1.4.2/chunk-FW4363Y4.js.map 93
+maps/web@1.4.2/editor-BYQAFAVK.js.map 223
+```
+
+```bash
+# 맵 안에 무엇이 들었나
+node -e 'const m=JSON.parse(require("fs").readFileSync("maps/web@1.4.2/app-CJLDKWDF.js.map"));
+  console.log("sources:",m.sources.length,"sourcesContent chars:",m.sourcesContent.reduce((a,s)=>a+s.length,0));
+  console.log(m.sources.filter(s=>s.includes("src/")))'
+```
+
+```text
+sources: 12 sourcesContent chars: 578879
+[ '../../src/app.jsx', '../../src/tracker.js' ]
+```
+
+맵의 `sourcesContent`에는 원본 소스가 주석까지 통째로 들어 있다. 맵을 번들 옆에 공개해 두면 누구나 개발자 도구에서 원본 코드를 그대로 읽는다. 주석에 적어 둔 내부 API 주소, 숨겨 둔 관리자 기능의 라우트, 기능 플래그 이름이 다 보인다. 프런트엔드 코드는 어차피 공개된 것이라 해도, 압축을 푸는 수고와 원본을 그대로 주는 것은 차이가 크다.
+
+그래서 맵은 만들되 공개하지 않는다. 번들 끝의 `//# sourceMappingURL=` 주석을 달지 않고, 맵 파일은 배포 폴더에서 빼서 수집 서버에만 올린다. webpack은 `devtool: "hidden-source-map"`, Vite는 `build.sourcemap: "hidden"`, esbuild는 `--sourcemap=external`이 이 모드다.
+
+```bash
+# 번들에 맵 주소 주석이 없는지, 공개 서버가 맵을 주지 않는지 확인한다
+grep -c sourceMappingURL dist/assets/*.js
+curl -s -o /dev/null -w "%{http_code} /assets/app-CJLDKWDF.js.map\n" localhost:18800/assets/app-CJLDKWDF.js.map
+```
+
+```text
+dist/assets/app-CJLDKWDF.js:0
+dist/assets/chunk-FW4363Y4.js:0
+dist/assets/editor-BYQAFAVK.js:0
+404 /assets/app-CJLDKWDF.js.map
+```
+
+아래 그림에서 다음을 누르면 빌드 산출물이 두 갈래로 나뉘어 가는 길과, 브라우저가 맵을 달라고 했을 때 막히는 자리가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={280}
+  caption="번들은 CDN으로, 맵은 수집 서버로만 간다"
+  zones={[
+    { id: "pub", label: "공개", x: 8, y: 16, w: 186, h: 250, tone: "public" },
+    { id: "prv", label: "비공개", x: 206, y: 16, w: 186, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "ci", label: "CI 빌드", sub: "web@1.4.2", x: 300, y: 60, icon: "server" },
+    { id: "cdn", label: "CDN", sub: "app-CJLD….js", x: 100, y: 130, icon: "internet" },
+    { id: "u", label: "브라우저", sub: "사용자", x: 100, y: 225, icon: "client" },
+    { id: "col", label: "수집 서버", sub: "maps/web@1.4.2", x: 300, y: 180, icon: "db" },
+  ]}
+  links={[
+    { from: "ci", to: "cdn", label: "JS만" },
+    { from: "ci", to: "col", label: "맵 업로드" },
+    { from: "cdn", to: "u" },
+    { from: "u", to: "col", label: "에러" },
+  ]}
+  steps={[
+    { path: ["ci", "cdn"], packet: "JS", title: "번들만 공개 서버로", detail: "맵 주소 주석이 없는 번들만 올린다. 파일 이름의 해시는 내용으로 정해져서 같은 코드면 같은 이름이다." },
+    { path: ["ci", "col"], packet: ".map", title: "맵은 릴리스 이름과 함께", detail: "같은 빌드에서 나온 맵을 릴리스 이름 폴더에 올린다. 배포보다 먼저 올려야 첫 에러부터 되돌릴 수 있다." },
+    { path: ["cdn", "u"], packet: "JS", title: "사용자는 압축된 코드만 받는다", detail: "번들 크기는 그대로다. 맵을 공개하지 않아도 사용자 쪽 성능은 달라지지 않는다." },
+    { path: ["u", "cdn"], packet: ".map?", blocked: true, title: "맵을 달라고 해도 없다", detail: "누군가 파일 이름 뒤에 .map을 붙여 요청해도 404다. 원본 소스가 공개되지 않는다." },
+    { path: ["u", "col"], packet: "stack", title: "되돌리기는 서버에서", detail: "브라우저는 압축된 스택만 보낸다. 수집 서버가 비공개 맵으로 원래 줄을 찾는다." },
+  ]}
+/>
+
+공개하지 않으면 개발자 자신도 운영 사이트에서 디버깅할 때 원본을 못 본다. 크롬 개발자 도구의 Sources 패널에서 파일을 우클릭해 맵을 직접 추가할 수 있고, 회사 네트워크에서만 맵을 주도록 CDN에서 막는 방법도 있다. 어느 쪽이든 "맵을 인터넷에 열어 두지 않는다"가 기준이다.
+
+## 릴리스 이름이 어긋나면 맵을 못 찾는다
+
+1.4.3을 배포했는데 CI의 맵 업로드 단계가 실패해서 수집 서버에는 1.4.2 맵만 남은 상황을 만들었다.
+
+```bash
+RELEASE=web@1.4.3 node build.mjs > /dev/null
+rm -rf maps/web@1.4.3     # 업로드 실패
+```
+
+```text
+{"kind":"onerror","release":"web@1.4.3","user":"u_1042","fp":"TypeError: Cannot read properties of undefined (reading 'FALL10') @ jo app-G5IVSJQ4.js:10:2133 (no map)",...}
+  mapped:
+    jo app-G5IVSJQ4.js:10:2133 (no map)
+    onClick app-G5IVSJQ4.js:10:2280 (no map)
+    ym app-G5IVSJQ4.js:8:126906 (no map)
+```
+
+코드 한 줄 안 바꾼 같은 버그인데(릴리스 이름 문자열만 달라져 번들 해시가 바뀌었다), 스택을 되돌리지 못했을 뿐 아니라 지문도 1.4.2 때와 달라졌다. 대시보드에는 "새 에러"가 하나 생긴 것처럼 보인다. 배포 직후 새 에러가 몰려 보이면 코드보다 맵 업로드부터 의심한다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="릴리스 이름 하나가 번들, 맵, 에러를 잇는다"
+  nodes={[
+    { id: "b", label: "빌드", sub: "RELEASE=web@1.4.2", x: 200, y: 35, w: 170 },
+    { id: "js", label: "번들", sub: "__RELEASE__ 주입", x: 80, y: 125, w: 130 },
+    { id: "mp", label: "맵 업로드", sub: "maps/web@1.4.2", x: 320, y: 125, w: 140 },
+    { id: "ev", label: "에러 이벤트", sub: "release 필드", x: 80, y: 215, w: 130 },
+    { id: "sym", label: "되돌리기", sub: "같은 이름의 맵", x: 320, y: 215, w: 130 },
+  ]}
+  edges={[
+    { from: "b", to: "js" },
+    { from: "b", to: "mp" },
+    { from: "js", to: "ev", label: "실행 중" },
+    { from: "ev", to: "sym" },
+    { from: "mp", to: "sym" },
+  ]}
+/>
+
+지킬 것은 셋이다. 릴리스 이름은 빌드할 때 한 번 정해(커밋 SHA가 흔하다) 번들 안에도 넣고 맵 업로드에도 쓴다. 맵 업로드는 배포 전에 하고, 실패하면 배포를 멈춘다. 에러 화면에서 릴리스로 거를 수 있게 해서 "1.4.3부터 생긴 에러"를 바로 본다. 이게 되면 "이 에러가 어느 배포에서 시작됐나"가 한 번에 나와서 롤백 판단이 빨라진다([롤백 전략](/posts/rollback-strategy)).
+
+파일 이름과 릴리스로 맵을 찾는 방식은 이렇게 어긋나기 쉬워서, 빌드할 때 번들과 맵에 같은 고유 ID(debug ID)를 새겨 넣고 그 ID로 찾는 방식이 나왔다. 소스맵은 2024년에 ECMA-426으로 표준이 됐고, debug ID는 그 위에 얹는 제안으로 논의 중이다. 일부 도구는 이미 자체 방식으로 쓰고 있지만 모든 번들러가 지원하는 건 아니니, 쓰는 도구의 문서를 확인한다.
+
+## 에러 한 건에 붙여 보내는 것
+
+스택만으로는 재현이 안 된다. "어떤 사용자가, 어느 화면에서, 무엇을 한 직후에" 났는지가 함께 있어야 한다. 실습 SDK가 저장 버튼 에러에 실제로 붙여 보낸 내용이다(UA는 줄였다).
+
+```text
+{
+ "release": "web@1.4.2",
+ "url": "http://localhost:18800/?email=[email]",
+ "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWeb…",
+ "user": "u_1042",
+ "session": "3f60ee53",
+ "name": "Error",
+ "message": "save failed: 500",
+ "stack": "Error: save failed: 500\n    at http://localhost:18800/assets/app-CJLDKWDF.js:10:2422",
+ "breadcrumbs": [
+  { "t": "23:44:50.155", "type": "ui.click", "message": "button#save" },
+  { "t": "23:44:50.163", "type": "fetch", "message": "500 /api/save" }
+ ],
+ "kind": "unhandledrejection"
+}
+```
+
+브레드크럼(breadcrumb)은 에러 직전의 행동 기록이다. 클릭, 페이지 이동, fetch 요청과 상태 코드, 콘솔 경고 같은 것을 최근 몇십 개만 둥근 버퍼에 담아 두고 에러가 나면 같이 보낸다. 위 기록은 "저장 버튼을 누르고 8ms 뒤 `/api/save`가 500을 줬다"고 말해 준다. 프런트엔드 버그가 아니라 서버 문제라는 게 여기서 갈린다. 실습 SDK는 `fetch`를 감싸 상태 코드를 남기고, 캡처 단계 클릭 리스너로 누른 요소를 남긴다.
+
+```js
+const origFetch = window.fetch;
+window.fetch = async (...args) => {
+  const url = String(args[0]);
+  try {
+    const res = await origFetch(...args);
+    if (!url.endsWith(ENDPOINT)) addCrumb("fetch", `${res.status} ${url}`); // 자기 전송은 기록하지 않는다
+    return res;
+  } catch (err) {
+    addCrumb("fetch", `failed ${url}`);
+    throw err;
+  }
+};
+```
+
+서버 로그와 잇고 싶으면 여기서 한 걸음 더 간다. fetch마다 요청 ID(또는 `traceparent`)를 헤더로 붙이고 브레드크럼에도 남기면, 에러 화면의 "500 /api/save" 옆 ID로 서버 로그를 바로 찾는다. 이 이어 붙이기는 [로그로 버그 추적하기](/posts/debugging-with-logs)에서 직접 해 본다.
+
+사용자 ID는 내부 ID만 보낸다. 이메일이나 이름을 넣으면 에러 도구가 개인정보 저장소가 된다. 가리기는 세 군데에서 한다. URL(쿼리 문자열), 메시지(`"invalid email kim@..."`처럼 값이 섞인 에러), 스택(인라인 스크립트는 페이지 URL로 찍힌다)이다. 서버에서도 한 번 더 거른다. 앱 로그의 가리기 원칙은 [구조화 로그](/posts/structured-logging) 글과 같다. 브레드크럼에 입력창 값이나 요청 본문을 남기지 않는 것도 같은 이유다.
+
+## 같은 에러가 만 번 올 때
+
+에러 수집은 장애 때 가장 바쁘다. 사용자 10만 명이 같은 버그를 밟으면 이벤트도 10만 건이고, 한 사용자가 스크롤 핸들러 안의 에러를 밟으면 초당 수십 건이다. 그래서 브라우저, 수집 서버 양쪽에서 걸러야 한다.
+
+실습에서 쿠폰 버튼을 30번 눌렀다.
+
+```bash
+node run2.mjs                       # 쿠폰 30번 클릭, 그다음 지워진 청크 열기
+curl -s localhost:18800/__groups    # 수집 서버가 묶은 그룹과 건수
+```
+
+```text
+[
+ { "fp": "resource: /img/banner-missing.png", "count": 1, "users": 1 },
+ { "fp": "TypeError: Cannot read properties of undefined (reading 'FALL10') @ src/app.jsx:42:25", "count": 1, "users": 1 },
+ { "fp": "TypeError: Failed to fetch dynamically imported module: http://localhost:<n>/assets/editor-BYQAFAVK.js @ ", "count": 1, "users": 1 }
+]
+```
+
+30번이 1건으로 왔다. SDK가 "이름 + 메시지 + 첫 프레임"을 키로 페이지당 한 번만 보내고, 페이지당 최대 10건에서 멈추기 때문이다. 아래 그림은 이 판단을 이벤트마다 따라간다.
+
+<AlgoTrace
+  caption="브라우저에서 보낼지 말지 정하기 (페이지당 한 번, 최대 10건)"
+  memoryLabel="이미 보낸 키"
+  cells={["쿠폰 1회", "쿠폰 2회", "쿠폰 30회", "저장 500", "11번째 새 에러"]}
+  steps={[
+    { pointer: 0, memory: ["FALL10@42"], caption: "처음 보는 키다. 보내고 키를 기록한다." },
+    { pointer: 1, memory: ["FALL10@42"], caption: "같은 키다. 이미 보냈으니 버린다. 서버의 건수는 늘지 않는다." },
+    { pointer: 2, memory: ["FALL10@42"], caption: "30번째도 같다. 한 사용자의 반복은 1건으로 충분하다." },
+    { pointer: 3, memory: ["FALL10@42", "save@51"], caption: "다른 에러다. 보낸다. 지금까지 2건." },
+    { pointer: 4, memory: ["FALL10@42", "save@51", "…10건"], caption: "이미 10건을 보냈다. 새 에러라도 이 페이지에서는 더 보내지 않는다. 고장 난 페이지 하나가 수집 서버를 덮지 않게 한다." },
+  ]}
+/>
+
+브라우저 쪽 거르기만으로는 부족하다. 사용자 수가 많으면 사용자당 1건이어도 많다. 수집 서버는 프로젝트별 초당 상한을 두고 넘치면 429로 거절하고, SDK는 429를 받으면 한동안 보내지 않는다. 비율 샘플링(`sampleRate: 0.25`처럼 넷 중 하나만)도 쓰는데, 샘플링한 뒤의 건수로는 "몇 명이 겪었나"를 정확히 셀 수 없다는 점을 기억한다. 영향 범위를 세는 일은 별도의 지표(에러를 겪은 세션 비율 같은)로 한다. 서버 로그 샘플링에서 같은 이야기를 했다.
+
+보내는 방법도 정해야 한다. `navigator.sendBeacon`은 탭을 닫는 순간에도 브라우저가 대신 보내 주지만, 크롬 계열은 아직 보내지 못하고 쌓인 비콘 본문의 합계를 64KB 정도로 제한한다. 스택과 브레드크럼이 큰 에러 여러 건이 몰리면 `sendBeacon`이 `false`를 돌려주고 조용히 버린다. 실습 수집 서버도 64KB가 넘는 본문은 413으로 거절한다. 그래서 브레드크럼 개수와 스택 길이를 자르고, `false`가 나오면 `fetch(..., { keepalive: true })`로 한 번 더 시도한다.
+
+## 직접 만들까, 도구를 쓸까
+
+실습 SDK는 원리를 보려고 만든 것이고, 운영에는 빠진 게 많다. 감싼 함수 이름 되살리기, 브라우저별 스택 형식, 오프라인일 때 쌓았다 보내기, 지문 규칙 조정 화면, 알림, 이슈 상태(해결됨으로 닫았는데 새 릴리스에서 다시 나면 다시 열기) 같은 것들이다. 그래서 대개는 에러 추적 전용 도구를 쓴다. SaaS로 쓰는 것과 직접 설치해 운영하는 것이 있고, 같은 제품이 두 형태를 다 내놓기도 한다.
+
+고를 때 보는 것은 비슷하다. 데이터가 어디에 저장되나(개인정보와 규정), 소스맵을 어떻게 올리나(빌드 도구 플러그인이 있나), 이벤트 수로 값을 매기나(위의 거르기가 비용과 직결된다), 백엔드의 trace와 이어지나. 직접 설치하는 쪽은 비용 예측이 쉽지만 저장소와 큐를 직접 운영해야 하고, 급할 때 그 시스템 자체가 장애가 될 수 있다.
+
+OpenTelemetry도 브라우저용 SDK가 있어서 프런트엔드의 fetch를 trace로 남기고 백엔드와 이을 수 있다. 다만 2026년 하반기 기준으로 브라우저 쪽은 서버 쪽보다 성숙도가 낮고, 에러 묶기나 소스맵 되돌리기 같은 에러 추적 기능은 따로 갖춰야 한다. 추적 쪽 이야기는 [분산 추적](/posts/distributed-tracing)에 있다.
+
+## 에러 화면에서 자주 보는 증상
+
+배포 직후 특정 에러가 치솟았다가 서서히 줄어든다. 청크 로드 실패일 가능성이 크다. 옛 탭을 들고 있던 사용자가 지워진 청크를 찾는 것이다. 에러의 릴리스가 직전 버전이고 파일 이름이 지금 배포에 없는지 본다.
+
+"Script error."가 대부분을 차지한다. 다른 출처 스크립트다. 내 번들을 CDN 도메인에서 내려주면서 `crossorigin`을 빼먹었거나, 서드파티 스크립트다. 서드파티는 고칠 수 없으니 출처로 걸러 따로 둔다.
+
+스택 맨 위 프레임이 `chrome-extension://`이나 `moz-extension://`이다. 사용자가 깐 확장 프로그램이 페이지에 끼워 넣은 코드다. 수집 단계에서 버린다.
+
+한 브라우저 버전에서만 난다. UA로 묶어 본다. 옛 사파리에 없는 API(`Array.prototype.at`이 예전에 그랬다)를 폴리필 없이 쓴 경우가 흔하다.
+
+`ResizeObserver loop completed with undelivered notifications` 같은 메시지가 많다. 브라우저가 내는 경고성 에러로, 대부분 사용자에게 보이는 문제가 아니다. 무시 목록에 넣되, 무시 목록이 길어지면 진짜 에러도 같이 묻히니 가끔 다시 본다.
+
+에러는 많은데 사용자 문의는 없다. 이미 복구된 에러(재시도로 성공한 fetch)를 에러로 보내고 있는지 본다. 반대로 문의는 있는데 에러가 없다면, 에러가 난 게 아니라 아무 일도 안 일어난 것(버튼이 비활성인 채로 남은 것)일 수 있다. 이때는 브레드크럼이 있는 세션 재생이나 사용자 행동 로그를 본다.
+
+## 다시 쿠폰 버튼 앞에서
+
+처음 장면에서 서버가 아무것도 몰랐던 건 에러가 브라우저 안에서 시작해 브라우저 안에서 끝났기 때문이다. 다섯 갈래로 나는 에러를 빠짐없이 듣고, 번들보다 먼저 난 것까지 붙잡고, 릴리스 이름이 맞는 비공개 맵으로 되돌리고, 브레드크럼과 사용자 ID를 붙여 보내면 `jo (app-CJLDKWDF.js:10:2133)`가 `src/app.jsx:42`의 `window.coupons[code]`가 된다. 다음 단계는 이 에러를 서버 로그와 같은 요청 ID로 잇는 일이다.
+
+## 면접에서 나올 만한 질문
+
+### 프런트엔드 에러는 어떻게 수집하나요?
+
+페이지에 작은 SDK를 넣어 브라우저 이벤트를 듣고 수집 서버로 보낸다. window의 error 이벤트(캡처 단계로 등록해 리소스 로드 실패까지), unhandledrejection, React 에러 경계의 componentDidCatch나 React 19의 루트 콜백을 모두 들어야 한다. 보낼 때는 릴리스, 사용자 내부 ID, 브레드크럼을 붙이고 sendBeacon으로 보낸다.
+
+### window.onerror만 등록하면 어떤 에러를 놓치나요?
+
+리소스 로드 실패와 Promise 거부를 놓친다. img나 script의 error 이벤트는 버블링되지 않아서 window의 캡처 단계 리스너만 받고, then 안에서 던진 에러나 import() 실패는 예외가 아니라 거부라서 unhandledrejection으로 온다. React 에러 경계가 잡은 렌더링 에러도 window까지 오지 않는다. SDK가 뜨기 전에 난 에러도 놓치니 head에 짧은 버퍼 스크립트를 둔다.
+
+### 수집된 에러가 "Script error."뿐입니다. 왜 그런가요?
+
+다른 출처에서 받은 스크립트의 에러라서 브라우저가 내용을 지운 것이다. 에러 메시지에 그 출처의 정보가 실릴 수 있어서다. script 태그에 crossorigin="anonymous"를 붙이고 스크립트 서버가 Access-Control-Allow-Origin을 주면 메시지와 스택이 보인다. 속성만 붙이고 헤더가 없으면 스크립트 로드 자체가 막히니 헤더부터 맞춘다.
+
+### 소스맵은 어떻게 동작하고, 왜 공개하지 않나요?
+
+압축된 파일의 줄과 칸을 원본 파일의 줄과 칸으로 바꾸는 대응표다. 수집 서버가 스택 프레임마다 맵에 물어 원래 위치를 찾는다. 맵의 sourcesContent에는 원본 소스가 주석까지 들어 있어서, 공개하면 누구나 원본 코드를 읽는다. 그래서 hidden-source-map처럼 주소 주석 없이 만들고 맵은 수집 서버에만 올린다.
+
+### 배포 후 에러 스택이 되돌려지지 않습니다. 무엇을 보나요?
+
+이벤트의 릴리스 이름과 업로드된 맵의 릴리스 이름이 같은지부터 본다. 맵 업로드 단계가 실패했거나, 번들에 넣은 릴리스와 업로드할 때 쓴 릴리스가 달랐거나, 업로드 뒤에 다시 빌드해서 해시가 바뀐 경우가 흔하다. 맵을 못 찾으면 지문도 압축된 이름으로 만들어져 같은 버그가 새 에러처럼 보인다. 그래서 맵 업로드를 배포 전에 하고 실패하면 배포를 멈춘다.
+
+### 같은 에러가 폭주할 때 수집 시스템을 어떻게 지키나요?
+
+브라우저와 서버 양쪽에서 거른다. 브라우저에서는 같은 키의 에러를 페이지당 한 번만 보내고 페이지당 상한을 둔다. 서버는 초당 상한을 넘으면 429로 거절하고 SDK는 한동안 보내지 않는다. 비율 샘플링을 쓰면 비용은 줄지만 영향 범위를 정확히 셀 수 없으니, 영향 범위는 별도 지표로 센다.
+
+### 에러 이벤트에 무엇을 붙여 보내야 하고, 무엇은 빼야 하나요?
+
+릴리스, 사용자 내부 ID, 세션, 페이지 URL, 브레드크럼(직전 클릭과 요청 상태 코드)을 붙인다. 브레드크럼이 있으면 프런트엔드 버그인지 서버 응답 문제인지가 바로 갈린다. 이메일·이름·토큰과 입력값, 요청 본문은 뺀다. URL, 메시지, 스택 세 곳 모두 가려야 하는데, 인라인 스크립트의 스택에는 페이지 URL이 그대로 찍히기 때문이다.

@@ -1,0 +1,411 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("lazy-loading-strategies");
+
+상품 상세 페이지를 휴대폰으로 열면 첫 화면에는 상품 이름과 사진 한 장, 설명 한 줄이 보인다. 그런데 이 화면을 띄우려고 브라우저는 요청 13개, 613KB를 받고 JS를 649ms 동안 실행한다. 스크롤을 한참 내려야 나오는 영상 플레이어, 매장 지도, 후기 위젯이 첫 로드에 전부 같이 실려 오기 때문이다. 사진은 그 짐들과 대역폭을 나눠 쓰느라 4초가 넘어서야 뜬다.
+
+지연 로딩(lazy loading)은 지금 필요 없는 것을 필요해질 때 받는 기법이다. 말은 쉬운데 실제로 정해야 할 것은 하나다. 언제 받을 것인가. 너무 늦게 받으면 사용자가 빈 칸을 보고, 너무 일찍 받으면 미룬 의미가 없다. 이 글은 같은 상품 페이지를 두 벌 만들어서 무엇을 언제 받을지에 따라 숫자가 어떻게 바뀌는지 잰다.
+
+코드를 청크로 나누는 방법(`import()`, 청크 그래프, 트리 셰이킹)은 [번들 쪼개기](/posts/code-splitting)에서 다뤘다. 여기서는 이미 나뉜 조각을 어느 시점에 부를지를 본다. 데이터 요청을 언제 보낼지는 [데이터 요청 최적화](/posts/data-fetching-optimization)에서, 프런트엔드 성능 전체의 순서는 [프런트엔드 성능 지도](/posts/frontend-performance-map)에서 이어진다.
+
+예제는 React 19 앱을 esbuild로 묶어 작은 Node 서버로 띄웠다. 영상 플레이어는 다른 포트(다른 출처)의 서버가 주는 iframe으로 흉내 냈다. 플레이어 스크립트 470KB, 광고 스크립트 90KB, 포스터 이미지 113KB다. 지도와 후기 위젯은 각각 320KB짜리 라이브러리를 쓴다. 측정은 Playwright로 Chromium 141을 띄우고 왕복 150ms, 내려받기 1.6Mbps, CPU 4배 느리게를 걸어 다섯 번 잰 가운데 값이다.
+
+## 첫 화면에 같이 실려 온 것들
+
+모든 것을 정적으로 import한 첫 번째 버전을 열었을 때 받은 파일 목록이다. 숫자는 압축된 상태로 전송된 바이트이고, 오른쪽 설명은 읽기 쉽게 내가 붙였다. favicon 같은 작은 요청은 뺐다.
+
+```text
+18750/eager                  436
+18750/app-eager.js           634
+18750/chunk-AW5TXOIY.js    69158   React
+18750/chunk-7PNUN3OM.js    79974   지도 라이브러리
+18750/chunk-TVCQZFPG.js    80003   후기 위젯 라이브러리
+18751/embed.html             434   영상 iframe
+18751/ads.js               57626
+18751/player.js           104590
+18751/poster.jpg          116314
+18750/hero.jpg            116314   첫 화면 사진 (LCP)
+```
+
+첫 화면에 실제로 쓰이는 건 HTML, 앱 코드, React, 사진뿐이다. 나머지 다섯 덩어리는 사용자가 스크롤하거나 누르기 전에는 쓸 일이 없다. 그런데 브라우저는 이걸 모르고 전부 같은 시점에 받는다. 대역폭은 하나라서 사진도 그만큼 늦게 도착한다.
+
+아래 그림에서 단계를 넘기면 이 페이지가 처음 열릴 때 어떤 요청이 누구에게 가는지 보인다.
+
+<NetworkTopology
+  width={400}
+  height={240}
+  caption="모두 즉시 받는 버전에서 첫 로드에 나가는 요청"
+  zones={[
+    { id: "mine", label: "우리 서버 :18750", x: 150, y: 14, w: 240, h: 120, tone: "private" },
+    { id: "third", label: "영상 서버 :18751", x: 150, y: 148, w: 240, h: 80, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "br", label: "휴대폰", sub: "1.6Mbps", x: 60, y: 120, icon: "client", w: 90 },
+    { id: "app", label: "앱 + React", sub: "70KB", x: 220, y: 56, icon: "server", w: 100 },
+    { id: "libs", label: "지도·후기", sub: "160KB", x: 330, y: 56, icon: "container", w: 96 },
+    { id: "img", label: "사진", sub: "LCP", x: 275, y: 106, icon: "server", w: 80 },
+    { id: "player", label: "플레이어", sub: "280KB", x: 270, y: 192, icon: "container", w: 100 },
+  ]}
+  links={[
+    { from: "br", to: "app" },
+    { from: "app", to: "libs" },
+    { from: "br", to: "img" },
+    { from: "br", to: "player" },
+  ]}
+  steps={[
+    { path: ["br", "app"], packet: "JS", title: "앱 코드와 React를 받는다", detail: "첫 화면을 그리는 데 꼭 필요한 부분이다. 여기까지는 미룰 것이 없다." },
+    { path: ["br", "app", "libs"], packet: "import", title: "정적 import가 라이브러리를 끌고 온다", detail: "지도와 후기 컴포넌트를 맨 위에서 import했으니 두 라이브러리도 지금 받는다. 실행도 지금 한다." },
+    { path: ["br", "player"], packet: "iframe", title: "영상 iframe이 따로 문서를 연다", detail: "iframe은 페이지 안의 또 다른 페이지다. 자기 HTML, 스크립트, 이미지를 따로 받는다." },
+    { path: ["br", "img"], packet: "jpg", title: "사진은 남은 대역폭으로 받는다", detail: "다른 요청과 같은 회선을 나눠 쓰니 늦게 끝난다. LCP가 4148ms였다." },
+  ]}
+/>
+
+## 언제 받을지 고르는 네 가지 시점
+
+지연 로딩을 쓴다고 하면 보통 `React.lazy`부터 떠올리는데, 그건 도구이고 결정은 시점이다. 실무에서 쓰는 시점은 대략 네 가지다.
+
+- 즉시: 첫 화면에 보이는 것. 미루면 안 된다.
+- 한가할 때: 첫 화면이 다 그려진 뒤 메인 스레드가 놀 때. 분석 스크립트, 다음에 쓸 가능성이 높은 청크.
+- 보일 때: 스크롤해서 화면 가까이 오면. 아래쪽 섹션, 이미지, 댓글.
+- 누를 때: 사용자가 원할 때만. 모달, 지도, 영상 플레이어, 채팅 위젯.
+
+누를 때와 보일 때는 사용자 행동 뒤에 받으니 기다림이 생긴다. 그래서 한 단계 앞의 신호를 같이 쓴다. 누르기 전에 손가락이 닿거나 포인터가 올라가는 순간, 보이기 전에 화면 근처에 다가오는 순간이다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="신호가 이를수록 기다림은 줄고 헛받기는 늘어난다"
+  nodes={[
+    { id: "load", label: "즉시", sub: "첫 화면", x: 70, y: 40, w: 100 },
+    { id: "idle", label: "한가할 때", sub: "idle", x: 200, y: 40, w: 100 },
+    { id: "near", label: "다가올 때", sub: "rootMargin", x: 330, y: 40, w: 104 },
+    { id: "hover", label: "닿을 때", sub: "pointerenter", x: 130, y: 200, w: 110 },
+    { id: "click", label: "누를 때", sub: "click", x: 290, y: 200, w: 100 },
+    { id: "chunk", label: "청크 요청", sub: "import()", x: 210, y: 120, w: 110 },
+  ]}
+  edges={[
+    { from: "load", to: "chunk" },
+    { from: "idle", to: "chunk" },
+    { from: "near", to: "chunk" },
+    { from: "hover", to: "chunk", label: "미리" },
+    { from: "click", to: "chunk", dashed: true, label: "늦게" },
+  ]}
+/>
+
+하나만 기억한다면, 신호가 이를수록 기다림은 줄어드는 대신 끝내 안 쓸 것을 받을 확률이 커진다. 시점을 고르는 일은 이 두 비용 사이의 자리를 찾는 일이다.
+
+## 누를 때 받는 지도
+
+지도 섹션은 "지도 보기" 버튼으로 바꿨다. 버튼을 누르기 전에는 지도 라이브러리를 받지 않는다.
+
+```jsx
+import { lazy, Suspense, useState } from "react";
+
+// import 함수를 따로 두면 미리 부르기와 lazy가 같은 Promise를 쓴다
+const importMap = () => import("./map-view.jsx");
+const MapView = lazy(() => importMap().then((m) => ({ default: m.MapView })));
+
+function MapSection() {
+  const [open, setOpen] = useState(false);
+  if (!open)
+    return (
+      <button onPointerEnter={importMap} onFocus={importMap} onClick={() => setOpen(true)} style={{ height: 240 }}>
+        지도 보기
+      </button>
+    );
+  return (
+    <Suspense fallback={<div style={{ height: 240 }}>지도 불러오는 중</div>}>
+      <MapView />
+    </Suspense>
+  );
+}
+```
+
+`lazy`에 넘기는 함수를 바깥으로 꺼내 둔 게 요점이다. 브라우저는 같은 모듈 주소의 `import()`를 한 번만 받고, 두 번째 호출부터는 이미 받은 모듈(또는 진행 중인 Promise)을 돌려준다. 그래서 포인터가 올라갔을 때 `importMap()`을 한 번 불러 두면, 클릭 뒤 `lazy`가 같은 함수를 부를 때 이미 받는 중이거나 받아 둔 상태다. 아래 표현을 조각내 보면 각 부분이 하는 일이 보인다.
+
+<UrlAnatomy
+  caption="미리 부를 수 있게 쪼갠 lazy 선언"
+  base="const MapView ="
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "lazy(", title: "처음 렌더링될 때 함수를 부른다", description: "lazy는 선언할 때가 아니라 이 컴포넌트가 처음 그려질 때 안의 함수를 부른다. 그 전까지는 아무것도 받지 않는다.", required: true },
+    { key: "() => importMap()", title: "주소가 같으면 한 번만 받는다", description: "importMap을 바깥에 두면 버튼의 pointerenter나 focus에서도 같은 함수를 부를 수 있다. 모듈 지도는 주소 하나에 모듈 하나라서 요청이 두 번 나가지 않는다.", required: true, code: "const importMap = () => import(\"./map-view.jsx\");" },
+    { key: ".then(m => ({ default: m.MapView }))", display: ".then(…default…)", title: "이름 있는 export를 default로 바꾼다", description: "lazy는 default export를 가진 모듈을 기대한다. 이름 있는 export라면 모양을 맞춰 준다." },
+    { key: ")", title: "Suspense 안에서 쓴다", description: "받는 동안 컴포넌트가 Promise를 던지고, 가장 가까운 Suspense가 fallback을 보여 준다. fallback에는 실제 지도와 같은 높이를 준다." },
+  ]}
+/>
+
+같은 조건에서 버튼을 누른 순간부터 지도가 그려질 때까지를 다섯 번씩 쟀다. 미리 부르는 쪽은 포인터를 올리고 300ms 뒤에 눌렀다.
+
+```text
+map hover=false 953,965,956,973,942 med 956
+map hover=true 579,615,627,573,583 med 583
+```
+
+포인터를 올리고 누르기까지의 300ms 동안 청크가 먼저 출발해서 기다림이 373ms 줄었다. 줄어드는 양은 사용자가 포인터를 올린 채 머뭇거리는 시간만큼이라, 고민하며 누르는 버튼일수록 효과가 크다.
+
+휴대폰에는 포인터를 올리는 동작이 없다. `pointerenter`는 터치에서도 손가락이 닿는 순간 발생하지만 `click`과의 간격이 탭 한 번 길이뿐이라 얻는 게 적다. 터치 화면에서는 버튼이 화면에 들어왔을 때 미리 부르거나, 첫 화면이 다 그려진 뒤 한가할 때 부르는 쪽이 낫다.
+
+클릭 뒤에 청크를 받는 구조는 배포 직후 옛 청크가 사라져 `ChunkLoadError`가 나는 문제를 안고 있다. 사용자가 버튼을 누른 순간 실패하니 체감이 크다. 재시도와 새로고침으로 다루는 방법은 [번들 쪼개기의 청크 에러 부분](/posts/code-splitting)에 있다.
+
+## 보일 때 받는 후기
+
+후기 섹션은 페이지 맨 아래, 스크롤을 3,000px쯤 내려야 나온다. 화면 가까이 오면 그때 컴포넌트를 받는다.
+
+```jsx
+function WhenVisible({ children, height }) {
+  const ref = useRef(null);
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const io = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting) {
+          setShow(true);
+          io.disconnect(); // 한 번 보였으면 더 볼 필요가 없다
+        }
+      },
+      { rootMargin: "300px" }, // 화면 아래 300px 전부터 보인 것으로 친다
+    );
+    io.observe(ref.current);
+    return () => io.disconnect();
+  }, []);
+  return <div ref={ref} style={{ minHeight: height }}>{show ? <Suspense fallback={null}>{children}</Suspense> : null}</div>;
+}
+
+<WhenVisible height={400}><Comments /></WhenVisible>
+```
+
+`minHeight`를 주는 이유는 두 가지다. 빈 `div`의 높이가 0이면 위쪽 내용이 길어질 때 관찰 대상의 위치가 계속 바뀌고, 나중에 후기가 들어오며 아래 내용을 밀어 CLS가 생긴다. IntersectionObserver가 콜백을 언제 부르는지, threshold가 왜 정확하지 않은지는 [IntersectionObserver 글](/posts/scroll-triggered-intersection-observer)에 정리했다.
+
+`rootMargin`이 얼마나 앞서 받을지를 정한다. 아래 그림은 화면(포인터)이 아래로 내려가며 섹션을 지날 때 무엇이 로드 목록에 들어가는지 보여 준다. 화면은 844px, 여유는 300px로 잡았다.
+
+<AlgoTrace
+  caption="스크롤할 때 rootMargin 300px가 미리 부르는 섹션"
+  memoryLabel="받은 청크"
+  cells={["사진 0", "영상 600", "지도 860", "설명 1140", "설명 2200", "후기 3200"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2], memory: ["app"], caption: "맨 위. 화면 0~844에 여유 300을 더하면 1144까지라 지도 자리까지 걸친다." },
+    { pointer: 3, found: [3], memory: ["app"], caption: "1500까지 내렸다. 후기는 3200에서 시작하니 아직 멀다." },
+    { pointer: 4, found: [4], memory: ["app"], caption: "2000. 화면 아래 끝 2844에 300을 더해도 3144라 후기에 닿지 않는다." },
+    { pointer: 4, found: [4, 5], memory: ["app", "comments"], caption: "2100. 여유 끝이 3244가 되어 후기에 걸친다. 이때 청크 요청이 나간다." },
+    { pointer: 5, found: [5], memory: ["app", "comments"], caption: "청크가 다 왔으면 후기가 화면에 들어오는 순간 바로 보인다. 덜 왔으면 빈 칸이 잠깐 보인다." },
+  ]}
+/>
+
+여유를 바꿔 가며 쟀다. 휠을 80ms마다 150px씩 굴려 빠르게 훑어 내리게 하고, 후기 제목이 실제 화면에 들어온 시각과 후기 내용이 그려진 시각의 차이를 봤다. 양수면 그만큼 빈 칸을 본 것이다.
+
+```text
+scroll margin=0px 890,881,848,893,884 med 884
+scroll margin=300px 709,714,738,711,740 med 714
+scroll margin=1000px 413,321,317,313,297 med 317
+```
+
+1000px을 줘도 300ms 넘게 빈 칸이 보였다. 이 망에서는 80KB 청크 하나 받고 실행하는 데 0.8초가 넘는데, 1초에 1,800px씩 내리는 사용자에게 1000px은 0.5초 거리다. 여유를 무작정 키우면 결국 즉시 받는 것과 같아지니, 빈 칸이 잠깐 보일 수 있다는 걸 받아들이고 그 자리를 스켈레톤으로 채우는 게 현실적이다. 아래 그림이 그 모습이다. 내려가면 회색 자리가 먼저 서 있다가 내용이 들어온다.
+
+<LoadingDemo patterns={["lazy-loading"]} caption="자리를 먼저 잡아 두고 화면에 들어올 때 내용을 채운다" />
+
+이미지는 이 관찰자를 직접 쓰지 않아도 된다. `<img loading="lazy">`와 `<iframe loading="lazy">`는 브라우저가 같은 일을 대신 하고, 얼마나 앞서 받을지도 브라우저가 망 상태를 보고 정한다. 크롬 계열 문서는 빠른 망에서 1,250px, 느린 망에서 2,500px 앞에서 받기 시작한다고 설명한다. 이미지 쪽 세부는 [이미지 최적화](/posts/image-optimization)에서 다룬다.
+
+## 영상 플레이어는 껍데기만 먼저
+
+서드파티 임베드(영상, 지도, SNS 게시물, 채팅 위젯)는 지연 로딩 효과가 가장 큰 곳이다. 우리 번들이 아니라서 크기를 줄일 수도 없고, iframe 하나가 자기 문서와 스크립트, 이미지, 광고를 줄줄이 받는다. 예제에서 영상 iframe 하나가 첫 로드의 278KB를 차지했다.
+
+그래서 처음에는 진짜 플레이어 대신 겉모습만 같은 가벼운 버튼을 둔다. 썸네일 이미지 위에 재생 아이콘을 얹은 것이다. 누르면 그때 진짜 iframe으로 바꾼다. 이 껍데기를 파사드(facade)라고 부른다. 영상 서비스용으로 `lite-youtube-embed` 같은 라이브러리가 이 방식을 쓴다.
+
+```jsx
+function VideoFacade() {
+  const [on, setOn] = useState(false);
+  if (on)
+    return <iframe src="https://player.example/embed?autoplay=1" title="제품 영상" allow="autoplay" width="100%" height="220" />;
+  return (
+    <button onClick={() => setOn(true)} aria-label="제품 영상 재생" style={{ width: "100%", height: 220, background: "url(/thumb.jpg) center/cover" }}>
+      ▶
+    </button>
+  );
+}
+```
+
+아래 그림에서 단계를 넘기며 누른 다음에 일어나는 일을 따라가 보자.
+
+<SequenceDiagram
+  caption="파사드를 누르면 그제야 진짜 플레이어를 받는다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "page", label: "우리 페이지" },
+    { id: "third", label: "영상 서버" },
+  ]}
+  steps={[
+    { from: "page", to: "page", label: "썸네일 12KB", title: "처음엔 썸네일만 그린다", detail: "버튼과 작은 이미지 하나다. 플레이어 스크립트, 광고, 포스터는 하나도 받지 않는다." },
+    { from: "user", to: "page", label: "click", title: "사용자가 재생을 누른다", detail: "이 순간 버튼을 iframe으로 바꾼다. autoplay=1을 붙여서 한 번 더 누르지 않게 한다." },
+    { from: "page", to: "third", label: "GET embed.html", title: "iframe이 문서를 연다", detail: "여기서부터는 처음 버전이 첫 로드에 하던 일이다. 문서를 받고 스크립트를 찾는다." },
+    { from: "third", to: "page", label: "player.js, ads.js", title: "스크립트를 받고 실행한다", detail: "플레이어 스크립트 105KB를 받고 실행한다. 느린 휴대폰에서는 실행에도 수백 ms가 든다." },
+    { from: "page", to: "user", label: "ready", title: "누른 뒤 1.8초 만에 재생 준비", detail: "첫 로드에서 뺀 비용이 클릭 뒤로 옮겨 왔다. 영상을 안 보는 사람은 이 비용을 아예 치르지 않는다.", payload: "facade 1847,1811,1812,1838,1981 med 1838" },
+  ]}
+/>
+
+누른 뒤 1.8초가 걸린다는 건 공짜가 아니라는 뜻이다. 대부분이 영상을 본다면(영상이 페이지의 주인공이라면) 파사드는 오히려 손해다. 몇 가지를 더 챙긴다.
+
+- 클릭 뒤 iframe의 자동 재생이 막힐 수 있다. 모바일 브라우저와 플레이어마다 자동 재생 정책이 달라서, 파사드를 누르고 플레이어에서 한 번 더 눌러야 하는 경우가 있다. 실제 대상 기기에서 확인해야 한다.
+- 버튼에는 `aria-label`로 무엇을 재생하는지 적는다. 썸네일 배경 이미지만으로는 화면 낭독기가 아무것도 읽지 못한다.
+- 누른 직후 바로 iframe의 높이가 같아야 한다. 파사드와 iframe의 크기가 다르면 그 자리에서 레이아웃이 밀린다.
+
+파사드까지 만들 여력이 없으면 `<iframe loading="lazy">`만으로도 화면 아래 임베드는 미룰 수 있다. 다만 화면에 들어오는 순간 전체 비용을 다 치르니, 첫 화면 근처에 있는 임베드에는 효과가 없다. 채팅 위젯처럼 iframe이 아니라 스크립트 태그로 붙는 것은 첫 상호작용(스크롤, 터치)이나 한가한 시점에 `<script>`를 만들어 넣는다. Next.js의 `next/script`는 `strategy="lazyOnload"`로 같은 일을 해 준다.
+
+## 둘을 나란히 놓으면
+
+영상은 파사드로, 지도는 누를 때, 후기는 보일 때로 바꾼 두 번째 버전을 처음 버전과 같은 조건에서 쟀다. 페이지를 연 뒤 5초 동안 사용자는 아무것도 하지 않았다.
+
+| 측정 (가운데 값) | 모두 즉시 | 시점별로 미룸 |
+|---|---|---|
+| 요청 수 | 13 | 8 |
+| 전송량 | 613KB | 196KB |
+| FCP | 2164ms | 1096ms |
+| LCP | 4148ms | 1848ms |
+| JS 실행 시간 (ScriptDuration) | 649ms | 153ms |
+| 긴 작업의 50ms 초과분 합 | 505ms | 77ms |
+| 가장 긴 작업 | 356ms | 111ms |
+
+FCP가 1초 빨라진 건 첫 화면을 그리기 전에 받고 실행하던 라이브러리 두 개가 빠져서다. 정적 import는 가져온 모듈을 모두 받아서 평가해야 앱 코드가 시작되니, 160KB를 받는 시간과 두 라이브러리의 초기화 코드가 첫 렌더링 앞을 막고 있었다. LCP가 2.3초 줄어든 건 사진이 더 이상 다른 파일과 회선을 나누지 않아서다. 지연 로딩이 "덜 실행하기"와 "중요한 것에 대역폭 몰아주기"를 함께 해 준 것이다.
+
+## 하이드레이션을 미루면 무엇이 줄어드나
+
+서버에서 HTML을 다 그려 보내는 페이지도 같은 고민이 있다. HTML은 이미 보이지만 브라우저가 그 위에 이벤트를 붙이는 [하이드레이션](/posts/hydration)은 JS로 한다. 화면 아래의 후기 목록 3,000줄까지 처음부터 하이드레이션할 필요는 없다. 서버 HTML은 그대로 두고, 후기 영역만 화면 가까이 왔을 때 살린다.
+
+```jsx
+hydrateRoot(document.getElementById("hero"), <HeroBox />);
+
+const el = document.getElementById("rev");
+const io = new IntersectionObserver(async ([e]) => {
+  if (!e.isIntersecting) return;
+  io.disconnect();
+  const { Reviews } = await import("./hyd-parts.jsx");
+  hydrateRoot(el, <Reviews />); // 이때 처음으로 후기 목록에 이벤트가 붙는다
+}, { rootMargin: "400px" });
+io.observe(el);
+```
+
+한 번에 둘 다 하이드레이션하는 버전과 비교했다. HTML은 175KB, 후기 `li`가 3,000개다.
+
+```text
+all  median fcp=352 hero=1196 blocking=429 longest=166 script=239
+lazy median fcp=404 hero=1276 blocking=395 longest=207 script=113
+```
+
+JS 실행 시간은 239ms에서 113ms로 절반이 됐다. 그런데 긴 작업의 합(blocking)은 429ms와 395ms로 거의 같다. 긴 작업 대부분이 스크립트가 아니라 175KB HTML을 파싱하고 3,000줄의 스타일과 레이아웃을 계산하는 시간이었기 때문이다. 하이드레이션을 미루면 JS 일은 줄지만 DOM 자체가 큰 비용은 그대로 남는다. 그건 DOM을 줄이거나 `content-visibility`로 화면 밖 렌더링을 건너뛰는 쪽의 일이고, [렌더링 성능 최적화](/posts/rendering-performance-optimization)에서 다룬다.
+
+영역마다 따로 살리는 방식을 프레임워크 차원으로 끌어올린 것이 Astro의 아일랜드다. `client:visible`, `client:idle` 같은 지시어가 위 코드와 같은 일을 한다. 아예 하이드레이션을 하지 않는 재개 가능성까지 포함한 비교는 [아일랜드와 재개 가능성](/posts/islands-resumability)에 있다.
+
+## 첫 화면에 있는 것은 미루지 않는다
+
+지연 로딩을 처음 도입하면 "다 lazy로 바꾸면 더 빠르겠지" 하는 유혹이 생긴다. 첫 화면 히어로 컴포넌트를 `React.lazy`로 자른 버전과 히어로 이미지에 `loading="lazy"`를 단 버전을 만들어 쟀다.
+
+```text
+                                   FCP     LCP
+hero (그냥 import)                 1012ms  1740ms
+lazyhero (히어로를 React.lazy로)   1352ms  2068ms
+
+static-eager (HTML의 img)           604ms  1048ms
+static-lazy  (img loading=lazy)     516ms  1280ms
+```
+
+히어로를 자르면 앱 코드를 실행한 뒤에야 히어로 청크를 요청하니 왕복 하나와 실행 한 번이 그대로 더해져 LCP가 328ms 늦어졌다. HTML에 직접 쓴 이미지에 `loading="lazy"`를 달면 232ms 늦어졌다. 브라우저의 프리로드 스캐너는 HTML을 훑으며 이미지를 미리 요청하는데, `lazy`가 붙은 이미지는 레이아웃을 계산해서 화면 안에 있는지 확인한 뒤에야 요청한다. 레이아웃은 CSS가 다 와야 할 수 있으니 그만큼 밀린다. `static-lazy`의 FCP가 오히려 빠른 건 이미지가 CSS와 대역폭을 다투지 않아서다. 첫 페인트는 조금 이르지만 정작 사용자가 기다리는 사진은 늦다.
+
+[Core Web Vitals 글](/posts/core-web-vitals)에서 LCP를 네 조각으로 나눴을 때 "리소스 로드 지연"이 바로 이 구간이다. 첫 화면의 LCP 후보는 지연 로딩의 반대편에 둔다. `loading="lazy"`를 빼고 필요하면 `fetchpriority="high"`를 준다. 우선순위 힌트는 [리소스 힌트](/posts/resource-hints-loading)에서 이어진다.
+
+어디까지가 첫 화면인지는 기기마다 다르다는 점도 함정이다. 390px 휴대폰에서 두 번째 화면인 카드가 1280px 데스크톱에서는 첫 화면에 있다. 목록의 앞 몇 개(보통 첫 줄)는 즉시, 나머지는 lazy로 나누는 게 흔한 절충이다.
+
+## 미루고 나서 새로 생기는 문제
+
+지연 로딩은 받는 시점을 옮길 뿐이라 옮긴 자리에서 문제가 생긴다. 현장에서 자주 만나는 것들이다.
+
+자리를 비워 두면 화면이 밀린다. fallback이나 관찰 대상에 높이가 없으면 내용이 도착할 때 아래가 밀려 CLS가 오른다. 실제 컴포넌트와 같은 높이를 주거나 `aspect-ratio`로 비율을 잡는다.
+
+안 받은 내용은 찾을 수 없다. 화면에 없던 후기는 브라우저의 페이지 내 찾기(Ctrl+F)에 걸리지 않는다. 검색엔진 크롤러도 스크롤을 하지 않으니, 보일 때 받는 방식으로만 존재하는 본문은 색인에 안 들어갈 수 있다. 구글은 렌더링할 때 긴 뷰포트를 써서 IntersectionObserver 기반 로딩은 대체로 처리한다고 안내하지만, 스크롤 이벤트에만 반응하는 코드는 실행되지 않는다. 검색에 걸려야 하는 본문은 서버 HTML에 넣는다.
+
+lazy 안의 lazy는 폭포가 된다. 지연 로딩된 컴포넌트가 다시 다른 lazy 컴포넌트를 품으면, 첫 청크를 받고 실행해야 두 번째 청크 요청이 나간다. 누를 때 한 번 기다릴 일을 두 번 기다리게 된다. 함께 쓰이는 조각은 같은 청크로 묶거나 바깥 청크를 받을 때 안쪽도 같이 부른다.
+
+데이터는 따로 늦는다. 컴포넌트 청크를 받은 뒤 그 컴포넌트가 마운트되어 API를 부르면 코드 → 데이터 순으로 일렬이 된다. 청크와 데이터 요청을 같은 신호에서 함께 출발시키는 방법은 [데이터 요청 최적화](/posts/data-fetching-optimization)에서 잰다.
+
+## 현장에서 지연 로딩을 점검하는 순서
+
+"페이지가 무겁다"는 말을 들었을 때 미룰 후보를 찾는 순서다.
+
+1. 개발자 도구의 Coverage 탭(Ctrl+Shift+P → Show Coverage)을 켜고 새로고침한다. 첫 로드 뒤 사용되지 않은 바이트 비율이 큰 JS 파일이 미룰 후보다.
+2. Network 탭에서 Initiator 열을 켜고, 첫 로드에 나간 요청을 출처별로 본다. 다른 도메인에서 오는 스크립트와 iframe은 파사드나 상호작용 뒤 로딩 후보다.
+3. Performance 탭에서 첫 화면이 그려지기 전의 긴 작업을 찾고, 어떤 모듈의 평가 코드인지 본다. 정적 import된 라이브러리의 초기화가 자주 보인다.
+4. 바꾼 뒤에는 같은 조건(망 제한, CPU 제한)에서 LCP와 긴 작업을 다시 재고, 미룬 기능을 실제로 눌러 기다림이 얼마인지도 잰다. 첫 로드만 재고 끝내면 비용을 클릭 뒤로 옮긴 사실을 놓친다.
+
+사용자 브라우저에서 미룬 청크가 실제로 얼마나 늦게 오는지 보고 싶다면 리소스 타이밍을 모으면 된다.
+
+```js
+// 청크 파일이 언제 요청되고 언제 끝났는지 모은다
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) {
+    if (e.initiatorType === "script" || e.name.includes("/chunk-")) {
+      console.log(e.name.split("/").pop(), Math.round(e.startTime), Math.round(e.responseEnd));
+    }
+  }
+}).observe({ type: "resource", buffered: true });
+```
+
+아래 함수는 섹션 목록과 스크롤 위치, 화면 높이, `rootMargin` 값을 받아 지금 받아야 할 섹션 id를 돌려준다. 관찰자가 하는 판정을 손으로 해 보는 것이다. 가장자리가 딱 맞닿기만 하는 경우는 겹치지 않는 것으로 친다.
+
+<CodePlayground
+  caption="지금 받아야 할 섹션 고르기"
+  functionName="sectionsToLoad"
+  initialCode={`function sectionsToLoad(sections, scrollY, viewportH, margin) {
+  // sections: [{ id, top, height }] (페이지 위에서부터의 px)
+  // 화면 [scrollY, scrollY + viewportH]를 위아래로 margin만큼 넓힌 범위와
+  // 겹치는 섹션의 id를 순서대로 돌려준다
+  return [];
+}`}
+  solution={`function sectionsToLoad(sections, scrollY, viewportH, margin) {
+  const top = scrollY - margin;
+  const bottom = scrollY + viewportH + margin;
+  return sections
+    .filter((s) => s.top < bottom && s.top + s.height > top)
+    .map((s) => s.id);
+}`}
+  tests={[
+    { label: "맨 위, 여유 0", args: [[{ id: "hero", top: 0, height: 600 }, { id: "video", top: 600, height: 260 }, { id: "map", top: 860, height: 280 }, { id: "reviews", top: 3200, height: 800 }], 0, 844, 0], expected: ["hero", "video"] },
+    { label: "맨 위, 여유 300", args: [[{ id: "hero", top: 0, height: 600 }, { id: "video", top: 600, height: 260 }, { id: "map", top: 860, height: 280 }, { id: "reviews", top: 3200, height: 800 }], 0, 844, 300], expected: ["hero", "video", "map"] },
+    { label: "2000px, 여유 300", args: [[{ id: "hero", top: 0, height: 600 }, { id: "video", top: 600, height: 260 }, { id: "map", top: 860, height: 280 }, { id: "reviews", top: 3200, height: 800 }], 2000, 844, 300], expected: [] },
+    { label: "2000px, 여유 400", args: [[{ id: "hero", top: 0, height: 600 }, { id: "video", top: 600, height: 260 }, { id: "map", top: 860, height: 280 }, { id: "reviews", top: 3200, height: 800 }], 2000, 844, 400], expected: ["reviews"] },
+    { label: "맞닿기만 하면 제외", args: [[{ id: "hero", top: 0, height: 600 }, { id: "video", top: 600, height: 260 }], 0, 600, 0], expected: ["hero"] },
+  ]}
+/>
+
+## 다시 613KB로
+
+처음 페이지가 무거웠던 건 코드가 커서라기보다 모든 것이 같은 순간에 출발해서였다. 영상은 누를 때, 지도는 닿을 때 미리, 후기는 다가올 때로 시점을 나누자 첫 로드는 196KB가 되고 LCP는 4.1초에서 1.8초가 됐다. 대신 누른 뒤의 기다림이 생겼고, 그걸 줄이려고 한 단계 이른 신호를 붙였다. 지연 로딩은 이 기다림을 어디에 둘지 고르는 일이고, 첫 화면에 보이는 것만은 그 대상이 아니다.
+
+## 면접에서 나올 만한 질문
+
+### 지연 로딩은 무엇을 줄이나요?
+
+첫 로드에 받고 실행하는 양을 줄인다. 지금 쓰지 않는 코드와 리소스를 빼면 첫 화면에 필요한 파일이 대역폭을 독차지하고, 메인 스레드도 첫 렌더링 전에 덜 일한다. 예제에서는 전송량이 613KB에서 196KB, JS 실행이 649ms에서 153ms로 줄었고 LCP가 2.3초 빨라졌다.
+
+### React.lazy로 자른 컴포넌트를 누를 때마다 늦게 뜨는데 어떻게 줄이나요?
+
+누르기 직전의 신호에서 미리 부른다. `import()` 함수를 바깥에 두고 `pointerenter`나 `focus`에서 한 번 불러 두면, 같은 모듈 주소는 한 번만 받으니 클릭 뒤 `lazy`가 그 결과를 그대로 쓴다. 예제에서 포인터를 올리고 300ms 뒤 누르니 956ms가 583ms로 줄었다. 터치 화면에는 호버가 없으니 화면에 들어올 때나 한가할 때 미리 부른다.
+
+### 첫 화면 이미지에 loading="lazy"를 달면 왜 느려지나요?
+
+브라우저가 그 이미지를 레이아웃이 끝난 뒤에야 요청하기 때문이다. 일반 이미지는 프리로드 스캐너가 HTML을 훑을 때 바로 요청하는데, lazy 이미지는 화면 안에 있는지 계산해야 해서 CSS를 다 받은 뒤로 밀린다. 예제에서 LCP가 1048ms에서 1280ms로 늦어졌다. LCP 후보는 lazy를 빼고 필요하면 `fetchpriority="high"`를 준다.
+
+### 서드파티 임베드는 어떻게 미루나요?
+
+파사드를 둔다. 진짜 플레이어 대신 썸네일과 재생 버튼만 그려 두고, 누르면 iframe으로 바꾼다. 영상을 보지 않는 사용자는 플레이어 비용을 아예 내지 않지만, 누른 사용자는 그 비용을 클릭 뒤에 치른다(예제에서 1.8초). 영상이 페이지의 주인공이면 오히려 손해이고, 모바일 자동 재생 정책 때문에 한 번 더 눌러야 할 수도 있다.
+
+### IntersectionObserver의 rootMargin은 얼마로 잡나요?
+
+받는 데 걸리는 시간과 스크롤 속도를 곱한 거리만큼이 기준이다. 느린 망에서 0.8초 걸리는 청크라면 빠르게 훑는 사용자에게는 1000px도 부족했다. 여유를 끝없이 키우면 즉시 받는 것과 같아지니 수백 px 정도로 두고, 그 자리에 높이를 잡은 스켈레톤을 둬서 잠깐 비는 순간을 덜 어색하게 만든다.
+
+### 하이드레이션을 미루면 TBT가 줄어드나요?
+
+JS 실행 몫만 준다. 예제에서 화면 아래 3,000줄 목록의 하이드레이션을 미루니 스크립트 시간은 239ms에서 113ms가 됐지만 긴 작업 합은 429ms와 395ms로 비슷했다. 긴 작업 대부분이 큰 HTML의 파싱과 스타일·레이아웃이었기 때문이다. DOM이 크면 하이드레이션 지연과 별개로 DOM을 줄이거나 화면 밖 렌더링을 건너뛰어야 한다.
+
+### 지연 로딩 때문에 생길 수 있는 부작용은요?
+
+자리를 안 잡으면 CLS가 오르고, 안 받은 본문은 페이지 내 찾기와 크롤러에 안 잡힐 수 있다. lazy 컴포넌트 안에 또 lazy가 있으면 청크 요청이 일렬로 서고, 청크를 받은 뒤 데이터를 부르면 코드와 데이터가 또 일렬이 된다. 배포 직후 옛 청크가 사라지면 클릭 순간 `ChunkLoadError`가 나니 재시도와 새로고침 처리가 필요하다.

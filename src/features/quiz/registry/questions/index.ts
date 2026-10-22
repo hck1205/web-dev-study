@@ -3,7 +3,9 @@ import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ACID_VS_BASE } from "./acid-vs-base";
 import { AGENTIC_RAG } from "./agentic-rag";
+import { AIRFLOW_ORCHESTRATION } from "./airflow-orchestration";
 import { ALERTING } from "./alerting";
+import { ALGORITHMS_OVERVIEW } from "./algorithms-overview";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
@@ -16,29 +18,36 @@ import { ARCHITECTURE_PATTERNS_OVERVIEW } from "./architecture-patterns-overview
 import { ARGOCD_BASICS } from "./argocd-basics";
 import { AUTHN_VS_AUTHZ } from "./authn-vs-authz";
 import { AUTOSCALING } from "./autoscaling";
+import { AWS_EC2_UBUNTU_SERVER_SETUP } from "./aws-ec2-ubuntu-server-setup";
 import { BACKEND_ENGINEER_ROADMAP } from "./backend-engineer-roadmap";
 import { BACKPRESSURE } from "./backpressure";
 import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
+import { BASH_SCRIPTING } from "./bash-scripting";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
+import { BINARY_SEARCH } from "./binary-search";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { BROWSER_RENDERING_PIPELINE } from "./browser-rendering-pipeline";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { BULLMQ_JOB_QUEUE } from "./bullmq-job-queue";
+import { BUNDLER_BASICS } from "./bundler-basics";
 import { CACHE_INVALIDATION } from "./cache-invalidation";
 import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
 import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
+import { CDC_CHANGE_DATA_CAPTURE } from "./cdc-change-data-capture";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CENTRALIZED_LOGGING_PIPELINE } from "./centralized-logging-pipeline";
 import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CIS_BENCHMARK_KUBE_BENCH } from "./cis-benchmark-kube-bench";
 import { CLAUDE_CODE_CONTEXT_WINDOW } from "./claude-code-context-window";
 import { CLAUDE_CODE_EXTENSIONS } from "./claude-code-extensions";
 import { CLAUDE_CODE_FUNDAMENTALS_MAP } from "./claude-code-fundamentals-map";
@@ -53,16 +62,23 @@ import { COLD_STARTS } from "./cold-starts";
 import { CONNECTION_POOL } from "./connection-pool";
 import { CONSISTENCY_MODELS } from "./consistency-models";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
+import { CONTAINER_SUPPLY_CHAIN_SECURITY } from "./container-supply-chain-security";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
 import { COUNT_MIN_SKETCH } from "./count-min-sketch";
+import { CPU_CACHE_HIERARCHY } from "./cpu-cache-hierarchy";
+import { CPU_INSTRUCTION_CYCLE } from "./cpu-instruction-cycle";
+import { CPU_PIPELINING_BRANCH_PREDICTION } from "./cpu-pipelining-branch-prediction";
 import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
+import { CSS_PERFORMANCE } from "./css-performance";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
+import { DATA_FETCHING_OPTIMIZATION } from "./data-fetching-optimization";
+import { DATA_LAKE_HDFS } from "./data-lake-hdfs";
 import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
@@ -92,10 +108,12 @@ import { DDOS_PROTECTION } from "./ddos-protection";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
 import { DEBOUNCE_THROTTLE } from "./debounce-throttle";
+import { DEBUGGING_WITH_LOGS } from "./debugging-with-logs";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
 import { DHCP } from "./dhcp";
+import { DIGITAL_SIGNATURES_CERTIFICATES } from "./digital-signatures-certificates";
 import { DISASTER_RECOVERY } from "./disaster-recovery";
 import { DISTRIBUTED_LOCK } from "./distributed-lock";
 import { DISTRIBUTED_TRACING } from "./distributed-tracing";
@@ -117,9 +135,11 @@ import { DS_LINKED_LIST } from "./ds-linked-list";
 import { DS_STACK_QUEUE_DEQUE } from "./ds-stack-queue-deque";
 import { DS_TRIE } from "./ds-trie";
 import { DS_UNION_FIND } from "./ds-union-find";
+import { DYNAMIC_PROGRAMMING } from "./dynamic-programming";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
+import { ELK_STACK_BASICS } from "./elk-stack-basics";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { ENTERPRISE_SYSTEM_INTEGRATION } from "./enterprise-system-integration";
@@ -134,11 +154,23 @@ import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { EXPRESS_MIDDLEWARE } from "./express-middleware";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FALCO_RUNTIME_SECURITY } from "./falco-runtime-security";
 import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
+import { FE_SD_NEWS_FEED } from "./fe-sd-news-feed";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
+import { FP_COMPOSITION_PIPE } from "./fp-composition-pipe";
+import { FP_FUNCTORS_MONADS_JS } from "./fp-functors-monads-js";
+import { FP_IN_REACT } from "./fp-in-react";
+import { FRONTEND_AS_DISTRIBUTED_SYSTEM } from "./frontend-as-distributed-system";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
+import { FRONTEND_ERROR_TRACKING } from "./frontend-error-tracking";
+import { FRONTEND_MONOREPO } from "./frontend-monorepo";
+import { FRONTEND_PERFORMANCE_MAP } from "./frontend-performance-map";
+import { FRONTEND_STATE_ARCHITECTURE } from "./frontend-state-architecture";
+import { FRONTEND_SYSTEM_DESIGN_INTERVIEW } from "./frontend-system-design-interview";
+import { FUNCTIONAL_PROGRAMMING_BASICS } from "./functional-programming-basics";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
@@ -163,9 +195,12 @@ import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
 import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
 import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
+import { GRAFANA_TEMPO_TRACING } from "./grafana-tempo-tracing";
 import { GRAPH_RAG } from "./graph-rag";
 import { GRAPHQL_BASICS } from "./graphql-basics";
+import { GREEDY_ALGORITHMS } from "./greedy-algorithms";
 import { GRPC } from "./grpc";
+import { HASH_HMAC_PASSWORD_HASHING } from "./hash-hmac-password-hashing";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
 import { HELM_CHART_TEMPLATES } from "./helm-chart-templates";
@@ -189,6 +224,7 @@ import { IAC_BASICS } from "./iac-basics";
 import { IAM_BASICS } from "./iam-basics";
 import { IDEMPOTENCY_KEY } from "./idempotency-key";
 import { IDS_IPS } from "./ids-ips";
+import { IMAGE_OPTIMIZATION } from "./image-optimization";
 import { INTEGRATION_TESTS_REAL_DB } from "./integration-tests-real-db";
 import { IPTABLES_BASICS } from "./iptables-basics";
 import { IPTABLES_NAT } from "./iptables-nat";
@@ -196,6 +232,8 @@ import { IPV6_BASICS } from "./ipv6-basics";
 import { ISLANDS_RESUMABILITY } from "./islands-resumability";
 import { JAVA_JVM_MEMORY_GC } from "./java-jvm-memory-gc";
 import { JAVASCRIPT_ROADMAP } from "./javascript-roadmap";
+import { JENKINS_ARGOCD_PUSH_PULL } from "./jenkins-argocd-push-pull";
+import { JENKINS_ON_KUBERNETES } from "./jenkins-on-kubernetes";
 import { JENKINS_PIPELINE_BASICS } from "./jenkins-pipeline-basics";
 import { JS_ARRAY_MUTATION } from "./js-array-mutation";
 import { JS_ARRAY_TRANSFORM } from "./js-array-transform";
@@ -289,6 +327,7 @@ import { K8S_STATEFULSET } from "./k8s-statefulset";
 import { K8S_STORAGECLASS_SNAPSHOTS } from "./k8s-storageclass-snapshots";
 import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
+import { KAFKA_TO_LAKE_PIPELINE } from "./kafka-to-lake-pipeline";
 import { KAFKA_VS_RABBITMQ_REPLAY } from "./kafka-vs-rabbitmq-replay";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
@@ -301,10 +340,14 @@ import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LAYERED_ARCHITECTURE } from "./layered-architecture";
+import { LAZY_LOADING_STRATEGIES } from "./lazy-loading-strategies";
 import { LEADER_ELECTION } from "./leader-election";
+import { LIGHTHOUSE_EXPLAINED } from "./lighthouse-explained";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
 import { LINUX_NAMESPACES_CGROUPS } from "./linux-namespaces-cgroups";
+import { LINUX_NETWORK_TUNING } from "./linux-network-tuning";
+import { LINUX_PERFORMANCE_TRIAGE } from "./linux-performance-triage";
 import { LINUX_PROCESSES_SIGNALS } from "./linux-processes-signals";
 import { LINUX_SYSTEMD_SYSTEMCTL } from "./linux-systemd-systemctl";
 import { LOAD_BALANCER_BASICS } from "./load-balancer-basics";
@@ -312,19 +355,25 @@ import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { LOCAL_K8S_KIND_MINIKUBE } from "./local-k8s-kind-minikube";
+import { LOGGING_TOOLS_OVERVIEW } from "./logging-tools-overview";
+import { LOGIC_GATES_ALU } from "./logic-gates-alu";
 import { LONG_POLLING } from "./long-polling";
 import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
+import { MFA_TOTP } from "./mfa-totp";
+import { MICRO_FRONTEND_INTEGRATION_PATTERNS } from "./micro-frontend-integration-patterns";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MICROSERVICES_DECOMPOSITION } from "./microservices-decomposition";
 import { MODULAR_MONOLITH } from "./modular-monolith";
+import { MODULE_FEDERATION_DEEP_DIVE } from "./module-federation-deep-dive";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
 import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
+import { MONOREPO_BUILD_CACHE } from "./monorepo-build-cache";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { MYSQL_INNODB_BASICS } from "./mysql-innodb-basics";
@@ -345,14 +394,19 @@ import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { NODEJS_SERVER_RUNTIME } from "./nodejs-server-runtime";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
+import { OLAP_STAR_SCHEMA } from "./olap-star-schema";
 import { ON_CALL } from "./on-call";
 import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
+import { OTEL_COLLECTOR_PIPELINE } from "./otel-collector-pipeline";
+import { OWASP_TOP_10_MAP } from "./owasp-top-10-map";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
+import { PAGE_CACHE_DISK_IO } from "./page-cache-disk-io";
 import { PARALLAX_SCROLLYTELLING } from "./parallax-scrollytelling";
+import { PASSKEYS_WEBAUTHN } from "./passkeys-webauthn";
 import { PATTERN_ABSTRACT_FACTORY } from "./pattern-abstract-factory";
 import { PATTERN_ADAPTER } from "./pattern-adapter";
 import { PATTERN_BRIDGE } from "./pattern-bridge";
@@ -377,6 +431,7 @@ import { PATTERN_STRATEGY } from "./pattern-strategy";
 import { PATTERN_TEMPLATE_METHOD } from "./pattern-template-method";
 import { PATTERN_VISITOR } from "./pattern-visitor";
 import { PERCENTILE_LATENCY } from "./percentile-latency";
+import { PERFORMANCE_METRICS_MEASUREMENT } from "./performance-metrics-measurement";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
@@ -395,6 +450,7 @@ import { PRODUCTION_INCIDENTS } from "./production-incidents";
 import { PROMETHEUS_BASICS } from "./prometheus-basics";
 import { PROXY_REVERSE_PROXY } from "./proxy-reverse-proxy";
 import { PUB_SUB } from "./pub-sub";
+import { PUBLIC_KEY_KEY_EXCHANGE } from "./public-key-key-exchange";
 import { PYTHAGOREAN_THEOREM } from "./pythagorean-theorem";
 import { QUADTREE } from "./quadtree";
 import { RABBITMQ_BASICS } from "./rabbitmq-basics";
@@ -409,17 +465,21 @@ import { RAY_CASTING } from "./ray-casting";
 import { REACT_RERENDER } from "./react-rerender";
 import { REACT_SERVER_COMPONENTS } from "./react-server-components";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
+import { RECURSION_BACKTRACKING } from "./recursion-backtracking";
 import { REDIS_BASICS } from "./redis-basics";
 import { REDIS_CLUSTER } from "./redis-cluster";
+import { REDIS_HIGH_THROUGHPUT } from "./redis-high-throughput";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
 import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
 import { RELEASE_CUTOVER_HYPERCARE } from "./release-cutover-hypercare";
 import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
+import { RENDERING_PERFORMANCE_OPTIMIZATION } from "./rendering-performance-optimization";
 import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
 import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
 import { RESILIENCE_PATTERNS } from "./resilience-patterns";
+import { RESOURCE_HINTS_LOADING } from "./resource-hints-loading";
 import { REST_API_DESIGN } from "./rest-api-design";
 import { RETRIES } from "./retries";
 import { REVERSE_PROXY_LB_API_GATEWAY } from "./reverse-proxy-lb-api-gateway";
@@ -495,6 +555,7 @@ import { SD_WALLET_TRANSFER } from "./sd-wallet-transfer";
 import { SD_WEB_CRAWLER_ARCHITECTURE } from "./sd-web-crawler-architecture";
 import { SD_WEB_CRAWLER_POLITENESS_DEDUP } from "./sd-web-crawler-politeness-dedup";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
+import { SECCOMP_APPARMOR } from "./seccomp-apparmor";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SEMANTIC_VERSIONING } from "./semantic-versioning";
@@ -505,7 +566,16 @@ import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
+import { SORTING_ALGORITHMS } from "./sorting-algorithms";
+import { SPARK_BASICS } from "./spark-basics";
+import { SPRING_AI_AGENTS } from "./spring-ai-agents";
 import { SPRING_ANIMATION } from "./spring-animation";
+import { SPRING_BOOT_4_MIGRATION } from "./spring-boot-4-migration";
+import { SPRING_BOOT_AUTO_CONFIGURATION } from "./spring-boot-auto-configuration";
+import { SPRING_BOOT_OBSERVABILITY } from "./spring-boot-observability";
+import { SPRING_BOOT_ON_KUBERNETES } from "./spring-boot-on-kubernetes";
+import { SPRING_CLOUD_VS_KUBERNETES } from "./spring-cloud-vs-kubernetes";
+import { SPRING_IOC_DI } from "./spring-ioc-di";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
@@ -538,9 +608,13 @@ import { SQLD_SUBQUERY_SET_OPERATORS } from "./sqld-subquery-set-operators";
 import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
+import { SSH_IN_PRACTICE } from "./ssh-in-practice";
+import { SSO_SAML_OIDC } from "./sso-saml-oidc";
 import { SSRF } from "./ssrf";
+import { STREAM_PROCESSING } from "./stream-processing";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
+import { SYMMETRIC_ENCRYPTION_AES } from "./symmetric-encryption-aes";
 import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
 import { SYSTEM_DESIGN_STUDY_PATH } from "./system-design-study-path";
 import { TAIL_LATENCY } from "./tail-latency";
@@ -555,17 +629,28 @@ import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
 import { TRANSACTIONAL_OUTBOX } from "./transactional-outbox";
+import { TS_GENERICS } from "./ts-generics";
+import { TS_NARROWING } from "./ts-narrowing";
+import { TS_TYPE_SYSTEM_BASICS } from "./ts-type-system-basics";
+import { TS_UTILITY_MAPPED_TYPES } from "./ts-utility-mapped-types";
+import { TSCONFIG_STRICT } from "./tsconfig-strict";
+import { TYPESCRIPT_IN_REACT } from "./typescript-in-react";
+import { TYPESCRIPT_ROADMAP } from "./typescript-roadmap";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
+import { VALKEY_VS_REDIS } from "./valkey-vs-redis";
 import { VECTOR_DB } from "./vector-db";
 import { VELERO_BACKUP } from "./velero-backup";
 import { VIEW_TRANSITIONS_SHARED_ELEMENT } from "./view-transitions-shared-element";
+import { VIRTUAL_MEMORY_PAGING } from "./virtual-memory-paging";
 import { VLAN_BASICS } from "./vlan-basics";
 import { VPC_BASICS } from "./vpc-basics";
 import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privatelink";
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WAF } from "./waf";
+import { WEB_FONT_OPTIMIZATION } from "./web-font-optimization";
+import { WEB_SECURITY_HEADERS } from "./web-security-headers";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -582,7 +667,9 @@ export const QUESTION_SETS = [
   ACID_TRANSACTIONS,
   ACID_VS_BASE,
   AGENTIC_RAG,
+  AIRFLOW_ORCHESTRATION,
   ALERTING,
+  ALGORITHMS_OVERVIEW,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
@@ -595,29 +682,36 @@ export const QUESTION_SETS = [
   ARGOCD_BASICS,
   AUTHN_VS_AUTHZ,
   AUTOSCALING,
+  AWS_EC2_UBUNTU_SERVER_SETUP,
   BACKEND_ENGINEER_ROADMAP,
   BACKPRESSURE,
   BACKUP_STRATEGY,
   BASE64,
+  BASH_SCRIPTING,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
+  BINARY_SEARCH,
   BLOOM_FILTER,
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
+  BROWSER_RENDERING_PIPELINE,
   BROWSER_STORAGE,
   BUILD_CACHING,
   BULLMQ_JOB_QUEUE,
+  BUNDLER_BASICS,
   CACHE_INVALIDATION,
   CACHE_WRITE_POLICIES,
   CACHING_CONCEPTS_MAP,
   CACHING_STRATEGIES,
   CANARY_RELEASE,
+  CDC_CHANGE_DATA_CAPTURE,
   CDN_EDGE_ANYCAST,
   CENTRALIZED_LOGGING_PIPELINE,
   CHAOS_ENGINEERING,
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CIS_BENCHMARK_KUBE_BENCH,
   CLAUDE_CODE_CONTEXT_WINDOW,
   CLAUDE_CODE_EXTENSIONS,
   CLAUDE_CODE_FUNDAMENTALS_MAP,
@@ -632,16 +726,23 @@ export const QUESTION_SETS = [
   CONNECTION_POOL,
   CONSISTENCY_MODELS,
   CONSISTENT_HASHING,
+  CONTAINER_SUPPLY_CHAIN_SECURITY,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
   COUNT_MIN_SKETCH,
+  CPU_CACHE_HIERARCHY,
+  CPU_INSTRUCTION_CYCLE,
+  CPU_PIPELINING_BRANCH_PREDICTION,
   CQRS,
   CRDT,
   CRON_JOBS,
   CSRF,
+  CSS_PERFORMANCE,
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
+  DATA_FETCHING_OPTIMIZATION,
+  DATA_LAKE_HDFS,
   DATA_STRUCTURES_OVERVIEW,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
@@ -671,10 +772,12 @@ export const QUESTION_SETS = [
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
   DEBOUNCE_THROTTLE,
+  DEBUGGING_WITH_LOGS,
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
   DHCP,
+  DIGITAL_SIGNATURES_CERTIFICATES,
   DISASTER_RECOVERY,
   DISTRIBUTED_LOCK,
   DISTRIBUTED_TRACING,
@@ -696,9 +799,11 @@ export const QUESTION_SETS = [
   DS_STACK_QUEUE_DEQUE,
   DS_TRIE,
   DS_UNION_FIND,
+  DYNAMIC_PROGRAMMING,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
+  ELK_STACK_BASICS,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
   ENTERPRISE_SYSTEM_INTEGRATION,
@@ -713,11 +818,23 @@ export const QUESTION_SETS = [
   EXPRESS_MIDDLEWARE,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FALCO_RUNTIME_SECURITY,
   FASTAPI_BASICS,
   FAULT_TOLERANCE,
+  FE_SD_NEWS_FEED,
   FEATURE_FLAGS,
   FIRST_PAGE_FROM_POWER_ON,
+  FP_COMPOSITION_PIPE,
+  FP_FUNCTORS_MONADS_JS,
+  FP_IN_REACT,
+  FRONTEND_AS_DISTRIBUTED_SYSTEM,
   FRONTEND_BROWSER_CACHE,
+  FRONTEND_ERROR_TRACKING,
+  FRONTEND_MONOREPO,
+  FRONTEND_PERFORMANCE_MAP,
+  FRONTEND_STATE_ARCHITECTURE,
+  FRONTEND_SYSTEM_DESIGN_INTERVIEW,
+  FUNCTIONAL_PROGRAMMING_BASICS,
   GARBAGE_COLLECTION,
   GATEWAY,
   GEOHASH,
@@ -742,9 +859,12 @@ export const QUESTION_SETS = [
   GLOBAL_ROLLOUT_LOCALIZATION,
   GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
+  GRAFANA_TEMPO_TRACING,
   GRAPH_RAG,
   GRAPHQL_BASICS,
+  GREEDY_ALGORITHMS,
   GRPC,
+  HASH_HMAC_PASSWORD_HASHING,
   HEALTH_CHECKS,
   HELM_BASICS,
   HELM_CHART_TEMPLATES,
@@ -768,6 +888,7 @@ export const QUESTION_SETS = [
   IAM_BASICS,
   IDEMPOTENCY_KEY,
   IDS_IPS,
+  IMAGE_OPTIMIZATION,
   INTEGRATION_TESTS_REAL_DB,
   IPTABLES_BASICS,
   IPTABLES_NAT,
@@ -775,6 +896,8 @@ export const QUESTION_SETS = [
   ISLANDS_RESUMABILITY,
   JAVA_JVM_MEMORY_GC,
   JAVASCRIPT_ROADMAP,
+  JENKINS_ARGOCD_PUSH_PULL,
+  JENKINS_ON_KUBERNETES,
   JENKINS_PIPELINE_BASICS,
   JS_ARRAY_MUTATION,
   JS_ARRAY_TRANSFORM,
@@ -868,6 +991,7 @@ export const QUESTION_SETS = [
   K8S_STORAGECLASS_SNAPSHOTS,
   K8S_VPA,
   KAFKA_BASICS,
+  KAFKA_TO_LAKE_PIPELINE,
   KAFKA_VS_RABBITMQ_REPLAY,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,
@@ -880,10 +1004,14 @@ export const QUESTION_SETS = [
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
   LAYERED_ARCHITECTURE,
+  LAZY_LOADING_STRATEGIES,
   LEADER_ELECTION,
+  LIGHTHOUSE_EXPLAINED,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
   LINUX_NAMESPACES_CGROUPS,
+  LINUX_NETWORK_TUNING,
+  LINUX_PERFORMANCE_TRIAGE,
   LINUX_PROCESSES_SIGNALS,
   LINUX_SYSTEMD_SYSTEMCTL,
   LOAD_BALANCER_BASICS,
@@ -891,19 +1019,25 @@ export const QUESTION_SETS = [
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
   LOCAL_K8S_KIND_MINIKUBE,
+  LOGGING_TOOLS_OVERVIEW,
+  LOGIC_GATES_ALU,
   LONG_POLLING,
   LOSSY_COUNTING,
   MERKLE_TREE,
   MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
   METRICS_TYPES,
+  MFA_TOTP,
+  MICRO_FRONTEND_INTEGRATION_PATTERNS,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MICROSERVICES_DECOMPOSITION,
   MODULAR_MONOLITH,
+  MODULE_FEDERATION_DEEP_DIVE,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
   MONOLITH_ARCHITECTURE,
+  MONOREPO_BUILD_CACHE,
   MULTI_REGION,
   MVC_PATTERN,
   MYSQL_INNODB_BASICS,
@@ -924,14 +1058,19 @@ export const QUESTION_SETS = [
   NODEJS_SERVER_RUNTIME,
   OAUTH,
   OBSERVABILITY_BASICS,
+  OLAP_STAR_SCHEMA,
   ON_CALL,
   OPENSEARCH_CLUSTER_OPERATIONS,
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
+  OTEL_COLLECTOR_PIPELINE,
+  OWASP_TOP_10_MAP,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
+  PAGE_CACHE_DISK_IO,
   PARALLAX_SCROLLYTELLING,
+  PASSKEYS_WEBAUTHN,
   PATTERN_ABSTRACT_FACTORY,
   PATTERN_ADAPTER,
   PATTERN_BRIDGE,
@@ -956,6 +1095,7 @@ export const QUESTION_SETS = [
   PATTERN_TEMPLATE_METHOD,
   PATTERN_VISITOR,
   PERCENTILE_LATENCY,
+  PERFORMANCE_METRICS_MEASUREMENT,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,
@@ -974,6 +1114,7 @@ export const QUESTION_SETS = [
   PROMETHEUS_BASICS,
   PROXY_REVERSE_PROXY,
   PUB_SUB,
+  PUBLIC_KEY_KEY_EXCHANGE,
   PYTHAGOREAN_THEOREM,
   QUADTREE,
   RABBITMQ_BASICS,
@@ -988,17 +1129,21 @@ export const QUESTION_SETS = [
   REACT_RERENDER,
   REACT_SERVER_COMPONENTS,
   REALTIME_COMMUNICATION,
+  RECURSION_BACKTRACKING,
   REDIS_BASICS,
   REDIS_CLUSTER,
+  REDIS_HIGH_THROUGHPUT,
   REDIS_MEMORY_EVICTION,
   REDIS_PERSISTENCE_HA,
   REDIS_REPLICATION_SENTINEL,
   RELEASE_CUTOVER_HYPERCARE,
   RENDERING_CSR_SPA,
+  RENDERING_PERFORMANCE_OPTIMIZATION,
   RENDERING_SSG_ISR,
   RENDERING_SSR,
   RENDERING_STRATEGIES,
   RESILIENCE_PATTERNS,
+  RESOURCE_HINTS_LOADING,
   REST_API_DESIGN,
   RETRIES,
   REVERSE_PROXY_LB_API_GATEWAY,
@@ -1074,6 +1219,7 @@ export const QUESTION_SETS = [
   SD_WEB_CRAWLER_ARCHITECTURE,
   SD_WEB_CRAWLER_POLITENESS_DEDUP,
   SDN_VXLAN_OVERLAY,
+  SECCOMP_APPARMOR,
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
   SEMANTIC_VERSIONING,
@@ -1084,7 +1230,16 @@ export const QUESTION_SETS = [
   SERVICE_MESH,
   SIT_UAT_TESTING,
   SLI_SLO,
+  SORTING_ALGORITHMS,
+  SPARK_BASICS,
+  SPRING_AI_AGENTS,
   SPRING_ANIMATION,
+  SPRING_BOOT_4_MIGRATION,
+  SPRING_BOOT_AUTO_CONFIGURATION,
+  SPRING_BOOT_OBSERVABILITY,
+  SPRING_BOOT_ON_KUBERNETES,
+  SPRING_CLOUD_VS_KUBERNETES,
+  SPRING_IOC_DI,
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,
@@ -1117,9 +1272,13 @@ export const QUESTION_SETS = [
   SQLD_TOP_N_HIERARCHICAL_PIVOT,
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
+  SSH_IN_PRACTICE,
+  SSO_SAML_OIDC,
   SSRF,
+  STREAM_PROCESSING,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
+  SYMMETRIC_ENCRYPTION_AES,
   SYSTEM_DESIGN_CONCEPTS_MAP,
   SYSTEM_DESIGN_STUDY_PATH,
   TAIL_LATENCY,
@@ -1134,17 +1293,28 @@ export const QUESTION_SETS = [
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
   TRANSACTIONAL_OUTBOX,
+  TS_GENERICS,
+  TS_NARROWING,
+  TS_TYPE_SYSTEM_BASICS,
+  TS_UTILITY_MAPPED_TYPES,
+  TSCONFIG_STRICT,
+  TYPESCRIPT_IN_REACT,
+  TYPESCRIPT_ROADMAP,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
+  VALKEY_VS_REDIS,
   VECTOR_DB,
   VELERO_BACKUP,
   VIEW_TRANSITIONS_SHARED_ELEMENT,
+  VIRTUAL_MEMORY_PAGING,
   VLAN_BASICS,
   VPC_BASICS,
   VPC_PEERING_TRANSIT_PRIVATELINK,
   VPC_SUBNETS_ROUTE_TABLES,
   VPN_IPSEC_WIREGUARD,
   WAF,
+  WEB_FONT_OPTIMIZATION,
+  WEB_SECURITY_HEADERS,
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,

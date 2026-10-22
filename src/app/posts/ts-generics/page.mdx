@@ -1,0 +1,512 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ts-generics");
+
+배열의 첫 값을 꺼내는 함수를 하나 만들었다. 숫자 배열에도, 문자열 배열에도 쓰고 싶어서 매개변수를 `any[]`로 받았다.
+
+```ts
+function first(items: any[]) {
+  return items[0];
+}
+
+const price = first([1200, 3400]);
+console.log(price.toFixed(1));
+const user = first(["kim", "lee"]);
+console.log(user.toFixed(1)); // 문자열에 toFixed
+```
+
+`tsc --strict`는 통과한다. 실행하면 두 번째 줄에서 멈춘다.
+
+```text
+1200.0
+TypeError: user.toFixed is not a function
+```
+
+`first`는 어떤 배열이든 받는다는 목적은 이뤘다. 대신 "숫자 배열을 넣으면 숫자가 나온다"는 사실을 잃었다. 들어간 타입과 나오는 타입 사이의 연결이 끊긴 것이다. 제네릭(generic)은 이 연결을 타입 매개변수 하나로 이어 준다.
+
+이 글은 TypeScript 시리즈의 두 번째 글이다. 할당 규칙과 `any`·`unknown`의 차이는 [타입 시스템 기초](/posts/ts-type-system-basics)에서 다뤘고, 여기서는 타입 매개변수가 어떻게 정해지는지, 제약과 기본값, 추론이 엇나가는 경우, React 컴포넌트와 훅에 붙이는 법까지 본다. 제네릭 위에서 타입을 변형하는 `Partial`, `Pick`, 조건부 타입은 [유틸리티·매핑 타입 글](/posts/ts-utility-mapped-types)에서 이어진다. 예제는 TypeScript 5.9와 `--strict`로 검사했다.
+
+## any를 쓰면 입력과 출력이 따로 논다
+
+같은 함수를 세 가지로 써 보면 차이가 보인다. 첫째는 위의 `any[]`다. 둘째는 유니온으로 받을 수 있는 걸 다 적는 방법이다.
+
+```ts
+function firstU(items: (string | number)[]): string | number | undefined { return items[0]; }
+const p = firstU([1200, 3400]);
+p.toFixed(1);
+```
+
+```text
+overload.ts(3,1): error TS18048: 'p' is possibly 'undefined'.
+overload.ts(3,3): error TS2339: Property 'toFixed' does not exist on type 'string | number'.
+  Property 'toFixed' does not exist on type 'string'.
+```
+
+이번엔 안전하지만 불편하다. 숫자 배열을 넣었는데도 결과가 `string | number`라서, 쓸 때마다 다시 확인해야 한다. 받을 수 있는 타입을 늘릴수록 결과는 더 흐려진다.
+
+셋째가 제네릭이다.
+
+```ts
+function first<T>(items: T[]): T | undefined {
+  return items[0];
+}
+
+const price = first([1200, 3400]);   // T = number
+const user = first(["kim", "lee"]);  // T = string
+console.log(user?.toFixed(1));
+const forced = first<number>([1, "a"]);
+```
+
+```text
+first.ts(7,19): error TS2551: Property 'toFixed' does not exist on type 'string'. Did you mean 'fixed'?
+first.ts(8,34): error TS2322: Type 'string' is not assignable to type 'number'.
+```
+
+`<T>`는 함수의 타입 매개변수 선언이다. 값 매개변수 `items`가 호출할 때 값을 받듯, `T`는 호출할 때 타입을 받는다. `items: T[]`와 반환 타입 `T | undefined`에 같은 `T`가 쓰였으니 "들어간 배열의 원소 타입이 그대로 나온다"는 관계가 적힌다. 그래서 문자열 배열에서 꺼낸 값에 `toFixed`를 부르면 컴파일 단계에서 막힌다. `first<number>(...)`처럼 타입 인자를 직접 넘기면 추론 대신 그 타입으로 검사한다.
+
+## 타입 매개변수는 호출하는 순간 정해진다
+
+`first`를 선언할 때 `T`는 아직 아무 타입도 아니다. 호출하는 줄마다 검사기가 인자를 보고 `T`를 정하고, 그 결과를 함수 시그니처에 대입한 다음 나머지를 검사한다. 아래 그림에서 다음을 누르며 `first([1200, 3400])` 한 줄이 검사되는 과정을 따라가 보자.
+
+<SequenceDiagram
+  caption="호출 한 줄마다 T를 정하고 대입한 뒤 검사한다"
+  actors={[
+    { id: "call", label: "호출부" },
+    { id: "chk", label: "검사기" },
+    { id: "sig", label: "first<T>" },
+  ]}
+  steps={[
+    { from: "call", to: "chk", label: "[1200, 3400]", title: "인자의 타입을 먼저 본다", detail: "배열 리터럴의 타입은 number[]다. 아직 T는 정해지지 않았다.", payload: "first([1200, 3400])" },
+    { from: "chk", to: "sig", label: "T[] ← number[]", title: "매개변수 자리에 맞춰 본다", detail: "items: T[] 자리에 number[]가 들어오니 T의 후보로 number를 얻는다." },
+    { from: "sig", to: "sig", label: "T = number", title: "T를 정하고 대입한다", detail: "후보가 하나라서 T는 number다. 시그니처가 (items: number[]) => number | undefined가 된다." },
+    { from: "sig", to: "call", label: "number | undefined", title: "반환 타입이 결과 변수로 간다", detail: "price의 타입은 number | undefined다. 호출부의 다음 줄은 이 타입으로 검사된다." },
+  ]}
+/>
+
+이 과정은 컴파일할 때만 일어난다. 출력된 자바스크립트에는 `<T>`가 없다. 제네릭 함수는 런타임에 `T`가 무엇인지 알 수 없어서, 함수 안에서 `if (T === number)` 같은 분기는 쓸 수 없다. 타입에 따라 다르게 동작하려면 값을 보고 판단하는 코드가 따로 있어야 한다.
+
+## 후보가 여럿이면 검사기가 고른다
+
+`T`가 한 번만 나오면 쉽다. 같은 `T`가 여러 인자에 나오면 검사기는 후보를 모아 하나로 정한다. 그 결과가 생각과 다를 때가 있다.
+
+```ts
+function longest<T extends { length: number }>(a: T, b: T): T {
+  return a.length >= b.length ? a : b;
+}
+
+longest("abc", "de");          // T = string
+longest([1, 2], [3]);          // T = number[]
+longest(10, 20);
+longest("abc", [1, 2]);
+```
+
+```text
+constraint2.ts(7,9): error TS2345: Argument of type 'number' is not assignable to parameter of type '{ length: number; }'.
+constraint2.ts(8,16): error TS2345: Argument of type 'number[]' is not assignable to parameter of type '"abc"'.
+```
+
+마지막 오류가 흥미롭다. 문자열과 배열을 섞어 넘기면 `T`가 `string | number[]`가 될 것 같지만, 검사기는 첫 인자에서 얻은 `"abc"`를 `T`로 고르고 두 번째 인자를 거기에 맞춰 본다. 후보 중에 나머지를 모두 담을 수 있는 타입이 없으면 유니온을 새로 만들지 않고 첫 후보를 고르는 것이 기본 동작이다. 아래 그림이 이 과정이다.
+
+<AlgoTrace
+  caption='longest("abc", [1, 2])에서 T를 고르는 과정'
+  memoryLabel="T의 후보"
+  cells={["a: \"abc\"", "b: number[]", "T 결정", "b 검사"]}
+  steps={[
+    { pointer: 0, memory: ["\"abc\""], caption: "첫 인자에서 후보 \"abc\"를 얻는다. 문자열 리터럴도 length를 가지니 제약을 만족한다." },
+    { pointer: 1, memory: ["\"abc\"", "number[]"], caption: "두 번째 인자에서 number[]를 얻는다. 두 후보는 서로의 부분 타입이 아니다." },
+    { pointer: 2, found: [2], memory: ["T = \"abc\""], caption: "둘을 다 담는 후보가 없으니 유니온을 만들지 않고 첫 후보를 고른다. 시그니처가 (a: \"abc\", b: \"abc\")가 된다." },
+    { pointer: 3, memory: ["T = \"abc\"", "number[] ✗"], caption: "number[]는 \"abc\" 자리에 못 들어간다. 그래서 오류가 두 번째 인자에 찍힌다." },
+  ]}
+/>
+
+이런 오류를 만나면 의도가 무엇인지 먼저 정한다. 정말 두 타입을 섞어 받고 싶다면 `longest<string | number[]>("abc", [1, 2])`처럼 타입 인자를 직접 적는다. 같은 종류여야 한다면 이 오류가 맞게 잡은 것이다.
+
+리터럴을 남길지 넓힐지도 규칙이 있다. 선언 파일로 뽑아 보면 같은 `"GET"`이 함수 모양에 따라 다르게 정해진다.
+
+```ts
+function first<T>(items: T[]): T | undefined { return items[0]; }
+export const mixed = first([1, "a"]);
+
+function wrap<T>(value: T) { return { value }; }
+export const a = wrap("GET");
+export const b = wrap({ method: "GET" });
+
+function wrapConst<const T>(value: T) { return { value }; }
+export const c = wrapConst({ method: "GET", tags: ["a", "b"] });
+```
+
+```text
+export declare const mixed: string | number | undefined;
+export declare const a: {
+    value: string;
+};
+export declare const b: {
+    value: {
+        method: string;
+    };
+};
+export declare const c: {
+    value: {
+        readonly method: "GET";
+        readonly tags: readonly ["a", "b"];
+    };
+};
+```
+
+배열 리터럴 `[1, "a"]` 하나에서는 원소 타입이 `string | number`로 합쳐진다. 후보가 여러 인자에서 온 게 아니라 배열 하나의 타입이기 때문이다. `wrap("GET")`은 `T`가 반환 타입 안쪽에 감싸여 있어서 `string`으로 넓혔다. 같은 실험에서 `function id<T>(v: T) { return v; }`처럼 반환 타입 맨 위에 `T`가 그대로 나오면 `"GET"`이 남았고, `T extends string`처럼 원시 타입 제약을 걸어도 남았다. TypeScript 5.0부터는 `<const T>`라고 적으면 호출하는 쪽이 `as const`를 붙인 것처럼 추론한다. 라우트 표나 이벤트 이름 목록처럼 리터럴을 그대로 받아야 하는 API를 만들 때 쓴다.
+
+## extends로 할 수 있는 일을 정한다
+
+`longest`의 `T extends { length: number }`는 제약(constraint)이다. 제약이 없으면 `T`는 무엇이든 될 수 있으니 함수 안에서 아무 속성도 쓸 수 없다.
+
+```ts
+function longest<T>(a: T, b: T) {
+  return a.length >= b.length ? a : b;
+}
+```
+
+```text
+constraint.ts(2,12): error TS2339: Property 'length' does not exist on type 'T'.
+constraint.ts(2,24): error TS2339: Property 'length' does not exist on type 'T'.
+```
+
+제약을 걸면 두 가지가 생긴다. 함수 안에서는 `length`를 쓸 수 있고, 호출하는 쪽에서는 `length`가 없는 값(`longest(10, 20)`)이 막힌다. 제약은 "이 함수가 `T`에 요구하는 최소한의 모양"이다. [타입 시스템 기초 글](/posts/ts-type-system-basics)의 구조적 타이핑이 여기서도 그대로 쓰인다. 문자열에도 배열에도 `length`가 있으니 둘 다 통과한다.
+
+여기서 `T extends { length: number }`를 그냥 매개변수 타입 `{ length: number }`로 바꾸면 어떻게 될까. 함수 안의 코드는 그대로 돌지만, 반환 타입이 `{ length: number }`로 굳어서 호출한 쪽은 문자열을 넣고도 `toUpperCase`를 못 쓴다. 제약 있는 제네릭은 "최소한 이 모양"을 요구하면서 실제로 들어온 더 구체적인 타입을 결과로 돌려준다.
+
+## 키 이름을 타입으로 받는다
+
+객체에서 속성 하나를 꺼내는 함수는 제네릭의 대표 예제다. 키를 그냥 `string`으로 받으면 오타를 못 잡고 반환 타입도 모른다.
+
+```ts
+type User = { id: number; name: string; email: string };
+const u: User = { id: 1, name: "kim", email: "k@ex.com" };
+
+function getProp<T, K extends keyof T>(obj: T, key: K): T[K] {
+  return obj[key];
+}
+
+const id = getProp(u, "id");       // number
+const nm = getProp(u, "name");     // string
+getProp(u, "nmae");
+
+function getLoose<T>(obj: T, key: string) {
+  return obj[key];
+}
+```
+
+```text
+keyof.ts(10,12): error TS2345: Argument of type '"nmae"' is not assignable to parameter of type 'keyof User'.
+keyof.ts(13,10): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type 'unknown'.
+  No index signature with a parameter of type 'string' was found on type 'unknown'.
+```
+
+시그니처 한 줄에 여러 문법이 겹쳐 있다. 조각을 눌러 하나씩 보자.
+
+<UrlAnatomy
+  caption="getProp 시그니처 읽기"
+  base="function getProp"
+  separator=""
+  joiner=""
+  params={[
+    { key: "T", display: "<T, ", title: "T: 객체의 타입", description: "obj 인자에서 추론된다. getProp(u, ...)이면 T = User다. 제약이 없으니 어떤 객체든 받는다.", required: true },
+    { key: "K", display: "K extends keyof T>", title: "K: T의 키 중 하나", description: "keyof T는 T의 키 이름을 모은 유니온이다. User라면 \"id\" | \"name\" | \"email\". K는 그중 하나로 제약되고, \"id\"를 넘기면 리터럴 \"id\"로 추론된다.", code: "keyof User  // \"id\" | \"name\" | \"email\"", required: true },
+    { key: "params", display: "(obj: T, key: K)", title: "매개변수가 T와 K를 정한다", description: "두 타입 매개변수 모두 인자에서 추론된다. 그래서 호출할 때 꺾쇠를 적을 일이 없다." },
+    { key: "ret", display: ": T[K]", title: "T[K]: 그 키의 값 타입", description: "인덱스 접근 타입이다. T = User, K = \"id\"이면 User[\"id\"], 곧 number다. 키에 따라 반환 타입이 달라진다.", code: "User[\"id\"]    // number\nUser[\"name\"]  // string" },
+  ]}
+/>
+
+`getLoose`의 오류도 같은 이유다. 키가 아무 `string`이면 그 키가 `T`에 있다는 보장이 없으니 결과를 정할 수 없다. 폼 라이브러리의 `register("email")`, 정렬 함수의 `sortBy(users, "createdAt")`, 테이블 컴포넌트의 `columns={[{ key: "price" }]}`가 모두 이 `K extends keyof T` 모양이다. 키를 문자열 리터럴로 적는데도 오타가 잡히는 API는 대개 이렇게 만들어져 있다.
+
+## 기본값과 추론을 막는 NoInfer
+
+타입 매개변수에도 기본값을 줄 수 있다. 추론할 곳이 없거나 생략했을 때 쓰인다.
+
+```ts
+type ApiResponse<T = unknown, E = { message: string }> =
+  | { ok: true; data: T }
+  | { ok: false; error: E };
+
+const r1: ApiResponse = { ok: true, data: 1 };
+const r2: ApiResponse<string[]> = { ok: true, data: ["a"] };
+const r3: ApiResponse<number, { code: number }> = { ok: false, error: { code: 404 } };
+const r4: ApiResponse<number> = { ok: false, error: { code: 404 } };
+```
+
+```text
+defaults.ts(8,55): error TS2353: Object literal may only specify known properties, and 'code' does not exist in type '{ message: string; }'.
+```
+
+`ApiResponse`만 쓰면 `data`는 `unknown`, 에러는 `{ message: string }`이다. 기본값이 있는 매개변수는 뒤에 두어야 하고, 앞의 것만 넘기고 뒤의 것은 생략할 수 있다. 기본값으로 `any`가 아니라 `unknown`을 고른 이유는 [타입 시스템 기초 글](/posts/ts-type-system-basics)의 `any`가 퍼지는 문제 때문이다.
+
+반대로 어떤 인자에서는 추론하지 않게 막고 싶을 때가 있다. 색 목록과 기본 색을 받는 함수를 보자.
+
+```ts
+function pickColor<C extends string>(colors: C[], fallback: C) { return colors[0] ?? fallback; }
+pickColor(["red", "blue"], "green");     // C가 "red" | "blue" | "green"으로 넓어진다
+
+function pickColor2<C extends string>(colors: C[], fallback: NoInfer<C>) { return colors[0] ?? fallback; }
+pickColor2(["red", "blue"], "green");
+```
+
+```text
+noinfer.ts(5,29): error TS2345: Argument of type '"green"' is not assignable to parameter of type '"red" | "blue"'.
+```
+
+첫 함수는 `fallback`도 `C`의 후보를 내놓아서, 목록에 없는 `"green"`이 그냥 통과한다. `NoInfer<C>`(TypeScript 5.4부터)는 "이 자리에서는 후보를 모으지 말고, 정해진 `C`로 검사만 해"라는 표시다. 그래서 `C`는 `colors`에서만 정해지고 `"green"`이 막힌다. 5.4보다 오래된 버전에서는 타입 매개변수를 하나 더 두는 `<C extends string, F extends C>` 같은 우회를 썼다.
+
+## 반환에만 쓰인 제네릭은 as와 같다
+
+API를 부르는 공용 함수에서 이런 모양을 자주 본다.
+
+```ts
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  return res.json();            // any → T, 아무 검사 없음
+}
+
+type User = { id: number; name: string };
+async function main() {
+  const user = await fetchJson<User>("/api/me");
+  const nothing = await fetchJson("/api/me");
+  console.log(user.name, nothing);
+}
+```
+
+오류는 하나도 없다. 타입 인자 없이 `export const p = fetchJson("/api/me")`라고 쓴 파일을 선언 파일로 뽑아 보면 `Promise<unknown>`이다.
+
+```text
+export declare const p: Promise<unknown>;
+```
+
+`T`가 매개변수 어디에도 없고 반환 타입에만 있으니 추론할 근거가 없다. 그래서 호출하는 쪽이 적어 주는 대로 된다. `fetchJson<User>(...)`는 생김새만 제네릭이고 하는 일은 `(await res.json()) as User`와 같다. 서버 응답이 바뀌어도 이 줄은 계속 `User`라고 주장한다.
+
+`T`를 값과 연결하면 같은 함수가 진짜 검사를 하게 된다. 응답을 확인하는 함수를 인자로 받으면, `T`는 그 함수의 반환 타입에서 추론된다.
+
+```ts
+type User = { id: number; name: string };
+
+function parseUser(raw: unknown): User {
+  if (typeof raw === "object" && raw !== null && "id" in raw && "name" in raw
+      && typeof raw.id === "number" && typeof raw.name === "string") {
+    return { id: raw.id, name: raw.name };
+  }
+  throw new Error("User 모양이 아니다: " + JSON.stringify(raw));
+}
+
+async function fetchJson<T>(url: string, parse: (raw: unknown) => T): Promise<T> {
+  const res = await fetch(url);
+  return parse(await res.json());
+}
+
+export const me = fetchJson("/api/me", parseUser);
+```
+
+```text
+export declare const me: Promise<User>;
+```
+
+꺾쇠를 적지 않았는데 `Promise<User>`가 됐다. `parseUser`에 맞는 값과 틀린 값을 넣어 보면 이렇다.
+
+```text
+{ id: 1, name: 'kim' }
+User 모양이 아니다: {"id":1,"nickname":"kim"}
+```
+
+아래 그림은 두 버전의 `fetchJson`에서 응답이 컴포넌트까지 가는 길을 비교한다.
+
+<NetworkTopology
+  width={400}
+  height={230}
+  caption="T를 적어 주는 것과 T를 값에서 얻는 것의 차이"
+  zones={[
+    { id: "net", label: "네트워크", x: 10, y: 20, w: 110, h: 190, tone: "edge" },
+    { id: "app", label: "앱 코드", x: 130, y: 20, w: 260, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "api", label: "/api/me", sub: "nickname", x: 65, y: 115, icon: "server", w: 90 },
+    { id: "cast", label: "fetchJson<User>", sub: "검사 없음", x: 210, y: 60, icon: "gateway", w: 120 },
+    { id: "parse", label: "parseUser", sub: "unknown→User", x: 210, y: 170, icon: "firewall", w: 110 },
+    { id: "ui", label: "프로필", sub: "user.name", x: 335, y: 115, icon: "client", w: 90 },
+  ]}
+  links={[
+    { from: "api", to: "cast" },
+    { from: "cast", to: "ui" },
+    { from: "api", to: "parse" },
+    { from: "parse", to: "ui" },
+  ]}
+  steps={[
+    { path: ["api", "cast"], packet: "JSON", title: "응답이 바뀌었다", detail: "서버가 name 대신 nickname을 보내기 시작했다. res.json()은 any를 돌려준다.", payload: "{ \"id\": 1, \"nickname\": \"kim\" }" },
+    { path: ["cast", "ui"], packet: "User?", title: "타입 인자는 믿고 넘긴다", detail: "fetchJson<User>는 as User와 같다. 컴포넌트는 user.name을 읽고 화면에 아무것도 안 나온다." },
+    { path: ["api", "parse"], packet: "unknown", blocked: true, title: "파서를 받는 버전은 경계에서 멈춘다", detail: "parseUser가 name이 문자열이 아니라는 걸 보고 에러를 던진다. 어디서 틀렸는지 메시지에 응답이 찍힌다." },
+    { path: ["parse", "ui"], packet: "User", title: "통과한 값만 들어간다", detail: "응답이 맞으면 T는 parseUser의 반환 타입에서 추론된 User다. 꺾쇠를 적을 필요도 없다." },
+  ]}
+/>
+
+"타입 매개변수는 두 번 이상 나와야 의미가 있다"는 경험칙이 여기서 나온다. 입력과 출력, 또는 두 입력을 잇는 데 쓰일 때 제네릭이 일을 한다. 반환 타입에만 있으면 캐스팅을 숨기는 것이고, 매개변수에 한 번만 있으면 `unknown`으로 바꿔도 똑같다. typescript-eslint에는 이런 매개변수를 찾아 주는 `no-unnecessary-type-parameters` 규칙이 있다(버전에 따라 기본 설정에 포함되지 않으니 직접 켜야 할 수 있다).
+
+## 컴포넌트와 훅에 타입 매개변수를 단다
+
+React 컴포넌트도 함수라서 제네릭으로 만들 수 있다. 목록, 테이블, 셀렉트처럼 "무엇을 담을지 모르는" 컴포넌트가 대상이다.
+
+```tsx
+import type { ReactNode } from "react";
+
+type ListProps<T> = {
+  items: T[];
+  getKey: (item: T) => string | number;
+  render: (item: T) => ReactNode;
+};
+
+function List<T>({ items, getKey, render }: ListProps<T>) {
+  return <ul>{items.map((it) => <li key={getKey(it)}>{render(it)}</li>)}</ul>;
+}
+
+type Product = { sku: string; title: string; price: number };
+const products: Product[] = [{ sku: "A1", title: "키보드", price: 59000 }];
+
+export const ok = <List items={products} getKey={(p) => p.sku} render={(p) => p.title} />;
+export const bad = <List items={products} getKey={(p) => p.id} render={(p) => p.title} />;
+```
+
+```text
+list.tsx(17,60): error TS2339: Property 'id' does not exist on type 'Product'.
+```
+
+JSX에서 `<List<Product> ...>`라고 적지 않아도 `items`에서 `T = Product`가 정해지고, 그 `T`가 `getKey`와 `render`의 매개변수 `p`로 흘러간다. 아래 그림은 `ListProps<T>`의 세 속성이 `T` 하나로 묶인 모습이다.
+
+<ConceptDiagram
+  width={400}
+  height={230}
+  caption="items에서 정해진 T가 콜백의 매개변수로 흘러간다"
+  nodes={[
+    { id: "items", label: "items", sub: "Product[]", x: 80, y: 50, w: 110 },
+    { id: "T", label: "T = Product", x: 200, y: 120, w: 120 },
+    { id: "key", label: "getKey(p)", sub: "p: Product", x: 320, y: 50, w: 110 },
+    { id: "render", label: "render(p)", sub: "p: Product", x: 320, y: 190, w: 110 },
+    { id: "any", label: "items: any[]", sub: "연결 끊김", x: 80, y: 190, w: 110 },
+  ]}
+  edges={[
+    { from: "items", to: "T", label: "추론" },
+    { from: "T", to: "key" },
+    { from: "T", to: "render" },
+    { from: "any", to: "render", dashed: true, label: "p: any" },
+  ]}
+/>
+
+`.tsx` 파일에서 화살표 함수로 제네릭 컴포넌트를 만들 때는 문법 하나를 조심한다. `<T>`가 JSX 태그로 읽힌다.
+
+```tsx
+const identity = <T>(x: T) => x;
+export {};
+```
+
+```text
+arrow.tsx(1,19): error TS17008: JSX element 'T' has no corresponding closing tag.
+arrow.tsx(1,29): error TS1382: Unexpected token. Did you mean `{'>'}` or `&gt;`?
+arrow.tsx(3,1): error TS1005: '</' expected.
+```
+
+`<T,>(x: T) => x`처럼 쉼표를 붙이거나 `<T extends unknown>`으로 쓰면 제네릭으로 읽힌다. 함수 선언문(`function List<T>`)은 이 문제가 없다.
+
+훅도 같은 방식이다. localStorage에 값을 저장하는 훅을 만들어 보자.
+
+```tsx
+import { useState } from "react";
+
+function useLocalStorage<T>(key: string, initial: T) {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw === null ? initial : (JSON.parse(raw) as T);
+    } catch {
+      return initial;
+    }
+  });
+  const save = (next: T) => {
+    setValue(next);
+    localStorage.setItem(key, JSON.stringify(next));
+  };
+  return [value, save] as const;
+}
+
+export function Settings() {
+  const [theme, setTheme] = useLocalStorage("theme", "light");
+  setTheme("dark");
+  setTheme(1);
+  const [mode, setMode] = useLocalStorage<"light" | "dark">("theme", "light");
+  setMode("blue");
+  return null;
+}
+```
+
+```text
+hook.tsx(22,12): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+hook.tsx(24,11): error TS2345: Argument of type '"blue"' is not assignable to parameter of type '"light" | "dark"'.
+```
+
+여기서 실무에서 놓치기 쉬운 점이 세 가지 보인다. 첫째, 타입 인자를 생략한 `useLocalStorage("theme", "light")`는 `T = string`이다. 앞에서 본 넓히기 규칙 때문이라 `"blue"`도 통과한다. 허용 값을 좁히고 싶으면 타입 인자를 적는다. 둘째, `return [value, save] as const`가 없으면 반환 타입이 `(T | ((next: T) => void))[]` 배열이 되어 구조 분해한 두 값이 모두 유니온이 된다. 튜플을 돌려주는 훅에는 `as const`를 붙인다. 셋째, 훅 안의 `JSON.parse(raw) as T`는 앞 절의 `fetchJson<T>`와 같은 거짓말이다. 저장 형식이 배포 사이에 바뀌면 옛 값이 새 타입으로 둔갑한다. 중요한 값이라면 `parse` 함수를 받는 모양으로 바꾼다. `useState<T>` 같은 기본 훅의 타입 인자, `useRef`와 이벤트 타입은 [React에서 TypeScript 쓰기](/posts/typescript-in-react)에서 정리한다.
+
+## 제네릭이 필요 없는 자리
+
+제네릭을 배우고 나면 모든 곳에 꺾쇠를 달고 싶어진다. 다음 경우는 없는 편이 읽기 쉽다.
+
+`function log<T>(value: T): void`처럼 `T`가 매개변수에 한 번만 나오고 결과와 이어지지 않으면 `value: unknown`과 같다. 입력 타입이 몇 개로 정해져 있고 각각 결과가 다르면 오버로드나 유니온이 더 정확하다. 그리고 `<T extends Record<string, any>, K extends keyof T, V extends T[K]>`처럼 매개변수가 셋 넘게 겹치면, 그 함수를 쓰는 사람은 오류 메시지를 읽을 수 없게 된다. 제네릭은 라이브러리 경계(공용 컴포넌트, 데이터 레이어, 유틸리티)에서 힘을 쓰고, 화면 하나에만 쓰는 코드에서는 구체적인 타입이 낫다.
+
+## 직접 해 보기: 키로 묶는 groupBy
+
+배열을 속성 값으로 묶는 `groupBy`를 만들어 보자. `key`는 `K extends keyof T`라서 없는 키는 컴파일할 때 막힌다. 아래 연습 칸은 타입을 지우고 실행하니, 결과만 맞추면 된다. 첫 그룹이 나온 순서대로 담고, 값은 문자열로 바꿔 키로 쓴다.
+
+<CodePlayground
+  caption="groupBy<T, K extends keyof T>"
+  language="typescript"
+  functionName="groupBy"
+  initialCode={`function groupBy<T, K extends keyof T>(items: T[], key: K): Record<string, T[]> {\n  // item[key] 값을 문자열로 바꿔 그룹 이름으로 쓴다\n  // 처음 나온 그룹 순서대로 담는다\n  return {};\n}`}
+  solution={`function groupBy<T, K extends keyof T>(items: T[], key: K): Record<string, T[]> {\n  const groups: Record<string, T[]> = {};\n  for (const item of items) {\n    const name = String(item[key]);\n    (groups[name] ??= []).push(item);\n  }\n  return groups;\n}`}
+  tests={[
+    { label: "팀별로 묶기", args: [[{ team: "web", name: "kim" }, { team: "app", name: "lee" }, { team: "web", name: "park" }], "team"], expected: { web: [{ team: "web", name: "kim" }, { team: "web", name: "park" }], app: [{ team: "app", name: "lee" }] } },
+    { label: "숫자 값도 문자열 키로", args: [[{ id: 1, stock: 0 }, { id: 2, stock: 3 }, { id: 3, stock: 0 }], "stock"], expected: { "0": [{ id: 1, stock: 0 }, { id: 3, stock: 0 }], "3": [{ id: 2, stock: 3 }] } },
+    { label: "빈 배열", args: [[], "team"], expected: {} },
+    { label: "불리언 값", args: [[{ sku: "A", soldOut: true }, { sku: "B", soldOut: false }], "soldOut"], expected: { true: [{ sku: "A", soldOut: true }], false: [{ sku: "B", soldOut: false }] } },
+  ]}
+/>
+
+풀이를 `tsc`로 검사하면 `groupBy([{ team: "web" }], "teem")`이 `Argument of type '"teem"' is not assignable to parameter of type '"team"'`로 막힌다. 표준에도 비슷한 함수가 있다. ES2024의 `Object.groupBy`는 키 대신 함수를 받고, TypeScript의 `lib.es2024` 선언은 결과를 `Partial<Record<K, T[]>>`로 적는다. 없는 그룹을 꺼내면 `undefined`일 수 있다는 뜻이다. Node 22에서 결과를 찍어 보면 프로토타입이 없는 객체(`[Object: null prototype]`)라서 `hasOwnProperty` 같은 메서드도 없다.
+
+## 들어간 것과 나온 것을 잇는 이름
+
+제네릭의 일은 하나다. 입력과 출력 사이, 또는 여러 입력 사이의 관계를 타입 매개변수라는 이름으로 적어 두는 것이다. 그 관계가 있으면 `any` 없이도 여러 타입을 받을 수 있고, 관계가 없으면(반환에만 쓰이거나 한 번만 나오면) 제네릭은 캐스팅이나 `unknown`의 다른 표기일 뿐이다. 다음 글 [타입 좁히기](/posts/ts-narrowing)에서는 유니온으로 받은 값을 조건문으로 하나씩 구체적인 타입으로 줄여 나가는 과정을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 제네릭을 왜 쓰나, any와 무엇이 다른가
+
+여러 타입을 받으면서도 입력과 출력 타입의 관계를 잃지 않으려고 쓴다. `any`는 받을 수는 있지만 결과도 `any`가 되어 검사가 끊기고, 유니온은 안전하지만 결과가 흐려져 쓸 때마다 다시 확인해야 한다. 제네릭은 `first<T>(items: T[]): T`처럼 호출마다 `T`를 정해 "숫자 배열이면 숫자"를 보장한다.
+
+### 타입 매개변수는 언제, 어떻게 정해지나
+
+호출하는 줄마다 검사기가 인자 타입을 매개변수 자리에 맞춰 보고 후보를 모아 정한다. 정해진 타입을 시그니처에 대입한 뒤 나머지 인자와 반환 타입을 검사한다. 추론할 근거가 없으면 기본값이, 기본값도 없으면 `unknown`이 된다. 모두 컴파일할 때 일이라 런타임에는 `T`가 남지 않는다.
+
+### extends 제약은 무엇을 해 주나
+
+`T`가 최소한 가져야 할 모양을 정한다. 함수 안에서는 그 모양의 속성을 쓸 수 있게 되고, 호출하는 쪽에서는 모양이 맞지 않는 인자가 막힌다. 그냥 매개변수 타입을 그 모양으로 적는 것과 달리, 실제로 들어온 더 구체적인 타입을 반환 타입으로 돌려줄 수 있다.
+
+### keyof와 T[K]로 무엇을 할 수 있나
+
+`keyof T`는 T의 키 이름 유니온이고, `K extends keyof T`로 받으면 존재하는 키만 넘길 수 있다. `T[K]`는 그 키의 값 타입이라서 `getProp(user, "id")`가 `number`를 돌려주는 식으로 키에 따라 반환 타입이 달라진다. 폼 `register`, 정렬 키, 테이블 컬럼 정의 같은 API가 이 모양이다.
+
+### 반환 타입에만 타입 매개변수가 있는 함수의 문제는
+
+`T`가 반환 타입에만 있으면 추론할 근거가 없어서 호출하는 쪽이 적는 대로 되고, 실제로는 `as User`와 같다. 응답이 바뀌어도 타입은 계속 `User`라고 주장한다. 검증 함수를 인자로 받아 `T`를 그 반환 타입에서 추론하게 하면 같은 모양으로 실제 검사를 할 수 있다.
+
+### NoInfer는 언제 쓰나
+
+어떤 인자가 타입 매개변수의 후보를 내놓지 않게 막을 때 쓴다(TypeScript 5.4부터). `pickColor(colors, fallback)`에서 `fallback`도 후보가 되면 목록에 없는 색이 유니온에 끼어들어 통과하는데, `fallback: NoInfer<C>`로 두면 `C`는 `colors`에서만 정해지고 `fallback`은 검사만 받는다.
+
+### .tsx에서 화살표 함수 제네릭이 오류가 나는 이유는
+
+`<T>(x: T) => x`의 `<T>`를 JSX 여는 태그로 파싱하기 때문이다. `<T,>`처럼 쉼표를 붙이거나 `<T extends unknown>`으로 쓰면 제네릭으로 읽힌다. 함수 선언문으로 쓰면 이 모호함이 없다.
+
+### 제네릭 훅에서 튜플을 돌려줄 때 as const를 붙이는 이유는
+
+`[value, setValue]`를 그냥 돌려주면 배열 리터럴로 추론되어 `(T | ((v: T) => void))[]`가 되고, 구조 분해한 두 변수가 모두 유니온이 된다. `as const`를 붙이면 `readonly [T, (v: T) => void]` 튜플이 되어 자리마다 타입이 유지된다. 반환 타입을 튜플로 직접 적어도 된다.

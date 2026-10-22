@@ -1,0 +1,481 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("data-lake-hdfs");
+
+광고 클릭 로그를 모으는 수집기가 몇 초마다 작은 파일 하나씩 HDFS에 올린다고 하자. 처음엔 아무 문제가 없다. 몇 달 뒤 분석 작업이 시작하자마자 한참 멈춰 있고, NameNode 메모리 경고가 뜬다. 데이터 양은 별로 늘지 않았는데 파일 수가 늘었다.
+
+같은 일을 직접 재현해 봤다. 클릭 10만 줄(약 5MB)을 파일 하나로 올리면 2.8초, 똑같은 내용을 파일 1만 개로 쪼개 올리면 5분 48초가 걸렸다. 바이트는 같은데 백 배 넘게 느리다. 이 차이가 어디서 오는지 알려면 HDFS가 파일을 어떻게 나눠 두고 누가 그 목록을 들고 있는지부터 봐야 한다. 이 글은 데이터 레이크의 바닥을 다룬다. HDFS의 블록과 복제, 서버가 죽을 때 일어나는 일, 작은 파일 문제, 그리고 많은 팀이 HDFS 대신 S3 같은 객체 저장소에 Parquet 파일과 테이블 포맷을 얹게 된 이유다.
+
+실험 환경은 Ubuntu 24.04, JDK 21, Hadoop 3.5.0이다. 서버 한 대에 NameNode 하나와 DataNode 넷을 포트만 바꿔 띄웠다(19700번대). 이 주제의 다른 글과 나눠 맡는다. 레이크에 쌓인 파일을 읽어 계산하는 쪽은 [Spark 기초](/posts/spark-basics), 매일 돌릴 작업의 순서와 재시도는 [Airflow](/posts/airflow-orchestration), Kafka에서 레이크까지 이어 붙이는 전체 흐름은 [Kafka에서 레이크까지](/posts/kafka-to-lake-pipeline)에 있다. 컬럼 저장과 압축의 원리는 [컬럼형 분석 DB](/posts/db-type-columnar-olap)에서 이미 다뤘으니 여기서는 파일 단위에서 보이는 모습만 짚는다.
+
+## 원본을 버리지 않고 일단 쌓아 두는 곳
+
+운영 DB는 주문을 받는 데 맞춰져 있다. 여기서 "지난 석 달 광고별 클릭 수" 같은 쿼리를 돌리면 운영이 느려지고, 애초에 클릭 로그처럼 하루 수억 줄 나오는 데이터는 운영 DB에 넣지도 않는다. 그래서 분석용 데이터는 따로 모은다.
+
+예전에는 바로 데이터 웨어하우스에 넣었다. 테이블을 먼저 설계하고, 정해진 모양으로 다듬어서(ETL) 넣는다. 깔끔하지만 나중에 새로운 질문이 생기면 이미 버린 열은 되살릴 수 없다. 데이터 레이크는 반대로 간다. 원본을 거의 그대로 싼 저장소에 파일로 쌓아 두고, 읽을 때 스키마를 붙인다. 오늘은 광고별 클릭 수만 보지만, 반년 뒤 "기기별로도 보자"는 요구가 와도 원본이 있으니 다시 계산하면 된다.
+
+그 대가로 레이크는 쉽게 늪이 된다. 누가 무엇을 언제 넣었는지 모르는 파일 더미가 되면 아무도 믿고 쓰지 못한다. 그래서 실무 레이크는 보통 층을 나눈다. 받은 그대로의 `raw`, 중복을 걸러 형식을 맞춘 `clean`(또는 silver), 보고서에 바로 쓰는 집계 `mart`(gold)다. 이름은 팀마다 다르지만 "원본은 지우지 않고, 위층은 언제든 원본에서 다시 만들 수 있다"는 규칙은 같다.
+
+## 큰 파일을 블록으로 잘라 여러 서버에 나눈다
+
+HDFS(Hadoop Distributed File System)는 서버 수십~수천 대의 디스크를 하나의 파일 시스템처럼 쓰게 해 준다. 2000년대 중반 구글의 GFS 논문을 따라 만든 것으로, 싼 서버를 많이 묶고 그중 일부가 늘 고장 나 있다고 가정한다.
+
+역할은 둘로 나뉜다. NameNode는 이름표를 든다. 어떤 경로에 어떤 파일이 있고, 그 파일이 어떤 블록으로 되어 있고, 각 블록이 어느 DataNode에 있는지를 메모리에 들고 있다. DataNode는 블록의 실제 바이트를 자기 디스크에 보관하고, 몇 초마다 NameNode에 살아 있다고 알린다(하트비트). 파일 내용은 NameNode를 거치지 않는다. 클라이언트는 NameNode에 "어디 있냐"만 묻고, 바이트는 DataNode와 직접 주고받는다.
+
+<ConceptDiagram
+  caption="NameNode는 위치만 알려 주고, 바이트는 DataNode와 직접 오간다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "client", label: "클라이언트", sub: "hdfs dfs, Spark", x: 70, y: 60, w: 110 },
+    { id: "nn", label: "NameNode", sub: "경로·블록·위치", x: 320, y: 60, w: 120 },
+    { id: "dn1", label: "DataNode 1", sub: "blk_825, 827", x: 70, y: 185, w: 110 },
+    { id: "dn3", label: "DataNode 3", sub: "blk_826, 827", x: 200, y: 185, w: 110 },
+    { id: "dn4", label: "DataNode 4", sub: "blk_825, 826", x: 330, y: 185, w: 110 },
+  ]}
+  edges={[
+    { from: "client", to: "nn", label: "어디 있나" },
+    { from: "client", to: "dn1", label: "바이트" },
+    { from: "dn3", to: "nn", label: "하트비트", dashed: true },
+    { from: "dn4", to: "nn", label: "블록 보고", dashed: true },
+  ]}
+/>
+
+300MB짜리 파일 하나를 올려 봤다. 블록 크기는 기본값 128MB, 복제 수는 기본값 3이다.
+
+```bash
+# 날짜 파티션 폴더를 만들고 파일을 올린다
+hdfs dfs -mkdir -p /raw/clicks/dt=2026-10-25
+hdfs dfs -put clicks-2026-10-25.log /raw/clicks/dt=2026-10-25/
+
+# 파일이 어떤 블록으로 나뉘어 어디에 있는지 본다
+hdfs fsck /raw/clicks/dt=2026-10-25/clicks-2026-10-25.log -files -blocks -locations
+```
+
+```text
+/raw/clicks/dt=2026-10-25/clicks-2026-10-25.log 300000000 bytes, replicated: replication=3, 3 block(s):  OK
+0. BP-98433893-127.0.0.1-1792631409020:blk_1073741825_1001 len=134217728 Live_repl=3  [DatanodeInfoWithStorage[127.0.0.1:19740,DS-4b802934-…,DISK], DatanodeInfoWithStorage[127.0.0.1:19720,DS-8c0f7a14-…,DISK], DatanodeInfoWithStorage[127.0.0.1:19710,DS-15b0c937-…,DISK]]
+1. BP-98433893-127.0.0.1-1792631409020:blk_1073741826_1002 len=134217728 Live_repl=3  [DatanodeInfoWithStorage[127.0.0.1:19730,…], DatanodeInfoWithStorage[127.0.0.1:19740,…], DatanodeInfoWithStorage[127.0.0.1:19720,…]]
+2. BP-98433893-127.0.0.1-1792631409020:blk_1073741827_1003 len=31564544 Live_repl=3  [DatanodeInfoWithStorage[127.0.0.1:19710,…], DatanodeInfoWithStorage[127.0.0.1:19740,…], DatanodeInfoWithStorage[127.0.0.1:19730,…]]
+
+Status: HEALTHY
+```
+
+긴 ID 일부는 `…`로 줄였다. 볼 곳은 세 군데다. 300,000,000바이트가 134,217,728(128MiB) 두 개와 31,564,544 하나로 잘렸다. 각 블록 뒤의 `Live_repl=3`과 대괄호 안의 DataNode 셋이 복제본 위치다. 블록마다 고른 DataNode 조합이 다르다. 그래서 DataNode 한 대가 죽어도 파일 전체가 아니라 블록 몇 개의 복제본 하나씩만 줄어든다.
+
+DataNode 디스크를 열어 보면 블록은 그냥 평범한 파일이다.
+
+```bash
+# DataNode 데이터 폴더에서 첫 블록 파일을 찾는다
+find hdata -name 'blk_1073741825*' -printf '%s %P\n'
+```
+
+```text
+1048583 dn2/data/subdir0/subdir0/blk_1073741825_1001.meta
+134217728 dn2/data/subdir0/subdir0/blk_1073741825
+1048583 dn1/data/subdir0/subdir0/blk_1073741825_1001.meta
+134217728 dn1/data/subdir0/subdir0/blk_1073741825
+1048583 dn4/data/subdir0/subdir0/blk_1073741825_1001.meta
+134217728 dn4/data/subdir0/subdir0/blk_1073741825
+```
+
+중간 경로는 짧게 줄였다. `.meta` 파일은 체크섬이다. 512바이트마다 4바이트 CRC를 적어서 134,217,728 ÷ 512 × 4 = 1,048,576바이트에 머리말 7바이트가 붙었다. 읽을 때 이 값과 맞지 않으면 그 복제본을 버리고 다른 DataNode에서 읽는다. 디스크가 조용히 비트를 틀리는 일을 이렇게 잡는다.
+
+블록을 이렇게 크게 잡는 이유는 NameNode 때문이다. 블록 하나마다 NameNode 메모리에 기록이 하나 생긴다. 블록이 4KB라면 1TB 파일 하나에 블록 2억 6천만 개가 생긴다. 128MB면 8,192개다. 대신 블록이 크면 작업을 잘게 나누기 어렵다. Spark는 기본적으로 블록 하나를 작업 하나에 맡기기 때문이다.
+
+## 쓰기는 DataNode끼리 줄을 서서 넘긴다
+
+올릴 때 클라이언트가 DataNode 셋에 각각 보내지 않는다. 첫 DataNode에만 보내고, 첫 DataNode가 받는 대로 둘째에 넘기고, 둘째가 셋째에 넘긴다. 확인(ack)은 거꾸로 돌아온다. 클라이언트 쪽 네트워크는 한 번만 쓰고, DataNode 사이 링크가 나머지를 나눠 맡는다. 아래 그림에서 다음을 누르면 첫 블록이 저장되는 순서가 보인다.
+
+<SequenceDiagram
+  caption="블록 하나를 쓰는 파이프라인"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "nn", label: "NameNode" },
+    { id: "d1", label: "DN :19710" },
+    { id: "d2", label: "DN :19720" },
+    { id: "d4", label: "DN :19740" },
+  ]}
+  steps={[
+    { from: "c", to: "nn", label: "create", title: "파일을 만든다고 알린다", detail: "이 단계에서는 이름만 생긴다. 쓰는 동안 경로 끝에 ._COPYING_이 붙어 있어서 다른 사람이 덜 쓴 파일을 읽지 않는다." },
+    { from: "nn", to: "c", label: "blk_825 + DN 3대", title: "블록 번호와 받을 DataNode를 정한다", detail: "NameNode가 블록 번호를 새로 내주고 복제본을 둘 DataNode 셋을 고른다.", payload: "BLOCK* allocate blk_1073741825_1001, replicas=127.0.0.1:19710, 127.0.0.1:19720, 127.0.0.1:19740" },
+    { from: "c", to: "d1", label: "packet", title: "첫 DataNode에만 보낸다", detail: "64KB 남짓한 패킷으로 잘라 흘려보낸다. 클라이언트는 나머지 둘을 신경 쓰지 않는다." },
+    { from: "d1", to: "d2", label: "packet", title: "받는 대로 다음에 넘긴다", detail: "첫 DataNode는 패킷을 디스크에 쓰면서 동시에 둘째에 넘긴다." },
+    { from: "d2", to: "d4", label: "packet", title: "마지막 DataNode까지", detail: "셋째가 받으면 이 패킷의 복제본이 셋이 된다." },
+    { from: "d4", to: "c", label: "ack", title: "확인은 거꾸로 돌아온다", detail: "셋째 → 둘째 → 첫째 → 클라이언트 순으로 ack가 올라온다. 셋 모두 받아야 그 패킷이 끝난다." },
+    { from: "c", to: "nn", label: "complete", title: "다 쓰면 닫는다", detail: "마지막 블록까지 끝나면 ._COPYING_을 떼고 이름을 바꾼다. 이 순간부터 다른 사람에게 보인다." },
+  ]}
+/>
+
+복제본 셋을 어디에 둘지는 랙(같은 스위치에 묶인 서버 묶음)을 본다. 기본 정책은 첫째를 쓰는 사람과 같은 서버(클라이언트가 DataNode 위에서 돌 때)에, 둘째를 다른 랙에, 셋째를 둘째와 같은 랙의 다른 서버에 둔다. 랙 하나가 통째로 꺼져도 살아남고, 랙 사이를 건너는 전송은 한 번으로 줄인다. 이 실험은 랙이 하나뿐이라 그냥 서로 다른 서버에 놓였다. 랙 정보는 `net.topology.script.file.name`으로 알려 줘야 한다. 이걸 안 하면 HDFS는 모든 서버가 한 랙에 있다고 보고, 랙 전원이 나가면 세 복제본이 한꺼번에 사라질 수 있다.
+
+읽을 때는 반대로 가장 가까운 복제본을 고른다. 같은 서버에 블록이 있으면 네트워크를 타지 않고 읽는다. 하둡 초기의 MapReduce가 "데이터를 계산으로 옮기지 말고 계산을 데이터 쪽으로 옮긴다"고 했던 것이 이 데이터 지역성이다. 이 원칙이 나중에 어떻게 무너지는지는 뒤에서 본다.
+
+## DataNode 하나를 죽여 봤다
+
+복제가 정말 스스로 회복되는지 확인했다. 원래는 DataNode가 죽었다고 판정하는 데 10분 30초가 걸린다(재확인 간격 5분 × 2 + 하트비트 3초 × 10). 실험에서는 재확인 간격(`dfs.namenode.heartbeat.recheck-interval`)을 10초로 줄였다.
+
+```bash
+# 19720번 DataNode 프로세스를 강제로 죽인다
+kill -9 "$(cat hlogs/dn2/hadoop-root-datanode.pid)"
+
+# 5초마다 살아 있는 DataNode 수와 복제가 모자란 블록 수를 본다
+watch -n 5 "hdfs dfsadmin -report | grep -E 'Live datanodes|Dead datanodes|Under replicated'"
+```
+
+01:10:58에 죽였다. NameNode 로그에 남은 순서는 이렇다(앞의 날짜와 클래스 이름 일부는 줄였다). 계산상 50초인데 판정 주기가 맞물려 1분 뒤에 찍혔다.
+
+```text
+01:11:58,574 INFO ...StateChange: BLOCK* removeDeadDatanode: lost heartbeat from 127.0.0.1:19720, removeBlocksFromBlockMap true
+01:11:59,742 INFO BlockStateChange: BLOCK* addStoredBlock: 127.0.0.1:19730 is added to blk_1073741825_1001 (size=134217728)
+01:12:00,146 INFO BlockStateChange: BLOCK* addStoredBlock: 127.0.0.1:19710 is added to blk_1073741826_1002 (size=134217728)
+```
+
+DataNode 쪽 로그에는 누가 누구에게 보냈는지가 남는다.
+
+```text
+01:11:59,736 INFO ...DataNode: DataTransfer, at 127.0.0.1:19710: Transmitted BP-98433893-…:blk_1073741825_1001 (numBytes=134217728) to /127.0.0.1:19730
+01:12:00,135 INFO ...DataNode: DataTransfer, at 127.0.0.1:19740: Transmitted BP-98433893-…:blk_1073741826_1002 (numBytes=134217728) to /127.0.0.1:19710
+```
+
+죽은 서버가 들고 있던 블록은 825와 826, 둘이다. 827은 원래 그 서버에 없었으니 아무 일도 없다. NameNode는 죽었다고 판정한 순간 두 블록이 복제본 둘만 남았다는 걸 알고, 살아 있는 복제본을 가진 DataNode에 "다른 DataNode에 하나 더 복사하라"고 시킨다. 복사도 DataNode끼리 직접 한다. 판정 뒤 2초 만에 다시 셋이 됐다.
+
+<NetworkTopology
+  caption="DataNode가 죽으면 남은 복제본에서 새 복제본을 만든다"
+  width={400}
+  height={260}
+  zones={[{ id: "rack", label: "/default-rack", x: 10, y: 110, w: 380, h: 140, tone: "private" }]}
+  nodes={[
+    { id: "nn", label: "NameNode", sub: ":19700", x: 200, y: 50, icon: "server" },
+    { id: "d1", label: "DN :19710", sub: "825 826 827", x: 60, y: 175, icon: "db" },
+    { id: "d2", label: "DN :19720", sub: "825 826", x: 155, y: 215, icon: "db" },
+    { id: "d3", label: "DN :19730", sub: "825 826 827", x: 250, y: 175, icon: "db" },
+    { id: "d4", label: "DN :19740", sub: "825 826 827", x: 340, y: 215, icon: "db" },
+  ]}
+  links={[
+    { from: "nn", to: "d1", dashed: true },
+    { from: "nn", to: "d2", dashed: true },
+    { from: "nn", to: "d3", dashed: true },
+    { from: "nn", to: "d4", dashed: true },
+    { from: "d1", to: "d3" },
+    { from: "d4", to: "d1" },
+  ]}
+  steps={[
+    { path: ["d2", "nn"], packet: "heartbeat", blocked: true, title: "하트비트가 끊긴다", detail: "kill -9로 죽인 뒤로 19720에서 하트비트가 오지 않는다. NameNode는 바로 죽었다고 하지 않고 정해진 시간을 기다린다." },
+    { path: ["nn"], highlight: ["d2"], title: "약 1분 뒤 죽었다고 판정한다", detail: "removeDeadDatanode가 찍히고, 그 서버에 있던 825와 826의 복제본이 둘로 줄었다고 계산한다.", payload: "BLOCK* removeDeadDatanode: lost heartbeat from 127.0.0.1:19720" },
+    { path: ["nn", "d1"], packet: "copy 825", title: "남은 복제본 주인에게 복사를 시킨다", detail: "825를 가진 19710에게 아직 825가 없는 19730으로 보내라고 한다." },
+    { path: ["d1", "d3"], packet: "blk_825", title: "DataNode끼리 직접 복사한다", detail: "128MB가 DataNode 사이에서 오간다. 클라이언트도 NameNode도 바이트를 만지지 않는다." },
+    { path: ["d4", "d1"], packet: "blk_826", title: "826도 같은 방식으로", detail: "19740이 19710으로 보낸다. 판정 뒤 2초 만에 모든 블록이 다시 셋이 됐다." },
+  ]}
+/>
+
+현장에서 볼 숫자가 여기서 나온다. `hdfs dfsadmin -report`의 `Under replicated blocks`는 복제가 모자란 블록 수이고, 서버가 죽은 직후 잠깐 올랐다가 0으로 내려가야 정상이다. 계속 남아 있으면 복사할 곳이 없는 것이다(남은 서버 수가 복제 수보다 적거나 디스크가 찼다). `Missing blocks`는 복제본이 하나도 남지 않은 블록이라 바로 봐야 한다. 서버 여러 대를 한꺼번에 내려야 할 때는 그냥 끄지 말고 decommission을 걸어 블록을 다른 곳으로 다 옮긴 뒤에 끈다.
+
+복제 3은 저장 공간을 3배 쓴다. Hadoop 3부터는 오래된 데이터에 이레이저 코딩(RS-6-3이면 데이터 6조각에 패리티 3조각, 1.5배)을 걸 수 있다. 공간은 아끼지만 읽다가 조각이 없으면 계산해서 되살려야 하고 데이터 지역성도 잃어서, 자주 읽지 않는 차가운 데이터에 쓴다. 원리는 [객체 저장소 설계 ③](/posts/sd-object-storage-durability)에 있다.
+
+## 작은 파일 1만 개가 느린 이유
+
+처음 장면으로 돌아간다. 같은 내용의 클릭 10만 줄을 한 번은 파일 1만 개로, 한 번은 파일 하나로 올렸다.
+
+```bash
+# 498바이트 남짓한 파일 1만 개 (합계 4,978,307바이트)
+time hdfs dfs -put small /raw/small
+# 같은 내용을 이어 붙인 파일 하나
+time hdfs dfs -put big.jsonl /raw/big.jsonl
+
+# NameNode가 관리하는 파일·블록 수 (JMX)
+curl -s 'http://127.0.0.1:19701/jmx?qry=Hadoop:service=NameNode,name=FSNamesystem' | grep -E '"FilesTotal"|"BlocksTotal"'
+hdfs dfs -count /raw/small /raw/big.jsonl
+```
+
+```text
+# small: real 5m48.739s
+# big:   real 0m2.846s
+    "FilesTotal" : 10007,
+    "BlocksTotal" : 10004,
+           1        10000            4978307 /raw/small
+           0            1            4978307 /raw/big.jsonl
+```
+
+`-count`의 열은 폴더 수, 파일 수, 바이트 수다. 바이트는 똑같이 4,978,307인데 파일은 1만 개 대 1개, NameNode의 블록 기록은 1만 개 대 1개다. 읽기도 같은 모양이었다. `hdfs dfs -cat`으로 전부 읽는 데 파일 1만 개는 20.8초, 파일 하나는 2.1초(JVM이 뜨는 시간 포함)였다.
+
+느린 이유는 파일마다 같은 의식을 치르기 때문이다. NameNode에 만들기를 요청하고, 블록을 받고, DataNode 셋과 파이프라인을 열고, 닫고, 완료를 알린다. 498바이트를 보내는 시간보다 이 왕복이 훨씬 길다. 읽을 때도 파일마다 NameNode에 위치를 묻고 DataNode에 연결한다. Spark 같은 엔진은 기본적으로 파일 하나에 작업(task) 하나 이상을 만들어서, 작업 1만 개를 띄우고 거두는 비용이 계산보다 커진다.
+
+더 큰 문제는 NameNode 메모리다. 파일, 폴더, 블록 하나하나가 NameNode 자바 힙에 객체로 올라간다. 흔히 인용되는 어림값은 객체 하나에 150바이트 정도다(정확한 값은 버전과 경로 길이에 따라 다르다). 파일 1억 개에 블록이 하나씩이면 객체 2억 개, 30GB쯤이다. HDFS 전체 용량이 아니라 파일 개수가 NameNode 한 대의 힙을 채운다. 오해 하나도 짚어 둔다. 498바이트 파일이 디스크에서 128MB를 차지하지는 않는다. DataNode 폴더의 블록 파일은 실제로 500, 499, 497바이트였다. 아까운 건 디스크가 아니라 NameNode 메모리와 왕복 시간이다.
+
+작은 파일은 대개 이런 데서 생긴다.
+
+- 스트리밍 수집기가 몇 초마다 파일을 닫는다.
+- Spark 작업이 파티션 200개(셔플 기본값)로 결과를 쓰는데 데이터가 작다. 날짜 파티션마다 파일 200개가 생긴다.
+- 파티션 열을 너무 잘게 잡았다(날짜 × 시간 × 국가 × 광고).
+
+고치는 방법은 셋이다. 쓰는 쪽에서 덜 자주 닫는다(수집 주기를 늘리거나 크기 기준으로 닫는다). 쓰기 전에 파티션 수를 줄인다(Spark의 `coalesce`, AQE의 파티션 합치기). 그래도 생긴 작은 파일은 주기적으로 모아 큰 파일로 다시 쓴다(컴팩션). 목표 크기는 보통 블록 크기 언저리, 128MB~1GB로 잡는다. 아래에서 컴팩션 계획을 짜는 함수를 직접 만들어 볼 수 있다.
+
+<CodePlayground
+  caption="작은 파일을 목표 크기 이하로 묶는 컴팩션 계획"
+  functionName="planCompaction"
+  initialCode={`// sizes: 파일 크기(MB) 목록, target: 목표 크기(MB)
+// 앞에서부터 차례로 묶되, 묶음 합이 target을 넘지 않게 한다.
+// target 이상인 파일은 건드리지 않고 건너뛴다.
+// 파일이 하나뿐인 묶음은 다시 쓸 이유가 없으니 빼고,
+// 각 묶음은 파일의 인덱스 배열로 돌려준다.
+function planCompaction(sizes, target) {
+  return [];
+}`}
+  solution={`function planCompaction(sizes, target) {
+  const groups = [];
+  let cur = [];
+  let sum = 0;
+  sizes.forEach((size, i) => {
+    if (size >= target) return; // 이미 큰 파일은 그대로 둔다
+    if (sum + size > target) {
+      groups.push(cur);
+      cur = [];
+      sum = 0;
+    }
+    cur.push(i);
+    sum += size;
+  });
+  groups.push(cur);
+  return groups.filter((g) => g.length >= 2);
+}`}
+  tests={[
+    { args: [[10, 20, 30, 40, 50], 64], expected: [[0, 1, 2]], label: "40과 50은 각자 혼자 남는다" },
+    { args: [[100, 5, 5, 5], 64], expected: [[1, 2, 3]], label: "큰 파일은 건너뛴다" },
+    { args: [[30, 30, 30, 30, 30], 64], expected: [[0, 1], [2, 3]], label: "둘씩 묶인다" },
+    { args: [[70, 80], 64], expected: [], label: "모두 이미 크다" },
+    { args: [[40, 40, 3], 64], expected: [[1, 2]], label: "혼자인 묶음은 뺀다" },
+    { args: [[], 64], expected: [], label: "빈 목록" },
+  ]}
+/>
+
+컴팩션에는 함정이 있다. 작은 파일을 읽어 큰 파일로 쓰고 옛 파일을 지우는 사이에 누가 그 폴더를 읽으면, 옛 파일과 새 파일을 둘 다 읽어 숫자가 두 배가 된다. HDFS는 폴더 이름 바꾸기가 원자적이라 새 폴더에 쓴 뒤 이름을 맞바꾸는 방법이 통했다. 객체 저장소로 가면 이 방법도 통하지 않는다. 그 이야기가 다음 절이다.
+
+## 계산과 저장을 떼어 놓게 된 이유
+
+HDFS는 계산 서버와 저장 서버가 같은 기계다. 디스크가 모자라면 CPU도 함께 사야 하고, 밤에만 바쁜 분석 작업 때문에 낮에도 서버를 켜 둬야 한다. NameNode는 HA를 꾸려야 하고(Active와 Standby, 편집 로그를 나눠 적는 JournalNode 셋, ZooKeeper로 전환을 맡는 ZKFC), 파일 수가 늘면 네임스페이스를 여러 NameNode로 쪼개는 페더레이션까지 가야 한다. 이걸 운영하는 일이 만만치 않다.
+
+클라우드에서는 S3, GCS, Azure Blob 같은 객체 저장소가 이 자리를 가져갔다. 용량은 쓰는 만큼만 내고, 복제와 내구성은 클라우드가 맡고, 계산 클러스터는 필요할 때만 띄웠다가 끈다. 네트워크가 충분히 빨라지면서 데이터 지역성을 포기해도 손해가 크지 않게 됐다. 객체 저장소 내부 구조는 [객체 저장소 설계 ①](/posts/sd-object-storage-architecture)에 있다.
+
+<NetworkTopology
+  caption="계산 클러스터는 필요할 때 띄우고, 데이터는 객체 저장소에 남는다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "compute", label: "계산 (켰다 껐다)", x: 10, y: 20, w: 170, h: 220, tone: "edge" },
+    { id: "store", label: "저장 (늘 켜짐)", x: 230, y: 20, w: 160, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "spark", label: "Spark 작업", sub: "밤 2시에만", x: 95, y: 80, icon: "server" },
+    { id: "trino", label: "Trino 쿼리", sub: "낮에 분석가", x: 95, y: 185, icon: "server" },
+    { id: "cat", label: "카탈로그", sub: "테이블 → 메타", x: 310, y: 80, icon: "dns" },
+    { id: "s3", label: "S3 버킷", sub: "Parquet 파일", x: 310, y: 185, icon: "db" },
+  ]}
+  links={[
+    { from: "spark", to: "cat" },
+    { from: "spark", to: "s3" },
+    { from: "trino", to: "cat" },
+    { from: "trino", to: "s3" },
+  ]}
+  steps={[
+    { path: ["spark", "cat"], packet: "clicks?", title: "테이블 위치를 묻는다", detail: "Spark는 경로가 아니라 테이블 이름으로 찾는다. 카탈로그가 지금 버전의 메타데이터 위치를 알려 준다." },
+    { path: ["spark", "s3"], packet: "write", title: "새 파일을 쓴다", detail: "계산 서버의 디스크가 아니라 객체 저장소에 바로 쓴다. 작업이 끝나면 클러스터를 꺼도 데이터는 남는다." },
+    { path: ["spark", "cat"], packet: "commit", title: "커밋은 포인터 하나를 바꾸는 일", detail: "새 파일 목록을 가리키도록 카탈로그의 포인터를 원자적으로 바꾼다. 이 순간 전에는 아무도 새 파일을 보지 않는다." },
+    { path: ["trino", "cat", "s3"], packet: "read", title: "다른 엔진도 같은 테이블을 읽는다", detail: "Trino는 같은 카탈로그에서 같은 스냅숏을 받아 같은 파일을 읽는다. 엔진과 저장이 서로 묶여 있지 않다." },
+  ]}
+/>
+
+객체 저장소는 파일 시스템이 아니다. 폴더는 없고 키 앞부분이 같을 뿐이다. 그래서 폴더 이름 바꾸기가 원자적이지 않다. 안에 든 객체를 하나씩 복사하고 지우니, 객체 1만 개 폴더의 이름 바꾸기는 1만 번 복사다. 중간에 죽으면 반쯤 옮겨진 상태가 남는다. 하둡 계열 작업은 결과를 임시 폴더에 쓰고 이름을 바꿔 커밋했기 때문에, S3 위에서는 느리고 위험했다. S3A 커미터처럼 이 문제를 피하는 장치가 따로 생긴 이유다. 일관성은 좋아졌다. S3는 2020년 12월부터 쓰기 직후 읽기와 목록 조회에 강한 일관성을 준다. 그 전에는 방금 쓴 파일이 목록에 안 보이는 일이 있었다.
+
+비용 구조도 다르다. 객체 저장소는 요청 횟수에 돈을 받고, 객체 하나를 여는 데 수십 밀리초가 든다. 작은 파일 문제가 NameNode 메모리 대신 요청 비용과 목록 조회 시간으로 모양만 바꿔 그대로 따라온다.
+
+## 경로를 읽으면 테이블 구조가 보인다
+
+레이크의 파일 경로에는 관례가 있다. 아래 경로를 조각별로 눌러 보면 각 부분이 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="레이크 파일 경로 하나를 조각으로 나눠 읽기"
+  base="s3://acme-lake"
+  separator="/"
+  joiner="/"
+  params={[
+    { key: "clean", display: "clean", title: "층", description: "raw, clean, mart처럼 가공 단계를 나눈다. 권한과 보관 기간도 층마다 다르게 건다. raw는 길게, 위층은 원본에서 다시 만들 수 있으니 짧게 둬도 된다." },
+    { key: "clicks", display: "clicks", title: "테이블", description: "이 폴더 아래가 테이블 하나다. 테이블 포맷을 쓰면 이 아래에 메타데이터 폴더(_delta_log 또는 metadata)가 함께 있다.", required: true },
+    { key: "dt", value: "2026-10-25", title: "파티션 열", description: "Hive 방식 파티션이다. 열 이름=값을 폴더 이름에 넣는다. WHERE dt = '2026-10-25'인 쿼리는 다른 날짜 폴더를 열지 않는다. 파일 안에는 dt 열이 없고 경로에서 읽는다." },
+    { key: "hour", value: "09", title: "두 번째 파티션 열", description: "더 잘게 나누면 건너뛰기는 좋아지지만 폴더마다 파일이 작아진다. 하루 데이터가 몇 GB 안 되면 시간 파티션은 대개 손해다." },
+    { key: "part-00000-f988a926-c000.zstd.parquet", display: "part-00000-…-c000.zstd.parquet", title: "데이터 파일", description: "쓴 작업의 번호와 UUID가 이름에 들어간다. 두 작업이 같은 폴더에 써도 이름이 겹치지 않게 하려는 것이다. 확장자 앞은 압축 방식이다." },
+  ]}
+/>
+
+파일 형식은 대부분 Parquet이다. 같은 클릭 300만 줄을 JSONL과 Parquet(zstd 압축, 행 그룹 50만 줄)으로 저장해 비교했다(pyarrow 26, 합성 데이터라 실제 로그보다 잘 눌린다).
+
+```text
+clicks.jsonl       321.1 MB
+clicks.parquet      17.7 MB
+rows 3000000 row_groups 6
+  rg0: rows=500000 click_id min=c00000000 max=c00499999
+  rg1: rows=500000 click_id min=c00500000 max=c00999999
+  …
+  rg5: rows=500000 click_id min=c02500000 max=c02999999
+  col click_id  ZSTD  0.42 MB (raw  6.66 MB)
+  col ad_id     ZSTD  0.57 MB (raw  0.57 MB)
+  col user_id   ZSTD  1.77 MB (raw  3.79 MB)
+  col country   ZSTD  0.09 MB (raw  0.13 MB)
+```
+
+Parquet 파일 하나 안은 행 그룹(row group)으로 나뉘고, 행 그룹 안에서 열별로 따로 모여 압축된다. 파일 끝의 꼬리말에 행 그룹마다 열의 최솟값과 최댓값이 적혀 있다. 엔진은 꼬리말만 먼저 읽고, 조건에 맞을 수 없는 행 그룹은 아예 열지 않는다. 열 저장과 압축이 왜 잘 통하는지는 [컬럼형 분석 DB](/posts/db-type-columnar-olap)에 자세히 있다.
+
+이번엔 같은 데이터를 날짜 폴더 셋으로 나눠 쓰고, 하루치 광고비 합계를 DuckDB 2.0(스레드 하나)으로 구했다. 세 번 돌린 중 가장 빠른 값이다.
+
+```text
+jsonl, 하루치 광고비       sum=73945580   1243.6 ms
+parquet 한 파일         sum=73945580      7.0 ms
+dt 파티션               sum=73945580      5.2 ms
+```
+
+```text
+╭─ Read Parquet ────┴───────────────────╮
+│ Function: READ_PARQUET                │
+│ Projections: cost                     │
+│ File Filters: dt = '2026-10-25'::DATE │
+│ Scanning Files: 1/3                   │
+╰───────────────────────────────────────╯
+```
+
+`EXPLAIN`의 `Scanning Files: 1/3`이 파티션 가지치기다. 날짜 조건이 폴더 이름과 맞는 파일 하나만 읽었다. `Projections: cost`는 여섯 열 중 `cost` 열만 읽는다는 뜻이다. JSONL은 줄마다 모든 글자를 해석해야 해서 200배 넘게 느렸다. 파티션 열은 쿼리가 자주 거르는 열, 값 종류가 적당히 적은 열로 고른다. 날짜가 가장 흔하다. `user_id`처럼 값이 수십만 가지인 열로 나누면 폴더 수십만 개에 작은 파일만 남는다.
+
+## 파일 더미 위에 커밋 로그를 얹는다
+
+여기까지 오면 레이크는 "폴더 안의 파일 = 테이블"이다. 이 규칙에는 구멍이 많다. 쓰는 도중에 읽으면 반쯤 쓴 결과가 보인다. 하루치를 다시 계산해 갈아 끼우는 사이에 읽으면 옛것과 새것이 섞인다. 열을 추가하면 옛 파일과 새 파일의 스키마가 다르다. 객체 저장소에서는 폴더 목록을 뽑는 것만으로 오래 걸린다.
+
+테이블 포맷(Apache Iceberg, Delta Lake, Apache Hudi)은 이 구멍을 메타데이터로 막는다. "이 테이블은 지금 이 파일들로 되어 있다"는 목록을 따로 적고, 바꿀 때는 새 목록을 원자적으로 하나 더 적는다. 읽는 쪽은 폴더를 뒤지지 않고 목록에 적힌 파일만 읽는다. delta-rs(Python `deltalake` 1.6)로 직접 해 봤다. 하루치를 쓰고, 다음 날을 덧붙이고, 다음 날 값이 틀려 그날 것만 다시 계산해 갈아 끼웠다.
+
+```python
+# 테이블 포맷이 파일 위에 커밋 로그를 얹는 모습 (delta_demo.py 일부)
+write_deltalake(p, day("2026-10-24", 3, 100), partition_by=["dt"])                  # v0
+write_deltalake(p, day("2026-10-25", 3, 100), partition_by=["dt"], mode="append")   # v1
+write_deltalake(p, day("2026-10-25", 2, 250), partition_by=["dt"], mode="overwrite",
+                predicate="dt = '2026-10-25'")                                     # v2
+```
+
+```text
+clicks/_delta_log/00000000000000000000.json
+clicks/_delta_log/00000000000000000001.json
+clicks/_delta_log/00000000000000000002.json
+clicks/dt=2026-10-24/part-00000-00b71212-…-c000.snappy.parquet
+clicks/dt=2026-10-25/part-00000-0a5d88e1-…-c000.snappy.parquet
+clicks/dt=2026-10-25/part-00000-f988a926-…-c000.snappy.parquet
+--- 00000000000000000002.json
+commitInfo WRITE {'mode': 'Overwrite', 'predicate': "dt = '2026-10-25'", 'partitionBy': '["dt"]'}
+remove dt=2026-10-25/part-00000-0a5d88e1-…-c000.snappy.parquet dataChange= True
+add dt=2026-10-25/part-00000-f988a926-…-c000.snappy.parquet dataChange= True
+version 2 files 2
+now   : [{'dt': '2026-10-24', 'cost_sum': 300}, {'dt': '2026-10-25', 'cost_sum': 500}]
+v1    : [{'dt': '2026-10-24', 'cost_sum': 300}, {'dt': '2026-10-25', 'cost_sum': 300}]
+```
+
+갈아 끼운 뒤에도 옛 파일 `0a5d88e1`은 폴더에 그대로 있다. 지우지 않고 커밋 로그에 `remove`라고만 적었다. 그래서 `version=1`을 지정하면 고치기 전 숫자(300)를 그대로 다시 읽는다(타임 트래블). 아래 그림은 읽는 쪽이 커밋 로그를 처음부터 따라가며 지금 살아 있는 파일 목록을 만드는 과정이다.
+
+<AlgoTrace
+  caption="커밋 로그를 차례로 적용하면 지금의 파일 목록이 나온다"
+  memoryLabel="살아 있는 파일"
+  cells={["v0 add 24/00b7", "v1 add 25/0a5d", "v2 remove 25/0a5d", "v2 add 25/f988"]}
+  steps={[
+    { caption: "읽는 쪽은 폴더 목록을 뽑지 않고 _delta_log부터 연다.", memory: [] },
+    { pointer: 0, caption: "v0: 10-24 파일 하나가 테이블에 들어온다.", memory: ["24/00b7"] },
+    { pointer: 1, caption: "v1: 10-25 파일을 덧붙인다. 이 시점의 합계는 300, 300이다.", memory: ["24/00b7", "25/0a5d"] },
+    { pointer: 2, caption: "v2: 틀린 10-25 파일을 목록에서 뺀다. 디스크에서는 아직 안 지웠다.", memory: ["24/00b7"] },
+    { pointer: 3, found: [0, 3], caption: "v2: 다시 계산한 파일을 넣는다. remove와 add가 한 커밋이라 중간 상태는 누구에게도 보이지 않는다.", memory: ["24/00b7", "25/f988"] },
+  ]}
+/>
+
+이 규칙을 모르는 도구로 폴더를 그냥 읽으면 사고가 난다. 같은 테이블을 DuckDB의 `read_parquet`로 폴더째 읽어 봤다.
+
+```text
+폴더를 그냥 읽으면: [('2026-10-24', 300), ('2026-10-25', 800)]
+커밋 로그로 읽으면: [('2026-10-24', 300), ('2026-10-25', 500)]
+vacuum dry run: ['dt=2026-10-25/part-00000-0a5d88e1-aba8-4a2f-9c89-269f7e351d46-c000.snappy.parquet']
+```
+
+10-25가 800이 됐다. 지워진 줄 알았던 옛 파일 300이 새 파일 500에 더해졌다. 테이블 포맷을 쓰는 테이블은 반드시 그 포맷을 아는 리더로 읽어야 한다. 옛 파일은 `VACUUM`이 보관 기간(Delta 기본 7일)이 지난 뒤에 실제로 지운다. 보관 기간을 너무 짧게 잡으면 오래 걸리는 쿼리가 읽던 파일이 사라지고, 타임 트래블도 그만큼만 된다.
+
+세 포맷은 같은 문제를 조금씩 다르게 푼다. 단정하기 어려운 부분은 범위를 밝혀 둔다.
+
+| | Delta Lake | Apache Iceberg | Apache Hudi |
+|---|---|---|---|
+| 메타데이터 | `_delta_log`의 JSON 커밋, 10번마다 Parquet 체크포인트 | metadata.json → 매니페스트 목록 → 매니페스트 | 타임라인(`.hoodie`) |
+| 원자적 커밋 | 다음 번호 로그 파일을 먼저 만든 쪽이 이긴다 | 카탈로그의 포인터를 비교 후 교체 | 타임라인의 instant |
+| 강한 쪽 | Spark·Databricks와의 통합 | 엔진 중립(Spark, Trino, Flink 등), 숨은 파티셔닝 | 레코드 단위 upsert, CDC 반영 |
+
+Iceberg의 숨은 파티셔닝은 `days(ts)` 같은 변환을 메타데이터에 적어 두고, 쿼리는 `ts` 조건만 걸어도 가지치기가 된다. 위에서 본 Hive 방식은 쿼리가 `dt` 열에 직접 조건을 걸어야 한다. `ts`로만 거르면 날짜 폴더 전부를 연다. 클라우드 업체들이 Iceberg 지원을 늘리면서 엔진 중립이 중요한 곳에서는 Iceberg를 고르는 경우가 늘었지만, 어느 쪽이 맞는지는 쓰는 엔진과 플랫폼에 따라 다르다.
+
+테이블 포맷이 작은 파일 문제를 없애 주지는 않는다. 커밋할 때마다 파일이 생기고, 메타데이터 파일도 쌓인다. 그래서 정기적인 컴팩션(`OPTIMIZE`, Iceberg의 `rewrite_data_files`), 옛 스냅숏 정리(`VACUUM`, `expire_snapshots`)가 운영 작업으로 따라온다.
+
+## 레이크가 느려졌다는 말을 들으면
+
+분석 작업이 느려졌다는 연락이 오면 데이터 양보다 파일 모양부터 본다.
+
+```bash
+# 폴더별 폴더 수, 파일 수, 바이트 수: 파일 수에 비해 바이트가 작으면 작은 파일 문제다
+hdfs dfs -count /warehouse/clean/clicks/*
+
+# 복제가 모자란 블록, 사라진 블록이 있는지 본다
+hdfs dfsadmin -report | grep -E 'Under replicated|Missing blocks|Live datanodes|Dead datanodes'
+
+# 특정 경로의 블록 상태를 자세히 본다 (큰 경로는 오래 걸리니 범위를 좁힌다)
+hdfs fsck /warehouse/clean/clicks/dt=2026-10-25 -files -blocks | tail -20
+```
+
+S3 위라면 같은 질문을 이렇게 던진다(출력은 예시다).
+
+```bash
+# 한 파티션의 객체 수와 총 크기
+aws s3 ls s3://acme-lake/clean/clicks/dt=2026-10-25/ --recursive --summarize | tail -2
+```
+
+```text
+Total Objects: 18342
+   Total Size: 2147483648
+```
+
+파티션 하나에 2GB가 객체 1만 8천 개로 흩어져 있다면 평균 117KB다. 컴팩션 대상이다. 증상별로 보면 이렇다. 작업이 시작하고 한참 동안 아무 작업(task)도 안 돈다면 파일 목록을 뽑고 꼬리말을 읽는 중이다. 작업 수가 수만 개로 뜬다면 파일이 작다. 결과 숫자가 가끔 두 배로 나온다면 테이블 포맷 없이 폴더를 덮어쓰는 도중에 읽었거나, 테이블 포맷 테이블을 폴더째 읽었다. 같은 쿼리인데 어제보다 열 배 느리다면 날짜 조건이 파티션 열이 아닌 다른 열에 걸려 가지치기가 안 됐을 가능성이 크다.
+
+흔한 실수도 같은 줄기다. `hdfs dfs -rm -r`은 휴지통(`fs.trash.interval`)이 켜져 있을 때만 되돌릴 수 있다. 기본값은 0이라 꺼져 있다. 운영 클러스터는 휴지통을 켜 두고, 큰 삭제는 `-skipTrash` 없이 한다. NameNode 하나로 운영하면서 `fsimage` 백업을 안 해 두는 것도 위험하다. NameNode 메타데이터가 사라지면 DataNode의 블록은 남아도 어느 블록이 어느 파일인지 알 수 없다.
+
+## 바이트보다 파일 개수를 먼저 센다
+
+HDFS는 큰 파일을 128MB 블록으로 잘라 세 서버에 복제하고, 위치는 NameNode 한 대가 메모리에 든다. 그래서 바이트보다 파일 개수가 먼저 한계를 만든다. 객체 저장소로 옮기면 서버 관리와 용량 걱정은 줄지만, 폴더 이름 바꾸기가 원자적이지 않아 "폴더 = 테이블" 규칙이 깨지고, 그 자리를 Iceberg나 Delta 같은 테이블 포맷의 커밋 로그가 메운다. 레이크를 설계할 때는 파일 크기와 파티션 열, 컴팩션 주기를 처음부터 함께 정한다. 이 파일을 실제로 읽어 계산하는 Spark는 [다음 글](/posts/spark-basics)에서 본다.
+
+## 면접에서 나올 만한 질문
+
+### HDFS에서 NameNode와 DataNode는 각각 무엇을 하나요?
+
+NameNode는 파일 이름, 블록 목록, 블록 위치 같은 메타데이터만 메모리에 들고, DataNode는 블록의 실제 바이트를 디스크에 저장한다. 클라이언트는 NameNode에 위치만 묻고 바이트는 DataNode와 직접 주고받는다. 그래서 NameNode는 데이터 양이 아니라 파일과 블록 개수에 부담을 받는다.
+
+### 블록 크기를 128MB처럼 크게 잡는 이유는 무엇인가요?
+
+블록 하나마다 NameNode 메모리에 기록이 생기고, 블록을 읽을 때마다 위치 조회와 연결 비용이 든다. 블록이 크면 메타데이터가 줄고 순차 읽기 비율이 높아진다. 대신 작업을 블록 단위로 나누는 엔진에서는 병렬성이 줄 수 있어서, 너무 크게 잡지도 않는다.
+
+### DataNode 한 대가 죽으면 어떤 일이 일어나나요?
+
+하트비트가 끊긴 뒤 기본 설정으로 10분 30초가 지나면 NameNode가 그 노드를 죽었다고 판정한다. 그 노드에 있던 블록의 복제 수가 모자라다고 계산하고, 남은 복제본을 가진 DataNode에 다른 노드로 복사하라고 시킨다. 복사는 DataNode끼리 직접 한다. `Under replicated blocks`가 잠깐 올랐다 0으로 돌아오면 정상이다.
+
+### 작은 파일 문제는 왜 생기고 어떻게 해결하나요?
+
+파일과 블록 하나하나가 NameNode 힙의 객체가 되고, 파일마다 생성·위치 조회·파이프라인 왕복이 반복되기 때문이다. 실험에서 같은 5MB를 파일 1만 개로 올리니 한 파일보다 백 배 넘게 느렸다. 쓰는 쪽에서 덜 자주 닫거나 파티션 수를 줄이고, 이미 생긴 파일은 128MB~1GB 단위로 컴팩션한다. 객체 저장소에서도 요청 비용과 목록 조회 시간으로 같은 문제가 남는다.
+
+### 데이터 레이크를 HDFS 대신 S3 같은 객체 저장소에 두는 이유는요?
+
+저장과 계산을 떼어 내서 용량은 쓰는 만큼만 내고, 계산 클러스터는 필요할 때만 띄울 수 있기 때문이다. NameNode HA와 디스크 교체 같은 운영 부담도 사라진다. 대신 폴더 이름 바꾸기가 원자적이지 않고 요청마다 지연과 비용이 있어서, 커밋 방식과 파일 크기를 따로 신경 써야 한다.
+
+### 테이블 포맷(Iceberg, Delta Lake)은 어떤 문제를 푸나요?
+
+"폴더 안 파일 = 테이블"이라는 규칙의 구멍을 메운다. 테이블을 이루는 파일 목록을 메타데이터에 적고 새 목록을 원자적으로 커밋해서, 읽는 쪽은 늘 완성된 스냅숏만 본다. 덕분에 부분 덮어쓰기, 스키마 변경, 타임 트래블이 된다. 다만 포맷을 모르는 도구로 폴더를 그냥 읽으면 지워진 파일까지 읽어 숫자가 틀린다.
+
+### 파티션 열은 어떻게 고르나요?
+
+쿼리가 자주 거르는 열 중에서 값 종류가 적당히 적은 열을 고르고, 날짜가 가장 흔하다. 너무 잘게 나누면 파티션마다 파일이 작아져 작은 파일 문제가 생긴다. Hive 방식에서는 쿼리가 파티션 열 자체에 조건을 걸어야 가지치기가 되고, Iceberg의 숨은 파티셔닝은 원래 열 조건으로도 가지치기가 된다.
+
+### HDFS NameNode가 단일 장애점이라는 말은 아직도 맞나요?
+
+NameNode가 하나뿐이면 맞다. 실무 클러스터는 Active와 Standby NameNode를 두고, 편집 로그를 JournalNode 여러 대에 나눠 적고, ZKFC가 장애 시 Standby로 전환하게 꾸린다. 파일 수가 한 대의 메모리를 넘으면 네임스페이스를 여러 NameNode로 나누는 페더레이션을 쓴다. 이런 운영 부담이 객체 저장소로 옮겨 가는 이유 중 하나다.

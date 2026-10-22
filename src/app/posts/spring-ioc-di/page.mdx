@@ -1,0 +1,530 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spring-ioc-di");
+
+`@Transactional`을 붙인 메서드에서 예외가 났는데 앞에서 넣은 행이 그대로 남아 있다. 어노테이션은 분명히 붙어 있고, 오타도 없다. 차이는 그 메서드를 부른 곳이었다. 같은 클래스 안의 다른 메서드가 `this.save()`로 불렀다. 바깥에서 부르면 트랜잭션이 열리고, 안에서 부르면 열리지 않는다.
+
+이 현상은 스프링이 객체를 어떻게 만들고 건네주는지 알면 바로 설명된다. 이 글은 그 바닥인 IoC 컨테이너와 의존성 주입(DI)을 다룬다. 왜 컨테이너가 필요해졌는지, 빈이 어떤 순서로 만들어지는지, 주입 방식과 스코프, 프록시, 순환 참조, 생명주기까지 실제로 돌려 본 출력과 함께 본다. 자동 구성이 이 위에서 어떻게 빈을 끼워 넣는지는 [Spring Boot 자동 구성](/posts/spring-boot-auto-configuration)에서, 3.x에서 4로 올리는 이야기는 [Spring Boot 4 마이그레이션](/posts/spring-boot-4-migration)에서 이어 간다.
+
+예제는 JDK 21, Spring Boot 4.1.1(Spring Framework 7.0.9)로 돌렸다. 의존성은 `spring-boot-starter-jdbc`와 H2뿐이다. 이 글에서 다루는 동작은 Spring Boot 3.x(Framework 6.x)에서도 같고, 다른 곳은 따로 적었다.
+
+## new가 곳곳에 흩어져 있으면 생기는 일
+
+주문 서비스가 결제 게이트웨이와 저장소를 쓴다고 해 보자. 가장 단순하게는 서비스가 필요한 걸 직접 만든다.
+
+```java
+class OrderService {
+  private final PaymentGateway pg = new TossGateway(System.getenv("TOSS_KEY"));
+  private final OrderRepository repo = new OrderRepository(new HikariDataSource(...));
+}
+```
+
+동작은 한다. 문제는 바꿀 때다. 테스트에서 가짜 결제를 쓰려면 이 클래스를 고쳐야 한다. `OrderRepository`를 쓰는 클래스가 열 개면 커넥션 풀도 열 개가 생긴다. 결제사를 바꾸면 `new TossGateway`를 찾아다니며 고쳐야 한다. 객체가 "무엇을 쓸지"와 "그걸 어떻게 만들지"를 함께 알고 있어서다.
+
+해법은 만드는 일을 밖으로 빼는 것이다. 서비스는 생성자로 받기만 하고, 조립은 한곳에서 한다.
+
+```java
+class OrderService {
+  private final PaymentGateway pg; private final OrderRepository repo;
+  OrderService(PaymentGateway pg, OrderRepository repo) { this.pg = pg; this.repo = repo; }
+  void place(String id, int amount) { System.out.println(pg.charge(amount)); repo.save(id); }
+}
+
+public class PlainMain {
+  public static void main(String[] args) {
+    // 조립을 한곳에서 손으로 한다
+    OrderService svc = new OrderService(new FakePsp(), new OrderRepository());
+    svc.place("o-1", 12000);
+  }
+}
+```
+
+```text
+fake-ok:12000
+saved o-1
+```
+
+이게 의존성 주입이다. 프레임워크가 없어도 된다. `main` 같은 조립 지점을 [헥사고날 아키텍처](/posts/hexagonal-architecture) 글에서는 composition root라고 불렀다. 객체가 자기 의존성을 직접 찾지 않고 받는다는 점에서 제어가 뒤집혔다고 하고, 이걸 제어의 역전(Inversion of Control, IoC)이라고 부른다.
+
+손으로 조립하는 방식은 클래스가 수십 개일 때까지는 괜찮다. 수백 개가 되면 `main`이 수백 줄의 `new`가 되고, 순서도 맞춰야 한다(저장소보다 DataSource가 먼저). 게다가 트랜잭션, 보안, 캐시처럼 여러 객체에 똑같이 끼워야 하는 일이 생긴다. 스프링의 IoC 컨테이너는 이 조립과 끼워 넣기를 대신한다.
+
+## 컨테이너가 빈을 만드는 순서
+
+스프링에서 컨테이너가 만들고 관리하는 객체를 빈(bean)이라고 한다. 컨테이너는 객체를 곧바로 만들지 않는다. 먼저 "무엇을 어떻게 만들지"를 적은 설계도인 빈 정의(BeanDefinition)를 모으고, 그다음에 의존 관계를 따라 실제 객체를 만든다.
+
+1. 정의 수집. `@SpringBootApplication`이 붙은 클래스의 패키지부터 하위 패키지를 훑어(컴포넌트 스캔) `@Component`, `@Service`, `@Repository`, `@Controller`, `@Configuration`이 붙은 클래스를 찾는다. `@Bean` 메서드와 자동 구성이 만든 정의도 여기에 더해진다.
+2. 정의 후처리. `BeanFactoryPostProcessor`가 정의를 고친다. `${...}` 자리표시자를 채우는 일이 여기서 일어난다.
+3. 객체 생성. 싱글턴 빈을 하나씩 만든다. 생성자 인자가 필요하면 그 빈을 먼저 만든다. 그래서 순서는 의존 관계가 정한다.
+4. 주입과 초기화. setter·필드 주입, `@PostConstruct` 같은 초기화 콜백을 부른다.
+5. 후처리기 감싸기. `BeanPostProcessor`가 완성된 객체를 받아 필요하면 프록시로 감싸서 돌려준다. 컨테이너에 등록되는 건 이 돌려받은 객체다.
+
+아래 그림은 주문 서비스 하나가 준비되기까지를 따라간다. 마지막 단계에서 컨테이너가 원본이 아니라 프록시를 쥔다는 사실이 이 글 뒤쪽의 이야기로 이어진다.
+
+<SequenceDiagram
+  caption="빈 하나가 컨테이너에 등록되기까지"
+  actors={[
+    { id: "scan", label: "스캐너" },
+    { id: "bf", label: "빈 팩토리" },
+    { id: "bpp", label: "후처리기" },
+    { id: "app", label: "애플리케이션" },
+  ]}
+  steps={[
+    { from: "scan", to: "bf", label: "정의 등록", title: "클래스를 찾아 설계도로 만든다", detail: "@Service가 붙은 OrderService, OrderWriter를 찾아 빈 정의로 등록한다. 아직 객체는 없다.", payload: "orderService -> demo.tx.OrderService\norderWriter  -> demo.tx.OrderWriter" },
+    { from: "bf", to: "bf", label: "orderWriter 생성", title: "필요한 쪽부터 만든다", detail: "orderService 생성자가 OrderWriter를 원하니 orderWriter를 먼저 만든다." },
+    { from: "bf", to: "bf", label: "orderService 생성", title: "생성자에 넣어 만든다", detail: "만들어 둔 orderWriter를 생성자 인자로 넘겨 orderService를 만든다." },
+    { from: "bf", to: "bpp", label: "초기화 끝", title: "후처리기에게 넘긴다", detail: "@PostConstruct까지 끝난 객체를 BeanPostProcessor에게 보낸다." },
+    { from: "bpp", to: "bf", label: "프록시 반환", title: "@Transactional이 보이면 감싼다", detail: "트랜잭션 후처리기가 원본을 감싼 CGLIB 프록시를 돌려준다. 컨테이너는 이걸 저장한다.", payload: "demo.tx.OrderService$$SpringCGLIB$$0" },
+    { from: "app", to: "bf", label: "getBean", title: "꺼내 쓰는 쪽은 프록시를 받는다", detail: "주입받든 getBean으로 꺼내든 받는 건 프록시다. 원본은 프록시 안에 숨어 있다." },
+  ]}
+/>
+
+## 주입 방식은 생성자로 고른다
+
+빈을 받는 방법은 생성자, setter, 필드 세 가지다. 지금은 생성자 주입이 기본이다. Spring 4.3부터는 생성자가 하나뿐이면 `@Autowired`를 붙이지 않아도 그 생성자로 주입한다.
+
+```java
+@Service
+class OrderService {
+  private final OrderRepository repo;
+  OrderService(OrderRepository repo) { this.repo = repo; }   // @Autowired 없이도 주입된다
+}
+```
+
+필드 주입은 짧아서 한때 많이 쓰였다. 문제는 컨테이너 밖에서 드러난다. 단위 테스트에서 그냥 `new`로 만들면 필드가 비어 있다.
+
+```java
+class OrderService {
+  @Autowired private OrderRepository repo;   // 필드 주입
+  void place(String id) { repo.save(id); }
+}
+
+// 단위 테스트에서 컨테이너 없이 만들어 본다
+new OrderService().place("o-1");
+```
+
+```text
+Exception in thread "main" java.lang.NullPointerException: Cannot invoke "demo.fieldnpe.OrderRepository.save(String)" because "this.repo" is null
+	at demo.fieldnpe.OrderService.place(FieldNpe.java:9)
+	at demo.fieldnpe.FieldNpe.main(FieldNpe.java:15)
+```
+
+생성자 주입이 나은 이유를 정리하면 이렇다. 의존성이 없으면 객체를 만들 수조차 없으니 반쯤 준비된 객체가 생기지 않는다. 필드를 `final`로 둘 수 있어 나중에 바뀌지 않는다. 테스트에서 컨테이너 없이 가짜를 넣어 만들 수 있다([단위 테스트](/posts/test-pyramid-unit-tests) 글의 테스트 더블이 그대로 쓰인다). 그리고 생성자 인자가 일곱 개, 여덟 개로 늘어나면 그 자체가 "이 클래스가 일을 너무 많이 한다"는 신호로 보인다.
+
+setter 주입은 선택적인 의존성이나, 만든 뒤에 바꿔 끼울 일이 있을 때만 쓴다. 테스트 클래스 안에서는 필드 주입(`@Autowired`)이 여전히 흔하다. 테스트 클래스는 컨테이너가 만들기 때문에 문제가 덜하다.
+
+## 같은 타입이 둘이면 컨테이너는 고르지 않는다
+
+결제 게이트웨이를 두 개 등록하고 서비스가 `PaymentGateway` 하나를 달라고 하면 어떻게 될까. 컨테이너는 대충 하나를 고르지 않고 시작을 멈춘다.
+
+```java
+interface PaymentGateway { String charge(int amount); }
+@Component class TossGateway implements PaymentGateway { ... }
+@Component class KcpGateway implements PaymentGateway { ... }
+
+@Service
+class OrderService {
+  OrderService(PaymentGateway gateway) { }
+}
+```
+
+```text
+***************************
+APPLICATION FAILED TO START
+***************************
+
+Description:
+
+Parameter 0 of constructor in demo.unique.OrderService required a single bean, but 2 were found:
+	- kcpGateway: defined in file [.../classes/demo/unique/KcpGateway.class]
+	- tossGateway: defined in file [.../classes/demo/unique/TossGateway.class]
+
+This may be due to missing parameter name information
+
+Action:
+
+Consider marking one of the beans as @Primary, updating the consumer to accept multiple beans, or using @Qualifier to identify the bean that should be consumed
+```
+
+경로는 줄여서 옮겼다. `Action`에 나온 세 가지가 실제 선택지다. 평소에 쓸 하나가 정해져 있으면 그쪽에 `@Primary`를 붙인다. 자리마다 다르면 받는 쪽에서 `@Qualifier("kcpGateway")`로 이름을 고른다. 둘 다 써야 하면 `List<PaymentGateway>`나 `Map<String, PaymentGateway>`로 모두 받는다. `Map`의 키는 빈 이름이라, 요청에 따라 결제사를 고르는 코드가 [전략 패턴](/posts/pattern-strategy)처럼 짧아진다.
+
+출력의 "missing parameter name information" 줄은 생성자 인자 이름으로 빈을 고르는 방식과 관련이 있다. 인자 이름이 `kcpGateway`면 그 이름의 빈을 고를 수 있는데, 컴파일할 때 `-parameters`를 켜야 이름이 남는다. Spring Boot의 Maven·Gradle 플러그인은 이걸 켜 둔다. 이름에 기대는 방식은 리팩터링에 약하니 `@Qualifier`를 쓰는 편이 읽기 쉽다.
+
+## @Transactional이 붙은 건 프록시였다
+
+처음의 이야기로 돌아간다. 같은 메서드를 세 가지 방식으로 불러 보고, 그때마다 트랜잭션이 열렸는지 찍어 봤다.
+
+```java
+@Service
+class OrderService {
+  private final OrderWriter writer;
+  OrderService(OrderWriter writer) { this.writer = writer; }
+
+  @Transactional
+  public void save() {
+    System.out.println("  save: tx active = " + TransactionSynchronizationManager.isActualTransactionActive());
+  }
+
+  public void placeAll() { this.save(); }            // 같은 객체 안에서 부른다
+
+  public void placeAllViaWriter() { writer.save(); } // 다른 빈으로 분리한 쪽을 부른다
+}
+```
+
+```text
+bean class = demo.tx.OrderService$$SpringCGLIB$$0
+is AOP proxy = true
+--- 바깥에서 save() 호출
+  save: tx active = true
+--- 바깥에서 placeAll() 호출 (안에서 this.save())
+  save: tx active = false
+--- 다른 빈으로 분리한 writer.save() 호출
+  writer.save: tx active = true
+```
+
+첫 줄이 답이다. 컨테이너가 준 객체의 클래스는 `OrderService`가 아니라 `OrderService$$SpringCGLIB$$0`이다. CGLIB이라는 바이트코드 생성 라이브러리로 `OrderService`를 상속한 클래스를 실행 중에 만든 것이다. 이 프록시는 메서드가 불리면 트랜잭션을 열고, 원본 객체의 메서드를 부르고, 끝나면 커밋하거나 롤백한다. [프록시 패턴](/posts/pattern-proxy)을 컨테이너가 자동으로 적용한 셈이다.
+
+<UrlAnatomy
+  caption="컨테이너가 준 객체의 클래스 이름 읽기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "demo.tx.OrderService", display: "demo.tx.OrderService", title: "원래 클래스", description: "내가 쓴 클래스다. 프록시는 이걸 상속해서 만들어졌다. 그래서 OrderService 타입으로 주입받을 수 있다." },
+    { key: "$$SpringCGLIB$$", display: "$$SpringCGLIB$$", title: "실행 중에 만든 하위 클래스", description: "CGLIB으로 만든 표시다. Spring Boot는 인터페이스가 있어도 기본으로 클래스 기반(CGLIB) 프록시를 쓴다. JDK 동적 프록시라면 이름이 jdk.proxy1.$Proxy0 같은 모양이 된다." },
+    { key: "0", display: "0", title: "생성 순번", description: "같은 클래스로 만든 프록시 클래스의 번호다. 의미를 둘 필요는 없다." },
+  ]}
+/>
+
+이제 `placeAll()`이 왜 실패하는지 보인다. 바깥에서 `placeAll()`을 부르면 프록시를 지나 원본의 `placeAll()`에 들어간다. `placeAll()`에는 `@Transactional`이 없으니 프록시는 그냥 통과시킨다. 원본 안에서 `this.save()`를 부르면 `this`는 원본 자신이다. 프록시를 다시 지나지 않으니 트랜잭션을 열 기회가 없다. 스프링 공식 문서도 "proxy mode에서는 프록시를 거쳐 들어오는 바깥 호출만 가로챈다"고 적고 있다.
+
+<NetworkTopology
+  caption="프록시를 지나는 호출과 지나지 않는 호출"
+  width={400}
+  height={260}
+  zones={[
+    { id: "zbean", label: "orderService 빈", x: 120, y: 20, w: 272, h: 230, tone: "private" },
+  ]}
+  nodes={[
+    { id: "caller", label: "Controller", sub: "caller", x: 60, y: 70, icon: "client", w: 92 },
+    { id: "proxy", label: "CGLIB proxy", sub: "tx 열고 닫기", x: 190, y: 70, icon: "gateway", w: 104 },
+    { id: "target", label: "OrderService", sub: "원본", x: 320, y: 70, icon: "server", w: 104 },
+    { id: "self", label: "this.save()", sub: "원본 안", x: 320, y: 190, icon: "server", w: 96 },
+    { id: "writer", label: "OrderWriter", sub: "다른 빈 proxy", x: 190, y: 190, icon: "gateway", w: 104 },
+  ]}
+  links={[
+    { from: "caller", to: "proxy" },
+    { from: "proxy", to: "target" },
+    { from: "target", to: "self", dashed: true },
+    { from: "target", to: "writer" },
+  ]}
+  steps={[
+    { path: ["caller", "proxy", "target"], packet: "save()", title: "바깥에서 save()를 부른다", detail: "프록시가 먼저 받아 트랜잭션을 열고 원본의 save()를 부른다. tx active = true." },
+    { path: ["caller", "proxy", "target"], packet: "placeAll", title: "placeAll()에는 어노테이션이 없다", detail: "프록시는 트랜잭션 없이 원본의 placeAll()로 넘긴다." },
+    { path: ["target", "self"], packet: "this", blocked: true, highlight: ["proxy"], title: "this.save()는 프록시를 지나지 않는다", detail: "this는 원본이다. 프록시가 끼어들 자리가 없어 @Transactional이 무시된다. tx active = false." },
+    { path: ["target", "writer"], packet: "save()", title: "다른 빈으로 빼면 프록시를 다시 지난다", detail: "주입받은 OrderWriter는 그 빈의 프록시다. 호출이 프록시를 지나니 트랜잭션이 열린다." },
+  ]}
+/>
+
+고치는 방법은 몇 가지다. 가장 깔끔한 건 위처럼 트랜잭션 경계를 다른 빈으로 빼는 것이다. "주문 저장"이 따로 떼어 낼 만한 책임이라는 신호이기도 하다. 자기 자신의 프록시를 주입받아(`@Lazy` 자기 주입, `ObjectProvider<OrderService>`) 그걸로 부르는 방법도 있지만 읽는 사람이 헷갈린다. 짧은 범위만 트랜잭션으로 묶고 싶으면 `TransactionTemplate`으로 코드 블록을 직접 감싼다. 정말 모든 내부 호출까지 가로채야 하면 바이트코드를 직접 고치는 AspectJ 모드가 있지만, 빌드 설정이 늘어서 잘 쓰지 않는다.
+
+프록시라는 사실에서 나오는 함정은 더 있다.
+
+- final 클래스와 final 메서드: CGLIB은 상속으로 프록시를 만드니 `final` 클래스는 감쌀 수 없다. 시작할 때 바로 실패한다. Kotlin은 클래스가 기본으로 `final`이라 `kotlin-spring` 플러그인(all-open)이 스프링 어노테이션이 붙은 클래스를 열어 준다.
+
+  ```text
+  Caused by: org.springframework.aop.framework.AopConfigException: Could not generate CGLIB subclass of class demo.finalcls.OrderService: Common causes of this problem include using a final class or a non-visible class
+  Caused by: java.lang.IllegalArgumentException: Cannot subclass final class demo.finalcls.OrderService
+  ```
+
+  `final` 메서드는 더 나쁘다. 클래스는 감싸지지만 그 메서드만 재정의되지 않아서, 오류 없이 트랜잭션이 빠진다.
+- private 메서드: 하위 클래스가 재정의할 수 없으니 가로채지 못한다. Spring 6.0부터는 클래스 기반 프록시에서 `protected`와 패키지 범위 메서드까지 트랜잭션이 걸리지만, `private`은 여전히 안 된다.
+- @PostConstruct 안에서의 호출: 초기화 콜백은 프록시로 감싸기 전, 원본 객체에서 불린다. 그 안에서 `@Transactional` 메서드를 불러도 트랜잭션이 없다. 시작할 때 데이터를 채워야 하면 `ApplicationReadyEvent` 리스너처럼 컨테이너 준비가 끝난 뒤에 부른다.
+- 체크 예외: 기본 규칙은 `RuntimeException`과 `Error`에서만 롤백한다. `IOException` 같은 체크 예외는 던져도 커밋된다. `@Transactional(rollbackFor = Exception.class)`로 바꿀 수 있다. 롤백 자체의 의미는 [ACID 트랜잭션](/posts/acid-transactions) 글에서 다뤘다.
+
+`@Async`, `@Cacheable`, `@Retryable`, 메서드 보안(`@PreAuthorize`)도 같은 프록시 방식이라 같은 함정을 그대로 가진다. "어노테이션이 안 먹는다"는 증상을 보면 먼저 그 호출이 프록시를 지났는지 본다.
+
+## 서로를 생성자로 원하면 시작하지 않는다
+
+주문 서비스가 쿠폰 서비스를 쓰고, 쿠폰 서비스가 주문 서비스를 쓴다고 해 보자. 둘 다 생성자 주입이면 컨테이너는 어느 쪽도 먼저 만들 수 없다. 주문을 만들려면 쿠폰이 있어야 하고, 쿠폰을 만들려면 주문이 있어야 한다.
+
+컨테이너는 "지금 만드는 중인 빈" 목록을 들고 다니다가, 이미 목록에 있는 빈을 또 만들려고 하면 고리를 알아챈다. 아래에서 다음을 누르면 그 목록이 쌓이는 모습을 따라간다.
+
+<AlgoTrace
+  caption="만드는 중인 빈 목록에 같은 이름이 다시 들어오면 고리다"
+  memoryLabel="생성 중"
+  cells={["orderService", "couponService", "orderService"]}
+  steps={[
+    { pointer: 0, memory: ["orderService"], caption: "orderService를 만들기 시작한다. 생성자가 CouponService를 원한다." },
+    { pointer: 1, memory: ["orderService", "couponService"], caption: "couponService를 먼저 만들러 간다. 생성자가 OrderService를 원한다." },
+    { pointer: 2, memory: ["orderService", "couponService"], caption: "orderService가 이미 생성 중 목록에 있다. 아직 객체가 없으니 넘겨줄 게 없다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["orderService", "couponService"], caption: "고리를 찾았다. 시작을 멈추고 고리를 그림으로 찍는다." },
+  ]}
+/>
+
+실제로 돌리면 이렇게 멈춘다.
+
+```text
+Description:
+
+The dependencies of some of the beans in the application context form a cycle:
+
+┌─────┐
+|  couponService defined in file [.../classes/demo/cycle/CouponService.class]
+↑     ↓
+|  orderService defined in file [.../classes/demo/cycle/OrderService.class]
+└─────┘
+
+
+Action:
+
+Relying upon circular references is discouraged and they are prohibited by default. Update your application to remove the dependency cycle between beans. As a last resort, it may be possible to break the cycle automatically by setting spring.main.allow-circular-references to true.
+```
+
+Spring Boot 2.6부터 순환 참조는 기본으로 금지다. 2.5까지는 필드·setter 주입끼리의 고리를 컨테이너가 조용히 풀어 줬다. 덜 만든 객체를 미리 꺼내 두는 "이른 참조"로 한쪽에 먼저 넣어 주는 방식이다. 출력 끝에 나온 `spring.main.allow-circular-references=true`가 그 예전 동작을 되살리는 설정이다.
+
+그런데 이 설정을 켜도 생성자끼리의 고리는 풀리지 않는다. 생성자에 넘길 객체 자체가 없으니 이른 참조도 만들 수 없다. 켜고 다시 돌린 결과다.
+
+```text
+Action:
+
+Despite circular references being allowed, the dependency cycle between beans could not be broken. Update your application to remove the dependency cycle.
+```
+
+같은 고리를 필드 주입으로 바꾸면, 설정을 켰을 때는 뜬다. 기본값에서는 똑같이 멈추고, 이번에는 고리 그림에 필드 이름이 찍힌다.
+
+```text
+┌─────┐
+|  couponService (field demo.cyclefield.OrderService demo.cyclefield.CouponService.orders)
+↑     ↓
+|  orderService (field demo.cyclefield.CouponService demo.cyclefield.OrderService.coupons)
+└─────┘
+```
+
+```text
+started: orders.coupons = CouponService
+```
+
+뜨게 만드는 방법은 이렇게 있지만, 고리는 설계 쪽 신호로 읽는 게 맞다. 두 서비스가 서로를 안다는 건 둘이 같은 무언가를 함께 쓰고 있다는 뜻인 경우가 많다. 그 공통 부분을 세 번째 빈으로 꺼내면 고리가 사라진다.
+
+<ConceptDiagram
+  caption="고리를 만든 공통 규칙을 꺼내면 화살표가 한 방향이 된다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "o1", label: "OrderService", x: 80, y: 50, w: 120, h: 42 },
+    { id: "c1", label: "CouponService", x: 80, y: 170, w: 124, h: 42 },
+    { id: "o2", label: "OrderService", x: 260, y: 40, w: 120, h: 42 },
+    { id: "c2", label: "CouponService", x: 340, y: 120, w: 124, h: 42 },
+    { id: "p", label: "CouponPolicy", sub: "할인 계산", x: 260, y: 195, w: 120, h: 44 },
+  ]}
+  edges={[
+    { from: "o1", to: "c1", label: "씀" },
+    { from: "c1", to: "o1", label: "씀", dashed: true },
+    { from: "o2", to: "p", label: "씀" },
+    { from: "c2", to: "p", label: "씀" },
+  ]}
+/>
+
+왼쪽은 주문이 할인을 계산하려고 쿠폰을 부르고, 쿠폰은 주문 금액을 보려고 주문을 부르는 모양이다. 오른쪽은 할인 계산 규칙을 `CouponPolicy`로 꺼내고 둘 다 그걸 쓴다. 정말로 한쪽이 다른 쪽에 "일이 끝났다"고 알려야 하는 관계라면 직접 부르지 않고 이벤트(`ApplicationEventPublisher`)로 바꾸는 방법도 있다.
+
+급하게 고리를 끊어야 할 때 쓰는 마지막 수단은 생성자 인자에 `@Lazy`를 붙이는 것이다. 컨테이너는 진짜 객체 대신 "처음 쓸 때 진짜를 찾아오는" 프록시를 넣어 준다.
+
+```java
+@Service
+class CouponService {
+  CouponService(@Lazy OrderService orders) {
+    System.out.println("coupon got: " + orders.getClass().getSimpleName());
+  }
+}
+```
+
+```text
+coupon got: OrderService$$SpringCGLIB$$0
+started ok
+```
+
+시작은 되지만 고리는 그대로이고, 문제가 첫 호출 시점으로 미뤄질 뿐이다.
+
+## 싱글턴 안에 넣은 프로토타입은 한 번만 만들어진다
+
+빈마다 수명 범위(스코프)가 있다. 기본은 싱글턴이다. 컨테이너 하나에 객체 하나를 만들어 모든 곳에 같은 걸 넣어 준다. [싱글턴 패턴](/posts/pattern-singleton)처럼 클래스가 스스로 하나만 지키는 게 아니라, 컨테이너가 하나만 만들어 나눠 주는 것이다. 그래서 테스트에서는 얼마든지 따로 만들 수 있다.
+
+`prototype`은 요청할 때마다 새로 만든다. 웹 환경에는 `request`, `session`, `application`, `websocket` 스코프가 더 있다.
+
+싱글턴은 여러 요청 스레드가 동시에 같은 객체를 쓴다는 뜻이기도 하다. 그래서 싱글턴 빈에 요청마다 바뀌는 값을 필드로 들고 있으면 안 된다. 사용자 A의 값이 사용자 B의 요청에서 보이는 사고가 여기서 난다. 싱글턴 빈은 상태가 없게(설정과 다른 빈 참조만 들고 있게) 만든다.
+
+흔한 실수가 하나 더 있다. 싱글턴 빈에 프로토타입 빈을 생성자로 넣으면, 싱글턴이 만들어질 때 딱 한 번 주입되고 끝이다. 매번 새 장바구니를 기대했는데 같은 장바구니가 계속 나온다.
+
+```java
+@Component @Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+class Cart {
+  static final AtomicInteger SEQ = new AtomicInteger();
+  final int id = SEQ.incrementAndGet();
+}
+
+@Component
+class Checkout {
+  private final Cart cart;                    // 시작할 때 한 번 주입된다
+  private final ObjectProvider<Cart> carts;   // 꺼낼 때마다 컨테이너에 부탁한다
+  Checkout(Cart cart, ObjectProvider<Cart> carts) { this.cart = cart; this.carts = carts; }
+  Cart injected() { return cart; }
+  Cart fresh() { return carts.getObject(); }
+}
+```
+
+```text
+singleton same? true
+prototype same? false
+injected cart:  1, 1
+provider cart:  4, 5
+```
+
+`injected`는 두 번 불러도 1번 장바구니다. `provider`는 부를 때마다 새것이다. 2번과 3번은 그 앞의 `prototype same?` 확인에서 `getBean`을 두 번 부르며 만들어졌다. `ObjectProvider` 말고도 `@Lookup` 메서드나 스코프 프록시(`@Scope(proxyMode = ScopedProxyMode.TARGET_CLASS)`)로 같은 문제를 푼다. `request` 스코프 빈을 싱글턴에 넣을 때 스코프 프록시를 쓰는 이유도 같다.
+
+## 빈이 태어나서 치워지기까지
+
+빈 하나의 생명주기를 콜백마다 번호를 찍어 확인했다. `PriceCache`는 생성자, setter 주입, `@PostConstruct`, `InitializingBean`, 준비 완료 이벤트, 종료 콜백을 모두 갖고 있다.
+
+```java
+@Component
+class PriceCache implements InitializingBean, DisposableBean {
+  private Clock clock;
+  PriceCache() { System.out.println("2. PriceCache 생성자 (clock = " + clock + ")"); }
+  @Autowired void setClock(Clock c) { this.clock = c; System.out.println("3. setter 주입"); }
+  @PostConstruct void warmUp() { System.out.println("4. @PostConstruct (clock 있음: " + (clock != null) + ")"); }
+  @Override public void afterPropertiesSet() { System.out.println("5. afterPropertiesSet"); }
+  @EventListener(ApplicationReadyEvent.class) void ready() { System.out.println("6. ApplicationReadyEvent"); }
+  @PreDestroy void flush() { System.out.println("7. @PreDestroy"); }
+  @Override public void destroy() { System.out.println("8. DisposableBean.destroy"); }
+}
+```
+
+```text
+1. Clock 생성자
+2. PriceCache 생성자 (clock = null)
+3. setter 주입
+4. @PostConstruct (clock 있음: true)
+5. afterPropertiesSet
+6. ApplicationReadyEvent
+== context.close()
+7. @PreDestroy
+8. DisposableBean.destroy
+```
+
+아래에서 단계를 넘기며 지금 어느 칸에 있는지, 그 순간 쓸 수 있는 게 무엇인지 본다.
+
+<AlgoTrace
+  caption="콜백마다 쓸 수 있는 것이 다르다"
+  memoryLabel="이때 쓸 수 있는 것"
+  cells={["생성자", "주입", "PostConstruct", "afterProps", "프록시", "Ready", "PreDestroy", "destroy"]}
+  steps={[
+    { pointer: 0, memory: ["생성자 인자"], caption: "생성자 안에서는 setter·필드로 받을 의존성이 아직 null이다." },
+    { pointer: 1, memory: ["생성자 인자", "setter·필드 의존성"], caption: "setter와 필드 주입이 끝난다." },
+    { pointer: 2, memory: ["생성자 인자", "setter·필드 의존성"], caption: "@PostConstruct. 의존성은 다 있지만 아직 원본 객체다. @Transactional이 안 걸린다." },
+    { pointer: 3, memory: ["생성자 인자", "setter·필드 의존성"], caption: "InitializingBean 콜백. @PostConstruct 다음에 불린다." },
+    { pointer: 4, memory: ["의존성", "프록시"], caption: "후처리기가 감싼다. 이제부터 다른 빈이 받는 건 프록시다." },
+    { pointer: 5, memory: ["의존성", "프록시", "모든 빈"], caption: "모든 빈이 준비됐다. 캐시 예열이나 트랜잭션이 필요한 초기화는 여기서 한다." },
+    { pointer: 6, found: [6, 7], memory: ["의존성"], caption: "종료할 때 @PreDestroy, 그다음 destroy가 불린다. 버퍼 비우기, 연결 닫기를 여기서 한다." },
+  ]}
+/>
+
+몇 가지를 짚어 둔다. 의존 관계 덕분에 `Clock`이 먼저 만들어졌다. 생성자 안에서 setter로 받을 `clock`은 아직 `null`이다. 종료 콜백은 `context.close()`가 불려야 실행된다. 웹 애플리케이션은 JVM 종료 훅으로 이걸 부르지만, `kill -9`로 죽이면 아무것도 불리지 않는다. 쿠버네티스에서 파드를 내릴 때 이 콜백이 돌 시간을 주는 이야기는 [Spring Boot를 쿠버네티스에 올리기](/posts/spring-boot-on-kubernetes)에서 다룬다.
+
+프로토타입 빈은 생성과 초기화까지만 컨테이너가 책임진다. 넘겨준 뒤에는 추적하지 않으니 `@PreDestroy`가 불리지 않는다. 프로토타입이 파일이나 연결을 열면 쓴 쪽이 닫아야 한다.
+
+## 작은 컨테이너를 직접 만들어 본다
+
+컨테이너가 하는 일의 뼈대는 "의존 관계를 따라 먼저 필요한 것부터 만들고, 만드는 중인 것을 또 만나면 고리로 본다"는 것이다. 아래 함수 `creationOrder(defs)`를 채워 보자. `defs`는 빈 이름에서 생성자 의존성 목록으로 가는 객체다. 정의 순서대로 빈을 만들되 의존성을 먼저 만들고, 만들어진 순서를 배열로 돌려준다. 고리를 만나면 `"cycle: a -> b -> a"` 문자열을, 정의가 없는 빈을 원하면 `"missing: 이름"`을 돌려준다.
+
+<CodePlayground
+  caption="생성 순서와 고리 찾기"
+  functionName="creationOrder"
+  initialCode={`function creationOrder(defs) {
+  // defs: { 빈 이름: [생성자 의존성 이름, ...] }
+  return [];
+}`}
+  solution={`function creationOrder(defs) {
+  const created = new Set();
+  const order = [];
+  const creating = [];
+  function create(name) {
+    if (created.has(name)) return null;
+    if (!(name in defs)) return "missing: " + name;
+    if (creating.includes(name)) {
+      return "cycle: " + [...creating.slice(creating.indexOf(name)), name].join(" -> ");
+    }
+    creating.push(name);
+    for (const dep of defs[name]) {
+      const err = create(dep);
+      if (err) return err;
+    }
+    creating.pop();
+    created.add(name);
+    order.push(name);
+    return null;
+  }
+  for (const name of Object.keys(defs)) {
+    const err = create(name);
+    if (err) return err;
+  }
+  return order;
+}`}
+  tests={[
+    { label: "의존성부터 만든다", args: [{ orderService: ["orderRepository", "paymentGateway"], orderRepository: ["dataSource"], paymentGateway: [], dataSource: [] }], expected: ["dataSource", "orderRepository", "paymentGateway", "orderService"] },
+    { label: "이미 만든 건 다시 안 만든다", args: [{ a: [], b: ["a"], c: ["a", "b"] }], expected: ["a", "b", "c"] },
+    { label: "두 빈의 고리", args: [{ orderService: ["couponService"], couponService: ["orderService"] }], expected: "cycle: orderService -> couponService -> orderService" },
+    { label: "세 빈의 고리", args: [{ web: ["service"], service: ["repo"], repo: ["web"] }], expected: "cycle: web -> service -> repo -> web" },
+    { label: "없는 빈", args: [{ orderService: ["paymentGateway"] }], expected: "missing: paymentGateway" },
+  ]}
+/>
+
+실제 컨테이너는 여기에 타입으로 찾기, 후보가 여럿일 때 고르기, 스코프, 후처리기 감싸기, 이른 참조가 더해진 것이다.
+
+## 시작이 실패하거나 어노테이션이 안 먹을 때 보는 곳
+
+증상별로 처음 볼 곳을 모아 둔다.
+
+- `required a single bean, but 2 were found`: 같은 타입 빈이 둘이다. 자동 구성이 만든 빈과 내가 만든 빈이 겹친 경우도 많다. `@Primary`, `@Qualifier`로 정하거나, 하나를 지운다.
+- `required a bean of type '...' that could not be found`: 그 클래스가 컴포넌트 스캔 범위 밖에 있는지 본다. `@SpringBootApplication` 클래스보다 위나 옆 패키지에 있으면 스캔되지 않는다. 자동 구성이 조건 때문에 빈을 안 만든 경우는 `--debug`의 조건 평가 리포트로 확인한다([자동 구성](/posts/spring-boot-auto-configuration) 글).
+- `form a cycle`: 고리 그림에 찍힌 빈들의 공통 책임을 꺼낸다. 설정으로 덮지 않는다.
+- `@Transactional`, `@Async`, `@Cacheable`이 안 먹는다: 같은 클래스 안의 호출인지, `private`·`final` 메서드인지, `@PostConstruct` 안인지 본다. 디버거에서 그 객체의 클래스 이름에 `$$SpringCGLIB$$`가 있는지 보면 프록시 여부를 바로 안다.
+- 요청끼리 값이 섞인다: 싱글턴 빈에 요청별 상태를 필드로 들고 있지 않은지 본다.
+
+빈 목록이 궁금하면 액추에이터의 `/actuator/beans`가 모든 빈과 의존 관계를 JSON으로 보여 준다. 운영에서는 노출 범위를 꼭 좁힌다.
+
+## 프록시 하나가 설명하는 것들
+
+IoC는 객체가 자기 의존성을 직접 만들지 않고 받는다는 생각이고, 스프링 컨테이너는 그 조립을 빈 정의와 의존 관계를 따라 대신해 준다. 생성자 주입을 쓰면 고리와 과한 의존이 시작 시점에 드러난다. 그리고 컨테이너가 건네는 객체는 원본이 아니라 프록시일 수 있다. `@Transactional`이 가끔 사라지는 이유, `final`과 `private`이 문제가 되는 이유가 모두 이 한 가지에서 나온다. 다음 글 [Spring Boot 자동 구성](/posts/spring-boot-auto-configuration)에서는 내가 만든 적 없는 `DataSource`와 트랜잭션 매니저가 어디서 왔는지 본다.
+
+## 면접에서 나올 만한 질문
+
+### IoC와 DI는 어떻게 다른가요?
+
+IoC는 객체가 자기가 쓸 것을 직접 만들거나 찾지 않고 바깥에서 받는다는 원칙이고, DI는 그 원칙을 구현하는 방법 중 하나로 생성자나 setter로 의존성을 넣어 주는 것이다. 스프링에서는 컨테이너가 빈 정의를 모아 의존 관계를 따라 객체를 만들고 넣어 준다. 프레임워크 없이도 `main`에서 손으로 조립하면 DI다.
+
+### 생성자 주입을 권장하는 이유는 무엇인가요?
+
+의존성 없이는 객체를 만들 수 없어서 반쯤 준비된 상태가 생기지 않고, 필드를 `final`로 둘 수 있다. 컨테이너 없이 `new`로 가짜를 넣어 단위 테스트를 할 수 있다. 생성자끼리의 순환 참조는 시작할 때 바로 실패해서 설계 문제가 일찍 드러난다. 인자가 많아지면 클래스가 너무 많은 일을 한다는 신호로도 읽힌다.
+
+### 같은 클래스 안에서 @Transactional 메서드를 부르면 왜 트랜잭션이 안 걸리나요?
+
+컨테이너가 주는 객체는 원본을 감싼 프록시이고, 트랜잭션은 프록시가 호출을 가로챌 때 열린다. 원본 안에서 `this.method()`로 부르면 `this`가 원본이라 프록시를 지나지 않는다. 트랜잭션 경계를 다른 빈으로 빼거나, `TransactionTemplate`으로 감싸거나, 꼭 필요하면 AspectJ 모드를 쓴다. `@Async`, `@Cacheable`도 같은 이유로 같은 함정이 있다.
+
+### JDK 동적 프록시와 CGLIB 프록시는 무엇이 다른가요?
+
+JDK 동적 프록시는 인터페이스를 구현한 객체를 만들고, CGLIB은 클래스를 상속한 하위 클래스를 만든다. 그래서 CGLIB은 `final` 클래스를 감쌀 수 없고 `final`·`private` 메서드는 가로채지 못한다. Spring Boot는 기본으로 인터페이스가 있어도 CGLIB을 쓴다. 인터페이스 프록시에 구체 클래스 타입으로 주입받으려다 실패하는 문제를 피하려는 선택이다.
+
+### 순환 참조는 왜 막혔고, 어떻게 푸나요?
+
+Spring Boot 2.6부터 기본으로 금지됐다. 예전에는 필드·setter 주입끼리의 고리를 덜 만든 객체의 이른 참조로 풀어 줬지만, 덜 초기화된 객체가 돌아다니는 위험이 있었다. `spring.main.allow-circular-references=true`로 되살릴 수 있지만 생성자끼리의 고리는 그래도 못 푼다. 두 빈이 함께 쓰는 부분을 세 번째 빈으로 꺼내거나 이벤트로 바꾸는 게 근본 해법이고, `@Lazy`는 문제를 첫 호출로 미루는 임시방편이다.
+
+### 싱글턴 빈에 프로토타입 빈을 주입하면 어떻게 되나요?
+
+싱글턴이 만들어질 때 한 번만 주입되니 계속 같은 프로토타입 객체를 쓰게 된다. 매번 새 객체가 필요하면 `ObjectProvider`로 꺼낼 때마다 받거나, `@Lookup` 메서드, 스코프 프록시를 쓴다. 프로토타입 빈은 컨테이너가 넘긴 뒤 추적하지 않아서 `@PreDestroy`도 불리지 않는다는 점도 함께 기억한다.
+
+### 싱글턴 빈은 스레드 안전한가요?
+
+컨테이너가 객체를 하나만 만들어 줄 뿐 동시성을 지켜 주지는 않는다. 여러 요청 스레드가 같은 객체를 동시에 쓰니, 요청마다 바뀌는 값을 필드에 두면 값이 섞인다. 싱글턴 빈은 설정과 다른 빈 참조만 들고 상태 없이 만들고, 요청별 값은 메서드 지역 변수나 인자로 다룬다.
+
+### @PostConstruct에서 DB 초기화를 하면 어떤 문제가 있나요?
+
+`@PostConstruct`는 후처리기가 프록시로 감싸기 전, 원본 객체에서 불린다. 그 안에서 자기 `@Transactional` 메서드를 불러도 트랜잭션이 없고, 다른 빈이 아직 준비되지 않았을 수도 있다. 시작 시 작업은 `ApplicationReadyEvent` 리스너나 `ApplicationRunner`에서 하는 편이 안전하다.

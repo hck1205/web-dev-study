@@ -22,6 +22,7 @@ export const TOPICS: Topic[] = [
         label: "Algorithms",
         description: "문제 풀이와 해설, 자료구조",
         children: [
+          { id: "techniques", label: "Techniques", description: "정렬, 이분 탐색, 재귀와 백트래킹, 동적 계획법, 그리디" },
           { id: "data-structures", label: "Data Structures", description: "배열, 연결 리스트, 스택·큐·덱, 해시맵, 트리, 힙, 트라이, 그래프, 유니온 파인드" },
           { id: "system-design", label: "For System Design", description: "블룸 필터, HyperLogLog, 지오해시, 쿼드트리, 머클 트리, Raft, OT·CRDT 등 대규모 시스템의 알고리즘" },
         ],
@@ -37,6 +38,7 @@ export const TOPICS: Topic[] = [
           { id: "frameworks", label: "Frameworks", description: "Node.js 런타임, Express 미들웨어, FastAPI" },
           { id: "languages", label: "Languages", description: "Go 동시성, JVM 메모리와 GC 등 서버 언어의 런타임" },
           { id: "messaging", label: "Messaging", description: "이벤트 기반 구조, Kafka, RabbitMQ, 전달 보장" },
+          { id: "spring", label: "Spring", description: "IoC와 DI, 자동 구성, Spring Boot 4 마이그레이션, 쿠버네티스 배포, 관측, Spring AI" },
           { id: "testing", label: "Testing", description: "단위·통합·E2E 테스트, 테스트 더블, 실제 DB로 테스트" },
         ],
       },
@@ -46,7 +48,15 @@ export const TOPICS: Topic[] = [
         description: "분야에 상관없이 공통으로 쓰는 지식",
         children: [{ id: "git", label: "Git", description: "버전 관리, 브랜치, 협업 흐름" }],
       },
-      { id: "computer-science", label: "Computer Science", description: "컴퓨터 과학 기초 이론" },
+      {
+        id: "computer-science",
+        label: "Computer Science",
+        description: "컴퓨터 과학 기초 이론",
+        children: [
+          { id: "computer-architecture", label: "Computer Architecture", description: "트랜지스터와 논리 게이트, ALU, CPU 명령어 사이클, 캐시 계층, 파이프라인" },
+        ],
+      },
+      { id: "data-engineering", label: "Data Engineering", description: "데이터 레이크와 HDFS, Spark, Airflow, Kafka에서 레이크까지의 파이프라인" },
       {
         id: "design-patterns",
         label: "Design Patterns",
@@ -80,7 +90,10 @@ export const TOPICS: Topic[] = [
         label: "Frontend",
         description: "브라우저, 렌더링, React · Next.js",
         children: [
+          { id: "css", label: "CSS", description: "CSS 성능, 웹 폰트, 크리티컬 CSS" },
+          { id: "typescript", label: "TypeScript", description: "타입 시스템, 제네릭, 좁히기, 유틸리티 타입, tsconfig" },
           { id: "architecture", label: "Architecture", description: "프런트엔드 구조 설계, 마이크로 프런트엔드" },
+          { id: "system-design", label: "System Design", description: "프런트엔드 시스템 디자인 면접, 상태 구조, 분산 시스템으로서의 프런트엔드" },
           {
             id: "javascript",
             label: "JavaScript",
@@ -156,7 +169,12 @@ export const TOPICS: Topic[] = [
           },
         ],
       },
-      { id: "security", label: "Security", description: "웹 보안, 브라우저 보안 정책, 공격과 방어" },
+      {
+        id: "security",
+        label: "Security",
+        description: "웹 보안, 브라우저 보안 정책, 공격과 방어",
+        children: [{ id: "cryptography", label: "Cryptography", description: "대칭키와 AES 모드, 공개키와 키 교환, 해시와 HMAC, 전자 서명과 인증서" }],
+      },
       {
         id: "system-design",
         label: "System Design",

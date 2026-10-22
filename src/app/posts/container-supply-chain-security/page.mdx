@@ -1,0 +1,602 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("container-supply-chain-security");
+
+어제 서명을 확인하고 배포한 `app:1.0`을 오늘 다시 받았더니 다른 프로그램이 나온다.
+
+```bash
+docker run --rm localhost:19330/demo/app:1.0
+```
+
+```text
+v2-evil
+```
+
+레지스트리는 해킹당하지 않았다. 누군가 같은 태그로 새 이미지를 올렸을 뿐이다. 태그는 덮어쓸 수 있는 이름표라서, 태그로 받는 쪽은 그 이름표가 지금 무엇을 가리키는지만 안다. 이미지를 만든 사람, 그 안에 든 패키지, 그 사이에 손댄 사람이 있는지는 따로 확인해야 한다.
+
+컨테이너 공급망 보안은 이 확인을 단계마다 거는 일이다. 이미지에 무엇이 들었나(SBOM), 그중 알려진 취약점은 무엇인가(스캔), 누가 만들었고 그 뒤로 바뀌지 않았나(서명), 클러스터는 그걸 확인한 이미지만 받나(어드미션). 실습은 Ubuntu 24.04 호스트에서 Trivy 0.70.0, Syft 1.36.0, cosign 3.0.2를 받아 돌렸고, 로컬 레지스트리(`registry:3`, 포트 19330)와 kwok으로 띄운 쿠버네티스 1.33 API 서버를 썼다.
+
+이미지를 작게 만드는 Dockerfile 쪽 이야기와 Trivy를 처음 돌려 보는 법은 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에, 한 번 빌드한 결과를 digest로 승격하는 파이프라인은 [CI/CD 기초](/posts/ci-cd-basics#한-번만-빌드하고-승격한다)에, npm 쪽 공급망은 [의존성 지옥](/posts/dependency-hell#설치는-남의-코드를-실행하는-일이다)에 있다. 서명 자체의 원리는 [전자 서명과 인증서](/posts/digital-signatures-certificates)가 다룬다. CKS 시리즈의 다른 글은 [CIS 벤치마크와 kube-bench](/posts/cis-benchmark-kube-bench), [seccomp와 AppArmor 프로필](/posts/seccomp-apparmor), [Falco 런타임 탐지](/posts/falco-runtime-security)다.
+
+## 소스에서 노드까지 끼어들 수 있는 자리
+
+이미지는 여러 손을 거쳐 노드에 닿는다. 아래 그림에서 다음을 누르면 그 길과, 길목마다 끼어드는 방법이 하나씩 나온다.
+
+<NetworkTopology
+  caption="이미지가 노드에 닿기까지 지나는 길목"
+  width={460}
+  height={300}
+  zones={[
+    { id: "build", label: "빌드", x: 10, y: 20, w: 200, h: 120, tone: "edge" },
+    { id: "cluster", label: "클러스터", x: 250, y: 160, w: 200, h: 130, tone: "private" },
+  ]}
+  nodes={[
+    { id: "src", label: "소스·의존성", x: 60, y: 80, icon: "server" },
+    { id: "ci", label: "CI 빌드", x: 160, y: 80, icon: "container" },
+    { id: "reg", label: "레지스트리", x: 330, y: 80, icon: "db" },
+    { id: "adm", label: "어드미션", x: 300, y: 225, icon: "firewall" },
+    { id: "node", label: "노드", x: 400, y: 225, icon: "server" },
+    { id: "atk", label: "공격자", x: 100, y: 230, icon: "client" },
+  ]}
+  links={[
+    { from: "src", to: "ci" },
+    { from: "ci", to: "reg" },
+    { from: "reg", to: "adm" },
+    { from: "adm", to: "node" },
+    { from: "atk", to: "reg", dashed: true },
+  ]}
+  steps={[
+    { path: ["src", "ci"], packet: "npm i", title: "의존성에 섞여 들어온다", detail: "베이스 이미지의 오래된 패키지, 악성 npm 패키지, 오래된 빌드 도구가 그대로 이미지에 들어간다. SBOM과 스캔이 여기를 본다." },
+    { path: ["ci", "reg"], packet: "push", title: "빌드한 것이 올라간다", detail: "CI가 만든 이미지에 서명을 붙인다. 서명은 이 digest를 이 빌드가 만들었다는 증명이다." },
+    { path: ["atk", "reg"], packet: "push :1.0", title: "같은 태그로 바꿔치기", detail: "레지스트리 쓰기 권한이 새거나 공개 이미지 이름을 비슷하게 만들면, 태그로 받는 쪽은 차이를 모른다." },
+    { path: ["reg", "adm"], packet: "Pod 생성", title: "클러스터 입구에서 확인한다", detail: "허용한 레지스트리인지, digest로 고정했는지, 서명이 맞는지를 어드미션에서 본다." },
+    { path: ["atk", "reg", "adm"], packet: "app:1.0", blocked: true, title: "서명 없는 이미지는 막힌다", detail: "바꿔치기한 이미지는 digest가 달라서 원래 서명과 맞지 않는다. 어드미션이 Pod 생성을 거부한다." },
+    { path: ["adm", "node"], packet: "@sha256", title: "확인한 digest만 노드로", detail: "노드는 확인을 통과한 digest를 받는다. 실행 중의 이상 행동은 그다음 단계인 런타임 탐지가 본다." },
+  ]}
+/>
+
+이 글은 앞의 세 단계를 차례로 따라간다. 마지막 노드 위의 이야기는 [Falco 런타임 탐지](/posts/falco-runtime-security)로 넘긴다.
+
+## 태그는 이름표고 digest가 내용이다
+
+이미지 참조 문자열부터 정확히 읽어야 한다. 조각을 누르면 각 부분의 뜻이 나온다.
+
+<UrlAnatomy
+  caption="이미지 참조 하나"
+  base=""
+  separator=""
+  joiner=""
+  params={[
+    { key: "registry", display: "registry.example.com/", title: "어느 레지스트리", description: "첫 조각에 점이나 포트가 있거나 localhost면 레지스트리 주소다. 없으면 docker.io로 본다. nginx는 docker.io/library/nginx다.", required: true },
+    { key: "repo", display: "shop/api", title: "저장소 이름", description: "레지스트리 안의 경로다. docker.io에서 한 단어짜리 이름은 공식 이미지라 library/가 앞에 붙는다." },
+    { key: "tag", display: ":1.4.2", title: "태그: 움직이는 이름표", description: "레지스트리에서 언제든 다른 이미지를 가리키게 바꿀 수 있다. 없으면 latest다." },
+    { key: "digest", display: "@sha256:6aa698b4…5e95", title: "digest: 내용의 해시", description: "매니페스트 내용의 SHA-256이다. 한 바이트라도 바뀌면 다른 값이 된다. 태그와 같이 적으면 런타임은 digest로 받는다.", required: true },
+  ]}
+/>
+
+로컬 레지스트리로 바꿔치기를 직접 해 봤다. `v1`을 출력하는 이미지를 `app:1.0`으로 올리고 digest를 적어 둔 다음, 같은 태그로 다른 이미지를 올렸다.
+
+```bash
+docker push localhost:19330/demo/app:1.0          # 첫 번째 이미지
+# ... Dockerfile을 바꿔 다시 빌드하고 같은 태그로
+docker push localhost:19330/demo/app:1.0
+docker run --rm localhost:19330/demo/app:1.0
+docker run --rm localhost:19330/demo/app@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95
+```
+
+```text
+1.0: digest: sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95 size: 855
+1.0: digest: sha256:6cadd4793799c8accd63d38b796acbfabfa2bab102220f37ba99f39cae7b62c2 size: 855
+v2-evil
+v1
+```
+
+태그로 받은 쪽은 새 이미지를, digest로 받은 쪽은 처음 이미지를 받았다. 레지스트리 안에서 일어난 일을 그림으로 보면 이렇다.
+
+<AlgoTrace
+  caption="태그는 옮겨 가고 digest는 제자리에 있다"
+  cells={["app:1.0", "sha256:6aa6…", "sha256:6cad…", "서명(6aa6)"]}
+  memoryLabel="레지스트리 상태"
+  steps={[
+    { pointer: 1, memory: ["1.0 → 6aa6"], caption: "첫 push. 태그 1.0이 매니페스트 6aa6을 가리킨다." },
+    { pointer: 3, memory: ["1.0 → 6aa6", "서명 → 6aa6"], caption: "서명을 붙인다. 서명은 태그가 아니라 digest 6aa6에 붙는다." },
+    { pointer: 2, memory: ["1.0 → 6cad", "서명 → 6aa6", "6aa6 (태그 없음)"], caption: "같은 태그로 다른 이미지를 올린다. 태그만 6cad로 옮겨 가고, 6aa6과 서명은 그대로 남는다." },
+    { pointer: 0, memory: ["1.0 → 6cad", "6cad에 서명 없음"], caption: "태그로 받으면 6cad가 온다. 서명을 확인하면 이 digest에는 서명이 없다고 나온다." },
+    { pointer: 1, found: [1, 3], memory: ["@sha256:6aa6 → v1"], caption: "digest로 받은 쪽은 처음 이미지 그대로다. 매니페스트에 digest를 적는 이유다." },
+  ]}
+/>
+
+그래서 운영 매니페스트에는 digest를 적는다. 사람이 읽기 좋게 `api:1.4.2@sha256:...`처럼 둘을 같이 적어도 되고, 그때 런타임은 digest로 받는다. digest를 손으로 관리하기는 힘드니 CI가 빌드 결과의 digest를 매니페스트에 써 넣거나, Renovate 같은 봇이 베이스 이미지 digest를 갱신하는 PR을 올리게 한다. Dockerfile의 `FROM`도 같다. `FROM node:22-alpine`은 빌드할 때마다 다른 베이스를 받을 수 있다.
+
+아래 편집기에서 참조 문자열을 쪼개는 함수를 짜 볼 수 있다. 정책을 짤 때 "어느 레지스트리인가"를 문자열 앞부분만 보고 판단하면 틀리기 쉽다. 기본값 규칙(docker.io, library/, latest)까지 넣어야 한다.
+
+<CodePlayground
+  caption="이미지 참조 파싱"
+  functionName="parseImage"
+  initialCode={`// 반환: { registry, repository, tag, digest }  (없는 값은 null)
+// 첫 조각에 '.' 이나 ':' 이 있거나 'localhost'면 레지스트리, 아니면 docker.io
+// docker.io의 한 단어 이름은 library/ 를 붙이고, 태그·digest가 둘 다 없으면 tag는 "latest"
+function parseImage(ref) {
+  return { registry: "", repository: "", tag: null, digest: null };
+}`}
+  solution={`function parseImage(ref) {
+  let digest = null;
+  const at = ref.indexOf("@");
+  if (at >= 0) { digest = ref.slice(at + 1); ref = ref.slice(0, at); }
+  let registry = "docker.io";
+  const slash = ref.indexOf("/");
+  if (slash >= 0) {
+    const first = ref.slice(0, slash);
+    if (first.includes(".") || first.includes(":") || first === "localhost") {
+      registry = first;
+      ref = ref.slice(slash + 1);
+    }
+  }
+  let tag = null;
+  const colon = ref.lastIndexOf(":");
+  if (colon >= 0) { tag = ref.slice(colon + 1); ref = ref.slice(0, colon); }
+  if (registry === "docker.io" && !ref.includes("/")) ref = "library/" + ref;
+  if (!tag && !digest) tag = "latest";
+  return { registry, repository: ref, tag, digest };
+}`}
+  tests={[
+    { label: "nginx", args: ["nginx"], expected: { registry: "docker.io", repository: "library/nginx", tag: "latest", digest: null } },
+    { label: "nginx:1.27-alpine", args: ["nginx:1.27-alpine"], expected: { registry: "docker.io", repository: "library/nginx", tag: "1.27-alpine", digest: null } },
+    { label: "bitnami/redis:7.4", args: ["bitnami/redis:7.4"], expected: { registry: "docker.io", repository: "bitnami/redis", tag: "7.4", digest: null } },
+    { label: "포트 있는 레지스트리", args: ["localhost:19330/demo/app:1.0"], expected: { registry: "localhost:19330", repository: "demo/app", tag: "1.0", digest: null } },
+    { label: "digest만", args: ["registry.example.com/shop/api@sha256:6aa6"], expected: { registry: "registry.example.com", repository: "shop/api", tag: null, digest: "sha256:6aa6" } },
+    { label: "태그와 digest", args: ["ghcr.io/me/api:1.4.2@sha256:abcd"], expected: { registry: "ghcr.io", repository: "me/api", tag: "1.4.2", digest: "sha256:abcd" } },
+  ]}
+/>
+
+## 이미지에 무엇이 들었나: SBOM
+
+SBOM(Software Bill of Materials)은 소프트웨어의 부품 목록이다. 이미지 안의 OS 패키지, 언어 패키지, 바이너리를 이름과 버전, 패키지 주소(purl)로 적는다. 형식은 CycloneDX와 SPDX 두 가지가 널리 쓰인다. Syft로 `node:22-alpine`의 SBOM을 뽑았다.
+
+```bash
+# 표로 하나, CycloneDX JSON으로 하나
+syft docker:node:22-alpine -q -o cyclonedx-json=sbom.cdx.json -o table=sbom.txt
+awk 'NR>1{print $NF}' sbom.txt | sort | uniq -c
+grep -E '^(libssl3|musl|busybox|npm) ' sbom.txt
+jq '{bomFormat, specVersion, components: (.components|length)}' sbom.cdx.json
+```
+
+```text
+     18 apk
+      1 binary
+      7 duplicate)
+      2 duplicates)
+    178 npm
+busybox                             1.37.0-r31   apk                      
+libssl3                             3.5.8-r0     apk                      
+musl                                1.2.6-r2     apk                      
+npm                                 10.9.9       npm                      
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "components": 498
+}
+```
+
+Node.js 실행 이미지인데 패키지 대부분이 npm 패키지(178개)다. 이미지에 같이 들어 있는 npm CLI 자신의 의존성이다. 앱은 런타임에 npm을 쓰지 않는다. CycloneDX의 components 498개에는 파일 항목(280개)까지 들어 있다.
+
+SBOM이 쓸모 있는 순간은 새 취약점이 발표된 날이다. "우리 이미지 중 libssl3 3.5.8을 쓰는 게 몇 개인가"를 이미지를 다시 받아 풀지 않고 SBOM만 뒤져서 답할 수 있다. 스캐너도 SBOM을 입력으로 받는다.
+
+```bash
+# 이미지 대신 SBOM 파일을 스캔한다
+trivy sbom --quiet --format json -o sbom-scan.json sbom.cdx.json
+jq -r '[.Results[]?.Vulnerabilities[]?.Severity] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' sbom-scan.json
+```
+
+```text
+HIGH=11 LOW=1 MEDIUM=10 UNKNOWN=1
+```
+
+이미지를 직접 스캔한 결과(`HIGH=11 LOW=1 MEDIUM=10 UNKNOWN=2`)와 거의 같다. 한 건 차이는 SBOM을 만든 도구(Syft)와 읽는 도구(Trivy)가 패키지를 알아보는 방식이 조금 달라서 생긴다. 한 도구로 만든 SBOM을 다른 도구로 읽으면 이런 차이가 늘 생길 수 있다는 점은 알아 둔다.
+
+## 알려진 취약점 걸러 내기
+
+Trivy로 호스트에 있던 이미지 여섯 개를 스캔했다. 취약점 DB(약 130MB)는 처음 한 번 받는다.
+
+```bash
+for i in node:22-slim node:22-alpine gcr.io/distroless/nodejs22-debian12:latest python:3.12-slim nginx:1.27-alpine alpine:3.20; do
+  f="r-$(echo $i | tr '/:' '__').json"
+  trivy image --quiet --scanners vuln --format json -o "$f" $i
+  printf '%-45s %s\n' "$i" "$(jq -r '[.Results[]?.Vulnerabilities[]?.Severity] | group_by(.) | map("\(.[0])=\(length)") | join(" ")' $f) os=$(jq -r '.Metadata.OS.Family + " " + .Metadata.OS.Name' $f)"
+done
+```
+
+```text
+node:22-slim                                  CRITICAL=4 HIGH=71 LOW=84 MEDIUM=102 UNKNOWN=1 os=debian 12.15
+node:22-alpine                                HIGH=11 LOW=1 MEDIUM=10 UNKNOWN=2 os=alpine 3.24.2
+gcr.io/distroless/nodejs22-debian12:latest    CRITICAL=1 HIGH=6 LOW=27 MEDIUM=35 UNKNOWN=1 os=debian 12.13
+python:3.12-slim                              HIGH=44 LOW=62 MEDIUM=63 UNKNOWN=4 os=debian 13.7
+nginx:1.27-alpine                             CRITICAL=2 HIGH=57 LOW=46 MEDIUM=100 UNKNOWN=6 os=alpine 3.21.3
+alpine:3.20                                   UNKNOWN=2 os=alpine 3.20.10
+```
+
+숫자를 읽는 법이 몇 가지 있다. 먼저 어디서 나왔는지 나눠 본다.
+
+```bash
+jq -r '.Results[] | "\(.Target) [\(.Class)/\(.Type)] \(.Vulnerabilities|length)"' r-node_22-slim.json r-node_22-alpine.json
+```
+
+```text
+node:22-slim (debian 12.15) [os-pkgs/debian] 241
+Node.js [lang-pkgs/node-pkg] 21
+node:22-alpine (alpine 3.24.2) [os-pkgs/alpine] 3
+Node.js [lang-pkgs/node-pkg] 21
+```
+
+같은 Node 22인데 Debian 기반은 OS 패키지에서 241건, Alpine 기반은 3건이다. 베이스에 깔린 패키지 수가 다르기 때문이다. 언어 패키지 21건은 둘 다 같은데, 무엇인지 열어 보면 이렇다.
+
+```bash
+jq -r '.Results[] | .Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL") | "\(.PkgName)\t\(.VulnerabilityID)\t\(.Severity)\t\(.InstalledVersion)\t\(.FixedVersion // "-")"' r-node_22-alpine.json | head -8
+jq -r '.Results[].Vulnerabilities[]? | select(.Severity=="HIGH") | .PkgPath' r-node_22-alpine.json | sort -u | head -3
+```
+
+```text
+brace-expansion	CVE-2026-102276	HIGH	2.0.2	5.0.10, 3.0.7, 2.1.5, 1.1.19
+brace-expansion	CVE-2026-102278	HIGH	2.0.2	5.0.11, 3.0.8, 2.1.6, 1.1.20
+brace-expansion	CVE-2026-13149	HIGH	2.0.2	5.0.7, 1.1.16, 2.1.2
+brace-expansion	CVE-2026-14257	HIGH	2.0.2	5.0.8, 3.0.3, 2.1.3, 1.1.17
+brace-expansion	CVE-2026-69152	HIGH	2.0.2	1.1.18, 2.1.4, 3.0.6, 5.0.9
+http-cache-semantics	CVE-2026-93748	HIGH	4.2.0	-
+ip-address	CVE-2026-69192	HIGH	10.1.0	10.3.1
+pacote	CVE-2026-9496	HIGH	19.0.2	21.5.1
+usr/local/lib/node_modules/npm/node_modules/@npmcli/metavuln-calculator/node_modules/pacote/package.json
+usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json
+usr/local/lib/node_modules/npm/node_modules/http-cache-semantics/package.json
+```
+
+HIGH 전부가 `usr/local/lib/node_modules/npm/` 아래, 즉 이미지에 딸려 온 npm CLI의 의존성이다. 앱은 이 코드를 실행하지 않는다. 멀티 스테이지 빌드로 실행 단계에 npm이 없는 베이스(distroless 같은)를 쓰면 이 줄들이 통째로 사라진다. 스캐너 결과를 줄이는 가장 효과적인 방법은 패치를 하나씩 쫓는 게 아니라 이미지에 넣는 것을 줄이는 것이다.
+
+그런데 distroless 이미지도 CRITICAL 1, HIGH 6이 나왔다. OS가 `debian 12.13`으로, 다른 Debian 이미지(12.15)보다 오래됐다. 이 VM에 예전에 받아 둔 `latest`라서다. 생성 시각으로 나이를 가늠하려 해도 안 된다.
+
+```bash
+docker image inspect gcr.io/distroless/nodejs22-debian12:latest --format '{{.Created}}'
+docker run --rm --entrypoint sh gcr.io/distroless/nodejs22-debian12:latest -c id
+```
+
+```text
+1970-01-01T00:00:00Z
+docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: exec: "sh": executable file not found in $PATH
+```
+
+재현 가능한 빌드를 위해 생성 시각을 0으로 고정해 두었다. 이미지 나이는 레지스트리의 digest 이력으로 확인해야 한다. 셸이 없다는 것도 보인다. 공격자가 앱 취약점으로 명령 실행을 얻어도 쓸 셸과 도구가 없다. 대신 운영자도 `kubectl exec`로 들어가 볼 수 없으니, 디버깅은 `kubectl debug`의 임시 컨테이너로 한다.
+
+CI에서는 결과를 기준으로 빌드를 멈춘다.
+
+```bash
+# HIGH·CRITICAL이 하나라도 있으면 종료 코드 1
+trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --format json -o /dev/null node:22-alpine; echo "exit=$?"
+# 고친 버전이 나온 것만 센다
+trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --format json -o /dev/null node:22-alpine; echo "exit=$?"
+```
+
+```text
+exit=1
+exit=1
+```
+
+`--ignore-unfixed`는 고친 버전이 아직 없는 취약점을 빼서, 지금 손쓸 수 있는 것만 실패로 만든다. 여기서는 고칠 수 있는 HIGH가 남아 있어서 둘 다 1이다. 실무에서는 이렇게 문턱을 정하고, 예외는 `.trivyignore`에 CVE 번호와 이유, 만료일을 적어 관리한다. 스캔은 빌드할 때 한 번으로 끝나지 않는다. 어제 깨끗했던 이미지도 오늘 새 CVE가 발표되면 취약해지므로, 레지스트리에 있는 이미지와 돌고 있는 이미지를 주기적으로 다시 스캔한다. 이때 SBOM을 저장해 두면 이미지를 다시 받지 않고 다시 스캔할 수 있다.
+
+## 누가 만들었나: 서명
+
+스캔과 SBOM은 "이 이미지에 무엇이 들었나"를 말한다. "이 이미지를 우리 CI가 만들었고 그 뒤로 바뀌지 않았나"는 서명이 말한다. Sigstore 프로젝트의 cosign이 컨테이너 서명에서 가장 널리 쓰인다. 방식은 두 가지다.
+
+키 방식은 키 쌍을 만들어 개인 키로 서명하고, 검증하는 쪽에 공개 키를 나눠 준다. 로컬 레지스트리에서 해 봤다. 이 VM에서는 Sigstore의 공개 서비스(TUF 저장소, 투명성 로그 Rekor)에 닿지 않아서 투명성 로그 기록을 끄고, 신뢰 루트 파일은 GitHub의 `sigstore/root-signing` 저장소에서 받아 썼다.
+
+```bash
+COSIGN_PASSWORD=demo cosign generate-key-pair      # cosign.key, cosign.pub
+IMG=localhost:19330/demo/app@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95
+# 태그가 아니라 digest에 서명한다
+COSIGN_PASSWORD=demo cosign sign --yes --key cosign.key --tlog-upload=false --use-signing-config=false $IMG
+cosign verify --key cosign.pub --insecure-ignore-tlog=true --trusted-root trusted_root.json $IMG
+```
+
+```text
+WARNING: Skipping tlog verification is an insecure practice that lacks transparency and auditability verification for the signature.
+
+Verification for localhost:19330/demo/app@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95 --
+The following checks were performed on each of these signatures:
+  - The cosign claims were validated
+  - Existence of the claims in the transparency log was verified offline
+  - The signatures were verified against the specified public key
+
+[{"critical":{"identity":{"docker-reference":"localhost:19330/demo/app@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95"},"image":{"docker-manifest-digest":"sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95"},"type":"https://sigstore.dev/cosign/sign/v1"},"optional":null}]
+```
+
+서명 내용(`critical.image`)에 digest가 박혀 있다. 그래서 바꿔치기한 태그로 확인하면 이렇게 된다.
+
+```bash
+cosign verify --key cosign.pub --insecure-ignore-tlog=true --trusted-root trusted_root.json localhost:19330/demo/app:1.0; echo "exit=$?"
+```
+
+```text
+Error: no signatures found
+error during command execution: no signatures found
+exit=10
+```
+
+태그 `1.0`이 가리키는 새 digest에는 서명이 없다. 키 방식의 약점은 키 자체다. 개인 키가 CI 비밀값으로 여기저기 복사되고, 유출되면 교체하고 이미 서명한 것까지 다시 따져야 한다.
+
+키리스(keyless) 방식은 오래 쓰는 키를 없앤다. 아래 그림에서 다음을 누르면 CI가 키 없이 서명하는 흐름을 따라간다.
+
+<SequenceDiagram
+  caption="키리스 서명: 10분짜리 인증서와 공개 기록"
+  actors={[
+    { id: "ci", label: "CI 작업" },
+    { id: "oidc", label: "OIDC 발급자" },
+    { id: "fulcio", label: "Fulcio" },
+    { id: "rekor", label: "Rekor 로그" },
+    { id: "v", label: "검증하는 쪽" },
+  ]}
+  steps={[
+    { from: "ci", to: "oidc", label: "ID 토큰 요청", title: "CI가 자기 신분을 증명한다", detail: "GitHub Actions 같은 CI는 작업마다 '이 저장소의 이 워크플로'라는 OIDC 토큰을 받을 수 있다." },
+    { from: "ci", to: "fulcio", label: "토큰 + 임시 공개 키", title: "짧은 인증서를 받는다", detail: "메모리에서 만든 임시 키 쌍의 공개 키와 토큰을 Fulcio에 보내면, 토큰의 신원을 SAN에 적은 10분짜리 인증서가 나온다." },
+    { from: "ci", to: "rekor", label: "서명 기록", title: "공개 로그에 남긴다", detail: "서명과 인증서를 투명성 로그에 올린다. 인증서가 만료된 뒤에도 '유효할 때 서명했다'는 증거가 된다. 임시 개인 키는 버린다." },
+    { from: "v", to: "rekor", label: "기록 확인", title: "로그와 신뢰 루트로 확인한다", detail: "검증하는 쪽은 Sigstore 신뢰 루트로 인증서 체인과 로그 기록을 확인한다." },
+    { from: "v", to: "v", label: "SAN·issuer 비교", title: "누가 서명했는지 맞춘다", detail: "인증서의 신원이 기대한 워크플로와 발급자인지 비교한다. 이 비교를 빼면 아무나의 서명도 통과한다.", payload: "--certificate-identity-regexp 'https://github.com/aquasecurity/trivy/.*'\n--certificate-oidc-issuer https://token.actions.githubusercontent.com" },
+  ]}
+/>
+
+이 글에서 쓴 Trivy 바이너리가 바로 이 방식으로 서명되어 있다. 릴리스에 같이 올라온 `.sigstore.json` 번들로 체크섬 파일을 검증했다.
+
+```bash
+cosign verify-blob trivy_0.70.0_checksums.txt --bundle trivy_0.70.0_checksums.txt.sigstore.json \
+  --trusted-root trusted_root.json \
+  --certificate-identity-regexp 'https://github.com/aquasecurity/trivy/.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+# 번들 안의 인증서
+jq -r '.verificationMaterial.certificate.rawBytes' trivy_0.70.0_checksums.txt.sigstore.json | base64 -d \
+  | openssl x509 -inform der -noout -issuer -dates -ext subjectAltName
+sha256sum -c --ignore-missing trivy_0.70.0_checksums.txt
+```
+
+```text
+Verified OK
+issuer=O = sigstore.dev, CN = sigstore-intermediate
+notBefore=Apr 17 06:46:08 2026 GMT
+notAfter=Apr 17 06:56:08 2026 GMT
+X509v3 Subject Alternative Name: critical
+    URI:https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.70.0
+trivy_0.70.0_Linux-64bit.tar.gz: OK
+```
+
+인증서의 유효 기간이 딱 10분이고, 주인은 사람이 아니라 `aquasecurity/trivy` 저장소의 릴리스 워크플로다. 서명으로 체크섬 파일을 믿고, 체크섬으로 바이너리를 믿는 두 단계다. 신원 조건을 바꾸거나 파일을 한 글자만 바꾸면 실패한다.
+
+```text
+Error: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value to match regex "https://github.com/evil/.*", got "https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.70.0"
+error during command execution: failed to verify signature: could not verify message: invalid signature when validating ASN.1 encoded signature
+```
+
+키리스에서 흔한 실수는 신원 조건을 느슨하게 거는 것이다. `--certificate-identity-regexp '.*'`처럼 걸면 GitHub Actions를 쓰는 아무 저장소의 서명이나 통과한다. 저장소, 워크플로 파일, 가능하면 태그나 브랜치까지 좁힌다.
+
+서명 옆에 SBOM이나 빌드 정보를 붙이는 것을 증명(attestation)이라고 한다. in-toto 형식의 문장에 "이 digest의 SBOM은 이것"을 담아 서명한다.
+
+```bash
+syft registry:$IMG -q -o cyclonedx-json=app.cdx.json
+COSIGN_PASSWORD=demo cosign attest --yes --key cosign.key --tlog-upload=false --use-signing-config=false \
+  --type cyclonedx --predicate app.cdx.json $IMG
+cosign verify-attestation --key cosign.pub --insecure-ignore-tlog=true --trusted-root trusted_root.json --type cyclonedx $IMG 2>/dev/null \
+  | jq -r '.payload' | base64 -d | jq '{_type, predicateType, subject, components: (.predicate.components|length)}'
+```
+
+```text
+{
+  "_type": "https://in-toto.io/Statement/v0.1",
+  "predicateType": "https://cyclonedx.org/bom",
+  "subject": [
+    {
+      "name": "localhost:19330/demo/app",
+      "digest": {
+        "sha256": "6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95"
+      }
+    }
+  ],
+  "components": 92
+}
+```
+
+한 가지 걸리는 점이 있었다. 서명한 뒤 `cosign tree`로 이미지에 붙은 것을 보면 "No Supply Chain Security Related Artifacts found"가 나왔다. cosign 3은 기본으로 새 번들 형식을 쓰고 이를 OCI referrers 방식으로 저장하는데, `tree`는 옛 방식(`sha256-<digest>.sig` 태그)을 찾는 것으로 보인다. 검증은 잘 됐다. 클러스터에서 서명을 확인하는 도구가 어느 저장 방식을 읽는지 버전을 맞춰 봐야 한다는 뜻이다.
+
+## 클러스터 입구에서 거르기
+
+확인하는 도구가 있어도 Pod를 만들 때 거치지 않으면 소용이 없다. 쿠버네티스에서는 어드미션 단계에서 거른다. 어드미션의 동작과 웹훅 장애 이야기는 [어드미션 컨트롤](/posts/k8s-admission-control)에 있고, 여기서는 이미지에 거는 정책 셋을 본다.
+
+<ConceptDiagram
+  width={420}
+  height={260}
+  caption="무엇을 확인하나와 어디서 확인하나"
+  nodes={[
+    { id: "pod", label: "Pod 생성 요청", x: 210, y: 35, w: 150 },
+    { id: "vap", label: "ValidatingAdmissionPolicy", sub: "레지스트리·digest", x: 90, y: 140, w: 170 },
+    { id: "ipw", label: "ImagePolicyWebhook", sub: "외부 서버 판정", x: 330, y: 140, w: 150 },
+    { id: "kyv", label: "Kyverno·policy-controller", sub: "서명·증명 검증", x: 210, y: 225, w: 190 },
+  ]}
+  edges={[
+    { from: "pod", to: "vap", label: "문자열 검사" },
+    { from: "pod", to: "ipw", label: "ImageReview" },
+    { from: "pod", to: "kyv", label: "웹훅" },
+  ]}
+/>
+
+문자열로 판단할 수 있는 규칙은 API 서버 안에서 도는 ValidatingAdmissionPolicy가 가장 가볍다. 외부 서버가 죽을 걱정이 없다.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: image-digest-and-registry
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["pods"]
+  variables:
+  - name: images
+    expression: "object.spec.containers.map(c, c.image) + (has(object.spec.initContainers) ? object.spec.initContainers.map(c, c.image) : [])"
+  validations:
+  - expression: "variables.images.all(i, i.startsWith('registry.example.com/'))"
+    message: "이미지는 registry.example.com에서만 받는다"
+  - expression: "variables.images.all(i, i.contains('@sha256:'))"
+    message: "이미지는 태그가 아니라 digest로 고정한다"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: image-digest-and-registry
+spec:
+  policyName: image-digest-and-registry
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        supply-chain: enforced
+```
+
+```bash
+kubectl apply -f vap.yaml
+kubectl create ns shop && kubectl label ns shop supply-chain=enforced
+kubectl -n shop run a --image=nginx:1.27-alpine
+kubectl -n shop run b --image=registry.example.com/shop/api:1.4.2
+kubectl -n shop run c --image=registry.example.com/shop/api@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95
+kubectl -n shop run d --image=registry.example.com.evil.io/api@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95
+```
+
+```text
+The pods "a" is invalid: : ValidatingAdmissionPolicy 'image-digest-and-registry' with binding 'image-digest-and-registry' denied request: 이미지는 registry.example.com에서만 받는다
+The pods "b" is invalid: : ValidatingAdmissionPolicy 'image-digest-and-registry' with binding 'image-digest-and-registry' denied request: 이미지는 태그가 아니라 digest로 고정한다
+pod/c created
+The pods "d" is invalid: : ValidatingAdmissionPolicy 'image-digest-and-registry' with binding 'image-digest-and-registry' denied request: 이미지는 registry.example.com에서만 받는다
+```
+
+`d`가 막힌 건 `startsWith`에 끝의 `/`까지 넣었기 때문이다. `startsWith('registry.example.com')`으로 쓰면 `registry.example.com.evil.io`가 통과한다. initContainers를 빼먹는 것도 흔한 구멍이다. ephemeralContainers(`kubectl debug`)까지 막을지도 정해야 한다. 그리고 Deployment로 만들면 Deployment 자체는 만들어지고 ReplicaSet의 이벤트에만 거절이 남는다.
+
+```text
+Error creating: pods "web-7dd566fbcc-qgnxt" is forbidden: ValidatingAdmissionPolicy 'image-digest-and-registry' with binding 'image-digest-and-registry' denied request: 이미지는 registry.example.com에서만 받는…
+```
+
+ImagePolicyWebhook은 CKS에서 자주 나오는 내장 어드미션 플러그인이다. API 서버가 Pod의 이미지 목록을 `ImageReview`로 외부 HTTPS 서버에 보내고, 서버가 허용 여부를 답한다. 실습에서는 digest 없는 이미지를 거절하는 30줄짜리 Node 서버를 127.0.0.1:19340에 띄우고 API 서버에 연결했다.
+
+```yaml
+# admission.yaml: --admission-control-config-file로 넘기고 --enable-admission-plugins에 ImagePolicyWebhook을 넣는다
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: ImagePolicyWebhook
+  configuration:
+    imagePolicy:
+      kubeConfigFile: /etc/kubernetes/ipw/kubeconfig.yaml   # 서버 주소와 CA, API 서버의 클라이언트 인증서
+      allowTTL: 50        # 허용 결과를 50초 캐시
+      denyTTL: 50         # 거절 결과를 50초 캐시
+      retryBackoff: 500   # 재시도 간격(ms)
+      defaultAllow: true  # 서버에 닿지 못할 때의 동작 (아래에서 확인)
+```
+
+```bash
+kubectl run t1 --image=nginx:1.27-alpine
+kubectl run t2 --image=registry.example.com/shop/api@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95
+cat server.log
+```
+
+```text
+Error from server (Forbidden): pods "t1" is forbidden: image policy webhook backend denied one or more images: digest 없는 이미지: nginx:1.27-alpine
+pod/t2 created
+listening 19340
+2026-10-22T03:25:08.968Z ImageReview ["nginx:1.27-alpine"] DENY
+2026-10-22T03:25:15.383Z ImageReview ["registry.example.com/shop/api@sha256:6aa698b4fffd0a2a2055ecbaa3405521d1720ca3ec61553c7380149fd13d5e95"] ALLOW
+```
+
+여기서 서버를 껐다. 방금 거절된 이미지는 캐시(denyTTL) 때문에 여전히 거절됐지만, 처음 보는 이미지는 그냥 통과했다.
+
+```bash
+kill "$(cat server.pid)"
+kubectl run t3 --image=nginx:1.27-alpine     # 50초 안: 캐시된 거절
+kubectl run t4 --image=busybox:1.36          # 처음 보는 이미지
+```
+
+```text
+Error from server (Forbidden): pods "t3" is forbidden: image policy webhook backend denied one or more images: digest 없는 이미지: nginx:1.27-alpine
+pod/t4 created
+```
+
+`defaultAllow: true`는 서버가 죽으면 모두 허용하는 설정이다. 공격자 입장에서는 정책 서버만 멈추면 문이 열린다. `false`로 바꾸고 다시 띄운 API 서버에서는 같은 상황에서 이렇게 나온다.
+
+```text
+Error from server (Forbidden): pods "t5" is forbidden: Post "https://127.0.0.1:19340/review?timeout=30s": dial tcp 127.0.0.1:19340: connect: connection refused
+```
+
+이번에는 닫혔다. 대신 정책 서버가 죽으면 CoreDNS나 정책 서버 자기 자신을 포함해 아무 Pod도 새로 못 뜬다. 정책 서버를 여러 개 띄우고, 장애 때 쓸 절차(설정 파일에서 플러그인을 빼고 API 서버를 다시 띄우기)를 미리 적어 둔다. 이 플러그인은 네임스페이스를 가려 적용하는 기능이 없다는 점도 같이 기억해 둔다.
+
+서명을 실제로 검증하는 건 Kyverno의 `verifyImages`나 Sigstore의 policy-controller 같은 웹훅이 맡는다. 아래는 Kyverno 정책의 모양이다(예시, 이 환경에서 Kyverno를 돌리지 않았고 필드 위치는 버전마다 조금씩 옮겨 가고 있다).
+
+```yaml
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-shop-images
+spec:
+  validationFailureAction: Enforce
+  webhookTimeoutSeconds: 30
+  rules:
+  - name: cosign-key
+    match:
+      any:
+      - resources:
+          kinds: ["Pod"]
+    verifyImages:
+    - imageReferences: ["registry.example.com/shop/*"]
+      mutateDigest: true      # 태그로 와도 검증한 digest로 바꿔 넣는다
+      verifyDigest: true
+      required: true
+      attestors:
+      - entries:
+        - keys:
+            publicKeys: |-
+              -----BEGIN PUBLIC KEY-----
+              (cosign.pub 내용)
+              -----END PUBLIC KEY-----
+```
+
+`mutateDigest`가 쓸모 있다. 개발자가 태그로 매니페스트를 써도, 정책이 서명을 확인한 그 digest로 Pod 스펙을 고쳐 넣는다. 확인한 것과 실행하는 것이 같아진다.
+
+## 어디서부터 거나
+
+한 번에 다 켜려다 배포가 멈추는 것보다, 순서를 정해 하나씩 거는 편이 낫다. 작은 팀이라면 먼저 CI에 Trivy를 `--exit-code 1 --ignore-unfixed`로 걸고, 실행 이미지를 멀티 스테이지와 작은 베이스로 줄이고, 매니페스트에 digest를 적는다. 그다음 허용 레지스트리와 digest 규칙을 ValidatingAdmissionPolicy로 경고(`Warn`)부터 걸어 위반을 모은 뒤 `Deny`로 올린다. 레지스트리가 여러 팀에 열려 있거나 외부 기여가 많아지면 CI에서 키리스 서명을 붙이고, 클러스터에서 서명 검증 웹훅을 건다. SBOM은 처음부터 빌드마다 만들어 저장해 두면, 새 CVE가 나온 날 영향 범위를 바로 답할 수 있다.
+
+장애 대응에서 자주 보는 증상도 정리해 둔다. 배포가 갑자기 멈췄는데 Deployment는 만들어졌다면 ReplicaSet 이벤트에서 어드미션 거절을 찾는다. 서명한 이미지가 검증에서 "no signatures found"를 내면 태그로 확인하고 있지 않은지, 서명을 저장한 방식과 검증 도구의 버전이 맞는지 본다. 스캐너가 갑자기 CI를 무더기로 실패시키면 대개 코드가 아니라 취약점 DB가 갱신된 것이다.
+
+## 면접에서 나올 만한 질문
+
+### 이미지 태그 대신 digest로 배포해야 하는 이유는요?
+
+태그는 레지스트리에서 언제든 다른 이미지를 가리키게 바꿀 수 있는 이름표이고, digest는 매니페스트 내용의 해시라 바뀌지 않는다. 같은 태그로 다른 이미지가 올라오면 태그로 받는 쪽은 모르고 새 이미지를 실행한다. 서명도 digest에 붙으므로, 확인한 것과 실행하는 것을 같게 하려면 digest로 고정한다. 관리는 CI가 빌드 결과 digest를 매니페스트에 써 넣거나 봇이 갱신하게 한다.
+
+### SBOM은 무엇이고 언제 쓸모가 있나요?
+
+이미지 안의 OS 패키지, 언어 패키지, 바이너리를 이름, 버전, purl로 적은 부품 목록이다. CycloneDX와 SPDX 형식이 많이 쓰인다. 새 취약점이 발표됐을 때 이미지를 다시 받지 않고 SBOM만 뒤져 영향받는 이미지를 찾을 수 있고, 스캐너에 SBOM을 넣어 다시 스캔할 수도 있다. 서명한 증명으로 이미지에 붙이면 SBOM 자체도 위조되지 않았음을 확인할 수 있다.
+
+### Trivy 결과가 수백 건입니다. 어떻게 줄이나요?
+
+어디서 나왔는지부터 나눈다. 대부분 베이스 이미지의 OS 패키지나 이미지에 딸려 온 도구(npm CLI 같은)에서 나온다. 멀티 스테이지 빌드로 실행 단계에 필요한 것만 남기고, distroless나 Alpine 같은 작은 베이스를 최신 digest로 쓰면 크게 준다. 남은 것은 `--ignore-unfixed`로 지금 고칠 수 있는 것부터 보고, 예외는 이유와 만료일을 적어 관리한다.
+
+### cosign의 키 방식과 키리스 방식은 어떻게 다른가요?
+
+키 방식은 오래 쓰는 키 쌍으로 서명하고 공개 키로 검증한다. 키 관리와 유출 시 교체가 부담이다. 키리스 방식은 CI의 OIDC 토큰으로 Fulcio에서 10분짜리 인증서를 받아 임시 키로 서명하고, Rekor 투명성 로그에 남긴다. 검증할 때는 인증서의 신원(워크플로 경로)과 발급자를 조건으로 건다. 이 조건을 느슨하게 걸면 아무나의 서명도 통과한다.
+
+### ImagePolicyWebhook의 defaultAllow는 무엇을 정하나요?
+
+정책 서버에 닿지 못할 때의 동작이다. true면 모두 허용(fail-open)이라 정책 서버만 멈추면 검사가 사라진다. false면 모두 거절(fail-closed)이라 정책 서버 장애가 곧 Pod 생성 장애가 된다. 보안 쪽에서는 false가 맞고, 그러려면 정책 서버를 이중화하고 장애 때 플러그인을 빼는 절차를 준비한다. 판정 결과는 allowTTL·denyTTL 동안 캐시된다.
+
+### 허용 레지스트리 정책을 짤 때 흔한 실수는요?
+
+접두사 비교에서 끝의 `/`를 빼서 `registry.example.com.evil.io`를 통과시키는 것, initContainers와 ephemeralContainers를 빼먹는 것, `nginx`처럼 레지스트리를 생략한 이름이 docker.io라는 걸 잊는 것이다. 그리고 Pod만 검사하면 Deployment는 만들어지고 ReplicaSet 이벤트에만 거절이 남아서, 배포 도구가 성공으로 착각할 수 있다.
+
+### 서명했는데 검증에서 "no signatures found"가 나옵니다. 무엇을 보나요?
+
+먼저 태그로 확인하고 있지 않은지 본다. 태그가 다른 digest로 옮겨 갔으면 그 digest에는 서명이 없다. 다음으로 서명 저장 방식과 도구 버전을 본다. cosign 3은 새 번들 형식을 OCI referrers로 저장하는데, 옛 방식의 태그를 찾는 도구는 서명을 못 찾을 수 있다. 레지스트리가 referrers API를 지원하는지도 확인한다.

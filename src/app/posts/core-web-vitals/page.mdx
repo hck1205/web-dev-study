@@ -320,7 +320,7 @@ for (const card of cards) {
 - 크기를 모르는 이미지와 영상. `width`·`height` 속성이나 CSS `aspect-ratio`가 없으면 파일이 도착하는 순간 자리가 생기면서 아래가 밀린다.
 - 광고, 임베드, iframe. 높이가 응답에 따라 달라지니, 가장 흔한 크기로 `min-height`를 잡아 둔다. 광고가 안 나왔다고 그 자리를 접어 버리면 그것도 밀림이다.
 - 나중에 끼워 넣는 내용. 쿠키 동의 띠나 "앱으로 보기" 배너를 콘텐츠 위에 밀어 넣으면 전체가 내려간다. 겹쳐 띄우거나(position: fixed) 자리를 미리 둔다.
-- 늦게 오는 웹 폰트. `font-display: swap`이면 대체 폰트로 먼저 그렸다가 웹 폰트로 바꾸는데, 두 폰트의 글자 폭과 줄 높이가 다르면 문단 길이가 바뀐다. 대체 폰트의 `@font-face`에 `size-adjust`, `ascent-override`를 줘서 크기를 맞추거나, 첫 방문에는 대체 폰트를 그대로 쓰는 `font-display: optional`을 고른다. Next.js의 `next/font`는 대체 폰트 크기 맞추기를 자동으로 해 준다.
+- 늦게 오는 웹 폰트. `font-display: swap`이면 대체 폰트로 먼저 그렸다가 웹 폰트로 바꾸는데, 두 폰트의 글자 폭과 줄 높이가 다르면 문단 길이가 바뀐다. 대체 폰트의 `@font-face`에 `size-adjust`, `ascent-override`를 줘서 크기를 맞추거나, 첫 방문에는 대체 폰트를 그대로 쓰는 `font-display: optional`을 고른다. Next.js의 `next/font`는 대체 폰트 크기 맞추기를 자동으로 해 준다. 한글 폰트에서는 이 자동 조정이 왜 잘 안 통하는지 [웹 폰트 최적화](/posts/web-font-optimization)에서 따로 쟀다.
 
 ## 밀림을 세션 창으로 묶어 센다
 

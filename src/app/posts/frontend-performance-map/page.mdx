@@ -1,0 +1,347 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-performance-map");
+
+상품 페이지를 개발자 노트북에서 열면 첫 사진이 260ms 만에 뜬다. 느리다고 할 사람이 없다. 같은 페이지를 느린 망과 느린 CPU를 흉내 낸 조건에서 열면 4,212ms가 걸린다. 사용자 리뷰에 "페이지가 안 열려요"가 올라오는 쪽은 두 번째 숫자다.
+
+프런트엔드 성능 작업은 손댈 곳이 너무 많아서 길을 잃기 쉽다. 번들, 이미지, 폰트, CSS, 렌더링, 하이드레이션, 데이터 요청, 캐시. 각각에 글이 하나씩 있을 만큼 깊다. 이 글은 그 글들을 한 장의 지도로 묶는다. 무엇부터 재고, 숫자를 보고 어느 손잡이를 돌릴지, 그리고 그 손잡이를 자세히 다룬 글이 어디 있는지를 따라간다.
+
+측정은 [지연 로딩 전략](/posts/lazy-loading-strategies)에서 만든 상품 페이지 두 벌로 했다. 모든 것을 즉시 받는 버전과 시점별로 미룬 버전이다. Playwright로 Chromium 141을 띄우고, 망 제한(왕복 150ms, 내려받기 1.6Mbps)과 CPU 4배 느리게를 따로따로 켜고 꺼 가며 다섯 번씩 잰 가운데 값이다.
+
+## 노트북에서는 아무도 느리다고 하지 않는다
+
+같은 페이지를 조건 네 가지로 열었다.
+
+```text
+eager  제한 없음    FCP 232 LCP 260 blocking 53 script 167
+eager  망만 느리게   FCP 1812 LCP 3912 blocking 40 script 151
+eager  CPU만 4배  FCP 616 LCP 660 blocking 483 script 630
+eager  둘 다      FCP 2192 LCP 4212 blocking 529 script 675
+lazy   제한 없음    FCP 100 LCP 112 blocking 0 script 34
+lazy   망만 느리게   FCP 892 LCP 1684 blocking 0 script 32
+lazy   CPU만 4배  FCP 280 LCP 280 blocking 62 script 154
+lazy   둘 다      FCP 1060 LCP 1812 blocking 50 script 139
+```
+
+`blocking`은 50ms를 넘긴 긴 작업들의 초과분을 더한 값이고, `script`는 크롬이 센 JS 실행 시간이다. 숫자가 많으니 그림으로 보자. 다음을 누르면 막대가 지표를 바꿔 가며 움직인다.
+
+<GeometryMorph
+  width={400}
+  height={200}
+  caption="같은 페이지, 조건 네 가지 (막대: 왼쪽부터 제한 없음, 망만, CPU만, 둘 다)"
+  shapes={[
+    { id: "b0", tone: "series1" },
+    { id: "b1", tone: "series2" },
+    { id: "b2", tone: "series3" },
+    { id: "b3", tone: "accent" },
+  ]}
+  steps={[
+    {
+      title: "즉시 받는 버전의 LCP",
+      detail: "망을 느리게 하자 260ms가 3912ms로 뛰었다. CPU만 느리게 하면 660ms다. 이 페이지의 LCP는 망이 정한다.",
+      shapes: {
+        b0: [[58, 162], [102, 162], [102, 170], [58, 170]],
+        b1: [[138, 43], [182, 43], [182, 170], [138, 170]],
+        b2: [[218, 149], [262, 149], [262, 170], [218, 170]],
+        b3: [[298, 33], [342, 33], [342, 170], [298, 170]],
+      },
+      labels: [
+        { x: 80, y: 154, text: "260", size: "sm" },
+        { x: 160, y: 35, text: "3912", size: "sm" },
+        { x: 240, y: 141, text: "660", size: "sm" },
+        { x: 320, y: 25, text: "4212", size: "sm" },
+        { x: 80, y: 188, text: "제한 없음", size: "sm", tone: "text" },
+        { x: 160, y: 188, text: "망만", size: "sm", tone: "text" },
+        { x: 240, y: 188, text: "CPU만", size: "sm", tone: "text" },
+        { x: 320, y: 188, text: "둘 다", size: "sm", tone: "text" },
+      ],
+      focus: ["b1"],
+    },
+    {
+      title: "미룬 버전의 LCP (같은 축)",
+      detail: "덜 보내자 망이 느린 조건의 막대가 가장 많이 줄었다. 3912ms가 1684ms가 됐다.",
+      shapes: {
+        b0: [[58, 166], [102, 166], [102, 170], [58, 170]],
+        b1: [[138, 115], [182, 115], [182, 170], [138, 170]],
+        b2: [[218, 161], [262, 161], [262, 170], [218, 170]],
+        b3: [[298, 111], [342, 111], [342, 170], [298, 170]],
+      },
+      labels: [
+        { x: 80, y: 158, text: "112", size: "sm" },
+        { x: 160, y: 107, text: "1684", size: "sm" },
+        { x: 240, y: 153, text: "280", size: "sm" },
+        { x: 320, y: 103, text: "1812", size: "sm" },
+        { x: 80, y: 188, text: "제한 없음", size: "sm", tone: "text" },
+        { x: 160, y: 188, text: "망만", size: "sm", tone: "text" },
+        { x: 240, y: 188, text: "CPU만", size: "sm", tone: "text" },
+        { x: 320, y: 188, text: "둘 다", size: "sm", tone: "text" },
+      ],
+      focus: ["b1"],
+    },
+    {
+      title: "즉시 받는 버전의 긴 작업",
+      detail: "축을 600ms로 바꿨다. 긴 작업은 망이 아니라 CPU가 정한다. 망만 느릴 때는 40ms, CPU만 느릴 때는 483ms다.",
+      shapes: {
+        b0: [[58, 158], [102, 158], [102, 170], [58, 170]],
+        b1: [[138, 161], [182, 161], [182, 170], [138, 170]],
+        b2: [[218, 57], [262, 57], [262, 170], [218, 170]],
+        b3: [[298, 47], [342, 47], [342, 170], [298, 170]],
+      },
+      labels: [
+        { x: 80, y: 150, text: "53", size: "sm" },
+        { x: 160, y: 153, text: "40", size: "sm" },
+        { x: 240, y: 49, text: "483", size: "sm" },
+        { x: 320, y: 39, text: "529", size: "sm" },
+        { x: 80, y: 188, text: "제한 없음", size: "sm", tone: "text" },
+        { x: 160, y: 188, text: "망만", size: "sm", tone: "text" },
+        { x: 240, y: 188, text: "CPU만", size: "sm", tone: "text" },
+        { x: 320, y: 188, text: "둘 다", size: "sm", tone: "text" },
+      ],
+      focus: ["b2"],
+    },
+    {
+      title: "미룬 버전의 긴 작업",
+      detail: "첫 로드에 실행하던 라이브러리 두 개가 빠지자 CPU 조건의 막대가 483ms에서 62ms로 내려앉았다.",
+      shapes: {
+        b0: [[58, 168], [102, 168], [102, 170], [58, 170]],
+        b1: [[138, 168], [182, 168], [182, 170], [138, 170]],
+        b2: [[218, 156], [262, 156], [262, 170], [218, 170]],
+        b3: [[298, 158], [342, 158], [342, 170], [298, 170]],
+      },
+      labels: [
+        { x: 80, y: 160, text: "0", size: "sm" },
+        { x: 160, y: 160, text: "0", size: "sm" },
+        { x: 240, y: 148, text: "62", size: "sm" },
+        { x: 320, y: 150, text: "50", size: "sm" },
+        { x: 80, y: 188, text: "제한 없음", size: "sm", tone: "text" },
+        { x: 160, y: 188, text: "망만", size: "sm", tone: "text" },
+        { x: 240, y: 188, text: "CPU만", size: "sm", tone: "text" },
+        { x: 320, y: 188, text: "둘 다", size: "sm", tone: "text" },
+      ],
+      focus: ["b2"],
+    },
+  ]}
+/>
+
+이 표에서 두 가지를 읽을 수 있다. 첫째, 개발 환경에서 잰 숫자는 거의 쓸모가 없다. 제한 없는 조건에서는 두 버전 모두 빠르다. 차이는 느린 기기와 느린 망에서만 드러난다. 둘째, 조건을 하나씩 켜 보면 어떤 지표가 무엇에 묶여 있는지 보인다. 이 페이지의 LCP는 망에, 긴 작업은 CPU에 묶여 있다. 망에 묶인 지표는 덜 보내고 일찍 보내야 줄고, CPU에 묶인 지표는 덜 실행해야 준다. 고칠 곳을 고르는 첫 단서가 이것이다.
+
+## 고치기 전에 재는 것
+
+성능 작업은 측정으로 시작한다. 숫자 없이 고치면 체감은 바뀌지 않는데 코드만 복잡해지기 쉽다. 측정에는 두 갈래가 있다.
+
+실험실 측정(lab)은 위처럼 정해진 조건에서 같은 페이지를 열어 재는 것이다. 매번 같은 조건이라 고치기 전과 후를 비교하기 좋고, 원인을 추적할 트레이스가 남는다. 대신 실제 사용자의 기기, 망, 캐시 상태, 행동을 모른다. 실사용자 측정(RUM, Real User Monitoring)은 사용자 브라우저에서 `PerformanceObserver`로 지표를 모아 서버로 보내는 것이다. 진짜 숫자지만 흩어져 있고 원인을 바로 알려 주지 않는다.
+
+둘은 역할이 다르다. 실사용자 측정으로 어느 페이지, 어느 기기층이 나쁜지 찾고, 실험실 측정으로 그 조건을 재현해 원인을 찾고 고친 뒤 다시 실사용자 숫자로 확인한다. 실사용자 숫자는 평균이 아니라 75번째 백분위수(p75)로 본다. 평균은 빠른 다수가 느린 소수를 가린다.
+
+자세한 내용은 세 글로 나눠 두었다.
+
+- [Core Web Vitals](/posts/core-web-vitals): LCP, INP, CLS가 무엇을 재고, 각각을 어떤 조각으로 나눠 원인을 찾는지.
+- [성능 지표 측정](/posts/performance-metrics-measurement): TTFB, FCP, LCP, Speed Index, TBT, INP, CLS를 브라우저가 어떻게 재고, 직접 모으려면 어떤 API를 쓰는지.
+- [Lighthouse 읽기](/posts/lighthouse-explained): Lighthouse 점수가 어떻게 나오고, 점수와 실사용자 숫자가 왜 다른지.
+
+## 다섯 개의 손잡이
+
+측정해서 나쁜 지표를 찾았으면 손잡이를 고른다. 프런트엔드 성능 기법은 많아 보이지만 결국 다섯 묶음 중 하나에 들어간다. 아래 그림은 각 손잡이가 브라우저 일의 어느 지점에 작용하는지 보여 준다. 점이 흐르는 방향이 페이지가 화면이 되는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="요청에서 픽셀까지, 손잡이가 닿는 자리"
+  nodes={[
+    { id: "cache", label: "다시 안 보내기", sub: "캐시", x: 75, y: 40, w: 120 },
+    { id: "less", label: "덜 보내기", sub: "번들·이미지·폰트", x: 230, y: 40, w: 130 },
+    { id: "early", label: "일찍 보내기", sub: "힌트·폭포 줄이기", x: 345, y: 130, w: 100 },
+    { id: "render", label: "덜 그리기", sub: "레이아웃·페인트", x: 230, y: 220, w: 120 },
+    { id: "main", label: "덜 실행하기", sub: "메인 스레드", x: 75, y: 220, w: 120 },
+    { id: "px", label: "화면", sub: "LCP·INP·CLS", x: 75, y: 130, w: 100 },
+  ]}
+  edges={[
+    { from: "cache", to: "less" },
+    { from: "less", to: "early" },
+    { from: "early", to: "render" },
+    { from: "render", to: "main", arrow: "both" },
+    { from: "main", to: "px" },
+  ]}
+/>
+
+순서에 이유가 있다. 다시 보내지 않으면 나머지 비용이 전부 사라지고, 보내지 않은 바이트는 받을 필요도 파싱할 필요도 실행할 필요도 없다. 그래서 위쪽 손잡이일수록 효과가 아래로 번진다. 앞의 측정에서 덜 보내기 하나로 LCP와 긴 작업이 함께 줄어든 게 그 예다. 반대로 메인 스레드 쪽 최적화는 그 일 자체만 줄인다. 효과가 좁지만 INP처럼 상호작용 중의 문제는 거기서만 풀린다.
+
+## 다시 보내지 않기
+
+가장 빠른 요청은 나가지 않는 요청이다. 요청 하나는 브라우저 안에서부터 여러 겹의 캐시를 거친다. 아래 그림에서 단계를 넘기며 요청이 어디서 멈출 수 있는지 보자.
+
+<NetworkTopology
+  width={400}
+  height={220}
+  caption="요청이 서버까지 가기 전에 멈출 수 있는 자리"
+  zones={[
+    { id: "device", label: "사용자 기기", x: 10, y: 14, w: 180, h: 190, tone: "neutral" },
+    { id: "edge", label: "CDN", x: 200, y: 14, w: 90, h: 190, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "page", label: "페이지", x: 55, y: 60, icon: "client", w: 80 },
+    { id: "http", label: "HTTP 캐시", sub: "max-age", x: 140, y: 60, icon: "db", w: 90 },
+    { id: "sw", label: "SW 캐시", sub: "Cache Storage", x: 100, y: 160, icon: "container", w: 100 },
+    { id: "cdn", label: "엣지", sub: "s-maxage", x: 245, y: 110, icon: "server", w: 80 },
+    { id: "origin", label: "원 서버", x: 350, y: 110, icon: "server", w: 80 },
+  ]}
+  links={[
+    { from: "page", to: "sw" },
+    { from: "sw", to: "http" },
+    { from: "page", to: "http" },
+    { from: "http", to: "cdn" },
+    { from: "cdn", to: "origin" },
+  ]}
+  steps={[
+    { path: ["page", "http"], packet: "main.js", title: "해시 붙은 파일은 기기에서 끝난다", detail: "파일 이름에 내용 해시가 있으면 1년짜리 immutable을 줄 수 있다. 다시 방문하면 요청이 아예 나가지 않는다." },
+    { path: ["page", "sw"], packet: "/", title: "Service Worker가 먼저 받는다", detail: "오프라인이거나 망이 느릴 때 SW 캐시에서 페이지를 돌려줄 수 있다. 무엇을 먼저 볼지는 전략으로 정한다." },
+    { path: ["page", "http", "cdn"], packet: "img", title: "기기에 없으면 가까운 엣지로", detail: "CDN이 들고 있으면 원 서버까지 가지 않는다. 왕복이 짧아지고 원 서버 부하도 준다." },
+    { path: ["page", "http", "cdn", "origin"], packet: "/api", title: "끝까지 가야 하는 요청", detail: "사용자마다 다른 응답은 원 서버까지 간다. 여기서는 같은 화면 안의 중복을 줄이는 클라이언트 캐시가 맡는다." },
+  ]}
+/>
+
+브라우저 쪽 캐시와 Service Worker는 [프런트엔드 캐시](/posts/frontend-browser-cache), 응답 헤더와 CDN은 [HTTP 캐시와 CDN](/posts/http-caching-cdn), 같은 API를 여러 컴포넌트가 부를 때 요청을 합치는 일은 [화면 데이터 캐시](/posts/client-data-cache)에서 다룬다. 캐시는 첫 방문을 빠르게 하지 못한다는 점은 기억해 둔다. 실사용자 측정에서 첫 방문과 재방문을 나눠 보는 이유다.
+
+## 덜 보내기
+
+첫 방문에서 가장 큰 효과는 대개 바이트를 줄이는 데서 나온다. 무엇이 큰지는 종류별로 본다.
+
+JS는 받는 것보다 실행이 비싸다. 같은 100KB라도 이미지는 디코딩하면 끝이지만 JS는 파싱, 컴파일, 실행을 거치고 그동안 메인 스레드를 쓴다. 번들러가 무엇을 하는지는 [번들러 기초](/posts/bundler-basics), 번들을 나누고 안 쓰는 코드를 덜어 내는 법은 [번들 쪼개기](/posts/code-splitting), 나눈 조각을 언제 받을지는 [지연 로딩 전략](/posts/lazy-loading-strategies)에 있다.
+
+이미지는 바이트로는 가장 큰 경우가 많고 LCP 요소인 경우도 많다. 포맷, 반응형 크기, 지연 로딩과 우선순위는 [이미지 최적화](/posts/image-optimization)에서 다룬다. 한글 웹폰트는 글자 수 때문에 파일이 유난히 크다. 서브셋과 `font-display`는 [웹폰트 최적화](/posts/web-font-optimization)에, 안 쓰는 CSS와 CSS-in-JS의 런타임 비용은 [CSS 성능](/posts/css-performance)에 있다.
+
+데이터도 바이트다. 목록 화면이 상세 필드까지 받으면 압축해도 열 배 넘게 크다. 필드 고르기와 압축 단계 선택은 [데이터 요청 최적화](/posts/data-fetching-optimization)에서 쟀다.
+
+## 일찍 보내기
+
+같은 바이트라도 언제 출발하느냐에 따라 화면이 뜨는 시각이 다르다. 브라우저는 HTML을 읽어야 CSS와 스크립트를 알고, 스크립트를 실행해야 데이터 요청을 알고, CSS를 받아야 폰트를 안다. 이 "알게 되는 순서"가 길면 회선이 놀고 있어도 요청이 늦게 나간다. 아래 그림에서 단계를 넘기며 늦게 발견되는 리소스를 따라가 보자.
+
+<SequenceDiagram
+  caption="늦게 발견되는 리소스와 앞당기는 손잡이"
+  actors={[
+    { id: "br", label: "브라우저" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "br", to: "srv", label: "GET /", title: "HTML을 요청한다", detail: "서버가 HTML을 늦게 주면 그 뒤의 모든 것이 늦다. TTFB는 서버 렌더링 방식과 캐시가 정한다." },
+    { from: "srv", to: "br", label: "HTML", title: "HTML을 읽으며 CSS와 스크립트를 찾는다", detail: "프리로드 스캐너가 앞질러 읽고 요청을 미리 보낸다. head의 CSS는 다 올 때까지 첫 페인트를 막는다." },
+    { from: "br", to: "srv", label: "GET font.woff2", title: "폰트는 CSS를 읽어야 안다", detail: "CSS가 와서 그 글꼴을 쓰는 요소가 있어야 요청이 나간다. preload로 앞당길 수 있다." },
+    { from: "br", to: "srv", label: "GET hero.jpg", title: "JS가 만든 이미지는 실행 뒤에 안다", detail: "CSR 화면의 LCP 이미지는 JS가 실행되어야 발견된다. 서버 HTML에 넣거나 preload와 fetchpriority로 앞당긴다." },
+    { from: "br", to: "srv", label: "GET /api", title: "데이터는 컴포넌트가 그려져야 안다", detail: "컴포넌트 안에서 부르면 트리 깊이만큼 계단이 생긴다. 진입 시점에 함께 출발시킨다." },
+  ]}
+/>
+
+리소스 힌트(`preload`, `preconnect`, `fetchpriority`)는 [리소스 힌트](/posts/resource-hints-loading)에서, HTML을 어디서 만들지(CSR, SSR, SSG, 스트리밍)는 [렌더링 전략 비교](/posts/rendering-strategies)와 [스트리밍 SSR](/posts/streaming-ssr-suspense)에서, 데이터 요청의 계단은 [데이터 요청 최적화](/posts/data-fetching-optimization)에서, 연결 수와 프로토콜 차이는 [HTTP 버전](/posts/http-versions)에서 다룬다.
+
+일찍 보내기에는 대가가 있다. 모든 것을 앞당기면 결국 모두가 같은 회선을 다툰다. `preload`를 열 개 붙이면 진짜 급한 LCP 이미지가 그 사이에 끼어 늦어진다. 앞당기는 건 늦게 발견되는 핵심 리소스 몇 개뿐이다.
+
+## 덜 그리기
+
+바이트가 다 와도 브라우저는 스타일을 계산하고, 배치하고, 칠하고, 합성해야 화면을 만든다. DOM이 크거나, 스크롤하거나 애니메이션할 때마다 배치를 다시 하게 만들면 이 단계가 프레임 예산 16.7ms를 넘긴다. 단계 하나하나와 각 단계를 깨우는 원인은 [브라우저 렌더링 파이프라인](/posts/browser-rendering-pipeline)에, 그걸 바탕으로 한 최적화(레이아웃 스래싱 피하기, `content-visibility`, 긴 목록 가상화)는 [렌더링 성능 최적화](/posts/rendering-performance-optimization)에 있다.
+
+움직이는 것은 합성 단계에서 끝나게 만든다. `transform`과 `opacity`만 바꾸는 애니메이션은 레이아웃과 페인트를 건너뛴다. 이 부분은 [애니메이션 성능](/posts/animation-performance)에서 트레이스로 쟀다. React 화면에서는 브라우저가 그리기 전에 React가 다시 렌더링하는 양부터 줄인다. 그건 [React는 언제 다시 그리나](/posts/react-rerender)에서 다룬다.
+
+## 덜 실행하기
+
+메인 스레드는 하나다. JS 실행, 스타일과 레이아웃, 입력 처리가 모두 그 위에서 줄을 선다. 50ms를 넘는 긴 작업이 있으면 그동안 눌러도 반응하지 않고, 이게 INP를 나쁘게 만든다. 이벤트 루프가 일을 어떻게 고르는지는 [이벤트 루프](/posts/event-loop)에, 긴 작업을 쪼개서 입력에 양보하는 법은 [Core Web Vitals의 INP 부분](/posts/core-web-vitals)에 있다.
+
+서버에서 HTML을 그려 보내는 페이지는 하이드레이션이 큰 몫을 차지한다. 비용과 불일치는 [하이드레이션](/posts/hydration)에, 필요한 곳만 살리는 방식은 [아일랜드와 재개 가능성](/posts/islands-resumability)에 있다. 지연 로딩 글에서 쟀듯이 하이드레이션을 미루면 JS 실행은 줄지만 큰 DOM의 비용은 남는다. 손잡이 하나로 모든 게 풀리지 않는 예다.
+
+입력마다 무거운 일을 하는 코드는 횟수를 줄인다([디바운스와 스로틀](/posts/debounce-throttle)). 오래 쓰는 화면이 점점 느려진다면 메모리 누수를 의심한다([메모리 누수](/posts/js-memory-leak)).
+
+## 증상에서 손잡이로
+
+현장에서는 지표 이름보다 증상으로 문제가 들어온다. 아래 그림은 흔한 증상을 하나씩 짚으며 어느 손잡이부터 볼지 적어 둔 것이다.
+
+<AlgoTrace
+  caption="증상을 보고 먼저 돌려 볼 손잡이"
+  memoryLabel="먼저 볼 곳"
+  cells={["첫 화면이 하얗다", "사진이 늦다", "눌러도 늦다", "화면이 밀린다", "재방문도 느리다", "스크롤이 끊긴다"]}
+  steps={[
+    { pointer: 0, memory: ["TTFB", "막는 CSS·JS"], caption: "FCP가 늦다. 서버 응답이 늦은지, head의 CSS와 동기 스크립트가 첫 페인트를 막는지 본다." },
+    { pointer: 1, memory: ["발견 시점", "이미지 크기"], caption: "LCP가 늦다. LCP 요소가 언제 발견되고 무엇과 회선을 다투는지 본다. lazy가 붙어 있지 않은지도." },
+    { pointer: 2, memory: ["긴 작업", "하이드레이션"], caption: "INP가 나쁘다. 누른 순간 메인 스레드에서 돌던 긴 작업과, 핸들러 뒤의 렌더링 양을 본다." },
+    { pointer: 3, memory: ["자리 잡기", "폰트 교체"], caption: "CLS가 높다. 크기 없는 이미지, 늦게 들어오는 배너, 폰트 교체로 바뀌는 글자 폭을 본다." },
+    { pointer: 4, memory: ["캐시 헤더"], caption: "다시 와도 느리다. 해시 없는 파일 이름, no-cache, 배포마다 바뀌는 청크 이름을 본다." },
+    { pointer: 5, memory: ["레이아웃", "페인트"], caption: "스크롤이 끊긴다. 스크롤 핸들러에서 배치를 읽고 쓰는지, 큰 영역을 다시 칠하는지 트레이스로 본다." },
+  ]}
+/>
+
+## 좋아진 숫자가 되돌아가지 않게
+
+성능은 고친 날보다 그다음 몇 달이 어렵다. 기능이 붙을 때마다 라이브러리가 하나씩 들어오고, 누구도 그 하나 때문에 느려졌다고 느끼지 못한다. 그래서 숫자로 한도를 정해 둔다. 이걸 성능 예산(performance budget)이라고 한다. "첫 로드 JS는 압축해서 170KB 이하", "LCP p75는 2.5초 이하" 같은 식이다.
+
+예산은 CI에서 검사해야 효과가 있다. 빌드 결과의 파일 크기를 재서 넘으면 실패시키고, 실험실 측정을 같은 조건으로 돌려 지표가 크게 나빠지면 경고한다. 실사용자 숫자는 배포 버전별로 나눠 봐서 어느 배포부터 나빠졌는지 찾는다.
+
+아래 함수는 첫 로드에 받은 리소스 목록과 종류별 예산(KB)을 받아 예산을 넘긴 종류와 넘긴 양을 돌려준다. 순서는 예산에 적힌 순서를 따르고, 예산이 없는 종류는 검사하지 않는다.
+
+<CodePlayground
+  caption="성능 예산 검사"
+  functionName="overBudget"
+  initialCode={`function overBudget(resources, budgets) {
+  // resources: [{ type, kb }]  budgets: { script: 170, image: 300, ... }
+  // 종류별 합이 예산을 넘으면 [type, 넘긴 kb]를 budgets 순서대로 모은다
+  return [];
+}`}
+  solution={`function overBudget(resources, budgets) {
+  const sum = {};
+  for (const r of resources) sum[r.type] = (sum[r.type] || 0) + r.kb;
+  return Object.keys(budgets)
+    .filter((t) => (sum[t] || 0) > budgets[t])
+    .map((t) => [t, sum[t] - budgets[t]]);
+}`}
+  tests={[
+    { label: "스크립트 두 개가 넘친다", args: [[{ type: "script", kb: 120 }, { type: "script", kb: 90 }, { type: "image", kb: 200 }, { type: "font", kb: 40 }], { script: 170, image: 300, font: 100 }], expected: [["script", 40]] },
+    { label: "미룬 버전은 통과", args: [[{ type: "script", kb: 70 }, { type: "image", kb: 116 }], { script: 170, image: 300, font: 100 }], expected: [] },
+    { label: "여러 종류가 넘친다", args: [[{ type: "image", kb: 116 }, { type: "image", kb: 116 }, { type: "image", kb: 116 }, { type: "font", kb: 120 }, { type: "script", kb: 170 }], { script: 170, image: 300, font: 100 }], expected: [["image", 48], ["font", 20]] },
+    { label: "예산 없는 종류는 무시", args: [[{ type: "video", kb: 5000 }], { script: 170, image: 300, font: 100 }], expected: [] },
+    { label: "즉시 받는 버전의 JS", args: [[{ type: "script", kb: 69 }, { type: "script", kb: 80 }, { type: "script", kb: 80 }, { type: "image", kb: 116 }], { script: 170, image: 300, font: 100 }], expected: [["script", 59]] },
+  ]}
+/>
+
+## 페이지 하나를 점검할 때 보는 목록
+
+새 페이지를 내보내기 전이나 느리다는 이야기를 들었을 때 위에서부터 훑는다. 항목마다 자세한 글을 붙였다.
+
+1. 느린 기기 조건으로 재고, 실사용자 p75와 비교한다. [성능 지표 측정](/posts/performance-metrics-measurement), [Core Web Vitals](/posts/core-web-vitals)
+2. 해시 붙은 정적 파일에 긴 캐시를 주고 있나. [프런트엔드 캐시](/posts/frontend-browser-cache), [HTTP 캐시와 CDN](/posts/http-caching-cdn)
+3. 첫 로드 JS에 첫 화면이 안 쓰는 코드가 있나. Coverage 탭으로 본다. [번들 쪼개기](/posts/code-splitting), [지연 로딩 전략](/posts/lazy-loading-strategies)
+4. LCP 요소가 HTML에 있고, lazy가 없고, 적당한 크기와 포맷인가. [이미지 최적화](/posts/image-optimization), [리소스 힌트](/posts/resource-hints-loading)
+5. 폰트가 글자를 오래 숨기거나 화면을 밀지 않나. [웹폰트 최적화](/posts/web-font-optimization)
+6. 첫 페인트를 막는 CSS가 크지 않나. [CSS 성능](/posts/css-performance)
+7. 데이터 요청이 계단을 이루거나 중복되지 않나. [데이터 요청 최적화](/posts/data-fetching-optimization)
+8. 서드파티 스크립트와 임베드가 첫 로드에 끼어 있지 않나. [지연 로딩 전략](/posts/lazy-loading-strategies)
+9. 누른 순간 긴 작업이 돌지 않나. 하이드레이션이 얼마나 걸리나. [하이드레이션](/posts/hydration), [이벤트 루프](/posts/event-loop)
+10. 스크롤과 애니메이션이 레이아웃을 깨우지 않나. [렌더링 성능 최적화](/posts/rendering-performance-optimization), [애니메이션 성능](/posts/animation-performance)
+
+번호는 대략 효과가 넓은 순서다. 1번에서 어느 지표가 나쁜지 정했다면 그 지표에 묶인 항목부터 본다. 앞의 측정처럼 LCP가 망에 묶여 있으면 2~8번이, 긴 작업이 CPU에 묶여 있으면 3번과 9번이 먼저다.
+
+## 다시 4.2초로
+
+노트북의 260ms와 휴대폰의 4,212ms는 같은 코드에서 나왔다. 조건을 하나씩 켜 보면 LCP는 망에, 긴 작업은 CPU에 묶여 있었고, 첫 로드에서 덜 보내는 손잡이 하나가 두 숫자를 함께 내렸다. 성능 작업은 기법 목록을 하나씩 적용하는 일이 아니라, 사용자 조건에서 재고, 나쁜 지표가 무엇에 묶였는지 보고, 그 지표에 닿는 손잡이부터 돌린 뒤 다시 재는 반복이다.
+
+## 면접에서 나올 만한 질문
+
+### 프런트엔드 성능을 개선하라고 하면 무엇부터 하나요?
+
+재는 것부터 한다. 실사용자 측정으로 어느 페이지와 기기층의 어떤 지표가 나쁜지 찾고, 그 조건을 실험실에서 재현해 원인을 본다. 고친 뒤에는 같은 조건으로 다시 재고, 실사용자 p75로 확인한다. 측정 없이 기법부터 적용하면 체감은 그대로인데 코드만 복잡해지기 쉽다.
+
+### 실험실 측정과 실사용자 측정은 어떻게 다르고, 왜 둘 다 필요한가요?
+
+실험실 측정은 정해진 조건에서 재서 비교와 원인 추적이 쉽지만 실제 사용자의 기기와 망을 모른다. 실사용자 측정은 진짜 분포를 보여 주지만 흩어져 있고 원인을 바로 말해 주지 않는다. 실사용자 숫자로 문제를 찾고 실험실에서 원인을 고친 뒤 다시 실사용자 숫자로 확인하는 식으로 같이 쓴다.
+
+### 실사용자 지표를 평균이 아니라 p75로 보는 이유는?
+
+평균은 빠른 다수가 느린 소수를 가리기 때문이다. 고성능 기기 사용자가 많으면 평균은 좋아 보여도 하위 사용자는 여전히 느리다. p75는 사용자 넷 중 셋이 그보다 빠르다는 뜻이라 느린 쪽을 놓치지 않으면서 극단값에 흔들리지 않는다. Core Web Vitals의 기준도 p75로 판정한다.
+
+### 성능 최적화 기법들을 어떤 순서로 보나요?
+
+다시 보내지 않기, 덜 보내기, 일찍 보내기, 덜 그리기, 덜 실행하기 순서로 본다. 위쪽일수록 효과가 아래로 번진다. 보내지 않은 바이트는 파싱하고 실행할 필요도 없어서, 예제에서 덜 보내기 하나로 LCP와 긴 작업이 함께 줄었다. 다만 INP처럼 상호작용 중의 문제는 메인 스레드 쪽에서만 풀린다.
+
+### 어떤 지표가 망에 묶였는지 CPU에 묶였는지 어떻게 아나요?
+
+망 제한과 CPU 제한을 하나씩 따로 켜서 잰다. 예제에서 망만 느리게 하자 LCP가 260ms에서 3912ms로, CPU만 느리게 하자 긴 작업이 53ms에서 483ms로 뛰었다. 망에 묶인 지표는 바이트와 요청 순서를, CPU에 묶인 지표는 실행량을 줄여야 움직인다.
+
+### 성능 예산은 왜 두고 어떻게 지키나요?
+
+기능이 붙을 때마다 조금씩 느려지는 것을 막으려고 둔다. 하나하나는 티가 안 나서 아무도 눈치채지 못하기 때문이다. 종류별 바이트나 지표 기준을 숫자로 정하고, CI에서 빌드 결과 크기와 실험실 측정을 검사해 넘으면 실패시킨다. 실사용자 숫자는 배포 버전별로 나눠 보면 어느 배포부터 나빠졌는지 찾을 수 있다.

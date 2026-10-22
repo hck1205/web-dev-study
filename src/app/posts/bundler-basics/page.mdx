@@ -1,0 +1,523 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("bundler-basics");
+
+webpack 4에서 5로 올리고 배포했더니 화면이 하얗다. 콘솔에는 한 줄만 있다.
+
+```text
+Uncaught ReferenceError: process is not defined
+```
+
+코드는 한 줄도 안 바꿨다. `process.env.API_URL`을 읽는 코드는 몇 년째 그 자리에 있었다. 달라진 건 번들러다. webpack 4는 브라우저에 없는 Node의 `process`를 몰래 채워 넣어 주고 있었고, 5는 그걸 그만뒀다. 그동안 우리 코드가 브라우저에서 돈 게 아니라, 번들러가 고쳐 쓴 코드가 돌고 있었던 셈이다.
+
+이 글은 그 "고쳐 쓰기"를 단계별로 뜯어 본다. import 한 줄이 어떤 파일로 찾아지는지, 묶인 결과물 안에 무엇이 들어가는지, 개발 서버와 프로덕션 빌드가 왜 다른 일을 하는지, 문법 변환과 폴리필이 어떻게 다른지를 실제 빌드 결과로 본다. 청크를 나누고 안 쓰는 코드를 털어 내는 이야기는 [코드 스플리팅과 트리 셰이킹](/posts/code-splitting)에서, 모듈 시스템 자체는 [ES 모듈](/posts/js-es-modules)에서 다뤘으니 여기서는 넘어간다.
+
+실험은 Node 22.22, esbuild 0.28.2, webpack 5.112, Rollup 4.64, Rolldown 1.2, Vite 8.3, Rspack 2.2, Babel 8.0, Chromium 141에서 돌렸다. 출력의 긴 임시 경로는 `…/fe5`로 줄였다.
+
+## 진입점 하나에서 dist까지
+
+번들러가 하는 일을 한 문장으로 줄이면 "진입점에서 닿는 모든 모듈을 찾아서, 브라우저가 바로 먹을 수 있는 몇 개의 파일로 다시 쓰는 것"이다. 이 안에 단계가 여럿 있다. 아래 그림에서 다음을 누르면 `src/main.js` 하나가 `dist`의 파일이 되기까지를 따라간다.
+
+<NetworkTopology
+  width={420}
+  height={280}
+  caption="번들러 안에서 모듈 하나가 지나는 길"
+  zones={[
+    { id: "build", label: "번들러", x: 110, y: 15, w: 215, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "src", label: "src/main.js", x: 50, y: 60, icon: "client", w: 90 },
+    { id: "resolve", label: "resolve", sub: "경로 찾기", x: 165, y: 60, icon: "dns", w: 90 },
+    { id: "transform", label: "transform", sub: "TS·JSX → JS", x: 270, y: 60, icon: "container", w: 90 },
+    { id: "graph", label: "module graph", x: 270, y: 140, icon: "switch", w: 90 },
+    { id: "chunk", label: "chunk", sub: "묶기·나누기", x: 165, y: 140, icon: "router", w: 90 },
+    { id: "minify", label: "minify", sub: "+ source map", x: 165, y: 220, icon: "gateway", w: 90 },
+    { id: "dist", label: "dist/*.js", x: 370, y: 220, icon: "server", w: 90 },
+  ]}
+  links={[
+    { from: "src", to: "resolve" },
+    { from: "resolve", to: "transform" },
+    { from: "transform", to: "graph" },
+    { from: "graph", to: "resolve", dashed: true, label: "새 import" },
+    { from: "graph", to: "chunk" },
+    { from: "chunk", to: "minify" },
+    { from: "minify", to: "dist" },
+  ]}
+  steps={[
+    { path: ["src", "resolve"], packet: "./main.js", title: "진입점을 받는다", detail: "설정에 적힌 entry 경로에서 시작한다. 이 파일이 실제로 어디 있는지부터 확인한다." },
+    { path: ["resolve", "transform"], packet: "읽기", title: "파일을 읽어 고쳐 쓴다", detail: "TypeScript 타입을 지우고 JSX를 함수 호출로 바꾸는 등 브라우저가 모르는 문법을 없앤다. webpack은 loader, Rollup·Vite는 plugin이 이 일을 한다." },
+    { path: ["transform", "graph"], packet: "AST", title: "import를 찾아 그래프에 넣는다", detail: "코드를 구문 트리로 바꾼 뒤 import와 export를 모두 적어 둔다. 실행하지 않고도 누가 무엇을 쓰는지 안다." },
+    { path: ["graph", "resolve"], packet: "lodash-es", title: "새 import마다 처음으로 돌아간다", detail: "그래프에 새로 생긴 경로를 하나씩 다시 resolve하고 transform한다. 더 찾을 게 없을 때까지 반복한다." },
+    { path: ["graph", "chunk"], packet: "3644개", title: "모듈을 파일 단위로 나눈다", detail: "진입점과 동적 import를 기준으로 어떤 모듈이 어느 출력 파일에 들어갈지 정한다. 안 쓰는 export는 여기서 빠진다." },
+    { path: ["chunk", "minify", "dist"], packet: "main.js", title: "줄이고, 지도를 만들고, 쓴다", detail: "공백과 긴 이름을 줄이고, 줄어든 코드가 원래 어느 줄이었는지 적은 source map을 함께 만든다. 파일 이름에 내용 해시를 붙여 dist에 쓴다." },
+  ]}
+/>
+
+이 중 resolve, transform, 그래프 만들기는 모듈마다 반복하고, 청크 나누기와 압축은 그래프가 다 만들어진 뒤에 한 번 한다. 그래서 모듈이 수천 개가 되면 앞쪽 반복이 빌드 시간을 좌우하고, 큰 출력 파일을 만들 때는 압축이 시간을 잡아먹는다. 뒤에서 실제 숫자로 본다.
+
+## import 한 줄이 실제 파일이 되기까지
+
+`import { debounce } from "lodash-es"`에는 경로가 없다. 이걸 디스크의 파일 하나로 바꾸는 게 resolve다. esbuild에 `--log-level=verbose`를 주면 이 과정을 그대로 보여 준다. 필요한 줄만 남겼다.
+
+```bash
+# 해석 과정을 자세히 찍는다. 결과 파일은 버린다
+npx esbuild src/r.js --bundle --format=esm --outfile=/dev/null --log-level=verbose
+```
+
+```text
+⬥ [VERBOSE] Resolving import "lodash-es" in directory "…/fe5/tiny/src" of type "import-statement"
+  Searching for "lodash-es" in "node_modules" directories starting from "…/fe5/tiny/src"
+    Checking for a package in the directory "…/fe5/node_modules/lodash-es"
+    The file "…/fe5/node_modules/lodash-es/package.json" exists
+      Searching for main fields in "…/fe5/node_modules/lodash-es/package.json"
+        Did not find main field "browser"
+        Found main field "module" with path "lodash.js"
+        Resolved to "…/fe5/node_modules/lodash-es/lodash.js" using the "module" field in "…/fe5/node_modules/lodash-es/package.json"
+  Marking this file as having no side effects due to "…/fe5/node_modules/lodash-es/package.json"
+⬥ [VERBOSE] Resolving import "react" in directory "…/fe5/tiny/src" of type "import-statement"
+    Looking for "." in "exports" map in "…/fe5/node_modules/react/package.json"
+      Checking condition map for one of ["browser", "default", "import", "module"]
+      Resolved to "…/fe5/node_modules/react/index.js"
+⬥ [VERBOSE] Resolving import "./cjs/react.development.js" in directory "…/fe5/node_modules/react" of type "require-call"
+```
+
+두 패키지가 서로 다른 길로 찾아졌다. 아래 그림에서 `react` 쪽을 한 칸씩 따라가 보자.
+
+<AlgoTrace
+  caption="bare import를 파일 하나로 바꾸는 순서"
+  memoryLabel="정해진 것"
+  cells={["src/node_modules", "tiny/node_modules", "fe5/node_modules", "package.json", "exports", "index.js"]}
+  steps={[
+    { pointer: 0, caption: "import한 파일의 폴더부터 node_modules를 찾는다. 여기엔 없다." },
+    { pointer: 1, caption: "한 단계 위로 올라간다. 여기도 없다." },
+    { pointer: 2, found: [2], memory: ["react 폴더"], caption: "다시 위로. fe5/node_modules/react가 있다. 패키지를 찾았다." },
+    { pointer: 3, memory: ["react 폴더", "exports 있음"], caption: "package.json을 읽는다. exports 필드가 있으면 main, module보다 이걸 먼저 본다." },
+    { pointer: 4, memory: ["react 폴더", "exports 있음", "조건: browser"], caption: "조건 목록을 위에서부터 맞춰 본다. 번들러가 지금 어떤 환경용으로 빌드하는지에 따라 고르는 칸이 달라진다." },
+    { pointer: 5, found: [2, 5], memory: ["react 폴더", "exports 있음", "조건: browser", "index.js"], caption: "react/index.js로 정해졌다. 이 파일이 다시 require로 development나 production 파일을 부른다." },
+  ]}
+/>
+
+순서를 말로 정리하면 이렇다. 상대 경로가 아니면 가장 가까운 `node_modules`부터 위로 올라가며 패키지 폴더를 찾는다. 찾으면 `package.json`의 `exports`를 먼저 보고, 없을 때만 `browser`, `module`, `main` 같은 필드를 번들러가 정한 순서대로 본다. `exports`의 조건 이름(`browser`, `import`, `require`, `default` 등)은 번들러 설정의 대상 환경을 따라 고른다. Node 쪽 규칙은 [ES 모듈 글의 exports 부분](/posts/js-es-modules)에 있다.
+
+같은 패키지가 환경에 따라 다른 파일로 갈 수 있다는 점이 실무에서 자주 문제를 일으킨다. 서버용 빌드에서 잘 되던 라이브러리가 브라우저 빌드에서는 `browser` 조건 때문에 다른 파일을 집거나, 반대로 브라우저 조건이 없는 패키지가 Node 전용 코드를 끌고 온다. 로그에 찍힌 "Marking this file as having no side effects"도 resolve 단계에서 정해진다. `package.json`의 `sideEffects: false`를 읽어 둔 것이고, 뒤의 트리 셰이킹이 이 정보를 쓴다.
+
+## 묶은 파일 안에는 무엇이 들어가나
+
+두 파일짜리 앱을 묶어 보면 번들러마다 출력 모양이 확연히 다르다.
+
+```js
+// src/format.js
+export const formatPrice = (n) => n.toLocaleString("ko-KR") + "원";
+export const unusedHelper = () => "never";
+
+// src/main.js
+import { formatPrice } from "./format.js";
+console.log(formatPrice(12900));
+```
+
+esbuild로 묶으면(압축 없이) 이렇게 나온다.
+
+```text
+// src/format.js
+var formatPrice = (n) => n.toLocaleString("ko-KR") + "원";
+
+// src/main.js
+console.log(formatPrice(12900));
+```
+
+모듈 경계가 사라지고 두 파일이 한 스코프로 펼쳐졌다. 이걸 스코프 호이스팅(scope hoisting)이라고 한다. 쓰지 않은 `unusedHelper`는 이미 빠졌다. "원"이 `원`이 된 건 esbuild가 기본으로 ASCII만 내보내서다. `--charset=utf8`을 주면 글자 그대로 남는다.
+
+webpack에서 모듈 합치기(`concatenateModules`)를 끄고 같은 앱을 묶으면 모듈마다 함수가 하나씩 생기고, 이를 부르는 작은 런타임이 붙는다. 주석과 일부 런타임을 줄였다.
+
+```text
+/******/ (() => { // webpackBootstrap
+/******/ 	var __webpack_modules__ = ({
+/***/ 254
+(__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) {
+/* unused harmony export unusedHelper */
+const formatPrice = (n) => n.toLocaleString("ko-KR") + "원";
+const unusedHelper = () => "never";
+/* harmony export */ __webpack_require__.d(__webpack_exports__, [
+/* harmony export */   "$", 0, /* binding */ formatPrice
+/* harmony export */ ]);
+/***/ }
+/******/ 	});
+/******/ 	const __webpack_module_cache__ = {};
+/******/ 	function __webpack_require__(moduleId) {
+/******/ 		const cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
+/******/ 		}
+/******/ 		const module = __webpack_module_cache__[moduleId] = { exports: {} };
+/******/ 		__webpack_modules__[moduleId](module, module.exports, __webpack_require__);
+/******/ 		return module.exports;
+/******/ 	}
+// … __webpack_require__.d, .o 정의 생략 …
+let __webpack_exports__ = {};
+/* harmony import */ var _format_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(254);
+console.log((0,_format_js__WEBPACK_IMPORTED_MODULE_0__/* .formatPrice */ .$)(12900));
+/******/ })()
+```
+
+`unusedHelper`는 "unused harmony export"라는 표시만 받고 아직 남아 있다. 이 상태에서 압축기(terser)가 쓰이지 않는 변수로 보고 지운다. webpack은 표시하고, 압축기가 지우는 두 단계로 트리 셰이킹을 한다. 프로덕션 모드의 기본값은 `concatenateModules: true`라서 실제로는 esbuild처럼 합쳐 주지만, 합칠 수 없는 모듈(CommonJS, 여러 청크가 함께 쓰는 모듈 등)은 이 모양으로 남는다. 아래 그림은 이 런타임이 `formatPrice`를 꺼내는 순서다.
+
+<SequenceDiagram
+  caption="webpack 런타임이 모듈 하나를 꺼내는 순서"
+  actors={[
+    { id: "main", label: "진입 코드" },
+    { id: "req", label: "__webpack_require__" },
+    { id: "cache", label: "모듈 캐시" },
+    { id: "mod", label: "모듈 254" },
+  ]}
+  steps={[
+    { from: "main", to: "req", label: "require(254)", title: "숫자 id로 모듈을 부른다", detail: "파일 경로 대신 빌드 때 정한 id를 쓴다. 프로덕션에서는 모듈 경로를 해시한 짧은 숫자다." },
+    { from: "req", to: "cache", label: "있나?", title: "캐시부터 본다", detail: "같은 모듈은 한 번만 실행한다. ES 모듈의 '한 번만 평가' 규칙을 흉내 낸 것이다." },
+    { from: "cache", to: "req", label: "없음", title: "처음이라 비어 있다", detail: "빈 exports 객체를 만들어 캐시에 먼저 넣는다. 순환 import가 있어도 무한히 돌지 않는 이유다." },
+    { from: "req", to: "mod", label: "함수 실행", title: "모듈 함수를 한 번 부른다", detail: "모듈의 최상위 코드가 이때 실행된다. 함수 하나가 모듈 스코프 역할을 한다." },
+    { from: "mod", to: "req", label: "exports.$", title: "getter로 내보낸다", detail: "formatPrice를 이름 $로 exports에 붙인다. 압축 때 긴 이름을 줄이려고 짧은 이름을 붙였다." },
+    { from: "req", to: "main", label: "exports", title: "호출할 때마다 꺼내 쓴다", detail: "(0, m.$)(12900)처럼 부른다. this가 exports 객체로 묶이지 않게 하는 장치다." },
+  ]}
+/>
+
+이 구조를 알아 두면 운영에서 보이는 낯선 스택 트레이스를 읽을 수 있다. `__webpack_require__`가 줄줄이 찍히면 모듈 최상위 코드에서 난 에러이고, `ChunkLoadError`는 이 런타임이 다른 청크를 받으려다 실패한 것이다. 모듈 함수로 감싸는 방식 자체는 [IIFE와 모듈 패턴](/posts/js-iife-module-pattern)에서 본 그 모양이다.
+
+## 직접 그래프를 펼쳐 보기
+
+번들러가 모듈 순서를 정하는 방법 자체는 단순하다. 진입점에서 깊이 우선으로 내려가면서 의존성을 먼저 넣고 자기 자신을 나중에 넣는다. 한 번 본 모듈은 다시 보지 않는다. ES 모듈의 평가 순서와 같다. 아래에서 `graph`(모듈마다 import하는 모듈 목록)와 `entry`를 받아 실행 순서를 돌려주는 함수를 만들어 보자.
+
+<CodePlayground
+  caption="모듈 그래프에서 실행 순서 구하기"
+  functionName="buildOrder"
+  initialCode={`function buildOrder(graph, entry) {
+  // graph: { "main.js": ["cart.js", "format.js"], ... }
+  // 1. 의존성을 먼저 방문하고, 자기 자신은 마지막에 넣는다
+  // 2. 이미 본 모듈은 건너뛴다 (순환 import 대비)
+  // 3. entry에서 닿지 않는 모듈은 넣지 않는다
+  return [];
+}`}
+  solution={`function buildOrder(graph, entry) {
+  const visited = new Set();
+  const order = [];
+  function visit(id) {
+    if (visited.has(id)) return;
+    visited.add(id);
+    for (const dep of graph[id] ?? []) visit(dep);
+    order.push(id);
+  }
+  visit(entry);
+  return order;
+}`}
+  tests={[
+    { args: [{ "main.js": ["cart.js", "format.js"], "cart.js": ["format.js"], "format.js": [] }, "main.js"], expected: ["format.js", "cart.js", "main.js"], label: "공통 의존성은 한 번만" },
+    { args: [{ "main.js": ["a.js", "b.js"], "a.js": ["c.js"], "b.js": ["c.js"], "c.js": [] }, "main.js"], expected: ["c.js", "a.js", "b.js", "main.js"], label: "다이아몬드 모양" },
+    { args: [{ "main.js": [] }, "main.js"], expected: ["main.js"], label: "의존성 없음" },
+    { args: [{ "main.js": ["a.js"], "a.js": ["b.js"], "b.js": ["a.js"] }, "main.js"], expected: ["b.js", "a.js", "main.js"], label: "순환 import" },
+    { args: [{ "main.js": ["a.js"], "a.js": [], "admin.js": ["a.js"] }, "main.js"], expected: ["a.js", "main.js"], label: "닿지 않는 admin.js" },
+    { args: [{ "main.js": ["b.js", "a.js"], "a.js": [], "b.js": [] }, "main.js"], expected: ["b.js", "a.js", "main.js"], label: "import 순서를 지킨다" },
+  ]}
+/>
+
+순환 테스트를 보면 `b.js`가 `a.js`보다 먼저 실행된다. 그 시점의 `a.js`는 아직 평가 전이라, `b.js`의 최상위 코드가 `a.js`의 값을 바로 쓰면 TDZ 에러나 `undefined`가 난다. 번들을 해도 이 문제는 사라지지 않는다. 다섯 번째 테스트처럼 진입점에서 닿지 않는 `admin.js`가 빠지는 게 번들러가 "쓰지 않는 파일"을 결과물에 넣지 않는 기본 원리다.
+
+## 개발 서버는 묶지 않는다
+
+같은 3000개 모듈 앱을 Vite 8의 개발 서버와 프로덕션 빌드로 각각 띄우고 Chromium으로 열어 봤다. 모듈은 이진 트리 모양으로 서로 import하고, `lodash-es`의 `debounce`를 하나 쓴다.
+
+```text
+dev       requests 3005 loadEventEnd 6295ms body KB 8273 [ '/node_modules/.vite/deps/lodash-es.js' ]
+dev(2nd)  requests 3005 loadEventEnd 4416ms body KB 8273 [ '/node_modules/.vite/deps/lodash-es.js' ]
+build     requests 2    loadEventEnd 69ms   body KB 48   []
+```
+
+개발 서버는 요청 3005개에 4~6초, 빌드 결과는 요청 2개에 69ms다. 두 번째 줄은 서버가 변환 결과를 기억한 뒤라 조금 빠르다. 개발 서버가 묶지 않는 이유는 수정 한 번에 다시 할 일을 최소로 만들기 위해서다. 아래 그림에서 두 경로를 비교해 보자.
+
+<NetworkTopology
+  width={420}
+  height={250}
+  caption="개발 서버와 빌드 결과는 브라우저에 다른 것을 준다"
+  zones={[
+    { id: "devz", label: "vite dev", x: 160, y: 15, w: 245, h: 105, tone: "edge" },
+    { id: "prodz", label: "vite build", x: 160, y: 135, w: 245, h: 100, tone: "public" },
+  ]}
+  nodes={[
+    { id: "br", label: "Chromium", x: 60, y: 125, icon: "client" },
+    { id: "dev", label: "dev server", sub: "요청마다 변환", x: 230, y: 70, icon: "server" },
+    { id: "deps", label: ".vite/deps", sub: "의존성만 묶음", x: 350, y: 70, icon: "container" },
+    { id: "cdn", label: "dist", sub: "정적 파일", x: 230, y: 190, icon: "server" },
+    { id: "bundle", label: "index-*.js", sub: "48KB 전송", x: 350, y: 190, icon: "container" },
+  ]}
+  links={[
+    { from: "br", to: "dev" },
+    { from: "dev", to: "deps" },
+    { from: "br", to: "cdn" },
+    { from: "cdn", to: "bundle" },
+  ]}
+  steps={[
+    { path: ["br", "dev"], packet: "main.js", title: "dev: 진입 모듈만 먼저 준다", detail: "서버는 요청이 온 파일 하나만 변환해서 돌려준다. 미리 다 묶어 두지 않으니 서버는 0.3초 만에 뜬다." },
+    { path: ["br", "dev"], packet: "m1 · m2", title: "dev: import마다 다시 요청한다", detail: "브라우저가 import를 읽을 때마다 다음 파일을 요청한다. 3000개 모듈이면 요청도 3000개이고, 그래프 깊이만큼 왕복이 쌓인다." },
+    { path: ["br", "dev", "deps"], packet: "lodash-es", title: "dev: 의존성은 미리 한 파일로", detail: "node_modules의 패키지는 처음 띄울 때 한 번 묶어 둔다. lodash-es의 수백 개 파일이 요청 하나가 된다. CommonJS 패키지를 ESM으로 바꾸는 일도 여기서 한다." },
+    { path: ["br", "dev"], packet: "HMR", highlight: ["devz"], title: "dev: 고친 파일 하나만 다시", detail: "파일을 저장하면 그 모듈만 다시 변환해 바꿔 끼운다. 앱 크기가 커져도 수정 한 번의 비용은 거의 그대로다." },
+    { path: ["br", "cdn", "bundle"], packet: "GET", highlight: ["prodz"], title: "build: 한 번에 받는다", detail: "빌드 때 그래프 전체를 펼쳐 묶고 압축해 뒀다. 요청 2개, 69ms. 사용자에게는 이쪽이 나간다." },
+  ]}
+/>
+
+이 차이 때문에 "개발 서버에서는 되는데 빌드하면 안 된다"는 일이 생긴다. Vite 7까지는 개발 서버의 의존성 묶기를 esbuild가, 빌드를 Rollup이 맡아서 두 도구의 동작 차이(CommonJS 처리, 순환 import 순서 등)가 그대로 드러났다. Vite 8부터는 Rust로 만든 Rolldown이 둘 다 맡는다. 그래도 "요청마다 변환"과 "한 번에 묶기"는 여전히 다른 길이라, 배포 전에는 `vite build && vite preview`로 실제 결과물을 띄워 보는 습관이 필요하다.
+
+### 개발용 코드가 프로덕션에 실리면
+
+개발과 프로덕션의 다른 큰 차이는 `process.env.NODE_ENV`다. 라이브러리는 이 값으로 경고 메시지, 검사 코드, 개발 도구 연결을 넣었다 뺐다 한다. React를 `createRoot`로 한 번 그리는 코드만 esbuild로 묶고 크기를 쟀다.
+
+```bash
+# NODE_ENV를 직접 정해 주고 압축까지 한다
+npx esbuild src/app.js --bundle --minify --outfile=out/dev.min.js --define:process.env.NODE_ENV='"development"'
+npx esbuild src/app.js --bundle --minify --outfile=out/prod.min.js --define:process.env.NODE_ENV='"production"'
+```
+
+```text
+dev.min  425185 bytes  gzip 127570
+prod.min 222760 bytes  gzip 68847
+```
+
+같은 앱인데 개발 빌드가 두 배쯤 크다. 개발용은 느리기도 하다. 프로퍼티 타입 검사, 경고, 개발 도구용 기록이 렌더링마다 돈다. 번들러 대부분은 프로덕션 모드에서 이 값을 알아서 `"production"`으로 바꿔 준다. esbuild는 `--define`을 안 주면 압축할 때 production, 안 할 때 development로 정한다. 직접 짠 빌드 스크립트에서 압축은 다른 도구로 하고 esbuild는 묶기만 시키면 개발용 React가 그대로 나간다. 확인은 번들 안에서 `react-dom-client.development`나 경고 문구를 검색해 보면 된다.
+
+## 문법은 바꿔 주지만 기능은 채워 주지 않는다
+
+번들러가 고쳐 쓰는 것 중 가장 오해가 많은 건 "구형 브라우저 지원"이다. 아래 코드를 크롬 79까지 지원하도록 esbuild로 바꿨다.
+
+```js
+const orders = [{ id: 1, status: "paid" }, { id: 2, status: "refund" }, { id: 3, status: "paid" }];
+const byStatus = Object.groupBy(orders, (o) => o.status);
+const lastId = orders.at(-1)?.id ?? 0;
+console.log(Object.keys(byStatus), lastId);
+```
+
+```bash
+npx esbuild src/modern.js --target=chrome79
+```
+
+```text
+var _a, _b;
+const orders = [{ id: 1, status: "paid" }, { id: 2, status: "refund" }, { id: 3, status: "paid" }];
+const byStatus = Object.groupBy(orders, (o) => o.status);
+const lastId = (_b = (_a = orders.at(-1)) == null ? void 0 : _a.id) != null ? _b : 0;
+console.log(Object.keys(byStatus), lastId);
+```
+
+`?.`와 `??`는 풀어 썼다. 크롬 80에서 생긴 문법이라 79는 읽지 못한다. 하지만 `Object.groupBy`(크롬 117)와 `Array.prototype.at`(크롬 92)은 그대로다. 이건 문법이 아니라 런타임에 있어야 하는 함수라서, 코드를 아무리 바꿔 써도 생기지 않는다. Chromium 141에서 `Object.groupBy`를 지운 뒤 이 파일을 실행하면 `Object.groupBy is not a function`으로 멈춘다. 크롬 79 사용자가 보는 화면이 이것이다. 문법을 낮추는 것(transpile)과 없는 기능을 채우는 것(폴리필)은 다른 일이다. `?.`가 어떻게 풀리는지는 [옵셔널 체이닝 글](/posts/js-optional-chaining-nullish)에서 자세히 봤다.
+
+폴리필은 core-js 같은 라이브러리가 맡고, Babel이 코드에서 쓴 기능만 골라 import를 넣어 준다. Babel 8에서는 `preset-env`의 `useBuiltIns` 옵션이 사라졌다. 예전 설정 그대로 돌리면 이렇게 멈춘다.
+
+```text
+Error: [BABEL] …/fe5/tiny/src/modern.js: The 'useBuiltIns' option has been removed. Please use babel-plugin-polyfill-corejs3 instead.
+```
+
+안내대로 플러그인을 쓰되, 대상 브라우저(`targets`)는 preset 안이 아니라 설정 최상위에 둬야 한다. preset 안에만 적으면 플러그인은 그 값을 모르고 browserslist 기본값으로 판단한다. 실제로 preset 안에 `chrome 79`를 적었더니 `debug` 출력에 `"chrome": "109"`가 찍히고 `at`의 폴리필이 빠졌다. 최상위로 옮긴 설정과 결과다.
+
+```json
+{
+  "targets": "chrome 79",
+  "presets": ["@babel/preset-env"],
+  "plugins": [["polyfill-corejs3", { "method": "usage-global", "version": "3.51" }]]
+}
+```
+
+```text
+var _orders$at$id, _orders$at;
+import "core-js/modules/es.array.at.js";
+import "core-js/modules/es.object.group-by.js";
+const orders = [{
+  id: 1,
+  status: "paid"
+}, {
+// … 중간 생략 …
+const lastId = (_orders$at$id = (_orders$at = orders.at(-1)) === null || _orders$at === void 0 ? void 0 : _orders$at.id) !== null && _orders$at$id !== void 0 ? _orders$at$id : 0;
+```
+
+이번에는 쓴 기능 두 개의 폴리필만 맨 위에 import로 들어갔다. esbuild와 SWC는 문법 변환만 하고 폴리필은 넣지 않는다. 그래서 Vite나 Next.js에서 구형 브라우저까지 지원해야 하면 `@vitejs/plugin-legacy` 같은 별도 장치를 쓰거나, 필요한 폴리필을 직접 import한다.
+
+### 대상 브라우저를 정하는 한 줄
+
+`targets` 자리에 브라우저 이름을 하나씩 적는 대신 보통 browserslist 질의를 쓴다. `package.json`의 `browserslist` 필드나 `.browserslistrc`에 적으면 Babel, PostCSS의 Autoprefixer, SWC가 같은 목록을 읽는다. 질의를 조각내 보자.
+
+<UrlAnatomy
+  caption="browserslist 질의 하나를 조각으로"
+  base="browserslist"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "share", display: "\"> 0.5% in KR", title: "점유율 기준", description: "한국 사용자 점유율이 0.5%를 넘는 브라우저 버전만 고른다. 통계는 설치된 caniuse-lite 데이터를 쓰므로 패키지를 오래 안 올리면 오래된 통계로 계산한다.", required: true },
+    { key: "last", display: "last 2 versions", title: "버전 수 기준", description: "브라우저마다 최근 두 버전을 넣는다. 쉼표는 합집합이라 앞 조건과 OR로 묶인다." },
+    { key: "dead", display: "not dead\"", title: "빼는 조건", description: "공식 지원이 끝났고 24개월 동안 업데이트가 없는 브라우저를 뺀다. not으로 시작하는 조건은 앞에서 모은 목록에서 덜어 낸다.", required: true, code: "npx browserslist \"> 0.5% in KR, last 2 versions, not dead\" | wc -l\n30" },
+  ]}
+/>
+
+`npx browserslist "defaults"`로 지금 기본값이 무엇을 뜻하는지 바로 볼 수 있다. browserslist 4.29가 내놓은 목록이다.
+
+```text
+and_chr 155 and_ff 158 and_qq 14.9 and_uc 15.5 android 155 chrome 155 chrome 154 chrome 153 chrome 152 chrome 151 chrome 150 chrome 109 edge 155 edge 154 edge 153 edge 152 firefox 158 firefox 157 firefox 156 firefox 155 firefox 153 ios_saf 27.0 ios_saf 26.6 ios_saf 26.5 ios_saf 18.5-18.7 kaios 3.0-3.1 kaios 2.5 op_mini all op_mob 80 opera 135 opera 134 safari 27 safari 26.6 samsung 30 samsung 29
+```
+
+최신 버전들 사이에 `chrome 109`가 섞여 있다. 윈도우 7·8에서 마지막으로 돌던 크롬이라 점유율이 남아 있어서다. 목표를 넓힐수록 변환과 폴리필이 늘어 번들이 커지니, 실제 사용자 통계를 보고 정한다.
+
+## 줄어든 코드에서 원래 줄을 찾는다
+
+압축(minify)은 공백과 주석을 지우고, 지역 변수 이름을 한 글자로 바꾸고, 계산할 수 있는 식은 미리 계산한다. 그러면 에러가 나도 어디인지 알 수 없다. `null`이 섞인 장바구니를 합산하는 코드를 압축해서 Node 22로 돌렸다.
+
+```bash
+npx esbuild src/checkout.js --bundle --minify --sourcemap --platform=node --format=esm --outfile=out/checkout.js
+node out/checkout.js                         # 그냥 실행
+node --enable-source-maps out/checkout.js    # source map을 읽고 실행
+```
+
+```text
+…/fe5/tiny/out/checkout.js:1
+function o(r){return r.reduce((e,t)=>e+t.price*t.qty,0)}var c=[{price:12900,qty:1},null];console.log(o(c));
+                                         ^
+
+TypeError: Cannot read properties of null (reading 'price')
+    at …/fe5/tiny/out/checkout.js:1:42
+    at Array.reduce (<anonymous>)
+    at o (…/fe5/tiny/out/checkout.js:1:24)
+```
+
+```text
+…/fe5/tiny/src/cart.js:2
+  return items.reduce((sum, item) => sum + item.price * item.qty, 0);
+                                                ^
+
+TypeError: Cannot read properties of null (reading 'price')
+    at <anonymous> (…/fe5/tiny/src/cart.js:2:49)
+    at Array.reduce (<anonymous>)
+    at totalPrice (…/fe5/tiny/src/cart.js:2:16)
+```
+
+첫 번째는 `o` 함수의 1번째 줄 42번째 글자라고만 한다. 두 번째는 `cart.js` 2번째 줄, 함수 이름 `totalPrice`까지 돌려놓았다. source map은 "출력의 몇 번째 줄 몇 번째 글자가 원본의 어디였는지"를 적은 JSON이다. 파일 끝의 `//# sourceMappingURL=checkout.js.map` 주석이 이 지도를 가리키고, `sourcesContent`에 원본 코드가 통째로 들어간다.
+
+원본이 통째로 들어간다는 게 함정이다. `.map` 파일을 공개 서버에 함께 올리면 누구나 원본 코드와 주석을 그대로 읽는다. 그래서 프로덕션에서는 지도를 만들되 공개하지 않는 방식(webpack의 `hidden-source-map`, Vite의 `build.sourcemap: "hidden"`)으로 만들고, 에러 수집 도구에만 올린다. 이 흐름은 [프런트엔드 에러 추적](/posts/frontend-error-tracking)에서 이어서 본다.
+
+## 같은 앱을 여섯 도구로 묶어 보면
+
+이제 앞의 3000개 모듈 앱을 여섯 도구로 각각 세 번씩 프로덕션 빌드했다. 4코어 Xeon 2.1GHz에서 잰 가운데값이다. 모두 압축까지 켰고 출력은 파일 하나다.
+
+| 도구 | 빌드 시간 | 출력 | gzip |
+|---|---|---|---|
+| esbuild 0.28 | 0.27초 | 368KB | 45.7KB |
+| Rspack 2.2 | 0.62초 | 335KB | 33.2KB |
+| Rolldown 1.2 | 0.71초 | 373KB | 47.2KB |
+| Vite 8.3 | 0.86초 | 368KB | 47.0KB |
+| webpack 5.112 | 7.70초 | 342KB | 34.1KB |
+| Rollup 4.64 + terser | 9.37초 | 359KB | 39.3KB |
+
+빠르기는 크게 두 무리로 갈린다. Go(esbuild)나 Rust(Rspack, Rolldown, Rolldown을 쓰는 Vite 8)로 만든 도구는 1초 안에 끝났고, 자바스크립트로 만든 webpack과 Rollup은 7~9초가 걸렸다. 네이티브 코드여서만은 아니다. 여러 코어로 파일을 나눠 처리하고 구문 트리를 단계마다 새로 만들지 않고 한 번 만든 것을 함께 쓰는 설계 차이가 크다.
+
+압축이 차지하는 몫도 따로 쟀다. 압축을 끄면 webpack은 3.3~4.1초, Rollup은 6.0~6.1초로 줄었다. 자바스크립트로 만든 압축기 terser가 3~4초를 쓰고 있었다는 뜻이다. webpack 프로젝트에서 빌드가 느리면 압축기를 esbuild나 SWC 기반으로 바꾸는 것만으로 꽤 줄어든다.
+
+결과물 크기는 반대 모습이다. 같은 코드인데 gzip 기준으로 33KB에서 47KB까지 차이가 났다. 압축기가 얼마나 공격적으로 함수를 펼치고 식을 줄이느냐가 다르기 때문이다. 이 숫자는 이 인공 앱 하나의 결과라서 실제 앱에서는 차이가 줄거나 순위가 바뀔 수 있다. 다만 "빌드 속도와 결과물 크기는 따로 잰다"는 교훈은 그대로다.
+
+도구들의 관계는 이렇게 정리된다.
+
+<ConceptDiagram
+  width={420}
+  height={260}
+  caption="번들러들이 서로 무엇을 이어받았나"
+  nodes={[
+    { id: "webpack", label: "webpack", sub: "JS · loader/plugin", x: 80, y: 50 },
+    { id: "rspack", label: "Rspack", sub: "Rust · webpack API", x: 80, y: 150 },
+    { id: "turbo", label: "Turbopack", sub: "Rust · Next.js", x: 80, y: 225 },
+    { id: "rollup", label: "Rollup", sub: "JS · ESM 출력", x: 220, y: 50 },
+    { id: "rolldown", label: "Rolldown", sub: "Rust · Rollup API", x: 220, y: 150 },
+    { id: "esbuild", label: "esbuild", sub: "Go · 단일 바이너리", x: 350, y: 50 },
+    { id: "vite", label: "Vite", sub: "dev server + build", x: 350, y: 180 },
+  ]}
+  edges={[
+    { from: "webpack", to: "rspack", label: "설정 호환" },
+    { from: "webpack", to: "turbo", label: "후속", dashed: true },
+    { from: "rollup", to: "rolldown", label: "플러그인 호환" },
+    { from: "rolldown", to: "vite", label: "8부터" },
+    { from: "esbuild", to: "vite", label: "7까지", dashed: true },
+  ]}
+/>
+
+고를 때 보는 것은 빠르기보다 이쪽이다.
+
+- webpack: 가장 오래되고 플러그인이 가장 많다. 모듈 페더레이션, 복잡한 레거시 설정이 있다면 여전히 기준이다. 느린 게 문제라면 설정을 거의 그대로 들고 Rspack으로 옮기는 길이 있다. 페더레이션 이야기는 [Module Federation 깊이 보기](/posts/module-federation-deep-dive)에서 다룬다.
+- Rollup: 라이브러리를 만들 때 깔끔한 ESM 출력이 장점이다. 대신 기본 기능이 적어서 플러그인을 직접 꽂아야 한다. CommonJS인 React를 플러그인 없이 묶으면 `RollupError: src/app.js (1:9): "createRoot" is not exported by "../node_modules/react-dom/client.js", imported by "src/app.js".`로 멈춘다. `@rollup/plugin-commonjs`가 있어야 한다.
+- esbuild: 설정 없이 빠르다. 직접 만든 빌드 스크립트, 라이브러리 번들, 다른 도구의 변환기로 많이 들어간다. 청크 나누기와 HMR은 단순한 편이다.
+- Vite: 개발 서버(묶지 않는 ESM + HMR)와 빌드를 한 세트로 준다. 새 SPA라면 가장 무난한 기본값이다.
+- Turbopack: Next.js 안에서만 쓴다. Next.js 16부터 개발과 빌드의 기본 번들러가 되었고, 이 블로그도 Turbopack으로 빌드한다. 그래서 remark 플러그인을 함수가 아니라 문자열 경로로 넘겨야 하는 것 같은 제약이 생긴다.
+
+빌드 시간이 문제라면 도구를 바꾸기 전에 캐시부터 본다. CI에서 매번 처음부터 빌드하는지, 바뀌지 않은 패키지까지 다시 빌드하는지가 도구 차이보다 클 때가 많다. 이건 [빌드 캐시](/posts/build-caching)와 [모노레포 빌드 캐시](/posts/monorepo-build-cache)에서 다룬다.
+
+## 운영에서 번들러가 범인일 때
+
+번들러 문제는 "코드는 안 바꿨는데"로 시작하는 경우가 많다. 증상별로 어디를 볼지 정리한다.
+
+처음 장면의 `process is not defined`는 브라우저에 없는 Node 전역을 코드가 쓰는데 번들러가 바꿔 주지 않은 것이다. `process.env.API_URL ?? "/api"`를 esbuild로 묶어 Chromium에서 돌리면 `[pageerror] process is not defined`가 난다. `--define:process.env.API_URL='"https://api.example.com"'`을 주면 출력이 `var o="https://api.example.com"`으로 바뀐다. 번들러는 이 값을 코드에 글자 그대로 박는다. 그래서 비밀 값을 define으로 넣으면 번들을 연 누구나 읽는다. Vite가 `VITE_`로, Next.js가 `NEXT_PUBLIC_`으로 시작하는 환경 변수만 클라이언트에 넣는 이유다.
+
+webpack 5로 올린 뒤 `path`, `crypto`, `buffer` 같은 이름에서 빌드가 깨지는 것도 같은 뿌리다.
+
+```text
+ERROR in ./src/env.js 1:0-24
+Module not found: Error: Can't resolve 'path' in '…/fe5/tiny/src'
+
+BREAKING CHANGE: webpack < 5 used to include polyfills for node.js core modules by default.
+This is no longer the case. Verify if you need this module and configure a polyfill for it.
+```
+
+메시지가 알려 주는 대로 `resolve.fallback`에 브라우저용 대체 패키지를 넣을 수 있다. 그 전에 그 모듈이 정말 브라우저에서 필요한지 본다. 대개는 서버에서만 써야 할 코드가 클라이언트 쪽 import에 딸려 들어온 것이다.
+
+번들이 갑자기 커졌다면 분석 도구로 무엇이 들어왔는지 본다. esbuild는 `--analyze`가 가장 빠르다.
+
+```bash
+npx esbuild src/app.js --bundle --minify --outfile=out/a.js --analyze
+```
+
+```text
+  out/a.js                                                         217.5kb  100.0%
+   ├ ../node_modules/react-dom/cjs/react-dom-client.production.js  200.2kb   92.0%
+   ├ ../node_modules/react/cjs/react.production.js                   7.8kb    3.6%
+   ├ ../node_modules/react-dom/cjs/react-dom.production.js           3.6kb    1.6%
+   ├ ../node_modules/scheduler/cjs/scheduler.production.js           3.6kb    1.6%
+```
+
+파일 이름에 `development`가 보이면 NODE_ENV가 안 바뀐 것이고, 같은 라이브러리가 두 줄 보이면 버전이 둘 들어온 것이다. webpack 계열은 `webpack-bundle-analyzer`를 쓰고, 읽는 법은 [코드 스플리팅 글의 번들 분석 부분](/posts/code-splitting)에 있다.
+
+개발 서버에서는 되는데 빌드 결과에서만 깨진다면 두 경로의 차이를 의심한다. 순환 import의 평가 순서, CommonJS 패키지의 default 처리, 대소문자만 다른 파일 경로(macOS 개발 기기는 구분하지 않고 리눅스 CI는 구분한다)가 흔한 원인이다. 로컬에서 `build`와 `preview`로 재현되는지부터 확인한다.
+
+## 결국 번들러는 번역가다
+
+번들러는 우리가 쓴 코드를 브라우저가 읽을 수 있는 코드로 다시 쓴다. 경로를 파일로 바꾸고, 모르는 문법을 풀고, 모듈을 펼쳐 묶고, 줄이고, 지도를 남긴다. 화면이 하얗게 되거나 번들이 불어났을 때 "어느 단계에서 무엇을 바꿨나"를 떠올리면 볼 곳이 좁혀진다. 묶은 파일을 브라우저가 언제 어떤 순서로 받는지는 [리소스 힌트와 로딩 순서](/posts/resource-hints-loading)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 번들러는 왜 필요한가요? 브라우저가 ES 모듈을 지원하는데요.
+
+모듈 수만큼 요청이 생기고, 그래프 깊이만큼 왕복이 쌓이기 때문이다. 3000개 모듈 앱을 묶지 않고 열면 요청 3005개에 4~6초, 묶으면 요청 2개에 69ms였다. 그 밖에도 TypeScript·JSX 변환, `node_modules` 경로 해석, 안 쓰는 코드 제거, 압축, 내용 해시 파일 이름처럼 브라우저가 해 주지 않는 일을 번들러가 맡는다.
+
+### 번들러는 import 경로를 어떻게 실제 파일로 찾나요?
+
+상대 경로가 아니면 가장 가까운 `node_modules`부터 위로 올라가며 패키지를 찾는다. 찾으면 `package.json`의 `exports`를 먼저 보고, 대상 환경에 맞는 조건(`browser`, `import`, `require`, `default`)을 고른다. `exports`가 없으면 `browser`, `module`, `main` 필드를 번들러가 정한 순서로 본다. 같은 패키지라도 서버 빌드와 브라우저 빌드가 다른 파일을 집을 수 있다.
+
+### Vite 개발 서버는 왜 빠르고, 빌드와 무엇이 다른가요?
+
+개발 서버는 미리 묶지 않고 브라우저가 요청한 모듈만 그때그때 변환해서 준다. 그래서 서버가 바로 뜨고, 파일을 고치면 그 모듈 하나만 다시 바꿔 끼운다(HMR). `node_modules`의 의존성만 미리 한 파일로 묶어 요청 수를 줄인다. 프로덕션 빌드는 그래프 전체를 묶고 압축한다. 두 경로가 다르니 배포 전에 `build`와 `preview`로 실제 결과물을 확인해야 한다.
+
+### 트랜스파일과 폴리필의 차이는요?
+
+트랜스파일은 문법을 낮추는 것이고, 폴리필은 런타임에 없는 함수를 채우는 것이다. `?.`는 풀어 쓸 수 있지만 `Object.groupBy`는 코드를 바꿔서 만들 수 없으니 core-js 같은 구현을 함께 실어야 한다. esbuild와 SWC는 문법만 낮추고 폴리필은 넣지 않는다. Babel 8에서는 `babel-plugin-polyfill-corejs3`로 쓴 기능만 골라 넣고, `targets`를 설정 최상위에 둬야 플러그인도 같은 대상을 본다.
+
+### source map은 어떻게 동작하고, 프로덕션에서는 어떻게 다루나요?
+
+압축된 출력의 줄과 글자 위치를 원본 파일의 위치로 돌려 주는 JSON 지도다. 출력 파일 끝의 `sourceMappingURL` 주석이 지도를 가리키고, 지도 안에 원본 코드가 통째로 들어갈 수 있다. 그래서 공개 서버에는 올리지 않고 hidden source map으로 만들어 에러 수집 도구에만 올린다.
+
+### esbuild나 Rspack이 webpack보다 훨씬 빠른 이유는요?
+
+네이티브 언어(Go, Rust)로 만들었고, 여러 코어로 모듈을 나눠 처리하며, 단계마다 구문 트리를 다시 만들지 않기 때문이다. 같은 3000개 모듈 앱에서 esbuild는 0.27초, webpack은 7.7초였다. webpack 시간의 3~4초는 자바스크립트 압축기 terser가 썼다. 다만 결과물 크기는 따로 재야 한다. 이 실험에서는 gzip 기준 33~47KB로 도구마다 달랐다.
+
+### 배포 후에 `process is not defined`가 납니다. 원인과 해결은요?
+
+브라우저에 없는 Node 전역 `process`를 코드가 쓰는데, 번들러가 그 식을 값으로 바꿔 주지 않은 것이다. webpack 5부터는 Node 전역과 코어 모듈을 자동으로 채우지 않는다. 빌드 때 정해지는 값이면 define(webpack의 `DefinePlugin`, Vite의 `import.meta.env`)으로 바꾸고, 클라이언트에 노출해도 되는 값인지 먼저 확인한다. define한 값은 번들에 글자 그대로 들어간다.
+
+### 프로덕션 번들에 개발용 React가 들어갔는지 어떻게 확인하나요?
+
+번들 분석에서 `react-dom-client.development` 같은 파일 이름이 보이는지, 번들 안에 개발용 경고 문구가 있는지 본다. 이 실험에서 개발 빌드는 gzip 128KB, 프로덕션은 69KB로 두 배 가까이 컸고 렌더링마다 검사 코드도 돈다. 원인은 대개 직접 만든 빌드 스크립트에서 `process.env.NODE_ENV`를 `"production"`으로 바꾸지 않은 것이다.

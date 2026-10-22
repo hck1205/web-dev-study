@@ -1,0 +1,530 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("browser-rendering-pipeline");
+
+배포하고 나서 첫 화면이 1초 넘게 하얗다는 제보가 왔다. Network 탭을 열어 보니 HTML은 30ms 만에 다 왔다. 문서는 이미 브라우저 손에 있는데 아무것도 그려지지 않는다. 줄을 따라 내려가 보면 `<head>`에 새로 붙은 스타일시트 하나가 1초 걸렸다. 그 파일이 오기 전까지 브라우저는 일부러 그리지 않은 것이다.
+
+이런 일이 왜 생기는지 알려면 브라우저가 바이트를 픽셀로 바꾸는 순서를 하나씩 따라가야 한다. 이 글은 그 순서를 크로미움 141(Playwright, headless, GPU 없음)과 일부러 응답을 늦게 주는 작은 Node 서버로 직접 재 가며 본다. 숫자는 이 컨테이너 기준이라 절댓값보다 차이를 보면 된다.
+
+큰 흐름(DOM, CSSOM, 렌더 트리, 리플로와 리페인트)은 [google.com을 치면 일어나는 일](/posts/what-happens-google-com)에 짧게 정리되어 있다. 여기서는 그 단계들이 실제로 어느 스레드에서, 무엇을 기다리며, 어떤 순서로 도는지를 판다. 이 순서에서 나오는 최적화는 다음 글 [렌더링 성능 최적화](/posts/rendering-performance-optimization)에서 다룬다.
+
+## 바이트가 픽셀이 되기까지 거치는 곳
+
+크롬 계열 브라우저는 탭마다 렌더러 프로세스를 두고, 그 안에서도 일을 여러 스레드로 나눈다. 우리가 쓰는 자바스크립트와 HTML 파싱, 스타일 계산, 레이아웃, 페인트는 모두 메인 스레드 하나에서 돈다. 픽셀을 채우는 래스터와 화면에 낼 프레임을 묶는 합성은 다른 스레드가 맡는다. 아래 그림에서 다음을 누르면 HTML 바이트가 화면까지 가는 길이 한 단계씩 그려진다.
+
+<NetworkTopology
+  caption="HTML 바이트가 화면이 되기까지 지나는 프로세스와 스레드 (크롬 계열)"
+  width={400}
+  height={260}
+  zones={[
+    { id: "browser", label: "브라우저·GPU", x: 10, y: 20, w: 120, h: 220, tone: "edge" },
+    { id: "renderer", label: "렌더러 프로세스", x: 145, y: 20, w: 245, h: 220, tone: "private" },
+  ]}
+  nodes={[
+    { id: "net", label: "네트워크", x: 70, y: 75, icon: "internet" },
+    { id: "display", label: "화면", x: 70, y: 190, icon: "client" },
+    { id: "main", label: "메인 스레드", sub: "파싱·스타일·레이아웃·페인트", x: 230, y: 75, icon: "server", w: 130 },
+    { id: "comp", label: "합성 스레드", x: 230, y: 190, icon: "switch" },
+    { id: "raster", label: "래스터 워커", x: 335, y: 135, icon: "container" },
+  ]}
+  links={[
+    { from: "net", to: "main" },
+    { from: "main", to: "comp" },
+    { from: "comp", to: "raster" },
+    { from: "comp", to: "display" },
+  ]}
+  steps={[
+    { path: ["net", "main"], packet: "HTML 바이트", title: "바이트가 렌더러로 넘어온다", detail: "네트워크는 브라우저 프로세스가 맡는다. 받은 조각을 기다리지 않고 바로바로 렌더러에 넘긴다." },
+    { path: ["main"], packet: "DOM·스타일", title: "메인 스레드가 읽고 계산한다", detail: "HTML을 DOM으로, CSS를 스타일 규칙으로 바꾸고, 요소마다 계산된 스타일과 위치·크기를 정한다." },
+    { path: ["main"], packet: "페인트 기록", title: "페인트는 명령 목록을 만든다", detail: "여기서는 아직 픽셀이 없다. 무엇을 어떤 순서로 그릴지 적은 목록만 만든다." },
+    { path: ["main", "comp"], packet: "Commit", title: "결과를 합성 스레드에 넘긴다", detail: "층 구조와 페인트 기록을 복사해 넘긴다. 이 순간부터 메인 스레드는 다음 일을 할 수 있다." },
+    { path: ["comp", "raster"], packet: "타일", title: "래스터 워커가 픽셀을 채운다", detail: "층을 타일로 잘라 화면 근처부터 픽셀로 바꾼다. 여러 워커가 나눠서 한다." },
+    { path: ["raster", "comp", "display"], packet: "프레임", title: "타일을 겹쳐 프레임을 낸다", detail: "합성 스레드가 타일과 층을 겹쳐 한 장의 프레임으로 만들고 화면에 보낸다." },
+  ]}
+/>
+
+이게 말뿐인 구분이 아니라는 걸 트레이스로 확인할 수 있다. 카드 50개와 `position: fixed` 배지 하나가 있는 페이지를 열면서 개발자 도구 Performance 패널이 쓰는 트레이스를 CDP(크롬 개발자 도구 프로토콜)로 떴다. 이벤트마다 어느 프로세스의 어느 스레드에서 처음 나왔는지, 몇 번 돌았는지를 셌다.
+
+```js
+const cdp = await page.context().newCDPSession(page);
+const events = [];
+cdp.on("Tracing.dataCollected", (e) => events.push(...e.value));
+await cdp.send("Tracing.start", {
+  categories: "devtools.timeline,disabled-by-default-devtools.timeline,blink,cc,viz,__metadata",
+  transferMode: "ReportEvents",
+});
+await page.goto("http://127.0.0.1:18600/p/pipeline");
+await page.waitForTimeout(500);
+await cdp.send("Tracing.end");
+// thread_name, process_name 메타 이벤트로 pid·tid를 이름으로 바꾸고,
+// ParseHTML부터 DrawFrame까지 이벤트를 스레드별로 묶어 첫 시각과 횟수를 찍는다
+```
+
+```text
+ParseHTML @ Renderer/CrRendererMain                처음    0.0ms    3회 합 0.96ms
+EvaluateScript @ Renderer/CrRendererMain           처음    0.5ms    1회 합 0.44ms
+UpdateLayoutTree @ Renderer/CrRendererMain         처음    1.9ms    1회 합 0.40ms
+Layout @ Renderer/CrRendererMain                   처음    2.5ms    1회 합 19.66ms
+PrePaint @ Renderer/CrRendererMain                 처음   24.2ms    1회 합 0.28ms
+Paint @ Renderer/CrRendererMain                    처음   24.6ms    2회 합 0.48ms
+Layerize @ Renderer/CrRendererMain                 처음   25.1ms    1회 합 0.07ms
+Commit @ Renderer/CrRendererMain                   처음   25.4ms    1회 합 0.10ms
+RasterTask @ Renderer/ThreadPoolForegroundWorker   처음   31.1ms    9회 합 2.07ms
+ActivateLayerTree @ Renderer/Compositor            처음   33.1ms    1회 합 0.00ms
+DrawFrame @ Renderer/Compositor                    처음   33.3ms    1회 합 0.00ms
+```
+
+위에서 아래로 읽으면 그대로 그림의 순서다. `UpdateLayoutTree`가 스타일 계산이다. 이름이 헷갈리는데, 크로미움은 스타일을 다시 계산하면서 레이아웃에 쓸 트리도 함께 고친다. `Commit`까지가 메인 스레드(`CrRendererMain`)의 몫이고, `RasterTask`는 워커 스레드에서, 마지막 두 줄은 합성 스레드(`Compositor`)에서 나왔다.
+
+눈에 띄는 숫자는 `Layout`의 19.66ms다. 카드 50개짜리 페이지치고 무거운데, 첫 레이아웃에는 글자 모양을 잡고(text shaping) 한글 글꼴을 찾는 일이 섞여 있어서다. 같은 스크립트를 몇 번 더 돌리면 9~14ms가 나와서 실행마다 꽤 흔들린다. 첫 레이아웃이 그다음 레이아웃보다 비싸다는 것만 가져가면 된다.
+
+## HTML은 받는 대로 읽는다
+
+파서는 HTML이 다 올 때까지 기다리지 않는다. 바이트가 오는 대로 문자로 풀고(디코딩), 태그 단위로 자르고(토큰화), 노드를 만들어 DOM 트리에 붙인다. 위 트레이스에서 `ParseHTML`이 3회로 나온 것도 파서가 한 번에 다 읽지 않고 조각 단위로 나눠 읽었기 때문이다.
+
+받는 대로 읽는다는 건 받는 대로 그릴 수도 있다는 뜻이다. 서버가 HTML 앞부분을 먼저 보내고, 1초 뒤에 나머지를 보내게 만들어 재 봤다.
+
+```js
+// 앞부분을 먼저 흘려보내고 1초 뒤에 문서를 닫는다
+res.write(`<!doctype html><html><head><title>s</title></head><body><h1>상품 목록</h1><p>...</p>`);
+setTimeout(() => res.end(`<p>뒷부분</p><script>performance.mark("tail-parsed")</script></body></html>`), 1000);
+```
+
+```text
+stream          {"FCP":28,"DCL":1006,"load":1007,"marks":{"tail-parsed":1004},"res":[]}
+```
+
+첫 화면(FCP)은 28ms에 그려졌고, 뒷부분이 파싱된 건 1004ms다. 문서가 다 오기 전에 이미 그렸다. 서버가 응답을 끝까지 모았다가 한 번에 보내는지, 앞부분부터 흘려보내는지에 따라 첫 화면이 이만큼 달라진다. React의 스트리밍 SSR이 기대는 것도 이 성질이다([스트리밍 SSR과 Suspense](/posts/streaming-ssr-suspense)).
+
+## 평범한 script를 만나면 파서가 선다
+
+그런데 파서가 늘 앞으로만 가지는 않는다. `async`도 `defer`도 없는 `<script>`를 만나면 파싱을 멈춘다. 그 스크립트가 `document.write()`로 바로 뒤에 HTML을 끼워 넣을 수 있으니, 스크립트를 실행해 보기 전에는 뒤를 어떻게 읽어야 할지 모른다. 그래서 이런 스크립트를 파서 차단 스크립트라고 부른다.
+
+파서가 `<head>`부터 읽어 내려가는 과정을 따라가 보자. 오른쪽 칸은 지금까지 만든 DOM과 파서의 상태다.
+
+<AlgoTrace
+  caption="파서가 head의 스타일시트와 스크립트를 지나는 순서"
+  memoryLabel="DOM과 파서 상태"
+  cells={["<head>", "<link css>", "<script>", "<body>", "<h1>", "<img>", "끝"]}
+  steps={[
+    { pointer: 0, memory: ["html", "head"], caption: "head를 열고 DOM에 노드를 붙인다." },
+    { pointer: 1, memory: ["html", "head", "link"], caption: "스타일시트 요청을 보낸다. 파싱은 멈추지 않는다. 대신 첫 화면이 이 CSS를 기다린다." },
+    { pointer: 2, memory: ["html", "head", "link", "script 대기"], caption: "평범한 script다. 파서가 여기서 선다. 파일을 받아 실행할 때까지 뒤를 읽지 않는다." },
+    { pointer: 2, memory: ["html", "head", "link", "script 실행"], caption: "파일이 와도 앞의 CSS가 아직이면 실행도 기다린다. 스크립트가 스타일 값을 읽을 수 있어서다." },
+    { pointer: 3, memory: ["html", "head", "link", "script", "body"], caption: "실행이 끝나야 파서가 다시 움직인다." },
+    { pointer: 4, memory: ["html", "head", "link", "script", "body", "h1"], caption: "제목 노드를 붙인다. CSS가 와 있으면 이제 그릴 수 있다." },
+    { pointer: 5, memory: ["html", "head", "link", "script", "body", "h1", "img"], caption: "이미지는 파서를 막지 않는다. 요청만 보내고 넘어간다." },
+    { pointer: 6, found: [6], memory: ["DOM 완성", "defer 실행", "DOMContentLoaded"], caption: "끝까지 읽었다. defer 스크립트를 순서대로 실행한 뒤 DOMContentLoaded가 뜬다." },
+  ]}
+/>
+
+네 번째 단계가 자주 놓치는 부분이다. CSS는 파싱을 막지 않지만, 그 뒤에 오는 스크립트의 실행은 막는다. 스크립트가 `getComputedStyle()`이나 `offsetWidth`를 읽으면 CSS가 적용된 값이 나와야 하기 때문이다. 1초 걸리는 CSS 바로 뒤에 인라인 스크립트 한 줄을 두고 재면 이렇다.
+
+```html
+<head>
+  <link rel="stylesheet" href="/r/a.css?t=css&d=1000">
+  <script>performance.mark("inline-script-ran")</script>
+</head>
+```
+
+```text
+cssBlocksScript {"FCP":1028,"DCL":1011,"load":1011,"marks":{"inline-script-ran":1010,"inline-end-of-body":1011},"res":["a.css 시작 6 끝 1009"]}
+```
+
+CSS가 1009ms에 끝나자마자 1010ms에 인라인 스크립트가 돌았다. 파일을 받을 필요도 없는 인라인 스크립트가 1초를 기다린 것이다. 이 스크립트가 파서를 막고 있으니 `body`의 파싱도 같이 밀렸다. 분석 태그 같은 인라인 스크립트를 스타일시트 아래에 두면 이런 식으로 둘이 엮인다.
+
+## 스크립트 태그의 속성이 순서를 바꾼다
+
+파서를 세우지 않으려면 스크립트 태그에 속성을 붙인다. 아래 태그의 조각을 누르면 각 속성이 무엇을 바꾸는지 나온다.
+
+<UrlAnatomy
+  caption="script 태그의 속성마다 받는 시점과 실행 시점이 다르다"
+  base="<script"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "src", value: "\"/app.js\"", title: "src", description: "외부 파일을 받는다. 속성이 이것뿐이면 파서가 서서 기다리고, 받자마자 실행한 뒤에야 다시 읽는다.", required: true },
+    { key: "defer", title: "defer", description: "받는 건 파싱과 나란히 하고, 실행은 파싱이 끝난 뒤 DOMContentLoaded 직전에 한다. 여러 개면 문서에 적힌 순서대로 실행한다." },
+    { key: "async", title: "async", description: "받는 건 나란히 하고, 다 받으면 그 자리에서 바로 실행한다. 실행하는 동안은 파서가 선다. 여러 개면 먼저 온 것부터 실행해서 순서를 믿을 수 없다." },
+    { key: "type", value: "\"module\"", title: "type=\"module\"", description: "ES 모듈은 따로 적지 않아도 defer처럼 동작한다. 여기에 async를 함께 붙이면 다 받는 대로 실행한다. import로 끌려오는 파일까지 다 받아야 실행할 수 있다." },
+  ]}
+/>
+
+1초 걸리는 스크립트 하나를 `<head>`에 두고 속성만 바꿔 가며 첫 화면(FCP), `DOMContentLoaded`(DCL), `load` 시각을 쟀다. 같은 브라우저에서 빈 페이지로 한 번 데운 뒤 잰 값이다.
+
+```js
+const r = await page.evaluate(() => {
+  const nav = performance.getEntriesByType("navigation")[0];
+  const fcp = performance.getEntriesByName("first-contentful-paint")[0];
+  return { FCP: fcp.startTime, DCL: nav.domContentLoadedEventStart, load: nav.loadEventStart };
+});
+```
+
+```text
+baseline        {"FCP":36,"DCL":20,"load":20,"marks":{"inline-end-of-body":15},"res":[]}
+syncJs          {"FCP":1032,"DCL":1022,"load":1023,"marks":{"inline-end-of-body":1019},"res":["a.js 시작 13 끝 1016"]}
+deferJs         {"FCP":36,"DCL":1025,"load":1026,"marks":{"inline-end-of-body":21},"res":["a.js 시작 18 끝 1024"]}
+asyncJs         {"FCP":36,"DCL":27,"load":1028,"marks":{"inline-end-of-body":24},"res":["a.js 시작 18 끝 1026"]}
+moduleJs        {"FCP":40,"DCL":1025,"load":1025,"marks":{"inline-end-of-body":23},"res":["a.js 시작 17 끝 1023"]}
+```
+
+`inline-end-of-body`는 `body` 맨 끝의 인라인 스크립트가 찍은 시각이라, 파서가 문서 끝에 닿은 때를 뜻한다. 평범한 스크립트는 파서를 1초 세웠고 첫 화면도 1032ms로 밀렸다. `defer`와 `module`은 파서가 21ms 만에 끝까지 읽고 36~40ms에 그렸지만, `DOMContentLoaded`는 스크립트가 실행된 뒤인 1025ms까지 미뤄졌다. `async`만 `DOMContentLoaded`까지 27ms에 끝났다. 대신 `load`는 기다린다.
+
+이 차이는 실무에서 바로 문제가 된다. `DOMContentLoaded`에 초기화를 걸어 둔 코드가 있다면 `defer` 스크립트가 늦을 때 같이 늦어진다. 반대로 `async`로 바꾸면 그 스크립트가 DOM이 다 만들어지기 전에 돌 수 있다. 서로 의존하는 스크립트 두 개에 `async`를 붙이면 도착 순서에 따라 가끔만 터지는 버그가 생긴다. 앱 코드는 `defer`나 모듈로, 다른 코드와 순서가 상관없는 독립 스크립트(분석 도구 같은 것)만 `async`로 두는 편이 안전하다.
+
+## 파서가 멈춘 동안 앞을 훑는 프리로드 스캐너
+
+앞의 그림대로라면 파서가 스크립트 앞에서 멈춘 1초 동안 아래쪽 이미지와 CSS는 요청조차 못 해야 한다. 실제로는 그렇지 않다. 크롬 계열을 포함한 주요 브라우저에는 프리로드 스캐너(preload scanner)가 있다. 메인 파서가 멈춘 동안 아직 읽지 않은 HTML을 가볍게 훑어서, 받아야 할 주소(`img`, `link`, `script`의 `src`·`href`)가 보이면 요청을 먼저 보낸다. DOM은 만들지 않고 주소만 찾는다.
+
+1초 걸리는 스크립트로 파서를 세워 두고, 그 아래에 이미지, 스타일시트, 그리고 자바스크립트로 만드는 이미지를 하나씩 두었다. 아래 그림에서 다음을 누르면 요청이 나가는 순서가 보인다. 그림 속 시각은 실제로 잰 값이다.
+
+<SequenceDiagram
+  caption="파서가 멈춰 있는 동안 스캐너가 아래쪽 리소스를 먼저 요청한다"
+  actors={[
+    { id: "parser", label: "파서" },
+    { id: "scanner", label: "프리로드 스캐너" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    { from: "parser", to: "server", label: "GET block.js", title: "파서가 script 앞에서 선다", detail: "7ms에 요청을 보내고 실행할 때까지 뒤를 읽지 않는다." },
+    { from: "scanner", to: "server", label: "GET hero.svg, late.css", title: "스캐너가 아래쪽을 훑는다", detail: "파서가 아직 읽지 않은 HTML에서 주소를 찾아 같은 7ms에 요청을 보낸다.", payload: "hero.svg 시작 7ms 끝 10ms\nlate.css 시작 7ms 끝 12ms" },
+    { from: "server", to: "parser", label: "block.js", title: "스크립트가 1초 만에 온다", detail: "그동안 이미지와 CSS는 이미 받아 두었다." },
+    { from: "parser", to: "parser", label: "실행, 파싱 재개", title: "파서가 다시 움직인다", detail: "아래쪽 태그를 DOM으로 만든다. 받아 둔 파일을 바로 쓴다." },
+    { from: "parser", to: "server", label: "GET js-made.svg", title: "스크립트가 만든 이미지는 이제야 요청한다", detail: "new Image()로 만든 주소는 HTML에 없어서 스캐너가 볼 수 없다.", payload: "js-made.svg 시작 1012ms 끝 1015ms" },
+  ]}
+/>
+
+```html
+<head><script src="/r/block.js?d=1000"></script></head>
+<body>
+  <img src="/r/hero.svg?t=img&d=0">
+  <link rel="stylesheet" href="/r/late.css?t=css&d=0">
+  <script>const i = new Image(); i.src = "/r/js-made.svg?t=img&d=0"; document.body.append(i)</script>
+</body>
+```
+
+```text
+scanner         {"FCP":1020,"DCL":1020,"load":1020,"marks":{},"res":["block.js 시작 7 끝 1010","hero.svg 시작 7 끝 10","late.css 시작 7 끝 12","js-made.svg 시작 1012 끝 1015"]}
+```
+
+HTML에 적힌 `hero.svg`와 `late.css`는 파서가 멈춰 있는데도 7ms에 요청이 나갔다. 스크립트로 만든 `js-made.svg`는 스크립트가 실행된 1012ms에야 요청됐다. 스캐너는 HTML 텍스트만 본다. 그래서 다음 것들은 스캐너의 눈에 띄지 않는다.
+
+- 자바스크립트가 만드는 `<img>`, `<script>`, 그리고 클라이언트 렌더링 앱의 모든 이미지
+- CSS 파일 안의 `background-image`, `@import`, `@font-face`의 `url()`. CSS를 받아서 해석해야 주소가 나온다
+- `data-src`에 주소를 두고 스크립트로 바꿔 끼우는 옛날식 지연 로딩
+
+가장 큰 그림(LCP 이미지)이 이 중 하나라면 스캐너의 도움을 못 받는다. HTML에 `<img>`로 적거나 `<link rel="preload">`로 주소를 미리 알려 준다. 이 처방의 자세한 내용은 [Core Web Vitals](/posts/core-web-vitals)의 히어로 이미지 부분과 [리소스 힌트](/posts/resource-hints-loading)에 있다.
+
+## CSS가 올 때까지 일부러 그리지 않는다
+
+이제 처음 장면으로 돌아간다. `<head>`의 스타일시트는 파서를 막지는 않지만 첫 렌더링을 막는다(render-blocking). CSS 없이 먼저 그리면 스타일 없는 화면이 번쩍 보였다가 다시 바뀐다. 브라우저는 그 깜빡임보다 잠깐 하얀 화면을 고른다.
+
+같은 1초짜리 CSS를 어디에, 어떤 속성으로 두느냐에 따라 결과가 달라진다. 아래 그림은 리소스 다운로드, 첫 화면, `DOMContentLoaded`를 한 줄씩 그린 것이다. 다음을 누르면 조건이 바뀌며 막대가 늘고 준다.
+
+<GeometryMorph
+  caption="1초 걸리는 리소스 하나가 첫 화면(FCP)과 DCL을 어디까지 미는지 (0~1200ms)"
+  width={400}
+  height={230}
+  shapes={[{ id: "res", tone: "series2" }, { id: "fcp", tone: "series1" }, { id: "dcl", tone: "series3" }]}
+  steps={[
+    {
+      title: "리소스 없음",
+      detail: "36ms에 첫 화면을 그리고 20ms에 DCL이 뜬다. 이것이 기준이다.",
+      shapes: { res: [[40, 50], [41, 50], [41, 75], [40, 75]], fcp: [[40, 115], [50, 115], [50, 140], [40, 140]], dcl: [[40, 180], [46, 180], [46, 205], [40, 205]] },
+      labels: [{ x: 90, y: 40, text: "다운로드", tone: "series2", size: "sm" }, { x: 90, y: 105, text: "FCP 36ms", tone: "series1", size: "sm" }, { x: 90, y: 170, text: "DCL 20ms", tone: "series3", size: "sm" }],
+      focus: ["fcp"],
+    },
+    {
+      title: "head의 CSS",
+      detail: "CSS가 1021ms에 끝나고 나서야 1120ms에 그린다. 처음 장면의 하얀 화면이다.",
+      shapes: { res: [[44, 50], [326, 50], [326, 75], [44, 75]], fcp: [[40, 115], [354, 115], [354, 140], [40, 140]], dcl: [[40, 180], [351, 180], [351, 205], [40, 205]] },
+      labels: [{ x: 185, y: 40, text: "a.css 13~1021ms", tone: "series2", size: "sm" }, { x: 300, y: 105, text: "FCP 1120ms", tone: "series1", size: "sm" }, { x: 300, y: 170, text: "DCL 1112ms", tone: "series3", size: "sm" }],
+      focus: ["res", "fcp"],
+    },
+    {
+      title: "body 끝의 CSS",
+      detail: "크로미움은 body 안의 스타일시트가 그 뒤 내용만 막게 한다. 위쪽은 64ms에 먼저 그렸다. 뒤의 인라인 스크립트가 CSS를 기다려 DCL은 밀렸다.",
+      shapes: { res: [[49, 50], [331, 50], [331, 75], [49, 75]], fcp: [[40, 115], [58, 115], [58, 140], [40, 140]], dcl: [[40, 180], [331, 180], [331, 205], [40, 205]] },
+      labels: [{ x: 190, y: 40, text: "a.css 32~1038ms", tone: "series2", size: "sm" }, { x: 110, y: 105, text: "FCP 64ms", tone: "series1", size: "sm" }, { x: 290, y: 170, text: "DCL 1041ms", tone: "series3", size: "sm" }],
+      focus: ["fcp"],
+    },
+    {
+      title: "media=\"print\"인 CSS",
+      detail: "지금 화면에 맞지 않는 미디어의 CSS는 받기는 하지만 그리기를 막지 않는다. FCP 36ms, DCL 20ms로 기준과 같다.",
+      shapes: { res: [[45, 50], [327, 50], [327, 75], [45, 75]], fcp: [[40, 115], [50, 115], [50, 140], [40, 140]], dcl: [[40, 180], [46, 180], [46, 205], [40, 205]] },
+      labels: [{ x: 186, y: 40, text: "print.css 18~1026ms", tone: "series2", size: "sm" }, { x: 100, y: 105, text: "FCP 36ms", tone: "series1", size: "sm" }, { x: 100, y: 170, text: "DCL 20ms", tone: "series3", size: "sm" }],
+      focus: ["fcp", "dcl"],
+    },
+    {
+      title: "head의 평범한 script",
+      detail: "파서가 서니 그릴 내용 자체가 없다. FCP 1032ms, DCL 1022ms.",
+      shapes: { res: [[44, 50], [324, 50], [324, 75], [44, 75]], fcp: [[40, 115], [329, 115], [329, 140], [40, 140]], dcl: [[40, 180], [326, 180], [326, 205], [40, 205]] },
+      labels: [{ x: 184, y: 40, text: "a.js 13~1016ms", tone: "series2", size: "sm" }, { x: 280, y: 105, text: "FCP 1032ms", tone: "series1", size: "sm" }, { x: 280, y: 170, text: "DCL 1022ms", tone: "series3", size: "sm" }],
+      focus: ["res", "fcp"],
+    },
+    {
+      title: "defer script",
+      detail: "첫 화면은 36ms로 돌아왔다. 실행을 미룬 만큼 DCL만 1025ms로 밀린다.",
+      shapes: { res: [[45, 50], [327, 50], [327, 75], [45, 75]], fcp: [[40, 115], [50, 115], [50, 140], [40, 140]], dcl: [[40, 180], [327, 180], [327, 205], [40, 205]] },
+      labels: [{ x: 186, y: 40, text: "a.js 18~1024ms", tone: "series2", size: "sm" }, { x: 100, y: 105, text: "FCP 36ms", tone: "series1", size: "sm" }, { x: 280, y: 170, text: "DCL 1025ms", tone: "series3", size: "sm" }],
+      focus: ["dcl"],
+    },
+  ]}
+/>
+
+세 번째 단계는 크로미움의 동작이다. `body` 안에 둔 `<link rel="stylesheet">`는 그 아래 내용의 렌더링만 막고 위쪽은 먼저 그리게 한다. 모든 브라우저가 똑같이 하지는 않으니 이걸 기대고 설계하지는 않는다.
+
+어떤 리소스가 렌더링을 막았는지는 짐작하지 않아도 된다. 크로미움 107부터 Resource Timing 항목에 `renderBlockingStatus`가 붙는다. CSS 두 개(그중 하나는 `media="print"`)와 속성이 다른 스크립트 네 개를 `<head>`에 둔 페이지에서 읽었다.
+
+```js
+performance.getEntriesByType("resource")
+  .map((e) => `${new URL(e.name).pathname.slice(3).padEnd(12)} ${e.renderBlockingStatus}`)
+  .join("\n");
+```
+
+```text
+main.css     blocking
+sync.js      blocking
+module.js    non-blocking
+defer.js     non-blocking
+async.js     non-blocking
+hero.svg     non-blocking
+print.css    non-blocking
+FCP 332ms
+```
+
+CSS는 300ms, 동기 스크립트는 200ms 걸리게 해 두었는데 첫 화면은 둘을 더한 500ms가 아니라 332ms였다. 스캐너 덕분에 둘이 나란히 받아졌고, 첫 화면은 막는 것들 중 가장 늦은 것에 맞춰졌다. RUM으로 이 값을 모으면 사용자 기기에서 무엇이 첫 화면을 막는지 바로 보인다.
+
+이 계산을 직접 해 보자. `<head>`에 있는 리소스 목록을 받아, 모두 나란히 받는다고 할 때 첫 화면이 가장 빨리 그려질 수 있는 시각을 돌려준다. 렌더링을 막는 것은 미디어 조건이 없거나 `all`, `screen`인 스타일시트와, `async`·`defer`·모듈이 아닌 스크립트다.
+
+<CodePlayground
+  caption="head 리소스 목록으로 첫 화면을 막는 시간 계산하기"
+  functionName="firstPaintAt"
+  initialCode={`function firstPaintAt(head) {
+  // head: [{ tag: "link" | "script", ms, media?, async?, defer?, module? }]
+  // ms: 받는 데 걸리는 시간. 모두 동시에 받기 시작한다고 본다
+  // 막는 것: media가 없거나 "all"/"screen"인 link,
+  //         async·defer·module이 모두 없는 script
+  // 반환: 막는 것들 중 가장 늦게 끝나는 시각. 없으면 0
+  return 0;
+}`}
+  solution={`function firstPaintAt(head) {
+  const blocking = head.filter((r) => {
+    if (r.tag === "link") return !r.media || r.media === "all" || r.media === "screen";
+    if (r.tag === "script") return !r.async && !r.defer && !r.module;
+    return false;
+  });
+  return blocking.reduce((max, r) => Math.max(max, r.ms), 0);
+}`}
+  tests={[
+    { label: "아무것도 없음", args: [[]], expected: 0 },
+    { label: "head의 CSS 하나", args: [[{ tag: "link", ms: 1000 }]], expected: 1000 },
+    { label: "defer 스크립트", args: [[{ tag: "script", ms: 1000, defer: true }]], expected: 0 },
+    { label: "CSS 200 + 동기 스크립트 800", args: [[{ tag: "link", ms: 200 }, { tag: "script", ms: 800 }]], expected: 800 },
+    { label: "앞의 측정과 같은 구성", args: [[{ tag: "link", ms: 300 }, { tag: "link", ms: 300, media: "print" }, { tag: "script", ms: 200 }, { tag: "script", ms: 200, defer: true }, { tag: "script", ms: 200, async: true }, { tag: "script", ms: 200, module: true }]], expected: 300 },
+    { label: "print CSS와 async만", args: [[{ tag: "link", ms: 500, media: "print" }, { tag: "script", ms: 400, async: true }]], expected: 0 },
+  ]}
+/>
+
+실제로는 이 값에 HTML 응답 시간과 파싱, 첫 레이아웃이 더해진다. 300이라는 답과 측정값 332ms 사이의 32ms가 그 몫이다. 크리티컬 CSS를 인라인으로 넣고 나머지를 늦게 받는 방법, `@import` 사슬이 왜 나쁜지는 [CSS 성능](/posts/css-performance)에서 따로 다룬다.
+
+## 스타일 계산과 레이아웃은 따로 센다
+
+DOM과 CSS 규칙이 준비되면 스타일 계산(Recalculate Style)이 요소마다 어떤 규칙이 걸리는지 정하고, 상속과 단위 변환을 거쳐 계산된 스타일(computed style)을 만든다. `getComputedStyle()`로 읽는 그 값이다. 그다음 레이아웃이 그 스타일로 상자의 위치와 크기를 정한다.
+
+레이아웃이 다루는 트리는 DOM과 모양이 다르다. `display: none`인 요소와 `<head>`는 빠지고, `::before`처럼 DOM에 없는 의사 요소는 들어간다. 줄바꿈된 글자는 줄마다 조각이 생긴다. 그래서 DOM 노드 수와 레이아웃이 하는 일의 양이 정확히 비례하지는 않는다.
+
+CDP의 `Performance.getMetrics`는 페이지가 지금까지 스타일 계산과 레이아웃을 몇 번, 얼마 동안 했는지 누적값을 준다. 앞의 카드 50개 페이지를 연 직후에 읽었다.
+
+```js
+await cdp.send("Performance.enable");
+await page.goto("http://127.0.0.1:18600/p/pipeline");
+const { metrics } = await cdp.send("Performance.getMetrics");
+```
+
+```text
+Nodes=274 LayoutCount=1 RecalcStyleCount=1 LayoutDuration=28.0ms RecalcStyleDuration=0.5ms ScriptDuration=0.4ms TaskDuration=45.6ms
+```
+
+페이지를 여는 동안 스타일 계산과 레이아웃이 한 번씩만 일어났다. 파서가 노드를 붙일 때마다 레이아웃을 하지 않고, 그릴 때가 되면 모아서 한다는 뜻이다. 이 숫자를 함수 실행 전후로 비교하면 어떤 코드가 레이아웃을 몇 번 부르는지 셀 수 있다. 크기를 읽는 코드가 레이아웃을 그 자리에서 강제로 부르는 경우는 [DOM 기초](/posts/dom-basics)에서 이 지표로 쟀다.
+
+## 페인트는 아직 그림이 아니다
+
+이름 때문에 오해가 많은 단계다. 크로미움의 `Paint`는 픽셀을 칠하지 않는다. "이 좌표에 이 색 사각형, 그 위에 이 글자"처럼 그리기 명령을 순서대로 적은 목록(페인트 기록, display list)을 만든다. 앞의 트레이스에서 `Paint`가 합쳐 0.48ms밖에 안 걸린 이유다. 실제로 픽셀을 채우는 건 래스터(rasterize) 단계이고, 메인 스레드가 아닌 래스터 워커에서 `RasterTask` 9회로 나뉘어 돌았다.
+
+페인트와 래스터 사이에는 층(레이어) 나누기가 있다. 브라우저는 페이지를 몇 장의 층으로 나눠 따로 래스터하고, 마지막에 합성 스레드가 겹친다. 어떤 요소가 따로 층이 되었고 왜 그런지는 CDP의 `LayerTree`로 볼 수 있다. 같은 페이지에서 읽었다.
+
+```js
+await cdp.send("LayerTree.enable");
+cdp.on("LayerTree.layerTreeDidChange", (e) => { if (e.layers) layers = e.layers; });
+// 페이지를 연 뒤 층마다 이유를 묻는다
+const { compositingReasonIds } = await cdp.send("LayerTree.compositingReasons", { layerId });
+```
+
+```text
+   0x0     drawsContent=true paintCount=0 reasons=(없음)
+ 390x800   drawsContent=false paintCount=0 reasons=OverflowScrolling
+ 390x6730  drawsContent=true paintCount=1 reasons=RootScroller,OverflowScrolling
+  25x26    drawsContent=true paintCount=1 reasons=WillChangeTransform
+ 390x800   drawsContent=false paintCount=0 reasons=Viewport
+```
+
+세로로 6730px인 문서 전체가 스크롤되는 층 하나(`RootScroller`)로 그려졌고, `will-change: transform`을 준 25×26 배지가 따로 층이 됐다. 스크롤할 때 브라우저가 다시 그리지 않고 이 큰 층을 옮기기만 하는 것도, 배지가 스크롤과 상관없이 제자리에 있는 것도 층이 나뉜 덕분이다.
+
+6730px짜리 층을 한 번에 다 래스터하지는 않는다. 층을 타일로 잘라 화면에 보이는 곳과 그 근처부터 채운다. 아주 빠르게 스크롤했을 때 잠깐 빈 칸이 보이는 체커보딩(checkerboarding)은 래스터가 스크롤을 못 따라간 순간이다. 층이 늘면 메모리가 얼마나 드는지는 [애니메이션 성능](/posts/animation-performance)의 `will-change` 실험에 있다.
+
+단계를 데이터 기준으로 다시 묶으면 이렇다. 왼쪽 위에서 오른쪽 아래로 점이 흐르는 방향이 다음 단계로 넘어가는 순서다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="각 단계는 앞 단계의 결과물을 받아 다음 결과물을 만든다"
+  nodes={[
+    { id: "dom", label: "DOM", x: 60, y: 40, w: 90 },
+    { id: "rules", label: "CSS 규칙", x: 60, y: 120, w: 90 },
+    { id: "style", label: "계산된 스타일", sub: "Recalc Style", x: 200, y: 80, w: 120 },
+    { id: "layout", label: "레이아웃 트리", sub: "위치·크기", x: 335, y: 80, w: 110 },
+    { id: "paint", label: "페인트 기록", sub: "그리기 명령", x: 335, y: 170, w: 110 },
+    { id: "layers", label: "층", sub: "Layerize", x: 200, y: 170, w: 100 },
+    { id: "tiles", label: "타일 픽셀", sub: "래스터 워커", x: 200, y: 260, w: 110 },
+    { id: "frame", label: "프레임", sub: "합성 스레드", x: 335, y: 260, w: 110 },
+  ]}
+  edges={[
+    { from: "dom", to: "style" },
+    { from: "rules", to: "style" },
+    { from: "style", to: "layout" },
+    { from: "layout", to: "paint" },
+    { from: "paint", to: "layers" },
+    { from: "layers", to: "tiles", label: "Commit" },
+    { from: "tiles", to: "frame" },
+  ]}
+/>
+
+이 순서가 성능 이야기의 바탕이다. 앞 단계를 다시 하게 만드는 변경일수록 비싸다. 위치나 크기를 바꾸면 레이아웃부터, 색을 바꾸면 페인트부터, `transform`과 `opacity`는 층을 겹치는 마지막 단계만 다시 한다. 속성별로 실제 비용을 잰 결과는 [애니메이션 성능](/posts/animation-performance)에 있다.
+
+## 프레임 하나 안의 순서
+
+첫 화면이 그려진 뒤에도 이 과정은 화면이 바뀔 때마다 반복된다. 차이는 매번 처음부터 하지 않고 바뀐 부분만 다시 한다는 것이다. 언제 다시 하는지는 이벤트 루프가 정한다. 태스크 하나가 끝나고 마이크로태스크를 다 비운 뒤, 그릴 때가 됐으면 렌더링 단계에 들어간다. 이 구조 자체는 [이벤트 루프](/posts/event-loop)에서 다뤘다. 여기서는 그 렌더링 단계 안을 트레이스로 들여다본다.
+
+`setTimeout`으로 배경색을 한 번 바꾸고, `requestAnimationFrame`으로 매 프레임 폭을 5px씩 늘리는 페이지에서 메인 스레드 이벤트를 순서대로 찍었다.
+
+```js
+setTimeout(() => { box.style.background = "#eb6834"; }, 0);
+let n = 0;
+const tick = () => {
+  box.style.width = 100 + n * 5 + "px"; // 첫 번째 tick은 100px 그대로다
+  if (++n < 6) requestAnimationFrame(tick);
+};
+requestAnimationFrame(tick);
+```
+
+```text
+  0.00ms  TimerFire (0.39ms)
+  0.01ms  FunctionCall (0.36ms)
+  0.41ms  FireAnimationFrame (0.06ms)
+  0.42ms  FunctionCall (0.05ms)
+  0.48ms  UpdateLayoutTree (0.02ms)
+  0.50ms  PrePaint (0.01ms)
+  0.53ms  Paint (0.03ms)
+  0.54ms  Paint (0.01ms)
+  0.60ms  Layerize (0.02ms)
+  0.63ms  Commit (0.03ms)
+ 11.06ms  FireAnimationFrame (0.08ms)
+ 11.07ms  FunctionCall (0.06ms)
+ 11.15ms  UpdateLayoutTree (0.10ms)
+ 11.25ms  Layout (0.04ms)
+ 11.31ms  PrePaint (0.03ms)
+ 11.34ms  Paint (0.02ms)
+ 11.35ms  Paint (0.01ms)
+ 11.37ms  Layerize (0.02ms)
+ 11.40ms  Commit (0.04ms)
+ 27.04ms  FireAnimationFrame (0.11ms)
+ 27.08ms  FunctionCall (0.05ms)
+ 27.15ms  UpdateLayoutTree (0.02ms)
+ 27.18ms  Layout (0.03ms)
+ 27.22ms  PrePaint (0.02ms)
+ 27.24ms  Paint (0.02ms)
+ 27.25ms  Paint (0.01ms)
+ 27.27ms  Layerize (0.02ms)
+ 27.29ms  Commit (0.10ms)
+```
+
+첫 묶음에는 `Layout`이 없다. 첫 번째 tick은 폭을 원래 값 100px로 다시 넣었을 뿐이고, 바뀐 건 타이머가 칠한 배경색이다. 색만 바뀌었으니 브라우저는 레이아웃을 건너뛰고 페인트부터 했다. 두 번째 묶음부터는 폭이 실제로 늘어서 `Layout`이 끼었다. 아래 그림은 이 기록을 한 칸씩 따라간 것이다.
+
+<AlgoTrace
+  caption="트레이스에 찍힌 순서대로 본 프레임 두 개"
+  memoryLabel="이번 프레임에 한 일"
+  cells={["태스크", "rAF", "Style", "Layout", "Paint", "Commit"]}
+  steps={[
+    { pointer: 0, memory: ["TimerFire: 배경색"], caption: "타이머 태스크가 배경색을 바꾼다. 화면은 아직 그대로다." },
+    { pointer: 1, memory: ["TimerFire: 배경색", "rAF: 폭 100px"], caption: "그릴 때가 됐다. rAF 콜백이 먼저 돈다. 폭은 원래 값 그대로다." },
+    { pointer: 2, memory: ["TimerFire: 배경색", "rAF: 폭 100px", "Style"], caption: "두 변경을 한꺼번에 보고 스타일을 다시 계산한다." },
+    { pointer: 4, memory: ["TimerFire: 배경색", "rAF: 폭 100px", "Style", "Paint"], caption: "크기가 그대로라 Layout을 건너뛰고 바로 페인트 기록을 고친다." },
+    { pointer: 5, found: [5], memory: ["TimerFire: 배경색", "rAF: 폭 100px", "Style", "Paint", "Commit"], caption: "합성 스레드에 넘긴다. 첫 프레임은 0.63ms에 끝났다." },
+    { pointer: 1, memory: ["rAF: 폭 105px"], caption: "약 11ms 뒤 다음 프레임. rAF가 폭을 105px로 바꾼다." },
+    { pointer: 3, memory: ["rAF: 폭 105px", "Style", "Layout"], caption: "이번엔 크기가 바뀌었으니 레이아웃이 낀다." },
+    { pointer: 5, found: [5], memory: ["rAF: 폭 105px", "Style", "Layout", "Paint", "Commit"], caption: "페인트와 Commit까지 거쳐 프레임을 넘긴다." },
+  ]}
+/>
+
+rAF 콜백이 스타일 계산 바로 앞에서 돈다는 게 이 기록으로 보인다. 화면을 바꾸는 코드를 rAF에 넣으면 그 변경이 바로 이어지는 렌더링에 들어간다. `setTimeout`에서 바꾸면 그 태스크가 프레임 사이 어디서 돌지 알 수 없어서, 한 프레임에 두 번 바꾸거나 한 프레임을 건너뛰기도 한다. 프레임 간격이 11ms, 16ms로 들쭉날쭉한 건 headless 환경이라 그렇다. 실제 화면에서는 주사율에 맞춰 16.7ms(60Hz)나 8.3ms(120Hz) 간격으로 돈다. 한 프레임 예산 이야기는 [애니메이션 성능](/posts/animation-performance)에, rAF의 정확도와 백그라운드 탭에서의 동작은 [타이머의 정확도](/posts/js-timers-accuracy)에 있다.
+
+## React 코드에서 이 순서를 만나는 곳
+
+React를 써도 브라우저가 그리는 순서는 그대로다. React는 DOM을 바꾸는 쪽에 있을 뿐이다.
+
+클라이언트 렌더링 앱의 HTML은 빈 `<div id="root">`와 모듈 스크립트 하나다. 모듈은 `defer`처럼 동작하니 파서를 막지 않고 첫 화면도 빨리 "그린다". 문제는 그릴 내용이 없다는 것이다. 사용자가 보는 첫 화면은 번들을 받고 실행해서 React가 DOM을 만든 뒤에야 나온다. 그 사이 이미지 주소는 모두 자바스크립트 안에 있으니 프리로드 스캐너도 도와줄 수 없다. 이 과정은 [CSR](/posts/rendering-csr-spa)에서 실제로 쟀다.
+
+훅 두 개의 차이도 이 순서로 설명된다. `useLayoutEffect`는 React가 DOM을 바꾼 직후, 브라우저가 스타일 계산과 페인트를 하기 전에 동기로 돈다. 여기서 크기를 재고 위치를 고치면 사용자는 고친 결과만 본다. 대신 이 안에서 `getBoundingClientRect()`를 읽으면 그 자리에서 레이아웃을 강제로 하게 되고, 이 훅이 오래 걸리면 그만큼 프레임이 늦는다. `useEffect`는 보통 브라우저가 그린 뒤에 돈다. 데이터 요청이나 구독처럼 화면과 상관없는 일은 여기에 둔다.
+
+스타일도 마찬가지다. 런타임 CSS-in-JS는 렌더링 중에 `<style>` 태그를 끼워 넣는다. 새 규칙이 들어갈 때마다 브라우저는 스타일을 다시 계산해야 한다. 정적으로 뽑은 CSS 파일은 `<head>`에서 렌더링을 막는 대신 한 번에 적용된다. 둘의 비용 차이는 [CSS 성능](/posts/css-performance)에서 다룬다. React 19부터는 `<link rel="stylesheet" precedence="...">`를 컴포넌트 안에 써도 `<head>`로 끌어올리고, 스타일시트가 올 때까지 그 부분을 보여 주지 않는 기능이 들어갔다. 깜빡임을 막는 방향은 브라우저의 렌더 차단과 같다.
+
+## 하얀 화면이 길 때 어디부터 보나
+
+처음 장면 같은 제보가 오면 이 순서로 좁힌다.
+
+먼저 HTML이 늦게 왔는지 본다. Network 탭에서 문서 요청의 Waiting(TTFB)이 길면 서버나 네트워크 문제이고, 이 글의 범위 밖이다. HTML은 빨리 왔는데 첫 화면이 늦으면 브라우저 안의 문제다.
+
+Performance 패널에서 페이지를 다시 불러 기록한다. 맨 위 Network 줄에서 첫 화면(FCP 표시) 전에 끝나는 CSS와 JS를 찾는다. 최근 크롬은 요청을 누르면 렌더링을 막았는지(Render blocking)를 함께 보여 준다. 자동으로 모으려면 앞의 `renderBlockingStatus`를 쓴다. 막는 것이 CSS라면 그 파일이 왜 큰지, 첫 화면에 다 필요한지 본다. 동기 스크립트라면 `defer`나 `async`로 바꿀 수 있는지 본다. 태그 관리자가 넣는 동기 스크립트가 흔한 범인이다.
+
+막는 리소스가 없는데도 늦다면 메인 스레드를 본다. 파싱이 끝난 뒤 긴 `Evaluate Script`나 거대한 `Layout`이 첫 페인트 앞을 덮고 있을 수 있다. 첫 레이아웃이 수백 ms라면 DOM이 너무 크거나 글꼴 처리가 무거운 경우다. 그다음은 LCP다. 첫 화면은 빨리 나왔는데 주인공 이미지가 늦게 뜬다면 그 이미지를 스캐너가 볼 수 있는지부터 확인한다.
+
+고친 뒤에는 같은 조건으로 FCP와 `renderBlockingStatus`를 다시 읽어서 막는 리소스가 사라졌는지 숫자로 확인한다. 개발 서버가 아니라 프로덕션 빌드로 잰다. 개발 모드는 CSS를 자바스크립트로 주입하는 등 구성이 달라서 결과가 엉뚱하게 나온다.
+
+## 다시 하얀 화면으로
+
+브라우저는 HTML을 받는 대로 읽고, 평범한 스크립트 앞에서 서고, CSS가 올 때까지 일부러 그리지 않는다. 그 사이 프리로드 스캐너가 HTML에 적힌 주소를 먼저 받아 둔다. 그리고 그릴 때는 스타일 계산, 레이아웃, 페인트 기록까지를 메인 스레드가, 픽셀 채우기와 층 겹치기를 다른 스레드가 맡는다. 화면이 늦으면 이 중 어느 단계가 무엇을 기다렸는지 트레이스로 찾으면 된다. 이 순서를 이용해 프레임마다 하는 일을 줄이는 방법은 [렌더링 성능 최적화](/posts/rendering-performance-optimization)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 브라우저가 HTML을 받아 화면에 그리기까지의 과정을 설명해 주세요.
+
+HTML을 받는 대로 토큰화해 DOM을 만들고, CSS로 스타일 규칙을 만든 뒤 요소마다 계산된 스타일을 정한다. 레이아웃이 위치와 크기를 정하고, 페인트가 그리기 명령 목록을 만들고, 층으로 나눠 합성 스레드에 넘긴다. 래스터 워커가 타일 단위로 픽셀을 채우면 합성 스레드가 층을 겹쳐 프레임을 낸다. 크롬 계열 기준으로 페인트 기록까지는 메인 스레드, 래스터와 합성은 다른 스레드에서 돈다.
+
+### CSS는 왜 렌더링을 막고, 자바스크립트는 왜 파싱을 막나요?
+
+CSS 없이 먼저 그리면 스타일 없는 화면이 번쩍 보였다가 바뀌니, 브라우저는 `<head>`의 스타일시트가 올 때까지 첫 렌더링을 미룬다. 평범한 스크립트는 `document.write()`로 뒤에 올 HTML을 바꿀 수 있어서 실행 전에는 파서가 앞으로 갈 수 없다. 여기에 더해 스크립트는 스타일 값을 읽을 수 있으니 앞선 CSS가 올 때까지 실행도 기다린다. 1초짜리 CSS 뒤의 인라인 스크립트가 1010ms에 실행된 것이 그 결과다.
+
+### async, defer, type="module"은 어떻게 다른가요?
+
+셋 다 받는 동안 파서를 막지 않는다. `defer`는 파싱이 끝난 뒤 문서 순서대로 실행하고 그다음 `DOMContentLoaded`가 뜬다. `async`는 다 받는 즉시 실행해서 순서를 보장하지 않고 `DOMContentLoaded`를 기다리게 하지도 않는다. 모듈 스크립트는 기본이 `defer`처럼 동작하고 `async`를 붙이면 받는 대로 실행한다. 측정해 보면 `defer`와 모듈은 FCP 36~40ms에 DCL 1025ms, `async`는 DCL 27ms였다.
+
+### 프리로드 스캐너는 무엇이고, 무엇을 놓치나요?
+
+메인 파서가 스크립트 앞에서 멈춘 동안 아직 읽지 않은 HTML을 훑어 `img`, `link`, `script`의 주소를 먼저 요청하는 보조 파서다. 1초 동안 파서가 멈춰 있어도 아래쪽 이미지와 CSS가 7ms에 요청된 것이 그 덕분이다. HTML 텍스트만 보기 때문에 자바스크립트가 만드는 요소, CSS 안의 `background-image`나 `@import`, `data-src` 방식의 지연 로딩은 놓친다. LCP 이미지가 여기 해당하면 HTML에 직접 쓰거나 `preload`로 알려 준다.
+
+### 페인트와 래스터는 어떻게 다른가요?
+
+크로미움의 페인트는 픽셀을 칠하지 않고 무엇을 어떤 순서로 그릴지 적은 명령 목록을 만든다. 래스터가 그 목록을 실제 픽셀로 바꾸며, 층을 타일로 잘라 래스터 워커 스레드에서 화면 근처부터 처리한다. 그래서 트레이스에서 메인 스레드의 `Paint`는 짧고 `RasterTask`는 다른 스레드에 여러 번 찍힌다. 빠르게 스크롤할 때 잠깐 보이는 빈 칸은 래스터가 따라가지 못한 순간이다.
+
+### 레이어는 왜 나누고, 어떤 요소가 따로 층이 되나요?
+
+층을 나눠 두면 스크롤이나 `transform`, `opacity` 변화 때 다시 그리지 않고 겹치는 위치만 바꿀 수 있다. 문서 전체를 담는 스크롤 층, `will-change: transform`을 준 요소, 3D 변환이나 비디오처럼 브라우저가 정한 이유가 있는 요소가 따로 층이 된다. CDP의 `LayerTree.compositingReasons`나 개발자 도구 Layers 패널에서 이유를 확인할 수 있다. 층마다 메모리를 쓰니 많이 만든다고 좋은 건 아니다.
+
+### requestAnimationFrame 콜백은 프레임의 어디에서 실행되나요?
+
+태스크와 마이크로태스크가 끝나고 브라우저가 그릴 때가 됐다고 판단하면, 스타일 계산 바로 앞에서 rAF 콜백을 실행한다. 트레이스에서도 `FireAnimationFrame` 다음에 `UpdateLayoutTree`, `Layout`, `Paint`, `Commit`이 이어졌다. 그래서 화면을 바꾸는 코드를 rAF에 두면 그 변경이 바로 다음 렌더링에 들어간다. 콜백 안에서 크기를 읽고 쓰기를 번갈아 하면 레이아웃이 여러 번 강제로 일어나니 읽기를 먼저 모은다.
+
+### 첫 화면이 하얗게 오래 보이면 무엇부터 확인하나요?
+
+HTML 응답이 늦은지(TTFB)부터 보고, 빨리 왔다면 첫 페인트 전에 끝나는 렌더 차단 리소스를 찾는다. Performance 패널의 Network 줄이나 Resource Timing의 `renderBlockingStatus`로 `<head>`의 CSS와 동기 스크립트를 골라낸다. 막는 리소스가 없으면 첫 페인트 앞을 덮는 긴 스크립트 실행이나 거대한 첫 레이아웃을 본다. 고친 뒤에는 프로덕션 빌드에서 같은 조건으로 다시 잰다.
