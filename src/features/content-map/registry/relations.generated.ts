@@ -2,6 +2,77 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "kafka-to-lake-pipeline": {
+    "links": [
+      "data-lake-hdfs",
+      "spark-basics",
+      "airflow-orchestration",
+      "kafka-basics",
+      "message-delivery-semantics",
+      "sd-ad-click-stream-windows",
+      "sd-ad-click-exactly-once",
+      "schema-versioning"
+    ],
+    "mentions": [
+      "stream-processing",
+      "sd-object-storage-architecture",
+      "pub-sub",
+      "postgres-architecture",
+      "sql-query-rewrite",
+      "zero-downtime-migrations"
+    ]
+  },
+  "airflow-orchestration": {
+    "links": [
+      "cron-jobs",
+      "batch-processing",
+      "spark-basics",
+      "data-lake-hdfs",
+      "idempotency-key",
+      "kafka-to-lake-pipeline"
+    ],
+    "mentions": [
+      "sd-object-storage-architecture",
+      "db-type-embedded",
+      "js-pure-functions",
+      "kafka-basics",
+      "osi-in-practice",
+      "http-methods",
+      "zero-downtime-migrations"
+    ]
+  },
+  "spark-basics": {
+    "links": [
+      "data-lake-hdfs",
+      "airflow-orchestration",
+      "kafka-to-lake-pipeline"
+    ],
+    "mentions": [
+      "db-partitioning",
+      "rest-api-design",
+      "sd-start-single-server",
+      "kafka-basics",
+      "db-type-relational"
+    ]
+  },
+  "data-lake-hdfs": {
+    "links": [
+      "spark-basics",
+      "airflow-orchestration",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "sd-object-storage-durability",
+      "sd-object-storage-architecture"
+    ],
+    "mentions": [
+      "db-partitioning",
+      "sd-start-single-server",
+      "stream-processing",
+      "kafka-basics",
+      "postgres-architecture",
+      "cdc-change-data-capture"
+    ]
+  },
   "spring-cloud-vs-kubernetes": {
     "links": [
       "microservices",
@@ -285,6 +356,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "elasticsearch-inverted-index",
       "db-type-wide-column",
+      "data-lake-hdfs",
       "sd-latency-numbers",
       "helm-basics",
       "sd-object-storage-architecture",
@@ -798,6 +870,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "olap-star-schema"
     ],
     "mentions": [
+      "kafka-to-lake-pipeline",
       "k8s-statefulset",
       "js-array-transform",
       "message-delivery-semantics",
@@ -839,6 +912,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "olap-star-schema"
     ],
     "mentions": [
+      "kafka-to-lake-pipeline",
       "elasticsearch-inverted-index",
       "mysql-replication-online-ddl",
       "page-cache-disk-io",
@@ -2072,6 +2146,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-cluster",
       "db-type-wide-column",
       "db-type-key-value",
+      "airflow-orchestration",
       "sd-start-single-server",
       "db-type-relational",
       "http-methods"
@@ -3149,6 +3224,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
+      "data-lake-hdfs",
       "stream-processing",
       "olap-star-schema",
       "sd-object-storage-architecture",
@@ -3243,6 +3319,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "page-cache-disk-io",
       "tail-latency",
       "vpc-basics",
+      "data-lake-hdfs",
       "cpu-pipelining-branch-prediction"
     ]
   },
@@ -5180,6 +5257,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "kafka-to-lake-pipeline",
       "pessimistic-locking",
       "postgres-reporting-sql",
       "microservices",
@@ -8404,6 +8482,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tcp-connection-lifecycle",
       "k8s-service-types",
       "db-type-key-value",
+      "data-lake-hdfs",
       "eks-cluster-basics",
       "ports-and-sockets",
       "local-custom-domain",
@@ -9223,6 +9302,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "kafka-to-lake-pipeline",
       "cdc-change-data-capture",
       "api-versioning",
       "postgres-architecture"
@@ -10209,6 +10289,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-advanced-sql",
       "db-architecture-by-scale",
       "postgres-mvcc-vacuum",
+      "airflow-orchestration",
       "stream-processing",
       "postgres-architecture",
       "redis-basics",
@@ -11411,6 +11492,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "metrics-types",
       "db-partitioning",
       "sqld-group-by-having",
+      "data-lake-hdfs",
       "sd-start-single-server",
       "prometheus-basics",
       "db-replication-sharding",
@@ -11431,6 +11513,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-reporting-sql",
       "db-sharding",
       "cdc-change-data-capture",
+      "data-lake-hdfs",
+      "kafka-to-lake-pipeline",
       "mysql-innodb-basics",
       "kafka-basics",
       "db-replication-sharding",
@@ -11602,6 +11686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-mq-storage-partitions",
       "bloom-filter",
       "db-index-pitfalls",
+      "data-lake-hdfs",
       "sd-kv-store-write-read-path",
       "db-partitioning",
       "dns"
@@ -12095,6 +12180,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rabbitmq-basics",
       "db-type-key-value",
       "message-delivery-semantics",
+      "kafka-to-lake-pipeline",
       "page-cache-disk-io",
       "db-type-relational",
       "db-type-graph",
@@ -12634,6 +12720,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",
+      "kafka-to-lake-pipeline",
       "base64",
       "kafka-basics",
       "redis-basics",

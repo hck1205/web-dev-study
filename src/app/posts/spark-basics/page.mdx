@@ -1,0 +1,404 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spark-basics");
+
+클릭 2000만 줄을 광고 표와 조인하는 Spark 작업을 돌렸다. Spark UI의 stage 진행률이 31/32에서 멈춰 있다. 태스크 서른한 개는 1초 안에 끝났는데 마지막 하나가 혼자 6초를 더 돈다. CPU를 늘려도 이 시간은 줄지 않는다. 늘린 CPU는 다 놀고 마지막 태스크 하나만 일하기 때문이다.
+
+이 장면을 이해하려면 Spark가 코드를 어떻게 잘라 실행하는지 알아야 한다. 코드는 바로 실행되지 않고 계획이 되고, 계획은 셔플을 경계로 stage로 잘리고, stage는 파티션 수만큼 태스크로 나뉜다. 위의 마지막 태스크는 파티션 하나에 데이터가 몰려서 생겼다. 이 글은 그 흐름을 PySpark 4.0.1 로컬 모드(코어 넷)로 직접 돌려 보며 따라간다. 지연 평가, DAG와 stage, 셔플, 파티션 수, 조인 전략, 데이터 치우침(skew), `explain()` 읽는 법이다.
+
+이 기계는 다른 작업과 CPU를 나눠 쓰는 상태라 시간은 실행마다 꽤 흔들렸다. 시간보다 태스크 수, 행 수, 실행 계획처럼 매번 같게 나오는 숫자를 기준으로 본다. 읽는 데이터는 [데이터 레이크와 HDFS](/posts/data-lake-hdfs)에서 만든 날짜 파티션 Parquet 클릭 300만 줄이다. 이 작업을 매일 정해진 순서로 돌리는 일은 [Airflow](/posts/airflow-orchestration)에, Kafka에서 받아 레이크에 쌓는 스트리밍 쪽은 [Kafka에서 레이크까지](/posts/kafka-to-lake-pipeline)에 있다.
+
+## 서버 한 대로 안 되는 집계를 나눠 맡긴다
+
+하루 클릭 로그가 수백 GB면 서버 한 대 메모리에 들어가지 않는다. 파일을 조각으로 나눠 여러 서버가 동시에 읽고, 같은 광고의 클릭끼리 모아 더하고, 결과를 다시 모아야 한다. 하둡 MapReduce가 이 일을 처음 대중화했지만, 단계마다 중간 결과를 디스크(HDFS)에 쓰고 다시 읽어서 느렸다. 여러 단계가 이어지는 분석이나 같은 데이터를 여러 번 도는 머신러닝에서 특히 그랬다.
+
+Spark는 2010년 무렵 버클리에서 이 문제를 풀려고 나왔다. 중간 결과를 될 수 있으면 메모리에 두고, 단계 전체를 먼저 계획으로 만든 뒤 한꺼번에 최적화해 실행한다. 조각 하나를 잃어도 처음부터가 아니라 그 조각을 만든 계산만 다시 하면 되도록, 데이터마다 "어디서 어떻게 만들어졌나"(lineage)를 기억한다.
+
+구조는 드라이버와 익스큐터로 나뉜다. 드라이버는 내 코드가 도는 프로세스로, 계획을 세우고 태스크를 나눠 준다. 익스큐터는 태스크를 받아 실제로 계산하는 JVM 프로세스다. 클러스터에서는 YARN이나 쿠버네티스가 익스큐터를 띄워 주고, 로컬 모드에서는 한 JVM 안에서 스레드 넷이 익스큐터 노릇을 한다.
+
+<ConceptDiagram
+  caption="드라이버가 계획을 세우고 태스크를 익스큐터에 나눠 준다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "drv", label: "드라이버", sub: "계획·스케줄링", x: 90, y: 60, w: 120 },
+    { id: "cm", label: "클러스터 관리자", sub: "YARN, k8s", x: 310, y: 60, w: 130 },
+    { id: "e1", label: "익스큐터 1", sub: "태스크 실행", x: 80, y: 185, w: 110 },
+    { id: "e2", label: "익스큐터 2", sub: "태스크 실행", x: 200, y: 185, w: 110 },
+    { id: "e3", label: "익스큐터 3", sub: "셔플 파일 보관", x: 320, y: 185, w: 110 },
+  ]}
+  edges={[
+    { from: "drv", to: "cm", label: "자원 요청" },
+    { from: "drv", to: "e1", label: "태스크" },
+    { from: "drv", to: "e2", label: "태스크" },
+    { from: "e2", to: "e3", label: "셔플", arrow: "both", dashed: true },
+  ]}
+/>
+
+## 변환은 계획만 쌓고, 액션이 실행한다
+
+한국 클릭만 골라 광고별 클릭 수와 광고비를 구하고, 광고비 상위 3개를 뽑는 코드다. 단계마다 시간과 지금까지 실행된 잡 수를 찍었다.
+
+```python
+clicks = spark.read.parquet("work/lake/clicks")
+kr = clicks.filter(F.col("country") == "KR")
+by_ad = kr.groupBy("ad_id").agg(F.count("*").alias("clicks"), F.sum("cost").alias("cost"))
+top = by_ad.orderBy(F.desc("cost")).limit(3)
+rows = top.collect()   # 여기서 처음으로 데이터를 읽는다
+rows = top.collect()   # 한 번 더
+```
+
+```text
+read.parquet: 3564 ms, 지금까지 잡 1개
+filter, groupBy, agg, orderBy, limit 정의: 643 ms, 지금까지 잡 1개
+collect() #1: 5268 ms, 지금까지 잡 3개
+collect() #2: 318 ms, 지금까지 잡 4개
+  Row(ad_id=210, clicks=3726, cost=295530)
+  Row(ad_id=458, clicks=3693, cost=286400)
+  Row(ad_id=293, clicks=3698, cost=285130)
+```
+
+`filter`부터 `limit`까지 다섯 줄을 지나는 동안 잡은 하나도 늘지 않았다. 643ms는 계산이 아니라 Python이 JVM에 계획을 만들어 달라고 부탁하고 컬럼 이름을 확인하는 시간이다. 이런 연산을 변환(transformation)이라고 한다. 계획만 쌓는다. `collect()`, `count()`, `write` 같은 액션(action)을 불러야 실행된다. `read.parquet`에서 잡이 하나 돈 것은 예외인데, 폴더를 훑어 파티션 열과 스키마를 알아내는 작업이다.
+
+두 번째 `collect()`가 318ms로 빨라진 데는 JVM이 데워진 것도 있지만, 같은 DataFrame을 다시 실행하면 앞 단계의 셔플 결과 파일을 다시 쓰기 때문이기도 하다. Spark UI REST API로 잡 목록을 보면 드러난다.
+
+```text
+job 3 collect at …  stages [4, 5] tasks 4 skippedStages 1 skippedTasks 3
+job 2 collect at …  stages [2, 3] tasks 4 skippedStages 1 skippedTasks 3
+job 1 collect at …  stages [1]    tasks 3 skippedStages 0 skippedTasks 0
+job 0 parquet at NativeMethodAccessorImpl.java stages [0] tasks 1 skippedStages 0 skippedTasks 0
+```
+
+첫 `collect()`가 잡 1과 2, 두 번째가 잡 3이다. 잡 3은 파일을 읽는 stage(태스크 3개)를 건너뛰었다(`skippedStages 1`). 아래 그림은 계획이 쌓이다가 액션에서 한꺼번에 실행되는 과정이다.
+
+<AlgoTrace
+  caption="변환은 계획에 한 줄씩 붙고, 액션에서 실행된다"
+  memoryLabel="논리 계획"
+  cells={["read", "filter", "groupBy", "agg", "orderBy", "limit", "collect"]}
+  steps={[
+    { pointer: 0, caption: "read.parquet: 스키마만 알아낸다. 데이터 행은 아직 읽지 않았다.", memory: ["Scan clicks"] },
+    { pointer: 1, caption: "filter: 계획에 조건 하나가 붙는다. 잡은 여전히 1개다.", memory: ["Scan clicks", "Filter KR"] },
+    { pointer: 2, caption: "groupBy: 혼자서는 아무것도 아니다. 다음 agg와 묶여야 집계가 된다.", memory: ["Scan clicks", "Filter KR", "group ad_id"] },
+    { pointer: 3, caption: "agg: 광고별 count와 sum이 계획에 들어간다.", memory: ["Scan clicks", "Filter KR", "Aggregate ad_id"] },
+    { pointer: 5, caption: "orderBy와 limit: 정렬 뒤 3개만이라는 것까지 계획에 있다.", memory: ["Scan clicks", "Filter KR", "Aggregate ad_id", "Top 3 by cost"] },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5], caption: "collect: 여기서 옵티마이저가 계획 전체를 다시 짜고 실행한다. 정렬 전체 대신 상위 3개만 추리는 연산으로 바뀐다.", memory: ["FileScan(cost, ad_id, country)", "partial agg", "Exchange", "final agg", "TakeOrdered 3"] },
+  ]}
+/>
+
+미루는 데는 이유가 있다. 계획 전체를 보고 나서야 고칠 수 있는 것들이 있다. 위 코드는 `orderBy` 뒤에 `limit(3)`이 오니 전체 정렬 대신 상위 3개만 추리는 `TakeOrderedAndProject`로 바뀌었다. 여섯 열 중 쓰는 세 열만 읽고, `country = 'KR'` 조건은 Parquet 리더에 내려 보내 행 그룹을 건너뛰게 한다. 이 최적화기를 Catalyst라고 부른다.
+
+지연 평가에는 함정도 있다. 액션을 두 번 부르면 계획이 두 번 실행된다. 같은 DataFrame으로 `count()`도 하고 `write`도 하면 파일을 두 번 읽는다. 여러 번 쓸 DataFrame은 `cache()`(또는 `persist()`)로 붙잡아 두고, 다 쓰면 `unpersist()`로 놓는다. 반대로 한 번만 쓰는 데이터를 습관처럼 `cache()`하면 메모리만 차지해 다른 작업을 디스크로 밀어낸다. 그리고 오류도 늦게 난다. 변환 줄에서 문제없던 코드가 몇 줄 뒤 `write`에서 터지면, 원인은 앞쪽 변환에 있을 수 있다.
+
+## explain()으로 계획을 펼쳐 본다
+
+위 `top.explain()`을 실행 뒤에 찍은 물리 계획이다. 아래에서 위로 읽는다.
+
+```text
+== Physical Plan ==
+AdaptiveSparkPlan isFinalPlan=true
++- == Final Plan ==
+   ResultQueryStage 1
+   +- TakeOrderedAndProject(limit=3, orderBy=[cost#8L DESC NULLS LAST], output=[ad_id#1L,clicks#7L,cost#8L])
+      +- *(2) HashAggregate(keys=[ad_id#1L], functions=[count(1), sum(cost#4L)])
+         +- AQEShuffleRead coalesced
+            +- ShuffleQueryStage 0
+               +- Exchange hashpartitioning(ad_id#1L, 200), ENSURE_REQUIREMENTS, [plan_id=41]
+                  +- *(1) HashAggregate(keys=[ad_id#1L], functions=[partial_count(1), partial_sum(cost#4L)])
+                     +- *(1) Project [ad_id#1L, cost#4L]
+                        +- *(1) Filter (isnotnull(country#3) AND (country#3 = KR))
+                           +- *(1) ColumnarToRow
+                              +- FileScan parquet [ad_id#1L,country#3,cost#4L,dt#5] Batched: true, DataFilters: [...], Format: Parquet, Location: InMemoryFileIndex(1 paths)[file:/…/work/lake/clicks], PartitionFilters: [], PushedFilters: [IsNotNull(country), EqualTo(country,KR)], ReadSchema: struct<ad_id:bigint,country:string,cost:bigint>
+```
+
+맨 아래 `FileScan` 줄에 읽기 최적화가 다 모여 있다. 조각을 눌러 보면 각 부분이 무슨 뜻인지 나온다.
+
+<UrlAnatomy
+  caption="FileScan 한 줄을 조각으로 읽기"
+  base="FileScan parquet"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "cols", display: "[ad_id,country,cost,dt]", title: "읽을 열", description: "파일의 여섯 열 중 계획에 필요한 열만 읽는다. dt는 파일 안이 아니라 폴더 이름에서 온다. select *를 쓰면 이 목록이 길어지고 그만큼 디스크를 더 읽는다.", required: true },
+    { key: "PartitionFilters", value: "[]", title: "파티션 가지치기", description: "비어 있다. 날짜 조건을 걸지 않았으니 dt 폴더 셋을 다 연다. WHERE dt = '2026-10-25'를 붙이면 여기에 조건이 나타나고 폴더 하나만 연다." },
+    { key: "PushedFilters", value: "[EqualTo(country,KR)]", title: "리더로 내려 보낸 조건", description: "Parquet 리더가 행 그룹 꼬리말의 최솟값과 최댓값을 보고 조건에 맞을 수 없는 행 그룹을 건너뛴다. 조건 열에 UDF를 씌우면 여기서 빠진다." },
+    { key: "ReadSchema", value: "struct<ad_id,country,cost>", title: "실제로 해석하는 스키마", description: "파일에서 꺼내 행으로 만드는 열이다. 넓은 테이블일수록 여기가 짧은지 먼저 본다." },
+  ]}
+/>
+
+위로 올라가면 `*(1)`과 `*(2)`가 보인다. 별표와 숫자는 그 연산들을 한 덩어리의 자바 코드로 합쳐 컴파일했다는 표시다(whole-stage codegen). 번호가 바뀌는 자리가 `Exchange`다. Exchange는 셔플, 즉 데이터를 키에 따라 다른 익스큐터로 다시 나눠 보내는 지점이다. `hashpartitioning(ad_id#1L, 200)`은 광고 번호의 해시로 200조각을 만든다는 뜻이다. 셔플 아래의 `partial_count`, `partial_sum`은 셔플 전에 각 태스크가 자기 몫을 먼저 더해 두는 단계라서, 네트워크로는 광고마다 한 줄씩만 건너간다.
+
+`Initial Plan`과 `Final Plan`이 따로 있는 것은 AQE(Adaptive Query Execution) 때문이다. Spark 3.2부터 기본으로 켜져 있다. 셔플이 끝나면 실제로 나온 크기를 보고 남은 계획을 다시 짠다. `AQEShuffleRead coalesced`는 200조각이 너무 작아서 합쳤다는 표시다. 실행 전에 찍은 `explain()`에는 `isFinalPlan=false`와 초기 계획만 나오니, 셔플 뒤 모습을 보려면 실행 뒤에 찍거나 Spark UI의 SQL 탭을 본다.
+
+## 셔플이 stage를 자른다
+
+연산은 두 종류다. `filter`, `select`, `withColumn`처럼 입력 파티션 하나만 보면 출력 파티션 하나가 나오는 좁은 변환은 셔플 없이 이어 붙여 한 태스크 안에서 처리한다. `groupBy`, `join`, `orderBy`, `distinct`, `repartition`처럼 같은 키를 한곳에 모아야 하는 넓은 변환은 셔플을 부른다. Spark는 셔플 자리마다 계획을 잘라 stage를 만든다. 앞 stage의 태스크는 결과를 키별로 나눠 로컬 디스크에 쓰고(셔플 쓰기), 뒤 stage의 태스크는 모든 앞 태스크에서 자기 몫을 가져온다(셔플 읽기). 아래 그림에서 다음을 누르면 광고 210번 클릭이 모이는 길이 보인다.
+
+<NetworkTopology
+  caption="셔플: 앞 stage가 키별로 나눠 쓰고, 뒤 stage가 자기 몫을 가져간다"
+  width={400}
+  height={260}
+  zones={[
+    { id: "s0", label: "stage 0 (파일 읽기)", x: 8, y: 20, w: 130, h: 225, tone: "edge" },
+    { id: "s1", label: "stage 1 (집계)", x: 262, y: 20, w: 130, h: 225, tone: "private" },
+  ]}
+  nodes={[
+    { id: "m1", label: "task dt=23", sub: "partial agg", x: 72, y: 65, icon: "server" },
+    { id: "m2", label: "task dt=24", sub: "partial agg", x: 72, y: 135, icon: "server" },
+    { id: "m3", label: "task dt=25", sub: "partial agg", x: 72, y: 205, icon: "server" },
+    { id: "sh", label: "셔플 파일", sub: "로컬 디스크", x: 200, y: 135, icon: "db" },
+    { id: "r1", label: "reduce 0", sub: "ad 210 …", x: 327, y: 90, icon: "server" },
+    { id: "r2", label: "reduce 1", sub: "ad 458 …", x: 327, y: 185, icon: "server" },
+  ]}
+  links={[
+    { from: "m1", to: "sh" },
+    { from: "m2", to: "sh" },
+    { from: "m3", to: "sh" },
+    { from: "sh", to: "r1" },
+    { from: "sh", to: "r2" },
+  ]}
+  steps={[
+    { path: ["m1", "sh"], packet: "210: 1240", title: "파일마다 먼저 더한다", detail: "10-23 파일을 읽은 태스크가 광고 210의 클릭을 미리 더해 한 줄로 만든다. 그리고 해시로 정한 조각 번호를 붙여 디스크에 쓴다." },
+    { path: ["m2", "sh"], packet: "210: 1251", title: "다른 날짜도 같은 조각 번호로", detail: "어느 태스크든 광고 210은 같은 해시값이라 같은 조각에 들어간다." },
+    { path: ["m3", "sh"], packet: "210: 1235", title: "앞 stage가 다 끝나야 한다", detail: "셋째 태스크까지 쓰기를 마쳐야 뒤 stage가 시작한다. 이 대기가 stage 경계다." },
+    { path: ["sh", "r1"], packet: "210 ×3", title: "뒤 태스크가 자기 몫을 가져간다", detail: "reduce 0은 세 태스크의 셔플 파일에서 자기 조각만 네트워크로 받아 합친다. 광고 210은 3726이 된다." },
+    { path: ["sh", "r2"], packet: "458 ×3", title: "다른 조각은 다른 태스크로", detail: "AQE가 없으면 이런 reduce 태스크가 200개 뜬다. 광고가 500개뿐인 데이터에는 너무 많다." },
+  ]}
+/>
+
+그림 속 210번의 날짜별 숫자는 설명을 위한 예시이고, 합계 3726만 실제 결과다. 셔플은 Spark 작업에서 가장 비싼 부분이다. 디스크에 쓰고, 네트워크로 옮기고, 다시 읽는다. 셔플 파일은 익스큐터의 로컬 디스크에 남기 때문에, 익스큐터가 죽으면 그 파일도 사라지고 뒤 stage가 `FetchFailedException`으로 실패해 앞 stage 일부를 다시 돌린다. 그래서 작업을 빠르게 만드는 일은 대개 셔플 횟수를 줄이고, 셔플로 건너가는 양을 줄이는 일이다. 같은 키로 `groupBy`를 두 번 하는 대신 한 번에 여러 집계를 하고, 조인 전에 필요 없는 행과 열을 먼저 거른다.
+
+stage가 잡히는 순서를 드라이버 쪽에서 보면 이렇다.
+
+<SequenceDiagram
+  caption="액션 하나가 잡이 되고, stage로 잘리고, 태스크로 나뉜다"
+  actors={[
+    { id: "py", label: "내 코드" },
+    { id: "drv", label: "드라이버" },
+    { id: "ex", label: "익스큐터" },
+  ]}
+  steps={[
+    { from: "py", to: "drv", label: "collect()", title: "액션이 잡을 만든다", detail: "그동안 쌓아 둔 논리 계획을 넘긴다." },
+    { from: "drv", to: "drv", label: "Catalyst", title: "계획을 고친다", detail: "필요한 열만 읽고, 조건을 리더로 내리고, 정렬 + limit을 상위 N 추리기로 바꾼다. 그 뒤 셔플 자리마다 잘라 stage를 만든다." },
+    { from: "drv", to: "ex", label: "stage 0 × 3", title: "앞 stage의 태스크를 보낸다", detail: "파일(파티션)이 셋이라 태스크도 셋이다. 코어가 넷이니 셋이 동시에 돈다." },
+    { from: "ex", to: "drv", label: "셔플 크기", title: "끝나면 결과 크기를 알린다", detail: "각 조각에 몇 바이트를 썼는지가 드라이버로 간다." },
+    { from: "drv", to: "drv", label: "AQE", title: "실제 크기를 보고 다시 짠다", detail: "200조각이 모두 작으니 합쳐서 태스크 하나로 줄인다. 한쪽이 작으면 브로드캐스트 조인으로 바꾸기도 한다." },
+    { from: "drv", to: "ex", label: "stage 1 × 1", title: "뒤 stage를 보낸다", detail: "합친 조각 하나를 태스크 하나가 처리한다." },
+    { from: "ex", to: "py", label: "Row × 3", title: "결과가 드라이버로 모인다", detail: "collect는 결과 전체를 드라이버 메모리로 가져온다. 3줄이니 괜찮지만, 큰 결과에 쓰면 드라이버가 죽는다." },
+  ]}
+/>
+
+마지막 단계가 흔한 사고다. 수천만 줄짜리 DataFrame에 `collect()`나 `toPandas()`를 부르면 결과가 드라이버 한 대로 몰린다. `spark.driver.maxResultSize`(기본 1g)를 넘으면 작업이 실패하고, 그보다 드라이버 메모리가 먼저 차면 드라이버가 죽는다. 큰 결과는 `write`로 파일에 쓰고, 눈으로 볼 것만 `limit` 뒤에 가져온다.
+
+## 파티션 수가 태스크 수다
+
+태스크 하나는 파티션 하나를 처리한다. 그러니 파티션 수가 병렬성의 상한이고, 파티션 크기가 태스크 하나의 일감이다. 같은 클릭 10만 줄을 파일 1만 개, 파일 하나, Parquet 파일 셋으로 읽어 `count()`했다.
+
+```text
+== 파일과 파티션
+  work/small         파티션 313  count=100,000  12.41s
+  work/big.jsonl     파티션   2  count=100,000  0.28s
+  work/lake/clicks   파티션   3  count=3,000,000  0.37s
+```
+
+파일 1만 개가 파티션 313개가 된 데는 규칙이 있다. Spark는 파일을 읽을 때 파티션 하나를 최대 128MB(`spark.sql.files.maxPartitionBytes`)로 채우는데, 파일 하나를 열 때마다 4MB(`spark.sql.files.openCostInBytes`)를 쓴 것으로 친다. 500바이트짜리 파일도 4MB 무게라 파티션 하나에 약 32개가 들어가고, 10,000 ÷ 32 ≈ 313이다. 작은 파일을 묶어 주긴 하지만, 파일마다 열고 닫는 비용은 그대로라 같은 내용인데 40배 넘게 느렸다. 작은 파일 문제의 근본 해결은 [데이터 레이크 글](/posts/data-lake-hdfs)의 컴팩션이다.
+
+셔플 뒤의 파티션 수는 따로 정한다. `spark.sql.shuffle.partitions` 기본값은 200이다. 같은 `groupBy("country").count()`를 AQE를 끄고 켜서 돌려 stage별 태스크 수를 봤다. 오른쪽 `#` 주석은 읽기 쉽게 덧붙였다.
+
+```text
+stage 0 tasks 1 parquet at NativeMethodAccesso
+stage 1 tasks 3 collect at …        # AQE 끔: 파일 읽기
+stage 2 tasks 200 collect at …      # AQE 끔: 셔플 뒤 200조각
+stage 3 tasks 3 collect at …        # AQE 켬: 파일 읽기
+stage 5 tasks 1 collect at …        # AQE 켬: 셔플 뒤 1조각으로 합침
+```
+
+나라가 세 개뿐인데 AQE를 끄면 태스크 200개가 뜨고 197개는 빈손으로 끝난다. 결과를 파일로 쓰면 파일 200개, 그중 대부분이 비거나 작은 파일이다. AQE는 셔플 결과를 보고 목표 크기(`spark.sql.adaptive.advisoryPartitionSizeInBytes`, 기본 64MB)에 맞게 합쳐 하나로 만들었다.
+
+반대 방향도 있다. 데이터가 TB 단위인데 200조각이면 조각 하나가 수 GB라 메모리에 안 들어가서 디스크로 넘친다(spill). Spark UI의 stage 화면에서 `Spill (Disk)` 열에 값이 보이면 조각이 너무 크다는 뜻이다. 어림으로는 셔플 조각 하나가 100~200MB쯤 되게 잡는다. 파티션 수를 바꾸는 손잡이는 둘이다. `repartition(n)`은 셔플을 해서 고르게 다시 나누고, `coalesce(n)`은 셔플 없이 옆 파티션끼리 붙여 수만 줄인다. 파일 쓰기 직전에 출력 파일 수를 줄일 때는 `coalesce`가 싸지만, 너무 적게 줄이면 앞 단계 계산까지 그 수의 태스크로 돌아 느려진다.
+
+## 작은 표는 통째로 보낸다
+
+조인도 셔플을 부른다. 양쪽을 조인 키로 셔플하고, 각 조각을 키 순서로 정렬해 맞춰 가는 것이 정렬 병합 조인(SortMergeJoin)이다. 한쪽이 작으면 더 싼 길이 있다. 작은 쪽 전체를 모든 익스큐터에 복사해 두고, 큰 쪽은 움직이지 않은 채 자기 자리에서 해시 표로 찾는다. 브로드캐스트 해시 조인이다. 큰 쪽의 셔플이 통째로 사라진다.
+
+```python
+ads = spark.range(1, 501).select(F.col("id").alias("ad_id"), (F.col("id") % 7).alias("advertiser_id"))
+clicks.join(ads, "ad_id")   # 광고 표 500줄
+```
+
+```text
+   +- BroadcastHashJoin [ad_id#43L], [ad_id#70L], Inner, BuildRight, false
+   +- BroadcastExchange HashedRelationBroadcastMode(List(input[0, bigint, false]),false), [pl…
+# spark.sql.autoBroadcastJoinThreshold = -1 로 끈 뒤
+   +- SortMergeJoin [ad_id#43L], [ad_id#70L], Inner
+```
+
+`BuildRight`는 오른쪽(광고 표)으로 해시 표를 만들었다는 뜻이다. 자동 브로드캐스트 기준은 `spark.sql.autoBroadcastJoinThreshold`(기본 10MB)이고, 통계가 없거나 부정확하면 작은 표인데도 정렬 병합 조인을 고른다. 확실히 작은 걸 알면 `F.broadcast(ads)`로 힌트를 준다. 반대로 수 GB짜리를 억지로 브로드캐스트하면 드라이버가 그걸 모았다 뿌리느라 메모리가 터지고, 브로드캐스트 시간 초과(`spark.sql.broadcastTimeout`, 기본 300초)가 난다.
+
+## 키 하나에 몰리면 태스크 하나가 끝나지 않는다
+
+처음 장면을 재현했다. 클릭 2000만 줄 중 60%가 광고 1번이다. 광고 표 5001줄과 조인했다. 치우침이 잘 보이게 브로드캐스트를 끄고 셔플 파티션을 32로 두었다. 조인 stage의 태스크 32개가 각각 몇 줄을 읽었는지 Spark REST API(`/stages/{id}/taskList`)로 뽑았다.
+
+```text
+[plain] 결과 20,000,000행
+  가장 오래 걸린 stage 4: 태스크 32개, 시간 중앙값 0.3s, 최대 6.2s
+  태스크별 읽은 행 수 중앙값 246,158, 최대 12,248,155
+  plan: +- * SortMergeJoin Inner (12)
+```
+
+한 태스크가 1224만 줄, 나머지는 24만 줄 남짓이다. 50배 차이다. 같은 키는 반드시 같은 조각으로 가니, 광고 1번의 1200만 줄은 태스크 하나가 다 받는다. 코어를 100개로 늘려도 이 태스크는 한 코어에서 돈다. 클러스터에서는 이런 태스크가 메모리를 넘쳐 spill하거나 익스큐터를 OOM으로 죽이기도 한다.
+
+AQE에는 치우친 조인을 쪼개는 기능이 있다(`spark.sql.adaptive.skewJoin.enabled`, 기본 켜짐). 셔플 뒤 어떤 조각이 중앙값의 5배를 넘고 256MB 이상이면(Spark 3.x~4.0 기본값) 그 조각을 여러 태스크로 나누고, 상대편 조각은 그 수만큼 복제한다. 이 데이터는 256MB에 못 미쳐 기준을 8MB로 낮춰 돌렸다.
+
+```text
+[aqe] 결과 20,000,000행
+  가장 오래 걸린 stage 4: 태스크 34개, 시간 중앙값 0.8s, 최대 5.9s
+  태스크별 읽은 행 수 중앙값 248,165, 최대 4,210,405
+  plan: +- * SortMergeJoin(skew=true) Inner (14)
+  plan: :  +- AQEShuffleRead (6)
+```
+
+`SortMergeJoin(skew=true)`가 쪼갰다는 표시다. 32개가 34개가 됐고, 최대 1224만 줄이 421만 줄로 줄었다. 셋으로밖에 못 나눈 이유는 쪼개는 단위가 앞 stage 태스크(매퍼)의 출력 묶음이기 때문이다. 시간은 이 기계에서 오히려 흔들렸다. 코어 넷에 다른 작업까지 돌던 상태라, 태스크를 쪼개도 동시에 돌 코어가 모자랐다. 쪼개기의 효과는 코어가 넉넉한 클러스터에서 그 태스크 하나가 stage 시간을 다 잡아먹을 때 드러난다.
+
+AQE가 못 푸는 경우(집계, 윈도 함수, 기준에 안 걸리는 치우침)에는 소금 치기(salting)를 쓴다. 뜨거운 키에 0~N-1의 난수를 붙여 N개의 키로 흩고, 작은 쪽은 N배로 복제해 짝을 맞춘다.
+
+```python
+N = 8
+clicks = clicks.withColumn("salt", (F.rand(42) * N).cast("int"))
+ads = ads.crossJoin(spark.range(N).select(F.col("id").cast("int").alias("salt")))  # 광고 표 8배
+joined = clicks.join(ads, ["ad_id", "salt"])
+```
+
+```text
+[salt] 결과 20,000,000행
+  가장 오래 걸린 stage 4: 태스크 34개, 시간 중앙값 0.7s, 최대 2.6s
+  태스크별 읽은 행 수 중앙값 259,263, 최대 1,762,728
+```
+
+최대가 176만 줄로 내려갔다. 결과 행 수는 2000만으로 같다. 대가는 작은 쪽이 N배가 되는 것과 코드가 복잡해지는 것이다. 모든 키에 소금을 치지 말고, 상위 몇 개 키만 골라 치는 방법도 흔하다. 집계라면 소금 붙은 키로 한 번 부분 합을 내고, 소금을 떼고 한 번 더 합친다. 아래 그림은 같은 키 열을 그냥 나눌 때와 소금을 쳐서 나눌 때를 비교한다.
+
+<AlgoTrace
+  caption="뜨거운 키 1번을 그냥 나누면 한 조각에 몰리고, 소금을 치면 흩어진다"
+  memoryLabel="조각별 행 수 (4조각)"
+  cells={["1", "1", "1", "1", "1", "1", "1", "1", "2", "3", "4", "5"]}
+  steps={[
+    { caption: "광고 번호 12개 중 8개가 1번이다. 키 % 4로 조각을 정한다.", memory: ["p0: 0", "p1: 0", "p2: 0", "p3: 0"] },
+    { pointer: 7, found: [0, 1, 2, 3, 4, 5, 6, 7], caption: "1번 여덟 개가 전부 p1로 간다. 1 % 4 = 1이기 때문이다.", memory: ["p0: 0", "p1: 8", "p2: 0", "p3: 0"] },
+    { pointer: 11, caption: "나머지 2, 3, 4, 5가 흩어진다. 5 % 4 = 1이라 p1에 하나 더 붙는다. 조각 하나가 9, 나머지가 1이다.", memory: ["p0: 1", "p1: 9", "p2: 1", "p3: 1"] },
+    { pointer: 0, caption: "이번엔 소금을 친다. i번째 행의 키를 key × 4 + (i % 4)로 바꾼다. 1번은 4, 5, 6, 7 네 가지로 갈린다.", memory: ["p0: 0", "p1: 0", "p2: 0", "p3: 0"] },
+    { pointer: 11, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], caption: "같은 키여도 다른 조각으로 흩어져 3, 3, 3, 3이 된다. 조인 상대편은 소금 값마다 한 벌씩, 네 벌을 준비해야 짝이 맞는다.", memory: ["p0: 3", "p1: 3", "p2: 3", "p3: 3"] },
+  ]}
+/>
+
+직접 만들어 볼 수 있다. 키를 조각 수로 나눈 나머지로 조각을 정하고, `salt`가 1보다 크면 i번째 행의 키를 `key × salt + (i % salt)`로 바꾼 뒤 나눈다.
+
+<CodePlayground
+  caption="해시 파티셔닝과 소금 치기"
+  functionName="partitionCounts"
+  initialCode={`// keys: 0 이상의 정수 키 배열, n: 조각 수, salt: 소금 값 개수 (1이면 소금 없음)
+// 조각 번호는 (키 % n). salt > 1이면 i번째 키를 key * salt + (i % salt)로 바꾼 뒤 나눈다.
+// 조각별 행 수 배열을 돌려준다.
+function partitionCounts(keys, n, salt) {
+  return new Array(n).fill(0);
+}`}
+  solution={`function partitionCounts(keys, n, salt) {
+  const counts = new Array(n).fill(0);
+  keys.forEach((key, i) => {
+    const k = salt > 1 ? key * salt + (i % salt) : key;
+    counts[k % n] += 1;
+  });
+  return counts;
+}`}
+  tests={[
+    { args: [[1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 5], 4, 1], expected: [1, 9, 1, 1], label: "소금 없이: p1에 몰린다" },
+    { args: [[1, 1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 5], 4, 4], expected: [3, 3, 3, 3], label: "소금 4: 고르게 흩어진다" },
+    { args: [[0, 1, 2, 3, 4, 5, 6, 7], 4, 1], expected: [2, 2, 2, 2], label: "고른 키" },
+    { args: [[7, 7, 7, 7], 2, 2], expected: [2, 2], label: "키 하나도 둘로" },
+    { args: [[], 3, 1], expected: [0, 0, 0], label: "빈 입력" },
+  ]}
+/>
+
+현장에서 치우침은 null과 기본값에서 자주 나온다. 로그인하지 않은 사용자의 `user_id`가 전부 null이거나 0이면, 그 값 하나가 제일 큰 키가 된다. 조인하기 전에 키 분포를 먼저 본다.
+
+```python
+# 조인 키 상위 10개의 개수를 본다
+clicks.groupBy("user_id").count().orderBy(F.desc("count")).show(10)
+```
+
+null 키는 내부 조인에서 어차피 짝이 없으니 조인 전에 걸러 내고, 외부 조인이면 따로 떼어 처리한 뒤 합친다.
+
+## RDD를 직접 쓰지 않게 된 이유
+
+지금까지 쓴 것은 DataFrame이다. Spark의 첫 API는 RDD(Resilient Distributed Dataset)였다. 파티션으로 나뉜 객체 묶음에 `map`, `reduceByKey` 같은 함수를 건다. 유연하지만 Spark는 그 함수 안을 들여다볼 수 없다. 어떤 열을 쓰는지, 조건이 무엇인지 모르니 열 골라 읽기도, 조건 내려 보내기도 못 한다. DataFrame은 연산을 이름 붙은 열과 식으로 적게 해서 Catalyst가 계획을 고칠 수 있게 하고, 데이터를 JVM 객체 대신 압축된 이진 형식(Tungsten)으로 들고 다닌다.
+
+같은 이유로 Python UDF는 비싸다. Spark가 안을 모르는 블랙박스이고, 행을 JVM에서 Python 프로세스로 보냈다가 받아와야 한다. 광고비가 0보다 크면 `paid`, 아니면 `free`로 나누는 같은 일을 내장 함수와 Python UDF로 해 봤다(300만 줄, 세 번 중 가장 빠른 값).
+
+```text
+== Python UDF와 내장 함수
+  내장 when    0.22s
+  Python UDF 1.87s
+[Row(b='free', count=1800997), Row(b='paid', count=1199003)]
+   *(2) Project [pythonUDF0#122 AS b#121]
+   +- BatchEvalPython [bucket(cost#46L)#120], [pythonUDF0#122]
+```
+
+결과는 같고 여덟 배 넘게 느리다. 계획의 `BatchEvalPython`이 JVM과 Python 사이를 오가는 자리다. 이 연산은 코드 생성 덩어리 `*(1)`과 `*(2)`를 갈라 놓기도 한다. `F.when`, `F.regexp_extract`, `F.date_trunc`처럼 내장 함수로 되는 일은 내장 함수로 한다. 꼭 Python이 필요하면 Arrow로 묶음째 넘기는 `pandas_udf`를 먼저 검토한다. Spark 3.5부터는 일반 Python UDF에도 Arrow 최적화 옵션이 있지만, 버전마다 기본값과 동작이 달라서 쓰는 버전에서 확인해야 한다. 그리고 버전 이야기를 하나 더 하면, Spark 4.0부터 ANSI SQL 모드가 기본으로 켜져서 0으로 나누기나 잘못된 형 변환이 null 대신 오류를 낸다. 3.x에서 잘 돌던 작업이 4.0에서 실패한다면 이것부터 의심한다.
+
+## 느린 Spark 작업을 받으면
+
+Spark UI(드라이버의 4040번 포트, 끝난 작업은 History Server)에서 위에서 아래로 좁힌다.
+
+- Jobs 탭에서 가장 오래 걸린 잡을 찾고, 그 잡의 stage 중 가장 긴 stage로 들어간다.
+- stage 화면의 Summary Metrics에서 Duration의 Median과 Max를 비교한다. Max가 Median의 몇 배 이상이면 치우침이다. 같은 표의 Shuffle Read Size / Records도 같이 본다.
+- `Spill (Memory)`, `Spill (Disk)`에 값이 있으면 조각이 너무 크다. 셔플 파티션 수를 늘리거나 AQE 목표 크기를 확인한다.
+- 태스크 수가 수만 개이고 각자 수십 ms면 조각이 너무 작거나 입력 파일이 너무 작다.
+- SQL 탭에서 최종 계획을 열어 조인이 BroadcastHashJoin인지 SortMergeJoin인지, FileScan에 PartitionFilters와 PushedFilters가 들어갔는지 본다.
+- GC Time이 태스크 시간의 상당 부분이면 익스큐터 메모리가 모자라거나 객체를 너무 많이 만든다(Python UDF, 큰 `collect_list`).
+
+UI를 열 수 없으면 같은 정보를 REST API로 뽑는다. 위 실험의 숫자도 이렇게 뽑았다.
+
+```bash
+# 드라이버가 떠 있는 동안: 앱 ID와 stage 목록
+curl -s http://127.0.0.1:4040/api/v1/applications | jq -r '.[0].id'
+curl -s "http://127.0.0.1:4040/api/v1/applications/$APP/stages?status=complete" \
+  | jq -r '.[] | "\(.stageId) tasks=\(.numCompleteTasks) shuffleRead=\(.shuffleReadBytes)"'
+```
+
+흔한 실수를 몇 가지 더 적는다. 루프 안에서 `withColumn`을 수백 번 부르면 계획이 깊어져 계획 짜는 데만 몇 분이 걸린다. 열 여러 개는 `select` 한 번으로 만든다. `df.count()`로 데이터를 확인하는 습관은 그때마다 전체를 읽는다. 결과를 덮어쓸 때 `mode("overwrite")`는 기본적으로 테이블 전체를 지운다. 날짜 파티션 하나만 갈아 끼우려면 `spark.sql.sources.partitionOverwriteMode=dynamic`을 켜거나 [테이블 포맷](/posts/data-lake-hdfs)의 조건부 덮어쓰기를 쓴다. 이걸 모르고 하루치를 다시 돌렸다가 나머지 날짜가 전부 사라지는 사고가 이 기능이 생긴 이유다.
+
+## 셔플을 세고, 조각을 고르게
+
+Spark는 변환을 계획으로 쌓아 두었다가 액션에서 Catalyst로 고쳐 실행한다. 계획은 셔플 자리마다 stage로 잘리고, stage는 파티션 수만큼 태스크로 나뉜다. 그래서 빠른 작업은 셔플이 적고, 조각이 고르고, 조각 크기가 적당하다. 실행 계획에서 Exchange 수와 조인 종류, FileScan의 필터를 읽고, UI에서 태스크 시간의 중앙값과 최댓값을 비교하면 대부분의 느린 작업은 원인이 보인다. 매일 이 작업을 순서대로, 실패하면 다시 돌리게 묶는 일은 [Airflow](/posts/airflow-orchestration)에서 다룬다.
+
+## 면접에서 나올 만한 질문
+
+### 변환(transformation)과 액션(action)은 어떻게 다른가요?
+
+변환은 계획에 연산을 붙이기만 하고 실행하지 않는다. `filter`, `select`, `groupBy`, `join`이 그렇다. 액션은 결과가 필요해서 그때까지 쌓인 계획을 실행한다. `collect`, `count`, `write`가 그렇다. 계획 전체를 보고 최적화하려고 미루는 것이고, 그래서 같은 DataFrame에 액션을 두 번 부르면 두 번 계산된다.
+
+### Spark는 stage를 어떤 기준으로 나누나요?
+
+셔플이 필요한 넓은 변환 자리에서 나눈다. `filter`나 `select` 같은 좁은 변환은 한 태스크 안에서 이어서 처리하고, `groupBy`, `join`, `orderBy`처럼 같은 키를 모아야 하는 연산 앞에서 계획을 자른다. 앞 stage가 셔플 파일을 다 써야 뒤 stage가 시작한다. 실행 계획에서는 `Exchange`가 그 경계다.
+
+### 셔플이 비싼 이유와 줄이는 방법은요?
+
+데이터를 로컬 디스크에 쓰고, 네트워크로 옮기고, 다시 읽어 정렬하거나 합치기 때문이다. 셔플 전에 필요 없는 행과 열을 거르고, 부분 집계로 건너가는 양을 줄이고, 작은 표와의 조인은 브로드캐스트로 바꾼다. 같은 키로 여러 번 셔플하지 않게 연산을 묶는 것도 방법이다.
+
+### spark.sql.shuffle.partitions는 어떻게 정하나요?
+
+기본값 200은 작은 데이터에는 너무 많고 큰 데이터에는 너무 적다. 셔플 조각 하나가 100~200MB쯤 되게 잡는 것이 출발점이다. Spark 3.2부터 기본으로 켜진 AQE는 실제 셔플 크기를 보고 작은 조각을 합쳐 주기 때문에, 요즘은 넉넉하게 잡고 AQE에 맡기는 경우가 많다. 실험에서 나라 세 개 집계는 AQE가 200조각을 하나로 합쳤다.
+
+### 데이터 치우침(skew)은 어떻게 알아보고 어떻게 고치나요?
+
+stage의 태스크 시간이나 셔플 읽기 행 수에서 최댓값이 중앙값보다 크게 튀면 치우침이다. 실험에서는 한 태스크가 1224만 줄, 중앙값이 24만 줄이었다. 조인이라면 AQE의 skew join이 큰 조각을 여러 태스크로 쪼개고, 안 되면 뜨거운 키에 소금을 쳐서 흩는다. null이나 0 같은 기본값 키는 조인 전에 걸러 낸다.
+
+### 브로드캐스트 조인은 언제 쓰고 언제 위험한가요?
+
+한쪽 표가 익스큐터마다 복사해도 될 만큼 작을 때 쓴다. 큰 쪽의 셔플이 사라져 훨씬 빠르다. 자동 기준은 10MB이고, `broadcast()` 힌트로 강제할 수 있다. 큰 표를 억지로 브로드캐스트하면 드라이버와 익스큐터 메모리가 터지거나 브로드캐스트 시간 초과가 난다.
+
+### Python UDF가 느린 이유는요?
+
+Spark가 함수 안을 모르는 블랙박스라 열 골라 읽기나 조건 내려 보내기 같은 최적화를 못 하고, 행을 JVM에서 Python 프로세스로 직렬화해 보냈다가 받아와야 하기 때문이다. 실험에서 같은 분류가 내장 함수로 0.22초, Python UDF로 1.87초였다. 내장 함수로 바꾸는 것이 먼저고, 안 되면 Arrow로 묶음째 넘기는 `pandas_udf`를 쓴다.
+
+### 익스큐터 하나가 죽으면 작업은 어떻게 되나요?
+
+그 익스큐터가 돌리던 태스크는 다른 익스큐터에서 다시 돈다. 데이터마다 lineage를 기억하고 있어서, 잃어버린 파티션만 그걸 만든 계산을 다시 해서 되살린다. 다만 그 익스큐터 디스크에 있던 셔플 파일도 사라지기 때문에 뒤 stage가 FetchFailed로 실패하고, 앞 stage의 해당 태스크를 다시 돌린 뒤 이어 간다.

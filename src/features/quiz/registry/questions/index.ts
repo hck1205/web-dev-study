@@ -3,6 +3,7 @@ import { ABORT_CONTROLLER } from "./abort-controller";
 import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ACID_VS_BASE } from "./acid-vs-base";
 import { AGENTIC_RAG } from "./agentic-rag";
+import { AIRFLOW_ORCHESTRATION } from "./airflow-orchestration";
 import { ALERTING } from "./alerting";
 import { ALGORITHMS_OVERVIEW } from "./algorithms-overview";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
@@ -77,6 +78,7 @@ import { CSS_PERFORMANCE } from "./css-performance";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
 import { DATA_FETCHING_OPTIMIZATION } from "./data-fetching-optimization";
+import { DATA_LAKE_HDFS } from "./data-lake-hdfs";
 import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
@@ -325,6 +327,7 @@ import { K8S_STATEFULSET } from "./k8s-statefulset";
 import { K8S_STORAGECLASS_SNAPSHOTS } from "./k8s-storageclass-snapshots";
 import { K8S_VPA } from "./k8s-vpa";
 import { KAFKA_BASICS } from "./kafka-basics";
+import { KAFKA_TO_LAKE_PIPELINE } from "./kafka-to-lake-pipeline";
 import { KAFKA_VS_RABBITMQ_REPLAY } from "./kafka-vs-rabbitmq-replay";
 import { KUBECONFIG_CONTEXTS } from "./kubeconfig-contexts";
 import { KUBECTL_APPLY_SSA } from "./kubectl-apply-ssa";
@@ -564,6 +567,7 @@ import { SERVICE_MESH } from "./service-mesh";
 import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
 import { SORTING_ALGORITHMS } from "./sorting-algorithms";
+import { SPARK_BASICS } from "./spark-basics";
 import { SPRING_AI_AGENTS } from "./spring-ai-agents";
 import { SPRING_ANIMATION } from "./spring-animation";
 import { SPRING_BOOT_4_MIGRATION } from "./spring-boot-4-migration";
@@ -663,6 +667,7 @@ export const QUESTION_SETS = [
   ACID_TRANSACTIONS,
   ACID_VS_BASE,
   AGENTIC_RAG,
+  AIRFLOW_ORCHESTRATION,
   ALERTING,
   ALGORITHMS_OVERVIEW,
   ANIMATION_PATTERNS,
@@ -737,6 +742,7 @@ export const QUESTION_SETS = [
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
   DATA_FETCHING_OPTIMIZATION,
+  DATA_LAKE_HDFS,
   DATA_STRUCTURES_OVERVIEW,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
@@ -985,6 +991,7 @@ export const QUESTION_SETS = [
   K8S_STORAGECLASS_SNAPSHOTS,
   K8S_VPA,
   KAFKA_BASICS,
+  KAFKA_TO_LAKE_PIPELINE,
   KAFKA_VS_RABBITMQ_REPLAY,
   KUBECONFIG_CONTEXTS,
   KUBECTL_APPLY_SSA,
@@ -1224,6 +1231,7 @@ export const QUESTION_SETS = [
   SIT_UAT_TESTING,
   SLI_SLO,
   SORTING_ALGORITHMS,
+  SPARK_BASICS,
   SPRING_AI_AGENTS,
   SPRING_ANIMATION,
   SPRING_BOOT_4_MIGRATION,

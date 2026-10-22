@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "kafka-to-lake-pipeline",
+    title: "Kafka에서 레이크까지: 스트리밍 적재, 정확히 한 번의 범위, 늦은 데이터",
+    summary: "같은 테이블인데 읽는 경로에 따라 80,000건과 84,998건이 나오는 장면에서 시작해, Spark Structured Streaming의 체크포인트와 싱크 커밋 로그, kill -9 뒤의 재실행, 스트리밍이 만드는 작은 파일과 일일 정리 배치, 닫힌 날짜를 다시 여는 늦은 데이터, 조용히 NULL이 되는 스키마 변경을 Kafka 4.1로 직접 재현한다.",
+    topic: "programming/data-engineering",
+    tags: ["Kafka", "Spark", "Big Data", "Messaging", "Distributed Systems"],
+    date: "2026-10-26",
+    keywords: ["Structured Streaming", "Kafka Connect", "늦은 데이터", "스트리밍 체크포인트"],
+  },
+  {
+    slug: "airflow-orchestration",
+    title: "Airflow: DAG, 데이터 구간, 재시도와 백필",
+    summary: "크론 두 줄로 이은 집계와 리포트가 어긋나는 장면에서 시작해, DAG와 센서, logical_date와 데이터 구간, 다시 돌려도 같은 결과를 내는 태스크, 백필, XCom의 한계를 Airflow 3.3으로 직접 돌려 본다. Airflow 3에서 바뀐 기본값과 queued에서 멈춘 태스크를 보는 순서도 다룬다.",
+    topic: "programming/data-engineering",
+    tags: ["Big Data", "Python", "Backend", "Automation"],
+    date: "2026-10-26",
+    keywords: ["Airflow", "데이터 구간", "logical_date", "백필 실행"],
+  },
+  {
+    slug: "spark-basics",
+    title: "Spark 기초: 지연 평가, stage와 셔플, 파티션, 데이터 치우침",
+    summary: "태스크 하나만 끝나지 않는 조인에서 시작해, 변환과 액션, 셔플이 자르는 stage, 파일 수와 파티션 수, AQE, 브로드캐스트 조인, skew join과 소금 치기, Python UDF의 비용을 PySpark 4.0으로 직접 돌려 실행 계획과 함께 본다.",
+    topic: "programming/data-engineering",
+    tags: ["Spark", "Big Data", "Performance", "Python"],
+    date: "2026-10-26",
+    keywords: ["Apache Spark", "지연 평가", "데이터 치우침", "브로드캐스트 조인", "AQE"],
+  },
+  {
+    slug: "data-lake-hdfs",
+    title: "데이터 레이크와 HDFS: 블록, 복제, 작은 파일, 그리고 테이블 포맷",
+    summary: "같은 5MB를 파일 1만 개로 올리면 한 파일보다 백 배 넘게 느린 이유에서 시작해, HDFS의 블록과 복제 파이프라인, DataNode를 죽였을 때의 재복제, NameNode 메모리를 Hadoop 3.5로 직접 확인한다. 객체 저장소로 옮겨 간 이유, Parquet과 파티션 가지치기, Delta Lake 커밋 로그와 타임 트래블도 다룬다.",
+    topic: "programming/data-engineering",
+    tags: ["Big Data", "Database", "Performance", "Distributed Systems"],
+    date: "2026-10-26",
+    keywords: ["HDFS", "NameNode", "작은 파일 문제", "테이블 포맷", "Parquet"],
+  },
+  {
     slug: "spring-cloud-vs-kubernetes",
     title: "Spring Cloud와 쿠버네티스: 무엇을 넘기고 무엇을 남기나",
     summary: "Eureka, Config Server, Gateway, LoadBalancer가 풀던 문제를 쿠버네티스의 Service, ConfigMap, Ingress와 짝지어 보고, 재고 서비스 두 대 중 한 대가 망가질 때 Resilience4j 서킷 브레이커가 실제로 어떻게 움직이는지 돌려 본다. readiness에 브레이커를 넣으면 생기는 연쇄 장애까지 다룬다.",
