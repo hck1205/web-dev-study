@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-service-types");
 
+<EasyIntro>
+  Pod는 다시 뜰 때마다 주소가 바뀐다. 그래서 라벨로 묶은 Pod들 앞에 바뀌지 않는 이름과 주소를 세우는데, 그것이 Service다. 그 주소는 어느 장치에도 실제로 붙어 있지 않고, 기계마다 적힌 전달 규칙이 그 주소로 온 요청을 Pod 하나로 바꿔 보낸다.
+
+  Service 종류는 그 위에 층을 하나씩 더 얹은 것이다. 기본 종류는 클러스터 안에서만 통하는 가상 주소이고, NodePort는 모든 기계에 같은 번호의 문을 하나 열고, LoadBalancer는 그 앞에 바깥 장비를 하나 더 세운다. 회사 대표 번호로 전화하면 교환원이 빈 직원에게 연결해 주는 것과 같아서, 받는 직원은 누가 걸었는지 모르고 교환원 번호만 본다.
+
+  그래서 바깥에서 들어온 요청의 진짜 출발 주소가 기계 주소로 바뀌어 보이는 일이 생긴다. 출발 주소를 지키는 설정으로 바꾸면 그 기계에 Pod가 있을 때만 받을 수 있어서, 앞단 장비가 Pod 없는 기계를 걸러 줘야 한다.
+</EasyIntro>
+
 웹 서버 앞의 Service를 `type: NodePort`로 바꿔서 사내 로드 밸런서에 물렸다. 접속은 잘 되는데 접근 로그의 클라이언트 IP가 전부 `192.168.50.11`, `192.168.50.13` 같은 노드 주소다. IP별로 걸어 둔 요청 수 제한이 노드 단위로 걸리고, 보안팀이 원하는 진짜 출발지는 어디에도 없다. 그래서 `externalTrafficPolicy: Local`로 바꿨더니 이번에는 노드 하나로 가는 요청만 전부 시간 초과가 난다.
 
 두 증상 모두 Service가 "가상 IP 하나에 DNAT 규칙 묶음"이라는 사실에서 나온다. 이 글은 ClusterIP, NodePort, LoadBalancer, ExternalName, headless가 각각 무엇을 더 얹는지, 트래픽 정책이 패킷의 출발지와 목적지를 어떻게 바꾸는지를 실제 API 객체와 손으로 만든 규칙으로 따라간다.

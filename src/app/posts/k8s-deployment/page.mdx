@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-deployment");
 
+<EasyIntro>
+  앱을 새 버전으로 바꿀 때 모든 Pod를 한꺼번에 끄고 켜면 그 사이에 손님을 받을 곳이 없다. 그래서 Deployment는 옛 Pod를 조금씩 빼고 새 Pod를 조금씩 넣는 방식으로 바꾼다. 배포 중에 목록을 보면 이름 가운데가 다른 두 무리가 섞여 있는 이유가 이것이다.
+
+  Deployment는 Pod를 직접 만들지 않고 버전마다 ReplicaSet이라는 무리를 하나씩 두고, 두 무리의 숫자를 서서히 옮긴다. 다리를 고칠 때 옆에 임시 다리를 먼저 놓고 차를 옮긴 뒤 옛 다리를 걷어 내는 것과 같다. 임시 다리를 몇 칸까지 더 놓을지와 몇 칸까지 잠깐 끊어도 되는지를 정하는 숫자가 maxSurge와 maxUnavailable이다.
+
+  새 Pod가 손님을 받을 준비가 됐다고 답해야 옛 Pod를 빼기 때문에, 준비 확인이 정직해야 배포 중 오류가 안 튄다. 되돌리기는 옛 무리를 다시 키우는 같은 방식의 배포라서, 리비전 번호는 새로 붙는다.
+</EasyIntro>
+
 배포를 걸어 놓고 `kubectl get pods`를 보면 이름 가운데가 다른 Pod 두 무리가 섞여 있다. `web-7d599ff9fb-...`가 셋, `web-86549bdb9f-...`가 둘. 그 사이에 들어온 요청은 어떤 건 옛 버전이, 어떤 건 새 버전이 받는다. 몇십 초 뒤에는 새 무리만 남는다. 이 몇십 초 동안 무슨 일이 일어나는지 알아야 배포 중에 502가 튈 때, 배포가 끝나지 않을 때, 급하게 되돌려야 할 때 손이 먼저 나간다.
 
 이 글은 Deployment가 롤링 업데이트를 하는 방식을 숫자로 따라간다. maxSurge와 maxUnavailable이 매 순간 Pod 수를 어떻게 정하는지, 리비전마다 ReplicaSet이 따로 있는 이유, rollout 명령으로 지켜보고 멈추고 되돌리는 법, Recreate와 minReadySeconds, progressDeadlineSeconds까지 본다. Pod를 직접 만들지 않고 컨트롤러에 맡기는 이유와 ReplicaSet이 Pod 수를 맞추는 원리는 [Pod 기본](/posts/k8s-pod-basics)에서 다뤘다. 출력은 kwok로 띄운 실습 클러스터(Kubernetes 1.30)에서 받았다. Deployment와 ReplicaSet 컨트롤러는 진짜이고, Pod가 Ready가 되기까지 걸리는 시간만 4~8초로 흉내 냈다.

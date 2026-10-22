@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("js-call-apply-bind");
 
+<EasyIntro>
+  함수 안의 this는 부르는 모양으로 정해지는데, 부르는 쪽에서 이걸 직접 정해 주고 싶을 때가 있다. 그 도구가 call과 apply와 bind다. call과 apply는 이 값을 this로 삼아 지금 바로 부르는 것이고, 둘의 차이는 인자를 하나씩 주느냐 배열로 주느냐뿐이다. bind는 부르지 않고 this를 붙여 둔 새 함수를 만들어 돌려주며, 실제 호출은 나중에 일어난다.
+
+  bind가 돌려주는 함수는 원래 함수의 코드가 없는 껍데기라서, 붙여 둔 this를 끝까지 놓지 않고 다시 bind하거나 call로 다른 값을 줘도 바뀌지 않는다. 그리고 bind는 부를 때마다 새 함수를 만든다.
+
+  이 마지막 성질이 버그를 낸다. 이벤트 리스너를 달 때와 뗄 때 각각 bind를 부르면 생김새만 같은 다른 함수라서 떼어지지 않고, 닫힌 모달이 계속 반응한다. 같은 참조가 필요한 자리에서는 bind를 한 번만 부르고 그 결과를 보관해 쓴다.
+</EasyIntro>
+
 모달을 열 때 `keydown` 리스너를 달고, 닫을 때 뗐다. 그런데 모달을 두 번 열었다 닫은 뒤 Escape를 한 번 누르니 닫기 처리가 두 번 돈다. 분명히 `removeEventListener`를 불렀다.
 
 ```js

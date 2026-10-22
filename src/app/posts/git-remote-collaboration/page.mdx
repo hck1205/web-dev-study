@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("git-remote-collaboration");
 
+<EasyIntro>
+  기능을 다 만들고 push를 쳤는데 "원격에 내가 갖고 있지 않은 작업이 있다"며 거절당했다. 그 사이 동료가 먼저 올린 것이다. 시키는 대로 pull을 치면 이번엔 "갈라진 브랜치를 어떻게 합칠지 정하라"는 긴 안내가 나온다.
+
+  원격은 다른 곳에 있는 같은 프로젝트의 저장소에 붙인 별명이고, 내 컴퓨터에는 같은 이름의 브랜치가 세 군데 있는 셈이다. 내 main, GitHub에 있는 main, 그리고 내가 마지막으로 GitHub를 봤을 때 찍어 둔 사진인 origin/main이다. 여행 중에 친구와 사진첩을 맞추는 것과 비슷해서, fetch는 친구의 새 사진만 받아 오는 것이고 pull은 받아 와서 내 사진첩에 바로 끼워 넣는 것이고 push는 내 사진을 친구에게 보내는 것이다.
+
+  push가 거절된 건 Git이 고장 난 게 아니라, 친구가 먼저 끼운 사진을 내 것으로 덮어쓰지 않게 막는 장치다. 그래서 먼저 받아 와서 내 사진 뒤에 이어 붙이거나(rebase) 합치는 사진을 하나 만든 뒤(merge) 다시 보낸다. 여러 사람이 같이 쓰는 브랜치에서 이미 보낸 사진의 순서를 바꾸면 남의 사진첩이 깨지니, 거기서는 합치는 쪽을 쓴다.
+</EasyIntro>
+
 로그인 기능을 다 만들고 커밋한 뒤 `git push`를 쳤는데 이런 메시지가 돌아왔다.
 
 ```text

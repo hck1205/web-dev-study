@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-pod-scheduling");
 
+<EasyIntro>
+  Pod를 만들면 누군가 어느 기계에 놓을지 정해야 한다. 기계가 수십 대면 사람이 일일이 고를 수 없으니 스케줄러라는 프로그램이 대신 고른다. 그런데 기계가 다섯 대나 있는데 Pod가 자리를 못 잡고 몇 분째 기다리는 일이 생긴다.
+
+  스케줄러가 고르는 방식은 두 단계다. 먼저 이 Pod를 놓을 수 없는 기계를 체로 걸러 내고, 남은 기계에 점수를 매겨 가장 높은 곳을 고른다. 체는 여러 겹이라서, Pod가 원하는 라벨이 없는 기계, 들어오지 말라는 표시가 붙은 기계, 같은 종류의 Pod가 이미 있는 기계가 차례로 떨어진다. 자리가 전혀 없으면 덜 중요한 Pod를 밀어내고 들어가기도 한다.
+
+  자리를 못 잡았을 때 나오는 한 줄 메시지는 기계마다 어느 체에서 떨어졌는지 적은 보고서다. 그 문장을 읽을 줄 알면 어느 체를 고쳐야 하는지 바로 보인다.
+</EasyIntro>
+
 새 노드 그룹을 붙이고 배포했는데 Pod 하나가 몇 분째 Pending이다. NODE 칸은 비어 있고, describe의 Events에는 한 줄만 있다. `0/5 nodes are available: 1 node(s) had untolerated taint {lab/sim: }, 4 node(s) didn't match Pod's node affinity/selector.` 노드는 다섯 개나 있는데 하나도 안 된다고 한다. 이 문장은 스케줄러가 노드를 하나씩 걸러 낸 결과 보고서다. 어떤 체를 거쳤는지 알면 무엇을 고칠지가 바로 보인다.
 
 이 글은 스케줄러가 노드를 고르는 두 단계(거르기와 점수 매기기)를 먼저 보고, 그 체를 사람이 조절하는 방법을 하나씩 실제로 걸어 본다. nodeSelector와 node affinity, taint와 toleration, Pod끼리의 affinity와 anti-affinity, topologySpreadConstraints, 그리고 자리가 없을 때 다른 Pod를 밀어내는 priority와 preemption이다. 모든 출력은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았다. 이 클러스터의 노드는 가짜지만 스케줄러는 진짜라, FailedScheduling 메시지와 배치 결과는 실제 클러스터와 같다. 노드는 다섯 개이고 zone-a에 node-1·node-3, zone-b에 node-2·node-4·node-5가 있다. node-4는 실습용 taint가 걸린 고장 난 노드다.

@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-pod-resources");
 
+<EasyIntro>
+  Pod 설정에는 CPU와 메모리를 얼마나 쓸지 적는 숫자가 두 개 있다. requests와 limits인데, 같은 칸에 나란히 적지만 읽는 쪽이 다르다. requests는 어느 기계에 자리를 잡을지 정하는 쪽이 보고, limits는 그 기계의 운영체제가 지키는 상한이다.
+
+  식당 예약에 비유하면 requests는 몇 명 자리를 잡아 달라는 예약 인원이고, limits는 그 테이블에 앉을 수 있는 최대 인원이다. 예약 자리가 없으면 Pod는 자리를 못 잡고 기다리는 Pending 상태로 남는다. CPU는 limits를 넘으면 잠깐씩 멈춰 세워져서 평균 사용량은 낮아 보여도 응답이 느려지고, 메모리는 넘는 순간 바로 죽여 버린다.
+
+  이걸 알면 느린 응답과 이유 없는 재시작을 어디서부터 봐야 하는지 보인다. 출발점은 requests를 실제 사용량에 맞추고 메모리 limits는 requests와 같게 두는 것이다.
+</EasyIntro>
+
 API의 p99 응답 시간이 가끔 튄다. CPU 사용량 그래프를 보면 평균 200m, limits 1000m의 20%라 여유가 넘친다. 그런데 응답이 느린 순간마다 따로 보는 지표 하나가 같이 솟는다. `container_cpu_cfs_throttled_periods_total`. CPU를 다 쓰지도 않았는데 커널이 이 컨테이너를 멈춰 세우고 있었다. 같은 주에 다른 팀의 워커는 RESTARTS가 계속 오르는데 로그에는 아무 에러도 없다. describe를 보니 `Reason: OOMKilled`, `Exit Code: 137`.
 
 둘 다 Pod의 `resources`에 적은 두 숫자, requests와 limits에서 나온다. requests는 스케줄러가 쓰고 limits는 커널이 쓴다. 같은 칸에 나란히 적는 값인데 읽는 쪽이 다르다. 이 글은 두 숫자가 각각 어디서 무슨 일을 하는지, QoS 클래스가 어떻게 정해지고 무엇을 바꾸는지, CPU 스로틀링과 OOMKilled가 실제로 어떻게 일어나는지를 직접 재현해 가며 본다. `kubectl` 출력은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았고, 스로틀링과 OOM은 리눅스 cgroup에 직접 한도를 걸어 실제 프로세스로 재현했다.

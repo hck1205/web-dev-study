@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-hpa");
 
+<EasyIntro>
+  점심시간에 주문이 몰리면 서버가 느려지고, 그렇다고 Pod를 늘 넉넉히 띄워 두면 새벽 내내 노는 Pod 값을 낸다. HPA는 부하에 맞춰 Pod 개수를 자동으로 늘렸다 줄이는 장치다. 15초마다 사용량을 재서 필요한 개수를 계산하고 Deployment의 개수만 고치면, 실제로 Pod를 늘리고 줄이는 일은 Deployment가 한다.
+
+  계산 공식은 한 줄이다. 지금 개수에 지금 사용률을 목표 사용률로 나눈 값을 곱하고 올림한다. 사용률은 Pod가 달라고 적어 둔 양인 requests에 견준 비율이라서, requests를 안 적으면 계산 자체가 안 되고 잘못 적으면 판단도 틀린다. 여기에 브레이크가 세 개 붙어서, 차이가 작으면 그냥 두고, 줄일 때는 5분 동안 지켜본 뒤 줄이고, 한 번에 움직이는 양을 제한한다.
+
+  에어컨이 온도를 재서 바람 세기를 바꾸듯 HPA도 잰 값대로만 움직인다. 그래서 Pod를 늘려도 기계에 자리가 없으면 기다리기만 하니, 기계를 늘리는 장치와 짝을 맞춰야 한다.
+</EasyIntro>
+
 점심시간에 주문이 몰리면 주문 API의 응답 시간이 튄다. Pod를 넉넉히 띄워 두면 해결되지만 새벽 내내 노는 Pod 값을 낸다. 그래서 HPA(Horizontal Pod Autoscaler)를 걸었다. 그런데 `kubectl get hpa`가 이렇게 나온다.
 
 ```text

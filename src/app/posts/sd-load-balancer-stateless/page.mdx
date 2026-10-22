@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("sd-load-balancer-stateless");
 
+<EasyIntro>
+  웹 서버가 한 대뿐이면 새 코드를 올릴 때마다 몇 초씩 모든 요청이 실패한다. 그래서 두 대로 늘리고 앞에 요청을 나눠 주는 로드 밸런서를 붙이면, 이번엔 로그인한 사용자가 페이지를 넘기다 갑자기 "로그인이 필요합니다"를 보게 된다.
+
+  은행 창구로 생각하면 쉽다. 번호표 기계(로드 밸런서)가 손님을 빈 창구로 보내 주니 창구 하나가 쉬어도 은행은 돌아간다. 문제는 1번 창구 직원이 손님 얼굴을 자기 수첩에만 적어 두면, 다음에 2번 창구로 간 손님을 아무도 못 알아본다는 것이다. 수첩을 창구마다 두지 않고 모두가 보는 공용 장부(Redis 같은 공유 저장소)로 옮겨야 어느 창구가 받아도 같은 손님으로 알아본다.
+
+  이렇게 창구가 아무것도 따로 기억하지 않는 상태를 무상태라고 부르는데, 그래야 창구를 아무 때나 닫거나 늘릴 수 있다. 로그인 외에도 올린 파일, 창구마다 돌리는 예약 작업처럼 숨은 수첩이 더 있다는 점이 자주 걸린다.
+</EasyIntro>
+
 이 시리즈에서 이 글의 자리: [② 웹과 DB 나누기](/posts/sd-split-web-and-db)에서 웹 계층과 데이터 계층을 나눈 다음 단계다. 다음 글은 [④ DB 복제](/posts/sd-db-replication-intro)다. 같은 장의 글은 [① 서버 한 대](/posts/sd-start-single-server), [⑤ 캐시와 CDN](/posts/sd-cache-and-cdn-tier), [⑥ 데이터 센터 여러 곳](/posts/sd-multi-datacenter), [⑦ 큐, 로그, 자동화](/posts/sd-queue-logging-automation), [⑧ 샤딩 입문](/posts/sd-sharding-intro)이다.
 
 맛집 리뷰 앱은 이제 웹 서버 한 대와 DB 서버 한 대로 돈다. [① 서버 한 대](/posts/sd-start-single-server)에서 본 문제가 아직 남아 있다. 배포할 때마다 몇 초씩 모든 요청이 실패한다. 웹 서버가 한 대뿐이라 그 서버를 내리면 갈 곳이 없다.

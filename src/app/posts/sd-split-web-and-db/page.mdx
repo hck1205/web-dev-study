@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("sd-split-web-and-db");
 
+<EasyIntro>
+  서버 한 대에서 웹 앱과 데이터베이스가 같이 돌면, 매주 돌리는 집계 쿼리가 앱 전체를 느리게 만들고, 앱이 메모리를 많이 쓴 순간 운영체제가 데이터베이스를 강제로 꺼 버리기도 한다. 한 컴퓨터의 CPU와 메모리와 디스크를 둘이 나눠 쓰니 한쪽 사정이 다른 쪽을 망가뜨린다.
+
+  첫 처방은 데이터베이스를 다른 서버로 옮기는 것이다. 한 방에서 요리와 장부 정리를 같이 하던 가게가 주방과 사무실을 따로 두는 것과 같다. 서로 방해하지 않고, 각자 필요한 장비를 따로 늘릴 수 있고, 사무실은 손님이 못 들어오는 안쪽에 둘 수 있다.
+
+  대신 주방에서 장부를 볼 때마다 복도를 건너야 한다. 한 번 오가는 시간은 짧아도 화면 하나에 스무 번씩 오가면 그 시간이 그대로 곱해지니, 한 번에 모아서 묻는 습관이 중요해진다. 옮기는 김에 어떤 종류의 데이터베이스를 쓸지, 서버를 더 크게 바꿀지 여러 대로 늘릴지도 함께 생각한다.
+</EasyIntro>
+
 이 시리즈에서 이 글의 자리: [① 서버 한 대](/posts/sd-start-single-server)에서 처음 무너진 곳을 고치는 글이다. 다음 글은 [③ 로드 밸런서와 무상태 웹](/posts/sd-load-balancer-stateless)이다. 같은 장의 글은 [④ DB 복제](/posts/sd-db-replication-intro), [⑤ 캐시와 CDN](/posts/sd-cache-and-cdn-tier), [⑥ 데이터 센터 여러 곳](/posts/sd-multi-datacenter), [⑦ 큐, 로그, 자동화](/posts/sd-queue-logging-automation), [⑧ 샤딩 입문](/posts/sd-sharding-intro)이다.
 
 맛집 리뷰 앱이 서버 한 대로 몇 달을 버텼다. 그런데 매주 월요일 새벽, 지난주 순위를 다시 계산하는 집계 쿼리가 돌 때면 앱 전체가 굼떠진다. 어느 날은 아예 리뷰 작성이 전부 실패했다. 로그를 보니 메모리가 모자라 리눅스가 PostgreSQL 프로세스를 강제로 꺼 버렸다. 웹 앱이 사진을 줄이느라 메모리를 많이 잡은 직후였다.
