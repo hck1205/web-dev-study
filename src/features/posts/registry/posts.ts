@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "frontend-performance-map",
+    title: "프런트엔드 성능 지도: 재고, 덜 보내고, 일찍 보내고, 덜 그리고, 덜 실행하기",
+    summary: "노트북에서 260ms인 페이지가 느린 휴대폰 조건에서 4.2초가 되는 장면에서 출발해, 망과 CPU 제한을 하나씩 켜서 지표가 무엇에 묶였는지 가르고 다섯 손잡이를 꺼내는 순서를 정리한다. 증상별로 먼저 볼 곳, 성능 예산, 점검 목록을 주제별 글로 이어 준다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "Frontend", "Browser"],
+    date: "2026-10-25",
+    keywords: ["프런트엔드 성능 지도", "성능 예산", "프런트엔드 최적화 순서"],
+  },
+  {
+    slug: "data-fetching-optimization",
+    title: "데이터 요청 최적화: 요청 폭포를 줄이는 순서",
+    summary: "API는 빠른데 화면은 2.2초 걸리는 주문 내역에서 출발해, 컴포넌트 트리를 따라 생기는 요청 폭포를 함께 출발시키기, 중복 합치기, 묶음 요청, BFF로 줄이며 Chromium에서 잰다. 연결 6개 제한, 급하지 않은 데이터 미루기, 필드와 압축으로 바이트 줄이기까지 다룬다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "React", "HTTP", "Frontend", "Browser"],
+    date: "2026-10-25",
+    keywords: ["요청 폭포", "render-as-you-fetch", "중복 요청 합치기", "fetch-on-render"],
+  },
+  {
+    slug: "lazy-loading-strategies",
+    title: "지연 로딩 전략: 무엇을 언제 받을지 고르기",
+    summary: "모든 것을 즉시 받는 상품 페이지와 시점별로 미룬 페이지를 Chromium에서 비교한다. 누를 때·보일 때·한가할 때 받기, 호버 미리 부르기, 서드파티 파사드, 하이드레이션 미루기, 첫 화면을 미루면 늦어지는 LCP까지 잰 숫자로 다룬다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "React", "Browser", "Frontend", "JavaScript"],
+    date: "2026-10-25",
+    keywords: ["React.lazy", "임베드 파사드", "지연 하이드레이션", "로딩 시점"],
+  },
+  {
     slug: "micro-frontend-integration-patterns",
     title: "마이크로 프런트엔드 조합 방식 직접 만들어 보기: 서버 조합, iframe, Web Components, single-spa",
     summary: "느린 조각 하나가 페이지 전체의 첫 바이트를 1.5초 늦췄다. 서버 조합과 스트리밍, iframe 높이 동기화와 메시지 검증, React 18과 19의 커스텀 요소 처리와 Shadow DOM, single-spa 생명주기, import map 배포 포인터와 리모트별 관측을 직접 만들어 확인한다.",

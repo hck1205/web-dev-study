@@ -2,6 +2,73 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "frontend-performance-map": {
+    "links": [
+      "lazy-loading-strategies",
+      "core-web-vitals",
+      "frontend-browser-cache",
+      "http-caching-cdn",
+      "client-data-cache",
+      "code-splitting",
+      "web-font-optimization",
+      "css-performance",
+      "data-fetching-optimization",
+      "rendering-strategies",
+      "streaming-ssr-suspense",
+      "http-versions",
+      "browser-rendering-pipeline",
+      "rendering-performance-optimization",
+      "animation-performance",
+      "react-rerender",
+      "event-loop",
+      "hydration",
+      "islands-resumability",
+      "debounce-throttle",
+      "js-memory-leak"
+    ],
+    "mentions": [
+      "pattern-proxy"
+    ]
+  },
+  "data-fetching-optimization": {
+    "links": [
+      "rendering-csr-spa",
+      "client-data-cache",
+      "abort-controller",
+      "lazy-loading-strategies",
+      "frontend-performance-map",
+      "n-plus-one-queries",
+      "http-versions",
+      "gateway",
+      "graphql-basics",
+      "nginx-https-performance",
+      "debounce-throttle",
+      "api-pagination-sorting",
+      "loading-patterns"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "streaming-ssr-suspense",
+      "sql-query-rewrite"
+    ]
+  },
+  "lazy-loading-strategies": {
+    "links": [
+      "code-splitting",
+      "data-fetching-optimization",
+      "frontend-performance-map",
+      "scroll-triggered-intersection-observer",
+      "hydration",
+      "rendering-performance-optimization",
+      "islands-resumability",
+      "core-web-vitals"
+    ],
+    "mentions": [
+      "browser-rendering-pipeline",
+      "rendering-strategies",
+      "pattern-proxy"
+    ]
+  },
   "micro-frontend-integration-patterns": {
     "links": [
       "micro-frontends",
@@ -28,6 +95,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-monorepo",
+      "lazy-loading-strategies",
       "code-splitting",
       "js-es-modules",
       "react-rerender",
@@ -9358,6 +9426,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
+      "data-fetching-optimization",
       "hydration",
       "nginx-basics",
       "nextjs-static-dynamic-rendering",
@@ -11333,6 +11402,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
       "microservices",
+      "data-fetching-optimization",
       "js-es-modules",
       "frontend-monorepo",
       "cors"

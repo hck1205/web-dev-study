@@ -1,0 +1,450 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("data-fetching-optimization");
+
+주문 내역 화면이 느리다는 이야기가 나와서 API 응답 시간을 봤다. 사용자 정보 120ms, 주문 목록 180ms, 주문별 품목 100ms. 하나하나는 빠르다. 그런데 휴대폰에서 화면이 다 채워지기까지는 2.2초가 걸린다. 개발자 도구의 Network 탭을 열면 요청 9개가 계단처럼 오른쪽 아래로 내려간다.
+
+API가 느린 게 아니라 요청이 서로를 기다리고 있었다. 이 글은 그 계단, 요청 폭포가 컴포넌트 코드에서 어떻게 생기는지 보고, 같은 화면을 네 가지로 다시 짜서 Chromium에서 잰다. 요청을 겹치고, 묶고, 하나로 합치고, 급하지 않은 것을 뒤로 빼는 순서다.
+
+이웃한 글들과 나눠 맡은 부분이 있다. 앱이 부팅할 때 코드 다운로드와 데이터 요청이 일렬로 서는 문제는 [CSR과 SPA](/posts/rendering-csr-spa)에서 라우트 단위로 쟀다. 같은 요청을 캐시로 줄이는 법은 [화면 데이터 캐시](/posts/client-data-cache), 늦은 응답을 버리는 법은 [AbortController](/posts/abort-controller)에 있다. 코드 조각을 언제 받을지는 [지연 로딩 전략](/posts/lazy-loading-strategies)에서, 성능 작업 전체의 순서는 [프런트엔드 성능 지도](/posts/frontend-performance-map)에서 다룬다. 이 글은 한 화면 안에서 데이터 요청들이 어떤 순서로 나가는지에 집중한다.
+
+예제는 React 19 화면을 esbuild로 묶고 작은 Node API 서버를 붙였다. 측정은 Playwright로 띄운 Chromium 141에서 내려받기 1.6Mbps, CPU 4배 느리게를 걸고 다섯 번 잰 가운데 값이다. 처음에는 크롬의 망 제한에 왕복 지연 150ms도 같이 걸었는데, 서버가 120ms 쓰는 요청이 157ms 만에 끝났다. 이 제한은 요청 단위로 거는 방식이라 서버 처리 시간과 겹쳐 계산된 것이다. 그래서 왕복 150ms는 API 서버가 응답마다 직접 더하게 했다.
+
+## 아홉 번의 요청이 서로를 기다린다
+
+처음 코드는 아주 흔한 모양이다. 컴포넌트마다 자기가 쓸 데이터를 `useEffect`로 부른다.
+
+```jsx
+const useGet = (url) => {
+  const [data, setData] = useState(null);
+  useEffect(() => { fetch(url).then((r) => r.json()).then(setData); }, [url]);
+  return data;
+};
+
+function Header() {
+  const user = useGet("/api/user/7"); // 머리글의 이름
+  return <header>{user ? user.name : "…"}</header>;
+}
+
+function Profile() {
+  const user = useGet("/api/user/7"); // 같은 요청을 또 한다
+  if (!user) return <p>불러오는 중</p>;
+  return <main><h1>{user.name}님의 주문</h1><Orders userId={user.id} /><Recommend /></main>;
+}
+
+function Orders({ userId }) {
+  const orders = useGet(`/api/users/${userId}/orders`);
+  if (!orders) return <p>주문 불러오는 중</p>;
+  return <ul>{orders.map((o) => <OrderRow key={o.id} o={o} />)}</ul>;
+}
+
+function OrderRow({ o }) {
+  const items = useGet(`/api/orders/${o.id}/items`); // 주문마다 한 번씩
+  return <li>{o.title}: {items ? items.map((i) => i.name).join(", ") : "…"}</li>;
+}
+```
+
+각 컴포넌트는 깔끔하다. 자기 데이터는 자기가 책임진다. 그런데 `Orders`는 `Profile`이 사용자를 받아야 그려지고, `OrderRow`는 `Orders`가 주문을 받아야 그려진다. 그려져야 요청이 나가니 요청도 그 순서대로 줄을 선다. 실제로 기록된 요청 시각이다(단위 ms, 페이지 시작 기준).
+
+```text
+/api/user/7                  start   687 sent   688 end   961
+/api/user/7                  start   687 sent   961 end  1238
+/api/users/7/orders          start  1300 sent  1301 end  1636
+/api/recommend               start  1302 sent  1303 end  2063
+/api/orders/1/items          start  1742 sent  1744 end  2003
+/api/orders/2/items          start  1743 sent  1745 end  2011
+/api/orders/3/items          start  1744 sent  1745 end  2019
+/api/orders/4/items          start  1745 sent  1748 end  2026
+/api/orders/5/items          start  1746 sent  1748 end  2033
+```
+
+```text
+a-nested ready 2842,2801,2244,2004,1969 med 2244 requests 9
+```
+
+아래 그림에서 단계를 넘기며 이 계단을 한 칸씩 내려가 보자.
+
+<SequenceDiagram
+  caption="컴포넌트마다 자기 데이터를 부를 때 생기는 계단"
+  actors={[
+    { id: "header", label: "Header" },
+    { id: "profile", label: "Profile" },
+    { id: "orders", label: "Orders" },
+    { id: "api", label: "API" },
+  ]}
+  steps={[
+    { from: "header", to: "api", label: "GET /api/user/7", title: "687ms: 두 컴포넌트가 같은 사용자를 부른다", detail: "Header와 Profile이 마운트되며 같은 주소를 동시에 요청한다. 두 번째 요청은 첫 번째가 끝난 961ms에야 실제로 나갔다." },
+    { from: "api", to: "profile", label: "user", title: "1238ms: Profile이 사용자를 받는다", detail: "Profile이 받은 쪽은 줄 서 있던 두 번째 요청이었다. 이제야 Orders를 그릴 수 있다." },
+    { from: "orders", to: "api", label: "GET /orders", title: "1300ms: 주문 목록을 부른다", detail: "주문 목록은 사용자 id만 있으면 된다. id 7은 주소에 이미 있었는데, 컴포넌트 구조 때문에 사용자 응답을 기다렸다." },
+    { from: "api", to: "orders", label: "orders ×5", title: "1636ms: 주문 다섯 건이 온다", detail: "이제 OrderRow 다섯 개가 그려진다. 각자 마운트되며 자기 품목을 부른다." },
+    { from: "orders", to: "api", label: "GET items ×5", title: "1742ms: 품목 요청 다섯 번", detail: "다섯 개가 동시에 나가서 길이는 한 칸이지만, 요청 수가 주문 수만큼 늘어난다. 주문이 50건이면 50번이다." },
+    { from: "api", to: "orders", label: "items", title: "2033ms: 마지막 품목이 도착한다", detail: "화면이 다 채워진다. 다섯 번 잰 가운데 값은 2244ms였다. 서버가 실제로 일한 시간은 이 중 일부다." },
+  ]}
+/>
+
+## 폭포는 컴포넌트 트리를 따라 생긴다
+
+계단 하나하나를 보면 두 종류가 섞여 있다. 품목 요청은 주문 id를 알아야 보낼 수 있다. 이건 데이터에 실제로 있는 의존이라 없앨 수 없고 줄일 수만 있다. 반면 주문 목록 요청은 사용자 id 7만 있으면 되는데, 그 id는 주소에 처음부터 있었다. 이 계단은 데이터가 아니라 코드 구조가 만든 가짜 의존이다.
+
+가짜 의존은 "데이터를 부르는 코드가 그 데이터를 쓰는 컴포넌트 안에 있다"는 데서 생긴다. 부모가 다 받아야 자식이 그려지고, 자식이 그려져야 자식의 요청이 나간다. 그래서 요청 순서가 데이터의 관계가 아니라 컴포넌트 트리의 깊이를 따라간다. React 쪽에서는 이 모양을 세 가지 이름으로 부른다.
+
+- 렌더링하면서 부르기(fetch-on-render): 위 코드처럼 컴포넌트가 그려진 뒤 effect에서 부른다. 트리 깊이만큼 계단이 생긴다.
+- 다 받고 렌더링하기(fetch-then-render): 화면에 필요한 데이터를 위에서 한꺼번에 받은 뒤 그린다. 계단은 없지만 가장 느린 요청을 모두가 기다린다.
+- 부르면서 렌더링하기(render-as-you-fetch): 요청은 가능한 한 일찍 다 출발시키고, 컴포넌트는 자기 데이터가 오는 대로 Suspense 경계 단위로 그린다.
+
+Suspense를 쓴다고 폭포가 사라지는 것도 아니다. 자식 컴포넌트가 렌더링 중에 자기 요청을 시작하고 그 Promise로 멈추면(suspend), 부모 경계가 풀린 뒤에야 자식이 렌더링되니 똑같은 계단이 생긴다. 요청을 언제 시작하느냐가 문제이지 기다리는 문법이 문제가 아니다. 라우트에 진입하는 순간 데이터를 출발시키는 라우터 로더 방식과 그 측정은 [CSR과 SPA 글](/posts/rendering-csr-spa)에 있다.
+
+## 주소만 보고 알 수 있는 것은 함께 출발시킨다
+
+두 번째 버전은 화면 진입 시점에 알 수 있는 요청을 한 번에 출발시킨다. 사용자와 주문 목록은 동시에, 품목은 주문 목록이 오자마자 한 번에 묶어서 받는다.
+
+```jsx
+const userId = 7; // 실제로는 라우터가 주소에서 꺼내 준다
+const userP = get(`/api/user/${userId}`);
+const ordersP = get(`/api/users/${userId}/orders`);
+// 진짜 의존은 남는다: 주문 id를 알아야 품목을 부른다
+const itemsP = ordersP.then((os) => get(`/api/items?orders=${os.map((o) => o.id).join(",")}`));
+const pageP = Promise.all([userP, ordersP, itemsP]);
+
+function Page() {
+  const [user, orders, items] = use(pageP); // 이미 출발한 Promise를 기다리기만 한다
+  return <OrdersView user={user} orders={orders} items={items} />;
+}
+```
+
+```text
+/api/user/7                  start   563 sent   565 end   861
+/api/users/7/orders          start   563 sent   565 end   929
+/api/items?orders=1,2,3,4,5  start   933 sent   934 end  1221
+
+b-hoisted ready 1254,1171,1237,1192,1211 med 1211 requests 4
+```
+
+요청은 9개에서 4개, 화면 완성은 2244ms에서 1211ms가 됐다. 사용자 요청과 주문 요청이 같은 565ms에 나란히 나간 게 보인다. 남은 계단은 주문 → 품목 하나뿐이고, 이건 진짜 의존이다.
+
+한 가지 실수를 조심해야 한다. `use(fetch(...))`처럼 컴포넌트 안에서 Promise를 만들면 렌더링할 때마다 새 Promise가 생겨 요청이 다시 나가고, 멈췄다 다시 그리기를 끝없이 반복할 수 있다. Promise는 컴포넌트 바깥(라우터 로더, 모듈 수준, 캐시 라이브러리)에서 만들고 컴포넌트에는 그 결과만 넘긴다. 실무에서는 TanStack Query 같은 라이브러리가 그 캐시 자리를 맡는다.
+
+## 같은 요청이 두 번 나가면
+
+첫 번째 버전에서 `/api/user/7`이 두 번 나갔고, 두 번째 요청은 첫 번째가 끝날 때까지 출발도 안 했다(`sent 961`). 연결이 모자라서가 아니다. 이 시점에 다른 요청은 없었다. 크롬은 같은 주소의 GET 요청이 동시에 두 개 생기면 HTTP 캐시가 첫 응답을 쓸 수 있는지 보려고 두 번째를 붙잡아 둔다. 응답이 `no-store`라서 결국 다시 받았다. 같은 주소를 두 번 동시에 부르는 페이지를 따로 만들어 확인해 보니, 기본 설정에서는 두 번째가 첫 번째 응답이 끝난 뒤(311ms)에 나갔고, `fetch(url, { cache: "no-store" })`로 HTTP 캐시를 건너뛰게 하면 둘이 나란히 나갔다(293ms, 296ms에 끝). 같은 데이터를 두 번 받은 것보다, Profile이 받은 쪽이 하필 줄 서 있던 두 번째였다는 게 더 아팠다. 화면의 핵심 경로가 277ms 늘었다.
+
+고치는 방법은 진행 중인 요청을 주소(키)로 기억해 두고, 같은 키가 오면 새로 보내지 않고 그 Promise를 돌려주는 것이다.
+
+```js
+const inflight = new Map();
+function getOnce(url) {
+  if (!inflight.has(url)) {
+    const p = fetch(url).then((r) => r.json()).finally(() => inflight.delete(url));
+    inflight.set(url, p);
+  }
+  return inflight.get(url);
+}
+```
+
+`finally`에서 지우는 게 요점이다. 지우지 않으면 첫 응답을 영원히 돌려주는 캐시가 되고, 실패한 Promise도 계속 남는다. 끝난 뒤에도 일정 시간 다시 쓰고 싶다면 그건 캐시의 일이고 신선한 시간(staleTime)을 정해야 한다. 이 부분은 [화면 데이터 캐시](/posts/client-data-cache)에서 다룬다.
+
+아래 함수에 같은 키의 호출 목록을 넣으면 실제로 네트워크에 나가는 요청 수를 돌려주게 만들어 보자. 응답에 `ms`만큼 걸린다고 치고, 앞 요청이 끝나기 전에 온 같은 키의 호출은 합친다. 끝난 시각과 정확히 같은 순간의 호출은 이미 끝난 것으로 본다.
+
+<CodePlayground
+  caption="진행 중인 요청 합치기"
+  functionName="countRequests"
+  initialCode={`function countRequests(calls, ms) {
+  // calls: [{ key, at }] (at: 호출 시각 ms, 순서가 섞여 있을 수 있다)
+  // 요청 하나는 ms만큼 걸린다. 같은 key의 요청이 진행 중이면 합친다
+  // 반환: 실제로 나간 요청 수
+  return 0;
+}`}
+  solution={`function countRequests(calls, ms) {
+  const endsAt = {};
+  let n = 0;
+  for (const c of [...calls].sort((a, b) => a.at - b.at)) {
+    if (endsAt[c.key] !== undefined && c.at < endsAt[c.key]) continue;
+    endsAt[c.key] = c.at + ms;
+    n++;
+  }
+  return n;
+}`}
+  tests={[
+    { label: "같은 순간 두 번", args: [[{ key: "user", at: 0 }, { key: "user", at: 5 }], 300], expected: 1 },
+    { label: "다른 키는 따로", args: [[{ key: "user", at: 0 }, { key: "orders", at: 0 }, { key: "user", at: 10 }], 300], expected: 2 },
+    { label: "끝난 순간은 새 요청", args: [[{ key: "user", at: 0 }, { key: "user", at: 300 }], 300], expected: 2 },
+    { label: "끝나기 직전과 한참 뒤", args: [[{ key: "user", at: 0 }, { key: "user", at: 299 }, { key: "user", at: 450 }], 300], expected: 2 },
+    { label: "순서가 섞인 호출", args: [[{ key: "a", at: 100 }, { key: "a", at: 0 }, { key: "b", at: 50 }, { key: "a", at: 350 }], 300], expected: 3 },
+    { label: "호출이 없으면 0", args: [[], 300], expected: 0 },
+  ]}
+/>
+
+## 목록의 줄마다 부르던 요청을 하나로
+
+`OrderRow`가 줄마다 품목을 부르던 구조는 서버 쪽에서 말하는 N+1과 같은 모양이다. 목록 한 번에 줄 수만큼 요청이 더 붙는다. 브라우저에서는 이게 더 비싸다. 서버 안의 쿼리는 왕복이 1ms 안쪽이지만, 휴대폰에서는 요청마다 왕복 수십~수백 ms와 헤더 바이트가 붙는다. 그래서 주문 id를 모아 한 번에 묻는 묶음 엔드포인트를 뒀다.
+
+<UrlAnatomy
+  caption="줄마다 부르던 요청을 한 번에 묻는 주소"
+  base="/api/items"
+  params={[
+    { key: "orders", value: "1,2,3,4,5", title: "필요한 id를 모아 한 번에", description: "목록을 받은 뒤 화면에 보이는 주문 id를 모아 보낸다. 응답은 id를 키로 한 객체라서 줄마다 자기 몫을 꺼내 쓴다.", required: true, code: "{ \"1\": [...], \"2\": [...], ... }" },
+    { key: "fields", value: "name,price", title: "쓰는 필드만", description: "목록 줄에 필요한 필드만 받는다. 상세 설명과 리뷰까지 딸려 오면 바이트가 열 배 넘게 커진다." },
+  ]}
+/>
+
+묶음에도 치를 값이 있다. id 조합마다 주소가 달라지니 HTTP 캐시나 CDN이 칸 하나를 재사용하기 어렵다. id가 수백 개면 주소가 길어지는데, 서버와 프록시마다 요청 줄 길이 제한이 있어서(nginx 기본 헤더 버퍼는 8KB 단위다) 너무 길면 414가 온다. 그때는 POST 본문으로 보내거나 화면에 보이는 만큼만 묶는다. 하나가 실패하면 전부 실패하는 문제도 생기니, 응답 안에 id별 성공·실패를 담아 줄 단위로 다루는 편이 낫다. 서버 쪽에서 같은 문제를 DataLoader로 푸는 이야기는 [N+1 쿼리](/posts/n-plus-one-queries)에 있다.
+
+## 연결 여섯 개의 줄
+
+묶지 않고 동시에 많이 보내면 다른 벽이 나온다. HTTP/1.1에서 크롬은 호스트 하나에 연결을 6개까지만 연다. 같은 서버에 200ms 걸리는 요청 12개를 한꺼번에 보내 봤다.
+
+```text
+/api/slow?i=0                start    52 sent    52 end   408
+/api/slow?i=1                start    53 sent    54 end   415
+...
+/api/slow?i=5                start    55 sent    57 end   445
+/api/slow?i=6                start    55 sent   408 end   760
+/api/slow?i=7                start    55 sent   416 end   775
+...
+/api/slow?i=11               start    62 sent   445 end   805
+```
+
+일곱 번째 요청은 55ms에 만들어졌지만 첫 요청이 끝난 408ms에야 나갔다. 아래 그림에서 칸이 차고 빠지는 모양을 보자.
+
+<AlgoTrace
+  caption="HTTP/1.1 연결 6개에 요청 12개가 들어갈 때"
+  memoryLabel="쓰는 중인 연결"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]}
+  steps={[
+    { pointer: 0, memory: ["0"], caption: "52ms. 첫 요청이 연결 하나를 잡는다." },
+    { pointer: 5, memory: ["0", "1", "2", "3", "4", "5"], caption: "57ms. 여섯 개가 연결 여섯 개를 다 잡았다." },
+    { pointer: 6, memory: ["0", "1", "2", "3", "4", "5"], caption: "6번은 만들어졌지만 빈 연결이 없어 기다린다. 개발자 도구에서는 Stalled로 보인다." },
+    { pointer: 6, found: [0], memory: ["1", "2", "3", "4", "5", "6"], caption: "408ms. 0번이 끝나 빈 연결로 6번이 나간다." },
+    { pointer: 11, found: [0, 1, 2, 3, 4, 5], memory: ["6", "7", "8", "9", "10", "11"], caption: "445ms. 뒤 여섯 개가 다 나갔다. 전부 끝난 시각은 805ms다." },
+  ]}
+/>
+
+HTTP/2부터는 연결 하나에 요청을 섞어 보내서 이 줄이 사라진다. 대부분의 CDN과 운영 서버는 이미 HTTP/2 이상이지만, 개발 서버, 사내 API 게이트웨이, TLS 없이 붙는 내부 서버는 여전히 HTTP/1.1인 경우가 있다. Network 탭의 Protocol 열에서 `http/1.1`이 보이고 Timing에 Stalled가 길다면 이 줄을 의심한다. 연결 수 제한과 프로토콜별 차이는 [HTTP 버전 글](/posts/http-versions)에서 자세히 다뤘다.
+
+## 화면 하나에 맞춘 응답, BFF
+
+두 번째 버전에서도 휴대폰과 서버 사이 왕복이 두 번(사용자·주문 → 품목) 남았다. 왕복이 비싼 쪽이 휴대폰과 서버 사이라면, 조립을 서버 쪽으로 옮기면 된다. 이 화면에 필요한 데이터를 한 번에 돌려주는 엔드포인트를 둔다. 화면(프런트엔드)을 위해 존재하는 백엔드라서 BFF(Backend For Frontend)라고 부른다.
+
+<NetworkTopology
+  width={400}
+  height={230}
+  caption="BFF는 왕복이 싼 서버 안쪽에서 요청을 조립한다"
+  zones={[
+    { id: "dc", label: "데이터센터 (왕복 1ms 안쪽)", x: 130, y: 14, w: 262, h: 204, tone: "private" },
+  ]}
+  nodes={[
+    { id: "phone", label: "휴대폰", sub: "왕복 150ms", x: 55, y: 116, icon: "client", w: 90 },
+    { id: "bff", label: "BFF", sub: "/bff/order-page", x: 200, y: 116, icon: "gateway", w: 104 },
+    { id: "user", label: "사용자", sub: "120ms", x: 330, y: 50, icon: "server", w: 84 },
+    { id: "order", label: "주문", sub: "180ms", x: 330, y: 116, icon: "server", w: 84 },
+    { id: "item", label: "품목", sub: "130ms", x: 330, y: 182, icon: "db", w: 84 },
+  ]}
+  links={[
+    { from: "phone", to: "bff" },
+    { from: "bff", to: "user" },
+    { from: "bff", to: "order" },
+    { from: "bff", to: "item" },
+  ]}
+  steps={[
+    { path: ["phone", "bff"], packet: "GET", title: "휴대폰은 한 번만 묻는다", detail: "화면 이름이 붙은 주소 하나로 요청한다. 비싼 왕복은 이 한 번뿐이다." },
+    { path: ["bff", "user"], packet: "user", highlight: ["order"], title: "사용자와 주문을 동시에", detail: "BFF가 두 서비스에 동시에 묻는다. 서버끼리는 왕복이 짧아서 각 서비스의 처리 시간만 든다." },
+    { path: ["bff", "item"], packet: "ids", title: "주문 id로 품목을 한 번에", detail: "진짜 의존은 여기에도 남지만, 왕복이 1ms 안쪽이라 계단 한 칸이 거의 공짜다." },
+    { path: ["bff", "phone"], packet: "JSON", title: "화면 모양 그대로 돌려준다", detail: "필요한 필드만 화면 구조로 담아 보낸다. 클라이언트는 id로 이어 붙이는 조립을 하지 않는다.", payload: "c-bff ready 1041 (med), requests 1" },
+  ]}
+/>
+
+```text
+/bff/order-page/7            start   521 sent   522 end   988
+
+c-bff ready 1041,1199,1007,1034,1078 med 1041 requests 1
+```
+
+세 버전을 같은 시간 축에 놓으면 막대가 어떻게 움직였는지 보인다. 다음을 누르면 같은 요청 막대가 왼쪽으로 미끄러지고, 마지막에는 하나로 합쳐진다. 세로선은 화면이 다 채워진 시각이다.
+
+<GeometryMorph
+  width={400}
+  height={200}
+  caption="요청 막대: 컴포넌트마다 부르기 → 함께 출발 → BFF 하나"
+  shapes={[
+    { id: "dup", tone: "muted" },
+    { id: "user", tone: "series1" },
+    { id: "orders", tone: "series2" },
+    { id: "items", tone: "series3" },
+    { id: "rec", tone: "outline" },
+    { id: "bff", tone: "accent" },
+    { id: "ready", tone: "accent" },
+  ]}
+  steps={[
+    {
+      title: "컴포넌트마다 부르기",
+      detail: "중복 사용자 요청이 앞을 막고, 주문과 품목이 계단을 만든다. 완성은 2033ms(이 회차).",
+      shapes: {
+        dup: [[166, 31], [204, 31], [204, 49], [166, 49]],
+        user: [[204, 61], [242, 61], [242, 79], [204, 79]],
+        orders: [[251, 91], [298, 91], [298, 109], [251, 109]],
+        items: [[313, 121], [353, 121], [353, 139], [313, 139]],
+        rec: [[251, 151], [357, 151], [357, 169], [251, 169]],
+        ready: [[352, 24], [354, 24], [354, 176], [352, 176]],
+      },
+      labels: [
+        { x: 38, y: 44, text: "user 중복", size: "sm", tone: "text" },
+        { x: 38, y: 74, text: "user", size: "sm", tone: "text" },
+        { x: 38, y: 104, text: "orders", size: "sm", tone: "text" },
+        { x: 38, y: 134, text: "items", size: "sm", tone: "text" },
+        { x: 38, y: 164, text: "추천", size: "sm", tone: "text" },
+        { x: 140, y: 194, text: "500", size: "sm" },
+        { x: 209, y: 194, text: "1000", size: "sm" },
+        { x: 279, y: 194, text: "1500", size: "sm" },
+        { x: 348, y: 194, text: "2000ms", size: "sm" },
+      ],
+      focus: ["dup"],
+    },
+    {
+      title: "함께 출발시키기",
+      detail: "사용자와 주문이 나란히 나가고, 품목은 한 번에 묶였다. 추천은 화면을 그린 뒤로 밀었다. 완성 1221ms.",
+      shapes: {
+        user: [[149, 61], [190, 61], [190, 79], [149, 79]],
+        orders: [[149, 91], [199, 91], [199, 109], [149, 109]],
+        items: [[200, 121], [240, 121], [240, 139], [200, 139]],
+        rec: [[243, 151], [349, 151], [349, 169], [243, 169]],
+        ready: [[239, 24], [241, 24], [241, 176], [239, 176]],
+      },
+      labels: [
+        { x: 38, y: 74, text: "user", size: "sm", tone: "text" },
+        { x: 38, y: 104, text: "orders", size: "sm", tone: "text" },
+        { x: 38, y: 134, text: "items 묶음", size: "sm", tone: "text" },
+        { x: 38, y: 164, text: "추천(뒤로)", size: "sm", tone: "text" },
+        { x: 140, y: 194, text: "500", size: "sm" },
+        { x: 209, y: 194, text: "1000", size: "sm" },
+        { x: 279, y: 194, text: "1500", size: "sm" },
+        { x: 348, y: 194, text: "2000ms", size: "sm" },
+      ],
+      focus: ["user", "orders"],
+    },
+    {
+      title: "BFF 하나",
+      detail: "세 요청이 서버 안쪽에서 조립되어 한 번의 왕복이 됐다. 완성 988ms(이 회차).",
+      shapes: {
+        bff: [[143, 61], [207, 61], [207, 79], [143, 79]],
+        ready: [[207, 24], [209, 24], [209, 176], [207, 176]],
+      },
+      labels: [
+        { x: 38, y: 74, text: "BFF", size: "sm", tone: "text" },
+        { x: 140, y: 194, text: "500", size: "sm" },
+        { x: 209, y: 194, text: "1000", size: "sm" },
+        { x: 279, y: 194, text: "1500", size: "sm" },
+        { x: 348, y: 194, text: "2000ms", size: "sm" },
+      ],
+      focus: ["bff"],
+    },
+  ]}
+/>
+
+BFF가 공짜는 아니다. 운영할 서버가 하나 늘고, 화면이 바뀔 때마다 BFF도 함께 배포해야 한다. 화면 단위 응답은 캐시 칸이 커서, 사용자 이름 하나 바뀌어도 화면 응답 전체를 다시 만든다. 그래서 "왕복이 비싸고 화면마다 데이터 모양이 다를 때"(모바일 앱, 여러 서비스를 엮는 화면) 효과가 크고, API 하나로 화면이 그려지는 단순한 서비스에서는 오히려 짐이다. BFF가 게이트웨이와 어떻게 역할을 나누는지는 [게이트웨이 글](/posts/gateway)에, 같은 문제를 쿼리 언어로 일반화한 방식은 [GraphQL 글](/posts/graphql-basics)에 있다.
+
+## 급하지 않은 데이터를 기다리게 하지 않는다
+
+추천 상품은 화면 맨 아래에 붙는다. 없어도 주문 내역은 읽을 수 있다. 그런데 "필요한 건 다 한꺼번에"라는 생각으로 추천까지 `Promise.all`에 넣으면 어떻게 될까.
+
+```jsx
+// 실수: 추천(600ms)까지 같이 기다린다
+const pageP = Promise.all([userP, ordersP, itemsP, get("/api/recommend")]);
+```
+
+```text
+d-allwait ready 1278,1343,1284,1335,1317 med 1317 requests 4
+b-hoisted ready 1254,1171,1237,1192,1211 med 1211 requests 4
+```
+
+`Promise.all`은 가장 늦은 것을 기다린다. 추천이 핵심 경로보다 늦게 끝나는 만큼 주문 내역도 늦게 뜬다. 여기서는 100ms 정도였지만, 추천 서버가 장애로 3초씩 걸리는 날에는 주문 내역도 3초를 기다리고, 추천이 실패하면 주문 내역까지 에러 화면이 된다. 핵심이 아닌 데이터는 자기 Suspense 경계(또는 자기 로딩 상태)를 따로 가져야 그 지연과 실패가 그 칸 안에서 끝난다.
+
+두 번째 버전에서는 추천을 아예 화면이 다 그려진 뒤에 불렀다(1241ms 출발). 급하지 않은 데이터를 뒤로 미는 방법은 몇 가지가 있다.
+
+- 경계를 나누고 동시에 출발시키기: 핵심과 같이 출발하되 따로 그린다. 대역폭이 넉넉하면 가장 빠르다.
+- 첫 화면이 그려진 뒤에 출발시키기: 핵심 요청과 회선, 연결을 다투지 않는다. 위 측정의 방식이다.
+- 화면 가까이 왔을 때 출발시키기: 아래쪽 섹션 데이터. 코드 조각을 같은 신호로 함께 부르면 코드 → 데이터 계단이 생기지 않는다. 신호를 고르는 법은 [지연 로딩 전략](/posts/lazy-loading-strategies)에 있다.
+- 우선순위 낮추기: `fetch(url, { priority: "low" })`로 브라우저에 덜 급하다고 알린다. 크롬 계열은 101부터 지원하고, 지원하지 않는 브라우저는 이 옵션을 무시하니 넣어 둬도 해는 없다.
+
+## 덜 받는 응답
+
+요청 수와 순서를 정리했으면 남는 건 바이트다. 상품 목록 API가 상품 50개를 상세 설명, 스펙, 리뷰 5개, 판매자 정보까지 통째로 돌려준다고 해 보자. 목록 화면이 쓰는 건 id, 이름, 가격, 썸네일뿐이다. Node 22의 zlib로 실제 크기를 쟀다.
+
+```text
+전체 필드        raw 68231 gzip(6) 11668 br(5) 10708 br(11) 9912
+목록에 쓰는 필드만   raw 4281 gzip(6) 594 br(5) 334 br(11) 343
+```
+
+압축만으로 68KB가 11KB가 되지만, 필드를 고르면 594바이트다. 압축은 반복을 줄일 뿐 필요 없는 정보 자체를 없애지는 못한다. 그리고 압축을 풀고 나면 브라우저는 68KB짜리 JSON을 그대로 파싱하고 메모리에 들고 있어야 한다.
+
+압축 방식도 비용이 다르다. 같은 68KB를 압축하는 데 걸린 시간이다.
+
+```text
+gzip(6) per call ms 0.39
+br(5) per call ms 0.73
+br(11) per call ms 48.63
+```
+
+brotli 최고 단계(11)는 gzip보다 15% 작게 만들지만 시간이 100배 넘게 든다. 빌드 때 한 번 압축해 두는 정적 파일에는 11을 쓰고, 요청마다 만드는 API 응답에는 4~6 정도를 쓰는 이유다. 응답 압축 설정은 [nginx 성능 설정 글](/posts/nginx-https-performance)에, 필요 없는 필드를 받는 오버페칭 문제를 스키마 수준에서 다루는 방법은 [GraphQL 글](/posts/graphql-basics)에 있다.
+
+## 늦게 오는 응답과 끝없는 목록
+
+요청을 일찍, 많이 보내기 시작하면 반대쪽 문제도 따라온다. 검색어를 칠 때마다 요청을 보내면 앞 글자의 응답이 뒤 글자의 응답보다 늦게 도착해 화면을 덮을 수 있다. 사용자가 다른 화면으로 떠났는데 받던 요청은 계속 대역폭을 쓴다. 이때는 지난 요청을 취소하고(AbortController), 입력이 멈출 때까지 요청을 미룬다(디바운스). 각각 [AbortController 글](/posts/abort-controller)과 [디바운스와 스로틀 글](/posts/debounce-throttle)에서 다뤘다.
+
+목록을 끝없이 이어 받는 화면은 한 번에 다 받지 않고 페이지 단위로 받는다. 오프셋 대신 커서를 쓰는 이유는 [페이지네이션 글](/posts/api-pagination-sorting)에, 화면 쪽의 무한 스크롤 표시는 [로딩 패턴](/posts/loading-patterns)에 있다. 다음 페이지를 센티널이 보이기 조금 전에 미리 부르면 이 글의 "일찍 출발시키기"와 같은 생각이 된다.
+
+## 현장에서 요청 폭포를 찾는 법
+
+"화면이 느리다"는 말을 들었을 때 데이터 요청 쪽을 좁혀 가는 순서다.
+
+1. 느린 망과 CPU 제한을 걸고 Network 탭을 연다. Fetch/XHR만 걸러서 Waterfall 열의 막대 모양을 본다. 오른쪽 아래로 내려가는 계단이면 폭포다.
+2. 계단의 각 요청을 눌러 Initiator 탭을 본다. 어떤 요청이 끝난 뒤의 어떤 코드(컴포넌트, effect)에서 시작됐는지 사슬로 나온다. 그 요청이 정말 앞 응답의 값을 쓰는지 확인한다. 안 쓴다면 가짜 의존이다.
+3. 같은 주소가 두 번 이상 나가는지 본다. 주소로 정렬하면 바로 보인다.
+4. Timing 탭에서 Stalled/Queueing이 길면 연결 수 제한이나 같은 주소 대기를, Waiting for server response가 길면 서버 처리 시간을 의심한다. 서버가 `Server-Timing` 헤더를 주면 그 안에서 어느 단계가 느렸는지까지 나온다.
+5. 사용자 브라우저에서는 리소스 타이밍으로 모은다. 아래 코드는 API 요청들을 시작 순서로 정렬해서 앞 요청이 끝난 뒤에야 시작한 요청을 표시한다.
+
+```js
+// 다른 API 요청이 끝난 직후(20ms 안)에 출발한 요청 = 계단의 다음 칸일 가능성이 높다
+const api = performance.getEntriesByType("resource")
+  .filter((e) => e.name.includes("/api/"))
+  .sort((a, b) => a.startTime - b.startTime);
+for (const e of api) {
+  const after = api.find((p) => p !== e && Math.abs(e.startTime - p.responseEnd) < 20);
+  console.log(new URL(e.name).pathname, Math.round(e.startTime), Math.round(e.responseEnd), after ? "← " + new URL(after.name).pathname : "");
+}
+```
+
+같은 데이터를 공격적으로 미리 부르다 보면 서버 부하가 늘어난다는 점도 기억해 둔다. 마우스를 올릴 때마다 상세를 미리 받는 화면은 실제 클릭보다 몇 배 많은 요청을 서버에 보낸다. 미리 부르기를 켠 뒤에는 API 요청량과 캐시 적중률도 같이 본다.
+
+## 다시 2.2초로
+
+API는 처음부터 빨랐다. 느렸던 건 컴포넌트 트리 모양대로 줄을 선 요청들이었다. 주소만 보고 알 수 있는 요청을 함께 출발시키고, 중복을 합치고, 줄마다 부르던 요청을 묶으니 2244ms가 1211ms가 됐고, 화면 단위 응답 하나로 합치니 1041ms가 됐다. 급하지 않은 추천은 따로 떼어 핵심 경로가 그 지연과 실패를 떠안지 않게 했다. 요청 하나하나를 빠르게 하기 전에, 요청들이 서로 무엇을 기다리는지부터 본다.
+
+## 면접에서 나올 만한 질문
+
+### 요청 폭포가 무엇이고 왜 생기나요?
+
+앞 요청이 끝나야 다음 요청이 출발하는 계단 모양의 요청 순서다. 데이터가 정말 앞 응답의 값을 필요로 해서 생기기도 하지만, 대부분은 데이터를 부르는 코드가 그 데이터를 쓰는 컴포넌트 안에 있어서 생긴다. 부모가 받아야 자식이 그려지고, 자식이 그려져야 자식의 요청이 나가니 요청이 트리 깊이만큼 줄을 선다.
+
+### fetch-on-render, fetch-then-render, render-as-you-fetch는 어떻게 다른가요?
+
+렌더링한 뒤 effect에서 부르면 트리 깊이만큼 계단이 생긴다. 다 받고 그리면 계단은 없지만 가장 느린 요청을 화면 전체가 기다린다. render-as-you-fetch는 요청을 진입 시점에 모두 출발시키고, 컴포넌트는 자기 데이터가 도착하는 대로 Suspense 경계 단위로 그린다. 요청 시작은 이르게, 기다림은 칸마다 따로 두는 방식이다.
+
+### Suspense를 쓰면 폭포가 사라지나요?
+
+아니다. 자식이 렌더링 중에 자기 요청을 시작하고 멈추면, 부모 경계가 풀린 뒤에야 자식이 렌더링되니 같은 계단이 생긴다. 컴포넌트 안에서 Promise를 만들면 렌더링마다 새 요청이 나가는 문제도 있다. 요청은 라우터 로더나 캐시처럼 컴포넌트 바깥에서 일찍 시작하고, Suspense는 기다리는 방법으로만 쓴다.
+
+### 같은 API를 여러 컴포넌트가 부르면 어떻게 하나요?
+
+진행 중인 요청을 키로 기억해 두고 같은 키가 오면 그 Promise를 돌려준다. 요청이 끝나면 지워야 하고, 끝난 뒤에도 다시 쓰려면 신선한 시간을 정하는 캐시가 필요하다. 크롬은 같은 주소의 GET이 동시에 나가면 두 번째를 첫 응답이 끝날 때까지 붙잡아 두는데, 예제에서는 그 때문에 화면 핵심 경로가 277ms 늘었다.
+
+### BFF는 언제 쓰고, 무엇을 내주나요?
+
+클라이언트와 서버 사이 왕복이 비싸고 화면마다 여러 서비스의 데이터를 엮어야 할 때 쓴다. 조립을 왕복이 싼 서버 안쪽으로 옮겨 휴대폰은 한 번만 묻는다. 예제에서 요청 4개 1211ms가 1개 1041ms가 됐다. 대신 운영할 서버가 늘고, 화면과 함께 배포해야 하며, 화면 단위 응답이라 캐시 재사용이 어렵다.
+
+### Promise.all로 화면 데이터를 한꺼번에 받으면 무엇이 문제인가요?
+
+가장 늦은 요청을 모두가 기다리고, 하나만 실패해도 전체가 실패한다. 핵심이 아닌 데이터(추천, 광고)를 넣으면 그 지연과 장애가 핵심 화면으로 번진다. 핵심 데이터만 묶고, 나머지는 자기 경계와 로딩 상태를 따로 가지게 하거나 첫 화면 뒤로 미룬다. 실패를 따로 다뤄야 한다면 `Promise.allSettled`를 쓴다.
+
+### 응답을 압축하면 필드를 줄일 필요가 없지 않나요?
+
+압축은 전송 바이트를 줄일 뿐 브라우저가 파싱하고 들고 있는 양은 그대로다. 예제에서 68KB가 gzip으로 11KB가 됐지만 필드를 고르면 594바이트였다. 압축 단계도 골라야 해서, brotli 11은 요청마다 쓰기엔 수십 ms가 들어 정적 파일에만 쓰고 동적 응답에는 4~6 정도를 쓴다.

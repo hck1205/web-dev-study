@@ -65,6 +65,7 @@ import { CSRF } from "./csrf";
 import { CSS_PERFORMANCE } from "./css-performance";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
+import { DATA_FETCHING_OPTIMIZATION } from "./data-fetching-optimization";
 import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
 import { DB_ARCHITECTURE_BY_SCALE } from "./db-architecture-by-scale";
 import { DB_CONSISTENCY_CAP } from "./db-consistency-cap";
@@ -147,6 +148,7 @@ import { FP_IN_REACT } from "./fp-in-react";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { FRONTEND_ERROR_TRACKING } from "./frontend-error-tracking";
 import { FRONTEND_MONOREPO } from "./frontend-monorepo";
+import { FRONTEND_PERFORMANCE_MAP } from "./frontend-performance-map";
 import { FUNCTIONAL_PROGRAMMING_BASICS } from "./functional-programming-basics";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
@@ -310,6 +312,7 @@ import { LAYER_IP_ROUTING_ICMP } from "./layer-ip-routing-icmp";
 import { LAYER_LINK_ETHERNET_ARP } from "./layer-link-ethernet-arp";
 import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LAYERED_ARCHITECTURE } from "./layered-architecture";
+import { LAZY_LOADING_STRATEGIES } from "./lazy-loading-strategies";
 import { LEADER_ELECTION } from "./leader-election";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
@@ -659,6 +662,7 @@ export const QUESTION_SETS = [
   CSS_PERFORMANCE,
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
+  DATA_FETCHING_OPTIMIZATION,
   DATA_STRUCTURES_OVERVIEW,
   DB_ARCHITECTURE_BY_SCALE,
   DB_CONSISTENCY_CAP,
@@ -741,6 +745,7 @@ export const QUESTION_SETS = [
   FRONTEND_BROWSER_CACHE,
   FRONTEND_ERROR_TRACKING,
   FRONTEND_MONOREPO,
+  FRONTEND_PERFORMANCE_MAP,
   FUNCTIONAL_PROGRAMMING_BASICS,
   GARBAGE_COLLECTION,
   GATEWAY,
@@ -904,6 +909,7 @@ export const QUESTION_SETS = [
   LAYER_LINK_ETHERNET_ARP,
   LAYER_MTU_FRAGMENTATION,
   LAYERED_ARCHITECTURE,
+  LAZY_LOADING_STRATEGIES,
   LEADER_ELECTION,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
