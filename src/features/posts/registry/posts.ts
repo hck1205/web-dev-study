@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "rendering-performance-optimization",
+    title: "렌더링 성능 최적화: 덜 깨우고, 좁게 번지고, 건너뛰기",
+    summary: "클래스 하나가 수만 개 요소의 스타일과 레이아웃을 깨우는 과정을 재 보고, 무효화 범위 좁히기, contain, content-visibility, 가상화, 읽기·쓰기 묶기로 비용을 줄인다. 그림자·필터의 래스터 비용과 requestIdleCallback을 쓰는 자리까지 실제 측정값으로 다룬다.",
+    topic: "programming/frontend/rendering",
+    tags: ["Browser", "Performance", "CSS", "React"],
+    date: "2026-10-25",
+    keywords: ["content-visibility", "CSS containment", "리스트 가상화", "무효화 범위"],
+  },
+  {
+    slug: "browser-rendering-pipeline",
+    title: "브라우저 렌더링 파이프라인: 바이트가 픽셀이 되기까지",
+    summary: "HTML을 받는 대로 읽는 파서, 파서를 세우는 스크립트, 첫 화면을 막는 CSS, 멈춘 동안 앞을 훑는 프리로드 스캐너를 크로미움에서 직접 재 본다. 스타일 계산부터 레이아웃, 페인트 기록, 래스터, 합성까지 어느 스레드에서 어떤 순서로 도는지 트레이스로 따라간다.",
+    topic: "programming/frontend/rendering",
+    tags: ["Browser", "Performance", "JavaScript", "CSS"],
+    date: "2026-10-25",
+    keywords: ["프리로드 스캐너", "파서 차단 스크립트", "래스터화", "페인트 기록"],
+  },
+  {
     slug: "api-gateway-use-cases",
     title: "API 게이트웨이가 하는 열 가지 일: 요청에 실제로 하는 것과 서비스에 남기는 것",
     summary: "게이트웨이 하나에 요청 수 제한, 인증, 분배, 라우팅, TLS 종료, 캐시, XML→JSON 변환, 서킷 브레이커, 로그와 지표, 버전 라우팅을 켜고 일마다 요청이 어떻게 바뀌는지 curl로 확인했다. 서비스에 남겨야 하는 인가와 멱등성, 입구에 몰아넣은 대가, 단계마다 무엇을 켤지도 정리했다.",

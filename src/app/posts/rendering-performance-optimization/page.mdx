@@ -1,0 +1,459 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rendering-performance-optimization");
+
+상품 1만 개를 한 페이지에 늘어놓은 관리자 화면이 있다. 상단의 "촘촘히 보기" 토글을 누르면 줄 간격이 줄어드는데, 누를 때마다 화면이 한 박자 얼어붙는다. 코드는 `document.body.classList.toggle("compact")` 한 줄이다. 자바스크립트는 거의 하는 일이 없는데 무엇이 시간을 먹는 걸까.
+
+범인은 그 한 줄이 깨우는 렌더링 단계들이다. 바이트가 픽셀이 되는 순서는 앞 글 [브라우저 렌더링 파이프라인](/posts/browser-rendering-pipeline)에서 트레이스로 따라갔다. 이 글은 그 순서를 거꾸로 이용한다. 어떤 단계를 깨우는지, 깨운 단계가 얼마나 넓게 번지는지, 아예 건너뛸 수 있는지를 하나씩 재 본다. 환경은 앞 글과 같은 크로미움 141(Playwright, headless, GPU 없음)이다. 이 컨테이너의 CPU 기준이라 실제 폰에서는 몇 배 느리다고 보면 된다.
+
+애니메이션에서 `left` 대신 `transform`을 쓰는 이야기와 `will-change`로 층을 늘릴 때의 메모리 비용은 [애니메이션 성능](/posts/animation-performance)에, 긴 작업을 쪼개 입력에 양보하는 `scheduler.yield()`는 [Core Web Vitals](/posts/core-web-vitals)에 있다. 여기서는 반복하지 않고 필요한 곳에서 링크만 건다.
+
+## 한 줄의 클래스가 몇 개의 요소를 깨우나
+
+처음 장면을 그대로 재현했다. 줄마다 노드 7개짜리 목록을 1천, 5천, 2만 줄로 만들고, `body`에 클래스를 붙여 모든 줄의 `padding`을 바꿨다. CSS 규칙은 `.compact .row { padding: 2px 12px }`이다. 비교로, 줄 하나에만 색을 바꾸는 클래스를 붙였다. 트레이스의 `UpdateLayoutTree` 이벤트에는 스타일을 다시 계산한 요소 수(`elementCount`)가, `Layout` 이벤트에는 다시 잰 레이아웃 객체 수가 남는다.
+
+```js
+// 넓은 무효화: body 클래스 하나로 모든 줄의 padding이 바뀐다
+document.body.classList.toggle("compact");
+document.body.offsetHeight; // 레이아웃까지 끝난 시간을 재려고 일부러 읽는다
+
+// 좁은 무효화: 줄 하나의 배경색만 바뀐다
+document.querySelectorAll(".row")[10].classList.toggle("hit");
+document.body.offsetHeight;
+```
+
+```text
+줄 1000 (노드 7015)
+  body 클래스: JS 안에서 10.3ms | 스타일 1회 3.4ms 요소 1000개 | 레이아웃 1회 6.2ms 객체(dirty/total) 1004/7004
+  한 줄 클래스: JS 안에서 0.4ms | 스타일 1회 0.1ms 요소 1개 | 레이아웃 0회 0.0ms 객체(dirty/total) 
+줄 5000 (노드 35015)
+  body 클래스: JS 안에서 37.4ms | 스타일 1회 16.4ms 요소 5000개 | 레이아웃 1회 20.5ms 객체(dirty/total) 5004/35004
+  한 줄 클래스: JS 안에서 1.2ms | 스타일 1회 0.1ms 요소 1개 | 레이아웃 0회 0.0ms 객체(dirty/total) 
+줄 20000 (노드 140015)
+  body 클래스: JS 안에서 125.6ms | 스타일 1회 41.5ms 요소 20000개 | 레이아웃 1회 83.6ms 객체(dirty/total) 20004/140004
+  한 줄 클래스: JS 안에서 6.5ms | 스타일 1회 0.1ms 요소 1개 | 레이아웃 0회 0.0ms 객체(dirty/total)
+```
+
+읽을 곳이 세 군데 있다. 첫째, `body` 클래스 하나가 줄 수만큼 요소의 스타일을 다시 계산하게 했다. 노드는 14만 개인데 다시 계산한 요소가 2만 개인 건, 크로미움이 `.compact .row` 규칙을 보고 `.row`만 무효화했기 때문이다. 브라우저도 범위를 좁히려 애쓰지만 규칙이 모든 줄을 가리키면 어쩔 수 없다. 둘째, 바뀐 게 `padding`이라 레이아웃까지 깨웠고 전체 객체 14만 개 중 2만 개가 다시 재졌다. 셋째, 줄 하나의 색만 바꾸면 스타일 계산은 요소 1개, 레이아웃은 0회다. 2만 줄일 때 6.5ms가 걸린 건 렌더링이 아니라 `querySelectorAll(".row")`로 2만 개를 모은 비용이다.
+
+2만 줄에서 125.6ms면 60Hz 기준 일곱 프레임을 넘게 놓친다. 같은 숫자를 프레임 예산과 나란히 놓으면 이렇다.
+
+<GeometryMorph
+  caption="body 클래스 하나를 바꿨을 때 스타일 계산과 레이아웃에 든 시간 (테두리 상자가 16.7ms)"
+  width={400}
+  height={200}
+  shapes={[{ id: "budget", tone: "outline" }, { id: "style", tone: "series1" }, { id: "layout", tone: "series2" }]}
+  steps={[
+    {
+      title: "1천 줄: 9.6ms",
+      detail: "스타일 3.4ms, 레이아웃 6.2ms. 예산 안이지만 절반을 넘게 썼다.",
+      shapes: { budget: [[20, 70], [120, 70], [120, 130], [20, 130]], style: [[20, 80], [40, 80], [40, 120], [20, 120]], layout: [[40, 80], [77, 80], [77, 120], [40, 120]] },
+      labels: [{ x: 70, y: 55, text: "16.7ms", size: "sm" }, { x: 30, y: 150, text: "style", tone: "series1", size: "sm" }, { x: 60, y: 150, text: "layout", tone: "series2", size: "sm" }],
+      focus: ["budget"],
+    },
+    {
+      title: "5천 줄: 36.9ms",
+      detail: "스타일 16.4ms, 레이아웃 20.5ms. 두 프레임 넘게 걸린다.",
+      shapes: { budget: [[20, 70], [120, 70], [120, 130], [20, 130]], style: [[20, 80], [118, 80], [118, 120], [20, 120]], layout: [[118, 80], [241, 80], [241, 120], [118, 120]] },
+      labels: [{ x: 70, y: 55, text: "16.7ms", size: "sm" }, { x: 69, y: 150, text: "style", tone: "series1", size: "sm" }, { x: 180, y: 150, text: "layout", tone: "series2", size: "sm" }],
+      focus: ["style", "layout"],
+    },
+    {
+      title: "2만 줄: 125.1ms",
+      detail: "스타일 41.5ms, 레이아웃 83.6ms. 그림을 그리기도 전에 7프레임 넘게 지났다.",
+      shapes: { budget: [[20, 70], [45, 70], [45, 130], [20, 130]], style: [[20, 80], [82, 80], [82, 120], [20, 120]], layout: [[82, 80], [207, 80], [207, 120], [82, 120]] },
+      labels: [{ x: 33, y: 55, text: "16.7ms", size: "sm" }, { x: 51, y: 150, text: "style", tone: "series1", size: "sm" }, { x: 145, y: 150, text: "layout", tone: "series2", size: "sm" }, { x: 300, y: 100, text: "가로축 1/4", size: "sm" }],
+      focus: ["layout"],
+    },
+    {
+      title: "줄 하나의 색: 0.1ms",
+      detail: "같은 2만 줄이어도 무효화 범위가 요소 하나면 스타일 0.1ms, 레이아웃 0회다.",
+      shapes: { budget: [[20, 70], [120, 70], [120, 130], [20, 130]], style: [[20, 80], [21, 80], [21, 120], [20, 120]], layout: [[21, 80], [21, 80], [21, 120], [21, 120]] },
+      labels: [{ x: 70, y: 55, text: "16.7ms", size: "sm" }, { x: 60, y: 150, text: "거의 0", tone: "series1", size: "sm" }],
+      focus: ["budget", "style"],
+    },
+  ]}
+/>
+
+세 번째 단계는 막대가 너무 길어 가로축을 4분의 1로 줄였다. 결국 비용은 "DOM이 얼마나 큰가"와 "변경이 그중 얼마를 건드리나"의 곱이다. 이 글의 최적화는 모두 둘 중 하나를 줄인다. 전체를 작게 만들거나(가상화, `content-visibility`), 건드리는 범위를 좁히거나(무효화 범위, `contain`), 비싼 단계 자체를 피한다(합성, 그림 효과).
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="각 처방이 파이프라인의 어느 단계를 줄이는지"
+  nodes={[
+    { id: "style", label: "Style", x: 60, y: 40, w: 80 },
+    { id: "layout", label: "Layout", x: 160, y: 40, w: 80 },
+    { id: "paint", label: "Paint·Raster", x: 265, y: 40, w: 100 },
+    { id: "comp", label: "Composite", x: 360, y: 120, w: 70 },
+    { id: "virt", label: "가상화", sub: "노드 자체를 줄임", x: 60, y: 135, w: 100 },
+    { id: "cv", label: "content-visibility", sub: "화면 밖 건너뜀", x: 175, y: 205, w: 140 },
+    { id: "contain", label: "contain", sub: "번지는 범위 차단", x: 160, y: 120, w: 100 },
+    { id: "fx", label: "그림 효과 줄이기", sub: "shadow·filter", x: 300, y: 205, w: 120 },
+  ]}
+  edges={[
+    { from: "style", to: "layout" },
+    { from: "layout", to: "paint" },
+    { from: "paint", to: "comp" },
+    { from: "virt", to: "style", dashed: true },
+    { from: "contain", to: "layout", dashed: true },
+    { from: "cv", to: "layout", dashed: true },
+    { from: "fx", to: "paint", dashed: true },
+  ]}
+/>
+
+## 무효화 범위를 좁히는 습관
+
+DOM을 줄이기 전에 공짜로 할 수 있는 것부터 본다. 같은 시각 효과라도 어떤 요소의 무엇을 바꾸느냐에 따라 깨우는 범위가 다르다.
+
+- 상태 클래스를 최상위(`html`, `body`)가 아니라 영향받는 가장 가까운 조상에 붙인다. 목록 밀도 토글이라면 목록 컨테이너에 붙인다.
+- 테마처럼 정말 전체가 바뀌는 경우는 CSS 변수를 쓴다. 변수 값이 바뀌어도 그 변수를 쓰는 요소의 스타일 계산은 일어나지만, 색에만 쓰인 변수라면 레이아웃까지는 가지 않는다.
+- 크기나 위치에 영향이 없는 속성(`color`, `background`, `opacity`)으로 표현할 수 있는지 먼저 본다. 앞의 측정처럼 색만 바꾸면 레이아웃 0회다.
+- 선택자를 단순하게 쓰는 건 유지보수에는 좋지만 성능 차이는 대부분 측정 오차 안이다. 선택자 비용보다 "몇 개의 요소가 매치되느냐"가 훨씬 크다. 선택자 매칭 비용 자체를 잰 결과는 [CSS 성능](/posts/css-performance)에 있다.
+
+React라면 상태를 어디에 두느냐가 같은 문제다. 밀도 상태를 최상위 컨텍스트에 두면 그 아래 컴포넌트가 다 다시 렌더링되고, 결과 DOM의 클래스도 넓게 바뀐다. 렌더링 범위를 줄이는 법은 [리렌더링](/posts/react-rerender)에서 다뤘다. 브라우저의 무효화 범위와 React의 렌더링 범위는 서로 다른 비용이지만, 둘 다 "상태를 쓰는 곳 가까이 둔다"로 줄어든다.
+
+## 레이아웃이 번지는 걸 contain으로 막는다
+
+이번에는 카드 3천 장 중 화면 안의 카드 하나에서 가격 글자만 바꾼다. 무효화 범위는 이미 가장 좁다. 그래도 레이아웃이 문서 전체로 번질 수 있다. 글자가 길어지면 카드가 커질 수 있고, 카드가 커지면 아래 카드들이 밀리기 때문이다. 브라우저는 그럴 가능성을 확인하려고 조상을 따라 올라간다.
+
+CSS `contain`은 "이 요소 안의 변화는 밖에 영향을 주지 않는다"고 브라우저에 약속하는 속성이다. 값마다 약속의 범위가 다르다. `layout`은 안쪽 배치가 바깥 배치에 영향을 주지 않는다, `paint`는 안쪽 내용이 상자 밖으로 그려지지 않는다, `size`는 안쪽 내용과 상관없이 크기가 정해져 있다는 약속이다. `content`는 `layout paint style`, `strict`는 거기에 `size`까지 더한 묶음이다.
+
+아래 그림에서 다음을 누르면 가격 글자 하나를 바꿨을 때 레이아웃이 어디까지 올라가는지 보인다.
+
+<NetworkTopology
+  caption="가격 글자 하나가 바뀌었을 때 레이아웃이 올라가는 길"
+  width={400}
+  height={250}
+  zones={[
+    { id: "card", label: "카드 5", x: 150, y: 105, w: 240, h: 135, tone: "private" },
+  ]}
+  nodes={[
+    { id: "doc", label: "문서", sub: "카드 3천 장", x: 70, y: 60, icon: "server" },
+    { id: "siblings", label: "다른 카드들", x: 70, y: 180, icon: "container" },
+    { id: "cardbox", label: "카드 상자", x: 270, y: 145, icon: "switch" },
+    { id: "price", label: "가격 글자", x: 335, y: 205, icon: "client" },
+    { id: "title", label: "제목·설명", x: 205, y: 205, icon: "client" },
+  ]}
+  links={[
+    { from: "price", to: "cardbox" },
+    { from: "title", to: "cardbox" },
+    { from: "cardbox", to: "doc" },
+    { from: "doc", to: "siblings" },
+  ]}
+  steps={[
+    { path: ["price"], packet: "글자 바뀜", title: "가격 글자가 길어진다", detail: "글자 조각의 폭이 바뀌었다. 여기부터 레이아웃 표시가 붙는다." },
+    { path: ["price", "cardbox", "doc"], packet: "크기 바뀜?", title: "contain이 없으면 문서까지 올라간다", detail: "카드 크기가 바뀔 수 있으니 부모와 문서까지 레이아웃을 다시 확인한다. 트레이스의 전체 객체 수는 24003이다." },
+    { path: ["doc", "siblings"], packet: "위치 확인", title: "다른 카드의 자리까지 확인한다", detail: "실제로 다시 잰 객체는 7개뿐이어도 그걸 확인하는 데 한 번에 2~3ms가 든다." },
+    { path: ["price", "cardbox"], packet: "strict", blocked: true, title: "contain: strict면 카드에서 멈춘다", detail: "크기가 고정이라고 약속했으니 카드 밖은 볼 필요가 없다. 전체 객체 수가 8로 줄어든다." },
+  ]}
+/>
+
+실제로 쟀다. 화면 안 카드 하나의 가격 글자를 10번 바꾸고 매번 레이아웃을 강제로 했다. 같은 스크립트를 세 번 돌렸다.
+
+```js
+const price = document.querySelectorAll(".price")[5];
+for (let i = 0; i < 10; i++) {
+  price.textContent = `${i * 1111}원 할인`;
+  document.body.offsetHeight; // 바꿀 때마다 레이아웃을 끝까지 하게 만든다
+}
+```
+
+```text
+contain 없음        10회 31.8ms | 레이아웃 10회 합 30.66ms | dirty/total 7/24003
+contain: content  10회 15.5ms | 레이아웃 10회 합 14.75ms | dirty/total 7/24003
+contain: strict   10회 2.7ms | 레이아웃 10회 합 1.25ms | dirty/total 4/8
+contain 없음        10회 24.7ms | 레이아웃 10회 합 23.74ms | dirty/total 7/24003
+contain: content  10회 28.3ms | 레이아웃 10회 합 27.09ms | dirty/total 7/24003
+contain: strict   10회 4.6ms | 레이아웃 10회 합 1.94ms | dirty/total 4/8
+contain 없음        10회 20.0ms | 레이아웃 10회 합 19.02ms | dirty/total 7/24003
+contain: content  10회 18.7ms | 레이아웃 10회 합 17.88ms | dirty/total 7/24003
+contain: strict   10회 3.2ms | 레이아웃 10회 합 1.48ms | dirty/total 4/8
+```
+
+결과가 기대와 다르게 나온 줄이 있다. `contain: content`는 세 번 중 한 번은 빨랐고 한 번은 오히려 느렸다. 전체 객체 수도 24003 그대로다. 레이아웃 격리만으로는 "카드 크기가 바뀔 수 있다"는 가능성이 사라지지 않으니, 브라우저는 여전히 위로 올라가 확인한다. 크기까지 약속한 `contain: strict`(여기서는 `height: 80px`와 함께)에서야 카드가 레이아웃의 경계가 되어 전체 객체 수가 8로 떨어지고, 레이아웃 시간이 10분의 1 아래로 줄었다.
+
+그래서 `contain: strict`나 `contain: size`는 크기를 정할 수 있는 곳에만 쓴다. 고정 높이 위젯, 채팅 메시지 목록의 바깥 틀, 대시보드의 차트 칸 같은 곳이다. 크기를 정하지 않고 `size`를 걸면 내용이 있어도 높이가 0이 되어 화면에서 사라진다. 흔한 실수다.
+
+## 화면 밖은 아예 그리지 않는다
+
+`contain`이 번지는 범위를 막는다면, `content-visibility: auto`는 화면 밖 요소의 렌더링을 통째로 건너뛴다. 요소가 뷰포트 근처에 오기 전까지 그 안쪽의 스타일 계산, 레이아웃, 페인트를 하지 않는다. 크롬 계열은 85부터, 다른 브라우저는 그보다 한참 뒤에 지원했으니 지원하지 않는 브라우저에서는 그냥 무시되는 점진적 개선으로 쓴다.
+
+긴 설명이 붙은 카드 3천 장으로 세 경우를 비교했다. 클래스 전환은 앞과 같은 `body` 클래스 토글이다.
+
+```css
+.card { content-visibility: auto; }
+.card { content-visibility: auto; contain-intrinsic-size: auto 120px; } /* 그리기 전 자리 크기 */
+```
+
+```text
+없음                첫 렌더링: 스타일 17.6ms 레이아웃 173.9ms | 클래스 전환 49.7ms | 높이 405662 → 끝까지 스크롤 뒤 405662 | 마지막 카드 그림? true | find true
+auto              첫 렌더링: 스타일 11.0ms 레이아웃 15.3ms | 클래스 전환 4.3ms | 높이 82188 → 끝까지 스크롤 뒤 90963 | 마지막 카드 그림? false | find true
+auto + intrinsic  첫 렌더링: 스타일 9.4ms 레이아웃 9.3ms | 클래스 전환 4.1ms | 높이 431883 → 끝까지 스크롤 뒤 431743 | 마지막 카드 그림? false | find true
+```
+
+첫 레이아웃이 173.9ms에서 15.3ms로, 클래스 전환이 49.7ms에서 4.3ms로 줄었다. 마지막 카드 안의 제목은 `checkVisibility({ contentVisibilityAuto: true })`가 `false`를 돌려줬다. 실제로 렌더링을 건너뛰고 있다는 뜻이다. 그런데도 `window.find("상품 2999")`로 찾기는 된다. `display: none`과 달리 DOM과 접근성 트리에는 남아 있어서 브라우저의 찾기(Ctrl+F)와 스크린 리더가 내용을 찾을 수 있다.
+
+문제는 두 번째 줄의 높이다. 건너뛴 카드는 내용 없이 테두리와 여백만큼의 크기로 계산되어 문서 높이가 405662px에서 82188px로 줄었다. 끝까지 스크롤하면서 카드가 하나씩 그려지자 90963px로 늘었다. 사용자는 스크롤바가 스크롤하는 동안 계속 줄어들고 위치가 튀는 걸 본다. `contain-intrinsic-size`로 그리기 전의 자리 크기를 알려 주면 높이가 431883px로 실제와 비슷해진다. 값 앞의 `auto`는 한 번 그린 카드의 실제 크기를 기억했다가, 다시 화면 밖으로 나가도 그 크기를 쓰라는 뜻이다. 끝까지 스크롤한 뒤 높이가 431743px로 거의 그대로인 것도 이 덕분이다.
+
+`content-visibility`가 맞는 곳은 길고, 화면 밖 부분이 크고, 블록 단위로 나뉜 페이지다. 긴 글, 댓글 목록, 상품 상세의 아래쪽 섹션 같은 곳이다. 앵커 링크로 중간에 뛰어드는 페이지라면 그 사이 블록의 크기 추정이 틀린 만큼 도착 위치가 어긋날 수 있으니 확인한다.
+
+## 1만 줄을 다 만들지 않는다
+
+`content-visibility`는 DOM은 그대로 두고 렌더링만 건너뛴다. 노드 7만 개는 여전히 메모리에 있고, `querySelectorAll`도, React의 재조정도 7만 개를 상대한다. 줄 수가 수천을 넘으면 아예 보이는 줄만 DOM에 두는 가상화(virtualization, windowing)를 쓴다. 전체 높이만큼의 빈 상자를 깔아 스크롤바를 만들고, 스크롤 위치에서 보이는 줄 번호를 계산해 그 줄만 그 자리에 놓는다.
+
+아래 그림에서 칸은 전체 목록의 줄이고, 다음을 누를 때마다 스크롤이 내려간다. 오른쪽에 실제로 DOM에 있는 줄이 보인다. 화면에는 세 줄이 보이고, 앞뒤로 한 줄씩 여유(overscan)를 둔다.
+
+<AlgoTrace
+  caption="스크롤 위치에 따라 DOM에 두는 줄만 바뀐다 (화면 3줄 + 앞뒤 여유 1줄)"
+  memoryLabel="DOM에 있는 줄"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2], memory: ["0", "1", "2", "3"], caption: "맨 위. 0~2번이 보이고 아래 여유로 3번까지 만든다." },
+    { pointer: 2, found: [2, 3, 4], memory: ["1", "2", "3", "4", "5"], caption: "두 줄 내렸다. 0번은 빠지고 5번이 새로 들어온다." },
+    { pointer: 4, found: [4, 5, 6], memory: ["3", "4", "5", "6", "7"], caption: "DOM의 줄 수는 그대로 다섯이다. 번호만 바뀐다." },
+    { pointer: 7, found: [7, 8, 9], memory: ["6", "7", "8", "9"], caption: "맨 아래. 뒤 여유는 목록 끝에서 잘린다." },
+  ]}
+/>
+
+1만 줄을 다 그린 목록과, 높이 32px 줄을 보이는 만큼만 그리는 바닐라 자바스크립트 목록을 비교했다.
+
+```js
+function visibleRange(scrollTop, viewport, rowHeight, total, overscan) {
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const end = Math.min(total, Math.ceil((scrollTop + viewport) / rowHeight) + overscan);
+  return [start, end];
+}
+vp.addEventListener("scroll", () => requestAnimationFrame(render), { passive: true });
+```
+
+```text
+전부 그리기   .row 10000개 노드 70015 | 첫 레이아웃 282.1ms 스타일 46.6ms | 클래스 전환 62.9ms
+가상화      .row 30개 노드 230 | 첫 레이아웃 4.7ms 스타일 0.7ms | 클래스 전환 0.6ms
+  scrollTop 160000 뒤 첫 줄: #4995 줄 수: 35
+```
+
+노드가 70015개에서 230개로, 첫 레이아웃이 282.1ms에서 4.7ms로, 처음 장면의 클래스 전환이 62.9ms에서 0.6ms로 줄었다. 160000px까지 스크롤하자 첫 줄이 4995번(5000번에서 여유 5줄을 뺀 값)이 되고 DOM에는 35줄만 있었다. 이 계산 함수를 직접 써 보자.
+
+<CodePlayground
+  caption="스크롤 위치로 그릴 줄 범위 구하기"
+  functionName="visibleRange"
+  initialCode={`function visibleRange(scrollTop, viewport, rowHeight, total, overscan) {
+  // scrollTop: 스크롤한 거리(px), viewport: 보이는 높이(px)
+  // rowHeight: 줄 높이(px), total: 전체 줄 수, overscan: 앞뒤 여유 줄 수
+  // 반환: [start, end]  start 이상 end 미만의 줄을 그린다
+  // start는 0보다 작으면 안 되고, end는 total보다 크면 안 된다
+  return [0, 0];
+}`}
+  solution={`function visibleRange(scrollTop, viewport, rowHeight, total, overscan) {
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const end = Math.min(total, Math.ceil((scrollTop + viewport) / rowHeight) + overscan);
+  return [start, end];
+}`}
+  tests={[
+    { label: "맨 위", args: [0, 800, 32, 10000, 5], expected: [0, 30] },
+    { label: "160000px 스크롤", args: [160000, 800, 32, 10000, 5], expected: [4995, 5030] },
+    { label: "여유 없이 100px", args: [100, 800, 32, 10000, 0], expected: [3, 29] },
+    { label: "맨 아래 근처", args: [319500, 800, 32, 10000, 5], expected: [9979, 10000] },
+    { label: "목록이 화면보다 짧음", args: [0, 800, 32, 10, 5], expected: [0, 10] },
+    { label: "줄 높이 40, 여유 2", args: [50, 100, 40, 100, 2], expected: [0, 6] },
+  ]}
+/>
+
+가상화에는 대가가 있다. 화면 밖 줄이 DOM에 없으니 브라우저의 찾기(Ctrl+F)로 찾을 수 없고, 스크린 리더가 전체 개수를 모른다(`aria-rowcount`, `aria-rowindex` 같은 속성으로 알려 줘야 한다). 줄 높이가 제각각이면 미리 잴 수 없어서 추정 높이로 시작하고 그린 뒤에 고치는데, 이때 스크롤이 튀기 쉽다. 빠르게 스크롤하면 새 줄이 그려지기 전에 빈 칸이 잠깐 보인다. 여유 줄 수가 이 빈 칸과 DOM 크기 사이의 저울질이다.
+
+React에서는 직접 만들기보다 TanStack Virtual이나 react-window 같은 라이브러리를 쓰는 경우가 많다. 둘 다 위 함수와 같은 계산을 한다. 흔한 실수는 `key`에 배열 인덱스를 쓰는 것이다. 가상 목록에서 인덱스는 "화면의 몇 번째 칸"이 되기 쉬워서, 스크롤할 때 컴포넌트 상태(입력값, 펼침 여부)가 다른 줄로 옮겨 붙는다. 데이터의 고유 id를 쓴다. 필터 입력처럼 목록 전체를 다시 계산하는 경우는 `useDeferredValue`나 `startTransition`으로 입력 반응을 먼저 그리게 한다.
+
+어느 쪽을 고를지는 줄 수와 요구 사항으로 정한다. 수백 줄이면 아무것도 하지 않아도 된다. 수천 줄이고 찾기와 접근성이 중요하면 `content-visibility`부터 해 본다. 수만 줄이거나 줄마다 무거운 컴포넌트라면 가상화가 맞다. 무한 스크롤로 계속 쌓이는 피드라면 가상화 없이는 결국 느려진다(무한 스크롤 자체는 [무한 스크롤](/posts/scroll-triggered-intersection-observer)에서 다뤘다).
+
+## 여러 컴포넌트가 각자 크기를 잴 때
+
+크기를 읽고 바로 쓰기를 반복하면 그때마다 강제 레이아웃이 일어난다는 건 [DOM 기초](/posts/dom-basics)에서 반복문으로 쟀다. 실무에서 더 자주 만나는 모양은 반복문이 아니라 컴포넌트다. 툴팁, 말줄임 판정, 높이 맞춤 카드가 각자 자기 크기를 읽고 자기 스타일을 쓴다. 한 컴포넌트만 보면 읽기 한 번, 쓰기 한 번이라 문제가 없어 보인다. 화면에 100개가 있으면 이야기가 다르다.
+
+<SequenceDiagram
+  caption="위젯 100개가 각자 읽고 쓰면, 읽기·쓰기를 단계로 모으면"
+  actors={[
+    { id: "w", label: "위젯들" },
+    { id: "s", label: "스케줄러" },
+    { id: "b", label: "브라우저" },
+  ]}
+  steps={[
+    { from: "w", to: "b", label: "위젯 1: 읽고 쓰기", title: "첫 위젯이 폭을 읽고 높이를 쓴다", detail: "아직 바뀐 게 없으니 읽기는 바로 답한다. 쓰기는 다시 해야 한다는 표시만 남긴다." },
+    { from: "w", to: "b", label: "위젯 2: 읽기", title: "다음 위젯의 읽기가 레이아웃을 부른다", detail: "앞 위젯이 남긴 표시 때문에 정확한 폭을 주려면 레이아웃을 지금 해야 한다. 100개면 100번이다." },
+    { from: "w", to: "s", label: "measure(), mutate()", title: "고친 코드: 읽기와 쓰기를 맡긴다", detail: "위젯은 바로 읽고 쓰지 않고 할 일을 스케줄러 큐에 넣는다." },
+    { from: "s", to: "b", label: "rAF: 읽기 100개", title: "다음 프레임 직전에 읽기만 먼저 돌린다", detail: "아무것도 바꾸지 않은 상태라 레이아웃은 많아야 한 번이다." },
+    { from: "s", to: "b", label: "쓰기 100개", title: "그다음 쓰기만 몰아서 한다", detail: "표시만 쌓이고, 실제 레이아웃은 이어지는 렌더링에서 한 번 한다." },
+  ]}
+/>
+
+열 줄짜리 스케줄러로 쟀다. `fastdom` 같은 라이브러리가 하는 일과 같은 원리다.
+
+```js
+const reads = [], writes = [];
+let scheduled = false;
+function flush() { scheduled = false; reads.splice(0).forEach((f) => f()); writes.splice(0).forEach((f) => f()); }
+const schedule = () => { if (!scheduled) { scheduled = true; requestAnimationFrame(flush); } };
+const measure = (f) => { reads.push(f); schedule(); };
+const mutate = (f) => { writes.push(f); schedule(); };
+
+// 각 위젯: 읽기는 measure 안에서, 쓰기는 mutate 안에서
+widgets.forEach((w) => measure(() => {
+  const width = w.parentElement.clientWidth;
+  mutate(() => { w.style.height = width / 20 + "px"; });
+}));
+```
+
+```text
+eachOnItsOwn  레이아웃 100회 레이아웃 시간 합 9.5ms
+batched       레이아웃 1회 레이아웃 시간 합 0.5ms
+```
+
+레이아웃이 100회에서 1회로 줄었다. 위젯 100개, 단순한 DOM이라 9.5ms지만, 앞에서 본 것처럼 문서가 크면 레이아웃 한 번이 수십 ms라서 곱하기 100이 된다.
+
+크기 변화에 반응하는 코드라면 처음부터 `ResizeObserver`를 쓰는 편이 낫다. 브라우저가 레이아웃을 끝낸 뒤 바뀐 크기를 모아서 한 번에 알려 주니 읽기가 공짜다. 콜백 안에서 다시 크기를 바꾸면 그 프레임 안에서 다시 레이아웃이 돌고, 끝없이 이어지면 "ResizeObserver loop completed with undelivered notifications" 오류가 난다. React에서 컴포넌트마다 `useLayoutEffect`로 `getBoundingClientRect()`를 읽는 패턴이 많다면 하나의 `ResizeObserver`로 모으는 것을 고려한다.
+
+## 그림 효과는 래스터에서 값을 치른다
+
+레이아웃을 다 피해도 남는 비용이 있다. 그림자와 필터는 픽셀을 채우는 래스터 단계에서 비싸다. 스크롤하면 새로 화면에 들어오는 영역을 래스터해야 하니, 정적인 페이지도 스크롤할 때 이 비용을 낸다.
+
+카드 200장에 효과만 바꿔 넣고, 마우스 휠로 약 12000px을 스크롤하는 동안 트레이스를 떴다.
+
+```js
+const VARIANTS = {
+  "평범한 카드": "border:1px solid #ddd",
+  "큰 box-shadow": "box-shadow:0 20px 60px rgba(0,0,0,.35)",
+  "filter: blur": "filter:blur(1px)",
+  "backdrop-filter": "background:rgba(255,255,255,.6);backdrop-filter:blur(12px)",
+};
+for (let i = 0; i < 30; i++) { await page.mouse.wheel(0, 400); await page.waitForTimeout(16); }
+```
+
+```text
+평범한 카드           Paint 15회 2.4ms | RasterTask 102회 15.4ms
+큰 box-shadow     Paint 15회 2.8ms | RasterTask 102회 198.0ms
+filter: blur     Paint 15회 1.7ms | RasterTask 102회 77.0ms
+backdrop-filter  Paint 15회 2.1ms | RasterTask 106회 19.2ms
+```
+
+메인 스레드의 `Paint`는 네 경우 모두 2~3ms로 비슷하다. 그리기 명령 목록의 길이는 거의 같기 때문이다. 차이는 명령을 픽셀로 바꾸는 `RasterTask`에서 났다. 흐림 반경 60px짜리 그림자는 평범한 카드보다 래스터에 13배쯤 시간이 들었다. 그림자 하나하나가 넓은 영역에 흐림을 계산해야 해서다.
+
+`backdrop-filter`가 싸 보이는 건 이 측정의 한계다. 뒤 배경을 흐리는 효과는 래스터가 아니라 합성 단계에서 층을 겹칠 때 계산되는데, 이 측정은 래스터만 셌다. GPU가 있는 실제 기기에서는 합성 쪽 비용으로 나타나고, 저사양 폰에서 큰 영역에 걸면 스크롤이 끊기는 원인이 된다.
+
+<GeometryMorph
+  caption="12000px 스크롤 동안 래스터 시간 합 (카드 200장, 이 컨테이너 기준)"
+  width={400}
+  height={200}
+  shapes={[{ id: "plain", tone: "muted" }, { id: "fx", tone: "series1" }]}
+  steps={[
+    {
+      title: "평범한 카드: 15.4ms",
+      detail: "테두리만 있는 카드다. 이것이 기준이다.",
+      shapes: { plain: [[30, 60], [44, 60], [44, 95], [30, 95]], fx: [[30, 115], [44, 115], [44, 150], [30, 150]] },
+      labels: [{ x: 110, y: 82, text: "기준 15.4ms", size: "sm" }, { x: 110, y: 137, text: "15.4ms", tone: "series1", size: "sm" }],
+      focus: ["fx"],
+    },
+    {
+      title: "큰 box-shadow: 198.0ms",
+      detail: "흐림 반경 60px 그림자. 같은 스크롤에 래스터가 13배쯤 들었다.",
+      shapes: { plain: [[30, 60], [44, 60], [44, 95], [30, 95]], fx: [[30, 115], [208, 115], [208, 150], [30, 150]] },
+      labels: [{ x: 110, y: 82, text: "기준 15.4ms", size: "sm" }, { x: 270, y: 137, text: "198.0ms", tone: "series1", size: "sm" }],
+      focus: ["fx"],
+    },
+    {
+      title: "filter: blur(1px): 77.0ms",
+      detail: "1px 흐림이어도 카드 전체를 따로 그려 흐려야 한다. 5배 정도다.",
+      shapes: { plain: [[30, 60], [44, 60], [44, 95], [30, 95]], fx: [[30, 115], [99, 115], [99, 150], [30, 150]] },
+      labels: [{ x: 110, y: 82, text: "기준 15.4ms", size: "sm" }, { x: 160, y: 137, text: "77.0ms", tone: "series1", size: "sm" }],
+      focus: ["fx"],
+    },
+    {
+      title: "backdrop-filter: 19.2ms (래스터만)",
+      detail: "래스터는 기준과 비슷하지만 흐림은 합성 때 계산된다. 이 막대에 그 비용은 없다.",
+      shapes: { plain: [[30, 60], [44, 60], [44, 95], [30, 95]], fx: [[30, 115], [47, 115], [47, 150], [30, 150]] },
+      labels: [{ x: 110, y: 82, text: "기준 15.4ms", size: "sm" }, { x: 160, y: 137, text: "19.2ms + 합성 비용", tone: "series1", size: "sm" }],
+      focus: ["fx"],
+    },
+  ]}
+/>
+
+처방은 효과를 버리는 게 아니라 비용이 드는 순간을 줄이는 것이다. 그림자를 호버 때 키우는 효과라면 그림자 자체를 애니메이션하지 말고, 큰 그림자를 미리 그려 둔 가상 요소(`::after`)의 `opacity`만 바꾼다. 목록 카드 수백 장에는 흐림 반경이 작은 그림자를 쓰고, 큰 그림자는 모달처럼 하나뿐인 요소에만 준다. `backdrop-filter`는 헤더처럼 작은 영역에만 건다. 효과마다 실제로 얼마나 드는지는 기기마다 다르니 개발자 도구 Rendering 탭의 Paint flashing으로 스크롤 중 다시 그리는 영역을 보고, Performance 패널에서 래스터 스레드를 확인한다.
+
+## 급하지 않은 일은 한가할 때
+
+렌더링 단계를 줄여도 메인 스레드에는 다른 일이 남는다. 분석 이벤트 묶어 보내기, 다음 화면에서 쓸 데이터 미리 가공하기, 로컬 저장소 정리 같은 일이다. 이런 일은 프레임 사이에 남는 시간에 하면 된다. `requestIdleCallback`이 그 시간을 준다.
+
+```js
+function work(deadline) {
+  while (deadline.timeRemaining() > 1 && queue.length) doSmallJob(queue.shift());
+  if (queue.length) requestIdleCallback(work, { timeout: 2000 }); // 남은 일은 다음 한가한 때로
+}
+requestIdleCallback(work, { timeout: 2000 }); // 2초 안에 한가한 때가 없으면 강제로 부른다
+```
+
+크로미움 141에서 한가할 때와, 30ms짜리 작업이 쉬지 않고 이어질 때 각각 콜백이 언제 불리는지 쟀다. 세 번 돌렸다.
+
+```text
+{ rIC: 'function', postTask: 'function', yield: 'function' }
+한가할 때 { waited: 1, timeRemaining: 16, didTimeout: false }
+바쁠 때 { waited: 180, timeRemaining: 3.8, didTimeout: false }
+{ rIC: 'function', postTask: 'function', yield: 'function' }
+한가할 때 { waited: 2, timeRemaining: 16.4, didTimeout: false }
+바쁠 때 { waited: 219, timeRemaining: 19.8, didTimeout: false }
+{ rIC: 'function', postTask: 'function', yield: 'function' }
+한가할 때 { waited: 5, timeRemaining: 14.9, didTimeout: false }
+바쁠 때 { waited: 180, timeRemaining: 3.9, didTimeout: false }
+```
+
+한가하면 몇 ms 안에 불리고 15ms 안팎을 받았다. 바쁘면 180~219ms를 기다렸다가 작업 사이 틈에 불렸고, 받은 시간은 3.8ms일 때도 있었다. 명세상 한 번에 주는 시간은 최대 50ms이고, 언제 불릴지는 보장되지 않는다. 그래서 `timeRemaining()`을 확인하며 작은 단위로 끊고, 반드시 해야 하는 일이면 `timeout`을 준다.
+
+idle 콜백에서 DOM을 바꾸는 건 피한다. 이 콜백은 프레임을 그린 뒤의 남는 시간에 돌아서, 여기서 바꾼 내용은 다음 프레임에서 스타일과 레이아웃을 다시 하게 만들고 그 비용이 남은 시간을 넘길 수 있다. DOM 변경은 rAF에서, 계산은 idle 콜백에서 한다. `requestIdleCallback`이 없는 브라우저도 있으니(사파리는 오랫동안 지원하지 않았다) `setTimeout`으로 물러서는 대비 코드를 둔다.
+
+첫 줄의 출력처럼 크로미움 141에는 `scheduler.postTask()`와 `scheduler.yield()`도 있다. `postTask`는 `"user-blocking"`, `"user-visible"`, `"background"` 세 우선순위로 작업을 예약하고, `yield`는 긴 작업 중간에 입력과 렌더링에 양보한다. 두 API의 지원은 브라우저마다 다르니 기능 검사 후 쓰고, 양보의 효과는 [Core Web Vitals](/posts/core-web-vitals)의 INP 부분과 [이벤트 루프](/posts/event-loop)의 긴 작업 쪼개기에서 이어서 보면 된다.
+
+## 현장에서 버벅이는 화면을 좁히는 순서
+
+"이 화면만 들어가면 버벅인다"는 제보가 오면 먼저 어떤 순간이 느린지 나눈다. 처음 열 때인지, 버튼을 누를 때인지, 스크롤할 때인지에 따라 보는 곳이 다르다.
+
+공통으로 개발자 도구 Performance 패널에서 CPU 4배 감속을 걸고 기록한다. 메인 스레드에서 보라색 `Recalculate Style`과 `Layout` 막대가 길면 이 글의 앞부분이다. 막대를 누르면 Summary에 영향받은 요소 수와 레이아웃 범위가 나온다. 수천 개라면 무효화 범위(어디에 클래스를 붙였나), DOM 크기(`Nodes` 지표, 콘솔에서 `document.querySelectorAll("*").length`), 경계 없는 레이아웃(`contain`)을 차례로 의심한다. `Layout` 막대에 빨간 삼각형과 "Forced reflow" 경고가 붙어 있으면 읽고 쓰기를 번갈아 하는 코드다. 경고의 호출 스택에 어느 컴포넌트인지 나온다.
+
+메인 스레드는 한가한데 스크롤이 끊기면 래스터와 합성 쪽이다. Rendering 탭의 Paint flashing을 켜고 스크롤해서 초록색으로 깜빡이는 영역이 넓은지, Layers 패널에서 층이 수백 개로 늘지 않았는지 본다. 큰 그림자, 필터, `backdrop-filter`, `will-change` 남발이 흔한 원인이다.
+
+고친 뒤에는 같은 조건에서 숫자로 확인한다. 이 글에서 쓴 것처럼 `Performance.getMetrics`의 `LayoutCount`, `RecalcStyleDuration`, `LayoutDuration`을 상호작용 전후로 비교하면 회귀 테스트로도 쓸 수 있다. 실제 사용자 기기에서 얼마나 나아졌는지는 INP로 본다.
+
+## 처음의 토글로 돌아가서
+
+처음의 토글은 `body` 클래스 하나가 1만 줄의 스타일과 레이아웃을 깨운 것이었다. 고치는 길은 셋이다. 클래스를 목록 컨테이너로 내려 무효화 범위를 줄이고, 줄 수가 이 정도면 가상화로 DOM 자체를 30줄로 만들고, 그럴 수 없으면 `content-visibility`로 화면 밖을 건너뛴다. 무엇을 하든 "얼마나 많은 요소를, 어느 단계부터 다시 하게 만드는가"를 트레이스로 확인하는 습관이 먼저다.
+
+## 면접에서 나올 만한 질문
+
+### 렌더링 성능을 개선하는 방법을 큰 틀에서 설명해 주세요.
+
+비용은 DOM 크기와 변경이 건드리는 범위의 곱이라서 둘 중 하나를 줄인다. 가상화나 `content-visibility`로 처리할 요소 수를 줄이고, 무효화 범위를 좁히거나 `contain`으로 레이아웃이 번지는 걸 막는다. 그다음 `transform`, `opacity`처럼 합성 단계에서 끝나는 속성을 쓰고, 래스터가 비싼 그림 효과를 줄인다. 무엇을 하든 트레이스로 어떤 단계가 길었는지 먼저 확인한다.
+
+### DOM 노드 수가 많으면 왜 느려지나요?
+
+스타일 계산과 레이아웃은 무효화된 요소 수에 비례해서 시간이 든다. `body` 클래스 하나로 모든 줄의 `padding`을 바꾸면, 1천 줄일 때 9.6ms였던 스타일과 레이아웃이 2만 줄에서는 125.1ms가 됐다. 같은 2만 줄이어도 줄 하나의 색만 바꾸면 요소 1개만 다시 계산하고 레이아웃은 없었다. 그래서 DOM 크기와 변경 범위를 함께 본다.
+
+### CSS contain은 무엇이고, content와 strict는 어떻게 다른가요?
+
+요소 안쪽의 변화가 밖에 영향을 주지 않는다고 브라우저에 약속하는 속성이다. `content`는 레이아웃·페인트·스타일 격리이고 `strict`는 여기에 크기 격리까지 더한다. 측정해 보면 `content`만으로는 카드 크기가 바뀔 가능성이 남아 브라우저가 여전히 문서 전체(객체 24003개)를 확인했고, 크기를 고정한 `strict`에서야 레이아웃 범위가 8개로 줄었다. 크기 격리는 크기를 정할 수 있는 곳에만 써야 하고, 아니면 높이가 0이 된다.
+
+### content-visibility: auto를 쓸 때 주의할 점은요?
+
+화면 밖 요소의 렌더링을 건너뛰어 첫 레이아웃이 173.9ms에서 15.3ms로 줄 만큼 효과가 크다. 대신 건너뛴 요소는 내용 없이 크기가 계산되어 스크롤바 길이가 바뀌고 위치가 튄다. `contain-intrinsic-size: auto 120px`처럼 예상 크기를 주고, `auto`로 한 번 그린 크기를 기억하게 한다. `display: none`과 달리 찾기와 접근성 트리에는 남는다.
+
+### 가상 스크롤은 어떻게 동작하고, 단점은 무엇인가요?
+
+전체 높이만큼의 빈 공간으로 스크롤바를 만들고, 스크롤 위치를 줄 높이로 나눠 보이는 줄 범위를 구한 뒤 그 줄만 DOM에 둔다. 1만 줄 목록의 노드가 7만 개에서 230개로 줄었다. 대신 화면 밖 줄은 찾기로 찾을 수 없고, 스크린 리더에 전체 개수를 따로 알려야 하며, 줄 높이가 제각각이면 추정과 보정 때문에 스크롤이 튈 수 있다. React에서는 `key`에 인덱스를 쓰면 상태가 다른 줄로 옮겨 붙는다.
+
+### 레이아웃 스래싱을 실무 코드에서는 어떻게 막나요?
+
+읽기와 쓰기를 단계로 나눈다. 여러 컴포넌트가 각자 읽고 쓰면 반복문이 없어도 위젯 수만큼 강제 레이아웃이 생기니, 읽기는 모아서 먼저, 쓰기는 그 뒤에 몰아서 하는 스케줄러를 둔다. 위젯 100개에서 레이아웃이 100회에서 1회로 줄었다. 크기 변화에 반응하는 코드라면 레이아웃이 끝난 뒤 크기를 모아서 알려 주는 `ResizeObserver`가 더 낫다.
+
+### box-shadow나 filter는 왜 성능에 영향을 주나요?
+
+그리기 명령은 짧아도 그 명령을 픽셀로 바꾸는 래스터에서 넓은 영역의 흐림을 계산해야 해서다. 카드 200장을 스크롤할 때 래스터 시간이 평범한 카드 15.4ms, 큰 그림자 198.0ms, `filter: blur(1px)` 77.0ms였다. 스크롤할 때마다 새로 보이는 영역을 래스터하니 정적인 페이지도 비용을 낸다. 그림자 애니메이션은 미리 그린 가상 요소의 `opacity`로 바꾸고, 큰 효과는 하나뿐인 요소에만 준다.
+
+### requestIdleCallback은 언제 쓰고, 무엇을 조심하나요?
+
+분석 이벤트 전송이나 데이터 미리 가공처럼 급하지 않은 일을 프레임 사이 남는 시간에 할 때 쓴다. 언제 불릴지 보장이 없어서 바쁠 때는 200ms 가까이 밀렸고, 받는 시간도 몇 ms일 수 있다. 그래서 `timeRemaining()`을 보며 잘게 끊고, 꼭 해야 하는 일에는 `timeout`을 준다. 여기서 DOM을 바꾸면 다음 프레임에 레이아웃 비용을 떠넘기니 DOM 변경은 rAF에서 한다.

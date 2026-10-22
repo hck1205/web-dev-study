@@ -25,6 +25,7 @@ import { BIG_O_NOTATION } from "./big-o-notation";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
+import { BROWSER_RENDERING_PIPELINE } from "./browser-rendering-pipeline";
 import { BROWSER_STORAGE } from "./browser-storage";
 import { BUILD_CACHING } from "./build-caching";
 import { BULLMQ_JOB_QUEUE } from "./bullmq-job-queue";
@@ -416,6 +417,7 @@ import { REDIS_PERSISTENCE_HA } from "./redis-persistence-ha";
 import { REDIS_REPLICATION_SENTINEL } from "./redis-replication-sentinel";
 import { RELEASE_CUTOVER_HYPERCARE } from "./release-cutover-hypercare";
 import { RENDERING_CSR_SPA } from "./rendering-csr-spa";
+import { RENDERING_PERFORMANCE_OPTIMIZATION } from "./rendering-performance-optimization";
 import { RENDERING_SSG_ISR } from "./rendering-ssg-isr";
 import { RENDERING_SSR } from "./rendering-ssr";
 import { RENDERING_STRATEGIES } from "./rendering-strategies";
@@ -604,6 +606,7 @@ export const QUESTION_SETS = [
   BLOOM_FILTER,
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
+  BROWSER_RENDERING_PIPELINE,
   BROWSER_STORAGE,
   BUILD_CACHING,
   BULLMQ_JOB_QUEUE,
@@ -995,6 +998,7 @@ export const QUESTION_SETS = [
   REDIS_REPLICATION_SENTINEL,
   RELEASE_CUTOVER_HYPERCARE,
   RENDERING_CSR_SPA,
+  RENDERING_PERFORMANCE_OPTIMIZATION,
   RENDERING_SSG_ISR,
   RENDERING_SSR,
   RENDERING_STRATEGIES,

@@ -2,6 +2,39 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rendering-performance-optimization": {
+    "links": [
+      "browser-rendering-pipeline",
+      "animation-performance",
+      "core-web-vitals",
+      "react-rerender",
+      "scroll-triggered-intersection-observer",
+      "dom-basics",
+      "event-loop"
+    ],
+    "mentions": [
+      "loading-patterns"
+    ]
+  },
+  "browser-rendering-pipeline": {
+    "links": [
+      "what-happens-google-com",
+      "rendering-performance-optimization",
+      "streaming-ssr-suspense",
+      "core-web-vitals",
+      "dom-basics",
+      "animation-performance",
+      "event-loop",
+      "js-timers-accuracy",
+      "rendering-csr-spa"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "packet-encapsulation",
+      "js-es-modules",
+      "pattern-proxy"
+    ]
+  },
   "api-gateway-use-cases": {
     "links": [
       "gateway",
@@ -851,7 +884,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "animation-performance"
     ],
     "mentions": [
-      "dom-basics"
+      "dom-basics",
+      "browser-rendering-pipeline"
     ]
   },
   "scroll-triggered-intersection-observer": {
@@ -6731,6 +6765,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "pythagorean-theorem",
       "sql-filtering-operators",
+      "browser-rendering-pipeline",
       "db-modeling-normalization"
     ]
   },
@@ -10638,6 +10673,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "http-caching-cdn",
       "browser-storage",
+      "rendering-performance-optimization",
       "js-memoization",
       "loading-patterns"
     ]
@@ -11073,6 +11109,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop"
     ],
     "mentions": [
+      "browser-rendering-pipeline",
       "ab-testing",
       "loading-patterns",
       "pattern-proxy",
@@ -11356,6 +11393,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "what-happens-google-com": {
     "links": [
+      "browser-rendering-pipeline",
       "network-troubleshooting-by-layer",
       "osi-in-practice"
     ],
