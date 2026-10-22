@@ -1,0 +1,609 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("otel-collector-pipeline");
+
+게이트웨이 역할의 Collector를 몇 분 내렸다 올렸더니, 그 사이의 trace가 저장소에 통째로 비어 있다. 앱 쪽에는 이런 줄만 남았다.
+
+```text
+Export retry time 5000ms exceeds remaining timeout 1164ms, not retrying further.
+shutdown error: Export failed with retryable status
+```
+
+앱은 span을 보냈고, 앞단 Collector는 받았다고 했고, 뒤의 Collector는 아무것도 못 받았다. 중간에서 무엇이 사라졌는지 알려면 Collector 안에 들어 있는 칸을 하나씩 알아야 한다. 이 글은 OpenTelemetry Collector를 직접 띄워서 데이터가 들어와 나가기까지 지나는 칸, 프로세서 순서, 개인정보 지우기, 백엔드가 멈췄을 때 큐가 하는 일과 한계, 메모리 보호, 에이전트와 게이트웨이 배치, trace를 한 곳으로 모으는 load_balancing까지 따라간다.
+
+Collector가 왜 필요한지, OTLP와 시맨틱 컨벤션이 무엇인지는 [관측 가능성 기본 글](/posts/observability-basics)에 있고, trace와 traceparent, 꼬리 샘플링 정책은 [분산 추적 글](/posts/distributed-tracing)에서 다뤘다. 여기서는 그 둘 사이에 놓인 Collector 자체를 본다. Collector가 내보낸 trace를 저장하고 찾는 쪽은 [Grafana Tempo 글](/posts/grafana-tempo-tracing)로 이어진다.
+
+실습은 Ubuntu 24.04에서 `otelcol-contrib` 0.162.0 바이너리를 내려받아 돌렸다. 앱은 Node.js 22와 OpenTelemetry JS SDK 3.0(`@opentelemetry/sdk-node` 0.300.0)으로 주문 요청 하나당 span 두 개(`GET /checkout`, `SELECT orders`)를 만들어 OTLP/HTTP로 보낸다. 아래 출력은 모두 이 환경에서 실제로 찍힌 것이다.
+
+## 받는 칸, 고치는 칸, 내보내는 칸
+
+Collector 설정은 다섯 종류의 부품과 그 부품을 잇는 파이프라인으로 이루어진다.
+
+- receiver: 데이터를 받는다. OTLP(gRPC 4317, HTTP 4318)가 기본이고, Prometheus scrape, 파일 로그 읽기, 호스트 지표 수집처럼 스스로 가지러 가는 것도 receiver다.
+- processor: 받은 데이터를 고친다. 묶기, 거르기, 속성 지우기, 샘플링, 메모리 보호가 여기서 일어난다.
+- exporter: 백엔드로 보낸다. OTLP, Prometheus remote write, Kafka, 파일, 디버그 출력 등이 있다.
+- connector: 한 파이프라인의 출구이면서 다른 파이프라인의 입구다. trace를 받아 지표를 만드는 식으로 신호를 바꾼다.
+- extension: 데이터 흐름 밖의 일. 헬스 체크, 인증, 디스크 큐 저장소가 여기 속한다.
+
+가장 작은 설정은 이렇다. 앱이 보낸 span을 받아 메모리 보호와 묶기를 거쳐 화면(로그)에 찍는다.
+
+```yaml
+# agent1.yaml
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:19518   # 기본은 4318. 실습 포트로 바꿨다
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 200
+    spike_limit_mib: 50
+  batch:
+    send_batch_size: 512
+    timeout: 2s
+exporters:
+  debug:
+    verbosity: detailed
+service:
+  telemetry:
+    metrics:                        # Collector 자신의 지표 (뒤에서 쓴다)
+      readers:
+        - pull:
+            exporter:
+              prometheus: { host: 127.0.0.1, port: 19588 }
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [debug]
+```
+
+부품을 `receivers:` 아래에 정의해도 `service.pipelines`에 넣지 않으면 아무 일도 하지 않는다. 처음 설정을 쓸 때 가장 많이 하는 실수가 프로세서를 정의만 하고 파이프라인에 빼먹는 것이다. 띄우기 전에 `validate`로 문법과 연결을 확인한다.
+
+```bash
+# 설정 검사: 문제가 없으면 아무것도 출력하지 않고 0으로 끝난다
+./otelcol-contrib validate --config agent1.yaml && echo VALID
+# 이 배포판에 든 부품 목록과 안정성 단계
+./otelcol-contrib components
+```
+
+```text
+VALID
+```
+
+contrib 배포판에는 receiver 107개, processor 33개, exporter 48개, connector 13개, extension 41개가 들어 있었다(`components` 출력을 세었다). 0.162에서는 부품 이름이 밑줄 형식(`otlp_http`, `load_balancing`, `k8s_attributes`)으로 바뀌어 있었고, 예전 이름(`otlphttp`, `loadbalancing`, `k8sattributes`)으로 쓴 설정도 `validate`를 그대로 통과했다. 인터넷의 예제는 대부분 예전 이름이라 둘 다 읽을 줄 알아야 한다.
+
+아래 그림에서 다음을 누르면 span 하나가 이 설정을 지나는 순서가 보인다.
+
+<NetworkTopology
+  width={400}
+  height={250}
+  caption="파이프라인 하나: 받고, 보호하고, 묶고, 내보낸다"
+  zones={[
+    { id: "col", label: "Collector (agent1.yaml)", x: 92, y: 20, w: 300, h: 130, tone: "private" },
+  ]}
+  nodes={[
+    { id: "app", label: "app", sub: "OTel SDK", x: 46, y: 85, icon: "client" },
+    { id: "rx", label: "otlp", sub: "receiver", x: 140, y: 85, icon: "router", w: 76 },
+    { id: "ml", label: "mem_limit", sub: "processor", x: 222, y: 85, icon: "firewall", w: 80 },
+    { id: "bt", label: "batch", sub: "processor", x: 300, y: 85, icon: "switch", w: 72 },
+    { id: "ex", label: "debug", sub: "exporter", x: 300, y: 200, icon: "server", w: 80 },
+    { id: "be", label: "backend", sub: "Tempo 등", x: 120, y: 200, icon: "db", w: 90 },
+  ]}
+  links={[
+    { from: "app", to: "rx", label: "OTLP" },
+    { from: "rx", to: "ml" },
+    { from: "ml", to: "bt" },
+    { from: "bt", to: "ex" },
+    { from: "ex", to: "be", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "rx"], packet: "2 spans", title: "receiver가 받는다", detail: "앱의 BatchSpanProcessor가 끝난 span을 모아 POST /v1/traces로 보낸다. receiver는 받는 즉시 다음 칸으로 넘긴다." },
+    { path: ["rx", "ml"], packet: "check", title: "메모리부터 확인한다", detail: "memory_limiter는 지금 힙이 한도를 넘었는지만 본다. 넘었으면 여기서 거절하고, 거절은 앱에 오류로 돌아간다." },
+    { path: ["ml", "bt"], packet: "batch", title: "묶어서 보낸다", detail: "512개가 차거나 2초가 지나면 한 묶음으로 다음 칸에 넘긴다. 백엔드로 가는 요청 수가 줄어든다." },
+    { path: ["bt", "ex", "be"], packet: "export", title: "exporter가 내보낸다", detail: "실습에서는 debug가 로그에 찍었다. 운영에서는 otlp_http나 otlp_grpc로 백엔드에 보낸다. 실패하면 재시도와 큐가 이 칸에서 일한다." },
+  ]}
+/>
+
+이 설정으로 주문 세 건을 보내자 debug exporter가 받은 내용을 그대로 찍었다(줄였다).
+
+```text
+info	Traces	{... "otelcol.component.id": "debug", "resource spans": 1, "spans": 6}
+Resource attributes:
+     -> service.name: Str(checkout)
+     -> host.name: Str(vm)
+     -> process.command_args: Slice(["/opt/node22/bin/node","/tmp/.../gen.js","3","10"])
+     -> telemetry.sdk.version: Str(3.0.0)
+Span #1
+    Trace ID       : 0271412aaf29dddf665a5796bbac64e5
+    Name           : GET /checkout
+    Kind           : Server
+Attributes:
+     -> url.full: Str(https://shop.example.com/checkout?email=user0@example.com&coupon=FALL26)
+     -> http.request.header.authorization: Str(Bearer eyJhbGciOiJIUzI1NiJ9.demo)
+     -> enduser.id: Str(user0@example.com)
+     -> http.response.status_code: Int(200)
+```
+
+span 여섯 개가 한 묶음에 들어왔다. 그리고 보면 안 되는 것이 셋 보인다. URL 쿼리의 이메일, Authorization 헤더 값, 사용자 이메일 자체인 `enduser.id`. SDK의 리소스 감지기가 붙인 `process.command_args`에는 서버의 실행 경로와 인자가 통째로 들어 있다. 인자로 비밀번호를 넘기는 프로그램이라면 그것까지 실린다. Collector를 거치는 동안 이것들을 지우는 게 다음 일이다.
+
+## 프로세서는 적은 순서대로 돈다
+
+`processors: [a, b, c]`의 순서가 곧 실행 순서다. 순서가 결과를 바꾸는 경우가 많아서 권장하는 틀이 있다.
+
+1. `memory_limiter`가 맨 앞이다. 거절할 거라면 일을 하기 전에 거절해야 메모리를 아낀다.
+2. 그다음 버릴 것을 버린다(`filter`, 샘플링). 버릴 데이터에 가공 비용을 쓰지 않는다.
+3. 속성을 고치고 지운다(`resource`, `attributes`, `transform`, `redaction`).
+4. `batch`는 끝 쪽이다. 묶은 뒤에 거르면 묶음 크기가 들쭉날쭉해진다.
+
+꼬리 샘플링(`tail_sampling`)처럼 trace 전체를 모아야 하는 프로세서는 예외적으로 생각할 게 있다. 앞에서 속성을 지우면 샘플링 정책이 그 속성을 볼 수 없다. 오류 여부나 지연으로 고르는 정책은 상관없지만, `enduser.id`로 특정 고객의 trace를 남기는 정책을 쓴다면 지우기를 샘플링 뒤로 보내야 한다.
+
+아래는 다음 절에서 쓸 설정의 프로세서 다섯 개를 span 하나가 차례로 지나는 모습이다. 오른쪽 칸에 지금 span에 남아 있는 속성이 보인다.
+
+<AlgoTrace
+  caption="processors: [memory_limiter, resource, attributes/scrub, transform/url, batch]"
+  memoryLabel="span에 남은 것"
+  cells={["mem_limit", "resource", "attr/scrub", "transform", "batch"]}
+  steps={[
+    { memory: ["command_args", "url: email=user0@…", "authorization", "enduser.id=user0@…"], caption: "앱이 보낸 그대로다. 리소스 속성 하나와 span 속성 셋에 민감한 값이 있다." },
+    { pointer: 0, memory: ["command_args", "url: email=user0@…", "authorization", "enduser.id=user0@…"], caption: "memory_limiter는 내용을 건드리지 않는다. 힙이 한도 아래라 통과시킨다." },
+    { pointer: 1, memory: ["env=prod", "url: email=user0@…", "authorization", "enduser.id=user0@…"], caption: "resource 프로세서가 process.command_args를 지우고 배포 환경 이름을 붙인다." },
+    { pointer: 2, memory: ["env=prod", "url: email=user0@…", "enduser.id=9551f6ff…"], caption: "attributes 프로세서가 Authorization 헤더를 지우고 enduser.id를 해시로 바꾼다." },
+    { pointer: 3, memory: ["env=prod", "url: email=REDACTED", "enduser.id=9551f6ff…"], caption: "transform 프로세서가 URL 안의 이메일만 정규식으로 바꾼다. 속성 단위가 아니라 값의 일부를 고친다." },
+    { pointer: 4, found: [4], memory: ["env=prod", "url: email=REDACTED", "enduser.id=9551f6ff…"], caption: "batch가 다른 span과 함께 묶어 exporter로 넘긴다. 이제 나가는 데이터에는 원래 값이 없다." },
+  ]}
+/>
+
+## 나가기 전에 지운다
+
+설정은 이렇다. 프로세서 이름 뒤의 `/scrub`, `/url`은 같은 종류의 프로세서를 여러 개 둘 때 붙이는 이름표다.
+
+```yaml
+processors:
+  resource:
+    attributes:
+      - key: process.command_args
+        action: delete
+      - key: deployment.environment.name
+        value: prod
+        action: upsert
+  attributes/scrub:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: enduser.id
+        action: hash
+  transform/url:
+    error_mode: ignore              # 문장 하나가 실패해도 데이터는 흘려보낸다
+    trace_statements:
+      - replace_pattern(span.attributes["url.full"], "email=[^&]+", "email=REDACTED")
+```
+
+`transform`은 OTTL(OpenTelemetry Transformation Language)이라는 작은 언어로 쓴다. 한 줄을 조각내 보면 읽는 법이 보인다.
+
+<UrlAnatomy
+  caption="OTTL 문장 하나 읽기"
+  base="replace_pattern("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "target", display: "span.attributes[\"url.full\"]", title: "고칠 대상 (경로)", description: "span의 속성 중 url.full이다. resource.attributes[...]면 리소스 속성, span.name이면 span 이름이다. trace_statements 안에서는 span 문맥으로 읽는다.", required: true },
+    { key: "regex", display: "\"email=[^&]+\"", title: "찾을 정규식", description: "Go 정규식(RE2) 문법이다. 뒤로 돌아보기 같은 기능은 없다. 여기서는 email= 뒤로 & 전까지를 잡는다.", required: true },
+    { key: "repl", display: "\"email=REDACTED\")", title: "바꿀 값", description: "잡은 부분을 이 문자열로 바꾼다. $1 같은 캡처 그룹 참조도 쓸 수 있다. 조건을 붙이려면 문장 끝에 where를 단다.", code: "replace_pattern(...) where span.kind == SPAN_KIND_SERVER" },
+  ]}
+/>
+
+같은 주문을 다시 보냈을 때 debug exporter가 찍은 span이다(호스트 관련 리소스 속성은 줄였다).
+
+```text
+Resource attributes:
+     -> service.name: Str(checkout)
+     -> telemetry.sdk.version: Str(3.0.0)
+     -> telemetry.sdk.language: Str(nodejs)
+     -> telemetry.sdk.name: Str(opentelemetry)
+     -> deployment.environment.name: Str(prod)
+...
+    Name           : GET /checkout
+Attributes:
+     -> http.request.method: Str(GET)
+     -> url.full: Str(https://shop.example.com/checkout?email=REDACTED&coupon=FALL26)
+     -> http.response.status_code: Int(200)
+     -> enduser.id: Str(9551f6ff6935f400d1422e75827ee012baad045daa3b733e3369fef22b0c9b4e)
+```
+
+`command_args`와 Authorization 헤더가 사라졌고, URL에는 쿠폰만 남았다. `enduser.id`의 해시를 직접 계산해 보면 같은 값이 나온다.
+
+```bash
+echo -n "user0@example.com" | sha256sum
+```
+
+```text
+9551f6ff6935f400d1422e75827ee012baad045daa3b733e3369fef22b0c9b4e  -
+```
+
+`hash`는 소금(salt) 없는 SHA-256이다. 같은 사용자는 늘 같은 해시가 되니 "이 사용자의 trace만 모아 보기"는 여전히 된다. 대신 이메일 목록을 가진 사람은 하나씩 해시해서 맞춰 볼 수 있다. 가명 처리일 뿐 익명화가 아니다. 법무 기준이 익명화를 요구한다면 지우는 쪽을 고른다.
+
+지울 목록을 하나하나 적는 방식에는 한계가 있다. 내일 누군가 `user.phone` 속성을 새로 붙이면 그대로 나간다. 그래서 반대로 허용 목록만 통과시키는 `redaction` 프로세서가 있다. `allowed_keys`에 적은 속성 말고는 모두 지우고, `blocked_values`에 카드 번호 같은 정규식을 주면 값 안에서 가린다. 엄격한 만큼 새 계측을 붙일 때마다 목록을 고쳐야 하는 비용이 있다. 보통은 게이트웨이 한 곳에 허용 목록을 두고, 에이전트에서는 확실히 아는 것만 지운다.
+
+Collector에서 지운다고 앱에서 조심하지 않아도 되는 건 아니다. Collector까지 가는 길(네트워크, Collector의 디버그 로그)에는 원래 값이 지나간다. 로그 쪽에서 남기기 전에 가리는 법은 [구조화 로그 글](/posts/structured-logging)에 있다.
+
+## 백엔드가 멈추면 큐가 받아 낸다
+
+이제 처음 장면을 재현한다. 에이전트 Collector가 게이트웨이 Collector(127.0.0.1:19530)로 내보내는데, 게이트웨이가 꺼져 있다. exporter에는 보내기 큐와 재시도를 켰다.
+
+```yaml
+exporters:
+  otlp_http/gateway:
+    endpoint: http://127.0.0.1:19530
+    sending_queue:
+      enabled: true
+      sizer: items          # 큐 크기를 요청 수가 아니라 span 수로 센다
+      queue_size: 2000
+      batch:                # 큐에서 꺼낼 때 묶는다
+        flush_timeout: 1s
+        min_size: 500
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 120s  # 한 묶음을 이 시간까지만 다시 보낸다
+```
+
+`sending_queue.batch`는 exporter 쪽에서 묶는 설정이다. 예전에는 `batch` 프로세서가 이 일을 했는데, 최근 버전은 exporter 큐에서 묶는 쪽으로 옮겨 가는 흐름이다. 0.162에서는 둘 다 있다.
+
+게이트웨이가 꺼진 채로 주문 1,500건(span 3,000개)을 초당 300건으로 보냈다. 끝난 뒤 Collector 자신의 지표를 봤다.
+
+```bash
+# Collector 내부 지표: 받은 것, 거절한 것, 큐에 쌓인 것
+curl -s 127.0.0.1:19588/metrics | grep -E "^otelcol_(receiver_accepted_spans|receiver_refused_spans|exporter_sent_spans|exporter_enqueue_failed_spans|exporter_queue_size)"
+```
+
+```text
+otelcol_exporter_enqueue_failed_spans{exporter="otlp_http/gateway"} 5120
+otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/gateway"} 1976
+otelcol_receiver_accepted_spans{receiver="otlp",transport="http"} 1976
+otelcol_receiver_refused_spans{receiver="otlp",transport="http"} 5120
+```
+
+큐가 2,000칸 중 1,976칸 찼고, 그 뒤로 들어온 묶음은 큐에 들어가지 못했다(`enqueue_failed`). 큐에 못 넣은 데이터는 receiver가 앱에 오류로 돌려준다(`refused`). 거절이 5,120개로 보낸 3,000개보다 많은 건 앱 SDK가 거절당한 512개짜리 묶음을 다시 보냈기 때문이다. 다시 보낼 때마다 다시 거절당해서 512개가 열 번 쌓였다. Collector 로그에는 두 종류의 줄이 남았다.
+
+```text
+info	internal/retry_sender.go:136	Exporting failed. Will retry the request after interval.	"otelcol.component.id": "otlp_http/gateway", ... "error": "failed to make an HTTP request: Post \"http://127.0.0.1:19530/v1/traces\": dial tcp 127.0.0.1:19530: connect: connection refused", "interval": "822.654304ms"}
+error	internal/base_exporter.go:119	Exporting failed. Rejecting data.	"otelcol.component.id": "otlp_http/gateway", ... "error": "sending queue is full", "rejected_items": 512}
+```
+
+`Will retry`는 큐 맨 앞의 묶음을 다시 보내는 중이라는 뜻이고 아직 잃은 건 없다. `Rejecting data`와 `sending queue is full`은 들어오는 것을 받지 못했다는 뜻이다. 앱 SDK도 다시 보내다가 자기 시간 제한에 걸려 포기했다. 처음에 본 두 줄이 이것이다.
+
+게이트웨이를 띄우고 8초 뒤 다시 봤다.
+
+```text
+--- 에이전트
+otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/gateway"} 0
+otelcol_exporter_sent_spans{exporter="otlp_http/gateway",server_address="127.0.0.1",server_port="19530",url_path="/v1/traces"} 1976
+--- 게이트웨이
+otelcol_receiver_accepted_spans{receiver="otlp",transport="http"} 1976
+```
+
+큐에 있던 1,976개는 모두 건너갔다. 3,000 − 1,976 = 1,024개, 512개짜리 묶음 두 개가 사라졌다. 이 흐름을 단계로 보면 이렇다.
+
+<SequenceDiagram
+  caption="게이트웨이가 꺼진 동안: 큐가 버티는 만큼만 남는다"
+  actors={[
+    { id: "app", label: "앱 SDK" },
+    { id: "ag", label: "에이전트" },
+    { id: "q", label: "보내기 큐" },
+    { id: "gw", label: "게이트웨이" },
+  ]}
+  steps={[
+    { from: "app", to: "ag", label: "512 spans", title: "평소처럼 보낸다", detail: "앱은 게이트웨이가 꺼진 걸 모른다. 에이전트의 receiver가 받아서 큐에 넣고 바로 성공을 돌려준다." },
+    { from: "q", to: "gw", label: "POST (refused)", title: "큐 맨 앞을 보내다 실패한다", detail: "연결이 거부되면 재시도 간격을 1초에서 5초까지 늘려 가며 다시 보낸다. 그 사이에도 큐는 계속 찬다.", payload: "Exporting failed. Will retry the request after interval." },
+    { from: "ag", to: "q", label: "1976/2000", title: "큐가 찬다", detail: "span 수로 센 큐가 2,000칸 가까이 찼다. 다음 묶음 512개는 들어갈 자리가 없다." },
+    { from: "ag", to: "app", label: "503", title: "넘친 것은 앱에 되돌린다", detail: "에이전트는 받기를 거절하고, 앱 SDK는 같은 묶음을 다시 보낸다. 자기 시간 제한을 넘기면 포기하고 버린다.", payload: "Exporting failed. Rejecting data. error: sending queue is full" },
+    { from: "q", to: "gw", label: "1976 spans", title: "게이트웨이가 돌아오면 비운다", detail: "큐에 있던 것은 차례로 건너간다. 거절당한 1,024개는 이미 앱에서 버려져 돌아오지 않는다." },
+  ]}
+/>
+
+큐 크기는 "백엔드가 몇 분 멈춰도 버틸까"로 정한다. 초당 span 수 × 버틸 초 = 필요한 칸 수다. 초당 2,000개를 5분 버티려면 60만 칸이고, span 하나가 1KB라면 메모리 600MB쯤이다. 큐를 키우면 메모리가 같이 커지니 다음 절의 memory_limiter와 컨테이너 메모리 한도를 함께 정해야 한다. 그리고 큐가 아무리 커도 `max_elapsed_time`(실습은 120초)을 넘긴 묶음은 `no more retries left`로 버려진다. 백엔드 장애가 이 시간보다 길면 큐 크기와 상관없이 잃는다.
+
+## 재시작하면 메모리 큐는 사라진다
+
+큐는 기본으로 메모리에 있다. 게이트웨이가 꺼진 채로 span 600개를 큐에 쌓아 두고, 에이전트를 SIGTERM으로 재시작한 뒤 게이트웨이를 띄웠다.
+
+```text
+-- 재시작 전 에이전트
+otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/gateway"} 600
+-- 종료 로그
+error	internal/queue_sender.go:57	Exporting failed. Dropping data.	... "error": "interrupted due to shutdown: failed to make an HTTP request: ...
+-- 재시작 + 게이트웨이 기동 후 게이트웨이
+(otelcol_receiver_accepted_spans 줄이 없다: 0건)
+```
+
+600개가 종료와 함께 버려졌다. 같은 실험을 큐 저장소를 디스크로 바꿔서 다시 했다. `file_storage` 확장을 정의하고 큐에 `storage`로 연결한다.
+
+```yaml
+extensions:
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    create_directory: true
+exporters:
+  otlp_http/gateway:
+    sending_queue:
+      storage: file_storage/queue   # 나머지 설정은 위와 같다
+service:
+  extensions: [file_storage/queue]
+```
+
+```text
+-- 재시작 전 에이전트
+otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/gateway"} 600
+-- 큐 디렉터리
+exporter_otlp_http_gateway_traces
+-- 재시작 + 게이트웨이 기동 후 에이전트
+otelcol_exporter_sent_spans{exporter="otlp_http/gateway",...} 600
+-- 게이트웨이
+otelcol_receiver_accepted_spans{receiver="otlp",transport="http"} 600
+```
+
+600개가 재시작을 넘어 모두 도착했다. 디스크 큐의 비용도 분명하다. 쿠버네티스라면 파드가 다른 노드로 옮겨 가면 디스크가 따라오지 않으니, DaemonSet 에이전트는 `hostPath`를, 게이트웨이는 StatefulSet과 PVC를 쓴다. 디스크에 쓰는 만큼 처리량이 떨어진다. 그리고 보냈는데 응답을 받기 전에 죽으면 다시 보내니 백엔드에 같은 span이 두 번 들어갈 수 있다(최소 한 번 전달). trace 저장소는 같은 span ID를 대개 견디지만, 지표를 카운터 증가분으로 보내는 경우엔 중복이 숫자를 바꾼다.
+
+## memory_limiter는 거절해서 살아남는다
+
+큐가 크고 백엔드가 멈추면 Collector의 메모리는 계속 오른다. 그대로 두면 컨테이너 한도에 걸려 OOM으로 죽고, 큐에 있던 것까지 잃는다. `memory_limiter`는 죽기 전에 받기를 멈추는 장치다. 실습에서는 한도를 일부러 작게(`limit_mib: 60`, `spike_limit_mib: 15`) 두고, 큐를 50만 칸으로 키운 뒤 게이트웨이를 끈 채 span을 계속 보냈다.
+
+```text
+warn	memorylimiter@v0.162.0/memorylimiter.go:301	Memory usage is above soft limit. Refusing data.	"cur_mem_mib": 47}
+info	memorylimiter@v0.162.0/memorylimiter.go:292	Memory usage is above soft limit. Forcing a GC.	"cur_mem_mib": 50}
+info	memorylimiter@v0.162.0/memorylimiter.go:207	Memory usage after GC.	"cur_mem_mib": 31}
+info	memorylimiter@v0.162.0/memorylimiter.go:270	Memory usage back within limits. Resuming normal operation.	"cur_mem_mib": 35}
+warn	memorylimiter@v0.162.0/memorylimiter.go:282	Memory usage is above hard limit. Forcing a GC.	"cur_mem_mib": 60}
+```
+
+한도는 두 개다. 하드 한도가 `limit_mib`(60)이고, 소프트 한도는 거기서 `spike_limit_mib`를 뺀 값(45)이다. 소프트 한도를 넘으면 받기를 거절하고, 하드 한도를 넘으면 GC를 강제로 돌린다. 내려오면 다시 받는다. 아래는 로그의 숫자를 차례로 옮긴 것이다.
+
+<AlgoTrace
+  caption="소프트 한도 45MiB, 하드 한도 60MiB (실습 로그의 값)"
+  memoryLabel="memory_limiter 상태"
+  cells={["47", "50", "31", "45", "35", "60"]}
+  steps={[
+    { memory: ["받는 중"], caption: "힙이 소프트 한도 45MiB 아래면 그냥 받는다. 1초마다 한 번씩 잰다(check_interval)." },
+    { pointer: 0, memory: ["거절 중"], caption: "47MiB. 소프트 한도를 넘어서 새로 들어오는 데이터를 거절한다. 앱은 오류를 받고 다시 보낸다." },
+    { pointer: 1, memory: ["거절 중", "GC 강제"], caption: "50MiB. 계속 높으니 GC를 강제로 돌린다." },
+    { pointer: 2, found: [2], memory: ["받는 중"], caption: "GC 뒤 31MiB로 내려왔다. 쓰레기가 많았을 뿐 살아 있는 데이터는 적었다." },
+    { pointer: 3, memory: ["거절 중"], caption: "큐가 계속 차서 다시 45MiB. 거절과 재개를 오간다." },
+    { pointer: 5, memory: ["거절 중", "GC 강제"], caption: "60MiB, 하드 한도다. GC를 강제로 돌린다. 이 상태가 오래가면 큐가 한도를 다 먹고 있다는 뜻이다." },
+  ]}
+/>
+
+같은 시점의 숫자 두 개를 나란히 보면 함정이 하나 보인다.
+
+```text
+otelcol_process_runtime_heap_alloc_bytes 6.3827072e+07
+otelcol_process_memory_rss 2.5161728e+08
+```
+
+memory_limiter가 보는 힙은 61MiB인데 프로세스의 RSS는 240MiB다. contrib 바이너리 자체가 407MB이고, 띄우자마자 RSS가 190MiB를 넘었다. 컨테이너 한도를 256MiB로 두고 `limit_mib: 200`을 주면 memory_limiter가 거절을 시작하기 전에 OOM이 먼저 온다. 그래서 고정값 대신 `limit_percentage`(컨테이너 한도 대비 비율, 흔히 80)와 `spike_limit_percentage`(흔히 25)를 쓰고, Go 런타임에도 `GOMEMLIMIT`을 한도의 80% 안팎으로 준다. 무엇보다 운영에서는 contrib을 그대로 쓰지 말고 OpenTelemetry Collector Builder(`ocb`)로 필요한 부품만 넣은 배포판을 만들거나, 그렇게 만든 공식 k8s 배포판을 쓴다. 크기도 줄고 공격 면도 줄어든다.
+
+거절의 효과는 앞쪽으로 번진다. 에이전트가 거절하면 앱이 다시 보내고, 게이트웨이가 거절하면 에이전트의 큐가 찬다. 압력을 앞쪽으로 되돌리는 구조라서, 어느 단이 거절을 시작했는지 지표로 보면 병목 위치를 찾을 수 있다.
+
+## 노드마다 하나, 앞에 하나
+
+Collector를 어디에 둘지는 두 가지 역할로 나눠 생각한다.
+
+에이전트는 앱 가까이, 보통 노드마다 하나(쿠버네티스 DaemonSet, [DaemonSet 글](/posts/k8s-daemonset) 참고) 둔다. 앱은 `localhost`나 노드 IP로 보내니 네트워크가 짧고, 앱 설정이 단순해진다. 노드에서만 할 수 있는 일도 에이전트가 맡는다. 노드의 CPU·메모리(`host_metrics`), 노드의 로그 파일(`filelog`), 그리고 `k8s_attributes`로 span을 보낸 파드의 IP를 보고 네임스페이스·파드·디플로이먼트 이름을 붙이는 일이다. 사이드카(파드마다 하나)는 격리가 확실하지만 파드 수만큼 Collector가 생겨 비용이 크다.
+
+게이트웨이는 클러스터나 리전마다 몇 대를 Deployment로 둔다. 바깥으로 나가는 일을 한곳에 모은다. 백엔드 인증 정보, 개인정보 허용 목록, 꼬리 샘플링, 여러 백엔드로 갈라 보내기, 백엔드를 바꿀 때의 전환이 여기서 일어난다. 앱 수백 개를 다시 배포하지 않고 게이트웨이 설정만 바꾸면 된다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="에이전트는 노드마다, 게이트웨이는 앞에 몇 대"
+  zones={[
+    { id: "n1", label: "node-1", x: 8, y: 14, w: 186, h: 120, tone: "private" },
+    { id: "n2", label: "node-2", x: 206, y: 14, w: 186, h: 120, tone: "private" },
+    { id: "gwz", label: "gateway (Deployment)", x: 60, y: 160, w: 280, h: 70, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "a1", label: "app-a", x: 56, y: 60, icon: "container" },
+    { id: "ag1", label: "agent", sub: "DaemonSet", x: 146, y: 100, icon: "router", w: 76 },
+    { id: "a2", label: "app-b", x: 254, y: 60, icon: "container" },
+    { id: "ag2", label: "agent", sub: "DaemonSet", x: 344, y: 100, icon: "router", w: 76 },
+    { id: "g1", label: "gw-1", x: 140, y: 200, icon: "gateway" },
+    { id: "g2", label: "gw-2", x: 260, y: 200, icon: "gateway" },
+    { id: "be", label: "backend", sub: "Tempo·Prom", x: 200, y: 272, icon: "db", w: 96 },
+  ]}
+  links={[
+    { from: "a1", to: "ag1" },
+    { from: "a2", to: "ag2" },
+    { from: "ag1", to: "g1" },
+    { from: "ag1", to: "g2" },
+    { from: "ag2", to: "g1" },
+    { from: "ag2", to: "g2" },
+    { from: "g1", to: "be" },
+    { from: "g2", to: "be" },
+  ]}
+  steps={[
+    { path: ["a1", "ag1"], packet: "OTLP", title: "앱은 노드의 에이전트로", detail: "보낼 주소는 노드 IP 하나다. 쿠버네티스에서는 status.hostIP를 환경 변수로 넘긴다." },
+    { path: ["ag1"], highlight: ["n1"], packet: "k8s attrs", title: "노드에서만 아는 것을 붙인다", detail: "에이전트가 보낸 쪽 파드 IP로 파드·네임스페이스·디플로이먼트 이름을 찾아 리소스 속성에 붙이고, 노드 지표와 로그도 같이 모은다." },
+    { path: ["ag1", "g2"], packet: "batch", title: "게이트웨이로 묶어 보낸다", detail: "에이전트는 가볍게 둔다. 큐와 재시도는 있지만 무거운 가공은 하지 않는다." },
+    { path: ["g2", "be"], highlight: ["gwz"], packet: "export", title: "나가는 일은 한곳에서", detail: "개인정보 허용 목록, 꼬리 샘플링, 백엔드 인증, 갈라 보내기를 게이트웨이에 모은다. 백엔드를 바꿀 때도 여기만 고친다." },
+  ]}
+/>
+
+작은 구성에서는 둘 중 하나로 충분하다. 서비스가 몇 개뿐이면 게이트웨이만 두고 앱이 바로 보내도 되고, 노드 지표가 필요 없으면 에이전트를 빼도 된다. 단계가 늘면 장애 지점도 늘어난다는 걸 같이 계산한다.
+
+## 꼬리 샘플링을 하려면 trace를 한 곳에 모은다
+
+게이트웨이를 두 대 이상 두고 꼬리 샘플링을 하면 문제가 생긴다. 꼬리 샘플링은 trace 하나의 span을 모두 본 뒤에 남길지 정하는데([샘플링 절](/posts/distributed-tracing) 참고), 일반 로드 밸런서는 요청 단위로 나누니 한 trace의 span이 두 게이트웨이에 흩어진다. 각자 반쪽만 보고 판단하게 된다.
+
+그래서 에이전트와 게이트웨이 사이에 `load_balancing` exporter를 둔다. trace ID를 해시해서 늘 같은 게이트웨이로 보낸다.
+
+```yaml
+exporters:
+  load_balancing:
+    routing_key: traceID       # 같은 trace는 늘 같은 게이트웨이로
+    protocol:
+      otlp:
+        tls:
+          insecure: true       # 실습용. 운영에서는 TLS를 켠다
+    resolver:
+      static:
+        hostnames: [127.0.0.1:19530, 127.0.0.1:19531]
+```
+
+확인하려면 한 trace의 span이 서로 다른 묶음으로 나가야 한다. 앱에서 자식 span(`SELECT orders`)은 바로 끝내고 부모 span(`GET /checkout`)은 6초 뒤에 끝내서, 둘이 다른 내보내기 요청에 실리게 했다. 주문 100건을 보내고 두 게이트웨이가 파일로 남긴 span을 trace ID별로 셌다.
+
+```text
+gw1: batches=2 traces=59 spans=118 complete=59
+gw2: batches=2 traces=41 spans=82 complete=41
+overlap 0
+```
+
+게이트웨이마다 묶음을 두 번(자식들, 6초 뒤 부모들) 받았고, 100개의 trace가 59개와 41개로 갈렸다. 두 게이트웨이에 함께 나타난 trace는 0개, 모든 trace가 한 게이트웨이에서 span 두 개를 다 갖췄다(`complete`). 묶음 경계와 상관없이 trace 단위로 모였다.
+
+<NetworkTopology
+  width={400}
+  height={210}
+  caption="load_balancing은 trace ID로 게이트웨이를 고른다"
+  nodes={[
+    { id: "ag", label: "agent", sub: "load_balancing", x: 70, y: 105, icon: "lb", w: 110 },
+    { id: "g1", label: "gw-1", sub: ":19530", x: 300, y: 50, icon: "gateway" },
+    { id: "g2", label: "gw-2", sub: ":19531", x: 300, y: 160, icon: "gateway" },
+  ]}
+  links={[
+    { from: "ag", to: "g1" },
+    { from: "ag", to: "g2" },
+  ]}
+  steps={[
+    { path: ["ag", "g1"], packet: "child", title: "자식 span이 먼저 나간다", detail: "trace ID를 해시해 고리 위 자리를 찾고, 그 자리를 맡은 gw-1로 보낸다." },
+    { path: ["ag", "g2"], packet: "child", title: "다른 trace는 다른 곳으로", detail: "같은 묶음 안이라도 trace ID가 다르면 다른 게이트웨이로 간다. 묶음을 trace 단위로 쪼갠다." },
+    { path: ["ag", "g1"], packet: "root +6s", title: "6초 뒤 부모 span도 같은 곳으로", detail: "다른 묶음으로 나갔지만 trace ID가 같으니 같은 gw-1로 간다. gw-1의 꼬리 샘플링은 trace 전체를 본다.", payload: "overlap 0 / complete 100" },
+  ]}
+/>
+
+해시는 [일관된 해싱](/posts/consistent-hashing) 고리를 쓴다. 게이트웨이가 늘거나 줄면 일부 trace의 담당이 바뀌고, 그 순간 진행 중이던 trace는 두 곳에 나뉠 수 있다. 쿠버네티스에서는 `static` 대신 `k8s` 리졸버나 헤드리스 서비스의 `dns` 리졸버로 게이트웨이 목록을 따라가게 한다. 게이트웨이를 자주 늘리고 줄이면 그만큼 잘린 trace가 생긴다는 걸 감안한다. 지표에서는 `routing_key: service`처럼 다른 키로 나누는 경우도 있다.
+
+## 커넥터로 trace에서 지표를 뽑는다
+
+connector는 파이프라인 두 개를 잇는다. `span_metrics`는 trace 파이프라인에서 span을 받아, 서비스·span 이름·상태별 호출 수와 지연 히스토그램을 지표 파이프라인으로 내보낸다. 샘플링하기 전에 뽑으면 버린 trace까지 포함한 정확한 요청 수가 나온다.
+
+```yaml
+connectors:
+  span_metrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 50ms, 500ms]
+    dimensions:
+      - name: http.response.status_code   # 레이블로 붙일 span 속성
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug, span_metrics]    # 커넥터는 이 파이프라인의 출구이고
+    metrics:
+      receivers: [span_metrics]           # 저 파이프라인의 입구다
+      exporters: [prometheus]
+```
+
+주문 50건(열 번째마다 500)을 보내고 Prometheus 형식으로 열어 둔 포트를 봤다. 기본 설정에서는 숫자가 처음 나오기까지 1분쯤 걸렸다(레이블 일부 생략).
+
+```text
+traces_span_metrics_duration_milliseconds_count{http_response_status_code="200",service_name="checkout",span_kind="SPAN_KIND_SERVER",span_name="GET /checkout",status_code="STATUS_CODE_UNSET"} 45
+traces_span_metrics_duration_milliseconds_count{http_response_status_code="500",service_name="checkout",span_kind="SPAN_KIND_SERVER",span_name="GET /checkout",status_code="STATUS_CODE_ERROR"} 5
+traces_span_metrics_duration_milliseconds_count{service_name="checkout",span_kind="SPAN_KIND_CLIENT",span_name="SELECT orders",status_code="STATUS_CODE_UNSET"} 50
+```
+
+앱에 지표 코드를 한 줄도 넣지 않고 RED 지표가 생겼다. 대신 `dimensions`에 넣은 속성은 레이블이 되니, 사용자 ID나 URL 전체를 넣으면 시계열이 폭발한다. span 이름에 ID가 들어간 서비스가 하나만 있어도 같은 일이 생긴다. 같은 일을 저장소 쪽에서 하는 Tempo의 metrics-generator는 [Tempo 글](/posts/grafana-tempo-tracing)에서 비교한다.
+
+## Collector가 아플 때 보는 숫자
+
+Collector도 하나의 서비스라서 지표를 보고 알림을 건다. 실습에서 계속 본 내부 지표가 그대로 진단표다.
+
+- `otelcol_receiver_refused_*`: 받기를 거절했다. memory_limiter나 꽉 찬 큐 때문이다. 앱이나 앞단 Collector에서 데이터가 사라지고 있다.
+- `otelcol_exporter_queue_size` ÷ `otelcol_exporter_queue_capacity`: 큐가 얼마나 찼나. 꾸준히 오르면 뒤가 느리거나 멈췄다.
+- `otelcol_exporter_enqueue_failed_*`: 큐에 못 넣고 버렸다. 이 값이 0이 아니면 이미 잃었다.
+- `otelcol_exporter_send_failed_*`: 재시도까지 끝나고 실패했다. 백엔드가 거절했거나 시간이 다 됐다.
+- `otelcol_process_memory_rss`와 컨테이너 한도: OOM까지 남은 거리.
+
+알림은 버린 쪽(`enqueue_failed`, `send_failed`, `refused`의 증가율)에 걸고, 큐 비율은 대시보드와 경고 수준에 둔다. 거는 법은 [알림 글](/posts/alerting)을 따른다. 설정이 의심스러우면 `validate`, 데이터가 어디서 멈췄는지 보려면 파이프라인 중간에 `debug` exporter를 잠깐 붙이고, 살아 있는지는 `health_check` 확장으로 본다.
+
+아래 함수는 내부 지표 스냅샷 하나를 받아 무엇이 잘못됐는지 말해 준다. 첫 테스트는 게이트웨이가 꺼졌을 때의 실습 숫자다.
+
+<CodePlayground
+  caption="Collector 내부 지표 읽기"
+  functionName="diagnose"
+  initialCode={`function diagnose(m) {
+  // m: { accepted, refused, queueSize, queueCapacity, enqueueFailed, sendFailed }
+  // 규칙 (이 순서대로 해당하는 것을 모두 담는다)
+  // enqueueFailed > 0 → "큐 넘침: N개 버림"
+  // sendFailed > 0    → "내보내기 실패: N개"
+  // refused > 0       → "받기 거절: N개"
+  // queueSize/queueCapacity >= 0.8 → "큐 X% 참" (X는 반올림한 정수)
+  // 아무것도 없으면 ["정상"]
+  return [];
+}`}
+  solution={`function diagnose(m) {
+  const out = [];
+  if (m.enqueueFailed > 0) out.push(\`큐 넘침: \${m.enqueueFailed}개 버림\`);
+  if (m.sendFailed > 0) out.push(\`내보내기 실패: \${m.sendFailed}개\`);
+  if (m.refused > 0) out.push(\`받기 거절: \${m.refused}개\`);
+  const ratio = m.queueCapacity ? m.queueSize / m.queueCapacity : 0;
+  if (ratio >= 0.8) out.push(\`큐 \${Math.round(ratio * 100)}% 참\`);
+  return out.length ? out : ["정상"];
+}`}
+  tests={[
+    {
+      label: "게이트웨이가 꺼졌을 때 (실습 값)",
+      args: [{ accepted: 1976, refused: 5120, queueSize: 1976, queueCapacity: 2000, enqueueFailed: 5120, sendFailed: 0 }],
+      expected: ["큐 넘침: 5120개 버림", "받기 거절: 5120개", "큐 99% 참"],
+    },
+    {
+      label: "게이트웨이가 돌아온 뒤",
+      args: [{ accepted: 1976, refused: 0, queueSize: 0, queueCapacity: 2000, enqueueFailed: 0, sendFailed: 0 }],
+      expected: ["정상"],
+    },
+    {
+      label: "재시도 시간이 다 된 묶음",
+      args: [{ accepted: 33792, refused: 0, queueSize: 28672, queueCapacity: 500000, enqueueFailed: 0, sendFailed: 512 }],
+      expected: ["내보내기 실패: 512개"],
+    },
+  ]}
+/>
+
+## 사라진 1,024개로 돌아가서
+
+처음 장면에서 사라진 trace는 Collector 안에서 정확히 어디서 버려졌는지 말할 수 있다. 게이트웨이가 멈춘 동안 에이전트의 메모리 큐가 2,000칸까지 받아 냈고, 넘친 묶음은 앱으로 되돌려졌다가 앱 SDK의 시간 제한에 걸려 버려졌다. 큐를 그 시간만큼 키우고, 재시작에도 남게 디스크에 두고, 메모리 한도는 RSS 기준으로 잡고, 버린 수를 지표로 알림에 걸면 같은 일이 다시 와도 무엇을 얼마나 잃는지 미리 안다. Collector는 받고, 고치고, 내보내는 세 칸이고, 문제는 거의 늘 내보내는 칸의 큐에서 생긴다.
+
+## 면접에서 나올 만한 질문
+
+### OpenTelemetry Collector의 파이프라인은 어떻게 구성되나요?
+
+receiver가 받고, processor가 적힌 순서대로 고치고, exporter가 내보낸다. 신호(traces, metrics, logs)마다 파이프라인을 따로 두고, connector가 한 파이프라인의 출구와 다른 파이프라인의 입구를 이어 trace에서 지표를 뽑는 식으로 신호를 바꾼다. 부품은 정의만 해서는 동작하지 않고 `service.pipelines`에 넣어야 한다.
+
+### 프로세서 순서는 어떻게 정하나요?
+
+memory_limiter를 맨 앞에 둬서 일을 하기 전에 거절하고, 그다음 거르기와 샘플링으로 버릴 것을 먼저 버리고, 속성 가공을 한 뒤 batch를 끝 쪽에 둔다. 다만 샘플링 정책이 보는 속성을 앞에서 지우면 정책이 동작하지 않으니, 그런 속성은 샘플링 뒤에서 지운다.
+
+### 백엔드가 몇 분 멈추면 데이터는 어떻게 되나요?
+
+exporter의 보내기 큐가 받아 내고 재시도로 다시 보낸다. 큐가 차면 새 데이터를 거절해 앞단(앱이나 에이전트)으로 되돌리고, 앞단이 시간 안에 못 보내면 거기서 버려진다. 실습에서는 큐 2,000칸이 1,976개를 지키고 1,024개를 잃었다. 재시도 최대 시간을 넘긴 묶음도 버려지니, 큐 크기는 초당 span 수 × 버틸 시간으로 잡고 재시도 시간도 함께 맞춘다.
+
+### 메모리 큐와 디스크 큐(file_storage)는 언제 고르나요?
+
+메모리 큐는 빠르지만 Collector가 재시작하면 쌓인 것이 사라진다. 실습에서 600개가 종료와 함께 버려졌고, 디스크 큐로 바꾸자 재시작 뒤 600개가 모두 도착했다. 디스크 큐는 쓰기 비용과 볼륨 관리(hostPath, PVC)가 필요하고 응답 전에 죽으면 다시 보내 중복이 생길 수 있다. 배포나 노드 교체가 잦은 게이트웨이에는 디스크 큐를 두는 편이 낫다.
+
+### memory_limiter는 무엇을 기준으로 동작하고, 어떤 함정이 있나요?
+
+Go 힙 사용량을 주기적으로 재서 소프트 한도(limit − spike)를 넘으면 받기를 거절하고, 하드 한도를 넘으면 GC를 강제한다. 힙만 보기 때문에 프로세스 RSS와 차이가 크다. 실습에서는 힙 61MiB일 때 RSS가 240MiB였다. 고정 MiB 대신 컨테이너 한도 대비 비율로 잡고 GOMEMLIMIT을 함께 주며, 필요한 부품만 넣은 배포판을 써서 기본 메모리를 줄인다.
+
+### 에이전트와 게이트웨이를 나누는 이유는 무엇인가요?
+
+에이전트는 노드마다 두어 앱과 가까이에서 받고, 노드 지표·로그와 파드 메타데이터처럼 그 자리에서만 알 수 있는 것을 붙인다. 게이트웨이는 몇 대를 앞에 두고 백엔드 인증, 개인정보 허용 목록, 꼬리 샘플링, 백엔드 전환처럼 바깥으로 나가는 일을 한곳에서 한다. 앱을 다시 배포하지 않고 정책을 바꿀 수 있는 대신 단계와 장애 지점이 늘어난다.
+
+### 게이트웨이 여러 대에서 꼬리 샘플링을 하면 무엇이 문제고, 어떻게 푸나요?
+
+일반 로드 밸런서는 요청 단위로 나눠서 한 trace의 span이 여러 게이트웨이에 흩어지고, 각 게이트웨이가 반쪽만 보고 판단한다. 앞단에 load_balancing exporter를 두고 trace ID로 해시하면 같은 trace는 늘 같은 게이트웨이로 간다. 실습에서 다른 묶음으로 나간 부모와 자식 span이 100개 trace 모두 같은 게이트웨이에 모였다. 게이트웨이 수가 바뀌는 순간에는 일부 trace가 갈릴 수 있다.
+
+### Collector에서 개인정보를 지울 때 주의할 점은?
+
+지울 키를 나열하는 방식은 새 속성이 생기면 새어 나가니, 게이트웨이에는 허용 목록(redaction 프로세서)을 두는 편이 안전하다. hash 액션은 소금 없는 SHA-256이라 같은 값은 같은 해시가 되고, 후보 목록이 있으면 되돌려 맞출 수 있어 익명화가 아니다. 그리고 Collector까지 가는 길에는 원래 값이 지나가니 앱에서 남기지 않는 것이 먼저다.

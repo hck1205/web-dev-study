@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "elk-stack-basics",
+    title: "ELK 스택 실전: ingest pipeline, 데이터 스트림, ILM, ES|QL",
+    summary: "message 한 줄과 받은 시각뿐인 nginx 로그에서 출발해 Elasticsearch 9.5에서 dissect 파이프라인으로 쪼개고, 기본 logs 템플릿과 데이터 스트림, 컴포넌트 템플릿으로 타입을 못 박고, ILM으로 넘기고 지우고, ES|QL로 묻는 과정을 실제 출력으로 따라간다. 인덱스마다 타입이 달라 질의가 깨지는 장면과 Loki와의 선택 기준도 다룬다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "Elasticsearch", "DevOps", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["ingest pipeline", "데이터 스트림", "ILM", "ES|QL", "logsdb"],
+  },
+  {
+    slug: "grafana-tempo-tracing",
+    title: "Grafana Tempo: 찾아보기 없이 trace를 저장하고 찾기",
+    summary: "Tempo 3.1을 직접 띄워 Parquet 블록과 bloom 필터로 trace를 저장하는 방식, ID 조회와 TraceQL 검색의 차이, 최근 30초가 검색에서 빠지는 이유, TraceQL 지표와 metrics-generator, exemplar로 p99의 튄 점에서 trace를 여는 길, trace 크기 한도로 span이 버려지는 장면까지 따라간다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "OpenTelemetry", "Distributed Systems", "Performance", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["Grafana Tempo", "TraceQL", "metrics-generator", "서비스 그래프"],
+  },
+  {
+    slug: "otel-collector-pipeline",
+    title: "OpenTelemetry Collector 파이프라인: 받고, 고치고, 내보내는 중간 정거장",
+    summary: "otelcol-contrib을 직접 띄워 receiver·processor·exporter의 순서, 내보내기 전 개인정보 지우기, 백엔드가 멈췄을 때 보내기 큐가 버티고 잃는 양, 디스크 큐와 memory_limiter, 에이전트와 게이트웨이 배치, trace ID로 게이트웨이를 고르는 load_balancing까지 실제 출력으로 따라간다.",
+    topic: "programming/server-infra/observability",
+    tags: ["Observability", "OpenTelemetry", "DevOps", "Kubernetes", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["memory_limiter", "sending_queue", "OTTL", "load_balancing exporter", "Collector 게이트웨이"],
+  },
+  {
     slug: "redis-high-throughput",
     title: "Redis 처리량 끌어올리기: 왕복, 시스템 콜, 파이프라인, I/O 스레드",
     summary: "Redis 한 대가 시간을 어디에 쓰는지 strace와 INFO cpu로 쪼개고, 파이프라인 깊이, 1ms 왕복 뒤의 반복문과 MGET, 연결 수와 재연결, I/O 스레드가 듣는 조건, 큰 값과 핫 키, CLIENT TRACKING, 샤딩을 실제 redis-benchmark 숫자로 따라간다.",

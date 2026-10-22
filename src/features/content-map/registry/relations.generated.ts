@@ -2,6 +2,57 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "elk-stack-basics": {
+    "links": [
+      "centralized-logging-pipeline",
+      "elasticsearch-inverted-index",
+      "opensearch-cluster-operations",
+      "structured-logging"
+    ],
+    "mentions": [
+      "observability-basics",
+      "sd-object-storage-architecture",
+      "kafka-basics",
+      "http-status-codes"
+    ]
+  },
+  "grafana-tempo-tracing": {
+    "links": [
+      "distributed-tracing",
+      "otel-collector-pipeline",
+      "observability-basics",
+      "grafana-dashboards",
+      "metrics-types",
+      "structured-logging"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "db-type-wide-column",
+      "sd-latency-numbers",
+      "helm-basics",
+      "sd-object-storage-architecture",
+      "kafka-basics",
+      "sli-slo"
+    ]
+  },
+  "otel-collector-pipeline": {
+    "links": [
+      "observability-basics",
+      "distributed-tracing",
+      "grafana-tempo-tracing",
+      "structured-logging",
+      "k8s-daemonset",
+      "consistent-hashing",
+      "alerting"
+    ],
+    "mentions": [
+      "k8s-statefulset",
+      "garbage-collection",
+      "kafka-basics",
+      "osi-in-practice",
+      "grpc"
+    ]
+  },
   "redis-high-throughput": {
     "links": [
       "redis-basics",
@@ -46,9 +97,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "prometheus-basics",
       "spring-boot-on-kubernetes",
       "db-type-time-series",
+      "otel-collector-pipeline",
       "spring-boot-4-migration",
       "structured-logging",
       "grafana-dashboards",
+      "grafana-tempo-tracing",
       "java-jvm-memory-gc"
     ],
     "mentions": [
@@ -12522,6 +12575,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "global-rollout-localization",
       "transactional-outbox",
       "kafka-basics",
+      "elk-stack-basics",
       "db-modeling-normalization"
     ]
   },

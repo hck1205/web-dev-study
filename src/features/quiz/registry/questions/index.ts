@@ -131,6 +131,7 @@ import { DYNAMIC_PROGRAMMING } from "./dynamic-programming";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
+import { ELK_STACK_BASICS } from "./elk-stack-basics";
 import { ENCRYPTION_AT_REST } from "./encryption-at-rest";
 import { ENCRYPTION_IN_TRANSIT } from "./encryption-in-transit";
 import { ENTERPRISE_SYSTEM_INTEGRATION } from "./enterprise-system-integration";
@@ -185,6 +186,7 @@ import { GITOPS_ARGOCD_VS_FLUX } from "./gitops-argocd-vs-flux";
 import { GLOBAL_ROLLOUT_LOCALIZATION } from "./global-rollout-localization";
 import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
+import { GRAFANA_TEMPO_TRACING } from "./grafana-tempo-tracing";
 import { GRAPH_RAG } from "./graph-rag";
 import { GRAPHQL_BASICS } from "./graphql-basics";
 import { GREEDY_ALGORITHMS } from "./greedy-algorithms";
@@ -385,6 +387,7 @@ import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
 import { OPTIMISTIC_LOCKING } from "./optimistic-locking";
 import { OSI_IN_PRACTICE } from "./osi-in-practice";
+import { OTEL_COLLECTOR_PIPELINE } from "./otel-collector-pipeline";
 import { OWASP_TOP_10_MAP } from "./owasp-top-10-map";
 import { PACKET_CAPTURE_TCPDUMP } from "./packet-capture-tcpdump";
 import { PACKET_ENCAPSULATION } from "./packet-encapsulation";
@@ -775,6 +778,7 @@ export const QUESTION_SETS = [
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
+  ELK_STACK_BASICS,
   ENCRYPTION_AT_REST,
   ENCRYPTION_IN_TRANSIT,
   ENTERPRISE_SYSTEM_INTEGRATION,
@@ -829,6 +833,7 @@ export const QUESTION_SETS = [
   GLOBAL_ROLLOUT_LOCALIZATION,
   GO_CONCURRENCY_BASICS,
   GRAFANA_DASHBOARDS,
+  GRAFANA_TEMPO_TRACING,
   GRAPH_RAG,
   GRAPHQL_BASICS,
   GREEDY_ALGORITHMS,
@@ -1029,6 +1034,7 @@ export const QUESTION_SETS = [
   OPERATIONAL_TRANSFORM,
   OPTIMISTIC_LOCKING,
   OSI_IN_PRACTICE,
+  OTEL_COLLECTOR_PIPELINE,
   OWASP_TOP_10_MAP,
   PACKET_CAPTURE_TCPDUMP,
   PACKET_ENCAPSULATION,
