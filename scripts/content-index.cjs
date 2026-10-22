@@ -103,6 +103,7 @@ const INTERVIEW_HEADING = "면접에서 나올 만한 질문";
 const plainText = (markdown) =>
   markdown
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`\n]*)`/g, "$1")
     .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1")
     .replace(/<[^>]+>/g, "")
     .replace(/\s+\n/g, "\n")
