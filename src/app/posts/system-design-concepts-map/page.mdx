@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("system-design-concepts-map");
 
+<EasyIntro>
+  시스템 설계 면접에서 "주문 서비스를 설계해 보라"는 질문을 받으면 아는 단어가 한꺼번에 떠오른다. 그런데 무엇부터 꺼낼지 모르면 대답이 단어 나열로 끝난다.
+
+  이 글은 자주 묶이는 개념 스물다섯 개를 주문 버튼 한 번이 지나가는 길 위에 올려놓는다. 요청은 이름을 주소로 바꾸는 정거장, 가까운 복사본을 주는 정거장, 요청을 나눠 주는 정거장을 지나 서버와 데이터베이스에 닿는다. 정거장마다 그 자리에서 일하는 개념이 있고, 얼마나 빠른지, 얼마나 안 멈추는지 같은 말은 길 전체를 재는 자다.
+
+  개념들은 일곱 묶음으로 나뉘고, 앞 묶음이 뒤 묶음이 필요한 이유를 설명해 주는 순서로 놓였다. 예를 들어 데이터 사본을 여러 개 두는 법을 알아야 왜 옛 값이 보이는지를 이야기할 수 있다. 외우는 것보다 한 요청 위에서 순서대로 꺼낼 수 있는 쪽이 면접에서 훨씬 쓸모 있다.
+</EasyIntro>
+
 시스템 설계 면접에서 "주문 서비스를 설계해 보세요"라는 질문을 받으면 머릿속에 단어가 한꺼번에 떠오른다. 로드 밸런서, 캐시, 샤딩, CAP, 큐, 게이트웨이. 단어는 다 아는데 무엇부터 꺼내야 할지 모르면 답이 단어 나열이 된다. 나도 처음엔 개념을 하나씩 따로 외웠고, 그래서 서로 어떻게 이어지는지 설명하지 못했다.
 
 "System Design 25가지 개념"으로 자주 묶이는 목록이 있다. Scalability, High Availability, Fault Tolerance, Latency, Throughput, Load Balancing, Caching, CDN, DNS, API Design, REST, SQL vs NoSQL, Indexing, Replication, Sharding, CAP Theorem, Consistency Models, ACID, Message Queue, Pub/Sub, Microservices, API Gateway, Rate Limiting, Authentication, Authorization. 이 글은 이 스물다섯 개를 일곱 묶음의 공부 순서로 다시 세우고, 개념마다 어떤 질문에 답하는지, 왜 그 자리에 오는지, 이 블로그의 어느 글을 읽으면 되는지를 잇는 지도다. 깊이 들어가는 일은 링크한 글이 맡는다.
