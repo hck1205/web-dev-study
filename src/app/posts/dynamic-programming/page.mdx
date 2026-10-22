@@ -1,0 +1,629 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("dynamic-programming");
+
+포인트 결제 화면에서 쿠폰을 최소 개수로 조합해 금액을 맞추는 기능을 만든다고 해 보자. 쿠폰 단위가 1, 3, 4이고 맞출 금액이 6이다. 가장 먼저 떠오르는 방법은 큰 쿠폰부터 채우는 것이다.
+
+```js
+function greedyCoins(coins, amount) {
+  const sorted = [...coins].sort((a, b) => b - a); // 큰 단위부터
+  const used = [];
+  for (const c of sorted) while (amount >= c) { amount -= c; used.push(c); }
+  return amount === 0 ? used : null;
+}
+console.log("greedy [1,3,4] 6 ->", greedyCoins([1, 3, 4], 6));
+```
+
+```text
+greedy [1,3,4] 6 -> [ 4, 1, 1 ]
+```
+
+세 장을 쓴다. 그런데 3 + 3이면 두 장이다. 큰 것부터 고르는 방식이 왜 여기서 틀리는지는 [그리디 알고리즘](/posts/greedy-algorithms) 글에서 따로 다룬다. 여기서는 반대쪽 길, 가능한 조합을 전부 보는 쪽에서 시작한다. 금액 a를 만드는 최소 장수는 "쿠폰 하나를 쓰고 남은 금액을 만드는 최소 장수 + 1" 중 가장 작은 값이다.
+
+```js
+let calls = 0;
+function minCoins(coins, amount) {
+  calls++;
+  if (amount === 0) return 0;          // 다 맞췄다
+  if (amount < 0) return Infinity;     // 넘쳤다. 이 길은 불가능
+  let best = Infinity;
+  for (const c of coins) best = Math.min(best, minCoins(coins, amount - c) + 1);
+  return best;
+}
+for (const a of [6, 20, 30, 40]) {
+  calls = 0;
+  const t = performance.now();
+  const r = minCoins([1, 3, 4], a);
+  console.log(`brute amount=${a} answer=${r} calls=${calls} ${(performance.now() - t).toFixed(1)}ms`);
+}
+```
+
+```text
+brute amount=6 answer=2 calls=46 0.1ms
+brute amount=20 answer=5 calls=38446 4.7ms
+brute amount=30 answer=8 calls=4728718 31.2ms
+brute amount=40 answer=10 calls=581593816 3999.4ms
+```
+
+답은 맞는데 금액이 10 늘 때마다 호출이 100배 넘게 불어난다. 40에서 벌써 4초다. 실제 결제 금액이 수만 원이면 이 함수는 끝나지 않는다. 이 글은 이 폭발을 동적 계획법(Dynamic Programming, DP)으로 줄이는 과정을 따라가고, 계단 오르기, 배낭, 최장 증가 부분 수열, 편집 거리처럼 면접에 자주 나오는 문제를 같은 틀로 푼다. 출력은 모두 Node.js 22에서 실제로 돌린 결과다.
+
+복잡도를 세는 법은 [Big O 표기법](/posts/big-o-notation)에, 함수 결과를 기억하는 기법 자체와 캐시 키의 함정은 [메모이제이션](/posts/js-memoization)에 있다. 재귀 호출과 콜 스택은 [재귀와 백트래킹](/posts/recursion-backtracking)에서 다룬다. 여기서는 그 위에서 "무엇을 기억할지 정하는 법"에 집중한다.
+
+## 같은 질문을 몇 번이나 다시 묻나
+
+호출이 왜 이렇게 많은지 세어 봤다. 금액 30으로 시작했을 때 각 금액이 몇 번 불렸는지다.
+
+```js
+const hits = new Map();
+// minCoins 첫 줄에 hits.set(amount, (hits.get(amount) ?? 0) + 1) 를 넣고 돌렸다
+minCoins([1, 3, 4], 30);
+console.log("amount=30: f(10) called", hits.get(10), "times, f(2)", hits.get(2), "times, distinct", [...hits.keys()].filter(k => k >= 0).length);
+```
+
+```text
+amount=30: f(10) called 7921 times, f(2) 372100 times, distinct 31
+```
+
+서로 다른 질문은 0부터 30까지 31개뿐이다. 그런데 "2를 만드는 최소 장수"를 37만 번 다시 계산했다. 30에서 1을 네 번 빼도, 3을 한 번 빼고 1을 한 번 빼도, 4를 한 번 빼도 같은 26에 도착하기 때문이다. 길이 달라도 도착하는 질문은 같다. 이것을 겹치는 부분 문제(overlapping subproblems)라고 한다.
+
+아래 그림은 금액 6에서 시작한 재귀가 같은 금액을 다시 만나는 순간을 따라간다. 오른쪽은 지금 쌓여 있는 호출이다.
+
+<AlgoTrace
+  caption="길은 다른데 같은 금액에 다시 도착한다"
+  memoryLabel="호출 스택"
+  cells={["f(0)", "f(1)", "f(2)", "f(3)", "f(4)", "f(5)", "f(6)"]}
+  steps={[
+    { pointer: 6, memory: ["f(6)"], caption: "6을 만든다. 쿠폰 1, 3, 4를 하나씩 써 본다." },
+    { pointer: 2, memory: ["f(6)", "f(5)", "f(4)", "f(3)", "f(2)"], caption: "1만 계속 쓰면 6, 5, 4, 3을 지나 2에 온다. f(2)를 처음 계산한다." },
+    { pointer: 2, found: [2], memory: ["f(6)", "f(3)", "f(2)"], caption: "이번엔 3을 쓰고 1을 썼다. 또 f(2)다. 아까 계산한 걸 잊고 처음부터 다시 한다." },
+    { pointer: 2, found: [2], memory: ["f(6)", "f(2)"], caption: "4를 바로 써도 f(2)다. f(6) 하나에서 f(2)는 네 번, f(0)은 아홉 번 불렸다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: ["f(6)"], caption: "서로 다른 질문은 7개다. 각각 한 번만 풀면 된다." },
+  ]}
+/>
+
+겹치는 부분 문제만으로는 DP가 되지 않는다. 작은 문제의 답으로 큰 문제의 답을 만들 수 있어야 한다. 금액 6의 최솟값은 5, 3, 2의 최솟값에 1을 더한 것 중 하나로 정해진다. 큰 문제의 최적해 안에 작은 문제의 최적해가 그대로 들어 있다는 성질이고, 최적 부분 구조(optimal substructure)라고 부른다. 두 성질이 다 있으면 같은 질문의 답을 한 번씩만 구해서 표에 적어 두는 방식이 통한다. 동적 계획법이라는 이름은 거창하지만 하는 일은 그 표를 채우는 것이다.
+
+## 표의 칸 하나가 무엇을 뜻하는지부터 정한다
+
+DP 문제를 풀 때 가장 먼저 쓰는 건 코드가 아니라 문장 하나다. "dp[a]는 금액 a를 만드는 최소 쿠폰 수다." 이 문장을 상태 정의라고 한다. 상태가 정해지면 나머지 세 가지가 따라 나온다.
+
+- 점화식: dp[a]를 더 작은 칸으로 쓴 식. 여기서는 dp[a] = min(dp[a - c] + 1), c는 a 이하인 쿠폰 단위다.
+- 시작값: 더 쪼갤 수 없는 칸. dp[0] = 0이다. 0원은 쿠폰 없이 만든다.
+- 채우는 순서: 오른쪽 칸이 왼쪽 칸을 보니 작은 금액부터 채운다.
+
+상태 정의가 흐릿하면 점화식도 흐릿해진다. "dp[a]는 a까지의 답"처럼 쓰면 a를 정확히 만드는 건지 a 이하를 만드는 건지 모호하고, 그 차이가 시작값과 정답 위치를 바꾼다. 면접에서 DP 문제를 받으면 이 문장을 먼저 소리 내어 말하는 게 좋다. 면접관이 방향을 확인해 줄 기회도 된다.
+
+금액 6의 칸이 어느 칸을 보고 있는지 그림으로 보면 이렇다. 화살표는 "이 칸을 알아야 저 칸을 채운다"는 방향이다.
+
+<ConceptDiagram
+  caption="dp[6]은 dp[5], dp[3], dp[2]를 보고, 그 칸들은 다시 더 작은 칸을 본다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "d6", label: "dp[6] = 2", sub: "3을 두 번", x: 200, y: 35, w: 120 },
+    { id: "d5", label: "dp[5] = 2", sub: "4 + 1", x: 70, y: 120, w: 110 },
+    { id: "d3", label: "dp[3] = 1", sub: "3 한 장", x: 200, y: 120, w: 110 },
+    { id: "d2", label: "dp[2] = 2", sub: "1 + 1", x: 330, y: 120, w: 110 },
+    { id: "d1", label: "dp[1] = 1", x: 135, y: 215, w: 100 },
+    { id: "d0", label: "dp[0] = 0", sub: "시작값", x: 265, y: 215, w: 100 },
+  ]}
+  edges={[
+    { from: "d5", to: "d6", label: "+1" },
+    { from: "d3", to: "d6", label: "+3" },
+    { from: "d2", to: "d6", label: "+4" },
+    { from: "d1", to: "d5", dashed: true },
+    { from: "d0", to: "d3", dashed: true },
+    { from: "d1", to: "d2", dashed: true },
+    { from: "d0", to: "d1", dashed: true },
+  ]}
+/>
+
+화살표가 한쪽으로만 흐르고 고리가 없다는 점이 중요하다. 칸 사이 의존이 사이클 없는 방향 그래프(DAG)이기 때문에 [위상 정렬](/posts/ds-graph-bfs-dfs) 순서대로 채우면 된다. 금액 문제는 그 순서가 그냥 0, 1, 2, …다. 의존에 고리가 생기는 문제라면 DP로 바로 풀 수 없고, 최단 경로 알고리즘처럼 다른 도구가 필요하다.
+
+## 위에서 내려가기와 아래에서 쌓기
+
+표를 채우는 방법은 두 가지다. 원래 재귀에 캐시를 붙여 필요한 칸만 위에서부터 계산하는 하향식(top-down, 메모이제이션), 그리고 반복문으로 시작값부터 차례로 채우는 상향식(bottom-up, 타뷸레이션)이다.
+
+```js
+function topDown(coins, amount) {
+  const memo = new Map();
+  let calls = 0;
+  function go(a) {
+    calls++;
+    if (a === 0) return 0;
+    if (a < 0) return Infinity;
+    if (memo.has(a)) return memo.get(a);   // 이미 푼 질문이면 꺼낸다
+    let best = Infinity;
+    for (const c of coins) best = Math.min(best, go(a - c) + 1);
+    memo.set(a, best);
+    return best;
+  }
+  return { r: go(amount), calls };
+}
+
+function bottomUp(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  dp[0] = 0;                                // 시작값
+  for (let a = 1; a <= amount; a++)         // 작은 금액부터
+    for (const c of coins) if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}
+```
+
+금액 40, 5,000, 1만, 10만으로 두 함수를 불러 봤다.
+
+```text
+amount=40 topDown=10 calls=121 0.15ms | bottomUp=10 0.08ms
+amount=5000 topDown=1250 calls=15001 6.26ms | bottomUp=1250 1.83ms
+topDown 10000: RangeError Maximum call stack size exceeded
+bottomUp 100000 = 25000 1.85ms
+```
+
+4초 걸리던 금액 40이 0.15ms가 됐다. 호출은 5억 8천만 번에서 121번이다. 칸이 41개, 칸마다 쿠폰 3개를 보니 대략 41 × 3이다. 시간 복잡도는 칸 수 × 칸당 일, 즉 O(amount × 쿠폰 종류)다. DP의 복잡도는 언제나 이렇게 센다.
+
+세 번째 줄이 하향식의 약점이다. 금액 1만에서 하향식은 콜 스택이 넘쳤다. 1을 빼는 재귀가 금액만큼 깊이 내려가기 때문이다. 이 코드로 이분 탐색해 보니 Node 22 기본 설정에서 금액 5,155까지가 한계였다. 프레임 크기에 따라 달라지는 숫자라 정확한 값보다 "수천 단계에서 끊긴다"는 감각이 중요하다. 상향식은 반복문이라 금액 10만도 2ms 안에 끝났다.
+
+둘 중 무엇을 고르는지는 문제 모양에 달렸다.
+
+| | 하향식 (메모) | 상향식 (표) |
+|---|---|---|
+| 작성 | 재귀 그대로라 점화식을 옮기기 쉽다 | 채우는 순서를 직접 정해야 한다 |
+| 계산하는 칸 | 실제로 필요한 칸만 | 모든 칸 |
+| 깊이 | 재귀 깊이만큼 스택을 쓴다 | 스택 걱정이 없다 |
+| 공간 줄이기 | 어렵다 | 이전 줄만 남기기 쉽다 |
+| 상수 비용 | 함수 호출, Map 조회 | 배열 접근 |
+
+상태가 띄엄띄엄 쓰이는 문제(예: 상태가 큰 수 두 개의 조합인데 실제로 닿는 건 일부뿐)는 하향식이 칸을 덜 만든다. 상태가 빽빽하고 깊이가 깊으면 상향식이 안전하다. 점화식은 하향식으로 먼저 맞춰 보고, 입력이 커질 수 있으면 상향식으로 옮기는 순서가 무난하다.
+
+아래 그림은 상향식이 표를 채우는 과정이다. 각 칸은 자기보다 1, 3, 4 왼쪽 칸만 본다.
+
+<AlgoTrace
+  caption="dp[a] = min(dp[a-1], dp[a-3], dp[a-4]) + 1"
+  memoryLabel="dp 표"
+  cells={["0", "1", "2", "3", "4", "5", "6"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["0", "∞", "∞", "∞", "∞", "∞", "∞"], caption: "dp[0] = 0. 나머지는 아직 못 만든다는 뜻으로 ∞를 둔다." },
+    { pointer: 2, found: [1], memory: ["0", "1", "2", "∞", "∞", "∞", "∞"], caption: "1과 2는 쿠폰 1만 쓸 수 있다. dp[1] = 1, dp[2] = 2." },
+    { pointer: 3, found: [0], memory: ["0", "1", "2", "1", "∞", "∞", "∞"], caption: "dp[3]은 dp[2]+1 = 3과 dp[0]+1 = 1 중 1이다." },
+    { pointer: 4, found: [0], memory: ["0", "1", "2", "1", "1", "∞", "∞"], caption: "dp[4]도 dp[0]+1로 한 장이다." },
+    { pointer: 5, found: [1, 4], memory: ["0", "1", "2", "1", "1", "2", "∞"], caption: "dp[5]는 dp[4]+1과 dp[1]+1이 둘 다 2다." },
+    { pointer: 6, found: [3], memory: ["0", "1", "2", "1", "1", "2", "2"], caption: "dp[6]은 dp[3]+1 = 2. 큰 것부터 고른 답 3보다 작다." },
+  ]}
+/>
+
+## 계단 오르기는 두 칸만 기억하면 된다
+
+면접에서 가장 먼저 나오는 DP는 계단 오르기(LeetCode 70)다. 한 번에 1칸이나 2칸 오를 수 있을 때 n칸을 오르는 방법의 수를 묻는다. 상태 정의는 "dp[i]는 i번째 칸에 도착하는 방법의 수"다. i번째 칸에는 i-1에서 한 칸 오르거나 i-2에서 두 칸 올라야 오니 dp[i] = dp[i-1] + dp[i-2]다. 피보나치와 같은 점화식이다.
+
+dp[i]가 바로 앞 두 칸만 본다는 데서 공간을 줄일 수 있다. 배열 전체를 들고 있을 필요 없이 변수 두 개만 굴린다.
+
+```js
+function climb(n) {
+  if (n <= 2) return n;
+  let a = 1, b = 2;                         // dp[1], dp[2]
+  for (let i = 3; i <= n; i++) [a, b] = [b, a + b];
+  return b;
+}
+console.log("climb:", [1, 2, 3, 4, 5, 10, 45].map((n) => `${n}->${climb(n)}`).join(" "));
+console.log("climb(80)", climb(80), "safe?", Number.isSafeInteger(climb(80)));
+```
+
+```text
+climb: 1->1 2->2 3->3 4->5 5->8 10->89 45->1836311903
+climb(80) 37889062373143900 safe? false
+```
+
+두 번째 줄은 DP와 상관없는 함정이다. 경우의 수는 금방 커지는데 자바스크립트 숫자는 2⁵³ - 1까지만 정확하다. 이 점화식은 n = 77까지 안전하고, 80에서는 BigInt로 계산한 정답 37889062373143906과 끝자리가 다르다. 그래서 경우의 수 문제는 보통 "1,000,000,007로 나눈 나머지를 출력하라"고 한다. 그 조건이 있으면 더할 때마다 나머지를 취하고, 없으면 BigInt를 쓴다.
+
+계단 문제의 꼬리 질문은 대개 조건을 비튼다. 한 번에 1, 2, 3칸이면 dp[i-3]이 더해진다. 밟으면 안 되는 칸이 있으면 그 칸을 0으로 둔다. 칸마다 비용이 있고 최소 비용을 물으면(LeetCode 746) 덧셈이 min으로 바뀐다. 상태 정의 문장만 다시 쓰면 점화식은 따라 나온다.
+
+## 배낭에 넣을지 말지
+
+0/1 배낭 문제는 물건마다 무게와 가치가 있고, 배낭 용량 안에서 가치 합을 최대로 만드는 문제다. 물건은 한 번만 넣을 수 있다. 쿠폰과 달리 같은 물건을 두 번 쓸 수 없으니 상태에 "어디까지 물건을 고려했나"가 들어가야 한다.
+
+dp[i][c]는 앞의 물건 i개만 써서 용량 c 안에 담을 수 있는 최대 가치다. i번째 물건을 넣지 않으면 dp[i-1][c], 넣으면 dp[i-1][c - w] + v다. 물건 세 개(노트북 무게 3 가치 4, 카메라 1·2, 책 2·3)와 용량 4로 표를 채웠다.
+
+```js
+const items = [{ name: "노트북", w: 3, v: 4 }, { name: "카메라", w: 1, v: 2 }, { name: "책", w: 2, v: 3 }];
+function knap2D(items, W) {
+  const n = items.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(W + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    const { w, v } = items[i - 1];
+    for (let c = 0; c <= W; c++) {
+      dp[i][c] = dp[i - 1][c];                                  // 안 넣는다
+      if (w <= c) dp[i][c] = Math.max(dp[i][c], dp[i - 1][c - w] + v); // 넣는다
+    }
+  }
+  return dp;
+}
+const t = knap2D(items, 4);
+t.forEach((r, i) => console.log(i === 0 ? "(없음)" : items[i - 1].name, r.join(" ")));
+let c = 4; const pick = [];
+for (let i = items.length; i > 0; i--) {
+  if (t[i][c] !== t[i - 1][c]) { pick.push(items[i - 1].name); c -= items[i - 1].w; } // 값이 바뀌었으면 넣은 것
+}
+console.log("pick", pick.reverse());
+```
+
+```text
+(없음) 0 0 0 0 0
+노트북 0 0 0 4 4
+카메라 0 2 2 4 6
+책 0 2 3 5 6
+pick [ '노트북', '카메라' ]
+```
+
+마지막 줄의 6이 답이다. 고른 물건은 표를 거꾸로 읽어서 찾는다. 윗줄과 값이 다르면 그 물건을 넣은 것이다. 시간과 공간은 물건 수 × 용량, O(nW)다.
+
+여기서 O(nW)가 다항 시간처럼 보이지만 그렇지 않다는 점이 단골 꼬리 질문이다. W는 입력의 크기가 아니라 입력에 적힌 숫자다. 용량이 10억이면 10억 칸이다. 숫자를 적는 데 필요한 비트 수로 보면 지수 시간이라 이런 알고리즘을 의사 다항 시간(pseudo-polynomial)이라 부르고, 0/1 배낭 자체는 NP-난해 문제로 분류된다. 용량이 크고 물건이 적으면(n ≤ 40 정도) 반씩 나눠 전부 나열하는 방법이 더 낫다.
+
+### 한 줄로 줄일 때 방향을 거꾸로 도는 이유
+
+각 줄은 바로 윗줄만 본다. 그러면 배열 한 줄로 덮어쓰며 채울 수 있다. 이때 용량을 큰 쪽에서 작은 쪽으로 돌아야 한다. 작은 쪽부터 돌면 이상한 답이 나온다.
+
+```js
+function knap1D(items, W, dir) {
+  const dp = new Array(W + 1).fill(0);
+  for (const { w, v } of items) {
+    if (dir === "down") { for (let c = W; c >= w; c--) dp[c] = Math.max(dp[c], dp[c - w] + v); }
+    else { for (let c = w; c <= W; c++) dp[c] = Math.max(dp[c], dp[c - w] + v); }
+  }
+  return dp;
+}
+console.log("1D down", knap1D(items, 4, "down").join(" "));
+console.log("1D up  ", knap1D(items, 4, "up").join(" "));
+```
+
+```text
+1D down 0 2 3 5 6
+1D up   0 2 4 6 8
+```
+
+정방향은 8이라고 답한다. 카메라를 네 번 넣은 값이다. 아래 그림에서 카메라 한 개를 정방향으로 넣는 과정을 보면 이유가 보인다.
+
+<AlgoTrace
+  caption="정방향으로 돌면 방금 넣은 카메라를 또 넣는다"
+  memoryLabel="dp"
+  cells={["c=0", "c=1", "c=2", "c=3", "c=4"]}
+  steps={[
+    { pointer: 0, memory: ["0", "0", "0", "0", "0"], caption: "빈 배낭에 카메라(무게 1, 가치 2)를 고려한다." },
+    { pointer: 1, found: [0], memory: ["0", "2", "0", "0", "0"], caption: "dp[1] = dp[0] + 2 = 2. 카메라 한 개다." },
+    { pointer: 2, found: [1], memory: ["0", "2", "4", "0", "0"], caption: "dp[2] = dp[1] + 2. 그런데 dp[1]은 방금 카메라를 넣은 값이다." },
+    { pointer: 4, found: [3], memory: ["0", "2", "4", "6", "8"], caption: "같은 카메라가 네 번 들어갔다. 0/1이 아니라 무제한 배낭이 됐다." },
+    { pointer: 4, found: [4], memory: ["0", "2", "2", "2", "2"], caption: "큰 쪽부터 돌면 dp[c-1]이 아직 이번 물건 전의 값이라 한 번만 들어간다." },
+  ]}
+/>
+
+정방향은 "이번 물건을 이미 넣은 상태"를 다시 읽는다. 그래서 물건을 몇 번이든 쓸 수 있는 무제한 배낭(unbounded knapsack)이 된다. 쿠폰 문제가 바로 그 경우라 앞에서 작은 금액부터 채워도 맞았다. 같은 코드에서 반복 방향 하나가 문제의 뜻을 바꾼다. 한 줄로 줄인 DP 코드를 읽을 때는 이 방향부터 확인한다.
+
+## 가장 길게 올라가는 줄
+
+최장 증가 부분 수열(LIS)은 수열에서 순서를 지키며 몇 개를 골라 만들 수 있는 가장 긴 증가 수열의 길이다. [10, 9, 2, 5, 3, 7, 101, 18]이면 2, 3, 7, 18처럼 4다. 연속할 필요는 없다.
+
+상태를 "dp[i]는 i번째 원소로 끝나는 가장 긴 증가 수열의 길이"로 두면, 앞의 원소 중 나보다 작은 것들의 dp에 1을 더한 최댓값이다. 정답은 dp 전체의 최댓값이다. "i번째까지의 LIS"로 두면 점화식이 안 나온다. 끝 원소를 모르면 다음 원소를 붙일 수 있는지 판단할 수 없기 때문이다. 상태 정의에 무엇을 넣어야 다음 결정을 내릴 수 있는지가 DP 설계의 대부분이다.
+
+```js
+function lisN2(a) {
+  const dp = new Array(a.length).fill(1);
+  let best = 0;
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < i; j++) if (a[j] < a[i] && dp[j] + 1 > dp[i]) dp[i] = dp[j] + 1;
+    best = Math.max(best, dp[i]);
+  }
+  return { best, dp };
+}
+console.log("lisN2", JSON.stringify(lisN2([10, 9, 2, 5, 3, 7, 101, 18])));
+```
+
+```text
+lisN2 {"best":4,"dp":[1,1,1,2,2,3,4,4]}
+```
+
+이중 반복문이라 O(n²)다. 면접에서는 거의 항상 "더 빠르게"가 이어진다. 길이별로 "그 길이의 증가 수열이 끝날 수 있는 가장 작은 값"만 tails 배열에 남기면 된다. 끝값이 작을수록 뒤에 붙일 수 있는 수가 많으니 작은 끝값만 기억해도 손해가 없다. tails는 항상 정렬돼 있어서 새 원소가 들어갈 자리를 [이분 탐색](/posts/binary-search)으로 찾는다.
+
+```js
+function lisFast(a) {
+  const tails = [];
+  for (const x of a) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {                   // x 이상인 첫 자리 (lower bound)
+      const m = (lo + hi) >> 1;
+      if (tails[m] < x) lo = m + 1; else hi = m;
+    }
+    tails[lo] = x;                      // 그 자리를 더 작은 끝값으로 바꾸거나 뒤에 붙인다
+    console.log(" x=", x, "pos", lo, "tails", JSON.stringify(tails));
+  }
+  return tails.length;
+}
+console.log("lisFast", lisFast([10, 9, 2, 5, 3, 7, 101, 18]));
+```
+
+```text
+ x= 10 pos 0 tails [10]
+ x= 9 pos 0 tails [9]
+ x= 2 pos 0 tails [2]
+ x= 5 pos 1 tails [2,5]
+ x= 3 pos 1 tails [2,3]
+ x= 7 pos 2 tails [2,3,7]
+ x= 101 pos 3 tails [2,3,7,101]
+ x= 18 pos 3 tails [2,3,7,18]
+lisFast 4
+```
+
+<AlgoTrace
+  caption="tails[k]는 길이 k+1인 증가 수열이 끝날 수 있는 가장 작은 값이다"
+  memoryLabel="tails"
+  cells={["10", "9", "2", "5", "3", "7", "101", "18"]}
+  steps={[
+    { pointer: 0, memory: ["10"], caption: "10으로 길이 1짜리 줄을 시작한다." },
+    { pointer: 2, memory: ["2"], caption: "9, 2가 차례로 와서 길이 1의 끝값을 더 작게 바꾼다." },
+    { pointer: 3, memory: ["2", "5"], caption: "5는 2보다 크다. 길이 2짜리 줄이 생긴다." },
+    { pointer: 4, memory: ["2", "3"], caption: "3은 5 자리를 차지한다. 길이 2의 끝값이 3으로 작아졌다." },
+    { pointer: 6, memory: ["2", "3", "7", "101"], caption: "7과 101은 뒤에 붙는다. 길이 4." },
+    { pointer: 7, found: [7], memory: ["2", "3", "7", "18"], caption: "18은 101 자리로 들어간다. 길이는 4 그대로다." },
+  ]}
+/>
+
+마지막 tails [2, 3, 7, 18]은 실제 증가 수열과 일치하지만 늘 그런 건 아니다. 중간에 끝값이 바뀌면 tails는 여러 수열의 조각이 섞인 모양이 된다. tails의 길이만 정답이다. 실제 수열이 필요하면 원소마다 "내 앞 원소의 인덱스"를 따로 적어 두고 거꾸로 따라간다.
+
+크기를 키워 두 방법을 재 봤다.
+
+```text
+n=20000 n^2: 277 942ms | nlogn: 277 4.05ms
+n=1000000 nlogn: 1897 84ms
+```
+
+n = 2만에서 이미 230배 차이다. n = 100만은 O(n²)로는 시도하지 않았다. 계산상 2,500배 더 걸린다. 같은 값이 여러 번 나올 때 "증가"를 엄격하게 볼지(`<`) 같은 값도 허용할지(`<=`)는 이분 탐색을 lower bound로 할지 upper bound로 할지로 갈린다. 위 코드는 엄격한 증가라 [2, 2, 2]의 답이 1이다.
+
+## 두 단어 사이의 거리
+
+검색창에 "recieve"를 쳤을 때 "혹시 receive?"를 띄우려면 두 문자열이 얼마나 비슷한지 숫자로 알아야 한다. 가장 흔한 기준이 편집 거리(레벤슈타인 거리)다. 한 글자 넣기, 지우기, 바꾸기 중 몇 번이면 한 문자열을 다른 문자열로 바꿀 수 있는지 센다.
+
+dp[i][j]는 a의 앞 i글자를 b의 앞 j글자로 바꾸는 최소 횟수다. 마지막 글자가 같으면 dp[i-1][j-1] 그대로다. 다르면 세 가지 중 가장 싼 것 + 1이다. 위 칸 dp[i-1][j]는 a의 글자를 지우는 것, 왼쪽 칸 dp[i][j-1]은 b의 글자를 넣는 것, 대각선 dp[i-1][j-1]은 바꾸는 것이다. 첫 줄과 첫 칸은 빈 문자열과의 거리라 0, 1, 2, …다.
+
+```js
+function editTable(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+  return dp;
+}
+```
+
+```text
+    ε s i t t i n g
+ε   0 1 2 3 4 5 6 7
+k   1 1 2 3 4 5 6 7
+i   2 2 1 2 3 4 5 6
+t   3 3 2 1 2 3 4 5
+t   4 4 3 2 1 2 3 4
+e   5 5 4 3 2 2 3 4
+n   6 6 5 4 3 3 2 3
+replace k->s, keep i, keep t, keep t, replace e->i, keep n, insert g
+```
+
+표를 찍고, 마지막 칸에서 거꾸로 따라가 편집 순서를 뽑은 결과다. kitten에서 sitting까지 3이다. 오른쪽 아래 칸에서 왼쪽 위로, 어느 칸에서 왔는지 거꾸로 따라가면 마지막 줄의 편집 순서가 나온다. 아래 그림은 표를 한 줄씩 채우는 모습이다. 각 줄은 바로 윗줄만 보고 만든다.
+
+<AlgoTrace
+  caption="kitten → sitting. 줄 하나는 a의 글자 하나를 더 본 결과다"
+  memoryLabel="지금 줄"
+  cells={["ε", "s", "i", "t", "t", "i", "n", "g"]}
+  steps={[
+    { pointer: 0, memory: ["0", "1", "2", "3", "4", "5", "6", "7"], caption: "빈 문자열에서 sitting의 앞 j글자를 만들려면 j번 넣는다." },
+    { pointer: 1, found: [1], memory: ["1", "1", "2", "3", "4", "5", "6", "7"], caption: "k 줄. k와 s가 달라 대각선 0에 1을 더한 1이다." },
+    { pointer: 2, found: [2], memory: ["2", "2", "1", "2", "3", "4", "5", "6"], caption: "i 줄. i가 같은 칸은 대각선을 그대로 가져와 1이다." },
+    { pointer: 4, found: [4], memory: ["4", "4", "3", "2", "1", "2", "3", "4"], caption: "t 두 줄을 지나면 kitt와 sitt의 거리가 1이다." },
+    { pointer: 7, found: [7], memory: ["6", "6", "5", "4", "3", "3", "2", "3"], caption: "n 줄. 마지막 칸 3이 답이다. 바꾸기 둘, 넣기 하나." },
+  ]}
+/>
+
+각 줄이 윗줄만 보니 공간을 두 줄, O(min(m, n))로 줄일 수 있다. 대신 표를 버리면 편집 순서를 되짚을 수 없다. 거리만 필요하면 두 줄, 무엇을 바꿨는지도 보여 줘야 하면 표 전체를 둔다. 공간을 줄이는 최적화는 언제나 이 대가를 낸다.
+
+### 데이터베이스와 검색에서 만나는 편집 거리
+
+PostgreSQL에는 이 계산이 확장으로 들어 있다. PostgreSQL 16에서 `fuzzystrmatch`를 켜고 상품 이름 다섯 개로 돌려 봤다.
+
+```sql
+CREATE EXTENSION fuzzystrmatch;            -- levenshtein() 함수를 제공하는 확장
+CREATE TABLE products (id int PRIMARY KEY, name text);
+INSERT INTO products VALUES (1,'receiver'),(2,'receive'),(3,'recipe'),(4,'review'),(5,'relieve');
+-- 오타 'recieve'와 가까운 순으로 3개
+SELECT name, levenshtein('recieve', name) AS dist FROM products ORDER BY dist, name LIMIT 3;
+```
+
+```text
+  name   | dist 
+---------+------
+ relieve |    1
+ receive |    2
+ recipe  |    2
+(3 rows)
+```
+
+사용자가 원한 건 receive일 텐데 relieve가 1등이다. c를 l로 하나 바꾸면 되기 때문이다. receive는 i와 e의 순서가 바뀐 것이라 레벤슈타인 거리로는 바꾸기 두 번이다. 인접한 두 글자 교환을 1로 치는 다메라우-레벤슈타인 거리를 쓰면 1이 된다. 실제 오타는 교환이 많아서 Elasticsearch의 fuzzy 쿼리는 기본으로 교환을 1회로 친다. 편집 거리는 글자 모양의 거리일 뿐 뜻의 거리가 아니라는 점도 함께 기억해 둔다.
+
+```sql
+EXPLAIN SELECT name FROM products WHERE levenshtein('recieve', name) <= 2;
+```
+
+```text
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Seq Scan on products  (cost=0.00..29.05 rows=423 width=32)
+   Filter: (levenshtein('recieve'::text, name) <= 2)
+(2 rows)
+```
+
+계획은 `Seq Scan`이다. 함수 결과에는 인덱스를 쓸 수 없으니 행마다 O(mn) 표를 하나씩 채운다. 상품이 수백만 개면 이 쿼리 하나가 CPU를 오래 잡는다. 그래서 보통은 `pg_trgm` 같은 인덱스로 후보를 먼저 수십 개로 줄이고, 그 후보에만 편집 거리를 계산해 순위를 매긴다. `levenshtein_less_equal(a, b, k)`는 거리가 k를 넘는 순간 계산을 멈춰서 후보 거르기에 조금 더 싸다.
+
+파일 비교도 같은 계열의 문제다. `git diff`가 기본으로 쓰는 Myers 알고리즘은 "가장 적은 넣기와 지우기로 한 파일을 다른 파일로 바꾸기"를 편집 그래프 위의 최단 경로로 푼다. 바꾸기 없이 넣기·지우기만 세면 최장 공통 부분 수열(LCS) 문제와 같아진다.
+
+## 표를 만들 때 반복해서 나오는 실수
+
+DP 코드는 짧아서 틀린 곳이 눈에 잘 안 띈다. 실제로 돌려 보면 아래 실수가 자주 나온다.
+
+시작값을 잘못 채운다. 최솟값 문제에서 표를 0으로 채우면 "아직 못 만든 칸"과 "0개로 만든 칸"이 구분되지 않는다.
+
+```js
+function coinBadInit(coins, amount) {
+  const dp = new Array(amount + 1).fill(0);    // Infinity여야 한다
+  for (let x = 1; x <= amount; x++)
+    for (const c of coins) if (c <= x) dp[x] = Math.min(dp[x], dp[x - c] + 1);
+  return dp[amount];
+}
+console.log("bad init", coinBadInit([1, 3, 4], 6));
+```
+
+```text
+bad init 0
+```
+
+min은 처음 넣은 0보다 작아질 수 없으니 답이 0이다. 최솟값은 Infinity, 최댓값은 -Infinity(또는 문제에 맞는 불가능 표시), 경우의 수는 0으로 채우고 시작값만 1로 둔다. 만들 수 없는 경우(쿠폰 [2]로 3원)에 -1을 돌려주는 처리도 이 구분에서 나온다.
+
+2차원 표를 `fill`로 만든다.
+
+```js
+const bad = new Array(3).fill(new Array(3).fill(0)); bad[0][0] = 1;
+console.log("fill bug", JSON.stringify(bad));
+const good = Array.from({ length: 3 }, () => new Array(3).fill(0)); good[0][0] = 1;
+console.log("from ok ", JSON.stringify(good));
+```
+
+```text
+fill bug [[1,0,0],[1,0,0],[1,0,0]]
+from ok  [[1,0,0],[0,0,0],[0,0,0]]
+```
+
+`fill`은 같은 배열 하나의 참조를 세 칸에 넣는다. 한 줄을 고치면 세 줄이 같이 바뀐다. 참조와 값의 차이는 [원시값과 참조](/posts/js-primitive-vs-reference)에서 다뤘다. 2차원 이상은 `Array.from`에 줄을 새로 만드는 함수를 넘긴다.
+
+반복문 순서를 바꾼다. 배낭의 방향처럼, 경우의 수 문제도 바깥 반복이 무엇인지에 따라 답이 다르다. 쿠폰 [1, 2, 5]로 5를 만드는 방법을 세면 이렇다.
+
+```js
+function waysCoinsOuter(coins, amount) {   // 바깥이 쿠폰
+  const dp = new Array(amount + 1).fill(0); dp[0] = 1;
+  for (const c of coins) for (let x = c; x <= amount; x++) dp[x] += dp[x - c];
+  return dp[amount];
+}
+function waysAmountOuter(coins, amount) {  // 바깥이 금액
+  const dp = new Array(amount + 1).fill(0); dp[0] = 1;
+  for (let x = 1; x <= amount; x++) for (const c of coins) if (c <= x) dp[x] += dp[x - c];
+  return dp[amount];
+}
+console.log("coins outer", waysCoinsOuter([1, 2, 5], 5), "amount outer", waysAmountOuter([1, 2, 5], 5));
+```
+
+```text
+coins outer 4 amount outer 9
+```
+
+쿠폰이 바깥이면 쿠폰을 정해진 순서로만 쓰니 `{1,1,1,1,1}`, `{1,1,1,2}`, `{1,2,2}`, `{5}`의 조합 4개를 센다. 금액이 바깥이면 1+2+2와 2+1+2와 2+2+1을 다른 것으로 보는 순열 9개를 센다. LeetCode 518번(조합)과 377번(순열)이 이 차이 하나로 갈린다.
+
+상태에 필요한 정보를 빠뜨린다. "주식을 사고팔되 판 다음 날은 쉰다" 같은 문제에서 dp[i]를 날짜 하나로만 두면, 어제 팔았는지 모르니 오늘 살 수 있는지 판단하지 못한다. 결정에 필요한 정보가 상태에 없으면 점화식을 쓸 수 없다. 그럴 때는 dp[i][보유 중/쉬는 중/빈손]처럼 차원을 하나 늘린다. 반대로 차원을 쓸데없이 늘리면 표가 커져 메모리가 터진다. n이 1만이고 상태가 n × n이면 1억 칸이고, 숫자 배열이라도 800MB다.
+
+## 고른 것까지 알려 줘야 할 때
+
+면접 문제는 대개 "최소 몇 장"만 묻지만 실제 기능은 "어떤 쿠폰을 쓸지"를 보여 줘야 한다. 칸을 채울 때 어느 선택으로 최솟값이 나왔는지 함께 적어 두면 된다.
+
+```js
+function coinPath(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity), from = new Array(amount + 1).fill(-1);
+  dp[0] = 0;
+  for (let x = 1; x <= amount; x++)
+    for (const c of coins) if (c <= x && dp[x - c] + 1 < dp[x]) { dp[x] = dp[x - c] + 1; from[x] = c; }
+  const used = [];
+  for (let x = amount; x > 0 && from[x] !== -1; x -= from[x]) used.push(from[x]); // 거꾸로 따라간다
+  return { count: dp[amount], used };
+}
+console.log(JSON.stringify(coinPath([1, 3, 4], 6)), JSON.stringify(coinPath([1, 3, 4], 13)));
+```
+
+```text
+{"count":2,"used":[3,3]} {"count":4,"used":[1,4,4,4]}
+```
+
+`from` 배열이 칸마다 "어디서 왔나"를 기억한다. 최솟값이 같은 선택이 여럿이면 어느 것을 남길지(`<`냐 `<=`냐)에 따라 출력되는 조합이 달라진다. 정답이 하나로 정해지지 않는 문제에서 테스트가 특정 조합을 기대하면 이 비교 하나로 실패한다.
+
+## 이 문제가 DP인지 알아보는 법
+
+문제 문장에 "최소", "최대", "몇 가지 방법", "가능한가"가 있고, 매 단계에 고를 수 있는 선택지가 여러 개이며, 앞의 선택이 뒤의 선택지를 바꾼다면 DP를 먼저 의심한다. 입력 제한도 힌트다. n이 1,000 안팎이면 O(n²) DP, 1만~10만이면 O(n) 또는 O(n log n) DP, 용량이나 금액이 10⁴ 안팎이면 그 숫자를 한 차원으로 쓰는 DP가 의도일 가능성이 크다.
+
+비슷해 보이는 기법과의 경계도 알아 둔다.
+
+- 분할 정복(병합 정렬 같은)도 문제를 쪼개지만, 쪼갠 조각이 서로 겹치지 않는다. 겹치지 않으면 기억할 이유가 없다. 정렬은 [정렬 알고리즘](/posts/sorting-algorithms)에서 다룬다.
+- 백트래킹은 선택지를 전부 시도하되 가망 없는 가지를 잘라 낸다. 답 자체를 모두 나열해야 하거나(모든 순열, 모든 배치) 상태가 너무 커서 표로 못 담으면 백트래킹이고, 같은 상태가 반복되면 그 위에 메모를 얹어 DP로 바꾼다.
+- 그리디는 매 단계 가장 좋아 보이는 선택 하나만 하고 돌아보지 않는다. DP보다 훨씬 빠르지만, 지역 최선이 전체 최선이라는 증명이 있을 때만 맞다. 처음의 쿠폰 문제가 반례다.
+
+현장에서는 DP를 "알고리즘 문제"로 만나기보다 이런 모양으로 만난다. 문자열 유사도와 diff, 텍스트를 줄 단위로 예쁘게 나누는 줄바꿈(TeX의 Knuth-Plass), 최단 경로의 벨만-포드, SQL 옵티마이저가 조인 순서를 고르는 방식(PostgreSQL은 테이블 수가 `geqo_threshold` 기본값 12 미만이면 부분 조인 결과를 기억하며 넓혀 가는 DP 탐색을 하고, 그 이상이면 유전 알고리즘으로 바꾼다)이 그렇다. 어느 쪽이든 "같은 부분 결과를 다시 계산하지 않는다"는 생각은 같다.
+
+## 직접 표를 채워 보기
+
+처음의 쿠폰 문제(LeetCode 322 Coin Change)를 직접 풀어 보자. 만들 수 없으면 -1을 돌려준다. 마지막 테스트는 금액이 1만이라 재귀만으로 풀면 스택이 넘친다.
+
+<CodePlayground
+  caption="Coin Change: 최소 쿠폰 수"
+  functionName="coinChange"
+  initialCode={`function coinChange(coins, amount) {
+  // dp[a] = 금액 a를 만드는 최소 개수
+  return -1;
+}`}
+  solution={`function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  dp[0] = 0;
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      if (c <= a) dp[a] = Math.min(dp[a], dp[a - c] + 1);
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}`}
+  tests={[
+    { args: [[1, 3, 4], 6], expected: 2, label: "[1,3,4] → 6" },
+    { args: [[1, 2, 5], 11], expected: 3, label: "[1,2,5] → 11" },
+    { args: [[2], 3], expected: -1, label: "만들 수 없다" },
+    { args: [[1], 0], expected: 0, label: "0원" },
+    { args: [[186, 419, 83, 408], 6249], expected: 20, label: "큰 단위들" },
+    { args: [[1, 3, 4], 10000], expected: 2500, label: "금액 1만" },
+  ]}
+/>
+
+DP는 결국 세 문장이다. 칸 하나가 무엇을 뜻하는지, 그 칸을 더 작은 칸으로 어떻게 쓰는지, 어디서 시작해 어느 순서로 채우는지. 이 셋을 말로 먼저 정하면 코드는 반복문 두 개로 끝난다. 다음으로는 같은 최적화 문제를 "돌아보지 않고" 푸는 [그리디 알고리즘](/posts/greedy-algorithms)을 보면 두 기법의 경계가 선명해진다. 문제 유형별로 어떤 기법을 고르는지는 [알고리즘 문제 접근법](/posts/algorithms-overview)에 모았다.
+
+## 면접에서 나올 만한 질문
+
+### 동적 계획법은 무엇이고 언제 쓰나요?
+
+큰 문제를 작은 부분 문제로 나누고, 각 부분 문제의 답을 한 번만 계산해 표에 적어 두며 푸는 방법이다. 같은 부분 문제가 여러 번 나오고(겹치는 부분 문제), 큰 문제의 최적해가 작은 문제의 최적해로 만들어질 때(최적 부분 구조) 쓴다. 쿠폰 최소 개수 문제에서 금액 40의 호출이 5억 8천만 번에서 121번으로 줄었다.
+
+### 메모이제이션과 타뷸레이션은 어떻게 다른가요?
+
+메모이제이션은 재귀에 캐시를 붙여 필요한 칸만 위에서 내려가며 계산하는 하향식이고, 타뷸레이션은 반복문으로 시작값부터 모든 칸을 채우는 상향식이다. 하향식은 점화식을 옮기기 쉽고 안 쓰는 칸을 계산하지 않지만 재귀 깊이만큼 스택을 쓴다. Node 22에서 하향식 쿠폰 문제는 금액 5천 남짓에서 스택이 넘쳤고 상향식은 10만도 2ms였다. 상향식은 이전 줄만 남겨 공간을 줄이기도 쉽다.
+
+### DP 문제를 받으면 어떤 순서로 접근하나요?
+
+상태 정의를 한 문장으로 먼저 쓴다. "dp[i]는 무엇이다"가 정해지면 그 칸을 더 작은 칸으로 쓰는 점화식, 더 쪼갤 수 없는 시작값, 의존 방향에 맞는 채우는 순서가 따라 나온다. 그다음 칸 수 × 칸당 일로 복잡도를 센다. 점화식이 안 나오면 결정에 필요한 정보가 상태에 빠진 경우가 많아서 차원을 하나 늘려 본다.
+
+### 0/1 배낭을 1차원 배열로 줄일 때 왜 용량을 거꾸로 도나요?
+
+정방향으로 돌면 dp[c - w]가 이미 이번 물건을 넣은 값으로 바뀌어 있어서 같은 물건을 여러 번 넣게 된다. 그러면 0/1이 아니라 무제한 배낭이 된다. 실제로 무게 1, 가치 2인 물건 하나가 정방향에서는 용량 4에 네 번 들어가 8이 나왔다. 큰 쪽부터 돌면 아직 이번 물건 전의 값을 읽으니 한 번만 들어간다.
+
+### 배낭 문제의 O(nW)는 다항 시간인가요?
+
+아니다. W는 입력에 적힌 숫자의 값이라, 숫자를 적는 데 드는 비트 수 기준으로는 지수적으로 커진다. 그래서 의사 다항 시간이라고 부르고, 0/1 배낭은 NP-난해로 분류된다. 용량이 10억이면 표가 10억 칸이라 쓸 수 없고, 물건 수가 40 정도로 적으면 반씩 나눠 나열하는 방법이 낫다.
+
+### LIS를 O(n log n)으로 푸는 원리는 무엇인가요?
+
+길이별로 그 길이의 증가 수열이 끝날 수 있는 가장 작은 값만 tails 배열에 남긴다. 끝값이 작을수록 뒤에 붙일 수 있는 수가 많아 손해가 없고, tails는 항상 정렬돼 있어 새 원소의 자리를 이분 탐색으로 찾는다. tails의 길이가 답이지만 tails 자체가 실제 수열은 아니다. n = 2만에서 O(n²)는 942ms, 이 방법은 4ms였다.
+
+### 편집 거리 표를 두 줄로 줄이면 무엇을 잃나요?
+
+거리 값은 그대로 구하지만 어떤 편집을 했는지 되짚을 수 없다. 편집 순서는 오른쪽 아래 칸에서 어느 이웃 칸에서 왔는지를 거꾸로 따라가며 얻는데, 지난 줄을 버리면 그 길이 사라진다. 거리만 필요하면 두 줄로 O(min(m, n)) 공간을 쓰고, diff처럼 변경 내용을 보여 줘야 하면 표를 남기거나 Hirschberg처럼 분할 정복으로 경로를 다시 만든다.
+
+### 그리디와 DP는 어떻게 구분하나요?
+
+그리디는 매 단계 가장 좋아 보이는 선택 하나만 하고 돌아보지 않고, DP는 가능한 선택을 모두 따져 표에 기록한다. 그리디는 지역 최선이 전체 최선이라는 증명이 있을 때만 맞는다. 쿠폰 [1, 3, 4]로 6을 만들 때 큰 것부터 고르면 세 장이지만 DP는 3 + 3의 두 장을 찾는다. 증명이 안 되면 작은 입력에서 둘의 답을 무작위로 비교해 반례부터 찾아본다.

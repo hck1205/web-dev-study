@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "algorithms-overview",
+    title: "알고리즘 문제 접근법: 입력 크기에서 기법까지",
+    summary: "n ≤ 10⁵인 문제에 O(n²) 풀이를 냈다가 시간 초과가 나는 데서 출발해, 입력 크기로 복잡도 예산을 잡고 문제가 묻는 것으로 기법을 좁히는 순서를 정리한다. 한 문제를 세 기법으로 풀어 비교하고, 면접 흐름과 자바스크립트 함정, 공부 순서를 링크로 묶었다.",
+    topic: "programming/algorithms",
+    tags: ["Algorithm", "JavaScript", "Performance"],
+    date: "2026-10-25",
+    keywords: ["알고리즘 문제 접근법", "답 이분 탐색", "복잡도 예산"],
+  },
+  {
+    slug: "greedy-algorithms",
+    title: "그리디 알고리즘: 지금 가장 좋아 보이는 선택이 맞을 때",
+    summary: "짧은 회의부터 넣었더니 회의 수가 줄어드는 데서 출발해 교환 논증, 완전 탐색과 비교하는 스트레스 테스트, 회의실 배정, 거스름돈과 배낭에서 그리디가 틀리는 이유, 허프만 코딩, 음수 간선의 다익스트라를 Node 22로 따라간다.",
+    topic: "programming/algorithms/techniques",
+    tags: ["Algorithm", "JavaScript"],
+    date: "2026-10-25",
+    keywords: ["그리디 알고리즘", "교환 논증", "회의실 배정", "허프만 코딩"],
+  },
+  {
+    slug: "dynamic-programming",
+    title: "동적 계획법: 같은 질문에 두 번 답하지 않기",
+    summary: "큰 쿠폰부터 고르면 틀리고 전부 따지면 끝나지 않는 문제에서 출발해, 상태 정의와 점화식, 하향식과 상향식, 계단 오르기·배낭·LIS·편집 거리를 Node 22로 재 가며 푼다. 1차원 배낭의 반복 방향, 초기값, 반복문 순서 같은 흔한 실수도 다룬다.",
+    topic: "programming/algorithms/techniques",
+    tags: ["Algorithm", "JavaScript", "Performance"],
+    date: "2026-10-25",
+    keywords: ["동적 계획법", "점화식", "배낭 문제", "편집 거리", "최장 증가 부분 수열"],
+  },
+  {
     slug: "performance-metrics-measurement",
     title: "성능 지표는 어떻게 재나: 브라우저 API부터 RUM 집계까지",
     summary: "TTFB, FCP, Speed Index, TBT가 브라우저 엔트리와 프레임에서 어떻게 계산되는지 따라가고, web-vitals로 사용자 기기의 값을 모아 p75와 구간으로 묶는 법을 다룬다. 전체 숫자가 느린 사용자를 가리는 경우와 지표별로 고칠 곳까지 짚는다.",

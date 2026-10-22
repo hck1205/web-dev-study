@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 599편 · 토픽 87개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 602편 · 토픽 87개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -125,6 +125,17 @@
 
 ### Programming › Algorithms (`programming/algorithms`)
 
+#### `algorithms-overview` — 알고리즘 문제 접근법: 입력 크기에서 기법까지
+
+- 요약: n ≤ 10⁵인 문제에 O(n²) 풀이를 냈다가 시간 초과가 나는 데서 출발해, 입력 크기로 복잡도 예산을 잡고 문제가 묻는 것으로 기법을 좁히는 순서를 정리한다. 한 문제를 세 기법으로 풀어 비교하고, 면접 흐름과 자바스크립트 함정, 공부 순서를 링크로 묶었다.
+- 태그: Algorithm, JavaScript, Performance
+- 키워드: 알고리즘 문제 접근법, 답 이분 탐색, 복잡도 예산
+- 길이: 365줄
+- 소제목: 입력 크기가 허락하는 복잡도 / 문장의 모양이 기법을 좁힌다 / 한 문제를 세 가지로 풀어 보기 / 면접에서 문제를 받은 뒤의 순서 / 자바스크립트로 풀 때 조심할 것 / 이 지도로 공부하는 순서 / 직접 창을 밀어 보기 / 면접에서 나올 만한 질문
+- 직접 링크 →: data-structures-overview, big-o-notation, dynamic-programming, greedy-algorithms, ds-hash-map, ds-array-matrix, ds-graph-bfs-dfs, ds-union-find, ds-heap, ds-stack-queue-deque, ds-binary-tree-bst, ds-trie
+- 키워드 백링크 →: sd-maps-tiles-routing, bloom-filter
+- 이 글로 오는 글 ←: dynamic-programming, greedy-algorithms
+
 #### `big-o-notation` — Big O 표기법: 입력이 커질 때 얼마나 느려지나
 
 - 요약: 100건에서는 빠르던 코드가 10만 건에서 시간 초과가 나는 이유를 Big O로 따라간다. 자주 만나는 복잡도와 실제 숫자, 최악과 분할 상환, 공간 복잡도, 해시맵과 이진 탐색으로 줄이는 법, 자바스크립트에 숨은 반복문까지 다룬다.
@@ -134,7 +145,7 @@
 - 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 운영에서 n²은 이런 모양으로 드러난다 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-rewrite
 - 키워드 백링크 →: ds-binary-tree-bst, js-execution-context, ds-hash-map, js-memoization, sql-filtering-operators, event-loop, ds-array-matrix
-- 이 글로 오는 글 ←: data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, js-memoization
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, greedy-algorithms, js-memoization
 
 #### `data-structures-overview` — 자료구조 한눈에 고르기: 면접 단골 13개 지도
 
@@ -145,7 +156,7 @@
 - 소제목: 재료는 두 가지뿐이다 / 필요한 연산에서 출발하기 / 연산별 비용 한 장 / 문제 문장에 숨은 신호 / 구조 여러 개가 함께 일하는 문제 / 세기와 고르기를 따로 하기 / 대표 문제를 구조에 짝지어 두기 / 메모리를 내주고 시간을 사는 거래 / 고른 구조가 틀렸다는 신호 / 이 지도로 공부하는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, ds-trie, ds-hash-map, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-array-matrix, ds-linked-list, ds-graph-bfs-dfs, ds-union-find, sd-maps-tiles-routing, bloom-filter
 - 키워드 백링크 →: js-memoization, sd-autocomplete-trie
-- 이 글로 오는 글 ←: ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-stack-queue-deque, ds-trie, ds-union-find, system-design-study-path
+- 이 글로 오는 글 ←: algorithms-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-stack-queue-deque, ds-trie, ds-union-find, system-design-study-path
 
 ### Programming › Algorithms › Data Structures (`programming/algorithms/data-structures`)
 
@@ -158,7 +169,7 @@
 - 소제목: 칸이 붙어 있어서 인덱스가 공짜다 / 자리가 모자라면 더 큰 방으로 옮긴다 / 자바스크립트 배열은 속이 여러 가지다 / 미리 자리를 잡으면 빨라질까 / 양 끝에서 좁혀 오는 두 포인터 / 창을 밀면서 세기 / 미리 더해 두면 구간 합이 뺄셈 한 번 / 2차원도 메모리에서는 한 줄이다 / 행렬을 제자리에서 돌리기 / 배열 코드에서 반복해서 나오는 실수 / 배열이 아닌 걸 골라야 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-linked-list, ds-stack-queue-deque, js-array-mutation, big-o-notation, ds-hash-map, js-primitive-vs-reference, ds-heap, ds-binary-tree-bst, data-structures-overview
 - 키워드 백링크 →: js-prototype-chain, js-memoization
-- 이 글로 오는 글 ←: big-o-notation, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque, greedy-algorithms
 
 #### `ds-binary-tree-bst` — 이진 트리와 이진 탐색 트리: 순회, 지우기, 기울어진 트리
 
@@ -169,7 +180,7 @@
 - 소제목: 노드 하나에 자식 두 개 / 왼쪽은 작고 오른쪽은 크다 / 네 가지 순서로 훑기 / 재귀는 깊이만큼 스택을 먹는다 / 지우기는 자식 수에 따라 세 갈래 / 정렬된 키를 넣으면 리스트가 된다 / BST가 맞는지 검증하기 / 두 노드의 가장 가까운 공통 조상 / 트리를 꺼낼 때와 넣어 둘 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-hash-map, ds-heap, data-structures-overview, ds-graph-bfs-dfs, dom-basics, ds-stack-queue-deque, db-index, sd-leaderboard-sorted-set
 - 키워드 백링크 →: ds-linked-list, redis-basics
-- 이 글로 오는 글 ←: big-o-notation, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie
 
 #### `ds-graph-bfs-dfs` — 그래프와 BFS·DFS: 최단 경로, 사이클, 위상 정렬
 
@@ -180,7 +191,7 @@
 - 소제목: 점과 선을 메모리에 담는 두 방법 / 가까운 것부터 한 겹씩 넓히는 BFS / 한 갈래를 끝까지 가 보는 DFS / 재귀는 수천 단계에서 끊긴다 / 방향 그래프에서 고리 찾기 / 먼저 할 일부터 줄 세우기 / 선수 과목을 다 들을 수 있나 / 격자도 그래프다 / 선에 무게가 붙으면 BFS가 틀린다 / 문제를 보고 탐색을 고르는 법 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-trie, ds-union-find, data-structures-overview, ds-stack-queue-deque, ds-heap, sd-maps-tiles-routing, db-type-graph
 - 키워드 백링크 →: dom-basics, js-closures
-- 이 글로 오는 글 ←: data-structures-overview, db-type-graph, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, graph-rag, modular-monolith, pattern-composite, sd-maps-tiles-routing, sd-web-crawler-architecture, sql-cte-recursive, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, db-type-graph, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, graph-rag, greedy-algorithms, modular-monolith, pattern-composite, sd-maps-tiles-routing, sd-web-crawler-architecture, sql-cte-recursive, sqld-top-n-hierarchical-pivot
 
 #### `ds-hash-map` — 해시맵: 키를 칸 번호로 바꾸는 구조와 O(1)이 깨지는 순간
 
@@ -191,7 +202,7 @@
 - 소제목: 키를 칸 번호로 바꾸는 함수 / 같은 칸에 두 키가 떨어지면 / 얼마나 채우면 느려지나 / 객체와 Map은 같은 해시가 아니다 / 면접 단골 문제를 해시로 풀기 / 일부러 충돌을 만드는 공격 / 해시가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, ds-stack-queue-deque, ds-binary-tree-bst, ds-heap, data-structures-overview, js-object-methods, js-memoization, ds-trie, bloom-filter, consistent-hashing
 - 키워드 백링크 →: js-equality-coercion, db-index, sd-latency-numbers, db-sharding, event-loop, big-o-notation
-- 이 글로 오는 글 ←: big-o-notation, bloom-filter, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, k8s-kube-proxy-modes, lossy-counting, postgres-operations, redis-basics, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, sql-query-tuning, sqld-joins
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, bloom-filter, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, k8s-kube-proxy-modes, lossy-counting, postgres-operations, redis-basics, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, sql-query-tuning, sqld-joins
 
 #### `ds-heap` — 힙과 우선순위 큐: 배열 하나로 가장 작은 것 꺼내기
 
@@ -202,7 +213,7 @@
 - 소제목: 배열 하나에 트리를 접어 넣는다 / 넣으면 올라가고 꺼내면 내려간다 / 한꺼번에 만들면 O(n)이다 / 정렬된 배열이 아니라 힙인 이유 / 비교 함수 하나가 힙의 성격을 정한다 / 상위 k개만 남기기 / k개의 줄을 하나로 합치기 / 흐르는 숫자의 중앙값 / 힙이 일하는 곳 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-binary-tree-bst, ds-hash-map, js-array-mutation, percentile-latency, event-loop, js-timers-accuracy, sd-maps-tiles-routing, ds-graph-bfs-dfs
 - 키워드 백링크 →: db-type-wide-column, db-index-design
-- 이 글로 오는 글 ←: data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-union-find, quadtree, sd-maps-tiles-routing
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-union-find, greedy-algorithms, quadtree, sd-maps-tiles-routing
 
 #### `ds-linked-list` — 연결 리스트: 포인터 하나로 이어 붙인 노드
 
@@ -224,7 +235,7 @@
 - 소제목: 마지막에 넣은 것이 먼저 나온다 / 쌓인 것을 정리하며 쌓는 단조 스택 / 먼저 온 것이 먼저 나간다 / 너비 우선 탐색이 큐를 쓰는 이유 / 양쪽 끝이 다 열린 덱과 링 버퍼 / 창 안의 최댓값을 덱으로 따라가기 / React의 상태 업데이트도 큐에 쌓인다 / 큐가 쌓이기만 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, ds-array-matrix, ds-linked-list, js-execution-context, pattern-command, big-o-notation, message-queue-basics, event-loop, ds-graph-bfs-dfs, sd-stock-exchange-low-latency, react-rerender, backpressure, ds-heap, data-structures-overview
 - 키워드 백링크 →: sd-latency-numbers, centralized-logging-pipeline, js-memory-leak
-- 이 글로 오는 글 ←: data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list
 
 #### `ds-trie` — 트라이: 접두사를 길로 바꾸는 자료구조
 
@@ -235,7 +246,7 @@
 - 소제목: 해시 집합이 대답하지 못하는 질문 / 글자 하나가 길 하나 / 넣고, 찾고, 접두사 묻기 / 해시 집합도 사실 O(L)이다 / 끝 표시를 잊으면 생기는 일 / 점 하나가 길을 여러 개로 가른다 / 판 위에서 단어 여러 개를 한 번에 찾기 / 판 위에서 직접 찾아보기 / 단어를 지울 때는 빈 가지까지 치운다 / 노드 하나가 생각보다 무겁다 / 글자를 어떻게 자르느냐 / 트라이를 고를 때와 고르지 않을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-autocomplete-trie, data-structures-overview, layer-ip-routing-icmp, ds-binary-tree-bst, ds-graph-bfs-dfs
 - 키워드 백링크 →: js-memory-leak, ds-hash-map, big-o-notation
-- 이 글로 오는 글 ←: data-structures-overview, ds-graph-bfs-dfs, ds-hash-map, sd-autocomplete-trie
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, ds-hash-map, sd-autocomplete-trie
 
 #### `ds-union-find` — 유니온 파인드: 같은 그룹인지 거의 상수 시간에
 
@@ -246,7 +257,7 @@
 - 소제목: 배열 하나로 숲을 만든다 / 한 줄로 늘어진 나무 / 작은 나무를 큰 나무 밑에 / 지나온 길을 대표에 바로 붙인다 / 둘을 합치면 사실상 상수 / 재귀 find가 죽는 순간 / 그룹이 몇 개 남았나 / 싼 선부터 고르는 크루스칼 / 고리를 만드는 첫 간선 / 유니온 파인드가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-graph-bfs-dfs, data-structures-overview, ds-heap, ds-hash-map
 - 키워드 백링크 →: ds-linked-list, big-o-notation
-- 이 글로 오는 글 ←: data-structures-overview, ds-graph-bfs-dfs
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, greedy-algorithms
 
 ### Programming › Algorithms › For System Design (`programming/algorithms/system-design`)
 
@@ -259,7 +270,7 @@
 - 소제목: 비트 배열에 도장 세 개 찍기 / 거짓 양성 확률을 계산하고 재 보기 / 크기와 해시 개수를 고르는 법 / 계획보다 많이 넣으면 무너진다 / Redis에서 쓰기 (RedisBloom) / 지울 수 없는 이유와 대안 / 디스크를 읽기 전에 묻는다 / 한 번 보고 마는 것들을 거른다 / DB 안에도 있다: PostgreSQL bloom 인덱스 / 블룸 필터가 사고를 내는 방식 / 조금 틀려도 되는 질문에만 쓴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: caching-strategies, db-type-wide-column, hyperloglog, count-min-sketch, lossy-counting
 - 키워드 백링크 →: db-type-embedded, ds-hash-map, js-memoization, cdn-edge-anycast, redis-basics, sd-kv-store-write-read-path, dns
-- 이 글로 오는 글 ←: ab-testing, caching-strategies, count-min-sketch, css-performance, data-structures-overview, db-performance-map, db-transaction-isolation, db-type-wide-column, ds-hash-map, hyperloglog, lossy-counting, merkle-tree, sd-ad-click-exactly-once, sd-kv-store-failure-handling, sd-kv-store-write-read-path, sd-url-shortener-key-generation, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, system-design-study-path
+- 이 글로 오는 글 ←: ab-testing, algorithms-overview, caching-strategies, count-min-sketch, css-performance, data-structures-overview, db-performance-map, db-transaction-isolation, db-type-wide-column, ds-hash-map, hyperloglog, lossy-counting, merkle-tree, sd-ad-click-exactly-once, sd-kv-store-failure-handling, sd-kv-store-write-read-path, sd-url-shortener-key-generation, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, system-design-study-path
 
 #### `count-min-sketch` — Count-Min Sketch: 더 세는 쪽으로만 틀리는 고정 크기 표
 
@@ -379,6 +390,30 @@
 - 소제목: 두 쪽이 서로의 파일을 모른다 / 받는 쪽이 먼저 블록 지문을 보낸다 / 한 칸씩 미는 체크섬 / 약한 체크섬과 강한 해시를 같이 쓰는 이유 / 46MB 파일 한 줄을 고쳐 보내 보기 / 블록 크기가 정하는 것 / 델타 전송이 통하지 않는 파일 / 아예 보내지 않고 건너뛰는 판단 / 백업이 느리거나 이상할 때 보는 곳 / 다른 도구들이 고른 방법 / 굴려서 찾고 해시로 확인한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: merkle-tree, traffic-shaping-qos, sd-file-sync-block-upload
 - 이 글로 오는 글 ←: merkle-tree, sd-file-sync-block-upload
+
+### Programming › Algorithms › Techniques (`programming/algorithms/techniques`)
+
+#### `dynamic-programming` — 동적 계획법: 같은 질문에 두 번 답하지 않기
+
+- 요약: 큰 쿠폰부터 고르면 틀리고 전부 따지면 끝나지 않는 문제에서 출발해, 상태 정의와 점화식, 하향식과 상향식, 계단 오르기·배낭·LIS·편집 거리를 Node 22로 재 가며 푼다. 1차원 배낭의 반복 방향, 초기값, 반복문 순서 같은 흔한 실수도 다룬다.
+- 태그: Algorithm, JavaScript, Performance
+- 키워드: 동적 계획법, 점화식, 배낭 문제, 편집 거리, 최장 증가 부분 수열
+- 길이: 630줄
+- 소제목: 같은 질문을 몇 번이나 다시 묻나 / 표의 칸 하나가 무엇을 뜻하는지부터 정한다 / 위에서 내려가기와 아래에서 쌓기 / 계단 오르기는 두 칸만 기억하면 된다 / 배낭에 넣을지 말지 / 가장 길게 올라가는 줄 / 두 단어 사이의 거리 / 표를 만들 때 반복해서 나오는 실수 / 고른 것까지 알려 줘야 할 때 / 이 문제가 DP인지 알아보는 법 / 직접 표를 채워 보기 / 면접에서 나올 만한 질문
+- 직접 링크 →: greedy-algorithms, big-o-notation, js-memoization, ds-graph-bfs-dfs, js-primitive-vs-reference, algorithms-overview
+- 키워드 백링크 →: elasticsearch-inverted-index
+- 이 글로 오는 글 ←: algorithms-overview, elasticsearch-inverted-index, greedy-algorithms, js-memoization, k8s-certifications
+
+#### `greedy-algorithms` — 그리디 알고리즘: 지금 가장 좋아 보이는 선택이 맞을 때
+
+- 요약: 짧은 회의부터 넣었더니 회의 수가 줄어드는 데서 출발해 교환 논증, 완전 탐색과 비교하는 스트레스 테스트, 회의실 배정, 거스름돈과 배낭에서 그리디가 틀리는 이유, 허프만 코딩, 음수 간선의 다익스트라를 Node 22로 따라간다.
+- 태그: Algorithm, JavaScript
+- 키워드: 그리디 알고리즘, 교환 논증, 회의실 배정, 허프만 코딩
+- 길이: 584줄
+- 소제목: 세 가지 기준을 같은 일정에 대 보기 / 일찍 끝나는 회의가 왜 맞는가 / 회의실이 몇 개 필요한가 / 큰 동전부터 내면 틀리는 나라 / 쪼갤 수 있으면 그리디, 못 쪼개면 DP / 멀리 갈 수 있는 곳만 기억하기 / 자주 나오는 글자에 짧은 부호를 / 그래프에서 그리디가 맞을 때와 틀릴 때 / 현장에서 그리디를 만나는 곳 / 그리디인지 확인하는 순서 / 직접 구간을 골라 보기 / 면접에서 나올 만한 질문
+- 직접 링크 →: dynamic-programming, big-o-notation, ds-heap, ds-graph-bfs-dfs, ds-union-find, load-balancing-algorithms, algorithms-overview
+- 키워드 백링크 →: ds-array-matrix, sd-maps-tiles-routing
+- 이 글로 오는 글 ←: algorithms-overview, dynamic-programming
 
 ### Programming › Backend (`programming/backend`)
 
@@ -1297,8 +1332,8 @@
 - 길이: 485줄
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 클러스터가 yellow나 red로 바뀌면 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db, opensearch-cluster-operations
-- 키워드 백링크 →: db-index, rag-retrieval-quality, mongodb-document-model, loading-patterns, global-rollout-localization, transactional-outbox, kafka-basics, db-modeling-normalization
-- 이 글로 오는 글 ←: api-pagination-sorting, centralized-logging-pipeline, cqrs, db-architecture-by-scale, db-types-overview, http-methods, http-streaming-sse, network-partitions, opensearch-cluster-operations, ports-and-sockets, postgres-jsonb-search, rag-retrieval-quality, sd-autocomplete-trie, sd-email-storage-search, sd-music-streaming, sd-queue-logging-automation, structured-logging
+- 키워드 백링크 →: db-index, rag-retrieval-quality, mongodb-document-model, loading-patterns, dynamic-programming, global-rollout-localization, transactional-outbox, kafka-basics, db-modeling-normalization
+- 이 글로 오는 글 ←: api-pagination-sorting, centralized-logging-pipeline, cqrs, db-architecture-by-scale, db-types-overview, dynamic-programming, http-methods, http-streaming-sse, network-partitions, opensearch-cluster-operations, ports-and-sockets, postgres-jsonb-search, rag-retrieval-quality, sd-autocomplete-trie, sd-email-storage-search, sd-music-streaming, sd-queue-logging-automation, structured-logging
 
 #### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
 
@@ -2677,7 +2712,7 @@
 - 길이: 473줄
 - 소제목: 원시값 일곱 가지, 나머지는 전부 객체 / 변수 칸에 들어 있는 것 / 대입은 칸의 내용을 그대로 복사한다 / 함수에 넘길 때도 같은 규칙이다 / const는 객체를 얼리지 않는다 / 내용이 같아도 다른 객체다 / React가 화면을 바꾸지 않을 때 / 현장에서 이 규칙을 만나는 증상 / 복사할지 공유할지 고르는 기준 / 칸에 든 것만 복사된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-equality-coercion, js-truthy-falsy-typeof, js-pure-functions, js-shallow-deep-copy, js-var-let-const, js-object-methods, react-rerender, js-immutability-react, js-array-mutation
-- 이 글로 오는 글 ←: ds-array-matrix, fp-in-react, functional-programming-basics, javascript-roadmap, js-array-mutation, js-call-apply-bind, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-iife-module-pattern, js-memoization, js-object-methods, js-prototype-chain, js-shallow-deep-copy, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, js-var-let-const, react-rerender
+- 이 글로 오는 글 ←: ds-array-matrix, dynamic-programming, fp-in-react, functional-programming-basics, javascript-roadmap, js-array-mutation, js-call-apply-bind, js-destructuring, js-equality-coercion, js-first-class-callbacks, js-iife-module-pattern, js-memoization, js-object-methods, js-prototype-chain, js-shallow-deep-copy, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, js-var-let-const, react-rerender
 
 #### `js-scope-lexical` — 스코프와 렉시컬 스코프: 이름은 어디서 찾나
 
@@ -2908,8 +2943,8 @@
 - 길이: 505줄
 - 소제목: 같은 입력이면 같은 답이라는 약속 / 캐시 키가 결과를 결정한다 / 버리지 않는 캐시는 메모리 누수다 / 객체를 키로 쓸 때는 WeakMap / Promise를 기억하면 요청이 하나로 합쳐진다 / 기억하는 비용이 계산보다 클 때 / useMemo는 칸이 하나뿐인 캐시다 / 연습: 크기 제한이 있는 memoize / 빠르게 틀리지 않으려면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-pure-functions, js-closures, react-rerender, big-o-notation, js-memory-leak, caching-strategies, client-data-cache, js-immutability-react, garbage-collection
-- 키워드 백링크 →: json-crud-http, rendering-strategies, redis-basics, js-primitive-vs-reference, dns
-- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-concepts-map, caching-strategies, client-data-cache, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, fp-in-react, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-memory-leak, js-pure-functions, react-rerender, sd-url-shortener-key-generation
+- 키워드 백링크 →: json-crud-http, rendering-strategies, dynamic-programming, redis-basics, js-primitive-vs-reference, dns
+- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-concepts-map, caching-strategies, client-data-cache, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, dynamic-programming, fp-in-react, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-memory-leak, js-pure-functions, react-rerender, sd-url-shortener-key-generation
 
 #### `js-pure-functions` — 순수 함수와 부수 효과: 같은 입력, 같은 결과, 남지 않는 흔적
 
@@ -3370,7 +3405,7 @@
 - 길이: 681줄
 - 소제목: 다섯 개 시험이 재는 것은 서로 다르다 / 숫자로 보는 시험 형식 / 영역 비중이 공부 순서를 정한다 / 플랫폼 쪽으로 넓어진 자격증 / 시험 당일 화면 안에서 일어나는 일 / 문제마다 컨텍스트부터 바꾼다 / YAML은 쓰지 말고 뽑는다 / 필드 이름이 기억나지 않을 때 / 명령형으로 끝나는 문제들 / 연습 환경은 셋으로 나눠 쓴다 / 6주 준비 계획 / 120분을 나눠 쓰는 법 / 시험장에서 자주 잃는 점수 / 자격증이 증명하는 것과 증명하지 못하는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-learning-roadmap, k8s-pod-troubleshooting, kubectl-essentials, k8s-architecture, k8s-node-maintenance, k8s-coredns, k8s-rbac, k8s-cluster-upgrade, k8s-etcd-backup, k8s-certificates-pki, helm-basics, kustomize-basics, k8s-crd, k8s-operators, k8s-service-types, k8s-network-policy, k8s-gateway-api, kubernetes-ingress, k8s-cni-pod-network, k8s-deployment, k8s-configmap, k8s-secret, k8s-hpa, k8s-pod-scheduling, k8s-pod-resources, k8s-pv-pvc, k8s-storageclass-snapshots, dockerfile-image-layers, k8s-job-cronjob, k8s-daemonset, k8s-pod-multicontainer, blue-green-deployment, canary-release, k8s-feature-maturity, k8s-pod-probes, k8s-admission-control, k8s-serviceaccount-tokens, k8s-security-context, linux-files-permissions, k8s-pod-security-admission, service-mesh, k8s-audit-logging, helm-dependencies-oci-gitops, k8s-deploy-pipeline-eks, distributed-tracing, k8s-kube-proxy-modes, packet-capture-tcpdump, kubeconfig-contexts, yaml-for-k8s, local-k8s-kind-minikube, linux-systemd-systemctl, k8s-api-objects, k8s-labels-selectors
-- 키워드 백링크 →: observability-basics, k8s-statefulset, gateway, iptables-basics, cron-jobs, microservices, cilium-ebpf, ci-cd-basics, autoscaling, db-type-key-value, dns, webhooks
+- 키워드 백링크 →: observability-basics, k8s-statefulset, gateway, iptables-basics, cron-jobs, microservices, cilium-ebpf, ci-cd-basics, autoscaling, dynamic-programming, db-type-key-value, dns, webhooks
 - 이 글로 오는 글 ←: k8s-learning-roadmap
 
 #### `k8s-deploy-pipeline-eks` — push에서 EKS까지 배포 파이프라인
@@ -3742,7 +3777,7 @@
 - 소제목: 실험 무대: 서버 셋, 요청 2만 개 / 차례대로 돌리면 느린 서버가 무너진다 / 지금 덜 바쁜 서버로 / 모두가 같은 서버를 고를 때 / 둘만 뽑아서 비교하기 / 같은 키는 같은 서버로 / 응답 시간을 보는 방법들 / 무엇을 고를까 / 분배가 이상할 때 확인하는 순서 / 같은 숫자, 다른 부하 / 면접에서 나올 만한 질문
 - 직접 링크 →: load-balancer-basics, nginx-reverse-proxy, consistent-hashing, osi-in-practice
 - 키워드 백링크 →: iptables-nat, realtime-communication, iptables-basics, service-mesh, http-versions, nat-traversal, cookie-session-login, grpc, caching-strategies
-- 이 글로 오는 글 ←: api-gateway-use-cases, canary-release, cdn-edge-anycast, consistent-hashing, devops-networking-roadmap, grpc, latency-bandwidth-throughput, load-balancer-basics, networking-essentials-map, nginx-reverse-proxy, pattern-strategy, reverse-proxy-lb-api-gateway, sd-load-balancer-stateless, system-design-concepts-map
+- 이 글로 오는 글 ←: api-gateway-use-cases, canary-release, cdn-edge-anycast, consistent-hashing, devops-networking-roadmap, greedy-algorithms, grpc, latency-bandwidth-throughput, load-balancer-basics, networking-essentials-map, nginx-reverse-proxy, pattern-strategy, reverse-proxy-lb-api-gateway, sd-load-balancer-stateless, system-design-concepts-map
 
 #### `nat-traversal` — NAT traversal: STUN, 홀 펀칭, TURN, ICE
 
@@ -6280,7 +6315,7 @@
 - 소제목: 세계 지도를 그림 한 장으로 보내면 / 둥근 지구를 네모로 펴기 / 확대 단계마다 넷으로 쪼갠다 / 타일은 미리 그려 CDN에 둔다 / 저장 공간과 비어 있는 바다 / 그림 대신 도형을 보내는 벡터 타일 / 교차로는 점, 도로는 선 / 가까운 곳부터 확정하는 다익스트라 / 목적지 쪽으로 기울이는 A* / 그래프가 크면 타일로 자른다 / 먼 길은 굵은 도로만 본다 / 현장에서 길 찾기가 틀리는 순간 / 다음 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-nearby-friends, sd-maps-location-eta, sd-proximity-service, http-caching-cdn, db-type-graph
 - 키워드 백링크 →: grpc, ds-graph-bfs-dfs, sd-object-storage-architecture, ds-heap
-- 이 글로 오는 글 ←: data-structures-overview, ds-graph-bfs-dfs, ds-heap, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, system-design-study-path
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, system-design-study-path
 
 #### `sd-metrics-collection` — 지표 모니터링 시스템 설계 ①: pull과 push로 모으고 큐로 나르기
 
@@ -6814,6 +6849,7 @@
 - 광고 클릭 집계 → `sd-ad-click-stream-windows`
 - 교차 엔터티 → `sqld-entity-attribute-relationship`
 - 교착 상태 → `db-locking-deadlock`
+- 교환 논증 → `greedy-algorithms`
 - 구성 드리프트 → `iac-basics`
 - 구조 공유 → `js-immutability-react`
 - 구조 분해 → `js-destructuring`
@@ -6826,6 +6862,7 @@
 - 그래프 DB → `db-type-graph`
 - 그룹 커밋 → `sd-kv-store-write-read-path`
 - 그룹 코디네이터 → `sd-mq-consumer-groups`
+- 그리디 알고리즘 → `greedy-algorithms`
 - 기기별 커서 → `sd-chat-message-storage`
 - 기본 거부 정책 → `k8s-network-policy`
 - 기본값 매개변수 → `js-function-forms`
@@ -6880,6 +6917,7 @@
 - 단조 시계 → `clock-skew`
 - 단축 URL → `sd-url-shortener-api-redirect`
 - 단편화 → `layer-mtu-fragmentation`
+- 답 이분 탐색 → `algorithms-overview`
 - 대리 키 → `db-keys-denormalization`
 - 대상 추적 정책 → `autoscaling`
 - 대시보드 프로비저닝 → `grafana-dashboards`
@@ -6908,6 +6946,7 @@
 - 동기화 복제본 → `sd-mq-replication`
 - 동기화 토큰 → `csrf`
 - 동시 사용자 수 → `api-scaling-ladder`
+- 동적 계획법 → `dynamic-programming`
 - 동적 렌더링 → `nextjs-static-dynamic-rendering`
 - 동적 배열 → `ds-array-matrix`
 - 동적 비밀 → `secrets-management`
@@ -7042,6 +7081,7 @@
 - 반정규화 → `db-keys-denormalization`
 - 방마다 매기는 번호 → `sd-chat-message-storage`
 - 배관 명령 → `pattern-facade`
+- 배낭 문제 → `dynamic-programming`
 - 배럴 파일 → `code-splitting`
 - 배제 제약 → `postgres-data-types`
 - 배치 처리 → `batch-processing`
@@ -7078,6 +7118,7 @@
 - 복사 깊이 → `js-shallow-deep-copy`
 - 복식부기 → `sd-payment-flow`
 - 복원 테스트 → `backup-strategy`
+- 복잡도 예산 → `algorithms-overview`
 - 복제 슬롯 → `db-replication-sharding`
 - 복제 지연 → `db-replication-sharding`
 - 복제본 승격 → `sd-db-replication-intro`
@@ -7258,6 +7299,7 @@
 - 안정화 창 → `k8s-hpa`
 - 안티 엔트로피 → `eventual-consistency`
 - 안티 조인 → `sql-joins-in-practice`
+- 알고리즘 문제 접근법 → `algorithms-overview`
 - 알림 로그 → `sd-notification-reliability`
 - 알림 저장소 → `sd-metrics-storage-alerting`
 - 알림 평가기 → `sd-metrics-storage-alerting`
@@ -7444,6 +7486,7 @@
 - 전파 지연 → `latency-bandwidth-throughput`
 - 점수 구간 샤딩 → `sd-leaderboard-scaling`
 - 점프 해시 → `consistent-hashing`
+- 점화식 → `dynamic-programming`
 - 접근자 속성 → `js-object-methods`
 - 접두사 샤딩 → `sd-autocomplete-data-pipeline`
 - 접속 상태 표시 → `sd-chat-presence`
@@ -7515,6 +7558,7 @@
 - 최상위 await → `js-async-await`
 - 최소 공통 조상 → `ds-binary-tree-bst`
 - 최장 접두사 일치 → `layer-ip-routing-icmp`
+- 최장 증가 부분 수열 → `dynamic-programming`
 - 최종 일관성 → `db-consistency-cap`
 - 추상 팩토리 → `pattern-abstract-factory`
 - 추정 롤백 → `distributed-transactions-2pc`
@@ -7649,6 +7693,7 @@
 - 페이아웃 → `sd-payment-flow`
 - 페인트 기록 → `browser-rendering-pipeline`
 - 펜싱 토큰 → `distributed-lock`
+- 편집 거리 → `dynamic-programming`
 - 평균 메모리 접근 시간 → `caching-concepts-map`
 - 포스트모템 → `postmortems`
 - 포워드 인증 → `api-gateway-use-cases`
@@ -7725,6 +7770,7 @@
 - 행 단위 보안 → `postgres-roles-security`
 - 행 우선 → `ds-array-matrix`
 - 허용 지연 → `sd-ad-click-stream-windows`
+- 허프만 코딩 → `greedy-algorithms`
 - 험블 오브젝트 → `clean-architecture`
 - 헥사고날 아키텍처 → `hexagonal-architecture`
 - 헬스 체크 → `osi-in-practice`
@@ -7740,6 +7786,7 @@
 - 홈 리전 → `multi-region`
 - 화살표 함수 → `js-function-forms`
 - 황금 신호 → `monitoring-basics`
+- 회의실 배정 → `greedy-algorithms`
 - 흐름 로그 → `network-flow-logs`
 - 흐름 제어 → `tcp-reliability-congestion`
 - 희소 배열 → `js-array-transform`
@@ -9007,6 +9054,11 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `algorithms-overview` ↔ `greedy-algorithms`
+- `algorithms-overview` ↔ `dynamic-programming`
+- `greedy-algorithms` ↔ `dynamic-programming`
+- `dynamic-programming` ↔ `js-memoization`
+- `dynamic-programming` ↔ `elasticsearch-inverted-index`
 - `performance-metrics-measurement` ↔ `lighthouse-explained`
 - `performance-metrics-measurement` ↔ `frontend-performance-map`
 - `performance-metrics-measurement` ↔ `core-web-vitals`

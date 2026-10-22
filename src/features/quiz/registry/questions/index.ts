@@ -4,6 +4,7 @@ import { ACID_TRANSACTIONS } from "./acid-transactions";
 import { ACID_VS_BASE } from "./acid-vs-base";
 import { AGENTIC_RAG } from "./agentic-rag";
 import { ALERTING } from "./alerting";
+import { ALGORITHMS_OVERVIEW } from "./algorithms-overview";
 import { ANIMATION_PATTERNS } from "./animation-patterns";
 import { ANIMATION_PERFORMANCE } from "./animation-performance";
 import { ANSIBLE_NETWORK_AUTOMATION } from "./ansible-network-automation";
@@ -122,6 +123,7 @@ import { DS_LINKED_LIST } from "./ds-linked-list";
 import { DS_STACK_QUEUE_DEQUE } from "./ds-stack-queue-deque";
 import { DS_TRIE } from "./ds-trie";
 import { DS_UNION_FIND } from "./ds-union-find";
+import { DYNAMIC_PROGRAMMING } from "./dynamic-programming";
 import { EDGE_CACHING } from "./edge-caching";
 import { EKS_CLUSTER_BASICS } from "./eks-cluster-basics";
 import { ELASTICSEARCH_INVERTED_INDEX } from "./elasticsearch-inverted-index";
@@ -177,6 +179,7 @@ import { GO_CONCURRENCY_BASICS } from "./go-concurrency-basics";
 import { GRAFANA_DASHBOARDS } from "./grafana-dashboards";
 import { GRAPH_RAG } from "./graph-rag";
 import { GRAPHQL_BASICS } from "./graphql-basics";
+import { GREEDY_ALGORITHMS } from "./greedy-algorithms";
 import { GRPC } from "./grpc";
 import { HEALTH_CHECKS } from "./health-checks";
 import { HELM_BASICS } from "./helm-basics";
@@ -606,6 +609,7 @@ export const QUESTION_SETS = [
   ACID_VS_BASE,
   AGENTIC_RAG,
   ALERTING,
+  ALGORITHMS_OVERVIEW,
   ANIMATION_PATTERNS,
   ANIMATION_PERFORMANCE,
   ANSIBLE_NETWORK_AUTOMATION,
@@ -724,6 +728,7 @@ export const QUESTION_SETS = [
   DS_STACK_QUEUE_DEQUE,
   DS_TRIE,
   DS_UNION_FIND,
+  DYNAMIC_PROGRAMMING,
   EDGE_CACHING,
   EKS_CLUSTER_BASICS,
   ELASTICSEARCH_INVERTED_INDEX,
@@ -779,6 +784,7 @@ export const QUESTION_SETS = [
   GRAFANA_DASHBOARDS,
   GRAPH_RAG,
   GRAPHQL_BASICS,
+  GREEDY_ALGORITHMS,
   GRPC,
   HEALTH_CHECKS,
   HELM_BASICS,

@@ -2,6 +2,54 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "algorithms-overview": {
+    "links": [
+      "data-structures-overview",
+      "big-o-notation",
+      "dynamic-programming",
+      "greedy-algorithms",
+      "ds-hash-map",
+      "ds-array-matrix",
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "ds-heap",
+      "ds-stack-queue-deque",
+      "ds-binary-tree-bst",
+      "ds-trie"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing",
+      "bloom-filter"
+    ]
+  },
+  "greedy-algorithms": {
+    "links": [
+      "dynamic-programming",
+      "big-o-notation",
+      "ds-heap",
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "load-balancing-algorithms",
+      "algorithms-overview"
+    ],
+    "mentions": [
+      "ds-array-matrix",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "dynamic-programming": {
+    "links": [
+      "greedy-algorithms",
+      "big-o-notation",
+      "js-memoization",
+      "ds-graph-bfs-dfs",
+      "js-primitive-vs-reference",
+      "algorithms-overview"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index"
+    ]
+  },
   "performance-metrics-measurement": {
     "links": [
       "core-web-vitals",
@@ -3883,6 +3931,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "rendering-strategies",
+      "dynamic-programming",
       "redis-basics",
       "js-primitive-vs-reference",
       "dns"
@@ -4775,6 +4824,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cilium-ebpf",
       "ci-cd-basics",
       "autoscaling",
+      "dynamic-programming",
       "db-type-key-value",
       "dns",
       "webhooks"
@@ -11596,6 +11646,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rag-retrieval-quality",
       "mongodb-document-model",
       "loading-patterns",
+      "dynamic-programming",
       "global-rollout-localization",
       "transactional-outbox",
       "kafka-basics",
