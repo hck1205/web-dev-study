@@ -2,6 +2,104 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "fe-sd-news-feed": {
+    "links": [
+      "sd-news-feed-publishing",
+      "sd-news-feed-retrieval",
+      "frontend-system-design-interview",
+      "frontend-state-architecture",
+      "frontend-as-distributed-system",
+      "rendering-strategies",
+      "api-pagination-sorting",
+      "rendering-performance-optimization",
+      "scroll-triggered-intersection-observer",
+      "image-optimization",
+      "core-web-vitals",
+      "realtime-communication",
+      "client-data-cache",
+      "loading-patterns",
+      "performance-metrics-measurement",
+      "frontend-error-tracking",
+      "error-budgets"
+    ],
+    "mentions": [
+      "graphql-basics",
+      "sd-split-web-and-db",
+      "sli-slo",
+      "db-modeling-normalization",
+      "gateway",
+      "js-currying-partial"
+    ]
+  },
+  "frontend-as-distributed-system": {
+    "links": [
+      "frontend-system-design-interview",
+      "frontend-state-architecture",
+      "fe-sd-news-feed",
+      "retries",
+      "idempotency-key",
+      "frontend-browser-cache",
+      "client-data-cache",
+      "optimistic-locking",
+      "browser-storage",
+      "clock-skew",
+      "code-splitting",
+      "api-versioning",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "resilience-patterns",
+      "cors",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "frontend-state-architecture": {
+    "links": [
+      "frontend-system-design-interview",
+      "frontend-as-distributed-system",
+      "client-data-cache",
+      "rendering-csr-spa",
+      "html-form-http",
+      "js-immutability-react",
+      "fp-in-react",
+      "react-rerender",
+      "browser-storage"
+    ],
+    "mentions": [
+      "loading-patterns",
+      "db-modeling-normalization"
+    ]
+  },
+  "frontend-system-design-interview": {
+    "links": [
+      "sd-autocomplete-trie",
+      "frontend-state-architecture",
+      "frontend-as-distributed-system",
+      "fe-sd-news-feed",
+      "api-pagination-sorting",
+      "race-conditions",
+      "debounce-throttle",
+      "browser-fetch",
+      "client-data-cache",
+      "react-rerender",
+      "core-web-vitals",
+      "code-splitting",
+      "performance-metrics-measurement",
+      "frontend-error-tracking",
+      "rendering-strategies",
+      "loading-patterns"
+    ],
+    "mentions": [
+      "html-form-http",
+      "http-caching-cdn",
+      "sd-split-web-and-db",
+      "lossy-counting",
+      "sd-cache-and-cdn-tier",
+      "gateway"
+    ]
+  },
   "linux-network-tuning": {
     "links": [
       "tcp-connection-lifecycle",
@@ -12251,6 +12349,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization",
       "js-function-forms",
       "js-pure-functions",
+      "frontend-state-architecture",
       "debounce-throttle",
       "js-primitive-vs-reference"
     ]

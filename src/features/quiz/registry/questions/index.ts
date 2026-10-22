@@ -146,15 +146,19 @@ import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
 import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
+import { FE_SD_NEWS_FEED } from "./fe-sd-news-feed";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
 import { FP_COMPOSITION_PIPE } from "./fp-composition-pipe";
 import { FP_FUNCTORS_MONADS_JS } from "./fp-functors-monads-js";
 import { FP_IN_REACT } from "./fp-in-react";
+import { FRONTEND_AS_DISTRIBUTED_SYSTEM } from "./frontend-as-distributed-system";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { FRONTEND_ERROR_TRACKING } from "./frontend-error-tracking";
 import { FRONTEND_MONOREPO } from "./frontend-monorepo";
 import { FRONTEND_PERFORMANCE_MAP } from "./frontend-performance-map";
+import { FRONTEND_STATE_ARCHITECTURE } from "./frontend-state-architecture";
+import { FRONTEND_SYSTEM_DESIGN_INTERVIEW } from "./frontend-system-design-interview";
 import { FUNCTIONAL_PROGRAMMING_BASICS } from "./functional-programming-basics";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
@@ -775,15 +779,19 @@ export const QUESTION_SETS = [
   FAILOVER,
   FASTAPI_BASICS,
   FAULT_TOLERANCE,
+  FE_SD_NEWS_FEED,
   FEATURE_FLAGS,
   FIRST_PAGE_FROM_POWER_ON,
   FP_COMPOSITION_PIPE,
   FP_FUNCTORS_MONADS_JS,
   FP_IN_REACT,
+  FRONTEND_AS_DISTRIBUTED_SYSTEM,
   FRONTEND_BROWSER_CACHE,
   FRONTEND_ERROR_TRACKING,
   FRONTEND_MONOREPO,
   FRONTEND_PERFORMANCE_MAP,
+  FRONTEND_STATE_ARCHITECTURE,
+  FRONTEND_SYSTEM_DESIGN_INTERVIEW,
   FUNCTIONAL_PROGRAMMING_BASICS,
   GARBAGE_COLLECTION,
   GATEWAY,

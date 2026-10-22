@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "fe-sd-news-feed",
+    title: "뉴스 피드 화면 설계: 가상화, 미리 부르기, 사진 자리, 새 글 띠",
+    summary: "뉴스 피드를 휴대폰 화면 쪽에서 설계한다. 응답 모양과 커서, 5,000개 목록의 가상화, 바닥에 닿기 전 다음 페이지, 사진 크기와 CLS, 새 글과 스크롤 앵커링, 뒤로 가기 위치 복원, 낙관적 좋아요와 관측 지표를 실제로 잰다.",
+    topic: "programming/frontend/system-design",
+    tags: ["Frontend", "System Design", "Performance", "React", "Browser"],
+    date: "2026-10-26",
+    keywords: ["뉴스 피드 화면", "스크롤 앵커링", "새 글 배너"],
+  },
+  {
+    slug: "frontend-as-distributed-system",
+    title: "분산 시스템으로서의 프런트엔드: 끊기는 네트워크, 여러 탭, 틀린 시계, 옛 코드",
+    summary: "응답만 사라진 주문은 다시 보내면 두 건이 된다. 오프라인 감지와 outbox, 브라우저가 몰래 다시 보내는 POST와 멱등성 키, 거꾸로 온 낙관적 업데이트 응답, 탭 사이 알림, 사용자 시계 보정, 배포 버전 차이를 Chromium에서 재현한다.",
+    topic: "programming/frontend/system-design",
+    tags: ["Frontend", "Browser", "System Design", "Architecture", "React"],
+    date: "2026-10-26",
+    keywords: ["배포 버전 차이", "BroadcastChannel", "멀티 탭 동기화", "오프라인 outbox"],
+  },
+  {
+    slug: "frontend-state-architecture",
+    title: "프런트엔드 상태 구조: 서버, URL, 폼, 화면, 전역 상태를 어디에 둘까",
+    summary: "필터를 useState에 두면 뒤로 가기에 사라진다. 상태를 원본이 사는 곳으로 나누고, 주소에 넣을 값, 같은 데이터를 두 곳에 두는 실수, 파생 값, Context가 모두를 다시 그리는 이유, 큰 폼의 렌더링을 React 앱으로 재 본다.",
+    topic: "programming/frontend/system-design",
+    tags: ["Frontend", "React", "System Design", "Architecture", "Performance"],
+    date: "2026-10-26",
+    keywords: ["URL 상태", "폼 상태", "상태 배치", "비제어 컴포넌트"],
+  },
+  {
+    slug: "frontend-system-design-interview",
+    title: "프런트엔드 시스템 디자인 면접: 자동완성 하나로 45분 따라가기",
+    summary: "같은 자동완성 문제도 프런트엔드 면접에서는 브라우저 안을 묻는다. 요구 사항, 컴포넌트, API 모양, 응답 순서와 취소, 한글 조합 입력, 콤보박스 접근성, 성능과 관측까지 실제로 재 보며 45분의 순서를 정리한다.",
+    topic: "programming/frontend/system-design",
+    tags: ["Frontend", "System Design", "React", "Browser", "Performance"],
+    date: "2026-10-26",
+    keywords: ["프런트엔드 시스템 디자인", "RADIO 프레임워크", "콤보박스 패턴"],
+  },
+  {
     slug: "linux-network-tuning",
     title: "리눅스 네트워크 한도 넘겨 보기: accept 큐, 임시 포트, 파일 디스크립터, conntrack",
     summary: "네트워크 네임스페이스 안에서 accept 큐, 임시 포트와 TIME_WAIT, 파일 디스크립터, conntrack 표를 차례로 넘쳐 보고 고치기 전후 숫자를 비교한다. 1초 지연, sys CPU 급증, 응답 없는 연결, table full이 각각 어느 한도인지 지표로 가리고, sysctl을 파일로 남기는 법과 컨테이너에서 값이 다른 이유까지 본다.",
