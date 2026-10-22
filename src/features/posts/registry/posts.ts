@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "performance-metrics-measurement",
+    title: "성능 지표는 어떻게 재나: 브라우저 API부터 RUM 집계까지",
+    summary: "TTFB, FCP, Speed Index, TBT가 브라우저 엔트리와 프레임에서 어떻게 계산되는지 따라가고, web-vitals로 사용자 기기의 값을 모아 p75와 구간으로 묶는 법을 다룬다. 전체 숫자가 느린 사용자를 가리는 경우와 지표별로 고칠 곳까지 짚는다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "Browser", "Core Web Vitals", "Frontend", "Observability"],
+    date: "2026-10-25",
+    keywords: ["Speed Index", "Total Blocking Time", "Navigation Timing", "web-vitals 라이브러리"],
+  },
+  {
+    slug: "lighthouse-explained",
+    title: "Lighthouse는 무엇을 재나: 점수 계산과 측정 방식",
+    summary: "Lighthouse가 페이지를 여는 순서, simulate와 devtools 스로틀링의 차이, 다섯 지표를 가중치와 로그 정규 곡선으로 점수 하나로 접는 과정을 직접 계산해 맞춰 본다. 점수가 회차마다 흔들리는 이유와 Lighthouse CI 단언의 함정까지 다룬다.",
+    topic: "programming/frontend/performance",
+    tags: ["Performance", "Browser", "Core Web Vitals", "Frontend", "CI/CD"],
+    date: "2026-10-25",
+    keywords: ["Lighthouse", "Lighthouse CI", "Lantern", "시뮬레이션 스로틀링"],
+  },
+  {
     slug: "image-optimization",
     title: "이미지 최적화: 포맷, 반응형 크기, 자리 잡기",
     summary: "사진 한 장을 JPEG·WebP·AVIF와 네 가지 폭으로 바꿔 바이트와 변환 시간을 재고, 브라우저가 srcset과 sizes로 어떤 파일을 고르는지 Chromium에서 확인한다. picture와 Accept 협상, width·height로 CLS 막기, loading=lazy의 실제 범위, 디코딩 메모리까지 다룬다.",

@@ -1,0 +1,521 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("performance-metrics-measurement");
+
+RUM(Real User Monitoring, 실제 사용자 브라우저에서 잰 값을 모으는 일)으로 상품 페이지의 INP를 모았더니 p75가 216ms다. 기준인 200ms를 살짝 넘었으니 핸들러를 조금 다듬으면 될 것 같다. 그런데 같은 데이터를 느린 기기만 떼어 보면 p75가 696ms다. 전체 숫자 하나가 느린 사용자의 사정을 가리고 있었다.
+
+이 숫자는 일부러 느리게 만든 데모 페이지를 Playwright로 24번 열어 모은 것이다. 절반은 그냥 열고, 절반은 크롬 개발자 도구 프로토콜로 네트워크를 늦추고 CPU를 4배 느리게 만들어 열었다. 지표를 제대로 쓰려면 이런 숫자가 브라우저 안에서 어떤 API로 만들어지고, 어떻게 서버로 와서, 어떤 식으로 묶여야 하는지 알아야 한다. 이 글은 그 과정을 지표 하나씩 따라간다.
+
+이 주제의 다른 글과 나눈 몫은 이렇다. LCP·INP·CLS가 무엇을 재고 어떤 기준으로 판정하는지는 [Core Web Vitals](/posts/core-web-vitals)에서, Lighthouse가 실험실에서 점수를 어떻게 만드는지는 [Lighthouse는 무엇을 재나](/posts/lighthouse-explained)에서 다뤘다. 여기서는 TTFB, FCP, Speed Index, TBT처럼 그 글들이 깊게 보지 않은 지표의 측정 원리와, 현장에서 직접 모으고 묶는 방법에 집중한다. 숫자는 모두 Chromium 141, Node 22, web-vitals 6.2.3, Lighthouse 13.5.0에서 직접 돌려 얻었다.
+
+## 지표마다 브라우저 API가 따로 있다
+
+브라우저는 성능 정보를 "엔트리"라는 기록으로 남긴다. 페이지 이동 한 번, 그림 한 번, 긴 작업 한 번이 각각 엔트리 하나다. 지표는 이 엔트리들을 정해진 규칙으로 계산한 결과다. 아래 그림은 어느 API에서 어느 지표가 나오는지 보여 준다.
+
+<ConceptDiagram
+  caption="엔트리 종류마다 나오는 지표가 다르다"
+  width={560}
+  height={340}
+  nodes={[
+    { id: "nav", label: "navigation", sub: "Navigation Timing", x: 120, y: 40, w: 180 },
+    { id: "paint", label: "paint", sub: "Paint Timing", x: 120, y: 95, w: 180 },
+    { id: "lcp", label: "LCP 엔트리", sub: "largest-contentful", x: 120, y: 150, w: 180 },
+    { id: "event", label: "event", sub: "Event Timing", x: 120, y: 205, w: 180 },
+    { id: "shift", label: "layout-shift", sub: "Layout Instability", x: 120, y: 260, w: 180 },
+    { id: "long", label: "longtask, LoAF", sub: "긴 작업 기록", x: 120, y: 315, w: 180 },
+    { id: "ttfb", label: "TTFB", x: 440, y: 40, w: 120 },
+    { id: "fcp", label: "FCP", x: 440, y: 95, w: 120 },
+    { id: "lcpm", label: "LCP", x: 440, y: 150, w: 120 },
+    { id: "inp", label: "INP", x: 440, y: 205, w: 120 },
+    { id: "cls", label: "CLS", x: 440, y: 260, w: 120 },
+    { id: "tbt", label: "TBT (실험실)", x: 440, y: 315, w: 120 },
+  ]}
+  edges={[
+    { from: "nav", to: "ttfb" },
+    { from: "paint", to: "fcp" },
+    { from: "lcp", to: "lcpm" },
+    { from: "event", to: "inp" },
+    { from: "shift", to: "cls" },
+    { from: "long", to: "tbt", dashed: true },
+  ]}
+/>
+
+엔트리는 모두 `PerformanceObserver`로 받는다. 관찰할 `type`을 정하고, `buffered: true`로 관찰을 시작하기 전에 생긴 것까지 달라고 한다. Speed Index만 예외다. 화면을 찍은 프레임을 비교해서 계산하는 지표라 브라우저 API가 없고, Lighthouse나 WebPageTest 같은 실험실 도구에서만 나온다. TBT도 긴 작업 엔트리로 비슷하게 셈할 수는 있지만 끝 시점(TTI)을 정하기 애매해서 현장 지표로는 쓰지 않는다.
+
+```js
+// 어떤 엔트리 종류를 이 브라우저가 지원하는지
+console.log(PerformanceObserver.supportedEntryTypes);
+```
+
+크롬 계열은 위 그림의 종류를 모두 지원한다. 다른 브라우저는 종류마다 지원 시점이 다르고 아직 없는 것도 있으니, 수집 코드는 지원하지 않는 종류를 조용히 건너뛰게 짠다. iOS 사용자가 많은 서비스라면 INP와 CLS 데이터가 일부 브라우저에서만 온다는 걸 집계할 때 염두에 둔다.
+
+## 첫 바이트가 오기까지
+
+TTFB(Time To First Byte)는 페이지 이동을 시작해서 HTML 응답의 첫 바이트가 올 때까지다. Navigation Timing의 `navigation` 엔트리 하나에 이동 과정의 시각이 단계별로 들어 있다. 데모 서버가 HTML을 600ms 늦게 주게 하고 엔트리를 꺼냈다. 출력은 시각 필드만 골라 소수 첫째 자리로 줄였다.
+
+```js
+const nav = performance.getEntriesByType("navigation")[0];
+console.log(nav.toJSON()); // requestStart, responseStart, ... 이 모두 들어 있다
+```
+
+```text
+{"name":"/good?ttfb=600","startTime":0,"redirectEnd":0,"domainLookupStart":0.5,"domainLookupEnd":0.5,
+ "connectStart":0.5,"connectEnd":0.5,"secureConnectionStart":0,"requestStart":4.4,
+ "responseStart":606.5,"responseEnd":607.4,"domContentLoadedEventEnd":627.4,"loadEventEnd":627.9,
+ "transferSize":2586,"nextHopProtocol":"http/1.1","type":"navigate"}
+  paint first-paint=652 first-contentful-paint=652
+```
+
+TTFB는 `responseStart`, 606.5ms다. 지연을 빼고 연 같은 페이지는 `responseStart`가 6ms, FCP가 52ms였다. 서버에서 600ms를 늦추자 FCP도 정확히 600ms 늦어진 652ms가 됐다. 첫 바이트가 오기 전에는 아무것도 그릴 수 없으니, TTFB는 FCP와 LCP의 바닥이다. 엔트리의 시각을 조각으로 나눠 보면 어디서 시간이 갔는지 보인다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="TTFB 606ms를 Navigation Timing 필드로 나눈 것"
+  base="TTFB 606.5ms"
+  separator=" = "
+  joiner=" + "
+  params={[
+    {
+      key: "redirect",
+      display: "리다이렉트 0",
+      title: "리다이렉트 (redirectEnd - startTime)",
+      description: "http에서 https로, 짧은 주소에서 긴 주소로 넘어가는 리다이렉트가 있으면 그 왕복이 통째로 들어간다. 광고 링크처럼 리다이렉트가 두세 번 이어지면 그것만으로 수백 ms다.",
+    },
+    {
+      key: "dns",
+      display: "DNS 0",
+      title: "DNS 조회 (domainLookupEnd - domainLookupStart)",
+      description: "이름을 IP로 바꾸는 시간이다. 이미 캐시에 있거나 같은 연결을 재사용하면 0이다. 첫 방문 모바일에서는 수십~수백 ms가 나오기도 한다.",
+    },
+    {
+      key: "connect",
+      display: "연결 0",
+      title: "TCP·TLS 연결 (connectEnd - connectStart)",
+      description: "TCP 핸드셰이크와 TLS 협상이다. https라면 secureConnectionStart부터 connectEnd까지가 TLS 몫이다. 로컬 http 데모라 0이다.",
+    },
+    {
+      key: "wait",
+      display: "서버 대기 602",
+      title: "요청 후 첫 바이트까지 (responseStart - requestStart)",
+      description: "606.5 - 4.4 = 602.1ms. 서버가 HTML을 만드는 시간과 네트워크 한 번 왕복이다. 이 데모에서는 서버가 일부러 기다린 600ms가 거의 전부다. 실제로는 DB 조회, SSR 렌더링, CDN 캐시 미스가 여기에 들어간다.",
+      required: true,
+      code: "responseStart 606.5 - requestStart 4.4 = 602.1",
+    },
+  ]}
+/>
+
+web-vitals 라이브러리의 attribution 빌드로 재면 같은 조각을 이름 붙여 준다. 실제로 받은 비컨 하나다.
+
+```text
+{"name":"TTFB","value":14.9,"rating":"good",
+ "attribution":{"waitingDuration":0.6,"dnsDuration":0,"connectionDuration":0,"requestDuration":14.3}}
+```
+
+`waitingDuration`은 이동을 시작해서 브라우저가 요청을 처리하기 시작할 때까지로, 주로 리다이렉트가 키운다. `requestDuration`은 요청부터 첫 바이트까지다. 라이브러리는 HTTP 캐시 확인 시간인 `cacheDuration`도 주는데, Service Worker가 응답하는 페이지라면 워커 시작 시간이 대개 여기에 들어간다(데모 수집 코드에서는 이 필드를 빼서 위 비컨에는 없다). 현장에서 TTFB가 나쁘면 어느 조각이 큰지 먼저 본다. 대기가 크면 리다이렉트, 캐시 확인이 크면 Service Worker, 연결이 크면 DNS·TLS와 CDN 위치, 요청이 크면 서버 처리와 캐시다.
+
+TTFB를 줄이는 일은 대부분 서버와 인프라 쪽이다. HTML을 CDN에 캐시하거나 정적으로 만들어 두면 서버 처리가 사라지고([렌더링 전략 고르기](/posts/rendering-strategies)), 리다이렉트를 한 번 줄이면 왕복 하나가 빠진다. 프런트엔드에서 할 수 있는 건 `<link rel="preconnect">`로 다른 출처 연결을 미리 여는 정도인데, 이건 HTML 자체가 아니라 그 뒤에 올 리소스의 연결 시간을 줄인다([리소스 힌트](/posts/resource-hints-loading)).
+
+## 처음 무언가 그려지는 순간
+
+FCP(First Contentful Paint)는 글자, 이미지, 캔버스처럼 내용이 있는 무언가가 처음 그려진 시각이다. 배경색만 칠한 순간은 `first-paint`로 따로 기록된다. 둘 다 `paint` 엔트리로 나온다.
+
+```js
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) console.log(e.name, Math.round(e.startTime));
+}).observe({ type: "paint", buffered: true });
+```
+
+FCP를 늦추는 건 그리기를 막는 리소스다. 데모의 `/bad`는 `<head>`에 800ms 걸리는 CSS와 동기 스크립트를 두었다. Resource Timing 엔트리에는 크롬 계열에서 `renderBlockingStatus` 필드가 있어서 그리기를 막은 리소스를 직접 알려 준다. `/bad`와 `/good`을 비교했다(파일, 막았는지, 요청 시작, 응답 끝).
+
+```text
+/bad  paint first-contentful-paint=1244
+      ["/slow.css","blocking",11,816]
+      ["/heavy.js","blocking",12,317]
+      longtask [818,400]
+
+/good paint first-contentful-paint=68
+      ["/light.js","non-blocking",9,13]
+```
+
+`/bad`의 스크립트는 317ms에 이미 도착했는데 818ms에야 실행됐다. 앞에 있는 CSS가 끝날 때까지 기다린 것이다. 스크립트는 자기보다 앞선 스타일시트가 적용된 상태를 볼 수 있어야 해서, 브라우저는 CSS가 끝나야 동기 스크립트를 실행한다. CSS 816ms, 그 뒤 스크립트 400ms, 그리고 나머지 파싱과 첫 그리기가 이어져 FCP가 1244ms가 됐다. `/good`은 핵심 CSS를 `<style>`로 넣고 스크립트에 `defer`를 붙여서 68ms에 그렸다.
+
+현장에서 FCP가 나쁜데 TTFB는 멀쩡하다면, 차이가 바로 이 구간이다. web-vitals의 FCP attribution은 이 차이를 `firstByteToFCP`로 준다.
+
+```text
+{"name":"FCP","value":1268,"rating":"good",
+ "attribution":{"timeToFirstByte":14.9,"firstByteToFCP":1253.1,"loadState":"complete"}}
+```
+
+첫 바이트 뒤 1253ms가 그리기를 막은 리소스와 파싱에 쓰였다는 뜻이다. FCP 기준은 1.8초 이하가 좋음이라 이 빠른 환경에서는 "good"이지만, 느린 기기 구간에서는 같은 페이지가 3초를 넘겼다. CSS를 어떻게 나눠 실을지는 [CSS 성능](/posts/css-performance)에서, 폰트가 FCP 텍스트를 늦추는 경우는 [웹 폰트 최적화](/posts/web-font-optimization)에서 다룬다.
+
+## 화면이 얼마나 빨리 채워지나
+
+FCP는 첫 글자 하나만 떠도 끝난다. 화면의 10%만 그려지고 나머지가 3초 동안 비어 있는 페이지와, 0.5초 만에 90%가 채워지는 페이지가 같은 FCP를 받을 수 있다. Speed Index는 이 차이를 잰다. 로딩 동안 찍은 프레임마다 마지막 화면과 얼마나 비슷한지(시각적 완성도)를 매기고, "아직 안 채워진 비율 × 그 시간"을 모두 더한다. 그래프로 그리면 완성도 곡선 위쪽의 빈 넓이다. 작을수록 빨리 채워진 것이다.
+
+Lighthouse는 이 계산에 `speedline-core`라는 라이브러리를 쓴다. Lighthouse로 trace를 저장한 뒤(`--save-assets`) 같은 라이브러리에 넣어 프레임별 완성도를 꺼냈다. throttling 없이(`provided`) 잰 기록이다.
+
+```text
+bad fastMode true SI 1586 | 0ms:0% 1279ms:33% 1296ms:31% 1309ms:75% 2456ms:100%
+   lighthouse SI 1586 FCP 1278
+good fastMode true SI 413 | 0ms:0% 148ms:76% 1255ms:100%
+   lighthouse SI 413 FCP 147
+```
+
+라이브러리가 낸 값이 Lighthouse 보고서의 Speed Index와 정확히 같다. 아래 그림에서 `/bad`의 1586ms가 쌓이는 과정을 보자.
+
+<AlgoTrace
+  caption="/bad 페이지의 Speed Index 1586ms 계산"
+  memoryLabel="빈 넓이"
+  cells={["0ms 0%", "1279 33%", "1296 31%", "1309 75%", "2456 100%"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["1279"],
+      caption: "0~1279ms 동안 화면은 0% 완성이다. 100% 비어 있었으니 1279 × 1.00 = 1279를 쌓는다.",
+    },
+    {
+      pointer: 1,
+      memory: ["1279", "11"],
+      caption: "1279ms에 33%가 됐다. 다음 프레임까지 17ms 동안 67%가 비어 있었다. 17 × 0.67 ≈ 11.",
+    },
+    {
+      pointer: 2,
+      memory: ["1279", "11", "9"],
+      caption: "1296ms에는 오히려 31%로 내려갔다. 완성도는 색 분포를 비교한 값이라 중간에 줄 수도 있다. 13 × 0.69 ≈ 9.",
+    },
+    {
+      pointer: 3,
+      memory: ["1279", "11", "9", "287"],
+      caption: "1309ms에 75%가 되고 2456ms까지 그대로다. 1147ms 동안 25%가 비어 있었다. 1147 × 0.25 ≈ 287.",
+    },
+    {
+      pointer: 4,
+      memory: ["1279", "11", "9", "287"],
+      caption: "2456ms에 마지막 이미지가 들어와 100%가 된다. 그 뒤로는 더할 게 없다.",
+    },
+    {
+      found: [0, 1, 2, 3, 4],
+      memory: ["SI ≈ 1586ms"],
+      caption: "1279 + 11 + 9 + 287 ≈ 1586ms. 첫 그리기 전 1.3초가 대부분을 차지한다. FCP를 당기면 Speed Index도 거의 그만큼 준다.",
+    },
+  ]}
+/>
+
+마지막 단계가 Speed Index의 성격을 보여 준다. 처음 비어 있는 시간은 100% 비율로 들어가니 가장 비싸다. `/good`은 148ms에 76%를 채워서 늦게 들어온 배너 하나가 남은 24%를 1.1초 동안 미뤘는데도 413ms다. 첫 화면의 큰 덩어리를 일찍 그리는 것이 Speed Index를 줄이는 가장 확실한 방법이다. 반대로 스켈레톤 화면은 완성도 계산에서 "마지막 화면과 다른 그림"이라 기대만큼 점수를 올려 주지 않을 수 있다.
+
+## 막힌 시간을 더하는 법
+
+TBT(Total Blocking Time)는 FCP부터 TTI(Time To Interactive, 메인 스레드가 한동안 조용해지는 시점)까지, 50ms를 넘긴 작업의 넘친 부분을 모두 더한 값이다. 사용자가 그 사이에 눌렀다면 기다렸을 시간의 합이다. 실험실 지표지만 원리는 브라우저의 `longtask` 엔트리로 그대로 따라갈 수 있다.
+
+Lighthouse의 실제 구현(`@paulirish/trace_engine`의 `TBTUtils.js`)을 읽어 보면 경계 처리가 하나 더 있다. 작업이 FCP 전에 시작해서 FCP 뒤에 끝나면, FCP 이전 부분을 잘라 내고 남은 길이로 50ms 규칙을 다시 적용한다. TTI 쪽 끝도 같은 식으로 자른다. 아래 그림은 Lighthouse가 simulate로 계산한 `/good` 페이지의 작업 목록이다. FCP는 641ms였다.
+
+<AlgoTrace
+  caption="FCP 641ms 이후의 작업만, 잘라서 센다"
+  memoryLabel="막힌 시간"
+  cells={["602+83", "988+120", "1108+120", "1228+120", "1348+120"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["0"],
+      caption: "602ms에 시작한 83ms 작업은 685ms에 끝난다. FCP 641ms 이전을 잘라 내면 44ms만 남고, 50ms가 안 되니 0이다.",
+    },
+    {
+      pointer: 1,
+      memory: ["0", "70"],
+      caption: "988ms의 120ms 작업. 통째로 FCP 뒤라 120 - 50 = 70을 더한다.",
+    },
+    {
+      pointer: 2,
+      memory: ["0", "70", "70"],
+      caption: "1108ms의 120ms 작업도 70.",
+    },
+    {
+      pointer: 3,
+      memory: ["0", "70", "70", "70"],
+      caption: "1228ms 작업도 70.",
+    },
+    {
+      pointer: 4,
+      memory: ["0", "70", "70", "70", "70"],
+      caption: "1348ms 작업도 70.",
+    },
+    {
+      found: [1, 2, 3, 4],
+      memory: ["TBT 280ms"],
+      caption: "합이 280ms로 Lighthouse 보고서의 TBT와 같다. 83ms 작업은 긴 작업 목록에는 있지만 TBT에는 한 푼도 안 들어갔다.",
+    },
+  ]}
+/>
+
+브라우저에서 직접 재면 이렇게 된다. throttling 없이 연 `/bad`에서 받은 `longtask` 엔트리는 `[818, 400]`과 `[2719, 250]` 두 개였고 FCP는 1244ms였다. 400ms 작업은 FCP 전에 끝났으니 빠지고, 250ms 작업만 200ms를 보탠다. 같은 페이지를 Lighthouse의 `provided` 방식으로 잰 TBT가 201ms였으니 거의 같다.
+
+```js
+const tasks = [];
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) tasks.push([e.startTime, e.duration]);
+}).observe({ type: "longtask", buffered: true });
+```
+
+`longtask` 엔트리는 50ms 이상인 작업만 기록하고, 어떤 코드였는지는 거의 알려 주지 않는다. 그 프레임 안에서 무슨 스크립트가 돌았는지까지 보려면 크롬 123부터 들어온 Long Animation Frame(LoAF) 엔트리를 쓴다. 쓰는 법과 출력은 [이벤트 루프](/posts/event-loop) 글에서 다뤘다. 이 데모에서 `/bad`의 버튼을 누르자 LoAF 엔트리가 `invoker: "BUTTON#buy.onclick"`, 스크립트 길이 200ms로 범인을 바로 짚었다.
+
+같은 계산을 직접 짜 보자. 작업은 `[시작, 길이]` 배열이고, FCP와 TTI 사이만 센다.
+
+<CodePlayground
+  caption="TBT 계산하기 (Lighthouse 규칙)"
+  functionName="tbt"
+  initialCode={`function tbt(tasks, fcp, tti) {\n  // tasks: [[startTime, duration], ...] (ms)\n  // FCP 이전과 TTI 이후는 잘라 내고, 남은 길이에서 50ms를 넘는 부분만 더한다\n  return 0;\n}`}
+  solution={`function tbt(tasks, fcp, tti) {\n  if (tti <= fcp) return 0;\n  let sum = 0;\n  for (const [start, duration] of tasks) {\n    const end = start + duration;\n    if (duration < 50 || end < fcp || start > tti) continue;\n    const clipped = Math.min(end, tti) - Math.max(start, fcp);\n    if (clipped < 50) continue;\n    sum += clipped - 50;\n  }\n  return sum;\n}`}
+  tests={[
+    { label: "/bad 브라우저", args: [[[818, 400], [2719, 250]], 1244, 5000], expected: 200 },
+    { label: "/good simulate", args: [[[602, 83], [988, 120], [1108, 120], [1228, 120], [1348, 120]], 641, 5000], expected: 280 },
+    { label: "FCP에 걸친 작업", args: [[[1000, 300]], 1200, 5000], expected: 50 },
+    { label: "TTI에 걸친 작업", args: [[[900, 200]], 0, 1000], expected: 50 },
+    { label: "딱 50ms", args: [[[100, 49], [200, 50]], 0, 1000], expected: 0 },
+    { label: "작업 없음", args: [[], 500, 3000], expected: 0 },
+    { label: "TTI가 FCP보다 앞", args: [[[100, 300]], 500, 400], expected: 0 },
+  ]}
+/>
+
+"FCP에 걸친 작업"을 놓치기 쉽다. 300ms 작업이지만 FCP 이후는 100ms뿐이라 50ms만 센다. FCP 전의 긴 작업은 TBT에 안 들어가는 대신 FCP 자체를 늦춘다. 긴 작업을 FCP 앞으로 옮겨서 TBT를 줄이는 건 숫자 장난일 뿐 사용자에게 나아지는 게 없다.
+
+TBT를 줄이는 방법은 INP를 줄이는 방법과 같다. 긴 작업을 쪼개 메인 스레드를 양보하고([Core Web Vitals](/posts/core-web-vitals)), 처음에 필요 없는 코드는 아예 늦게 싣고([지연 로딩 전략](/posts/lazy-loading-strategies), [코드 스플리팅](/posts/code-splitting)), 레이아웃을 강제로 여러 번 돌리는 코드를 없앤다([렌더링 성능 최적화](/posts/rendering-performance-optimization)).
+
+## 사용자 브라우저에서 서버까지
+
+직접 모으는 흐름은 단순하다. 페이지에 web-vitals를 싣고, 값이 정해지면 비컨으로 보내고, 서버에서 쌓아서 묶는다. 아래 그림에서 다음을 누르면 비컨 하나가 집계까지 가는 길이 보인다.
+
+<SequenceDiagram
+  caption="지표 하나가 RUM 집계에 들어가기까지"
+  actors={[
+    { id: "page", label: "페이지" },
+    { id: "wv", label: "web-vitals" },
+    { id: "rum", label: "수집 서버" },
+    { id: "db", label: "집계" },
+  ]}
+  steps={[
+    {
+      from: "page",
+      to: "wv",
+      label: "onLCP(send)",
+      title: "콜백을 건다",
+      detail: "onTTFB, onFCP, onLCP, onCLS, onINP에 같은 전송 함수를 넘긴다. 라이브러리가 PerformanceObserver를 대신 걸고 규칙대로 계산한다.",
+    },
+    {
+      from: "wv",
+      to: "wv",
+      label: "값 확정",
+      title: "값이 정해질 때까지 기다린다",
+      detail: "TTFB와 FCP는 바로 정해진다. LCP는 첫 입력이나 탭 숨김 때, CLS와 INP는 탭이 숨겨질 때 최종값이 된다. 머무는 동안 계속 바뀌기 때문이다.",
+    },
+    {
+      from: "wv",
+      to: "page",
+      label: "send(metric)",
+      title: "전송 함수가 불린다",
+      detail: "name, value, rating, id, attribution이 든 객체를 받는다. attribution 빌드면 어느 요소, 어느 스크립트 때문인지가 같이 온다.",
+      payload: "{ name: \"INP\", value: 696, rating: \"poor\", ... }",
+    },
+    {
+      from: "page",
+      to: "rum",
+      label: "sendBeacon",
+      title: "페이지가 닫혀도 보낸다",
+      detail: "탭을 닫거나 다른 앱으로 넘어가는 순간에 보내야 하니 sendBeacon이나 keepalive fetch를 쓴다. 이 부분은 브라우저 fetch 글에서 다뤘다.",
+    },
+    {
+      from: "rum",
+      to: "db",
+      label: "구간별 저장",
+      title: "나눌 기준을 같이 저장한다",
+      detail: "페이지 유형, 기기 등급, 네트워크 종류, 배포 버전을 함께 남긴다. 나중에 나눠 볼 수 없는 기준은 처음부터 없는 것과 같다.",
+    },
+    {
+      from: "db",
+      to: "db",
+      label: "p75",
+      title: "평균이 아니라 p75로 묶는다",
+      detail: "구간마다 75번째 백분위수를 낸다. 전체 p75 하나만 보면 느린 구간이 가려진다.",
+    },
+  ]}
+/>
+
+데모 페이지에 넣은 수집 코드는 이 정도다. attribution에서 필요한 필드만 골라 크기를 줄였다.
+
+```js
+import { onTTFB, onFCP, onLCP, onCLS, onINP } from "web-vitals/attribution";
+
+function send(metric) {
+  const body = JSON.stringify({
+    page: location.pathname,
+    seg: deviceSegment(), // 기기·네트워크 구간
+    name: metric.name,
+    value: metric.value,
+    rating: metric.rating,
+    navigationType: metric.navigationType,
+    attribution: pickAttribution(metric.attribution),
+  });
+  navigator.sendBeacon("/rum", body);
+}
+
+onTTFB(send);
+onFCP(send);
+onLCP(send);
+onCLS(send);
+onINP(send);
+```
+
+`/bad`에서 버튼을 누른 방문의 INP와 CLS 비컨이다.
+
+```text
+{"page":"/bad","seg":"fast","name":"INP","value":208,"rating":"needs-improvement",
+ "attribution":{"inputDelay":0.5,"processingDuration":201.7,"presentationDelay":5.8,
+   "interactionTarget":"#buy","interactionType":"pointer","loadState":"complete",
+   "longestScript":{"url":"/bad?rum=1&seg=fast","invoker":"BUTTON#buy.onclick","subpart":"processing-duration","dur":200}}}
+{"page":"/bad","seg":"fast","name":"CLS","value":0.1933,"rating":"needs-improvement",
+ "attribution":{"largestShiftTarget":"html>body>p","largestShiftValue":0.1933,"loadState":"complete"}}
+```
+
+INP 쪽은 `longestScript`가 LoAF에서 뽑은 가장 긴 스크립트를 알려 준다. 버튼 클릭 핸들러가 처리 구간에서 200ms를 썼다는 것까지 한 줄에 있다. 이 정도면 대시보드에서 "INP 나쁜 상위 `interactionTarget`" 목록을 만들어 고칠 순서를 정할 수 있다. CLS 쪽 `largestShiftTarget`은 밀린 요소를 가리키니, 원인은 그 위에서 늦게 자리를 잡은 요소(이 데모에서는 배너와 크기 없는 이미지)에서 찾는다.
+
+`id`도 같이 보내는 게 좋다. CLS와 INP는 한 방문에서 값이 바뀌며 여러 번 보고될 수 있어서, 서버는 같은 `id`의 마지막 값만 쓴다. bfcache로 뒤로 가기 복원이 일어나면 라이브러리가 새 `id`로 다시 보고하고 `navigationType`이 `back-forward-cache`가 된다. 이 값들은 따로 묶어 본다. 복원된 페이지는 거의 즉시 뜨니 섞으면 LCP가 실제보다 좋아 보인다.
+
+## 숫자를 묶는 방법이 결론을 바꾼다
+
+처음 장면의 숫자를 전부 펼치면 이렇다. 페이지마다 빠른 구간 6번, 느린 구간 6번이다. 백분위수는 값을 정렬해 `ceil(0.75 × n)`번째를 고르는 방식으로 냈다.
+
+```text
+page  metric  n   p75(all)  p75(fast)  p75(slow)   mean(all)
+/bad CLS      12     0.298     0.1933      0.298       0.246
+/bad FCP      12      3024       1260       3028        2139
+/bad INP      12       216        208        696         298
+/bad LCP      12      3024       1292       3028        2152
+/good CLS     12         0          0          0           0
+/good FCP     12       660         56        680         358
+/good INP     11        16         16         16      14.545
+/good LCP     12      1828         76       1852     958.667
+```
+
+`/bad`의 INP 열두 개를 정렬해서 p75를 고르는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="전체 p75는 느린 구간의 꼬리를 못 본다"
+  memoryLabel="고른 값"
+  cells={["208", "208", "208", "208", "208", "208", "216", "216", "216", "240", "696", "744"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: [],
+      caption: "/bad의 INP 열두 개를 작은 것부터 늘어놓았다. 빠른 구간 여섯 개와 느린 구간 여섯 개가 섞여 있다.",
+    },
+    {
+      pointer: 8,
+      memory: ["전체 p75 216"],
+      caption: "ceil(0.75 × 12) = 9번째 값은 216ms다. 기준을 조금 넘었을 뿐이라 대수롭지 않아 보인다.",
+    },
+    {
+      pointer: 11,
+      memory: ["전체 p75 216", "평균 298"],
+      caption: "평균은 298ms다. 696과 744 두 개가 끌어올렸다. 평균은 꼬리 몇 개에 흔들리고, 무엇이 문제인지는 말해 주지 않는다.",
+    },
+    {
+      found: [5, 6, 7, 8, 10, 11],
+      memory: ["느린 p75 696"],
+      caption: "느린 구간 여섯 개(208, 216, 216, 216, 696, 744)만 보면 ceil(0.75 × 6) = 5번째, 696ms다. 느린 기기 사용자 넷 중 하나는 0.7초를 기다렸다.",
+    },
+  ]}
+/>
+
+느린 구간의 696, 744 두 방문은 모두 표시 지연이 500ms 안팎이었다. 핸들러는 다른 방문처럼 200ms에 끝났는데 그다음 프레임이 늦게 그려졌다는 뜻이다. 빠른 기계에서는 한 번도 나오지 않은 모양이라, 기기를 나눠 보지 않았다면 존재조차 몰랐을 문제다. 이럴 때 LoAF 엔트리를 같이 모으면 그 프레임에서 무엇이 돌았는지 볼 수 있다.
+
+`/good`의 LCP도 같은 이야기를 한다. 평균은 959ms, 전체 p75는 1828ms, 빠른 구간 p75는 76ms다. 빠른 구간과 느린 구간이 두 덩어리로 갈라져 있으면 평균은 어느 쪽도 대표하지 않는 가운데 숫자가 된다. 그래서 현장 지표는 p75로 묶고, 반드시 구간으로 나눈다. 나누는 기준으로 흔히 쓰는 것은 이렇다.
+
+- 기기: `navigator.hardwareConcurrency`, `navigator.deviceMemory`(크롬 계열만) 같은 값으로 저·중·고 등급을 나눈다. User-Agent의 기기 모델은 정확하지만 요즘 브라우저는 UA 정보를 줄여서 보내니 기대만큼 안 나올 수 있다.
+- 네트워크: `navigator.connection.effectiveType`(크롬 계열만)이 `4g`, `3g` 같은 값을 준다.
+- 페이지 유형: 주소 그대로가 아니라 `/product/:id`처럼 라우트 패턴으로 묶는다. 주소마다 따로 묶으면 표본이 너무 작아진다.
+- 배포 버전: 회귀가 어느 배포에서 시작됐는지 찾는 기준이다.
+
+표본 수도 같이 본다. 위 표는 구간당 여섯 개라 p75 하나가 값 하나에 좌우된다. 실제 서비스에서 구간을 잘게 나누면 이런 일이 금방 생긴다. 대시보드에 n을 함께 띄우고, 수백 개가 안 되는 구간의 p75는 믿지 않는다.
+
+## 현장 데이터만 보여 주는 함정
+
+느린 구간의 `/bad` LCP 여섯 개는 모두 3012~3036ms였고, LCP 요소가 상품 사진이 아니라 문단(`html>body>p`)이었다.
+
+```text
+{"page":"/bad","seg":"slow","name":"LCP","value":3028,"rating":"needs-improvement",
+ "attribution":{"timeToFirstByte":11.7,"resourceLoadDelay":0,"resourceLoadDuration":0,
+   "elementRenderDelay":3016.3,"target":"html>body>p"}}
+```
+
+이 데모는 페이지가 뜨고 2.5~3.5초 뒤에 버튼을 누른다. 느린 네트워크에서는 그때까지 780KB짜리 lazy 이미지가 다 오지 않았고, LCP는 첫 입력에서 기록을 멈추니 그 시점까지 가장 컸던 문단이 LCP가 됐다. 빠른 구간에서는 같은 페이지의 LCP가 `#hero`였다.
+
+실무에서 이런 일은 흔하다. 사용자가 빨리 스크롤하거나 누르는 페이지일수록 현장 LCP는 실제로 큰 그림이 뜬 시각보다 앞선 값을 기록한다. 그래서 RUM의 LCP가 생각보다 좋게 나왔다면 `target`의 분포부터 본다. LCP 요소가 의도한 히어로 이미지인 비율이 낮다면, 사용자가 그 이미지를 기다리다 못해 움직였다는 신호일 수도 있다. 반대로 실험실 측정은 아무도 누르지 않으니 항상 끝까지 기다린 LCP를 낸다. 두 숫자가 다른 이유가 하나 더 생긴 셈이다.
+
+## 나쁜 지표에서 고칠 곳으로
+
+지표가 나쁘다는 걸 확인했다면, 앞의 조각들을 보고 원인으로 간다. 데모에서 `/bad`를 `/good`으로 바꾼 일들과, 같은 증상일 때 볼 글을 묶었다.
+
+| 지표 | 먼저 볼 조각 | 흔한 원인 | 고치는 방향 |
+|---|---|---|---|
+| TTFB | `requestDuration`, `waitingDuration` | 느린 SSR, 캐시 미스, 리다이렉트 | CDN·정적 생성([렌더링 전략](/posts/rendering-strategies)), 리다이렉트 줄이기 |
+| FCP | `firstByteToFCP`, `renderBlockingStatus` | 차단 CSS, 동기 스크립트, 폰트 | 핵심 CSS 인라인([CSS 성능](/posts/css-performance)), `defer`, [웹 폰트 최적화](/posts/web-font-optimization) |
+| Speed Index | 프레임별 완성도 | 첫 화면을 JS가 그린다 | 서버에서 HTML로 보내기, 첫 화면 크기 줄이기([렌더링 파이프라인](/posts/browser-rendering-pipeline)) |
+| LCP | `resourceLoadDelay`, `target` | lazy 히어로, 늦게 발견되는 이미지, 큰 파일 | [이미지 최적화](/posts/image-optimization), [리소스 힌트](/posts/resource-hints-loading), [데이터 요청 최적화](/posts/data-fetching-optimization) |
+| TBT·INP | `longestScript`, `processingDuration` | 큰 번들, 긴 핸들러, 서드파티 | [번들러](/posts/bundler-basics)·[코드 스플리팅](/posts/code-splitting), [지연 로딩](/posts/lazy-loading-strategies), 작업 쪼개기 |
+| CLS | `largestShiftTarget` | 크기 없는 이미지, 늦게 끼는 배너 | `width`·`height`, 자리 미리 잡기, [렌더링 성능](/posts/rendering-performance-optimization) |
+
+데모에서 실제로 바꾼 건 네 가지다. CSS를 `<style>`로 넣고 스크립트를 `defer`로 바꿨다(FCP 1244ms → 68ms). 히어로 이미지에서 `loading="lazy"`를 빼고 `fetchpriority="high"`와 `width`·`height`를 줬다(빠른 구간 LCP p75 1292ms → 76ms). 배너 자리를 미리 120px 잡았다(CLS p75 0.298 → 0). 클릭 핸들러에서 버튼 글자를 먼저 바꾸고 무거운 일을 `setTimeout` 뒤로 미뤘다(INP p75 216ms → 16ms). 무거운 일의 양은 그대로다. 사용자가 보는 반응만 앞으로 당겼다.
+
+여러 지표를 한 번에 손대야 할 때 순서는 [프런트엔드 성능 지도](/posts/frontend-performance-map)에 정리했다.
+
+## 지표가 거짓말하는 순간들
+
+수집 코드를 넣고 나서 숫자가 이상하게 나오는 경우는 대개 측정 쪽 문제다.
+
+탭을 백그라운드에서 연 방문은 FCP와 LCP가 비정상적으로 크다. 숨겨진 탭은 그리기를 미루기 때문이다. web-vitals는 처음부터 숨겨져 있던 페이지의 LCP와 FCP를 보고하지 않는다. 직접 `PerformanceObserver`로 짠 코드라면 `document.visibilityState`를 보고 같은 처리를 해야 한다.
+
+Speculation Rules나 `<link rel="prerender">`로 미리 렌더링된 페이지는 사용자가 실제로 들어오기 전에 로딩이 끝나 있다. 이때 엔트리의 시각은 미리 렌더링을 시작한 때가 기준이라, 그대로 쓰면 음수에 가까운 이상한 값이 나온다. web-vitals는 Navigation Timing의 `activationStart`를 빼서 실제로 화면에 들어온 순간을 기준으로 맞춘다. 직접 짤 때 빠뜨리기 쉬운 부분이다.
+
+SPA에서 라우트를 옮기는 소프트 내비게이션은 지금의 지표 정의로는 새 페이지로 치지 않는다. 첫 페이지 LCP만 기록되고, 그 뒤 화면 전환의 느림은 INP에만 일부 나타난다. 크롬에서 소프트 내비게이션을 따로 재는 실험이 진행 중이지만 아직 표준 지표는 아니다. 라우트 전환 속도가 중요하다면 `performance.mark()`와 `measure()`로 직접 구간을 재서 같이 보낸다.
+
+```js
+performance.mark("route-start");
+await navigate("/product/7");
+performance.mark("route-end");
+const m = performance.measure("route", "route-start", "route-end");
+send({ name: "ROUTE", value: m.duration }); // 앞의 send를 재사용
+```
+
+비컨이 아예 안 오는 경우도 있다. 광고 차단기가 `/rum`, `/analytics` 같은 경로를 막거나, 페이지를 닫는 타이밍에 전송이 끊기는 경우다. 수집 경로 이름을 평범하게 짓고, 수집량을 페이지뷰 수와 비교해서 얼마나 빠지는지 본다. 빠지는 방문이 특정 브라우저나 기기에 몰려 있으면 그만큼 분포가 기운다.
+
+## 처음 장면으로 돌아가서
+
+INP p75 216ms와 696ms는 같은 데이터였다. 차이는 묶는 방법뿐이다. 지표는 브라우저 엔트리에서 나오고, 엔트리가 담은 조각(TTFB의 요청 대기, FCP의 첫 바이트 이후 시간, INP의 표시 지연, LCP의 target)이 고칠 곳을 가리킨다. 그 숫자를 p75로, 기기와 페이지 유형으로 나눠서 보면 전체 숫자가 가렸던 사용자가 드러난다. 실험실에서 그 구간을 다시 만들어 볼 때는 [Lighthouse는 무엇을 재나](/posts/lighthouse-explained)의 방법으로 돌아간다.
+
+## 면접에서 나올 만한 질문
+
+### 웹 성능 지표는 브라우저에서 어떻게 측정하나요?
+
+브라우저가 남기는 성능 엔트리를 `PerformanceObserver`로 받아서 계산한다. TTFB는 Navigation Timing의 `responseStart`, FCP는 `paint` 엔트리, LCP는 `largest-contentful-paint`, INP는 `event` 엔트리, CLS는 `layout-shift` 엔트리에서 나온다. 관찰을 늦게 시작해도 `buffered: true`로 지난 엔트리를 받는다. Speed Index는 화면 프레임 비교가 필요해서 브라우저 API가 없고 실험실 도구에서만 나온다.
+
+### TTFB가 나쁘면 무엇을 보나요?
+
+Navigation Timing을 조각으로 나눠서 리다이렉트, DNS, 연결, 요청 후 첫 바이트까지 중 어디가 큰지 본다. 대부분은 요청 후 대기, 즉 서버 처리와 캐시 미스다. HTML을 CDN에 캐시하거나 정적으로 생성하고, 불필요한 리다이렉트를 없앤다. TTFB는 FCP와 LCP의 바닥이라, 여기서 늘어난 시간은 그대로 뒤 지표에 더해진다.
+
+### Speed Index는 FCP와 무엇이 다른가요?
+
+FCP는 첫 내용이 그려진 한 시점이고, Speed Index는 로딩 동안 화면이 얼마나 빨리 채워졌는지를 넓이로 잰다. 프레임마다 시각적 완성도를 매기고 "안 채워진 비율 × 시간"을 더한다. 첫 그리기 전의 빈 화면이 100% 비율로 들어가서 가장 비싸고, 첫 화면의 큰 덩어리를 일찍 그리면 크게 준다.
+
+### TBT는 어떻게 계산하고, 왜 현장에서는 쓰지 않나요?
+
+FCP부터 TTI까지 50ms를 넘긴 작업마다 넘친 부분을 더한다. 작업이 FCP나 TTI 경계에 걸치면 바깥 부분을 잘라 내고 남은 길이로 다시 계산한다. 현장에서는 TTI라는 끝 시점을 안정적으로 정하기 어렵고, 실제 사용자의 입력이 있으니 그 입력의 지연인 INP를 직접 재는 게 낫다. 그래서 TBT는 실험실에서 INP 대신 쓰는 지표다.
+
+### RUM 데이터를 평균이 아니라 p75로 보는 이유와, 구간을 나눠야 하는 이유는요?
+
+평균은 꼬리 몇 개에 끌려가고, 빠른 사용자와 느린 사용자가 두 덩어리로 갈라져 있으면 어느 쪽도 대표하지 못한다. p75는 사용자 넷 중 셋이 겪는 수준이라 기준선으로 안정적이다. 그래도 전체 p75 하나는 느린 구간을 가린다. 데모에서 전체 INP p75는 216ms였지만 느린 기기만 보면 696ms였다. 기기 등급, 네트워크, 페이지 유형, 배포 버전으로 나누고 구간마다 표본 수를 같이 본다.
+
+### 현장 LCP가 실험실보다 좋게 나왔습니다. 믿어도 되나요?
+
+LCP는 첫 입력에서 기록을 멈추니, 사용자가 큰 이미지가 뜨기 전에 누르거나 스크롤하면 그 시점까지 가장 컸던 요소가 LCP가 된다. 데모의 느린 구간에서도 LCP 요소가 히어로 이미지가 아니라 문단이었다. 그래서 attribution의 `target` 분포를 같이 보고, 의도한 요소가 LCP인 비율을 확인한다. 백그라운드 탭과 bfcache 복원, 미리 렌더링된 방문이 섞였는지도 본다.
+
+### web-vitals 라이브러리를 쓰지 않고 직접 PerformanceObserver로 짜면 어떤 실수를 하기 쉬운가요?
+
+CLS와 INP를 페이지를 떠날 때까지 기다리지 않고 일찍 보내거나, 탭 숨김 때 보내지 않아 값을 잃는다. 처음부터 숨겨진 탭의 LCP·FCP를 걸러내지 않고, 미리 렌더링된 페이지에서 `activationStart`를 빼지 않는다. bfcache 복원을 새 방문으로 다시 재지 않는 것도 흔하다. 이런 규칙을 CrUX와 같게 맞춰 둔 게 web-vitals라서, 특별한 이유가 없으면 라이브러리를 쓰고 attribution 빌드로 원인 정보까지 받는다.

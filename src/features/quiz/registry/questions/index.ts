@@ -316,6 +316,7 @@ import { LAYER_MTU_FRAGMENTATION } from "./layer-mtu-fragmentation";
 import { LAYERED_ARCHITECTURE } from "./layered-architecture";
 import { LAZY_LOADING_STRATEGIES } from "./lazy-loading-strategies";
 import { LEADER_ELECTION } from "./leader-election";
+import { LIGHTHOUSE_EXPLAINED } from "./lighthouse-explained";
 import { LINUX_FILES_PERMISSIONS } from "./linux-files-permissions";
 import { LINUX_GREP_AWK_SED } from "./linux-grep-awk-sed";
 import { LINUX_NAMESPACES_CGROUPS } from "./linux-namespaces-cgroups";
@@ -395,6 +396,7 @@ import { PATTERN_STRATEGY } from "./pattern-strategy";
 import { PATTERN_TEMPLATE_METHOD } from "./pattern-template-method";
 import { PATTERN_VISITOR } from "./pattern-visitor";
 import { PERCENTILE_LATENCY } from "./percentile-latency";
+import { PERFORMANCE_METRICS_MEASUREMENT } from "./performance-metrics-measurement";
 import { PESSIMISTIC_LOCKING } from "./pessimistic-locking";
 import { PORTS_AND_SOCKETS } from "./ports-and-sockets";
 import { POSTGRES_ADVANCED_SQL } from "./postgres-advanced-sql";
@@ -916,6 +918,7 @@ export const QUESTION_SETS = [
   LAYERED_ARCHITECTURE,
   LAZY_LOADING_STRATEGIES,
   LEADER_ELECTION,
+  LIGHTHOUSE_EXPLAINED,
   LINUX_FILES_PERMISSIONS,
   LINUX_GREP_AWK_SED,
   LINUX_NAMESPACES_CGROUPS,
@@ -995,6 +998,7 @@ export const QUESTION_SETS = [
   PATTERN_TEMPLATE_METHOD,
   PATTERN_VISITOR,
   PERCENTILE_LATENCY,
+  PERFORMANCE_METRICS_MEASUREMENT,
   PESSIMISTIC_LOCKING,
   PORTS_AND_SOCKETS,
   POSTGRES_ADVANCED_SQL,

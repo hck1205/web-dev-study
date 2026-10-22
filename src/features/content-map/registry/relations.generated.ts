@@ -2,6 +2,44 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "performance-metrics-measurement": {
+    "links": [
+      "core-web-vitals",
+      "lighthouse-explained",
+      "rendering-strategies",
+      "resource-hints-loading",
+      "css-performance",
+      "web-font-optimization",
+      "event-loop",
+      "lazy-loading-strategies",
+      "code-splitting",
+      "rendering-performance-optimization",
+      "browser-rendering-pipeline",
+      "image-optimization",
+      "data-fetching-optimization",
+      "bundler-basics",
+      "frontend-performance-map"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "browser-fetch",
+      "dns"
+    ]
+  },
+  "lighthouse-explained": {
+    "links": [
+      "core-web-vitals",
+      "performance-metrics-measurement",
+      "code-splitting",
+      "bundler-basics"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "ab-testing",
+      "http-versions",
+      "waf"
+    ]
+  },
   "image-optimization": {
     "links": [
       "core-web-vitals",
@@ -52,6 +90,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "lazy-loading-strategies",
       "core-web-vitals",
+      "performance-metrics-measurement",
+      "lighthouse-explained",
       "frontend-browser-cache",
       "http-caching-cdn",
       "client-data-cache",
@@ -208,6 +248,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "lighthouse-explained",
       "rendering-strategies",
       "animation-performance",
       "http-versions",
@@ -9135,6 +9176,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "animation-patterns"
     ],
     "mentions": [
+      "lighthouse-explained",
       "pattern-proxy"
     ]
   },
@@ -9486,6 +9528,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "data-fetching-optimization",
+      "lighthouse-explained",
       "hydration",
       "nginx-basics",
       "nextjs-static-dynamic-rendering",
@@ -11490,7 +11533,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop"
     ],
     "mentions": [
+      "performance-metrics-measurement",
       "resource-hints-loading",
+      "lighthouse-explained",
       "browser-rendering-pipeline",
       "ab-testing",
       "image-optimization",
@@ -11599,6 +11644,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "lighthouse-explained",
       "lossy-counting",
       "http-status-codes",
       "core-web-vitals"
