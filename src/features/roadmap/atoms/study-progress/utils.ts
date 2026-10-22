@@ -95,6 +95,13 @@ export function recordCheckpoint(progress: StudyProgress, id: string, score: num
   return { ...progress, checkpoints: { ...progress.checkpoints, [id]: result } };
 }
 
+/** 응용 질문 결과를 남긴다. 엮어서 답했으면 엮인 글들을 "응용함"으로 올린다 */
+export function recordApplied(progress: StudyProgress, id: string, posts: string[], knew: boolean, answer: string, today = localDate()): StudyProgress {
+  let next: StudyProgress = { ...progress, applied: { ...(progress.applied ?? {}), [id]: { knew, answer: answer.trim() || undefined, updatedAt: today } } };
+  if (knew) for (const slug of posts) next = raiseStage(next, slug, 4, today);
+  return next;
+}
+
 export const isDue = (post: PostProgress | undefined, today = localDate()) => Boolean(post && post.stage >= 1 && post.due <= today);
 
 /** 글 목록의 단계별 개수와 완료율. 완료는 "적용함" 이상으로 센다 */
@@ -111,7 +118,11 @@ export function parseProgress(text: string): StudyProgress | null {
   try {
     const data = JSON.parse(text) as Partial<StudyProgress>;
     if (!data || typeof data !== "object" || typeof data.posts !== "object" || data.posts === null) return null;
-    return { posts: data.posts, checkpoints: typeof data.checkpoints === "object" && data.checkpoints ? data.checkpoints : {} };
+    return {
+      posts: data.posts,
+      checkpoints: typeof data.checkpoints === "object" && data.checkpoints ? data.checkpoints : {},
+      applied: typeof data.applied === "object" && data.applied ? data.applied : {},
+    };
   } catch {
     return null;
   }

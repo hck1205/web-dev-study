@@ -2,6 +2,7 @@
 
 import { Button, Container, PageHeader } from "@/common/design-system";
 import { ProgressBar } from "@/features/roadmap/components/progress-bar";
+import { AppliedPrompt } from "../applied-prompt";
 import { ReviewSession } from "../review-session";
 import { useStudyDashboard } from "./study-dashboard";
 import { Actions, ItemLink, List, Minutes, RoadmapRow, Side, Stats, Step, StepNumber } from "./study-dashboard.styled";
@@ -84,26 +85,27 @@ export function StudyDashboard() {
         <h2>
           <StepNumber aria-hidden>3</StepNumber>응용<Minutes>20분</Minutes>
         </h2>
-        {study.weak.length > 0 ? (
-          <>
-            <p>자주 틀린 글부터 다시 연다. 이번엔 글을 덮고 "이게 장애로 나타나면 어디서부터 보나"를 말로 답해 본다.</p>
-            <List>
-              {study.weak.map((post) => (
-                <li key={post.slug}>
-                  <ItemLink href={post.href}>
-                    <strong>{post.title}</strong>
-                    <span>
-                      틀림 {post.wrong} · 맞음 {post.correct}
-                    </span>
-                  </ItemLink>
-                </li>
-              ))}
-            </List>
-          </>
-        ) : (
-          <p>오늘 읽은 두 글을 한 문장으로 잇는다. "A가 있어서 B가 가능하다" 또는 "A가 느리면 B에서 증상이 난다" 꼴로 적어 본다. 엮는 질문 묶음은 곧 추가된다.</p>
-        )}
+        <p>글 두어 편을 엮어야 답할 수 있는 상황 질문이다. 글을 덮고 결론부터 말한 뒤 포인트와 비교한다.</p>
+        <AppliedPrompt />
       </Step>
+
+      {study.weak.length > 0 && (
+        <Side>
+          <h2>자주 틀린 글</h2>
+          <List>
+            {study.weak.map((post) => (
+              <li key={post.slug}>
+                <ItemLink href={post.href}>
+                  <strong>{post.title}</strong>
+                  <span>
+                    틀림 {post.wrong} · 맞음 {post.correct}
+                  </span>
+                </ItemLink>
+              </li>
+            ))}
+          </List>
+        </Side>
+      )}
 
       {study.unexplained.length > 0 && (
         <Side>

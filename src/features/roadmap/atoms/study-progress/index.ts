@@ -4,7 +4,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useResetAtom } from "jotai/utils";
 import { studyProgressAtom } from "./utils";
 
-export type { CheckpointResult, PostProgress, Stage, StudyProgress } from "./types";
+export type { AppliedResult, CheckpointResult, PostProgress, Stage, StudyProgress } from "./types";
 export {
   BOX_INTERVAL_DAYS,
   EMPTY_PROGRESS,
@@ -16,6 +16,7 @@ export {
   localDate,
   parseProgress,
   raiseStage,
+  recordApplied,
   recordCheckpoint,
   reviewPost,
   saveExplanation,

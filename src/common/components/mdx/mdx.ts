@@ -10,6 +10,7 @@ import { MdxTable } from "./mdx-table";
 import { MotionDemo } from "./motion-demo";
 import { NetworkTopology } from "./network-topology";
 import { SequenceDiagram } from "./sequence-diagram";
+import { Term } from "./term";
 import { UrlAnatomy } from "./url-anatomy";
 import { VectorSpace } from "./vector-space";
 
@@ -20,6 +21,7 @@ export const mdxComponents: MDXComponents = {
   table: MdxTable,
   Callout,
   EasyIntro,
+  Term,
   SequenceDiagram,
   ConceptDiagram,
   UrlAnatomy,

@@ -23,7 +23,17 @@ export interface CheckpointResult {
   updatedAt: string;
 }
 
+export interface AppliedResult {
+  /** 포인트와 비교해 엮어서 답했다고 스스로 판정했는지 */
+  knew: boolean;
+  /** 내가 적은 답 */
+  answer?: string;
+  updatedAt: string;
+}
+
 export interface StudyProgress {
   posts: Record<string, PostProgress>;
   checkpoints: Record<string, CheckpointResult>;
+  /** 응용 질문 id → 결과. 예전 기록에는 없을 수 있다 */
+  applied?: Record<string, AppliedResult>;
 }
