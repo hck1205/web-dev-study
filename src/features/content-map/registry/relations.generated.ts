@@ -2,6 +2,49 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "recursion-backtracking": {
+    "links": [
+      "js-execution-context",
+      "js-memoization",
+      "js-primitive-vs-reference",
+      "dynamic-programming",
+      "big-o-notation",
+      "ds-binary-tree-bst",
+      "ds-graph-bfs-dfs"
+    ],
+    "mentions": []
+  },
+  "binary-search": {
+    "links": [
+      "big-o-notation",
+      "sorting-algorithms",
+      "ds-hash-map",
+      "ds-binary-tree-bst",
+      "db-index",
+      "git-tips-advanced",
+      "recursion-backtracking"
+    ],
+    "mentions": [
+      "api-scaling-ladder",
+      "sql-filtering-operators"
+    ]
+  },
+  "sorting-algorithms": {
+    "links": [
+      "big-o-notation",
+      "js-array-mutation",
+      "ds-heap",
+      "js-execution-context",
+      "api-pagination-sorting",
+      "db-index",
+      "event-loop",
+      "binary-search"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "db-index-design"
+    ]
+  },
   "ts-narrowing": {
     "links": [
       "ts-type-system-basics",
@@ -42,13 +85,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "data-structures-overview",
       "big-o-notation",
+      "recursion-backtracking",
       "dynamic-programming",
       "greedy-algorithms",
+      "binary-search",
       "ds-hash-map",
       "ds-array-matrix",
       "ds-graph-bfs-dfs",
       "ds-union-find",
       "ds-heap",
+      "sorting-algorithms",
       "ds-stack-queue-deque",
       "ds-binary-tree-bst",
       "ds-trie"
@@ -61,6 +107,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "greedy-algorithms": {
     "links": [
       "dynamic-programming",
+      "sorting-algorithms",
       "big-o-notation",
       "ds-heap",
       "ds-graph-bfs-dfs",
@@ -70,7 +117,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ds-array-matrix",
-      "sd-maps-tiles-routing"
+      "sd-maps-tiles-routing",
+      "recursion-backtracking"
     ]
   },
   "dynamic-programming": {
@@ -78,8 +126,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "greedy-algorithms",
       "big-o-notation",
       "js-memoization",
+      "recursion-backtracking",
       "ds-graph-bfs-dfs",
+      "binary-search",
       "js-primitive-vs-reference",
+      "sorting-algorithms",
       "algorithms-overview"
     ],
     "mentions": [
@@ -691,6 +742,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "dom-basics",
+      "binary-search",
+      "recursion-backtracking",
       "js-closures"
     ]
   },
@@ -720,6 +773,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs"
     ],
     "mentions": [
+      "sorting-algorithms",
       "db-type-wide-column",
       "db-index-design"
     ]
@@ -800,6 +854,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-memoization",
       "big-o-notation",
+      "sorting-algorithms",
       "js-array-mutation",
       "redis-basics"
     ]
@@ -1476,6 +1531,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "recursion-backtracking",
       "dns"
     ]
   },
@@ -2494,6 +2550,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "http-versions",
       "event-loop",
+      "binary-search",
       "what-happens-google-com"
     ]
   },
@@ -2866,6 +2923,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-embedded",
       "sd-leaderboard-sorted-set",
       "db-type-relational",
+      "binary-search",
+      "sorting-algorithms",
       "merkle-tree",
       "clock-skew",
       "db-index-pitfalls"
@@ -7597,6 +7656,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "express-middleware",
+      "sorting-algorithms",
       "ab-testing",
       "redis-basics",
       "js-closures",
@@ -11208,10 +11268,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "big-o-notation": {
     "links": [
+      "binary-search",
       "sql-query-rewrite"
     ],
     "mentions": [
       "ds-binary-tree-bst",
+      "sorting-algorithms",
       "js-execution-context",
       "ds-hash-map",
       "js-memoization",

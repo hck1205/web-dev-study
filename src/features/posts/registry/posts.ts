@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "recursion-backtracking",
+    title: "재귀와 백트래킹: 고르고, 들어가고, 되돌리기",
+    summary: "모든 부분집합이 빈 배열로 나온 버그에서 출발해 재귀와 백트래킹의 뼈대, 부분집합·조합·순열, 중복 처리, 가지치기, N-Queens를 직접 짜고 잰다. 답이 너무 많을 때의 메모리, 동적 계획법과의 경계, 정규식 엔진 속 백트래킹까지 다룬다.",
+    topic: "programming/algorithms/techniques",
+    tags: ["Algorithm", "JavaScript", "Performance"],
+    date: "2026-10-25",
+    keywords: ["백트래킹", "N-Queens", "순열과 조합"],
+  },
+  {
+    slug: "binary-search",
+    title: "이분 탐색: 구간을 정하면 off-by-one이 사라진다",
+    summary: "\"지금까지의 로그\"를 찾다 무한 루프에 빠진 이분 탐색에서 출발해 반열린 구간, lower bound와 upper bound, 비트 연산 넘침, 실수 범위, 답을 놓고 찾는 매개 변수 탐색, 회전 배열과 봉우리 찾기를 Node 22로 따라간다.",
+    topic: "programming/algorithms/techniques",
+    tags: ["Algorithm", "JavaScript", "Search"],
+    date: "2026-10-25",
+    keywords: ["이분 탐색", "lower bound", "upper bound", "매개 변수 탐색"],
+  },
+  {
+    slug: "sorting-algorithms",
+    title: "정렬 알고리즘: 버블부터 TimSort까지, 무엇을 얼마나 옮기나",
+    summary: "정렬된 배열을 넣자 직접 짠 퀵 정렬이 스택을 넘기는 데서 출발해 버블·삽입·병합·퀵·힙·계수 정렬을 짜고 잰다. 안정성, V8의 TimSort가 정렬된 입력에서 빠른 이유, 비교 함수가 정렬을 망치는 경우까지 다룬다.",
+    topic: "programming/algorithms/techniques",
+    tags: ["Algorithm", "JavaScript", "Performance"],
+    date: "2026-10-25",
+    keywords: ["퀵 정렬", "병합 정렬", "TimSort", "계수 정렬"],
+  },
+  {
     slug: "ts-narrowing",
     title: "TypeScript 타입 좁히기: 조건문이 타입을 줄이는 방법과 빠진 갈래 찾기",
     summary: "결제 상태를 하나 추가했는데 화면에 undefined가 찍힌 switch에서 출발해 제어 흐름 분석, typeof·in·instanceof, 콜백과 재할당에서 풀리는 좁힘, 판별 유니온, never로 하는 완전성 검사를 실제 tsc 출력으로 따라간다. 거짓말하는 타입 가드, 5.5의 추론된 타입 서술어와 filter(Boolean), 단언 함수의 TS2775, useReducer 액션까지 다룬다.",

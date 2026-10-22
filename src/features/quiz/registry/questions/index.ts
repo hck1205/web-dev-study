@@ -23,6 +23,7 @@ import { BACKUP_STRATEGY } from "./backup-strategy";
 import { BASE64 } from "./base64";
 import { BATCH_PROCESSING } from "./batch-processing";
 import { BIG_O_NOTATION } from "./big-o-notation";
+import { BINARY_SEARCH } from "./binary-search";
 import { BLOOM_FILTER } from "./bloom-filter";
 import { BLUE_GREEN_DEPLOYMENT } from "./blue-green-deployment";
 import { BROWSER_FETCH } from "./browser-fetch";
@@ -432,6 +433,7 @@ import { RAY_CASTING } from "./ray-casting";
 import { REACT_RERENDER } from "./react-rerender";
 import { REACT_SERVER_COMPONENTS } from "./react-server-components";
 import { REALTIME_COMMUNICATION } from "./realtime-communication";
+import { RECURSION_BACKTRACKING } from "./recursion-backtracking";
 import { REDIS_BASICS } from "./redis-basics";
 import { REDIS_CLUSTER } from "./redis-cluster";
 import { REDIS_MEMORY_EVICTION } from "./redis-memory-eviction";
@@ -530,6 +532,7 @@ import { SERVICE_DISCOVERY } from "./service-discovery";
 import { SERVICE_MESH } from "./service-mesh";
 import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
+import { SORTING_ALGORITHMS } from "./sorting-algorithms";
 import { SPRING_ANIMATION } from "./spring-animation";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
@@ -631,6 +634,7 @@ export const QUESTION_SETS = [
   BASE64,
   BATCH_PROCESSING,
   BIG_O_NOTATION,
+  BINARY_SEARCH,
   BLOOM_FILTER,
   BLUE_GREEN_DEPLOYMENT,
   BROWSER_FETCH,
@@ -1040,6 +1044,7 @@ export const QUESTION_SETS = [
   REACT_RERENDER,
   REACT_SERVER_COMPONENTS,
   REALTIME_COMMUNICATION,
+  RECURSION_BACKTRACKING,
   REDIS_BASICS,
   REDIS_CLUSTER,
   REDIS_MEMORY_EVICTION,
@@ -1138,6 +1143,7 @@ export const QUESTION_SETS = [
   SERVICE_MESH,
   SIT_UAT_TESTING,
   SLI_SLO,
+  SORTING_ALGORITHMS,
   SPRING_ANIMATION,
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
