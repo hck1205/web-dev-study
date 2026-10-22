@@ -2,6 +2,40 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "micro-frontend-integration-patterns": {
+    "links": [
+      "micro-frontends",
+      "module-federation-deep-dive",
+      "streaming-ssr-suspense",
+      "timeouts",
+      "js-memory-leak",
+      "canary-release",
+      "rollback-strategy",
+      "frontend-error-tracking",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "rendering-strategies",
+      "microservices",
+      "cors"
+    ]
+  },
+  "module-federation-deep-dive": {
+    "links": [
+      "micro-frontends",
+      "micro-frontend-integration-patterns"
+    ],
+    "mentions": [
+      "frontend-monorepo",
+      "code-splitting",
+      "js-es-modules",
+      "react-rerender",
+      "cors",
+      "css-performance",
+      "dns"
+    ]
+  },
   "monorepo-build-cache": {
     "links": [
       "frontend-monorepo",
@@ -3071,6 +3105,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "micro-frontend-integration-patterns",
       "js-function-forms"
     ]
   },
@@ -11289,7 +11324,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "micro-frontends": {
-    "links": [],
+    "links": [
+      "module-federation-deep-dive",
+      "micro-frontend-integration-patterns"
+    ],
     "mentions": [
       "build-caching",
       "rendering-csr-spa",

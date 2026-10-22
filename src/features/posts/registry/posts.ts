@@ -5,6 +5,24 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "micro-frontend-integration-patterns",
+    title: "마이크로 프런트엔드 조합 방식 직접 만들어 보기: 서버 조합, iframe, Web Components, single-spa",
+    summary: "느린 조각 하나가 페이지 전체의 첫 바이트를 1.5초 늦췄다. 서버 조합과 스트리밍, iframe 높이 동기화와 메시지 검증, React 18과 19의 커스텀 요소 처리와 Shadow DOM, single-spa 생명주기, import map 배포 포인터와 리모트별 관측을 직접 만들어 확인한다.",
+    topic: "programming/frontend/architecture",
+    tags: ["Architecture", "Frontend", "React", "Micro Frontends", "Browser"],
+    date: "2026-10-25",
+    keywords: ["single-spa", "import map", "Shadow DOM", "Web Components"],
+  },
+  {
+    slug: "module-federation-deep-dive",
+    title: "Module Federation 깊게 보기: 공유 스코프, 버전 협상, 리모트 장애",
+    summary: "리모트 하나가 응답하지 않자 셸 전체가 120초 동안 비었다. webpack 5 셸과 리모트 둘을 직접 띄워 공유 스코프 초기화, singleton 버전 선택, 경고와 strictVersion, eager, 런타임 리모트 로딩과 요청 왕복 비용을 실제 출력으로 따라간다.",
+    topic: "programming/frontend/architecture",
+    tags: ["Architecture", "Frontend", "React", "Micro Frontends", "JavaScript"],
+    date: "2026-10-25",
+    keywords: ["공유 스코프", "remoteEntry", "strictVersion", "chunkLoadTimeout"],
+  },
+  {
     slug: "monorepo-build-cache",
     title: "모노레포 빌드: 작업 그래프와 바뀐 것만 빌드하기",
     summary: "패키지 의존성으로 작업 그래프를 만들고, 바뀐 것과 그 위쪽만 골라 돌리고, 지난 결과를 캐시에서 꺼낸다. 다섯 가지 방법의 CI 시간을 재 보고, 기준 커밋과 얕은 clone이 만드는 함정, 해시를 흔드는 파일, turbo prune, 모노레포가 짐이 되는 경우를 다룬다.",

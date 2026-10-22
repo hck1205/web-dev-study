@@ -328,10 +328,12 @@ import { MERKLE_TREE } from "./merkle-tree";
 import { MESSAGE_DELIVERY_SEMANTICS } from "./message-delivery-semantics";
 import { MESSAGE_QUEUE_BASICS } from "./message-queue-basics";
 import { METRICS_TYPES } from "./metrics-types";
+import { MICRO_FRONTEND_INTEGRATION_PATTERNS } from "./micro-frontend-integration-patterns";
 import { MICRO_FRONTENDS } from "./micro-frontends";
 import { MICROSERVICES } from "./microservices";
 import { MICROSERVICES_DECOMPOSITION } from "./microservices-decomposition";
 import { MODULAR_MONOLITH } from "./modular-monolith";
+import { MODULE_FEDERATION_DEEP_DIVE } from "./module-federation-deep-dive";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
 import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
@@ -920,10 +922,12 @@ export const QUESTION_SETS = [
   MESSAGE_DELIVERY_SEMANTICS,
   MESSAGE_QUEUE_BASICS,
   METRICS_TYPES,
+  MICRO_FRONTEND_INTEGRATION_PATTERNS,
   MICRO_FRONTENDS,
   MICROSERVICES,
   MICROSERVICES_DECOMPOSITION,
   MODULAR_MONOLITH,
+  MODULE_FEDERATION_DEEP_DIVE,
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
   MONOLITH_ARCHITECTURE,
