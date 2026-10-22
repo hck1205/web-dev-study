@@ -93,6 +93,7 @@ import { DDOS_PROTECTION } from "./ddos-protection";
 import { DEAD_LETTER_QUEUE } from "./dead-letter-queue";
 import { DEADLOCKS } from "./deadlocks";
 import { DEBOUNCE_THROTTLE } from "./debounce-throttle";
+import { DEBUGGING_WITH_LOGS } from "./debugging-with-logs";
 import { DEPENDENCY_HELL } from "./dependency-hell";
 import { DESIGN_PATTERNS_OVERVIEW } from "./design-patterns-overview";
 import { DEVOPS_NETWORKING_ROADMAP } from "./devops-networking-roadmap";
@@ -140,6 +141,7 @@ import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
+import { FRONTEND_ERROR_TRACKING } from "./frontend-error-tracking";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
@@ -313,6 +315,7 @@ import { LOAD_BALANCING_ALGORITHMS } from "./load-balancing-algorithms";
 import { LOADING_PATTERNS } from "./loading-patterns";
 import { LOCAL_CUSTOM_DOMAIN } from "./local-custom-domain";
 import { LOCAL_K8S_KIND_MINIKUBE } from "./local-k8s-kind-minikube";
+import { LOGGING_TOOLS_OVERVIEW } from "./logging-tools-overview";
 import { LONG_POLLING } from "./long-polling";
 import { LOSSY_COUNTING } from "./lossy-counting";
 import { MERKLE_TREE } from "./merkle-tree";
@@ -674,6 +677,7 @@ export const QUESTION_SETS = [
   DEAD_LETTER_QUEUE,
   DEADLOCKS,
   DEBOUNCE_THROTTLE,
+  DEBUGGING_WITH_LOGS,
   DEPENDENCY_HELL,
   DESIGN_PATTERNS_OVERVIEW,
   DEVOPS_NETWORKING_ROADMAP,
@@ -721,6 +725,7 @@ export const QUESTION_SETS = [
   FEATURE_FLAGS,
   FIRST_PAGE_FROM_POWER_ON,
   FRONTEND_BROWSER_CACHE,
+  FRONTEND_ERROR_TRACKING,
   GARBAGE_COLLECTION,
   GATEWAY,
   GEOHASH,
@@ -894,6 +899,7 @@ export const QUESTION_SETS = [
   LOADING_PATTERNS,
   LOCAL_CUSTOM_DOMAIN,
   LOCAL_K8S_KIND_MINIKUBE,
+  LOGGING_TOOLS_OVERVIEW,
   LONG_POLLING,
   LOSSY_COUNTING,
   MERKLE_TREE,

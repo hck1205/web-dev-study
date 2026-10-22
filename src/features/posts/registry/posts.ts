@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "logging-tools-overview",
+    title: "로그 도구 지도: 증상마다 어디를 먼저 여나",
+    summary: "요청 하나가 지나는 브라우저, 프록시, 프로세스, 서버, 컨테이너, 로그 저장소, 클라우드 콘솔에는 저마다 로그가 있다. 504인데 앱 로그는 200인 장면에서 출발해, 각 도구가 답하는 질문과 증상별로 먼저 열 곳을 정리한다.",
+    topic: "programming/in-practice",
+    tags: ["Observability", "Linux", "Nginx", "Kubernetes", "Browser"],
+    date: "2026-10-25",
+    keywords: ["Preserve log", "HAR 파일", "tail -F", "CloudWatch Logs Insights"],
+  },
+  {
+    slug: "debugging-with-logs",
+    title: "로그로 버그 추적하기: 문의 한 줄에서 재현까지",
+    summary: "\"결제가 두 번 됐다\"는 문의에서 출발해, 증상이 남은 서비스에서 첫 줄을 찾고 trace_id로 세 서비스의 로그를 한 줄로 세운다. 시계가 틀린 로그는 span ID로 순서를 맞추고, 한 사람만 debug를 켜고, 찾은 조건으로 재현한 뒤 고친다.",
+    topic: "programming/in-practice",
+    tags: ["Observability", "Backend", "Node.js", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["로그로 버그 추적", "로그 타임라인", "요청 단위 디버그 로그"],
+  },
+  {
+    slug: "frontend-error-tracking",
+    title: "프런트엔드 에러 추적: 브라우저 에러를 모으고 소스맵으로 되돌리기",
+    summary: "사용자 브라우저에서 난 에러는 서버가 모른다. 다섯 갈래로 나는 에러를 빠짐없이 듣고, 비공개 소스맵으로 압축된 스택을 원래 줄로 되돌리고, 맥락을 붙여 묶는 과정을 직접 만든 수집기로 따라간다.",
+    topic: "programming/in-practice",
+    tags: ["JavaScript", "React", "Browser", "Observability", "Troubleshooting"],
+    date: "2026-10-25",
+    keywords: ["프런트엔드 에러 추적", "hidden-source-map", "브레드크럼"],
+  },
+  {
     slug: "rendering-performance-optimization",
     title: "렌더링 성능 최적화: 덜 깨우고, 좁게 번지고, 건너뛰기",
     summary: "클래스 하나가 수만 개 요소의 스타일과 레이아웃을 깨우는 과정을 재 보고, 무효화 범위 좁히기, contain, content-visibility, 가상화, 읽기·쓰기 묶기로 비용을 줄인다. 그림자·필터의 래스터 비용과 requestIdleCallback을 쓰는 자리까지 실제 측정값으로 다룬다.",

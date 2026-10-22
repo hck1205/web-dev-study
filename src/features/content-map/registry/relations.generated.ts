@@ -2,6 +2,71 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "logging-tools-overview": {
+    "links": [
+      "frontend-error-tracking",
+      "debugging-with-logs",
+      "centralized-logging-pipeline",
+      "curl-for-debugging",
+      "network-troubleshooting-by-layer",
+      "nginx-reverse-proxy",
+      "linux-systemd-systemctl",
+      "kubectl-essentials",
+      "k8s-pod-troubleshooting",
+      "grafana-dashboards",
+      "structured-logging"
+    ],
+    "mentions": [
+      "observability-basics",
+      "opensearch-cluster-operations",
+      "cookie-session-login",
+      "k8s-pod-resources",
+      "sd-start-single-server",
+      "osi-in-practice",
+      "http-status-codes",
+      "dns"
+    ]
+  },
+  "debugging-with-logs": {
+    "links": [
+      "structured-logging",
+      "centralized-logging-pipeline",
+      "distributed-tracing",
+      "frontend-error-tracking",
+      "logging-tools-overview",
+      "timeouts",
+      "clock-skew",
+      "feature-flags",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "rendering-ssr",
+      "opensearch-cluster-operations",
+      "sd-payment-flow",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "frontend-error-tracking": {
+    "links": [
+      "debugging-with-logs",
+      "logging-tools-overview",
+      "js-promises",
+      "code-splitting",
+      "cors",
+      "js-classes",
+      "hydration",
+      "rollback-strategy",
+      "structured-logging",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "observability-basics",
+      "browser-fetch",
+      "rendering-strategies",
+      "http-status-codes"
+    ]
+  },
   "rendering-performance-optimization": {
     "links": [
       "browser-rendering-pipeline",
@@ -5690,6 +5755,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cloud-cost-optimization"
     ],
     "mentions": [
+      "logging-tools-overview",
       "serverless-architecture",
       "https-tls",
       "k8s-deploy-pipeline-eks",
@@ -6299,6 +6365,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "observability-basics",
       "distributed-tracing",
       "monitoring-basics",
+      "debugging-with-logs",
       "metrics-types"
     ],
     "mentions": [
@@ -11443,6 +11510,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "oauth": {
     "links": [],
     "mentions": [
+      "logging-tools-overview",
       "token-login",
       "cookie-session-login"
     ]
