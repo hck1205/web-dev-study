@@ -1,0 +1,593 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spring-boot-4-migration");
+
+Spring Boot 3.5 앱의 `pom.xml`에서 부모 버전 숫자 하나를 `4.1.1`로 바꾸고 빌드했다. 컨트롤러 하나, 서비스 하나, DB 설정 하나, 테스트 하나짜리 작은 주문 서비스다. 3.5.16에서는 테스트까지 초록색이었는데, 숫자를 바꾸자 컴파일 오류가 아홉 줄 나왔다. 코드는 한 글자도 안 바꿨다.
+
+이 글은 그 앱을 실제로 4.1.1로 올리면서 나온 오류를 순서대로 고친 기록이다. 왜 깨졌는지, 무엇으로 고쳤는지, 그리고 4.0에서 새로 생긴 기능(API 버전 관리, HTTP 서비스 클라이언트, 내장 재시도) 중 직접 돌려 본 것을 함께 적는다. 자동 구성 jar가 쪼개진 배경은 [Spring Boot 자동 구성](/posts/spring-boot-auto-configuration)에서, 프록시와 빈 이야기는 [IoC 컨테이너와 DI](/posts/spring-ioc-di)에서 다뤘다.
+
+환경은 JDK 21, Maven 3.9.11이다. 출발점은 Spring Boot 3.5.16(Framework 6.2.x), 도착점은 Spring Boot 4.1.1(Framework 7.0.9)이다. 버전 정보는 Spring Boot 4.0·4.1 릴리스 노트, 4.0 마이그레이션 가이드, Spring Framework 7.0 릴리스 노트를 기준으로 했다. 4.0.0은 2025년 11월 20일에 Maven Central에 올라왔다.
+
+## 4.0에서 바뀐 바닥
+
+먼저 무엇이 바뀌었는지 큰 줄기만 본다. 하나하나는 뒤에서 오류와 함께 다시 나온다.
+
+- Java 17 이상이 필요하다. 3.x와 같은 바닥이지만, Framework 7은 JDK 25를 권장한다고 적고 있다.
+- Jakarta EE 11, Servlet 6.1이 바닥이다. 내장 Tomcat은 11.0이고, Undertow 지원은 빠졌다(4.0.0에도 `spring-boot-starter-undertow`가 없다).
+- 자동 구성이 기술별 모듈로 쪼개졌다. 3.5.16의 `spring-boot-autoconfigure` jar는 약 2.0MB에 자동 구성 156개를 담고 있었는데, 4.1.1에서는 같은 이름의 jar가 약 370KB이고 나머지는 `spring-boot-jdbc`, `spring-boot-webmvc`, `spring-boot-jackson` 같은 모듈로 옮겨 갔다. 패키지 이름도 `org.springframework.boot.<모듈>`로 바뀌었다.
+- 스타터도 기술 이름을 따른다. `spring-boot-starter-web`은 `spring-boot-starter-webmvc`로 이름이 바뀌었고(옛 이름은 deprecated로 남아 있다), `spring-boot-starter-aop`는 `spring-boot-starter-aspectj`가 됐다. 테스트도 `spring-boot-starter-webmvc-test`처럼 기술마다 짝이 있다.
+- Jackson 3이 기본이다. 그룹 ID와 패키지가 `com.fasterxml.jackson`에서 `tools.jackson`으로 바뀌었다(`jackson-annotations`만 예외). Jackson 2 지원은 deprecated 상태로 남았다.
+- 널 안전성 어노테이션이 JSpecify로 바뀌었다. Spring의 `org.springframework.lang.Nullable`은 deprecated다.
+- 3.x에서 deprecated였던 클래스, 메서드, 속성은 4.0에서 지워졌다. `@MockBean`, `@SpyBean`도 여기에 들어간다.
+
+마이그레이션 가이드가 가장 먼저 시키는 일은 "3.5.x 최신으로 먼저 올려라"다. 그다음이 deprecation 경고를 0으로 만드는 것이다. 4.0에서 지워진 것들은 3.x에서 이미 경고로 알려 준 것이라, 경고를 다 지우고 나면 4.0에서 깨질 곳이 크게 줄어든다.
+
+아래 그림은 이 글이 따라갈 길이다. 단계마다 무엇을 확인하고 넘어가는지 본다.
+
+<NetworkTopology
+  caption="3.x 앱을 4.x로 옮기는 길"
+  width={400}
+  height={280}
+  zones={[
+    { id: "z3", label: "Boot 3.x", x: 8, y: 20, w: 150, h: 250, tone: "edge" },
+    { id: "z4", label: "Boot 4.x", x: 170, y: 20, w: 222, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "old", label: "3.3 / 3.4", sub: "출발", x: 83, y: 70, icon: "server", w: 100 },
+    { id: "latest", label: "3.5.16", sub: "경고 0개", x: 83, y: 200, icon: "server", w: 100 },
+    { id: "b40", label: "4.0.x", sub: "migrator 켬", x: 230, y: 200, icon: "container", w: 92 },
+    { id: "b41", label: "4.1.x", sub: "4.0 경고 정리", x: 330, y: 200, icon: "container", w: 100 },
+    { id: "done", label: "migrator 제거", sub: "끝", x: 280, y: 70, icon: "lock", w: 120 },
+  ]}
+  links={[
+    { from: "old", to: "latest" },
+    { from: "latest", to: "b40" },
+    { from: "b40", to: "b41" },
+    { from: "b41", to: "done" },
+    { from: "old", to: "b41", dashed: true },
+  ]}
+  steps={[
+    { path: ["old", "latest"], packet: "bump", title: "같은 메이저 안에서 최신으로", detail: "3.5.x 최신으로 올린다. 3.x 안의 변화라 깨지는 곳이 적고, 4.0에서 지워질 API가 전부 경고로 보인다." },
+    { path: ["latest"], packet: "-Xlint", title: "deprecation 경고를 지운다", detail: "@MockBean, 이름이 바뀐 속성처럼 4.0에서 사라질 것들을 여기서 고친다. 테스트가 통과하는 상태로 커밋한다." },
+    { path: ["latest", "b40"], packet: "bump", title: "4.0으로 올리고 migrator를 붙인다", detail: "컴파일 오류(패키지, Jackson)를 고치고, spring-boot-properties-migrator로 바뀐 설정 키를 찾는다." },
+    { path: ["b40", "b41"], packet: "bump", title: "4.1은 4.0의 deprecation을 지운 판이다", detail: "4.1 릴리스 노트는 4.0에서 deprecated된 클래스와 속성을 지웠다고 적는다. 4.0에서 경고를 정리하고 넘어간다." },
+    { path: ["b41", "done"], packet: "clean", title: "migrator를 떼고 끝낸다", detail: "migrator는 시작할 때 옛 키를 새 키로 임시로 옮겨 주는 진단 도구다. 운영 의존성에 남겨 두지 않는다." },
+    { path: ["old", "b41"], packet: "jump", blocked: true, title: "한 번에 뛰면 원인을 못 가른다", detail: "오래된 버전에서 바로 4.1로 가면 3.x의 삭제, 4.0의 변경, 4.1의 삭제가 한꺼번에 터진다. 어느 단계의 문제인지 가르기 어렵다." },
+  ]}
+/>
+
+이 글의 실험은 일부러 3.5.16에서 4.1.1로 한 번에 올렸다. 작은 앱이라 가능했다. 서비스가 크면 위 그림처럼 4.0.x를 한 번 거치는 쪽이 낫다.
+
+## 3.5에서 먼저 경고를 본다
+
+출발점인 3.5.16 앱은 이렇게 생겼다.
+
+```java
+// OrderController.java
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+  private final OrderService service; private final ObjectMapper mapper;
+  // ...
+  @GetMapping("/{id}/raw")
+  public JsonNode raw(@PathVariable String id) { return mapper.valueToTree(service.find(id)); }
+}
+
+// DbConfig.java
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+
+// OrderService.java
+import org.springframework.lang.Nullable;
+
+// OrderControllerTest.java
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+```
+
+```text
+# application.properties
+management.endpoints.enabled-by-default=false
+management.endpoint.health.enabled=true
+spring.dao.exceptiontranslation.enabled=true
+```
+
+deprecation 경고를 모두 보이게 해서 컴파일했다.
+
+```bash
+# deprecated API 사용을 경고로 모두 찍는다
+mvn -B clean test-compile -Dmaven.compiler.showDeprecation=true -Dmaven.compiler.showWarnings=true
+```
+
+```text
+[WARNING] src/test/java/demo/orders/OrderControllerTest.java:[16,4] org.springframework.boot.test.mock.mockito.MockBean in org.springframework.boot.test.mock.mockito has been deprecated and marked for removal
+```
+
+경고는 한 줄뿐이다. `@MockBean`은 3.4에서 deprecated가 됐고 4.0에서 지워진다. 그런데 이 경고만 고치면 될까. 아니다. Jackson 패키지, 자동 구성 패키지는 3.5에서 경고가 나오지 않는다. 3.5 안에서는 아무 문제가 없는 정상 API이기 때문이다. 설정 키도 컴파일러는 보지 않는다. 경고 0개는 필요조건이지 충분조건이 아니다.
+
+## 숫자 하나 바꿨더니 아홉 줄
+
+부모 버전만 `4.1.1`로 바꾸고 다시 빌드했다.
+
+```text
+[ERROR] COMPILATION ERROR : 
+[ERROR] src/main/java/demo/orders/DbConfig.java:[4,51] package org.springframework.boot.autoconfigure.jdbc does not exist
+[ERROR] src/main/java/demo/orders/DbConfig.java:[12,3] cannot find symbol
+[ERROR] src/main/java/demo/orders/DbConfig.java:[14,31] cannot find symbol
+[ERROR] src/main/java/demo/orders/OrderController.java:[3,38] package com.fasterxml.jackson.databind does not exist
+[ERROR] src/main/java/demo/orders/OrderController.java:[4,38] package com.fasterxml.jackson.databind does not exist
+[ERROR] src/main/java/demo/orders/OrderController.java:[11,53] cannot find symbol
+[ERROR] src/main/java/demo/orders/OrderController.java:[12,48] cannot find symbol
+[ERROR] src/main/java/demo/orders/OrderController.java:[21,10] cannot find symbol
+[ERROR] src/main/java/demo/orders/DbConfig.java:[12,63] cannot find symbol
+```
+
+아홉 줄이지만 원인은 두 개다. 자동 구성 패키지가 옮겨 갔고, Jackson이 3으로 바뀌었다. 고치는 동안 무엇이 남았는지 따라가 본다.
+
+<AlgoTrace
+  caption="오류를 원인별로 묶으면 고칠 일은 적다"
+  memoryLabel="고친 것"
+  cells={["DataSourceProps", "jackson.databind", "MockBean", "TestRestTemplate", "TRT 빈 없음", "RestTemplateBuilder", "설정 키"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "main 컴파일 오류 9줄 중 3줄은 DataSourceProperties 패키지다." },
+    { pointer: 0, found: [0], memory: ["boot.jdbc.autoconfigure"], caption: "import를 org.springframework.boot.jdbc.autoconfigure로 바꾼다." },
+    { pointer: 1, found: [0, 1], memory: ["boot.jdbc.autoconfigure", "tools.jackson"], caption: "나머지 6줄은 Jackson이다. com.fasterxml.jackson.databind를 tools.jackson.databind로 바꾼다." },
+    { pointer: 2, found: [0, 1], memory: ["boot.jdbc.autoconfigure", "tools.jackson"], caption: "main이 통과하자 테스트 컴파일이 깨진다. MockBean 패키지가 없다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["boot.jdbc.autoconfigure", "tools.jackson", "@MockitoBean", "resttestclient"], caption: "@MockitoBean으로 바꾸고 TestRestTemplate의 새 패키지를 import한다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["boot.jdbc.autoconfigure", "tools.jackson", "@MockitoBean", "resttestclient"], caption: "컴파일은 되는데 테스트가 실패한다. @SpringBootTest가 더 이상 TestRestTemplate을 만들어 주지 않는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: ["…", "@AutoConfigureTestRestTemplate"], caption: "어노테이션을 붙이자 이번엔 RestTemplateBuilder 클래스가 없다고 한다. spring-boot-restclient가 빠졌다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["…", "RestTestClient"], caption: "새 테스트 클라이언트인 RestTestClient로 바꾸자 테스트가 통과한다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: ["…", "properties-migrator"], caption: "마지막으로 실행해서 바뀐 설정 키를 migrator 로그로 찾는다." },
+  ]}
+/>
+
+## 패키지가 옮겨 간 자동 구성 클래스
+
+`DataSourceProperties`는 jar가 쪼개지면서 자리를 옮겼다.
+
+```java
+// 3.x
+import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+// 4.x
+import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
+```
+
+이름을 조각으로 읽으면 규칙이 보인다.
+
+<UrlAnatomy
+  caption="4.x 자동 구성 클래스 이름 읽기"
+  separator="."
+  joiner="."
+  base="org.springframework.boot"
+  params={[
+    { key: "jdbc", display: "jdbc", title: "모듈 이름", description: "4.0부터 각 모듈은 org.springframework.boot.<모듈> 패키지로 시작한다. jar 이름 spring-boot-jdbc와 같다.", required: true },
+    { key: "autoconfigure", display: "autoconfigure", title: "자동 구성 하위 패키지", description: "3.x는 autoconfigure.jdbc처럼 자동 구성이 먼저, 기술이 뒤였다. 4.x는 순서가 뒤집혔다." },
+    { key: "cls", display: "DataSourceProperties", title: "클래스 이름", description: "클래스 이름은 대부분 그대로다. import만 고치면 된다. @EntityScan처럼 다른 모듈로 간 것도 있다(boot.persistence.autoconfigure)." },
+  ]}
+/>
+
+코드의 `import`는 컴파일러가 잡아 주지만, 문자열로 적은 클래스 이름은 아무도 잡아 주지 않는다. `spring.autoconfigure.exclude=org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration` 같은 설정이 있으면 4.x 이름(`org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration`)으로 바꿔야 한다. 저장소 전체에서 `org.springframework.boot.autoconfigure.`를 문자열로 검색해 본다.
+
+```bash
+# 설정 파일과 코드에서 3.x 자동 구성 패키지를 문자열로 쓴 곳을 찾는다
+grep -rn "org.springframework.boot.autoconfigure\." src/ --include=*.properties --include=*.yml --include=*.yaml --include=*.java
+```
+
+스타터 하나가 이제 몇 개의 모듈을 끌고 오는지 `mvn dependency:tree`로 봤다. `spring-boot-starter-webmvc`는 `spring-boot-webmvc`, `spring-boot-jackson`, `spring-boot-tomcat`, `spring-boot-http-converter`, `spring-boot-servlet`, `spring-boot-web-server`를 끌고 온다. 그 관계를 그림으로 그리면 이렇다.
+
+<ConceptDiagram
+  caption="4.x의 webmvc 스타터가 끌고 오는 Boot 모듈 (dependency:tree 기준)"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "st", label: "starter-webmvc", x: 200, y: 36, w: 136, h: 40 },
+    { id: "mvc", label: "boot-webmvc", sub: "MVC 자동 구성", x: 70, y: 120, w: 116, h: 44 },
+    { id: "jk", label: "boot-jackson", sub: "Jackson 3", x: 200, y: 120, w: 112, h: 44 },
+    { id: "tc", label: "boot-tomcat", sub: "내장 서버", x: 330, y: 120, w: 112, h: 44 },
+    { id: "sv", label: "boot-servlet", x: 70, y: 210, w: 110, h: 40 },
+    { id: "hc", label: "http-converter", x: 200, y: 210, w: 120, h: 40 },
+    { id: "ws", label: "web-server", x: 330, y: 210, w: 104, h: 40 },
+  ]}
+  edges={[
+    { from: "st", to: "mvc" },
+    { from: "st", to: "jk" },
+    { from: "st", to: "tc" },
+    { from: "mvc", to: "sv" },
+    { from: "st", to: "hc" },
+    { from: "tc", to: "ws" },
+  ]}
+/>
+
+모듈이 쪼개진 덕분에 쓰지 않는 기술의 자동 구성은 클래스패스에 아예 올라오지 않는다. 대신 "의존성은 넣었는데 기능이 안 켜진다"는 일이 생긴다. 예전에는 `spring-boot-autoconfigure` 하나에 Flyway 자동 구성까지 들어 있어서 `flyway-core`만 넣어도 동작했지만, 4.0부터는 `spring-boot-starter-flyway`를 넣어야 한다고 가이드는 적고 있다. Liquibase도 같다.
+
+당장 모듈을 하나하나 고를 여유가 없으면 가이드가 다리로 내놓은 `spring-boot-starter-classic`(테스트는 `spring-boot-starter-test-classic`)이 있다. 모든 모듈을 넣되 그 모듈들이 끌고 오는 라이브러리는 빼서, 3.x처럼 "라이브러리를 넣으면 켜지는" 감각을 되살린다. 어디까지나 옮기는 동안 쓰는 임시 방편이다.
+
+## Jackson 3은 패키지부터 다르다
+
+Jackson 오류는 `import`를 바꾸면 사라진다.
+
+```java
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+```
+
+4.1.1이 실제로 끌고 온 Jackson jar를 보면 바뀐 범위가 보인다.
+
+```text
+jackson-databind-3.1.5.jar
+jackson-annotations-2.21.jar
+jackson-core-3.1.5.jar
+```
+
+`jackson-databind`, `jackson-core`는 3.x이고, `@JsonProperty` 같은 어노테이션이 든 `jackson-annotations`는 2.x 그대로다. 그래서 DTO에 붙은 `com.fasterxml.jackson.annotation.*`은 고치지 않아도 된다. 고칠 곳은 `ObjectMapper`, `JsonNode`, 직렬화기처럼 databind와 core를 직접 쓰는 코드다.
+
+패키지 말고도 달라진 점이 있다. Jackson 3의 예외는 체크 예외가 아니다.
+
+```text
+public class tools.jackson.core.JacksonException extends java.lang.RuntimeException {
+```
+
+2.x에서 `JsonProcessingException`을 잡던 `try/catch`는 3에서 컴파일은 되지만(`JacksonException`으로 바꾸면) 이제 잡지 않아도 되는 예외가 된다. 반대로 예외를 잡아서 400으로 바꾸던 코드가 있다면 빠뜨리지 않게 확인한다. Boot 쪽 이름도 바뀌었다. `@JsonComponent`는 `@JacksonComponent`, `@JsonMixin`은 `@JacksonMixin`이고, 매퍼를 직접 정의하려면 `ObjectMapper` 대신 `JsonMapper` 빈을 둔다.
+
+응답 JSON이 그대로인지는 직접 비교했다. 같은 요청에 3.5.16(포트 19001)과 4.1.1(포트 19000)이 돌려준 본문이다.
+
+```text
+$ curl -s localhost:19001/orders/o-1/raw
+{"id":"o-1","amount":12000,"orderedOn":"2026-10-26"}
+$ curl -s localhost:19000/orders/o-1/raw
+{"id":"o-1","amount":12000,"orderedOn":"2026-10-26"}
+```
+
+이 예제에서는 같았다. 하지만 Jackson 3은 기본 설정 일부가 바뀌었다. API 응답 모양이 계약인 서비스라면, 올리기 전과 후의 응답을 스냅숏으로 떠서 비교하는 테스트를 하나 두는 게 안전하다. [API 버전 관리](/posts/api-versioning) 글에서 다룬 깨는 변경이 라이브러리 업그레이드로 조용히 들어올 수 있다.
+
+라이브러리 하나가 아직 Jackson 2에 묶여 있다면 deprecated 모듈인 `spring-boot-jackson2`로 버틸 수 있다(설정은 `spring.jackson2.*`). 가이드는 Jersey가 아직 Jackson 3을 지원하지 않으니 Jersey를 쓰면 이 모듈을 쓰라고 적고 있다. Framework 7.0 릴리스 노트는 Jackson 2 자동 감지를 7.1에서 끄고 7.2에서 지울 계획이라고 적고 있으니 오래 기댈 곳은 아니다.
+
+## 테스트 쪽이 가장 많이 깨진다
+
+main을 고치자 테스트 컴파일이 깨졌다.
+
+```text
+[ERROR] src/test/java/demo/orders/OrderControllerTest.java:[10,50] package org.springframework.boot.test.mock.mockito does not exist
+[ERROR] src/test/java/demo/orders/OrderControllerTest.java:[11,48] package org.springframework.boot.test.web.client does not exist
+```
+
+`@MockBean`은 Spring Framework의 `@MockitoBean`으로 바꾼다. 패키지는 `org.springframework.test.context.bean.override.mockito`다. 가이드는 `@MockitoBean`이 테스트 클래스의 필드에서만 동작하고 `@Configuration` 클래스 안에서는 쓸 수 없다고 적는다. 공용 설정 클래스에 `@MockBean`을 모아 두던 프로젝트는 구조를 바꿔야 한다.
+
+`TestRestTemplate`은 `org.springframework.boot.resttestclient` 패키지로 옮겼다. import만 고치고 돌리자 이번엔 실행 중에 실패했다.
+
+```text
+Caused by: org.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'org.springframework.boot.resttestclient.TestRestTemplate' available: expected at least 1 bean which qualifies as autowire candidate. Dependency annotations: {@org.springframework.beans.factory.annotation.Autowired(required=true)}
+```
+
+4.0부터 `@SpringBootTest`는 `TestRestTemplate`을 알아서 만들어 주지 않는다. `@AutoConfigureTestRestTemplate`을 붙이자 또 다른 오류가 났다.
+
+```text
+Caused by: java.lang.NoClassDefFoundError: org/springframework/boot/restclient/RestTemplateBuilder
+```
+
+`TestRestTemplate`은 `RestTemplateBuilder`를 쓰는데, 그게 든 `spring-boot-restclient` 모듈이 클래스패스에 없다. 가이드도 `TestRestTemplate`을 계속 쓰려면 `spring-boot-resttestclient`와 `spring-boot-restclient`를 둘 다 넣으라고 적고 있다. 오류 메시지만 보면 엉뚱한 곳을 의심하기 쉬운데, 원인은 모듈이 쪼개진 것 하나다.
+
+여기서는 새 `RestTestClient`로 바꿨다. 의존성은 `spring-boot-starter-webmvc-test`로 충분했다.
+
+```java
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureRestTestClient
+class OrderControllerTest {
+  @Autowired RestTestClient rest;
+  @MockitoBean OrderService service;
+
+  @Test
+  void returnsOrderAsJson() {
+    given(service.find("o-9")).willReturn(new Order("o-9", 5000, LocalDate.of(2026, 10, 26)));
+    rest.get().uri("/orders/o-9").exchange()
+        .expectStatus().isOk()
+        .expectBody(String.class).isEqualTo("{\"id\":\"o-9\",\"amount\":5000,\"orderedOn\":\"2026-10-26\"}");
+  }
+}
+```
+
+```text
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+```
+
+`MockMvc`도 같은 방향이다. 가이드에 따르면 `@SpringBootTest`만으로는 더 이상 `MockMvc`가 생기지 않으니 `@AutoConfigureMockMvc`를 붙인다. Framework 7.0 릴리스 노트 기준으로 JUnit 6이 바닥이고(이 예제에도 `junit-jupiter-api-6.0.3`이 들어왔다), TestContext의 JUnit 4 지원은 deprecated다.
+
+## 설정 키는 migrator가 찾는다
+
+컴파일러는 `application.properties`를 읽지 않는다. 지워지거나 이름이 바뀐 설정 키는 오류 없이 무시된다. 그래서 4.x로 올리는 동안 `spring-boot-properties-migrator`를 런타임 의존성으로 잠깐 넣는다.
+
+```xml
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-properties-migrator</artifactId>
+  <scope>runtime</scope>
+</dependency>
+```
+
+띄우자 시작 로그 끝에 두 덩어리가 찍혔다.
+
+```text
+WARN 8159 --- [main] o.s.b.c.p.m.PropertiesMigrationListener  : 
+The use of configuration keys that have been renamed was found in the environment:
+
+Property source 'Config resource 'class path resource [application.properties]' via location 'optional:classpath:/'':
+	Key: spring.dao.exceptiontranslation.enabled
+		Line: 5
+		Replacement: spring.persistence.exceptiontranslation.enabled
+
+
+Each configuration key has been temporarily mapped to its replacement for your convenience. To silence this warning, please update your configuration to use the new keys.
+
+ERROR 8159 --- [main] o.s.b.c.p.m.PropertiesMigrationListener  : 
+The use of configuration keys that are no longer supported was found in the environment:
+
+Property source 'Config resource 'class path resource [application.properties]' via location 'optional:classpath:/'':
+	Key: management.endpoints.enabled-by-default
+		Line: 3
+		Reason: Replacement key 'management.endpoints.access.default' uses an incompatible target type
+```
+
+두 종류가 다르다. 위쪽 WARN은 이름만 바뀐 키다. migrator가 옛 키 값을 새 키로 임시로 옮겨 줬으니 지금은 동작한다. 아래쪽 ERROR는 그대로 옮길 수 없는 키다. `enabled-by-default`는 참·거짓이었는데, 대신 들어온 `management.endpoints.access.default`는 `none`, `read-only`, `unrestricted` 중 하나를 받는다. 이건 사람이 뜻을 보고 고쳐야 한다. 이 앱에서는 `false`가 "기본으로 모두 끔"이었으니 `none`으로, `management.endpoint.health.enabled=true`는 `management.endpoint.health.access=read-only`로 바꿨다.
+
+migrator가 하는 일을 직접 짜 보면 어디까지 믿을 수 있는지 감이 온다. `renamed`는 옛 키에서 새 키로 가는 표, `unsupported`는 자동으로 옮길 수 없는 키 목록이다. 옮긴 결과는 `"키=값"` 문자열을 정렬한 배열로, 보고는 정렬한 문자열 배열로 돌려준다. 이 연습에서는 새 키가 이미 있으면 새 키 값을 그대로 둔다.
+
+<CodePlayground
+  caption="설정 키 옮기기"
+  functionName="migrateProperties"
+  initialCode={`function migrateProperties(props, renamed, unsupported) {
+  // props: { "키": "값" }, renamed: { "옛 키": "새 키" }, unsupported: ["키", ...]
+  return { migrated: [], report: [] };
+}`}
+  solution={`function migrateProperties(props, renamed, unsupported) {
+  const migrated = [];
+  const report = [];
+  for (const [key, value] of Object.entries(props)) {
+    if (key in renamed) {
+      const next = renamed[key];
+      if (!(next in props)) migrated.push(next + "=" + value);
+      report.push("renamed: " + key + " -> " + next);
+    } else if (unsupported.includes(key)) {
+      report.push("unsupported: " + key);
+    } else {
+      migrated.push(key + "=" + value);
+    }
+  }
+  return { migrated: migrated.sort(), report: report.sort() };
+}`}
+  tests={[
+    { label: "이름만 바뀐 키", args: [{ "server.port": "19000", "spring.dao.exceptiontranslation.enabled": "true" }, { "spring.dao.exceptiontranslation.enabled": "spring.persistence.exceptiontranslation.enabled" }, ["management.endpoints.enabled-by-default"]], expected: { migrated: ["server.port=19000", "spring.persistence.exceptiontranslation.enabled=true"], report: ["renamed: spring.dao.exceptiontranslation.enabled -> spring.persistence.exceptiontranslation.enabled"] } },
+    { label: "옮길 수 없는 키는 빼고 보고만", args: [{ "management.endpoints.enabled-by-default": "false", "server.port": "19000" }, { "spring.dao.exceptiontranslation.enabled": "spring.persistence.exceptiontranslation.enabled" }, ["management.endpoints.enabled-by-default"]], expected: { migrated: ["server.port=19000"], report: ["unsupported: management.endpoints.enabled-by-default"] } },
+    { label: "새 키가 이미 있으면 새 키 값", args: [{ "spring.dao.exceptiontranslation.enabled": "false", "spring.persistence.exceptiontranslation.enabled": "true" }, { "spring.dao.exceptiontranslation.enabled": "spring.persistence.exceptiontranslation.enabled" }, ["management.endpoints.enabled-by-default"]], expected: { migrated: ["spring.persistence.exceptiontranslation.enabled=true"], report: ["renamed: spring.dao.exceptiontranslation.enabled -> spring.persistence.exceptiontranslation.enabled"] } },
+    { label: "바뀐 게 없다", args: [{ "server.port": "8080" }, { "spring.dao.exceptiontranslation.enabled": "spring.persistence.exceptiontranslation.enabled" }, ["management.endpoints.enabled-by-default"]], expected: { migrated: ["server.port=8080"], report: [] } },
+    { label: "둘 다 섞여 있다", args: [{ "spring.dao.exceptiontranslation.enabled": "true", "management.endpoints.enabled-by-default": "false" }, { "spring.dao.exceptiontranslation.enabled": "spring.persistence.exceptiontranslation.enabled" }, ["management.endpoints.enabled-by-default"]], expected: { migrated: ["spring.persistence.exceptiontranslation.enabled=true"], report: ["renamed: spring.dao.exceptiontranslation.enabled -> spring.persistence.exceptiontranslation.enabled", "unsupported: management.endpoints.enabled-by-default"] } },
+  ]}
+/>
+
+migrator는 Boot가 아는 키만 본다. 사내 스타터나 서드파티 라이브러리의 설정 키는 그 라이브러리의 메타데이터에 이력이 있어야 잡힌다. 그리고 migrator가 옮겨 준 덕분에 동작하는 상태를 운영에 내보내면, migrator를 뗀 날 다시 깨진다. 로그의 WARN이 0개가 될 때까지 키를 고치고 의존성을 지운다.
+
+같은 앱이 버전만 바꿔도 다르게 답하는 곳이 하나 더 있었다. 액추에이터 health다.
+
+```text
+$ curl -s localhost:19001/actuator/health          # 3.5.16
+{"status":"UP"}
+$ curl -s localhost:19001/actuator/health/liveness
+ [404]
+$ curl -s localhost:19000/actuator/health          # 4.1.1
+{"groups":["liveness","readiness"],"status":"UP"}
+$ curl -s localhost:19000/actuator/health/liveness
+{"status":"UP"}
+```
+
+4.0부터 liveness·readiness 프로브가 기본으로 켜진다. 3.x에서는 쿠버네티스 위에서만 자동으로 켜졌다. 쿠버네티스 프로브 경로를 이미 `/actuator/health/liveness`로 잡아 둔 팀에게는 좋은 변화지만, 모니터링이 health 응답 본문을 문자열로 비교하고 있었다면 깨진다. 프로브를 어떻게 잡는지는 [Spring Boot를 쿠버네티스에 올리기](/posts/spring-boot-on-kubernetes)에서 다룬다.
+
+## OpenRewrite에 맡겨 본 결과
+
+손으로 고친 것과 같은 출발점(3.5.16 앱)에 OpenRewrite의 Boot 4 업그레이드 레시피를 돌려 봤다. OpenRewrite는 코드를 구문 트리로 읽어 정해진 규칙(레시피)대로 고치는 도구다.
+
+```bash
+# rewrite-spring의 Boot 4.0 업그레이드 레시피를 돌린다 (코드가 바로 바뀌니 커밋해 둔 상태에서)
+mvn -B org.openrewrite.maven:rewrite-maven-plugin:6.46.1:run \
+  -Drewrite.recipeArtifactCoordinates=org.openrewrite.recipe:rewrite-spring:6.37.1 \
+  -Drewrite.activeRecipes=org.openrewrite.java.spring.boot4.UpgradeSpringBoot_4_0
+```
+
+```text
+[WARNING] Changes have been made to src/main/java/demo/orders/DbConfig.java by:
+[WARNING]     org.openrewrite.java.spring.boot4.MigrateToModularStarters
+[WARNING]         org.openrewrite.java.spring.boot4.MigrateAutoconfigurePackages
+[WARNING]             org.openrewrite.java.ChangePackage
+[WARNING] Changes have been made to src/main/java/demo/orders/OrderService.java by:
+[WARNING]     org.openrewrite.java.spring.framework.UpgradeSpringFramework_7_0
+[WARNING]         org.openrewrite.java.jspecify.MigrateFromSpringFrameworkAnnotations
+[WARNING]             org.openrewrite.java.ChangeType
+[WARNING] Changes have been made to src/test/java/demo/orders/OrderControllerTest.java by:
+[WARNING]     org.openrewrite.java.spring.boot4.ReplaceMockBeanAndSpyBean
+[WARNING]         org.openrewrite.java.ChangeType
+...
+[WARNING] Please review and commit the results.
+[WARNING] Estimate time saved: 1h 15m
+```
+
+자바 코드 변경은 손으로 한 것과 거의 같았다. `DataSourceProperties`와 Jackson 패키지를 바꾸고, `@MockBean`을 `@MockitoBean`으로, `org.springframework.lang.Nullable`을 `org.jspecify.annotations.Nullable`로 바꾸고, 테스트에 `@AutoConfigureTestRestTemplate`을 붙였다. 설정 파일은 migrator가 손을 못 댄 키까지 바꿨다.
+
+```diff
+-management.endpoints.enabled-by-default=false
+-management.endpoint.health.enabled=true
+-spring.dao.exceptiontranslation.enabled=true
++management.endpoints.access.default=none
++management.endpoint.health.access=read-only
++spring.persistence.exceptiontranslation.enabled=true
+```
+
+그런데 `pom.xml`은 그대로 빌드되지 않았다. 이 실행에서는 부모 버전이 `3.5.16`으로 남아 있었고, 새로 넣은 의존성 버전 자리에 `4.0.x`라는 문자열이 그대로 들어갔다.
+
+```text
+[ERROR] dependency: org.springframework.boot:spring-boot-starter-webmvc:jar:4.0.x (compile)
+[ERROR] 	Could not find artifact org.springframework.boot:spring-boot-starter-webmvc:jar:4.0.x in central (https://repo.maven.apache.org/maven2)
+```
+
+로그에는 `4.0.x` 버전 POM을 내려받지 못했다는 경고가 여러 번 찍혀 있었다. 레시피 버전 탓인지, 이 환경의 저장소 조회 탓인지까지는 가려내지 못했다. 확실한 건 레시피를 돌린 뒤에도 빌드와 테스트로 확인해야 한다는 점이다. 로그 끝의 "Please review"는 빈말이 아니다. 레시피는 반복 작업을 크게 줄여 주지만, `TestRestTemplate`에 필요한 `spring-boot-restclient` 같은 의존성 판단까지 맡기기는 어렵다.
+
+## 4.0에서 새로 생긴 것 몇 가지
+
+고치기만 하고 끝내기엔 아까운 기능이 있다. 4.1.1로 작은 앱을 하나 더 만들어 직접 돌려 봤다. 포트는 19002다.
+
+API 버전 관리는 Framework 7에서 1급 기능이 됐다. 같은 경로에 버전마다 다른 핸들러를 둔다.
+
+```java
+@RestController
+class GreetingController {
+  @GetMapping(path = "/greet", version = "1") String v1() { return "hello"; }
+  @GetMapping(path = "/greet", version = "2") Greeting v2() { return new Greeting("hello", 2); }
+}
+```
+
+```text
+# application.properties: 버전을 API-Version 헤더에서 읽는다
+spring.mvc.apiversion.use.header=API-Version
+```
+
+```text
+$ curl -s localhost:19002/greet
+{"timestamp":"2026-10-22T01:24:32.533Z","status":400,"error":"Bad Request","path":"/greet"}
+$ curl -s -H API-Version:1 localhost:19002/greet
+hello
+$ curl -s -H API-Version:2 localhost:19002/greet
+{"text":"hello","version":2}
+$ curl -s -H API-Version:3 localhost:19002/greet
+{"timestamp":"2026-10-22T01:24:32.596Z","status":400,"error":"Bad Request","path":"/greet"}
+```
+
+헤더가 없거나 없는 버전이면 400이다. 헤더가 없을 때 기본 버전을 쓰려면 `spring.mvc.apiversion.default`를 준다. 헤더 대신 쿼리 파라미터, 미디어 타입 파라미터, 경로에서 읽을 수도 있다. 버전을 어디에 실을지, 언제 옛 버전을 닫을지 같은 설계 판단은 [API 버전 관리](/posts/api-versioning) 글에서 다뤘다.
+
+HTTP 서비스 클라이언트는 인터페이스만 쓰면 구현을 만들어 준다. Framework 7의 `@ImportHttpServices`로 그룹을 등록하고, Boot는 그룹마다 `spring.http.serviceclient.<그룹>.base-url` 같은 설정을 붙인다. 위의 버전 API를 이 클라이언트로 불러 봤다. 의존성은 `spring-boot-starter-restclient`를 더했다.
+
+```java
+@HttpExchange("/greet")
+interface GreetingClient {
+  @GetExchange String greet(@RequestHeader("API-Version") String version);
+}
+
+@SpringBootApplication
+@EnableResilientMethods
+@ImportHttpServices(group = "self", types = GreetingClient.class)
+public class New4App { ... }
+```
+
+```text
+# application.properties
+spring.http.serviceclient.self.base-url=http://localhost:19002
+```
+
+아래 그림은 시작 직후 실행한 코드가 클라이언트를 거쳐 버전별 핸들러에 닿는 길이다.
+
+<SequenceDiagram
+  caption="인터페이스 하나로 버전별 API를 부른다"
+  actors={[
+    { id: "runner", label: "Runner" },
+    { id: "proxy", label: "Client 프록시" },
+    { id: "rest", label: "RestClient" },
+    { id: "mvc", label: "MVC 핸들러" },
+  ]}
+  steps={[
+    { from: "runner", to: "proxy", label: "greet(\"2\")", title: "인터페이스 메서드를 부른다", detail: "주입받은 GreetingClient는 구현 클래스가 아니라 JDK 동적 프록시다.", payload: "client class = demo.new4.$Proxy65" },
+    { from: "proxy", to: "rest", label: "GET /greet", title: "어노테이션을 요청으로 바꾼다", detail: "@GetExchange와 @RequestHeader를 읽어 경로와 헤더를 채운다. base-url은 self 그룹 설정에서 온다.", payload: "GET http://localhost:19002/greet\nAPI-Version: 2" },
+    { from: "rest", to: "mvc", label: "HTTP", title: "실제 HTTP 요청이 나간다", detail: "같은 앱의 Tomcat이 받는다. 다른 서비스라면 base-url만 바꾸면 된다." },
+    { from: "mvc", to: "mvc", label: "version=2", title: "헤더로 핸들러를 고른다", detail: "API-Version 헤더가 2이니 v2()가 선택된다." },
+    { from: "mvc", to: "runner", label: "200 JSON", title: "응답이 문자열로 돌아온다", detail: "반환 타입이 String이라 본문을 그대로 받는다.", payload: "client v2 -> {\"text\":\"hello\",\"version\":2}" },
+  ]}
+/>
+
+```text
+client v1 -> hello
+client v2 -> {"text":"hello","version":2}
+client class = demo.new4.$Proxy65
+```
+
+`$Proxy65`라는 클래스 이름에서 보이듯 이것도 프록시다. [IoC 컨테이너와 DI](/posts/spring-ioc-di)에서 본 CGLIB 프록시와 달리 인터페이스만 있으니 JDK 동적 프록시로 만들어졌다.
+
+재시도도 Framework에 들어왔다. 예전에는 Spring Retry라는 별도 프로젝트를 썼는데, 7.0부터 `spring-core`에 `@Retryable`과 `@ConcurrencyLimit`이 생겼고 `@EnableResilientMethods`로 켠다. Boot 4.0 가이드는 Spring Retry의 의존성 관리를 뺐다고 적고 있으니, 계속 Spring Retry를 쓰려면 버전을 직접 적어야 한다.
+
+```java
+@Service
+class FlakyPricing {
+  private final AtomicInteger calls = new AtomicInteger();
+  @Retryable(maxRetries = 3, delay = 100)
+  public int price() {
+    int n = calls.incrementAndGet();
+    System.out.println("  price() attempt " + n);
+    if (n < 3) throw new IllegalStateException("upstream 503");
+    return 12000;
+  }
+}
+```
+
+```text
+  price() attempt 1
+  price() attempt 2
+  price() attempt 3
+price = 12000
+```
+
+두 번 실패하고 세 번째에 성공했다. 프록시 기반이라 같은 클래스 안에서 부르면 재시도가 걸리지 않는 함정도 `@Transactional`과 똑같다. 재시도 간격을 어떻게 잡아야 몰리지 않는지는 [재시도](/posts/retries) 글에서 다뤘다.
+
+널 안전성은 기능이라기보다 방향이다. Spring의 `@Nullable`이 JSpecify의 `org.jspecify.annotations.Nullable`로 바뀌었고, 4.1.1에서 옛 어노테이션을 쓰면 이렇게 경고가 난다.
+
+```text
+[WARNING] src/main/java/demo/orders/OrderService.java:[9,11] org.springframework.lang.Nullable in org.springframework.lang has been deprecated
+```
+
+자바 컴파일러 자체는 이 어노테이션으로 아무것도 검사하지 않는다. NullAway 같은 검사기를 붙였을 때, 그리고 Kotlin이 스프링 API를 부를 때 의미가 생긴다. 가이드는 Kotlin 코드나 널 검사를 켠 빌드가 이 변화로 깨질 수 있다고 경고한다. 스프링이 `null`을 돌려줄 수 있다고 표시한 API를 Kotlin에서 널이 아닌 타입으로 받고 있었다면 컴파일 오류가 난다.
+
+## 올리기 전에 확인할 목록
+
+실제로 해 보고 나서 정리한 순서다.
+
+1. 3.5.x 최신으로 올리고 `-Dmaven.compiler.showDeprecation=true`로 경고를 0개로 만든다. 테스트가 통과하는 상태로 커밋한다.
+2. 쓰는 기술을 적는다. Undertow를 쓰면 Tomcat이나 Jetty로 옮길 계획부터 세운다. Jersey, Spock처럼 4.0에서 지원이 빠지거나 막힌 것이 있는지 가이드를 본다.
+3. 4.0.x로 올리고 `spring-boot-properties-migrator`를 붙인다. 시간이 없으면 `spring-boot-starter-classic`으로 시작해 모듈별 스타터로 줄여 간다.
+4. 컴파일 오류를 원인별로 묶는다. 대부분 자동 구성 패키지, Jackson 3, 테스트 어노테이션 세 묶음이다. OpenRewrite 레시피로 반복 작업을 줄이되 결과는 빌드로 확인한다.
+5. 문자열로 적은 클래스 이름(`spring.autoconfigure.exclude`, 리플렉션, `@ConditionalOnClass(name = ...)`)을 검색한다. 컴파일러가 못 잡는다.
+6. API 응답을 이전 버전과 비교한다. Jackson 기본값 변화와 health 응답 모양 변화가 여기서 걸린다.
+7. migrator 경고가 0개가 되면 의존성을 지우고 4.1.x로 넘어간다.
+
+## 버전 숫자보다 큰 변화
+
+4.0은 버전 숫자 하나지만 실제로는 세 가지가 함께 바뀐 판이다. 자동 구성이 기술별 모듈로 쪼개져 패키지와 스타터 이름이 달라졌고, Jackson이 3으로 넘어갔고, 3.x 동안 경고로만 남아 있던 것들이 지워졌다. 이 글의 작은 앱에서 나온 오류도 모두 이 셋 중 하나였다. 그래서 3.5에서 경고를 지우고, 4.0에서 migrator로 설정을 잡고, 오류를 원인별로 묶어 고치면 생각보다 덜 아프다. 남은 위험은 컴파일러가 보지 않는 곳, 즉 설정 키와 문자열 클래스 이름과 응답 모양이다.
+
+## 면접에서 나올 만한 질문
+
+### Spring Boot 4.0에서 가장 크게 바뀐 것은 무엇인가요?
+
+자동 구성이 하나의 큰 jar에서 기술별 모듈로 쪼개진 것이다. 패키지가 `org.springframework.boot.<모듈>`로 바뀌고 스타터도 `spring-boot-starter-webmvc`처럼 기술 이름을 따른다. 여기에 Jackson 3 기본 채택, JSpecify 널 어노테이션, Jakarta EE 11 바닥, 3.x deprecated API 삭제가 함께 들어왔다. Java 바닥은 3.x와 같은 17이다.
+
+### 3.x에서 4.x로 올릴 때 어떤 순서로 하나요?
+
+먼저 3.5.x 최신으로 올리고 deprecation 경고를 모두 없앤다. 그다음 4.0.x로 올려 컴파일 오류를 원인별로 고치고, `spring-boot-properties-migrator`로 바뀐 설정 키를 찾는다. 4.1은 4.0에서 deprecated된 것을 지웠으니 4.0에서 경고를 정리한 뒤 넘어가고, 마지막에 migrator를 뗀다.
+
+### properties migrator는 무엇을 해 주고, 무엇을 못 하나요?
+
+시작할 때 환경을 훑어 이름이 바뀐 키는 새 키로 임시로 옮겨 주고 WARN으로 알려 주며, 타입이 달라 옮길 수 없는 키는 ERROR로 알려 준다. Boot가 메타데이터로 아는 키만 보니 사내 설정 키는 못 잡는다. 옮겨 준 덕분에 동작하는 상태라 운영에 남기면 안 되고, 경고를 다 고친 뒤 의존성을 지운다.
+
+### Jackson 3으로 바뀌면 무엇을 고쳐야 하나요?
+
+`com.fasterxml.jackson.databind`와 `core`를 쓰는 코드를 `tools.jackson`으로 바꾼다. `jackson-annotations`는 2.x 그대로라 DTO 어노테이션은 둔다. 예외가 `RuntimeException`이 되었고, Boot의 `@JsonComponent`는 `@JacksonComponent`가 됐으며 매퍼는 `JsonMapper` 빈으로 정의한다. 기본 설정이 바뀐 부분이 있으니 응답 JSON을 이전 버전과 비교하는 테스트를 둔다.
+
+### @MockBean이 없어졌는데 무엇으로 바꾸나요?
+
+Spring Framework의 `@MockitoBean`과 `@MockitoSpyBean`으로 바꾼다. 3.4에서 deprecated됐고 4.0에서 지워졌다. 테스트 클래스 필드에서만 동작하고 `@Configuration` 클래스에서는 쓸 수 없어서, 공용 설정에 목을 모아 두던 구조는 바꿔야 한다.
+
+### 업그레이드 후 TestRestTemplate 주입이 실패하는 이유는 무엇인가요?
+
+4.0부터 `@SpringBootTest`가 `TestRestTemplate`을 자동으로 만들지 않고, 클래스도 `spring-boot-resttestclient` 모듈로 옮겼다. `@AutoConfigureTestRestTemplate`을 붙여야 하고, 내부에서 쓰는 `RestTemplateBuilder`가 든 `spring-boot-restclient`도 클래스패스에 있어야 한다. 새 코드라면 `RestTestClient`와 `@AutoConfigureRestTestClient`로 옮기는 편이 간단하다.
+
+### OpenRewrite 같은 자동 마이그레이션 도구는 얼마나 믿을 수 있나요?
+
+패키지 이동, 어노테이션 교체, 설정 키 변경 같은 기계적인 작업은 잘한다. 다만 의존성 버전 결정이나 모듈 사이의 숨은 의존성 같은 판단은 틀릴 수 있어서, 돌린 뒤 반드시 빌드와 테스트로 확인하고 diff를 검토한다. 직접 돌려 봤을 때도 자바 코드 변경은 맞았지만 `pom.xml`은 그대로 빌드되지 않았다.
+
+### API 버전 관리 기능은 기존 방식과 무엇이 다른가요?
+
+예전에는 경로에 `/v1`을 넣거나 헤더를 직접 읽는 필터를 짰다. Framework 7부터는 `@GetMapping(version = "2")`처럼 매핑에 버전을 적고, 버전을 헤더·쿼리·경로·미디어 타입 중 어디서 읽을지 설정으로 정한다. 지원하지 않는 버전이나 빠진 버전은 400으로 막히고, `RestClient`와 HTTP 서비스 클라이언트도 같은 버전 정보를 보낼 수 있다.

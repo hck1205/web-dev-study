@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "spring-boot-4-migration",
+    title: "Spring Boot 4 마이그레이션: 3.5 앱을 4.1로 올리며 깨진 것들",
+    summary: "3.5.16 앱의 부모 버전만 4.1.1로 바꿨을 때 나온 컴파일·테스트 오류를 원인별로 고치고, properties migrator와 OpenRewrite 레시피의 실제 결과를 본다. 모듈로 쪼개진 자동 구성, Jackson 3, @MockitoBean, API 버전 관리, HTTP 서비스 클라이언트, 내장 @Retryable도 직접 돌려 본다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Backend", "Troubleshooting"],
+    date: "2026-10-26",
+    keywords: ["Spring Boot 4", "properties migrator", "OpenRewrite", "Jackson 3"],
+  },
+  {
+    slug: "spring-boot-auto-configuration",
+    title: "Spring Boot 자동 구성: 만든 적 없는 빈은 어디서 오나",
+    summary: "코드 없는 스타터 jar, AutoConfiguration.imports 목록, --debug 조건 평가 리포트를 직접 읽고, 내 빈을 두면 자동 구성이 물러나는 모습, 설정 출처의 우선순위와 환경 변수 이름 규칙, 시작 시 설정 검증, 프로필, 직접 만든 자동 구성까지 다룬다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Backend"],
+    date: "2026-10-26",
+    keywords: ["자동 구성", "조건 평가 리포트", "ConditionalOnMissingBean", "relaxed binding"],
+  },
+  {
+    slug: "spring-ioc-di",
+    title: "IoC 컨테이너와 DI: 빈은 어떻게 만들어지고 왜 프록시로 건네지나",
+    summary: "@Transactional이 같은 클래스 안의 호출에서만 사라지는 현상을 재현하고, 컨테이너가 빈을 만드는 순서, 생성자 주입, 같은 타입 빈 고르기, CGLIB 프록시의 함정, Boot 2.6부터 막힌 순환 참조, 스코프와 생명주기 콜백을 실제 출력으로 따라간다.",
+    topic: "programming/backend/spring",
+    tags: ["Spring", "Java", "Backend", "Design Pattern"],
+    date: "2026-10-26",
+    keywords: ["의존성 주입", "IoC 컨테이너", "생성자 주입", "순환 참조", "자기 호출"],
+  },
+  {
     slug: "digital-signatures-certificates",
     title: "전자 서명과 인증서: 서명 하나에서 신뢰 사슬까지",
     summary: "자체 인증서를 테스트하다 만난 unable to get local issuer certificate 오류에서 출발해 RSA-PSS·ECDSA·Ed25519 서명을 직접 만들고, 루트·중간·리프 체인을 openssl로 세워 검증·파손시켜 본다. 폐기와 Certificate Transparency까지 다룬다.",

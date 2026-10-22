@@ -550,6 +550,9 @@ import { SIT_UAT_TESTING } from "./sit-uat-testing";
 import { SLI_SLO } from "./sli-slo";
 import { SORTING_ALGORITHMS } from "./sorting-algorithms";
 import { SPRING_ANIMATION } from "./spring-animation";
+import { SPRING_BOOT_4_MIGRATION } from "./spring-boot-4-migration";
+import { SPRING_BOOT_AUTO_CONFIGURATION } from "./spring-boot-auto-configuration";
+import { SPRING_IOC_DI } from "./spring-ioc-di";
 import { SQL_AGGREGATION_PITFALLS } from "./sql-aggregation-pitfalls";
 import { SQL_BASICS } from "./sql-basics";
 import { SQL_BATCH_TIMEOUT_POOL } from "./sql-batch-timeout-pool";
@@ -1187,6 +1190,9 @@ export const QUESTION_SETS = [
   SLI_SLO,
   SORTING_ALGORITHMS,
   SPRING_ANIMATION,
+  SPRING_BOOT_4_MIGRATION,
+  SPRING_BOOT_AUTO_CONFIGURATION,
+  SPRING_IOC_DI,
   SQL_AGGREGATION_PITFALLS,
   SQL_BASICS,
   SQL_BATCH_TIMEOUT_POOL,

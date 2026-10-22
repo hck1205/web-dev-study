@@ -2,6 +2,45 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "spring-boot-4-migration": {
+    "links": [
+      "spring-boot-auto-configuration",
+      "spring-ioc-di",
+      "api-versioning",
+      "retries"
+    ],
+    "mentions": [
+      "rest-api-design",
+      "js-classes",
+      "db-migration-tools"
+    ]
+  },
+  "spring-boot-auto-configuration": {
+    "links": [
+      "spring-ioc-di",
+      "spring-boot-4-migration",
+      "secrets-management"
+    ],
+    "mentions": [
+      "rolling-deployment",
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "spring-ioc-di": {
+    "links": [
+      "spring-boot-auto-configuration",
+      "spring-boot-4-migration",
+      "hexagonal-architecture",
+      "test-pyramid-unit-tests",
+      "pattern-strategy",
+      "pattern-proxy",
+      "acid-transactions",
+      "pattern-singleton"
+    ],
+    "mentions": [
+      "sql-batch-timeout-pool"
+    ]
+  },
   "digital-signatures-certificates": {
     "links": [
       "https-tls",
@@ -1980,6 +2019,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "spring-ioc-di",
       "autoscaling",
       "event-loop",
       "sql-batch-timeout-pool",
@@ -4281,6 +4321,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-execution-context",
       "event-delegation",
       "js-classes",
+      "spring-ioc-di",
       "js-es-modules",
       "js-destructuring",
       "js-primitive-vs-reference"
@@ -4476,6 +4517,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "spring-ioc-di",
       "db-type-embedded",
       "js-currying-partial",
       "pattern-proxy",
@@ -4552,6 +4594,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "rendering-strategies",
       "dynamic-programming",
+      "spring-ioc-di",
       "redis-basics",
       "js-primitive-vs-reference",
       "dns"
@@ -4633,7 +4676,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
-      "db-types-overview"
+      "db-types-overview",
+      "spring-ioc-di"
     ]
   },
   "js-object-methods": {
@@ -4650,6 +4694,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "pattern-proxy",
+      "spring-ioc-di",
       "js-es-modules"
     ]
   },
@@ -8215,6 +8260,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "express-middleware",
       "sorting-algorithms",
       "ab-testing",
+      "spring-ioc-di",
       "redis-basics",
       "js-closures",
       "token-login"
@@ -8438,6 +8484,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "resilience-patterns",
       "http-versions",
+      "spring-ioc-di",
       "js-immutability-react",
       "js-destructuring",
       "grpc",
@@ -9292,6 +9339,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-basics",
       "js-prototype-chain",
       "db-types-overview",
+      "spring-ioc-di",
       "js-immutability-react",
       "js-shallow-deep-copy"
     ]
@@ -9532,6 +9580,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "hexagonal-architecture",
       "cron-jobs",
+      "spring-ioc-di",
       "thread-safety",
       "js-es-modules",
       "leader-election",
@@ -9567,6 +9616,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns"
     ],
     "mentions": [
+      "spring-ioc-di",
       "sql-batch-timeout-pool",
       "js-closures"
     ]
@@ -11879,6 +11929,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "optimistic-locking",
       "loading-patterns",
       "upper-layers-session-presentation-app",
+      "spring-ioc-di",
       "api-versioning",
       "client-data-cache",
       "resilience-patterns",
@@ -12272,6 +12323,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-function-forms",
       "garbage-collection",
       "event-loop",
+      "spring-ioc-di",
       "js-strict-mode",
       "js-closures",
       "layer-mtu-fragmentation",
