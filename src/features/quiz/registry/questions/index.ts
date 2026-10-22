@@ -45,6 +45,7 @@ import { CHAOS_ENGINEERING } from "./chaos-engineering";
 import { CI_CD_BASICS } from "./ci-cd-basics";
 import { CILIUM_EBPF } from "./cilium-ebpf";
 import { CIRCUIT_BREAKER } from "./circuit-breaker";
+import { CIS_BENCHMARK_KUBE_BENCH } from "./cis-benchmark-kube-bench";
 import { CLAUDE_CODE_CONTEXT_WINDOW } from "./claude-code-context-window";
 import { CLAUDE_CODE_EXTENSIONS } from "./claude-code-extensions";
 import { CLAUDE_CODE_FUNDAMENTALS_MAP } from "./claude-code-fundamentals-map";
@@ -59,6 +60,7 @@ import { COLD_STARTS } from "./cold-starts";
 import { CONNECTION_POOL } from "./connection-pool";
 import { CONSISTENCY_MODELS } from "./consistency-models";
 import { CONSISTENT_HASHING } from "./consistent-hashing";
+import { CONTAINER_SUPPLY_CHAIN_SECURITY } from "./container-supply-chain-security";
 import { COOKIE_SESSION_LOGIN } from "./cookie-session-login";
 import { CORE_WEB_VITALS } from "./core-web-vitals";
 import { CORS } from "./cors";
@@ -146,6 +148,7 @@ import { EXPONENTIAL_BACKOFF_JITTER } from "./exponential-backoff-jitter";
 import { EXPRESS_MIDDLEWARE } from "./express-middleware";
 import { EXTERNAL_SECRETS } from "./external-secrets";
 import { FAILOVER } from "./failover";
+import { FALCO_RUNTIME_SECURITY } from "./falco-runtime-security";
 import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FE_SD_NEWS_FEED } from "./fe-sd-news-feed";
@@ -542,6 +545,7 @@ import { SD_WALLET_TRANSFER } from "./sd-wallet-transfer";
 import { SD_WEB_CRAWLER_ARCHITECTURE } from "./sd-web-crawler-architecture";
 import { SD_WEB_CRAWLER_POLITENESS_DEDUP } from "./sd-web-crawler-politeness-dedup";
 import { SDN_VXLAN_OVERLAY } from "./sdn-vxlan-overlay";
+import { SECCOMP_APPARMOR } from "./seccomp-apparmor";
 import { SECRETS_MANAGEMENT } from "./secrets-management";
 import { SECURITY_GROUPS_NACL } from "./security-groups-nacl";
 import { SEMANTIC_VERSIONING } from "./semantic-versioning";
@@ -692,6 +696,7 @@ export const QUESTION_SETS = [
   CI_CD_BASICS,
   CILIUM_EBPF,
   CIRCUIT_BREAKER,
+  CIS_BENCHMARK_KUBE_BENCH,
   CLAUDE_CODE_CONTEXT_WINDOW,
   CLAUDE_CODE_EXTENSIONS,
   CLAUDE_CODE_FUNDAMENTALS_MAP,
@@ -706,6 +711,7 @@ export const QUESTION_SETS = [
   CONNECTION_POOL,
   CONSISTENCY_MODELS,
   CONSISTENT_HASHING,
+  CONTAINER_SUPPLY_CHAIN_SECURITY,
   COOKIE_SESSION_LOGIN,
   CORE_WEB_VITALS,
   CORS,
@@ -793,6 +799,7 @@ export const QUESTION_SETS = [
   EXPRESS_MIDDLEWARE,
   EXTERNAL_SECRETS,
   FAILOVER,
+  FALCO_RUNTIME_SECURITY,
   FASTAPI_BASICS,
   FAULT_TOLERANCE,
   FE_SD_NEWS_FEED,
@@ -1189,6 +1196,7 @@ export const QUESTION_SETS = [
   SD_WEB_CRAWLER_ARCHITECTURE,
   SD_WEB_CRAWLER_POLITENESS_DEDUP,
   SDN_VXLAN_OVERLAY,
+  SECCOMP_APPARMOR,
   SECRETS_MANAGEMENT,
   SECURITY_GROUPS_NACL,
   SEMANTIC_VERSIONING,

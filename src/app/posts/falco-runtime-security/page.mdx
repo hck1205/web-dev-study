@@ -1,0 +1,425 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("falco-runtime-security");
+
+이미지는 스캔을 통과했고, 서명도 맞고, seccomp 프로필도 걸려 있다. 그런데 웹 앱의 파일 업로드 취약점 하나로 누군가 컨테이너 안에서 명령을 실행한다. 컨테이너 안에서 이런 일이 벌어진다고 해 보자.
+
+```bash
+# nginx 컨테이너에 터미널을 붙여 들어가서 하는 일
+docker exec -it fx sh -c 'tty; id; head -1 /etc/shadow; echo 10.0.0.9 evil >> /etc/hosts; tail -1 /etc/hosts'
+```
+
+```text
+/dev/pts/0
+uid=0(root) gid=0(root) groups=0(root),0(root),1(bin),2(daemon),3(sys),4(adm),6(disk),10(wheel),11(floppy),20(dialout),26(tape),27(video)
+root:*::0:::::
+10.0.0.9 evil
+```
+
+셸이 떴고, 비밀번호 파일을 읽었고, `/etc/hosts`를 고쳤다. 전부 성공했다. 기본 seccomp 프로필은 이 중 아무것도 막지 않는다. `execve`, `openat`, `write`는 모든 프로그램이 쓰는 시스템 콜이다. 앞 단계의 장치들은 "들어오기 전"과 "할 수 있는 범위"를 좁힐 뿐, 허용된 범위 안의 이상한 행동은 보지 않는다.
+
+Falco는 이 빈자리를 맡는다. 노드의 커널에서 시스템 콜을 지켜보다가 "컨테이너에서 터미널 셸이 떴다", "민감한 파일을 읽었다" 같은 규칙에 맞으면 알림을 낸다. 막는 도구가 아니라 알아채는 도구다. 이 글은 Falco 0.45.1 컨테이너 이미지로 실습했다. 이 VM은 프로세스의 잠금 메모리 한도를 올릴 권한(CAP_SYS_RESOURCE)이 없어서 Falco의 이벤트 수집기가 뜨지 않았다. 그래서 규칙 파일 읽기, 규칙 검증, 필드 조회 같은 출력은 실제로 돌린 것이고, Falco가 내는 알림은 공식 출력 형식을 따른 예시로 표시한다.
+
+CKS 시리즈의 다른 글은 [CIS 벤치마크와 kube-bench](/posts/cis-benchmark-kube-bench), [seccomp와 AppArmor 프로필](/posts/seccomp-apparmor), [컨테이너 공급망 보안](/posts/container-supply-chain-security)이다. API 서버 쪽에서 누가 무엇을 했는지 남기는 기록은 [감사 로그](/posts/k8s-audit-logging)가, eBPF 자체의 원리는 [Cilium과 eBPF](/posts/cilium-ebpf)가 다룬다.
+
+## 막는 장치와 알아채는 장치
+
+컨테이너 보안 장치를 시점으로 나누면 이렇다.
+
+<ConceptDiagram
+  width={420}
+  height={270}
+  caption="막는 장치와 알아채는 장치"
+  nodes={[
+    { id: "img", label: "배포 전", sub: "스캔·서명·어드미션", x: 80, y: 50, w: 140 },
+    { id: "lim", label: "실행 범위", sub: "seccomp·AppArmor", x: 340, y: 50, w: 140 },
+    { id: "rt", label: "실행 중 행동", sub: "Falco", x: 210, y: 145, w: 130 },
+    { id: "api", label: "API 기록", sub: "감사 로그", x: 80, y: 235, w: 120 },
+    { id: "resp", label: "대응", sub: "격리·삭제", x: 340, y: 235, w: 110 },
+  ]}
+  edges={[
+    { from: "img", to: "rt", label: "통과한 이미지" },
+    { from: "lim", to: "rt", label: "허용된 범위" },
+    { from: "rt", to: "resp", label: "알림" },
+    { from: "api", to: "rt", dashed: true, arrow: "both", label: "서로 맞춰 본다" },
+  ]}
+/>
+
+seccomp와 AppArmor로 막을 수 있는 건 미리 막는다. 하지만 `sh`를 실행하는 것도, `/etc/shadow`를 여는 것도 정상 프로그램이 하는 일이라 일괄로 막기 어렵다. Falco는 "이 컨테이너에서 이 맥락으로 하면 이상하다"는 규칙으로 그 사이를 본다. 공격 흐름을 단계별로 놓고 보면 Falco가 어디서 알아채는지 보인다. 아래 그림에서 다음을 누르면 Pod 하나가 털리는 과정이 하나씩 그려진다.
+
+<NetworkTopology
+  caption="Pod 하나가 털리는 과정과 Falco 규칙"
+  width={440}
+  height={300}
+  zones={[
+    { id: "node", label: "노드", x: 120, y: 20, w: 310, h: 270, tone: "private" },
+    { id: "pod", label: "web Pod", x: 140, y: 45, w: 150, h: 230, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "atk", label: "공격자", x: 50, y: 70, icon: "client" },
+    { id: "app", label: "웹 앱", x: 215, y: 80, icon: "container" },
+    { id: "sh", label: "sh", sub: "tty 붙음", x: 215, y: 160, icon: "server" },
+    { id: "etc", label: "/etc/shadow", x: 215, y: 240, icon: "lock" },
+    { id: "api", label: "API 서버", sub: ":443", x: 370, y: 100, icon: "gateway" },
+    { id: "falco", label: "Falco", sub: "eBPF", x: 370, y: 220, icon: "firewall" },
+  ]}
+  links={[
+    { from: "atk", to: "app" },
+    { from: "app", to: "sh" },
+    { from: "sh", to: "etc" },
+    { from: "sh", to: "api" },
+    { from: "falco", to: "sh", dashed: true },
+  ]}
+  steps={[
+    { path: ["atk", "app"], packet: "업로드", title: "앱 취약점으로 들어온다", detail: "파일 업로드나 역직렬화 취약점으로 앱 프로세스가 명령을 실행하게 만든다. 여기까지는 정상 요청처럼 보인다." },
+    { path: ["app", "sh"], packet: "execve", title: "셸을 띄운다", detail: "Terminal shell in container 규칙이 execve 이벤트에서 tty가 붙은 셸을 본다. 웹 서버가 셸을 띄우는 일은 평소에 없다." },
+    { path: ["sh", "etc"], packet: "openat", title: "민감한 파일을 읽는다", detail: "Read sensitive file untrusted가 /etc/shadow 같은 파일을 신뢰하지 않는 프로그램이 여는 것을 본다." },
+    { path: ["sh", "api"], packet: "connect", title: "API 서버에 붙는다", detail: "Pod 안의 ServiceAccount 토큰으로 API 서버를 부른다. Contact K8S API Server From Container가 이 연결을 본다." },
+    { path: ["falco", "sh"], packet: "alert", highlight: ["falco"], title: "Falco는 알림만 낸다", detail: "Falco 자체는 막지 않는다. 알림을 받아 Pod를 격리하거나 지우는 일은 따로 붙인다." },
+  ]}
+/>
+
+## 커널에서 규칙까지 이벤트가 가는 길
+
+Falco는 노드마다 하나씩(쿠버네티스에서는 DaemonSet으로) 돈다. 시스템 콜 하나가 알림이 되기까지 아래 순서를 거친다.
+
+<SequenceDiagram
+  caption="execve 하나가 Falco 알림이 되기까지"
+  actors={[
+    { id: "p", label: "컨테이너 sh" },
+    { id: "bpf", label: "eBPF 프로브" },
+    { id: "rb", label: "링 버퍼" },
+    { id: "lib", label: "libsinsp" },
+    { id: "eng", label: "규칙 엔진" },
+  ]}
+  steps={[
+    { from: "p", to: "bpf", label: "execve", title: "커널의 추적 지점에서 잡는다", detail: "modern eBPF 프로브가 시스템 콜 진입·종료 지점에 붙어 있다. 프로세스는 아무것도 모른 채 계속 돈다." },
+    { from: "bpf", to: "rb", label: "이벤트 기록", title: "공유 버퍼에 쌓는다", detail: "인자와 결과를 링 버퍼에 쓴다. 기본은 CPU 두 개마다 버퍼 하나다. 사용자 공간이 못 따라오면 여기서 이벤트가 버려진다." },
+    { from: "rb", to: "lib", label: "읽기", title: "맥락을 붙인다", detail: "프로세스 트리, 열린 파일, 컨테이너 ID를 기억해 두고 이벤트에 붙인다. 런타임 소켓에서 이미지와 Pod 이름도 가져온다." },
+    { from: "lib", to: "eng", label: "proc.name=sh", title: "규칙과 맞춰 본다", detail: "evt.type으로 먼저 거른 규칙들의 조건만 평가한다. 기본 설정은 처음 맞는 규칙에서 멈춘다." },
+    { from: "eng", to: "eng", label: "output", title: "알림을 낸다", detail: "output 문자열의 %필드를 채워 stdout, 파일, HTTP, 프로그램으로 보낸다.", payload: "A shell was spawned in a container with an attached terminal | ... process=sh ..." },
+  ]}
+/>
+
+이벤트를 커널에서 꺼내는 부품을 드라이버라고 부른다. 0.45.1의 설정 파일에 적힌 선택지는 넷이다.
+
+```bash
+# 이미지 안의 falco.yaml에서 engine 설명 부분
+docker run --rm --entrypoint sh falcosecurity/falco:latest -c 'sed -n 285,289p /etc/falco/falco.yaml'
+```
+
+```text
+# - `kmod`: Kernel Module
+# - `modern_ebpf`: Modern eBPF (CO-RE eBPF probe)
+# - `replay`: Replay a scap trace file
+# - `nodriver`: No driver is injected into the system.
+#   This is useful to debug and to run plugins with 'syscall' source.
+```
+
+기본값은 `modern_ebpf`다. 커널의 BTF 정보로 한 번 빌드한 프로브를 여러 커널에서 그대로 쓰는 방식(CO-RE)이라, 노드마다 커널 모듈을 빌드할 필요가 없다. 대략 커널 5.8 이상에 BTF가 켜져 있어야 한다. 예전의 `ebpf`(legacy probe)는 이 판의 목록에 없다. `kmod`는 커널 모듈을 올리는 방식이라 오래된 커널에서 쓰지만, 모듈 로드를 막은 노드(Secure Boot, 잠긴 노드 OS)에서는 못 쓴다.
+
+이 VM에서 modern eBPF로 띄웠을 때는 이렇게 끝났다.
+
+```bash
+docker run -d --name falco --privileged --pid=host \
+  -v /var/run/docker.sock:/host/var/run/docker.sock -v /proc:/host/proc:ro -v /etc:/host/etc:ro \
+  falcosecurity/falco:latest falco -o engine.kind=modern_ebpf -o json_output=true
+docker logs falco 2>&1 | tail -6
+```
+
+```text
+2026-10-22T03:29:44+0000: Opening 'syscall' source with modern BPF probe.
+2026-10-22T03:29:44+0000: One ring buffer every '2' CPUs.
+2026-10-22T03:29:44+0000: [libs]: Trying to open the right engine!
+2026-10-22T03:29:44+0000: [libs]: libpman: unable to bump RLIMIT_MEMLOCK to RLIM_INFINITY (errno: 1 | message: Operation not permitted)
+2026-10-22T03:29:44+0000: An error occurred in an event source, forcing termination...
+Error: unable to configure the libpman state.
+```
+
+`--privileged`인데도 잠금 메모리 한도를 못 올렸다. 이 실습 VM은 바깥 샌드박스가 root에게서도 CAP_SYS_RESOURCE를 빼 두었고, Docker 데몬의 한도도 8MB로 묶여 있었다. 현장에서 같은 메시지를 보면 노드 OS나 컨테이너 런타임의 rlimit 설정, 보안 정책이 Falco DaemonSet의 권한을 줄이고 있지 않은지 본다. Falco가 CrashLoopBackOff인 동안에는 그 노드에서 아무것도 탐지되지 않는다는 점이 중요하다. Falco 자체의 상태도 감시 대상이다.
+
+## 규칙 한 줄씩 읽기
+
+Falco 이미지에는 기본 규칙 파일이 들어 있다. 이 판의 기본 파일에 든 규칙은 25개이고, 모두 `maturity_stable` 태그가 붙은 안정 규칙이다.
+
+```bash
+docker run --rm --entrypoint sh falcosecurity/falco:latest -c 'grep -c "^- rule:" /etc/falco/falco_rules.yaml; grep "^- rule:" /etc/falco/falco_rules.yaml | head -8'
+```
+
+```text
+25
+- rule: Directory traversal monitored file read
+- rule: Read sensitive file trusted after startup
+- rule: Read sensitive file untrusted
+- rule: Run shell untrusted
+- rule: System user interactive
+- rule: Terminal shell in container
+- rule: Contact K8S API Server From Container
+- rule: Netcat Remote Code Execution in Container
+```
+
+예전 글이나 시험 자료에 자주 나오는 "Write below etc" 같은 규칙은 이 파일에 없다. 기본 규칙은 성숙도에 따라 stable, incubating, sandbox로 나뉘어 따로 배포되고, 이미지에는 stable만 들어 있다. 필요한 규칙은 추가 규칙 파일로 받거나 직접 쓴다.
+
+맨 앞 장면의 셸을 잡는 규칙은 이렇게 생겼다. 조각을 누르면 필드마다 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="Terminal shell in container 규칙의 필드"
+  base="- rule: Terminal shell in container"
+  separator=" "
+  joiner=" · "
+  params={[
+    { key: "condition", value: "spawned_process and container and shell_procs and proc.tty != 0 ...", title: "언제 맞나", description: "매크로를 and로 엮은 필터식이다. 새 프로세스 실행이고, 호스트가 아닌 컨테이너이고, 이름이 셸 목록에 있고, 터미널이 붙어 있으면 맞는다.", required: true, code: "spawned_process            → evt.type in (execve, execveat)\ncontainer                  → container.id != host\nshell_procs                → proc.name in (shell_binaries)\nshell_binaries             → [ash, bash, csh, ksh, sh, tcsh, zsh, dash]" },
+    { key: "container_entrypoint", title: "부모가 런타임일 때만", description: "부모 프로세스가 없거나 runc, containerd-shim 같은 런타임이면 맞는다. kubectl exec로 들어온 셸이 이 모양이다." },
+    { key: "not user_expected_...", title: "예외를 끼우는 자리", description: "기본값은 never_true라 아무것도 빼지 않는다. 사용자가 이 매크로를 덮어써서 디버그용 이미지 같은 예외를 넣는다." },
+    { key: "output", value: "A shell was spawned ... %proc.cmdline %proc.tty", title: "알림 문장", description: "%필드 자리에 이벤트 값이 들어간다. 컨테이너 플러그인이 있으면 이미지·Pod 이름 같은 필드도 붙는다." },
+    { key: "priority", value: "NOTICE", title: "심각도", description: "EMERGENCY부터 DEBUG까지 syslog 등급을 쓴다. 설정의 priority 아래 등급은 내보내지 않는다." },
+    { key: "tags", value: "[mitre_execution, T1059]", title: "분류", description: "MITRE ATT&CK 기법 번호와 성숙도가 붙는다. 알림을 모아 볼 때 이 태그로 나눈다." },
+  ]}
+/>
+
+규칙에 쓸 수 있는 필드는 Falco가 직접 알려 준다.
+
+```bash
+docker run --rm --entrypoint falco falcosecurity/falco:latest --list=syscall 2>/dev/null \
+  | grep -E '^(proc\.(name|pname|cmdline|tty)|fd\.name|container\.image\.repository|k8s\.(pod\.name|ns\.name)) '
+```
+
+```text
+proc.name                     The process name (truncated after 16 characters) generating the event (task->comm). 
+proc.pname                    The proc.name (truncated after 16 characters) of the parent process. 
+proc.cmdline                  The concatenation of `proc.name + proc.args` (truncated after 4096 bytes) when starting 
+proc.tty                      The controlling terminal of the process. 0 for processes without a terminal. 
+fd.name                       FD full name. If the fd is a file, this field contains the full path. If the FD is a 
+container.image.repository    The container image repository (e.g. falcosecurity/falco). In instances of userspace 
+k8s.pod.name                  The Kubernetes pod name. This field is extracted from the container runtime socket 
+k8s.ns.name                   The Kubernetes namespace name. This field is extracted from the container runtime socket 
+```
+
+`proc.name`이 16자에서 잘린다는 설명을 눈여겨본다. 커널의 `comm` 값이라서 긴 이름의 프로그램은 잘린 이름으로 비교해야 한다. 공격자가 실행 파일 이름을 바꾸면 이름 기반 목록은 그대로 우회되므로, 중요한 규칙은 `proc.exepath`나 부모 관계까지 같이 본다.
+
+맨 앞의 셸이 규칙에 맞았다면 알림은 이런 모양으로 나온다(예시: 이 VM에서는 수집기가 뜨지 않아서, 0.45.1 규칙의 output 형식과 Falco의 JSON 출력 구조를 따라 적었다).
+
+```text
+{"hostname":"node-1","output":"2026-10-22T03:40:12.418230512+0000: Notice A shell was spawned in a container with an attached terminal | evt_type=execve user=root user_uid=0 user_loginuid=-1 process=sh proc_exepath=/bin/busybox parent=containerd-shim command=sh -c tty; id; head -1 /etc/shadow terminal=34816 exe_flags=EXE_WRITABLE|EXE_LOWER_LAYER container_id=3ad7b26ded6d container_name=web","priority":"Notice","rule":"Terminal shell in container","source":"syscall","tags":["T1059","container","maturity_stable","mitre_execution","shell"],"time":"2026-10-22T03:40:12.418230512Z"}
+```
+
+## 내 규칙을 쓰고 검증하기
+
+규칙을 고칠 때 기본 파일을 직접 건드리지 않는다. 판이 오르면 덮어써진다. 따로 파일을 만들어 기본 파일 뒤에 읽히게 하고(`rules_files`의 순서, 보통 `/etc/falco/rules.d/`나 `falco_rules.local.yaml`), 거기서 덧붙이거나 바꾼다.
+
+```yaml
+# custom_rules.yaml
+- list: allowed_debug_images
+  items: [registry.example.com/tools/netshoot]
+
+# 기본 규칙이 비워 둔 예외 매크로를 바꿔 끼운다
+- macro: user_expected_terminal_shell_in_container_conditions
+  condition: (container.image.repository in (allowed_debug_images))
+  override:
+    condition: replace
+
+# 기본 파일에 없는 규칙을 새로 쓴다
+- rule: Write below etc in container
+  desc: 컨테이너 안에서 /etc 아래 파일을 쓰기 모드로 연다
+  condition: >
+    open_write and container
+    and fd.name startswith /etc/
+    and not proc.name in (package_mgmt_binaries)
+  output: >
+    /etc 아래 쓰기 | file=%fd.name process=%proc.name command=%proc.cmdline
+    container=%container.name image=%container.image.repository
+  priority: ERROR
+  tags: [container, filesystem, mitre_persistence]
+```
+
+배포하기 전에 `-V`로 검증한다. 기본 파일과 같이 넣어야 매크로와 목록을 찾는다.
+
+```bash
+docker run --rm -v $PWD:/rules:ro --entrypoint falco falcosecurity/falco:latest \
+  -V /etc/falco/falco_rules.yaml -V /rules/custom_rules.yaml 2>&1 | tail -2
+```
+
+```text
+/etc/falco/falco_rules.yaml: Ok
+/rules/custom_rules.yaml: Ok
+```
+
+필드 이름 오타는 이렇게 잡힌다.
+
+```text
+/rules/bad_rules.yaml: Invalid
+1 Errors:
+In rules content: (/rules/bad_rules.yaml:0:0)
+    rule 'Broken rule': (/rules/bad_rules.yaml:0:2)
+    rule condition: (/rules/bad_rules.yaml:2:13)
+    condition expression: ("open_write and fd...":3:29)
+------
+open_write and fd.nmae startswith /etc/
+                                      ^
+------
+LOAD_ERR_COMPILE_CONDITION (Error compiling condition): filter_check called with nonexistent field fd.nmae
+```
+
+운영 중인 Falco에 검증 안 한 파일을 넣으면 규칙을 읽지 못해 프로세스가 멈춘다. 노드 전체의 탐지가 같이 꺼진다. CI에서 `-V`를 돌리는 게 가장 싼 안전장치다.
+
+인터넷에서 찾은 예제를 그대로 붙였을 때 흔히 보는 오류도 있다.
+
+```yaml
+- macro: user_known_package_manager_in_container
+  condition: (container.image.repository = registry.example.com/base/builder)
+  append: true
+```
+
+```text
+LOAD_ERR_VALIDATE (Error validating rule/macro/list/exception objects): Macro uses 'append' or 'override.condition: append' but no macro by that name already exists
+
+1 Warnings:
+In rules content: (/rules/tune_rules.yaml:0:0)
+    macro 'user_known_package_manager_in_container': (/rules/tune_rules.yaml:10:2)
+------
+- macro: user_known_package_manager_in_container
+  ^
+------
+LOAD_DEPRECATED_ITEM (Used deprecated item): 'append' key is deprecated. Add an 'append' entry (e.g. 'condition: append') under 'override' instead.
+```
+
+오류가 둘이다. 덧붙이려는 매크로가 stable 규칙 파일에 없고(incubating 쪽 규칙이 쓰던 매크로다), `append: true`라는 옛 문법은 `override:` 아래로 옮겨 갔다. 규칙 파일의 판과 예제의 판을 맞춰 봐야 한다.
+
+## 시끄러운 알림 줄이기
+
+Falco를 처음 켜면 알림이 쏟아진다. 백업 에이전트가 `/etc/shadow`를 읽고, 보안 스캐너가 민감한 파일을 훑고, 운영자가 디버그 이미지로 셸을 띄운다. 알림이 너무 많으면 아무도 안 본다. 줄이는 방법은 세 가지다. 규칙의 비어 있는 예외 매크로(`user_known_...`, `user_expected_...`)를 덮어쓰거나, 규칙에 `exceptions`를 붙이거나, 우선순위 기준을 올린다.
+
+```yaml
+# tune_rules.yaml
+- rule: Read sensitive file untrusted
+  exceptions:
+  - name: backup_agent_reads_shadow
+    fields: [proc.name, fd.name]
+    comps: [=, =]
+    values:
+    - [restic, /etc/shadow]
+  override:
+    exceptions: append
+
+- macro: user_known_read_sensitive_files_activities
+  condition: (container.image.repository = registry.example.com/security/scanner)
+  override:
+    condition: replace
+```
+
+```text
+/etc/falco/falco_rules.yaml: Ok
+/rules/tune_rules.yaml: Ok
+```
+
+`exceptions`는 필드 묶음과 값 줄의 표다. 값 한 줄의 모든 필드가 맞으면 그 이벤트는 알림에서 빠진다. 조건식에 `and not (...)`을 계속 붙이는 것보다 무엇을 왜 뺐는지 읽기 쉽다. 아래 그림은 이벤트 몇 개가 규칙과 예외를 지나는 순서다.
+
+<AlgoTrace
+  caption="Read sensitive file untrusted와 예외 한 줄"
+  cells={["cat /etc/shadow", "restic /etc/shadow", "restic /etc/passwd", "cat /etc/hosts", "nginx openat"]}
+  memoryLabel="판정"
+  steps={[
+    { pointer: 0, memory: ["cat: 알림"], caption: "민감한 파일을 신뢰 목록에 없는 cat이 연다. 조건에 맞고 예외에도 없으니 알림이다." },
+    { pointer: 1, memory: ["cat: 알림", "restic shadow: 예외"], caption: "백업 에이전트가 shadow를 읽는다. 예외 줄 [restic, /etc/shadow]의 두 필드가 모두 맞아서 빠진다." },
+    { pointer: 2, memory: ["cat: 알림", "restic shadow: 예외", "restic passwd: 알림"], caption: "같은 restic이라도 파일이 다르면 예외 줄과 맞지 않는다. 예외는 필드 전부가 맞아야 한다." },
+    { pointer: 3, memory: ["restic shadow: 예외", "restic passwd: 알림", "hosts: 통과"], caption: "/etc/hosts는 민감한 파일 목록에 없어서 이 규칙의 조건부터 맞지 않는다." },
+    { pointer: 4, found: [4], memory: ["restic passwd: 알림", "hosts: 통과", "nginx: 통과"], caption: "대부분의 이벤트는 evt.type과 조건에서 바로 걸러진다. 규칙 엔진이 실제로 끝까지 평가하는 이벤트는 적다." },
+  ]}
+/>
+
+예외를 넓게 잡는 실수가 가장 위험하다. `proc.name = restic`만으로 빼면 공격자가 자기 도구 이름을 `restic`으로 바꿔 우회한다. 예외에는 이미지 저장소, 실행 경로, 네임스페이스처럼 공격자가 바꾸기 어려운 필드를 섞는다.
+
+아래 편집기에서 예외 판정을 직접 짜 볼 수 있다. 이벤트의 `fd.name`이 민감한 파일 목록에 있으면 조건에 맞고, 예외 중 값 한 줄의 필드가 전부 맞으면 빠진다. 비교 연산은 `=`, `in`, `startswith`만 다룬다.
+
+<CodePlayground
+  caption="Falco 예외 판정"
+  functionName="shouldAlert"
+  initialCode={`// event: { "proc.name": "cat", "fd.name": "/etc/shadow", "container.image": "nginx" }
+// sensitive: 민감한 파일 경로 배열
+// exceptions: [{ fields: [...], comps: ["=", "in", "startswith"], values: [[...], ...] }]
+function shouldAlert(event, sensitive, exceptions) {
+  return false;
+}`}
+  solution={`function shouldAlert(event, sensitive, exceptions) {
+  if (!sensitive.includes(event["fd.name"])) return false;
+  for (const ex of exceptions) {
+    for (const row of ex.values) {
+      const all = ex.fields.every((f, i) => {
+        const v = event[f], want = row[i], op = ex.comps[i];
+        if (op === "=") return v === want;
+        if (op === "in") return want.includes(v);
+        if (op === "startswith") return typeof v === "string" && v.startsWith(want);
+        return false;
+      });
+      if (all) return false;
+    }
+  }
+  return true;
+}`}
+  tests={[
+    { label: "cat이 shadow를 읽음", args: [{ "proc.name": "cat", "fd.name": "/etc/shadow", "container.image": "nginx" }, ["/etc/shadow", "/etc/passwd"], [{ fields: ["proc.name", "fd.name"], comps: ["=", "="], values: [["restic", "/etc/shadow"]] }]], expected: true },
+    { label: "restic이 shadow를 읽음", args: [{ "proc.name": "restic", "fd.name": "/etc/shadow", "container.image": "restic/restic" }, ["/etc/shadow", "/etc/passwd"], [{ fields: ["proc.name", "fd.name"], comps: ["=", "="], values: [["restic", "/etc/shadow"]] }]], expected: false },
+    { label: "restic이라도 passwd는 알림", args: [{ "proc.name": "restic", "fd.name": "/etc/passwd", "container.image": "restic/restic" }, ["/etc/shadow", "/etc/passwd"], [{ fields: ["proc.name", "fd.name"], comps: ["=", "="], values: [["restic", "/etc/shadow"]] }]], expected: true },
+    { label: "디버그 이미지의 bash", args: [{ "proc.name": "bash", "fd.name": "/etc/shadow", "container.image": "registry.example.com/tools/netshoot" }, ["/etc/shadow"], [{ fields: ["container.image", "proc.name"], comps: ["startswith", "in"], values: [["registry.example.com/tools/", ["sh", "bash"]]] }]], expected: false },
+    { label: "디버그 이미지라도 python3", args: [{ "proc.name": "python3", "fd.name": "/etc/shadow", "container.image": "registry.example.com/tools/netshoot" }, ["/etc/shadow"], [{ fields: ["container.image", "proc.name"], comps: ["startswith", "in"], values: [["registry.example.com/tools/", ["sh", "bash"]]] }]], expected: true },
+    { label: "민감하지 않은 파일", args: [{ "proc.name": "cat", "fd.name": "/etc/hosts", "container.image": "nginx" }, ["/etc/shadow", "/etc/passwd"], []], expected: false },
+  ]}
+/>
+
+설정 쪽에도 함정이 하나 있다. `rule_matching`의 기본값이 `first`다.
+
+```text
+# Rules conditions are evaluated in the order they are defined in the rules files.
+# For this reason, when using `first` as value, only the first defined rule will
+# trigger, possibly shadowing other rules.
+```
+
+같은 이벤트에 맞는 규칙이 둘이면 먼저 정의된 것만 알림을 낸다. 내가 쓴 "Write below etc in container" 규칙이 기본 파일의 다른 규칙과 같은 이벤트에 맞으면, 내 규칙은 조용할 수 있다. 시험해 볼 때 알림이 안 나오면 규칙이 틀렸다고 단정하기 전에 앞의 규칙이 먼저 가져가지 않았는지 본다. `all`로 바꾸면 다 내보내지만 평가 비용이 늘어난다.
+
+## 알림을 받은 다음
+
+Falco는 stdout, 파일, HTTP, 외부 프로그램으로 알림을 내보낸다. 쿠버네티스에서는 보통 Helm 차트로 DaemonSet을 깔고, 함께 쓰는 Falcosidekick이 알림을 Slack, 웹훅, 로그 저장소, 메시지 큐로 나눠 보낸다. JSON 출력(`json_output: true`)으로 받으면 `rule`, `priority`, `output_fields`로 바로 거를 수 있다.
+
+```bash
+# 노드의 Falco 로그에서 셸 알림만, 어느 Pod인지 (예시: 이 환경에서는 Falco가 뜨지 않았다)
+kubectl -n falco logs ds/falco --since=1h | grep '"rule":"Terminal shell in container"' \
+  | jq -r '.output_fields | "\(.["k8s.ns.name"])/\(.["k8s.pod.name"]) \(.["proc.cmdline"])"'
+```
+
+알림 다음의 대응은 자동화할 수 있지만 조심해야 한다. "셸이 뜨면 Pod를 지운다"를 자동으로 걸면 증거(메모리, 열린 연결, 바뀐 파일)도 같이 사라지고, 오탐 하나가 서비스 장애가 된다. 흔히 쓰는 순서는 이렇다. 먼저 사람에게 알린다. 확실한 규칙(예를 들어 커널 모듈 로드, 컨테이너 탈출 시도)에만 자동 대응을 건다. 자동 대응도 바로 지우기보다 Pod에 라벨을 붙여 NetworkPolicy로 네트워크를 끊고, 노드를 cordon하고, 증거를 뜬 다음 지운다. 같은 시간대의 [감사 로그](/posts/k8s-audit-logging#지운-사람을-jq로-찾기)에서 그 Pod로 `exec`를 연 사용자가 있었는지도 맞춰 본다. 셸이 공격자의 것이 아니라 운영자의 `kubectl exec`였을 수 있다.
+
+CKS 시험에서는 이 흐름의 앞부분이 나온다. 노드의 Falco 로그(패키지로 설치했다면 systemd 서비스의 저널)에서 특정 규칙의 알림을 찾아 어느 컨테이너인지 알아내고, 해당 Pod를 정리하거나 규칙의 output 형식을 바꾸는 식이다. 규칙을 바꾼 뒤에는 `-V`로 검증하고 Falco를 다시 읽게 한다.
+
+## 탐지는 마지막 그물이다
+
+Falco는 앞 단계를 모두 지나 들어온 행동을 잡는 마지막 그물이다. 그물이 촘촘할수록 좋은 게 아니라, 걸린 것을 사람이 실제로 볼 수 있어야 의미가 있다. 기본 stable 규칙으로 시작하고, 우리 환경의 정상 행동을 예외로 빼서 알림을 줄이고, 규칙 파일은 CI에서 검증하고, Falco가 노드마다 살아 있는지도 같이 감시한다.
+
+## 면접에서 나올 만한 질문
+
+### Falco는 무엇을 하고, seccomp나 AppArmor와 무엇이 다른가요?
+
+Falco는 노드의 시스템 콜 이벤트를 커널에서 받아 규칙에 맞는 행동을 탐지하고 알림을 내는 런타임 보안 도구다. seccomp와 AppArmor는 정해 둔 범위 밖의 동작을 막는 장치이고, Falco는 허용된 범위 안의 이상 행동(컨테이너에서 셸 실행, 민감 파일 읽기)을 알아챈다. Falco 자체는 막지 않으므로 대응은 따로 붙인다.
+
+### Falco는 이벤트를 어떻게 수집하나요?
+
+드라이버가 커널의 시스템 콜 진입·종료 지점에 붙어 이벤트를 링 버퍼에 쓰고, 사용자 공간의 libsinsp가 이를 읽어 프로세스·파일·컨테이너 맥락을 붙인 뒤 규칙 엔진이 평가한다. 기본 드라이버는 BTF와 CO-RE를 쓰는 modern eBPF라 노드마다 커널 모듈을 빌드하지 않아도 된다. 커널이 오래됐으면 커널 모듈(kmod)을 쓴다. 버퍼가 넘치면 이벤트가 버려진다.
+
+### "Terminal shell in container" 규칙은 어떤 조건으로 맞나요?
+
+execve 이벤트이고, 호스트가 아닌 컨테이너이고, 프로세스 이름이 셸 목록에 있고, 터미널(tty)이 붙어 있고, 부모가 런타임(runc, containerd-shim)이거나 없을 때 맞는다. `kubectl exec -it`로 들어온 셸이 정확히 이 모양이다. 디버그 이미지처럼 예상한 경우는 `user_expected_terminal_shell_in_container_conditions` 매크로를 덮어써서 뺀다.
+
+### 알림이 너무 많을 때 어떻게 줄이나요?
+
+규칙의 user_known 같은 예외 매크로를 덮어쓰거나, 규칙에 exceptions 표를 붙이거나, 내보낼 우선순위 기준을 올린다. 예외에는 프로세스 이름처럼 쉽게 바꿀 수 있는 필드만 쓰지 말고 이미지 저장소, 실행 경로, 네임스페이스를 섞는다. 기본 규칙 파일은 직접 고치지 않고 뒤에 읽히는 별도 파일에서 override로 바꾼다.
+
+### 직접 쓴 규칙이 알림을 안 냅니다. 무엇을 보나요?
+
+먼저 `falco -V`로 규칙이 문법상 맞는지, 쓰는 필드와 매크로가 그 판에 있는지 본다. 다음으로 `rule_matching`이 기본값 first라서 같은 이벤트에 먼저 정의된 다른 규칙이 맞으면 내 규칙은 평가되지 않는다는 점을 확인한다. 조건의 `evt.type`이 실제 시스템 콜과 맞는지(open이 아니라 openat), `proc.name`이 16자에서 잘리는지도 본다.
+
+### Falco 알림을 받으면 Pod를 바로 지우는 게 맞나요?
+
+대부분은 아니다. 바로 지우면 메모리, 연결, 바뀐 파일 같은 증거가 사라지고, 오탐이면 서비스 장애가 된다. 먼저 사람에게 알리고, 확실한 규칙에만 자동 대응을 건다. 자동 대응도 네트워크 격리, 노드 cordon, 증거 확보 후 삭제 순서가 낫다. 감사 로그로 그 시간에 운영자의 exec가 있었는지도 맞춰 본다.
+
+### Falco가 노드에서 CrashLoopBackOff입니다. 무엇이 문제일 수 있나요?
+
+드라이버를 못 올린 경우가 흔하다. modern eBPF는 BTF가 있는 커널이 필요하고, 잠금 메모리 한도를 올리거나 BPF 프로그램을 올릴 권한이 없으면 시작하지 못한다. kmod는 모듈 로드가 막힌 노드에서 실패한다. 검증하지 않은 규칙 파일도 프로세스를 멈춘다. 그동안 그 노드는 탐지가 꺼진 상태이므로 Falco 자체의 상태를 감시해야 한다.

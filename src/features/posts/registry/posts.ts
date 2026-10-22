@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "falco-runtime-security",
+    title: "Falco 런타임 탐지: 허용된 시스템 콜 안의 이상 행동",
+    summary: "기본 seccomp가 막지 않는 셸 실행과 민감 파일 읽기에서 출발해 Falco가 eBPF로 이벤트를 받아 규칙을 평가하는 흐름, 기본 규칙 읽기, 내 규칙 쓰기와 -V 검증, 예외로 알림 줄이기, rule_matching first의 함정, 알림 뒤의 대응 순서를 정리한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Observability", "DevOps"],
+    date: "2026-10-26",
+    keywords: ["Falco", "런타임 탐지", "Falcosidekick", "modern eBPF"],
+  },
+  {
+    slug: "container-supply-chain-security",
+    title: "컨테이너 공급망 보안: SBOM, 스캔, 서명, 어드미션",
+    summary: "같은 태그로 다른 이미지가 올라오는 바꿔치기에서 출발해 digest 고정, Syft SBOM과 Trivy 스캔 결과 읽기, cosign 키 서명과 키리스 서명 검증, SBOM 증명을 로컬 레지스트리에서 해 보고, ValidatingAdmissionPolicy와 ImagePolicyWebhook의 fail-open·fail-closed 동작을 실제 API 서버에서 확인한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Docker", "DevOps"],
+    date: "2026-10-26",
+    keywords: ["SBOM", "cosign", "Sigstore", "ImagePolicyWebhook", "이미지 서명"],
+  },
+  {
+    slug: "seccomp-apparmor",
+    title: "seccomp와 AppArmor 프로필: 앱에 맞는 허용 목록 만들기",
+    summary: "Docker 기본 seccomp 프로필이 무엇을 막는지 JSON으로 열어 보고, strace와 SCMP_ACT_LOG 반복으로 nginx 전용 허용 목록을 만들어 runc가 먼저 넘어지는 장면과 리로드가 막히는 장면을 재현한다. AppArmor 프로필과 complain 모드, Localhost 프로필을 노드마다 나눠 주는 문제와 막힌 원인을 가려내는 순서도 다룬다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "Linux", "Container"],
+    date: "2026-10-26",
+    keywords: ["SCMP_ACT_LOG", "AppArmor 프로필", "Security Profiles Operator", "seccomp 허용 목록"],
+  },
+  {
+    slug: "cis-benchmark-kube-bench",
+    title: "CIS 벤치마크와 kube-bench: FAIL 목록을 읽고 고치는 순서",
+    summary: "kube-bench가 항목 하나를 ps와 stat 출력으로 판정하는 방식부터 따라가고, 기본 컨트롤 플레인에서 나온 FAIL을 플래그와 파일 권한으로 고쳐 PASS로 바꾼다. 중복 플래그를 첫 값으로 읽는 점검기의 착시, 익명 인증을 끄면 헬스 체크가 멈추는 항목, kubelet 설정과 Job 실행, 예외 관리까지 실제 클러스터 프로세스로 확인한다.",
+    topic: "programming/server-infra/kubernetes/security",
+    tags: ["Kubernetes", "Security", "DevOps", "Linux"],
+    date: "2026-10-26",
+    keywords: ["kube-bench", "CIS Kubernetes Benchmark", "NodeRestriction", "anonymous-auth"],
+  },
+  {
     slug: "elk-stack-basics",
     title: "ELK 스택 실전: ingest pipeline, 데이터 스트림, ILM, ES|QL",
     summary: "message 한 줄과 받은 시각뿐인 nginx 로그에서 출발해 Elasticsearch 9.5에서 dissect 파이프라인으로 쪼개고, 기본 logs 템플릿과 데이터 스트림, 컴포넌트 템플릿으로 타입을 못 박고, ILM으로 넘기고 지우고, ES|QL로 묻는 과정을 실제 출력으로 따라간다. 인덱스마다 타입이 달라 질의가 깨지는 장면과 Loki와의 선택 기준도 다룬다.",

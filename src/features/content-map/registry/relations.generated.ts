@@ -2,6 +2,92 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "falco-runtime-security": {
+    "links": [
+      "cis-benchmark-kube-bench",
+      "seccomp-apparmor",
+      "container-supply-chain-security",
+      "k8s-audit-logging",
+      "cilium-ebpf"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "k8s-network-policy",
+      "hosts-file",
+      "k8s-daemonset",
+      "docker-container-basics",
+      "k8s-security-context",
+      "helm-basics",
+      "k8s-node-maintenance",
+      "k8s-certifications",
+      "webhooks"
+    ]
+  },
+  "container-supply-chain-security": {
+    "links": [
+      "dockerfile-image-layers",
+      "ci-cd-basics",
+      "dependency-hell",
+      "digital-signatures-certificates",
+      "cis-benchmark-kube-bench",
+      "seccomp-apparmor",
+      "falco-runtime-security",
+      "k8s-admission-control"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "k8s-pod-basics",
+      "owasp-top-10-map",
+      "k8s-coredns",
+      "k8s-pod-troubleshooting",
+      "https-tls",
+      "what-happens-google-com",
+      "local-k8s-kind-minikube",
+      "k8s-certifications",
+      "webhooks"
+    ]
+  },
+  "seccomp-apparmor": {
+    "links": [
+      "k8s-security-context",
+      "cis-benchmark-kube-bench",
+      "container-supply-chain-security",
+      "falco-runtime-security"
+    ],
+    "mentions": [
+      "blue-green-deployment",
+      "k8s-daemonset",
+      "docker-container-basics",
+      "k8s-architecture",
+      "linux-processes-signals",
+      "linux-files-permissions",
+      "osi-in-practice",
+      "k8s-certifications"
+    ]
+  },
+  "cis-benchmark-kube-bench": {
+    "links": [
+      "k8s-certifications",
+      "seccomp-apparmor",
+      "container-supply-chain-security",
+      "falco-runtime-security",
+      "k8s-serviceaccount-tokens",
+      "k8s-audit-logging",
+      "k8s-certificates-pki"
+    ],
+    "mentions": [
+      "k8s-architecture",
+      "k8s-pod-security-admission",
+      "k8s-security-context",
+      "helm-basics",
+      "authn-vs-authz",
+      "linux-files-permissions",
+      "osi-in-practice",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "eks-cluster-basics"
+    ]
+  },
   "elk-stack-basics": {
     "links": [
       "centralized-logging-pipeline",
@@ -5609,6 +5695,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-security-admission",
       "service-mesh",
       "k8s-audit-logging",
+      "cis-benchmark-kube-bench",
+      "seccomp-apparmor",
+      "container-supply-chain-security",
+      "falco-runtime-security",
       "helm-dependencies-oci-gitops",
       "k8s-deploy-pipeline-eks",
       "distributed-tracing",
@@ -6007,6 +6097,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
+      "container-supply-chain-security",
       "authn-vs-authz",
       "what-happens-google-com",
       "high-availability",
@@ -6166,6 +6257,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "iptables-basics",
       "cilium-ebpf",
+      "falco-runtime-security",
       "local-k8s-kind-minikube",
       "eks-cluster-basics"
     ]
@@ -6391,6 +6483,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-security-admission"
     ],
     "mentions": [
+      "seccomp-apparmor",
       "docker-container-basics",
       "k8s-architecture",
       "local-k8s-kind-minikube"
@@ -8505,6 +8598,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "bash-scripting",
       "terraform-basics",
+      "container-supply-chain-security",
       "token-login"
     ]
   },
@@ -8804,6 +8898,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "vpc-subnets-route-tables",
       "reverse-proxy-lb-api-gateway",
+      "falco-runtime-security",
       "layer-ip-addressing",
       "what-happens-google-com",
       "layer-ip-routing-icmp",
@@ -10636,6 +10731,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice"
     ],
     "mentions": [
+      "seccomp-apparmor",
       "nginx-reverse-proxy",
       "k8s-service-types",
       "docker-container-basics",

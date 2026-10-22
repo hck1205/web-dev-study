@@ -1,0 +1,525 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("seccomp-apparmor");
+
+nginx 컨테이너에 직접 만든 seccomp 프로필을 걸었다. 페이지는 잘 뜬다. 며칠 뒤 설정을 바꾸고 `nginx -s reload`를 쳤더니 이런 줄이 나온다.
+
+```text
+2026/10/22 03:13:09 [notice] 35#35: signal process started
+2026/10/22 03:13:09 [alert] 35#35: kill(1, 1) failed (1: Operation not permitted)
+nginx: [alert] kill(1, 1) failed (1: Operation not permitted)
+```
+
+root로 도는 프로세스가 자기 자식에게 신호 하나를 못 보낸다. 권한 문제처럼 보이지만, 프로필을 만들 때 `kill` 시스템 콜을 목록에 넣지 않았을 뿐이다. 서버를 띄우고 요청 몇 번을 보내는 동안에는 nginx가 `kill`을 한 번도 부르지 않았기 때문이다.
+
+seccomp와 AppArmor가 무엇이고 securityContext의 어느 필드인지는 [securityContext](/posts/k8s-security-context#시스템-콜을-거르는-seccomp)에서 다뤘다. 이 글은 그다음 질문에 답한다. 기본 프로필은 정확히 무엇을 막나, 앱에 맞춘 좁은 프로필은 어떻게 만들고 어디서 깨지나, 그 프로필을 노드마다 어떻게 나눠 주나. 실습은 Ubuntu 24.04 호스트의 Docker 29.8과 runc로 했다. 이 VM의 커널은 AppArmor 모듈 없이 빌드되어 있어서 AppArmor 부분은 동작을 직접 재현하지 못했고, 해당 출력은 쿠버네티스 공식 튜토리얼의 것을 옮겼다고 표시한다.
+
+CKS 시리즈의 다른 글은 [CIS 벤치마크와 kube-bench](/posts/cis-benchmark-kube-bench), [컨테이너 공급망 보안](/posts/container-supply-chain-security), [Falco 런타임 탐지](/posts/falco-runtime-security)다.
+
+## 시스템 콜 하나가 지나는 관문
+
+프로세스가 파일을 열거나 신호를 보내려면 커널에 시스템 콜을 건다. 그 요청은 커널 안에서 여러 검사를 차례로 지난다. 아래 그림에서 다음을 누르면 `kill(1, SIGHUP)` 하나가 지나는 길을 따라간다.
+
+<SequenceDiagram
+  caption="kill(1, SIGHUP) 하나가 지나는 검사"
+  actors={[
+    { id: "app", label: "nginx" },
+    { id: "sc", label: "seccomp" },
+    { id: "cap", label: "권한 검사" },
+    { id: "lsm", label: "AppArmor" },
+    { id: "k", label: "커널 동작" },
+  ]}
+  steps={[
+    { from: "app", to: "sc", label: "syscall 62", title: "커널에 들어오자마자", detail: "시스템 콜 번호와 인자 여섯 개가 seccomp BPF 필터에 먼저 들어간다. 경로나 파일 이름은 모르고, 숫자만 본다.", payload: "nr=62 (kill) args=[1, 1, ...]" },
+    { from: "sc", to: "app", label: "EPERM", title: "목록에 없으면 여기서 끝", detail: "허용 목록에 kill이 없으면 커널은 실제 동작을 하지 않고 바로 오류를 돌려준다. 앱은 Operation not permitted를 받는다." },
+    { from: "sc", to: "cap", label: "ALLOW", title: "목록에 있으면 다음 검사", detail: "필터가 허용하면 평소의 권한 검사로 간다. 신호를 보낼 수 있는 UID인지, capability가 있는지 본다." },
+    { from: "cap", to: "lsm", label: "LSM 훅", title: "경로와 동작 단위의 검사", detail: "AppArmor는 커널 곳곳의 LSM 훅에서 이 프로세스의 프로필이 이 동작(파일 쓰기, 신호, 네트워크)을 허용하는지 본다." },
+    { from: "lsm", to: "k", label: "허용", title: "그제야 실제로 한다", detail: "모든 검사를 지난 요청만 신호를 보낸다. 앞에서 하나라도 막으면 같은 EPERM이나 EACCES로 보여서 앱 로그만으로는 어디서 막혔는지 모른다." },
+  ]}
+/>
+
+둘은 보는 것이 다르다. seccomp는 "어떤 시스템 콜을, 어떤 숫자 인자로"를 본다. 포인터가 가리키는 문자열(파일 경로)은 읽지 못한다. AppArmor는 "어떤 경로에 읽기·쓰기를, 어떤 capability를, 어떤 네트워크를"을 본다. 그래서 "`/etc` 아래에 쓰지 마라"는 seccomp로는 못 하고 AppArmor로 한다. 반대로 "새 namespace를 만들지 마라"는 seccomp가 시스템 콜 단위로 깔끔하게 막는다.
+
+<ConceptDiagram
+  width={420}
+  height={260}
+  caption="컨테이너를 좁히는 장치가 보는 것"
+  nodes={[
+    { id: "p", label: "컨테이너 프로세스", x: 210, y: 35, w: 160 },
+    { id: "sc", label: "seccomp", sub: "시스템 콜 번호·인자", x: 80, y: 130, w: 140 },
+    { id: "cap", label: "capability", sub: "root 특권 조각", x: 210, y: 210, w: 130 },
+    { id: "aa", label: "AppArmor", sub: "경로·동작 (Ubuntu)", x: 340, y: 130, w: 140 },
+    { id: "se", label: "SELinux", sub: "라벨 (RHEL)", x: 340, y: 220, w: 120 },
+  ]}
+  edges={[
+    { from: "p", to: "sc", label: "먼저" },
+    { from: "p", to: "cap" },
+    { from: "p", to: "aa" },
+    { from: "aa", to: "se", dashed: true, arrow: "both", label: "노드마다 하나" },
+  ]}
+/>
+
+AppArmor와 SELinux는 같은 자리(LSM)를 놓고 배포판마다 하나를 쓴다. Ubuntu와 Debian은 AppArmor, RHEL·Fedora 계열은 SELinux가 기본이다. 쿠버네티스에서는 `appArmorProfile`과 `seLinuxOptions`가 각각의 필드다.
+
+## 기본 프로필이 막는 것
+
+Docker와 containerd, CRI-O의 `RuntimeDefault`는 모두 Docker가 처음 만든 기본 프로필 계열이다. 원본은 moby 저장소에 JSON으로 있다. 열어 보면 구조가 단순하다.
+
+```bash
+# Docker 기본 seccomp 프로필의 뼈대
+curl -sSLf -o default.json https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json
+jq '{defaultAction, defaultErrnoRet, archMap: [.archMap[].architecture], groups: (.syscalls|length)}' default.json
+```
+
+```text
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "defaultErrnoRet": 1,
+  "archMap": [
+    "SCMP_ARCH_X86_64",
+    "SCMP_ARCH_AARCH64",
+    "SCMP_ARCH_MIPS64",
+    "SCMP_ARCH_MIPS64N32",
+    "SCMP_ARCH_MIPSEL64",
+    "SCMP_ARCH_MIPSEL64N32",
+    "SCMP_ARCH_S390X",
+    "SCMP_ARCH_RISCV64",
+    "SCMP_ARCH_LOONGARCH64"
+  ],
+  "groups": 60
+}
+```
+
+기본 동작이 `SCMP_ACT_ERRNO`에 errno 1(EPERM)이다. 목록에 없는 시스템 콜은 전부 "Operation not permitted"로 돌려보낸다. 그 아래 60개 묶음이 허용 규칙이다. 조각을 누르면 규칙 하나에 들어가는 필드가 나온다.
+
+<UrlAnatomy
+  caption="seccomp 프로필 규칙 하나"
+  base="{"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "\"names\"", value: "[\"clone\"]", title: "어떤 시스템 콜에", description: "이름 목록이다. 런타임이 아키텍처별 번호로 바꿔서 BPF 필터를 만든다.", required: true },
+    { key: "\"action\"", value: "\"SCMP_ACT_ALLOW\"", title: "맞으면 무엇을", description: "ALLOW(허용), ERRNO(오류 반환), KILL_PROCESS(죽임), LOG(허용하고 기록), TRACE, NOTIFY가 있다.", required: true },
+    { key: "\"args\"", value: "[{index:0, value:0x7E020000, op:MASKED_EQ}]", title: "인자 조건", description: "첫 번째 인자에 마스크를 씌운 값이 0일 때만 맞는다. clone의 플래그 중 namespace 비트가 하나도 없으면 허용한다는 뜻이다.", code: "(flags & 0x7E020000) == 0" },
+    { key: "\"excludes\"", value: "{caps:[\"CAP_SYS_ADMIN\"]}", title: "이럴 땐 이 규칙을 빼고", description: "컨테이너에 CAP_SYS_ADMIN이 있으면 이 제한 규칙 대신 clone을 통째로 허용하는 다른 규칙이 쓰인다. 프로필을 만들 때 런타임이 판단한다." },
+    { key: "\"errnoRet\"", value: "38", title: "돌려줄 오류 번호", description: "ERRNO 규칙에서 EPERM 대신 다른 번호를 줄 수 있다. 기본 프로필은 clone3에 38(ENOSYS)을 줘서 glibc가 옛 clone으로 물러나게 한다." },
+  ]}
+/>
+
+허용 이름을 세 보면 이렇다.
+
+```bash
+# 조건 없이 허용하는 이름, 조건부까지 합친 이름
+jq '[.syscalls[] | select(.action=="SCMP_ACT_ALLOW" and .args==null and .includes==null and .excludes==null) | .names[]] | unique | length' default.json
+jq '[.syscalls[] | select(.action=="SCMP_ACT_ALLOW") | .names[]] | unique | length' default.json
+# 몇 가지 위험한 시스템 콜은 어떤 조건에서 열리나
+for s in unshare mount keyctl ptrace bpf reboot; do printf "%s: " $s
+  jq -r --arg s $s '[.syscalls[] | select(.names|index($s)) | (.action + (if .includes.caps then " caps="+(.includes.caps|join(",")) else "" end) + (if .includes.minKernel then " minKernel="+.includes.minKernel else "" end))] | join(" | ")' default.json
+done
+```
+
+```text
+361
+426
+unshare: SCMP_ACT_ALLOW caps=CAP_SYS_ADMIN
+mount: SCMP_ACT_ALLOW caps=CAP_SYS_ADMIN
+keyctl: 
+ptrace: SCMP_ACT_ALLOW minKernel=4.8 | SCMP_ACT_ALLOW caps=CAP_SYS_PTRACE
+bpf: SCMP_ACT_ALLOW caps=CAP_SYS_ADMIN | SCMP_ACT_ALLOW caps=CAP_BPF
+reboot: SCMP_ACT_ALLOW caps=CAP_SYS_BOOT
+```
+
+`unshare`, `mount`, `bpf`는 그 capability를 준 컨테이너에서만 열린다. `keyctl`은 아예 목록에 없다. 커널 키링은 namespace로 나뉘지 않아서 컨테이너끼리 섞이기 때문이다. `ptrace`는 커널 4.8부터 seccomp 우회 구멍이 막혀서 허용으로 바뀌었다. 목록에서 io_uring 계열을 찾아도 나오지 않는다. 커널 취약점이 자주 나온 통로라 기본 프로필에서 빠졌다.
+
+이 기본 프로필이 실제로 무엇을 막는지는 user namespace 하나로 바로 보인다.
+
+```bash
+# 기본 프로필과 프로필 없음에서 각각 user namespace를 만들어 본다
+docker run --rm alpine:3.20 grep -E 'Seccomp' /proc/self/status
+docker run --rm alpine:3.20 unshare -U -r id; echo "exit=$?"
+docker run --rm --security-opt seccomp=unconfined alpine:3.20 grep -E 'Seccomp' /proc/self/status
+docker run --rm --security-opt seccomp=unconfined alpine:3.20 unshare -U -r id; echo "exit=$?"
+```
+
+```text
+Seccomp:	2
+Seccomp_filters:	1
+unshare: unshare(0x10000000): Operation not permitted
+exit=1
+Seccomp:	0
+Seccomp_filters:	0
+uid=0(root) gid=0(root) groups=0(root),0(root),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody),65534(nobody)
+exit=0
+```
+
+`0x10000000`이 `CLONE_NEWUSER`다. 프로필 없이 띄운 컨테이너에서는 아무 capability 없이도 새 user namespace를 만들고 그 안에서 root가 된다. 이 안에서는 평소 막힌 커널 기능(네트워크 설정, 마운트)을 건드릴 수 있어서, 커널 권한 상승 공격의 흔한 출발점이다. 쿠버네티스는 Pod에 아무것도 안 적으면 이 `Unconfined` 상태로 띄운다. kubelet의 `seccompDefault: true`가 있어야 위쪽 줄처럼 된다.
+
+## 허용 목록을 직접 만든다
+
+기본 프로필은 400개 넘는 시스템 콜을 연다. 아무 앱이나 돌아가게 하려고 넓게 잡은 목록이다. 특정 앱 하나만 돌릴 컨테이너라면 그 앱이 실제로 쓰는 것만 열 수 있다. 순서는 셋이다. 앱이 부르는 시스템 콜을 모으고, 그걸 허용 목록으로 만들고, 목록에 없는 것을 기록만 하는 모드로 돌려서 빠진 걸 채운다.
+
+모으는 방법으로는 `strace`가 가장 손쉽다. 컨테이너 안에 strace가 없어도, 이미지를 풀어 호스트에서 `chroot`로 실행하면 된다.
+
+```bash
+# nginx 이미지의 파일 시스템을 풀고, 호스트의 strace로 시스템 콜을 기록한다
+docker create --name ngx-export nginx:1.27-alpine
+mkdir rootfs && docker export ngx-export | tar -x -C rootfs && docker rm ngx-export
+sudo timeout 4 strace -f -qq -o ngx.trace chroot rootfs /usr/sbin/nginx -g 'daemon off;' &
+sleep 2; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:80/
+# 이름만 뽑아 많이 부른 순서로
+awk '{print $2}' ngx.trace | grep -oE '^[a-z_0-9]+\(' | tr -d '(' | sort | uniq -c | sort -rn | head -8
+awk '{print $2}' ngx.trace | grep -oE '^[a-z_0-9]+\(' | tr -d '(' | sort -u | wc -l
+```
+
+```text
+200
+    361 munmap
+    192 mmap
+    136 rt_sigprocmask
+     53 close
+     31 write
+     31 fcntl
+     30 open
+     30 gettid
+70
+```
+
+시작하고 요청 하나에 응답하는 동안 70가지를 불렀다. `chroot` 자체가 부른 것도 몇 개 섞였다. 이 70개로 `defaultAction: SCMP_ACT_ERRNO` 프로필을 만들어 컨테이너에 걸었더니 nginx가 아니라 runc가 먼저 넘어졌다.
+
+```text
+docker: Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error closing exec fds: get handle to /proc/thread-self/fd: fstatfs fsmount:fscontext:proc: operation not permitted
+```
+
+runc는 필터를 건 다음 앱을 `execve`하기 직전까지 몇 가지 일을 더 한다. 열린 파일을 정리하고(`close_range`), capability를 맞추고(`capget`, `capset`), 실행 파일을 확인한다. 이 시스템 콜도 같은 필터를 지나야 한다. 앱만 추적해서는 이걸 알 수 없다.
+
+빠진 걸 찾는 데는 `SCMP_ACT_LOG`를 쓴다. 기본 동작을 LOG로 바꾸면 목록에 없는 시스템 콜도 허용하되 커널 로그에 남긴다. 컨테이너는 정상으로 돌고, 로그만 보면 된다. 기록이 어떻게 생겼는지는 아무 규칙 없이 전부 LOG로 두는 프로필로 먼저 봤다.
+
+```bash
+# 모든 시스템 콜을 허용하면서 기록하는 프로필
+echo '{"defaultAction":"SCMP_ACT_LOG","architectures":["SCMP_ARCH_X86_64"]}' > log-all.json
+docker run --rm --security-opt seccomp=log-all.json alpine:3.20 cat /etc/hostname > /dev/null
+sudo dmesg | grep -c 'type=1326'
+sudo dmesg | grep 'type=1326' | tail -1
+```
+
+```text
+10
+[ 7507.924987] audit: type=1326 audit(1792633039.866:11): auid=4294967295 uid=0 gid=0 ses=4294967295 subj=kernel pid=6090 comm="runc:[2:INIT]" exe="/runc" sig=0 arch=c000003e syscall=72 compat=0 ip=0x557d714adaae code=0x7ffc0000
+```
+
+`type=1326`이 seccomp 기록이다. `comm`이 누가 불렀는지, `syscall=72`가 번호, `code=0x7ffc0000`이 LOG 동작이라는 뜻이다. 번호는 `/usr/include/x86_64-linux-gnu/asm/unistd_64.h`에서 이름으로 바꾼다(72는 `fcntl`).
+
+여기서 함정이 하나 있다. auditd가 없으면 커널은 이 기록을 일반 커널 로그로 내보내는데, 그 경로에 속도 제한이 걸려 있다.
+
+```bash
+# 커널 로그 속도 제한: 5초에 10줄
+cat /proc/sys/kernel/printk_ratelimit /proc/sys/kernel/printk_ratelimit_burst
+```
+
+```text
+5
+10
+```
+
+`cat` 하나를 돌렸는데 기록이 딱 10줄이었다. 나머지는 버려졌다. 그래서 허용 목록에 LOG 기본 동작을 붙여 "목록에 없는 것만" 기록하게 하고, 찾은 것을 목록에 더해 다시 돌리는 일을 기록이 0줄이 될 때까지 반복했다. 반복은 작은 스크립트로 돌렸다. 매번 5초 넘게 쉬고, 새 커널 로그의 번호를 이름으로 바꿔 목록에 붙인다.
+
+```bash
+# iter.sh의 핵심: LOG 프로필로 띄우고, 요청 하나 보내고, 새 기록의 번호를 이름으로
+docker run -d --name ngx -p 19320:80 --security-opt seccomp=ngx-log.json --entrypoint nginx nginx:1.27-alpine -g 'daemon off;'
+curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:19320/
+sudo dmesg | tail -n +$((N0+1)) | grep 'type=1326' | sed -E 's/.*syscall=([0-9]+).*/\1/' | sort -u
+```
+
+스크립트 전체를 돌린 출력은 이렇다. 회차마다 응답 코드, 목록 크기, 새로 찾은 이름을 찍는다.
+
+```text
+iter 1 http=200 count=76 new: capset newfstatat faccessat2
+iter 2 http=200 count=79 new:
+```
+
+auditd를 켠 노드라면 `/var/log/audit/audit.log`에 빠짐없이 쌓이므로 이 과정이 한두 번에 끝난다. 아래 그림은 손으로 돌린 앞의 회차까지 합쳐 목록이 채워진 순서다.
+
+<AlgoTrace
+  caption="LOG 모드를 돌릴 때마다 빠진 시스템 콜이 채워진다"
+  cells={["strace 70개", "1회차", "2회차", "3회차", "4회차", "5회차"]}
+  memoryLabel="새로 찾은 것"
+  steps={[
+    { pointer: 0, memory: ["앱이 부른 70개"], caption: "strace로 앱이 시작하고 응답하는 동안 부른 시스템 콜을 모았다. ERRNO로 걸면 runc가 먼저 넘어진다." },
+    { pointer: 1, memory: ["capget", "fstatfs", "close_range", "openat2"], caption: "LOG 모드 첫 실행. runc가 exec 직전에 쓰는 것들이 나왔다. 로그가 10줄에서 끊겼다." },
+    { pointer: 2, memory: ["futex", "tgkill", "statx"], caption: "5초 넘게 기다렸다 다시 돌린다. 앞에서 잘린 기록이 이번에 보인다." },
+    { pointer: 3, memory: ["capset", "newfstatat", "faccessat2"], caption: "셋이 더 나왔다. 처음부터 entrypoint 셸을 건너뛰고 nginx를 바로 실행하도록 바꿨다." },
+    { pointer: 4, found: [4], memory: ["(없음)"], caption: "새 기록이 0줄. 79개로 시작과 요청 처리에 필요한 것이 다 찼다." },
+    { pointer: 5, memory: ["kill"], caption: "며칠 뒤 nginx -s reload가 kill을 부른다. 수집할 때 하지 않은 동작은 목록에 없다." },
+  ]}
+/>
+
+79개짜리 목록을 `SCMP_ACT_ERRNO`로 걸면 이렇게 된다.
+
+```bash
+jq '.defaultAction="SCMP_ACT_ERRNO"' ngx-log.json > nginx-allow.json
+docker run -d --name ngx -p 19320:80 --security-opt seccomp=nginx-allow.json --entrypoint nginx nginx:1.27-alpine -g 'daemon off;'
+curl -s -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1:19320/
+docker exec ngx cat /etc/alpine-release; echo "exit=$?"
+docker exec ngx unshare -U -r id; echo "exit=$?"
+docker exec ngx ping -c1 -W1 127.0.0.1; echo "exit=$?"
+docker exec ngx nginx -s reload; echo "exit=$?"
+```
+
+```text
+http=200
+3.21.3
+exit=0
+unshare: unshare(0x10000000): Operation not permitted
+exit=1
+PING 127.0.0.1 (127.0.0.1): 56 data bytes
+ping: sendto: Operation not permitted
+exit=1
+2026/10/22 03:13:09 [notice] 35#35: signal process started
+2026/10/22 03:13:09 [alert] 35#35: kill(1, 1) failed (1: Operation not permitted)
+nginx: [alert] kill(1, 1) failed (1: Operation not permitted)
+exit=1
+```
+
+`docker exec`로 들어온 프로세스도 같은 필터 아래에 있다. 공격자가 셸을 얻어도 `ping`조차 못 보낸다(`sendto`가 없다). 대신 운영자가 하던 `reload`도 막혔다. 이 글 맨 앞의 장면이다.
+
+좁은 프로필은 이 두 얼굴을 같이 가진다. 수집할 때 하지 않은 동작은 모두 막힌다. 설정 리로드, 로그 회전 신호, 드물게 타는 오류 처리 경로, 라이브러리 업데이트로 바뀐 호출(같은 일을 `stat` 대신 `statx`로 하는 식)이 다 그렇다. 그래서 실무에서는 대개 둘 중 하나를 고른다. 모든 Pod에 `RuntimeDefault`를 기본으로 걸고, 노출이 크거나 공격받기 쉬운 몇 개만 직접 만든 프로필을 쓴다. 직접 만든 프로필은 운영에서 할 동작(리로드, 헬스 체크, 종료 신호)을 수집 단계에 일부러 넣고, 이미지 버전을 올릴 때마다 LOG 모드로 한 번 더 돌려 본다.
+
+성능을 걱정할 필요는 거의 없다. 1바이트씩 400만 번 읽고 쓰는 `dd`로 재 봤다.
+
+```bash
+for opt in seccomp=unconfined seccomp=default.json seccomp=nginx-allow.json; do
+  for r in 1 2 3; do
+    docker run --rm --security-opt $opt alpine:3.20 dd if=/dev/zero of=/dev/null bs=1 count=4000000 2>&1 | grep copied | sed "s|^|$opt |"
+  done
+done
+```
+
+```text
+seccomp=unconfined 4000000 bytes (3.8MB) copied, 2.115186 seconds, 1.8MB/s
+seccomp=unconfined 4000000 bytes (3.8MB) copied, 2.209785 seconds, 1.7MB/s
+seccomp=unconfined 4000000 bytes (3.8MB) copied, 1.549633 seconds, 2.5MB/s
+seccomp=default.json 4000000 bytes (3.8MB) copied, 1.678542 seconds, 2.3MB/s
+seccomp=default.json 4000000 bytes (3.8MB) copied, 1.532941 seconds, 2.5MB/s
+seccomp=default.json 4000000 bytes (3.8MB) copied, 1.472552 seconds, 2.6MB/s
+seccomp=nginx-allow.json 4000000 bytes (3.8MB) copied, 1.517886 seconds, 2.5MB/s
+seccomp=nginx-allow.json 4000000 bytes (3.8MB) copied, 1.495792 seconds, 2.4MB/s
+seccomp=nginx-allow.json 4000000 bytes (3.8MB) copied, 1.603527 seconds, 2.4MB/s
+```
+
+시스템 콜 800만 번에서 프로필 사이의 차이가 실행마다 생기는 흔들림보다 작았다. 이 VM 한 대에서 잰 값이지만, 필터가 인자 조건 없이 항상 허용하는 시스템 콜은 커널(5.11부터)이 결과를 비트맵으로 기억해 두기 때문에 매번 BPF를 돌지 않는다.
+
+## 규칙을 판정하는 함수 짜 보기
+
+허용 목록 프로필의 판정은 간단하다. 이름이 맞고 인자 조건이 모두 맞는 허용 규칙이 하나라도 있으면 허용, 없으면 기본 동작이다. 인자 비교는 같음(`SCMP_CMP_EQ`)과 마스크를 씌운 같음(`SCMP_CMP_MASKED_EQ`, `(인자 & value) == valueTwo`, valueTwo가 없으면 0)만 다룬다. 테스트의 프로필은 기본 프로필의 `clone`과 `personality` 규칙을 그대로 옮겼다.
+
+<CodePlayground
+  caption="seccomp 허용 목록 판정"
+  functionName="decide"
+  initialCode={`// profile: { defaultAction, syscalls: [{ names, action, args? }] }
+// args 조건: { index, value, op: "SCMP_CMP_EQ" | "SCMP_CMP_MASKED_EQ", valueTwo? }
+function decide(profile, name, args) {
+  return profile.defaultAction;
+}`}
+  solution={`function decide(profile, name, args) {
+  for (const rule of profile.syscalls) {
+    if (!rule.names.includes(name)) continue;
+    const ok = (rule.args || []).every((c) => {
+      const a = args[c.index];
+      if (c.op === "SCMP_CMP_EQ") return a === c.value;
+      if (c.op === "SCMP_CMP_MASKED_EQ") return (a & c.value) === (c.valueTwo || 0);
+      return false;
+    });
+    if (ok) return rule.action;
+  }
+  return profile.defaultAction;
+}`}
+  tests={[
+    { label: "read는 허용", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["read", "write", "openat"], action: "SCMP_ACT_ALLOW" }, { names: ["clone"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 2114060288, op: "SCMP_CMP_MASKED_EQ" }] }, { names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 0, op: "SCMP_CMP_EQ" }] }, { names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 8, op: "SCMP_CMP_EQ" }] }] }, "read", []], expected: "SCMP_ACT_ALLOW" },
+    { label: "mount는 목록에 없다", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["read", "write", "openat"], action: "SCMP_ACT_ALLOW" }, { names: ["clone"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 2114060288, op: "SCMP_CMP_MASKED_EQ" }] }] }, "mount", []], expected: "SCMP_ACT_ERRNO" },
+    { label: "평범한 fork용 clone", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["clone"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 2114060288, op: "SCMP_CMP_MASKED_EQ" }] }] }, "clone", [18874385]], expected: "SCMP_ACT_ALLOW" },
+    { label: "CLONE_NEWUSER가 섞인 clone", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["clone"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 2114060288, op: "SCMP_CMP_MASKED_EQ" }] }] }, "clone", [268435473]], expected: "SCMP_ACT_ERRNO" },
+    { label: "personality(8)은 두 번째 규칙", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 0, op: "SCMP_CMP_EQ" }] }, { names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 8, op: "SCMP_CMP_EQ" }] }] }, "personality", [8]], expected: "SCMP_ACT_ALLOW" },
+    { label: "personality(0x40000)은 막힘", args: [{ defaultAction: "SCMP_ACT_ERRNO", syscalls: [{ names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 0, op: "SCMP_CMP_EQ" }] }, { names: ["personality"], action: "SCMP_ACT_ALLOW", args: [{ index: 0, value: 8, op: "SCMP_CMP_EQ" }] }] }, "personality", [262144]], expected: "SCMP_ACT_ERRNO" },
+  ]}
+/>
+
+`18874385`는 `0x01200011`(`SIGCHLD | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID`), 보통의 `fork()`가 넘기는 값이다. `268435473`은 거기에 `CLONE_NEWUSER`(`0x10000000`)를 더한 값이다. seccomp는 인자로 들어온 숫자만 보므로 이런 비트 검사는 할 수 있지만, `openat`의 경로 문자열처럼 포인터 뒤의 내용은 볼 수 없다. 그 일은 AppArmor 몫이다.
+
+## AppArmor는 경로로 막는다
+
+AppArmor 프로필은 JSON이 아니라 규칙 문장의 목록이다. 쿠버네티스 공식 튜토리얼의 예제는 모든 파일 쓰기를 막는다.
+
+```text
+#include <tunables/global>
+
+profile k8s-apparmor-example-deny-write flags=(attach_disconnected) {
+  #include <abstractions/base>
+
+  file,
+
+  # Deny all file writes.
+  deny /** w,
+}
+```
+
+`file,`로 파일 접근을 다 허용한 다음 `deny /** w,`로 쓰기만 뺀다. 경로 패턴(`/etc/**`, `/var/log/nginx/*.log`)과 권한(r, w, x, l, k)을 조합하고, `capability net_bind_service,`나 `network inet tcp,` 같은 줄로 capability와 네트워크도 다룬다. seccomp가 못 하는 "이 디렉터리에만 쓰기"를 여기서 한다.
+
+이 VM은 커널에 AppArmor가 없어서 Docker도 seccomp만 보고한다.
+
+```bash
+docker info | sed -n '/Security Options/,/Kernel Version/p'
+```
+
+```text
+ Security Options:
+  seccomp
+   Profile: builtin
+ Kernel Version: 6.18.44-fc-v139
+```
+
+AppArmor가 켜진 Ubuntu 노드라면 `apparmor` 줄이 하나 더 있고, Docker와 containerd는 각자의 기본 프로필(`docker-default`, `cri-containerd.apparmor.d`)을 건다. 노드에서 하는 일은 이렇다. 아래 명령은 이 환경에서 돌리지 못했다.
+
+```bash
+# 노드에 프로필을 올린다 (-r: 이미 있으면 교체)
+sudo apparmor_parser -r /etc/apparmor.d/k8s-apparmor-example-deny-write
+# 올라간 프로필과 모드 확인
+sudo aa-status | grep -A3 'profiles are in enforce mode'
+# 막지 않고 기록만 하는 complain 모드로 바꿔 시험한다 (apparmor-utils 패키지)
+sudo aa-complain /etc/apparmor.d/k8s-apparmor-example-deny-write
+# 다시 막는 모드로
+sudo aa-enforce /etc/apparmor.d/k8s-apparmor-example-deny-write
+```
+
+complain 모드가 seccomp의 LOG와 같은 자리다. 막힌 동작은 `dmesg`나 `/var/log/syslog`에 `apparmor="DENIED"`(complain이면 `ALLOWED`)로 남는다. `aa-logprof`는 그 기록을 읽어 프로필에 넣을 규칙을 제안한다.
+
+Pod에서는 1.30부터 `appArmorProfile` 필드로 건다. 컨테이너 수준에 적으면 그 컨테이너에만, Pod 수준에 적으면 모든 컨테이너에 적용된다.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-apparmor
+spec:
+  securityContext:
+    appArmorProfile:
+      type: Localhost
+      localhostProfile: k8s-apparmor-example-deny-write   # 노드에 올라간 프로필 이름
+  containers:
+  - name: hello
+    image: busybox:1.28
+    command: ["sh", "-c", "echo 'Hello AppArmor!' && sleep 1h"]
+```
+
+노드에 그 이름의 프로필이 없으면 Pod는 스케줄되고 이미지도 받지만 컨테이너가 만들어지지 않는다. 공식 튜토리얼에 실린 이벤트는 이렇다(예시, 런타임마다 문구가 다르다).
+
+```text
+  Warning  Failed     7s (x2 over 8s)  kubelet            Error: failed to get container spec opts: failed to generate apparmor spec opts: apparmor profile not found k8s-apparmor-example-allow-write
+```
+
+참고로 Ubuntu 23.10부터는 호스트 쪽에서도 AppArmor로 권한 없는 user namespace 생성을 제한한다(`kernel.apparmor_restrict_unprivileged_userns`). 앞에서 seccomp로 막은 것과 같은 공격면을 다른 장치로 한 번 더 막는 셈이다. 버전과 설정에 따라 다르니 노드에서 `sysctl`로 확인한다.
+
+## 프로필을 노드에 나눠 주는 일
+
+seccomp도 AppArmor도 `Localhost` 프로필은 노드의 파일이다. 쿠버네티스는 이 파일을 대신 나눠 주지 않고, 스케줄러는 어느 노드에 어떤 프로필이 있는지 모른다. 아래 그림은 프로필 하나가 Pod에 걸리기까지의 길이다. 다음을 누르면 경로가 하나씩 그려진다.
+
+<NetworkTopology
+  caption="Localhost 프로필이 컨테이너에 걸리기까지"
+  width={440}
+  height={300}
+  zones={[
+    { id: "n1", label: "node-1", x: 200, y: 20, w: 230, h: 120, tone: "private" },
+    { id: "n2", label: "node-2 (새로 추가)", x: 200, y: 160, w: 230, h: 120, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "git", label: "프로필 저장소", x: 70, y: 70, icon: "server" },
+    { id: "ds", label: "배포 수단", sub: "DS·SPO·이미지", x: 70, y: 210, icon: "gateway" },
+    { id: "f1", label: "seccomp 디렉터리", sub: "profiles/ngx.json", x: 270, y: 80, icon: "lock", w: 120 },
+    { id: "r1", label: "kubelet·runc", x: 380, y: 80, icon: "container" },
+    { id: "f2", label: "seccomp 디렉터리", sub: "(비어 있음)", x: 270, y: 220, icon: "lock", w: 120 },
+    { id: "r2", label: "kubelet·runc", x: 380, y: 220, icon: "container" },
+  ]}
+  links={[
+    { from: "git", to: "ds" },
+    { from: "ds", to: "f1" },
+    { from: "ds", to: "f2", dashed: true },
+    { from: "f1", to: "r1" },
+    { from: "f2", to: "r2" },
+  ]}
+  steps={[
+    { path: ["git", "ds"], packet: "ngx.json", title: "프로필은 코드처럼 관리한다", detail: "JSON 프로필이나 AppArmor 프로필을 저장소에 두고 리뷰를 거쳐 바꾼다." },
+    { path: ["ds", "f1"], packet: "복사", title: "노드마다 파일로 놓는다", detail: "seccomp는 /var/lib/kubelet/seccomp/ 아래, AppArmor는 apparmor_parser로 커널에 올린다. DaemonSet이나 Security Profiles Operator, 노드 이미지에 굽는 방법이 있다." },
+    { path: ["f1", "r1"], packet: "Localhost", title: "kubelet이 경로를 넘긴다", detail: "Pod의 localhostProfile: profiles/ngx.json은 seccomp 디렉터리 기준 상대 경로다. runc가 이 파일로 필터를 만든다." },
+    { path: ["ds", "f2", "r2"], packet: "Localhost", blocked: true, title: "새 노드에는 파일이 없다", detail: "오토스케일러가 붙인 노드에 프로필이 아직 없으면 그 노드에 간 Pod만 CreateContainerError로 멈춘다. 같은 Deployment인데 일부 Pod만 실패하는 증상이다." },
+  ]}
+/>
+
+마지막 단계가 현장에서 가장 헷갈리는 증상이다. 같은 Deployment의 Pod 중 몇 개만 뜨지 않고, 실패한 Pod를 모아 보면 모두 새 노드에 있다. 노드가 붙자마자 프로필이 깔리도록 DaemonSet으로 배포하거나, 노드 이미지에 미리 넣거나, 프로필이 있는 노드에 라벨을 붙이고 `nodeSelector`로 그 노드만 고르게 한다.
+
+Security Profiles Operator(SPO)는 이 일을 CRD로 맡는 쿠버네티스 SIG 프로젝트다. `SeccompProfile`, `AppArmorProfile` 객체를 만들면 노드마다 파일을 깔아 주고, `ProfileRecording`으로 실행 중인 Pod의 시스템 콜을 기록해 프로필 초안을 만든다. 앞에서 손으로 한 수집과 반복을 클러스터 안에서 해 주는 도구다. 기능과 지원 범위는 버전마다 달라서 쓰기 전에 저장소 문서를 본다.
+
+```yaml
+# Localhost seccomp 프로필을 거는 Pod (노드의 /var/lib/kubelet/seccomp/profiles/ngx.json)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+spec:
+  securityContext:
+    seccompProfile:
+      type: Localhost
+      localhostProfile: profiles/ngx.json
+  containers:
+  - name: nginx
+    image: nginx:1.27-alpine
+    command: ["nginx", "-g", "daemon off;"]
+```
+
+CKS 시험에서 나오는 형태도 이것이다. 노드에 SSH로 들어가 프로필 파일을 정해진 디렉터리에 놓거나 AppArmor 프로필을 올리고, Pod 매니페스트에 그 이름을 적는다. 시험 환경에서 필드 이름이 기억나지 않으면 `kubectl explain pod.spec.securityContext.seccompProfile`이 바로 알려 준다.
+
+## 막혔는지 아닌지 가려내는 순서
+
+컨테이너가 "Operation not permitted"를 내면 원인 후보가 넷이다. 파일 권한, capability, seccomp, AppArmor. 보는 순서는 이렇다.
+
+```bash
+# 1) 지금 걸린 필터와 프로필: Seccomp 2면 필터 모드, attr/current는 AppArmor 프로필 이름
+kubectl exec web -- grep -E 'Seccomp|NoNewPrivs' /proc/1/status
+kubectl exec web -- cat /proc/1/attr/current
+# 2) 프로필을 잠깐 풀어 같은 동작을 시험 (운영이 아니라 복제한 Pod에서)
+#    seccompProfile.type: Unconfined 또는 appArmorProfile.type: Unconfined
+# 3) 노드 커널 로그에서 직접 확인
+sudo dmesg | grep -E 'type=1326|apparmor="DENIED"' | tail
+```
+
+Unconfined로 바꿔서 증상이 사라지면 그 장치가 원인이다. 커널 로그에 `type=1326`(seccomp)이나 `apparmor="DENIED"`가 보이면 무엇이 막혔는지까지 알 수 있다. seccomp의 ERRNO 동작은 기록을 남기지 않는다는 점도 기억해 둔다. 막힌 걸 기록하려면 LOG로 돌리거나, 막는 규칙에 `SCMP_ACT_KILL_PROCESS` 대신 기록이 남는 동작을 쓴다.
+
+정리하면 seccomp는 시스템 콜 번호로, AppArmor는 경로와 동작으로 컨테이너가 커널에 요청할 수 있는 범위를 좁힌다. 모든 Pod에 RuntimeDefault를 기본으로 걸고, 좁은 프로필은 노출이 큰 워크로드에만 수집과 LOG 반복으로 만들어, 운영 동작까지 넣고 노드마다 빠짐없이 깐다.
+
+## 면접에서 나올 만한 질문
+
+### seccomp와 AppArmor는 무엇이 다른가요?
+
+seccomp는 시스템 콜이 커널에 들어오는 입구에서 번호와 숫자 인자만 보고 허용, 오류, 종료를 정한다. AppArmor는 커널 곳곳의 LSM 훅에서 경로, capability, 네트워크 같은 동작 단위로 허용 여부를 본다. 그래서 "새 namespace 금지"는 seccomp가, "`/etc`에 쓰기 금지"는 AppArmor가 맞다. 둘은 겹치지 않고 함께 건다.
+
+### Docker 기본 프로필은 무엇을 막고, 쿠버네티스는 기본으로 그걸 거나요?
+
+기본 동작이 EPERM이고 400개 남짓을 허용하는 목록이다. `keyctl`, io_uring 계열은 빠져 있고, `unshare`, `mount`, `bpf`는 해당 capability가 있을 때만 열린다. `clone`도 namespace 플래그가 없을 때만 허용한다. 쿠버네티스는 아무것도 적지 않으면 Unconfined라서, `seccompProfile: RuntimeDefault`를 적거나 kubelet의 `seccompDefault: true`를 켜야 이 프로필이 걸린다.
+
+### 앱 전용 seccomp 프로필은 어떻게 만드나요?
+
+strace나 SPO의 기록 기능으로 앱이 부르는 시스템 콜을 모아 허용 목록을 만들고, 기본 동작을 SCMP_ACT_LOG로 둔 채 돌려서 목록에 없는 호출을 커널 로그로 찾아 채운다. 기록이 더 나오지 않으면 ERRNO로 바꾼다. 이때 runc가 exec 직전에 쓰는 시스템 콜(close_range, capget 등)도 넣어야 하고, auditd가 없으면 커널 로그 속도 제한 때문에 여러 번 돌려야 한다.
+
+### 좁은 프로필의 위험은 무엇인가요?
+
+수집할 때 하지 않은 동작이 운영에서 막힌다. 설정 리로드의 `kill`, 드문 오류 경로, 라이브러리 업데이트로 바뀐 시스템 콜 같은 것들이다. 증상은 권한 오류처럼 보여서 원인을 찾기 어렵다. 그래서 운영 동작을 수집 단계에 넣고, 이미지 버전을 올릴 때마다 LOG 모드로 다시 확인한다. 대부분의 워크로드는 RuntimeDefault로 두는 편이 현실적이다.
+
+### Localhost 프로필을 쓰는 Pod 일부만 CreateContainerError가 납니다. 왜일까요?
+
+프로필 파일이 일부 노드에만 있을 가능성이 크다. 쿠버네티스는 프로필을 배포하지 않고 스케줄러도 프로필 위치를 모른다. 실패한 Pod의 노드를 모아 보면 새로 붙은 노드인 경우가 많다. DaemonSet이나 SPO로 모든 노드에 깔거나, 노드 이미지에 넣거나, 라벨과 nodeSelector로 프로필이 있는 노드만 고르게 한다.
+
+### "Operation not permitted"가 seccomp 때문인지 어떻게 확인하나요?
+
+`/proc/1/status`의 Seccomp 값으로 필터가 걸렸는지 보고, 복제한 Pod에서 Unconfined로 바꿔 같은 동작을 시험한다. 노드 커널 로그에서 `type=1326`이 보이면 seccomp, `apparmor="DENIED"`면 AppArmor다. ERRNO 동작은 로그를 남기지 않으므로 필요하면 LOG 모드로 잠깐 돌린다. strace로 보면 그 시스템 콜이 `-1 EPERM`을 받는 줄이 바로 보인다.
+
+### seccomp 필터가 성능에 영향을 주나요?
+
+대부분의 워크로드에서 거의 없다. 1바이트씩 400만 번 읽고 쓰는 실험에서 프로필 사이의 차이가 실행마다 생기는 흔들림보다 작았다. 커널 5.11부터는 인자 조건 없이 항상 허용되는 시스템 콜의 결과를 비트맵으로 기억해서 BPF를 매번 돌리지 않는다. 인자 조건이 많은 규칙이 자주 불리는 시스템 콜에 붙으면 비용이 생길 수 있으니, 의심되면 그 워크로드로 직접 잰다.
