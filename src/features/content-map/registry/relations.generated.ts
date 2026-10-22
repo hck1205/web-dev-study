@@ -2,6 +2,42 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "ts-narrowing": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-generics",
+      "js-truthy-falsy-typeof",
+      "js-prototype-chain",
+      "fp-in-react"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "js-function-forms",
+      "js-pure-functions",
+      "js-destructuring"
+    ]
+  },
+  "ts-generics": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-narrowing"
+    ],
+    "mentions": [
+      "browser-storage",
+      "js-function-forms",
+      "js-destructuring"
+    ]
+  },
+  "ts-type-system-basics": {
+    "links": [
+      "ts-generics",
+      "ts-narrowing"
+    ],
+    "mentions": [
+      "js-prototype-chain",
+      "js-destructuring"
+    ]
+  },
   "algorithms-overview": {
     "links": [
       "data-structures-overview",
@@ -4583,6 +4619,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "ts-narrowing",
       "js-destructuring"
     ]
   },
@@ -6906,6 +6943,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-queue-logging-automation",
       "rest-api-design",
       "event-sourcing",
+      "ts-type-system-basics",
       "js-pure-functions",
       "dead-letter-queue"
     ]
@@ -7520,6 +7558,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-admission-control",
       "mongodb-document-model",
+      "ts-narrowing",
       "js-short-circuit",
       "js-closures"
     ]
@@ -7530,7 +7569,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator",
       "pattern-interpreter"
     ],
-    "mentions": []
+    "mentions": [
+      "ts-narrowing"
+    ]
   },
   "pattern-template-method": {
     "links": [
@@ -7573,6 +7614,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "ts-narrowing",
       "js-pure-functions"
     ]
   },
@@ -8425,7 +8467,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-execution-context",
-      "ds-graph-bfs-dfs"
+      "ds-graph-bfs-dfs",
+      "ts-narrowing"
     ]
   },
   "dead-letter-queue": {

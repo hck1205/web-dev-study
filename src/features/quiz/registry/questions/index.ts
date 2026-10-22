@@ -580,6 +580,9 @@ import { TIMEOUTS } from "./timeouts";
 import { TOKEN_LOGIN } from "./token-login";
 import { TRAFFIC_SHAPING_QOS } from "./traffic-shaping-qos";
 import { TRANSACTIONAL_OUTBOX } from "./transactional-outbox";
+import { TS_GENERICS } from "./ts-generics";
+import { TS_NARROWING } from "./ts-narrowing";
+import { TS_TYPE_SYSTEM_BASICS } from "./ts-type-system-basics";
 import { UDP_AND_QUIC } from "./udp-and-quic";
 import { UPPER_LAYERS_SESSION_PRESENTATION_APP } from "./upper-layers-session-presentation-app";
 import { VECTOR_DB } from "./vector-db";
@@ -1185,6 +1188,9 @@ export const QUESTION_SETS = [
   TOKEN_LOGIN,
   TRAFFIC_SHAPING_QOS,
   TRANSACTIONAL_OUTBOX,
+  TS_GENERICS,
+  TS_NARROWING,
+  TS_TYPE_SYSTEM_BASICS,
   UDP_AND_QUIC,
   UPPER_LAYERS_SESSION_PRESENTATION_APP,
   VECTOR_DB,

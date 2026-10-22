@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "ts-narrowing",
+    title: "TypeScript 타입 좁히기: 조건문이 타입을 줄이는 방법과 빠진 갈래 찾기",
+    summary: "결제 상태를 하나 추가했는데 화면에 undefined가 찍힌 switch에서 출발해 제어 흐름 분석, typeof·in·instanceof, 콜백과 재할당에서 풀리는 좁힘, 판별 유니온, never로 하는 완전성 검사를 실제 tsc 출력으로 따라간다. 거짓말하는 타입 가드, 5.5의 추론된 타입 서술어와 filter(Boolean), 단언 함수의 TS2775, useReducer 액션까지 다룬다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "React", "JavaScript"],
+    date: "2026-10-25",
+    keywords: ["타입 좁히기", "판별 유니온", "타입 가드", "완전성 검사", "단언 함수"],
+  },
+  {
+    slug: "ts-generics",
+    title: "TypeScript 제네릭: 들어간 타입과 나오는 타입을 잇는다",
+    summary: "any[]로 받은 first 함수가 문자열에 toFixed를 부르다 멈춘 장면에서 출발해 타입 매개변수가 호출마다 정해지는 과정, 후보가 여럿일 때의 추론, extends 제약과 keyof, 기본값과 NoInfer, const 타입 매개변수를 tsc 출력으로 확인한다. 반환에만 쓰인 제네릭이 as와 같은 이유, 제네릭 컴포넌트와 훅, .tsx의 <T,> 문법까지 다룬다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "React", "JavaScript"],
+    date: "2026-10-25",
+    keywords: ["타입 매개변수", "제네릭 제약", "NoInfer", "const 타입 매개변수"],
+  },
+  {
+    slug: "ts-type-system-basics",
+    title: "TypeScript 타입 시스템 기초: 모양으로 비교하고, 리터럴만 따로 검사하고, 컴파일 뒤엔 사라진다",
+    summary: "순서를 바꿔 넘긴 사용자 ID와 주문 ID가 아무 오류 없이 통과한 코드에서 출발해 구조적 타이핑, 브랜드 타입, 객체 리터럴의 초과 속성 검사, any·unknown·never, let과 const의 넓히기와 satisfies를 실제 tsc 출력으로 따라간다. type과 interface의 차이, 경계에서 값을 확인해야 하는 이유, JSX 속성 검사와 useState([])의 never[]까지 다룬다.",
+    topic: "programming/frontend/typescript",
+    tags: ["TypeScript", "JavaScript", "React"],
+    date: "2026-10-25",
+    keywords: ["구조적 타이핑", "초과 속성 검사", "브랜드 타입", "타입 넓히기"],
+  },
+  {
     slug: "algorithms-overview",
     title: "알고리즘 문제 접근법: 입력 크기에서 기법까지",
     summary: "n ≤ 10⁵인 문제에 O(n²) 풀이를 냈다가 시간 초과가 나는 데서 출발해, 입력 크기로 복잡도 예산을 잡고 문제가 묻는 것으로 기법을 좁히는 순서를 정리한다. 한 문제를 세 기법으로 풀어 비교하고, 면접 흐름과 자바스크립트 함정, 공부 순서를 링크로 묶었다.",
