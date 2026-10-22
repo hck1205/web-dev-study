@@ -37,6 +37,7 @@ import { CACHE_WRITE_POLICIES } from "./cache-write-policies";
 import { CACHING_CONCEPTS_MAP } from "./caching-concepts-map";
 import { CACHING_STRATEGIES } from "./caching-strategies";
 import { CANARY_RELEASE } from "./canary-release";
+import { CDC_CHANGE_DATA_CAPTURE } from "./cdc-change-data-capture";
 import { CDN_EDGE_ANYCAST } from "./cdn-edge-anycast";
 import { CENTRALIZED_LOGGING_PIPELINE } from "./centralized-logging-pipeline";
 import { CHAOS_ENGINEERING } from "./chaos-engineering";
@@ -368,6 +369,7 @@ import { NGINX_REVERSE_PROXY } from "./nginx-reverse-proxy";
 import { NODEJS_SERVER_RUNTIME } from "./nodejs-server-runtime";
 import { OAUTH } from "./oauth";
 import { OBSERVABILITY_BASICS } from "./observability-basics";
+import { OLAP_STAR_SCHEMA } from "./olap-star-schema";
 import { ON_CALL } from "./on-call";
 import { OPENSEARCH_CLUSTER_OPERATIONS } from "./opensearch-cluster-operations";
 import { OPERATIONAL_TRANSFORM } from "./operational-transform";
@@ -567,6 +569,7 @@ import { SQLD_TOP_N_HIERARCHICAL_PIVOT } from "./sqld-top-n-hierarchical-pivot";
 import { SQLD_TYPE_CONVERSION } from "./sqld-type-conversion";
 import { SQLD_WINDOW_FUNCTIONS } from "./sqld-window-functions";
 import { SSRF } from "./ssrf";
+import { STREAM_PROCESSING } from "./stream-processing";
 import { STREAMING_SSR_SUSPENSE } from "./streaming-ssr-suspense";
 import { STRUCTURED_LOGGING } from "./structured-logging";
 import { SYSTEM_DESIGN_CONCEPTS_MAP } from "./system-design-concepts-map";
@@ -652,6 +655,7 @@ export const QUESTION_SETS = [
   CACHING_CONCEPTS_MAP,
   CACHING_STRATEGIES,
   CANARY_RELEASE,
+  CDC_CHANGE_DATA_CAPTURE,
   CDN_EDGE_ANYCAST,
   CENTRALIZED_LOGGING_PIPELINE,
   CHAOS_ENGINEERING,
@@ -983,6 +987,7 @@ export const QUESTION_SETS = [
   NODEJS_SERVER_RUNTIME,
   OAUTH,
   OBSERVABILITY_BASICS,
+  OLAP_STAR_SCHEMA,
   ON_CALL,
   OPENSEARCH_CLUSTER_OPERATIONS,
   OPERATIONAL_TRANSFORM,
@@ -1182,6 +1187,7 @@ export const QUESTION_SETS = [
   SQLD_TYPE_CONVERSION,
   SQLD_WINDOW_FUNCTIONS,
   SSRF,
+  STREAM_PROCESSING,
   STREAMING_SSR_SUSPENSE,
   STRUCTURED_LOGGING,
   SYSTEM_DESIGN_CONCEPTS_MAP,

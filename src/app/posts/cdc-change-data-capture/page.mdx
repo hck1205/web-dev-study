@@ -1,0 +1,570 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cdc-change-data-capture");
+
+주문 검색 화면에서 취소한 주문이 아직 "결제 완료"로 보인다는 문의가 왔다. 검색 인덱스는 1분마다 도는 동기화 작업이 채운다. `updated_at`이 마지막으로 본 시각보다 큰 행을 읽어 인덱스에 넣는 단순한 작업이다. 로그를 보면 작업은 1분마다 잘 돌았고 에러도 없었다. 그런데 어떤 주문은 바뀐 상태가 영영 넘어가지 않았고, 지운 주문은 인덱스에 그대로 남아 있었다.
+
+테이블의 변경을 다른 저장소(검색 인덱스, 캐시, 분석 DB, 다른 서비스)로 옮기는 일을 CDC(Change Data Capture)라고 부른다. 이 글은 "변경을 빠짐없이, 순서대로 옮기려면 무엇을 읽어야 하고 어디서 틀어지나"를 다룬다. 같은 주제의 다른 글과 나눠 맡는다. CDC로 아웃박스를 내보내는 장면과 슬롯이 WAL을 붙잡아 디스크를 채우는 장면은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에, 폴링 릴레이 아웃박스는 [트랜잭셔널 아웃박스](/posts/transactional-outbox)에, 분석 DB로 흘려보내는 큰 그림은 [컬럼형 분석 DB](/posts/db-type-columnar-olap)에 있다. 여기서는 그 앞뒤, 즉 세 가지 읽는 방법의 차이와 처음 복사, 스키마 변경, 받는 쪽의 중복을 본다.
+
+실험은 Ubuntu 24.04의 PostgreSQL 16.15로 했다. 논리 복제는 `wal_level = logical`이 필요해서, 공유 클러스터는 건드리지 않고 그 설정으로 따로 띄운 실험용 인스턴스(포트 18960)에서 돌렸다.
+
+## 검색 인덱스가 따라오지 못한 이유
+
+실험용 주문 테이블은 이렇다. 처음에 주문 세 건이 있다.
+
+```sql
+CREATE TABLE orders (
+  id         bigint PRIMARY KEY,
+  user_id    bigint NOT NULL,
+  amount     integer NOT NULL,
+  status     text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO orders (id, user_id, amount, status) VALUES
+ (1, 7, 41000, 'paid'), (2, 8, 9000, 'paid'), (3, 7, 15000, 'shipped');
+```
+
+동기화 작업은 `WHERE updated_at > :마지막으로 본 시각`으로 읽고, 읽은 것 중 가장 큰 `updated_at`을 다음 기준으로 삼는다. 여기에 흔한 상황 셋을 일으켰다. 트랜잭션 A가 주문 1을 고친 뒤 3초 동안 다른 일을 하다 커밋한다. 그 사이 트랜잭션 B가 주문 2를 취소하고 바로 커밋한다. 누군가 주문 3을 지운다.
+
+```bash
+# 트랜잭션 A: 주문 1을 고치고 3초 뒤 커밋 (백그라운드)
+psql -d da1_shop -c "BEGIN; UPDATE orders SET status='shipped', updated_at=now() WHERE id=1; SELECT pg_sleep(3); COMMIT;" &
+sleep 1
+# 트랜잭션 B: 주문 2를 바로 취소
+psql -d da1_shop -c "UPDATE orders SET status='cancelled', updated_at=now() WHERE id=2"
+# 주문 3 삭제
+psql -d da1_shop -c "DELETE FROM orders WHERE id=3"
+```
+
+A가 커밋하기 전과 후에 한 번씩 폴링했다.
+
+```text
+poll#1 (WHERE updated_at > '2026-10-22 00:27:01.212702+00')
+ id |  status   |          updated_at
+----+-----------+-------------------------------
+  2 | cancelled | 2026-10-22 00:27:14.167432+00
+(1 row)
+
+A committed at 00:27:16.159
+poll#2 (WHERE updated_at > '2026-10-22 00:27:14.167432+00')
+ id | status | updated_at
+----+--------+------------
+(0 rows)
+
+actual table:
+ id |  status   |          updated_at
+----+-----------+-------------------------------
+  1 | shipped   | 2026-10-22 00:27:13.151066+00
+  2 | cancelled | 2026-10-22 00:27:14.167432+00
+(2 rows)
+```
+
+주문 1의 `updated_at`은 13.151초다. PostgreSQL의 `now()`는 트랜잭션이 시작한 시각이라서, 커밋은 16초에 했어도 값은 13초로 남는다. 첫 폴링이 기준을 14.167초로 올려 버렸으니 두 번째 폴링은 13초짜리 행을 다시 볼 일이 없다. 주문 3은 행 자체가 사라져서 어떤 `WHERE`로도 찾을 수 없다. 처음 문의의 두 증상이 그대로 나왔다. 아래 그림에서 다음을 누르면 순서가 보인다.
+
+<SequenceDiagram
+  caption="updated_at 폴링이 늦게 커밋된 변경을 놓치는 순서"
+  actors={[
+    { id: "a", label: "트랜잭션 A" },
+    { id: "b", label: "트랜잭션 B" },
+    { id: "db", label: "orders" },
+    { id: "poll", label: "폴러" },
+  ]}
+  steps={[
+    { from: "a", to: "db", label: "UPDATE id=1", title: "A가 13.151초에 고친다", detail: "updated_at에는 트랜잭션 시작 시각이 들어간다. 아직 커밋 전이라 다른 세션에는 안 보인다." },
+    { from: "b", to: "db", label: "UPDATE id=2", title: "B가 14.167초에 고치고 커밋한다", detail: "B는 짧아서 바로 보인다." },
+    { from: "poll", to: "db", label: "> 01.21", title: "폴러가 읽는다", detail: "주문 2만 보인다. 기준을 14.167초로 올린다.", payload: "cursor = '00:27:14.167432'" },
+    { from: "a", to: "db", label: "COMMIT", title: "A가 16초에 커밋한다", detail: "이제 주문 1이 보이지만 updated_at은 여전히 13.151초다." },
+    { from: "poll", to: "db", label: "> 14.16", title: "다음 폴링은 0건이다", detail: "13초짜리 변경은 기준보다 작아서 영영 넘어가지 않는다. 지운 주문 3도 마찬가지다." },
+  ]}
+/>
+
+기준을 몇 초 뒤로 겹쳐 읽는 식으로 땜질할 수는 있다. 하지만 트랜잭션이 얼마나 길어질지 모르니 몇 초를 겹쳐야 안전한지 정할 수 없고, 삭제는 여전히 못 잡는다. 삭제를 잡으려면 행을 지우지 않고 `deleted_at`을 채우는 소프트 삭제로 바꿔야 한다. 그리고 1분 사이에 같은 행이 세 번 바뀌면 마지막 모습 하나만 본다. 중간 상태가 필요 없는 검색 인덱스라면 괜찮지만, "결제됨 → 취소됨"이라는 사건 자체가 필요한 쪽에는 맞지 않는다.
+
+폴링이 나쁜 방법은 아니다. 테이블이 작고, 삭제가 없거나 소프트 삭제이고, 몇 분 늦어도 되는 곳이라면 가장 싸다. 다만 위의 두 구멍을 알고 써야 한다.
+
+## 트리거로 바뀐 행을 한 줄씩 적어 둔다
+
+두 번째 방법은 DB가 직접 적게 하는 것이다. `orders`에 트리거를 달아 INSERT, UPDATE, DELETE가 일어날 때마다 변경 로그 테이블에 한 줄씩 남긴다. 같은 트랜잭션 안에서 적으니 커밋되면 함께 보이고, 롤백되면 함께 사라진다.
+
+```sql
+CREATE TABLE order_changes (
+  seq        bigserial PRIMARY KEY,
+  op         text NOT NULL,
+  order_id   bigint NOT NULL,
+  old_row    jsonb,
+  new_row    jsonb,
+  txid       xid8 NOT NULL DEFAULT pg_current_xact_id(),
+  changed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE FUNCTION capture_order_change() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO order_changes (op, order_id, old_row, new_row)
+  VALUES (TG_OP,
+          COALESCE(NEW.id, OLD.id),
+          CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END,   -- 바뀌기 전 행
+          CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END);  -- 바뀐 뒤 행
+  RETURN NULL;
+END $$;
+
+CREATE TRIGGER orders_cdc
+AFTER INSERT OR UPDATE OR DELETE ON orders
+FOR EACH ROW EXECUTE FUNCTION capture_order_change();
+
+INSERT INTO orders (id, user_id, amount, status) VALUES (4, 9, 22000, 'paid');
+UPDATE orders SET status = 'shipped' WHERE id = 4;
+DELETE FROM orders WHERE id = 2;
+
+SELECT seq, op, order_id, old_row->>'status' AS old_status,
+       new_row->>'status' AS new_status, txid
+FROM order_changes ORDER BY seq;
+```
+
+```text
+ seq |   op   | order_id | old_status | new_status | txid
+-----+--------+----------+------------+------------+------
+   1 | INSERT |        4 |            | paid       |  740
+   2 | UPDATE |        4 | paid       | shipped    |  741
+   3 | DELETE |        2 | cancelled  |            |  742
+(3 rows)
+```
+
+삭제도 잡히고, 바뀌기 전 값(`old_status`)도 남는다. 폴링의 두 구멍이 다 막혔다. 대가는 쓰는 쪽이 치른다. 주문 10만 건 테이블에서 무작위 행 하나를 고치는 쓰기를 `pgbench`로 10초씩, 트리거를 붙였다 뗐다 하며 세 번씩 돌렸다. 공유 디스크의 fsync 시간이 출렁여서 결과가 흔들리기에 `synchronous_commit = off`로 디스크 대기를 빼고 쓰기 자체의 비용만 쟀다.
+
+```bash
+# 무작위 행 하나를 고치는 스크립트를 4개 연결로 10초 동안
+PGOPTIONS="-c synchronous_commit=off" pgbench -n -c 4 -j 2 -T 10 -f upd.sql da1_shop
+```
+
+```text
+no_trigger run1 tps = 29292.518423 (without initial connection time)
+trigger    run1 tps = 20978.406049 (without initial connection time)
+no_trigger run2 tps = 31407.789501 (without initial connection time)
+trigger    run2 tps = 20251.264859 (without initial connection time)
+no_trigger run3 tps = 31635.844891 (without initial connection time)
+trigger    run3 tps = 20576.136634 (without initial connection time)
+```
+
+초당 약 3만 1천 건이 2만 5백 건 안팎으로, 3분의 1쯤 줄었다. 쓰기 한 번이 행 두 개(원래 행과 로그 행)와 인덱스 갱신을 더 하게 됐으니 당연하다. 숫자는 이 4코어 실험 환경의 값이고, 디스크 대기가 큰 실제 서버에서는 비율이 달라진다. 그래도 방향은 같다. 트리거 CDC는 원본 테이블의 쓰기를 느리게 하고, 로그 테이블은 계속 커지니 읽은 만큼 지우는 청소도 따로 돌려야 한다. 로그 테이블을 읽는 쪽은 결국 `seq`로 폴링하므로, 앞 절의 "번호는 먼저, 커밋은 나중" 문제도 그대로 남는다. 그 문제와 푸는 법은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)의 아웃박스 절에 있다.
+
+## 이미 적고 있는 로그를 빌려 읽는다
+
+세 번째 방법은 DB가 원래 남기는 로그를 읽는 것이다. PostgreSQL은 모든 변경을 WAL에 먼저 적는다. 장애 복구와 복제를 위해서다. `wal_level = logical`이면 이 WAL을 "어느 테이블의 어떤 행이 어떻게 바뀌었나"로 풀어 낼 수 있고, 읽는 쪽의 위치는 복제 슬롯이 기억한다. 원본 쓰기 경로에는 아무것도 붙지 않는다. 대부분의 CDC 도구가 이 방식을 쓴다. MySQL은 같은 일을 row 형식 binlog로 한다.
+
+PostgreSQL에는 이 기능으로 다른 DB에 테이블을 복제하는 논리 복제가 들어 있다. 받는 쪽이 PostgreSQL이면 별도 도구 없이 바로 CDC가 된다. 같은 인스턴스의 다른 DB(`da1_copy`)로 복제해 봤다. 문서에 따르면 같은 인스턴스 안에서 구독할 때 `CREATE SUBSCRIPTION`이 슬롯까지 만들게 하면 멈춘다. 그래서 슬롯을 먼저 만들어 두고 `create_slot = false`로 붙였다. 서버가 다르면 이 단계는 필요 없다.
+
+```sql
+-- 보내는 쪽 (da1_shop): 무엇을 내보낼지 정한다
+CREATE PUBLICATION orders_pub FOR TABLE orders;
+SELECT * FROM pg_create_logical_replication_slot('copy_sub', 'pgoutput');
+
+-- 받는 쪽 (da1_copy): 같은 모양의 테이블을 만들고 구독한다
+CREATE TABLE orders (
+  id bigint PRIMARY KEY, user_id bigint NOT NULL, amount integer NOT NULL,
+  status text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE SUBSCRIPTION copy_sub
+  CONNECTION 'host=localhost port=18960 dbname=da1_shop user=postgres'
+  PUBLICATION orders_pub
+  WITH (create_slot = false, slot_name = 'copy_sub', copy_data = true);
+```
+
+구독하자마자 받는 쪽에는 그 시점의 주문 1, 4가 복사됐다. 이어서 보내는 쪽에 주문 5를 넣고 주문 4를 고쳤다.
+
+```text
+ id |  status
+----+-----------
+  1 | shipped
+  4 | delivered
+  5 | paid
+(3 rows)
+
+ slot_name |  plugin  | active | confirmed_flush_lsn | wal_status
+-----------+----------+--------+---------------------+------------
+ copy_sub  | pgoutput | t      | 0/333E48B0          | reserved
+(1 row)
+```
+
+`pgoutput`은 PostgreSQL 10부터 들어 있는 디코딩 플러그인이다. 사람이 읽는 텍스트가 아니라 복제 프로토콜의 바이너리 메시지를 낸다. 주문 하나를 넣고 슬롯에서 날것으로 꺼내 첫 바이트만 봤다.
+
+```sql
+SELECT lsn, xid, chr(get_byte(data, 0)) AS msg, length(data) AS bytes
+FROM pg_logical_slot_get_binary_changes('bin_demo', NULL, NULL,
+       'proto_version', '1', 'publication_names', 'orders_pub');
+```
+
+```text
+    lsn     |   xid   | msg | bytes
+------------+---------+-----+-------
+ 0/38000110 | 1796019 | B   |    21
+ 0/38000110 | 1796019 | R   |   119
+ 0/38000110 | 1796019 | I   |    74
+ 0/38000658 | 1796019 | C   |    26
+(4 rows)
+```
+
+`B`(Begin), `R`(Relation: 테이블 이름과 컬럼 정의), `I`(Insert), `C`(Commit)다. 테이블 정의를 먼저 보내고 그 뒤로는 번호로 가리키기 때문에, 받는 쪽은 테이블 모양을 기억하며 읽는다. Debezium 같은 외부 도구도 이 메시지를 받아 JSON 같은 이벤트로 바꾼다. PostgreSQL 15부터는 발행에 행 필터(`WHERE`)와 컬럼 목록을 줄 수 있어서, 필요한 행과 컬럼만 내보낼 수도 있다.
+
+아래 그림에서 다음을 누르면 변경 하나가 로그를 타고 여러 곳으로 퍼지는 길과, 이 글 뒤쪽에서 볼 막히는 지점이 보인다.
+
+<NetworkTopology
+  caption="로그 기반 CDC: 커밋된 변경이 슬롯을 거쳐 여러 저장소로"
+  width={400}
+  height={280}
+  zones={[
+    { id: "src", label: "운영 DB", x: 8, y: 20, w: 150, h: 240, tone: "private" },
+    { id: "dst", label: "받는 쪽", x: 270, y: 20, w: 122, h: 240, tone: "public" },
+  ]}
+  nodes={[
+    { id: "api", label: "주문 API", x: 83, y: 60, icon: "server" },
+    { id: "wal", label: "WAL", sub: "pgoutput", x: 83, y: 140, icon: "db" },
+    { id: "slot", label: "slot", sub: "copy_sub", x: 83, y: 220, icon: "lock" },
+    { id: "cdc", label: "CDC 커넥터", x: 214, y: 140, icon: "gateway", w: 96 },
+    { id: "search", label: "검색 인덱스", x: 331, y: 60, icon: "db", w: 100 },
+    { id: "cache", label: "캐시", x: 331, y: 140, icon: "db" },
+    { id: "olap", label: "분석 DB", x: 331, y: 220, icon: "db" },
+  ]}
+  links={[
+    { from: "api", to: "wal" },
+    { from: "wal", to: "slot", dashed: true },
+    { from: "wal", to: "cdc" },
+    { from: "cdc", to: "search" },
+    { from: "cdc", to: "cache" },
+    { from: "cdc", to: "olap" },
+  ]}
+  steps={[
+    { path: ["api", "wal"], packet: "COMMIT", title: "앱은 평소처럼 커밋한다", detail: "트리거도 폴링 쿼리도 없다. 쓰기 경로에 붙는 것이 없다." },
+    { path: ["wal", "cdc"], packet: "B R I C", title: "커밋된 트랜잭션만 순서대로 나온다", detail: "커밋 순서대로 나오니 늦게 커밋된 변경도 빠지지 않는다. 삭제도 나온다." },
+    { path: ["cdc", "search"], packet: "id=2 취소", title: "받는 쪽마다 따로 반영한다", detail: "검색 인덱스는 문서를 고치고, 캐시는 키를 지우고, 분석 DB는 행을 쌓는다." },
+    { path: ["cdc", "wal", "slot"], packet: "ack LSN", highlight: ["slot"], title: "어디까지 받았는지 슬롯에 알린다", detail: "확인한 LSN 전까지는 WAL을 지워도 된다. 확인 전에 죽으면 그 뒤를 다시 받는다." },
+    { path: ["wal", "cdc", "olap"], packet: "ALTER", blocked: true, title: "스키마가 바뀌면 받는 쪽이 멈춘다", detail: "DDL은 논리 복제로 넘어가지 않는다. 받는 쪽에 없는 컬럼이 오면 적용이 실패한다." },
+  ]}
+/>
+
+## 처음 한 번은 통째로 복사해야 한다
+
+로그는 슬롯을 만든 순간부터의 변경만 준다. 이미 있는 주문 수백만 건은 로그에 없다. 그래서 CDC는 항상 두 단계다. 지금 있는 것을 통째로 복사하고(초기 스냅숏), 그 뒤의 변경을 이어 받는다. 둘 사이에 틈이 있으면 변경이 빠지고, 겹치면 같은 변경을 두 번 받는다.
+
+PostgreSQL은 이 이음매를 슬롯 생성과 함께 준다. 복제 연결에서 슬롯을 만들며 `EXPORT_SNAPSHOT`을 주면, 슬롯의 시작 위치(`consistent_point`)와 정확히 같은 시점의 스냅숏 이름을 돌려준다. 다른 세션이 그 스냅숏으로 테이블을 읽으면, 읽은 결과와 슬롯의 첫 변경 사이에 틈도 겹침도 없다. 복제 연결이 열려 있는 동안 주문 7을 넣고, 그 스냅숏으로 테이블을 읽은 뒤, 슬롯을 읽었다.
+
+```sql
+-- 복제 연결: psql "dbname=da1_shop replication=database"
+CREATE_REPLICATION_SLOT snap_demo LOGICAL test_decoding EXPORT_SNAPSHOT;
+
+-- 다른 세션: 슬롯이 돌려준 스냅숏으로 읽는다
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SET TRANSACTION SNAPSHOT '00000005-0006AACD-1';
+SELECT id, status FROM orders ORDER BY id;
+COMMIT;
+```
+
+```text
+slot: consistent_point=0/3341AE68 snapshot_name=00000005-0006AACD-1
+-- order 7 inserted after the slot was created
+ id |  status
+----+-----------
+  1 | shipped
+  4 | delivered
+  5 | paid
+  6 | paid
+(4 rows)
+
+    lsn     |                       data
+------------+----------------------------------------------------------------------------
+ 0/3341AE68 | BEGIN 1796014
+ 0/3341AE68 | table public.orders: INSERT: id[bigint]:7 user_id[bigint]:9 amount[integer]:5000 status[text]:'paid' updated_at[timestamp with time zone]:'2026-10-22 00:31:40.420816+00' coupon[text]:null
+ 0/3341AF38 | COMMIT 1796014
+(3 rows)
+```
+
+스냅숏으로 읽은 쪽에는 주문 7이 없고, 슬롯의 첫 변경이 바로 주문 7이다. 보기 쉽게 사람이 읽는 `test_decoding` 플러그인으로 돌렸다(`coupon` 컬럼은 다음 절에서 추가한 것이다). 구독의 `copy_data = true`와 Debezium의 초기 스냅숏이 안에서 하는 일이 이것이다.
+
+<AlgoTrace
+  caption="스냅숏과 슬롯이 같은 시점에서 이어진다"
+  cells={["slot @AE68", "snap id=1", "snap id=4", "snap id=5", "snap id=6", "WAL +id=7", "WAL 다음"]}
+  memoryLabel="받는 쪽 테이블"
+  steps={[
+    { pointer: 0, memory: [], caption: "슬롯을 만든다. 시작 위치와 같은 시점의 스냅숏 이름을 함께 받는다." },
+    { pointer: 2, found: [1, 2], memory: ["1 shipped", "4 delivered"], caption: "그 스냅숏으로 기존 행을 읽어 넣는다. 오래 걸려도 같은 시점의 모습이다." },
+    { pointer: 4, found: [1, 2, 3, 4], memory: ["1 shipped", "4 delivered", "5 paid", "6 paid"], caption: "스냅숏 복사가 끝났다. 그동안 들어온 주문 7은 스냅숏에 없다." },
+    { pointer: 5, found: [1, 2, 3, 4, 5], memory: ["1", "4", "5", "6", "7 paid"], caption: "슬롯의 첫 변경이 주문 7이다. 틈도 겹침도 없다." },
+    { pointer: 6, found: [1, 2, 3, 4, 5, 6], memory: ["1", "4", "5", "6", "7", "…"], caption: "그 뒤로는 슬롯이 내주는 변경을 커밋 순서대로 이어 받는다." },
+  ]}
+/>
+
+이음매는 맞지만 비용이 있다. 수억 행을 복사하는 몇 시간 동안 슬롯은 WAL을 붙잡고 있고, 스냅숏을 연 트랜잭션은 그동안 VACUUM이 지울 수 있는 행의 경계를 묶어 둔다. 큰 테이블의 첫 복사는 복제본에서 하거나, 테이블을 덩어리로 나눠 조금씩 복사하는 방식(Debezium의 증분 스냅숏이 이렇게 한다)을 쓴다. 증분 방식은 덩어리를 읽는 동안 들어온 변경과 겹치는 행을 걸러 내는 규칙으로 이음매를 맞춘다.
+
+## 스키마를 바꾸면 복제가 멈춘다
+
+논리 복제는 행의 변경만 옮기고 `ALTER TABLE` 같은 DDL은 옮기지 않는다. 보내는 쪽에 쿠폰 컬럼을 추가하고, 그 컬럼을 채운 주문을 넣었다.
+
+```sql
+-- 보내는 쪽
+ALTER TABLE orders ADD COLUMN coupon text;
+INSERT INTO orders (id, user_id, amount, status, coupon)
+VALUES (6, 8, 12000, 'paid', 'WELCOME10');
+```
+
+```text
+2026-10-22 00:30:53.098 UTC [5609] LOG:  logical replication apply worker for subscription "copy_sub" has started
+2026-10-22 00:30:53.103 UTC [5609] ERROR:  logical replication target relation "public.orders" is missing replicated column: "coupon"
+2026-10-22 00:30:53.105 UTC [2644] LOG:  background worker "logical replication worker" (PID 5407) exited with exit code 1
+```
+
+받는 쪽 적용 워커가 죽었다가 다시 뜨고, 같은 변경에서 다시 죽기를 반복한다. `pg_stat_subscription_stats`(PostgreSQL 15부터)의 `apply_error_count`가 2로 올라 있었다. 그동안 주문 6 뒤의 모든 변경이 받는 쪽에 반영되지 않고, 보내는 쪽 슬롯은 WAL을 붙잡는다. 받는 쪽에도 컬럼을 추가하자 몇 초 뒤 알아서 이어 받았다.
+
+```text
+ id |  status   |  coupon
+----+-----------+-----------
+  1 | shipped   |
+  4 | delivered |
+  5 | paid      |
+  6 | paid      | WELCOME10
+(4 rows)
+```
+
+그래서 컬럼 추가는 받는 쪽 먼저, 컬럼 삭제는 보내는 쪽 먼저 한다. 받는 쪽에 컬럼이 더 있는 건 괜찮고(기본값이 들어간다), 없는 컬럼이 오면 멈추기 때문이다. Debezium처럼 `R` 메시지에서 새 테이블 정의를 읽어 스키마 변경을 따라가는 도구도, 그 뒤의 검색 인덱스나 분석 테이블이 새 필드를 받을 준비가 돼 있는지는 따로 챙겨야 한다. 배포 순서를 정하는 법은 [무중단 마이그레이션](/posts/zero-downtime-migrations)과 같은 확장 후 축소 순서다.
+
+## 바뀌기 전 값은 어디까지 남나
+
+캐시를 지우거나 검색 문서를 옮기려면 "무엇이 바뀌었나"뿐 아니라 "바뀌기 전에 무엇이었나"가 필요할 때가 있다. 로그에 이전 값이 얼마나 남는지는 테이블의 `REPLICA IDENTITY`가 정한다. 기본값(`DEFAULT`)은 기본 키만 남긴다. 긴 설명 컬럼이 있는 상품 테이블로 확인했다. 설명은 압축 없이 TOAST(큰 값을 따로 떼어 저장하는 곳)로 가도록 `STORAGE EXTERNAL`로 두었다.
+
+```sql
+CREATE TABLE products (id bigint PRIMARY KEY, name text, price integer, description text);
+ALTER TABLE products ALTER COLUMN description SET STORAGE EXTERNAL;
+INSERT INTO products VALUES (1, 'keyboard', 89000, repeat('long spec text ', 1000));
+-- (여기서 test_decoding 슬롯을 비운 뒤)
+UPDATE products SET price = 79000 WHERE id = 1;
+DELETE FROM products WHERE id = 1;
+```
+
+```text
+    lsn     |   xid   |                                                              data
+------------+---------+--------------------------------------------------------------------------------------------------------------------------------
+ 0/3340EEF8 | 1796004 | table public.products: UPDATE: id[bigint]:1 name[text]:'keyboard' price[integer]:79000 description[text]:unchanged-toast-datum
+ 0/3340EF98 | 1796005 | table public.products: DELETE: id[bigint]:1
+(2 rows)
+```
+
+두 가지가 보인다. DELETE에는 `id` 하나만 있다. 지운 상품의 이름이나 가격은 로그에 없으니, "삭제된 상품의 카테고리 캐시도 지운다" 같은 일은 받는 쪽이 따로 기억하고 있어야 한다. UPDATE에는 바뀌기 전 값이 없고, 바뀌지 않은 큰 값은 `unchanged-toast-datum`으로만 온다. PostgreSQL이 TOAST 값을 건드리지 않은 UPDATE에서는 그 값을 WAL에 다시 쓰지 않기 때문이다. 받는 쪽이 이 행을 통째로 덮어쓰면 설명이 빈 값이 된다. 흔하게 당하는 실수다.
+
+`REPLICA IDENTITY FULL`로 바꾸면 UPDATE와 DELETE에 바뀌기 전 행 전체가 붙는다.
+
+```sql
+ALTER TABLE products REPLICA IDENTITY FULL;
+-- id=2 상품을 넣은 뒤 가격을 두 번 고쳤다
+SELECT substring(data from 'new-tuple: .*$') AS new_part, length(data)
+FROM pg_logical_slot_get_changes('peek', NULL, NULL) WHERE data LIKE '%UPDATE%';
+```
+
+```text
+                                                new_part                                                 | length
+---------------------------------------------------------------------------------------------------------+--------
+ new-tuple: id[bigint]:2 name[text]:'mouse' price[integer]:33000 description[text]:unchanged-toast-datum |  15217
+(1 row)
+```
+
+`old-key:` 부분에 설명 1만 5천 자가 통째로 들어가서 변경 한 줄이 15,217자가 됐다. 그런데 바뀐 뒤 쪽(`new-tuple`)의 설명은 여전히 `unchanged-toast-datum`이다. 이전 값에서 채워 넣어야 한다. 대가는 WAL 크기다. 가격 하나를 고쳐도 행 전체가 WAL에 실린다. 그래서 FULL은 이전 값이 정말 필요한 테이블에만 쓰고, 기본 키가 없는 테이블에 UPDATE와 DELETE를 복제해야 할 때(기본 키가 없으면 DEFAULT로는 행을 가리킬 수 없다) 쓴다. Debezium은 바뀌지 않은 TOAST 값을 정해 둔 자리 표시 문자열로 내보내니, 받는 쪽은 그 값을 보면 기존 값을 유지하도록 짜야 한다.
+
+## Debezium이 대신 해 주는 일
+
+받는 쪽이 PostgreSQL이 아니면 디코딩된 변경을 누군가 이벤트로 바꿔 날라야 한다. 가장 흔한 선택이 Kafka Connect 위에서 도는 Debezium이다. 슬롯에 붙어 변경을 받고, 테이블마다 Kafka 토픽에 이벤트로 쓰고, 어디까지 보냈는지를 Kafka에 기록한 뒤 슬롯에 확인을 보낸다. 직접 띄워 보지는 않았으니 아래는 문서 기준의 일반적인 모양이다. 버전마다 필드와 설정 이름이 조금씩 다르다.
+
+이벤트 한 건의 생김새를 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="Debezium 변경 이벤트의 값 부분 (예시)"
+  separator=""
+  joiner=", "
+  params={[
+    { key: "before", display: "before", title: "바뀌기 전 행", description: "REPLICA IDENTITY에 따라 채워진다. 기본값이면 UPDATE에서 null이고, DELETE에서는 기본 키만 있다.", code: "{ \"id\": 2, \"status\": \"paid\", ... }" },
+    { key: "after", display: "after", title: "바뀐 뒤 행", description: "INSERT와 UPDATE에 있다. DELETE에서는 null이다. 바뀌지 않은 TOAST 값은 자리 표시 문자열로 온다.", code: "{ \"id\": 2, \"status\": \"cancelled\", ... }" },
+    { key: "op", display: "op", title: "무슨 변경인가", description: "c(생성), u(수정), d(삭제), 그리고 초기 스냅숏에서 읽은 행은 r(읽기)이다. 받는 쪽이 r과 c를 같게 다루면 된다.", code: "\"op\": \"u\"" },
+    { key: "source", display: "source.lsn", title: "어디서 왔나", description: "DB, 스키마, 테이블, 트랜잭션 번호와 LSN이 들어 있다. 받는 쪽이 중복과 순서를 가릴 때 이 LSN을 쓴다.", code: "\"source\": { \"table\": \"orders\", \"txId\": 742, \"lsn\": 859102720 }" },
+    { key: "ts_ms", display: "ts_ms", title: "처리한 시각", description: "커넥터가 이벤트를 만든 시각이다. source.ts_ms(DB에서 커밋된 시각)와의 차이가 CDC 지연이다." },
+  ]}
+/>
+
+DELETE 뒤에는 기본 설정에서 같은 키에 값이 null인 메시지(툼스톤)를 하나 더 보낸다. 토픽을 키별 최신 값만 남기는 컴팩션으로 운영하면, 툼스톤이 있어야 지운 키가 토픽에서도 사라진다. 컴팩션은 [Kafka 기초](/posts/kafka-basics)의 보관 기간 절에 있다.
+
+운영에서 자주 만나는 설정은 둘이다. 하나는 초기 스냅숏을 언제 할지 정하는 `snapshot.mode`다. 기본은 처음 시작할 때 한 번이다. 다른 하나는 하트비트다. 같은 서버의 다른 DB나 다른 테이블은 바쁜데 CDC 대상 테이블만 조용하면, 커넥터는 보낼 이벤트가 없어 슬롯에 새 위치를 확인해 주지 않는다. 그러면 슬롯이 WAL을 계속 붙잡는다. 하트비트를 켜서 주기적으로 위치를 확인하게 하거나, 대상 DB에 작은 하트비트 테이블을 두고 주기적으로 갱신하게 한다.
+
+## 받는 쪽은 같은 변경을 다시 받는다
+
+로그 기반 CDC도 받는 쪽에 정확히 한 번 도착하지는 않는다. 커넥터가 Kafka에 썼는데 위치를 기록하기 전에 죽으면, 다시 뜬 뒤 마지막으로 기록한 위치부터 다시 보낸다. 초기 스냅숏과 스트림이 겹치는 구간을 다시 보내는 도구도 있다. 그래서 받는 쪽은 같은 변경이 두 번 와도 결과가 같아야 한다. 이유는 [메시지 전달 보장](/posts/message-delivery-semantics)에 있다.
+
+키마다 마지막으로 반영한 LSN을 들고 있다가, 그보다 크지 않은 변경은 버리는 것이 가장 단순한 방법이다. 삭제한 뒤에도 LSN은 지우지 않는다. 지우면 다시 온 오래된 INSERT가 지운 행을 되살린다.
+
+<AlgoTrace
+  caption="키마다 마지막 LSN을 기억하면 다시 온 변경을 버린다"
+  cells={["10 c id1", "20 d id1", "10 c id1", "30 c id3", "30 c id3"]}
+  memoryLabel="받는 쪽 행 · 마지막 LSN"
+  steps={[
+    { pointer: 0, found: [0], memory: ["id1 paid", "last id1=10"], caption: "주문 1이 생겼다. LSN 10을 기억한다." },
+    { pointer: 1, found: [1], memory: ["last id1=20"], caption: "주문 1을 지운다. 행은 없애지만 LSN 20은 남긴다." },
+    { pointer: 2, memory: ["last id1=20"], caption: "커넥터가 재시작하며 LSN 10을 다시 보냈다. 20보다 작으니 버린다." },
+    { pointer: 3, found: [3], memory: ["id3 paid", "last id1=20", "last id3=30"], caption: "새 주문 3이 들어온다." },
+    { pointer: 4, memory: ["id3 paid", "last id1=20", "last id3=30"], caption: "같은 LSN 30이 또 왔다. 크지 않으니 버린다." },
+  ]}
+/>
+
+직접 짜 보자. 변경 목록을 받아 받는 쪽 테이블의 최종 모습을 `[id, status]` 배열(id 오름차순)로 돌려준다. 다시 온 변경, 같은 키의 순서가 뒤집힌 변경, 지운 뒤 다시 온 오래된 생성이 섞여 있다. 그냥 덮어쓰는 틀 코드로는 세 번째와 네 번째 테스트가 틀린다.
+
+<CodePlayground
+  caption="다시 받아도 같은 결과가 나오는 CDC 적용기"
+  functionName="applyChanges"
+  initialCode={`// changes: [{ lsn, op: "c" | "u" | "d", id, status? }, ...] 도착 순서대로
+function applyChanges(changes) {
+  const rows = new Map();
+  for (const c of changes) {
+    if (c.op === "d") rows.delete(c.id);
+    else rows.set(c.id, c.status);
+  }
+  return [...rows].sort((a, b) => a[0] - b[0]);
+}`}
+  solution={`function applyChanges(changes) {
+  const rows = new Map();     // id -> status
+  const lastLsn = new Map();  // id -> 마지막으로 반영한 lsn (지운 뒤에도 남긴다)
+  for (const c of changes) {
+    const seen = lastLsn.get(c.id);
+    if (seen !== undefined && c.lsn <= seen) continue;  // 이미 반영했거나 더 오래된 변경
+    lastLsn.set(c.id, c.lsn);
+    if (c.op === "d") rows.delete(c.id);
+    else rows.set(c.id, c.status);
+  }
+  return [...rows].sort((a, b) => a[0] - b[0]);
+}`}
+  tests={[
+    { label: "생성과 수정", args: [[{ lsn: 10, op: "c", id: 1, status: "paid" }, { lsn: 20, op: "c", id: 2, status: "paid" }, { lsn: 30, op: "u", id: 1, status: "shipped" }]], expected: [[1, "shipped"], [2, "paid"]] },
+    { label: "재시작 뒤 다시 온 변경", args: [[{ lsn: 10, op: "c", id: 1, status: "paid" }, { lsn: 20, op: "c", id: 2, status: "paid" }, { lsn: 30, op: "u", id: 1, status: "shipped" }, { lsn: 20, op: "c", id: 2, status: "paid" }, { lsn: 30, op: "u", id: 1, status: "shipped" }]], expected: [[1, "shipped"], [2, "paid"]] },
+    { label: "지운 뒤 다시 온 생성", args: [[{ lsn: 10, op: "c", id: 1, status: "paid" }, { lsn: 20, op: "d", id: 1 }, { lsn: 10, op: "c", id: 1, status: "paid" }]], expected: [] },
+    { label: "순서가 뒤집힌 수정", args: [[{ lsn: 10, op: "c", id: 1, status: "paid" }, { lsn: 30, op: "u", id: 1, status: "shipped" }, { lsn: 20, op: "u", id: 1, status: "packed" }, { lsn: 25, op: "c", id: 3, status: "paid" }]], expected: [[1, "shipped"], [3, "paid"]] },
+    { label: "빈 입력", args: [[]], expected: [] },
+  ]}
+/>
+
+실제 저장소에서는 이 비교를 쓰기와 함께 원자적으로 한다. PostgreSQL이나 MySQL이면 행에 `source_lsn` 컬럼을 두고 `ON CONFLICT ... DO UPDATE ... WHERE excluded.source_lsn > t.source_lsn`으로 더 새로울 때만 덮어쓴다. Elasticsearch라면 문서 버전에 LSN을 넣는 외부 버전(`version_type=external`)이 같은 일을 한다. 같은 키의 변경이 늘 같은 Kafka 파티션으로 가게 기본 키를 메시지 키로 쓰면 순서 뒤집힘 자체가 드물어진다.
+
+## 슬롯이 끊기는 날
+
+슬롯이 WAL을 붙잡아 디스크를 채우는 위험과 `max_slot_wal_keep_size`로 상한을 두는 법은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에서 봤다. 여기서는 상한에 걸렸을 때 CDC 쪽에서 실제로 무슨 일이 일어나는지 본다. 실험용 인스턴스에 상한을 64MB로 걸고, 아무도 읽지 않는 슬롯을 하나 만든 뒤 WAL을 70MB쯤 만들었다.
+
+```sql
+ALTER SYSTEM SET max_slot_wal_keep_size = '64MB';
+SELECT pg_reload_conf();
+SELECT slot_name FROM pg_create_logical_replication_slot('analytics_cdc', 'pgoutput');
+UPDATE bench_orders SET amount = amount + 1;   -- 10만 행씩 세 번
+SELECT slot_name, active, wal_status, restart_lsn,
+       pg_size_pretty(safe_wal_size) AS safe_wal_size
+FROM pg_replication_slots;
+```
+
+```text
+   slot_name   | active | wal_status | retained_wal | safe_wal_size
+---------------+--------+------------+--------------+---------------
+ copy_sub      | t      | reserved   | 72 MB        | 3972 kB
+ analytics_cdc | f      | reserved   | 72 MB        | 3972 kB
+(2 rows)
+
+   slot_name   | active | wal_status | restart_lsn | safe_wal_size
+---------------+--------+------------+-------------+---------------
+ copy_sub      | t      | reserved   | 0/38000028  | 80 MB
+ analytics_cdc | f      | lost       |             |
+(2 rows)
+```
+
+첫 표에서 `safe_wal_size`가 4MB 남짓으로 줄었다. "이만큼 더 쌓이면 이 슬롯은 끊긴다"는 남은 여유다. 체크포인트가 지나자 읽지 않던 슬롯의 `wal_status`가 `lost`가 됐다. 계속 읽고 있던 `copy_sub`는 위치를 따라와 다시 80MB의 여유를 얻었다. 서버 로그와, 끊긴 슬롯에서 읽으려 할 때의 응답은 이렇다.
+
+```text
+2026-10-22 00:31:52.140 UTC [2645] LOG:  invalidating obsolete replication slot "analytics_cdc"
+2026-10-22 00:31:52.140 UTC [2645] HINT:  You might need to increase max_slot_wal_keep_size.
+
+ERROR:  can no longer get changes from replication slot "analytics_cdc"
+DETAIL:  This slot has been invalidated because it exceeded the maximum reserved size.
+```
+
+DB는 살았지만 CDC는 그 사이의 변경을 잃었다. 되살릴 수 없으니 슬롯을 지우고 새로 만들어 초기 스냅숏부터 다시 해야 한다. 그래서 감시 지표는 `wal_status`가 `reserved`가 아닌 슬롯, `safe_wal_size`가 줄어드는 속도, 그리고 받는 쪽의 지연(커밋 시각과 반영 시각의 차이) 셋이다.
+
+<Callout kind="warning">
+프라이머리가 죽어 스탠바이로 넘어가면, PostgreSQL 16까지는 논리 복제 슬롯이 스탠바이에 없다. 새 프라이머리에서 슬롯을 다시 만들면 그 순간부터의 변경만 나오므로, 장애 직전의 변경을 잃지 않으려면 초기 스냅숏부터 다시 해야 한다. PostgreSQL 17부터는 슬롯을 스탠바이와 동기화하는 failover 슬롯 기능이 생겼다. 관리형 DB는 서비스마다 지원이 다르니 문서를 확인한다.
+</Callout>
+
+## 세 방법 중 무엇을 고르나
+
+세 방법은 "무엇을 놓치나"와 "누가 비용을 치르나"가 다르다. 실제로 비교할 일이 많아서 표로 둔다.
+
+| 방법 | 놓치는 것 | 비용을 치르는 곳 | 어울리는 곳 |
+|---|---|---|---|
+| `updated_at` 폴링 | 삭제, 늦게 커밋된 변경, 중간 상태 | 원본에 주기적인 조회 | 작은 테이블, 소프트 삭제, 몇 분 늦어도 되는 동기화 |
+| 트리거 | 거의 없다 (읽는 쪽 순서는 따로 챙긴다) | 원본 쓰기마다. 이 실험에서 처리량 3분의 1 감소 | 로그를 읽을 수 없는 관리형 DB, 감사 기록 |
+| 로그 기반 | 거의 없다. DDL과 TOAST 값은 따로 챙긴다 | 슬롯 감시, 커넥터 운영 | 대부분의 실시간 CDC |
+
+트리거는 감사 기록처럼 "누가 언제 무엇을 바꿨나"를 DB 안에 남겨야 할 때 여전히 좋은 답이다. 로그 기반은 원본을 가장 덜 건드리지만, 슬롯과 커넥터라는 운영 부품이 늘어난다. 이벤트를 내보내는 것이 목적이라면, 테이블 변경을 그대로 내보내는 CDC와 의미 있는 사건을 따로 적는 아웃박스를 함께 쓰는 경우가 많다. 테이블 구조가 바뀌어도 이벤트 계약이 깨지지 않기 때문이다. 둘의 차이는 [트랜잭셔널 아웃박스](/posts/transactional-outbox)의 비교 절에 있다.
+
+## CDC가 늦다는 알림이 왔을 때
+
+검색이나 분석 쪽 데이터가 몇 분째 안 바뀐다는 알림이 오면 보내는 쪽부터 받는 쪽 순서로 본다.
+
+```sql
+-- 1) 슬롯이 살아 있고 누군가 읽고 있나
+SELECT slot_name, active, wal_status,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)) AS behind,
+       pg_size_pretty(safe_wal_size) AS safe_wal_size
+FROM pg_replication_slots WHERE slot_type = 'logical';
+
+-- 2) 큰 트랜잭션이 디코딩 메모리를 넘어 디스크로 흘렀나 (PostgreSQL 14부터)
+SELECT slot_name, total_txns, total_bytes, spill_txns, spill_bytes
+FROM pg_stat_replication_slots;
+```
+
+두 번째 쿼리를 실험이 끝날 무렵 돌린 값은 이랬다.
+
+```text
+ slot_name | total_txns | total_bytes | spill_txns | spill_bytes
+-----------+------------+-------------+------------+-------------
+ copy_sub  |         30 |    50456766 |          0 |           0
+(1 row)
+```
+
+`active`가 `f`면 커넥터가 붙어 있지 않다. 커넥터 쪽 로그를 본다. `active`는 `t`인데 `behind`가 계속 크면 받는 쪽이 느리거나 막혀 있다. 받는 쪽 적용 에러부터 본다. 위의 DDL 사례처럼 같은 변경에서 계속 실패하고 있을 수 있다. `spill_txns`가 늘고 있으면 한 트랜잭션에서 수백만 행을 바꾸는 배치가 디코딩을 느리게 하는 중이다. 디코딩은 트랜잭션이 커밋될 때까지 변경을 메모리(`logical_decoding_work_mem`, 기본 64MB)에 모으고 넘치면 디스크에 쓴다. 대량 UPDATE를 작은 트랜잭션으로 나누면 CDC 지연도 함께 줄어든다.
+
+슬롯이 `lost`면 위에서 본 대로 다시 스냅숏을 뜬다. 이때 받는 쪽을 비우고 다시 채울지, 그대로 둔 채 덮어쓸지 정해야 한다. 덮어쓰기로 가면 그 사이 지워진 행이 받는 쪽에 남는다. 지운 행을 정리하는 비교 작업이 따로 필요하다.
+
+## 로그를 읽고, 두 번 받을 각오를 한다
+
+CDC는 "바뀐 것을 어떻게 알아내나"의 문제다. `updated_at` 폴링은 늦게 커밋된 변경과 삭제를 놓치고, 트리거는 다 잡지만 원본의 쓰기를 느리게 한다. 로그 기반은 DB가 이미 적는 WAL을 커밋 순서대로 읽어 둘 다 피하는 대신, 초기 스냅숏과의 이음매, 옮겨 주지 않는 DDL, 기본 키만 남는 이전 값, 끊길 수 있는 슬롯을 챙겨야 한다. 받는 쪽은 같은 변경을 다시 받아도 결과가 같게 만든다. 이 변경 흐름을 받아 상태를 들고 계산하는 쪽은 [스트림 처리](/posts/stream-processing)에서, 분석 DB에 어떤 모양으로 쌓을지는 [스타 스키마](/posts/olap-star-schema)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### CDC를 왜 쓰나요? 애플리케이션에서 두 군데에 쓰면 안 되나요?
+
+DB와 검색 인덱스에 따로 쓰면 둘 사이에서 실패하는 순간 둘이 어긋나고, 그걸 되맞출 기준이 없다. CDC는 DB를 유일한 원본으로 두고 커밋된 변경만 다른 곳에 따라가게 만든다. 앱 코드를 고치지 않고 받는 쪽을 늘릴 수 있다는 것도 장점이다.
+
+### updated_at으로 폴링하면 무엇을 놓치나요?
+
+삭제와 늦게 커밋된 변경을 놓친다. `now()`는 트랜잭션 시작 시각이라 오래 걸린 트랜잭션의 행은 커밋됐을 때 이미 기준보다 과거 값을 갖고 있고, 지운 행은 조회할 방법이 없다. 폴링 사이에 여러 번 바뀐 중간 상태도 사라진다. 소프트 삭제와 겹쳐 읽기로 일부를 줄일 수는 있지만 완전히 막지는 못한다.
+
+### 로그 기반 CDC가 트리거 방식보다 나은 점과 치르는 것은요?
+
+원본 쓰기 경로에 아무것도 붙지 않는다. 트리거는 쓰기마다 로그 행을 하나 더 쓰니, 실험에서는 처리량이 3분의 1쯤 줄었다. 대신 로그 기반은 `wal_level = logical`, 복제 슬롯 감시, 커넥터 운영이 필요하고, DDL은 옮겨 주지 않는다.
+
+### 초기 스냅숏과 스트리밍 사이에 변경이 빠지거나 겹치지 않게 하려면요?
+
+슬롯을 만들 때 그 시작 위치와 같은 시점의 스냅숏을 받아, 그 스냅숏으로 기존 데이터를 읽는다. PostgreSQL은 `CREATE_REPLICATION_SLOT ... EXPORT_SNAPSHOT`으로 이걸 준다. 스냅숏에 없는 변경은 정확히 슬롯의 첫 변경부터 나온다. 큰 테이블은 스냅숏을 오래 열어 두는 부담이 있어 덩어리로 나눠 복사하는 증분 스냅숏을 쓰기도 한다.
+
+### DELETE 이벤트에 지운 행의 다른 컬럼이 없는 이유는요?
+
+`REPLICA IDENTITY`가 기본값이면 WAL에 기본 키만 남기 때문이다. 이전 행 전체가 필요하면 `REPLICA IDENTITY FULL`로 바꾸는데, 그러면 UPDATE마다 행 전체가 WAL에 실려 WAL이 커진다. 또 바뀌지 않은 TOAST 값은 FULL에서도 바뀐 뒤 쪽에 `unchanged-toast-datum`으로 오니, 받는 쪽이 기존 값을 유지하도록 짜야 한다.
+
+### 테이블에 컬럼을 추가했더니 복제가 멈췄습니다. 왜 그렇고 어떻게 배포해야 하나요?
+
+논리 복제는 DDL을 옮기지 않는다. 받는 쪽에 없는 컬럼이 담긴 변경이 오면 적용 워커가 에러로 죽고 같은 변경에서 계속 실패한다. 컬럼 추가는 받는 쪽 먼저, 삭제는 보내는 쪽 먼저 하면 된다. 받는 쪽에 컬럼을 맞추면 멈췄던 지점부터 알아서 이어 받는다.
+
+### 받는 쪽에서 같은 변경을 두 번 받으면 어떻게 하나요?
+
+키마다 마지막으로 반영한 LSN을 저장하고, 그보다 크지 않은 변경은 버린다. 삭제한 뒤에도 그 LSN을 남겨야 다시 온 오래된 INSERT가 지운 행을 되살리지 않는다. 저장소에서는 `source_lsn` 비교를 조건으로 건 upsert나 외부 버전으로 원자적으로 처리한다.
+
+### 슬롯이 lost가 되면 무엇을 잃고, 어떻게 복구하나요?
+
+슬롯이 붙잡을 수 있는 WAL 상한(`max_slot_wal_keep_size`)을 넘어서 그 사이 WAL이 지워졌다는 뜻이다. DB는 디스크가 차지 않고 살아남지만, 그 구간의 변경은 다시 읽을 수 없다. 슬롯을 지우고 새로 만들어 초기 스냅숏부터 다시 하고, 그 사이 지워진 행이 받는 쪽에 남지 않았는지 맞춰 본다.

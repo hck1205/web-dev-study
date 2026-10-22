@@ -2,6 +2,65 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "stream-processing": {
+    "links": [
+      "sd-ad-click-stream-windows",
+      "sd-ad-click-exactly-once",
+      "kafka-basics",
+      "cdc-change-data-capture",
+      "backpressure",
+      "olap-star-schema"
+    ],
+    "mentions": [
+      "k8s-statefulset",
+      "js-array-transform",
+      "message-delivery-semantics",
+      "db-type-embedded",
+      "db-type-key-value",
+      "sd-object-storage-architecture",
+      "pub-sub",
+      "tcp-reliability-congestion",
+      "postgres-architecture",
+      "dns"
+    ]
+  },
+  "olap-star-schema": {
+    "links": [
+      "db-type-columnar-olap",
+      "cdc-change-data-capture",
+      "hyperloglog",
+      "sql-views-materialized",
+      "stream-processing"
+    ],
+    "mentions": [
+      "postgres-reporting-sql",
+      "sql-query-tuning",
+      "sql-subqueries-exists-lateral",
+      "db-type-relational",
+      "db-keys-denormalization",
+      "db-modeling-normalization"
+    ]
+  },
+  "cdc-change-data-capture": {
+    "links": [
+      "event-driven-architecture",
+      "transactional-outbox",
+      "db-type-columnar-olap",
+      "zero-downtime-migrations",
+      "kafka-basics",
+      "message-delivery-semantics",
+      "stream-processing",
+      "olap-star-schema"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "mysql-replication-online-ddl",
+      "postgres-architecture",
+      "db-replication-sharding",
+      "db-type-wide-column",
+      "sql-basics"
+    ]
+  },
   "typescript-roadmap": {
     "links": [
       "javascript-roadmap",
@@ -1354,6 +1413,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-migration-tools",
       "sql-batch-timeout-pool",
+      "cdc-change-data-capture",
       "sql-basics"
     ]
   },
@@ -2217,6 +2277,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-columnar-olap",
+      "cdc-change-data-capture",
       "sd-start-single-server",
       "redis-basics",
       "resilience-patterns",
@@ -2264,6 +2325,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-embedded",
+      "stream-processing",
       "postgres-architecture",
       "http-methods"
     ]
@@ -2283,6 +2345,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
+      "stream-processing",
+      "olap-star-schema",
       "sd-object-storage-architecture",
       "sd-mq-storage-partitions",
       "batch-processing"
@@ -2332,6 +2396,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sd-queue-logging-automation",
       "db-type-key-value",
+      "stream-processing",
       "sd-start-single-server",
       "autoscaling",
       "db-type-relational",
@@ -3108,6 +3173,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-type-wide-column",
       "gateway",
+      "stream-processing",
       "race-conditions",
       "kafka-basics",
       "redis-basics"
@@ -3686,6 +3752,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
+      "cdc-change-data-capture",
       "db-modeling-normalization"
     ]
   },
@@ -3993,6 +4060,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-columnar-olap",
+      "cdc-change-data-capture",
       "sql-query-rewrite"
     ]
   },
@@ -4293,6 +4361,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-reporting-sql",
       "microservices",
       "browser-storage",
+      "cdc-change-data-capture",
       "sd-payment-flow",
       "db-index-design",
       "resilience-patterns",
@@ -4311,7 +4380,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "schema-versioning"
     ],
     "mentions": [
-      "postgres-architecture"
+      "postgres-architecture",
+      "cdc-change-data-capture"
     ]
   },
   "cqrs": {
@@ -6607,6 +6677,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "kafka-basics",
       "redis-basics",
+      "cdc-change-data-capture",
       "dns"
     ]
   },
@@ -7109,6 +7180,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mysql-replication-online-ddl",
       "mysql-innodb-basics",
       "db-replication-sharding",
+      "cdc-change-data-capture",
       "sql-basics"
     ]
   },
@@ -8211,6 +8283,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "batch-processing"
     ],
     "mentions": [
+      "stream-processing",
       "transactional-outbox",
       "js-pure-functions",
       "db-transaction-isolation",
@@ -8270,6 +8343,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "cdc-change-data-capture",
       "api-versioning",
       "postgres-architecture"
     ]
@@ -8309,6 +8383,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-advanced-sql",
       "db-architecture-by-scale",
       "db-type-columnar-olap",
+      "cdc-change-data-capture",
       "db-locking-deadlock",
       "distributed-tracing",
       "kafka-basics",
@@ -9241,6 +9316,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-advanced-sql",
       "db-architecture-by-scale",
       "postgres-mvcc-vacuum",
+      "stream-processing",
       "postgres-architecture",
       "redis-basics",
       "resilience-patterns",
@@ -10110,7 +10186,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cqrs",
       "scaling-horizontal-vertical",
       "redis-basics",
-      "high-availability"
+      "high-availability",
+      "cdc-change-data-capture"
     ]
   },
   "db-partitioning": {
@@ -10443,6 +10520,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "postgres-reporting-sql",
       "db-sharding",
+      "cdc-change-data-capture",
       "mysql-innodb-basics",
       "kafka-basics",
       "db-replication-sharding",
@@ -10480,6 +10558,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-consistency-cap"
     ],
     "mentions": [
+      "stream-processing",
       "sql-insert-update-delete",
       "mysql-innodb-basics",
       "sd-start-single-server",
@@ -10534,7 +10613,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sd-mq-storage-partitions",
-      "scaling-horizontal-vertical"
+      "scaling-horizontal-vertical",
+      "cdc-change-data-capture"
     ]
   },
   "db-type-relational": {
@@ -10565,6 +10645,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-jsonb-search",
       "db-partitioning",
       "postgres-getting-started",
+      "cdc-change-data-capture",
       "acid-transactions"
     ]
   },
@@ -10623,7 +10704,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs",
       "graph-rag",
       "sd-start-single-server",
-      "db-type-relational"
+      "db-type-relational",
+      "cdc-change-data-capture"
     ]
   },
   "postgres-architecture": {
@@ -10728,7 +10810,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "opensearch-cluster-operations",
       "webhooks",
       "db-index-design",
-      "sd-db-replication-intro"
+      "sd-db-replication-intro",
+      "cdc-change-data-capture"
     ]
   },
   "postgres-getting-started": {
@@ -11088,6 +11171,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
+      "cdc-change-data-capture",
       "transactional-outbox",
       "rabbitmq-basics",
       "db-type-key-value",
@@ -11288,6 +11372,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cache-write-policies",
       "bloom-filter",
       "db-type-columnar-olap",
+      "cdc-change-data-capture",
       "ds-linked-list",
       "mysql-replication-online-ddl",
       "sd-start-single-server",
@@ -11837,6 +11922,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "cdc-change-data-capture",
       "rag-retrieval-quality",
       "mongodb-document-model",
       "loading-patterns",
@@ -11912,6 +11998,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "observability-basics",
       "ddd-bounded-context",
       "db-type-columnar-olap",
+      "cdc-change-data-capture",
       "rabbitmq-basics",
       "client-data-cache",
       "monolith-architecture",

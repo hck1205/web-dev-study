@@ -5,6 +5,33 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "stream-processing",
+    title: "스트림 처리: 상태를 키로 나누고 로그로 지키기",
+    summary: "컨슈머를 늘리자 회원별 합계가 둘로 갈리는 장면에서 시작해, 재분배, 스트림과 테이블의 이중성, 옛 값이 붙는 스트림-테이블 조인과 시간 조인, 창이 정하는 조인 상태, 체인지로그 복원을 Node로 재현한다. Kafka Streams와 Flink의 상태 저장 방식과 고르는 기준도 다룬다.",
+    topic: "programming/backend/messaging",
+    tags: ["Messaging", "Backend", "Distributed Systems", "System Design", "Node.js"],
+    date: "2026-10-25",
+    keywords: ["스트림 처리", "Kafka Streams", "Flink", "스트림-테이블 조인"],
+  },
+  {
+    slug: "olap-star-schema",
+    title: "스타 스키마: 분석 DB에 사실과 차원을 나눠 쌓기",
+    summary: "사실 테이블과 차원 테이블, 입도를 섞으면 합계가 부푸는 이유, 조인이 셋인데도 빠른 스타 조인을 DuckDB로 확인한다. 넓은 테이블과의 비교, 회원이 이사할 때 과거 매출을 지키는 SCD 2형, 요약 테이블과 더할 수 없는 값을 PostgreSQL 16과 함께 다룬다.",
+    topic: "programming/database/db-types",
+    tags: ["Database", "PostgreSQL", "Performance", "System Design"],
+    date: "2026-10-25",
+    keywords: ["스타 스키마", "사실 테이블", "차원 테이블", "SCD"],
+  },
+  {
+    slug: "cdc-change-data-capture",
+    title: "CDC: 테이블 변경을 빠짐없이 다른 저장소로 옮기기",
+    summary: "updated_at 폴링이 늦게 커밋된 변경과 삭제를 놓치는 장면을 재현하고, 트리거와 WAL 기반 논리 복제를 PostgreSQL 16으로 비교한다. 초기 스냅숏과 슬롯의 이음매, DDL에 멈추는 구독, REPLICA IDENTITY와 TOAST, 다시 받아도 같은 결과를 내는 적용기, 끊긴 슬롯 복구까지 다룬다.",
+    topic: "programming/database",
+    tags: ["Database", "PostgreSQL", "Distributed Systems", "Messaging", "System Design"],
+    date: "2026-10-25",
+    keywords: ["CDC", "Debezium", "REPLICA IDENTITY", "pgoutput"],
+  },
+  {
     slug: "typescript-roadmap",
     title: "TypeScript 로드맵: 에러 한 화면에서 여섯 글로",
     summary: "파일 하나에서 나온 tsc 에러 여섯 줄이 각각 다른 규칙에서 나왔다는 데서 출발해 이 블로그의 TypeScript 글을 읽는 순서로 엮고, 에러 번호에서 먼저 펼 글을 찾는 길과 JS 저장소를 옮기는 순서를 정리한다.",
