@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("fp-in-react");
+
+회원 목록에서 이름을 누르면 오른쪽에 프로필 수정 폼이 뜬다. 김하나를 눌렀다가 이두리를 누르면 제목은 "이두리 님의 프로필"로 바뀌는데, 이름 입력칸에는 여전히 "김하나"가 들어 있다.
+
+```jsx
+function ProfileForm({ user }) {
+  const [name, setName] = useState(user.name); // props를 state에 복사한다
+  return <input value={name} onChange={(e) => setName(e.target.value)} />;
+}
+
+function App() {
+  const [selectedId, setSelectedId] = useState(1);
+  const user = USERS.find((u) => u.id === selectedId);
+  return (
+    <>
+      {USERS.map((u) => <button key={u.id} onClick={() => setSelectedId(u.id)}>{u.name}</button>)}
+      <p>{user.name} 님의 프로필</p>
+      <ProfileForm user={user} />
+      <ProfileForm key={user.id} user={user} />
+    </>
+  );
+}
+```
+
+같은 폼을 두 번 그렸다. 두 번째는 `key`를 붙였다. React 19.3 개발 빌드를 크로미움에서 돌리고, 이두리를 누르기 전과 뒤에 화면 값을 읽었다.
+
+```text
+처음: 제목="김하나 님의 프로필" 입력(그냥)="김하나" 입력(key)="김하나"
+이두리 클릭 뒤: 제목="이두리 님의 프로필" 입력(그냥)="김하나" 입력(key)="이두리"
+```
+
+`useState(user.name)`의 인자는 처음 마운트될 때 한 번만 쓰인다. 그 뒤로 `user` props가 바뀌어도 `name` 상태는 그대로다. 같은 데이터(이름)가 props와 state 두 곳에 살게 되면서, 둘이 어긋났다.
+
+이 글은 React 코드를 함수형의 눈으로 다시 본다. 컴포넌트를 "상태를 받아 화면을 돌려주는 함수"로 보면, 이런 버그는 대개 같은 값을 두 곳에 두었거나, 계산할 수 있는 값을 상태로 들고 있거나, 효과를 엉뚱한 자리에 둔 데서 나온다. 출력은 모두 React 19.3을 크로미움(개발 빌드)과 Node.js 22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 렌더링이 왜 순수해야 하는지, StrictMode가 왜 두 번 부르는지는 [순수 함수와 부수 효과](/posts/js-pure-functions#react가-순수함을-요구하는-세-자리)에, 상태를 불변으로 고치는 법은 [불변성과 React](/posts/js-immutability-react)에, 오래된 값을 보는 클로저 문제는 [클로저](/posts/js-closures)에, 언제 다시 렌더링되는지는 [React는 언제 다시 그리나](/posts/react-rerender)에 있다. 함수형 프로그래밍 전체 그림은 [함수형 프로그래밍 기초](/posts/functional-programming-basics)에서 시작한다. 여기서는 그 위에서 컴포넌트와 상태를 어떻게 나눌지를 본다.
+
+## 같은 값이 두 곳에 살면 어긋난다
+
+처음 버그를 순서대로 따라가면 `useState`가 props를 언제 읽는지 보인다. 아래 그림에서 다음을 누른다.
+
+<SequenceDiagram
+  caption="useState의 초깃값은 처음 한 번만 읽힌다"
+  actors={[
+    { id: "app", label: "App" },
+    { id: "form", label: "ProfileForm" },
+    { id: "state", label: "name 상태" },
+  ]}
+  steps={[
+    { from: "app", to: "form", label: "user=김하나", title: "처음 그린다", detail: "ProfileForm이 처음 마운트된다." },
+    { from: "form", to: "state", label: "useState('김하나')", title: "초깃값으로 상태를 만든다", detail: "이 순간 props의 이름이 상태로 복사된다. 둘은 이제 따로 산다." },
+    { from: "app", to: "form", label: "user=이두리", title: "props가 바뀐다", detail: "같은 자리, 같은 컴포넌트라 React는 기존 인스턴스를 다시 렌더링한다." },
+    { from: "form", to: "state", label: "useState('이두리')", title: "초깃값은 무시된다", detail: "이미 상태가 있으니 인자는 쓰이지 않는다. name은 여전히 김하나다.", payload: "입력(그냥)=\"김하나\"" },
+  ]}
+/>
+
+함수형으로 말하면 이 컴포넌트는 같은 입력(`user`)에 다른 출력을 낸다. 화면이 props만이 아니라 "예전에 받은 props"에도 기대고 있어서다. 고치는 방법은 두 가지이고, 무엇을 원하는지에 따라 고른다.
+
+사용자가 바뀌면 폼을 처음부터 다시 시작하고 싶다면 `key={user.id}`를 준다. key가 바뀌면 React는 이전 인스턴스를 버리고 새로 마운트하니 초깃값이 다시 읽힌다. 위 출력의 두 번째 입력칸이 그렇다. 입력하던 내용도 함께 사라진다는 점이 이 방법의 뜻이다.
+
+이름이 언제나 props를 따라가야 한다면 상태를 두지 않는다. 입력값의 주인을 부모로 올리고(`value={user.name}`, `onChange`로 부모에게 알림), 폼은 받은 값만 그린다. 진실의 원천을 한 곳으로 정하는 것이다. `useEffect(() => setName(user.name), [user.name])`로 둘을 맞추는 방법도 흔히 보이지만, 이건 다음 절에서 볼 "동기화" 문제를 그대로 가져온다.
+
+## 계산할 수 있으면 상태로 두지 않는다
+
+검색어로 목록을 거르는 컴포넌트를 두 가지로 만들었다. 하나는 거른 결과를 상태에 담고 effect로 맞추고, 하나는 렌더링 중에 바로 계산한다.
+
+```jsx
+const ITEMS = ["react", "redux", "remix", "vue", "svelte", "solid"];
+
+function WithEffect({ query }) {
+  const [filtered, setFiltered] = useState(ITEMS);
+  useEffect(() => { setFiltered(ITEMS.filter((s) => s.includes(query))); }, [query]);
+  console.log(`[effect] render query="${query}" → ${filtered.join(",")}`);
+  return <ul>{filtered.map((s) => <li key={s}>{s}</li>)}</ul>;
+}
+
+function Derived({ query }) {
+  const filtered = ITEMS.filter((s) => s.includes(query));
+  console.log(`[derived] render query="${query}" → ${filtered.join(",")}`);
+  return <ul>{filtered.map((s) => <li key={s}>{s}</li>)}</ul>;
+}
+```
+
+검색어를 `""`, `"re"`, `"red"`로 차례로 바꾸며 렌더링 로그를 모았다.
+
+```text
+--- query=""
+[effect] render query="" → react,redux,remix,vue,svelte,solid
+[derived] render query="" → react,redux,remix,vue,svelte,solid
+[effect] render query="" → react,redux,remix,vue,svelte,solid
+--- query="re"
+[effect] render query="re" → react,redux,remix,vue,svelte,solid
+[derived] render query="re" → react,redux,remix
+[effect] render query="re" → react,redux,remix
+--- query="red"
+[effect] render query="red" → react,redux,remix
+[derived] render query="red" → redux
+[effect] render query="red" → redux
+```
+
+effect 쪽은 검색어가 바뀔 때마다 두 번 렌더링됐다. 더 눈여겨볼 건 첫 번째 렌더링이다. `query="re"`인데 목록은 아직 여섯 개다. 이 렌더링 동안 컴포넌트는 서로 맞지 않는 두 값을 들고 있다. 이 컴포넌트가 "결과 n건" 문구를 그리거나, 결과가 0건일 때 로그를 보낸다면 틀린 값으로 한 번 일한다. 처음 마운트할 때도 `filter`가 내용은 같지만 새 배열을 돌려주니 쓸데없이 한 번 더 그렸다.
+
+<AlgoTrace
+  caption="effect로 맞추면 한 번은 어긋난 채로 렌더링된다"
+  memoryLabel="이 렌더링이 본 값"
+  cells={["props 변경", "렌더 1", "effect", "렌더 2"]}
+  steps={[
+    { pointer: 0, memory: ["query 're'"], caption: "부모가 검색어를 're'로 바꾼다." },
+    { pointer: 1, memory: ["query 're'", "filtered 6개"], caption: "새 검색어와 옛 결과로 렌더링한다. 둘이 맞지 않는다." },
+    { pointer: 2, memory: ["setFiltered(3개)"], caption: "커밋이 끝난 뒤 effect가 돌아 결과를 상태에 넣는다. 상태가 바뀌었으니 다시 렌더링을 예약한다." },
+    { pointer: 3, found: [3], memory: ["query 're'", "filtered 3개"], caption: "두 번째 렌더링에서야 맞는다. derived 쪽은 첫 렌더링부터 3개였다." },
+  ]}
+/>
+
+렌더링이 `(props, state) → 화면`인 순수 함수라면, `query`에서 계산할 수 있는 `filtered`는 함수 안에서 계산하면 된다. 상태로 두는 건 "계산 결과를 캐시한 변수를 직접 관리하겠다"는 뜻이고, 캐시를 갱신하는 일(effect)이 늘 한 박자 늦다. 계산이 정말 무거울 때만 `useMemo`로 감싸 같은 입력의 결과를 기억한다. `useMemo`가 칸 하나짜리 캐시라는 점은 [메모이제이션](/posts/js-memoization#usememo는-칸이-하나뿐인-캐시다)에서 다뤘다. React Compiler를 켜면 이런 계산은 자동으로 메모이제이션되지만, 상태로 들고 있는 구조까지 고쳐 주지는 않는다([React Compiler가 대신해 주는 것](/posts/react-rerender#react-compiler가-대신해-주는-것)).
+
+판단 기준은 질문 하나다. "이 값을 다른 상태나 props로 계산할 수 있나?" 그렇다면 상태가 아니다. 장바구니 합계, 걸러진 목록, 폼이 제출 가능한지 여부, 선택된 항목 객체(`items.find((i) => i.id === selectedId)`)가 다 그렇다. 선택된 항목을 객체째 상태에 넣으면 목록이 새로 고쳐졌을 때 옛 객체를 들고 있게 되니 id만 상태로 둔다.
+
+## 상태 변화는 리듀서라는 순수 함수로 모은다
+
+상태가 여러 개이고 서로 엮이면 `useState`를 여러 번 부르는 것보다 하나의 함수로 모으는 게 낫다. `useReducer`에 넘기는 리듀서는 `(지금 상태, 일어난 일) → 다음 상태`인 순수 함수다. 배열의 `reduce`와 같은 모양이라 이름도 같다.
+
+```js
+export const initialState = { status: "editing", items: [], error: null };
+
+export function checkoutReducer(state, action) {
+  switch (action.type) {
+    case "add": {
+      if (state.status !== "editing") return state; // 결제 중에는 담지 않는다
+      const found = state.items.find((i) => i.id === action.item.id);
+      const items = found
+        ? state.items.map((i) => (i.id === action.item.id ? { ...i, qty: i.qty + 1 } : i))
+        : [...state.items, { ...action.item, qty: 1 }];
+      return { ...state, items };
+    }
+    case "submit":
+      return state.items.length === 0
+        ? { ...state, error: "EMPTY_CART" }
+        : { ...state, status: "submitting", error: null };
+    case "failed":
+      return { ...state, status: "editing", error: action.error };
+    case "succeeded":
+      return { status: "done", items: [], error: null };
+    default:
+      return state;
+  }
+}
+```
+
+`isSubmitting`, `isDone`, `hasError`를 불리언 세 개로 두면 "결제 중이면서 완료" 같은 말이 안 되는 조합이 생길 수 있다. `status` 하나로 두고 가능한 값만 나열하면 그런 조합이 처음부터 없다. 규칙(결제 중에는 담지 않는다)도 컴포넌트 여기저기의 `if`가 아니라 리듀서 한 곳에 산다.
+
+리듀서는 React를 몰라도 된다. 그래서 브라우저도, 테스트 렌더러도 없이 Node의 기본 테스트 러너로 시험할 수 있다. 액션 목록을 `reduce`로 흘려보내면 사용자의 클릭 순서를 그대로 재현하는 셈이다.
+
+```js
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { checkoutReducer as reduce, initialState } from "./checkout-reducer.mjs";
+
+const pen = { id: "pen", price: 1000 };
+const run = (actions, from = initialState) => actions.reduce(reduce, from);
+
+test("같은 상품을 두 번 담으면 수량이 2", () => {
+  assert.deepEqual(run([{ type: "add", item: pen }, { type: "add", item: pen }]).items, [{ ...pen, qty: 2 }]);
+});
+test("빈 장바구니는 결제로 넘어가지 않는다", () => {
+  assert.deepEqual(run([{ type: "submit" }]), { status: "editing", items: [], error: "EMPTY_CART" });
+});
+test("결제 중에는 상품이 담기지 않는다", () => {
+  const s = run([{ type: "add", item: pen }, { type: "submit" }, { type: "add", item: pen }]);
+  assert.equal(s.status, "submitting");
+  assert.equal(s.items[0].qty, 1);
+});
+test("이전 상태를 고치지 않는다", () => {
+  const before = run([{ type: "add", item: pen }]);
+  const snapshot = structuredClone(before);
+  reduce(before, { type: "add", item: pen });
+  assert.deepEqual(before, snapshot);
+});
+```
+
+`node --test --test-reporter=spec checkout-reducer.test.mjs`의 앞부분이다.
+
+```text
+✔ 같은 상품을 두 번 담으면 수량이 2 (1.406972ms)
+✔ 빈 장바구니는 결제로 넘어가지 않는다 (0.182965ms)
+✔ 결제 중에는 상품이 담기지 않는다 (0.14245ms)
+✔ 이전 상태를 고치지 않는다 (0.256938ms)
+```
+
+마지막 테스트가 지키는 게 불변성이다. 리듀서가 받은 상태를 고쳐서 같은 객체를 돌려주면 React는 `Object.is`로 비교해 바뀐 게 없다고 보고 렌더링을 건너뛴다. 그 실제 결과는 [순수 함수 글](/posts/js-pure-functions#react가-순수함을-요구하는-세-자리)에, 중첩된 상태를 고치는 법은 [불변성과 React](/posts/js-immutability-react)에 있다.
+
+## 효과는 원인이 있는 자리에 둔다
+
+렌더링과 리듀서가 순수하면 부수 효과(요청, 토스트, 로그, DOM 조작)는 어디서 하나. 두 자리가 있다. 사용자가 무언가를 해서 생기는 일은 이벤트 핸들러에서, 화면이 어떤 상태로 그려졌기 때문에 해야 하는 일(외부 위젯 연결, 구독)은 effect에서 한다.
+
+이 구분을 어기면 어떻게 되는지 "상품을 담으면 토스트를 띄운다"로 시험했다. 둘 다 처음 마운트할 때 저장해 둔 장바구니를 복원한다. 하나는 `items`가 바뀌는 걸 effect로 보고 토스트를 띄우고, 하나는 버튼 핸들러에서 띄운다. `StrictMode`로 감싸 개발 빌드로 돌렸다.
+
+```jsx
+function CartWithEffect() {
+  const [items, setItems] = useState([]);
+  useEffect(() => { setItems(["저장해 둔 공책"]); }, []); // 저장된 장바구니를 복원한다
+  useEffect(() => { if (items.length > 0) showToast(`[effect] ${items.at(-1)} 담았다`); }, [items]);
+  return <button onClick={() => setItems((xs) => [...xs, "펜"])}>담기</button>;
+}
+
+function CartWithHandler() {
+  const [items, setItems] = useState([]);
+  useEffect(() => { setItems(["저장해 둔 공책"]); }, []);
+  const add = () => { setItems((xs) => [...xs, "펜"]); showToast("[handler] 펜 담았다"); };
+  return <button onClick={add}>담기</button>;
+}
+```
+
+```text
+토스트: [effect] 저장해 둔 공책 담았다
+--- 아무것도 누르지 않았다
+토스트: [handler] 펜 담았다
+토스트: [effect] 펜 담았다
+--- 각 버튼을 한 번씩 눌렀다
+```
+
+아무도 누르지 않았는데 "저장해 둔 공책 담았다"가 떴다. effect는 "사용자가 담았다"를 아는 게 아니라 "`items`가 바뀌었다"만 안다. 복원, 서버 동기화, 다른 탭에서 온 변경까지 모두 같은 신호로 보인다. 핸들러는 클릭이라는 원인 바로 옆에 있으니 그런 혼동이 없다.
+
+아래 그림에서 다음을 누르면 클릭 하나가 순수한 부분과 효과가 있는 부분을 어떻게 지나가는지 보인다.
+
+<NetworkTopology
+  caption="가운데는 순수하고, 효과는 양 끝에서 일어난다"
+  width={400}
+  height={250}
+  zones={[
+    { id: "pure", label: "순수 (두 번 불려도 같다)", x: 120, y: 20, w: 170, h: 210, tone: "private" },
+  ]}
+  nodes={[
+    { id: "click", label: "클릭", x: 50, y: 60, icon: "client", w: 70 },
+    { id: "handler", label: "핸들러", sub: "토스트, 요청", x: 50, y: 170, icon: "gateway", w: 80 },
+    { id: "reducer", label: "리듀서", sub: "다음 상태", x: 205, y: 60, icon: "router", w: 90 },
+    { id: "render", label: "렌더링", sub: "화면 설명", x: 205, y: 170, icon: "router", w: 90 },
+    { id: "dom", label: "DOM 커밋", x: 345, y: 60, icon: "container", w: 80 },
+    { id: "effect", label: "effect", sub: "구독, 위젯", x: 345, y: 170, icon: "gateway", w: 80 },
+  ]}
+  links={[
+    { from: "click", to: "handler" },
+    { from: "handler", to: "reducer", label: "dispatch" },
+    { from: "reducer", to: "render" },
+    { from: "render", to: "dom" },
+    { from: "dom", to: "effect" },
+  ]}
+  steps={[
+    { path: ["click", "handler"], packet: "click", title: "원인이 있는 자리", detail: "사용자가 담기를 눌렀다는 사실은 핸들러만 안다. 토스트와 요청은 여기서 보낸다." },
+    { path: ["handler", "reducer"], packet: "add", title: "일어난 일을 데이터로 보낸다", detail: "dispatch({ type: 'add', item })는 명령이 아니라 사건 기록이다. 리듀서가 다음 상태를 계산한다." },
+    { path: ["reducer", "render"], packet: "state", title: "상태에서 화면을 계산한다", detail: "렌더링은 상태를 받아 JSX를 돌려줄 뿐이다. 개발 모드에서는 두 번 불려도 결과가 같아야 한다." },
+    { path: ["render", "dom", "effect"], packet: "commit", title: "그려진 뒤에 할 일", detail: "effect는 화면이 이 상태로 그려졌기 때문에 해야 하는 일만 한다. 클릭의 결과를 여기서 처리하면 복원 때도 실행된다." },
+  ]}
+/>
+
+effect가 꼭 필요한 곳은 React 바깥의 무언가를 화면 상태에 맞춰야 할 때다. 지도 위젯에 지금 좌표를 넘기거나, 웹소켓을 구독하거나, `document.title`을 바꾸는 일이다. 그 밖에 effect가 보인다면 "이건 계산인가(렌더링으로), 사용자 행동의 결과인가(핸들러로)"를 먼저 묻는다.
+
+## 훅은 렌더링마다 새로 만드는 함수다
+
+컴포넌트 함수는 렌더링마다 처음부터 다시 실행된다. 그 안에서 만든 핸들러와 effect 함수도 렌더링마다 새로 만들어지고, 각자 그 렌더링의 props와 state를 클로저로 붙잡는다. 렌더링 하나가 그 순간의 스냅숏이라고 보면 된다. 타이머나 구독 콜백이 오래된 스냅숏을 붙잡고 있으면 옛 값을 보는 버그가 되는데, 원인과 고치는 법은 [클로저](/posts/js-closures#react-컴포넌트에서-오래된-값을-보는-이유)에 정리했다.
+
+함수형의 눈으로 보면 커스텀 훅은 합성이다. 작은 훅을 이어서 큰 훅을 만든다.
+
+```jsx
+function useFilteredItems(items, query) {
+  const deferred = useDeferredValue(query);       // 입력은 바로, 거르기는 여유 있을 때
+  return useMemo(() => items.filter((s) => s.includes(deferred)), [items, deferred]);
+}
+```
+
+이 훅은 상태를 만들지 않는다. 받은 값에서 계산할 뿐이라 어디서 불러도 같은 입력에 같은 결과를 준다. 훅을 만들 때 상태를 안에 숨길지(`useToggle`처럼) 받은 값으로 계산만 할지 먼저 정하면, 같은 값이 두 곳에 사는 처음 버그를 피한다.
+
+## 셀렉터는 같은 입력에 같은 참조를 돌려줘야 한다
+
+전역 스토어(Redux, Zustand, 직접 만든 것)에서 필요한 조각만 꺼내는 함수를 셀렉터라고 한다. 셀렉터도 `state → 값`인 순수 함수다. 그런데 React는 여기에 조건을 하나 더 건다. 상태가 그대로면 결과도 같은 참조여야 한다. `useSyncExternalStore`로 만든 작은 스토어에서 장바구니에 든 상품만 꺼냈다.
+
+```jsx
+function useStore(selector) {
+  return useSyncExternalStore(store.subscribe, () => selector(store.getState()));
+}
+
+function CartBadge() {
+  const items = useStore((s) => s.cart.filter((i) => i.qty > 0)); // 부를 때마다 새 배열
+  return <span>{items.length}</span>;
+}
+```
+
+```text
+[console.error] The result of getSnapshot should be cached to avoid an infinite loop
+[pageerror] Maximum update depth exceeded. This can happen when a component repeatedly calls setState inside componentWillUpdate or componentDidUpdate. React limits the number of nested updates to prevent infinite loops.
+```
+
+`filter`는 내용이 같아도 늘 새 배열을 만든다. React는 렌더링 도중 스냅숏을 다시 읽어 `Object.is`로 비교하는데, 매번 다르니 스토어가 바뀐 줄 알고 다시 렌더링하고, 또 다르니 또 렌더링한다.
+
+<SequenceDiagram
+  caption="새 배열은 매번 '바뀐 상태'로 보인다"
+  actors={[
+    { id: "react", label: "React" },
+    { id: "snap", label: "getSnapshot" },
+    { id: "badge", label: "CartBadge" },
+  ]}
+  steps={[
+    { from: "react", to: "snap", label: "읽기 1", title: "스냅숏을 읽는다", detail: "셀렉터가 filter로 새 배열 A를 돌려준다." },
+    { from: "react", to: "snap", label: "읽기 2", title: "한 번 더 읽어 비교한다", detail: "상태는 그대로인데 새 배열 B가 나온다.", payload: "Object.is(A, B) // false" },
+    { from: "react", to: "badge", label: "다시 렌더링", title: "바뀐 줄 안다", detail: "참조가 다르니 스토어가 바뀌었다고 보고 렌더링을 다시 한다. 개발 빌드는 여기서 경고를 찍는다." },
+    { from: "react", to: "react", label: "#185", title: "멈춘다", detail: "같은 일이 계속되니 중첩 업데이트 한도에 걸린다.", payload: "Maximum update depth exceeded." },
+  ]}
+/>
+
+Zustand 5도 같은 이유로 객체나 배열을 새로 만드는 셀렉터에서 무한 루프를 낸다. 고치는 방법은 셀렉터를 메모이제이션하는 것이다. 입력(여기서는 `s.cart`)이 지난번과 같은 참조면 지난번 결과를 그대로 돌려준다. Redux의 `createSelector`(Reselect)가 이 일을 한다. 열 줄로 직접 만들었다.
+
+```jsx
+function createSelector(pickInput, compute) {
+  let lastInput, lastResult, has = false;
+  return (state) => {
+    const input = pickInput(state);
+    if (has && Object.is(input, lastInput)) return lastResult;
+    has = true; lastInput = input; lastResult = compute(input);
+    return lastResult;
+  };
+}
+const selectInCart = createSelector((s) => s.cart, (cart) => cart.filter((i) => i.qty > 0));
+```
+
+<UrlAnatomy
+  caption="메모 셀렉터를 조각으로 읽기"
+  base="createSelector("
+  separator=""
+  joiner=", "
+  params={[
+    { key: "input", display: "(s) => s.cart", title: "무엇이 바뀌면 다시 계산하나", description: "상태에서 입력 조각을 꺼낸다. 불변으로 고쳤다면 cart를 건드리지 않은 업데이트에서는 같은 참조가 나온다.", required: true },
+    { key: "compute", display: "(cart) => cart.filter(...))", title: "비싼 계산", description: "입력이 바뀐 경우에만 실행한다. 결과를 기억해 두었다가 같은 입력이면 같은 배열을 돌려준다.", code: "Object.is(input, lastInput) ? lastResult : compute(input)" },
+  ]}
+/>
+
+`user`만 바꾸고, 그다음 `cart`를 바꾸며 `CartBadge`가 몇 번 렌더링됐는지 셌다.
+
+```text
+처음 렌더 수: 1
+user만 바꾼 뒤: 1
+cart를 바꾼 뒤: 2 배지: 2
+```
+
+<AlgoTrace
+  caption="입력 참조가 같으면 지난 결과를 그대로 돌려준다"
+  memoryLabel="셀렉터의 기억"
+  cells={["처음", "user 변경", "cart 변경"]}
+  steps={[
+    { pointer: 0, memory: ["cart#1", "결과 A (1개)"], caption: "처음 읽을 때 계산하고 입력과 결과를 기억한다." },
+    { pointer: 1, found: [1], memory: ["cart#1", "결과 A (1개)"], caption: "user만 바뀌었다. cart는 같은 참조라 계산 없이 A를 돌려준다. React는 같다고 보고 렌더링하지 않는다." },
+    { pointer: 2, memory: ["cart#2", "결과 B (2개)"], caption: "cart가 새 배열이 됐다. 다시 계산해 B를 기억하고, 배지만 다시 그린다." },
+  ]}
+/>
+
+이 셀렉터가 동작하는 전제는 상태를 불변으로 고친다는 것이다. `cart`를 제자리에서 고치면 참조가 같아서 셀렉터는 옛 결과를 돌려주고 배지는 바뀌지 않는다. 같은 화면에서 이어서 시험했다.
+
+```js
+store.setState((s) => { s.cart.push({ id: 3, price: 100, qty: 1 }); return { ...s }; }); // 바깥만 새 객체
+```
+
+```text
+cart에 push한 뒤: 2 배지: 2 실제: 3
+```
+
+렌더링 수가 그대로이고 배지는 2에 멈췄다. 실제 장바구니에는 세 개가 들어 있다. 메모이제이션은 "같은 참조면 같은 내용"이라는 약속 위에서만 맞고, 그 약속을 지키는 게 불변성이다. 숫자 하나(`items.length`)처럼 원시값을 고르는 셀렉터는 이 문제가 없으니, 컴포넌트가 정말 필요한 값만 고르는 것도 방법이다. 캐시 키와 크기 문제는 [메모이제이션](/posts/js-memoization)에서 더 다룬다.
+
+## 연습: 결제 리듀서 만들기
+
+아래 리듀서는 받은 상태를 직접 고친다. 결과값은 대체로 맞아 보이지만 이전 상태가 바뀌고, 결제 중에도 상품이 담기고, 빈 장바구니도 결제로 넘어간다. 본문의 규칙대로 고친다. `run`은 테스트용이다. 액션을 차례로 흘려보내고 마지막 상태와 처음 상태가 그대로인지를 돌려준다.
+
+<CodePlayground
+  caption="결제 리듀서"
+  functionName="run"
+  initialCode={`function checkoutReducer(state, action) {
+  switch (action.type) {
+    case "add": {
+      const found = state.items.find((i) => i.id === action.item.id);
+      if (found) found.qty += 1;
+      else state.items.push({ ...action.item, qty: 1 });
+      return state;
+    }
+    case "submit":
+      state.status = "submitting";
+      return state;
+    case "failed":
+      state.status = "editing";
+      state.error = action.error;
+      return state;
+    case "succeeded":
+      return { status: "done", items: [], error: null };
+    default:
+      return state;
+  }
+}
+
+// 아래는 테스트용이다
+function run(actions) {
+  const start = { status: "editing", items: [], error: null };
+  const before = JSON.stringify(start);
+  const final = actions.reduce(checkoutReducer, start);
+  return { final, startUntouched: JSON.stringify(start) === before };
+}`}
+  solution={`function checkoutReducer(state, action) {
+  switch (action.type) {
+    case "add": {
+      if (state.status !== "editing") return state;
+      const found = state.items.find((i) => i.id === action.item.id);
+      const items = found
+        ? state.items.map((i) => (i.id === action.item.id ? { ...i, qty: i.qty + 1 } : i))
+        : [...state.items, { ...action.item, qty: 1 }];
+      return { ...state, items };
+    }
+    case "submit":
+      return state.items.length === 0
+        ? { ...state, error: "EMPTY_CART" }
+        : { ...state, status: "submitting", error: null };
+    case "failed":
+      return { ...state, status: "editing", error: action.error };
+    case "succeeded":
+      return { status: "done", items: [], error: null };
+    default:
+      return state;
+  }
+}
+
+function run(actions) {
+  const start = { status: "editing", items: [], error: null };
+  const before = JSON.stringify(start);
+  const final = actions.reduce(checkoutReducer, start);
+  return { final, startUntouched: JSON.stringify(start) === before };
+}`}
+  tests={[
+    {
+      label: "같은 상품 두 번",
+      args: [[{ type: "add", item: { id: "pen", price: 1000 } }, { type: "add", item: { id: "pen", price: 1000 } }]],
+      expected: { final: { status: "editing", items: [{ id: "pen", price: 1000, qty: 2 }], error: null }, startUntouched: true },
+    },
+    {
+      label: "빈 장바구니 결제",
+      args: [[{ type: "submit" }]],
+      expected: { final: { status: "editing", items: [], error: "EMPTY_CART" }, startUntouched: true },
+    },
+    {
+      label: "결제 중에 담기",
+      args: [[{ type: "add", item: { id: "pen", price: 1000 } }, { type: "submit" }, { type: "add", item: { id: "pen", price: 1000 } }]],
+      expected: { final: { status: "submitting", items: [{ id: "pen", price: 1000, qty: 1 }], error: null }, startUntouched: true },
+    },
+    {
+      label: "카드 거절 뒤 다시 편집",
+      args: [[{ type: "add", item: { id: "pen", price: 1000 } }, { type: "submit" }, { type: "failed", error: "CARD_DECLINED" }]],
+      expected: { final: { status: "editing", items: [{ id: "pen", price: 1000, qty: 1 }], error: "CARD_DECLINED" }, startUntouched: true },
+    },
+    {
+      label: "결제 성공",
+      args: [[{ type: "add", item: { id: "pen", price: 1000 } }, { type: "submit" }, { type: "succeeded" }]],
+      expected: { final: { status: "done", items: [], error: null }, startUntouched: true },
+    },
+  ]}
+/>
+
+## 다시 프로필 폼으로
+
+처음 폼은 이름을 props와 state 두 곳에 두어서 어긋났다. React를 함수형으로 쓴다는 건 거창한 라이브러리가 아니라 몇 가지 판단을 꾸준히 하는 일이다. 값마다 주인을 한 곳으로 정하고, 계산할 수 있는 건 렌더링 중에 계산하고, 상태 변화는 순수한 리듀서에 모으고, 효과는 원인이 있는 핸들러나 외부와 맞추는 effect에만 둔다. 셀렉터와 메모이제이션은 불변 업데이트라는 약속 위에서 동작한다. 이 판단들이 지켜지면 StrictMode의 두 번 호출도, React Compiler의 자동 메모이제이션도 코드를 깨뜨리지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### React 컴포넌트를 순수 함수로 봐야 하는 이유는 무엇인가요?
+
+React는 같은 props와 state면 같은 화면이 나온다고 믿고 렌더링을 건너뛰거나, 중간에 버리거나, 두 번 부른다. 렌더링 중에 바깥 값을 고치거나 요청을 보내면 이 동작들이 버그가 된다. 그래서 렌더링은 상태에서 화면을 계산하는 데만 쓰고, 효과는 이벤트 핸들러와 effect로 보낸다.
+
+### props를 useState 초깃값으로 쓰면 어떤 문제가 생기나요?
+
+초깃값은 처음 마운트할 때만 읽혀서 이후 props가 바뀌어도 상태는 그대로다. 같은 값이 두 곳에 살게 되어 어긋난다. 대상이 바뀌면 폼을 새로 시작하려는 거라면 `key`를 줘서 다시 마운트하고, 늘 props를 따라가야 하면 상태를 두지 않고 부모가 값을 가진다. effect로 둘을 맞추는 건 한 박자 늦은 동기화라 피한다.
+
+### 파생 상태를 useEffect로 동기화하면 왜 안 좋나요?
+
+effect는 커밋 뒤에 돌기 때문에 값이 바뀔 때마다 렌더링이 두 번 일어나고, 첫 렌더링은 새 입력과 옛 결과라는 맞지 않는 조합으로 그려진다. 실제로 검색어가 "re"인데 목록은 여섯 개인 렌더링이 한 번 끼었다. 다른 상태로 계산할 수 있는 값은 렌더링 중에 계산하고, 무거우면 `useMemo`로 감싼다.
+
+### useState 대신 useReducer를 쓰는 건 언제인가요?
+
+상태가 여러 개이고 서로의 값에 따라 바뀌거나, "결제 중에는 담지 않는다" 같은 규칙이 여러 핸들러에 흩어질 때다. 리듀서는 `(state, action) → 다음 상태`인 순수 함수라 규칙을 한 곳에 모으고 React 없이 Node 테스트로 액션 순서를 재현할 수 있다. 불리언 여러 개 대신 `status` 하나로 두면 말이 안 되는 조합도 사라진다.
+
+### 이벤트 핸들러와 useEffect 중 어디에 부수 효과를 두나요?
+
+사용자의 행동 때문에 생기는 일은 핸들러, 화면이 그 상태로 그려졌기 때문에 해야 하는 일은 effect다. "담으면 토스트"를 effect로 하면 effect는 상태가 바뀌었다는 것만 알아서 장바구니를 복원할 때도 토스트가 떴다. effect는 외부 위젯, 구독, `document.title`처럼 React 바깥을 화면에 맞출 때 쓴다.
+
+### 셀렉터가 매번 새 배열을 돌려주면 어떻게 되나요?
+
+`useSyncExternalStore` 기반 스토어에서는 스냅숏이 매번 다른 참조라 React가 계속 다시 렌더링하다 "The result of getSnapshot should be cached" 경고와 "Maximum update depth exceeded" 에러로 멈춘다. 입력 참조가 같으면 지난 결과를 돌려주는 메모 셀렉터(`createSelector`)를 쓰거나, 원시값처럼 비교가 쉬운 값만 고른다.
+
+### 메모 셀렉터가 불변성에 기대는 이유는요?
+
+메모 셀렉터는 입력 조각의 참조가 같으면 내용도 같다고 보고 계산을 건너뛴다. 상태를 제자리에서 고치면 참조는 그대로인데 내용이 바뀌어서 옛 결과를 돌려주고 화면이 갱신되지 않는다. 불변 업데이트는 바뀐 경로만 새 참조로 만드니 바뀌지 않은 조각은 같은 참조로 남아 캐시가 맞게 동작한다.
+
+### 커스텀 훅을 함수형 관점에서 설계하는 방법은요?
+
+훅도 함수 합성으로 본다. 상태를 안에 숨길 훅과 받은 값에서 계산만 하는 훅을 나누고, 계산만 하는 훅은 같은 입력에 같은 결과를 주게 만든다. 작은 훅(`useDeferredValue`, `useMemo`)을 이어 더 큰 훅을 만들면 각 단계를 따로 이해할 수 있다. 훅 안의 함수는 렌더링마다 새로 만들어지는 클로저라 오래 사는 콜백에는 최신 값을 넘기는 장치가 필요하다.

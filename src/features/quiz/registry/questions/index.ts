@@ -62,6 +62,7 @@ import { CQRS } from "./cqrs";
 import { CRDT } from "./crdt";
 import { CRON_JOBS } from "./cron-jobs";
 import { CSRF } from "./csrf";
+import { CSS_PERFORMANCE } from "./css-performance";
 import { CSS_STICKY_SCROLL_SNAP } from "./css-sticky-scroll-snap";
 import { CURL_FOR_DEBUGGING } from "./curl-for-debugging";
 import { DATA_STRUCTURES_OVERVIEW } from "./data-structures-overview";
@@ -140,8 +141,13 @@ import { FASTAPI_BASICS } from "./fastapi-basics";
 import { FAULT_TOLERANCE } from "./fault-tolerance";
 import { FEATURE_FLAGS } from "./feature-flags";
 import { FIRST_PAGE_FROM_POWER_ON } from "./first-page-from-power-on";
+import { FP_COMPOSITION_PIPE } from "./fp-composition-pipe";
+import { FP_FUNCTORS_MONADS_JS } from "./fp-functors-monads-js";
+import { FP_IN_REACT } from "./fp-in-react";
 import { FRONTEND_BROWSER_CACHE } from "./frontend-browser-cache";
 import { FRONTEND_ERROR_TRACKING } from "./frontend-error-tracking";
+import { FRONTEND_MONOREPO } from "./frontend-monorepo";
+import { FUNCTIONAL_PROGRAMMING_BASICS } from "./functional-programming-basics";
 import { GARBAGE_COLLECTION } from "./garbage-collection";
 import { GATEWAY } from "./gateway";
 import { GEOHASH } from "./geohash";
@@ -329,6 +335,7 @@ import { MODULAR_MONOLITH } from "./modular-monolith";
 import { MONGODB_DOCUMENT_MODEL } from "./mongodb-document-model";
 import { MONITORING_BASICS } from "./monitoring-basics";
 import { MONOLITH_ARCHITECTURE } from "./monolith-architecture";
+import { MONOREPO_BUILD_CACHE } from "./monorepo-build-cache";
 import { MULTI_REGION } from "./multi-region";
 import { MVC_PATTERN } from "./mvc-pattern";
 import { MYSQL_INNODB_BASICS } from "./mysql-innodb-basics";
@@ -571,6 +578,7 @@ import { VPC_PEERING_TRANSIT_PRIVATELINK } from "./vpc-peering-transit-privateli
 import { VPC_SUBNETS_ROUTE_TABLES } from "./vpc-subnets-route-tables";
 import { VPN_IPSEC_WIREGUARD } from "./vpn-ipsec-wireguard";
 import { WAF } from "./waf";
+import { WEB_FONT_OPTIMIZATION } from "./web-font-optimization";
 import { WEBHOOKS } from "./webhooks";
 import { WEBSOCKET_DEEP_DIVE } from "./websocket-deep-dive";
 import { WHAT_HAPPENS_GOOGLE_COM } from "./what-happens-google-com";
@@ -646,6 +654,7 @@ export const QUESTION_SETS = [
   CRDT,
   CRON_JOBS,
   CSRF,
+  CSS_PERFORMANCE,
   CSS_STICKY_SCROLL_SNAP,
   CURL_FOR_DEBUGGING,
   DATA_STRUCTURES_OVERVIEW,
@@ -724,8 +733,13 @@ export const QUESTION_SETS = [
   FAULT_TOLERANCE,
   FEATURE_FLAGS,
   FIRST_PAGE_FROM_POWER_ON,
+  FP_COMPOSITION_PIPE,
+  FP_FUNCTORS_MONADS_JS,
+  FP_IN_REACT,
   FRONTEND_BROWSER_CACHE,
   FRONTEND_ERROR_TRACKING,
+  FRONTEND_MONOREPO,
+  FUNCTIONAL_PROGRAMMING_BASICS,
   GARBAGE_COLLECTION,
   GATEWAY,
   GEOHASH,
@@ -913,6 +927,7 @@ export const QUESTION_SETS = [
   MONGODB_DOCUMENT_MODEL,
   MONITORING_BASICS,
   MONOLITH_ARCHITECTURE,
+  MONOREPO_BUILD_CACHE,
   MULTI_REGION,
   MVC_PATTERN,
   MYSQL_INNODB_BASICS,
@@ -1155,6 +1170,7 @@ export const QUESTION_SETS = [
   VPC_SUBNETS_ROUTE_TABLES,
   VPN_IPSEC_WIREGUARD,
   WAF,
+  WEB_FONT_OPTIMIZATION,
   WEBHOOKS,
   WEBSOCKET_DEEP_DIVE,
   WHAT_HAPPENS_GOOGLE_COM,

@@ -2,6 +2,128 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "monorepo-build-cache": {
+    "links": [
+      "frontend-monorepo",
+      "build-caching",
+      "dockerfile-image-layers",
+      "git-branching-strategy",
+      "micro-frontends"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "git-branch-merge",
+      "dependency-hell",
+      "git-remote-collaboration"
+    ]
+  },
+  "frontend-monorepo": {
+    "links": [
+      "monorepo-build-cache",
+      "micro-frontends",
+      "dependency-hell",
+      "js-es-modules",
+      "semantic-versioning",
+      "git-branching-strategy"
+    ],
+    "mentions": [
+      "build-caching",
+      "http-caching-cdn",
+      "api-versioning",
+      "js-hoisting-tdz",
+      "microservices"
+    ]
+  },
+  "web-font-optimization": {
+    "links": [
+      "css-performance",
+      "core-web-vitals"
+    ],
+    "mentions": [
+      "cors",
+      "http-versions",
+      "dns"
+    ]
+  },
+  "css-performance": {
+    "links": [
+      "browser-rendering-pipeline",
+      "rendering-performance-optimization",
+      "web-font-optimization",
+      "react-rerender"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "animation-performance",
+      "http-versions",
+      "bloom-filter",
+      "count-min-sketch",
+      "dns"
+    ]
+  },
+  "fp-in-react": {
+    "links": [
+      "js-pure-functions",
+      "js-immutability-react",
+      "js-closures",
+      "react-rerender",
+      "functional-programming-basics",
+      "js-memoization"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "fp-composition-pipe",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "fp-functors-monads-js": {
+    "links": [
+      "functional-programming-basics",
+      "fp-composition-pipe",
+      "js-array-transform",
+      "js-promises",
+      "client-data-cache",
+      "fp-in-react"
+    ],
+    "mentions": []
+  },
+  "fp-composition-pipe": {
+    "links": [
+      "functional-programming-basics",
+      "js-currying-partial",
+      "js-async-await",
+      "js-promise-combinators",
+      "fp-functors-monads-js",
+      "code-splitting",
+      "fp-in-react"
+    ],
+    "mentions": [
+      "pattern-decorator",
+      "js-function-forms"
+    ]
+  },
+  "functional-programming-basics": {
+    "links": [
+      "js-first-class-callbacks",
+      "js-pure-functions",
+      "js-immutability-react",
+      "fp-composition-pipe",
+      "fp-functors-monads-js",
+      "fp-in-react",
+      "react-server-components",
+      "js-object-methods",
+      "js-primitive-vs-reference",
+      "js-array-mutation",
+      "js-execution-context",
+      "js-array-transform",
+      "js-spread-rest"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "js-function-forms",
+      "js-closures"
+    ]
+  },
   "logging-tools-overview": {
     "links": [
       "frontend-error-tracking",
@@ -72,6 +194,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-rendering-pipeline",
       "animation-performance",
       "core-web-vitals",
+      "css-performance",
       "react-rerender",
       "scroll-triggered-intersection-observer",
       "dom-basics",
@@ -87,6 +210,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-performance-optimization",
       "streaming-ssr-suspense",
       "core-web-vitals",
+      "css-performance",
       "dom-basics",
       "animation-performance",
       "event-loop",
@@ -570,7 +694,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-ignore-config",
-      "git-tips-advanced"
+      "git-tips-advanced",
+      "fp-composition-pipe"
     ]
   },
   "kafka-vs-rabbitmq-replay": {
@@ -647,6 +772,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "mongodb-document-model",
       "db-type-key-value",
+      "monorepo-build-cache",
       "sd-start-single-server",
       "db-type-relational",
       "redis-basics"
@@ -2151,6 +2277,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-autocomplete-trie",
+      "monorepo-build-cache",
       "sd-start-single-server",
       "http-methods"
     ]
@@ -3587,6 +3714,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "fp-composition-pipe",
       "js-function-forms",
       "js-spread-rest",
       "js-destructuring"
@@ -4121,6 +4249,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "microservices",
       "pattern-proxy",
       "kafka-basics",
+      "frontend-monorepo",
       "grpc"
     ]
   },
@@ -5655,6 +5784,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "graphql-basics",
       "dockerfile-image-layers",
+      "frontend-monorepo",
       "js-hoisting-tdz"
     ]
   },
@@ -5666,7 +5796,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops"
     ],
     "mentions": [
-      "helm-basics"
+      "helm-basics",
+      "frontend-monorepo"
     ]
   },
   "k8s-architecture": {
@@ -6336,7 +6467,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dependency-hell",
       "git-internals-basics",
-      "js-strict-mode"
+      "js-strict-mode",
+      "frontend-monorepo"
     ]
   },
   "ci-cd-basics": {
@@ -6357,6 +6489,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ab-testing",
       "security-groups-nacl",
       "osi-in-practice",
+      "frontend-monorepo",
       "dns"
     ]
   },
@@ -7084,6 +7217,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator"
     ],
     "mentions": [
+      "fp-in-react",
       "js-promises",
       "rendering-strategies",
       "design-patterns-overview"
@@ -7365,6 +7499,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "express-middleware",
+      "fp-composition-pipe",
       "ds-linked-list",
       "sd-payment-flow",
       "event-delegation",
@@ -7963,6 +8098,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dockerfile-image-layers",
       "iptables-basics",
+      "fp-composition-pipe",
       "eks-cluster-basics",
       "vlan-basics",
       "layer-link-ethernet-arp",
@@ -8855,6 +8991,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "argocd-basics",
       "semantic-versioning",
       "docker-container-basics",
+      "fp-composition-pipe",
       "api-versioning",
       "redis-basics",
       "what-happens-google-com",
@@ -10259,7 +10396,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "git-stash-reflog",
       "token-login",
-      "what-happens-google-com"
+      "what-happens-google-com",
+      "frontend-monorepo"
     ]
   },
   "git-branching-strategy": {
@@ -10272,7 +10410,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-deploy-pipeline-eks",
       "ab-testing",
-      "api-versioning"
+      "api-versioning",
+      "frontend-monorepo"
     ]
   },
   "git-troubleshooting": {
@@ -10815,6 +10954,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-probes",
       "iptables-basics",
+      "fp-composition-pipe",
       "proxy-reverse-proxy",
       "docker-commands-workflow",
       "redis-basics",
@@ -10834,6 +10974,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "iptables-basics",
       "rest-api-design",
+      "fp-composition-pipe",
       "k8s-security-context",
       "grpc",
       "linux-processes-signals",
@@ -11155,6 +11296,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "microservices",
       "js-es-modules",
+      "frontend-monorepo",
       "cors"
     ]
   },
@@ -11173,6 +11315,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "what-happens-google-com",
       "code-splitting",
+      "web-font-optimization",
       "event-loop"
     ],
     "mentions": [
@@ -11444,6 +11587,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "ssrf",
       "csrf",
+      "fp-composition-pipe",
       "http-versions",
       "what-happens-google-com",
       "cookie-session-login",

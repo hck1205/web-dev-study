@@ -1,0 +1,460 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("fp-composition-pipe");
+
+검색어를 정리하는 함수를 작은 함수 넷으로 나눠 이어 붙였다. 앞뒤 공백을 지우고, 소문자로 바꾸고, 겹친 공백을 하나로 줄이고, 12자로 자른다. 순서대로 적었으니 순서대로 실행될 거라 생각했다.
+
+```js
+const compose = (...fns) => (x) => fns.reduceRight((v, f) => f(v), x);
+
+const trim = (s) => s.trim();
+const lower = (s) => s.toLowerCase();
+const collapse = (s) => s.replace(/\s+/g, " ");
+const cut = (n) => (s) => s.slice(0, n);
+
+const normalize = compose(trim, lower, collapse, cut(12));
+console.log(JSON.stringify(normalize("    React   Hooks   Tutorial  ")));
+```
+
+Node 22에서 돌렸다.
+
+```text
+"react"
+```
+
+"react hooks"쯤을 기대했는데 첫 단어만 남았다. `compose`는 오른쪽 함수부터 실행한다. 그래서 맨 먼저 `cut(12)`가 공백이 붙은 원문을 잘랐고, 앞 공백 네 칸 때문에 "    React   "만 남았다. 그 뒤에 공백을 줄이고 지웠으니 "react"다. 함수 목록은 맞았고 방향이 틀렸다.
+
+이 글은 함수를 이어 붙이는 두 도구 `compose`와 `pipe`를 다룬다. 방향이 왜 둘인지, 이어 붙일 수 있는 함수의 조건, 중간값을 엿보는 `tap`, 비동기 단계를 섞는 법, 어느 단계에서 망가졌는지 찾는 법, TypeScript 타입, 표준에 들어오려는 파이프라인 연산자까지 본다. 출력은 Node.js 22와 TypeScript 5.9에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 함수형 프로그래밍 전체 지도는 [함수형 프로그래밍 기초](/posts/functional-programming-basics)에, 설정을 먼저 받고 데이터를 나중에 받는 data-last 함수와 커링은 [커링과 부분 적용](/posts/js-currying-partial)에 있다. 거기서 `pipe`의 기본 모양은 이미 봤으니, 여기서는 실제로 이어 붙일 때 생기는 문제에 집중한다.
+
+## 수학의 합성은 오른쪽부터 읽는다
+
+`compose`가 오른쪽부터 도는 건 실수가 아니라 수학 표기를 그대로 옮긴 결과다. 수학에서 `f ∘ g`는 "g를 먼저 하고 그 결과에 f를 한다", 즉 `f(g(x))`다. 코드로 써도 `trim(lower(collapse(cut(12)(x))))`의 가장 안쪽, 가장 오른쪽 함수가 먼저 실행된다. `compose(trim, lower, collapse, cut(12))`는 이 중첩 호출에서 괄호만 걷어 낸 모양이다.
+
+아래 그림은 처음 `normalize`가 문자열을 처리한 순서다. 다음을 누르면 `reduceRight`가 함수 목록을 오른쪽에서 왼쪽으로 훑으며 값을 바꾼다.
+
+<AlgoTrace
+  caption="compose: 오른쪽 함수가 먼저 받는다"
+  memoryLabel="지금 값"
+  cells={["trim", "lower", "collapse", "cut(12)"]}
+  steps={[
+    { pointer: 3, memory: ["'    React   '"], caption: "cut(12)이 원문 앞 12자를 자른다. 앞 공백 4칸이 자리를 먹었다." },
+    { pointer: 2, memory: ["' React '"], caption: "collapse가 겹친 공백을 하나로 줄인다. Hooks는 이미 잘려 나갔다." },
+    { pointer: 1, memory: ["' react '"], caption: "소문자로 바꾼다." },
+    { pointer: 0, memory: ["'react'"], caption: "마지막에 trim. 자르기가 맨 먼저 일어나서 한 단어만 남았다." },
+  ]}
+/>
+
+코드를 위에서 아래로, 왼쪽에서 오른쪽으로 읽는 사람에게는 반대 방향이 편하다. 그래서 왼쪽부터 도는 `pipe`가 따로 생겼다. 차이는 `reduce`냐 `reduceRight`냐 하나뿐이다.
+
+```js
+const pipe = (...fns) => (x) => fns.reduce((v, f) => f(v), x);
+const compose = (...fns) => (x) => fns.reduceRight((v, f) => f(v), x);
+
+const normalize = pipe(trim, collapse, lower, cut(12), trim);
+console.log(JSON.stringify(normalize("    React   Hooks   Tutorial  ")));
+```
+
+```text
+"react hooks"
+```
+
+`pipe`로 바꾸면서 마지막에 `trim`을 하나 더 넣었다. 12자로 자르면 "react hooks " 뒤에 공백이 남기 때문이다. 이어 붙인 함수 목록에서는 순서가 곧 의미다. 같은 함수 다섯 개라도 순서가 다르면 다른 함수가 된다.
+
+<AlgoTrace
+  caption="pipe: 적은 순서대로 받는다"
+  memoryLabel="지금 값"
+  cells={["trim", "collapse", "lower", "cut(12)", "trim"]}
+  steps={[
+    { pointer: 0, memory: ["'React   Hooks   Tutorial'"], caption: "먼저 앞뒤 공백을 지운다." },
+    { pointer: 1, memory: ["'React Hooks Tutorial'"], caption: "겹친 공백을 하나로 줄인다." },
+    { pointer: 2, memory: ["'react hooks tutorial'"], caption: "소문자로 바꾼다." },
+    { pointer: 3, memory: ["'react hooks '"], caption: "이제 자른다. 12번째 글자가 공백이라 끝에 남는다." },
+    { pointer: 4, found: [4], memory: ["'react hooks'"], caption: "한 번 더 trim. 원하던 값이 나온다." },
+  ]}
+/>
+
+라이브러리도 둘을 다 준다. lodash는 `flow`(왼쪽부터)와 `flowRight`(오른쪽부터), Ramda는 `pipe`와 `compose`다. Redux가 내보내는 `compose`는 이름대로 오른쪽부터 돈다. RxJS의 `observable.pipe(map(...), filter(...))`는 왼쪽부터다. 팀에서 하나만 정해 쓰면 방향을 헷갈릴 일이 줄어든다. 대부분의 애플리케이션 코드에는 읽는 순서와 실행 순서가 같은 `pipe`가 맞다.
+
+## 이어 붙일 수 있는 함수의 조건
+
+`pipe`는 앞 함수의 반환값 하나를 다음 함수의 인자 하나로 넘긴다. 그래서 이어 붙일 함수는 두 조건을 지켜야 한다. 인자를 하나만 받을 것, 그리고 다음 함수가 받을 모양을 돌려줄 것.
+
+<ConceptDiagram
+  width={400}
+  height={220}
+  caption="앞 함수의 출력 모양이 다음 함수의 입력 모양과 맞아야 한다"
+  nodes={[
+    { id: "in", label: "string", sub: "입력", x: 50, y: 60, w: 80 },
+    { id: "split", label: "split", sub: "string → string[]", x: 150, y: 60, w: 120 },
+    { id: "clean", label: "trimAll", sub: "string[] → string[]", x: 290, y: 60, w: 130 },
+    { id: "count", label: "count", sub: "string[] → number", x: 290, y: 170, w: 130 },
+    { id: "shout", label: "shout", sub: "string → string", x: 110, y: 170, w: 120 },
+  ]}
+  edges={[
+    { from: "in", to: "split" },
+    { from: "split", to: "clean", label: "배열" },
+    { from: "clean", to: "count", label: "배열" },
+    { from: "count", to: "shout", label: "숫자가 간다", dashed: true },
+  ]}
+/>
+
+인자가 둘 이상인 함수는 설정을 미리 채워 하나만 받게 만든다. 위의 `cut(12)`가 그 예다. 설정을 앞에 두고 데이터를 맨 뒤에 받는 이 모양(data-last)과 커링은 [커링과 부분 적용](/posts/js-currying-partial#데이터를-마지막-인자에-두는-이유)에서 다뤘다.
+
+인자 개수가 어긋나면 에러 없이 틀린 값이 나온다. 함수 이름만 넘기는 포인트 프리(point-free) 스타일에서 자주 만난다.
+
+```js
+console.log(["10", "10", "10"].map(parseInt));
+console.log(["10", "10", "10"].map((s) => parseInt(s, 10)));
+console.log(["1.5", "2", "x"].map(Number));
+```
+
+```text
+[ 10, NaN, 2 ]
+[ 10, 10, 10 ]
+[ 1.5, 2, NaN ]
+```
+
+`map`은 콜백에 값, 인덱스, 배열 세 개를 넘긴다. `parseInt`는 두 번째 인자를 진법으로 읽으니 `parseInt("10", 1)`은 `NaN`, `parseInt("10", 2)`는 2가 된다. `Number`는 인자를 하나만 쓰니 안전하다. 포인트 프리로 넘기기 전에 그 함수가 인자를 몇 개 쓰는지 확인하고, 애매하면 화살표 함수로 감싼다. `pipe`는 인자를 하나만 넘기니 이 문제가 덜하지만, 같은 함수를 `map`에도 넘기는 순간 다시 생긴다.
+
+포인트 프리가 읽기 좋은 경우는 이름이 동작을 다 설명할 때다. `filter(Boolean)`, `map(Number)`, `pipe(trim, lower)`는 짧고 분명하다. 반대로 `pipe(map(prop("items")), flatten, uniqBy(prop("id")))`처럼 길어지면 각 단계가 무엇을 받는지 머릿속에서 추적해야 한다. 그때는 중간에 이름 있는 변수를 두는 편이 낫다.
+
+## 중간값을 엿보는 tap
+
+두 번째 조건을 어기면, 즉 다음 함수가 받을 모양을 돌려주지 않으면 에러는 엉뚱한 단계에서 난다. 태그 문자열을 배열로 나누는 파이프다.
+
+```js
+const pipe = (...fns) => (x) => fns.reduce((v, f) => f(v), x);
+const split = (s) => s.split(",");
+const trimAll = (xs) => { xs.map((t) => t.trim()); }; // 중괄호를 썼는데 return이 없다
+const dropEmpty = (xs) => xs.filter(Boolean);
+
+pipe(split, trimAll, dropEmpty)("react, hooks,");
+```
+
+이 다섯 줄을 `tags.js`로 저장해 실행하면 이렇게 끝난다(경로는 줄였다).
+
+```text
+…/tags.js:4
+const dropEmpty = (xs) => xs.filter(Boolean);
+                             ^
+
+TypeError: Cannot read properties of undefined (reading 'filter')
+    at dropEmpty (…/tags.js:4:30)
+    at …/tags.js:1:54
+    at Array.reduce (<anonymous>)
+    at …/tags.js:1:37
+```
+
+스택은 `dropEmpty`를 가리키지만 잘못한 건 `undefined`를 돌려준 `trimAll`이다. `trimAll`은 이미 끝나서 스택에 없다. 남은 건 실패한 단계와 `pipe`의 `reduce` 줄뿐이다. 중간값을 보려 해도 `pipe` 안에는 변수가 없어서 `console.log`를 넣을 자리가 없다.
+
+이럴 때 쓰는 게 `tap`이다. 받은 값으로 무언가(보통 로그)를 하고, 값은 그대로 돌려준다. 값을 바꾸지 않으니 파이프 어디에 끼워도 결과가 같다.
+
+```js
+const tap = (label) => (x) => { console.log(label, x); return x; };
+
+const tags = pipe(split, tap("split:"), trimAll, tap("trimAll:"), dropEmpty);
+tags("react, hooks,");
+```
+
+```text
+split: [ 'react', ' hooks', '' ]
+trimAll: undefined
+Cannot read properties of undefined (reading 'filter')
+```
+
+`trimAll:` 뒤가 `undefined`라 범인이 바로 보인다. 로그 대신 `(x) => { debugger; return x; }`를 끼우면 그 자리에서 브라우저 개발자 도구가 멈춘다. RxJS의 `tap` 연산자, Ramda의 `tap`도 같은 생각이다. 디버깅이 끝나면 빼거나, 로그 레벨로 끈다.
+
+반복해서 같은 실수를 하는 팀이라면 `pipe` 자체가 잡게 만들 수도 있다. 각 단계의 결과를 검사해 `undefined`를 돌려준 단계에서 바로 멈춘다.
+
+```js
+const strictPipe = (...fns) => (x) =>
+  fns.reduce((v, f, i) => {
+    const out = f(v);
+    if (out === undefined) throw new Error(`단계 ${i + 1}(${f.name})가 undefined를 돌려줬다. 입력: ${JSON.stringify(v)}`);
+    return out;
+  }, x);
+
+strictPipe(split, trimAll, dropEmpty)("react, hooks,");
+```
+
+```text
+단계 2(trimAll)가 undefined를 돌려줬다. 입력: ["react"," hooks",""]
+```
+
+에러가 원인 단계의 이름과 입력을 들고 나온다. `f.name`이 나오려면 단계가 이름 있는 함수여야 한다. 람다를 바로 넘기면 빈 문자열이다. 운영 코드에서 입력 전체를 메시지에 넣으면 개인정보가 로그에 남을 수 있으니, 크기나 타입만 남기거나 개발 모드에서만 켠다.
+
+아래 그림에서 다음을 누르면 `strictPipe`가 값을 넘기다 두 번째 단계에서 막는 과정이 보인다.
+
+<NetworkTopology
+  caption="undefined를 돌려준 단계에서 멈춘다"
+  width={400}
+  height={170}
+  nodes={[
+    { id: "in", label: "입력", sub: "'react, hooks,'", x: 45, y: 85, icon: "client", w: 80 },
+    { id: "s1", label: "split", sub: "단계 1", x: 145, y: 85, icon: "router", w: 80 },
+    { id: "s2", label: "trimAll", sub: "단계 2", x: 250, y: 85, icon: "firewall", w: 80 },
+    { id: "s3", label: "dropEmpty", sub: "단계 3", x: 355, y: 85, icon: "router", w: 80 },
+  ]}
+  links={[
+    { from: "in", to: "s1" },
+    { from: "s1", to: "s2" },
+    { from: "s2", to: "s3", dashed: true },
+  ]}
+  steps={[
+    { path: ["in", "s1"], packet: "string", title: "문자열이 들어간다", detail: "split이 쉼표로 나눠 배열을 만든다." },
+    { path: ["s1", "s2"], packet: "배열 3개", title: "배열이 넘어간다", detail: "trimAll이 받는다. map은 돌지만 결과를 버린다.", payload: "[\"react\",\" hooks\",\"\"]" },
+    { path: ["s2", "s3"], packet: "undefined", blocked: true, title: "여기서 막는다", detail: "결과가 undefined라 strictPipe가 다음 단계로 넘기지 않고 단계 번호와 이름으로 에러를 던진다.", payload: "단계 2(trimAll)가 undefined를 돌려줬다." },
+  ]}
+/>
+
+## 비동기 단계가 섞이면 값 대신 Promise가 흐른다
+
+사용자를 불러오고, 팀을 붙이고, 화면용 라벨을 만드는 파이프를 같은 `pipe`로 만들었다. 앞의 두 단계는 `async` 함수다.
+
+```js
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const fetchUser = async (id) => { await sleep(100); return { id, name: "kim", teamId: 7 }; };
+const fetchTeam = async (user) => { await sleep(100); return { ...user, team: "payments" }; };
+const toLabel = (u) => `${u.name} (${u.team})`;
+
+const broken = pipe(fetchUser, fetchTeam, toLabel);
+console.log("broken:", broken(1));
+```
+
+```text
+broken: undefined (undefined)
+```
+
+에러도 없이 틀린 값이 나왔다. `fetchUser(1)`은 Promise를 돌려주고, `fetchTeam`은 그 Promise를 사용자 객체인 줄 알고 받는다. Promise를 펼친 `{ ...promise }`에는 자기 속성이 없으니 `name`이 없고, `fetchTeam`이 돌려준 것도 또 Promise다. `toLabel`은 Promise에서 `name`과 `team`을 찾다가 `undefined`를 이어 붙였다. `async` 함수가 늘 Promise를 돌려준다는 점은 [async/await](/posts/js-async-await)에서 다뤘다.
+
+고치려면 각 단계를 앞 Promise의 `then`에 건다. 시작값도 `Promise.resolve`로 감싸 두면 동기 함수와 비동기 함수를 섞어도 된다. `then`은 핸들러가 값을 돌려주면 그 값을, Promise를 돌려주면 그 Promise의 결과를 다음으로 넘기기 때문이다.
+
+```js
+const pipeAsync = (...fns) => (x) => fns.reduce((p, f) => p.then(f), Promise.resolve(x));
+
+const t0 = performance.now();
+pipeAsync(fetchUser, fetchTeam, toLabel)(1)
+  .then((v) => console.log("pipeAsync:", v, Math.round(performance.now() - t0) + "ms"));
+```
+
+```text
+pipeAsync: kim (payments) 200ms
+```
+
+아래 그림에서 다음을 누르면 `pipeAsync`가 단계마다 앞 단계가 끝나기를 기다렸다 넘기는 과정이 보인다.
+
+<SequenceDiagram
+  caption="단계마다 then으로 이어서 값이 도착한 뒤에 넘긴다"
+  actors={[
+    { id: "pipe", label: "pipeAsync" },
+    { id: "user", label: "fetchUser" },
+    { id: "team", label: "fetchTeam" },
+    { id: "label", label: "toLabel" },
+  ]}
+  steps={[
+    { from: "pipe", to: "user", label: "Promise.resolve(1).then", title: "시작값을 Promise로 감싼다", detail: "첫 단계도 then으로 걸리니 동기 함수든 비동기 함수든 같은 방식으로 다룬다." },
+    { from: "user", to: "pipe", label: "100ms 뒤 사용자", title: "첫 단계가 끝난다", detail: "fetchUser의 Promise가 이행되면 그 값이 다음 then으로 넘어간다.", payload: "{ id: 1, name: 'kim', teamId: 7 }" },
+    { from: "pipe", to: "team", label: ".then(fetchTeam)", title: "값이 도착한 뒤 다음 단계", detail: "fetchTeam은 Promise가 아니라 진짜 사용자 객체를 받는다." },
+    { from: "team", to: "label", label: "200ms에 팀 붙은 객체", title: "동기 단계도 같은 줄에", detail: "toLabel은 평범한 함수다. then에 걸려 있으니 앞 값이 도착하면 바로 실행된다." },
+    { from: "label", to: "pipe", label: "'kim (payments)'", title: "결과도 Promise", detail: "pipeAsync가 돌려준 건 Promise다. 받는 쪽은 await이나 then으로 꺼낸다.", payload: "pipeAsync: kim (payments) 200ms" },
+  ]}
+/>
+
+두 가지를 기억한다. 첫째, 단계는 차례로 실행되니 시간이 더해진다. 서로 의존하지 않는 요청(사용자와 공지 목록처럼)을 파이프에 줄 세우면 할 필요 없는 대기가 생긴다. 그런 요청은 `Promise.all`로 동시에 보내고 그 결과를 파이프의 입력으로 쓴다([Promise 조합 메서드](/posts/js-promise-combinators)). 둘째, 한 단계가 거부되면 나머지 `then`은 건너뛰고 거부가 끝까지 미끄러진다. 파이프 끝에 `catch`가 하나 있으면 어느 단계의 실패든 거기서 받는다. 실패를 값으로 다뤄 단계별로 다르게 처리하고 싶다면 [map과 flatMap으로 보는 펑터와 모나드](/posts/fp-functors-monads-js)의 Result 방식으로 넘어간다.
+
+## 메서드 체이닝으로 충분할 때
+
+자바스크립트에는 이미 체이닝이 있다. `words.filter(...).map(...)`도 왼쪽부터 차례로 함수를 적용한다. 그런데 체이닝은 그 객체가 가진 메서드만 이을 수 있다. 배열에 `countBy` 메서드가 없으니 중간에 내 함수를 끼우려면 체인을 끊어야 한다. `pipe`는 아무 함수나 잇는다.
+
+```js
+const words = ["react", "hooks", "react", "pipe", "compose", "hooks", "react"];
+const countBy = (xs) => xs.reduce((m, w) => m.set(w, (m.get(w) ?? 0) + 1), new Map());
+const topN = (n) => (m) => [...m].sort((a, b) => b[1] - a[1]).slice(0, n);
+
+console.log(pipe(countBy, topN(2))(words));
+```
+
+```text
+[ [ 'react', 3 ], [ 'hooks', 2 ] ]
+```
+
+`countBy`는 안에서 `Map`을 고치지만 그 `Map`은 함수 안에서 막 만든 값이라 바깥에서는 순수하다. 어떤 걸 고를지는 단순하다. 배열 메서드만으로 끝나면 체이닝이 가장 읽기 쉽고 디버거도 잘 따라간다. 내 함수, 서로 다른 타입을 오가는 변환(문자열 → 배열 → `Map` → 배열), 재사용할 변환 단계를 이름 붙여 묶고 싶을 때 `pipe`를 쓴다.
+
+번들 크기에서도 차이가 난다. lodash의 `_.chain(...)`은 모든 메서드를 가진 래퍼 객체를 쓰니 쓰지 않는 메서드까지 번들에 들어간다. 함수를 하나씩 import해 `flow`로 잇는 쪽은 쓴 함수만 남는다. 실제로 얼마나 빠지는지는 번들러 설정에 따라 다르니 번들 분석기로 확인한다([코드 스플리팅](/posts/code-splitting)의 트리 셰이킹 부분).
+
+React에서 `compose`를 가장 많이 본 곳은 고차 컴포넌트(HOC)였다. `compose(withRouter, connect(mapState))(Profile)`처럼 컴포넌트를 감싸는 함수를 여러 겹 이었다. 감싼 순서가 props가 흐르는 순서를 정해서 같은 실수가 자주 났고, 개발자 도구에는 감싼 컴포넌트가 줄줄이 쌓였다. 지금은 대부분 훅으로 바뀌었다. 훅을 이어 쓰는 방식은 [React 안의 함수형](/posts/fp-in-react)에서 본다.
+
+## TypeScript에서 pipe의 타입
+
+가장 쉽게 쓴 `pipe`는 타입을 다 잃는다.
+
+```ts
+const loosePipe = (...fns: Array<(x: any) => any>) => (x: any) => fns.reduce((v, f) => f(v), x);
+
+const split = (s: string) => s.split(",");
+const count = (xs: string[]) => xs.length;
+const shout = (s: string) => s.toUpperCase();
+
+const a = loosePipe(split, count, shout); // 통과한다. 실행하면 터진다
+```
+
+`count`가 숫자를 돌려주는데 `shout`는 문자열을 받는다. `any`로 열어 둔 탓에 컴파일러가 아무 말도 안 한다. 실행하면 숫자에서 문자열 메서드를 찾다가 `TypeError: s.toUpperCase is not a function`으로 터진다.
+
+단계 수만큼 오버로드를 적으면 앞 함수의 출력 타입이 다음 함수의 입력 타입으로 이어진다. fp-ts, RxJS, Effect 같은 라이브러리가 `pipe`에 오버로드를 수십 개 적어 두는 이유다.
+
+```ts
+function pipe<A, B>(ab: (a: A) => B): (a: A) => B;
+function pipe<A, B, C>(ab: (a: A) => B, bc: (b: B) => C): (a: A) => C;
+function pipe<A, B, C, D>(ab: (a: A) => B, bc: (b: B) => C, cd: (c: C) => D): (a: A) => D;
+function pipe(...fns: Array<(x: unknown) => unknown>) {
+  return (x: unknown) => fns.reduce((v, f) => f(v), x);
+}
+
+const b = pipe(split, count, shout); // 컴파일 에러
+const c = pipe(split, count);        // (a: string) => number
+```
+
+위 두 코드 조각을 한 파일(`pipe.ts`)에 두고 `tsc --strict`로 검사했다.
+
+```text
+pipe.ts(15,23): error TS2345: Argument of type '(xs: string[]) => number' is not assignable to parameter of type '(b: string[]) => string'.
+  Type 'number' is not assignable to type 'string'.
+```
+
+에러가 `shout`가 아니라 `count` 자리를 가리킨다는 점을 눈여겨본다. TypeScript는 `shout`의 입력에서 C를 `string`으로 먼저 추론하고, 그러면 `count`가 `string[] → string`이어야 하는데 숫자를 돌려주니 틀렸다고 본다. 오류 위치가 잘못 고른 함수 바로 앞일 수 있으니 양쪽 단계를 같이 본다. 오버로드 개수를 넘는 단계를 넘기면 맞는 오버로드가 없다는 에러가 나니, 길어진 파이프는 둘로 나눠 이름을 붙인다. 커링한 함수의 타입은 [커링과 부분 적용](/posts/js-currying-partial)에서 다뤘다.
+
+## 표준에 들어오려는 파이프라인 연산자
+
+`pipe` 함수 없이 문법으로 이어 쓰자는 제안이 TC39의 파이프라인 연산자(`|>`)다. 여러 안이 경쟁하다 2021년에 Hack 방식이 Stage 2가 됐다. 내가 확인한 범위에서는 그 뒤로 단계가 더 오르지 않았고, 앞의 값을 가리키는 기호(topic token)도 아직 확정되지 않았다. 지금 브라우저와 Node는 이 문법을 모른다.
+
+```text
+SyntaxError: Unexpected token '>'
+```
+
+Node 22에서 `1 |> f(%)`를 `new Function`으로 읽힌 결과다. 쓰려면 Babel 플러그인으로 변환해야 한다. `@babel/plugin-proposal-pipeline-operator` 8.0에 `proposal: "hack"`, `topicToken: "%"`를 주고 변환했다.
+
+```js
+const label = userId |> await fetchUser(%) |> toLabel(%) |> console.log(%);
+const slug = title |> %.trim() |> %.toLowerCase() |> %.replace(/\s+/g, "-");
+```
+
+```text
+var _ref, _ref2, _ref3;
+const label = (_ref3 = userId, _ref2 = await fetchUser(_ref3), _ref = toLabel(_ref2), console.log(_ref));
+const slug = title.trim().toLowerCase().replace(/\s+/g, "-");
+```
+
+Hack 방식은 `pipe`와 다르게 한 단계가 함수가 아니라 식이다. `%`가 앞 단계의 값을 가리키고, 인자가 여러 개인 함수(`f(%, 10)`), 메서드(`%.trim()`), `await`을 그대로 쓸 수 있다. 커링을 하지 않아도 된다는 게 큰 차이다. 변환 결과도 임시 변수에 차례로 대입하는 평범한 코드라서 함수 호출이 늘지 않는다. 조각을 누르면 각 단계가 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="Hack 파이프라인 한 줄 읽기"
+  base="userId"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "fetch", display: "|> await fetchUser(%)", title: "await도 한 단계", description: "% 자리에 userId가 들어간다. pipe 함수와 달리 await을 단계 안에 그대로 쓴다.", required: true },
+    { key: "label", display: "|> toLabel(%)", title: "앞 값이 %", description: "앞 단계의 결과, 즉 사용자 객체가 %에 들어간다. 커링하지 않은 평범한 함수도 이어진다." },
+    { key: "log", display: "|> console.log(%)", title: "마지막 단계", description: "식 전체의 값은 마지막 단계의 결과다. 여기서는 console.log의 반환값 undefined가 label이 된다.", code: "_ref = toLabel(_ref2), console.log(_ref)" },
+  ]}
+/>
+
+실무 판단은 간단하다. 제안 단계의 문법은 바뀔 수 있고, 바뀌면 코드 전체를 다시 고쳐야 한다. 표준이 되기 전에는 `pipe` 함수나 이름 있는 중간 변수로 쓴다.
+
+## 연습: pipe와 compose 직접 만들기
+
+`pipe`는 왼쪽 함수부터, `compose`는 오른쪽 함수부터 차례로 적용하는 함수를 돌려준다. 함수를 하나도 받지 않으면 받은 값을 그대로 돌려준다. `run`은 테스트용이라 고치지 않는다.
+
+<CodePlayground
+  caption="pipe와 compose"
+  functionName="run"
+  initialCode={`function pipe(...fns) {
+  // 왼쪽 함수부터 차례로 적용하는 함수를 돌려준다
+  return (x) => x;
+}
+
+function compose(...fns) {
+  // 오른쪽 함수부터 차례로 적용하는 함수를 돌려준다
+  return (x) => x;
+}
+
+// 아래는 테스트용이다
+const trim = (s) => s.trim();
+const lower = (s) => s.toLowerCase();
+const collapse = (s) => s.replace(/\\s+/g, " ");
+const cut = (n) => (s) => s.slice(0, n);
+
+function run(kind, input) {
+  if (kind === "pipe") return pipe(trim, collapse, lower, cut(12), trim)(input);
+  if (kind === "compose") return compose(trim, cut(12), lower, collapse, trim)(input);
+  if (kind === "pipe-order") return pipe((s) => s + "a", (s) => s + "b")(input);
+  if (kind === "compose-order") return compose((s) => s + "a", (s) => s + "b")(input);
+  if (kind === "empty") return pipe()(input);
+}`}
+  solution={`function pipe(...fns) {
+  return (x) => fns.reduce((v, f) => f(v), x);
+}
+
+function compose(...fns) {
+  return (x) => fns.reduceRight((v, f) => f(v), x);
+}
+
+const trim = (s) => s.trim();
+const lower = (s) => s.toLowerCase();
+const collapse = (s) => s.replace(/\\s+/g, " ");
+const cut = (n) => (s) => s.slice(0, n);
+
+function run(kind, input) {
+  if (kind === "pipe") return pipe(trim, collapse, lower, cut(12), trim)(input);
+  if (kind === "compose") return compose(trim, cut(12), lower, collapse, trim)(input);
+  if (kind === "pipe-order") return pipe((s) => s + "a", (s) => s + "b")(input);
+  if (kind === "compose-order") return compose((s) => s + "a", (s) => s + "b")(input);
+  if (kind === "empty") return pipe()(input);
+}`}
+  tests={[
+    { label: "pipe로 검색어 정리", args: ["pipe", "    React   Hooks   Tutorial  "], expected: "react hooks" },
+    { label: "compose로 같은 일", args: ["compose", "    React   Hooks   Tutorial  "], expected: "react hooks" },
+    { label: "pipe는 a 다음 b", args: ["pipe-order", "x"], expected: "xab" },
+    { label: "compose는 b 다음 a", args: ["compose-order", "x"], expected: "xba" },
+    { label: "함수가 없으면 그대로", args: ["empty", "same"], expected: "same" },
+  ]}
+/>
+
+## 다시 검색어로
+
+처음 함수가 "react"만 남긴 건 함수 목록이 아니라 방향 때문이었다. `compose`는 수학처럼 오른쪽부터, `pipe`는 읽는 순서대로 왼쪽부터 돈다. 이어 붙일 함수는 인자 하나를 받아 다음 단계가 받을 모양을 돌려줘야 하고, 그게 깨지면 에러는 다음 단계에서 난다. 그때 `tap`으로 엿보고, 자주 깨진다면 `pipe`가 단계 이름을 들고 실패하게 만든다. 비동기 단계는 `then`으로 잇는다. 다음 글 [map과 flatMap으로 보는 펑터와 모나드](/posts/fp-functors-monads-js)에서는 실패하거나 비어 있을 수 있는 값을 파이프에 흘리는 방법을 본다.
+
+## 면접에서 나올 만한 질문
+
+### compose와 pipe는 어떻게 다른가요?
+
+적용 순서만 다르다. `compose(f, g)(x)`는 수학의 합성처럼 `f(g(x))`, 즉 오른쪽 함수부터 실행하고 `reduceRight`로 구현한다. `pipe(f, g)(x)`는 `g(f(x))`로 왼쪽부터 실행하고 `reduce`로 구현한다. 읽는 순서와 실행 순서가 같은 `pipe`가 애플리케이션 코드에서 더 많이 쓰인다.
+
+### 함수 합성을 하려면 함수가 어떤 조건을 갖춰야 하나요?
+
+인자를 하나만 받고, 다음 함수가 받을 모양의 값을 돌려줘야 한다. 인자가 여럿인 함수는 커링이나 부분 적용으로 설정을 미리 채워 단항 함수로 만든다. 출력 모양이 어긋나면 에러가 그 단계가 아니라 다음 단계에서 나니 디버깅이 어려워진다.
+
+### 포인트 프리 스타일의 장단점은요?
+
+인자 이름 없이 함수 이름만 이어 쓰니 짧고 "무엇을 하는가"가 드러난다. 대신 단계마다 무엇을 받는지 머릿속에서 추적해야 하고, 중단점을 걸 변수가 없다. `["10","10","10"].map(parseInt)`가 `[10, NaN, 2]`가 되는 것처럼 인자 개수가 어긋나는 함정도 있다. 이름이 동작을 다 설명하는 짧은 경우에만 쓴다.
+
+### 파이프라인 중간값을 어떻게 디버깅하나요?
+
+값을 그대로 돌려주면서 로그를 찍는 `tap`을 단계 사이에 끼운다. 값을 바꾸지 않으니 어디에 끼워도 결과가 같고, `debugger`를 넣으면 그 자리에서 멈춘다. 자주 깨지는 파이프라면 각 단계 결과를 검사해 `undefined`를 돌려준 단계의 번호와 이름으로 에러를 던지게 만든다.
+
+### 비동기 함수를 pipe로 이으면 어떻게 되나요?
+
+일반 `pipe`는 Promise를 값처럼 다음 함수에 넘겨서 에러 없이 틀린 값이 나온다. 시작값을 `Promise.resolve`로 감싸고 각 단계를 `then`으로 이으면 앞 단계가 끝난 뒤 실제 값이 넘어간다. 이 경우 단계 시간이 더해지니 서로 의존하지 않는 요청은 `Promise.all`로 먼저 모은다. 어느 단계가 거부돼도 끝의 `catch` 하나에서 받는다.
+
+### 메서드 체이닝과 pipe 중 무엇을 쓰나요?
+
+배열 메서드만으로 끝나면 체이닝이 읽기 쉽고 디버거도 잘 따라간다. 내가 만든 함수를 끼우거나, 문자열에서 배열, `Map`으로 타입이 바뀌는 변환을 잇거나, 변환 단계를 이름 붙여 재사용하고 싶으면 `pipe`가 맞다. 라이브러리 래퍼 체인은 쓰지 않는 메서드까지 번들에 넣을 수 있다.
+
+### TypeScript에서 pipe 타입은 어떻게 잡나요?
+
+`any` 배열로 받으면 단계 사이의 타입 불일치를 못 잡는다. 단계 수만큼 제네릭 오버로드를 적어서 앞 함수의 반환 타입이 다음 함수의 인자 타입으로 이어지게 한다. fp-ts나 RxJS의 `pipe`가 오버로드를 많이 가진 이유다. 에러 위치가 추론 순서 때문에 틀린 함수의 앞 단계를 가리킬 수 있다.
+
+### 파이프라인 연산자 `|>`는 쓸 수 있나요?
+
+아직 표준이 아니다. Hack 방식 제안이 2021년에 Stage 2가 됐고, 앞 값을 가리키는 기호도 확정되지 않았다. Babel 플러그인으로 변환해 쓸 수는 있지만 문법이 바뀌면 코드를 전부 고쳐야 하니 실무에서는 `pipe` 함수나 이름 있는 중간 변수를 쓴다.
