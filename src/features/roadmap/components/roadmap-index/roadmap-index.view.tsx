@@ -1,15 +1,16 @@
 "use client";
 
-import { Badge, Container, PageHeader, color } from "@/common/design-system";
+import { Badge, ChoiceChip, Container, PageHeader, color } from "@/common/design-system";
 import { ProgressBar } from "../progress-bar";
 import { ProgressTools } from "../progress-tools";
+import { RoadmapGraph } from "../roadmap-graph";
 import { useRoadmapIndex } from "./roadmap-index";
-import { CardDescription, CardHead, CardMeta, Cards, Legend, NextLink, NextList, RoadmapCard, Section, TierCard, Tiers } from "./roadmap-index.styled";
+import { CardDescription, CardHead, CardMeta, Cards, Legend, NextLink, NextList, RoadmapCard, Section, SectionHead, TierCard, Tiers } from "./roadmap-index.styled";
 
 const TIER_TONES = { 1: "accent", 2: "info", 3: "neutral" } as const;
 
 export function RoadmapIndex() {
-  const { tiers, tierLabels, next, roadmaps } = useRoadmapIndex();
+  const { tiers, tierLabels, next, roadmaps, graph, view, setView } = useRoadmapIndex();
 
   return (
     <Container size="narrow">
@@ -63,8 +64,21 @@ export function RoadmapIndex() {
       </Section>
 
       <Section>
-        <h2>로드맵</h2>
-        <Cards>
+        <SectionHead>
+          <h2>로드맵</h2>
+          <div role="group" aria-label="보기 방식">
+            <ChoiceChip selected={view === "graph"} onClick={() => setView("graph")}>
+              지도
+            </ChoiceChip>
+            <ChoiceChip selected={view === "list"} onClick={() => setView("list")}>
+              목록
+            </ChoiceChip>
+          </div>
+        </SectionHead>
+        {view === "graph" ? (
+          <RoadmapGraph nodes={graph.nodes} edges={graph.edges} label="최상위 로드맵 지도" />
+        ) : (
+          <Cards>
           {roadmaps.map((roadmap, index) => (
             <li key={roadmap.key} style={{ animationDelay: `${index * 40}ms` }}>
               <RoadmapCard href={roadmap.href} locked={roadmap.locked}>
@@ -88,6 +102,7 @@ export function RoadmapIndex() {
             </li>
           ))}
         </Cards>
+        )}
       </Section>
 
       <Section>
