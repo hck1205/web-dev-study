@@ -2,6 +2,238 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "browser-devtools-debugging": {
+    "links": [
+      "js-memory-leak",
+      "nodejs-debugging-profiling",
+      "frontend-error-tracking",
+      "abort-controller",
+      "frontend-browser-cache",
+      "curl-for-debugging",
+      "js-closures",
+      "js-microtask-macrotask",
+      "core-web-vitals",
+      "dom-basics",
+      "performance-metrics-measurement",
+      "react-rerender",
+      "browser-storage",
+      "pwa-install-offline"
+    ],
+    "mentions": [
+      "logging-tools-overview",
+      "https-tls",
+      "csrf",
+      "event-loop",
+      "race-conditions",
+      "dns"
+    ]
+  },
+  "character-encoding-unicode": {
+    "links": [
+      "js-strings-unicode",
+      "postgres-data-types",
+      "mysql-innodb-basics",
+      "http-message",
+      "html-form-http",
+      "base64"
+    ],
+    "mentions": [
+      "bash-scripting",
+      "upper-layers-session-presentation-app",
+      "bit-manipulation",
+      "db-modeling-normalization"
+    ]
+  },
+  "cpu-scheduling-interrupts": {
+    "links": [
+      "process-vs-thread",
+      "mutex-semaphore-monitor",
+      "k8s-pod-resources",
+      "linux-namespaces-cgroups",
+      "tail-latency",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "virtual-memory-paging",
+      "ds-binary-tree-bst",
+      "k8s-architecture"
+    ]
+  },
+  "floating-point-numbers": {
+    "links": [
+      "js-numbers-bigint",
+      "postgres-data-types",
+      "process-vs-thread"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "postgres-query-planner"
+    ]
+  },
+  "html-form-validation": {
+    "links": [
+      "html-form-http",
+      "react-forms-actions",
+      "js-numbers-bigint"
+    ],
+    "mentions": [
+      "sd-payment-flow",
+      "frontend-state-architecture"
+    ]
+  },
+  "js-error-handling": {
+    "links": [
+      "nodejs-error-handling",
+      "frontend-error-tracking",
+      "js-numbers-bigint",
+      "react-suspense-error-boundary",
+      "js-async-await",
+      "fp-functors-monads-js"
+    ],
+    "mentions": [
+      "js-promise-combinators",
+      "event-loop",
+      "http-status-codes",
+      "js-hoisting-tdz"
+    ]
+  },
+  "js-numbers-bigint": {
+    "links": [
+      "floating-point-numbers",
+      "js-equality-coercion",
+      "js-error-handling"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "sd-latency-numbers",
+      "bit-manipulation",
+      "js-truthy-falsy-typeof"
+    ]
+  },
+  "js-strings-unicode": {
+    "links": [
+      "js-template-literals",
+      "js-equality-coercion",
+      "character-encoding-unicode",
+      "js-iterators-generators",
+      "js-primitive-vs-reference",
+      "js-array-mutation"
+    ],
+    "mentions": [
+      "js-spread-rest"
+    ]
+  },
+  "mutex-semaphore-monitor": {
+    "links": [
+      "race-conditions",
+      "thread-safety",
+      "deadlocks",
+      "process-vs-thread",
+      "connection-pool",
+      "backpressure",
+      "cpu-scheduling-interrupts",
+      "distributed-lock"
+    ],
+    "mentions": [
+      "sd-queue-logging-automation",
+      "cpu-cache-hierarchy",
+      "sd-maps-tiles-routing",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "go-concurrency-basics"
+    ]
+  },
+  "process-vs-thread": {
+    "links": [
+      "mutex-semaphore-monitor",
+      "cpu-scheduling-interrupts",
+      "race-conditions",
+      "thread-safety",
+      "nodejs-server-runtime",
+      "virtual-memory-paging",
+      "cpu-cache-hierarchy",
+      "deadlocks",
+      "linux-processes-signals",
+      "scaling-horizontal-vertical",
+      "nginx-basics",
+      "java-jvm-memory-gc",
+      "go-concurrency-basics",
+      "linux-namespaces-cgroups",
+      "k8s-pod-resources"
+    ],
+    "mentions": [
+      "browser-security-model",
+      "cpu-pipelining-branch-prediction",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "redis-basics"
+    ]
+  },
+  "pwa-install-offline": {
+    "links": [
+      "frontend-browser-cache",
+      "browser-storage",
+      "browser-devtools-debugging"
+    ],
+    "mentions": [
+      "lighthouse-explained",
+      "what-happens-google-com",
+      "dns"
+    ]
+  },
+  "runtime-validation-zod": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-narrowing",
+      "react-forms-actions",
+      "browser-storage",
+      "express-middleware",
+      "frontend-error-tracking",
+      "web-security-headers",
+      "openapi-spec-first",
+      "ts-declaration-files-modules",
+      "ts-enum-vs-union"
+    ],
+    "mentions": [
+      "html-form-http",
+      "client-data-cache",
+      "react-suspense-error-boundary",
+      "frontend-performance-map",
+      "api-versioning",
+      "webhooks"
+    ]
+  },
+  "ts-declaration-files-modules": {
+    "links": [
+      "tsconfig-strict",
+      "js-es-modules",
+      "ts-type-system-basics",
+      "ts-enum-vs-union",
+      "runtime-validation-zod"
+    ],
+    "mentions": [
+      "js-iife-module-pattern",
+      "frontend-monorepo"
+    ]
+  },
+  "ts-enum-vs-union": {
+    "links": [
+      "ts-type-system-basics",
+      "tsconfig-strict",
+      "ts-narrowing",
+      "runtime-validation-zod",
+      "ts-generics",
+      "js-immutability-react",
+      "ts-utility-mapped-types"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof",
+      "js-spread-rest",
+      "ts-declaration-files-modules",
+      "bit-manipulation",
+      "frontend-build-tooling"
+    ]
+  },
   "dynamodb-modeling-capacity": {
     "links": [
       "db-type-key-value",
@@ -148,6 +380,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "service-discovery",
+      "process-vs-thread",
       "page-cache-disk-io",
       "mysql-replication-online-ddl",
       "http-caching-cdn",
@@ -369,6 +602,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "graphql-client-caching",
       "postgres-data-types",
+      "js-numbers-bigint",
       "sql-query-rewrite",
       "db-modeling-normalization"
     ]
@@ -522,6 +756,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-delegation",
       "dom-basics",
       "rendering-strategies",
+      "ts-declaration-files-modules",
       "css-performance"
     ]
   },
@@ -608,6 +843,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sd-latency-numbers",
+      "js-numbers-bigint",
+      "floating-point-numbers",
       "segment-tree-fenwick",
       "js-destructuring"
     ]
@@ -637,6 +874,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-sharding",
+      "floating-point-numbers",
       "js-strict-mode"
     ]
   },
@@ -733,7 +971,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rag-classic-pipeline",
       "claude-code-context-window"
     ],
-    "mentions": []
+    "mentions": [
+      "floating-point-numbers"
+    ]
   },
   "mcp-protocol": {
     "links": [
@@ -790,6 +1030,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-lifecycle",
       "js-callback-hell",
+      "browser-devtools-debugging",
       "virtual-memory-paging",
       "json-crud-http",
       "k8s-architecture",
@@ -851,6 +1092,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "js-template-literals",
       "mongodb-document-model",
+      "js-numbers-bigint",
+      "ts-declaration-files-modules",
       "pattern-proxy",
       "sql-batch-timeout-pool",
       "sql-query-rewrite"
@@ -873,6 +1116,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-processes-signals",
       "event-loop",
       "code-review-practices",
+      "runtime-validation-zod",
       "frontend-build-tooling"
     ]
   },
@@ -955,8 +1199,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "ids-ips",
+      "character-encoding-unicode",
+      "js-numbers-bigint",
       "event-loop",
       "recursion-backtracking",
+      "js-strings-unicode",
       "db-modeling-normalization",
       "core-web-vitals"
     ]
@@ -980,7 +1227,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sit-uat-testing",
-      "api-test-automation"
+      "api-test-automation",
+      "floating-point-numbers"
     ]
   },
   "twelve-factor-app": {
@@ -1479,6 +1727,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "css-sticky-scroll-snap",
+      "js-numbers-bigint",
       "css-custom-properties",
       "web-accessibility"
     ]
@@ -1703,7 +1952,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "web-security-headers",
       "browser-security-model",
-      "ds-linked-list"
+      "ds-linked-list",
+      "floating-point-numbers"
     ]
   },
   "cpu-cache-hierarchy": {
@@ -1730,6 +1980,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "virtual-memory-paging"
     ],
     "mentions": [
+      "cpu-scheduling-interrupts",
       "sd-latency-numbers",
       "ds-hash-map",
       "bit-manipulation"
@@ -1740,6 +1991,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cpu-instruction-cycle"
     ],
     "mentions": [
+      "floating-point-numbers",
       "bit-manipulation"
     ]
   },
@@ -2071,7 +2323,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rolling-deployment",
-      "sql-batch-timeout-pool"
+      "sql-batch-timeout-pool",
+      "character-encoding-unicode"
     ]
   },
   "spring-ioc-di": {
@@ -2121,7 +2374,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "digital-signatures-certificates",
       "encryption-at-rest"
     ],
-    "mentions": []
+    "mentions": [
+      "js-numbers-bigint"
+    ]
   },
   "symmetric-encryption-aes": {
     "links": [
@@ -2342,6 +2597,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc"
     ],
     "mentions": [
+      "process-vs-thread",
+      "js-numbers-bigint",
       "ds-hash-map",
       "bit-manipulation",
       "redis-basics"
@@ -2583,9 +2840,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-jsx-components",
       "js-classes",
       "js-function-forms",
+      "ts-declaration-files-modules",
       "js-strict-mode",
       "js-pure-functions",
       "js-destructuring",
+      "runtime-validation-zod",
       "frontend-build-tooling"
     ]
   },
@@ -2631,6 +2890,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-scaling-ladder",
       "load-testing-k6",
       "sql-filtering-operators",
+      "floating-point-numbers",
       "bit-manipulation"
     ]
   },
@@ -2664,6 +2924,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-numbers-bigint",
       "js-function-forms",
       "js-pure-functions",
       "js-destructuring"
@@ -2679,6 +2940,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-storage",
       "js-function-forms",
+      "ts-declaration-files-modules",
       "js-destructuring"
     ]
   },
@@ -2693,6 +2955,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-prototype-chain",
+      "runtime-validation-zod",
+      "ts-declaration-files-modules",
       "js-destructuring",
       "frontend-build-tooling"
     ]
@@ -2717,6 +2981,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "shortest-path-algorithms",
+      "js-numbers-bigint",
       "bit-manipulation",
       "sd-maps-tiles-routing",
       "bloom-filter"
@@ -2756,6 +3021,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "elasticsearch-inverted-index",
+      "js-numbers-bigint",
       "shortest-path-algorithms"
     ]
   },
@@ -2999,6 +3265,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "build-caching",
       "tsconfig-strict",
       "http-caching-cdn",
+      "ts-declaration-files-modules",
       "api-versioning",
       "js-hoisting-tdz",
       "microservices"
@@ -4014,6 +4281,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "abort-controller",
       "tail-latency",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "js-closures"
     ]
   },
@@ -4052,6 +4320,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
+      "js-numbers-bigint",
       "http-status-codes",
       "webhooks"
     ]
@@ -4067,8 +4336,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-strategy"
     ],
     "mentions": [
+      "character-encoding-unicode",
       "k8s-deploy-pipeline-eks",
       "rendering-strategies",
+      "js-strings-unicode",
       "db-modeling-normalization"
     ]
   },
@@ -4093,6 +4364,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-versioning"
     ],
     "mentions": [
+      "character-encoding-unicode",
       "http-status-codes"
     ]
   },
@@ -4189,7 +4461,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "event-loop",
       "sql-batch-timeout-pool",
-      "http-status-codes"
+      "http-status-codes",
+      "runtime-validation-zod"
     ]
   },
   "express-middleware": {
@@ -4210,7 +4483,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "web-security-headers",
       "js-pure-functions",
       "osi-in-practice",
-      "http-status-codes"
+      "http-status-codes",
+      "runtime-validation-zod"
     ]
   },
   "nodejs-server-runtime": {
@@ -4237,6 +4511,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "mutex-semaphore-monitor",
       "recursion-backtracking",
       "dns"
     ]
@@ -4763,7 +5038,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "percentile-latency"
     ],
     "mentions": [
-      "ds-linked-list"
+      "ds-linked-list",
+      "floating-point-numbers"
     ]
   },
   "sd-wallet-event-sourcing": {
@@ -4799,6 +5075,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "event-driven-architecture",
+      "floating-point-numbers",
       "redis-basics",
       "http-methods"
     ]
@@ -5458,6 +5735,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "character-encoding-unicode",
       "sd-start-single-server",
       "lossy-counting",
       "global-rollout-localization",
@@ -5545,7 +5823,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "http-versions",
       "token-login",
-      "oauth"
+      "oauth",
+      "pwa-install-offline"
     ]
   },
   "sd-web-crawler-politeness-dedup": {
@@ -5622,6 +5901,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-testing-strategy",
+      "js-numbers-bigint",
       "db-type-key-value",
       "mysql-innodb-basics",
       "sd-start-single-server",
@@ -5646,6 +5926,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "db-sharding",
       "db-type-key-value",
+      "js-numbers-bigint",
+      "floating-point-numbers",
       "bit-manipulation",
       "high-availability"
     ]
@@ -5835,6 +6117,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-types-overview"
     ],
     "mentions": [
+      "js-numbers-bigint",
       "db-type-key-value",
       "postgres-data-types",
       "sd-news-feed-publishing",
@@ -6490,6 +6773,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rendering-strategies",
       "js-es-modules",
+      "runtime-validation-zod",
       "js-primitive-vs-reference"
     ]
   },
@@ -6780,7 +7064,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "bundler-basics",
       "react-memoization-hooks",
-      "react-state-snapshot-batching"
+      "react-state-snapshot-batching",
+      "runtime-validation-zod"
     ]
   },
   "js-template-literals": {
@@ -6794,7 +7079,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration",
       "graphql-basics",
       "nodejs-orm-query-builder",
-      "rendering-strategies"
+      "rendering-strategies",
+      "floating-point-numbers"
     ]
   },
   "js-memoization": {
@@ -6886,6 +7172,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "react-memoization-hooks",
+      "process-vs-thread",
       "react-state-management-libraries",
       "js-memory-leak",
       "react-useeffect",
@@ -7132,6 +7419,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "timeouts",
       "k8s-deploy-pipeline-eks",
+      "js-numbers-bigint",
       "reverse-proxy-lb-api-gateway",
       "vpc-basics",
       "osi-in-practice",
@@ -7342,6 +7630,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "browser-devtools-debugging",
       "js-function-forms",
       "js-truthy-falsy-typeof",
       "js-destructuring"
@@ -7507,6 +7796,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-numbers-bigint",
       "ts-narrowing",
       "js-destructuring"
     ]
@@ -7519,8 +7809,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-optional-chaining-nullish"
     ],
     "mentions": [
+      "floating-point-numbers",
       "sql-injection",
       "js-template-literals",
+      "js-numbers-bigint",
+      "runtime-validation-zod",
       "react-useeffect"
     ]
   },
@@ -8531,6 +8824,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "seccomp-apparmor",
       "docker-container-basics",
       "k8s-architecture",
+      "js-numbers-bigint",
       "local-k8s-kind-minikube"
     ]
   },
@@ -8956,6 +9250,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "page-cache-disk-io",
       "sql-aggregation-pitfalls",
       "osi-in-practice",
+      "mutex-semaphore-monitor",
       "layer-ip-routing-icmp"
     ]
   },
@@ -9812,6 +10107,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cpu-cache-hierarchy",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "dns"
     ]
@@ -9962,6 +10258,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "load-testing-k6",
       "ds-linked-list",
       "consistency-models",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "acid-transactions"
     ]
@@ -9982,6 +10279,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics"
     ]
   },
@@ -10008,6 +10306,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "redis-basics",
       "resilience-patterns",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "http-methods"
     ]
@@ -10577,6 +10876,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "express-middleware",
       "sorting-algorithms",
       "ab-testing",
+      "runtime-validation-zod",
       "nodejs-web-frameworks",
       "spring-ioc-di",
       "redis-basics",
@@ -10935,6 +11235,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-resources",
       "docker-container-basics",
       "nodejs-debugging-profiling",
+      "js-numbers-bigint",
       "spring-boot-on-kubernetes",
       "bash-scripting",
       "osi-in-practice",
@@ -11681,6 +11982,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-basics",
       "js-prototype-chain",
+      "js-numbers-bigint",
       "db-types-overview",
       "spring-ioc-di",
       "js-immutability-react",
@@ -11700,6 +12002,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-object-methods",
       "nodejs-orm-query-builder",
       "resilience-patterns",
+      "runtime-validation-zod",
       "http-methods"
     ]
   },
@@ -12341,6 +12644,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "semantic-versioning",
       "docker-container-basics",
       "fp-composition-pipe",
+      "ts-declaration-files-modules",
       "api-versioning",
       "redis-basics",
       "what-happens-google-com",
@@ -12731,6 +13035,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics"
     ],
     "mentions": [
+      "process-vs-thread",
       "valkey-vs-redis",
       "vpc-basics"
     ]
@@ -12743,6 +13048,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "process-vs-thread",
       "leader-election"
     ]
   },
@@ -12975,7 +13281,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-driven-architecture",
       "distributed-transactions-2pc",
       "sql-batch-timeout-pool",
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "mutex-semaphore-monitor"
     ]
   },
   "sql-batch-timeout-pool": {
@@ -13212,6 +13519,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "youtube-url-to-video",
       "grpc",
       "first-page-from-power-on",
+      "character-encoding-unicode",
       "packet-encapsulation",
       "packet-capture-tcpdump",
       "http-versions",
@@ -13589,6 +13897,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding"
     ],
     "mentions": [
+      "process-vs-thread",
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
       "virtual-memory-paging",
@@ -13712,6 +14021,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics"
     ],
     "mentions": [
+      "floating-point-numbers",
       "race-conditions",
       "sql-select-where-null",
       "postgres-architecture"
@@ -13919,6 +14229,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-data-modeling"
     ],
     "mentions": [
+      "floating-point-numbers",
       "postgres-getting-started"
     ]
   },
@@ -14180,6 +14491,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "process-vs-thread",
       "virtual-memory-paging",
       "ds-hash-map",
       "ds-linked-list",
@@ -14196,6 +14508,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "process-vs-thread",
       "virtual-memory-paging",
       "page-cache-disk-io",
       "sd-start-single-server",
@@ -14334,13 +14647,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cors",
       "js-prototype-chain",
       "optimistic-locking",
+      "character-encoding-unicode",
       "loading-patterns",
       "upper-layers-session-presentation-app",
+      "floating-point-numbers",
       "spring-ioc-di",
       "api-versioning",
       "client-data-cache",
       "resilience-patterns",
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "runtime-validation-zod"
     ]
   },
   "big-o-notation": {
@@ -14413,6 +14729,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow"
     ],
     "mentions": [
+      "process-vs-thread",
       "virtual-memory-paging",
       "linux-namespaces-cgroups",
       "k8s-pod-resources",
@@ -14421,6 +14738,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "fp-composition-pipe",
       "k8s-security-context",
       "bash-scripting",
+      "mutex-semaphore-monitor",
       "grpc",
       "linux-processes-signals",
       "aws-ec2-ubuntu-server-setup",
@@ -14666,6 +14984,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index-design",
       "http-message",
       "http-versions",
+      "floating-point-numbers",
       "redis-basics",
       "sql-query-rewrite"
     ]
@@ -14980,6 +15299,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "backpressure",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "grpc",
       "http-methods"
     ]
@@ -15102,6 +15422,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pythagorean-theorem": {
     "links": [],
     "mentions": [
+      "floating-point-numbers",
       "vector-db"
     ]
   },

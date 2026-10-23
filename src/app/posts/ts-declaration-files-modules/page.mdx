@@ -1,0 +1,440 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ts-declaration-files-modules");
+
+<EasyIntro>
+  오래된 자바스크립트 도구를 가져다 쓰려는데 TypeScript가 "이 도구의 설명서가 없다"며 빨간 줄을 긋는다. 도구는 잘 돌아가지만, 무엇을 넣고 무엇이 나오는지 적힌 종이가 없어서 검사기가 확인을 못 하는 것이다.
+
+  이 설명서가 선언 파일이다. 전자 제품 상자에 든 사용 설명서처럼, 기계 자체는 들어 있지 않고 버튼 이름과 쓰는 법만 적혀 있다. 설명서는 도구를 만든 사람이 넣어 주기도 하고, 다른 사람들이 모아 둔 공용 설명서 창고에서 받기도 하고, 없으면 내가 직접 쓰기도 한다.
+
+  이미 있는 설명서에 한 줄을 덧붙이는 방법도 있다. 그런데 덧붙일 종이를 잘못 쓰면 원래 설명서를 통째로 가려 버려서, 멀쩡하던 버튼까지 없다고 나온다. 이 글은 검사기가 설명서를 어디서 찾는지, 직접 쓰거나 덧붙일 때 무엇을 조심해야 하는지 따라간다.
+</EasyIntro>
+
+사내에서 오래 쓰던 자바스크립트 패키지 `legacy-slug`를 TypeScript 프로젝트에서 import했다. 코드는 잘 돌아가는데 `tsc`가 막는다.
+
+```ts
+import slug from "legacy-slug";
+console.log(slug("Hello World"));
+```
+
+```text
+src/a.ts(1,18): error TS7016: Could not find a declaration file for module 'legacy-slug'. '…/node_modules/legacy-slug/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/legacy-slug` if it exists or add a new declaration (.d.ts) file containing `declare module 'legacy-slug';`
+```
+
+(경로 앞부분은 줄였다.) 메시지가 해결책을 두 가지 알려 준다. `@types` 패키지를 설치하거나, `declare module`이 든 `.d.ts` 파일을 직접 만들라는 것이다. 둘 다 같은 일을 한다. 자바스크립트 파일 옆에 "이 모듈은 이런 타입을 내보낸다"는 설명을 따로 붙인다.
+
+이 글은 그 설명, 즉 선언 파일을 다룬다. 검사기가 import 한 줄에서 타입을 찾는 순서, 패키지의 `exports`에 타입이 빠졌을 때의 증상, 타입 없는 라이브러리에 타입을 붙이는 법, 있는 타입에 필드를 더하는 모듈 보강과 `declare global`, 같은 이름이 합쳐지는 선언 병합, 지금도 `namespace`가 쓰이는 자리, JS 프로젝트에 JSDoc으로 타입을 들이는 법까지 본다. `moduleResolution`의 종류는 [tsconfig 글](/posts/tsconfig-strict)에서, ES 모듈 자체는 [ES 모듈 글](/posts/js-es-modules)에서 다뤘다. 예제는 TypeScript 5.9로 확인했다.
+
+## 선언 파일은 타입만 담은 파일이다
+
+`.d.ts` 파일에는 실행되는 코드가 없다. 함수의 몸통도, 변수의 초기값도 없이 "이런 이름이 이런 타입으로 있다"는 선언만 들어 있다. `tsc --declaration`으로 `.ts`를 컴파일하면 `.js`와 함께 이 파일이 나온다. 라이브러리는 둘을 함께 배포하고, 쓰는 쪽의 검사기는 `.js`가 아니라 `.d.ts`를 읽는다.
+
+```ts
+// node_modules/typed-lib/index.d.ts
+export interface Theme { primary: string }
+export declare function createTheme(t: Theme): Theme;
+```
+
+`declare`는 "이 값은 다른 곳에 실제로 있으니 믿고 타입만 기록해 둬라"는 표시다. 이런 선언을 앰비언트 선언(ambient declaration)이라고 부른다. 구현이 없다는 점을 빼면 보통 코드와 문법이 같다.
+
+선언 파일을 다룰 때 가장 먼저 구분할 것은 그 파일이 모듈이냐 스크립트냐다. 파일의 가장 바깥에 `import`나 `export`가 하나라도 있으면 모듈이고, 그 안의 선언은 그 파일에 갇힌다. 하나도 없으면 스크립트이고, 선언이 전역에 풀린다. 같은 `interface Window`도 어느 쪽 파일에 쓰느냐에 따라 전역 타입을 넓히기도 하고, 아무 효과 없는 지역 타입이 되기도 한다. 뒤에서 보는 "보강이 적용되지 않는" 문제의 대부분이 이 구분에서 생긴다.
+
+## import 한 줄에서 타입을 찾는 순서
+
+`import slug from "legacy-slug"`를 만나면 검사기는 정해진 순서로 타입을 찾는다. `moduleResolution`이 `bundler`나 `nodenext`일 때 큰 흐름은 아래 그림과 같다.
+
+<SequenceDiagram
+  caption="검사기가 legacy-slug의 타입을 찾아 가는 길"
+  actors={[
+    { id: "tsc", label: "검사기" },
+    { id: "pkg", label: "패키지 폴더" },
+    { id: "at", label: "@types" },
+    { id: "own", label: "내 .d.ts" },
+  ]}
+  steps={[
+    { from: "tsc", to: "pkg", label: "exports", title: "package.json의 exports부터 본다", detail: "exports가 있으면 types 조건을 찾고, 없으면 조건에 맞는 JS 파일 옆의 같은 이름 .d.ts를 찾는다.", payload: "\"exports\": { \".\": { \"types\": \"./index.d.ts\" } }" },
+    { from: "tsc", to: "pkg", label: "types, main", title: "exports가 없으면 types와 main", detail: "types(또는 typings) 필드, 그다음 main이 가리키는 JS 옆의 .d.ts를 본다. legacy-slug에는 둘 다 없다." },
+    { from: "tsc", to: "at", label: "@types/legacy-slug", title: "DefinitelyTyped에서 온 타입", detail: "node_modules/@types 아래 같은 이름 폴더를 찾는다. 커뮤니티가 따로 쓴 선언이 여기 설치된다." },
+    { from: "tsc", to: "own", label: "declare module", title: "프로그램에 들어 있는 앰비언트 모듈", detail: "include에 잡힌 .d.ts 중 declare module \"legacy-slug\"가 있으면 그 선언을 쓴다." },
+    { from: "tsc", to: "tsc", label: "TS7016", title: "끝까지 못 찾으면 any로 둔다", detail: "JS 파일은 찾았으니 import는 되지만, 타입이 없어 noImplicitAny에서 에러가 된다." },
+  ]}
+/>
+
+그림의 순서는 단순화한 것이다. 실제로는 `declare module`로 같은 이름을 선언한 앰비언트 모듈이 있으면 검사기가 그쪽을 먼저 고른다(뒤에서 이 때문에 생기는 버그를 본다). 정확히 어디를 거쳤는지는 `--traceResolution`으로 볼 수 있다. 출력이 아주 길어서 마지막 줄만 걸러 본다.
+
+```bash
+# 이 모듈 이름이 어느 파일로 풀렸는지 확인한다
+npx tsc -p . --traceResolution | grep "legacy-slug' was successfully resolved"
+```
+
+```text
+======== Module name 'legacy-slug' was successfully resolved to '…/node_modules/@types/legacy-slug/index.d.ts' with Package ID '@types/legacy-slug/index.d.ts@1.0.0'. ========
+```
+
+`@types/legacy-slug`를 설치한 상태에서 돌린 결과다. 타입이 어디서 왔는지 모를 때, 특히 같은 패키지의 타입이 두 군데 있어서 엉뚱한 쪽이 잡힐 때 이 한 줄이 답을 준다.
+
+`@types` 패키지는 DefinitelyTyped라는 저장소에서 사람들이 직접 쓴 선언을 npm에 올린 것이다. 라이브러리 작성자가 쓴 게 아니라서 실제 동작과 어긋날 수 있고, 버전도 따로 간다. `@types/react`의 메이저 버전을 `react`와 맞추는 이유다. 요즘 많은 라이브러리는 직접 `.d.ts`를 함께 배포하니, 설치 전에 패키지에 타입이 들어 있는지 먼저 본다. npm 사이트에서 패키지 이름 옆의 TS 배지가 그 표시다.
+
+## exports에 types가 빠진 패키지
+
+라이브러리를 만드는 쪽에서 자주 하는 실수가 있다. 예전 방식대로 최상위 `types` 필드로 선언 파일을 가리키고, 새로 `exports` 필드를 추가하면서 거기에는 타입을 적지 않은 경우다.
+
+```json
+{
+  "name": "split-lib",
+  "type": "module",
+  "types": "./dist/types/index.d.ts",
+  "exports": { ".": { "import": "./dist/esm/index.js" } }
+}
+```
+
+`moduleResolution`이 `node10`(예전 `node`)인 프로젝트에서는 문제가 없다. `bundler`나 `nodenext`에서는 `exports`가 있으면 최상위 `types`를 보지 않는다.
+
+```text
+src/main.ts(1,21): error TS7016: Could not find a declaration file for module 'split-lib'. '…/node_modules/split-lib/dist/esm/index.js' implicitly has an 'any' type.
+  There are types at '…/node_modules/split-lib/dist/types/index.d.ts', but this result could not be resolved when respecting package.json "exports". The 'split-lib' library may need to update its package.json or typings.
+```
+
+메시지 두 번째 줄이 원인을 그대로 말한다. 타입 파일은 있는데 `exports` 규칙으로는 거기 갈 수 없다는 것이다. 검사기는 `import` 조건으로 찾은 `dist/esm/index.js` 옆에서 `index.d.ts`를 찾았고, 타입 파일이 다른 폴더에 있으니 실패했다. 고치는 방법은 `exports`에 `types` 조건을 넣는 것이다. 아래에서 조각을 하나씩 눌러 보면 각 조건이 언제 쓰이는지 나온다.
+
+<UrlAnatomy
+  caption="exports 한 항목을 조건별로 읽기"
+  base='"exports": { ".": {'
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "types", value: "./dist/types/index.d.ts", display: "\"types\": \"./dist/types/index.d.ts\"", title: "검사기만 읽는 조건", description: "TypeScript가 타입을 찾을 때 쓰는 조건이다. 조건은 위에서부터 먼저 맞는 것을 고르므로 항상 맨 앞에 둔다. 뒤에 두면 import 조건이 먼저 맞아 JS 옆에서 .d.ts를 찾는다.", required: true },
+    { key: "import", value: "./dist/esm/index.js", display: "\"import\": \"./dist/esm/index.js\"", title: "import 문으로 불렀을 때", description: "ESM으로 가져올 때 쓰는 파일이다. 번들러와 Node가 모두 이 조건을 안다." },
+    { key: "require", value: "./dist/cjs/index.cjs", display: "\"require\": \"./dist/cjs/index.cjs\"", title: "require로 불렀을 때", description: "CommonJS 쪽 파일이다. ESM과 CJS 타입이 다르면 import와 require 안에 각각 types를 중첩해 둔다." },
+    { key: "default", value: "./dist/esm/index.js", display: "\"default\": \"./dist/esm/index.js\"", title: "아무 조건도 안 맞을 때", description: "마지막 대비책이다. 조건 순서상 항상 맨 끝에 둔다." },
+  ]}
+/>
+
+`types`를 맨 앞에 넣고 다시 검사하면 에러가 사라진다. 라이브러리를 배포하기 전에는 `@arethetypeswrong/cli` 같은 도구로 `node10`, `node16`, `bundler` 해석 방식마다 타입이 제대로 잡히는지 확인할 수 있다. 쓰는 쪽에서 이 에러를 만났다면 고칠 수 있는 건 라이브러리 버전을 올리거나, 아래처럼 직접 선언을 붙이는 것이다.
+
+## 타입 없는 라이브러리에 직접 타입 붙이기
+
+`@types`도 없으면 직접 쓴다. 가장 짧은 방법은 메시지가 알려 준 한 줄이다.
+
+```ts
+// types/legacy-slug.d.ts
+declare module "legacy-slug";
+```
+
+이걸 줄임 앰비언트 모듈(shorthand ambient module)이라고 한다. 에러는 사라지지만 모든 import가 `any`가 된다. 급할 때 빌드를 살리는 용도로만 쓰고, 실제로 쓰는 함수의 모양은 적어 두는 게 낫다.
+
+`legacy-slug`는 CommonJS로 `module.exports = function slug(...)`를 내보내고, 함수에 `version` 속성도 붙어 있다. 호출할 수 있으면서 속성도 가진 값이다. 이런 모양은 함수 선언과 같은 이름의 `namespace`를 합쳐서 표현한다.
+
+```ts
+// types/legacy-slug.d.ts
+declare module "legacy-slug" {
+  interface SlugOptions { sep?: string }
+  function slug(input: string, opts?: SlugOptions): string;
+  namespace slug {
+    const version: string;
+  }
+  export = slug;
+}
+```
+
+```ts
+// src/a.ts
+import slug from "legacy-slug";
+console.log(slug("Hello World", { sep: "_" }), slug.version);
+slug(42);
+```
+
+```text
+src/a.ts(3,6): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+```
+
+이제 `slug(42)` 같은 실수가 잡힌다. `export =`는 CommonJS의 `module.exports = ...`를 그대로 옮긴 문법이고, `esModuleInterop`이 켜져 있어야 `import slug from`처럼 기본 import로 받을 수 있다(`module`이 `nodenext`면 자동으로 켜진다). 켜져 있지 않으면 TS1259가 난다.
+
+이 선언 파일을 만들어 놓고도 TS7016이 그대로 남는다면, 파일이 프로그램에 들어 있지 않은 것이다. `tsconfig.json`의 `include`에 `src`만 있고 `types` 폴더가 빠지면 정확히 처음과 같은 TS7016이 다시 나온다. 파일이 들어 있는지는 `--explainFiles`로 확인한다.
+
+```bash
+# 각 파일이 왜 프로그램에 들어왔는지 출력한다
+npx tsc -p . --explainFiles | grep -A1 "^types/"
+```
+
+```text
+types/global.d.ts
+  Matched by include pattern 'types' in 'tsconfig.json'
+types/legacy-slug.d.ts
+  Matched by include pattern 'types' in 'tsconfig.json'
+```
+
+목록에 없으면 `include`를 고친다. 편집기에서는 되는데 CI의 `tsc`에서만 실패한다면 대부분 이 경우다. 편집기는 열려 있는 파일을 함께 보기도 해서 차이가 난다.
+
+JS 모듈이 아닌 파일을 import하는 경우도 같은 방법으로 푼다. 번들러가 `.svg`나 CSS 모듈을 처리해 주더라도 검사기는 그 파일의 타입을 모르니 TS2307을 낸다. 와일드카드 앰비언트 모듈로 한 번에 선언한다.
+
+```ts
+// types/assets.d.ts
+declare module "*.svg" { const src: string; export default src; }
+declare module "*.module.css" { const classes: Record<string, string>; export default classes; }
+```
+
+Next.js의 `next-env.d.ts`나 Vite의 `vite/client` 타입이 이런 선언을 미리 넣어 준다. 프레임워크가 만든 파일을 지우거나 `include`에서 빼면 이 에러가 갑자기 생긴다.
+
+## 있는 타입에 필드 더하기: 모듈 보강
+
+타입이 이미 있는 라이브러리의 인터페이스에 필드를 더하고 싶을 때가 있다. 테마 라이브러리의 `Theme`에 회사 색 `brand`를 추가하거나, 라우터의 메타 타입에 필드를 넣는 경우다. 라이브러리를 고치지 않고 내 쪽에서 선언을 덧붙이는 걸 모듈 보강(module augmentation)이라고 한다.
+
+처음에는 이렇게 써 보기 쉽다.
+
+```ts
+// types/theme.d.ts  (import도 export도 없다)
+declare module "typed-lib" {
+  interface Theme { brand: string }
+}
+```
+
+```ts
+// src/b.ts
+import { createTheme } from "typed-lib";
+createTheme({ primary: "#000", brand: "x" });
+```
+
+```text
+src/b.ts(1,10): error TS2305: Module '"typed-lib"' has no exported member 'createTheme'.
+```
+
+`brand`를 더하려 했는데 멀쩡히 있던 `createTheme`이 사라졌다. `theme.d.ts`가 스크립트 파일이라서, 그 안의 `declare module "typed-lib"`은 보강이 아니라 `typed-lib`이라는 모듈을 새로 선언한 것이 됐다. 검사기는 같은 이름의 앰비언트 모듈 선언을 실제 패키지보다 먼저 고르니, 이제 `typed-lib`에는 `Theme` 하나만 있다.
+
+파일 맨 위에 `import` 한 줄을 넣어 모듈로 만들면 해결된다.
+
+```ts
+// types/theme.d.ts
+import "typed-lib";
+
+declare module "typed-lib" {
+  interface Theme { brand: string }
+}
+```
+
+이제 `createTheme`이 돌아오고, `brand`를 빼먹으면 에러가 난다.
+
+```text
+src/b.ts(2,13): error TS2345: Argument of type '{ primary: string; }' is not assignable to parameter of type 'Theme'.
+  Property 'brand' is missing in type '{ primary: string; }' but required in type 'Theme'.
+```
+
+모듈 파일 안의 `declare module`은 이미 있는 모듈에 선언을 합치는 보강이 된다. `import "typed-lib"` 대신 `export {}`를 넣어도 모듈이 되지만, 보강 대상을 import해 두면 그 패키지가 설치되지 않았을 때 바로 알 수 있다. 아래 그림은 두 파일이 검사기 안에서 어떻게 이어지는지 보여 준다.
+
+<ConceptDiagram
+  caption="같은 declare module이 파일 종류에 따라 보강도 되고 덮어쓰기도 된다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "lib", label: "typed-lib", sub: "index.d.ts", x: 200, y: 40, w: 120 },
+    { id: "mod", label: "theme.d.ts", sub: "import 있음", x: 90, y: 140, w: 120 },
+    { id: "scr", label: "theme.d.ts", sub: "import 없음", x: 310, y: 140, w: 120 },
+    { id: "ok", label: "Theme", sub: "primary + brand", x: 90, y: 220, w: 130 },
+    { id: "bad", label: "typed-lib", sub: "Theme만 남음", x: 310, y: 220, w: 130 },
+  ]}
+  edges={[
+    { from: "mod", to: "lib", label: "합친다" },
+    { from: "mod", to: "ok" },
+    { from: "scr", to: "lib", label: "가린다", dashed: true },
+    { from: "scr", to: "bad" },
+  ]}
+/>
+
+보강에는 한계가 있다. 이미 있는 선언에 합치는 것이라 새 export를 만들 수 없고, 기존 속성의 타입을 바꿀 수도 없다. 인터페이스에 필드를 더하는 일이 대부분이다. 라이브러리가 `type Theme = { ... }`처럼 타입 별칭으로 내보냈다면 합칠 수 없으니 보강도 안 된다. 그래서 확장을 염두에 둔 라이브러리는 일부러 `interface`로 열어 둔다. styled-components의 `DefaultTheme`, Vue의 `ComponentCustomProperties`처럼 "여기에 보강하라"고 문서에 적힌 빈 인터페이스가 그런 자리다.
+
+## 전역에 붙이기: declare global과 Window
+
+분석 스크립트가 `window.dataLayer`를 만들어 둔다. TypeScript는 그 속성을 모른다.
+
+```ts
+window.dataLayer.push({ event: "view" });
+```
+
+```text
+src/c.ts(1,8): error TS2339: Property 'dataLayer' does not exist on type 'Window & typeof globalThis'.
+```
+
+`Window`는 `lib.dom.d.ts`에 있는 전역 인터페이스다. 모듈 파일에서 전역에 선언을 더하려면 `declare global`로 감싼다.
+
+```ts
+// types/global.d.ts
+declare global {
+  interface Window { dataLayer: unknown[] }
+}
+```
+
+```text
+types/global.d.ts(1,9): error TS2669: Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.
+```
+
+이번에는 반대 이유로 막혔다. `declare global`은 모듈 안에서만 쓸 수 있는데 이 파일에 `import`도 `export`도 없다. 파일 끝에 `export {};`를 넣으면 통과한다. 또는 `declare global` 없이 스크립트 파일에 `interface Window { ... }`를 바로 써도 된다. 스크립트의 선언은 원래 전역이니 `lib.dom.d.ts`의 `Window`와 합쳐진다.
+
+```ts
+// types/global.d.ts  (스크립트 파일. import/export를 넣지 않는다)
+interface Window { dataLayer: unknown[] }
+declare const __APP_VERSION__: string; // 번들러가 치환해 주는 상수
+```
+
+두 방식 중 무엇을 쓰든 규칙은 하나다. 모듈 파일이면 `declare global`, 스크립트 파일이면 그냥 선언. 섞으면 앞에서 본 두 에러 중 하나가 난다. 스크립트 방식은 나중에 누군가 파일에 `import`를 한 줄 추가하는 순간 선언이 전부 지역으로 바뀌어 조용히 깨진다. 팀에서는 `export {}`와 `declare global`을 쓰는 쪽이 덜 위험하다.
+
+전역을 넓히는 건 편하지만 그만큼 거짓말하기도 쉽다. `dataLayer`를 `unknown[]`로 선언하면 스크립트가 로드되기 전에도 항상 있다고 믿게 된다. 정말 없을 수 있다면 `dataLayer?: unknown[]`로 적어서 쓰는 쪽이 확인하게 만든다.
+
+## 같은 이름이 합쳐지는 규칙: 선언 병합
+
+모듈 보강과 `Window` 확장은 모두 선언 병합(declaration merging) 위에서 동작한다. 같은 범위에 같은 이름으로 선언된 것들을 검사기가 하나로 합치는 규칙이다. 무엇끼리 합쳐지는지 직접 확인해 봤다.
+
+```ts
+interface Box { w: number }
+interface Box { h: number }
+export const b: Box = { w: 1 };
+
+type T = { a: number };
+type T = { b: number };
+
+export function fmt(n: number) { return n.toFixed(2); }
+export namespace fmt { export const currency = "KRW"; }
+console.log(fmt(1), fmt.currency);
+```
+
+```text
+m.ts(3,14): error TS2741: Property 'h' is missing in type '{ w: number; }' but required in type 'Box'.
+m.ts(5,6): error TS2300: Duplicate identifier 'T'.
+m.ts(6,6): error TS2300: Duplicate identifier 'T'.
+```
+
+인터페이스 둘은 합쳐져서 `w`와 `h`를 모두 요구한다. 타입 별칭은 합쳐지지 않고 중복 에러가 난다. [type과 interface의 차이](/posts/ts-type-system-basics)를 물으면 이 점이 꼭 나온다. 함수와 같은 이름의 `namespace`는 합쳐져서 호출도 되고 속성도 가진 값이 된다. 클래스와 인터페이스, `enum`과 `namespace`도 합쳐진다.
+
+호출할 수 있으면서 속성도 가진 값을 하이브리드 타입이라고 부른다. jQuery의 `$`처럼 `$("...")`로 부르면서 `$.ajax`도 갖는 모양이다. 인터페이스로는 호출 시그니처와 속성을 함께 적는다.
+
+```ts
+interface Counter {
+  (): number;
+  count: number;
+  reset(): void;
+}
+
+export function makeCounter(): Counter {
+  const c = () => ++c.count;
+  c.count = 0;
+  c.reset = () => { c.count = 0; };
+  return c;
+}
+```
+
+이 코드는 `as` 없이 통과한다. TypeScript 3.1부터 함수를 선언한 같은 범위에서 속성을 붙이면 검사기가 그 속성을 함수 타입에 포함시킨다. 그래서 새 코드에서는 함수와 `namespace`를 합치지 않고도 같은 모양을 만든다. `namespace` 병합은 주로 선언 파일에서 이미 있는 JS 값을 묘사할 때 쓴다.
+
+## namespace가 아직 쓰이는 곳
+
+`namespace`는 ES 모듈이 나오기 전, 전역 이름 충돌을 피하려고 만든 TypeScript 문법이다. 컴파일하면 즉시 실행 함수로 감싼 객체가 된다. 지금 코드를 나누는 일은 ES 모듈이 하니 새 코드에 `namespace`를 쓸 이유가 거의 없다. 값을 가진 `namespace`는 [enum 글](/posts/ts-enum-vs-union)에서 본 `erasableSyntaxOnly`에도 걸린다.
+
+남은 쓰임은 셋이다. 하나는 위에서 본 선언 파일의 병합이다. `declare namespace`는 타입만 기록하니 지워도 아무것도 남지 않아 `erasableSyntaxOnly`에 걸리지 않는다. 둘째는 전역 스크립트로 로드되는 라이브러리(UMD)의 타입을 쓸 때다. `@types/google.maps`가 `google.maps.Map`처럼 전역 `namespace`로 타입을 내보내는 것이 그 예다. 셋째는 타입끼리 묶어 이름을 정리할 때다. `React.ReactNode`, `JSX.IntrinsicElements`처럼 관련 타입을 한 이름 아래 모으는 데 쓴다.
+
+## JS 프로젝트에 JSDoc으로 타입 들이기
+
+모든 파일을 `.ts`로 바꾸기 어려운 프로젝트도 있다. 그럴 때는 `.js`를 그대로 두고 JSDoc 주석으로 타입을 적은 뒤, 검사기에게 JS도 검사하라고 한다.
+
+```json
+{
+  "compilerOptions": {
+    "strict": true,
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}
+```
+
+```js
+// src/price.js
+/** @typedef {import("./types").Cart} Cart */
+
+/**
+ * @param {Cart} cart
+ * @param {number} [rate]
+ * @returns {number}
+ */
+export function total(cart, rate = 0) {
+  return cart.items.reduce((s, i) => s + i.price * i.qty, 0) * (1 - rate);
+}
+
+total({ items: [{ price: "1000", qty: 2 }] });
+```
+
+```text
+src/price.js(12,19): error TS2322: Type 'string' is not assignable to type 'number'.
+```
+
+`.js` 파일인데 `.ts`와 같은 에러가 났다. `@typedef {import("./types").Cart}`로 `.ts`에 있는 타입을 가져다 쓸 수도 있어서, 공통 타입은 `.ts`로 먼저 옮기고 함수는 JSDoc으로 두는 식의 점진 전환이 된다. 이 파일에서 선언 파일을 만들면 JSDoc이 그대로 타입이 된다.
+
+```text
+export function total(cart: Cart, rate?: number): number;
+export type Cart = import("./types").Cart;
+```
+
+전환 순서는 이렇게 잡는다. 처음에는 `checkJs`를 끄고, 손볼 파일 맨 위에만 `// @ts-check`를 붙여 파일 단위로 켠다. 어느 정도 정리되면 `checkJs`를 켜고, 아직 못 고친 파일에는 `// @ts-nocheck`를 붙여 목록을 줄여 간다. `@ts-nocheck`가 붙은 파일 수가 남은 작업량이다. Svelte처럼 라이브러리 소스를 JSDoc으로 쓰고 `.d.ts`를 생성해 배포하는 프로젝트도 있다. 빌드 단계 없이 JS를 그대로 실행하면서 타입 검사는 받는 방식이다.
+
+## 전역 타입이 어디서 오는지 정하는 types
+
+`describe`, `it`, `process` 같은 전역 이름은 `@types/jest`나 `@types/node`가 스크립트 방식으로 선언한다. 검사기는 기본적으로 `node_modules/@types` 아래 패키지를 전부 자동으로 프로그램에 넣는다. `compilerOptions.types`로 그 목록을 정하면 거기 적은 것만 들어간다.
+
+```json
+{ "compilerOptions": { "types": [] } }
+```
+
+```text
+src/t.ts(1,1): error TS2593: Cannot find name 'describe'. Do you need to install type definitions for a test runner? Try `npm i --save-dev @types/jest` or `npm i --save-dev @types/mocha` and then add 'jest' or 'mocha' to the types field in your tsconfig.
+```
+
+이 옵션은 전역 선언에만 영향을 준다. `import slug from "legacy-slug"`처럼 직접 import하는 모듈의 `@types`는 `types: []`여도 그대로 찾는다. 실무에서는 이걸 두 가지로 쓴다. 테스트 전역(`describe`, `expect`)이 앱 코드에서 자동 완성되지 않도록 앱용과 테스트용 tsconfig의 `types`를 나누고, 서로 충돌하는 전역(Jest와 Vitest, DOM과 Node의 `setTimeout` 반환 타입)이 함께 들어오는 것을 막는다.
+
+## 보강이 안 먹을 때 보는 순서
+
+선언을 썼는데 효과가 없을 때, 증상별로 원인이 거의 정해져 있다.
+
+라이브러리의 다른 export까지 사라졌다(TS2305)면 보강 파일이 스크립트다. 맨 위에 `import "그 패키지"`를 넣는다. `declare global`에서 TS2669가 나면 반대로 파일이 모듈이 아니다. `export {}`를 넣는다.
+
+선언이 아예 무시되는 것 같으면(여전히 TS7016이나 TS2339) 파일이 프로그램에 없다. `--explainFiles`로 확인하고 `include`를 고친다. `files`만 적은 tsconfig나, 모노레포에서 패키지마다 tsconfig가 따로 있는 경우에 잘 빠진다.
+
+보강한 모듈 이름이 실제 import와 다를 수도 있다. `declare module "lib"`라고 썼는데 코드는 `lib/dist/index`를 import하거나, 패키지가 `exports`로 하위 경로를 나눴다면 보강은 다른 모듈에 붙은 셈이다. 보강할 이름은 그 타입이 실제로 선언된 모듈 경로여야 한다. `--traceResolution`으로 그 타입이 어느 파일에서 왔는지 보고 맞춘다.
+
+편집기에서만 되고 CI에서 안 되면 tsconfig가 다르거나 `include` 범위가 다르다. 편집기가 어떤 tsconfig를 쓰는지는 VS Code의 "TypeScript: Go to Project Configuration" 명령으로 볼 수 있다. `skipLibCheck`가 숨기는 선언 파일 에러는 [tsconfig 글](/posts/tsconfig-strict)에 정리했다.
+
+## 선언은 약속이고, 위치가 뜻을 정한다
+
+선언 파일은 실행 코드 없이 타입만 담아서, 검사기가 JS 패키지를 믿고 검사할 수 있게 해 준다. 검사기는 `exports`의 `types` 조건, JS 옆의 `.d.ts`, `types` 필드, `@types`, 프로그램 안의 `declare module` 순서로 타입을 찾는다. 같은 `declare module`도 모듈 파일 안에 있으면 보강이고, 스크립트 파일에 있으면 원래 선언을 가리는 새 선언이다. `declare global`은 모듈 안에서만 쓴다. 이 모든 게 선언 병합 위에서 동작하고, 병합은 인터페이스와 `namespace`가 하고 타입 별칭은 하지 않는다. 그리고 선언은 검사기에게 하는 약속일 뿐이라, 실제 값이 그 약속과 다르면 검사기는 모른다. 바깥에서 들어오는 값을 어떻게 확인하는지는 [런타임 검증 글](/posts/runtime-validation-zod)에서 이어 본다.
+
+## 면접에서 나올 만한 질문
+
+### .d.ts 파일은 무엇이고 언제 필요한가
+
+실행 코드 없이 타입 선언만 담은 파일이다. JS로 배포되는 라이브러리의 타입을 검사기에게 알려 줄 때 쓰고, `tsc --declaration`으로 `.ts`에서 만들거나 직접 쓴다. 쓰는 쪽의 검사기는 `.js`가 아니라 이 파일을 읽어 import한 값의 타입을 정한다.
+
+### TS7016 에러가 나면 어떻게 해결하나
+
+모듈의 JS는 찾았지만 타입을 못 찾았다는 뜻이다. 먼저 패키지가 타입을 함께 배포하는지, `@types` 패키지가 있는지 확인하고, 없으면 `declare module "이름"`으로 직접 선언 파일을 쓴다. 타입 파일이 있는데도 이 에러가 나면 패키지의 `exports`에 `types` 조건이 빠졌을 가능성이 높고, 메시지에 "There are types at"이 함께 나온다. 직접 쓴 선언이 무시되면 `include`에 그 파일이 들어 있는지 본다.
+
+### 모듈 보강을 했는데 라이브러리의 다른 export가 사라졌다. 왜인가
+
+보강 파일에 `import`나 `export`가 없어서 스크립트 파일이 됐기 때문이다. 스크립트 안의 `declare module "lib"`은 보강이 아니라 그 이름의 모듈을 새로 선언한 것이 되고, 검사기는 이 앰비언트 선언을 실제 패키지보다 먼저 쓴다. 파일 맨 위에 `import "lib"`이나 `export {}`를 넣어 모듈로 만들면 기존 선언에 합쳐진다.
+
+### declare global은 언제 쓰고 왜 TS2669가 나나
+
+모듈 파일에서 `Window`나 전역 변수처럼 전역 범위에 선언을 더할 때 쓴다. 모듈 안에서만 의미가 있어서, `import`도 `export`도 없는 스크립트 파일에 쓰면 TS2669가 난다. 스크립트 파일이라면 `declare global` 없이 `interface Window`를 바로 쓰면 되지만, 나중에 import가 추가되면 조용히 지역 선언이 되니 `export {}`와 `declare global`을 함께 쓰는 편이 안전하다.
+
+### 선언 병합이 되는 것과 안 되는 것은
+
+인터페이스끼리, 인터페이스와 클래스, 함수·클래스·`enum`과 같은 이름의 `namespace`는 합쳐진다. 타입 별칭은 합쳐지지 않고 TS2300 중복 에러가 난다. 그래서 다른 곳에서 확장할 수 있게 열어 둘 타입은 `interface`로 내보내고, 보강도 인터페이스에만 할 수 있다.
+
+### namespace는 지금도 써야 하나
+
+코드를 나누는 용도로는 ES 모듈이 대신하니 새 코드에 값을 가진 `namespace`를 쓸 이유는 거의 없고, `erasableSyntaxOnly`에도 걸린다. 선언 파일에서 함수와 속성을 함께 가진 CommonJS 값을 묘사하거나, 전역으로 로드되는 라이브러리의 타입을 묶거나, `JSX`처럼 관련 타입을 한 이름 아래 모을 때는 여전히 쓴다. `declare namespace`는 타입만 남기니 지워도 문제가 없다.
+
+### JS 프로젝트에 TypeScript를 점진적으로 도입하려면
+
+`allowJs`와 JSDoc으로 시작한다. 처음에는 고칠 파일에 `// @ts-check`를 붙여 파일 단위로 검사하고, 익숙해지면 `checkJs`를 켜고 남은 파일에 `// @ts-nocheck`를 붙여 줄여 간다. 공통 타입은 `.ts`로 먼저 옮겨 JSDoc의 `import()` 타입으로 가져다 쓰고, 경계가 되는 모듈부터 `.ts`로 바꾼다.
+
+### compilerOptions.types를 비우면 무엇이 달라지나
+
+`node_modules/@types`의 패키지를 자동으로 전역에 넣던 동작이 꺼지고, 적은 패키지만 전역 선언으로 들어온다. 직접 import하는 모듈의 `@types`는 영향을 받지 않는다. 테스트 전역이 앱 코드에 섞이거나 서로 다른 테스트 러너·환경의 전역이 충돌할 때 앱용과 테스트용 tsconfig에서 각각 나눠 적는다.

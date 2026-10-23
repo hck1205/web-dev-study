@@ -1,0 +1,523 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ts-enum-vs-union");
+
+<EasyIntro>
+  주문 상태를 0, 1, 2 같은 번호로 정해 두고 이름을 붙이는 문법이 있다. 그런데 서버가 7번을 보내도 프로그램은 아무 말 없이 받아 버려서 화면에 빈칸이 생긴다.
+
+  번호표를 떠올려 보면 쉽다. 은행 창구가 1번부터 3번까지만 있는데 번호표 기계가 아무 숫자나 찍어 주면, 7번을 들고 온 손님은 갈 창구가 없다. 숫자라는 모양만 맞으면 통과시키는 규칙 때문이다.
+
+  그래서 많은 팀이 번호 대신 "대기", "완료" 같은 정해진 낱말 목록을 쓰고, 그 목록에 없는 낱말은 아예 들어오지 못하게 한다. 이 글은 두 방식이 실행할 때 무엇을 남기는지, 요즘 도구들이 왜 낱말 목록 쪽을 더 좋아하는지 살펴본다. 같은 김에 자리마다 정해진 값이 들어가는 배열과, 고치지 못하게 막는 표시도 함께 본다.
+</EasyIntro>
+
+주문 상태를 `enum`으로 정의하고 상태마다 문구를 돌려주는 함수를 만들었다. 서버는 상태를 숫자로 보낸다.
+
+```ts
+enum Status { Idle, Loading, Done }
+
+const raw: number = JSON.parse('{"status":7}').status;
+
+function label(s: Status) {
+  switch (s) {
+    case Status.Idle: return "대기";
+    case Status.Loading: return "불러오는 중";
+    case Status.Done: return "완료";
+  }
+}
+
+const x: Status = raw; // number를 Status 자리에 넣었다
+console.log(label(x));
+```
+
+`tsc --strict`는 에러를 하나도 내지 않는다. 실행하면 이렇게 나온다.
+
+```text
+undefined
+```
+
+서버가 새 상태 7을 추가했을 뿐인데 화면에는 빈 문구가 찍혔다. `Status`는 0, 1, 2만 있는데 왜 `number`가 그대로 들어갔을까. 이 글은 여기서 출발해 `enum`이 실제로 무엇을 만들어 내는지, `const enum`이 왜 요즘 빌드 도구에서 깨지는지, 그리고 그 대신 많이 쓰는 `as const` 객체와 리터럴 유니온을 본다. 같은 재료로 만드는 튜플과 `readonly`의 함정까지 다룬다.
+
+리터럴 타입과 넓히기의 기본 규칙, `as const`와 `satisfies`의 차이는 [타입 시스템 기초](/posts/ts-type-system-basics)에서, `isolatedModules`와 Node의 타입 제거는 [tsconfig 글](/posts/tsconfig-strict)에서 다뤘다. 여기서는 그 위에서 "상태 목록을 무엇으로 표현할까"라는 질문에 답한다. 예제는 TypeScript 5.9와 `--strict`, 실행은 Node 22로 확인했다.
+
+## enum은 타입이면서 값이다
+
+TypeScript 문법 대부분은 컴파일하면 지워진다. `enum`은 몇 안 되는 예외다. 타입 자리에도 쓰이지만, 자바스크립트로 바꾸면 실제 객체가 하나 생긴다. 위의 `Status`와 문자열 `enum` 하나를 `tsc`로 바꿔 보면 이렇다.
+
+```ts
+enum Status { Idle, Loading, Done }
+enum Color { Red = "RED", Blue = "BLUE" }
+```
+
+```text
+var Status;
+(function (Status) {
+    Status[Status["Idle"] = 0] = "Idle";
+    Status[Status["Loading"] = 1] = "Loading";
+    Status[Status["Done"] = 2] = "Done";
+})(Status || (Status = {}));
+var Color;
+(function (Color) {
+    Color["Red"] = "RED";
+    Color["Blue"] = "BLUE";
+})(Color || (Color = {}));
+```
+
+숫자 `enum`의 줄이 특이하다. `Status["Idle"] = 0`은 대입식이라 그 값인 `0`을 돌려주고, 바깥의 `Status[0] = "Idle"`이 그 숫자를 키로 이름을 한 번 더 넣는다. 이름으로 숫자를 찾는 칸과 숫자로 이름을 찾는 칸이 같은 객체에 둘 다 생긴다. 이걸 역매핑(reverse mapping)이라고 한다. 아래 그림에서 다음을 누르면 한 줄씩 객체가 채워지는 과정을 볼 수 있다.
+
+<AlgoTrace
+  caption="숫자 enum 한 줄이 객체에 칸을 두 개씩 만든다"
+  memoryLabel="Status 객체의 칸"
+  cells={["Idle = 0", "Loading = 1", "Done = 2", "keys()"]}
+  steps={[
+    { pointer: 0, memory: ["Idle: 0"], caption: "안쪽 대입 Status[\"Idle\"] = 0이 먼저 실행된다. 이름으로 숫자를 찾는 칸이다." },
+    { pointer: 0, found: [0], memory: ["Idle: 0", "0: \"Idle\""], caption: "대입식이 돌려준 0을 키로 바깥 대입이 이름을 넣는다. 이게 역매핑이다." },
+    { pointer: 1, found: [0, 1], memory: ["Idle: 0", "0: \"Idle\"", "Loading: 1", "1: \"Loading\""], caption: "다음 멤버도 같은 모양으로 두 칸이 생긴다. 값을 안 적으면 앞 값에 1을 더한다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["Idle: 0", "0: \"Idle\"", "Loading: 1", "1: \"Loading\"", "Done: 2", "2: \"Done\""], caption: "멤버 셋에 칸이 여섯 개가 됐다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["\"0\"", "\"1\"", "\"2\"", "\"Idle\"", "\"Loading\"", "\"Done\""], caption: "Object.keys는 여섯 개를 다 돌려준다. 정수 키가 앞으로 정렬된다." },
+  ]}
+/>
+
+이 객체를 그대로 돌면 결과가 예상과 다르다.
+
+```ts
+console.log(Status[1], Status["Loading"]);
+console.log(Object.keys(Status));
+console.log(Object.keys(Color));
+console.log(Object.values(Status));
+```
+
+```text
+Loading 1
+[ '0', '1', '2', 'Idle', 'Loading', 'Done' ]
+[ 'Red', 'Blue' ]
+[ 'Idle', 'Loading', 'Done', 0, 1, 2 ]
+```
+
+셀렉트 박스 옵션을 `Object.values(Status)`로 만들었다가 옵션이 여섯 개가 되는 버그가 여기서 나온다. 문자열 `enum`에는 역매핑이 없어서 이 문제가 없다. 역매핑은 숫자 값에만 붙는다.
+
+## 숫자 enum이 number를 받아 주는 이유
+
+처음 코드로 돌아가자. 숫자 `enum` 자리에 숫자를 직접 넣어 보면 TypeScript 5.0부터는 범위 밖 리터럴을 막는다.
+
+```ts
+function setStatus(s: Status) { return s; }
+setStatus(Status.Loading);
+setStatus(7);
+setStatus(42 as number);
+```
+
+```text
+enum.ts(6,11): error TS2345: Argument of type '7' is not assignable to parameter of type 'Status'.
+```
+
+`7`은 걸렸지만 `42 as number`는 통과했다. 리터럴 `7`은 검사기가 값을 알 수 있어서 0, 1, 2 중 하나가 아니라고 판단한다. 하지만 타입이 그냥 `number`인 값은 무엇이 들어 있는지 모르니, 숫자 `enum` 자리에 넣는 걸 허락한다. 처음 코드의 `raw`가 바로 이 경우였다.
+
+이 허용은 일부러 남겨 둔 것이다. 숫자 `enum`은 비트 플래그로도 쓰였다. `Read = 1, Write = 2`를 두고 `Read | Write`처럼 비트 연산으로 조합하면 결과는 `3`이라는, 멤버 목록에 없는 숫자가 된다. 이런 값을 받아야 하니 `number`를 막을 수 없다. 대가는 API 응답이나 `localStorage`에서 꺼낸 숫자가 아무 확인 없이 `enum`이 된다는 점이다.
+
+현장에서 이 버그를 만나면 증상이 이렇다. `switch`에 `default`가 없는 함수가 `undefined`를 돌려주고, 화면에는 빈 칸이나 `undefined` 문자열이 찍힌다. [완전성 검사](/posts/ts-narrowing)를 걸어 둬도 소용이 없다. 검사기는 `Status`가 0, 1, 2 중 하나라고 믿으니 세 갈래를 다 처리한 코드를 완전하다고 본다. 숫자가 들어오는 경계에서 범위를 확인하는 수밖에 없다.
+
+## 문자열 enum은 이름표를 본다
+
+문자열 `enum`은 반대로 지나치게 엄격하다. 값이 같은 문자열이어도 리터럴로는 넣을 수 없다.
+
+```ts
+enum Color { Red = "RED", Blue = "BLUE" }
+enum Paint { Red = "RED" }
+
+function paint(c: Color) { return c; }
+paint(Color.Red);
+paint("RED");
+export const c: Color = Paint.Red;
+```
+
+```text
+enum.ts(11,7): error TS2345: Argument of type '"RED"' is not assignable to parameter of type 'Color'.
+u.ts(11,14): error TS2322: Type 'Paint' is not assignable to type 'Color'.
+```
+
+TypeScript는 거의 모든 곳에서 모양으로 타입을 비교하는데, `enum`만은 선언한 이름으로 비교한다. 런타임 값이 똑같이 `"RED"`인 `Paint.Red`도 `Color` 자리에는 못 들어간다. 장점은 "아무 문자열이나 넣는 실수"를 막는다는 것이고, 단점은 서버가 보낸 `"RED"`를 쓰려면 `as Color`로 우겨야 한다는 것이다. 그 `as`는 값이 정말 `"RED"`인지 확인하지 않으니, 결국 경계의 검사를 우회하는 길이 하나 더 생긴다.
+
+컴포넌트 props로 받을 때도 불편하다. `<Button color="RED" />`라고 쓸 수 없고, 쓰는 쪽마다 `Color`를 import해야 한다. 디자인 시스템처럼 여러 패키지가 같은 값을 주고받는 곳에서 이게 마찰이 된다.
+
+## const enum은 다른 파일에서 깨진다
+
+런타임 객체가 싫으면 `const enum`이 있다. `tsc`는 `const enum` 멤버를 쓰는 자리에 값을 바로 박아 넣고, 객체는 만들지 않는다.
+
+```ts
+// ce-a.ts
+export const enum Dir { Up = 1, Down = 2 }
+
+// ce-b.ts
+import { Dir } from "./ce-a";
+console.log(Dir.Up);
+```
+
+```text
+// tsc가 만든 ce-a.js
+export {};
+// tsc가 만든 ce-b.js
+console.log(1 /* Dir.Up */);
+export {};
+```
+
+깔끔해 보이지만 이건 `tsc`가 두 파일을 다 읽었기 때문에 가능했다. `ce-b.ts`를 바꾸려면 `ce-a.ts`를 열어 `Dir.Up`이 1이라는 걸 알아야 한다. esbuild, SWC, Babel, Next.js 컴파일러처럼 파일을 하나씩 따로 바꾸는 도구는 그걸 못 한다. 그래서 `import`와 `Dir.Up`을 그대로 남긴다. 같은 저장소 안의 `const enum`이면 그 도구들이 정의 쪽 파일을 보통 `enum`처럼 객체로 만들어 주니 우연히 동작한다. 깨지는 건 라이브러리가 `.d.ts`에만 `const enum`을 남기고 JS에는 아무것도 내보내지 않았을 때다.
+
+<SequenceDiagram
+  caption="선언 파일에만 있는 const enum을 파일 단위 변환기가 만나면"
+  actors={[
+    { id: "app", label: "main.ts" },
+    { id: "tool", label: "변환기" },
+    { id: "dts", label: "index.d.ts" },
+    { id: "js", label: "index.js" },
+  ]}
+  steps={[
+    { from: "app", to: "tool", label: "Dir.Up", title: "앱 코드가 Dir.Up을 쓴다", detail: "라이브러리 타입에는 declare const enum Dir가 있다.", payload: "import { Dir } from \"dirlib\";\nconsole.log(Dir.Up);" },
+    { from: "tool", to: "dts", label: "값은?", title: "tsc라면 선언을 읽어 1로 바꾼다", detail: "프로그램 전체를 보는 tsc는 .d.ts에서 값을 찾아 1을 박아 넣는다." },
+    { from: "tool", to: "tool", label: "그대로 둠", title: "파일 하나만 보는 도구는 값을 모른다", detail: "esbuild나 Node의 타입 제거는 다른 파일을 열지 않으니 import를 남긴다." },
+    { from: "tool", to: "js", label: "import Dir", title: "실행할 때 값을 찾는다", detail: "라이브러리 JS는 const enum을 지우고 배포해서 Dir라는 값이 없다." },
+    { from: "js", to: "app", label: "에러", title: "링크 단계에서 실패한다", detail: "esbuild는 번들할 때, Node는 모듈을 연결할 때 멈춘다.", payload: "does not provide an export named 'Dir'" },
+  ]}
+/>
+
+실제로 선언 파일에 `export declare const enum Dir`만 있고 JS에는 `export {}`만 있는 패키지를 만들어 확인했다. `tsc`는 통과하고 `1`을 박아 넣지만, esbuild 번들과 Node 22의 타입 제거 실행은 둘 다 멈춘다.
+
+```text
+✘ [ERROR] No matching export in "node_modules/dirlib/index.js" for import "Dir"
+
+    main.ts:1:9:
+      1 │ import { Dir } from "dirlib";
+        ╵          ~~~
+```
+
+```text
+SyntaxError: The requested module 'dirlib' does not provide an export named 'Dir'
+```
+
+`isolatedModules`를 켜면 `tsc`가 이 상황을 미리 알려 준다.
+
+```text
+main.ts(2,13): error TS2748: Cannot access ambient const enums when 'isolatedModules' is enabled.
+```
+
+라이브러리를 만드는 쪽이라면 공개 API에 `const enum`을 두지 않는다. 꼭 써야 하면 `preserveConstEnums`로 JS에도 객체를 남긴다. 그러면 런타임 객체가 생기니 처음 목표였던 "객체 없는 enum"은 사라진다. 결국 `const enum`은 한 저장소 안에서 `tsc`로만 빌드하는 경우에 쓸 만한 기능이다.
+
+## 타입만 지우는 도구가 늘어난 흐름
+
+`enum`을 둘러싼 분위기를 바꾼 건 "타입을 검사하지 않고 지우기만 하는" 도구들이다. esbuild와 SWC가 빌드를 맡고, Node 22부터는 `.ts` 파일에서 타입을 지우고 바로 실행할 수 있다(22.18부터 기본으로 켜졌다). 지우기만 하는 방식에서 `enum`은 곤란한 문법이다. 지우면 객체가 사라지고, 남기려면 코드를 새로 만들어야 한다. Node의 기본 모드가 `enum`을 거부하는 출력은 [tsconfig 글](/posts/tsconfig-strict)에 있다.
+
+TypeScript 5.8은 이 흐름에 맞춰 `erasableSyntaxOnly` 옵션을 만들었다. 켜면 지우기만으로는 처리할 수 없는 문법을 에러로 막는다.
+
+```ts
+export enum Status { Idle, Loading }
+export namespace Util { export const x = 1; }
+export class P { constructor(public name: string) {} }
+```
+
+```text
+erase.ts(1,13): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erase.ts(2,18): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+erase.ts(3,30): error TS1294: This syntax is not allowed when 'erasableSyntaxOnly' is enabled.
+```
+
+`enum`, 값을 가진 `namespace`, 생성자 매개변수 프로퍼티(`public name`) 세 가지가 걸렸다. 셋 다 타입이 아니라 런타임 코드를 만들어 내는 TypeScript 전용 문법이다. TC39에서 논의 중인 "타입 주석" 제안도 브라우저가 타입을 무시하고 실행하는 방향이라, 이런 문법은 그 제안에 들어가지 않는다. 그래서 새 코드에서 `enum`을 피하는 팀이 늘었다. `enum`이 틀린 문법이라서가 아니라, 도구가 다룰 수 있는 범위 밖에 있어서다.
+
+## as const 객체와 유니온으로 바꾸기
+
+`enum`이 하던 일은 두 가지다. 이름으로 값을 부르게 해 주고(`Status.Loading`), 허용된 값의 집합을 타입으로 만든다. 평범한 객체와 리터럴 유니온으로 둘 다 할 수 있다.
+
+```ts
+export const Status = { Idle: "idle", Loading: "loading", Done: "done" } as const;
+export type Status = (typeof Status)[keyof typeof Status];
+
+export function label(s: Status) { return s; }
+label(Status.Loading);
+label("done");
+label("finished");
+```
+
+```text
+ac.ts(7,7): error TS2345: Argument of type '"finished"' is not assignable to parameter of type 'Status'.
+```
+
+선언 파일로 뽑아 보면 무엇이 만들어졌는지 보인다.
+
+```text
+export declare const Status: {
+    readonly Idle: "idle";
+    readonly Loading: "loading";
+    readonly Done: "done";
+};
+export type Status = (typeof Status)[keyof typeof Status];
+```
+
+`as const`가 각 속성을 `readonly` 리터럴로 고정했고, `typeof Status`로 그 객체의 타입을 가져와 `keyof`로 키를 모은 뒤 인덱스로 값을 꺼냈다. 결과는 `"idle" | "loading" | "done"`이다. 값과 타입에 같은 이름 `Status`를 붙여도 된다. TypeScript는 값 자리와 타입 자리를 따로 찾기 때문이다. 쓰는 쪽은 `enum` 때와 똑같이 `Status.Loading`이라고 쓸 수 있고, `"done"`처럼 문자열 리터럴을 바로 넣어도 된다. props로 `color="red"`를 받는 컴포넌트에 잘 맞는 이유다.
+
+목록 자체가 필요하면 배열로 시작한다.
+
+```ts
+export const SIZES = ["sm", "md", "lg"] as const;
+export type Size = (typeof SIZES)[number];
+
+SIZES.includes("xl");
+const s: string = "md";
+SIZES.includes(s);
+```
+
+```text
+ac.ts(14,16): error TS2345: Argument of type '"xl"' is not assignable to parameter of type '"sm" | "md" | "lg"'.
+ac.ts(16,16): error TS2345: Argument of type 'string' is not assignable to parameter of type '"sm" | "md" | "lg"'.
+```
+
+두 번째 에러가 실무에서 자주 걸린다. 사용자 입력이 허용 목록에 있는지 확인하려고 `includes`를 불렀는데, `includes`가 이미 목록 안의 값만 받겠다고 해서 문자열을 넣을 수가 없다. 확인 함수를 하나 두고 그 안에서만 넓혀 비교한다.
+
+```ts
+export function isSize(v: string): v is Size {
+  return (SIZES as readonly string[]).includes(v);
+}
+```
+
+가드를 거치지 않고 바로 넣으면 어떻게 되는지, 처음 버그와 같은 상황을 유니온으로 만들어 봤다.
+
+```ts
+const STATUS = ["idle", "loading", "done"] as const;
+type Status = (typeof STATUS)[number];
+const raw: string = JSON.parse('{"status":"finished"}').status;
+export const x: Status = raw;
+```
+
+```text
+u.ts(4,14): error TS2322: Type 'string' is not assignable to type '"idle" | "loading" | "done"'.
+```
+
+처음의 숫자 `enum` 버그와 비교하면 차이가 분명하다. `enum`은 `number`를 아무 말 없이 받았고, 리터럴 유니온은 `string`을 거절한다. 확인하지 않은 값은 들어오지 못하니 `isSize` 같은 가드나 [런타임 검증](/posts/runtime-validation-zod)을 거치게 된다. 에러가 귀찮게 느껴져도, 그 에러가 처음 버그를 컴파일 단계로 끌어올린 것이다.
+
+그렇다고 `enum`이 모든 면에서 지는 건 아니다. 무엇을 고를지 정리하면 이렇다.
+
+| 고를 때 보는 것 | 숫자 enum | 문자열 enum | as const + 유니온 |
+|---|---|---|---|
+| 런타임 객체 | 있음(역매핑 포함) | 있음 | 직접 만든 객체만 |
+| 리터럴 값 바로 넣기 | 숫자 아무거나 통과 | 막힘 | 허용 목록만 통과 |
+| 타입만 지우는 도구 | 변환 필요 | 변환 필요 | 그대로 지워짐 |
+| 멤버에 JSDoc, 이름 바꾸기 | 편함 | 편함 | 객체 키라 비슷하게 가능 |
+| 비트 플래그 | 자연스러움 | 해당 없음 | 숫자 상수 객체로 직접 |
+
+이미 `enum`을 많이 쓰는 코드베이스에서 일부러 다 걷어 낼 필요는 없다. 새로 만드는 공개 API, 여러 패키지가 공유하는 타입, Node로 `.ts`를 직접 돌리는 코드에서 유니온 쪽을 고르면 된다.
+
+## 리터럴 타입은 어디서 넓어지나
+
+리터럴 유니온으로 바꾸고 나면 "분명 `"dark"`를 돌려줬는데 왜 `string`이냐"는 에러를 자주 만난다. 변수의 넓히기는 [기초 글](/posts/ts-type-system-basics)에서 봤으니, 여기서는 함수와 배열에서 넓어지는 자리를 본다.
+
+```ts
+export function mode() { return "dark"; }
+export function pick(flag: boolean) { return flag ? "dark" : "light"; }
+export const sizes = ["sm", "md"];
+export const pair = [1, "a"];
+export const pairT = [1, "a"] as const;
+export function tuple<T extends unknown[]>(...xs: T) { return xs; }
+export const t = tuple(1, "a");
+```
+
+```text
+export declare function mode(): string;
+export declare function pick(flag: boolean): "dark" | "light";
+export declare const sizes: string[];
+export declare const pair: (string | number)[];
+export declare const pairT: readonly [1, "a"];
+export declare function tuple<T extends unknown[]>(...xs: T): T;
+export declare const t: [number, string];
+```
+
+리터럴 하나만 돌려주는 `mode()`는 반환 타입이 `string`으로 넓어졌고, 두 리터럴 중 하나를 돌려주는 `pick()`은 유니온이 남았다. 반환 타입이 중요한 함수라면 추론에 맡기지 말고 `(): Theme`처럼 적는 편이 안전하다. 배열 리터럴은 원소를 모은 배열 타입이 된다. 위치마다 타입을 남기고 싶으면 `as const`를 붙이거나, 나머지 매개변수를 `T extends unknown[]`로 받아 튜플로 추론하게 한다. 마지막 방법은 [제네릭 글](/posts/ts-generics)의 `const` 타입 매개변수와 함께 쓰면 리터럴까지 남길 수 있다.
+
+## 튜플: 자리마다 타입이 다른 배열
+
+`[1, "a"] as const`가 만든 `readonly [1, "a"]`가 튜플이다. 길이가 정해져 있고 자리마다 타입이 다르다. React의 `useState`가 돌려주는 `[state, setState]`가 대표적인 예다. 튜플에는 이름표, 선택 요소, 나머지 요소를 붙일 수 있다.
+
+```ts
+type Range = [start: number, end: number];
+type Opt = [name: string, age?: number];
+type Path = [string, ...number[]];
+type Mid = [first: string, ...rest: number[], last: boolean];
+
+export const r: Range = [1, 2];
+export const o1: Opt = ["kim"];
+export const p: Path = ["root", 1, 2, 3];
+export const m: Mid = ["a", 1, 2, true];
+export const bad: Range = [1, 2, 3];
+```
+
+```text
+tup.ts(10,14): error TS2322: Type '[number, number, number]' is not assignable to type 'Range'.
+  Source has 3 element(s) but target allows only 2.
+```
+
+`start`, `end` 같은 이름표(4.0부터)는 타입 검사에 영향이 없다. 편집기의 자동 완성과 함수 매개변수로 펼칠 때 이름으로 보일 뿐이다. 나머지 요소는 4.2부터 중간에도 올 수 있어서 `Mid`처럼 앞과 뒤가 고정되고 가운데가 늘어나는 모양도 만든다.
+
+튜플의 `length`도 타입이다. 값을 일부러 틀리게 넣어 에러 메시지로 타입을 확인했다.
+
+```text
+t2.ts(4,14): error TS2322: Type '"x"' is not assignable to type '2'.
+t2.ts(5,14): error TS2322: Type '"x"' is not assignable to type '2 | 1'.
+t2.ts(6,14): error TS2322: Type 'string' is not assignable to type 'number'.
+```
+
+`Range`의 길이는 정확히 `2`, 선택 요소가 있는 `Opt`는 `2 | 1`, 나머지 요소가 있는 `Path`는 그냥 `number`다. 이 성질 덕분에 타입 수준에서 "인자가 몇 개인가"를 계산할 수 있다.
+
+함정이 하나 있다. `readonly`가 아닌 튜플은 배열 메서드를 그대로 갖는다.
+
+```ts
+const r: Range = [1, 2];
+r.push(3);      // 에러 없음
+console.log(r);
+```
+
+```text
+[ 1, 2, 3 ]
+```
+
+타입은 여전히 길이 2라고 말하는데 실제 값은 세 칸이다. 튜플을 함수에서 돌려주거나 상태로 들고 있다면 `readonly [number, number]`로 적어 `push`를 막는다.
+
+## readonly는 얕고, 한쪽으로만 막는다
+
+`readonly`는 "이 참조로는 고치지 않겠다"는 표시다. 배열에 붙이면 `push`, `splice` 같은 변경 메서드가 타입에서 빠진다. 대입할 때 방향이 있다.
+
+```ts
+function sum(xs: number[]) { xs.push(0); return xs.length; }
+
+const frozen: readonly number[] = [1, 2];
+sum(frozen);
+const mutable: number[] = [1, 2];
+export const ok: readonly number[] = mutable;
+frozen.push(3);
+const tupRo = [1, 2] as const;
+sum(tupRo);
+```
+
+```text
+tup.ts(20,5): error TS2345: Argument of type 'readonly number[]' is not assignable to parameter of type 'number[]'.
+  The type 'readonly number[]' is 'readonly' and cannot be assigned to the mutable type 'number[]'.
+tup.ts(23,8): error TS2339: Property 'push' does not exist on type 'readonly number[]'.
+tup.ts(26,5): error TS2345: Argument of type 'readonly [1, 2]' is not assignable to parameter of type 'number[]'.
+  The type 'readonly [1, 2]' is 'readonly' and cannot be assigned to the mutable type 'number[]'.
+```
+
+고칠 수 있는 배열을 읽기 전용 자리에 넣는 건 된다(`ok`). 반대는 막힌다. `number[]`를 받는 함수는 안에서 `push`할 수도 있으니, 읽기 전용 배열을 넘기면 약속이 깨지기 때문이다. 그래서 `as const`로 만든 상수 배열을 일반 배열 매개변수에 넘기면 에러가 난다. 해결은 받는 쪽을 `readonly number[]`로 바꾸는 것이다. 읽기만 하는 함수라면 매개변수를 처음부터 `readonly`로 적어 두는 편이 받을 수 있는 값이 더 넓다.
+
+객체 속성의 `readonly`는 더 약하다.
+
+```ts
+type User = { readonly id: number; tags: string[] };
+const u: User = { id: 1, tags: [] };
+u.id = 2;
+u.tags.push("a");
+const w: { id: number } = u;
+w.id = 3;
+console.log(u.id);
+
+const cfg = Object.freeze({ a: 1, nested: { b: 2 } });
+cfg.nested.b = 3;
+```
+
+```text
+t2.ts(10,3): error TS2540: Cannot assign to 'id' because it is a read-only property.
+```
+
+```text
+3
+```
+
+에러는 `u.id = 2` 한 줄뿐이다. `u.tags.push`는 통과한다. `readonly`는 속성 자리만 막고 그 안의 배열은 막지 않는 얕은 표시다. 더 놀라운 건 `w`다. `readonly id`를 가진 객체를 `id`를 고칠 수 있는 타입에 넣어도 에러가 없고, `w.id = 3`으로 원래 객체가 바뀌었다. 속성의 `readonly`는 대입 호환성에 영향을 주지 않기 때문이다. 배열의 `readonly`가 대입을 막는 것과 다르다. `Object.freeze`도 런타임에서 얕게 얼리고, 타입도 `Readonly`로 바깥 한 겹만 바꾼다. 그래서 `cfg.nested.b = 3`도 통과한다.
+
+React 상태에서 이 차이가 중요해진다. `readonly`를 붙여도 중첩 배열을 직접 `push`하는 실수는 잡히지 않고, 그러면 참조가 바뀌지 않아 화면이 다시 그려지지 않는다. 불변 업데이트가 왜 필요한지는 [불변성 글](/posts/js-immutability-react)에 있다. 깊게 막고 싶으면 [매핑된 타입](/posts/ts-utility-mapped-types)으로 `DeepReadonly`를 만들 수 있지만, 타입이 복잡해지는 만큼 꼭 필요한 경계(설정 객체, 외부에 넘기는 상태)에만 쓴다.
+
+## 기존 enum을 걷어 낼 때 보는 곳
+
+이미 있는 `enum`을 유니온으로 옮긴다면 순서가 있다. 먼저 런타임 객체를 쓰는 곳을 찾는다.
+
+```bash
+# enum 선언 위치
+grep -rn --include='*.ts' --include='*.tsx' -E '^\s*(export\s+)?(const\s+)?enum\s' src
+# enum 객체를 값으로 돌리는 곳 (Object.keys/values/entries)
+grep -rn -E 'Object\.(keys|values|entries)\(' src
+```
+
+`Object.values(Status)` 같은 곳은 `as const` 객체로 바꾸면 결과가 달라진다. 숫자 `enum`이었다면 역매핑 칸이 사라지니 오히려 버그가 고쳐지는 경우가 많지만, 그 결과에 의존하던 코드가 있으면 같이 고친다.
+
+다음은 값이 밖으로 나가는 곳이다. 숫자 `enum` 값이 API 요청, DB 컬럼, `localStorage`, 분석 이벤트에 저장되어 있다면 숫자를 문자열로 바꾸는 건 데이터 형식 변경이다. 타입만 바꾸고 값은 숫자로 두는 방법도 있다.
+
+```ts
+export const Status = { Idle: 0, Loading: 1, Done: 2 } as const;
+export type Status = (typeof Status)[keyof typeof Status]; // 0 | 1 | 2
+```
+
+이러면 직렬화 형식은 그대로고, 받는 쪽에서 `number`를 `Status`로 바꾸려면 확인을 거쳐야 한다. 처음 버그를 막는 데는 이것으로 충분하다.
+
+마지막으로 새 코드에서 `enum`이 다시 생기지 않게 막는다. `erasableSyntaxOnly`를 켜거나, ESLint의 `no-restricted-syntax` 규칙에 `TSEnumDeclaration` 셀렉터를 넣어 린트 단계에서 막는다.
+
+## 직접 해 보기: enum 객체에서 값만 꺼내기
+
+옮기는 동안에는 `enum` 객체를 셀렉트 박스나 검증 목록으로 써야 할 때가 있다. 숫자 `enum`의 역매핑 칸을 빼고 원래 값만 돌려주는 함수를 만들어 보자. 인자는 `tsc`가 만든 `enum` 객체와 같은 모양이다. 숫자 값과 문자열 값이 섞인 `enum`도 있다.
+
+<CodePlayground
+  caption="enumValues: 역매핑 칸을 빼고 멤버 값만 순서대로"
+  language="typescript"
+  functionName="enumValues"
+  initialCode={`function enumValues(e: Record<string, string | number>): (string | number)[] {
+  // 숫자 enum: { 0: "Idle", Idle: 0 }처럼 칸이 둘씩 있다
+  // 문자열 enum: { Red: "RED" }처럼 칸이 하나다
+  return [];
+}`}
+  solution={`function enumValues(e: Record<string, string | number>): (string | number)[] {
+  // 역매핑 칸은 키가 숫자 문자열이다. 멤버 이름은 숫자로 시작할 수 없다
+  return Object.keys(e)
+    .filter((k) => Number.isNaN(Number(k)))
+    .map((k) => e[k]);
+}`}
+  tests={[
+    { label: "숫자 enum", args: [{ 0: "Idle", 1: "Loading", 2: "Done", Idle: 0, Loading: 1, Done: 2 }], expected: [0, 1, 2] },
+    { label: "문자열 enum", args: [{ Red: "RED", Blue: "BLUE" }], expected: ["RED", "BLUE"] },
+    { label: "섞인 enum", args: [{ 0: "No", No: 0, Yes: "YES" }], expected: [0, "YES"] },
+    { label: "값을 직접 정한 숫자 enum", args: [{ 10: "Low", 20: "High", Low: 10, High: 20 }], expected: [10, 20] },
+    { label: "빈 enum", args: [{}], expected: [] },
+  ]}
+/>
+
+`typeof e[k] === "number"`로 거르면 문자열 `enum`과 섞인 `enum`에서 틀린다. 키 쪽을 봐야 한다. 멤버 이름은 식별자라 숫자로 시작할 수 없으니, 숫자로 읽히는 키는 모두 역매핑 칸이다.
+
+## 이름 목록이 필요하면 값부터
+
+`enum`은 타입과 런타임 객체를 동시에 만드는 TypeScript 전용 문법이다. 숫자 `enum`은 역매핑 칸이 생기고 `number`를 아무 확인 없이 받으며, 문자열 `enum`은 같은 값의 리터럴도 거절한다. `const enum`은 파일 하나만 보는 도구에서 깨지고, 타입만 지우는 도구가 늘면서 `enum` 자체가 다루기 어려운 문법이 됐다. `as const` 객체와 `(typeof X)[keyof typeof X]` 유니온은 평범한 자바스크립트 값에서 타입을 뽑으니 어느 도구에서나 지워지고, 확인하지 않은 값을 거절한다. 튜플과 `readonly`는 같은 `as const`에서 나오지만, `readonly`는 얕고 속성에서는 대입을 막지 않는다는 점을 기억해 둔다.
+
+## 면접에서 나올 만한 질문
+
+### enum과 리터럴 유니온은 무엇이 다른가
+
+`enum`은 컴파일 뒤에도 객체가 남는 문법이고, 리터럴 유니온은 타입이라 완전히 지워진다. 숫자 `enum`은 역매핑 칸이 생기고 `number` 타입 값을 확인 없이 받아 주며, 문자열 `enum`은 선언 이름으로 비교해서 같은 문자열 리터럴도 거절한다. 유니온은 허용된 리터럴만 받고 `string`이나 `number`는 거절하니, 경계에서 확인을 강제한다. 이름으로 부르는 편의가 필요하면 `as const` 객체를 함께 둔다.
+
+### 숫자 enum 자리에 아무 숫자나 들어가는 이유는
+
+비트 플래그처럼 멤버를 조합한 숫자(`Read | Write`가 3)를 받아야 해서 `number` 타입 값을 허용하기 때문이다. TypeScript 5.0부터 범위 밖 숫자 리터럴(`7`)은 막지만, 타입이 `number`인 변수는 값을 알 수 없어 그대로 통과한다. API 응답이나 저장소에서 꺼낸 숫자가 확인 없이 `enum`이 되고, 완전성 검사도 이 값을 잡지 못한다.
+
+### 숫자 enum의 역매핑은 어떻게 만들어지나
+
+`E[E["A"] = 0] = "A"`처럼 대입식이 돌려준 값을 다시 키로 써서, 이름→숫자 칸과 숫자→이름 칸을 함께 만든다. 그래서 멤버가 셋이면 `Object.keys`가 여섯 개를 돌려주고, `Object.values`로 옵션 목록을 만들면 이름과 숫자가 섞인다. 문자열 `enum`에는 역매핑이 없다.
+
+### const enum을 라이브러리에서 쓰면 안 되는 이유는
+
+`const enum`은 `tsc`가 다른 파일의 선언을 읽어 값을 박아 넣는 방식인데, esbuild·SWC·Babel·Node의 타입 제거는 파일을 하나씩 변환해서 그 값을 모른다. 라이브러리가 JS에서 `const enum`을 지우고 `.d.ts`에만 남기면, 그런 도구로 빌드한 앱은 없는 export를 import하다 실패한다. `isolatedModules`를 켜면 TS2748로 미리 알 수 있고, 꼭 써야 하면 `preserveConstEnums`로 객체를 남긴다.
+
+### erasableSyntaxOnly는 무엇을 막고 왜 생겼나
+
+5.8에서 생긴 옵션으로, 타입을 지우는 것만으로는 처리할 수 없는 문법(`enum`, 값을 가진 `namespace`, 생성자 매개변수 프로퍼티 등)을 TS1294로 막는다. Node 22의 타입 제거나 타입 주석 제안처럼 타입을 지우기만 하고 실행하는 흐름에 코드를 맞추려는 목적이다. Node로 `.ts`를 직접 실행하는 프로젝트에서 켜 둘 만하다.
+
+### as const 객체로 enum을 대신하는 패턴을 설명해 달라
+
+`const Status = { Idle: "idle", ... } as const`로 값을 고정하고 `type Status = (typeof Status)[keyof typeof Status]`로 값들의 유니온을 뽑는다. 값과 타입이 같은 이름을 써도 되는 건 TypeScript가 값 자리와 타입 자리를 따로 찾기 때문이다. 쓰는 쪽은 `Status.Idle`과 `"idle"` 둘 다 쓸 수 있고, 평범한 객체라 어떤 변환 도구에서도 문제가 없다. 배열이 필요하면 `as const` 배열에서 `(typeof A)[number]`로 뽑는다.
+
+### readonly 배열을 number[] 매개변수에 넘기면 왜 에러가 나나
+
+`number[]`를 받는 함수는 안에서 `push`할 수 있으니, 읽기 전용이라고 약속한 배열을 넘기면 그 약속이 깨지기 때문이다. 반대로 일반 배열은 `readonly` 자리에 넣을 수 있다. 읽기만 하는 함수는 매개변수를 `readonly T[]`로 적으면 두 종류를 모두 받는다. 단, 객체 속성의 `readonly`는 대입 호환성에 영향을 주지 않아서 일반 타입 변수로 옮기면 고칠 수 있고, 중첩된 값도 막지 않는다.
+
+### 튜플은 배열과 무엇이 다르고 어디에 쓰나
+
+튜플은 길이가 정해지고 자리마다 타입이 다른 배열 타입이다. `length`가 `2`처럼 리터럴 타입이 되고, 이름표·선택 요소·나머지 요소를 붙일 수 있다. 훅이 `[value, setValue]`를 돌려줄 때처럼 순서가 의미를 갖는 짧은 묶음에 쓴다. `readonly`가 아닌 튜플은 `push`가 통과해 타입과 실제 길이가 어긋날 수 있으니 돌려주는 튜플은 `readonly`나 `as const`로 만든다.

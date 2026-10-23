@@ -1,0 +1,405 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("html-form-validation");
+
+<EasyIntro>
+  인터넷에서 주문할 때 이름, 전화번호, 주소를 적는 칸이 폼이다. 칸마다 무엇을 적는 칸인지 브라우저에 제대로 알려 주면, 휴대폰은 숫자 칸에 숫자 자판을 띄우고 저장해 둔 주소를 알맞은 칸에 채워 준다.
+
+  폼을 우체국 접수 창구라고 생각하면 쉽다. 창구 직원은 봉투에 우편번호가 비었거나 자리 수가 틀리면 바로 돌려준다. 손님은 줄을 다시 설 필요 없이 그 자리에서 고친다. 브라우저가 칸을 검사해 주는 일이 바로 이 창구 직원의 일이다.
+
+  돌려줄 때는 무엇이 왜 틀렸는지 말해 줘야 한다. 빨간 테두리만 보여 주면 눈이 불편해 화면을 소리로 듣는 사람은 무엇을 고쳐야 할지 모른다. 그래서 칸마다 이름표를 붙이고, 틀렸다는 말을 그 칸에 이어 둔다.
+
+  창구에서 통과했다고 끝은 아니다. 누구든 창구를 거치지 않고 봉투를 바로 보낼 수 있으니, 안쪽 사무실인 서버가 한 번 더 확인한다.
+</EasyIntro>
+
+배송지 입력 폼을 배포하고 나서 모바일 사용자에게 이런 이야기를 들었다. 우편번호 칸을 누르면 숫자 키패드가 아니라 일반 자판이 뜬다. 자동 완성을 눌렀더니 이름 칸에 이메일이 들어갔다. 화면 낭독기로 쓰는 사용자는 제출을 눌러도 아무 일이 없다고 했다. 실제로는 칸 아래 빨간 글씨가 떴는데 그걸 읽어 주지 않았다.
+
+```html
+<input name="zip" placeholder="우편번호" />
+<input name="nm" placeholder="받는 분" />
+<p class="error">우편번호를 확인하세요</p>
+```
+
+세 문제 모두 브라우저에 정보가 모자라서 생긴다. 이 칸이 무엇인지(`type`, `autocomplete`), 어떤 자판이 맞는지(`inputmode`), 이름이 무엇인지(`label`), 틀렸다는 말이 어느 칸 이야기인지(`aria-describedby`)를 알려 주지 않았다. 이 글은 HTML만으로 이 정보를 주는 법과, 브라우저에 들어 있는 검증 시스템(제약 검증 API)을 쓰는 법을 본다. 폼이 HTTP 요청이 되는 과정은 [HTML form은 어떻게 HTTP 요청이 되나](/posts/html-form-http)에서, React에서 폼 상태와 검증 스키마를 다루는 법은 [React 폼 글](/posts/react-forms-actions)에서 다룬다. 브라우저 동작은 2024년 이후의 크롬·파이어폭스·사파리를 기준으로 하고, 차이가 있는 곳은 따로 적는다.
+
+## 칸의 종류가 자판과 검증을 정한다
+
+`input`의 속성 셋이 비슷해 보여서 자주 섞인다. 하는 일이 다르다.
+
+`type`은 값의 종류다. 브라우저는 이걸 보고 입력 UI와 검증 규칙을 정한다. `email`이면 `@`가 있는지 검사하고, `number`면 숫자가 아닌 값을 막고 위아래 화살표를 붙이며, `date`면 달력을 띄운다.
+
+`inputmode`는 가상 키보드 모양만 정한다. 검증은 하지 않는다. `numeric`(숫자), `decimal`(숫자와 소수점), `tel`(전화 자판), `email`, `url`, `search`, `none`이 있다.
+
+`autocomplete`는 이 칸에 무슨 정보가 들어가는지 알려 준다. 브라우저와 비밀번호 관리자는 이걸 보고 저장된 값을 채운다.
+
+아래 우편번호 칸을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="우편번호 칸에 필요한 속성들"
+  base="<input"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "type",
+      value: "\"text\"",
+      title: "숫자처럼 보여도 text",
+      description: "우편번호는 계산하는 수가 아니라 숫자로 된 글자다. type=\"number\"로 두면 숫자로 다루는 순간 앞자리 0이 사라지고, 마우스 휠에 값이 바뀌고, e나 소수점이 들어가며, maxlength가 먹지 않는다.",
+      required: true,
+    },
+    {
+      key: "inputmode",
+      value: "\"numeric\"",
+      title: "숫자 키패드를 띄운다",
+      description: "검증은 하지 않고 모바일 자판만 바꾼다. 카드 번호, 인증 번호, 우편번호처럼 숫자로 된 글자에 쓴다. 가격처럼 소수점이 필요하면 decimal을 쓴다.",
+      required: true,
+    },
+    {
+      key: "autocomplete",
+      value: "\"shipping postal-code\"",
+      title: "무슨 정보인지 알려 준다",
+      description: "postal-code 앞의 shipping은 배송지 묶음이라는 뜻이다. 같은 폼에 청구지(billing)가 있어도 섞이지 않는다. 이 속성이 없으면 브라우저는 name이나 라벨 글자로 짐작한다.",
+    },
+    {
+      key: "pattern",
+      value: "\"[0-9]{5}\"",
+      title: "값 전체가 맞아야 한다",
+      description: "앞뒤에 ^와 $를 쓰지 않아도 전체 일치로 검사한다. 최신 브라우저는 v 플래그로 컴파일하니 문자 클래스 안의 맨 하이픈은 \\-로 이스케이프한다.",
+    },
+    {
+      key: "maxlength",
+      value: "\"5\"",
+      title: "여섯 번째 글자는 입력되지 않는다",
+      description: "maxlength는 입력 자체를 막는다. minlength는 막지 않고 검증할 때만 본다.",
+    },
+    {
+      key: "required",
+      title: "비어 있으면 제출을 막는다",
+      description: "값 없는 속성이다. required=\"false\"라고 써도 속성이 있으니 필수다. 필수가 아니게 하려면 속성을 지운다.",
+      required: true,
+    },
+  ]}
+/>
+
+`type="number"`는 생각보다 쓸 곳이 좁다. 수량이나 나이처럼 더하고 빼는 값에만 쓴다. 숫자가 아닌 글자를 넣으면 `input.value`가 `""`이 되어, 자바스크립트에서는 "비었다"와 "잘못 썼다"를 값만으로 구별할 수 없다. 이 차이는 뒤에서 볼 `validity.badInput`으로만 알 수 있다. 받은 문자열을 숫자로 바꿀 때 `Number()`와 `parseInt`가 어떻게 다른지는 [자바스크립트 숫자 글](/posts/js-numbers-bigint)에서 다룬다.
+
+`type="tel"`은 전화 자판을 띄우지만 형식을 검사하지 않는다. 나라마다 전화번호 형식이 달라서 브라우저가 정해 둔 규칙이 없다. `type="email"`은 검사가 꽤 느슨하다. `a@b`도 통과한다. 명세의 규칙이 도메인에 점을 요구하지 않기 때문이다. 정말 쓰는 주소인지는 확인 메일로만 알 수 있다.
+
+자동 완성이 엉뚱한 칸을 채운 건 `autocomplete`가 없어서 브라우저가 `name="nm"` 같은 이름으로 짐작했기 때문이다. 자주 쓰는 값을 정리하면 이렇다.
+
+```html
+<input name="name" autocomplete="shipping name" />
+<input name="tel" type="tel" autocomplete="shipping tel" />
+<input name="addr1" autocomplete="shipping address-line1" />
+<input name="email" type="email" autocomplete="email" />
+<input name="username" autocomplete="username" />
+<input name="password" type="password" autocomplete="current-password" />  <!-- 로그인 -->
+<input name="newPassword" type="password" autocomplete="new-password" />  <!-- 가입·변경 -->
+<input name="otp" inputmode="numeric" autocomplete="one-time-code" />     <!-- 문자 인증 번호 -->
+```
+
+`new-password`를 주면 크롬과 사파리가 강한 비밀번호를 제안한다. `one-time-code`는 사파리에서 문자로 받은 인증 번호를 자판 위에 띄워 준다. `autocomplete="off"`는 기대만큼 동작하지 않는다. 로그인 칸과 주소 칸에서는 브라우저가 사용자 편의를 위해 무시하는 경우가 많다. 자동 완성을 끄고 싶은 이유가 "엉뚱한 값이 들어가서"라면, 끄는 대신 맞는 토큰을 주는 게 답이다.
+
+모바일 자판의 엔터 키 글자는 `enterkeyhint`로 바꾼다. 여러 칸을 차례로 채우는 폼이면 `next`, 마지막 칸이면 `done`이나 `send`를 준다. 모든 모바일 브라우저가 이 힌트를 똑같이 보여 주지는 않는다.
+
+## 칸마다 이름표를 붙인다
+
+`placeholder`는 이름표가 아니다. 글자를 치기 시작하면 사라져서, 두 번째 칸을 채우다 첫 칸이 무엇이었는지 잊는다. 글자색이 옅어 대비가 낮고, 화면 낭독기와 브라우저 번역 기능이 다르게 다루기도 한다. 이름은 `label`로 붙인다.
+
+```html
+<!-- 1. for와 id로 잇는다 -->
+<label for="zip">우편번호</label>
+<input id="zip" name="zip" inputmode="numeric" autocomplete="shipping postal-code" />
+
+<!-- 2. label로 감싼다. id가 필요 없다 -->
+<label>
+  받는 분
+  <input name="name" autocomplete="shipping name" />
+</label>
+```
+
+둘 다 같은 효과가 있다. 칸에 포커스가 가면 화면 낭독기가 "우편번호, 편집 가능한 텍스트"처럼 이름을 읽는다. 라벨 글자를 눌러도 칸에 포커스가 간다. 체크박스와 라디오에서 이게 특히 중요하다. 16px짜리 동그라미 대신 글자 전체가 눌리는 영역이 되니, 모바일에서 터치 대상이 커진다.
+
+`for`의 값은 `id`와 정확히 같아야 한다. 같은 컴포넌트가 한 화면에 두 번 나오면 `id`가 겹쳐 두 번째 라벨이 첫 번째 칸을 가리킨다. React에서는 `useId`로 만든다. 디자인상 라벨을 보이지 않게 해야 하면 `aria-label`을 주거나, 화면에서만 감추는 CSS 클래스로 `label`을 숨긴다. `display: none`으로 숨기면 화면 낭독기에서도 사라진다.
+
+라디오 버튼 묶음은 라벨이 두 층이다. 각 버튼의 이름("일반 배송")과 묶음 전체의 질문("배송 방법")이다. 묶음의 질문은 `fieldset`과 `legend`로 준다.
+
+```html
+<fieldset>
+  <legend>배송 방법</legend>
+  <label><input type="radio" name="ship" value="normal" required /> 일반 배송</label>
+  <label><input type="radio" name="ship" value="dawn" /> 새벽 배송</label>
+</fieldset>
+```
+
+화면 낭독기는 묶음에 들어갈 때 "배송 방법, 그룹"을 읽고, 버튼마다 "일반 배송, 라디오 버튼, 2개 중 1번째"를 읽는다. `legend`가 없으면 "새벽 배송"만 들리고 무엇을 고르는 건지 모른다. 같은 `name`을 가진 라디오 중 하나에만 `required`를 붙여도 묶음 전체가 필수가 된다. `fieldset`에 `disabled`를 주면 안의 칸이 한꺼번에 비활성화되는 것도 쓸모가 있다.
+
+## 브라우저가 칸마다 검사하는 것
+
+`required`, `pattern`, `min` 같은 속성을 주면 브라우저가 칸마다 상태를 계산해 둔다. 이 상태가 `input.validity`(`ValidityState` 객체)다. 위반한 규칙마다 플래그가 하나씩 있다.
+
+```js
+const zip = document.querySelector("#zip");
+console.log(zip.validity.valid);            // 모든 규칙을 통과했나
+console.log(zip.validity.valueMissing);     // required인데 비었다
+console.log(zip.validity.patternMismatch);  // pattern에 안 맞는다
+console.log(zip.validationMessage);         // 브라우저가 만든 안내 문구 (브라우저 언어로)
+```
+
+플래그는 이렇게 나뉜다. `valueMissing`(필수인데 비었다), `typeMismatch`(`email`, `url` 형식이 아니다), `patternMismatch`, `tooLong`과 `tooShort`(`maxlength`, `minlength`), `rangeUnderflow`와 `rangeOverflow`(`min`, `max`), `stepMismatch`(`step` 단위가 아니다), `badInput`(숫자 칸에 숫자가 아닌 글자처럼 브라우저가 값으로 바꾸지 못했다), `customError`(자바스크립트로 직접 지정했다). 하나라도 `true`면 `valid`가 `false`다.
+
+여기서 자주 걸리는 함정이 둘 있다.
+
+`type="number"`의 `step` 기본값은 1이다. 가격 칸을 `type="number"`로 두고 `step`을 안 주면 `19.99`가 `stepMismatch`로 막힌다. 크롬은 가장 가까운 유효한 값 두 개(19와 20)를 알려 주는 말풍선을 띄운다. 소수를 받으려면 `step="0.01"`이나 `step="any"`를 준다.
+
+`minlength`와 `tooShort`는 사용자가 직접 고친 값에만 검사한다. 자바스크립트로 `input.value = "ab"`를 넣으면 `minlength="8"`이어도 `tooShort`가 `false`다. 서버에서 받은 초기값이나 테스트 코드에서 값을 넣고 "왜 검증이 안 되지"라고 헤매는 원인이다. `maxlength`도 같은 규칙이다.
+
+`disabled`와 `readonly` 칸은 검증에서 빠진다. `disabled` 칸은 값이 전송도 되지 않는다. 화면에 보여만 주고 값은 보내야 한다면 `readonly`를 쓴다.
+
+## 제출 버튼을 누르면 일어나는 일
+
+검증은 제출할 때 한 번에 돈다. 아래 그림에서 다음을 누르면 제출 버튼부터 서버 응답까지 순서가 보인다.
+
+<SequenceDiagram
+  caption="제출 한 번에 브라우저 검증, 스크립트, 서버 검증이 차례로 돈다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "browser", label: "브라우저" },
+    { id: "script", label: "스크립트" },
+    { id: "server", label: "서버" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "browser",
+      label: "제출 버튼 · Enter",
+      title: "제출을 요청한다",
+      detail: "submit 버튼을 누르거나 칸에서 Enter를 친다. form.requestSubmit()도 같은 경로를 탄다.",
+    },
+    {
+      from: "browser",
+      to: "browser",
+      label: "칸마다 validity 계산",
+      title: "제약 검증을 돈다",
+      detail: "form에 novalidate가 없으면 모든 칸의 ValidityState를 본다. 하나라도 틀리면 제출을 멈춘다.",
+    },
+    {
+      from: "browser",
+      to: "script",
+      label: "invalid 이벤트",
+      title: "틀린 칸마다 invalid가 온다",
+      detail: "틀린 칸마다 invalid 이벤트가 발생한다. 이 이벤트는 버블링하지 않는다. 그다음 브라우저는 첫 번째 틀린 칸에 포커스를 옮기고 말풍선을 띄운다.",
+    },
+    {
+      from: "browser",
+      to: "script",
+      label: "submit 이벤트",
+      title: "다 맞으면 submit이 온다",
+      detail: "여기서 preventDefault를 하고 fetch로 보낼 수 있다. 막지 않으면 페이지가 이동하며 일반 폼 전송이 된다.",
+    },
+    {
+      from: "script",
+      to: "server",
+      label: "POST /orders",
+      title: "서버가 다시 검사한다",
+      detail: "브라우저 검증은 건너뛸 수 있으니 서버는 모든 값을 처음 보는 값처럼 다시 검증한다. 재고, 중복 같은 건 서버만 안다.",
+    },
+    {
+      from: "server",
+      to: "script",
+      label: "422 fields",
+      title: "칸별 오류를 돌려준다",
+      detail: "어느 칸이 왜 틀렸는지 칸 이름을 키로 돌려준다. 문장 하나로만 돌려주면 화면이 칸에 붙일 수 없다.",
+      payload: "{\"fields\": {\"zip\": \"배송할 수 없는 지역이다\"}}",
+    },
+    {
+      from: "script",
+      to: "user",
+      label: "칸에 오류를 붙인다",
+      title: "브라우저 검증과 같은 자리에 보인다",
+      detail: "해당 칸에 aria-invalid와 오류 문구를 잇고 그 칸으로 포커스를 옮긴다. 사용자는 어디서 온 오류인지 구별할 필요가 없다.",
+    },
+  ]}
+/>
+
+스크립트로 제출할 때 자주 틀리는 게 `form.submit()`과 `form.requestSubmit()`의 차이다. `submit()`은 검증을 건너뛰고 `submit` 이벤트도 보내지 않은 채 바로 전송한다. `submit` 이벤트에서 fetch로 보내도록 만든 폼에 `submit()`을 부르면 검증도 핸들러도 거치지 않고 페이지가 이동한다. 사용자가 누른 것처럼 제출하려면 `requestSubmit()`을 쓴다.
+
+검증을 직접 돌리는 메서드도 둘이다. `checkValidity()`는 검사만 하고 결과를 `true`, `false`로 돌려준다. 틀린 칸에는 `invalid` 이벤트를 보낸다. `reportValidity()`는 여기에 더해 첫 번째 틀린 칸에 포커스를 옮기고 말풍선을 띄운다. 여러 단계로 나뉜 폼에서 "다음" 버튼을 누를 때 지금 단계의 칸만 `reportValidity()`로 확인하면 마지막 단계에서 한꺼번에 오류를 보는 일을 막는다.
+
+임시 저장 버튼처럼 검증 없이 보내야 하는 버튼에는 `formnovalidate`를 붙인다. 그 버튼으로 제출할 때만 검증을 건너뛴다.
+
+## 직접 만든 규칙은 setCustomValidity로 끼운다
+
+"비밀번호 확인이 비밀번호와 같아야 한다"는 HTML 속성으로 표현할 수 없다. 이런 규칙은 `setCustomValidity(문구)`로 끼운다. 빈 문자열이 아닌 값을 넣으면 그 칸은 `customError` 상태가 되어 제출이 막히고, 그 문구가 말풍선에 뜬다.
+
+```js
+const pw = form.elements.password;
+const confirm = form.elements.confirm;
+
+function checkMatch() {
+  // 같으면 빈 문자열로 꼭 풀어 준다. 안 그러면 영원히 틀린 칸으로 남는다
+  confirm.setCustomValidity(confirm.value === pw.value ? "" : "비밀번호가 서로 다르다");
+}
+pw.addEventListener("input", checkMatch);
+confirm.addEventListener("input", checkMatch);
+```
+
+가장 흔한 버그가 주석에 적은 그대로다. 한 번 `setCustomValidity("...")`를 하면 빈 문자열로 다시 부를 때까지 그 칸은 계속 틀린 상태다. 사용자가 값을 고쳐도 제출이 안 된다. 그래서 문구를 정하는 코드는 `input` 이벤트마다 돌면서 맞으면 `""`, 틀리면 문구를 넣는 식으로 쓴다.
+
+서버에서 돌아온 오류도 같은 방법으로 붙일 수 있다. `zip.setCustomValidity("배송할 수 없는 지역이다")` 뒤에 `zip.reportValidity()`를 부르면 브라우저 말풍선으로 보인다. 다음 `input` 이벤트에서 `""`로 풀어 주는 것까지 같이 짠다.
+
+## 처음부터 빨간 칸이 되지 않게
+
+CSS의 `:invalid` 선택자로 틀린 칸에 빨간 테두리를 그리면 페이지를 열자마자 필수 칸이 모두 빨갛다. 비어 있는 필수 칸은 아직 아무것도 안 했는데도 이미 `valueMissing`이기 때문이다.
+
+이 문제 때문에 생긴 선택자가 `:user-invalid`다. 사용자가 그 칸과 상호작용한 뒤(값을 바꾸고 포커스를 옮기거나, 제출을 시도한 뒤)부터 틀렸을 때만 걸린다. 2023년 말부터 크롬·파이어폭스·사파리가 모두 지원한다.
+
+```css
+/* 처음부터 빨개지지 않는다. 사용자가 건드리거나 제출을 시도한 뒤부터 적용된다 */
+input:user-invalid {
+  border-color: var(--color-danger);
+}
+input:user-invalid + .field-error {
+  display: block;
+}
+```
+
+언제 오류를 보여 줄지는 UX 결정이다. 타이핑하는 중간에 "형식이 맞지 않는다"가 뜨면 아직 다 쓰지도 않았는데 혼나는 기분이다. 보통은 칸을 떠날 때(`blur`)나 제출할 때 처음 보여 주고, 한 번 오류가 뜬 칸은 고치는 즉시(`input`) 사라지게 한다. `:user-invalid`가 이 흐름에 가깝게 동작한다.
+
+## 직접 그리는 오류는 칸에 잇는다
+
+브라우저 말풍선은 모양을 바꿀 수 없고, 금방 사라지고, 한 번에 한 칸만 보여 준다. 그래서 디자인이 있는 서비스는 대부분 `form`에 `novalidate`를 붙여 말풍선을 끄고 오류 문구를 직접 그린다. `novalidate`를 붙여도 `validity`, `checkValidity()`, `setCustomValidity()`는 그대로 동작한다. 꺼지는 건 제출할 때의 자동 차단과 말풍선뿐이다. 그래서 규칙은 HTML 속성으로 두고 화면만 직접 만드는 조합이 흔하다.
+
+직접 그릴 때는 빨간 글씨와 칸을 연결해 줘야 한다. 처음 폼에서 화면 낭독기가 오류를 못 읽은 게 이 연결이 없어서였다.
+
+```html
+<label for="zip">우편번호</label>
+<input id="zip" name="zip" required pattern="[0-9]{5}"
+       aria-invalid="true" aria-describedby="zip-hint zip-error" />
+<p id="zip-hint">숫자 다섯 자리</p>
+<p id="zip-error">우편번호를 입력해 달라</p>
+```
+
+`aria-invalid="true"`는 이 칸이 틀렸다는 상태를 알리고, `aria-describedby`는 칸에 포커스가 갔을 때 이름 다음에 읽을 요소를 가리킨다. 화면 낭독기는 "우편번호, 잘못됨, 편집 가능한 텍스트, 숫자 다섯 자리, 우편번호를 입력해 달라"처럼 읽는다. `aria-errormessage`라는 속성도 있지만 화면 낭독기마다 지원이 고르지 않아 `aria-describedby`가 더 안전하다. 이 속성들을 React 컴포넌트로 묶는 방법과 첫 번째 틀린 칸으로 포커스를 옮기는 처리는 [React 폼 글](/posts/react-forms-actions)에 있다.
+
+`novalidate` 폼에서 화면을 그리는 코드는 `validity`를 읽어 문구를 고른다. 브라우저의 `validationMessage`를 그대로 써도 되지만, 문구가 브라우저 언어를 따라가고 브라우저마다 다르다. 서비스 말투로 맞추려면 플래그를 보고 직접 고른다.
+
+```js
+form.addEventListener("submit", (e) => {
+  const fields = [...form.elements].filter((el) => el.willValidate);
+  const invalid = fields.filter((el) => !el.validity.valid);
+  for (const el of fields) {
+    const errorEl = document.getElementById(el.id + "-error");
+    if (el.validity.valid) el.removeAttribute("aria-invalid");
+    else el.setAttribute("aria-invalid", "true");
+    if (errorEl) errorEl.textContent = el.validity.valid ? "" : messageFor(el.validity, rulesOf(el));
+  }
+  if (invalid.length > 0) {
+    e.preventDefault();
+    invalid[0].focus(); // 첫 번째 틀린 칸으로
+  }
+});
+```
+
+`willValidate`는 버튼, `disabled` 칸처럼 검증 대상이 아닌 요소를 걸러 준다. `aria-invalid`는 값을 꼭 `"true"`로 적는다. `toggleAttribute`처럼 값 없이 붙이면 빈 문자열이 되는데, ARIA는 빈 값을 `false`로 해석한다.
+
+위 코드의 `messageFor`를 직접 써 보자. `validity` 플래그 객체와 칸의 규칙(`label`, `minLength`, `min`, `max`, `step`, `hint`, `customMessage`)을 받아 문구를 돌려준다. 여러 플래그가 함께 켜질 수 있으니 순서가 중요하다. 비었으면 다른 규칙은 의미가 없고, 숫자로 읽지 못했으면 범위도 볼 수 없다. 테스트에서는 실제 `ValidityState` 대신 같은 이름의 키를 가진 객체를 넘긴다.
+
+<CodePlayground
+  caption="validity 플래그로 오류 문구 고르기"
+  functionName="messageFor"
+  initialCode={`function messageFor(validity, rules) {\n  // valid면 "", 아니면 "라벨: 문구"\n  // 순서: valueMissing → badInput → typeMismatch → patternMismatch\n  //       → tooShort → rangeUnderflow → rangeOverflow → stepMismatch → customError\n  return "";\n}`}
+  solution={`function messageFor(validity, rules) {\n  const label = rules.label;\n  if (validity.valid) return "";\n  if (validity.valueMissing) return label + ": 꼭 입력해야 한다";\n  if (validity.badInput) return label + ": 숫자만 입력할 수 있다";\n  if (validity.typeMismatch) return label + ": 형식이 맞지 않는다";\n  if (validity.patternMismatch) return label + ": " + rules.hint;\n  if (validity.tooShort) return label + ": " + rules.minLength + "자 이상 입력한다";\n  if (validity.rangeUnderflow) return label + ": " + rules.min + " 이상이어야 한다";\n  if (validity.rangeOverflow) return label + ": " + rules.max + " 이하여야 한다";\n  if (validity.stepMismatch) return label + ": " + rules.step + " 단위로 입력한다";\n  if (validity.customError) return label + ": " + rules.customMessage;\n  return label + ": 값을 확인해 달라";\n}`}
+  tests={[
+    { label: "통과", args: [{ valid: true }, { label: "이메일" }], expected: "" },
+    { label: "비었다", args: [{ valid: false, valueMissing: true }, { label: "이메일" }], expected: "이메일: 꼭 입력해야 한다" },
+    { label: "형식", args: [{ valid: false, typeMismatch: true }, { label: "이메일" }], expected: "이메일: 형식이 맞지 않는다" },
+    { label: "pattern", args: [{ valid: false, patternMismatch: true }, { label: "우편번호", hint: "숫자 다섯 자리" }], expected: "우편번호: 숫자 다섯 자리" },
+    { label: "너무 짧다", args: [{ valid: false, tooShort: true }, { label: "비밀번호", minLength: 8 }], expected: "비밀번호: 8자 이상 입력한다" },
+    { label: "범위가 step보다 먼저", args: [{ valid: false, rangeOverflow: true, stepMismatch: true }, { label: "수량", max: 10, step: 1 }], expected: "수량: 10 이하여야 한다" },
+    { label: "숫자가 아니다", args: [{ valid: false, badInput: true }, { label: "수량" }], expected: "수량: 숫자만 입력할 수 있다" },
+    { label: "직접 지정", args: [{ valid: false, customError: true }, { label: "아이디", customMessage: "이미 쓰는 아이디다" }], expected: "아이디: 이미 쓰는 아이디다" },
+  ]}
+/>
+
+## pattern이 조용히 무시될 때
+
+`pattern="[a-z0-9-]+"`처럼 썼는데 아무 값이나 통과한다면 정규식이 컴파일에 실패했을 가능성이 크다. 2023년 무렵부터 주요 브라우저는 `pattern`을 정규식의 `v` 플래그로 컴파일한다. `v` 플래그에서는 문자 클래스 안에 이스케이프하지 않은 `-`, `(`, `|` 같은 문자가 문법 오류다. 오류가 나면 브라우저는 그 `pattern`을 없는 것처럼 취급하고 콘솔에 경고만 남긴다. 검증이 사라지는데 화면에는 아무 표시가 없다.
+
+Node 22에서 같은 규칙으로 확인해 보면 이렇다.
+
+```js
+for (const p of ["[0-9]{5}", "[a-z-]", "[\\w-]", "[a-z\\-]"]) {
+  try {
+    new RegExp("^(?:" + p + ")$", "v");
+    console.log(p, "ok");
+  } catch (e) {
+    console.log(p, "오류");
+  }
+}
+```
+
+```text
+[0-9]{5} ok
+[a-z-] 오류
+[\w-] 오류
+[a-z\-] ok
+```
+
+오래된 코드에서 `pattern`이 갑자기 안 먹는다는 신고가 오면 콘솔에서 "Pattern attribute value ... is not a valid regular expression" 같은 경고를 먼저 찾는다. 문자 클래스 안의 하이픈은 `\-`로 이스케이프한다.
+
+## 브라우저 검증은 보안이 아니다
+
+여기까지의 검증은 모두 사용자를 돕는 장치다. 개발자 도구에서 `required`를 지우거나 `curl`로 요청을 만들면 브라우저를 거치지 않는다. 그래서 서버는 같은 규칙을 다시 검사하고, 형식 말고도 권한, 재고, 중복처럼 서버만 아는 규칙을 본다. 이 이야기는 [HTML form 글의 "브라우저 검증은 친절일 뿐이다"](/posts/html-form-http)에서 더 다룬다.
+
+서버가 거절했을 때 화면이 할 일은 오류를 원래 칸으로 돌려 붙이는 것이다. 그러려면 서버 응답이 칸 이름을 키로 가져야 한다.
+
+```json
+{
+  "message": "입력값을 확인해 달라",
+  "fields": {
+    "zip": "배송할 수 없는 지역이다",
+    "tel": "이미 다른 계정에 등록된 번호다"
+  }
+}
+```
+
+화면은 `fields`의 키로 `form.elements[key]`를 찾아 `aria-invalid`와 오류 문구를 붙이고, 첫 번째 칸으로 포커스를 옮긴다. 서버의 칸 이름과 폼의 `name`이 다르면 연결이 끊기니, 둘을 처음부터 같은 이름으로 맞춰 둔다. `fields`에 없는 오류(결제 대행사 장애 같은)는 폼 위의 요약 영역에 보여 준다. 이 요약 영역은 `role="alert"`로 두면 나타나는 순간 화면 낭독기가 읽는다. 칸마다 `alert`를 붙이면 여러 문구가 한꺼번에 소리를 내니 요약 하나에만 쓴다.
+
+## 다시 배송지 폼으로
+
+처음 폼은 `type`, `inputmode`, `autocomplete`를 맞춰서 숫자 키패드와 자동 완성 문제를 고친다. `placeholder` 대신 `label`을 붙이고, 라디오 묶음에는 `fieldset`과 `legend`를 준다. 규칙은 `required`, `pattern`, `min` 같은 속성으로 적어 브라우저의 `validity`가 계산하게 두고, 직접 만든 규칙은 `setCustomValidity`로 끼우되 맞으면 꼭 `""`로 풀어 준다. 오류를 직접 그리면 `aria-invalid`와 `aria-describedby`로 칸에 잇고, 서버 오류도 같은 자리에 붙인다. 그래도 진짜 검사는 서버가 한다.
+
+## 면접에서 나올 만한 질문
+
+### type, inputmode, autocomplete는 어떻게 다른가요?
+
+`type`은 값의 종류라서 입력 UI와 검증 규칙까지 바꾼다. `inputmode`는 모바일 가상 키보드 모양만 바꾸고 검증은 하지 않는다. `autocomplete`는 칸에 들어갈 정보의 종류를 알려 브라우저와 비밀번호 관리자가 저장된 값을 맞는 칸에 채우게 한다. 그래서 우편번호나 카드 번호처럼 숫자로 된 글자는 `type="text"`에 `inputmode="numeric"`, 알맞은 `autocomplete` 토큰을 주는 조합을 쓴다.
+
+### 숫자 입력에 type="number"를 쓰면 안 되나요?
+
+수량이나 나이처럼 계산하는 값에는 써도 되지만, 숫자로 된 글자에는 맞지 않는다. 숫자로 다루는 순간 앞자리 0이 사라지고, `e`나 소수점이 들어가며, `maxlength`가 적용되지 않고, 마우스 휠에 값이 바뀐다. 숫자가 아닌 값을 넣으면 `value`가 빈 문자열이 되어 `validity.badInput`으로만 구별할 수 있다. `step` 기본값이 1이라 소수를 받으려면 `step`을 따로 준다.
+
+### label은 왜 필요한가요? placeholder로 대신하면 안 되나요?
+
+`label`은 칸의 접근 가능한 이름이 되어 화면 낭독기가 포커스 때 읽고, 라벨을 눌러도 칸에 포커스가 가서 터치 영역이 넓어진다. `placeholder`는 입력을 시작하면 사라지고 대비가 낮아 이름 역할을 못 한다. `for`와 `id`로 잇거나 `label`로 감싸고, 라디오 묶음에는 `fieldset`과 `legend`로 묶음의 질문을 준다.
+
+### 제약 검증 API는 무엇이고 어떻게 쓰나요?
+
+HTML 검증 속성을 바탕으로 브라우저가 칸마다 계산해 두는 검증 상태와 그걸 다루는 메서드다. `input.validity`의 플래그(`valueMissing`, `patternMismatch`, `rangeOverflow` 등)로 무엇이 틀렸는지 알고, `checkValidity()`로 검사만, `reportValidity()`로 검사와 말풍선 표시를 한다. 직접 만든 규칙은 `setCustomValidity`로 끼운다. `novalidate`를 붙여도 이 API는 그대로 동작해서, 규칙은 속성으로 두고 화면만 직접 그릴 수 있다.
+
+### setCustomValidity를 쓸 때 주의할 점은 무엇인가요?
+
+빈 문자열이 아닌 값을 넣으면 다시 `""`로 부를 때까지 그 칸이 계속 틀린 상태로 남는다. 사용자가 값을 고쳐도 제출이 안 되는 버그가 여기서 나온다. 그래서 `input` 이벤트마다 규칙을 다시 계산해 맞으면 `""`, 틀리면 문구를 넣는다. 서버 오류를 붙일 때도 다음 입력에서 풀어 주는 코드를 같이 둔다.
+
+### :invalid 대신 :user-invalid를 쓰는 이유는 무엇인가요?
+
+`:invalid`는 사용자가 아무것도 하기 전에도 걸려서, 페이지를 열자마자 비어 있는 필수 칸이 모두 빨갛게 보인다. `:user-invalid`는 사용자가 그 칸을 바꾸고 떠나거나 제출을 시도한 뒤부터 틀렸을 때만 걸린다. 2023년 말부터 주요 브라우저가 모두 지원한다. 오류를 언제 보여 줄지(blur, submit, input)는 UX 결정이고, 보통 처음엔 떠날 때나 제출할 때 보여 주고 고치는 즉시 지운다.
+
+### 직접 오류를 그릴 때 접근성은 어떻게 챙기나요?
+
+틀린 칸에 `aria-invalid="true"`를 주고, 오류 문구 요소의 `id`를 `aria-describedby`로 이어서 포커스가 갈 때 이름과 함께 읽히게 한다. 제출에 실패하면 첫 번째 틀린 칸으로 포커스를 옮긴다. 색만으로 상태를 알리지 않고 문구를 함께 둔다. 칸에 붙일 수 없는 전체 오류는 `role="alert"` 요약 하나로 알린다.
+
+### 클라이언트 검증만 하면 안 되나요? 서버 오류는 어떻게 보여 주나요?
+
+안 된다. 브라우저 검증은 개발자 도구나 `curl`로 쉽게 건너뛸 수 있는 편의 기능이라, 서버가 모든 값을 다시 검증하고 권한·재고·중복처럼 서버만 아는 규칙도 본다. 서버는 칸 이름을 키로 오류를 돌려주고, 화면은 같은 `name`의 칸을 찾아 클라이언트 오류와 같은 자리에 붙이고 포커스를 옮긴다. 칸에 속하지 않는 오류는 폼 위 요약에 보여 준다.

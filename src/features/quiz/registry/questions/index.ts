@@ -1,3 +1,17 @@
+import { TS_ENUM_VS_UNION } from "./ts-enum-vs-union";
+import { TS_DECLARATION_FILES_MODULES } from "./ts-declaration-files-modules";
+import { RUNTIME_VALIDATION_ZOD } from "./runtime-validation-zod";
+import { PWA_INSTALL_OFFLINE } from "./pwa-install-offline";
+import { PROCESS_VS_THREAD } from "./process-vs-thread";
+import { MUTEX_SEMAPHORE_MONITOR } from "./mutex-semaphore-monitor";
+import { JS_STRINGS_UNICODE } from "./js-strings-unicode";
+import { JS_NUMBERS_BIGINT } from "./js-numbers-bigint";
+import { JS_ERROR_HANDLING } from "./js-error-handling";
+import { HTML_FORM_VALIDATION } from "./html-form-validation";
+import { FLOATING_POINT_NUMBERS } from "./floating-point-numbers";
+import { CPU_SCHEDULING_INTERRUPTS } from "./cpu-scheduling-interrupts";
+import { CHARACTER_ENCODING_UNICODE } from "./character-encoding-unicode";
+import { BROWSER_DEVTOOLS_DEBUGGING } from "./browser-devtools-debugging";
 import { SPRING_TRANSACTIONAL_PROPAGATION } from "./spring-transactional-propagation";
 import { SPRING_SECURITY_ARCHITECTURE } from "./spring-security-architecture";
 import { SPRING_MVC_REQUEST_LIFECYCLE } from "./spring-mvc-request-lifecycle";
@@ -755,6 +769,20 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  TS_ENUM_VS_UNION,
+  TS_DECLARATION_FILES_MODULES,
+  RUNTIME_VALIDATION_ZOD,
+  PWA_INSTALL_OFFLINE,
+  PROCESS_VS_THREAD,
+  MUTEX_SEMAPHORE_MONITOR,
+  JS_STRINGS_UNICODE,
+  JS_NUMBERS_BIGINT,
+  JS_ERROR_HANDLING,
+  HTML_FORM_VALIDATION,
+  FLOATING_POINT_NUMBERS,
+  CPU_SCHEDULING_INTERRUPTS,
+  CHARACTER_ENCODING_UNICODE,
+  BROWSER_DEVTOOLS_DEBUGGING,
   SPRING_TRANSACTIONAL_PROPAGATION,
   SPRING_SECURITY_ARCHITECTURE,
   SPRING_MVC_REQUEST_LIFECYCLE,
