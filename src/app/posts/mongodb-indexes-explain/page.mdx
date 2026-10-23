@@ -1,0 +1,648 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mongodb-indexes-explain");
+
+<EasyIntro>
+  두꺼운 책에서 특정 단어가 나오는 쪽을 찾으려면 앞에서부터 한 장씩 넘기는 방법과, 책 맨 뒤의 찾아보기를 펴는 방법이 있다. 찾아보기에는 단어가 가나다순으로 적혀 있고 옆에 쪽 번호가 붙어 있어서 금방 찾는다.
+
+  데이터베이스의 인덱스가 바로 이 찾아보기다. 인덱스가 없으면 데이터베이스는 문서를 처음부터 끝까지 다 읽는다. 찾아보기가 있으면 필요한 몇 장만 펼친다.
+
+  찾아보기를 만들 때는 무엇으로 정리할지 정해야 한다. 이름순인지, 날짜순인지, 지도 위 위치인지에 따라 모양이 달라진다. 시간이 지나면 저절로 지워지는 쪽지 같은 찾아보기도 있고, 자주 찾는 것만 따로 모아 둔 얇은 찾아보기도 있다.
+
+  데이터베이스는 찾아보기가 여러 개일 때 어떤 걸 쓸지 직접 골라 본 다음, 가장 빨랐던 것을 기억해 두었다가 다음에 다시 쓴다. 그래서 찾아보기가 있는데도 엉뚱한 방법으로 찾고 있지는 않은지 가끔 확인해야 한다.
+</EasyIntro>
+
+주문 목록 API가 느리다는 이야기를 듣고 `db.orders.getIndexes()`를 쳐 보면 인덱스는 분명 있다. `userId`에도 있고 `status`에도 있다. 그런데 느린 쿼리 로그에는 `COLLSCAN`이 찍혀 있다. 인덱스가 있다는 것과 쿼리가 그 인덱스를 잘 쓰고 있다는 건 다른 이야기다.
+
+이 글은 그 차이를 `explain`으로 읽는 법에서 시작한다. 그다음 MongoDB가 제공하는 인덱스 종류(멀티키, 텍스트, 2dsphere, TTL, 부분, 와일드카드, 숨김)를 언제 쓰는지, 쿼리 플래너가 인덱스를 어떻게 고르고 기억하는지, 운영 중에 인덱스를 만들면 무엇이 잠기는지를 본다. 문서 모델과 내장·참조, ESR 규칙의 기본은 [MongoDB 문서 모델](/posts/mongodb-document-model)에서 다뤘으니 여기서는 그 위를 쌓는다.
+
+실험은 Ubuntu 24.04에서 MongoDB 8.0 복제본 셋(3대)을 띄우고 했다. 출력은 모두 이 환경에서 실제로 돌린 것이다. 7.0 이하에서는 explain의 일부 필드 이름이 다를 수 있다.
+
+## 실험에 쓸 주문 컬렉션
+
+주문 10만 건을 넣었다. 회원은 5,000명이고, 한 사람당 주문이 스무 건 남짓이다.
+
+```js
+// shop.orders 문서 하나
+{
+  _id: ObjectId("..."),
+  userId: "u42",
+  status: "paid",            // paid 60%, shipped 20%, cancelled 20%
+  total: 87000,
+  createdAt: ISODate("2026-08-14T03:12:00Z"),
+  tags: ["book"],
+  items: [
+    { sku: "sku-7", cat: "book", price: 12000, qty: 1 },
+    { sku: "sku-311", cat: "toy", price: 25000, qty: 3 }
+  ]
+}
+```
+
+```js
+db.orders.countDocuments({ userId: "u42" });                  // 21
+db.orders.countDocuments({ userId: "u42", status: "paid" });  // 12
+```
+
+이 글 내내 "u42의 결제 완료 주문" 12건을 찾는 쿼리를 기준으로 삼는다.
+
+## explain에서 먼저 보는 세 숫자
+
+`explain("executionStats")`를 붙이면 쿼리를 실제로 실행하고, 어떤 계획을 골랐는지와 일을 얼마나 했는지를 돌려준다. 출력이 길어서 처음엔 막막한데, 먼저 볼 곳은 정해져 있다. 아래 조각을 하나씩 눌러 보면 각 필드가 무엇을 말하는지 나온다.
+
+<UrlAnatomy
+  caption='explain("executionStats")에서 먼저 보는 필드'
+  base="executionStats"
+  separator=" { "
+  joiner=", "
+  params={[
+    {
+      key: "nReturned",
+      value: "12",
+      title: "돌려준 문서 수",
+      description: "쿼리 조건을 만족해서 실제로 응답에 실린 문서 개수다. 나머지 두 숫자를 이 값과 비교한다.",
+      required: true,
+    },
+    {
+      key: "totalKeysExamined",
+      value: "21",
+      title: "훑은 인덱스 항목 수",
+      description: "인덱스에서 읽은 키 개수다. 0이면 인덱스를 아예 안 썼다는 뜻이다. nReturned보다 많이 크면 인덱스가 조건 일부만 걸러 주고 있다.",
+      required: true,
+    },
+    {
+      key: "totalDocsExamined",
+      value: "21",
+      title: "읽은 문서 수",
+      description: "디스크나 캐시에서 실제 문서를 꺼내 본 횟수다. 커버드 쿼리면 0이 된다. 이 값이 nReturned의 수십 배면 쓸데없는 문서를 잔뜩 읽고 버리는 중이다.",
+      required: true,
+    },
+    {
+      key: "stage",
+      value: "FETCH ← IXSCAN",
+      display: "stage: FETCH ← IXSCAN",
+      title: "실행 단계",
+      description: "winningPlan을 안쪽부터 읽는다. IXSCAN은 인덱스 훑기, FETCH는 문서 꺼내기, COLLSCAN은 전체 훑기, SORT는 메모리 정렬이다.",
+      code: "COLLSCAN            인덱스 없음\nFETCH <- IXSCAN     인덱스로 찾고 문서를 읽음\nPROJECTION_COVERED  인덱스만으로 끝냄\nSORT                메모리에서 정렬",
+    },
+  ]}
+/>
+
+인덱스를 하나씩 늘려 가며 같은 쿼리를 돌려 보면 세 숫자가 이렇게 바뀐다. 아래는 각 실행에서 필요한 값만 뽑아 한 줄로 찍은 것이다.
+
+```js
+const q = { userId: "u42", status: "paid" };
+db.orders.find(q).explain("executionStats");
+```
+
+```text
+인덱스 없음          COLLSCAN          {"nReturned":12,"totalKeysExamined":0,"totalDocsExamined":100000,"ms":90}
+{ userId: 1 }        FETCH <- IXSCAN   {"nReturned":12,"totalKeysExamined":21,"totalDocsExamined":21,"ms":2}
+{ userId: 1, status: 1 }  FETCH <- IXSCAN   {"nReturned":12,"totalKeysExamined":12,"totalDocsExamined":12,"ms":1}
+```
+
+첫 줄은 12건을 찾으려고 10만 건을 다 읽었다. 둘째 줄은 `userId` 인덱스로 u42의 주문 21건까지는 바로 갔지만, `status`는 문서를 꺼내 봐야 알 수 있어서 21건을 읽고 9건을 버렸다. 셋째 줄은 인덱스가 두 조건을 다 걸러 줘서 세 숫자가 같다. 이 상태가 목표다.
+
+`totalDocsExamined / nReturned` 비율이 대략적인 낭비 지표다. 1에 가까우면 좋고, 10을 넘으면 인덱스를 다시 볼 신호다. 다만 페이지네이션 쿼리처럼 `limit`이 걸려 있으면 플래너가 일찍 멈추기 때문에, 비율보다 절댓값(몇 건을 읽었나)을 같이 본다.
+
+이때 explain의 `indexBounds`에 인덱스의 어느 구간을 읽었는지가 나온다.
+
+```text
+{
+  userId: [ '["u42", "u42"]' ],
+  status: [ '["paid", "paid"]' ]
+}
+```
+
+두 필드 모두 한 점(`["u42", "u42"]`)으로 좁혀졌다. 범위 조건이면 `[50000, inf.0]`처럼 구간이 나오고, `[MinKey, MaxKey]`가 보이면 그 필드로는 전혀 좁히지 못한 것이다.
+
+## 인덱스만 읽고 끝내기: 커버드 쿼리
+
+쿼리가 필요로 하는 필드가 전부 인덱스 안에 있으면, MongoDB는 문서를 꺼내지 않고 인덱스만 읽고 답한다. 이걸 커버드 쿼리(covered query)라고 한다. `{ userId: 1, status: 1, total: 1 }` 인덱스를 만들고 `total`만 가져와 보면 차이가 보인다.
+
+```js
+db.orders.createIndex({ userId: 1, status: 1, total: 1 });
+
+// _id를 빼고 인덱스에 있는 필드만 요청
+db.orders.find({ userId: "u42", status: "paid" }, { _id: 0, total: 1 })
+  .explain("executionStats");
+
+// _id를 그대로 두면
+db.orders.find({ userId: "u42", status: "paid" }, { total: 1 })
+  .explain("executionStats");
+```
+
+```text
+_id 제외   PROJECTION_COVERED <- IXSCAN          {"nReturned":12,"totalKeysExamined":12,"totalDocsExamined":0}
+_id 포함   PROJECTION_SIMPLE <- FETCH <- IXSCAN  {"nReturned":12,"totalKeysExamined":12,"totalDocsExamined":12}
+```
+
+`totalDocsExamined`가 0이고 단계 이름이 `PROJECTION_COVERED`면 커버드다. 흔한 실수는 `_id`를 안 빼는 것이다. 프로젝션에서 `_id`는 기본으로 포함되는데 이 인덱스에는 `_id`가 없어서, 결국 문서를 꺼내러 간다.
+
+커버드 쿼리가 안 되는 경우가 몇 가지 더 있다. 조건이나 프로젝션에 인덱스에 없는 필드가 하나라도 있을 때, 멀티키 인덱스에서 배열 필드 자체를 돌려 달라고 할 때가 대표적이다. 샤드 클러스터에서는 인덱스에 샤드 키가 포함돼 있어야 한다(라우터가 고아 문서를 걸러 내려고 샤드 키를 확인하기 때문이다).
+
+목록 화면처럼 몇 개 필드만 보여 주는 API가 초당 수천 번 호출된다면, 커버드가 되도록 인덱스에 필드 한두 개를 덧붙이는 게 꽤 큰 차이를 낸다. 대신 인덱스가 커지고 쓰기마다 갱신할 항목이 늘어나니, 아무 쿼리에나 필드를 다 붙이지는 않는다.
+
+## 배열에 거는 멀티키 인덱스
+
+배열 필드에 인덱스를 만들면 MongoDB는 원소 하나마다 인덱스 항목을 만든다. 이걸 멀티키 인덱스라고 부르고, 따로 옵션을 주지 않아도 배열이 들어오는 순간 자동으로 멀티키가 된다.
+
+```js
+db.orders.createIndex({ "items.sku": 1 });
+db.orders.find({ "items.sku": "sku-7" }).explain("executionStats");
+```
+
+```text
+multikey FETCH <- IXSCAN {"nReturned":427,"totalKeysExamined":427,"totalDocsExamined":427} isMultiKey true
+```
+
+`isMultiKey: true`가 찍혀 있다. 주문 하나에 상품이 세 개면 항목도 세 개라, 배열이 긴 컬렉션일수록 인덱스가 문서 수보다 훨씬 커진다. 배열 원소가 수백 개씩 되는 필드에 인덱스를 걸면 쓰기 한 번에 인덱스 항목 수백 개를 고쳐야 한다.
+
+제약이 하나 있다. 복합 인덱스 하나에 배열 필드를 두 개 넣을 수 없다. `tags`와 `items`가 둘 다 배열이니 둘을 묶으면 거절된다.
+
+```js
+db.orders.createIndex({ tags: 1, "items.sku": 1 });
+```
+
+```text
+MongoServerError[CannotIndexParallelArrays]: Index build failed: ... cannot index parallel arrays [items] [tags]
+```
+
+두 배열을 묶으면 원소 조합(곱)만큼 항목이 생겨 폭발하기 때문이다. 이 에러는 인덱스를 만들 때뿐 아니라, 인덱스가 이미 있는 상태에서 두 필드가 모두 배열인 문서를 넣으려 할 때도 난다. 그래서 "처음엔 `tags`가 문자열이었는데 어느 날 배열로 바뀐" 데이터가 섞이면 쓰기가 갑자기 실패한다.
+
+배열 안 객체의 두 필드를 같은 원소에서 맞춰 찾으려면 `$elemMatch`를 쓴다. `{ "items.cat": "book", "items.price": { $gte: 20000 } }`는 "book인 원소가 있고, 2만 원 이상인 원소가 있는" 주문이라 서로 다른 원소여도 걸린다. "2만 원 이상인 book 원소"를 원하면 `{ items: { $elemMatch: { cat: "book", price: { $gte: 20000 } } } }`로 써야 한다.
+
+## 인덱스가 있는데 COLLSCAN이 나오는 이유
+
+앞에서 말한 그 장면으로 돌아간다. `userId`에 인덱스가 있는데도 전체를 훑는 쿼리들이다. 같은 컬렉션에서 실제로 확인한 것만 적는다.
+
+```js
+// 1) $or의 한쪽에 인덱스가 없다
+db.orders.find({ $or: [{ userId: "u42" }, { total: { $gt: 400000 } }] })
+
+// 2) 끝이 고정된 정규식 (접두사가 없다)
+db.orders.find({ userId: /42$/ })
+
+// 3) 앞이 고정된 정규식
+db.orders.find({ userId: /^u42/ })
+
+// 4) 인덱스와 다른 collation으로 찾는다
+db.orders.find({ userId: "U42" }).collation({ locale: "en", strength: 2 })
+```
+
+```text
+1) $or        SUBPLAN <- COLLSCAN   {"nReturned":34,"totalKeysExamined":0,"totalDocsExamined":100000}
+2) /42$/      FETCH <- IXSCAN       {"nReturned":1000,"totalKeysExamined":100000,"totalDocsExamined":1000}
+3) /^u42/     FETCH <- IXSCAN       {"nReturned":2183,"totalKeysExamined":2184,"totalDocsExamined":2183}
+4) collation  COLLSCAN              {"nReturned":21,"totalKeysExamined":0,"totalDocsExamined":100000}
+```
+
+`$or`는 절마다 따로 계획을 세운다. 한 절이라도 인덱스가 없으면 그 절 때문에 어차피 전체를 읽어야 하니 통째로 COLLSCAN이 된다. `total`에도 인덱스를 만들면 두 IXSCAN을 합치는 `OR` 계획으로 바뀐다.
+
+정규식은 결과가 흥미롭다. 둘 다 IXSCAN이지만 `/42$/`는 인덱스 키 10만 개를 전부 읽었다. 문자열 끝이 42인지는 처음부터 끝까지 봐야 알 수 있어서, 인덱스를 "작은 컬렉션처럼" 다 훑은 것이다. 실행 계획 이름만 보고 안심하면 안 되는 이유다. `/^u42/`처럼 앞이 고정되면 `["u42", "u43")` 구간만 읽는다(u42, u420~u429, u4200~u4299가 걸려서 2,183건이다). 대소문자를 무시하는 `/^u42/i`는 다시 전체 키를 읽는다.
+
+collation은 문자열을 비교하는 규칙(대소문자 구분, 언어별 정렬)이다. 인덱스는 만들 때의 collation으로 정렬돼 있어서, 쿼리가 다른 collation을 요구하면 그 인덱스를 못 쓴다. 대소문자를 무시하고 찾아야 한다면 같은 collation으로 인덱스를 따로 만든다.
+
+```js
+db.orders.createIndex({ userId: 1 }, { collation: { locale: "en", strength: 2 } });
+```
+
+이 밖에 실무에서 자주 만나는 원인은 이렇다.
+
+- 접두사가 아닌 필드로만 찾는다. `{ userId: 1, status: 1 }`은 `status`만으로 찾는 쿼리에 못 쓴다.
+- 타입이 다르다. 문자열 `"42"`로 저장한 필드를 숫자 `42`로 찾으면 아무것도 안 나오거나, 타입이 섞인 필드에서 결과가 엉뚱해진다.
+- 부분 인덱스의 조건을 쿼리가 포함하지 않는다(뒤에서 본다).
+- 인덱스를 숨겨 두었다(뒤에서 본다).
+- 플래너가 더 낫다고 판단했다. 결과가 컬렉션의 대부분이면 인덱스로 하나씩 꺼내는 것보다 그냥 훑는 게 빠를 수 있다.
+
+## 지우기를 맡기는 TTL 인덱스
+
+세션, 인증 코드, 임시 장바구니처럼 일정 시간이 지나면 필요 없는 문서는 TTL(time to live) 인덱스로 자동 삭제한다. 날짜 필드에 `expireAfterSeconds`를 붙여 인덱스를 만들면 된다.
+
+```js
+// expireAt 시각이 지나면 지운다 (0초 뒤)
+db.sessions.createIndex({ expireAt: 1 }, { expireAfterSeconds: 0 });
+
+// 또는 createdAt 기준 30분 뒤
+db.sessions.createIndex({ createdAt: 1 }, { expireAfterSeconds: 1800 });
+```
+
+흔한 오해는 시각이 되는 순간 지워진다고 생각하는 것이다. 실제로는 TTL 모니터라는 백그라운드 스레드가 기본 60초마다 한 번 돌면서 지난 문서를 지운다. 만료 시각을 지금으로 맞춘 문서 1,000개를 넣고 1초마다 개수를 세어 봤다. 문자열로 날짜를 넣은 문서와 필드가 없는 문서도 하나씩 섞었다.
+
+```js
+db.sessions.insertMany([
+  ...Array.from({ length: 1000 }, (_, i) => ({ sid: "s" + i, expireAt: new Date() })),
+  { sid: "str", expireAt: new Date().toISOString() },  // 문자열
+  { sid: "none" },                                      // 필드 없음
+]);
+```
+
+```text
+0s 1002
+10s 1002
+20s 1002
+30s 1002
+done 32s 2
+```
+
+32초 동안은 만료된 문서 1,000개가 그대로 조회됐다. 이번엔 32초였지만 모니터 주기에 따라 최대 60초 남짓, 삭제할 양이 많거나 서버가 바쁘면 그보다 더 늦어질 수 있다. 끝까지 남은 2개는 문자열과 필드 없음이다. TTL은 BSON 날짜 타입(또는 날짜 배열)만 본다.
+
+```text
+[ { sid: 'str', expireAt: '2026-10-23T18:44:14.201Z' }, { sid: 'none' } ]
+```
+
+TTL 모니터가 지운 개수는 `db.serverStatus().metrics.ttl`에서 본다. 이 실험 전후로 `deletedDocuments`가 11에서 1011로, `passes`가 3에서 4로 늘었다. 패스 한 번에 1,000개를 지운 것이다.
+
+아래에서 삭제 시각을 직접 계산해 보면 "최대 한 주기만큼 늦는다"가 손에 잡힌다. 모니터가 `firstPass`초에 처음 돌고 이후 `interval`초마다 돈다고 할 때, 각 문서가 지워지는 시각을 돌려준다. 날짜가 아닌 값(여기서는 숫자가 아닌 값)은 지워지지 않으니 `null`이다.
+
+<CodePlayground
+  caption="TTL 모니터는 언제 지우나"
+  functionName="ttlDeleteTimes"
+  initialCode={`function ttlDeleteTimes(docs, firstPass, interval) {
+  // docs: [{ expireAt: 초(숫자) }], 숫자가 아니거나 없으면 지워지지 않는다
+  // 모니터는 firstPass, firstPass + interval, ... 에 돈다
+  // 각 문서가 지워지는 시각 배열을 돌려준다 (안 지워지면 null)
+  return [];
+}`}
+  solution={`function ttlDeleteTimes(docs, firstPass, interval) {
+  return docs.map((d) => {
+    if (typeof d.expireAt !== "number") return null;       // 날짜 타입이 아니면 TTL 대상이 아니다
+    if (d.expireAt <= firstPass) return firstPass;          // 첫 패스에 이미 지났다
+    // 만료 뒤 처음 돌아오는 패스
+    return firstPass + Math.ceil((d.expireAt - firstPass) / interval) * interval;
+  });
+}`}
+  tests={[
+    {
+      label: "실험과 같은 상황: 28초에 첫 패스",
+      args: [[{ expireAt: 0 }, { expireAt: 5 }, { expireAt: 61 }, { expireAt: "2026-10-23" }, {}], 28, 60],
+      expected: [28, 28, 88, null, null],
+    },
+    { label: "패스 직후 만료되면 한 주기를 기다린다", args: [[{ expireAt: 10 }, { expireAt: 11 }], 10, 60], expected: [10, 70] },
+    { label: "같은 패스에 몰린다", args: [[{ expireAt: 100 }, { expireAt: 120 }], 0, 60], expected: [120, 120] },
+    { label: "빈 컬렉션", args: [[], 0, 60], expected: [] },
+  ]}
+/>
+
+그래서 TTL을 쓸 때는 두 가지를 같이 한다. 만료가 정확해야 하는 곳(세션 유효성, 쿠폰 사용 기한)은 앱 쿼리에 `expireAt: { $gt: new Date() }` 조건을 꼭 붙인다. TTL은 청소부고, 유효성 검사는 앱이 한다. 그리고 대량으로 한꺼번에 만료되는 데이터(자정에 일괄 만료)는 삭제가 한 패스에 몰려 쓰기 부하와 복제 지연을 만든다. 만료 시각에 몇 분씩 무작위 값을 더해 흩어 둔다.
+
+몇 가지 더 알아 둘 것이 있다. TTL 삭제는 프라이머리에서만 일어나고, 세컨더리는 그 삭제를 oplog로 받아 적용한다. TTL 인덱스는 필드 하나짜리여야 한다. `expireAfterSeconds`는 인덱스를 다시 만들지 않고 `collMod`로 바꿀 수 있다.
+
+```js
+db.runCommand({ collMod: "sessions", index: { keyPattern: { createdAt: 1 }, expireAfterSeconds: 3600 } });
+```
+
+## 검색창에 거는 텍스트 인덱스
+
+상품 이름과 설명으로 검색하는 기능은 `text` 인덱스로 시작할 수 있다. 단어를 쪼개고 어간(stem)을 뽑아 역색인을 만든다.
+
+```js
+db.products.insertMany([
+  { name: "Running Shoes", desc: "lightweight shoes for running and jogging" },
+  { name: "Trail Runner", desc: "a shoe that runs well on mountain trails" },
+  { name: "Rain Jacket", desc: "waterproof jacket for runners" },
+  { name: "운동화", desc: "가벼운 러닝용 운동화" },
+]);
+db.products.createIndex({ name: "text", desc: "text" }, { weights: { name: 3 } });
+
+db.products.find(
+  { $text: { $search: "running" } },
+  { _id: 0, name: 1, score: { $meta: "textScore" } }
+).sort({ score: { $meta: "textScore" } });
+```
+
+```text
+[
+  { name: 'Running Shoes', score: 2.875 },
+  { name: 'Trail Runner', score: 0.6 }
+]
+```
+
+"running"이 영어 어간 "run"으로 바뀌어서 설명에 "runs"가 있는 Trail Runner도 걸렸다. `name`에 가중치 3을 줬기 때문에 이름에 단어가 있는 Running Shoes의 점수가 높다. "runners"는 어간이 "runner"라서 Rain Jacket은 안 걸렸다.
+
+한국어는 사정이 다르다. "러닝"과 "운동"으로 찾으면 둘 다 결과가 비어 있다.
+
+```text
+$search: "러닝"  → []
+$search: "운동"  → []
+```
+
+`$text`가 지원하는 언어 목록에 한국어가 없어서, 공백 기준으로 자른 "러닝용", "운동화"를 통째로 한 단어로 본다. 조사나 접미사를 떼어 내지 못하니 부분 일치가 안 된다.
+
+텍스트 인덱스는 컬렉션당 하나만 만들 수 있다. 하나를 더 만들려고 하면 거절된다.
+
+```text
+MongoServerError[IndexOptionsConflict]: An equivalent index already exists with a different name and options. ...
+```
+
+그래서 텍스트 인덱스는 "영어 위주의 간단한 키워드 검색"까지가 적당하다. 오타 허용(fuzzy), 자동 완성, 한국어 형태소 분석, 세밀한 점수 조정이 필요하면 Atlas Search를 쓴다. Atlas Search는 mongod 옆에서 도는 Lucene 기반 검색 프로세스(mongot)가 따로 색인을 유지하고, 집계 파이프라인의 `$search` 단계로 질의한다. 한국어 분석기도 고를 수 있다. Atlas가 아닌 자체 운영 환경에서는 8.2부터 Community Edition에서 미리보기로 쓸 수 있게 됐지만, 버전과 지원 범위를 확인하고 쓴다. 검색이 서비스의 중심이라면 Elasticsearch나 OpenSearch로 데이터를 따로 보내는 구성도 여전히 흔하다. 역색인 자체는 [Elasticsearch 역색인](/posts/elasticsearch-inverted-index)에서 자세히 다뤘다.
+
+## 가까운 매장을 찾는 2dsphere
+
+"내 위치에서 2km 안의 매장"은 지구 표면 위의 거리 계산이다. GeoJSON 형식으로 좌표를 넣고 `2dsphere` 인덱스를 건다. 좌표 순서는 `[경도, 위도]`다. 지도 API들이 흔히 쓰는 `(위도, 경도)` 순서로 넣는 실수가 가장 잦은데, 넣을 때 에러가 나지 않을 수도 있어서(위도 범위 안의 값이면 통과한다) 엉뚱한 곳에 매장이 찍힌다.
+
+```js
+db.stores.insertMany([
+  { name: "강남점", loc: { type: "Point", coordinates: [127.0276, 37.4979] } },
+  { name: "역삼점", loc: { type: "Point", coordinates: [127.0365, 37.5006] } },
+  { name: "홍대점", loc: { type: "Point", coordinates: [126.9244, 37.5563] } },
+  { name: "판교점", loc: { type: "Point", coordinates: [127.1112, 37.3947] } },
+]);
+```
+
+인덱스 없이 `$near`를 쓰면 실행 자체가 안 된다.
+
+```text
+MongoServerError[NoQueryExecutionPlans]: error processing query: ... planner returned error :: caused by :: unable to find index for $geoNear query
+```
+
+인덱스를 만들고 `$geoNear`로 거리까지 받아 본다. `$geoNear`는 파이프라인의 첫 단계여야 한다.
+
+```js
+db.stores.createIndex({ loc: "2dsphere" });
+db.stores.aggregate([
+  { $geoNear: {
+      near: { type: "Point", coordinates: [127.0286, 37.4994] },  // 강남역 근처
+      distanceField: "m",
+      maxDistance: 20000,   // 미터
+  } },
+  { $project: { _id: 0, name: 1, m: { $round: ["$m", 0] } } },
+]);
+```
+
+```text
+[
+  { name: '강남점', m: 189 },
+  { name: '역삼점', m: 710 },
+  { name: '홍대점', m: 11169 },
+  { name: '판교점', m: 13752 }
+]
+```
+
+가까운 순으로 정렬되고 거리는 미터 단위다. 반경 안의 것만 정렬 없이 필요하면 `$geoWithin`과 `$centerSphere`를 쓰는데, 이쪽은 인덱스가 없어도 실행은 된다(느릴 뿐이다). 평면 좌표(게임 맵, 사무실 도면)라면 `2d` 인덱스가 따로 있다. 위치 기반 서비스를 설계할 때 지오해시나 쿼드트리로 공간을 나누는 원리는 [지오해시](/posts/geohash) 글에 있다.
+
+## 자주 찾는 것만 담는 부분 인덱스
+
+주문의 60%가 `paid`이고, 관리 화면은 "최근 결제 완료 주문"만 본다. 전체 주문에 `createdAt` 인덱스를 거는 대신 `paid`인 문서만 담는 부분 인덱스(partial index)를 만들 수 있다.
+
+```js
+db.orders.createIndex(
+  { createdAt: -1 },
+  { partialFilterExpression: { status: "paid" }, name: "paid_createdAt" }
+);
+```
+
+쿼리가 그 조건을 포함할 때만 쓰인다.
+
+```js
+db.orders.find({ status: "paid", createdAt: { $gte: ISODate("2026-09-20") } })     // 조건 포함
+db.orders.find({ createdAt: { $gte: ISODate("2026-09-20") } })                     // status 없음
+db.orders.find({ status: "shipped", createdAt: { $gte: ISODate("2026-09-20") } })  // 다른 값
+```
+
+```text
+partial hit    FETCH <- IXSCAN  {"nReturned":1792,"keys":1792,"docs":1792}
+partial miss   COLLSCAN         {"nReturned":2946,"keys":0,"docs":100000}
+partial other  COLLSCAN         {"nReturned":566,"keys":0,"docs":100000}
+```
+
+`status`를 빼먹은 두 번째 쿼리는 결과가 인덱스 범위를 벗어날 수 있으니(shipped 주문도 답에 들어가야 하니) 인덱스를 못 쓴다. 코드 한 곳에서 조건을 빠뜨리면 그 API만 조용히 느려진다.
+
+대신 크기가 작다. 같은 컬렉션에서 인덱스 크기를 보면 이렇다.
+
+```js
+db.orders.stats().indexSizes
+```
+
+```text
+{
+  _id_: 2793472,
+  userId_1: 983040,
+  userId_1_status_1: 1159168,
+  userId_1_status_1_total_1: 1523712,
+  'items.sku_1': 1724416,
+  paid_createdAt: 692224
+}
+```
+
+부분 인덱스(`paid_createdAt`, 약 0.7MB)가 가장 작다. 전체 문서의 일부만 담고, `paid`가 아닌 문서를 쓸 때는 갱신할 필요도 없다. "삭제되지 않은 것만 유일해야 하는" 제약에도 쓴다. `{ email: 1 }`에 `unique: true`와 `partialFilterExpression: { deletedAt: null }`을 같이 주면, 탈퇴한 회원의 이메일과 새 회원의 이메일이 겹쳐도 된다. 비슷한 옛 기능인 `sparse`는 필드가 있는 문서만 담는데, 부분 인덱스가 그 상위 호환이라 새로 만들 때는 부분 인덱스를 쓴다.
+
+## 와일드카드 인덱스와 숨김 인덱스
+
+상품마다 속성이 다른 경우가 있다. 옷은 `color`와 `size`, 가전은 `voltage`, 식품은 `weight`. 속성 이름을 미리 알 수 없으면 필드마다 인덱스를 만들 수가 없다. 와일드카드 인덱스는 하위 필드 전부를 한 인덱스에 담는다.
+
+```js
+db.items.insertMany([
+  { sku: "a", attrs: { color: "red", size: "M" } },
+  { sku: "b", attrs: { color: "blue", voltage: 220 } },
+  { sku: "c", attrs: { weight: 3 } },
+]);
+db.items.createIndex({ "attrs.$**": 1 });
+db.items.find({ "attrs.voltage": 220 }).explain("executionStats");
+```
+
+```text
+wildcard FETCH <- IXSCAN(attrs.$**_1) {"nReturned":1,"keys":1,"docs":1}
+keyPattern: { '$_path': 1, 'attrs.voltage': 1 }
+```
+
+내부적으로는 "필드 경로 + 값"을 키로 저장한다(`$_path`). 편하지만 만능은 아니다. 한 번에 한 필드 조건만 인덱스로 처리하고, 정렬이나 복합 조건은 일반 복합 인덱스만큼 잘 받쳐 주지 못한다. 쿼리 모양이 정해져 있으면 그 모양에 맞는 일반 인덱스가 낫다. 와일드카드는 정말 필드를 모를 때, 또는 속성을 `[{ k: "color", v: "red" }]` 같은 배열로 바꾸는(attribute 패턴) 리팩터링 전 임시방편으로 쓴다.
+
+숨김 인덱스(hidden index)는 인덱스를 지우기 전에 쓰는 안전장치다. 쓰기 때는 계속 갱신되지만 플래너가 고르지 않는다. "이 인덱스 안 쓰는 것 같은데 지워도 되나"를 시험해 볼 수 있다.
+
+```js
+db.orders.hideIndex("userId_1_status_1");
+db.orders.hideIndex("userId_1_status_1_total_1");
+db.orders.find({ userId: "u42", status: "paid" }).explain("executionStats");
+```
+
+```text
+hidden FETCH <- IXSCAN(userId_1) {"nReturned":12,"keys":21,"docs":21}
+```
+
+두 복합 인덱스를 숨기자 `userId_1`로 돌아가 문서를 21건 읽었다. 숨긴 뒤 하루 이틀 지표를 보고 문제가 없으면 지우고, 문제가 생기면 `unhideIndex`로 바로 되돌린다. 인덱스를 지우고 다시 만들려면 큰 컬렉션에서 몇십 분이 걸리지만, 숨김 해제는 즉시다.
+
+어떤 인덱스가 실제로 쓰이는지는 `$indexStats`로 본다. 서버가 켜진 뒤로 각 인덱스가 몇 번 쓰였는지 나온다. 재시작하면 0부터 다시 세고, 멤버마다 따로 세니 프라이머리와 세컨더리를 다 본다.
+
+```js
+db.orders.aggregate([{ $indexStats: {} }, { $project: { name: 1, "accesses.ops": 1, "accesses.since": 1 } }]);
+```
+
+## 플래너는 후보를 경주시키고 결과를 기억한다
+
+쓸 수 있는 인덱스가 여러 개면 MongoDB는 어떤 걸 고를까. 통계를 바탕으로 비용을 추정하는 관계형 DB와 달리, MongoDB는 후보 계획들을 실제로 조금씩 실행해 본다. `explain("allPlansExecution")`을 보면 그 경주 기록이 나온다.
+
+```js
+db.orders.find({ userId: "u42", status: "paid" }).explain("allPlansExecution");
+```
+
+```text
+[
+  { plan: 'FETCH <- IXSCAN(userId_1_status_1)', nReturned: 12, works: 13, keys: 12 },
+  { plan: 'FETCH <- IXSCAN(userId_1)', nReturned: 8, works: 13, keys: 13 },
+  { plan: 'FETCH <- IXSCAN(userId_1_status_1_total_1)', nReturned: 12, works: 13, keys: 12 }
+]
+```
+
+`works`는 실행기가 한 걸음씩 일한 횟수다. 같은 13걸음 동안 `userId_1`은 8건을 찾았고 복합 인덱스 둘은 12건을 다 찾고 끝났다. 결과를 더 많이 더 빨리 내는 쪽이 이긴다. 아래 그림에서 "다음"을 누르면 이 경주와 캐시가 어떻게 이어지는지 차례로 나온다.
+
+<SequenceDiagram
+  caption="후보 경주, 계획 캐시, 다시 계획 세우기"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "planner", label: "플래너" },
+    { id: "cache", label: "계획 캐시" },
+    { id: "exec", label: "실행기" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "planner",
+      label: "find",
+      title: "처음 보는 모양의 쿼리",
+      detail: "값은 달라도 조건 필드, 정렬, 프로젝션이 같으면 같은 모양이다. u42든 u43이든 같은 모양으로 본다.",
+      payload: "{ userId: <값>, status: <값> }",
+    },
+    {
+      from: "planner",
+      to: "cache",
+      label: "있나?",
+      title: "캐시부터 본다",
+      detail: "이 모양으로 저장된 계획이 없다. 쓸 수 있는 인덱스로 후보 계획을 만든다.",
+    },
+    {
+      from: "planner",
+      to: "exec",
+      label: "후보 3개 경주",
+      title: "후보를 조금씩 실행한다",
+      detail: "후보마다 번갈아 일을 시킨다. 결과 101건을 채우거나 한 후보가 끝나면 경주를 멈추고 점수를 매긴다.",
+    },
+    {
+      from: "exec",
+      to: "cache",
+      label: "승자 저장",
+      title: "이긴 계획을 기록한다",
+      detail: "처음엔 비활성 항목으로 들어가고 그때의 works를 함께 적는다. 같은 모양이 다시 와서 비슷한 비용으로 끝나면 활성이 된다.",
+    },
+    {
+      from: "app",
+      to: "cache",
+      label: "같은 모양",
+      title: "다음부터는 경주를 건너뛴다",
+      detail: "활성 항목이 있으면 바로 그 계획으로 실행한다. 경주 비용이 사라진다.",
+    },
+    {
+      from: "exec",
+      to: "planner",
+      label: "너무 오래 걸림",
+      title: "캐시된 계획이 기대보다 열 배 넘게 일하면",
+      detail: "데이터 분포가 달라졌다는 뜻이다. 캐시 항목을 버리고 다시 경주시킨다.",
+    },
+  ]}
+/>
+
+캐시 상태는 `getPlanCache().list()`로 본다. 같은 모양의 쿼리를 한 번, 두 번 돌린 뒤와 몇 번 더 돌린 뒤를 비교했다.
+
+```js
+db.orders.getPlanCache().list();
+```
+
+```text
+// 두 번 실행한 뒤
+{ planCacheShapeHash: '749576AF', planCacheKey: '16F12D9C', isActive: false, works: Long('26'), cachedPlan: 'FETCH',
+  shape: { query: { userId: 'u43', status: 'paid' }, sort: {}, projection: {} } }
+
+// 몇 번 더 실행한 뒤
+{ isActive: true, works: Long('13') }
+```
+
+`planCacheShapeHash`(예전 이름은 `queryHash`이고, 8.0의 explain에는 둘 다 나온다)는 쿼리 모양의 해시라서, 느린 쿼리 로그에서 같은 값을 찾으면 "이 모양의 쿼리가 어떤 계획을 쓰는지"를 추적할 수 있다.
+
+이 방식에는 알려진 약점이 있다. 경주는 처음 들어온 값으로 한다. "주문이 3건인 회원"으로 경주해서 이긴 계획이 "주문이 30만 건인 대형 판매자"에게도 쓰인다. 반대로 대형 판매자가 먼저 와서 이상한 계획이 캐시되기도 한다. 그러면 같은 API가 어떤 사용자에게만 느리다. 열 배 규칙으로 다시 계획을 세우긴 하지만, 그 사이에 느린 요청이 나간다.
+
+계획 캐시는 메모리에만 있고 멤버마다 따로다. 인덱스를 만들거나 지우면 그 컬렉션의 캐시가 비고, 재시작해도 빈다. 그래서 "재시작하니 빨라졌다"는 말은 캐시된 나쁜 계획이 날아갔다는 뜻일 때가 많다. 급하면 캐시를 비운다.
+
+```js
+db.orders.getPlanCache().clear();  // 이 컬렉션의 계획 캐시를 비운다
+```
+
+## 내가 고르는 hint, 그리고 쓰지 말아야 할 때
+
+플래너가 계속 엉뚱한 인덱스를 고르면 `hint`로 강제할 수 있다.
+
+```js
+db.orders.find({ userId: "u42", status: "paid" }).hint({ userId: 1 })        // 특정 인덱스
+db.orders.find({ userId: "u42", status: "paid" }).hint({ $natural: 1 })      // 전체 훑기 강제
+db.orders.find({ userId: "u42" }).hint({ nope: 1 })                          // 없는 인덱스
+```
+
+```text
+hint     FETCH <- IXSCAN(userId_1) {"nReturned":12,"keys":21,"docs":21}
+natural  COLLSCAN {"nReturned":12,"keys":0,"docs":100000}
+ERR BadValue ... planner returned error :: caused by :: hint provided does not correspond to an existing index
+```
+
+마지막 줄이 `hint`의 위험이다. 코드에 hint를 박아 두면, 누군가 인덱스를 지우거나 이름을 바꾸는 순간 그 쿼리가 에러로 바뀐다. 데이터 분포가 바뀌어 다른 인덱스가 나아져도 따라가지 못한다. 그래서 hint는 원인을 확인하는 도구로 먼저 쓰고, 고칠 때는 더 나은 인덱스를 만들거나 쓸모없는 인덱스를 지워서 플래너가 맞게 고르게 하는 쪽을 택한다. 앱 코드를 바꿀 수 없을 때는 8.0부터 생긴 쿼리 설정(`setQuerySettings`)으로 특정 쿼리 모양에 인덱스를 지정하는 방법도 있다.
+
+## 운영 중에 인덱스를 만들면
+
+느린 쿼리를 찾았고 인덱스를 만들어야 한다. 운영 중인 큰 컬렉션에서 `createIndex`를 치면 무슨 일이 생길까.
+
+4.2부터 인덱스 빌드는 하이브리드 방식이다. 시작과 끝에 아주 짧게 배타 잠금을 잡고, 그 사이 컬렉션을 훑는 긴 시간 동안에는 읽기와 쓰기를 막지 않는다. 빌드 중에 들어온 쓰기는 따로 모아 두었다가 마지막에 반영한다. 실험에서 부분 인덱스를 만들 때 서버 로그에 찍힌 단계가 이렇다.
+
+```text
+Index build: registering
+Index build: starting {"namespace":"shop.orders","properties":{...,"name":"paid_createdAt",...},"method":"Hybrid"}
+Index build: inserted keys from external sorter into index
+Index build: commit quorum satisfied
+Index build: done building
+Index build: completed successfully
+```
+
+`commit quorum satisfied`가 복제본 셋의 특징이다. 4.4부터는 프라이머리가 먼저 다 만들고 세컨더리가 따라 만드는 게 아니라, 데이터를 가진 투표 멤버들이 동시에 만들고, 기본으로 그 멤버 전부(`commitQuorum: "votingMembers"`)가 준비됐다고 해야 커밋한다.
+
+그래도 조심할 곳이 있다.
+
+- 빌드는 컬렉션 전체를 읽고 정렬해서 디스크와 CPU, 캐시를 많이 쓴다. 정렬 메모리는 `maxIndexBuildMemoryUsageMegabytes`(기본 200MB)를 넘으면 디스크로 내려간다. 트래픽이 적은 시간에 만든다.
+- 마지막 배타 잠금은 그 컬렉션에서 돌고 있는 긴 연산이 끝나야 잡을 수 있다. 그동안 뒤에 온 연산들이 줄을 선다. 몇 분짜리 집계가 돌고 있으면 빌드 끝에서 짧은 멈춤이 생길 수 있다.
+- 세컨더리 하나의 디스크가 느리면 커밋이 그 멤버를 기다린다. 진행 상황은 `db.currentOp({ "command.createIndexes": { $exists: true } })`로 본다.
+- 빌드 중에 멤버가 재시작되면 다시 시작하지만, 빌드 중에 유일 제약을 깨는 문서가 들어오면 끝에서 실패한다.
+
+예전에는 세컨더리를 하나씩 빼서 단독 모드로 인덱스를 만들고 다시 넣는 롤링 빌드를 많이 했다. 지금도 아주 큰 컬렉션에서 영향을 최소화하고 싶을 때 쓰지만, 손이 많이 가서 대부분은 하이브리드 빌드로 충분하다.
+
+## 인덱스를 고르는 순서
+
+새 쿼리가 생기면 먼저 그 쿼리의 모양을 적는다. 같음 조건, 정렬, 범위가 무엇인지 보고 ESR 순서로 복합 인덱스를 설계하고, 자주 호출되면 커버드를 노린다. 데이터 일부만 찾는다면 부분 인덱스, 만료가 있으면 TTL, 위치는 2dsphere, 영어 키워드 검색은 텍스트 인덱스, 필드를 미리 모르면 와일드카드를 본다. 만든 뒤에는 explain의 세 숫자로 확인하고, 안 쓰는 인덱스는 숨겨 본 뒤 지운다. 인덱스는 읽기를 빠르게 하는 대신 쓰기와 메모리를 쓰니, 개수는 적을수록 좋다. 같은 컬렉션으로 여러 단계를 이어 계산하는 방법은 [MongoDB 집계 파이프라인](/posts/mongodb-aggregation-pipeline)에서, 데이터가 여러 대로 퍼질 때의 이야기는 [복제본 셋과 샤드 클러스터](/posts/mongodb-replica-set-sharding)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### explain에서 무엇을 보고 인덱스가 잘 쓰이는지 판단하나요?
+
+`executionStats`의 nReturned, totalKeysExamined, totalDocsExamined 세 숫자를 비교한다. 셋이 비슷하면 인덱스가 조건을 잘 걸러 주는 것이고, docsExamined가 nReturned의 수십 배면 쓸데없는 문서를 읽고 버리는 중이다. 단계로는 COLLSCAN이 전체 훑기, SORT가 메모리 정렬이라 이 둘이 보이면 먼저 의심한다. IXSCAN이어도 keysExamined가 전체 문서 수와 같으면 인덱스를 다 훑은 것이니 이름만 보고 안심하지 않는다.
+
+### 커버드 쿼리는 무엇이고 어떤 조건에서 되나요?
+
+조건과 프로젝션에 쓰인 필드가 모두 한 인덱스 안에 있어서, 문서를 읽지 않고 인덱스만으로 답하는 쿼리다. explain에서 totalDocsExamined가 0이고 PROJECTION_COVERED 단계가 보인다. 프로젝션에서 `_id`를 빼지 않거나, 배열 필드가 끼거나, 샤드 클러스터에서 인덱스에 샤드 키가 없으면 커버드가 안 된다.
+
+### 멀티키 인덱스의 제약은 무엇인가요?
+
+배열 원소마다 항목이 생겨서 배열이 길면 인덱스가 커지고 쓰기 비용이 늘어난다. 복합 인덱스 하나에 배열 필드를 두 개 넣을 수 없어서 CannotIndexParallelArrays 에러가 난다. 이 에러는 인덱스를 만들 때뿐 아니라 두 필드가 모두 배열인 문서를 넣을 때도 나서, 필드 타입이 나중에 배열로 바뀌면 쓰기가 갑자기 실패한다.
+
+### TTL 인덱스로 지웠는데 왜 만료된 문서가 아직 조회되나요?
+
+TTL 모니터가 기본 60초마다 한 번 돌면서 지우기 때문에, 만료 시각과 실제 삭제 사이에 최대 한 주기 이상 차이가 난다. 삭제할 양이 많거나 서버가 바쁘면 더 늦어진다. 날짜 타입이 아닌 값(문자열로 넣은 날짜)이나 필드가 없는 문서는 아예 지워지지 않는다. 그래서 정확한 만료가 필요하면 앱 쿼리에 만료 시각 조건을 함께 건다.
+
+### 인덱스가 있는데 COLLSCAN이 나오는 이유는 무엇인가요?
+
+`$or`의 한 절에 인덱스가 없거나, 복합 인덱스의 접두사가 아닌 필드로만 찾거나, 쿼리와 인덱스의 collation이 다르거나, 부분 인덱스의 조건을 쿼리가 포함하지 않거나, 인덱스를 숨겨 둔 경우가 대표적이다. 결과가 컬렉션의 대부분이라 플래너가 전체 훑기를 더 싸다고 판단할 때도 있다. 끝이 고정된 정규식은 IXSCAN으로 나와도 인덱스 전체를 읽는다.
+
+### 쿼리 플래너는 인덱스를 어떻게 고르고, 그 방식의 약점은 무엇인가요?
+
+후보 계획들을 실제로 조금씩 실행해서 결과를 가장 효율적으로 낸 계획을 고르고, 쿼리 모양별로 계획 캐시에 저장한다. 다음부터는 경주 없이 캐시된 계획을 쓰고, 실행 비용이 기록보다 열 배 넘게 커지면 다시 계획을 세운다. 약점은 처음 들어온 값으로 고른 계획이 분포가 다른 값에도 쓰인다는 것이라, 특정 사용자에게만 느린 현상이 생긴다. 캐시는 인덱스 변경과 재시작 때 비워진다.
+
+### hint를 코드에 넣는 건 왜 조심해야 하나요?
+
+인덱스 이름이나 구조가 바뀌면 그 쿼리가 에러로 바뀌고, 데이터 분포가 달라져 더 나은 인덱스가 생겨도 따라가지 못한다. 원인을 확인하는 도구로 쓰고, 고칠 때는 맞는 인덱스를 만들거나 경쟁하는 쓸모없는 인덱스를 지운다. 인덱스를 지우기 전에는 숨김 인덱스로 먼저 시험한다.
+
+### 운영 중에 큰 컬렉션에 인덱스를 만들어도 되나요?
+
+4.2부터는 시작과 끝에만 짧게 배타 잠금을 잡는 하이브리드 빌드라 긴 시간 동안 읽기·쓰기를 막지는 않는다. 대신 컬렉션 전체를 읽고 정렬해서 디스크와 CPU를 많이 쓰고, 마지막 잠금은 돌고 있는 긴 연산을 기다린다. 4.4부터는 데이터를 가진 투표 멤버가 동시에 만들고 commit quorum을 채워야 끝나서, 느린 세컨더리가 있으면 그만큼 늦어진다. 트래픽이 적은 시간에 만들고 currentOp으로 진행을 본다.

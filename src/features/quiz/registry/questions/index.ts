@@ -1,3 +1,18 @@
+import { TS_CLASSES_ACCESS_MODIFIERS } from "./ts-classes-access-modifiers";
+import { SHELL_ENVIRONMENT_STARTUP } from "./shell-environment-startup";
+import { SECURITY_PRINCIPLES_CIA_DEFENSE_IN_DEPTH } from "./security-principles-cia-defense-in-depth";
+import { ROUTING_PROTOCOLS_OSPF_RIP_EIGRP } from "./routing-protocols-ospf-rip-eigrp";
+import { ROUTE53_ROUTING_POLICIES } from "./route53-routing-policies";
+import { REACT_CLIENT_ROUTING } from "./react-client-routing";
+import { POSTGRES_SLOW_DB_TRIAGE } from "./postgres-slow-db-triage";
+import { NEXTJS_SELF_HOSTING_DEPLOYMENT } from "./nextjs-self-hosting-deployment";
+import { NETWORK_DESIGN_THREE_TIER_SPINE_LEAF } from "./network-design-three-tier-spine-leaf";
+import { MONGODB_REPLICA_SET_SHARDING } from "./mongodb-replica-set-sharding";
+import { MONGODB_INDEXES_EXPLAIN } from "./mongodb-indexes-explain";
+import { MONGODB_AGGREGATION_PIPELINE } from "./mongodb-aggregation-pipeline";
+import { GATEWAY_LINK_REDUNDANCY_FHRP_LACP } from "./gateway-link-redundancy-fhrp-lacp";
+import { BGP_BASICS } from "./bgp-basics";
+import { BASH_CONTROL_FLOW_FUNCTIONS } from "./bash-control-flow-functions";
 import { TS_ENUM_VS_UNION } from "./ts-enum-vs-union";
 import { TS_DECLARATION_FILES_MODULES } from "./ts-declaration-files-modules";
 import { RUNTIME_VALIDATION_ZOD } from "./runtime-validation-zod";
@@ -769,6 +784,21 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  TS_CLASSES_ACCESS_MODIFIERS,
+  SHELL_ENVIRONMENT_STARTUP,
+  SECURITY_PRINCIPLES_CIA_DEFENSE_IN_DEPTH,
+  ROUTING_PROTOCOLS_OSPF_RIP_EIGRP,
+  ROUTE53_ROUTING_POLICIES,
+  REACT_CLIENT_ROUTING,
+  POSTGRES_SLOW_DB_TRIAGE,
+  NEXTJS_SELF_HOSTING_DEPLOYMENT,
+  NETWORK_DESIGN_THREE_TIER_SPINE_LEAF,
+  MONGODB_REPLICA_SET_SHARDING,
+  MONGODB_INDEXES_EXPLAIN,
+  MONGODB_AGGREGATION_PIPELINE,
+  GATEWAY_LINK_REDUNDANCY_FHRP_LACP,
+  BGP_BASICS,
+  BASH_CONTROL_FLOW_FUNCTIONS,
   TS_ENUM_VS_UNION,
   TS_DECLARATION_FILES_MODULES,
   RUNTIME_VALIDATION_ZOD,

@@ -2,6 +2,317 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "bash-control-flow-functions": {
+    "links": [
+      "bash-scripting",
+      "shell-environment-startup",
+      "regex-and-globbing",
+      "linux-files-permissions",
+      "linux-grep-awk-sed",
+      "secrets-management"
+    ],
+    "mentions": [
+      "js-scope-lexical"
+    ]
+  },
+  "bgp-basics": {
+    "links": [
+      "route53-routing-policies",
+      "layer-ip-routing-icmp",
+      "cdn-edge-anycast",
+      "vpn-ipsec-wireguard",
+      "k8s-service-types",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "browser-fetch",
+      "network-design-three-tier-spine-leaf",
+      "routing-protocols-ospf-rip-eigrp",
+      "ddos-protection",
+      "vlan-basics",
+      "ipv6-basics",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "gateway-link-redundancy-fhrp-lacp": {
+    "links": [
+      "routing-protocols-ospf-rip-eigrp",
+      "load-balancer-basics",
+      "high-availability",
+      "leader-election",
+      "network-design-three-tier-spine-leaf",
+      "router-vs-switch"
+    ],
+    "mentions": [
+      "layer-link-ethernet-arp",
+      "vpc-subnets-route-tables",
+      "browser-fetch",
+      "docker-network-drivers",
+      "packet-capture-tcpdump",
+      "layer-ip-routing-icmp",
+      "sd-start-single-server",
+      "cdn-edge-anycast",
+      "dhcp",
+      "vlan-basics",
+      "ipv6-basics"
+    ]
+  },
+  "mongodb-aggregation-pipeline": {
+    "links": [
+      "mongodb-document-model",
+      "mongodb-indexes-explain",
+      "mongodb-replica-set-sharding"
+    ],
+    "mentions": [
+      "db-index-design",
+      "db-type-relational"
+    ]
+  },
+  "mongodb-indexes-explain": {
+    "links": [
+      "mongodb-document-model",
+      "elasticsearch-inverted-index",
+      "geohash",
+      "mongodb-aggregation-pipeline",
+      "mongodb-replica-set-sharding"
+    ],
+    "mentions": [
+      "opensearch-cluster-operations",
+      "sd-proximity-service",
+      "postgres-query-planner",
+      "db-index-design",
+      "db-type-relational",
+      "db-replication-sharding",
+      "quadtree",
+      "dns"
+    ]
+  },
+  "mongodb-replica-set-sharding": {
+    "links": [
+      "mongodb-document-model",
+      "db-replication-sharding",
+      "idempotency-key",
+      "disaster-recovery",
+      "mongodb-indexes-explain",
+      "mongodb-aggregation-pipeline"
+    ],
+    "mentions": [
+      "sd-sharding-intro",
+      "scaling-horizontal-vertical",
+      "vpc-basics",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "network-design-three-tier-spine-leaf": {
+    "links": [
+      "router-vs-switch",
+      "routing-protocols-ospf-rip-eigrp",
+      "gateway-link-redundancy-fhrp-lacp",
+      "sdn-vxlan-overlay",
+      "high-availability",
+      "vpc-peering-transit-privatelink",
+      "vpc-basics",
+      "vpc-subnets-route-tables"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "bgp-basics",
+      "leader-election",
+      "microservices",
+      "sd-object-storage-durability",
+      "cdn-edge-anycast",
+      "load-balancer-basics",
+      "vlan-basics",
+      "layer-ip-addressing",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "nextjs-self-hosting-deployment": {
+    "links": [
+      "code-splitting",
+      "dockerfile-image-layers",
+      "nextjs-static-dynamic-rendering",
+      "rendering-csr-spa",
+      "rendering-ssg-isr",
+      "frontend-error-tracking",
+      "otel-collector-pipeline",
+      "distributed-tracing",
+      "js-memory-leak",
+      "garbage-collection",
+      "streaming-ssr-suspense",
+      "k8s-pod-lifecycle"
+    ],
+    "mentions": [
+      "observability-basics",
+      "docker-commands-workflow",
+      "k8s-pod-resources",
+      "rendering-strategies",
+      "proxy-reverse-proxy",
+      "cpu-cache-hierarchy",
+      "cache-invalidation",
+      "autoscaling",
+      "service-mesh",
+      "rolling-deployment",
+      "react-server-components",
+      "osi-in-practice",
+      "redis-basics",
+      "frontend-monorepo",
+      "frontend-build-tooling",
+      "js-closures"
+    ]
+  },
+  "postgres-slow-db-triage": {
+    "links": [
+      "sql-query-tuning",
+      "db-locking-deadlock",
+      "linux-performance-triage",
+      "postgres-mvcc-vacuum",
+      "nodejs-debugging-profiling",
+      "cilium-ebpf"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "sd-latency-numbers",
+      "page-cache-disk-io",
+      "linux-systemd-systemctl",
+      "db-replication-sharding",
+      "postgres-getting-started"
+    ]
+  },
+  "react-client-routing": {
+    "links": [
+      "rendering-csr-spa",
+      "react-suspense-error-boundary",
+      "react-forms-actions",
+      "client-data-cache",
+      "code-splitting",
+      "spa-auth-token-storage",
+      "nextjs-self-hosting-deployment",
+      "nextjs-static-dynamic-rendering",
+      "react-server-components"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "data-fetching-optimization",
+      "react-useeffect",
+      "rendering-strategies",
+      "db-modeling-normalization"
+    ]
+  },
+  "route53-routing-policies": {
+    "links": [
+      "dns",
+      "failover",
+      "multi-region",
+      "vpc-basics",
+      "health-checks",
+      "cdn-edge-anycast",
+      "bgp-basics",
+      "canary-release",
+      "vpn-ipsec-wireguard"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "service-mesh",
+      "http-versions",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "what-happens-google-com",
+      "layer-ip-addressing",
+      "udp-and-quic"
+    ]
+  },
+  "routing-protocols-ospf-rip-eigrp": {
+    "links": [
+      "layer-ip-routing-icmp",
+      "router-vs-switch",
+      "shortest-path-algorithms",
+      "network-design-three-tier-spine-leaf",
+      "cdn-edge-anycast",
+      "gateway-link-redundancy-fhrp-lacp"
+    ],
+    "mentions": [
+      "iptables-basics",
+      "bgp-basics",
+      "layer-ip-addressing",
+      "sd-maps-tiles-routing",
+      "security-groups-nacl",
+      "vlan-basics",
+      "ipv6-basics",
+      "sd-email-protocols",
+      "sd-video-streaming-cost",
+      "layer-mtu-fragmentation",
+      "dns"
+    ]
+  },
+  "security-principles-cia-defense-in-depth": {
+    "links": [
+      "owasp-top-10-map",
+      "zero-trust-architecture",
+      "authn-vs-authz",
+      "encryption-in-transit",
+      "encryption-at-rest",
+      "hash-hmac-password-hashing",
+      "ddos-protection",
+      "backup-strategy",
+      "high-availability",
+      "k8s-security-context",
+      "security-groups-nacl",
+      "sql-injection",
+      "k8s-audit-logging",
+      "iam-basics",
+      "postgres-roles-security",
+      "k8s-rbac",
+      "linux-namespaces-cgroups",
+      "seccomp-apparmor",
+      "k8s-network-policy",
+      "secrets-management",
+      "waf"
+    ],
+    "mentions": [
+      "gateway",
+      "k8s-deploy-pipeline-eks",
+      "sd-start-single-server",
+      "ssrf",
+      "sso-saml-oidc"
+    ]
+  },
+  "shell-environment-startup": {
+    "links": [
+      "bash-control-flow-functions",
+      "bash-scripting",
+      "secrets-management",
+      "linux-files-permissions",
+      "cron-jobs",
+      "linux-systemd-systemctl"
+    ],
+    "mentions": [
+      "k8s-configmap",
+      "docker-container-basics",
+      "ds-hash-map"
+    ]
+  },
+  "ts-classes-access-modifiers": {
+    "links": [
+      "js-classes",
+      "ts-type-system-basics",
+      "ts-enum-vs-union",
+      "pattern-template-method",
+      "tsconfig-strict",
+      "pattern-strategy",
+      "design-patterns-overview"
+    ],
+    "mentions": [
+      "nodejs-web-frameworks",
+      "spring-ioc-di",
+      "react-suspense-error-boundary",
+      "character-encoding-unicode",
+      "oop-four-pillars"
+    ]
+  },
   "browser-devtools-debugging": {
     "links": [
       "js-memory-leak",
@@ -326,7 +637,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-query-rewrite",
+      "mongodb-indexes-explain",
       "db-index-design",
+      "mongodb-replica-set-sharding",
       "dns"
     ]
   },
@@ -346,6 +659,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "coupling-cohesion-principles",
       "js-prototype-chain",
+      "ts-classes-access-modifiers",
       "sd-payment-reliability",
       "pattern-visitor"
     ]
@@ -381,6 +695,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "service-discovery",
       "process-vs-thread",
+      "route53-routing-policies",
+      "postgres-slow-db-triage",
       "page-cache-disk-io",
       "mysql-replication-online-ddl",
       "http-caching-cdn",
@@ -538,6 +854,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "micro-frontends"
     ],
     "mentions": [
+      "react-client-routing",
       "spring-ioc-di",
       "js-memoization",
       "ds-graph-bfs-dfs",
@@ -704,7 +1021,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "minimum-spanning-tree"
     ],
-    "mentions": []
+    "mentions": [
+      "routing-protocols-ospf-rip-eigrp"
+    ]
   },
   "spring-boot-testing": {
     "links": [
@@ -989,6 +1308,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ssrf",
       "spring-security-jwt-oauth2",
       "token-login",
+      "security-principles-cia-defense-in-depth",
       "cookie-session-login",
       "dns"
     ]
@@ -1089,6 +1409,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "zero-downtime-migrations"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "k8s-deploy-pipeline-eks",
       "js-template-literals",
       "mongodb-document-model",
@@ -1274,6 +1595,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa"
     ],
     "mentions": [
+      "react-client-routing",
       "frontend-testing-strategy",
       "smoke-sanity-regression-testing"
     ]
@@ -1885,6 +2207,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-partitioning",
       "sd-start-single-server",
+      "mongodb-replica-set-sharding",
       "stream-processing",
       "kafka-basics",
       "postgres-architecture",
@@ -2067,6 +2390,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cache-write-policies",
       "git-undo",
       "helm-dependencies-oci-gitops",
+      "security-principles-cia-defense-in-depth",
       "github-actions-docker-ecr",
       "vpc-basics",
       "webhooks"
@@ -2459,6 +2783,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-state-management-libraries",
       "react-forms-actions",
+      "react-client-routing",
       "frontend-testing-strategy",
       "react-memoization-hooks",
       "loading-patterns",
@@ -2514,6 +2839,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "k8s-architecture",
       "sd-start-single-server",
+      "shell-environment-startup",
       "sql-batch-timeout-pool",
       "udp-and-quic",
       "dns"
@@ -4085,6 +4411,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "redis-cluster",
+      "mongodb-replica-set-sharding",
       "db-type-wide-column",
       "db-type-key-value",
       "airflow-orchestration",
@@ -4243,6 +4570,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "sql-basics",
       "page-cache-disk-io",
       "distributed-transactions-2pc",
@@ -4539,6 +4867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "security-principles-cia-defense-in-depth",
       "kafka-basics",
       "vector-db",
       "on-call"
@@ -4572,6 +4901,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-versioning"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "github-actions-docker-ecr",
       "postgres-connections-pg-hba",
       "sql-insert-update-delete",
@@ -4597,6 +4927,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-testing-strategy",
+      "bash-control-flow-functions",
       "event-loop",
       "microservices",
       "db-type-embedded",
@@ -5337,6 +5668,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pub-sub",
+      "mongodb-replica-set-sharding",
       "rolling-deployment",
       "vpc-basics",
       "rendering-strategies"
@@ -5674,6 +6006,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sd-start-single-server",
       "db-type-relational",
+      "mongodb-replica-set-sharding",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
@@ -6863,7 +7196,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "vpc-subnets-route-tables",
-      "layer-mtu-fragmentation"
+      "layer-mtu-fragmentation",
+      "bgp-basics"
     ]
   },
   "packet-encapsulation": {
@@ -6919,8 +7253,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "packet-capture-tcpdump",
       "sd-start-single-server",
+      "gateway-link-redundancy-fhrp-lacp",
+      "network-design-three-tier-spine-leaf",
       "dhcp",
       "ipv6-basics",
+      "bgp-basics",
       "vpc-basics",
       "udp-and-quic",
       "dns"
@@ -7364,6 +7701,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mongodb-document-model",
+      "mongodb-replica-set-sharding",
       "db-type-wide-column",
       "db-type-key-value",
       "acid-vs-base",
@@ -7390,8 +7728,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "timeouts",
+      "route53-routing-policies",
       "k8s-architecture",
       "event-loop",
+      "security-principles-cia-defense-in-depth",
       "osi-in-practice",
       "db-type-key-value",
       "http-methods"
@@ -7418,6 +7758,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "timeouts",
+      "gateway-link-redundancy-fhrp-lacp",
       "k8s-deploy-pipeline-eks",
       "js-numbers-bigint",
       "reverse-proxy-lb-api-gateway",
@@ -7709,6 +8050,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs",
       "rabbitmq-basics",
       "microservices",
+      "ts-classes-access-modifiers",
       "pattern-proxy",
       "kafka-basics",
       "frontend-monorepo",
@@ -7860,6 +8202,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-injection",
       "packet-capture-tcpdump",
       "https-tls",
+      "bgp-basics",
       "cilium-ebpf",
       "vpc-basics",
       "dns",
@@ -9138,6 +9481,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "dhcp",
       "cilium-ebpf",
+      "bgp-basics",
       "on-call"
     ]
   },
@@ -9488,12 +9832,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
+      "route53-routing-policies",
       "db-type-key-value",
       "sd-multi-datacenter",
       "db-replication-sharding",
       "distributed-tracing",
       "osi-in-practice",
       "redis-basics",
+      "bgp-basics",
       "postgres-architecture",
       "dns"
     ]
@@ -9585,6 +9931,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-architecture",
+      "security-principles-cia-defense-in-depth",
       "http-status-codes",
       "sso-saml-oidc"
     ]
@@ -9604,6 +9951,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "twelve-factor-app",
       "k8s-architecture",
       "bash-scripting",
+      "postgres-slow-db-triage",
       "git-staging-area",
       "sql-batch-timeout-pool",
       "high-availability",
@@ -9754,6 +10102,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "csrf",
       "race-conditions",
+      "security-principles-cia-defense-in-depth",
       "layer-ip-addressing",
       "ipv6-basics",
       "cookie-session-login",
@@ -9769,7 +10118,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "owasp-top-10-map",
-      "upper-layers-session-presentation-app"
+      "upper-layers-session-presentation-app",
+      "security-principles-cia-defense-in-depth"
     ]
   },
   "xss": {
@@ -10274,6 +10624,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "k8s-pod-probes",
       "java-jvm-memory-gc",
       "event-loop",
@@ -10501,6 +10852,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "sd-start-single-server",
       "autoscaling",
+      "shell-environment-startup",
       "linux-files-permissions",
       "postgres-architecture",
       "local-k8s-kind-minikube",
@@ -10584,6 +10936,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "route53-routing-policies",
       "vpc-basics",
       "osi-in-practice",
       "tcp-connection-lifecycle",
@@ -10689,7 +11042,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "eventual-consistency"
     ],
-    "mentions": []
+    "mentions": [
+      "mongodb-replica-set-sharding"
+    ]
   },
   "clock-skew": {
     "links": [
@@ -10737,6 +11092,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "postgres-architecture",
       "redis-basics",
+      "gateway-link-redundancy-fhrp-lacp",
       "db-type-key-value",
       "postgres-getting-started",
       "dns"
@@ -10760,6 +11116,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mongodb-document-model",
       "sd-kv-store-failure-handling",
       "consistency-models",
+      "mongodb-replica-set-sharding",
       "sd-kv-store-versioning",
       "sql-batch-timeout-pool",
       "mysql-replication-online-ddl",
@@ -11238,6 +11595,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-numbers-bigint",
       "spring-boot-on-kubernetes",
       "bash-scripting",
+      "postgres-slow-db-triage",
       "osi-in-practice",
       "client-data-cache"
     ]
@@ -11253,6 +11611,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-multicontainer",
       "k8s-architecture",
       "bash-scripting",
+      "shell-environment-startup",
       "linux-systemd-systemctl"
     ]
   },
@@ -11272,6 +11631,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "high-availability",
       "rds-aurora-managed-db",
       "authn-vs-authz",
+      "security-principles-cia-defense-in-depth",
       "code-review-practices",
       "sso-saml-oidc",
       "https-tls",
@@ -11371,6 +11731,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "batch-processing"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "stream-processing",
       "transactional-outbox",
       "js-pure-functions",
@@ -11544,6 +11905,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "canary-release",
       "k8s-service-types",
       "k8s-pv-pvc",
+      "route53-routing-policies",
       "kubernetes-ingress",
       "service-mesh",
       "local-k8s-kind-minikube"
@@ -11656,6 +12018,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs",
       "security-groups-nacl",
       "local-k8s-kind-minikube",
+      "bgp-basics",
       "vpc-basics",
       "udp-and-quic"
     ]
@@ -11689,6 +12052,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cilium-ebpf",
       "grpc",
       "layer-ip-routing-icmp",
+      "bgp-basics",
       "first-page-from-power-on",
       "udp-and-quic",
       "layer-link-ethernet-arp"
@@ -11877,6 +12241,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cri-cni-csi",
       "k8s-architecture",
       "cloud-cost-optimization",
+      "postgres-slow-db-triage",
       "centralized-logging-pipeline",
       "k8s-node-maintenance",
       "vpc-basics",
@@ -12076,6 +12441,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "encryption-in-transit",
       "https-tls",
+      "postgres-slow-db-triage",
       "autoscaling",
       "latency-bandwidth-throughput",
       "db-replication-sharding",
@@ -12173,6 +12539,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-lifecycle",
+      "gateway-link-redundancy-fhrp-lacp",
       "iptables-nat",
       "owasp-top-10-map",
       "vpc-subnets-route-tables",
@@ -12187,7 +12554,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "redis-basics",
       "client-data-cache",
-      "grpc"
+      "network-design-three-tier-spine-leaf",
+      "grpc",
+      "bgp-basics"
     ]
   },
   "pattern-abstract-factory": {
@@ -12315,6 +12684,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "db-type-wide-column",
       "sd-start-single-server",
+      "mongodb-replica-set-sharding",
       "vpc-basics",
       "redis-basics",
       "caching-strategies"
@@ -12328,6 +12698,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-lock"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "zero-downtime-migrations",
       "db-architecture-by-scale",
       "mysql-innodb-basics",
@@ -12370,10 +12741,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
+      "network-design-three-tier-spine-leaf",
       "cilium-ebpf",
       "security-groups-nacl",
+      "routing-protocols-ospf-rip-eigrp",
       "ipv6-basics",
       "layer-ip-routing-icmp",
+      "bgp-basics",
       "router-vs-switch",
       "udp-and-quic"
     ]
@@ -12392,6 +12766,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks",
       "what-happens-google-com",
       "ipv6-basics",
+      "bgp-basics",
       "sso-saml-oidc",
       "pattern-abstract-factory",
       "dns"
@@ -12527,7 +12902,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "realtime-communication",
       "http-versions",
-      "ddos-protection"
+      "ddos-protection",
+      "bgp-basics"
     ]
   },
   "security-groups-nacl": {
@@ -12583,6 +12959,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics",
       "layer-ip-addressing",
       "realtime-communication",
+      "bgp-basics",
       "github-actions-docker-ecr",
       "eks-cluster-basics"
     ]
@@ -12599,6 +12976,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs"
     ],
     "mentions": [
+      "route53-routing-policies",
       "layer-ip-routing-icmp",
       "terraform-basics",
       "iptables-basics",
@@ -12945,6 +13323,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration"
     ],
     "mentions": [
+      "nextjs-self-hosting-deployment",
       "page-cache-disk-io",
       "autoscaling",
       "react-server-components",
@@ -12988,6 +13367,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "data-fetching-optimization",
+      "react-client-routing",
       "frontend-testing-strategy",
       "lighthouse-explained",
       "hydration",
@@ -13018,6 +13398,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-roles-security"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "db-architecture-by-scale",
       "encryption-in-transit",
       "postgres-operations",
@@ -13238,6 +13619,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "docker-container-basics",
       "realtime-communication",
+      "route53-routing-policies",
       "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
       "service-mesh",
@@ -13294,6 +13676,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "pessimistic-locking",
       "postgres-mvcc-vacuum",
       "db-architecture-by-scale",
@@ -13579,6 +13962,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "vpc-peering-transit-privatelink",
+      "gateway-link-redundancy-fhrp-lacp",
       "docker-container-basics",
       "router-vs-switch",
       "what-happens-google-com",
@@ -13757,6 +14141,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "acid-vs-base",
       "network-partitions",
       "mongodb-document-model",
+      "mongodb-replica-set-sharding",
       "sd-kv-store-versioning",
       "leader-election",
       "redis-basics",
@@ -13919,6 +14304,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "mysql-innodb-basics",
       "db-index-design",
       "distributed-transactions-2pc"
@@ -13939,6 +14325,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "virtual-memory-paging",
       "db-migration-tools",
       "db-architecture-by-scale",
+      "postgres-slow-db-triage",
       "load-testing-k6",
       "page-cache-disk-io",
       "ds-hash-map",
@@ -14409,6 +14796,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "ds-hash-map"
     ]
   },
@@ -15131,6 +15519,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-es-modules",
+      "react-client-routing",
       "debounce-throttle",
       "http-versions",
       "rendering-strategies"
@@ -15193,7 +15582,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "sd-sharding-intro",
+      "mongodb-replica-set-sharding",
       "acid-vs-base",
+      "mongodb-indexes-explain",
       "sd-start-single-server",
       "distributed-transactions-2pc",
       "db-index-design",
@@ -15310,6 +15701,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file"
     ],
     "mentions": [
+      "route53-routing-policies",
       "http-versions",
       "digital-signatures-certificates",
       "sd-email-protocols",

@@ -1,6 +1,21 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "ts-classes-access-modifiers": 7,
+  "shell-environment-startup": 7,
+  "security-principles-cia-defense-in-depth": 7,
+  "routing-protocols-ospf-rip-eigrp": 7,
+  "route53-routing-policies": 7,
+  "react-client-routing": 7,
+  "postgres-slow-db-triage": 7,
+  "nextjs-self-hosting-deployment": 7,
+  "network-design-three-tier-spine-leaf": 7,
+  "mongodb-replica-set-sharding": 7,
+  "mongodb-indexes-explain": 7,
+  "mongodb-aggregation-pipeline": 7,
+  "gateway-link-redundancy-fhrp-lacp": 7,
+  "bgp-basics": 7,
+  "bash-control-flow-functions": 7,
   "ts-enum-vs-union": 7,
   "ts-declaration-files-modules": 7,
   "runtime-validation-zod": 7,

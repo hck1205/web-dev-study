@@ -1,0 +1,563 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nextjs-self-hosting-deployment");
+
+<EasyIntro>
+  Next.js 앱을 Vercel에 올리면 버튼 몇 번으로 끝난다. 그런데 회사 서버나 Docker로 옮기면 잘 되던 것들이 하나둘 이상해진다. 서버마다 다른 화면을 보여 주고, 배포할 때마다 버튼이 안 눌리고, 메모리가 조금씩 불어난다.
+
+  Vercel은 배달 앱과 같다. 주문만 하면 포장, 배달, 반품까지 알아서 해 준다. 직접 운영한다는 건 가게를 차려서 포장도 배달도 스스로 하는 일이다. 그래서 Vercel이 몰래 해 주던 일을 하나씩 찾아서 직접 챙겨야 한다.
+
+  가장 먼저 챙길 것은 꼭 필요한 파일만 담은 작은 상자를 만드는 일이다. 다음은 서버가 여러 대일 때 모두 같은 기억을 쓰게 하는 일이다. 마지막으로 서버가 지금 어떤 상태인지 밖에서 볼 수 있게 계기판을 다는 일이다. 이 세 가지를 알면 어디서든 Next.js를 안정적으로 돌릴 수 있다.
+</EasyIntro>
+
+Vercel에서 잘 돌던 쇼핑몰을 사내 쿠버네티스로 옮겼다. 파드 세 개를 띄우고 로드 밸런서를 앞에 뒀다. 첫날부터 문의가 들어온다. 상품 가격을 바꿨는데 새로고침할 때마다 옛 가격과 새 가격이 번갈아 나온다. 배포 직후에는 장바구니 버튼을 누르면 "Failed to find Server Action"이 뜬다. 일주일쯤 지나자 파드 메모리 그래프가 계단처럼 오르다가 OOMKilled로 재시작된다.
+
+코드는 한 줄도 바꾸지 않았다. 바뀐 건 앱을 돌리는 자리다. Vercel은 정적 파일을 CDN에 올리고, ISR 캐시를 모든 인스턴스가 함께 쓰게 하고, 배포가 바뀌는 순간 옛 브라우저가 새 서버에 엉뚱한 요청을 보내지 않게 막아 준다. 직접 운영하면 이 일들이 모두 내 몫이 된다. 이 글은 Next.js 16.4로 작은 앱을 실제로 빌드해 띄워 보면서, Vercel 밖에서 Next.js를 돌릴 때 챙길 것을 순서대로 짚는다. 실험은 Node.js 22, Ubuntu 24.04 위에서 했다.
+
+## 빌드 결과를 어디에 올릴 수 있나
+
+`next build`가 끝나면 `.next` 폴더가 남는다. 이걸 돌리는 방법은 공식 문서 기준으로 네 가지다. Node.js 서버(`next start`), Docker 컨테이너, 정적 내보내기(`output: "export"`), 그리고 플랫폼이 빌드 결과를 받아 자기 방식으로 바꾸는 어댑터다. 앞의 둘은 Next.js의 모든 기능을 쓸 수 있고, 정적 내보내기는 서버가 필요한 기능을 버린다. 어댑터는 플랫폼마다 지원 범위가 다르다.
+
+아래 그림은 빌드 결과 하나가 어떤 길로 갈라지는지 보여 준다. 화살표를 따라 흐르는 점은 같은 `.next`에서 출발한다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="빌드 한 번, 배포 방식 네 갈래. 서버를 남기느냐가 첫 갈림길이다."
+  nodes={[
+    { id: "build", label: "next build", sub: ".next 폴더", x: 210, y: 40, w: 130 },
+    { id: "start", label: "next start", sub: "Node 서버 전체", x: 70, y: 140, w: 120 },
+    { id: "standalone", label: "standalone", sub: "server.js + 추린 파일", x: 210, y: 140, w: 140 },
+    { id: "export", label: "output: export", sub: "HTML 파일만", x: 350, y: 140, w: 120 },
+    { id: "docker", label: "Docker 이미지", sub: "k8s·ECS·Cloud Run", x: 210, y: 245, w: 140 },
+    { id: "static", label: "Nginx·S3", sub: "서버 기능 없음", x: 350, y: 245, w: 110 },
+    { id: "adapter", label: "어댑터", sub: "플랫폼이 변환", x: 70, y: 245, w: 110 },
+  ]}
+  edges={[
+    { from: "build", to: "start" },
+    { from: "build", to: "standalone" },
+    { from: "build", to: "export" },
+    { from: "standalone", to: "docker", label: "COPY" },
+    { from: "export", to: "static" },
+    { from: "build", to: "adapter", dashed: true, label: "onBuildComplete" },
+  ]}
+/>
+
+컨테이너로 돌린다면 거의 항상 가운데 길, `output: "standalone"`을 고른다. 이유는 크기다.
+
+## standalone은 필요한 파일만 추려 낸다
+
+`next start`로 돌리려면 `package.json`의 의존성 전체가 깔린 `node_modules`가 서버에 있어야 한다. 빌드 도구, 타입 정의, 테스트 라이브러리까지 함께 따라간다. `output: "standalone"`을 켜면 빌드가 각 페이지가 실제로 `import`·`require`·`fs`로 읽는 파일을 정적 분석으로 따라가(`@vercel/nft`), 실행에 필요한 파일만 `.next/standalone`에 복사한다.
+
+```js
+// next.config.mjs
+export default {
+  output: "standalone",
+};
+```
+
+페이지 몇 개짜리 실험 앱을 빌드하고 크기를 비교했다.
+
+```bash
+# 프로덕션 빌드 후 크기 비교
+pnpm build
+du -sh node_modules .next/standalone
+ls .next/standalone
+```
+
+```text
+481M	node_modules
+58M	.next/standalone
+.next  node_modules  package.json  server.js
+```
+
+`node_modules` 481MB가 58MB로 줄었다. 여기에는 TypeScript 같은 개발 의존성도 들어 있어서 단순 비교는 조금 과장이지만, 프로덕션 의존성만 깔아도 Next.js 패키지 전체와 SWC 바이너리 같은 빌드용 파일이 따라오니 차이는 크다. `server.js`는 `next start` 대신 쓰는 최소 서버다.
+
+함정이 하나 있다. 그대로 띄우면 화면은 나오는데 스타일과 스크립트가 다 빠진다.
+
+```bash
+# standalone 서버를 띄우고 JS 청크 하나를 요청해 본다
+PORT=3101 node .next/standalone/server.js &
+curl -s localhost:3101/ | grep -o '/_next/static/[^"]*\.js' | head -1
+curl -s -o /dev/null -w "%{http_code}\n" localhost:3101/_next/static/chunks/3dps80a5t77wo.js
+```
+
+```text
+/_next/static/chunks/3dps80a5t77wo.js
+404
+```
+
+standalone은 `public`과 `.next/static`을 일부러 복사하지 않는다. 문서는 이 둘을 CDN에서 주는 것을 기본으로 보기 때문이다. 서버가 직접 주게 하려면 빌드 뒤에 옮겨 준다.
+
+```bash
+# 정적 파일을 standalone 안으로 복사한다
+cp -r public .next/standalone/
+cp -r .next/static .next/standalone/.next/
+curl -sI localhost:3101/_next/static/chunks/3dps80a5t77wo.js | grep -i "HTTP\|cache-control"
+```
+
+```text
+HTTP/1.1 200 OK
+Cache-Control: public, max-age=31536000, immutable
+```
+
+파일 이름에 내용 해시가 들어 있어서 1년 동안 바뀌지 않는다고 선언한다. 이 파일들을 CDN이나 S3로 따로 올린다면 `assetPrefix`로 주소를 바꾼다. 해시 파일 이름이 왜 안전한지는 [번들 쪼개기](/posts/code-splitting)의 "파일 이름에 내용의 지문을 넣는다"에 있다.
+
+추적이 틀리는 경우도 알아 둔다. 모노레포에서 `packages/web`만 빌드하면 그 바깥 파일은 추적되지 않으니 `outputFileTracingRoot`를 루트로 올린다. 런타임에 경로를 조합해 읽는 파일(템플릿, 인증서, 네이티브 바이너리)은 분석기가 못 찾으니 `outputFileTracingIncludes`로 넣는다. 반대로 추적이 너무 많이 잡는 경우도 있다. 뒤에서 만들 캐시 핸들러에 `fs.readFileSync(path.join(DIR, key))`처럼 변수로 경로를 만든 코드를 넣었더니 Turbopack이 이런 경고를 냈다.
+
+```text
+Warning: Dynamic filesystem access causes tracing of the whole project
+Static analysis determined that this filesystem access causes the whole project to be traced and included in the output.
+This is usually unintentional and leads to all source files (including the public folder) to be deployed as part of the server code.
+```
+
+실제로 `.next/standalone` 안에 `Dockerfile`, `tsconfig.json`, 소스 폴더까지 복사돼 있었다. 경고가 알려 주는 대로 경로를 하위 폴더로 고정하거나, 그 호출에 `/*turbopackIgnore: true*/` 주석을 달아 추적에서 뺀다. 빌드 로그의 경고를 흘려보내면 이미지에 소스 코드와 `.env` 파일이 실려 나갈 수 있다.
+
+## 멀티 스테이지 Dockerfile
+
+standalone을 이미지에 담는 정석은 단계를 나눈 빌드다. 의존성 설치, 빌드, 실행을 서로 다른 단계로 두고 마지막 단계에는 결과물만 옮긴다. 레이어 캐시와 멀티 스테이지 빌드의 원리는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers)에서 자세히 다뤘으니 여기서는 Next.js에 특화된 줄만 본다.
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM node:22-alpine AS deps
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile          # 잠금 파일 그대로 설치
+
+FROM node:22-alpine AS builder
+WORKDIR /app
+RUN corepack enable
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ARG NEXT_PUBLIC_API_URL                     # 브라우저 번들에 박힐 값은 빌드 때 넣는다
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
+RUN addgroup -S nodejs -g 1001 && adduser -S nextjs -u 1001 -G nodejs
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+USER nextjs
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+실험 앱의 standalone을 마지막 단계와 같은 구성으로 담았더니 `docker images`에서 320MB가 나왔다. 그중 238MB가 `node:22-alpine` 베이스 자체다. 앱 몫은 60MB 남짓이다. 더 줄이고 싶으면 베이스를 distroless로 바꾸는 쪽이 앱을 깎는 것보다 효과가 크다.
+
+이 Dockerfile에서 사고가 잘 나는 줄이 셋이다.
+
+`HOSTNAME=0.0.0.0`을 빼면 안 된다. standalone `server.js`는 `process.env.HOSTNAME || '0.0.0.0'` 주소에 붙는다. 그런데 Docker와 쿠버네티스는 이 환경 변수를 컨테이너 ID나 파드 이름으로 미리 채워 둔다. 그 이름이 가리키는 IP 하나에만 붙는다는 뜻이다. 실험 서버에서 `HOSTNAME`을 기계 이름(`vm`, `127.0.0.1`로 풀린다)으로 주고 띄워 봤다.
+
+```text
+- Local:         http://vm:3601
+LISTEN 0      511        127.0.0.1:3601       0.0.0.0:*    users:(("next-server (v1",pid=26966,fd=21))
+```
+
+`0.0.0.0`이 아니라 그 이름의 주소에만 열렸다. 파드라면 파드 IP에만 열리니, 같은 파드 안에서 `127.0.0.1`로 들어오는 요청(서비스 메시 사이드카, `exec`로 도는 `curl localhost` 프로브)이 연결 거부를 받는다. 그래서 값을 명시해 덮어쓴다.
+
+`ARG NEXT_PUBLIC_API_URL`은 빌드 단계에 있어야 한다. `NEXT_PUBLIC_`으로 시작하는 변수는 `next build` 때 브라우저 번들의 문자열로 바뀌어 박힌다. 실행 단계에서 `-e NEXT_PUBLIC_API_URL=...`을 줘도 이미 박힌 값은 바뀌지 않는다. 같은 이미지를 스테이징과 운영에 그대로 올리고 싶다면 브라우저가 쓸 값도 서버에서 읽어 내려 주는 구조로 바꿔야 한다. 서버 쪽 코드는 동적 렌더링 안에서 `process.env`를 읽으면 실행 시점 값을 본다. 정적으로 구워지는 페이지에서 읽으면 빌드 때 값이 HTML에 굳는다. 어느 페이지가 정적인지는 [Next.js App Router는 언제 정적이고 언제 동적인가](/posts/nextjs-static-dynamic-rendering)에서 확인하는 법을 다뤘다.
+
+`USER nextjs`는 보안 때문이다. 다만 ISR이 기본 캐시를 `.next/cache` 아래에 쓰니, 그 폴더를 쓸 수 있게 `--chown`을 붙였다. 빼먹으면 ISR 재생성 때 `EACCES`가 로그에 찍히고 페이지가 갱신되지 않는다.
+
+실행할 때 넘기는 값도 한 번 조각으로 나눠 보자. 운영에서 실제로 쓰는 `docker run` 한 줄이다. 조각을 누르면 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="운영 컨테이너 한 줄. 빌드 때 정할 것과 실행 때 정할 것이 섞여 있다."
+  base="docker run"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "memory",
+      display: "--memory=1g",
+      title: "컨테이너 메모리 한도",
+      description: "이 값을 넘으면 커널이 프로세스를 죽인다(종료 코드 137). Node 힙 한도는 이 값보다 넉넉히 작아야 한다. 힙 바깥에서 쓰는 버퍼, 이미지 최적화, 네이티브 모듈 메모리가 따로 있기 때문이다.",
+      required: true,
+    },
+    {
+      key: "node-options",
+      display: "-e NODE_OPTIONS=--max-old-space-size=640",
+      title: "V8 힙 한도(MB)",
+      description: "컨테이너 한도의 60~75% 정도로 두는 경우가 많다. 힙이 이 값에 닿으면 GC가 더 자주 돌고, 그래도 모자라면 프로세스가 'heap out of memory'로 죽는다. 커널에게 죽는 것보다 원인이 로그에 남는다.",
+      code: "node -e \"console.log(require('v8').getHeapStatistics().heap_size_limit / 1048576)\"",
+    },
+    {
+      key: "key",
+      display: "-e NEXT_SERVER_ACTIONS_ENCRYPTION_KEY",
+      title: "서버 액션 암호화 키",
+      description: "서버 액션이 클라이언트에 보내는 클로저 값을 암호화하는 키다. 문서는 빌드할 때 이 값을 주라고 하고, 키는 빌드 결과에 들어간다. 빌드마다 새 키가 생기면 서버마다, 배포마다 키가 달라질 수 있다.",
+    },
+    {
+      key: "port",
+      display: "-p 3000:3000",
+      title: "포트",
+      description: "server.js는 PORT 환경 변수를 읽는다. 앞에 Nginx 같은 리버스 프록시를 두고 컨테이너 포트는 밖에 직접 열지 않는 구성이 권장된다.",
+    },
+    {
+      key: "image",
+      display: "shop:3f9c2a1",
+      title: "이미지 태그",
+      description: "latest 대신 커밋 해시로 태그를 붙인다. 같은 태그면 같은 빌드라는 약속이 있어야 롤백과 버전 비교가 된다. 뒤에서 볼 deploymentId에도 같은 해시를 쓰면 추적이 쉽다.",
+      required: true,
+    },
+  ]}
+/>
+
+## 정적 내보내기는 서버를 버리는 선택
+
+`output: "export"`는 빌드 때 모든 페이지를 HTML로 구워 `out` 폴더에 떨어뜨린다. S3나 Nginx에 올리면 끝이라 운영 부담이 가장 적다. 대신 요청 시점에 서버가 해야 하는 일은 전부 못 한다. 실험 앱에 그대로 켜 봤다.
+
+```text
+Error: export const dynamic = "force-static"/export const revalidate not configured on route "/api/health" with "output: export".
+> Build error occurred
+Error: Failed to collect page data for /api/health
+```
+
+요청을 읽는 Route Handler가 있으니 빌드가 멈췄다. 문서가 꼽는 못 쓰는 기능은 `generateStaticParams` 없는 동적 경로, 쿠키, `next.config`의 rewrites·redirects·headers, Proxy, ISR, 기본 이미지 최적화, 초안 모드, 서버 액션, 가로채는 라우트다.
+
+조용히 무시되는 것도 있다. Route Handler를 지우고 다시 빌드하니 `revalidate = 3600`을 적어 둔 상품 페이지가 에러 없이 `out/products/1.html`로 한 번 구워졌다. 다시 만들어 줄 서버가 없으니 그 숫자는 아무 의미가 없다. "ISR을 켜 놨는데 가격이 안 바뀐다"는 문의가 이렇게도 생긴다.
+
+결과물의 파일 이름도 본다. `/products/1`이 `products/1.html`로 나오니, Nginx에서는 확장자 없는 주소를 그 파일로 잇는 설정이 필요하다.
+
+```nginx
+location / {
+  try_files $uri $uri.html $uri/ =404;   # /products/1 → /products/1.html
+}
+```
+
+모든 주소를 `index.html`로 돌리는 SPA 폴백을 습관처럼 넣으면 없는 페이지도 200으로 응답하고, 깨진 청크 요청에 HTML이 돌아가는 문제가 생긴다. 이 함정은 [CSR과 SPA](/posts/rendering-csr-spa)의 "폴백이 삼켜 버리는 오류들"에 정리돼 있다.
+
+## 커스텀 서버와 어댑터
+
+Express 앞단에 Next.js를 붙이고 싶을 때 쓰는 것이 커스텀 서버다. `next()`로 앱을 만들고 `getRequestHandler()`를 내 HTTP 서버에 꽂는다.
+
+```ts
+// server.ts
+import { createServer } from "node:http";
+import next from "next";
+
+const app = next({ dev: process.env.NODE_ENV !== "production" });
+const handle = app.getRequestHandler();
+
+await app.prepare();
+createServer((req, res) => handle(req, res)).listen(Number(process.env.PORT ?? 3000));
+```
+
+문서의 입장은 분명하다. 내장 라우터로 안 되는 경우에만 쓴다. 그리고 standalone과 함께 쓸 수 없다. standalone은 커스텀 서버 파일을 추적하지 않고 자기 `server.js`를 따로 만들기 때문이다. 웹소켓 서버를 같은 프로세스에 붙이려고 커스텀 서버를 고르는 경우가 많은데, 서버리스나 오토스케일링 환경까지 생각하면 웹소켓은 별도 서비스로 빼는 편이 운영이 쉽다. 인증이나 리다이렉트처럼 요청 앞단 로직은 대부분 Proxy(예전 이름 Middleware)로 충분하다.
+
+어댑터는 반대 방향의 확장이다. 플랫폼이 Next.js 빌드에 끼어들어 결과를 자기 형식으로 바꾼다. 16.2에서 `adapterPath`가 정식 옵션이 됐다. 어댑터는 `modifyConfig`로 빌드 전 설정을 바꾸고, `onBuildComplete`에서 라우트 목록, 정적 파일, 프리렌더 결과, 빌드 ID를 받아 플랫폼용 산출물을 만든다.
+
+```js
+// my-adapter.js
+/** @type {import('next').NextAdapter} */
+module.exports = {
+  name: "my-platform",
+  async onBuildComplete({ outputs, buildId }) {
+    console.log(buildId, outputs.appPages.length, outputs.staticFiles.length);
+  },
+};
+```
+
+직접 어댑터를 짤 일은 드물다. 알아 둘 것은 "이 플랫폼이 공개 어댑터 API 위에 만들어졌나"다. 16.4 문서 기준으로 Next.js 팀이 검증한 어댑터는 Vercel과 Bun이고, Cloudflare와 Netlify는 어댑터 API로 옮기는 중이라 아직은 각자 만든 통합을 쓴다. 검증되지 않은 통합은 ISR, PPR, 이미지 최적화 지원이 플랫폼마다 다르니 쓰려는 기능을 문서에서 확인한다.
+
+## Node.js 런타임과 Edge 런타임
+
+Next.js 서버 코드는 두 런타임 중 하나에서 돈다. Node.js 런타임은 기본값이고 모든 Node API와 npm 패키지를 쓸 수 있다. Edge 런타임은 `fetch`, `Request`, `Response`, Web Crypto, 스트림 같은 웹 표준 API만 있는 가벼운 환경이다. 시작이 빠르고 CDN 가장자리에서 돌릴 수 있지만 `fs`, 네이티브 모듈, 많은 DB 드라이버가 안 되고 ISR도 지원하지 않는다.
+
+이 균형이 최근 크게 바뀌었다. 15.5에서 Middleware가 Node.js 런타임을 정식 지원했고, 16에서 Middleware가 Proxy로 이름을 바꾸면서 기본 런타임이 Node.js가 됐다. Proxy 파일에는 `runtime` 설정을 아예 쓸 수 없다. 16.4 문서는 페이지와 Route Handler의 `export const runtime = "edge"`도 폐기 예정으로 표시하고 지우라고 안내한다.
+
+직접 운영하는 입장에서는 오히려 단순해졌다. `next start`든 standalone이든 Edge 런타임 코드도 결국 같은 Node 프로세스 안에서 흉내 내서 돌린다. 내 서버에서 Edge를 골라 얻는 이득은 거의 없고, 패키지 호환성 문제만 남는다. 예전 코드에서 `runtime = "edge"`가 보이면 지우고, Proxy 안에서 DB 드라이버나 `jsonwebtoken` 같은 Node 전용 패키지를 못 써서 우회했던 코드도 정리할 수 있다.
+
+## 서버가 여러 대면 기억도 함께 써야 한다
+
+처음 장면의 "새로고침마다 가격이 바뀐다"로 돌아가자. ISR 캐시는 기본으로 각 인스턴스의 디스크와 메모리(기본 50MB)에 있다. 갱신 요청이 파드 하나에만 가면 그 파드만 새 페이지를 준다. 이 현상 자체는 [SSG와 ISR](/posts/rendering-ssg-isr)의 "서버가 두 대면 한 대만 갱신된다"에서 두 인스턴스로 재현했다. 여기서는 고치는 쪽을 해 본다.
+
+`cacheHandler`에 공유 저장소를 쓰는 핸들러를 꽂고, 인스턴스마다 들고 있던 메모리 캐시는 끈다.
+
+```js
+// next.config.mjs
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+
+export default {
+  output: "standalone",
+  cacheHandler: require.resolve("./cache-handler.js"),
+  cacheMaxMemorySize: 0, // 인스턴스별 메모리 캐시를 끈다
+};
+```
+
+실무라면 Redis에 두겠지만 실험에서는 두 프로세스가 같은 디렉터리를 보게 했다. 직렬화에 `JSON.stringify` 대신 `v8.serialize`를 쓴 이유가 있다. 캐시 항목에는 `Buffer`(RSC 데이터)와 `Map`(세그먼트 데이터)이 들어 있어서 JSON으로 저장하면 되살릴 때 타입이 깨진다. 문서는 이 실수를 하면 클라이언트 이동 때 `segmentData.get is not a function` 같은 에러가 난다고 경고한다.
+
+```js
+// cache-handler.js
+const fs = require("node:fs");
+const path = require("node:path");
+const v8 = require("node:v8");
+const crypto = require("node:crypto");
+const DIR = process.env.SHARED_CACHE_DIR;
+const file = (key) => path.join(DIR, crypto.createHash("sha256").update(key).digest("hex"));
+// 페이지 항목은 태그가 응답 헤더에, fetch 항목은 ctx.tags에 있다
+const tagsOf = (data, ctx) => {
+  const h = data?.headers?.["x-next-cache-tags"];
+  return [...(ctx?.tags ?? []), ...(typeof h === "string" ? h.split(",") : [])];
+};
+
+module.exports = class SharedCacheHandler {
+  async get(key) {
+    try { return v8.deserialize(fs.readFileSync(/*turbopackIgnore: true*/ file(key))); }
+    catch { return null; }
+  }
+  async set(key, data, ctx) {
+    const entry = { value: data, lastModified: Date.now(), tags: tagsOf(data, ctx) };
+    fs.writeFileSync(/*turbopackIgnore: true*/ file(key), v8.serialize(entry));
+  }
+  async revalidateTag(tags) {
+    tags = [tags].flat();
+    for (const f of fs.readdirSync(/*turbopackIgnore: true*/ DIR)) {
+      const p = path.join(DIR, f);
+      if (v8.deserialize(fs.readFileSync(/*turbopackIgnore: true*/ p)).tags.some((t) => tags.includes(t))) fs.rmSync(p);
+    }
+  }
+  resetRequestCache() {}
+};
+```
+
+인스턴스 A(3201)와 B(3202)를 같은 디렉터리로 띄우고, 상품 페이지(`revalidate = 3600`)를 번갈아 부른 뒤 A에만 `revalidatePath("/products/1")`을 보냈다. 페이지에는 렌더링한 시각을 찍었다.
+
+```text
+3201 2026-10-23T18:56:56.371Z x-nextjs-cache: MISS
+3202 2026-10-23T18:56:56.371Z x-nextjs-cache: HIT
+{"revalidated":"/products/1","pid":8052}
+3201 2026-10-23T18:56:57.611Z x-nextjs-cache: MISS
+3202 2026-10-23T18:56:57.611Z x-nextjs-cache: HIT
+```
+
+B는 자기가 렌더링한 적 없는 A의 결과를 `HIT`으로 줬고, 갱신도 A 한 곳에 보냈는데 B까지 새 시각으로 바뀌었다. 핸들러 로그에는 `revalidatePath`가 실제로는 `_N_T_/products/1`이라는 특별한 태그로 `revalidateTag`를 부른 흔적이 남았다. 경로 갱신이 태그 갱신 위의 편의 기능이라는 문서 설명 그대로다.
+
+하나 눈여겨볼 점이 있다. 첫 요청이 `MISS`였다. 빌드 때 구운 HTML이 있는데도 공유 저장소가 비어 있으니 새로 렌더링했다. 커스텀 핸들러는 빌드 산출물 경로로는 조회되지 않기 때문이다. 배포 직후 모든 페이지가 한 번씩 다시 렌더링되니, 페이지가 많고 원본 API가 약하다면 배포 직후 부하를 계산에 넣는다.
+
+<SequenceDiagram
+  caption="공유 캐시 핸들러를 둔 두 인스턴스. 갱신은 한 곳에 와도 저장소는 하나다."
+  actors={[
+    { id: "admin", label: "관리자" },
+    { id: "a", label: "인스턴스 A" },
+    { id: "store", label: "공유 저장소" },
+    { id: "b", label: "인스턴스 B" },
+  ]}
+  steps={[
+    {
+      from: "a",
+      to: "store",
+      label: "set APP_PAGE",
+      title: "A가 렌더링한 결과를 공유 저장소에 쓴다",
+      detail: "첫 요청에서 A가 페이지를 만들고 태그와 함께 저장한다. 메모리 캐시를 껐으니 A도 다음부터 저장소에서 읽는다.",
+      payload: "tags=_N_T_/layout|...|_N_T_/products/1",
+    },
+    {
+      from: "b",
+      to: "store",
+      label: "get → HIT",
+      title: "B는 같은 항목을 읽는다",
+      detail: "B는 렌더링하지 않고 A가 만든 결과를 준다. 두 파드가 같은 시각이 찍힌 HTML을 내보낸다.",
+    },
+    {
+      from: "admin",
+      to: "a",
+      label: "revalidatePath",
+      title: "갱신 요청은 로드 밸런서가 고른 한 곳에만 간다",
+      detail: "가격을 저장한 뒤 갱신 API를 부르면 요청은 파드 하나에만 도착한다. 공유 캐시가 없으면 여기서 B가 뒤처진다.",
+      payload: "POST /api/revalidate?path=/products/1",
+    },
+    {
+      from: "a",
+      to: "store",
+      label: "revalidateTag",
+      title: "A가 저장소에서 태그가 맞는 항목을 지운다",
+      detail: "revalidatePath는 경로를 특별한 태그로 바꿔 revalidateTag를 부른다. 저장소가 하나라 지우는 것도 한 번이면 된다.",
+      payload: "_N_T_/products/1",
+    },
+    {
+      from: "b",
+      to: "store",
+      label: "get → 새 페이지",
+      title: "B도 바로 새 결과를 본다",
+      detail: "B가 다음 요청에서 읽을 때 저장소에는 이미 새로 만든 항목만 있다. 새로고침마다 가격이 바뀌는 현상이 사라진다.",
+    },
+  ]}
+/>
+
+이 핸들러는 ISR, Route Handler 응답, 이미지 최적화가 쓰는 캐시다. `'use cache'` 지시어를 쓰는 Cache Components는 `cacheHandlers`(복수형)라는 별도 설정을 쓰고, 여러 인스턴스 사이의 태그 무효화를 맞추려면 그 핸들러의 `refreshTags()`를 구현해 요청마다 공유 저장소에서 태그 상태를 당겨 와야 한다. 이름이 한 글자 차이라 섞어 쓰기 쉽다.
+
+### 빌드가 다르면 서로 못 알아본다
+
+여러 대를 운영할 때 캐시만큼 자주 터지는 것이 빌드 사이의 어긋남이다. 같은 코드를 두 번 빌드해 `BUILD_ID`를 봤다.
+
+```text
+first:  _kop0bjdSo4FBKPuIKhSV
+second: aBP23O7thwchtJBXSnHkk
+```
+
+빌드할 때마다 새 ID가 생긴다. 스테이징과 운영에서 각각 빌드하거나, 파드마다 시작할 때 빌드하는 구성이면 같은 커밋인데 서버마다 ID가 달라진다. 서버 액션 암호화 키도 빌드마다 새로 생긴다. 그래서 파드 A가 렌더링한 폼을 파드 B가 받으면 B는 그 액션을 풀지 못하고 "Failed to find Server Action"을 낸다. 해법은 원칙 하나다. 이미지는 한 번 빌드해서 모든 환경에 같은 이미지를 올린다. 여러 번 빌드할 수밖에 없다면 `generateBuildId`를 커밋 해시로 고정하고 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`를 빌드에 같은 값으로 준다.
+
+롤링 배포 중에는 이미 열려 있던 브라우저가 문제다. 옛 버전 HTML을 들고 있는 탭이 새 서버에 옛 청크를 요청하면 404가 나고, 옛 액션 ID를 보내면 실패한다. `deploymentId`를 주면 Next.js가 이 어긋남을 감지한다.
+
+```js
+// next.config.mjs
+export default {
+  output: "standalone",
+  deploymentId: process.env.DEPLOYMENT_VERSION, // 예: 커밋 해시
+};
+```
+
+`DEPLOYMENT_VERSION=v42`로 빌드한 HTML을 보면 정적 파일 주소에 배포 ID가 붙고, 서버 응답에는 자기 배포 ID를 알리는 헤더가 실린다.
+
+```text
+/_next/static/chunks/3dps80a5t77wo.js?dpl=v42
+x-nextjs-deployment-id: v43
+```
+
+두 번째 줄은 `v43`으로 다시 빌드한 서버의 응답 헤더다. 문서에 따르면 클라이언트 이동 요청은 `x-deployment-id` 헤더로 자기 버전을 보내고, 서버가 자기 ID와 다르다고 판단하면 클라이언트 이동 대신 전체 새로고침을 시킨다. 새로고침이라 `useState` 같은 컴포넌트 상태는 날아간다. 그래서 장바구니처럼 잃으면 곤란한 값은 URL이나 저장소에 둔다. 덤으로, `deploymentId`를 주면 빌드 ID는 매번 같은 값으로 고정됐다(`build-TfctsWXpff2fKS`가 두 빌드에서 같았다). 버전 구분은 배포 ID가 맡는다.
+
+옛 청크 404 자체를 없애는 방법은 정적 파일을 배포마다 지우지 않고 CDN 버킷에 계속 쌓는 것이다. 해시 이름이라 충돌하지 않고, 옛 탭도 자기 청크를 계속 받을 수 있다.
+
+## instrumentation.ts로 서버 안을 들여다본다
+
+Vercel 대시보드가 보여 주던 함수 로그와 트레이스도 직접 만들어야 한다. 출발점은 프로젝트 루트(또는 `src`)의 `instrumentation.ts`다. `register`는 서버 인스턴스가 시작될 때 한 번, 요청을 받기 전에 끝까지 실행된다. `onRequestError`는 서버가 잡은 에러마다 불린다.
+
+```ts
+// instrumentation.ts
+import type { Instrumentation } from "next";
+
+export async function register() {
+  console.log(`[register] runtime=${process.env.NEXT_RUNTIME} pid=${process.pid}`);
+}
+
+export const onRequestError: Instrumentation.onRequestError = async (err, request, context) => {
+  const digest = typeof err === "object" && err !== null && "digest" in err ? String(err.digest) : undefined;
+  console.log("[onRequestError]", JSON.stringify({
+    message: (err as Error).message, digest, path: request.path,
+    routePath: context.routePath, routeType: context.routeType, renderSource: context.renderSource,
+  }));
+};
+```
+
+일부러 에러를 던지는 페이지를 standalone으로 띄우고 요청했다.
+
+```text
+[register] runtime=nodejs pid=9909
+⨯ Error: DB timeout
+    at c (.next/server/chunks/ssr/_0z751ptpavbmn._.js:1:95) {
+  digest: '2957309533'
+}
+[onRequestError] {"message":"DB timeout","digest":"2957309533","path":"/boom","routePath":"/boom","routeType":"render","renderSource":"react-server-components"}
+```
+
+`digest`를 눈여겨본다. 프로덕션에서 서버 컴포넌트 에러는 메시지가 브라우저로 가지 않고 이 숫자만 간다. 사용자가 보낸 스크린샷의 digest로 서버 로그를 찾으려면 `onRequestError`에서 digest를 꼭 함께 남긴다. 스택이 `.next/server/chunks/...js:1:95`처럼 압축된 위치로 찍히는 것도 보인다. 원래 소스 위치로 보려면 서버 소스맵을 켜고 Node를 `--enable-source-maps`로 띄우거나, 에러 수집 도구에 소스맵을 올린다. 브라우저 쪽 에러 수집은 [프런트엔드 에러 추적](/posts/frontend-error-tracking)에서 다룬다.
+
+`NEXT_RUNTIME`으로 갈라 두는 이유는 `register`가 런타임마다 불리기 때문이다. Node 전용 SDK는 `nodejs`일 때만 동적 `import()`로 불러온다.
+
+### OpenTelemetry 붙이기
+
+Next.js는 요청 처리, 라우트 렌더링, `fetch` 호출을 OpenTelemetry 스팬으로 이미 만들어 둔다. 내보낼 곳만 정해 주면 된다. 가장 짧은 길은 `@vercel/otel`이다. 이름과 달리 Vercel 밖에서도 쓰는 패키지다.
+
+```bash
+# 문서가 안내하는 설치 목록
+pnpm add @vercel/otel @opentelemetry/sdk-logs @opentelemetry/api-logs @opentelemetry/instrumentation
+```
+
+```ts
+// instrumentation.ts
+import { registerOTel } from "@vercel/otel";
+
+export function register() {
+  registerOTel({ serviceName: "shop-web" });
+}
+```
+
+내보내는 주소는 표준 환경 변수 `OTEL_EXPORTER_OTLP_ENDPOINT`로 Collector를 가리킨다. 루트 스팬 이름은 `GET /products/[id]`처럼 메서드와 라우트 패턴이고, 그 아래에 `render route (app) /products/[id]`, `fetch GET https://api...` 스팬이 달린다. 라우트 패턴으로 묶이니 상품 수만큼 이름이 쪼개지지 않는다. 기본으로 내보내는 스팬은 일부이고 `NEXT_OTEL_VERBOSE=1`을 주면 더 자세히 나온다. 다른 라이브러리로 `fetch`를 계측한다면 `NEXT_OTEL_FETCH_DISABLED=1`로 중복을 끈다.
+
+Collector를 어떻게 두고 어디로 보내는지는 [OpenTelemetry Collector 파이프라인](/posts/otel-collector-pipeline)에, 스팬을 이어 서비스 사이를 따라가는 법은 [분산 트레이싱](/posts/distributed-tracing)에 있다. Next.js 쪽에서 할 일은 "루트 스팬의 라우트 이름이 의미 있게 찍히는지", "느린 요청 하나를 골라 어느 `fetch`가 시간을 먹었는지 보이는지" 두 가지를 확인하는 것이다.
+
+## 메모리가 계단처럼 오를 때
+
+처음 장면의 OOMKilled로 가 보자. 먼저 기준선을 잰다. 실험 앱 standalone 서버의 RSS를 시작 직후와 요청 600번 뒤에 봤다.
+
+```bash
+# next-server 프로세스의 RSS(KB)를 본다
+ps -o rss= -p "$(pgrep -f 'standalone/server.js')"
+```
+
+```text
+94920
+123532
+```
+
+시작 직후 약 93MB, 요청 뒤 약 121MB다. 서버가 뜰 때 모든 페이지의 JS 모듈을 미리 메모리에 올려 두고(preload), 한 번 올린 모듈은 내리지 않기 때문에 처음에 조금 오르다가 평평해지는 것이 정상이다. `experimental.preloadEntriesOnStart: false`로 시작 메모리를 줄일 수는 있지만, 모든 페이지가 한 번씩 요청되면 결국 같은 크기가 된다.
+
+평평해지지 않고 계속 오른다면 의심할 곳은 정해져 있다.
+
+모듈 최상위에 둔 캐시가 첫째다. `const cache = new Map()`을 파일 최상위에 두고 요청마다 사용자 ID나 검색어를 키로 넣으면 서버 프로세스가 사는 동안 절대 비워지지 않는다. 브라우저에서는 새로고침이 치워 주던 것을 서버에서는 아무도 안 치운다. 크기 제한이 있는 LRU를 쓰거나 공유 캐시로 뺀다.
+
+다음은 ISR 메모리 캐시다. 기본 50MB씩 인스턴스마다 든다. 페이지가 많으면 그만큼 상한까지 찬다. 공유 핸들러를 쓴다면 `cacheMaxMemorySize: 0`으로 끈다.
+
+이미지 최적화도 메모리를 많이 쓴다. `next/image`는 `sharp`로 변환하는데, 문서는 glibc 기반 리눅스에서 메모리 할당기 때문에 사용량이 과해질 수 있다고 따로 적어 뒀다. 이미지가 많은 서비스라면 이미지 최적화를 별도 서비스나 CDN으로 빼는 것도 방법이다.
+
+컨테이너 한도와 Node 힙 한도의 관계도 본다. 힙이 한도에 닿기 전에 컨테이너가 먼저 한도를 넘으면 커널이 프로세스를 죽이고(종료 코드 137), 로그에는 아무것도 남지 않는다. 기본 힙 한도는 Node 버전과 환경에 따라 정해지니, 컨테이너 안에서 위 `UrlAnatomy`의 명령으로 `heap_size_limit`을 한 번 찍어 보고 `--max-old-space-size`를 한도보다 넉넉히 작게 준다. 그래야 메모리가 모자랄 때 `JavaScript heap out of memory`라는 원인이 로그에 남는다.
+
+원인을 찾을 때는 힙 스냅숏을 비교한다. `NODE_OPTIONS=--inspect`로 띄우고 크롬 DevTools의 Memory 탭에서 스냅숏을 몇 분 간격으로 두 장 찍어 늘어난 객체를 본다. 운영 파드에 디버거 포트를 여는 건 위험하니, 같은 이미지를 스테이징에서 부하를 걸어 재현하는 편이 낫다. 클로저와 이벤트 리스너가 메모리를 붙잡는 원리는 [메모리 누수](/posts/js-memory-leak), V8 GC가 힙을 나누는 방식은 [가비지 컬렉션](/posts/garbage-collection)에 있다.
+
+빌드가 메모리 부족으로 죽는 것은 다른 문제다. CI 러너에서 `next build`가 죽으면 `next build --experimental-debug-memory-usage`로 단계별 힙 사용량을 찍어 본다. "Running TypeScript" 단계에서 죽는다면 타입 검사를 CI의 별도 단계로 빼고, "Generating static pages" 뒤에 죽는다면 프리렌더 소스맵(`enablePrerenderSourceMaps: false`)을 끄는 것부터 해 본다.
+
+## 올리기 전에 한 번 더 보는 것
+
+앞에서 다룬 것을 운영 순서대로 다시 엮으면 이렇다.
+
+앞단에는 Nginx 같은 리버스 프록시를 둔다. 느린 연결 공격, 요청 크기 제한, 속도 제한을 Next.js 프로세스 대신 막아 준다. 다만 프록시가 응답을 모았다가 한꺼번에 보내면 스트리밍 SSR이 무의미해진다. Nginx라면 `X-Accel-Buffering: no` 헤더를 내려 버퍼링을 끈다. 스트리밍이 왜 중요한지는 [스트리밍 SSR과 Suspense](/posts/streaming-ssr-suspense)에 있다.
+
+헬스 체크는 가벼운 Route Handler 하나로 만든다. 메인 페이지를 헬스 체크로 쓰면 DB가 느릴 때 파드가 줄줄이 재시작된다. 준비 상태(readiness)와 살아 있음(liveness)을 나누는 이유는 [파드 생명 주기](/posts/k8s-pod-lifecycle)를 참고한다.
+
+종료 신호도 확인한다. 실험에서 standalone 서버에 `SIGTERM`을 보내자 몇 초 안에 프로세스가 스스로 정리하고 끝났다. 문서는 서버가 처리 중인 요청과 `after()` 콜백을 마친 뒤 끝난다고 설명하고, 플랫폼에 10~30초의 유예 시간을 두라고 권한다. Dockerfile의 `CMD`를 셸 형식(`CMD node server.js`)으로 쓰면 셸이 PID 1이 되어 신호를 Node에 넘기지 않을 수 있고, 그러면 유예 시간이 끝날 때 강제 종료된다. exec 형식으로 쓴다.
+
+캐시 일관성은 세 가지를 맞춘다. 공유 `cacheHandler`, 같은 빌드에서 나온 같은 이미지, 고정된 서버 액션 키. 배포 어긋남에는 `deploymentId`를 쓰고, 정적 파일은 CDN에 쌓아 둔다. 관측은 `instrumentation.ts`의 `onRequestError`로 digest를 남기고 OpenTelemetry로 라우트별 지연을 본다. 메모리는 기준선을 재 두고, 컨테이너 한도와 힙 한도를 함께 정한다.
+
+## 다시 세 개의 파드로
+
+처음의 세 증상은 모두 Vercel이 대신 맡던 일이 빠져서 생겼다. 가격이 번갈아 나온 건 파드마다 따로 든 ISR 캐시 탓이라 공유 캐시 핸들러로 고친다. 배포 직후 서버 액션 에러는 빌드마다 달라지는 키와 버전 어긋남 탓이라, 한 번 빌드한 이미지를 모든 곳에 올리고 `deploymentId`를 준다. 메모리 계단은 기준선과 비교해 모듈 캐시, ISR 메모리 캐시, 이미지 최적화를 차례로 의심한다. standalone 이미지, 공유 캐시, 계측. 이 셋을 갖추면 어디에 올려도 같은 앱이 같은 방식으로 돈다.
+
+## 면접에서 나올 만한 질문
+
+### output: "standalone"은 무엇을 하고 왜 Docker에서 쓰나
+
+빌드할 때 각 페이지가 실제로 읽는 파일을 정적 분석으로 따라가서, 실행에 필요한 파일과 최소 `server.js`만 `.next/standalone`에 모은다. `node_modules` 전체를 이미지에 넣지 않아도 되니 이미지가 크게 줄고 배포가 빨라진다. 실험 앱에서 481MB가 58MB가 됐다. 다만 `public`과 `.next/static`은 복사하지 않으므로 직접 옮기거나 CDN에서 준다.
+
+### standalone으로 띄웠더니 CSS와 JS가 전부 404다. 왜인가
+
+standalone은 정적 파일을 CDN에서 주는 것을 전제로 `.next/static`과 `public`을 빼고 만든다. 빌드 뒤에 `.next/static`을 `standalone/.next/static`으로, `public`을 `standalone/public`으로 복사하면 `server.js`가 그대로 서빙한다. Dockerfile 마지막 단계에서 세 폴더를 따로 `COPY`하는 이유다.
+
+### 쿠버네티스 파드 여러 개에서 ISR 페이지가 파드마다 다르게 보인다. 어떻게 고치나
+
+ISR 캐시가 기본으로 인스턴스마다 디스크와 메모리에 따로 있어서, 갱신 요청을 받은 파드만 새 페이지를 준다. `cacheHandler`로 Redis 같은 공유 저장소를 쓰는 핸들러를 꽂고 `cacheMaxMemorySize: 0`으로 인스턴스별 메모리 캐시를 끈다. 핸들러는 `Buffer`와 `Map`이 들어 있는 항목을 제대로 직렬화해야 하고, `'use cache'`를 쓴다면 `cacheHandlers`와 `refreshTags`를 따로 구현한다.
+
+### 배포 직후 "Failed to find Server Action"이 나는 이유는
+
+서버 액션 ID와 암호화 키가 빌드마다 달라지기 때문이다. 서버마다 다른 빌드가 돌거나, 옛 버전 페이지를 연 브라우저가 새 서버에 액션을 보내면 서버가 그 액션을 알아보지 못한다. 이미지를 한 번만 빌드해 모든 인스턴스에 쓰고, 여러 번 빌드해야 하면 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`와 `generateBuildId`를 고정한다. 롤링 배포 중의 옛 탭은 `deploymentId`로 감지해 전체 새로고침을 시킨다.
+
+### NEXT_PUBLIC_ 변수를 컨테이너 실행 때 바꿨는데 반영되지 않는다
+
+`NEXT_PUBLIC_` 변수는 `next build` 때 브라우저 번들에 문자열로 박힌다. 실행 때 환경 변수를 바꿔도 이미 만들어진 JS는 그대로다. 빌드 인자로 넣어 환경마다 이미지를 따로 만들거나, 같은 이미지를 쓰고 싶다면 브라우저가 쓸 값을 서버에서 동적으로 읽어 내려 주는 구조로 바꾼다.
+
+### Edge 런타임과 Node.js 런타임은 어떻게 고르나
+
+기본은 Node.js 런타임이고 직접 운영한다면 거의 항상 이쪽이다. Edge 런타임은 웹 표준 API만 있어서 `fs`, 네이티브 모듈, 많은 DB 드라이버를 못 쓰고 ISR도 지원하지 않는다. Next.js 16부터 Proxy는 Node.js 런타임으로 돌고, 16.4 문서는 페이지의 `runtime = "edge"`를 폐기 예정으로 안내한다. 내 서버에서는 Edge를 골라도 같은 Node 프로세스에서 흉내 내 돌리니 얻는 이득이 거의 없다.
+
+### 정적 내보내기를 고르면 무엇을 포기하나
+
+요청 시점에 서버가 해야 하는 모든 것을 포기한다. 요청을 읽는 Route Handler, 쿠키, rewrites·redirects·headers, Proxy, ISR, 기본 이미지 최적화, 서버 액션이 안 된다. Route Handler가 있으면 빌드가 멈추지만 `revalidate`는 에러 없이 무시되니 더 조심해야 한다. 대신 S3나 Nginx에 파일만 올리면 되니 운영이 가장 단순하다.
+
+### 운영 중인 Next.js 서버 메모리가 계속 오른다. 어디서부터 보나
+
+먼저 기준선을 잰다. 시작 직후 모든 페이지 모듈을 미리 올리니 처음에 오르다 평평해지는 것은 정상이다. 계속 오르면 모듈 최상위의 무제한 캐시, 인스턴스별 ISR 메모리 캐시, 이미지 최적화를 차례로 의심하고, 스테이징에서 부하를 걸어 힙 스냅숏 두 장을 비교한다. 컨테이너 한도보다 Node 힙 한도를 작게 줘야 커널에 조용히 죽지 않고 원인이 로그에 남는다.
