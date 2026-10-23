@@ -203,3 +203,20 @@ export const Legend = styled.ul`
     border-radius: 2px;
   }
 `;
+
+export const SectionHead = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${space[2]};
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: ${space[3]};
+
+  h2 {
+    margin: 0;
+  }
+  div {
+    display: flex;
+    gap: ${space[2]};
+  }
+`;

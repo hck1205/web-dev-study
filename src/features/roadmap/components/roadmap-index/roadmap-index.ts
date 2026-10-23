@@ -1,17 +1,20 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { getPostBySlug, postHref } from "@/features/posts/registry";
 import { useGetStudyProgress } from "../../atoms/study-progress";
-import { nextSlugs, roadmapStats, tierStats } from "../../hooks/use-roadmap-stats";
+import { nextSlugs, roadmapStats, tierStats, topGraph } from "../../hooks/use-roadmap-stats";
 import { TOP_ROADMAPS, placementOf, roadmapHref } from "../../registry";
 
 const TIER_LABELS = { 1: "핵심", 2: "실무·면접", 3: "참고" } as const;
 
+export type RoadmapView = "graph" | "list";
+
 export function useRoadmapIndex() {
   const progress = useGetStudyProgress();
+  const [view, setView] = useState<RoadmapView>("graph");
 
-  return useMemo(() => {
+  const data = useMemo(() => {
     const tiers = tierStats(progress);
     const next = nextSlugs(progress, 3)
       .map((slug) => ({ slug, post: getPostBySlug(slug), placement: placementOf(slug) }))
@@ -39,6 +42,7 @@ export function useRoadmapIndex() {
       };
     });
 
-    return { tiers, tierLabels: TIER_LABELS, next, roadmaps };
+    return { tiers, tierLabels: TIER_LABELS, next, roadmaps, graph: topGraph(progress) };
   }, [progress]);
+  return { ...data, view, setView };
 }

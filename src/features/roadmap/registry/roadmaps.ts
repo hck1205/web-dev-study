@@ -148,6 +148,7 @@ export const ROADMAPS: RoadmapNode[] = [
     label: "자바스크립트와 TypeScript",
     description: "변수 상자가 생기는 순간부터 이벤트 루프, 타입 시스템까지. 프런트엔드와 Node 백엔드의 공통 언어.",
     tier: 1,
+    requires: ["foundations/programs"],
     items: [
       {
         id: "basics",
@@ -311,6 +312,7 @@ export const ROADMAPS: RoadmapNode[] = [
     label: "데이터베이스",
     description: "SQL 한 줄이 어떻게 실행되는지부터 인덱스, 트랜잭션, 복제, 샤딩, 그리고 저장소 고르기까지.",
     tier: 1,
+    requires: ["foundations/linux"],
     items: [
       {
         id: "sql",
@@ -561,6 +563,7 @@ export const ROADMAPS: RoadmapNode[] = [
     label: "자료구조와 알고리즘",
     description: "입력이 커질 때 얼마나 느려지나부터, 13가지 자료구조와 다섯 가지 풀이 기법까지.",
     tier: 1,
+    requires: ["foundations/computer-architecture"],
     items: [
       "big-o-notation",
       {
@@ -1018,6 +1021,7 @@ export const ROADMAPS: RoadmapNode[] = [
     label: "AI와 에이전트",
     description: "RAG가 답을 만드는 과정과 Claude Code를 일 시키는 법.",
     tier: 3,
+    requires: ["database/db-types"],
     items: [
       { id: "rag", label: "RAG", items: ["rag-classic-pipeline", "rag-retrieval-quality", "graph-rag", "agentic-rag", "rag-patterns-overview"] },
       {

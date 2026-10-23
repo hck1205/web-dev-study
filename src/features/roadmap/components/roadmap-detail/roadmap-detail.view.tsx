@@ -16,6 +16,7 @@ import {
   PostSummary,
   Requirements,
   RoadmapLink,
+  RailItem,
   RoadmapMeta,
   Rows,
   Summary,
@@ -77,7 +78,14 @@ export function RoadmapDetail() {
       ) : (
         <Rows>
           {rows.map((row, index) => (
-            <li key={row.kind === "post" ? row.slug : row.kind === "roadmap" ? row.key : row.id} style={{ animationDelay: `${index * 30}ms` }}>
+            <RailItem
+              key={row.kind === "post" ? row.slug : row.kind === "roadmap" ? row.key : row.id}
+              kind={row.kind}
+              reached={row.kind === "post" ? row.stage >= 1 : row.kind === "roadmap" ? row.stats.total > 0 && row.stats.started === row.stats.total : row.passed}
+              current={row.kind === "post" && row.isNext}
+              last={index === rows.length - 1}
+              style={{ animationDelay: `${index * 30}ms` }}
+            >
               {row.kind === "post" && (
                 <PostLink href={row.href} isNext={row.isNext}>
                   <Order aria-hidden>{(order += 1)}</Order>
@@ -113,7 +121,7 @@ export function RoadmapDetail() {
                   </span>
                 </CheckpointLink>
               )}
-            </li>
+            </RailItem>
           ))}
         </Rows>
       )}
