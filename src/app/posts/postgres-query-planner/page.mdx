@@ -1,0 +1,681 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("postgres-query-planner");
+
+<EasyIntro>
+  데이터베이스에 질문을 하면 바로 답을 찾으러 가지 않고, 먼저 어떤 길로 갈지 정한다. 이 일을 하는 부분을 플래너라고 한다. 플래너는 내비게이션처럼 갈 수 있는 길을 여러 개 그려 보고, 길마다 시간이 얼마나 걸릴지 점수를 매겨 가장 낮은 점수의 길을 고른다.
+
+  점수를 매기려면 길 위에 차가 몇 대 있는지 알아야 한다. 데이터베이스는 표를 전부 세지 않고 일부만 뽑아 본 통계로 짐작한다. 어떤 값이 얼마나 자주 나오는지, 값들이 어디쯤 몰려 있는지를 적어 둔 메모다.
+
+  메모가 틀리면 내비게이션이 막힌 길을 고르듯 느린 방법을 고른다. 두 조건이 사실 같은 뜻인데 서로 상관없다고 짐작하거나, 같은 질문을 여러 번 하면 값을 보지 않고 한 번 정한 길을 계속 쓰는 경우가 그렇다. 그래서 어제까지 빠르던 질문이 코드 한 줄 바꾸지 않았는데 갑자기 느려지기도 한다.
+</EasyIntro>
+
+판매자 관리 화면의 "최근 주문 20건" API는 늘 0.2초 안에 끝났다. 어느 날 몇몇 판매자만 30초가 걸린다는 문의가 들어온다. 배포는 없었고, 쿼리도 그대로고, 인덱스도 그대로다. 같은 SQL을 psql에 붙여 넣어 돌리면 0.1ms에 끝난다. 앱에서만 느리다.
+
+이런 일의 범인은 대개 플래너(planner)다. PostgreSQL은 쿼리를 받으면 실행할 수 있는 방법을 여러 개 만들고, 방법마다 비용을 계산해서 가장 싼 것을 고른다. 그 계산에는 통계에서 짐작한 행 수가 들어가는데, 짐작이 틀리거나 값을 모른 채 계산하면 엉뚱한 방법이 골라진다. 이 글은 플래너가 비용을 어떤 식으로 세는지, 행 수를 어떻게 짐작하는지, 조인 순서를 얼마나 따져 보는지, 그리고 prepared statement가 여섯 번째 실행부터 계획을 바꾸는 규칙까지 실제 숫자로 따라간다.
+
+실행 계획을 읽는 법과 느린 쿼리를 찾는 법은 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에 있고, 이 글은 그 계획이 왜 그렇게 나왔는지를 본다. 인덱스가 안 타는 흔한 경우는 [인덱스가 안 타는 이유 글](/posts/db-index-pitfalls)에서 다뤘다.
+
+기준은 Ubuntu 24.04의 PostgreSQL 16(16.15)이다. 예제 테이블은 쇼핑몰이다. 회원 `users` 10만 명, 상품 `products` 1,000개, 주문 `orders` 100만 건이고, 주문에는 판매자 `shop_id`가 붙어 있다. 판매자는 50곳인데 큰 판매자 다섯 곳이 주문의 90%를 갖고, 판매자 50번은 1월에 주문 50건을 받고 문을 닫은 곳이다. 아래 출력은 모두 이 환경에서 실제로 돌린 결과이고, 병렬 계획을 끈 상태(`SET max_parallel_workers_per_gather = 0;`)라서 계획이 단순하게 보인다.
+
+```sql
+CREATE TABLE orders (
+  id         bigint PRIMARY KEY,
+  user_id    int  NOT NULL,   -- 회원. 1번 회원이 주문의 20%를 갖는다
+  product_id int  NOT NULL,
+  shop_id    int  NOT NULL,   -- 판매자 50곳. 1~5번이 90%
+  status     text NOT NULL,   -- delivered, paid, cancelled, pending
+  amount     int  NOT NULL,   -- 1,000~99,999원
+  city       text NOT NULL,   -- city0~city99
+  zip        text NOT NULL,   -- city와 짝이 맞는 zip0~zip99
+  created_at timestamptz NOT NULL
+);
+CREATE INDEX orders_user_id_idx    ON orders (user_id);
+CREATE INDEX orders_shop_id_idx    ON orders (shop_id);
+CREATE INDEX orders_status_idx     ON orders (status);
+CREATE INDEX orders_created_at_idx ON orders (created_at);
+```
+
+## SQL 한 줄이 실행되기까지
+
+쿼리는 다섯 단계를 지난다. 파서가 문자열을 문법 트리로 바꾸고, 분석기가 테이블과 컬럼 이름을 실제 객체에 묶는다. 재작성기(rewriter)는 뷰를 그 뷰의 정의로 펼치고 규칙(RULE)을 적용한다. 그다음 플래너가 실행 방법을 고르고, 실행기(executor)가 고른 계획대로 행을 꺼낸다. 아래 그림에서 다음을 누르면 쿼리가 한 단계씩 넘어간다.
+
+<SequenceDiagram
+  caption="쿼리 문자열이 결과 행이 되기까지"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "parse", label: "파서·분석기" },
+    { id: "rw", label: "재작성기" },
+    { id: "plan", label: "플래너" },
+    { id: "exec", label: "실행기" },
+  ]}
+  steps={[
+    { from: "app", to: "parse", label: "SQL 문자열", title: "문자열을 트리로 바꾼다", detail: "문법이 틀리면 여기서 syntax error가 난다. 분석기는 orders가 어느 스키마의 어떤 테이블인지, 컬럼 타입이 무엇인지 카탈로그에서 찾아 붙인다.", payload: "SELECT id FROM orders WHERE shop_id = 50" },
+    { from: "parse", to: "rw", label: "쿼리 트리", title: "뷰를 펼친다", detail: "FROM에 뷰가 있으면 뷰의 SELECT로 바꿔 끼운다. 그래서 뷰를 쓴 쿼리도 플래너 입장에선 원래 테이블을 직접 쓴 쿼리와 같다." },
+    { from: "rw", to: "plan", label: "재작성된 트리", title: "실행 방법을 만든다", detail: "테이블마다 읽는 법(Seq Scan, Index Scan, Bitmap)과 조인 방법, 조인 순서를 조합해 후보를 만들고 비용이 가장 낮은 것을 남긴다." },
+    { from: "plan", to: "plan", label: "pg_stats 읽기", title: "행 수를 짐작한다", detail: "조건마다 통계를 보고 몇 행이 남을지 계산한다. 비용 계산의 재료라서 여기서 틀리면 뒤가 다 틀린다." },
+    { from: "plan", to: "exec", label: "계획 트리", title: "고른 계획을 실행한다", detail: "실행기는 계획의 맨 위 노드부터 행을 달라고 요청하고, 아래 노드가 행을 하나씩 올려 보낸다. 실행 중에는 계획을 바꾸지 않는다." },
+    { from: "exec", to: "app", label: "결과 행", title: "결과를 돌려준다", detail: "EXPLAIN은 플래너까지만 돌고 계획을 보여 준다. EXPLAIN ANALYZE는 실행까지 해서 실제 행 수와 시간을 함께 적는다." },
+  ]}
+/>
+
+마지막 단계가 중요하다. 실행기는 실행 중에 "생각보다 행이 많네" 하고 계획을 바꾸지 않는다. 한 번 고른 계획은 끝까지 간다. 그래서 플래너의 짐작이 틀리면 그 대가를 쿼리가 끝날 때까지 치른다.
+
+## 비용은 페이지와 행으로 센다
+
+`EXPLAIN`의 `cost=0.00..21096.00`은 밀리초가 아니다. 플래너가 정한 단위로 센 점수다. 기준은 "8KB 페이지 하나를 순서대로 읽는 비용 = 1"이고, 나머지는 이 기준에 대한 비율로 정해져 있다.
+
+```sql
+SELECT name, setting
+FROM pg_settings
+WHERE name IN ('seq_page_cost', 'random_page_cost', 'cpu_tuple_cost',
+               'cpu_index_tuple_cost', 'cpu_operator_cost')
+ORDER BY name;
+```
+
+```text
+         name         | setting
+----------------------+---------
+ cpu_index_tuple_cost | 0.005
+ cpu_operator_cost    | 0.0025
+ cpu_tuple_cost       | 0.01
+ random_page_cost     | 4
+ seq_page_cost        | 1
+(5 rows)
+```
+
+페이지를 순서대로 읽으면 1, 아무 데나 골라 읽으면 4, 행 하나를 처리하면 0.01, 인덱스 항목 하나는 0.005, `=`나 `>` 같은 연산자 한 번은 0.0025다. 테이블이 몇 페이지, 몇 행인지는 `pg_class`에 있다. 이 값도 `ANALYZE`나 `VACUUM`이 갱신한 짐작값이다.
+
+```sql
+SELECT relname, relpages, reltuples
+FROM pg_class
+WHERE relname IN ('orders', 'users', 'products')
+ORDER BY relname;
+```
+
+```text
+ relname  | relpages | reltuples
+----------+----------+-----------
+ orders   |    11096 |     1e+06
+ products |        7 |      1000
+ users    |      736 |    100000
+(3 rows)
+```
+
+이제 순차 스캔의 비용을 손으로 계산할 수 있다. 페이지 11,096개를 순서대로 읽고(11,096 × 1), 행 100만 개를 처리한다(1,000,000 × 0.01 = 10,000). 합이 21,096이다.
+
+```sql
+EXPLAIN SELECT * FROM orders;
+```
+
+```text
+                           QUERY PLAN
+-----------------------------------------------------------------
+ Seq Scan on orders  (cost=0.00..21096.00 rows=1000000 width=52)
+(1 row)
+```
+
+정확히 맞는다. 조건을 하나 붙이면 행마다 비교 연산이 한 번씩 더 든다. 1,000,000 × 0.0025 = 2,500이 더해져 23,596이 된다.
+
+```sql
+EXPLAIN SELECT * FROM orders WHERE amount > 90000;
+```
+
+```text
+                          QUERY PLAN
+---------------------------------------------------------------
+ Seq Scan on orders  (cost=0.00..23596.00 rows=99940 width=52)
+   Filter: (amount > 90000)
+(2 rows)
+```
+
+비용의 두 숫자는 "첫 행을 내기까지의 비용..마지막 행까지의 비용"이다. 순차 스캔은 바로 첫 행을 내니 앞이 0이다. 정렬은 다 받아야 첫 행을 내니 앞 숫자가 크다. `LIMIT`가 있으면 플래너는 이 두 숫자 사이를 비율로 잘라 쓴다. 뒤에서 이 규칙이 사고를 만든다.
+
+인덱스 스캔의 비용은 더 복잡하다. 인덱스 페이지와 항목 비용에, 테이블 페이지를 몇 번 띄엄띄엄 읽을지가 더해진다. 여기에 인덱스 순서와 테이블 저장 순서가 얼마나 닮았는지(`pg_stats.correlation`)가 들어간다. 닮았으면 테이블 페이지를 순서대로 읽는 쪽에, 아니면 `random_page_cost`로 하나씩 읽는 쪽에 가깝게 계산한다. SSD에서 `random_page_cost`를 1.1 근처로 낮추는 이유와 효과는 [PostgreSQL 운영 글](/posts/postgres-operations)에서 실측했다.
+
+여기서 알아 둘 것은 하나다. 비용 식에 들어가는 재료 중 사람이 정하는 건 설정값이고, 나머지는 거의 다 "몇 행이 나올까"라는 짐작이다. 비용이 틀리는 이유의 대부분은 설정이 아니라 이 짐작이다.
+
+## 몇 행이 나올지 짐작하는 법
+
+위 계획의 `rows=99940`은 어디서 왔을까. 플래너는 조건마다 선택도(selectivity), 그러니까 "전체 행 중 몇 비율이 이 조건을 통과할까"를 0과 1 사이 숫자로 구하고, 여기에 전체 행 수를 곱한다. 선택도의 재료는 `ANALYZE`가 모아 둔 `pg_stats`다.
+
+`ANALYZE`는 테이블을 다 읽지 않는다. 컬럼별 통계 목표(`default_statistics_target`, 기본 100)의 300배, 그러니까 기본값이면 3만 행을 무작위로 뽑아 본다. 그 표본에서 컬럼마다 이런 것을 적어 둔다.
+
+```sql
+SELECT attname, null_frac, n_distinct, most_common_vals, most_common_freqs
+FROM pg_stats
+WHERE tablename = 'orders' AND attname = 'status';
+```
+
+```text
+ attname | null_frac | n_distinct |          most_common_vals          |           most_common_freqs
+---------+-----------+------------+------------------------------------+---------------------------------------
+ status  |         0 |          4 | {delivered,paid,cancelled,pending} | {0.79836667,0.14123334,0.0499,0.0105}
+(1 row)
+```
+
+`most_common_vals`(MCV)는 자주 나오는 값 목록이고, `most_common_freqs`는 그 값이 표본에서 차지한 비율이다. `status = 'pending'`이면 MCV에 있으니 그 비율을 그대로 쓴다. 0.0105 × 1,000,000 = 10,500행이다.
+
+```sql
+EXPLAIN SELECT * FROM orders WHERE status = 'pending';
+SELECT count(*) FROM orders WHERE status = 'pending';
+```
+
+```text
+                                      QUERY PLAN
+--------------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=121.80..11625.89 rows=10500 width=52)
+   Recheck Cond: (status = 'pending'::text)
+   ->  Bitmap Index Scan on orders_status_idx  (cost=0.00..119.17 rows=10500 width=0)
+         Index Cond: (status = 'pending'::text)
+(4 rows)
+
+ count
+-------
+  9988
+(1 row)
+```
+
+짐작 10,500, 실제 9,988. 표본에서 나온 숫자라 이 정도 오차는 늘 있다. 계획을 바꿀 만큼 틀린 건 아니다.
+
+MCV에 없는 값은 어떻게 할까. `user_id`를 보자. 1번 회원이 주문의 20%를 차지하고 나머지는 고르게 퍼져 있다.
+
+```sql
+SELECT null_frac, n_distinct, most_common_vals, most_common_freqs
+FROM pg_stats
+WHERE tablename = 'orders' AND attname = 'user_id';
+```
+
+```text
+ null_frac | n_distinct | most_common_vals | most_common_freqs
+-----------+------------+------------------+-------------------
+         0 |      54984 | {1}              | {0.19893333}
+(1 row)
+```
+
+MCV에 없는 값은 "MCV와 NULL이 차지하고 남은 비율을, MCV가 아닌 나머지 값들이 똑같이 나눠 갖는다"고 본다. (1 − 0.19893333 − 0) ÷ (54,984 − 1) ≈ 0.00001457, 행으로는 14.57이라 15행이다.
+
+```sql
+EXPLAIN SELECT * FROM orders WHERE user_id = 4242;
+```
+
+```text
+                                    QUERY PLAN
+----------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=4.54..63.07 rows=15 width=52)
+   Recheck Cond: (user_id = 4242)
+   ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.54 rows=15 width=0)
+         Index Cond: (user_id = 4242)
+(4 rows)
+```
+
+그런데 `n_distinct`가 54,984로 나왔다. 실제로 세면 99,971명이다. 3만 행 표본에서 서로 다른 값의 수를 거꾸로 짐작하는 건 원래 어렵고, 값이 많고 고르게 퍼진 컬럼일수록 작게 나오기 쉽다. 그래서 회원별 행 수를 두 배쯤 많게 본다. 이 표에서는 15행이냐 8행이냐라 문제가 없지만, 이 숫자가 조인의 바깥쪽 행 수가 되면 차이가 커진다. 진짜 값을 알면 직접 알려 줄 수 있다.
+
+```sql
+-- 음수는 "행 수에 대한 비율"이다. -0.1 = 행 수의 10%가 서로 다른 값
+ALTER TABLE orders ALTER COLUMN user_id SET (n_distinct = -0.1);
+ANALYZE orders;
+EXPLAIN SELECT * FROM orders WHERE user_id = 4242;
+```
+
+```text
+                                   QUERY PLAN
+---------------------------------------------------------------------------------
+ Bitmap Heap Scan on orders  (cost=4.49..35.94 rows=8 width=52)
+   Recheck Cond: (user_id = 4242)
+   ->  Bitmap Index Scan on orders_user_id_idx  (cost=0.00..4.49 rows=8 width=0)
+         Index Cond: (user_id = 4242)
+(4 rows)
+```
+
+실제 4242번 회원의 주문은 8건이다. 되돌리려면 `ALTER TABLE orders ALTER COLUMN user_id RESET (n_distinct);` 후 다시 `ANALYZE`한다. 회원이 늘면 비율도 바뀌므로 고정값보다 비율(음수)로 주는 편이 오래 맞는다.
+
+## 범위 조건은 히스토그램으로 센다
+
+`amount > 90000`처럼 범위를 묻는 조건에는 MCV가 소용없다. 금액은 값이 거의 다 달라서 자주 나오는 값이 없다. 이때는 `histogram_bounds`를 쓴다. 표본의 값을 정렬해서 같은 개수씩 칸으로 나눈 경계값 목록이다. 기본 통계 목표면 경계가 101개라 보기 힘드니, 이 글에서는 `amount` 컬럼만 목표를 10으로 낮춰 두었다(`ALTER TABLE orders ALTER COLUMN amount SET STATISTICS 10;`). 그러면 경계 11개, 칸 10개가 된다.
+
+```sql
+SELECT histogram_bounds FROM pg_stats
+WHERE tablename = 'orders' AND attname = 'amount';
+```
+
+```text
+                          histogram_bounds
+--------------------------------------------------------------------
+ {1002,10900,20602,30513,40315,50188,60126,70183,80135,89994,99996}
+(1 row)
+```
+
+칸마다 행이 10%씩 들어 있다는 뜻이다. 90,000은 아홉 번째 경계 89,994와 마지막 경계 99,996 사이, 즉 마지막 칸 안에 있다. 플래너는 칸 안에서는 값이 고르게 퍼져 있다고 보고 직선으로 나눈다. 90,000은 그 칸의 (90,000 − 89,994) ÷ (99,996 − 89,994) ≈ 0.0006 지점이다. 그러니 90,000보다 작은 값의 비율은 (9 + 0.0006) ÷ 10 = 0.90006이고, 큰 값은 0.09994다. 100만 행이면 99,940행. 위 계획의 `rows=99940`과 같다.
+
+직접 계산해 보면 감이 온다. 아래 함수를 채워서 플래너와 같은 숫자가 나오는지 확인해 보자. 테스트 값은 모두 위 히스토그램으로 실제 `EXPLAIN`을 돌려 얻은 `rows`다.
+
+<CodePlayground
+  caption="히스토그램으로 amount > x의 행 수 짐작하기"
+  functionName="estimateGreater"
+  initialCode={`// bounds: pg_stats.histogram_bounds (오름차순)
+// x: 조건 amount > x 의 x
+// totalRows: 테이블 행 수 (pg_class.reltuples)
+function estimateGreater(bounds, x, totalRows) {
+  // 1. x가 들어 있는 칸 i를 찾는다
+  // 2. 칸 안에서 x의 위치를 0~1로 구한다
+  // 3. x보다 작은 비율 = (i + 위치) / 칸 수
+  return 0;
+}`}
+  solution={`function estimateGreater(bounds, x, totalRows) {
+  const bins = bounds.length - 1;
+  if (x <= bounds[0]) return totalRows;
+  if (x >= bounds[bins]) return 0;
+  let i = 0;
+  while (bounds[i + 1] < x) i++;
+  const frac = (x - bounds[i]) / (bounds[i + 1] - bounds[i]);
+  const less = (i + frac) / bins;
+  return Math.round(totalRows * (1 - less));
+}`}
+  tests={[
+    { label: "amount > 90000", args: [[1002, 10900, 20602, 30513, 40315, 50188, 60126, 70183, 80135, 89994, 99996], 90000, 1000000], expected: 99940 },
+    { label: "amount > 50000", args: [[1002, 10900, 20602, 30513, 40315, 50188, 60126, 70183, 80135, 89994, 99996], 50000, 1000000], expected: 501904 },
+    { label: "amount > 25000", args: [[1002, 10900, 20602, 30513, 40315, 50188, 60126, 70183, 80135, 89994, 99996], 25000, 1000000], expected: 755625 },
+  ]}
+/>
+
+실제 PostgreSQL은 몇 가지를 더 한다. MCV가 있으면 MCV 값들은 따로 세서 더하고 히스토그램 몫에는 MCV를 뺀 비율만 곱한다. 범위가 첫 칸이나 마지막 칸에 걸리고 그 컬럼에 인덱스가 있으면, 인덱스 끝을 직접 들여다봐서 실제 최솟값·최댓값으로 칸 끝을 고친다. 그래도 뼈대는 위 함수 그대로다.
+
+이 계산이 틀어지는 대표적인 경우가 시간 컬럼이다. `created_at`의 히스토그램은 마지막 `ANALYZE` 시점까지만 안다. 그 뒤에 들어온 오늘 주문을 `created_at > now() - interval '1 hour'`로 찾으면, 통계상으로는 그 범위에 행이 거의 없다. 위에서 말한 인덱스 끝 확인이 이 문제를 많이 덜어 주지만, 인덱스가 없거나 범위가 복잡하면 그대로 틀린다. 대량으로 넣은 직후에 계획이 이상하면 먼저 `ANALYZE`부터 돌려 보는 이유다.
+
+## 조건 두 개를 곱하면 틀리는 경우
+
+조건이 둘이면 플래너는 기본적으로 둘이 서로 관계없다고 보고 선택도를 곱한다. `city`와 `zip`은 짝이 정해져 있다. city7이면 반드시 zip7이다. 그런데 플래너는 그걸 모른다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT o.id, u.email
+FROM orders o
+JOIN users u ON u.id = o.user_id
+WHERE o.city = 'city7' AND o.zip = 'zip7';
+```
+
+```text
+                                                          QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.29..26805.14 rows=94 width=29) (actual time=0.047..161.121 rows=10015 loops=1)
+   ->  Seq Scan on orders o  (cost=0.00..26096.00 rows=94 width=12) (actual time=0.017..127.681 rows=10015 loops=1)
+         Filter: ((city = 'city7'::text) AND (zip = 'zip7'::text))
+         Rows Removed by Filter: 989985
+   ->  Index Scan using users_pkey on users u  (cost=0.29..7.54 rows=1 width=25) (actual time=0.003..0.003 rows=1 loops=10015)
+         Index Cond: (id = o.user_id)
+ Planning Time: 0.386 ms
+ Execution Time: 161.494 ms
+(8 rows)
+```
+
+`city = 'city7'`만이면 9,700행으로 본다(MCV 비율 0.0097). 여기에 `zip = 'zip7'`의 0.0097을 또 곱해서 94행이 됐다. 실제는 10,015행으로 100배 넘게 틀렸다.
+
+이럴 때 쓰는 것이 확장 통계(extended statistics)다. 컬럼 사이의 관계를 따로 모아 두라고 알려 준다. PostgreSQL 10부터 `ndistinct`와 `dependencies`, 12부터 `mcv` 종류가 있다.
+
+```sql
+-- city가 정해지면 zip이 정해지는 관계(함수 종속)를 모은다
+CREATE STATISTICS orders_city_zip (dependencies) ON city, zip FROM orders;
+ANALYZE orders;
+
+SELECT statistics_name, dependencies FROM pg_stats_ext
+WHERE statistics_name = 'orders_city_zip';
+```
+
+```text
+ statistics_name |               dependencies
+-----------------+------------------------------------------
+ orders_city_zip | {"7 => 8": 1.000000, "8 => 7": 1.000000}
+(1 row)
+```
+
+`7 => 8`은 7번째 컬럼(city)이 8번째 컬럼(zip)을 100% 결정한다는 뜻이다. 같은 쿼리를 다시 본다.
+
+```text
+                                                         QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------
+ Hash Join  (cost=2986.00..29109.56 rows=10500 width=29) (actual time=63.688..199.807 rows=10015 loops=1)
+   Hash Cond: (o.user_id = u.id)
+   ->  Seq Scan on orders o  (cost=0.00..26096.00 rows=10500 width=12) (actual time=0.033..129.521 rows=10015 loops=1)
+         Filter: ((city = 'city7'::text) AND (zip = 'zip7'::text))
+         Rows Removed by Filter: 989985
+   ->  Hash  (cost=1736.00..1736.00 rows=100000 width=25) (actual time=62.688..62.689 rows=100000 loops=1)
+         Buckets: 131072  Batches: 1  Memory Usage: 6880kB
+         ->  Seq Scan on users u  (cost=0.00..1736.00 rows=100000 width=25) (actual time=0.010..24.683 rows=100000 loops=1)
+ Planning Time: 0.857 ms
+ Execution Time: 200.573 ms
+(10 rows)
+```
+
+짐작이 10,500행으로 맞아졌고 조인 방법이 Nested Loop에서 Hash Join으로 바뀌었다. 솔직히 말하면 이 실험에서는 시간이 오히려 161ms에서 200ms로 늘었다. `users`가 통째로 메모리에 있어서 인덱스를 1만 번 찾아가는 일이 싸고, 해시 테이블을 만드는 데 63ms가 들었기 때문이다. 비용 모델은 인덱스를 찾아갈 때 디스크를 읽을 수도 있다고 보수적으로 계산한다.
+
+그러니 이 예에서 볼 것은 시간이 아니라 짐작이 맞아졌다는 사실이다. 94행이라는 틀린 숫자는 이 노드에서 끝나지 않는다. 이 결과가 다른 테이블과 한 번 더 조인되면 플래너는 바깥이 94행이라 믿고 다음 조인도 Nested Loop로, 그다음도 Nested Loop로 고른다. 안쪽 테이블이 메모리에 없거나 인덱스가 없으면 1만 번 반복이 1만 번의 디스크 읽기, 또는 1만 번의 순차 스캔이 된다. 틀린 짐작은 계획 트리를 따라 위로 올라가며 곱해진다. 실제로 짐작이 틀려 조인이 느려진 계획을 읽는 법은 [느린 쿼리 찾기 글](/posts/sql-query-tuning)에서 봤다.
+
+확장 통계에도 한계가 있다. 같은 테이블의 컬럼끼리만 만들 수 있고(테이블을 건너는 관계는 못 잡는다), `dependencies`는 `=` 조건에서만 쓰인다. 범위 조건이 섞이면 `mcv` 종류가 필요하다. 그리고 만들어 두기만 하면 안 되고 `ANALYZE`를 돌려야 채워진다.
+
+## 추정이 틀리면 조인 방법이 바뀐다
+
+조인 방법을 고르는 기준을 짐작 행 수 쪽에서 다시 보면 이렇다. Nested Loop는 바깥 행 하나마다 안쪽을 한 번 찾는다. 비용이 대략 "바깥 행 수 × 안쪽을 한 번 찾는 비용"이라 바깥이 작을수록 싸다. Hash Join은 한쪽을 통째로 읽어 해시 테이블을 만든 뒤 다른 쪽을 훑는다. 만드는 값이 미리 들지만 행 수가 커져도 비용이 천천히 는다. Merge Join은 양쪽을 조인 키 순서로 정렬해서 지퍼처럼 맞물린다. 이미 정렬된 입력(인덱스)이 있을 때 싸다.
+
+그래서 바깥 행 수를 작게 짐작할수록 Nested Loop가 골라지고, 크게 짐작할수록 Hash Join이 골라진다. 작게 틀리는 쪽이 더 위험하다. 크게 틀려 Hash Join을 고르면 조금 손해 보는 정도지만, 작게 틀려 Nested Loop를 고르면 반복 횟수만큼 시간이 곱해진다. `EXPLAIN ANALYZE`에서 `rows=1`인데 `loops`가 수만인 Nested Loop가 보이면 거의 항상 이 경우다.
+
+## 조인 순서는 몇 가지나 따져 보나
+
+테이블이 셋이면 조인 순서는 여러 가지다. `orders`와 `users`를 먼저 붙이고 `products`를 붙일 수도, `products`를 먼저 걸러 `orders`와 붙이고 `users`를 붙일 수도 있다. 테이블이 n개면 순서의 가짓수는 n이 커질수록 폭발한다. PostgreSQL은 동적 계획법으로 이 문제를 푼다. 테이블 두 개짜리 조합 중 가장 싼 것을 기억해 두고, 그걸 바탕으로 세 개짜리를, 다시 네 개짜리를 만든다. 같은 테이블 묶음에 대해서는 가장 싼 방법 하나(정렬 순서가 다른 것은 따로)만 남겨서 계산을 줄인다.
+
+이 계산에도 한도가 있다. 설정 셋이 그 한도다.
+
+```sql
+SELECT name, setting FROM pg_settings
+WHERE name IN ('join_collapse_limit', 'from_collapse_limit', 'geqo_threshold')
+ORDER BY name;
+```
+
+```text
+        name         | setting
+---------------------+---------
+ from_collapse_limit | 8
+ geqo_threshold      | 12
+ join_collapse_limit | 8
+(3 rows)
+```
+
+`join_collapse_limit`는 명시적인 `JOIN` 구문을 몇 개까지 풀어서 순서를 다시 짤지 정한다. 8이면 8개까지는 쿼리에 쓴 순서와 상관없이 플래너가 순서를 정한다. 그보다 많으면 쓴 순서를 일부 그대로 따른다. `from_collapse_limit`는 FROM 안의 서브쿼리를 바깥으로 끌어올려 합칠지의 한도다. 둘을 1로 두면 플래너는 쓴 순서대로만 조인한다. 차이를 보자. `products`를 이름으로 걸러 한 행만 남기는 쿼리를, 일부러 `orders`와 `users`부터 쓴다.
+
+```sql
+EXPLAIN ANALYZE
+SELECT o.id, u.email, p.name
+FROM orders o
+JOIN users u    ON u.id = o.user_id
+JOIN products p ON p.id = o.product_id
+WHERE p.name = 'product 7';
+```
+
+```text
+                                                           QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=19.80..24065.69 rows=1000 width=40) (actual time=0.158..160.174 rows=977 loops=1)
+   ->  Hash Join  (cost=19.51..23751.64 rows=1000 width=23) (actual time=0.141..154.979 rows=977 loops=1)
+         Hash Cond: (o.product_id = p.id)
+         ->  Seq Scan on orders o  (cost=0.00..21096.00 rows=1000000 width=16) (actual time=0.004..65.449 rows=1000000 loops=1)
+         ->  Hash  (cost=19.50..19.50 rows=1 width=15) (actual time=0.120..0.121 rows=1 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 9kB
+               ->  Seq Scan on products p  (cost=0.00..19.50 rows=1 width=15) (actual time=0.018..0.118 rows=1 loops=1)
+                     Filter: (name = 'product 7'::text)
+                     Rows Removed by Filter: 999
+   ->  Index Scan using users_pkey on users u  (cost=0.29..0.31 rows=1 width=25) (actual time=0.005..0.005 rows=1 loops=977)
+         Index Cond: (id = o.user_id)
+ Planning Time: 0.487 ms
+ Execution Time: 160.356 ms
+(13 rows)
+```
+
+플래너는 쓴 순서를 무시하고 `products` 한 행으로 `orders`를 먼저 거른 뒤(977행) 회원을 붙였다. 이제 `SET join_collapse_limit = 1;`로 순서를 고정하고 같은 쿼리를 돌린다.
+
+```text
+                                                            QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------------
+ Hash Join  (cost=3005.51..29362.75 rows=1000 width=40) (actual time=34.562..781.428 rows=977 loops=1)
+   Hash Cond: (o.product_id = p.id)
+   ->  Hash Join  (cost=2986.00..26707.11 rows=1000000 width=33) (actual time=34.397..704.934 rows=1000000 loops=1)
+         Hash Cond: (o.user_id = u.id)
+         ->  Seq Scan on orders o  (cost=0.00..21096.00 rows=1000000 width=16) (actual time=0.003..93.614 rows=1000000 loops=1)
+         ->  Hash  (cost=1736.00..1736.00 rows=100000 width=25) (actual time=34.185..34.187 rows=100000 loops=1)
+               Buckets: 131072  Batches: 1  Memory Usage: 6880kB
+               ->  Seq Scan on users u  (cost=0.00..1736.00 rows=100000 width=25) (actual time=0.004..11.390 rows=100000 loops=1)
+   ->  Hash  (cost=19.50..19.50 rows=1 width=15) (actual time=0.088..0.089 rows=1 loops=1)
+         Buckets: 1024  Batches: 1  Memory Usage: 9kB
+         ->  Seq Scan on products p  (cost=0.00..19.50 rows=1 width=15) (actual time=0.008..0.085 rows=1 loops=1)
+               Filter: (name = 'product 7'::text)
+               Rows Removed by Filter: 999
+ Planning Time: 0.262 ms
+ Execution Time: 781.666 ms
+(15 rows)
+```
+
+쓴 대로 주문 100만 건과 회원을 먼저 붙이느라 중간 결과가 100만 행이 됐고, 160ms가 781ms가 됐다. 이 설정은 계획을 망가뜨리려고 있는 게 아니다. 쿼리를 쓴 사람이 순서를 더 잘 알 때, 또는 테이블이 많아 계획 시간이 실행 시간보다 커질 때 쓴다. 이 경우는 뒤의 "힌트 없이 계획을 바꾸는 방법"에서 다시 다룬다.
+
+FROM에 들어가는 항목이 `geqo_threshold`(12)개 이상이면 동적 계획법을 포기하고 GEQO(유전 알고리즘 기반 탐색)로 넘어간다. 후보 순서를 몇 개 만들고 섞고 고르기를 반복해서 "꽤 괜찮은" 순서를 찾는다. 모든 경우를 보지 않으니 계획 시간은 짧지만 가장 좋은 순서를 놓칠 수 있다. 무작위성은 `geqo_seed`로 고정돼 있어서 같은 입력이면 같은 결과가 나오지만, 테이블 하나만 늘어도 전혀 다른 계획이 나올 수 있다. 테이블 열 개 넘게 조인하는 리포트 쿼리가 조인 하나 추가하자 갑자기 느려졌다면 이 경계를 넘었는지 확인해 본다.
+
+## 다섯 번 실행한 뒤에 바뀌는 계획
+
+이제 처음 장면으로 돌아간다. 판매자별 최근 주문 20건이다. 앱은 이 쿼리를 prepared statement로 보낸다. 한 번 준비해 두고 값만 바꿔 실행하는 방식이다. 같은 일을 psql의 `PREPARE`로 재현한다.
+
+```sql
+SELECT shop_id, count(*) AS orders, max(created_at) AS last_order
+FROM orders WHERE shop_id IN (1, 11, 50)
+GROUP BY shop_id ORDER BY shop_id;
+```
+
+```text
+ shop_id | orders |       last_order
+---------+--------+------------------------
+       1 | 180328 | 2026-10-17 08:24:35+00
+      11 |   2233 | 2026-10-17 08:06:40+00
+      50 |     50 | 2026-01-01 00:20:50+00
+(3 rows)
+```
+
+판매자 50번은 주문이 50건뿐이고 마지막 주문이 1월 1일이다. 이 판매자로 먼저 실행한다.
+
+```sql
+PREPARE shop_recent(int) AS
+  SELECT id, amount, created_at FROM orders
+  WHERE shop_id = $1
+  ORDER BY created_at DESC
+  LIMIT 20;
+
+EXPLAIN ANALYZE EXECUTE shop_recent(50);
+```
+
+```text
+                                                               QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=132.53..132.58 rows=20 width=20) (actual time=0.054..0.061 rows=20 loops=1)
+   ->  Sort  (cost=132.53..132.61 rows=33 width=20) (actual time=0.053..0.059 rows=20 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: top-N heapsort  Memory: 27kB
+         ->  Bitmap Heap Scan on orders  (cost=4.68..131.69 rows=33 width=20) (actual time=0.015..0.021 rows=50 loops=1)
+               Recheck Cond: (shop_id = 50)
+               Heap Blocks: exact=1
+               ->  Bitmap Index Scan on orders_shop_id_idx  (cost=0.00..4.67 rows=33 width=0) (actual time=0.008..0.008 rows=50 loops=1)
+                     Index Cond: (shop_id = 50)
+ Planning Time: 0.188 ms
+ Execution Time: 0.081 ms
+(11 rows)
+```
+
+좋은 계획이다. 판매자 인덱스로 50건을 꺼내 정렬하고 20건을 낸다. 0.081ms. 이어서 중간 규모 판매자 11~14번으로 네 번 실행한다. 이 판매자들은 주문이 2천 건쯤이고 최근까지 꾸준히 들어온다. 그래서 플래너는 이번엔 다른 계획을 고른다. `created_at` 인덱스를 뒤에서부터 읽다가 판매자가 맞는 행 20개를 모으면 멈추는 계획이다.
+
+```text
+ Limit  (cost=0.42..396.22 rows=20 width=20)
+   ->  Index Scan Backward using orders_created_at_idx on orders  (cost=0.42..39579.43 rows=2000 width=20)
+         Filter: (shop_id = 11)
+```
+
+`LIMIT`의 비용 0.42..396.22는 아래 노드의 전체 비용 39,579.43에 20 ÷ 2,000을 곱해 잘라 낸 값이다. 플래너는 "판매자 11번 행이 시간 순으로 고르게 퍼져 있으니 뒤에서부터 1천 행쯤 읽으면 20개가 모인다"고 보는 것이다. 12, 13, 14번도 같은 모양이고 비용은 360.23, 377.37, 432.27이 나왔다. 여기까지 다섯 번은 모두 값을 넣고 새로 계획했다. 이런 계획을 custom plan이라 한다.
+
+```sql
+SELECT name, generic_plans, custom_plans FROM pg_prepared_statements;
+```
+
+```text
+    name     | generic_plans | custom_plans
+-------------+---------------+--------------
+ shop_recent |             0 |            5
+(1 row)
+```
+
+여섯 번째로 다시 판매자 50번을 부른다.
+
+```text
+                                                                        QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..40.00 rows=20 width=20) (actual time=201.677..201.686 rows=20 loops=1)
+   ->  Index Scan Backward using orders_created_at_idx on orders  (cost=0.42..39579.43 rows=20000 width=20) (actual time=201.675..201.682 rows=20 loops=1)
+         Filter: (shop_id = $1)
+         Rows Removed by Filter: 999950
+ Planning Time: 0.074 ms
+ Execution Time: 201.706 ms
+(6 rows)
+```
+
+0.081ms이던 같은 쿼리가 201ms가 됐다. 2,500배다. 조건이 `shop_id = 50`이 아니라 `shop_id = $1`로 찍혀 있다. 값을 모르는 계획, generic plan이 쓰인 것이다. `pg_prepared_statements`를 다시 보면 `generic_plans`가 1이 되어 있다.
+
+왜 이렇게 됐는지는 규칙을 알면 바로 보인다. PostgreSQL은 prepared statement의 처음 다섯 번을 custom plan으로 돌리면서 비용을 기록한다. 여섯 번째에 값 없이 generic plan을 한 번 만들고, 그 비용을 custom plan 다섯 번의 평균과 비교한다. 소스(`plancache.c`) 기준으로 custom 쪽에는 매번 다시 계획하는 값으로 `1000 × cpu_operator_cost × (테이블 수 + 1)`, 여기서는 1000 × 0.0025 × 2 = 5를 더한다. generic이 더 싸면 그 뒤로는 generic plan을 계속 쓴다. 아래 그림에서 다음을 누르면 실행 번호마다 기억해 두는 비용이 쌓이고 여섯 번째에 판정이 난다.
+
+<AlgoTrace
+  caption="prepared statement가 generic plan으로 넘어가는 순간"
+  memoryLabel="기록한 custom 비용"
+  cells={["#1 판매자50", "#2 판매자11", "#3 판매자12", "#4 판매자13", "#5 판매자14", "#6 판매자50"]}
+  steps={[
+    { pointer: 0, memory: ["132.58"], caption: "첫 실행. 값 50을 넣고 계획한다. 판매자 인덱스로 50행을 꺼내 정렬하는 계획, 비용 132.58." },
+    { pointer: 1, memory: ["132.58", "396.22"], caption: "판매자 11은 2천 행으로 짐작한다. created_at 인덱스를 뒤에서 읽는 계획, 비용 396.22." },
+    { pointer: 2, memory: ["132.58", "396.22", "360.23"], caption: "판매자 12도 같은 모양이다. 비용 360.23." },
+    { pointer: 3, memory: ["132.58", "396.22", "360.23", "377.37"], caption: "판매자 13, 비용 377.37." },
+    { pointer: 4, memory: ["132.58", "396.22", "360.23", "377.37", "432.27"], caption: "판매자 14, 비용 432.27. custom plan이 다섯 번 쌓였다." },
+    { pointer: 5, memory: ["평균 339.73 + 5", "generic 40.00"], caption: "값 없이 계획하면 판매자 하나를 1/50 = 2만 행으로 본다. 뒤에서 1천 행만 읽으면 된다고 보고 비용 40.00. 344.73보다 싸니 generic으로 넘어간다." },
+    { pointer: 5, found: [5], memory: ["generic 고정"], caption: "판매자 50은 1월에 멈췄다. 뒤에서부터 999,950행을 버리고서야 20행을 찾는다. 201ms." },
+  ]}
+/>
+
+generic plan은 값을 모르니 `shop_id = $1`을 "판매자 아무나 하나"로 본다. 선택도는 1 ÷ `n_distinct` = 1/50, 2만 행이다. 2만 행이 시간 순으로 고르게 퍼져 있다면 뒤에서 1천 행만 읽으면 20개가 모이니 비용이 40으로 아주 싸다. 평균적인 판매자에게는 맞는 계획이다. 문 닫은 판매자 50번에게는 최악이다. 그 판매자의 주문은 인덱스의 맨 앞쪽에 몰려 있어서 거의 100만 행을 지나야 한다.
+
+판매자 1번(18만 건)이 generic plan을 만나면 어떨까. 뒤에서 129행만 버리고 끝나서 0.08ms다. 그래서 대부분의 요청은 빠르고 몇몇 판매자만 느린, 처음 장면 같은 증상이 나온다. 앱에서만 느리고 psql에 값을 직접 넣으면 빠른 것도 같은 이유다. psql에 값을 넣은 쿼리는 매번 custom plan이다. 이 실험 테이블은 100만 행이라 200ms에서 끝났지만, 이 계획이 버리는 행 수는 테이블 크기에 비례한다. 테이블이 100배면 버리는 행도 100배다.
+
+PostgreSQL 16부터는 값 없이 generic plan을 바로 볼 수 있다. 앱 로그에서 `$1`이 든 쿼리를 그대로 가져와 확인할 때 편하다.
+
+```sql
+EXPLAIN (GENERIC_PLAN)
+SELECT id, amount, created_at FROM orders
+WHERE shop_id = $1 ORDER BY created_at DESC LIMIT 20;
+```
+
+```text
+                                                 QUERY PLAN
+------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..40.00 rows=20 width=20)
+   ->  Index Scan Backward using orders_created_at_idx on orders  (cost=0.42..39579.43 rows=20000 width=20)
+         Filter: (shop_id = $1)
+(3 rows)
+```
+
+당장 막는 방법은 `plan_cache_mode`(PostgreSQL 12부터)다. 기본값 `auto`가 위의 규칙이고, `force_custom_plan`이면 매번 값을 넣어 계획한다. `force_generic_plan`은 반대로 처음부터 generic만 쓴다.
+
+```sql
+SET plan_cache_mode = force_custom_plan;
+EXPLAIN ANALYZE EXECUTE shop_recent(50);
+```
+
+```text
+                                                               QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=132.53..132.58 rows=20 width=20) (actual time=0.051..0.053 rows=20 loops=1)
+   ->  Sort  (cost=132.53..132.61 rows=33 width=20) (actual time=0.050..0.051 rows=20 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: top-N heapsort  Memory: 27kB
+         ->  Bitmap Heap Scan on orders  (cost=4.68..131.69 rows=33 width=20) (actual time=0.028..0.034 rows=50 loops=1)
+               Recheck Cond: (shop_id = 50)
+               Heap Blocks: exact=1
+               ->  Bitmap Index Scan on orders_shop_id_idx  (cost=0.00..4.67 rows=33 width=0) (actual time=0.021..0.021 rows=50 loops=1)
+                     Index Cond: (shop_id = 50)
+ Planning Time: 0.106 ms
+ Execution Time: 0.082 ms
+(11 rows)
+```
+
+세션 전체에 걸면 다른 쿼리까지 매번 계획하는 비용을 치른다. 계획 시간이 실행 시간보다 큰 짧은 쿼리가 많은 서비스라면 손해다. 범위를 좁혀 거는 편이 낫다. 이 쿼리만 쓰는 함수에 `SET plan_cache_mode = force_custom_plan`을 붙이거나, 이 화면을 맡은 DB 역할에만 `ALTER ROLE report_reader SET plan_cache_mode = force_custom_plan;`처럼 건다. 되돌릴 때는 `ALTER ROLE ... RESET plan_cache_mode;`다.
+
+## 드라이버와 풀이 문장을 준비하는 방식
+
+여기서 헷갈리는 게 있다. 코드에는 `PREPARE`를 쓴 적이 없는데 왜 prepared statement가 생기나. 드라이버가 알아서 만든다. 그리고 드라이버마다 언제 만드는지가 다르다.
+
+PostgreSQL JDBC 드라이버(pgJDBC)는 같은 `PreparedStatement`를 `prepareThreshold`(기본 5)번 실행하면 그때부터 서버 쪽에 이름 붙은 문장을 만든다. 서버는 그 문장을 다시 다섯 번 custom plan으로 돌린 뒤 판정한다. 그래서 앱에서 보면 열 번째쯤 실행부터 계획이 바뀔 수 있다. 커넥션 풀이 연결을 오래 쥐고 있으니 이 판정은 연결마다 따로 일어난다. 어떤 연결은 판정 전에 중간 규모 판매자만 다섯 번 받아 generic으로 넘어가고, 어떤 연결은 큰 판매자를 받아 custom에 남는다. 같은 API인데 어떤 요청은 느리고 어떤 요청은 빠른 게 이 때문이고, 앱을 재시작하면 연결이 새로 맺어져 증상이 한동안 사라지기도 한다. "재시작하니 나았다"가 반복되면 이 경우를 의심한다.
+
+node-postgres(`pg`)는 쿼리에 `name`을 줄 때만 이름 붙은 문장을 만든다. 값만 넘기는 보통 호출은 이름 없는 문장으로 매번 파싱하고, 이름 없는 문장은 실행할 때의 값을 보고 계획하므로 이 문제가 생기지 않는다. 대신 매번 계획하는 비용을 낸다. 다른 드라이버나 ORM은 버전마다 기본값이 달라서, 쓰는 드라이버의 문서에서 "server-side prepared statement"가 언제 켜지는지 확인하는 수밖에 없다.
+
+PgBouncer를 transaction 모드로 쓰면 이야기가 하나 더 붙는다. 예전에는 prepared statement를 아예 못 썼고, 1.21부터 `max_prepared_statements`를 켜면 쓸 수 있다. 버전별 기본값과 실제로 깨지는 모습은 [커넥션 풀 글](/posts/connection-pool)에 있다. 이때 문장은 PgBouncer 뒤의 서버 연결에 준비되고, 여러 클라이언트의 같은 쿼리가 그 서버 연결의 문장을 함께 쓸 수 있다. 그러면 "처음 다섯 번"이 서로 다른 클라이언트의 요청으로 채워진다. 판정 시점을 앱 하나만 보고 짐작하기가 더 어려워진다.
+
+## 힌트 없이 계획을 바꾸는 방법
+
+오라클이나 MySQL 8은 쿼리 안에 `/*+ ... */` 힌트를 적어 계획을 지정할 수 있다. PostgreSQL 본체에는 힌트가 없다. `pg_hint_plan`이라는 확장이 있지만 관리형 DB에서 못 쓰는 경우도 있고, 힌트는 데이터가 바뀌어도 계획을 바꾸지 못하게 묶는다. 그래서 먼저 플래너가 맞는 답을 내도록 재료를 고친다. 순서는 대략 이렇다.
+
+첫째, 통계를 고친다. 대량 변경 직후라면 `ANALYZE`, 분포가 치우친 컬럼이면 그 컬럼만 통계 목표를 올린다(`ALTER TABLE orders ALTER COLUMN shop_id SET STATISTICS 1000;` 후 `ANALYZE`). 서로 다른 값 수가 틀리면 `n_distinct`를 지정하고, 컬럼끼리 관련이 있으면 `CREATE STATISTICS`를 만든다. 모두 위에서 숫자로 본 방법이다.
+
+둘째, 계획이 고를 수 있는 길을 바꾼다. 판매자 쿼리라면 진짜 해결책은 `(shop_id, created_at)` 복합 인덱스다. 판매자로 좁히고 시간 순으로 이미 정렬된 행을 20개만 읽으면 되니 어느 판매자든 빠르다. 그런데 이 실험에서는 복합 인덱스를 만들어도 generic plan이 여전히 `created_at` 인덱스를 골랐다. 비용이 40.00 대 42.57로 근소하게 졌기 때문이다. 복합 인덱스는 테이블을 띄엄띄엄 읽는다고 계산되는데, `random_page_cost` 4가 그 값을 비싸게 매긴 것이다. SSD 기준인 1.1로 낮추자 generic plan도 복합 인덱스를 골랐다. 쓰지 않게 된 `created_at` 단일 인덱스를 지워도 같은 계획이 나왔다(비용 42.57).
+
+```text
+ Limit  (cost=0.42..12.27 rows=20 width=20)
+   ->  Index Scan Backward using orders_shop_created_idx on orders  (cost=0.42..11845.43 rows=20000 width=20)
+         Index Cond: (shop_id = $1)
+```
+
+복합 인덱스를 쓰는 generic plan으로 판매자 50번을 돌리면 0.141ms, 판매자 1번은 0.095ms였다. 값을 몰라도 모든 값에 괜찮은 계획이 생겼으니 generic plan이어도 상관없다. prepared statement 문제를 `plan_cache_mode`로 덮기 전에, 값에 따라 계획이 갈리지 않게 만들 수 있는지 먼저 본다.
+
+셋째, 쿼리 모양으로 순서를 지정한다. CTE에 `MATERIALIZED`를 붙이면(PostgreSQL 12부터) 그 부분을 먼저 따로 실행하고 결과만 넘긴다. 서브쿼리에 `OFFSET 0`을 붙이면 플래너가 서브쿼리를 바깥과 합치지 못한다. 오래된 요령이지만 지금도 동작한다. 조인 순서를 직접 정하고 싶으면 그 트랜잭션에서만 `join_collapse_limit`를 1로 둔다.
+
+```sql
+BEGIN;
+SET LOCAL join_collapse_limit = 1;   -- 이 트랜잭션에서만 쓴 순서대로 조인
+SELECT ...                           -- 순서를 직접 정한 쿼리
+COMMIT;                              -- 끝나면 원래 값으로 돌아간다
+```
+
+넷째, 마지막 수단으로 `enable_nestloop`, `enable_seqscan` 같은 스위치를 `SET LOCAL`로 끈다. 이 스위치는 그 방법을 금지하는 게 아니라 비용에 아주 큰 값을 더해서 웬만하면 안 고르게 만든다. 원인을 확인하는 실험 도구로는 좋지만 운영 코드에 박아 두면 데이터가 바뀐 뒤에 더 나은 계획까지 막는다. 서버 전체 설정(`postgresql.conf`)에서 끄는 건 하지 않는다.
+
+비용 상수를 테이블스페이스 단위로 다르게 줄 수도 있다(`ALTER TABLESPACE fast_ssd SET (random_page_cost = 1.1);`). 디스크 종류가 섞인 서버에서 쓴다.
+
+## 계획이 갑자기 바뀌었을 때 보는 순서
+
+현장에서 "어제까지 빨랐다"는 말을 들으면 이 순서로 좁힌다.
+
+먼저 정말 계획이 바뀌었는지 본다. [느린 쿼리 찾기 글](/posts/sql-query-tuning)의 `pg_stat_statements`에서 그 쿼리의 `mean_exec_time`과 `max_exec_time`을 보면, 평균은 그대로인데 최대만 튀는지(값에 따라 갈리는 경우), 평균 자체가 올랐는지(계획이 통째로 바뀐 경우) 갈린다. 느린 순간의 계획을 남겨야 하면 `auto_explain` 확장으로 일정 시간을 넘긴 쿼리의 계획을 로그에 쓴다. prepared statement로 돈 쿼리는 로그에 `$1`이 남는다.
+
+다음으로 앱과 같은 조건에서 재현한다. psql에 값을 넣어 돌리면 custom plan이라 빠르게 나오기 쉽다. `PREPARE` 후 여섯 번 이상 실행하거나, PostgreSQL 16이면 `EXPLAIN (GENERIC_PLAN)`으로 앱이 실제로 쓰는 계획을 본다. 계획을 비교할 때는 `rows` 짐작과 `actual rows`가 몇 배 차이 나는 가장 안쪽 노드를 찾는다. 그 노드가 출발점이다.
+
+그다음 통계가 언제 갱신됐는지 본다.
+
+```sql
+SELECT relname, n_live_tup, n_mod_since_analyze, last_analyze, last_autoanalyze
+FROM pg_stat_user_tables WHERE relname = 'orders';
+```
+
+`n_mod_since_analyze`가 크면 마지막 통계 이후 많이 바뀐 것이다. autovacuum은 기본으로 행의 10%(`autovacuum_analyze_scale_factor = 0.1`)가 바뀌어야 `ANALYZE`를 돌린다. 1억 행 테이블이면 천만 행이 바뀌어야 돈다는 뜻이라, 하루치 데이터가 통계에 없는 채로 오후를 보낼 수 있다. 큰 테이블은 테이블 단위로 이 비율을 낮춘다. autovacuum 쪽 설정은 [VACUUM 글](/posts/postgres-mvcc-vacuum)에 있다.
+
+마지막으로, 고친 다음에는 고친 이유를 남긴다. 통계 목표, `n_distinct`, 확장 통계, 역할별 `plan_cache_mode`는 몇 달 뒤 누군가 "이건 왜 있지" 하고 지우기 쉬운 설정이다. 마이그레이션 파일에 주석으로 이 글에서 본 것 같은 `EXPLAIN` 전후를 붙여 두면 다음 사람이 덜 헤맨다.
+
+플래너는 똑똑한 계산기가 아니라 받은 숫자로 성실하게 계산하는 기계다. 계획이 이상하면 계산식보다 재료부터 의심한다. 짐작한 행 수가 실제와 몇 배 다른지, 그 짐작이 어느 통계에서 왔는지, 값을 알고 계획했는지 모르고 계획했는지. 이 세 가지를 확인하면 대부분의 "갑자기 느려진 쿼리"는 원인이 나온다.
+
+## 면접에서 나올 만한 질문
+
+### PostgreSQL 플래너는 실행 계획을 어떻게 고르나요?
+
+비용 기반으로 고른다. 테이블마다 읽는 방법과 조인 방법, 조인 순서를 조합해 후보를 만들고, 페이지 읽기(`seq_page_cost` 1, `random_page_cost` 4)와 행·연산자 처리 비용을 더해 가장 싼 후보를 고른다. 비용 식의 재료 대부분은 `pg_stats`로 짐작한 행 수라서, 짐작이 틀리면 계획도 틀린다. 실행 중에는 계획을 바꾸지 않는다.
+
+### 조건의 행 수는 어떻게 추정하나요?
+
+`ANALYZE`가 표본(기본 3만 행)으로 모은 통계를 쓴다. 같다 조건은 값이 MCV 목록에 있으면 그 빈도를, 없으면 남은 비율을 나머지 값 수로 나눈 값을 쓴다. 범위 조건은 히스토그램 경계에서 값이 든 칸을 찾고 칸 안은 고르게 퍼졌다고 보고 직선으로 나눈다. 조건이 여러 개면 서로 독립이라 보고 곱한다.
+
+### 추정 rows가 실제보다 훨씬 작으면 어떤 일이 생기나요?
+
+Nested Loop가 골라지기 쉽다. Nested Loop의 비용은 바깥 행 수에 비례하니 바깥이 작다고 믿으면 가장 싸 보인다. 실제 행이 많으면 안쪽 탐색이 그만큼 반복되고, 그 결과가 다시 다른 조인의 입력이 되면 틀린 짐작이 위로 올라가며 곱해진다. `EXPLAIN ANALYZE`에서 `rows=1`인데 `loops`가 수만인 노드가 이 신호다. 크게 틀리면 Hash Join을 골라 조금 손해 보는 정도라 작게 틀리는 쪽이 더 위험하다.
+
+### 컬럼끼리 관련이 있어 추정이 틀릴 때는 어떻게 하나요?
+
+`CREATE STATISTICS`로 확장 통계를 만들고 `ANALYZE`한다. `dependencies`는 한 컬럼이 다른 컬럼을 결정하는 관계, `ndistinct`는 컬럼 묶음의 서로 다른 값 수, `mcv`는 묶음의 자주 나오는 값 조합을 모은다. 실험에서 city와 zip 조건의 짐작이 94행에서 10,500행(실제 10,015행)으로 고쳐졌다. 같은 테이블 안의 컬럼끼리만 되고, 테이블을 건너는 관계는 못 잡는다.
+
+### prepared statement가 어느 순간부터 느려지는 이유는 무엇인가요?
+
+generic plan으로 넘어갔기 때문이다. PostgreSQL은 처음 다섯 번을 값을 넣은 custom plan으로 돌리고, 여섯 번째에 값 없이 만든 generic plan의 비용이 custom 평균(계획 비용 포함)보다 싸면 그 뒤로 generic을 쓴다. generic plan은 값을 평균적인 값으로 보기 때문에 분포가 치우친 값에서 크게 틀린다. 실험에서는 문 닫은 판매자 조회가 0.081ms에서 201ms가 됐다. PostgreSQL 16의 `EXPLAIN (GENERIC_PLAN)`으로 그 계획을 바로 볼 수 있다.
+
+### 그 문제는 어떻게 고치나요?
+
+먼저 값과 상관없이 좋은 계획이 생기게 만든다. 판매자 예에서는 `(shop_id, created_at)` 복합 인덱스가 그 답이었고, 비용 상수가 맞지 않아 안 골라지면 `random_page_cost`도 함께 본다. 그래도 값마다 계획이 달라야 하면 `plan_cache_mode = force_custom_plan`을 그 쿼리의 함수나 그 역할에만 건다. 세션 전체나 서버 전체에 걸면 짧은 쿼리들까지 매번 계획하는 비용을 낸다. 드라이버 쪽에서는 pgJDBC의 `prepareThreshold`처럼 서버 쪽 문장을 만드는 시점도 확인한다.
+
+### pg_hint_plan 없이 계획을 바꾸는 방법에는 무엇이 있나요?
+
+재료를 고치는 쪽이 먼저다. `ANALYZE`, 컬럼별 통계 목표, `n_distinct` 지정, 확장 통계, 인덱스 추가나 삭제, 테이블스페이스별 `random_page_cost`가 있다. 쿼리 모양으로는 `MATERIALIZED` CTE와 `OFFSET 0`으로 합치기를 막고, `SET LOCAL join_collapse_limit = 1`로 쓴 순서대로 조인시킬 수 있다. `enable_nestloop` 같은 스위치는 비용을 크게 더하는 방식이라 원인 확인용으로만 쓰고 운영 설정으로 두지 않는다.
+
+### 조인할 테이블이 많아지면 플래너는 어떻게 하나요?
+
+`join_collapse_limit`(기본 8)까지는 명시적 JOIN의 순서를 풀어 동적 계획법으로 모든 조합을 따진다. 더 많으면 쓴 순서를 일부 따른다. FROM 항목이 `geqo_threshold`(기본 12)개 이상이면 유전 알고리즘 기반의 GEQO로 넘어가 계획 시간을 줄이는 대신 최적 순서를 놓칠 수 있다. 조인이 하나 늘었을 뿐인데 계획이 크게 바뀌었다면 이 경계를 넘었는지 본다.

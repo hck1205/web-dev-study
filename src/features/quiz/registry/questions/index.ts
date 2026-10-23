@@ -1,3 +1,17 @@
+import { SPRING_TRANSACTIONAL_PROPAGATION } from "./spring-transactional-propagation";
+import { SPRING_SECURITY_ARCHITECTURE } from "./spring-security-architecture";
+import { SPRING_MVC_REQUEST_LIFECYCLE } from "./spring-mvc-request-lifecycle";
+import { SOLID_PRINCIPLES } from "./solid-principles";
+import { RDS_AURORA_MANAGED_DB } from "./rds-aurora-managed-db";
+import { POSTGRES_QUERY_PLANNER } from "./postgres-query-planner";
+import { OOP_FOUR_PILLARS } from "./oop-four-pillars";
+import { MONGODB_CRUD_OPERATORS } from "./mongodb-crud-operators";
+import { JPA_PERSISTENCE_CONTEXT } from "./jpa-persistence-context";
+import { JPA_ENTITY_RELATIONSHIPS } from "./jpa-entity-relationships";
+import { ELASTICSEARCH_QUERY_DSL } from "./elasticsearch-query-dsl";
+import { ELASTICSEARCH_MAPPING } from "./elasticsearch-mapping";
+import { ELASTICSEARCH_AGGREGATIONS } from "./elasticsearch-aggregations";
+import { DYNAMODB_MODELING_CAPACITY } from "./dynamodb-modeling-capacity";
 import { WEB_COMPONENTS_SHADOW_DOM } from "./web-components-shadow-dom";
 import { SPRING_SECURITY_JWT_OAUTH2 } from "./spring-security-jwt-oauth2";
 import { SPRING_BOOT_TESTING } from "./spring-boot-testing";
@@ -741,6 +755,20 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  SPRING_TRANSACTIONAL_PROPAGATION,
+  SPRING_SECURITY_ARCHITECTURE,
+  SPRING_MVC_REQUEST_LIFECYCLE,
+  SOLID_PRINCIPLES,
+  RDS_AURORA_MANAGED_DB,
+  POSTGRES_QUERY_PLANNER,
+  OOP_FOUR_PILLARS,
+  MONGODB_CRUD_OPERATORS,
+  JPA_PERSISTENCE_CONTEXT,
+  JPA_ENTITY_RELATIONSHIPS,
+  ELASTICSEARCH_QUERY_DSL,
+  ELASTICSEARCH_MAPPING,
+  ELASTICSEARCH_AGGREGATIONS,
+  DYNAMODB_MODELING_CAPACITY,
   WEB_COMPONENTS_SHADOW_DOM,
   SPRING_SECURITY_JWT_OAUTH2,
   SPRING_BOOT_TESTING,

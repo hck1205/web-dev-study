@@ -1,6 +1,20 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "spring-transactional-propagation": 7,
+  "spring-security-architecture": 7,
+  "spring-mvc-request-lifecycle": 7,
+  "solid-principles": 7,
+  "rds-aurora-managed-db": 7,
+  "postgres-query-planner": 7,
+  "oop-four-pillars": 7,
+  "mongodb-crud-operators": 7,
+  "jpa-persistence-context": 7,
+  "jpa-entity-relationships": 7,
+  "elasticsearch-query-dsl": 7,
+  "elasticsearch-mapping": 7,
+  "elasticsearch-aggregations": 7,
+  "dynamodb-modeling-capacity": 7,
   "web-components-shadow-dom": 7,
   "spring-security-jwt-oauth2": 7,
   "spring-boot-testing": 7,

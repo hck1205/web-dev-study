@@ -1,0 +1,468 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("elasticsearch-aggregations");
+
+<EasyIntro>
+  학교에서 반마다 가장 인기 있는 과자 세 개를 조사해 교무실에 올렸다고 해 보자. 교무실은 반에서 올라온 표만 더해서 학교 전체 1위부터 3위를 발표한다. 그런데 어떤 과자가 모든 반에서 4위였다면, 어느 반의 표에도 올라오지 않아서 학교 전체로는 2위인데도 발표에서 빠진다.
+
+  Elasticsearch의 집계도 이렇게 동작한다. 데이터가 여러 조각(샤드)에 나뉘어 있고, 조각마다 자기 상위 몇 개만 올려 보내면 가운데서 그걸 합친다. 그래서 가끔 숫자가 조금 틀리고, Elasticsearch는 얼마나 틀릴 수 있는지를 같이 알려 준다. 반에서 더 많이 적어 올리게 하면 정확해지는 대신 일이 늘어난다.
+
+  방문자 수처럼 서로 다른 사람이 몇 명인지 세는 일은 더 어렵다. 이름을 전부 외우면 정확하지만 공책이 끝없이 필요하다. 그래서 작은 공책 한 권으로 거의 맞는 숫자를 내는 요령을 쓴다.
+
+  매일 같은 계산을 반복한다면 미리 계산해 둔 표를 따로 만들어 두고 그 표를 읽는 방법도 있다.
+</EasyIntro>
+
+대시보드에 "브랜드별 판매 건수 상위 3"을 띄웠다. 어느 날 데이터 담당자가 엑셀로 직접 세어 보더니 2위 브랜드가 화면에 없다고 한다. 화면에는 A, B, C가 나오는데 실제 2위는 D다. 같은 데이터, 같은 쿼리인데 숫자가 틀렸다. 버그를 찾느라 반나절을 쓰기 쉬운 장면이지만, 이건 Elasticsearch가 설명서에 적어 둔 동작이다.
+
+이 글은 집계(aggregation)가 샤드 위에서 어떻게 계산되는지에서 출발해, 지표 집계와 버킷 집계, 하위 집계와 nested 집계, 파이프라인 집계, 버킷이 많을 때 넘겨 읽는 composite, 반복 계산을 미리 해 두는 transform까지 따라간다. 모든 출력은 Elasticsearch 9.1.5 단일 노드에 샤드 3개짜리 `sales` 인덱스를 만들어 직접 돌린 것이다. 집계가 읽는 doc_values와 `nested` 매핑은 [매핑 글](/posts/elasticsearch-mapping)에서 다뤘다.
+
+예제 인덱스의 매핑은 이렇다. 판매 한 건이 문서 하나이고, 주문에 담긴 상품들은 `nested`로 둔다.
+
+```json
+PUT sales
+{
+  "settings": { "number_of_shards": 3, "number_of_replicas": 0 },
+  "mappings": { "properties": {
+    "brand":  { "type": "keyword" },
+    "amount": { "type": "integer" },
+    "qty":    { "type": "integer" },
+    "user":   { "type": "keyword" },
+    "soldAt": { "type": "date" },
+    "items":  { "type": "nested", "properties": {
+      "sku": { "type": "keyword" }, "color": { "type": "keyword" }, "qty": { "type": "integer" } } }
+  } }
+}
+```
+
+문서 328건을 `routing`으로 샤드마다 일부러 치우치게 나눠 넣었다. 브랜드별 실제 건수는 A 90, D 77, B 56, C 54, E 51이다.
+
+## 샤드마다 상위 몇 개만 올려 보낸다
+
+집계 요청을 받은 노드(코디네이터)는 샤드마다 같은 집계를 보낸다. 각 샤드는 자기가 가진 문서만으로 계산해 결과를 돌려주고, 코디네이터가 이걸 합친다(reduce). 합계나 최댓값은 샤드별 값을 더하거나 비교하면 정확히 나온다. 문제는 `terms`처럼 "상위 N개"를 고르는 집계다. 모든 브랜드의 개수를 다 보내면 정확하지만, 키가 수백만 개인 필드라면 그걸 다 보낼 수 없다. 그래서 샤드는 자기 상위 `shard_size`개만 보낸다.
+
+`size: 3`, `shard_size: 3`으로 돌리면 이렇게 나온다.
+
+```json
+GET sales/_search?size=0
+{ "aggs": { "top": { "terms": { "field": "brand", "size": 3, "shard_size": 3, "show_term_doc_count_error": true } } } }
+```
+
+```text
+"doc_count_error_upper_bound": 78,
+"sum_other_doc_count": 130,
+"buckets": [
+  { "key": "A", "doc_count": 90, "doc_count_error_upper_bound": 0 },
+  { "key": "B", "doc_count": 55, "doc_count_error_upper_bound": 26 },
+  { "key": "C", "doc_count": 53, "doc_count_error_upper_bound": 26 }
+]
+```
+
+D가 없다. B도 실제 56인데 55로 나왔다. 아래 그림에서 샤드 세 개의 상위 3개가 합쳐지는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="샤드마다 상위 3개만 보내고 합치기"
+  memoryLabel="코디네이터가 합친 값"
+  cells={["0·A30", "0·B28", "0·C26", "0·D25", "0·E1", "1·A30", "1·C27", "1·D26", "1·E25", "1·B1", "2·A30", "2·B27", "2·D26", "2·E25", "2·C1"]}
+  steps={[
+    { caption: "앞 숫자가 샤드 번호다. 샤드마다 개수가 많은 순으로 늘어놓았다. 각 샤드는 앞의 세 칸만 보낸다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["A 30", "B 28", "C 26"], caption: "샤드0은 A, B, C를 보낸다. D 25는 4위라 샤드에 남는다." },
+    { pointer: 7, found: [0, 1, 2, 5, 6, 7], memory: ["A 60", "B 28", "C 53", "D 26"], caption: "샤드1은 A, C, D를 보낸다. E 25는 4위라 남고, B 1은 꼴찌라 안 온다." },
+    { pointer: 12, found: [0, 1, 2, 5, 6, 7, 10, 11, 12], memory: ["A 90", "B 55", "C 53", "D 52"], caption: "샤드2는 A, B, D를 보낸다. 합쳐 보니 D는 52로 4위다." },
+    { pointer: 3, found: [0, 1, 2, 5, 6, 7, 10, 11, 12], memory: ["A 90", "B 55", "C 53"], caption: "상위 3개는 A, B, C. 실제 2위인 D(77)는 샤드0에 남은 25 때문에 밀려났다. B도 샤드1의 1건이 빠져 55가 됐다." },
+  ]}
+/>
+
+응답의 두 숫자가 이 오차를 알려 준다. 버킷마다 붙은 `doc_count_error_upper_bound`는 "이 키가 실제로는 이만큼 더 많을 수 있다"는 상한이다. B는 샤드1이 B를 보내지 않았으니, 샤드1이 보낸 마지막 값(D 26)보다 작은 만큼은 빠졌을 수 있다. 그래서 26이다. 바깥의 `doc_count_error_upper_bound`(78)는 결과에 아예 안 나온 키가 가질 수 있는 최대 개수로, 샤드마다 보낸 마지막 값을 더한 것이다(26 + 26 + 26). 78이 결과의 3위인 53보다 크니 "3위 밖에 있는 키가 사실 더 클 수도 있다"는 경고다. `sum_other_doc_count`는 상위 3개에 들지 않은 문서 수다.
+
+직접 계산해 보자. 샤드마다 키별 개수가 주어졌을 때 각 샤드가 상위 `shardSize`개만 보내고 코디네이터가 합친 결과의 상위 `size`개를 돌려주는 함수다. 개수가 같으면 키 이름 순으로 정렬한다.
+
+<CodePlayground
+  caption="terms 집계의 샤드별 상위 N 합치기"
+  functionName="mergeTopTerms"
+  initialCode={`function mergeTopTerms(shards, size, shardSize) {
+  // shards: [{ A: 30, B: 28, ... }, ...]
+  // 각 샤드는 개수 내림차순 상위 shardSize개만 보낸다
+  // 반환: [["A", 90], ["B", 55], ...] 상위 size개
+  return [];
+}`}
+  solution={`function mergeTopTerms(shards, size, shardSize) {
+  const order = (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1);
+  const merged = {};
+  for (const shard of shards) {
+    const top = Object.entries(shard).sort(order).slice(0, shardSize);
+    for (const [key, count] of top) merged[key] = (merged[key] ?? 0) + count;
+  }
+  return Object.entries(merged).sort(order).slice(0, size);
+}`}
+  tests={[
+    { label: "shard_size 3", args: [[{ A: 30, B: 28, C: 26, D: 25, E: 1 }, { A: 30, B: 1, C: 27, D: 26, E: 25 }, { A: 30, B: 27, C: 1, D: 26, E: 25 }], 3, 3], expected: [["A", 90], ["B", 55], ["C", 53]] },
+    { label: "shard_size 4", args: [[{ A: 30, B: 28, C: 26, D: 25, E: 1 }, { A: 30, B: 1, C: 27, D: 26, E: 25 }, { A: 30, B: 27, C: 1, D: 26, E: 25 }], 3, 4], expected: [["A", 90], ["D", 77], ["B", 55]] },
+    { label: "shard_size 5", args: [[{ A: 30, B: 28, C: 26, D: 25, E: 1 }, { A: 30, B: 1, C: 27, D: 26, E: 25 }, { A: 30, B: 27, C: 1, D: 26, E: 25 }], 3, 5], expected: [["A", 90], ["D", 77], ["B", 56]] },
+    { label: "샤드 둘, 하나씩만", args: [[{ x: 5, y: 3 }, { y: 4, z: 9 }], 2, 1], expected: [["z", 9], ["x", 5]] },
+  ]}
+/>
+
+`shard_size`를 4로 올리면 D가 순위에 들어오지만 B는 여전히 55다. 5로 올려 모든 키를 보내야 정확해진다. 마지막 테스트에서는 실제 7건인 y가 아예 빠진다.
+
+그러면 왜 평소에는 이 문제를 잘 못 볼까. `shard_size`의 기본값이 `size * 1.5 + 10`이라서다. `size: 3`이면 샤드마다 14개를 보낸다. 같은 데이터에 `shard_size`를 빼고 돌리면 정확한 결과가 나온다.
+
+```text
+"doc_count_error_upper_bound": 0,
+"buckets": [ { "key": "A", "doc_count": 90 }, { "key": "D", "doc_count": 77 }, { "key": "B", "doc_count": 56 } ]
+```
+
+키 종류가 수천, 수만 개이고 샤드마다 분포가 다르면 기본값으로도 오차가 생긴다. 대응은 세 가지다. 정확해야 하는 집계는 `shard_size`를 올리고 응답의 오차 상한을 확인한다. 같은 키의 문서를 같은 샤드에 모으면(예: 판매자 id로 routing) 샤드끼리 겹치는 키가 없어서 오차가 없다. 그리고 "상위 N" 자체가 근사여도 되는 화면인지 먼저 정한다. 정산처럼 틀리면 안 되는 숫자는 composite로 전부 넘겨 읽거나 원본 DB에서 센다.
+
+`terms`를 개수 오름차순(`"order": { "_count": "asc" }`)으로 정렬하면 오차는 더 커진다. 각 샤드에서 가장 적은 키가 전체로는 적지 않을 수 있기 때문이다. 문서도 이 정렬은 권하지 않는다. 드문 키를 찾고 싶으면 `rare_terms` 집계가 따로 있다.
+
+## 지표 집계: 숫자 하나를 낸다
+
+값 하나를 계산하는 집계다. `avg`, `sum`, `min`, `max`, `value_count`, 그리고 이걸 한 번에 내는 `stats`가 있다.
+
+```json
+GET sales/_search?size=0
+{ "aggs": {
+  "s":  { "stats":          { "field": "amount" } },
+  "es": { "extended_stats": { "field": "amount" } },
+  "vc": { "value_count":    { "field": "amount" } }
+} }
+```
+
+```text
+"s":  { "count": 328, "min": 1000.0, "max": 20000.0, "avg": 10399.390243902439, "sum": 3411000.0 },
+"vc": { "value": 328 },
+"es": { "count": 328, ..., "variance": 3.2020365481856044E7, "std_deviation": 5658.654034472866,
+        "std_deviation_bounds": { "upper": 21716.698312848173, "lower": -917.9178250432942, ... } }
+```
+
+`avg`, `sum`을 따로 부르면 같은 필드를 여러 번 읽으니, 여러 개가 필요하면 `stats` 한 번이 낫다. `extended_stats`는 분산과 표준편차, 평균 ± 2σ 구간을 더 준다. 하한이 -917원으로 나왔다. 가격처럼 한쪽으로 치우친 분포에서는 평균 ± 2σ가 실제 데이터 범위를 잘 설명하지 못한다는 뜻이다. 이상값을 잡으려면 `percentiles`로 p95, p99를 보는 쪽이 낫다.
+
+`value_count`는 문서 수가 아니라 값의 수를 센다. 다중 값 필드(배열)면 문서보다 크게 나온다. 값이 없는 문서는 모든 지표 집계에서 빠진다. 빈 값을 0으로 쳐야 하면 `"missing": 0`을 준다. 평균이 생각보다 높게 나오면 값이 없는 문서가 빠진 게 아닌지 먼저 본다.
+
+## 서로 다른 값이 몇 개인지: cardinality
+
+"이번 달 구매자 수"는 `user` 필드의 서로 다른 값 개수다. 정확히 세려면 본 값을 전부 기억해야 한다. 샤드마다 집합을 만들어 코디네이터로 보내면, 사용자가 천만 명일 때 그 집합을 메모리에 올리고 네트워크로 옮겨야 한다.
+
+`cardinality` 집계는 HyperLogLog++로 이 문제를 피한다. 값을 해시하고 해시의 앞쪽 0이 몇 개 이어지는지를 칸별로 최댓값만 기억한다. 메모리는 정해진 크기로 고정되고, 샤드끼리 합칠 때는 칸마다 최댓값을 고르면 된다. 원리는 [HyperLogLog 글](/posts/hyperloglog)에 따로 정리했다.
+
+손잡이는 `precision_threshold`(기본 3000, 최대 40000)다. 서로 다른 값이 이 숫자보다 적으면 거의 정확하고, 넘으면 근사로 바뀐다. 메모리는 대략 `precision_threshold × 8`바이트다. 방문 20만 건에 서로 다른 사용자 57,897명이 있는 인덱스로 돌려 봤다.
+
+```text
+precision_threshold   100 → 58047   (+0.26%)
+precision_threshold  1000 → 58158   (+0.45%)
+precision_threshold  3000 → 57660   (-0.41%)
+precision_threshold 40000 → 57789   (-0.19%)
+```
+
+실제 값이 임계값보다 크니 어느 설정이든 근사다. 오차는 모두 0.5% 안쪽이고, 임계값을 올린다고 꼭 더 정확해지지도 않았다. 한 번 돌린 결과라서 이 숫자가 일반적인 오차를 뜻하지는 않는다. 다만 수만 명 단위에서 1% 안쪽의 오차를 받아들일 수 있으면 기본값으로 충분하다는 감은 잡힌다. 판매 데이터의 구매자 수(110명)처럼 값이 임계값보다 적으면 정확한 수가 나온다.
+
+정확한 고유 수가 꼭 필요하면 `terms`나 composite로 키를 전부 넘겨 읽어 세야 한다. 비용이 키 수에 비례한다.
+
+## 버킷 집계: 문서를 통에 나눈다
+
+버킷 집계는 문서를 조건별 통(버킷)에 나눈다. `terms`(값마다), `histogram`(숫자 간격마다), `date_histogram`(시간 간격마다), `range`(정한 구간마다), `filter`와 `filters`(쿼리마다)가 있다.
+
+```json
+{ "aggs": { "h": { "histogram": { "field": "amount", "interval": 5000 } } } }
+{ "aggs": { "r": { "range": { "field": "amount", "ranges": [ { "to": 5000 }, { "from": 5000, "to": 15000 }, { "from": 15000 } ] } } } }
+```
+
+```text
+histogram: 0 → 64, 5000 → 92, 10000 → 78, 15000 → 76, 20000 → 18
+range:     *-5000 → 64, 5000-15000 → 170, 15000-* → 94
+```
+
+`range`의 `from`은 포함, `to`는 제외다. `histogram`의 키는 구간의 시작값이다.
+
+`filter`는 버킷 하나, `filters`는 이름 붙인 버킷 여러 개를 만든다. 쿼리 조건과 별개로 "전체 평균과 브랜드 A 평균"을 한 요청에서 받을 때 쓴다.
+
+```json
+{ "aggs": {
+  "all":   { "avg": { "field": "amount" } },
+  "onlyA": { "filter": { "term": { "brand": "A" } }, "aggs": { "avg": { "avg": { "field": "amount" } } } }
+} }
+```
+
+```text
+"all":   { "value": 10399.390243902439 },
+"onlyA": { "doc_count": 90, "avg": { "value": 10144.444444444445 } }
+```
+
+### date_histogram은 시간대와 달력을 같이 본다
+
+월별 판매를 그리면 이렇다.
+
+```json
+{ "aggs": { "m": { "date_histogram": { "field": "soldAt", "calendar_interval": "month" } } } }
+{ "aggs": { "m": { "date_histogram": { "field": "soldAt", "calendar_interval": "month", "time_zone": "Asia/Seoul" } } } }
+```
+
+```text
+UTC:        2026-09-01T00:00:00.000Z → 166,       2026-10-01T00:00:00.000Z → 160,       2026-11-01T00:00:00.000Z → 2
+Asia/Seoul: 2026-09-01T00:00:00.000+09:00 → 164,  2026-10-01T00:00:00.000+09:00 → 162,  2026-11-01T00:00:00.000+09:00 → 2
+```
+
+`time_zone`을 안 주면 UTC 자정으로 나눈다. 한국 시간 10월 1일 오전 3시 판매는 UTC로는 9월 30일 18시라 9월 통에 들어간다. 위 결과에서 문서 2건이 9월에서 10월로 옮겨 갔다. 한국 서비스의 월 매출이 정산팀 숫자와 몇 건씩 안 맞으면 이것부터 본다. 날짜는 UTC로 저장하고, 집계할 때 `time_zone`을 준다.
+
+간격 지정은 두 가지로 나뉜다. `calendar_interval`은 달력 단위(`minute`, `hour`, `day`, `week`, `month`, `quarter`, `year`, 또는 `1d`, `1M`처럼 1 단위)다. 달마다 길이가 다르고 서머타임이 있는 시간대에서는 하루가 23시간이나 25시간일 수 있는데, 이걸 달력대로 맞춰 준다. `fixed_interval`은 정해진 길이(`30d`, `12h`)다. `calendar_interval`에 `30d`를 주면 거절된다.
+
+```text
+"reason": "The supplied interval [30d] could not be parsed as a calendar interval."
+```
+
+`fixed_interval: 30d`는 받지만 결과가 달력과 어긋난다. 통의 시작이 1970-01-01부터 30일씩 끊은 자리라서, 이번 데이터에서는 `2026-08-05`, `2026-09-04`, `2026-10-04`가 키로 나왔다. "월별"이 필요하면 `calendar_interval: month`를 쓴다.
+
+## 통 안에서 다시 계산하기: 하위 집계
+
+버킷 집계 안에 `aggs`를 넣으면 통마다 그 집계를 다시 한다. 브랜드별 매출, 월별 브랜드별 건수처럼 겹쳐 쌓는다. 중첩은 깊이 제한이 없지만, 통 수가 곱해진다는 걸 잊으면 안 된다. 브랜드 1,000개 × 일 365개 × 색 10개면 통이 365만 개다.
+
+`nested` 필드는 하위 집계에서 한 겹을 더 거쳐야 한다. 주문 안 상품의 색별 수량을 세 보자. 비교를 위해 `nested`로 감싸지 않은 것도 같이 보냈다.
+
+```json
+GET sales/_search?size=0
+{ "aggs": {
+  "wrong": { "terms": { "field": "items.color" } },
+  "items": { "nested": { "path": "items" }, "aggs": {
+    "color": { "terms": { "field": "items.color" }, "aggs": {
+      "q":      { "sum": { "field": "items.qty" } },
+      "orders": { "reverse_nested": {} }
+    } }
+  } }
+} }
+```
+
+```text
+"wrong": { "buckets": [] },
+"items": { "doc_count": 482, "color": { "buckets": [
+  { "key": "blue",  "doc_count": 162, "q": { "value": 243.0 }, "orders": { "doc_count": 162 } },
+  { "key": "red",   "doc_count": 162, "q": { "value": 240.0 }, "orders": { "doc_count": 162 } },
+  { "key": "black", "doc_count": 158, "q": { "value": 236.0 }, "orders": { "doc_count": 158 } }
+] } }
+```
+
+감싸지 않은 `wrong`은 빈 배열이다. 오류가 아니라서 대시보드에 "데이터 없음"으로 뜨고 끝난다. `nested` 집계 안에서는 `doc_count`가 주문 수가 아니라 상품 줄 수(482)다. 주문 수로 되돌리려면 `reverse_nested`로 부모 문서로 올라가 센다. 이 예제는 주문 하나에 같은 색이 두 번 들어가지 않아서 두 숫자가 같지만, 같은 색 상품이 여러 줄 들어가는 데이터면 `orders`가 더 작게 나온다.
+
+## 집계 결과를 다시 계산하기: 파이프라인 집계
+
+파이프라인 집계는 문서가 아니라 다른 집계의 결과를 입력으로 받는다. `buckets_path`로 어느 값을 읽을지 가리킨다. 일별 매출에 전날 대비 변화(`derivative`), 누적 매출(`cumulative_sum`), 개당 평균가(`bucket_script`)를 붙여 보자.
+
+```json
+GET sales/_search?size=0
+{
+  "query": { "range": { "soldAt": { "gte": "2026-09-01", "lt": "2026-09-08" } } },
+  "aggs": { "d": {
+    "date_histogram": { "field": "soldAt", "calendar_interval": "day" },
+    "aggs": {
+      "rev":     { "sum": { "field": "amount" } },
+      "units":   { "sum": { "field": "qty" } },
+      "diff":    { "derivative":     { "buckets_path": "rev" } },
+      "cum":     { "cumulative_sum": { "buckets_path": "rev" } },
+      "perUnit": { "bucket_script":  { "buckets_path": { "r": "rev", "u": "units" }, "script": "params.r / params.u" } }
+    }
+  } }
+}
+```
+
+```text
+day          rev     diff     cum      perUnit
+2026-09-01   68000   -        68000    4857.14
+2026-09-02   36000   -32000   104000   4500.0
+2026-09-03   70000   34000    174000   3684.21
+2026-09-04   82000   12000    256000   6833.33
+2026-09-05   78000   -4000    334000   6000.0
+2026-09-06   79000   1000     413000   5642.86
+2026-09-07   75000   -4000    488000   5357.14
+```
+
+응답 JSON에서 값만 표로 옮겼다. 첫날에는 앞 통이 없어서 `diff`가 없다. 파이프라인 집계는 샤드에서 돌지 않고, 코디네이터가 reduce를 끝낸 뒤 돈다. 그래서 문서를 다시 읽지 않아 싸다. 대신 `terms` 결과처럼 앞 단계가 근사면 그 오차를 그대로 물려받는다.
+
+값이 없는 날이 끼면 `derivative`가 그날을 건너뛰어 다음 날과 이틀 전을 비교한다(`gap_policy` 기본값 `skip`). 하루 매출이 0인 날도 통으로 만들려면 `date_histogram`에 `min_doc_count: 0`과 `extended_bounds`를 준다.
+
+통을 정렬하고 자르는 `bucket_sort`, 통 중 최댓값을 고르는 `max_bucket`도 자주 쓴다. 매출 기준 상위 브랜드 둘과 1위 브랜드를 한 번에 받는다.
+
+```json
+{ "aggs": {
+  "b": { "terms": { "field": "brand", "size": 10 }, "aggs": {
+    "rev":  { "sum": { "field": "amount" } },
+    "top2": { "bucket_sort": { "sort": [ { "rev": { "order": "desc" } } ], "size": 2 } }
+  } },
+  "best": { "max_bucket": { "buckets_path": "b>rev" } }
+} }
+```
+
+```text
+"b": { "buckets": [ { "key": "A", "doc_count": 90, "rev": { "value": 913000.0 } },
+                    { "key": "D", "doc_count": 77, "rev": { "value": 844000.0 } } ] },
+"best": { "value": 913000.0, "keys": [ "A" ] }
+```
+
+`terms`의 `order`를 하위 집계(`rev`)로 바꿔도 같은 결과를 낼 수 있지만, 그러면 샤드마다 자기 매출 순으로 상위만 보내서 앞에서 본 오차가 생긴다. 여기서는 `size: 10`으로 브랜드를 다 받은 뒤 `bucket_sort`로 잘랐다. 브랜드가 많아서 다 받을 수 없으면 오차를 감수하거나 composite로 넘긴다.
+
+## 버킷이 너무 많을 때
+
+분 단위 히스토그램을 두 달 치에 걸면 어떻게 될까.
+
+```json
+{ "aggs": { "m": { "date_histogram": { "field": "soldAt", "fixed_interval": "1m", "min_doc_count": 0 } } } }
+```
+
+```text
+"type": "too_many_buckets_exception",
+"reason": "Trying to create too many buckets. Must be less than or equal to: [65536] but this number of buckets
+was exceeded. This limit can be set by changing the [search.max_buckets] cluster level setting.",
+"max_buckets": 65536
+```
+
+`search.max_buckets`(기본 65,536)는 한 응답에 만들 수 있는 통 수의 상한이다. 노드 메모리를 지키는 안전장치라, 오류가 났다고 이 값을 올리는 건 마지막 수단이다. 통 하나하나가 힙에 올라가고 응답 JSON도 그만큼 커진다. 간격을 넓히거나, 기간을 줄이거나, 아래의 composite로 나눠 읽는다. 이와 별도로 집계 전체가 쓰는 메모리는 요청 서킷 브레이커(`indices.breaker.request.limit`, 기본 힙의 60%)가 본다.
+
+### composite로 넘겨 읽기
+
+"모든 브랜드 × 모든 달의 매출을 CSV로 내려 달라"는 요구는 상위 N이 아니라 전부를 원한다. `composite` 집계는 여러 소스의 키 조합을 정렬된 순서로 정해진 개수씩 돌려주고, 다음 페이지를 위한 `after_key`를 준다. 아래 그림에서 페이지가 이어지는 과정을 보자.
+
+<SequenceDiagram
+  caption="composite 집계로 버킷을 세 개씩 넘겨 받기"
+  actors={[
+    { id: "job", label: "내보내기 작업" },
+    { id: "es", label: "Elasticsearch" },
+  ]}
+  steps={[
+    { from: "job", to: "es", label: "size 3", title: "첫 페이지", detail: "브랜드와 월 두 소스를 주고 세 개만 달라고 한다. after는 비워 둔다." },
+    { from: "es", to: "job", label: "A·09, A·10, A·11", title: "정렬된 키 조합 세 개", detail: "키는 brand, month 순으로 정렬돼 있다. 마지막 키가 after_key로 같이 온다.", payload: "after_key: { brand: \"A\", month: \"2026-11\" }" },
+    { from: "job", to: "es", label: "after A·11", title: "다음 페이지", detail: "받은 after_key를 그대로 after에 넣어 다시 보낸다. 쿼리와 소스는 바꾸지 않는다." },
+    { from: "es", to: "job", label: "B·09, B·10, B·11", title: "이어지는 세 개", detail: "A·11 다음 조합부터 준다. 각 샤드도 그 뒤만 보면 되니 앞 페이지를 다시 계산하지 않는다." },
+    { from: "job", to: "es", label: "after …", title: "버킷이 빌 때까지", detail: "buckets가 비어 오면 끝이다. 페이지마다 정렬된 키가 정확히 이어져서 terms처럼 빠지는 키가 없다." },
+  ]}
+/>
+
+실제 요청은 이렇다.
+
+```json
+GET sales/_search?size=0
+{ "aggs": { "c": {
+  "composite": {
+    "size": 3,
+    "sources": [
+      { "brand": { "terms": { "field": "brand" } } },
+      { "month": { "date_histogram": { "field": "soldAt", "calendar_interval": "month", "format": "yyyy-MM" } } }
+    ]
+  },
+  "aggs": { "rev": { "sum": { "field": "amount" } } }
+} } }
+```
+
+```text
+"after_key": { "brand": "A", "month": "2026-11" },
+"buckets": [
+  { "key": { "brand": "A", "month": "2026-09" }, "doc_count": 44, "rev": { "value": 461000.0 } },
+  { "key": { "brand": "A", "month": "2026-10" }, "doc_count": 45, "rev": { "value": 439000.0 } },
+  { "key": { "brand": "A", "month": "2026-11" }, "doc_count": 1,  "rev": { "value": 13000.0 } }
+]
+```
+
+`"after": { "brand": "B", "month": "2026-09" }`를 넣고 다시 보내면 그 다음 조합부터 온다.
+
+```text
+"after_key": { "brand": "C", "month": "2026-09" },
+"buckets": [
+  { "key": { "brand": "B", "month": "2026-10" }, "doc_count": 26, "rev": { "value": 262000.0 } },
+  { "key": { "brand": "B", "month": "2026-11" }, "doc_count": 1,  "rev": { "value": 9000.0 } },
+  { "key": { "brand": "C", "month": "2026-09" }, "doc_count": 25, "rev": { "value": 265000.0 } }
+]
+```
+
+composite는 정확하다. 각 샤드가 키 순서대로 정렬해 정해진 지점 뒤의 키만 보내기 때문에, 샤드마다 상위를 고르는 `terms`와 달리 빠지는 키가 없다. 대신 결과를 키 순서로만 받는다. "매출 순 상위 10"은 composite로 바로 못 하고, 전부 받은 뒤 앱에서 정렬해야 한다. 이건 [깊은 페이지에서 쓰는 search_after](/posts/elasticsearch-inverted-index)와 같은 생각이다. 앞 페이지를 버리지 않고 마지막 위치를 기억해 이어 간다.
+
+## 같은 집계를 매번 하지 않기: transform
+
+대시보드가 열릴 때마다 석 달 치 원본 판매 문서 수천만 건을 브랜드 × 일로 집계한다면, 같은 계산을 사용자 수만큼 반복하는 셈이다. transform은 이 집계를 한 번 돌려 결과를 새 인덱스에 문서로 저장한다. 대시보드는 그 작은 인덱스를 읽는다. 두 가지 방식이 있다.
+
+`pivot`은 group_by 키 조합마다 문서 하나를 만든다. 브랜드 × 일별 매출과 구매자 수를 미리 계산해 보자.
+
+```json
+PUT _transform/brand-daily
+{
+  "source": { "index": "sales" },
+  "dest":   { "index": "brand-daily" },
+  "pivot": {
+    "group_by": {
+      "brand": { "terms": { "field": "brand" } },
+      "day":   { "date_histogram": { "field": "soldAt", "calendar_interval": "1d" } }
+    },
+    "aggregations": {
+      "revenue": { "sum": { "field": "amount" } },
+      "buyers":  { "cardinality": { "field": "user" } }
+    }
+  }
+}
+POST _transform/brand-daily/_start
+
+GET _transform/brand-daily/_stats
+GET brand-daily/_search?size=2&sort=day:asc,brand:asc
+```
+
+```text
+"state": "stopped", "stats": { "documents_processed": 328, "documents_indexed": 195 }
+
+{ "revenue": 20000.0, "buyers": 1, "brand": "A", "day": "2026-09-01T00:00:00.000Z" }
+{ "revenue": 8000.0,  "buyers": 2, "brand": "C", "day": "2026-09-01T00:00:00.000Z" }
+```
+
+원본 328건이 195개 문서로 줄었다. 원본이 수천만 건이어도 결과는 브랜드 수 × 일 수 정도다. transform은 안에서 composite 집계로 원본을 넘겨 읽기 때문에 앞의 `terms` 오차가 없다. 목적 인덱스의 매핑도 집계 종류를 보고 만든다(`brand`는 keyword, `revenue`는 double, `buyers`는 long, `day`는 date). 한 가지 걸리는 건 `cardinality`를 하루 단위로 미리 계산해 두면 그 값을 다시 더해 "월 구매자 수"를 만들 수 없다는 것이다. 같은 사람이 여러 날 샀으면 중복으로 세어진다. 미리 계산할 때는 나중에 더해도 되는 값(합, 개수, 최댓값)인지 따진다.
+
+`latest`는 키마다 가장 최근 문서 하나만 남긴다. 사용자별 마지막 구매를 모아 두면 "30일 넘게 안 산 사용자" 같은 질의가 쉬워진다.
+
+```json
+PUT _transform/last-purchase
+{
+  "source": { "index": "sales" },
+  "dest":   { "index": "last-purchase" },
+  "latest": { "unique_key": [ "user" ], "sort": "soldAt" }
+}
+```
+
+```text
+"documents_processed": 328, "documents_indexed": 110
+
+GET last-purchase/_search?q=user:u7
+{ "soldAt": "2026-10-24T01:58:00Z", "brand": "A", "user": "u7" }
+```
+
+구매자 110명마다 문서가 하나씩 생겼다. 위 예제는 한 번 돌고 멈추는 배치 transform이라 상태가 `stopped`다. 계속 따라가게 하려면 `"sync": { "time": { "field": "soldAt", "delay": "60s" } }`와 `frequency`를 줘서 연속 모드로 만든다. 그러면 체크포인트마다 바뀐 키만 다시 계산한다. `delay`는 늦게 도착하는 문서를 기다리는 시간이다. 이걸 너무 짧게 두면 늦게 색인된 판매가 이미 지나간 체크포인트에 끼지 못해 빠진다. 수집 지연이 큰 데이터면 `soldAt` 대신 색인 시각을 따로 적어 두고 그 필드로 sync하는 방법도 있다.
+
+transform이 맞지 않는 경우도 있다. 사용자가 고르는 필터 조합이 너무 다양해서 미리 계산할 축을 정할 수 없을 때다. 그때는 원본 집계를 쓰되 기간을 줄이고, 결과 캐시(`request_cache`, `size: 0` 요청에 기본 적용)가 잘 맞게 시간 범위를 분 단위로 반올림해 보내는 식으로 비용을 줄인다.
+
+## 숫자가 이상할 때 보는 순서
+
+대시보드 숫자가 엑셀과 다르다는 말을 들으면 이 순서로 본다. `terms`라면 응답의 `doc_count_error_upper_bound`가 0인지 본다. 0이 아니면 샤드 근사다. `cardinality`라면 근사가 원래 동작이다. 날짜별 숫자가 조금씩 어긋나면 `time_zone`이 빠졌는지 본다. 평균이 이상하면 `missing`으로 빠진 문서가 있는지 본다. 결과가 비면 `nested` 필드를 `nested` 집계 없이 묻고 있는지 본다. 느리거나 거절되면 통 수를 세어 보고 composite나 transform으로 나눈다.
+
+처음의 대시보드로 돌아가면, D가 빠진 건 샤드마다 상위 몇 개만 합치는 구조 때문이었고 응답은 그 가능성을 `doc_count_error_upper_bound`로 이미 알려 주고 있었다. 집계는 숫자를 주는 기능이라 틀린 숫자도 그럴듯해 보인다. 어떤 집계가 정확하고 어떤 집계가 근사인지 알고 있어야 그 숫자를 믿을지 정할 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### terms 집계 결과가 정확하지 않을 수 있는 이유는?
+
+각 샤드가 자기 데이터만으로 상위 `shard_size`개를 골라 보내고, 코디네이터는 받은 것만 합치기 때문이다. 어떤 키가 모든 샤드에서 순위 밖이면 전체로는 상위여도 빠지고, 일부 샤드에서만 빠지면 개수가 작게 나온다. 응답의 `doc_count_error_upper_bound`가 그 오차 상한이다. `shard_size`를 올리거나, 같은 키를 같은 샤드로 routing하거나, 정확해야 하면 composite로 전부 읽는다.
+
+### doc_count_error_upper_bound와 sum_other_doc_count는 무엇을 뜻하나?
+
+버킷마다 붙는 `doc_count_error_upper_bound`는 그 키가 실제로 더 많을 수 있는 최대치이고, 바깥의 같은 이름은 결과에 아예 안 나온 키가 가질 수 있는 최대 개수다. 바깥 값이 결과의 마지막 순위보다 크면 순위 밖에 더 큰 키가 있을 수 있다는 경고다. `sum_other_doc_count`는 반환한 버킷에 들지 않은 문서 수다.
+
+### cardinality 집계는 어떻게 동작하고 왜 근사인가?
+
+HyperLogLog++로 값을 해시하고 칸마다 앞쪽 0의 최대 길이만 기억해서 고정된 메모리로 고유 수를 추정한다. 샤드끼리는 칸마다 최댓값을 골라 합치면 되니 분산 환경에 맞는다. `precision_threshold`(기본 3000, 최대 40000)보다 적은 값은 거의 정확하고 넘으면 근사이며, 메모리는 대략 임계값의 8배 바이트다. 정확한 값이 필요하면 키를 전부 넘겨 읽어야 해서 비용이 키 수에 비례한다.
+
+### date_histogram에서 calendar_interval과 fixed_interval의 차이는?
+
+`calendar_interval`은 달·주·일처럼 달력 단위로 나눠서 달마다 다른 길이와 서머타임을 맞춰 준다. `fixed_interval`은 정해진 밀리초 길이로 나눠서 `30d`를 주면 달력과 어긋난 날짜에서 통이 시작된다. 어느 쪽이든 `time_zone`을 안 주면 UTC 자정으로 끊어서, 한국 서비스의 일·월 집계가 몇 건씩 어긋난다.
+
+### 버킷이 너무 많아 too_many_buckets_exception이 나면?
+
+`search.max_buckets`(기본 65,536)는 노드 메모리를 지키는 상한이라 올리는 건 마지막 수단이다. 먼저 간격이나 기간을 줄이고, 전부가 필요하면 composite 집계로 `after_key`를 넘기며 나눠 읽는다. 반복되는 집계라면 transform으로 미리 계산해 작은 인덱스를 읽는다.
+
+### 파이프라인 집계는 어디서 계산되고 무엇에 주의하나?
+
+파이프라인 집계는 샤드가 아니라 코디네이터에서, 다른 집계의 reduce가 끝난 결과를 입력으로 계산한다. 문서를 다시 읽지 않아 싸지만 앞 단계가 `terms`처럼 근사면 그 오차를 물려받는다. `derivative`는 빈 통을 기본으로 건너뛰니 `min_doc_count: 0`과 `extended_bounds`로 빈 날을 채울지 정한다.
+
+### transform의 pivot과 latest는 언제 쓰나?
+
+`pivot`은 group_by 키 조합마다 집계 결과를 문서로 저장해서, 대시보드가 원본 대신 작은 요약 인덱스를 읽게 한다. `latest`는 키마다 가장 최근 문서만 남겨 사용자별 마지막 상태 같은 걸 만든다. 안에서 composite로 읽어 정확하고, 연속 모드는 `sync`의 시간 필드와 `delay`로 늦게 오는 문서를 기다린다. 고유 수처럼 나중에 더할 수 없는 값을 잘게 미리 계산하면 상위 단위로 합칠 수 없다는 점을 주의한다.

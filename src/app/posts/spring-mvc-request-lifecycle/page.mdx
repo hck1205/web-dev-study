@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spring-mvc-request-lifecycle");
+
+<EasyIntro>
+  주문 API에 요청을 보냈는데 400 에러가 돌아왔다. 그런데 주문을 처리하는 코드에 찍어 둔 로그는 한 줄도 없었다. 요청이 그 코드에 닿기도 전에 누군가 돌려보낸 것이다.
+
+  스프링 서버로 들어온 요청은 큰 건물의 접수처를 여러 번 거치는 손님과 같다. 정문 경비가 출입증을 보고, 안내 데스크가 어느 부서로 갈지 정하고, 부서 앞의 담당자가 서류 양식을 확인한 뒤에야 실제 담당자를 만난다. 서류에 빈칸이 있거나 글씨를 못 읽으면 담당자 얼굴도 못 보고 돌아간다.
+
+  이 글은 손님이 거치는 접수처를 순서대로 따라간다. 어느 접수처에서 막혔는지 알면 어디 로그를 봐야 할지, 에러 응답을 어디서 손봐야 할지도 바로 보인다. 접수처의 직원 수가 정해져 있어서 손님이 한꺼번에 몰리면 줄이 생긴다는 것도 함께 본다.
+</EasyIntro>
+
+## 컨트롤러 로그가 한 줄도 없는 400
+
+주문 생성 API에 요청을 보냈더니 400이 돌아왔다. 컨트롤러 첫 줄에 로그를 찍어 두었는데 아무것도 안 나온다. 응답 본문도 무엇이 잘못됐는지 말해 주지 않는다.
+
+```bash
+# 닫는 중괄호 하나를 빠뜨린 JSON을 보낸다
+curl -s -i -X POST -H 'Content-Type: application/json' \
+  -d '{"productId":"p-1","quantity":2' http://localhost:8080/orders
+```
+
+```text
+HTTP/1.1 400
+Content-Type: application/json
+Connection: close
+
+{"timestamp":"2026-10-23T12:49:50.783Z","status":400,"error":"Bad Request","path":"/orders"}
+```
+
+서버 로그를 보면 컨트롤러 대신 이 줄이 있다.
+
+```text
+WARN 5307 --- [nio-8080-exec-2] .w.s.m.s.DefaultHandlerExceptionResolver : Resolved [org.springframework.http.converter.HttpMessageNotReadableException: JSON parse error: Unexpected end-of-input: expected close marker for Object ...]
+```
+
+요청은 서버에 분명히 닿았다. 다만 컨트롤러 메서드에 넘길 `OrderRequest` 객체를 만들다 실패했다. 스프링 MVC는 컨트롤러를 부르기 전에 꽤 많은 일을 하고, 그 사이 어디서든 요청을 돌려보낼 수 있다. 이 글은 내장 톰캣이 연결을 받는 순간부터 응답이 나가기까지를 순서대로 따라간다. 어디서 막혔는지 알면 어느 로그를 봐야 하는지, 어디를 고쳐야 하는지가 정해진다.
+
+예제는 JDK 21, Spring Boot 4.1.1(Spring Framework 7.0.9, Tomcat 11.0.24)로 돌렸다. 의존성은 `spring-boot-starter-webmvc`와 `spring-boot-starter-validation`이다. Boot 3.x에서는 스타터 이름이 `spring-boot-starter-web`이고, 이 글의 흐름은 그대로 같다. 빈이 어떻게 만들어지고 왜 프록시로 건네지는지는 [IoC 컨테이너와 DI](/posts/spring-ioc-di)에서, 톰캣이 어떤 자동 구성으로 뜨는지는 [Spring Boot 자동 구성](/posts/spring-boot-auto-configuration)에서 다뤘다.
+
+## 요청 하나가 지나가는 길
+
+먼저 전체 지도를 본다. 실험용 앱에 필터 하나, 인터셉터 하나, 컨트롤러 하나를 두고 각각 로그를 찍었다.
+
+```java
+@RestController
+@RequestMapping("/orders")
+class OrderController {
+  @PostMapping
+  ResponseEntity<OrderResponse> create(@Valid @RequestBody OrderRequest req) {
+    System.out.println("[controller] create " + req + " on " + Thread.currentThread());
+    return ResponseEntity.status(201).body(new OrderResponse("o-1", req.productId(), req.quantity()));
+  }
+}
+
+record OrderRequest(@NotBlank String productId, @Min(1) @Max(100) int quantity) {}
+```
+
+정상 요청 하나를 보내면 로그가 이렇게 찍힌다.
+
+```text
+[filter] before POST /orders
+[interceptor] preHandle handler=demo.mvc.OrderController#create(OrderRequest)
+[controller] create OrderRequest[productId=p-1, quantity=2] on Thread[#31,http-nio-8080-exec-1,5,main]
+[interceptor] postHandle
+[interceptor] afterCompletion ex=null
+[filter] after status=201
+```
+
+필터가 가장 바깥, 그 안에 인터셉터, 가장 안쪽에 컨트롤러가 있다. 들어갈 때 바깥부터, 나올 때 안쪽부터 끝난다. 컨트롤러가 도는 스레드 이름은 `http-nio-8080-exec-1`이다. 톰캣 스레드 풀의 일꾼 하나가 이 요청을 처음부터 끝까지 맡는다는 뜻이다.
+
+아래 그림에서 다음을 누르면 처음 장면의 깨진 JSON이 어디까지 갔다가 돌아오는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="깨진 JSON은 컨트롤러 직전에서 돌아온다"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "tomcat", label: "톰캣" },
+    { id: "filter", label: "필터 체인" },
+    { id: "ds", label: "디스패처" },
+    { id: "ctrl", label: "컨트롤러" },
+  ]}
+  steps={[
+    { from: "client", to: "tomcat", label: "POST /orders", title: "연결을 받고 스레드를 붙인다", detail: "톰캣이 HTTP 요청을 읽고 스레드 풀에서 일꾼 하나를 꺼내 이 요청을 맡긴다.", payload: "thread: http-nio-8080-exec-2" },
+    { from: "tomcat", to: "filter", label: "doFilter", title: "필터를 차례로 지난다", detail: "문자 인코딩 필터, 폼 필터, 요청 컨텍스트 필터, 그리고 내가 등록한 로그 필터를 지난다." },
+    { from: "filter", to: "ds", label: "service()", title: "디스패처 서블릿에 닿는다", detail: "필터 체인 끝에 서블릿이 하나 있다. 스프링 MVC의 입구인 DispatcherServlet이다." },
+    { from: "ds", to: "ds", label: "핸들러 찾기", title: "어느 메서드가 받을지 정한다", detail: "URL과 HTTP 메서드로 OrderController#create를 찾고, 인터셉터의 preHandle을 부른다." },
+    { from: "ds", to: "ds", label: "본문 읽기 실패", title: "인자를 만들다 멈춘다", detail: "JSON을 OrderRequest로 바꾸던 메시지 컨버터가 파싱 에러를 낸다. 컨트롤러는 불리지 않는다.", payload: "HttpMessageNotReadableException" },
+    { from: "ds", to: "client", label: "400", title: "예외가 응답으로 바뀐다", detail: "예외 리졸버가 이 예외를 400으로 바꾸고 WARN 로그를 한 줄 남긴다. 필터는 돌아오는 길에 status=400을 본다." },
+  ]}
+/>
+
+## 내장 톰캣과 요청 스레드
+
+예전에는 톰캣을 서버에 따로 설치하고 war 파일을 올렸다. Spring Boot는 톰캣을 라이브러리로 들고 있다가 `main`에서 띄운다. 그래서 jar 하나를 `java -jar`로 실행하면 서버가 뜬다. 이렇게 앱 안에 들어간 서버를 내장 서버(embedded server)라고 한다. Boot 4에서는 톰캣과 Jetty를 고를 수 있고, Undertow 지원은 빠졌다.
+
+톰캣은 연결을 받는 쪽과 요청을 처리하는 쪽을 나눈다. NIO 커넥터가 소켓을 지켜보다가 요청이 들어오면 워커 스레드 풀에 넘긴다. 워커 스레드는 필터부터 컨트롤러, 응답 쓰기까지 이 요청을 끝까지 들고 있는다. 컨트롤러가 DB나 외부 API를 1초 기다리면 그 스레드도 1초 동안 다른 요청을 못 받는다.
+
+이 풀의 크기를 정하는 설정이 몇 개 있다. 값은 Boot 4.1 기본값이다.
+
+```properties
+# 워커 스레드 최대 수 (기본 200)
+server.tomcat.threads.max=200
+# 놀고 있어도 유지하는 최소 스레드 (기본 10)
+server.tomcat.threads.min-spare=10
+# 톰캣이 동시에 붙들고 있는 연결 수 (기본 8192)
+server.tomcat.max-connections=8192
+# 연결이 max-connections에 닿았을 때 OS가 대신 쌓아 두는 줄 (기본 100)
+server.tomcat.accept-count=100
+```
+
+스레드가 모자라면 어떻게 되는지 직접 본다. 최대 스레드를 2개로 줄이고 1초 걸리는 요청 네 개를 동시에 보냈다.
+
+```bash
+# 스레드 2개짜리 서버를 띄운다
+java -jar app.jar --server.tomcat.threads.max=2 --server.tomcat.threads.min-spare=1
+
+# 1초 걸리는 /orders/slow를 동시에 네 번 부른다
+for i in 1 2 3 4; do
+  curl -s -o /dev/null -w "req$i %{http_code} %{time_total}s\n" http://localhost:8080/orders/slow &
+done; wait
+```
+
+```text
+req2 200 1.526155s
+req4 200 1.542848s
+req3 200 2.546596s
+req1 200 2.565548s
+```
+
+```text
+[controller] slow on http-nio-8080-exec-1
+[controller] slow on http-nio-8080-exec-2
+[controller] slow on http-nio-8080-exec-2
+[controller] slow on http-nio-8080-exec-1
+```
+
+두 요청은 1.5초 남짓, 나머지 둘은 2.5초 남짓 걸렸다. 0.5초쯤 더 붙은 건 갓 뜬 서버의 첫 요청 준비 시간이다. 스레드 이름을 보면 일꾼 둘이 번갈아 네 요청을 처리했다. 뒤의 두 요청은 거절당하지 않았다. 연결은 받아 둔 채 스레드가 빌 때까지 기다렸다. 아래 그림이 그 1초씩의 줄을 보여 준다.
+
+<AlgoTrace
+  caption="스레드가 둘이면 네 번째 요청은 2초 뒤에 끝난다"
+  memoryLabel="스레드를 기다리는 요청"
+  cells={["req1", "req2", "req3", "req4"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "req1이 들어와 exec-1이 맡는다." },
+    { pointer: 1, memory: [], caption: "req2가 들어와 exec-2가 맡는다. 이제 남은 스레드가 없다." },
+    { pointer: 2, memory: ["req3"], caption: "req3은 연결만 받아 두고 기다린다." },
+    { pointer: 3, memory: ["req3", "req4"], caption: "req4도 기다린다. 응답은 아직 아무것도 안 나갔다." },
+    { found: [0, 1], memory: ["req3", "req4"], caption: "1초 뒤 req1, req2가 끝나고 스레드 둘이 빈다." },
+    { found: [0, 1, 2, 3], memory: [], caption: "빈 스레드가 req3, req4를 맡아 다시 1초 뒤 끝난다. 뒤의 둘은 2초를 썼다." },
+  ]}
+/>
+
+운영에서 이 줄이 보이는 모습은 "CPU는 한가한데 응답 시간이 계단처럼 늘어난다"다. 스레드 덤프를 뜨면 `http-nio-8080-exec-*` 스레드 200개가 전부 소켓 읽기나 커넥션 풀 대기에 서 있다. 스레드 풀 고갈과 덤프 읽는 법, 기다림에 상한을 두는 이야기는 [JVM 메모리와 스레드](/posts/java-jvm-memory-gc)에서 자세히 다뤘다.
+
+### 가상 스레드를 켜면 바뀌는 것
+
+Java 21 이상이면 설정 한 줄로 요청마다 가상 스레드를 쓸 수 있다.
+
+```properties
+spring.threads.virtual.enabled=true
+```
+
+켜고 같은 요청을 보내면 스레드 이름부터 다르다.
+
+```text
+[controller] slow on tomcat-handler-2
+[controller] slow on tomcat-handler-1
+[controller] create OrderRequest[productId=p-1, quantity=2] on VirtualThread[#43,tomcat-handler-4]/runnable@ForkJoinPool-1-worker-2
+```
+
+요청마다 새 가상 스레드가 만들어지고, 기다리는 동안에는 바닥의 OS 스레드를 놓아준다. 그래서 `server.tomcat.threads.max`의 200이라는 천장이 사실상 사라진다. 대신 천장이 다른 곳으로 옮겨 간다. 커넥션 풀이 10개면 동시에 DB를 쓰는 요청도 10개다. 스레드가 무한해 보이면 커넥션 풀 앞의 대기열이 길어지고, 외부 API에 동시 요청이 쏟아진다. 가상 스레드를 켤 때는 [커넥션 풀](/posts/connection-pool) 크기와 외부 호출의 동시성 제한을 함께 본다. `synchronized` 안에서 기다리면 캐리어를 붙잡는 문제(JDK 21~23)는 위의 JVM 글에서 실험으로 보였다.
+
+## 필터는 서블릿 앞, 인터셉터는 핸들러 앞
+
+톰캣과 스프링 사이에는 서블릿이라는 약속이 있다. 서블릿은 "HTTP 요청 하나를 받아 응답을 쓰는 자바 객체"의 표준 규격(Jakarta Servlet)이다. 스프링 MVC 전체가 `DispatcherServlet`이라는 서블릿 하나로 톰캣에 등록된다. 필터도 이 규격에 있다. 서블릿 앞에 줄줄이 서서 요청과 응답을 감싸는 객체다.
+
+필터를 던져서 일부러 실패시키면 스택 트레이스에 그 줄이 그대로 찍힌다. 아래는 안쪽부터 읽은 일부다.
+
+```text
+java.lang.IllegalStateException: filter boom
+	at demo.mvc.LoggingFilter.doFilterInternal(MvcApp.java:60)
+	at org.springframework.web.filter.RequestContextFilter.doFilterInternal(RequestContextFilter.java:100)
+	at org.springframework.web.filter.FormContentFilter.doFilterInternal(FormContentFilter.java:93)
+	at org.springframework.web.filter.CharacterEncodingFilter.doFilterInternal(CharacterEncodingFilter.java:199)
+	at org.apache.catalina.core.StandardWrapperValve.invoke(StandardWrapperValve.java:165)
+	...
+	at org.apache.tomcat.util.threads.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:483)
+```
+
+톰캣 스레드에서 시작해 Boot가 등록한 인코딩 필터, 폼 필터, 요청 컨텍스트 필터를 지나 내 필터에 왔다. 내 필터에 `@Order(1)`을 줬는데도 Boot 필터들 뒤에 선 건, 이 필터들이 더 작은(먼저 오는) 순서 값을 갖고 있어서다. Spring Security를 넣으면 이 줄에 `springSecurityFilterChain`이 하나 더 끼는데, 그 이야기는 [Spring Security 구조](/posts/spring-security-architecture)에서 이어 간다.
+
+인터셉터는 스프링 MVC 안쪽의 장치다. `DispatcherServlet`이 처리할 핸들러를 정한 다음에 불린다. 그래서 인터셉터는 "어느 컨트롤러 메서드가 받을지"를 안다. 위 로그의 `handler=demo.mvc.OrderController#create(OrderRequest)`가 그것이다. 필터는 이걸 모른다. 아직 정해지지 않았기 때문이다.
+
+```java
+@Component
+class TimingInterceptor implements HandlerInterceptor {
+  public boolean preHandle(HttpServletRequest req, HttpServletResponse res, Object handler) {
+    return true;   // false를 돌려주면 컨트롤러로 가지 않는다
+  }
+  public void postHandle(HttpServletRequest req, HttpServletResponse res, Object handler, ModelAndView mv) { }
+  public void afterCompletion(HttpServletRequest req, HttpServletResponse res, Object handler, Exception ex) { }
+}
+
+@Component
+class WebConfig implements WebMvcConfigurer {
+  private final TimingInterceptor t;
+  WebConfig(TimingInterceptor t) { this.t = t; }
+  public void addInterceptors(InterceptorRegistry r) {
+    r.addInterceptor(t).addPathPatterns("/orders/**");   // 경로를 골라 붙인다
+  }
+}
+```
+
+둘 중 무엇을 쓸지는 무엇을 알아야 하는 일인지로 고른다.
+
+- 필터: 요청 본문 감싸기(여러 번 읽게 캐싱), 문자 인코딩, CORS, 인증처럼 스프링 MVC와 상관없이 모든 요청에 걸어야 하는 일. 정적 파일과 `/error` 요청에도 걸린다. 응답을 감싼 객체로 바꿔 끼울 수 있는 것도 필터뿐이다.
+- 인터셉터: 어느 컨트롤러 메서드인지, 그 메서드에 붙은 어노테이션이 무엇인지 보고 결정하는 일. 메서드별 권한 표시, 요청 로그에 핸들러 이름 남기기, 특정 경로에만 거는 공통 처리.
+
+필터에서 던진 예외와 인터셉터에서 던진 예외가 다르게 처리된다는 점도 기억해 둔다. 이건 아래 예외 처리 절에서 본다.
+
+## DispatcherServlet이 하는 일의 순서
+
+`DispatcherServlet`은 혼자 일하지 않는다. 대부분의 일을 전략 객체들에게 맡기고 순서만 지휘한다. 그래서 프런트 컨트롤러라고 부른다. 핵심 메서드 `doDispatch`의 흐름을 줄이면 이렇다.
+
+1. `HandlerMapping`에게 이 요청을 받을 핸들러를 묻는다. `@RequestMapping`을 읽어 둔 `RequestMappingHandlerMapping`이 URL, HTTP 메서드, `Content-Type`, `Accept`를 맞춰 보고 `OrderController#create`를 돌려준다. 인터셉터 목록도 함께 묶어 준다(HandlerExecutionChain).
+2. 그 핸들러를 실제로 부를 줄 아는 `HandlerAdapter`를 고른다. 어노테이션 컨트롤러는 `RequestMappingHandlerAdapter`다.
+3. 인터셉터의 `preHandle`을 순서대로 부른다.
+4. 어댑터가 메서드 인자를 하나씩 만든다(argument resolver). `@RequestBody`는 메시지 컨버터로 본문을 읽고, `@Valid`가 있으면 검증까지 한다. `@PathVariable`, `@RequestParam`은 문자열을 타입으로 바꾼다.
+5. 컨트롤러 메서드를 부른다.
+6. 돌려받은 값을 응답으로 쓴다(return value handler). `@RestController`라면 메시지 컨버터가 객체를 JSON으로 바꿔 본문에 쓴다.
+7. 인터셉터의 `postHandle`을 거꾸로 부른다.
+8. 중간에 예외가 났다면 `HandlerExceptionResolver`들이 응답으로 바꾼다.
+9. 인터셉터의 `afterCompletion`을 거꾸로 부른다.
+
+아래 그림은 이 협력자들의 관계다. 디스패처에서 나간 화살표를 따라 점이 흐른다.
+
+<ConceptDiagram
+  caption="DispatcherServlet은 지휘만 하고 일은 협력자가 한다"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "ds", label: "DispatcherServlet", sub: "순서 지휘", x: 200, y: 40, w: 150, h: 44 },
+    { id: "hm", label: "HandlerMapping", sub: "누가 받나", x: 75, y: 125, w: 130, h: 44 },
+    { id: "ha", label: "HandlerAdapter", sub: "어떻게 부르나", x: 325, y: 125, w: 130, h: 44 },
+    { id: "ar", label: "인자 해석", sub: "@RequestBody, @Valid", x: 255, y: 205, w: 150, h: 44 },
+    { id: "mc", label: "메시지 컨버터", sub: "JSON ↔ 객체", x: 330, y: 270, w: 120, h: 40 },
+    { id: "er", label: "ExceptionResolver", sub: "예외 → 응답", x: 75, y: 220, w: 140, h: 44 },
+  ]}
+  edges={[
+    { from: "ds", to: "hm", label: "1" },
+    { from: "ds", to: "ha", label: "2" },
+    { from: "ha", to: "ar", label: "인자" },
+    { from: "ar", to: "mc", label: "본문" },
+    { from: "ds", to: "er", label: "예외", dashed: true },
+  ]}
+/>
+
+이 구조를 알면 확장 지점도 보인다. 직접 만든 타입을 인자로 받고 싶으면 `HandlerMethodArgumentResolver`를, 새 본문 형식을 읽고 쓰려면 `HttpMessageConverter`를 등록한다. `DispatcherServlet` 자체를 고칠 일은 거의 없다.
+
+로그에 있던 이 두 줄도 이 구조에서 나온다.
+
+```text
+INFO 5307 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Initializing Servlet 'dispatcherServlet'
+INFO 5307 --- [nio-8080-exec-1] o.s.web.servlet.DispatcherServlet        : Completed initialization in 5 ms
+```
+
+`DispatcherServlet`은 기본으로 첫 요청이 올 때 초기화된다. 이 실험에서는 5ms였지만 핸들러 매핑과 컨버터가 많은 앱에서는 첫 요청 하나가 눈에 띄게 느려진다. 배포 직후 첫 요청만 느린 게 신경 쓰이면 `spring.mvc.servlet.load-on-startup=1`로 시작할 때 미리 초기화한다.
+
+## 인자를 만들다 실패하면 컨트롤러는 불리지 않는다
+
+처음 장면으로 돌아가면, 깨진 JSON은 4번 단계에서 멈췄다. 같은 단계에서 멈추는 요청이 몇 가지 더 있다. 실험 앱에 각각 보내 본 결과다.
+
+```bash
+# 1) 검증 실패: quantity는 1 이상이어야 한다
+curl -s -i -X POST -H 'Content-Type: application/json' \
+  -d '{"productId":"p-1","quantity":0}' http://localhost:8080/orders
+# 2) 본문 형식이 JSON이 아니다
+curl -s -i -X POST -H 'Content-Type: text/plain' -d 'hi' http://localhost:8080/orders
+# 3) 경로 변수가 숫자가 아니다
+curl -s -i http://localhost:8080/orders/abc
+```
+
+각 요청에서 서버에 남은 로그다(긴 줄은 줄였다).
+
+```text
+WARN ... DefaultHandlerExceptionResolver : Resolved [org.springframework.web.bind.MethodArgumentNotValidException: Validation failed for argument [0] ... [Field error in object 'orderRequest' on field 'quantity': rejected value [0]; ... default message [must be greater than or equal to 1]] ]
+WARN ... DefaultHandlerExceptionResolver : Resolved [org.springframework.web.HttpMediaTypeNotSupportedException: Content-Type 'text/plain;charset=UTF-8' is not supported]
+WARN ... DefaultHandlerExceptionResolver : Resolved [org.springframework.web.method.annotation.MethodArgumentTypeMismatchException: Method parameter 'id': Failed to convert value of type 'java.lang.String' to required type 'long'; For input string: "abc"]
+```
+
+응답 코드는 차례로 400, 415, 400이었다. 415 응답에는 `Accept: application/json, application/*+json` 헤더가 붙어서, 이 엔드포인트가 받는 형식을 알려 줬다. 세 경우 모두 컨트롤러 로그가 없고, 인터셉터의 `preHandle`은 찍혔다. 핸들러는 정해졌지만 인자를 만들지 못한 것이다.
+
+여기서 현장에서 쓸 규칙이 하나 나온다. 컨트롤러 로그가 없는 4xx는 `DefaultHandlerExceptionResolver`의 WARN 줄을 먼저 찾는다. 예외 이름이 어느 단계에서 막혔는지 말해 준다.
+
+| 예외 | 코드 | 막힌 곳 |
+|---|---|---|
+| `HttpMessageNotReadableException` | 400 | JSON 문법, 타입이 다른 필드(문자열 자리에 객체 등) |
+| `MethodArgumentNotValidException` | 400 | `@Valid` 검증 실패 |
+| `HttpMediaTypeNotSupportedException` | 415 | 요청 `Content-Type`을 읽을 컨버터가 없다 |
+| `MethodArgumentTypeMismatchException` | 400 | 경로 변수·쿼리 파라미터 형 변환 |
+| `HttpRequestMethodNotSupportedException` | 405 | URL은 맞는데 HTTP 메서드가 다르다 |
+| `NoResourceFoundException` | 404 | 맞는 핸들러가 없어 정적 리소스로 넘겼는데 그것도 없다 |
+
+마지막 줄은 Spring Framework 6.1부터의 동작이다. 컨트롤러가 없는 경로는 정적 리소스 핸들러가 받고, 파일이 없으면 이 예외로 404를 만든다.
+
+400 응답 헤더에 `Connection: close`가 있었던 것도 짚어 둔다. 톰캣은 400, 500처럼 요청 자체가 이상하거나 서버가 망가졌을 수 있는 일부 상태 코드에서는 keep-alive 연결을 닫는다. 앞단 프록시와 연결을 재사용하는 구성이라면 400이 쏟아질 때 연결도 다시 맺느라 비용이 붙는다.
+
+검증이 일어나는 자리도 알아 둔다. `@Valid @RequestBody`의 검증은 컨트롤러 메서드에 들어가기 전, 인자 해석 단계에서 끝난다. 반면 서비스 메서드의 파라미터에 붙인 제약은 클래스에 `@Validated`를 붙여 메서드 검증 프록시가 감쌀 때만 동작하고, 실패하면 `ConstraintViolationException`이 난다. 같은 검증 실패라도 예외 이름이 다르니 에러 처리도 따로 잡아야 한다. Spring Framework 6.1부터는 컨트롤러 메서드 파라미터에 바로 붙인 제약(`@Min`이 붙은 `@PathVariable` 등)도 내장 메서드 검증이 처리하고, 이때는 `HandlerMethodValidationException`이 난다.
+
+## 인터셉터 세 메서드가 불리는 규칙
+
+인터셉터는 메서드가 셋이고, 불리는 조건이 서로 다르다. 위 실험에서 나온 로그로 규칙을 정리하면 이렇다.
+
+- `preHandle`은 등록 순서대로 불린다. 하나라도 `false`를 돌려주면 그 자리에서 멈추고 컨트롤러는 불리지 않는다.
+- `postHandle`은 컨트롤러가 정상으로 끝났을 때만, 거꾸로 불린다. 예외가 나면 건너뛴다. 재고 없음 예외를 던진 요청에서는 `postHandle` 로그가 없었다.
+- `afterCompletion`은 `preHandle`이 `true`를 돌려준 인터셉터에 대해서만, 거꾸로 불린다. 예외가 나도 불리니 정리 작업은 여기에 둔다.
+
+한 가지 더 있다. `@RestController`에서는 `postHandle`이 불릴 때 이미 응답 본문이 써져 있다. 메시지 컨버터가 6번 단계에서 응답을 써서 커밋했기 때문이다. 그래서 `postHandle`에서 응답 헤더를 추가해도 클라이언트에 가지 않는다. 헤더를 붙이려면 필터나 `ResponseBodyAdvice`를 쓴다.
+
+그리고 실험 로그에서 `afterCompletion ex=null`은 예외가 났던 요청에서도 똑같이 찍혔다. `@ExceptionHandler`나 기본 리졸버가 예외를 응답으로 바꿨으면, 인터셉터에는 "처리된 예외"로 보여 `null`이 넘어온다. 인터셉터에서 에러율을 세려면 `ex` 대신 응답 상태 코드를 본다.
+
+아래 함수 `dispatch(interceptors, controllerThrows)`를 채워 보자. `interceptors`는 `name`과 `pre`(preHandle이 돌려줄 값)를 가진 객체 배열이고, `controllerThrows`가 `true`면 컨트롤러가 예외를 던진다. 불린 순서대로 `"auth.pre"`, `"controller"`, `"auth.post"`, `"auth.after"` 같은 문자열 배열을 돌려준다.
+
+<CodePlayground
+  caption="인터셉터 호출 순서"
+  functionName="dispatch"
+  initialCode={`function dispatch(interceptors, controllerThrows) {
+  const log = [];
+  // preHandle → controller → postHandle → afterCompletion
+  return log;
+}`}
+  solution={`function dispatch(interceptors, controllerThrows) {
+  const log = [];
+  let passed = -1;
+  for (let i = 0; i < interceptors.length; i++) {
+    log.push(interceptors[i].name + ".pre");
+    if (!interceptors[i].pre) {
+      // true를 돌려준 인터셉터만 거꾸로 정리한다
+      for (let j = passed; j >= 0; j--) log.push(interceptors[j].name + ".after");
+      return log;
+    }
+    passed = i;
+  }
+  log.push("controller");
+  if (!controllerThrows) {
+    for (let j = interceptors.length - 1; j >= 0; j--) log.push(interceptors[j].name + ".post");
+  }
+  for (let j = interceptors.length - 1; j >= 0; j--) log.push(interceptors[j].name + ".after");
+  return log;
+}`}
+  tests={[
+    { label: "정상 흐름", args: [[{ name: "auth", pre: true }, { name: "timing", pre: true }], false], expected: ["auth.pre", "timing.pre", "controller", "timing.post", "auth.post", "timing.after", "auth.after"] },
+    { label: "컨트롤러 예외", args: [[{ name: "auth", pre: true }, { name: "timing", pre: true }], true], expected: ["auth.pre", "timing.pre", "controller", "timing.after", "auth.after"] },
+    { label: "첫 인터셉터가 막음", args: [[{ name: "auth", pre: false }, { name: "timing", pre: true }], false], expected: ["auth.pre"] },
+    { label: "중간에서 막음", args: [[{ name: "locale", pre: true }, { name: "auth", pre: false }, { name: "timing", pre: true }], false], expected: ["locale.pre", "auth.pre", "locale.after"] },
+    { label: "인터셉터 없음", args: [[], false], expected: ["controller"] },
+  ]}
+/>
+
+네 번째 테스트가 실무에서 자주 헷갈린다. `auth`가 막으면 `auth` 자신의 `afterCompletion`은 불리지 않는다. `preHandle`에서 무언가를 열어 두고(타이머, MDC 값) `false`를 돌려주기 전에 직접 정리하지 않으면 그 값이 스레드에 남는다. 톰캣 스레드는 재사용되니 다음 요청의 로그에 엉뚱한 사용자 ID가 찍힌다.
+
+## 예외는 누가 응답으로 바꾸나
+
+컨트롤러나 그 아래 서비스에서 던진 예외는 `DispatcherServlet`이 잡아 `HandlerExceptionResolver` 목록에 차례로 묻는다. Boot 기본 구성에서 순서는 이렇다.
+
+1. `ExceptionHandlerExceptionResolver`: 컨트롤러 안의 `@ExceptionHandler`, 그다음 `@ControllerAdvice` 안의 `@ExceptionHandler`를 찾는다.
+2. `ResponseStatusExceptionResolver`: `@ResponseStatus`가 붙은 예외나 `ResponseStatusException`을 그 코드로 바꾼다.
+3. `DefaultHandlerExceptionResolver`: 앞에서 본 스프링 MVC 내장 예외를 400, 405, 415 같은 코드로 바꾼다.
+
+아무도 처리하지 못하면 예외는 서블릿 밖, 톰캣까지 올라간다. 톰캣은 Boot가 등록한 에러 페이지 설정을 보고 요청을 `/error`로 다시 보낸다(error dispatch). 거기서 Boot의 `BasicErrorController`가 처음 장면에서 본 `timestamp`, `status`, `error`, `path` 본문을 만든다.
+
+재고가 없을 때 던질 예외를 하나 만들고 `@RestControllerAdvice`에서 처리해 본다.
+
+```java
+class OutOfStockException extends RuntimeException {
+  OutOfStockException(String productId) { super(productId); }
+}
+
+@RestControllerAdvice
+class ApiExceptionHandler {
+  @ExceptionHandler(OutOfStockException.class)
+  ProblemDetail outOfStock(OutOfStockException e) {
+    ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "재고가 없습니다: " + e.getMessage());
+    pd.setType(URI.create("https://example.com/problems/out-of-stock"));
+    pd.setTitle("Out of stock");
+    pd.setProperty("productId", e.getMessage());
+    return pd;
+  }
+}
+```
+
+```text
+HTTP/1.1 409
+Content-Type: application/problem+json
+
+{"detail":"재고가 없습니다: p-0","instance":"/orders","status":409,"title":"Out of stock","type":"https://example.com/problems/out-of-stock","productId":"p-0"}
+```
+
+`@ControllerAdvice`의 범위에는 경계가 있다. `DispatcherServlet` 안에서 난 예외만 본다. 필터에서 던진 예외는 `DispatcherServlet`에 닿기 전이라 어드바이스가 모른다. 로그 필터에서 일부러 예외를 던졌을 때가 그랬다.
+
+```text
+HTTP/1.1 500
+Content-Type: application/json
+
+{"timestamp":"2026-10-23T12:49:59.595Z","status":500,"error":"Internal Server Error","path":"/orders/1"}
+```
+
+```text
+ERROR ... o.a.c.c.C.[.[.[/].[dispatcherServlet] : Servlet.service() for servlet [dispatcherServlet] in context with path [] threw exception
+
+java.lang.IllegalStateException: filter boom
+```
+
+어드바이스에 `IllegalStateException` 처리기를 두었더라도 결과는 같다. 응답은 톰캣이 `/error`로 보낸 뒤 Boot 기본 형식으로 만들어졌다. JWT 검증 필터에서 토큰이 틀렸다고 예외를 던지면, 공들여 만든 에러 형식 대신 500이 나가는 이유가 이것이다. 필터에서 일어난 실패는 필터 안에서 직접 응답을 쓰거나, Spring Security처럼 실패를 처리하는 전용 장치를 둔다.
+
+인터셉터는 다르다. 인터셉터는 `DispatcherServlet` 안에서 불리니 `preHandle`에서 던진 예외는 `@ControllerAdvice`가 받는다. 인증 실패를 공통 에러 형식으로 내고 싶어서 필터 대신 인터셉터를 고르는 경우도 있다.
+
+## 에러 본문을 ProblemDetail로 맞춘다
+
+같은 API에서 어떤 에러는 Boot 기본 형식(`timestamp`, `error`), 어떤 에러는 내가 만든 형식이면 클라이언트가 둘 다 파싱해야 한다. HTTP API 에러 본문의 표준 형식이 RFC 9457 Problem Details(이전 RFC 7807)이고, 스프링은 6.0부터 이걸 `ProblemDetail` 타입으로 지원한다. 필드 뜻은 [HTTP 상태 코드](/posts/http-status-codes)와 [REST API 설계](/posts/rest-api-design) 글에서 다뤘으니, 여기서는 스프링에서 켜는 방법만 본다.
+
+스프링 MVC 내장 예외까지 이 형식으로 바꾸는 설정이 있다. Boot 4.1에서도 기본은 꺼져 있다.
+
+```properties
+spring.mvc.problemdetails.enabled=true
+```
+
+켜고 앞의 요청을 다시 보냈다.
+
+```text
+HTTP/1.1 400
+Content-Type: application/problem+json
+
+{"detail":"Invalid request content.","instance":"/orders","status":400,"title":"Bad Request"}
+```
+
+```text
+HTTP/1.1 400
+Content-Type: application/problem+json
+
+{"detail":"Failed to convert 'id' with value: 'abc'","instance":"/orders/abc","status":400,"title":"Bad Request"}
+```
+
+```text
+HTTP/1.1 404
+Content-Type: application/problem+json
+
+{"detail":"No static resource nothing.","instance":"/nothing","status":404,"title":"Not Found"}
+```
+
+형식은 맞췄는데 검증 실패의 `detail`이 "Invalid request content."뿐이다. 어느 필드가 틀렸는지 알려 주려면 `ResponseEntityExceptionHandler`를 상속해 그 처리기 하나만 덮어쓴다. 이 클래스가 내장 예외 전부를 `ProblemDetail`로 바꾸는 처리기 묶음이다.
+
+```java
+@RestControllerAdvice
+class ApiExceptionHandler extends ResponseEntityExceptionHandler {
+  @Override
+  protected ResponseEntity<Object> handleMethodArgumentNotValid(
+      MethodArgumentNotValidException ex, HttpHeaders headers,
+      HttpStatusCode status, WebRequest request) {
+    ProblemDetail pd = ex.getBody();   // 스프링이 만든 기본 ProblemDetail
+    pd.setProperty("errors", ex.getFieldErrors().stream()
+        .map(f -> Map.of("field", f.getField(), "message", f.getDefaultMessage()))
+        .toList());
+    return handleExceptionInternal(ex, pd, headers, status, request);
+  }
+}
+```
+
+```text
+{"detail":"Invalid request content.","instance":"/orders","status":400,"title":"Bad Request","errors":[{"message":"must be greater than or equal to 1","field":"quantity"},{"message":"must not be blank","field":"productId"}]}
+```
+
+이 클래스를 상속한 어드바이스를 두면 `spring.mvc.problemdetails.enabled`를 켜지 않아도 내장 예외가 `ProblemDetail`로 나간다. 위 출력은 그 설정 없이 얻었다. 반대로 둘을 같이 쓰면 Boot도 같은 역할의 어드바이스를 등록하려 하는데, 내 빈이 있으면 Boot 것은 물러난다.
+
+에러 응답을 손볼 때 흔한 실수가 두 가지 있다. 하나는 `@ExceptionHandler(Exception.class)`로 모든 예외를 500으로 덮는 것이다. 그러면 415나 405 같은 내장 예외까지 500이 되어 버린다. 전체 처리기를 두려면 `ResponseEntityExceptionHandler`를 상속해 내장 예외를 먼저 가져가게 한다. 다른 하나는 `e.getMessage()`를 그대로 `detail`에 넣는 것이다. SQL 오류 메시지나 내부 클래스 이름이 밖으로 나간다. 사용자에게 보여 줄 문구와 로그에 남길 원인을 나눈다.
+
+## JSP가 실행 jar에서 잘 안 되는 이유
+
+요즘 스프링 백엔드는 JSON API가 대부분이고 화면은 Thymeleaf나 별도 프런트엔드로 만든다. 그래도 오래된 프로젝트를 Boot로 옮기다 보면 JSP를 만난다. Boot 공식 문서는 내장 서버에서 JSP 지원에 제약이 있다고 적어 둔다. 톰캣과 Jetty에서 war로 패키징하면 동작하지만, 실행 가능한 jar로는 동작하지 않는다. JSP는 요청 시점에 `.jsp` 파일을 찾아 서블릿으로 컴파일하는데, 문서 표현으로는 톰캣 안에 하드코딩된 파일 패턴 때문에 jar 안에 중첩된 위치에서는 그 파일을 찾지 못한다. JSP를 꼭 유지해야 하면 war로 만들고, 새로 만드는 화면은 템플릿 엔진으로 옮기는 편이 낫다.
+
+## 400을 다시 보면
+
+처음의 400은 톰캣 스레드가 필터를 지나 `DispatcherServlet`에 닿고, 핸들러까지 정해진 다음, 인자를 만드는 단계에서 돌아온 요청이었다. 컨트롤러 로그가 없으니 `DefaultHandlerExceptionResolver`의 WARN 줄에서 예외 이름을 찾으면 된다. 이 흐름을 머리에 두면 필터와 인터셉터 중 어디에 코드를 둘지, `@ControllerAdvice`가 왜 어떤 예외는 못 잡는지, 스레드 풀 200이 왜 응답 시간을 계단처럼 만드는지가 한 그림으로 설명된다. 다음은 같은 요청이 DB에 닿을 때의 이야기다. [@Transactional 깊게](/posts/spring-transactional-propagation)에서 트랜잭션이 이 요청 스레드에 어떻게 묶이는지 본다.
+
+## 면접에서 나올 만한 질문
+
+### Spring MVC에서 요청이 처리되는 흐름을 설명해 주세요.
+
+톰캣 워커 스레드가 요청을 받아 서블릿 필터 체인을 지나 `DispatcherServlet`에 넘긴다. `DispatcherServlet`은 `HandlerMapping`으로 받을 컨트롤러 메서드를 찾고, `HandlerAdapter`가 인자를 해석해 메서드를 부른다. 이때 `@RequestBody`는 메시지 컨버터가 읽고 `@Valid` 검증도 한다. 반환값은 다시 메시지 컨버터가 응답으로 쓰고, 그 앞뒤로 인터셉터가 끼어든다. 중간에 난 예외는 `HandlerExceptionResolver`가 응답으로 바꾼다.
+
+### 필터와 인터셉터는 어떻게 다른가요?
+
+필터는 서블릿 규격의 장치라 `DispatcherServlet` 앞에서 모든 요청에 걸리고, 요청·응답 객체를 감싼 것으로 바꿔 끼울 수 있다. 인터셉터는 스프링 MVC 안에서 핸들러가 정해진 뒤에 불려서 어느 컨트롤러 메서드인지 안다. 인코딩, CORS, 인증처럼 MVC와 무관한 일은 필터에, 핸들러 정보가 필요한 일은 인터셉터에 둔다. 필터에서 던진 예외는 `@ControllerAdvice`가 잡지 못하고, 인터셉터에서 던진 예외는 잡는다.
+
+### 컨트롤러에 로그가 안 찍히는 400은 어디서부터 보나요?
+
+`DefaultHandlerExceptionResolver`가 남기는 WARN 로그의 예외 이름부터 본다. `HttpMessageNotReadableException`이면 JSON 문법이나 필드 타입, `MethodArgumentNotValidException`이면 검증 실패, `MethodArgumentTypeMismatchException`이면 경로·쿼리 값 변환 실패다. 415면 요청 `Content-Type`을 읽을 컨버터가 없는 것이다. 모두 컨트롤러 메서드에 넘길 인자를 만드는 단계에서 멈춘 경우다.
+
+### @ControllerAdvice가 잡지 못하는 예외는 무엇인가요?
+
+`DispatcherServlet` 밖에서 난 예외다. 서블릿 필터에서 던진 예외가 대표적이고, 이건 톰캣이 `/error`로 다시 보내 Boot의 기본 에러 응답이 나간다. 응답을 이미 커밋한 뒤에 난 예외도 형식을 바꿀 수 없다. 필터의 실패는 필터 안에서 직접 응답을 쓰거나 전용 처리기를 둔다.
+
+### ProblemDetail은 무엇이고 어떻게 적용하나요?
+
+RFC 9457 Problem Details 형식의 에러 본문을 스프링이 6.0부터 타입으로 지원하는 것이다. `@ExceptionHandler`에서 `ProblemDetail`을 돌려주면 `application/problem+json`으로 나간다. 내장 예외까지 맞추려면 `spring.mvc.problemdetails.enabled=true`를 켜거나 `ResponseEntityExceptionHandler`를 상속한 어드바이스를 둔다. 검증 실패의 필드 목록처럼 기본에 없는 정보는 `handleMethodArgumentNotValid`를 덮어써 속성으로 추가한다.
+
+### 톰캣 스레드 풀이 가득 차면 어떻게 되고, 어떻게 확인하나요?
+
+새 요청은 거절되지 않고 연결을 받은 채 스레드가 빌 때까지 기다린다. 그래서 CPU는 한가한데 응답 시간이 계단처럼 늘어나는 모습으로 나타난다. 스레드 덤프에서 `http-nio-*-exec-*` 스레드가 전부 외부 호출이나 커넥션 풀 대기에 서 있는지 본다. `threads.max`를 늘리기 전에 느린 외부 호출에 타임아웃을 거는 게 먼저다.
+
+### 가상 스레드를 켜면 무엇이 좋아지고 무엇을 조심해야 하나요?
+
+`spring.threads.virtual.enabled=true`면 요청마다 가상 스레드가 만들어져, 기다리는 동안 OS 스레드를 놓아준다. 블로킹 코드 그대로 동시에 기다릴 수 있는 요청 수가 크게 늘어난다. 대신 스레드 수라는 자연스러운 제한이 사라져서 커넥션 풀 대기열과 외부 API로 부하가 그대로 넘어간다. JDK 21~23에서는 `synchronized` 안에서 기다리면 캐리어 스레드를 붙잡는 문제도 있다.
+
+### postHandle에서 응답 헤더를 추가했는데 클라이언트에 안 보입니다. 왜인가요?
+
+`@ResponseBody` 컨트롤러는 반환값을 메시지 컨버터가 바로 응답 본문으로 써서 커밋한 뒤에 `postHandle`이 불린다. 커밋된 응답에는 헤더를 더할 수 없다. 응답 헤더는 필터에서 `chain.doFilter` 전에 붙이거나, `ResponseBodyAdvice`처럼 본문을 쓰기 직전에 끼어드는 장치를 쓴다.

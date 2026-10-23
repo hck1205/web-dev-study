@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("elasticsearch-mapping");
+
+<EasyIntro>
+  도서관에 새 책이 들어오면 사서는 책마다 카드를 만든다. 제목은 어느 칸에, 출판 연도는 어느 칸에 적을지 미리 정해 둔 양식이 있어야 나중에 연도순으로 꽂거나 제목으로 찾을 수 있다.
+
+  Elasticsearch에서 이 양식을 매핑이라고 부른다. 양식을 정해 주지 않으면 처음 들어온 문서를 보고 알아서 칸을 만드는데, 가격 "19000"을 글자로 적어 보내면 숫자 칸이 아니라 글자 칸이 생긴다. 그러면 9000원이 19000원보다 비싸다고 정렬되는 일이 생긴다.
+
+  옷 한 벌에 색과 사이즈가 여러 개 붙어 있을 때도 조심해야 한다. 양식이 색은 색끼리, 사이즈는 사이즈끼리 따로 적어 버리면 어떤 색과 어떤 사이즈가 짝이었는지 잊어버린다. 짝을 지켜야 하면 짝마다 작은 카드를 따로 붙이는 방식을 고른다.
+
+  한 번 만든 칸의 종류는 나중에 바꿀 수 없다. 그래서 양식을 고쳐야 하면 새 카드함을 만들어 책을 옮겨 적고, 안내판을 새 카드함 쪽으로 돌려 놓는다.
+</EasyIntro>
+
+쇼핑몰 검색에 색과 사이즈 필터를 붙였다. 사용자가 "빨강"과 "L"을 고르면 이 쿼리가 나간다.
+
+```json
+GET products/_search
+{
+  "query": { "bool": { "filter": [
+    { "term": { "options.color.keyword": "red" } },
+    { "term": { "options.size.keyword": "L" } }
+  ] } }
+}
+```
+
+결과에 기본 티셔츠가 나온다. 이 상품의 옵션은 빨강 M과 파랑 L이다. 빨강 L은 없다. 쿼리를 아무리 다시 읽어도 틀린 데가 없다. 원인은 쿼리가 아니라 이 인덱스의 매핑, 즉 필드마다 어떤 타입으로 어떻게 저장할지 정한 설계도에 있다.
+
+이 글은 그 설계도를 다룬다. 역색인이 무엇이고 `text`와 `keyword`가 왜 다른지는 [역색인 글](/posts/elasticsearch-inverted-index)에서 봤으니, 여기서는 매핑을 직접 정하지 않았을 때 생기는 일, 객체 배열을 저장하는 세 가지 방법, 정렬과 집계가 읽는 저장소, 그리고 이미 만든 필드를 고쳐야 할 때의 순서를 따라간다. 모든 출력은 Elasticsearch 9.1.5 단일 노드에서 직접 돌려 얻었다. 같은 데이터로 집계를 묻는 이야기는 [집계 글](/posts/elasticsearch-aggregations)에 이어서 썼다.
+
+## 아무것도 정하지 않으면 이렇게 만든다
+
+인덱스를 만들지 않고 문서를 바로 넣어 보자. Elasticsearch는 문서를 보고 필드 타입을 추측해 매핑을 만든다. 이게 동적 매핑이다.
+
+```json
+PUT products/_doc/1?refresh
+{
+  "name": "기본 티셔츠",
+  "price": "19000",
+  "stock": 3,
+  "released": "2026-03-02",
+  "onSale": "true",
+  "options": [ { "color": "red", "size": "M" }, { "color": "blue", "size": "L" } ]
+}
+
+GET products/_mapping
+```
+
+만들어진 매핑에서 필드별 타입만 추리면 이렇다.
+
+```text
+name      text + keyword(ignore_above 256)
+price     text + keyword(ignore_above 256)
+onSale    text + keyword(ignore_above 256)
+options   object
+  color   text + keyword
+  size    text + keyword
+released  date
+stock     long
+```
+
+`stock: 3`은 숫자라 `long`이 됐고, `"2026-03-02"`는 날짜처럼 생겨서 `date`가 됐다. 날짜 추측(`date_detection`)은 기본으로 켜져 있다. 하지만 숫자 추측(`numeric_detection`)은 기본으로 꺼져 있어서, 따옴표로 감싼 `"19000"`은 문자열로 보고 `text`와 `keyword` 두 벌을 만들었다. `"true"`도 문자열이다. 앞단 서버가 폼 값을 그대로 넘기거나 CSV를 옮겨 넣을 때 이런 문서가 흔히 들어온다.
+
+이 매핑에서 가격 정렬을 걸면 어떻게 될까. 9,000원짜리 상품을 하나 더 넣고 `price.keyword`로 정렬했다.
+
+```text
+{"hits":{"hits":[{"_id":"1","sort":["19000"]},{"_id":"2","sort":["9000"]}]}}
+```
+
+19,000원이 9,000원보다 앞에 온다. 글자로 비교하면 "1"이 "9"보다 앞이기 때문이다. 범위 검색도 망가진다. `price`가 1만 원 이상인 상품을 찾으면 9,000원짜리까지 두 개가 다 나온다. `"9000"`이 글자 순으로 `"10000"`보다 뒤라서다. 오류는 하나도 나지 않는다.
+
+`text` 필드로 정렬하면 그때는 오류가 난다.
+
+```json
+GET products/_search
+{ "sort": [ { "name": "asc" } ] }
+```
+
+```text
+"type": "illegal_argument_exception",
+"reason": "Fielddata is disabled on [name] in [products]. Text fields are not optimised for operations
+that require per-document field data like aggregations and sorting, so these operations are disabled
+by default. Please use a keyword field instead. ..."
+```
+
+메시지가 원인과 해법을 다 말해 준다. 정렬은 `name.keyword`로 한다. 왜 `text`로는 안 되는지는 아래 "정렬과 집계는 다른 곳을 읽는다"에서 본다.
+
+동적 매핑이 나쁜 건 아니다. 개발 초기에 데이터 모양을 모를 때는 편하다. 다만 운영 인덱스는 매핑을 직접 정해서 만든다(명시적 매핑). 한 번 만들어진 필드 타입은 바꿀 수 없어서, 첫 문서가 잘못 들어오면 그 실수가 인덱스 수명 내내 남기 때문이다.
+
+## 매핑을 직접 쓰면
+
+같은 상품을 위한 매핑을 직접 써 보자. 아래 그림에서 조각을 눌러 보면 각 설정이 무엇을 막는지 보인다.
+
+<UrlAnatomy
+  caption="products-v2 매핑의 조각들"
+  base="PUT products-v2"
+  separator=" "
+  joiner=" · "
+  params={[
+    {
+      key: "dynamic",
+      display: "\"dynamic\": \"strict\"",
+      title: "모르는 필드는 거절",
+      description: "매핑에 없는 필드가 오면 문서를 통째로 거절한다. true(기본)는 새 필드를 매핑에 추가하고, false는 _source에만 남기고 색인하지 않으며, runtime은 런타임 필드로 추가한다.",
+      code: "\"dynamic\": \"strict\"",
+      required: true,
+    },
+    {
+      key: "name",
+      display: "name: text + raw",
+      title: "멀티 필드",
+      description: "같은 값을 검색용 text와 정렬·집계용 keyword로 두 번 색인한다. 동적 매핑이 만드는 .keyword와 같은 구조인데, 이름과 옵션을 내가 정한다.",
+      code: "\"name\": { \"type\": \"text\", \"fields\": { \"raw\": { \"type\": \"keyword\" } } }",
+    },
+    {
+      key: "price",
+      display: "price: integer",
+      title: "숫자 타입",
+      description: "가격은 정수라 integer로 둔다. long, integer, short, byte, double, float, half_float, scaled_float이 있다. 소수점 가격이면 scaled_float에 scaling_factor 100을 주면 내부에서는 정수로 저장한다.",
+      code: "\"price\": { \"type\": \"integer\" }",
+    },
+    {
+      key: "released",
+      display: "released: date",
+      title: "날짜와 형식",
+      description: "format으로 받을 형식을 정한다. 여러 개는 ||로 잇는다. 내부에서는 UTC 밀리초(long)로 저장한다. 시간대 없는 문자열은 UTC로 해석한다.",
+      code: "\"released\": { \"type\": \"date\", \"format\": \"yyyy-MM-dd||epoch_millis\" }",
+    },
+    {
+      key: "options",
+      display: "options: nested",
+      title: "짝을 지키는 배열",
+      description: "배열의 객체 하나하나를 숨은 문서로 따로 색인한다. 색과 사이즈의 짝이 유지된다. 대신 질의는 nested 쿼리로 해야 한다.",
+      code: "\"options\": { \"type\": \"nested\", \"properties\": { \"color\": { \"type\": \"keyword\" }, \"size\": { \"type\": \"keyword\" } } }",
+    },
+    {
+      key: "internalMemo",
+      display: "memo: index false",
+      title: "보관만 하는 필드",
+      description: "검색도 정렬도 하지 않을 값은 역색인(index)과 doc_values를 끈다. _source에는 남아서 응답으로는 받을 수 있다.",
+      code: "\"internalMemo\": { \"type\": \"keyword\", \"index\": false, \"doc_values\": false }",
+    },
+  ]}
+/>
+
+이 매핑으로 인덱스를 만들고 같은 문서를 넣으면 이번에는 `"19000"`이 숫자로 들어간다. 숫자 필드는 기본으로 `coerce`가 켜져 있어서, 숫자로 읽히는 문자열을 숫자로 바꿔 색인한다. `_source`에는 받은 그대로 `"19000"`이 남고, 정렬 값은 숫자 19000이 된다.
+
+```text
+{"_id":"2","_source":{"price":9000},"sort":[9000]},{"_id":"1","_source":{"price":"19000"},"sort":[19000]}
+```
+
+숫자로 읽을 수 없는 값과 매핑에 없는 필드는 거절된다.
+
+```text
+PUT products-v2/_doc/4  { "name": "후드", "price": "오만구천원" }
+"type": "document_parsing_exception",
+"reason": "[1:26] failed to parse field [price] of type [integer] in document with id '4'. Preview of field's value: '오만구천원'"
+
+PUT products-v2/_doc/3  { "name": "린넨 셔츠", "price": 49000, "weight": 300 }
+"type": "strict_dynamic_mapping_exception",
+"reason": "[1:48] mapping set to strict, dynamic introduction of [weight] within [_doc] is not allowed"
+```
+
+거절이 불편해 보이지만 이게 원하는 동작이다. 잘못된 데이터는 넣는 쪽에서 바로 실패해야 고칠 수 있다. 한두 필드가 가끔 깨진 값으로 오는 로그 같은 데이터라면 필드에 `ignore_malformed: true`를 줘서 그 필드만 버리고 문서는 받게 할 수도 있다.
+
+`boolean`은 `true`, `false`, 그리고 문자열 `"true"`, `"false"`, 빈 문자열(거짓)만 받는다. `"yes"`나 `1`은 거절된다. `geo_point`는 `{ "lat": 37.4979, "lon": 127.0276 }` 객체, `"37.5665,126.9780"` 문자열, `[126.978, 37.5665]` 배열을 모두 받는데, 배열만 경도가 먼저다. 이 순서를 헷갈려 좌표가 바다 한가운데 찍히는 일이 잦다. 서울역 근처에서 거리순으로 정렬하면 이렇게 나온다.
+
+```json
+GET products-v2/_search
+{ "sort": [ { "_geo_distance": { "store": { "lat": 37.5547, "lon": 126.9707 }, "order": "asc", "unit": "km" } } ] }
+```
+
+```text
+{"_id":"2","sort":[1.4613866772811261]},{"_id":"1","sort":[8.066501704261347]}
+```
+
+### 규칙으로 정하는 동적 템플릿
+
+필드가 계속 늘어나는 데이터는 매핑을 전부 미리 쓸 수 없다. 이럴 때는 "이런 이름이나 이런 값이 오면 이 타입으로"라는 규칙을 둔다. 이게 `dynamic_templates`다.
+
+```json
+PUT events
+{
+  "mappings": {
+    "numeric_detection": true,
+    "dynamic_templates": [
+      { "ids_as_keyword":     { "match": "*_id",                "mapping": { "type": "keyword" } } },
+      { "strings_as_keyword": { "match_mapping_type": "string", "mapping": { "type": "keyword", "ignore_above": 1024 } } }
+    ]
+  }
+}
+
+PUT events/_doc/1?refresh
+{ "order_id": 12345, "user_id": "u-1", "amount": "39000", "memo": "빠른 배송", "at": "2026/10/23 10:00:00" }
+```
+
+```text
+amount    long
+at        date (format: yyyy/MM/dd HH:mm:ss||yyyy/MM/dd||epoch_millis)
+memo      keyword (ignore_above 1024)
+order_id  keyword
+user_id   keyword
+```
+
+`order_id`는 숫자로 왔지만 이름이 `_id`로 끝나서 `keyword`가 됐다. 주문 번호는 더하거나 평균 낼 값이 아니고, 정확히 일치로 찾는 값이라 `keyword`가 맞다. 숫자 타입은 범위 검색에 맞춘 구조(BKD 트리)로 저장돼서 `term` 하나로 찾는 데는 오히려 `keyword`가 빠르다. `amount`는 `numeric_detection`을 켰기 때문에 문자열이었는데도 `long`이 됐다. 템플릿은 위에서부터 처음 맞는 하나만 적용된다. 순서를 바꾸면 `order_id`가 문자열 규칙에 먼저 걸리지는 않지만(숫자로 왔으니), `user_id`는 `strings_as_keyword`에 먼저 걸린다. 결과가 같아서 이번에는 티가 안 날 뿐이다.
+
+## 객체 배열은 납작하게 펴진다
+
+이제 처음 장면으로 돌아가자. 동적 매핑이 `options`를 `object`로 만들었다. Lucene(Elasticsearch 아래의 검색 라이브러리)에는 객체라는 개념이 없다. 문서는 필드 이름과 값 목록의 묶음일 뿐이다. 그래서 `object` 타입은 안쪽 필드를 점으로 이은 이름으로 펴서 저장한다. 배열이면 값을 필드별로 모은다.
+
+아래 그림에서 기본 티셔츠의 옵션이 펴지는 과정을 따라가 보자.
+
+<AlgoTrace
+  caption="options 배열이 object로 저장될 때"
+  memoryLabel="Lucene 문서 하나에 남는 것"
+  cells={["red · M", "blue · L"]}
+  steps={[
+    { caption: "원본 _source에는 옵션 두 개가 짝으로 들어 있다." },
+    { pointer: 0, memory: ["options.color: red", "options.size: M"], caption: "첫 옵션을 편다. 색은 options.color 칸에, 사이즈는 options.size 칸에 들어간다." },
+    { pointer: 1, memory: ["options.color: red, blue", "options.size: M, L"], caption: "두 번째 옵션의 값이 같은 칸에 덧붙는다. 이 순간 어떤 색이 어떤 사이즈와 짝이었는지가 사라진다." },
+    { found: [0, 1], memory: ["options.color: red, blue", "options.size: M, L"], caption: "red 조건은 color 칸에서, L 조건은 size 칸에서 따로 맞는다. 그래서 빨강 L이 없는데도 문서가 걸린다." },
+  ]}
+/>
+
+이 펴는 규칙을 직접 짜 보자. 객체를 받아 점으로 이은 필드 이름마다 값 배열을 모아 돌려주는 함수다.
+
+<CodePlayground
+  caption="object 타입처럼 문서를 펴 보기"
+  functionName="flatten"
+  initialCode={`function flatten(doc, prefix = "", out = {}) {
+  // 값이 객체면 안으로 들어가고, 배열이면 원소마다 같은 이름에 모은다
+  return out;
+}`}
+  solution={`function flatten(doc, prefix = "", out = {}) {
+  for (const [k, v] of Object.entries(doc)) {
+    const path = prefix ? prefix + "." + k : k;
+    const items = Array.isArray(v) ? v : [v];
+    for (const item of items) {
+      if (item !== null && typeof item === "object") flatten(item, path, out);
+      else (out[path] ??= []).push(item);
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "옵션 배열", args: [{ options: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }], expected: { "options.color": ["red", "blue"], "options.size": ["M", "L"] } },
+    { label: "값 배열", args: [{ name: "셔츠", tags: ["a", "b"] }], expected: { name: ["셔츠"], tags: ["a", "b"] } },
+    { label: "중첩 객체와 빠진 필드", args: [{ seller: { name: "kim", tags: ["x"] }, options: [{ color: "red" }, { size: "L" }] }], expected: { "seller.name": ["kim"], "seller.tags": ["x"], "options.color": ["red"], "options.size": ["L"] } },
+  ]}
+/>
+
+세 번째 테스트를 보면 더 분명하다. 색만 있는 옵션과 사이즈만 있는 옵션이 섞여도 펴진 결과는 "red, L"이 짝인 것과 구별되지 않는다.
+
+## object, nested, flattened 중에 고르기
+
+객체를 저장하는 방법은 세 가지이고, 비용이 다르다.
+
+`object`(기본)는 위에서 본 대로 편다. 문서 하나가 Lucene 문서 하나라서 가장 싸다. 배열 안 객체끼리의 짝이 필요 없을 때 쓴다. 판매자 정보처럼 객체가 하나뿐이면 펴도 잃는 게 없다.
+
+`nested`는 배열의 객체 하나하나를 숨은 Lucene 문서로 따로 색인하고, 부모 문서 바로 옆에 붙여 저장한다. 짝이 지켜지니 빨강 L 쿼리가 제대로 동작한다. 대신 쿼리를 `nested`로 감싸야 한다.
+
+```json
+GET products-v2/_search
+{
+  "query": { "nested": {
+    "path": "options",
+    "query": { "bool": { "filter": [
+      { "term": { "options.color": "red" } },
+      { "term": { "options.size": "L" } }
+    ] } }
+  } }
+}
+```
+
+```text
+{"hits":{"hits":[{"_id":"2"}]}}
+```
+
+진짜 빨강 L인 오버핏 티셔츠만 나왔다. `nested`로 감싸지 않고 `options.color`에 `term`을 바로 걸면 결과가 비어 버린다(`{}`). 값이 부모가 아니라 숨은 문서에 있기 때문이다. 매핑을 `nested`로 바꾸고 쿼리를 그대로 두면 필터가 조용히 아무것도 못 찾는 장애가 난다.
+
+숨은 문서가 실제로 있다는 건 `_cat/indices`로 보인다.
+
+```text
+GET _cat/indices/products*?v&h=index,docs.count,store.size
+index       docs.count store.size
+products-v2          5        9kb
+products             2     13.6kb
+```
+
+상품은 둘인데 `products-v2`의 문서 수는 5다. 상품 2개에 옵션 3개가 숨은 문서로 붙었다. 옵션이 상품마다 50개인 쇼핑몰이라면 색인 문서 수가 51배가 된다. 비용은 여기서 나온다.
+
+- 질의할 때 숨은 문서에서 맞은 것을 찾고, 그 부모를 다시 찾아 잇는 조인을 한다. 옵션이 많을수록 맞은 자식을 부모로 모으는 일이 커진다.
+- 옵션 하나만 바꿔도 부모와 모든 숨은 문서를 통째로 다시 색인한다. 숨은 문서가 부모 옆에 블록으로 붙어 있어야 해서 따로 고칠 수 없다.
+- 그래서 한도가 있다. 인덱스당 `nested` 필드 수는 기본 50개(`index.mapping.nested_fields.limit`), 문서 하나의 숨은 문서 수는 기본 10,000개(`index.mapping.nested_objects.limit`)다.
+
+옵션이 자주 바뀌고 수도 많다면 `nested` 대신 모델을 바꾸는 게 낫다. 옵션(SKU) 하나를 문서 하나로 색인하고 상품 id를 필드로 두면, 빨강 L 필터는 평범한 `term` 두 개가 되고 상품 단위로 묶어 보여 줄 때는 `collapse`를 쓴다. 짝이 필요한 조합이 한두 개뿐이면 `"color_size": "red_L"` 같은 합친 `keyword` 필드를 하나 더 두는 방법도 있다.
+
+`flattened`는 객체 전체를 필드 하나로 본다. 안쪽 키가 아무리 많아도 매핑에는 필드 하나만 생긴다. 값은 전부 `keyword`처럼 저장되고, `attrs.fit`처럼 키 경로로 찾을 수 있다.
+
+```json
+GET products-v2/_search
+{ "query": { "term": { "attrs.fit": "oversize" } } }
+```
+
+```text
+{"hits":{"hits":[{"_id":"2"}]}}
+```
+
+상품마다 속성 이름이 제각각인 "상품 상세 속성"이나, 키를 예측할 수 없는 로그의 라벨 같은 곳에 맞는다. 대신 안쪽 값은 모두 문자열이라 숫자 범위나 분석기를 쓰는 전문 검색이 안 된다. 짝도 지키지 않는다. OpenSearch에서는 같은 역할을 `flat_object`가 한다([OpenSearch 운영 글](/posts/opensearch-cluster-operations)).
+
+## 정렬과 집계는 다른 곳을 읽는다
+
+검색은 "이 단어가 들어 있는 문서가 어디냐"를 묻는다. 역색인은 단어 → 문서 방향이라 여기에 빠르다. 정렬과 집계는 반대로 "이 문서의 이 필드 값이 뭐냐"를 묻는다. 문서 → 값 방향이다. 역색인으로 이걸 답하려면 모든 단어를 훑어야 한다.
+
+그래서 Elasticsearch는 색인할 때 문서 → 값 방향의 열 저장소를 하나 더 디스크에 쓴다. 이게 `doc_values`다. `text`를 뺀 거의 모든 타입에서 기본으로 켜져 있고, 디스크에 있으니 힙을 쓰지 않고 운영체제의 페이지 캐시로 읽는다. 정렬, 집계, 스크립트의 필드 접근이 모두 이걸 읽는다.
+
+`text`에는 doc_values가 없다. 분석기를 거친 토큰 여러 개가 값이라 열 하나에 담을 게 없어서다. `fielddata: true`를 주면 쓸 수는 있다. 질의가 들어올 때 역색인을 뒤집어 문서 → 토큰 표를 힙에 만든다. 결과가 기대와 다르다는 게 문제다.
+
+```json
+PUT fd
+{ "mappings": { "properties": { "name": { "type": "text", "fielddata": true } } } }
+PUT fd/_doc/1  { "name": "Zebra Apple" }
+PUT fd/_doc/2  { "name": "Mango" }
+
+GET fd/_search
+{ "sort": [ { "name": "asc" } ] }
+```
+
+```text
+{"_id":"1","sort":["apple"]},{"_id":"2","sort":["mango"]}
+```
+
+"Zebra Apple"이 "Mango"보다 앞에 왔다. 정렬 값이 원문이 아니라 토큰 중 가장 작은 `apple`이기 때문이다. 문자열 전체로 정렬하려면 `keyword` 서브 필드를 쓴다. 그리고 fielddata는 한 번 올라가면 세그먼트가 사라질 때까지 힙에 남는다. 상품명처럼 고유한 토큰이 많은 필드에 켜면 힙이 차오르고, `indices.breaker.fielddata.limit`(기본 힙의 40%)에 걸려 질의가 `circuit_breaking_exception`으로 거절된다. 얼마나 쓰고 있는지는 노드 통계로 본다.
+
+```text
+GET _nodes/stats/indices/fielddata
+"fielddata": { "memory_size_in_bytes": 504, "evictions": 0, ... }
+```
+
+반대로 정렬도 집계도 안 할 `keyword`나 숫자 필드는 `doc_values: false`로 디스크를 아낄 수 있다. 검색은 되고 정렬·집계만 막힌다. 위 매핑의 `internalMemo`처럼 `index`까지 끄면 그 필드로는 아무것도 묻지 못한다.
+
+```text
+"reason": "failed to create query: Cannot search on field [internalMemo] since it is not indexed nor has doc values."
+```
+
+나중에 집계가 필요해지면 다시 색인해야 하니, 확실히 안 쓸 필드에만 끈다. 집계에서 doc_values가 어떻게 쓰이는지는 [집계 글](/posts/elasticsearch-aggregations)에서 이어진다.
+
+## 필드가 끝없이 늘어날 때
+
+동적 매핑을 켜 둔 인덱스에 사용자별 키가 들어오기 시작하면 매핑이 폭발한다. 예를 들어 `{ "clicks": { "u-1001": 3, "u-1002": 5 } }`처럼 사용자 id가 키가 되면 사용자 수만큼 필드가 생긴다. 필드 정의는 클러스터 상태에 들어가고 모든 노드가 들고 있어서, 필드가 수만 개가 되면 매핑을 바꿀 때마다 클러스터 상태를 퍼뜨리는 데 시간이 걸리고 마스터 노드가 느려진다.
+
+그래서 인덱스당 필드 수에 한도가 있다. 기본 1,000개(`index.mapping.total_fields.limit`)이고 객체와 멀티 필드도 각각 센다. 한도를 10으로 줄이고 키 11개짜리 객체를 넣어 봤다.
+
+```text
+"type": "document_parsing_exception",
+"reason": "[1:68] failed to parse: Limit of total fields [10] has been exceeded while adding new fields [11]"
+```
+
+이 오류를 만나면 한도부터 올리고 싶어진다. 하지만 한도는 증상이고 원인은 데이터 모양이다. 고치는 방법은 이렇다.
+
+- 값이 될 것을 키로 쓰지 않는다. `{ "clicks": [ { "user": "u-1001", "n": 3 } ] }`처럼 키를 값으로 내린다.
+- 키를 예측할 수 없는 객체는 `flattened`로 받는다.
+- 아예 검색하지 않을 객체는 `"enabled": false`로 둬서 `_source`에만 남긴다.
+- 최상위에 `"dynamic": "strict"`나 `false`를 걸어 새 필드가 생기는 걸 막는다.
+
+8.x 후반 버전부터는 `index.mapping.total_fields.ignore_dynamic_beyond_limit`를 켜면 한도를 넘는 동적 필드를 색인하지 않고 `_ignored`에 기록한 채 문서는 받는다. 한도 3인 인덱스에 필드 5개짜리 문서를 넣어 보면 이렇다.
+
+```text
+{"_ignored":["d","e"],"_source":{"a":1,"b":2,"c":3,"d":4,"e":5}}
+```
+
+`d`와 `e`는 `_source`에는 남지만 검색되지 않는다. 로그처럼 일부 필드를 잃어도 되는 데이터용이다.
+
+## 바꿀 수 없는 필드를 바꾸는 순서
+
+`price`를 `integer`에서 `long`으로 바꾸려고 하면 거절된다.
+
+```json
+PUT products-v2/_mapping
+{ "properties": { "price": { "type": "long" } } }
+```
+
+```text
+"type": "illegal_argument_exception",
+"reason": "mapper [price] cannot be changed from type [integer] to [long]"
+```
+
+이미 디스크의 세그먼트에 `integer`용 구조로 쓴 값을 그 자리에서 고칠 방법이 없어서다. 할 수 있는 건 새 필드 추가, 기존 `text`에 멀티 필드 추가, `ignore_above` 같은 일부 설정 변경 정도다. 새 서브 필드를 추가하면 이후 들어오는 문서에만 적용된다는 것도 알아 둔다. `name.ngram`을 추가한 직후 그 필드가 있는 문서는 0건이었고, `_update_by_query`로 문서를 제자리에서 다시 색인한 뒤에야 2건이 됐다.
+
+```text
+GET products-v2/_search  { "query": { "exists": { "field": "name.ngram" } } }   → total 0
+POST products-v2/_update_by_query                                               → {"total":2,"updated":2}
+GET products-v2/_search  { "query": { "exists": { "field": "name.ngram" } } }   → total 2
+```
+
+타입을 바꾸려면 새 인덱스를 만들어 옮기는 수밖에 없다. 앱이 인덱스 이름이 아니라 별칭(alias)으로 접근하게 해 두면 이 교체를 멈춤 없이 할 수 있다. 아래 그림에서 단계를 넘겨 보자.
+
+<SequenceDiagram
+  caption="새 인덱스로 옮기고 별칭을 바꿔 끼우기"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "alias", label: "shop-products" },
+    { id: "old", label: "products" },
+    { id: "new", label: "products-v3" },
+  ]}
+  steps={[
+    { from: "app", to: "alias", label: "검색", title: "앱은 별칭만 안다", detail: "별칭 shop-products가 옛 인덱스 products를 가리킨다. 앱 설정에는 인덱스 이름이 없다." },
+    { from: "alias", to: "old", label: "products", title: "지금은 옛 인덱스로", detail: "검색과 쓰기가 모두 옛 인덱스로 간다." },
+    { from: "new", to: "new", label: "PUT 새 매핑", title: "새 인덱스를 만든다", detail: "고친 매핑으로 products-v3를 만든다. 옮기는 동안은 refresh_interval을 -1로 꺼 두면 색인이 빠르다.", payload: "\"price\": { \"type\": \"integer\" }\n\"options\": { \"type\": \"nested\" }" },
+    { from: "old", to: "new", label: "_reindex", title: "문서를 옮긴다", detail: "_reindex가 옛 인덱스의 _source를 읽어 새 인덱스에 다시 색인한다. 문서 수가 많으면 wait_for_completion=false로 작업을 걸고 진행을 확인한다." },
+    { from: "alias", to: "new", label: "_aliases 교체", title: "별칭을 한 번에 돌린다", detail: "remove와 add를 한 요청에 담으면 원자적으로 바뀐다. 별칭이 아무 인덱스도 안 가리키는 순간이 없다." },
+    { from: "app", to: "alias", label: "검색", title: "앱은 바뀐 걸 모른다", detail: "같은 이름으로 검색했는데 이제 새 매핑의 인덱스가 답한다. 문제가 생기면 별칭을 옛 인덱스로 되돌리면 된다." },
+  ]}
+/>
+
+실제 명령과 응답은 이렇다.
+
+```json
+POST _aliases
+{ "actions": [ { "add": { "index": "products", "alias": "shop-products" } } ] }
+
+PUT products-v3
+{ "settings": { "number_of_shards": 1, "number_of_replicas": 0, "refresh_interval": "-1" },
+  "mappings": { "dynamic": "strict", "properties": { "price": { "type": "integer" }, ... } } }
+
+POST _reindex
+{ "source": { "index": "products" }, "dest": { "index": "products-v3" } }
+```
+
+```text
+{"took":23,"total":2,"created":2,"failures":[]}
+```
+
+`_reindex`도 옛 `products`의 `"19000"`을 새 인덱스의 `integer` 필드에 넣으면서 숫자로 바꿨다. 숫자로 못 바꾸는 값이 있었다면 `failures`에 쌓인다. 옮긴 뒤에는 refresh를 되돌리고 개수를 맞춰 본 다음 별칭을 바꾼다.
+
+```json
+PUT products-v3/_settings
+{ "index": { "refresh_interval": "1s" } }
+
+GET _cat/count/products-v3?v
+
+POST _aliases
+{ "actions": [
+  { "remove": { "index": "products",    "alias": "shop-products" } },
+  { "add":    { "index": "products-v3", "alias": "shop-products" } }
+] }
+
+GET _cat/aliases/shop-products?v
+```
+
+```text
+epoch      timestamp count
+1792781284 18:48:04  2
+
+alias         index       filter routing.index routing.search is_write_index
+shop-products products-v3 -      -             -              -
+```
+
+이제 `shop-products`로 가격 정렬을 하면 9,000원이 먼저 나온다.
+
+운영에서 이 순서를 밟을 때 걸리는 게 하나 있다. `_reindex`가 도는 동안에도 옛 인덱스에는 새 상품과 수정이 계속 들어온다. 그 변경은 새 인덱스에 없다. 방법은 둘이다. 원본 DB에서 다시 만드는 파이프라인이 있으면 별칭을 바꾸기 전에 그 기간의 변경을 새 인덱스에 다시 흘려 넣는다. 아니면 옮기는 동안 앱이 두 인덱스에 다 쓰게 하고, 별칭을 바꾼 뒤 옛 쪽 쓰기를 끈다. 어느 쪽이든 Elasticsearch가 원본이 아니라 검색용 사본이라는 전제가 있어야 편하다. 이 구성은 [역색인 글](/posts/elasticsearch-inverted-index)의 동기화 부분에서 다뤘다. 별칭 교체는 몇 밀리초 안에 끝나지만, 새 인덱스의 캐시가 비어 있어서 바꾼 직후 몇 분은 검색 지연이 조금 오를 수 있다.
+
+## 매핑을 정할 때 스스로 묻는 것
+
+필드마다 세 가지를 묻는다. 이 필드로 단어 검색을 하나(그러면 `text`), 정확히 일치·정렬·집계를 하나(그러면 `keyword`나 숫자·날짜), 아니면 보관만 하나(그러면 `index: false`나 `enabled: false`). 둘 다 필요하면 멀티 필드로 두 벌을 둔다.
+
+배열 안 객체는 짝이 필요한지 묻는다. 필요 없으면 `object`, 필요하고 원소 수가 적고 잘 안 바뀌면 `nested`, 많거나 자주 바뀌면 문서 모양을 바꾼다. 키를 예측할 수 없으면 `flattened`.
+
+그리고 인덱스를 만들 때 최상위에 `dynamic`을 정하고, 처음부터 별칭으로 접근하게 해 둔다. 매핑은 반드시 다시 바뀐다. 바뀔 때 멈추지 않게 해 두는 게 첫 매핑보다 중요하다. 정리하면 처음의 빨강 L 문제는 매핑 한 줄(`nested`)과 쿼리 한 겹(`nested` 쿼리)으로 풀리지만, 그 한 줄을 바꾸려면 인덱스를 새로 만들어야 한다. 그래서 매핑은 첫 문서를 넣기 전에 정한다.
+
+## 면접에서 나올 만한 질문
+
+### 동적 매핑과 명시적 매핑은 어떻게 다르고, 운영에서는 무엇을 쓰나?
+
+동적 매핑은 첫 문서를 보고 타입을 추측해 매핑을 만들고, 명시적 매핑은 인덱스를 만들 때 필드 타입을 직접 정한다. 동적 매핑은 숫자 추측이 기본으로 꺼져 있어 따옴표로 온 숫자를 문자열로 만들고, 문자열마다 `text`와 `keyword` 두 벌을 만든다. 필드 타입은 나중에 못 바꾸니 운영 인덱스는 명시적 매핑에 `dynamic: strict`나 동적 템플릿으로 규칙을 정해 둔다.
+
+### 객체 배열에서 "빨강이면서 L"을 찾았는데 다른 조합이 나온다. 왜 그런가?
+
+기본 `object` 타입은 객체를 펴서 `options.color`와 `options.size`를 각각 값 목록으로 저장하기 때문에 원소끼리의 짝이 사라진다. 그래서 색 조건과 사이즈 조건이 서로 다른 원소에 맞아도 문서가 걸린다. 짝을 지키려면 필드를 `nested`로 매핑하고 `nested` 쿼리로 묻거나, 옵션 하나를 문서 하나로 색인하도록 모델을 바꾼다.
+
+### nested 질의가 느린 이유는?
+
+`nested`는 배열의 객체마다 숨은 Lucene 문서를 만들어 부모 옆에 붙여 두기 때문에 색인 문서 수가 원소 수만큼 늘어난다. 질의할 때는 맞은 숨은 문서를 찾고 부모로 다시 잇는 조인을 해야 한다. 원소 하나만 바꿔도 부모와 모든 숨은 문서를 다시 색인한다. 그래서 필드 수(기본 50)와 문서당 객체 수(기본 10,000)에 한도가 있고, 원소가 많거나 자주 바뀌면 문서 모델을 바꾸는 편이 낫다.
+
+### text 필드로 정렬하면 어떻게 되나?
+
+기본으로는 fielddata가 꺼져 있어서 `illegal_argument_exception`이 난다. 정렬과 집계는 문서 → 값 방향의 doc_values를 읽는데 `text`에는 doc_values가 없기 때문이다. `fielddata: true`로 켜면 동작은 하지만 토큰 중 하나로 정렬돼 "Zebra Apple"이 apple 기준으로 앞에 오고, 역색인을 힙에 뒤집어 올려 메모리를 크게 쓴다. 정렬은 `keyword` 서브 필드로 한다.
+
+### doc_values와 fielddata의 차이는?
+
+doc_values는 색인할 때 디스크에 쓰는 열 저장소로, `text`를 뺀 대부분 타입에 기본으로 켜져 있고 페이지 캐시로 읽는다. fielddata는 `text` 필드에서 질의 시점에 역색인을 뒤집어 힙에 만드는 구조라 메모리를 많이 쓰고, 서킷 브레이커(기본 힙의 40%)에 걸리면 질의가 거절된다. 정렬·집계가 필요 없는 필드는 doc_values를 꺼서 디스크를 아낄 수 있다.
+
+### 매핑 폭발은 무엇이고 어떻게 막나?
+
+사용자 id 같은 값이 필드 이름으로 들어와 필드 수가 끝없이 느는 현상이다. 필드 정의는 클러스터 상태에 들어가 모든 노드가 들고 있어서 마스터와 클러스터 전체가 느려진다. 기본 한도는 인덱스당 1,000개다. 값을 키로 쓰지 않게 데이터 모양을 바꾸고, 예측할 수 없는 키는 `flattened`나 `enabled: false`로 받고, `dynamic`을 막는 게 근본 해법이다.
+
+### 이미 운영 중인 인덱스의 필드 타입을 바꿔야 한다면?
+
+필드 타입은 바꿀 수 없으니 새 매핑으로 인덱스를 만들고 `_reindex`로 옮긴 뒤, 별칭을 `_aliases` 한 요청에서 remove와 add로 원자적으로 바꿔 끼운다. 앱이 처음부터 별칭으로 접근하면 멈춤 없이 교체되고, 문제가 생기면 별칭만 되돌리면 된다. 옮기는 동안 들어온 변경은 원본에서 다시 흘려 넣거나 이중 쓰기로 메운다.

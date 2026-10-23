@@ -1,0 +1,515 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("oop-four-pillars");
+
+<EasyIntro>
+  가게 계산대에 카드, 포인트, 계좌이체 같은 결제 방법이 하나씩 늘어난다고 생각해 보자. 계산하는 사람이 결제 방법마다 다른 순서를 외우고 있으면, 새 방법이 생길 때마다 그 사람을 다시 가르쳐야 한다. 객체 지향은 이 일을 콘센트처럼 만든다. 계산대에는 콘센트 구멍 모양만 정해 두고, 결제 방법마다 그 모양에 맞는 플러그를 만들어 꽂는다.
+
+  플러그 속 전선이 어떻게 감겨 있는지는 밖에서 만질 수 없게 막아 둔다. 그래야 누가 잔액을 마음대로 바꾸지 못한다. 계산대는 플러그를 꽂고 결제해 달라고 말하기만 하고, 꽂힌 게 카드인지 포인트인지는 몰라도 된다. 같은 말을 했는데 꽂힌 플러그에 따라 다른 일이 일어나는 것이다.
+
+  플러그를 만들 때 이미 있는 플러그를 통째로 물려받아 조금만 고치는 방법도 있다. 편하지만 원래 플러그의 속이 바뀌면 물려받은 쪽이 몰래 고장 날 수 있다. 그래서 물려받기보다 다른 플러그를 안에 넣고 필요한 일을 맡기는 방법을 더 자주 권한다.
+</EasyIntro>
+
+주문 서비스의 결제 함수를 맡았다. 처음엔 카드 하나였고, 포인트가 붙고, 계좌이체가 붙었다. 이번 분기에 간편결제 두 곳이 더 들어온다. 함수는 이렇게 생겼다.
+
+```ts
+function pay(order: Order, method: string) {
+  if (method === "card") {
+    const res = cardGateway.approve(order.cardNo, order.amount);
+    if (!res.ok) throw new Error("카드 승인 실패");
+    order.paidBy = "card";
+  } else if (method === "point") {
+    if (order.user.point < order.amount) throw new Error("포인트 부족");
+    order.user.point -= order.amount;
+    order.paidBy = "point";
+  } else if (method === "transfer") {
+    const account = virtualAccount.issue(order.id, order.amount);
+    order.paidBy = "transfer";
+    order.waitingDeposit = account;
+  }
+}
+```
+
+결제 수단이 하나 늘 때마다 이 함수에 갈래가 하나 붙는다. 문제는 여기서 끝나지 않는다. 환불 함수, 영수증 함수, 수수료 계산 함수에도 같은 `if (method === ...)` 사다리가 있다. 간편결제 하나를 붙이려면 네 군데를 고쳐야 하고, 하나라도 빠뜨리면 그 결제 수단만 환불이 안 된다. 포인트 쪽 갈래는 `order.user.point`를 직접 깎는데, 같은 코드가 이벤트 지급 배치에도 있어서 포인트가 음수가 된 회원이 생긴 적도 있다.
+
+객체 지향 프로그래밍(OOP)의 네 기둥인 캡슐화, 추상화, 상속, 다형성은 이 코드의 문제 하나씩에 대응한다. 이 글은 위 결제 코드를 고쳐 가며 네 기둥을 하나씩 본다. 각 기둥이 언제 도움이 되고 언제 해가 되는지, 면접에서 이어지는 꼬리 질문(상속보다 합성, 다이아몬드 문제, getter/setter, 프로토타입)까지 간다. 예제는 TypeScript를 기본으로 쓰고, 다중 상속과 오버로딩처럼 언어마다 다른 부분은 Java로 보인다. 모든 출력은 Node.js 22와 JDK 21에서 돌린 결과다. 네 기둥 위에 올라가는 설계 원칙은 [SOLID 글](/posts/solid-principles)에서 이어진다.
+
+## 네 기둥은 따로 서 있지 않다
+
+먼저 고친 모습을 그림으로 본다. 주문 쪽은 `Payment`라는 모양 하나만 알고, 결제 수단마다 그 모양을 지키는 객체가 있다. 화살표를 따라 점이 흐르는 방향이 "누가 누구를 아는가"다.
+
+<ConceptDiagram
+  caption="주문은 결제의 모양만 알고, 결제 수단이 그 모양을 채운다"
+  width={400}
+  height={280}
+  nodes={[
+    { id: "checkout", label: "Checkout", sub: "주문 결제 흐름", x: 200, y: 40, w: 150 },
+    { id: "payment", label: "Payment", sub: "approve · refund", x: 200, y: 135, w: 150 },
+    { id: "card", label: "CardPayment", x: 70, y: 235, w: 120 },
+    { id: "point", label: "PointPayment", x: 200, y: 235, w: 120 },
+    { id: "transfer", label: "Transfer", x: 330, y: 235, w: 110 },
+  ]}
+  edges={[
+    { from: "checkout", to: "payment", label: "호출" },
+    { from: "card", to: "payment", label: "구현", dashed: true },
+    { from: "point", to: "payment", label: "구현", dashed: true },
+    { from: "transfer", to: "payment", label: "구현", dashed: true },
+  ]}
+/>
+
+`Payment`가 "결제는 승인과 환불을 할 수 있다"만 남긴 것이 추상화다. 포인트 잔액을 `PointPayment` 안에 가두고 정해진 메서드로만 바꾸게 한 것이 캡슐화다. `Checkout`이 `payment.approve()`라고 부르면 꽂힌 객체에 따라 카드 승인이나 포인트 차감이 일어나는 것이 다형성이다. 상속은 이 그림에서 일부러 뺐다. 이유는 뒤에서 본다.
+
+넷은 순서가 있다. 추상화로 모양을 정해야 다형성이 생기고, 캡슐화로 안을 막아야 그 모양 뒤의 구현을 마음 놓고 바꿀 수 있다. 상속은 모양과 구현을 함께 물려주는 한 가지 방법일 뿐, 다형성을 얻는 유일한 길이 아니다.
+
+## 캡슐화는 규칙을 객체 안에 두는 일이다
+
+포인트가 음수가 된 사고부터 고친다. 원인은 잔액이라는 숫자를 아무 데서나 직접 바꿀 수 있었다는 것이다. "잔액은 0 밑으로 내려가지 않는다", "충전은 양의 정수만" 같은 규칙(불변식, invariant)이 결제 함수, 배치, 관리자 화면에 흩어져 있었고, 그중 한 곳이 규칙을 빠뜨렸다.
+
+캡슐화는 데이터와 그 데이터를 바꾸는 규칙을 한 객체에 묶고, 바깥에서는 규칙을 지키는 메서드로만 바꾸게 하는 것이다.
+
+```ts
+class PointWallet {
+  #balance = 0;                       // 바깥에서 읽을 수도, 쓸 수도 없다
+
+  get balance(): number {             // 읽기만 연다
+    return this.#balance;
+  }
+
+  charge(amount: number): void {      // 충전 규칙은 여기 한 곳에
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("충전 금액이 잘못됐다");
+    this.#balance += amount;
+  }
+
+  use(amount: number): void {         // 차감 규칙도 여기 한 곳에
+    if (amount > this.#balance) throw new Error(`잔액 부족: ${this.#balance}원`);
+    this.#balance -= amount;
+  }
+}
+
+const w = new PointWallet();
+w.charge(3000);
+w.use(1000);
+console.log("잔액:", w.balance);
+try { w.use(5000); } catch (e) { console.log((e as Error).message); }
+```
+
+```text
+잔액: 2000
+잔액 부족: 2000원
+```
+
+배치든 관리자 화면이든 포인트를 깎으려면 `use()`를 거쳐야 한다. 규칙을 고칠 일이 생기면 이 클래스 하나만 고친다.
+
+여기서 흔한 오해가 있다. 필드를 `private`로 바꾸고 `getBalance()`와 `setBalance()`를 만들면 캡슐화가 됐다고 생각하는 것이다. `setBalance(-999999)`를 누구나 부를 수 있다면 필드를 공개한 것과 다르지 않다. 이름만 메서드일 뿐 규칙은 여전히 바깥에 있다. 캡슐화가 됐는지는 "이 객체의 불변식을 깨뜨리는 호출이 바깥에서 가능한가"로 판단한다. 세터를 만들기 전에 "이 값을 왜 바꾸려 하나"를 묻고, 그 이유를 메서드 이름으로 만든다. `setBalance` 대신 `charge`, `use`, `expire`가 된다.
+
+같은 맥락에서 객체에게 값을 물어서 바깥에서 판단하지 말고, 객체에게 하라고 시키라는 말(Tell, Don't Ask)이 있다. `if (wallet.balance >= amount) wallet.balance -= amount`는 묻고 나서 바깥에서 판단한다. `wallet.use(amount)`는 시킨다. 앞의 코드는 두 줄 사이에 다른 요청이 끼어들면 잔액 검사가 무의미해지는 문제도 있다. 여러 요청이 동시에 같은 잔액을 깎는 상황은 [경쟁 조건 글](/posts/race-conditions)에서 다뤘다.
+
+## 접근 제한자와 스코프는 다른 이야기다
+
+캡슐화를 언어가 도와주는 장치가 접근 제한자(access modifier)다. Java는 네 단계가 있다. `public`은 어디서나, `protected`는 같은 패키지와 하위 클래스에서, 아무것도 안 쓴 기본값(package-private)은 같은 패키지에서만, `private`은 그 클래스 안에서만 접근할 수 있다. 기본값이 `public`이 아니라 package-private이라는 걸 놓쳐서, 다른 패키지의 테스트에서 메서드가 안 보이는 일을 자주 겪는다.
+
+TypeScript에는 비슷해 보이지만 성격이 다른 두 가지가 있다. `private` 키워드는 타입 검사기만 막는다. 컴파일된 자바스크립트에는 평범한 속성으로 남는다. `#` 필드는 자바스크립트 엔진이 막는다.
+
+```ts
+class LeakyWallet {
+  private balance = 0;
+}
+const leaky = new LeakyWallet();
+(leaky as any).balance = -999999;   // 타입 검사만 피하면 그대로 바뀐다
+console.log("TS private:", (leaky as any).balance);
+```
+
+```text
+TS private: -999999
+```
+
+`#balance`는 클래스 밖에서 이름을 쓰는 순간 문법 오류라 이런 우회가 안 된다. 두 방식의 차이와 `#` 필드가 상속에서 어떻게 동작하는지는 [클래스와 상속 글](/posts/js-classes)에 자세히 있다.
+
+이걸 스코프와 헷갈리면 안 된다. 스코프(scope)는 코드에서 어떤 이름이 어디까지 보이느냐, 그러니까 변수의 유효 범위다. 함수 안에서 만든 `let` 변수는 그 블록 밖에서 이름을 부를 수 없다. 가시성(visibility)은 객체의 멤버를 바깥의 누가 쓸 수 있느냐다. 스코프는 "이름이 살아 있는 범위", 가시성은 "문이 열려 있는 상대"다. 자바스크립트에서 클래스가 생기기 전에 클로저로 비공개 상태를 만들던 방식은 스코프로 가시성을 흉내 낸 것이다. 그 방식은 [클로저 글](/posts/js-closures)에 있다.
+
+## 추상화는 무엇을 하는지만 남긴다
+
+이제 결제 수단마다 다른 코드를 하나의 모양으로 묶는다. 결제가 무엇을 해야 하는지만 적는다. 어떻게 하는지는 적지 않는다.
+
+```ts
+interface Payment {
+  readonly method: string;
+  approve(order: Order): Promise<PaymentResult>;
+  refund(order: Order, amount: number): Promise<void>;
+}
+
+class CardPayment implements Payment {
+  readonly method = "card";
+  constructor(private readonly gateway: CardGateway) {}
+
+  async approve(order: Order) {
+    const res = await this.gateway.approve(order.cardNo, order.amount);
+    if (!res.ok) return { ok: false, reason: res.message } as const;
+    return { ok: true, txId: res.txId } as const;
+  }
+
+  async refund(order: Order, amount: number) {
+    await this.gateway.cancel(order.txId!, amount);
+  }
+}
+
+class PointPayment implements Payment {
+  readonly method = "point";
+  constructor(private readonly wallets: WalletRepository) {}
+
+  async approve(order: Order) {
+    const wallet = await this.wallets.of(order.userId);
+    wallet.use(order.amount);                  // 규칙은 PointWallet이 지킨다
+    await this.wallets.save(wallet);
+    return { ok: true, txId: `point-${order.id}` } as const;
+  }
+
+  async refund(order: Order, amount: number) {
+    const wallet = await this.wallets.of(order.userId);
+    wallet.charge(amount);
+    await this.wallets.save(wallet);
+  }
+}
+```
+
+추상화가 잘 됐는지는 이 모양만 보고 쓰는 쪽 코드를 쓸 수 있는지로 판단한다. `Checkout`은 PG사 API도, 포인트 저장소도 모른 채 `approve`와 `refund`만 부른다.
+
+추상화가 새는 경우도 알아야 한다. 계좌이체는 `approve`를 불러도 바로 결제가 끝나지 않는다. 가상계좌를 발급하고 입금을 기다린다. 이걸 무리하게 `approve`가 `ok: true`를 돌려주는 모양에 맞추면, 쓰는 쪽이 "결제 완료"로 착각하고 상품을 보낸다. 이럴 땐 모양을 고친다. 결과에 `pending` 상태를 두거나, 즉시 결제와 나중 결제를 다른 모양으로 나눈다. 구현의 사정이 모양 밖으로 새어 나와 쓰는 쪽이 그걸 알아야 하는 상황을 새는 추상화(leaky abstraction)라고 부른다. 모양을 처음부터 완벽하게 정할 수는 없다. 구현이 두세 개 생긴 뒤에 공통점을 보고 정하는 편이 덜 틀린다.
+
+## 다형성은 같은 호출로 다른 일을 시킨다
+
+`Checkout`은 이제 이렇게 된다.
+
+```ts
+class Checkout {
+  constructor(private readonly payments: Map<string, Payment>) {}
+
+  async pay(order: Order, method: string) {
+    const payment = this.payments.get(method);
+    if (!payment) throw new Error(`지원하지 않는 결제 수단: ${method}`);
+    const result = await payment.approve(order);   // 무엇이 꽂혔는지 모른다
+    if (!result.ok) throw new Error(result.reason);
+    order.markPaid(payment.method, result.txId);
+  }
+}
+```
+
+`payment.approve(order)` 한 줄이 꽂힌 객체에 따라 카드 승인도, 포인트 차감도 된다. 이렇게 같은 이름의 호출이 받는 객체의 실제 타입에 따라 다른 구현으로 가는 것이 다형성(polymorphism)이다. 간편결제를 붙일 때는 `Payment`를 구현한 클래스 하나를 만들고 `payments`에 등록하면 끝난다. `Checkout`도, 환불 흐름도 고치지 않는다. if 사다리가 사라진 게 아니라, 어느 객체를 꽂을지 고르는 일이 `Map`을 만드는 한 곳으로 모였다. 고르는 쪽을 어디에 둘지는 [전략 패턴 글](/posts/pattern-strategy)에서 더 다뤘다.
+
+실행 중에 어느 구현으로 갈지 정하는 걸 동적 디스패치(dynamic dispatch)라 한다. 아래 그림에서 다음을 누르면 호출이 실제 메서드를 찾아가는 길이 보인다.
+
+<SequenceDiagram
+  caption="payment.approve()가 실제 메서드를 찾아가는 길"
+  actors={[
+    { id: "checkout", label: "Checkout" },
+    { id: "ref", label: "payment 변수" },
+    { id: "table", label: "메서드 표" },
+    { id: "impl", label: "Card.approve" },
+  ]}
+  steps={[
+    { from: "checkout", to: "ref", label: "approve(order)", title: "모양만 보고 부른다", detail: "컴파일러는 변수 타입이 Payment라는 것만 안다. Payment에 approve가 있으니 호출을 허락한다." },
+    { from: "ref", to: "table", label: "실제 객체 확인", title: "꽂힌 객체를 따라간다", detail: "실행 중에 변수가 가리키는 객체를 본다. 이번엔 CardPayment 인스턴스다. Java는 클래스마다 메서드 표(vtable)를, 자바스크립트는 프로토타입 체인을 따라간다." },
+    { from: "table", to: "impl", label: "approve 찾음", title: "그 클래스의 구현을 고른다", detail: "CardPayment가 approve를 정의했으니 그 메서드로 간다. PointPayment였다면 같은 줄에서 포인트 차감 코드로 갔을 것이다." },
+    { from: "impl", to: "checkout", label: "결과", title: "부른 쪽은 차이를 모른다", detail: "Checkout은 어느 구현이 돌았는지 모른 채 결과만 받는다. 새 결제 수단이 생겨도 이 흐름은 그대로다." },
+  ]}
+/>
+
+다형성에는 다른 종류도 있다. 같은 이름의 메서드를 매개변수만 다르게 여러 개 두는 오버로딩(overloading)이다. 이름이 비슷해서 오버라이딩(overriding, 하위 클래스가 상위의 메서드를 다시 정의)과 자주 섞이는데, 둘은 고르는 시점이 다르다. Java로 확인한다.
+
+```java
+public class Main {
+    static abstract class Payment {
+        abstract String approve(int amount);
+    }
+    static class Card extends Payment {
+        String approve(int amount) { return "카드 승인 " + amount; }
+    }
+    static class Point extends Payment {
+        String approve(int amount) { return "포인트 차감 " + amount; }
+    }
+
+    static String describe(Payment p) { return "describe(Payment)"; }
+    static String describe(Card c)    { return "describe(Card)"; }
+
+    public static void main(String[] args) {
+        Payment p = new Card();
+        System.out.println(p.approve(5000));   // 오버라이딩
+        System.out.println(describe(p));       // 오버로딩
+        System.out.println(describe(new Card()));
+    }
+}
+```
+
+```text
+카드 승인 5000
+describe(Payment)
+describe(Card)
+```
+
+`p`가 가리키는 객체는 `Card`인데 `describe(p)`는 `describe(Payment)`로 갔다. 오버로딩은 컴파일할 때 변수의 선언 타입(`Payment`)을 보고 고르기 때문이다. 오버라이딩은 실행할 때 실제 객체(`Card`)를 보고 고른다. 오버로딩을 다형성처럼 쓰려고 하면 이 차이에 걸린다. TypeScript의 함수 오버로드는 타입 시그니처를 여러 개 적는 문법일 뿐이고, 구현은 하나라서 실행 중에 인자를 직접 검사해야 한다. 자바스크립트에는 런타임 오버로딩이 없다.
+
+## 상속은 구현까지 물려받는다
+
+상속(inheritance)은 기존 클래스의 모양과 구현을 함께 물려받는 것이다. "카드 결제는 결제다"처럼 is-a 관계일 때 쓴다고 배운다. 코드 재사용에 편하다. 그런데 구현을 물려받는다는 건, 상위 클래스의 내부가 바뀌면 하위 클래스가 영향을 받는다는 뜻이기도 하다.
+
+결제마다 붙는 태그(쿠폰 사용, 첫 구매 같은)를 모으는 `TagSet`을 라이브러리에서 가져다 쓴다고 하자. 태그가 몇 번 추가됐는지 세고 싶어서 상속으로 확장했다. `add`와 `addAll`을 모두 덮어써서 셌다.
+
+```ts
+// 라이브러리 1.0: addAll이 내부 저장소에 바로 넣는다
+class TagSetV1 {
+  protected items = new Set<string>();
+  add(tag: string): this {
+    this.items.add(tag);
+    return this;
+  }
+  addAll(tags: string[]): this {
+    for (const t of tags) this.items.add(t);
+    return this;
+  }
+  get size() {
+    return this.items.size;
+  }
+}
+
+// 라이브러리 1.1: 중복 코드를 줄이려고 addAll이 add를 부르게 고쳤다
+class TagSetV2 extends TagSetV1 {
+  override addAll(tags: string[]): this {
+    for (const t of tags) this.add(t);
+    return this;
+  }
+}
+
+// 우리 코드: 어느 버전이든 같은 방식으로 상속해서 센다
+function makeCounting(Base: typeof TagSetV1) {
+  return class CountingTagSet extends Base {
+    addedCount = 0;
+    override add(tag: string): this {
+      this.addedCount++;
+      return super.add(tag);
+    }
+    override addAll(tags: string[]): this {
+      this.addedCount += tags.length;
+      return super.addAll(tags);
+    }
+  };
+}
+
+for (const [name, Base] of [["1.0", TagSetV1], ["1.1", TagSetV2]] as const) {
+  const s = new (makeCounting(Base))();
+  s.addAll(["a", "b", "c"]);
+  console.log(`라이브러리 ${name}: addedCount=${s.addedCount}, size=${s.size}`);
+}
+```
+
+```text
+라이브러리 1.0: addedCount=3, size=3
+라이브러리 1.1: addedCount=6, size=3
+```
+
+우리 코드는 한 글자도 안 바꿨는데 라이브러리를 올리자 숫자가 두 배가 됐다. 아래 그림에서 다음을 누르면 1.1에서 `addAll` 한 번이 어떻게 두 번 세어지는지 따라간다.
+
+<AlgoTrace
+  caption="라이브러리 1.1에서 addAll(['a','b','c'])가 세어지는 순서"
+  memoryLabel="addedCount"
+  cells={["Counting.addAll", "TagSet.addAll", "this.add('a')", "this.add('b')", "this.add('c')"]}
+  steps={[
+    { pointer: 0, memory: ["+3"], caption: "우리 addAll이 먼저 태그 수 3을 더하고 super.addAll을 부른다." },
+    { pointer: 1, memory: ["+3"], caption: "라이브러리 1.1의 addAll은 태그마다 this.add를 부른다. this는 여전히 CountingTagSet이다." },
+    { pointer: 2, memory: ["+3", "+1"], caption: "동적 디스패치 때문에 this.add는 우리가 덮어쓴 add로 간다. 한 번 더 센다." },
+    { pointer: 3, memory: ["+3", "+1", "+1"], caption: "b도 같은 길로 다시 세어진다." },
+    { pointer: 4, found: [0, 2, 3, 4], memory: ["+3", "+1", "+1", "+1", "= 6"], caption: "모두 6이다. 1.0에서는 addAll이 add를 부르지 않아서 3이었다." },
+  ]}
+/>
+
+다형성이 여기서는 독이 됐다. 상위 클래스가 자기 메서드를 안에서 어떻게 부르는지(자기 호출)는 공개된 모양이 아니라 구현의 세부인데, 하위 클래스가 그 세부에 기대고 있었다. 이렇게 상위 클래스의 겉으로 보기엔 안전한 변경이 하위 클래스를 깨뜨리는 문제를 깨지기 쉬운 기반 클래스(fragile base class) 문제라고 한다. 『이펙티브 자바』가 "상속보다는 컴포지션을 사용하라"는 항목에서 `HashSet`으로 든 예와 같은 구조다.
+
+상속이 위험해지는 경우를 정리하면 이렇다. 상위 클래스를 다른 팀이나 라이브러리가 관리할 때, 상위 클래스가 상속을 염두에 두고 "어떤 메서드가 어떤 메서드를 부르는지" 문서로 약속하지 않았을 때, 그리고 하위 클래스가 모양이 아니라 동작의 일부만 바꾸려 할 때다. Java에서 상속을 허용할 생각이 없는 클래스에 `final`을 붙이고, Kotlin이 클래스를 기본으로 `final`로 만든 것도 이 때문이다.
+
+상속이 맞는 곳도 있다. 같은 팀이 상위와 하위를 함께 고치고, 진짜 is-a 관계이며, 상위 클래스가 처음부터 확장 지점을 정해 둔 경우다. 순서는 위에서 정하고 단계 몇 개만 하위에서 채우는 [템플릿 메서드 패턴](/posts/pattern-template-method)이 그런 설계다.
+
+## 물려받는 대신 안에 넣는다
+
+고치는 방법은 상속을 끊고 `TagSet`을 안에 넣는 것이다. 우리 클래스가 `TagSet`이 되는 대신 `TagSet`을 가진다(has-a). 필요한 일은 안에 넣은 객체에 맡긴다(위임). 이걸 합성(composition)이라 한다. 이제 `TagSet`이 안에서 `add`를 부르든 말든, 그 `add`는 `TagSet`의 것이지 우리 것이 아니다.
+
+아래 코드는 라이브러리 1.1과 상속으로 만든 `CountingTagSet`이다. 테스트가 실패한다. `CountingTagSet`을 합성으로 고쳐서 테스트를 통과시켜 보자. `run`은 태그 목록을 `addAll`로 넣고 `"z"`를 `add`로 하나 더 넣은 뒤 `[addedCount, size]`를 돌려준다.
+
+<CodePlayground
+  caption="상속을 합성으로 바꿔 두 번 세는 문제 고치기"
+  functionName="run"
+  initialCode={`// 라이브러리 1.1 (고칠 수 없다)
+class TagSet {
+  #items = new Set();
+  add(tag) { this.#items.add(tag); return this; }
+  addAll(tags) { for (const t of tags) this.add(t); return this; }
+  get size() { return this.#items.size; }
+}
+
+// 우리 코드: 상속으로 셌더니 두 번 센다
+class CountingTagSet extends TagSet {
+  addedCount = 0;
+  add(tag) { this.addedCount++; return super.add(tag); }
+  addAll(tags) { this.addedCount += tags.length; return super.addAll(tags); }
+}
+
+function run(tags) {
+  const s = new CountingTagSet();
+  s.addAll(tags);
+  s.add("z");
+  return [s.addedCount, s.size];
+}`}
+  solution={`class TagSet {
+  #items = new Set();
+  add(tag) { this.#items.add(tag); return this; }
+  addAll(tags) { for (const t of tags) this.add(t); return this; }
+  get size() { return this.#items.size; }
+}
+
+// 상속 대신 TagSet을 안에 두고 일을 맡긴다
+class CountingTagSet {
+  #inner = new TagSet();
+  addedCount = 0;
+  add(tag) { this.addedCount++; this.#inner.add(tag); return this; }
+  addAll(tags) { this.addedCount += tags.length; this.#inner.addAll(tags); return this; }
+  get size() { return this.#inner.size; }
+}
+
+function run(tags) {
+  const s = new CountingTagSet();
+  s.addAll(tags);
+  s.add("z");
+  return [s.addedCount, s.size];
+}`}
+  tests={[
+    { label: "a, b, c 넣고 z", args: [["a", "b", "c"]], expected: [4, 4] },
+    { label: "a를 두 번 넣고 z", args: [["a", "a"]], expected: [3, 2] },
+    { label: "빈 목록 넣고 z", args: [[]], expected: [1, 1] },
+  ]}
+/>
+
+합성에도 값이 있다. `TagSet`에 메서드가 스무 개 있으면 필요한 만큼 위임 메서드를 직접 써야 한다. 그리고 합성한 객체는 `TagSet` 타입이 아니므로 `TagSet`을 받는 함수에 넘길 수 없다. 그래서 보통은 공통 인터페이스(`TagCollection`)를 두고, 라이브러리 클래스와 우리 클래스가 모두 그 인터페이스를 따르게 한다. 같은 모양으로 감싸서 기능을 덧붙이는 이 구조가 [데코레이터 패턴](/posts/pattern-decorator)이다. 상속으로 기능을 조합하면 하위 클래스가 곱으로 늘고 합성하면 합으로 는다는 이야기는 [디자인 패턴 개요](/posts/design-patterns-overview)에서 그림으로 봤다.
+
+## 추상 클래스, 인터페이스, 구체 클래스
+
+`Payment`를 인터페이스로 둘지 추상 클래스로 둘지도 자주 묻는다. 셋을 나란히 놓으면 이렇다.
+
+구체 클래스(concrete class)는 모든 메서드에 구현이 있어서 `new`로 바로 만들 수 있는 클래스다. `PointWallet`, `CardPayment`가 그렇다. 추상 클래스(abstract class)는 일부 메서드를 구현 없이 남겨 둔 클래스라 직접 만들 수 없고, 상속해서 빈 부분을 채운 하위 클래스만 만들 수 있다. 상태(필드)와 생성자, 구현된 공통 메서드를 가질 수 있다. 인터페이스(interface)는 모양만 정한다.
+
+고르는 기준은 "무엇을 공유하고 싶은가"다. 모양만 공유하면 인터페이스다. 결제 수단처럼 구현끼리 공통 코드가 거의 없고, 한 클래스가 여러 역할(`Payment`이면서 `Refundable`)을 맡을 수 있어야 하면 인터페이스가 맞다. Java에서 클래스는 하나만 상속하지만 인터페이스는 여러 개 구현할 수 있다. 공통 상태나 정해진 순서까지 공유하면 추상 클래스다. 모든 결제가 "요청 로그 → 승인 → 감사 로그" 순서를 지켜야 하고 로그 필드를 함께 쓴다면, 그 순서를 추상 클래스에 두고 `doApprove`만 하위에서 채운다. 다만 그 순간부터 위에서 본 상속의 대가를 함께 진다.
+
+Java 8부터 인터페이스도 `default` 메서드로 구현을 가질 수 있어서 둘의 경계가 흐려졌다. 그래도 인터페이스는 인스턴스 필드(상태)를 가질 수 없다는 차이는 남아 있다.
+
+TypeScript의 인터페이스는 성격이 또 다르다. 컴파일하면 사라지는 타입 정보라서 실행 중에 `x instanceof Payment` 같은 검사를 할 수 없다. 그리고 구조적 타입이다. `implements Payment`를 쓰지 않아도 `method`, `approve`, `refund`가 맞는 모양이면 `Payment` 자리에 들어간다. Java는 선언한 이름으로 판단하는 명목적 타입이라 `implements`를 쓴 클래스만 들어간다. 테스트에서 가짜 결제 객체를 만들 때 TypeScript는 객체 리터럴 하나로 끝나는 이유다.
+
+## 다중 상속과 다이아몬드
+
+클래스가 부모를 둘 가질 수 있으면 생기는 문제가 있다. `B`와 `C`가 모두 `A`를 상속하고 둘 다 `A`의 `cancel()`을 다르게 덮어썼는데, `D`가 `B`와 `C`를 함께 상속하면 `D`의 `cancel()`은 어느 쪽일까. 상속 관계를 그리면 마름모 모양이라 다이아몬드 문제라고 부른다. `A`의 필드가 `D` 안에 한 벌인지 두 벌인지도 문제가 된다.
+
+C++은 다중 상속을 허용하고, 가상 상속(`virtual`)으로 `A`를 한 벌만 두게 하거나 호출할 때 `B::cancel()`처럼 이름을 지정하게 한다. Python은 정해진 규칙(C3 선형화)으로 메서드를 찾는 순서(MRO)를 하나로 줄 세운다. Java는 클래스의 다중 상속을 아예 막고 인터페이스 다중 구현만 허용해서 상태 쪽 문제를 피했다. 그런데 인터페이스에 `default` 메서드가 생기면서 동작 쪽 다이아몬드는 다시 생길 수 있다.
+
+```java
+interface Refundable { default String cancel() { return "환불"; } }
+interface Voidable   { default String cancel() { return "승인 취소"; } }
+
+class Card implements Refundable, Voidable { }
+```
+
+```text
+Main.java:4: error: types Refundable and Voidable are incompatible;
+class Card implements Refundable, Voidable { }
+^
+  class Card inherits unrelated defaults for cancel() from types Refundable and Voidable
+1 error
+```
+
+Java는 알아서 고르지 않고 컴파일을 멈춘다. 하위 클래스가 직접 정하라는 뜻이다. `인터페이스이름.super.메서드()`로 어느 쪽을 쓸지 고른다.
+
+```java
+class Card implements Refundable, Voidable {
+    @Override
+    public String cancel() {
+        return Voidable.super.cancel() + " 후 " + Refundable.super.cancel();
+    }
+}
+```
+
+```text
+승인 취소 후 환불
+```
+
+자바스크립트와 TypeScript는 클래스가 `extends`를 하나만 할 수 있다. 여러 클래스의 기능을 섞고 싶으면 위 `makeCounting`처럼 클래스를 받아 확장한 클래스를 돌려주는 믹스인 함수를 쓰는데, 섞는 순서에 따라 결과가 달라지니 결국 같은 고민을 한다. 대부분은 합성으로 푸는 편이 단순하다.
+
+## 자바스크립트의 클래스는 프로토타입 위에 있다
+
+Java의 클래스는 컴파일러가 아는 설계도이고, 객체는 그 설계도의 인스턴스다. 자바스크립트는 출발이 다르다. 객체가 다른 객체를 원형(prototype)으로 가리키고, 속성을 찾다가 없으면 원형으로 올라가서 찾는다. `class` 문법은 생성자 함수와 원형 연결을 만들어 주는 포장지다. 그래서 실행 중에 원형을 바꾸거나 객체 하나에만 메서드를 붙이는 일이 가능하고, 위의 동적 디스패치도 메서드 표가 아니라 원형 체인 탐색으로 일어난다. 하위 클래스 필드가 부모 생성자가 끝난 뒤에야 붙어서 생기는 함정 같은 세부는 [클래스와 상속 글](/posts/js-classes)에서 다뤘다.
+
+네 기둥의 생각은 그대로 통한다. 다만 자바스크립트에서는 함수가 값이라서, 메서드 하나짜리 인터페이스는 대개 함수 하나로 충분하다. 결제 수단이 승인 하나만 한다면 `Payment` 인터페이스 대신 `(order) => Promise<PaymentResult>` 타입의 함수를 `Map`에 넣어도 같은 다형성을 얻는다.
+
+## 객체 지향이 과해지는 순간
+
+처음의 if 사다리가 항상 나쁜 건 아니다. 결제 수단이 셋에서 늘지 않고, 대신 "결제 수단마다 하는 일"이 자꾸 는다면 이야기가 바뀐다. 이번 달엔 수수료 계산, 다음 달엔 정산 파일 만들기, 그다음엔 부정 결제 점수 매기기가 붙는다고 하자. 클래스 방식에서는 새 일 하나에 결제 클래스 셋을 모두 열어 메서드를 더해야 한다. 반대로 `switch` 방식에서는 새 함수 하나만 쓰면 된다.
+
+새 종류가 자주 늘면 클래스와 다형성이, 새 동작이 자주 늘면 종류를 닫아 둔 `switch`가 고치는 곳이 적다. 이 둘이 동시에 쉬운 방법은 없다(이 긴장을 표현 문제, expression problem이라 부른다). TypeScript에서는 종류를 닫아 두는 쪽이 꽤 안전하다. 유니온 타입과 `never` 검사를 쓰면 종류를 하나 더하고 `switch`에 빠뜨렸을 때 컴파일러가 알려 준다.
+
+```ts
+type PaymentMethod =
+  | { kind: "card"; cardNo: string }
+  | { kind: "point"; userId: number }
+  | { kind: "transfer"; bank: string };
+
+function fee(m: PaymentMethod, amount: number): number {
+  switch (m.kind) {
+    case "card":
+      return Math.round(amount * 0.025);
+    case "point":
+      return 0;
+    default: {
+      const unreachable: never = m;   // 처리하지 않은 종류가 있으면 여기서 막힌다
+      return unreachable;
+    }
+  }
+}
+```
+
+```text
+union.ts(13,13): error TS2322: Type '{ kind: "transfer"; bank: string; }' is not assignable to type 'never'.
+```
+
+`transfer`를 빠뜨렸다는 걸 실행 전에 안다. 처음 코드의 진짜 문제는 if 사다리 자체보다 `method: string`이라 빠뜨려도 아무도 몰랐다는 데 있었다. 유니온으로 좁히는 방법은 [타입 좁히기 글](/posts/ts-narrowing)에 있다.
+
+반대쪽 과잉도 흔하다. 구현이 하나뿐인 인터페이스를 클래스마다 만들고(`UserService`와 `UserServiceImpl`), 재사용할 것도 없는데 `BaseService`, `AbstractBaseService`로 세 층 상속을 쌓는다. 코드를 읽으려면 파일 다섯 개를 오가야 하고, 정작 바꿀 일이 생기면 계층 전체를 건드린다. 인터페이스는 구현이 둘 이상이 되거나(테스트용 가짜 포함), 경계 너머의 팀·모듈과 약속이 필요할 때 만든다. 상속은 계층이 두 단계를 넘기 시작하면 합성으로 풀 수 있는지 먼저 본다.
+
+결제 코드로 돌아가면, 네 기둥이 한 일은 각각 하나다. 캡슐화는 포인트 규칙을 한 곳에 가뒀고, 추상화는 결제의 모양을 정했고, 다형성은 그 모양으로 새 결제 수단을 꽂게 했다. 상속은 쓰지 않아도 됐다. 이 구조를 원칙으로 정리한 것이 SOLID이고, 같은 결제 코드에 다섯 원칙을 차례로 적용하는 이야기는 [SOLID 글](/posts/solid-principles)로 이어진다. 객체를 누가 만들어 꽂아 주는지는 [IoC 컨테이너와 DI 글](/posts/spring-ioc-di)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 객체 지향의 네 가지 특징을 설명해 주세요.
+
+캡슐화, 추상화, 상속, 다형성이다. 캡슐화는 데이터와 그 데이터를 바꾸는 규칙을 한 객체에 묶고 정해진 메서드로만 바꾸게 하는 것이고, 추상화는 무엇을 하는지만 남긴 모양(인터페이스)을 정하는 것이다. 다형성은 같은 호출이 실제 객체에 따라 다른 구현으로 가는 것이고, 상속은 모양과 구현을 함께 물려받는 방법이다. 결제 수단이 늘 때마다 if를 고치던 코드를 `Payment` 인터페이스와 구현 클래스로 바꾸면 넷이 각자 어디서 일하는지 보인다.
+
+### 캡슐화와 getter/setter는 같은 건가요?
+
+아니다. 필드를 private로 바꾸고 setter를 열어 두면 누구나 불변식을 깰 수 있으니 공개 필드와 다르지 않다. 캡슐화가 됐는지는 바깥에서 객체의 규칙을 깨는 호출이 가능한지로 판단한다. 값을 바꾸는 이유를 `setBalance` 대신 `charge`, `use` 같은 메서드로 만들고, 그 안에서 규칙을 검사한다. 묻고 판단하지 말고 시키라는 Tell, Don't Ask도 같은 이야기다.
+
+### 오버라이딩과 오버로딩은 어떻게 다른가요?
+
+오버라이딩은 하위 클래스가 상위 메서드를 다시 정의하는 것이고, 실행 중에 실제 객체 타입을 보고 구현을 고른다(동적 디스패치). 오버로딩은 같은 이름에 매개변수만 다른 메서드를 여러 개 두는 것이고, 컴파일할 때 변수의 선언 타입을 보고 고른다. 그래서 Java에서 `Payment p = new Card()`를 `describe(p)`에 넘기면 `describe(Card)`가 아니라 `describe(Payment)`가 불린다. 자바스크립트에는 런타임 오버로딩이 없고, TypeScript 오버로드는 시그니처만 여러 개다.
+
+### 상속보다 합성을 권하는 이유는 무엇인가요?
+
+상속은 구현까지 물려받아서 상위 클래스의 내부 변경이 하위 클래스를 깨뜨릴 수 있기 때문이다. 라이브러리의 `addAll`이 내부에서 `add`를 부르도록 바뀌자, 둘 다 덮어써서 세던 하위 클래스가 두 번 세게 된 것이 깨지기 쉬운 기반 클래스 문제다. 합성은 객체를 안에 두고 공개된 메서드로만 맡기므로 상대의 자기 호출 방식에 영향을 받지 않는다. 대신 위임 코드를 직접 써야 하고 타입이 달라지니 공통 인터페이스를 함께 둔다. 같은 팀이 함께 관리하는 진짜 is-a 관계나 확장 지점을 정해 둔 템플릿 메서드에서는 상속도 괜찮다.
+
+### 추상 클래스와 인터페이스는 언제 각각 쓰나요?
+
+모양만 공유하면 인터페이스, 공통 상태나 정해진 처리 순서까지 공유하면 추상 클래스를 쓴다. Java에서 클래스는 하나만 상속하지만 인터페이스는 여러 개 구현할 수 있어서 여러 역할을 맡기기엔 인터페이스가 낫다. Java 8의 `default` 메서드로 인터페이스도 구현을 가질 수 있지만 인스턴스 필드는 여전히 못 가진다. TypeScript 인터페이스는 컴파일하면 사라지는 구조적 타입이라 `instanceof`로 검사할 수 없다.
+
+### 다이아몬드 문제는 무엇이고 Java는 어떻게 피하나요?
+
+두 부모가 같은 조상의 메서드를 서로 다르게 덮어썼을 때 둘을 함께 상속한 자식이 어느 쪽을 써야 할지 모호해지는 문제다. 조상의 상태가 한 벌인지 두 벌인지도 문제가 된다. Java는 클래스 다중 상속을 막아 상태 쪽 문제를 피했고, `default` 메서드끼리 충돌하면 컴파일 오류를 내서 하위 클래스가 `Voidable.super.cancel()`처럼 직접 고르게 한다. C++은 가상 상속, Python은 C3 선형화로 정한 메서드 탐색 순서로 푼다.
+
+### 자바스크립트의 객체 지향은 Java와 무엇이 다른가요?
+
+자바스크립트는 프로토타입 기반이다. 객체가 다른 객체를 원형으로 가리키고, 속성이 없으면 원형 체인을 따라 올라가 찾는다. `class`는 생성자 함수와 원형 연결을 만들어 주는 문법이라 실행 중에 원형을 바꾸는 일도 가능하다. 함수가 값이라서 메서드 하나짜리 인터페이스는 함수 하나로 대신하는 경우가 많고, TypeScript는 구조적 타입이라 `implements` 없이도 모양이 맞으면 같은 자리에 들어간다.
+
+### 객체 지향 설계가 오히려 해가 되는 경우가 있나요?
+
+있다. 결제 수단 같은 종류는 거의 안 늘고 그 종류에 대한 동작만 자꾸 는다면, 클래스마다 메서드를 더하는 것보다 종류를 닫아 둔 `switch`가 고칠 곳이 적다. TypeScript에서는 유니온과 `never` 검사로 빠뜨린 경우를 컴파일 때 잡을 수 있다. 구현이 하나뿐인 인터페이스나 재사용 없는 깊은 상속 계층도 읽기만 어렵게 만든다. 새 종류가 자주 느는지, 새 동작이 자주 느는지를 보고 고른다.

@@ -2,6 +2,235 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "dynamodb-modeling-capacity": {
+    "links": [
+      "db-type-key-value",
+      "optimistic-locking",
+      "elasticsearch-query-dsl"
+    ],
+    "mentions": [
+      "sd-sharding-intro",
+      "iam-basics",
+      "db-locking-deadlock",
+      "db-consistency-cap",
+      "db-type-relational",
+      "resilience-patterns",
+      "sd-mq-storage-partitions",
+      "postgres-operations",
+      "db-modeling-normalization",
+      "dns",
+      "zero-downtime-migrations"
+    ]
+  },
+  "elasticsearch-aggregations": {
+    "links": [
+      "elasticsearch-mapping",
+      "hyperloglog",
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "postgres-architecture"
+    ]
+  },
+  "elasticsearch-mapping": {
+    "links": [
+      "elasticsearch-inverted-index",
+      "elasticsearch-aggregations",
+      "opensearch-cluster-operations"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "page-cache-disk-io",
+      "transactional-outbox"
+    ]
+  },
+  "elasticsearch-query-dsl": {
+    "links": [
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "elasticsearch-mapping",
+      "opensearch-cluster-operations",
+      "sql-filtering-operators"
+    ]
+  },
+  "jpa-entity-relationships": {
+    "links": [
+      "jpa-persistence-context",
+      "n-plus-one-queries",
+      "db-modeling-normalization"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "js-execution-context",
+      "pattern-proxy",
+      "sql-query-rewrite"
+    ]
+  },
+  "jpa-persistence-context": {
+    "links": [
+      "n-plus-one-queries",
+      "jpa-entity-relationships",
+      "spring-transactional-propagation",
+      "optimistic-locking",
+      "sql-batch-timeout-pool"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "caching-strategies",
+      "pattern-proxy",
+      "redis-basics",
+      "sql-query-rewrite"
+    ]
+  },
+  "mongodb-crud-operators": {
+    "links": [
+      "mongodb-document-model",
+      "elasticsearch-inverted-index",
+      "api-pagination-sorting",
+      "optimistic-locking",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "sql-query-rewrite",
+      "db-index-design",
+      "dns"
+    ]
+  },
+  "oop-four-pillars": {
+    "links": [
+      "solid-principles",
+      "race-conditions",
+      "js-classes",
+      "js-closures",
+      "pattern-strategy",
+      "pattern-template-method",
+      "pattern-decorator",
+      "design-patterns-overview",
+      "ts-narrowing",
+      "spring-ioc-di"
+    ],
+    "mentions": [
+      "coupling-cohesion-principles",
+      "js-prototype-chain",
+      "sd-payment-reliability",
+      "pattern-visitor"
+    ]
+  },
+  "postgres-query-planner": {
+    "links": [
+      "sql-query-tuning",
+      "db-index-pitfalls",
+      "postgres-operations",
+      "connection-pool",
+      "postgres-mvcc-vacuum"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "dynamic-programming",
+      "ds-hash-map",
+      "db-index-design",
+      "sql-batch-timeout-pool",
+      "postgres-getting-started"
+    ]
+  },
+  "rds-aurora-managed-db": {
+    "links": [
+      "postgres-operations",
+      "failover",
+      "db-replication-sharding",
+      "connection-pool",
+      "serverless-limits",
+      "backup-strategy",
+      "cloud-cost-optimization",
+      "dynamodb-modeling-capacity"
+    ],
+    "mentions": [
+      "service-discovery",
+      "page-cache-disk-io",
+      "mysql-replication-online-ddl",
+      "http-caching-cdn",
+      "api-versioning",
+      "security-groups-nacl",
+      "vpc-basics",
+      "sql-batch-timeout-pool",
+      "postgres-architecture",
+      "dns"
+    ]
+  },
+  "solid-principles": {
+    "links": [
+      "oop-four-pillars",
+      "pattern-strategy",
+      "spring-ioc-di",
+      "clean-architecture",
+      "hexagonal-architecture",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "code-review-practices",
+      "sd-payment-reliability",
+      "sd-email-protocols",
+      "coupling-cohesion-principles"
+    ]
+  },
+  "spring-mvc-request-lifecycle": {
+    "links": [
+      "spring-ioc-di",
+      "spring-boot-auto-configuration",
+      "java-jvm-memory-gc",
+      "connection-pool",
+      "spring-security-architecture",
+      "http-status-codes",
+      "rest-api-design",
+      "spring-transactional-propagation"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "nodejs-web-frameworks",
+      "deadlocks",
+      "upper-layers-session-presentation-app",
+      "sql-batch-timeout-pool",
+      "cors",
+      "token-login"
+    ]
+  },
+  "spring-security-architecture": {
+    "links": [
+      "spring-mvc-request-lifecycle",
+      "authn-vs-authz",
+      "cookie-session-login",
+      "token-login",
+      "web-security-headers",
+      "spring-transactional-propagation",
+      "csrf",
+      "spring-security-jwt-oauth2",
+      "spring-ioc-di"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "base64",
+      "mfa-totp"
+    ]
+  },
+  "spring-transactional-propagation": {
+    "links": [
+      "spring-ioc-di",
+      "acid-transactions",
+      "db-transaction-isolation",
+      "jpa-persistence-context",
+      "connection-pool",
+      "transactional-outbox"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "mysql-innodb-basics",
+      "db-replication-sharding",
+      "spring-boot-auto-configuration",
+      "sql-batch-timeout-pool"
+    ]
+  },
   "balanced-search-trees": {
     "links": [
       "ds-binary-tree-bst",
@@ -26,6 +255,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cqrs"
     ],
     "mentions": [
+      "solid-principles",
       "clean-architecture",
       "js-optional-chaining-nullish",
       "js-function-forms",
@@ -210,7 +440,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-undo",
-      "ddd-tactical-patterns"
+      "ddd-tactical-patterns",
+      "oop-four-pillars"
     ]
   },
   "segment-tree-fenwick": {
@@ -267,6 +498,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sso-saml-oidc"
     ],
     "mentions": [
+      "spring-security-architecture",
       "spring-boot-4-migration",
       "base64",
       "mfa-totp"
@@ -419,6 +651,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "nodejs-orm-query-builder",
+      "jpa-persistence-context",
       "js-spread-rest",
       "ddd-bounded-context",
       "pattern-proxy"
@@ -1531,6 +1764,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "dockerfile-image-layers",
       "layer-ip-addressing",
+      "rds-aurora-managed-db",
       "vpc-basics",
       "dns"
     ]
@@ -1683,6 +1917,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "observability-basics",
       "sd-object-storage-architecture",
+      "elasticsearch-mapping",
       "kafka-basics",
       "http-status-codes"
     ]
@@ -1778,6 +2013,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
       "elasticsearch-inverted-index",
       "grpc",
       "centralized-logging-pipeline",
@@ -2002,6 +2238,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-split-web-and-db",
       "lossy-counting",
       "sd-cache-and-cdn-tier",
+      "postgres-query-planner",
       "gateway"
     ]
   },
@@ -2328,7 +2565,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-function-forms",
       "react-custom-hooks-rules",
       "js-destructuring",
-      "js-hoisting-tdz"
+      "js-hoisting-tdz",
+      "oop-four-pillars"
     ]
   },
   "tsconfig-strict": {
@@ -2500,7 +2738,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "shortest-path-algorithms",
       "ds-array-matrix",
       "sd-maps-tiles-routing",
-      "recursion-backtracking"
+      "recursion-backtracking",
+      "postgres-query-planner"
     ]
   },
   "dynamic-programming": {
@@ -2908,6 +3147,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rendering-ssr",
       "opensearch-cluster-operations",
+      "elasticsearch-aggregations",
       "sd-payment-flow",
       "http-methods",
       "dns"
@@ -3615,6 +3855,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-disruption-budget",
+      "elasticsearch-aggregations",
       "k8s-statefulset",
       "sd-mq-storage-partitions",
       "resilience-patterns",
@@ -4467,6 +4708,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-array-transform",
       "load-testing-k6",
       "sd-start-single-server",
+      "dynamodb-modeling-capacity",
       "sd-mq-storage-partitions",
       "redis-basics"
     ]
@@ -5703,6 +5945,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "rds-aurora-managed-db",
       "leader-election",
       "mysql-replication-online-ddl",
       "postgres-operations",
@@ -5801,7 +6044,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "high-availability",
       "load-testing-k6",
       "sd-object-storage-architecture",
-      "db-replication-sharding"
+      "db-replication-sharding",
+      "postgres-query-planner"
     ]
   },
   "sql-interview-problems": {
@@ -6115,6 +6359,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "acid-vs-base",
       "db-type-columnar-olap",
       "db-replication-sharding",
+      "dynamodb-modeling-capacity",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
@@ -6742,6 +6987,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nextjs-static-dynamic-rendering"
     ],
     "mentions": [
+      "dynamodb-modeling-capacity",
       "dead-letter-queue",
       "realtime-communication",
       "message-queue-basics",
@@ -8110,7 +8356,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "page-cache-disk-io",
       "velero-backup",
       "local-k8s-kind-minikube",
-      "grpc"
+      "grpc",
+      "rds-aurora-managed-db"
     ]
   },
   "k8s-gateway-api": {
@@ -8153,6 +8400,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map",
       "layer-ip-addressing",
       "layer-ip-routing-icmp",
+      "postgres-query-planner",
       "udp-and-quic",
       "dns"
     ]
@@ -8815,6 +9063,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture",
       "redis-basics",
       "high-availability",
+      "rds-aurora-managed-db",
       "github-actions-docker-ecr",
       "vpc-basics"
     ]
@@ -8832,6 +9081,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-architecture-by-scale",
       "db-type-key-value",
       "rest-api-design",
+      "rds-aurora-managed-db",
       "iam-basics",
       "db-type-relational",
       "resilience-patterns",
@@ -9448,7 +9698,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dependency-hell",
       "git-internals-basics",
       "js-strict-mode",
-      "frontend-monorepo"
+      "frontend-monorepo",
+      "postgres-query-planner"
     ]
   },
   "ci-cd-basics": {
@@ -10152,6 +10403,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql"
     ],
     "mentions": [
+      "spring-security-architecture",
       "network-monitoring",
       "ipv6-basics",
       "sd-latency-numbers",
@@ -10294,7 +10546,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-interpreter"
     ],
     "mentions": [
-      "ts-narrowing"
+      "ts-narrowing",
+      "oop-four-pillars"
     ]
   },
   "pattern-template-method": {
@@ -10526,6 +10779,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "spring-security-architecture",
       "react-suspense-error-boundary",
       "express-middleware",
       "fp-composition-pipe",
@@ -10549,6 +10803,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "jpa-persistence-context",
       "json-crud-http",
       "resilience-patterns",
       "http-versions",
@@ -10714,6 +10969,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "passkeys-webauthn",
       "high-availability",
+      "rds-aurora-managed-db",
       "authn-vs-authz",
       "code-review-practices",
       "sso-saml-oidc",
@@ -11232,7 +11488,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-in-react",
       "ds-graph-bfs-dfs",
       "ts-narrowing",
-      "code-review-practices"
+      "code-review-practices",
+      "oop-four-pillars"
     ]
   },
   "dead-letter-queue": {
@@ -11323,6 +11580,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-node-maintenance",
       "vpc-basics",
       "local-k8s-kind-minikube",
+      "rds-aurora-managed-db",
       "eks-cluster-basics"
     ]
   },
@@ -11401,6 +11659,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
+      "solid-principles",
       "hexagonal-architecture",
       "js-function-forms",
       "http-status-codes",
@@ -11653,6 +11913,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-jsx-components",
       "js-object-methods",
+      "solid-principles",
+      "oop-four-pillars",
       "code-review-practices",
       "sd-email-protocols"
     ]
@@ -11710,6 +11972,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns"
     ],
     "mentions": [
+      "solid-principles",
       "spring-ioc-di",
       "refactoring-code-smells",
       "code-review-practices",
@@ -12788,7 +13051,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "mysql-innodb-basics",
       "sd-start-single-server",
-      "sd-mq-storage-partitions"
+      "sd-mq-storage-partitions",
+      "postgres-query-planner"
     ]
   },
   "db-index-pitfalls": {
@@ -13238,6 +13502,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series",
       "mysql-innodb-basics",
       "db-type-key-value",
+      "rds-aurora-managed-db",
       "ds-hash-map",
       "sqld-top-n-hierarchical-pivot",
       "page-cache-disk-io",
@@ -13265,6 +13530,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column"
     ],
     "mentions": [
+      "dynamodb-modeling-capacity",
       "raft-consensus",
       "ds-hash-map",
       "page-cache-disk-io",
@@ -13360,6 +13626,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "pessimistic-locking",
+      "rds-aurora-managed-db",
       "virtual-memory-paging",
       "db-migration-tools",
       "db-architecture-by-scale",
@@ -13405,7 +13672,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics",
       "db-locking-deadlock",
       "db-index-design",
-      "postgres-data-types"
+      "postgres-data-types",
+      "oop-four-pillars"
     ]
   },
   "postgres-jsonb-search": {
@@ -13750,6 +14018,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-consistency-cap",
       "prometheus-basics",
       "db-architecture-by-scale",
+      "rds-aurora-managed-db",
       "mysql-innodb-basics",
       "sd-start-single-server",
       "page-cache-disk-io",
@@ -14553,6 +14822,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-locking-deadlock"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
       "client-data-cache",
       "enterprise-application-patterns",
       "nodejs-web-frameworks",
@@ -14586,6 +14856,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "opensearch-cluster-operations"
     ],
     "mentions": [
+      "elasticsearch-mapping",
       "db-index",
       "cdc-change-data-capture",
       "rag-retrieval-quality",
