@@ -1,3 +1,30 @@
+import { TWELVE_FACTOR_APP } from "./twelve-factor-app";
+import { TEST_DESIGN_TECHNIQUES } from "./test-design-techniques";
+import { TDD_BDD_ATDD } from "./tdd-bdd-atdd";
+import { STRING_SEARCH_ALGORITHMS } from "./string-search-algorithms";
+import { SMOKE_SANITY_REGRESSION_TESTING } from "./smoke-sanity-regression-testing";
+import { REGEX_AND_GLOBBING } from "./regex-and-globbing";
+import { PASSWORD_ATTACKS_CREDENTIAL_STUFFING } from "./password-attacks-credential-stuffing";
+import { OPENAPI_SPEC_FIRST } from "./openapi-spec-first";
+import { NODEJS_WEB_FRAMEWORKS } from "./nodejs-web-frameworks";
+import { NODEJS_ORM_QUERY_BUILDER } from "./nodejs-orm-query-builder";
+import { NODEJS_HTTP_CLIENTS } from "./nodejs-http-clients";
+import { NODEJS_FS_STREAMS } from "./nodejs-fs-streams";
+import { NODEJS_ERROR_HANDLING } from "./nodejs-error-handling";
+import { NODEJS_DEBUGGING_PROFILING } from "./nodejs-debugging-profiling";
+import { MCP_PROTOCOL } from "./mcp-protocol";
+import { LLM_BASICS_FOR_DEVELOPERS } from "./llm-basics-for-developers";
+import { LLM_API_INTEGRATION } from "./llm-api-integration";
+import { GRAPHQL_CLIENT_CACHING } from "./graphql-client-caching";
+import { GRAPHQL_AUTHORIZATION } from "./graphql-authorization";
+import { GITHUB_REPO_GOVERNANCE } from "./github-repo-governance";
+import { ENTERPRISE_APPLICATION_PATTERNS } from "./enterprise-application-patterns";
+import { DDD_TACTICAL_PATTERNS } from "./ddd-tactical-patterns";
+import { CODE_REVIEW_PRACTICES } from "./code-review-practices";
+import { BIT_MANIPULATION } from "./bit-manipulation";
+import { ARCHITECTURE_DOCS_C4_ADR } from "./architecture-docs-c4-adr";
+import { API_TEST_AUTOMATION } from "./api-test-automation";
+import { API_KEY_HMAC_AUTH } from "./api-key-hmac-auth";
 import { WEB_WORKERS } from "./web-workers";
 import { WEB_ACCESSIBILITY } from "./web-accessibility";
 import { TS_CONDITIONAL_INFER } from "./ts-conditional-infer";
@@ -696,6 +723,33 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  TWELVE_FACTOR_APP,
+  TEST_DESIGN_TECHNIQUES,
+  TDD_BDD_ATDD,
+  STRING_SEARCH_ALGORITHMS,
+  SMOKE_SANITY_REGRESSION_TESTING,
+  REGEX_AND_GLOBBING,
+  PASSWORD_ATTACKS_CREDENTIAL_STUFFING,
+  OPENAPI_SPEC_FIRST,
+  NODEJS_WEB_FRAMEWORKS,
+  NODEJS_ORM_QUERY_BUILDER,
+  NODEJS_HTTP_CLIENTS,
+  NODEJS_FS_STREAMS,
+  NODEJS_ERROR_HANDLING,
+  NODEJS_DEBUGGING_PROFILING,
+  MCP_PROTOCOL,
+  LLM_BASICS_FOR_DEVELOPERS,
+  LLM_API_INTEGRATION,
+  GRAPHQL_CLIENT_CACHING,
+  GRAPHQL_AUTHORIZATION,
+  GITHUB_REPO_GOVERNANCE,
+  ENTERPRISE_APPLICATION_PATTERNS,
+  DDD_TACTICAL_PATTERNS,
+  CODE_REVIEW_PRACTICES,
+  BIT_MANIPULATION,
+  ARCHITECTURE_DOCS_C4_ADR,
+  API_TEST_AUTOMATION,
+  API_KEY_HMAC_AUTH,
   WEB_WORKERS,
   WEB_ACCESSIBILITY,
   TS_CONDITIONAL_INFER,

@@ -2,6 +2,492 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-key-hmac-auth": {
+    "links": [
+      "oauth",
+      "password-attacks-credential-stuffing",
+      "hash-hmac-password-hashing",
+      "secrets-management",
+      "rate-limiting-in-practice",
+      "jwt-key-rotation",
+      "clock-skew",
+      "idempotency-key",
+      "webhooks",
+      "encryption-in-transit"
+    ],
+    "mentions": [
+      "gateway",
+      "base64",
+      "digital-signatures-certificates",
+      "token-login",
+      "redis-basics",
+      "what-happens-google-com",
+      "sd-url-shortener-key-generation",
+      "https-tls",
+      "db-modeling-normalization"
+    ]
+  },
+  "api-test-automation": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "api-versioning",
+      "smoke-sanity-regression-testing",
+      "integration-tests-real-db",
+      "sit-uat-testing",
+      "test-design-techniques"
+    ],
+    "mentions": [
+      "openapi-spec-first",
+      "ci-cd-basics",
+      "tdd-bdd-atdd",
+      "js-array-transform",
+      "http-status-codes",
+      "oauth",
+      "cors",
+      "http-methods"
+    ]
+  },
+  "architecture-docs-c4-adr": {
+    "links": [
+      "hexagonal-architecture",
+      "layered-architecture",
+      "distributed-tracing",
+      "ddd-tactical-patterns",
+      "enterprise-application-patterns",
+      "ddd-bounded-context",
+      "clean-architecture"
+    ],
+    "mentions": [
+      "modular-monolith",
+      "github-repo-governance",
+      "sd-queue-logging-automation",
+      "rabbitmq-basics",
+      "pub-sub",
+      "kafka-basics",
+      "security-groups-nacl",
+      "db-types-overview",
+      "redis-basics",
+      "what-happens-google-com"
+    ]
+  },
+  "bit-manipulation": {
+    "links": [
+      "logic-gates-alu",
+      "linux-files-permissions",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "sd-unique-id-generator",
+      "bloom-filter",
+      "feature-flags"
+    ],
+    "mentions": [
+      "db-index",
+      "sd-latency-numbers",
+      "js-destructuring"
+    ]
+  },
+  "code-review-practices": {
+    "links": [
+      "github-repo-governance",
+      "git-stacked-prs",
+      "idempotency-key",
+      "race-conditions",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "architecture-docs-c4-adr",
+      "sql-query-rewrite"
+    ]
+  },
+  "ddd-tactical-patterns": {
+    "links": [
+      "ddd-bounded-context",
+      "enterprise-application-patterns",
+      "db-keys-denormalization",
+      "mvc-pattern",
+      "cqrs",
+      "transactional-outbox",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "db-sharding",
+      "js-strict-mode"
+    ]
+  },
+  "enterprise-application-patterns": {
+    "links": [
+      "ddd-tactical-patterns",
+      "mvc-pattern",
+      "hexagonal-architecture",
+      "n-plus-one-queries",
+      "clean-architecture",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "nodejs-orm-query-builder",
+      "js-spread-rest",
+      "ddd-bounded-context",
+      "pattern-proxy"
+    ]
+  },
+  "github-repo-governance": {
+    "links": [
+      "git-branching-strategy",
+      "code-review-practices",
+      "git-stacked-prs",
+      "git-large-files-secrets",
+      "dependency-hell"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "k8s-deploy-pipeline-eks",
+      "rest-api-design",
+      "token-login",
+      "build-caching"
+    ]
+  },
+  "graphql-authorization": {
+    "links": [
+      "graphql-basics",
+      "authn-vs-authz",
+      "hexagonal-architecture",
+      "graphql-client-caching"
+    ],
+    "mentions": [
+      "n-plus-one-queries",
+      "realtime-communication",
+      "rest-api-design",
+      "base64",
+      "js-pure-functions",
+      "iam-basics",
+      "redis-basics",
+      "cookie-session-login",
+      "sql-query-rewrite"
+    ]
+  },
+  "graphql-client-caching": {
+    "links": [
+      "graphql-basics",
+      "client-data-cache",
+      "api-pagination-sorting",
+      "graphql-authorization"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "loading-patterns",
+      "db-type-relational",
+      "db-modeling-normalization"
+    ]
+  },
+  "llm-api-integration": {
+    "links": [
+      "llm-basics-for-developers",
+      "mcp-protocol",
+      "spring-ai-agents",
+      "rag-classic-pipeline",
+      "http-streaming-sse",
+      "server-sent-events",
+      "resilience-patterns",
+      "rate-limiting-in-practice"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "json-crud-http",
+      "rest-api-design",
+      "cookie-session-login"
+    ]
+  },
+  "llm-basics-for-developers": {
+    "links": [
+      "llm-api-integration",
+      "mcp-protocol",
+      "rag-classic-pipeline",
+      "claude-code-context-window"
+    ],
+    "mentions": []
+  },
+  "mcp-protocol": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "claude-code-project-structure",
+      "spring-ai-agents",
+      "server-sent-events",
+      "oauth"
+    ],
+    "mentions": [
+      "api-styles-overview",
+      "ssrf",
+      "token-login",
+      "cookie-session-login",
+      "dns"
+    ]
+  },
+  "nodejs-debugging-profiling": {
+    "links": [
+      "event-loop",
+      "nodejs-server-runtime",
+      "garbage-collection",
+      "js-memory-leak",
+      "percentile-latency",
+      "nodejs-http-clients",
+      "linux-processes-signals",
+      "distributed-tracing",
+      "nodejs-error-handling"
+    ],
+    "mentions": [
+      "observability-basics",
+      "realtime-communication",
+      "bash-scripting",
+      "ssh-in-practice",
+      "regex-and-globbing",
+      "js-es-modules",
+      "sql-batch-timeout-pool",
+      "http-caching-cdn"
+    ]
+  },
+  "nodejs-error-handling": {
+    "links": [
+      "js-promises",
+      "express-middleware",
+      "nodejs-http-clients",
+      "structured-logging",
+      "nodejs-fs-streams",
+      "linux-processes-signals",
+      "resilience-patterns",
+      "nodejs-debugging-profiling"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "js-callback-hell",
+      "virtual-memory-paging",
+      "json-crud-http",
+      "k8s-architecture",
+      "centralized-logging-pipeline",
+      "event-loop",
+      "osi-in-practice",
+      "connection-pool",
+      "http-methods"
+    ]
+  },
+  "nodejs-fs-streams": {
+    "links": [
+      "backpressure",
+      "nodejs-error-handling",
+      "garbage-collection",
+      "nodejs-server-runtime",
+      "nodejs-http-clients"
+    ],
+    "mentions": [
+      "regex-and-globbing",
+      "http-streaming-sse",
+      "event-loop",
+      "js-es-modules",
+      "http-status-codes",
+      "debounce-throttle"
+    ]
+  },
+  "nodejs-http-clients": {
+    "links": [
+      "browser-fetch",
+      "timeouts",
+      "tcp-connection-lifecycle",
+      "nodejs-fs-streams",
+      "nodejs-error-handling",
+      "abort-controller",
+      "resilience-patterns",
+      "nodejs-debugging-profiling"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "https-tls",
+      "js-memory-leak",
+      "sd-payment-flow",
+      "osi-in-practice",
+      "http-status-codes",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "nodejs-orm-query-builder": {
+    "links": [
+      "n-plus-one-queries",
+      "db-migration-tools",
+      "connection-pool",
+      "hexagonal-architecture",
+      "zero-downtime-migrations"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "js-template-literals",
+      "mongodb-document-model",
+      "pattern-proxy",
+      "sql-batch-timeout-pool",
+      "sql-query-rewrite"
+    ]
+  },
+  "nodejs-web-frameworks": {
+    "links": [
+      "express-middleware",
+      "nodejs-server-runtime",
+      "fastapi-basics",
+      "api-key-hmac-auth",
+      "spring-ioc-di",
+      "serverless-limits",
+      "cold-starts",
+      "xss",
+      "rendering-ssr",
+      "hexagonal-architecture"
+    ],
+    "mentions": [
+      "linux-processes-signals",
+      "event-loop",
+      "code-review-practices",
+      "frontend-build-tooling"
+    ]
+  },
+  "openapi-spec-first": {
+    "links": [
+      "rest-api-design",
+      "api-versioning",
+      "frontend-testing-strategy",
+      "integration-tests-real-db"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "fastapi-basics",
+      "api-test-automation",
+      "http-status-codes"
+    ]
+  },
+  "password-attacks-credential-stuffing": {
+    "links": [
+      "hash-hmac-password-hashing",
+      "mfa-totp",
+      "passkeys-webauthn",
+      "rate-limiting-in-practice",
+      "rate-limiting-algorithms",
+      "api-key-hmac-auth",
+      "ddos-protection"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "redis-basics",
+      "http-status-codes",
+      "sso-saml-oidc"
+    ]
+  },
+  "regex-and-globbing": {
+    "links": [
+      "linux-grep-awk-sed",
+      "bash-scripting",
+      "git-ignore-config",
+      "recursion-backtracking",
+      "big-o-notation",
+      "structured-logging"
+    ],
+    "mentions": [
+      "centralized-logging-pipeline",
+      "sd-latency-numbers",
+      "event-loop"
+    ]
+  },
+  "smoke-sanity-regression-testing": {
+    "links": [
+      "test-design-techniques",
+      "test-pyramid-unit-tests",
+      "sit-uat-testing",
+      "ci-cd-basics",
+      "api-test-automation",
+      "tdd-bdd-atdd"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "build-caching",
+      "code-splitting",
+      "dependency-hell",
+      "k8s-deploy-pipeline-eks",
+      "osi-in-practice",
+      "frontend-monorepo"
+    ]
+  },
+  "string-search-algorithms": {
+    "links": [
+      "big-o-notation",
+      "bit-manipulation",
+      "ds-hash-map",
+      "rsync-algorithm",
+      "regex-and-globbing",
+      "binary-search",
+      "elasticsearch-inverted-index",
+      "ds-trie"
+    ],
+    "mentions": [
+      "db-index",
+      "ids-ips",
+      "event-loop",
+      "recursion-backtracking",
+      "db-modeling-normalization",
+      "core-web-vitals"
+    ]
+  },
+  "tdd-bdd-atdd": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "test-design-techniques",
+      "smoke-sanity-regression-testing",
+      "api-test-automation"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "test-design-techniques": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "smoke-sanity-regression-testing",
+      "tdd-bdd-atdd"
+    ],
+    "mentions": [
+      "sit-uat-testing",
+      "api-test-automation"
+    ]
+  },
+  "twelve-factor-app": {
+    "links": [
+      "dependency-hell",
+      "k8s-configmap",
+      "secrets-management",
+      "feature-flags",
+      "dockerfile-image-layers",
+      "helm-basics",
+      "sd-load-balancer-stateless",
+      "k8s-hpa",
+      "k8s-pod-lifecycle",
+      "rolling-deployment",
+      "docker-compose",
+      "integration-tests-real-db",
+      "structured-logging",
+      "observability-basics",
+      "db-migration-tools",
+      "k8s-job-cronjob"
+    ],
+    "mentions": [
+      "k8s-statefulset",
+      "centralized-logging-pipeline",
+      "iptables-nat",
+      "helm-dependencies-oci-gitops",
+      "message-queue-basics",
+      "docker-container-basics",
+      "spring-ioc-di",
+      "sd-payment-flow",
+      "sd-object-storage-architecture",
+      "db-type-embedded",
+      "kafka-basics",
+      "redis-basics",
+      "frontend-monorepo"
+    ]
+  },
   "aria-keyboard-focus": {
     "links": [
       "html-semantics",
@@ -10,7 +496,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa"
     ],
     "mentions": [
-      "frontend-testing-strategy"
+      "frontend-testing-strategy",
+      "smoke-sanity-regression-testing"
     ]
   },
   "browser-security-model": {
@@ -78,7 +565,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "design-system-building"
     ],
     "mentions": [
-      "rendering-strategies"
+      "rendering-strategies",
+      "smoke-sanity-regression-testing"
     ]
   },
   "design-system-building": {
@@ -93,7 +581,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "aria-keyboard-focus",
       "web-accessibility",
       "react-component-patterns",
-      "rendering-strategies"
+      "rendering-strategies",
+      "smoke-sanity-regression-testing"
     ]
   },
   "frontend-build-tooling": {
@@ -127,6 +616,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-browser-cache",
       "design-system-building",
       "react-state-management-libraries",
+      "smoke-sanity-regression-testing",
       "html-semantics",
       "web-accessibility",
       "sd-payment-flow",
@@ -146,7 +636,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-testing-strategy",
-      "rendering-strategies"
+      "nodejs-web-frameworks",
+      "rendering-strategies",
+      "code-review-practices"
     ]
   },
   "js-iterators-generators": {
@@ -215,6 +707,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-state-management-libraries",
       "event-loop",
+      "bit-manipulation",
       "core-web-vitals"
     ]
   },
@@ -355,8 +848,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-concurrent-transitions",
       "js-memoization",
       "rendering-strategies",
+      "code-review-practices",
       "react-memoization-hooks",
       "js-pure-functions",
+      "ddd-tactical-patterns",
       "react-rerender",
       "js-primitive-vs-reference"
     ]
@@ -658,6 +1153,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-cloud-vs-kubernetes"
     ],
     "mentions": [
+      "mcp-protocol",
       "api-styles-overview",
       "resilience-patterns",
       "redis-basics",
@@ -700,14 +1196,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-latency-numbers",
-      "ds-hash-map"
+      "ds-hash-map",
+      "bit-manipulation"
     ]
   },
   "logic-gates-alu": {
     "links": [
       "cpu-instruction-cycle"
     ],
-    "mentions": []
+    "mentions": [
+      "bit-manipulation"
+    ]
   },
   "aws-ec2-ubuntu-server-setup": {
     "links": [
@@ -776,6 +1275,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting",
       "jenkins-pipeline-basics",
       "git-branch-merge",
+      "github-repo-governance",
       "cache-write-policies",
       "git-undo",
       "helm-dependencies-oci-gitops",
@@ -1168,6 +1668,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "react-memoization-hooks",
       "loading-patterns",
+      "ddd-tactical-patterns",
       "db-modeling-normalization"
     ]
   },
@@ -1302,6 +1803,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ds-hash-map",
+      "bit-manipulation",
       "redis-basics"
     ]
   },
@@ -1352,7 +1854,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "waf"
     ],
     "mentions": [
-      "hash-hmac-password-hashing"
+      "password-attacks-credential-stuffing",
+      "hash-hmac-password-hashing",
+      "code-review-practices"
     ]
   },
   "web-security-headers": {
@@ -1395,7 +1899,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cookie-session-login",
+      "password-attacks-credential-stuffing",
       "oauth",
+      "bit-manipulation",
       "db-modeling-normalization"
     ]
   },
@@ -1410,7 +1916,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "frontend-testing-strategy",
       "base64",
-      "digital-signatures-certificates"
+      "digital-signatures-certificates",
+      "bit-manipulation"
     ]
   },
   "stream-processing": {
@@ -1565,7 +2072,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-binary-tree-bst",
       "ds-graph-bfs-dfs"
     ],
-    "mentions": []
+    "mentions": [
+      "regex-and-globbing"
+    ]
   },
   "binary-search": {
     "links": [
@@ -1579,7 +2088,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "api-scaling-ladder",
-      "sql-filtering-operators"
+      "sql-filtering-operators",
+      "bit-manipulation"
     ]
   },
   "sorting-algorithms": {
@@ -1664,6 +2174,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "bit-manipulation",
       "sd-maps-tiles-routing",
       "bloom-filter"
     ]
@@ -1935,6 +2446,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branching-strategy"
     ],
     "mentions": [
+      "github-repo-governance",
       "build-caching",
       "tsconfig-strict",
       "http-caching-cdn",
@@ -2003,7 +2515,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "fp-in-react"
     ],
-    "mentions": []
+    "mentions": [
+      "nodejs-orm-query-builder"
+    ]
   },
   "fp-composition-pipe": {
     "links": [
@@ -2125,6 +2639,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-testing-strategy",
+      "smoke-sanity-regression-testing",
       "html-semantics",
       "loading-patterns"
     ]
@@ -2254,6 +2769,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pessimistic-locking",
+      "nodejs-web-frameworks",
       "http-caching-cdn",
       "sd-object-storage-architecture",
       "event-loop",
@@ -2351,7 +2867,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs"
     ],
     "mentions": [
+      "nodejs-web-frameworks",
       "js-memory-leak",
+      "string-search-algorithms",
       "ds-hash-map",
       "big-o-notation"
     ]
@@ -2501,6 +3019,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "http-status-codes",
       "ssrf",
+      "mcp-protocol",
       "sql-query-rewrite",
       "gateway"
     ]
@@ -2519,10 +3038,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "long-polling"
     ],
     "mentions": [
+      "nodejs-fs-streams",
       "browser-fetch",
       "elasticsearch-inverted-index",
       "json-crud-http",
       "rendering-strategies",
+      "nodejs-http-clients",
       "http-status-codes",
       "what-happens-google-com",
       "grpc"
@@ -2541,6 +3062,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "edge-caching",
+      "graphql-client-caching",
       "observability-basics",
       "pattern-iterator",
       "realtime-communication",
@@ -2584,7 +3106,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-tips-advanced",
-      "postgres-architecture"
+      "postgres-architecture",
+      "mcp-protocol"
     ]
   },
   "claude-code-parallel-and-scheduled": {
@@ -2598,6 +3121,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "docker-compose",
       "git-branch-merge",
+      "github-repo-governance",
       "postgres-architecture"
     ]
   },
@@ -2608,7 +3132,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
-      "postgres-architecture"
+      "postgres-architecture",
+      "mcp-protocol"
     ]
   },
   "claude-code-extensions": {
@@ -2619,7 +3144,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-remote-collaboration",
-      "osi-in-practice"
+      "code-review-practices",
+      "osi-in-practice",
+      "mcp-protocol"
     ]
   },
   "claude-code-project-structure": {
@@ -2630,6 +3157,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-fundamentals-map"
     ],
     "mentions": [
+      "mcp-protocol",
       "git-ignore-config",
       "git-tips-advanced",
       "fp-composition-pipe"
@@ -2786,6 +3314,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks"
     ],
     "mentions": [
+      "github-repo-governance",
       "realtime-communication",
       "docker-container-basics",
       "jenkins-on-kubernetes",
@@ -3143,6 +3672,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "autoscaling",
+      "code-review-practices",
       "race-conditions",
       "osi-in-practice",
       "sql-batch-timeout-pool",
@@ -3210,11 +3740,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "postgres-connections-pg-hba",
       "sql-insert-update-delete",
+      "nodejs-orm-query-builder",
       "event-loop",
       "osi-in-practice",
       "db-index-design",
       "ports-and-sockets",
       "http-status-codes",
+      "api-test-automation",
       "ipv6-basics",
       "postgres-getting-started"
     ]
@@ -3233,6 +3765,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "microservices",
       "db-type-embedded",
+      "code-review-practices",
       "react-custom-hooks-rules"
     ]
   },
@@ -3299,6 +3832,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
+      "smoke-sanity-regression-testing",
       "db-index-design",
       "web-accessibility",
       "kafka-basics",
@@ -3314,7 +3848,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
-      "kafka-basics"
+      "kafka-basics",
+      "llm-basics-for-developers"
     ]
   },
   "caching-concepts-map": {
@@ -3452,6 +3987,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "js-memory-leak",
       "schema-versioning",
+      "architecture-docs-c4-adr",
       "db-modeling-normalization",
       "on-call",
       "webhooks"
@@ -4169,6 +4705,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-propagation"
     ],
     "mentions": [
+      "nodejs-http-clients",
       "frontend-testing-strategy",
       "js-pure-functions",
       "http-status-codes",
@@ -4547,6 +5084,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "db-sharding",
       "db-type-key-value",
+      "bit-manipulation",
       "high-availability"
     ]
   },
@@ -5589,6 +6127,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-driven-architecture"
     ],
     "mentions": [
+      "ddd-tactical-patterns",
       "monolith-architecture",
       "db-locking-deadlock",
       "http-status-codes"
@@ -5605,6 +6144,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "tsconfig-strict",
+      "ddd-tactical-patterns",
       "react-custom-hooks-rules",
       "http-status-codes"
     ]
@@ -5624,6 +6164,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-currying-partial",
       "pattern-proxy",
       "http-status-codes",
+      "ddd-tactical-patterns",
       "grpc",
       "frontend-testing-strategy"
     ]
@@ -5656,6 +6197,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-useeffect",
       "js-pure-functions",
+      "ddd-tactical-patterns",
       "react-custom-hooks-rules"
     ]
   },
@@ -5683,6 +6225,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "hydration",
       "graphql-basics",
+      "nodejs-orm-query-builder",
       "rendering-strategies"
     ]
   },
@@ -5760,7 +6303,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "js-strict-mode",
       "rendering-strategies",
-      "js-function-forms"
+      "js-function-forms",
+      "ddd-tactical-patterns"
     ]
   },
   "js-immutability-react": {
@@ -5829,6 +6373,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-timers-accuracy",
       "frontend-testing-strategy",
+      "smoke-sanity-regression-testing",
       "web-accessibility",
       "parallax-scrollytelling"
     ]
@@ -6083,7 +6628,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-build-tooling",
       "js-classes",
       "js-es-modules",
-      "js-truthy-falsy-typeof"
+      "js-truthy-falsy-typeof",
+      "ddd-tactical-patterns"
     ]
   },
   "sql-aggregation-pitfalls": {
@@ -6142,7 +6688,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-array-mutation"
     ],
     "mentions": [
-      "js-execution-context"
+      "js-execution-context",
+      "ddd-tactical-patterns"
     ]
   },
   "js-destructuring": {
@@ -6245,7 +6792,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-styles-overview",
       "rendering-strategies",
       "js-function-forms",
-      "http-status-codes"
+      "http-status-codes",
+      "ddd-tactical-patterns"
     ]
   },
   "js-callback-hell": {
@@ -6260,6 +6808,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "abort-controller"
     ],
     "mentions": [
+      "nodejs-error-handling",
       "json-crud-http",
       "react-state-snapshot-batching",
       "message-delivery-semantics",
@@ -6279,6 +6828,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-basics",
       "graphql-basics",
+      "nodejs-web-frameworks",
       "sd-start-single-server",
       "http-caching-cdn",
       "react-custom-hooks-rules",
@@ -6419,7 +6969,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "react-useeffect",
-      "react-memoization-hooks"
+      "react-memoization-hooks",
+      "ddd-tactical-patterns"
     ]
   },
   "ddos-protection": {
@@ -6744,6 +7295,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
+      "smoke-sanity-regression-testing",
       "cron-jobs",
       "helm-basics",
       "k8s-labels-selectors",
@@ -6764,6 +7316,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cri-cni-csi",
       "k8s-architecture",
       "helm-basics",
+      "nodejs-web-frameworks",
       "iam-basics",
       "base64",
       "sd-object-storage-architecture",
@@ -7773,6 +8326,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "service-mesh",
       "iptables-nat",
+      "code-review-practices",
       "security-groups-nacl",
       "osi-in-practice",
       "client-data-cache",
@@ -8040,9 +8594,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "timeouts"
     ],
     "mentions": [
+      "nodejs-http-clients",
       "browser-fetch",
       "docker-container-basics",
       "iptables-basics",
+      "code-review-practices",
       "tail-latency",
       "network-config-cicd",
       "vpc-basics",
@@ -8177,6 +8733,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics"
     ],
     "mentions": [
+      "twelve-factor-app",
       "k8s-architecture",
       "bash-scripting",
       "git-staging-area",
@@ -8355,7 +8912,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "owasp-top-10-map",
+      "nodejs-web-frameworks",
       "sql-injection",
+      "code-review-practices",
       "bundler-basics"
     ]
   },
@@ -8497,6 +9056,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "docker-container-basics",
       "realtime-communication",
+      "smoke-sanity-regression-testing",
       "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",
       "autoscaling",
@@ -8785,6 +9345,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "k8s-pod-probes",
       "k8s-deploy-pipeline-eks",
+      "nodejs-orm-query-builder",
+      "code-review-practices",
       "rolling-deployment",
       "sql-basics"
     ]
@@ -8803,6 +9365,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "db-architecture-by-scale",
       "graphql-basics",
+      "nodejs-orm-query-builder",
+      "code-review-practices",
       "vpc-basics",
       "sql-batch-timeout-pool",
       "redis-basics"
@@ -8861,6 +9425,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-state-snapshot-batching",
       "sd-start-single-server",
       "db-locking-deadlock",
+      "code-review-practices",
       "sql-batch-timeout-pool",
       "redis-basics",
       "resilience-patterns",
@@ -8991,6 +9556,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-queue-logging-automation",
       "kafka-basics",
       "http-status-codes",
+      "api-test-automation",
       "webhooks"
     ]
   },
@@ -9121,6 +9687,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "rabbitmq-basics",
       "tcp-connection-lifecycle",
+      "nodejs-http-clients",
       "event-loop",
       "kafka-basics",
       "http-status-codes"
@@ -9334,6 +9901,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "fp-in-react",
       "js-promises",
       "react-useeffect",
+      "ddd-tactical-patterns",
       "rendering-strategies",
       "design-patterns-overview"
     ]
@@ -9360,6 +9928,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "react-state-snapshot-batching",
+      "nodejs-web-frameworks",
       "js-pure-functions",
       "cqrs",
       "design-patterns-overview"
@@ -9406,6 +9975,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "code-review-practices",
       "design-patterns-overview"
     ]
   },
@@ -9425,6 +9995,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "express-middleware",
       "sorting-algorithms",
       "ab-testing",
+      "nodejs-web-frameworks",
       "spring-ioc-di",
       "redis-basics",
       "js-closures",
@@ -9608,6 +10179,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "operational-transform",
+      "ddd-tactical-patterns",
       "bullmq-job-queue",
       "redis-basics",
       "microservices",
@@ -9778,6 +10350,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
+      "nodejs-debugging-profiling",
       "spring-boot-on-kubernetes",
       "bash-scripting",
       "osi-in-practice",
@@ -9813,6 +10386,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "passkeys-webauthn",
       "high-availability",
       "authn-vs-authz",
+      "code-review-practices",
       "sso-saml-oidc",
       "https-tls",
       "vpc-basics",
@@ -10273,7 +10847,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-map-set-weak",
       "js-object-methods",
       "js-strict-mode",
-      "js-es-modules"
+      "js-es-modules",
+      "ddd-tactical-patterns"
     ]
   },
   "pattern-facade": {
@@ -10307,6 +10882,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "nodejs-web-frameworks",
+      "code-review-practices",
       "js-first-class-callbacks",
       "resilience-patterns",
       "http-methods"
@@ -10324,7 +10901,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-execution-context",
       "typescript-in-react",
       "ds-graph-bfs-dfs",
-      "ts-narrowing"
+      "ts-narrowing",
+      "code-review-practices"
     ]
   },
   "dead-letter-queue": {
@@ -10530,6 +11108,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
+      "nodejs-orm-query-builder",
       "resilience-patterns",
       "http-methods"
     ]
@@ -10580,6 +11159,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "reverse-proxy-lb-api-gateway",
       "packet-capture-tcpdump",
+      "nodejs-http-clients",
       "deadlocks",
       "what-happens-google-com",
       "grpc",
@@ -10726,6 +11306,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-probes",
       "test-pyramid-unit-tests",
+      "nodejs-orm-query-builder",
       "sql-batch-timeout-pool",
       "design-patterns-overview"
     ]
@@ -10742,6 +11323,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-jsx-components",
       "js-object-methods",
+      "code-review-practices",
       "sd-email-protocols"
     ]
   },
@@ -10758,9 +11340,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "hexagonal-architecture",
       "cron-jobs",
+      "nodejs-orm-query-builder",
+      "nodejs-web-frameworks",
       "react-state-snapshot-batching",
       "spring-ioc-di",
       "thread-safety",
+      "code-review-practices",
       "js-es-modules",
       "leader-election",
       "sql-batch-timeout-pool"
@@ -10796,6 +11381,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "spring-ioc-di",
+      "code-review-practices",
       "sql-batch-timeout-pool",
       "js-closures"
     ]
@@ -11211,7 +11797,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-project-structure",
       "k8s-pod-basics",
-      "k8s-architecture"
+      "k8s-architecture",
+      "nodejs-web-frameworks"
     ]
   },
   "helm-basics": {
@@ -11828,6 +12415,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mysql-innodb-basics",
       "loading-patterns",
       "db-index-design",
+      "code-review-practices",
+      "nodejs-orm-query-builder",
       "sql-subqueries-exists-lateral",
       "sql-joins-in-practice",
       "pattern-proxy",
@@ -11916,6 +12505,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sqld-group-by-having",
+      "code-review-practices",
       "postgres-getting-started"
     ]
   },
@@ -12110,6 +12700,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "k8s-cni-pod-network",
       "ssrf",
+      "bit-manipulation",
       "nat-traversal",
       "security-groups-nacl",
       "vpc-basics",
@@ -12407,6 +12998,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-mq-storage-partitions",
       "page-cache-disk-io",
       "mysql-innodb-basics",
+      "bit-manipulation",
       "db-type-relational",
       "acid-transactions"
     ]
@@ -12585,6 +13177,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-tips-advanced",
+      "github-repo-governance",
       "git-staging-area"
     ]
   },
@@ -12610,6 +13203,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "github-actions-docker-ecr",
+      "github-repo-governance",
       "git-stash-reflog",
       "token-login",
       "what-happens-google-com",
@@ -12624,6 +13218,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "semantic-versioning"
     ],
     "mentions": [
+      "github-repo-governance",
       "k8s-deploy-pipeline-eks",
       "ab-testing",
       "api-versioning",
@@ -12656,6 +13251,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-branch-merge",
+      "github-repo-governance",
       "dockerfile-image-layers"
     ]
   },
@@ -12708,6 +13304,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "ds-graph-bfs-dfs",
       "sqld-group-by-having",
+      "regex-and-globbing",
       "sql-cte-recursive",
       "sql-case-when",
       "js-closures"
@@ -13151,6 +13748,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "nodejs-debugging-profiling",
       "ds-binary-tree-bst",
       "sorting-algorithms",
       "js-execution-context",
@@ -13158,6 +13756,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization",
       "sql-filtering-operators",
       "event-loop",
+      "regex-and-globbing",
       "ds-array-matrix"
     ]
   },
@@ -13428,6 +14027,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "nodejs-http-clients",
       "html-form-http",
       "client-data-cache",
       "json-crud-http",
@@ -13454,6 +14054,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "openapi-spec-first",
       "n-plus-one-queries",
       "api-versioning",
       "base64",
@@ -13555,6 +14156,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-suspense-error-boundary",
       "css-styling-approaches",
+      "github-repo-governance",
       "build-caching",
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
@@ -13618,7 +14220,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "enterprise-application-patterns",
+      "nodejs-web-frameworks",
       "pattern-observer",
+      "code-review-practices",
       "js-pure-functions",
       "pattern-proxy",
       "http-status-codes",
@@ -13948,6 +14553,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "logging-tools-overview",
+      "api-key-hmac-auth",
       "token-login",
       "cookie-session-login"
     ]

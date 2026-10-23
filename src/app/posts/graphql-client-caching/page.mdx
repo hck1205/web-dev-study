@@ -1,0 +1,446 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("graphql-client-caching");
+
+<EasyIntro>
+  학교 도서관에 같은 책이 여러 반의 추천 목록에 올라 있다고 해 보자. 반마다 책을 한 권씩 따로 사 두면, 누가 한 권에 메모를 고쳐도 다른 반 책은 그대로다. 그래서 도서관은 책을 한 권만 두고 반 목록에는 "몇 번 서가의 그 책"이라는 표시만 적어 둔다. 그러면 책 한 권을 고치면 모든 목록에서 고친 책이 보인다.
+
+  GraphQL 클라이언트의 캐시도 이렇게 생겼다. 서버에서 받은 데이터를 종류와 번호로 한 칸씩 나눠 두고, 화면마다 받은 목록에는 그 칸을 가리키는 표시만 남긴다. 할 일 하나를 완료로 바꾸면 그 칸만 고쳐도 그 할 일이 보이는 모든 화면이 함께 바뀐다.
+
+  대신 이 방식이 모르는 일도 있다. 새 책이 들어왔을 때 어느 반 목록에 넣어야 하는지는 도서관이 알 수 없다. 그래서 새 항목을 추가하면 목록에 넣는 일은 직접 알려 줘야 한다. 이 글은 그 칸 나누기가 어떻게 돌아가는지, 그리고 어디서 화면이 안 바뀌는지를 직접 돌려 보며 살펴본다.
+</EasyIntro>
+
+## 추가했는데 목록이 그대로다
+
+할 일 앱을 Apollo Client로 만들었다. 목록 화면은 `todos` 쿼리로 그리고, 체크박스를 누르면 `toggleTodo` 뮤테이션을, 입력창에서 Enter를 누르면 `addTodo` 뮤테이션을 보낸다. 체크박스는 누르자마자 목록에 반영되는데, 새 할 일은 서버에 잘 저장됐는데도 목록에 안 나타난다. 새로고침해야 보인다.
+
+둘 다 뮤테이션 하나고, 둘 다 서버 응답이 정상이다. 차이는 캐시가 응답을 어떻게 받아들이느냐에 있다. 체크박스 쪽은 "이미 아는 객체의 필드가 바뀌었다"는 응답이고, 추가 쪽은 "처음 보는 객체가 생겼다"는 응답이다. 캐시는 앞의 것은 알아서 처리하고 뒤의 것은 못 한다.
+
+이 글은 GraphQL 클라이언트가 응답을 저장하는 두 방식(정규화 캐시와 문서 캐시)을 Apollo Client와 urql로 돌려 보고, Relay가 다른 길을 가는 이유와 TanStack Query로 GraphQL을 부르는 선택까지 비교한다. 서버 쪽 GraphQL(스키마, 리졸버, persisted query)은 [GraphQL 기초](/posts/graphql-basics)에, REST 응답을 TanStack Query로 캐시하는 방법(쿼리 키, `staleTime`, 무효화)은 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있다. 데모는 Node.js 22, `@apollo/client` 3.14, `@urql/core` 6.0으로 돌렸다. 캐시 객체만 꺼내 쓰면 React 없이도 동작을 확인할 수 있다.
+
+## 응답을 종류와 번호로 쪼개 둔다
+
+Apollo Client의 `InMemoryCache`에 할 일 두 개짜리 응답을 넣고 캐시 내용을 꺼내 봤다.
+
+```js
+const cache = new InMemoryCache();
+cache.writeQuery({
+  query: gql`query Todos { todos { id title done } }`,
+  data: { todos: [
+    { __typename: "Todo", id: "1", title: "우유 사기", done: false },
+    { __typename: "Todo", id: "2", title: "글 쓰기", done: false },
+  ] },
+});
+console.log(JSON.stringify(cache.extract(), null, 1));
+```
+
+```text
+{
+ "Todo:1": {
+  "__typename": "Todo",
+  "id": "1",
+  "title": "우유 사기",
+  "done": false
+ },
+ "Todo:2": {
+  "__typename": "Todo",
+  "id": "2",
+  "title": "글 쓰기",
+  "done": false
+ },
+ "ROOT_QUERY": {
+  "__typename": "Query",
+  "todos": [
+   {
+    "__ref": "Todo:1"
+   },
+   {
+    "__ref": "Todo:2"
+   }
+  ]
+ }
+}
+```
+
+응답은 트리 모양이었는데 캐시는 평평한 표가 됐다. 객체마다 `__typename`과 `id`를 이어 붙인 `Todo:1` 같은 키로 한 칸씩 들어갔고, 쿼리 결과(`ROOT_QUERY.todos`)에는 객체 대신 `__ref` 표시만 남았다. 이것이 정규화 캐시(normalized cache)다. 관계형 DB에서 같은 데이터를 한 곳에만 두는 정규화와 같은 생각이다.
+
+`__typename`은 쿼리에 적지 않아도 Apollo가 요청을 보낼 때 모든 선택 집합에 자동으로 붙인다. `id`는 자동으로 붙지 않는다. 쿼리에서 `id`를 빼면 그 객체는 키를 만들 수 없어 부모 안에 통째로 박힌다. 키 필드가 `id`가 아닌 타입(`isbn`, `sku`)은 `typePolicies`의 `keyFields`로 알려 준다.
+
+같은 객체가 여러 쿼리에 나와도 칸은 하나다. 아래 그림에서 `todos(all)`과 `todos(open)`은 서로 다른 쿼리 결과지만 같은 `Todo:2` 칸을 가리킨다. 점이 흐르는 방향이 참조 방향이다.
+
+<ConceptDiagram
+  caption="정규화 캐시: 쿼리 결과는 참조 목록이고, 객체는 한 칸에만 있다"
+  width={640}
+  height={300}
+  nodes={[
+    { id: "all", label: "todos(all)", sub: "ROOT_QUERY", x: 100, y: 70, w: 140 },
+    { id: "open", label: "todos(open)", sub: "ROOT_QUERY", x: 100, y: 160, w: 140 },
+    { id: "me", label: "me", sub: "ROOT_QUERY", x: 100, y: 250, w: 140 },
+    { id: "t1", label: "Todo:1", sub: "우유 사기", x: 360, y: 70, w: 130 },
+    { id: "t2", label: "Todo:2", sub: "글 쓰기", x: 360, y: 180, w: 130 },
+    { id: "u9", label: "User:9", sub: "lee", x: 560, y: 250, w: 120 },
+  ]}
+  edges={[
+    { from: "all", to: "t1" },
+    { from: "all", to: "t2" },
+    { from: "open", to: "t1" },
+    { from: "open", to: "t2" },
+    { from: "me", to: "u9" },
+    { from: "t2", to: "u9", label: "owner" },
+  ]}
+/>
+
+인자가 다른 같은 필드는 다른 칸이다. `todos(filter: "all")`과 `todos(filter: "open")`을 각각 넣으면 `ROOT_QUERY`의 키가 이렇게 나뉜다.
+
+```text
+[ '__typename', 'todos({"filter":"all"})', 'todos({"filter":"open"})' ]
+```
+
+정규화는 직접 짜 보면 금방 손에 익는다. 응답 트리를 내려가며 `__typename`과 `id`가 있는 객체는 표에 넣고 그 자리에 참조를 남기면 된다. 같은 객체가 두 번 나오면 필드를 합친다.
+
+<CodePlayground
+  caption="응답 트리를 정규화 캐시로 바꾸기"
+  functionName="check"
+  initialCode={`function normalize(data) {
+  // __typename과 id가 둘 다 있는 객체는 store["Type:id"]에 넣고
+  // 그 자리에는 { __ref: "Type:id" }를 남긴다.
+  // 같은 키가 또 나오면 필드를 합친다. 배열은 원소마다 처리한다.
+  // id가 없는 객체는 부모 안에 그대로 둔다.
+  // 루트 결과는 store.ROOT_QUERY에 넣는다.
+  const store = {};
+  return store;
+}
+
+// 결과를 비교하기 쉽게 키를 정렬한다 (고치지 않는다)
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v === null || typeof v !== "object") return v;
+  return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]));
+}
+function check(data) { return sortKeys(normalize(data)); }`}
+  solution={`function normalize(data) {
+  const store = {};
+  const visit = (v) => {
+    if (Array.isArray(v)) return v.map(visit);
+    if (v === null || typeof v !== "object") return v;
+    const out = {};
+    for (const [k, x] of Object.entries(v)) out[k] = visit(x); // 자식부터
+    if (v.__typename && v.id != null) {
+      const key = v.__typename + ":" + v.id;
+      store[key] = { ...store[key], ...out };                 // 같은 칸이면 합친다
+      return { __ref: key };
+    }
+    return out;                                               // id 없으면 박아 둔다
+  };
+  store.ROOT_QUERY = visit(data);
+  return store;
+}
+
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v === null || typeof v !== "object") return v;
+  return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]));
+}
+function check(data) { return sortKeys(normalize(data)); }`}
+  tests={[
+    { label: "객체 하나", args: [{ me: { __typename: "User", id: "1", name: "kim" } }], expected: { ROOT_QUERY: { me: { __ref: "User:1" } }, "User:1": { __typename: "User", id: "1", name: "kim" } } },
+    { label: "목록", args: [{ todos: [{ __typename: "Todo", id: "1", done: false }, { __typename: "Todo", id: "2", done: true }] }], expected: { ROOT_QUERY: { todos: [{ __ref: "Todo:1" }, { __ref: "Todo:2" }] }, "Todo:1": { __typename: "Todo", done: false, id: "1" }, "Todo:2": { __typename: "Todo", done: true, id: "2" } } },
+    { label: "중첩과 합치기", args: [{ todos: [{ __typename: "Todo", id: "1", owner: { __typename: "User", id: "9", name: "lee" } }], me: { __typename: "User", id: "9", email: "lee@ex.com" } }], expected: { ROOT_QUERY: { me: { __ref: "User:9" }, todos: [{ __ref: "Todo:1" }] }, "Todo:1": { __typename: "Todo", id: "1", owner: { __ref: "User:9" } }, "User:9": { __typename: "User", email: "lee@ex.com", id: "9", name: "lee" } } },
+    { label: "id 없는 객체", args: [{ stats: { __typename: "Stats", count: 3 } }], expected: { ROOT_QUERY: { stats: { __typename: "Stats", count: 3 } } } },
+    { label: "같은 객체 두 번", args: [{ a: { __typename: "Todo", id: "1", title: "x" }, b: { __typename: "Todo", id: "1", done: true } }], expected: { ROOT_QUERY: { a: { __ref: "Todo:1" }, b: { __ref: "Todo:1" } }, "Todo:1": { __typename: "Todo", done: true, id: "1", title: "x" } } },
+  ]}
+/>
+
+셋째 테스트에서 `todos` 쪽에서 본 lee의 `name`과 `me` 쪽에서 본 `email`이 `User:9` 한 칸에 합쳐졌다. 정규화 캐시의 장점이 여기서 나온다. 어느 쿼리로 받았든 같은 사람에 대한 정보는 한곳에 모인다.
+
+## 바뀐 필드는 알아서, 새 항목은 직접
+
+이제 처음 장면으로 돌아가자. 체크박스를 누르면 `toggleTodo(id: "2")`의 응답이 온다. 응답에 `id`와 바뀐 필드만 들어 있어도 캐시는 그걸 `Todo:2` 칸에 덮어쓴다. 칸을 가리키는 모든 쿼리 결과가 바뀐 값으로 읽힌다.
+
+```text
+== after toggle
+{"todos":[{"__typename":"Todo","id":"1","title":"우유 사기","done":false},{"__typename":"Todo","id":"2","title":"글 쓰기","done":true}]}
+```
+
+같은 뮤테이션을 선택 집합에서 `id`를 빼고 보내 봤다.
+
+```graphql
+mutation { toggle(id: "2") { done } }        # id 없음
+mutation { toggle(id: "2") { id done } }     # id 있음
+```
+
+```text
+no id in response : ["1:false","2:false"]
+with id           : ["1:false","2:true"]
+```
+
+`id`가 없으면 캐시는 이 `done`이 어느 칸의 것인지 모른다. 서버는 바뀌었는데 화면은 그대로다. 뮤테이션 선택 집합에 `id`와 화면에 보이는 필드를 함께 받는 것이 정규화 캐시를 쓰는 첫째 규칙이다.
+
+새 할 일을 추가하는 `addTodo`는 사정이 다르다. 응답의 `Todo:3`은 캐시에 칸이 생기지만, `ROOT_QUERY.todos` 목록에는 여전히 참조가 두 개뿐이다.
+
+```text
+== after add (no update)
+["1","2"]
+```
+
+캐시는 새 객체가 어느 목록에 들어가야 하는지 모른다. 전체 목록에 들어가야 할 수도, `filter: "open"` 목록에만 들어가야 할 수도, 정렬 기준에 따라 맨 앞이나 맨 뒤에 들어가야 할 수도 있다. 이건 업무 규칙이라 캐시가 짐작할 수 없다. 그래서 개발자가 알려 준다.
+
+```ts
+const [addTodo] = useMutation(ADD_TODO, {
+  update(cache, { data }) {
+    if (!data) return;
+    cache.modify({
+      fields: {
+        // ROOT_QUERY.todos 목록 끝에 새 참조를 붙인다
+        todos(existing = [], { toReference }) {
+          return [...existing, toReference(data.addTodo)];
+        },
+      },
+    });
+  },
+});
+```
+
+```text
+== after modify
+["1","2","3"]
+```
+
+지울 때도 같다. `deleteTodo`의 응답이 `id`만 돌려주면 캐시는 그 칸을 지워야 하는지 모른다. `cache.evict({ id: cache.identify(todo) })`로 칸을 지우고 `cache.gc()`로 아무도 가리키지 않는 칸을 정리한다. 지운 칸을 가리키던 목록의 참조는 Apollo가 읽을 때 걸러 준다.
+
+```text
+== after evict
+["2","3"]
+```
+
+손으로 고치기가 번거로우면 `refetchQueries: ["Todos"]`로 목록 쿼리를 다시 받는 방법이 있다. 코드는 간단하지만 요청이 한 번 더 나가고, 목록이 크면 그만큼 느리다. 목록이 작거나 정렬·필터 규칙이 복잡해 클라이언트에서 재현하기 어려우면 다시 받는 쪽이 낫다.
+
+## 필터가 걸린 목록은 직접 맞춰야 한다
+
+정규화 캐시가 알아서 해 주는 것은 "칸 안의 값"까지다. 목록에 누가 들어 있는지는 건드리지 않는다. `filter: "open"`(미완료) 목록을 받아 둔 상태에서 `Todo:2`를 완료로 바꿔 봤다.
+
+```text
+with id           : ["1:false","2:true"]
+```
+
+앞에서 본 이 결과는 사실 `todos(filter: "open")`을 읽은 것이다. 완료된 할 일이 미완료 목록에 `done: true`로 그대로 남아 있다. 캐시 입장에서는 칸 값을 고쳤을 뿐이고, 목록에서 빼야 한다는 건 "open은 done이 false인 것"이라는 서버 규칙을 알아야 한다. 탭이 "전체 / 미완료"로 나뉜 화면이라면, 토글 뮤테이션에도 `update`에서 `todos(open)` 목록을 고치거나 그 목록을 다시 받게 해야 한다. `cache.modify`의 필드 함수는 인자가 다른 칸마다 불리고, 두 번째 인자의 `storeFieldName`이나 `args`로 어느 필터의 목록인지 구분할 수 있다.
+
+페이지가 나뉜 목록에도 같은 문제가 있다. 무한 스크롤에서 `feed(after: $cursor)`를 두 번 받으면 기본 동작은 인자마다 칸을 따로 만든다.
+
+```text
+{"__typename":"Query","feed({\"after\":null})":[{"__ref":"Post:p1"},{"__ref":"Post:p2"}],"feed({\"after\":\"p2\"})":[{"__ref":"Post:p3"}]}
+```
+
+화면은 한 목록을 이어서 보여 주고 싶은데 캐시는 두 목록을 갖고 있다. `typePolicies`에서 `keyArgs: false`로 커서 인자를 칸 이름에서 빼고, `merge`로 이어 붙이게 한다.
+
+```ts
+new InMemoryCache({
+  typePolicies: {
+    Query: {
+      fields: {
+        feed: {
+          keyArgs: false, // 커서가 달라도 같은 칸
+          merge(existing = [], incoming) { return [...existing, ...incoming]; },
+        },
+      },
+    },
+  },
+});
+```
+
+```text
+{"__typename":"Query","feed":[{"__ref":"Post:p1"},{"__ref":"Post:p2"},{"__ref":"Post:p3"}]}
+```
+
+`keyArgs: false`는 인자를 전부 무시한다는 뜻이라, 커서 말고 필터 인자도 있다면 `keyArgs: ["filter"]`처럼 칸을 나눌 인자만 적는다. 그러지 않으면 필터를 바꿔도 옛 필터 결과 뒤에 이어 붙는다. Apollo의 `relayStylePagination()`, `offsetLimitPagination()` 도우미가 이 패턴을 미리 만들어 둔 것이다. 커서 방식과 오프셋 방식의 차이는 [API 페이지네이션](/posts/api-pagination-sorting)에 있다.
+
+## id 없는 객체가 서로를 지운다
+
+정규화가 안 되는 객체에는 다른 함정이 있다. 사용자 설정 `settings`에 `id`가 없는데, 화면 A는 `theme`만, 화면 B는 `lang`만 묻는다고 하자. 둘을 차례로 캐시에 쓰면 Apollo가 개발 모드에서 경고를 낸다.
+
+```text
+An error occurred! For more details, see the full error text at https://go.apollo.dev/c/err#%7B%22version%22%3A%223.14.1%22%2C%22message%22%3A15%2C%22args%22%3A%5B%22settings%22%2C%22User%22%2C%22either%20ensure%20all%20objects%20of%20type%20Settings%20have%20an%20ID%20or%20a%20custom%20merge%20function%2C%20or%20%22%2C%22User.settings%22%2C%22%7B%5Cn%20%20%5C%22__typename%5C%22%3A%20%5C%22Settings%5C%22%2C%5Cn%20%20%5C%22theme%5C%22%3A%20%5C%22dark%5C%22%5Cn%7D%22%2C%22%7B%5Cn%20%20%5C%22__typename%5C%22%3A%20%5C%22Settings%5C%22%2C%5Cn%20%20%5C%22lang%5C%22%3A%20%5C%22ko%5C%22%5Cn%7D%22%5D%7D
+{"__typename":"User","id":"1","settings":{"__typename":"Settings","lang":"ko"}}
+read A: null
+```
+
+링크를 열면 "Cache data may be lost when replacing the settings field of a User object"라는 문구다. `id`가 없으니 두 `settings`가 같은 객체인지 알 수 없어 B의 응답이 A의 것을 통째로 갈아 끼웠다. A의 쿼리를 다시 읽으면 `theme`이 없어 `null`이 나온다. 기본 정책(`cache-first`)에서 이러면 A는 서버에 다시 묻는다. 두 화면이 동시에 떠 있으면 서로를 덮어쓰며 같은 요청이 계속 반복되는 증상으로 나타날 수 있다. 네트워크 탭에 같은 쿼리가 끝없이 찍힌다면 이걸 먼저 의심한다.
+
+고치는 방법은 둘이다. 객체에 `id`를 주거나(`keyFields`로 다른 키를 지정하거나), "이 타입은 같은 부모 아래면 합쳐도 된다"고 알려 준다.
+
+```ts
+new InMemoryCache({ typePolicies: { Settings: { merge: true } } });
+```
+
+```text
+{"__typename":"User","id":"1","settings":{"__typename":"Settings","theme":"dark","lang":"ko"}}
+read A: {"me":{"__typename":"User","id":"1","settings":{"__typename":"Settings","theme":"dark"}}}
+```
+
+반대 방향의 실수도 있다. 서로 다른 객체가 같은 `__typename:id`를 갖는 경우다. 언어별 상품 정보가 `Product:42` 하나로 들어오거나, 버전마다 내용이 다른 문서가 같은 `id`를 쓰면 마지막에 받은 것이 이전 것을 덮어쓴다. 한국어 화면에 영어 상품명이 뜬다면 `keyFields: ["id", "locale"]`처럼 키를 넓혀야 한다.
+
+## 문서 캐시는 응답을 통째로 둔다
+
+urql의 기본 캐시는 정규화를 하지 않는다. 쿼리 문서와 변수를 묶은 키 하나에 응답을 통째로 둔다. 이것이 문서 캐시(document cache)다. TanStack Query가 쿼리 키 하나에 응답을 두는 것과 같은 모양이다.
+
+정규화가 없으니 뮤테이션 후 어떤 쿼리를 다시 받을지는 다른 규칙으로 정한다. urql은 응답에 들어 있는 `__typename`을 본다. 뮤테이션 응답에 `Todo`가 있으면, 결과에 `Todo`가 들어 있던 쿼리를 모두 무효화하고 다시 받는다. 가짜 서버를 붙여 네트워크 요청을 세어 봤다.
+
+```text
+  [net #1] query todos
+list -> []
+add #1 (list empty)
+  [net #2] mutation addTodo
+refetch manually
+  [net #3] query todos
+list -> ["1"]
+add #2 (list has Todo)
+  [net #4] mutation addTodo
+  [net #5] query todos
+list -> ["1","2"]
+```
+
+두 번째 추가(`net #4`) 뒤에는 목록이 알아서 다시 받아졌다(`net #5`). 그런데 첫 추가(`net #2`) 뒤에는 아무 일도 없었다. 목록이 비어 있어서 결과에 `Todo`라는 타입 이름이 한 번도 나오지 않았기 때문이다. urql은 이 쿼리가 `Todo`와 관련 있다는 걸 알 수 없다. 빈 목록 화면에서 첫 항목을 추가했는데 안 보인다는 버그가 정확히 이 모양이다. 쿼리 쪽 context에 `additionalTypenames: ["Todo"]`를 주면 빈 결과여도 `Todo` 뮤테이션에 반응한다.
+
+문서 캐시의 장점은 단순함이다. 캐시가 틀린 값을 보여 줄 일이 적다. 의심스러우면 다시 받기 때문이다. 대가는 요청 수다. 할 일 하나를 토글해도 `Todo`가 들어 있던 쿼리 모두가 다시 나간다. 같은 객체를 여러 화면이 보여 주고, 화면 사이를 자주 오가는 앱이라면 정규화 캐시가 요청을 훨씬 아낀다. urql도 정규화가 필요하면 Graphcache(`@urql/exchange-graphcache`)를 끼운다. 그때는 Apollo의 `update`와 비슷하게 목록 갱신 규칙을 `updates` 설정으로 적는다.
+
+## 누르자마자 바꿔 두고, 틀리면 되돌린다
+
+체크박스를 눌렀을 때 서버 응답(수백 ms)을 기다리지 않고 바로 바꾸는 것이 낙관적 응답(optimistic response)이다. Apollo는 이걸 캐시 위의 얇은 층으로 구현한다. 진짜 데이터는 그대로 두고, 그 위에 "아마 이렇게 될 것"을 덮어 놓았다가 응답이 오면 층을 걷어 낸다.
+
+```js
+cache.recordOptimisticTransaction((c) => {
+  c.writeFragment({ id: "Todo:2", fragment: gql`fragment X on Todo { done }`, data: { done: true } });
+}, "opt-1");
+// 화면이 읽는 값과 진짜 값을 따로 읽어 본다
+```
+
+```text
+optimistic view : ["1:false","2:true"]
+real view       : ["1:false","2:false"]
+after rollback  : ["1:false","2:false"]
+```
+
+화면은 낙관적 층을 포함해서 읽으니 바로 체크된 것으로 보인다. 진짜 데이터는 아직 `false`다. 서버가 에러를 주면 층만 걷어 내면 원래대로 돌아간다. 실제 코드에서는 `useMutation`의 `optimisticResponse` 옵션에 서버가 돌려줄 모양(`__typename`, `id` 포함)을 주면 이 과정을 Apollo가 대신한다. 아래 그림에서 단계를 넘기면 층이 생기고 걷히는 순서가 보인다.
+
+<SequenceDiagram
+  caption="낙관적 응답으로 체크박스를 토글할 때"
+  actors={[
+    { id: "ui", label: "체크박스" },
+    { id: "cache", label: "캐시" },
+    { id: "srv", label: "서버" },
+  ]}
+  steps={[
+    { from: "ui", to: "cache", label: "optimisticResponse", title: "먼저 캐시에 층을 덮는다", detail: "서버가 돌려줄 것으로 예상한 값을 Todo:2 칸 위에 얇은 층으로 쓴다. 진짜 칸은 건드리지 않는다.", payload: "{ __typename: \"Todo\", id: \"2\", done: true }" },
+    { from: "cache", to: "ui", label: "done: true", title: "화면은 층까지 읽는다", detail: "Todo:2를 가리키는 모든 화면이 바로 체크된 상태로 다시 그려진다. 사용자는 기다리지 않는다." },
+    { from: "ui", to: "srv", label: "mutation toggle", title: "요청은 그 뒤에 나간다", detail: "실제 뮤테이션이 네트워크로 나간다. 모바일이라면 이 왕복에 수백 ms가 걸린다." },
+    { from: "srv", to: "cache", label: "id, done", title: "응답이 오면 층을 걷고 진짜를 쓴다", detail: "낙관적 층을 지우고 서버 응답을 진짜 칸에 쓴다. 예상과 같으면 화면은 변하지 않는다. 서버가 다른 값을 주면 그 값으로 바뀐다." },
+    { from: "srv", to: "ui", label: "error", title: "실패하면 층만 걷힌다", detail: "에러가 오면 층을 걷어 내기만 하면 원래 값으로 돌아간다. 되돌리는 코드를 따로 쓸 필요가 없다. 사용자에게는 실패를 알린다." },
+  ]}
+/>
+
+낙관적 응답에도 `id`가 있어야 한다. 새 항목을 추가하는 경우라면 서버가 줄 `id`를 아직 모르니 `temp-1` 같은 임시 ID를 쓰고, 진짜 응답이 오면 임시 칸은 층과 함께 사라진다. 이 사이에 사용자가 임시 항목을 눌러 상세 화면으로 가면 없는 ID로 요청이 나간다. 임시 항목은 응답이 올 때까지 누를 수 없게 두는 편이 안전하다. 낙관적 업데이트 전반의 설계(되돌릴 때 사용자에게 어떻게 보여 줄지)는 [클라이언트 데이터 캐시](/posts/client-data-cache)의 "누르자마자 바뀌는 화면"에 있다.
+
+## Relay는 컴포넌트가 자기 데이터를 적는다
+
+Relay는 같은 정규화 캐시를 쓰지만 출발점이 다르다. Apollo와 urql은 "화면이 쿼리를 하나 쓰고 그 결과를 아래 컴포넌트에 나눠 준다"는 모양이 기본이다. Relay는 컴포넌트마다 자기가 쓰는 필드를 프래그먼트로 적고, 화면 쿼리는 그 프래그먼트를 모으기만 한다(프래그먼트 동거, fragment colocation).
+
+```tsx
+// TodoItem은 자기가 그리는 필드만 적는다
+function TodoItem({ todo }: { todo: TodoItem_todo$key }) {
+  const data = useFragment(graphql`
+    fragment TodoItem_todo on Todo { id title done }
+  `, todo);
+  return <label><input type="checkbox" checked={data.done} readOnly /> {data.title}</label>;
+}
+
+// 화면 쿼리는 아래 컴포넌트의 프래그먼트를 펼쳐 모을 뿐이다
+const TodosQuery = graphql`
+  query TodosPageQuery { todos { id ...TodoItem_todo } }
+`;
+```
+
+이 방식이 Relay 컴파일러와 묶인다. 빌드 전에 `relay-compiler`가 코드의 `graphql` 태그를 모두 읽어 스키마와 대조하고, 쿼리와 타입(`TodoItem_todo$key` 같은)을 파일로 만든다. 스키마에 없는 필드를 쓰면 빌드가 실패한다. 화면 쿼리는 미리 만들어져 있으니 런타임에 쿼리 문자열을 조립하지 않고, persisted query로 바꾸기도 쉽다.
+
+데이터 가리기(data masking)도 따라온다. 부모 컴포넌트는 `todos`를 받아도 `title`을 읽을 수 없다. 프래그먼트에 적은 컴포넌트만 그 필드를 본다. 그래서 `TodoItem`에서 `title`을 지우면 그 필드가 쿼리에서 빠지고, 혹시 다른 컴포넌트가 몰래 쓰고 있었다면 타입 에러로 드러난다. 화면이 수백 개인 앱에서 "이 필드를 지워도 되나"를 안전하게 답할 수 있는 이유다. Apollo Client도 3.12부터 프래그먼트 단위 데이터 가리기를 선택해서 켤 수 있다.
+
+대신 Relay는 서버에 요구하는 것이 많다. 모든 객체에 전역에서 유일한 `id`가 있어야 하고(Relay는 `__typename` 없이 `id`만으로 칸을 정한다), 어떤 객체든 다시 불러올 수 있는 `node(id)` 필드와 정해진 모양의 연결(connection) 페이지네이션을 기대한다. 뮤테이션 뒤 목록에 넣기는 `@appendEdge`, `@deleteRecord` 같은 선언형 디렉티브로 적는다. `node(id)` 필드를 열면 서버 쪽 인가가 더 중요해진다. 그 이야기는 [GraphQL 인가](/posts/graphql-authorization)에 있다.
+
+## 정규화 없이 TanStack Query로 부르기
+
+GraphQL을 쓴다고 꼭 GraphQL 전용 클라이언트를 써야 하는 건 아니다. 이미 REST 쪽에서 TanStack Query를 쓰고 있다면 GraphQL 요청도 그냥 함수로 감싸 넣을 수 있다.
+
+```ts
+// graphql-request 같은 작은 클라이언트로 요청만 보낸다
+export const useTodosQuery = () =>
+  useQuery({
+    queryKey: ["todos", { filter: "all" }],
+    queryFn: () => gqlClient.request(TodosDocument, { filter: "all" }),
+  });
+
+export const useToggleTodoMutation = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => gqlClient.request(ToggleTodoDocument, { id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["todos"] }), // 접두사로 모두 무효화
+  });
+};
+```
+
+이건 urql의 문서 캐시와 같은 모양이다. 응답을 쿼리 키 하나에 통째로 두고, 뮤테이션 뒤에는 키 접두사로 무효화해 다시 받는다. 정규화가 없으니 같은 할 일이 목록과 상세 두 곳에 있으면 둘 다 무효화해야 하고, 무효화를 빠뜨리면 한쪽만 옛 값이다. 대신 `__typename`과 `id`를 꼭 받아야 하는 규칙이나 `typePolicies` 설정 없이, 팀이 이미 아는 도구로 끝난다. GraphQL Code Generator로 문서마다 타입을 뽑아 `request`에 넘기면 응답 타입도 그대로 따라온다.
+
+고르는 기준을 정리하면 이렇다.
+
+- 같은 객체가 여러 화면에 걸쳐 보이고, 한곳에서 바꾸면 모든 곳이 바로 따라와야 한다: Apollo Client 또는 urql + Graphcache의 정규화 캐시.
+- 화면 수가 많고 팀이 크며, 서버가 Relay 규약(전역 ID, `node`, connection)을 지킬 수 있다: Relay. 컴파일러와 규약을 배우는 비용이 있다.
+- 화면이 적고 뮤테이션 뒤 다시 받는 비용이 작다, 또는 REST와 GraphQL을 한 도구로 다루고 싶다: urql 기본 캐시나 TanStack Query.
+- 서버 컴포넌트에서 데이터를 받아 그리는 Next.js App Router 앱: 클라이언트 캐시를 크게 쓰지 않을 수 있다. 서버에서 받은 데이터는 클라이언트 캐시에 넘겨 시작하게 할 수 있고, 그 방식은 [클라이언트 데이터 캐시](/posts/client-data-cache)의 "서버가 받아 둔 데이터를 넘겨받기"와 같다.
+
+## 화면이 안 바뀔 때 보는 순서
+
+뮤테이션 뒤 화면이 그대로일 때 아래 순서로 좁힌다.
+
+1. 네트워크 탭에서 뮤테이션 응답을 연다. 바뀐 객체에 `__typename`과 `id`가 있는지, 화면에 보이는 필드가 함께 왔는지 본다. 없으면 선택 집합을 고친다.
+2. 바뀐 게 필드 값이 아니라 목록 구성(추가, 삭제, 필터에서 빠짐)이라면 정규화 캐시가 알아서 해 주는 일이 아니다. `update`, `cache.modify`, `evict`나 `refetchQueries`가 있는지 본다.
+3. Apollo Client Devtools(브라우저 확장)의 Cache 탭에서 `ROOT_QUERY`를 연다. 같은 필드가 인자별로 여러 칸으로 갈라져 있다면 `keyArgs`를, 다른 언어·버전 데이터가 한 칸에 섞였다면 `keyFields`를 본다.
+4. 같은 쿼리가 네트워크 탭에 계속 반복된다면 `id` 없는 객체가 서로를 덮어쓰는 경우다. 개발 모드 콘솔의 "Cache data may be lost" 경고를 찾는다.
+5. urql이라면 결과가 빈 목록이었는지 본다. 빈 결과에는 `__typename`이 없어 무효화 대상에서 빠진다. `additionalTypenames`를 준다.
+
+로그아웃할 때 캐시를 비우는 것도 잊지 않는다. 정규화 캐시에는 이전 사용자의 객체가 칸째로 남아 있어서, 다른 계정으로 로그인했을 때 잠깐 남의 이름이 보일 수 있다. Apollo는 `client.clearStore()`나 `client.resetStore()`로 비운다.
+
+## 칸은 캐시가, 목록은 내가
+
+정규화 캐시는 응답을 `__typename:id` 칸으로 쪼개 두고, 쿼리 결과에는 참조만 남긴다. 그래서 이미 아는 객체의 필드가 바뀌면 모든 화면이 따라온다. 대신 새 객체가 어느 목록에 들어가는지, 필터에서 빠져야 하는지는 업무 규칙이라 직접 알려 줘야 한다. 문서 캐시는 이 규칙을 "의심스러우면 다시 받기"로 대신하고, Relay는 컴포넌트마다 필드를 적게 해서 큰 앱에서도 캐시와 화면이 어긋나지 않게 한다. 어느 쪽이든 응답에 `id`를 받는 데서 시작한다.
+
+## 면접에서 나올 만한 질문
+
+### GraphQL 클라이언트의 정규화 캐시는 어떻게 동작하나요?
+
+응답 트리를 내려가며 `__typename`과 `id`가 있는 객체를 `Todo:1` 같은 키의 칸에 한 번씩 저장하고, 쿼리 결과에는 그 칸을 가리키는 참조만 남긴다. 같은 객체가 여러 쿼리에 나와도 칸은 하나라서, 한 칸을 고치면 그 객체를 보여 주는 모든 화면이 함께 바뀐다. 인자가 다른 같은 필드는 `todos({"filter":"open"})`처럼 다른 칸이 된다.
+
+### 뮤테이션 후 필드 변경은 반영되는데 새 항목 추가는 반영되지 않는 이유는요?
+
+필드 변경 응답은 이미 있는 칸을 덮어쓰면 끝나지만, 새 객체가 어느 목록의 어디에 들어가야 하는지는 캐시가 모르기 때문이다. 필터나 정렬 같은 업무 규칙이 필요하다. 그래서 `update`와 `cache.modify`로 목록에 참조를 넣거나, `refetchQueries`로 목록을 다시 받는다. 삭제도 `evict`와 `gc`로 직접 지운다.
+
+### 뮤테이션 응답에서 id를 빼면 어떻게 되나요?
+
+캐시가 응답의 값이 어느 칸의 것인지 알 수 없어 기존 객체를 갱신하지 못한다. 데모에서도 `id` 없이 받은 `done: true`는 목록에 반영되지 않았다. 뮤테이션 선택 집합에는 `id`와 화면에 보이는 필드를 함께 받는 것이 기본 규칙이다. `id`가 아닌 키를 쓰는 타입은 `keyFields`로 알려 준다.
+
+### 문서 캐시와 정규화 캐시의 차이와 트레이드오프는요?
+
+문서 캐시는 쿼리와 변수 묶음 하나에 응답을 통째로 두고, 뮤테이션 응답의 타입 이름 등으로 관련 쿼리를 무효화해 다시 받는다. 단순하고 틀린 값을 보여 줄 일이 적지만 요청이 많다. 정규화 캐시는 요청을 아끼고 화면 사이 일관성이 좋지만, 목록 갱신 규칙과 `keyFields`, `keyArgs`, `merge` 같은 설정을 개발자가 관리해야 한다. urql의 기본 캐시는 빈 목록 결과에 타입 이름이 없어 무효화를 놓치는 함정도 있다.
+
+### Relay가 Apollo와 다른 점은요?
+
+컴포넌트마다 쓰는 필드를 프래그먼트로 적고 화면 쿼리는 그걸 모으기만 하는 프래그먼트 동거가 기본이다. `relay-compiler`가 빌드 때 쿼리와 타입을 만들고, 데이터 가리기로 컴포넌트는 자기 프래그먼트의 필드만 읽는다. 대신 서버가 전역 유일 `id`, `node(id)`, connection 페이지네이션 같은 규약을 지켜야 해서 도입 비용이 크다.
+
+### 낙관적 응답은 Apollo에서 어떻게 구현되나요?
+
+진짜 캐시 위에 낙관적 층을 하나 덮어 쓰고, 화면은 그 층까지 포함해 읽는다. 서버 응답이 오면 층을 걷고 진짜 값을 쓰며, 실패하면 층만 걷으면 원래 값으로 돌아간다. 낙관적 응답에도 `__typename`과 `id`가 있어야 칸을 찾을 수 있고, 새 항목은 임시 ID를 쓴다.
+
+### 같은 쿼리가 네트워크 탭에 끝없이 반복된다면 무엇을 의심하나요?
+
+`id` 없는 객체를 두 쿼리가 서로 다른 필드로 받아 서로를 덮어쓰는 경우를 먼저 본다. 한 쿼리가 쓴 객체를 다른 쿼리가 통째로 갈아 끼우면 앞 쿼리는 필드가 없어 다시 서버에 묻고, 이게 반복된다. Apollo는 개발 모드에서 "Cache data may be lost" 경고를 낸다. 객체에 `id`를 주거나 `typePolicies`에서 `merge: true`로 합치게 한다.
+
+### GraphQL을 쓰는데 TanStack Query를 고를 만한 경우는요?
+
+화면이 적고 뮤테이션 뒤 다시 받는 비용이 작거나, REST와 GraphQL을 한 도구로 다루고 싶을 때다. 응답을 쿼리 키에 통째로 두고 무효화로 다시 받는 문서 캐시 방식이라 설정이 단순하다. 같은 객체가 여러 화면에 흩어져 있고 즉시 일관되게 보여야 한다면 정규화 캐시가 요청과 코드를 더 아낀다.
