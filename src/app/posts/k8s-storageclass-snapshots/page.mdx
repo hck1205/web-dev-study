@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-storageclass-snapshots");
 
+<EasyIntro>
+  디스크를 어떤 등급으로 만들지 정하는 것이 StorageClass이고, 그 디스크를 어느 순간의 모습 그대로 찍어 두는 것이 VolumeSnapshot이다. 큰 변경 전에 디스크를 찍어 두고 싶을 때 클라우드 화면 대신 쿠버네티스 안에서 하는 방법이다.
+
+  StorageClass는 디스크 주문서 양식과 같아서 한 번 만들면 어떤 업체가 어떤 조건으로 만드는지를 고칠 수 없다. 그래서 등급마다 양식을 나누고, 기본 양식은 하나만 두고, 운영 데이터용은 지워도 디스크가 남는 양식을 따로 둔다. 스냅샷은 디스크와 똑같이 요청서와 실물과 양식 세 짝으로 다루고, 되살리기는 스냅샷을 재료로 삼은 새 디스크 요청서를 내는 일이다.
+
+  스냅샷은 같은 저장소 안에 있는 사본이라 원본 저장소가 망가지면 같이 사라지니 백업 그 자체는 아니고 백업의 재료일 뿐이다. 되살리기는 같은 칸 안에서, 같은 업체 양식으로, 원래 크기 이상으로만 된다.
+</EasyIntro>
+
 DB 스키마를 바꾸는 마이그레이션 전날, 리뷰어가 "디스크 스냅샷부터 떠 두고 하자"고 한다. 클라우드 콘솔에서 EBS 스냅샷 버튼을 누르는 대신 쿠버네티스 안에서 하고 싶다. `VolumeSnapshot`을 만들었는데 READYTOUSE가 한참 비어 있다. 겨우 찍었더니 스테이징 네임스페이스에서는 그 스냅샷으로 복원이 안 된다. 그리고 애초에 이 디스크를 만든 StorageClass의 IOPS를 올리려고 고쳤더니 API 서버가 거절한다.
 
 이 글은 디스크를 어떤 등급으로 만들지 정하는 StorageClass 설계와, 그 디스크를 찍고 되살리는 VolumeSnapshot을 다룬다. 이 주제의 다른 글도 있다. PVC가 PV에 묶이는 규칙, 접근 모드(RWO·ROX·RWX·RWOP), `WaitForFirstConsumer`와 존 때문에 생기는 Pending, `Retain`·`Delete` 회수 정책의 함정, 용량 확장은 [PV와 PVC 글](/posts/k8s-pv-pvc)에 실제 출력과 함께 있다. 여기서는 그 설명을 반복하지 않는다. 백업을 몇 벌, 어디에, 얼마나 오래 둘지는 [백업 전략 글](/posts/backup-strategy)이 맡는다.

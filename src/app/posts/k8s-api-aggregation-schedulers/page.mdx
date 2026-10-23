@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-api-aggregation-schedulers");
 
+<EasyIntro>
+  쿠버네티스의 기본 기능만으로 모자랄 때 넓히는 길이 두 가지 있다. 하나는 요청을 받는 창구를 넓히는 것이고, 다른 하나는 컨테이너를 어느 서버에 앉힐지 정하는 자리 안내를 바꾸는 것이다.
+
+  큰 식당으로 생각해 보자. 안내 데스크는 대부분의 주문을 직접 받지만, 특정 메뉴는 옆 주방으로 넘긴다. 서버 사용량을 묻는 요청이 그렇게 다른 프로그램으로 넘어가고, 안내 데스크가 손님 확인을 먼저 끝낸 뒤 누가 주문했는지 쪽지로 적어 준다. 그래서 옆 주방이 문을 닫으면 그 메뉴만 막히는데, 그 탓에 공간 하나를 지우는 일까지 멈춰 버리기도 한다.
+
+  자리 안내원은 손님을 한 명씩 앉힌다. 세 명이 다 모여야 시작하는 일행 둘이 자리를 반씩 차지하면 서로를 기다리며 영원히 멈춘다. 그래서 일행이 다 앉을 자리가 날 때만 한꺼번에 안내하는 묶음 배치가 필요하다.
+</EasyIntro>
+
 `kubectl top pods`가 되는 클러스터에서 `kubectl get crd | grep metrics`를 쳐 보면 아무것도 안 나온다. `metrics.k8s.io`는 CRD가 아닌데도 `kubectl get --raw /apis/metrics.k8s.io/v1beta1/pods`에 답이 온다. 답하는 쪽은 kube-apiserver가 아니라 metrics-server라는 별도 서버다. API 서버가 그 경로의 요청만 metrics-server로 넘겨 준다. 이게 API 집계(aggregation)다.
 
 같은 클러스터에서 학습 작업 두 개를 동시에 띄웠더니 둘 다 워커 몇 개만 뜨고 나머지는 Pending에 멈췄다. 각자 자리를 반씩 차지하고 서로를 기다린다. 기본 스케줄러는 Pod를 한 번에 하나씩 보니 "다 같이 뜨거나 아예 안 뜨거나"를 모른다. 이럴 때 스케줄러를 바꾸거나 넓힌다.

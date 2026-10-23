@@ -18,6 +18,7 @@ const ROOT = path.join(__dirname, "..");
 const POSTS_DIR = path.join(ROOT, "src/app/posts");
 const GENERATED = path.join(ROOT, "src/features/content-map/registry/relations.generated.ts");
 const QUIZ_COUNTS = path.join(ROOT, "src/features/quiz/registry/counts.generated.ts");
+const INTERVIEW = path.join(ROOT, "src/features/study/registry/interview.generated.ts");
 const DOC = path.join(ROOT, "docs/content-index.md");
 
 /** 이 줄 수를 넘는 글은 쪼갤 후보로 표시한다. */
@@ -93,6 +94,43 @@ fs.writeFileSync(
   `// 자동 생성 파일이다. 직접 고치지 말고 \`pnpm content:index\`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = ${JSON.stringify(quizCounts, null, 2)};
+`,
+);
+
+// ---- interview.generated.ts ----
+// 글 끝의 "## 면접에서 나올 만한 질문" 섹션에서 질문(###)과 답을 뽑아 복습 카드로 쓴다. /study에서만 동적으로 불러온다.
+const INTERVIEW_HEADING = "면접에서 나올 만한 질문";
+const plainText = (markdown) =>
+  markdown
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`([^`\n]*)`/g, "$1")
+    .replace(/[*_]{1,2}([^*_]+)[*_]{1,2}/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+\n/g, "\n")
+    .trim();
+const interview = {};
+for (const post of posts) {
+  const match = post.file.source.match(new RegExp(`^##\\s+${INTERVIEW_HEADING}\\s*$([\\s\\S]*)`, "m"));
+  if (!match) continue;
+  const body = match[1].split(/^##\s/m)[0].replace(/```[\s\S]*?```/g, "");
+  const parts = body.split(/^###\s+/m).slice(1);
+  const items = parts
+    .map((part) => {
+      const [first, ...rest] = part.split("\n");
+      const answer = plainText(rest.join("\n")).split(/\n{2,}/).map((p) => p.replace(/\n/g, " ").trim()).filter(Boolean).join("\n\n");
+      return { question: plainText(first), answer };
+    })
+    .filter((item) => item.question && item.answer);
+  if (items.length) interview[post.slug] = items;
+}
+fs.mkdirSync(path.dirname(INTERVIEW), { recursive: true });
+fs.writeFileSync(
+  INTERVIEW,
+  `// 자동 생성 파일이다. 직접 고치지 말고 \`pnpm content:index\`를 실행한다 (scripts/content-index.cjs).
+// 글 slug → "면접에서 나올 만한 질문" 섹션의 질문과 답. /study 복습 카드가 쓴다.
+import type { InterviewQuestion } from "./types";
+
+export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = ${JSON.stringify(interview, null, 2)};
 `,
 );
 

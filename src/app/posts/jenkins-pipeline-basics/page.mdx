@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("jenkins-pipeline-basics");
 
+<EasyIntro>
+  코드를 올리면 자동으로 검사하고 빌드해 주는 서버가 Jenkins다. 저장소에 둔 설명서 한 장(Jenkinsfile)에 단계를 적어 두면 그 순서대로 돌아간다. 그런데 설명서 한 장 뒤에는 일을 나눠 주는 컨트롤러, 실제로 돌리는 에이전트, GitHub와 주고받는 알림, 비밀값 금고가 함께 움직인다.
+
+  공장으로 치면 컨트롤러는 작업 지시를 내리는 사무실이고, 에이전트는 실제로 물건을 만드는 작업장이다. 작업 지시는 작업장 이름이 아니라 꼬리표로 나가서, 그 꼬리표를 단 작업장이 하나도 없으면 지시는 실패도 성공도 못 한 채 대기열에 머문다. 글 처음에 병합 버튼이 잠긴 채 기다리기만 한 이유가 그것이다.
+
+  그래서 빌드가 안 돌면 설명서보다 그 바깥을 먼저 본다. 알림이 왔는지, 맞는 작업장이 살아 있는지, 결과를 보고하는 이름이 맞는지 순서로 확인한 뒤에야 단계를 본다.
+</EasyIntro>
+
 PR을 올렸는데 GitHub의 병합 버튼이 잠겨 있다. 필수 상태 체크 `continuous-integration/jenkins/pr-merge`가 "Expected — Waiting for status to be reported"에서 움직이지 않는다. Jenkins 화면에 가 보면 빌드는 대기열에 올라가 있고, 옆에 이런 줄이 떠 있다.
 
 ```text

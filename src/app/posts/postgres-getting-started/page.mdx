@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("postgres-getting-started");
 
+<EasyIntro>
+  리눅스 서버에 PostgreSQL을 깔고 psql을 치면 첫 접속부터 거절당하기 쉽다. 사용자가 없다는 에러인데, 설치가 잘못된 것이 아니다. psql은 아무것도 안 알려 주면 지금 쓰는 리눅스 계정 이름을 DB 사용자 이름으로 그대로 들고 가고, 서버는 출입 명부를 보고 그런 이름은 모른다고 답한다.
+
+  설치 직후에는 postgres라는 사용자 하나만 있어서, 먼저 그 이름으로 들어가 내 이름의 사용자와 데이터베이스를 만들어야 한다. 그다음에는 서버 안의 구조를 알면 된다. 서버 하나 안에 데이터베이스가 여러 개 있고, 데이터베이스 안에 스키마라는 칸이 있고, 그 안에 테이블이 있다.
+
+  테이블이 분명히 있는데 없다고 나오면 다른 스키마를 보고 있거나 이름의 대소문자가 다른 경우가 대부분이다.
+</EasyIntro>
+
 Ubuntu 서버에 PostgreSQL을 깔았다. 설치는 1분 만에 끝났고, 이제 접속만 하면 된다. 터미널에 `psql`을 친다.
 
 ```text

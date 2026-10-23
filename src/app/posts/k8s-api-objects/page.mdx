@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-api-objects");
 
+<EasyIntro>
+  설정 파일을 스무 줄 써서 쿠버네티스에 올리고 다시 읽어 보면 여든 줄 가까이 돌아온다. 쓴 적 없는 번호와 기본값이 붙어 있고, 맨 아래에는 지금 상태라는 덩어리가 통째로 생겼다. 며칠 뒤에는 반대로 지웠다고 답했는데 객체가 사라지지 않는 일이 생긴다.
+
+  쿠버네티스에 올리는 모든 것은 같은 모양의 문서다. 어떤 규칙으로 읽을지, 무엇인지, 이름표가 무엇인지, 내가 원하는 상태가 무엇인지, 지금 실제 상태가 어떤지의 다섯 칸으로 되어 있다. 원하는 상태는 사람이 쓰고 실제 상태는 쿠버네티스가 쓰며, 서버는 저장할 때 고유 번호와 바뀔 때마다 오르는 버전 번호를 붙인다. 그래서 돌아온 문서가 길어진 것이고, 그걸 그대로 저장소에 넣으면 나중에 충돌이 난다.
+
+  지웠는데 남아 있는 것은 지우기 전에 정리할 일이 있다는 표시가 붙어 있기 때문이다. 그 표시를 떼 주기로 한 쪽이 죽어 있으면 객체는 영원히 지워지는 중으로 남는다.
+</EasyIntro>
+
 Deployment 매니페스트를 스무 줄 남짓 써서 `kubectl apply`를 했다. 확인하려고 `kubectl get deploy web -o yaml`을 치면 여든 줄 가까이 돌아온다. 쓴 적 없는 `uid`, `resourceVersion`, `generation`이 붙어 있고, `strategy`와 `terminationGracePeriodSeconds` 같은 값이 채워져 있고, 맨 아래에는 `status`라는 덩어리가 통째로 생겼다. 며칠 뒤에는 반대 일이 생긴다. `kubectl delete`가 "deleted"라고 답했는데 객체가 사라지지 않는다.
 
 둘 다 쿠버네티스 API 오브젝트가 어떻게 생겼는지 알면 풀린다. 이 글은 매니페스트의 다섯 칸(apiVersion, kind, metadata, spec, status)이 각각 누구의 것인지, API 그룹과 버전이 URL로 어떻게 이어지는지, `resourceVersion`과 `generation`이 무엇을 세는지, 그리고 ownerReferences와 finalizer가 삭제를 어떻게 바꾸는지를 본다. 출력은 kwok로 띄운 실습 클러스터(Kubernetes 1.30)에서 받았다. API 서버, etcd, 컨트롤러 매니저는 진짜이고 노드와 컨테이너만 흉내 낸다.

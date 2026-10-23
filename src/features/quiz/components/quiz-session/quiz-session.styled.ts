@@ -1,12 +1,5 @@
 import styled from "@emotion/styled";
-import { anim, color, font, space } from "@/common/design-system";
-
-export const Intro = styled.section`
-  display: grid;
-  gap: ${space[5]};
-  justify-items: start;
-  animation: ${anim.fadeUp} 400ms ${anim.easing.out} both;
-`;
+import { color, font, space } from "@/common/design-system";
 
 export const IntroMeta = styled.p`
   margin: 0;

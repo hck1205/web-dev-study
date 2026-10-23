@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-node-autoscaling-karpenter");
 
+<EasyIntro>
+  손님이 몰려 Pod를 열 개로 늘렸는데, 그 Pod를 받을 기계가 없어서 줄줄이 기다린다. Pod 개수를 늘리는 일과 기계를 늘리는 일은 따로라서, 기계를 늘리는 도구가 따로 필요하다. 대표가 둘인데 오래 쓰인 Cluster Autoscaler와 비교적 새로 나온 Karpenter다.
+
+  둘 다 자리를 못 잡고 기다리는 Pod를 보고 기계를 늘리지만, 무엇을 늘리느냐가 다르다. Cluster Autoscaler는 미리 정해 둔 기계 묶음의 대수를 늘리고, Karpenter는 기다리는 Pod들의 요구를 보고 거기에 맞는 크기의 기계를 그때그때 고른다. 버스 회사가 정해진 크기의 버스를 더 보내는 것과, 승객 수를 보고 택시든 대형 버스든 골라 보내는 것의 차이다.
+
+  줄일 때는 둘 다 Pod를 내려서 기계를 비우므로 앱이 정해 둔 중단 허용 약속이 속도를 정한다. 그리고 Pod가 달라고 적은 자원이 실제보다 부풀어 있으면 기계가 꽉 찬 것처럼 보여 아무것도 줄지 않는다.
+</EasyIntro>
+
 점심 트래픽에 HPA가 Pod를 10개로 늘렸다. 그런데 `kubectl get pods`에 Pending이 줄지어 있다.
 
 ```text

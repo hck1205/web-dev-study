@@ -96,6 +96,7 @@ src/
 - 본문은 `src/app/posts/{slug}/page.mdx`에 쓴다. title은 `getPostMetadata(slug)`로 레지스트리에서 가져온다 (아래 "글 추가").
 - `mdx-components.tsx`(루트)는 `@/common/components/mdx`의 `mdxComponents`와 글 레이아웃(`PostLayout`) wrapper를 연결한다. 본문 스타일은 `prose`, 표는 `mdx-table`(모바일 가로 스크롤), 경고 박스는 `<Callout kind="note|tip|warning">`(남발 금지), 시각화는 아래 "그림과 애니메이션" 표를 따른다.
 - 새 MDX 전용 컴포넌트는 `common/components/mdx/{name}/`에 같은 파일 패턴으로 만들고 `mdx.ts`에 등록한다.
+- 글 맨 위의 `<EasyIntro>`는 "쉽게 말하면" 상자다(아래 "글 추가" 6번). 접혀 있다가 쉬운 모드에서 펼쳐진다.
 - **루트 `mdx-components.tsx`의 `MdxWrapper`는 서버 컴포넌트로 유지한다.** wrapper를 클라이언트 컴포넌트로 직접 연결하면 Next.js가 넘기는 `searchParams`가 직렬화되어 MDX 페이지가 동적 렌더링으로 바뀐다. `children`만 넘기는 서버 래퍼를 거친다.
 - 플러그인은 `next.config.ts`에 문자열 이름으로 지정한다(Turbopack): `remark-gfm`(표), `rehype-slug`(헤딩 id), `rehype-highlight`(코드 하이라이트). 하이라이트 색은 `prose.styled.ts`에서 관리한다.
 
@@ -233,7 +234,9 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 2. `src/features/posts/registry/posts.ts`에 메타데이터(slug, title, summary, **topic**, **tags**, date)를 추가한다. `topic`은 토픽 id를 `/`로 이은 경로다 (예: `"programming/algorithms"`). 없는 경로면 토픽이 표시되지 않으니 `topics.ts`와 맞춘다.
 3. 제목(h1)·요약은 레이아웃이 렌더링하므로 MDX 본문에서 `#` 제목을 쓰지 않는다. 본문은 `##`부터 시작한다. 요약(summary)도 본문과 같은 평서체로 쓴다.
 4. **퀴즈**: `src/features/quiz/registry/questions/{slug}.ts`에 글 내용으로 4지선다 문제를 5~7개 쓰고, `questions/index.ts`의 `QUESTION_SETS`에 추가한다(아래 "퀴즈" 참고).
-5. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다(공백과 `/`는 하이픈, `TCP/IP` → `tcp-ip`). 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
+5. **로드맵 자리**: `src/features/roadmap/registry/roadmaps.ts`에서 글이 들어갈 로드맵의 `items`에 slug를 공부 순서에 맞게 넣는다. 모든 글은 정확히 한 로드맵에 있어야 하며, 빠지거나 두 번 들어가면 빌드가 멈춘다(아래 "학습 로드맵" 참고).
+6. **쉽게 말하면**: 본문 맨 위(metadata 줄 다음 빈 줄 뒤)에 `<EasyIntro>` 블록을 넣는다. 초·중학생도 따라올 수 있는 말로 6~8문장, 비유는 하나, 일반 문단만(목록·코드·링크·`{}` 금지). 헤더의 "쉽게" 토글이 켜져 있으면 펼친 채로 보인다.
+7. **해시태그**: `tags`에 단어를 적으면 글 카드·글 상단에 `#태그` 링크로 표시되고 `/tags/{slug}` 페이지가 자동 생성된다. 공백은 제거해 표시하고(`Hash Table` → `#HashTable`), 슬러그는 소문자-하이픈이다(공백과 `/`는 하이픈, `TCP/IP` → `tcp-ip`). 대소문자만 다른 태그는 하나로 합쳐진다. 기존 태그를 재사용해 분류를 일관되게 유지한다 (`/tags` 참고).
 
 ## 채용 공고로 글 만들기 (회사 라벨)
 
@@ -279,6 +282,18 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - 제목, 코드(인라인 포함), 이미 링크인 텍스트는 건너뛴다. 영문 키워드는 단어 경계를 지킨다(`IndexedDB` 안의 `DB`에 걸리지 않음). 긴 키워드부터 찾는다.
 - `/posts/...`로 가는 링크는 직접 쓴 것까지 모두 새 창(`target="_blank"`, `rel="noopener noreferrer"`)으로 열리고, 본문에서 ↗ 표시가 붙는다. 직접 링크한 글은 자동으로 한 번 더 링크하지 않는다.
 - 키워드는 그 글을 대표하는 말만 2~5개 적는다. "토큰", "서버"처럼 너무 흔한 단어는 엉뚱한 곳에 링크가 걸리니 피한다(대신 "액세스 토큰", "세션 쿠키"처럼 구체적으로).
+
+## 학습 로드맵 (`/roadmap`) · 오늘 할 일 (`/study`)
+
+글 661편을 "완벽히 이해하고 응용할 수 있는 사람"이 되기 위한 학습 시스템이다. 로그인 없이 이 브라우저의 localStorage(`study-progress`)에 기록하고, JSON으로 내보내고 가져온다.
+
+- **로드맵 데이터**: `features/roadmap/registry/roadmaps.ts`의 트리 하나가 단일 원천이다. 노드의 `items`에 글(slug), 관문(`{ checkpoint }`), 또 다른 로드맵이 **순서대로** 들어간다(로드맵 안의 로드맵, 깊이 제한 없음). 순서가 곧 공부 순서다. `tier`(1 핵심 / 2 실무·면접 / 3 참고)는 로드맵 단위로 주고 글마다 `{ post, tier }`로 덮어쓴다. `requires`는 "먼저 읽어 두면 좋은" 로드맵의 절대 경로(안내용 잠금, 강제 아님). 빌드 시 `validateRoadmaps`가 없는 글·중복·빠진 글·없는 requires를 검사한다.
+- **마스터 4단계**(글마다): 1 읽음(손으로 체크) → 2 설명함(글 끝 "내 말로 설명하기"에 20자 이상 저장) → 3 적용함(그 글 퀴즈 또는 관문에서 80% 이상) → 4 응용함(손으로 체크). 상태는 `features/roadmap/atoms/study-progress`(get/set/reset)로 다룬다.
+- **관문**: 로드맵 `items`의 `{ checkpoint: "이름" }`. 그 앞에 놓인 글들(하위 로드맵 포함)의 퀴즈를 모아 풀고 80% 이상이면 통과, 한 문제도 틀리지 않은 글은 적용함으로 올라간다. 경로는 `/roadmap/{로드맵 경로}/cp-{번호}`.
+- **복습**: 읽은 글은 라이트너 상자(1→2→4→7→15일, 어휘 사전과 같은 간격)로 `/study`에 돌아온다. 카드는 글 끝의 면접 질문(`features/study/registry/interview.generated.ts`, `pnpm content:index`가 "## 면접에서 나올 만한 질문" 섹션에서 뽑는다), 한 줄 요약, 4지선다를 섞어 낸다. 알았다/몰랐다로 자기 채점한다. 면접 질문 파일(약 2.5MB)과 문제 본문은 복습을 시작할 때만 동적으로 불러온다.
+- **글 페이지 패널**(`features/roadmap/components/study-panel`): 로드맵 위치와 앞뒤 글, 단계 버튼, 설명 쓰기, 그 글 퀴즈(`features/quiz/components/post-quiz`, 문제는 눌렀을 때 내려받는다).
+- **퀴즈 엔진 재사용**: 문제 묶음을 푸는 상태 기계는 `features/quiz/hooks/use-quiz-runner`, 화면은 `features/quiz/components/quiz-player`(시작 → 문제 카드 → 결과). 토픽 퀴즈·관문·글 퀴즈·복습 카드가 모두 이걸 쓴다.
+- **쉬운 모드**: 헤더의 "쉽게" 토글(`common/atoms/easy-mode`). 켜면 글마다 `<EasyIntro>`가 펼쳐진 채로 시작한다.
 
 ## 퀴즈 (토픽별 Flash 퀴즈)
 

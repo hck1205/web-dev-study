@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("eks-cluster-basics");
 
+<EasyIntro>
+  쿠버네티스를 직접 설치하면 중심 부품의 백업, 인증서 갱신, 버전 올리기를 전부 내가 해야 한다. EKS는 그 중심 부품을 AWS가 자기 계정에서 대신 돌려 주고, 내 쪽에는 프로그램이 실제로 도는 노드만 남긴다. 그 대신 사람과 프로그램이 클러스터에 닿는 방식이 AWS의 규칙을 따른다.
+
+  건물 출입을 떠올리면 된다. AWS 계정 권한이 아무리 높아도 그것은 회사 출입증일 뿐이고, 클러스터 안으로 들어가려면 그 출입증을 클러스터 명단에 따로 올려야 한다. 글 처음의 동료가 로그인에 실패한 이유가 그것이다.
+
+  프로그램도 건물의 진짜 주소, 그러니까 VPC 서브넷의 IP를 하나씩 받아 쓴다. 미리 넉넉히 받아 두는 습관 때문에 주소가 프로그램 수보다 빨리 떨어져서, 컴퓨터 힘은 남는데 새 프로그램이 못 뜨는 일이 생긴다. 서브넷을 크게 잡아야 하는 이유다.
+</EasyIntro>
+
 Terraform으로 EKS 클러스터를 만들고 `kubectl get nodes`까지 확인했다. 다음 날 동료가 같은 명령을 쳤더니 `You must be logged in to the server`가 나온다. 권한은 AdministratorAccess인데도 그렇다. 한 달 뒤에는 노드 CPU와 메모리가 반 넘게 남는데 새 Pod가 `ContainerCreating`에서 멈춘다. 이벤트에는 `failed to assign an IP address to container`가 찍혀 있다.
 
 두 장면 모두 쿠버네티스 자체가 아니라 EKS가 쿠버네티스를 AWS에 붙이는 방식에서 나온다. 사람은 IAM으로 클러스터에 들어오고, Pod는 VPC의 IP를 받는다. 이 글은 EKS의 뼈대를 그 두 접점 중심으로 본다. AWS가 대신 운영하는 컨트롤 플레인과 엔드포인트, kubectl이 IAM으로 로그인하는 과정과 access entry, 노드를 띄우는 세 방식(관리형 노드 그룹, Fargate, Karpenter), VPC CNI가 Pod에 IP를 주는 방식과 서브넷이 바닥나는 계산, Pod에 AWS 권한을 주는 IRSA와 EKS Pod Identity, 애드온과 버전 업그레이드 주기까지 간다.

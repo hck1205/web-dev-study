@@ -3,12 +3,14 @@ import { AlgoTrace } from "./algo-trace";
 import { Callout } from "./callout";
 import { CodePlayground } from "./code-playground";
 import { ConceptDiagram } from "./concept-diagram";
+import { EasyIntro } from "./easy-intro";
 import { GeometryMorph } from "./geometry-morph";
 import { LoadingDemo } from "./loading-demo";
 import { MdxTable } from "./mdx-table";
 import { MotionDemo } from "./motion-demo";
 import { NetworkTopology } from "./network-topology";
 import { SequenceDiagram } from "./sequence-diagram";
+import { Term } from "./term";
 import { UrlAnatomy } from "./url-anatomy";
 import { VectorSpace } from "./vector-space";
 
@@ -18,6 +20,8 @@ import { VectorSpace } from "./vector-space";
 export const mdxComponents: MDXComponents = {
   table: MdxTable,
   Callout,
+  EasyIntro,
+  Term,
   SequenceDiagram,
   ConceptDiagram,
   UrlAnatomy,

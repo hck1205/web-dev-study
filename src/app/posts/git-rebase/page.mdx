@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("git-rebase");
 
+<EasyIntro>
+  기능 브랜치에서 일주일 작업하는 동안 main이 계속 바뀌어서 그때마다 merge로 받아 왔더니, PR을 올리려고 히스토리를 보니 내 커밋 두 개 사이사이에 병합 커밋이 끼어 선이 얽혀 있다. 이걸 깔끔하게 펴 주는 게 rebase다.
+
+  rebase는 내 커밋들을 떼어 내서 최신 main 위에 다시 올려놓는 일이다. 이사와 같다. 짐(내가 한 변경)은 그대로지만 집 주소(받침이 되는 커밋)가 바뀌니, 커밋은 새 주소로 다시 만들어지고 해시도 전부 바뀐다. 그래서 처음부터 최신 main에서 시작한 것처럼 일자로 보이는 히스토리가 남는다.
+
+  merge는 있었던 일을 그대로 남기고 rebase는 깨끗하게 다시 쓰는 것이라, 혼자 쓰는 브랜치에서는 rebase로 정리하고 여러 사람이 같이 쓰는 브랜치에서는 하지 않는다. 이미 남에게 보낸 커밋을 새 주소로 옮기면 남의 사본과 어긋나기 때문이다. 커밋을 합치거나 순서를 바꾸는 interactive rebase도 같은 원리이고, 잘못했을 때는 reflog로 이사 전 주소를 찾아 돌아갈 수 있다.
+</EasyIntro>
+
 블로그에 검색 기능을 붙이는 `feature/search` 브랜치에서 일주일 동안 작업했다. 그사이 main에 다른 사람의 커밋이 계속 들어와서, 뒤처질 때마다 `git merge main`으로 받아 왔다. PR을 올리려고 히스토리를 봤더니 이렇게 생겼다.
 
 ```text

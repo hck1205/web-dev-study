@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-kube-proxy-modes");
 
+<EasyIntro>
+  쿠버네티스에서는 프로그램(Pod)이 수시로 생기고 사라져서, 서비스 하나로 들어온 요청을 지금 살아 있는 프로그램 어디로 보낼지 매번 정해 줘야 한다. 이 일을 맡은 kube-proxy는 교통 경찰처럼 차를 직접 안내하지 않고, 길목에 안내판을 써 붙이는 쪽에 가깝다. 실제로 요청을 돌려보내는 건 운영체제 커널이고, kube-proxy는 안내판 내용만 고친다.
+
+  모드란 그 안내판을 어떤 방식으로 적느냐의 차이다. iptables 모드는 서비스마다 안내판을 한 줄씩 길게 늘어놓아서, 서비스가 수만 개가 되면 맨 아래 줄을 찾느라 느려지고 한 줄만 고쳐도 전체를 다시 써야 한다. nftables 모드는 안내판을 찾아보기 표 하나로 만들어서 몇 개든 한 번에 찾고 바뀐 칸만 고친다. 앞서 그 문제를 풀려던 IPVS 모드는 쿠버네티스 방식과 잘 맞지 않아 1.35부터 쓰지 말라는 경고가 붙었다.
+
+  어떤 모드든 한 번 정해진 길은 커널의 연결 기억에 남아서, 안내판을 바꿔도 이미 가던 요청은 옛길로 계속 간다는 점이 자주 헷갈린다.
+</EasyIntro>
+
 클러스터를 1.35 이상으로 올리면 IPVS 모드로 돌던 kube-proxy가 이 모드는 deprecated라는 경고를 남긴다. 그럼 무엇으로 옮겨야 할까. iptables로 돌아가면 Service가 수만 개일 때 느리다고 들었고, nftables는 이름만 들어 봤다. 모드를 바꾸면 노드의 규칙이 어떻게 바뀌는지, 트래픽은 끊기지 않는지, 바꾼 뒤에 무엇이 달라지는지 알아야 결정할 수 있다.
 
 이 글은 kube-proxy의 세 모드를 비교하고 고르는 데 필요한 내부 동작을 다룬다. 이 주제의 다른 글도 있다. iptables 모드의 `KUBE-SERVICES → KUBE-SVC → KUBE-SEP` 체인과 `statistic` 확률이 엔드포인트를 고르는 원리는 [iptables NAT 글](/posts/iptables-nat#쿠버네티스-service는-nat-규칙-묶음이다)에, ClusterIP·NodePort와 `externalTrafficPolicy`의 Local·Cluster 차이와 클라이언트 IP 보존은 [Service 타입 글](/posts/k8s-service-types#트래픽-정책을-직접-따져-보기)에 있다. 여기서는 그 설명을 반복하지 않고, 같은 Service가 nftables 모드에서는 어떤 모양이 되는지, 규칙 수가 늘면 무엇이 느려지는지, conntrack이 모드와 상관없이 일으키는 문제를 직접 만든 규칙으로 확인한다.

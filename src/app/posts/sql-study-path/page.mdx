@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("sql-study-path");
 
+<EasyIntro>
+  SQL, 그러니까 데이터베이스에 질문하는 말을 처음 배우면 스무 줄짜리 긴 질문 앞에서 어디부터 읽을지 막막하다. 그런데 긴 질문도 사실은 여섯 가지 도구를 하나씩 차례로 얹은 것이다.
+
+  도구는 이 순서로 쌓인다. 표를 읽고, 원하는 줄만 거르고, 같은 사람끼리 묶어 합계를 내고, 다른 표를 옆에 붙이고, 계산한 결과를 다시 재료로 넣고, 줄을 그대로 둔 채 순위를 붙인다. 이 글은 회원 넷과 주문 일곱 개짜리 작은 표 위에서 질문 하나를 한 단계씩 키운다.
+
+  도구마다 틀리기 쉬운 자리도 거의 정해져 있다. 값을 모르는 칸이 섞이면 거르기와 붙이기에서 줄이 조용히 사라지고, 평균을 낼 때 누구를 넣었는지에 따라 기준이 바뀐다. 숫자가 이상하면 단계마다 줄이 몇 개 남았는지 세어 보면 된다.
+</EasyIntro>
+
 export const PG_MEMBERS = ["kim", "lee", "park", "choi"].map((name, i) => ({ id: i + 1, name }));
 
 export const toOrders = (rows) => rows.map(([id, member_id, amount, status, ordered_at]) => ({ id, member_id, amount, status, ordered_at }));

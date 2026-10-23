@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-cri-cni-csi");
 
+<EasyIntro>
+  쿠버네티스, 그러니까 컨테이너 수천 개를 여러 서버에 나눠 띄우는 관리 프로그램 초기에는 컨테이너를 띄우고 디스크를 붙이는 코드가 전부 쿠버네티스 안에 들어 있었다. 저장 장치 회사가 버그 하나를 고치려 해도 쿠버네티스 새 버전을 기다려야 했다.
+
+  그래서 벽에 달린 규격 콘센트처럼 세 가지 표준 연결 구멍을 만들었다. 하나는 컨테이너를 실제로 띄우는 프로그램을, 하나는 컨테이너에 네트워크 선을 꽂는 프로그램을, 하나는 디스크를 만들고 붙이는 프로그램을 끼우는 구멍이다. 각 서버의 관리자 프로그램은 순서만 알고, 실제 일은 콘센트에 꽂힌 플러그인이 한다.
+
+  이걸 알면 장애가 났을 때 어느 콘센트 너머의 문제인지부터 가를 수 있다. 네트워크 설정 파일 하나가 없으면 서버 전체가 준비 안 됨으로 바뀌고, 네트워크를 꽂다가 중간에 실패하면 주소가 반납되지 않고 조금씩 새어 나간다.
+</EasyIntro>
+
 노드 하나가 갑자기 Pod를 못 띄운다. 이벤트에는 `failed to setup network for sandbox`가 찍혀 있다. 옆 노드에서는 PVC가 Pending에 멈춰 `Waiting for a volume to be created either by the external provisioner`라고만 한다. 둘 다 쿠버네티스 코드가 아니라 플러그인에서 난 문제다. kubelet은 컨테이너를 직접 띄우지 않고, 네트워크를 직접 꽂지 않고, 디스크를 직접 붙이지 않는다. 셋 다 표준 인터페이스 너머의 플러그인에게 맡긴다.
 
 그 세 인터페이스가 CRI(Container Runtime Interface), CNI(Container Network Interface), CSI(Container Storage Interface)다. 이 글은 셋이 왜 따로 생겼는지, 각각 누가 누구를 어떻게 부르는지, 고장 나면 어디에 흔적이 남는지를 본다. 실습은 Ubuntu 24.04 컨테이너에서 했다. GitHub 릴리스에서 받은 containerd v2.3.0, runc v1.4.0, crictl v1.37.0, CNI 참조 플러그인 v1.9.1로 진짜 Pod sandbox를 띄웠고, CSI는 소스에서 빌드한 hostpath 드라이버(v1.18.0)와 external-provisioner(v6.4.0)를 kwok 실습 클러스터(kube-apiserver v1.37.0)에 붙였다. kubelet은 kwok의 가짜 노드라 없다. kubelet이 할 일은 crictl과 gRPC 호출로 손수 대신했다.

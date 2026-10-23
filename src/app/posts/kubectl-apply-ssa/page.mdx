@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("kubectl-apply-ssa");
 
+<EasyIntro>
+  트래픽이 몰려서 결제 서버를 손으로 6개로 늘렸는데, 30분 뒤 동료가 이미지 하나를 바꾸려고 설정 파일을 적용하자 다시 3개가 됐다. 파일에 3이라고 적혀 있었기 때문이다. 그런데 같은 날 아침 누군가 손으로 붙인 이름표는 적용 뒤에도 그대로 남았다. 파일에 없는 값인데 왜 하나는 살고 하나는 덮였을까.
+
+  답은 적용 명령이 무엇과 무엇을 비교하느냐에 있다. 기본 방식은 이번 파일, 지금 클러스터의 값, 지난번에 적용했던 파일 셋을 맞대어, 파일에 있는 값은 덮고 지난번엔 있었는데 이번엔 없는 값은 지우고 둘 다 없는 값은 남의 것으로 보고 둔다. 그래서 손으로 바꾼 개수는 파일에 적혀 있으니 덮이고, 이름표는 파일에 없으니 살아남았다.
+
+  서버 쪽 적용은 필드마다 누가 마지막으로 정했는지 주인을 기록해 두고, 남의 필드를 바꾸려 하면 말없이 덮는 대신 충돌이라고 멈춘다. 적용하기 전에 무엇이 바뀔지 미리 보는 명령도 있다.
+</EasyIntro>
+
 트래픽이 몰려서 결제 API를 손으로 6개로 늘렸다. 30분 뒤 동료가 이미지 태그 하나를 바꾸려고 `kubectl apply -f api.yaml`을 쳤다. Pod가 다시 3개가 됐다. 파일에 `replicas: 3`이 적혀 있었기 때문이다. 같은 일은 HPA가 늘려 둔 replicas에서도, 누가 `kubectl edit`으로 고친 값에서도 생긴다.
 
 이상한 건 반대 경우다. 그날 아침 다른 사람이 `kubectl label`로 붙여 둔 `oncall=kim` 라벨은 apply 뒤에도 그대로 남았다. 파일에 없는 값인데 왜 라벨은 살아남고 replicas는 덮였을까. 답은 `kubectl apply`가 무엇과 무엇을 비교하느냐에 있다. 이 글은 클라이언트 쪽 apply가 쓰는 3방향 비교와 `last-applied-configuration` 어노테이션, 그 한계를 풀려고 나온 서버 쪽 apply(Server-Side Apply)의 필드 주인 개념, 충돌과 `--force-conflicts`, 적용 전에 보는 `kubectl diff`와 서버 dry-run, 그리고 `--prune`의 위험을 차례로 본다.

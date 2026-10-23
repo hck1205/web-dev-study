@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("network-config-cicd");
 
+<EasyIntro>
+  네트워크 설정을 코드로 적어 두어도, 사람마다 자기 노트북에서 적용하거나 급할 때 화면에서 손으로 고치면 코드와 실제가 금방 달라진다. 누가 언제 무엇을 바꿨는지도 남지 않는다.
+
+  그래서 변경이 들어오는 문을 하나로 만든다. 공장에 정문 하나만 두고, 들어오는 물건은 모두 검사대를 지나게 하는 것과 같다. 기계가 먼저 문법과 위험한 규칙을 걸러 내고, 사람은 "무엇이 바뀔지" 적힌 계획서를 보고 도장을 찍는다. 실제 적용은 그 도장 찍힌 계획서 그대로, 정해진 시간에만 파이프라인이 한다.
+
+  그래도 비상문으로 몰래 들어온 변경이 생길 수 있다. 매일 아침 순찰을 돌듯 코드와 실제를 비교해 다른 곳을 찾아내고, 찾은 것은 코드를 고치거나 되돌려서 다시 정문으로 들여보낸다.
+</EasyIntro>
+
 금요일 저녁, 장애 대응 중에 누군가 콘솔에서 퍼블릭 라우트 테이블의 경로 하나를 지웠다. 장애는 다른 원인이었고 그 변경은 잊혔다. 월요일 오전, 아무 상관 없는 태그 변경 PR이 apply되면서 Terraform이 그 경로를 되살렸다. 그 사이 사흘 동안 코드와 실제는 달랐고, 아무도 몰랐다. 반대 상황도 있다. 노트북에서 각자 `terraform apply`를 치다 보니 리뷰 없이 보안 그룹이 열렸고, 누가 언제 바꿨는지는 CloudTrail을 뒤져야 나온다.
 
 네트워크 설정을 코드로 만들었다면([Terraform](/posts/terraform-network-iac), [Ansible](/posts/ansible-network-automation)) 다음은 그 코드가 실제에 닿는 길을 하나로 만드는 일이다. 변경은 PR로만 들어오고, 기계가 문법과 정책을 검사하고, 사람은 plan을 보고 승인하고, 적용은 파이프라인만 한다. 그리고 코드 밖에서 생긴 변화를 정기적으로 찾아낸다. 이 글은 GitHub Actions로 그 흐름을 짠다. 워크플로 문법, OIDC, environment 같은 기본은 [GitHub Actions로 ECR에 이미지 올리기](/posts/github-actions-docker-ecr)에서 다뤘으니 여기서는 네트워크 변경에 필요한 부분만 본다.

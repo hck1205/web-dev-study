@@ -2,6 +2,14 @@ import { getPostMetadata } from "@/features/posts";
 
 export const metadata = getPostMetadata("k8s-pod-lifecycle");
 
+<EasyIntro>
+  Pod 목록을 보면 상태 칸에 Pending, Running, CrashLoopBackOff 같은 말이 계속 바뀌며 지나간다. 그런데 쿠버네티스가 정한 Pod의 큰 단계는 다섯 개뿐이고, 화면에 보이는 말 대부분은 그 안의 컨테이너 하나하나가 지금 어떤 상태인지를 알려 주는 것이다. 이 세 층을 나눠 읽어야 상태 칸의 말이 무슨 뜻인지 알 수 있다.
+
+  컨테이너가 죽으면 kubelet이 같은 자리에서 다시 띄우는데, 계속 죽으면 다시 띄우기 전에 기다리는 시간을 10초에서 두 배씩 늘려 5분까지 간다. 그 기다리는 동안의 이름이 CrashLoopBackOff라서, 이 말은 지금 죽고 있다는 뜻이 아니라 다음 시도를 기다린다는 뜻이다. Pod를 지울 때는 손님 명단에서 이름을 빼는 일과 가게 문을 닫는 일이 동시에 시작되는 식당과 같아서, 명단이 미처 안 지워진 사이에 온 손님이 닫힌 문 앞에 서게 된다.
+
+  그래서 문을 닫기 전에 잠깐 기다리는 시간을 두고, 앱이 끝내라는 신호를 받으면 처리 중인 일을 마치고 나가게 만든다. 배포할 때마다 오류가 몇 개씩 튀는 이유가 바로 이 종료 순서 안에 있다.
+</EasyIntro>
+
 배포 중에 `kubectl get pods`를 반복해서 치다 보면 STATUS 칸에 온갖 말이 지나간다. Pending, ContainerCreating, Init:0/2, Running, CrashLoopBackOff, Terminating, Completed. 그런데 쿠버네티스 문서를 보면 Pod의 phase는 다섯 개뿐이다. ContainerCreating이나 CrashLoopBackOff는 phase가 아니다. 그럼 STATUS 칸에 찍히는 저 말은 다 어디서 오는 걸까.
 
 이 글은 Pod가 만들어져서 사라지기까지의 상태를 세 층(phase, 컨테이너 상태, 조건)으로 나눠 읽고, 컨테이너가 죽으면 kubelet이 어떻게 다시 띄우는지, Pod를 지우면 어떤 순서로 끝나는지를 따라간다. 배포할 때마다 502가 몇 개씩 튀는 문제의 원인도 이 종료 순서 안에 있다. `kubectl` 출력은 앞 글과 같은 실습용 클러스터(kwok, Kubernetes 1.30)에서 받았고, 컨테이너가 실제로 죽어야 나오는 상태는 그 상태 값을 직접 넣어 재현했다. 신호와 종료 코드는 Ubuntu 24.04에서 실제 프로세스로 확인했다.
