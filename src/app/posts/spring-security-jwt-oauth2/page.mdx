@@ -1,0 +1,558 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spring-security-jwt-oauth2");
+
+<EasyIntro>
+  주문 서버에 요청이 오면 "이 사람이 누구이고 무엇을 해도 되는지"를 확인해야 한다. 요청에는 로그인 서버가 도장을 찍어 준 출입증이 붙어 오는데, 예전에는 이 출입증을 검사하는 코드를 사람이 직접 짰다.
+
+  직접 짠 검사기는 놓치는 게 많다. 출입증의 날짜가 지났는지, 우리 건물용 출입증이 맞는지, 도장이 진짜인지를 하나라도 빼먹으면 남의 출입증으로도 들어올 수 있다. 그래서 스프링에는 이미 잘 만든 검사기가 들어 있고, 설정 몇 줄로 켤 수 있다.
+
+  이 검사기는 도장의 진짜 모양을 로그인 서버에서 한 번 받아 와 기억해 두고, 처음 보는 모양이 오면 다시 받아 온다. 출입증에 적힌 "관리자" 같은 글자를 스프링이 알아듣는 권한으로 바꾸는 일도 맡는다.
+
+  사람이 브라우저로 로그인하는 일, 그리고 우리 서버가 다른 서버를 부를 때 자기 출입증을 받아 오는 일도 같은 도구 상자에 들어 있다. 이 글은 직접 만든 검사기를 이 도구들로 바꾸면서 실제로 어떤 응답이 오가는지 하나씩 확인한다.
+</EasyIntro>
+
+주문 API에 3년 전에 누군가 짜 둔 `JwtAuthFilter`가 있었다. 헤더에서 토큰을 꺼내 서명을 확인하고, 클레임에서 사용자 ID를 꺼내 `SecurityContextHolder`에 넣는 클래스다. 잘 돌았다. 그런데 결제팀이 쓰라고 발급받은 토큰으로 주문 API를 불렀더니 그대로 통과했다. 필터가 토큰의 `aud`(이 토큰이 어느 API용인지)를 보지 않았기 때문이다.
+
+이 글은 그 필터를 Spring Security의 표준 리소스 서버 설정으로 바꾸는 과정을 따라간다. 받은 토큰을 검사하는 쪽(리소스 서버), 사람이 브라우저로 로그인하는 쪽(`oauth2Login`), 우리 서버가 다른 API를 부를 때 토큰을 받아 오는 쪽(OAuth2 클라이언트)을 차례로 본다. JWT의 구조와 서명 원리는 [토큰으로 로그인하기](/posts/token-login)에서, 인가 코드 흐름과 PKCE는 [OAuth 2.0](/posts/oauth)에서, 키 교체 절차는 [JWT 서명 키 교체](/posts/jwt-key-rotation)에서 다뤘다. 여기서는 스프링이 그 일을 어떻게 나눠 맡는지에 집중한다.
+
+실험 환경은 JDK 21, Spring Boot 4.1.1(Spring Security 7.1.1, Nimbus JOSE+JWT 10.9.1)이다. 인가 서버는 Node 내장 `crypto`로 RS256 토큰을 찍어 주고 JWKS를 내주는 60줄짜리 가짜 서버를 `localhost:9000`에 띄웠다. 아래 응답은 모두 이 환경에서 `curl`로 받은 그대로다.
+
+## 직접 만든 필터가 맡고 있던 일
+
+원래 필터는 이렇게 생겼다. 많이 보는 모양이다.
+
+```java
+// 직접 만든 JWT 필터 (바꾸기 전)
+@Component
+public class JwtAuthFilter extends OncePerRequestFilter {
+  private final PublicKey key = loadPublicKey();
+
+  @Override
+  protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+      throws ServletException, IOException {
+    String header = req.getHeader("Authorization");
+    if (header != null && header.startsWith("Bearer ")) {
+      try {
+        Claims c = Jwts.parser().verifyWith(key).build()
+            .parseSignedClaims(header.substring(7)).getPayload();
+        var auth = new UsernamePasswordAuthenticationToken(
+            c.getSubject(), null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+      } catch (JwtException e) {
+        // 토큰이 이상하면 그냥 넘긴다
+      }
+    }
+    chain.doFilter(req, res);
+  }
+}
+```
+
+이 필터는 서명과 만료만 본다. 빠진 것을 꼽으면 이렇다. `aud`와 `iss`를 보지 않는다. 공개 키가 코드에 박혀 있어서 인가 서버가 키를 바꾸면 배포를 다시 해야 한다. 토큰이 틀려도 401을 내지 않고 다음 필터로 넘기니, 뒤에서 "인증 안 됨"으로 막히긴 하지만 응답에 왜 틀렸는지가 남지 않는다. 권한은 무조건 `ROLE_USER` 하나다. 그리고 `@Component`라서 Spring Boot가 이 필터를 서블릿 필터로 한 번 더 등록한다. 이 이야기는 뒤에서 다시 한다.
+
+이 일들은 Spring Security에 이미 들어 있다. 받은 Bearer 토큰을 검사해 인증 객체로 바꾸는 서버를 OAuth 2.0 용어로 리소스 서버라고 부르고, 스프링에서는 `oauth2ResourceServer()` 설정 한 줄이 그 역할을 켠다.
+
+## 필터 대신 설정 몇 줄
+
+의존성 하나와 설정 세 줄이면 된다. Spring Boot 4에서 스타터 이름이 기술 이름을 따라 바뀌었다. 예전 이름 `spring-boot-starter-oauth2-resource-server`도 4.1.1에 남아 있지만 pom 설명에 "deprecated in favor of spring-boot-starter-security-oauth2-resource-server"라고 적혀 있다.
+
+```xml
+<!-- pom.xml: Spring Boot 4.x 이름 -->
+<dependency>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+</dependency>
+```
+
+```properties
+# application.properties
+# 토큰의 iss가 이 값과 정확히 같아야 한다
+spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:9000
+# 공개 키 목록 주소. 없으면 issuer-uri로 OIDC 디스커버리 문서를 읽어서 찾는다
+spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:9000/jwks
+# 토큰의 aud에 이 값이 들어 있어야 한다
+spring.security.oauth2.resourceserver.jwt.audiences=orders-api
+```
+
+```java
+@Bean
+@Order(1)
+SecurityFilterChain api(HttpSecurity http) throws Exception {
+  http.securityMatcher("/api/**")
+      .authorizeHttpRequests(a -> a
+          .requestMatchers("/api/admin/**").hasRole("ADMIN")
+          .requestMatchers("/api/orders/**").hasAuthority("SCOPE_orders.read")
+          .anyRequest().authenticated())
+      // 세션을 만들지 않는다. 매 요청이 토큰으로 스스로를 증명한다
+      .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+      // 쿠키로 인증하지 않으니 CSRF 토큰도 필요 없다
+      .csrf(c -> c.disable())
+      .oauth2ResourceServer(o -> o.jwt(Customizer.withDefaults()));
+  return http.build();
+}
+```
+
+앱을 띄울 때 인가 서버 로그에는 아무것도 찍히지 않았다. Spring Boot는 `JwtDecoder`를 만들 때 공개 키를 바로 받지 않고, 첫 요청이 들어올 때 받는다. 그래서 인가 서버가 잠깐 죽어 있어도 앱은 뜬다. 대신 첫 요청이 그 값을 치른다.
+
+CSRF를 끈 것은 이 체인이 쿠키를 전혀 쓰지 않기 때문이다. 브라우저가 자동으로 실어 보내는 것이 없으면 다른 사이트가 요청을 위조해도 실을 자격 증명이 없다. 같은 앱이 세션 쿠키로도 로그인을 받는다면 그쪽 체인에서는 끄면 안 된다. 왜 그런지는 [CSRF](/posts/csrf)에 있다.
+
+## 요청 하나가 필터 체인을 지나는 길
+
+토큰이 붙은 요청 하나가 들어와 컨트롤러에 닿기까지를 그림으로 따라가 본다. 아래 그림에서 다음을 누르면 단계마다 누가 누구에게 무엇을 넘기는지 보인다.
+
+<SequenceDiagram
+  caption="Bearer 토큰이 컨트롤러에 닿기까지"
+  actors={[
+    { id: "client", label: "클라이언트" },
+    { id: "filter", label: "Bearer 필터" },
+    { id: "decoder", label: "JwtDecoder" },
+    { id: "idp", label: "인가 서버" },
+    { id: "authz", label: "인가 필터" },
+    { id: "ctrl", label: "컨트롤러" },
+  ]}
+  steps={[
+    {
+      from: "client",
+      to: "filter",
+      label: "GET /api/me",
+      title: "헤더에서 토큰을 꺼낸다",
+      detail: "BearerTokenAuthenticationFilter가 Authorization 헤더에서 Bearer 뒤의 문자열을 꺼낸다. 헤더가 없으면 아무것도 하지 않고 넘기고, 나중에 인가 단계에서 401이 된다.",
+      payload: "Authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0...",
+    },
+    {
+      from: "filter",
+      to: "decoder",
+      label: "decode(token)",
+      title: "디코더에게 검사를 맡긴다",
+      detail: "필터는 토큰을 직접 보지 않는다. JwtAuthenticationProvider를 거쳐 JwtDecoder가 서명, exp와 nbf, iss, aud를 차례로 확인한다.",
+    },
+    {
+      from: "decoder",
+      to: "idp",
+      label: "GET /jwks",
+      title: "처음이거나 모르는 kid면 공개 키를 받는다",
+      detail: "헤더의 kid에 맞는 키가 캐시에 없을 때만 JWKS를 받는다. 이번 실험에서는 앱을 띄운 뒤 첫 요청에서 한 번 받았고, 같은 kid로 오는 요청에서는 다시 받지 않았다.",
+      payload: "{\"keys\":[{\"kty\":\"RSA\",\"kid\":\"k1\",\"use\":\"sig\",\"alg\":\"RS256\",\"n\":\"...\",\"e\":\"AQAB\"}]}",
+    },
+    {
+      from: "decoder",
+      to: "filter",
+      label: "Jwt",
+      title: "클레임을 권한으로 바꾼다",
+      detail: "검사를 통과한 Jwt를 JwtAuthenticationConverter가 인증 객체로 바꾼다. 기본값은 scope 클레임의 값마다 SCOPE_를 붙인 권한이다.",
+      payload: "authorities: [FACTOR_BEARER, SCOPE_orders.read, SCOPE_profile]",
+    },
+    {
+      from: "filter",
+      to: "authz",
+      label: "다음 필터",
+      title: "인증 객체를 컨텍스트에 넣고 넘긴다",
+      detail: "SecurityContext에 JwtAuthenticationToken이 들어간다. 세션은 만들지 않는다. 요청이 끝나면 컨텍스트도 비워진다.",
+    },
+    {
+      from: "authz",
+      to: "ctrl",
+      label: "허용",
+      title: "경로 규칙과 권한을 맞춰 본다",
+      detail: "AuthorizationFilter가 requestMatchers 규칙을 위에서부터 보고 권한을 확인한다. 인증은 됐는데 권한이 모자라면 여기서 403이 난다.",
+    },
+    {
+      from: "ctrl",
+      to: "client",
+      label: "200",
+      title: "컨트롤러는 Authentication만 받는다",
+      detail: "컨트롤러는 토큰 문자열을 모른다. 인자로 Authentication이나 @AuthenticationPrincipal Jwt를 받아 sub와 권한을 읽는다.",
+      payload: "{\"name\":\"user-42\",\"authorities\":[\"FACTOR_BEARER\",\"SCOPE_orders.read\",\"SCOPE_profile\"]}",
+    },
+  ]}
+/>
+
+마지막 응답의 `FACTOR_BEARER`는 내가 넣은 권한이 아니다. Spring Security 7은 어떤 방식으로 인증했는지를 `FACTOR_` 권한으로 함께 붙인다. 다중 인증(MFA) 요구를 권한 규칙으로 표현하려고 생긴 것이라, 권한 목록을 그대로 응답에 노출하거나 테스트에서 목록 전체를 비교하면 7로 올린 뒤 깨질 수 있다.
+
+## 401과 403은 응답 헤더에서 갈린다
+
+직접 만든 필터의 가장 큰 불편은 실패 이유가 남지 않는다는 점이었다. 표준 리소스 서버는 RFC 6750 형식으로 `WWW-Authenticate` 헤더에 이유를 적는다. 여러 경우를 직접 보냈다.
+
+```bash
+# 1) 토큰 없이
+curl -si localhost:8081/api/me
+# 2) 정상 토큰으로 ADMIN 경로 (roles 클레임은 있지만 아직 매핑 안 함)
+curl -si -H "Authorization: Bearer $T" localhost:8081/api/admin/ping
+# 3) aud가 billing-api인 토큰
+curl -si -H "Authorization: Bearer $W" localhost:8081/api/me
+# 4) 서명 부분을 뒤집은 토큰
+curl -si -H "Authorization: Bearer $X" localhost:8081/api/me
+```
+
+```text
+HTTP/1.1 401
+WWW-Authenticate: Bearer resource_metadata="http://localhost:8081/.well-known/oauth-protected-resource"
+
+HTTP/1.1 403
+WWW-Authenticate: Bearer error="insufficient_scope", error_description="The request requires higher privileges than provided by the access token.", error_uri="https://tools.ietf.org/html/rfc6750#section-3.1"
+
+HTTP/1.1 401
+WWW-Authenticate: Bearer error="invalid_token", error_description="An error occurred while attempting to decode the Jwt: The aud claim is not valid", error_uri="https://tools.ietf.org/html/rfc6750#section-3.1", resource_metadata="http://localhost:8081/.well-known/oauth-protected-resource"
+
+HTTP/1.1 401
+WWW-Authenticate: Bearer error="invalid_token", error_description="An error occurred while attempting to decode the Jwt: Signed JWT rejected: Invalid signature", error_uri="https://tools.ietf.org/html/rfc6750#section-3.1", resource_metadata="http://localhost:8081/.well-known/oauth-protected-resource"
+```
+
+토큰이 없으면 `error` 없이 `Bearer`만 온다. "토큰을 가져오라"는 뜻이다. 토큰이 틀리면 401에 `invalid_token`, 토큰은 맞는데 권한이 모자라면 403에 `insufficient_scope`다. 401은 "누군지 모르겠다", 403은 "누군지는 아는데 안 된다"이고, 이 구분은 [인증과 인가](/posts/authn-vs-authz)의 두 질문과 그대로 겹친다. 응답 본문은 비어 있다. 운영에서 이유를 찾을 곳은 본문이 아니라 이 헤더다.
+
+`resource_metadata`는 Spring Security 7이 새로 붙이는 값으로, RFC 9728(보호 자원 메타데이터)이 정한 주소다. 클라이언트가 이 API를 부르려면 어느 인가 서버에서 토큰을 받아야 하는지 찾아가는 데 쓴다. 아래 그림에서 헤더의 조각을 하나씩 눌러 보면 각 값이 무엇을 말하는지 나온다.
+
+<UrlAnatomy
+  caption="리소스 서버가 돌려준 WWW-Authenticate 헤더"
+  base="WWW-Authenticate: Bearer"
+  separator=" "
+  joiner=", "
+  params={[
+    {
+      key: "error",
+      value: "\"invalid_token\"",
+      title: "무엇이 틀렸나",
+      description: "RFC 6750이 정한 세 값 중 하나다. invalid_request는 요청 모양이 틀렸을 때, invalid_token은 만료·서명·클레임 검사에서 떨어졌을 때(401), insufficient_scope는 권한이 모자랄 때(403)다. 토큰이 아예 없으면 이 값이 빠진다.",
+      required: true,
+    },
+    {
+      key: "error_description",
+      value: "\"...The aud claim is not valid\"",
+      title: "사람이 읽을 이유",
+      description: "어느 검사에서 떨어졌는지 적힌다. 실험에서 본 문구는 The aud claim is not valid, The iss claim is not valid, Jwt expired at ..., Signed JWT rejected: Invalid signature, Another algorithm expected, or no matching key(s) found였다. 401을 조사할 때 가장 먼저 볼 곳이다.",
+    },
+    {
+      key: "error_uri",
+      value: "\"https://tools.ietf.org/html/rfc6750#section-3.1\"",
+      display: "error_uri=\"...rfc6750#section-3.1\"",
+      title: "오류 코드의 정의",
+      description: "오류 코드가 정의된 문서 위치다. 매번 같은 값이라 진단에는 거의 쓰지 않는다.",
+    },
+    {
+      key: "resource_metadata",
+      value: "\"http://localhost:8081/.well-known/oauth-protected-resource\"",
+      display: "resource_metadata=\".../.well-known/oauth-protected-resource\"",
+      title: "이 API의 메타데이터 주소",
+      description: "RFC 9728의 보호 자원 메타데이터 문서 주소다. 클라이언트가 어느 인가 서버의 토큰을 받아야 하는지 찾아가는 데 쓴다. Spring Security 7에서 붙기 시작했다.",
+    },
+  ]}
+/>
+
+`error_description`에 검사 단계가 그대로 드러나는 게 마음에 걸릴 수 있다. 토큰을 만들 수 없는 공격자에게 "서명이 틀렸다"를 알려 준다고 얻을 게 많지는 않지만, 바깥에 내보내는 게 꺼려지면 `BearerTokenAuthenticationEntryPoint`를 바꾸는 대신 게이트웨이에서 헤더를 다듬는 편이 진단 정보를 안쪽 로그에 남기기 쉽다.
+
+## 시계가 1분 어긋나도 통과하는 이유
+
+만료 검사는 `exp`를 지금 시각과 비교한다. 그런데 인가 서버와 리소스 서버의 시계는 조금씩 다르다. 그래서 스프링의 기본 검사기 `JwtTimestampValidator`는 60초의 여유를 둔다. 실제로 30초 전에 만료된 토큰과 90초 전에 만료된 토큰을 보냈다.
+
+```text
+--- exp가 30초 전인 토큰
+200
+--- exp가 90초 전인 토큰
+HTTP/1.1 401
+WWW-Authenticate: Bearer error="invalid_token", error_description="An error occurred while attempting to decode the Jwt: Jwt expired at 2026-10-23T12:50:01Z", ...
+```
+
+30초 지난 토큰은 통과했다. 액세스 토큰 수명이 5분이면 실제로는 6분까지 쓰인다는 뜻이다. 보통은 문제가 안 되지만, 로그아웃 직후 짧은 토큰으로 막겠다는 설계라면 이 1분을 계산에 넣어야 한다. 여유를 줄이려면 디코더를 직접 만들어 검사기를 바꾼다.
+
+```java
+@Bean
+JwtDecoder jwtDecoder() {
+  NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri("http://localhost:9000/jwks").build();
+  decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+      new JwtTimestampValidator(Duration.ofSeconds(10)),     // 여유 10초
+      new JwtIssuerValidator("http://localhost:9000"),
+      new JwtClaimValidator<List<String>>("aud", aud -> aud != null && aud.contains("orders-api"))));
+  return decoder;
+}
+```
+
+디코더 빈을 직접 만들면 Spring Boot의 `issuer-uri`, `audiences` 설정은 이 빈에 적용되지 않는다. 자동 구성은 같은 타입의 빈이 있으면 물러나기 때문이다([Spring Boot 자동 구성](/posts/spring-boot-auto-configuration)). 위 코드처럼 iss와 aud 검사기를 직접 다시 넣어야 한다. 이걸 빼먹고 만료 여유만 바꾸면, 바꾸기 전보다 검사가 약해진다.
+
+## 공개 키는 언제 다시 받나
+
+리소스 서버는 서명 검증에 인가 서버의 공개 키가 필요하다. 그 목록이 JWKS(JSON Web Key Set)이고, 토큰 헤더의 `kid`로 어느 키를 쓸지 고른다. 스프링이 이 목록을 언제 받는지 인가 서버 로그로 확인했다.
+
+```text
+--- 첫 요청 (kid=k1)
+12:51:31.456 GET /jwks
+--- 같은 토큰으로 세 번 더           (로그 없음)
+--- 존재하지 않는 kid=zz로 다섯 번
+12:51:31.893 GET /jwks
+12:51:31.916 GET /jwks
+12:51:31.938 GET /jwks
+12:51:31.956 GET /jwks
+12:51:31.979 GET /jwks
+--- 인가 서버에 k3를 새로 추가하고, k3로 서명한 토큰으로 네 번
+12:51:43.542 GET /jwks
+```
+
+처음 보는 `kid`가 오면 한 번 받아 오고, 그다음부터는 캐시를 쓴다. 키 교체를 겹치는 기간을 두고 하면 리소스 서버를 손댈 필요가 없는 이유가 이것이다. 교체 순서 자체는 [JWT 서명 키 교체](/posts/jwt-key-rotation)에 정리했다.
+
+눈여겨볼 것은 마지막 다섯 줄이다. 존재하지 않는 `kid`를 단 토큰이 올 때마다 JWKS를 다시 받았다. 7.1.1의 `NimbusJwtDecoder` 소스를 보면 JWKS 소스를 만들 때 `.rateLimited(false)`로 Nimbus의 재조회 횟수 제한을 꺼 둔다. 누군가 아무 `kid`나 붙인 가짜 토큰을 초당 수천 개 보내면, 그 수만큼 우리 서버가 인가 서버를 두드린다. 인가 서버가 느려지면 JWKS 요청이 쌓이고, 기본 연결·읽기 타임아웃은 각각 30초다(`sun.net.client.defaultConnectTimeout`, `defaultReadTimeout` 시스템 속성으로 바뀐다). 대책은 앞단의 [요청 제한](/posts/rate-limiting-in-practice)으로 인증 실패가 많은 클라이언트를 끊거나, `NimbusJwtDecoder.withJwkSetUri(...).restOperations(...)`로 짧은 타임아웃을 준 클라이언트를 넣는 것이다.
+
+인가 서버를 재시작했더니 같은 `kid=k1`인데 키가 새로 만들어진 경우도 겪었다. 이때는 캐시에 `k1`이 있으니 다시 받지 않고, 계속 `Signed JWT rejected: Invalid signature`가 났다. 다른 키를 같은 `kid`로 내보내는 것은 인가 서버 쪽 실수지만, 증상은 리소스 서버에서 나타난다. `kid`가 맞는데 서명이 틀리면 JWKS 응답과 토큰의 키를 직접 비교해 본다.
+
+## 클레임을 권한으로 바꾸는 곳
+
+기본 변환기는 `scope`(또는 `scp`) 클레임만 본다. 토큰에 `"roles": ["ADMIN"]`이 들어 있어도 `hasRole("ADMIN")`은 403이었다. 앞의 `insufficient_scope` 응답이 그것이다. 인가 서버마다 역할을 담는 클레임 이름이 다르니, 스프링은 그 매핑을 앱에 맡긴다.
+
+```java
+@Bean
+JwtAuthenticationConverter jwtAuthenticationConverter() {
+  JwtGrantedAuthoritiesConverter scopes = new JwtGrantedAuthoritiesConverter(); // scope -> SCOPE_x
+  JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+  converter.setJwtGrantedAuthoritiesConverter(jwt -> {
+    List<GrantedAuthority> out = new ArrayList<>(scopes.convert(jwt));
+    List<String> roles = jwt.getClaimAsStringList("roles");
+    if (roles != null) roles.forEach(r -> out.add(new SimpleGrantedAuthority("ROLE_" + r)));
+    return out;
+  });
+  return converter;
+}
+```
+
+```text
+# 변환기를 넣은 뒤 /api/me
+{"aud":["orders-api"],"name":"user-42","authorities":["FACTOR_BEARER","ROLE_ADMIN","SCOPE_orders.read","SCOPE_profile"]}
+# /api/admin/ping
+HTTP/1.1 200
+pong
+```
+
+`hasRole("ADMIN")`은 내부적으로 `ROLE_ADMIN` 권한을 찾고, `hasAuthority("ADMIN")`은 글자 그대로 `ADMIN`을 찾는다. 매핑에서 `ROLE_`을 붙였으면 `hasRole`, 안 붙였으면 `hasAuthority`를 써야 한다. 이게 어긋나면 토큰에는 분명 관리자라고 적혀 있는데 403이 나고, 원인을 찾느라 한참 걸린다.
+
+Keycloak은 역할을 `realm_access.roles`처럼 중첩된 객체 안에 둔다. 이때는 `jwt.getClaimAsMap("realm_access")`에서 꺼낸다. 인증 객체의 이름(`auth.getName()`)은 기본이 `sub`인데, 사람이 읽을 이름이 따로 있으면 `converter.setPrincipalClaimName("preferred_username")`로 바꾼다. 다만 이름은 바뀔 수 있으니 DB의 외래 키처럼 쓰는 값은 `sub`로 두는 편이 안전하다.
+
+권한을 토큰에 담으면 토큰이 살아 있는 동안 그 권한도 살아 있다. 관리자 권한을 회수해도 이미 발급된 토큰은 만료 때까지 `ROLE_ADMIN`을 들고 다닌다. 위험한 작업은 토큰의 역할 대신 DB에서 지금 권한을 다시 확인하는 쪽이 낫다. 이 문제는 [인증과 인가](/posts/authn-vs-authz)의 "토큰에 적힌 역할은 언제 낡나"에서 길게 다뤘다.
+
+## aud를 안 보면 생기는 일
+
+처음 이야기로 돌아간다. 결제 API용으로 발급된 토큰이 주문 API를 통과한 이유는 `aud` 검사가 없어서였다. 표준 설정에서도 `audiences`를 빼면 똑같이 된다. `audiences`를 비운 채로 띄우고 `aud=billing-api` 토큰을 보냈다.
+
+```text
+{"name":"user-42","aud":["billing-api"],"authorities":["FACTOR_BEARER","SCOPE_orders.read"]} 200
+```
+
+통과했다. 한 인가 서버가 여러 API의 토큰을 발급하면, 서명과 `iss`는 모든 토큰이 똑같다. API를 가르는 건 `aud`뿐이다. 한 서비스가 받은 토큰을 다른 서비스로 그대로 들고 가서 쓰는 걸 막으려면 리소스 서버마다 자기 이름을 `audiences`에 적는다.
+
+`iss`도 글자 하나까지 비교한다. 설정을 `http://localhost:9000/`(끝에 슬래시)로 바꾸자 정상 토큰이 `The iss claim is not valid`로 막혔다. 인가 서버 콘솔에 적힌 issuer를 복사해 붙일 때 이 슬래시가 자주 문제를 만든다.
+
+## 브라우저 로그인은 다른 체인이다
+
+같은 앱에 관리자 화면이 있고, 사람이 회사 계정으로 로그인한다고 하자. 이건 토큰을 받는 쪽이 아니라 토큰을 얻어 오는 쪽이고, 결과는 세션이다. `oauth2Login()`이 그 일을 맡는다.
+
+```properties
+spring.security.oauth2.client.registration.demo.client-id=web-app
+spring.security.oauth2.client.registration.demo.client-secret=web-secret
+spring.security.oauth2.client.registration.demo.authorization-grant-type=authorization_code
+spring.security.oauth2.client.registration.demo.scope=openid,profile
+spring.security.oauth2.client.provider.demo.authorization-uri=http://localhost:9000/authorize
+spring.security.oauth2.client.provider.demo.token-uri=http://localhost:9000/token
+spring.security.oauth2.client.provider.demo.jwk-set-uri=http://localhost:9000/jwks
+```
+
+```java
+@Bean
+@Order(2)
+SecurityFilterChain web(HttpSecurity http) throws Exception {
+  http.authorizeHttpRequests(a -> a.anyRequest().authenticated())
+      .oauth2Login(Customizer.withDefaults());   // 세션 + CSRF 보호는 기본값 그대로
+  return http.build();
+}
+```
+
+이제 앱에는 체인이 두 개다. `/api/**`는 `@Order(1)` 체인이 먼저 가져가고, 나머지는 `@Order(2)` 체인으로 간다. 아래 그림은 같은 앱 안에서 두 체인이 무엇을 받고 무엇을 남기는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="한 앱, 두 체인: 토큰을 받는 쪽과 세션을 만드는 쪽"
+  nodes={[
+    { id: "req", label: "들어온 요청", x: 200, y: 30, w: 130 },
+    { id: "api", label: "/api/** 체인", sub: "oauth2ResourceServer", x: 100, y: 115, w: 170 },
+    { id: "web", label: "나머지 체인", sub: "oauth2Login", x: 300, y: 115, w: 150 },
+    { id: "bearer", label: "Bearer 토큰", sub: "세션 없음 · CSRF 끔", x: 100, y: 210, w: 170 },
+    { id: "session", label: "JSESSIONID", sub: "세션 · CSRF 켬", x: 300, y: 210, w: 150 },
+  ]}
+  edges={[
+    { from: "req", to: "api", label: "@Order(1)" },
+    { from: "req", to: "web", label: "@Order(2)" },
+    { from: "api", to: "bearer", label: "매 요청 검사" },
+    { from: "web", to: "session", label: "로그인 한 번" },
+  ]}
+/>
+
+로그인하지 않은 채로 `/`를 열었다.
+
+```text
+HTTP/1.1 302
+Set-Cookie: JSESSIONID=E9550D81DB1D62FBA208CE21650A5265; Path=/; HttpOnly
+Location: http://localhost:8081/oauth2/authorization/demo
+
+HTTP/1.1 302
+Set-Cookie: JSESSIONID=6DDD2CA5205C823877CEF16C52929B06; Path=/; HttpOnly
+Location: http://localhost:9000/authorize?response_type=code&client_id=web-app&scope=openid%20profile&state=sOiLyDo4Jq-5yOHEgu37m4BESUet3vk8VB47zJWZYFk%3D&redirect_uri=http://localhost:8081/login/oauth2/code/demo&nonce=trEGpT5lj3w74X-eZbheVcljRtHlmxl6Se255JzdnKM&code_challenge=Be4xS9MkFobc0gkqJ3iVEujw4PRwQjoZisI_uKjPzuM&code_challenge_method=S256
+```
+
+첫 302에서 세션이 생긴다. 이 세션에 "로그인 뒤 돌아갈 주소"를 적어 둔다. 두 번째 302가 인가 서버로 가는 주소인데, `state`, `nonce`, `code_challenge`가 모두 붙어 있다. `state`는 콜백이 내가 시작한 요청의 답인지 확인하는 값, `nonce`는 ID 토큰이 이번 로그인을 위해 발급됐는지 확인하는 값, `code_challenge`는 PKCE다. 비밀을 가진 서버 앱(confidential client)인데도 이 버전은 PKCE를 기본으로 붙였다. 세 값의 의미는 [OAuth 2.0](/posts/oauth)에 자세히 있다.
+
+인가 서버에서 로그인하면 브라우저가 `/login/oauth2/code/demo?code=...&state=...`로 돌아온다. 스프링은 세션에 저장한 요청과 `state`를 맞춰 보고, 코드를 토큰으로 바꾸고, ID 토큰의 서명과 `nonce`를 검사한 뒤 `OidcUser`를 세션에 넣는다. 이때 세션 ID를 새로 바꾼다(세션 고정 공격 방지). 그 뒤로 브라우저는 토큰을 모른다. 들고 다니는 건 세션 쿠키뿐이다. 이 구조가 쿠키 세션 로그인과 무엇이 같고 다른지는 [쿠키와 세션](/posts/cookie-session-login)에, 회사 계정으로 모으는 이야기는 [SSO: SAML과 OIDC](/posts/sso-saml-oidc)에 있다.
+
+여기서 흔한 실수가 하나 있다. 로그인 결과로 받은 ID 토큰을 그대로 백엔드 API의 Bearer 토큰으로 넘기는 것이다. ID 토큰의 `aud`는 API가 아니라 로그인한 앱(client_id)이다. API가 `audiences`를 제대로 검사하면 막히고, 안 하면 통과해 버린다. API를 부를 때는 액세스 토큰을 쓴다. 로그인한 사용자의 액세스 토큰은 `@RegisteredOAuth2AuthorizedClient`로 꺼낼 수 있다.
+
+## 내 서버가 다른 API를 부를 때
+
+주문 서비스가 재고 서비스를 부른다. 사람은 없다. 서버가 자기 이름으로 토큰을 받아야 하고, 이게 client credentials 흐름이다. 리소스 서버 설정과 별개로 클라이언트 등록이 하나 더 필요하다.
+
+```properties
+spring.security.oauth2.client.registration.inventory.client-id=orders-service
+spring.security.oauth2.client.registration.inventory.client-secret=s3cret
+spring.security.oauth2.client.registration.inventory.authorization-grant-type=client_credentials
+spring.security.oauth2.client.registration.inventory.scope=inventory.read
+spring.security.oauth2.client.registration.inventory.provider=demo
+```
+
+```java
+@Bean
+OAuth2AuthorizedClientManager authorizedClientManager(
+    ClientRegistrationRepository regs, OAuth2AuthorizedClientService service) {
+  var manager = new AuthorizedClientServiceOAuth2AuthorizedClientManager(regs, service);
+  manager.setAuthorizedClientProvider(
+      OAuth2AuthorizedClientProviderBuilder.builder().clientCredentials().build());
+  return manager;
+}
+
+@Bean
+RestClient inventoryClient(RestClient.Builder builder, OAuth2AuthorizedClientManager manager) {
+  var interceptor = new OAuth2ClientHttpRequestInterceptor(manager);
+  interceptor.setClientRegistrationIdResolver(request -> "inventory"); // 어느 등록으로 토큰을 받을지
+  return builder.baseUrl("http://localhost:9000").requestInterceptor(interceptor).build();
+}
+```
+
+`/api/orders/stock`을 세 번 불렀을 때 인가 서버와 재고 API에 찍힌 로그다.
+
+```text
+12:51:59.637 POST /token grant_type=client_credentials&scope=inventory.read auth: Basic b3Jk
+12:51:59.735 GET /inventory Bearer eyJhbGciOiJSU...
+12:51:59.761 GET /inventory Bearer eyJhbGciOiJSU...
+12:51:59.783 GET /inventory Bearer eyJhbGciOiJSU...
+```
+
+토큰은 한 번만 받았다. 그 뒤 두 번은 저장해 둔 토큰을 다시 썼다. 클라이언트 비밀은 기본값대로 Basic 인증 헤더(`client_secret_basic`)로 갔다. 아래 그림에서 이 흐름을 단계별로 본다.
+
+<SequenceDiagram
+  caption="client credentials: 토큰은 한 번 받고 만료 전까지 다시 쓴다"
+  actors={[
+    { id: "orders", label: "주문 서비스" },
+    { id: "store", label: "토큰 저장소" },
+    { id: "idp", label: "인가 서버" },
+    { id: "inv", label: "재고 API" },
+  ]}
+  steps={[
+    {
+      from: "orders",
+      to: "store",
+      label: "inventory 토큰?",
+      title: "인터셉터가 먼저 저장된 토큰을 찾는다",
+      detail: "OAuth2ClientHttpRequestInterceptor가 요청을 보내기 전에 매니저에게 inventory 등록의 토큰을 달라고 한다. 처음이라 없다.",
+    },
+    {
+      from: "orders",
+      to: "idp",
+      label: "POST /token",
+      title: "서버 자신의 이름으로 토큰을 받는다",
+      detail: "사용자도 리다이렉트도 없다. client_id와 비밀을 Basic 헤더에 실어 보내고 scope를 적는다.",
+      payload: "grant_type=client_credentials&scope=inventory.read\nAuthorization: Basic b3JkZXJzLXNlcnZpY2U6czNjcmV0",
+    },
+    {
+      from: "orders",
+      to: "store",
+      label: "저장",
+      title: "받은 토큰을 만료 시각과 함께 저장한다",
+      detail: "OAuth2AuthorizedClientService에 저장된다. 기본 구현은 메모리라 인스턴스마다 따로 받는다.",
+    },
+    {
+      from: "orders",
+      to: "inv",
+      label: "GET /inventory",
+      title: "Bearer 헤더를 붙여 보낸다",
+      detail: "재고 API 입장에서는 이 요청도 그냥 Bearer 토큰이 붙은 요청이다. 재고 API는 aud가 inventory-api인지 검사한다.",
+      payload: "Authorization: Bearer eyJhbGciOiJSUzI1NiIs...",
+    },
+    {
+      from: "orders",
+      to: "inv",
+      label: "GET /inventory",
+      title: "두 번째부터는 저장된 토큰을 쓴다",
+      detail: "만료 전이면 인가 서버를 부르지 않는다. 기본값은 만료 60초 전부터 새로 받는다.",
+    },
+  ]}
+/>
+
+매니저를 `AuthorizedClientServiceOAuth2AuthorizedClientManager`로 직접 만든 이유가 있다. 스프링이 기본으로 쓰는 `DefaultOAuth2AuthorizedClientManager`는 토큰을 현재 HTTP 요청(세션)에 묶어 저장한다. 사람이 로그인한 화면에서는 그게 맞지만, `@Scheduled` 작업이나 메시지 리스너처럼 HTTP 요청 밖에서 부르면 꺼낼 요청이 없어 실패한다. 서버끼리의 호출에는 요청과 무관하게 저장하는 쪽을 쓴다.
+
+토큰 저장소가 메모리라는 점도 알아 둔다. Pod가 열 개면 토큰도 열 개 받고, 재시작할 때마다 새로 받는다. 대부분은 괜찮지만 인가 서버가 토큰 발급 횟수를 제한하면 배포 순간에 걸릴 수 있다.
+
+## 직접 만든 필터에서 자주 보는 구멍
+
+표준 설정으로 옮길 수 없는 사정(사내 토큰 형식, 오래된 인가 서버)이 있어 필터를 계속 써야 할 수도 있다. 그럴 때 처음 본 필터에서 실제로 문제가 되는 곳을 짚는다.
+
+`@Component`를 붙인 `Filter`는 Spring Boot가 서블릿 컨테이너에도 자동으로 등록한다. `addFilterBefore`로 시큐리티 체인에도 넣으면, 같은 필터가 시큐리티 체인 바깥에서 한 번 더 돈다. 바깥은 `securityMatcher`와 상관없이 모든 요청에 걸리고, 시큐리티 체인이 컨텍스트를 준비하기 전이다. 빈으로 두려면 `FilterRegistrationBean`에서 `setEnabled(false)`로 서블릿 등록을 끈다. 처음부터 빈으로 만들지 않고 체인 설정에서 `new`로 넣는 편이 단순하다.
+
+예외를 삼키고 넘기면 원인이 사라진다. 실패하면 `AuthenticationEntryPoint`로 401을 내고 체인을 멈춰야 한다. 또 서명 키를 `alg` 헤더를 보고 고르는 코드는 위험하다. 공개 키를 HMAC 비밀로 써서 서명을 맞추는 알고리즘 혼동 공격이 그 틈을 탄다. 허용할 알고리즘을 서버가 정해 둔다. 스프링 디코더는 기본으로 RS256만 받는다.
+
+`SecurityContextHolder`는 스레드 로컬이다. 필터에서 직접 넣었다면 요청이 끝날 때 비워야 한다. 톰캣은 스레드를 재사용하므로, 비우지 않으면 다음 요청이 앞 사람의 인증을 물려받을 수 있다. 표준 체인은 `SecurityContextHolderFilter`가 이 정리를 맡는다. 마지막으로 `exp`, `nbf`, `iss`, `aud` 검사를 라이브러리 기본값에 맡기지 말고 하나씩 켜져 있는지 테스트로 확인한다. 라이브러리마다 기본으로 검사하는 클레임이 다르다.
+
+## 401이 쏟아질 때 보는 순서
+
+배포 직후 401이 쏟아진다는 연락을 받으면 이 순서로 본다.
+
+```bash
+# 1) 응답 헤더의 error_description부터 본다
+curl -si -H "Authorization: Bearer $TOKEN" https://orders.example.com/api/me | grep -i www-authenticate
+
+# 2) 토큰의 헤더와 페이로드를 읽는다 (서명은 검증하지 않는 단순 디코딩)
+echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null; echo
+
+# 3) 인가 서버의 JWKS에 토큰의 kid가 있는지 본다
+curl -s https://idp.example.com/jwks | grep -o '"kid":"[^"]*"'
+```
+
+`error_description`이 `aud`나 `iss`를 말하면 설정 값이나 토큰 발급 쪽 문제다. `no matching key(s) found`면 `kid`가 JWKS에 없다. 키 교체를 서두른 것이다. `Invalid signature`인데 `kid`는 있다면 같은 `kid`로 다른 키가 나간 경우를 의심한다. `Jwt expired`가 특정 서버에서만 나면 그 서버의 시계를 본다(`timedatectl`). 그래도 모르겠으면 잠깐 `logging.level.org.springframework.security=TRACE`를 켠다. 어느 체인이 요청을 가져갔고 어느 필터에서 멈췄는지 한 줄씩 찍힌다. 다만 TRACE는 요청마다 수십 줄이라 운영에서는 짧게 켜고 끈다.
+
+리소스 서버, 로그인, 클라이언트는 이름이 비슷해서 섞이기 쉽지만 맡은 질문이 다르다. 들어온 토큰을 믿어도 되는지는 리소스 서버가, 사람을 누구로 볼지는 `oauth2Login`이, 내가 남을 부를 자격은 OAuth2 클라이언트가 답한다. 어느 쪽이든 마지막에 확인할 것은 같다. 이 토큰이 정말 나를 위해 발급됐는가, 즉 `aud`다.
+
+## 면접에서 나올 만한 질문
+
+### Spring Security에서 JWT 인증은 어떻게 설정하나요?
+
+`spring-boot-starter-security-oauth2-resource-server`를 넣고 `oauth2ResourceServer(o -> o.jwt(...))`를 켠다. 설정에는 `issuer-uri`나 `jwk-set-uri`, 그리고 `audiences`를 적는다. 그러면 `BearerTokenAuthenticationFilter`가 헤더에서 토큰을 꺼내고, `JwtDecoder`가 서명·만료·iss·aud를 검사하고, `JwtAuthenticationConverter`가 클레임을 권한으로 바꾼다. 직접 필터를 짤 필요가 없다.
+
+### 리소스 서버가 401과 403을 구분하는 기준은요?
+
+토큰이 없거나 검사에서 떨어지면 401이고 `WWW-Authenticate`에 `invalid_token`이 적힌다. 토큰은 유효한데 경로가 요구하는 권한이 없으면 403이고 `insufficient_scope`가 적힌다. 401은 인증 단계에서, 403은 인가 필터에서 난다. 운영에서 원인은 본문이 아니라 이 헤더의 `error_description`에서 찾는다.
+
+### JWKS는 언제 다시 받나요? 키를 교체하면 리소스 서버를 재시작해야 하나요?
+
+첫 요청에서 받아 캐시하고, 토큰의 `kid`가 캐시에 없을 때 다시 받는다. 그래서 인가 서버가 새 키를 미리 게시하고 겹치는 기간을 두면 재시작이 필요 없다. 반대로 같은 `kid`로 다른 키를 내보내면 캐시를 갱신하지 않아 서명 오류가 계속 난다. 또 7.1.1 기준으로 모르는 `kid`마다 재조회하고 횟수 제한이 꺼져 있어서, 가짜 `kid` 토큰이 몰리면 인가 서버를 두드리게 된다.
+
+### 토큰의 roles 클레임으로 hasRole을 쓰려면 무엇을 해야 하나요?
+
+기본 변환기는 `scope`만 `SCOPE_` 권한으로 바꾸므로 `JwtAuthenticationConverter`에 권한 변환 함수를 넣는다. `roles` 값마다 `ROLE_`을 붙여 `SimpleGrantedAuthority`로 만들면 `hasRole("ADMIN")`이 동작한다. `ROLE_`을 안 붙였다면 `hasAuthority`를 써야 한다. 이 접두사가 어긋나는 게 가장 흔한 403 원인이다.
+
+### aud 검사는 왜 필요한가요?
+
+한 인가 서버가 여러 API의 토큰을 발급하면 서명과 iss는 모두 같아서, API를 가르는 값은 `aud`뿐이다. 검사하지 않으면 다른 API용으로 받은 토큰이나 로그인용 ID 토큰으로도 들어올 수 있다. 실험에서도 `audiences`를 비우자 `aud=billing-api` 토큰이 200을 받았다. 디코더 빈을 직접 만들면 이 검사기를 다시 넣어야 한다는 점도 주의한다.
+
+### oauth2Login과 oauth2ResourceServer는 어떻게 다른가요? 한 앱에 둘 다 둘 수 있나요?
+
+`oauth2Login`은 인가 코드 흐름으로 토큰을 얻어 와 세션을 만드는 쪽이고, 브라우저는 세션 쿠키만 들고 다닌다. `oauth2ResourceServer`는 들어온 Bearer 토큰을 매 요청 검사하고 세션을 만들지 않는다. 한 앱에 두려면 `securityMatcher`와 `@Order`로 체인을 나눈다. 세션 쪽은 CSRF 보호를 켜 두고, 토큰 쪽은 끈다.
+
+### 서비스끼리 호출할 때 토큰은 어떻게 받고, 운영에서 주의할 점은요?
+
+client credentials 등록을 만들고 `OAuth2ClientHttpRequestInterceptor`를 `RestClient`에 붙이면, 토큰을 한 번 받아 저장하고 만료 직전까지 다시 쓴다. HTTP 요청 밖(스케줄러, 메시지 리스너)에서도 부르면 `AuthorizedClientServiceOAuth2AuthorizedClientManager`를 써야 한다. 기본 저장소가 메모리라 인스턴스마다 토큰을 따로 받는다는 점, 받는 쪽 API가 `aud`를 검사하도록 맞춰야 한다는 점도 챙긴다.
+
+### 직접 만든 JWT 필터를 계속 써야 한다면 무엇을 점검하나요?
+
+`@Component`로 등록해 서블릿 필터로 두 번 돌지 않는지, 실패 시 예외를 삼키지 않고 401로 끝내는지, 허용 알고리즘을 서버가 고정했는지 본다. exp·nbf·iss·aud를 모두 검사하는지 테스트로 확인하고, `SecurityContextHolder`를 요청 끝에 비우는지도 본다. 스레드가 재사용되므로 비우지 않으면 앞 요청의 인증이 남을 수 있다.

@@ -266,8 +266,7 @@ nobody@example.com  401  min 0.1088s  median 0.1365s  max 0.1860s
     { id: "v", label: "피해자 계정" },
   ]}
   steps={[
-    { from: "a", to: "a", label: "유출 목록", title: "다른 사이트의 유출 목록을 준비한다", detail: "이메일과 비밀번호 쌍 수백만 줄이다. 추측이 아니라 누군가 실제로 쓰던 값이다.", payload: "kim@example.com:Haneul!0312
-lee@example.com:qwer1234" },
+    { from: "a", to: "a", label: "유출 목록", title: "다른 사이트의 유출 목록을 준비한다", detail: "이메일과 비밀번호 쌍 수백만 줄이다. 추측이 아니라 누군가 실제로 쓰던 값이다.", payload: "kim@example.com:Haneul!0312\nlee@example.com:qwer1234" },
     { from: "a", to: "p", label: "요청 분산", title: "요청을 주거용 IP들로 흩는다", detail: "IP 하나당 한두 번만 보낸다. IP 카운터는 여기서 약해진다." },
     { from: "p", to: "s", label: "POST /login", title: "쌍마다 한 번씩 넣는다", detail: "계정당 한 번이라 잠금에 안 걸린다. 서비스 전체 실패율과 기기 지문, 봇 점수가 여기서 잡을 수 있는 신호다." },
     { from: "s", to: "p", label: "200 OK", title: "재사용한 사람의 계정이 열린다", detail: "비밀번호가 맞으니 서버는 정상 로그인으로 본다. MFA나 패스키가 있었다면 여기서 멈췄다." },

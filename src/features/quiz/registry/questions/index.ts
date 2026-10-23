@@ -1,3 +1,21 @@
+import { WEB_COMPONENTS_SHADOW_DOM } from "./web-components-shadow-dom";
+import { SPRING_SECURITY_JWT_OAUTH2 } from "./spring-security-jwt-oauth2";
+import { SPRING_BOOT_TESTING } from "./spring-boot-testing";
+import { SHORTEST_PATH_ALGORITHMS } from "./shortest-path-algorithms";
+import { SEGMENT_TREE_FENWICK } from "./segment-tree-fenwick";
+import { REFACTORING_CODE_SMELLS } from "./refactoring-code-smells";
+import { MINIMUM_SPANNING_TREE } from "./minimum-spanning-tree";
+import { LOAD_TESTING_K6 } from "./load-testing-k6";
+import { GRAPHQL_SUBSCRIPTIONS_DEFER } from "./graphql-subscriptions-defer";
+import { GRAPHQL_SCHEMA_TYPE_SYSTEM } from "./graphql-schema-type-system";
+import { GRAPHQL_PAGINATION_CONNECTIONS } from "./graphql-pagination-connections";
+import { GRAPHQL_OPERATIONS_SYNTAX } from "./graphql-operations-syntax";
+import { GRAPHQL_EXECUTION_VALIDATION } from "./graphql-execution-validation";
+import { FRONTEND_FRAMEWORKS_COMPARED } from "./frontend-frameworks-compared";
+import { CSS_CUSTOM_PROPERTIES } from "./css-custom-properties";
+import { COUPLING_COHESION_PRINCIPLES } from "./coupling-cohesion-principles";
+import { CLEAN_CODE_PRACTICES } from "./clean-code-practices";
+import { BALANCED_SEARCH_TREES } from "./balanced-search-trees";
 import { TWELVE_FACTOR_APP } from "./twelve-factor-app";
 import { TEST_DESIGN_TECHNIQUES } from "./test-design-techniques";
 import { TDD_BDD_ATDD } from "./tdd-bdd-atdd";
@@ -723,6 +741,24 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  WEB_COMPONENTS_SHADOW_DOM,
+  SPRING_SECURITY_JWT_OAUTH2,
+  SPRING_BOOT_TESTING,
+  SHORTEST_PATH_ALGORITHMS,
+  SEGMENT_TREE_FENWICK,
+  REFACTORING_CODE_SMELLS,
+  MINIMUM_SPANNING_TREE,
+  LOAD_TESTING_K6,
+  GRAPHQL_SUBSCRIPTIONS_DEFER,
+  GRAPHQL_SCHEMA_TYPE_SYSTEM,
+  GRAPHQL_PAGINATION_CONNECTIONS,
+  GRAPHQL_OPERATIONS_SYNTAX,
+  GRAPHQL_EXECUTION_VALIDATION,
+  FRONTEND_FRAMEWORKS_COMPARED,
+  CSS_CUSTOM_PROPERTIES,
+  COUPLING_COHESION_PRINCIPLES,
+  CLEAN_CODE_PRACTICES,
+  BALANCED_SEARCH_TREES,
   TWELVE_FACTOR_APP,
   TEST_DESIGN_TECHNIQUES,
   TDD_BDD_ATDD,
