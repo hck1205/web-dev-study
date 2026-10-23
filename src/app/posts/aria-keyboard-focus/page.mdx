@@ -1,0 +1,402 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("aria-keyboard-focus");
+
+<EasyIntro>
+  키보드로 웹을 쓰는 사람에게 포커스는 지금 손가락이 닿아 있는 자리다. Tab 키를 누르면 다음 버튼이나 링크로 그 자리가 옮겨 가고, Enter를 누르면 그 자리에 있는 것이 눌린다. 그래서 포커스가 엉뚱한 곳으로 튀거나 사라지면 키보드 사용자는 길을 잃는다.
+
+  포커스는 극장의 안내원이 들고 있는 손전등과 비슷하다. 불이 꺼진 객석에서 손전등이 비추는 곳만 보인다. 팝업 창이 열렸는데 손전등이 여전히 뒤쪽 객석을 비추고 있으면, 그 사람은 팝업이 열린 줄도 모른다.
+
+  ARIA는 화면을 읽어 주는 프로그램에게 이 상자는 탭이고 지금 선택되어 있다는 식으로 정보를 덧붙이는 속성이다. 그런데 이름표만 붙일 뿐 키보드로 움직이는 기능은 만들어 주지 않는다. 그래서 가능하면 처음부터 그런 기능이 들어 있는 버튼이나 링크 태그를 쓰고, 꼭 필요할 때만 ARIA를 더한다.
+</EasyIntro>
+
+## 탭 메뉴에 ARIA를 다 붙였는데
+
+상품 상세 페이지의 "설명, 리뷰, 배송, 문의" 탭을 만들었다. 접근성을 챙기려고 W3C 문서를 보며 `role="tablist"`, `role="tab"`, `aria-selected`, `aria-controls`를 빠짐없이 붙였다. 자동 검사도 통과했다. 그런데 키보드로 써 보면 이상하다. Tab을 누르면 포커스가 탭 네 개를 하나씩 다 거쳐 가고, 오른쪽 방향키는 아무 반응이 없다. 스크린리더는 "탭, 4개 중 1번째, 선택됨"이라고 잘 읽어 주는데, 정작 "방향키로 옮기세요"라는 약속을 지키지 않으니 사용자는 탭이라는 말을 듣고 방향키를 눌렀다가 아무 일도 없어 당황한다.
+
+ARIA는 접근성 트리에 정보를 적을 뿐, 동작을 만들어 주지 않는다. `role="tab"`이라고 쓰는 순간 "나는 탭이니 방향키로 옮겨 다닐 수 있다"는 약속을 한 것이고, 그 약속을 지키는 키보드 처리는 개발자 몫이다. 이 글은 ARIA를 언제 쓰고 언제 쓰지 말아야 하는지, 이름과 설명을 붙이는 세 가지 방법, 그리고 ARIA보다 더 자주 틀리는 포커스 관리(탭 순서, 모달, 방향키 이동, SPA 화면 전환)를 Chromium 141에서 확인해 가며 정리한다. 태그 선택과 접근성 트리는 [시맨틱 HTML](/posts/html-semantics)에, 기준과 검사 도구는 [웹 접근성 기초](/posts/web-accessibility)에 있다.
+
+## ARIA를 쓰지 않는 게 첫 번째 규칙이다
+
+WAI-ARIA(Accessible Rich Internet Applications)는 HTML만으로는 표현할 수 없는 위젯(탭, 트리, 콤보박스)의 의미를 보조 기술에 알리려고 만든 W3C 명세다. 그런데 W3C의 "HTML에서 ARIA 쓰기" 문서가 첫 번째로 꼽는 규칙은 "쓸 수 있는 HTML 요소가 있으면 ARIA 대신 그 요소를 써라"다. 나머지 규칙도 같은 방향이다.
+
+1. 원하는 의미와 동작을 가진 HTML 요소가 있으면 그걸 쓴다.
+2. 요소의 원래 의미를 바꾸지 않는다. `h2`에 `role="tab"`을 붙이지 말고, `h2` 안에 `button`을 넣는다.
+3. ARIA로 만든 위젯은 모두 키보드로 쓸 수 있어야 한다.
+4. 포커스를 받을 수 있는 요소에 `role="presentation"`이나 `aria-hidden="true"`를 쓰지 않는다.
+5. 상호작용하는 요소는 모두 접근 가능한 이름을 가져야 한다.
+
+이 규칙이 첫 번째인 이유는 잘못된 ARIA가 ARIA가 없는 것보다 나쁘기 때문이다. WebAIM은 해마다 인기 사이트 100만 개의 홈페이지를 검사하는데, ARIA를 쓴 페이지가 쓰지 않은 페이지보다 평균적으로 감지된 오류가 더 많았다. ARIA는 브라우저가 정한 역할과 이름을 덮어쓰기 때문에, 틀리게 쓰면 맞게 동작하던 요소까지 망가뜨린다.
+
+```html
+<!-- 나쁨: 버튼 흉내. 키보드 처리를 전부 손으로 붙여야 한다 -->
+<div role="button" tabindex="0" onclick="save()">저장</div>
+
+<!-- 좋음: 같은 의미와 동작이 기본으로 들어 있다 -->
+<button type="button" onclick="save()">저장</button>
+
+<!-- 나쁨: 포커스를 받는데 트리에서는 사라진다. 키보드 사용자에게 "빈 곳"이 생긴다 -->
+<a href="/cart" aria-hidden="true">장바구니</a>
+```
+
+HTML에 없는 위젯을 만들 때 ARIA가 필요해진다. 그때 참고하는 문서가 W3C의 ARIA 작성 가이드(APG, ARIA Authoring Practices Guide)다. 탭, 메뉴 버튼, 콤보박스, 트리, 그리드마다 어떤 역할과 속성을 쓰고 어떤 키에 반응해야 하는지가 정리되어 있다.
+
+## 역할, 상태, 속성
+
+ARIA 속성은 세 종류다.
+
+- 역할(role): 요소가 무엇인지. `tab`, `tablist`, `tabpanel`, `dialog`, `alert`, `switch`. 한 번 정하면 바꾸지 않는다.
+- 상태(state): 사용자의 조작으로 자주 바뀌는 값. `aria-selected`, `aria-expanded`, `aria-pressed`, `aria-checked`, `aria-invalid`, `aria-disabled`, `aria-busy`.
+- 속성(property): 비교적 고정된 특성과 관계. `aria-controls`, `aria-labelledby`, `aria-describedby`, `aria-haspopup`, `aria-level`, `aria-required`.
+
+역할마다 꼭 있어야 하는 상태가 있고, 붙일 수 없는 속성도 있다. `role="checkbox"`에는 `aria-checked`가 있어야 하고, `role="tab"`은 `role="tablist"` 안에 있어야 한다. 이런 짝은 axe 같은 자동 검사가 잘 잡는다. 못 잡는 건 상태를 제때 바꾸는 일이다. 드롭다운을 열었는데 `aria-expanded`가 계속 `false`이면 스크린리더 사용자에게는 영원히 닫힌 메뉴다. React에서는 상태 값을 그대로 속성에 묶어 두면 빼먹을 일이 줄어든다.
+
+```tsx
+function Disclosure({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  return (
+    <>
+      <button type="button" aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((v) => !v)}>
+        {title}
+      </button>
+      <div id={panelId} hidden={!open}>
+        {children}
+      </div>
+    </>
+  );
+}
+```
+
+`aria-expanded`에 boolean을 넘기면 React가 `"true"`, `"false"` 문자열로 써 준다. `aria-*` 속성은 문자열 값이라, `aria-hidden={false}`와 속성을 아예 빼는 것은 결과가 같지 않을 수 있다(전자는 `aria-hidden="false"`가 붙는다). 숨길 때만 붙이고 아니면 빼는 편이 안전하다.
+
+`role="menu"`는 흔한 함정이다. 이름 때문에 사이트의 메뉴 바에 붙이기 쉬운데, ARIA의 menu는 데스크톱 앱의 "파일, 편집" 같은 응용 프로그램 메뉴를 뜻한다. 붙이는 순간 스크린리더는 방향키로만 움직이는 메뉴 모드로 바꾸고, 사용자는 링크 목록인 줄 모른다. 사이트 내비게이션은 `nav`, `ul`, `a`로 만들고, 펼침 메뉴는 위의 `Disclosure`처럼 `aria-expanded`를 가진 버튼으로 만든다.
+
+## 이름을 붙이는 세 가지 방법
+
+`aria-label`, `aria-labelledby`, `aria-describedby`는 비슷해 보이지만 역할이 다르다.
+
+- `aria-label`: 이름을 문자열로 직접 준다. 화면에 보이는 글자가 없는 아이콘 버튼에 쓴다.
+- `aria-labelledby`: 페이지에 있는 다른 요소의 글자로 이름을 만든다. `id`를 공백으로 여러 개 이으면 순서대로 붙는다. 대화 상자의 이름을 그 안의 제목으로 붙일 때가 대표적이다.
+- `aria-describedby`: 이름이 아니라 설명이다. 이름과 역할을 읽은 뒤 덧붙여 읽는다. 입력 형식 안내나 오류 문구를 이을 때 쓴다.
+
+여러 개가 겹치면 우선순위가 있다. 접근 가능한 이름 계산 규칙(accname)은 `aria-labelledby`, `aria-label`, 요소 자체의 이름(`label`, `alt`, 버튼 안의 글자), `title`·`placeholder` 순으로 먼저 있는 것을 쓴다. 일부러 세 가지를 다 붙인 입력칸으로 Chromium에서 확인했다.
+
+```html
+<span id="l1">배송지</span><span id="l2">우편번호</span>
+<label for="z">우편</label>
+<input id="z" aria-label="ZIP" aria-labelledby="l1 l2" aria-describedby="h">
+<span id="h">5자리 숫자</span>
+
+<button aria-label="닫기">X</button>
+<div aria-label="상자">내용</div>
+<input placeholder="검색어">
+```
+
+```text
+- textbox "배송지 우편번호"
+- button "닫기": X
+- text: 내용
+- textbox "검색어"
+```
+
+`label`도 `aria-label`도 무시되고 `aria-labelledby`의 두 글자가 이어져 이름이 됐다. 버튼은 안의 "X" 대신 `aria-label`의 "닫기"가 이름이다. `div`에 붙인 `aria-label`은 사라졌다. 역할이 generic인 요소에는 이름을 붙일 수 없게 명세가 막아 두었다. `div`에 이름을 주고 싶다면 그건 대개 랜드마크(`section`과 `aria-labelledby`)나 다른 역할이 필요하다는 신호다. 마지막 줄처럼 `placeholder`는 다른 이름이 없을 때 마지막으로 쓰인다.
+
+실무에서 가려 쓸 기준은 세 가지다. 보이는 글자가 있으면 `aria-labelledby`나 원래 요소(`label`)로 그 글자를 이름으로 쓴다. 화면의 글자와 들리는 이름이 같아야 음성으로 "닫기 눌러"라고 명령하는 사용자도 버튼을 찾는다(WCAG 2.5.3). 보이는 글자가 없을 때만 `aria-label`을 쓴다. 그리고 `aria-label`은 브라우저 번역 기능이 번역하지 않는 경우가 있어서, 다국어 페이지에서는 숨긴 글자를 `aria-labelledby`로 잇는 편이 안전하다.
+
+## 화면이 바뀌었다고 알려 주기
+
+포커스를 옮기지 않고 무언가 바뀌었다는 사실만 알려야 할 때가 있다. 장바구니에 담겼다, 검색 결과가 12개다, 저장 중이다. 눈으로 보는 사람은 화면 구석의 토스트를 보지만, 스크린리더 사용자는 포커스가 있는 곳만 듣는다. 이럴 때 라이브 리전(live region)을 쓴다.
+
+```html
+<!-- 처음부터 DOM에 빈 채로 둔다 -->
+<div role="status" class="visually-hidden" id="cart-status"></div>
+```
+
+```ts
+// 담기에 성공하면 글자만 바꾼다
+document.getElementById("cart-status")!.textContent = "장바구니에 담았다. 지금 3개.";
+```
+
+`aria-live="polite"`는 스크린리더가 하던 말을 마친 뒤 읽고, `aria-live="assertive"`는 하던 말을 끊고 바로 읽는다. `role="status"`는 polite, `role="alert"`는 assertive와 같은 효과를 내면서 의미도 함께 준다. 대부분은 polite가 맞다. 결제 실패나 세션 만료처럼 지금 당장 알아야 하는 것만 assertive로 한다. 모든 토스트를 alert로 만들면 사용자가 무언가를 읽는 도중에 계속 끊긴다.
+
+라이브 리전에서 가장 흔한 실수는 영역 자체를 내용과 함께 새로 만드는 것이다. 스크린리더는 이미 있는 라이브 리전의 "변화"를 듣는다. `{show && <div role="status">담았다</div>}`처럼 메시지와 영역을 같이 마운트하면 많은 스크린리더가 읽지 않는다. 영역은 페이지가 뜰 때부터 비워 두고 글자만 바꾼다. 같은 메시지를 두 번 연속 알려야 하면 글자가 바뀌지 않아 조용하니, 한 번 비웠다가 다시 넣는다.
+
+`aria-busy="true"`는 영역이 갱신 중이라는 뜻이다. 여러 조각이 차례로 바뀌는 동안 켜 두면 끝날 때까지 읽기를 미룬다. 실제로 어떻게 반응하는지는 스크린리더마다 차이가 있어서, 라이브 리전은 NVDA와 VoiceOver 양쪽에서 직접 들어 보고 확정한다.
+
+## tabindex 세 가지 값
+
+`tabindex`는 요소가 키보드 포커스를 받는지, 받는다면 몇 번째로 받는지를 정한다.
+
+- `tabindex="0"`: Tab 순서에 넣는다. 순서는 DOM에 나온 위치를 따른다. 원래 포커스를 받지 않는 요소를 위젯으로 만들 때 쓴다.
+- `tabindex="-1"`: Tab으로는 가지 않지만 `element.focus()`로는 포커스를 줄 수 있다. 모달의 제목, 화면 전환 뒤의 `h1`, 건너뛰기 링크의 도착지처럼 코드로만 포커스를 옮길 곳에 쓴다.
+- `tabindex="1"` 이상: 쓰지 않는다.
+
+양수가 왜 문제인지는 직접 눌러 보면 바로 보인다. 아래 마크업에서 Tab을 다섯 번 눌렀다.
+
+```html
+<a href="#">홈</a>
+<input id="q" tabindex="1">
+<button>검색</button>
+<a href="#" tabindex="2">도움말</a>
+<div tabindex="0">카드</div>
+```
+
+```text
+INPUT#q → A:도움말 → A:홈 → BUTTON:검색 → DIV:카드
+```
+
+양수 `tabindex`를 가진 요소가 숫자 순서대로 먼저 오고, 나머지(0과 원래 포커스를 받는 요소)가 DOM 순서로 그 뒤에 온다. 페이지 맨 아래 `tabindex="2"`짜리 도움말 링크가 맨 위의 홈 링크보다 먼저 포커스를 받는다. 검색창을 먼저 받게 하려고 붙인 숫자 하나가 페이지 전체 순서를 뒤틀고, 컴포넌트가 늘어날수록 숫자를 맞추는 일은 불가능해진다. 순서를 바꾸고 싶으면 DOM 순서를 바꾼다.
+
+## 포커스 순서는 DOM 순서다
+
+Tab 순서는 DOM 순서를 따르고, 화면에 보이는 순서는 CSS가 정한다. 둘이 어긋나면 포커스가 화면 여기저기를 뛰어다닌다. 흔한 원인은 이렇다.
+
+- `flex-direction: row-reverse`나 `order`로 버튼 순서를 화면에서만 바꿨다. "취소, 확인"이 화면에는 "확인, 취소"로 보이는데 Tab은 취소부터 간다.
+- 그리드에서 `grid-area`로 카드를 옮겼다. 왼쪽 위 카드가 DOM에서는 맨 마지막이다.
+- `position: absolute`로 모달이나 드롭다운을 화면 위에 띄웠는데 DOM은 페이지 맨 끝에 있다. 버튼을 누르고 Tab을 누르면 페이지 끝까지 가야 드롭다운에 닿는다.
+
+WCAG 2.4.3(포커스 순서)과 1.3.2(의미 있는 순서)가 이걸 다룬다. 고치는 방법은 화면 순서대로 DOM을 쓰는 것이다. 크롬 137부터는 플렉스·그리드 컨테이너에 `reading-flow` 속성을 주면 Tab 순서가 화면 배치를 따르게 할 수 있지만, 아직 모든 브라우저가 지원하지는 않는다.
+
+포커스가 사라지는 경우도 있다. 포커스를 받은 요소가 DOM에서 지워지면 `document.activeElement`는 `body`로 돌아간다. 목록에서 "삭제" 버튼을 눌러 그 줄이 사라지면, 키보드 사용자의 다음 Tab은 페이지 맨 앞에서 다시 시작한다. 지운 뒤에는 다음 줄의 삭제 버튼이나 목록 제목으로 포커스를 옮겨 준다.
+
+## 모달은 바깥을 잠근다
+
+모달 대화 상자에서 키보드 사용자가 기대하는 동작은 네 가지다. 열리면 포커스가 모달 안으로 들어간다. Tab이 모달 밖으로 나가지 않는다. `Esc`를 누르면 닫힌다. 닫히면 열기 전에 있던 자리로 포커스가 돌아온다. 마지막이 가장 자주 빠진다. 포커스가 `body`로 떨어지면 사용자는 페이지 맨 위부터 다시 찾아 내려와야 한다.
+
+예전에는 이걸 모두 손으로 만들었다. 모달 밖의 요소에 `aria-hidden`을 걸고, keydown에서 Tab을 잡아 마지막 요소에서 첫 요소로 돌리는 포커스 트랩을 짰다. 지금은 `dialog` 요소의 `showModal()`이 대부분을 해 준다. "삭제" 버튼으로 확인 대화 상자를 여는 예제를 Chromium 141에서 키보드로 따라갔다.
+
+```html
+<button id="opener">삭제</button>
+<a href="#">뒤 링크</a>
+<dialog id="d" aria-labelledby="t">
+  <h2 id="t">정말 지울까요?</h2>
+  <p>되돌릴 수 없다.</p>
+  <button id="cancel">취소</button>
+  <button id="ok">삭제</button>
+</dialog>
+<script>
+  document.getElementById("opener").onclick = () => d.showModal();
+</script>
+```
+
+```text
+열기    → BUTTON#cancel 취소
+Tab     → BUTTON#ok 삭제
+Tab     → BODY (페이지 밖으로 나갔다. 실제 창에서는 주소창 쪽)
+Tab     → BUTTON#cancel 취소
+Esc     → 닫힘, BUTTON#opener 삭제
+```
+
+아래 그림에서 단계를 넘기며 포커스가 어디로 가는지 따라가 보자.
+
+<SequenceDiagram
+  caption="showModal()로 연 대화 상자의 포커스"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "opener", label: "열기 버튼" },
+    { id: "dialog", label: "dialog" },
+    { id: "page", label: "나머지 페이지" },
+  ]}
+  steps={[
+    { from: "user", to: "opener", label: "Enter", title: "삭제 버튼을 누른다", detail: "브라우저는 지금 포커스가 있는 요소를 기억해 둔다." },
+    { from: "opener", to: "dialog", label: "showModal()", title: "모달로 연다", detail: "dialog가 최상위 층(top layer)에 올라가고, 뒤에 ::backdrop이 깔린다." },
+    { from: "dialog", to: "page", label: "inert", title: "바깥이 잠긴다", detail: "나머지 페이지는 클릭도 포커스도 안 되고 접근성 트리에서도 빠진다. aria-hidden을 손으로 걸 필요가 없다." },
+    { from: "dialog", to: "dialog", label: "첫 포커스", title: "안쪽 첫 요소로 포커스", detail: "Chromium 141에서는 포커스를 받을 수 있는 첫 요소인 취소 버튼으로 갔다. autofocus를 주면 그 요소로 간다." },
+    { from: "user", to: "dialog", label: "Tab", title: "Tab은 안에서 돈다", detail: "취소, 삭제를 지나면 페이지 밖(주소창)으로 갔다가 다시 취소로 온다. 뒤 링크로는 가지 않는다." },
+    { from: "user", to: "dialog", label: "Esc", title: "Esc로 닫는다", detail: "cancel 이벤트가 나고 대화 상자가 닫힌다. 막으려면 cancel에서 preventDefault를 부른다." },
+    { from: "dialog", to: "opener", label: "포커스 복귀", title: "열던 자리로 돌아온다", detail: "닫히면 기억해 둔 삭제 버튼으로 포커스가 돌아온다." },
+  ]}
+/>
+
+Tab이 브라우저 주소창으로 한 번 나가는 건 정상이다. 페이지 안에서는 갇혀 있지만 사용자가 브라우저 자체를 쓸 길은 열어 두는 동작이라, 손으로 만든 트랩처럼 주소창까지 막을 필요는 없다.
+
+autofocus가 없을 때 어디로 보낼지는 명세가 몇 번 바뀌었고 브라우저마다 대화 상자 자체에 포커스를 주기도 한다. 첫 포커스는 `autofocus`로 직접 정해 두는 게 확실하다. 어디에 둘지는 내용에 따라 고른다. 되돌릴 수 없는 삭제 확인이라면 취소 버튼이 안전하다. 실수로 Enter를 한 번 더 눌러도 지워지지 않는다. 긴 약관처럼 내용을 먼저 읽어야 하는 모달이면 제목이나 본문 컨테이너에 `tabindex="-1"`을 주고 거기에 `autofocus`를 둔다. 폼 모달이면 첫 입력칸이다.
+
+`dialog`를 쓸 수 없는 구조라면 `inert` 속성이 다음 선택지다. 모달 밖을 감싼 요소에 `inert`를 붙이면 그 안의 모든 요소가 클릭·포커스·접근성 트리에서 빠진다. 2023년부터 크롬, 파이어폭스, 사파리가 모두 지원한다. 앞의 실험에서도 `inert` 안의 버튼은 Tab 순서에서 건너뛰었고 접근성 트리에 나오지 않았다. 직접 만든 모달에는 `role="dialog"`와 `aria-modal="true"`, 이름(`aria-labelledby`)을 주고, 바깥에 `inert`, 열고 닫을 때 포커스 이동을 직접 처리한다.
+
+`popover` 속성은 다르다. 바깥을 누르거나 `Esc`를 누르면 닫히는 가벼운 층이지만 바깥을 잠그지 않는다. 툴팁, 메뉴, 알림처럼 모달이 아닌 것에 쓴다. `dialog`를 `show()`로 열어도 모달이 아니라 바깥이 잠기지 않는다. 모달이 필요하면 `showModal()`이다.
+
+## 방향키로 옮겨 다니는 위젯
+
+처음의 탭 메뉴로 돌아가자. 탭이 네 개면 Tab 키를 네 번 눌러야 탭 목록을 지나간다. 툴바에 버튼이 스무 개면 스무 번이다. APG의 탭, 툴바, 라디오 그룹, 메뉴, 그리드 패턴은 그래서 "묶음 전체가 Tab 순서의 한 칸"이고, 묶음 안에서는 방향키로 움직이게 한다.
+
+이걸 만드는 기본 방법이 로빙 tabindex(roving tabindex)다. 묶음 안에서 지금 고른 항목 하나만 `tabindex="0"`, 나머지는 모두 `tabindex="-1"`로 둔다. 방향키를 누르면 `0`을 다음 항목으로 옮기고 그 항목에 `focus()`를 부른다. Tab으로 묶음을 떠났다가 돌아오면 마지막으로 고른 항목으로 바로 온다. 아래는 서식 툴바에서 키를 누를 때마다 `tabindex="0"`이 어디로 옮겨 가는지 보여 준다. 밑줄 버튼은 비활성이라 건너뛰게 만들었다.
+
+<AlgoTrace
+  caption="툴바의 로빙 tabindex"
+  memoryLabel="tabindex=0인 항목"
+  cells={["굵게", "기울임", "밑줄(비활성)", "링크", "목록"]}
+  steps={[
+    { pointer: 0, memory: ["굵게"], caption: "Tab으로 툴바에 들어온다. tabindex=0인 굵게에 포커스가 간다." },
+    { pointer: 1, memory: ["기울임"], caption: "→ 키. 굵게는 -1, 기울임은 0이 되고 focus()를 부른다." },
+    { pointer: 3, memory: ["링크"], caption: "→ 키. 밑줄은 비활성이라 건너뛰고 링크로 간다." },
+    { pointer: 4, memory: ["목록"], caption: "End 키. 마지막 활성 항목인 목록으로 바로 간다." },
+    { pointer: 0, memory: ["굵게"], caption: "→ 키. 끝에서 처음으로 돌아간다." },
+    { memory: ["굵게"], caption: "Tab 키. 툴바를 한 번에 떠나 다음 요소로 간다." },
+    { pointer: 0, found: [0], memory: ["굵게"], caption: "Shift+Tab으로 돌아오면 마지막에 고른 굵게로 온다." },
+  ]}
+/>
+
+비활성 항목을 건너뛸지는 위젯마다 다르다. APG는 툴바나 메뉴의 비활성 항목에 포커스를 주는 방식도 허용한다. 포커스를 받게 두면 "밑줄, 사용 불가"라는 정보를 들을 수 있다는 장점이 있다. 여기서는 건너뛰는 쪽으로 만들었다. 다음 항목을 고르는 함수를 직접 써 보자.
+
+<CodePlayground
+  caption="방향키로 다음 항목 고르기"
+  functionName="nextIndex"
+  initialCode={`// disabled: 항목마다 비활성 여부. 예) [false, true, false]
+// current: 지금 tabindex=0인 항목의 인덱스
+// key: "ArrowRight" | "ArrowLeft" | "Home" | "End" | 그 밖의 키
+// 비활성 항목은 건너뛰고, 양 끝에서는 반대쪽으로 돌아간다.
+// 갈 곳이 없거나 처리하지 않는 키면 current를 그대로 돌려준다.
+function nextIndex(disabled, current, key) {
+  return current;
+}`}
+  solution={`function nextIndex(disabled, current, key) {
+  const n = disabled.length;
+  if (key === "Home" || key === "End") {
+    const order = [...Array(n).keys()];
+    if (key === "End") order.reverse();
+    const found = order.find((i) => !disabled[i]);
+    return found === undefined ? current : found;
+  }
+  const step = key === "ArrowRight" ? 1 : key === "ArrowLeft" ? -1 : 0;
+  if (step === 0) return current;
+  let i = current;
+  for (let tries = 0; tries < n; tries++) {
+    i = (i + step + n) % n;
+    if (!disabled[i]) return i;
+  }
+  return current;
+}`}
+  tests={[
+    { args: [[false, false, false], 0, "ArrowRight"], expected: 1, label: "→ 한 칸" },
+    { args: [[false, false, false], 2, "ArrowRight"], expected: 0, label: "끝에서 처음으로" },
+    { args: [[false, true, false], 0, "ArrowRight"], expected: 2, label: "비활성 건너뛰기" },
+    { args: [[false, false, true], 0, "ArrowLeft"], expected: 1, label: "처음에서 ←, 끝의 비활성 건너뛰기" },
+    { args: [[true, false, false, true], 2, "Home"], expected: 1, label: "Home: 첫 활성 항목" },
+    { args: [[true, false, false, true], 1, "End"], expected: 2, label: "End: 마지막 활성 항목" },
+    { args: [[true, false, true], 1, "ArrowRight"], expected: 1, label: "갈 곳이 없으면 그대로" },
+    { args: [[false, false], 1, "Enter"], expected: 1, label: "처리하지 않는 키" },
+  ]}
+/>
+
+React에서는 이 함수를 keydown 핸들러에 붙이고, 인덱스를 상태로 두고, 항목마다 `tabIndex={i === active ? 0 : -1}`을 주고, 인덱스가 바뀐 뒤 ref 배열로 `focus()`를 부르면 된다. 방향키를 처리했으면 `event.preventDefault()`로 페이지 스크롤을 막는다. 세로 목록이면 위·아래 방향키, 탭처럼 가로면 왼쪽·오른쪽이다. 아랍어처럼 오른쪽에서 왼쪽으로 쓰는 페이지에서는 좌우를 뒤집는다.
+
+탭 패턴이라면 몇 가지가 더 붙는다. 방향키로 탭을 옮기면 바로 그 패널을 보여 주는 자동 활성화가 APG의 기본 권장이다. 패널을 그리는 데 시간이 걸리면 방향키로는 포커스만 옮기고 Enter·Space로 고르는 수동 활성화를 쓴다. 패널에는 `role="tabpanel"`과 `aria-labelledby`(그 탭의 `id`)를 주고, 패널 안에 포커스 받을 요소가 없으면 패널 자체에 `tabindex="0"`을 줘서 Tab으로 내용에 닿게 한다.
+
+로빙 tabindex의 대안은 `aria-activedescendant`다. 포커스는 컨테이너에 그대로 두고, 지금 고른 항목의 `id`를 이 속성에 적어 스크린리더에 알린다. 포커스를 옮기지 않으니 입력칸에 계속 타자를 칠 수 있어서 콤보박스에 쓴다. 콤보박스 쪽은 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)의 자동완성 예제에 있다. 대신 실제 포커스가 움직이지 않아서 항목이 보이도록 스크롤하는 일과 `:focus` 스타일을 직접 처리해야 한다.
+
+## SPA에서 화면이 바뀐 뒤
+
+일반 웹 사이트에서 링크를 누르면 새 문서가 열리고, 포커스는 문서 처음으로 가고, 스크린리더는 새 페이지의 제목을 읽는다. SPA는 문서를 다시 받지 않고 내용만 바꾼다([CSR과 SPA](/posts/rendering-csr-spa)). 그러면 포커스는 방금 누른 링크에 그대로 남거나, 그 링크가 사라졌으면 `body`로 떨어진다. 스크린리더는 아무 말도 하지 않는다. 화면이 바뀐 줄 모르는 사용자는 같은 링크를 또 누른다.
+
+라우트가 바뀐 뒤 해야 할 일은 두 가지다.
+
+1. 새 화면의 시작점으로 포커스를 옮긴다. 보통 새 페이지의 `h1`에 `tabindex="-1"`을 주고 `focus()`를 부른다. 포커스 테두리가 제목에 보이는 게 싫다면 그 요소의 `:focus` 테두리만 빼되, 키보드 사용자를 위해 다른 표시를 남긴다.
+2. 바뀌었다는 사실을 알린다. 라이브 리전에 새 페이지 제목을 넣는다.
+
+Next.js는 2번을 기본으로 해 준다. 라우트 안내기(route announcer)가 `next/link`로 이동할 때마다 `document.title`을, 없으면 첫 `h1`을, 그것도 없으면 경로를 라이브 리전으로 읽는다. 그래서 페이지마다 다른 `title`을 주는 것이 접근성 문제이기도 하다. React Router나 직접 만든 라우터는 이런 처리가 기본으로 들어 있지 않으니 직접 만든다.
+
+```tsx
+"use client";
+
+// 라우트가 바뀔 때마다 새 화면의 h1로 포커스를 옮긴다
+function useFocusHeadingOnRouteChange(pathname: string) {
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false; // 첫 진입에서는 옮기지 않는다
+      return;
+    }
+    const heading = document.querySelector<HTMLElement>("main h1");
+    if (!heading) return;
+    heading.setAttribute("tabindex", "-1");
+    heading.focus({ preventScroll: false });
+  }, [pathname]);
+}
+```
+
+첫 로드에서 포커스를 옮기지 않는 것은 일부러다. 문서를 처음 열 때는 브라우저와 스크린리더가 알아서 처음부터 읽는다. 목록 필터처럼 주소는 바뀌지만 화면 대부분이 그대로인 이동에서는 포커스를 옮기지 말고 결과 개수만 라이브 리전으로 알리는 편이 낫다. 어디로 포커스를 보낼지는 "사용자가 이 이동 다음에 무엇을 하려는가"로 정한다.
+
+## 포커스가 보여야 한다
+
+키보드 사용자에게 포커스 테두리는 마우스 커서다. 그런데 디자인 리뷰에서 "클릭하면 파란 테두리가 생긴다"는 이유로 `outline: none`을 전역에 넣는 일이 많다. 그 순간 키보드 사용자는 커서 없는 마우스를 쓰는 셈이 된다(WCAG 2.4.7 위반).
+
+이 갈등을 풀려고 생긴 것이 `:focus-visible`이다. 브라우저가 "이 포커스를 보여 줘야 하는가"를 휴리스틱으로 판단해서, 키보드로 옮긴 포커스에는 맞고 마우스 클릭으로 생긴 포커스에는 대개 맞지 않는다. Chromium 141에서 확인했다.
+
+```text
+버튼을 클릭      :focus-visible = false
+입력칸을 클릭    :focus-visible = true   ← 타자를 칠 곳이라 항상 보여 준다
+링크를 클릭      :focus-visible = false
+Tab으로 버튼에   :focus-visible = true
+```
+
+그래서 기본 테두리를 지우지 말고, 스타일을 `:focus-visible`에 건다.
+
+```css
+/* 클릭할 때 생기는 테두리만 신경 쓰인다면 이것으로 충분하다 */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+```
+
+테두리는 `box-shadow`보다 `outline`으로 그린다. 윈도우의 고대비 모드(CSS의 `forced-colors: active`)는 `box-shadow`를 지워 버려서, 그림자로 만든 포커스 링이 사라진다. 디자인 때문에 그림자를 꼭 써야 하면 `outline: 2px solid transparent`를 함께 둔다. 평소엔 투명해서 안 보이고, 고대비 모드에서는 시스템 색으로 칠해져 보인다. 포커스 링 색도 배경과 3:1 이상 대비가 나야 한다(1.4.11).
+
+포커스가 보여도 가려지면 소용없다. 고정 머리글 아래로 포커스된 입력칸이 숨어 버리면 WCAG 2.2의 2.4.11에 걸린다. 고정 머리글 높이만큼 `html`에 `scroll-padding-top`을 주면 브라우저가 포커스 요소를 그 아래로 스크롤한다.
+
+사파리는 macOS에서 기본 설정으로 버튼을 클릭해도 포커스를 주지 않고, Tab으로도 링크에 가지 않는다(시스템 설정의 키보드 탐색과 사파리의 "Tab 키로 웹 페이지의 각 항목 강조"를 켜야 간다). 사파리에서 "Tab이 링크를 건너뛴다"는 제보는 대개 이 설정이다.
+
+## 현장에서 키보드로 확인하는 순서
+
+새 컴포넌트나 화면을 만들면 마우스를 치우고 이 순서로 눌러 본다.
+
+1. Tab만으로 페이지 처음부터 끝까지 간다. 포커스가 항상 보이는가, 화면 순서대로 가는가, 숨은 요소(닫힌 메뉴 안의 링크)에 포커스가 가지 않는가.
+2. 모든 버튼과 링크를 Enter로, 버튼은 Space로도 눌러 본다.
+3. 모달과 드롭다운을 열고 `Esc`로 닫는다. 닫은 뒤 포커스가 연 버튼으로 돌아오는가.
+4. 탭, 툴바, 메뉴, 라디오 그룹에서 방향키와 Home·End가 되는가. Tab 한 번에 묶음을 지나가는가.
+5. 무언가를 지우거나 화면을 바꾼 뒤 포커스가 어디 있는지 본다. 개발자 도구 콘솔에서 `document.activeElement`를 실시간 표현식(Live expression, 눈 모양 아이콘)으로 걸어 두면 포커스가 어디로 갔는지 계속 보인다.
+
+크롬 개발자 도구의 Elements 패널에서 요소를 오른쪽 클릭하고 "Force state › :focus-visible"을 고르면 포커스 스타일을 고정해 놓고 고칠 수 있다. Playwright 테스트에서는 `page.keyboard.press("Tab")` 뒤에 `expect(page.getByRole("button", { name: "취소" })).toBeFocused()`로 포커스 이동을 회귀 테스트로 묶어 둘 수 있다.
+
+## 다시 탭 메뉴로
+
+처음의 탭 메뉴는 ARIA 속성은 다 맞았지만 약속한 동작이 없었다. 탭 하나만 `tabindex="0"`으로 두고 방향키와 Home·End로 옮기게 하면, Tab 한 번에 탭 목록을 지나 패널로 가고 스크린리더가 말한 "탭"이 정말 탭처럼 움직인다. ARIA는 접근성 트리에 의미를 적는 도구이고, 포커스는 그 의미대로 움직이게 하는 도구다. HTML 요소로 되는 건 HTML로 하고, 안 되는 위젯만 APG를 보고 ARIA와 키보드 처리를 함께 만든다.
+
+## 면접에서 나올 만한 질문
+
+### ARIA의 첫 번째 규칙은 무엇인가요?
+
+쓸 수 있는 HTML 요소가 있으면 ARIA 대신 그 요소를 쓰라는 것이다. ARIA는 접근성 트리의 역할과 이름을 바꿀 뿐 포커스나 키보드 동작을 만들어 주지 않아서, `div role="button"`은 키 처리를 모두 손으로 붙여야 한다. 잘못 쓴 ARIA는 브라우저가 맞게 정한 의미까지 덮어써 없을 때보다 나빠진다.
+
+### aria-label, aria-labelledby, aria-describedby는 어떻게 다른가요?
+
+앞의 둘은 이름이고 마지막은 설명이다. `aria-labelledby`는 화면에 있는 요소의 글자로 이름을 만들고 가장 우선한다. `aria-label`은 문자열로 직접 주며 보이는 글자가 없을 때 쓴다. `aria-describedby`는 이름과 역할을 읽은 뒤 덧붙는 설명으로, 입력 안내나 오류 문구를 잇는다. generic `div`에는 이름을 붙일 수 없다.
+
+### tabindex 0, -1, 양수는 각각 언제 쓰나요?
+
+0은 원래 포커스를 받지 않는 요소를 DOM 순서대로 Tab 순서에 넣고, -1은 Tab으로는 안 가지만 `focus()`로 옮길 곳(모달 제목, 화면 전환 뒤 `h1`)에 쓴다. 양수는 그 요소들을 숫자 순서로 페이지 맨 앞에 끌어와 전체 순서를 뒤틀기 때문에 쓰지 않는다. 순서를 바꾸고 싶으면 DOM 순서를 바꾼다.
+
+### 모달의 포커스 관리는 어떻게 하나요?
+
+열면 안쪽으로 포커스를 옮기고, 바깥을 잠그고, `Esc`로 닫고, 닫으면 연 요소로 포커스를 돌려준다. `dialog`의 `showModal()`은 바깥을 inert로 만들고 첫 포커스, `Esc` 닫기, 포커스 복귀를 브라우저가 해 준다. 직접 만들면 `role="dialog"`, `aria-modal`, 이름, 바깥 요소의 `inert`, 포커스 이동을 모두 챙긴다. 삭제 확인처럼 위험한 모달은 첫 포커스를 취소에 둔다.
+
+### 로빙 tabindex는 무엇이고 왜 쓰나요?
+
+탭이나 툴바처럼 여러 항목이 모인 위젯을 Tab 순서의 한 칸으로 만들고, 안에서는 방향키로 움직이게 하는 방법이다. 고른 항목 하나만 `tabindex="0"`, 나머지는 -1로 두고 방향키를 누를 때 0을 옮기며 `focus()`를 부른다. 항목이 많아도 Tab 한 번에 지나갈 수 있고 돌아오면 마지막 항목으로 온다. 포커스를 옮길 수 없는 콤보박스에는 `aria-activedescendant`를 쓴다.
+
+### aria-live로 알렸는데 스크린리더가 읽지 않는 이유는 무엇일까요?
+
+대개 라이브 리전을 메시지와 함께 새로 마운트했기 때문이다. 스크린리더는 이미 있는 라이브 리전의 내용이 바뀌는 것을 듣으니, 영역은 처음부터 비워 둔 채 두고 글자만 바꿔야 한다. 같은 문구를 연달아 넣으면 변화가 없어 조용하고, assertive를 남발하면 다른 안내를 끊는다. 실제 동작은 스크린리더마다 차이가 있어 직접 들어 봐야 한다.
+
+### SPA에서 라우트가 바뀌면 접근성 측면에서 무엇을 해야 하나요?
+
+문서가 다시 로드되지 않으니 포커스가 이전 링크에 남거나 `body`로 떨어지고, 스크린리더는 화면이 바뀐 걸 알리지 않는다. 새 화면의 `h1`에 `tabindex="-1"`을 주고 포커스를 옮기거나, 라이브 리전으로 새 제목을 알린다. Next.js는 라우트 안내기가 `document.title`이나 `h1`을 자동으로 읽어 주므로 페이지마다 고유한 제목을 주는 게 중요하다.
+
+### outline: none을 쓰면 안 되나요?
+
+대체 표시 없이 쓰면 키보드 사용자가 포커스 위치를 볼 수 없어 WCAG 2.4.7에 걸린다. 클릭할 때 생기는 테두리가 문제라면 `:focus:not(:focus-visible)`에서만 지우고, `:focus-visible`에 대비 3:1 이상의 `outline`을 준다. `box-shadow`만 쓰면 윈도우 고대비 모드에서 사라지니 투명 `outline`을 함께 둔다.

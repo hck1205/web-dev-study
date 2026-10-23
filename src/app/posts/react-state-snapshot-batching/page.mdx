@@ -1,0 +1,471 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-state-snapshot-batching");
+
+<EasyIntro>
+  React에서 버튼을 누를 때마다 숫자를 세 개씩 올리려고 같은 명령을 세 번 썼는데 숫자가 하나만 오르는 일이 있다. 컴퓨터가 고장 난 게 아니라 React가 숫자를 기억하는 방식 때문이다.
+
+  React는 화면을 그릴 때마다 그 순간의 숫자를 찍은 사진 한 장을 컴포넌트에게 건넨다. 버튼을 누르면 컴포넌트는 그 사진 속 숫자를 보고 일한다. 사진 속 숫자가 0이면 "1로 바꿔 줘"를 세 번 말해도 세 번 모두 1로 바꿔 달라는 같은 부탁이다.
+
+  부탁은 바로 처리되지 않고 줄을 서서 기다린다. 지금 하는 일이 끝나면 React가 줄 선 부탁을 차례로 처리하고, 새 숫자로 화면을 다시 그리며 새 사진을 건넨다.
+
+  "지금 숫자에 1을 더해 줘"라고 부탁하는 방법도 있다. 이렇게 말하면 React가 줄을 처리하면서 앞 부탁의 결과에 이어서 더해 주니 세 번 부탁하면 세 개가 오른다.
+</EasyIntro>
+
+글 아래에 "좋아요 +3" 버튼을 만들었다. 한 번 누르면 좋아요가 세 개 오르는 장난스러운 버튼이다. 코드는 당연해 보였다.
+
+```tsx
+function LikeButton() {
+  const [count, setCount] = useState(0);
+
+  function handleClick() {
+    setCount(count + 1);
+    setCount(count + 1);
+    setCount(count + 1);
+    console.log("핸들러 안 count:", count);
+  }
+
+  return <button onClick={handleClick}>좋아요 {count}</button>;
+}
+```
+
+눌러 보면 0에서 1이 된다. 3이 아니다. 콘솔에는 `핸들러 안 count: 0`이 찍힌다. 세 번 바꿨는데 바로 다음 줄에서 읽은 값은 여전히 0이다.
+
+이 두 가지는 같은 사실에서 나온다. React의 state는 변수에 값을 넣어 두는 것과 다르게 동작한다. 이 글은 `useState`가 값을 어디에 두고, `setCount`가 실제로 무엇을 하고, 다음 렌더링에서 그 값이 어떻게 계산되는지 따라간다. JSX와 컴포넌트가 무엇인지는 앞 글 [JSX와 컴포넌트](/posts/react-jsx-components)에서 봤다.
+
+## 렌더링 한 번은 사진 한 장이다
+
+함수 컴포넌트는 렌더링할 때마다 처음부터 다시 실행된다. `const [count, setCount] = useState(0)`도 렌더링마다 다시 실행되고, 그때 React가 이 컴포넌트 자리에 기억해 둔 값을 꺼내 `count`에 넣어 준다. 첫 렌더링이면 초깃값 0, 그다음부터는 마지막으로 정해진 값이다.
+
+여기서 `count`는 `const`다. 그 렌더링이 진행되는 동안, 그리고 그 렌더링에서 만든 함수들이 살아 있는 동안 바뀌지 않는다. 이걸 흔히 state 스냅샷이라고 부른다. 렌더링마다 그 순간의 값으로 찍은 사진 한 장을 받는 셈이다. `handleClick`도 그 렌더링 안에서 만들어진 함수라서, 그 사진 속 `count`를 본다.
+
+그래서 처음 코드는 실제로 이렇게 실행됐다.
+
+```tsx
+// count가 0인 렌더링에서 만든 handleClick
+setCount(0 + 1);
+setCount(0 + 1);
+setCount(0 + 1);
+console.log("핸들러 안 count:", 0);
+```
+
+`setCount`는 지금 렌더링의 `count`를 바꾸지 않는다. 다음 렌더링에 쓸 값을 정해 달라고 React에 요청할 뿐이다. 세 번 모두 "다음 값은 1"이라는 같은 요청이었다.
+
+사진이라는 말이 정말 맞는지는 시간을 끌어 보면 보인다.
+
+```tsx
+function handleClick() {
+  setCount(count + 1);
+  setTimeout(() => alert(count), 3000);
+}
+```
+
+0일 때 누르면 화면은 바로 1이 되지만, 3초 뒤 알림창에는 0이 뜬다. 그 사이 화면이 몇 번 다시 그려졌든 이 타이머 콜백은 클릭한 순간의 렌더링에서 만들어졌고, 그 렌더링의 `count`는 0이다. 콜백이 오래 살아남아 옛 값을 보는 문제가 타이머와 구독에서 어떤 버그가 되는지는 [클로저](/posts/js-closures#react-컴포넌트에서-오래된-값을-보는-이유)에서 따로 다뤘다.
+
+아래 그림에서 다음을 누르면 클릭 한 번이 어떻게 다음 렌더링까지 이어지는지 보인다.
+
+<SequenceDiagram
+  caption="핸들러는 지난 렌더링의 사진을 보고, setState는 다음 렌더링에 쓸 요청을 남긴다"
+  actors={[
+    { id: "handler", label: "handleClick" },
+    { id: "queue", label: "업데이트 큐" },
+    { id: "react", label: "React" },
+  ]}
+  steps={[
+    {
+      from: "handler",
+      to: "queue",
+      label: "setCount(0 + 1)",
+      title: "첫 번째 요청",
+      detail: "이 핸들러가 본 count는 0이다. '다음 값은 1'이라는 요청이 큐에 들어간다.",
+    },
+    {
+      from: "handler",
+      to: "queue",
+      label: "setCount(0 + 1) × 2",
+      title: "두 번째, 세 번째 요청",
+      detail: "count는 여전히 0이다. 같은 요청이 두 개 더 쌓인다.",
+      payload: "큐: [1, 1, 1]",
+    },
+    {
+      from: "handler",
+      to: "handler",
+      label: "console.log(count)",
+      title: "바로 읽어도 0이다",
+      detail: "이번 렌더링의 count는 const라서 핸들러가 끝날 때까지 0이다.",
+    },
+    {
+      from: "queue",
+      to: "react",
+      label: "큐 처리",
+      title: "핸들러가 끝난 뒤 한 번에 처리한다",
+      detail: "React가 큐를 앞에서부터 처리한다. 1로, 1로, 1로. 결과는 1이다.",
+    },
+    {
+      from: "react",
+      to: "handler",
+      label: "새 렌더 count=1",
+      title: "새 사진을 건넨다",
+      detail: "컴포넌트를 다시 호출하고 useState가 1을 돌려준다. 새 handleClick은 1을 본다.",
+    },
+  ]}
+/>
+
+## 요청은 큐에 쌓였다가 다음 렌더링에서 풀린다
+
+이번에는 이전 값에 이어서 계산하는 방법이다. `setCount`에 값 대신 함수를 넘긴다.
+
+```tsx
+function handleClick() {
+  setCount((c) => c + 1);
+  setCount((c) => c + 1);
+  setCount((c) => c + 1);
+}
+```
+
+이 함수를 업데이터 함수라고 부른다. 함수형 업데이트라고도 한다. 업데이터는 "다음 값은 이것"이 아니라 "직전 값을 받아서 이렇게 바꿔 줘"라는 요청이다. React는 다음 렌더링에서 큐를 처리할 때 업데이터에 직전 결과를 넣어 부른다. 세 업데이터가 0 → 1 → 2 → 3으로 이어진다.
+
+값과 업데이터를 섞으면 어떻게 될까. React 19.3과 jsdom으로 직접 섞어 넣고 화면과 렌더링 횟수를 찍었다.
+
+```tsx
+let api;
+function Counter() {
+  renders++;
+  const [count, setCount] = useState(0);
+  const [user, setUser] = useState({ name: "kim", age: 20 });
+  api = { count, setCount, user, setUser };
+  return <p>{count} {user.age}</p>;
+}
+
+// 각 줄은 act() 안에서 한 핸들러처럼 실행했다
+setCount(count + 1); setCount(count + 1); setCount(count + 1);
+setCount((c) => c + 1); setCount((c) => c + 1); setCount((c) => c + 1);
+setCount(count + 5); setCount((c) => c + 1); setCount((c) => c * 2);
+setCount((c) => c + 1); setCount(0); setCount((c) => c + 10);
+```
+
+```text
+처음                               화면: 0 20 | 누적 렌더: 1
+  핸들러 안 count: 0
+setCount(count + 1) × 3            화면: 1 20 | 누적 렌더: 2
+setCount(c => c + 1) × 3           화면: 4 20 | 누적 렌더: 3
+count+5, c=>c+1, c=>c*2            화면: 20 20 | 누적 렌더: 4
+c=>c+1, 0, c=>c+10                 화면: 10 20 | 누적 렌더: 5
+```
+
+화면의 첫 숫자가 `count`다. 뒤의 20은 같은 컴포넌트에 함께 둔 `user.age`이고 뒤 절에서 쓴다.
+
+두 가지가 보인다. 하나, 세 번씩 `setCount`를 불렀는데 렌더링은 매번 한 번만 늘었다. 한 핸들러 안의 요청은 모았다가 한 번에 처리한다. 둘, 결과는 큐를 앞에서부터 차례로 적용한 값이다. 세 번째 줄을 따라가 보면, 그때 `count`는 4였다. 아래 그림이 그 줄을 한 칸씩 처리한다.
+
+<AlgoTrace
+  caption="count가 4일 때 setCount(count + 5), c => c + 1, c => c * 2를 넣으면"
+  memoryLabel="계산 중인 값"
+  cells={["시작 4", "값 9", "c => c + 1", "c => c * 2", "렌더"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["4"],
+      caption: "핸들러가 끝나고 React가 큐를 처리하기 시작한다. 시작 값은 지금 state인 4다.",
+    },
+    {
+      pointer: 1,
+      memory: ["9"],
+      caption: "setCount(count + 5)는 핸들러가 본 count 4로 이미 계산된 값 9다. 값은 앞의 결과를 버리고 그 값으로 바꾼다.",
+    },
+    {
+      pointer: 2,
+      memory: ["9", "10"],
+      caption: "업데이터는 직전 결과 9를 받아 10을 돌려준다.",
+    },
+    {
+      pointer: 3,
+      memory: ["9", "10", "20"],
+      caption: "다음 업데이터는 10을 받아 20을 돌려준다.",
+    },
+    {
+      pointer: 4,
+      found: [4],
+      memory: ["20"],
+      caption: "큐가 비었다. 컴포넌트를 한 번 다시 호출하고 useState는 20을 돌려준다. 렌더링은 한 번뿐이다.",
+    },
+  ]}
+/>
+
+네 번째 줄도 같은 규칙이다. 업데이터가 20을 21로 만들고, 값 0이 그걸 덮고, 마지막 업데이터가 0에 10을 더해 10이 됐다. 값을 넣는 건 사실 `(c) => 0`처럼 직전 값을 무시하는 업데이터를 넣은 것과 같다.
+
+언제 업데이터를 쓰나. 다음 값이 직전 값에서 계산된다면 업데이터가 안전하다. 같은 핸들러에서 여러 번 부를 때, 그리고 타이머나 구독 콜백처럼 옛 렌더링에서 만든 함수가 부를 때 특히 그렇다. 입력창 값처럼 직전 값과 상관없이 새 값이 정해지면 값을 넘겨도 된다. 모든 곳에 업데이터를 쓰는 팀도 있는데, 틀린 건 아니지만 읽는 사람이 "이전 값에 기대는 계산인가"를 구분하기 어려워진다.
+
+업데이터의 인자 이름은 `c`, `prev`, state 이름의 첫 글자를 많이 쓴다. 이름은 아무래도 좋지만 업데이터는 순수해야 한다. React는 업데이터를 렌더링 중에 부르고, 개발 모드의 StrictMode에서는 두 번 부른다. 업데이터 안에서 `prev.push()`처럼 이전 값을 고치면 항목이 두 번 들어가는 증상이 나온다. 그 실험은 [불변 업데이트](/posts/js-immutability-react#업데이트-함수가-두-번-불리는-이유)에 있다.
+
+## 큐 처리를 직접 계산해 본다
+
+큐를 처리하는 규칙을 함수로 써 보면 위 결과들이 손에 잡힌다. 아래 `processQueue`는 지금 state와 큐를 받아 다음 렌더링에서 쓸 값을 돌려준다. 큐의 숫자는 값을 넣은 요청(`setCount(5)`)이고, `"+1"`, `"*2"`, `"-3"` 같은 문자열은 업데이터(`setCount((c) => c + 1)`)를 뜻한다. 테스트의 처음 두 개가 처음 버튼의 두 가지 버전이다.
+
+<CodePlayground
+  caption="업데이트 큐 처리하기"
+  functionName="processQueue"
+  initialCode={`function processQueue(base, queue) {
+  let state = base;
+  // 숫자면 그 값으로 바꾸고,
+  // "+n", "-n", "*n"이면 직전 state에 계산을 적용한다
+  return state;
+}`}
+  solution={`function processQueue(base, queue) {
+  let state = base;
+  for (const update of queue) {
+    if (typeof update === "number") {
+      state = update;
+      continue;
+    }
+    const op = update[0];
+    const n = Number(update.slice(1));
+    if (op === "+") state = state + n;
+    else if (op === "-") state = state - n;
+    else if (op === "*") state = state * n;
+  }
+  return state;
+}`}
+  tests={[
+    { args: [0, [1, 1, 1]], expected: 1, label: "setCount(count + 1) × 3" },
+    { args: [0, ["+1", "+1", "+1"]], expected: 3, label: "setCount(c => c + 1) × 3" },
+    { args: [4, [9, "+1", "*2"]], expected: 20, label: "count+5, c+1, c*2 (count=4)" },
+    { args: [20, ["+1", 0, "+10"]], expected: 10, label: "c+1, 0, c+10" },
+    { args: [7, []], expected: 7, label: "요청이 없으면 그대로" },
+    { args: [3, ["*2", 5, "-1", "+1"]], expected: 5, label: "값이 앞의 계산을 덮는다" },
+  ]}
+/>
+
+실제 React의 큐는 이보다 복잡하다. 업데이트마다 우선순위가 있어서 급한 업데이트를 먼저 처리하고 낮은 우선순위 업데이트는 나중 렌더링으로 미루기도 한다. 그래도 같은 우선순위 안에서 넣은 순서대로 적용한다는 규칙은 같아서, 최종 값은 위 함수와 똑같이 나온다.
+
+## 비동기가 아니라 다음 렌더링에 반영된다
+
+"setState는 비동기라서 바로 반영되지 않는다"는 설명을 자주 듣는다. 결과만 보면 비슷하지만 정확하지 않고, 이 말을 믿으면 이상한 코드를 쓰게 된다.
+
+```tsx
+async function handleSave() {
+  await setCount(count + 1);   // setCount는 Promise를 돌려주지 않는다
+  console.log(count);          // 여전히 이전 값이다
+}
+```
+
+`setCount`는 `undefined`를 돌려준다. 기다릴 Promise가 없으니 `await`는 아무 의미가 없다. 그 뒤에 읽는 `count`가 이전 값인 이유도 "아직 처리되지 않아서"가 아니라, 이 함수가 이전 렌더링의 `const`를 보고 있어서다. 렌더링이 끝난 뒤에 읽어도 이 함수 안의 `count`는 바뀌지 않는다.
+
+정확한 말은 이렇다. setState는 업데이트를 큐에 넣고 렌더링을 예약한다. 지금 실행 중인 코드(이벤트 핸들러, `await` 사이의 한 덩어리)가 끝나면 React가 쌓인 업데이트를 모아 한 번 렌더링한다. 새 값은 다음 렌더링의 `useState`가 돌려준다.
+
+여러 setState를 모아 렌더링 한 번으로 처리하는 걸 배칭이라고 한다. React 17까지는 React 이벤트 핸들러 안에서만 모았고, React 18부터는 `createRoot`로 띄우면 `setTimeout`이나 `await` 뒤에서도 모은다. 이 변화와 `await`를 사이에 둔 핸들러가 몇 번 렌더링되는지는 [여러 번 바꿔도 렌더링은 한 번](/posts/react-rerender#여러-번-바꿔도-렌더링은-한-번)에서 그림으로 봤다.
+
+방금 바꾼 값이 필요하면 두 가지 중 하나를 한다. 계산한 다음 값을 변수에 담아 둔다.
+
+```tsx
+function handleAdd(item) {
+  const next = [...items, item];
+  setItems(next);
+  saveDraft(next);     // 방금 만든 값을 그대로 쓴다
+}
+```
+
+또는 DOM이 바뀐 뒤에 해야 하는 일이라면(새로 추가된 줄로 스크롤하기) `react-dom`의 `flushSync`로 그 업데이트를 바로 렌더링하고 커밋하게 한다. 배칭을 끄는 셈이라 꼭 필요한 곳에만 쓴다.
+
+```tsx
+import { flushSync } from "react-dom";
+
+function handleSend(text) {
+  flushSync(() => {
+    setMessages((m) => [...m, text]);
+  });
+  listRef.current.lastElementChild.scrollIntoView();  // 새 줄이 이미 DOM에 있다
+}
+```
+
+## 같은 값이면 렌더링을 건너뛴다
+
+setState에 넘긴 다음 값이 지금 값과 같으면 React는 렌더링을 건너뛴다. 같은지는 `Object.is`로 본다. 숫자와 문자열은 값이 같으면 같고, 객체와 배열은 같은 참조인지 본다. `Object.is`는 `===`와 거의 같지만 `NaN`을 자기 자신과 같다고 보고 `+0`과 `-0`을 다르게 본다.
+
+앞의 실험을 이어서, count가 10일 때 `setCount(10)`을 두 번 하고 객체 state를 두 가지로 바꿨다.
+
+```tsx
+const [user, setUser] = useState({ name: "kim", age: 20 });
+
+// A: 같은 객체를 고쳐서 다시 넣는다
+const u = user; u.age = 21; setUser(u);
+
+// B: 새 객체를 만들어 넣는다
+setUser({ ...user, age: 22 });
+```
+
+```text
+setCount(10) (같은 값)              화면: 10 20 | 누적 렌더: 6
+setCount(10) 한 번 더               화면: 10 20 | 누적 렌더: 6
+user.age=21; setUser(user)         화면: 10 20 | 누적 렌더: 6
+setUser({...user, age:22})         화면: 10 22 | 누적 렌더: 7
+```
+
+첫 번째 `setCount(10)`에서 렌더링 횟수가 5에서 6으로 늘었다. 값이 같은데도 컴포넌트를 한 번 불렀다. React 문서에도 적혀 있듯이, 같은 값이어도 건너뛰기 전에 그 컴포넌트를 한 번 호출해 보는 경우가 있다. 그때 자식까지 내려가지는 않고 결과도 버린다. 두 번째부터는 호출도 없이 건너뛰었다. 그러니 "같은 값을 넣으면 함수가 절대 안 불린다"고 기대하는 코드를 쓰지 않는다. 렌더링이 순수하면 한 번 더 불려도 문제가 없다.
+
+A가 더 중요하다. `age`를 21로 고쳤지만 화면은 20 그대로이고 렌더링도 없었다. 같은 객체를 넣었으니 `Object.is`가 같다고 판단했다. 데이터는 이미 21인데 화면은 20인, 어긋난 상태가 됐다. 나중에 다른 이유로 렌더링되면 그제야 21이 갑자기 나타난다. "배열에 push했는데 화면이 안 바뀐다", "다른 걸 누르면 그제야 반영된다"는 증상이 이것이다. B처럼 새 객체를 만들어 넣어야 React가 바뀐 줄 안다.
+
+## 객체 state는 합쳐지지 않는다
+
+클래스 컴포넌트의 `this.setState({ email })`는 넘긴 필드만 기존 state에 합쳐 줬다. `useState`의 setter는 합치지 않는다. 넘긴 값이 통째로 다음 state가 된다.
+
+```tsx
+const [form, setForm] = useState({ name: "", email: "" });
+
+setForm({ email: "a@b.c" });                // name이 사라진다
+setForm({ ...form, email: "a@b.c" });       // 나머지를 펼쳐서 함께 넣는다
+setForm((f) => ({ ...f, email: "a@b.c" })); // 직전 값에 이어서
+```
+
+필드가 서로 따로 바뀐다면 객체 하나보다 `useState`를 여러 개 두는 편이 단순하다. 늘 함께 바뀌는 값(마우스 좌표의 x, y)이면 하나로 묶는다. 중첩이 깊은 객체를 고치는 방법과 Immer는 [불변 업데이트](/posts/js-immutability-react)에서 다뤘다.
+
+## 초깃값은 처음 한 번만 읽는다
+
+`useState(초깃값)`의 인자는 첫 렌더링에만 쓰이고 이후에는 무시된다. 그런데 인자를 계산하는 코드는 무시되든 말든 렌더링마다 실행된다. 저장해 둔 초안을 읽어 오는 편집기로 시험했다. 실험에서는 jsdom이라 `localStorage` 대신 호출 횟수만 세는 함수로 바꿔 돌렸다.
+
+```tsx
+function loadDraft(kind) {
+  reads[kind]++;
+  return localStorage.getItem("draft") ?? "";
+}
+
+function Editor() {
+  const [a] = useState(loadDraft("eager"));         // 렌더링마다 loadDraft를 부른다
+  const [b] = useState(() => loadDraft("lazy"));    // 함수를 넘긴다
+  // ...
+}
+```
+
+다섯 번 렌더링한 뒤 `loadDraft`가 불린 횟수다.
+
+```text
+일반       렌더 5번 뒤 loadDraft 호출: {"eager":5,"lazy":1}
+StrictMode 렌더 5번 뒤 loadDraft 호출: {"eager":10,"lazy":2}
+```
+
+`useState(loadDraft())`는 렌더링마다 `localStorage`를 읽고, 그 결과를 버린다. `useState(() => loadDraft())`처럼 함수를 넘기면 React가 첫 렌더링에만 그 함수를 부른다. 이걸 지연 초기화라고 한다. StrictMode에서 지연 초기화 함수도 두 번 불린 건 업데이터와 마찬가지로 순수한지 확인하려는 이중 호출이다. 큰 배열을 만들거나, 저장소를 읽거나, 무거운 계산을 하는 초깃값이면 함수로 넘긴다. `useState(loadDraft)`처럼 함수 자체를 넘겨도 되지만 `useState(loadDraft())`와 한 글자 차이라 실수하기 쉽다.
+
+초깃값이 한 번만 읽힌다는 사실은 다른 버그도 만든다. props를 초깃값으로 쓰면 props가 바뀌어도 state는 따라가지 않는다. 이 장면은 [같은 값이 두 곳에 살면 어긋난다](/posts/fp-in-react#같은-값이-두-곳에-살면-어긋난다)에서 따라가 봤다. 처음 한 번만 쓰는 게 의도라면 이름을 `initialColor`처럼 지어 읽는 사람에게 알린다. 다른 대상으로 바뀔 때 state를 새로 시작하고 싶다면 key를 바꾸는 방법이 있는데, 그건 [effect 없이 쓰는 법](/posts/react-without-effects)에서 이어서 본다.
+
+## useState로 버틸 때와 useReducer로 넘어갈 때
+
+`useReducer`는 state를 바꾸는 규칙을 컴포넌트 밖의 함수 하나로 모으는 훅이다. `dispatch({ type: "added", item })`처럼 일어난 일을 보내면 리듀서 `(state, action) => 다음 state`가 다음 값을 계산한다. 내부적으로는 업데이터 큐와 같은 큐를 쓴다. 업데이터가 "직전 값 → 다음 값" 함수였다면 리듀서는 그 함수를 액션 종류별로 한 곳에 모은 것이다.
+
+고르는 기준은 복잡도다. 값 하나, 바꾸는 방법 한두 가지면 `useState`가 짧다. 이런 신호가 보이면 `useReducer`를 생각한다.
+
+- 핸들러 여러 곳에서 같은 state 여러 개를 함께 바꾼다
+- 다음 state가 다른 state에 따라 달라진다(결제 중이면 담기를 막는다)
+- 불리언 여러 개가 말이 안 되는 조합을 만든다(`isLoading`과 `isDone`이 동시에 true)
+- 상태 전이 규칙을 React 없이 단위 테스트하고 싶다
+
+리듀서를 설계하고 테스트하는 예제는 [React 안의 함수형](/posts/fp-in-react#상태-변화는-리듀서라는-순수-함수로-모은다)에 있다. 하나 덧붙이면, `setCount` 같은 setter와 `dispatch`는 렌더링 사이에 같은 함수로 유지된다. 그래서 effect의 의존성 배열에 넣어도 effect가 다시 돌지 않고, 린트 규칙도 이 둘은 빼도 된다고 본다.
+
+## 두 컴포넌트가 같은 값을 봐야 할 때
+
+설명 패널 두 개를 만들었다. 각 패널이 자기 `isOpen` state를 갖고, 제목을 누르면 열린다. 그런데 요구사항이 "한 번에 하나만 열린다"로 바뀌었다.
+
+```tsx
+function Panel({ title, children }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <section>
+      <button onClick={() => setIsOpen(true)}>{title}</button>
+      {isOpen && children}
+    </section>
+  );
+}
+```
+
+패널 A는 패널 B의 state를 볼 수도, 바꿀 수도 없다. state는 그걸 선언한 컴포넌트 자리에 붙어 있기 때문이다. 둘이 같은 정보를 봐야 하면 그 정보를 둘의 가장 가까운 공통 부모로 올린다. 이걸 상태 끌어올리기라고 부른다.
+
+```tsx
+function Accordion() {
+  const [activeIndex, setActiveIndex] = useState(0);
+  return (
+    <>
+      <Panel title="배송" isOpen={activeIndex === 0} onOpen={() => setActiveIndex(0)}>
+        평일 오후 2시 전 주문은 당일 출고한다.
+      </Panel>
+      <Panel title="반품" isOpen={activeIndex === 1} onOpen={() => setActiveIndex(1)}>
+        수령 후 7일 안에 신청한다.
+      </Panel>
+    </>
+  );
+}
+
+function Panel({ title, isOpen, onOpen, children }) {
+  return (
+    <section>
+      <button onClick={onOpen}>{title}</button>
+      {isOpen && children}
+    </section>
+  );
+}
+```
+
+이제 "어느 패널이 열렸나"라는 값은 `Accordion`의 `activeIndex` 한 곳에만 있다. 각 값의 주인을 한 곳으로 정해 두는 걸 단일 원천(single source of truth)이라고 한다. 패널은 받은 `isOpen`을 그리고, 바꾸고 싶으면 `onOpen`으로 부모에게 알린다. 자기 state로 동작하는 처음 `Panel`을 비제어, props로 동작하는 지금 `Panel`을 제어 컴포넌트라고 부르기도 한다. 폼 입력에서 이 둘을 고르는 이야기는 [프런트엔드 상태 구조](/posts/frontend-state-architecture)에 있다.
+
+끌어올린다고 무조건 꼭대기로 올리는 건 아니다. 필요한 컴포넌트들의 가장 가까운 공통 부모까지만 올린다. 더 위로 올릴수록 그 state가 바뀔 때 다시 렌더링되는 범위가 넓어진다. 반대로 내려서 렌더링을 줄이는 방법은 [상태는 내리고 내용은 올린다](/posts/react-rerender#상태는-내리고-내용은-올린다)에서 봤다.
+
+## 계산할 수 있는 값은 state에 두지 않는다
+
+state를 늘리다 보면 이미 가진 state에서 계산할 수 있는 값까지 state로 두게 된다.
+
+```tsx
+const [items, setItems] = useState([]);
+const [total, setTotal] = useState(0);         // items에서 계산할 수 있다
+const [selected, setSelected] = useState(null); // 항목 객체를 통째로 복사해 둔다
+```
+
+`total`을 state로 두면 `items`를 바꾸는 모든 곳에서 `setTotal`도 잊지 않고 불러야 한다. 하나라도 빠지면 둘이 어긋난다. 렌더링 중에 `const total = items.reduce(...)`로 계산하면 어긋날 수가 없다. `selected`도 마찬가지로, 목록의 항목 이름을 고치면 복사해 둔 객체는 옛 이름을 들고 있다. id만 state로 두고 렌더링 중에 `items.find((i) => i.id === selectedId)`로 찾는다.
+
+판단은 질문 하나로 한다. 이 값을 다른 state나 props로 계산할 수 있나. 그렇다면 state가 아니다. 이 원칙과 effect로 값을 맞추면 한 박자 늦는 이유는 [계산할 수 있으면 상태로 두지 않는다](/posts/fp-in-react#계산할-수-있으면-상태로-두지-않는다)에서 렌더링 로그로 봤다.
+
+비슷하게 서로 모순될 수 있는 state도 합친다. `isSending`과 `isSent`를 따로 두면 둘 다 true인 상태가 가능하다. `status: "typing" | "sending" | "sent"` 하나로 두면 그런 조합이 처음부터 없다.
+
+## 화면에서 만나는 state 버그를 거꾸로 찾기
+
+현장에서는 증상이 먼저 온다. 증상별로 원인을 짚으면 이렇다.
+
+"버튼 하나로 여러 번 올렸는데 한 번만 오른다"면 같은 렌더링의 값으로 계산한 요청을 여러 번 넣은 것이다. 업데이터 함수로 바꾼다. "저장 직후 콘솔에 이전 값이 찍힌다"는 버그가 아니라 스냅샷이다. 다음 값을 변수에 담아 쓰고, 새 값을 보고 싶으면 렌더링 본문에서 찍는다.
+
+"배열에 넣었는데 화면이 안 바뀌다가 다른 걸 누르면 나타난다"면 같은 객체를 고쳐서 다시 넣은 것이다. 새 배열을 만든다. "props가 바뀌었는데 폼이 옛 값을 보여 준다"면 props를 초깃값으로 복사한 state다. "합계와 목록이 가끔 어긋난다"면 계산할 수 있는 값을 state로 둔 것이다.
+
+확인은 React DevTools의 Components 탭에서 한다. 컴포넌트를 고르면 오른쪽 hooks 목록에 `State: 20`처럼 지금 값이 보인다. 화면의 숫자와 DevTools의 값이 다르면 렌더링이 안 된 것(같은 참조를 넣었다)이고, 둘이 같은데 틀렸다면 계산이 틀린 것이다. 렌더링 본문 맨 위에 `console.log`를 두면 렌더링마다 어떤 값으로 그렸는지 시간 순으로 남는다. StrictMode 개발 모드에서는 두 번씩 찍히는 게 정상이다.
+
+## 좋아요 +3으로 돌아가서
+
+`setCount(count + 1)`을 세 번 불러도 1만 오른 건, 세 요청 모두 같은 렌더링의 사진 속 `count` 0으로 계산한 "다음 값은 1"이었기 때문이다. setState는 지금 값을 바꾸지 않고 큐에 요청을 넣고, 핸들러가 끝나면 React가 큐를 순서대로 처리해 렌더링 한 번으로 새 값을 내놓는다. 이어서 계산하려면 업데이터를 넘기고, 같은 참조를 넣으면 건너뛴다는 걸 기억해 새 객체를 만든다. state가 렌더링 바깥의 시스템(서버 연결, 타이머, DOM 위젯)과 맞춰져야 할 때가 다음 주제다. [useEffect를 제대로 쓰기](/posts/react-useeffect)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### `setCount(count + 1)`을 세 번 호출하면 왜 1만 증가하나요?
+
+한 렌더링 안에서 `count`는 바뀌지 않는 값이라 세 호출 모두 같은 `count`로 계산한 같은 다음 값을 요청하기 때문이다. setState는 지금 변수를 바꾸지 않고 다음 렌더링에 쓸 업데이트를 큐에 넣는다. 이전 결과에 이어서 계산하려면 `setCount((c) => c + 1)`처럼 업데이터 함수를 넘긴다.
+
+### setState는 비동기인가요?
+
+Promise를 돌려주는 비동기 함수는 아니다. 업데이트를 큐에 넣고 렌더링을 예약할 뿐이고, 지금 실행 중인 코드가 끝나면 React가 모아서 한 번 렌더링한다. 바로 다음 줄에서 이전 값이 보이는 건 처리가 늦어서가 아니라 그 함수가 이전 렌더링의 스냅샷을 보고 있기 때문이다. 업데이트 직후 DOM이 필요하면 `flushSync`를 쓴다.
+
+### 업데이터 함수와 값을 섞어서 넣으면 결과는 어떻게 되나요?
+
+큐에 넣은 순서대로 적용한다. 값은 직전 결과를 버리고 그 값으로 바꾸고, 업데이터는 직전 결과를 받아 다음 값을 계산한다. 예를 들어 4에서 `count + 5`, `c => c + 1`, `c => c * 2`를 넣으면 9, 10, 20을 거쳐 20이 되고 렌더링은 한 번이다.
+
+### 같은 값으로 setState하면 리렌더링되나요?
+
+`Object.is`로 비교해서 같으면 자식까지의 렌더링을 건너뛴다. 다만 건너뛰기 전에 그 컴포넌트를 한 번 호출하는 경우가 있어서, 호출 자체가 없다고 기대하면 안 된다. 객체를 고친 뒤 같은 참조를 넣으면 같은 값으로 보여 화면이 안 바뀌니, 새 객체를 만들어 넣는다.
+
+### useState의 지연 초기화는 언제 쓰나요?
+
+초깃값을 만드는 비용이 클 때 쓴다. `useState(compute())`는 결과를 첫 렌더링에만 쓰면서도 계산은 렌더링마다 하고, `useState(() => compute())`는 첫 렌더링에만 함수를 부른다. `localStorage` 읽기, 큰 배열 생성, 파싱 같은 초깃값이 해당한다. 개발 모드 StrictMode에서는 순수성 검사로 두 번 불릴 수 있다.
+
+### 형제 컴포넌트가 같은 state를 써야 하면 어떻게 하나요?
+
+state를 둘의 가장 가까운 공통 부모로 올리고, 값은 props로 내려주고 바꾸는 함수는 콜백 props로 넘긴다. 그러면 그 값의 원천이 한 곳이 되어 둘이 어긋나지 않는다. 너무 위로 올리면 렌더링 범위가 넓어지니 필요한 곳까지만 올리고, 멀리 떨어진 여러 곳이 쓰는 값이면 context나 외부 저장소를 고려한다.
+
+### 어떤 값을 state로 두지 말아야 하나요?
+
+다른 state나 props로 계산할 수 있는 값이다. 합계, 걸러진 목록, 선택된 항목 객체 같은 것을 state로 두면 원본을 바꿀 때마다 함께 맞춰야 하고 하나라도 빠지면 어긋난다. 렌더링 중에 계산하고, 무거우면 `useMemo`로 감싼다. 서로 모순될 수 있는 불리언 여러 개는 상태 하나로 합친다.
+
+### useState와 useReducer는 어떻게 고르나요?
+
+값이 단순하고 바꾸는 방법이 적으면 useState, 여러 state가 함께 바뀌거나 다음 상태가 현재 상태의 규칙에 따라 정해지면 useReducer를 고른다. 리듀서는 상태 전이 규칙을 한 순수 함수에 모으니 React 없이 테스트할 수 있다. 둘 다 같은 업데이트 큐를 쓰고, setter와 dispatch는 렌더링 사이에 같은 함수로 유지된다.

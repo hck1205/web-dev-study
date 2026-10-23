@@ -1,0 +1,466 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-styling-approaches");
+
+<EasyIntro>
+  웹 페이지의 모양을 정하는 CSS는 원래 모든 규칙이 한 방에 모여 사는 구조다. 누가 버튼이라는 이름으로 규칙을 하나 쓰면, 다른 화면에서 같은 이름을 쓴 버튼까지 함께 바뀐다.
+
+  여러 사람이 같은 서랍장을 쓰면서 서랍마다 이름표를 붙이는 상황을 떠올리면 쉽다. 이름표가 겹치면 남의 물건을 꺼내게 되고, 오래된 물건은 주인이 누군지 몰라 아무도 버리지 못한다. 그래서 사람들은 이름표를 길고 규칙적으로 붙이기도 하고, 기계가 이름표에 고유한 번호를 붙이게 하기도 하고, 물건 옆에 설명서를 같이 묶어 두기도 했다.
+
+  설명서를 물건과 같이 묶는 방식은 편하지만, 화면을 그릴 때마다 설명서를 읽고 정리하는 일이 생겨서 느려질 수 있다. 미리 정리해 둔 작은 이름표만 조합해 쓰는 방식은 서랍장이 거의 자라지 않는다. 어느 방식이 정답이라기보다, 팀의 크기와 화면이 얼마나 자주 바뀌는지에 따라 고르는 것이다.
+</EasyIntro>
+
+## 버튼 색 하나 바꿨는데 다른 화면이 깨졌다
+
+결제 페이지의 버튼을 파란색에서 초록색으로 바꿔 달라는 요청을 받았다. `styles.css`에서 `.button`을 찾아 색을 바꿨다. 배포하고 나니 관리자 화면의 버튼, 마케팅 페이지의 배너 버튼까지 초록색이 됐다. 같은 이름을 다른 사람이 다른 의도로 쓰고 있었다.
+
+그래서 이번엔 `.checkout .button`으로 범위를 좁혀 새 규칙을 쓴다. 반년 뒤 결제 페이지를 리뉴얼하면서 이 규칙은 아무 데서도 안 쓰이게 됐지만, 지워도 되는지 확신하는 사람이 없어 그대로 남는다. CSS 파일은 해마다 커진다.
+
+CSS 스타일링 방식이 이렇게 많아진 건 이 두 문제 때문이다. 하나는 이름 충돌이다. CSS의 클래스 이름은 페이지 전체가 나눠 쓰는 하나의 전역 이름 공간이다. 다른 하나는 죽은 CSS다. HTML과 CSS가 따로 살아서, 어떤 규칙이 아직 쓰이는지 코드만 보고는 알 수 없다. 여기에 컴포넌트 시대가 되면서 두 가지가 더 붙었다. props에 따라 바뀌는 동적 스타일과, 라이트·다크처럼 전체 색을 바꿔 끼우는 테마다.
+
+이 글은 다섯 가지 방식이 이 네 문제를 각자 어떻게 푸는지, 대신 무엇을 내주는지를 본다. 명시도와 캐스케이드 자체는 따로 다룰 주제라 짧게만 짚는다. 런타임 CSS-in-JS의 렌더링 비용을 실제로 잰 숫자는 [CSS 성능](/posts/css-performance)에 있고, 여기서는 그 결과를 바탕으로 고르는 기준을 다룬다.
+
+## 이름을 길게 지어 충돌을 피한다 (BEM)
+
+가장 오래된 해법은 도구 없이 규칙으로 막는 것이다. BEM(Block, Element, Modifier)은 클래스 이름에 소속을 박아 넣는다.
+
+```css
+/* block: 독립된 부품 */
+.product-card { display: grid; gap: 0.75rem; }
+
+/* element: block 안의 부분. 두 개의 밑줄로 잇는다 */
+.product-card__title { font-weight: 600; }
+.product-card__price { color: var(--color-accent); }
+
+/* modifier: 변형. 두 개의 하이픈으로 잇는다 */
+.product-card--sold-out { opacity: 0.5; }
+.product-card__price--discount { color: var(--color-danger); }
+```
+
+```html
+<article class="product-card product-card--sold-out">
+  <h3 class="product-card__title">무선 이어폰</h3>
+  <p class="product-card__price product-card__price--discount">39,000원</p>
+</article>
+```
+
+규칙이 하나 더 있다. 선택자를 중첩하지 않고 클래스 하나로만 쓴다. `.product-card .title` 대신 `.product-card__title`을 쓰면 모든 규칙의 명시도가 클래스 하나로 같아진다. 명시도 싸움이 없으니 나중에 선언한 규칙이 이긴다는 단순한 원칙만 남는다.
+
+BEM은 빌드 도구가 필요 없고 어떤 프레임워크에서도 쓸 수 있다. 개발자 도구에서 클래스 이름만 보고 어느 부품의 어느 부분인지 바로 안다. 대신 모든 걸 사람이 지켜야 한다. 누군가 `.title`을 전역에 쓰면 막을 방법이 없다. 죽은 CSS 문제도 그대로다. `.product-card__badge`가 아직 쓰이는지는 저장소 전체를 검색해 봐야 하고, 클래스 이름을 문자열로 조합하는 코드(`"product-card--" + state`)가 있으면 검색으로도 못 찾는다.
+
+워드프레스 테마, 서버에서 HTML을 만드는 사이트, 프레임워크 없이 만드는 작은 페이지처럼 컴포넌트 단위 빌드가 없는 곳에서는 지금도 좋은 선택이다.
+
+## 빌드가 이름을 바꿔 주는 CSS Modules
+
+CSS Modules는 같은 생각을 도구가 대신 지켜 준다. 파일 이름이 `.module.css`로 끝나면 번들러가 그 안의 클래스 이름을 파일마다 고유한 이름으로 바꾸고, 원래 이름과 바뀐 이름의 짝을 자바스크립트 객체로 내보낸다.
+
+```css
+/* button.module.css: 이름을 짧게 써도 된다. 이 파일 안에서만 유효하다 */
+.root { padding: 0.5rem 1rem; border-radius: 6px; }
+.primary { background: var(--color-accent); color: white; }
+
+/* 다른 클래스의 선언을 가져다 쓴다 */
+.danger { composes: root; background: var(--color-danger); }
+
+/* 정말 전역이어야 하는 이름은 명시적으로 빠져나간다 */
+:global(.dark) .root { border: 1px solid var(--color-border); }
+```
+
+```tsx
+import styles from "./button.module.css";
+
+export function Button({ variant = "primary", ...props }: ButtonProps) {
+  // styles.primary는 빌드 후 "button_primary__x7Ab2" 같은 문자열이다
+  return <button className={`${styles.root} ${styles[variant]}`} {...props} />;
+}
+```
+
+이름 충돌은 구조적으로 사라진다. 다른 파일의 `.root`와 절대 겹치지 않는다. 결과물은 평범한 `.css` 파일이라 런타임 비용이 없고, 브라우저가 따로 캐시하고 병렬로 받는다. 서버 컴포넌트에서도 그냥 쓸 수 있다. Next.js, Vite 모두 설정 없이 지원한다.
+
+죽은 CSS는 절반쯤 풀린다. 컴포넌트 파일을 지우면 그 컴포넌트만 import하던 `.module.css`도 번들에서 빠진다. 하지만 파일 안에서 안 쓰는 클래스는 그대로 실린다. 번들러는 `styles.oldBadge`를 아무도 안 읽는다는 걸 보통 추적하지 않는다.
+
+남는 아쉬움은 동적 스타일과 타입이다. props 값을 스타일에 넣으려면 클래스를 미리 다 만들어 두고 고르거나, 아래에서 볼 CSS 변수로 값을 넘겨야 한다. `styles.primray`처럼 오타를 내도 `undefined`가 들어갈 뿐 오류가 나지 않는다. 타입 선언을 생성하는 플러그인을 붙이면 잡을 수 있다.
+
+## 런타임 CSS-in-JS는 렌더링하면서 CSS를 만든다
+
+Emotion, styled-components는 스타일을 컴포넌트 코드 안에 자바스크립트로 쓴다. 이 블로그도 Emotion으로 만들었다.
+
+```tsx
+import styled from "@emotion/styled";
+
+const Button = styled.button<{ $tone: "primary" | "danger"; $wide?: boolean }>`
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  /* props로 바로 분기한다. 자바스크립트 표현식이면 무엇이든 된다 */
+  background: ${(p) => (p.$tone === "danger" ? "var(--color-danger)" : "var(--color-accent)")};
+  width: ${(p) => (p.$wide ? "100%" : "auto")};
+`;
+```
+
+이 방식이 인기를 얻은 이유는 분명하다. 스타일과 마크업이 한 파일에 있어 컴포넌트를 지우면 스타일도 같이 사라진다. 죽은 CSS가 생길 틈이 거의 없다. 이름은 라이브러리가 스타일 내용의 해시로 만드니 충돌도 없다. props를 그대로 쓸 수 있어 동적 스타일이 가장 자유롭고, `ThemeProvider`로 테마 객체를 내려 주면 어디서든 `theme.color.accent`를 읽는다. TypeScript로 테마 타입까지 검사된다.
+
+대신 CSS를 만드는 일이 브라우저에서, 렌더링할 때마다 일어난다. 아래 그림에서 다음을 누르면 Emotion이 서버 렌더링과 브라우저에서 스타일 하나를 처리하는 순서가 진행된다.
+
+<SequenceDiagram
+  caption="런타임 CSS-in-JS: 스타일이 클래스가 되기까지"
+  actors={[
+    { id: "comp", label: "컴포넌트" },
+    { id: "lib", label: "Emotion" },
+    { id: "html", label: "서버 HTML" },
+    { id: "br", label: "브라우저" },
+  ]}
+  steps={[
+    {
+      from: "comp",
+      to: "lib",
+      label: "styled 호출",
+      title: "렌더링 중에 스타일을 넘긴다",
+      detail: "props를 넣어 템플릿 문자열을 완성한다. 이 계산은 렌더링마다 다시 일어난다.",
+    },
+    {
+      from: "lib",
+      to: "lib",
+      label: "직렬화 + 해시",
+      title: "문자열로 만들고 이름을 붙인다",
+      detail: "완성된 CSS 문자열을 해시해서 클래스 이름을 만든다. 같은 내용이면 같은 이름이다.",
+      payload: "padding:0.5rem 1rem;background:var(--color-accent); → css-1q8jsgx",
+    },
+    {
+      from: "lib",
+      to: "html",
+      label: "규칙 모으기",
+      title: "서버에서는 시트 대신 캐시에 모은다",
+      detail: "서버에는 document가 없다. 이번 요청에서 쓴 규칙을 캐시에 쌓아 둔다.",
+    },
+    {
+      from: "html",
+      to: "br",
+      label: "style 태그 동봉",
+      title: "HTML과 함께 규칙을 보낸다",
+      detail: "모은 규칙을 style 태그로 HTML에 끼워 넣어야 첫 화면이 스타일 없이 번쩍이지 않는다.",
+    },
+    {
+      from: "br",
+      to: "lib",
+      label: "번들 실행",
+      title: "브라우저에서 같은 계산을 다시 한다",
+      detail: "하이드레이션 때 컴포넌트가 다시 돌며 같은 해시를 만든다. 이미 있는 규칙이면 넣지 않는다.",
+    },
+    {
+      from: "comp",
+      to: "lib",
+      label: "props 변경",
+      title: "새 값이면 새 규칙",
+      detail: "처음 보는 조합이면 규칙을 시트에 새로 넣는다. 값이 자주 바뀌면 규칙이 계속 쌓인다.",
+    },
+  ]}
+/>
+
+비용은 세 군데서 나온다. 첫째, 라이브러리 자체가 자바스크립트 번들에 들어간다. 둘째, 렌더링마다 스타일을 문자열로 만들고 해시하는 계산이 메인 스레드에서 돈다. 셋째, props 값이 스타일에 그대로 들어가면 값마다 다른 클래스가 생겨 규칙이 끝없이 쌓이고, 규칙을 넣을 때마다 브라우저가 스타일을 다시 계산한다. 행 1,000개짜리 목록에서 이 차이가 얼마인지는 [CSS 성능의 런타임 CSS-in-JS 측정](/posts/css-performance#런타임-css-in-js가-렌더링마다-하는-일)에 숫자로 정리했다.
+
+## 서버 렌더링과 서버 컴포넌트에서 막히는 지점
+
+위 그림의 3, 4단계가 서버 렌더링의 숙제다. 규칙을 모아 HTML에 넣지 않으면 브라우저는 스타일 없는 HTML을 먼저 그리고, 번들이 실행된 뒤에야 모양이 잡힌다. 그래서 라이브러리마다 서버에서 스타일을 수집하는 장치가 있다. styled-components는 `ServerStyleSheet`, Emotion은 캐시를 직접 만들어 수집한다. Next.js App Router에서는 두 라이브러리 모두 `useServerInsertedHTML` 훅으로 스트리밍되는 HTML 조각마다 그동안 모인 규칙을 끼워 넣는 "레지스트리" 컴포넌트를 만들어야 한다.
+
+```tsx
+"use client";
+// styled-components를 App Router에서 쓰는 레지스트리의 뼈대
+import { useServerInsertedHTML } from "next/navigation";
+import { useState } from "react";
+import { ServerStyleSheet, StyleSheetManager } from "styled-components";
+
+export function StyledRegistry({ children }: { children: React.ReactNode }) {
+  const [sheet] = useState(() => new ServerStyleSheet());
+
+  useServerInsertedHTML(() => {
+    const styles = sheet.getStyleElement(); // 지금까지 모인 규칙
+    sheet.instance.clearTag();              // 다음 조각에서 중복으로 넣지 않게 비운다
+    return <>{styles}</>;
+  });
+
+  if (typeof window !== "undefined") return <>{children}</>;
+  return <StyleSheetManager sheet={sheet.instance}>{children}</StyleSheetManager>;
+}
+```
+
+더 큰 벽은 React 서버 컴포넌트다. 서버 컴포넌트는 서버에서 한 번 실행되고 자바스크립트가 브라우저로 가지 않는다. 훅도, 컨텍스트도 쓸 수 없다. 그런데 런타임 CSS-in-JS는 테마를 컨텍스트로 읽고, 브라우저에서 다시 실행되며 규칙을 관리한다. 그래서 `styled.button`으로 만든 컴포넌트는 서버 컴포넌트가 될 수 없고, 쓰는 파일마다 `"use client"`가 붙는다. 정적인 카드 하나를 그리는 데도 그 컴포넌트와 라이브러리 코드가 브라우저로 간다. 서버 컴포넌트로 자바스크립트를 줄이려던 목적과 정면으로 부딪친다.
+
+이 흐름은 라이브러리 생태계에도 반영됐다. styled-components는 2025년 메인테이너가 유지보수 모드를 선언하고 새 프로젝트에는 다른 방식을 권했다. React 19는 `<style>` 요소에 `href`와 `precedence`를 주면 중복을 없애고 `<head>`로 올려 주는 기능을 넣었는데, 런타임 라이브러리가 이 기능을 써서 서버 렌더링 수집을 단순하게 만들 여지는 있다. 그래도 서버 컴포넌트에서 실행되지 못하는 문제는 남는다.
+
+이 블로그는 모든 화면을 클라이언트 컴포넌트로 만들기로 정해 두었기 때문에 Emotion을 써도 이 벽에 부딪히지 않는다. 서버 컴포넌트를 적극적으로 쓰려는 프로젝트라면 이야기가 달라진다.
+
+## 제로 런타임: 자바스크립트로 쓰고 CSS로 내보낸다
+
+런타임 CSS-in-JS의 장점(타입, 같은 파일, 자동 이름)은 갖되 계산은 빌드 때 끝내자는 쪽이 제로 런타임(zero-runtime) CSS-in-JS다. 아래 그림은 스타일 코드가 언제 CSS가 되는지에 따라 방식들을 나눈 것이다.
+
+<ConceptDiagram
+  caption="스타일이 CSS가 되는 시점: 빌드 때인가, 실행 때인가"
+  width={420}
+  height={300}
+  nodes={[
+    { id: "src", label: "스타일 코드", sub: "CSS·TS·클래스", x: 210, y: 40, w: 150 },
+    { id: "build", label: "빌드 시점", sub: "Modules·VE·Panda·TW", x: 100, y: 145, w: 170 },
+    { id: "run", label: "실행 시점", sub: "Emotion·SC", x: 320, y: 145, w: 140 },
+    { id: "file", label: ".css 파일", sub: "캐시·병렬 다운로드", x: 100, y: 255, w: 160 },
+    { id: "tag", label: "style 태그", sub: "JS가 규칙 삽입", x: 320, y: 255, w: 140 },
+  ]}
+  edges={[
+    { from: "src", to: "build", label: "추출" },
+    { from: "src", to: "run", label: "번들에 포함" },
+    { from: "build", to: "file" },
+    { from: "run", to: "tag", label: "렌더링마다" },
+  ]}
+/>
+
+vanilla-extract는 `.css.ts` 파일에 스타일을 타입스크립트 객체로 쓴다. 빌드가 이 파일을 실행해 CSS를 뽑고, 자바스크립트에는 클래스 이름 문자열만 남긴다.
+
+```ts
+// button.css.ts: 빌드 때 실행되고, 런타임에는 클래스 이름만 남는다
+import { style, createVar } from "@vanilla-extract/css";
+import { recipe } from "@vanilla-extract/recipes";
+import { vars } from "./theme.css";
+
+export const progress = createVar(); // 런타임 값을 받을 CSS 변수
+
+export const button = recipe({
+  base: { padding: "0.5rem 1rem", borderRadius: vars.radius.md },
+  variants: {
+    tone: {
+      primary: { background: vars.color.accent },
+      danger: { background: vars.color.danger },
+    },
+    size: { sm: { fontSize: "0.875rem" }, md: { fontSize: "1rem" } },
+  },
+  defaultVariants: { tone: "primary", size: "md" },
+});
+
+export const bar = style({ width: progress }); // width: var(--progress__1a2b3c)
+```
+
+```tsx
+import { assignInlineVars } from "@vanilla-extract/dynamic";
+import { button, bar, progress } from "./button.css";
+
+// variant는 미리 만들어 둔 클래스 중에서 고른다
+<button className={button({ tone: "danger", size: "sm" })}>삭제</button>
+
+// 런타임 값은 CSS 변수로 넘긴다
+<div className={bar} style={assignInlineVars({ [progress]: `${percent}%` })} />
+```
+
+Linaria는 Emotion과 거의 같은 `styled` 문법을 쓰되, props를 쓰는 보간을 빌드 때 CSS 변수로 바꾼다. `${(p) => p.color}`는 `color: var(--abc123)`이 되고, 컴포넌트는 그 변수 값만 인라인 스타일로 넣는다. 기존 styled-components 코드를 옮기기 쉽다. Panda CSS와 Meta의 StyleX는 정적 분석으로 스타일 객체를 읽어 선언 하나당 클래스 하나인 아토믹(atomic) CSS로 만든다.
+
+공통된 제약이 있다. 빌드 도구가 코드를 읽어 CSS를 뽑으려면 스타일이 빌드 때 알 수 있는 값이어야 한다. `css({ color: user.favoriteColor })`처럼 실행해 봐야 아는 값은 넣을 수 없고, 반드시 미리 정한 변형이나 CSS 변수로 표현해야 한다. 처음엔 답답하지만, 결과적으로 "이 컴포넌트가 가질 수 있는 모양의 목록"이 코드에 드러나 디자인 시스템과 잘 맞는다. 번들러 플러그인(Vite, webpack, Next.js용)이 필요하고, 도구마다 지원하는 번들러가 달라 Turbopack 같은 새 번들러로 옮길 때 발목을 잡을 수 있다는 점은 확인하고 고른다.
+
+## 유틸리티 클래스는 CSS 파일이 자라지 않는다
+
+Tailwind CSS는 방향이 아예 다르다. 컴포넌트마다 클래스를 만들지 않고, `p-4`(padding 1rem), `text-sm`, `bg-blue-600`처럼 선언 하나짜리 클래스를 HTML에서 조합한다.
+
+```tsx
+export function ProductCard({ product }: { product: Product }) {
+  return (
+    <article className="grid gap-3 rounded-lg border p-4 md:grid-cols-[160px_1fr]">
+      <h3 className="font-semibold">{product.name}</h3>
+      <p className="text-sm text-gray-600 dark:text-gray-300">{product.price}</p>
+    </article>
+  );
+}
+```
+
+처음 보면 인라인 스타일을 클래스로 바꿔 쓴 것 같다. 차이는 세 가지다. 값이 디자인 토큰 목록 안에서만 고를 수 있게 묶여 있다(`p-4`는 되지만 `p-[13px]`은 일부러 튀어 보이는 문법이다). `md:`, `hover:`, `dark:`처럼 인라인 스타일로는 못 하는 미디어 쿼리와 상태를 쓸 수 있다. 그리고 같은 클래스는 몇 번을 써도 CSS에는 한 번만 들어간다.
+
+마지막 성질이 아토믹 CSS의 핵심이다. 컴포넌트가 100개에서 1,000개로 늘어도, 쓰는 선언의 종류는 금방 포화된다. `display: flex`는 앱 전체에서 한 줄이다. 아래 그림은 컴포넌트 세 개의 선언을 차례로 읽으며 아토믹 규칙을 만드는 과정이다. 처음 보는 선언만 규칙이 늘어난다.
+
+<AlgoTrace
+  caption="선언 하나에 클래스 하나: 같은 선언은 다시 만들지 않는다"
+  memoryLabel="만들어진 규칙"
+  cells={["A color:#fff", "A padding:8px", "B color:#fff", "B margin:0", "C padding:8px", "C color:#111"]}
+  steps={[
+    { pointer: 0, memory: [".a0 color:#fff"], caption: "컴포넌트 A의 첫 선언. 처음 보니 a0을 만든다." },
+    { pointer: 1, memory: [".a0 color:#fff", ".a1 padding:8px"], caption: "padding도 처음이라 a1. A의 클래스는 a0 a1이다." },
+    { pointer: 2, found: [0, 2], memory: [".a0 color:#fff", ".a1 padding:8px"], caption: "B의 color:#fff는 이미 있다. 규칙을 만들지 않고 a0을 다시 쓴다." },
+    { pointer: 3, memory: [".a0 color:#fff", ".a1 padding:8px", ".a2 margin:0"], caption: "margin:0은 새로 a2. B는 a0 a2다." },
+    { pointer: 4, found: [1, 4], memory: [".a0 color:#fff", ".a1 padding:8px", ".a2 margin:0"], caption: "C의 padding은 a1을 재사용한다." },
+    { pointer: 5, memory: [".a0 color:#fff", ".a1 padding:8px", ".a2 margin:0", ".a3 color:#111"], caption: "값이 다른 color는 다른 선언이라 a3. 선언 6개가 규칙 4개가 됐다." },
+  ]}
+/>
+
+직접 만들어 보자. 컴포넌트마다 스타일 객체를 받아, 각 컴포넌트에 붙일 클래스 문자열과 만들어진 규칙 목록을 돌려준다. 클래스 이름은 처음 나온 순서대로 `a0`, `a1`, …이고, 선언은 `속성:값` 문자열로 비교한다.
+
+<CodePlayground
+  caption="아토믹 CSS 만들기"
+  functionName="atomize"
+  initialCode={`function atomize(components) {
+  const ids = new Map(); // "color:#fff" → "a0"
+  const rules = [];      // ".a0{color:#fff}"
+  // 컴포넌트마다 Object.entries(style)을 돌며
+  // 처음 보는 선언이면 이름을 만들고 규칙을 추가한다
+  const classes = [];
+  return { classes, rules };
+}`}
+  solution={`function atomize(components) {
+  const ids = new Map();
+  const rules = [];
+  const classes = components.map((style) =>
+    Object.entries(style).map(([prop, value]) => {
+      const decl = \`\${prop}:\${value}\`;
+      if (!ids.has(decl)) {
+        const name = "a" + ids.size;
+        ids.set(decl, name);
+        rules.push(\`.\${name}{\${decl}}\`);
+      }
+      return ids.get(decl);
+    }).join(" ")
+  );
+  return { classes, rules };
+}`}
+  tests={[
+    { label: "컴포넌트 하나", args: [[{ color: "#fff", padding: "8px" }]], expected: { classes: ["a0 a1"], rules: [".a0{color:#fff}", ".a1{padding:8px}"] } },
+    { label: "그림의 A, B, C", args: [[{ color: "#fff", padding: "8px" }, { color: "#fff", margin: "0" }, { padding: "8px", color: "#111" }]], expected: { classes: ["a0 a1", "a0 a2", "a1 a3"], rules: [".a0{color:#fff}", ".a1{padding:8px}", ".a2{margin:0}", ".a3{color:#111}"] } },
+    { label: "모두 같은 선언", args: [[{ display: "flex" }, { display: "flex" }, { display: "flex" }]], expected: { classes: ["a0", "a0", "a0"], rules: [".a0{display:flex}"] } },
+    { label: "빈 입력", args: [[]], expected: { classes: [], rules: [] } },
+  ]}
+/>
+
+Tailwind는 소스 파일을 훑어 실제로 쓰인 클래스만 CSS로 만든다. 죽은 CSS가 거의 없고, 클래스를 지우면 다음 빌드에서 규칙도 사라진다. Tailwind 4부터는 설정을 자바스크립트 파일 대신 CSS 안의 `@theme`에 쓰고, 거기 적은 토큰이 CSS 변수로도 함께 나온다.
+
+```css
+/* app.css (Tailwind 4) */
+@import "tailwindcss";
+
+@theme {
+  --color-brand: oklch(0.62 0.19 255);  /* bg-brand, text-brand 유틸리티가 생긴다 */
+  --radius-card: 0.75rem;              /* rounded-card */
+}
+```
+
+흔한 실수가 둘 있다. 하나는 클래스 이름을 조합하는 코드다. Tailwind는 코드를 실행하지 않고 글자 그대로 찾기 때문에 `bg-${color}-600`이라고 쓰면 `bg-red-600`이 소스에 없어 CSS가 만들어지지 않는다. 화면에선 색이 안 나오는데 오류도 없다. 가능한 값을 완성된 문자열로 써 둔 객체에서 고른다.
+
+```tsx
+// 이렇게 쓰면 빌드가 찾지 못한다
+<span className={`bg-${tone}-600`} />
+
+// 완성된 클래스 이름이 소스에 그대로 있어야 한다
+const toneClass = { danger: "bg-red-600", success: "bg-green-600" } as const;
+<span className={toneClass[tone]} />
+```
+
+다른 하나는 충돌하는 클래스다. 공용 `Button`이 `px-4`를 갖고 있고 쓰는 쪽에서 `className="px-2"`를 넘기면, 어느 쪽이 이길지는 class 속성의 순서가 아니라 CSS 파일 안의 규칙 순서로 정해진다. 의도대로 덮이지 않는다. 그래서 공용 컴포넌트는 `tailwind-merge` 같은 도구로 겹치는 클래스를 정리하고, 변형은 `cva`(class-variance-authority)로 모아 관리하는 게 보통이다.
+
+마크업이 길어지고 읽기 어렵다는 건 Tailwind의 오래된 비판이다. 컴포넌트로 잘게 나누면 상당 부분 해결되지만, 디자이너와 HTML을 같이 보는 문화가 없는 팀이라면 진입 장벽이 된다.
+
+## 동적 스타일은 CSS 변수로 넘긴다
+
+다섯 방식을 지나며 한 가지 패턴이 계속 나왔다. 값이 몇 개로 정해져 있으면 미리 만든 클래스(variant)에서 고르고, 진짜로 연속된 값(진행률, 드래그 좌표, 사용자가 고른 색)은 CSS 변수로 넘긴다.
+
+```tsx
+// 어떤 방식을 쓰든 통하는 모양
+<div
+  className={styles.bar}                       // 규칙은 하나: width: var(--progress)
+  style={{ "--progress": `${percent}%` } as React.CSSProperties}
+/>
+```
+
+이렇게 하면 값이 바뀌어도 새 CSS 규칙이 생기지 않는다. 브라우저는 그 요소의 변수 하나만 다시 계산한다. 런타임 CSS-in-JS에서도 이 방식으로 바꾸면 규칙이 쌓이는 문제는 막을 수 있다. 1초에 60번 바뀌는 드래그 좌표 같은 값은 변수조차 React 렌더링을 거치지 않게 `ref`로 직접 `el.style.setProperty("--x", ...)`를 부르는 편이 낫다.
+
+## 테마는 CSS 변수 한 벌을 바꿔 끼우는 일
+
+런타임 CSS-in-JS의 `ThemeProvider` 방식은 테마를 자바스크립트 객체로 내려 준다. 다크 모드로 바꾸면 테마 객체가 바뀌고, 테마를 읽는 모든 styled 컴포넌트가 다시 렌더링되며 새 규칙을 만든다. 그리고 자바스크립트가 실행되기 전까지는 어떤 테마인지 모르니, 서버 렌더링한 첫 화면이 라이트로 그려졌다가 다크로 번쩍 바뀌기 쉽다.
+
+CSS 변수로 하면 테마 전환은 속성 하나를 바꾸는 일이 된다.
+
+```css
+:root {
+  --color-bg: #ffffff;
+  --color-text: #1a1a1a;
+  --color-accent: #2563eb;
+}
+
+:root[data-theme="dark"] {
+  --color-bg: #121212;
+  --color-text: #e6e6e6;
+  --color-accent: #7aa2ff;
+}
+
+/* 컴포넌트는 어떤 테마인지 모르고 변수만 읽는다 */
+.card { background: var(--color-bg); color: var(--color-text); }
+```
+
+```html
+<!-- head 맨 앞, CSS보다 먼저. 첫 그림 전에 테마를 정해 번쩍임을 막는다 -->
+<script>
+  try {
+    const saved = localStorage.getItem("theme");
+    const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch {}
+</script>
+```
+
+React는 아무것도 다시 렌더링하지 않는다. 브라우저가 변수를 읽는 요소의 스타일만 다시 계산한다. 이 방식은 BEM, CSS Modules, 제로 런타임, Tailwind(`@theme` 변수, `dark:` 변형) 어디서나 쓸 수 있고, Emotion에서도 테마 객체에 hex 대신 `var(--color-accent)`를 넣어 두면 같은 효과를 얻는다. 이 블로그의 디자인 토큰이 그렇게 되어 있다. 다만 `:root`의 변수를 바꾸면 페이지 전체가 재계산 대상이 되므로, 1초에 여러 번 바꾸는 값은 `:root`가 아니라 실제로 쓰는 요소 가까이에 둔다.
+
+토큰을 몇 단계로 나누고 다크 모드 값을 어떻게 짝 지을지는 [디자인 시스템 만들기](/posts/design-system-building)에서 이어서 다룬다.
+
+## 팀과 프로젝트에 따라 고르기
+
+네 가지 문제를 각 방식이 어떻게 푸는지 한 번에 보면 이렇다.
+
+| | 이름 충돌 | 죽은 CSS | 동적 스타일 | 런타임 비용 | 서버 컴포넌트 |
+|---|---|---|---|---|---|
+| 전역 CSS + BEM | 규칙으로 막음 | 남는다 | 클래스·변수 | 없음 | 된다 |
+| CSS Modules | 구조적으로 없음 | 파일 단위로 빠짐 | 클래스·변수 | 없음 | 된다 |
+| 런타임 CSS-in-JS | 해시로 없음 | 컴포넌트와 함께 사라짐 | props 그대로 | 있음 | 클라이언트만 |
+| 제로 런타임 | 해시로 없음 | 컴포넌트와 함께 사라짐 | variant·변수 | 없음 | 된다 |
+| Tailwind | 이름이 없음 | 쓰인 것만 생성 | 클래스 맵·변수 | 없음 | 된다 |
+
+혼자 하거나 작은 팀이 빨리 만드는 서비스라면 Tailwind나 CSS Modules가 무난하다. 둘 다 설정이 거의 없고 어떤 렌더링 방식과도 맞는다. Tailwind는 토큰 체계를 공짜로 얻는 대신 마크업 문법을 배워야 하고, CSS Modules는 평범한 CSS라 배울 게 없는 대신 토큰은 직접 CSS 변수로 만들어야 한다.
+
+디자인 시스템을 여러 제품이 공유하는 큰 조직이라면 타입으로 토큰과 변형을 강제할 수 있는 쪽이 유리하다. vanilla-extract나 Panda처럼 변형 목록이 코드로 드러나는 제로 런타임 도구, 또는 Tailwind에 `cva`로 변형을 묶는 조합이 많이 쓰인다. 공용 컴포넌트 패키지의 결과물이 평범한 CSS라는 점도 중요하다. 쓰는 앱이 어떤 번들러를 쓰든 가져다 쓸 수 있다.
+
+이미 Emotion이나 styled-components로 수백 개의 컴포넌트를 만든 앱이라면, 성능 문제가 측정으로 확인되기 전에 갈아엎을 이유는 약하다. 자주 바뀌는 값을 CSS 변수로 빼고, 테마를 CSS 변수로 옮기고, 새 화면부터 다른 방식으로 만들며 천천히 옮긴다. Next.js App Router로 넘어가며 서버 컴포넌트를 본격적으로 쓰려 한다면 그때가 옮길 시점이다.
+
+## 옮겨 탈 때 밟는 것들
+
+두 방식이 한 앱에 같이 있는 기간이 생각보다 길다. 그동안 가장 자주 생기는 문제는 규칙의 순서다. Emotion은 `<head>` 끝에 `<style>`을 넣고, CSS Modules 파일은 번들러가 정한 순서로 `<link>`가 들어간다. 같은 명시도라면 나중에 온 규칙이 이기니, 페이지를 오가며 CSS가 로드되는 순서가 바뀌면 같은 버튼의 모양이 달라진다. 이럴 때 `@layer`로 "리셋, 기존 스타일, 새 스타일" 순서를 명시하면 로드 순서와 상관없이 우선순위가 고정된다. 자세한 규칙은 [CSS 성능의 @layer 부분](/posts/css-performance#명시도-싸움을-layer로-끝내기)에 있다.
+
+또 하나는 테마의 이중화다. Emotion 테마 객체와 CSS 변수가 같은 색을 따로 들고 있으면 어느 날 하나만 고쳐진다. 옮기기 전에 테마 객체의 값부터 `var(--...)`로 바꿔 원천을 CSS 변수 하나로 만든다.
+
+컴포넌트 파일을 옮길 때 인라인으로 흩어진 매직 넘버(`margin-top: 13px`)를 그대로 옮기면 새 방식에서도 같은 혼란이 이어진다. 옮기는 김에 토큰 값으로 맞추되, 화면이 1~2px 달라지는 걸 리뷰에서 잡을 수 있게 시각 회귀 테스트를 먼저 깔아 두면 안심하고 바꿀 수 있다.
+
+## 고르는 기준은 네 가지 질문
+
+스타일링 방식은 이름 충돌을 어떻게 막는가, 안 쓰는 CSS를 어떻게 지우는가, 바뀌는 값을 어떻게 넘기는가, 테마를 어떻게 바꾸는가에 대한 서로 다른 답이다. 런타임 CSS-in-JS는 마지막 두 질문에 가장 편한 답을 줬지만 실행 비용과 서버 컴포넌트 제약을 남겼고, 그 뒤의 도구들은 빌드 시점에 CSS를 끝내고 바뀌는 값은 CSS 변수로 넘기는 쪽으로 모이고 있다. 어떤 도구를 고르든 토큰과 테마를 CSS 변수로 두면 다음에 옮길 때 가장 큰 짐이 줄어든다.
+
+## 면접에서 나올 만한 질문
+
+### CSS 스타일링 방식들이 풀려는 문제는 무엇인가?
+
+크게 이름 충돌과 죽은 CSS다. CSS 클래스는 페이지 전체가 나눠 쓰는 전역 이름이라 다른 사람의 규칙과 겹치고, HTML과 따로 살아서 어떤 규칙이 아직 쓰이는지 알 수 없다. 컴포넌트 시대에는 props에 따른 동적 스타일과 테마 전환이 더해졌다. BEM은 규칙으로, CSS Modules는 빌드가 바꾼 고유 이름으로, CSS-in-JS는 스타일과 컴포넌트를 같은 곳에 두는 것으로, Tailwind는 이름 자체를 없애는 것으로 답한다.
+
+### CSS Modules는 어떻게 이름 충돌을 막나?
+
+`.module.css` 파일의 클래스 이름을 번들러가 파일마다 고유한 이름(파일명과 해시가 붙은 이름)으로 바꾸고, 원래 이름과의 짝을 객체로 내보낸다. 컴포넌트는 그 객체로 클래스를 붙이니 다른 파일의 같은 이름과 겹칠 수 없다. 결과물이 평범한 CSS 파일이라 런타임 비용이 없고 서버 컴포넌트에서도 쓴다. 다만 파일 안에서 안 쓰는 클래스는 그대로 실리고, 동적 값은 클래스를 미리 만들거나 CSS 변수로 넘겨야 한다.
+
+### 런타임 CSS-in-JS의 비용은 무엇인가?
+
+라이브러리가 번들에 들어가고, 렌더링마다 스타일을 직렬화·해시해 클래스를 만드는 계산이 메인 스레드에서 돈다. props 값이 스타일에 그대로 들어가면 값마다 새 규칙이 생겨 시트가 커지고 규칙 삽입이 스타일 재계산을 일으킨다. 서버 렌더링에서는 그 요청에서 쓴 규칙을 모아 HTML에 넣는 장치가 따로 필요하다. 자주 바뀌는 값을 CSS 변수로 빼면 규칙이 쌓이는 문제는 줄일 수 있다.
+
+### React 서버 컴포넌트에서 Emotion이나 styled-components를 못 쓰는 이유는?
+
+서버 컴포넌트는 서버에서만 실행되고 훅과 컨텍스트를 쓸 수 없는데, 런타임 CSS-in-JS는 테마를 컨텍스트로 읽고 브라우저에서 다시 실행되며 규칙을 관리하기 때문이다. 그래서 styled 컴포넌트는 클라이언트 컴포넌트여야 하고, 정적인 부분까지 자바스크립트가 브라우저로 간다. App Router에서는 `useServerInsertedHTML`로 수집한 스타일을 스트리밍 조각마다 넣는 레지스트리도 만들어야 한다. 서버 컴포넌트를 많이 쓰는 앱이면 제로 런타임이나 CSS Modules, Tailwind가 맞는다.
+
+### 제로 런타임 CSS-in-JS는 런타임 방식과 무엇이 다른가?
+
+스타일을 자바스크립트나 타입스크립트로 쓰는 건 같지만, 빌드 도구가 그 코드를 읽어 CSS 파일로 뽑아내고 런타임에는 클래스 이름만 남긴다. 실행 비용이 없고 서버 컴포넌트와도 맞는다. 대신 빌드 때 알 수 있는 값만 쓸 수 있어서 런타임 값은 미리 정한 변형이나 CSS 변수로 표현해야 하고, 번들러 플러그인이 필요하다. 변형 목록이 코드에 드러나 디자인 시스템과 잘 맞는다.
+
+### Tailwind에서 동적으로 클래스 이름을 만들면 왜 스타일이 안 나오나?
+
+Tailwind는 소스 파일을 실행하지 않고 글자 그대로 훑어서 쓰인 클래스만 CSS로 만든다. `bg-${color}-600`처럼 조합하면 완성된 `bg-red-600`이 소스 어디에도 없어 규칙이 생성되지 않는다. 가능한 값을 완성된 문자열로 적어 둔 객체에서 고르면 된다. 같은 이유로 공용 컴포넌트의 클래스를 덮어쓸 때는 CSS 안의 규칙 순서가 승부를 정하니 `tailwind-merge`로 겹치는 클래스를 정리한다.
+
+### 다크 모드를 CSS 변수로 구현하면 무엇이 좋은가?
+
+테마 전환이 `data-theme` 속성 하나를 바꾸는 일이 되어 React가 아무것도 다시 렌더링하지 않고, 브라우저가 변수를 읽는 요소의 스타일만 다시 계산한다. head 맨 앞의 작은 스크립트로 첫 그림 전에 속성을 정하면 라이트로 그렸다가 다크로 바뀌는 번쩍임도 막는다. 스타일링 도구와 상관없이 쓸 수 있어 나중에 도구를 바꿔도 테마는 그대로 남는다. `:root` 변수를 자주 바꾸면 전체 재계산이 일어나니 빈번한 값은 요소 가까이에 둔다.
+
+### 팀 규모에 따라 스타일링 방식을 어떻게 고르나?
+
+작은 팀이 빨리 만들 때는 설정이 거의 없고 어떤 렌더링 방식과도 맞는 Tailwind나 CSS Modules가 무난하다. 여러 제품이 디자인 시스템을 공유하면 토큰과 변형을 타입으로 강제하고 결과물이 평범한 CSS인 제로 런타임 도구나 Tailwind와 cva 조합이 유리하다. 이미 런타임 CSS-in-JS로 큰 앱을 만들었다면 측정으로 문제가 확인되기 전에는 갈아엎기보다 바뀌는 값과 테마를 CSS 변수로 옮기고 새 화면부터 바꾼다. 서버 컴포넌트 도입이 옮길 시점의 좋은 신호다.

@@ -1,0 +1,396 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-position-stacking-context");
+
+<EasyIntro>
+  화면의 상자들은 보통 위에서 아래로 차례대로 놓인다. 그런데 팝업 창이나 말풍선처럼 다른 상자 위에 겹쳐 떠야 하는 것도 있다. 이럴 때 상자를 원래 자리에서 꺼내 원하는 곳에 놓는 방법이 position이고, 겹쳤을 때 누가 위에 올지 정하는 숫자가 z-index다.
+
+  겹치는 순서는 투명 필름을 여러 장 겹쳐 놓은 모습을 떠올리면 쉽다. 어떤 상자들은 자기만의 필름 한 장에 함께 그려진다. 필름 안에서 아무리 높은 번호를 받아도 그 필름 자체가 다른 필름 아래에 깔려 있으면 같이 깔린다.
+
+  그래서 팝업에 엄청 큰 번호를 줬는데도 머리글 밑에 숨는 일이 생긴다. 팝업의 번호가 작아서가 아니라 팝업이 들어 있는 필름이 아래에 있어서다. 투명도나 움직임 효과 같은 설정 하나가 새 필름을 몰래 만들기도 한다.
+
+  이런 문제를 피하려고 팝업은 보통 페이지 맨 바깥으로 옮겨서 그린다. 그러면 다른 필름에 갇히지 않고 맨 위에 뜰 수 있다.
+</EasyIntro>
+
+모달을 열었더니 상단 고정 헤더가 모달 위를 덮는다. 모달에는 `z-index: 9999`, 헤더에는 `z-index: 10`을 줬다. 9999가 10보다 크니 모달이 위여야 한다. 혹시 몰라 99999로 올려 봐도 그대로다.
+
+```html
+<header style="position: fixed; top: 0; z-index: 10">헤더</header>
+<main style="position: relative; z-index: 1">
+  <div class="modal" style="position: fixed; inset: 0; z-index: 9999">모달</div>
+</main>
+```
+
+크로미움 141에서 헤더와 모달이 겹치는 지점을 `document.elementFromPoint`로 찍으면 `header`가 나온다. 헤더 아래 지점에서는 `div.modal`이 나온다. 모달은 그려졌지만 헤더 밑에 깔렸다. 문제는 9999가 아니라 모달을 감싼 `main`의 `z-index: 1`이다.
+
+이 글은 요소를 일반 흐름 밖으로 꺼내는 `position`, 그 요소가 어디를 기준으로 서는지 정하는 포함 블록(containing block), 그리고 겹친 요소의 앞뒤를 정하는 쌓임 맥락(stacking context)을 차례로 본다. 결과는 크로미움 141에서 `getBoundingClientRect`와 `elementFromPoint`로 확인했다. 상자 자체의 크기와 일반 흐름은 [박스 모델과 일반 흐름](/posts/css-box-model-layout)에서 먼저 다뤘다.
+
+## 다섯 가지 position
+
+`position`은 상자를 일반 흐름에 둘지, 꺼낼지, 꺼냈다면 무엇을 기준으로 놓을지를 정한다.
+
+`static`(초깃값)은 일반 흐름 그대로다. `top`, `left` 같은 inset 속성과 `z-index`가 효과가 없다. flex·grid 아이템은 예외인데, 이건 아래에서 다시 본다.
+
+`relative`는 일반 흐름에 자리를 그대로 차지한 채, 그려지는 위치만 inset 값만큼 옮긴다. `top: 10px`을 주면 상자는 10px 아래에 그려지지만 원래 자리는 비어 있고 다른 요소가 그 자리를 메우지 않는다. 혼자 쓰기보다는 자식의 `absolute` 기준점을 만들거나 `z-index`를 쓰려고 붙이는 경우가 많다.
+
+`absolute`는 일반 흐름에서 빠진다. 자리를 차지하지 않으니 형제들이 그 자리를 메운다. 위치는 포함 블록을 기준으로 inset 값이 정한다. 너비를 정하지 않으면 내용에 맞게 줄어든다.
+
+`fixed`는 `absolute`와 같이 흐름에서 빠지고, 기준이 뷰포트다. 스크롤해도 화면의 같은 자리에 있다. 예외가 있는데, 이 글의 중요한 함정 중 하나다.
+
+`sticky`는 평소엔 `relative`처럼 흐름 안에 있다가, 스크롤로 inset 선에 닿으면 붙는다. 가장 가까운 스크롤 컨테이너와 포함 블록 사이에서만 움직인다. 붙지 않는 경우와 원인은 [sticky와 scroll-snap](/posts/css-sticky-scroll-snap)에서 재 봤다.
+
+## absolute는 누구를 기준으로 서나
+
+`absolute`의 `top: 0; left: 0`이 어디를 가리키는지는 포함 블록이 정한다. 규칙은 `position` 값마다 다르다.
+
+- `static`, `relative`, `sticky`: 가장 가까운 블록 컨테이너 조상의 content box
+- `absolute`: `static`이 아닌 가장 가까운 조상의 padding box. 그런 조상이 없으면 초기 포함 블록(뷰포트 크기의 사각형, 문서 맨 위에 고정)
+- `fixed`: 뷰포트. 단, 조상 중에 `transform`, `perspective`, `filter`, `backdrop-filter`, `contain: paint`·`layout`, 이런 속성을 대상으로 한 `will-change`가 있으면 그 조상의 padding box
+
+`absolute`의 기준이 padding box라는 점은 테두리가 있을 때 드러난다. `position: relative; border: 5px solid`인 부모가 화면의 (100, 600)에 있을 때 안쪽 `absolute; top: 0; left: 0` 요소는 (105, 605)에 선다. 테두리 안쪽, 안쪽 여백 바깥 모서리다. 부모의 padding은 무시하고 붙는다.
+
+퍼센트 inset도 포함 블록 기준이다. `top: 50%`는 포함 블록 높이의 50%다. 그래서 가운데 정렬에 `top: 50%; left: 50%; transform: translate(-50%, -50%)`를 썼다. 앞의 두 값은 포함 블록 기준이고, `translate`의 퍼센트는 자기 크기 기준이라 둘을 섞으면 정확히 가운데가 된다. 지금은 `inset: 0; margin: auto`나 부모의 `display: grid; place-items: center`로 더 간단하게 한다.
+
+### 마주 보는 inset은 크기를 정한다
+
+`absolute` 요소의 너비는 `auto`일 때 내용에 맞게 줄어든다. 그런데 `left`와 `right`를 함께 주면 이야기가 달라진다. 두 값은 위치가 아니라 양쪽 가장자리를 정하고, 그 사이가 너비가 된다. 400 × 200px 부모 안에서 크로미움으로 쟀다.
+
+```text
+top: 0                                     → 0, 0   크기 52 × 21   (글자 폭만큼)
+left: 0; right: 0; top: 0                  → 0, 0   크기 400 × 21  (양쪽 끝까지)
+inset: 20px                                → 20, 20 크기 360 × 160
+inset: 0; margin: auto; 200 × 100          → 100, 50 크기 200 × 100  (가운데)
+```
+
+`inset`은 `top`, `right`, `bottom`, `left`를 한 번에 쓰는 단축 속성이다. `inset: 20px`은 네 방향에서 20px씩 들어간 사각형을 만들어 부모를 덮는 오버레이에 쓴다. 마지막 줄은 네 방향을 0으로 묶은 뒤 크기를 정하고 `margin: auto`로 남는 공간을 양쪽에 똑같이 나눈 것이다. 크기를 아는 요소를 `transform` 없이 가운데에 놓는 방법이고, `transform`을 쓰지 않으니 안쪽 `fixed` 요소의 포함 블록도 바꾸지 않는다.
+
+"absolute인데 엉뚱한 곳에 붙는다"면 기준이 될 조상에 `position: relative`가 빠졌거나, 반대로 생각지 못한 조상이 `relative`나 `transform`을 가지고 있다. 개발자 도구에서 요소를 선택하고 콘솔에 `$0.offsetParent`를 치면 대개 그 조상이 나온다. `offsetParent`는 `fixed` 요소에서는 `null`이고 표 관련 요소에서는 규칙이 조금 다르니 참고용으로만 쓴다.
+
+## transform이 있는 조상 안의 fixed
+
+`fixed`가 뷰포트를 기준으로 한다는 건 절반만 맞다. 조상 하나에 `transform`이 있으면 그 조상이 `fixed`의 포함 블록이 된다. 그러면 `fixed` 요소는 그 조상과 함께 스크롤되어 올라간다. 크로미움에서 조상마다 속성을 하나씩 주고, 500px 스크롤한 뒤 `position: fixed; top: 0; left: 0` 요소의 위치를 쟀다. 정상이면 (0, 0)이다.
+
+```text
+조상의 속성                  fixed 요소 위치 (left, top)
+(없음)                       0, 0
+transform: translateZ(0)     100, -300   ← 조상을 따라 올라갔다
+filter: blur(0)              100, -100
+will-change: transform       100, 0
+backdrop-filter: blur(1px)   100, 200
+contain: paint               100, 300
+opacity: 0.99                0, 0
+transform: none              0, 0
+```
+
+조상들은 모두 `margin-left: 100px`이고 세로로 쌓여 있다. `left`가 100이 된 줄은 모두 그 조상이 포함 블록이 된 것이다. `top`이 음수거나 양수로 제각각인 건 각 조상이 문서의 다른 높이에 있기 때문이다. `opacity`는 아래에서 볼 쌓임 맥락은 만들지만 포함 블록은 바꾸지 않는다. `transform: none`도 영향이 없다.
+
+명세가 이렇게 정한 이유는 `transform`이 그 요소 안에 새 좌표계를 만들기 때문이다. 회전하거나 크기를 바꾼 상자 안의 자식이 혼자 뷰포트에 붙어 있으면 그리기가 성립하지 않는다.
+
+실무에서 이 함정은 애니메이션을 타고 들어온다. 카드가 나타날 때 `transform: translateY(20px)`에서 `translateY(0)`으로 움직이는 효과를 걸면, 애니메이션이 끝나도 `translateY(0)`이 남는다. 값은 0이지만 `none`이 아니라서 포함 블록을 바꾼다. 그 카드 안에서 연 모달이나 드롭다운이 카드 크기에 갇히고 스크롤을 따라 움직인다. 성능을 위해 `will-change: transform`이나 `translateZ(0)`을 습관처럼 붙여 둔 컨테이너도 같다. 그래서 화면 전체를 덮어야 하는 요소는 애초에 그런 조상 밖, 문서 맨 바깥에서 그린다. 이 방법은 아래 포털에서 본다.
+
+## overflow: hidden 카드 밖으로 나가는 드롭다운
+
+포함 블록은 잘림에도 관여한다. 카드에 둥근 모서리를 깔끔하게 자르려고 `overflow: hidden`을 줬더니, 카드 안의 드롭다운 메뉴가 카드 경계에서 잘려 반만 보인다. 그런데 다른 카드에서는 같은 드롭다운이 멀쩡히 밖으로 나온다. 차이는 카드 자신에게 `position`이 있느냐다.
+
+`overflow`가 잘라 내는 대상은 그 요소 안에 그려지는 후손 전부가 아니다. 포함 블록이 그 요소이거나 그 요소 안쪽에 있는 후손만 자른다. `absolute` 후손의 포함 블록이 `overflow` 요소보다 바깥에 있으면 그 후손은 잘리지 않는다. 크로미움에서 높이 100px 카드 안에 `top: 80px`, 높이 100px짜리 드롭다운을 두고 카드 아래쪽 밖의 지점을 찍었다.
+
+```html
+<div style="position: relative">                       <!-- 바깥 기준점 -->
+  <div class="card" style="overflow: hidden; height: 100px">
+    <div class="dropdown" style="position: absolute; top: 80px; height: 100px"></div>
+  </div>
+</div>
+```
+
+```text
+카드에 position 없음                 → 카드 밖 지점에 dropdown이 보인다
+카드에 position: relative            → 바깥 div가 보인다 (잘렸다)
+카드에 transform: translateY(0)      → 바깥 div가 보인다 (잘렸다)
+```
+
+카드에 `position`이 없으면 드롭다운의 포함 블록은 바깥 div다. 카드의 `overflow`는 이 드롭다운을 자르지 않는다. 카드에 `position: relative`를 주면 카드가 포함 블록이 되어 잘린다. `transform`도 포함 블록을 만들어서 같은 결과다. 카드 등장 애니메이션을 넣었더니 갑자기 드롭다운이 잘리기 시작했다면 이것이다.
+
+그렇다고 이 규칙에 기대서 카드의 `position`을 빼는 건 깨지기 쉽다. 누군가 카드 안에 배지를 붙이려고 `position: relative`를 넣는 순간 다시 잘린다. 드롭다운, 툴팁, 콤보박스 목록처럼 부모 경계를 넘어야 하는 요소는 모달과 마찬가지로 포털이나 `popover`로 바깥에서 그리고, 위치는 기준 요소의 `getBoundingClientRect()`로 계산하거나 CSS 앵커 포지셔닝(크롬 125부터, 다른 브라우저는 아직 지원 범위를 확인해야 한다)으로 붙인다. 둥근 모서리만 자르고 싶다면 카드 대신 안쪽 이미지에만 `border-radius`와 `overflow: hidden`을 주는 방법도 있다.
+
+## z-index 9999가 지는 이유
+
+이제 처음의 모달이다. `z-index`는 전역 순위가 아니다. 같은 쌓임 맥락 안에 있는 형제끼리만 비교된다.
+
+쌓임 맥락은 요소들을 한 덩어리로 묶어 앞뒤를 정하는 단위다. 어떤 요소가 쌓임 맥락을 만들면, 그 요소와 모든 후손은 바깥에서 볼 때 한 장의 판으로 취급된다. 바깥의 다른 요소와 비교할 때는 판 전체의 `z-index` 하나만 쓴다. 판 안의 후손이 가진 `z-index`는 판 안에서 순서를 정하는 데만 쓰인다.
+
+처음 예제의 `main`은 `position: relative; z-index: 1`이라 쌓임 맥락을 만든다. 모달의 9999는 `main`이라는 판 안에서만 의미가 있고, 바깥에서 헤더와 비교되는 건 `main`의 1이다. 1이 10보다 작으니 `main` 판 전체가 헤더 아래에 깔리고, 그 안의 모달도 함께 깔린다.
+
+아래 그림은 판을 옆에서 본 모습이다. 위에 있을수록 화면 앞쪽이다. 다음을 누르면 숫자만 볼 때의 착각부터 포털로 고치는 과정까지 이어진다.
+
+<GeometryMorph
+  caption="위에 있는 판일수록 화면 앞에 그려진다. 진한 판이 모달, 옅은 판이 main, 테두리 판이 header다."
+  width={400}
+  height={260}
+  shapes={[{ id: "main", tone: "muted" }, { id: "header", tone: "outline" }, { id: "modal", tone: "accent" }]}
+  steps={[
+    {
+      title: "숫자만 보면 모달이 맨 위다",
+      detail: "z-index만 나란히 놓으면 모달 9999, 헤더 10, main 1 순서다. 대부분 이렇게 기대한다.",
+      shapes: { modal: [[110, 35], [330, 35], [310, 65], [90, 65]], header: [[110, 115], [330, 115], [310, 145], [90, 145]], main: [[110, 195], [330, 195], [310, 225], [90, 225]] },
+      labels: [{ x: 365, y: 52, text: "9999", tone: "accent", size: "sm" }, { x: 365, y: 132, text: "10", size: "sm" }, { x: 365, y: 212, text: "1", size: "sm" }],
+      focus: ["modal"],
+    },
+    {
+      title: "main이 판 하나로 묶는다",
+      detail: "main은 position: relative와 z-index: 1로 쌓임 맥락을 만든다. 모달은 main 판 위에 붙은 그림이 되고, 9999는 판 안에서만 쓰인다.",
+      shapes: { modal: [[130, 175], [310, 175], [295, 195], [115, 195]], header: [[110, 85], [330, 85], [310, 115], [90, 115]], main: [[110, 195], [330, 195], [310, 225], [90, 225]] },
+      labels: [{ x: 365, y: 102, text: "10", size: "sm" }, { x: 365, y: 200, text: "1 (9999 포함)", size: "sm" }],
+      focus: ["main", "modal"],
+    },
+    {
+      title: "판끼리 비교한다",
+      detail: "바깥에서는 header의 10과 main의 1만 비교한다. main 판이 아래로 가니 모달도 함께 헤더 밑에 깔린다.",
+      shapes: { modal: [[130, 175], [310, 175], [295, 195], [115, 195]], header: [[110, 55], [330, 55], [310, 85], [90, 85]], main: [[110, 195], [330, 195], [310, 225], [90, 225]] },
+      labels: [{ x: 365, y: 72, text: "10", size: "sm" }, { x: 365, y: 200, text: "1", size: "sm" }],
+      focus: ["header"],
+    },
+    {
+      title: "포털로 판 밖에 꺼낸다",
+      detail: "모달을 body 바로 아래에서 그리면 main 판에 갇히지 않는다. 이제 루트 맥락에서 헤더 10과 직접 비교되어 맨 위로 올라간다.",
+      shapes: { modal: [[110, 35], [330, 35], [310, 65], [90, 65]], header: [[110, 115], [330, 115], [310, 145], [90, 145]], main: [[110, 195], [330, 195], [310, 225], [90, 225]] },
+      labels: [{ x: 365, y: 52, text: "9999", tone: "accent", size: "sm" }, { x: 365, y: 132, text: "10", size: "sm" }, { x: 365, y: 212, text: "1", size: "sm" }],
+      focus: ["modal"],
+    },
+  ]}
+/>
+
+왜 이렇게 묶을까. `opacity: 0.5`를 생각하면 이유가 보인다. 반투명은 요소와 후손을 먼저 한 장으로 다 그린 다음 그 한 장을 반투명하게 합쳐야 맞게 보인다. 후손 하나가 판 밖으로 빠져나가 다른 요소 사이에 끼면 그 후손만 투명도가 따로 놀게 된다. `transform`, `filter`, `mix-blend-mode`도 마찬가지로 "이 덩어리 전체에" 효과를 거는 속성이라, 덩어리를 하나의 판으로 고정해야 한다. 쌓임 맥락은 이런 효과가 성립하도록 그룹의 경계를 정하는 장치다.
+
+같은 모달을 `main` 밖, `body`의 직계 자식으로 옮기고 다시 찍으면 겹치는 지점에서 `div.modal`이 나온다. 숫자는 하나도 바꾸지 않았다.
+
+## 쌓임 맥락을 만드는 속성
+
+문제는 쌓임 맥락이 `z-index`를 쓰지 않는 속성으로도 생긴다는 점이다. 명세와 크로미움 기준으로 아래 중 하나면 새 쌓임 맥락이다.
+
+- 루트 요소(`html`)
+- `position: relative`·`absolute`이면서 `z-index`가 `auto`가 아님
+- `position: fixed`·`sticky` (z-index와 상관없이)
+- flex·grid 아이템이면서 `z-index`가 `auto`가 아님 (`position`이 없어도)
+- `opacity`가 1 미만
+- `transform`, `scale`, `rotate`, `translate`, `filter`, `backdrop-filter`, `perspective`, `clip-path`, `mask`가 `none`이 아님
+- `mix-blend-mode`가 `normal`이 아님
+- `isolation: isolate`
+- `will-change`에 위 속성 중 하나를 적음
+- `contain: layout`·`paint`
+- top layer에 올라간 요소 (모달 `dialog`, 팝오버, 전체 화면 요소)
+
+`opacity`의 영향을 크로미움에서 확인했다. 카드에 `opacity: 0.9`를 주고, 카드 안의 툴팁에 `position: absolute; z-index: 9999`를 줬다. 카드 바로 다음 형제는 `position: relative`이고 `z-index`가 없다.
+
+```html
+<div class="card" style="opacity: 0.9">
+  <div class="tooltip" style="position: absolute; z-index: 9999">툴팁</div>
+</div>
+<div class="next" style="position: relative; top: -100px; left: 50px">다음 카드</div>
+```
+
+```text
+겹치는 지점의 elementFromPoint → div.next
+```
+
+툴팁이 다음 카드 밑에 깔렸다. `opacity`가 카드를 쌓임 맥락으로 만들었고, 바깥에서 비교되는 카드의 순위는 `z-index: 0`과 같은 단계다. 다음 카드도 `z-index: auto`인 positioned 요소라 같은 단계이고, 같은 단계에서는 문서에서 나중에 나온 쪽이 위다. 카드에 마우스를 올리면 살짝 흐려지는 효과 하나가 툴팁을 가린 것이다.
+
+flex 아이템 규칙도 확인했다. flex 컨테이너 안에서 `position` 없이 `z-index: 2`만 준 아이템과, `position: relative; z-index: 1`인 다음 아이템을 겹치게 두면 앞 아이템이 위에 보인다. "static이면 z-index가 안 먹는다"는 일반 흐름의 블록에만 맞는 말이다.
+
+## 한 맥락 안에서 칠하는 순서
+
+쌓임 맥락 하나 안에서 브라우저는 정해진 순서로 칠한다. 나중에 칠한 것이 위에 보인다. CSS 2.1 부록 E가 정한 순서를 줄이면 일곱 단계다.
+
+<AlgoTrace
+  caption="쌓임 맥락 하나를 칠하는 순서. 오른쪽으로 갈수록 위에 보인다."
+  memoryLabel="칠한 것"
+  cells={["배경·테두리", "음수 z", "블록", "float", "인라인", "z 0·auto", "양수 z"]}
+  steps={[
+    { pointer: 0, memory: ["맥락 배경"], caption: "쌓임 맥락을 만든 요소 자신의 배경과 테두리를 먼저 칠한다." },
+    { pointer: 1, memory: ["맥락 배경", "z -1"], caption: "z-index가 음수인 자식 맥락을 작은 값부터 칠한다. 부모 배경 위, 나머지 모든 것 아래다." },
+    { pointer: 2, memory: ["맥락 배경", "z -1", "블록 배경"], caption: "position이 없는 일반 흐름의 블록 상자들의 배경과 테두리를 문서 순서대로 칠한다." },
+    { pointer: 3, memory: ["맥락 배경", "z -1", "블록 배경", "float"], caption: "float 상자를 칠한다. 일반 블록의 배경 위에 뜬다." },
+    { pointer: 4, memory: ["맥락 배경", "z -1", "블록 배경", "float", "글자"], caption: "인라인 내용, 즉 글자와 인라인 상자를 칠한다. 그래서 글자는 float 위에 온다." },
+    { pointer: 5, memory: ["맥락 배경", "z -1", "블록 배경", "float", "글자", "z 0·auto"], caption: "position이 있고 z-index가 auto나 0인 요소, opacity·transform으로 생긴 맥락을 문서 순서대로 칠한다." },
+    { pointer: 6, found: [6], memory: ["맥락 배경", "z -1", "블록 배경", "float", "글자", "z 0·auto", "z 1+"], caption: "z-index가 양수인 자식 맥락을 작은 값부터 칠한다. 맨 위다." },
+  ]}
+/>
+
+이 순서에서 몇 가지가 바로 나온다. `position`만 주고 `z-index`를 안 준 요소(6단계)는 `float`(4단계)와 글자(5단계)보다 위에 그려진다. 크로미움에서 `position: relative`인 상자 위로 음수 마진을 준 `float`를 겹쳐도 `elementFromPoint`는 relative 상자를 고른다. 반대로 음수 z-index 요소(2단계)는 일반 블록의 배경(3단계)보다도 아래라서, 같은 맥락 안의 형제 블록을 겹치면 그 블록 밑으로 숨는다.
+
+### 음수 z-index와 isolation: isolate
+
+배경 장식을 글자 뒤에 깔려고 `z-index: -1`을 주면 장식이 부모 배경 밑으로 사라져 안 보일 때가 있다. 부모가 쌓임 맥락이 아니면, 음수 z-index 요소는 부모가 아니라 더 위쪽의 맥락에서 2단계에 칠해진다. 부모의 배경은 그 맥락에서 3단계 이후에 칠해지니 장식을 덮는다.
+
+```html
+<section style="position: absolute; background: white">
+  <div style="position: relative; z-index: -1; left: 20px">장식</div>
+</section>
+<section style="position: absolute; background: white; isolation: isolate">
+  <div style="position: relative; z-index: -1; left: 20px">장식</div>
+</section>
+```
+
+```text
+첫 번째 section, 겹친 지점 → section (장식이 부모 배경 밑으로 숨었다)
+두 번째 section, 겹친 지점 → 장식 div
+```
+
+`isolation: isolate`는 다른 효과 없이 쌓임 맥락만 만든다. 부모가 맥락이 되면 1단계에서 부모 배경을 먼저 칠하고 2단계에서 장식을 그 위에 칠한다. 장식은 부모 배경 위, 부모의 글자 아래에 선다. 원래 의도대로다.
+
+이 속성은 컴포넌트 경계에도 쓸모가 있다. 컴포넌트 루트에 `isolation: isolate`를 주면 안쪽에서 쓴 `z-index`가 바깥으로 새지 않는다. 카드 안의 배지를 `z-index: 2`로 올려도 그건 카드 판 안의 일이고, 페이지의 헤더나 드롭다운과 다투지 않는다. `position`과 `z-index`를 주는 것과 달리 루트의 위치와 순위를 바꾸지 않는다.
+
+## 두 요소 중 누가 위인가
+
+규칙을 함수로 옮겨 보자. 각 요소를 루트 맥락에서 자기까지 거쳐 온 쌓임 맥락의 목록으로 나타낸다. 목록의 항목은 그 단계의 `z`(auto는 0으로 친다)와 같은 맥락 안의 문서 순서 `order`다. 두 요소는 서로 조상 관계가 아니라고 가정한다.
+
+예를 들어 처음 예제의 모달은 루트에서 `main`(z 1, 순서 2)을 거쳐 자기(z 9999, 순서 0)에 이르므로 `[{ z: 1, order: 2 }, { z: 9999, order: 0 }]`이고, 헤더는 `[{ z: 10, order: 1 }]`이다.
+
+<CodePlayground
+  caption="쌓임 맥락 경로로 앞뒤 판정하기"
+  functionName="isAbove"
+  initialCode={`// a, b: [{ z, order }, ...] 루트 맥락부터 요소까지
+// a가 b보다 위에 그려지면 true
+function isAbove(a, b) {
+  return false;
+}`}
+  solution={`function isAbove(a, b) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    const x = a[i], y = b[i];
+    if (x.z === y.z && x.order === y.order) continue; // 같은 판을 지나는 중
+    if (x.z !== y.z) return x.z > y.z;                // 처음 갈린 단계의 z
+    return x.order > y.order;                         // z가 같으면 나중 것
+  }
+  return a.length > b.length;
+}`}
+  tests={[
+    { label: "main 안의 모달 vs 헤더", args: [[{ z: 1, order: 2 }, { z: 9999, order: 0 }], [{ z: 10, order: 1 }]], expected: false },
+    { label: "헤더 vs main 안의 모달", args: [[{ z: 10, order: 1 }], [{ z: 1, order: 2 }, { z: 9999, order: 0 }]], expected: true },
+    { label: "opacity 카드 안 툴팁 vs 다음 카드", args: [[{ z: 0, order: 0 }, { z: 9999, order: 0 }], [{ z: 0, order: 1 }]], expected: false },
+    { label: "형제 z 2 vs z 1", args: [[{ z: 2, order: 0 }], [{ z: 1, order: 1 }]], expected: true },
+    { label: "같은 판 안에서 5 vs 3", args: [[{ z: 1, order: 0 }, { z: 5, order: 0 }], [{ z: 1, order: 0 }, { z: 3, order: 1 }]], expected: true },
+    { label: "z가 같으면 나중 것", args: [[{ z: 0, order: 3 }], [{ z: 0, order: 1 }]], expected: true },
+  ]}
+/>
+
+핵심 줄은 `continue`다. 두 경로가 같은 판을 지나는 동안은 비교할 게 없고, 처음으로 갈린 단계에서 한 번만 비교한다. 그 아래 단계의 숫자는 아무리 커도 보지 않는다. 모달의 9999가 무시된 이유가 코드 한 줄로 드러난다. 실제 브라우저는 여기에 위의 일곱 단계(음수 z, float, 인라인 등)를 더해 비교한다.
+
+## 모달은 body 아래로
+
+앞의 두 함정, `transform` 조상 안에 갇히는 `fixed`와 낮은 쌓임 맥락에 갇히는 `z-index`는 해법이 같다. 화면 전체를 덮는 요소를 그런 조상 밖에서 그린다. React에서는 `createPortal`이 이 일을 한다.
+
+```tsx
+import { createPortal } from "react-dom";
+
+function Modal({ open, children }: { open: boolean; children: React.ReactNode }) {
+  if (!open) return null;
+  // 컴포넌트 트리에서는 버튼 옆에 있지만, DOM은 body 바로 아래에 붙는다
+  return createPortal(<div className="modal">{children}</div>, document.body);
+}
+```
+
+포털은 DOM 위치만 바꾼다. React 트리에서는 원래 자리에 있으므로 context가 그대로 전달되고, 모달 안에서 일어난 클릭 같은 React 이벤트도 React 트리를 따라 원래 부모 컴포넌트까지 버블링된다. 바깥 클릭으로 닫는 로직을 DOM 기준(`contains`)으로 짜면 포털 안의 클릭을 바깥 클릭으로 잘못 볼 수 있으니 주의한다. 서버 렌더링 중에는 `document`가 없으니 마운트된 뒤에만 포털을 만든다.
+
+브라우저에도 같은 일을 하는 기능이 있다. `dialog` 요소를 `showModal()`로 열거나 `popover` 속성을 가진 요소를 열면 top layer에 올라간다. top layer는 문서의 모든 쌓임 맥락보다 위에 있는 별도의 층이다. 크로미움에서 `position: relative; z-index: 1; transform: translateX(0)`인 조상 안에 `dialog`를 두고, 화면 전체에 `z-index: 2147483647`짜리 `fixed` 요소를 깔아 둔 채 `showModal()`을 불렀다.
+
+```text
+showModal() 전, 화면 왼쪽 위  → 덮개 div (z-index 2147483647)
+showModal() 후, 같은 지점     → dialog
+dialog 위치                   → 0, 0 (transform 조상이 아니라 뷰포트 기준)
+```
+
+DOM 위치를 옮기지 않았는데도 z-index 최댓값과 `transform` 조상을 모두 벗어났다. `showModal()`은 뒤쪽 내용을 비활성(inert)으로 만들고 Esc로 닫히는 동작까지 기본으로 준다. `dialog`의 모달 동작은 크롬 37, 파이어폭스 98, 사파리 15.4부터, `popover`는 크롬 114, 파이어폭스 125, 사파리 17부터 지원한다. 지원 범위가 맞으면 포털보다 먼저 고려할 만하다.
+
+포털로 직접 만든 모달은 겹침 문제만 풀 뿐, 모달다운 동작은 직접 채워야 한다. 고를 때 비교할 항목은 이렇다.
+
+- 뒤쪽 내용 막기: 포털 모달은 뒤의 버튼에 Tab으로 포커스가 그대로 간다. 포커스 가두기를 직접 짜거나 모달 바깥 형제에 `inert` 속성을 준다. `showModal()`은 이걸 기본으로 한다.
+- 닫은 뒤 포커스: 모달을 연 버튼으로 포커스를 돌려줘야 키보드 사용자가 길을 잃지 않는다. `dialog`는 닫힐 때 열기 전 포커스로 돌아간다.
+- 배경 스크롤: 모달 뒤 페이지가 스크롤되지 않게 `body`에 `overflow: hidden`을 거는 코드가 흔하다. `body`의 overflow는 뷰포트로 전파되어 문서 스크롤만 막으므로 안쪽 sticky의 기준을 바꾸지 않지만, 모바일 사파리에서는 이것만으로 배경 스크롤이 완전히 막히지 않는 경우가 있어 확인이 필요하다.
+- 애니메이션: `dialog`의 열고 닫는 전환은 `@starting-style`과 `transition-behavior: allow-discrete`가 필요해 브라우저 지원을 확인해야 한다. 포털 모달은 일반 요소라 기존 애니메이션 방식을 그대로 쓴다.
+
+포털을 쓰지 않는 요소, 예를 들어 헤더와 드롭다운과 토스트 사이의 순서는 숫자 경쟁이 되지 않게 미리 단계를 정해 둔다. 디자인 토큰으로 `dropdown: 100`, `sticky: 200`, `overlay: 300`, `toast: 400`처럼 이름 붙은 값만 쓰게 하면, 누군가 9999를 쓰고 다른 사람이 99999로 이기는 일이 줄어든다. 그래도 같은 쌓임 맥락에 있을 때만 이 숫자가 통한다는 건 변하지 않는다.
+
+## sticky가 안 붙는다면 먼저 볼 것
+
+`sticky`는 쌓임 맥락과 포함 블록이 함께 얽힌다. 붙지 않을 때 확인할 순서만 적고 자세한 측정은 [sticky와 scroll-snap](/posts/css-sticky-scroll-snap)에 넘긴다.
+
+- `top`, `bottom` 같은 inset 값이 하나라도 있는가. 없으면 붙지 않는다.
+- 조상 중에 `overflow: hidden`·`auto`·`scroll`인 요소가 있는가. 그 요소가 스크롤 컨테이너가 되어 붙는 기준이 바뀐다. 잘라내기만 원하면 `overflow: clip`으로 바꾼다.
+- 부모(포함 블록)에 움직일 자리가 있는가. 부모 높이가 sticky 요소 높이와 같으면 붙을 틈이 없다. flex의 기본 `align-items: stretch`가 흔한 원인이다.
+- 붙긴 하는데 다른 요소가 위를 덮는가. `sticky`는 항상 쌓임 맥락을 만들지만 `z-index`가 `auto`면 6단계에서 문서 순서로 칠해진다. 뒤에 오는 `position`이 있는 카드가 덮으면 `z-index`를 준다.
+
+## 무엇이 위에 있는지 찾기
+
+겹침 문제를 디버깅할 때는 추측보다 브라우저에게 묻는 게 빠르다. 첫째는 `elementFromPoint`다. 콘솔에서 `document.elementFromPoint(x, y)`를 부르면 그 좌표에서 맨 위에 그려진 요소가 나온다. 위에서 측정할 때 쓴 방법이다. 둘째는 조상을 거슬러 올라가며 쌓임 맥락을 만드는 속성을 찾는 것이다. 깔린 요소를 선택하고 콘솔에 붙여 넣는다.
+
+```js
+// $0(선택한 요소)부터 위로 올라가며 쌓임 맥락을 만드는 이유를 모은다
+function reasons(el) {
+  const s = getComputedStyle(el);
+  const p = el.parentElement && getComputedStyle(el.parentElement);
+  const r = [];
+  if (s.position === "fixed" || s.position === "sticky") r.push(`position: ${s.position}`);
+  if (/relative|absolute/.test(s.position) && s.zIndex !== "auto") r.push(`position + z-index: ${s.zIndex}`);
+  if (p && /flex|grid/.test(p.display) && s.zIndex !== "auto") r.push(`flex/grid 아이템 + z-index: ${s.zIndex}`);
+  if (s.opacity !== "1") r.push(`opacity: ${s.opacity}`);
+  if (s.transform !== "none") r.push("transform");
+  if (s.filter !== "none") r.push("filter");
+  if (s.isolation === "isolate") r.push("isolation: isolate");
+  if (s.mixBlendMode !== "normal") r.push("mix-blend-mode");
+  if (/transform|opacity|filter/.test(s.willChange)) r.push(`will-change: ${s.willChange}`);
+  return r;
+}
+const out = [];
+for (let el = $0; el && el !== document.documentElement; el = el.parentElement) {
+  const r = reasons(el);
+  const name = el.tagName.toLowerCase() + (el.id ? `#${el.id}` : "");
+  if (r.length) out.push(`${name} → ${r.join(", ")}`);
+}
+console.log(out.join("\n"));
+```
+
+처음 예제의 모달을 선택하고 실행하면 이렇게 나온다.
+
+```text
+div#modal → position: fixed
+main#main → position + z-index: 1
+```
+
+목록의 가장 위쪽 조상(`main`)이 바깥에서 비교되는 판이다. 이 판의 순위와 상대 요소가 속한 판의 순위를 비교하면 답이 나온다. 모든 속성을 다 검사하지는 않으니(`clip-path`, `contain` 등은 빠졌다) 결과가 비어도 쌓임 맥락이 없다고 단정하지 않는다. 크롬 개발자 도구의 Layers 패널(더보기 › More tools › Layers)은 합성 레이어를 3D로 보여 주는데, 합성 레이어와 쌓임 맥락은 같은 개념이 아니라서 참고로만 쓴다.
+
+## 숫자를 올리기 전에
+
+`z-index`가 안 먹으면 숫자를 올리기 전에 두 가지를 묻는다. 이 요소와 상대 요소가 같은 쌓임 맥락에 있는가. 아니라면 둘이 처음 갈리는 조상끼리의 순위는 무엇인가. `fixed`가 엉뚱하게 움직이면 조상에 `transform`, `filter`, `will-change`가 있는지 본다. 둘 다 화면 전체를 덮는 요소라면 포털이나 top layer로 그 조상 밖에서 그리는 것이 근본 해법이다. 선언끼리의 우선순위는 [캐스케이드와 명시도](/posts/css-cascade-specificity)에서, 아이템을 나란히 놓는 규칙은 [Flexbox와 Grid](/posts/css-flexbox-grid)에서 다뤘다.
+
+## 면접에서 나올 만한 질문
+
+### position의 다섯 가지 값을 설명해 달라.
+
+`static`은 일반 흐름 그대로이고 inset과 z-index가 효과 없다. `relative`는 자리를 차지한 채 그리는 위치만 옮긴다. `absolute`는 흐름에서 빠져 가장 가까운 positioned 조상의 padding box를 기준으로 서고, `fixed`는 뷰포트를 기준으로 선다. `sticky`는 흐름 안에 있다가 스크롤 컨테이너의 inset 선에 닿으면 포함 블록 안에서만 붙는다.
+
+### absolute 요소의 기준은 어떻게 정해지나?
+
+`static`이 아닌 가장 가까운 조상의 padding box가 포함 블록이 된다. 테두리 안쪽에 붙고 부모의 padding은 무시한다. 그런 조상이 없으면 초기 포함 블록, 즉 문서 맨 위의 뷰포트 크기 사각형이다. 퍼센트 inset도 이 포함 블록 크기를 기준으로 한다.
+
+### position: fixed인데 스크롤을 따라 움직인다. 왜 그런가?
+
+조상 중에 `transform`, `filter`, `backdrop-filter`, `perspective`, `contain: paint`, 또는 그런 속성을 대상으로 한 `will-change`가 있어서 그 조상이 fixed의 포함 블록이 된 것이다. `translateY(0)`처럼 값이 0이어도 `none`이 아니면 해당된다. 애니메이션 라이브러리가 남긴 transform이 흔한 원인이고, 포털이나 top layer로 그 조상 밖에서 그려 해결한다.
+
+### z-index: 9999를 줬는데 다른 요소 밑에 깔린다. 왜 그런가?
+
+`z-index`는 같은 쌓임 맥락 안에서만 비교된다. 조상 하나가 쌓임 맥락을 만들면 바깥에서는 그 조상의 순위 하나로 비교되고 안쪽의 9999는 판 안에서만 쓰인다. 조상이 `z-index: 1`이면 `z-index: 10`인 요소 밑에 판째로 깔린다. 깔린 요소의 조상 중 쌓임 맥락을 만드는 요소를 찾아 그 순위를 고치거나 요소를 그 조상 밖으로 옮긴다.
+
+### 쌓임 맥락은 어떤 경우에 생기나?
+
+`position: relative`·`absolute`와 `z-index`(auto 아님), `position: fixed`·`sticky`, z-index가 있는 flex·grid 아이템, `opacity` 1 미만, `transform`·`filter`·`clip-path`·`mask` 등이 `none`이 아님, `mix-blend-mode`, `isolation: isolate`, 그런 속성의 `will-change`, `contain: paint`, top layer 요소다. `opacity`나 `transform`처럼 z-index와 무관해 보이는 속성이 맥락을 만들어 툴팁을 가리는 경우가 실무에서 자주 생긴다.
+
+### 쌓임 맥락 안에서 칠하는 순서는?
+
+맥락 요소의 배경·테두리, 음수 z-index 자식, 일반 흐름 블록, float, 인라인 내용, z-index가 auto·0인 positioned 요소와 opacity 등으로 생긴 맥락, 양수 z-index 자식 순이다. 그래서 position만 준 요소는 float와 글자 위에 그려지고, 음수 z-index 요소는 같은 맥락의 일반 블록 배경보다도 아래에 깔린다.
+
+### isolation: isolate는 언제 쓰나?
+
+다른 효과 없이 쌓임 맥락만 만들고 싶을 때 쓴다. `z-index: -1` 장식이 부모 배경 밑으로 사라질 때 부모에 주면 장식이 부모 배경 위, 글자 아래에 선다. 컴포넌트 루트에 주면 안쪽 z-index가 바깥 요소와 다투지 않게 가둘 수 있다. `position`과 `z-index`를 주는 방법과 달리 루트 자신의 순위를 바꾸지 않는다.
+
+### 모달을 포털로 body에 렌더링하는 이유는? 대안은 있나?
+
+모달이 `transform`이 있는 조상에 갇히거나 낮은 쌓임 맥락에 묶여 다른 요소 밑에 깔리는 걸 피하려고 DOM 위치를 문서 맨 바깥으로 옮긴다. React 트리 위치는 그대로라 context와 이벤트 버블링은 원래 부모를 따른다. 대안으로 `dialog.showModal()`이나 `popover`를 쓰면 top layer에 올라가 DOM을 옮기지 않고도 모든 쌓임 맥락과 transform 조상을 벗어나고, 뒤쪽 비활성화와 Esc 닫기도 기본으로 따라온다.

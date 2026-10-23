@@ -1,0 +1,409 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-memoization-hooks");
+
+<EasyIntro>
+  React 컴포넌트는 화면이 바뀔 때마다 처음부터 다시 실행되는 함수라서, 같은 계산을 몇 번이고 다시 한다. memo, useMemo, useCallback은 "지난번과 재료가 같으면 지난번 답을 그대로 쓰자"고 React에게 부탁하는 도구다. 시험지 맨 끝에 지난번 문제와 답을 한 줄만 적어 두는 것과 비슷하다. 이번 문제가 지난번과 똑같으면 답을 베끼고, 하나라도 다르면 다시 푼다. 그런데 문제가 같은지 확인하는 데도 시간이 들고, 적어 둔 답만큼 공책 자리도 차지한다. 또 겉보기엔 같은 문제여도 새로 인쇄한 종이면 React는 다른 문제로 본다. 그래서 무조건 다 적어 두는 게 아니라 정말 오래 걸리는 문제에만 쓰는 게 맞다. 요즘은 React Compiler가 어디에 적어 둘지를 대신 정해 주기도 한다.
+</EasyIntro>
+
+리뷰에서 "목록이 느리니 다 감싸 주세요"라는 말을 듣고 `ProductRow`를 `memo`로 감쌌다. 넘기는 핸들러도 전부 `useCallback`으로 고정했다. 그런데 Profiler를 다시 녹화해 보면 줄 200개가 여전히 글자마다 렌더링된다. 이유를 보려고 렌더링 원인 기록을 켜면 "Props changed: (children)"이라고 나온다.
+
+```tsx
+const ProductRow = memo(function ProductRow({ product, onAdd, children }: Props) {
+  return (
+    <li>
+      {product.name}
+      <button onClick={() => onAdd(product.id)}>담기</button>
+      {children}
+    </li>
+  );
+});
+
+function ProductList({ products, onAdd }: ListProps) {
+  return (
+    <ul>
+      {products.map((p) => (
+        <ProductRow key={p.id} product={p} onAdd={onAdd}>
+          <PriceTag price={p.price} />
+        </ProductRow>
+      ))}
+    </ul>
+  );
+}
+```
+
+`memo`, `useMemo`, `useCallback`이 언제 듣고 언제 안 듣는지의 기본, 그리고 인라인 함수 하나가 `memo`를 깨는 장면은 [React는 언제 다시 그리나](/posts/react-rerender)에서 다뤘다. 이 글은 그다음 질문들을 본다. 세 도구는 정확히 무엇을 어디에 기억하는가, 왜 이런 코드에서 조용히 무력해지는가, 감싸는 쪽이 오히려 손해인 때는 언제인가, 그리고 React Compiler가 이걸 어떻게 대신하고 어디서 손을 떼는가.
+
+## 세 도구가 기억하는 것
+
+셋 다 "칸 하나짜리 캐시"다. 지난 렌더링의 입력과 결과를 하나씩만 들고 있다가, 이번 입력이 지난번과 같으면 결과를 그대로 돌려준다.
+
+```tsx
+const sorted = useMemo(() => sortBy(items, key), [items, key]); // 값을 기억한다
+const onAdd = useCallback((id: string) => add(id), [add]);      // 함수 자체를 기억한다
+const Row = memo(ProductRow);                                   // props가 같으면 지난 렌더링 결과를 다시 쓴다
+```
+
+`useMemo`와 `useCallback`의 캐시 키는 의존성 배열이고, 원소마다 `Object.is`로 지난번 배열과 비교한다. `useCallback(fn, deps)`는 `useMemo(() => fn, deps)`와 똑같다. 함수를 새로 만들지 않게 해 주는 게 아니라, 렌더링마다 새로 만든 함수를 버리고 지난번 함수를 돌려줄 뿐이다. 함수 생성 비용을 아끼는 도구가 아니다.
+
+`memo`의 캐시 키는 props 객체이고, 결과는 그 컴포넌트의 지난 렌더링 결과다. 부모가 렌더링될 때 React는 props를 얕게 비교해서 같으면 그 컴포넌트를 호출하지 않고 지난번 결과를 그대로 쓴다. 자기 state나 읽고 있는 context가 바뀌면 `memo`와 상관없이 렌더링된다.
+
+칸이 하나라는 건 실제로 확인할 수 있다. 의존 값을 `A, B, A, A` 순서로 바꾸며 `useMemo`를 네 번 렌더링하면 계산은 세 번 일어난다. 세 번째 `A`는 바로 앞이 `B`였으니 맞지 않는다. 칸 하나짜리 캐시가 일반 메모이제이션과 어떻게 다른지는 [메모이제이션 글](/posts/js-memoization)에서 자세히 봤다.
+
+공식 문서는 이 캐시를 "성능 최적화로만" 쓰라고 한다. React는 필요하면 캐시를 버릴 수 있다고 밝혀 두었다. 개발 중에 파일을 고치면 버리고, 첫 마운트 중에 Suspense로 멈추면 버린다. 그래서 `useMemo`로 "한 번만 만들어지는 객체"를 보장받으려 하면 안 된다. 정말 한 번만 만들어야 하는 값은 `useState(() => create())`의 초기화 함수나 ref의 지연 초기화로 만든다.
+
+## memo가 props를 비교하는 방법
+
+`memo`의 비교는 얕다. props 객체의 키 개수가 같은지 보고, 키마다 `Object.is`로 비교하고, 처음 다른 칸이 나오면 바로 "다르다"고 끝낸다. 객체 안으로는 들어가지 않는다. 처음 코드의 `ProductRow`가 받는 props를 하나씩 비교해 보면 어디서 지는지 보인다.
+
+<AlgoTrace
+  caption="부모가 다시 렌더링될 때 memo가 ProductRow의 props를 비교하는 순서"
+  memoryLabel="비교 결과"
+  cells={["key 개수", "product", "onAdd", "children"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["3개 = 3개"],
+      caption: "먼저 이전 props와 새 props의 키 개수를 본다. 둘 다 product, onAdd, children 세 개다.",
+    },
+    {
+      pointer: 1,
+      memory: ["3개 = 3개", "product 같음"],
+      caption: "product는 같은 배열에서 꺼낸 같은 객체다. Object.is로 같다.",
+    },
+    {
+      pointer: 2,
+      memory: ["3개 = 3개", "product 같음", "onAdd 같음"],
+      caption: "onAdd는 부모가 useCallback으로 고정한 함수다. 참조가 그대로다.",
+    },
+    {
+      pointer: 3,
+      memory: ["3개 = 3개", "product 같음", "onAdd 같음", "children 다름"],
+      caption: "children은 부모가 이번 렌더링에서 새로 만든 PriceTag 엘리먼트 객체다. 내용이 같아도 다른 객체라 여기서 진다. ProductRow를 다시 렌더링한다.",
+    },
+    {
+      pointer: 3,
+      found: [0, 1, 2, 3],
+      memory: ["3개 = 3개", "product 같음", "onAdd 같음", "children 같음"],
+      caption: "PriceTag를 ProductRow 안에서 직접 그리고 price만 넘기게 바꾸면 비교할 칸이 모두 같아진다. 이번엔 렌더링을 건너뛴다.",
+    },
+  ]}
+/>
+
+`Object.is`는 `===`와 거의 같지만 두 군데가 다르다. `NaN`은 자기 자신과 같다고 보고, `0`과 `-0`은 다르다고 본다. props에 `NaN`이 들어와도 `memo`가 매번 깨지지 않는 이유다. 반대로 `-0`과 `0`이 번갈아 들어오는 계산 결과라면 매번 다르다고 판단한다.
+
+얕은 비교 함수를 직접 만들어 보자. 키 개수, 키 존재 여부, 값마다 `Object.is`까지 맞아야 한다. 마지막 테스트처럼 개수가 같아도 키 이름이 다르면 다르다.
+
+<CodePlayground
+  caption="memo가 쓰는 얕은 비교"
+  functionName="shallowEqual"
+  initialCode={`// prev, next: props 객체
+// 키 개수가 같고, 모든 키가 next에도 있고, 값이 모두 Object.is로 같으면 true
+function shallowEqual(prev, next) {
+  return false;
+}`}
+  solution={`function shallowEqual(prev, next) {
+  if (Object.is(prev, next)) return true;
+  const prevKeys = Object.keys(prev);
+  const nextKeys = Object.keys(next);
+  if (prevKeys.length !== nextKeys.length) return false;
+  for (const key of prevKeys) {
+    if (!Object.hasOwn(next, key) || !Object.is(prev[key], next[key])) return false;
+  }
+  return true;
+}`}
+  tests={[
+    { label: "원시값만 같음", args: [{ id: 1, label: "a" }, { id: 1, label: "a" }], expected: true },
+    { label: "객체 리터럴 style", args: [{ style: { gap: 8 } }, { style: { gap: 8 } }], expected: false },
+    { label: "NaN은 같다", args: [{ n: NaN }, { n: NaN }], expected: true },
+    { label: "0과 -0은 다르다", args: [{ n: 0 }, { n: -0 }], expected: false },
+    { label: "undefined 키가 하나 더", args: [{ a: 1 }, { a: 1, b: undefined }], expected: false },
+    { label: "개수는 같고 이름이 다름", args: [{ a: 1, b: undefined }, { a: 1, c: undefined }], expected: false },
+  ]}
+/>
+
+다섯 번째 테스트는 실무에서 가끔 만난다. 부모가 `<Row {...props} extra={maybe} />`처럼 조건에 따라 `undefined`인 prop을 넘기면, 값은 같아도 키 개수가 달라져서 비교가 깨질 수 있다.
+
+## children이 memo를 깨는 이유
+
+JSX는 함수 호출이다. `<PriceTag price={p.price} />`는 렌더링할 때마다 `{ $$typeof, type, key, ref, props }` 모양의 새 객체를 만든다. React 19.2에서 찍어 보면 `$$typeof`가 `Symbol(react.transitional.element)`인 평범한 객체다. 그리고 `children`은 이름만 특별할 뿐 props의 한 칸이다. 그래서 `memo`로 감싼 컴포넌트에 JSX 자식을 넘기면, 부모가 렌더링될 때마다 `children` 칸이 새 객체가 된다.
+
+부모를 다섯 번 렌더링하면서 두 컴포넌트가 몇 번 렌더링되는지 셌다. 둘 다 `memo`로 감쌌다.
+
+```text
+memo + children으로 <b>hi</b>를 넘김:   5번 중 5번 렌더링
+memo + title="hi" 문자열을 넘김:        5번 중 1번 렌더링 (첫 마운트만)
+```
+
+고치는 방법은 셋이다. 첫째, 자식을 받지 말고 자식이 쓸 데이터를 받는다. 처음 코드라면 `ProductRow`가 `price`를 받아 안에서 `PriceTag`를 그린다. 대부분 이게 제일 깔끔하다. 둘째, 자식 엘리먼트를 `useMemo`로 고정해서 넘긴다. 엘리먼트도 값이니 캐시할 수 있다. 다만 목록 안에서는 줄마다 `useMemo`를 부를 수 없어서(훅 규칙) 쓸 수 있는 곳이 좁다. 셋째, `memo` 경계를 옮긴다. `children`을 받는 껍데기 대신 무거운 내용 쪽 컴포넌트에 `memo`를 붙인다.
+
+여기서 하나 헷갈리기 쉬운 점이 있다. [상태를 내리고 내용을 올리는 패턴](/posts/react-rerender)은 `children`을 써서 렌더링을 막는다. 그건 `children`을 만든 쪽(위쪽 부모)이 다시 렌더링되지 않을 때만 통한다. 위쪽이 렌더링되지 않으니 `children` 엘리먼트가 지난번 객체 그대로이고, React는 같은 엘리먼트를 받으면 그 아래를 건너뛴다. 처음 코드는 반대다. `children`을 만드는 `ProductList`가 매번 렌더링되니 매번 새 객체다.
+
+## 의존성이 매번 새로 태어나면
+
+`useMemo`와 `useCallback`을 써 놓고도 매번 다시 계산되는 코드는 대개 의존성 배열에 렌더링마다 새로 생기는 값이 들어 있다. 눈에 잘 안 띄는 모양 몇 가지가 있다.
+
+```tsx
+function OrderTable({ data, options }: Props) {
+  const rows = data ?? [];                     // data가 undefined인 동안 렌더링마다 새 빈 배열
+  const sorted = useMemo(() => sortRows(rows, options.sortKey), [rows, options]);
+  //                                                            ^^^^  ^^^^^^^ 부모가 options={{ sortKey }}로 넘기면 매번 새 객체
+  const handleRetry = useCallback(() => refetch(options), [options]);
+  // ...
+}
+```
+
+`data ?? []`는 로딩 중에 렌더링마다 새 빈 배열을 만든다. 데이터가 도착한 뒤에는 괜찮지만 로딩 동안 `useMemo`가 매번 돈다. 빈 배열을 컴포넌트 밖 상수(`const EMPTY: Row[] = []`)로 빼면 해결된다. 부모가 넘기는 `options={{ sortKey }}`는 자식 쪽에서 아무리 `useMemo`를 써도 고칠 수 없다. 의존성에 객체 전체 대신 실제로 쓰는 원시값 `options.sortKey`를 넣는다.
+
+같은 이유로 `useMemo(() => ..., [props])`는 거의 항상 무의미하다. props 객체는 렌더링마다 새로 만들어진다. 의존성 배열에는 함수 안에서 실제로 읽는 값을 하나하나 적는다. 린트의 `exhaustive-deps` 규칙이 빠진 값을 알려 주고, 객체를 통째로 넣으라고 제안하면 그 객체가 어디서 오는지부터 확인한다.
+
+이런 문제가 무서운 건 소리가 없어서다. 결과는 맞고 에러도 없다. 성능만 기대만큼 안 나온다. 확인하는 가장 빠른 방법은 Profiler의 렌더링 원인 기록이다. `memo`로 감싼 컴포넌트가 "Props changed: (options)"로 계속 렌더링되면 그 prop이 어디서 새로 만들어지는지 거슬러 올라간다.
+
+## 감싸는 쪽이 손해일 때
+
+`memo`, `useMemo`, `useCallback`은 공짜가 아니다. 비용은 세 가지다.
+
+비교 비용. 렌더링할 때마다 의존성 배열이나 props를 비교한다. 비교 자체는 싸지만, 비교에서 거의 항상 "다르다"가 나오는 곳에서는 순수한 추가 비용이다. 매 렌더링 바뀌는 `value`를 받는 입력칸 컴포넌트에 `memo`를 붙이면 비교를 하고, 지고, 렌더링도 한다.
+
+메모리 비용. 캐시는 지난 입력과 결과를 붙잡고 있다. `useMemo`로 거대한 배열을 기억하면 다음에 다시 계산할 때까지 그 배열은 가비지 컬렉션되지 않는다. 화면에서 이미 안 쓰는 큰 데이터를 붙잡는 일이 생긴다.
+
+복잡도 비용. 의존성 배열은 손으로 관리하는 캐시 무효화 규칙이다. 빠뜨리면 오래된 값을 쓰는 버그가 생기고, 넣으면 위 절처럼 매번 깨진다. 코드를 읽는 사람은 "이게 왜 감싸져 있지"를 매번 판단해야 한다.
+
+## 무엇이 정말 비싼지 재 본다
+
+"계산이 비싸면 `useMemo`"라는 말에서 비싸다의 기준이 막연하다. 상품 2,000개로 흔한 계산 몇 가지를 재 봤다. Node 22, 서버용 Xeon 2.8GHz에서 각각 수백 번 돌린 평균이다.
+
+```js
+const products = Array.from({ length: 2000 }, (_, i) => ({ id: i, name: "상품 " + i, price: (i * 7919) % 100000 }));
+
+products.filter((p) => p.name.includes("19"));                          // 거르기
+[...products].sort((a, b) => a.price - b.price);                        // 복사해서 정렬
+products.map((p) => new Intl.NumberFormat("ko-KR").format(p.price));   // 줄마다 포매터 생성
+const fmt = new Intl.NumberFormat("ko-KR");
+products.map((p) => fmt.format(p.price));                              // 포매터 하나 재사용
+```
+
+```text
+2,000개 filter(includes)        0.068 ms
+2,000개 복사 후 가격 정렬        0.441 ms
+2,000개 Intl 가격 포맷         117.300 ms
+2,000개 포맷(포매터 재사용)      1.347 ms
+```
+
+2,000개를 거르는 데 0.07ms다. 휴대폰이 이보다 몇 배 느리다고 쳐도 한 프레임(약 16ms)에 한참 못 미친다. 이걸 `useMemo`로 감싸서 아끼는 시간은 의존성 비교와 거의 같은 수준이다. 정렬도 0.4ms라 렌더링이 아주 잦은 곳이 아니면 차이가 안 난다.
+
+눈에 띄는 건 셋째 줄이다. 줄마다 `Intl.NumberFormat`을 새로 만들면 117ms, 하나를 만들어 다시 쓰면 1.3ms다. 거의 90배 차이다. 비용의 대부분이 계산이 아니라 포매터 객체를 만드는 데 있었다. 이런 건 `useMemo`보다 먼저 구조로 푼다. locale이 고정이면 모듈 맨 위에 한 번 만들고, 바뀔 수 있으면 `useMemo(() => new Intl.NumberFormat(locale), [locale])`로 locale마다 하나만 만든다.
+
+공식 문서가 권하는 방법도 이것이다. 의심 가는 계산을 `console.time`과 `console.timeEnd`로 감싸서 재고, 합쳐서 1ms 정도를 넘으면 메모이제이션을 고려한다. 개발 모드는 느리니 프로덕션 빌드로 재고, 크롬 Performance 패널에서 CPU를 4배나 6배 느리게 걸어서 사용자의 기기와 비슷하게 맞춘다. 그리고 `useMemo`는 첫 렌더링을 빠르게 해 주지 않는다는 것도 기억한다. 처음에는 어차피 계산해야 한다. 아끼는 건 그다음 렌더링들이다.
+
+## effect 의존성에 들어가는 함수
+
+`useCallback`이 렌더링과 상관없이 필요한 곳이 하나 있다. effect가 컴포넌트 안에서 만든 함수를 쓰는 경우다.
+
+```tsx
+function OrderPage({ orderId }: { orderId: string }) {
+  const [order, setOrder] = useState<Order | null>(null);
+
+  const load = async () => {
+    setOrder(await fetchOrder(orderId));
+  };
+
+  useEffect(() => {
+    load();
+  }, [load]); // load는 렌더링마다 새 함수라 effect가 렌더링마다 돈다
+}
+```
+
+`load`가 렌더링마다 새로 생기니 effect도 렌더링마다 다시 돈다. 응답이 와서 `setOrder`로 렌더링되면 또 새 `load`, 또 요청이다. 끝나지 않는 요청 루프가 된다. 린트의 `exhaustive-deps`가 이 경우를 정확히 짚는다.
+
+```text
+  4:9  warning  The 'load' function makes the dependencies of useEffect Hook (at line 9) change on every render. Move it inside the useEffect callback. Alternatively, wrap the definition of 'load' in its own useCallback() Hook  react-hooks/exhaustive-deps
+```
+
+경고가 고치는 방법 두 가지를 그대로 알려 준다.
+
+첫째, 함수를 effect 안으로 옮긴다. effect 안에서만 쓰는 함수라면 이게 가장 단순하고, 의존성은 함수가 읽는 `orderId` 하나가 된다. React 문서도 이쪽을 먼저 권한다.
+
+```tsx
+useEffect(() => {
+  let ignore = false;
+  fetchOrder(orderId).then((o) => { if (!ignore) setOrder(o); });
+  return () => { ignore = true; }; // orderId가 바뀌면 이전 응답을 버린다
+}, [orderId]);
+```
+
+둘째, 그 함수를 버튼 핸들러에서도 쓰는 등 effect 밖에서도 필요하면 `useCallback(load, [orderId])`로 고정한다. 그러면 `orderId`가 바뀔 때만 새 함수가 되고 effect도 그때만 돈다. 함수가 최신 값을 읽어야 하지만 effect를 다시 돌리고 싶지는 않은 경우는 셋째 길인 `useEffectEvent`가 있는데, [클로저 글](/posts/js-closures)에서 다뤘다.
+
+## 엘리먼트를 직접 기억하는 방법
+
+`memo`로 컴포넌트를 감싸는 대신, 부모에서 자식 엘리먼트 자체를 `useMemo`로 기억해도 같은 효과가 난다. React는 렌더링하다가 지난번과 같은 엘리먼트 객체를 만나면 그 아래를 건너뛴다.
+
+```tsx
+function Dashboard({ data, filter }: Props) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const chart = useMemo(() => <SalesChart data={data} />, [data]); // data가 그대로면 같은 엘리먼트
+
+  return (
+    <section onMouseOver={(e) => setHovered((e.target as HTMLElement).id)}>
+      <Toolbar hovered={hovered} />
+      {chart}
+    </section>
+  );
+}
+```
+
+`hovered`가 바뀌어 `Dashboard`가 렌더링되어도 `chart`는 지난번 객체라 `SalesChart`는 호출되지 않는다. `SalesChart`를 `memo`로 감싸지 않아도 된다. 이 방법은 `SalesChart`를 여기서만 비싸게 쓰고 다른 곳에서는 감쌀 필요가 없을 때 유용하다. 단점은 의존성 배열을 또 하나 관리한다는 것이다. 여러 곳에서 같은 컴포넌트를 비싸게 쓴다면 컴포넌트 쪽에 `memo`를 붙이는 게 낫다. React Compiler가 하는 일이 사실상 이 방법을 모든 JSX에 자동으로 적용하는 것이다.
+
+## 그래서 언제 손으로 감싸나
+
+손으로 감쌀 가치가 있는 곳은 이렇게 좁힌다. Profiler에서 실제로 오래 걸리는 컴포넌트이고, props가 대부분의 렌더링에서 같으며, 넘기는 참조를 모두 고정할 수 있을 때 `memo`를 쓴다. 계산이 눈에 띄게 오래 걸릴 때(공식 문서는 `console.time`으로 재서 1ms 이상이면 고려하라고 한다) `useMemo`를 쓴다. `memo`로 감싼 자식이나 effect 의존성에 들어가는 함수일 때 `useCallback`을 쓴다. 그 밖은 감싸지 않는 게 기본이다.
+
+## 비교 함수를 직접 넘길 때
+
+`memo`의 두 번째 인자로 비교 함수를 넘길 수 있다. 이전 props와 새 props를 받아 "같다"고 판단하면 `true`를 돌려준다. 클래스 컴포넌트의 `shouldComponentUpdate`와 반대 방향이라 헷갈리기 쉽다. `true`는 "렌더링을 건너뛰어도 된다"는 뜻이다.
+
+```tsx
+const PriceRow = memo(
+  function PriceRow({ item }: { item: Item }) {
+    return <li>{item.name} {item.price}</li>;
+  },
+  (prev, next) => prev.item.id === next.item.id && prev.item.price === next.item.price,
+);
+```
+
+서버에서 매번 새 객체로 오는 `item`을 id와 가격만으로 비교하게 했다. 이름이 바뀐 새 객체를 다섯 번 넘겨도 렌더링은 첫 마운트 한 번뿐이었다. 의도대로 동작한 것이지만, 동시에 위험도 보여 준다. 이름이 정말 바뀌었는데 화면에는 옛 이름이 남는다.
+
+비교 함수에서 함수 props를 빼먹으면 더 조용한 버그가 생긴다. 부모가 새 state를 읽는 새 `onSave`를 넘겨도 자식은 렌더링을 건너뛰니 이전 `onSave`, 즉 오래된 state를 붙잡은 함수를 계속 쓴다. 비교 함수를 쓴다면 모든 prop을 다루고, 객체 안을 깊게 비교하는 일은 피한다. 깊은 비교는 데이터가 크면 렌더링보다 오래 걸린다. 대개는 비교 함수보다 넘기는 데이터를 안정적으로 만드는 쪽(서버 응답의 구조 공유, 원시값 props)이 낫다.
+
+## React Compiler가 넣는 캐시
+
+손으로 관리하는 캐시가 이렇게 실수하기 쉬워서 React 팀은 빌드할 때 메모이제이션을 자동으로 넣는 컴파일러를 만들었다. React 19가 나올 무렵 공개되어 베타와 RC를 거쳤고, 2025년 10월에 `babel-plugin-react-compiler` 1.0이 나왔다. Babel 플러그인이라 Next.js, Vite 같은 도구에서 빌드 단계에 끼워 넣는다.
+
+컴파일러가 실제로 무엇을 넣는지 보려고 1.0으로 이 컴포넌트를 컴파일했다.
+
+```tsx
+export function ProductList({ products, query, onOpen }) {
+  const visible = products.filter((p) => p.name.includes(query));
+  return (
+    <ul>
+      {visible.map((p) => (
+        <Row key={p.id} item={p} onSelect={() => onOpen(p.id)} />
+      ))}
+    </ul>
+  );
+}
+```
+
+나온 코드의 앞부분이다. 아래 조각을 눌러 보면 각 줄이 무엇을 하는지 나온다.
+
+<UrlAnatomy
+  caption="컴파일러가 만든 ProductList의 첫 부분"
+  base="function ProductList(t0) {"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "cache",
+      display: "const $ = _c(10);",
+      title: "컴포넌트마다 캐시 칸 10개",
+      description: "react/compiler-runtime의 c 함수가 이 컴포넌트 인스턴스용 배열을 하나 만든다. 훅처럼 렌더링 사이에 유지된다. useMemo 여러 개를 배열 하나로 합친 셈이다.",
+      required: true,
+    },
+    {
+      key: "check",
+      display: "if ($[0] !== onOpen || $[1] !== products || $[2] !== query) {",
+      title: "의존성 비교를 컴파일러가 적는다",
+      description: "이 블록이 읽는 값 세 개를 지난번 값과 비교한다. 의존성 배열을 사람이 적지 않으니 빠뜨릴 일이 없다.",
+      required: true,
+    },
+    {
+      key: "inner",
+      display: "if ($[4] !== query) { t2 = (p) => p.name.includes(query); ... }",
+      title: "더 잘게 나눈다",
+      description: "filter에 넘기는 함수는 query만 읽으니 query가 바뀔 때만 새로 만든다. 사람이 이 정도로 쪼개 쓰는 일은 드물다.",
+    },
+    {
+      key: "row",
+      display: "t3 = (p_0) => <Row ... onSelect={() => onOpen(p_0.id)} />",
+      title: "줄마다 만드는 함수는 그대로다",
+      description: "map 안의 onSelect는 목록을 다시 계산하는 순간 줄마다 새로 만들어진다. query가 바뀌면 남아 있는 줄도 새 onSelect를 받는다.",
+    },
+    {
+      key: "reuse",
+      display: "} else { t1 = $[3]; }",
+      title: "같으면 지난번 결과",
+      description: "세 값이 모두 그대로면 filter와 map을 아예 건너뛰고 지난번에 만든 엘리먼트 배열을 그대로 쓴다.",
+    },
+  ]}
+/>
+
+손으로 쓴 `useMemo`보다 촘촘하다. 조건문 뒤나 early return 뒤의 값도 캐시할 수 있는데, 훅은 조건부로 부를 수 없으니 사람은 못 하는 일이다. 그리고 JSX 엘리먼트 자체를 캐시하기 때문에 앞에서 본 `children` 문제도 상당 부분 사라진다. 부모가 같은 입력으로 다시 렌더링되면 `<PriceTag price={p.price} />` 엘리먼트도 지난번 객체가 나온다.
+
+한계도 출력에 그대로 보인다. `map` 안의 `onSelect`는 목록 전체를 다시 계산할 때 줄마다 새로 만들어진다. 검색어가 바뀌는 순간 남아 있는 줄도 모두 새 함수를 받는다. 목록이 정말 무거우면 줄 컴포넌트가 `onOpen`과 `id`를 따로 받게 바꾸는 식의 구조 조정은 여전히 사람 몫이다. 2,000줄을 한 번에 다시 거르는 비용 자체도 메모이제이션으로는 사라지지 않는다.
+
+## 규칙을 어기면 조용히 빠진다
+
+컴파일러는 컴포넌트가 React의 규칙을 지킨다고 가정해야 캐시를 넣을 수 있다. 렌더링이 순수하고, props와 state를 직접 고치지 않고, 훅을 항상 같은 순서로 부른다는 가정이다. 이걸 어긴 코드를 찾으면 그 컴포넌트는 건드리지 않고 원래대로 둔다. 빌드는 실패하지 않는다. 일부러 규칙을 어긴 컴포넌트 넷을 컴파일하고 로그를 받아 봤다.
+
+```text
+CompileError  Hooks must always be called in a consistent order, and may not be called conditionally. See the Rules of Hooks (https://react.dev/warnings/invalid-hook-call-warning)
+CompileError  Cannot access refs during render
+CompileError  This value cannot be modified
+CompileSkip
+```
+
+위에서부터 조건부 훅, 렌더링 중 ref 읽기, props 고치기, 그리고 `"use no memo"` 지시어로 일부러 뺀 컴포넌트다(ref 컴포넌트는 같은 에러가 세 줄 찍혀서 한 줄만 남겼다). 넷 다 출력에 `_c(...)` 캐시가 없었다. 앱은 그대로 돌지만 이 컴포넌트들은 최적화되지 않는다. 컴파일러를 켰는데 기대만큼 빨라지지 않았다면 이게 첫 번째 용의자다.
+
+이 규칙들은 린트로 미리 볼 수 있다. `eslint-plugin-react-hooks` 7의 `recommended` 설정에는 예전부터 있던 `rules-of-hooks`, `exhaustive-deps`에 더해 컴파일러가 쓰는 검사(`refs`, `immutability`, `purity`, `set-state-in-render`, `set-state-in-effect` 등)가 들어 있다. 컴파일러를 켜기 전에 이 린트를 먼저 돌려서 걸리는 곳을 보는 게 순서다.
+
+## 도입할 때 확인할 것
+
+버전. 컴파일러는 React 19를 기준으로 한다. 17과 18에서도 쓸 수 있지만 `react-compiler-runtime` 패키지를 따로 설치하고 `target` 옵션으로 React 버전을 알려 줘야 한다. 출력이 `react/compiler-runtime`의 함수를 쓰는데, 이 진입점이 19에만 있어서다.
+
+빌드 연결. Next.js는 16부터 `next.config`의 `reactCompiler: true`로 켠다(15에서는 `experimental` 아래에 있었다). Vite는 `@vitejs/plugin-react`의 Babel 플러그인 목록에 넣는다. Babel 파이프라인에서 다른 플러그인보다 먼저 돌아야 한다고 공식 문서가 강조한다. 컴파일은 빌드 시간을 늘리니 큰 저장소라면 전후 빌드 시간을 재 둔다.
+
+범위. 한 번에 다 켜기 부담스러우면 `compilationMode: "annotation"`으로 두고 `"use memo"`를 적은 컴포넌트만 컴파일한다. 반대로 전체를 켜고 문제가 되는 컴포넌트에만 `"use no memo"`를 붙여 뺄 수도 있다. 이 지시어는 임시 탈출구로 쓰고, 원인을 고친 뒤 지운다.
+
+라이브러리. 렌더링 중에 바뀌는 값을 돌려주는 라이브러리 API는 컴파일러의 가정과 맞지 않는다. 린트의 `incompatible-library` 규칙이 이런 호출을 경고로 알려 준다. 경고가 뜬 컴포넌트는 컴파일러가 건너뛰거나 결과가 낡을 수 있으니 테스트를 꼭 돌린다.
+
+이미 있는 `useMemo`, `useCallback`. 컴파일러는 손으로 쓴 메모이제이션을 지우지 않고 그대로 두며, 컴파일 결과가 원래 메모이제이션을 지키는지 검사한다(`preserve-manual-memoization` 규칙). 기존 코드를 일부러 지울 필요는 없다. 특히 effect 의존성에 들어가는 값의 메모이제이션을 지우면 effect가 도는 횟수가 바뀔 수 있다. 새 코드부터 손으로 감싸지 않는다.
+
+확인. React DevTools의 컴포넌트 트리에서 컴파일된 컴포넌트 옆에 "Memo ✨" 표시가 붙는다. 켜고 나서 느렸던 화면을 Profiler로 다시 녹화해 전후를 비교한다. 컴파일러는 측정을 대신해 주지 않는다.
+
+## 다시 처음 목록으로
+
+처음 목록이 느렸던 건 `memo`가 `children` 칸에서 매번 졌기 때문이다. 세 도구는 모두 지난 입력 하나만 기억하는 캐시이고, 입력은 `Object.is`로 비교한다. 그래서 렌더링마다 새로 생기는 객체, 배열, 함수, JSX 엘리먼트가 입력에 하나라도 섞이면 소리 없이 무력해진다. 감싸기 전에 그 입력이 정말 안정적인지 보고, Profiler로 효과를 확인한다. React Compiler는 이 일을 촘촘하게 대신하지만 규칙을 지키는 컴포넌트에서만 그렇고, 상태를 어디 둘지 같은 구조 문제는 남는다.
+
+## 면접에서 나올 만한 질문
+
+### React.memo, useMemo, useCallback은 각각 무엇을 캐시하나요?
+
+`memo`는 컴포넌트의 지난 렌더링 결과를 props를 키로, `useMemo`는 계산한 값을 의존성 배열을 키로 캐시한다. `useCallback`은 `useMemo(() => fn, deps)`와 같아서 함수 참조를 캐시한다. 셋 다 지난번 입력 하나만 기억하고, 입력은 칸마다 `Object.is`로 비교한다. React는 필요하면 캐시를 버릴 수 있어서 의미상 꼭 필요한 값의 보장에는 쓰지 않는다.
+
+### useCallback을 쓰면 함수 생성 비용이 줄어드나요?
+
+아니다. 함수는 렌더링마다 똑같이 새로 만들어지고, `useCallback`은 의존성이 같으면 새 함수를 버리고 지난번 함수를 돌려줄 뿐이다. 얻는 것은 참조가 유지된다는 사실 하나라서, `memo`로 감싼 자식이나 훅 의존성에 넘길 때만 의미가 있다. 그 밖에서는 비교 비용만 는다.
+
+### memo로 감쌌는데도 계속 렌더링됩니다. 무엇부터 보나요?
+
+Profiler의 렌더링 원인 기록으로 어느 prop이 바뀌었는지 본다. 대개 렌더링마다 새로 만드는 객체·배열·함수 prop이거나 JSX를 넘기는 `children`이다. 그다음 그 값이 어디서 만들어지는지 거슬러 올라가 컴포넌트 밖 상수, 원시값 props, `useMemo`나 `useCallback`으로 고정한다. 자기 state나 context가 바뀌는 경우는 `memo`가 원래 막지 못한다.
+
+### memo가 오히려 손해인 경우는요?
+
+props가 거의 매번 바뀌는 컴포넌트, 렌더링이 원래 싼 컴포넌트에서는 비교 비용만 더해진다. 캐시가 큰 값을 붙잡아 메모리를 쓰고, 의존성 배열이라는 무효화 규칙을 사람이 관리해야 해서 버그가 생기기 쉽다. 측정해서 오래 걸리고 props가 대체로 같은 곳에만 쓴다.
+
+### useMemo는 어느 정도 비싼 계산부터 쓰나요?
+
+재 보고 정한다. `console.time`으로 감싸 프로덕션 빌드와 느리게 건 CPU에서 재고, 합쳐서 1ms쯤 넘으면 고려한다. 2,000개를 거르는 정도는 0.1ms도 안 걸려 의존성 비교 비용과 비슷하다. 오히려 줄마다 `Intl.NumberFormat` 같은 객체를 새로 만드는 일이 훨씬 비싸서, 그런 건 모듈 상수나 locale마다 하나만 만드는 구조로 먼저 푼다.
+
+### memo의 비교 함수는 어떻게 쓰고, 무엇을 조심해야 하나요?
+
+두 번째 인자로 `(prev, next) => boolean`을 넘기고, `true`를 돌려주면 렌더링을 건너뛴다. 일부 prop만 비교하면 실제로 바뀐 값이 화면에 반영되지 않고, 함수 prop을 빼먹으면 자식이 오래된 state를 붙잡은 콜백을 계속 쓴다. 깊은 비교는 데이터가 크면 렌더링보다 비싸다. 대개 넘기는 데이터를 안정적으로 만드는 편이 낫다.
+
+### React Compiler는 어떻게 동작하나요?
+
+빌드할 때 컴포넌트를 분석해서 값과 JSX를 의존 단위로 쪼개고, 컴포넌트마다 캐시 배열 하나를 만들어 칸마다 이전 입력과 비교하는 코드를 넣는다. 의존성을 사람이 적지 않으니 빠뜨리지 않고, 조건문 뒤의 값처럼 훅으로는 못 하는 곳도 캐시한다. 2025년 10월에 1.0이 나왔고 React 19 기준이며, 17·18은 런타임 패키지를 따로 쓴다.
+
+### React Compiler를 켜면 memo를 전부 지워도 되나요?
+
+새 코드는 손으로 감싸지 않아도 되지만 기존 코드를 일부러 지울 필요는 없다. 컴파일러는 규칙을 어긴 컴포넌트(조건부 훅, 렌더링 중 ref 접근, props 변경)를 빌드 에러 없이 건너뛰어서, 그런 곳은 손으로 쓴 메모이제이션만 남는다. effect 의존성의 메모이제이션을 지우면 effect 실행 횟수가 바뀔 수도 있다. 린트를 먼저 돌리고, DevTools의 Memo 표시와 Profiler로 확인한다.

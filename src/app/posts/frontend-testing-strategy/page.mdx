@@ -1,0 +1,531 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-testing-strategy");
+
+<EasyIntro>
+  급식 맛을 확인하는 방법은 두 가지다. 조리사가 소금을 몇 그램 넣고 냄비를 몇 번 저었는지 지켜보는 방법과, 다 된 음식을 직접 먹어 보는 방법이다.
+
+  지켜보는 방법은 조리사가 순서를 조금만 바꿔도 틀렸다고 말한다. 맛이 똑같은데도 그렇다. 먹어 보는 방법은 순서가 어떻든 맛이 그대로면 통과다.
+
+  화면을 만드는 코드의 테스트도 같다. 코드 안쪽을 들여다보는 테스트는 코드를 정리할 때마다 깨지고, 사용자처럼 버튼을 찾아 누르고 화면을 확인하는 테스트는 그대로 통과한다. 그래서 사용자가 보는 이름으로 버튼을 찾고, 서버 대신 가짜 응답을 준비하고, 중요한 흐름 몇 개만 진짜 브라우저로 끝까지 눌러 본다.
+</EasyIntro>
+
+장바구니 컴포넌트의 상태 관리가 지저분해져서 `useState` 네 개를 `useReducer` 하나로 합쳤다고 해 보자. 화면은 그대로다. 버튼을 누르면 수량이 오르고, 0이 되면 줄이 사라진다. 그런데 CI가 빨갛다. 테스트 스무 개가 깨졌다.
+
+깨진 테스트를 열어 보면 이런 모양이다.
+
+```tsx
+// 구현을 들여다보는 테스트
+const { setQty } = vi.hoisted(() => ({ setQty: vi.fn() }));
+vi.mock("./use-cart-state", () => ({
+  useCartState: () => ({ items: [{ id: 1, qty: 2 }], setQty }),
+}));
+
+it("+ 버튼을 누르면 setQty를 호출한다", () => {
+  const { container } = render(<Cart />);
+  fireEvent.click(container.querySelector(".qty-plus")!);
+  expect(setQty).toHaveBeenCalledWith(1, 3);
+});
+```
+
+훅 이름, 함수 이름, CSS 클래스 이름을 테스트가 알고 있다. 리팩터링은 바로 이것들을 바꾸는 일이라, 동작이 맞아도 테스트가 깨진다. 거꾸로 `setQty`는 불렸는데 화면 숫자가 안 바뀌는 버그는 이 테스트가 못 잡는다. 깨져야 할 때는 통과하고, 통과해야 할 때는 깨지는 테스트다.
+
+이 글은 프런트엔드 테스트를 어디에 얼마나 둘지, 그리고 각 층에서 무엇을 조심해야 하는지 따라간다. 스텁·목·가짜 같은 테스트 대역의 일반론과 피라미드 이야기는 [테스트 피라미드와 단위 테스트](/posts/test-pyramid-unit-tests)에 있고, 여기서는 브라우저 화면을 테스트할 때만 생기는 문제를 본다. 예제는 Vitest 5, React 19, Testing Library 16, MSW 3, Playwright로 실제로 돌려 본 결과다.
+
+## 사용자가 보는 것으로 확인한다
+
+같은 장면을 사용자 쪽에서 다시 쓰면 이렇다.
+
+```tsx
+it("+를 누르면 수량이 하나 오른다", async () => {
+  const user = userEvent.setup();
+  render(<Cart initialItems={[{ id: 1, name: "양말", qty: 2 }]} />);
+
+  const row = screen.getByRole("row", { name: /양말/ });
+  await user.click(within(row).getByRole("button", { name: "수량 늘리기" }));
+
+  expect(within(row).getByRole("spinbutton", { name: "수량" })).toHaveValue(3);
+});
+```
+
+이 테스트는 `useState`든 `useReducer`든 Zustand든 상관하지 않는다. "양말 줄의 수량 늘리기 버튼을 누르면 수량 칸이 3이 된다"는 사용자가 겪는 사실만 확인한다. 그래서 리팩터링에는 깨지지 않고, 화면 숫자가 안 바뀌는 버그에는 깨진다.
+
+Testing Library를 만든 Kent C. Dodds가 이 원칙을 이렇게 적었다. 테스트가 소프트웨어가 쓰이는 방식과 닮을수록 더 큰 확신을 준다. 사용자는 두 종류다. 화면을 쓰는 최종 사용자, 그리고 컴포넌트를 props로 쓰는 개발자. 테스트는 이 둘이 보는 것만 만진다. state 값, 훅 호출 횟수, 내부 함수 이름은 둘 다 보지 않는다.
+
+예외는 있다. 날짜 계산, 가격 반올림, 정렬 규칙처럼 화면과 떨어진 순수 함수는 함수 단위로 테스트하는 게 가장 빠르고 정확하다. 원칙은 "컴포넌트를 쪼개 보지 말라"가 아니라 "바깥에서 관찰할 수 있는 결과를 보라"다. 순수 함수의 바깥은 반환값이고, 컴포넌트의 바깥은 화면과 콜백 props다.
+
+## 트로피 모양이 나오는 이유
+
+프런트엔드에서는 피라미드 대신 트로피 모양을 자주 이야기한다. 아래가 넓은 받침(정적 분석), 그 위의 좁은 목(단위), 가장 불룩한 몸통(통합), 위의 작은 손잡이(E2E) 순서다. 아래 그림의 화살표는 위로 갈수록 무엇이 늘어나는지 보여 준다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="위로 갈수록 확신은 커지고, 느려지고, 실패 원인을 찾기 어려워진다"
+  nodes={[
+    { id: "static", label: "정적 분석", sub: "TypeScript · ESLint", x: 120, y: 245, w: 170 },
+    { id: "unit", label: "단위", sub: "순수 함수 · 훅", x: 120, y: 180, w: 120 },
+    { id: "integ", label: "통합", sub: "컴포넌트 + MSW", x: 120, y: 110, w: 190 },
+    { id: "e2e", label: "E2E", sub: "Playwright", x: 120, y: 40, w: 110 },
+    { id: "conf", label: "확신", sub: "실제와 닮은 정도", x: 330, y: 60 },
+    { id: "cost", label: "비용", sub: "시간 · 흔들림", x: 330, y: 200 },
+  ]}
+  edges={[
+    { from: "static", to: "unit" },
+    { from: "unit", to: "integ" },
+    { from: "integ", to: "e2e" },
+    { from: "e2e", to: "conf", label: "가장 큼", dashed: true },
+    { from: "static", to: "cost", label: "가장 쌈", dashed: true },
+  ]}
+/>
+
+몸통이 통합 테스트인 데는 이유가 있다. 프런트엔드 버그의 상당수는 함수 하나 안이 아니라 조각 사이에서 생긴다. 폼 컴포넌트, 검증 훅, 데이터 요청 훅, 캐시가 맞물리는 자리다. 이걸 하나씩 목으로 끊어 단위 테스트하면 이음매가 전부 가짜가 된다. 컴포넌트를 실제 자식, 실제 훅과 함께 렌더링하고 네트워크만 경계에서 가짜로 바꾸면, jsdom에서 빠르게 돌면서도 이음매를 진짜로 확인한다.
+
+받침이 정적 분석인 것도 프런트엔드답다. props 이름 오타, `undefined`일 수 있는 값을 그냥 쓰는 실수, 훅 규칙 위반은 TypeScript와 ESLint(`react-hooks` 규칙)가 테스트를 한 줄도 안 쓰고 잡는다. 이런 걸 테스트로 확인하려 들면 테스트만 늘어난다.
+
+모양 자체에 집착할 필요는 없다. 디자인 시스템 패키지라면 컴포넌트 단위 테스트와 시각 회귀가 대부분일 것이고, 결제 흐름이 핵심인 서비스라면 E2E 비중이 커진다. 물어야 할 질문은 "이 버그를 가장 싸게 잡는 층이 어디인가"다.
+
+## 테스트 러너와 가짜 DOM
+
+컴포넌트 테스트는 보통 Node.js 위에서 돈다. 브라우저가 없으니 DOM을 흉내 내는 라이브러리가 필요하다. 러너는 Vitest나 Jest, DOM은 jsdom이나 happy-dom이다.
+
+Vitest는 Vite의 변환 파이프라인을 그대로 써서, 앱이 Vite 기반이면 별칭이나 플러그인 설정을 두 번 쓰지 않아도 된다. ESM과 TypeScript를 따로 변환기 없이 다룬다. Jest는 오래 쓰인 만큼 자료와 플러그인이 많고, 기존 프로젝트의 대부분이 Jest라 그대로 두는 경우도 많다. `describe`, `it`, `expect` 모양은 거의 같아서 옮기는 비용은 주로 `jest.fn` → `vi.fn` 같은 목 API와 설정 파일에서 든다.
+
+```ts
+// vitest.config.ts
+import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: "jsdom", // 또는 "happy-dom"
+    globals: true,        // 아래에서 이유를 본다
+    setupFiles: ["./src/test/setup.ts"],
+  },
+});
+```
+
+jsdom은 명세를 충실히 따르는 쪽이고, happy-dom은 빠른 대신 빠진 기능이 더 있다. 어느 쪽이든 가짜 DOM이 하지 않는 일은 같다. 레이아웃을 계산하지 않는다. jsdom에서 너비 300px짜리 `div`를 재 봤다.
+
+```text
+{"width":0,"offsetWidth":0,"IntersectionObserver":"undefined","ResizeObserver":"undefined","matchMedia":"undefined","fetch":"function"}
+```
+
+스타일에 300px을 줘도 크기는 0이다. `IntersectionObserver`, `ResizeObserver`, `matchMedia`도 없다. 그래서 가상 스크롤, 화면에 들어오면 불러오는 이미지, 반응형 분기처럼 크기에 기대는 코드는 jsdom에서 제대로 확인할 수 없다. 이런 API를 목으로 채워 넣고 테스트를 통과시키는 순간 그 테스트는 내가 만든 목을 확인하는 셈이 된다. 크기와 레이아웃이 핵심인 컴포넌트는 실제 브라우저에서 돌리는 쪽(Playwright, 또는 Vitest 브라우저 모드)으로 올린다.
+
+### globals를 끄면 조용히 빠지는 것
+
+위 설정에서 `globals: true`를 꺼 두고 처음 테스트를 돌렸을 때 이상한 일이 있었다. 테스트 사이에 이전 테스트의 화면이 남았고, 뒤에서 볼 act 경고도 전혀 나오지 않았다. 테스트 안에서 React가 보는 전역 플래그를 찍어 보니 이랬다.
+
+```text
+ACT_ENV undefined test
+```
+
+`@testing-library/react`는 불러올 때 전역 `afterEach`가 있으면 거기에 `cleanup`을 걸고, 전역 `beforeAll`이 있으면 `IS_REACT_ACT_ENVIRONMENT`를 켠다. Vitest는 기본으로 이 함수들을 전역에 두지 않으니 둘 다 빠진다. `globals: true`를 켜거나, setup 파일에서 `afterEach(cleanup)`을 걸고 `globalThis.IS_REACT_ACT_ENVIRONMENT = true`를 직접 넣어야 한다. 켜고 다시 돌리면 `ACT_ENV true test`가 찍히고 경고도 제대로 나온다. 에러 없이 조용히 빠지는 설정이라, Jest에서 Vitest로 옮긴 뒤 테스트끼리 간섭하기 시작했다면 여기부터 본다.
+
+## 요소를 찾는 순서에 접근성이 들어 있다
+
+Testing Library는 요소를 찾는 방법에 우선순위를 둔다. 위에 있을수록 사용자가 실제로 요소를 알아보는 방식에 가깝다.
+
+1. `getByRole` — 역할과 접근 가능한 이름. 버튼, 링크, 체크박스, 제목, 표의 행
+2. `getByLabelText` — 폼 입력칸의 라벨
+3. `getByPlaceholderText`, `getByText`, `getByDisplayValue` — 눈에 보이는 글자
+4. `getByAltText`, `getByTitle` — 이미지 대체 텍스트, title
+5. `getByTestId` — 위 방법이 모두 안 될 때만
+
+`getByRole`이 1순위인 이유는 접근성 트리를 그대로 쓰기 때문이다. 스크린 리더는 화면을 픽셀로 보지 않고 "버튼, 이름 '검색'"처럼 역할과 이름으로 읽는다. `getByRole("button", { name: "검색" })`이 실패한다면, 그 요소는 스크린 리더 사용자에게도 "검색 버튼"으로 들리지 않는다는 뜻이다. `div`에 `onClick`을 단 가짜 버튼은 역할이 없어서 이 쿼리로 찾을 수 없다. 테스트를 쓰다가 접근성 버그를 같이 잡게 된다.
+
+아래 쿼리를 조각으로 나눠 보면 세 가지를 따로 고른다는 걸 알 수 있다. 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="쿼리 이름은 기다리는 방식, 개수, 찾는 기준을 이어 붙인 것이다"
+  base="screen."
+  separator=""
+  joiner=""
+  params={[
+    {
+      key: "find",
+      display: "find",
+      title: "기다리는 방식",
+      description: "get은 지금 바로 찾고 없으면 던진다. query는 없으면 null을 돌려준다(없음을 확인할 때). find는 나타날 때까지 기다리는 Promise다(기본 1초).",
+      required: true,
+    },
+    {
+      key: "All",
+      display: "All",
+      title: "개수",
+      description: "없으면 정확히 하나를 기대한다. 두 개 이상 찾으면 get과 find는 에러를 던진다. All을 붙이면 배열을 돌려준다.",
+    },
+    {
+      key: "ByRole",
+      display: "ByRole",
+      title: "찾는 기준",
+      description: "역할로 찾는다. 접근성 트리에서 계산한 암묵적 역할(button, link, textbox, list, status 등)과 명시한 role 속성을 모두 본다.",
+      required: true,
+    },
+    {
+      key: "args",
+      display: "(\"button\", { name: \"검색\" })",
+      title: "역할과 이름",
+      description: "name은 접근 가능한 이름이다. 버튼 안의 글자, aria-label, 연결된 label에서 계산된다. 문자열이면 정확히 같아야 하고, 정규식이면 일부만 맞아도 된다.",
+      code: "getByRole(\"heading\", { level: 2, name: /결제/ })\ngetByRole(\"checkbox\", { checked: true })",
+    },
+  ]}
+/>
+
+이 쿼리는 실패했을 때도 쓸모가 있다. 이름을 "찾기"로 잘못 쓰고 돌렸더니 이런 메시지가 나왔다.
+
+```text
+TestingLibraryElementError: Unable to find an accessible element with the role "button" and name "찾기"
+
+Here are the accessible roles:
+
+  search:
+
+  Name "":
+  <form
+    role="search"
+  />
+
+  --------------------------------------------------
+  textbox:
+
+  Name "이름":
+  <input
+    id="q"
+    value=""
+  />
+
+  --------------------------------------------------
+  button:
+
+  Name "검색":
+  <button
+    type="submit"
+  />
+```
+
+화면에 있는 역할과 이름이 그대로 나열된다. 접근성 트리가 어떻게 보이는지 확인하는 도구로도 쓸 수 있다. `search` 랜드마크의 이름이 비어 있다는 것도 여기서 보인다.
+
+`getByTestId`는 마지막 수단이다. 사용자는 `data-testid`를 보지 못한다. 차트 캔버스처럼 역할과 글자로 가리킬 방법이 정말 없는 요소에만 쓴다. 쿼리가 안 잡힌다고 testid부터 붙이면 접근성 문제를 덮는 쪽으로 간다.
+
+## getBy로 찾으면 운에 맡기게 된다
+
+검색 버튼을 누르면 서버에서 사람 목록을 받아 보여 주는 컴포넌트를 테스트한다. 응답이 바로 오는 동안은 `getBy`로도 통과했다. 가짜 서버에 100ms 지연을 넣자 같은 테스트가 깨졌다.
+
+```tsx
+await user.click(screen.getByRole("button", { name: "검색" }));
+expect(screen.getByRole("list", { name: "검색 결과" })).toBeInTheDocument();
+```
+
+```text
+ × src/exp2.test.jsx > B 기다리지 않고 getBy 271ms
+   → Unable to find an accessible element with the role "list" and name "검색 결과"
+```
+
+목록은 응답이 온 다음에 생긴다. `getBy`는 지금 이 순간만 본다. 응답이 아주 빠른 로컬에서는 통과하고 CI 기계가 바쁠 때 깨지는, 전형적인 흔들리는 테스트가 여기서 나온다. 나중에 나타나는 요소는 `findBy`로 찾는다.
+
+```tsx
+expect(await screen.findByRole("list", { name: "검색 결과" })).toBeInTheDocument();
+```
+
+`findBy`는 `getBy`를 `waitFor`로 감싼 것이다. `waitFor`는 콜백을 50ms마다 다시 부르고, 던지지 않으면 끝나고, 1초가 지나도 계속 던지면 마지막 에러로 실패한다. 아래 그림에서 "다음"을 누르면 이 반복이 보인다.
+
+<SequenceDiagram
+  caption="findBy는 콜백을 다시 불러 보는 반복이다"
+  actors={[
+    { id: "test", label: "테스트" },
+    { id: "rtl", label: "Testing Library" },
+    { id: "dom", label: "jsdom" },
+    { id: "msw", label: "MSW" },
+  ]}
+  steps={[
+    {
+      from: "test",
+      to: "dom",
+      label: "click 검색",
+      title: "버튼을 누른다",
+      detail: "컴포넌트가 fetch를 부른다. 요청은 MSW가 가로채 100ms 뒤에 답하도록 되어 있다.",
+    },
+    {
+      from: "test",
+      to: "rtl",
+      label: "findByRole(list)",
+      title: "나타날 때까지 기다리겠다고 말한다",
+      detail: "findBy는 Promise를 돌려준다. 테스트는 await에서 멈추고, 그 사이 이벤트 루프는 계속 돈다.",
+    },
+    {
+      from: "rtl",
+      to: "dom",
+      label: "getByRole → 없음",
+      title: "바로 한 번 찾아본다",
+      detail: "아직 목록이 없어 에러가 난다. 실패로 끝내지 않고 50ms 뒤에 다시 부르도록 예약한다. DOM이 바뀌면 그때도 다시 부른다.",
+    },
+    {
+      from: "msw",
+      to: "dom",
+      label: "200 JSON",
+      title: "응답이 와서 상태가 바뀐다",
+      detail: "컴포넌트가 setUsers를 부르고 목록이 렌더링된다. 이 업데이트는 Testing Library가 감싼 act 안에서 일어나서 경고가 나지 않는다.",
+      payload: "[{ \"id\": 1, \"name\": \"김민지\" }]",
+    },
+    {
+      from: "rtl",
+      to: "dom",
+      label: "getByRole → 찾음",
+      title: "다시 찾으니 있다",
+      detail: "콜백이 던지지 않았으므로 기다림이 끝나고 요소를 돌려준다. 1초 안에 못 찾았다면 마지막 에러 메시지로 실패했을 것이다.",
+    },
+    {
+      from: "rtl",
+      to: "test",
+      label: "element",
+      title: "테스트가 이어진다",
+      detail: "이제 목록 안의 내용을 확인한다. 이미 화면에 있으므로 이 뒤로는 getBy를 써도 된다.",
+    },
+  ]}
+/>
+
+`waitFor`에는 지켜야 할 규칙이 몇 개 있다. 콜백 안에서 클릭 같은 부수 효과를 일으키지 않는다. 50ms마다 다시 불리니 클릭도 여러 번 된다. 콜백 하나에 단언 하나만 둔다. 단언이 여러 개면 앞의 것이 통과할 때까지 뒤의 것은 확인되지 않고, 실패 메시지도 덜 정확해진다. 그리고 빈 콜백으로 `await waitFor(() => {})`를 써서 "잠깐 기다리기"로 쓰지 않는다. 무엇을 기다리는지 테스트에 적어야 나중에 읽는 사람이 안다.
+
+사라지는 것을 기다릴 때는 `waitForElementToBeRemoved`를 쓰고, 없음을 확인할 때는 `queryBy`를 쓴다. `getBy`로 없음을 확인하면 찾지 못했다는 에러가 먼저 나서 단언까지 가지 못한다.
+
+## userEvent는 사람처럼 누른다
+
+클릭과 입력을 일으키는 방법은 두 가지다. `fireEvent`는 DOM 이벤트 하나를 그 요소에 바로 보낸다. `userEvent`는 사람이 했을 때 브라우저가 일으키는 일련의 이벤트를 순서대로 흉내 낸다. 클릭이면 pointerdown, mousedown, focus, pointerup, mouseup, click이 이어지고, 글자 입력이면 글자마다 keydown, keypress, input, keyup이 생긴다.
+
+차이는 사람이 할 수 없는 동작에서 드러난다. 다른 요소에 가려져 `pointer-events: none`인 버튼을 두 방법으로 눌러 봤다.
+
+```tsx
+<button onClick={() => console.log("clicked")} style={{ pointerEvents: "none" }}>저장</button>
+```
+
+```text
+stdout | src/exp.test.jsx > D fireEvent는 누른다
+clicked
+
+ FAIL  src/exp.test.jsx > E userEvent는 거부한다
+Error: Unable to perform pointer interaction as the element has `pointer-events: none`:
+
+BUTTON(label=저장)
+```
+
+`fireEvent`는 사용자가 누를 수 없는 버튼을 눌러 버렸고, `userEvent`는 누를 수 없다고 알려 줬다. 오버레이에 가려진 버튼, `disabled`인 입력칸에 타이핑하기 같은 버그는 `userEvent`가 잡는다. `fireEvent.change(input, { target: { value: "abc" } })`는 값만 바꿔서 `onKeyDown`에 건 단축키, `maxLength`, IME 처리 같은 것은 확인하지 못한다.
+
+쓰는 법도 정해져 있다. `userEvent.setup()`을 렌더링 전에 부르고, 모든 동작을 `await`한다. v14부터 동작이 모두 비동기다. `await`를 빼먹으면 다음 줄이 이벤트가 끝나기 전에 돌아 간헐적으로 실패한다. `fireEvent`가 필요한 경우는 `scroll`처럼 `userEvent`에 해당 동작이 없는 이벤트를 보낼 때 정도다.
+
+## act 경고는 보지 않은 변화를 알린다
+
+React 테스트를 쓰다 보면 이 경고를 꼭 만난다. 검색 버튼을 `fireEvent`로 누르고, 응답이 오길 `setTimeout`으로 300ms 기다린 다음 확인하게 짰다.
+
+```tsx
+fireEvent.click(screen.getByRole("button", { name: "검색" }));
+await new Promise((r) => setTimeout(r, 300));
+expect(screen.getByRole("list", { name: "검색 결과" })).toBeInTheDocument();
+```
+
+```text
+stderr | src/exp2.test.jsx > C act 밖 업데이트
+An update to UserSearch inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+```
+
+테스트는 통과했는데 경고가 났다. `act`는 "이 안에서 일어난 업데이트와 effect를 모두 처리하고 DOM에 반영한 다음 돌아오라"는 표시다. React는 테스트 환경에서 `act` 밖에서 상태가 바뀌면, 테스트가 그 변화를 보지 못한 채 다음 줄로 갔을 수 있다고 경고한다. 여기서는 클릭은 `fireEvent`가 감싼 `act` 안이었지만, 300ms 뒤 응답이 와서 `setUsers`가 불린 순간은 아무도 감싸지 않았다.
+
+이 경고를 끄려고 테스트 곳곳에 `act`를 직접 두르는 건 대개 틀린 처방이다. 고칠 곳은 "무엇을 기다리는지"다. 앞의 `findByRole`로 바꾸면 Testing Library가 기다리는 동안 `act`로 감싸서 경고가 사라진다. Testing Library의 `render`, `fireEvent`, `userEvent`, `waitFor`는 이미 `act`를 쓴다.
+
+경고가 테스트가 끝난 뒤에 나온다면 다른 신호다. 테스트는 끝났는데 컴포넌트가 아직 무언가를 하고 있다는 뜻이다. 확인하지 않은 요청이 늦게 도착했거나, 정리하지 않은 타이머가 돈다. 단언을 하나 추가해 그 결과까지 기다리거나, 컴포넌트의 effect 정리(clean-up)가 빠지지 않았는지 본다. 운영에서 언마운트 뒤 상태를 바꾸는 버그와 같은 뿌리일 때가 많다.
+
+## 네트워크는 경계에서 가로챈다
+
+컴포넌트가 서버에서 데이터를 받는다면, 테스트에서 진짜 서버를 부를 수는 없다. 흔한 방법은 `fetch`나 axios 모듈, 데이터 훅을 목으로 바꾸는 것이다. 이러면 처음 본 장면과 같은 문제가 생긴다. 데이터 훅을 TanStack Query로 바꾸는 순간 목이 맞지 않게 되고, 캐시·재시도·로딩 상태를 실제로 거치지 않는다.
+
+MSW(Mock Service Worker)는 한 단계 바깥, 요청이 앱을 떠난 자리에서 가로챈다. 컴포넌트, 훅, `fetch` 호출은 전부 진짜로 돌고, 응답만 가짜다. Node에서는 요청 모듈을 가로채는 방식으로, 브라우저에서는 이름처럼 Service Worker로 동작한다. 같은 핸들러를 테스트와 로컬 개발, Storybook에서 함께 쓴다.
+
+```ts
+// src/test/server.ts
+import { http, HttpResponse } from "msw";
+import { setupServer } from "msw/node";
+
+export const server = setupServer(
+  http.get("https://api.example.com/users", ({ request }) => {
+    const q = new URL(request.url).searchParams.get("q") ?? "";
+    const all = [{ id: 1, name: "김민지" }, { id: 2, name: "김도윤" }, { id: 3, name: "이서준" }];
+    return HttpResponse.json(all.filter((u) => u.name.includes(q)));
+  }),
+);
+```
+
+```ts
+// src/test/setup.ts
+beforeAll(() => server.listen({ onUnhandledRequest: "error" })); // 핸들러 없는 요청은 실패시킨다
+afterEach(() => server.resetHandlers());                         // 테스트에서 덮은 핸들러를 되돌린다
+afterAll(() => server.close());
+```
+
+실패 응답은 테스트 안에서 `server.use`로 덮는다. 기본 핸들러는 성공 경로만 두고, 에러·빈 결과·느린 응답은 그 테스트에서만 바꾼다.
+
+```tsx
+test("서버가 500을 주면 오류를 알린다", async () => {
+  server.use(http.get("https://api.example.com/users", () => new HttpResponse(null, { status: 500 })));
+  const user = userEvent.setup();
+  render(<UserSearch />);
+  await user.click(screen.getByRole("button", { name: "검색" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("검색에 실패했다");
+});
+```
+
+```text
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Duration  2.01s (environment 46%, transform 23%, tests 19%, setup 9%, import 2%)
+```
+
+`onUnhandledRequest: "error"`는 꼭 켠다. 기본값은 경고만 찍고 요청을 진짜 네트워크로 흘려보낸다. 새로 추가한 API에 핸들러를 안 만들었는데 테스트가 운 좋게 통과하거나, CI에서 외부로 나가는 요청이 막혀 엉뚱한 곳에서 실패한다. `resetHandlers`를 빼면 앞 테스트에서 덮어쓴 500 응답이 다음 테스트로 새어 순서에 따라 결과가 달라진다.
+
+TanStack Query 같은 캐시 라이브러리를 쓴다면 테스트마다 새 `QueryClient`를 만들고 재시도를 끈다. 캐시를 공유하면 앞 테스트의 응답이 다음 테스트에 남고, 기본 재시도가 켜져 있으면 에러 테스트가 재시도 간격만큼 오래 걸리다 `findBy`의 1초를 넘긴다. 캐시 동작 자체는 [클라이언트 데이터 캐시](/posts/client-data-cache)에서 다룬다.
+
+핸들러가 실제 API와 어긋날 수 있다는 약점은 남는다. 서버가 필드 이름을 바꿔도 MSW 핸들러는 옛 모양을 계속 준다. OpenAPI 스키마에서 응답 타입과 핸들러를 만들거나, 핸들러가 돌려주는 값에 서버와 같은 타입을 붙여 컴파일러가 어긋남을 잡게 한다. 그래도 못 잡는 계약 문제는 아래의 E2E가 맡는다.
+
+## 스냅샷이 아무것도 지키지 못하는 이유
+
+`expect(container).toMatchSnapshot()` 한 줄이면 컴포넌트 전체 마크업이 파일로 저장되고, 다음부터 한 글자라도 달라지면 실패한다. 쉬워 보이지만 두 가지로 망가진다.
+
+첫째, 무엇이 맞는지 말하지 않는다. 수백 줄짜리 스냅샷이 실패하면 리뷰어는 차이가 의도한 것인지 판단해야 하는데, 버튼 클래스 하나 바꾼 PR에서 스냅샷 열 개가 바뀌면 다들 `-u`로 갱신하고 넘어간다. 버그가 들어간 마크업도 그렇게 새 정답이 된다. 둘째, 상관없는 변화에도 깨진다. 디자인 시스템 컴포넌트의 내부 `div` 하나가 바뀌면 그걸 쓰는 모든 화면의 스냅샷이 깨진다. 처음 장면의 "통과해야 할 때 깨지는 테스트"가 대량으로 생긴다.
+
+스냅샷이 맞는 자리는 작고, 사람이 읽을 수 있고, 바뀌면 진짜 의미가 있는 출력이다. 에러 메시지 문자열, 직렬화한 설정 객체, 코드 생성기 결과 같은 것이다. 이때도 `toMatchInlineSnapshot()`으로 테스트 파일 안에 두면 리뷰에서 바로 읽힌다. 화면이 맞는지는 역할과 글자로 단언하고, 생김새가 맞는지는 아래의 시각 회귀로 본다.
+
+## 브라우저에서만 보이는 버그는 E2E로
+
+jsdom에서 통과해도 실제 브라우저에서 깨지는 것이 있다. 레이아웃 때문에 버튼이 가려지는 일, 라우팅과 새로고침, 쿠키와 리다이렉트가 얽힌 로그인, 여러 페이지를 지나는 결제 흐름, 실제 서버와의 계약이다. 이건 진짜 브라우저로 앱을 띄워 끝까지 눌러 보는 E2E 테스트가 맡는다. 요즘은 Playwright를 많이 쓴다. 크로미움, 파이어폭스, 웹킷을 같은 API로 돌린다.
+
+Playwright의 핵심은 기다림이 내장되어 있다는 점이다. `click()`은 요소가 보이고, 움직임이 멈추고(stable), 다른 요소에 가려지지 않고, 활성화될 때까지 기다린 뒤 누른다. 단언도 기다린다. 같은 장면을 두 방식으로 써 봤다. 버튼을 누르면 300ms 뒤에 개수가 1로 바뀌는 페이지다.
+
+```ts
+test("값을 한 번 읽고 비교한다", async ({ page }) => {
+  await page.goto(url);
+  await page.getByRole("button", { name: "장바구니에 담기" }).click();
+  expect(await page.locator("#count").textContent()).toBe("1");
+});
+
+test("웹 우선 단언은 다시 확인한다", async ({ page }) => {
+  await page.goto(url);
+  await page.getByRole("button", { name: "장바구니에 담기" }).click();
+  await expect(page.getByRole("status")).toHaveText("1");
+});
+```
+
+```text
+  ✘  1 e2e/cart.spec.mjs:4:1 › 값을 한 번 읽고 비교한다 (377ms)
+  ✓  2 e2e/cart.spec.mjs:9:1 › 웹 우선 단언은 다시 확인한다 (618ms)
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: "1"
+    Received: "0"
+```
+
+첫 번째는 `textContent()`로 값을 한 번 읽어 와서 일반 `expect`로 비교한다. 읽은 순간은 아직 0이다. 두 번째의 `await expect(locator).toHaveText()`는 웹 우선 단언(web-first assertion)이라, 조건이 맞을 때까지 기본 5초 동안 다시 확인한다. Testing Library의 `findBy`와 같은 생각이다. 쿼리도 `getByRole`을 쓸 수 있다. `output` 요소의 암묵적 역할이 `status`라서 id 없이 찾았다.
+
+E2E가 흔들리는 원인은 대부분 정해져 있다.
+
+- `page.waitForTimeout(1000)` 같은 고정 대기. 기계가 느리면 모자라고, 빠르면 시간만 버린다. 기다릴 조건을 단언으로 적는다.
+- 테스트끼리 데이터를 공유한다. 한 테스트가 만든 주문을 다른 테스트가 지운다. 테스트마다 자기 계정과 데이터를 만들고, 병렬로 돌아도 겹치지 않게 이름에 고유 값을 붙인다.
+- 순서에 기대는 테스트. 로그인 테스트가 먼저 돌아야 다음 테스트가 통과한다. Playwright는 테스트마다 새 브라우저 컨텍스트(쿠키·저장소가 비어 있는 프로필)를 주므로, 로그인 상태가 필요하면 `storageState`로 미리 저장한 상태를 불러온다.
+- 진짜 외부 서비스. 결제 대행사 샌드박스나 이메일 발송이 느려지면 내 테스트가 깨진다. `page.route`로 외부 요청만 가로채 가짜 응답을 준다.
+- 애니메이션과 시계. 움직이는 요소는 stable을 기다리느라 늦고, 날짜가 들어간 화면은 매일 바뀐다. `page.clock`으로 시간을 고정한다.
+
+실패했을 때는 트레이스를 본다. `trace: "retain-on-failure"`나 `"on-first-retry"`로 두면 실패한 테스트마다 `trace.zip`이 남는다. 위 실패에서도 이렇게 경로가 찍혔다.
+
+```text
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/cart-값을-한-번-읽고-비교한다/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/cart-값을-한-번-읽고-비교한다/trace.zip
+```
+
+트레이스 뷰어는 동작마다 그 순간의 DOM 스냅샷, 콘솔, 네트워크 요청을 보여 준다. CI에서만 깨지는 테스트를 로컬에서 재현하려고 애쓰기 전에 트레이스부터 연다. 클릭한 순간 화면에 로딩 오버레이가 떠 있었는지, API가 500을 줬는지가 거기 있다. 흔들리는 테스트를 어떻게 격리하고 고칠지는 [CI/CD](/posts/ci-cd-basics)에서 다룬다.
+
+E2E는 비싸다. 하나에 수 초가 걸리고, 깨지면 원인이 앱 전체 어디든 될 수 있다. 그래서 돈과 직결되거나 깨지면 서비스가 멈추는 흐름만 둔다. 가입, 로그인, 검색에서 장바구니를 거쳐 결제까지 같은 것이다. 폼 검증 문구 하나하나를 E2E로 확인하는 건 통합 테스트로 내린다.
+
+## 픽셀을 비교하는 시각 회귀
+
+역할과 글자로는 "버튼이 있다"까지만 안다. 버튼이 화면 밖으로 밀렸는지, 다크 모드에서 글자가 배경과 같은 색인지는 모른다. 시각 회귀 테스트는 화면을 찍어 이전 기준 이미지와 픽셀 단위로 비교한다. Playwright에서는 `await expect(page).toHaveScreenshot()` 한 줄이고, Storybook 스토리마다 찍어 주는 서비스도 있다.
+
+문제는 픽셀이 생각보다 자주 다르다는 것이다. 운영체제마다 글꼴 렌더링이 달라서 맥에서 만든 기준 이미지는 리눅스 CI에서 깨진다. 기준 이미지는 CI와 같은 도커 이미지 안에서 만들고 갱신한다. 시계, 광고, 무작위 추천처럼 매번 바뀌는 영역은 `mask` 옵션으로 가린다. 애니메이션은 Playwright가 스크린샷 때 기본으로 멈춘다. 그래도 남는 미세한 차이는 `maxDiffPixelRatio` 같은 허용치로 흡수하는데, 너무 크게 잡으면 진짜 깨짐도 통과한다.
+
+시각 회귀는 디자인 시스템 컴포넌트와 핵심 화면 몇 개에 둔다. 페이지 전체를 모두 찍으면 공통 헤더 한 줄을 바꿀 때마다 기준 이미지 수백 장을 갱신해야 하고, 그러면 스냅샷 테스트와 같은 길로 간다. 다들 확인 없이 승인한다.
+
+## CI에서는 싼 것부터 돌린다
+
+층마다 비용이 다르니 CI에서도 순서를 둔다. 빨리 끝나고 실패 원인이 분명한 것부터 돌려서, 비싼 단계는 앞 단계를 통과한 커밋만 받게 한다.
+
+```bash
+# 1. 정적 분석: 수 초~수십 초
+pnpm typecheck && pnpm lint
+
+# 2. 단위·컴포넌트 테스트: jsdom, 병렬
+pnpm vitest run
+
+# 3. 빌드: 운영과 같은 산출물
+pnpm build
+
+# 4. E2E: 빌드한 앱(또는 미리보기 배포)에 대고, 브라우저 여러 대로 나눠 돈다
+pnpm playwright test --shard=1/4
+```
+
+E2E는 개발 서버가 아니라 빌드 결과에 대고 돌린다. 개발 서버에서만 되는 코드(개발용 프록시, 지연 컴파일 때문에 생기는 타이밍)를 운영에서 쓰는 것처럼 확인하는 실수를 막는다. 미리보기 배포가 있는 환경이면 그 주소에 대고 돌리는 것이 가장 운영에 가깝다.
+
+재시도는 CI에서만 켠다(`retries: process.env.CI ? 2 : 0`). 재시도로 통과한 테스트는 Playwright 결과에 flaky로 따로 표시되는데, 이걸 통과로 보고 넘기면 흔들리는 테스트가 계속 쌓인다. flaky 목록을 주기적으로 보고 고친다. PR마다 바뀐 파일과 관련된 테스트만 돌리는 기능(`vitest --changed`)은 빠른 확인용이고, `main`에 합칠 때는 전체를 돌린다.
+
+## 커버리지 숫자가 말해 주지 않는 것
+
+컴포넌트 테스트에서 커버리지는 특히 쉽게 부풀려진다. 컴포넌트를 `render`만 해도 렌더링에 지나간 줄이 모두 덮인 것으로 잡힌다. 단언이 하나도 없는 테스트가 80%를 만든다. 조건부 렌더링(`{error && <Alert />}`)은 줄 커버리지로는 덮였어도 분기 커버리지로 보면 한쪽만 지났을 수 있다. 숫자를 볼 거라면 분기 커버리지를 본다.
+
+커버리지는 "어디가 전혀 테스트되지 않았나"를 찾는 데 쓰고, "충분히 테스트됐나"를 판단하는 데는 쓰지 않는다. 결제 금액 계산처럼 중요한 모듈의 덮이지 않은 줄을 찾는 용도로는 훌륭하다. 반대로 전체 80% 같은 문턱을 강제하면 쉬운 줄을 덮는 의미 없는 테스트가 늘어난다. 테스트가 정말 버그를 잡는지 확인하는 변이 테스트는 [테스트 피라미드와 단위 테스트](/posts/test-pyramid-unit-tests)에서 본다.
+
+처음 장면으로 돌아가면, 깨진 스무 개를 사용자 행동으로 다시 쓰는 것이 정답이다. 훅 목을 걷어 내고, 버튼을 역할과 이름으로 찾고, 서버는 MSW로 바꾼다. 그러면 다음 리팩터링에서는 하나도 깨지지 않고, 수량이 안 오르는 버그가 생기면 그때 깨진다. 테스트가 해야 할 일이 그것이다.
+
+## 면접에서 나올 만한 질문
+
+### 프런트엔드 테스트는 무엇을 기준으로 써야 하나요?
+
+구현이 아니라 사용자가 관찰할 수 있는 결과를 기준으로 쓴다. 화면 사용자에게는 보이는 요소와 동작, 컴포넌트를 쓰는 개발자에게는 props와 콜백이 바깥이다. state 값이나 훅 호출 횟수를 확인하면 리팩터링할 때마다 깨지고, 정작 화면이 안 바뀌는 버그는 못 잡는다. 순수 함수는 반환값이 바깥이라 함수 단위로 테스트한다.
+
+### 테스트 트로피는 피라미드와 무엇이 다른가요?
+
+트로피는 받침에 정적 분석을 두고 가장 큰 몸통을 통합 테스트로 둔다. 프런트엔드 버그는 컴포넌트, 훅, 데이터 요청, 캐시가 맞물리는 이음매에서 많이 생기는데, 이걸 목으로 끊은 단위 테스트는 이음매를 확인하지 못하기 때문이다. 실제 컴포넌트 트리를 렌더링하고 네트워크만 MSW로 바꾸면 jsdom에서 빠르게 돌면서 이음매를 확인한다. 모양보다 "이 버그를 가장 싸게 잡는 층이 어디인가"가 기준이다.
+
+### getByRole을 1순위로 쓰는 이유는요?
+
+접근성 트리의 역할과 이름으로 찾기 때문이다. 스크린 리더가 요소를 읽는 방식과 같아서, `getByRole("button", { name: "검색" })`으로 못 찾는 요소는 보조 기술 사용자에게도 검색 버튼으로 전달되지 않는다. 테스트를 쓰면서 접근성 버그를 함께 잡고, 클래스나 구조가 바뀌어도 깨지지 않는다. `getByTestId`는 다른 방법이 없을 때만 쓴다.
+
+### getBy, queryBy, findBy는 언제 쓰나요?
+
+`getBy`는 지금 있어야 하는 요소, `queryBy`는 없음을 확인할 때, `findBy`는 비동기로 나타날 요소에 쓴다. `findBy`는 `getBy`를 `waitFor`로 감싼 것이라 50ms마다 다시 찾고 기본 1초까지 기다린다. 응답 뒤에 생기는 요소를 `getBy`로 찾으면 빠른 기계에서는 통과하고 느린 CI에서 깨지는 흔들리는 테스트가 된다.
+
+### act 경고는 왜 나오고 어떻게 고치나요?
+
+테스트 환경에서 `act` 밖에서 React 상태가 바뀌면, 테스트가 그 변화를 기다리지 않고 지나갔을 수 있다는 경고다. 보통 비동기 응답이나 타이머가 테스트가 확인하지 않은 시점에 상태를 바꿀 때 난다. `act`를 직접 두르기보다 `findBy`나 `waitFor`로 그 결과를 기다리게 고치는 게 맞다. 테스트가 끝난 뒤에 나오면 정리되지 않은 타이머나 늦게 온 요청을 의심한다.
+
+### fireEvent 대신 userEvent를 쓰는 이유는요?
+
+`userEvent`는 사람이 할 때 브라우저가 일으키는 이벤트를 순서대로 흉내 내고, 사람이 할 수 없는 동작은 거부한다. 클릭이면 pointer, mouse, focus, click 이벤트가 이어지고, `pointer-events: none`으로 가려진 버튼은 누를 수 없다고 에러를 낸다. `fireEvent`는 이벤트 하나만 바로 보내서 가려진 버튼도 눌러 버린다. 동작이 모두 비동기라 `await`를 빠뜨리지 않는다.
+
+### API를 목으로 바꿀 때 MSW를 쓰는 이유는요?
+
+요청이 앱을 떠난 네트워크 경계에서 가로채서 컴포넌트, 데이터 훅, 캐시가 모두 진짜로 돌기 때문이다. `fetch`나 데이터 훅을 목으로 바꾸면 라이브러리를 바꿀 때 목이 깨지고 재시도·캐시 동작은 확인하지 못한다. `onUnhandledRequest: "error"`로 빠진 핸들러를 잡고, 테스트마다 `resetHandlers`로 덮어쓴 응답을 되돌린다. 핸들러가 실제 API와 어긋나는 문제는 스키마 기반 타입과 E2E로 보완한다.
+
+### E2E 테스트가 흔들릴 때 어디부터 보나요?
+
+먼저 트레이스를 열어 실패 순간의 DOM, 콘솔, 네트워크를 본다. 원인은 대개 고정 대기, 테스트끼리 공유하는 데이터, 실행 순서 의존, 느린 외부 서비스, 시간에 따라 바뀌는 화면이다. 고정 대기는 웹 우선 단언으로, 공유 데이터는 테스트마다 만든 고유 데이터로, 외부 서비스는 `page.route`로 바꾼다. CI 재시도는 켜 두되 flaky로 표시된 테스트를 통과로 보지 않고 따로 고친다.

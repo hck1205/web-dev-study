@@ -1,0 +1,429 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-build-tooling");
+
+<EasyIntro>
+  코드를 고치고 저장하면 화면이 바로 바뀐다. 그런데 어떤 파일을 고치면 입력해 둔 글자가 그대로 남고, 어떤 파일을 고치면 화면이 통째로 새로 열려 다 지워진다.
+
+  개발 서버는 자동차 정비소와 비슷하다. 타이어 하나가 닳았으면 시동을 건 채로 그 타이어만 갈아 끼우지만, 엔진과 너무 얽힌 부품은 차를 세우고 처음부터 다시 시동을 걸어야 바꿀 수 있다. 화면이 새로 열리는 건 이렇게 차를 다시 세운 경우다.
+
+  손님에게 내보낼 때는 정비소가 아니라 공장에서 차를 완성품으로 다시 조립한다. 오래된 도로에서도 달리도록 부품을 바꿔 끼우면 차가 무거워지고, 설계도를 함께 넣어 보내면 남이 설계를 다 들여다볼 수 있다. 그래서 개발할 때와 내보낼 때 도구가 하는 일이 다르다는 걸 알아야 사고를 막는다.
+</EasyIntro>
+
+회원 가입 폼을 만들고 있다. 이메일을 입력해 둔 채 라벨 글자 하나를 고치고 저장하면, 입력한 이메일이 그대로 남아 있다. 그런데 같은 파일에 검증 함수를 하나 export한 뒤로는 저장할 때마다 화면이 새로 열리며 입력이 지워진다. 터미널에는 이런 줄이 찍힌다.
+
+```text
+12:43:11 PM [vite] (client) hmr update /src/SignupForm.tsx
+12:43:11 PM [vite] (client) hmr invalidate /src/SignupForm.tsx Could not Fast Refresh ("isValidEmail" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react#consistent-components-exports
+12:43:11 PM [vite] (client) page reload src/SignupForm.tsx
+```
+
+코드에는 아무 문제가 없다. 개발 서버가 "이 파일은 바꿔 끼울 수 없다"고 판단하고 페이지 전체를 다시 불렀을 뿐이다. 이 글은 개발 서버가 그 판단을 어떻게 내리는지에서 출발한다. webpack처럼 묶어서 띄우는 개발 서버와 Vite처럼 요청받은 파일만 바꿔 주는 개발 서버의 차이, 의존성 사전 번들링, HMR이 바꿔 끼울 경계를 찾는 방법, React Fast Refresh가 상태를 지키는 조건을 본 뒤, 트랜스파일러와 타입 검사, 대상 브라우저와 번들 크기, 소스맵 종류, 환경 변수로 넘어간다.
+
+실험은 Ubuntu 24.04, 4코어 Xeon 2.8GHz에서 Node.js 22.22, Vite 8.3.5와 @vitejs/plugin-react 6.1, webpack 5.112(webpack-dev-server 6.1, babel-loader), Babel 8.0, SWC 1.16, esbuild 0.28, TypeScript 5.9.3과 7.0.2, Chromium 141로 돌렸다.
+
+이 주제의 다른 글: 번들러가 경로를 찾고 모듈을 묶는 과정, 묶지 않는 개발 서버가 요청을 몇 개 만드는지, 트랜스파일과 폴리필의 차이, browserslist 질의 읽기, hidden 소스맵, `define`으로 박히는 값은 [번들러 기초](/posts/bundler-basics)에서 실제 빌드로 따라갔다. 청크 나누기와 트리 셰이킹, 배럴 파일 문제는 [코드 스플리팅과 트리 셰이킹](/posts/code-splitting)에 있다. 이 글은 그 위에서 "개발 중에 무슨 일이 일어나나"와 "어떤 도구를 어떤 설정으로 고르나"를 다룬다.
+
+## 묶어서 띄우는 서버, 요청받고 바꾸는 서버
+
+webpack-dev-server는 시작할 때 진입점에서 닿는 모든 모듈을 읽고 변환해서 번들을 메모리에 만든다. 브라우저는 그 번들을 받는다. 파일을 고치면 바뀐 모듈만 다시 변환하고 번들의 해당 부분을 갈아 끼운다. Vite의 개발 서버는 시작할 때 소스 코드를 거의 건드리지 않는다. 브라우저가 `<script type="module">`로 진입 파일을 요청하면 그 파일 하나를 변환해서 주고, 브라우저가 그 안의 `import`를 읽어 다음 파일을 요청하면 또 그것만 변환한다. 묶는 일을 브라우저의 ES 모듈 로더에 맡긴 셈이다.
+
+같은 앱으로 두 방식을 비교했다. 컴포넌트 2000개가 이진 트리 모양으로 서로를 import하는 React 앱이다. webpack 쪽은 흔한 설정대로 babel-loader로 TSX를 변환하고 React Fast Refresh 플러그인을 붙였다. 1500번째 컴포넌트의 글자를 바꿔 저장하고, 브라우저 화면에 바뀐 글자가 보일 때까지 걸린 시간을 세 번 쟀다.
+
+```text
+vite dev      ready in 357 ms     첫 로드 3813~5181ms, 요청 2009개   저장 → 화면 251, 248, 250ms
+webpack dev   compiled in 10955ms 첫 로드 897~1711ms, 요청 2개       저장 → 화면 698, 689, 701ms
+```
+
+Vite는 0.4초 만에 떴지만 첫 화면까지 4~5초가 걸렸다. 브라우저가 모듈 2000개를 하나씩 요청하고, 서버가 요청마다 변환해서다. webpack은 뜨는 데 11초가 걸렸지만, 한 번 뜬 뒤 첫 화면은 1초 안팎이다. 이미 묶인 번들 하나를 받기 때문이다. 파일 하나를 고쳤을 때는 Vite가 250ms, webpack이 700ms였다. webpack은 바뀐 모듈을 다시 변환한 뒤(로그로는 480~527ms) 번들 조각을 다시 만들어 보내야 하고, Vite는 바뀐 파일 하나만 변환해 브라우저가 그 파일을 다시 import하게 하면 끝난다.
+
+이 숫자가 말하는 건 "어느 쪽이 빠르다"보다 "어디에 시간을 쓰느냐"다. webpack 방식은 시작할 때 앱 크기만큼 비용을 치르고, 그 뒤로는 변경 비용도 앱 크기에 따라 조금씩 는다. Vite 방식은 시작 비용이 거의 없고 수정 한 번의 비용이 앱 크기와 거의 상관없는 대신, 페이지를 새로 열 때마다 화면에 필요한 모듈 수만큼 요청이 생긴다. 모듈이 수천 개인 화면이라면 새로고침이 느리게 느껴지고, 그래서 Vite 개발 서버에서는 HMR이 실패해 전체 새로고침으로 떨어지는 일이 더 아프다. 처음 장면의 폼이 그 경우다.
+
+webpack 쪽도 Fast Refresh 플러그인을 빼면 수정할 때마다 페이지 전체를 다시 불러 1.5~1.8초가 걸렸다. HMR은 개발 서버가 저절로 해 주는 게 아니라, 모듈을 바꿔 끼워도 된다고 알려 주는 코드가 있어야 동작한다. 그 코드를 누가 넣는지는 아래에서 본다.
+
+## node_modules는 미리 한 번 묶어 둔다
+
+Vite가 소스는 묶지 않으면서 예외로 두는 게 `node_modules`의 패키지다. 처음 띄울 때 소스에서 import하는 패키지를 찾아 각각 한 파일로 묶어 `node_modules/.vite/deps`에 둔다. 이걸 의존성 사전 번들링(dependency pre-bundling)이라고 한다. 이유는 둘이다.
+
+하나는 요청 수다. `lodash-es`는 파일 하나에 함수 하나씩, 644개 파일로 나뉜 패키지다. `import { debounce } from "lodash-es"`는 패키지 입구 파일을 거치는데, 이 파일이 나머지를 전부 다시 export한다. 사전 번들링을 끄고(`optimizeDeps.exclude: ["lodash-es"]`) 같은 페이지를 열어 봤다.
+
+```text
+사전 번들링 켬   requests 17    lodash requests 1     load 299 ms
+사전 번들링 끔   requests 656   lodash requests 640   load 1360~2782 ms
+```
+
+`debounce` 하나를 쓰려고 브라우저가 640개 파일을 받았다. 사전 번들링은 이 640개를 한 파일로 만들어 요청 하나로 줄인다. 묶인 파일은 `?v=해시`가 붙은 주소에 오래 캐시하라는 헤더로 나가서, 다음 새로고침부터는 브라우저 캐시에서 바로 읽힌다.
+
+다른 하나는 CommonJS다. 브라우저의 ES 모듈 로더는 `require`와 `module.exports`를 모른다. React나 dayjs처럼 CommonJS로 배포되는 패키지는 사전 번들링 단계에서 ES 모듈로 감싼다. 이 단계를 건너뛰게 하면 바로 깨진다. dayjs를 제외 목록에 넣었더니 브라우저가 이렇게 멈췄다.
+
+```text
+[pageerror] The requested module '/@fs/…/node_modules/dayjs/dayjs.min.js?v=19451bef' does not provide an export named 'default'
+```
+
+사전 번들링 결과에는 무엇을 언제 묶었는지가 `_metadata.json`에 남는다.
+
+```text
+{
+  "hash": "34c721cf",
+  "configHash": "51e82e1e",
+  "lockfileHash": "e460fc7b",
+  "browserHash": "25f14942",
+  "optimized": {
+    "react-dom": {
+      "src": "../../react-dom/index.js",
+      "file": "react-dom.js",
+      "fileHash": "10f3cc89",
+      "needsInterop": true
+    },
+```
+
+`lockfileHash`와 `configHash`가 바뀌면, 즉 패키지를 설치하거나 Vite 설정을 고치면 다시 묶는다. `needsInterop: true`는 CommonJS를 감쌌다는 표시다. Vite 7까지는 이 일을 esbuild가 했고, Vite 8부터는 Rolldown이 한다.
+
+실무에서 이 장치가 드러나는 순간이 있다. 처음 띄울 때 소스를 훑어 찾지 못한 패키지, 예를 들어 사용자가 어떤 화면에 들어가야 동적 `import()`로 불러오는 패키지를 나중에 만나면 그 자리에서 다시 묶고 페이지를 새로고침한다. 새 패키지 두 개를 쓰는 코드를 서버가 떠 있는 상태에서 추가했더니 이렇게 찍혔다.
+
+```text
+12:44:05 PM [vite] (client) dependencies optimized: dayjs, lodash-es
+12:44:05 PM [vite] (client) optimized dependencies changed. reloading
+```
+
+개발 중에 어떤 화면에 처음 들어갈 때마다 페이지가 한 번씩 저절로 새로고침된다면 이것이다. `optimizeDeps.include`에 그 패키지를 적어 두면 처음부터 묶는다. 모노레포에서 `workspace:`로 연결한 내부 패키지는 `node_modules` 밖의 소스로 취급돼 사전 번들링 대상이 아니다. 그 패키지가 CommonJS로 빌드돼 있으면 위와 같은 `default` 에러가 나니 `include`에 넣는다. 캐시가 꼬인 것 같으면 `vite --force`로 다시 묶는다.
+
+## 고친 파일 하나를 바꿔 끼우는 길
+
+HMR(Hot Module Replacement)은 페이지를 새로 열지 않고 바뀐 모듈만 실행 중인 앱에 갈아 끼우는 기능이다. 개발 서버는 파일 사이의 import 관계를 그래프로 들고 있다. 어떤 모듈이 바뀌면 그 모듈이 "나는 바뀌어도 스스로 처리할 수 있다"고 선언했는지(`import.meta.hot.accept()`) 본다. 선언했으면 그 모듈이 경계(boundary)가 되어 새 버전만 다시 실행한다. 선언하지 않았으면 그 모듈을 import하는 쪽으로 한 칸 올라가서 같은 질문을 한다. 어느 갈래로 올라가든 경계를 만나지 못하고 진입 파일까지 닿으면, 바꿔 끼울 방법이 없으니 페이지 전체를 다시 불러온다.
+
+아래 그림에서 다음을 누르면 파일 하나를 저장했을 때 서버와 브라우저 사이에 무엇이 오가는지 보인다.
+
+<SequenceDiagram
+  caption="저장 한 번에 서버는 경계를 찾고, 브라우저는 새 모듈을 import해 바꿔 끼운다"
+  actors={[
+    { id: "fs", label: "파일 감시" },
+    { id: "server", label: "개발 서버" },
+    { id: "client", label: "브라우저 HMR" },
+    { id: "react", label: "React" },
+  ]}
+  steps={[
+    { from: "fs", to: "server", label: "validate.ts 변경", title: "운영체제가 변경을 알린다", detail: "리눅스는 inotify로 파일 변경을 알려 준다. 서버는 이 파일의 변환 캐시를 버린다." },
+    { from: "server", to: "server", label: "그래프 거슬러 오르기", title: "바꿔 끼울 경계를 찾는다", detail: "validate.ts는 accept하지 않는다. import하는 SignupForm.tsx로 올라가니 React 플러그인이 넣은 accept가 있다. 여기가 경계다." },
+    { from: "server", to: "client", label: "ws: update", title: "웹소켓으로 갱신을 알린다", detail: "바뀐 경계 모듈의 경로와 시각을 보낸다.", payload: "{ type: 'update', updates: [{ type: 'js-update', path: '/src/SignupForm.tsx', acceptedPath: '/src/SignupForm.tsx', timestamp: … }] }" },
+    { from: "client", to: "server", label: "import(?t=…)", title: "새 주소로 다시 import한다", detail: "주소에 시각을 붙여 브라우저 모듈 캐시를 피한다. 서버는 이 파일과, 바뀐 validate.ts를 새로 변환해 준다." },
+    { from: "client", to: "react", label: "accept 콜백", title: "새 모듈을 넘겨받는다", detail: "React Refresh 런타임이 새 컴포넌트 함수를 이전 것과 같은 자리로 등록한다." },
+    { from: "react", to: "react", label: "다시 렌더링", title: "상태는 그대로, 코드만 새것", detail: "컴포넌트를 마운트 해제하지 않고 새 함수로 다시 렌더링한다. 입력해 둔 이메일이 남는다." },
+  ]}
+/>
+
+실제로 `validate.ts`만 고쳤을 때 서버 로그에는 바뀐 파일이 아니라 경계가 찍힌다.
+
+```text
+12:43:31 PM [vite] (client) hmr update /src/SignupForm.tsx
+```
+
+경계를 못 찾는 경우도 바로 확인된다. 진입 파일인 `main.tsx`를 고치면 그 위로 올라갈 곳이 없으니 `page reload src/main.tsx`가 찍히고 입력이 지워졌다. CSS 파일은 Vite가 스스로 accept하는 모듈이라, `theme.css`를 고치면 `hmr update /src/theme.css`만 찍히고 스타일 태그 내용만 바뀐다.
+
+여러 컴포넌트가 함께 쓰는 설정 파일을 진입 파일도 import하고 있다면, 그 파일을 고칠 때마다 전체 새로고침이 된다. 갈래 하나라도 진입 파일까지 경계 없이 닿으면 실패이기 때문이다. 이 탐색을 직접 짜 보자. `importers`는 "이 파일을 import하는 파일들"이고, `accepts`는 스스로 바뀌어도 된다고 선언한 파일들이다. 경계 목록을 이름순으로 돌려주고, 진입 파일(import하는 쪽이 없는 파일)까지 경계 없이 닿으면 `"full-reload"`를 돌려준다. 순환 import가 있어도 끝나야 한다.
+
+<CodePlayground
+  caption="HMR 경계 찾기"
+  functionName="findBoundaries"
+  initialCode={`function findBoundaries(importers, accepts, changed) {
+  // importers: { "src/validate.ts": ["src/SignupForm.tsx", ...], "src/main.tsx": [] }
+  // accepts: 스스로 accept하는 파일 목록
+  // 돌려줄 값: 경계 파일 배열(이름순) 또는 "full-reload"
+  return [];
+}`}
+  solution={`function findBoundaries(importers, accepts, changed) {
+  const boundaries = [];
+  const seen = new Set(); // 순환 import에서 끝없이 돌지 않게
+  const stack = [changed];
+  while (stack.length > 0) {
+    const file = stack.pop();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    if (accepts.includes(file)) {
+      boundaries.push(file); // 여기서 멈추고 이 모듈만 다시 실행한다
+      continue;
+    }
+    const parents = importers[file] ?? [];
+    if (parents.length === 0) return "full-reload"; // 진입 파일까지 경계가 없었다
+    stack.push(...parents);
+  }
+  return boundaries.sort();
+}`}
+  tests={[
+    { label: "컴포넌트 파일은 스스로 경계", args: [{ "src/main.tsx": [], "src/App.tsx": ["src/main.tsx"], "src/SignupForm.tsx": ["src/App.tsx"], "src/LoginForm.tsx": ["src/App.tsx"], "src/validate.ts": ["src/SignupForm.tsx", "src/LoginForm.tsx"], "src/config.ts": ["src/main.tsx", "src/SignupForm.tsx"], "src/theme.css": ["src/main.tsx"] }, ["src/App.tsx", "src/SignupForm.tsx", "src/LoginForm.tsx", "src/theme.css"], "src/SignupForm.tsx"], expected: ["src/SignupForm.tsx"] },
+    { label: "유틸은 쓰는 컴포넌트 둘이 경계", args: [{ "src/main.tsx": [], "src/App.tsx": ["src/main.tsx"], "src/SignupForm.tsx": ["src/App.tsx"], "src/LoginForm.tsx": ["src/App.tsx"], "src/validate.ts": ["src/SignupForm.tsx", "src/LoginForm.tsx"], "src/config.ts": ["src/main.tsx", "src/SignupForm.tsx"], "src/theme.css": ["src/main.tsx"] }, ["src/App.tsx", "src/SignupForm.tsx", "src/LoginForm.tsx", "src/theme.css"], "src/validate.ts"], expected: ["src/LoginForm.tsx", "src/SignupForm.tsx"] },
+    { label: "진입 파일도 import하는 설정", args: [{ "src/main.tsx": [], "src/App.tsx": ["src/main.tsx"], "src/SignupForm.tsx": ["src/App.tsx"], "src/LoginForm.tsx": ["src/App.tsx"], "src/validate.ts": ["src/SignupForm.tsx", "src/LoginForm.tsx"], "src/config.ts": ["src/main.tsx", "src/SignupForm.tsx"], "src/theme.css": ["src/main.tsx"] }, ["src/App.tsx", "src/SignupForm.tsx", "src/LoginForm.tsx", "src/theme.css"], "src/config.ts"], expected: "full-reload" },
+    { label: "CSS는 스스로 경계", args: [{ "src/main.tsx": [], "src/App.tsx": ["src/main.tsx"], "src/SignupForm.tsx": ["src/App.tsx"], "src/LoginForm.tsx": ["src/App.tsx"], "src/validate.ts": ["src/SignupForm.tsx", "src/LoginForm.tsx"], "src/config.ts": ["src/main.tsx", "src/SignupForm.tsx"], "src/theme.css": ["src/main.tsx"] }, ["src/App.tsx", "src/SignupForm.tsx", "src/LoginForm.tsx", "src/theme.css"], "src/theme.css"], expected: ["src/theme.css"] },
+    { label: "진입 파일 자체", args: [{ "src/main.tsx": [], "src/App.tsx": ["src/main.tsx"], "src/SignupForm.tsx": ["src/App.tsx"], "src/LoginForm.tsx": ["src/App.tsx"], "src/validate.ts": ["src/SignupForm.tsx", "src/LoginForm.tsx"], "src/config.ts": ["src/main.tsx", "src/SignupForm.tsx"], "src/theme.css": ["src/main.tsx"] }, ["src/App.tsx", "src/SignupForm.tsx", "src/LoginForm.tsx", "src/theme.css"], "src/main.tsx"], expected: "full-reload" },
+    { label: "순환 import가 있어도 끝난다", args: [{ "a.ts": ["b.ts"], "b.ts": ["a.ts", "View.tsx"], "View.tsx": ["main.ts"], "main.ts": [] }, ["View.tsx"], "a.ts"], expected: ["View.tsx"] },
+  ]}
+/>
+
+실제 Vite는 여기에 몇 가지를 더 본다. 모듈이 특정 의존성만 받겠다고 선언하는 경우(`accept("./dep", cb)`), 경계 모듈이 스스로를 무효로 돌리는 경우(`invalidate`), 순환 import 안에서 경계를 만나 결과가 꼬일 수 있는 경우다. 마지막 경우에는 안전하게 전체 새로고침을 고른다. 뼈대는 위와 같다.
+
+## Fast Refresh가 상태를 지키는 조건
+
+`.tsx` 파일마다 `import.meta.hot.accept`를 넣어 주는 건 React 플러그인이다. 그런데 무조건 넣는 게 아니라 "이 모듈의 export가 전부 React 컴포넌트일 때만 바꿔 끼운다"는 조건을 건다. 컴포넌트가 아닌 export, 예를 들어 함수 `isValidEmail`이 있으면 이 파일을 import한 다른 모듈들이 옛 함수를 계속 들고 있게 된다. React는 컴포넌트는 새 함수로 바꿔 그릴 수 있지만, 아무 함수나 쓰는 쪽까지 찾아가 바꿔 줄 수는 없다. 그래서 플러그인은 그 모듈을 무효(invalidate)로 돌리고 위로 올려 보내고, 결국 전체 새로고침이 된다. 처음 장면의 로그가 이것이다.
+
+같은 폼 파일로 하나씩 바꿔 가며 확인했다. 입력란에 이메일을 넣어 둔 뒤 파일을 고치고, 1.5초 뒤 입력란이 그대로인지 봤다.
+
+```text
+컴포넌트만 export, 라벨 수정                   → hmr update, 입력 유지
+export const MAX_LENGTH = 20 추가, 라벨 수정    → hmr update, 입력 유지
+MAX_LENGTH 값을 30으로 수정                    → hmr invalidate ("MAX_LENGTH" export is incompatible), page reload, 입력 사라짐
+export function isValidEmail 추가, 라벨 수정    → hmr invalidate ("isValidEmail" export is incompatible), page reload, 입력 사라짐
+isValidEmail을 validate.ts로 옮김, 라벨 수정    → hmr update, 입력 유지
+validate.ts의 함수 본문 수정                   → hmr update /src/SignupForm.tsx, 입력 유지
+컴포넌트에 useState 하나 추가                  → hmr update, 새로고침 없이 입력만 초기화
+```
+
+Vite의 React 플러그인은 숫자나 문자열 같은 원시값 상수 export는 값이 그대로인 동안 봐준다. 값이 바뀌면 그 상수를 쓰는 다른 모듈이 옛 값을 들고 있게 되니 새로고침한다. 함수 export는 고칠 때마다 새로고침이다. 해결은 단순하다. 컴포넌트 파일에서는 컴포넌트만 export하고, 상수·유틸·컨텍스트 객체·훅은 다른 파일로 옮긴다. ESLint의 `react-refresh/only-export-components` 규칙이 이걸 잡아 준다.
+
+마지막 줄도 알아 둘 만하다. 훅을 추가하거나 순서를 바꾸면 React Refresh는 이전 상태를 새 훅 목록에 맞출 수 없어서, 페이지는 그대로 두고 그 컴포넌트만 다시 마운트한다. 상태가 초기화되는 건 그 때문이다. 이 밖에 상태가 남지 않는 경우는 이렇다. 클래스 컴포넌트는 항상 다시 마운트된다. `export default () => <div />`처럼 이름 없는 화살표 함수를 내보내면 Refresh가 컴포넌트를 식별하지 못해 상태가 사라진다. 파일 위에 `// @refresh reset` 주석을 달면 일부러 매번 다시 마운트하게 할 수 있다. 그리고 Refresh 중에는 `useEffect`, `useMemo`, `useCallback`이 의존성 배열과 상관없이 다시 실행된다. 저장할 때마다 effect 안의 요청이 다시 나가는 게 버그가 아니라는 뜻이다. effect가 정리 함수를 제대로 갖고 있는지 확인하는 기회이기도 하다.
+
+webpack에서는 `@pmmmwh/react-refresh-webpack-plugin`과 Babel의 `react-refresh/babel` 플러그인이 같은 일을 한다. Next.js는 이 설정이 내장돼 있다. 규칙은 React Refresh 런타임이 정하는 것이라 도구가 달라도 같다.
+
+## 트랜스파일러는 파일 하나만 본다
+
+TSX를 브라우저가 읽는 자바스크립트로 바꾸는 도구가 트랜스파일러다. 지금 많이 쓰는 건 넷이다. Babel은 자바스크립트로 만든 가장 오래된 도구로, 플러그인으로 구문 트리를 마음대로 고칠 수 있다. SWC는 Rust로 만들었고 Next.js, Rspack, Vite의 SWC 플러그인이 쓴다. esbuild는 Go로 만든 번들러 겸 변환기다. Vite 8은 Rust로 만든 Oxc로 변환한다(Vite 8의 React 플러그인은 Babel에 의존하지 않는다). 그리고 TypeScript 컴파일러 `tsc` 자신도 변환을 할 수 있다.
+
+앞의 컴포넌트 2000개를 같은 설정(TSX, 자동 JSX 런타임, ES2022 출력)으로 한 파일씩 변환했다. 한 번 데운 뒤 두 번 잰 값이다.
+
+```text
+Babel 8                   4106~4790 ms / 2000 files
+SWC 1.16                   119~175  ms / 2000 files
+tsc 5.9 transpileModule   2934~3222 ms / 2000 files
+```
+
+SWC가 Babel보다 서른 배 넘게 빨랐다. esbuild는 자바스크립트 API가 Go 프로세스와 메시지를 주고받는 구조라 파일 하나씩 부르는 이 측정에서는 부르는 비용이 대부분이어서 뺐다. 같은 앱을 esbuild로 한 번에 묶으면 0.24~0.27초가 걸렸다. webpack 프로젝트에서 개발 서버 시작이 10초씩 걸린다면, babel-loader를 swc-loader나 esbuild-loader로 바꾸는 것만으로 시작 시간이 크게 준다. Babel 플러그인에 의존하는 기능(일부 CSS-in-JS의 빌드 타임 변환, 오래된 데코레이터 문법 등)이 있으면 그 부분만 남긴다.
+
+빠른 변환기들에는 공통 조건이 있다. 파일 하나만 보고 변환한다는 것이다. 다른 파일의 타입 정보를 읽지 않는다. 그래서 파일 하나만 봐서는 알 수 없는 문법은 처리하지 못한다. 대표적인 게 타입을 값처럼 다시 내보내는 코드다.
+
+```ts
+// status.ts
+export const enum OrderStatus { Paid = "PAID", Refunded = "REFUNDED" }
+export interface Order { id: number; status: OrderStatus }
+
+// index.ts
+import { OrderStatus, Order } from "./status.js";
+export { Order } from "./status.js";
+const o: Order = { id: 1, status: OrderStatus.Paid };
+console.log(o.status);
+```
+
+`index.ts`만 보는 변환기는 `Order`가 타입인지 값인지 모른다. 그래서 `export { Order }`를 그대로 남긴다. 그런데 `status.ts`를 변환하면 `interface`는 지워진다. esbuild로 두 파일을 각각 변환해 Node.js 22로 실행했다.
+
+```text
+export { Order } from "./status.js";
+         ^^^^^
+SyntaxError: The requested module './status.js' does not provide an export named 'Order'
+```
+
+`export type { Order }`로 바꾸면 `PAID`가 찍힌다. `tsc`는 프로젝트 전체를 보니 이런 코드를 알아서 지워 주지만, 파일 단위 변환기는 그럴 수 없다. tsconfig에 `isolatedModules: true`를 켜 두면 `tsc`가 이런 코드를 미리 에러로 알려 준다.
+
+```text
+index.ts(2,10): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+```
+
+TypeScript 5.0부터는 `verbatimModuleSyntax`가 더 엄격하게, 타입만 쓰는 import에 `import type`을 강제한다. 쓴 그대로 남기고 `type`이 붙은 것만 지우는 규칙이라 어떤 변환기를 써도 결과가 같다. 위의 `const enum`도 파일 단위 변환기에서는 값이 인라인되지 않고 평범한 enum 객체로 바뀐다. esbuild 출력의 `status.js`에는 `export var OrderStatus = ...` 객체가 생겼다. tsconfig 옵션의 나머지는 [tsconfig와 strict 옵션](/posts/tsconfig-strict)에 있다.
+
+## 타입 검사는 따로 돌린다
+
+위의 빠른 변환기들은 타입을 지우기만 하고 검사하지 않는다. 타입 오류가 있어도 Vite 개발 서버는 화면을 띄우고, `vite build`도 성공한다. 타입 검사는 `tsc --noEmit`을 따로 돌려서 한다. 보통 이렇게 나눈다.
+
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build"
+  }
+}
+```
+
+개발 중에도 에디터의 TypeScript 서버가 검사를 해 주고, 화면 위에 타입 에러를 띄우고 싶으면 `vite-plugin-checker`나 webpack의 `fork-ts-checker-webpack-plugin`처럼 별도 프로세스에서 `tsc`를 돌리는 플러그인을 붙인다. 변환과 검사를 같은 프로세스에서 순서대로 하면 저장할 때마다 검사가 끝날 때까지 HMR이 기다려야 하니 일부러 떼어 놓은 것이다.
+
+이 검사 단계가 느린 쪽이었다. TypeScript 7은 컴파일러를 Go로 다시 써서 나왔다. 같은 2000개 컴포넌트 프로젝트를 두 버전으로 검사했다.
+
+```text
+tsc 5.9 exit 0 6534ms
+tsc 7.0 exit 0 509ms
+tsc 5.9 exit 0 6797ms
+tsc 7.0 exit 0 528ms
+```
+
+열세 배쯤 빨라졌다. CI에서 타입 검사가 병목이었다면 큰 차이다. 다만 7은 예전의 자바스크립트 컴파일러 API를 그대로 내보내지 않는다. 설치한 7.0.2 패키지에서 `require("typescript").createProgram`은 `undefined`였고, 새 API는 `typescript/unstable/...` 아래에 있었다. 컴파일러 API를 직접 쓰는 도구(타입 정보를 쓰는 린트 규칙, 코드 생성기)는 아직 5.x에 기대는 경우가 있다. 검사는 7로 돌리고, API에 기대는 도구는 5.x를 함께 두는 식으로 옮기는 경우가 많다. 이 블로그도 아직 5.9를 쓴다.
+
+## 타깃을 낮추면 번들이 커진다
+
+변환기의 `target`은 "어느 버전의 자바스크립트까지 읽을 수 있는 브라우저에서 돌릴 것인가"다. 낮출수록 새 문법을 옛 문법으로 풀어 써야 해서 코드가 길어진다. 문법 변환과 폴리필의 차이, browserslist로 대상 정하는 법은 [번들러 기초](/posts/bundler-basics)에 있으니, 여기서는 얼마나 커지는지만 잰다. 실무에서 흔한 문법을 고루 넣은 장바구니 모듈(클래스 비공개 필드, `??=`, 옵셔널 체이닝, 객체 전개와 나머지, 제너레이터, async 함수, async 제너레이터와 `for await`)을 대상만 바꿔 압축했다.
+
+```text
+esbuild es2022    1236 bytes  gzip   732
+esbuild es2017    3864 bytes  gzip  1884
+esbuild es2015    4121 bytes  gzip  1948
+Babel (chrome 58, safari 11)            6620 bytes  gzip  2671
+Babel + core-js (usage-global)         61876 bytes  gzip 23627
+```
+
+ES2022에서 ES2017로 내리자 gzip 기준 2.6배가 됐다. 비공개 필드가 `WeakMap`과 도우미 함수로, async 제너레이터가 제너레이터 기반 상태 기계와 도우미로 바뀌었다. 그 변환 모습은 [Map, Set, WeakMap](/posts/js-map-set-weak)과 [이터레이터와 제너레이터](/posts/js-iterators-generators)에서 봤다. 도우미 함수는 파일마다 한 번씩 들어가서 모듈이 많을수록 더 쌓인다.
+
+더 큰 건 폴리필이다. Babel의 core-js 플러그인을 `usage-global`로 켜자 32배가 됐다. 들어간 import 29개를 보면 이유가 보인다.
+
+```text
+import "core-js/modules/es.iterator.filter.js";
+import "core-js/modules/es.iterator.map.js";
+import "core-js/modules/es.set.union.v2.js";
+import "core-js/modules/es.set.intersection.v2.js";
+import "core-js/modules/es.map.get-or-insert.js";
+import "core-js/modules/es.object.group-by.js";
+// … 29개
+```
+
+이 코드는 이터레이터 헬퍼도, `Set.prototype.union`도 쓰지 않는다. 그런데 플러그인은 타입을 모르니 `items.filter(...)`의 `items`가 이터레이터일 수도 있다고 보고 `es.iterator.filter`를 넣고, `new Set`을 봤으니 새 `Set` 메서드를 다 넣는다. 사용 여부를 이름으로 추측하기 때문에 생기는 과잉이다. 대상 브라우저를 낮게 잡을수록 "없을 수도 있는 기능"이 늘어나 이 목록이 길어진다.
+
+그래서 대상은 실제 사용자 통계로 정한다. 사용자 대부분이 최근 브라우저라면 `target`을 ES2020 이상으로 올리는 것만으로 번들이 눈에 띄게 준다. 소수의 구형 브라우저를 버릴 수 없다면 두 벌을 만드는 방법이 있다. Vite의 `@vitejs/plugin-legacy`는 최신 브라우저용 번들과 구형용 번들을 따로 만들고, `<script type="module">`과 `<script nomodule>`로 브라우저가 알아서 하나만 받게 한다. 구형 사용자만 큰 번들을 받는다.
+
+## 소스맵은 무엇을 담느냐로 고른다
+
+소스맵이 압축된 코드의 위치를 원본 위치로 돌려준다는 것, 공개 서버에 올리면 원본이 그대로 보인다는 것은 [번들러 기초](/posts/bundler-basics)와 [프런트엔드 에러 추적](/posts/frontend-error-tracking)에서 다뤘다. 여기서는 종류를 고르는 기준을 본다. webpack의 `devtool` 값은 조각을 조합한 이름이다.
+
+<UrlAnatomy
+  caption="webpack devtool 이름은 조각마다 뜻이 있다"
+  base="devtool:"
+  separator=" "
+  joiner="-"
+  params={[
+    { key: "eval", title: "모듈마다 eval로 감싼다", description: "각 모듈을 eval 문자열로 넣고 그 끝에 소스맵을 붙인다. 다시 빌드할 때 바뀐 모듈의 문자열만 갈아 끼우면 돼서 가장 빠르다. 개발 전용이다." },
+    { key: "cheap", title: "줄만 맞춘다", description: "열(몇 번째 글자) 정보를 버리고 줄만 대응시킨다. 지도가 작고 만들기 빠르다. 한 줄에 여러 식이 있으면 정확한 위치는 못 짚는다." },
+    { key: "module", title: "로더 이전의 원본으로", description: "babel-loader 같은 로더가 바꾸기 전의 원본 파일로 돌려준다. 이게 없으면 변환된 코드를 보게 된다." },
+    { key: "source-map", title: "지도를 만든다", description: "끝이 source-map이면 별도 .map 파일을 만든다. 앞에 hidden이 붙으면 파일 끝의 sourceMappingURL 주석을 빼고, nosources가 붙으면 원본 코드(sourcesContent)를 지도에 넣지 않는다.", required: true, code: "개발: eval-cheap-module-source-map\n프로덕션: hidden-source-map 또는 nosources-source-map" },
+  ]}
+/>
+
+2000개 컴포넌트 앱을 프로덕션 모드로 빌드하며 값만 바꿨다.
+
+```text
+false                  js  484232  map        -  url-comment:0  sourcesContent:-
+source-map             js  484265  map  1616067  url-comment:1  sourcesContent:1
+hidden-source-map      js  484232  map  1616067  url-comment:0  sourcesContent:1
+nosources-source-map   js  484265  map   655419  url-comment:1  sourcesContent:0
+```
+
+`source-map`과 `hidden-source-map`은 같은 지도를 만들고, 차이는 번들 끝의 `//# sourceMappingURL=` 주석 하나다. 주석이 없으면 브라우저 개발자 도구가 지도를 찾지 않는다. 지도 파일 자체를 서버에 올리지 않는 게 핵심이고, 주석을 빼는 건 404 요청을 만들지 않으려는 것이다. `nosources-source-map`은 원본 코드를 빼서 지도가 40%로 줄었다. 에러 위치(파일 이름, 줄, 열)는 돌려주지만 그 줄의 코드는 보여 주지 않는다. 에러 수집 도구에 원본 코드까지 올리기 싫을 때 쓴다.
+
+개발에서는 지도를 얼마나 빨리 다시 만드느냐가 중요하다. 저장할 때마다 다시 빌드하니까 `eval-cheap-module-source-map`처럼 바뀐 모듈만 갈아 끼울 수 있고 줄만 맞추는 값을 많이 쓴다. Vite 개발 서버는 이 고민이 없다. 파일을 하나씩 변환해 주니 변환할 때 그 파일의 지도를 함께 붙여 보낸다. 프로덕션 빌드에서만 `build.sourcemap`을 `true`, `"hidden"`, `"inline"`, `false` 중에서 고른다.
+
+## 환경 변수는 빌드 때 글자로 박힌다
+
+번들러가 `process.env.API_URL` 같은 식을 빌드 때 값으로 바꿔 넣는다는 것, 그래서 Vite는 `VITE_`로 시작하는 변수만 클라이언트에 넣는다는 것은 [번들러 기초](/posts/bundler-basics)에서 봤다. 그 규칙 위에서 실제로 사고가 나는 모양을 보자. `.env`에 이렇게 적었다.
+
+```bash
+# .env
+VITE_API_URL=https://api.example.com
+VITE_PAYMENT_SECRET=sk_live_51abc
+DB_PASSWORD=hunter2
+
+# .env.production
+VITE_API_URL=https://api.prod.example.com
+```
+
+```js
+console.log(import.meta.env.VITE_API_URL, import.meta.env.DB_PASSWORD, import.meta.env.MODE, import.meta.env.PROD);
+console.log(import.meta.env.VITE_PAYMENT_SECRET);
+```
+
+`vite build`의 결과물이다.
+
+```text
+console.log(`https://api.prod.example.com`,void 0,`production`,!0),console.log(`sk_live_51abc`);
+```
+
+세 가지가 보인다. 첫째, `VITE_` 접두사가 없는 `DB_PASSWORD`는 `void 0`이 됐다. 접두사가 막아 준 것이다. 둘째, `VITE_`를 붙인 결제 비밀 키는 글자 그대로 번들에 들어갔다. 접두사는 "공개해도 된다"는 표시이지 보호 장치가 아니다. "프런트에서 쓰려니 안 보여서 `VITE_`를 붙였다"가 비밀이 새는 가장 흔한 경로다. 클라이언트가 비밀 키로 직접 요청해야 하는 구조라면 그 요청은 서버를 거치도록 바꿔야 한다. 셋째, 빌드 모드가 `production`이라 `.env.production`의 값이 `.env`를 덮었다. Vite는 `.env`, `.env.local`, `.env.[mode]`, `.env.[mode].local` 순으로 읽어 뒤에 읽은 것이 이긴다. `.local` 파일은 깃에 올리지 않는 용도다.
+
+키를 변수로 꺼내면 더 크게 샌다.
+
+```js
+const key = location.hash.slice(1);
+console.log(import.meta.env[key]);
+```
+
+```text
+console.log({BASE_URL:`/`,DEV:!1,MODE:`production`,PROD:!0,SSR:!1,VITE_API_URL:`https://api.prod.example.com`,VITE_PAYMENT_SECRET:`sk_live_51abc`}[e])
+```
+
+어떤 키를 쓸지 빌드 때 알 수 없으니 `VITE_` 변수 전체를 객체로 박았다. 코드에 한 번도 이름을 적지 않은 변수까지 들어간다. 배포 전에 빌드 결과물을 `grep -r "sk_live" dist/`처럼 검색해 보는 단계를 CI에 두면 이런 실수를 잡는다.
+
+글자로 박힌다는 성질에서 또 하나의 제약이 나온다. 같은 빌드 결과물을 스테이징과 운영에 그대로 올리면서 API 주소만 바꾸는 건 안 된다. 주소가 이미 번들 안에 있기 때문이다. 환경마다 빌드를 따로 하거나, 빌드에는 넣지 않고 앱이 시작할 때 `/config.json` 같은 파일을 받아 읽게 한다. 컨테이너 이미지를 한 번 만들어 여러 환경에 쓰는 팀이라면 뒤쪽 방식이 맞다.
+
+## Vite 8과 Turbopack은 어디쯤 있나
+
+도구가 빠르게 바뀌고 있어서 지금 위치를 짚어 둔다. Vite 7까지는 개발 서버의 변환과 사전 번들링을 esbuild가, 프로덕션 빌드를 Rollup이 맡았다. 두 도구의 동작 차이(CommonJS 처리, 순환 import 순서)가 "개발에서는 되는데 빌드하면 깨진다"의 원인이 되곤 했다. Vite 8은 Rust로 만든 Rolldown(Rollup과 플러그인 API가 호환되는 번들러)과 Oxc(변환기)로 개발과 빌드를 모두 처리한다. 설치된 Vite 8.3.5의 `package.json`을 보면 의존성에 `rolldown`이 있고 esbuild는 선택 의존성으로 내려갔다. 대부분의 Rollup 플러그인은 그대로 돈다. 다만 esbuild 전용 옵션(`esbuild`, `optimizeDeps.esbuildOptions`)에 기대던 설정은 옮겨야 한다. 6이나 7에서 올린다면 공식 이전 안내를 보고, `vite build && vite preview`로 결과물을 꼭 확인한다.
+
+Turbopack은 Next.js 안에서만 쓰는 Rust 번들러다. Next.js 16부터 개발과 빌드의 기본값이 되었다. webpack 설정(`webpack()` 함수)은 Turbopack에서 쓰이지 않아서, 커스텀 로더를 쓰던 프로젝트는 `turbopack.rules`로 옮기거나 `--webpack` 옵션으로 webpack을 계속 쓴다. 이 블로그가 MDX 플러그인을 함수가 아니라 문자열 경로로 넘기는 것도 Turbopack이 설정 안의 함수를 받지 못해서다. Next.js 밖에서 단독 번들러로 쓰는 도구는 아니다.
+
+## 개발 서버가 이상할 때 보는 순서
+
+저장할 때마다 입력이 지워지면 터미널 로그부터 본다. `hmr invalidate ... export is incompatible`이면 컴포넌트 파일에 컴포넌트가 아닌 export가 있는 것이고, `page reload src/파일`이면 그 파일에서 진입 파일까지 경계가 없는 것이다. 모든 화면이 import하는 파일을 진입 파일도 import하고 있지 않은지 본다.
+
+어떤 화면에 처음 들어갈 때마다 페이지가 한 번 새로고침되면 `dependencies optimized` 로그를 찾는다. 늦게 발견된 패키지를 `optimizeDeps.include`에 넣는다.
+
+Vite 개발 서버의 첫 로드가 유난히 느리면 네트워크 탭에서 요청 수를 본다. 앞에서처럼 `node_modules` 밖의 배럴 파일이 수백 개 모듈을 끌고 오고 있을 가능성이 크다. 배럴 파일 문제는 [코드 스플리팅](/posts/code-splitting)에서 다뤘다.
+
+파일을 저장해도 아무 반응이 없으면 파일 감시가 끊긴 것이다. 리눅스에서는 감시할 수 있는 파일 수에 상한이 있고, 넘으면 `Error: ENOSPC: System limit for number of file watchers reached`가 난다. 모노레포처럼 파일이 많으면 이 상한에 닿는다.
+
+```bash
+# 지금 상한을 확인한다
+sysctl fs.inotify.max_user_watches
+# 지금 부팅 동안만 올린다
+sudo sysctl fs.inotify.max_user_watches=524288
+# 재부팅 뒤에도 유지되게 저장한다
+echo "fs.inotify.max_user_watches=524288" | sudo tee /etc/sysctl.d/60-inotify.conf
+sudo sysctl --system
+```
+
+```text
+fs.inotify.max_user_watches = 130016
+```
+
+이 서버(Ubuntu 24.04)에서는 13만 개쯤이었다. 리눅스 5.11 이후 커널은 메모리 크기에 따라 기본값을 정하므로 기기마다 다르다. 되돌리려면 `/etc/sysctl.d/60-inotify.conf`를 지우고 `sudo sysctl --system`을 다시 돌린다. 도커 컨테이너 안에서 호스트의 폴더를 마운트했거나, WSL2에서 윈도우 쪽 디스크(`/mnt/c/...`)의 프로젝트를 돌릴 때는 변경 알림 자체가 넘어오지 않는 경우가 있다. 이때는 프로젝트를 리눅스 쪽 파일 시스템으로 옮기는 게 가장 좋고, 그럴 수 없으면 Vite의 `server.watch.usePolling: true`로 주기적으로 훑게 한다. CPU를 더 쓴다.
+
+개발에서는 되는데 빌드 결과에서만 깨지면 두 경로의 차이를 의심한다. 위의 타입 재export처럼 변환기 차이에서 오기도 하고, CommonJS 처리나 순환 import 순서에서 오기도 한다. `build`와 `preview`로 로컬에서 재현되는지부터 본다.
+
+## 다시 비워지던 폼으로
+
+처음의 폼은 `SignupForm.tsx`가 컴포넌트가 아닌 `isValidEmail`을 함께 export해서, React 플러그인이 바꿔 끼우기를 포기하고 전체 새로고침으로 넘긴 것이었다. 함수를 `validate.ts`로 옮기자 같은 수정이 `hmr update`로 끝나고 입력이 남았다. 개발 서버는 import 그래프를 거슬러 올라가 바꿔 끼울 경계를 찾고, 못 찾으면 새로고침한다. 그 위에서 트랜스파일러는 파일 하나만 보고 빠르게 타입을 지우고, 타입 검사는 따로 돌고, 프로덕션 빌드는 대상 브라우저에 맞춰 코드를 늘리고 소스맵과 환경 변수를 굳힌다. 각 단계가 무엇을 모르는지(다른 파일의 타입, 실행할 때의 환경, 사용자 브라우저)를 알면 사고가 어디서 나는지도 보인다.
+
+## 면접에서 나올 만한 질문
+
+### Vite 개발 서버는 webpack 개발 서버와 무엇이 다른가요?
+
+webpack-dev-server는 시작할 때 전체 그래프를 읽고 변환해 번들을 메모리에 만들고, Vite는 소스를 묶지 않고 브라우저가 요청한 모듈만 그때 변환해 네이티브 ES 모듈로 준다. 그래서 Vite는 바로 뜨고 수정 한 번의 비용이 앱 크기와 거의 상관없지만, 새로고침할 때 모듈 수만큼 요청이 생긴다. 2000개 컴포넌트 앱에서 Vite는 0.4초에 떴지만 첫 로드에 4~5초, 요청 2009개였고, webpack은 11초에 떠서 첫 로드는 1초 안팎이었다. 파일 하나 수정이 화면에 보이기까지는 Vite 250ms, webpack 700ms였다.
+
+### Vite의 의존성 사전 번들링은 왜 하나요?
+
+두 가지 이유다. `lodash-es`처럼 파일이 수백 개로 나뉜 패키지를 묶지 않으면 import 하나에 수백 개 요청이 생긴다. 실험에서 `debounce` 하나에 요청 640개가 나갔고 켜면 1개였다. 그리고 CommonJS 패키지는 브라우저 모듈 로더가 읽지 못해서 ES 모듈로 감싸야 한다. 결과는 `node_modules/.vite/deps`에 두고 lockfile과 설정의 해시가 바뀌면 다시 만든다. 나중에 발견된 패키지는 그 자리에서 다시 묶고 새로고침하므로 `optimizeDeps.include`로 미리 알려 둔다.
+
+### HMR은 어떻게 동작하고, 언제 전체 새로고침으로 떨어지나요?
+
+개발 서버가 import 그래프를 들고 있다가 파일이 바뀌면 `import.meta.hot.accept`를 선언한 모듈을 찾아 그래프를 거슬러 오른다. 그 모듈이 경계가 되어 웹소켓으로 브라우저에 알리면, 브라우저는 시각을 붙인 주소로 새 모듈을 import해 accept 콜백에 넘긴다. 어느 갈래로든 경계 없이 진입 파일까지 닿으면 바꿔 끼울 수 없으니 전체 새로고침한다. 진입 파일 자체나, 진입 파일도 import하는 공용 설정 파일을 고칠 때가 그렇다.
+
+### React Fast Refresh가 상태를 유지하지 못하는 경우는요?
+
+모듈이 컴포넌트 말고 다른 것도 export하면 Vite React 플러그인이 모듈을 무효로 돌려 전체 새로고침이 된다. 원시값 상수는 값이 그대로인 동안 봐주지만 값이 바뀌거나 함수를 export하면 새로고침된다. 훅을 추가하거나 순서를 바꾸면 그 컴포넌트만 다시 마운트돼 상태가 초기화되고, 클래스 컴포넌트와 이름 없는 화살표 함수 default export도 상태가 남지 않는다. Refresh 중에는 effect가 의존성과 상관없이 다시 실행된다.
+
+### esbuild나 SWC로 TypeScript를 변환하면 타입 검사는 어떻게 하나요? 무엇을 조심하나요?
+
+이 도구들은 파일 하나만 보고 타입을 지울 뿐 검사하지 않으니 `tsc --noEmit`을 따로 돌린다. 빌드 스크립트나 CI에 넣고, 개발 중에는 에디터나 별도 프로세스 플러그인이 맡는다. 파일 하나만 보니 `export { Order }`처럼 타입을 값처럼 재export하면 런타임에 "does not provide an export named" 에러가 나고, `const enum`은 인라인되지 않는다. `isolatedModules`나 `verbatimModuleSyntax`를 켜서 `tsc`가 미리 잡게 한다.
+
+### 빌드 target을 낮추면 왜 번들이 커지나요?
+
+새 문법을 옛 문법으로 풀어 쓰면서 도우미 코드가 붙기 때문이다. 같은 모듈이 ES2022에서 gzip 732바이트, ES2017에서 1884바이트였다. 비공개 필드는 `WeakMap`으로, async 제너레이터는 상태 기계로 바뀐다. 폴리필까지 넣으면 더 커서, core-js를 `usage-global`로 켜자 23.6KB가 됐다. 플러그인이 타입을 모르고 메서드 이름으로 사용 여부를 추측해 쓰지 않는 이터레이터 헬퍼와 `Set` 메서드까지 넣었다. 실제 사용자 통계로 대상을 정하고, 구형 지원이 꼭 필요하면 최신용과 구형용 번들을 나눈다.
+
+### 프로덕션 소스맵은 어떤 종류로 만들고 어떻게 다루나요?
+
+`hidden-source-map`이나 `nosources-source-map`으로 만들어 에러 수집 도구에만 올리고 공개 서버에는 올리지 않는다. hidden은 지도는 똑같이 만들되 번들 끝의 `sourceMappingURL` 주석을 빼서 브라우저가 찾지 않게 하고, nosources는 지도에서 원본 코드를 빼 줄과 열만 돌려준다. 실험에서 지도는 1.6MB에서 655KB로 줄었다. 개발에서는 다시 빌드가 빠른 `eval-cheap-module-source-map` 같은 값을 쓴다.
+
+### 프런트엔드 환경 변수에 비밀 키를 넣으면 어떻게 되나요?
+
+번들러가 빌드 때 값을 글자 그대로 코드에 박아서 번들을 연 누구나 읽는다. Vite는 `VITE_` 접두사가 있는 변수만 넣는데, 접두사는 공개해도 된다는 표시일 뿐이라 비밀 키에 붙이면 그대로 샌다. `import.meta.env[key]`처럼 키를 변수로 꺼내면 `VITE_` 변수 전체가 객체로 들어간다. 비밀 키가 필요한 요청은 서버를 거치게 바꾸고, 배포 전에 빌드 결과물을 검색하는 단계를 둔다. 같은 빌드를 여러 환경에 쓰려면 시작할 때 설정 파일을 받아 읽는 런타임 설정으로 바꾼다.

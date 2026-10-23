@@ -1,0 +1,538 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-without-effects");
+
+<EasyIntro>
+  React에서 effect는 화면을 다 그린 다음에 바깥세상을 맞추는 코드다. 그런데 바깥세상과 상관없는 일까지 effect로 처리하는 코드가 많다. 그러면 화면이 한 번 틀린 모습으로 그려지고, 그 뒤에 effect가 고쳐서 한 번 더 그린다.
+
+  답장 편지를 쓰는 상황을 떠올려 보자. 받는 사람을 바꿨는데 편지지를 바로 바꾸지 않고, 일단 앞 사람에게 쓰던 편지를 새 사람 이름으로 보여 준 다음에야 편지지를 새것으로 바꾸는 것과 비슷하다. 잠깐이지만 틀린 편지가 보이고, 그 순간 누가 보내기를 누르면 엉뚱한 사람에게 간다.
+
+  계산할 수 있는 값은 그리면서 바로 계산하면 된다. 버튼을 눌러서 생긴 일은 버튼을 누른 그 자리에서 처리하면 된다. 다른 사람으로 바뀌면 처음부터 새 편지지를 꺼내면 된다.
+
+  이렇게 effect를 하나씩 지우면 화면이 두 번 그려지는 일이 줄고, 틀린 모습이 잠깐 보이는 버그도 함께 사라진다.
+</EasyIntro>
+
+선물 주문 화면을 하나 생각해 보자. 받는 사람을 고르고, 카드에 넣을 메모를 적고, 상품을 담고, 배송 알림을 켤지 고른다. 이 화면의 컴포넌트에 `useEffect`가 여섯 개 있고, 이런 증상이 나온다.
+
+- 받는 사람을 바꾸면 이전 사람에게 쓰던 메모가 한순간 새 사람 이름 옆에 보인다. 그 순간 자동 저장이 돌면 메모가 엉뚱한 사람의 초안으로 저장된다.
+- 비싼 상품을 담으면 합계가 한 번 45,000원으로 보였다가 42,000원이 된다.
+- 알림 토글을 누르면 토글은 바로 켜지는데 옆의 "저장됨" 표시는 한 박자 늦다.
+
+세 증상 모두 아래 실험에서 그대로 재현된다. 그리고 effect를 지우고 다른 자리로 옮기면 하나씩 사라진다. 이 글은 그 effect들이 왜 필요 없었는지, 각각 어디로 옮겨야 하는지를 실험 로그와 함께 정리한다. effect가 실제로 필요한 경우와 정리 함수, 의존성 배열의 동작은 앞 글 [useEffect를 제대로 쓰기](/posts/react-useeffect)에서 봤다.
+
+## effect가 필요한지 가르는 질문
+
+effect는 렌더링이 끝난 뒤 React 바깥의 시스템을 화면에 맞추는 코드다. 그러니 effect를 쓰기 전에 두 가지를 묻는다.
+
+첫째, 맞출 바깥 시스템이 있나. 서버 연결, 브라우저 API, 외부 위젯, 타이머처럼 React가 관리하지 않는 것이 있어야 effect의 일이다. props와 state만 가지고 새 값을 만드는 일이라면 바깥 시스템이 없다. 렌더링 중에 계산하면 된다.
+
+둘째, 이 일이 왜 일어나야 하나. 사용자가 무언가를 했기 때문이라면 그 행동의 이벤트 핸들러에 둔다. 화면이 이 상태로 보이고 있기 때문이라면 effect에 둔다. "구매 버튼을 눌렀으니 주문을 보낸다"는 앞의 경우, "채팅방 화면이 떠 있으니 연결한다"는 뒤의 경우다.
+
+아래 그림이 그 갈림길이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="effect를 쓰기 전에 지나가는 질문"
+  nodes={[
+    { id: "q1", label: "props·state로 계산?", x: 200, y: 35, w: 160 },
+    { id: "render", label: "렌더링 중 계산", sub: "무거우면 useMemo", x: 70, y: 115, w: 120 },
+    { id: "q2", label: "사용자 행동 때문?", x: 250, y: 115, w: 150 },
+    { id: "handler", label: "이벤트 핸들러", sub: "요청, 알림, 부모 알림", x: 120, y: 200, w: 130 },
+    { id: "q3", label: "바깥 시스템과 맞춤?", x: 300, y: 200, w: 150 },
+    { id: "effect", label: "useEffect", sub: "시작과 정리", x: 300, y: 275, w: 110 },
+  ]}
+  edges={[
+    { from: "q1", to: "render", label: "예" },
+    { from: "q1", to: "q2", label: "아니오" },
+    { from: "q2", to: "handler", label: "예" },
+    { from: "q2", to: "q3", label: "아니오" },
+    { from: "q3", to: "effect", label: "예" },
+  ]}
+/>
+
+이 질문을 지나면 남는 effect가 생각보다 적다. 아래 절들은 처음 화면의 effect들을 이 질문에 하나씩 넣어 본 결과다.
+
+## 계산할 수 있는 값을 effect로 맞추지 않는다
+
+가장 흔한 경우다. 이름과 성으로 전체 이름을 만들거나, 목록을 검색어로 거르는 값을 state에 두고 effect로 맞춘다.
+
+```tsx
+// 지울 코드
+const [fullName, setFullName] = useState("");
+useEffect(() => {
+  setFullName(firstName + " " + lastName);
+}, [firstName, lastName]);
+
+// 바꾼 코드
+const fullName = firstName + " " + lastName;
+```
+
+effect 버전은 `firstName`이 바뀐 렌더링에서 옛 `fullName`으로 한 번 그리고, effect가 돈 뒤 한 번 더 그린다. 이 한 박자 어긋남을 렌더링 로그로 보여 준 실험은 [계산할 수 있으면 상태로 두지 않는다](/posts/fp-in-react#계산할-수-있으면-상태로-두지-않는다)에 있으니 여기서는 계산이 무거울 때만 짚는다.
+
+목록 수천 개를 정렬하고 거르는 계산이라면 렌더링마다 하기 부담스러울 수 있다. 이때도 effect가 아니라 `useMemo`다.
+
+```tsx
+const visible = useMemo(
+  () => filterAndSort(todos, filter, sortKey),
+  [todos, filter, sortKey],
+);
+```
+
+`useMemo`는 의존 값이 같으면 지난 결과를 돌려주고, 다르면 렌더링 중에 다시 계산한다. effect와 달리 첫 렌더링부터 맞는 값이 나온다. 무거운지는 감으로 정하지 않고 재 본다. `console.time("filter")`와 `console.timeEnd("filter")`로 감싸 개발자 도구의 CPU 스로틀링을 켜고 재서 1ms를 꾸준히 넘기면 감쌀 만하다. React Compiler를 켠 프로젝트라면 이런 계산은 컴파일러가 알아서 기억해 둔다. 다만 컴파일러는 state를 effect로 맞추는 구조까지 고쳐 주지 않는다.
+
+## effect를 이어 붙인 계산은 중간값을 그린다
+
+effect 하나가 state를 바꾸고, 그 state를 보는 다른 effect가 또 state를 바꾸는 연쇄가 있다. 처음 화면의 장바구니가 이렇다. 담긴 상품으로 소계를 맞추고, 소계로 배송비를 맞추고, 둘로 합계를 맞춘다.
+
+```tsx
+const PRICES = { pen: 1500, note: 3000, bag: 42000 };
+
+function Cart() {
+  const [cart, setCart] = useState([]);
+  const [subtotal, setSubtotal] = useState(0);
+  const [shipping, setShipping] = useState(3000);
+  const [total, setTotal] = useState(3000);
+
+  useEffect(() => { setSubtotal(cart.reduce((s, id) => s + PRICES[id], 0)); }, [cart]);
+  useEffect(() => { setShipping(subtotal >= 30000 ? 0 : 3000); }, [subtotal]);
+  useEffect(() => { setTotal(subtotal + shipping); }, [subtotal, shipping]);
+
+  return <p>{total}</p>;
+}
+```
+
+React 19.3과 jsdom에서 가방(42,000원)을 담고, 렌더링마다 값과 커밋 직후의 DOM을 찍었다. 커밋 시점은 `useLayoutEffect`로 DOM 글자를 읽어 확인했다.
+
+```text
+--- 가방(42000원)을 담는다
+  render#1 cart=1개 subtotal=0 shipping=3000 total=3000
+    commit: DOM = 3000
+  render#2 cart=1개 subtotal=42000 shipping=3000 total=3000
+    commit: DOM = 3000
+  render#3 cart=1개 subtotal=42000 shipping=0 total=45000
+    commit: DOM = 45000
+  render#4 cart=1개 subtotal=42000 shipping=0 total=42000
+    commit: DOM = 42000
+렌더 4번, 화면 42000
+```
+
+클릭 한 번에 렌더링과 커밋이 네 번 일어났다. 세 번째 커밋에서는 DOM에 45,000이 들어갔다. 소계는 새 값인데 합계를 계산할 때 쓴 배송비가 아직 3,000원이던 순간이다. 이 사이에 브라우저가 화면을 그리면 사용자는 합계가 튀는 걸 본다. 그리지 않더라도 이 값을 읽는 자식 컴포넌트, 분석 로그, 다른 effect는 틀린 합계로 한 번 일한다. 아래 그림에서 다음을 누르면 연쇄가 한 칸씩 진행된다.
+
+<SequenceDiagram
+  caption="effect가 effect를 깨우면 클릭 하나가 커밋 네 번이 된다"
+  actors={[
+    { id: "react", label: "React" },
+    { id: "e1", label: "소계 effect" },
+    { id: "e2", label: "배송비 effect" },
+    { id: "e3", label: "합계 effect" },
+  ]}
+  steps={[
+    {
+      from: "react",
+      to: "e1",
+      label: "커밋 1 (cart 바뀜)",
+      title: "가방을 담았다",
+      detail: "cart만 새 값으로 렌더링하고 커밋한다. 화면의 합계는 아직 3,000원이다.",
+    },
+    {
+      from: "e1",
+      to: "react",
+      label: "setSubtotal(42000)",
+      title: "소계를 맞춘다",
+      detail: "cart가 바뀌었으니 소계 effect가 돈다. state를 바꿨으니 다시 렌더링한다. 커밋 2.",
+    },
+    {
+      from: "react",
+      to: "e2",
+      label: "subtotal 바뀜",
+      title: "배송비 effect가 깨어난다",
+      detail: "소계가 3만 원을 넘었으니 배송비를 0으로 바꾼다. 같은 커밋 뒤에 합계 effect도 돌아 42,000 + 3,000을 계산한다.",
+      payload: "setShipping(0)\nsetTotal(42000 + 3000)",
+    },
+    {
+      from: "e3",
+      to: "react",
+      label: "커밋 3: 45000",
+      title: "틀린 합계가 DOM에 들어간다",
+      detail: "합계 effect는 아직 옛 배송비를 봤다. 45,000원이 커밋된다.",
+    },
+    {
+      from: "react",
+      to: "e3",
+      label: "shipping 바뀜",
+      title: "합계를 다시 맞춘다",
+      detail: "배송비가 바뀌었으니 합계 effect가 한 번 더 돌아 42,000 + 0을 넣는다. 커밋 4에서야 맞는다.",
+    },
+  ]}
+/>
+
+effect 세 개를 지우고 렌더링 중에 계산하면 이렇다.
+
+```tsx
+function Cart() {
+  const [cart, setCart] = useState([]);
+  const subtotal = cart.reduce((s, id) => s + PRICES[id], 0);
+  const shipping = subtotal >= 30000 ? 0 : 3000;
+  const total = subtotal + shipping;
+  return <p>{total}</p>;
+}
+```
+
+```text
+--- 가방(42000원)을 담는다
+  render#1 cart=1개 subtotal=42000 shipping=0 total=42000
+렌더 1번, 화면 42000
+```
+
+렌더링 한 번, 중간값 없음이다. state는 `cart` 하나만 남았다.
+
+연쇄가 계산이 아니라 규칙의 연쇄일 때도 있다. 카드 게임에서 금카드를 세 장 모으면 라운드가 오르고, 다섯 라운드가 지나면 게임이 끝나는 식이다. 이런 다음 상태는 effect 사슬이 아니라 카드를 내는 이벤트 핸들러(또는 리듀서) 한 곳에서 한 번에 계산한다. 사슬로 두면 위처럼 중간 상태가 커밋되고, 나중에 "기록을 되돌려 보기" 같은 기능을 넣을 때 과거 상태를 넣는 순간 effect가 다시 줄줄이 돌아 기록이 망가진다.
+
+## 대상이 바뀌면 key로 새로 시작한다
+
+처음 화면의 첫 번째 버그, 받는 사람을 바꾸면 이전 메모가 보이던 문제다. 코드는 받는 사람이 바뀌면 effect로 초안을 비운다.
+
+```tsx
+function Note({ userId }) {
+  const [draft, setDraft] = useState("");
+  useEffect(() => {
+    setDraft("");          // 받는 사람이 바뀌면 비운다
+  }, [userId]);
+  return <p>{userId}에게: {draft}</p>;
+}
+```
+
+"하나"에게 "내일 3시 회의"를 적다가 받는 사람을 "두리"로 바꿨다. 커밋마다 DOM 글자를 찍었다.
+
+```text
+--- 받는 사람을 두리로 바꾼다
+  render user=두리 draft="내일 3시 회의"
+    commit: 두리에게: 내일 3시 회의
+  render user=두리 draft=""
+    commit: 두리에게: 
+```
+
+첫 커밋의 화면이 "두리에게: 내일 3시 회의"다. 하나에게 쓰던 메모가 두리에게 보낼 메모로 커밋됐다. effect는 이 커밋이 끝난 뒤에야 돌기 때문이다. 이 순간에 자동 저장 effect가 `[userId, draft]`를 보고 돌면 두리의 초안으로 "내일 3시 회의"를 저장한다. 처음 증상의 원인이 이것이다.
+
+받는 사람이 바뀌면 이 메모 화면은 사실 다른 화면이다. 그렇다면 React에게 다른 화면이라고 알려 주면 된다. key를 받는 사람으로 준다.
+
+```tsx
+function NotePage({ userId }) {
+  return <Note key={userId} userId={userId} />;
+}
+
+function Note({ userId }) {
+  const [draft, setDraft] = useState("");   // key가 바뀌면 처음부터 다시 만든다
+  return <p>{userId}에게: {draft}</p>;
+}
+```
+
+```text
+--- 받는 사람을 두리로 바꾼다
+  render user=두리 draft=""
+    commit: 두리에게: 
+```
+
+key가 바뀌면 React는 이전 `Note`를 버리고 새로 마운트한다. 그 안의 모든 state가 초깃값으로 시작하니 첫 렌더링부터 빈 메모다. 틀린 커밋이 없고 렌더링도 한 번이다. `Note` 안에 state가 열 개 있어도, 자식 컴포넌트 안에 state가 있어도 한 번에 비워진다. effect로 비우는 방식은 state를 하나 추가할 때마다 초기화 코드도 잊지 않고 추가해야 한다.
+
+아래 그림은 두 방식의 커밋을 나란히 따라간다.
+
+<AlgoTrace
+  caption="effect로 비우면 틀린 커밋이 한 번 끼고, key로 바꾸면 없다"
+  memoryLabel="커밋된 화면"
+  cells={["하나 입력", "두리로 변경", "effect 실행", "key 방식"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["하나에게: 내일 3시 회의"],
+      caption: "하나에게 메모를 적었다. 여기까지는 두 방식이 같다.",
+    },
+    {
+      pointer: 1,
+      memory: ["하나에게: 내일 3시 회의", "두리에게: 내일 3시 회의"],
+      caption: "effect 방식. userId만 바뀌고 draft는 그대로인 채 렌더링하고 커밋한다. 두리 이름 옆에 하나의 메모가 보인다.",
+    },
+    {
+      pointer: 2,
+      memory: ["하나에게: 내일 3시 회의", "두리에게: 내일 3시 회의", "두리에게: (빈칸)"],
+      caption: "커밋이 끝나고서야 effect가 setDraft('')를 부르고 한 번 더 렌더링한다. 그 사이 자동 저장이 돌면 틀린 초안이 저장된다.",
+    },
+    {
+      pointer: 3,
+      found: [3],
+      memory: ["하나에게: 내일 3시 회의", "두리에게: (빈칸)"],
+      caption: "key 방식. key가 바뀌어 Note를 새로 만들고, draft는 초깃값으로 시작한다. 첫 커밋부터 맞고 렌더링도 한 번이다.",
+    },
+  ]}
+/>
+
+key로 초기화할 때 주의할 점이 있다. 새로 마운트되니 그 아래 DOM도 새로 만들어지고 effect도 처음부터 다시 돈다. 무거운 자식 트리를 통째로 다시 만들고 싶지 않다면, 비워야 하는 state를 가진 작은 컴포넌트에만 key를 준다. 그리고 key는 정말로 "다른 대상"을 뜻하는 값이어야 한다. 렌더링마다 바뀌는 값을 주면 매번 처음부터 다시 만든다.
+
+## 일부만 맞춰야 하면 렌더링 중에 조정한다
+
+모든 state를 비우고 싶은 게 아니라 일부만 맞추고 싶을 때가 있다. 목록이 바뀌면 선택만 풀고 나머지(펼침 상태, 정렬)는 남기는 경우다. effect로 하면 앞과 같은 모양이 된다.
+
+```tsx
+function List({ items }) {
+  const [selected, setSelected] = useState(null);
+  useEffect(() => { setSelected(null); }, [items]);
+  // ...
+}
+```
+
+```text
+--- 목록이 바뀐다
+  render selected=b
+    render Child selected=b
+    commit: c,d / 선택: b
+  render selected=null
+    render Child selected=null
+    commit: c,d / 선택: null
+```
+
+새 목록 c, d에 없는 b가 선택된 화면이 한 번 커밋되고, 자식도 그 값으로 한 번 렌더링됐다. 이전 props를 state에 기억해 두고 렌더링 중에 비교하면 이 한 번을 없앨 수 있다.
+
+```tsx
+function List({ items }) {
+  const [selected, setSelected] = useState(null);
+  const [prevItems, setPrevItems] = useState(items);
+
+  if (items !== prevItems) {      // 렌더링 중에 바뀐 걸 알아챈다
+    setPrevItems(items);
+    setSelected(null);
+  }
+  // ...
+}
+```
+
+```text
+--- 목록이 바뀐다
+  render selected=b
+  render selected=null
+    render Child selected=null
+    commit: c,d / 선택: null
+```
+
+`List`가 두 번 불렸지만 첫 번째 결과는 쓰이지 않았다. 렌더링 도중에 자기 state를 바꾸면 React는 그 렌더링이 돌려준 JSX를 버리고, 자식으로 내려가기 전에 같은 컴포넌트를 바로 다시 부른다. 자식은 맞는 값으로 한 번만 렌더링됐고 틀린 커밋도 없다.
+
+이 패턴에는 규칙이 있다. 렌더링 중에 바꿀 수 있는 건 지금 렌더링 중인 그 컴포넌트의 state뿐이다. 부모나 다른 컴포넌트의 state를 바꾸면 React가 경고한다. 그리고 반드시 조건 안에서 바꾼다. `items !== prevItems` 같은 조건 없이 바꾸면 렌더링마다 state가 바뀌어 `Too many re-renders` 오류로 멈춘다. 그 오류가 어떻게 보이는지는 [렌더링이 멈추지 않을 때 남는 흔적](/posts/react-rerender#렌더링이-멈추지-않을-때-남는-흔적)에 있다.
+
+이 패턴도 사실 차선책이다. 읽기 어렵고, 이전 값을 기억하는 state가 하나 는다. 더 나은 방법이 있는지 먼저 본다. 선택한 항목 객체 대신 id를 state로 두고 렌더링 중에 `const selection = items.find((i) => i.id === selectedId) ?? null`로 찾으면, 목록에서 사라진 항목은 저절로 선택이 풀린다. 조정할 state가 아예 없어진다.
+
+## 사용자 행동의 결과는 핸들러에 둔다
+
+폼을 제출하면 서버에 보내는 코드를 이렇게 쓰기도 한다. 제출 버튼은 보낼 데이터를 state에 넣기만 하고, effect가 그 state를 보고 요청을 보낸다.
+
+```tsx
+// 지울 코드
+const [payload, setPayload] = useState(null);
+
+useEffect(() => {
+  if (payload !== null) {
+    post("/api/notes", payload);
+  }
+}, [payload]);
+
+function handleSubmit() {
+  setPayload({ to: userId, body: draft });
+}
+```
+
+이 effect는 "제출 버튼을 눌렀다"를 모른다. `payload`가 바뀌었다는 것만 안다. 같은 내용으로 두 번 제출하면 새 객체라 두 번 보내지만, 다른 이유로 `payload`가 복원되거나 화면이 다시 마운트되면 누르지 않았는데도 보낸다. 개발 모드의 StrictMode에서 effect가 다시 붙을 때 `payload`가 남아 있으면 요청이 한 번 더 나간다. 요청은 원인이 있는 자리, 핸들러에서 보낸다.
+
+```tsx
+async function handleSubmit() {
+  await post("/api/notes", { to: userId, body: draft });
+  setDraft("");
+}
+```
+
+같은 원리로 토스트, 페이지 이동, 분석 이벤트("구매 버튼 클릭")도 그 행동의 핸들러에 둔다. 상품을 담으면 토스트를 띄우는 코드를 effect로 짰을 때 장바구니 복원만으로 토스트가 떴던 실험은 [효과는 원인이 있는 자리에 둔다](/posts/fp-in-react#효과는-원인이-있는-자리에-둔다)에 있다.
+
+반대로 "이 화면이 보였다"는 분석 이벤트는 화면이 그려졌기 때문에 일어나는 일이니 effect가 맞다. 같은 분석 로그라도 원인이 무엇이냐에 따라 자리가 갈린다.
+
+## 부모에게 알리는 일은 바꾸는 자리에서 한다
+
+세 번째 버그, 알림 토글과 "저장됨" 표시가 한 박자 어긋나던 문제다. 토글이 자기 state를 갖고, 바뀌면 effect로 부모에게 알렸다.
+
+```tsx
+function Toggle({ onChange }) {
+  const [isOn, setIsOn] = useState(false);
+  useEffect(() => { onChange(isOn); }, [isOn, onChange]);
+  return <button onClick={() => setIsOn(!isOn)}>{isOn ? "켜짐" : "꺼짐"}</button>;
+}
+```
+
+```text
+--- 클릭
+  render Toggle isOn=true
+    commit: 켜짐 저장값:false
+  render Settings saved=true
+  render Toggle isOn=true
+    commit: 켜짐 저장값:true
+```
+
+토글만 먼저 렌더링되어 "켜짐 저장값:false"가 커밋되고, effect가 부모를 깨워 한 번 더 렌더링했다. 클릭 한 번에 커밋 두 번이고, 그 사이 화면은 서로 맞지 않는다. 핸들러에서 둘을 함께 바꾸면 배칭으로 한 번에 처리된다.
+
+```tsx
+function Toggle({ onChange }) {
+  const [isOn, setIsOn] = useState(false);
+  function handleClick() {
+    const next = !isOn;
+    setIsOn(next);
+    onChange(next);      // 같은 이벤트 안에서 부모에게도 알린다
+  }
+  return <button onClick={handleClick}>{isOn ? "켜짐" : "꺼짐"}</button>;
+}
+```
+
+```text
+--- 클릭
+  render Settings saved=true
+  render Toggle isOn=true
+    commit: 켜짐 저장값:true
+```
+
+부모와 자식이 같은 커밋에 맞는 값으로 그려졌다. 더 나아가면 토글이 state를 갖지 않고 부모가 준 `isOn`만 그리게 만들 수 있다. 값의 원천이 부모 하나가 되니 맞출 일 자체가 없다. 상태 끌어올리기는 [두 컴포넌트가 같은 값을 봐야 할 때](/posts/react-state-snapshot-batching#두-컴포넌트가-같은-값을-봐야-할-때)에서 봤다.
+
+같은 냄새가 나는 코드가 하나 더 있다. 자식이 데이터를 받아 와서 effect로 부모에게 올려 주는 코드다(`useEffect(() => { if (data) onFetched(data); }, [data])`). React에서 데이터는 위에서 아래로 흐른다. 부모가 그 데이터를 필요로 한다면 부모가 받아 와서 자식에게 내려준다. 데이터가 어디서 왔는지 추적하기도 그쪽이 쉽다.
+
+## 앱이 시작될 때 한 번만 하는 일
+
+로그인 토큰을 확인하거나 분석 SDK를 초기화하는 일은 앱에서 딱 한 번 해야 한다. 최상위 컴포넌트의 `useEffect(..., [])`에 두면 개발 모드에서 두 번 돈다.
+
+```tsx
+let didInit = false;
+
+function initSdk(tag) { console.log(`initSdk() 호출 (${tag})`); }
+
+function AppEffect() {
+  useEffect(() => { initSdk("effect"); }, []);
+  return null;
+}
+
+function AppGuard() {
+  useEffect(() => {
+    if (didInit) return;
+    didInit = true;
+    initSdk("가드");
+  }, []);
+  return null;
+}
+```
+
+두 컴포넌트를 StrictMode 안에 나란히 그렸다.
+
+```text
+initSdk() 호출 (effect)
+initSdk() 호출 (가드)
+initSdk() 호출 (effect)
+```
+
+컴포넌트 effect는 다시 붙는 검사에서 한 번 더 돌았다. 이 검사는 정리 함수를 시험하는 것이고, 앱 초기화는 정리할 수 있는 일이 아니다. 앱 초기화는 컴포넌트 생명주기가 아니라 앱 생명주기에 속한다. 그래서 모듈 변수로 한 번만 실행되게 막거나, 아예 컴포넌트 밖 모듈 최상위에서 실행한다.
+
+```tsx
+if (typeof window !== "undefined") {
+  checkAuthToken();          // 이 모듈을 처음 불러올 때 한 번
+  loadDataFromLocalStorage();
+}
+
+function App() { ... }
+```
+
+모듈 최상위 코드는 그 모듈을 import하는 순간 실행된다. 테스트에서 모듈만 불러와도 돌고, 서버에서 렌더링하는 프레임워크라면 서버에서도 돈다. 위의 `typeof window` 검사가 그래서 있다. 이런 코드는 앱의 진입점 가까이에 모아 두고, 여기저기 흩지 않는다.
+
+## 바깥 저장소는 구독 훅으로 읽는다
+
+브라우저의 온라인 상태처럼 React 바깥에서 바뀌는 값을 화면에 보여 줄 때, 흔히 effect로 구독하고 state에 복사한다.
+
+```tsx
+const [isOnline, setIsOnline] = useState(true);
+useEffect(() => {
+  const update = () => setIsOnline(navigator.onLine);
+  window.addEventListener("online", update);
+  window.addEventListener("offline", update);
+  return () => {
+    window.removeEventListener("online", update);
+    window.removeEventListener("offline", update);
+  };
+}, []);
+```
+
+동작은 하지만 첫 렌더링은 늘 `true`로 그려지고(이미 오프라인이어도), 서버 렌더링 결과와 맞추는 방법도 직접 짜야 한다. 이런 경우를 위해 React 18에 `useSyncExternalStore`가 들어왔다.
+
+```tsx
+function subscribe(callback) {
+  window.addEventListener("online", callback);
+  window.addEventListener("offline", callback);
+  return () => {
+    window.removeEventListener("online", callback);
+    window.removeEventListener("offline", callback);
+  };
+}
+
+function useOnlineStatus() {
+  return useSyncExternalStore(
+    subscribe,                 // 바뀌면 알려 달라고 등록하는 함수
+    () => navigator.onLine,    // 브라우저에서 지금 값을 읽는 함수
+    () => true,                // 서버 렌더링과 하이드레이션 때 쓸 값
+  );
+}
+```
+
+React가 구독과 해제를 맡고, 렌더링할 때마다 지금 값을 직접 읽으니 첫 렌더링부터 맞다. 동시성 렌더링 중에 값이 바뀌어 화면의 일부만 새 값으로 그려지는 문제(tearing)도 React가 막아 준다. 지켜야 할 규칙은 하나다. 지금 값을 읽는 함수는 저장소가 바뀌지 않았다면 같은 값을 돌려줘야 한다. 부를 때마다 새 객체를 만들면(`() => ({ online: navigator.onLine })`) 매번 바뀐 걸로 보인다. React 19.3 개발 빌드에서 그렇게 짜 보면 `The result of getSnapshot should be cached to avoid an infinite loop` 경고가 찍히고 `Maximum update depth exceeded` 오류로 렌더링이 멈춘다. 그 함정은 [셀렉터는 같은 입력에 같은 참조를 돌려줘야 한다](/posts/fp-in-react#셀렉터는-같은-입력에-같은-참조를-돌려줘야-한다)에서 봤다. Zustand, Redux 같은 상태 라이브러리도 안에서는 이 훅으로 저장소를 구독한다.
+
+## 데이터 받아 오기는 effect보다 도구에
+
+effect에서 직접 `fetch`하는 코드는 바깥 시스템(네트워크)과 맞추는 일이니 effect의 일이 맞다. 다만 제대로 하려면 경쟁 상태를 막는 정리 함수가 필요하고, 그걸로도 캐시가 없고, 같은 요청이 중복되고, 부모와 자식의 요청이 계단처럼 이어지는 문제가 남는다. 경쟁 상태 실험은 [요청을 보내는 effect는 경쟁한다](/posts/react-useeffect#요청을-보내는-effect는-경쟁한다)에 있다.
+
+그래서 데이터 받아 오기는 effect를 직접 쓰기보다 그 일을 잘하는 도구에 맡긴다. 클라이언트에서는 TanStack Query나 SWR이 쿼리 키로 캐시하고, 키가 바뀌면 이전 요청을 무시하거나 취소하고, 같은 키의 요청을 하나로 합친다. Next.js 같은 프레임워크라면 서버 컴포넌트나 라우트의 데이터 로딩 기능으로 렌더링 전에 받아 온다. 도구의 동작은 [화면 데이터 캐시](/posts/client-data-cache)에서 다뤘다. 이 도구들도 안에서는 effect와 구독을 쓴다. 차이는 그 effect를 한 번 제대로 짜 둔 걸 모두가 쓴다는 것이다.
+
+## 코드 리뷰에서 effect를 지우는 순서
+
+effect를 보면 이 순서로 묻는다. 앞에서 걸리면 그 자리로 옮기고 effect를 지운다.
+
+이 effect가 바꾸는 state는 다른 state나 props로 계산할 수 있나. 그렇다면 렌더링 중에 계산하고 state를 지운다. 무거우면 `useMemo`다. 이 effect가 다른 effect를 깨우나. 그렇다면 사슬 전체를 렌더링 계산이나 핸들러 하나로 합친다.
+
+이 effect는 props가 바뀌었을 때 state를 비우나. 전부 비운다면 key, 일부만이라면 렌더링 중 조정, 그보다 먼저 id만 두고 계산할 수 있는지 본다.
+
+이 effect는 사용자 행동 뒤에 일어나야 하는 일을 하나. 요청, 토스트, 이동, 부모에게 알리기라면 그 행동의 핸들러로 옮긴다.
+
+앱에서 한 번만 해야 하는 일인가. 모듈 최상위나 모듈 변수 가드로 옮긴다. 바깥 저장소를 state로 복사하나. `useSyncExternalStore`로 바꾼다. 데이터를 받아 오나. 데이터 도구로 바꾼다.
+
+이 질문을 다 지나서 남는 effect가 진짜 effect다. 서버 연결, 브라우저 API 구독, 외부 위젯 연동, 화면이 보였다는 기록 같은 것들이다. 그 effect는 정리 함수와 의존성 배열을 [useEffect를 제대로 쓰기](/posts/react-useeffect)대로 짠다.
+
+## 여섯 개에서 하나로
+
+선물 주문 화면의 effect 여섯 개 중 다섯 개는 바깥 시스템이 없었다. 계산을 effect로 맞추던 세 개는 렌더링 중 계산이 되어 합계가 튀지 않게 됐고, 받는 사람이 바뀌면 비우던 effect는 key가 되어 엉뚱한 초안 저장이 사라졌고, 부모에게 알리던 effect는 핸들러로 옮겨져 한 박자 늦던 표시가 맞춰졌다. 남은 하나는 자동 저장, 즉 서버라는 바깥 시스템과 맞추는 effect였다. effect가 필요 없는 자리에 effect를 두면 화면은 한 번 틀린 채로 커밋되고 그 틀린 순간이 버그가 된다. 계산은 렌더링에, 행동의 결과는 핸들러에, 대상이 바뀌면 key에 두면 그 순간이 처음부터 생기지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### useEffect가 필요 없는 대표적인 경우는 무엇인가요?
+
+바깥 시스템과 맞출 일이 없는 경우다. props나 state로 계산할 수 있는 값을 state에 두고 effect로 맞추는 것, 사용자 행동의 결과(요청, 알림)를 state 변화로 감지해 처리하는 것, props가 바뀔 때 state를 effect로 비우는 것이 대표적이다. 각각 렌더링 중 계산, 이벤트 핸들러, key로 바꾸면 렌더링 횟수가 줄고 한 번 틀린 화면이 커밋되는 문제도 사라진다.
+
+### 파생 값을 effect로 맞추면 실제로 어떤 문제가 생기나요?
+
+effect는 커밋 뒤에 돌기 때문에, 원본이 바뀐 렌더링은 옛 파생 값으로 먼저 커밋되고 effect가 고친 뒤 한 번 더 렌더링된다. effect끼리 이어지면 클릭 한 번에 커밋이 여러 번 일어나고, 실험에서는 합계 45,000원이라는 틀린 중간값이 DOM에 들어갔다. 렌더링 중에 계산하면 한 번에 맞는 값이 나온다.
+
+### props가 바뀌면 컴포넌트 state를 초기화하려면 어떻게 하나요?
+
+state 전체를 새로 시작하고 싶으면 그 props를 key로 준다. key가 바뀌면 React가 컴포넌트를 새로 마운트해 모든 state와 자식 state가 초깃값으로 돌아가고, 첫 커밋부터 맞다. effect로 비우면 이전 state가 새 props와 함께 한 번 커밋되어, 그 순간 자동 저장 같은 다른 effect가 틀린 값으로 돈다.
+
+### 렌더링 중에 setState를 해도 되나요?
+
+지금 렌더링 중인 컴포넌트 자신의 state를, 조건 안에서 바꾸는 경우만 된다. 이전 props를 state로 기억해 두고 달라졌을 때 다른 state를 맞추는 패턴이 그렇다. React는 그 렌더링의 결과를 버리고 자식으로 내려가기 전에 바로 다시 렌더링하니 틀린 값이 커밋되지 않는다. 조건 없이 바꾸면 무한 렌더링 오류가 나고, 다른 컴포넌트의 state는 바꿀 수 없다. 그래도 가능하면 id만 두고 계산하는 쪽을 먼저 찾는다.
+
+### 자식의 상태 변화를 부모에게 알릴 때 effect를 쓰면 안 되는 이유는요?
+
+자식이 먼저 렌더링되어 커밋되고, 그 뒤 effect가 부모를 깨워 한 번 더 렌더링하니 커밋이 두 번이고 그 사이 부모와 자식의 값이 어긋난다. 상태를 바꾸는 핸들러 안에서 부모 콜백도 함께 부르면 배칭으로 한 번에 처리된다. 더 나은 건 자식이 state를 갖지 않고 부모가 준 값을 그리는 제어 컴포넌트로 만드는 것이다.
+
+### 앱 시작 때 한 번만 실행할 코드는 어디에 두나요?
+
+빈 의존성 effect는 개발 모드 StrictMode에서 두 번 돌고, 컴포넌트가 다시 마운트되면 또 돈다. 앱 초기화는 컴포넌트가 아니라 앱 생명주기에 속하니 모듈 변수 가드로 한 번만 실행하거나 모듈 최상위에서 실행한다. 모듈 최상위 코드는 import만으로 실행되니 서버 렌더링과 테스트에서 돌아도 되는지 확인하고, 브라우저 전용이면 `typeof window`로 막는다.
+
+### 외부 저장소를 구독할 때 useEffect 대신 useSyncExternalStore를 쓰는 이유는요?
+
+effect로 구독해 state에 복사하면 첫 렌더링은 초깃값으로 그려지고, 동시성 렌더링 중에 값이 바뀌면 화면 일부만 새 값인 tearing이 생길 수 있다. `useSyncExternalStore`는 렌더링마다 지금 값을 읽고 구독과 해제를 React가 맡아, 첫 렌더링부터 맞고 tearing도 막는다. 서버 렌더링용 값을 따로 받는다. 지금 값을 읽는 함수는 변화가 없으면 같은 참조를 돌려줘야 한다.

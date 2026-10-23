@@ -116,7 +116,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI › {Claude Code, RAG}, Algorithms › {Data Structures, For System Design, Techniques}, Backend › {API Design, Architecture, Auth, Frameworks, Languages, Messaging, Spring, Testing}, Common › Git, Computer Science › Computer Architecture, Data Engineering, Design Patterns › {Behavioral, Creational, Structural}, In Practice, Database › {DB Types, MySQL, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, CSS, JavaScript, Performance, React, Rendering, System Design, TypeScript}, Network › {Cloud Networking, HTTP, Infrastructure, OSI · TCP/IP, Performance}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Cloud, Docker, IaC, Kubernetes › {Config & Storage, EKS, Foundation, Helm, Networking, Operations, Platform, Pod, Security, Workloads}, Nginx, Observability, SRE}, Security › Cryptography, System Design, UI/UX), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI › {Claude Code, RAG}, Algorithms › {Data Structures, For System Design, Techniques}, Backend › {API Design, Architecture, Auth, Frameworks, Languages, Messaging, Spring, Testing}, Common › Git, Computer Science › Computer Architecture, Data Engineering, Design Patterns › {Behavioral, Creational, Structural}, In Practice, Database › {DB Types, MySQL, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, CSS, HTML & A11y, JavaScript, Performance, React, Rendering, Security, System Design, Testing, TypeScript}, Network › {Cloud Networking, HTTP, Infrastructure, OSI · TCP/IP, Performance}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Cloud, Docker, IaC, Kubernetes › {Config & Storage, EKS, Foundation, Helm, Networking, Operations, Platform, Pod, Security, Workloads}, Nginx, Observability, SRE}, Security › Cryptography, System Design, UI/UX), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -285,7 +285,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 ## 학습 로드맵 (`/roadmap`) · 오늘 할 일 (`/study`)
 
-글 661편을 "완벽히 이해하고 응용할 수 있는 사람"이 되기 위한 학습 시스템이다. 로그인 없이 이 브라우저의 localStorage(`study-progress`)에 기록하고, JSON으로 내보내고 가져온다.
+글 695편을 "완벽히 이해하고 응용할 수 있는 사람"이 되기 위한 학습 시스템이다. 로그인 없이 이 브라우저의 localStorage(`study-progress`)에 기록하고, JSON으로 내보내고 가져온다.
 
 - **로드맵 데이터**: `features/roadmap/registry/roadmaps.ts`의 트리 하나가 단일 원천이다. 노드의 `items`에 글(slug), 관문(`{ checkpoint }`), 또 다른 로드맵이 **순서대로** 들어간다(로드맵 안의 로드맵, 깊이 제한 없음). 순서가 곧 공부 순서다. `tier`(1 핵심 / 2 실무·면접 / 3 참고)는 로드맵 단위로 주고 글마다 `{ post, tier }`로 덮어쓴다. `requires`는 "먼저 읽어 두면 좋은" 로드맵의 절대 경로(안내용 잠금, 강제 아님). 빌드 시 `validateRoadmaps`가 없는 글·중복·빠진 글·없는 requires를 검사한다.
 - **마스터 4단계**(글마다): 1 읽음(손으로 체크) → 2 설명함(글 끝 "내 말로 설명하기"에 20자 이상 저장) → 3 적용함(그 글 퀴즈 또는 관문에서 80% 이상) → 4 응용함(손으로 체크). 상태는 `features/roadmap/atoms/study-progress`(get/set/reset)로 다룬다.

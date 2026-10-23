@@ -1,0 +1,532 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-useeffect");
+
+<EasyIntro>
+  React 컴포넌트는 화면이 어떻게 생겨야 하는지만 계산하고, 그동안 바깥세상에는 손대지 않는다. 그런데 채팅 서버에 접속하거나, 타이머를 켜거나, 창 크기를 지켜보는 일은 바깥세상과 연결해야 할 수 있다. 이런 일을 하는 자리가 effect다.
+
+  effect는 화면을 다 그린 다음에 실행된다. 화면이 지금 보여 주는 내용에 맞게 바깥을 맞추는 일이라서다. 예를 들어 지금 화면이 여행 채팅방이라면 여행 채팅방 서버에 연결한다.
+
+  수도꼭지를 떠올리면 쉽다. effect는 꼭지를 여는 일이고, effect가 돌려주는 정리 함수는 꼭지를 잠그는 일이다. 다른 방으로 옮기면 React는 먼저 앞 방의 꼭지를 잠그고 새 방의 꼭지를 연다. 화면을 떠날 때도 꼭지를 잠근다.
+
+  잠그는 일을 빼먹으면 화면을 떠나도 물이 계속 흐른다. 그래서 React는 개발할 때 일부러 꼭지를 열었다 잠갔다 다시 열어 보면서 잠그는 코드가 제대로 있는지 확인한다.
+</EasyIntro>
+
+채팅 화면에서 방을 `general`에서 `travel`로 바꿨다. 화면은 여행 방인데 `general` 방의 새 메시지 알림이 계속 뜬다. 개발 서버의 로그를 보면 페이지에 처음 들어올 때마다 연결이 두 번 맺어지고 하나가 바로 끊긴다. 누군가는 "개발 모드에서 effect가 두 번 도는 건 버그 같으니 `useRef`로 막자"고 한다.
+
+두 증상은 같은 질문으로 풀린다. effect는 언제 실행되고, 언제 정리되는가. 이 글은 `useEffect`를 컴포넌트가 바깥 시스템과 동기화하는 도구로 보고, 실행 시점과 의존성 배열, 정리 함수의 순서, 개발 모드의 이중 실행, 요청을 보내는 effect의 경쟁 문제를 실제 로그로 따라간다. state가 렌더링 사이에 어떻게 이어지는지는 앞 글 [useState와 상태 스냅샷](/posts/react-state-snapshot-batching)에서 봤다.
+
+## effect는 렌더링이 끝난 뒤 바깥을 맞추는 코드다
+
+React 컴포넌트의 렌더링은 순수해야 한다. props와 state로 엘리먼트를 계산할 뿐, 서버에 연결하거나 DOM을 직접 고치지 않는다. 그 이유는 [JSX와 컴포넌트](/posts/react-jsx-components#렌더링은-같은-입력에-같은-결과를-내야-한다)에서 봤다. 그런데 화면에는 React가 관리하지 않는 것들이 엮여 있다. 채팅 서버 연결, `setInterval` 타이머, `window`의 이벤트 리스너, 지도나 차트 같은 외부 위젯, `document.title`이 그렇다.
+
+effect는 이런 바깥 시스템을 지금 화면 상태에 맞추는 코드다. "화면에 `travel` 방이 그려졌으니 `travel` 방 서버에 연결되어 있어야 한다"는 식이다.
+
+```tsx
+function ChatRoom({ roomId }) {
+  useEffect(() => {
+    const connection = createConnection(roomId);  // 바깥 시스템에 연결한다
+    connection.connect();
+    return () => connection.disconnect();         // 맞출 대상이 바뀌거나 사라지면 끊는다
+  }, [roomId]);                                   // roomId가 바뀌면 다시 맞춘다
+
+  return <h1>{roomId} 방</h1>;
+}
+```
+
+effect를 클래스 시절의 생명주기(`componentDidMount`, `componentDidUpdate`)로 이해하면 헷갈린다. "마운트될 때 연결하고, 업데이트될 때 무언가 하고"라고 생각하면 언제 무엇을 해야 하는지 경우의 수가 늘어난다. effect 하나는 "동기화를 시작하는 코드"와 "동기화를 멈추는 코드"의 짝이다. React는 필요할 때마다 멈추고 다시 시작할 뿐이다. 방이 바뀌든, 처음 그려지든, 개발 모드에서 다시 붙이든 같은 짝이 반복된다.
+
+거꾸로, 바깥 시스템이 없는 일은 effect의 일이 아니다. props에서 값을 계산하거나, 버튼을 눌렀을 때 요청을 보내는 일이 그렇다. 이런 경우는 다음 글 [effect 없이 쓰는 법](/posts/react-without-effects)에서 하나씩 본다.
+
+## 렌더, 커밋, 그리고 effect
+
+effect가 언제 도는지 로그로 확인했다. 부모와 자식이 각자 effect를 가진 트리를 React 19.3과 jsdom으로 그리고, `roomId`를 바꾸고, 같은 값으로 다시 그리고, 언마운트했다.
+
+```tsx
+function Child({ roomId }) {
+  log(`render Child room=${roomId}`);
+  useEffect(() => {
+    log(`  effect Child connect ${roomId}`);
+    return () => log(`  cleanup Child disconnect ${roomId}`);
+  }, [roomId]);
+  return <p>{roomId}</p>;
+}
+
+function Parent({ roomId }) {
+  log(`render Parent room=${roomId}`);
+  useEffect(() => {
+    log(`  effect Parent title=${roomId}`);
+    return () => log(`  cleanup Parent title=${roomId}`);
+  }, [roomId]);
+  return <Child roomId={roomId} />;
+}
+```
+
+```text
+--- 마운트
+render Parent room=general
+render Child room=general
+  effect Child connect general
+  effect Parent title=general
+--- roomId 변경
+render Parent room=travel
+render Child room=travel
+  cleanup Child disconnect general
+  cleanup Parent title=general
+  effect Child connect travel
+  effect Parent title=travel
+--- 같은 roomId로 다시 렌더
+render Parent room=travel
+render Child room=travel
+--- 언마운트
+  cleanup Parent title=travel
+  cleanup Child disconnect travel
+```
+
+읽을 것이 몇 가지 있다.
+
+렌더링이 전부 끝난 뒤에 effect가 돈다. 부모와 자식을 모두 렌더링하고, 그 결과를 DOM에 반영(커밋)한 다음이다. 그래서 effect 안에서는 DOM이 이미 새 내용이다.
+
+자식의 effect가 부모보다 먼저 돈다. 부모의 effect가 실행될 때 자식은 이미 준비를 마친 상태다.
+
+`roomId`가 바뀌면 이전 effect의 정리 함수가 먼저 다 돌고, 그다음 새 effect가 돈다. 정리 함수의 로그가 `general`인 점을 보면, 정리 함수는 자기가 만들어진 렌더링의 값을 본다. 이전 방을 끊어야 하니 맞는 동작이다.
+
+같은 `roomId`로 다시 그리면 렌더링은 일어나도 effect는 돌지 않는다. 의존성 배열이 같기 때문이다.
+
+언마운트할 때는 이 실험에서 부모의 정리 함수가 먼저 돌았다. 업데이트 때와 순서가 반대다. 부모와 자식의 정리 순서에 기대는 코드는 쓰지 않는 게 좋다. 각 effect가 자기가 연 것만 닫으면 순서는 상관이 없다.
+
+화면에 그려지는 시점과의 관계도 알아 둔다. `useEffect`는 보통 브라우저가 화면을 그린(페인트) 다음에 실행된다. effect가 페인트를 막지 않게 하려는 설계다. 예외가 있다. React 18부터 클릭이나 키 입력 같은 사용자 입력으로 생긴 업데이트는 effect를 페인트 전에 동기로 실행한다. 어느 쪽이든 effect는 커밋 뒤에 돈다는 사실은 같다. 그려지기 전에 DOM을 재서 위치를 고쳐야 하는 일(툴팁 위치 잡기)이라면 `useLayoutEffect`라는 별도 훅이 있다.
+
+## 의존성 배열은 다시 맞출 때를 정한다
+
+`useEffect`의 두 번째 인자는 "이 값들이 바뀌면 다시 동기화하라"는 목록이다.
+
+```tsx
+useEffect(() => { ... });            // 배열이 없다: 렌더링마다 다시 맞춘다
+useEffect(() => { ... }, []);        // 빈 배열: 처음 한 번만 (개발 모드에서는 붙였다 떼고 다시 붙인다)
+useEffect(() => { ... }, [roomId]);  // roomId가 바뀌었을 때만
+```
+
+React는 렌더링마다 이번 배열과 지난 배열을 칸마다 `Object.is`로 비교한다. 하나라도 다르면 이전 effect를 정리하고 새 effect를 실행한다. 모두 같으면 건너뛴다.
+
+의존성은 "고르는" 게 아니다. effect 안에서 읽는 렌더링 값(props, state, 컴포넌트 안에서 만든 변수와 함수)은 모두 배열에 들어가야 한다. effect가 `roomId`를 읽는데 배열에서 빼면, effect는 첫 렌더링의 `roomId`를 붙잡은 채 방이 바뀌어도 다시 연결하지 않는다. 처음 증상, 방을 바꿨는데 이전 방 알림이 계속 오는 게 이 모양이다.
+
+`eslint-plugin-react-hooks`의 `exhaustive-deps` 규칙이 이걸 검사한다. effect 안에서 읽는 값이 배열에 없으면 경고하고, 고쳐 넣을 배열을 제안한다. 반대로 effect가 읽지 않는 값을 넣으면 불필요하다고 알린다. 의존성을 빼고 싶으면 배열을 고칠 게 아니라 effect 코드를 고쳐서 그 값을 읽지 않게 만든다. 경고를 `eslint-disable`로 끄면 오래된 값을 보는 버그가 시작된다. 그 버그의 모양과 세 가지 해법은 [클로저](/posts/js-closures#의존성-배열을-비우고-경고를-끄는-실수)에서 다뤘다.
+
+예외로 빼도 되는 값이 있다. `useState`의 setter, `useReducer`의 `dispatch`, `useRef`가 돌려준 ref 객체는 렌더링 사이에 같은 값으로 유지되니 넣어도 빼도 결과가 같고, 린트도 요구하지 않는다. 컴포넌트 밖에 선언한 상수와 함수는 렌더링 값이 아니라서 넣을 필요가 없다.
+
+비교 규칙을 함수로 써 보면 객체 의존성이 왜 문제인지 바로 보인다. 아래 `effectRuns`는 렌더링마다의 의존성 배열을 받아, 그 렌더링 뒤에 effect가 처음 실행되는지(`run`), 건너뛰는지(`skip`), 정리하고 다시 실행하는지(`cleanup+run`)를 돌려준다. 배열이 없는 effect는 `null`로 넣는다. 네 번째 테스트를 보면 내용이 같은 두 객체도 다르게 판정된다.
+
+<CodePlayground
+  caption="의존성 배열 비교하기"
+  functionName="effectRuns"
+  initialCode={`function effectRuns(depsPerRender) {
+  const result = [];
+  // 첫 렌더링은 "run"
+  // 그다음부터는 지난 배열과 칸마다 Object.is로 비교해
+  // 모두 같으면 "skip", 하나라도 다르거나 배열이 없으면 "cleanup+run"
+  return result;
+}`}
+  solution={`function effectRuns(depsPerRender) {
+  const result = [];
+  let prev;
+  depsPerRender.forEach((deps, i) => {
+    if (i === 0) {
+      result.push("run");
+    } else {
+      const same =
+        deps !== null &&
+        prev !== null &&
+        deps.length === prev.length &&
+        deps.every((d, j) => Object.is(d, prev[j]));
+      result.push(same ? "skip" : "cleanup+run");
+    }
+    prev = deps;
+  });
+  return result;
+}`}
+  tests={[
+    { args: [[[1], [1], [2]]], expected: ["run", "skip", "cleanup+run"], label: "[roomId]가 같다가 바뀐다" },
+    { args: [[null, null, null]], expected: ["run", "cleanup+run", "cleanup+run"], label: "배열이 없다" },
+    { args: [[[], [], []]], expected: ["run", "skip", "skip"], label: "빈 배열" },
+    { args: [[[{ status: "open" }], [{ status: "open" }]]], expected: ["run", "cleanup+run"], label: "렌더링마다 새로 만든 객체" },
+    { args: [[["open"], ["open"]]], expected: ["run", "skip"], label: "원시값을 넣는다" },
+    { args: [[[1, "a"], [1, "b"], [1, "b"]]], expected: ["run", "cleanup+run", "skip"], label: "두 칸 중 하나만 바뀐다" },
+  ]}
+/>
+
+## 의존성이 렌더링마다 바뀌면
+
+CodePlayground의 네 번째 경우가 실제 코드에서 어떤 모습인지 채팅방으로 시험했다. 연결 옵션을 객체로 만들어 effect에 넘기고, 린트가 시키는 대로 그 객체를 의존성에 넣었다. 그리고 같은 화면의 메시지 입력칸에 글자를 쳤다.
+
+```tsx
+function ChatRoom({ roomId }) {
+  const [message, setMessage] = useState("");
+  const options = { serverUrl, roomId };           // 렌더링마다 새 객체
+  useEffect(() => {
+    const c = createConnection(options);
+    c.connect();
+    return () => c.disconnect();
+  }, [options]);
+  return <input value={message} onChange={(e) => setMessage(e.target.value)} />;
+}
+```
+
+```text
+  connect general
+입력 "안"
+  disconnect general
+  connect general
+입력 "안녕"
+  disconnect general
+  connect general
+입력 "안녕!"
+  disconnect general
+  connect general
+연결 4번
+```
+
+글자 하나 칠 때마다 연결을 끊고 다시 맺었다. `message`가 바뀌어 다시 렌더링되면 `options`가 새 객체가 되고, `Object.is`로는 매번 다르기 때문이다. 실서비스라면 웹소켓 서버에 재연결이 몰리고, 그 사이 도착한 메시지를 놓친다.
+
+고치는 방법은 바깥에서 안으로 순서대로 본다.
+
+- 객체를 effect 안에서 만든다. 그러면 의존성은 객체가 아니라 `roomId` 같은 원시값이 된다.
+- 렌더링 값을 쓰지 않는 객체나 함수라면 컴포넌트 밖으로 뺀다. 의존성에서 아예 사라진다.
+- props로 객체를 받는다면 effect 밖에서 필요한 원시값만 꺼내(`const { roomId } = options`) 그걸 의존성에 넣는다.
+- 그래도 안 되면 `useMemo`나 `useCallback`으로 참조를 고정한다. 마지막 수단이다.
+
+첫 번째 방법으로 바꾸면 이렇다.
+
+```tsx
+useEffect(() => {
+  const options = { serverUrl, roomId };   // effect 안에서 만든다
+  const c = createConnection(options);
+  c.connect();
+  return () => c.disconnect();
+}, [roomId]);
+```
+
+```text
+  connect general
+입력 "안"
+입력 "안녕"
+입력 "안녕!"
+연결 1번
+```
+
+effect 안에서 state를 바꾸는데 의존성이 렌더링마다 바뀌면 연결 반복이 아니라 무한 렌더링이 된다. 그 경우 개발 빌드와 프로덕션 빌드의 콘솔에 무엇이 남고 무엇이 안 남는지는 [렌더링이 멈추지 않을 때 남는 흔적](/posts/react-rerender#렌더링이-멈추지-않을-때-남는-흔적)에서 측정했다.
+
+## 정리 함수가 도는 순간
+
+effect가 돌려주는 함수가 정리 함수다. 앞의 로그에서 본 대로 두 번 돈다. 의존성이 바뀌어 effect를 다시 실행하기 직전, 그리고 컴포넌트가 화면에서 사라질 때다. 아래 그림에서 다음을 누르면 채팅방 하나의 일생이 순서대로 나온다.
+
+<SequenceDiagram
+  caption="정리 함수는 다음 effect 전에, 그리고 사라질 때 돈다"
+  actors={[
+    { id: "react", label: "React" },
+    { id: "effect", label: "effect" },
+    { id: "server", label: "채팅 서버" },
+  ]}
+  steps={[
+    {
+      from: "react",
+      to: "effect",
+      label: "커밋 후 실행",
+      title: "general 방을 그렸다",
+      detail: "렌더링과 커밋이 끝나면 React가 effect를 실행한다.",
+    },
+    {
+      from: "effect",
+      to: "server",
+      label: "connect(general)",
+      title: "동기화를 시작한다",
+      detail: "effect가 general 방에 연결하고, 끊는 방법을 정리 함수로 돌려준다.",
+    },
+    {
+      from: "react",
+      to: "effect",
+      label: "roomId → travel",
+      title: "의존성이 바뀌었다",
+      detail: "새 렌더링의 [roomId]가 지난번과 다르다. 새 effect를 실행하기 전에 지난 effect를 먼저 정리한다.",
+    },
+    {
+      from: "effect",
+      to: "server",
+      label: "disconnect(general)",
+      title: "지난 정리 함수는 지난 값을 본다",
+      detail: "정리 함수는 general 렌더링에서 만들어졌으니 general을 끊는다. 그다음 새 effect가 travel에 연결한다.",
+      payload: "cleanup Child disconnect general\neffect Child connect travel",
+    },
+    {
+      from: "react",
+      to: "effect",
+      label: "언마운트",
+      title: "화면에서 사라진다",
+      detail: "더 맞출 대상이 없으니 마지막 정리 함수를 부른다.",
+    },
+    {
+      from: "effect",
+      to: "server",
+      label: "disconnect(travel)",
+      title: "열었던 것을 모두 닫았다",
+      detail: "연결 수가 0으로 돌아왔다. 정리 함수가 없었다면 travel 연결이 화면 밖에서 계속 살아 있었다.",
+    },
+  ]}
+/>
+
+정리 함수가 해야 하는 일은 effect가 한 일을 되돌리는 것이다. 연결했으면 끊고, 구독했으면 해제하고, 타이머를 걸었으면 멈추고, 위젯을 만들었으면 없앤다.
+
+```tsx
+useEffect(() => {
+  const id = setInterval(tick, 1000);
+  return () => clearInterval(id);
+}, []);
+
+useEffect(() => {
+  function onResize() { setWidth(window.innerWidth); }
+  window.addEventListener("resize", onResize);
+  return () => window.removeEventListener("resize", onResize);  // 같은 함수 참조를 넘겨야 떼어진다
+}, []);
+
+useEffect(() => {
+  const observer = new IntersectionObserver(onIntersect);
+  observer.observe(ref.current);
+  return () => observer.disconnect();
+}, []);
+```
+
+`removeEventListener`는 등록할 때와 같은 함수 참조를 받아야 떼어진다. 정리 함수 안에서 새 화살표 함수를 넘기면 아무것도 떼지 못한다. 리스너가 여럿이면 `addEventListener`의 `signal` 옵션에 `AbortController`의 신호를 넘기고 정리 함수에서 `abort()` 한 번으로 모두 떼는 방법도 있다. 그 방법은 [리스너 여러 개를 한 번에 뗀다](/posts/abort-controller#리스너-여러-개를-한-번에-뗀다)에 있다.
+
+정리 함수를 빠뜨리면 무엇이 남는지 시험했다. `resize` 리스너를 다는 컴포넌트를 세 번 그렸다 지운 뒤 한 번 더 그리고, `resize`를 한 번 일으켰다.
+
+```text
+정리 없음 일반       남은 리스너 4개, resize 한 번에 핸들러 4번
+정리 없음 StrictMode 남은 리스너 8개, resize 한 번에 핸들러 8번
+정리 있음 일반       남은 리스너 1개, resize 한 번에 핸들러 1번
+정리 있음 StrictMode 남은 리스너 1개, resize 한 번에 핸들러 1번
+```
+
+정리 함수가 없으면 화면에 들어올 때마다 리스너가 하나씩 쌓인다. 핸들러 안에서 `setState`를 하면 이미 사라진 컴포넌트를 붙잡고 있으니 메모리도 풀리지 않는다. SPA에서 화면을 오가며 오래 쓰면 점점 느려지는 원인이 된다. 메모리가 실제로 어떻게 쌓이는지는 [메모리 누수](/posts/js-memory-leak)에서 힙 스냅샷으로 봤다.
+
+## 개발 모드에서 두 번 연결되는 이유
+
+같은 실험의 StrictMode 줄을 보자. 정리 함수가 없을 때 리스너가 8개로 두 배가 됐다. 처음 증상의 "연결이 두 번 맺어진다"도 같은 일이다. 앞의 부모-자식 트리를 StrictMode로 감싸 마운트하면 로그가 이렇다.
+
+```text
+--- 마운트
+render Parent room=general
+render Parent room=general
+render Child room=general
+render Child room=general
+  effect Child connect general
+  effect Parent title=general
+  cleanup Parent title=general
+  cleanup Child disconnect general
+  effect Child connect general
+  effect Parent title=general
+```
+
+렌더링이 두 번씩인 건 렌더링 순수성 검사다. 그 아래가 effect 검사다. React 18부터 StrictMode의 개발 빌드는 컴포넌트를 처음 마운트한 직후 effect를 한 번 정리하고 다시 실행한다. 사용자가 화면을 떠났다가 바로 돌아온 상황을 흉내 내는 것이다. 프로덕션 빌드에서는 하지 않는다.
+
+이 검사가 묻는 건 하나다. "시작 → 정리 → 시작"이 "시작" 한 번과 사용자 눈에 똑같은가. 정리 함수가 제대로 짜였다면 연결이 하나 생겼다 끊기고 다시 하나가 생기니, 결국 연결은 하나다. 정리 함수가 없거나 덜 되돌리면 두 개가 남고, 위 실험처럼 리스너가 두 배가 된다. 개발 중에 이 차이가 보이면 프로덕션에서 화면을 오갈 때 같은 누수가 생긴다는 뜻이다.
+
+그래서 `useRef` 플래그로 두 번째 실행을 막는 건 고치는 게 아니다. 검사를 끄는 것이고, 정리 함수가 없다는 사실은 그대로 남는다. 네트워크 탭에 요청이 두 번 나가고 하나가 `(canceled)`로 보이는 것도 정리 함수에서 요청을 취소한 정상 동작이다. 그 장면은 [AbortController](/posts/abort-controller#react-effect에서-취소가-닿지-않을-때) 글의 서버 로그로 봤다.
+
+정말로 앱 전체에서 한 번만 해야 하는 초기화(분석 도구 초기화, 로그인 토큰 확인)는 effect가 아니라 다른 자리에 둔다. 이건 [effect 없이 쓰는 법](/posts/react-without-effects)에서 다룬다.
+
+## 요청을 보내는 effect는 경쟁한다
+
+effect에서 데이터를 받아 오는 코드는 거의 모든 React 프로젝트에 있다. 그리고 거의 같은 버그를 갖고 있다.
+
+```tsx
+function Profile({ id }) {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    fetchUser(id).then((u) => setUser(u));
+  }, [id]);
+  return <p>{user ? user.name : "로딩"}</p>;
+}
+```
+
+사용자를 1, 2, 3번으로 빠르게 바꿨다. 아래 로그는 `fetchUser`와 콜백에 시각을 찍는 줄을 더해 돌린 결과다. 1번 응답은 300ms, 2번은 120ms, 3번은 60ms 걸리게 했다. 앞의 요청일수록 늦게 오는 상황이다.
+
+```text
+  28ms GET /users/1 보냄
+  32ms GET /users/2 보냄
+  46ms GET /users/3 보냄
+ 105ms /users/3 응답
+ 106ms   setUser(user3)
+ 153ms /users/2 응답
+ 153ms   setUser(user2)
+ 329ms /users/1 응답
+ 330ms   setUser(user1)
+ 454ms 선택한 id=3, 화면: user1
+```
+
+선택한 건 3번인데 화면에는 1번이 남았다. 늦게 도착한 응답이 마지막에 `setUser`를 불러 덮었다. 이런 걸 경쟁 상태라고 한다. 응답이 도착하는 순서는 요청 순서를 따르지 않는다.
+
+정리 함수가 이걸 고친다. id가 바뀌면 이전 effect의 정리 함수가 돌고, 그때 이전 요청의 결과를 버리라고 표시한다.
+
+```tsx
+useEffect(() => {
+  let ignore = false;
+  fetchUser(id).then((u) => {
+    if (!ignore) setUser(u);   // 이 effect가 아직 최신일 때만 반영한다
+  });
+  return () => { ignore = true; };
+}, [id]);
+```
+
+```text
+  26ms GET /users/1 보냄
+  29ms GET /users/2 보냄
+  45ms GET /users/3 보냄
+ 106ms /users/3 응답
+ 107ms   setUser(user3)
+ 149ms /users/2 응답
+ 149ms   버림 user2
+ 326ms /users/1 응답
+ 327ms   버림 user1
+ 453ms 선택한 id=3, 화면: user3
+```
+
+`ignore`는 effect 실행마다 새로 생기는 변수다. 1번 effect의 `then` 콜백은 1번 effect의 `ignore`를 보고, 그건 2번으로 바뀔 때 정리 함수가 `true`로 바꿔 놓았다. 아래 그림이 두 번째 로그를 한 줄씩 따라간다.
+
+<AlgoTrace
+  caption="ignore 플래그는 effect마다 따로 생기고, 정리 함수가 지난 것을 끈다"
+  memoryLabel="살아 있는 effect의 ignore"
+  cells={["id=1", "id=2", "id=3", "3 응답", "2 응답", "1 응답"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["#1 false"],
+      caption: "id=1 effect가 요청을 보낸다. 이 effect의 ignore는 false다.",
+    },
+    {
+      pointer: 1,
+      memory: ["#1 true", "#2 false"],
+      caption: "id가 2로 바뀐다. 새 effect 전에 #1의 정리 함수가 돌아 #1의 ignore를 true로 바꾼다.",
+    },
+    {
+      pointer: 2,
+      memory: ["#1 true", "#2 true", "#3 false"],
+      caption: "id가 3으로 바뀐다. #2도 꺼지고, #3만 false로 남는다.",
+    },
+    {
+      pointer: 3,
+      found: [3],
+      memory: ["#1 true", "#2 true", "#3 false"],
+      caption: "3번 응답이 먼저 온다. #3의 ignore가 false라 setUser(user3).",
+    },
+    {
+      pointer: 4,
+      memory: ["#1 true", "#2 true", "#3 false"],
+      caption: "2번 응답. #2의 콜백은 자기 ignore를 보는데 true다. 버린다.",
+    },
+    {
+      pointer: 5,
+      found: [3],
+      memory: ["#1 true", "#2 true", "#3 false"],
+      caption: "1번 응답도 버린다. 화면에는 user3이 남는다. 플래그가 없던 처음 코드는 여기서 user1로 덮였다.",
+    },
+  ]}
+/>
+
+`ignore`는 결과만 버리고 요청은 끝까지 간다. 네트워크와 서버 자원까지 아끼려면 `AbortController`로 요청 자체를 끊는다. 정리 함수에서 `controller.abort()`를 부르고 `fetch`에 `signal`을 넘기면, 지난 요청은 `AbortError`로 끝난다. 신호를 받지 않는 함수에서는 `abort()`가 아무 효과도 없다는 함정과 서버까지 취소를 잇는 방법은 [AbortController로 취소 설계하기](/posts/abort-controller)에서 다뤘다.
+
+이렇게 고쳐도 effect로 직접 받아 오는 방식에는 한계가 남는다. 캐시가 없어서 화면을 다시 열 때마다 처음부터 받는다. 같은 데이터를 쓰는 컴포넌트 세 곳이 각자 요청한다. 부모가 받은 뒤에야 자식이 렌더링되어 요청을 시작하니 요청이 계단처럼 이어진다. 그래서 실무에서는 TanStack Query 같은 라이브러리나 프레임워크의 데이터 로딩 기능에 맡기는 편이 낫다. 그 이야기는 [화면 데이터 캐시](/posts/client-data-cache)에 있다.
+
+## 다시 연결하면 안 되는 값을 읽을 때
+
+채팅방에 테마를 붙였다. 메시지가 오면 지금 테마 색으로 알림을 띄운다. effect가 `theme`을 읽으니 린트는 `theme`을 의존성에 넣으라고 한다. 넣으면 테마를 바꿀 때마다 채팅 연결이 끊겼다 다시 맺어진다.
+
+```text
+== theme을 의존성에
+  connect general
+  알림[light] 첫 메시지
+테마를 dark로
+  disconnect general
+  connect general
+  알림[dark] 두 번째 메시지
+```
+
+연결은 `roomId`에만 반응해야 하고, 알림은 최신 `theme`을 읽어야 한다. 한 effect 안에 반응해야 하는 값과 읽기만 할 값이 섞인 경우다. 이걸 위해 생긴 훅이 `useEffectEvent`다. 실험 단계를 거쳐 React 19.2부터 정식 API가 됐다.
+
+```tsx
+import { useEffect, useEffectEvent } from "react";
+
+function ChatRoom({ roomId, theme }) {
+  const onMessage = useEffectEvent((m) => {
+    showNotification(m, theme);       // 늘 최신 theme을 읽는다
+  });
+
+  useEffect(() => {
+    const c = createConnection(roomId);
+    c.on("message", (m) => onMessage(m));
+    c.connect();
+    return () => c.disconnect();
+  }, [roomId]);                       // onMessage는 의존성에 넣지 않는다
+}
+```
+
+```text
+== useEffectEvent
+  connect general
+  알림[light] 첫 메시지
+테마를 dark로
+  알림[dark] 두 번째 메시지
+```
+
+연결은 한 번만 맺었고, 알림은 바뀐 테마로 떴다. `useEffectEvent`로 감싼 함수는 의존성에 넣지 않는다. 대신 쓰는 자리가 정해져 있다. effect 안(그리고 effect가 만든 콜백 안)에서만 부르고, 다른 컴포넌트나 훅에 넘기지 않는다. 렌더링 중에 부르는 것도 안 된다. 이 함수는 "effect 안에서 일어나는 이벤트"를 위한 것이지, 의존성 경고를 피하는 도구가 아니다. 이 훅이 없던 버전에서는 `useRef`에 최신 값을 담아 읽는 방법을 썼다. 타이머에서 같은 문제를 푸는 세 가지 방법을 비교한 건 [클로저](/posts/js-closures#react-컴포넌트에서-오래된-값을-보는-이유)에 있다.
+
+## 현장에서 effect를 의심하는 순서
+
+증상에서 원인으로 가는 길을 정리해 두면 이렇다.
+
+"화면을 바꿨는데 이전 대상의 데이터가 계속 들어온다"면 의존성 배열에서 빠진 값이 있거나 정리 함수가 없다. effect 안에서 읽는 값을 배열과 비교하고, 정리 함수가 effect가 연 것을 전부 닫는지 본다.
+
+"개발 모드에서만 두 번씩 일어난다"면 StrictMode의 검사다. 두 번째 실행을 막지 말고, 정리 함수를 넣은 뒤에도 결과가 두 배인지 본다. 두 배라면 정리가 덜 됐다.
+
+"입력할 때마다 연결이나 구독이 다시 맺어진다"면 렌더링마다 새로 만드는 객체나 함수가 의존성에 있다. React DevTools Profiler의 "왜 렌더링됐는지"와 effect 안의 로그를 함께 보면 어떤 값 때문에 다시 도는지 보인다.
+
+"빠르게 바꾸면 엉뚱한 결과가 남는다"면 요청 경쟁이다. 정리 함수에서 결과를 버리거나 요청을 취소한다.
+
+"화면을 오래 쓰면 점점 느려진다"면 정리되지 않은 리스너와 타이머를 의심한다. 크롬 DevTools의 Elements 패널에서 `window`나 요소를 고르고 Event Listeners 탭을 보면 같은 리스너가 몇 개 붙어 있는지 셀 수 있다. 콘솔에서는 `getEventListeners(window)`로 볼 수 있다(크롬 계열 DevTools의 콘솔 전용 함수다).
+
+## 다시 채팅방으로
+
+방을 바꿨는데 이전 방 알림이 온 건 effect가 `roomId`를 읽으면서 의존성에서 빠졌거나, 정리 함수가 이전 연결을 끊지 않았기 때문이다. 개발 모드의 이중 연결은 버그가 아니라 정리 함수를 시험하는 장치였고, `useRef`로 막으면 그 시험만 사라진다. effect는 렌더링 뒤에 바깥 시스템을 화면에 맞추는 "시작과 정리"의 짝이고, 의존성 배열은 언제 다시 맞출지를 코드가 읽는 값으로 정한다. 그런데 이렇게 쓰고 보면 많은 effect가 애초에 맞출 바깥 시스템이 없다. 그런 effect를 지우는 법이 다음 글 [effect 없이 쓰는 법](/posts/react-without-effects)이다.
+
+## 면접에서 나올 만한 질문
+
+### useEffect는 무엇을 하는 훅인가요?
+
+렌더링이 끝난 뒤 React 바깥의 시스템을 지금 화면 상태에 맞추는 코드를 두는 자리다. 서버 연결, 구독, 타이머, 외부 위젯, `document.title` 같은 것이 대상이다. effect 함수가 동기화를 시작하고, 돌려준 정리 함수가 멈춘다. 바깥 시스템이 없는 계산이나 사용자 이벤트의 결과 처리는 effect가 아니라 렌더링과 이벤트 핸들러에 둔다.
+
+### useEffect는 정확히 언제 실행되나요?
+
+렌더링과 커밋이 끝나 DOM이 바뀐 뒤에 실행되고, 보통은 브라우저가 화면을 그린 다음이다. React 18부터 클릭이나 키 입력으로 생긴 업데이트의 effect는 페인트 전에 동기로 실행된다. 트리 안에서는 자식의 effect가 부모보다 먼저 돈다. 그려지기 전에 DOM을 재야 하면 `useLayoutEffect`를 쓴다.
+
+### 의존성 배열은 어떻게 정하나요?
+
+고르는 게 아니라 effect 안에서 읽는 렌더링 값(props, state, 컴포넌트 안의 변수와 함수)을 모두 넣는다. React는 렌더링마다 각 칸을 `Object.is`로 비교해 하나라도 다르면 정리하고 다시 실행한다. `exhaustive-deps` 린트가 빠진 값을 알려 주고, 빼고 싶으면 effect가 그 값을 읽지 않게 코드를 바꾼다. setter와 dispatch, ref 객체는 바뀌지 않으니 넣지 않아도 된다.
+
+### 정리 함수는 언제, 어떤 값으로 실행되나요?
+
+의존성이 바뀌어 effect를 다시 실행하기 직전과 컴포넌트가 사라질 때 실행된다. 정리 함수는 자기가 만들어진 렌더링의 값을 보기 때문에, 방이 바뀌면 이전 방 id로 연결을 끊는다. 다음 effect를 실행하기 전에 바뀐 effect들의 정리 함수를 모두 먼저 실행한다.
+
+### StrictMode에서 effect가 두 번 실행되는 건 왜인가요? 막아야 하나요?
+
+React 18부터 StrictMode 개발 빌드는 첫 마운트 직후 effect를 한 번 정리하고 다시 실행해서, 정리 함수가 effect를 제대로 되돌리는지 확인한다. 시작-정리-시작이 시작 한 번과 같은 결과를 내면 정상이다. ref 플래그로 막으면 검사만 사라지고 누수는 남는다. 프로덕션에서는 한 번만 실행된다.
+
+### effect에서 데이터를 받아 올 때 생기는 경쟁 상태는 어떻게 막나요?
+
+빠르게 값이 바뀌면 늦게 도착한 이전 요청의 응답이 최신 결과를 덮는다. effect 안에 `ignore` 변수를 두고 정리 함수에서 `true`로 바꿔 지난 응답을 버리거나, `AbortController`로 지난 요청을 실제로 취소한다. 캐시와 중복 요청 문제까지 생각하면 TanStack Query 같은 라이브러리에 맡기는 편이 낫다.
+
+### 객체나 함수를 의존성에 넣으면 무슨 문제가 생기나요?
+
+컴포넌트 안에서 만든 객체와 함수는 렌더링마다 새 참조라서 effect가 렌더링마다 다시 실행된다. 연결 effect라면 입력할 때마다 재연결되고, effect 안에서 state를 바꾸면 무한 렌더링이 된다. 객체를 effect 안에서 만들거나, 컴포넌트 밖으로 빼거나, 원시값만 의존성에 넣고, 마지막으로 `useMemo`나 `useCallback`을 쓴다.
+
+### useEffectEvent는 언제 쓰나요?
+
+effect가 최신 값을 읽어야 하지만 그 값이 바뀔 때 다시 실행되면 안 될 때 쓴다. 채팅 연결은 방에만 반응하고 알림은 최신 테마를 써야 하는 경우가 그렇다. React 19.2부터 정식 API이고, 감싼 함수는 의존성에 넣지 않는 대신 effect 안에서만 부르고 다른 곳에 넘기지 않는다. 이전에는 ref에 최신 값을 담아 같은 일을 했다.

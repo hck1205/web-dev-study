@@ -2,6 +2,545 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "aria-keyboard-focus": {
+    "links": [
+      "html-semantics",
+      "web-accessibility",
+      "frontend-system-design-interview",
+      "rendering-csr-spa"
+    ],
+    "mentions": [
+      "frontend-testing-strategy"
+    ]
+  },
+  "browser-security-model": {
+    "links": [
+      "cors",
+      "csrf",
+      "xss",
+      "spa-auth-token-storage",
+      "web-security-headers",
+      "web-workers",
+      "owasp-top-10-map",
+      "browser-storage"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "frontend-testing-strategy",
+      "cpu-pipelining-branch-prediction",
+      "html-form-http",
+      "cookie-session-login"
+    ]
+  },
+  "css-box-model-layout": {
+    "links": [
+      "css-flexbox-grid",
+      "css-sticky-scroll-snap",
+      "css-cascade-specificity",
+      "css-position-stacking-context"
+    ],
+    "mentions": []
+  },
+  "css-cascade-specificity": {
+    "links": [
+      "css-performance",
+      "css-box-model-layout",
+      "css-position-stacking-context"
+    ],
+    "mentions": [
+      "micro-frontend-integration-patterns"
+    ]
+  },
+  "css-flexbox-grid": {
+    "links": [
+      "css-box-model-layout",
+      "css-sticky-scroll-snap"
+    ],
+    "mentions": [
+      "responsive-design"
+    ]
+  },
+  "css-position-stacking-context": {
+    "links": [
+      "css-box-model-layout",
+      "css-sticky-scroll-snap",
+      "css-cascade-specificity",
+      "css-flexbox-grid"
+    ],
+    "mentions": [
+      "event-propagation",
+      "design-system-building"
+    ]
+  },
+  "css-styling-approaches": {
+    "links": [
+      "css-performance",
+      "design-system-building"
+    ],
+    "mentions": [
+      "rendering-strategies"
+    ]
+  },
+  "design-system-building": {
+    "links": [
+      "css-styling-approaches",
+      "semantic-versioning",
+      "frontend-monorepo"
+    ],
+    "mentions": [
+      "css-performance",
+      "frontend-testing-strategy",
+      "aria-keyboard-focus",
+      "web-accessibility",
+      "react-component-patterns",
+      "rendering-strategies"
+    ]
+  },
+  "frontend-build-tooling": {
+    "links": [
+      "bundler-basics",
+      "code-splitting",
+      "tsconfig-strict",
+      "js-map-set-weak",
+      "js-iterators-generators",
+      "frontend-error-tracking"
+    ],
+    "mentions": [
+      "dependency-hell",
+      "pattern-iterator",
+      "docker-container-basics",
+      "js-optional-chaining-nullish",
+      "react-useeffect",
+      "js-function-forms",
+      "js-es-modules",
+      "frontend-monorepo",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "frontend-testing-strategy": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "client-data-cache",
+      "ci-cd-basics"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "design-system-building",
+      "react-state-management-libraries",
+      "html-semantics",
+      "web-accessibility",
+      "sd-payment-flow",
+      "event-loop",
+      "js-pure-functions",
+      "react-custom-hooks-rules"
+    ]
+  },
+  "html-semantics": {
+    "links": [
+      "web-accessibility",
+      "aria-keyboard-focus",
+      "dom-basics",
+      "html-form-http",
+      "hydration",
+      "seo-for-spa"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "rendering-strategies"
+    ]
+  },
+  "js-iterators-generators": {
+    "links": [
+      "pattern-iterator",
+      "js-destructuring",
+      "js-spread-rest",
+      "js-map-set-weak",
+      "js-execution-context",
+      "frontend-build-tooling",
+      "js-promise-combinators",
+      "http-streaming-sse",
+      "frontend-state-architecture"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "js-async-await",
+      "js-promises",
+      "spark-basics",
+      "bundler-basics"
+    ]
+  },
+  "js-map-set-weak": {
+    "links": [
+      "js-memory-leak",
+      "js-memoization",
+      "js-prototype-chain",
+      "js-equality-coercion",
+      "js-immutability-react",
+      "js-object-methods",
+      "pattern-iterator",
+      "ds-hash-map",
+      "bundler-basics",
+      "js-shallow-deep-copy"
+    ],
+    "mentions": [
+      "web-workers",
+      "spring-ioc-di",
+      "pattern-prototype",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-component-patterns": {
+    "links": [
+      "typescript-in-react",
+      "react-rerender",
+      "pattern-decorator",
+      "frontend-system-design-interview",
+      "design-patterns-overview"
+    ],
+    "mentions": [
+      "react-suspense-error-boundary",
+      "react-context",
+      "aria-keyboard-focus",
+      "react-custom-hooks-rules",
+      "js-pure-functions"
+    ]
+  },
+  "react-concurrent-transitions": {
+    "links": [
+      "react-rerender",
+      "react-fiber-render-commit",
+      "debounce-throttle",
+      "react-suspense-error-boundary"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "event-loop",
+      "core-web-vitals"
+    ]
+  },
+  "react-context": {
+    "links": [
+      "react-rerender",
+      "fp-in-react",
+      "react-memoization-hooks",
+      "react-custom-hooks-rules",
+      "react-server-components"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "rendering-strategies",
+      "frontend-state-architecture",
+      "frontend-monorepo"
+    ]
+  },
+  "react-custom-hooks-rules": {
+    "links": [
+      "react-context",
+      "react-memoization-hooks",
+      "client-data-cache",
+      "hydration",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "fp-in-react",
+      "react-concurrent-transitions",
+      "react-useeffect",
+      "ds-linked-list",
+      "rendering-strategies",
+      "race-conditions",
+      "http-status-codes",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-fiber-render-commit": {
+    "links": [
+      "react-rerender",
+      "react-reconciliation-keys",
+      "event-loop",
+      "react-concurrent-transitions"
+    ],
+    "mentions": [
+      "react-useref-layout-effect",
+      "web-workers",
+      "react-useeffect",
+      "ds-graph-bfs-dfs",
+      "react-state-management-libraries",
+      "cpu-instruction-cycle",
+      "ds-linked-list",
+      "core-web-vitals"
+    ]
+  },
+  "react-forms-actions": {
+    "links": [
+      "html-form-http",
+      "frontend-state-architecture",
+      "frontend-system-design-interview",
+      "idempotency-key",
+      "react-server-components",
+      "loading-patterns",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "react-suspense-error-boundary",
+      "rendering-strategies",
+      "js-destructuring",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "react-jsx-components": {
+    "links": [
+      "react-rerender",
+      "xss",
+      "react-state-snapshot-batching",
+      "typescript-in-react",
+      "js-short-circuit",
+      "react-useeffect",
+      "js-pure-functions"
+    ],
+    "mentions": [
+      "react-memoization-hooks",
+      "js-object-methods",
+      "react-concurrent-transitions",
+      "pattern-decorator",
+      "js-strict-mode",
+      "js-es-modules",
+      "js-destructuring",
+      "js-truthy-falsy-typeof",
+      "frontend-build-tooling",
+      "js-closures"
+    ]
+  },
+  "react-memoization-hooks": {
+    "links": [
+      "react-rerender",
+      "js-memoization",
+      "js-closures"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-memory-leak",
+      "react-state-snapshot-batching",
+      "react-useeffect",
+      "http-caching-cdn",
+      "js-immutability-react",
+      "react-custom-hooks-rules",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-reconciliation-keys": {
+    "links": [
+      "react-rerender",
+      "react-fiber-render-commit"
+    ],
+    "mentions": [
+      "dynamic-programming",
+      "pattern-decorator",
+      "react-useeffect",
+      "ds-linked-list"
+    ]
+  },
+  "react-state-management-libraries": {
+    "links": [
+      "client-data-cache",
+      "frontend-state-architecture",
+      "pattern-observer",
+      "js-immutability-react",
+      "fp-in-react"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "browser-storage",
+      "react-concurrent-transitions",
+      "js-memoization",
+      "rendering-strategies",
+      "react-memoization-hooks",
+      "js-pure-functions",
+      "react-rerender",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-state-snapshot-batching": {
+    "links": [
+      "react-jsx-components",
+      "js-closures",
+      "js-immutability-react",
+      "react-rerender",
+      "fp-in-react",
+      "react-without-effects",
+      "frontend-state-architecture",
+      "react-useeffect"
+    ],
+    "mentions": [
+      "js-pure-functions"
+    ]
+  },
+  "react-suspense-error-boundary": {
+    "links": [
+      "streaming-ssr-suspense",
+      "hydration",
+      "client-data-cache",
+      "code-splitting",
+      "react-concurrent-transitions"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "react-state-snapshot-batching",
+      "react-useref-layout-effect"
+    ]
+  },
+  "react-useeffect": {
+    "links": [
+      "react-state-snapshot-batching",
+      "react-jsx-components",
+      "react-without-effects",
+      "js-closures",
+      "react-rerender",
+      "abort-controller",
+      "js-memory-leak",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "js-function-forms",
+      "race-conditions",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-useref-layout-effect": {
+    "links": [
+      "js-closures",
+      "react-memoization-hooks",
+      "typescript-in-react",
+      "browser-rendering-pipeline",
+      "hydration"
+    ],
+    "mentions": [
+      "dom-basics",
+      "react-useeffect",
+      "react-concurrent-transitions",
+      "react-state-snapshot-batching",
+      "js-function-forms",
+      "rendering-strategies",
+      "js-pure-functions",
+      "react-custom-hooks-rules",
+      "core-web-vitals"
+    ]
+  },
+  "react-without-effects": {
+    "links": [
+      "react-useeffect",
+      "fp-in-react",
+      "react-rerender",
+      "react-state-snapshot-batching",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "react-memoization-hooks",
+      "k8s-pod-resources",
+      "react-concurrent-transitions",
+      "react-state-management-libraries",
+      "rendering-strategies",
+      "race-conditions"
+    ]
+  },
+  "responsive-design": {
+    "links": [
+      "image-optimization"
+    ],
+    "mentions": [
+      "css-sticky-scroll-snap",
+      "web-accessibility"
+    ]
+  },
+  "seo-for-spa": {
+    "links": [
+      "rendering-csr-spa",
+      "html-semantics",
+      "aria-keyboard-focus",
+      "sd-web-crawler-politeness-dedup",
+      "rendering-strategies",
+      "rendering-ssg-isr",
+      "rendering-ssr",
+      "xss"
+    ],
+    "mentions": [
+      "html-form-http",
+      "k8s-deploy-pipeline-eks",
+      "nextjs-static-dynamic-rendering",
+      "http-status-codes",
+      "what-happens-google-com"
+    ]
+  },
+  "spa-auth-token-storage": {
+    "links": [
+      "token-login",
+      "cookie-session-login",
+      "oauth",
+      "browser-storage",
+      "csrf",
+      "xss",
+      "frontend-as-distributed-system",
+      "gateway",
+      "browser-security-model",
+      "web-security-headers"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "json-crud-http",
+      "what-happens-google-com",
+      "cors",
+      "js-closures"
+    ]
+  },
+  "ts-conditional-infer": {
+    "links": [
+      "ts-utility-mapped-types",
+      "ts-generics",
+      "tsconfig-strict",
+      "js-map-set-weak",
+      "ts-narrowing"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-spread-rest",
+      "js-promises",
+      "js-template-literals",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "web-accessibility": {
+    "links": [
+      "html-semantics",
+      "aria-keyboard-focus",
+      "animation-performance",
+      "lighthouse-explained"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "design-system-building",
+      "count-min-sketch"
+    ]
+  },
+  "web-workers": {
+    "links": [
+      "core-web-vitals",
+      "event-loop",
+      "frontend-browser-cache",
+      "js-shallow-deep-copy",
+      "web-security-headers",
+      "thread-safety"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "react-useeffect",
+      "browser-storage",
+      "realtime-communication",
+      "browser-rendering-pipeline",
+      "spring-ioc-di",
+      "sd-maps-tiles-routing"
+    ]
+  },
   "kafka-to-lake-pipeline": {
     "links": [
       "data-lake-hdfs",
@@ -132,6 +671,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "web-security-headers",
+      "browser-security-model",
       "ds-linked-list"
     ]
   },
@@ -378,6 +918,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-statefulset",
       "garbage-collection",
+      "web-accessibility",
       "kafka-basics",
       "osi-in-practice",
       "grpc"
@@ -574,6 +1115,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "error-budgets"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "graphql-basics",
       "sd-split-web-and-db",
       "sli-slo",
@@ -599,6 +1141,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "spa-auth-token-storage",
       "realtime-communication",
       "resilience-patterns",
       "cors",
@@ -619,6 +1163,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-storage"
     ],
     "mentions": [
+      "react-state-management-libraries",
+      "react-forms-actions",
+      "frontend-testing-strategy",
+      "react-memoization-hooks",
       "loading-patterns",
       "db-modeling-normalization"
     ]
@@ -645,6 +1193,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "html-form-http",
       "http-caching-cdn",
+      "frontend-testing-strategy",
+      "html-semantics",
       "sd-split-web-and-db",
       "lossy-counting",
       "sd-cache-and-cdn-tier",
@@ -814,6 +1364,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "cpu-pipelining-branch-prediction",
       "rendering-strategies",
       "what-happens-google-com"
@@ -857,6 +1408,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "xss"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "base64",
       "digital-signatures-certificates"
     ]
@@ -943,6 +1495,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-storage",
       "json-crud-http",
       "js-template-literals",
+      "react-custom-hooks-rules",
       "js-destructuring",
       "frontend-monorepo",
       "js-closures"
@@ -959,8 +1512,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-roadmap"
     ],
     "mentions": [
+      "react-useeffect",
       "rendering-strategies",
+      "react-useref-layout-effect",
       "js-function-forms",
+      "react-custom-hooks-rules",
       "js-destructuring",
       "js-hoisting-tdz"
     ]
@@ -975,11 +1531,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-in-react"
     ],
     "mentions": [
+      "css-styling-approaches",
+      "react-jsx-components",
       "js-classes",
       "js-function-forms",
       "js-strict-mode",
       "js-pure-functions",
-      "js-destructuring"
+      "js-destructuring",
+      "frontend-build-tooling"
     ]
   },
   "ts-utility-mapped-types": {
@@ -991,6 +1550,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-in-react"
     ],
     "mentions": [
+      "ts-conditional-infer",
       "js-template-literals",
       "db-types-overview"
     ]
@@ -1081,7 +1641,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-prototype-chain",
-      "js-destructuring"
+      "js-destructuring",
+      "frontend-build-tooling"
     ]
   },
   "algorithms-overview": {
@@ -1160,6 +1721,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-browser-cache",
+      "frontend-testing-strategy",
       "browser-fetch",
       "dns"
     ]
@@ -1173,6 +1735,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-browser-cache",
+      "frontend-testing-strategy",
       "ab-testing",
       "http-versions",
       "waf"
@@ -1202,6 +1765,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bundler-basics"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "https-tls",
       "js-pure-functions",
       "cors",
@@ -1221,7 +1785,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
-      "js-hoisting-tdz"
+      "react-jsx-components",
+      "js-hoisting-tdz",
+      "frontend-build-tooling"
     ]
   },
   "frontend-performance-map": {
@@ -1254,6 +1820,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "pattern-proxy"
     ]
   },
@@ -1276,6 +1843,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "streaming-ssr-suspense",
+      "frontend-testing-strategy",
       "sql-query-rewrite"
     ]
   },
@@ -1293,6 +1861,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "browser-rendering-pipeline",
       "rendering-strategies",
       "pattern-proxy"
@@ -1311,8 +1880,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "react-suspense-error-boundary",
       "http-caching-cdn",
+      "react-useeffect",
+      "frontend-testing-strategy",
       "rendering-strategies",
+      "design-system-building",
       "microservices",
       "cors"
     ]
@@ -1324,7 +1897,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
+      "react-suspense-error-boundary",
       "frontend-monorepo",
+      "frontend-testing-strategy",
       "lazy-loading-strategies",
       "code-splitting",
       "js-es-modules",
@@ -1375,6 +1950,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "frontend-testing-strategy",
       "resource-hints-loading",
       "http-versions",
       "dns"
@@ -1388,6 +1964,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "css-styling-approaches",
+      "css-cascade-specificity",
+      "frontend-testing-strategy",
       "lighthouse-explained",
       "rendering-strategies",
       "animation-performance",
@@ -1407,7 +1986,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization"
     ],
     "mentions": [
+      "react-memoization-hooks",
       "json-crud-http",
+      "react-state-management-libraries",
+      "react-custom-hooks-rules",
       "fp-composition-pipe",
       "js-primitive-vs-reference"
     ]
@@ -1476,6 +2058,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "frontend-testing-strategy",
       "opensearch-cluster-operations",
       "cookie-session-login",
       "k8s-pod-resources",
@@ -1520,9 +2103,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "frontend-testing-strategy",
       "browser-fetch",
       "cpu-instruction-cycle",
       "rendering-strategies",
+      "react-suspense-error-boundary",
       "http-status-codes",
       "bundler-basics"
     ]
@@ -1539,6 +2124,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "html-semantics",
       "loading-patterns"
     ]
   },
@@ -1557,6 +2144,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "rendering-strategies",
       "packet-encapsulation",
       "js-es-modules",
@@ -2429,7 +3017,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "animation-performance"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "dom-basics",
+      "web-accessibility",
       "browser-rendering-pipeline"
     ]
   },
@@ -2444,6 +3034,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "loading-patterns"
     ],
     "mentions": [
+      "react-useeffect",
+      "frontend-testing-strategy",
       "css-sticky-scroll-snap",
       "animation-performance",
       "pattern-proxy",
@@ -2460,6 +3052,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "html-semantics",
       "pattern-proxy"
     ]
   },
@@ -2470,7 +3064,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "scroll-triggered-intersection-observer",
-      "animation-performance"
+      "animation-performance",
+      "css-position-stacking-context"
     ]
   },
   "scroll-patterns-overview": {
@@ -2487,7 +3082,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle",
       "core-web-vitals"
     ],
-    "mentions": []
+    "mentions": [
+      "web-accessibility"
+    ]
   },
   "fastapi-basics": {
     "links": [
@@ -2632,9 +3229,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "event-loop",
       "microservices",
-      "db-type-embedded"
+      "db-type-embedded",
+      "react-custom-hooks-rules"
     ]
   },
   "first-page-from-power-on": {
@@ -2701,6 +3300,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index-design",
+      "web-accessibility",
       "kafka-basics",
       "db-modeling-normalization",
       "on-call"
@@ -2825,6 +3425,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-injection"
     ],
     "mentions": [
+      "web-accessibility",
       "postgres-getting-started"
     ]
   },
@@ -3555,6 +4156,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "react-state-snapshot-batching",
       "core-web-vitals"
     ]
   },
@@ -3567,6 +4169,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-propagation"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "js-pure-functions",
       "http-status-codes",
       "js-closures"
@@ -3584,6 +4187,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "json-crud-http",
       "http-versions",
       "event-loop",
@@ -3918,6 +4522,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-algorithms"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "db-type-key-value",
       "mysql-innodb-basics",
       "sd-start-single-server",
@@ -4426,6 +5031,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "frontend-testing-strategy",
       "sd-autocomplete-trie",
       "test-pyramid-unit-tests",
       "pattern-proxy"
@@ -4440,6 +5046,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "js-optional-chaining-nullish",
       "js-closures"
     ]
@@ -4454,6 +5061,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "frontend-testing-strategy",
       "micro-frontend-integration-patterns",
       "js-function-forms"
     ]
@@ -4470,7 +5078,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "frontend-testing-strategy"
+    ]
   },
   "system-design-concepts-map": {
     "links": [
@@ -4559,6 +5169,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "web-security-headers",
       "cpu-pipelining-branch-prediction",
+      "react-useeffect",
       "js-function-forms",
       "clock-skew"
     ]
@@ -4586,6 +5197,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-closures"
     ],
     "mentions": [
+      "react-useeffect",
       "cpu-instruction-cycle",
       "js-function-forms",
       "js-strict-mode"
@@ -4755,6 +5367,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pattern-factory-method",
+      "react-suspense-error-boundary",
       "js-strict-mode"
     ]
   },
@@ -4786,6 +5399,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization"
     ],
     "mentions": [
+      "react-useeffect",
       "js-classes",
       "js-function-forms",
       "js-strict-mode",
@@ -4807,6 +5421,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-execution-context",
       "event-delegation",
       "js-classes",
+      "react-suspense-error-boundary",
       "spring-ioc-di",
       "js-es-modules",
       "js-destructuring",
@@ -4990,6 +5605,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "tsconfig-strict",
+      "react-custom-hooks-rules",
       "http-status-codes"
     ]
   },
@@ -5008,7 +5624,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-currying-partial",
       "pattern-proxy",
       "http-status-codes",
-      "grpc"
+      "grpc",
+      "frontend-testing-strategy"
     ]
   },
   "js-es-modules": {
@@ -5021,6 +5638,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-ssr"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "rendering-strategies",
       "http-versions",
       "js-strict-mode",
@@ -5036,7 +5654,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-template-literals"
     ],
     "mentions": [
-      "js-pure-functions"
+      "react-useeffect",
+      "js-pure-functions",
+      "react-custom-hooks-rules"
     ]
   },
   "js-optional-chaining-nullish": {
@@ -5048,7 +5668,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
-      "bundler-basics"
+      "bundler-basics",
+      "react-memoization-hooks",
+      "react-state-snapshot-batching"
     ]
   },
   "js-template-literals": {
@@ -5077,8 +5699,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection"
     ],
     "mentions": [
+      "react-memoization-hooks",
       "json-crud-http",
       "rendering-strategies",
+      "react-useeffect",
       "dynamic-programming",
       "spring-ioc-di",
       "redis-basics",
@@ -5100,6 +5724,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "js-strict-mode",
+      "react-concurrent-transitions",
+      "react-state-snapshot-batching",
       "test-pyramid-unit-tests",
       "js-es-modules",
       "http-methods"
@@ -5113,6 +5739,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "ts-conditional-infer",
       "fp-composition-pipe",
       "js-function-forms",
       "js-spread-rest",
@@ -5146,7 +5773,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-object-methods"
     ],
     "mentions": [
+      "react-memoization-hooks",
+      "react-state-management-libraries",
       "js-memory-leak",
+      "react-useeffect",
       "js-memoization",
       "js-function-forms",
       "db-modeling-normalization"
@@ -5162,6 +5792,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
+      "js-map-set-weak",
+      "react-useeffect",
       "db-types-overview",
       "spring-ioc-di"
     ]
@@ -5179,6 +5811,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-map-set-weak",
       "pattern-proxy",
       "spring-ioc-di",
       "js-es-modules"
@@ -5195,6 +5828,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-timers-accuracy",
+      "frontend-testing-strategy",
+      "web-accessibility",
       "parallax-scrollytelling"
     ]
   },
@@ -5204,7 +5839,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-animation",
       "animation-performance"
     ],
-    "mentions": []
+    "mentions": [
+      "frontend-testing-strategy"
+    ]
   },
   "spring-animation": {
     "links": [
@@ -5221,7 +5858,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "view-transitions-shared-element",
       "animation-performance"
     ],
-    "mentions": []
+    "mentions": [
+      "web-accessibility"
+    ]
   },
   "serverless-architecture": {
     "links": [
@@ -5400,7 +6039,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-classes",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "react-useeffect",
+      "react-state-snapshot-batching"
+    ]
   },
   "js-first-class-callbacks": {
     "links": [
@@ -5420,7 +6062,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "retries"
     ],
     "mentions": [
-      "js-spread-rest"
+      "js-spread-rest",
+      "react-state-snapshot-batching",
+      "react-useeffect"
     ]
   },
   "js-function-forms": {
@@ -5436,6 +6080,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-destructuring"
     ],
     "mentions": [
+      "frontend-build-tooling",
       "js-classes",
       "js-es-modules",
       "js-truthy-falsy-typeof"
@@ -5511,6 +6156,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "pattern-iterator",
+      "react-useeffect",
       "js-pure-functions",
       "js-primitive-vs-reference"
     ]
@@ -5615,6 +6261,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "react-state-snapshot-batching",
       "message-delivery-semantics",
       "js-function-forms"
     ]
@@ -5634,6 +6281,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "graphql-basics",
       "sd-start-single-server",
       "http-caching-cdn",
+      "react-custom-hooks-rules",
       "sql-batch-timeout-pool",
       "http-status-codes",
       "what-happens-google-com"
@@ -5724,6 +6372,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "react-useeffect",
       "js-function-forms"
     ]
   },
@@ -5751,7 +6401,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sql-injection",
-      "js-template-literals"
+      "js-template-literals",
+      "react-useeffect"
     ]
   },
   "js-primitive-vs-reference": {
@@ -5766,7 +6417,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-immutability-react",
       "js-array-mutation"
     ],
-    "mentions": []
+    "mentions": [
+      "react-useeffect",
+      "react-memoization-hooks"
+    ]
   },
   "ddos-protection": {
     "links": [
@@ -7715,6 +8369,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "owasp-top-10-map",
+      "browser-security-model",
       "what-happens-google-com"
     ]
   },
@@ -8162,6 +8817,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "web-security-headers",
+      "web-workers",
       "ds-linked-list",
       "consistency-models",
       "go-concurrency-basics",
@@ -8202,6 +8858,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-advanced-sql",
+      "react-state-snapshot-batching",
       "sd-start-single-server",
       "db-locking-deadlock",
       "sql-batch-timeout-pool",
@@ -8520,6 +9177,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-network-tuning",
       "local-custom-domain",
       "event-loop",
+      "web-accessibility",
       "ports-and-sockets",
       "http-status-codes",
       "layer-ip-routing-icmp",
@@ -8672,8 +9330,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator"
     ],
     "mentions": [
+      "react-state-management-libraries",
       "fp-in-react",
       "js-promises",
+      "react-useeffect",
       "rendering-strategies",
       "design-patterns-overview"
     ]
@@ -8699,6 +9359,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-state"
     ],
     "mentions": [
+      "react-state-snapshot-batching",
       "js-pure-functions",
       "cqrs",
       "design-patterns-overview"
@@ -8709,6 +9370,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-factory-method"
     ],
     "mentions": [
+      "js-iterators-generators",
       "sd-cache-and-cdn-tier",
       "kafka-basics"
     ]
@@ -8963,6 +9625,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "react-suspense-error-boundary",
       "express-middleware",
       "fp-composition-pipe",
       "ds-linked-list",
@@ -9607,6 +10270,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
+      "js-map-set-weak",
       "js-object-methods",
       "js-strict-mode",
       "js-es-modules"
@@ -10076,6 +10740,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
+      "react-jsx-components",
       "js-object-methods",
       "sd-email-protocols"
     ]
@@ -10093,6 +10758,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "hexagonal-architecture",
       "cron-jobs",
+      "react-state-snapshot-batching",
       "spring-ioc-di",
       "thread-safety",
       "js-es-modules",
@@ -10736,6 +11402,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scroll-triggered-intersection-observer",
       "js-es-modules",
       "streaming-ssr-suspense",
+      "frontend-testing-strategy",
       "rendering-strategies",
       "js-closures"
     ]
@@ -10765,6 +11432,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "http-versions",
+      "react-suspense-error-boundary",
       "http-status-codes"
     ]
   },
@@ -10778,6 +11446,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-server-components"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "react-useeffect",
       "count-min-sketch"
     ]
   },
@@ -10812,6 +11482,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "docker-container-basics",
+      "react-state-management-libraries",
+      "seo-for-spa",
       "proxy-reverse-proxy",
       "osi-in-practice",
       "http-status-codes",
@@ -10831,9 +11503,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "data-fetching-optimization",
+      "frontend-testing-strategy",
       "lighthouse-explained",
       "hydration",
+      "react-useeffect",
       "nginx-basics",
+      "seo-for-spa",
       "nextjs-static-dynamic-rendering",
       "http-status-codes"
     ]
@@ -12008,7 +12683,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-group-by-having",
-      "sqld-correlated-subquery"
+      "sqld-correlated-subquery",
+      "web-accessibility"
     ]
   },
   "sqld-rollup-cube-grouping-sets": {
@@ -12418,6 +13094,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
+      "web-workers",
       "resource-hints-loading",
       "realtime-communication",
       "js-pure-functions",
@@ -12438,9 +13115,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "http-caching-cdn",
       "browser-storage",
+      "react-state-snapshot-batching",
+      "react-useeffect",
       "rendering-performance-optimization",
       "js-memoization",
-      "loading-patterns"
+      "loading-patterns",
+      "react-state-management-libraries"
     ]
   },
   "json-crud-http": {
@@ -12751,6 +13431,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "html-form-http",
       "client-data-cache",
       "json-crud-http",
+      "react-useeffect",
       "frontend-browser-cache",
       "rendering-csr-spa",
       "race-conditions",
@@ -12842,6 +13523,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-timers-accuracy"
     ],
     "mentions": [
+      "web-workers",
       "dom-basics",
       "js-es-modules",
       "osi-in-practice"
@@ -12859,6 +13541,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "spring-ioc-di",
       "js-strict-mode",
+      "frontend-build-tooling",
       "js-closures",
       "layer-mtu-fragmentation",
       "dns"
@@ -12870,10 +13553,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "micro-frontend-integration-patterns"
     ],
     "mentions": [
+      "react-suspense-error-boundary",
+      "css-styling-approaches",
       "build-caching",
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
       "microservices",
+      "design-system-building",
       "data-fetching-optimization",
       "js-es-modules",
       "frontend-monorepo",
@@ -12900,7 +13586,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "performance-metrics-measurement",
+      "seo-for-spa",
       "resource-hints-loading",
+      "frontend-testing-strategy",
+      "web-workers",
       "lighthouse-explained",
       "browser-rendering-pipeline",
       "ab-testing",
@@ -12990,7 +13679,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-strategies"
     ],
     "mentions": [
+      "react-context",
+      "react-useref-layout-effect",
       "core-web-vitals",
+      "react-memoization-hooks",
+      "react-suspense-error-boundary",
+      "react-jsx-components",
+      "react-useeffect",
+      "react-concurrent-transitions",
+      "react-state-management-libraries",
+      "react-state-snapshot-batching",
       "js-memoization",
       "js-function-forms",
       "js-pure-functions",
@@ -13186,6 +13884,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "what-happens-google-com",
       "cookie-session-login",
       "oauth",
+      "frontend-build-tooling",
       "first-page-from-power-on",
       "dns"
     ]

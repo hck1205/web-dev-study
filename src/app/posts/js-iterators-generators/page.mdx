@@ -1,0 +1,698 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-iterators-generators");
+
+<EasyIntro>
+  보통 함수는 부르면 처음부터 끝까지 한 번에 달린다. 제너레이터 함수는 게임의 일시정지 버튼처럼 중간에 멈춰 서서 값을 하나 내주고, 누군가 계속하라고 할 때까지 그 자리에서 기다린다.
+
+  계속하라고 하면 멈췄던 줄 바로 다음부터 이어서 달리고, 변수 값도 멈췄던 그대로 남아 있다. 그래서 숫자를 끝없이 만들어 내는 함수도 필요한 만큼만 계속 버튼을 누르면 되니 컴퓨터가 멈추지 않는다.
+
+  계속 버튼을 누를 때 값을 하나 건네줄 수도 있고, 이제 그만하라고 알릴 수도 있다. 그만하라는 말을 들으면 함수는 정리할 일을 마치고 끝난다.
+
+  자바스크립트의 반복문과 배열 펼치기는 모두 이 계속 버튼을 누르는 규칙 하나를 함께 쓴다. 그 규칙만 지키면 내가 만든 물건도 배열처럼 반복문에 넣을 수 있다.
+</EasyIntro>
+
+피드 아이템을 하나씩 만들어 주는 함수를 제너레이터로 바꾸고, 잘 도는지 보려고 첫 줄에 로그를 찍었다. 함수를 불렀는데 로그가 안 나온다. 에러도 없다.
+
+```js
+function* loadFeed() {
+  console.log("피드 생성 시작");
+  yield 1;
+}
+const feed = loadFeed();
+console.log(typeof feed, Object.prototype.toString.call(feed));
+```
+
+```text
+object [object Generator]
+```
+
+함수 본문은 한 줄도 돌지 않았다. 돌아온 건 결과가 아니라 `Generator`라는 객체다. 이 객체의 `next()`를 불러야 그제야 본문이 움직인다.
+
+```js
+console.log(feed.next());
+console.log(feed.next());
+console.log(feed.next());
+```
+
+```text
+피드 생성 시작
+{ value: 1, done: false }
+{ value: undefined, done: true }
+{ value: undefined, done: true }
+```
+
+이 글은 이 `next()`가 무엇인지에서 출발한다. `for...of`와 전개 문법이 이 메서드를 어떻게 부르는지, 직접 만든 객체를 반복 가능하게 만드는 규약, 함수가 `yield`에서 멈췄다가 이어지는 원리, 바깥에서 값을 넣고 에러를 던지고 끝내는 방법, 비동기 제너레이터까지 따라간다. 출력은 Node.js 22.22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: 페이지네이션 API를 `for await` 하나로 감싸는 설계, 이터레이터 헬퍼로 계산 횟수가 줄어드는 측정, 순회 중 컬렉션을 바꿀 때의 함정은 [이터레이터 패턴](/posts/pattern-iterator)에서 다뤘다. 배열 구조 분해가 `next()`를 몇 번 부르고 언제 닫는지는 [구조 분해](/posts/js-destructuring)에, 전개가 이터레이터를 끝까지 도는 모습은 [전개와 나머지 문법](/posts/js-spread-rest)에 있다. 여기서는 그 밑에 깔린 규약과 제너레이터라는 함수 자체를 본다.
+
+## for...of가 실제로 부르는 것
+
+설정 객체를 `for...of`로 돌리려다 이런 에러를 본 적이 있을 것이다.
+
+```js
+const settings = { theme: "dark", lang: "ko" };
+for (const x of settings) {}
+```
+
+```text
+TypeError: settings is not iterable
+```
+
+`for...of`는 "배열이면 돌고 아니면 실패"하는 문법이 아니다. 오른쪽 값에서 `Symbol.iterator`라는 이름의 메서드를 찾고, 그 메서드가 돌려준 객체의 `next()`를 `done`이 `true`가 될 때까지 부른다. 평범한 객체에는 이 메서드가 없어서 시작조차 못 했다. 손으로 풀어 쓰면 이렇다.
+
+```js
+const arr = ["a", "b"];
+const it = arr[Symbol.iterator]();  // 1. 이터레이터를 하나 받는다
+let r;
+while (!(r = it.next()).done) {     // 2. done이 true가 될 때까지 next()
+  console.log(r);                   // 3. 몸통에는 r.value가 들어간다
+}
+console.log(r);
+```
+
+```text
+{ value: 'a', done: false }
+{ value: 'b', done: false }
+{ value: undefined, done: true }
+```
+
+여기 등장하는 두 이름을 구분해 둔다. `[Symbol.iterator]()` 메서드를 가진 객체가 이터러블(iterable, 반복 가능한 것)이고, 그 메서드가 돌려준 객체, 즉 `next()`로 `{ value, done }`을 주는 객체가 이터레이터(iterator, 반복하는 것)다. 이 약속을 이터러블 프로토콜과 이터레이터 프로토콜이라고 부른다.
+
+풀어 쓴 코드에 빠진 것이 하나 있다. 반복문 몸통에서 `break`, `return`, `throw`로 빠져나가면 `for...of`는 이터레이터에 `return()` 메서드가 있는지 보고 불러 준다. "더는 안 꺼낼 테니 정리하라"는 신호다. 끝까지 다 돌았거나 `next()` 자체가 에러를 던졌을 때는 부르지 않는다. 이 신호를 받아 데이터베이스 커서를 닫는 예는 [이터레이터 패턴](/posts/pattern-iterator)에 있다.
+
+이 규약을 쓰는 건 `for...of`만이 아니다. 아래 그림처럼 언어 곳곳의 문법과 내장 함수가 같은 입구로 값을 꺼낸다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="꺼내 쓰는 쪽과 내주는 쪽이 Symbol.iterator 하나로 만난다"
+  nodes={[
+    { id: "forof", label: "for...of", x: 70, y: 35, w: 110 },
+    { id: "spread", label: "[...x] · f(...x)", x: 70, y: 95, w: 120 },
+    { id: "destr", label: "const [a, b] = x", x: 70, y: 155, w: 130 },
+    { id: "from", label: "Array.from(x)", x: 70, y: 215, w: 120 },
+    { id: "ctor", label: "new Map(x) · new Set(x)", sub: "Promise.all(x)도", x: 80, y: 272, w: 150 },
+    { id: "proto", label: "Symbol.iterator", sub: "next() → { value, done }", x: 245, y: 150, w: 130 },
+    { id: "array", label: "Array · String", x: 365, y: 55, w: 100 },
+    { id: "coll", label: "Map · Set", x: 365, y: 115, w: 100 },
+    { id: "dom", label: "NodeList", sub: "arguments도", x: 365, y: 180, w: 100 },
+    { id: "gen", label: "제너레이터 객체", x: 365, y: 245, w: 110 },
+  ]}
+  edges={[
+    { from: "forof", to: "proto" },
+    { from: "spread", to: "proto" },
+    { from: "destr", to: "proto" },
+    { from: "from", to: "proto" },
+    { from: "ctor", to: "proto" },
+    { from: "array", to: "proto", label: "구현" },
+    { from: "coll", to: "proto" },
+    { from: "dom", to: "proto" },
+    { from: "gen", to: "proto" },
+  ]}
+/>
+
+그래서 같은 객체를 넣으면 실패하는 모양도 같다.
+
+```js
+new Map(settings);
+Promise.all(settings);
+```
+
+```text
+TypeError: object is not iterable (cannot read property Symbol(Symbol.iterator))
+TypeError: object is not iterable (cannot read property Symbol(Symbol.iterator))
+```
+
+`Array.from`만 조금 다르다. 이터러블이 아니어도 `length`가 있는 유사 배열이면 받아 준다. `Array.from({ length: 3 }, (_, i) => i * 2)`가 `[0, 2, 4]`를 만드는 이유다. 같은 객체를 전개하면 `is not iterable`로 실패한다.
+
+평범한 객체가 이터러블이 아닌 건 일부러 그렇게 둔 것이다. 객체를 돈다고 할 때 키를 돌지, 값을 돌지, 쌍을 돌지 정답이 없다. 그래서 `Object.keys`, `Object.values`, `Object.entries`로 무엇을 돌지 고르게 했고, 이 셋은 배열을 돌려주니 바로 `for...of`에 넣을 수 있다. 키와 값을 짝으로 다루는 자료구조가 필요하면 처음부터 이터러블인 `Map`을 쓴다. `Map`과 객체의 차이는 [Map, Set, WeakMap](/posts/js-map-set-weak)에서 따로 다룬다.
+
+## 이터러블을 손으로 만들어 보기
+
+규약을 알았으니 직접 만들어 보자. `range(0, 5, 2)`가 0, 2, 4를 내주는 객체다.
+
+```js
+function range(start, end, step = 1) {
+  return {
+    [Symbol.iterator]() {
+      let current = start;            // 위치는 이터레이터마다 따로 든다
+      return {
+        next() {
+          if (current >= end) return { value: undefined, done: true };
+          const value = current;
+          current += step;
+          return { value, done: false };
+        },
+        return() {
+          console.log("  return() 호출됨");
+          return { value: undefined, done: true };
+        },
+      };
+    },
+  };
+}
+
+const r = range(0, 5, 2);
+console.log([...r], [...r]);
+for (const x of r) { if (x === 2) break; }
+const [first] = r;
+console.log(first);
+console.log(Math.max(...range(1, 4)));
+```
+
+```text
+[ 0, 2, 4 ] [ 0, 2, 4 ]
+  return() 호출됨
+  return() 호출됨
+0
+3
+```
+
+출력에서 볼 것이 셋이다. 첫째, 두 번 펼쳐도 두 번 다 값이 나온다. `[Symbol.iterator]()`가 불릴 때마다 `current`를 새로 가진 이터레이터를 만들기 때문이다. 둘째, `break`와 `const [first]`에서 `return()`이 불렸다. 둘 다 끝까지 돌지 않고 멈췄다. 전개는 끝까지 돌았으니 부르지 않았다. 셋째, `Math.max(...range(1, 4))`처럼 내 객체가 내장 함수의 인자 자리에도 그대로 들어간다.
+
+손으로 만들 때 흔히 하는 실수가 두 가지다. 하나는 `done: true`를 돌려주는 조건을 빠뜨리는 것이다. `for...of`라면 화면이 멈추는 정도로 드러나지만, 전개나 `Array.from`은 끝을 기다리며 메모리를 계속 채우다가 탭이 죽는다. 다른 하나는 이터레이터가 자기 자신을 돌려주게 만드는 것이다.
+
+```js
+function oneShot(arr) {
+  let i = 0;
+  return {
+    next: () => (i < arr.length ? { value: arr[i++], done: false } : { value: undefined, done: true }),
+    [Symbol.iterator]() { return this; }, // 위치를 하나만 갖는다
+  };
+}
+const o = oneShot([1, 2]);
+console.log([...o], [...o]);
+```
+
+```text
+[ 1, 2 ] []
+```
+
+위치(`i`)가 객체에 하나뿐이라, 한 번 돌고 나면 끝난 상태로 남는다. 이렇게 "이터레이터이면서 자기 자신을 돌려주는 이터러블"은 한 번만 돌 수 있다. 배열의 `values()`나 `Map`의 `entries()`가 돌려주는 이터레이터가 이 모양이고, 뒤에서 볼 제너레이터 객체도 그렇다.
+
+TypeScript로 쓴다면 위 객체는 `Iterable<number>`, 이터레이터는 `Iterator<number>`다. 5.6부터는 내장 이터레이터의 공통 조상을 가리키는 `IteratorObject` 타입이 생겼고, `--strictBuiltinIteratorReturn`(`strict`에 포함)을 켜면 `done: true`일 때의 `value`가 `any`가 아니라 `undefined`로 잡힌다.
+
+## 같은 일을 제너레이터로
+
+`range`의 이터레이터는 "다음에 무엇을 줄지"를 기억하려고 `current` 변수와 `next()`의 분기를 갖고 있다. 제너레이터는 이 기억을 함수의 실행 위치로 대신한다.
+
+```js
+function* range(start, end, step = 1) {
+  for (let i = start; i < end; i += step) yield i;
+}
+console.log([...range(0, 5, 2)]);
+```
+
+```text
+[ 0, 2, 4 ]
+```
+
+`function*`로 선언한 함수는 부르면 본문을 실행하지 않고 제너레이터 객체를 돌려준다. 이 객체는 `next()`를 가진 이터레이터이고, `[Symbol.iterator]()`가 자기 자신을 돌려주는 이터러블이다. 처음 장면에서 `feed[Symbol.iterator]() === feed`를 찍어 보면 `true`가 나온다. 그래서 제너레이터 객체도 앞의 `oneShot`처럼 한 번만 돈다. 여러 번 돌아야 하면 객체 대신 함수를 넘기거나, `[Symbol.iterator]`를 제너레이터 메서드로 둔다.
+
+```js
+class Playlist {
+  #songs = ["intro", "main", "outro"];
+  *[Symbol.iterator]() {        // 돌 때마다 새 제너레이터 객체가 생긴다
+    yield* this.#songs;
+  }
+}
+const p = new Playlist();
+console.log([...p], [...p]);
+```
+
+```text
+[ 'intro', 'main', 'outro' ] [ 'intro', 'main', 'outro' ]
+```
+
+`yield*`는 다른 이터러블에 반복을 맡기는 문법이다. 배열을 넣으면 원소를 하나씩 내주고, 다른 제너레이터를 넣으면 그 제너레이터가 끝날 때까지 대신 돈다. 맡긴 제너레이터가 `return`한 값은 `yield*` 식의 결과가 된다.
+
+```js
+function* inner() { yield "a"; yield "b"; return "inner 끝"; }
+function* outer() {
+  const result = yield* inner();
+  console.log("yield*의 값:", result);
+  yield "c";
+}
+console.log([...outer()]);
+
+function* g() { yield 1; return 99; }
+console.log([...g()]);
+```
+
+```text
+yield*의 값: inner 끝
+[ 'a', 'b', 'c' ]
+[ 1 ]
+```
+
+`return 99`는 결과 배열에 들어가지 않았다. `return`한 값은 `{ value: 99, done: true }`로 나오는데, `for...of`와 전개는 `done: true`인 결과의 `value`를 버린다. 반복 결과는 `yield`로만 내보내고, `return` 값은 `yield*`로 받거나 `next()`를 직접 부를 때만 쓴다. 트리를 깊이 우선으로 도는 제너레이터처럼 재귀를 `yield*`로 이으면 짧게 쓸 수 있다. 다만 깊이마다 제너레이터가 하나씩 겹쳐 값 하나가 모든 층을 거쳐 올라오니, 깊이가 수천인 구조라면 명시적인 스택으로 바꾸는 편이 빠르다.
+
+## yield에서 멈춘 함수는 어디에 있나
+
+보통 함수는 부르면 [실행 컨텍스트](/posts/js-execution-context)가 콜 스택에 올라가고, 끝나면 내려와 사라진다. 지역 변수도 닿는 곳이 없으면 함께 사라진다. 제너레이터는 `yield`에서 컨텍스트를 스택에서 내리되 버리지 않는다. 지역 변수와 "다음에 실행할 위치"를 제너레이터 객체 안에 보관해 두고, 다음 `next()`가 오면 그 컨텍스트를 다시 스택에 올려 멈춘 자리부터 이어 간다. `await`가 함수를 멈췄다 잇는 것도 같은 장치를 쓴다.
+
+명세는 제너레이터 객체의 상태를 넷으로 나눈다. 막 만들어져 한 줄도 안 돈 상태(suspended-start), `yield`에서 멈춘 상태(suspended-yield), 지금 돌고 있는 상태(executing), 끝난 상태(completed)다. 끝난 제너레이터의 `next()`는 항상 `{ value: undefined, done: true }`를 준다. 처음 장면의 세 번째 줄이 그것이다. 돌고 있는 제너레이터의 `next()`를 그 안에서 다시 부르면 에러가 난다.
+
+```js
+function* self() { it.next(); yield 1; }
+const it = self();
+it.next();
+```
+
+```text
+TypeError: Generator is already running
+```
+
+직접 이렇게 쓸 일은 없지만, 제너레이터가 낸 값을 받은 콜백이 같은 제너레이터를 다시 당기는 구조(이벤트 핸들러 안에서 `next()`를 부르는 상태 기계 등)에서 이 에러를 만난다.
+
+엔진이 제너레이터를 지원하지 않던 시절에는 트랜스파일러가 이 동작을 흉내 냈다. 함수 본문을 `switch` 문으로 쪼개고 "몇 번째 칸에서 멈췄나"를 변수에 저장하는 상태 기계로 바꾸는 것이다(Babel의 regenerator). 지금은 모든 주요 브라우저가 제너레이터를 지원해서 대상 브라우저를 ES2017 이상으로 잡으면 이 변환이 나오지 않는다. 빌드 대상을 너무 낮게 잡으면 이 코드가 번들에 다시 실린다. 크기 차이는 [개발 서버와 빌드 도구](/posts/frontend-build-tooling)에서 잰다.
+
+## next(값)으로 안에 값을 넣는다
+
+지금까지는 제너레이터가 값을 밖으로 내보내기만 했다. `next()`에 인자를 주면 반대 방향으로도 값이 간다. 멈춰 있던 `yield` 식이 그 인자로 바뀐다.
+
+```js
+function* conversation() {
+  console.log("시작");
+  const name = yield "이름은?";
+  console.log("받은 이름:", name);
+  const age = yield `${name}, 나이는?`;
+  console.log("받은 나이:", age);
+  return `${name}(${age})`;
+}
+const c = conversation();
+console.log(c.next("무시됨"));
+console.log(c.next("민지"));
+console.log(c.next(29));
+console.log(c.next());
+```
+
+```text
+시작
+{ value: '이름은?', done: false }
+받은 이름: 민지
+{ value: '민지, 나이는?', done: false }
+받은 나이: 29
+{ value: '민지(29)', done: true }
+{ value: undefined, done: true }
+```
+
+첫 `next("무시됨")`의 인자는 어디에도 들어가지 않았다. 첫 `next()`는 본문을 처음부터 첫 `yield`까지 돌리는 호출이라, 그 값을 받아 줄 `yield`가 아직 없다. 두 번째 `next("민지")`가 첫 `yield` 자리에 `"민지"`를 넣고 다음 `yield`까지 돌린다. 한 번의 `next()`가 "값을 넣고, 다음 멈출 곳까지 돌리고, 거기서 나온 값을 받는" 왕복이다. 아래 그림에서 다음을 누르며 값이 어느 방향으로 가는지 따라가 보자.
+
+<SequenceDiagram
+  caption="next()는 값을 넣고, 다음 yield까지 돌리고, 나온 값을 받아 오는 왕복이다"
+  actors={[
+    { id: "caller", label: "부르는 쪽" },
+    { id: "gen", label: "제너레이터" },
+  ]}
+  steps={[
+    { from: "caller", to: "gen", label: "next(\"무시됨\")", title: "첫 next는 시작 버튼이다", detail: "본문을 처음부터 돌린다. 받아 줄 yield가 아직 없으니 인자는 버려진다." },
+    { from: "gen", to: "caller", label: "yield \"이름은?\"", title: "첫 yield에서 멈춘다", detail: "\"시작\"을 찍고 첫 yield에 닿았다. 값을 내보내고 지역 변수와 위치를 보관한 채 멈춘다.", payload: "{ value: '이름은?', done: false }" },
+    { from: "caller", to: "gen", label: "next(\"민지\")", title: "멈춘 yield가 인자로 바뀐다", detail: "yield \"이름은?\" 식 전체가 \"민지\"가 되어 name에 들어간다. 그다음 줄부터 이어 간다." },
+    { from: "gen", to: "caller", label: "yield \"민지, 나이는?\"", title: "다음 yield까지 돌고 또 멈춘다", detail: "방금 받은 이름으로 질문을 만들어 내보낸다.", payload: "{ value: '민지, 나이는?', done: false }" },
+    { from: "caller", to: "gen", label: "next(29)", title: "두 번째 yield에 29가 들어간다", detail: "age가 29가 되고, 본문 끝의 return까지 간다." },
+    { from: "gen", to: "caller", label: "return", title: "return 값은 done: true와 함께 온다", detail: "for...of였다면 이 값은 버려졌다. next()를 직접 부를 때만 받는다.", payload: "{ value: '민지(29)', done: true }" },
+  ]}
+/>
+
+이 양방향 통로 덕분에 제너레이터는 "할 일을 밖에 맡기고 결과를 받아 이어 가는" 코드가 된다. 제너레이터가 `yield fetchUser(7)`로 Promise를 내보내면, 바깥의 실행기가 그 Promise가 끝나길 기다렸다가 결과를 `next(user)`로 넣어 준다. 제너레이터 쪽에서 보면 `const user = yield fetchUser(7)`은 비동기 호출을 동기 코드처럼 쓴 것이다. async/await가 언어에 들어오기 전, co 같은 라이브러리가 정확히 이렇게 동작했다. async 함수는 이 실행기를 엔진에 내장한 것이라고 볼 수 있다. 뒤의 redux-saga도 같은 생각에서 출발한다.
+
+## return()과 throw()로 바깥에서 끝내기
+
+제너레이터 객체에는 `next()` 말고 두 메서드가 더 있다. `return(값)`은 멈춘 `yield` 자리에서 함수가 `return 값`을 한 것처럼 끝내고, `throw(에러)`는 그 자리에서 에러가 던져진 것처럼 만든다. 둘 다 바깥에서 제너레이터의 흐름을 바꾸는 손잡이다.
+
+```js
+function* worker() {
+  try {
+    while (true) {
+      try {
+        const job = yield "대기";
+        console.log("처리:", job);
+      } catch (e) {
+        console.log("안에서 잡음:", e.message);
+      }
+    }
+  } finally {
+    console.log("정리");
+    yield "정리 중";
+    console.log("정리 끝");
+  }
+}
+const w = worker();
+console.log(w.next());
+console.log(w.next("A"));
+console.log(w.throw(new Error("요청 취소")));
+console.log(w.return("종료"));
+console.log(w.next());
+console.log(w.next());
+```
+
+```text
+{ value: '대기', done: false }
+처리: A
+{ value: '대기', done: false }
+안에서 잡음: 요청 취소
+{ value: '대기', done: false }
+정리
+{ value: '정리 중', done: false }
+정리 끝
+{ value: '종료', done: true }
+{ value: undefined, done: true }
+```
+
+`throw()`로 던진 에러는 멈춰 있던 `yield` 자리에서 터졌고, 안쪽 `try...catch`가 잡았다. 잡았으니 제너레이터는 죽지 않고 다음 `yield "대기"`까지 돌았다. 안에서 잡지 않으면 에러는 `throw()`를 부른 쪽으로 튀어나오고 제너레이터는 끝난 상태가 된다.
+
+`return("종료")`는 기대와 다르게 동작한다. 바로 `done: true`가 나오지 않고 `{ value: '정리 중', done: false }`가 나왔다. `return()`은 `finally`를 실행시키는데, 그 `finally` 안에 `yield`가 있으니 거기서 다시 멈춘 것이다. 다음 `next()`가 `finally`를 마저 돌린 뒤에야 `{ value: '종료', done: true }`가 나온다. `for...of`의 `break`가 부르는 것도 이 `return()`이라서, `finally`에 `yield`를 쓰면 반복문을 빠져나온 뒤에도 정리가 반쯤에서 멈춰 버린다. `finally`에는 동기적인 정리만 두고 `yield`를 쓰지 않는다.
+
+시작하기 전에 두 메서드를 부르면 본문은 한 줄도 돌지 않는다.
+
+```js
+function* never() { console.log("본문"); try { yield 1; } catch { console.log("잡음"); } }
+const n = never();
+try { n.throw(new Error("시작 전 취소")); } catch (e) { console.log("밖으로:", e.message); }
+console.log(n.next());
+console.log(never().return("먼저 끝"));
+```
+
+```text
+밖으로: 시작 전 취소
+{ value: undefined, done: true }
+{ value: '먼저 끝', done: true }
+```
+
+아직 `try` 안에 들어가지 않았으니 `catch`가 잡을 수 없다. 에러는 곧바로 밖으로 나오고 제너레이터는 끝난다. 제너레이터에 취소를 전하는 코드를 짤 때, 첫 `next()` 전에 취소가 오는 경우도 이렇게 처리된다는 걸 알아 둔다.
+
+## 끝이 없는 수열과 지연 평가
+
+제너레이터는 누가 `next()`를 부를 때만 다음 값을 만든다. 이걸 지연 평가라고 부른다. 그래서 끝나지 않는 수열도 아무 문제 없이 정의할 수 있다.
+
+```js
+function* fibonacci() {
+  let [a, b] = [0, 1];
+  while (true) {
+    yield a;
+    [a, b] = [b, a + b];
+  }
+}
+console.log(fibonacci().filter((n) => n % 2 === 0).take(5).toArray());
+console.log(fibonacci().drop(10).take(3).toArray());
+```
+
+```text
+[ 0, 2, 8, 34, 144 ]
+[ 55, 89, 144 ]
+```
+
+`filter`, `take`, `drop`, `toArray`는 배열 메서드가 아니라 이터레이터 헬퍼다. ES2025에 들어갔고 크롬 122, 파이어폭스 131, 사파리 18.4, Node.js 22부터 쓸 수 있다. 헬퍼는 `Iterator.prototype`에 붙어 있어서 제너레이터 객체에서 바로 부를 수 있고, 배열이라면 `arr.values()`로 이터레이터를 꺼낸 뒤 붙인다. 이터레이터 규약만 지킨 손수 만든 객체는 `Iterator.from(obj)`로 감싸면 헬퍼를 얻는다. 비동기 이터레이터용 헬퍼는 아직 표준이 아니다. 앞의 몇 개만 필요할 때 헬퍼가 계산 횟수를 얼마나 줄이는지는 [이터레이터 패턴](/posts/pattern-iterator)에서 쟀다.
+
+메모리 차이도 크다. 0부터 천만 미만까지 더하는 일을 배열을 만들어서 한 번, 제너레이터로 한 번 했다. 덧셈 도중에 힙이 얼마나 늘었는지 쟀다(`node --expose-gc`로 실행해 시작 전에 GC를 한 번 돌렸다).
+
+```js
+function rangeArray(n) { const a = []; for (let i = 0; i < n; i++) a.push(i); return a; }
+function* rangeGen(n) { for (let i = 0; i < n; i++) yield i; }
+```
+
+```text
+array     sum 49999995000000 추가 힙 189.0MB
+generator sum 49999995000000 추가 힙 0.8MB
+```
+
+배열은 천만 개를 다 만들어 둔 뒤에 더하기 시작했고, 제너레이터는 숫자 하나를 만들고 더하고 버리기를 반복했다. 몇 번 돌려 보니 배열 쪽 수치는 GC 시점에 따라 189MB에서 327MB까지 흔들렸고, 걸린 시간은 둘 다 수백 ms로 비슷했다. 다 만들어 둘 필요가 없는 큰 수열, 파일의 줄, 페이지로 나뉜 API 결과처럼 크기를 모르는 데이터에서 이 차이가 난다.
+
+지연 평가의 반대편 함정도 있다. 끝이 없는 이터러블은 끝까지 도는 문법에 넣으면 안 된다. `[...fibonacci()]`, `Array.from(fibonacci())`, `Math.max(...fibonacci())`, `const [first, ...rest] = fibonacci()`는 모두 `done`을 기다리며 영원히 돈다. 브라우저라면 탭이 응답 없음으로 멈춘다. 끝없는 수열에는 반드시 `take` 같은 끊는 장치를 먼저 붙인다.
+
+## 비동기 제너레이터와 for await
+
+`async function*`로 선언하면 비동기 제너레이터가 된다. 안에서 `await`와 `yield`를 함께 쓸 수 있고, `next()`가 `{ value, done }` 대신 그것을 담은 Promise를 돌려준다. 이터러블 쪽 입구도 `Symbol.iterator`가 아니라 `Symbol.asyncIterator`다. 이걸 소비하는 문법이 `for await...of`다.
+
+```js
+async function* ticks() {
+  for (let i = 1; i <= 3; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    console.log("  yield", i);
+    yield i;
+  }
+}
+const t = ticks();
+const t0 = Date.now();
+const ps = [t.next(), t.next(), t.next(), t.next()];
+console.log("next() 네 번을 한꺼번에 불렀다");
+for (const p of ps) {
+  const r = await p;
+  console.log(Date.now() - t0, "ms", r);
+}
+```
+
+```text
+next() 네 번을 한꺼번에 불렀다
+  yield 1
+100 ms { value: 1, done: false }
+  yield 2
+201 ms { value: 2, done: false }
+  yield 3
+301 ms { value: 3, done: false }
+301 ms { value: undefined, done: true }
+```
+
+`next()`를 기다리지 않고 네 번 연달아 불렀지만 본문이 넷으로 갈라져 동시에 돌지는 않았다. 비동기 제너레이터는 받은 `next()` 요청을 줄 세워 두고, 앞 요청이 끝나야 다음 요청을 처리한다. 100ms 간격으로 하나씩 끝난 이유다. 덕분에 페이지네이션 제너레이터를 여러 곳에서 동시에 당겨도 커서가 꼬이지 않는다. 반대로 말하면, 비동기 제너레이터 하나로는 병렬성이 생기지 않는다. 여러 페이지를 동시에 받고 싶다면 제너레이터 안에서 `Promise.all`로 묶어 받아야 한다. 결과를 전부 배열로 모으고 싶으면 `Array.fromAsync(ticks())`가 있다(ES2024, Node.js 22, 크롬 121).
+
+`for await`는 동기 이터러블도 받는다. 원소마다 `await`를 해 줄 뿐이다. 그래서 Promise 배열을 `for await`로 도는 코드가 흔한데, 여기에 함정이 있다.
+
+```js
+const wait = (ms, v, fail) =>
+  new Promise((res, rej) => setTimeout(() => (fail ? rej(new Error(v)) : res(v)), ms));
+
+const jobs = [wait(300, "느린 요청"), wait(100, "빠른 실패", true)];
+try {
+  for await (const v of jobs) console.log(v);
+} catch (e) {
+  console.log("catch:", e.message);
+}
+```
+
+```text
+…/i.mjs:1
+const wait = (ms, v, fail) => new Promise((res, rej) => setTimeout(() => (fail ? rej(new Error(v)) : res(v)), ms));
+                                                                                     ^
+
+Error: 빠른 실패
+    at Timeout._onTimeout (…/i.mjs:1:86)
+```
+
+`catch`가 있는데도 Node.js 22가 100ms 만에 프로세스를 끝냈다. `for await`는 첫 번째 Promise(300ms)를 기다리는 중이고, 두 번째 Promise는 아직 아무도 `await`하지 않았다. 그 상태에서 두 번째가 실패하니 "처리되지 않은 거부"가 되었고, Node.js의 기본 설정은 이때 프로세스를 죽인다. 브라우저에서는 콘솔에 빨간 에러가 찍히고, 에러 수집 도구에 같은 에러가 두 번 쌓인다. 이미 시작한 Promise 여러 개를 기다릴 때는 `Promise.all`이나 `allSettled`를 쓴다. 어떤 조합을 고를지는 [Promise 조합 함수](/posts/js-promise-combinators)에서 다뤘다. `for await`는 다음 값을 기다렸다가 받아야 하는 진짜 비동기 이터러블에 쓴다.
+
+그런 이터러블의 대표가 스트림이다. `fetch` 응답 본문인 `ReadableStream`은 비동기 이터러블이라, 큰 응답을 조각이 도착하는 대로 처리할 수 있다.
+
+```js
+const res = await fetch("/api/export.ndjson");
+const decoder = new TextDecoder();
+let received = 0;
+for await (const chunk of res.body) {     // chunk는 Uint8Array 조각
+  received += chunk.length;
+  render(decoder.decode(chunk, { stream: true }));
+}
+```
+
+`break`하면 `return()`이 불리고, 스트림 쪽에서는 그게 `cancel()`로 이어져 남은 다운로드를 멈춘다. Node.js 22에서 조각 하나만 읽고 `break`했더니 스트림의 `cancel` 콜백이 불렸다. 브라우저 지원은 갈린다. 크롬 124, 파이어폭스 110부터 되지만 사파리는 지원이 늦었으니 쓰기 전에 호환 표를 확인하고, 없으면 `res.body.getReader()`로 `read()`를 반복하는 고전적인 방식으로 쓴다. 서버가 조각을 흘려보내는 방식은 [HTTP 스트리밍과 SSE](/posts/http-streaming-sse)에서 이어진다.
+
+## redux-saga는 왜 제너레이터를 골랐나
+
+제너레이터를 제품 코드에서 가장 크게 쓴 라이브러리가 redux-saga다. 사가는 액션을 받아 API를 부르고 결과를 다시 액션으로 내보내는 제너레이터 함수다.
+
+```js
+import { call, put } from "redux-saga/effects";
+
+function* loadUser(action) {
+  const user = yield call(fetchUser, action.id);
+  yield put({ type: "user/loaded", user });
+}
+```
+
+`call(fetchUser, 7)`은 `fetchUser`를 부르지 않는다. "fetchUser를 7로 불러 달라"는 설명을 담은 평범한 객체를 만들 뿐이다. redux-saga 1.5에서 찍어 보면 이렇다.
+
+```js
+const gen = loadUser({ id: 7 });
+console.log(gen.next().value);
+console.log(gen.next({ id: 7, name: "민지" }).value);
+console.log(gen.next());
+```
+
+```text
+{
+  '@@redux-saga/IO': true,
+  combinator: false,
+  type: 'CALL',
+  payload: { context: null, fn: [Function: fetchUser], args: [ 7 ] }
+}
+{
+  '@@redux-saga/IO': true,
+  combinator: false,
+  type: 'PUT',
+  payload: {
+    channel: undefined,
+    action: { type: 'user/loaded', user: [Object] }
+  }
+}
+{ value: undefined, done: true }
+```
+
+실제로 API를 부르고, 결과를 `next(결과)`로 넣어 주고, 실패하면 `throw(에러)`로 던져 주는 건 미들웨어다. 사가는 할 일을 데이터로 적어 내보내기만 한다. 이 구조에서 두 가지가 나온다. 하나는 테스트다. 위처럼 `next()`를 한 단계씩 부르며 나온 객체를 비교하면 네트워크를 흉내 내지 않고도 흐름을 검사할 수 있고, `next({ id: 7, ... })`로 응답을 마음대로 넣을 수 있다. 다른 하나는 취소다. `takeLatest`가 새 액션을 받으면 이전 사가의 제너레이터에 `return()`을 불러 멈추게 한다. async 함수는 바깥에서 멈출 손잡이가 없어서 이게 안 된다.
+
+대가도 있다. 흐름이 `yield` 객체와 미들웨어 사이를 오가니 스택 트레이스가 끊기고, TypeScript는 `yield` 식의 결과 타입을 추론하지 못해 `const user: User = yield call(...)`처럼 손으로 적어야 한다. 요즘 새 프로젝트에서는 서버 데이터 캐시를 TanStack Query 같은 도구에 맡기는 경우가 많고, 사가는 웹소켓 이벤트를 받아 여러 액션을 조율하는 것처럼 오래 사는 흐름이 많은 곳에 남아 있다. 상태 관리 도구를 고르는 기준은 [프런트엔드 상태 설계](/posts/frontend-state-architecture)에 있다.
+
+이 실행기를 직접 만들어 보면 제너레이터의 세 메서드가 한눈에 들어온다. 아래 `run`은 사가가 내보낸 `{ type, payload }`를 보고 `handlers`에서 같은 이름의 함수를 불러 결과를 돌려준다. 핸들러가 에러를 던지면 그 에러를 사가 안으로 던진다. 사가가 끝나면 `return` 값을 돌려준다. 아래 `checkout`과 `scenario`는 고치지 않는다.
+
+<CodePlayground
+  caption="제너레이터를 돌리는 작은 실행기"
+  functionName="scenario"
+  initialCode={`function run(saga, handlers) {
+  // 1. saga.next()로 시작한다
+  // 2. 나온 값이 { type, payload }면 handlers[type](payload)를 부른다
+  // 3. 결과는 saga.next(결과)로 돌려준다
+  // 4. 핸들러가 throw하면 saga.throw(에러)로 안에 던진다
+  // 5. done이 true면 value를 return한다
+}
+
+// 아래는 고치지 않는다
+function* checkout(itemId) {
+  const stock = yield { type: "getStock", payload: itemId };
+  if (stock === 0) return "품절";
+  try {
+    const orderId = yield { type: "pay", payload: itemId };
+    yield { type: "log", payload: "결제 " + orderId };
+    return "완료 " + orderId;
+  } catch (e) {
+    yield { type: "log", payload: "실패 " + e.message };
+    return "다시 시도";
+  }
+}
+
+function scenario(stock, payFails) {
+  const logs = [];
+  const handlers = {
+    getStock: () => {
+      if (stock < 0) throw new Error("재고 조회 실패");
+      return stock;
+    },
+    pay: (id) => {
+      if (payFails) throw new Error("카드 거절");
+      return "ord-" + id;
+    },
+    log: (msg) => { logs.push(msg); },
+  };
+  try {
+    return [run(checkout(7), handlers), logs];
+  } catch (e) {
+    return ["밖으로: " + e.message, logs];
+  }
+}`}
+  solution={`function run(saga, handlers) {
+  let step = saga.next();
+  while (!step.done) {
+    const { type, payload } = step.value;
+    let result;
+    try {
+      result = handlers[type](payload);
+    } catch (error) {
+      step = saga.throw(error); // 사가가 잡으면 다음 yield가, 못 잡으면 여기서 밖으로 나간다
+      continue;
+    }
+    step = saga.next(result);
+  }
+  return step.value;
+}
+
+function* checkout(itemId) {
+  const stock = yield { type: "getStock", payload: itemId };
+  if (stock === 0) return "품절";
+  try {
+    const orderId = yield { type: "pay", payload: itemId };
+    yield { type: "log", payload: "결제 " + orderId };
+    return "완료 " + orderId;
+  } catch (e) {
+    yield { type: "log", payload: "실패 " + e.message };
+    return "다시 시도";
+  }
+}
+
+function scenario(stock, payFails) {
+  const logs = [];
+  const handlers = {
+    getStock: () => {
+      if (stock < 0) throw new Error("재고 조회 실패");
+      return stock;
+    },
+    pay: (id) => {
+      if (payFails) throw new Error("카드 거절");
+      return "ord-" + id;
+    },
+    log: (msg) => { logs.push(msg); },
+  };
+  try {
+    return [run(checkout(7), handlers), logs];
+  } catch (e) {
+    return ["밖으로: " + e.message, logs];
+  }
+}`}
+  tests={[
+    { label: "재고가 있으면 결제까지", args: [3, false], expected: ["완료 ord-7", ["결제 ord-7"]] },
+    { label: "품절이면 결제를 부르지 않는다", args: [0, true], expected: ["품절", []] },
+    { label: "결제 실패는 사가의 catch가 잡는다", args: [3, true], expected: ["다시 시도", ["실패 카드 거절"]] },
+    { label: "사가가 못 잡은 에러는 run 밖으로", args: [-1, false], expected: ["밖으로: 재고 조회 실패", []] },
+  ]}
+/>
+
+풀이에서 `saga.throw(error)`가 하는 일을 보자. 사가 안에 `try`가 있으면 그 `catch`로 들어가 다음 `yield`까지 돌고 결과를 돌려준다. 없으면 에러가 `throw()`를 부른 자리, 즉 `run` 안에서 다시 튀어나온다. 에러를 잡을지 말지를 실행기가 아니라 사가가 정한다. async 함수 안의 `try...catch`가 `await`에서 거부된 Promise를 잡는 것도 같은 구조다.
+
+## 이터레이터가 범인일 때 보이는 증상
+
+증상에서 원인으로 가는 길을 정리해 둔다.
+
+`TypeError: x is not iterable`은 이터러블이 아닌 값을 `for...of`, 전개, 배열 구조 분해, `new Map`, `Promise.all`에 넣었다는 뜻이다. API 응답이 배열에서 `{ items: [...] }`로 바뀌었거나, `undefined`가 들어왔거나, 객체를 돌려고 했을 때다. 객체라면 `Object.entries`를 쓴다.
+
+반복 결과가 두 번째부터 비어 있다면 제너레이터 객체나 `values()` 같은 한 번짜리 이터레이터를 두 번 돌린 것이다. 배열로 한 번 받아 두거나, 돌 때마다 새로 만드는 이터러블로 감싼다.
+
+탭이 멈추거나 메모리가 끝없이 오르면 끝이 없는 이터러블을 전개나 `Array.from`에 넣었거나, 손으로 만든 `next()`가 `done: true`를 돌려주지 않는 것이다. 개발자 도구의 성능 탭에서 일시 정지하면 콜 스택 맨 위에 그 `next`가 보인다.
+
+`break`했는데 파일이나 연결이 안 닫힌다면 손으로 만든 이터레이터에 `return()`이 없거나, 제너레이터의 `finally`에 `yield`가 있는 것이다.
+
+`for await`로 Promise 배열을 도는 코드에서 `catch`가 있는데도 처리되지 않은 거부 경고가 뜬다면 앞에서 본 순서 문제다. `Promise.all`로 바꾼다.
+
+## 다시 첫 줄이 안 찍히던 제너레이터로
+
+처음의 `loadFeed()`가 아무것도 찍지 않은 건 제너레이터 함수가 본문 대신 멈춰 있는 실행 컨텍스트를 돌려주기 때문이었다. `next()`가 그 컨텍스트를 다음 `yield`까지 돌리고, `next(값)`은 멈춘 자리에 값을 넣고, `return()`과 `throw()`는 그 자리에서 끝내거나 에러를 낸다. `for...of`, 전개, 구조 분해, `Array.from`은 모두 `Symbol.iterator`로 이터레이터를 받아 이 `next()`를 부르는 소비자일 뿐이다. 이 규약 하나를 알면 내 자료구조를 언어의 반복 문법에 끼워 넣을 수 있고, 끝없는 수열이나 스트림처럼 다 만들어 둘 수 없는 데이터를 필요한 만큼만 꺼내 쓸 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 이터러블과 이터레이터는 어떻게 다른가요?
+
+이터러블은 `[Symbol.iterator]()` 메서드를 가진 객체이고, 이터레이터는 그 메서드가 돌려준 `next()`를 가진 객체다. `next()`는 `{ value, done }`을 돌려주고 `done`이 `true`면 반복이 끝난다. 배열은 이터러블이라 돌 때마다 새 이터레이터를 만들지만, 제너레이터 객체는 자기 자신을 이터레이터로 돌려주기 때문에 한 번만 돈다.
+
+### for...of는 내부에서 무엇을 하나요?
+
+오른쪽 값의 `Symbol.iterator` 메서드를 불러 이터레이터를 받고, `done`이 `true`가 될 때까지 `next()`를 불러 `value`를 몸통에 넣는다. 몸통에서 `break`, `return`, `throw`로 빠져나가면 이터레이터의 `return()`을 불러 정리할 기회를 준다. 끝까지 돌았을 때는 부르지 않는다. 메서드가 없으면 `is not iterable` 에러가 난다.
+
+### 일반 객체는 왜 for...of로 돌 수 없나요?
+
+객체를 돈다는 게 키인지 값인지 쌍인지 정해져 있지 않아서 언어가 일부러 이터러블로 만들지 않았다. 대신 `Object.keys`, `values`, `entries`가 배열을 돌려주니 그걸 돈다. 키-값 짝을 다루는 자료구조로 순서대로 돌고 싶으면 처음부터 이터러블인 `Map`을 쓴다. `for...in`은 다른 문법으로, 상속받은 열거 가능한 속성까지 문자열 키로 돈다.
+
+### 제너레이터는 어떻게 함수 중간에서 멈췄다가 이어서 실행되나요?
+
+`yield`에서 실행 컨텍스트를 콜 스택에서 내리되 버리지 않고 제너레이터 객체에 보관하기 때문이다. 지역 변수와 다음 실행 위치가 그대로 남아 있다가, 다음 `next()`가 오면 컨텍스트를 다시 스택에 올려 멈춘 자리부터 이어 간다. 제너레이터 객체는 시작 전, yield에서 멈춤, 실행 중, 끝남의 네 상태를 가진다. 엔진이 지원하지 않던 시절에는 트랜스파일러가 본문을 `switch` 기반 상태 기계로 바꿔 흉내 냈다.
+
+### next()에 넘긴 인자는 어디로 가나요? 첫 번째 next의 인자는요?
+
+멈춰 있던 `yield` 식의 결과가 된다. `const name = yield "이름은?"`에서 다음 `next("민지")`를 부르면 `name`이 `"민지"`가 된다. 첫 번째 `next()`는 본문을 처음부터 첫 `yield`까지 돌리는 호출이라 받아 줄 `yield`가 없어서 인자가 버려진다. 이 양방향 통로가 co나 redux-saga처럼 제너레이터로 비동기 흐름을 쓰는 라이브러리의 바탕이다.
+
+### return()과 throw()는 언제 쓰고 어떻게 동작하나요?
+
+`return(v)`는 멈춘 자리에서 `return v`를 한 것처럼 끝내며 `finally`를 실행하고, `throw(e)`는 그 자리에서 에러가 난 것처럼 만들어 안쪽 `try...catch`가 잡을 수 있게 한다. `for...of`의 `break`가 `return()`을 부르고, redux-saga의 `takeLatest`가 이전 작업을 취소할 때도 `return()`을 쓴다. `finally` 안에 `yield`가 있으면 `return()`이 바로 끝나지 않고 그 `yield`에서 다시 멈추니 `finally`에는 `yield`를 두지 않는다.
+
+### 비동기 제너레이터에서 next()를 여러 번 동시에 부르면 어떻게 되나요?
+
+요청이 줄을 서서 하나씩 처리된다. 100ms씩 걸리는 비동기 제너레이터에 `next()`를 네 번 연달아 불렀더니 100, 201, 301ms에 차례로 끝났다. 그래서 여러 곳에서 동시에 당겨도 내부 상태가 꼬이지 않지만, 제너레이터 하나로 병렬 처리가 되지는 않는다. 동시에 받고 싶으면 안에서 `Promise.all`로 묶는다.
+
+### Promise 배열을 for await로 돌면 무엇이 문제인가요?
+
+앞의 Promise를 기다리는 동안 뒤의 Promise가 먼저 실패하면, 그 거부를 아직 아무도 `await`하지 않아서 처리되지 않은 거부가 된다. Node.js 22에서는 `catch`를 둘러 두었는데도 기본 설정 때문에 프로세스가 바로 종료됐다. 이미 시작한 작업 여러 개를 기다릴 때는 `Promise.all`이나 `allSettled`를 쓰고, `for await`는 스트림이나 페이지네이션처럼 다음 값을 받아 와야 하는 비동기 이터러블에 쓴다.
