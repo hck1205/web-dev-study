@@ -1,0 +1,433 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-users-groups-sudo");
+
+<EasyIntro>
+  학교 건물에 들어갈 때 쓰는 출입증을 떠올려 보자. 출입증에는 이름과 번호가 적혀 있고, 문은 이름이 아니라 번호를 보고 열어 준다. 선생님용 출입증은 교무실까지 열리고, 학생용은 교실까지만 열린다.
+
+  리눅스의 사용자 계정도 이런 출입증이다. 컴퓨터는 사람 이름 대신 번호로 누가 무엇을 가졌는지 기억한다. 그래서 누가 학교를 떠나 출입증을 없애도, 그 사람이 쓰던 사물함에는 번호가 그대로 붙어 있다. 나중에 같은 번호를 받은 새 학생이 오면 그 사물함이 새 학생 것이 되어 버린다.
+
+  교무실 열쇠를 아무에게나 빌려주면 위험하니, 꼭 필요할 때만 잠깐 빌리고 누가 언제 빌렸는지 장부에 적는다. 리눅스에서 이 일을 하는 것이 sudo다.
+
+  이 글은 계정이 어떤 파일에 어떻게 적혀 있는지, 계정을 안전하게 만들고 지우는 법, 관리자 권한을 잠깐 빌리는 법과 그 기록을 읽는 법을 차례로 살펴본다.
+</EasyIntro>
+
+퇴사한 개발자의 계정을 정리하는 날이었다. `sudo userdel -r kim` 한 줄로 끝냈는데, 다음 날 아침 매일 만들어지던 매출 리포트가 오지 않았다. 리포트를 만드는 systemd 서비스가 `User=kim`으로 돌고 있었던 것이다. 서비스는 계정을 찾지 못해 `status=217/USER`로 시작조차 못 했다. 리포트 스크립트가 있던 `/srv/report`는 지워지지 않았지만, `ls -l`로 보니 주인 칸에 이름 대신 `1001`이라는 숫자만 남아 있었다.
+
+계정은 사람의 것만이 아니다. 서비스, 파일, 크론, 권한이 계정 하나에 엮여 있고, 리눅스는 그 연결을 이름이 아니라 숫자로 기억한다. 이 글은 계정이 적힌 세 파일(`/etc/passwd`, `/etc/shadow`, `/etc/group`)의 칸부터 읽고, UID와 시스템 계정, `useradd`·`usermod`·`userdel`의 함정, 계정을 지우기 전에 잠그는 법, su와 sudo의 차이, sudoers 문법과 NOPASSWD의 위험, 그 사이에 끼어드는 PAM, 그리고 `auth.log`로 로그인과 sudo 기록을 읽는 법까지 따라간다.
+
+기준은 Ubuntu 24.04(shadow 4.13, sudo 1.9.15)다. RHEL 계열과 다른 부분은 따로 적었다. 출력은 모두 실습 머신에서 직접 돌린 것이다. 권한 비트와 그룹이 파일 접근에 어떻게 쓰이는지는 [파일 권한 글](/posts/linux-files-permissions)에서, 새 서버에서 관리자 계정을 처음 만드는 절차는 [EC2 서버 첫 설정 글](/posts/aws-ec2-ubuntu-server-setup)에서 다뤘다.
+
+## 계정은 텍스트 파일 세 개에 적혀 있다
+
+리눅스에는 계정 데이터베이스가 따로 없다. 로컬 계정은 콜론으로 칸을 나눈 텍스트 파일에 한 줄씩 적힌다.
+
+```bash
+grep -E "^(root|daemon|www-data|nobody|ubuntu):" /etc/passwd
+ls -l /etc/passwd /etc/shadow /etc/group /etc/gshadow
+```
+
+```text
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+ubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash
+-rw-r--r-- 1 root root   1195 Oct 23 19:00 /etc/group
+-rw-r----- 1 root shadow 1044 Oct 23 19:00 /etc/gshadow
+-rw-r--r-- 1 root root   3952 Oct 23 19:00 /etc/passwd
+-rw-r----- 1 root shadow 1614 Oct 23 19:00 /etc/shadow
+```
+
+`/etc/passwd`의 일곱 칸은 이름, 비밀번호 자리, UID, 기본 GID, 설명(GECOS), 홈 디렉터리, 로그인 셸이다. 둘째 칸의 `x`는 "비밀번호는 shadow에 있다"는 표시다. 옛날에는 여기에 해시가 그대로 들어 있었는데, `/etc/passwd`는 `ls -l`이나 `id`가 UID를 이름으로 바꾸려고 누구나 읽어야 하는 파일이라 해시를 떼어 root와 `shadow` 그룹만 읽을 수 있는 `/etc/shadow`로 옮겼다. 위 권한 칸이 그 차이를 보여 준다.
+
+`/etc/group`은 그룹 이름, 비밀번호 자리, GID, 그리고 그 그룹을 보조 그룹으로 가진 사용자 목록이다. 사용자의 기본 그룹은 여기 목록에 없고 `/etc/passwd`의 넷째 칸에만 있다. 그래서 `grep kim /etc/group`으로 소속 그룹을 세면 하나가 빠진다. 항상 `id kim`으로 본다.
+
+LDAP이나 SSSD를 붙인 회사 서버에서는 계정이 이 파일에 없을 수도 있다. 어디서 찾을지는 `/etc/nsswitch.conf`의 `passwd:` 줄이 정하고, 파일이든 LDAP이든 상관없이 보려면 `getent passwd kim`을 쓴다.
+
+## shadow 한 줄 읽기
+
+사용자를 하나 만들고 비밀번호를 준 뒤 shadow 줄을 봤다.
+
+```bash
+sudo useradd -m -u 1001 -s /bin/bash -c "Kim Dev" kim
+echo 'kim:Sup3r-secret!' | sudo chpasswd
+sudo grep '^kim:' /etc/shadow
+```
+
+```text
+kim:$y$j9T$khdfqChrb/YMooyutkZNQ/$IO2khMq0Y/skZG1O/lgIC0nNpaS4cOp4SJXBH4ltcxD:20749:0:99999:7:::
+```
+
+조각을 눌러 보면 칸마다 뜻이 나온다.
+
+<UrlAnatomy
+  caption="/etc/shadow 한 줄. 날짜 칸은 1970-01-01부터 센 일수다."
+  base="kim"
+  separator=":"
+  joiner=":"
+  params={[
+    { key: "hash", display: "$y$j9T$khdf…$IO2k…", title: "비밀번호 해시", description: "$y$는 yescrypt다. Ubuntu 22.04부터 기본이고, 그 전과 RHEL 8은 $6$(SHA-512 crypt)를 썼다. 가운데는 비용 설정과 소금, 마지막이 해시다. 맨 앞에 !가 붙으면 잠긴 계정, * 하나면 비밀번호로는 로그인할 수 없는 계정이다.", required: true },
+    { key: "lastchg", display: "20749", title: "마지막 변경일", description: "1970-01-01부터 20749일째, 즉 2026-10-23이다. 0이면 다음 로그인 때 비밀번호를 바꾸게 한다." },
+    { key: "min", display: "0", title: "최소 사용 일수", description: "바꾼 뒤 이 날짜가 지나야 다시 바꿀 수 있다. 0이면 언제든 바꾼다." },
+    { key: "max", display: "99999", title: "최대 사용 일수", description: "이 날짜가 지나면 비밀번호가 만료된다. 99999는 사실상 무기한이다." },
+    { key: "warn", display: "7", title: "만료 경고", description: "만료 며칠 전부터 로그인할 때 경고를 보여 줄지다." },
+    { key: "rest", display: "::", title: "유예 · 계정 만료 · 예약", description: "비밀번호가 만료된 뒤 로그인을 허락하는 유예 일수, 계정 자체의 만료일, 예약 칸이다. 계정 만료일은 비밀번호와 상관없이 로그인을 막는다. 뒤에서 퇴사자 계정을 닫을 때 쓴다." },
+  ]}
+/>
+
+날짜 칸은 직접 계산해 볼 수 있다. `date -d "1970-01-01 +20749 days" +%F`가 `2026-10-23`을 낸다. 사람이 읽기 좋게 보려면 `sudo chage -l kim`을 쓴다.
+
+```text
+Last password change					: Oct 23, 2026
+Password expires					: never
+Password inactive					: never
+Account expires						: never
+Minimum number of days between password change		: 0
+Maximum number of days between password change		: 99999
+Number of days of warning before password expires	: 7
+```
+
+해시 앞의 `$y$`가 무엇인지는 `/etc/pam.d/common-password`의 `pam_unix.so obscure yescrypt`가 정한다. `/etc/login.defs`의 `ENCRYPT_METHOD SHA512`는 `chpasswd`처럼 PAM을 거치지 않는 일부 도구만 본다. 같은 서버에서 계정마다 해시 형식이 다르게 보이면 이 둘이 어긋난 경우다. 해시를 느리게 만드는 이유는 [비밀번호 해싱 글](/posts/hash-hmac-password-hashing)에 정리해 두었다.
+
+## UID는 숫자라서 다시 쓰일 수 있다
+
+커널은 이름을 모른다. 프로세스와 파일에는 UID와 GID라는 숫자만 붙고, `ls -l`이 그 숫자를 `/etc/passwd`에서 찾아 이름으로 바꿔 보여 줄 뿐이다. 범위에는 관례가 있다.
+
+- 0: root. 이름이 무엇이든 UID 0이면 root다.
+- 1~999: 시스템 계정. 패키지가 데몬용으로 만든다(`www-data` 33, `postgres` 등).
+- 1000~60000: 사람 계정. `/etc/login.defs`의 `UID_MIN`, `UID_MAX`가 정한다.
+- 65534: `nobody`. NFS나 user namespace에서 "알 수 없는 사용자"가 이 번호로 보인다.
+
+`useradd`는 빈 번호를 찾는 게 아니라 범위 안에서 가장 큰 UID 다음 번호를 준다. 실습 머신에는 패키지 관리자 Nix가 만든 `nixbld1`~`nixbld32`(30001~30032)이 있어서, `-u` 없이 만들었더니 kim이 1001이 아니라 30033을 받았다. 그래서 위에서는 `-u 1001`로 번호를 정해 줬다.
+
+이 규칙 때문에 지운 계정의 번호가 다시 나온다. `ubuntu`(1000)만 있는 깨끗한 서버를 흉내 내 별도 디렉터리의 passwd 파일로 해 봤다(`useradd -P`는 다른 루트 디렉터리의 계정 파일을 고친다).
+
+```bash
+sudo useradd -P ./root kim  && grep kim  ./root/etc/passwd
+sudo userdel  -P ./root kim
+sudo useradd -P ./root park && grep park ./root/etc/passwd
+```
+
+```text
+kim:x:1001:1001::/home/kim:/bin/bash
+park:x:1001:1001::/home/park:/bin/bash
+```
+
+kim이 쓰던 1001을 새로 온 park이 그대로 받았다. 처음 장면의 `/srv/report`처럼 kim 소유로 남은 파일은 이 순간 park의 것이 된다. 퇴사자가 남긴 코드와 비밀 값이 새 사람 손에 넘어가고, 반대로 park이 거기에 쓴 파일이 옛 백업 스크립트에 섞여 들어가기도 한다. 계정을 지우기 전에 그 UID가 가진 파일을 정리해야 하는 이유다. 컨테이너와 호스트의 UID가 어긋날 때 생기는 일은 [파일 권한 글](/posts/linux-files-permissions)의 컨테이너 절에 있다.
+
+## useradd와 usermod에서 자주 밟는 것
+
+Ubuntu에는 `useradd`(저수준, 옵션 그대로)와 `adduser`(Debian 계열의 대화형 래퍼)가 둘 다 있다. 스크립트에서는 결과가 옵션대로 정해지는 `useradd`를 쓰는데, 기본값이 생각과 다르다.
+
+```bash
+sudo useradd plain
+grep '^plain:' /etc/passwd
+ls -ld /home/plain
+grep -v "^#" /etc/default/useradd | grep .
+```
+
+```text
+plain:x:30034:30034::/home/plain:/bin/sh
+ls: cannot access '/home/plain': No such file or directory
+SHELL=/bin/sh
+```
+
+옵션 없이 만들면 홈 디렉터리가 생기지 않고 셸은 bash가 아니라 `/bin/sh`다. 그래서 사람 계정은 `-m`(홈 만들기)과 `-s /bin/bash`를 꼭 붙인다. RHEL 계열의 `useradd`는 기본으로 홈을 만들고 셸도 bash라서, 같은 스크립트가 배포판에 따라 다르게 동작한다.
+
+`usermod`의 `-G`는 더 위험하다.
+
+```bash
+sudo useradd -m -s /bin/bash -G sudo,adm jin && id jin
+sudo usermod -G docker jin && id jin       # -a를 빠뜨렸다
+sudo usermod -aG sudo jin && id jin        # 다시 넣는다
+```
+
+```text
+uid=30033(jin) gid=30033(jin) groups=30033(jin),4(adm),27(sudo)
+uid=30033(jin) gid=30033(jin) groups=30033(jin),996(docker)
+uid=30033(jin) gid=30033(jin) groups=30033(jin),27(sudo),996(docker)
+```
+
+`-G`만 쓰면 보조 그룹 목록을 "이것으로 바꾼다"라서 `sudo`와 `adm`이 빠졌다. 자기 계정에 이걸 하고 로그아웃하면 sudo를 잃는다. 추가는 항상 `-aG`다. 그룹을 바꿔도 이미 로그인한 세션에는 반영되지 않고 다시 로그인해야 적용되는데, 이 부분은 [파일 권한 글](/posts/linux-files-permissions)에서 다뤘다.
+
+## 서비스 계정에는 셸도 홈도 주지 않는다
+
+nginx, PostgreSQL, 직접 만든 API 서버처럼 사람이 아닌 프로그램이 쓸 계정은 시스템 계정으로 만든다.
+
+```bash
+# -r: 시스템 UID 범위, -M: 홈 만들지 않음, 셸은 nologin
+sudo useradd -r -s /usr/sbin/nologin -d /opt/shop -M shop
+grep '^shop:' /etc/passwd /etc/shadow
+id shop
+```
+
+```text
+/etc/passwd:shop:x:995:990::/opt/shop:/usr/sbin/nologin
+/etc/shadow:shop:!:20749::::::
+uid=995(shop) gid=990(shop) groups=990(shop)
+```
+
+UID가 1000 아래에서 위에서부터 내려오며 붙고, shadow의 해시 칸은 `!`라 비밀번호로는 절대 로그인할 수 없다. 셸이 `/usr/sbin/nologin`이면 SSH 키가 어떻게든 들어가도 로그인하는 순간 이 문장만 찍고 끝난다.
+
+```text
+This account is currently not available.
+```
+
+셸을 주지 않는 건 공격 경로를 하나 줄이는 일이다. 서비스가 뚫려서 그 계정의 파일 쓰기 권한을 얻은 공격자가 `~/.ssh/authorized_keys`를 심어도 셸이 없으면 SSH로 들어와 자리를 잡지 못한다. 셸 없이도 되는 SSH 포트 포워딩(`ssh -N -L ...`)까지 막으려면 sshd_config의 `Match User`에서 `AllowTcpForwarding no`를 함께 준다. 다만 이건 대화형 로그인만 막는다. 서비스 프로세스 자체는 셸과 상관없이 돌고, root는 `sudo -u shop -s /bin/bash`나 `su -s /bin/bash shop`으로 여전히 그 계정이 될 수 있다. 서비스마다 계정을 따로 두면 하나가 뚫려도 다른 서비스의 파일과 DB 소켓은 지켜진다. 같은 계정으로 여러 서비스를 돌리면 그 경계가 사라진다.
+
+systemd 유닛에서는 `DynamicUser=yes`로 계정을 아예 만들지 않고 서비스가 뜰 때만 임시 UID를 받게 할 수도 있다. 이렇게 하면 지울 계정도, 남는 UID도 없다. 유닛 파일을 쓰는 법은 [systemd 글](/posts/linux-systemd-systemctl)에 있다.
+
+## 계정을 지우기 전에 잠그고 기다린다
+
+처음 장면으로 돌아가자. `userdel`은 그 사용자의 프로세스가 돌고 있으면 거절한다.
+
+```text
+$ sudo userdel kim
+userdel: user kim is currently used by process 23952
+$ echo $?
+8
+```
+
+그래서 많은 사람이 `pkill -u kim` 뒤에 지운다. 그러면 서비스는 멈추고 파일은 숫자로 남는다.
+
+```text
+$ ls -l /srv/report
+total 32
+-rw-r--r-- 1 1001 1001     8 Oct 23 19:05 run.sh
+-rwxr-xr-x 1 1001 1001 26936 Oct 23 19:05 x
+$ ls -ld /home/kim
+drwxr-x--- 2 1001 1001 4096 Oct 23 19:05 /home/kim
+```
+
+`-r` 없이 지웠더니 홈도 숫자 주인으로 남았다. 지우는 건 마지막 단계여야 한다. 퇴사 당일에는 계정을 닫기만 하고, 그 계정에 엮인 것을 찾아 옮긴 뒤에 지운다. 닫는 방법이 여럿인데 막는 범위가 다르다. 실습 머신에 sshd를 띄워 하나씩 시험했다.
+
+```bash
+sudo usermod -L dev          # 1) 비밀번호 잠금: shadow 해시 앞에 ! 를 붙인다
+sudo passwd -S dev
+# 비밀번호 로그인과 키 로그인을 각각 시도해 본다
+```
+
+```text
+dev L 2026-10-23 0 99999 7 -1
+Permission denied, please try again.
+key-login-ok
+```
+
+`usermod -L`(=`passwd -l`)은 비밀번호만 잠근다. SSH 키 로그인은 비밀번호를 보지 않으니 그대로 된다. 퇴사자 계정을 이것만으로 닫았다고 생각하면 키를 가진 사람은 계속 들어온다.
+
+```bash
+sudo usermod -e 1 dev        # 2) 계정 만료일을 1970-01-02로: 인증 방법과 상관없이 막는다
+sudo chage -l dev | grep "Account expires"
+# 키로 다시 시도한 뒤 auth.log를 본다
+```
+
+```text
+Account expires						: Jan 02, 1970
+vm sshd[27183]: fatal: Access denied for user dev by PAM account configuration [preauth]
+```
+
+계정 만료는 키 인증이 성공한 뒤에 PAM의 account 단계가 막는다. 뒤에서 볼 PAM 순서가 여기서 효과를 낸다. 셋째 방법인 `usermod -s /usr/sbin/nologin`은 앞에서 본 문장을 찍고 끊는다. 퇴사자 계정은 이 순서로 닫는다.
+
+```bash
+# 1) 닫는다: 만료 + 비밀번호 잠금 + 셸 회수 + 키 제거
+sudo usermod -e 1 -L -s /usr/sbin/nologin kim
+sudo mv /home/kim/.ssh/authorized_keys /root/offboard-kim-authorized_keys
+sudo pkill -KILL -u kim                       # 남아 있는 세션을 끊는다
+
+# 2) 엮인 것을 찾는다
+sudo find / -xdev -uid 1001 -not -path "/home/kim/*" 2>/dev/null | head   # 홈 밖의 파일
+sudo crontab -l -u kim                                                   # 개인 크론
+grep -rl "User=kim" /etc/systemd/system /usr/lib/systemd/system 2>/dev/null   # 서비스
+sudo grep -r "kim" /etc/sudoers /etc/sudoers.d/                          # sudo 규칙
+
+# 3) 옮긴다: 서비스는 전용 계정으로, 파일 주인도 바꾼다
+sudo chown -R report:report /srv/report
+
+# 4) 몇 주 뒤 문제가 없으면 지운다 (-r: 홈과 메일 스풀까지)
+sudo userdel -r kim
+```
+
+공용 계정 하나를 여럿이 쓰고 있었다면 이 일이 훨씬 어렵다. 퇴사자 한 명 때문에 그 계정의 비밀번호와 키를 모두 바꾸고 모든 사람에게 다시 나눠 줘야 한다. 사람마다 계정을 따로 만들고 필요한 권한만 sudo로 주는 이유가 이것이고, 로그에 "누가" 했는지 남는 것도 그 덕이다.
+
+## su는 사람이 되고, sudo는 명령을 빌린다
+
+둘 다 다른 사용자(대개 root)의 권한을 얻는 방법이지만 묻는 비밀번호와 남는 기록이 다르다.
+
+- `su -`는 대상 계정의 비밀번호를 묻고, 그 계정의 셸을 통째로 준다. root로 `su`하려면 root 비밀번호를 여럿이 알아야 하고, 셸 안에서 한 일은 기본으로 기록되지 않는다.
+- `sudo 명령`은 자기 비밀번호를 묻고, sudoers가 허락한 명령만 실행하며, 명령마다 로그를 남긴다. 비밀번호를 한 번 맞히면 터미널마다 15분 동안 다시 묻지 않는다.
+
+`su`와 `su -`의 차이는 환경이다. `-`가 없으면 지금의 환경 변수와 디렉터리를 그대로 가지고 들어가서, `PATH`에 일반 사용자의 디렉터리가 섞인 root 셸이 된다. sudo 쪽은 `sudo -s`가 지금 환경으로 셸을, `sudo -i`가 대상 계정의 로그인 셸을 준다. Ubuntu는 root 비밀번호가 아예 없어서(`!`로 잠김) `su -`로 root가 될 수 없고, sudo만 쓰게 되어 있다.
+
+15분 캐시는 실습에서 한 번 헷갈리게 만들었다. 맞는 비밀번호로 sudo를 한 번 쓴 직후 틀린 비밀번호를 넣었는데 통과했다. 캐시가 살아 있으니 아예 묻지 않은 것이다. `sudo -k`로 캐시를 지운 뒤에야 틀린 비밀번호가 거절됐다.
+
+```text
+$ sudo -k; printf 'wrong\nwrong\nwrong\n' | sudo -S -p '' id
+Sorry, try again.
+Sorry, try again.
+sudo: 3 incorrect password attempts
+```
+
+## sudoers 문법과 visudo
+
+규칙은 `/etc/sudoers`와 `/etc/sudoers.d/` 아래 파일에 있다. Ubuntu 24.04의 기본 `/etc/sudoers`에서 주석을 빼면 이렇다(실습 환경이 넣은 줄 하나는 뺐다).
+
+```text
+Defaults	env_reset
+Defaults	mail_badpass
+Defaults	secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+Defaults	use_pty
+root	ALL=(ALL:ALL) ALL
+%admin ALL=(ALL) ALL
+%sudo	ALL=(ALL:ALL) ALL
+@includedir /etc/sudoers.d
+```
+
+`env_reset`은 sudo로 실행하는 명령에 사용자 환경 변수 대부분을 넘기지 않는다. `secure_path`는 사용자가 `PATH` 앞에 자기 디렉터리를 넣어 `ls`라는 이름의 가짜 프로그램을 root로 실행시키는 일을 막는다. 규칙 줄은 "누가 어느 호스트에서=(누구로:어느 그룹으로) 무엇을"이다. `%sudo`는 sudo 그룹 전체에 모든 명령을 허락한다. Ubuntu에서 관리자를 만드는 일이 `usermod -aG sudo`인 이유다. RHEL 계열은 같은 역할을 `%wheel`이 한다.
+
+규칙이 여러 개 맞으면 마지막에 맞은 것이 이긴다. `%sudo ALL=(ALL:ALL) ALL` 뒤에 `kim ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart shop`을 두면 kim은 그 명령만 비밀번호 없이 쓰고, 다른 명령은 sudo 그룹 규칙대로 비밀번호를 묻는다. 순서를 반대로 쓰면 NOPASSWD가 묻힌다. `/etc/sudoers.d/`의 파일은 이름순으로 읽히고, 이름에 `.`이 들어가거나 `~`로 끝나는 파일은 무시된다. `deploy.conf`로 만든 파일이 적용되지 않는 흔한 이유다.
+
+파일은 반드시 `visudo`로 고치거나 `visudo -c`로 검사한다. 문법이 틀린 파일이 하나라도 있으면 sudo가 모든 규칙을 거부해서 관리자 전원이 sudo를 잃는다. 한 줄의 각 칸을 조각으로 읽는 그림과 문법 오류의 실제 모습은 [EC2 서버 첫 설정 글](/posts/aws-ec2-ubuntu-server-setup)에 있다.
+
+```bash
+sudo visudo -f /etc/sudoers.d/deploy      # 저장할 때 문법을 검사한다
+sudo visudo -c                            # 전체를 검사한다
+sudo -l -U kim                            # kim이 실제로 무엇을 할 수 있는지 본다
+```
+
+### NOPASSWD가 위험한 진짜 이유
+
+NOPASSWD 자체보다 위험한 건 "허락한 명령이 다른 명령을 실행할 수 있는가"다. 로그 파일을 찾으라고 `find`를 허락한 규칙을 만들어 봤다.
+
+```bash
+echo 'dev ALL=(root) NOPASSWD: /usr/bin/find /var/log *' | sudo tee /etc/sudoers.d/dev-find
+sudo chmod 440 /etc/sudoers.d/dev-find && sudo visudo -c
+# dev 계정으로: 허락된 find에 -exec를 붙인다
+sudo -n /usr/bin/find /var/log -maxdepth 0 -exec /bin/sh -c "id" \;
+```
+
+```text
+uid=0(root) gid=0(root) groups=0(root)
+```
+
+`find`의 `-exec`로 root 셸을 얻었다. `vim`, `less`(`!sh`), `tar`, `awk`, `git`, `env`, `systemctl edit`처럼 안에서 다른 프로그램을 띄울 수 있는 명령은 허락하는 순간 "모든 명령"을 허락한 것과 같다. 이런 명령 목록을 모아 둔 공개 자료(GTFOBins)가 있을 정도다. 파일 편집을 허락하려면 `sudoedit`(편집기는 사용자 권한으로 돌고 저장만 root로 한다)를 쓰고, 명령은 인자까지 정확히 적고 끝의 `*`를 피한다. 배포 계정처럼 사람이 아닌 계정에만 NOPASSWD를 주고, 그때도 명령을 스크립트 하나로 좁힌다.
+
+## PAM이 인증 사이에 끼어든다
+
+sudo, su, sshd, 로그인 화면은 비밀번호를 직접 검사하지 않는다. "이 사람이 맞는지 확인해 달라"를 PAM(Pluggable Authentication Modules)에 맡긴다. 프로그램마다 `/etc/pam.d/` 아래에 설정 파일이 있다.
+
+```bash
+grep -v "^#" /etc/pam.d/sudo | grep .
+grep -v "^#" /etc/pam.d/common-password | grep .
+```
+
+```text
+session    required   pam_limits.so
+session    required   pam_env.so readenv=1 user_readenv=0
+session    required   pam_env.so readenv=1 envfile=/etc/default/locale user_readenv=0
+@include common-auth
+@include common-account
+@include common-session-noninteractive
+password	[success=1 default=ignore]	pam_unix.so obscure yescrypt
+password	requisite			pam_deny.so
+password	required			pam_permit.so
+```
+
+한 줄은 "단계, 성패를 다루는 방식, 모듈"이다. 단계는 넷이다. auth는 누구인지 확인하고(비밀번호, OTP), account는 지금 들어와도 되는지 본다(계정 만료, 접속 시간). password는 비밀번호를 바꿀 때, session은 들어온 뒤의 준비(자원 한도, 환경 변수, 로그)다. `required`는 실패해도 나머지를 다 돌린 뒤 실패로, `requisite`는 즉시 실패로, `sufficient`는 성공하면 거기서 통과로 끝낸다. `su`의 설정 맨 위에 있는 `auth sufficient pam_rootok.so`가 "root가 su하면 비밀번호를 묻지 않는다"를 만드는 줄이다.
+
+아래 그림에서 단계를 넘기면 `sudo systemctl restart shop` 한 번이 거치는 길이 보인다.
+
+<SequenceDiagram
+  caption="sudo는 sudoers로 허락을, PAM으로 본인 확인과 계정 상태를 보고, 실행 전후로 로그를 남긴다."
+  actors={[
+    { id: "u", label: "kim" },
+    { id: "sudo", label: "sudo" },
+    { id: "pam", label: "PAM" },
+    { id: "log", label: "auth.log" },
+    { id: "cmd", label: "systemctl" },
+  ]}
+  steps={[
+    { from: "u", to: "sudo", label: "sudo systemctl ...", title: "명령을 빌려 달라고 한다", detail: "sudo는 setuid root 프로그램이라 처음부터 root로 돈다. 먼저 sudoers에서 kim이 이 명령을 쓸 수 있는지 찾는다." },
+    { from: "sudo", to: "pam", label: "auth", title: "본인인지 확인한다", detail: "NOPASSWD가 아니고 15분 캐시도 없으면 PAM auth 단계가 비밀번호를 묻고 pam_unix가 shadow의 해시와 비교한다." },
+    { from: "sudo", to: "pam", label: "account", title: "들어와도 되는 계정인지", detail: "비밀번호가 맞아도 계정이 만료됐으면 여기서 막힌다. 키 로그인이 막힌 것도 이 단계였다." },
+    { from: "sudo", to: "log", label: "COMMAND=...", title: "누가 무엇을 했는지 적는다", detail: "사용자, 작업 디렉터리, 대상 사용자, 명령 전체가 한 줄로 남는다. 틀린 비밀번호도 횟수와 함께 남는다.", payload: "sudo:      dev : PWD=/home/dev ; USER=root ; COMMAND=/usr/bin/systemctl --version" },
+    { from: "sudo", to: "pam", label: "session", title: "세션을 연다", detail: "자원 한도와 환경을 준비하고 session opened for user root 로그를 남긴다." },
+    { from: "sudo", to: "cmd", label: "exec (root)", title: "명령을 root로 실행한다", detail: "env_reset과 secure_path가 적용된 깨끗한 환경으로 실행하고, 끝나면 session closed를 남긴다." },
+  ]}
+/>
+
+PAM에 모듈을 넣으면 sudo나 sshd를 다시 빌드하지 않아도 인증 방식이 바뀐다. 실패 횟수로 계정을 잠그는 `pam_faillock`, OTP를 묻는 `pam_google_authenticator` 같은 것이 이렇게 붙는다. 반대로 이 파일을 잘못 고치면 모든 로그인이 막힐 수 있다. PAM 설정을 바꿀 때는 root 세션 하나를 열어 둔 채로 새 터미널에서 로그인을 시험하고, 실패하면 열어 둔 세션으로 되돌린다.
+
+## 인증 로그로 누가 들어왔는지 본다
+
+Ubuntu에서 로그인, su, sudo 기록은 rsyslog가 `/var/log/auth.log`에 모은다(RHEL 계열은 `/var/log/secure`). 실습 머신에서 sshd와 sudo로 성공과 실패를 일부러 만들고 읽었다. `pam_limits`, `pam_systemd`처럼 실습 환경 때문에 생긴 경고 줄은 뺐다.
+
+```bash
+sudo grep -v -E "pam_limits|pam_systemd" /var/log/auth.log
+```
+
+```text
+2026-10-23T19:06:52.169527+00:00 vm sshd[26797]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=127.0.0.1  user=dev
+2026-10-23T19:06:53.897745+00:00 vm sshd[26797]: Failed password for dev from 127.0.0.1 port 36382 ssh2
+2026-10-23T19:06:54.665615+00:00 vm sshd[26831]: Invalid user admin from 127.0.0.1 port 37418
+2026-10-23T19:06:57.501753+00:00 vm sshd[26831]: Failed password for invalid user admin from 127.0.0.1 port 37418 ssh2
+2026-10-23T19:06:58.345533+00:00 vm sshd[26861]: Accepted password for dev from 127.0.0.1 port 37432 ssh2
+2026-10-23T19:06:58.349983+00:00 vm sshd[26861]: pam_unix(sshd:session): session opened for user dev(uid=1002) by dev(uid=0)
+2026-10-23T19:06:23.784226+00:00 vm sudo: pam_unix(sudo:auth): authentication failure; logname= uid=1002 euid=0 tty= ruser=dev rhost=  user=dev
+2026-10-23T19:06:29.525536+00:00 vm sudo:      dev : 3 incorrect password attempts ; PWD=/home/dev ; USER=root ; COMMAND=/usr/bin/cat /etc/shadow
+2026-10-23T19:06:17.516924+00:00 vm sudo:      dev : PWD=/home/dev ; USER=root ; COMMAND=/usr/bin/systemctl --version
+2026-10-23T19:07:12.352441+00:00 vm sshd[27200]: Accepted publickey for dev from 127.0.0.1 port 53752 ssh2: ED25519 SHA256:AsXR2cAwlkGFHf6txkwK6KUe5LzhGJ3DpMuRXIwlHh4
+```
+
+(시간 순서가 섞인 건 여러 번 시험한 줄을 종류별로 모아서다.) 읽을 곳은 몇 군데다. `Invalid user admin`은 없는 계정 이름으로 들어오려 한 것이라 인터넷에 열린 서버라면 자동화된 대입 공격의 흔적이다. `Failed password for dev`는 있는 계정에 틀린 비밀번호다. `Accepted publickey` 뒤의 `SHA256:...`은 어느 키로 들어왔는지 알려 주는 지문이라, `ssh-keygen -lf authorized_keys`의 지문과 맞춰 보면 사람이 특정된다. sudo 줄에는 명령 전체가 남고, 실패는 `3 incorrect password attempts`처럼 횟수로 남는다.
+
+```bash
+# 오늘 실패한 SSH 로그인을 IP별로 센다
+sudo grep "Failed password" /var/log/auth.log | grep -oE "from [0-9.]+" | sort | uniq -c | sort -rn | head
+# 누가 어떤 sudo 명령을 썼는지
+sudo grep -E "sudo: +[a-z_][a-z0-9_-]* : .*COMMAND=" /var/log/auth.log | tail
+# 어느 키로 들어왔는지
+sudo grep "Accepted publickey" /var/log/auth.log | tail -5
+```
+
+rsyslog가 없는 이미지나 컨테이너라면 같은 기록이 journald에만 있다. `journalctl -t sudo`, `journalctl -u ssh`(Ubuntu의 유닛 이름은 `ssh.service`), `journalctl _COMM=sshd --since today`로 본다. 최근 로그인 목록은 `last`, 실패 목록은 `sudo lastb`, 계정별 마지막 로그인은 `lastlog`가 보여 준다.
+
+로그는 공격자가 root를 얻으면 지울 수 있다. 감사가 중요한 서버라면 로그를 서버 밖으로 바로 보내고, sudo의 `log_output` 옵션이나 auditd로 명령 내용까지 남긴다.
+
+## 계정은 사람과 서비스를 구분하는 경계다
+
+계정은 텍스트 파일 세 개의 한 줄씩이고, 커널은 이름이 아니라 UID라는 숫자로 주인을 기억한다. 그래서 지운 계정의 숫자가 파일에 남고 다시 쓰인다. 사람은 각자 계정과 sudo로, 서비스는 셸 없는 전용 계정으로 나누고, 퇴사자 계정은 만료와 잠금으로 먼저 닫은 뒤 엮인 것을 옮기고 지운다. sudo는 명령 단위로 권한을 빌려 주고 기록을 남기지만, 허락한 명령이 셸을 띄울 수 있으면 그 경계가 사라진다.
+
+## 면접에서 나올 만한 질문
+
+### /etc/passwd와 /etc/shadow를 나눈 이유는?
+
+`/etc/passwd`는 `ls -l`이나 `id`가 UID를 이름으로 바꾸려고 모든 사용자가 읽어야 하는 파일이다. 예전처럼 여기에 해시가 있으면 누구나 해시를 가져가 오프라인으로 대입 공격을 할 수 있다. 그래서 해시와 만료 정보만 root와 shadow 그룹만 읽는 `/etc/shadow`로 떼어 냈고, passwd의 둘째 칸에는 `x`만 남았다.
+
+### 퇴사자 계정은 어떻게 정리하나?
+
+먼저 지우지 않고 닫는다. `usermod -e 1 -L -s /usr/sbin/nologin`으로 계정 만료, 비밀번호 잠금, 셸 회수를 하고 authorized_keys를 치운 뒤 세션을 끊는다. 그다음 그 UID 소유 파일, 크론, `User=`로 그 계정을 쓰는 서비스, sudoers 규칙을 찾아 옮긴다. 문제가 없으면 나중에 `userdel -r`로 지운다. 바로 지우면 서비스가 멈추고, 남은 파일의 UID가 새 사용자에게 넘어갈 수 있다.
+
+### usermod -L로 잠갔는데 그 사용자가 여전히 로그인한다. 왜인가?
+
+`-L`은 shadow의 해시 앞에 `!`를 붙여 비밀번호 인증만 막기 때문이다. SSH 키 인증은 비밀번호를 보지 않으니 그대로 통과한다. 인증 방법과 상관없이 막으려면 `usermod -e 1`로 계정을 만료시킨다. 그러면 키 인증 뒤에 PAM account 단계가 거절한다.
+
+### su와 sudo의 차이는? 공용 root 비밀번호 대신 sudo를 쓰는 이유는?
+
+su는 대상 계정의 비밀번호로 그 계정의 셸을 통째로 얻고, sudo는 자기 비밀번호로 허락된 명령만 대상 권한으로 실행한다. sudo는 명령마다 누가 무엇을 했는지 로그를 남기고, 사람마다 허락 범위를 다르게 줄 수 있으며, 한 사람이 나가도 그 사람 계정만 닫으면 된다. 공용 root 비밀번호는 누가 했는지 알 수 없고 한 명이 나갈 때마다 모두의 비밀번호를 바꿔야 한다.
+
+### 서비스 계정에 셸을 주지 않는 이유는?
+
+서비스가 뚫려 공격자가 그 계정으로 파일을 쓸 수 있게 돼도, 셸이 nologin이면 authorized_keys를 심어 SSH로 들어와 자리를 잡는 길이 막힌다. 비밀번호 칸도 `!`라 비밀번호 로그인도 안 된다. 다만 nologin은 대화형 로그인만 막을 뿐 서비스 실행에는 영향이 없고, root는 여전히 그 계정으로 전환할 수 있다. 서비스마다 계정을 따로 두는 것이 더 큰 효과를 낸다.
+
+### sudoers에 특정 명령만 NOPASSWD로 허락했는데 root 셸이 뚫렸다. 어떻게 가능한가?
+
+허락한 명령이 다른 프로그램을 실행할 수 있으면 그걸로 셸을 띄울 수 있다. `find -exec`, `vim`의 `:!sh`, `less`의 `!sh`, `tar`의 체크포인트 옵션 같은 것이다. 끝에 `*`를 붙여 인자를 열어 두면 위험한 옵션까지 허락된다. 편집은 `sudoedit`으로, 명령은 인자까지 고정하거나 검증하는 스크립트 하나로 좁힌다.
+
+### PAM은 무엇이고 어디에 쓰나?
+
+sudo, sshd, su 같은 프로그램이 인증을 직접 구현하지 않고 맡기는 공용 틀이다. auth(본인 확인), account(계정 상태), password(비밀번호 변경), session(로그인 후 준비) 네 단계에 모듈을 쌓아 정책을 만든다. 그래서 프로그램을 고치지 않고 OTP, 실패 횟수 잠금, LDAP 인증을 붙일 수 있다. 잘못 고치면 모든 로그인이 막히니 root 세션을 열어 둔 채 시험한다.
+
+### 서버에 누가 들어왔고 sudo로 무엇을 했는지 어떻게 확인하나?
+
+Ubuntu는 `/var/log/auth.log`, RHEL 계열은 `/var/log/secure`를 본다. sshd의 `Accepted publickey` 줄에 키 지문이 있어 authorized_keys와 맞춰 사람을 특정하고, sudo 줄에는 사용자와 명령 전체가 남는다. rsyslog가 없으면 `journalctl -t sudo`, `journalctl -u ssh`로 본다. 로그는 root가 지울 수 있으니 중요한 서버는 로그를 밖으로 바로 보낸다.

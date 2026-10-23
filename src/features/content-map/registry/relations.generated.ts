@@ -2,6 +2,320 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "api-security-owasp-api-top10": {
+    "links": [
+      "owasp-top-10-map",
+      "authn-vs-authz",
+      "ssrf",
+      "rate-limiting-in-practice",
+      "cors",
+      "web-security-headers",
+      "api-versioning",
+      "encryption-in-transit",
+      "graphql-schema-type-system"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "api-styles-overview",
+      "graphql-basics",
+      "sd-payment-flow",
+      "code-review-practices",
+      "js-pure-functions",
+      "db-types-overview",
+      "runtime-validation-zod",
+      "webhooks"
+    ]
+  },
+  "bash-expansions-variables": {
+    "links": [
+      "bash-scripting",
+      "shell-redirection-pipes",
+      "bash-control-flow-functions",
+      "linux-grep-awk-sed"
+    ],
+    "mentions": [
+      "nginx-basics",
+      "js-array-transform"
+    ]
+  },
+  "cloud-service-models-shared-responsibility": {
+    "links": [
+      "cloud-cost-optimization",
+      "aws-ec2-ubuntu-server-setup",
+      "ssrf",
+      "security-incident-response",
+      "serverless-limits",
+      "cold-starts",
+      "serverless-architecture",
+      "iam-basics"
+    ],
+    "mentions": [
+      "rds-aurora-managed-db",
+      "db-type-key-value",
+      "docker-container-basics",
+      "linux-boot-process",
+      "backup-strategy",
+      "autoscaling",
+      "security-principles-cia-defense-in-depth",
+      "mfa-totp",
+      "security-groups-nacl",
+      "vpc-basics",
+      "sso-saml-oidc",
+      "eks-cluster-basics",
+      "on-call"
+    ]
+  },
+  "firewall-types-ngfw": {
+    "links": [
+      "iptables-basics",
+      "security-groups-nacl",
+      "waf",
+      "ids-ips",
+      "ddos-protection",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "encryption-in-transit",
+      "what-happens-google-com",
+      "cloud-service-models-shared-responsibility",
+      "udp-and-quic"
+    ]
+  },
+  "github-actions-workflows": {
+    "links": [
+      "github-actions-docker-ecr",
+      "ci-cd-basics",
+      "github-repo-governance",
+      "yaml-for-k8s",
+      "build-caching",
+      "security-incident-response"
+    ],
+    "mentions": [
+      "webhooks"
+    ]
+  },
+  "linux-boot-process": {
+    "links": [
+      "linux-systemd-systemctl",
+      "linux-processes-signals",
+      "linux-disks-filesystems"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "encryption-at-rest"
+    ]
+  },
+  "linux-disks-filesystems": {
+    "links": [
+      "page-cache-disk-io",
+      "linux-files-permissions",
+      "linux-boot-process",
+      "aws-ec2-ubuntu-server-setup"
+    ],
+    "mentions": [
+      "process-vs-thread",
+      "dockerfile-image-layers"
+    ]
+  },
+  "linux-users-groups-sudo": {
+    "links": [
+      "linux-files-permissions",
+      "aws-ec2-ubuntu-server-setup",
+      "hash-hmac-password-hashing",
+      "linux-systemd-systemctl"
+    ],
+    "mentions": [
+      "ssh-in-practice",
+      "docker-container-basics",
+      "iptables-nat",
+      "shell-environment-startup",
+      "postgres-architecture"
+    ]
+  },
+  "network-attacks-l2-l3": {
+    "links": [
+      "layer-link-ethernet-arp",
+      "dhcp",
+      "dns",
+      "zero-trust-architecture",
+      "https-tls",
+      "token-login",
+      "network-flow-logs",
+      "security-logging-detection-siem",
+      "vlan-basics",
+      "security-groups-nacl"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "vpc-basics"
+    ]
+  },
+  "nextjs-app-router-routing": {
+    "links": [
+      "nextjs-static-dynamic-rendering",
+      "react-server-components",
+      "nextjs-route-handlers-proxy",
+      "streaming-ssr-suspense",
+      "react-suspense-error-boundary",
+      "react-reconciliation-keys",
+      "nextjs-caching-layers",
+      "nextjs-parallel-intercepting-routes"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "rendering-csr-spa",
+      "rendering-strategies",
+      "n-plus-one-queries"
+    ]
+  },
+  "nextjs-caching-layers": {
+    "links": [
+      "nextjs-static-dynamic-rendering",
+      "rendering-ssg-isr",
+      "nextjs-server-actions-security",
+      "nextjs-route-handlers-proxy"
+    ],
+    "mentions": [
+      "react-server-components",
+      "nextjs-app-router-routing",
+      "rendering-strategies",
+      "sd-start-single-server",
+      "js-memoization",
+      "redis-basics",
+      "js-closures",
+      "js-primitive-vs-reference",
+      "count-min-sketch",
+      "webhooks"
+    ]
+  },
+  "nextjs-parallel-intercepting-routes": {
+    "links": [
+      "nextjs-app-router-routing",
+      "aria-keyboard-focus",
+      "nextjs-caching-layers",
+      "nextjs-static-dynamic-rendering",
+      "streaming-ssr-suspense",
+      "nextjs-route-handlers-proxy"
+    ],
+    "mentions": [
+      "react-server-components",
+      "frontend-testing-strategy",
+      "rendering-strategies",
+      "react-suspense-error-boundary",
+      "http-status-codes"
+    ]
+  },
+  "nextjs-route-handlers-proxy": {
+    "links": [
+      "http-status-codes",
+      "express-middleware",
+      "authn-vs-authz",
+      "nextjs-server-actions-security",
+      "nextjs-caching-layers",
+      "server-sent-events",
+      "web-security-headers"
+    ],
+    "mentions": [
+      "nextjs-static-dynamic-rendering",
+      "nextjs-self-hosting-deployment",
+      "proxy-reverse-proxy",
+      "ab-testing",
+      "rendering-strategies",
+      "js-memoization",
+      "react-server-components",
+      "cookie-session-login",
+      "count-min-sketch",
+      "token-login",
+      "webhooks"
+    ]
+  },
+  "nextjs-server-actions-security": {
+    "links": [
+      "react-server-components",
+      "react-forms-actions",
+      "csrf",
+      "nextjs-route-handlers-proxy",
+      "authn-vs-authz",
+      "rate-limiting-in-practice",
+      "nextjs-caching-layers"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "rendering-strategies",
+      "js-memoization",
+      "code-review-practices",
+      "rolling-deployment",
+      "k8s-pod-scheduling",
+      "cookie-session-login",
+      "js-closures"
+    ]
+  },
+  "security-incident-response": {
+    "links": [
+      "production-incidents",
+      "postmortems",
+      "secrets-management",
+      "on-call",
+      "github-actions-docker-ecr",
+      "github-actions-workflows",
+      "iam-basics",
+      "security-groups-nacl",
+      "cloud-service-models-shared-responsibility",
+      "backup-strategy"
+    ],
+    "mentions": [
+      "git-large-files-secrets",
+      "sd-start-single-server",
+      "autoscaling",
+      "osi-in-practice"
+    ]
+  },
+  "security-logging-detection-siem": {
+    "links": [
+      "structured-logging",
+      "centralized-logging-pipeline",
+      "k8s-audit-logging",
+      "secrets-management"
+    ],
+    "mentions": [
+      "token-login",
+      "network-flow-logs",
+      "bloom-filter",
+      "osi-in-practice",
+      "cookie-session-login",
+      "ssrf",
+      "ansible-network-automation",
+      "acid-transactions",
+      "db-modeling-normalization"
+    ]
+  },
+  "shell-redirection-pipes": {
+    "links": [
+      "bash-scripting",
+      "bash-control-flow-functions",
+      "linux-network-tuning",
+      "linux-systemd-systemctl",
+      "bash-expansions-variables"
+    ],
+    "mentions": [
+      "centralized-logging-pipeline"
+    ]
+  },
+  "vulnerability-management-cve-cvss": {
+    "links": [
+      "owasp-top-10-map",
+      "canary-release",
+      "waf",
+      "security-logging-detection-siem",
+      "container-supply-chain-security"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "sql-injection",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
   "bash-control-flow-functions": {
     "links": [
       "bash-scripting",
@@ -12,6 +326,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
+      "shell-redirection-pipes",
+      "bash-expansions-variables",
       "js-scope-lexical"
     ]
   },
@@ -146,9 +462,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "nextjs-route-handlers-proxy",
       "observability-basics",
       "docker-commands-workflow",
       "k8s-pod-resources",
+      "nextjs-parallel-intercepting-routes",
       "rendering-strategies",
       "proxy-reverse-proxy",
       "cpu-cache-hierarchy",
@@ -197,6 +515,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "http-caching-cdn",
       "data-fetching-optimization",
+      "nextjs-app-router-routing",
       "react-useeffect",
       "rendering-strategies",
       "db-modeling-normalization"
@@ -292,6 +611,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-configmap",
       "docker-container-basics",
+      "linux-users-groups-sudo",
       "ds-hash-map"
     ]
   },
@@ -487,6 +807,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-devtools-debugging"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "lighthouse-explained",
       "what-happens-google-com",
       "dns"
@@ -1210,6 +1531,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nodejs-orm-query-builder",
       "jpa-persistence-context",
       "js-spread-rest",
+      "api-security-owasp-api-top10",
       "ddd-bounded-context",
       "pattern-proxy"
     ]
@@ -1238,6 +1560,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "graphql-client-caching"
     ],
     "mentions": [
+      "api-security-owasp-api-top10",
       "graphql-subscriptions-defer",
       "n-plus-one-queries",
       "realtime-communication",
@@ -1258,6 +1581,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "graphql-authorization"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "graphql-schema-type-system",
       "rendering-strategies",
       "loading-patterns",
@@ -1484,6 +1808,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "centralized-logging-pipeline",
       "sd-latency-numbers",
+      "bash-expansions-variables",
       "event-loop"
     ]
   },
@@ -1584,6 +1909,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-embedded",
       "kafka-basics",
       "redis-basics",
+      "cloud-service-models-shared-responsibility",
       "frontend-monorepo"
     ]
   },
@@ -1666,6 +1992,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "design-system-building"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "rendering-strategies",
       "css-custom-properties",
       "smoke-sanity-regression-testing"
@@ -1880,6 +2207,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "react-suspense-error-boundary",
+      "nextjs-app-router-routing",
       "rendering-strategies",
       "js-destructuring",
       "resilience-patterns",
@@ -2048,6 +2376,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "image-optimization"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "css-sticky-scroll-snap",
       "js-numbers-bigint",
       "css-custom-properties",
@@ -2067,6 +2396,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "html-form-http",
+      "nextjs-app-router-routing",
       "k8s-deploy-pipeline-eks",
       "nextjs-static-dynamic-rendering",
       "http-status-codes",
@@ -2332,11 +2662,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "virtual-memory-paging",
       "terraform-basics",
+      "linux-users-groups-sudo",
       "ansible-network-automation",
       "proxy-reverse-proxy",
       "page-cache-disk-io",
       "sd-start-single-server",
       "js-memory-leak",
+      "linux-disks-filesystems",
       "dockerfile-image-layers",
       "layer-ip-addressing",
       "rds-aurora-managed-db",
@@ -2841,6 +3173,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "shell-environment-startup",
       "sql-batch-timeout-pool",
+      "linux-users-groups-sudo",
       "udp-and-quic",
       "dns"
     ]
@@ -2854,8 +3187,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iac-basics"
     ],
     "mentions": [
+      "bash-expansions-variables",
       "ansible-network-automation",
-      "postgres-operations"
+      "postgres-operations",
+      "shell-redirection-pipes"
     ]
   },
   "ssh-in-practice": {
@@ -2906,6 +3241,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mysql-innodb-basics",
+      "linux-disks-filesystems",
       "sd-kv-store-write-read-path",
       "message-queue-basics",
       "acid-transactions"
@@ -2926,6 +3262,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "process-vs-thread",
       "js-numbers-bigint",
       "ds-hash-map",
+      "linux-disks-filesystems",
       "bit-manipulation",
       "redis-basics"
     ]
@@ -2991,6 +3328,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "frontend-testing-strategy",
       "cpu-pipelining-branch-prediction",
       "rendering-strategies",
@@ -3008,6 +3346,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "html-form-http",
       "token-login",
+      "cloud-service-models-shared-responsibility",
       "sli-slo",
       "db-modeling-normalization"
     ]
@@ -3373,6 +3712,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-browser-cache",
       "frontend-testing-strategy",
       "browser-fetch",
+      "nextjs-app-router-routing",
       "dns"
     ]
   },
@@ -3619,6 +3959,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "css-styling-approaches",
+      "nextjs-app-router-routing",
       "css-cascade-specificity",
       "frontend-testing-strategy",
       "lighthouse-explained",
@@ -3720,8 +4061,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "k8s-pod-resources",
       "sd-start-single-server",
+      "linux-disks-filesystems",
       "osi-in-practice",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
       "dns"
     ]
   },
@@ -3767,6 +4110,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-strategies",
       "react-suspense-error-boundary",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
       "bundler-basics"
     ]
   },
@@ -4282,6 +4626,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
+      "linux-disks-filesystems",
       "postgres-architecture",
       "mcp-protocol"
     ]
@@ -4310,7 +4655,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mcp-protocol",
       "git-ignore-config",
       "git-tips-advanced",
-      "fp-composition-pipe"
+      "fp-composition-pipe",
+      "shell-redirection-pipes"
     ]
   },
   "kafka-vs-rabbitmq-replay": {
@@ -4466,6 +4812,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks"
     ],
     "mentions": [
+      "github-actions-workflows",
       "github-repo-governance",
       "realtime-communication",
       "docker-container-basics",
@@ -5590,6 +5937,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "db-type-relational",
       "sd-mq-storage-partitions",
+      "cloud-service-models-shared-responsibility",
       "webhooks"
     ]
   },
@@ -5651,7 +5999,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "db-type-embedded",
       "db-type-relational",
-      "db-replication-sharding"
+      "db-replication-sharding",
+      "linux-disks-filesystems"
     ]
   },
   "sd-mq-replication": {
@@ -6939,6 +7288,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "jwt-key-rotation"
     ],
     "mentions": [
+      "api-security-owasp-api-top10",
       "rate-limiting-in-practice",
       "gateway",
       "clock-skew",
@@ -7368,6 +7718,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-ssr"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "frontend-testing-strategy",
       "rendering-strategies",
       "http-versions",
@@ -7577,6 +7928,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "animation-performance"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "frontend-testing-strategy"
     ]
   },
@@ -7613,6 +7965,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dynamodb-modeling-capacity",
       "dead-letter-queue",
+      "nextjs-route-handlers-proxy",
       "realtime-communication",
       "message-queue-basics",
       "db-type-key-value",
@@ -9593,6 +9946,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "page-cache-disk-io",
       "sql-aggregation-pitfalls",
+      "linux-disks-filesystems",
       "osi-in-practice",
       "mutex-semaphore-monitor",
       "layer-ip-routing-icmp"
@@ -9616,6 +9970,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rollback-strategy",
       "security-groups-nacl",
       "osi-in-practice",
+      "cloud-service-models-shared-responsibility",
       "vpc-basics",
       "http-methods",
       "dns"
@@ -9630,6 +9985,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "graphql-basics",
+      "linux-disks-filesystems",
       "dockerfile-image-layers",
       "frontend-monorepo",
       "js-hoisting-tdz"
@@ -9839,6 +10195,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing",
       "osi-in-practice",
       "redis-basics",
+      "cloud-service-models-shared-responsibility",
       "bgp-basics",
       "postgres-architecture",
       "dns"
@@ -9933,6 +10290,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "serverless-architecture",
       "security-principles-cia-defense-in-depth",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
       "sso-saml-oidc"
     ]
   },
@@ -10185,6 +10543,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "nginx-reverse-proxy",
       "k8s-configmap",
+      "network-attacks-l2-l3",
       "k8s-architecture",
       "packet-capture-tcpdump",
       "reverse-proxy-lb-api-gateway",
@@ -10734,6 +11093,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics"
     ],
     "mentions": [
+      "github-actions-workflows",
       "bash-scripting",
       "yaml-for-k8s",
       "vpc-subnets-route-tables",
@@ -10852,6 +11212,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "sd-start-single-server",
       "autoscaling",
+      "shell-redirection-pipes",
       "shell-environment-startup",
       "linux-files-permissions",
       "postgres-architecture",
@@ -11559,6 +11920,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "centralized-logging-pipeline",
       "sd-start-single-server",
+      "bash-expansions-variables",
+      "linux-disks-filesystems",
       "osi-in-practice",
       "http-status-codes"
     ]
@@ -11611,6 +11974,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-multicontainer",
       "k8s-architecture",
       "bash-scripting",
+      "linux-disks-filesystems",
       "shell-environment-startup",
       "linux-systemd-systemctl"
     ]
@@ -11633,6 +11997,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "authn-vs-authz",
       "security-principles-cia-defense-in-depth",
       "code-review-practices",
+      "cloud-service-models-shared-responsibility",
       "sso-saml-oidc",
       "https-tls",
       "vpc-basics",
@@ -12935,6 +13300,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-sharding",
       "ports-and-sockets",
+      "cloud-service-models-shared-responsibility",
       "layer-ip-addressing",
       "iptables-nat",
       "github-actions-docker-ecr",
@@ -13251,7 +13617,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "streaming-ssr-suspense",
       "react-server-components"
     ],
-    "mentions": []
+    "mentions": [
+      "nextjs-app-router-routing"
+    ]
   },
   "islands-resumability": {
     "links": [
@@ -13265,6 +13633,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scroll-triggered-intersection-observer",
       "js-es-modules",
       "streaming-ssr-suspense",
+      "nextjs-app-router-routing",
       "frontend-testing-strategy",
       "rendering-strategies",
       "js-closures"
@@ -13280,6 +13649,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nextjs-static-dynamic-rendering"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "pattern-proxy"
     ]
   },
@@ -13293,6 +13663,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "proxy-reverse-proxy",
       "http-versions",
       "react-suspense-error-boundary",
@@ -13309,6 +13680,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-server-components"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "frontend-testing-strategy",
       "react-useeffect",
       "count-min-sketch"
@@ -13323,6 +13695,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "nextjs-self-hosting-deployment",
       "page-cache-disk-io",
       "autoscaling",
@@ -13961,6 +14334,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics"
     ],
     "mentions": [
+      "network-attacks-l2-l3",
       "vpc-peering-transit-privatelink",
       "gateway-link-redundancy-fhrp-lacp",
       "docker-container-basics",
@@ -14329,6 +14703,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "load-testing-k6",
       "page-cache-disk-io",
       "ds-hash-map",
+      "linux-disks-filesystems",
       "linux-files-permissions",
       "db-type-relational",
       "postgres-getting-started",
@@ -14993,6 +15368,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
+      "nextjs-app-router-routing",
       "web-workers",
       "resource-hints-loading",
       "realtime-communication",
@@ -15443,6 +15819,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "vulnerability-management-cve-cvss",
       "dom-basics",
       "js-memoization",
       "js-function-forms",
@@ -15520,6 +15897,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-es-modules",
       "react-client-routing",
+      "nextjs-app-router-routing",
       "debounce-throttle",
       "http-versions",
       "rendering-strategies"
@@ -15551,6 +15929,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-message",
       "frontend-browser-cache",
       "http-versions",
+      "linux-disks-filesystems",
       "pattern-proxy",
       "redis-basics",
       "cookie-session-login",
@@ -15632,6 +16011,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "nextjs-app-router-routing",
       "lighthouse-explained",
       "lossy-counting",
       "http-status-codes",

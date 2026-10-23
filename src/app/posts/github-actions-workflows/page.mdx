@@ -1,0 +1,549 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("github-actions-workflows");
+
+<EasyIntro>
+  GitHub Actions는 코드에 무슨 일이 생길 때마다 정해 둔 일을 대신 해 주는 자동 일꾼이다. 일꾼에게 주는 작업 지시서가 워크플로 파일이고, 언제 일을 시작할지와 무엇을 어떤 순서로 할지가 적혀 있다.
+
+  일꾼을 아파트 경비실에 비유하면 쉽다. 주민이 택배를 맡기면 경비실 열쇠로 창고를 열어 준다. 그런데 처음 보는 사람이 맡긴 상자까지 같은 열쇠로 창고에 넣어 주면, 상자 안에 무엇이 들었는지 모른 채 창고 문을 열어 주는 셈이다. 그래서 GitHub은 바깥 사람이 보낸 변경에는 창고 열쇠인 비밀 값을 빼고 일을 시킨다.
+
+  이 글은 일꾼이 언제 깨어나는지, 어느 방에서 일하는지, 일 사이에 물건을 어떻게 넘기는지를 차례로 본다. 마지막으로 열쇠를 너무 많이 주지 않는 법과, 남이 만든 도구를 함부로 믿지 않는 법을 본다.
+</EasyIntro>
+
+오픈 소스 저장소에 외부 기여자가 PR을 올렸다. 내 PR에서는 잘 돌던 통합 테스트가 그 PR에서만 실패한다. 로그를 열어 보면 이렇다.
+
+```text
+Run npm run test:integration
+Error: API_KEY is not set
+```
+
+`API_KEY`는 분명 저장소 Settings의 Secrets에 들어 있다. 오타도 없다. 같은 워크플로, 같은 파일인데 누가 PR을 올렸느냐에 따라 비밀 값이 있다가 없다. 검색해 보면 "`pull_request_target`으로 바꾸면 된다"는 답이 나온다. 실제로 바꾸면 테스트가 통과한다. 그리고 그 순간 저장소에 큰 구멍이 하나 생긴다.
+
+이 글은 이 장면을 이해하는 데 필요한 것들을 차례로 본다. 이벤트마다 어느 커밋의 어느 워크플로 파일이 어떤 권한으로 도는지, 잡과 러너, 표현식과 컨텍스트, 잡 사이에 값과 파일을 넘기는 법, 재사용 워크플로와 composite 액션, 그리고 보안이다. 워크플로 파일의 기본 뼈대와 OIDC로 AWS에 배포하는 예제는 [GitHub Actions로 이미지 빌드하고 ECR에 올리기](/posts/github-actions-docker-ecr)에서 다뤘으니 여기서는 반복하지 않는다. CI/CD가 무엇을 하려는 것인지는 [CI/CD의 뼈대](/posts/ci-cd-basics)에 있다.
+
+lint 출력은 actionlint 1.7.7로 직접 돌린 결과다. 이 실습 환경에서는 GitHub 러너를 띄울 수 없어서, 러너 로그는 공식 문서에 나오는 형식으로만 짧게 보인다.
+
+## 워크플로 하나가 도는 데 필요한 네 가지
+
+워크플로 파일은 `.github/workflows/` 아래의 YAML이다. 하나가 돌려면 네 가지가 정해져야 한다.
+
+1. 무슨 일이 일어났나: 이벤트(`on`)
+2. 어느 커밋의 어느 파일을 읽나: 이벤트마다 정해진 `GITHUB_SHA`와 `GITHUB_REF`
+3. 어디서 도나: 러너(`runs-on`)
+4. 무엇을 할 수 있나: `GITHUB_TOKEN`의 권한과 받는 비밀 값
+
+처음 장면의 답은 4번에 있다. 그런데 4번은 1번과 2번에 따라 달라진다. 그래서 이벤트부터 본다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="이벤트가 커밋과 권한을 함께 정하고, 잡은 그 위에서 러너를 하나씩 받는다"
+  nodes={[
+    { id: "ev", label: "이벤트", sub: "push, PR, cron", x: 80, y: 50, w: 130 },
+    { id: "sha", label: "커밋과 파일", sub: "GITHUB_SHA", x: 300, y: 50, w: 140 },
+    { id: "perm", label: "권한", sub: "토큰, secrets", x: 300, y: 150, w: 130 },
+    { id: "wf", label: "워크플로", sub: "jobs 그래프", x: 80, y: 150, w: 130 },
+    { id: "r1", label: "잡 A 러너", sub: "새 VM", x: 80, y: 255, w: 130 },
+    { id: "r2", label: "잡 B 러너", sub: "needs: A", x: 300, y: 255, w: 130 },
+  ]}
+  edges={[
+    { from: "ev", to: "sha", label: "정한다" },
+    { from: "ev", to: "perm", label: "정한다" },
+    { from: "sha", to: "wf", label: "파일 읽기" },
+    { from: "wf", to: "r1" },
+    { from: "r1", to: "r2", label: "outputs" },
+    { from: "perm", to: "r2", dashed: true },
+    { from: "perm", to: "r1", dashed: true },
+  ]}
+/>
+
+## 이벤트는 어느 커밋을 돌릴지까지 정한다
+
+`on`에 적는 이벤트는 수십 가지지만 자주 쓰는 건 몇 개다. 중요한 건 이름보다 각 이벤트가 어느 커밋의 워크플로 파일을 읽고, 그 실행이 어떤 권한을 받느냐다.
+
+| 이벤트 | 돌리는 커밋 (`GITHUB_SHA`) | 워크플로 파일 출처 | 포크에서 왔을 때 |
+|---|---|---|---|
+| `push` | 푸시된 커밋 | 그 커밋 | 해당 없음 |
+| `pull_request` | PR을 base에 합쳐 본 머지 커밋 | 그 머지 커밋 | secrets 없음, 토큰 읽기 전용 |
+| `pull_request_target` | base 브랜치의 마지막 커밋 | base 브랜치 | secrets 있음, 토큰 쓰기 가능 |
+| `schedule` | 기본 브랜치의 마지막 커밋 | 기본 브랜치 | 해당 없음 |
+| `workflow_dispatch` | 실행할 때 고른 브랜치나 태그 | 그 ref | 해당 없음 |
+| `workflow_run` | 기본 브랜치의 마지막 커밋 | 기본 브랜치 | secrets 있음 |
+
+`pull_request`의 첫 칸이 눈여겨볼 곳이다. PR 브랜치 그대로가 아니라 `refs/pull/{번호}/merge`라는, base와 합쳐 본 임시 머지 커밋을 돈다. 그래서 base가 앞서 나가 있으면 PR 브랜치에서는 통과하던 테스트가 CI에서 실패할 수 있다. 충돌이 있는 PR은 머지 커밋을 만들 수 없어서 `pull_request` 워크플로가 아예 돌지 않는다.
+
+워크플로 파일 출처도 PR 쪽이라는 점이 중요하다. PR을 올린 사람이 워크플로 파일을 고치면 그 고친 파일이 돈다. 같은 저장소의 브랜치라면 괜찮다. 그 사람은 이미 쓰기 권한이 있으니까. 포크라면 이야기가 다르다. 아무나 내 저장소에 PR을 열 수 있고, 그 PR 안의 워크플로는 아무 명령이나 돌릴 수 있다. 그래서 GitHub은 포크에서 온 `pull_request` 실행에 저장소 secrets를 주지 않고 `GITHUB_TOKEN`도 읽기 전용으로 준다. 공개 저장소는 처음 기여하는 사람의 워크플로 실행을 관리자가 승인해야 돌게 하는 설정도 기본으로 켜져 있다.
+
+처음 장면의 `API_KEY is not set`은 버그가 아니라 이 보호 장치가 일한 결과다.
+
+### `pull_request_target`으로 바꾸면 생기는 구멍
+
+`pull_request_target`은 base 저장소의 맥락에서 돈다. 워크플로 파일도 base 브랜치의 것이라 PR 작성자가 고칠 수 없다. 그래서 secrets와 쓰기 토큰을 준다. 라벨을 붙이거나 첫 기여자에게 인사 댓글을 다는 것처럼, PR의 코드를 실행하지 않는 일을 하라고 만든 이벤트다.
+
+문제는 이 이벤트에서 PR 코드를 체크아웃해 실행할 때다.
+
+```yaml
+# 이렇게 쓰면 안 된다
+on: pull_request_target
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}   # 포크의 코드를 가져온다
+      - run: npm ci && npm test                            # 포크의 package.json 스크립트가 돈다
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+```
+
+워크플로 파일은 base의 것이라 안전해 보인다. 하지만 `npm ci`는 PR이 고친 `package.json`의 `postinstall`을 실행하고, `npm test`는 PR이 고친 테스트 코드를 실행한다. 공격자는 워크플로를 건드릴 필요가 없다. `package.json` 한 줄에 `curl`을 넣으면 `API_KEY`와 쓰기 토큰이 밖으로 나간다. 쓰기 토큰이 있으면 저장소에 커밋을 밀어 넣거나 릴리스를 바꿀 수도 있다.
+
+이 조합을 흔히 "pwn request"라고 부른다. actionlint는 이 패턴을 잡지 않는다. 위 파일을 넣고 돌려도 `head.sha` 체크아웃에 대해서는 아무 말이 없다. 워크플로 보안 전용 검사 도구(zizmor 같은)는 위험한 트리거를 따로 경고한다.
+
+비밀 값이 꼭 필요한 검사라면 두 단계로 나눈다. 아래 그림에서 다음을 누르면 순서가 보인다.
+
+<SequenceDiagram
+  caption="PR 코드는 권한 없는 곳에서 돌리고, 권한 있는 워크플로는 결과물만 읽는다"
+  actors={[
+    { id: "fork", label: "포크 PR" },
+    { id: "pr", label: "pull_request" },
+    { id: "art", label: "아티팩트" },
+    { id: "wr", label: "workflow_run" },
+    { id: "gh", label: "GitHub API" },
+  ]}
+  steps={[
+    { from: "fork", to: "pr", label: "PR 열기", title: "PR 코드는 권한 없는 쪽에서 돈다", detail: "pull_request 이벤트라 secrets가 없고 토큰은 읽기 전용이다. 여기서 빌드와 단위 테스트를 돌린다." },
+    { from: "pr", to: "art", label: "결과 올리기", title: "결과만 파일로 남긴다", detail: "테스트 리포트, 커버리지, PR 번호를 아티팩트로 올린다. 실행 파일은 넘기지 않는다.", payload: "report.json\npr-number.txt" },
+    { from: "pr", to: "wr", label: "completed", title: "앞 워크플로가 끝나면 깨어난다", detail: "workflow_run은 기본 브랜치의 워크플로 파일로 돈다. PR 작성자가 이 파일을 바꿀 수 없다." },
+    { from: "wr", to: "art", label: "내려받기", title: "아티팩트는 데이터로만 읽는다", detail: "PR이 만든 파일이라 믿지 않는다. 실행하지 않고, 값은 검증한 뒤 쓴다." },
+    { from: "wr", to: "gh", label: "댓글 쓰기", title: "권한이 필요한 일만 여기서 한다", detail: "쓰기 토큰으로 PR에 결과 댓글을 단다. secrets가 있는 쪽에는 PR 코드가 한 줄도 없다." },
+  ]}
+/>
+
+포인트는 권한과 PR 코드가 한 잡에 같이 있지 않게 하는 것이다. 통합 테스트처럼 PR 코드를 비밀 값과 함께 돌려야만 하는 일이라면 자동으로는 돌리지 않는다. 관리자가 코드를 읽어 본 뒤 라벨을 붙이거나 `workflow_dispatch`로 수동 실행하게 한다. 저장소 설정 쪽에서 포크 PR을 다루는 법은 [PR과 리뷰를 굴리는 저장소 설정](/posts/github-repo-governance)에 있다.
+
+### schedule과 workflow_dispatch
+
+`schedule`은 cron 문법이고 시각은 UTC다. 한국 시간 오전 9시에 돌리려면 `0 0 * * *`이라고 써야 한다. 가장 짧은 간격은 5분이다. 정각에는 전 세계의 예약 실행이 몰려서 몇 분씩 늦게 시작하거나, 부하가 심하면 건너뛰기도 한다. 정각을 피해 `17 0 * * *`처럼 쓰는 편이 낫다.
+
+예약 실행은 항상 기본 브랜치의 마지막 커밋으로 돈다. 기능 브랜치에 cron을 넣고 기다려도 돌지 않는다. 그리고 공개 저장소에서는 60일 동안 저장소 활동이 없으면 예약 워크플로가 자동으로 꺼진다. 야간 점검을 걸어 두고 잊은 저장소에서 "언제부턴가 안 돌고 있었다"는 일이 이렇게 생긴다.
+
+`workflow_dispatch`는 Actions 탭의 Run workflow 버튼이나 API로 손으로 실행한다. `inputs`로 값을 받을 수 있어서 "이 태그를 스테이징에 배포" 같은 운영 작업에 쓴다. 이 이벤트도 기본 브랜치에 워크플로 파일이 있어야 버튼이 나타난다.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "배포할 환경"
+        type: choice
+        options: [staging, production]
+        required: true
+      dry_run:
+        type: boolean
+        default: true
+```
+
+### 쓸데없이 돌지 않게 거르기
+
+`push`와 `pull_request`는 `branches`, `tags`, `paths`로 거를 수 있다. 문서만 바뀐 PR에 통합 테스트를 돌리지 않으려면 `paths-ignore: ["docs/**", "**.md"]`를 쓴다.
+
+여기에 흔한 함정이 하나 있다. 브랜치 보호에서 이 워크플로를 필수 검사로 걸어 두면, 문서만 바꾼 PR은 워크플로가 아예 돌지 않아 검사가 영원히 "기다리는 중"으로 남고 머지가 막힌다. 경로 필터를 워크플로 단위에 걸지 말고, 워크플로는 항상 돌게 한 뒤 첫 잡에서 바뀐 파일을 보고 뒤 잡을 건너뛰게 하는 방법이 있다. 건너뛴(skipped) 잡은 필수 검사에서 통과로 친다.
+
+## 잡과 러너: 잡마다 새 컴퓨터 한 대
+
+`jobs` 아래의 잡 하나는 러너 하나를 받는다. 같은 워크플로의 잡이라도 파일 시스템을 나누지 않는다. `needs`가 없는 잡은 동시에 출발하고, `needs`가 있으면 앞 잡이 끝나야 출발한다.
+
+GitHub 호스티드 러너는 잡마다 새로 만든 가상 머신이다. `ubuntu-latest`는 글을 쓰는 시점에 Ubuntu 24.04를 가리킨다. 이 라벨은 GitHub이 새 LTS로 옮길 때 바뀐다. 어느 날 갑자기 빌드가 깨지는 일을 피하려면 `ubuntu-24.04`처럼 버전을 박아 두고, 옮길 때 직접 바꾼다. 잡 하나의 기본 최대 시간은 360분이다. 대부분의 잡은 그보다 훨씬 짧게 끝나야 하니 `timeout-minutes`를 잡마다 걸어 둔다. 멈춘 잡이 여섯 시간 동안 분당 요금을 먹는 일을 막는다.
+
+셀프 호스티드 러너는 내가 관리하는 머신에 러너 프로그램을 깔아 붙인 것이다. 사내망의 DB에 닿아야 하거나, GPU가 필요하거나, 호스티드 러너가 너무 비쌀 때 쓴다. 대신 몇 가지가 달라진다.
+
+- 잡이 끝나도 머신이 그대로다. 앞 잡이 남긴 파일, 캐시, 도커 이미지, 백그라운드 프로세스가 다음 잡에 보인다.
+- 머신의 네트워크 위치와 권한(사내망, 클라우드 인스턴스 역할)을 그 위에서 도는 모든 잡이 함께 쓴다.
+- 러너 프로그램과 OS 패치를 내가 한다.
+
+그래서 셀프 호스티드 러너를 공개 저장소에 붙이면 안 된다. 누구나 PR을 열 수 있고, 워크플로 승인 설정을 놓치면 포크의 코드가 내 머신에서 돈다. 한 번 돈 코드는 크론 작업이나 백그라운드 프로세스를 심어 두고 다음 잡의 비밀 값을 기다릴 수 있다. 머신이 사내망에 있으면 사내망이 열린다. GitHub 문서도 셀프 호스티드 러너는 비공개 저장소에만 쓰라고 권한다.
+
+비공개 저장소에서도 잡 하나만 돌고 사라지는 러너가 안전하다. 러너를 `--ephemeral`로 등록하면 잡 하나를 받은 뒤 등록이 풀린다. 쿠버네티스에서는 Actions Runner Controller(ARC)가 잡마다 러너 파드를 띄우고 지운다. 러너 그룹으로 어느 저장소가 어느 러너를 쓸지 묶어 두는 것도 잊지 않는다.
+
+## 표현식과 컨텍스트: 값은 어디서 오나
+
+워크플로 안에서 `${{ ... }}`로 감싼 것이 표현식이다. 러너가 스크립트를 실행하기 전에 GitHub이 먼저 계산해서 그 자리에 문자열로 바꿔 넣는다. 이 "먼저 문자열로 바꿔 넣는다"는 성질이 뒤에서 보안 문제로 이어진다.
+
+표현식이 읽는 값은 컨텍스트에 들어 있다. 자주 쓰는 것만 추리면 이렇다.
+
+- `github`: 이벤트 이름, ref, sha, 저장소, 실행한 사람, 그리고 `github.event`에 웹훅 페이로드 전체
+- `env`: 워크플로·잡·스텝에 적은 환경 변수
+- `vars`: 저장소·조직·environment에 등록한 설정 변수(비밀이 아닌 값)
+- `secrets`: 비밀 값
+- `needs`: 앞 잡의 결과(`result`)와 출력(`outputs`)
+- `steps`: 같은 잡의 앞 스텝의 결과와 출력
+- `matrix`, `inputs`, `runner`, `job`
+
+컨텍스트마다 쓸 수 있는 자리가 다르다. 예를 들어 잡 수준의 `if`에서는 `steps`를 쓸 수 없다. 아직 스텝이 돌기 전이니까. `runs-on`에서는 `env`를 쓸 수 없다. 이런 실수는 대부분 실행해 보기 전에 actionlint가 잡는다.
+
+```bash
+# 워크플로를 푸시하기 전에 로컬에서 검사한다
+actionlint
+```
+
+일부러 틀린 파일을 넣고 돌린 결과다.
+
+```text
+.github/workflows/ci.yml:5:13: invalid CRON format "0 25 * * *" in schedule event: end of range (25) above maximum (23): 25 [events]
+  |
+5 |     - cron: "0 25 * * *"
+  |             ^~
+.github/workflows/ci.yml:15:3: job "deploy" needs job "tset" which does not exist in this workflow [job-needs]
+   |
+15 |   deploy:
+   |   ^~~~~~~
+.github/workflows/ci.yml:19:23: property "test" is not defined in object type {} [expression]
+   |
+19 |       - run: echo ${{ needs.test.outputs.version }}
+   |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~
+```
+
+세 번째 줄이 재미있다. `needs`에 `tset`이라고 오타를 냈더니, `needs` 컨텍스트에 `test`가 없다는 오류가 따로 나온다. `needs` 컨텍스트에는 `needs:`에 적은 잡만 들어간다. 직접 적지 않은 할아버지 잡의 출력은 손자 잡에서 읽을 수 없다.
+
+이 파일을 처음 돌렸을 때는 이보다 앞에서 막혔다.
+
+```text
+.github/workflows/ci.yml:13:0: could not parse as YAML: yaml: line 13: mapping values are not allowed in this context [syntax-check]
+   |
+13 |       - run: echo "제목: ${{ github.event.pull_request.title }}"
+   |
+```
+
+`run: echo "제목: ..."`처럼 따옴표로 시작하지 않는 값 안에 콜론과 공백(`: `)이 들어가면 YAML이 그 자리를 새 키로 읽으려 한다. 명령이 한 줄이라도 `run: |`로 블록을 열어 쓰면 이런 일이 없다. YAML 문법 자체는 [쿠버네티스를 위한 YAML](/posts/yaml-for-k8s)에 정리해 뒀다.
+
+### 문자열로 먼저 바꿔 넣는다는 것의 무게
+
+앞의 lint 결과에는 이런 경고도 있었다.
+
+```text
+.github/workflows/ci.yml:13:32: "github.event.pull_request.title" is potentially untrusted. avoid using it directly in inline scripts. instead, pass it through an environment variable. see https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions for more details [expression]
+```
+
+PR 제목은 PR을 올린 사람이 정한다. GitHub이 표현식을 문자열로 바꿔 넣은 뒤 셸이 그걸 실행하니, 제목에 따옴표와 세미콜론을 넣으면 명령이 된다. 러너가 받는 스크립트를 똑같이 만들어 bash로 돌려 봤다.
+
+```bash
+TITLE='fix typo"; echo "STOLEN=$SECRET_TOKEN" ; echo "'
+TEMPLATE='echo "제목: ${{ github.event.pull_request.title }}"'
+SCRIPT="${TEMPLATE//'${{ github.event.pull_request.title }}'/$TITLE}"   # GitHub이 하는 치환
+echo "$SCRIPT"
+SECRET_TOKEN=ghs_example123 bash -c "$SCRIPT"
+```
+
+```text
+echo "제목: fix typo"; echo "STOLEN=$SECRET_TOKEN" ; echo ""
+제목: fix typo
+STOLEN=ghs_example123
+```
+
+치환된 스크립트에서 따옴표가 닫히고 명령 하나가 끼어들었다. 같은 값을 환경 변수로 넘기면 어떻게 되는지도 돌려 봤다.
+
+```bash
+PR_TITLE="$TITLE" SECRET_TOKEN=ghs_example123 bash -c 'echo "제목: $PR_TITLE"'
+```
+
+```text
+제목: fix typo"; echo "STOLEN=$SECRET_TOKEN" ; echo "
+```
+
+환경 변수는 셸이 값으로 펼칠 뿐 코드로 다시 읽지 않는다. 그래서 PR 제목, 본문, 브랜치 이름, 이슈 댓글, 커밋 메시지처럼 남이 정하는 값은 `run`에 바로 넣지 않고 `env`로 받은 뒤 `"$PR_TITLE"`처럼 따옴표로 감싸 쓴다.
+
+```yaml
+- name: 제목 출력
+  env:
+    PR_TITLE: ${{ github.event.pull_request.title }}
+  run: |
+    echo "제목: $PR_TITLE"
+```
+
+### 조건과 상태 함수
+
+`if`에는 표현식을 쓴다. 이때는 `${{ }}`를 생략해도 된다. 기본값은 `success()`다. 앞 잡이 모두 성공해야 돈다는 뜻이다. 그 밖에 `always()`(무조건), `failure()`(앞에서 무언가 실패했을 때), `cancelled()`가 있다.
+
+헷갈리는 건 건너뛴 잡이다. `build`가 실패하면 `needs: build`인 `test`는 건너뛰고(skipped), `needs: test`인 `deploy`도 건너뛴다. 건너뛴 잡은 성공이 아니라서 그 뒤도 줄줄이 건너뛴다. 반대로 `failure()`는 직접 적은 `needs`뿐 아니라 그 위로 이어진 조상 잡 중 하나라도 실패했으면 참이다. 그래서 `deploy` 뒤에 `if: failure()`로 붙인 알림 잡은 `build`가 실패해서 `deploy`가 건너뛴 경우에도 돈다.
+
+`always()`는 강력한 만큼 조심한다. 워크플로를 취소해도 `always()` 잡은 돈다. 정리 작업에는 좋지만, 배포 잡에 `always()`를 붙이면 테스트가 실패해도 배포된다. "실패해도 돌되 취소했을 때는 멈추게" 하려면 `if: ${{ !cancelled() }}`를 쓴다.
+
+아래 코드에서 이 규칙을 직접 구현해 볼 수 있다. 잡 정의와 실패할 잡 목록을 받아, 각 잡이 성공·실패·건너뜀 중 무엇으로 끝나는지 이름순으로 돌려준다. `if`는 `success()`(생략 시 기본), `always()`, `failure()` 세 가지만 다룬다.
+
+<CodePlayground
+  caption="needs와 if로 잡 결과 정하기"
+  functionName="jobResults"
+  initialCode={`// jobs: { 이름: { needs?: string[], if?: "success()" | "always()" | "failure()" } }
+// failing: 실제로 돌면 실패하는 잡 이름 목록
+// 반환: 이름순으로 "이름=success|failure|skipped"
+function jobResults(jobs, failing) {
+  return [];
+}`}
+  solution={`function jobResults(jobs, failing) {
+  const status = {};
+  const ancestors = (name, seen = new Set()) => {
+    for (const p of jobs[name].needs || []) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        ancestors(p, seen);
+      }
+    }
+    return seen;
+  };
+  const decide = (name) => {
+    if (status[name]) return status[name];
+    const needs = jobs[name].needs || [];
+    needs.forEach(decide);
+    const cond = jobs[name].if || "success()";
+    let runs;
+    if (cond === "always()") runs = true;
+    else if (cond === "failure()") runs = [...ancestors(name)].some((a) => status[a] === "failure");
+    else runs = needs.every((p) => status[p] === "success");
+    status[name] = !runs ? "skipped" : failing.includes(name) ? "failure" : "success";
+    return status[name];
+  };
+  return Object.keys(jobs).sort().map((name) => name + "=" + decide(name));
+}`}
+  tests={[
+    {
+      label: "모두 성공",
+      args: [{ build: {}, lint: {}, test: { needs: ["build"] }, deploy: { needs: ["lint", "test"] }, notify: { needs: ["deploy"], if: "failure()" }, report: { needs: ["test"], if: "always()" } }, []],
+      expected: ["build=success", "deploy=success", "lint=success", "notify=skipped", "report=success", "test=success"],
+    },
+    {
+      label: "build 실패",
+      args: [{ build: {}, lint: {}, test: { needs: ["build"] }, deploy: { needs: ["lint", "test"] }, notify: { needs: ["deploy"], if: "failure()" }, report: { needs: ["test"], if: "always()" } }, ["build"]],
+      expected: ["build=failure", "deploy=skipped", "lint=success", "notify=success", "report=success", "test=skipped"],
+    },
+    {
+      label: "deploy 실패",
+      args: [{ build: {}, lint: {}, test: { needs: ["build"] }, deploy: { needs: ["lint", "test"] }, notify: { needs: ["deploy"], if: "failure()" }, report: { needs: ["test"], if: "always()" } }, ["deploy"]],
+      expected: ["build=success", "deploy=failure", "lint=success", "notify=success", "report=success", "test=success"],
+    },
+    {
+      label: "lint 실패",
+      args: [{ build: {}, lint: {}, test: { needs: ["build"] }, deploy: { needs: ["lint", "test"] }, notify: { needs: ["deploy"], if: "failure()" }, report: { needs: ["test"], if: "always()" } }, ["lint"]],
+      expected: ["build=success", "deploy=skipped", "lint=failure", "notify=success", "report=success", "test=success"],
+    },
+    {
+      label: "둘 중 하나만 실패해도",
+      args: [{ a: {}, b: {}, c: { needs: ["a", "b"] } }, ["b"]],
+      expected: ["a=success", "b=failure", "c=skipped"],
+    },
+  ]}
+/>
+
+실제 GitHub은 단계별로 한꺼번에 출발시키지 않는다. 잡 하나가 끝나는 즉시 그 잡만 기다리던 잡이 출발한다. 위 코드는 순서가 아니라 최종 결과만 따진다.
+
+## 잡 사이에 값과 파일을 넘기는 법
+
+잡은 러너를 따로 쓰니 넘길 것이 있으면 명시적으로 넘겨야 한다. 무엇을 넘기느냐에 따라 길이 셋이다.
+
+짧은 문자열은 출력(outputs)으로 넘긴다. 스텝에서 `$GITHUB_OUTPUT` 파일에 `이름=값`을 쓰고, 잡의 `outputs`로 끌어올리면 뒤 잡이 `needs.{잡}.outputs.{이름}`으로 읽는다.
+
+```yaml
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}          # 스텝 출력을 잡 출력으로 끌어올린다
+    steps:
+      - id: v
+        run: echo "tag=v$(date +%Y%m%d)-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo "배포할 태그는 ${{ needs.version.outputs.tag }}"
+```
+
+예전 글에 자주 나오는 `::set-output` 명령은 더는 쓰지 않는다. 같은 잡의 다음 스텝들에 환경 변수를 넘길 때는 `$GITHUB_ENV`에 쓴다.
+
+출력에 비밀 값을 담으면 안 된다. 잡 출력에 secrets로 가려진 값이 들어 있으면 GitHub은 그 출력을 뒤 잡에 넘기지 않는다. 비밀 값이 필요하면 뒤 잡에서 다시 secrets로 읽는다.
+
+빌드 결과물이나 테스트 리포트 같은 파일은 아티팩트로 넘긴다. `actions/upload-artifact`로 올리고 뒤 잡에서 `actions/download-artifact`로 받는다. 실행이 끝난 뒤에도 Actions 화면에서 내려받을 수 있고, 기본 보관 기간은 90일이다(설정으로 줄인다). v4부터 아티팩트는 한 번 올리면 바꿀 수 없어서, 같은 실행 안에서 같은 이름으로 두 번 올리면 실패한다. matrix 잡마다 올릴 때는 이름에 matrix 값을 넣고, 받을 때 `pattern`과 `merge-multiple: true`로 합친다.
+
+여러 실행에 걸쳐 다시 쓰고 싶은 것은 캐시에 둔다. 의존성 다운로드 결과처럼 없어도 다시 만들 수 있는 것이다. 아티팩트와 캐시는 비슷해 보이지만 약속이 다르다.
+
+- 아티팩트는 이 실행이 만든 결과물이다. 있어야 하고, 없으면 실패다.
+- 캐시는 있으면 빠르고 없어도 맞아야 하는 것이다. 언제든 지워질 수 있다. 7일 동안 쓰이지 않으면 지워지고, 저장소마다 용량 한도가 차면 오래된 것부터 밀려난다.
+
+그래서 빌드한 결과물을 캐시로 다음 잡에 넘기면, 캐시가 밀려난 날 배포 잡이 빈손으로 출발한다. 캐시 키를 어떻게 정하고 `restore-keys`가 어떤 순서로 찾는지, 브랜치마다 캐시가 어떻게 나뉘는지는 [빌드 캐시로 CI 줄이기](/posts/build-caching)에 자세히 있다. 가장 흔한 Node 프로젝트라면 `actions/setup-node`의 `cache: npm` 한 줄로 충분하다.
+
+## 같은 스텝을 여러 저장소에서 쓰기
+
+저장소가 여러 개가 되면 같은 YAML이 복사된다. 한 군데를 고치면 열 군데를 고쳐야 한다. 묶는 방법이 두 가지다.
+
+재사용 워크플로는 워크플로 전체를 함수처럼 부른다. 불리는 쪽은 `on: workflow_call`로 입력과 secrets를 선언하고, 부르는 쪽은 잡 자리에 `uses:`를 쓴다.
+
+```yaml
+# 불리는 쪽: org/ci-templates/.github/workflows/node-ci.yml
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+    secrets:
+      NPM_TOKEN:
+        required: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+      - run: npm ci && npm test
+```
+
+```yaml
+# 부르는 쪽
+jobs:
+  ci:
+    uses: org/ci-templates/.github/workflows/node-ci.yml@v1
+    with:
+      node-version: "22"
+    secrets: inherit          # 부르는 쪽의 secrets를 그대로 넘긴다
+```
+
+composite 액션은 스텝 몇 개를 액션 하나로 묶는다. `action.yml`에 `runs.using: composite`를 쓰고, 부르는 쪽은 스텝 자리에 `uses:`를 쓴다.
+
+```yaml
+# .github/actions/setup-app/action.yml
+name: setup-app
+inputs:
+  node-version:
+    default: "22"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+    - run: npm ci
+      shell: bash            # composite 안의 run은 shell을 반드시 적는다
+```
+
+둘을 가르는 기준은 단위다. 재사용 워크플로는 잡 단위라 자기 러너를 따로 받고, 잡 여러 개와 `environment` 승인까지 담을 수 있다. 화면에도 별도 잡으로 보인다. composite 액션은 부르는 잡의 러너 안에서 스텝으로 펼쳐져서 앞뒤 스텝과 파일 시스템을 함께 쓴다. "체크아웃하고 Node 깔고 의존성 설치"처럼 잡 안의 준비 동작은 composite로, "테스트, 빌드, 배포까지 회사 표준 파이프라인"은 재사용 워크플로로 만든다.
+
+재사용 워크플로에서 자주 걸리는 것들이 있다. 부르는 쪽의 `env`는 불리는 쪽에 넘어가지 않는다. 필요한 값은 `inputs`로 넘긴다. `secrets: inherit`는 편하지만 불리는 워크플로가 저장소의 모든 비밀을 받으니, 다른 팀이 관리하는 템플릿이라면 필요한 것만 이름을 붙여 넘긴다. 템플릿을 `@main`으로 부르면 템플릿 저장소에 푸시되는 순간 모든 저장소의 CI가 바뀐다. 태그나 SHA로 고정한다.
+
+## 마켓플레이스 액션은 남의 코드다
+
+`uses: someone/some-action@v3`는 그 저장소의 `v3` 태그가 가리키는 코드를 내 러너에서 내 토큰과 함께 실행한다는 뜻이다. 그런데 git 태그는 움직일 수 있다. 저장소 주인이나, 그 계정을 탈취한 사람이 `v3` 태그를 다른 커밋으로 옮기면 내 워크플로는 다음 실행부터 바뀐 코드를 돈다. 내 저장소에는 아무 변경도 없는데.
+
+실제로 2025년 3월에 널리 쓰이던 `tj-actions/changed-files` 액션의 태그 여러 개가 악성 커밋을 가리키도록 바뀌었다. 그 커밋은 러너 메모리에서 비밀 값을 찾아 빌드 로그에 찍었다. 공개 저장소라면 로그는 누구나 읽는다. 태그로 부르던 저장소는 모두 영향을 받았고, 커밋 SHA로 고정한 저장소는 받지 않았다. 로그에 비밀 값이 찍힌 저장소는 그 값을 모두 교체해야 했다. 비밀 값이 샌 뒤의 순서는 [보안 사고 대응](/posts/security-incident-response)에 있다.
+
+그래서 서드파티 액션은 40자리 커밋 SHA로 부른다. 커밋 SHA는 내용의 해시라 옮길 수 없다. 사람이 읽을 수 있게 버전을 주석으로 단다.
+
+```bash
+# 태그가 가리키는 커밋 SHA를 확인한다
+git ls-remote https://github.com/actions/checkout refs/tags/v4.2.2
+```
+
+```text
+11bd71901bbe5b1630ceea73d27597364c9af683	refs/tags/v4.2.2
+```
+
+```yaml
+- uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+```
+
+SHA로 고정하면 업데이트가 멈추는 게 걱정이다. Dependabot이나 Renovate는 SHA로 고정한 액션도 새 버전의 SHA로 올리는 PR을 만들고, 주석의 버전도 함께 바꿔 준다. 리뷰를 거쳐 올리는 셈이다. SHA로 고정해도 그 액션이 안에서 `latest` 도커 이미지를 받거나 다른 액션을 태그로 부르면 그 부분은 여전히 움직인다. 액션 코드를 한 번은 열어 본다. 조직 설정에서 허용한 액션만 쓰게 제한할 수도 있다.
+
+## GITHUB_TOKEN은 필요한 만큼만
+
+잡마다 GitHub이 `GITHUB_TOKEN`을 하나 만들어 준다. 그 저장소에만 쓸 수 있고 잡이 끝나면 만료된다. 권한은 저장소·조직 설정의 기본값을 따르는데, 오래된 저장소는 기본값이 읽기·쓰기 전체로 되어 있는 경우가 많다. 최근에 만든 조직과 저장소는 읽기 전용이 기본이다.
+
+워크플로 맨 위에 `permissions`를 적어 기본값을 덮어쓴다. 하나라도 적으면 적지 않은 권한은 모두 `none`이 된다.
+
+```yaml
+permissions:
+  contents: read            # 워크플로 전체는 읽기만
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: npm ci && npm test
+
+  comment:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write  # 이 잡만 PR 댓글 권한을 받는다
+    steps:
+      - run: gh pr comment "$PR" --body "테스트 통과"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+```
+
+권한을 잡 단위로 좁혀 두면, 앞에서 본 스크립트 주입이나 오염된 액션이 터져도 가져갈 수 있는 것이 읽기 토큰뿐이다. 클라우드 배포가 필요하면 `id-token: write`를 그 잡에만 주고 OIDC로 역할을 빌린다. 이 부분은 [ECR 글의 OIDC 절](/posts/github-actions-docker-ecr)에 있다.
+
+`GITHUB_TOKEN`으로 만든 이벤트는 새 워크플로를 깨우지 않는다는 점도 알아 둔다. 워크플로가 이 토큰으로 커밋을 푸시해도 `push` 워크플로가 다시 돌지 않는다. 무한 반복을 막는 장치다. 릴리스 워크플로가 태그를 찍었는데 배포 워크플로가 안 도는 일이 이것 때문이다. 이어서 돌려야 하면 `workflow_run`이나 `workflow_call`로 잇는다.
+
+## 상태 배지와 실패를 보는 순서
+
+README에 붙이는 상태 배지는 워크플로 파일 이름으로 만든다.
+
+```markdown
+![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg?branch=main)
+```
+
+`?branch=`를 빼면 기본 브랜치가 아니라 가장 최근 실행의 결과가 보여서, 누군가의 기능 브랜치가 실패하면 배지가 빨개진다. `branch`를 적는다. 이벤트도 `?event=push`로 고를 수 있다.
+
+CI가 실패했을 때는 다음 순서로 좁힌다.
+
+1. 워크플로가 아예 안 돌았나. 이벤트 필터(`branches`, `paths`)와 `schedule`의 기본 브랜치 조건을 본다. 포크 PR이면 승인 대기 중인지 본다.
+2. 돌았는데 바로 실패했나. 실행 화면 맨 위의 Annotations에 YAML 오류나 권한 오류가 먼저 뜬다.
+3. 특정 스텝이 실패했나. 그 스텝 로그의 마지막 몇 줄과 종료 코드를 본다. 비밀 값이 빈 문자열로 들어간 경우(포크, environment 승인 전)를 의심한다.
+4. 가끔만 실패하나. 같은 커밋을 Re-run으로 두 번 돌려 본다. 통과하면 플레이키 테스트나 캐시 문제다. Re-run 화면의 "Enable debug logging"을 켜면 러너 내부 로그가 더 나온다.
+
+## 다시 처음의 포크 PR로
+
+포크 PR에서 `API_KEY`가 비어 있던 건 GitHub이 남의 코드에 내 열쇠를 주지 않으려고 일부러 비운 것이었다. `pull_request_target`은 그 보호를 걷어 내는 이벤트라서 PR 코드를 실행하는 순간 열쇠가 남의 손에 넘어간다. 고칠 방향은 비밀 값이 필요 없는 검사를 `pull_request`에서 돌리고, 권한이 필요한 일은 PR 코드가 없는 `workflow_run`이나 사람이 확인한 뒤의 수동 실행으로 옮기는 것이다. 그리고 어느 워크플로든 토큰은 읽기로 시작하고, 남이 정하는 문자열은 `env`로 받고, 남이 만든 액션은 SHA로 고정한다. 이 저장소가 쓰는 GitHub 설정 전체는 [PR과 리뷰를 굴리는 저장소 설정](/posts/github-repo-governance)으로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### GitHub Actions에서 워크플로, 잡, 스텝, 러너는 각각 무엇인가요?
+
+워크플로는 `.github/workflows`의 YAML 파일 하나로, 이벤트가 오면 실행된다. 잡은 워크플로 안의 작업 단위이고 잡마다 러너 하나를 받는다. 러너는 잡을 실행하는 머신으로, 호스티드 러너는 잡마다 새 VM이다. 스텝은 잡 안에서 차례로 실행되는 명령이나 액션이고, 같은 잡의 스텝끼리는 파일 시스템을 공유한다. 잡끼리는 공유하지 않으니 출력이나 아티팩트로 넘긴다.
+
+### 포크에서 온 PR에서는 왜 secrets가 비어 있나요?
+
+`pull_request` 이벤트는 PR의 머지 커밋에 있는 워크플로 파일로 돈다. 포크 PR이면 외부인이 그 파일과 코드를 마음대로 바꿀 수 있으니, GitHub은 secrets를 주지 않고 `GITHUB_TOKEN`도 읽기 전용으로 준다. 의도된 보호라서 우회하기보다 비밀 값이 필요 없는 검사로 나누는 게 맞다.
+
+### pull_request_target은 왜 위험한가요?
+
+base 브랜치의 워크플로 파일로 돌면서 secrets와 쓰기 토큰을 받는다. 여기서 PR의 head 커밋을 체크아웃해 `npm ci`나 테스트를 돌리면 외부인의 코드가 그 권한을 들고 실행된다. 워크플로 파일을 못 바꿔도 `package.json` 스크립트나 테스트 코드로 충분하다. PR 코드를 실행하지 않는 라벨링·댓글 같은 일에만 쓰고, 결과가 필요하면 `pull_request`에서 만든 아티팩트를 `workflow_run`에서 데이터로만 읽는다.
+
+### `run`에 `${{ github.event.pull_request.title }}`를 바로 쓰면 무엇이 문제인가요?
+
+표현식은 셸이 실행하기 전에 문자열로 치환된다. 제목에 따옴표와 세미콜론을 넣으면 스크립트의 문법이 바뀌어 임의 명령이 실행된다. `env`로 받은 뒤 `"$PR_TITLE"`로 쓰면 셸이 값으로만 펼치므로 코드가 되지 않는다. 브랜치 이름, 커밋 메시지, 이슈 본문도 마찬가지다.
+
+### 캐시와 아티팩트는 어떻게 다르게 쓰나요?
+
+아티팩트는 이 실행이 만든 결과물을 잡 사이에 넘기거나 실행 뒤에 남기는 용도라 없으면 실패해야 한다. 캐시는 여러 실행에 걸쳐 재사용하는 가속 장치라 언제든 지워질 수 있고, 없어도 결과가 같아야 한다. 빌드 결과물을 캐시로 넘기면 캐시가 밀려난 날 배포가 빈손으로 출발하니 아티팩트로 넘긴다.
+
+### 재사용 워크플로와 composite 액션은 언제 무엇을 쓰나요?
+
+재사용 워크플로는 잡 단위라 자기 러너를 받고 여러 잡과 environment 승인을 담을 수 있어 표준 파이프라인 전체를 묶을 때 쓴다. composite 액션은 부르는 잡의 러너 안에서 스텝으로 펼쳐지니 체크아웃과 설치 같은 준비 동작을 묶을 때 쓴다. 재사용 워크플로에는 부르는 쪽의 `env`가 넘어가지 않고, composite의 `run` 스텝에는 `shell`을 꼭 적어야 한다.
+
+### 서드파티 액션을 태그 대신 커밋 SHA로 고정하는 이유는요?
+
+태그는 옮길 수 있어서 액션 저장소가 탈취되면 내 저장소는 그대로인데 다음 실행부터 악성 코드가 돈다. 2025년 `tj-actions/changed-files` 사고가 그랬고, SHA로 고정한 저장소는 피해를 보지 않았다. SHA에 버전 주석을 달고 Dependabot이나 Renovate로 리뷰를 거쳐 올린다. 액션이 안에서 태그나 `latest`를 쓰면 그 부분은 여전히 움직인다는 한계도 있다.
+
+### 셀프 호스티드 러너를 공개 저장소에 붙이면 안 되는 이유는요?
+
+포크 PR의 코드가 내 머신에서 돌 수 있고, 셀프 호스티드 러너는 잡이 끝나도 머신이 남아서 심어 둔 프로세스가 다음 잡의 비밀 값을 노릴 수 있다. 머신의 사내망 위치와 클라우드 권한도 그대로 쓰인다. 비공개 저장소에서도 `--ephemeral` 러너나 ARC처럼 잡마다 새로 만드는 러너를 쓰고, 러너 그룹으로 쓸 수 있는 저장소를 묶는다.

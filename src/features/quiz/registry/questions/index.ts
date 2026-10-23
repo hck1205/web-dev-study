@@ -1,3 +1,21 @@
+import { VULNERABILITY_MANAGEMENT_CVE_CVSS } from "./vulnerability-management-cve-cvss";
+import { SHELL_REDIRECTION_PIPES } from "./shell-redirection-pipes";
+import { SECURITY_LOGGING_DETECTION_SIEM } from "./security-logging-detection-siem";
+import { SECURITY_INCIDENT_RESPONSE } from "./security-incident-response";
+import { NEXTJS_SERVER_ACTIONS_SECURITY } from "./nextjs-server-actions-security";
+import { NEXTJS_ROUTE_HANDLERS_PROXY } from "./nextjs-route-handlers-proxy";
+import { NEXTJS_PARALLEL_INTERCEPTING_ROUTES } from "./nextjs-parallel-intercepting-routes";
+import { NEXTJS_CACHING_LAYERS } from "./nextjs-caching-layers";
+import { NEXTJS_APP_ROUTER_ROUTING } from "./nextjs-app-router-routing";
+import { NETWORK_ATTACKS_L2_L3 } from "./network-attacks-l2-l3";
+import { LINUX_USERS_GROUPS_SUDO } from "./linux-users-groups-sudo";
+import { LINUX_DISKS_FILESYSTEMS } from "./linux-disks-filesystems";
+import { LINUX_BOOT_PROCESS } from "./linux-boot-process";
+import { GITHUB_ACTIONS_WORKFLOWS } from "./github-actions-workflows";
+import { FIREWALL_TYPES_NGFW } from "./firewall-types-ngfw";
+import { CLOUD_SERVICE_MODELS_SHARED_RESPONSIBILITY } from "./cloud-service-models-shared-responsibility";
+import { BASH_EXPANSIONS_VARIABLES } from "./bash-expansions-variables";
+import { API_SECURITY_OWASP_API_TOP10 } from "./api-security-owasp-api-top10";
 import { TS_CLASSES_ACCESS_MODIFIERS } from "./ts-classes-access-modifiers";
 import { SHELL_ENVIRONMENT_STARTUP } from "./shell-environment-startup";
 import { SECURITY_PRINCIPLES_CIA_DEFENSE_IN_DEPTH } from "./security-principles-cia-defense-in-depth";
@@ -784,6 +802,24 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  VULNERABILITY_MANAGEMENT_CVE_CVSS,
+  SHELL_REDIRECTION_PIPES,
+  SECURITY_LOGGING_DETECTION_SIEM,
+  SECURITY_INCIDENT_RESPONSE,
+  NEXTJS_SERVER_ACTIONS_SECURITY,
+  NEXTJS_ROUTE_HANDLERS_PROXY,
+  NEXTJS_PARALLEL_INTERCEPTING_ROUTES,
+  NEXTJS_CACHING_LAYERS,
+  NEXTJS_APP_ROUTER_ROUTING,
+  NETWORK_ATTACKS_L2_L3,
+  LINUX_USERS_GROUPS_SUDO,
+  LINUX_DISKS_FILESYSTEMS,
+  LINUX_BOOT_PROCESS,
+  GITHUB_ACTIONS_WORKFLOWS,
+  FIREWALL_TYPES_NGFW,
+  CLOUD_SERVICE_MODELS_SHARED_RESPONSIBILITY,
+  BASH_EXPANSIONS_VARIABLES,
+  API_SECURITY_OWASP_API_TOP10,
   TS_CLASSES_ACCESS_MODIFIERS,
   SHELL_ENVIRONMENT_STARTUP,
   SECURITY_PRINCIPLES_CIA_DEFENSE_IN_DEPTH,

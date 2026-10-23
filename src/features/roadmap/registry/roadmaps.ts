@@ -43,15 +43,20 @@ export const ROADMAPS: RoadmapNode[] = [
         items: [
           "linux-processes-signals",
           "linux-files-permissions",
+          "linux-users-groups-sudo",
           "linux-grep-awk-sed",
+          "shell-redirection-pipes",
           "linux-systemd-systemctl",
+          "linux-boot-process",
           "bash-scripting",
+          "bash-expansions-variables",
           "bash-control-flow-functions",
           "shell-environment-startup",
           "ssh-in-practice",
           { checkpoint: "리눅스 기본 관문" },
           "virtual-memory-paging",
           "page-cache-disk-io",
+          "linux-disks-filesystems",
           "linux-performance-triage",
           "linux-namespaces-cgroups",
           "iptables-basics",
@@ -352,7 +357,14 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "Next.js",
         tier: 2,
         requires: ["frontend/rendering"],
-        items: ["nextjs-self-hosting-deployment"],
+        items: [
+          "nextjs-app-router-routing",
+          "nextjs-caching-layers",
+          "nextjs-route-handlers-proxy",
+          "nextjs-parallel-intercepting-routes",
+          "nextjs-server-actions-security",
+          "nextjs-self-hosting-deployment",
+        ],
       },
       {
         id: "performance",
@@ -719,7 +731,7 @@ export const ROADMAPS: RoadmapNode[] = [
         id: "web-attacks",
         label: "웹 공격과 방어",
         tier: 1,
-        items: ["browser-security-model", "xss", "csrf", "sql-injection", "ssrf", "web-security-headers", "spa-auth-token-storage", "owasp-top-10-map", { checkpoint: "웹 공격 관문" }],
+        items: ["browser-security-model", "xss", "csrf", "sql-injection", "ssrf", "api-security-owasp-api-top10", "web-security-headers", "spa-auth-token-storage", "owasp-top-10-map", { checkpoint: "웹 공격 관문" }],
       },
       {
         id: "cryptography",
@@ -729,7 +741,13 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "infra-security",
         label: "인프라 보안",
-        items: ["encryption-in-transit", "encryption-at-rest", "secrets-management", "iam-basics", "zero-trust-architecture", "waf", "ids-ips", "ddos-protection"],
+        items: ["encryption-in-transit", "encryption-at-rest", "secrets-management", "iam-basics", "zero-trust-architecture", "firewall-types-ngfw", "network-attacks-l2-l3", "waf", "ids-ips", "ddos-protection"],
+      },
+      {
+        id: "operations",
+        label: "보안 운영",
+        tier: 2,
+        items: ["vulnerability-management-cve-cvss", "security-logging-detection-siem", "security-incident-response"],
       },
     ],
   },
@@ -976,6 +994,7 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "CI/CD와 배포",
         items: [
           "ci-cd-basics",
+          "github-actions-workflows",
           "github-actions-docker-ecr",
           "build-caching",
           "jenkins-pipeline-basics",
@@ -1000,7 +1019,7 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "cloud",
         label: "클라우드 운영",
-        items: ["serverless-limits", "cold-starts", "cloud-cost-optimization"],
+        items: ["cloud-service-models-shared-responsibility", "serverless-limits", "cold-starts", "cloud-cost-optimization"],
       },
       {
         id: "observability",
