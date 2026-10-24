@@ -632,32 +632,32 @@ Prometheus는 대상을 찾고(서비스 디스커버리), 이름표를 고치�
 
 ### relabel_configs와 metric_relabel_configs는 무엇이 다른가요?
 
-relabel_configs는 scrape하기 전에 대상마다 돌아서, 대상을 거르고 주소와 대상 라벨을 바꿉니다. metric_relabel_configs는 scrape한 뒤 샘플마다 돌아서, 필요 없는 지표나 라벨을 저장 전에 버립니다. 뒤의 것은 이미 받아 온 데이터를 버리는 거라 전송 비용은 그대로지만 저장되는 시계열 수는 줄어듭니다.
+relabel_configs는 scrape하기 전에 대상마다 돌아서, 대상을 거르고 주소와 대상 라벨을 바꾼다. metric_relabel_configs는 scrape한 뒤 샘플마다 돌아서, 필요 없는 지표나 라벨을 저장 전에 버린다. 뒤의 것은 이미 받아 온 데이터를 버리는 거라 전송 비용은 그대로지만 저장되는 시계열 수는 줄어든다.
 
 ### ServiceMonitor를 만들었는데 Prometheus가 대상을 잡지 않습니다. 어디부터 보나요?
 
-Prometheus 리소스의 serviceMonitorSelector가 그 ServiceMonitor의 라벨을 고르는지부터 봅니다. kube-prometheus-stack은 기본으로 release 라벨을 요구해서, 라벨이 없으면 오류 없이 생성된 설정에서 빠집니다. 그다음 ServiceMonitor의 selector가 Service를 고르는지, endpoints.port가 Service 포트 이름과 같은지, Prometheus SA에 그 네임스페이스를 읽을 RBAC가 있는지를 차례로 봅니다.
+Prometheus 리소스의 serviceMonitorSelector가 그 ServiceMonitor의 라벨을 고르는지부터 본다. kube-prometheus-stack은 기본으로 release 라벨을 요구해서, 라벨이 없으면 오류 없이 생성된 설정에서 빠진다. 그다음 ServiceMonitor의 selector가 Service를 고르는지, endpoints.port가 Service 포트 이름과 같은지, Prometheus SA에 그 네임스페이스를 읽을 RBAC가 있는지를 차례로 본다.
 
 ### Prometheus의 WAL은 왜 있고, 운영에서 어떤 문제를 만드나요?
 
-최근 데이터는 메모리의 head에 있기 때문에, 프로세스가 죽어도 잃지 않도록 샘플을 WAL에 먼저 적습니다. 재시작하면 WAL을 처음부터 다시 읽어 head를 복구하는데, 시계열이 많으면 이 재생이 몇 분 걸리고 그동안 scrape도 쿼리도 멈춥니다. 그래서 짧은 liveness 프로브가 재생 중에 컨테이너를 죽이지 않게 하고, remote_write는 이 WAL을 꼬리 읽기하므로 WAL이 정리되기 전까지만 재전송할 수 있다는 점도 함께 기억합니다.
+최근 데이터는 메모리의 head에 있기 때문에, 프로세스가 죽어도 잃지 않도록 샘플을 WAL에 먼저 적는다. 재시작하면 WAL을 처음부터 다시 읽어 head를 복구하는데, 시계열이 많으면 이 재생이 몇 분 걸리고 그동안 scrape도 쿼리도 멈춘다. 그래서 짧은 liveness 프로브가 재생 중에 컨테이너를 죽이지 않게 하고, remote_write는 이 WAL을 꼬리 읽기하므로 WAL이 정리되기 전까지만 재전송할 수 있다는 점도 함께 기억한다.
 
 ### 보존 기간을 15일로 두면 정확히 15일 뒤에 지워지나요?
 
-아닙니다. 보존은 2시간 이상 단위의 블록을 통째로 지우는 방식이라, 블록의 끝이 기간을 넘겨야 지워집니다. 그래서 디스크에는 설정보다 조금 더 남습니다. retention.size를 함께 쓰면 오래된 블록부터 지우는데, 이 크기에는 WAL과 head 청크도 포함되므로 볼륨보다 여유 있게 잡습니다.
+아니다. 보존은 2시간 이상 단위의 블록을 통째로 지우는 방식이라, 블록의 끝이 기간을 넘겨야 지워진다. 그래서 디스크에는 설정보다 조금 더 남는다. retention.size를 함께 쓰면 오래된 블록부터 지우는데, 이 크기에는 WAL과 head 청크도 포함되므로 볼륨보다 여유 있게 잡는다.
 
 ### 카디널리티 문제는 어떻게 찾고 고치나요?
 
-`/api/v1/status/tsdb`의 seriesCountByMetricName이나 promtool tsdb analyze로 시계열을 많이 만드는 지표와 라벨, 값이 자주 바뀌는 라벨을 찾습니다. 사용자 ID, 전체 URL, Pod 이름 같은 값이 라벨에 들어간 경우가 대부분입니다. 근본 해결은 앱에서 그 라벨을 빼는 것이고, 급할 때는 metric_relabel_configs로 해당 지표나 라벨을 저장 전에 버립니다.
+`/api/v1/status/tsdb`의 seriesCountByMetricName이나 promtool tsdb analyze로 시계열을 많이 만드는 지표와 라벨, 값이 자주 바뀌는 라벨을 찾는다. 사용자 ID, 전체 URL, Pod 이름 같은 값이 라벨에 들어간 경우가 대부분이다. 근본 해결은 앱에서 그 라벨을 빼는 것이고, 급할 때는 metric_relabel_configs로 해당 지표나 라벨을 저장 전에 버린다.
 
 ### federation과 remote_write는 언제 무엇을 쓰나요?
 
-federation은 위쪽 Prometheus가 아래쪽의 /federate를 scrape해서 현재 값을 가져오는 방식이라, 기록 규칙으로 줄인 집계 지표 몇 개를 올리는 데 맞습니다. 원본 시계열을 모두 모으거나 오래 보관하려면 remote_write로 중앙 저장소에 밀어 보냅니다. remote_write는 받는 쪽이 느리거나 죽으면 재시도하므로, 보낸 시각과 최신 시각의 차이에 알림을 걸어 둡니다.
+federation은 위쪽 Prometheus가 아래쪽의 /federate를 scrape해서 현재 값을 가져오는 방식이라, 기록 규칙으로 줄인 집계 지표 몇 개를 올리는 데 맞다. 원본 시계열을 모두 모으거나 오래 보관하려면 remote_write로 중앙 저장소에 밀어 보낸다. remote_write는 받는 쪽이 느리거나 죽으면 재시도하므로, 보낸 시각과 최신 시각의 차이에 알림을 걸어 둔다.
 
 ### Thanos와 Mimir는 어떻게 다른가요?
 
-둘 다 Prometheus 블록을 객체 저장소에 두고 여러 Prometheus의 데이터를 합쳐 묻게 해 줍니다. Thanos는 기존 Prometheus 옆에 sidecar를 붙여 블록을 올리고 Query가 최근과 과거를 합치는 방식이라 점진적으로 도입하기 좋습니다. Mimir는 remote_write를 받는 수평 확장형 저장소로 테넌트 분리와 한도가 강점이고, 그만큼 운영할 컴포넌트가 많습니다.
+둘 다 Prometheus 블록을 객체 저장소에 두고 여러 Prometheus의 데이터를 합쳐 묻게 해 준다. Thanos는 기존 Prometheus 옆에 sidecar를 붙여 블록을 올리고 Query가 최근과 과거를 합치는 방식이라 점진적으로 도입하기 좋다. Mimir는 remote_write를 받는 수평 확장형 저장소로 테넌트 분리와 한도가 강점이고, 그만큼 운영할 컴포넌트가 많다.
 
 ### Prometheus를 고가용성으로 운영하려면 어떻게 하나요?
 
-같은 설정의 Prometheus 두 대가 같은 대상을 각자 scrape하게 두는 게 기본입니다. 두 대의 데이터는 미세하게 다르므로 쿼리 쪽(Thanos Query, Mimir)에서 replica 라벨로 중복을 지우고, 알림은 두 대가 모두 Alertmanager로 보내 Alertmanager가 묶어서 한 번만 전합니다. 디스크를 공유해 한 TSDB를 두 대가 쓰는 방식은 lock 때문에 안 되고 지원되지도 않습니다.
+같은 설정의 Prometheus 두 대가 같은 대상을 각자 scrape하게 두는 게 기본이다. 두 대의 데이터는 미세하게 다르므로 쿼리 쪽(Thanos Query, Mimir)에서 replica 라벨로 중복을 지우고, 알림은 두 대가 모두 Alertmanager로 보내 Alertmanager가 묶어서 한 번만 전한다. 디스크를 공유해 한 TSDB를 두 대가 쓰는 방식은 lock 때문에 안 되고 지원되지도 않는다.
