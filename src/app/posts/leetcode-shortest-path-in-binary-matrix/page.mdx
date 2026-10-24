@@ -1,0 +1,541 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-shortest-path-in-binary-matrix");
+
+<EasyIntro>
+  바둑판 같은 마당에 돌이 군데군데 놓여 있다. 왼쪽 위 칸에서 오른쪽 아래 칸까지 돌을 밟지 않고 가고 싶은데, 한 번에 바로 옆 여덟 칸 어디로든 한 걸음 옮길 수 있다. 가장 적은 칸을 밟고 도착하는 길을 찾는 문제다. 가장 좋은 방법은 연못에 돌을 던졌을 때 물결이 퍼지는 모습을 떠올리는 것이다. 출발 칸에서 한 걸음에 닿는 칸들이 첫 번째 물결, 거기서 한 걸음 더 가면 닿는 칸들이 두 번째 물결이다. 물결은 돌에 막히면 돌아서 퍼지고, 이미 물결이 지나간 칸에는 다시 들어가지 않는다. 물결이 도착 칸에 처음 닿는 순간 몇 번째 물결인지 세면 그게 가장 짧은 길이다. 끝까지 닿지 않으면 길이 없다.
+</EasyIntro>
+
+0과 1로 된 정사각형 격자에서 0인 칸만 밟고 왼쪽 위에서 오른쪽 아래까지 가는 가장 짧은 길을 찾는 문제다. 상하좌우뿐 아니라 대각선까지 여덟 방향으로 움직일 수 있다는 점만 빼면 격자 BFS의 교과서 같은 문제다. 그래서 오히려 "왜 BFS인가", "BFS보다 빨리 할 수 있나"를 묻기 좋다.
+
+[LeetCode 1091. Shortest Path in Binary Matrix](https://leetcode.com/problems/shortest-path-in-binary-matrix/)는 Medium이다. 이 글은 모든 길을 걸어 보는 DFS부터 가지치기 DFS, BFS, 격자를 방문 표시로 쓰는 BFS, 양방향 BFS, A\*까지 여섯 가지 풀이를 짠다. 격자를 그래프로 보는 법과 BFS가 최단 거리를 주는 이유는 [BFS·DFS 글](/posts/ds-graph-bfs-dfs#격자도-그래프다)에, A\*의 원리는 [최단 경로 알고리즘 글](/posts/shortest-path-algorithms#목적지-쪽으로-기울이는-a)에 있다. 여기서는 이 문제에 맞춰 쓰는 법과 틀리는 지점에 집중한다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 여덟 방향으로 걷는 격자의 가장 짧은 길
+
+`grid`는 n × n 격자이고 칸 값은 0(지나갈 수 있음) 또는 1(막힘)이다. 왼쪽 위 `(0, 0)`에서 오른쪽 아래 `(n - 1, n - 1)`까지 0인 칸만 지나 가는 길 중 가장 짧은 길의 길이를 돌려준다. 한 칸에서 이웃한 여덟 칸(대각선 포함) 중 하나로 옮길 수 있다. 길이는 지나간 칸의 개수다. 출발 칸과 도착 칸도 센다. 길이 없으면 -1이다.
+
+풀이를 고를 때 보는 조건은 이렇다.
+
+- n은 100 이하라 칸은 많아야 1만 개다. 칸마다 이웃 여덟 개를 보면 8만 번이라 칸을 한 번씩 보는 풀이면 넉넉하다.
+- 한 걸음의 비용이 모두 같다. 대각선도 한 걸음이다. 무게가 같으니 BFS가 최단 거리를 준다.
+- 대각선으로 옮길 때 옆의 두 칸이 막혀 있어도 된다. 두 벽 사이의 모서리를 비스듬히 빠져나갈 수 있다는 뜻이다.
+- 출발 칸이나 도착 칸이 1일 수 있다. 그러면 바로 -1이다.
+
+이 글에서 쓸 첫 예시는 3 × 3 격자다.
+
+```text
+0 1 0
+0 1 0
+0 0 0
+```
+
+손으로 풀어 보자. 가운데 열이 위 두 칸 막혀 있어서 바로 대각선으로는 못 간다. `(0, 0)`에서 아래 `(1, 0)`으로 내려가고, 거기서 대각선으로 `(2, 1)`, 그다음 오른쪽 `(2, 2)`로 가면 칸 네 개를 지난다. 길이는 4다. `(1, 0)`에서 `(2, 0)`을 거쳐 아랫줄을 따라가면 다섯 칸이라 하나 더 길다. 대각선 한 걸음이 직선 두 걸음을 줄여 준다는 게 이 문제의 맛이다.
+
+## 갈 수 있는 길을 모두 걸어 본다
+
+가장 먼저 떠오르는 방법은 출발 칸에서 갈 수 있는 길을 모두 걸어 보고 가장 짧은 것을 고르는 것이다. 지금 걷는 길 위의 칸은 다시 밟지 않는다. 같은 칸을 두 번 지나면 고리를 돈 것이라 더 짧아질 수 없기 때문이다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1;
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  const onPath = Array.from({ length: n }, () => new Array(n).fill(false));
+  let best = Infinity;
+
+  const dfs = (r, c, len) => {
+    if (r === n - 1 && c === n - 1) { best = Math.min(best, len); return; }
+    onPath[r][c] = true;
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nc < 0 || nr >= n || nc >= n) continue;
+      if (grid[nr][nc] === 1 || onPath[nr][nc]) continue;
+      dfs(nr, nc, len + 1);
+    }
+    onPath[r][c] = false; // 다른 길에서는 이 칸을 다시 지나도 된다
+  };
+  dfs(0, 0, 1);
+  return best === Infinity ? -1 : best;
+}
+```
+
+정답은 맞는다. 문제는 길의 개수다. 여덟 방향으로 움직이면 작은 격자에서도 길이 폭발한다. 막힌 칸이 없는 3 × 3 격자에서 호출이 827번, 4 × 4에서 551,576번이었다. 5 × 5는 몇 분을 돌려도 끝나지 않았다. 시간은 같은 칸을 지나지 않는 길의 수에 비례하고, 칸 수가 늘면 지수적으로 늘어난다.
+
+## 더 짧게 와 본 칸에서 돌아오는 DFS
+
+같은 칸에 더 짧게 와 본 적이 있으면 지금 길로 그 칸에서 더 가 봐야 이길 수 없다. 칸마다 지금까지 찾은 가장 짧은 길이를 적어 두고, 그보다 길거나 같으면 돌아온다. 이 검사가 고리도 막으니 지금 걷는 길을 따로 기억할 필요가 없다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1;
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  const best = Array.from({ length: n }, () => new Array(n).fill(Infinity));
+
+  const dfs = (r, c, len) => {
+    if (len >= best[r][c]) return; // 더 짧게 와 본 적이 있다
+    best[r][c] = len;
+    if (r === n - 1 && c === n - 1) return;
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nc < 0 || nr >= n || nc >= n || grid[nr][nc] === 1) continue;
+      dfs(nr, nc, len + 1);
+    }
+  };
+  dfs(0, 0, 1);
+  const v = best[n - 1][n - 1];
+  return v === Infinity ? -1 : v;
+}
+```
+
+작은 격자에서는 쓸 만해 보이지만 100 × 100에서는 무너진다. 막힌 칸이 없는 격자에서 호출이 3억 8,688만 번, 7.1초였다. DFS는 한 방향으로 깊이 들어가며 칸마다 엉뚱하게 긴 길이를 먼저 적고, 나중에 더 짧은 길이를 찾을 때마다 그 뒤를 처음부터 다시 훑는다. 깊이도 문제다. 벽이 지그재그로 놓인 격자에서는 길이 4,854칸이라 재귀가 그만큼 깊어지고, Node.js 기본 스택에서 `Maximum call stack size exceeded`로 멈췄다.
+
+이 DFS의 낭비는 "아직 최단이 아닌 길이"를 붙잡고 먼저 멀리 가 본다는 데서 나온다. 가까운 칸부터 확정해 가면 같은 칸을 다시 볼 일이 없다.
+
+## 가까운 칸부터 한 겹씩 넓히는 BFS
+
+한 걸음의 비용이 모두 같으면 "출발에서 한 걸음에 닿는 칸 → 두 걸음에 닿는 칸 → …" 순서로 넓혀 가는 BFS가 최단 거리를 준다. 큐는 먼저 넣은 것을 먼저 꺼내니, 길이 k인 칸을 다 꺼내기 전에는 길이 k + 1인 칸이 나오지 않는다. 그래서 어떤 칸에 처음 닿은 길이가 그 칸의 최단 길이다. 도착 칸을 꺼내는 순간 답이 나온다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1; // 출발이나 도착이 막혔다
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  const dist = Array.from({ length: n }, () => new Array(n).fill(0)); // 0: 아직 안 닿음
+  dist[0][0] = 1; // 길이는 지나는 칸 수라 출발 칸이 1이다
+  const queue = [[0, 0]];
+  for (let head = 0; head < queue.length; head++) {
+    const [r, c] = queue[head];
+    if (r === n - 1 && c === n - 1) return dist[r][c];
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nc < 0 || nr >= n || nc >= n) continue; // 격자 밖
+      if (grid[nr][nc] === 1 || dist[nr][nc] !== 0) continue; // 벽이거나 이미 닿았다
+      dist[nr][nc] = dist[r][c] + 1; // 넣을 때 표시해야 같은 칸이 두 번 들어가지 않는다
+      queue.push([nr, nc]);
+    }
+  }
+  return -1;
+}
+```
+
+큐를 `shift()`로 앞에서 빼지 않고 `head` 번호로 읽는다. JavaScript 배열의 `shift()`는 뒤의 원소를 모두 한 칸씩 당겨서 원소가 많으면 O(n)이다. 방문 표시는 큐에 넣을 때 한다. 꺼낼 때 표시하면 같은 칸이 이웃 여러 곳에서 여러 번 들어간다. 답은 같지만, 막힌 칸이 없는 100 × 100에서 넣을 때 표시하면 1만 번 넣고 끝나는 것이 꺼낼 때 표시하면 39,403번으로 네 배 가까이 늘었다.
+
+아래 그림은 3 × 3 예시에서 이 코드가 큐를 어떻게 쓰는지 따라간 것이다. 칸은 격자를 윗줄부터 한 줄로 늘어놓은 것이고, 초록 칸이 큐에서 꺼낸 칸, 아래는 큐에 든 칸을 `(행,열):길이`로 적었다. 실제 코드에 로그를 찍어 나온 순서 그대로다.
+
+<AlgoTrace
+  caption="3 × 3 격자의 BFS. 칸은 윗줄부터 한 줄로 늘어놓은 격자 값이다"
+  memoryLabel="큐 (칸:길이)"
+  cells={["0", "1", "0", "0", "1", "0", "0", "0", "0"]}
+  steps={[
+    { pointer: 0, memory: ["(0,0):1"], caption: "출발 칸의 길이를 1로 적고 큐에 넣는다." },
+    { pointer: 0, found: [0], memory: ["(1,0):2"], caption: "(0,0)을 꺼낸다. 오른쪽과 대각선은 벽이라 아래 (1,0)만 들어간다." },
+    { pointer: 3, found: [0, 3], memory: ["(2,0):3", "(2,1):3"], caption: "(1,0)을 꺼낸다. 아래 (2,0)과 대각선 (2,1)이 길이 3으로 들어간다." },
+    { pointer: 6, found: [0, 3, 6], memory: ["(2,1):3"], caption: "(2,0)을 꺼낸다. 이웃이 모두 벽이거나 이미 닿은 칸이다." },
+    { pointer: 7, found: [0, 3, 6, 7], memory: ["(1,2):4", "(2,2):4"], caption: "(2,1)을 꺼낸다. 대각선 (1,2)와 오른쪽 (2,2)가 길이 4로 들어간다." },
+    { pointer: 5, found: [0, 3, 6, 7, 5], memory: ["(2,2):4", "(0,2):5"], caption: "(1,2)를 꺼낸다. 위 (0,2)가 길이 5로 들어간다." },
+    { pointer: 8, found: [0, 3, 6, 7, 5, 8], memory: ["(0,2):5"], caption: "(2,2)를 꺼냈다. 도착 칸이니 길이 4를 돌려준다." },
+  ]}
+/>
+
+셋째 단계에서 `(2,0)`과 `(2,1)`이 같은 길이 3으로 들어간다. 둘 다 출발에서 세 칸째다. BFS는 같은 겹에 있는 칸을 다 꺼낸 뒤에야 다음 겹으로 간다. 그래서 길이 4인 `(2,2)`가 나오기 전에 길이 3인 칸이 모두 처리되고, `(2,2)`에 처음 붙은 4가 최단이다. 오른쪽 위 `(0,2)`는 길이 5로 큐에 남지만 도착 칸을 먼저 꺼내서 볼 필요가 없다.
+
+조금 큰 4 × 4 격자에서 물결이 퍼지는 모습도 보자. 아래 그림에서 다음을 누르면 BFS의 겹이 하나씩 넓어지고, 선은 한 걸음에 오갈 수 있는 이웃 칸을 이은 것이다.
+
+<VectorSpace
+  caption="4 × 4 격자. 가운데 열의 벽을 대각선으로 빠져나가 다섯 칸에 도착한다"
+  width={400}
+  height={260}
+  groups={[{ id: "open", label: "빈칸 (0)" }, { id: "wall", label: "벽 (1)" }]}
+  points={[
+    { id: "p00", label: "(0,0)", x: 60, y: 40, group: "open" },
+    { id: "p01", label: "(0,1)", x: 150, y: 40, group: "open" },
+    { id: "p02", label: "1", x: 240, y: 40, group: "wall" },
+    { id: "p03", label: "(0,3)", x: 330, y: 40, group: "open", labelAt: "left" },
+    { id: "p10", label: "1", x: 60, y: 100, group: "wall" },
+    { id: "p11", label: "(1,1)", x: 150, y: 100, group: "open" },
+    { id: "p12", label: "1", x: 240, y: 100, group: "wall" },
+    { id: "p13", label: "(1,3)", x: 330, y: 100, group: "open", labelAt: "left" },
+    { id: "p20", label: "1", x: 60, y: 160, group: "wall" },
+    { id: "p21", label: "(2,1)", x: 150, y: 160, group: "open" },
+    { id: "p22", label: "1", x: 240, y: 160, group: "wall" },
+    { id: "p23", label: "(2,3)", x: 330, y: 160, group: "open", labelAt: "left" },
+    { id: "p30", label: "(3,0)", x: 60, y: 220, group: "open" },
+    { id: "p31", label: "1", x: 150, y: 220, group: "wall" },
+    { id: "p32", label: "(3,2)", x: 240, y: 220, group: "open" },
+    { id: "p33", label: "(3,3)", x: 330, y: 220, group: "open", labelAt: "left" },
+  ]}
+  edges={[["p00", "p01"], ["p00", "p11"], ["p01", "p11"], ["p11", "p21"], ["p21", "p30"], ["p21", "p32"], ["p32", "p33"], ["p32", "p23"], ["p23", "p33"], ["p23", "p13"], ["p13", "p03"]]}
+  steps={[
+    { caption: "길이 1. 출발 칸 (0,0)이다. 선은 한 걸음에 오갈 수 있는 이웃이다.", showEdges: true, path: ["p00"] },
+    { caption: "길이 2. (0,1)과 대각선 (1,1)이 같은 겹에 닿는다. 그림은 (1,1) 쪽을 따라간다.", showEdges: true, path: ["p00", "p11"] },
+    { caption: "길이 3. 가운데 열이 막혀 오른쪽으로는 못 가고 아래 (2,1)로 내려간다.", showEdges: true, path: ["p00", "p11", "p21"] },
+    { caption: "길이 4. (3,0)과 (3,2)가 닿는다. (3,2)로는 벽 두 개 사이 모서리를 대각선으로 빠져나간다.", showEdges: true, path: ["p00", "p11", "p21", "p32"] },
+    { caption: "길이 5. (3,3)과 (2,3)이 닿는다. 도착 칸 (3,3)에 처음 닿았으니 답은 5다.", showEdges: true, path: ["p00", "p11", "p21", "p32", "p33"] },
+  ]}
+/>
+
+넷째 단계가 이 문제의 조건 하나를 보여 준다. `(2,1)`에서 `(3,2)`로 갈 때 옆의 `(2,2)`와 `(3,1)`이 둘 다 벽이다. 그래도 이 문제에서는 대각선 이동이 허용된다. 실제 로봇 길찾기라면 모서리를 뚫고 지나가는 셈이라 막는 경우가 많으니, 문제마다 이 규칙을 확인해야 한다.
+
+시간은 칸마다 한 번 꺼내고 이웃 여덟 개를 보니 O(8n²) = O(n²)이다. 공간은 길이 표와 큐가 각각 O(n²)다. 막힌 칸이 없는 100 × 100에서 칸 1만 개를 다 꺼내고 나서야 도착 칸이 나왔다. 도착 칸이 가장 먼 겹의 마지막에 있어서다. 이 낭비를 줄이는 게 뒤의 두 풀이다.
+
+### Python과 Java로 쓰면
+
+Python에서는 큐로 `collections.deque`를 쓴다. `list.pop(0)`은 앞을 빼고 나머지를 당겨서 O(n)이라 칸이 1만 개면 눈에 띄게 느려진다. 범위 검사는 `0 <= nr < n`처럼 이어 쓸 수 있다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def shortest_path_binary_matrix(grid: List[List[int]]) -> int:
+    n = len(grid)
+    if grid[0][0] == 1 or grid[n - 1][n - 1] == 1:
+        return -1
+    dirs = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    dist = [[0] * n for _ in range(n)]  # 0: 아직 안 닿음
+    dist[0][0] = 1
+    queue = deque([(0, 0)])
+    while queue:
+        r, c = queue.popleft()  # list.pop(0)은 O(n)이라 deque를 쓴다
+        if r == n - 1 and c == n - 1:
+            return dist[r][c]
+        for dr, dc in dirs:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < n and 0 <= nc < n and grid[nr][nc] == 0 and dist[nr][nc] == 0:
+                dist[nr][nc] = dist[r][c] + 1
+                queue.append((nr, nc))
+    return -1
+
+
+print(shortest_path_binary_matrix([[0, 1, 0], [0, 1, 0], [0, 0, 0]]))
+print(shortest_path_binary_matrix([[0]]))
+print(shortest_path_binary_matrix([[0, 0], [0, 1]]))
+```
+
+```text
+4
+1
+-1
+```
+
+`dist = [[0] * n] * n`으로 만들면 안 된다. 같은 줄 하나를 n번 가리키는 리스트가 되어 한 칸을 고치면 모든 줄의 같은 열이 함께 바뀐다. 위 코드처럼 줄마다 새로 만든다.
+
+Java는 `ArrayDeque`를 큐로 쓴다. `LinkedList`도 되지만 노드마다 객체를 만들어 더 느리다. 방향 배열은 `static final`로 클래스에 한 번만 둔다.
+
+```java
+import java.util.*;
+
+class Solution {
+    private static final int[][] DIRS = {{-1, -1}, {-1, 0}, {-1, 1}, {0, -1}, {0, 1}, {1, -1}, {1, 0}, {1, 1}};
+
+    public int shortestPathBinaryMatrix(int[][] grid) {
+        int n = grid.length;
+        if (grid[0][0] == 1 || grid[n - 1][n - 1] == 1) return -1;
+        int[][] dist = new int[n][n]; // 0: 아직 안 닿음
+        dist[0][0] = 1;
+        ArrayDeque<int[]> queue = new ArrayDeque<>();
+        queue.offer(new int[]{0, 0});
+        while (!queue.isEmpty()) {
+            int[] cur = queue.poll();
+            int r = cur[0], c = cur[1];
+            if (r == n - 1 && c == n - 1) return dist[r][c];
+            for (int[] d : DIRS) {
+                int nr = r + d[0], nc = c + d[1];
+                if (nr < 0 || nc < 0 || nr >= n || nc >= n) continue;
+                if (grid[nr][nc] == 1 || dist[nr][nc] != 0) continue;
+                dist[nr][nc] = dist[r][c] + 1;
+                queue.offer(new int[]{nr, nc});
+            }
+        }
+        return -1;
+    }
+}
+```
+
+```text
+4
+1
+-1
+```
+
+## 격자를 방문 표시로 쓰는 BFS
+
+길이 표 `dist`를 따로 두지 않아도 된다. 지나간 칸을 1로 바꿔 벽처럼 막으면 그게 방문 표시다. 길이는 겹 단위로 넓히면서 세면 된다. 지금 겹의 칸을 모두 꺼내고 다음 겹을 새 배열에 모은 뒤, 겹을 하나 넘길 때마다 길이를 1 늘린다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] !== 0 || grid[n - 1][n - 1] !== 0) return -1;
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  let frontier = [[0, 0]];
+  grid[0][0] = 1; // 지나간 칸을 벽으로 막아 방문 표시를 대신한다
+  for (let len = 1; frontier.length > 0; len++) {
+    const next = [];
+    for (const [r, c] of frontier) {
+      if (r === n - 1 && c === n - 1) return len;
+      for (const [dr, dc] of dirs) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nc < 0 || nr >= n || nc >= n || grid[nr][nc] !== 0) continue;
+        grid[nr][nc] = 1;
+        next.push([nr, nc]);
+      }
+    }
+    frontier = next;
+  }
+  return -1;
+}
+```
+
+추가 공간이 겹 배열 두 개뿐이라 길이 표 1만 칸이 사라진다. 시간은 그대로 O(n²)이고, 측정에서는 표를 만들지 않는 만큼 가장 빨랐다. 막힌 칸이 없는 100 × 100에서 2.4ms, 앞의 BFS는 5.7ms였다.
+
+대신 입력을 망가뜨린다. 함수를 부른 쪽이 그 격자를 다시 쓴다면 문제가 된다. 면접에서 이 방법을 쓸 때는 "입력을 바꿔도 되나"를 먼저 묻고, 안 된다면 길이 표를 쓰거나 복사본에서 돌린다. 끝난 뒤 1로 바꾼 칸을 되돌려 놓는 방법도 있지만 원래 벽과 구분할 수 없으니 2 같은 다른 값으로 표시해야 한다.
+
+## 양쪽 끝에서 동시에 넓히는 BFS
+
+출발에서만 물결을 퍼뜨리면 도착점까지 거리 d만큼의 원을 다 채워야 한다. 도착점에서도 동시에 물결을 퍼뜨려 가운데서 만나면, 반지름 d / 2짜리 원 두 개만 채우면 된다. 넓이가 반지름의 제곱에 비례하니 일이 절반 정도로 준다. 이게 양방향 BFS다. 원리는 [Word Ladder의 양방향 절](/posts/leetcode-word-ladder#양쪽-끝에서-물결을-함께-퍼뜨린다)과 같다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1;
+  if (n === 1) return 1;
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  const ds = Array.from({ length: n }, () => new Array(n).fill(0)); // 출발 쪽에서 센 칸 수
+  const dt = Array.from({ length: n }, () => new Array(n).fill(0)); // 도착 쪽에서 센 칸 수
+  ds[0][0] = 1;
+  dt[n - 1][n - 1] = 1;
+  let fs = [[0, 0]], ft = [[n - 1, n - 1]];
+
+  while (fs.length > 0 && ft.length > 0) {
+    // 지금 겹이 작은 쪽을 한 겹 넓힌다
+    const fromStart = fs.length <= ft.length;
+    const mine = fromStart ? ds : dt, other = fromStart ? dt : ds;
+    const front = fromStart ? fs : ft;
+    const next = [];
+    let best = Infinity;
+    for (const [r, c] of front) {
+      for (const [dr, dc] of dirs) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nc < 0 || nr >= n || nc >= n || grid[nr][nc] === 1) continue;
+        // 반대쪽 물결이 이미 닿은 칸이면 두 물결이 만났다
+        if (other[nr][nc] !== 0) best = Math.min(best, mine[r][c] + other[nr][nc]);
+        if (mine[nr][nc] !== 0) continue;
+        mine[nr][nc] = mine[r][c] + 1;
+        next.push([nr, nc]);
+      }
+    }
+    if (best !== Infinity) return best; // 이 겹에서 찾은 만남 중 가장 짧은 것
+    if (fromStart) fs = next; else ft = next;
+  }
+  return -1;
+}
+```
+
+만나는 순간의 길이는 `mine[r][c] + other[nr][nc]`다. 내 쪽에서 `(r, c)`까지 센 칸 수와, 반대쪽에서 이웃 칸까지 센 칸 수를 더하면 출발부터 도착까지 지난 칸 수가 된다. 두 쪽 모두 자기 출발 칸을 1로 셌으니 겹치는 칸이 없다.
+
+처음 만난 순간 바로 돌려주지 않고 그 겹을 끝까지 돌며 가장 작은 값을 고른 데는 이유가 있다. 반대쪽 물결에는 길이가 다른 여러 겹의 칸이 섞여 있어서, 처음 만난 칸이 가장 짧은 만남이라고 바로 말하기 어렵다. 겹 전체의 최솟값을 고르면 "이 겹까지 넓혔을 때 가능한 만남 중 가장 짧은 것"이라 맞는 이유를 설명하기 쉽다. 이 문제의 무작위 격자 5만 개에서는 처음 만난 순간 돌려줘도 틀린 적이 없었지만, 면접에서는 안전한 쪽으로 짜는 게 낫다. 이 코드는 무작위 격자 2만 개로 BFS와 비교해 모두 같은 답을 냈다.
+
+막힌 칸이 없는 100 × 100에서 꺼낸 칸이 4,901개로 BFS의 1만 개의 절반이었다. 막힌 칸이 30%인 무작위 격자에서는 BFS가 6,923개, 양방향이 4,361개였다. 반면 벽이 지그재그로 놓여 길이 하나뿐인 격자에서는 물결이 원이 아니라 가는 줄이라 줄어드는 게 없다. BFS 4,955개, 양방향 4,950개였다. 시간 복잡도의 최악은 BFS와 같은 O(n²)이다.
+
+## 도착점 쪽으로 기울이는 A\*
+
+BFS는 도착점이 어디 있는지 모르고 모든 방향을 똑같이 넓힌다. A\*는 칸마다 "여기서 도착점까지 적어도 몇 칸이 남았나"를 어림해서, 지금까지 온 칸 수 g와 남은 칸 수의 어림 h를 더한 f = g + h가 작은 칸부터 꺼낸다. 도착점 쪽 칸이 먼저 나오니 반대쪽은 덜 뒤진다.
+
+어림값 h는 실제 남은 거리보다 크면 안 된다. 크게 어림하면 진짜 최단 길을 늦게 꺼내 놓칠 수 있다. 여덟 방향으로 움직일 수 있으면 한 걸음에 행과 열을 동시에 하나씩 줄일 수 있으니, 남은 걸음은 적어도 `max(남은 행, 남은 열)`이다. 이걸 체비셰프 거리라고 부른다. 벽이 없을 때 정확히 그 값이고 벽이 있으면 더 늘 뿐이라 절대 넘지 않는다. 상하좌우만 움직이는 격자였다면 맨해튼 거리 `남은 행 + 남은 열`을 쓴다. 여기서 맨해튼 거리를 쓰면 대각선 덕분에 실제보다 크게 어림하는 칸이 생겨 틀릴 수 있다.
+
+```js
+function shortestPathBinaryMatrix(grid) {
+  const n = grid.length;
+  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1;
+  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
+  // 남은 칸 수의 하한: 대각선으로 행과 열을 함께 줄일 수 있으니 체비셰프 거리
+  const h = (r, c) => Math.max(n - 1 - r, n - 1 - c);
+  const g = Array.from({ length: n }, () => new Array(n).fill(Infinity));
+  g[0][0] = 1;
+
+  // [f = g + h, g, r, c]. f가 같으면 g가 큰 쪽(더 나아간 칸)을 먼저 꺼낸다
+  const heap = [[1 + h(0, 0), 1, 0, 0]];
+  const less = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] > b[1]);
+  const push = (x) => {
+    heap.push(x);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!less(heap[i], heap[p])) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1;
+        let s = i;
+        if (l < heap.length && less(heap[l], heap[s])) s = l;
+        if (r < heap.length && less(heap[r], heap[s])) s = r;
+        if (s === i) break;
+        [heap[s], heap[i]] = [heap[i], heap[s]];
+        i = s;
+      }
+    }
+    return top;
+  };
+
+  while (heap.length > 0) {
+    const [, gc, r, c] = pop();
+    if (gc > g[r][c]) continue; // 낡은 후보
+    if (r === n - 1 && c === n - 1) return gc;
+    for (const [dr, dc] of dirs) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nc < 0 || nr >= n || nc >= n || grid[nr][nc] === 1) continue;
+      if (gc + 1 < g[nr][nc]) {
+        g[nr][nc] = gc + 1;
+        push([gc + 1 + h(nr, nc), gc + 1, nr, nc]);
+      }
+    }
+  }
+  return -1;
+}
+```
+
+f가 같은 칸이 많아서 동점 규칙이 효과를 크게 바꾼다. g가 큰 쪽, 곧 도착점에 더 다가간 칸을 먼저 꺼내게 했다. 막힌 칸이 없는 100 × 100에서 A\*는 칸을 딱 100개만 꺼냈다. 대각선을 따라 곧장 내려간 것이다. 막힌 칸 30%인 격자에서는 1,397개로 BFS의 6,923개보다 훨씬 적었다. 지그재그 격자에서는 4,950개로 줄지 않았다. 어림값이 가리키는 방향과 실제 길이 정반대인 구간이 많아서다.
+
+시간은 힙 때문에 최악 O(n² log n)이라 BFS보다 나쁘다. h를 0으로 두면 그대로 다익스트라가 되고, 한 걸음 비용이 모두 1이라 BFS와 같은 순서로 꺼내면서 힙 비용만 더한다. 그래서 이 문제의 기본값은 BFS이고, A\*는 "격자가 아주 크고 도착점이 하나"일 때의 선택지다. 실제 게임과 지도 길찾기가 A\*를 쓰는 이유다.
+
+## 격자 길이를 직접 구해 보기
+
+빈 함수를 채워 테스트를 돌려 보자. 칸 하나짜리 격자, 출발이나 도착이 막힌 격자, 벽 두 개 사이를 대각선으로 빠져나가는 격자, 길이 없는 격자를 넣어 두었다.
+
+<CodePlayground
+  caption="Shortest Path in Binary Matrix"
+  functionName="shortestPathBinaryMatrix"
+  initialCode={"function shortestPathBinaryMatrix(grid) {\n  // grid: n × n, 0은 지나갈 수 있고 1은 막혔다. 여덟 방향으로 움직인다\n  // (0, 0)에서 (n - 1, n - 1)까지 지나는 칸 수의 최솟값, 길이 없으면 -1\n  return -1;\n}"}
+  solution={"function shortestPathBinaryMatrix(grid) {\n  const n = grid.length;\n  if (grid[0][0] === 1 || grid[n - 1][n - 1] === 1) return -1; // 출발이나 도착이 막혔다\n  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];\n  const dist = Array.from({ length: n }, () => new Array(n).fill(0)); // 0: 아직 안 닿음\n  dist[0][0] = 1; // 길이는 지나는 칸 수라 출발 칸이 1이다\n  const queue = [[0, 0]];\n  for (let head = 0; head < queue.length; head++) {\n    const [r, c] = queue[head];\n    if (r === n - 1 && c === n - 1) return dist[r][c];\n    for (const [dr, dc] of dirs) {\n      const nr = r + dr, nc = c + dc;\n      if (nr < 0 || nc < 0 || nr >= n || nc >= n) continue; // 격자 밖\n      if (grid[nr][nc] === 1 || dist[nr][nc] !== 0) continue; // 벽이거나 이미 닿았다\n      dist[nr][nc] = dist[r][c] + 1; // 넣을 때 표시해야 같은 칸이 두 번 들어가지 않는다\n      queue.push([nr, nc]);\n    }\n  }\n  return -1;\n}\n"}
+  tests={[
+    { label: "글의 3 × 3 예시", args: [[[0, 1, 0], [0, 1, 0], [0, 0, 0]]], expected: 4 },
+    { label: "글의 4 × 4 예시", args: [[[0, 0, 1, 0], [1, 0, 1, 0], [1, 0, 1, 0], [0, 1, 0, 0]]], expected: 5 },
+    { label: "칸 하나", args: [[[0]]], expected: 1 },
+    { label: "칸 하나가 벽", args: [[[1]]], expected: -1 },
+    { label: "벽 사이 대각선", args: [[[0, 1], [1, 0]]], expected: 2 },
+    { label: "출발이 막혔다", args: [[[1, 0], [0, 0]]], expected: -1 },
+    { label: "도착이 막혔다", args: [[[0, 0], [0, 1]]], expected: -1 },
+    { label: "길이 없다", args: [[[0, 1, 1], [1, 1, 1], [1, 1, 0]]], expected: -1 },
+    { label: "윗줄 따라 내려가기", args: [[[0, 0, 0], [1, 1, 0], [1, 1, 0]]], expected: 4 },
+  ]}
+/>
+
+## 100 × 100 격자 세 장으로 비교
+
+세 격자는 막힌 칸이 없는 격자, 막힌 칸이 30%인 무작위 격자(답 117), 벽이 지그재그로 놓여 길이 하나뿐인 격자(답 4,854)다. 꺼낸 칸 수와 시간을 함께 적었다.
+
+| 풀이 | 시간 | 공간 | 빈 격자 | 무작위 30% | 지그재그 | 언제 고르나 |
+|---|---|---|---|---|---|---|
+| 모든 길 DFS | 지수 | O(n²) | 끝나지 않는다 | 끝나지 않는다 | 끝나지 않는다 | 고르지 않는다 |
+| 가지치기 DFS | 최악 지수 | O(n²) | 3.9억 번, 7.1초 | 1.2억 번, 4.6초 | 스택 넘침 | 고르지 않는다 |
+| BFS | O(n²) | O(n²) | 1만 칸, 5.7ms | 6,923칸, 3.2ms | 4,955칸, 2.2ms | 기본값 |
+| 격자에 표시하는 BFS | O(n²) | O(n) 추가 | 2.4ms | 0.9ms | 0.9ms | 입력을 바꿔도 될 때 |
+| 양방향 BFS | O(n²) | O(n²) | 4,901칸, 2.7ms | 4,361칸, 1.6ms | 4,950칸, 1.7ms | 격자가 넓게 열려 있을 때 |
+| A\* (체비셰프) | O(n² log n) | O(n²) | 100칸, 1.5ms | 1,397칸, 1.5ms | 4,950칸, 1.3ms | 격자가 크고 도착점 방향이 대체로 열려 있을 때 |
+
+지그재그 격자에서 가지치기 DFS는 스택을 키우면 49만 번에 끝났다. 길이 하나뿐이라 헷갈릴 일이 적어서다. 하지만 기본 스택에서는 멈추니 쓸 수 없다. 면접에서는 BFS를 내놓고 "한 걸음 비용이 모두 같아서 처음 닿은 길이가 최단"을 먼저 말한다. 시간이 남으면 양방향 BFS와 A\*로 꺼내는 칸을 줄이는 방법을 덧붙인다.
+
+## 칸 수와 대각선에서 틀린다
+
+가장 흔한 실수는 길이를 걸음 수로 세는 것이다. 이 문제의 길이는 지나간 칸 수라서 출발 칸이 1이다.
+
+```js
+// 틀린 코드: 출발 칸을 0으로 센다
+dist[0][0] = 0;
+```
+
+3 × 3 예시에서 이 코드는 4가 아니라 3을 내고, `[[0]]`에서는 1이 아니라 0을 낸다. 걸음 수에 1을 더한 값이 답이다. 거리 표를 0으로 "아직 안 닿음"을 나타내는 데 쓴다면 출발 칸을 0으로 두는 순간 출발 칸이 안 닿은 칸처럼 보여 다시 큐에 들어가는 문제도 생긴다.
+
+두 번째는 방향을 네 개만 쓰는 것이다. 다른 격자 문제에서 쓰던 상하좌우 배열을 그대로 가져오면 대각선을 놓친다. 3 × 3 예시에서 4 대신 5가 나오고, `[[0, 1], [1, 0]]`에서는 대각선 한 걸음이면 되는 길을 못 찾아 2 대신 -1을 낸다.
+
+세 번째는 출발 칸 검사를 빼먹는 것이다.
+
+```js
+// 틀린 코드: 출발 칸이 벽인지 보지 않고 바로 큐에 넣는다
+dist[0][0] = 1;
+const queue = [[0, 0]];
+```
+
+`[[1, 0], [0, 0]]`에서 출발 칸이 벽인데도 거기서 퍼져 나가 2를 낸다. `[[1]]`처럼 칸 하나짜리 벽 격자에서는 출발이 곧 도착이라 1을 낸다. 답은 둘 다 -1이다. 도착 칸이 벽인 경우는 BFS가 벽을 큐에 넣지 않으니 저절로 -1이 되지만, 같이 검사해 두면 헛일을 하지 않는다.
+
+네 번째는 방문 표시를 꺼낼 때 하는 것이다. 답은 맞지만 같은 칸이 여러 번 큐에 들어간다. 여덟 방향이라 한 칸에 이웃이 여덟이고, 빈 100 × 100에서 큐에 넣는 횟수가 1만 번에서 39,403번으로 늘었다. 칸이 더 많은 문제에서는 메모리가 터진다.
+
+다섯 번째는 A\*의 어림값을 맨해튼 거리로 쓰는 것이다. 대각선이 허용되면 맨해튼 거리는 실제 남은 걸음보다 클 수 있다. 막힌 칸이 없는 3 × 3에서 출발 칸의 맨해튼 거리는 4인데 실제로는 대각선 두 걸음이면 된다. 이렇게 크게 어림하면 최단 길을 늦게 꺼내 더 긴 답을 낸다.
+
+```text
+0 0 0 0
+0 1 1 0
+0 0 1 0
+1 1 0 0
+```
+
+이 격자의 답은 5인데(왼쪽 아래로 돌아 `(2,1)`에서 `(3,2)`로 대각선), 맨해튼 거리를 쓴 A\*는 오른쪽 위로 도는 길을 먼저 끝까지 밀고 가서 6을 낸다. 무작위 격자 5만 개 중 1,125개에서 이렇게 틀렸다.
+
+## 격자 길찾기가 바뀌면
+
+### 지나간 길 자체를 돌려 달라면
+
+칸을 큐에 넣을 때 어디서 왔는지 `prev[nr][nc] = [r, c]`로 적어 둔다. 도착 칸에서 `prev`를 따라 출발 칸까지 거꾸로 올라간 뒤 뒤집으면 길이 나온다. BFS는 칸마다 처음 닿을 때 한 번만 적으니 따라간 길이 곧 최단 길이다.
+
+### 벽을 k개까지 부술 수 있다면
+
+같은 칸이라도 "벽을 몇 개 부수고 왔나"에 따라 다른 상태가 된다. 상태를 `(행, 열, 남은 부수기 횟수)`로 늘려 BFS를 돌린다. 상태 수가 n² × (k + 1)개로 늘어난다. LeetCode 1293. Shortest Path in a Grid with Obstacles Elimination이 이 문제다.
+
+### 칸마다 지나는 비용이 다르다면
+
+한 걸음 비용이 달라지면 BFS의 "처음 닿은 길이가 최단"이 깨진다. 다익스트라로 바꾼다. 비용이 0과 1 두 가지뿐이면 덱의 앞뒤에 넣는 0-1 BFS가 O(n²)으로 끝난다([최단 경로 글의 0-1 BFS 절](/posts/shortest-path-algorithms#무게가-0과-1뿐이면-덱으로)). 지나는 칸 높이의 최댓값을 최소로 하라면 [Swim in Rising Water](/posts/leetcode-swim-in-rising-water)가 된다.
+
+### 대각선으로 모서리를 뚫지 못하게 하라면
+
+대각선으로 옮길 때 옆의 두 칸 `(r, nc)`와 `(nr, c)`가 모두 0일 때만 허용하는 검사를 붙인다. 하나라도 벽이면 허용하지 않는 규칙도 흔하다. 4 × 4 예시에서 이 규칙을 넣으면 `(2,1)`에서 `(3,2)`로 갈 수 없어 길이 사라진다.
+
+### 출발 칸이 여러 개라면
+
+출발 칸을 모두 큐에 넣고 길이 1로 시작하는 다중 출발 BFS가 된다. [Rotting Oranges](/posts/leetcode-rotting-oranges)가 이 모양이다.
+
+### 비슷한 문제
+
+- [Rotting Oranges](/posts/leetcode-rotting-oranges): 여러 칸에서 동시에 퍼지는 격자 BFS.
+- [Word Ladder](/posts/leetcode-word-ladder): 격자 대신 단어 그래프의 BFS와 양방향 BFS.
+- [Swim in Rising Water](/posts/leetcode-swim-in-rising-water): 칸 값의 최댓값을 최소로 하는 격자 다익스트라.
+- LeetCode 1293. Shortest Path in a Grid with Obstacles Elimination: 상태를 늘린 격자 BFS.
+- LeetCode 542. 01 Matrix: 모든 0에서 동시에 퍼지는 다중 출발 BFS.
+
+## 면접에서 나올 만한 질문
+
+### 왜 BFS를 쓰나
+
+한 걸음의 비용이 모두 같기 때문이다. BFS는 길이 k인 칸을 다 꺼내야 길이 k + 1인 칸을 꺼내니, 어떤 칸에 처음 닿은 길이가 그 칸의 최단 길이다. 그래서 도착 칸을 꺼내는 순간 답이 확정된다. DFS는 먼저 찾은 길이가 최단이라는 보장이 없어 모든 길을 비교해야 한다.
+
+### 방문 표시는 언제 하나
+
+큐에 넣을 때 한다. BFS에서는 처음 닿은 길이가 최단이라 넣는 순간 값이 확정되기 때문이다. 꺼낼 때 표시하면 같은 칸이 여러 이웃에서 여러 번 들어간다. 답은 같지만 빈 100 × 100에서 넣는 횟수가 1만 번에서 39,403번으로 늘었다. 다익스트라에서 넣을 때 표시하면 틀리는 것과 혼동하지 않아야 한다. 그쪽은 무게가 달라 넣을 때의 값이 확정이 아니다.
+
+### 시간과 공간 복잡도는
+
+칸마다 한 번 꺼내고 이웃 여덟 개를 보니 시간은 O(n²)이다. 공간은 길이 표와 큐가 O(n²)다. 격자 자체를 방문 표시로 쓰면 길이 표가 사라져 추가 공간이 겹 크기만큼으로 준다. 대신 입력을 바꾸니 바꿔도 되는지 먼저 확인한다.
+
+### 더 빠르게 할 수 있나
+
+시간 복잡도는 O(n²)보다 줄일 수 없지만 꺼내는 칸 수는 줄일 수 있다. 양방향 BFS는 양쪽에서 반지름 절반짜리 원 두 개만 채워 빈 격자에서 칸을 절반만 꺼냈다. A\*는 체비셰프 거리로 도착점 쪽을 먼저 꺼내 빈 격자에서 100칸만 꺼냈다. 다만 길이 하나뿐인 지그재그 격자에서는 둘 다 줄어드는 게 거의 없다.
+
+### A\*에서 어림값은 어떻게 고르나
+
+실제 남은 걸음보다 크지 않은 값을 고른다. 여덟 방향 이동이라 한 걸음에 행과 열을 하나씩 동시에 줄일 수 있으니 `max(남은 행, 남은 열)`인 체비셰프 거리가 맞다. 상하좌우만 된다면 맨해튼 거리를 쓴다. 대각선이 되는데 맨해튼 거리를 쓰면 크게 어림해서 최단 길을 놓칠 수 있다.
+
+### 출발 칸이나 도착 칸이 막혀 있으면
+
+바로 -1이다. 출발 칸 검사를 빼먹으면 벽에서 출발해 길을 찾아 버린다. `[[1]]`이면 출발이 곧 도착이라 1을 내는 실수가 대표적이다. 도착 칸이 벽이면 BFS가 그 칸을 큐에 넣지 않아 저절로 -1이 되지만, 시작 전에 검사하면 격자 전체를 헛되이 훑지 않는다.
+
+### 길이를 왜 1부터 세나
+
+문제가 길이를 지나간 칸 수로 정의했기 때문이다. 출발 칸 하나만 있어도 길이는 1이다. 걸음 수로 세면 늘 1이 모자라 `[[0]]`에서 0을 낸다. 길이 표에 0을 "아직 안 닿음"으로 쓰는 코드라면 출발 칸을 1로 두는 게 표시 역할도 겸한다.

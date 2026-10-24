@@ -2,6 +2,379 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "leetcode-alien-dictionary": {
+    "links": [
+      "leetcode-course-schedule",
+      "leetcode-course-schedule-ii",
+      "ds-graph-bfs-dfs",
+      "leetcode-permutations"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-bitwise-and-of-numbers-range": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "leetcode-single-number",
+      "leetcode-power-of-two",
+      "leetcode-counting-bits",
+      "layer-ip-addressing",
+      "leetcode-longest-common-prefix",
+      "leetcode-single-number-ii",
+      "leetcode-missing-number",
+      "leetcode-reverse-bits"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "security-groups-nacl",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-candy": {
+    "links": [
+      "greedy-algorithms",
+      "ds-graph-bfs-dfs",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-ipo",
+      "leetcode-trapping-rain-water",
+      "leetcode-product-of-array-except-self"
+    ],
+    "mentions": []
+  },
+  "leetcode-coin-change-ii": {
+    "links": [
+      "leetcode-coin-change",
+      "dynamic-programming",
+      "leetcode-climbing-stairs",
+      "leetcode-word-break",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-target-sum",
+      "leetcode-combination-sum"
+    ],
+    "mentions": [
+      "js-memoization",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-construct-tree-from-preorder-inorder": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-validate-binary-search-tree",
+      "leetcode-invert-binary-tree",
+      "leetcode-diameter-of-binary-tree"
+    ],
+    "mentions": [
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-count-primes": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-powx-n",
+      "ds-union-find",
+      "leetcode-happy-number"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "ds-hash-map",
+      "floating-point-numbers",
+      "sd-email-protocols"
+    ]
+  },
+  "leetcode-detect-squares": {
+    "links": [
+      "ds-hash-map",
+      "leetcode-rotate-image",
+      "leetcode-spiral-matrix",
+      "leetcode-two-sum"
+    ],
+    "mentions": []
+  },
+  "leetcode-distinct-subsequences": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-subsets",
+      "leetcode-coin-change-ii",
+      "leetcode-interleaving-string",
+      "leetcode-edit-distance",
+      "leetcode-regular-expression-matching"
+    ],
+    "mentions": [
+      "js-memoization",
+      "ds-array-matrix",
+      "recursion-backtracking",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-excel-sheet-column-number": {
+    "links": [
+      "leetcode-plus-one",
+      "leetcode-multiply-strings",
+      "leetcode-reverse-integer",
+      "leetcode-powx-n"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-extra-characters-in-a-string": {
+    "links": [
+      "leetcode-word-break",
+      "dynamic-programming",
+      "ds-trie",
+      "leetcode-implement-trie",
+      "leetcode-replace-words",
+      "string-search-algorithms",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-find-city-smallest-neighbors": {
+    "links": [
+      "shortest-path-algorithms",
+      "leetcode-network-delay-time",
+      "ds-graph-bfs-dfs",
+      "leetcode-path-with-maximum-probability"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing",
+      "ds-heap"
+    ]
+  },
+  "leetcode-interleaving-string": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-edit-distance",
+      "ds-graph-bfs-dfs",
+      "leetcode-distinct-subsequences",
+      "leetcode-regular-expression-matching",
+      "leetcode-unique-paths"
+    ],
+    "mentions": [
+      "js-memoization",
+      "ds-array-matrix",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-ipo": {
+    "links": [
+      "ds-heap",
+      "greedy-algorithms",
+      "leetcode-gas-station",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-task-scheduler",
+      "leetcode-meeting-rooms-ii"
+    ],
+    "mentions": []
+  },
+  "leetcode-merge-triplets-to-form-target-triplet": {
+    "links": [
+      "greedy-algorithms",
+      "bit-manipulation",
+      "dynamic-programming",
+      "leetcode-hand-of-straights",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-ipo",
+      "leetcode-jump-game"
+    ],
+    "mentions": [
+      "http-methods"
+    ]
+  },
+  "leetcode-missing-number": {
+    "links": [
+      "leetcode-single-number",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-linked-list-cycle",
+      "leetcode-single-number-ii",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls"
+    ]
+  },
+  "leetcode-my-calendar-i": {
+    "links": [
+      "leetcode-meeting-rooms",
+      "interval-problems-pattern",
+      "binary-search",
+      "leetcode-car-pooling",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-insert-interval",
+      "leetcode-interval-list-intersections",
+      "leetcode-employee-free-time"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "segment-tree-fenwick",
+      "sd-hotel-double-booking",
+      "postgres-data-types"
+    ]
+  },
+  "leetcode-path-with-maximum-probability": {
+    "links": [
+      "leetcode-network-delay-time",
+      "shortest-path-algorithms",
+      "ds-heap",
+      "leetcode-swim-in-rising-water",
+      "leetcode-cheapest-flights-within-k-stops",
+      "leetcode-find-city-smallest-neighbors"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "ds-graph-bfs-dfs",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-plus-one": {
+    "links": [
+      "leetcode-multiply-strings",
+      "leetcode-add-two-numbers",
+      "bit-manipulation",
+      "recursion-backtracking",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "redis-basics",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-power-of-two": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-bitwise-and-of-numbers-range",
+      "leetcode-powx-n",
+      "leetcode-single-number",
+      "leetcode-missing-number",
+      "leetcode-reverse-integer"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "ds-hash-map",
+      "floating-point-numbers",
+      "segment-tree-fenwick",
+      "logic-gates-alu",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-reverse-integer": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-plus-one",
+      "leetcode-add-two-numbers",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers",
+      "leetcode-missing-number",
+      "leetcode-power-of-two"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-shortest-path-in-binary-matrix": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "shortest-path-algorithms",
+      "leetcode-word-ladder",
+      "leetcode-swim-in-rising-water",
+      "leetcode-rotting-oranges"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-single-number-ii": {
+    "links": [
+      "leetcode-single-number",
+      "ds-hash-map",
+      "leetcode-missing-number",
+      "leetcode-majority-element",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-stock-with-cooldown": {
+    "links": [
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "dynamic-programming",
+      "leetcode-house-robber"
+    ],
+    "mentions": [
+      "js-memoization"
+    ]
+  },
+  "leetcode-sum-of-prefix-scores-of-strings": {
+    "links": [
+      "leetcode-implement-trie",
+      "string-search-algorithms",
+      "monotonic-stack-pattern",
+      "leetcode-longest-common-prefix",
+      "leetcode-largest-rectangle-in-histogram"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque",
+      "sd-autocomplete-trie",
+      "core-web-vitals"
+    ]
+  },
+  "leetcode-target-sum": {
+    "links": [
+      "leetcode-partition-equal-subset-sum",
+      "dynamic-programming",
+      "leetcode-two-sum",
+      "leetcode-coin-change-ii",
+      "leetcode-subsets"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-memoization",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-valid-parenthesis-string": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "js-memoization",
+      "ds-stack-queue-deque",
+      "leetcode-generate-parentheses",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-candy",
+      "leetcode-ipo"
+    ],
+    "mentions": [
+      "postgres-query-planner"
+    ]
+  },
   "leetcode-sudoku-solver": {
     "links": [
       "leetcode-n-queens",
@@ -44,6 +417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "interval-problems-pattern",
       "ds-heap",
       "leetcode-meeting-rooms",
+      "leetcode-my-calendar-i",
       "leetcode-merge-intervals",
       "leetcode-employee-free-time",
       "leetcode-interval-list-intersections"
@@ -68,6 +442,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-course-schedule",
       "dynamic-programming",
       "recursion-backtracking",
+      "leetcode-alien-dictionary",
       "leetcode-redundant-connection",
       "leetcode-reconstruct-itinerary"
     ],
@@ -112,6 +487,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-heap",
       "leetcode-meeting-rooms",
       "leetcode-interval-list-intersections",
+      "leetcode-my-calendar-i",
       "leetcode-meeting-rooms-ii",
       "leetcode-car-pooling",
       "leetcode-insert-interval"
@@ -159,6 +535,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map",
       "ds-heap",
       "sorting-algorithms",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-ipo",
       "leetcode-partition-labels"
     ],
     "mentions": []
@@ -173,6 +553,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-merge-intervals",
       "leetcode-meeting-rooms-ii",
       "leetcode-insert-interval",
+      "leetcode-my-calendar-i",
       "leetcode-merge-two-sorted-lists"
     ],
     "mentions": [
@@ -239,6 +620,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "recursion-backtracking",
       "big-o-notation",
+      "leetcode-plus-one",
       "leetcode-add-two-numbers",
       "leetcode-powx-n",
       "leetcode-sum-of-two-integers"
@@ -285,7 +667,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-coin-change",
       "dynamic-programming",
+      "leetcode-coin-change-ii",
       "recursion-backtracking",
+      "leetcode-target-sum",
       "binary-search"
     ],
     "mentions": [
@@ -333,7 +717,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs",
       "shortest-path-algorithms",
       "leetcode-pacific-atlantic-water-flow",
-      "leetcode-word-ladder"
+      "leetcode-word-ladder",
+      "leetcode-shortest-path-in-binary-matrix"
     ],
     "mentions": [
       "sd-maps-tiles-routing"
@@ -357,6 +742,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ds-binary-tree-bst",
       "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-construct-tree-from-preorder-inorder",
       "leetcode-diameter-of-binary-tree"
     ],
     "mentions": []
@@ -449,8 +835,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-subsets-ii",
       "recursion-backtracking",
       "dynamic-programming",
+      "leetcode-target-sum",
       "leetcode-partition-equal-subset-sum",
-      "leetcode-permutations"
+      "leetcode-permutations",
+      "leetcode-coin-change-ii"
     ],
     "mentions": [
       "floating-point-numbers"
@@ -485,7 +873,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-binary-tree-level-order-traversal",
       "leetcode-validate-binary-search-tree",
       "leetcode-diameter-of-binary-tree",
-      "leetcode-binary-tree-right-side-view"
+      "leetcode-binary-tree-right-side-view",
+      "leetcode-construct-tree-from-preorder-inorder"
     ],
     "mentions": [
       "ds-array-matrix",
@@ -542,6 +931,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-heap",
       "leetcode-car-pooling",
       "leetcode-non-overlapping-intervals",
+      "leetcode-my-calendar-i",
       "leetcode-employee-free-time",
       "leetcode-merge-intervals",
       "leetcode-interval-list-intersections",
@@ -1270,6 +1660,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-product-of-array-except-self": {
     "links": [
       "leetcode-trapping-rain-water",
+      "leetcode-candy",
       "leetcode-study-guide",
       "ds-array-matrix",
       "segment-tree-fenwick",
@@ -1553,7 +1944,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-cheapest-flights-within-k-stops": {
     "links": [
       "leetcode-network-delay-time",
-      "shortest-path-algorithms"
+      "shortest-path-algorithms",
+      "leetcode-find-city-smallest-neighbors",
+      "leetcode-path-with-maximum-probability"
     ],
     "mentions": [
       "ds-graph-bfs-dfs",
@@ -1569,6 +1962,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "bit-manipulation",
       "leetcode-climbing-stairs",
+      "leetcode-power-of-two",
       "leetcode-single-number",
       "leetcode-reverse-bits",
       "leetcode-sum-of-two-integers"
@@ -1632,6 +2026,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bit-manipulation",
       "logic-gates-alu",
       "leetcode-counting-bits",
+      "leetcode-power-of-two",
       "leetcode-single-number",
       "leetcode-reverse-bits",
       "leetcode-sum-of-two-integers"
@@ -1664,6 +2059,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-longest-common-subsequence",
       "leetcode-edit-distance",
       "recursion-backtracking",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
       "leetcode-word-break"
     ],
     "mentions": [
@@ -1679,6 +2076,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bit-manipulation",
       "leetcode-number-of-1-bits",
       "two-pointers-pattern",
+      "leetcode-reverse-integer",
       "leetcode-single-number",
       "leetcode-counting-bits",
       "leetcode-sum-of-two-integers"
@@ -1702,6 +2100,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "logic-gates-alu",
       "bit-manipulation",
+      "leetcode-reverse-integer",
       "leetcode-single-number",
       "leetcode-number-of-1-bits",
       "leetcode-counting-bits",
@@ -1719,7 +2118,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-union-find",
       "binary-search",
       "leetcode-network-delay-time",
-      "minimum-spanning-tree"
+      "minimum-spanning-tree",
+      "leetcode-path-with-maximum-probability"
     ],
     "mentions": [
       "sd-maps-tiles-routing"
@@ -1803,6 +2203,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "interval-problems-pattern",
       "leetcode-merge-intervals",
       "leetcode-meeting-rooms-ii",
+      "leetcode-my-calendar-i",
       "leetcode-employee-free-time",
       "leetcode-non-overlapping-intervals",
       "leetcode-insert-interval",
@@ -1840,6 +2241,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bit-manipulation",
       "ds-hash-map",
       "binary-search",
+      "leetcode-single-number-ii",
+      "leetcode-missing-number",
       "leetcode-linked-list-cycle",
       "leetcode-contains-duplicate",
       "leetcode-number-of-1-bits",
@@ -1869,6 +2272,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-implement-trie",
       "ds-graph-bfs-dfs",
       "leetcode-word-search-ii",
+      "leetcode-extra-characters-in-a-string",
       "leetcode-decode-ways",
       "leetcode-palindrome-partitioning"
     ],
@@ -2012,6 +2416,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-study-guide",
       "leetcode-coin-change",
       "leetcode-house-robber",
+      "leetcode-coin-change-ii",
       "sliding-window-pattern",
       "leetcode-decode-ways"
     ],
@@ -2030,6 +2435,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-house-robber",
       "dynamic-programming",
       "greedy-algorithms",
+      "leetcode-coin-change-ii",
       "ds-graph-bfs-dfs",
       "leetcode-word-break"
     ],
@@ -2042,6 +2448,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "ds-union-find",
       "leetcode-redundant-connection",
+      "leetcode-alien-dictionary",
       "leetcode-clone-graph"
     ],
     "mentions": [
@@ -2052,6 +2459,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "dynamic-programming",
       "leetcode-longest-common-subsequence",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
       "leetcode-regular-expression-matching"
     ],
     "mentions": [
@@ -2076,6 +2485,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "greedy-algorithms",
       "bit-manipulation",
       "leetcode-longest-increasing-subsequence",
+      "leetcode-stock-with-cooldown",
       "leetcode-house-robber-ii",
       "ds-binary-tree-bst",
       "binary-search"
@@ -2088,6 +2498,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-merge-intervals",
       "binary-search",
       "leetcode-employee-free-time",
+      "leetcode-my-calendar-i",
       "leetcode-non-overlapping-intervals",
       "leetcode-interval-list-intersections"
     ],
@@ -2127,6 +2538,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-longest-common-subsequence": {
     "links": [
       "leetcode-edit-distance",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
       "dynamic-programming",
       "leetcode-unique-paths",
       "leetcode-longest-increasing-subsequence",
@@ -2170,7 +2583,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-heap",
       "leetcode-cheapest-flights-within-k-stops",
       "ds-graph-bfs-dfs",
-      "leetcode-swim-in-rising-water"
+      "leetcode-path-with-maximum-probability",
+      "leetcode-swim-in-rising-water",
+      "leetcode-find-city-smallest-neighbors"
     ],
     "mentions": [
       "sd-maps-tiles-routing"
@@ -2186,6 +2601,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-longest-increasing-subsequence",
       "dynamic-programming",
       "binary-search",
+      "leetcode-my-calendar-i",
       "leetcode-meeting-rooms-ii",
       "leetcode-insert-interval",
       "leetcode-minimum-interval-to-include-each-query"
@@ -2243,7 +2659,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-network-delay-time",
       "leetcode-edit-distance",
       "leetcode-rotting-oranges",
-      "leetcode-course-schedule"
+      "leetcode-course-schedule",
+      "leetcode-shortest-path-in-binary-matrix"
     ],
     "mentions": [
       "sd-maps-tiles-routing"
@@ -2354,7 +2771,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-implement-trie",
       "binary-search",
-      "leetcode-replace-words"
+      "leetcode-replace-words",
+      "leetcode-sum-of-prefix-scores-of-strings"
     ],
     "mentions": [
       "string-search-algorithms",
@@ -2414,6 +2832,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-implement-trie",
       "leetcode-longest-common-prefix",
       "ds-trie",
+      "leetcode-extra-characters-in-a-string",
       "leetcode-word-break"
     ],
     "mentions": [
@@ -2425,6 +2844,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ds-binary-tree-bst",
       "leetcode-binary-tree-level-order-traversal",
+      "leetcode-construct-tree-from-preorder-inorder",
       "leetcode-maximum-depth-of-binary-tree",
       "leetcode-validate-binary-search-tree",
       "bit-manipulation",
@@ -2761,13 +3181,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-subsets",
       "recursion-backtracking",
+      "leetcode-coin-change-ii",
       "leetcode-combination-sum-ii",
       "leetcode-subsets-ii",
       "leetcode-coin-change",
       "greedy-algorithms",
       "leetcode-permutations",
       "leetcode-letter-combinations-of-a-phone-number",
-      "leetcode-partition-equal-subset-sum"
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-target-sum"
     ],
     "mentions": [
       "dynamic-programming"
@@ -2791,6 +3213,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-replace-words",
       "ds-trie",
       "binary-search",
+      "leetcode-sum-of-prefix-scores-of-strings",
       "sd-autocomplete-trie",
       "leetcode-longest-common-prefix"
     ],

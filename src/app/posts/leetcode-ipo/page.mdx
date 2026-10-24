@@ -1,0 +1,507 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-ipo");
+
+<EasyIntro>
+  작은 가게가 돈을 불리려고 일을 몇 개 골라 하려고 한다. 일마다 시작하려면 가게에 돈이 얼마 이상 있어야 하고, 끝내면 이익이 들어온다. 시작할 때 돈을 쓰는 건 아니고, 그만큼 있어야 일을 받아 준다는 뜻이다. 정해진 횟수만큼 일을 해서 마지막에 돈을 가장 많이 갖는 방법을 찾는 문제다.
+
+  답은 단순하다. 지금 가진 돈으로 할 수 있는 일 중에서 이익이 가장 큰 일을 한다. 돈은 줄어들지 않고 늘기만 하니, 이익을 크게 챙길수록 다음 차례에 할 수 있는 일도 많아진다. 작은 이익을 먼저 챙겨서 손해 볼 일은 없다.
+
+  게임에서 레벨이 올라야 들어갈 수 있는 던전을 떠올리면 쉽다. 지금 레벨로 들어갈 수 있는 던전 중 경험치를 가장 많이 주는 곳에 간다. 레벨이 오르면 새 던전이 열리고, 그중에서 또 가장 좋은 곳을 고른다. 열린 던전을 경험치 순으로 줄 세워 두는 상자가 있으면 매번 빨리 고를 수 있다.
+</EasyIntro>
+
+[IPO](https://leetcode.com/problems/ipo/)는 LeetCode 502번이고 Hard로 분류된다. 그리디 규칙은 금방 떠오르는데, 이걸 빠르게 돌리려면 정렬과 최대 힙을 함께 써야 해서 Hard다. 면접에서는 두 가지를 본다. "지금 할 수 있는 것 중 가장 큰 이익"이 왜 최선인지 설명할 수 있는가, 그리고 "할 수 있는 것"이 계속 늘어나는 집합을 어떤 자료구조로 들고 다니는가.
+
+이 글은 다섯 풀이를 본다. 모든 순서를 해 보는 완전 탐색, 매 차례 모든 프로젝트를 훑는 풀이, 이익 순으로 정렬해 두고 처음 가능한 것을 고르는 풀이, 자본 순 정렬과 최대 힙을 쓰는 풀이, 그리고 모든 프로젝트를 이미 할 수 있을 때의 지름길이다. 힙 자체는 [힙 글](/posts/ds-heap)에, 그리디를 증명하는 틀은 [그리디 알고리즘 글](/posts/greedy-algorithms)에 있다. 코드는 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 자본이 문턱인 프로젝트 고르기
+
+프로젝트가 n개 있다. i번 프로젝트는 시작하려면 자본이 `capital[i]` 이상 있어야 하고, 끝내면 순이익 `profits[i]`가 자본에 더해진다. 처음 자본은 `w`이고, 서로 다른 프로젝트를 최대 k개 할 수 있다. 마지막 자본의 최댓값을 돌려준다.
+
+`capital[i]`는 쓰는 돈이 아니라 문턱이다. 자본이 3이고 문턱 2짜리 프로젝트(이익 5)를 하면 자본은 3 - 2 + 5가 아니라 3 + 5 = 8이 된다. 이 점을 잘못 읽으면 풀이 전체가 틀어진다.
+
+풀이 선택에 영향을 주는 제약은 이렇다.
+
+- n과 k는 최대 10^5다. 차례마다 모든 프로젝트를 훑는 O(k · n)은 10^10이라 안 된다.
+- 이익은 0 이상 10^4 이하라 음수가 없다. 하면 자본이 줄어드는 프로젝트가 없다는 뜻이고, 이게 그리디를 성립하게 한다.
+- 처음 자본과 문턱은 최대 10^9다. 마지막 자본은 최대 10^9 + 10^5 × 10^4 = 2 × 10^9로, Java `int` 최댓값(약 21.47억)에 겨우 들어간다.
+
+## 손으로 세 번 골라 본다
+
+이 글에서 계속 쓸 예시다. k = 3, 처음 자본 w = 0이다.
+
+```text
+번호     0  1  2  3  4  5
+문턱     0  1  1  2  4  6
+이익     1  2  3  1  5  4
+```
+
+자본 0으로 할 수 있는 건 문턱 0인 0번뿐이다. 하면 자본이 1이 된다.
+
+자본 1이면 1번(이익 2)과 2번(이익 3)이 열린다. 이익이 큰 2번을 하면 자본이 4가 된다.
+
+자본 4면 1번(이익 2), 3번(이익 1), 4번(이익 5)을 할 수 있다. 4번을 하면 자본이 9가 된다. 세 번을 다 썼으니 답은 9다. 5번(문턱 6)은 자본 9면 할 수 있지만 횟수가 남지 않았다.
+
+다르게 골라 보자. 두 번째에 이익이 작은 1번을 하면 자본이 3이라 4번(문턱 4)이 안 열린다. 세 번째로 2번을 하면 6에서 끝난다. 작은 이익을 고르면 자본이 덜 늘고, 자본이 덜 늘면 열리는 프로젝트도 줄어든다. 손해만 본다.
+
+## 모든 순서를 해 본다
+
+곧은 풀이부터 쓴다. 지금 자본으로 할 수 있는 아직 안 한 프로젝트를 하나씩 해 보고, 남은 횟수로 재귀한다. 횟수를 다 쓰거나 할 게 없으면 그때 자본이 후보다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  const n = profits.length;
+  const used = new Array(n).fill(false);
+  function go(left, cur) {
+    let best = cur;                                // 여기서 멈추는 것도 후보다
+    if (left === 0) return best;
+    for (let i = 0; i < n; i++) {
+      if (used[i] || capital[i] > cur) continue;   // 이미 했거나 문턱이 높다
+      used[i] = true;
+      best = Math.max(best, go(left - 1, cur + profits[i]));
+      used[i] = false;                             // 되돌린다
+    }
+    return best;
+  }
+  return go(k, w);
+}
+```
+
+순서까지 모두 보니 최악에 n × (n - 1) × ... 로 O(n!/(n - k)!)이다. 문턱이 모두 0이고 k = n인 입력으로 재 봤다.
+
+```text
+8 brute 36 10.4
+10 brute 55 348.6
+```
+
+프로젝트 10개에서 0.35초다. 같은 집합을 다른 순서로 하는 경우를 모두 따로 세는 게 낭비다. 그리고 손으로 풀 때 본 대로, 매 차례 할 일은 사실 정해져 있다.
+
+## 지금 할 수 있는 것 중 이익이 가장 큰 것
+
+그리디 규칙은 이렇다. 차례마다 지금 자본으로 할 수 있는 아직 안 한 프로젝트 중 이익이 가장 큰 것을 한다. 할 수 있는 게 없으면 멈춘다.
+
+이게 왜 최선인지는 바꿔치기 논법으로 보인다. 어떤 최적의 순서 O가 있고, 그리디의 순서 G와 앞에서부터 j번째까지 같다고 하자. j + 1번째에 G는 g를, O는 다른 o를 했다. 앞의 j개가 같으니 그 순간 자본이 같고, o도 그때 할 수 있었다. 그리디는 할 수 있는 것 중 이익이 가장 큰 걸 골랐으니 g의 이익은 o 이상이다.
+
+- g가 O의 뒤쪽 m번째에 나온다면, O에서 g와 o의 자리를 바꾼다. j + 1번째부터 m - 1번째까지는 자본이 (g의 이익 - o의 이익)만큼 많거나 같으니 원래 하던 프로젝트를 여전히 할 수 있다. m번째에 하는 o는 문턱이 j + 1번째 자본 이하였으니 문제없다. m번째 이후는 같은 집합을 했으니 자본이 같다.
+- g가 O에 아예 없다면, O의 o를 g로 바꾼다. 그 뒤 모든 순간의 자본이 같거나 많아져서 나머지를 그대로 할 수 있고, 마지막 자본도 같거나 많다.
+
+어느 쪽이든 마지막 자본이 줄지 않는 최적의 순서가 생기고, 그 순서는 G와 j + 1번째까지 같다. 이걸 반복하면 G 자체가 최적이 된다. 이익이 음수가 아니라는 조건은 "할 수 있는데 안 하는 게 나은 경우가 없다"를 보장한다. 그래서 할 게 있으면 항상 한다.
+
+이 증명은 그리디 알고리즘 글의 [일찍 끝나는 회의 증명](/posts/greedy-algorithms#일찍-끝나는-회의가-왜-맞는가)과 같은 바꿔치기 논법이다. 이제 남은 건 "할 수 있는 것 중 이익이 가장 큰 것"을 얼마나 빨리 찾느냐다.
+
+## 차례마다 전부 훑는다
+
+그리디를 그대로 옮긴다. 차례마다 모든 프로젝트를 훑어서 할 수 있는 것 중 이익이 가장 큰 것을 고른다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  const n = profits.length;
+  const used = new Array(n).fill(false);
+  for (let round = 0; round < k; round++) {
+    let best = -1;
+    for (let i = 0; i < n; i++) {
+      if (used[i] || capital[i] > w) continue;      // 이미 했거나 문턱이 높다
+      if (best === -1 || profits[i] > profits[best]) best = i;
+    }
+    if (best === -1) break;                         // 할 수 있는 게 없다
+    used[best] = true;
+    w += profits[best];
+  }
+  return w;
+}
+```
+
+시간 O(k · n), 공간 O(n)이다. 프로젝트 1만 개, k = 1만에서 466ms가 걸렸다. 10만 개면 100배인 수십 초다. 매 차례 이미 할 수 없다고 확인한 프로젝트와 이미 후보였던 프로젝트를 처음부터 다시 본다. 자본은 늘기만 하니, 한 번 열린 프로젝트는 계속 열려 있다. 이 사실을 쓰면 다시 볼 필요가 없어진다.
+
+## 이익 순으로 줄 세워 두고 처음 열린 것
+
+반대 방향으로 정렬해 볼 수도 있다. 이익이 큰 순서로 프로젝트를 정렬해 두고, 차례마다 앞에서부터 보다가 처음 만나는 할 수 있는 프로젝트를 고른다. 이익 순이니 처음 만난 것이 할 수 있는 것 중 가장 크다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  const n = profits.length;
+  const order = [...profits.keys()].sort((a, b) => profits[b] - profits[a]); // 이익이 큰 순서
+  const used = new Array(n).fill(false);
+  for (let round = 0; round < k; round++) {
+    let picked = -1;
+    for (const i of order) if (!used[i] && capital[i] <= w) { picked = i; break; }
+    if (picked === -1) break;
+    used[picked] = true;
+    w += profits[picked];
+  }
+  return w;
+}
+```
+
+이익이 큰 프로젝트가 대부분 열려 있으면 빨리 끝난다. 그런데 이익이 큰 프로젝트일수록 문턱이 높으면, 매 차례 잠긴 프로젝트를 앞에서부터 다시 건너뛰어야 한다. 최악은 여전히 O(k · n)이고, 같은 1만 개 입력에서 104ms였다. 문턱이 0, 1, 2, ...로 올라가고 이익은 무작위인 입력이다. 정렬을 이익 쪽으로 하면 "열린 것"을 관리할 수 없다. 정렬은 문턱 쪽으로 하고, 이익은 다른 자료구조에 맡겨야 한다.
+
+## 문턱 순으로 열고 최대 힙에서 꺼낸다
+
+두 가지를 나눠 맡긴다.
+
+- 문턱이 작은 순으로 프로젝트를 정렬해 두고, 포인터 j로 "아직 안 열린 첫 프로젝트"를 가리킨다. 자본이 늘 때마다 j를 앞으로 밀며 새로 열린 프로젝트를 꺼낸다. 자본이 줄지 않으니 j는 뒤로 갈 일이 없다.
+- 열린 프로젝트의 이익은 최대 힙에 넣는다. 최대 힙은 가장 큰 값을 O(log n)에 꺼내 준다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  const n = profits.length;
+  const order = [...capital.keys()].sort((a, b) => capital[a] - capital[b]); // 문턱이 낮은 순서
+  const heap = new MaxHeap();                      // 열린 프로젝트의 이익
+  let j = 0;                                       // 아직 안 열린 첫 프로젝트
+  for (let round = 0; round < k; round++) {
+    while (j < n && capital[order[j]] <= w) heap.push(profits[order[j++]]); // 새로 열린 것
+    if (heap.size === 0) break;                    // 할 수 있는 게 없다
+    w += heap.pop();                               // 이익이 가장 큰 것을 한다
+  }
+  return w;
+}
+```
+
+JavaScript에는 기본 힙이 없어서 `MaxHeap`을 직접 썼다. 배열로 만든 이진 힙이다.
+
+```js
+class MaxHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  push(x) {
+    const a = this.a; a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {                                // 부모보다 크면 위로 올린다
+      const p = (i - 1) >> 1;
+      if (a[p] >= a[i]) break;
+      [a[p], a[i]] = [a[i], a[p]]; i = p;
+    }
+  }
+  pop() {
+    const a = this.a; const top = a[0]; const last = a.pop();
+    if (a.length) {
+      a[0] = last; let i = 0;
+      for (;;) {                                   // 자식 중 큰 쪽과 바꾸며 내려간다
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && a[l] > a[m]) m = l;
+        if (r < a.length && a[r] > a[m]) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]]; i = m;
+      }
+    }
+    return top;
+  }
+}
+```
+
+예시에서 차례마다 찍었다. `added`는 그 차례에 새로 열린 프로젝트 번호다.
+
+```text
+round 0 added [0] took 1 w 1 heap [] j 1
+round 1 added [1,2] took 3 w 4 heap [2] j 3
+round 2 added [3,4] took 5 w 9 heap [2,1] j 5
+```
+
+1번 프로젝트(이익 2)는 둘째 차례에 열렸지만 한 번도 뽑히지 않고 힙에 남았다. 힙에 남은 건 버린 게 아니라 "할 수 있지만 더 좋은 게 있어서 미룬" 것이다. 아래 그림에서 다음을 누르면 문턱 순으로 줄 선 프로젝트가 열리고 힙에서 빠지는 과정을 볼 수 있다. 칸은 문턱 순이고 "문턱/이익"으로 적었다.
+
+<AlgoTrace
+  caption="k = 3, w = 0: 열린 프로젝트를 힙에 넣고 가장 큰 이익을 꺼낸다"
+  memoryLabel="자본 | 힙(열린 이익)"
+  cells={["0/1", "1/2", "1/3", "2/1", "4/5", "6/4"]}
+  steps={[
+    { pointer: 0, memory: ["w 0", "힙 [1]"], caption: "자본 0으로는 문턱 0인 첫 프로젝트만 열린다. 이익 1을 힙에 넣는다." },
+    { pointer: 0, found: [0], memory: ["w 1", "힙 []"], caption: "힙에서 1을 꺼내 한다. 자본이 1이 된다." },
+    { pointer: 2, found: [0], memory: ["w 1", "힙 [3, 2]"], caption: "자본 1이면 문턱 1짜리 둘이 열린다. 이익 2와 3을 힙에 넣는다." },
+    { pointer: 2, found: [0, 2], memory: ["w 4", "힙 [2]"], caption: "가장 큰 3을 꺼낸다. 자본이 4가 된다. 이익 2는 힙에 남겨 둔다." },
+    { pointer: 4, found: [0, 2], memory: ["w 4", "힙 [5, 2, 1]"], caption: "자본 4면 문턱 2와 4가 열린다. 이익 1과 5를 넣는다. 문턱 6은 아직 잠겨 있다." },
+    { pointer: 4, found: [0, 2, 4], memory: ["w 9", "힙 [2, 1]"], caption: "5를 꺼내 자본이 9가 된다. 세 번을 다 썼으니 답은 9다." },
+  ]}
+/>
+
+시간은 정렬 O(n log n)에, 프로젝트마다 힙에 한 번 넣는 O(n log n), 차례마다 한 번 꺼내는 O(k log n)을 더해 O((n + k) log n)이다. 공간은 정렬 순서와 힙으로 O(n)이다. 10만 개, k = 10만에서 61ms였다. 이 풀이가 기본 답이다.
+
+이 모양은 "시간이 지나며 후보가 늘어나는데, 후보 중 가장 좋은 걸 계속 꺼내야 한다"는 문제에 그대로 쓰인다. LeetCode 1834번 Single-Threaded CPU는 도착 시간 순으로 작업을 열고 처리 시간이 짧은 작업을 힙에서 꺼낸다. 871번 Minimum Number of Refueling Stops는 지나온 주유소를 힙에 넣어 두고 기름이 모자랄 때 가장 큰 것을 꺼낸다. [Gas Station 글](/posts/leetcode-gas-station#기름을-넣는-횟수를-최소로-하라면)에서도 짧게 다뤘다.
+
+### 문턱도 힙에 넣는 두 힙 풀이
+
+정렬 대신 문턱 기준 최소 힙을 하나 더 두는 풀이도 많이 쓰인다. 처음에 모든 프로젝트를 (문턱, 이익)으로 최소 힙에 넣고, 차례마다 맨 위의 문턱이 자본 이하인 동안 꺼내서 이익을 최대 힙에 옮긴다. 정렬된 배열 대신 힙에서 문턱이 작은 순서로 꺼내는 것뿐이라 복잡도는 같다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  const locked = new PairMinHeap();                // [문턱, 이익]을 문턱이 작은 순으로
+  for (let i = 0; i < profits.length; i++) locked.push([capital[i], profits[i]]);
+  const open = new MaxHeap();                      // 열린 프로젝트의 이익
+  for (let round = 0; round < k; round++) {
+    while (locked.size && locked.peek()[0] <= w) open.push(locked.pop()[1]); // 문턱을 넘은 것을 옮긴다
+    if (open.size === 0) break;
+    w += open.pop();
+  }
+  return w;
+}
+```
+
+`PairMinHeap`은 위의 `MaxHeap`에서 비교를 `a[p][0] <= a[i][0]`처럼 쌍의 첫 값 기준 최소로 바꾼 것이다. 무작위 입력 3만 개로 완전 탐색과 맞춰 봤고 어긋난 입력은 없었다. 10만 개, k = 10만에서 두 힙 풀이가 119ms, 정렬 + 포인터 풀이가 61ms였다. 힙에서 하나씩 꺼내는 비용이 정렬 한 번보다 크다. 언어에 힙만 있고 쌍 정렬이 번거로울 때 이렇게 쓰고, 정렬이 쉬운 언어에서는 정렬 + 포인터가 빠르고 읽기도 쉽다.
+
+## 이미 다 열려 있을 때의 지름길
+
+처음 자본이 모든 문턱 이상이면 문턱은 의미가 없다. 그냥 이익이 가장 큰 k개를 더하면 된다.
+
+```js
+function findMaximizedCapital(k, w, profits, capital) {
+  if (capital.every(c => c <= w)) {                // 모든 프로젝트가 처음부터 열려 있다
+    const sorted = [...profits].sort((a, b) => b - a);
+    for (let i = 0; i < Math.min(k, sorted.length); i++) w += sorted[i];
+    return w;
+  }
+  return heapSolution(k, w, profits, capital);     // 아니면 힙 풀이
+}
+```
+
+문턱이 모두 0이고 n과 k가 10^5인 입력이라면 힙에 10만 개를 넣고 10만 번 꺼내는 대신 정렬 한 번으로 끝난다. 모든 문턱이 0인 10만 개 입력에서 힙 풀이 69ms, 지름길 38ms였다. 상위 k개만 필요하니 정렬 대신 선택 알고리즘(quickselect)을 쓰면 평균 O(n)까지 줄일 수 있다.
+
+같은 생각으로, k가 n 이상이면 k를 n으로 줄여도 된다. 그리고 힙이 비는 순간 멈추는 `break`도 지름길이다. 남은 횟수가 아무리 많아도 할 게 없으면 더 볼 필요가 없다.
+
+다섯 풀이가 무작위 입력 3만 개에서 모두 같은 답을 내는지 맞춰 봤다.
+
+```js
+let bad = 0;
+for (let t = 0; t < 30000; t++) {
+  const n = 1 + Math.floor(Math.random() * 6);     // 프로젝트 1~6개
+  const k = 1 + Math.floor(Math.random() * 4);     // 횟수 1~4
+  const w = Math.floor(Math.random() * 3);         // 처음 자본 0~2
+  const p = Array.from({ length: n }, () => Math.floor(Math.random() * 5)); // 이익 0~4
+  const c = Array.from({ length: n }, () => Math.floor(Math.random() * 6)); // 문턱 0~5
+  const r = [brute, scan, byProfit, heap, heapShortcut].map(f => f(k, w, [...p], [...c]));
+  if (new Set(r).size > 1) bad++;
+}
+console.log("stress bad", bad);
+```
+
+```text
+stress bad 0
+```
+
+문턱 범위를 처음 자본보다 조금 넓게 잡아야 "아직 안 열린 프로젝트"가 자주 생긴다. 모두 열려 있는 입력만 만들면 문턱 처리 버그를 놓친다.
+
+## Python과 Java로 옮긴 힙 풀이
+
+```python
+import heapq
+from typing import List
+
+
+class Solution:
+    def findMaximizedCapital(self, k: int, w: int, profits: List[int], capital: List[int]) -> int:
+        projects = sorted(zip(capital, profits))       # 문턱이 낮은 순서
+        heap = []                                      # 이익을 음수로 넣어 최대 힙처럼 쓴다
+        j = 0
+        for _ in range(k):
+            while j < len(projects) and projects[j][0] <= w:
+                heapq.heappush(heap, -projects[j][1])  # 지금 자본으로 할 수 있게 된 프로젝트
+                j += 1
+            if not heap:                               # 할 수 있는 프로젝트가 없다
+                break
+            w += -heapq.heappop(heap)                  # 가장 이익이 큰 것을 한다
+        return w
+```
+
+```text
+2 0 [1, 2, 3] [0, 1, 1] 4
+3 0 [1, 2, 3] [0, 1, 2] 6
+3 0 [1, 2, 3, 1, 5, 4] [0, 1, 1, 2, 4, 6] 9
+1 0 [1, 2, 3] [1, 1, 2] 0
+10 0 [1, 2, 3] [0, 1, 1] 6
+2 5 [4, 1, 7] [0, 0, 0] 16
+```
+
+Python의 `heapq`는 최소 힙만 있다. 이익을 음수로 넣고 꺼낼 때 다시 부호를 바꾸는 게 흔한 방법이다. 이걸 잊고 양수로 넣으면 이익이 가장 작은 프로젝트부터 하게 된다. `sorted(zip(capital, profits))`는 문턱이 같으면 이익으로도 정렬하는데, 문턱이 같은 것들은 어차피 함께 열리니 결과에 영향이 없다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int findMaximizedCapital(int k, int w, int[] profits, int[] capital) {
+        int n = profits.length;
+        int[][] projects = new int[n][];
+        for (int i = 0; i < n; i++) projects[i] = new int[]{capital[i], profits[i]};
+        Arrays.sort(projects, (a, b) -> Integer.compare(a[0], b[0]));   // 문턱이 낮은 순서
+        PriorityQueue<Integer> heap = new PriorityQueue<>(Collections.reverseOrder()); // 최대 힙
+        int j = 0;
+        for (int round = 0; round < k; round++) {
+            while (j < n && projects[j][0] <= w) heap.offer(projects[j++][1]); // 새로 열린 프로젝트
+            if (heap.isEmpty()) break;                                    // 할 수 있는 게 없다
+            w += heap.poll();                                             // 가장 이익이 큰 것
+        }
+        return w;
+    }
+}
+```
+
+```text
+2 0 [1, 2, 3] [0, 1, 1] 4
+3 0 [1, 2, 3] [0, 1, 2] 6
+3 0 [1, 2, 3, 1, 5, 4] [0, 1, 1, 2, 4, 6] 9
+1 0 [1, 2, 3] [1, 1, 2] 0
+10 0 [1, 2, 3] [0, 1, 1] 6
+2 5 [4, 1, 7] [0, 0, 0] 16
+```
+
+`main`에서 같은 입력을 넣은 결과다. Java의 `PriorityQueue`도 기본은 최소 힙이라 `Collections.reverseOrder()`를 넘긴다. 비교자는 `a[0] - b[0]` 대신 `Integer.compare`를 썼다. 이 문제는 문턱이 0 이상 10^9 이하라 빼기도 넘치지 않지만, 음수가 섞이는 값에서 빼기 비교자는 넘쳐서 순서가 뒤집힌다. 마지막 자본은 최대 약 2 × 10^9라 `int`에 들어간다. 이익 상한이 조금만 커져도 넘치니 그런 변형에서는 `long`을 쓴다.
+
+## 프로젝트를 고르는 방법별 비용
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 순서 | O(n!/(n - k)!) | O(n) | 작은 입력으로 답을 맞춰 볼 때 |
+| 차례마다 전부 훑기 | O(k · n) | O(n) | 그리디 규칙을 그대로 확인할 때 |
+| 이익 순 정렬 + 처음 열린 것 | 최악 O(k · n) | O(n) | 이익 큰 것이 대부분 열려 있을 때 |
+| 문턱 순 정렬 + 최대 힙 | O((n + k) log n) | O(n) | 기본 답 |
+| 모두 열려 있을 때 상위 k개 | O(n log n) | O(n) | 힙 풀이 앞에 붙이는 지름길 |
+
+## 힙을 잘못 다루는 코드
+
+### 문턱을 쓰는 돈으로 읽는다
+
+`w -= capital[i]`를 넣으면 문제를 다르게 푼 것이다. 이 문제에서 이익은 순이익이고 문턱은 필요한 자본일 뿐이다. 예시에서 이렇게 하면 0번(문턱 0)을 하고 자본 1, 2번(문턱 1)을 하고 1 - 1 + 3 = 3이 되어 4번(문턱 4)이 열리지 않는다. 문제를 읽을 때 "자본이 줄어드는가"를 먼저 확인한다.
+
+### 문턱이 가장 낮은 것부터 한다
+
+열린 프로젝트 중 문턱이 가장 낮은 것을 고르는 그리디는 그럴듯하지만 틀린다. 문턱이 같으면 이익이 큰 것을 먼저 고르게 해도 예시에서 0번, 2번, 1번 순으로 해서 1, 4, 6으로 끝난다. 정답 9보다 작다. 셋째 차례에 이익 5짜리 4번이 열려 있었는데 문턱이 더 낮은 1번을 골랐다. 문턱은 "할 수 있나"만 정하고, 고르는 기준은 이익이다.
+
+<AlgoTrace
+  caption="같은 입력에서 문턱이 낮은 것부터 고르면 6에서 끝난다"
+  memoryLabel="자본 | 고른 프로젝트"
+  cells={["0/1", "1/2", "1/3", "2/1", "4/5", "6/4"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["w 1", "0/1"], caption: "문턱 0을 먼저 한다. 여기까지는 같다." },
+    { pointer: 2, found: [0, 2], memory: ["w 4", "0/1, 1/3"], caption: "문턱 1인 둘 중 이익이 큰 1/3을 한다. 자본 4." },
+    { pointer: 1, found: [0, 1, 2], memory: ["w 6", "0/1, 1/3, 1/2"], caption: "4/5가 열려 있는데 문턱이 더 낮은 1/2를 고른다. 자본 6에서 끝나 정답 9에 못 미친다." },
+  ]}
+/>
+
+### 힙이 비었는데 꺼낸다
+
+`if (heap.size === 0) break;`를 빼면, 할 수 있는 프로젝트가 없을 때 직접 만든 힙의 `pop()`이 `undefined`를 돌려준다. `w += undefined`는 `NaN`이다. k = 1, w = 0, 문턱이 모두 1 이상인 입력에서 0 대신 `NaN`이 나왔다. k가 n보다 큰 입력에서도 같은 일이 생긴다. Python의 `heappop`이나 Java의 `poll`은 각각 `IndexError`와 `null`(언박싱하면 `NullPointerException`)로 터진다.
+
+### 차례마다 포인터를 처음으로 되돌린다
+
+```js
+for (let round = 0; round < k; round++) {
+  let j = 0;                                       // 매번 처음부터 다시 연다
+  while (j < n && capital[order[j]] <= w) heap.push(profits[order[j++]]);
+  // ...
+}
+```
+
+j를 반복 안에서 선언하면 이미 힙에 넣었거나 이미 한 프로젝트를 다시 넣는다. 같은 프로젝트를 두 번 하게 된다. k = 2, w = 0, 이익 `[5, 1]`, 문턱 `[0, 10]`에서 0번을 두 번 해 10이 나왔다. 정답은 5다. j가 반복 밖에 있어야 "한 번 열린 프로젝트는 한 번만 넣는다"가 지켜진다.
+
+### 이익을 정렬할 때 비교자를 빼먹는다
+
+이익 순 정렬 풀이에서 `order.sort()`처럼 비교자 없이 정렬하면 JavaScript는 번호를 문자열로 비교한다. 이익 순서와 상관없는 순서가 나와서 "처음 열린 것"이 가장 큰 이익이 아니게 된다. 숫자 정렬에는 언제나 `(a, b) => ...` 비교자를 준다.
+
+## 프로젝트를 직접 골라 보는 칸
+
+빈 함수를 채우고 실행해 본다. 풀이 보기는 문턱 순 정렬과 최대 힙 풀이다. 힙은 함수 안에 함께 넣었다.
+
+<CodePlayground
+  caption="IPO"
+  functionName="findMaximizedCapital"
+  initialCode={`function findMaximizedCapital(k, w, profits, capital) {
+  // 최대 k개 프로젝트를 해서 마지막 자본의 최댓값을 구한다
+  return w;
+}`}
+  solution={`function findMaximizedCapital(k, w, profits, capital) {
+  const heap = [];
+  const push = (x) => {
+    heap.push(x);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p] >= heap[i]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l] > heap[m]) m = l;
+        if (r < heap.length && heap[r] > heap[m]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i], heap[m]];
+        i = m;
+      }
+    }
+    return top;
+  };
+  const n = profits.length;
+  const order = [...capital.keys()].sort((a, b) => capital[a] - capital[b]);
+  let j = 0;
+  for (let round = 0; round < k; round++) {
+    while (j < n && capital[order[j]] <= w) push(profits[order[j++]]);
+    if (heap.length === 0) break;
+    w += pop();
+  }
+  return w;
+}`}
+  tests={[
+    { args: [2, 0, [1, 2, 3], [0, 1, 1]], expected: 4, label: "두 번 고른다" },
+    { args: [3, 0, [1, 2, 3], [0, 1, 2]], expected: 6, label: "하나씩 열린다" },
+    { args: [3, 0, [1, 2, 3, 1, 5, 4], [0, 1, 1, 2, 4, 6]], expected: 9, label: "이익이 큰 것을 골라야 4/5가 열린다" },
+    { args: [1, 0, [1, 2, 3], [1, 1, 2]], expected: 0, label: "할 수 있는 게 없다" },
+    { args: [10, 0, [1, 2, 3], [0, 1, 1]], expected: 6, label: "k가 프로젝트 수보다 크다" },
+    { args: [2, 5, [4, 1, 7], [0, 0, 0]], expected: 16, label: "처음부터 모두 열려 있다" },
+    { args: [2, 0, [5, 1], [0, 10]], expected: 5, label: "같은 프로젝트를 두 번 하지 않는다" },
+  ]}
+/>
+
+## 조건이 바뀌면 달라지는 것
+
+### 이익이 음수일 수 있다면
+
+이익이 음수인 프로젝트는 자본을 줄이기만 하고, 자본이 줄면 열리는 프로젝트도 줄어든다. 그러니 할 이유가 없다. 힙에서 꺼낸 값이 0 이하이면 멈추면 된다. 바꿔치기 증명에서 "할 수 있으면 항상 한다"가 이 경우만 "이익이 양수일 때만 한다"로 바뀐다.
+
+### 문턱만큼 돈을 써야 한다면
+
+자본에서 문턱을 빼고 수익을 더하는 문제라면, 순이익은 수익 - 비용이고 문턱도 비용 그 자체다. 이익이 큰 것을 고르는 그리디는 여전히 맞지 않을 수 있다. 비용이 큰 프로젝트를 먼저 하면 자본이 일시적으로 줄어 다른 프로젝트가 막힐 수 있어서, 순이익이 같아도 순서가 결과를 바꾼다. 이 경우는 작은 입력에서 완전 탐색으로 그리디와 맞춰 보고 반례를 찾는 것부터 시작한다. LeetCode 630번 Course Schedule III처럼 시간을 쓰는 문제는 마감 순 정렬과 최대 힙으로 "이미 고른 것 중 가장 비싼 것을 빼는" 다른 그리디가 쓰인다.
+
+### 어떤 프로젝트를 했는지 돌려 달라면
+
+힙에 이익만 넣지 말고 (이익, 번호)를 넣으면 꺼낼 때 번호를 얻는다. 차례마다 꺼낸 번호를 모으면 순서까지 나온다. 복잡도는 같다.
+
+### 프로젝트가 계속 새로 들어온다면
+
+문턱 순 정렬 대신 새 프로젝트를 문턱 기준 최소 힙에 넣는 두 힙 풀이가 맞다. 정렬된 배열은 중간에 끼워 넣기가 O(n)이지만, 힙은 O(log n)이다. 자본이 늘 때마다 문턱 힙에서 꺼내 이익 힙으로 옮기는 흐름은 그대로다.
+
+같은 그리디 묶음의 다른 문제로는 [Hand of Straights](/posts/leetcode-hand-of-straights), [Merge Triplets to Form Target Triplet](/posts/leetcode-merge-triplets-to-form-target-triplet), [Valid Parenthesis String](/posts/leetcode-valid-parenthesis-string), [Candy](/posts/leetcode-candy)가 있다. 힙에서 가장 좋은 것을 계속 꺼내는 모양은 [Task Scheduler](/posts/leetcode-task-scheduler)와 [Meeting Rooms II](/posts/leetcode-meeting-rooms-ii)에서도 나온다.
+
+## 면접에서 나올 만한 질문
+
+### 지금 할 수 있는 것 중 이익이 가장 큰 걸 고르는 게 왜 최선인가요?
+
+자본은 줄지 않고 늘기만 해서, 지금 자본을 크게 늘리면 다음에 할 수 있는 프로젝트 집합이 같거나 커진다. 최적의 순서가 그리디와 처음 달라지는 곳에서 그리디의 선택과 바꿔치기해도 이후 모든 순간의 자본이 같거나 많아서 손해가 없다. 그래서 그리디의 순서도 최적이다.
+
+### 왜 문턱으로 정렬하고 이익은 힙에 넣나요?
+
+열리는 순서는 문턱이 정하고, 고르는 기준은 이익이기 때문이다. 자본이 줄지 않으니 문턱 순으로 정렬해 두면 포인터 하나로 새로 열린 것만 꺼낼 수 있다. 열린 것 중 가장 큰 이익은 계속 바뀌는 집합에서 최댓값을 꺼내야 해서 최대 힙이 맞다.
+
+### 시간 복잡도는 얼마인가요?
+
+정렬 O(n log n), 프로젝트마다 힙에 한 번 넣는 O(n log n), 차례마다 한 번 꺼내는 O(k log n)이라 O((n + k) log n)이다. 힙이 비면 멈추니 실제로 꺼내는 횟수는 min(k, n) 이하다. 공간은 O(n)이다.
+
+### 힙에 남은 프로젝트는 버리는 건가요?
+
+아니다. 할 수는 있지만 더 좋은 게 있어서 미룬 것이다. 다음 차례에 새로 열린 것들과 함께 다시 경쟁한다. 그래서 힙은 차례마다 비우지 않고 계속 쌓아 간다.
+
+### 문턱이 모두 0이면 어떻게 하나요?
+
+문턱이 의미가 없으니 이익이 큰 k개를 더하면 된다. 정렬 한 번이면 끝나고, 선택 알고리즘을 쓰면 평균 O(n)이다. 힙 풀이 앞에 이 검사를 붙이면 문턱이 모두 0인 큰 테스트에서 시간이 줄어든다.
+
+### Java로 옮길 때 주의할 점은?
+
+`PriorityQueue`는 기본이 최소 힙이라 `Collections.reverseOrder()`를 넘겨야 한다. 마지막 자본은 최대 약 2 × 10^9라 `int`에 겨우 들어가니 범위가 커지는 변형이면 `long`을 쓴다. 쌍을 정렬하는 비교자는 빼기 대신 `Integer.compare`로 쓰는 습관이 안전하다.
+
+### 이익이 음수인 프로젝트가 있으면 무엇이 바뀌나요?
+
+음수 이익은 자본을 줄이기만 하고 새로 열어 주는 것이 없으니 하지 않는다. 힙에서 꺼낸 최댓값이 0 이하이면 멈춘다. 나머지 흐름은 그대로다.

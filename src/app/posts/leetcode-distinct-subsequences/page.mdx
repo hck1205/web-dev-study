@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-distinct-subsequences");
+
+<EasyIntro>
+  글자 카드 a, b, a, b, c, c가 한 줄로 놓여 있다. 이 줄에서 카드를 몇 장 골라 순서를 바꾸지 않고 읽었을 때 abc가 되는 방법이 몇 가지인지 센다. 같은 글자가 여러 장이라 고르는 방법이 여러 가지다. 첫 번째 a와 두 번째 b와 마지막 c를 골라도 abc이고, 다른 카드를 골라도 abc일 수 있다. 하나하나 다 골라 보면 너무 오래 걸리니, 카드를 왼쪽부터 한 장씩 보면서 "지금까지 a를 만드는 방법", "ab를 만드는 방법", "abc를 만드는 방법"이 몇 가지인지 공책에 적어 둔다. 새 카드가 b라면 지금까지의 a 하나하나 뒤에 이 b를 붙일 수 있으니, ab의 개수에 a의 개수를 더한다. 마지막 카드까지 보고 나면 abc 칸에 적힌 6이 답이다.
+</EasyIntro>
+
+유전체 분석에서는 긴 DNA 서열 안에 짧은 패턴이 띄엄띄엄 몇 번이나 들어 있는지 세는 일이 있다. 연속해서 붙어 있을 필요는 없고, 순서만 지키면 된다. [LeetCode 115. Distinct Subsequences](https://leetcode.com/problems/distinct-subsequences/)가 바로 그 계산이다. 문자열 `s`에서 글자를 골라 `t`를 만드는 방법의 수를 센다.
+
+[Longest Common Subsequence](/posts/leetcode-longest-common-subsequence)가 "가장 긴 공통 부분 수열의 길이"를 물었다면 이 문제는 "`t` 전체가 `s`의 부분 수열로 몇 번 나타나나"를 묻는다. 표의 칸 뜻은 비슷한데 연산이 max에서 덧셈으로 바뀌고, 표를 한 줄로 줄일 때 도는 방향이 답을 가른다. 이 글에서는 모든 부분 수열을 만들어 보는 방법에서 시작해 두 갈래 재귀, 메모이제이션, 2차원 표, 배열 한 줄, 글자별 위치 목록으로 건너뛰는 풀이까지 여섯 가지를 본다. 코드는 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 순서를 지키며 골라 t를 만드는 방법 수
+
+문자열 `s`와 `t`가 주어진다. `s`의 부분 수열 가운데 `t`와 같은 것의 개수를 돌려준다. 부분 수열은 글자 몇 개를 지우고 남은 글자를 순서 그대로 읽은 것이다. 지운 위치가 다르면 같은 문자열이 나와도 다른 부분 수열로 센다. "ababcc"에서 0, 1, 4번 글자를 남긴 abc와 0, 1, 5번 글자를 남긴 abc는 서로 다른 하나씩이다.
+
+제약은 두 문자열 길이 1000 이하, 영문자다. 답은 32비트 부호 있는 정수에 들어가도록 테스트를 만들었다고 밝혀 둔다. 칸이 100만 개 남짓이라 O(mn)이면 충분하다. 다만 중간 칸은 답보다 훨씬 커질 수 있다. 이 이야기는 뒤에서 언어별로 다룬다.
+
+`t`가 `s`보다 길면 답은 0이다. `t`가 빈 문자열이면 아무것도 고르지 않는 한 가지라 답은 1이다. 이 두 바닥이 점화식의 시작점이 된다.
+
+## ababcc에서 abc를 여섯 번 찾는다
+
+예시는 `s = "ababcc"`, `t = "abc"`다. `s`의 위치를 0부터 매기면 a는 0, 2번, b는 1, 3번, c는 4, 5번에 있다. abc가 되려면 a, b, c를 왼쪽에서 오른쪽 순서로 하나씩 골라야 한다.
+
+```text
+위치    0 1 2 3 4 5
+s       a b a b c c
+
+a0 b1 c4    a0 b1 c5
+a0 b3 c4    a0 b3 c5
+a2 b3 c4    a2 b3 c5
+```
+
+a2 다음에는 b1을 쓸 수 없다. 순서가 거꾸로이기 때문이다. 그래서 a0은 b를 둘 다 쓸 수 있고 a2는 b3만 쓸 수 있다. a와 b를 고르는 방법이 3가지, c는 늘 2가지라 3 × 2 = 6이다.
+
+이 셈에는 "어떤 b를 고르면 그 앞의 a 개수만큼 갈래가 생긴다"는 구조가 숨어 있다. 뒤에서 배열 한 줄 풀이가 하는 일이 정확히 이것이다.
+
+## 부분 수열을 전부 만들어 대조한다
+
+가장 단순한 방법은 `s`의 부분 수열을 모두 만들어 `t`와 같은지 보는 것이다. 글자마다 남길지 지울지 정하니 2^m가지다. 길이가 `t`와 같은 것만 비교하면 조금 줄지만 여전히 지수다.
+
+```js
+function numDistinct(s, t) {
+  const m = s.length;
+  let count = 0;
+  for (let mask = 0; mask < (1 << m); mask++) {   // 비트 i가 1이면 s[i]를 남긴다
+    let sub = "";
+    for (let i = 0; i < m; i++) if (mask & (1 << i)) sub += s[i];
+    if (sub === t) count++;
+  }
+  return count;
+}
+```
+
+비트 마스크(정수의 각 비트를 "남긴다/지운다" 표시로 쓰는 기법)는 [Subsets](/posts/leetcode-subsets)에서 본 것과 같다. m이 30을 넘으면 `1 << m`이 32비트 범위를 넘어 JavaScript에서 깨지고, 그 전에 2^30번 반복이라 시간도 안 된다. m = 1000은 상상할 수 없다. 이 풀이는 손으로 센 6이 맞는지 확인하는 데만 쓴다.
+
+## 짝짓거나 건너뛰는 재귀
+
+부분 수열을 다 만들 필요 없이 `t`를 앞에서부터 맞춰 간다. `go(i, j)`를 "`s`의 i번째부터 써서 `t`의 j번째부터를 만드는 방법 수"로 둔다. `s[i]`를 볼 때 할 수 있는 일은 둘이다.
+
+- `s[i]`를 건너뛴다. 언제든 할 수 있다. `go(i + 1, j)`.
+- `s[i]`가 `t[j]`와 같으면 둘을 짝짓는다. `go(i + 1, j + 1)`.
+
+두 갈래는 "`s[i]`를 썼나 안 썼나"로 갈리니 겹치지 않는다. 그래서 그냥 더한다.
+
+```js
+function numDistinct(s, t) {
+  function go(i, j) {
+    if (j === t.length) return 1;                  // t를 다 맞췄다: 한 가지
+    if (i === s.length) return 0;                  // s가 먼저 끝났다
+    let ways = go(i + 1, j);                       // s[i]를 건너뛴다
+    if (s[i] === t[j]) ways += go(i + 1, j + 1);   // s[i]를 t[j]에 짝짓는다
+    return ways;
+  }
+  return go(0, 0);
+}
+console.log(numDistinct("ababcc", "abc")); // 6
+```
+
+바닥 두 줄의 순서가 중요하다. `j === t.length`를 먼저 봐야 `s`와 `t`가 동시에 끝났을 때 1이 나온다. 순서를 바꾸면 `numDistinct("abc", "abc")`가 0이 된다.
+
+같은 글자가 많을수록 갈래가 많아진다. a 2k개 뒤에 x가 붙은 `s`에서 a k개 뒤에 y가 붙은 `t`를 찾게 해 봤다. 답은 0인데, a를 짝짓는 모든 방법을 다 걸어 본 뒤에야 y를 못 찾는다는 걸 안다.
+
+```text
+a 16개, a 8개    호출 129,048번        3 ms
+a 20개, a 10개   호출 2,017,957번      27 ms
+a 24개, a 12개   호출 31,718,201번     449 ms
+```
+
+글자가 4개씩 늘 때마다 15배쯤이다. 길이 1000은 끝나지 않는다.
+
+## 같은 (i, j)는 한 번만 센다
+
+`go(i, j)`의 답은 i와 j에만 달려 있다. a0 b1을 고르고 왔든 a2 b3을 고르고 왔든, 4번 위치부터 c를 찾는 상황은 같은 `go(4, 2)`다. 메모 표를 붙인다. 하나 더, 남은 `s`가 남은 `t`보다 짧으면 바로 0을 돌려줘 쓸데없는 칸을 줄인다.
+
+```js
+function numDistinct(s, t) {
+  const m = s.length, n = t.length;
+  const memo = Array.from({ length: m }, () => new Array(n).fill(-1)); // -1 = 아직 모름
+  function go(i, j) {
+    if (j === n) return 1;
+    if (m - i < n - j) return 0;                   // 남은 글자가 모자란다
+    if (memo[i][j] !== -1) return memo[i][j];
+    let ways = go(i + 1, j);
+    if (s[i] === t[j]) ways += go(i + 1, j + 1);
+    return (memo[i][j] = ways);
+  }
+  return go(0, 0);
+}
+```
+
+방법 수 0은 아주 흔한 답이라 "모름" 표시는 0이 아니라 -1이다. 시간 O(mn), 공간 O(mn)이다.
+
+재귀 깊이가 m까지 간다. Python으로 옮기면 바로 걸린다. `s`가 a 1000개, `t`가 a 하나일 때 `functools.lru_cache`로 짠 재귀는 기본 한도 1000에서 `RecursionError`를 냈다. 한도를 올리면 돈다.
+
+```python
+import sys
+from functools import lru_cache
+
+class Solution:
+    def numDistinct(self, s: str, t: str) -> int:
+        m, n = len(s), len(t)
+        sys.setrecursionlimit(max(1000, 2 * m + 100))   # 깊이가 m까지 간다
+
+        @lru_cache(maxsize=None)
+        def go(i: int, j: int) -> int:
+            if j == n:
+                return 1
+            if m - i < n - j:                            # 남은 글자가 모자란다
+                return 0
+            ways = go(i + 1, j)
+            if s[i] == t[j]:
+                ways += go(i + 1, j + 1)
+            return ways
+
+        return go(0, 0)
+```
+
+한도는 m보다 넉넉하게 잡는다. 실행 환경의 다른 호출도 같은 한도를 나눠 쓰기 때문이다. 이렇게 고치면 a 1000개에서 a 둘을 고르는 499,500가지도 바로 나온다. 그래도 재귀 프레임은 무겁고 한도를 올리는 건 코딩 테스트 환경마다 막힐 수 있어서, 아래의 표 풀이가 더 안전하다.
+
+## 위 칸과 왼쪽 위 칸을 더한다
+
+아래에서 위로 쌓는다. `dp[i][j]`를 "`s`의 앞 i글자에서 `t`의 앞 j글자를 만드는 방법 수"로 둔다. `s`의 i번째 글자 `s[i-1]`을 쓰느냐 안 쓰느냐로 나눈다.
+
+<ConceptDiagram
+  caption="칸 하나는 두 칸에서 온다. 글자가 같을 때만 대각선이 열린다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "dg", label: "dp[i-1][j-1]", sub: "왼쪽 위", x: 100, y: 50, w: 130 },
+    { id: "up", label: "dp[i-1][j]", sub: "위", x: 300, y: 50, w: 130 },
+    { id: "me", label: "dp[i][j]", sub: "지금 칸", x: 300, y: 180, w: 130 },
+  ]}
+  edges={[
+    { from: "up", to: "me", label: "s[i-1]을 안 쓴다" },
+    { from: "dg", to: "me", label: "같으면 짝짓는다", dashed: true },
+  ]}
+/>
+
+```text
+dp[i][j] = dp[i-1][j]                         s[i-1]을 안 쓴다
+         + (s[i-1] == t[j-1] ? dp[i-1][j-1] : 0)   s[i-1]을 t[j-1]에 짝짓는다
+```
+
+Edit Distance나 LCS와 달리 왼쪽 칸 `dp[i][j-1]`은 보지 않는다. `t`의 글자는 하나도 빠짐없이 맞춰야 해서 "`t`의 글자를 건너뛴다"는 선택이 없기 때문이다. 건너뛸 수 있는 건 `s`의 글자뿐이다.
+
+바닥은 `dp[i][0] = 1`(빈 `t`는 어떤 `s`에서도 한 가지)이고, `dp[0][j] = 0`(j가 1 이상이면 빈 `s`로는 못 만든다)이다.
+
+```js
+function numDistinct(s, t) {
+  const m = s.length, n = t.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = 1;         // 빈 t는 한 가지
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = dp[i - 1][j];                       // s[i-1]을 안 쓴다
+      if (s[i - 1] === t[j - 1]) dp[i][j] += dp[i - 1][j - 1]; // 짝짓는다
+    }
+  return dp[m][n];
+}
+```
+
+예시의 표는 이렇다. 줄은 `s`의 앞 i글자, 열은 `t`의 앞 j글자다.
+
+```text
+          ε  a  b  c
+ε         1  0  0  0
+a         1  1  0  0
+b         1  1  1  0
+a         1  2  1  0
+b         1  2  3  0
+c         1  2  3  3
+c         1  2  3  6
+```
+
+세 번째 줄(aba)의 a 칸 2는 a를 만드는 방법이 a0, a2 두 가지라는 뜻이다. 네 번째 줄(abab)의 ab 칸 3은 위 칸 1(b3를 안 쓴다: a0 b1)에 왼쪽 위 2(b3를 쓴다: a0 b3, a2 b3)를 더한 값이다. 마지막 줄의 abc 칸 6은 위 칸 3에 왼쪽 위 3을 더했다. 마지막 c를 쓰지 않는 3가지와 쓰는 3가지다.
+
+`dp[i][0] = 1`을 0번 줄에만 넣고 나머지 줄을 0으로 두면 틀린다. 예시에서 6 대신 4가 나온다. "빈 `t`를 만드는 방법은 한 가지"가 모든 줄에서 성립해야 대각선으로 올라오는 값이 바르다.
+
+시간 O(mn), 공간 O(mn)이다.
+
+## 한 줄로 줄일 때는 오른쪽부터
+
+칸이 위와 왼쪽 위만 보니 배열 한 줄로 줄인다. `s`의 글자를 하나씩 읽으며 `dp[j]`("`t`의 앞 j글자를 만드는 방법 수")를 갱신한다. 이때 j를 오른쪽에서 왼쪽으로 돈다. `dp[j]`를 갱신할 때 필요한 `dp[j-1]`이 아직 윗줄 값(이번 글자를 쓰기 전)이어야 하기 때문이다.
+
+```js
+function numDistinct(s, t) {
+  const n = t.length;
+  const dp = new Array(n + 1).fill(0);
+  dp[0] = 1;                                    // 빈 t는 한 가지
+  for (const c of s)                            // s의 글자를 하나씩 들인다
+    for (let j = n; j >= 1; j--)                // 오른쪽부터: dp[j-1]이 아직 이전 값
+      if (c === t[j - 1]) dp[j] += dp[j - 1];   // 이 글자를 t[j-1]로 쓴다
+  return dp[n];
+}
+```
+
+`dp[0] = 1`은 한 번만 넣으면 된다. 반복문이 j = 1까지만 돌아 0번 칸은 바뀌지 않으니, 2차원 표의 "모든 줄의 0번 칸이 1"이 저절로 지켜진다.
+
+아래 그림에서 다음을 누르면 `s`의 글자를 하나씩 들일 때마다 배열이 어떻게 바뀌는지 볼 수 있다. 칸은 `t`의 앞부분 ε, a, ab, abc다.
+
+<AlgoTrace
+  caption="s = ababcc, t = abc. 글자가 들어올 때마다 그 글자로 끝나는 칸만 앞 칸 값을 더한다"
+  memoryLabel="dp (ε, a, ab, abc를 만드는 방법 수)"
+  cells={["ε", "a", "ab", "abc"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1", "0", "0", "0"], caption: "시작. 빈 문자열을 만드는 방법만 하나다." },
+    { pointer: 1, found: [0, 1], memory: ["1", "1", "0", "0"], caption: "a0이 들어온다. a 칸에 ε 칸 1을 더한다." },
+    { pointer: 2, found: [1, 2], memory: ["1", "1", "1", "0"], caption: "b1이 들어온다. ab 칸에 a 칸 1을 더한다. a0 b1이다." },
+    { pointer: 1, found: [0, 1], memory: ["1", "2", "1", "0"], caption: "a2가 들어온다. a 칸이 2가 된다. a0과 a2다." },
+    { pointer: 2, found: [1, 2], memory: ["1", "2", "3", "0"], caption: "b3이 들어온다. ab 칸에 a 칸 2를 더해 3이다. 두 a 모두 b3과 짝지을 수 있다." },
+    { pointer: 3, found: [2, 3], memory: ["1", "2", "3", "3"], caption: "c4가 들어온다. abc 칸에 ab 칸 3을 더한다." },
+    { pointer: 3, found: [2, 3], memory: ["1", "2", "3", "6"], caption: "c5가 들어온다. 다시 3을 더해 6이다. 답은 6이다." },
+  ]}
+/>
+
+왼쪽부터 돌면 어떻게 될까. 이번 예시처럼 `t`에 같은 글자가 없으면 한 글자가 칸 하나만 바꾸니 차이가 없다. 그런데 `t`에 같은 글자가 있으면 문제가 된다. `s = "aaaa"`, `t = "aa"`에서 왼쪽부터 돌면 a 하나가 들어올 때 a 칸을 먼저 늘리고, 그 늘어난 값으로 aa 칸을 또 늘린다. 같은 글자 하나를 `t`의 두 자리에 동시에 쓴 셈이라 6 대신 10이 나온다. 이번 예시로는 버그가 안 드러난다는 게 무서운 점이다.
+
+시간 O(mn), 공간 O(n)이다. 이 문제의 정석 답이다.
+
+## t에 있는 글자 자리만 건너다닌다
+
+한 줄 풀이를 보면 글자 c가 들어올 때 실제로 바뀌는 칸은 `t`에서 c가 있는 자리뿐이다. `t`가 길고 글자가 다양하면 n칸을 다 훑는 건 낭비다. 글자마다 `t` 안의 위치를 큰 것부터 목록으로 만들어 두고, 그 자리만 갱신한다.
+
+```js
+function numDistinct(s, t) {
+  const n = t.length;
+  const pos = new Map();                       // 글자 → t에서의 위치들 (큰 것부터)
+  for (let j = n - 1; j >= 0; j--) {
+    if (!pos.has(t[j])) pos.set(t[j], []);
+    pos.get(t[j]).push(j);
+  }
+  const dp = new Array(n + 1).fill(0);
+  dp[0] = 1;
+  for (const c of s) {
+    const list = pos.get(c);
+    if (!list) continue;                       // t에 없는 글자는 볼 필요가 없다
+    for (const j of list) dp[j + 1] += dp[j];  // 큰 위치부터: 오른쪽부터 도는 것과 같다
+  }
+  return dp[n];
+}
+```
+
+위치를 큰 것부터 넣어 둔 것이 한 줄 풀이의 "오른쪽부터"와 같은 역할을 한다. 시간은 O(n + Σ(`s`의 각 글자가 `t`에 나오는 횟수))다. 최악(모든 글자가 같다)은 여전히 O(mn)이지만, 소문자 26자가 고루 섞인 길이 1000과 300짜리 문자열에서 한 줄 풀이가 2.0 ms, 이 풀이가 0.12 ms였다(열 번 돌려 가장 빠른 값). 알파벳이 큰 경우(DNA의 4글자보다 단백질의 20글자, 아니면 유니코드)일수록 차이가 커진다.
+
+## 세 언어로 쓴 한 줄 풀이
+
+```python
+class Solution:
+    def numDistinct(self, s: str, t: str) -> int:
+        n = len(t)
+        dp = [0] * (n + 1)
+        dp[0] = 1                              # 빈 t는 한 가지로 만든다
+        for c in s:
+            for j in range(n, 0, -1):          # 오른쪽부터: dp[j-1]이 아직 윗줄 값
+                if c == t[j - 1]:
+                    dp[j] += dp[j - 1]
+        return dp[n]
+```
+
+```java
+class Solution {
+    public int numDistinct(String s, String t) {
+        int n = t.length();
+        int[] dp = new int[n + 1];             // 중간 칸은 넘칠 수 있지만 답 칸은 맞는다
+        dp[0] = 1;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            for (int j = n; j >= 1; j--)
+                if (c == t.charAt(j - 1)) dp[j] += dp[j - 1];
+        }
+        return dp[n];
+    }
+}
+```
+
+세 언어 모두 예시에서 6, `("aaaa", "aa")`에서 6, `("banana", "ban")`에서 3, `("abc", "")`에서 1, `("", "a")`에서 0을 냈다.
+
+중간 칸의 크기는 꼭 짚어야 한다. a 40개 뒤에 c가 붙은 `s`에서 a 20개 뒤에 b가 붙은 `t`를 찾으면 답은 0이다. 그런데 계산 도중 "a 20개를 만드는 방법" 칸은 C(40, 20) = 137,846,528,820으로 32비트를 훌쩍 넘는다. Java `int`로 계산하면 이 칸이 407,575,348로 감기지만 답 칸 0은 그대로 맞는다.
+
+- Java `int`는 넘치면 2^32로 나눈 나머지로 감긴다. 덧셈만 하니 답 칸도 "진짜 답의 나머지"가 되고, 진짜 답이 32비트 안이면 같다.
+- Python은 정수 크기에 한계가 없어 큰 칸도 정확히 계산한다. 대신 큰 정수 덧셈이라 조금 느려진다.
+- JavaScript는 2^53을 넘는 칸에서 정밀도를 잃지만, 답 칸에 더해지는 칸은 모두 답보다 작거나 같다(0 이상인 값의 합이므로). 큰 칸은 답에 쓰이지 않는다.
+- C++은 부호 있는 정수의 넘침이 정의되지 않은 동작이라 많은 풀이가 `unsigned long long`이나 `double`을 쓴다.
+
+같은 논리는 [Coin Change II](/posts/leetcode-coin-change-ii#세-언어로-쓴-1차원-풀이)에서도 나왔다. 경우의 수를 덧셈으로만 쌓는 DP는 대개 이렇다.
+
+## 여섯 풀이를 칸 수로 재면
+
+길이 10 이하 `s`와 3 이하 `t`(글자 a, b, c) 4000쌍에서 여섯 풀이의 답이 모두 같았다. 시간은 소문자 26자로 무작위로 만든 길이 1000의 `s`와 300의 `t`로, 열 번 돌린 중 가장 빠른 값이다.
+
+| 풀이 | 시간 | 공간 | 잰 시간 | 언제 고르나 |
+|---|---|---|---|---|
+| 부분 수열 전부 만들기 | O(2^m · m) | O(m) | 불가능 | 손으로 센 값 확인 |
+| 두 갈래 재귀 | 지수 | O(m) | 불가능 | 점화식을 세울 때 |
+| 메모이제이션 | O(mn) | O(mn) | 1.6 ms | 재귀가 편할 때. Python은 깊이 주의 |
+| 2차원 표 | O(mn) | O(mn) | 4.5 ms | 어떤 위치를 골랐는지 되짚을 때 |
+| 배열 한 줄 | O(mn) | O(n) | 2.0 ms | 기본 답 |
+| 글자별 위치 목록 | O(n + 짝 수) | O(n) | 0.12 ms | 글자 종류가 많을 때 |
+
+메모이제이션이 표보다 빠른 건 실제로 닿는 칸만 계산하기 때문이다. 무작위 문자열에서는 글자가 맞는 일이 드물어 j가 잘 늘지 않는다. 이 입력에서 `go`는 15,529번만 불렸고, 표는 30만 칸을 다 채웠다. 반대로 같은 글자가 많은 입력이면 메모도 거의 모든 칸을 보게 되고 재귀 비용 때문에 표보다 느려진다.
+
+## 개수를 쌓다가 틀리는 자리
+
+### 한 줄 풀이를 왼쪽부터 돈다
+
+가장 흔하고 가장 위험하다. `t`에 같은 글자가 없으면 결과가 같아서 예시로는 안 잡힌다. `("aaaa", "aa")`에서 6 대신 10, `("aabb", "ab")`는 글자가 달라 4로 같게 나온다. 테스트에 반복 글자가 있는 `t`를 꼭 넣는다.
+
+### 0번 열을 0번 줄에만 채운다
+
+`dp[0][0] = 1`만 두고 `dp[i][0]`을 0으로 두면 "앞의 i글자에서 빈 `t`를 만드는 방법"이 0이 되어 대각선으로 올라가는 값이 끊긴다. 예시에서 4, `("aaaa", "aa")`에서 3이 나온다. 한 줄 풀이에서는 `dp[0]`을 건드리지 않으면 되니 이 실수가 생기지 않는다.
+
+### 바닥 조건의 순서를 바꾼다
+
+재귀에서 `i === s.length`를 먼저 보면 `s`와 `t`가 같이 끝난 경우를 0으로 센다. `("abc", "abc")`가 1이 아니라 0이 된다. `t`가 끝났는지를 먼저 본다.
+
+### s와 t의 역할을 바꾼다
+
+이 문제는 "`s`의 부분 수열 중 `t`"다. `numDistinct(t, s)`처럼 거꾸로 부르면 짧은 쪽에서 긴 쪽을 찾게 되어 대부분 0이 나온다. 면접에서 문제를 다시 말할 때 "긴 쪽에서 글자를 지워 짧은 쪽을 만든다"고 한 번 짚어 두면 실수가 준다.
+
+### 연속 부분 문자열로 착각한다
+
+"ababcc"에 "abc"가 연속으로 들어 있는 건 2~4번 한 번뿐이다. 부분 수열은 띄엄띄엄 골라도 되니 6이다. `indexOf`로 세는 코드가 머릿속에 먼저 떠오른다면 문제를 다시 읽는다.
+
+## 부분 수열 개수를 직접 세어 보기
+
+아래 칸에서 `numDistinct`를 채워 실행해 보자. 반복 글자가 있는 `t`, 빈 `t`, `s`가 더 짧은 경우가 테스트에 있다.
+
+<CodePlayground
+  caption="Distinct Subsequences"
+  functionName="numDistinct"
+  initialCode={`function numDistinct(s, t) {
+  // s의 부분 수열 중 t와 같은 것의 개수
+  return 0;
+}`}
+  solution={`function numDistinct(s, t) {
+  const n = t.length;
+  const dp = new Array(n + 1).fill(0);
+  dp[0] = 1; // 빈 t는 한 가지
+  for (const c of s) {
+    for (let j = n; j >= 1; j--) {
+      if (c === t[j - 1]) dp[j] += dp[j - 1];
+    }
+  }
+  return dp[n];
+}`}
+  tests={[
+    { args: ["ababcc", "abc"], expected: 6, label: "ababcc에서 abc" },
+    { args: ["aaaa", "aa"], expected: 6, label: "t에 같은 글자 (왼쪽부터 돌면 10)" },
+    { args: ["abc", ""], expected: 1, label: "빈 t" },
+    { args: ["", "a"], expected: 0, label: "빈 s" },
+    { args: ["ab", "abc"], expected: 0, label: "s가 더 짧다" },
+    { args: ["banana", "ban"], expected: 3, label: "banana에서 ban" },
+    { args: ["subsequence", "sue"], expected: 7, label: "subsequence에서 sue" },
+  ]}
+/>
+
+## 부분 수열 문제를 비틀면
+
+### 고른 위치를 모두 보여 달라면
+
+재귀의 두 갈래를 백트래킹으로 바꿔 짝지은 위치를 모은다. 남은 글자가 모자라면 바로 돌아오게 하면 헛걸음이 준다.
+
+```js
+function listPositions(s, t) {
+  const out = [], cur = [];
+  (function go(i, j) {
+    if (j === t.length) { out.push(cur.join(",")); return; } // t를 다 맞췄다
+    if (s.length - i < t.length - j) return;                 // 남은 글자가 모자란다
+    if (s[i] === t[j]) { cur.push(i); go(i + 1, j + 1); cur.pop(); } // 짝짓는다
+    go(i + 1, j);                                            // 건너뛴다
+  })(0, 0);
+  return out;
+}
+console.log(listPositions("ababcc", "abc").join(" "));
+```
+
+```text
+0,1,4 0,1,5 0,3,4 0,3,5 2,3,4 2,3,5
+```
+
+손으로 센 표와 같다. 결과 수만큼 시간이 드니 개수만 필요할 때는 DP를 쓴다.
+
+### 하나라도 있는지만 알면 된다면
+
+[Is Subsequence](https://leetcode.com/problems/is-subsequence/)(392번)가 그 문제다. 개수를 셀 필요가 없으니 두 포인터로 O(m)에 끝난다. `s`를 훑다가 `t`의 다음 글자와 같으면 `t` 포인터를 옮긴다.
+
+```js
+function isSubsequence(t, s) {          // t가 s의 부분 수열인가 (392번은 인자 이름이 반대다)
+  let j = 0;
+  for (const c of s) if (j < t.length && c === t[j]) j++;
+  return j === t.length;
+}
+isSubsequence("abc", "ababcc"); // true
+isSubsequence("acb", "ababcc"); // false
+```
+
+여기서는 욕심이 통한다. `t`의 다음 글자가 나오면 바로 짝짓는 게 언제나 손해가 아니다. 더 뒤의 같은 글자와 짝지어도 남는 선택지가 줄기만 하기 때문이다. 개수를 셀 때는 어느 글자와 짝짓느냐가 다른 경우가 되니 욕심이 아니라 덧셈이 필요하다. 개수를 세야 할 때만 이 글의 DP가 필요하다. 같은 `s`로 `t`를 수없이 묻는다면 글자별 위치 목록을 만들어 두고 이진 탐색으로 다음 위치를 찾는다.
+
+### s 안의 서로 다른 부분 수열이 몇 가지인지
+
+이름이 비슷한 [940. Distinct Subsequences II](https://leetcode.com/problems/distinct-subsequences-ii/)는 `t` 없이 `s`의 서로 다른 부분 수열(빈 것 제외)이 몇 종류인지 센다. 이번에는 위치가 달라도 문자열이 같으면 하나로 센다. 글자가 하나 들어올 때마다 지금까지의 모든 부분 수열 뒤에 붙여 개수가 두 배가 되고, 같은 글자가 전에 나왔다면 그때 이미 만든 것만큼 뺀다.
+
+```js
+function distinctSubseqII(s) {
+  const MOD = 1_000_000_007;
+  const last = new Map();       // 글자 → 그 글자를 마지막으로 붙이기 직전의 개수
+  let total = 1;                // 빈 부분 수열 포함
+  for (const c of s) {
+    const before = total;
+    total = (total * 2 - (last.get(c) || 0) + MOD) % MOD; // 전부 뒤에 c를 붙이고, 겹치는 만큼 뺀다
+    last.set(c, before);
+  }
+  return (total - 1 + MOD) % MOD; // 빈 것을 뺀다
+}
+```
+
+"aba"는 a, b, ab, ba, aa, aba로 6, "aaa"는 a, aa, aaa로 3, 이 글의 "ababcc"는 35가 나온다. 115번은 위치가 다르면 다르게 세고 940번은 문자열이 같으면 하나로 센다. 이름이 비슷해 면접에서 헷갈리기 쉬운 짝이다.
+
+### 답이 너무 크면
+
+답이 32비트를 넘을 수 있는 변형은 덧셈마다 `% 1_000_000_007`을 한다. 덧셈만 있으니 마지막에 한 번 나누는 것과 같은 결과다. 그러면 중간 칸이 넘치는 걱정도 함께 사라진다.
+
+같은 2차원 격자 틀의 다른 문제로 [Interleaving String](/posts/leetcode-interleaving-string)(두 문자열을 섞어 셋째를 만드나), [Edit Distance](/posts/leetcode-edit-distance)(고치는 최소 횟수), [Regular Expression Matching](/posts/leetcode-regular-expression-matching)(패턴이 문자열 전체와 맞나)이 있다. 칸의 뜻은 모두 "두 문자열의 앞부분"이고, 어느 칸에서 오는지와 연산(덧셈, min, 참·거짓)만 다르다.
+
+## 면접에서 나올 만한 질문
+
+### 점화식을 설명해 주세요.
+
+`dp[i][j]`는 `s`의 앞 i글자에서 `t`의 앞 j글자를 만드는 방법 수다. `s[i-1]`을 안 쓰는 경우 `dp[i-1][j]`에, `s[i-1] == t[j-1]`이면 짝짓는 경우 `dp[i-1][j-1]`을 더한다. 바닥은 모든 i에서 `dp[i][0] = 1`이다. `s[i-1]`을 썼는지 안 썼는지로 갈리니 두 경우는 겹치지 않는다.
+
+### LCS나 Edit Distance와 무엇이 다른가요?
+
+왼쪽 칸 `dp[i][j-1]`을 보지 않는다. `t`는 한 글자도 빠짐없이 만들어야 해서 "`t`의 글자를 건너뛰는" 선택이 없기 때문이다. 연산도 max나 min이 아니라 덧셈이다. 그래서 같은 경우를 두 번 세지 않도록 갈래가 서로 겹치지 않는지 확인하는 게 중요하다.
+
+### 한 줄로 줄일 때 왜 오른쪽부터 도나요?
+
+`dp[j]`를 갱신할 때 쓰는 `dp[j-1]`이 이번 글자를 쓰기 전 값이어야 하기 때문이다. 왼쪽부터 돌면 이번 글자로 늘어난 `dp[j-1]`을 다시 써서 같은 글자 하나를 `t`의 두 자리에 쓴 셈이 된다. `t`에 같은 글자가 없으면 차이가 안 드러나서 `("aaaa", "aa")`처럼 반복 글자가 있는 테스트로 확인한다.
+
+### 중간 값이 넘치면 어떻게 하나요?
+
+답이 32비트 안이라는 보장만 있고 중간 칸은 C(40, 20)처럼 훨씬 커질 수 있다. 덧셈만 하니 Java `int`가 감겨도 답 칸의 나머지는 보존되어 결과가 맞는다. JavaScript도 답에 쓰이는 칸은 답보다 커지지 않아 괜찮다. C++은 넘침이 정의되지 않은 동작이라 `unsigned`나 더 큰 타입을 쓰고, 큰 답을 묻는 변형은 나머지 연산을 한다.
+
+### 시간을 더 줄일 수 있나요?
+
+최악은 O(mn)이지만, `s`의 글자가 바꾸는 칸은 `t`에서 그 글자가 있는 자리뿐이다. 글자별 위치 목록을 큰 위치부터 만들어 그 자리만 갱신하면 O(n + 짝 수)가 된다. 글자 종류가 많을수록 빨라지고, `t`에 없는 글자는 아예 건너뛴다. 남은 `s`가 남은 `t`보다 짧으면 0을 돌려주는 가지치기도 함께 쓴다.
+
+### 하나라도 있는지만 묻는다면요?
+
+개수가 필요 없으니 두 포인터로 O(m)이다. `s`를 훑으며 `t`의 다음 글자와 같을 때 `t` 쪽을 옮기고, 끝까지 옮겼으면 참이다. 같은 `s`에 질문이 많이 들어오면 글자별 위치 목록과 이진 탐색으로 질문 하나를 O(n log m)에 답한다.
+
+### 실제로 고른 위치를 모두 돌려주라면요?
+
+재귀를 백트래킹으로 바꿔 짝지은 위치를 모은다. 개수가 6이면 목록도 6개라 결과 크기만큼 시간이 든다. 표를 먼저 채워 두면 값이 0인 갈래(그쪽으로는 `t`를 완성할 수 없는 갈래)로 들어가지 않아 헛걸음 없이 나열할 수 있다.

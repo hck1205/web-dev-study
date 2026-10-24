@@ -1,0 +1,479 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-interleaving-string");
+
+<EasyIntro>
+  빨간 구슬 줄과 파란 구슬 줄이 있다. 두 줄에서 구슬을 앞에서부터 하나씩 빼서 새 줄에 꿰는데, 어느 줄에서 뺄지는 마음대로 고를 수 있다. 다만 한 줄 안의 순서는 바꿀 수 없다. 누군가 완성된 줄을 보여 주며 "이거 두 줄을 섞어서 만든 거 맞지?"라고 묻는다. 앞에서부터 맞춰 보면 되는데, 빨간 줄과 파란 줄의 맨 앞 구슬 색이 같을 때가 문제다. 어느 쪽에서 뺐는지 알 수 없어서 하나를 골랐다가 나중에 막히면 되돌아가야 한다. 그래서 바둑판을 그린다. 가로로 한 칸 가면 파란 줄에서 하나, 세로로 한 칸 가면 빨간 줄에서 하나를 뺀 것이다. 칸마다 "여기까지 맞게 올 수 있나"를 적어 두면, 오른쪽 아래 칸에 닿을 수 있는지가 곧 답이다.
+</EasyIntro>
+
+두 사람이 같은 문서를 동시에 고치면 각자의 편집이 차례대로 섞여 하나의 기록이 된다. 각자의 순서는 지켜졌는지, 기록이 정말 두 사람 편집을 섞은 것인지 확인하려면 이 문제를 풀어야 한다. [LeetCode 97. Interleaving String](https://leetcode.com/problems/interleaving-string/)은 문자열 세 개를 주고 셋째가 앞의 둘을 순서를 지키며 섞은 것인지 묻는다.
+
+표의 칸이 "두 문자열에서 몇 글자씩 썼나"를 뜻한다는 점에서 [Longest Common Subsequence](/posts/leetcode-longest-common-subsequence), [Edit Distance](/posts/leetcode-edit-distance)와 같은 틀이다. 다른 점은 셋째 문자열의 위치가 따로 필요 없다는 것이다. 왜 그런지가 이 문제의 출발점이다. 이 글에서는 앞에서부터 욕심내서 맞추는 방법이 왜 틀리는지 보고, 되돌아가는 재귀, 실패한 칸을 적어 두는 메모이제이션, 2차원 표, 배열 한 줄, 격자 위 BFS까지 다섯 풀이를 본다. 코드는 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 두 줄의 순서를 지키며 섞었나
+
+문자열 `s1`, `s2`, `s3`가 주어진다. `s3`가 `s1`과 `s2`를 끼워 넣어(interleave) 만든 것인지 돌려준다. 끼워 넣는다는 건 `s1`과 `s2`를 여러 조각으로 잘라 번갈아 이어 붙이되, 각 문자열 안의 글자 순서는 그대로 두는 것이다. 결국 `s3`의 글자 하나하나를 앞에서부터 "이건 `s1`의 다음 글자", "이건 `s2`의 다음 글자"로 빠짐없이 나눌 수 있으면 참이다.
+
+제약은 `s1`, `s2` 길이 100 이하, `s3` 길이 200 이하, 영어 소문자다. 칸이 101 × 101이라 O(mn)이면 넉넉하다. LeetCode는 덧붙여 "추가 메모리를 `s2.length` 크기만 써서 풀 수 있나"를 묻는다. 뒤에서 배열 한 줄 풀이가 그 답이다.
+
+길이부터 맞춰 본다. `s1.length + s2.length`가 `s3.length`와 다르면 볼 것도 없이 거짓이다. 이 한 줄을 빼먹으면 뒤의 모든 풀이가 엉뚱한 답을 낸다.
+
+## 앞에서부터 맞추다 막히는 경우
+
+예시는 `s1 = "abc"`, `s2 = "acd"`, `s3 = "acabdc"`다. 손으로 나눠 보면 이렇게 된다.
+
+```text
+s3   a  c  a  b  d  c
+     2  2  1  1  2  1     (1 = s1에서, 2 = s2에서)
+s1         a  b     c
+s2   a  c        d
+```
+
+`s2`에서 "ac"를 먼저 쓰고, `s1`에서 "ab", 다시 `s2`에서 "d", 마지막으로 `s1`의 "c"다. 참이다.
+
+가장 먼저 떠오르는 방법은 두 포인터다. `s3`를 한 글자씩 보며 `s1`의 다음 글자와 같으면 `s1`을 쓰고, 아니면 `s2`를 쓰고, 둘 다 아니면 거짓이다.
+
+```js
+function greedy(s1, s2, s3) {
+  if (s1.length + s2.length !== s3.length) return false;
+  let i = 0, j = 0;
+  for (let k = 0; k < s3.length; k++) {
+    if (i < s1.length && s1[i] === s3[k]) i++;        // s1을 먼저 써 본다
+    else if (j < s2.length && s2[j] === s3[k]) j++;
+    else return false;
+  }
+  return true;
+}
+console.log(greedy("abc", "acd", "acabdc")); // false, 정답은 true
+```
+
+첫 글자 a가 `s1`에도 `s2`에도 맞는다. 욕심내서 `s1`의 a를 쓰면 다음 글자 c가 `s1`의 b와도 `s2`의 a와도 안 맞아 막힌다. 정답은 첫 a를 `s2`에서 가져오는 쪽이었다. `s2`를 먼저 써 보는 쪽으로 바꿔도 다른 입력에서 똑같이 막힌다. 두 글자가 같을 때 어느 쪽을 골라야 할지는 뒤를 봐야 안다. 그래서 두 갈래를 다 따져 보는 방법이 필요하다.
+
+## 막히면 되돌아가는 재귀
+
+`s1`에서 i글자, `s2`에서 j글자를 썼다면 `s3`에서는 정확히 i + j글자를 맞춘 상태다. 그러니 `s3`의 위치 k는 따로 들고 다닐 필요가 없다. 상태는 `(i, j)` 둘뿐이다.
+
+```js
+function isInterleave(s1, s2, s3) {
+  if (s1.length + s2.length !== s3.length) return false;
+  function go(i, j) {
+    const k = i + j;                                  // s3에서 맞출 차례인 위치
+    if (k === s3.length) return true;                 // 다 맞췄다
+    if (i < s1.length && s1[i] === s3[k] && go(i + 1, j)) return true; // s1에서 가져온다
+    if (j < s2.length && s2[j] === s3[k] && go(i, j + 1)) return true; // s2에서 가져온다
+    return false;
+  }
+  return go(0, 0);
+}
+```
+
+`&&`가 짧게 끊어 주어서 한쪽 갈래에서 참이 나오면 다른 쪽은 보지 않는다. 길이 검사를 했으니 `k === s3.length`이면 i와 j가 모두 끝까지 간 것이다.
+
+갈래가 둘로 나뉘는 건 두 글자가 같을 때뿐이라 보통은 빨리 끝난다. 나쁜 경우는 모든 글자가 같다가 마지막에 틀리는 입력이다. `s1`과 `s2`가 a로만 n글자, `s3`가 a 2n-1개 뒤에 b 하나일 때를 재 봤다.
+
+```text
+n = 10   호출 520,675번       9 ms
+n = 12   호출 7,696,443번     167 ms
+n = 14   호출 115,000,919번   2,243 ms
+```
+
+n이 2 늘 때마다 15배쯤이다. a로 이뤄진 경로를 다 걸어 본 뒤에야 마지막 b에서 실패를 알게 되는데, 그 경로의 수가 `C(2n, n)`에 가깝게 는다. n = 100이면 끝나지 않는다.
+
+## 한 번 막힌 칸은 다시 가지 않는다
+
+재귀가 느린 이유는 같은 `(i, j)`에 여러 길로 다시 오기 때문이다. `s1`에서 a, `s2`에서 a를 쓴 것과 `s2`에서 a, `s1`에서 a를 쓴 것은 둘 다 `(1, 1)`에 온다. `(1, 1)`에서 남은 글자를 맞출 수 있는지는 어떤 길로 왔는지와 상관없다.
+
+답이 참이면 바로 맨 위까지 참이 올라가 끝나니, 적어 둘 것은 "이 칸에서는 안 된다"뿐이다.
+
+```js
+function isInterleave(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  const failed = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(false)); // 실패한 칸
+  function go(i, j) {
+    if (i + j === s3.length) return true;
+    if (failed[i][j]) return false;                   // 이미 가 봤는데 막힌 칸
+    const k = i + j;
+    if ((i < m && s1[i] === s3[k] && go(i + 1, j)) ||
+        (j < n && s2[j] === s3[k] && go(i, j + 1))) return true;
+    failed[i][j] = true;
+    return false;
+  }
+  return go(0, 0);
+}
+```
+
+칸마다 많아야 한 번 계산하니 시간 O(mn), 공간 O(mn)이다. 위의 나쁜 입력을 n = 100으로 돌려도 2 ms가 안 걸렸다. 재귀 깊이는 m + n, 많아야 200이라 Python 기본 한도 1000 안에 들어온다.
+
+참과 거짓 두 값만 다루는 문제라 "아직 모름"을 따로 표시할 필요가 없다는 점도 편하다. 개수를 세는 문제였다면 `-1` 같은 표시가 필요했을 것이다.
+
+## 바둑판에 닿을 수 있는 칸을 칠한다
+
+이제 아래에서 위로 쌓는다. `dp[i][j]`를 "`s1`의 앞 i글자와 `s2`의 앞 j글자로 `s3`의 앞 i + j글자를 만들 수 있나"로 둔다. 마지막 글자 `s3[i+j-1]`이 어디서 왔는지로 나눈다.
+
+- `s1`에서 왔다면 `s1[i-1]`과 같아야 하고, 그 앞은 `dp[i-1][j]`가 참이어야 한다. 위 칸에서 내려온 것이다.
+- `s2`에서 왔다면 `s2[j-1]`과 같아야 하고, 그 앞은 `dp[i][j-1]`이 참이어야 한다. 왼쪽 칸에서 온 것이다.
+
+```js
+function isInterleave(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(false));
+  dp[0][0] = true;                                   // 빈 문자열 둘로 빈 문자열을 만든다
+  for (let i = 0; i <= m; i++)
+    for (let j = 0; j <= n; j++) {
+      if (i > 0 && dp[i - 1][j] && s1[i - 1] === s3[i + j - 1]) dp[i][j] = true; // 위에서
+      if (j > 0 && dp[i][j - 1] && s2[j - 1] === s3[i + j - 1]) dp[i][j] = true; // 왼쪽에서
+    }
+  return dp[m][n];
+}
+```
+
+0번 줄은 `s2`만으로 `s3`의 앞부분을 만들 수 있는지, 0번 칸은 `s1`만으로 만들 수 있는지다. 따로 채우지 않아도 위 반복문의 i = 0, j = 0 경우가 알아서 처리한다. 예시의 표는 이렇다(T = 참).
+
+```text
+          s2:  ε  a  c  d
+s1: ε          T  T  T  F
+    a          T  F  T  F
+    b          F  F  T  T
+    c          F  F  F  T
+```
+
+0번 줄 `T T T F`는 `s2`의 "a", "ac"가 `s3`의 앞부분 "a", "ac"와 같고, "acd"는 "aca"와 달라 막힌다는 뜻이다. (1, 1)이 F인 이유는 `s3`의 앞 두 글자 "ac"를 a 하나씩으로 만들 수 없기 때문이다. 오른쪽 아래가 T라 답은 참이다.
+
+이 표는 사실 격자 위의 길 찾기다. 오른쪽으로 한 칸은 `s2`에서 한 글자, 아래로 한 칸은 `s1`에서 한 글자를 쓰는 걸음이고, 걸음마다 그 글자가 `s3`의 다음 글자와 같아야 걸을 수 있다. 아래 그림에서 다음을 누르면 걸을 수 있는 걸음과 실제로 찾은 길을 볼 수 있다.
+
+<VectorSpace
+  caption="s1 = abc(아래로), s2 = acd(오른쪽으로), s3 = acabdc. 칸 이름은 (s1에서 쓴 수, s2에서 쓴 수)"
+  groups={[
+    { id: "ok", label: "닿을 수 있음" },
+    { id: "no", label: "닿을 수 없음" },
+  ]}
+  points={[
+    { id: "p00", label: "0,0", x: 60, y: 40, group: "ok" },
+    { id: "p01", label: "0,1", x: 160, y: 40, group: "ok" },
+    { id: "p02", label: "0,2", x: 260, y: 40, group: "ok" },
+    { id: "p03", label: "0,3", x: 360, y: 40, group: "no" },
+    { id: "p10", label: "1,0", x: 60, y: 100, group: "ok" },
+    { id: "p11", label: "1,1", x: 160, y: 100, group: "no" },
+    { id: "p12", label: "1,2", x: 260, y: 100, group: "ok" },
+    { id: "p13", label: "1,3", x: 360, y: 100, group: "no" },
+    { id: "p20", label: "2,0", x: 60, y: 160, group: "no" },
+    { id: "p21", label: "2,1", x: 160, y: 160, group: "no" },
+    { id: "p22", label: "2,2", x: 260, y: 160, group: "ok" },
+    { id: "p23", label: "2,3", x: 360, y: 160, group: "ok" },
+    { id: "p30", label: "3,0", x: 60, y: 220, group: "no" },
+    { id: "p31", label: "3,1", x: 160, y: 220, group: "no" },
+    { id: "p32", label: "3,2", x: 260, y: 220, group: "no" },
+    { id: "p33", label: "3,3", x: 360, y: 220, group: "ok" },
+  ]}
+  edges={[["p00", "p01"], ["p00", "p10"], ["p01", "p02"], ["p02", "p12"], ["p12", "p22"], ["p20", "p21"], ["p22", "p23"], ["p23", "p33"]]}
+  steps={[
+    { caption: "16칸이 표의 칸이다. 색은 표를 다 채운 뒤 참(닿을 수 있음)과 거짓을 나눈 것이다." },
+    { showEdges: true, caption: "글자가 맞아 걸을 수 있는 걸음만 선으로 그었다. (0,0)에서는 a가 양쪽에 맞아 두 걸음이 있다." },
+    { showEdges: true, path: ["p00", "p10"], caption: "s1의 a로 아래로 가면 (1,0)이다. 거기서 s3의 c는 s1의 b와도 s2의 a와도 안 맞아 막힌다. 욕심 풀이가 간 길이다." },
+    { showEdges: true, path: ["p00", "p01", "p02"], caption: "s2로 a, c를 쓰면 (0,2)다. s3의 앞 두 글자 ac를 s2에서 가져왔다." },
+    { showEdges: true, path: ["p00", "p01", "p02", "p12", "p22"], caption: "s1의 a, b로 두 칸 내려간다. s3의 acab까지 맞췄다." },
+    { showEdges: true, path: ["p00", "p01", "p02", "p12", "p22", "p23", "p33"], caption: "s2의 d로 오른쪽, s1의 c로 아래. 오른쪽 아래 (3,3)에 닿아 참이다." },
+  ]}
+/>
+
+(2,0)에서 (2,1)로 가는 선은 글자는 맞지만 (2,0) 자체에 닿을 수 없어서 쓸모가 없다. 표의 칸이 참이려면 글자가 맞고, 동시에 출발 칸이 참이어야 한다. 시간 O(mn), 공간 O(mn)이다.
+
+## 한 줄만 남겨도 된다
+
+칸 하나는 위 칸과 왼쪽 칸만 본다. 배열 하나를 왼쪽에서 오른쪽으로 덮어쓰면, 덮어쓰기 전의 `dp[j]`가 위 칸이고 방금 덮어쓴 `dp[j-1]`이 왼쪽 칸이다. LeetCode가 덧붙인 "추가 메모리 `s2.length`" 조건이 이것이다.
+
+```js
+function isInterleave(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  const dp = new Array(n + 1).fill(false);
+  for (let i = 0; i <= m; i++)
+    for (let j = 0; j <= n; j++) {
+      if (i === 0 && j === 0) { dp[0] = true; continue; }
+      const k = i + j - 1;                                   // s3에서 이번에 맞출 글자
+      const fromUp = i > 0 && dp[j] && s1[i - 1] === s3[k];  // dp[j]는 아직 윗줄 값
+      const fromLeft = j > 0 && dp[j - 1] && s2[j - 1] === s3[k]; // dp[j-1]은 이미 이번 줄 값
+      dp[j] = fromUp || fromLeft;
+    }
+  return dp[n];
+}
+```
+
+`dp[j] = fromUp || fromLeft`로 매번 새로 써야 한다. 2차원 표에서처럼 참일 때만 `true`를 넣으면, 윗줄에서 남은 참이 이번 줄 칸에 그대로 남아 틀린다. 줄마다 0번 칸(`j = 0`)도 다시 계산해야 한다. 이 칸은 "`s1`의 앞 i글자만으로 `s3`의 앞 i글자를 만들 수 있나"라 줄이 내려가며 바뀐다.
+
+아래 그림은 줄마다 배열 한 줄이 어떻게 바뀌는지 보여 준다. 칸은 `s2`에서 쓴 글자 수 0~3이다.
+
+<AlgoTrace
+  caption="s1 = abc, s2 = acd, s3 = acabdc. 줄을 내려갈 때마다 배열 하나를 덮어쓴다"
+  memoryLabel="dp (s2에서 쓴 글자 수 0 ~ 3)"
+  cells={["ε", "a", "c", "d"]}
+  steps={[
+    { pointer: 2, found: [0, 1, 2], memory: ["T", "T", "T", "F"], caption: "0번 줄. s2만으로 a, ac는 만들지만 acd는 aca와 달라 막힌다." },
+    { pointer: 2, found: [0, 2], memory: ["T", "F", "T", "F"], caption: "s1의 a를 들인다. (1,1)은 ac를 a 둘로 못 만들어 F. (1,2)는 위 칸 T에 a가 맞아 T다." },
+    { pointer: 3, found: [2, 3], memory: ["F", "F", "T", "T"], caption: "s1의 b. 0번 칸은 ab와 ac가 달라 F. (2,2)는 위에서, (2,3)은 왼쪽에서 d가 맞아 T다." },
+    { pointer: 3, found: [3], memory: ["F", "F", "F", "T"], caption: "s1의 c. 마지막 칸은 위 칸 T에서 c가 맞아 T다. 답은 참이다." },
+  ]}
+/>
+
+시간 O(mn), 공간 O(n)이다. `s2`가 `s1`보다 길면 둘을 바꿔 넣어 O(min(m, n))으로 줄일 수 있다. 끼워 넣기는 두 문자열의 역할이 대칭이라 바꿔도 답이 같다. 이 문제의 정석 답이 이것이다.
+
+## 격자 위를 너비 우선으로 걷는다
+
+표를 길 찾기로 봤으니 그래프 탐색으로 풀 수도 있다. (0, 0)에서 출발해 글자가 맞는 오른쪽, 아래 칸으로 큐를 따라 퍼지고, 한 번 넣은 칸은 다시 넣지 않는다. (m, n)에 닿으면 참이다.
+
+```js
+function isInterleave(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  const seen = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(false));
+  const queue = [[0, 0]];
+  seen[0][0] = true;
+  for (let h = 0; h < queue.length; h++) {           // shift 대신 머리 위치를 옮긴다
+    const [i, j] = queue[h];
+    if (i === m && j === n) return true;
+    const k = i + j;
+    if (i < m && !seen[i + 1][j] && s1[i] === s3[k]) { seen[i + 1][j] = true; queue.push([i + 1, j]); }
+    if (j < n && !seen[i][j + 1] && s2[j] === s3[k]) { seen[i][j + 1] = true; queue.push([i, j + 1]); }
+  }
+  return false;
+}
+```
+
+닿을 수 있는 칸만 방문하므로 막다른 칸이 많으면 표를 다 채우는 것보다 일찍 끝난다. 최악은 똑같이 O(mn)이다. 같은 칸에 닿는 모든 길이 i + j가 같아서 BFS의 층이 곧 `s3`의 위치다. 깊이 우선(DFS)으로 바꾸면 위의 메모이제이션 재귀와 같은 풀이가 된다. [격자 BFS/DFS](/posts/ds-graph-bfs-dfs)를 알면 이쪽이 더 자연스럽게 떠오를 수도 있다.
+
+## 세 언어로 쓴 한 줄 풀이
+
+```python
+class Solution:
+    def isInterleave(self, s1: str, s2: str, s3: str) -> bool:
+        m, n = len(s1), len(s2)
+        if m + n != len(s3):
+            return False
+        if n > m:                          # 짧은 쪽을 열로 두면 배열이 짧아진다
+            s1, s2, m, n = s2, s1, n, m
+        dp = [False] * (n + 1)
+        for i in range(m + 1):
+            for j in range(n + 1):
+                if i == 0 and j == 0:
+                    dp[0] = True
+                    continue
+                k = i + j - 1
+                up = i > 0 and dp[j] and s1[i - 1] == s3[k]
+                left = j > 0 and dp[j - 1] and s2[j - 1] == s3[k]
+                dp[j] = up or left
+        return dp[n]
+```
+
+```java
+class Solution {
+    public boolean isInterleave(String s1, String s2, String s3) {
+        int m = s1.length(), n = s2.length();
+        if (m + n != s3.length()) return false;
+        if (n > m) return isInterleave(s2, s1, s3);   // 짧은 쪽을 열로
+        boolean[] dp = new boolean[n + 1];
+        for (int i = 0; i <= m; i++) {
+            for (int j = 0; j <= n; j++) {
+                if (i == 0 && j == 0) { dp[0] = true; continue; }
+                char c = s3.charAt(i + j - 1);
+                boolean up = i > 0 && dp[j] && s1.charAt(i - 1) == c;
+                boolean left = j > 0 && dp[j - 1] && s2.charAt(j - 1) == c;
+                dp[j] = up || left;
+            }
+        }
+        return dp[n];
+    }
+}
+```
+
+세 언어 모두 예시에서 참, `s3 = "acbadc"`에서 거짓, 빈 문자열 셋에서 참, `("a", "b", "a")`에서 거짓(길이가 안 맞는다)을 냈다.
+
+Python은 동시 대입 한 줄로 두 문자열과 길이를 함께 바꾼다. 하나라도 빠뜨리면 m, n이 바뀐 문자열과 어긋나 범위 밖을 읽는다. Java는 짧은 쪽을 열로 두려고 인자를 바꿔 자기 자신을 한 번 더 부른다. 바꾼 뒤에는 n이 m보다 크지 않아 다시 부르지 않는다. 세 언어 모두 빈 문자열을 따로 처리하지 않아도 된다. `s1`이 비면 0번 줄만, `s2`가 비면 0번 칸만 계산된다.
+
+## 다섯 풀이를 칸 수로 비교하면
+
+길이 4 이하의 a, b 문자열 5000쌍(절반은 실제로 섞어 만든 `s3`, 절반은 무작위)에서 다섯 풀이의 답이 모두 같았다. 시간은 a 100개짜리 두 문자열과 a 199개 + b로 잰 최악의 거짓 입력이다.
+
+| 풀이 | 시간 | 공간 | 잰 시간 | 언제 고르나 |
+|---|---|---|---|---|
+| 앞에서부터 욕심 | O(m + n) | O(1) | 틀림 | 쓰지 않는다. 반례를 보이는 용도 |
+| 되돌아가는 재귀 | 지수 | O(m + n) | 끝나지 않음 | 점화식 확인용 |
+| 실패한 칸 메모 | O(mn) | O(mn) | 1.9 ms | 재귀로 생각하는 게 편할 때 |
+| 2차원 표 | O(mn) | O(mn) | 1.7 ms | 실제로 어떻게 섞었는지 되짚을 때 |
+| 배열 한 줄 | O(mn) | O(min(m, n)) | 1.2 ms | 기본 답, 메모리 조건이 붙을 때 |
+| 격자 BFS | O(mn) | O(mn) | 4.6 ms | 막다른 칸이 많을 때, 그래프로 설명할 때 |
+
+BFS가 느린 건 칸마다 배열을 만들어 큐에 넣는 비용 때문이다. 최악 입력에서는 결국 모든 칸을 다 방문한다.
+
+## 섞기 판정에서 잘못 짜는 곳
+
+### 길이 검사를 빼먹는다
+
+`s3`가 더 길어도 표는 앞의 m + n글자만 본다. 길이 검사가 없으면 `("ab", "c", "abcx")`에서 참이 나온다. 뒤에 붙은 x를 아무도 확인하지 않기 때문이다. 반대로 `s3`가 짧으면 `s3[i+j-1]`이 `undefined`가 되어 비교가 다 실패하니 우연히 거짓이 나온다. 맞는 답이 우연에 기대지 않게 맨 앞에서 길이부터 거른다.
+
+### 셋째 문자열 위치를 상태에 넣는다
+
+`go(i, j, k)`처럼 k를 따로 들고 다니면 상태가 m × n × (m+n)개로 보여 메모 표를 3차원으로 만들게 된다. 하지만 k는 언제나 i + j라 실제로 쓰는 칸은 2차원뿐이다. 3차원 표는 메모리를 200배 낭비한다. 이 관찰을 면접에서 먼저 말하면 좋다.
+
+### 한 줄 풀이에서 0번 칸을 고정한다
+
+0번 줄을 미리 채운 뒤 1번 줄부터 `j = 1`부터만 돌면 `dp[0]`이 첫 줄의 참으로 남는다. 0번 칸은 "`s1`의 앞 i글자가 `s3`의 앞 i글자와 같은가"라 줄마다 바뀌어야 한다. 이 실수가 있으면 `("b", "aa", "aaa")`에서 참이 나온다. `s3`에 b가 없는데도 그렇다.
+
+### 참일 때만 덮어쓴다
+
+2차원 표에서는 칸이 처음에 모두 거짓이니 참일 때만 써도 된다. 한 줄로 줄이면 칸에 윗줄 값이 들어 있어서, 이번 줄에서 거짓이어야 할 칸이 윗줄의 참을 그대로 들고 간다. `("a", "b", "bb")`에서 참이 나온다. 0번 줄에서 b 한 글자를 `s2`로 맞춘 참이 1번 줄까지 남아, `s1`의 a가 b와 다른데도 마지막 칸이 참이 된다. 한 줄 풀이에서는 `dp[j] = fromUp || fromLeft`처럼 매번 새로 대입한다.
+
+### 욕심에 한 번만 되돌아가기를 붙인다
+
+두 글자가 같을 때 한쪽을 골랐다가 바로 다음 글자에서 막히면 다른 쪽으로 바꾸는 식으로 고치는 경우가 있다. 막히는 지점이 한참 뒤일 수 있어서 이걸로는 부족하다. 결국 모든 갈래를 기억하는 메모이제이션이 필요하다.
+
+## 섞기 판정을 직접 짜 보기
+
+아래 칸에서 `isInterleave`를 채워 실행해 보자. 빈 문자열, 한쪽만 빈 경우, 길이가 안 맞는 경우, 욕심 풀이가 틀리는 경우가 테스트에 있다.
+
+<CodePlayground
+  caption="Interleaving String"
+  functionName="isInterleave"
+  initialCode={`function isInterleave(s1, s2, s3) {
+  // s3가 s1과 s2를 순서를 지키며 섞은 것인지
+  return false;
+}`}
+  solution={`function isInterleave(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  const dp = new Array(n + 1).fill(false);
+  for (let i = 0; i <= m; i++) {
+    for (let j = 0; j <= n; j++) {
+      if (i === 0 && j === 0) { dp[0] = true; continue; }
+      const k = i + j - 1;
+      const fromUp = i > 0 && dp[j] && s1[i - 1] === s3[k];
+      const fromLeft = j > 0 && dp[j - 1] && s2[j - 1] === s3[k];
+      dp[j] = fromUp || fromLeft;
+    }
+  }
+  return dp[n];
+}`}
+  tests={[
+    { args: ["abc", "acd", "acabdc"], expected: true, label: "욕심이 틀리는 참" },
+    { args: ["abc", "acd", "acbadc"], expected: false, label: "글자는 같고 순서가 틀림" },
+    { args: ["", "", ""], expected: true, label: "모두 빈 문자열" },
+    { args: ["a", "", "a"], expected: true, label: "한쪽만 빈 문자열" },
+    { args: ["a", "b", "a"], expected: false, label: "길이가 안 맞는다" },
+    { args: ["ab", "c", "abcx"], expected: false, label: "s3가 더 길다" },
+    { args: ["b", "aa", "aaa"], expected: false, label: "0번 칸을 고정하면 틀린다" },
+    { args: ["abcd", "x", "abxcd"], expected: true, label: "중간에 한 글자" },
+  ]}
+/>
+
+## 섞기 문제를 넓히면
+
+### 어떻게 섞었는지 돌려 달라면
+
+2차원 표를 남기고 (m, n)에서 거꾸로 걷는다. 위 칸이 참이고 `s1[i-1]`이 `s3[i+j-1]`과 같으면 그 글자는 `s1`에서 온 것이고, 아니면 왼쪽 칸에서 `s2`로 온 것이다.
+
+```js
+function whichSource(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return null;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(false));
+  dp[0][0] = true;
+  for (let i = 0; i <= m; i++)
+    for (let j = 0; j <= n; j++) {
+      if (i > 0 && dp[i - 1][j] && s1[i - 1] === s3[i + j - 1]) dp[i][j] = true;
+      if (j > 0 && dp[i][j - 1] && s2[j - 1] === s3[i + j - 1]) dp[i][j] = true;
+    }
+  if (!dp[m][n]) return null;
+  const out = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && dp[i - 1][j] && s1[i - 1] === s3[i + j - 1]) { out.push(1); i--; } // s1에서 왔다
+    else { out.push(2); j--; }                                                      // s2에서 왔다
+  }
+  return out.reverse().join(" ");
+}
+console.log(whichSource("abc", "acd", "acabdc")); // 2 2 1 1 2 1
+```
+
+손으로 나눈 것과 같다. 지금 칸이 참이면 위나 왼쪽 중 적어도 하나는 조건을 만족하는 참이니, 거꾸로 걷는 동안 막다른 길이 없다. 섞는 방법이 여럿이면 위 칸을 먼저 확인하는 순서 때문에 `s1`을 뒤쪽에 몰아 쓴 방법이 나온다.
+
+### 섞는 방법이 몇 가지인지 세라면
+
+참·거짓 대신 개수를 담는다.
+
+```js
+function countInterleavings(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return 0;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  dp[0][0] = 1;
+  for (let i = 0; i <= m; i++)
+    for (let j = 0; j <= n; j++) {
+      if (i > 0 && s1[i - 1] === s3[i + j - 1]) dp[i][j] += dp[i - 1][j]; // 마지막 글자가 s1에서
+      if (j > 0 && s2[j - 1] === s3[i + j - 1]) dp[i][j] += dp[i][j - 1]; // 마지막 글자가 s2에서
+    }
+  return dp[m][n];
+}
+```
+ 예시는 1가지, `("aa", "aa", "aaaa")`는 6가지, `("ab", "ab", "abab")`는 2가지가 나왔다. 개수가 커지면 나머지로 묻는 변형이 된다. 같은 글자로만 된 경우 `C(m+n, m)`가지라 금방 커진다.
+
+### 문자열이 세 개 이상이라면
+
+k개를 섞으면 상태가 k차원이 된다. 셋째 문자열의 위치는 여전히 다른 위치들의 합이라 따로 둘 필요가 없다. 길이가 각각 L이면 O(L^k)라 k가 크면 감당할 수 없다. 면접에서는 차원이 하나씩 늘어난다는 것까지만 답하면 된다.
+
+### 문자열이 아주 길다면
+
+길이가 10^5이면 mn이 10^10이라 표가 안 된다. 이때는 참인 칸만 들고 가는 BFS가 낫다. 같은 층(같은 i + j)에서 참인 칸은 대개 몇 개뿐이라, 층마다 참인 i만 집합으로 들고 내려가면 실제로는 훨씬 적은 칸만 본다.
+
+```js
+function isInterleaveLayers(s1, s2, s3) {
+  const m = s1.length, n = s2.length;
+  if (m + n !== s3.length) return false;
+  let cur = new Set([0]);                          // 이번 층(i + j = k)에서 닿은 i들
+  for (let k = 0; k < s3.length; k++) {
+    const next = new Set();
+    for (const i of cur) {
+      const j = k - i;
+      if (i < m && s1[i] === s3[k]) next.add(i + 1); // s1에서 가져온다
+      if (j < n && s2[j] === s3[k]) next.add(i);     // s2에서 가져온다 (i는 그대로)
+    }
+    if (next.size === 0) return false;             // 이 층에서 모두 막혔다
+    cur = next;
+  }
+  return cur.has(m);
+}
+```
+
+글자가 겹치지 않는 길이 10만짜리 두 문자열을 섞은 입력에서 17 ms에 참을 냈다. 층마다 참인 칸이 하나뿐이라 20만 번 남짓만 돈다. 최악(모든 글자가 같다)은 여전히 O(mn)이다.
+
+같은 2차원 격자 틀의 다른 문제로 [Distinct Subsequences](/posts/leetcode-distinct-subsequences)(부분 수열로 몇 번 나타나나), [Regular Expression Matching](/posts/leetcode-regular-expression-matching)(패턴과 문자열을 함께 걷기), [Unique Paths](/posts/leetcode-unique-paths)(격자에서 길의 수)가 있다.
+
+## 면접에서 나올 만한 질문
+
+### 두 포인터로 앞에서부터 맞추면 왜 안 되나요?
+
+두 문자열의 다음 글자가 같을 때 어느 쪽을 써야 할지 뒤를 봐야 알기 때문이다. `("abc", "acd", "acabdc")`에서 첫 a를 `s1`에서 쓰면 바로 막히지만 `s2`에서 쓰면 끝까지 맞는다. 어느 쪽을 먼저 시도하든 막히는 반례가 있어서 갈래를 다 기억하는 DP가 필요하다.
+
+### 상태가 왜 (i, j) 두 개면 되나요?
+
+`s1`에서 i글자, `s2`에서 j글자를 썼다면 `s3`에서는 정확히 i + j글자를 맞춘 상태라 셋째 위치가 따로 필요 없다. 그래서 칸은 (m+1) × (n+1)개뿐이고 시간이 O(mn)이다. k를 상태에 넣으면 같은 칸을 3차원 표로 낭비한다.
+
+### 점화식을 말해 주세요.
+
+`dp[i][j]`는 `s1`의 앞 i글자와 `s2`의 앞 j글자로 `s3`의 앞 i + j글자를 만들 수 있는지다. `dp[i-1][j]`가 참이고 `s1[i-1] == s3[i+j-1]`이거나, `dp[i][j-1]`이 참이고 `s2[j-1] == s3[i+j-1]`이면 참이다. 바닥은 `dp[0][0] = true`이고, 맨 앞에서 길이 합이 다르면 거짓을 돌려준다.
+
+### 추가 메모리를 s2 길이만큼만 쓰려면요?
+
+칸이 위와 왼쪽만 보니 배열 한 줄을 왼쪽에서 오른쪽으로 덮어쓴다. 덮어쓰기 전의 `dp[j]`가 위 칸, 방금 쓴 `dp[j-1]`이 왼쪽 칸이다. 줄마다 0번 칸도 다시 계산하고, 참일 때만이 아니라 매번 새로 대입해야 한다. 짧은 쪽을 열로 두면 O(min(m, n))이다.
+
+### 메모이제이션에서 왜 실패한 칸만 적나요?
+
+참이 한 번 나오면 그 값이 맨 위까지 바로 올라가 탐색이 끝나기 때문이다. 다시 물어볼 일이 생기는 건 거짓인 칸뿐이라 "이 칸에서는 안 된다"만 기억하면 된다. 칸마다 많아야 한 번씩 실패하니 O(mn)이다.
+
+### 이 문제를 그래프 문제로 볼 수 있나요?
+
+격자의 칸 (i, j)를 정점으로, 글자가 맞는 오른쪽·아래 걸음을 간선으로 보면 (0, 0)에서 (m, n)까지 길이 있는지 묻는 문제다. BFS나 DFS에 방문 표시를 하면 칸마다 한 번씩만 보니 O(mn)이고, DFS에 방문 표시를 한 것이 곧 메모이제이션이다. 막다른 칸이 많은 입력에서는 닿을 수 있는 칸만 보는 탐색이 표 전체를 채우는 것보다 빠르다.
+
+### 섞는 방법의 수를 세라면 무엇을 바꾸나요?
+
+불리언 대신 정수를 담고 `||`를 `+`로 바꾼다. 위에서 오는 경우와 왼쪽에서 오는 경우는 마지막 글자의 출처가 달라서 겹치지 않으니 더해도 중복이 없다. 같은 글자로만 된 문자열이면 `C(m+n, m)`가지라 값이 금방 커져 나머지로 묻는 경우가 많다.

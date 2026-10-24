@@ -1,0 +1,512 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-stock-with-cooldown");
+
+<EasyIntro>
+  문구점에서 산 스티커를 친구에게 되파는 놀이를 한다고 해 보자. 날마다 스티커 값이 다르고, 한 번에 한 장만 들고 있을 수 있다. 그런데 규칙이 하나 있다. 스티커를 판 다음 날은 가게가 쉬는 날이라 아무것도 살 수 없다. 그래서 오를 때마다 사고파는 방법이 통하지 않는다. 하루하루 내가 어떤 처지인지 세 가지로 나눠 적으면 문제가 쉬워진다. 스티커를 들고 있는 날, 오늘 막 판 날, 아무것도 없이 쉬는 날이다. 날마다 이 세 칸에 "이 처지라면 지금까지 가장 많이 번 돈"을 적고, 어제 칸을 보고 오늘 칸을 채운다. 마지막 날 들고 있지 않은 칸 중 큰 쪽이 답이다.
+</EasyIntro>
+
+주식 문제 시리즈의 첫 글 [Best Time to Buy and Sell Stock](/posts/leetcode-best-time-to-buy-and-sell-stock)에서 "들고 있는가, 비어 있는가"라는 두 상태로 하루를 나눠 봤다. 그때는 한 번만 사고팔아서 상태 기계가 조금 과했다. [LeetCode 309. Best Time to Buy and Sell Stock with Cooldown](https://leetcode.com/problems/best-time-to-buy-and-sell-stock-with-cooldown/)은 그 틀이 진짜로 필요해지는 문제다. 판 다음 날 하루를 쉬어야 한다는 조건 하나 때문에 "오를 때마다 챙긴다"는 탐욕이 무너지고, 상태를 하나 더 만들어야 한다.
+
+이 글에서는 모든 경우를 다 보는 재귀에서 시작해 메모이제이션, 세 상태 표, 변수 세 개, 두 상태로 줄인 버전, 그리고 "마지막으로 판 날"로 나누는 전혀 다른 점화식까지 여섯 풀이를 본다. DP의 기본 개념(겹치는 부분 문제, 탑다운과 바텀업)은 [동적 계획법 글](/posts/dynamic-programming)에 있으니 여기서는 반복하지 않는다. 코드는 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 팔고 나면 하루를 쉬어야 한다
+
+날짜별 주가 배열 `prices`가 주어진다. 사고팔기를 몇 번이든 할 수 있지만 규칙이 셋 있다.
+
+- 한 번에 한 주만 들고 있을 수 있다. 사려면 먼저 팔아야 한다.
+- 판 다음 날에는 살 수 없다. 이 하루를 쿨다운이라고 부른다.
+- 같은 날 사고팔 수는 있지만 이익이 0이라 의미가 없다.
+
+얻을 수 있는 최대 이익을 돌려준다. 거래를 안 하면 0이니 답은 0보다 작지 않다. 길이는 1 이상 5000 이하, 가격은 0 이상 1000 이하다. 5000이면 O(n²)도 1250만 번 남짓이라 통과는 하지만, 이 문제는 O(n)이 자연스럽게 나온다.
+
+## 여섯 날짜를 손으로 따라가 보기
+
+예시로 `prices = [1, 4, 2, 5, 3, 6]`을 쓴다. 쿨다운이 없다면 오르는 날을 전부 챙겨 1→4, 2→5, 3→6으로 3 + 3 + 3 = 9를 번다. 그런데 1→4를 판 다음 날(가격 2)은 쿨다운이라 2에 살 수 없다.
+
+몇 가지 계획을 세워 본다.
+
+```text
+day     0  1  2  3  4  5
+price   1  4  2  5  3  6
+
+계획 A  buy sell 쉼  buy  .  sell     3 + 1 = 4
+계획 B  buy  .   .  sell 쉼   .       4
+계획 C  buy  .   .   .   .  sell      5
+계획 D  buy sell 쉼   .  buy sell     3 + 3 = 6
+```
+
+계획 D가 가장 낫다. 1에 사서 4에 팔고, 2일은 쿨다운으로 쉬고, 3일(가격 5)은 일부러 그냥 보낸 뒤 4일에 3에 사서 6에 판다. 5에 사는 것보다 하루 기다려 3에 사는 게 낫다는 판단이 들어간다. 이런 "지금 할 수 있지만 안 하는" 선택 때문에 탐욕이 통하지 않고, 날마다 할 수 있는 선택을 다 따져 봐야 한다. 답은 6이다.
+
+## 오르는 구간을 앞에서부터 잡으면 틀린다
+
+탐욕을 조금 고쳐 볼 수도 있다. 골짜기에서 사서 봉우리에서 파는 오르막 구간을 앞에서부터 차례로 잡고, 매수일이 직전 매도 다음 날이면 그 구간을 버린다.
+
+```js
+function greedy(prices) {
+  let profit = 0, lastSell = -2, i = 0;
+  const n = prices.length;
+  while (i < n - 1) {
+    while (i < n - 1 && prices[i + 1] <= prices[i]) i++; // 골짜기
+    const buy = i;
+    while (i < n - 1 && prices[i + 1] > prices[i]) i++;  // 봉우리
+    const sell = i;
+    if (sell > buy && buy > lastSell + 1) {             // 쿨다운에 걸리지 않으면 잡는다
+      profit += prices[sell] - prices[buy];
+      lastSell = sell;
+    }
+  }
+  return profit;
+}
+console.log(greedy([1, 5, 4, 9])); // 4, 정답은 8
+```
+
+`[1, 5, 4, 9]`에서 이 탐욕은 1→5를 먼저 잡고, 4가 쿨다운에 걸려 4→9를 버린다. 하지만 정답은 두 구간을 합쳐 1에 사서 9에 파는 8이다. 앞 구간을 잡을지, 뒤 구간과 합칠지, 뒤 구간을 위해 앞 구간을 버릴지는 뒤를 봐야 알 수 있다. `[3, 1, 4, 8, 2, 9]`에서도 이 탐욕은 7, 정답은 10이다. 이렇게 오늘의 선택이 내일 할 수 있는 일을 바꾸면 경우를 나눠 기억하는 DP로 간다.
+
+## 날마다 두 갈래로 나눠 보는 재귀
+
+하루를 보낼 때 내 처지는 "주식을 들고 있다"와 "없다" 둘 중 하나다. 처지마다 할 수 있는 일이 두 가지씩이다.
+
+- 없을 때: 오늘 산다(다음 날은 들고 있다), 또는 그냥 보낸다.
+- 들고 있을 때: 오늘 판다(다음 날은 쿨다운이라 그다음 날부터 다시 없는 처지), 또는 그냥 들고 있는다.
+
+`go(i, holding)`을 "i일 아침에 이 처지일 때 앞으로 벌 수 있는 최대 이익"으로 두면 그대로 옮겨진다.
+
+```js
+function maxProfit(prices) {
+  function go(i, holding) {
+    if (i >= prices.length) return 0;                // 날이 끝났다
+    const skip = go(i + 1, holding);                 // 오늘은 아무것도 안 한다
+    if (holding) return Math.max(skip, prices[i] + go(i + 2, false)); // 판다. i+1일은 쿨다운
+    return Math.max(skip, -prices[i] + go(i + 1, true));              // 산다
+  }
+  return go(0, false);
+}
+console.log(maxProfit([1, 4, 2, 5, 3, 6])); // 6
+```
+
+쿨다운은 `go(i + 2, false)` 한 곳에만 들어간다. 판 다음 날을 건너뛰고 그다음 날부터 다시 "없는 처지"로 시작한다. 날이 끝났을 때 주식을 들고 있어도 0을 돌려주는 건 괜찮다. 산 값을 이미 `-prices[i]`로 뺐기 때문에, 팔지 못한 계획은 알아서 손해로 계산돼 뽑히지 않는다.
+
+날마다 두 갈래라 호출 수가 지수로 는다. 0~9를 도는 가격으로 재 봤다.
+
+```text
+길이 20  호출 194,457번       4 ms
+길이 25  호출 3,236,383번     26 ms
+길이 30  호출 53,863,463번    460 ms
+```
+
+길이가 5 늘 때마다 16배쯤이다. 길이 5000은 꿈도 못 꾼다.
+
+## 같은 (날, 보유 여부)를 다시 묻지 않게
+
+`go`가 받는 값은 날짜 `i`와 보유 여부 두 가지뿐이라 서로 다른 질문은 `2n`개밖에 없다. "1일에 사고 2일에 그냥 보낸 경우"와 "1일에 그냥 보내고 2일에 산 경우"가 결국 같은 `go(3, true)`를 묻는다. 답을 적어 둔다.
+
+```js
+function maxProfit(prices) {
+  const n = prices.length;
+  const memo = [new Array(n).fill(null), new Array(n).fill(null)]; // memo[보유][날]
+  function go(i, h) {
+    if (i >= n) return 0;
+    if (memo[h][i] !== null) return memo[h][i];
+    const skip = go(i + 1, h);
+    const act = h ? prices[i] + go(i + 2, 0) : -prices[i] + go(i + 1, 1);
+    return (memo[h][i] = Math.max(skip, act));
+  }
+  return go(0, 0);
+}
+```
+
+"아직 모름" 표시를 `null`로 둔 건 이익 0이 흔한 답이라서다. 0이나 -1을 표시로 쓰면 0이 저장된 칸을 다시 계산하거나, 들고 있는 처지의 음수 값과 헷갈린다.
+
+시간 O(n), 공간 O(n)이다. 다만 재귀 깊이가 n까지 간다. n = 5000이면 JavaScript는 대체로 버티지만 Python은 기본 재귀 한도가 1000이라 `sys.setrecursionlimit`을 올려야 하고, 그래도 프레임이 무거워 느리다. 아래에서 위로 쌓는 쪽으로 넘어간다.
+
+## 하루를 세 상태로 나눈다
+
+재귀에서는 "판다"가 이틀을 한 번에 건너뛰었다. 아래에서 위로 채울 때는 하루씩 나아가는 편이 깔끔해서, 하루가 끝났을 때의 처지를 셋으로 나눈다.
+
+- `hold`: 주식을 들고 하루를 마쳤다.
+- `sold`: 오늘 팔았다. 그래서 내일은 살 수 없다.
+- `rest`: 주식이 없고, 오늘 팔지도 않았다. 내일 살 수 있다.
+
+각 칸의 값은 "그 처지로 i일을 마쳤을 때 손에 쥔 최대 금액"이다. 산 돈은 빼고 판 돈은 더하니 `hold`는 음수일 수 있다. 상태 사이의 화살표를 먼저 그린다.
+
+<ConceptDiagram
+  caption="하루가 지날 때 갈 수 있는 길. rest에서만 살 수 있다"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "rest", label: "rest", sub: "없음, 살 수 있음", x: 90, y: 70, w: 140 },
+    { id: "hold", label: "hold", sub: "들고 있음", x: 330, y: 70, w: 120 },
+    { id: "sold", label: "sold", sub: "오늘 팜", x: 210, y: 200, w: 120 },
+  ]}
+  edges={[
+    { from: "rest", to: "hold", label: "산다 -p" },
+    { from: "hold", to: "sold", label: "판다 +p" },
+    { from: "sold", to: "rest", label: "쿨다운" },
+  ]}
+/>
+
+그림에 자기 자신으로 돌아오는 화살표는 빠져 있지만 `hold`와 `rest`는 "그대로 하루 보내기"가 된다. `sold`는 그대로 머물 수 없다. 오늘 판 상태는 내일이면 무조건 쉬는 상태가 된다. 화살표를 식으로 옮긴다.
+
+```text
+hold[i] = max(hold[i-1], rest[i-1] - p)   계속 들거나, 쉬던 상태에서 산다
+sold[i] = hold[i-1] + p                   어제 들고 있던 걸 판다
+rest[i] = max(rest[i-1], sold[i-1])       계속 쉬거나, 어제 판 다음 날이다
+```
+
+쿨다운은 `hold`로 들어오는 화살표가 `rest`에서만 출발하는 것으로 표현된다. `sold`에서 바로 `hold`로 가는 길이 없으니 판 다음 날 사는 일이 생길 수 없다.
+
+상태를 나눌 때는 두 가지를 확인한다. 하나는 빠짐없음이다. 어떤 날 밤이든 나는 "들고 있다", "오늘 팔아서 없다", "오늘 팔지 않았고 없다" 중 정확히 하나에 있다. 다른 하나는 미래가 지금 상태만으로 정해지는지다. 내일 할 수 있는 일은 오늘 밤 상태 하나로 결정된다. `hold`면 팔거나 들고 있고, `sold`면 쉬기만 하고, `rest`면 사거나 쉰다. 언제 샀는지, 몇 번 거래했는지는 내일 선택에 영향이 없다. 이 두 조건이 맞으면 각 상태의 최댓값만 들고 가도 답을 잃지 않는다. 만약 "판 지 이틀 안"처럼 내일 선택을 바꾸는 정보가 상태 밖에 있으면 상태를 더 쪼개야 한다. 쿨다운이 k일인 변형이 그렇다.
+
+시작은 0일이다. 0일에 사면 `hold[0] = -prices[0]`, 0일에 팔 수는 없으니 `sold[0]`은 불가능한 상태로 `-Infinity`, `rest[0] = 0`이다.
+
+```js
+function maxProfit(prices) {
+  const n = prices.length;
+  if (n === 0) return 0;
+  const hold = new Array(n), sold = new Array(n), rest = new Array(n);
+  hold[0] = -prices[0];
+  sold[0] = -Infinity; // 0일에 팔 수는 없다
+  rest[0] = 0;
+  for (let i = 1; i < n; i++) {
+    hold[i] = Math.max(hold[i - 1], rest[i - 1] - prices[i]);
+    sold[i] = hold[i - 1] + prices[i];
+    rest[i] = Math.max(rest[i - 1], sold[i - 1]);
+  }
+  return Math.max(sold[n - 1], rest[n - 1]); // 마지막 날 들고 있으면 손해다
+}
+```
+
+예시의 표는 이렇다.
+
+```text
+day     0    1    2    3    4    5
+price   1    4    2    5    3    6
+hold   -1   -1   -1   -1    0    0
+sold   -∞    3    1    4    2    6
+rest    0    0    3    3    4    4
+```
+
+4일의 `hold`가 0으로 바뀐 게 계획 D의 두 번째 매수다. 3일의 `rest` 3(1일에 판 돈이 쿨다운을 지나 여기까지 왔다)에서 가격 3을 빼서 0이 된다. 5일의 `sold` 6이 답이다. 2일의 `hold`가 `rest[1] - 2 = -2`가 아니라 -1로 남는 데서 쿨다운이 보인다. 1일에 판 돈 3은 2일 `rest`에 가서야 쓸 수 있다.
+
+답을 `max(sold, rest)`로 고르는 이유도 짚는다. `hold`는 주식을 들고 끝난 상태라, 마지막 매수 값을 날린 셈이라 다른 두 칸보다 클 수 없다. 넣어도 답은 같지만 뜻이 흐려진다.
+
+시간 O(n), 공간 O(n)이다. 표가 있으면 어떤 날 사고팔았는지 되짚을 수 있다. 마지막 칸에서 출발해 값이 어느 화살표로 왔는지 따라가면 예시에서 "0일 사고 1일 팔고, 4일 사고 5일 판다"가 나온다.
+
+## 표 세 줄을 변수 세 개로
+
+i일 칸은 i-1일 칸만 본다. 변수 세 개면 충분하다. 조심할 곳은 갱신 순서다. 세 식의 오른쪽은 모두 어제 값이어야 한다. `sold`는 어제 `hold`를 쓰고, `rest`는 어제 `sold`를 쓰니 덮어쓰기 전에 하나를 빼 둔다.
+
+```js
+function maxProfit(prices) {
+  let hold = -Infinity; // 아직 산 적이 없으니 불가능한 상태로 시작
+  let sold = -Infinity;
+  let rest = 0;
+  for (const p of prices) {
+    const prevSold = sold;
+    sold = hold + p;                 // 어제 hold로 판다
+    hold = Math.max(hold, rest - p); // 어제 rest에서 산다 (rest는 아직 어제 값)
+    rest = Math.max(rest, prevSold); // 어제 sold 다음 날이다
+  }
+  return Math.max(sold, rest);
+}
+```
+
+`sold`를 먼저 계산하면 `hold`가 아직 어제 값이고, `hold`를 계산할 때 `rest`도 아직 어제 값이다. 덮어쓰기 전에 필요한 건 어제 `sold` 하나라 `prevSold`만 둔다. 0일을 따로 처리하지 않아도 된다. `hold`를 `-Infinity`로 시작하면 0일의 `sold`가 `-Infinity`가 되고, `hold`는 `0 - p`가 된다. 표 풀이의 초기값과 똑같다. 빈 배열이면 반복을 안 돌고 `max(-Infinity, 0) = 0`이 나온다.
+
+아래 그림에서 다음을 누르면 날마다 세 변수가 어떻게 바뀌는지 볼 수 있다. 위에서 그린 표의 열을 하나씩 읽는 것과 같다.
+
+<AlgoTrace
+  caption="prices = [1, 4, 2, 5, 3, 6]. 하루마다 세 상태를 어제 값으로 갱신한다"
+  memoryLabel="그날 밤의 세 상태"
+  cells={["1", "4", "2", "5", "3", "6"]}
+  steps={[
+    { memory: ["hold = -∞", "sold = -∞", "rest = 0"], caption: "시작. 아무것도 사지 않았다." },
+    { pointer: 0, memory: ["hold = -1", "sold = -∞", "rest = 0"], caption: "0일. 1에 사면 hold가 -1이다. 팔 수는 없다." },
+    { pointer: 1, found: [1], memory: ["hold = -1", "sold = 3", "rest = 0"], caption: "1일. 어제 hold -1에 4를 더해 sold가 3이다." },
+    { pointer: 2, memory: ["hold = -1", "sold = 1", "rest = 3"], caption: "2일. 어제 판 3이 rest로 넘어온다. 오늘 hold는 어제 rest 0에서 사야 해서 -1 그대로다." },
+    { pointer: 3, memory: ["hold = -1", "sold = 4", "rest = 3"], caption: "3일. 5에 사면 3 - 5 = -2라 hold는 -1이 낫다. 지금 팔면 4다." },
+    { pointer: 4, found: [4], memory: ["hold = 0", "sold = 2", "rest = 4"], caption: "4일. rest 3에서 3에 사서 hold가 0이 된다. 쿨다운을 지난 돈으로 다시 산다." },
+    { pointer: 5, found: [5], memory: ["hold = 0", "sold = 6", "rest = 4"], caption: "5일. hold 0에 6을 더해 sold가 6이다. 답은 max(6, 4) = 6이다." },
+  ]}
+/>
+
+시간 O(n), 공간 O(1)이다. 이 문제의 정석 풀이가 이것이다.
+
+## 이틀 전 장부로 사는 두 상태 버전
+
+세 상태가 번거로우면 첫 글의 두 상태(`hold`, `free`)로도 된다. `free[i]`를 "i일을 주식 없이 마친 최대 금액"으로 두면 `sold`와 `rest`를 합친 것이다. 쿨다운은 "살 때는 이틀 전 `free`를 쓴다"로 바뀐다. i일에 사려면 i-1일에 팔지 않았어야 하는데, i-2일까지 주식 없이 마친 상태는 i-1일을 쉬었다는 보장이 있다.
+
+```js
+function maxProfit(prices) {
+  let hold = -Infinity;
+  let free = 0;   // 어제까지 주식 없이 마친 최대 금액
+  let free2 = 0;  // 그 전날 값. 살 때는 이걸 쓴다
+  for (const p of prices) {
+    const prevFree = free;
+    free = Math.max(free, hold + p);   // 그대로 쉬거나, 오늘 판다
+    hold = Math.max(hold, free2 - p);  // 이틀 전 free에서 산다
+    free2 = prevFree;
+  }
+  return free;
+}
+```
+
+`hold = max(hold, free2 - p)`에서 `free2` 대신 `free`를 쓰면 쿨다운이 없는 [122번](/posts/leetcode-best-time-to-buy-and-sell-stock#몇-번이든-사고팔-수-있다면-leetcode-122) 풀이가 된다. 두 문제의 차이가 정확히 이 한 글자다. 이 버전은 쿨다운이 k일로 늘어나는 변형에서 일반화하기 쉽다. 이틀 전 대신 k+1일 전 값을 쓰면 된다.
+
+`hold`를 갱신할 때 `free2`는 아직 이틀 전 값이어야 한다. `free2 = prevFree`를 `hold` 갱신보다 먼저 쓰면 어제 값으로 사게 돼 쿨다운이 사라진다. 순서가 세 상태 버전보다 더 까다롭다.
+
+## 마지막으로 판 날로 나누는 다른 길
+
+상태 기계를 몰라도 떠올릴 수 있는 점화식이 하나 더 있다. `dp[i]`를 "i일까지 거래를 다 끝냈을 때 최대 이익"으로 두고, i일에 무엇을 했는지로 나눈다.
+
+- i일에 팔지 않았다: `dp[i-1]`과 같다.
+- i일에 팔았고, 그 주식은 j일에 샀다: j일에 사려면 j-1일은 쿨다운이 아니어야 하니 j-2일까지의 이익 `dp[j-2]`에 `prices[i] - prices[j]`를 더한다.
+
+```js
+function maxProfit(prices) {
+  const n = prices.length;
+  const dp = new Array(n).fill(0); // dp[i]: i일까지 끝냈을 때 최대 이익
+  for (let i = 1; i < n; i++) {
+    dp[i] = dp[i - 1];                           // i일에 팔지 않는다
+    for (let j = 0; j < i; j++) {                // j일에 사서 i일에 판다
+      const before = j >= 2 ? dp[j - 2] : 0;     // j-1일은 쿨다운일 수 없다
+      dp[i] = Math.max(dp[i], before + prices[i] - prices[j]);
+    }
+  }
+  return n ? dp[n - 1] : 0;
+}
+```
+
+매수일 j를 다 대 보니 O(n²)다. n = 5000이면 1250만 번 남짓 돈다. 길이 5000짜리 배열로 재 보니 이 풀이가 119 ms, 아래에서 고친 O(n) 버전이 1.2 ms, 변수 세 개 풀이가 0.7 ms였다. 통과는 하지만 100배 차이다.
+
+안쪽 반복문을 보면 i가 바뀌어도 `dp[j-2] - prices[j]` 부분은 j에만 달려 있다. 그러니 이 값의 최댓값을 `best`로 들고 다니면 안쪽 반복문이 사라진다.
+
+```js
+function maxProfit(prices) {
+  const n = prices.length;
+  if (n === 0) return 0;
+  const dp = new Array(n).fill(0);
+  let best = -prices[0]; // 지금까지의 max(dp[j-2] - prices[j])
+  for (let i = 1; i < n; i++) {
+    dp[i] = Math.max(dp[i - 1], best + prices[i]);
+    best = Math.max(best, (i >= 2 ? dp[i - 2] : 0) - prices[i]); // i일에 사는 후보를 추가
+  }
+  return dp[n - 1];
+}
+```
+
+예시에서 `dp`는 `[0, 3, 3, 4, 4, 6]`, `best`는 3일까지 -1, 4일부터 0이다. 그런데 이 `best`를 다시 보면 앞에서 본 `hold`와 똑같은 값이다. `dp`는 `free`이고 `dp[i-2]`는 `free2`다. 점화식을 "마지막 거래"로 세워도 최적화를 하고 나면 상태 기계와 같은 곳에 도착한다. 면접에서 상태 기계가 바로 안 떠오르면 이 길로 가도 된다.
+
+## 세 언어로 옮긴 쿨다운 풀이
+
+변수 세 개 풀이를 Python과 Java로 옮긴다.
+
+```python
+from typing import List
+
+class Solution:
+    def maxProfit(self, prices: List[int]) -> int:
+        hold, sold, rest = float("-inf"), float("-inf"), 0
+        for p in prices:
+            # 오른쪽은 모두 어제 값으로 계산된다 (동시 대입)
+            hold, sold, rest = max(hold, rest - p), hold + p, max(rest, sold)
+        return max(sold, rest)
+```
+
+Python은 동시 대입 덕분에 `prevSold` 같은 임시 변수가 필요 없다. 오른쪽 세 식을 모두 계산한 다음 한꺼번에 넣기 때문이다. `float("-inf")`는 첫날이 지나면 `hold`가 정수가 되고 그 뒤 `sold`도 정수라서, 돌려주는 값은 정수다. 빈 배열이면 `max(-inf, 0)`이 정수 0을 고른다. 정수가 아주 커져도 Python은 넘치지 않는다.
+
+```java
+class Solution {
+    public int maxProfit(int[] prices) {
+        // 불가능한 상태는 아주 작은 수로 둔다. /2는 빼기가 들어가는 변형에서 넘치지 않게 하는 여유다
+        int hold = Integer.MIN_VALUE / 2, sold = Integer.MIN_VALUE / 2, rest = 0;
+        for (int p : prices) {
+            int prevSold = sold;
+            sold = hold + p;                   // 어제 들고 있던 걸 오늘 판다
+            hold = Math.max(hold, rest - p);   // 계속 들거나, 쉬던 상태에서 산다
+            rest = Math.max(rest, prevSold);   // 계속 쉬거나, 어제 판 다음 날이다
+        }
+        return Math.max(sold, rest);
+    }
+}
+```
+
+Java에는 `-Infinity`가 없어서 `Integer.MIN_VALUE`를 쓰고 싶어진다. 이 코드는 거기에 양수를 더하기만 해서 넘치지 않지만, 수수료를 빼는 변형(`hold + p - fee`)으로 바꾸면 가격 0, 수수료 2일 때 `MIN_VALUE - 2`가 아주 큰 양수로 넘어가 답이 망가진다. 처음부터 `MIN_VALUE / 2`로 여유를 두는 습관이 안전하다. 세 언어 모두 위 예시에서 6, `[3, 1, 4, 8, 2, 9]`에서 10을 냈다.
+
+## 여섯 풀이의 시간과 공간
+
+길이 10 이하 무작위 배열 5000개로 여섯 풀이(와 두 상태 버전)의 답이 모두 같은 걸 확인했다.
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 두 갈래 재귀 | 지수 | O(n) 스택 | 점화식을 처음 세울 때 확인용 |
+| 메모이제이션 | O(n) | O(n) | 재귀로 생각하는 게 편할 때. Python은 깊이 주의 |
+| 마지막 매도일 DP | O(n²) | O(n) | 상태 기계가 안 떠오를 때 출발점 |
+| 마지막 매도일 + 최댓값 | O(n) | O(n) | 위 풀이를 면접에서 최적화해 보일 때 |
+| 세 상태 표 | O(n) | O(n) | 사고판 날짜까지 되짚어야 할 때 |
+| 변수 세 개 | O(n) | O(1) | 기본 답. 코드가 가장 짧다 |
+| 두 상태 + 이틀 전 | O(n) | O(1) | 쿨다운 길이가 바뀌는 변형 |
+
+## 쿨다운을 놓치는 코드
+
+### 갱신 순서가 틀려서 같은 날 정보가 섞인다
+
+```js
+for (const p of prices) {
+  hold = Math.max(hold, rest - p);
+  sold = hold + p;                 // 방금 바꾼 hold를 쓴다
+  rest = Math.max(rest, sold);     // 방금 바꾼 sold를 쓴다
+}
+```
+
+예시에서 이 코드는 9를 낸다. 쿨다운이 없는 답이다. `rest`가 오늘 판 돈을 바로 받아 버려서, 내일 `hold`가 그 돈으로 살 수 있게 된다. 세 식의 오른쪽이 모두 어제 값인지 하나씩 확인하거나, Python처럼 동시 대입을 쓴다.
+
+### 살 때 어제 free를 쓴다
+
+두 상태 버전에서 `hold = Math.max(hold, free - p)`로 쓰면 역시 9가 나온다. 이 코드는 122번의 정답이라 틀린 줄 모르고 넘어가기 쉽다. 쿨다운이 걸리는 곳은 사는 화살표 하나뿐이라는 걸 기억하면 어디를 고쳐야 할지 보인다.
+
+### 판 다음 날을 건너뛰지 않는다
+
+재귀에서 `prices[i] + go(i + 1, false)`로 쓰면 쿨다운이 없어진다. 반대로 `go(i + 2, true)`처럼 보유 여부를 잘못 넘기면 팔고 나서도 들고 있는 처지가 되어 같은 주식을 두 번 판다. 재귀 바닥을 `i >= prices.length`가 아니라 `i === prices.length`로 쓰면 마지막 날 판 뒤의 `i + 2`가 바닥을 건너뛰어 재귀가 끝나지 않는다. `[1, 4, 2]`에서 바로 `Maximum call stack size exceeded`가 난다.
+
+### 불가능한 상태를 0으로 시작한다
+
+`hold = 0`으로 시작하면 "공짜로 주식 하나를 들고 시작"한 셈이 된다. `[5, 4, 3]`에서 아무것도 사지 않고 0일에 팔아 5를 버는 답이 나온다. 아직 들 수 없는 상태는 `-Infinity`(Java는 아주 작은 수)로 둔다.
+
+## 상태 세 개를 직접 짜 보기
+
+아래 칸에서 `maxProfit`을 채워 실행해 보자. 테스트에는 빈 배열과 하루짜리, 계속 떨어지는 가격, 쿨다운 때문에 하루를 기다려야 하는 경우가 들어 있다.
+
+<CodePlayground
+  caption="Best Time to Buy and Sell Stock with Cooldown"
+  functionName="maxProfit"
+  initialCode={`function maxProfit(prices) {
+  // 판 다음 날은 살 수 없다. 최대 이익을 돌려준다
+  return 0;
+}`}
+  solution={`function maxProfit(prices) {
+  let hold = -Infinity; // 들고 있음
+  let sold = -Infinity; // 오늘 팜
+  let rest = 0;         // 없음, 내일 살 수 있음
+  for (const p of prices) {
+    const prevSold = sold;
+    sold = hold + p;
+    hold = Math.max(hold, rest - p);
+    rest = Math.max(rest, prevSold);
+  }
+  return Math.max(sold, rest);
+}`}
+  tests={[
+    { args: [[1, 4, 2, 5, 3, 6]], expected: 6, label: "하루 기다렸다 산다" },
+    { args: [[3, 1, 4, 8, 2, 9]], expected: 10, label: "두 번 거래" },
+    { args: [[1]], expected: 0, label: "하루뿐" },
+    { args: [[]], expected: 0, label: "빈 배열" },
+    { args: [[5, 4, 3, 2, 1]], expected: 0, label: "계속 떨어진다" },
+    { args: [[1, 2, 4]], expected: 3, label: "한 번에 길게" },
+    { args: [[2, 1, 4, 5, 2, 9, 7]], expected: 10, label: "쿨다운 뒤 바닥에서 산다" },
+  ]}
+/>
+
+## 쿨다운이 길어지거나 수수료가 붙으면
+
+### 쿨다운이 k일이라면
+
+두 상태 버전에서 "이틀 전 free"가 "k+1일 전 free"가 된다. 여러 날 전 값이 필요하니 `free`를 배열로 둔다.
+
+```js
+function maxProfitCooldownK(prices, k) {
+  const n = prices.length;
+  const free = new Array(n + 1).fill(0); // free[i]: i-1일까지 주식 없이 마친 최대 금액
+  let hold = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const back = i - k >= 0 ? free[i - k] : 0; // 마지막 매도 뒤 k일이 지나야 산다
+    hold = Math.max(hold, back - prices[i]);
+    free[i + 1] = Math.max(free[i], hold + prices[i]);
+  }
+  return free[n];
+}
+```
+
+예시에서 k = 0이면 9, 1이면 6, 2이면 6, 3이면 5다. k = 1일 때 앞의 풀이와 같은지, k = 0~3에서 재귀 브루트포스와 같은지 무작위 배열 3000개로 확인했다. 공간은 O(n)이지만 최근 k+1개만 원형 배열로 들고 있으면 O(k)로 줄어든다.
+
+### 거래마다 수수료가 있다면 (LeetCode 714)
+
+파는 화살표에 수수료를 뺀다. `sold = hold + p - fee`. 쿨다운이 없는 714번은 `sold`와 `rest`를 합쳐 두 상태로 풀고, 쿨다운과 수수료가 둘 다 있으면 세 상태 그대로 파는 식만 바꾼다. 예시에 수수료 1을 붙이면 두 번 거래하면 6 - 2 = 4, 1에 사서 6에 한 번 팔면 5 - 1 = 4라 답은 4다.
+
+### 거래 횟수에 제한까지 있다면
+
+상태에 "지금까지 몇 번 샀나"를 더한다. 세 상태가 횟수마다 하나씩 생겨 O(nk)가 된다. 첫 글의 [최대 k번 변형](/posts/leetcode-best-time-to-buy-and-sell-stock#최대-k번까지라면-leetcode-123-188)에 `rest` 상태를 끼우면 된다.
+
+### 사고판 날짜를 알려 달라면
+
+세 상태 표를 남기고 끝에서 거꾸로 따라간다. 지금 어느 상태에 있는지 들고 하루씩 뒤로 가며, 그 칸의 값이 어느 화살표에서 왔는지 비교한다.
+
+```js
+function trades(prices) {
+  const n = prices.length;
+  if (n === 0) return [];
+  const hold = [-prices[0]], sold = [-Infinity], rest = [0];
+  for (let i = 1; i < n; i++) {
+    hold[i] = Math.max(hold[i - 1], rest[i - 1] - prices[i]);
+    sold[i] = hold[i - 1] + prices[i];
+    rest[i] = Math.max(rest[i - 1], sold[i - 1]);
+  }
+  let state = sold[n - 1] > rest[n - 1] ? "sold" : "rest";
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    if (state === "sold") {                 // 오늘 팔았다. 어제는 들고 있었다
+      out.push(`sell ${i}`);
+      state = "hold";
+    } else if (state === "hold") {
+      if (i > 0 && hold[i] === hold[i - 1]) continue; // 어제도 들고 있었다
+      out.push(`buy ${i}`);                 // 오늘 샀다. 어제는 쉬는 상태였다
+      state = "rest";
+    } else if (i > 0 && rest[i] === sold[i - 1]) {
+      state = "sold";                       // 어제 판 다음 날이었다
+    }
+  }
+  return out.reverse();
+}
+console.log(trades([1, 4, 2, 5, 3, 6]).join(", "));
+console.log(trades([3, 1, 4, 8, 2, 9]).join(", "));
+```
+
+```text
+buy 0, sell 1, buy 4, sell 5
+buy 1, sell 2, buy 4, sell 5
+```
+
+첫 줄이 손으로 찾은 계획 D다. 두 번째 예시에서는 1에 사서 4에 팔고, 쿨다운(8)을 지나 2에 사서 9에 판다. 3 + 7 = 10이다. 1에 사서 8에 팔면 7을 한 번에 벌지만 그다음 날이 쿨다운이라 9 앞의 2를 놓친다. 값이 같은 화살표가 둘이면 비교 순서에 따라 다른 (하지만 이익은 같은) 계획이 나온다.
+
+같은 상태 기계 틀은 [House Robber](/posts/leetcode-house-robber)("어제 털었으면 오늘은 못 턴다")에도 그대로 있다. 털었다·안 털었다 두 상태가 사고팔기 대신 들어간 모양이다. 판 다음 날 못 사는 것과 턴 다음 집을 못 터는 것은 같은 제약이다.
+
+## 면접에서 나올 만한 질문
+
+### 쿨다운이 없는 122번처럼 오르는 날을 다 챙기면 왜 안 되나요?
+
+판 다음 날 살 수 없어서, 연속으로 오르내리는 구간에서 어떤 상승을 버릴지 골라야 하기 때문이다. `[1, 4, 2, 5, 3, 6]`에서 오르는 날을 다 챙기면 9인데 쿨다운 때문에 실제로는 6이 최대다. 지금 팔면 내일을 잃으니, 오늘의 선택이 미래에 영향을 주는 전형적인 DP 상황이다.
+
+### 상태를 왜 셋으로 나눴나요?
+
+"주식이 없다"에도 "내일 살 수 있다"와 "내일 살 수 없다"가 섞여 있기 때문이다. 오늘 판 상태(`sold`)와 그냥 쉬는 상태(`rest`)를 나누면 쿨다운이 "`hold`로 들어오는 화살표는 `rest`에서만 출발한다"는 구조로 바뀐다. 두 상태로 풀고 싶으면 대신 이틀 전 `free`를 기억하면 된다.
+
+### 공간을 O(1)로 줄일 때 무엇을 조심하나요?
+
+세 식의 오른쪽이 모두 어제 값이어야 한다. `sold`를 먼저 계산하고, 어제 `sold`를 임시 변수에 빼 둔 다음 `hold`, `rest` 순으로 갱신한다. 순서를 틀리면 오늘 판 돈으로 오늘 밤 `rest`가 채워져 쿨다운이 사라지고, 예시에서 9 같은 쿨다운 없는 답이 나온다.
+
+### 초기값은 어떻게 정하나요?
+
+아직 산 적이 없으니 `hold`와 `sold`는 불가능한 상태로 `-Infinity`, `rest`는 0이다. `hold`를 0으로 두면 공짜 주식을 들고 시작한 셈이라 떨어지는 가격에서도 이익이 생긴다. Java에서는 `Integer.MIN_VALUE`에 수수료를 빼는 식이 붙으면 넘치니 `MIN_VALUE / 2`처럼 여유를 둔다.
+
+### 상태 기계가 안 떠오르면 어떻게 접근하나요?
+
+`dp[i]`를 i일까지의 최대 이익으로 두고 "i일에 팔았다면 언제 샀나"로 나눈다. j일에 샀으면 `dp[j-2] + prices[i] - prices[j]`라 O(n²)인데, `dp[j-2] - prices[j]`의 최댓값을 들고 다니면 O(n)이 된다. 그 최댓값이 바로 상태 기계의 `hold`라서 두 길이 같은 풀이로 만난다.
+
+### 쿨다운이 k일로 늘어나면요?
+
+사는 화살표만 바뀐다. 두 상태 버전에서 이틀 전 대신 k+1일 전의 `free`로 산다. 최근 k+1개의 `free`를 배열이나 원형 버퍼로 들고 있으면 시간 O(n), 공간 O(k)다.
+
+### 실제로 사고판 날짜도 돌려줄 수 있나요?
+
+세 상태 표를 O(n) 공간으로 남기고 마지막 날에서 거꾸로 따라간다. 지금 값이 어느 화살표에서 왔는지(그대로 머물렀나, 샀나, 팔았나)를 비교해 상태를 바꿔 가며 거래를 모은다. 변수 세 개 풀이로는 지나간 상태를 잃기 때문에 되짚을 수 없다.

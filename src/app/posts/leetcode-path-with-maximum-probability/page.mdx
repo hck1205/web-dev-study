@@ -1,0 +1,512 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-path-with-maximum-probability");
+
+<EasyIntro>
+  여러 섬이 흔들다리로 이어져 있다고 해 보자. 다리마다 무사히 건널 확률이 적혀 있다. 다리를 두 개 건너면 두 확률을 곱한 만큼만 무사히 도착한다. 그래서 다리를 많이 건널수록 확률은 점점 작아진다. 우리는 출발 섬에서 도착 섬까지 가장 안전한 길, 곧 곱한 확률이 가장 큰 길을 찾고 싶다. 가장 좋은 방법은 지금까지 가장 안전하게 갈 수 있는 섬부터 하나씩 확정하는 것이다. 지금 가장 안전한 섬은 다른 다리를 더 건너 돌아와도 더 안전해질 수 없기 때문이다. 확률은 1보다 클 수 없어서 다리를 더 건너면 줄어들기만 한다. 확정한 섬에서 이어진 다리를 보며 이웃 섬의 확률을 높여 주다 보면, 도착 섬이 확정되는 순간 답이 나온다.
+</EasyIntro>
+
+길마다 성공 확률이 붙은 그래프에서 출발점부터 도착점까지 성공 확률이 가장 큰 길을 찾는 문제다. 무게를 더하는 대신 확률을 곱하고, 가장 작은 값 대신 가장 큰 값을 찾는다. 처음엔 낯설지만 바꿔 놓고 보면 다익스트라와 같은 구조라서, 최단 경로를 "왜" 그렇게 푸는지 확인하기 좋은 문제다.
+
+[LeetCode 1514. Path with Maximum Probability](https://leetcode.com/problems/path-with-maximum-probability/)는 Medium이다. 이 글은 모든 길을 따라가 보는 DFS부터 가지치기 DFS, 벨만-포드, SPFA, 최대 힙 다익스트라, 로그를 씌운 다익스트라까지 여섯 가지 풀이를 짠다. 다익스트라 자체와 낡은 후보 처리는 [Network Delay Time](/posts/leetcode-network-delay-time)과 [최단 경로 알고리즘 글](/posts/shortest-path-algorithms)에서 다뤘으니 여기서는 "곱하기와 최대"로 바꿀 때 무엇이 그대로이고 무엇이 달라지는지에 집중한다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 성공 확률을 곱해 가며 가장 안전한 길을 찾는다
+
+노드는 0부터 n - 1까지다. `edges[i] = [a, b]`는 a와 b를 잇는 양방향 길이고, 그 길을 무사히 지날 확률이 `succProb[i]`다. 여러 길을 지나면 성공 확률은 각 길의 확률을 곱한 값이다. `start`에서 `end`까지 가는 길 중 성공 확률이 가장 큰 값을 돌려준다. 길이 없으면 0이다. 정답과 10^-5 안쪽으로 차이 나면 맞은 것으로 친다.
+
+풀이를 고를 때 보는 조건은 이렇다.
+
+- n은 1만 이하, 간선은 2만 개 이하다. 노드가 1만이면 모든 쌍을 구하는 O(n³)은 1조 번이라 안 된다. 출발점 하나에서 푸는 방법이 필요하다.
+- 확률은 0 이상 1 이하다. 곱할수록 커지지 않는다는 이 성질이 다익스트라를 성립하게 한다.
+- 길은 양방향이고, 두 노드 사이에 길은 많아야 하나다. 그래프를 만들 때 양쪽 모두에 넣어야 한다.
+- 출발과 도착은 다른 노드다.
+
+이 글에서 쓸 예시는 노드 5개, 길 7개이고 0에서 4로 간다.
+
+```text
+0 - 1 : 0.5     1 - 4 : 0.5     3 - 4 : 0.5
+0 - 2 : 0.75    2 - 3 : 0.5     2 - 4 : 0.25
+1 - 2 : 0.75
+```
+
+<ConceptDiagram
+  caption="예시 그래프. 선 옆 숫자가 그 길을 무사히 지날 확률이다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "n0", label: "0", sub: "출발", x: 40, y: 125, w: 56, h: 40 },
+    { id: "n1", label: "1", x: 160, y: 40, w: 56, h: 40 },
+    { id: "n2", label: "2", x: 160, y: 210, w: 56, h: 40 },
+    { id: "n3", label: "3", x: 280, y: 210, w: 56, h: 40 },
+    { id: "n4", label: "4", sub: "도착", x: 360, y: 110, w: 56, h: 40 },
+  ]}
+  edges={[
+    { from: "n0", to: "n1", label: "0.5", arrow: "none" },
+    { from: "n0", to: "n2", label: "0.75", arrow: "none" },
+    { from: "n1", to: "n2", label: "0.75", arrow: "none" },
+    { from: "n1", to: "n4", label: "0.5", arrow: "none" },
+    { from: "n2", to: "n3", label: "0.5", arrow: "none" },
+    { from: "n3", to: "n4", label: "0.5", arrow: "none" },
+    { from: "n2", to: "n4", label: "0.25", arrow: "none" },
+  ]}
+/>
+
+손으로 풀어 보자. 4로 가는 길을 몇 개 적어 본다.
+
+- 0 → 1 → 4: 0.5 × 0.5 = 0.25
+- 0 → 2 → 4: 0.75 × 0.25 = 0.1875
+- 0 → 2 → 3 → 4: 0.75 × 0.5 × 0.5 = 0.1875
+- 0 → 2 → 1 → 4: 0.75 × 0.75 × 0.5 = 0.28125
+
+가장 큰 값은 길을 세 번 건너는 0 → 2 → 1 → 4의 0.28125다. 1로 바로 가면 0.5인데 2를 거쳐 돌아가면 0.5625라서 더 안전하다. 짧은 길이 늘 좋은 건 아니고, 경로를 다 비교해야 할 것처럼 보인다. 아래 풀이들은 그 비교를 얼마나 줄이느냐로 갈린다.
+
+## 모든 길을 따라가 확률을 곱해 본다
+
+가장 먼저 떠오르는 방법은 출발점에서 갈 수 있는 길을 모두 따라가 보는 것이다. 같은 노드를 두 번 지나는 길은 고리를 한 바퀴 더 도는 것이라 확률이 커질 수 없으니, 지금 길 위에 있는 노드는 다시 밟지 않는다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  const graph = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], i) => {
+    graph[a].push([b, succProb[i]]);
+    graph[b].push([a, succProb[i]]); // 양방향
+  });
+
+  const onPath = new Array(n).fill(false);
+  let best = 0;
+  const dfs = (u, p) => {
+    if (u === end) { best = Math.max(best, p); return; }
+    onPath[u] = true;
+    for (const [v, w] of graph[u]) {
+      if (!onPath[v]) dfs(v, p * w);
+    }
+    onPath[u] = false; // 다른 길에서는 이 노드를 다시 지나도 된다
+  };
+  dfs(start, 1);
+  return best;
+}
+```
+
+예시에서는 호출 13번으로 끝난다. 하지만 같은 노드를 지나지 않는 길(단순 경로)의 수는 그래프가 조금만 빽빽해져도 폭발한다. 노드 14개, 간선 37개짜리 무작위 그래프에서 세어 보니 호출이 92,784번이었다. 노드가 1만 개면 끝나지 않는다. 시간은 단순 경로 수에 비례하고, 최악에는 O(n!)에 가깝다.
+
+## 더 높은 확률로 와 본 노드에서 돌아오는 가지치기
+
+같은 노드에 더 높은 확률로 와 본 적이 있다면, 지금 길로 그 노드에서 더 가 봐야 이길 수 없다. 노드마다 지금까지 찾은 가장 높은 도착 확률을 적어 두고, 그보다 낮거나 같으면 돌아온다. 이 검사가 고리도 막아 준다. 고리를 돌아 같은 노드로 오면 확률이 커질 수 없어서 바로 돌아오기 때문이다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  const graph = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], i) => {
+    graph[a].push([b, succProb[i]]);
+    graph[b].push([a, succProb[i]]);
+  });
+
+  const best = new Array(n).fill(0); // best[u]: u에 닿는 지금까지의 최고 확률
+  const dfs = (u, p) => {
+    if (p <= best[u]) return; // 이미 이보다 높은 확률로 와 본 적이 있다
+    best[u] = p;
+    for (const [v, w] of graph[u]) dfs(v, p * w);
+  };
+  dfs(start, 1);
+  return best[end];
+}
+```
+
+`p <= best[u]`에서 같을 때도 돌아오는 게 중요하다. 확률이 1인 길로만 이어진 고리(`0 - 1 - 2 - 0`이 모두 1)가 있으면 `<`로는 같은 확률로 계속 서로를 불러 스택이 넘친다. 확률이 0인 길로 가면 `0 <= 0`이라 바로 돌아오는 것도 덤이다.
+
+노드 14개짜리 그래프에서는 호출이 92,784번에서 477번으로 줄었다. 그런데 노드 1만 개, 간선 2만 개짜리 무작위 그래프에서는 호출이 8,741만 번, 시간이 4.9초였다. 한 노드의 확률이 오를 때마다 그 뒤쪽을 처음부터 다시 훑기 때문이다. 확률이 확정되지 않은 노드에서 먼저 뻗어 나가는 게 낭비의 원인이다. 재귀 깊이도 노드 수만큼 깊어질 수 있어 Python이었다면 기본 재귀 한도 1,000에 바로 걸린다.
+
+## 간선 전체를 다시 훑는 벨만-포드
+
+재귀를 버리고 간선 전체를 훑으며 "a까지의 확률 × p가 b의 확률보다 크면 올린다"를 반복한다. 최단 경로의 완화(relaxation)를 곱하기와 최대로 바꾼 것이다. 길이 양방향이니 한 간선에서 두 방향을 모두 본다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  const prob = new Array(n).fill(0);
+  prob[start] = 1;
+  for (let round = 1; round < n; round++) {
+    let changed = false;
+    for (let i = 0; i < edges.length; i++) {
+      const [a, b] = edges[i], p = succProb[i];
+      // 길이 양방향이라 두 방향 모두 완화한다
+      if (prob[a] * p > prob[b]) { prob[b] = prob[a] * p; changed = true; }
+      if (prob[b] * p > prob[a]) { prob[a] = prob[b] * p; changed = true; }
+    }
+    if (!changed) break; // 한 바퀴 동안 바뀐 게 없으면 끝
+  }
+  return prob[end];
+}
+```
+
+가장 좋은 길은 같은 노드를 두 번 지나지 않으니 간선이 많아야 n - 1개이고, 한 바퀴마다 그 길의 앞쪽이 한 칸 이상 확정되어 n - 1바퀴면 충분하다. 이유는 [Network Delay Time의 벨만-포드 절](/posts/leetcode-network-delay-time#간선-전체를-n---1번-다시-보는-벨만-포드)과 같다.
+
+시간은 O(n · E), 최대 크기에서 2억 번이다. 바뀐 게 없으면 멈추는 조기 종료 덕분에 무작위 그래프에서는 12바퀴, 3.6ms로 끝났다. 하지만 입력이 불리하면 그대로 2억 번이다. 0 - 1 - 2 - … - 9999 사슬을 간선 순서를 거꾸로 적어 두고 0에서 출발하면, 한 바퀴에 한 칸씩만 전진해 9,999바퀴를 다 돌았고 571ms가 걸렸다. 사슬이라 간선이 1만 개뿐인데도 그렇다.
+
+## 확률이 오른 노드만 다시 보는 SPFA
+
+벨만-포드는 바뀌지 않은 노드의 간선까지 매번 본다. 확률이 오른 노드만 큐에 넣고, 그 노드에서 나가는 간선만 다시 보면 헛일이 준다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  const graph = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], i) => {
+    graph[a].push([b, succProb[i]]);
+    graph[b].push([a, succProb[i]]);
+  });
+  const prob = new Array(n).fill(0);
+  const inQueue = new Array(n).fill(false);
+  prob[start] = 1;
+  const queue = [start];
+  inQueue[start] = true;
+  for (let head = 0; head < queue.length; head++) {
+    const u = queue[head];
+    inQueue[u] = false; // 꺼냈으니 다시 오르면 또 들어갈 수 있다
+    for (const [v, w] of graph[u]) {
+      if (prob[u] * w > prob[v]) {
+        prob[v] = prob[u] * w;
+        if (!inQueue[v]) { inQueue[v] = true; queue.push(v); }
+      }
+    }
+  }
+  return prob[end];
+}
+```
+
+예시에서는 노드를 7번 꺼냈다. 노드 1만 개짜리 무작위 그래프에서는 23,269번 꺼냈으니 노드 하나를 평균 2.3번 다시 본 셈이다. 최악은 벨만-포드와 같은 O(n · E)다. 큐에서 먼저 꺼낸 노드의 값이 나중에 또 오르는 일을 막을 장치가 없어서다.
+
+여기까지는 모두 "오를 수 있으면 다시 본다"는 방식이다. 확률이 가장 높은 노드부터 꺼내면 한 번 꺼낸 노드는 다시 볼 필요가 없다는 게 다음 풀이의 출발점이다.
+
+## 확률이 가장 높은 노드부터 확정하는 다익스트라
+
+손으로 푼 과정을 떠올려 보자. 0에서 출발하면 1은 0.5, 2는 0.75가 된다. 이때 2는 더 오를 수 없다. 2에 더 높은 확률로 가려면 0.75보다 작은 어딘가를 먼저 지나야 하는데, 거기서 확률 1 이하인 길을 곱하면 0.75보다 커질 수 없다. 그래서 "아직 확정하지 않은 노드 중 확률이 가장 높은 노드"는 바로 확정해도 된다.
+
+이건 무게가 0 이상일 때 다익스트라가 성립하는 이유와 똑같다. 더하기에서 "0 이상을 더하면 줄지 않는다"가 곱하기에서는 "1 이하를 곱하면 늘지 않는다"로 바뀌었을 뿐이다. 그래서 최소 힙을 최대 힙으로, `<`를 `>`로, 더하기를 곱하기로 바꾸면 된다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  // 양방향 인접 리스트: graph[u] = [[v, p], ...]
+  const graph = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], i) => {
+    graph[a].push([b, succProb[i]]);
+    graph[b].push([a, succProb[i]]);
+  });
+
+  const prob = new Array(n).fill(0);
+  prob[start] = 1;
+  const heap = [[1, start]]; // [확률, 노드]를 확률 큰 순으로 꺼내는 최대 힙
+
+  const push = (item) => {
+    heap.push(item);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] >= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1;
+        let s = i;
+        if (l < heap.length && heap[l][0] > heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] > heap[s][0]) s = r;
+        if (s === i) break;
+        [heap[s], heap[i]] = [heap[i], heap[s]];
+        i = s;
+      }
+    }
+    return top;
+  };
+
+  while (heap.length > 0) {
+    const [p, u] = pop();
+    if (u === end) return p;      // 꺼내는 순간 확정된다
+    if (p < prob[u]) continue;    // 더 높은 확률로 이미 확정된 노드의 낡은 후보
+    for (const [v, w] of graph[u]) {
+      if (p * w > prob[v]) {
+        prob[v] = p * w;
+        push([prob[v], v]);
+      }
+    }
+  }
+  return 0; // end에 닿지 못했다
+}
+```
+
+힙은 [Network Delay Time](/posts/leetcode-network-delay-time#힙으로-다음-노드를-빨리-고른다)의 최소 힙에서 비교 방향만 뒤집었다. 힙의 원리는 [힙 글](/posts/ds-heap#넣으면-올라가고-꺼내면-내려간다)에 있다. 도착점 하나만 필요하니 `end`를 꺼내는 순간 돌려준다. 꺼낼 때 확정되므로 그 뒤로 값이 바뀌지 않는다.
+
+아래 그림은 예시 그래프에서 이 코드가 힙을 어떻게 쓰는지 따라간 것이다. 칸은 노드 0~4이고, 아래는 힙에 든 후보를 `확률:노드`로 확률이 큰 순서대로 적었다. 실제 코드에 로그를 찍어 꺼낸 순서 그대로다.
+
+<AlgoTrace
+  caption="최대 힙 다익스트라. 칸은 노드 0~4, 초록 칸이 확정된 노드다"
+  memoryLabel="힙 (확률:노드)"
+  cells={["0", "1", "2", "3", "4"]}
+  steps={[
+    { pointer: 0, memory: ["1:0"], caption: "출발점 0의 확률을 1로 적고 힙에 넣는다. 나머지는 모두 0이다." },
+    { pointer: 0, found: [0], memory: ["0.75:2", "0.5:1"], caption: "1:0을 꺼내 확정한다. 1은 0.5, 2는 0.75가 된다." },
+    { pointer: 2, found: [0, 2], memory: ["0.5625:1", "0.5:1", "0.375:3", "0.1875:4"], caption: "0.75:2를 꺼내 확정한다. 1이 0.75 × 0.75 = 0.5625로 오르고, 3은 0.375, 4는 0.1875다." },
+    { pointer: 1, found: [0, 2, 1], memory: ["0.5:1", "0.375:3", "0.28125:4", "0.1875:4"], caption: "0.5625:1을 꺼내 확정한다. 4가 0.5625 × 0.5 = 0.28125로 오른다." },
+    { pointer: 1, found: [0, 2, 1], memory: ["0.375:3", "0.28125:4", "0.1875:4"], caption: "0.5:1이 나왔다. 1은 이미 0.5625로 확정됐으니 낡은 후보라 버린다." },
+    { pointer: 3, found: [0, 2, 1, 3], memory: ["0.28125:4", "0.1875:4"], caption: "0.375:3을 꺼내 확정한다. 3을 거쳐 4로 가면 0.1875라 오르지 않는다." },
+    { pointer: 4, found: [0, 2, 1, 3, 4], memory: ["0.1875:4"], caption: "0.28125:4를 꺼냈다. 도착점이 확정됐으니 0.28125를 돌려준다." },
+  ]}
+/>
+
+셋째 단계가 손으로 풀 때 본 장면이다. 1은 처음 0.5로 들어갔지만 2를 확정하고 나서 0.5625로 다시 들어갔다. 큰 쪽이 먼저 나와 확정됐으니 나중에 나온 0.5:1은 `p < prob[u]` 검사에서 버려진다. 마지막에 0.1875:4가 힙에 남아 있지만 도착점을 이미 꺼냈으니 볼 필요가 없다.
+
+시간은 O(E log E)다. 확률이 오를 때마다 힙에 하나씩 넣어서 힙에는 많아야 2E개(양방향)가 들어간다. 공간은 그래프 O(n + E)와 힙 O(E)다. 여기까지 본 풀이 중 처음으로 최악 입력을 걱정하지 않아도 되는 풀이다.
+
+### Python과 Java로 쓰면
+
+Python의 `heapq`는 최소 힙뿐이라 확률에 `-`를 붙여 넣고 꺼낼 때 다시 뒤집는다. 튜플 `(-확률, 노드)`는 첫 값부터 비교하니 확률이 큰 것부터 나온다. 이 부호를 빼먹으면 확률이 낮은 것부터 꺼내서 답이 틀린다(뒤의 틀리는 코드 절에서 본다).
+
+```python
+import heapq
+from typing import List
+
+
+def max_probability(n: int, edges: List[List[int]], succ_prob: List[float],
+                    start: int, end: int) -> float:
+    graph = [[] for _ in range(n)]
+    for (a, b), p in zip(edges, succ_prob):
+        graph[a].append((b, p))
+        graph[b].append((a, p))
+
+    prob = [0.0] * n
+    prob[start] = 1.0
+    heap = [(-1.0, start)]  # heapq는 최소 힙이라 확률에 -를 붙여 넣는다
+    while heap:
+        neg, u = heapq.heappop(heap)
+        p = -neg
+        if u == end:
+            return p
+        if p < prob[u]:
+            continue  # 낡은 후보
+        for v, w in graph[u]:
+            if p * w > prob[v]:
+                prob[v] = p * w
+                heapq.heappush(heap, (-prob[v], v))
+    return 0.0
+
+
+ex = [[0, 1], [0, 2], [1, 2], [1, 4], [2, 3], [3, 4], [2, 4]]
+pr = [0.5, 0.75, 0.75, 0.5, 0.5, 0.5, 0.25]
+print(max_probability(5, ex, pr, 0, 4))
+print(max_probability(3, [[0, 1]], [0.5], 0, 2))
+print(max_probability(2, [[0, 1]], [0.0], 0, 1))
+```
+
+```text
+0.28125
+0.0
+0.0
+```
+
+Java는 `PriorityQueue`의 비교자를 `Double.compare(y[0], x[0])`로 뒤집어 최대 힙을 만든다. 정수 문제에서 쓰던 `(x, y) -> y[0] - x[0]`은 `double`을 돌려주니 비교자로 컴파일되지 않고, `(int)`로 바꾸면 0.5와 0.25의 차가 0이 되어 순서가 망가진다. 노드 번호도 `double[]`에 함께 넣었으니 꺼낼 때 `(int)`로 바꾼다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public double maxProbability(int n, int[][] edges, double[] succProb, int start, int end) {
+        List<List<double[]>> graph = new ArrayList<>();
+        for (int i = 0; i < n; i++) graph.add(new ArrayList<>());
+        for (int i = 0; i < edges.length; i++) {
+            int a = edges[i][0], b = edges[i][1];
+            graph.get(a).add(new double[]{b, succProb[i]});
+            graph.get(b).add(new double[]{a, succProb[i]});
+        }
+
+        double[] prob = new double[n];
+        prob[start] = 1.0;
+        // [확률, 노드]. 확률이 큰 것부터 꺼내도록 비교를 뒤집는다
+        PriorityQueue<double[]> pq = new PriorityQueue<>((x, y) -> Double.compare(y[0], x[0]));
+        pq.offer(new double[]{1.0, start});
+        while (!pq.isEmpty()) {
+            double[] cur = pq.poll();
+            double p = cur[0];
+            int u = (int) cur[1];
+            if (u == end) return p;
+            if (p < prob[u]) continue; // 낡은 후보
+            for (double[] e : graph.get(u)) {
+                int v = (int) e[0];
+                if (p * e[1] > prob[v]) {
+                    prob[v] = p * e[1];
+                    pq.offer(new double[]{prob[v], v});
+                }
+            }
+        }
+        return 0.0;
+    }
+}
+```
+
+```text
+0.28125
+0.0
+0.0
+```
+
+노드 번호를 `double`에 넣어도 1만까지의 정수는 정확히 표현되니 문제없다. `double`은 2^53까지의 정수를 오차 없이 담는다.
+
+## 로그를 씌우면 보통 최단 경로가 된다
+
+곱하기를 더하기로 바꾸는 오래된 방법이 있다. 로그는 곱을 합으로 바꾼다. log(p1 × p2) = log p1 + log p2다. 확률이 0과 1 사이라 log p는 0 이하이니 부호를 뒤집은 -log p는 0 이상이다. 그리고 확률이 클수록 -log p는 작다. 그러니 "곱한 확률이 가장 큰 길"은 "무게 -log p를 더한 거리가 가장 짧은 길"과 같다. 무게가 0 이상이니 보통 다익스트라를 그대로 쓴다.
+
+```js
+function maxProbability(n, edges, succProb, start, end) {
+  const graph = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], i) => {
+    if (succProb[i] === 0) return;      // -log 0 = 무한대: 지나갈 수 없는 길
+    const w = -Math.log(succProb[i]);   // 0 이상인 무게로 바꾼다
+    graph[a].push([b, w]);
+    graph[b].push([a, w]);
+  });
+  const dist = new Array(n).fill(Infinity);
+  dist[start] = 0;
+  const heap = [[0, start]]; // [거리, 노드] 최소 힙. push/pop은 Network Delay Time 글과 같다
+  // ... push, pop 생략 ...
+  while (heap.length > 0) {
+    const [d, u] = pop();
+    if (u === end) return Math.exp(-d); // 거리를 다시 확률로
+    if (d > dist[u]) continue;
+    for (const [v, w] of graph[u]) {
+      if (d + w < dist[v]) { dist[v] = d + w; push([dist[v], v]); }
+    }
+  }
+  return 0;
+}
+```
+
+예시에서 이 코드는 0.28125가 아니라 0.28125000000000006을 낸다. 로그와 지수를 오가며 작은 반올림 오차가 붙기 때문이다. LeetCode는 10^-5 안쪽 차이를 받아 주니 통과하지만, 정확한 값과 비교하는 테스트에서는 틀린다. 확률을 직접 곱하는 앞의 풀이는 0.5, 0.75처럼 2의 거듭제곱으로 나눈 값끼리 곱하면 오차 없이 정확한 값이 나온다.
+
+시간은 다익스트라와 같은 O(E log E)이고 로그 계산이 간선마다 한 번 더 붙는다. 그럼 왜 쓰나. 확률을 수백 번 곱하면 값이 `double`이 표현할 수 있는 가장 작은 수보다 작아져 0으로 떨어진다(언더플로). 0.01을 200번 곱하면 10^-400인데, `double`은 약 4.9 × 10^-324보다 작은 양수를 담지 못한다. 로그 합은 200 × 4.6 = 920 정도라 아무 문제가 없다. 음성 인식의 비터비 알고리즘이나 확률 모델에서 로그 확률을 쓰는 이유가 이것이다. 이 문제는 노드가 1만 개라 이론상 언더플로가 날 수 있지만, 답이 10^-5보다 작으면 0과 구분하지 않으니 직접 곱해도 된다.
+
+## 가장 안전한 길을 직접 구해 보기
+
+빈 함수를 채워 테스트를 돌려 보자. 확률은 모두 0.5, 0.25, 0.75처럼 2의 거듭제곱으로 나눈 값이라 곱셈에 오차가 없고, 어떤 순서로 곱해도 정확히 같은 값이 나온다. 로그를 쓰는 풀이로는 오차 때문에 몇 개가 틀릴 수 있다.
+
+<CodePlayground
+  caption="Path with Maximum Probability"
+  functionName="maxProbability"
+  initialCode={"function maxProbability(n, edges, succProb, start, end) {\n  // edges[i] = [a, b]: a와 b를 잇는 양방향 길, 성공 확률 succProb[i]\n  // start에서 end까지 성공 확률의 최댓값, 길이 없으면 0\n  return 0;\n}"}
+  solution={"function maxProbability(n, edges, succProb, start, end) {\n  // 양방향 인접 리스트: graph[u] = [[v, p], ...]\n  const graph = Array.from({ length: n }, () => []);\n  edges.forEach(([a, b], i) => {\n    graph[a].push([b, succProb[i]]);\n    graph[b].push([a, succProb[i]]);\n  });\n\n  const prob = new Array(n).fill(0);\n  prob[start] = 1;\n  const heap = [[1, start]]; // [확률, 노드]를 확률 큰 순으로 꺼내는 최대 힙\n\n  const push = (item) => {\n    heap.push(item);\n    let i = heap.length - 1;\n    while (i > 0) {\n      const p = (i - 1) >> 1;\n      if (heap[p][0] >= heap[i][0]) break;\n      [heap[p], heap[i]] = [heap[i], heap[p]];\n      i = p;\n    }\n  };\n  const pop = () => {\n    const top = heap[0];\n    const last = heap.pop();\n    if (heap.length > 0) {\n      heap[0] = last;\n      let i = 0;\n      while (true) {\n        const l = 2 * i + 1, r = l + 1;\n        let s = i;\n        if (l < heap.length && heap[l][0] > heap[s][0]) s = l;\n        if (r < heap.length && heap[r][0] > heap[s][0]) s = r;\n        if (s === i) break;\n        [heap[s], heap[i]] = [heap[i], heap[s]];\n        i = s;\n      }\n    }\n    return top;\n  };\n\n  while (heap.length > 0) {\n    const [p, u] = pop();\n    if (u === end) return p;      // 꺼내는 순간 확정된다\n    if (p < prob[u]) continue;    // 더 높은 확률로 이미 확정된 노드의 낡은 후보\n    for (const [v, w] of graph[u]) {\n      if (p * w > prob[v]) {\n        prob[v] = p * w;\n        push([prob[v], v]);\n      }\n    }\n  }\n  return 0; // end에 닿지 못했다\n}\n"}
+  tests={[
+    { label: "글의 예시", args: [5, [[0, 1], [0, 2], [1, 2], [1, 4], [2, 3], [3, 4], [2, 4]], [0.5, 0.75, 0.75, 0.5, 0.5, 0.5, 0.25], 0, 4], expected: 0.28125 },
+    { label: "길이 없다", args: [3, [[0, 1]], [0.5], 0, 2], expected: 0 },
+    { label: "확률 0인 길", args: [2, [[0, 1]], [0], 0, 1], expected: 0 },
+    { label: "거꾸로 적힌 간선", args: [3, [[1, 0], [2, 1]], [0.5, 0.5], 0, 2], expected: 0.25 },
+    { label: "바로 가는 길이 낫다", args: [3, [[0, 1], [1, 2], [0, 2]], [0.5, 0.5, 0.5], 0, 2], expected: 0.5 },
+    { label: "확률 1 고리", args: [4, [[0, 1], [1, 2], [2, 0], [2, 3]], [1, 1, 1, 0.125], 0, 3], expected: 0.125 },
+    { label: "돌아가는 길이 낫다", args: [4, [[0, 3], [0, 1], [1, 2], [2, 3]], [0.125, 0.75, 0.75, 0.75], 0, 3], expected: 0.421875 },
+  ]}
+/>
+
+## 확률 문제를 푸는 여섯 방법 비교
+
+n은 노드 수, E는 간선 수다. 측정은 노드 1만 개, 간선 2만 개짜리 무작위 그래프에서 했다.
+
+| 풀이 | 시간 | 공간 | 무작위 그래프 | 언제 고르나 |
+|---|---|---|---|---|
+| 모든 길 DFS | 단순 경로 수, 최악 O(n!) | O(n) | 끝나지 않는다 | 노드가 열 개 안팎일 때 검증용 |
+| 가지치기 DFS | 최악 지수 | O(n) | 호출 8,741만 번, 4.9초 | 고르지 않는다 |
+| 벨만-포드 | O(n · E) | O(n) | 12바퀴, 3.6ms | 입력이 우호적이고 코드가 짧아야 할 때. 사슬 입력에서 9,999바퀴 |
+| SPFA | 평균 빠름, 최악 O(n · E) | O(n + E) | 2.3만 번 꺼냄 | 평균만 믿어도 되는 경우 |
+| 최대 힙 다익스트라 | O(E log E) | O(n + E) | 최악이 보장된다 | 기본값 |
+| -log 다익스트라 | O(E log E) | O(n + E) | 같은 급, 오차 10^-17 | 확률을 아주 많이 곱해 언더플로가 걱정될 때 |
+
+벨만-포드가 무작위 그래프에서 빠르게 끝난 건 조기 종료가 일찍 걸렸기 때문이다. 같은 벨만-포드가 간선 1만 개짜리 사슬에서는 571ms를 썼다. 면접에서는 최대 힙 다익스트라를 내놓고 "확률이 1 이하라 곱할수록 커지지 않으니 확정이 성립한다"를 꼭 말한다. 그 한 문장이 이 문제의 요점이다.
+
+## 최소 힙 습관과 한쪽 방향 간선에서 틀린다
+
+가장 흔한 실수는 최단 경로 코드를 옮기면서 힙 방향을 그대로 두는 것이다. Python에서 `-`를 빼먹으면 이렇게 된다.
+
+```js
+// 틀린 코드: 확률이 작은 것부터 꺼내는 최소 힙에 도착 즉시 반환
+const [p, u] = popMin();
+if (u === end) return p;
+```
+
+예시에서 이 코드는 0.28125가 아니라 0.25를 낸다. 확률이 작은 후보부터 꺼내다 보니 0 → 1 → 4로 0.25가 적힌 4를 먼저 꺼내고 돌려줘 버린다. 다익스트라의 확정 논리는 "지금 가장 좋은 것"을 꺼낼 때만 성립한다.
+
+두 번째는 간선을 한쪽 방향으로만 넣는 것이다. `edges[i] = [a, b]`를 보고 `graph[a]`에만 넣으면 a에서 b로만 갈 수 있다. 예시에서 이 코드는 2에서 1로 가는 길을 못 써서 0.25를 내고, `[[1, 0], [1, 2]]`처럼 간선이 거꾸로 적힌 입력에서 0에서 2로 가는 답 0.25를 0으로 낸다.
+
+세 번째는 BFS처럼 힙에 넣을 때 방문 표시를 하는 것이다.
+
+```js
+// 틀린 코드: 처음 닿은 확률로 굳힌다
+for (const [v, w] of graph[u]) {
+  if (!seen[v]) { seen[v] = true; push([p * w, v]); }
+}
+```
+
+예시에서 1은 0에서 바로 간 0.5로 굳고, 2를 거친 0.5625를 받을 기회가 사라진다. 4도 2에서 바로 간 0.1875로 먼저 들어가 굳는다. 이 코드는 0.1875를 낸다. 넣는 순간은 후보일 뿐이고 확정은 꺼낼 때 한다. [Swim in Rising Water](/posts/leetcode-swim-in-rising-water#넣을-때-표시해도-되는-이유)처럼 넣을 때 표시해도 되는 문제가 따로 있는데, 그 문제는 칸의 높이가 어느 이웃에서 오든 같고 꺼내는 값이 커지기만 해서, 처음 넣을 때의 값이 가장 좋은 값이기 때문이다. 이 문제는 확률이 길마다 달라서 나중에 꺼낸 노드가 더 좋은 길로 닿을 수 있다.
+
+네 번째는 최단 경로 코드의 초기값을 그대로 쓰는 것이다. 거리 배열은 `Infinity`로 채우지만 확률 배열은 0으로 채우고, 출발점은 0이 아니라 1이다. 출발점을 0으로 두면 곱이 모두 0이라 어떤 노드도 오르지 않는다.
+
+다섯 번째는 낡은 후보 검사를 `p <= prob[u]`로 쓰는 것이다. 꺼낸 후보가 유효하면 `p`와 `prob[u]`가 같으니 모든 노드가 버려진다. 버리는 조건은 엄격하게 작을 때다.
+
+## 길 고르는 기준이 바뀌면
+
+### 경로 자체를 돌려 달라면
+
+확률이 오를 때 `prev[v] = u`를 적어 두고, 끝에서 `end`부터 `prev`를 따라 거꾸로 올라간 뒤 뒤집는다. 방법은 [최단 경로 글의 경로 복원 절](/posts/shortest-path-algorithms#지나온-길을-거꾸로-따라가기)과 같다.
+
+### 확률이 1보다 큰 값이 섞이면
+
+곱할수록 커질 수 있으니 다익스트라의 확정이 깨진다. 이건 최단 경로에서 음수 간선이 섞인 것과 같다. -log p가 음수가 되는 간선이 생긴다고 보면 바로 이해된다. 벨만-포드로 바꾸고, 곱이 1보다 큰 고리가 있으면 최댓값이 정의되지 않는다고 답한다. 환율 차익 거래를 찾는 문제가 이 모양이다. 환율을 곱해 한 바퀴 돌아왔을 때 1보다 크면 돈을 무한히 불릴 수 있다. 이유는 [최단 경로 글의 음수 간선 절](/posts/shortest-path-algorithms#음수-간선-하나가-확정을-깬다)에 있다.
+
+### 길을 k번 이하로만 건너라면
+
+다익스트라는 가장 좋은 확률만 들고 다녀서, 확률은 낮아도 덜 건넌 길이 나중에 필요해지는 경우를 놓친다. 바퀴 수를 k로 묶은 벨만-포드가 맞는다. [Cheapest Flights Within K Stops](/posts/leetcode-cheapest-flights-within-k-stops)가 같은 구조다.
+
+### 곱이 아니라 가장 약한 다리가 기준이라면
+
+길에서 가장 낮은 확률을 최대로 하라면(가장 약한 다리가 가장 튼튼한 길) `p * w` 자리를 `Math.min(p, w)`로 바꾼 최대 힙 다익스트라가 된다. 반대로 가장 높은 값을 최소로 하는 문제가 [Swim in Rising Water](/posts/leetcode-swim-in-rising-water)다. 최대 신장 트리 위의 경로를 쓰는 방법도 있다.
+
+### 출발점이 여러 개라면
+
+출발점마다 다익스트라를 돌리거나, 노드가 수백 개 이하면 플로이드-워셜로 모든 쌍을 한 번에 구한다. 플로이드-워셜이 그대로 쓰이는 문제가 [Find the City With the Smallest Number of Neighbors at a Threshold Distance](/posts/leetcode-find-city-smallest-neighbors)다.
+
+### 비슷한 문제
+
+- [Network Delay Time](/posts/leetcode-network-delay-time): 더하기와 최소로 푸는 같은 구조의 다익스트라.
+- [Swim in Rising Water](/posts/leetcode-swim-in-rising-water): 더하기 대신 최댓값으로 바꾼 다익스트라.
+- LeetCode 1631. Path With Minimum Effort: 이웃 칸 높이 차의 최댓값을 최소로 하는 격자 다익스트라.
+- LeetCode 399. Evaluate Division: 간선에 비율을 곱해 가는 그래프 탐색. 최적화가 아니라 경로 하나만 찾으면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 확률을 곱하는데 왜 다익스트라를 쓸 수 있나
+
+확률이 0 이상 1 이하라서 길을 더 지날수록 곱이 커지지 않기 때문이다. 아직 확정하지 않은 노드 중 확률이 가장 높은 노드에 더 높은 확률로 가려면 그보다 낮은 노드를 거쳐야 하는데, 거기서 1 이하를 곱하면 커질 수 없다. 최단 경로에서 무게가 0 이상이라 더해도 줄지 않는 것과 같은 성질이다.
+
+### 최단 경로 코드에서 무엇을 바꾸나
+
+최소 힙을 최대 힙으로, 더하기를 곱하기로, `<` 비교를 `>`로 바꾼다. 초기값은 `Infinity` 대신 0, 출발점은 0 대신 1이다. 간선은 양방향으로 넣는다. 낡은 후보 버리기와 도착점을 꺼내면 바로 끝내는 구조는 그대로다.
+
+### -log를 씌우는 방법은 언제 쓰나
+
+곱을 합으로 바꿔 보통 다익스트라를 그대로 쓰고 싶을 때, 그리고 확률을 아주 많이 곱해 언더플로가 걱정될 때 쓴다. -log p는 0 이상이라 다익스트라가 성립한다. 대신 로그와 지수를 오가며 작은 오차가 붙는다. 예시에서도 0.28125가 아니라 0.28125000000000006이 나왔다.
+
+### 벨만-포드로도 통과하는데 왜 다익스트라인가
+
+벨만-포드는 O(n · E), 이 문제에서 최악 2억 번이다. 조기 종료로 무작위 입력에서는 금방 끝나지만, 사슬처럼 불리한 입력에서는 노드 수만큼 바퀴를 다 돈다. 다익스트라는 O(E log E)가 입력과 상관없이 보장된다. 벨만-포드가 필요한 건 확률이 1을 넘는 값이 섞이거나 건너는 횟수에 제한이 있을 때다.
+
+### 힙에 넣을 때 방문 표시를 하면 왜 틀리나
+
+넣는 순간의 확률은 후보일 뿐이고, 나중에 다른 길로 더 높아질 수 있기 때문이다. 예시에서 1은 바로 가면 0.5지만 2를 거치면 0.5625다. 넣을 때 굳히면 0.5로 고정되고 답이 0.1875로 틀린다. 확정은 힙에서 꺼낼 때 한다.
+
+### 시간과 공간 복잡도는
+
+그래프를 만드는 데 O(n + E), 힙에는 확률이 오를 때마다 넣어 많아야 2E개가 들어가고 넣고 빼는 데 log가 붙어 O(E log E)다. E가 n² 이하라 O(E log n)이라고도 쓴다. 공간은 그래프와 힙을 합쳐 O(n + E)다.
+
+### 확률이 1보다 큰 값이 있으면
+
+곱할수록 커질 수 있어 다익스트라가 틀린다. 최단 경로에 음수 간선이 생긴 것과 같다. 벨만-포드로 n - 1바퀴 완화하고, n번째 바퀴에도 값이 오르면 곱이 1보다 큰 고리가 있어 최댓값이 없다고 답한다. 환율 차익 거래 탐지가 이 구조다.

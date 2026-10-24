@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 1105편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 1131편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -561,7 +561,7 @@
 - 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / O는 최악이라는 뜻이 아니다 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 운영에서 n²은 이런 모양으로 드러난다 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: binary-search, sql-query-rewrite
 - 키워드 백링크 →: nodejs-debugging-profiling, ds-binary-tree-bst, sorting-algorithms, js-execution-context, ds-hash-map, js-memoization, sql-filtering-operators, event-loop, regex-and-globbing, ds-array-matrix
-- 이 글로 오는 글 ←: algorithms-overview, binary-search, complexity-classes-p-np, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, greedy-algorithms, js-memoization, leetcode-4sum, leetcode-asteroid-collision, leetcode-binary-search, leetcode-climbing-stairs, leetcode-daily-temperatures, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-group-anagrams, leetcode-largest-rectangle-in-histogram, leetcode-longest-consecutive-sequence, leetcode-longest-palindromic-substring, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-multiply-strings, leetcode-n-queens, leetcode-number-of-connected-components, leetcode-pacific-atlantic-water-flow, leetcode-palindrome-partitioning, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-sort-colors, leetcode-study-guide, leetcode-subsets, leetcode-subsets-ii, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-search, monotonic-stack-pattern, recursion-backtracking, regex-and-globbing, sliding-window-pattern, sorting-algorithms, string-search-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, binary-search, complexity-classes-p-np, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, greedy-algorithms, js-memoization, leetcode-4sum, leetcode-asteroid-collision, leetcode-binary-search, leetcode-climbing-stairs, leetcode-daily-temperatures, leetcode-extra-characters-in-a-string, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-group-anagrams, leetcode-largest-rectangle-in-histogram, leetcode-longest-consecutive-sequence, leetcode-longest-palindromic-substring, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-multiply-strings, leetcode-n-queens, leetcode-number-of-connected-components, leetcode-pacific-atlantic-water-flow, leetcode-palindrome-partitioning, leetcode-plus-one, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-shortest-path-in-binary-matrix, leetcode-sort-colors, leetcode-study-guide, leetcode-subsets, leetcode-subsets-ii, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-search, monotonic-stack-pattern, recursion-backtracking, regex-and-globbing, sliding-window-pattern, sorting-algorithms, string-search-algorithms
 
 #### `complexity-classes-p-np` — P와 NP: 빨리 풀 수 없다는 걸 어떻게 아나
 
@@ -607,7 +607,7 @@
 - 소제목: 칸이 붙어 있어서 인덱스가 공짜다 / 자리가 모자라면 더 큰 방으로 옮긴다 / 자바스크립트 배열은 속이 여러 가지다 / 미리 자리를 잡으면 빨라질까 / 양 끝에서 좁혀 오는 두 포인터 / 창을 밀면서 세기 / 미리 더해 두면 구간 합이 뺄셈 한 번 / 2차원도 메모리에서는 한 줄이다 / 행렬을 제자리에서 돌리기 / 배열 코드에서 반복해서 나오는 실수 / 배열이 아닌 걸 골라야 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-linked-list, ds-stack-queue-deque, js-array-mutation, big-o-notation, ds-hash-map, js-primitive-vs-reference, ds-heap, ds-binary-tree-bst, data-structures-overview
 - 키워드 백링크 →: cpu-cache-hierarchy, js-prototype-chain, sliding-window-pattern, two-pointers-pattern, segment-tree-fenwick, js-memoization
-- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, cpu-cache-hierarchy, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque, greedy-algorithms, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-capacity-to-ship-packages-within-d-days, leetcode-car-pooling, leetcode-container-with-most-water, leetcode-fruit-into-baskets, leetcode-gas-station, leetcode-happy-number, leetcode-interval-list-intersections, leetcode-invert-binary-tree, leetcode-linked-list-cycle, leetcode-longest-common-subsequence, leetcode-lowest-common-ancestor-of-bst, leetcode-max-consecutive-ones-iii, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-move-zeroes, leetcode-product-of-array-except-self, leetcode-remove-duplicates-from-sorted-array, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-rotate-image, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-two-sum-ii, leetcode-valid-palindrome, leetcode-valid-parentheses, segment-tree-fenwick, sliding-window-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, cpu-cache-hierarchy, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque, greedy-algorithms, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-capacity-to-ship-packages-within-d-days, leetcode-car-pooling, leetcode-container-with-most-water, leetcode-distinct-subsequences, leetcode-fruit-into-baskets, leetcode-gas-station, leetcode-happy-number, leetcode-interleaving-string, leetcode-interval-list-intersections, leetcode-invert-binary-tree, leetcode-linked-list-cycle, leetcode-longest-common-subsequence, leetcode-lowest-common-ancestor-of-bst, leetcode-max-consecutive-ones-iii, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-move-zeroes, leetcode-product-of-array-except-self, leetcode-remove-duplicates-from-sorted-array, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-rotate-image, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-two-sum-ii, leetcode-valid-palindrome, leetcode-valid-parentheses, segment-tree-fenwick, sliding-window-pattern, two-pointers-pattern
 
 #### `ds-binary-tree-bst` — 이진 트리와 이진 탐색 트리: 순회, 지우기, 기울어진 트리
 
@@ -618,7 +618,7 @@
 - 소제목: 노드 하나에 자식 두 개 / 왼쪽은 작고 오른쪽은 크다 / 네 가지 순서로 훑기 / 재귀는 깊이만큼 스택을 먹는다 / 지우기는 자식 수에 따라 세 갈래 / 정렬된 키를 넣으면 리스트가 된다 / BST가 맞는지 검증하기 / 두 노드의 가장 가까운 공통 조상 / 트리를 꺼낼 때와 넣어 둘 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-hash-map, ds-heap, data-structures-overview, ds-graph-bfs-dfs, dom-basics, ds-stack-queue-deque, db-index, sd-leaderboard-sorted-set
 - 키워드 백링크 →: balanced-search-trees, cpu-instruction-cycle, page-cache-disk-io, ds-linked-list, redis-basics
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, cpu-scheduling-interrupts, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie, leetcode-binary-tree-level-order-traversal, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-house-robber, leetcode-insert-interval, leetcode-invert-binary-tree, leetcode-kth-largest-element-in-a-stream, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-non-overlapping-intervals, leetcode-serialize-and-deserialize-binary-tree, leetcode-sliding-window-maximum, leetcode-sliding-window-median, leetcode-study-guide, leetcode-time-based-key-value-store, leetcode-two-sum-ii, leetcode-validate-binary-search-tree, recursion-backtracking, segment-tree-fenwick
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, cpu-scheduling-interrupts, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie, leetcode-binary-tree-level-order-traversal, leetcode-construct-tree-from-preorder-inorder, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-house-robber, leetcode-insert-interval, leetcode-invert-binary-tree, leetcode-kth-largest-element-in-a-stream, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-my-calendar-i, leetcode-non-overlapping-intervals, leetcode-serialize-and-deserialize-binary-tree, leetcode-sliding-window-maximum, leetcode-sliding-window-median, leetcode-study-guide, leetcode-time-based-key-value-store, leetcode-two-sum-ii, leetcode-validate-binary-search-tree, recursion-backtracking, segment-tree-fenwick
 
 #### `ds-graph-bfs-dfs` — 그래프와 BFS·DFS: 최단 경로, 사이클, 위상 정렬
 
@@ -629,7 +629,7 @@
 - 소제목: 점과 선을 메모리에 담는 두 방법 / 가까운 것부터 한 겹씩 넓히는 BFS / 한 갈래를 끝까지 가 보는 DFS / 재귀는 수천 단계에서 끊긴다 / 방향 그래프에서 고리 찾기 / 먼저 할 일부터 줄 세우기 / 선수 과목을 다 들을 수 있나 / 격자도 그래프다 / 선에 무게가 붙으면 BFS가 틀린다 / 문제를 보고 탐색을 고르는 법 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-trie, ds-union-find, data-structures-overview, ds-stack-queue-deque, ds-heap, sd-maps-tiles-routing, db-type-graph
 - 키워드 백링크 →: shortest-path-algorithms, linters-formatters, dom-basics, binary-search, recursion-backtracking, js-closures
-- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-catalog-lineage, data-structures-overview, db-type-graph, dbt-transformations, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, frontend-frameworks-compared, graph-rag, greedy-algorithms, leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-right-side-view, leetcode-cheapest-flights-within-k-stops, leetcode-clone-graph, leetcode-coin-change, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-design-add-and-search-words, leetcode-diameter-of-binary-tree, leetcode-generate-parentheses, leetcode-jump-game, leetcode-jump-game-ii, leetcode-max-area-of-island, leetcode-maximum-depth-of-binary-tree, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-number-of-connected-components, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-rotting-oranges, leetcode-study-guide, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, max-flow-bipartite-matching, modular-monolith, npm-package-publishing, pattern-composite, plugin-microkernel-architecture, react-fiber-render-commit, recursion-backtracking, sd-maps-tiles-routing, sd-web-crawler-architecture, shortest-path-algorithms, site-architecture-internal-linking, sql-cte-recursive, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-catalog-lineage, data-structures-overview, db-type-graph, dbt-transformations, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, frontend-frameworks-compared, graph-rag, greedy-algorithms, leetcode-alien-dictionary, leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-right-side-view, leetcode-candy, leetcode-cheapest-flights-within-k-stops, leetcode-clone-graph, leetcode-coin-change, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-design-add-and-search-words, leetcode-diameter-of-binary-tree, leetcode-find-city-smallest-neighbors, leetcode-generate-parentheses, leetcode-interleaving-string, leetcode-jump-game, leetcode-jump-game-ii, leetcode-max-area-of-island, leetcode-maximum-depth-of-binary-tree, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-number-of-connected-components, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-path-with-maximum-probability, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-rotting-oranges, leetcode-shortest-path-in-binary-matrix, leetcode-study-guide, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, max-flow-bipartite-matching, modular-monolith, npm-package-publishing, pattern-composite, plugin-microkernel-architecture, react-fiber-render-commit, recursion-backtracking, sd-maps-tiles-routing, sd-web-crawler-architecture, shortest-path-algorithms, site-architecture-internal-linking, sql-cte-recursive, sqld-top-n-hierarchical-pivot
 
 #### `ds-hash-map` — 해시맵: 키를 칸 번호로 바꾸는 구조와 O(1)이 깨지는 순간
 
@@ -640,7 +640,7 @@
 - 소제목: 키를 칸 번호로 바꾸는 함수 / 같은 칸에 두 키가 떨어지면 / 얼마나 채우면 느려지나 / 객체와 Map은 같은 해시가 아니다 / 면접 단골 문제를 해시로 풀기 / 일부러 충돌을 만드는 공격 / 해시가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, ds-stack-queue-deque, ds-binary-tree-bst, ds-heap, data-structures-overview, js-object-methods, js-memoization, ds-trie, bloom-filter, consistent-hashing
 - 키워드 백링크 →: js-equality-coercion, db-index, sd-latency-numbers, db-sharding, event-loop, two-pointers-pattern, big-o-notation
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, bloom-filter, cpu-cache-hierarchy, cpu-instruction-cycle, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, js-map-set-weak, k8s-kube-proxy-modes, leetcode-3sum, leetcode-binary-tree-maximum-path-sum, leetcode-contains-duplicate, leetcode-daily-temperatures, leetcode-group-anagrams, leetcode-hand-of-straights, leetcode-happy-number, leetcode-implement-trie, leetcode-linked-list-cycle, leetcode-longest-consecutive-sequence, leetcode-longest-substring-without-repeating, leetcode-next-greater-element-i, leetcode-number-of-connected-components, leetcode-partition-labels, leetcode-single-number, leetcode-study-guide, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-sudoku, lossy-counting, postgres-operations, postgres-query-planner, randomized-algorithms, redis-basics, redis-high-throughput, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, shell-environment-startup, sql-query-tuning, sqld-joins, string-search-algorithms, valkey-vs-redis, virtual-memory-paging
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, bloom-filter, cpu-cache-hierarchy, cpu-instruction-cycle, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, js-map-set-weak, k8s-kube-proxy-modes, leetcode-3sum, leetcode-binary-tree-maximum-path-sum, leetcode-contains-duplicate, leetcode-count-primes, leetcode-daily-temperatures, leetcode-detect-squares, leetcode-group-anagrams, leetcode-hand-of-straights, leetcode-happy-number, leetcode-implement-trie, leetcode-linked-list-cycle, leetcode-longest-consecutive-sequence, leetcode-longest-substring-without-repeating, leetcode-missing-number, leetcode-next-greater-element-i, leetcode-number-of-connected-components, leetcode-partition-labels, leetcode-power-of-two, leetcode-single-number, leetcode-single-number-ii, leetcode-study-guide, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-sudoku, lossy-counting, postgres-operations, postgres-query-planner, randomized-algorithms, redis-basics, redis-high-throughput, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, shell-environment-startup, sql-query-tuning, sqld-joins, string-search-algorithms, valkey-vs-redis, virtual-memory-paging
 
 #### `ds-heap` — 힙과 우선순위 큐: 배열 하나로 가장 작은 것 꺼내기
 
@@ -651,7 +651,7 @@
 - 소제목: 배열 하나에 트리를 접어 넣는다 / 넣으면 올라가고 꺼내면 내려간다 / 한꺼번에 만들면 O(n)이다 / 정렬된 배열이 아니라 힙인 이유 / 비교 함수 하나가 힙의 성격을 정한다 / 상위 k개만 남기기 / k개의 줄을 하나로 합치기 / 흐르는 숫자의 중앙값 / 힙이 일하는 곳 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-binary-tree-bst, ds-hash-map, js-array-mutation, percentile-latency, event-loop, js-timers-accuracy, sd-maps-tiles-routing, ds-graph-bfs-dfs
 - 키워드 백링크 →: sorting-algorithms, db-type-wide-column, db-index-design
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, divide-and-conquer, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-union-find, greedy-algorithms, interval-problems-pattern, leetcode-asteroid-collision, leetcode-car-pooling, leetcode-cheapest-flights-within-k-stops, leetcode-design-twitter, leetcode-employee-free-time, leetcode-find-median-from-data-stream, leetcode-gas-station, leetcode-hand-of-straights, leetcode-k-closest-points-to-origin, leetcode-kth-largest-element-in-a-stream, leetcode-kth-largest-element-in-an-array, leetcode-last-stone-weight, leetcode-max-area-of-island, leetcode-median-of-two-sorted-arrays, leetcode-meeting-rooms-ii, leetcode-merge-k-sorted-lists, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-network-delay-time, leetcode-reorganize-string, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-task-scheduler, leetcode-top-k-frequent-elements, leetcode-trapping-rain-water, minimum-spanning-tree, quadtree, queue-based-load-leveling, sd-maps-tiles-routing, segment-tree-fenwick, shortest-path-algorithms, sorting-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, divide-and-conquer, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-union-find, greedy-algorithms, interval-problems-pattern, leetcode-asteroid-collision, leetcode-car-pooling, leetcode-cheapest-flights-within-k-stops, leetcode-design-twitter, leetcode-employee-free-time, leetcode-find-city-smallest-neighbors, leetcode-find-median-from-data-stream, leetcode-gas-station, leetcode-hand-of-straights, leetcode-ipo, leetcode-k-closest-points-to-origin, leetcode-kth-largest-element-in-a-stream, leetcode-kth-largest-element-in-an-array, leetcode-last-stone-weight, leetcode-max-area-of-island, leetcode-median-of-two-sorted-arrays, leetcode-meeting-rooms-ii, leetcode-merge-k-sorted-lists, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-network-delay-time, leetcode-path-with-maximum-probability, leetcode-reorganize-string, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-task-scheduler, leetcode-top-k-frequent-elements, leetcode-trapping-rain-water, minimum-spanning-tree, quadtree, queue-based-load-leveling, sd-maps-tiles-routing, segment-tree-fenwick, shortest-path-algorithms, sorting-algorithms
 
 #### `ds-linked-list` — 연결 리스트: 포인터 하나로 이어 붙인 노드
 
@@ -662,7 +662,7 @@
 - 소제목: 노드가 다음 노드의 주소를 들고 있다 / 화살표를 돌리기 전에 다음 노드를 잡아 둔다 / 두 배로 달리는 포인터 / 고리가 있는지 메모리 없이 알아내기 / 정렬된 두 줄을 하나로 합치기 / 자바스크립트에서 연결 리스트를 잘 안 쓰는 이유 / 해시맵이 노드를 가리킬 때: LRU 캐시 / React 안에도 연결 리스트가 있다 / 연결 리스트 코드에서 자주 나는 실수 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, ds-stack-queue-deque, thread-safety, ds-heap, garbage-collection, caching-strategies, redis-memory-eviction, react-rerender, js-memory-leak
 - 키워드 백링크 →: js-memoization, big-o-notation, cpu-cache-hierarchy, sorting-algorithms, js-array-mutation, redis-basics
-- 이 글로 오는 글 ←: balanced-search-trees, caching-concepts-map, caching-strategies, cpu-cache-hierarchy, cpu-pipelining-branch-prediction, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-stack-queue-deque, ds-union-find, js-array-mutation, leetcode-add-two-numbers, leetcode-binary-tree-level-order-traversal, leetcode-clone-graph, leetcode-contains-duplicate, leetcode-copy-list-with-random-pointer, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-lowest-common-ancestor-of-bst, leetcode-lru-cache, leetcode-median-of-two-sorted-arrays, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-min-stack, leetcode-multiply-strings, leetcode-remove-duplicates-from-sorted-array, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-reverse-linked-list, leetcode-reverse-nodes-in-k-group, leetcode-sort-colors, leetcode-study-guide, leetcode-sudoku-solver, leetcode-sum-of-two-integers, leetcode-time-based-key-value-store, leetcode-top-k-frequent-elements, leetcode-valid-palindrome, pattern-chain-of-responsibility, react-custom-hooks-rules, react-fiber-render-commit, react-reconciliation-keys, redis-basics, redis-memory-eviction, sd-leaderboard-sorted-set, sd-stock-exchange-order-book, sorting-algorithms, thread-safety, two-pointers-pattern
+- 이 글로 오는 글 ←: balanced-search-trees, caching-concepts-map, caching-strategies, cpu-cache-hierarchy, cpu-pipelining-branch-prediction, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-stack-queue-deque, ds-union-find, js-array-mutation, leetcode-add-two-numbers, leetcode-binary-tree-level-order-traversal, leetcode-clone-graph, leetcode-contains-duplicate, leetcode-copy-list-with-random-pointer, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-lowest-common-ancestor-of-bst, leetcode-lru-cache, leetcode-median-of-two-sorted-arrays, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-min-stack, leetcode-multiply-strings, leetcode-plus-one, leetcode-remove-duplicates-from-sorted-array, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-reverse-integer, leetcode-reverse-linked-list, leetcode-reverse-nodes-in-k-group, leetcode-sort-colors, leetcode-study-guide, leetcode-sudoku-solver, leetcode-sum-of-two-integers, leetcode-time-based-key-value-store, leetcode-top-k-frequent-elements, leetcode-valid-palindrome, pattern-chain-of-responsibility, react-custom-hooks-rules, react-fiber-render-commit, react-reconciliation-keys, redis-basics, redis-memory-eviction, sd-leaderboard-sorted-set, sd-stock-exchange-order-book, sorting-algorithms, thread-safety, two-pointers-pattern
 
 #### `ds-stack-queue-deque` — 스택, 큐, 덱: 끝에서만 넣고 빼는 구조
 
@@ -673,7 +673,7 @@
 - 소제목: 마지막에 넣은 것이 먼저 나온다 / 쌓인 것을 정리하며 쌓는 단조 스택 / 먼저 온 것이 먼저 나간다 / 너비 우선 탐색이 큐를 쓰는 이유 / 양쪽 끝이 다 열린 덱과 링 버퍼 / 창 안의 최댓값을 덱으로 따라가기 / React의 상태 업데이트도 큐에 쌓인다 / 큐가 쌓이기만 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, ds-array-matrix, ds-linked-list, js-execution-context, pattern-command, big-o-notation, message-queue-basics, event-loop, ds-graph-bfs-dfs, sd-stock-exchange-low-latency, react-rerender, backpressure, ds-heap, data-structures-overview
 - 키워드 백링크 →: sliding-window-pattern, sd-latency-numbers, centralized-logging-pipeline, js-memory-leak
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, leetcode-asteroid-collision, leetcode-car-fleet, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-next-greater-element-i, leetcode-partition-labels, leetcode-remove-k-digits, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern, shortest-path-algorithms, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, leetcode-asteroid-collision, leetcode-car-fleet, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-next-greater-element-i, leetcode-partition-labels, leetcode-remove-k-digits, leetcode-sliding-window-maximum, leetcode-sum-of-prefix-scores-of-strings, leetcode-trapping-rain-water, leetcode-valid-parentheses, leetcode-valid-parenthesis-string, monotonic-stack-pattern, shortest-path-algorithms, two-pointers-pattern
 
 #### `ds-trie` — 트라이: 접두사를 길로 바꾸는 자료구조
 
@@ -684,7 +684,7 @@
 - 소제목: 해시 집합이 대답하지 못하는 질문 / 글자 하나가 길 하나 / 넣고, 찾고, 접두사 묻기 / 해시 집합도 사실 O(L)이다 / 끝 표시를 잊으면 생기는 일 / 점 하나가 길을 여러 개로 가른다 / 판 위에서 단어 여러 개를 한 번에 찾기 / 판 위에서 직접 찾아보기 / 단어를 지울 때는 빈 가지까지 치운다 / 노드 하나가 생각보다 무겁다 / 글자를 어떻게 자르느냐 / 트라이를 고를 때와 고르지 않을 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-autocomplete-trie, data-structures-overview, layer-ip-routing-icmp, ds-binary-tree-bst, ds-graph-bfs-dfs
 - 키워드 백링크 →: nodejs-web-frameworks, js-memory-leak, string-search-algorithms, ds-hash-map, big-o-notation
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, ds-hash-map, leetcode-design-add-and-search-words, leetcode-implement-trie, leetcode-letter-combinations-of-a-phone-number, leetcode-replace-words, leetcode-study-guide, leetcode-word-break, leetcode-word-search, leetcode-word-search-ii, sd-autocomplete-trie, string-search-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, ds-hash-map, leetcode-design-add-and-search-words, leetcode-extra-characters-in-a-string, leetcode-implement-trie, leetcode-letter-combinations-of-a-phone-number, leetcode-replace-words, leetcode-study-guide, leetcode-word-break, leetcode-word-search, leetcode-word-search-ii, sd-autocomplete-trie, string-search-algorithms
 
 #### `ds-union-find` — 유니온 파인드: 같은 그룹인지 거의 상수 시간에
 
@@ -695,7 +695,7 @@
 - 소제목: 배열 하나로 숲을 만든다 / 한 줄로 늘어진 나무 / 작은 나무를 큰 나무 밑에 / 지나온 길을 대표에 바로 붙인다 / 둘을 합치면 사실상 상수 / 재귀 find가 죽는 순간 / 그룹이 몇 개 남았나 / 싼 선부터 고르는 크루스칼 / 고리를 만드는 첫 간선 / 유니온 파인드가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-graph-bfs-dfs, data-structures-overview, ds-heap, ds-hash-map
 - 키워드 백링크 →: minimum-spanning-tree, ds-linked-list, big-o-notation
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, greedy-algorithms, leetcode-container-with-most-water, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-max-area-of-island, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-number-of-connected-components, leetcode-number-of-islands, leetcode-redundant-connection, leetcode-swim-in-rising-water, minimum-spanning-tree
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, greedy-algorithms, leetcode-container-with-most-water, leetcode-count-primes, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-max-area-of-island, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-number-of-connected-components, leetcode-number-of-islands, leetcode-redundant-connection, leetcode-swim-in-rising-water, minimum-spanning-tree
 
 #### `max-flow-bipartite-matching` — 최대 유량과 이분 매칭: 파이프에 얼마나 흘려보낼 수 있나
 
@@ -727,7 +727,7 @@
 - 소제목: 값 하나가 바뀌면 누적 합을 다시 만든다 / 구간을 반씩 나눠 미리 더해 둔다 / 묻는 구간을 노드 몇 개로 덮는다 / 값 하나 고치면 뿌리까지 log n개 / 배열 크기는 왜 4n인가 / 바닥부터 쌓는 반복문 세그먼트 트리 / 구간 전체에 더하기: 지연 전파 / 최하위 비트로 부모를 찾는 펜윅 트리 / 펜윅이 못 하는 질의 / 현장에서 쓰이는 곳 / 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, balanced-search-trees, ds-heap, ds-binary-tree-bst, sd-leaderboard-sorted-set
 - 키워드 백링크 →: sd-latency-numbers, sql-filtering-operators, db-type-time-series, redis-basics
-- 이 글로 오는 글 ←: balanced-search-trees, bit-manipulation, ds-array-matrix, interval-problems-pattern, leetcode-car-pooling, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-longest-increasing-subsequence, leetcode-majority-element, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-product-of-array-except-self, leetcode-sliding-window-maximum, leetcode-sliding-window-median
+- 이 글로 오는 글 ←: balanced-search-trees, bit-manipulation, ds-array-matrix, interval-problems-pattern, leetcode-car-pooling, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-longest-increasing-subsequence, leetcode-majority-element, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-my-calendar-i, leetcode-power-of-two, leetcode-product-of-array-except-self, leetcode-sliding-window-maximum, leetcode-sliding-window-median
 
 #### `shortest-path-algorithms` — 최단 경로: 다익스트라, 벨만-포드, A*를 고르는 기준
 
@@ -738,7 +738,7 @@
 - 소제목: 가장 가까운 곳부터 확정한다 / 힙에 낡은 후보가 쌓여도 괜찮다 / 지나온 길을 거꾸로 따라가기 / 음수 간선 하나가 확정을 깬다 / 모든 간선을 V-1번 다시 본다 / 고리를 돌수록 줄어드는 길: 음수 사이클 / 목적지 쪽으로 기울이는 A\* / 무게가 0과 1뿐이면 덱으로 / 모든 쌍이 필요하면 플로이드-워셜 / 그래프를 보고 알고리즘을 고르는 순서 / 현장에서 최단 경로가 틀리는 순간 / 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-graph-bfs-dfs, sd-maps-tiles-routing, greedy-algorithms, ds-heap, router-vs-switch, ds-stack-queue-deque, dynamic-programming, minimum-spanning-tree
 - 키워드 백링크 →: routing-protocols-ospf-rip-eigrp
-- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-jump-game-ii, leetcode-network-delay-time, leetcode-rotting-oranges, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, routing-protocols-ospf-rip-eigrp
+- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-find-city-smallest-neighbors, leetcode-jump-game-ii, leetcode-network-delay-time, leetcode-path-with-maximum-probability, leetcode-rotting-oranges, leetcode-shortest-path-in-binary-matrix, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, routing-protocols-ospf-rip-eigrp
 
 ### Programming › Algorithms › For System Design (`programming/algorithms/system-design`)
 
@@ -896,9 +896,9 @@
 - 키워드: (없음)
 - 길이: 514줄
 - 소제목: 한 칸 또는 두 칸씩 오르는 방법의 수 / 4칸짜리 계단을 손으로 세 본다 / 점화식 그대로 재귀로 짠다 / 한 번 구한 칸은 적어 둔다 / 바닥부터 표를 채운다 / 손가락 두 개만 짚고 올라간다 / 행렬을 거듭제곱하면 log n번에 끝난다 / 공식 하나로 바로 구한다면 / 2칸 걸음을 몇 번 쓰나로 세기 / Python과 Java로 옮길 때 / 일곱 풀이를 나란히 놓으면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: dynamic-programming, recursion-backtracking, big-o-notation, leetcode-study-guide, leetcode-coin-change, leetcode-house-robber, sliding-window-pattern, leetcode-decode-ways
+- 직접 링크 →: dynamic-programming, recursion-backtracking, big-o-notation, leetcode-study-guide, leetcode-coin-change, leetcode-house-robber, leetcode-coin-change-ii, sliding-window-pattern, leetcode-decode-ways
 - 키워드 백링크 →: js-classes, js-memoization, divide-and-conquer, floating-point-numbers, js-destructuring, js-closures
-- 이 글로 오는 글 ←: leetcode-coin-change, leetcode-counting-bits, leetcode-decode-ways, leetcode-house-robber, leetcode-longest-increasing-subsequence, leetcode-powx-n, leetcode-word-break
+- 이 글로 오는 글 ←: leetcode-coin-change, leetcode-coin-change-ii, leetcode-counting-bits, leetcode-decode-ways, leetcode-house-robber, leetcode-longest-increasing-subsequence, leetcode-powx-n, leetcode-word-break
 
 #### `leetcode-coin-change` — LeetCode 322. Coin Change: 마지막에 낸 동전 하나로 표를 채운다
 
@@ -907,8 +907,8 @@
 - 키워드: (없음)
 - 길이: 513줄
 - 소제목: 최소 개수로 금액을 맞추기 / 8원을 손으로 맞춰 본다 / 큰 동전부터 집으면 틀린다 / 마지막 동전을 하나씩 다 대 본다 / 금액마다 답을 적어 두면 / 0원부터 표를 채운다 / 바깥 반복문을 동전으로 바꿔도 될까 / 금액을 정점으로 보면 최단 경로다 / 큰 동전부터 깊이 파고 잘라 내기 / Python과 Java로 옮길 때 / 풀이들을 나란히 놓으면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-climbing-stairs, leetcode-house-robber, dynamic-programming, greedy-algorithms, ds-graph-bfs-dfs, leetcode-word-break
-- 이 글로 오는 글 ←: leetcode-climbing-stairs, leetcode-combination-sum, leetcode-longest-increasing-subsequence, leetcode-partition-equal-subset-sum, leetcode-word-break
+- 직접 링크 →: leetcode-climbing-stairs, leetcode-house-robber, dynamic-programming, greedy-algorithms, leetcode-coin-change-ii, ds-graph-bfs-dfs, leetcode-word-break
+- 이 글로 오는 글 ←: leetcode-climbing-stairs, leetcode-coin-change-ii, leetcode-combination-sum, leetcode-longest-increasing-subsequence, leetcode-partition-equal-subset-sum, leetcode-word-break
 
 #### `leetcode-decode-ways` — LeetCode 91. Decode Ways: 조건이 붙은 계단 오르기
 
@@ -927,8 +927,8 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 붙어 있는 두 집은 함께 고를 수 없다 / 일곱 집을 손으로 골라 본다 / 탐욕으로 고르면 틀린다 / 모든 조합을 다 대 본다 / 이 집을 열까, 지나칠까 / 같은 집에서 다시 묻지 않게 적어 둔다 / 마지막으로 연 집을 기준으로 센다 / 앞에서부터 표를 채운다 / 기록 두 개만 들고 골목을 걷는다 / 열었다와 안 열었다를 따로 들고 다니기 / Python과 Java로 옮길 때 / 일곱 풀이를 나란히 놓으면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-climbing-stairs, dynamic-programming, greedy-algorithms, bit-manipulation, leetcode-longest-increasing-subsequence, leetcode-house-robber-ii, ds-binary-tree-bst, binary-search
-- 이 글로 오는 글 ←: leetcode-climbing-stairs, leetcode-coin-change, leetcode-house-robber-ii, leetcode-longest-increasing-subsequence, leetcode-maximum-product-subarray, leetcode-word-break
+- 직접 링크 →: leetcode-climbing-stairs, dynamic-programming, greedy-algorithms, bit-manipulation, leetcode-longest-increasing-subsequence, leetcode-stock-with-cooldown, leetcode-house-robber-ii, ds-binary-tree-bst, binary-search
+- 이 글로 오는 글 ←: leetcode-climbing-stairs, leetcode-coin-change, leetcode-house-robber-ii, leetcode-longest-increasing-subsequence, leetcode-maximum-product-subarray, leetcode-stock-with-cooldown, leetcode-word-break
 
 #### `leetcode-house-robber-ii` — LeetCode 213. House Robber II: 원을 한 군데 끊으면 아는 문제가 된다
 
@@ -981,9 +981,9 @@
 - 키워드: (없음)
 - 길이: 490줄
 - 소제목: 같은 합의 두 묶음으로 나눌 수 있나 / 절반을 만드는 부분집합 하나만 찾으면 된다 / 다섯 수를 손으로 나눠 본다 / 모든 부분집합을 대 본다 / 넣을지 말지 정하며 남은 합을 줄인다 / 원소마다 한 줄씩 만들 수 있는 합을 적는다 / 한 줄로 줄이려면 큰 합부터 내려간다 / 만들 수 있는 합만 모아 둔다 / 비트 하나를 합 하나로 쓴다 / Python과 Java로 쓴 1차원 표와 비트셋 / 여섯 풀이를 칸 수로 비교하면 / 배낭을 잘못 채우는 코드 / 두 묶음을 직접 나눠 보기 / 배낭의 모양이 바뀌면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-coin-change, dynamic-programming, recursion-backtracking, binary-search
+- 직접 링크 →: leetcode-coin-change, dynamic-programming, leetcode-coin-change-ii, recursion-backtracking, leetcode-target-sum, binary-search
 - 키워드 백링크 →: sql-aggregation-pitfalls, complexity-classes-p-np, bit-manipulation
-- 이 글로 오는 글 ←: leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-last-stone-weight, leetcode-subsets
+- 이 글로 오는 글 ←: leetcode-coin-change-ii, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-last-stone-weight, leetcode-subsets, leetcode-target-sum
 
 #### `leetcode-word-break` — LeetCode 139. Word Break: 칸막이 자리마다 나눌 수 있는지 적는다
 
@@ -992,9 +992,9 @@
 - 키워드: (없음)
 - 길이: 510줄
 - 소제목: 사전 단어로 빈틈없이 자르기 / sunflower를 손으로 잘라 본다 / 가장 긴 단어부터 떼면 막힌다 / 자를 수 있는 자리를 모두 시도한다 / 같은 자리를 두 번 묻지 않는다 / 칸막이 자리마다 동그라미를 친다 / 단어 쪽에서 앞으로 뻗어 나가기 / 자리를 정점으로 보면 길 찾기다 / 트라이로 한 번에 훑기 / Python과 Java로 옮길 때 / 일곱 풀이를 나란히 놓으면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-climbing-stairs, leetcode-house-robber, leetcode-coin-change, dynamic-programming, ds-trie, leetcode-implement-trie, ds-graph-bfs-dfs, leetcode-word-search-ii, leetcode-decode-ways, leetcode-palindrome-partitioning
+- 직접 링크 →: leetcode-climbing-stairs, leetcode-house-robber, leetcode-coin-change, dynamic-programming, ds-trie, leetcode-implement-trie, ds-graph-bfs-dfs, leetcode-word-search-ii, leetcode-extra-characters-in-a-string, leetcode-decode-ways, leetcode-palindrome-partitioning
 - 키워드 백링크 →: sql-filtering-operators, recursion-backtracking
-- 이 글로 오는 글 ←: leetcode-coin-change, leetcode-decode-ways, leetcode-longest-increasing-subsequence, leetcode-palindrome-partitioning, leetcode-regular-expression-matching, leetcode-replace-words
+- 이 글로 오는 글 ←: leetcode-coin-change, leetcode-coin-change-ii, leetcode-decode-ways, leetcode-extra-characters-in-a-string, leetcode-longest-increasing-subsequence, leetcode-palindrome-partitioning, leetcode-regular-expression-matching, leetcode-replace-words
 
 ### Programming › Algorithms › LeetCode › 2-D DP (`programming/algorithms/leetcode/dp-2d`)
 
@@ -1008,6 +1008,28 @@
 - 직접 링크 →: leetcode-unique-paths, leetcode-longest-common-subsequence, dynamic-programming, greedy-algorithms, leetcode-permutations, leetcode-edit-distance, leetcode-regular-expression-matching
 - 키워드 백링크 →: bit-manipulation, js-memoization
 
+#### `leetcode-coin-change-ii` — LeetCode 518. Coin Change II: 동전을 바깥에 두면 묶음을 한 번씩 센다
+
+- 요약: 합이 금액이 되는 동전 묶음의 수를 재귀, 메모이제이션, 개수를 다 대 보는 표, 2차원 표, 1차원 배열로 구한다. 반복문 순서를 바꾸면 순서까지 세는 이유, 0/1 배낭과의 차이, 넘침, k번째 묶음 꺼내기 같은 변형도 함께 본다.
+- 태그: LeetCode, Dynamic Programming, Algorithm
+- 키워드: (없음)
+- 길이: 493줄
+- 소제목: 동전 묶음이 몇 가지인지 센다 / 6원을 손으로 세어 본다 / 이 동전을 하나 더 쓰거나, 다음 동전으로 / (동전 번호, 남은 금액) 칸에 적어 두기 / 동전마다 몇 개를 쓸지 다 대 보는 표 / 같은 줄 왼쪽 칸이 이미 그 합을 들고 있다 / 배열 한 줄로 접는다 / 반복문을 뒤집으면 순서까지 센다 / 세 언어로 쓴 1차원 풀이 / 다섯 풀이를 저울에 달면 / 개수를 셀 때 잘못 짜는 곳 / 1차원 배열을 직접 채워 보기 / 동전에 조건이 붙으면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-coin-change, dynamic-programming, leetcode-climbing-stairs, leetcode-word-break, leetcode-partition-equal-subset-sum, leetcode-target-sum, leetcode-combination-sum
+- 키워드 백링크 →: js-memoization, recursion-backtracking
+- 이 글로 오는 글 ←: leetcode-climbing-stairs, leetcode-coin-change, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-distinct-subsequences, leetcode-partition-equal-subset-sum, leetcode-target-sum
+
+#### `leetcode-distinct-subsequences` — LeetCode 115. Distinct Subsequences: 짝짓거나 건너뛰는 두 갈래를 더한다
+
+- 요약: 문자열 s에서 글자를 골라 t를 만드는 방법의 수를 부분 수열 전부 만들기, 두 갈래 재귀, 메모이제이션, 2차원 표, 오른쪽부터 도는 배열 한 줄, 글자별 위치 목록으로 구한다. 왼쪽부터 돌면 틀리는 이유, 중간 값 넘침, Is Subsequence와 Distinct Subsequences II 같은 변형도 함께 본다.
+- 태그: LeetCode, Dynamic Programming, String, Algorithm
+- 키워드: (없음)
+- 길이: 475줄
+- 소제목: 순서를 지키며 골라 t를 만드는 방법 수 / ababcc에서 abc를 여섯 번 찾는다 / 부분 수열을 전부 만들어 대조한다 / 짝짓거나 건너뛰는 재귀 / 같은 (i, j)는 한 번만 센다 / 위 칸과 왼쪽 위 칸을 더한다 / 한 줄로 줄일 때는 오른쪽부터 / t에 있는 글자 자리만 건너다닌다 / 세 언어로 쓴 한 줄 풀이 / 여섯 풀이를 칸 수로 재면 / 개수를 쌓다가 틀리는 자리 / 부분 수열 개수를 직접 세어 보기 / 부분 수열 문제를 비틀면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-longest-common-subsequence, leetcode-subsets, leetcode-coin-change-ii, leetcode-interleaving-string, leetcode-edit-distance, leetcode-regular-expression-matching
+- 키워드 백링크 →: js-memoization, ds-array-matrix, recursion-backtracking, dynamic-programming
+- 이 글로 오는 글 ←: leetcode-edit-distance, leetcode-interleaving-string, leetcode-longest-common-subsequence, leetcode-regular-expression-matching
+
 #### `leetcode-edit-distance` — LeetCode 72. Edit Distance: 위는 지우기, 왼쪽은 넣기, 대각선은 바꾸기
 
 - 요약: 넣기, 지우기, 바꾸기로 한 단어를 다른 단어로 고치는 최소 횟수를 재귀, 메모이제이션, 2차원 표, 배열 하나, 거리 k 이하만 보는 띠 DP로 구한다. 표를 되짚어 편집 순서를 얻는 법, LCS와의 관계, 맞바꾸기와 비용이 붙는 변형도 함께 본다.
@@ -1015,9 +1037,20 @@
 - 키워드: (없음)
 - 길이: 503줄
 - 소제목: 세 가지 연산, 가장 적은 횟수 / sunday를 saturday로 고쳐 보기 / 마지막 글자로 경우를 나눈다 / 셋으로 갈라지는 재귀 / 칸마다 한 번만 계산한다 / 표를 채우고 거꾸로 읽는다 / 배열 하나로 줄이기 / 거리가 k 이하인지만 알면 될 때 / Python의 동시 대입과 Java의 Math.min / 거리를 재는 다섯 가지 방법 / 자주 나오는 버그 / 배열 하나로 직접 풀어 보기 / 연산이 바뀌면 표도 바뀐다 / 면접에서 나올 만한 질문
-- 직접 링크 →: dynamic-programming, leetcode-longest-common-subsequence, leetcode-regular-expression-matching
+- 직접 링크 →: dynamic-programming, leetcode-longest-common-subsequence, leetcode-distinct-subsequences, leetcode-interleaving-string, leetcode-regular-expression-matching
 - 키워드 백링크 →: js-memoization
-- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-longest-common-subsequence, leetcode-regular-expression-matching, leetcode-word-ladder
+- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-distinct-subsequences, leetcode-interleaving-string, leetcode-longest-common-subsequence, leetcode-regular-expression-matching, leetcode-word-ladder
+
+#### `leetcode-interleaving-string` — LeetCode 97. Interleaving String: 두 문자열에서 쓴 글자 수만 기억하면 된다
+
+- 요약: 셋째 문자열이 두 문자열을 순서대로 섞은 것인지 판정한다. 앞에서부터 맞추는 욕심이 틀리는 반례를 보고, 되돌아가는 재귀, 실패한 칸 메모, 2차원 표, 배열 한 줄, 격자 BFS를 비교한다. 섞은 출처 되짚기, 섞는 방법의 수, 아주 긴 문자열 변형도 함께 본다.
+- 태그: LeetCode, Dynamic Programming, String, Algorithm
+- 키워드: (없음)
+- 길이: 480줄
+- 소제목: 두 줄의 순서를 지키며 섞었나 / 앞에서부터 맞추다 막히는 경우 / 막히면 되돌아가는 재귀 / 한 번 막힌 칸은 다시 가지 않는다 / 바둑판에 닿을 수 있는 칸을 칠한다 / 한 줄만 남겨도 된다 / 격자 위를 너비 우선으로 걷는다 / 세 언어로 쓴 한 줄 풀이 / 다섯 풀이를 칸 수로 비교하면 / 섞기 판정에서 잘못 짜는 곳 / 섞기 판정을 직접 짜 보기 / 섞기 문제를 넓히면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-longest-common-subsequence, leetcode-edit-distance, ds-graph-bfs-dfs, leetcode-distinct-subsequences, leetcode-regular-expression-matching, leetcode-unique-paths
+- 키워드 백링크 →: js-memoization, ds-array-matrix, dynamic-programming
+- 이 글로 오는 글 ←: leetcode-distinct-subsequences, leetcode-edit-distance, leetcode-longest-common-subsequence, leetcode-regular-expression-matching
 
 #### `leetcode-longest-common-subsequence` — LeetCode 1143. Longest Common Subsequence: 같으면 대각선, 다르면 한쪽을 버린다
 
@@ -1026,9 +1059,9 @@
 - 키워드: (없음)
 - 길이: 505줄
 - 소제목: 순서는 지키고 건너뛰는 건 자유 / stone과 longest를 손으로 맞춰 보기 / 부분 수열을 전부 만들어 보기 / 맨 앞 두 글자만 보고 갈래 나누기 / 같은 (i, j)는 한 번만 계산한다 / 표를 왼쪽 위부터 채운다 / 두 줄, 그리고 한 줄 / LIS로 바꿔 풀기 / Python과 Java의 한 줄 DP / 여섯 풀이를 한 표에 / 그럴듯한데 틀리는 코드 / diag를 챙기며 직접 써 보기 / 같은 표로 풀리는 문제들 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-edit-distance, dynamic-programming, leetcode-unique-paths, leetcode-longest-increasing-subsequence, binary-search, greedy-algorithms, leetcode-longest-palindromic-substring
+- 직접 링크 →: leetcode-edit-distance, leetcode-distinct-subsequences, leetcode-interleaving-string, dynamic-programming, leetcode-unique-paths, leetcode-longest-increasing-subsequence, binary-search, greedy-algorithms, leetcode-longest-palindromic-substring
 - 키워드 백링크 →: js-memoization, two-pointers-pattern, divide-and-conquer, bit-manipulation, ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-edit-distance, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-regular-expression-matching, leetcode-unique-paths
+- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-distinct-subsequences, leetcode-edit-distance, leetcode-interleaving-string, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-regular-expression-matching, leetcode-unique-paths
 
 #### `leetcode-regular-expression-matching` — LeetCode 10. Regular Expression Matching: 별은 0번 쓰거나 하나 먹고 머문다
 
@@ -1037,9 +1070,31 @@
 - 키워드: (없음)
 - 길이: 535줄
 - 소제목: 점 하나와 별 하나로 만든 정규식 / abbd에 패턴을 손으로 맞춰 보기 / 내장 정규식으로 끝내면 안 되는 이유 / 별 앞에서 두 갈래로 나뉘는 재귀 / 같은 (i, j)는 한 번만 묻는다 / 별 칸은 윗줄의 같은 열을 본다 / 두 줄이면 된다 / 지금 서 있을 수 있는 자리를 모두 들고 간다 / Python과 Java의 바텀업 / 여섯 가지 매칭 방법을 한 표에 / 별에서 자주 틀리는 곳 / 표로 직접 맞춰 보기 / 패턴 문법이 바뀌면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-longest-common-subsequence, leetcode-edit-distance, recursion-backtracking, leetcode-word-break
+- 직접 링크 →: leetcode-longest-common-subsequence, leetcode-edit-distance, recursion-backtracking, leetcode-distinct-subsequences, leetcode-interleaving-string, leetcode-word-break
 - 키워드 백링크 →: message-delivery-semantics, js-memoization, two-pointers-pattern, regex-and-globbing, dynamic-programming
-- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-edit-distance
+- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-distinct-subsequences, leetcode-edit-distance, leetcode-interleaving-string
+
+#### `leetcode-stock-with-cooldown` — LeetCode 309. Best Time to Buy and Sell Stock with Cooldown: 판 다음 날을 따로 세면 풀린다
+
+- 요약: 판 다음 날 살 수 없는 조건 때문에 오르막을 다 챙기는 탐욕이 틀리는 이유를 보고, 재귀, 메모이제이션, 세 상태 표, 변수 세 개, 이틀 전 값을 쓰는 두 상태, 마지막 매도일로 나누는 O(n²)와 O(n) 풀이까지 비교한다. 쿨다운 k일, 수수료, 거래 날짜 되짚기 변형도 함께 본다.
+- 태그: LeetCode, Dynamic Programming, Algorithm
+- 키워드: (없음)
+- 길이: 513줄
+- 소제목: 팔고 나면 하루를 쉬어야 한다 / 여섯 날짜를 손으로 따라가 보기 / 오르는 구간을 앞에서부터 잡으면 틀린다 / 날마다 두 갈래로 나눠 보는 재귀 / 같은 (날, 보유 여부)를 다시 묻지 않게 / 하루를 세 상태로 나눈다 / 표 세 줄을 변수 세 개로 / 이틀 전 장부로 사는 두 상태 버전 / 마지막으로 판 날로 나누는 다른 길 / 세 언어로 옮긴 쿨다운 풀이 / 여섯 풀이의 시간과 공간 / 쿨다운을 놓치는 코드 / 상태 세 개를 직접 짜 보기 / 쿨다운이 길어지거나 수수료가 붙으면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-best-time-to-buy-and-sell-stock, dynamic-programming, leetcode-house-robber
+- 키워드 백링크 →: js-memoization
+- 이 글로 오는 글 ←: leetcode-house-robber
+
+#### `leetcode-target-sum` — LeetCode 494. Target Sum: 더하기 바구니의 합은 이미 정해져 있다
+
+- 요약: 수마다 더하기나 빼기를 붙여 목표 값을 만드는 경우의 수를 부호 재귀, 중간에서 만나기, 메모이제이션, 합을 축으로 한 표, 부분집합 합으로 바꾼 0/1 배낭으로 구한다. 0이 답을 두 배로 만드는 이유, 음수 목표, 홀짝 검사, 식 되짚기 같은 변형도 함께 본다.
+- 태그: LeetCode, Dynamic Programming, Backtracking, Algorithm
+- 키워드: (없음)
+- 길이: 482줄
+- 소제목: 수마다 더하기나 빼기를 붙인다 / 카드 네 장으로 열여섯 가지를 다 써 보기 / 갈래마다 더하거나 빼는 재귀 / 반씩 나눠 세고 가운데서 맞춘다 / (몇 번째 수, 지금 합)이 같으면 답도 같다 / 합을 축으로 한 장부를 한 줄씩 넘긴다 / 더하기 바구니의 합은 정해져 있다 / 세 언어로 쓴 부분집합 풀이 / 다섯 풀이를 한 줄씩 놓으면 / 부호 문제에서 자주 틀리는 자리 / 부호 조합을 직접 세어 보기 / 부호 문제를 비틀면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-partition-equal-subset-sum, dynamic-programming, leetcode-two-sum, leetcode-coin-change-ii, leetcode-subsets
+- 키워드 백링크 →: sd-latency-numbers, js-memoization, recursion-backtracking
+- 이 글로 오는 글 ←: leetcode-coin-change-ii, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-partition-equal-subset-sum
 
 #### `leetcode-unique-paths` — LeetCode 62. Unique Paths: 마지막 한 걸음이 어디서 왔나로 센다
 
@@ -1050,9 +1105,20 @@
 - 소제목: 로봇은 오른쪽과 아래로만 간다 / 3 × 4 격자에서 손으로 세어 보기 / 갈래마다 따라가는 재귀 / 한 번 센 칸은 적어 둔다 / 표를 위에서부터 채운다 / 한 줄이면 충분하다 / 순서만 고르면 되는 조합 공식 / Python의 큰 정수와 Java의 int / 다섯 가지 세는 법을 한눈에 / 표 하나에서 나오는 실수들 / 경로 수를 직접 세어 보기 / 격자가 바뀌면 점화식도 바뀐다 / 면접에서 나올 만한 질문
 - 직접 링크 →: dynamic-programming, recursion-backtracking, leetcode-word-search, leetcode-longest-common-subsequence
 - 키워드 백링크 →: message-delivery-semantics, js-memoization, sql-aggregation-pitfalls
-- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-longest-common-subsequence
+- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-interleaving-string, leetcode-longest-common-subsequence
 
 ### Programming › Algorithms › LeetCode › Advanced Graphs (`programming/algorithms/leetcode/advanced-graphs`)
+
+#### `leetcode-alien-dictionary` — LeetCode 269. Alien Dictionary: 이웃한 두 단어에서 규칙 하나씩
+
+- 요약: 정렬된 외계 단어 목록에서 글자 순서를 순열 시험, 모든 쌍 비교, 세 가지 색 DFS, 칸의 알고리즘, 알파벳 순 가장 앞선 답으로 구한다. 이웃한 쌍만 보면 되는 이유와 접두사 모순, 첫 차이 뒤를 규칙으로 넣는 실수를 함께 본다.
+- 태그: LeetCode, Graph, Algorithm
+- 키워드: (없음)
+- 길이: 563줄
+- 소제목: 단어 목록에서 글자 순서를 거꾸로 읽어 낸다 / 글자를 줄 세우는 모든 방법을 시험한다 / 모든 단어 쌍에서 규칙을 모은다 / 이웃한 두 단어만 비교해도 충분하다 / 다 끝난 글자부터 적고 뒤집는 DFS / 앞설 글자가 없는 것부터 꺼내는 칸의 알고리즘 / 답이 여럿이면 알파벳 순으로 앞선 것을 고른다 / 외계 글자 순서를 직접 구해 보기 / 다섯 풀이가 하는 일의 양 / 첫 차이 하나, 접두사 하나에서 틀린다 / 외계 사전에 다른 질문을 던지면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-course-schedule, leetcode-course-schedule-ii, ds-graph-bfs-dfs, leetcode-permutations
+- 키워드 백링크 →: recursion-backtracking
+- 이 글로 오는 글 ←: leetcode-course-schedule, leetcode-course-schedule-ii
 
 #### `leetcode-cheapest-flights-within-k-stops` — LeetCode 787. Cheapest Flights Within K Stops: 바퀴 수가 곧 비행 횟수다
 
@@ -1061,9 +1127,20 @@
 - 키워드: (없음)
 - 길이: 519줄
 - 소제목: 갈아타기 횟수가 정해진 가장 싼 표 / 비행 횟수를 세며 길을 전부 따라가는 DFS / 한 번 탈 때마다 한 층씩 넓히는 BFS / 바퀴 수를 k + 1로 묶은 벨만-포드 / 비행 횟수까지 들고 다니는 다익스트라 / 같은 질문을 기억해 두는 DP / 다익스트라를 그대로 쓰면 틀리는 곳 / k + 1바퀴를 직접 돌려 보기 / 표 값을 구하는 다섯 방법 비교 / 제자리 갱신과 바퀴 수에서 틀린다 / 제한이 바뀌거나 경로가 필요하면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-network-delay-time, shortest-path-algorithms
+- 직접 링크 →: leetcode-network-delay-time, shortest-path-algorithms, leetcode-find-city-smallest-neighbors, leetcode-path-with-maximum-probability
 - 키워드 백링크 →: ds-graph-bfs-dfs, js-memoization, sd-maps-tiles-routing, ds-heap, dynamic-programming
-- 이 글로 오는 글 ←: leetcode-network-delay-time
+- 이 글로 오는 글 ←: leetcode-network-delay-time, leetcode-path-with-maximum-probability
+
+#### `leetcode-find-city-smallest-neighbors` — LeetCode 1334. Find the City With the Smallest Number of Neighbors at a Threshold Distance: 표 하나로 모든 도시의 거리를 채운다
+
+- 요약: 임계 거리 안의 이웃이 가장 적은 도시를 도시마다 DFS, 벨만-포드, 임계 거리에서 끊는 다익스트라, 플로이드-워셜로 구한다. 동점이면 큰 번호를 고르는 비교, k가 바깥이어야 하는 반복 순서, Java의 무한대 넘침을 함께 본다.
+- 태그: LeetCode, Graph, Dynamic Programming, Algorithm
+- 키워드: (없음)
+- 길이: 506줄
+- 소제목: 임계 거리 안에 이웃이 가장 적은 도시 / 도시마다 길을 끝까지 따라가 보는 DFS / 도시마다 벨만-포드를 한 번씩 / 도시마다 다익스트라, 임계 거리에서 끊는다 / 길이 꽉 찼으면 배열에서 가장 가까운 도시를 고른다 / 거쳐 갈 도시를 하나씩 늘리는 플로이드-워셜 / 이웃 수를 세고 동점은 큰 번호로 / 이웃이 적은 도시를 직접 찾아 보기 / 도시 100개에서 다섯 풀이 비교 / 동점 규칙과 반복 순서에서 틀린다 / 도시 문제가 커지거나 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: shortest-path-algorithms, leetcode-network-delay-time, ds-graph-bfs-dfs, leetcode-path-with-maximum-probability
+- 키워드 백링크 →: sd-maps-tiles-routing, ds-heap
+- 이 글로 오는 글 ←: leetcode-cheapest-flights-within-k-stops, leetcode-network-delay-time, leetcode-path-with-maximum-probability
 
 #### `leetcode-min-cost-to-connect-all-points` — LeetCode 1584. Min Cost to Connect All Points: 선이 꽉 차 있으면 배열 프림
 
@@ -1083,9 +1160,20 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 신호가 가장 늦게 닿는 노드를 찾는다 / 길을 전부 따라가 보는 DFS / 모든 쌍을 다 구하는 플로이드-워셜 / 간선 전체를 n - 1번 다시 보는 벨만-포드 / 바뀐 노드만 다시 보는 SPFA / 가장 이른 노드부터 확정하는 다익스트라 / 힙으로 다음 노드를 빨리 고른다 / 힙 다익스트라를 직접 짜 보기 / 여섯 풀이를 나란히 놓으면 / BFS 습관과 배열 크기에서 틀린다 / 조건이 바뀌면 고르는 알고리즘 / 면접에서 나올 만한 질문
-- 직접 링크 →: shortest-path-algorithms, ds-heap, leetcode-cheapest-flights-within-k-stops, ds-graph-bfs-dfs, leetcode-swim-in-rising-water
+- 직접 링크 →: shortest-path-algorithms, ds-heap, leetcode-cheapest-flights-within-k-stops, ds-graph-bfs-dfs, leetcode-path-with-maximum-probability, leetcode-swim-in-rising-water, leetcode-find-city-smallest-neighbors
 - 키워드 백링크 →: sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-cheapest-flights-within-k-stops, leetcode-min-cost-to-connect-all-points, leetcode-reconstruct-itinerary, leetcode-swim-in-rising-water, leetcode-word-ladder
+- 이 글로 오는 글 ←: leetcode-cheapest-flights-within-k-stops, leetcode-find-city-smallest-neighbors, leetcode-min-cost-to-connect-all-points, leetcode-path-with-maximum-probability, leetcode-reconstruct-itinerary, leetcode-swim-in-rising-water, leetcode-word-ladder
+
+#### `leetcode-path-with-maximum-probability` — LeetCode 1514. Path with Maximum Probability: 곱할수록 작아지니 다익스트라가 된다
+
+- 요약: 성공 확률을 곱해 가장 안전한 길을 모든 길 DFS, 가지치기 DFS, 벨만-포드, SPFA, 최대 힙 다익스트라, -log 다익스트라로 구한다. 확률이 1 이하라 확정이 성립하는 이유와 최소 힙을 그대로 쓰는 실수, 한쪽 방향 간선, 로그 오차를 함께 본다.
+- 태그: LeetCode, Graph, Heap, Algorithm
+- 키워드: (없음)
+- 길이: 513줄
+- 소제목: 성공 확률을 곱해 가며 가장 안전한 길을 찾는다 / 모든 길을 따라가 확률을 곱해 본다 / 더 높은 확률로 와 본 노드에서 돌아오는 가지치기 / 간선 전체를 다시 훑는 벨만-포드 / 확률이 오른 노드만 다시 보는 SPFA / 확률이 가장 높은 노드부터 확정하는 다익스트라 / 로그를 씌우면 보통 최단 경로가 된다 / 가장 안전한 길을 직접 구해 보기 / 확률 문제를 푸는 여섯 방법 비교 / 최소 힙 습관과 한쪽 방향 간선에서 틀린다 / 길 고르는 기준이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-network-delay-time, shortest-path-algorithms, ds-heap, leetcode-swim-in-rising-water, leetcode-cheapest-flights-within-k-stops, leetcode-find-city-smallest-neighbors
+- 키워드 백링크 →: sd-latency-numbers, ds-graph-bfs-dfs, sd-maps-tiles-routing
+- 이 글로 오는 글 ←: leetcode-cheapest-flights-within-k-stops, leetcode-find-city-smallest-neighbors, leetcode-network-delay-time, leetcode-swim-in-rising-water
 
 #### `leetcode-reconstruct-itinerary` — LeetCode 332. Reconstruct Itinerary: 막다른 공항은 일정의 끝에 적는다
 
@@ -1098,6 +1186,17 @@
 - 키워드 백링크 →: message-delivery-semantics
 - 이 글로 오는 글 ←: leetcode-course-schedule-ii
 
+#### `leetcode-shortest-path-in-binary-matrix` — LeetCode 1091. Shortest Path in Binary Matrix: 여덟 방향으로 퍼지는 물결
+
+- 요약: 0과 1로 된 격자의 가장 짧은 길을 모든 길 DFS, 가지치기 DFS, BFS, 격자에 표시하는 BFS, 양방향 BFS, 체비셰프 A*로 구한다. 길이를 칸 수로 세는 것, 대각선 방향, 출발 칸 검사, 맨해튼 어림값이 틀리는 이유를 함께 본다.
+- 태그: LeetCode, Graph, BFS, Algorithm
+- 키워드: (없음)
+- 길이: 542줄
+- 소제목: 여덟 방향으로 걷는 격자의 가장 짧은 길 / 갈 수 있는 길을 모두 걸어 본다 / 더 짧게 와 본 칸에서 돌아오는 DFS / 가까운 칸부터 한 겹씩 넓히는 BFS / 격자를 방문 표시로 쓰는 BFS / 양쪽 끝에서 동시에 넓히는 BFS / 도착점 쪽으로 기울이는 A\* / 격자 길이를 직접 구해 보기 / 100 × 100 격자 세 장으로 비교 / 칸 수와 대각선에서 틀린다 / 격자 길찾기가 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: ds-graph-bfs-dfs, shortest-path-algorithms, leetcode-word-ladder, leetcode-swim-in-rising-water, leetcode-rotting-oranges
+- 키워드 백링크 →: big-o-notation, sd-maps-tiles-routing
+- 이 글로 오는 글 ←: leetcode-rotting-oranges, leetcode-word-ladder
+
 #### `leetcode-swim-in-rising-water` — LeetCode 778. Swim in Rising Water: 길이 대신 가장 높은 칸을 줄인다
 
 - 요약: 물이 차오르는 격자를 건너는 가장 이른 시간을 경로 전부 DFS, 물 높이를 하나씩 올리는 BFS, 이분 탐색, 최댓값 다익스트라, 유니온 파인드로 푼다. 이 문제에서는 힙에 넣을 때 방문 표시를 해도 되는 이유와 크루스칼과의 관계도 함께 본다.
@@ -1105,9 +1204,9 @@
 - 키워드: (없음)
 - 길이: 500줄
 - 소제목: 길에서 가장 높은 칸이 잠길 때까지 / 길을 전부 따라가 보는 DFS / 물 높이를 하나씩 올려 본다 / 이분 탐색으로 물 높이를 좁힌다 / 낮은 칸부터 꺼내는 다익스트라 / 물을 실제로 채우는 유니온 파인드 / 헤엄칠 시간을 직접 구해 보기 / 물 높이를 구하는 다섯 방법 비교 / 출발 칸과 더하기 습관에서 틀린다 / 비용이 칸에서 선으로 옮겨 가면 / 면접에서 나올 만한 질문
-- 직접 링크 →: shortest-path-algorithms, ds-union-find, binary-search, leetcode-network-delay-time, minimum-spanning-tree
+- 직접 링크 →: shortest-path-algorithms, ds-union-find, binary-search, leetcode-network-delay-time, minimum-spanning-tree, leetcode-path-with-maximum-probability
 - 키워드 백링크 →: sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-network-delay-time, leetcode-pacific-atlantic-water-flow
+- 이 글로 오는 글 ←: leetcode-network-delay-time, leetcode-pacific-atlantic-water-flow, leetcode-path-with-maximum-probability, leetcode-shortest-path-in-binary-matrix
 
 ### Programming › Algorithms › LeetCode › Arrays & Hashing (`programming/algorithms/leetcode/arrays-hashing`)
 
@@ -1162,6 +1261,7 @@
 - 소제목: 절반을 넘게 나오는 수 하나 / 손으로 세어 보기 / 수마다 처음부터 세는 풀이 / 장부에 횟수를 적는 풀이 / 정렬하면 가운데에 있다 / 아무거나 집어 확인하기 / 반씩 나눠 이긴 쪽끼리 겨루기 / 자리마다 다수결 / 서로 다른 둘을 짝지어 지운다 / Python과 Java로 옮기기 / 일곱 풀이를 나란히 놓고 보면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-top-k-frequent-elements, bit-manipulation, leetcode-two-sum, segment-tree-fenwick, binary-search, leetcode-contains-duplicate
 - 키워드 백링크 →: lossy-counting, string-search-algorithms, sql-aggregation-pitfalls, divide-and-conquer, logic-gates-alu
+- 이 글로 오는 글 ←: leetcode-single-number-ii
 
 #### `leetcode-product-of-array-except-self` — LeetCode 238. Product of Array Except Self: 왼쪽 곱과 오른쪽 곱이 한 칸에서 만난다
 
@@ -1170,9 +1270,9 @@
 - 키워드: (없음)
 - 길이: 508줄
 - 소제목: 나를 뺀 나머지 전부의 곱 / 손으로 한 칸씩 곱해 보기 / 칸마다 나머지를 다 곱하는 풀이 / 전체 곱을 나누면 안 되나 / 왼쪽 곱과 오른쪽 곱으로 쪼개기 / 답 배열에 왼쪽 곱부터 채운다 / 양 끝에서 동시에 채우는 한 번 훑기 / Python과 Java로 옮기기 / 다섯 풀이를 나란히 놓고 보면 / 0과 음수에서 틀리는 코드 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-trapping-rain-water, leetcode-study-guide, ds-array-matrix, segment-tree-fenwick, leetcode-maximum-product-subarray, leetcode-two-sum, leetcode-contains-duplicate, leetcode-top-k-frequent-elements
+- 직접 링크 →: leetcode-trapping-rain-water, leetcode-candy, leetcode-study-guide, ds-array-matrix, segment-tree-fenwick, leetcode-maximum-product-subarray, leetcode-two-sum, leetcode-contains-duplicate, leetcode-top-k-frequent-elements
 - 키워드 백링크 →: floating-point-numbers
-- 이 글로 오는 글 ←: leetcode-maximum-product-subarray
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-maximum-product-subarray
 
 #### `leetcode-top-k-frequent-elements` — LeetCode 347. Top K Frequent Elements: 빈도를 칸 번호로 쓰면 정렬이 필요 없다
 
@@ -1193,7 +1293,7 @@
 - 길이: 507줄
 - 소제목: 문제를 내 말로 다시 쓰면 / 손으로 먼저 찾아 보기 / 모든 쌍을 다 대 보는 풀이 / 정렬해 놓고 양 끝에서 좁히기 / 정렬한 뒤 짝을 이분 탐색으로 찾기 / 짝을 기억해 두는 장부: 해시맵 두 번 훑기 / 한 번만 훑어도 된다 / Python과 Java로 옮길 때 / 다섯 풀이를 나란히 놓고 보면 / 틀리기 쉬운 입력들 / 직접 풀어 보기 / 면접관이 이어서 묻는 변형 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-hash-map, big-o-notation, leetcode-study-guide, two-pointers-pattern, sorting-algorithms, leetcode-two-sum-ii, binary-search, leetcode-3sum, leetcode-contains-duplicate, leetcode-group-anagrams
-- 이 글로 오는 글 ←: leetcode-4sum, leetcode-contains-duplicate, leetcode-longest-consecutive-sequence, leetcode-majority-element, leetcode-next-greater-element-i, leetcode-product-of-array-except-self, leetcode-study-guide, leetcode-two-sum-ii, leetcode-valid-anagram, leetcode-valid-sudoku, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-4sum, leetcode-contains-duplicate, leetcode-detect-squares, leetcode-longest-consecutive-sequence, leetcode-majority-element, leetcode-next-greater-element-i, leetcode-product-of-array-except-self, leetcode-study-guide, leetcode-target-sum, leetcode-two-sum-ii, leetcode-valid-anagram, leetcode-valid-sudoku, two-pointers-pattern
 
 #### `leetcode-valid-anagram` — LeetCode 242. Valid Anagram: 글자 수를 세는 26칸이면 충분하다
 
@@ -1226,9 +1326,9 @@
 - 키워드: (없음)
 - 길이: 514줄
 - 소제목: 같은 수를 여러 번 써서 합을 맞춘다 / 손으로 [2, 3, 6, 7]에서 7을 맞춰 보면 / 순서까지 다 만들고 정렬해서 지우기 / 시작 위치를 넘겨 한 순서로만 만든다 / 작은 수부터 보다가 넘치면 멈춘다 / 이 수를 또 쓰거나, 다음 수로 넘어가거나 / 작은 합의 답으로 큰 합의 답을 쌓기 / 다섯 풀이를 나란히 놓으면 / break가 답을 지워 버리는 경우 / 면접관이 조건을 바꾸면 / 쿠폰 조합 기능에 그대로 옮기면 / 순서를 하나로 정하고, 넘치기 전에 멈춘다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-subsets, recursion-backtracking, leetcode-combination-sum-ii, leetcode-subsets-ii, leetcode-coin-change, greedy-algorithms, leetcode-permutations, leetcode-letter-combinations-of-a-phone-number, leetcode-partition-equal-subset-sum
+- 직접 링크 →: leetcode-subsets, recursion-backtracking, leetcode-coin-change-ii, leetcode-combination-sum-ii, leetcode-subsets-ii, leetcode-coin-change, greedy-algorithms, leetcode-permutations, leetcode-letter-combinations-of-a-phone-number, leetcode-partition-equal-subset-sum, leetcode-target-sum
 - 키워드 백링크 →: dynamic-programming
-- 이 글로 오는 글 ←: leetcode-combination-sum-ii, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-permutations, leetcode-subsets, leetcode-subsets-ii
+- 이 글로 오는 글 ←: leetcode-coin-change-ii, leetcode-combination-sum-ii, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-permutations, leetcode-subsets, leetcode-subsets-ii
 
 #### `leetcode-combination-sum-ii` — LeetCode 40. Combination Sum II: 같은 값은 한 자리에 한 번, 넘치면 그 자리에서 멈춘다
 
@@ -1237,7 +1337,7 @@
 - 키워드: (없음)
 - 길이: 511줄
 - 소제목: 한 장씩만 쓸 수 있는 후보로 합을 맞춘다 / [3, 1, 3, 2, 1]에서 4를 맞춰 보면 / 겹치는 답은 Set으로 지우면 될까 / 정렬하고, 같은 자리의 같은 값은 건너뛰고, 넘치면 멈춘다 / 넣거나, 같은 값을 통째로 건너뛰거나 / 금액마다 몇 장을 낼지 고르기 / 작은 합의 목록을 이어 붙여 큰 합을 만든다 / 다섯 풀이를 후보 100개로 재 보면 / 답이 사라지는 네 가지 실수 / 조건이 달라지면 / 환불 금액 맞추기에 쓰면 / 같은 값은 앞의 것부터, 넘치면 그 자리에서 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-combination-sum, leetcode-subsets-ii, recursion-backtracking, dynamic-programming, leetcode-partition-equal-subset-sum, leetcode-permutations
+- 직접 링크 →: leetcode-combination-sum, leetcode-subsets-ii, recursion-backtracking, dynamic-programming, leetcode-target-sum, leetcode-partition-equal-subset-sum, leetcode-permutations, leetcode-coin-change-ii
 - 키워드 백링크 →: floating-point-numbers
 - 이 글로 오는 글 ←: leetcode-combination-sum, leetcode-subsets, leetcode-subsets-ii
 
@@ -1271,7 +1371,7 @@
 - 소제목: 모든 조각이 회문이 되게 자르는 방법 / "abba"를 손으로 잘라 보면 / 자를 틈마다 자를지 말지 정하기 / 앞에서 회문 조각을 하나 떼고 나머지를 맡긴다 / 회문인지를 미리 표로 만들어 둔다 / 가운데에서 넓혀 가며 회문을 모은다 / 뒤쪽 답을 먼저 만들어 앞에 붙인다 / 다섯 풀이를 "aaaa…"로 재 보면 / 조각이 비어 나오거나 회문을 놓치는 코드 / 문제를 살짝 바꾸면 / 해시태그를 단어로 나누는 코드와 같은 모양 / 앞 조각을 떼고, 회문 확인은 표에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-subsets, leetcode-combination-sum, recursion-backtracking, dynamic-programming, bit-manipulation, leetcode-longest-palindromic-substring, leetcode-word-break, leetcode-valid-palindrome
 - 키워드 백링크 →: js-memoization, big-o-notation
-- 이 글로 오는 글 ←: leetcode-decode-ways, leetcode-longest-palindromic-substring, leetcode-word-break
+- 이 글로 오는 글 ←: leetcode-decode-ways, leetcode-extra-characters-in-a-string, leetcode-longest-palindromic-substring, leetcode-word-break
 
 #### `leetcode-permutations` — LeetCode 46. Permutations: 쓴 것을 표시하고 바꾼 것은 모두 되돌린다
 
@@ -1282,7 +1382,7 @@
 - 소제목: 같은 원소들을 줄 세우는 모든 방법 / 손으로 [1, 2, 3]을 줄 세워 보면 / 일단 다 만들고 겹친 걸 버리기 / 하나씩 들이며 모든 틈에 끼워 넣기 / 쓴 원소를 표시하며 자리를 채운다 / 배열 안에서 자리를 바꿔 가며 채우기 / 재귀 없이 다음 순열로 넘어가기 / 교환 한 번에 순열 하나, Heap 알고리즘 / 여섯 풀이를 나란히 놓으면 / 되돌리기를 하나만 하면 / 면접관이 조건을 바꾸면 / 순서 테스트를 실제로 돌리면 / 쓴 것을 표시하고, 바꾼 것은 모두 되돌린다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-subsets, leetcode-combination-sum, recursion-backtracking, leetcode-n-queens, leetcode-permutation-in-string, leetcode-course-schedule
 - 키워드 백링크 →: sliding-window-pattern, ds-graph-bfs-dfs, js-destructuring
-- 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-subsets, leetcode-subsets-ii
+- 이 글로 오는 글 ←: leetcode-alien-dictionary, leetcode-burst-balloons, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-subsets, leetcode-subsets-ii
 
 #### `leetcode-subsets` — LeetCode 78. Subsets: 고르는 순서를 정하면 겹치지 않는다
 
@@ -1293,7 +1393,7 @@
 - 소제목: 원소마다 넣을지 말지 정하는 문제 / 손으로 [1, 2, 3]을 적어 보면 / 원소를 하나씩 들이며 답을 두 배로 / 넣는다, 안 넣는다 두 갈래로 내려가기 / 시작 위치를 넘기면 모든 마디가 답이다 / 0부터 2^n - 1까지 세면 끝난다 / 재귀를 스택 하나로 바꾸면 / 다섯 풀이를 나란히 놓으면 / 결과가 전부 빈 배열로 나온다면 / 면접관이 조건을 바꾸면 / 옵션 조합 테스트를 만들 때 / 고른 순서를 정하면 겹치지 않는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-combination-sum, leetcode-permutations, leetcode-n-queens, recursion-backtracking, leetcode-subsets-ii, dynamic-programming, bit-manipulation, leetcode-partition-equal-subset-sum, leetcode-generate-parentheses, leetcode-combination-sum-ii, leetcode-letter-combinations-of-a-phone-number
 - 키워드 백링크 →: big-o-notation, test-design-techniques
-- 이 글로 오는 글 ←: leetcode-combination-sum, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-permutations, leetcode-subsets-ii, leetcode-sudoku-solver
+- 이 글로 오는 글 ←: leetcode-combination-sum, leetcode-distinct-subsequences, leetcode-generate-parentheses, leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-permutations, leetcode-subsets-ii, leetcode-sudoku-solver, leetcode-target-sum
 
 #### `leetcode-subsets-ii` — LeetCode 90. Subsets II: 같은 값 중에서는 앞의 것부터 쓴다
 
@@ -1440,6 +1540,17 @@
 
 ### Programming › Algorithms › LeetCode › Bit Manipulation (`programming/algorithms/leetcode/bit-manipulation`)
 
+#### `leetcode-bitwise-and-of-numbers-range` — LeetCode 201. Bitwise AND of Numbers Range: 양 끝의 공통 접두사만 남는다
+
+- 요약: 구간 안의 모든 정수를 AND하는 문제를 하나씩 AND하기, 비트마다 처음 꺼지는 수 계산, 같아질 때까지 밀기, right의 낮은 1 지우기, XOR와 앞자리 0 세기로 푼다. 왜 공통 접두사만 남는지 증명하고, 같은 수 구간과 Java 반복 넘침 같은 버그, 구간 OR와 XOR 변형까지 다룬다.
+- 태그: LeetCode, Bit Manipulation, Algorithm
+- 키워드: (없음)
+- 길이: 512줄
+- 소제목: 구간 안의 모든 수를 AND하면 / 9부터 12까지 세로로 세워 보면 / 하나씩 AND하다 0이 되면 멈춘다 / 비트마다 언제 처음 꺼지는지 계산하기 / 두 끝이 같아질 때까지 오른쪽으로 민다 / right의 낮은 1을 left 아래로 내려갈 때까지 지운다 / 처음 다른 자리를 한 번에 찾기 / 다섯 풀이를 백만 쌍으로 재 보면 / 같은 수, 0, 최댓값 구간에서 생기는 버그 / 구간 AND를 손으로 짜 보기 / OR라면, XOR라면, 질의가 많다면 / 면접에서 나올 만한 질문
+- 직접 링크 →: bit-manipulation, leetcode-number-of-1-bits, leetcode-single-number, leetcode-power-of-two, leetcode-counting-bits, layer-ip-addressing, leetcode-longest-common-prefix, leetcode-single-number-ii, leetcode-missing-number, leetcode-reverse-bits
+- 키워드 백링크 →: sd-latency-numbers, security-groups-nacl, dynamic-programming
+- 이 글로 오는 글 ←: leetcode-power-of-two
+
 #### `leetcode-counting-bits` — LeetCode 338. Counting Bits: 절반의 답에 맨 아래 비트를 더한다
 
 - 요약: 0부터 n까지 모든 수의 1 비트 개수를 수마다 세기, 세 가지 점화식, 탑다운 메모, 배열을 두 배씩 늘리기로 구하고 1000만 개에서 재 본다. 괄호 우선순위 실수, 타입 배열, 배열 없이 총개수만 세는 O(log n) 계산까지 다룬다.
@@ -1447,9 +1558,20 @@
 - 키워드: (없음)
 - 길이: 507줄
 - 소제목: 0부터 n까지 1의 개수를 한 줄로 / 0부터 8까지 손으로 써 보면 / 수마다 따로 세기 / 한 칸 민 수의 답에 맨 아래 비트를 더한다 / 앞의 절반에 1을 붙인 수 / 가장 낮은 1을 끈 수의 답에 1을 더한다 / 배열을 두 배씩 늘려 가기 / 여섯 풀이를 재 보면 / 틀리기 쉬운 곳 / 직접 풀어 보기 / 조건을 바꿔 묻는다면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-number-of-1-bits, dynamic-programming, bit-manipulation, leetcode-climbing-stairs, leetcode-single-number, leetcode-reverse-bits, leetcode-sum-of-two-integers
+- 직접 링크 →: leetcode-number-of-1-bits, dynamic-programming, bit-manipulation, leetcode-climbing-stairs, leetcode-power-of-two, leetcode-single-number, leetcode-reverse-bits, leetcode-sum-of-two-integers
 - 키워드 백링크 →: sd-latency-numbers, js-numbers-bigint, floating-point-numbers
-- 이 글로 오는 글 ←: leetcode-number-of-1-bits, leetcode-reverse-bits, leetcode-single-number, leetcode-sum-of-two-integers
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-missing-number, leetcode-number-of-1-bits, leetcode-power-of-two, leetcode-reverse-bits, leetcode-single-number, leetcode-single-number-ii, leetcode-sum-of-two-integers
+
+#### `leetcode-missing-number` — LeetCode 268. Missing Number: 인덱스가 있어야 할 목록을 들고 있다
+
+- 요약: 0부터 n까지에서 빠진 수 하나를 후보 훑기, 정렬, 해시 집합, 순환 정렬, 합 공식, 인덱스와 값 XOR 순서로 풀고 백만 칸 배열로 재 본다. 합 공식이 Java에서 넘치는 이유와 정렬된 배열, 빠진 수가 둘인 변형까지 다룬다.
+- 태그: LeetCode, Bit Manipulation, Math, Algorithm
+- 키워드: (없음)
+- 길이: 565줄
+- 소제목: 0부터 n까지에서 한 칸이 빈다 / 다섯 칸짜리 예시를 손으로 / 후보를 하나씩 배열에서 찾아본다 / 정렬하면 자리와 값이 어긋나는 곳이 답이다 / 본 수를 집합에 적어 두기 / 값을 제자리로 돌려보내는 순환 정렬 / 있어야 할 합에서 실제 합을 뺀다 / 인덱스와 값을 함께 XOR한다 / 백만 칸 배열에서 여섯 풀이를 재 보면 / 빈칸이 끝에 있거나 처음에 있을 때 / 빠진 수를 직접 찾아 보기 / 정렬돼 있거나, 빈칸이 둘이거나, 중복이 섞이면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-single-number, ds-hash-map, binary-search, leetcode-linked-list-cycle, leetcode-single-number-ii, leetcode-number-of-1-bits, leetcode-counting-bits, bit-manipulation
+- 키워드 백링크 →: sql-aggregation-pitfalls
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-power-of-two, leetcode-reverse-integer, leetcode-single-number, leetcode-single-number-ii
 
 #### `leetcode-number-of-1-bits` — LeetCode 191. Number of 1 Bits: 켜진 비트만 골라 지우며 센다
 
@@ -1458,9 +1580,20 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 이진수로 쓰면 1이 몇 개인가 / 90을 손으로 세어 보면 / 이진 문자열로 바꿔 세기 / 맨 아래 칸을 보고 한 칸씩 민다 / 켜진 비트만 골라 지운다 / 여러 번 불린다면 표를 만든다 / 표 없이 한꺼번에 세는 SWAR / 여섯 풀이를 재 보면 / 틀리기 쉬운 곳 / 직접 풀어 보기 / 면접관이 이어서 묻는 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: bit-manipulation, logic-gates-alu, leetcode-counting-bits, leetcode-single-number, leetcode-reverse-bits, leetcode-sum-of-two-integers
+- 직접 링크 →: bit-manipulation, logic-gates-alu, leetcode-counting-bits, leetcode-power-of-two, leetcode-single-number, leetcode-reverse-bits, leetcode-sum-of-two-integers
 - 키워드 백링크 →: sd-latency-numbers, js-numbers-bigint, cpu-pipelining-branch-prediction, redis-basics, dynamic-programming
-- 이 글로 오는 글 ←: leetcode-counting-bits, leetcode-reverse-bits, leetcode-single-number, leetcode-sum-of-two-integers
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-counting-bits, leetcode-missing-number, leetcode-power-of-two, leetcode-reverse-bits, leetcode-single-number, leetcode-single-number-ii, leetcode-sum-of-two-integers
+
+#### `leetcode-power-of-two` — LeetCode 231. Power of Two: 1이 하나뿐인 수
+
+- 요약: 2의 거듭제곱 판별을 2로 나누기, 1의 개수 세기, n & (n - 1), n & -n, 2^30의 약수, 31개 집합, 로그로 풀고 백만 개의 수로 재 본다. 0과 32비트 최솟값, 괄호 우선순위, 로그 오차에서 깨지는 코드와 3·4의 거듭제곱 변형을 다룬다.
+- 태그: LeetCode, Bit Manipulation, Math, Algorithm
+- 키워드: (없음)
+- 길이: 516줄
+- 소제목: 1, 2, 4, 8 중 하나인가 / 2의 거듭제곱을 이진수로 쓰면 / 2로 안 나눠질 때까지 나눈다 / 켜진 비트를 세어 하나인지 본다 / 가장 낮은 1을 끄면 0이 되는가 / 가장 낮은 1만 남겨도 그대로인가 / 가장 큰 거듭제곱으로 나눠 보기 / 로그로 지수를 구하면 생기는 일 / 여덟 풀이를 백만 개의 수로 재 보면 / 0, 음수, 최솟값에서 깨지는 코드 / 거듭제곱 판별기를 직접 만들기 / 3의 거듭제곱, 4의 거듭제곱, 다음 2의 거듭제곱 / 면접에서 나올 만한 질문
+- 직접 링크 →: bit-manipulation, leetcode-number-of-1-bits, leetcode-counting-bits, leetcode-bitwise-and-of-numbers-range, leetcode-powx-n, leetcode-single-number, leetcode-missing-number, leetcode-reverse-integer
+- 키워드 백링크 →: sd-latency-numbers, ds-hash-map, floating-point-numbers, segment-tree-fenwick, logic-gates-alu, dynamic-programming
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-counting-bits, leetcode-number-of-1-bits, leetcode-reverse-integer
 
 #### `leetcode-reverse-bits` — LeetCode 190. Reverse Bits: 앞의 0까지 서른두 칸을 뒤집는다
 
@@ -1469,9 +1602,20 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 서른두 칸을 거울에 비춘다 / 13을 손으로 뒤집으면 / 문자열로 뒤집기 / 한 비트씩 꺼내 반대쪽에 쌓는다 / 양 끝 비트를 바꾼다 / 여러 번 불린다면 바이트 표를 쓴다 / 다섯 번 만에 뒤집는 분할 정복 / Python과 Java로 옮기기 / 다섯 풀이를 재 보면 / 틀리기 쉬운 곳 / 직접 풀어 보기 / 면접관이 바꿔 묻는 것 / 면접에서 나올 만한 질문
-- 직접 링크 →: bit-manipulation, leetcode-number-of-1-bits, two-pointers-pattern, leetcode-single-number, leetcode-counting-bits, leetcode-sum-of-two-integers
+- 직접 링크 →: bit-manipulation, leetcode-number-of-1-bits, two-pointers-pattern, leetcode-reverse-integer, leetcode-single-number, leetcode-counting-bits, leetcode-sum-of-two-integers
 - 키워드 백링크 →: js-numbers-bigint, divide-and-conquer, cpu-pipelining-branch-prediction
-- 이 글로 오는 글 ←: leetcode-counting-bits, leetcode-number-of-1-bits, leetcode-single-number, leetcode-sum-of-two-integers
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-counting-bits, leetcode-number-of-1-bits, leetcode-reverse-integer, leetcode-single-number, leetcode-sum-of-two-integers
+
+#### `leetcode-reverse-integer` — LeetCode 7. Reverse Integer: 넘치기 전에 멈춘다
+
+- 요약: 정수의 자릿수를 뒤집되 32비트를 넘으면 0을 돌려주는 문제를 문자열 뒤집기, 끝자리 떼기, 곱하기 전 검사, 넘친 뒤 되돌려 확인, 한계 문자열 비교로 푼다. 7과 -8이 나오는 이유, 음수 나머지의 언어별 차이, Math.abs 함정을 실제 출력으로 본다.
+- 태그: LeetCode, Bit Manipulation, Math, Algorithm
+- 키워드: (없음)
+- 길이: 528줄
+- 소제목: 거꾸로 읽되 32비트 안에서만 / -1230을 손으로 뒤집으면 / 문자열로 바꿔 뒤집기 / 끝자리를 떼어 새 수의 끝에 붙인다 / 곱하기 전에 넘칠지 먼저 본다 / 넘친 뒤 되돌려 보고 알아채기 / 문자열을 한계값과 사전 순으로 비교하기 / 다섯 풀이를 백만 번씩 돌려 보면 / 부호와 끝자리 0이 만드는 버그 / 한계에 걸친 수로 연습하기 / 회문 판별, 문자열 파싱, 64비트로 넓히면 / 면접에서 나올 만한 질문
+- 직접 링크 →: bit-manipulation, leetcode-plus-one, leetcode-add-two-numbers, leetcode-reverse-bits, leetcode-sum-of-two-integers, leetcode-missing-number, leetcode-power-of-two
+- 키워드 백링크 →: js-numbers-bigint, ds-linked-list, logic-gates-alu
+- 이 글로 오는 글 ←: leetcode-excel-sheet-column-number, leetcode-power-of-two, leetcode-reverse-bits, leetcode-sum-of-two-integers
 
 #### `leetcode-single-number` — LeetCode 136. Single Number: 같은 수를 두 번 섞으면 사라진다
 
@@ -1480,9 +1624,20 @@
 - 키워드: (없음)
 - 길이: 511줄
 - 소제목: 두 번씩 나오는 수들 사이의 외톨이 / 손으로 짝을 지워 보면 / 수마다 몇 번 나오는지 다시 세기 / 정렬하면 짝이 나란히 선다 / 장부에 횟수를 적어 두기 / 짝이 맞으면 바닥에서 치운다 / 합으로 계산하기 / 같은 수를 두 번 섞으면 사라진다 / 여섯 풀이를 재 보면 / 틀리기 쉬운 곳 / 직접 풀어 보기 / 조건이 바뀌면 어떻게 하나 / 면접에서 나올 만한 질문
-- 직접 링크 →: bit-manipulation, ds-hash-map, binary-search, leetcode-linked-list-cycle, leetcode-contains-duplicate, leetcode-number-of-1-bits, leetcode-counting-bits, leetcode-reverse-bits, leetcode-sum-of-two-integers
+- 직접 링크 →: bit-manipulation, ds-hash-map, binary-search, leetcode-single-number-ii, leetcode-missing-number, leetcode-linked-list-cycle, leetcode-contains-duplicate, leetcode-number-of-1-bits, leetcode-counting-bits, leetcode-reverse-bits, leetcode-sum-of-two-integers
 - 키워드 백링크 →: js-numbers-bigint, logic-gates-alu
-- 이 글로 오는 글 ←: leetcode-counting-bits, leetcode-number-of-1-bits, leetcode-reverse-bits, leetcode-sum-of-two-integers
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-counting-bits, leetcode-missing-number, leetcode-number-of-1-bits, leetcode-power-of-two, leetcode-reverse-bits, leetcode-single-number-ii, leetcode-sum-of-two-integers
+
+#### `leetcode-single-number-ii` — LeetCode 137. Single Number II: 비트마다 셋을 세고 한 바퀴 돌린다
+
+- 요약: 나머지가 세 번씩 나오는 배열에서 외톨이를 다시 세기, 정렬, 해시맵, 합 계산, 자리마다 세어 3으로 나누기, ones와 twos 상태 기계로 푼다. XOR가 통하지 않는 이유, 부호 비트와 갱신 순서에서 나는 버그, k번씩 나오는 일반형을 다룬다.
+- 태그: LeetCode, Bit Manipulation, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 593줄
+- 소제목: 모두 세 번, 하나만 한 번 / XOR 한 줄은 여기서 0을 낸다 / 수마다 다시 세기 / 정렬하면 세 개씩 붙어 선다 / 장부에 횟수를 적는다 / 세 배 한 고유 합에서 전체 합을 뺀다 / 비트 자리마다 1을 세어 3으로 나눈다 / 비트마다 0, 1, 2를 세는 작은 기계 / 3만 개짜리 배열로 여섯 풀이를 재 보면 / 부호 비트와 두 줄의 순서에서 나는 버그 / 세 번씩 섞인 배열로 연습하기 / k번씩 나온다면, 외톨이가 두 번 나온다면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-single-number, ds-hash-map, leetcode-missing-number, leetcode-majority-element, leetcode-number-of-1-bits, leetcode-counting-bits, bit-manipulation
+- 키워드 백링크 →: message-delivery-semantics, logic-gates-alu
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-missing-number, leetcode-single-number
 
 #### `leetcode-sum-of-two-integers` — LeetCode 371. Sum of Two Integers: 올림 없는 합과 올림을 따로 더한다
 
@@ -1491,9 +1646,9 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 더하기 기호 없이 더하라 / 이진수로 5 + 3을 세로로 더하면 / 덧셈을 쓰면 안 되는데 덧셈 없이 더하는 꼼수들 / 자리마다 더하는 전가산기 흉내 / 올림 없이 더하고 올림만 따로 더한다 / Python은 정수에 끝이 없어서 마스크가 필요하다 / Java는 int가 알아서 32비트다 / 네 가지를 나란히 보면 / 틀리기 쉬운 곳 / 직접 풀어 보기 / 꼬리 질문으로 넓혀 가기 / 면접에서 나올 만한 질문
-- 직접 링크 →: logic-gates-alu, bit-manipulation, leetcode-single-number, leetcode-number-of-1-bits, leetcode-counting-bits, leetcode-reverse-bits
+- 직접 링크 →: logic-gates-alu, bit-manipulation, leetcode-reverse-integer, leetcode-single-number, leetcode-number-of-1-bits, leetcode-counting-bits, leetcode-reverse-bits
 - 키워드 백링크 →: js-numbers-bigint, ds-linked-list, floating-point-numbers
-- 이 글로 오는 글 ←: leetcode-counting-bits, leetcode-multiply-strings, leetcode-number-of-1-bits, leetcode-reverse-bits, leetcode-single-number
+- 이 글로 오는 글 ←: leetcode-counting-bits, leetcode-multiply-strings, leetcode-number-of-1-bits, leetcode-plus-one, leetcode-reverse-bits, leetcode-reverse-integer, leetcode-single-number
 
 ### Programming › Algorithms › LeetCode › Graphs (`programming/algorithms/leetcode/graphs`)
 
@@ -1515,9 +1670,9 @@
 - 키워드: (없음)
 - 길이: 500줄
 - 소제목: 선수 과목이 꼬여 있지 않은가 / 들을 수 있는 과목을 매번 다시 찾는다 / 지금 걷는 길만 기억하면 지수 시간이 된다 / 세 가지 색으로 칠하는 DFS / 선수 과목 수를 세어 두는 칸의 알고리즘 / 큐 대신 스택이나 힙을 써도 된다 / 재귀 없이 세 가지 색을 칠하려면 / 유니온 파인드로는 방향을 알 수 없다 / 여섯 풀이를 과목 수로 고르면 / 방향을 뒤집고, 회색을 빼먹고 / 수강 신청이 더 까다로워지면 / 고리가 있으면 누군가는 영원히 기다린다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ds-graph-bfs-dfs, leetcode-course-schedule-ii, dynamic-programming, ds-union-find, leetcode-redundant-connection, leetcode-clone-graph
+- 직접 링크 →: ds-graph-bfs-dfs, leetcode-course-schedule-ii, dynamic-programming, ds-union-find, leetcode-redundant-connection, leetcode-alien-dictionary, leetcode-clone-graph
 - 키워드 백링크 →: spring-ioc-di
-- 이 글로 오는 글 ←: leetcode-clone-graph, leetcode-course-schedule-ii, leetcode-permutations, leetcode-redundant-connection, leetcode-word-ladder
+- 이 글로 오는 글 ←: leetcode-alien-dictionary, leetcode-clone-graph, leetcode-course-schedule-ii, leetcode-permutations, leetcode-redundant-connection, leetcode-word-ladder
 
 #### `leetcode-course-schedule-ii` — LeetCode 210. Course Schedule II: 꺼낸 순서를 그대로 내면 된다
 
@@ -1526,9 +1681,9 @@
 - 키워드: (없음)
 - 길이: 539줄
 - 소제목: 듣는 순서를 하나 적어 낸다 / 들을 수 있는 과목을 매번 모아 적는다 / 들어가자마자 적으면 순서가 틀린다 / 다 끝난 과목부터 적고 뒤집는다 / 꺼낸 순서가 그대로 답인 칸의 알고리즘 / 재귀 없이 후위 순서를 만들려면 / 답이 여럿일 때 하나로 정하려면 / 내 답이 맞는지 확인하는 함수 / 2,000과목 사슬에서 재 보면 / 순서 만들기 일곱 가지 / 빈 배열, 빠진 과목, 거꾸로 된 순서 / 순서 문제가 바뀌면 / 꺼낸 순서를 그대로 내면 된다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-course-schedule, dynamic-programming, recursion-backtracking, leetcode-redundant-connection, leetcode-reconstruct-itinerary
+- 직접 링크 →: leetcode-course-schedule, dynamic-programming, recursion-backtracking, leetcode-alien-dictionary, leetcode-redundant-connection, leetcode-reconstruct-itinerary
 - 키워드 백링크 →: ds-union-find, ds-graph-bfs-dfs, sd-video-upload-transcoding
-- 이 글로 오는 글 ←: leetcode-course-schedule
+- 이 글로 오는 글 ←: leetcode-alien-dictionary, leetcode-course-schedule
 
 #### `leetcode-max-area-of-island` — LeetCode 695. Max Area of Island: 섬이 끝날 때 칸 수를 들고 나온다
 
@@ -1591,9 +1746,9 @@
 - 키워드: (없음)
 - 길이: 542줄
 - 소제목: 1분에 한 칸씩 옆으로 번진다 / 매분 상자 전체를 다시 훑는다 / 귤마다 가장 가까운 곰팡이까지 잰다 / 곰팡이 귤을 모두 한 큐에 넣고 출발한다 / 겹을 나누지 않고 시각을 칸에 적는다 / DFS로 시각을 덮어쓰면 같은 칸을 수천 번 본다 / 귤이 한 줄로 늘어선 상자로 재 보면 / 번지는 시간 구하기 다섯 가지 / 1분을 더 세거나, 멀쩡한 귤을 잊거나 / 번지는 문제가 바뀌면 / 물결이 마지막 귤에 닿는 순간 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-number-of-islands, leetcode-max-area-of-island, ds-graph-bfs-dfs, shortest-path-algorithms, leetcode-pacific-atlantic-water-flow, leetcode-word-ladder
+- 직접 링크 →: leetcode-number-of-islands, leetcode-max-area-of-island, ds-graph-bfs-dfs, shortest-path-algorithms, leetcode-pacific-atlantic-water-flow, leetcode-word-ladder, leetcode-shortest-path-in-binary-matrix
 - 키워드 백링크 →: sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-max-area-of-island, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-word-ladder
+- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-max-area-of-island, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-shortest-path-in-binary-matrix, leetcode-word-ladder
 
 #### `leetcode-word-ladder` — LeetCode 127. Word Ladder: 이웃을 빨리 찾고 양쪽에서 넓힌다
 
@@ -1602,11 +1757,21 @@
 - 키워드: (없음)
 - 길이: 540줄
 - 소제목: 한 글자씩 바꿔 건너가는 사다리 / 모든 사다리를 다 올라 본다 / 단어 쌍을 전부 비교해 그래프를 만든다 / 글자를 하나씩 바꿔 보며 이웃을 찾는다 / 와일드카드 통으로 이웃을 묶는다 / 양쪽 끝에서 물결을 함께 퍼뜨린다 / 두 입력으로 재 보면 / 다섯 풀이를 목록 모양으로 고르면 / 단어 수와 바꾼 횟수, 그리고 지우는 시점 / 사다리 문제가 바뀌면 / 이웃을 빨리 찾고, 양쪽에서 넓힌다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ds-graph-bfs-dfs, recursion-backtracking, leetcode-number-of-islands, shortest-path-algorithms, leetcode-network-delay-time, leetcode-edit-distance, leetcode-rotting-oranges, leetcode-course-schedule
+- 직접 링크 →: ds-graph-bfs-dfs, recursion-backtracking, leetcode-number-of-islands, shortest-path-algorithms, leetcode-network-delay-time, leetcode-edit-distance, leetcode-rotting-oranges, leetcode-course-schedule, leetcode-shortest-path-in-binary-matrix
 - 키워드 백링크 →: sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-rotting-oranges
+- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-rotting-oranges, leetcode-shortest-path-in-binary-matrix
 
 ### Programming › Algorithms › LeetCode › Greedy (`programming/algorithms/leetcode/greedy`)
+
+#### `leetcode-candy` — LeetCode 135. Candy: 왼쪽에서 한 번, 오른쪽에서 한 번
+
+- 요약: 옆 친구보다 점수가 높으면 사탕을 더 주는 최소 배분을 반복 수정, 두 배열, 배열 하나로 두 번 훑기, 낮은 점수부터 채우기, 오르막과 내리막 세기로 구한다. 두 값의 최댓값이 왜 최소인지와 max를 빼먹는 실수, 원형과 격자 변형까지 본다.
+- 태그: LeetCode, Greedy, Algorithm
+- 키워드: (없음)
+- 길이: 507줄
+- 소제목: 옆 친구보다 점수가 높으면 사탕도 많이 / 왼쪽만 보고 나눠 주면 생기는 일 / 고칠 게 없을 때까지 다시 고친다 / 두 방향의 조건을 따로 푼다 / 배열 하나로 두 번 훑는다 / 점수가 낮은 아이부터 채운다 / 오르막과 내리막의 길이만 센다 / Python과 Java로 옮긴 두 번 훑기 / 사탕 배분 방법별 비용 / 사탕을 잘못 세는 코드 / 사탕을 직접 나눠 보는 칸 / 줄 모양이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: greedy-algorithms, ds-graph-bfs-dfs, leetcode-hand-of-straights, leetcode-merge-triplets-to-form-target-triplet, leetcode-valid-parenthesis-string, leetcode-ipo, leetcode-trapping-rain-water, leetcode-product-of-array-except-self
+- 이 글로 오는 글 ←: leetcode-hand-of-straights, leetcode-ipo, leetcode-merge-triplets-to-form-target-triplet, leetcode-product-of-array-except-self, leetcode-valid-parenthesis-string
 
 #### `leetcode-gas-station` — LeetCode 134. Gas Station: 바닥난 구간은 통째로 건너뛴다
 
@@ -1617,7 +1782,7 @@
 - 소제목: 원형 길 위의 주유소 / 손으로 한 바퀴 돌아 본다 / 모든 출발점에서 한 바퀴를 돌려 본다 / 실패한 구간은 통째로 건너뛴다 / 한 번 훑으며 출발점을 다시 고른다 / 누적 합이 가장 낮은 곳 다음에서 출발한다 / 양 끝에서 좁혀 온다 / Python과 Java로 옮기기 / 풀이 비교 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, leetcode-best-time-to-buy-and-sell-stock, two-pointers-pattern, ds-heap
 - 키워드 백링크 →: ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-boats-to-save-people, leetcode-hand-of-straights, leetcode-house-robber-ii
+- 이 글로 오는 글 ←: leetcode-boats-to-save-people, leetcode-hand-of-straights, leetcode-house-robber-ii, leetcode-ipo
 
 #### `leetcode-hand-of-straights` — LeetCode 846. Hand of Straights: 가장 작은 카드는 맨 앞에 설 수밖에 없다
 
@@ -1625,8 +1790,19 @@
 - 태그: LeetCode, Greedy, Hash Table, Algorithm
 - 키워드: (없음)
 - 길이: 501줄
-- 소제목: 카드를 연속한 묶음으로 나누기 / 손으로 먼저 묶어 본다 / 가장 작은 카드는 갈 곳이 하나뿐이다 / 정렬해 두고 매번 배열에서 지운다 / 개수 장부로 지우는 일을 줄인다 / 최소 힙으로 가장 작은 숫자를 꺼낸다 / 숫자마다 열린 묶음 수만 센다 / 정렬 없이 줄의 맨 앞을 찾아간다 / Python과 Java로 쓴 장부 풀이 / 다섯 풀이를 한 표에 / 묶다가 틀리는 자리 / 카드를 직접 묶어 보는 칸 / 묶는 규칙이 바뀌면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-jump-game, leetcode-gas-station, greedy-algorithms, ds-hash-map, ds-heap, sorting-algorithms, leetcode-partition-labels
+- 소제목: 카드를 연속한 묶음으로 나누기 / 손으로 먼저 묶어 본다 / 가장 작은 카드는 갈 곳이 하나뿐이다 / 정렬해 두고 매번 배열에서 지운다 / 개수 장부로 지우는 일을 줄인다 / 최소 힙으로 가장 작은 숫자를 꺼낸다 / 숫자마다 열린 묶음 수만 센다 / 정렬 없이 줄의 맨 앞을 찾아간다 / Python과 Java로 쓴 장부 풀이 / 다섯 가지 묶는 법의 비용 / 묶다가 틀리는 자리 / 카드를 직접 묶어 보는 칸 / 묶는 규칙이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-jump-game, leetcode-gas-station, greedy-algorithms, ds-hash-map, ds-heap, sorting-algorithms, leetcode-merge-triplets-to-form-target-triplet, leetcode-valid-parenthesis-string, leetcode-candy, leetcode-ipo, leetcode-partition-labels
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-ipo, leetcode-merge-triplets-to-form-target-triplet, leetcode-valid-parenthesis-string
+
+#### `leetcode-ipo` — LeetCode 502. IPO: 열린 것 중 가장 큰 이익을 힙에서 꺼낸다
+
+- 요약: 자본이 문턱인 프로젝트를 최대 k개 골라 자본을 불리는 문제를 모든 순서, 차례마다 전부 훑기, 이익 순 정렬, 문턱 순 정렬과 최대 힙, 모두 열려 있을 때의 지름길로 푼다. 가장 큰 이익을 고르는 그리디의 바꿔치기 증명과 포인터를 되돌리는 실수까지 본다.
+- 태그: LeetCode, Greedy, Heap, Algorithm
+- 키워드: (없음)
+- 길이: 508줄
+- 소제목: 자본이 문턱인 프로젝트 고르기 / 손으로 세 번 골라 본다 / 모든 순서를 해 본다 / 지금 할 수 있는 것 중 이익이 가장 큰 것 / 차례마다 전부 훑는다 / 이익 순으로 줄 세워 두고 처음 열린 것 / 문턱 순으로 열고 최대 힙에서 꺼낸다 / 이미 다 열려 있을 때의 지름길 / Python과 Java로 옮긴 힙 풀이 / 프로젝트를 고르는 방법별 비용 / 힙을 잘못 다루는 코드 / 프로젝트를 직접 골라 보는 칸 / 조건이 바뀌면 달라지는 것 / 면접에서 나올 만한 질문
+- 직접 링크 →: ds-heap, greedy-algorithms, leetcode-gas-station, leetcode-hand-of-straights, leetcode-merge-triplets-to-form-target-triplet, leetcode-valid-parenthesis-string, leetcode-candy, leetcode-task-scheduler, leetcode-meeting-rooms-ii
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-hand-of-straights, leetcode-merge-triplets-to-form-target-triplet, leetcode-valid-parenthesis-string
 
 #### `leetcode-jump-game` — LeetCode 55. Jump Game: 닿을 수 있는 가장 먼 칸만 기억한다
 
@@ -1637,7 +1813,7 @@
 - 소제목: 칸마다 적힌 숫자만큼 뛸 수 있다 / 손으로 두 줄을 건너 본다 / 갈 수 있는 길을 모두 걸어 본다 / 한 번 알아낸 칸은 적어 둔다 / 뒤에서부터 표를 채운다 / 가장 가까운 좋은 칸만 기억한다 / 칸을 정점으로 보고 넓게 퍼진다 / 앞에서 닿을 수 있는 가장 먼 칸을 늘려 간다 / Python과 Java로 옮기기 / 풀이 비교 / 그럴듯하지만 틀리는 걸음 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, dynamic-programming, recursion-backtracking, ds-graph-bfs-dfs, interval-problems-pattern, leetcode-jump-game-ii, sliding-window-pattern
 - 키워드 백링크 →: js-memoization
-- 이 글로 오는 글 ←: leetcode-boats-to-save-people, leetcode-hand-of-straights, leetcode-jump-game-ii, leetcode-partition-labels
+- 이 글로 오는 글 ←: leetcode-boats-to-save-people, leetcode-hand-of-straights, leetcode-jump-game-ii, leetcode-merge-triplets-to-form-target-triplet, leetcode-partition-labels
 
 #### `leetcode-jump-game-ii` — LeetCode 45. Jump Game II: 한 번에 닿는 칸끼리 묶어 층을 센다
 
@@ -1650,6 +1826,17 @@
 - 키워드 백링크 →: sliding-window-pattern, js-memoization, sd-maps-tiles-routing, dynamic-programming
 - 이 글로 오는 글 ←: leetcode-jump-game
 
+#### `leetcode-merge-triplets-to-form-target-triplet` — LeetCode 1899. Merge Triplets to Form Target Triplet: 넘치는 묶음만 빼고 전부 합친다
+
+- 요약: 칸별 최댓값 합치기로 목표 묶음을 만드는 문제를 모든 부분집합, 걸러 낸 뒤 합치기, 한 번 훑기, 맞춘 칸 표시로 푼다. 한 칸이라도 넘치는 묶음이 왜 독인지, 남은 것을 전부 합쳐도 되는 이유와 최소 연산 횟수 변형까지 본다.
+- 태그: LeetCode, Greedy, Algorithm
+- 키워드: (없음)
+- 길이: 516줄
+- 소제목: 칸마다 큰 쪽만 남기는 합치기 / 작은 예시로 합쳐 본다 / 모든 부분집합을 합쳐 본다 / 한 칸이라도 넘치면 독이 된다 / 쓸 수 있는 묶음은 전부 합쳐도 손해가 없다 / 두 칸으로 줄여 그려 보면 / 걸러 낸 목록을 만들고 합친다 / 한 번 훑으며 합친다 / 맞춘 칸만 표시하고 일찍 끝낸다 / 실제로 어떤 연산을 하면 되나 / Python과 Java로 옮긴 표시 풀이 / 합치는 방법별 비용 / 역할을 합쳐 권한을 맞추는 일과 같은 모양 / 칸을 따로 보다가 틀리는 자리 / 묶음을 직접 합쳐 보는 칸 / 합치는 규칙이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: greedy-algorithms, bit-manipulation, dynamic-programming, leetcode-hand-of-straights, leetcode-valid-parenthesis-string, leetcode-candy, leetcode-ipo, leetcode-jump-game
+- 키워드 백링크 →: http-methods
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-hand-of-straights, leetcode-ipo, leetcode-valid-parenthesis-string
+
 #### `leetcode-partition-labels` — LeetCode 763. Partition Labels: 마지막 자리까지 조각을 민다
 
 - 요약: 같은 글자가 한 조각에만 있도록 문자열을 가장 많이 자르는 문제를 매번 뒤 확인하기, 글자 구간 합치기, 앞뒤 비트마스크, 열린 글자 세기, 마지막 자리로 end 밀기로 푼다. 자를 수 있는 곳에서 모두 잘라도 되는 이유와 Jump Game과의 연결, 반대 조건의 변형까지 본다.
@@ -1660,6 +1847,17 @@
 - 직접 링크 →: leetcode-jump-game, interval-problems-pattern, leetcode-merge-intervals, bit-manipulation, monotonic-stack-pattern, ds-hash-map
 - 키워드 백링크 →: ds-stack-queue-deque
 - 이 글로 오는 글 ←: leetcode-hand-of-straights, leetcode-merge-intervals
+
+#### `leetcode-valid-parenthesis-string` — LeetCode 678. Valid Parenthesis String: 열린 괄호 수를 범위로 들고 간다
+
+- 요약: 별표가 섞인 괄호 줄의 올바름을 별표 바꿔 보기, 구간 DP, 열린 수 메모와 표, 두 스택, 범위 lo와 hi, 양쪽에서 훑기로 판정한다. 가능한 열린 수가 왜 끊김 없는 구간인지, lo를 0으로 올려도 되는 이유와 별표가 비울 수 없는 변형까지 본다.
+- 태그: LeetCode, Greedy, Stack, Dynamic Programming, Algorithm
+- 키워드: (없음)
+- 길이: 544줄
+- 소제목: 별표가 섞인 괄호 줄 / 별표 하나에 세 갈래 길 / 별표를 하나씩 바꿔 보는 완전 탐색 / 구간마다 올바른지 표에 적는다 / 열린 수를 상태로 두는 메모 재귀 / 여는 괄호와 별표의 자리를 따로 쌓는다 / 열린 수의 가장 작은 값과 가장 큰 값만 든다 / 양쪽에서 한 번씩 훑는다 / Python과 Java로 옮긴 범위 풀이 / 괄호 판정 방법별 비용 / 별표를 잘못 다루는 코드 / 별표를 직접 바꿔 보는 칸 / 규칙이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-valid-parentheses, recursion-backtracking, dynamic-programming, js-memoization, ds-stack-queue-deque, leetcode-generate-parentheses, leetcode-hand-of-straights, leetcode-merge-triplets-to-form-target-triplet, leetcode-candy, leetcode-ipo
+- 키워드 백링크 →: postgres-query-planner
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-hand-of-straights, leetcode-ipo, leetcode-merge-triplets-to-form-target-triplet
 
 ### Programming › Algorithms › LeetCode › Heap / Priority Queue (`programming/algorithms/leetcode/heap`)
 
@@ -1757,7 +1955,7 @@
 - 길이: 502줄
 - 소제목: 같은 작업 사이에 n칸을 띄운다 / 손으로 줄을 세워 본다 / 매 시각 가장 많이 남은 작업을 고른다 / 최대 힙과 대기 줄로 쉬는 칸을 건너뛴다 / 가장 많은 작업으로 뼈대를 세운다 / 빈칸 수를 직접 센다 / 알파벳 순으로 고르면 틀린다 / 1만 개로 재 봤다 / Python과 Java로 옮기기 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, ds-heap, leetcode-reorganize-string, cpu-scheduling-interrupts
-- 이 글로 오는 글 ←: leetcode-last-stone-weight, leetcode-meeting-rooms-ii, leetcode-minimum-interval-to-include-each-query, leetcode-reorganize-string
+- 이 글로 오는 글 ←: leetcode-ipo, leetcode-last-stone-weight, leetcode-meeting-rooms-ii, leetcode-minimum-interval-to-include-each-query, leetcode-reorganize-string
 
 ### Programming › Algorithms › LeetCode › Intervals (`programming/algorithms/leetcode/intervals`)
 
@@ -1770,7 +1968,7 @@
 - 소제목: 두 구간이 겹치는 조건은 한 줄이다 / 왜 정렬부터 하나 / 시작 순으로 합치기 / 이미 정렬된 목록에 끼워 넣기 / 끝 순으로 정렬해야 할 때 / 동시에 몇 개가 겹치나 / 두 목록의 교집합 / 질의가 따로 올 때 / 경계값: 닫힌 구간과 열린 구간 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, leetcode-study-guide, leetcode-merge-intervals, leetcode-insert-interval, leetcode-non-overlapping-intervals, leetcode-meeting-rooms, ds-heap, two-pointers-pattern, leetcode-minimum-interval-to-include-each-query, segment-tree-fenwick
 - 키워드 백링크 →: ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-jump-game, leetcode-jump-game-ii, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals, leetcode-partition-labels, leetcode-study-guide, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-jump-game, leetcode-jump-game-ii, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-my-calendar-i, leetcode-non-overlapping-intervals, leetcode-partition-labels, leetcode-study-guide, two-pointers-pattern
 
 #### `leetcode-car-pooling` — LeetCode 1094. Car Pooling: 정류장마다 타고 내린 수만 적어 두면 된다
 
@@ -1779,9 +1977,9 @@
 - 키워드: (없음)
 - 길이: 502줄
 - 소제목: 동쪽으로만 가는 차에 다 태울 수 있나 / 세 여행을 길 위에 쌓아 본다 / 위치를 하나씩 지나가며 센다 / 태우는 곳에서만 세도 충분하다 / 내릴 곳이 가장 가까운 손님부터 내린다 / 타고 내리는 사건을 줄 세운다 / 길이 1001짜리 장부에 적는다 / accumulate와 int[1001]로 옮긴다 / 장부를 직접 써 본다 / 무작위 여행으로 다섯 풀이를 맞춰 본다 / 다섯 풀이를 위치 범위로 고른다 / 같은 정류장에서 내리고 타는 순서 / 정류장이 10억 개라면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-meeting-rooms-ii, interval-problems-pattern, ds-heap, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-employee-free-time, leetcode-interval-list-intersections
+- 직접 링크 →: leetcode-meeting-rooms-ii, interval-problems-pattern, ds-heap, leetcode-meeting-rooms, leetcode-my-calendar-i, leetcode-merge-intervals, leetcode-employee-free-time, leetcode-interval-list-intersections
 - 키워드 백링크 →: segment-tree-fenwick, ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-employee-free-time, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals
+- 이 글로 오는 글 ←: leetcode-employee-free-time, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-my-calendar-i
 
 #### `leetcode-employee-free-time` — LeetCode 759. Employee Free Time: 모두의 바쁜 시간을 합치면 틈이 남는다
 
@@ -1790,9 +1988,9 @@
 - 키워드: (없음)
 - 길이: 513줄
 - 소제목: 모두가 쉬는 시간을 찾는다 / 세 직원의 하루를 겹쳐 본다 / 끝점 사이 조각을 하나씩 검사한다 / 다 모아서 합치고 틈을 읽는다 / 합친 목록 없이 가장 늦은 끝만 들고 간다 / 바쁜 사람 수를 세다가 0이 되는 곳 / 직원마다 이미 정렬돼 있다는 걸 쓴다 / 둘씩 합쳐 올라간다 / 튜플 비교와 비교자로 힙을 옮긴다 / 힙 병합을 직접 짜 본다 / 입력 조건을 지키는 일정 생성기로 맞춰 본다 / 여섯 방법의 비용 / 길이 0인 틈과 끝없는 틈 / 회의 잡기 도우미로 넓히면 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-merge-intervals, leetcode-merge-k-sorted-lists, interval-problems-pattern, ds-heap, leetcode-meeting-rooms, leetcode-interval-list-intersections, leetcode-meeting-rooms-ii, leetcode-car-pooling, leetcode-insert-interval
+- 직접 링크 →: leetcode-merge-intervals, leetcode-merge-k-sorted-lists, interval-problems-pattern, ds-heap, leetcode-meeting-rooms, leetcode-interval-list-intersections, leetcode-my-calendar-i, leetcode-meeting-rooms-ii, leetcode-car-pooling, leetcode-insert-interval
 - 키워드 백링크 →: sorting-algorithms, two-pointers-pattern, divide-and-conquer
-- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals
+- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-my-calendar-i
 
 #### `leetcode-insert-interval` — LeetCode 57. Insert Interval: 앞, 겹침, 뒤 세 덩어리로 한 번에 넣는다
 
@@ -1801,9 +1999,9 @@
 - 키워드: (없음)
 - 길이: 513줄
 - 소제목: 정렬된 달력에 약속 하나를 끼운다 / 손으로 한 번 넣어 본다 / 붙이고 정렬한 뒤 합친다 / 제자리를 찾아 끼우고 합친다 / 앞, 겹침, 뒤 세 덩어리로 한 번에 훑는다 / 새 구간이 떨어질 수 있는 자리 / 경계를 이분 탐색으로 찾는다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 틀리는 코드 조각 / 풀이 비교 / 실제 코드에서 이 모양을 만나는 곳 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: interval-problems-pattern, leetcode-merge-intervals, binary-search, leetcode-employee-free-time, leetcode-non-overlapping-intervals, leetcode-interval-list-intersections
+- 직접 링크 →: interval-problems-pattern, leetcode-merge-intervals, binary-search, leetcode-employee-free-time, leetcode-my-calendar-i, leetcode-non-overlapping-intervals, leetcode-interval-list-intersections
 - 키워드 백링크 →: ds-binary-tree-bst
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-my-calendar-i, leetcode-non-overlapping-intervals
 
 #### `leetcode-interval-list-intersections` — LeetCode 986. Interval List Intersections: 먼저 끝나는 쪽을 버리며 두 줄을 읽는다
 
@@ -1812,9 +2010,9 @@
 - 키워드: (없음)
 - 길이: 504줄
 - 소제목: 두 일정에서 겹치는 시간만 뽑는다 / 두 줄을 손으로 맞대 본다 / 두 구간의 교집합은 max와 min 한 줄 / 모든 짝을 맞대 본다 / 이분 탐색으로 겹치기 시작하는 곳으로 건너뛴다 / 먼저 끝나는 쪽을 버린다 / 두 줄을 한 줄로 합쳐 가장 늦은 끝과 맞댄다 / 열린 구간이 둘인 곳을 센다 / 리스트와 toArray로 옮긴다 / 다른 입력으로 포인터 규칙을 시험한다 / 길이 0인 구간까지 섞어 맞춰 본다 / 다섯 풀이를 입력 크기로 고른다 / 한 점짜리 교집합이 사라지는 코드 / 목록이 셋이거나 정렬이 안 돼 있다면 / 면접에서 나올 만한 질문
-- 직접 링크 →: interval-problems-pattern, two-pointers-pattern, leetcode-meeting-rooms, leetcode-employee-free-time, binary-search, leetcode-merge-intervals, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-merge-two-sorted-lists
+- 직접 링크 →: interval-problems-pattern, two-pointers-pattern, leetcode-meeting-rooms, leetcode-employee-free-time, binary-search, leetcode-merge-intervals, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-my-calendar-i, leetcode-merge-two-sorted-lists
 - 키워드 백링크 →: sorting-algorithms, ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-meeting-rooms-ii, leetcode-merge-intervals
+- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-my-calendar-i
 
 #### `leetcode-meeting-rooms` — LeetCode 252. Meeting Rooms: 시작 순으로 세우면 바로 앞 회의만 보면 된다
 
@@ -1823,9 +2021,9 @@
 - 키워드: (없음)
 - 길이: 501줄
 - 소제목: 몸이 하나일 때 모든 회의에 갈 수 있나 / 회의 다섯 개를 손으로 놓아 본다 / 모든 회의 짝을 비교한다 / 시작 순으로 세우고 이웃만 본다 / 시작과 끝을 사건으로 쪼개 쓸고 지나간다 / 시작과 끝을 따로 정렬한다 / 시각 범위가 작으면 칸에 표시한다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 한 글자 차이로 틀리는 곳 / 실제 일정 데이터에서 걸리는 것 / 풀이 비교 / 방이 몇 개 필요한가로 넘어가기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: interval-problems-pattern, leetcode-merge-intervals, leetcode-meeting-rooms-ii, leetcode-employee-free-time, leetcode-non-overlapping-intervals, leetcode-insert-interval, leetcode-car-pooling
+- 직접 링크 →: interval-problems-pattern, leetcode-merge-intervals, leetcode-meeting-rooms-ii, leetcode-my-calendar-i, leetcode-employee-free-time, leetcode-non-overlapping-intervals, leetcode-insert-interval, leetcode-car-pooling
 - 키워드 백링크 →: ds-binary-tree-bst, sorting-algorithms, sd-hotel-double-booking
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-car-pooling, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-car-pooling, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query, leetcode-my-calendar-i, leetcode-non-overlapping-intervals
 
 #### `leetcode-meeting-rooms-ii` — LeetCode 253. Meeting Rooms II: 가장 먼저 비는 방 하나만 보면 된다
 
@@ -1834,9 +2032,9 @@
 - 키워드: (없음)
 - 길이: 523줄
 - 소제목: 회의실을 몇 개 잡아야 하나 / 다섯 회의를 방에 직접 넣어 본다 / 회의가 시작하는 순간마다 세어 본다 / 방마다 비는 시각을 적어 두고 빈 방을 찾는다 / 가장 먼저 비는 방 하나만 보면 된다 / 시작과 끝을 따로 줄 세운다 / 사건으로 쪼개 세거나 칸에 적는다 / heapq와 PriorityQueue로 옮긴다 / 힙을 직접 만들어 돌려 본다 / 방 수가 하나씩 어긋나는 코드 / 느린 풀이를 기준 삼아 맞춰 본다 / 여섯 풀이를 시간과 쓰임새로 고른다 / 어느 회의가 어느 방에 들어갔나 / 조건이 하나씩 붙을 때 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-meeting-rooms, interval-problems-pattern, ds-heap, leetcode-car-pooling, leetcode-non-overlapping-intervals, leetcode-employee-free-time, leetcode-merge-intervals, leetcode-interval-list-intersections, leetcode-minimum-interval-to-include-each-query, leetcode-task-scheduler
+- 직접 링크 →: leetcode-meeting-rooms, interval-problems-pattern, ds-heap, leetcode-car-pooling, leetcode-non-overlapping-intervals, leetcode-my-calendar-i, leetcode-employee-free-time, leetcode-merge-intervals, leetcode-interval-list-intersections, leetcode-minimum-interval-to-include-each-query, leetcode-task-scheduler
 - 키워드 백링크 →: ds-array-matrix, sorting-algorithms
-- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-non-overlapping-intervals
+- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-interval-list-intersections, leetcode-ipo, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-my-calendar-i, leetcode-non-overlapping-intervals
 
 #### `leetcode-merge-intervals` — LeetCode 56. Merge Intervals: 시작 순으로 세우면 마지막 띠만 보면 된다
 
@@ -1860,6 +2058,17 @@
 - 키워드 백링크 →: binary-search
 - 이 글로 오는 글 ←: interval-problems-pattern, leetcode-meeting-rooms-ii, leetcode-non-overlapping-intervals
 
+#### `leetcode-my-calendar-i` — LeetCode 729. My Calendar I: 정렬해 두면 바로 앞과 뒤 예약만 보면 된다
+
+- 요약: 예약 요청을 하나씩 받아 겹치면 거절하는 달력을 모두 훑기, 정렬 배열과 이분 탐색, 직접 만든 이진 탐색 트리, TreeMap, 동적 세그먼트 트리, 차분 맵으로 만든다. 양옆만 보면 되는 이유, 시간 순 요청에서 무너지는 트리, 이중·삼중 예약으로 넓히는 길까지 본다.
+- 태그: LeetCode, Intervals, Binary Search, Algorithm
+- 키워드: (없음)
+- 길이: 531줄
+- 소제목: 겹치면 거절하는 달력 / 여섯 요청을 손으로 받아 본다 / 겹침 판정은 부등식 두 개 / 받은 예약을 모두 훑는다 / 시작 순으로 꽂아 두고 양옆만 본다 / 예약을 나무에 매단다 / 균형 트리가 있는 언어라면 / 시각 축 전체를 나무로 나눈다 / 겹침 수를 세는 장부로 / 연산 목록으로 달력을 돌려 본다 / 다섯 달력에 같은 요청을 넣어 본다 / 호출 수와 입력 순서로 고른다 / 경계 하나로 예약이 잘못 받아지는 코드 / 이중 예약까지 받는다면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-meeting-rooms, interval-problems-pattern, binary-search, leetcode-car-pooling, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-employee-free-time
+- 키워드 백링크 →: ds-binary-tree-bst, segment-tree-fenwick, sd-hotel-double-booking, postgres-data-types
+- 이 글로 오는 글 ←: leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-non-overlapping-intervals
+
 #### `leetcode-non-overlapping-intervals` — LeetCode 435. Non-overlapping Intervals: 가장 일찍 끝나는 구간을 남긴다
 
 - 요약: 겹치지 않게 지울 최소 개수를 조합 전부, 마지막 구간 DP, DP와 이분 탐색, 끝 순 그리디, 시작 순 그리디로 구한다. 짧은 것부터 고르는 그리디의 반례, 음수 값에서 터지는 초깃값, 점수가 붙는 변형까지 본다.
@@ -1867,7 +2076,7 @@
 - 키워드: (없음)
 - 길이: 500줄
 - 소제목: 최소로 지운다는 건 최대로 남긴다는 뜻이다 / 체육관 예약 다섯 개를 손으로 골라 본다 / 남길 조합을 전부 시험한다 / 마지막에 남긴 구간으로 상태를 정한다 / 남기거나 건너뛰거나, 재귀로 내려간다 / 이분 탐색으로 앞 구간을 바로 찾는다 / 가장 일찍 끝나는 구간을 남긴다 / 시작 순으로 정렬해도 된다, 대신 늦게 끝나는 쪽을 버린다 / 짧은 것부터 남기면 틀린다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 실제로 틀리는 줄들 / 이 판단이 실제로 쓰이는 곳 / 풀이 비교 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
-- 직접 링크 →: interval-problems-pattern, greedy-algorithms, leetcode-merge-intervals, leetcode-meeting-rooms, bit-manipulation, leetcode-longest-increasing-subsequence, dynamic-programming, binary-search, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-minimum-interval-to-include-each-query
+- 직접 링크 →: interval-problems-pattern, greedy-algorithms, leetcode-merge-intervals, leetcode-meeting-rooms, bit-manipulation, leetcode-longest-increasing-subsequence, dynamic-programming, binary-search, leetcode-my-calendar-i, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-minimum-interval-to-include-each-query
 - 키워드 백링크 →: ds-binary-tree-bst, js-memoization
 - 이 글로 오는 글 ←: interval-problems-pattern, leetcode-insert-interval, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query
 
@@ -1882,7 +2091,7 @@
 - 소제목: 거꾸로 적힌 두 수를 더한다 / 세로 덧셈을 그대로 따라가면 / 리스트를 숫자로 바꿔 더하기 / 언어의 큰 정수에 맡기기 / 자리마다 더하고 올림을 넘긴다 / 남은 자리를 재귀에 넘기기 / 입력 노드를 결과로 다시 쓰기 / 다섯 풀이를 한 줄씩 / 올림을 직접 넘겨 보기 / 마지막 1이 사라지는 코드 / 자릿수가 반대 방향이라면 / 세로 덧셈을 리스트 위에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-linked-list, leetcode-reverse-linked-list, leetcode-multiply-strings
 - 키워드 백링크 →: js-numbers-bigint, floating-point-numbers
-- 이 글로 오는 글 ←: leetcode-multiply-strings, leetcode-reverse-linked-list
+- 이 글로 오는 글 ←: leetcode-multiply-strings, leetcode-plus-one, leetcode-reverse-integer, leetcode-reverse-linked-list
 
 #### `leetcode-copy-list-with-random-pointer` — LeetCode 138. Copy List with Random Pointer: 복사본을 원본 바로 뒤에 세운다
 
@@ -1904,7 +2113,7 @@
 - 소제목: 꼬리가 다시 앞을 가리키는 리스트 / 끝을 기다리는 방법은 통하지 않는다 / 노드 수의 상한만큼만 걸어 보기 / 지나간 노드를 집합에 적어 두기 / 노드에 다녀간 표시 남기기 / 뒤집어 보면 머리로 돌아온다 / 두 배로 달리는 토끼는 거북이를 따라잡는다 / 거북이를 순간이동시키는 Brent 방법 / 여섯 풀이를 나란히 놓으면 / 직접 고리를 찾아보기 / 비교와 종료 조건에서 나는 실수 / 고리의 입구, 길이, 다른 모양의 고리 / 실제 코드에서 고리를 만나는 순간 / 같은 노드를 다시 밟았는가 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-linked-list, ds-hash-map, leetcode-reverse-linked-list, leetcode-happy-number, leetcode-reorder-list
 - 키워드 백링크 →: ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-happy-number, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-reverse-linked-list, leetcode-single-number, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-happy-number, leetcode-missing-number, leetcode-remove-nth-node-from-end-of-list, leetcode-reorder-list, leetcode-reverse-linked-list, leetcode-single-number, two-pointers-pattern
 
 #### `leetcode-lru-cache` — LeetCode 146. LRU Cache: 찾기는 해시맵, 순서는 연결 리스트
 
@@ -1984,6 +2193,35 @@
 
 ### Programming › Algorithms › LeetCode › Math & Geometry (`programming/algorithms/leetcode/math-geometry`)
 
+#### `leetcode-count-primes` — LeetCode 204. Count Primes: 나누지 말고 배수를 지운다
+
+- 요약: n보다 작은 소수의 개수를 나눠 보기 세 가지, 에라토스테네스의 체, 홀수만 담는 체, 선형 체로 차례로 센다. 제곱부터 지우는 이유와 O(n log log n)의 근거, Java와 JavaScript에서 제곱이 넘치는 함정까지 실제 측정과 함께 본다.
+- 태그: LeetCode, Math, Algorithm
+- 키워드: (없음)
+- 길이: 505줄
+- 소제목: n보다 작은 소수를 센다 / 10까지 손으로 걸러 보기 / 모든 수로 나눠 본다 / 제곱근까지만 나눠 본다 / 이미 찾은 소수로만 나눠 본다 / 배수를 지워 나가는 체 / 홀수만 담는 체 / 모든 합성수를 정확히 한 번씩 지우는 체 / Python과 Java에서 체를 빠르게 / 여섯 풀이를 같은 n으로 재 보면 / 답을 미리 어림해 두기 / 경계와 넘침에서 틀린다 / 직접 걸러 보기 / 범위와 질문이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: bit-manipulation, leetcode-powx-n, ds-union-find, leetcode-happy-number
+- 키워드 백링크 →: message-delivery-semantics, ds-hash-map, floating-point-numbers, sd-email-protocols
+
+#### `leetcode-detect-squares` — LeetCode 2013. Detect Squares: 대각선 하나가 정사각형을 정한다
+
+- 요약: 점을 모으며 정사각형 개수를 묻는 설계 문제를 목록 훑기, 개수 장부, 서로 다른 자리만 보기, 같은 세로줄만 보기, 변 길이 대 보기로 차례로 푼다. 중복을 왜 곱하는지와 넓이 0, 두 번 세기, defaultdict 함정까지 본다.
+- 태그: LeetCode, Math, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 501줄
+- 소제목: 점을 모아 두고 정사각형 개수를 묻는다 / 대각선 하나가 정사각형을 정한다 / 점 목록을 두 번 훑는다 / 목록 옆에 개수 장부를 둔다 / 서로 다른 자리만 대각선으로 본다 / 같은 세로줄의 점만 본다 / 변의 길이를 하나씩 대 본다 / Python과 Java, 장부를 만드는 도구가 다르다 / 다섯 장부를 같은 입력으로 재 보면 / 넓이 0과 중복에서 틀린다 / 직접 세어 보기 / 모양과 조건을 바꾸면 / 면접에서 나올 만한 질문
+- 직접 링크 →: ds-hash-map, leetcode-rotate-image, leetcode-spiral-matrix, leetcode-two-sum
+
+#### `leetcode-excel-sheet-column-number` — LeetCode 171. Excel Sheet Column Number: 0이 없는 26진법을 읽는다
+
+- 요약: 엑셀 열 이름을 번호로 바꾸는 문제를 하나씩 세기, 길이별 묶음, 오른쪽부터 자릿값, 왼쪽부터 26 곱하고 더하기, 재귀로 차례로 푼다. 보통 26진수가 왜 안 맞는지와 거꾸로 바꿀 때 1을 빼는 이유, int 넘침과 셀 주소 파싱까지 본다.
+- 태그: LeetCode, Math, String, Algorithm
+- 키워드: (없음)
+- 길이: 508줄
+- 소제목: 열 이름을 열 번호로 바꾼다 / A부터 세어 보면 보이는 것 / 0이 없는 26진법 / A부터 하나씩 세어 올라간다 / 길이별로 묶어서 센다 / 오른쪽부터 자릿값을 곱해 더한다 / 왼쪽부터 26을 곱하고 더한다 / 재귀와 reduce로 같은 식을 쓴다 / Python과 Java에서 글자를 숫자로 / 다섯 가지 읽는 법을 나란히 / 글자값과 진법에서 틀린다 / 거꾸로 숫자를 열 이름으로 / 셀 주소를 읽는 코드 / 직접 열 번호로 바꿔 보기 / 알파벳과 규칙이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-plus-one, leetcode-multiply-strings, leetcode-reverse-integer, leetcode-powx-n
+- 키워드 백링크 →: floating-point-numbers
+
 #### `leetcode-happy-number` — LeetCode 202. Happy Number: 리스트가 없어도 토끼와 거북이는 달린다
 
 - 요약: 자릿수 제곱합을 되풀이해 1에 닿는지 묻는 문제를 집합, 플로이드의 토끼와 거북이, 브렌트, 4에서 멈추기로 차례로 푼다. 숫자가 왜 반드시 반복되는지와 세제곱·다른 진법 변형에서 지름길이 깨지는 이유까지 본다.
@@ -1993,7 +2231,7 @@
 - 소제목: 자릿수를 제곱해서 더하는 일을 되풀이한다 / 19와 2를 손으로 굴려 보기 / 숫자가 끝없이 커지지 않는 이유 / 몇 걸음이면 끝나나 / 다음 숫자를 계산하는 함수 / 본 숫자를 집합에 적어 둔다 / 두 사람이 다른 속도로 달린다 / 걸음을 두 배씩 늘려 가며 기다린다 / 행복하지 않은 수는 모두 4를 지난다 / Python과 Java로 옮기기 / 네 풀이를 나란히 / 고리를 찾다가 자주 틀리는 곳 / 직접 돌려 보기 / 규칙이 바뀌면 무엇이 달라지나 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-linked-list-cycle, ds-hash-map, bit-manipulation, dynamic-programming, leetcode-powx-n
 - 키워드 백링크 →: seo-redirects-site-migration, ds-linked-list, js-memoization, sql-aggregation-pitfalls, ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-linked-list-cycle, leetcode-powx-n
+- 이 글로 오는 글 ←: leetcode-count-primes, leetcode-linked-list-cycle, leetcode-powx-n
 
 #### `leetcode-multiply-strings` — LeetCode 43. Multiply Strings: 곱이 들어갈 칸은 두 자리 번호의 합으로 정해진다
 
@@ -2002,9 +2240,20 @@
 - 키워드: (없음)
 - 길이: 511줄
 - 소제목: 문자열 두 개를 곱해 문자열로 돌려준다 / 정수로 바꾸면 어디서 틀리나 / 세로 곱셈을 손으로 해 보기 / 한 줄씩 곱해서 문자열로 더한다 / 곱이 들어갈 칸은 i + j로 정해진다 / 결과 칸에 바로 적고 올림을 넘긴다 / 올림은 마지막에 한 번만 넘긴다 / 일곱 자리씩 묶어서 곱한다 / 곱셈 세 번으로 줄이는 카라츠바 / Python의 int와 Java의 equals / 다섯 가지 곱셈을 재 보면 / 앞의 0과 올림에서 자주 틀린다 / 직접 곱해 보기 / 입력이 달라지면 / 면접에서 나올 만한 질문
-- 직접 링크 →: recursion-backtracking, big-o-notation, leetcode-add-two-numbers, leetcode-powx-n, leetcode-sum-of-two-integers
+- 직접 링크 →: recursion-backtracking, big-o-notation, leetcode-plus-one, leetcode-add-two-numbers, leetcode-powx-n, leetcode-sum-of-two-integers
 - 키워드 백링크 →: js-numbers-bigint, ds-linked-list, sql-aggregation-pitfalls, divide-and-conquer, bit-manipulation
-- 이 글로 오는 글 ←: leetcode-add-two-numbers
+- 이 글로 오는 글 ←: leetcode-add-two-numbers, leetcode-excel-sheet-column-number, leetcode-plus-one
+
+#### `leetcode-plus-one` — LeetCode 66. Plus One: 9가 아닌 칸을 만나면 멈춘다
+
+- 요약: 자릿수 배열에 1을 더하는 문제를 숫자 변환, BigInt, 올림 들고 가기, 9가 아닌 칸에서 멈추기, 마지막 9가 아닌 칸 찾기, 재귀로 차례로 푼다. 길이가 늘어나는 유일한 경우와 평균 1.11칸만 보는 이유, k를 더하는 변형까지 본다.
+- 태그: LeetCode, Math, Algorithm
+- 키워드: (없음)
+- 길이: 503줄
+- 소제목: 자릿수 배열에 1을 더한다 / 2499와 999에 1을 더해 보기 / 숫자로 바꿔서 더한다 / 큰 수 타입으로 바꾼다 / 올림을 끝까지 들고 간다 / 9가 아닌 칸에서 멈춘다 / 마지막 9가 아닌 칸을 먼저 찾는다 / 재귀로 왼쪽 칸에 넘긴다 / Python과 Java에서 새 배열을 만드는 법 / 여섯 풀이를 한 줄씩 / 올림이 맨 앞까지 갈 때 틀린다 / BigInt를 정답지로 두고 무작위로 찔러 보기 / 직접 1을 더해 보기 / 현장에서 만나는 하나 올리기 / 1이 아닌 것을 더하거나 빼면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-multiply-strings, leetcode-add-two-numbers, bit-manipulation, recursion-backtracking, leetcode-sum-of-two-integers
+- 키워드 백링크 →: js-numbers-bigint, ds-linked-list, redis-basics, big-o-notation
+- 이 글로 오는 글 ←: leetcode-excel-sheet-column-number, leetcode-multiply-strings, leetcode-reverse-integer
 
 #### `leetcode-powx-n` — LeetCode 50. Pow(x, n): 지수를 반씩 접으면 예순 번이면 끝난다
 
@@ -2015,7 +2264,7 @@
 - 소제목: x를 n번 곱한 값을 구한다 / 3의 13제곱을 손으로 줄여 보기 / n번 곱하기 / 한 번씩 줄이는 재귀 / 반으로 나누는 재귀 / 지수의 비트를 오른쪽부터 읽는다 / 로그와 지수 함수로 계산하기 / 빠르다고 더 정확하지는 않다 / Python과 Java로 옮기기 / 다섯 풀이를 나란히 / 거듭제곱에서 자주 틀리는 곳 / 직접 돌려 보기 / 같은 뼈대로 푸는 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: divide-and-conquer, bit-manipulation, floating-point-numbers, js-numbers-bigint, leetcode-climbing-stairs, binary-search, leetcode-happy-number
 - 키워드 백링크 →: sql-aggregation-pitfalls, dynamic-programming
-- 이 글로 오는 글 ←: leetcode-happy-number, leetcode-multiply-strings
+- 이 글로 오는 글 ←: leetcode-count-primes, leetcode-excel-sheet-column-number, leetcode-happy-number, leetcode-multiply-strings, leetcode-power-of-two
 
 #### `leetcode-rotate-image` — LeetCode 48. Rotate Image: 대각선으로 접고 좌우로 뒤집으면 돌아간다
 
@@ -2026,7 +2275,7 @@
 - 소제목: 정사각형을 시계 방향으로 한 번 돌린다 / 3 × 3에서 숫자가 어디로 가는지 따라가 보기 / 새 배열에 옮겨 그리기 / 네 칸씩 돌려 끼운다 / 대각선으로 접고 좌우로 뒤집는다 / 뒤집기 두 번이 왜 회전이 되나 / Python과 Java로 옮기기 / 세 풀이를 나란히 / 돌리다가 자주 틀리는 곳 / 세 풀이를 서로 맞춰 보기 / 직접 돌려 보기 / 방향과 모양이 바뀌면 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, leetcode-spiral-matrix, leetcode-set-matrix-zeroes
 - 키워드 백링크 →: sql-aggregation-pitfalls
-- 이 글로 오는 글 ←: leetcode-set-matrix-zeroes, leetcode-spiral-matrix
+- 이 글로 오는 글 ←: leetcode-detect-squares, leetcode-set-matrix-zeroes, leetcode-spiral-matrix
 
 #### `leetcode-set-matrix-zeroes` — LeetCode 73. Set Matrix Zeroes: 첫 행과 첫 열을 장부로 빌린다
 
@@ -2047,7 +2296,7 @@
 - 길이: 501줄
 - 소제목: 바깥에서 안으로 감아 들어가며 읽는다 / 3 × 4에서 손으로 감아 보기 / 윗줄을 떼고 판을 돌린다 / 막히면 오른쪽으로 꺾는 로봇 / 걸음 수가 하나씩 줄어든다 / 네 경계를 한 칸씩 안으로 민다 / 한 줄만 남았을 때 두 번 읽지 않기 / Python과 Java로 옮기기 / 네 풀이를 나란히 / 나선을 돌다가 자주 틀리는 곳 / 직접 돌려 보기 / 나선이 바뀌는 변형들 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-rotate-image, leetcode-set-matrix-zeroes
-- 이 글로 오는 글 ←: leetcode-rotate-image, leetcode-set-matrix-zeroes
+- 이 글로 오는 글 ←: leetcode-detect-squares, leetcode-rotate-image, leetcode-set-matrix-zeroes
 
 ### Programming › Algorithms › LeetCode › Sliding Window (`programming/algorithms/leetcode/sliding-window`)
 
@@ -2060,7 +2309,7 @@
 - 소제목: 한 번 사고 한 번 판다 / 손으로 먼저 풀어 보기 / 모든 짝을 다 해 보기 / 반으로 나눠서 푸는 방법 / 뒤에서부터 최댓값을 쌓아 두기 / 지금까지의 최저가만 기억한다 / 창으로 보면 왼쪽 끝은 산 날이다 / 하루치 변화량을 이어 붙인다 / 들고 있는가, 비어 있는가 / 코딩 테스트용 세 언어 코드 / 풀이 한눈에 비교 / 직접 풀어 보기 / 자주 틀리는 코드 / 형제 문제들: 거래 조건이 바뀌면 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, greedy-algorithms, dynamic-programming, sliding-window-pattern, leetcode-longest-substring-without-repeating, two-pointers-pattern, leetcode-sliding-window-maximum
 - 키워드 백링크 →: string-search-algorithms, divide-and-conquer, sorting-algorithms, monotonic-stack-pattern
-- 이 글로 오는 글 ←: leetcode-gas-station, leetcode-longest-substring-without-repeating, leetcode-maximum-product-subarray, leetcode-sliding-window-maximum, sliding-window-pattern
+- 이 글로 오는 글 ←: leetcode-gas-station, leetcode-longest-substring-without-repeating, leetcode-maximum-product-subarray, leetcode-sliding-window-maximum, leetcode-stock-with-cooldown, sliding-window-pattern
 
 #### `leetcode-fruit-into-baskets` — LeetCode 904. Fruit Into Baskets: 종류가 둘 이하인 가장 긴 구간
 
@@ -2226,7 +2475,7 @@
 - 소제목: n쌍으로 만들 수 있는 올바른 괄호를 전부 / 손으로 n = 3을 적어 보면 / 일단 다 만들고 검사하기 / 틀린 접두사는 더 키우지 않는다 / 재귀 없이 상태를 직접 쌓는 스택 / 첫 괄호가 닫히는 자리로 나누기 / 한 쌍씩 끼워 넣기 / 답의 개수는 카탈란 수 / 다섯 풀이를 나란히 놓으면 / 자주 틀리는 곳 / 면접관이 조건을 바꾸면 / 잔고가 음수가 되지 않는 길만 걷는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-valid-parentheses, recursion-backtracking, dynamic-programming, leetcode-subsets, leetcode-permutations, leetcode-combination-sum, leetcode-n-queens, monotonic-stack-pattern
 - 키워드 백링크 →: ds-graph-bfs-dfs, ds-binary-tree-bst, big-o-notation
-- 이 글로 오는 글 ←: leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-subsets, leetcode-valid-parentheses, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-letter-combinations-of-a-phone-number, leetcode-n-queens, leetcode-subsets, leetcode-valid-parentheses, leetcode-valid-parenthesis-string, monotonic-stack-pattern
 
 #### `leetcode-largest-rectangle-in-histogram` — LeetCode 84. Largest Rectangle in Histogram: 꺼내는 순간 양쪽 벽이 정해진다
 
@@ -2237,7 +2486,7 @@
 - 소제목: 막대그래프 안에 들어가는 가장 큰 직사각형 / 모든 구간을 하나씩 재 보면 / 막대마다 양옆으로 넓혀 보기 / 가장 낮은 막대로 반씩 나누기 / 이미 찾은 벽을 따라 건너뛰기 / 단조 스택으로 양쪽 벽 구하기 / 꺼낼 때 넓이가 정해지는 한 번의 훑기 / 여섯 풀이를 나란히 놓으면 / 보초와 폭 계산에서 틀린다 / 넓이와 함께 구간도 돌려주기 / 면접관이 이어서 묻는 것 / 막대마다 양쪽 벽을 찾으면 끝난다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-daily-temperatures, monotonic-stack-pattern, leetcode-trapping-rain-water, leetcode-container-with-most-water
 - 키워드 백링크 →: segment-tree-fenwick, js-execution-context, two-pointers-pattern, divide-and-conquer, ds-stack-queue-deque, big-o-notation, sorting-algorithms
-- 이 글로 오는 글 ←: leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-next-greater-element-i, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-next-greater-element-i, leetcode-sum-of-prefix-scores-of-strings, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern
 
 #### `leetcode-min-stack` — LeetCode 155. Min Stack: 최솟값의 역사를 함께 쌓아 둔다
 
@@ -2281,7 +2530,7 @@
 - 소제목: 무엇을 확인하라는 문제인가 / 붙어 있는 짝부터 지워 나가기 / 한 종류라면 숫자 하나로 충분하다 / 아직 닫히지 않은 괄호를 쌓아 두는 스택 / 여는 괄호 대신 기다리는 닫는 괄호를 쌓는다 / 배열과 top 하나로 직접 만든 스택 / 재귀로 읽으면 콜 스택이 스택 노릇을 한다 / 여섯 풀이를 나란히 놓으면 / 틀리기 쉬운 입력들 / 면접관이 조건을 바꾸면 / 가장 최근에 연 괄호 하나만 보면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-stack-queue-deque, recursion-backtracking, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, dynamic-programming, leetcode-generate-parentheses, monotonic-stack-pattern, leetcode-min-stack
 - 키워드 백링크 →: pattern-interpreter, js-execution-context, ds-array-matrix, big-o-notation
-- 이 글로 오는 글 ←: leetcode-asteroid-collision, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-min-stack, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-asteroid-collision, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-min-stack, leetcode-valid-parenthesis-string, monotonic-stack-pattern
 
 #### `monotonic-stack-pattern` — 단조 스택 패턴: 다음 큰 원소에서 히스토그램까지
 
@@ -2292,7 +2541,7 @@
 - 소제목: 오른쪽에서 처음 만나는 더 큰 값 / 꺼낸 값이 다시 필요 없는 이유 / 넣을 때와 꺼낼 때, 두 번 답이 정해진다 / 안에 while이 있어도 O(n) / 배열이 원형이면 두 바퀴 돈다 / 히스토그램으로 이어지는 흐름 / 단조 덱: 창이 움직이는 단조 스택 / 꺼내는 조건이 비교가 아니라 이득일 때 / 자주 틀리는 곳 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-stack-queue-deque, leetcode-study-guide, big-o-notation, leetcode-largest-rectangle-in-histogram, leetcode-sliding-window-maximum, sliding-window-pattern, leetcode-valid-parentheses, leetcode-min-stack, leetcode-generate-parentheses, leetcode-daily-temperatures, leetcode-trapping-rain-water, two-pointers-pattern
 - 키워드 백링크 →: recursion-backtracking
-- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-car-fleet, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-next-greater-element-i, leetcode-partition-labels, leetcode-remove-k-digits, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-valid-parentheses, sliding-window-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-car-fleet, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-next-greater-element-i, leetcode-partition-labels, leetcode-remove-k-digits, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-sum-of-prefix-scores-of-strings, leetcode-trapping-rain-water, leetcode-valid-parentheses, sliding-window-pattern, two-pointers-pattern
 
 ### Programming › Algorithms › LeetCode › Trees (`programming/algorithms/leetcode/trees`)
 
@@ -2328,6 +2577,17 @@
 - 직접 링크 →: leetcode-binary-tree-level-order-traversal, ds-graph-bfs-dfs, leetcode-maximum-depth-of-binary-tree, leetcode-serialize-and-deserialize-binary-tree
 - 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-invert-binary-tree
 
+#### `leetcode-construct-tree-from-preorder-inorder` — LeetCode 105. Construct Binary Tree from Preorder and Inorder Traversal: 뿌리를 찾고 둘로 나눈다
+
+- 요약: 전위와 중위 순회 결과로 이진 트리를 다시 짓는 문제를 배열 자르기, 인덱스와 선형 탐색, 해시맵, 멈출 값 넘기기, 스택까지 다섯 가지로 푼다. 만드는 순서가 왜 전위 순서여야 하는지, 중복 값과 재귀 깊이 함정, 후위·전위 조합 변형도 함께 본다.
+- 태그: LeetCode, Tree, Algorithm
+- 키워드: (없음)
+- 길이: 518줄
+- 소제목: 두 줄 세우기로 트리 하나를 되살린다 / 배열을 잘라서 넘긴다 / 자르지 않고 경계 인덱스만 넘긴다 / 중위 위치를 표로 만들어 둔다 / 해시맵 없이 멈출 값을 넘긴다 / 스택 하나로 왼쪽 등뼈를 따라간다 / 다섯 가지 복원 방법 견주기 / 두 순회로 트리 되살려 보기 / 복원 코드가 어긋나는 자리 / 순회 조합을 바꾸는 변형들 / 뿌리를 찾고 둘로 나눈다 / 면접에서 나올 만한 질문
+- 직접 링크 →: ds-binary-tree-bst, leetcode-serialize-and-deserialize-binary-tree, leetcode-validate-binary-search-tree, leetcode-invert-binary-tree, leetcode-diameter-of-binary-tree
+- 키워드 백링크 →: divide-and-conquer
+- 이 글로 오는 글 ←: leetcode-invert-binary-tree, leetcode-serialize-and-deserialize-binary-tree, leetcode-validate-binary-search-tree
+
 #### `leetcode-diameter-of-binary-tree` — LeetCode 543. Diameter of Binary Tree: 높이는 위로 올리고 꺾인 길은 옆에 적는다
 
 - 요약: 이진 트리에서 가장 먼 두 노드 사이의 간선 수를 모든 노드 BFS, 높이 다시 재기, BFS 두 번, 후위 순회 재귀와 스택까지 다섯 가지로 잰다. 지름이 뿌리를 지나지 않는 경우, 노드 수와 간선 수 혼동, 10^4단계 트리에서 재귀가 넘치는 지점도 직접 확인한다.
@@ -2337,7 +2597,7 @@
 - 소제목: 가장 먼 두 노드 사이의 간선 수 / 모든 노드에서 가장 먼 곳까지 걸어 본다 / 노드마다 왼쪽 높이와 오른쪽 높이를 다시 잰다 / 아무 데서나 가장 먼 곳, 거기서 다시 가장 먼 곳 / 높이를 올려 보내며 지름은 옆에 적어 둔다 / 재귀 없이 후위 순서를 손으로 흉내 낸다 / 다섯 가지 지름 계산 견주기 / 지름을 직접 재 보기 / 지름 계산이 하나씩 어긋나는 자리 / 지름에서 갈라지는 문제들 / 꺾이는 곳마다 한 번씩 잰다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-maximum-depth-of-binary-tree, leetcode-binary-tree-maximum-path-sum, ds-graph-bfs-dfs, leetcode-validate-binary-search-tree, leetcode-invert-binary-tree
 - 키워드 백링크 →: js-memoization, js-closures
-- 이 글로 오는 글 ←: leetcode-binary-tree-maximum-path-sum, leetcode-invert-binary-tree, leetcode-maximum-depth-of-binary-tree, leetcode-validate-binary-search-tree
+- 이 글로 오는 글 ←: leetcode-binary-tree-maximum-path-sum, leetcode-construct-tree-from-preorder-inorder, leetcode-invert-binary-tree, leetcode-maximum-depth-of-binary-tree, leetcode-validate-binary-search-tree
 
 #### `leetcode-invert-binary-tree` — LeetCode 226. Invert Binary Tree: 모든 노드에서 두 자식을 맞바꾼다
 
@@ -2346,9 +2606,9 @@
 - 키워드: (없음)
 - 길이: 557줄
 - 소제목: 모든 층에서 왼쪽과 오른쪽을 맞바꾼다 / 거울에 비친 새 트리를 따로 만든다 / 내 두 자식을 바꾸고 아래로 내려보낸다 / 아래부터 뒤집어 올라온다 / 중위 순서로 하면 한쪽이 두 번 뒤집힌다 / 재귀 없이 스택에 쌓아 두고 꺼낸다 / 한 층씩 줄 세워 뒤집는다 / 뒤집는 다섯 가지 방법 견주기 / 거울 트리를 직접 만들어 보기 / 뒤집기 코드가 조용히 틀리는 경우 / 거울 트리에서 뻗어 나가는 문제들 / 노드마다 같은 일을 한 번씩 / 면접에서 나올 만한 질문
-- 직접 링크 →: ds-binary-tree-bst, leetcode-maximum-depth-of-binary-tree, leetcode-binary-tree-maximum-path-sum, leetcode-binary-tree-level-order-traversal, leetcode-validate-binary-search-tree, leetcode-diameter-of-binary-tree, leetcode-binary-tree-right-side-view
+- 직접 링크 →: ds-binary-tree-bst, leetcode-maximum-depth-of-binary-tree, leetcode-binary-tree-maximum-path-sum, leetcode-binary-tree-level-order-traversal, leetcode-validate-binary-search-tree, leetcode-diameter-of-binary-tree, leetcode-binary-tree-right-side-view, leetcode-construct-tree-from-preorder-inorder
 - 키워드 백링크 →: ds-array-matrix, js-destructuring, pattern-prototype
-- 이 글로 오는 글 ←: leetcode-diameter-of-binary-tree, leetcode-maximum-depth-of-binary-tree
+- 이 글로 오는 글 ←: leetcode-construct-tree-from-preorder-inorder, leetcode-diameter-of-binary-tree, leetcode-maximum-depth-of-binary-tree
 
 #### `leetcode-lowest-common-ancestor-of-bst` — LeetCode 235. Lowest Common Ancestor of a Binary Search Tree: 두 값이 처음 갈라지는 곳
 
@@ -2379,9 +2639,9 @@
 - 키워드: (없음)
 - 길이: 691줄
 - 소제목: 무엇을 적어야 똑같이 다시 세울 수 있나 / JSON으로 통째로 적기 / 전위와 중위를 두 줄로 적기 / 빈자리까지 층 순서로 적기 / 전위 순회에 빈자리를 끼워 적기 / 재귀 없이 같은 문자열을 만들고 읽기 / 후위 순회로 적고 뒤에서부터 읽기 / 여섯 가지 형식을 나란히 놓으면 / 직접 직렬화해 보기 / 받은 문자열을 그대로 믿으면 / 면접관이 이어서 묻는 것 / 빈자리를 적어야 모양이 남는다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ds-binary-tree-bst, leetcode-binary-tree-level-order-traversal, leetcode-maximum-depth-of-binary-tree, leetcode-validate-binary-search-tree, bit-manipulation, leetcode-binary-tree-maximum-path-sum, leetcode-study-guide
+- 직접 링크 →: ds-binary-tree-bst, leetcode-binary-tree-level-order-traversal, leetcode-construct-tree-from-preorder-inorder, leetcode-maximum-depth-of-binary-tree, leetcode-validate-binary-search-tree, bit-manipulation, leetcode-binary-tree-maximum-path-sum, leetcode-study-guide
 - 키워드 백링크 →: grpc, js-execution-context, redis-basics
-- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-binary-tree-right-side-view, leetcode-encode-and-decode-strings, leetcode-evaluate-reverse-polish-notation, leetcode-lowest-common-ancestor-of-bst
+- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-binary-tree-right-side-view, leetcode-construct-tree-from-preorder-inorder, leetcode-encode-and-decode-strings, leetcode-evaluate-reverse-polish-notation, leetcode-lowest-common-ancestor-of-bst
 
 #### `leetcode-validate-binary-search-tree` — LeetCode 98. Validate Binary Search Tree: 조상이 정한 범위를 들고 내려간다
 
@@ -2390,8 +2650,8 @@
 - 키워드: (없음)
 - 길이: 510줄
 - 소제목: 왼쪽 가지 전체가 작고 오른쪽 가지 전체가 커야 한다 / 바로 아래 자식만 비교하면 놓치는 것 / 노드마다 왼쪽 최댓값과 오른쪽 최솟값을 구한다 / 중위 순회로 펼치면 정렬된 줄이 나온다 / 직전 값 하나만 들고 다닌다 / 스택으로 중위 순회를 멈출 수 있게 한다 / 위에서 허용 범위를 좁혀 내려보낸다 / 아래에서 최솟값과 최댓값을 올려 보낸다 / 여섯 가지 검사 견주기 / BST 판정기 직접 짜 보기 / 경계값과 중복에서 무너지는 코드 / BST 검사에서 이어지는 문제들 / 조상이 정한 범위를 끝까지 지킨다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ds-binary-tree-bst, leetcode-lowest-common-ancestor-of-bst, leetcode-diameter-of-binary-tree
-- 이 글로 오는 글 ←: leetcode-diameter-of-binary-tree, leetcode-invert-binary-tree, leetcode-lowest-common-ancestor-of-bst, leetcode-serialize-and-deserialize-binary-tree
+- 직접 링크 →: ds-binary-tree-bst, leetcode-lowest-common-ancestor-of-bst, leetcode-construct-tree-from-preorder-inorder, leetcode-diameter-of-binary-tree
+- 이 글로 오는 글 ←: leetcode-construct-tree-from-preorder-inorder, leetcode-diameter-of-binary-tree, leetcode-invert-binary-tree, leetcode-lowest-common-ancestor-of-bst, leetcode-serialize-and-deserialize-binary-tree
 
 ### Programming › Algorithms › LeetCode › Tries (`programming/algorithms/leetcode/tries`)
 
@@ -2406,6 +2666,17 @@
 - 키워드 백링크 →: ds-graph-bfs-dfs, js-memoization
 - 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-word-search-ii
 
+#### `leetcode-extra-characters-in-a-string` — LeetCode 2707. Extra Characters in a String: 버리기와 덮기를 끝에서부터 비교한다
+
+- 요약: 문자열을 사전 단어로 덮고 남는 글자 수를 가장 적게 만드는 문제를 끊는 방법 전부 재귀, 탑다운 메모, 앞에서 채우는 DP, 뒤에서 채우는 집합 DP, 시작 위치마다 트라이를 내려가는 DP 다섯 가지로 푼다. 가장 긴 단어부터 덮는 탐욕이 틀리는 이유와 첫 끝 표시에서 멈추면 안 되는 이유, 2,000글자에서 잰 속도 차이도 함께 본다.
+- 태그: LeetCode, Trie, Dynamic Programming, Algorithm
+- 키워드: (없음)
+- 길이: 522줄
+- 소제목: 사전 단어로 덮고 남는 글자 세기 / 끊는 방법을 전부 해 보는 재귀 / 같은 자리를 다시 풀지 않게 적어 두기 / 앞에서부터 채우는 표와 끝에서부터 채우는 표 / 시작 위치마다 트라이를 한 번만 내려가기 / 다섯 풀이를 한 줄씩 대 보면 / 2,000글자로 늘려 재 보면 / 직접 dp 칸을 채워 보기 / 눈앞의 가장 긴 단어를 덮으면 틀린다 / 조건을 바꾸어 묻는 꼬리 질문 / 버리기와 덮기를 뒤에서부터 비교한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-word-break, dynamic-programming, ds-trie, leetcode-implement-trie, leetcode-replace-words, string-search-algorithms, leetcode-palindrome-partitioning
+- 키워드 백링크 →: big-o-notation, recursion-backtracking
+- 이 글로 오는 글 ←: leetcode-replace-words, leetcode-word-break
+
 #### `leetcode-implement-trie` — LeetCode 208. Implement Trie (Prefix Tree): 같은 접두사는 노드 하나로 나눠 쓴다
 
 - 요약: insert, search, startsWith를 배열 훑기, 접두사 집합, 정렬과 이진 탐색, Map 트라이, 26칸 배열 트라이, 정수 번호 트라이까지 여섯 가지로 만들고 메모리를 실제로 재어 비교한다. 끝 표시를 빠뜨리는 실수와 Python 기본 인자 함정, 삭제와 개수 세기 같은 꼬리 질문도 다룬다.
@@ -2413,9 +2684,9 @@
 - 키워드: (없음)
 - 길이: 642줄
 - 소제목: 세 연산과 끝 표시 하나 / 단어를 배열에 쌓아 두고 다 훑기 / 접두사까지 전부 집합에 넣어 두면 / 정렬해 두고 이진 탐색으로 찾기 / 글자마다 갈림길을 만든다 / 자식을 26칸 배열로 고정하면 / 노드를 객체 대신 정수 번호로 / 메모리를 재 보면 / 여섯 풀이를 나란히 놓으면 / 끝 표시와 길 끊김에서 틀린다 / 면접관이 이어서 묻는 것 / 같은 접두사는 한 번만 저장한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-design-add-and-search-words, leetcode-word-search-ii, leetcode-replace-words, ds-trie, binary-search, sd-autocomplete-trie, leetcode-longest-common-prefix
+- 직접 링크 →: leetcode-design-add-and-search-words, leetcode-word-search-ii, leetcode-replace-words, ds-trie, binary-search, leetcode-sum-of-prefix-scores-of-strings, sd-autocomplete-trie, leetcode-longest-common-prefix
 - 키워드 백링크 →: process-vs-thread, layer-ip-routing-icmp, ds-hash-map
-- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-longest-common-prefix, leetcode-replace-words, leetcode-word-break, leetcode-word-search-ii
+- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-extra-characters-in-a-string, leetcode-longest-common-prefix, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-word-break, leetcode-word-search-ii
 
 #### `leetcode-longest-common-prefix` — LeetCode 14. Longest Common Prefix: 다른 글자를 만나는 순간 멈춘다
 
@@ -2424,9 +2695,9 @@
 - 키워드: (없음)
 - 길이: 500줄
 - 소제목: 모두가 함께 가진 앞부분 / 하나씩 비교하며 줄여 나가기 / 세로로 한 칸씩 훑는다 / 반으로 나눠 합치기 / 길이를 이진 탐색한다 / 정렬하면 처음과 끝만 보면 된다 / 정렬하지 않고 가장 작은 것과 가장 큰 것만 / 트라이로 갈림길까지 내려가기 / 글자 비교 횟수를 세어 보면 / 일곱 풀이를 나란히 놓으면 / 짧은 문자열과 빈 문자열에서 틀린다 / 면접관이 이어서 묻는 것 / 다른 글자를 만나는 순간 멈춘다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, binary-search, leetcode-replace-words
+- 직접 링크 →: leetcode-implement-trie, binary-search, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings
 - 키워드 백링크 →: string-search-algorithms, divide-and-conquer, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-replace-words
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-implement-trie, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings
 
 #### `leetcode-replace-words` — LeetCode 648. Replace Words: 처음 만나는 끝 표시가 가장 짧은 어근이다
 
@@ -2435,8 +2706,19 @@
 - 키워드: (없음)
 - 길이: 502줄
 - 소제목: 가장 짧은 어근으로 바꾼다 / 단어마다 어근을 전부 맞춰 보기 / 짧은 어근부터 정렬해 두기 / 앞부분을 잘라서 집합에 물어보기 / 첫 끝 표시에서 멈추는 트라이 / 문장을 쪼개지 않고 한 번만 훑기 / 다섯 풀이를 재 보면 / 다섯 풀이를 나란히 놓으면 / 끝까지 내려가거나 처음 것을 놓친다 / 면접관이 이어서 묻는 것 / 처음 만나는 끝 표시가 답이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, leetcode-longest-common-prefix, ds-trie, leetcode-word-break
+- 직접 링크 →: leetcode-implement-trie, leetcode-longest-common-prefix, ds-trie, leetcode-extra-characters-in-a-string, leetcode-word-break
 - 키워드 백링크 →: layer-ip-routing-icmp, string-search-algorithms
+- 이 글로 오는 글 ←: leetcode-extra-characters-in-a-string, leetcode-implement-trie, leetcode-longest-common-prefix
+
+#### `leetcode-sum-of-prefix-scores-of-strings` — LeetCode 2416. Sum of Prefix Scores of Strings: 지나간 단어 수를 노드마다 세어 둔다
+
+- 요약: 단어마다 모든 앞부분의 점수를 더하는 문제를 전부 맞춰 보기, 앞부분 해시맵, 롤링 해시, count를 든 트라이, 정렬과 이웃 LCP와 단조 스택 다섯 가지로 푼다. 점수가 모든 단어와의 공통 접두사 길이 합이라는 성질과 끝 노드에만 세는 실수, 1,000글자 단어 1,000개로 잰 속도와 Java 메모리도 함께 본다.
+- 태그: LeetCode, Trie, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 513줄
+- 소제목: 앞부분마다 같은 앞부분을 가진 단어 수 / 앞부분마다 단어를 전부 맞춰 보기 / 앞부분 문자열을 해시맵에 세어 두기 / 문자열 대신 해시값을 이어서 계산하기 / 지나간 단어 수를 든 트라이 / 정렬하면 공통 접두사 길이의 합이 된다 / 1,000글자 단어 1,000개로 잰 다섯 풀이 / 직접 count를 올려 보기 / 끝 노드에만 세거나 중복을 지우면 틀린다 / 조건을 바꾸어 묻는 꼬리 질문 / 지나간 수를 세어 두면 점수가 길 위에 있다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-implement-trie, string-search-algorithms, monotonic-stack-pattern, leetcode-longest-common-prefix, leetcode-largest-rectangle-in-histogram
+- 키워드 백링크 →: ds-stack-queue-deque, sd-autocomplete-trie, core-web-vitals
 - 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-longest-common-prefix
 
 #### `leetcode-word-search-ii` — LeetCode 212. Word Search II: 판을 한 번만 걷고 찾은 가지는 잘라 낸다
@@ -2538,7 +2820,7 @@
 - 소제목: 한 칸의 물은 양쪽 최고 벽이 정한다 / 칸마다 양쪽을 끝까지 둘러본다 / 양쪽 최고를 미리 적어 둔다 / 웅덩이를 가로 층으로 잰다 / 가장 높은 벽을 기준으로 둘로 나눈다 / 낮은 쪽부터 물을 확정한다 / 직접 짜 보기 / 다섯 풀이를 나란히 놓으면 / 자주 틀리는 곳 / 면접관이 이어서 바꾸는 문제들 / 같은 물을 세는 다섯 가지 방법 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-container-with-most-water, two-pointers-pattern, dynamic-programming, monotonic-stack-pattern, ds-heap, shortest-path-algorithms, leetcode-largest-rectangle-in-histogram, leetcode-daily-temperatures
 - 키워드 백링크 →: ds-stack-queue-deque, ds-array-matrix, sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-pacific-atlantic-water-flow, leetcode-product-of-array-except-self, monotonic-stack-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-candy, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-pacific-atlantic-water-flow, leetcode-product-of-array-except-self, monotonic-stack-pattern, two-pointers-pattern
 
 #### `leetcode-two-sum-ii` — LeetCode 167. Two Sum II - Input Array Is Sorted: 합이 크면 큰 쪽을 버린다
 
@@ -2584,7 +2866,7 @@
 - 소제목: 참이 한 번만 바뀌는 곳을 찾는다 / 구간의 정의가 코드를 정한다 / 같은 값이 여러 개면 경계도 두 개다 / 정렬해 두고 여러 번 찾을 때의 계산 / 가운데를 구하다 넘치는 경우 / 실수 범위에서 찾을 때는 횟수로 끊는다 / 답을 놓고 거꾸로 찾는다 / 정렬이 반쯤 깨진 배열에서 / 연습: 처음과 끝 찾기 / 연습: 최소 트럭 용량 / 범위를 반으로 줄이는 근거 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, sorting-algorithms, ds-hash-map, ds-binary-tree-bst, db-index, git-tips-advanced, recursion-backtracking
 - 키워드 백링크 →: api-scaling-ladder, load-testing-k6, sql-filtering-operators, floating-point-numbers, bit-manipulation
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-4sum, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-design-twitter, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-fruit-into-baskets, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-kth-largest-element-in-a-stream, leetcode-last-stone-weight, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-majority-element, leetcode-max-consecutive-ones-iii, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-next-greater-element-i, leetcode-non-overlapping-intervals, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-remove-duplicates-from-sorted-array, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-single-number, leetcode-sliding-window-median, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-swim-in-rising-water, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-4sum, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-design-twitter, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-fruit-into-baskets, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-kth-largest-element-in-a-stream, leetcode-last-stone-weight, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-majority-element, leetcode-max-consecutive-ones-iii, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-missing-number, leetcode-my-calendar-i, leetcode-next-greater-element-i, leetcode-non-overlapping-intervals, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-remove-duplicates-from-sorted-array, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-single-number, leetcode-sliding-window-median, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-swim-in-rising-water, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
 
 #### `bit-manipulation` — 비트 연산: 플래그, 마스크, XOR 트릭과 비트마스크 DP
 
@@ -2595,7 +2877,7 @@
 - 소제목: 숫자 하나에 스위치 아홉 개 / 연산 다섯 개와 시프트 / 가장 낮은 1 비트를 다루는 두 가지 요령 / 짝이 없는 수는 XOR가 찾는다 / 정수 하나로 부분집합을 센다 / 외판원 문제를 비트마스크 DP로 / 자바스크립트는 비트 연산 앞에서 32비트로 자른다 / 바이트를 놓는 순서 / 현장에서 비트마스크를 고를 때와 피할 때 / 외판원 문제를 직접 풀어 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: logic-gates-alu, linux-files-permissions, recursion-backtracking, dynamic-programming, sd-unique-id-generator, bloom-filter, feature-flags
 - 키워드 백링크 →: db-index, sd-latency-numbers, js-numbers-bigint, floating-point-numbers, segment-tree-fenwick, js-destructuring
-- 이 글로 오는 글 ←: ai-crawlers-bot-control, algorithms-overview, binary-search, character-encoding-unicode, complexity-classes-p-np, cpu-instruction-cycle, hyperloglog, js-binary-data-typed-arrays, js-numbers-bigint, layer-ip-addressing, leetcode-binary-search, leetcode-boats-to-save-people, leetcode-burst-balloons, leetcode-counting-bits, leetcode-happy-number, leetcode-house-robber, leetcode-house-robber-ii, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-majority-element, leetcode-multiply-strings, leetcode-n-queens, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-partition-labels, leetcode-powx-n, leetcode-reverse-bits, leetcode-search-a-2d-matrix, leetcode-serialize-and-deserialize-binary-tree, leetcode-single-number, leetcode-study-guide, leetcode-subsets, leetcode-sudoku-solver, leetcode-sum-of-two-integers, leetcode-valid-sudoku, logic-gates-alu, mfa-totp, passkeys-webauthn, postgres-architecture, react-concurrent-transitions, sd-unique-id-generator, seo-log-file-analysis-search-console, string-search-algorithms, ts-enum-vs-union, virtual-memory-paging
+- 이 글로 오는 글 ←: ai-crawlers-bot-control, algorithms-overview, binary-search, character-encoding-unicode, complexity-classes-p-np, cpu-instruction-cycle, hyperloglog, js-binary-data-typed-arrays, js-numbers-bigint, layer-ip-addressing, leetcode-binary-search, leetcode-bitwise-and-of-numbers-range, leetcode-boats-to-save-people, leetcode-burst-balloons, leetcode-count-primes, leetcode-counting-bits, leetcode-happy-number, leetcode-house-robber, leetcode-house-robber-ii, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-majority-element, leetcode-merge-triplets-to-form-target-triplet, leetcode-missing-number, leetcode-multiply-strings, leetcode-n-queens, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-partition-labels, leetcode-plus-one, leetcode-power-of-two, leetcode-powx-n, leetcode-reverse-bits, leetcode-reverse-integer, leetcode-search-a-2d-matrix, leetcode-serialize-and-deserialize-binary-tree, leetcode-single-number, leetcode-single-number-ii, leetcode-study-guide, leetcode-subsets, leetcode-sudoku-solver, leetcode-sum-of-two-integers, leetcode-valid-sudoku, logic-gates-alu, mfa-totp, passkeys-webauthn, postgres-architecture, react-concurrent-transitions, sd-unique-id-generator, seo-log-file-analysis-search-console, string-search-algorithms, ts-enum-vs-union, virtual-memory-paging
 
 #### `divide-and-conquer` — 분할 정복: 반으로 쪼개는 재귀와 마스터 정리, 퀵셀렉트
 
@@ -2606,7 +2888,7 @@
 - 소제목: 쪼개고, 따로 풀고, 합친다 / 퀵셀렉트를 코드로 옮기면 / 걸리는 시간을 점화식으로 적는다 / 마스터 정리로 복잡도를 바로 읽는다 / 곱셈 한 번을 아끼면 지수가 바뀐다 / 합치면서 덤으로 세는 것 / 동적 계획법과 갈리는 곳 / 퀵셀렉트가 무너지는 입력 / 깊이가 얼마나 되나 / 가장 가까운 두 점 / 현장에서 k번째를 찾을 때 / 직접 짜 보는 퀵셀렉트 / 얼마나 쪼개고 얼마나 합치나 / 면접에서 나올 만한 질문
 - 직접 링크 →: sorting-algorithms, recursion-backtracking, dynamic-programming, randomized-algorithms, quadtree, ds-heap, percentile-latency
 - 키워드 백링크 →: binary-search, http-status-codes
-- 이 글로 오는 글 ←: dynamic-programming, leetcode-best-time-to-buy-and-sell-stock, leetcode-climbing-stairs, leetcode-employee-free-time, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-k-closest-points-to-origin, leetcode-kth-largest-element-in-a-stream, leetcode-kth-largest-element-in-an-array, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-majority-element, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-multiply-strings, leetcode-powx-n, leetcode-reverse-bits, leetcode-top-k-frequent-elements, network-troubleshooting-by-layer, randomized-algorithms
+- 이 글로 오는 글 ←: dynamic-programming, leetcode-best-time-to-buy-and-sell-stock, leetcode-climbing-stairs, leetcode-construct-tree-from-preorder-inorder, leetcode-employee-free-time, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-k-closest-points-to-origin, leetcode-kth-largest-element-in-a-stream, leetcode-kth-largest-element-in-an-array, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-majority-element, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-multiply-strings, leetcode-powx-n, leetcode-reverse-bits, leetcode-top-k-frequent-elements, network-troubleshooting-by-layer, randomized-algorithms
 
 #### `dynamic-programming` — 동적 계획법: 같은 질문에 두 번 답하지 않기
 
@@ -2617,7 +2899,7 @@
 - 소제목: 같은 질문을 몇 번이나 다시 묻나 / 표의 칸 하나가 무엇을 뜻하는지부터 정한다 / 위에서 내려가기와 아래에서 쌓기 / 계단 오르기는 두 칸만 기억하면 된다 / 배낭에 넣을지 말지 / 가장 길게 올라가는 줄 / 두 단어 사이의 거리 / 표를 만들 때 반복해서 나오는 실수 / 고른 것까지 알려 줘야 할 때 / 이 문제가 DP인지 알아보는 법 / 직접 표를 채워 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, big-o-notation, js-memoization, recursion-backtracking, ds-graph-bfs-dfs, binary-search, js-primitive-vs-reference, sorting-algorithms, algorithms-overview
 - 키워드 백링크 →: elasticsearch-inverted-index, js-numbers-bigint, complexity-classes-p-np, divide-and-conquer, shortest-path-algorithms
-- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, complexity-classes-p-np, divide-and-conquer, elasticsearch-inverted-index, greedy-algorithms, js-memoization, k8s-certifications, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-tree-maximum-path-sum, leetcode-burst-balloons, leetcode-capacity-to-ship-packages-within-d-days, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-coin-change, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-counting-bits, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-decode-ways, leetcode-edit-distance, leetcode-generate-parentheses, leetcode-happy-number, leetcode-house-robber, leetcode-house-robber-ii, leetcode-jump-game, leetcode-jump-game-ii, leetcode-last-stone-weight, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-maximum-product-subarray, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-pacific-atlantic-water-flow, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-regular-expression-matching, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-subsets, leetcode-trapping-rain-water, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-break, phishing-social-engineering, postgres-query-planner, react-reconciliation-keys, recursion-backtracking, shortest-path-algorithms, sliding-window-pattern, software-supply-chain-ci-hardening
+- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, complexity-classes-p-np, divide-and-conquer, elasticsearch-inverted-index, greedy-algorithms, js-memoization, k8s-certifications, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-tree-maximum-path-sum, leetcode-bitwise-and-of-numbers-range, leetcode-burst-balloons, leetcode-capacity-to-ship-packages-within-d-days, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-coin-change, leetcode-coin-change-ii, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-counting-bits, leetcode-course-schedule, leetcode-course-schedule-ii, leetcode-decode-ways, leetcode-distinct-subsequences, leetcode-edit-distance, leetcode-extra-characters-in-a-string, leetcode-generate-parentheses, leetcode-happy-number, leetcode-house-robber, leetcode-house-robber-ii, leetcode-interleaving-string, leetcode-jump-game, leetcode-jump-game-ii, leetcode-last-stone-weight, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-maximum-product-subarray, leetcode-merge-triplets-to-form-target-triplet, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-pacific-atlantic-water-flow, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-power-of-two, leetcode-powx-n, leetcode-regular-expression-matching, leetcode-sliding-window-maximum, leetcode-stock-with-cooldown, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-subsets, leetcode-target-sum, leetcode-trapping-rain-water, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-valid-parenthesis-string, leetcode-word-break, phishing-social-engineering, postgres-query-planner, react-reconciliation-keys, recursion-backtracking, shortest-path-algorithms, sliding-window-pattern, software-supply-chain-ci-hardening
 
 #### `greedy-algorithms` — 그리디 알고리즘: 지금 가장 좋아 보이는 선택이 맞을 때
 
@@ -2628,7 +2910,7 @@
 - 소제목: 세 가지 기준을 같은 일정에 대 보기 / 일찍 끝나는 회의가 왜 맞는가 / 회의실이 몇 개 필요한가 / 겹치는 구간은 합치고, 새 구간은 끼워 넣는다 / 큰 동전부터 내면 틀리는 나라 / 쪼갤 수 있으면 그리디, 못 쪼개면 DP / 멀리 갈 수 있는 곳만 기억하기 / 자주 나오는 글자에 짧은 부호를 / 그래프에서 그리디가 맞을 때와 틀릴 때 / 현장에서 그리디를 만나는 곳 / 그리디인지 확인하는 순서 / 직접 구간을 골라 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: dynamic-programming, sorting-algorithms, big-o-notation, ds-heap, ds-graph-bfs-dfs, ds-union-find, load-balancing-algorithms, algorithms-overview
 - 키워드 백링크 →: minimum-spanning-tree, complexity-classes-p-np, shortest-path-algorithms, ds-array-matrix, sd-maps-tiles-routing, recursion-backtracking, postgres-query-planner
-- 이 글로 오는 글 ←: algorithms-overview, dynamic-programming, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-burst-balloons, leetcode-capacity-to-ship-packages-within-d-days, leetcode-coin-change, leetcode-combination-sum, leetcode-gas-station, leetcode-hand-of-straights, leetcode-house-robber, leetcode-jump-game, leetcode-longest-common-subsequence, leetcode-non-overlapping-intervals, leetcode-remove-k-digits, leetcode-reorganize-string, leetcode-study-guide, leetcode-task-scheduler, minimum-spanning-tree, shortest-path-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, dynamic-programming, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-burst-balloons, leetcode-candy, leetcode-capacity-to-ship-packages-within-d-days, leetcode-coin-change, leetcode-combination-sum, leetcode-gas-station, leetcode-hand-of-straights, leetcode-house-robber, leetcode-ipo, leetcode-jump-game, leetcode-longest-common-subsequence, leetcode-merge-triplets-to-form-target-triplet, leetcode-non-overlapping-intervals, leetcode-remove-k-digits, leetcode-reorganize-string, leetcode-study-guide, leetcode-task-scheduler, minimum-spanning-tree, shortest-path-algorithms
 
 #### `randomized-algorithms` — 랜덤 알고리즘: 무작위로 최악을 피하고, 크기를 모르는 스트림에서 고르기
 
@@ -2650,7 +2932,7 @@
 - 소제목: 더 작은 같은 문제에 맡긴다 / 고르고, 들어가고, 되돌린다 / 기록한 답이 전부 같은 배열이었다 / 다음 후보를 고르는 규칙만 다르다 / 답의 개수가 곧 걸리는 시간이다 / 같은 값이 섞이면 같은 답이 또 나온다 / 가망 없는 가지는 들어가지 않는다 / 퀸을 놓았다 물리는 N-Queens / 같은 계산을 또 하는 재귀 / 정규식 엔진 안의 백트래킹 / 깊은 트리를 만났을 때 / 연습: 합이 target이 되는 조합 / 되돌릴 수 있어서 다 볼 수 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-execution-context, js-memoization, js-primitive-vs-reference, dynamic-programming, big-o-notation, ds-binary-tree-bst, ds-graph-bfs-dfs
 - 키워드 백링크 →: regex-and-globbing, js-strict-mode
-- 이 글로 오는 글 ←: algorithms-overview, binary-search, bit-manipulation, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, input-validation-secure-coding, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-climbing-stairs, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-course-schedule-ii, leetcode-decode-ways, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-jump-game, leetcode-letter-combinations-of-a-phone-number, leetcode-maximum-depth-of-binary-tree, leetcode-multiply-strings, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-permutation-in-string, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-reorganize-string, leetcode-reverse-linked-list, leetcode-study-guide, leetcode-subsets, leetcode-subsets-ii, leetcode-sudoku-solver, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-valid-sudoku, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, monotonic-stack-pattern, nodejs-server-runtime, regex-and-globbing, string-search-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, binary-search, bit-manipulation, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, input-validation-secure-coding, leetcode-alien-dictionary, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-climbing-stairs, leetcode-coin-change-ii, leetcode-combination-sum, leetcode-combination-sum-ii, leetcode-course-schedule-ii, leetcode-decode-ways, leetcode-distinct-subsequences, leetcode-evaluate-reverse-polish-notation, leetcode-extra-characters-in-a-string, leetcode-generate-parentheses, leetcode-jump-game, leetcode-letter-combinations-of-a-phone-number, leetcode-maximum-depth-of-binary-tree, leetcode-multiply-strings, leetcode-n-queens, leetcode-palindrome-partitioning, leetcode-partition-equal-subset-sum, leetcode-permutation-in-string, leetcode-permutations, leetcode-plus-one, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-reorganize-string, leetcode-reverse-linked-list, leetcode-study-guide, leetcode-subsets, leetcode-subsets-ii, leetcode-sudoku-solver, leetcode-target-sum, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-valid-parenthesis-string, leetcode-valid-sudoku, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, monotonic-stack-pattern, nodejs-server-runtime, regex-and-globbing, string-search-algorithms
 
 #### `sorting-algorithms` — 정렬 알고리즘: 버블부터 TimSort까지, 무엇을 얼마나 옮기나
 
@@ -2672,7 +2954,7 @@
 - 소제목: 한 칸 밀 때마다 처음부터 다시 비교한다 / 이미 맞힌 글자는 다시 보지 않는다 / 실패 함수는 패턴이 자기 자신과 겹치는 길이다 / 글자 대신 숫자를 먼저 비교한다 / 뒤에서부터 비교하면 크게 건너뛴다 / 언어와 도구는 이미 섞어 쓴다 / 같은 텍스트에서 여러 번 찾을 때 / 찾을 단어가 수천 개일 때 / 무엇을 고를까 / 현장에서 검색이 느려질 때 보는 곳 / KMP를 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, bit-manipulation, ds-hash-map, rsync-algorithm, regex-and-globbing, binary-search, elasticsearch-inverted-index, ds-trie
 - 키워드 백링크 →: db-index, ids-ips, input-validation-secure-coding, character-encoding-unicode, js-numbers-bigint, event-loop, recursion-backtracking, js-strings-unicode, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-longest-common-prefix, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-permutation-in-string, leetcode-replace-words, leetcode-valid-palindrome
+- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-extra-characters-in-a-string, leetcode-longest-common-prefix, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-permutation-in-string, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-valid-palindrome
 
 ### Programming › Backend (`programming/backend`)
 
@@ -3434,7 +3716,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: postgres-slow-db-triage, stream-processing, transactional-outbox, js-pure-functions, db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-fruit-into-baskets, leetcode-max-area-of-island, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-subarray-product-less-than-k, leetcode-sudoku-solver, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, reverse-etl, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
+- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-count-primes, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-fruit-into-baskets, leetcode-max-area-of-island, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-single-number-ii, leetcode-subarray-product-less-than-k, leetcode-sudoku-solver, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, reverse-etl, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -4214,7 +4496,7 @@
 - 소제목: 0.1 + 0.2를 여러 언어에 물어보면 / 64비트를 셋으로 나눈다 / 0.1은 2진수로 끝나지 않는다 / 비트를 직접 쪼개 보기 / 오차는 더할수록 쌓인다 / 같은지 비교하는 법 / 2의 53제곱 너머의 정수 / 0이 둘, 자기 자신과 다른 값 / 반올림에는 방법이 여러 개다 / 돈은 정수로 세거나 decimal로 다룬다 / 나누고 남은 1원은 어디로 / 더하는 순서가 결과를 바꾼다 / 실무에서 고르는 기준 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-numbers-bigint, postgres-data-types, process-vs-thread
 - 키워드 백링크 →: js-binary-data-typed-arrays, sd-latency-numbers, input-validation-secure-coding, postgres-query-planner
-- 이 글로 오는 글 ←: binary-search, bit-manipulation, cpu-pipelining-branch-prediction, ddd-tactical-patterns, deep-learning-basics, etl-vs-elt, input-validation-secure-coding, js-equality-coercion, js-numbers-bigint, js-runtimes-node-deno-bun, js-template-literals, json-crud-http, leetcode-add-two-numbers, leetcode-boats-to-save-people, leetcode-car-fleet, leetcode-climbing-stairs, leetcode-combination-sum-ii, leetcode-counting-bits, leetcode-k-closest-points-to-origin, leetcode-maximum-product-subarray, leetcode-powx-n, leetcode-product-of-array-except-self, leetcode-subarray-product-less-than-k, leetcode-sum-of-two-integers, leetcode-valid-anagram, llm-basics-for-developers, logic-gates-alu, ml-experiment-tracking, mongodb-document-model, postgres-data-types, pythagorean-theorem, rest-api-design, sd-stock-exchange-order-book, sd-unique-id-generator, sd-wallet-transfer, soap-and-soa, sql-basics, test-design-techniques
+- 이 글로 오는 글 ←: binary-search, bit-manipulation, cpu-pipelining-branch-prediction, ddd-tactical-patterns, deep-learning-basics, etl-vs-elt, input-validation-secure-coding, js-equality-coercion, js-numbers-bigint, js-runtimes-node-deno-bun, js-template-literals, json-crud-http, leetcode-add-two-numbers, leetcode-boats-to-save-people, leetcode-car-fleet, leetcode-climbing-stairs, leetcode-combination-sum-ii, leetcode-count-primes, leetcode-counting-bits, leetcode-excel-sheet-column-number, leetcode-k-closest-points-to-origin, leetcode-maximum-product-subarray, leetcode-power-of-two, leetcode-powx-n, leetcode-product-of-array-except-self, leetcode-subarray-product-less-than-k, leetcode-sum-of-two-integers, leetcode-valid-anagram, llm-basics-for-developers, logic-gates-alu, ml-experiment-tracking, mongodb-document-model, postgres-data-types, pythagorean-theorem, rest-api-design, sd-stock-exchange-order-book, sd-unique-id-generator, sd-wallet-transfer, soap-and-soa, sql-basics, test-design-techniques
 
 #### `garbage-collection` — 가비지 컬렉션 안쪽: 세대, 멈춤, 그리고 컨테이너 메모리 한도
 
@@ -4337,7 +4619,7 @@
 - 소제목: 전기로 켜고 끄는 스위치에서 시작한다 / NAND 하나로 나머지를 다 만든다 / 아랫자리에서 올라온 1까지 더하기 / 올림이 줄을 서서 지나간다 / 음수는 뒤집고 1을 더한다 / 끝을 넘으면 반대쪽 끝으로 간다 / ALU는 답과 함께 표시를 남긴다 / 넘쳤을 때 언어가 하는 일 / 현장에서 넘침을 만나는 곳 / 8비트 덧셈기를 직접 만들어 보기 / 덧셈 하나에 들어 있는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: cpu-instruction-cycle
 - 키워드 백링크 →: floating-point-numbers, bit-manipulation
-- 이 글로 오는 글 ←: bit-manipulation, cpu-instruction-cycle, grpc, leetcode-majority-element, leetcode-n-queens, leetcode-number-of-1-bits, leetcode-single-number, leetcode-sudoku-solver, leetcode-sum-of-two-integers, memory-safety-buffer-overflow
+- 이 글로 오는 글 ←: bit-manipulation, cpu-instruction-cycle, grpc, leetcode-majority-element, leetcode-n-queens, leetcode-number-of-1-bits, leetcode-power-of-two, leetcode-reverse-integer, leetcode-single-number, leetcode-single-number-ii, leetcode-sudoku-solver, leetcode-sum-of-two-integers, memory-safety-buffer-overflow
 
 ### Programming › Data Engineering (`programming/data-engineering`)
 
@@ -4942,7 +5224,7 @@
 - 소제목: 0.1을 열 번 더하면 1이 아니다 / 정수는 범위를 넘으면 에러가 난다 / varchar(n)이 text보다 빠르지 않다 / 오전 9시 주문이 오후 6시로 보인다 / UUID 키는 순서가 있어야 인덱스가 편하다 / 배열은 편하지만 관계를 대신하지 않는다 / 주문 상태를 담는 세 가지 방법 / 같은 방을 두 번 예약하지 못하게 / 도메인, NULL, 기본값, 형 변환 / 타입마다 몇 바이트를 쓰나 / 컬럼을 만들 때 묻는 것들 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-getting-started, db-index, postgres-jsonb-search, sql-basics
 - 키워드 백링크 →: floating-point-numbers, race-conditions, sql-select-where-null, postgres-architecture
-- 이 글로 오는 글 ←: acid-transactions, character-encoding-unicode, floating-point-numbers, graphql-schema-type-system, postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started, postgres-roles-security, sd-sharding-intro, sd-unique-id-generator, sql-interview-problems, sqld-data-modeling
+- 이 글로 오는 글 ←: acid-transactions, character-encoding-unicode, floating-point-numbers, graphql-schema-type-system, leetcode-my-calendar-i, postgres-advanced-sql, postgres-functions-triggers, postgres-getting-started, postgres-roles-security, sd-sharding-intro, sd-unique-id-generator, sql-interview-problems, sqld-data-modeling
 
 #### `postgres-functions-triggers` — 함수, 프로시저, 트리거: PL/pgSQL로 DB 안에 로직 두기
 
@@ -5008,7 +5290,7 @@
 - 소제목: SQL 한 줄이 실행되기까지 / 비용은 페이지와 행으로 센다 / 몇 행이 나올지 짐작하는 법 / 범위 조건은 히스토그램으로 센다 / 조건 두 개를 곱하면 틀리는 경우 / 추정이 틀리면 조인 방법이 바뀐다 / 조인 순서는 몇 가지나 따져 보나 / 다섯 번 실행한 뒤에 바뀌는 계획 / 드라이버와 풀이 문장을 준비하는 방식 / 힌트 없이 계획을 바꾸는 방법 / 계획이 갑자기 바뀌었을 때 보는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index-pitfalls, postgres-operations, connection-pool, postgres-mvcc-vacuum
 - 키워드 백링크 →: db-architecture-by-scale, dynamic-programming, ds-hash-map, db-index-design, sql-batch-timeout-pool, postgres-getting-started
-- 이 글로 오는 글 ←: build-caching, custom-form-controls, db-partitioning, floating-point-numbers, frontend-system-design-interview, greedy-algorithms, k8s-kube-proxy-modes, mongodb-indexes-explain, prompt-reasoning-techniques, sd-start-single-server
+- 이 글로 오는 글 ←: build-caching, custom-form-controls, db-partitioning, floating-point-numbers, frontend-system-design-interview, greedy-algorithms, k8s-kube-proxy-modes, leetcode-valid-parenthesis-string, mongodb-indexes-explain, prompt-reasoning-techniques, sd-start-single-server
 
 #### `postgres-reporting-sql` — PostgreSQL 리포트 쿼리: DISTINCT ON, FILTER, generate_series, 머티리얼라이즈드 뷰, COPY, LATERAL
 
@@ -5043,7 +5325,7 @@
 - 소제목: 80ms와 1ms 사이에 있는 것 / 명령은 한 줄로 서서 하나씩 실행된다 / 느린 명령 하나가 모두를 세운다 / Redis 6의 I/O 스레드는 무엇을 나눠 맡나 / Ubuntu에 설치하고 접속하기 / 밖에서 접속하게 열 때 막아야 할 것 / 키 이름은 콜론으로 나눈다 / 문자열: 값, 카운터, 락 / 해시: 객체 하나를 필드로 나눠 담기 / 리스트: 들어온 순서대로 꺼내는 큐 / 셋과 정렬된 셋: 중복 없는 모음과 순위표 / 놓치지 않는 스트림, 흘려보내는 채널 / 만료 시간을 다루는 명령 / KEYS 대신 SCAN / 여러 명령을 묶는 세 가지 방법 / 응용 로그에 Redis 타임아웃이 찍히면 / Memcached와 무엇이 다른가 / 주 저장소로 쓰기 전에 따져 볼 것 / 라이선스가 바뀐 이야기 / 빠른 이유와 멈추는 이유는 같은 곳에 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: redis-high-throughput, message-queue-basics, redis-memory-eviction, network-troubleshooting-by-layer, event-loop, redis-persistence-ha, caching-strategies, valkey-vs-redis
 - 키워드 백링크 →: redis-cluster, distributed-lock, ds-hash-map, ds-linked-list, sd-leaderboard-sorted-set, sd-start-single-server, pub-sub, db-type-relational, os-kernel-system-calls, kafka-basics, db-transaction-isolation, mysql-innodb-basics, acid-transactions, vpc-basics, dns
-- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, agent-memory, api-gateway-use-cases, api-key-hmac-auth, api-scaling-ladder, architecture-docs-c4-adr, backend-engineer-roadmap, balanced-search-trees, batch-processing, bloom-filter, blue-green-deployment, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, circuit-breaker, clean-code-practices, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, container-orchestration-choices, cookie-session-login, count-min-sketch, cqrs, crdt, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-performance-map, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, ds-binary-tree-bst, ds-linked-list, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, graphql-authorization, graphql-subscriptions-defer, habit-features-progress-reminders, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, jpa-persistence-context, js-memoization, k8s-service-types, leetcode-encode-and-decode-strings, leetcode-lru-cache, leetcode-number-of-1-bits, leetcode-serialize-and-deserialize-binary-tree, linux-performance-triage, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, model-serving, monolith-architecture, multi-region, multi-tenancy-isolation, mutex-semaphore-monitor, n-plus-one-queries, network-partitions, nextjs-caching-layers, nextjs-self-hosting-deployment, nginx-reverse-proxy, nodejs-server-runtime, optimistic-locking, os-kernel-system-calls, password-attacks-credential-stuffing, pattern-command, pattern-singleton, pattern-strategy, performance-antipatterns, ports-and-sockets, process-vs-thread, pub-sub, queue-based-load-leveling, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-high-throughput, redis-memory-eviction, redis-modules-stack, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, reverse-proxy-lb-api-gateway, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-music-streaming, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, segment-tree-fenwick, service-discovery, spring-ai-agents, sql-vs-nosql, system-design-concepts-map, system-design-study-path, tcp-reliability-congestion, twelve-factor-app, valkey-vs-redis, virtual-memory-paging, vpc-subnets-route-tables, websocket-deep-dive
+- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, agent-memory, api-gateway-use-cases, api-key-hmac-auth, api-scaling-ladder, architecture-docs-c4-adr, backend-engineer-roadmap, balanced-search-trees, batch-processing, bloom-filter, blue-green-deployment, bullmq-job-queue, cache-invalidation, cache-write-policies, caching-concepts-map, caching-strategies, circuit-breaker, clean-code-practices, clock-skew, cloud-cost-optimization, consistency-models, consistent-hashing, container-orchestration-choices, cookie-session-login, count-min-sketch, cqrs, crdt, cron-jobs, db-architecture-by-scale, db-consistency-cap, db-performance-map, db-sharding, db-type-key-value, db-types-overview, dead-letter-queue, distributed-lock, docker-compose, docker-network-volume, ds-binary-tree-bst, ds-linked-list, encryption-in-transit, exponential-backoff-jitter, feature-flags, gateway, geohash, graphql-authorization, graphql-subscriptions-defer, habit-features-progress-reminders, health-checks, helm-basics, helm-dependencies-oci-gitops, high-availability, http-caching-cdn, hyperloglog, idempotency-key, jpa-persistence-context, js-memoization, k8s-service-types, leetcode-encode-and-decode-strings, leetcode-lru-cache, leetcode-number-of-1-bits, leetcode-plus-one, leetcode-serialize-and-deserialize-binary-tree, linux-performance-triage, load-balancer-basics, long-polling, lossy-counting, message-queue-basics, model-serving, monolith-architecture, multi-region, multi-tenancy-isolation, mutex-semaphore-monitor, n-plus-one-queries, network-partitions, nextjs-caching-layers, nextjs-self-hosting-deployment, nginx-reverse-proxy, nodejs-server-runtime, optimistic-locking, os-kernel-system-calls, password-attacks-credential-stuffing, pattern-command, pattern-singleton, pattern-strategy, performance-antipatterns, ports-and-sockets, process-vs-thread, pub-sub, queue-based-load-leveling, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, realtime-communication, redis-cluster, redis-high-throughput, redis-memory-eviction, redis-modules-stack, redis-persistence-ha, redis-replication-sentinel, rendering-ssg-isr, rest-api-design, reverse-proxy-lb-api-gateway, rollback-strategy, scaling-horizontal-vertical, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-db-replication-intro, sd-hotel-inventory-scaling, sd-interview-framework, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-music-streaming, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, sd-notification-reliability, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-url-shortener-api-redirect, sd-url-shortener-key-generation, sd-wallet-transfer, sd-web-crawler-architecture, segment-tree-fenwick, service-discovery, spring-ai-agents, sql-vs-nosql, system-design-concepts-map, system-design-study-path, tcp-reliability-congestion, twelve-factor-app, valkey-vs-redis, virtual-memory-paging, vpc-subnets-route-tables, websocket-deep-dive
 
 #### `redis-cluster` — Redis Cluster: 해시 슬롯, MOVED와 ASK
 
@@ -5265,7 +5547,7 @@
 - 소제목: 아홉 줄, 점수 다섯 개 / 같은 아홉 줄을 세는 방법이 셋이다 / 평균이 둘로 갈라진 이유 / 행이 하나도 없을 때 / LEFT JOIN 뒤의 `count(*)`는 0을 세지 못한다 / 조건별로 세면 WHERE와 FILTER가 다른 행을 지운다 / ELSE 0을 붙인 count는 전부를 센다 / WHERE에 쓸지 HAVING에 쓸지는 숫자로 정한다 / GROUP BY에는 무엇을 적어야 하나 / NULL도 한 묶음이 되고, 이어 붙이기는 순서를 적어야 한다 / 리포트 숫자가 맞지 않을 때 보는 순서 / 집계 함수를 직접 만들어 보기 / 분모부터 확인한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-filtering-operators, sqld-group-by-having, sql-joins-in-practice, sql-case-when
 - 키워드 백링크 →: db-modeling-normalization
-- 이 글로 오는 글 ←: leetcode-binary-search, leetcode-car-fleet, leetcode-contains-duplicate, leetcode-evaluate-reverse-polish-notation, leetcode-find-median-from-data-stream, leetcode-happy-number, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-median-of-two-sorted-arrays, leetcode-multiply-strings, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-reorganize-string, leetcode-rotate-image, leetcode-study-guide, leetcode-sudoku-solver, leetcode-unique-paths, linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path
+- 이 글로 오는 글 ←: leetcode-binary-search, leetcode-car-fleet, leetcode-contains-duplicate, leetcode-evaluate-reverse-polish-notation, leetcode-find-median-from-data-stream, leetcode-happy-number, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-median-of-two-sorted-arrays, leetcode-missing-number, leetcode-multiply-strings, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-reorganize-string, leetcode-rotate-image, leetcode-study-guide, leetcode-sudoku-solver, leetcode-unique-paths, linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path
 
 #### `sql-basics` — SQL 기본 명령어: 테이블과 제약 조건 만들기
 
@@ -6551,7 +6833,7 @@
 - 소제목: 숫자 하나는 64비트 세 칸으로 나뉜다 / 0.1은 이진수로 끝나지 않는다 / 같은지 비교할 때는 오차를 허용한다 / 2의 53제곱부터 정수가 건너뛴다 / JSON으로 받은 주문 번호가 바뀐다 / 돈은 정수 단위로 센다 / toFixed의 반올림은 보이는 숫자를 따르지 않는다 / 문자열을 숫자로 바꾸는 길은 여러 개다 / BigInt는 다른 규칙으로 계산한다 / 비트 연산은 32비트 정수로 접는다 / 직접 해 보기: 문자열 금액을 정확히 더하기 / 다시 장바구니로 / 면접에서 나올 만한 질문
 - 직접 링크 →: floating-point-numbers, js-equality-coercion, js-error-handling
 - 키워드 백링크 →: json-crud-http, js-binary-data-typed-arrays, sd-latency-numbers, bit-manipulation, js-truthy-falsy-typeof
-- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, claude-code-models-and-cost, claude-code-plugins-and-channels, dynamic-programming, floating-point-numbers, graphql-schema-type-system, high-availability, html-form-validation, js-binary-data-typed-arrays, js-equality-coercion, js-error-handling, js-truthy-falsy-typeof, k8s-security-context, leetcode-add-two-numbers, leetcode-counting-bits, leetcode-multiply-strings, leetcode-number-of-1-bits, leetcode-powx-n, leetcode-reverse-bits, leetcode-single-number, leetcode-study-guide, leetcode-sum-of-two-integers, linux-processes-signals, mongodb-document-model, nodejs-orm-query-builder, pattern-prototype, public-key-key-exchange, randomized-algorithms, responsive-design, sd-sharding-intro, sd-unique-id-generator, sd-url-shortener-api-redirect, sit-uat-testing, string-search-algorithms, ts-narrowing, virtual-memory-paging
+- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, claude-code-models-and-cost, claude-code-plugins-and-channels, dynamic-programming, floating-point-numbers, graphql-schema-type-system, high-availability, html-form-validation, js-binary-data-typed-arrays, js-equality-coercion, js-error-handling, js-truthy-falsy-typeof, k8s-security-context, leetcode-add-two-numbers, leetcode-counting-bits, leetcode-multiply-strings, leetcode-number-of-1-bits, leetcode-plus-one, leetcode-powx-n, leetcode-reverse-bits, leetcode-reverse-integer, leetcode-single-number, leetcode-study-guide, leetcode-sum-of-two-integers, linux-processes-signals, mongodb-document-model, nodejs-orm-query-builder, pattern-prototype, public-key-key-exchange, randomized-algorithms, responsive-design, sd-sharding-intro, sd-unique-id-generator, sd-url-shortener-api-redirect, sit-uat-testing, string-search-algorithms, ts-narrowing, virtual-memory-paging
 
 #### `js-optional-chaining-nullish` — 옵셔널 체이닝과 ??: 어디서 멈추고 무엇을 없음으로 보나
 
@@ -6852,7 +7134,7 @@
 - 소제목: 같은 입력이면 같은 답이라는 약속 / 캐시 키가 결과를 결정한다 / 버리지 않는 캐시는 메모리 누수다 / 객체를 키로 쓸 때는 WeakMap / Promise를 기억하면 요청이 하나로 합쳐진다 / 기억하는 비용이 계산보다 클 때 / useMemo는 칸이 하나뿐인 캐시다 / 연습: 크기 제한이 있는 memoize / 빠르게 틀리지 않으려면 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-pure-functions, js-closures, react-rerender, big-o-notation, js-memory-leak, caching-strategies, client-data-cache, js-immutability-react, garbage-collection
 - 키워드 백링크 →: react-memoization-hooks, json-crud-http, rendering-strategies, react-useeffect, dynamic-programming, spring-ioc-di, redis-basics, js-primitive-vs-reference, dns
-- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-concepts-map, caching-strategies, client-data-cache, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, dynamic-programming, fp-in-react, frontend-frameworks-compared, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-map-set-weak, js-memory-leak, js-pure-functions, leetcode-binary-tree-maximum-path-sum, leetcode-burst-balloons, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-design-add-and-search-words, leetcode-diameter-of-binary-tree, leetcode-edit-distance, leetcode-happy-number, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-common-subsequence, leetcode-lru-cache, leetcode-non-overlapping-intervals, leetcode-palindrome-partitioning, leetcode-regular-expression-matching, leetcode-unique-paths, leetcode-word-search, nextjs-caching-layers, nextjs-route-handlers-proxy, nextjs-server-actions-security, react-memoization-hooks, react-rerender, react-state-management-libraries, recursion-backtracking, sd-url-shortener-key-generation
+- 이 글로 오는 글 ←: big-o-notation, bloom-filter, caching-concepts-map, caching-strategies, client-data-cache, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, dynamic-programming, fp-in-react, frontend-frameworks-compared, javascript-roadmap, js-array-transform, js-call-apply-bind, js-closures, js-destructuring, js-first-class-callbacks, js-immutability-react, js-map-set-weak, js-memory-leak, js-pure-functions, leetcode-binary-tree-maximum-path-sum, leetcode-burst-balloons, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-coin-change-ii, leetcode-design-add-and-search-words, leetcode-diameter-of-binary-tree, leetcode-distinct-subsequences, leetcode-edit-distance, leetcode-happy-number, leetcode-interleaving-string, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-common-subsequence, leetcode-lru-cache, leetcode-non-overlapping-intervals, leetcode-palindrome-partitioning, leetcode-regular-expression-matching, leetcode-stock-with-cooldown, leetcode-target-sum, leetcode-unique-paths, leetcode-valid-parenthesis-string, leetcode-word-search, nextjs-caching-layers, nextjs-route-handlers-proxy, nextjs-server-actions-security, react-memoization-hooks, react-rerender, react-state-management-libraries, recursion-backtracking, sd-url-shortener-key-generation
 
 #### `js-pure-functions` — 순수 함수와 부수 효과: 같은 입력, 같은 결과, 남지 않는 흔적
 
@@ -7157,7 +7439,7 @@
 - 소제목: 세 숫자가 각각 재는 것 / 실험실 점수와 사용자 점수가 다른 이유 / 가장 큰 그림이 늦게 뜨는 과정 / LCP를 네 조각으로 나눠 보기 / 히어로 이미지를 빨리 받는 법 / 눌렀는데 화면이 늦게 바뀐다 / 긴 작업을 쪼개서 양보하기 / 화면이 밀리는 양을 재는 법 / 밀림을 세션 창으로 묶어 센다 / 실제 사용자 기기에서 모으기 / 나빠진 지표를 브라우저에서 직접 재 보기 / 점수보다 분포를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, code-splitting, web-font-optimization, event-loop
 - 키워드 백링크 →: performance-metrics-measurement, seo-for-spa, resource-hints-loading, frontend-testing-strategy, web-workers, lighthouse-explained, browser-rendering-pipeline, ab-testing, image-optimization, loading-patterns, pattern-proxy, cors, dns
-- 이 글로 오는 글 ←: ab-testing, animation-performance, browser-devtools-debugging, browser-rendering-pipeline, code-splitting, dom-basics, event-loop, event-propagation, fe-sd-news-feed, frontend-browser-cache, frontend-performance-map, frontend-system-design-interview, html-media-embed, hydration, image-optimization, javascript-roadmap, lazy-loading-strategies, leetcode-longest-common-prefix, lighthouse-explained, loading-patterns, performance-metrics-measurement, react-concurrent-transitions, react-fiber-render-commit, react-rerender, react-useref-layout-effect, rendering-csr-spa, rendering-performance-optimization, rendering-ssr, rendering-strategies, resource-hints-loading, scroll-patterns-overview, scroll-triggered-intersection-observer, search-engine-ranking-pagerank, streaming-ssr-suspense, string-search-algorithms, web-font-optimization, web-workers
+- 이 글로 오는 글 ←: ab-testing, animation-performance, browser-devtools-debugging, browser-rendering-pipeline, code-splitting, dom-basics, event-loop, event-propagation, fe-sd-news-feed, frontend-browser-cache, frontend-performance-map, frontend-system-design-interview, html-media-embed, hydration, image-optimization, javascript-roadmap, lazy-loading-strategies, leetcode-longest-common-prefix, leetcode-sum-of-prefix-scores-of-strings, lighthouse-explained, loading-patterns, performance-metrics-measurement, react-concurrent-transitions, react-fiber-render-commit, react-rerender, react-useref-layout-effect, rendering-csr-spa, rendering-performance-optimization, rendering-ssr, rendering-strategies, resource-hints-loading, scroll-patterns-overview, scroll-triggered-intersection-observer, search-engine-ranking-pagerank, streaming-ssr-suspense, string-search-algorithms, web-font-optimization, web-workers
 
 #### `data-fetching-optimization` — 데이터 요청 최적화: 요청 폭포를 줄이는 순서
 
@@ -8235,7 +8517,7 @@
 - 소제목: 두 방화벽이 서 있는 자리 / 보안 그룹은 연결을 기억한다 / NACL은 패킷 하나하나를 본다 / 응답 패킷은 포트가 다르다 / 규칙을 지웠는데 연결이 살아 있다 / 어디서 막혔는지 확인하기 / 무엇을 어디에 걸까 / 두 장면을 다시 보면 / 면접에서 나올 만한 질문
 - 직접 링크 →: vpc-basics, iptables-basics, network-flow-logs, terraform-network-iac, vpc-peering-transit-privatelink
 - 키워드 백링크 →: vpc-subnets-route-tables, ports-and-sockets, dhcp, layer-ip-routing-icmp, postgres-getting-started, udp-and-quic, dns
-- 이 글로 오는 글 ←: ansible-network-automation, architecture-docs-c4-adr, authn-vs-authz, aws-core-services-map, aws-ec2-ubuntu-server-setup, block-file-object-storage, cdn-edge-anycast, ci-cd-basics, clock-skew, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, config-management-tools, curl-for-debugging, ddos-protection, devops-networking-roadmap, docker-network-drivers, ec2-instance-types-launch-templates, ecs-fargate-task-service, eks-cluster-basics, failover, firewall-types-ngfw, first-page-from-power-on, iac-basics, ids-ips, iptables-basics, ipv6-basics, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-node-autoscaling-karpenter, k8s-project-structure, k8s-service-types, kubectl-essentials, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, load-balancer-basics, mongodb-security, nat-traversal, network-attacks-l2-l3, network-config-cicd, network-flow-logs, network-layers-overview, network-partitions, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, osi-in-practice, owasp-top-10-map, ports-and-sockets, postgres-connections-pg-hba, proxy-reverse-proxy, rds-aurora-managed-db, reverse-proxy-lb-api-gateway, route53-routing-policies, routing-protocols-ospf-rip-eigrp, sd-split-web-and-db, sdn-vxlan-overlay, security-compliance-for-developers, security-incident-response, security-principles-cia-defense-in-depth, ssrf, tcp-connection-lifecycle, terraform-basics, terraform-dependency-graph-lifecycle, terraform-hcl-expressions-data-sources, terraform-modules-tfvars, terraform-network-iac, terraform-testing-policy-scanning, udp-and-quic, virtualization-hypervisors, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, zero-trust-architecture
+- 이 글로 오는 글 ←: ansible-network-automation, architecture-docs-c4-adr, authn-vs-authz, aws-core-services-map, aws-ec2-ubuntu-server-setup, block-file-object-storage, cdn-edge-anycast, ci-cd-basics, clock-skew, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, config-management-tools, curl-for-debugging, ddos-protection, devops-networking-roadmap, docker-network-drivers, ec2-instance-types-launch-templates, ecs-fargate-task-service, eks-cluster-basics, failover, firewall-types-ngfw, first-page-from-power-on, iac-basics, ids-ips, iptables-basics, ipv6-basics, k8s-cni-pod-network, k8s-deploy-pipeline-eks, k8s-node-autoscaling-karpenter, k8s-project-structure, k8s-service-types, kubectl-essentials, layer-ip-addressing, layer-ip-routing-icmp, layer-mtu-fragmentation, leetcode-bitwise-and-of-numbers-range, load-balancer-basics, mongodb-security, nat-traversal, network-attacks-l2-l3, network-config-cicd, network-flow-logs, network-layers-overview, network-partitions, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, osi-in-practice, owasp-top-10-map, ports-and-sockets, postgres-connections-pg-hba, proxy-reverse-proxy, rds-aurora-managed-db, reverse-proxy-lb-api-gateway, route53-routing-policies, routing-protocols-ospf-rip-eigrp, sd-split-web-and-db, sdn-vxlan-overlay, security-compliance-for-developers, security-incident-response, security-principles-cia-defense-in-depth, ssrf, tcp-connection-lifecycle, terraform-basics, terraform-dependency-graph-lifecycle, terraform-hcl-expressions-data-sources, terraform-modules-tfvars, terraform-network-iac, terraform-testing-policy-scanning, udp-and-quic, virtualization-hypervisors, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, waf, zero-trust-architecture
 
 #### `vpc-basics` — VPC 기본: 클라우드 안에 빌린 내 사설망
 
@@ -8292,7 +8574,7 @@
 - 소제목: 메서드는 서버와 맺는 약속이다 / 안전, 멱등, 캐시 가능 / 같은 요청을 두 번 보내면 / PUT은 통째로, PATCH는 일부만 / POST를 다시 보내면 주문이 두 개 / GET에 본문을 싣지 않는 이유 / HEAD와 OPTIONS는 묻기만 한다 / 405와 Allow, 대소문자 / 폼은 GET과 POST만 안다 / CONNECT와 TRACE / 스펙대로 하지 않는 서버들 / 프록시는 멱등성을 보고 재시도를 고른다 / 다시 메일 링크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-caching-cdn, resilience-patterns, cors, cookie-session-login, http-status-codes, nginx-reverse-proxy
 - 키워드 백링크 →: graphql-basics, json-crud-http, elasticsearch-inverted-index, gateway, csrf, js-pure-functions, client-data-cache, what-happens-google-com
-- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, actor-model, agent-tool-design, airflow-orchestration, ansible-network-automation, api-gateway-use-cases, api-test-automation, backend-engineer-roadmap, batch-processing, browser-fetch, config-management-tools, cqrs, crdt, csrf, curl-for-debugging, dead-letter-queue, debugging-with-logs, distributed-lock, elasticsearch-bulk-indexing, etl-vs-elt, fault-tolerance, frontend-as-distributed-system, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, iac-basics, idempotency-key, js-pure-functions, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, microservices, mongodb-replica-set-sharding, netconf-restconf-yang, networking-essentials-map, nginx-reverse-proxy, nodejs-error-handling, nodejs-http-clients, pattern-builder, pattern-decorator, queue-based-load-leveling, race-conditions, react-forms-actions, resilience-patterns, rest-api-design, retries, saga-pattern, sd-ad-click-exactly-once, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-news-feed-publishing, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, service-mesh, sql-interview-problems, system-design-concepts-map, system-design-study-path, tail-latency, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, actor-model, agent-tool-design, airflow-orchestration, ansible-network-automation, api-gateway-use-cases, api-test-automation, backend-engineer-roadmap, batch-processing, browser-fetch, config-management-tools, cqrs, crdt, csrf, curl-for-debugging, dead-letter-queue, debugging-with-logs, distributed-lock, elasticsearch-bulk-indexing, etl-vs-elt, fault-tolerance, frontend-as-distributed-system, gateway, html-form-http, http-message, http-status-codes, http-versions, https-tls, iac-basics, idempotency-key, js-pure-functions, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, leetcode-merge-triplets-to-form-target-triplet, message-delivery-semantics, message-queue-basics, microservices, mongodb-replica-set-sharding, netconf-restconf-yang, networking-essentials-map, nginx-reverse-proxy, nodejs-error-handling, nodejs-http-clients, pattern-builder, pattern-decorator, queue-based-load-leveling, race-conditions, react-forms-actions, resilience-patterns, rest-api-design, retries, saga-pattern, sd-ad-click-exactly-once, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-news-feed-publishing, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, service-mesh, sql-interview-problems, system-design-concepts-map, system-design-study-path, tail-latency, transactional-outbox, webhooks
 
 #### `http-status-codes` — HTTP 상태 코드 제대로 쓰기
 
@@ -8516,7 +8798,7 @@
 - 소제목: 주소 하나에 망 번호와 기기 번호가 들어 있다 / 서브넷 마스크를 비트로 보기 / 망 하나에 몇 대를 붙일 수 있나 / 같은 망이면 직접, 아니면 게이트웨이로 / 사설 대역과 특수한 주소들 / 큰 대역을 작게 나누기 / 대역이 겹치면 길이 사라진다 / IPv6 주소 읽기 / 현장에서 주소와 마주치는 순간 / 동네와 번지 / 면접에서 나올 만한 질문
 - 직접 링크 →: network-layers-overview, layer-link-ethernet-arp, layer-ip-routing-icmp, iptables-nat, ports-and-sockets, ipv6-basics, proxy-reverse-proxy
 - 키워드 백링크 →: vpc-peering-transit-privatelink, k8s-network-policy, docker-container-basics, vpc-subnets-route-tables, sd-latency-numbers, k8s-cni-pod-network, ssrf, python-essentials-for-backend, bit-manipulation, nat-traversal, security-groups-nacl, vpc-basics, dhcp, eks-cluster-basics, dns
-- 이 글로 오는 글 ←: ai-crawlers-bot-control, aws-ec2-ubuntu-server-setup, cloud-deployment-models-multicloud, devops-networking-roadmap, dhcp, eks-cluster-basics, first-page-from-power-on, ids-ips, ipv6-basics, k8s-certificates-pki, k8s-cni-pod-network, k8s-etcd-backup, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-multi-cluster, k8s-project-structure, layer-ip-routing-icmp, layer-link-ethernet-arp, network-design-three-tier-spine-leaf, network-layers-overview, network-troubleshooting-by-layer, networking-essentials-map, postgres-connections-pg-hba, postgres-roles-security, proxy-reverse-proxy, route53-routing-policies, routing-protocols-ospf-rip-eigrp, seo-log-file-analysis-search-console, ssrf, terraform-hcl-expressions-data-sources, terraform-modules-tfvars, terraform-network-iac, terraform-testing-policy-scanning, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, wan-mpls-sd-wan-vrf, webhooks
+- 이 글로 오는 글 ←: ai-crawlers-bot-control, aws-ec2-ubuntu-server-setup, cloud-deployment-models-multicloud, devops-networking-roadmap, dhcp, eks-cluster-basics, first-page-from-power-on, ids-ips, ipv6-basics, k8s-certificates-pki, k8s-cni-pod-network, k8s-etcd-backup, k8s-kube-proxy-modes, k8s-learning-roadmap, k8s-multi-cluster, k8s-project-structure, layer-ip-routing-icmp, layer-link-ethernet-arp, leetcode-bitwise-and-of-numbers-range, network-design-three-tier-spine-leaf, network-layers-overview, network-troubleshooting-by-layer, networking-essentials-map, postgres-connections-pg-hba, postgres-roles-security, proxy-reverse-proxy, route53-routing-policies, routing-protocols-ospf-rip-eigrp, seo-log-file-analysis-search-console, ssrf, terraform-hcl-expressions-data-sources, terraform-modules-tfvars, terraform-network-iac, terraform-testing-policy-scanning, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables, wan-mpls-sd-wan-vrf, webhooks
 
 #### `layer-ip-routing-icmp` — 라우팅과 ICMP: 패킷이 길을 찾는 법
 
@@ -11567,7 +11849,7 @@
 - 소제목: 바이트를 세는 두 가지 자 / 나노초부터 수백 밀리초까지, 지연의 사다리 / 이 컴퓨터에서 직접 재 보기 / 거리는 빛의 속도가 정한다 / 왕복 횟수가 응답 시간을 정한다 / 아홉 개수와 멈춰도 되는 시간 / 숫자를 외울 때 자주 하는 실수 / 직접 계산해 보기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-sharding-intro, sd-capacity-estimation, sd-interview-framework, sd-rate-limiter-design, sd-cache-and-cdn-tier, sd-multi-datacenter, n-plus-one-queries, high-availability, sli-slo, percentile-latency, latency-bandwidth-throughput
 - 키워드 백링크 →: sd-start-single-server, distributed-tracing, tcp-reliability-congestion, redis-basics, virtual-memory-paging, sql-query-rewrite
-- 이 글로 오는 글 ←: bit-manipulation, clock-skew, cpu-cache-hierarchy, cpu-instruction-cycle, crawl-budget-faceted-navigation, ds-hash-map, ds-stack-queue-deque, floating-point-numbers, grafana-tempo-tracing, js-numbers-bigint, layer-ip-addressing, leetcode-counting-bits, leetcode-daily-temperatures, leetcode-number-of-1-bits, percentile-latency, postgres-slow-db-triage, randomized-algorithms, regex-and-globbing, sd-capacity-estimation, sd-interview-framework, sd-news-feed-retrieval, sd-sharding-intro, sd-split-web-and-db, sd-stock-exchange-low-latency, segment-tree-fenwick, system-design-study-path, virtual-memory-paging
+- 이 글로 오는 글 ←: bit-manipulation, clock-skew, cpu-cache-hierarchy, cpu-instruction-cycle, crawl-budget-faceted-navigation, ds-hash-map, ds-stack-queue-deque, floating-point-numbers, grafana-tempo-tracing, js-numbers-bigint, layer-ip-addressing, leetcode-bitwise-and-of-numbers-range, leetcode-counting-bits, leetcode-daily-temperatures, leetcode-number-of-1-bits, leetcode-path-with-maximum-probability, leetcode-power-of-two, leetcode-target-sum, percentile-latency, postgres-slow-db-triage, randomized-algorithms, regex-and-globbing, sd-capacity-estimation, sd-interview-framework, sd-news-feed-retrieval, sd-sharding-intro, sd-split-web-and-db, sd-stock-exchange-low-latency, segment-tree-fenwick, system-design-study-path, virtual-memory-paging
 
 #### `sd-load-balancer-stateless` — 수백만 사용자로 키우기 ③: 로드 밸런서와 무상태 웹 서버
 
@@ -11679,7 +11961,7 @@
 - 소제목: 빈도표 하나와 LIKE 하나로 시작하기 / 접두사를 길로 바꾸는 트라이 / 접두사 아래를 전부 뒤지면 / 노드마다 상위 5개를 적어 둔다 / 한글은 치는 동안 글자가 바뀐다 / 키를 누를 때마다 요청을 보내지 않는다 / 서버 쪽 경로와 거르는 단계 / 추천이 이상하다는 문의가 오면 / 트라이로 상위 k개 찾기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-chat-presence, sd-autocomplete-data-pipeline, sd-video-upload-transcoding, http-caching-cdn, debounce-throttle, browser-fetch, elasticsearch-inverted-index, ds-trie
 - 키워드 백링크 →: input-validation-secure-coding, character-encoding-unicode, sd-start-single-server, lossy-counting, global-rollout-localization, osi-in-practice, vim-for-servers, db-modeling-normalization
-- 이 글로 오는 글 ←: data-structures-overview, debounce-throttle, ds-trie, frontend-system-design-interview, leetcode-implement-trie, sd-autocomplete-data-pipeline, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path
+- 이 글로 오는 글 ←: data-structures-overview, debounce-throttle, ds-trie, frontend-system-design-interview, leetcode-implement-trie, leetcode-sum-of-prefix-scores-of-strings, sd-autocomplete-data-pipeline, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path
 
 #### `sd-chat-connections` — 채팅 시스템 설계 ①: 폴링에서 WebSocket까지, 연결을 붙잡는 채팅 서버
 
@@ -11723,7 +12005,7 @@
 - 소제목: 메일 한 통이 지나는 길 / 받는 서버는 DNS의 MX가 알려 준다 / SMTP 대화 한 번 / 첨부 파일은 글자로 바뀌어 실린다 / 꺼내 읽기: POP3, IMAP, 그리고 HTTP / 길을 잠그는 TLS, 편지를 잠그는 S/MIME과 PGP / 아무나 남의 주소를 적을 수 있다 / 스팸함으로 가지 않으려면 / 서비스로 키우면: 보내는 쪽의 줄 / 메일이 안 간다는 문의가 오면 / 다음 글에서 메일을 저장한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-hotel-inventory-scaling, sd-email-storage-search, sd-object-storage-architecture, dns, base64, realtime-communication, sd-notification-reliability
 - 키워드 백링크 →: serverless-architecture, https-tls, what-happens-google-com, actor-model, db-modeling-normalization
-- 이 글로 오는 글 ←: dead-letter-queue, dns, k8s-configmap, message-queue-basics, network-layers-overview, pattern-factory-method, phishing-social-engineering, routing-protocols-ospf-rip-eigrp, sd-email-storage-search, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-notification-system, soap-and-soa, solid-principles, system-design-study-path, upper-layers-session-presentation-app
+- 이 글로 오는 글 ←: dead-letter-queue, dns, k8s-configmap, leetcode-count-primes, message-queue-basics, network-layers-overview, pattern-factory-method, phishing-social-engineering, routing-protocols-ospf-rip-eigrp, sd-email-storage-search, sd-hotel-double-booking, sd-hotel-inventory-scaling, sd-notification-system, soap-and-soa, solid-principles, system-design-study-path, upper-layers-session-presentation-app
 
 #### `sd-email-storage-search` — 이메일 서비스 설계 ②: 메일 저장소와 검색 색인
 
@@ -11767,7 +12049,7 @@
 - 소제목: 가장 작은 예약 시스템 / 같은 손님이 두 번 누른다 / 마지막 세 방을 열 명이 노린다 / 줄을 세운다: SELECT FOR UPDATE / 버전을 보고 다시 한다: 낙관적 잠금 / 넘치면 DB가 거절한다: CHECK 제약 / 같은 조건에서 네 가지를 돌려 보면 / 이미 넘친 예약을 찾는 법 / 다음 글에서 재고 테이블을 키운다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-ad-click-exactly-once, sd-hotel-inventory-scaling, sd-email-protocols, idempotency-key, race-conditions, db-transaction-isolation, pessimistic-locking, db-locking-deadlock, optimistic-locking, exponential-backoff-jitter, sd-db-replication-intro
 - 키워드 백링크 →: db-migration-tools, gateway, sd-ad-click-stream-windows, postgres-functions-triggers, sql-basics, postgres-getting-started, http-methods
-- 이 글로 오는 글 ←: leetcode-meeting-rooms, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-hotel-inventory-scaling, system-design-study-path
+- 이 글로 오는 글 ←: leetcode-meeting-rooms, leetcode-my-calendar-i, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-hotel-inventory-scaling, system-design-study-path
 
 #### `sd-hotel-inventory-scaling` — 호텔 예약 시스템 설계 ②: 객실 유형 재고, 캐시, 서비스 사이의 일관성
 
@@ -11866,7 +12148,7 @@
 - 소제목: 세계 지도를 그림 한 장으로 보내면 / 둥근 지구를 네모로 펴기 / 확대 단계마다 넷으로 쪼갠다 / 타일은 미리 그려 CDN에 둔다 / 저장 공간과 비어 있는 바다 / 그림 대신 도형을 보내는 벡터 타일 / 교차로는 점, 도로는 선 / 가까운 곳부터 확정하는 다익스트라 / 목적지 쪽으로 기울이는 A* / 그래프가 크면 타일로 자른다 / 먼 길은 굵은 도로만 본다 / 현장에서 길 찾기가 틀리는 순간 / 다음 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-nearby-friends, sd-maps-location-eta, sd-proximity-service, http-caching-cdn, db-type-graph
 - 키워드 백링크 →: grpc, ds-graph-bfs-dfs, sd-object-storage-architecture, ds-heap
-- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-evaluate-reverse-polish-notation, leetcode-jump-game-ii, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-rotting-oranges, leetcode-sort-colors, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, mutex-semaphore-monitor, routing-protocols-ospf-rip-eigrp, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, shortest-path-algorithms, system-design-study-path, web-workers
+- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-evaluate-reverse-polish-notation, leetcode-find-city-smallest-neighbors, leetcode-jump-game-ii, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-path-with-maximum-probability, leetcode-rotting-oranges, leetcode-shortest-path-in-binary-matrix, leetcode-sort-colors, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, mutex-semaphore-monitor, routing-protocols-ospf-rip-eigrp, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, shortest-path-algorithms, system-design-study-path, web-workers
 
 #### `sd-metrics-collection` — 지표 모니터링 시스템 설계 ①: pull과 push로 모으고 큐로 나르기
 
@@ -16102,51 +16384,108 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `leetcode-meeting-rooms` ↔ `leetcode-merge-intervals` (42%: 비교한다, 시작, 순으로, 세우고, 시작과, 끝을, 범위가, 작으면)
-- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-minimum-window-substring` (41%: 구간, 시작점마다, 길이로, 이분, 탐색하기, 창을, 매번, 언어로)
-- `leetcode-find-minimum-in-rotated-sorted-array` ↔ `leetcode-search-in-rotated-sorted-array` (38%: 꺾이는, 곳을, 정렬된, 풀이, 비교, 이렇게, 짜면, 틀린다)
+- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-minimum-window-substring` (43%: 구간, 시작점마다, 길이로, 이분, 탐색하기, 창을, 매번, 언어로)
+- `leetcode-meeting-rooms` ↔ `leetcode-merge-intervals` (40%: 비교한다, 시작, 순으로, 세우고, 시작과, 끝을, 범위가, 작으면)
 - `leetcode-longest-substring-without-repeating` ↔ `leetcode-minimum-window-substring` (38%: 시작점마다, 이분, 탐색하기, 왼쪽을, 해시맵, 128칸, 배열, 언어로)
-- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-longest-substring-without-repeating` (37%: 시작점마다, 끝까지, 이분, 탐색하기, 언어로, 최종, 풀이, 비교)
-- `leetcode-k-closest-points-to-origin` ↔ `leetcode-kth-largest-element-in-an-array` (36%: 크기, k인, 힙에, 남긴다, 전부, 넣고, k번, 꺼낸다)
+- `leetcode-single-number-ii` ↔ `leetcode-single-number` (38%: 수마다, 세기, 정렬하면, 선다, 장부에, 횟수를, 번씩, bit)
+- `leetcode-find-minimum-in-rotated-sorted-array` ↔ `leetcode-search-in-rotated-sorted-array` (38%: 꺾이는, 곳을, 정렬된, 풀이, 비교, 이렇게, 짜면, 틀린다)
+- `leetcode-path-with-maximum-probability` ↔ `leetcode-network-delay-time` (38%: 길을, 따라가, 간선, 전체를, 벨만, 포드, 노드만, spfa)
+- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-longest-substring-without-repeating` (38%: 시작점마다, 끝까지, 이분, 탐색하기, 언어로, 최종, 풀이, 비교)
 - `leetcode-majority-element` ↔ `leetcode-single-number` (35%: 나오는, 수마다, 장부에, 횟수를, 정렬하면, 틀리기, 쉬운, 조건이)
 - `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (35%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 이름을, 스칼라)
-- `leetcode-jump-game-ii` ↔ `leetcode-jump-game` (33%: 칸마다, python과, java로, 옮기기, 풀이, 비교, 그럴듯하지만, 조건이)
+- `leetcode-k-closest-points-to-origin` ↔ `leetcode-kth-largest-element-in-an-array` (33%: 크기, k인, 힙에, 남긴다, 전부, 넣고, k번, 꺼낸다)
+- `leetcode-jump-game-ii` ↔ `leetcode-jump-game` (32%: 칸마다, java로, 옮기기, 풀이, 비교, 그럴듯하지만, 조건이, greedy)
 - `mongodb-indexes-explain` ↔ `db-index-pitfalls` (30%: 주문, 인덱스, 인덱스가, 있는데, 운영, 인덱스를, index)
+- `leetcode-number-of-1-bits` ↔ `leetcode-reverse-bits` (30%: 문자열로, 바꿔, 칸을, 불린다면, 표를, 틀리기, 쉬운, bit)
 - `leetcode-4sum` ↔ `leetcode-3sum` (30%: 겹으로, 골라, 고정하고, 끝에서, 수를, 3sum, two, pointers)
 - `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
-- `leetcode-number-of-1-bits` ↔ `leetcode-reverse-bits` (29%: 문자열로, 바꿔, 칸을, 불린다면, 표를, 틀리기, 쉬운, bit)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (29%: 연산자, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (29%: 붙이는, 행을, sqld, 시험, 포인트)
-- `leetcode-merge-intervals` ↔ `leetcode-partition-labels` (29%: 구간을, 겹치지, 조각을, 합친다, 마지막, 끝을, python과, java로)
 - `mysql-innodb-basics` ↔ `pessimistic-locking` (29%: 테이블, update가, 잠금은, 행이, 잠금, 대기를, 좁혀, 가는)
-- `leetcode-climbing-stairs` ↔ `leetcode-house-robber` (29%: 표를, 채운다, 개만, python과, java로, 옮길, 일곱, 틀리기)
-- `leetcode-insert-interval` ↔ `leetcode-merge-intervals` (29%: 합친다, python과, java로, 옮기기, 풀이, 비교, 실제, 코드에서)
 - `leetcode-container-with-most-water` ↔ `leetcode-two-sum-ii` (28%: 짝을, 끝에서, 쪽을, 버린다, two, sum, 이어서, 문제들)
+- `leetcode-distinct-subsequences` ↔ `leetcode-interleaving-string` (28%: 순서를, 지키며, 재귀, 칸을, 글자, 언어로, 풀이, 수로)
 - `leetcode-reverse-nodes-in-k-group` ↔ `leetcode-reverse-linked-list` (28%: 값만, 꺼내서, 뒤집어, 노드를, 잇기, 스택에, 쌓았다가, linked)
-- `leetcode-merge-k-sorted-lists` ↔ `leetcode-merge-two-sorted-lists` (28%: 정렬된, 모아서, 정렬하기, 합쳐, 조건을, linked, list, merge)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (28%: 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (28%: 테이블, sqld, 시험, 포인트, oracle)
 - `leetcode-cheapest-flights-within-k-stops` ↔ `leetcode-network-delay-time` (28%: 길을, 전부, dfs, bfs, 벨만, 포드, 다익스트라, 다익스트라를)
+- `leetcode-merge-intervals` ↔ `leetcode-partition-labels` (28%: 구간을, 겹치지, 조각을, 합친다, 마지막, 끝을, java로, 옮기기)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
 - `javascript-roadmap` ↔ `k8s-learning-roadmap` (27%: 01, 02, 03, 04, 05, 06, 07, 증상이면)
 - `leetcode-container-with-most-water` ↔ `leetcode-trapping-rain-water` (27%: 낮은, 벽이, 벽을, 높은, 잰다, two, 이어서, 문제들)
 - `leetcode-find-minimum-in-rotated-sorted-array` ↔ `leetcode-median-of-two-sorted-arrays` (27%: 곳을, 오른쪽, 풀이, 비교, 이렇게, 짜면, 틀린다, 이어서)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (27%: 글에서, 사원, 테이블, sqld, 시험, 포인트, oracle)
-- `leetcode-task-scheduler` ↔ `leetcode-k-closest-points-to-origin` (27%: 최대, 세운다, 개로, 봤다, python과, java로, 옮기기, 틀리기)
 - `leetcode-number-of-connected-components` ↔ `leetcode-number-of-islands` (27%: 큐로, 겹씩, bfs, 때마다, 빼는, 유니온, 파인드, 세기)
-- `leetcode-minimum-interval-to-include-each-query` ↔ `leetcode-k-closest-points-to-origin` (27%: 전부, 크기, 두고, 힙에, 봤다, python과, java로, 옮기기)
 - `performance-antipatterns` ↔ `caching-concepts-map` (27%: 거꾸로, 1., 2., 3., 4., 5., 6., 7.)
+- `leetcode-sum-of-prefix-scores-of-strings` ↔ `leetcode-replace-words` (26%: 앞부분을, 전부, 맞춰, 두기, 이어서, 트라이, trie, hash)
 - `mongodb-indexes-explain` ↔ `db-index-design` (26%: 주문, 쿼리, 인덱스, 담는, 부분, 인덱스와, 결과를, 인덱스를)
 - `sd-db-replication-intro` ↔ `db-replication-sharding` (26%: 복제본은, 대로, 방금, 보인다, 죽으면, 이어받나, 복제는, scalability)
-- `leetcode-majority-element` ↔ `leetcode-longest-consecutive-sequence` (26%: 수마다, 풀이, python과, java로, 옮기기, 놓고, 틀리기, 쉬운)
-- `leetcode-coin-change` ↔ `leetcode-house-robber` (26%: 틀린다, 표를, 채운다, python과, java로, 옮길, 틀리기, 쉬운)
 - `db-index-pitfalls` ↔ `db-index-design` (26%: 주문, 100만, 인덱스, 인덱스는, 인덱스를, index)
+- `leetcode-3sum` ↔ `leetcode-container-with-most-water` (26%: two, 끝에서, 이어서, 문제들, 건너뛴다, pointers, sum)
+- `elasticsearch-snapshot-dr` ↔ `velero-backup` (26%: 뜨고, 이름으로, 되살리기, sre, resilience, 스냅숏과, 재해, 복구)
+- `leetcode-merge-k-sorted-lists` ↔ `leetcode-merge-two-sorted-lists` (26%: 정렬된, 모아서, 정렬하기, 합쳐, linked, list, merge, sorted)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `leetcode-alien-dictionary` ↔ `leetcode-course-schedule-ii`
+- `leetcode-alien-dictionary` ↔ `leetcode-course-schedule`
+- `leetcode-bitwise-and-of-numbers-range` ↔ `leetcode-power-of-two`
+- `leetcode-candy` ↔ `leetcode-ipo`
+- `leetcode-candy` ↔ `leetcode-merge-triplets-to-form-target-triplet`
+- `leetcode-candy` ↔ `leetcode-valid-parenthesis-string`
+- `leetcode-candy` ↔ `leetcode-hand-of-straights`
+- `leetcode-candy` ↔ `leetcode-product-of-array-except-self`
+- `leetcode-coin-change-ii` ↔ `leetcode-target-sum`
+- `leetcode-coin-change-ii` ↔ `leetcode-partition-equal-subset-sum`
+- `leetcode-coin-change-ii` ↔ `leetcode-climbing-stairs`
+- `leetcode-coin-change-ii` ↔ `leetcode-coin-change`
+- `leetcode-coin-change-ii` ↔ `leetcode-combination-sum`
+- `leetcode-construct-tree-from-preorder-inorder` ↔ `leetcode-validate-binary-search-tree`
+- `leetcode-construct-tree-from-preorder-inorder` ↔ `leetcode-invert-binary-tree`
+- `leetcode-construct-tree-from-preorder-inorder` ↔ `leetcode-serialize-and-deserialize-binary-tree`
+- `leetcode-distinct-subsequences` ↔ `leetcode-interleaving-string`
+- `leetcode-distinct-subsequences` ↔ `leetcode-regular-expression-matching`
+- `leetcode-distinct-subsequences` ↔ `leetcode-edit-distance`
+- `leetcode-distinct-subsequences` ↔ `leetcode-longest-common-subsequence`
+- `leetcode-extra-characters-in-a-string` ↔ `leetcode-word-break`
+- `leetcode-extra-characters-in-a-string` ↔ `leetcode-replace-words`
+- `leetcode-find-city-smallest-neighbors` ↔ `leetcode-path-with-maximum-probability`
+- `leetcode-find-city-smallest-neighbors` ↔ `leetcode-network-delay-time`
+- `leetcode-interleaving-string` ↔ `leetcode-regular-expression-matching`
+- `leetcode-interleaving-string` ↔ `leetcode-edit-distance`
+- `leetcode-interleaving-string` ↔ `leetcode-longest-common-subsequence`
+- `leetcode-ipo` ↔ `leetcode-merge-triplets-to-form-target-triplet`
+- `leetcode-ipo` ↔ `leetcode-valid-parenthesis-string`
+- `leetcode-ipo` ↔ `leetcode-hand-of-straights`
+- `leetcode-merge-triplets-to-form-target-triplet` ↔ `leetcode-valid-parenthesis-string`
+- `leetcode-merge-triplets-to-form-target-triplet` ↔ `leetcode-hand-of-straights`
+- `leetcode-missing-number` ↔ `leetcode-single-number-ii`
+- `leetcode-missing-number` ↔ `leetcode-single-number`
+- `leetcode-my-calendar-i` ↔ `leetcode-car-pooling`
+- `leetcode-my-calendar-i` ↔ `leetcode-employee-free-time`
+- `leetcode-my-calendar-i` ↔ `leetcode-interval-list-intersections`
+- `leetcode-my-calendar-i` ↔ `leetcode-meeting-rooms-ii`
+- `leetcode-my-calendar-i` ↔ `leetcode-meeting-rooms`
+- `leetcode-my-calendar-i` ↔ `leetcode-insert-interval`
+- `leetcode-path-with-maximum-probability` ↔ `leetcode-cheapest-flights-within-k-stops`
+- `leetcode-path-with-maximum-probability` ↔ `leetcode-swim-in-rising-water`
+- `leetcode-path-with-maximum-probability` ↔ `leetcode-network-delay-time`
+- `leetcode-plus-one` ↔ `leetcode-multiply-strings`
+- `leetcode-power-of-two` ↔ `leetcode-reverse-integer`
+- `leetcode-power-of-two` ↔ `leetcode-counting-bits`
+- `leetcode-power-of-two` ↔ `leetcode-number-of-1-bits`
+- `leetcode-reverse-integer` ↔ `leetcode-reverse-bits`
+- `leetcode-reverse-integer` ↔ `leetcode-sum-of-two-integers`
+- `leetcode-shortest-path-in-binary-matrix` ↔ `leetcode-rotting-oranges`
+- `leetcode-shortest-path-in-binary-matrix` ↔ `leetcode-word-ladder`
+- `leetcode-single-number-ii` ↔ `leetcode-single-number`
+- `leetcode-stock-with-cooldown` ↔ `leetcode-house-robber`
+- `leetcode-sum-of-prefix-scores-of-strings` ↔ `leetcode-longest-common-prefix`
+- `leetcode-sum-of-prefix-scores-of-strings` ↔ `leetcode-implement-trie`
+- `leetcode-target-sum` ↔ `leetcode-partition-equal-subset-sum`
+- `leetcode-valid-parenthesis-string` ↔ `leetcode-hand-of-straights`
 - `leetcode-sudoku-solver` ↔ `leetcode-valid-sudoku`
 - `leetcode-sudoku-solver` ↔ `leetcode-n-queens`
 - `leetcode-sudoku-solver` ↔ `leetcode-word-search`
