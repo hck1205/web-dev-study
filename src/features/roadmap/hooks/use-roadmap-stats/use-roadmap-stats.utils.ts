@@ -222,6 +222,27 @@ export function courseStats(course: Course, progress: StudyProgress) {
   return { stages, total: stageCounts([...counted], progress) };
 }
 
+/**
+ * 세부 로드맵이 들어 있는 큰 로드맵 단계. 단계가 이 로드맵이나 그 상위·하위 로드맵을 읽으면 이어진 것으로 본다
+ */
+export function coursesOfRoadmap(key: string) {
+  const related = (other: string) => other === key || key.startsWith(`${other}/`) || other.startsWith(`${key}/`);
+  return COURSES.flatMap((course) => {
+    const index = course.stages.findIndex((stage) => (stage.roadmaps ?? []).some(related));
+    if (index < 0) return [];
+    return [{ course: course.id, courseLabel: course.label, stageLabel: course.stages[index].label, href: `/roadmap/course/${course.id}#stage-${index + 1}` }];
+  });
+}
+
+/** 글 하나가 들어 있는 큰 로드맵 단계 (글 페이지 학습 패널용) */
+export function coursesOfPost(slug: string) {
+  return COURSES.flatMap((course) => {
+    const index = course.stages.findIndex((stage) => stagePosts(stage).includes(slug));
+    if (index < 0) return [];
+    return [{ course: course.id, courseLabel: course.label, stageLabel: course.stages[index].label, href: `/roadmap/course/${course.id}#stage-${index + 1}` }];
+  });
+}
+
 /** 이 큰 로드맵으로 들어오는 길 (다른 로드맵의 next) */
 export const incomingCourses = (id: string) =>
   COURSES.flatMap((course) => course.next.filter((link) => link.course === id).map((link) => ({ id: course.id, label: course.label, why: link.why })));

@@ -4,7 +4,7 @@ import { useParams } from "next/navigation";
 import { useMemo } from "react";
 import { getPostBySlug, postHref } from "@/features/posts/registry";
 import { type Stage, stageOf, useGetStudyProgress } from "../../atoms/study-progress";
-import { roadmapStats } from "../../hooks/use-roadmap-stats";
+import { coursesOfRoadmap, roadmapStats } from "../../hooks/use-roadmap-stats";
 import { CHECKPOINTS, checkpointHref, findRoadmap, isCheckpoint, isPost, isRoadmap, postSlug, roadmapCrumbs, roadmapHref, roadmapKey, tierOf } from "../../registry";
 import type { FlatRoadmap, RoadmapItem } from "../../registry";
 
@@ -103,5 +103,6 @@ export function useRoadmapDetail() {
     crumbs: roadmap ? [{ label: "로드맵", href: "/roadmap" }, ...roadmapCrumbs(roadmap)] : [{ label: "로드맵", href: "/roadmap" }],
     rows: detail?.rows ?? [],
     stats: detail?.stats,
+    courses: roadmap ? coursesOfRoadmap(roadmap.path.join("/")) : [],
   };
 }

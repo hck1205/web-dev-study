@@ -38,8 +38,7 @@ export function CourseDetail() {
 
   return (
     <Container size="narrow">
-      <CrumbLinks items={[{ label: "로드맵", href: "/roadmap" }]} />
-      <PageHeader title={course.label} lead={course.description} />
+      <PageHeader eyebrow={<CrumbLinks items={[{ label: "로드맵", href: "/roadmap" }]} />} title={course.label} lead={course.description} />
       <ProgressBar counts={data.total.counts} total={data.total.total} withText />
       <Intro>
         단원 순서는{" "}

@@ -29,7 +29,7 @@ const CheckpointQuiz = dynamic(() => import("../checkpoint-quiz").then((module) 
 const TIER_TONES = { 1: "accent", 2: "info", 3: "neutral" } as const;
 
 export function RoadmapDetail() {
-  const { roadmap, checkpointId, crumbs, rows, stats } = useRoadmapDetail();
+  const { roadmap, checkpointId, crumbs, rows, stats, courses } = useRoadmapDetail();
 
   if (!roadmap || !stats) {
     return (
@@ -66,6 +66,19 @@ export function RoadmapDetail() {
                 {index > 0 && ", "}
                 <Link href={`/roadmap/${requirement.roadmap.path.join("/")}`}>
                   {requirement.roadmap.node.label} ({requirement.readPercent}% 읽음)
+                </Link>
+              </span>
+            ))}
+          </Requirements>
+        )}
+        {courses.length > 0 && (
+          <Requirements>
+            큰 로드맵에서:{" "}
+            {courses.map((item, index) => (
+              <span key={item.course}>
+                {index > 0 && ", "}
+                <Link href={item.href}>
+                  {item.courseLabel} › {item.stageLabel}
                 </Link>
               </span>
             ))}

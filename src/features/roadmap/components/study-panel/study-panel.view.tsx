@@ -46,6 +46,19 @@ export function StudyPanel({ slug }: StudyPanelProps) {
           )}
           지금 단계: <StageMark stage={panel.stage} withLabel />
         </Position>
+        {panel.courses.length > 0 && (
+          <Position>
+            큰 로드맵:{" "}
+            {panel.courses.map((item, index) => (
+              <span key={item.course}>
+                {index > 0 && " · "}
+                <Link href={item.href}>
+                  {item.courseLabel} › {item.stageLabel}
+                </Link>
+              </span>
+            ))}
+          </Position>
+        )}
       </Head>
 
       <Stages aria-label="마스터 단계">

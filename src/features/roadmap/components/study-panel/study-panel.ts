@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { getPostBySlug, postHref } from "@/features/posts/registry";
 import { PASS_RATIO, type Stage, raiseStage, saveExplanation, setStage, stageOf, useGetStudyProgress, useSetStudyProgress } from "../../atoms/study-progress";
+import { coursesOfPost } from "../../hooks/use-roadmap-stats";
 import { placementOf, roadmapCrumbs, roadmapHref } from "../../registry";
 
 /** 글 페이지 끝의 학습 패널: 로드맵 위치, 앞뒤 글, 단계 체크, 내 말로 설명하기, 글 퀴즈 */
@@ -57,6 +58,7 @@ export function useStudyPanel(slug: string) {
     box: saved?.box ?? 0,
     due: saved?.due,
     crumbs: placement ? roadmapCrumbs(placement.roadmap) : [],
+    courses: coursesOfPost(slug),
     roadmapHref: placement ? roadmapHref(placement.roadmap.path) : "/roadmap",
     position: placement ? { index: placement.index + 1, total: placement.roadmap.posts.length } : undefined,
     prev: neighbor(placement?.prev),
