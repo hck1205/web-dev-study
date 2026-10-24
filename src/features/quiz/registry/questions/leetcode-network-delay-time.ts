@@ -10,7 +10,7 @@ export const LEETCODE_NETWORK_DELAY_TIME: QuizQuestion[] = [
     answer: 3,
     explanation:
       "BFS는 1에서 바로 간 3을 5로 굳히고, 3에서 간 5도 5 + 7 = 12로 굳힌다. 실제 답은 2를 거친 3이 3, 4가 5, 5가 6이라 6이다. BFS가 최단 거리를 주는 건 간선 무게가 모두 같을 때뿐이다.",
-    anchor: "틀리기-쉬운-곳",
+    anchor: "bfs-습관과-배열-크기에서-틀린다",
   },
   {
     id: "leetcode-network-delay-time-2",
@@ -40,7 +40,7 @@ export const LEETCODE_NETWORK_DELAY_TIME: QuizQuestion[] = [
     answer: 2,
     explanation:
       "후보를 넣을 때 dist[v]도 같은 값으로 바꾸므로 유효한 후보는 꺼낼 때 t와 dist[u]가 같다. 같을 때 버리면 출발점부터 버려진다. 버리는 조건은 엄격하게 큰 t > dist[u]다.",
-    anchor: "틀리기-쉬운-곳",
+    anchor: "bfs-습관과-배열-크기에서-틀린다",
   },
   {
     id: "leetcode-network-delay-time-4",

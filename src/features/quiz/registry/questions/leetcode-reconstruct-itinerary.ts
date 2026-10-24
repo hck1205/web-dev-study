@@ -45,7 +45,7 @@ export const LEETCODE_RECONSTRUCT_ITINERARY: QuizQuestion[] = [
     answer: 1,
     explanation:
       "예시만 봐도 JFK를 두 번 지나야 한다. 공항에 표시하면 DEN에서 JFK로 돌아갈 수 없어 일정을 하나도 완성하지 못한다. 모든 '간선'을 한 번씩 쓰는 문제라 표시도 간선에 한다.",
-    anchor: "틀리기-쉬운-곳",
+    anchor: "공항-표시와-문자열-정렬에서-틀린다",
   },
   {
     id: "leetcode-reconstruct-itinerary-4",
@@ -60,7 +60,7 @@ export const LEETCODE_RECONSTRUCT_ITINERARY: QuizQuestion[] = [
     answer: 3,
     explanation:
       "문자열 뺄셈은 NaN이고, 비교 함수가 NaN을 돌려주면 V8은 같은 것으로 보고 순서를 바꾸지 않는다. 에러가 없어서 찾기 어렵다. (a, b) => (a < b ? 1 : a > b ? -1 : 0)이나 sort().reverse()를 쓴다.",
-    anchor: "틀리기-쉬운-곳",
+    anchor: "공항-표시와-문자열-정렬에서-틀린다",
   },
   {
     id: "leetcode-reconstruct-itinerary-5",

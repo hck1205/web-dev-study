@@ -1,3 +1,25 @@
+import { WHAT_IS_MLOPS } from "./what-is-mlops";
+import { PRODUCT_ANALYTICS_FUNNELS } from "./product-analytics-funnels";
+import { MODEL_SERVING } from "./model-serving";
+import { ML_MODEL_MONITORING_DRIFT } from "./ml-model-monitoring-drift";
+import { ML_EXPERIMENT_TRACKING } from "./ml-experiment-tracking";
+import { LAMBDA_KAPPA_ARCHITECTURE } from "./lambda-kappa-architecture";
+import { ETL_VS_ELT } from "./etl-vs-elt";
+import { DBT_TRANSFORMATIONS } from "./dbt-transformations";
+import { DATA_WAREHOUSE_ARCHITECTURE } from "./data-warehouse-architecture";
+import { DATA_MESH_FABRIC } from "./data-mesh-fabric";
+import { LEETCODE_SWIM_IN_RISING_WATER } from "./leetcode-swim-in-rising-water";
+import { LEETCODE_SUM_OF_TWO_INTEGERS } from "./leetcode-sum-of-two-integers";
+import { LEETCODE_SET_MATRIX_ZEROES } from "./leetcode-set-matrix-zeroes";
+import { LEETCODE_REVERSE_BITS } from "./leetcode-reverse-bits";
+import { LEETCODE_REGULAR_EXPRESSION_MATCHING } from "./leetcode-regular-expression-matching";
+import { LEETCODE_POWX_N } from "./leetcode-powx-n";
+import { LEETCODE_NUMBER_OF_1_BITS } from "./leetcode-number-of-1-bits";
+import { LEETCODE_MINIMUM_INTERVAL_TO_INCLUDE_EACH_QUERY } from "./leetcode-minimum-interval-to-include-each-query";
+import { LEETCODE_MIN_COST_TO_CONNECT_ALL_POINTS } from "./leetcode-min-cost-to-connect-all-points";
+import { LEETCODE_HAPPY_NUMBER } from "./leetcode-happy-number";
+import { LEETCODE_COUNTING_BITS } from "./leetcode-counting-bits";
+import { LEETCODE_CHEAPEST_FLIGHTS_WITHIN_K_STOPS } from "./leetcode-cheapest-flights-within-k-stops";
 import { ML_MODEL_EVALUATION } from "./ml-model-evaluation";
 import { EXPLAINABLE_AI_SHAP_LIME } from "./explainable-ai-shap-lime";
 import { CLAUDE_CODE_AGENT_TEAMS } from "./claude-code-agent-teams";
@@ -996,6 +1018,28 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  WHAT_IS_MLOPS,
+  PRODUCT_ANALYTICS_FUNNELS,
+  MODEL_SERVING,
+  ML_MODEL_MONITORING_DRIFT,
+  ML_EXPERIMENT_TRACKING,
+  LAMBDA_KAPPA_ARCHITECTURE,
+  ETL_VS_ELT,
+  DBT_TRANSFORMATIONS,
+  DATA_WAREHOUSE_ARCHITECTURE,
+  DATA_MESH_FABRIC,
+  LEETCODE_SWIM_IN_RISING_WATER,
+  LEETCODE_SUM_OF_TWO_INTEGERS,
+  LEETCODE_SET_MATRIX_ZEROES,
+  LEETCODE_REVERSE_BITS,
+  LEETCODE_REGULAR_EXPRESSION_MATCHING,
+  LEETCODE_POWX_N,
+  LEETCODE_NUMBER_OF_1_BITS,
+  LEETCODE_MINIMUM_INTERVAL_TO_INCLUDE_EACH_QUERY,
+  LEETCODE_MIN_COST_TO_CONNECT_ALL_POINTS,
+  LEETCODE_HAPPY_NUMBER,
+  LEETCODE_COUNTING_BITS,
+  LEETCODE_CHEAPEST_FLIGHTS_WITHIN_K_STOPS,
   ML_MODEL_EVALUATION,
   EXPLAINABLE_AI_SHAP_LIME,
   CLAUDE_CODE_AGENT_TEAMS,

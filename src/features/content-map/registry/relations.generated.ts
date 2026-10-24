@@ -2,6 +2,383 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "data-mesh-fabric": {
+    "links": [
+      "data-warehouse-architecture",
+      "cdc-change-data-capture",
+      "ddd-bounded-context",
+      "microservices-decomposition"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "db-sharding",
+      "microservices",
+      "graph-rag",
+      "db-type-columnar-olap",
+      "schema-versioning",
+      "sli-slo"
+    ]
+  },
+  "data-warehouse-architecture": {
+    "links": [
+      "etl-vs-elt",
+      "olap-star-schema",
+      "db-type-columnar-olap",
+      "data-lake-hdfs",
+      "event-driven-architecture"
+    ],
+    "mentions": [
+      "db-sharding",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "acid-transactions",
+      "db-keys-denormalization",
+      "dbt-transformations",
+      "db-modeling-normalization"
+    ]
+  },
+  "dbt-transformations": {
+    "links": [
+      "etl-vs-elt",
+      "data-warehouse-architecture",
+      "olap-star-schema",
+      "cdc-change-data-capture",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "ds-graph-bfs-dfs"
+    ]
+  },
+  "etl-vs-elt": {
+    "links": [
+      "spark-basics",
+      "data-lake-hdfs",
+      "airflow-orchestration",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "data-privacy-compliance",
+      "cdc-change-data-capture",
+      "clock-skew",
+      "schema-versioning",
+      "data-warehouse-architecture"
+    ],
+    "mentions": [
+      "db-sharding",
+      "mysql-replication-online-ddl",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "floating-point-numbers",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "dbt-transformations",
+      "http-methods",
+      "zero-downtime-migrations",
+      "webhooks"
+    ]
+  },
+  "lambda-kappa-architecture": {
+    "links": [
+      "batch-processing",
+      "stream-processing",
+      "sd-ad-click-stream-windows",
+      "kafka-to-lake-pipeline",
+      "data-lake-hdfs",
+      "cdc-change-data-capture",
+      "etl-vs-elt",
+      "data-warehouse-architecture"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "centralized-logging-pipeline",
+      "sd-ad-click-exactly-once",
+      "sd-object-storage-architecture",
+      "kafka-basics",
+      "db-type-columnar-olap",
+      "code-review-practices",
+      "postgres-architecture",
+      "shells-posix-compat",
+      "zero-downtime-migrations"
+    ]
+  },
+  "ml-experiment-tracking": {
+    "links": [
+      "ml-model-evaluation",
+      "git-large-files-secrets",
+      "canary-release",
+      "ml-model-monitoring-drift"
+    ],
+    "mentions": [
+      "ab-testing",
+      "floating-point-numbers",
+      "long-polling",
+      "git-staging-area",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
+  "ml-model-monitoring-drift": {
+    "links": [
+      "ml-model-evaluation",
+      "ml-fundamentals",
+      "observability-basics",
+      "explainable-ai-shap-lime",
+      "prometheus-basics",
+      "metrics-types",
+      "alerting",
+      "canary-release",
+      "ml-experiment-tracking",
+      "llm-observability"
+    ],
+    "mentions": [
+      "model-serving",
+      "data-warehouse-architecture",
+      "llm-evals",
+      "linux-performance-triage",
+      "vector-db"
+    ]
+  },
+  "model-serving": {
+    "links": [
+      "what-is-mlops",
+      "self-hosting-llm-inference",
+      "fastapi-basics",
+      "deep-learning-basics",
+      "canary-release",
+      "ab-testing",
+      "explainable-ai-shap-lime"
+    ],
+    "mentions": [
+      "dbt-transformations",
+      "observability-basics",
+      "data-warehouse-architecture",
+      "ml-experiment-tracking",
+      "db-type-key-value",
+      "docker-container-basics",
+      "airflow-orchestration",
+      "ml-fundamentals",
+      "cold-starts",
+      "autoscaling",
+      "event-loop",
+      "llm-evals",
+      "cloud-deployment-models-multicloud",
+      "input-validation-secure-coding",
+      "code-review-practices",
+      "distributed-tracing",
+      "kafka-basics",
+      "redis-basics",
+      "grpc",
+      "db-modeling-normalization",
+      "dns",
+      "fine-tuning-vs-rag-vs-prompting"
+    ]
+  },
+  "product-analytics-funnels": {
+    "links": [
+      "ab-testing",
+      "browser-fetch",
+      "data-privacy-compliance"
+    ],
+    "mentions": [
+      "k8s-batch-kueue"
+    ]
+  },
+  "what-is-mlops": {
+    "links": [
+      "deep-learning-basics",
+      "model-serving",
+      "explainable-ai-shap-lime",
+      "data-lake-hdfs",
+      "airflow-orchestration",
+      "canary-release",
+      "k8s-gpu-dra",
+      "llm-evals"
+    ],
+    "mentions": [
+      "ml-experiment-tracking",
+      "docker-container-basics",
+      "bash-scripting",
+      "sd-object-storage-architecture",
+      "ci-cd-basics",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
+  "leetcode-cheapest-flights-within-k-stops": {
+    "links": [
+      "leetcode-network-delay-time",
+      "shortest-path-algorithms"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "js-memoization",
+      "sd-maps-tiles-routing",
+      "ds-heap",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-counting-bits": {
+    "links": [
+      "leetcode-number-of-1-bits",
+      "dynamic-programming",
+      "bit-manipulation",
+      "leetcode-climbing-stairs",
+      "leetcode-single-number",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-numbers-bigint",
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-happy-number": {
+    "links": [
+      "leetcode-linked-list-cycle",
+      "ds-hash-map",
+      "bit-manipulation",
+      "dynamic-programming",
+      "leetcode-powx-n"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "js-memoization",
+      "sql-aggregation-pitfalls",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-min-cost-to-connect-all-points": {
+    "links": [
+      "minimum-spanning-tree",
+      "ds-union-find",
+      "leetcode-network-delay-time"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "ds-graph-bfs-dfs",
+      "segment-tree-fenwick",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-minimum-interval-to-include-each-query": {
+    "links": [
+      "interval-problems-pattern",
+      "ds-heap",
+      "ds-union-find",
+      "segment-tree-fenwick",
+      "leetcode-merge-intervals",
+      "leetcode-insert-interval",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-meeting-rooms",
+      "leetcode-merge-k-sorted-lists",
+      "leetcode-task-scheduler"
+    ],
+    "mentions": [
+      "binary-search"
+    ]
+  },
+  "leetcode-number-of-1-bits": {
+    "links": [
+      "bit-manipulation",
+      "logic-gates-alu",
+      "leetcode-counting-bits",
+      "leetcode-single-number",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-numbers-bigint",
+      "cpu-pipelining-branch-prediction",
+      "redis-basics",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-powx-n": {
+    "links": [
+      "divide-and-conquer",
+      "bit-manipulation",
+      "floating-point-numbers",
+      "js-numbers-bigint",
+      "leetcode-climbing-stairs",
+      "binary-search",
+      "leetcode-happy-number"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-regular-expression-matching": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-edit-distance",
+      "recursion-backtracking",
+      "leetcode-word-break"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "js-memoization",
+      "two-pointers-pattern",
+      "regex-and-globbing",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-reverse-bits": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "two-pointers-pattern",
+      "leetcode-single-number",
+      "leetcode-counting-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "divide-and-conquer",
+      "cpu-pipelining-branch-prediction"
+    ]
+  },
+  "leetcode-set-matrix-zeroes": {
+    "links": [
+      "leetcode-rotate-image",
+      "leetcode-spiral-matrix"
+    ],
+    "mentions": [
+      "js-shallow-deep-copy"
+    ]
+  },
+  "leetcode-sum-of-two-integers": {
+    "links": [
+      "logic-gates-alu",
+      "bit-manipulation",
+      "leetcode-single-number",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-reverse-bits"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-swim-in-rising-water": {
+    "links": [
+      "shortest-path-algorithms",
+      "ds-union-find",
+      "binary-search",
+      "leetcode-network-delay-time",
+      "minimum-spanning-tree"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing"
+    ]
+  },
   "claude-code-agent-teams": {
     "links": [
       "multi-agent-systems",
@@ -24,8 +401,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "explainable-ai-shap-lime": {
     "links": [
       "deep-learning-basics",
+      "model-serving",
       "ab-testing",
-      "llm-evals"
+      "llm-evals",
+      "what-is-mlops"
     ],
     "mentions": [
       "ml-fundamentals",
@@ -49,7 +428,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "greedy-algorithms",
       "leetcode-permutations",
-      "leetcode-edit-distance"
+      "leetcode-edit-distance",
+      "leetcode-regular-expression-matching"
     ],
     "mentions": [
       "bit-manipulation",
@@ -89,7 +469,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "recursion-backtracking",
       "ds-graph-bfs-dfs",
-      "leetcode-network-delay-time"
+      "leetcode-network-delay-time",
+      "leetcode-min-cost-to-connect-all-points"
     ],
     "mentions": [
       "message-delivery-semantics"
@@ -98,7 +479,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-rotate-image": {
     "links": [
       "ds-array-matrix",
-      "leetcode-spiral-matrix"
+      "leetcode-spiral-matrix",
+      "leetcode-set-matrix-zeroes"
     ],
     "mentions": [
       "sql-aggregation-pitfalls"
@@ -110,7 +492,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map",
       "binary-search",
       "leetcode-linked-list-cycle",
-      "leetcode-contains-duplicate"
+      "leetcode-contains-duplicate",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
     ],
     "mentions": [
       "js-numbers-bigint",
@@ -119,7 +505,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-spiral-matrix": {
     "links": [
-      "leetcode-rotate-image"
+      "leetcode-rotate-image",
+      "leetcode-set-matrix-zeroes"
     ],
     "mentions": []
   },
@@ -175,11 +562,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "transformer-attention-kv-cache",
       "k8s-gpu-dra",
       "fine-tuning-vs-rag-vs-prompting",
+      "model-serving",
       "floating-point-numbers",
+      "what-is-mlops",
       "explainable-ai-shap-lime"
     ],
     "mentions": [
       "n-plus-one-queries",
+      "ml-experiment-tracking",
       "ml-fundamentals",
       "postgres-architecture",
       "self-hosting-llm-inference",
@@ -306,7 +696,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-edit-distance": {
     "links": [
       "dynamic-programming",
-      "leetcode-longest-common-subsequence"
+      "leetcode-longest-common-subsequence",
+      "leetcode-regular-expression-matching"
     ],
     "mentions": [
       "js-memoization"
@@ -414,7 +805,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "shortest-path-algorithms",
       "ds-heap",
-      "ds-graph-bfs-dfs"
+      "leetcode-cheapest-flights-within-k-stops",
+      "ds-graph-bfs-dfs",
+      "leetcode-swim-in-rising-water"
     ],
     "mentions": [
       "sd-maps-tiles-routing"
@@ -430,7 +823,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-longest-increasing-subsequence",
       "dynamic-programming",
       "binary-search",
-      "leetcode-insert-interval"
+      "leetcode-insert-interval",
+      "leetcode-minimum-interval-to-include-each-query"
     ],
     "mentions": [
       "ds-binary-tree-bst",
@@ -442,7 +836,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs",
       "leetcode-number-of-islands",
       "dynamic-programming",
-      "leetcode-trapping-rain-water"
+      "leetcode-trapping-rain-water",
+      "leetcode-swim-in-rising-water"
     ],
     "mentions": [
       "big-o-notation"
@@ -816,6 +1211,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-meeting-rooms",
       "ds-heap",
       "two-pointers-pattern",
+      "leetcode-minimum-interval-to-include-each-query",
       "segment-tree-fenwick"
     ],
     "mentions": [
@@ -1060,6 +1456,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-linked-list",
       "ds-hash-map",
       "leetcode-reverse-linked-list",
+      "leetcode-happy-number",
       "leetcode-reorder-list"
     ],
     "mentions": [
@@ -2353,6 +2750,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "latency-bandwidth-throughput",
       "event-loop",
       "js-memory-leak",
+      "model-serving",
       "code-review-practices",
       "spring-boot-auto-configuration",
       "spring-ioc-di",
@@ -2906,6 +3304,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rendering-ssr",
+      "data-warehouse-architecture",
       "db-architecture-by-scale",
       "gateway",
       "sd-object-storage-architecture",
@@ -5947,6 +6346,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-to-lake-pipeline"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "sd-object-storage-architecture",
       "db-type-embedded",
       "js-pure-functions",
@@ -5980,6 +6380,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "db-partitioning",
       "sd-start-single-server",
       "mongodb-replica-set-sharding",
@@ -5987,6 +6388,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "postgres-architecture",
       "linux-archive-transfer",
+      "etl-vs-elt",
       "cdc-change-data-capture"
     ]
   },
@@ -6903,6 +7305,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-subqueries-exists-lateral",
       "db-type-relational",
       "db-keys-denormalization",
+      "dbt-transformations",
       "db-modeling-normalization"
     ]
   },
@@ -8517,6 +8920,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postmortems"
     ],
     "mentions": [
+      "etl-vs-elt",
       "http-status-codes",
       "shells-posix-compat",
       "dns"
@@ -9445,6 +9849,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "db-type-wide-column",
       "sliding-window-pattern",
       "data-lake-hdfs",
@@ -14252,11 +14657,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "data-warehouse-architecture",
       "data-privacy-compliance",
       "virtualization-hypervisors",
       "mysql-innodb-basics",
       "linux-files-permissions",
       "optimistic-locking",
+      "etl-vs-elt",
       "vpc-basics",
       "db-modeling-normalization"
     ]
@@ -16894,6 +17301,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-peering-transit-privatelink",
       "wan-mpls-sd-wan-vrf",
       "browser-fetch",
+      "data-mesh-fabric",
       "public-key-key-exchange",
       "webhooks",
       "what-happens-google-com",
@@ -18248,7 +18656,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "cpu-pipelining-branch-prediction",
       "acid-transactions",
-      "db-index-design"
+      "db-index-design",
+      "etl-vs-elt"
     ]
   },
   "db-type-newsql": {
@@ -18931,6 +19340,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "opensearch-cluster-operations",
       "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
+      "data-warehouse-architecture",
       "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
