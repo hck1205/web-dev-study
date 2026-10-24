@@ -642,7 +642,7 @@ POST _security/api_key
 }
 ```
 
-응답의 `id`, `api_key`, `encoded`, `expiration` 가운데 `encoded`를 `Authorization: ApiKey <encoded>` 헤더로 쓴다. 키의 권한은 `role_descriptors`와 발급한 사용자 권한의 교집합이라, 발급자보다 큰 권한은 생기지 않는다. 키 값은 발급할 때 한 번만 보이고, 새어 나가면 `DELETE _security/api_key`에 `ids`를 줘서 무효화한다. 만료를 비워 두면 영원히 살아 있으니 기한을 꼭 주고, 만료 전에 새 키로 바꿔 끼우는 순서를 정해 둔다. OpenSearch Security에는 Elasticsearch의 `_security/api_key`에 해당하는 API가 없어서, 보통 권한을 줄인 내부 사용자, 클라이언트 인증서, OIDC·JWT 같은 외부 인증으로 같은 일을 한다.
+응답의 `id`, `api_key`, `encoded`, `expiration` 가운데 `encoded`를 `Authorization: ApiKey <encoded>` 헤더로 쓴다. 키의 권한은 `role_descriptors`와 발급한 사용자 권한의 교집합이라, 발급자보다 큰 권한은 생기지 않는다. 키 값은 발급할 때 한 번만 보이고, 새어 나가면 `DELETE _security/api_key`에 `ids`를 줘서 무효화한다. 만료를 비워 두면 영원히 살아 있으니 기한을 꼭 주고, 만료 전에 새 키로 바꿔 끼우는 순서를 정해 둔다. OpenSearch Security에는 Elasticsearch의 `_security/api_key`에 바로 대응하는 API가 오랫동안 없었다(3.x에 실험 기능으로 API 토큰이 들어오고 있지만 기본은 꺼져 있다). 그래서 보통 권한을 줄인 내부 사용자, 클라이언트 인증서, OIDC·JWT 같은 외부 인증으로 같은 일을 한다.
 
 ## 클러스터가 이상할 때 묻는 순서
 
