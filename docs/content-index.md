@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 1017편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 1046편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -29,7 +29,7 @@
 - 소제목: 세 가지는 바꾸는 곳이 다르다 / 모델이 지금의 모습이 되기까지 / 지식이 필요하면 먼저 붙여 준다 / 형식과 습관은 예시로 가르친다 / 전체 학습과 LoRA, QLoRA / 데이터 수백 건을 만드는 일 / 파인튜닝 한 바퀴 / 과적합과 망각 / API에 맡길까, 직접 돌릴까 / 파인튜닝을 했는데 효과가 없을 때 / 비용, 갱신 속도, 평가를 나란히 놓으면 / '지식은 RAG, 형식은 파인튜닝'의 한계 / 큰 모델로 작은 모델 가르치기 / 언제 파인튜닝하나: 신호와 순서 / 무엇을 모르는지가 길을 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: system-prompt-design, context-engineering, rag-classic-pipeline
 - 키워드 백링크 →: llm-api-integration, embedding-models-applications, llm-evals, postgres-architecture, self-hosting-llm-inference, ml-fundamentals, vector-db, llm-basics-for-developers
-- 이 글로 오는 글 ←: deep-learning-basics, llm-app-security-guardrails, llm-model-selection, model-serving, rag-classic-pipeline, self-hosting-llm-inference, system-prompt-design, transformer-attention-kv-cache
+- 이 글로 오는 글 ←: deep-learning-basics, edge-ai-on-device, llm-app-security-guardrails, llm-model-selection, model-serving, rag-classic-pipeline, self-hosting-llm-inference, system-prompt-design, transformer-attention-kv-cache
 
 #### `llm-api-integration` — LLM API를 서비스에 붙이기: 스트리밍, 도구 호출, 구조화 출력, 재시도
 
@@ -51,7 +51,7 @@
 - 소제목: 모델이 읽는 단위는 글자가 아니다 / 다음 단어 맞히기 기계가 대화를 하게 된 과정 / 한 번에 한 토큰씩 고른다 / 같은 질문에 답이 달라지는 이유 / 컨텍스트 창은 매번 통째로 다시 읽는 작업대다 / 모델을 고를 때 보는 숫자 / 프롬프트 기법은 확률을 미는 일이다 / 그럴듯한 문장과 사실은 다르다 / 지시와 데이터가 같은 줄에 섞인다 / 답이 이상하다는 제보가 왔을 때 / 결국 다음 토큰 하나의 문제다 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-api-integration, mcp-protocol, rag-classic-pipeline, claude-code-context-window
 - 키워드 백링크 →: system-prompt-design, llm-app-security-guardrails, ai-coding-agents, llm-evals, prompt-reasoning-techniques, floating-point-numbers, self-hosting-llm-inference
-- 이 글로 오는 글 ←: ai-coding-agents, context-engineering, deep-learning-basics, fine-tuning-vs-rag-vs-prompting, llm-api-integration, llm-app-security-guardrails, llm-evals, llm-model-selection, llm-observability, mcp-protocol, multimodal-llm-apps, prompt-reasoning-techniques, rag-classic-pipeline, self-hosting-llm-inference, system-prompt-design, transformer-attention-kv-cache
+- 이 글로 오는 글 ←: ai-coding-agents, context-engineering, deep-learning-basics, edge-ai-on-device, fine-tuning-vs-rag-vs-prompting, llm-api-integration, llm-app-security-guardrails, llm-evals, llm-model-selection, llm-observability, mcp-protocol, multimodal-llm-apps, prompt-reasoning-techniques, rag-classic-pipeline, self-hosting-llm-inference, system-prompt-design, transformer-attention-kv-cache
 
 #### `llm-model-selection` — 모델 고르기: 닫힌 모델과 오픈 웨이트, 생각하는 모델, 단가표 읽기
 
@@ -310,7 +310,7 @@
 - 소제목: 고친 질문만 보면 망가진 질문은 안 보인다 / 시험지부터 만든다 / 정답이 정해진 문제는 코드로 채점한다 / 정답이 하나가 아닌 문제는 LLM에게 채점을 맡긴다 / 채점관을 사람과 맞춰 본다 / RAG와 에이전트는 따로 재는 것이 있다 / 모델이 말하는 확신을 그대로 믿을 수 있나 / 같은 시험을 몇 번 쳐야 하나 / CI에서 회귀 테스트로 돌린다 / 시험 점수는 좋은데 사용자는 불만이다 / 평가가 있어도 생기는 일들 / 평가는 프롬프트의 단위 테스트다 / 면접에서 나올 만한 질문
 - 직접 링크 →: rag-retrieval-quality, llm-basics-for-developers, ai-coding-agents, llm-api-integration, prompt-reasoning-techniques
 - 키워드 백링크 →: system-prompt-design, agentic-rag, ab-testing, smoke-sanity-regression-testing, agent-tool-design, rag-classic-pipeline, vector-db
-- 이 글로 오는 글 ←: agent-memory, agent-reasoning-patterns, agent-tool-design, agentic-rag, context-engineering, embedding-models-applications, explainable-ai-shap-lime, fine-tuning-vs-rag-vs-prompting, llm-api-integration, llm-app-security-guardrails, llm-basics-for-developers, llm-model-selection, llm-observability, ml-fundamentals, ml-model-evaluation, ml-model-monitoring-drift, model-serving, multi-agent-systems, multimodal-llm-apps, prompt-reasoning-techniques, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, self-hosting-llm-inference, system-prompt-design, what-is-mlops
+- 이 글로 오는 글 ←: agent-memory, agent-reasoning-patterns, agent-tool-design, agentic-rag, context-engineering, embedding-models-applications, explainable-ai-shap-lime, fine-tuning-vs-rag-vs-prompting, llm-api-integration, llm-app-security-guardrails, llm-basics-for-developers, llm-model-selection, llm-observability, ml-fundamentals, ml-model-evaluation, ml-model-monitoring-drift, ml-pipelines-ci-cd, model-serving, multi-agent-systems, multimodal-llm-apps, prompt-reasoning-techniques, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, self-hosting-llm-inference, system-prompt-design, what-is-mlops
 
 #### `llm-observability` — LLM 관측성: 프롬프트, 도구 호출, 토큰 비용을 trace로 남기기
 
@@ -332,7 +332,7 @@
 - 소제목: 데이터를 밖으로 보낼 수 없을 때 / 모델은 Hugging Face Hub에서 고른다 / 노트북의 Ollama와 서버의 vLLM은 하는 일이 다르다 / GPU 메모리는 가중치와 KV 캐시로 나뉜다 / 4비트로 줄이면 무엇을 잃나 / 한 요청씩 처리하면 GPU가 논다 / 동시 사용자와 지연은 맞바꾼다 / OpenAI 호환 엔드포인트로 연다 / API보다 싸지는 지점 / 아주 작은 모델은 브라우저에서 돌린다 / 직접 띄운 서버에서 받는 제보 / 직접 띄운다는 건 GPU 메모리를 관리하는 일이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-basics-for-developers, llm-api-integration, llm-evals, k8s-gpu-dra, multimodal-llm-apps
 - 키워드 백링크 →: system-prompt-design, api-scaling-ladder, load-testing-k6, transformer-attention-kv-cache, osi-in-practice, fine-tuning-vs-rag-vs-prompting, rag-classic-pipeline, vector-db
-- 이 글로 오는 글 ←: deep-learning-basics, embedding-models-applications, fine-tuning-vs-rag-vs-prompting, geohash, http-streaming-sse, llm-basics-for-developers, llm-model-selection, model-serving, multimodal-llm-apps, transformer-attention-kv-cache
+- 이 글로 오는 글 ←: deep-learning-basics, edge-ai-on-device, embedding-models-applications, fine-tuning-vs-rag-vs-prompting, geohash, http-streaming-sse, llm-basics-for-developers, llm-model-selection, model-serving, multimodal-llm-apps, transformer-attention-kv-cache
 
 ### Programming › AI › Machine Learning (`programming/ai/machine-learning`)
 
@@ -345,7 +345,7 @@
 - 소제목: 규칙을 적는 대신 숫자를 고친다 / 한 바퀴: 순전파, 손실, 역전파, 갱신 / 같은 반복을 수백 번 하면 / 걸음 크기: 학습률 / 한 번에 몇 장 보고 고칠까: 배치 크기 / 몇 바퀴 돌까: 에폭과 멈출 때 / 깊이 쌓으면 앞쪽 층이 안 배운다: 기울기 소실 / SGD 대신 Adam을 많이 쓰는 이유 / 같은 코드를 PyTorch로 / GPU가 빠른 이유는 행렬 곱이다 / 학습은 추론보다 메모리를 훨씬 많이 먹는다 / 16비트로 학습하기: 혼합 정밀도 / PyTorch와 TensorFlow는 어디가 다른가 / 다시 반복문 하나로 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-basics-for-developers, transformer-attention-kv-cache, k8s-gpu-dra, fine-tuning-vs-rag-vs-prompting, model-serving, floating-point-numbers, what-is-mlops, explainable-ai-shap-lime
 - 키워드 백링크 →: n-plus-one-queries, ml-experiment-tracking, ml-fundamentals, postgres-architecture, self-hosting-llm-inference, cpu-pipelining-branch-prediction, db-modeling-normalization
-- 이 글로 오는 글 ←: explainable-ai-shap-lime, ml-fundamentals, model-serving, what-is-mlops
+- 이 글로 오는 글 ←: edge-ai-on-device, explainable-ai-shap-lime, ml-fundamentals, model-serving, what-is-mlops
 
 #### `explainable-ai-shap-lime` — 모델 설명하기: SHAP과 LIME은 예측을 어떻게 쪼개나
 
@@ -377,9 +377,20 @@
 - 길이: 334줄
 - 소제목: 네 칸짜리 표로 다시 센다 / 문턱값을 옮기면 두 숫자가 시소를 탄다 / ROC 곡선과 AUC는 순서를 잰다 / 드문 쪽이 중요하면 PR 곡선을 본다 / 점수를 확률로 믿어도 되나 / 회귀는 오차의 모양을 본다 / 한 번 나눈 점수는 운이다 / 오프라인 점수와 서비스 지표가 어긋나는 이유 / 지표를 고르는 순서 / 숫자 하나로 모델을 말하지 않는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ml-fundamentals, llm-evals, ab-testing
-- 이 글로 오는 글 ←: llm-app-security-guardrails, ml-experiment-tracking, ml-fundamentals, ml-model-monitoring-drift
+- 이 글로 오는 글 ←: llm-app-security-guardrails, ml-experiment-tracking, ml-fundamentals, ml-model-monitoring-drift, ml-pipelines-ci-cd
 
 ### Programming › AI › MLOps (`programming/ai/mlops`)
+
+#### `edge-ai-on-device` — 엣지 AI: 모델을 기기 안에서 돌리기, 양자화와 경량 런타임
+
+- 요약: 서버 왕복 때문에 느리고 집 안 화면을 보낸다는 불만을 받은 카메라 앱에서 시작해, 기기 추론과 서버 추론의 선택 기준, ONNX Runtime으로 잰 INT8 양자화의 크기와 정확도, 영점이 있는 양자화와 이상치, 가지치기와 지식 증류를 직접 돌려 본다. LiteRT·ExecuTorch·ONNX Runtime, Jetson과 TensorRT, 흩어진 기기 모델의 배포와 관측까지 다룬다.
+- 태그: AI, Machine Learning, Performance, Python
+- 키워드: 엣지 AI, 온디바이스 추론, ONNX Runtime, ExecuTorch
+- 길이: 292줄
+- 소제목: 기기에서 돌릴까, 서버에 둘까 / 모델 크기는 파라미터 수 × 바이트 / 양자화는 범위를 256칸으로 나누는 일 / 덜 중요한 가중치를 지운다: 가지치기 / 큰 모델이 작은 모델을 가르친다: 지식 증류 / 런타임: 같은 모델을 기기마다 다른 칩으로 / 엣지 가속기: Jetson 같은 보드 / 흩어진 모델을 배포하고 지켜보기 / 작게 만들고, 기기마다 재고, 되돌릴 길을 둔다 / 면접에서 나올 만한 질문
+- 직접 링크 →: self-hosting-llm-inference, model-serving, deep-learning-basics, fine-tuning-vs-rag-vs-prompting, canary-release, feature-flags, ml-model-monitoring-drift, ml-experiment-tracking, ml-pipelines-ci-cd
+- 키워드 백링크 →: llm-basics-for-developers, animation-performance
+- 이 글로 오는 글 ←: ml-pipelines-ci-cd, model-serving
 
 #### `ml-experiment-tracking` — 실험 추적과 모델 레지스트리: 어느 데이터로 학습한 모델인가
 
@@ -388,9 +399,9 @@
 - 키워드: 실험 추적, MLflow, DVC, 모델 레지스트리
 - 길이: 422줄
 - 소제목: 같은 코드, 같은 데이터인데 숫자가 다르다 / 실행마다 무엇을 남기나: MLflow 기록 / 큰 데이터는 Git 밖에, 버전은 Git 안에: DVC / 네 가지를 한 줄로 묶는다 / 운영에 나간 모델에 이름표를 붙인다: 모델 레지스트리 / 기록을 남기고도 재현이 안 되는 경우 / 다시 만들 수 있어야 고칠 수 있다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ml-model-evaluation, git-large-files-secrets, canary-release, ml-model-monitoring-drift
+- 직접 링크 →: ml-model-evaluation, git-large-files-secrets, ml-pipelines-ci-cd, canary-release, ml-model-monitoring-drift
 - 키워드 백링크 →: ab-testing, floating-point-numbers, long-polling, git-staging-area, cloud-service-models-shared-responsibility
-- 이 글로 오는 글 ←: deep-learning-basics, ml-model-monitoring-drift, model-serving, what-is-mlops
+- 이 글로 오는 글 ←: data-catalog-lineage, deep-learning-basics, edge-ai-on-device, ml-model-monitoring-drift, ml-pipelines-ci-cd, model-serving, what-is-mlops
 
 #### `ml-model-monitoring-drift` — 모델 모니터링: 데이터 드리프트, 개념 드리프트, 늦게 오는 정답
 
@@ -399,9 +410,20 @@
 - 키워드: 데이터 드리프트, 개념 드리프트, 모집단 안정성 지수, 모델 모니터링
 - 길이: 407줄
 - 소제목: 서버가 멀쩡해도 모델은 틀릴 수 있다 / 무엇이 바뀌었는지부터 나눈다 / 드리프트보다 먼저 보는 데이터 품질 / 분포를 숫자 하나로 비교하기: PSI / KS 검정은 표본이 크면 뭐든 잡는다 / 입력은 그대로인데 성능이 떨어진다 / 정답이 늦게 오면 기록부터 남긴다 / 정답 없이 버티는 대리 지표 / Prometheus에 모델 지표를 올린다 / 경보는 몇 번 울려야 믿을 수 있나 / 경보가 울린 다음에 하는 일 / 붙이고 나서 자주 하는 실수 / 모델은 배포한 날부터 낡는다 / 면접에서 나올 만한 질문
-- 직접 링크 →: ml-model-evaluation, ml-fundamentals, observability-basics, explainable-ai-shap-lime, prometheus-basics, metrics-types, alerting, canary-release, ml-experiment-tracking, llm-observability
-- 키워드 백링크 →: model-serving, data-warehouse-architecture, llm-evals, linux-performance-triage, vector-db
-- 이 글로 오는 글 ←: ml-experiment-tracking
+- 직접 링크 →: ml-model-evaluation, ml-fundamentals, observability-basics, model-serving, explainable-ai-shap-lime, prometheus-basics, metrics-types, alerting, canary-release, ml-pipelines-ci-cd, ml-experiment-tracking, llm-observability
+- 키워드 백링크 →: data-quality-checks, data-warehouse-architecture, llm-evals, linux-performance-triage, vector-db
+- 이 글로 오는 글 ←: edge-ai-on-device, ml-experiment-tracking, ml-pipelines-ci-cd
+
+#### `ml-pipelines-ci-cd` — ML 파이프라인과 CI/CD: 학습을 자동으로 다시 돌리고 안전하게 배포하기
+
+- 요약: 손으로 돌리던 재학습이 신규 사용자 행이 빠진 데이터로 전체 AUC만 올린 모델을 내보낸 장면에서 시작해, 데이터 검증부터 배포까지 단계를 나누고 코드·데이터·모델을 따로 시험한다. 구간별 승격 관문과 pytest 행동 테스트, PR마다 지표 차이를 붙이는 CML, Kubeflow Pipelines와 Airflow, 재학습 주기, 지속 학습을 자동 배포까지 잇는 위험을 다룬다.
+- 태그: AI, Machine Learning, CI/CD, Python, Testing
+- 키워드: ML 파이프라인, CML, Kubeflow Pipelines, 승격 관문
+- 길이: 359줄
+- 소제목: 노트북 한 권을 단계로 쪼갠다 / ML의 CI는 코드, 데이터, 모델을 따로 시험한다 / 전체 AUC가 올랐는데 내보내면 안 되는 모델 / PR마다 학습 결과를 붙인다: CML / 학습 파이프라인을 돌리는 곳: Kubeflow Pipelines와 Airflow / 배포 단계는 서빙 방식에 따라 다르다 / 언제 다시 학습하나: 일정과 드리프트 / 지속 학습이 자동 배포까지 가면 위험한 이유 / 파이프라인을 만들고 나서 흔한 실수 / 자동화할수록 관문이 중요해진다 / 면접에서 나올 만한 질문
+- 직접 링크 →: ml-experiment-tracking, ml-model-monitoring-drift, ci-cd-basics, what-is-mlops, test-pyramid-unit-tests, github-actions-workflows, airflow-orchestration, canary-release, blue-green-deployment, model-serving, edge-ai-on-device
+- 키워드 백링크 →: data-quality-checks, github-actions-docker-ecr, data-orchestrators-comparison, smoke-sanity-regression-testing, sd-object-storage-architecture, ml-model-evaluation, llm-evals, code-review-practices, etl-vs-elt, zero-downtime-migrations
+- 이 글로 오는 글 ←: edge-ai-on-device, ml-experiment-tracking, ml-model-monitoring-drift, what-is-mlops
 
 #### `model-serving` — 모델 서빙: 배치 추론과 온라인 추론, 학습-서빙 차이, 배포 전략
 
@@ -411,8 +433,8 @@
 - 길이: 406줄
 - 소제목: 같은 모델이 서빙에서만 틀리는 이유 / 밤에 한꺼번에 할까, 요청마다 할까 / 요청 한 건이 지나가는 길 / FastAPI로 감싸기 / 묶어서 계산하면 싸진다: 동적 배칭 / 전용 추론 서버가 대신 해 주는 것 / 학습과 서빙에 같은 특징을 주는 곳 / 새 모델은 그림자부터 내보낸다 / 실시간 추론이 느릴 때 보는 곳 / 관리형 ML 서비스는 어디까지 맡아 주나 / 서빙은 학습의 연장이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-is-mlops, self-hosting-llm-inference, fastapi-basics, deep-learning-basics, canary-release, ab-testing, explainable-ai-shap-lime
-- 키워드 백링크 →: dbt-transformations, observability-basics, data-warehouse-architecture, ml-experiment-tracking, db-type-key-value, docker-container-basics, airflow-orchestration, ml-fundamentals, cold-starts, autoscaling, event-loop, llm-evals, cloud-deployment-models-multicloud, input-validation-secure-coding, code-review-practices, distributed-tracing, kafka-basics, redis-basics, grpc, db-modeling-normalization, dns, fine-tuning-vs-rag-vs-prompting
-- 이 글로 오는 글 ←: backend-language-comparison, deep-learning-basics, explainable-ai-shap-lime, ml-model-monitoring-drift, what-is-mlops
+- 키워드 백링크 →: dbt-transformations, observability-basics, edge-ai-on-device, data-warehouse-architecture, ml-experiment-tracking, db-type-key-value, docker-container-basics, airflow-orchestration, ml-fundamentals, cold-starts, autoscaling, event-loop, llm-evals, cloud-deployment-models-multicloud, input-validation-secure-coding, code-review-practices, distributed-tracing, kafka-basics, redis-basics, grpc, db-modeling-normalization, dns, fine-tuning-vs-rag-vs-prompting
+- 이 글로 오는 글 ←: backend-language-comparison, deep-learning-basics, edge-ai-on-device, explainable-ai-shap-lime, ml-model-monitoring-drift, ml-pipelines-ci-cd, what-is-mlops
 
 #### `what-is-mlops` — MLOps: 코드와 데이터 둘 다 바뀌는 시스템을 운영하기
 
@@ -422,8 +444,8 @@
 - 길이: 412줄
 - 소제목: 같은 코드로 다른 모델이 나온다 / 코드, 데이터, 모델: 바뀌는 축이 셋이다 / 모델 코드는 전체의 작은 상자 하나다 / MLOps가 지키려는 것 / 구성 요소는 고리로 이어진다 / 손작업에서 자동 재학습까지: 성숙도 0~2 / 재학습 한 바퀴를 따라가 보기 / 다시 만들 수 있으려면 무엇을 남기나 / 데이터가 깨져도 정확도는 멀쩡하다 / 새 모델이 운영에 들어갈 자격 / 도구 없이 시작하는 최소 구성 / DevOps를 하던 팀이 처음 겪는 것 / 플랫폼을 사기 전에 확인할 것 / 세 축을 기록하고, 관문을 세우고, 고리를 닫는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: deep-learning-basics, model-serving, explainable-ai-shap-lime, data-lake-hdfs, airflow-orchestration, canary-release, k8s-gpu-dra, llm-evals
-- 키워드 백링크 →: ml-experiment-tracking, docker-container-basics, bash-scripting, sd-object-storage-architecture, ci-cd-basics, cloud-service-models-shared-responsibility
-- 이 글로 오는 글 ←: deep-learning-basics, explainable-ai-shap-lime, model-serving
+- 키워드 백링크 →: data-quality-checks, ml-pipelines-ci-cd, ml-experiment-tracking, docker-container-basics, bash-scripting, sd-object-storage-architecture, ci-cd-basics, cloud-service-models-shared-responsibility
+- 이 글로 오는 글 ←: data-catalog-lineage, deep-learning-basics, explainable-ai-shap-lime, ml-pipelines-ci-cd, model-serving
 
 ### Programming › AI › Prompt Engineering (`programming/ai/prompt-engineering`)
 
@@ -539,7 +561,7 @@
 - 소제목: 몇 초가 아니라 늘어나는 모양을 센다 / 상수와 작은 항을 버리는 이유 / 자주 만나는 모양들 / n이 백만이 되면 / 운이 좋을 때와 나쁠 때 / O는 최악이라는 뜻이 아니다 / 가끔 비싼 연산은 나눠서 센다 / 메모리도 같은 방식으로 센다 / 이중 반복문을 해시맵 하나로 / 정렬해 두면 log n으로 찾는다 / 자바스크립트에 숨은 반복문 / 운영에서 n²은 이런 모양으로 드러난다 / 다시 주문 걸러내기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: binary-search, sql-query-rewrite
 - 키워드 백링크 →: nodejs-debugging-profiling, ds-binary-tree-bst, sorting-algorithms, js-execution-context, ds-hash-map, js-memoization, sql-filtering-operators, event-loop, regex-and-globbing, ds-array-matrix
-- 이 글로 오는 글 ←: algorithms-overview, binary-search, complexity-classes-p-np, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, greedy-algorithms, js-memoization, leetcode-binary-search, leetcode-climbing-stairs, leetcode-daily-temperatures, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-group-anagrams, leetcode-largest-rectangle-in-histogram, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-n-queens, leetcode-pacific-atlantic-water-flow, leetcode-search-in-rotated-sorted-array, leetcode-study-guide, leetcode-subsets, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-search, monotonic-stack-pattern, recursion-backtracking, regex-and-globbing, sliding-window-pattern, sorting-algorithms, string-search-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, binary-search, complexity-classes-p-np, data-structures-overview, ds-array-matrix, ds-hash-map, ds-linked-list, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, greedy-algorithms, js-memoization, leetcode-binary-search, leetcode-climbing-stairs, leetcode-daily-temperatures, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-group-anagrams, leetcode-largest-rectangle-in-histogram, leetcode-longest-consecutive-sequence, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-n-queens, leetcode-pacific-atlantic-water-flow, leetcode-search-in-rotated-sorted-array, leetcode-sort-colors, leetcode-study-guide, leetcode-subsets, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-search, monotonic-stack-pattern, recursion-backtracking, regex-and-globbing, sliding-window-pattern, sorting-algorithms, string-search-algorithms
 
 #### `complexity-classes-p-np` — P와 NP: 빨리 풀 수 없다는 걸 어떻게 아나
 
@@ -585,7 +607,7 @@
 - 소제목: 칸이 붙어 있어서 인덱스가 공짜다 / 자리가 모자라면 더 큰 방으로 옮긴다 / 자바스크립트 배열은 속이 여러 가지다 / 미리 자리를 잡으면 빨라질까 / 양 끝에서 좁혀 오는 두 포인터 / 창을 밀면서 세기 / 미리 더해 두면 구간 합이 뺄셈 한 번 / 2차원도 메모리에서는 한 줄이다 / 행렬을 제자리에서 돌리기 / 배열 코드에서 반복해서 나오는 실수 / 배열이 아닌 걸 골라야 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-linked-list, ds-stack-queue-deque, js-array-mutation, big-o-notation, ds-hash-map, js-primitive-vs-reference, ds-heap, ds-binary-tree-bst, data-structures-overview
 - 키워드 백링크 →: cpu-cache-hierarchy, js-prototype-chain, sliding-window-pattern, two-pointers-pattern, segment-tree-fenwick, js-memoization
-- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, cpu-cache-hierarchy, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque, greedy-algorithms, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-container-with-most-water, leetcode-gas-station, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-longest-common-subsequence, leetcode-lowest-common-ancestor-of-bst, leetcode-merge-intervals, leetcode-minimum-window-substring, leetcode-reorder-list, leetcode-rotate-image, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-two-sum-ii, leetcode-valid-palindrome, leetcode-valid-parentheses, segment-tree-fenwick, sliding-window-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, cpu-cache-hierarchy, data-structures-overview, ds-hash-map, ds-linked-list, ds-stack-queue-deque, greedy-algorithms, interval-problems-pattern, leetcode-best-time-to-buy-and-sell-stock, leetcode-container-with-most-water, leetcode-fruit-into-baskets, leetcode-gas-station, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-longest-common-subsequence, leetcode-lowest-common-ancestor-of-bst, leetcode-merge-intervals, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-move-zeroes, leetcode-product-of-array-except-self, leetcode-remove-duplicates-from-sorted-array, leetcode-reorder-list, leetcode-rotate-image, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-two-sum-ii, leetcode-valid-palindrome, leetcode-valid-parentheses, segment-tree-fenwick, sliding-window-pattern, two-pointers-pattern
 
 #### `ds-binary-tree-bst` — 이진 트리와 이진 탐색 트리: 순회, 지우기, 기울어진 트리
 
@@ -596,7 +618,7 @@
 - 소제목: 노드 하나에 자식 두 개 / 왼쪽은 작고 오른쪽은 크다 / 네 가지 순서로 훑기 / 재귀는 깊이만큼 스택을 먹는다 / 지우기는 자식 수에 따라 세 갈래 / 정렬된 키를 넣으면 리스트가 된다 / BST가 맞는지 검증하기 / 두 노드의 가장 가까운 공통 조상 / 트리를 꺼낼 때와 넣어 둘 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-hash-map, ds-heap, data-structures-overview, ds-graph-bfs-dfs, dom-basics, ds-stack-queue-deque, db-index, sd-leaderboard-sorted-set
 - 키워드 백링크 →: balanced-search-trees, cpu-instruction-cycle, page-cache-disk-io, ds-linked-list, redis-basics
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, cpu-scheduling-interrupts, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie, leetcode-binary-tree-level-order-traversal, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-house-robber, leetcode-insert-interval, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-non-overlapping-intervals, leetcode-serialize-and-deserialize-binary-tree, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-two-sum-ii, recursion-backtracking, segment-tree-fenwick
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, cpu-scheduling-interrupts, data-structures-overview, ds-array-matrix, ds-hash-map, ds-heap, ds-trie, leetcode-binary-tree-level-order-traversal, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-generate-parentheses, leetcode-house-robber, leetcode-insert-interval, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-non-overlapping-intervals, leetcode-serialize-and-deserialize-binary-tree, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-two-sum-ii, recursion-backtracking, segment-tree-fenwick
 
 #### `ds-graph-bfs-dfs` — 그래프와 BFS·DFS: 최단 경로, 사이클, 위상 정렬
 
@@ -607,7 +629,7 @@
 - 소제목: 점과 선을 메모리에 담는 두 방법 / 가까운 것부터 한 겹씩 넓히는 BFS / 한 갈래를 끝까지 가 보는 DFS / 재귀는 수천 단계에서 끊긴다 / 방향 그래프에서 고리 찾기 / 먼저 할 일부터 줄 세우기 / 선수 과목을 다 들을 수 있나 / 격자도 그래프다 / 선에 무게가 붙으면 BFS가 틀린다 / 문제를 보고 탐색을 고르는 법 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-trie, ds-union-find, data-structures-overview, ds-stack-queue-deque, ds-heap, sd-maps-tiles-routing, db-type-graph
 - 키워드 백링크 →: shortest-path-algorithms, linters-formatters, dom-basics, binary-search, recursion-backtracking, js-closures
-- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, db-type-graph, dbt-transformations, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, frontend-frameworks-compared, graph-rag, greedy-algorithms, leetcode-binary-tree-level-order-traversal, leetcode-cheapest-flights-within-k-stops, leetcode-clone-graph, leetcode-coin-change, leetcode-course-schedule, leetcode-design-add-and-search-words, leetcode-generate-parentheses, leetcode-jump-game, leetcode-jump-game-ii, leetcode-maximum-depth-of-binary-tree, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-study-guide, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, max-flow-bipartite-matching, modular-monolith, npm-package-publishing, pattern-composite, plugin-microkernel-architecture, react-fiber-render-commit, recursion-backtracking, sd-maps-tiles-routing, sd-web-crawler-architecture, shortest-path-algorithms, sql-cte-recursive, sqld-top-n-hierarchical-pivot
+- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-catalog-lineage, data-structures-overview, db-type-graph, dbt-transformations, ds-binary-tree-bst, ds-heap, ds-stack-queue-deque, ds-trie, ds-union-find, dynamic-programming, frontend-frameworks-compared, graph-rag, greedy-algorithms, leetcode-binary-tree-level-order-traversal, leetcode-cheapest-flights-within-k-stops, leetcode-clone-graph, leetcode-coin-change, leetcode-course-schedule, leetcode-design-add-and-search-words, leetcode-generate-parentheses, leetcode-jump-game, leetcode-jump-game-ii, leetcode-maximum-depth-of-binary-tree, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-number-of-islands, leetcode-pacific-atlantic-water-flow, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-study-guide, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, max-flow-bipartite-matching, modular-monolith, npm-package-publishing, pattern-composite, plugin-microkernel-architecture, react-fiber-render-commit, recursion-backtracking, sd-maps-tiles-routing, sd-web-crawler-architecture, shortest-path-algorithms, sql-cte-recursive, sqld-top-n-hierarchical-pivot
 
 #### `ds-hash-map` — 해시맵: 키를 칸 번호로 바꾸는 구조와 O(1)이 깨지는 순간
 
@@ -618,7 +640,7 @@
 - 소제목: 키를 칸 번호로 바꾸는 함수 / 같은 칸에 두 키가 떨어지면 / 얼마나 채우면 느려지나 / 객체와 Map은 같은 해시가 아니다 / 면접 단골 문제를 해시로 풀기 / 일부러 충돌을 만드는 공격 / 해시가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, ds-stack-queue-deque, ds-binary-tree-bst, ds-heap, data-structures-overview, js-object-methods, js-memoization, ds-trie, bloom-filter, consistent-hashing
 - 키워드 백링크 →: js-equality-coercion, db-index, sd-latency-numbers, db-sharding, event-loop, two-pointers-pattern, big-o-notation
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, bloom-filter, cpu-cache-hierarchy, cpu-instruction-cycle, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, js-map-set-weak, k8s-kube-proxy-modes, leetcode-3sum, leetcode-binary-tree-maximum-path-sum, leetcode-contains-duplicate, leetcode-daily-temperatures, leetcode-group-anagrams, leetcode-happy-number, leetcode-implement-trie, leetcode-linked-list-cycle, leetcode-longest-substring-without-repeating, leetcode-partition-labels, leetcode-single-number, leetcode-study-guide, leetcode-two-sum, leetcode-two-sum-ii, lossy-counting, postgres-operations, postgres-query-planner, randomized-algorithms, redis-basics, redis-high-throughput, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, shell-environment-startup, sql-query-tuning, sqld-joins, string-search-algorithms, valkey-vs-redis, virtual-memory-paging
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, binary-search, bloom-filter, cpu-cache-hierarchy, cpu-instruction-cycle, data-structures-overview, db-type-key-value, db-type-relational, ds-array-matrix, ds-binary-tree-bst, ds-heap, ds-trie, ds-union-find, hyperloglog, iptables-nat, js-map-set-weak, k8s-kube-proxy-modes, leetcode-3sum, leetcode-binary-tree-maximum-path-sum, leetcode-contains-duplicate, leetcode-daily-temperatures, leetcode-group-anagrams, leetcode-happy-number, leetcode-implement-trie, leetcode-linked-list-cycle, leetcode-longest-consecutive-sequence, leetcode-longest-substring-without-repeating, leetcode-partition-labels, leetcode-single-number, leetcode-study-guide, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-sudoku, lossy-counting, postgres-operations, postgres-query-planner, randomized-algorithms, redis-basics, redis-high-throughput, redis-memory-eviction, sd-kv-store-partition-replication, sd-leaderboard-sorted-set, sd-news-feed-retrieval, shell-environment-startup, sql-query-tuning, sqld-joins, string-search-algorithms, valkey-vs-redis, virtual-memory-paging
 
 #### `ds-heap` — 힙과 우선순위 큐: 배열 하나로 가장 작은 것 꺼내기
 
@@ -640,7 +662,7 @@
 - 소제목: 노드가 다음 노드의 주소를 들고 있다 / 화살표를 돌리기 전에 다음 노드를 잡아 둔다 / 두 배로 달리는 포인터 / 고리가 있는지 메모리 없이 알아내기 / 정렬된 두 줄을 하나로 합치기 / 자바스크립트에서 연결 리스트를 잘 안 쓰는 이유 / 해시맵이 노드를 가리킬 때: LRU 캐시 / React 안에도 연결 리스트가 있다 / 연결 리스트 코드에서 자주 나는 실수 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, ds-stack-queue-deque, thread-safety, ds-heap, garbage-collection, caching-strategies, redis-memory-eviction, react-rerender, js-memory-leak
 - 키워드 백링크 →: js-memoization, big-o-notation, cpu-cache-hierarchy, sorting-algorithms, js-array-mutation, redis-basics
-- 이 글로 오는 글 ←: balanced-search-trees, caching-concepts-map, caching-strategies, cpu-cache-hierarchy, cpu-pipelining-branch-prediction, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-stack-queue-deque, ds-union-find, js-array-mutation, leetcode-binary-tree-level-order-traversal, leetcode-clone-graph, leetcode-contains-duplicate, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-lowest-common-ancestor-of-bst, leetcode-median-of-two-sorted-arrays, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-min-stack, leetcode-reorder-list, leetcode-reverse-linked-list, leetcode-study-guide, leetcode-sum-of-two-integers, leetcode-top-k-frequent-elements, leetcode-valid-palindrome, pattern-chain-of-responsibility, react-custom-hooks-rules, react-fiber-render-commit, react-reconciliation-keys, redis-basics, redis-memory-eviction, sd-leaderboard-sorted-set, sd-stock-exchange-order-book, sorting-algorithms, thread-safety, two-pointers-pattern
+- 이 글로 오는 글 ←: balanced-search-trees, caching-concepts-map, caching-strategies, cpu-cache-hierarchy, cpu-pipelining-branch-prediction, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-stack-queue-deque, ds-union-find, js-array-mutation, leetcode-binary-tree-level-order-traversal, leetcode-clone-graph, leetcode-contains-duplicate, leetcode-happy-number, leetcode-linked-list-cycle, leetcode-lowest-common-ancestor-of-bst, leetcode-median-of-two-sorted-arrays, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-min-stack, leetcode-remove-duplicates-from-sorted-array, leetcode-reorder-list, leetcode-reverse-linked-list, leetcode-sort-colors, leetcode-study-guide, leetcode-sum-of-two-integers, leetcode-top-k-frequent-elements, leetcode-valid-palindrome, pattern-chain-of-responsibility, react-custom-hooks-rules, react-fiber-render-commit, react-reconciliation-keys, redis-basics, redis-memory-eviction, sd-leaderboard-sorted-set, sd-stock-exchange-order-book, sorting-algorithms, thread-safety, two-pointers-pattern
 
 #### `ds-stack-queue-deque` — 스택, 큐, 덱: 끝에서만 넣고 빼는 구조
 
@@ -651,7 +673,7 @@
 - 소제목: 마지막에 넣은 것이 먼저 나온다 / 쌓인 것을 정리하며 쌓는 단조 스택 / 먼저 온 것이 먼저 나간다 / 너비 우선 탐색이 큐를 쓰는 이유 / 양쪽 끝이 다 열린 덱과 링 버퍼 / 창 안의 최댓값을 덱으로 따라가기 / React의 상태 업데이트도 큐에 쌓인다 / 큐가 쌓이기만 할 때 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, ds-array-matrix, ds-linked-list, js-execution-context, pattern-command, big-o-notation, message-queue-basics, event-loop, ds-graph-bfs-dfs, sd-stock-exchange-low-latency, react-rerender, backpressure, ds-heap, data-structures-overview
 - 키워드 백링크 →: sliding-window-pattern, sd-latency-numbers, centralized-logging-pipeline, js-memory-leak
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-partition-labels, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern, shortest-path-algorithms, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-array-matrix, ds-binary-tree-bst, ds-graph-bfs-dfs, ds-hash-map, ds-linked-list, leetcode-car-fleet, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-partition-labels, leetcode-sliding-window-maximum, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern, shortest-path-algorithms, two-pointers-pattern
 
 #### `ds-trie` — 트라이: 접두사를 길로 바꾸는 자료구조
 
@@ -673,7 +695,7 @@
 - 소제목: 배열 하나로 숲을 만든다 / 한 줄로 늘어진 나무 / 작은 나무를 큰 나무 밑에 / 지나온 길을 대표에 바로 붙인다 / 둘을 합치면 사실상 상수 / 재귀 find가 죽는 순간 / 그룹이 몇 개 남았나 / 싼 선부터 고르는 크루스칼 / 고리를 만드는 첫 간선 / 유니온 파인드가 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-graph-bfs-dfs, data-structures-overview, ds-heap, ds-hash-map
 - 키워드 백링크 →: minimum-spanning-tree, ds-linked-list, big-o-notation
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, greedy-algorithms, leetcode-container-with-most-water, leetcode-course-schedule, leetcode-lowest-common-ancestor-of-bst, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-number-of-islands, leetcode-swim-in-rising-water, minimum-spanning-tree
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ds-graph-bfs-dfs, greedy-algorithms, leetcode-container-with-most-water, leetcode-course-schedule, leetcode-longest-consecutive-sequence, leetcode-lowest-common-ancestor-of-bst, leetcode-merge-intervals, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-number-of-islands, leetcode-swim-in-rising-water, minimum-spanning-tree
 
 #### `max-flow-bipartite-matching` — 최대 유량과 이분 매칭: 파이프에 얼마나 흘려보낼 수 있나
 
@@ -705,7 +727,7 @@
 - 소제목: 값 하나가 바뀌면 누적 합을 다시 만든다 / 구간을 반씩 나눠 미리 더해 둔다 / 묻는 구간을 노드 몇 개로 덮는다 / 값 하나 고치면 뿌리까지 log n개 / 배열 크기는 왜 4n인가 / 바닥부터 쌓는 반복문 세그먼트 트리 / 구간 전체에 더하기: 지연 전파 / 최하위 비트로 부모를 찾는 펜윅 트리 / 펜윅이 못 하는 질의 / 현장에서 쓰이는 곳 / 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-array-matrix, balanced-search-trees, ds-heap, ds-binary-tree-bst, sd-leaderboard-sorted-set
 - 키워드 백링크 →: sd-latency-numbers, sql-filtering-operators, db-type-time-series, redis-basics
-- 이 글로 오는 글 ←: balanced-search-trees, bit-manipulation, ds-array-matrix, interval-problems-pattern, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-longest-increasing-subsequence, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-sliding-window-maximum
+- 이 글로 오는 글 ←: balanced-search-trees, bit-manipulation, ds-array-matrix, interval-problems-pattern, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-longest-increasing-subsequence, leetcode-min-cost-to-connect-all-points, leetcode-minimum-interval-to-include-each-query, leetcode-product-of-array-except-self, leetcode-sliding-window-maximum
 
 #### `shortest-path-algorithms` — 최단 경로: 다익스트라, 벨만-포드, A*를 고르는 기준
 
@@ -740,7 +762,7 @@
 - 소제목: 행마다 다른 해시로 한 칸씩 더한다 / 너비는 ε, 깊이는 δ로 정한다 / 보수적 갱신은 필요한 만큼만 올린다 / 행끼리 독립이어야 한다 / Redis에서 쓰기 / 상위 k개는 힙을 붙여서 / Lossy Counting과 같은 데이터로 / 캐시가 CMS를 쓰는 방식 / 차단 규칙이 정상 사용자를 막을 때 / 표준 갱신과 보수적 갱신을 코드로 비교하기 / 더 세는 쪽으로만 틀리는 고정 크기 표 / 면접에서 나올 만한 질문
 - 직접 링크 →: lossy-counting, rate-limiting-algorithms, redis-memory-eviction, bloom-filter, hyperloglog
 - 키워드 백링크 →: redis-basics
-- 이 글로 오는 글 ←: bloom-filter, caching-strategies, css-performance, hydration, hyperloglog, leetcode-top-k-frequent-elements, lossy-counting, nextjs-caching-layers, nextjs-route-handlers-proxy, redis-modules-stack, rendering-ssg-isr, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, web-accessibility
+- 이 글로 오는 글 ←: bloom-filter, caching-strategies, css-performance, hydration, hyperloglog, icon-system-svg, leetcode-top-k-frequent-elements, lossy-counting, nextjs-caching-layers, nextjs-route-handlers-proxy, redis-modules-stack, rendering-ssg-isr, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, seo-redirects-site-migration, web-accessibility
 
 #### `crdt` — CRDT: 어떤 순서로 합쳐도 같아지는 자료형
 
@@ -773,7 +795,7 @@
 - 소제목: 동전을 몇 번 연속 뒷면이 나왔나 / 레지스터에 최댓값만 남긴다 / 평균은 조화 평균으로 낸다 / 오차가 정말 √m에 반비례하나 / 아주 적을 때와 아주 많을 때 / Redis에서 세기 / Set과 나란히 놓고 재 보기 / 교집합은 잘 못 센다 / 다른 방법과 고르는 기준 / 정수 ID라면 비트맵으로 정확히 센다 / 레지스터와 조화 평균을 코드로 / 숫자가 이상할 때 의심할 것 / 12KB로 세는 대신 포기하는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: bloom-filter, bit-manipulation, lossy-counting, count-min-sketch
 - 키워드 백링크 →: ds-hash-map, redis-basics, cookie-session-login, shells-posix-compat
-- 이 글로 오는 글 ←: bloom-filter, count-min-sketch, elasticsearch-aggregations, lossy-counting, olap-star-schema, password-attacks-credential-stuffing, randomized-algorithms, redis-high-throughput, sd-ad-click-exactly-once, sd-autocomplete-data-pipeline
+- 이 글로 오는 글 ←: bi-semantic-layer, bloom-filter, count-min-sketch, elasticsearch-aggregations, lossy-counting, olap-star-schema, password-attacks-credential-stuffing, randomized-algorithms, redis-high-throughput, sd-ad-click-exactly-once, sd-autocomplete-data-pipeline
 
 #### `lossy-counting` — Lossy Counting: 덜 세는 대신 빠짐없이 인기 항목 찾기
 
@@ -863,7 +885,7 @@
 - 소제목: LeetCode에서 무엇을 연습하나 / 번호 순서 대신 패턴 순서로 / 어떤 언어로 풀까 / 한 문제를 푸는 여섯 단계 / 막혔을 때 / 복습은 간격을 늘려 가며 / 면접장에서 말하며 풀기 / 얼마나 풀어야 하나 / 면접에서 나올 만한 질문
 - 직접 링크 →: algorithms-overview, big-o-notation, two-pointers-pattern, sliding-window-pattern, monotonic-stack-pattern, leetcode-two-sum, ds-hash-map, binary-search, ds-linked-list, ds-binary-tree-bst, ds-trie, ds-heap, recursion-backtracking, dynamic-programming, ds-graph-bfs-dfs, shortest-path-algorithms, minimum-spanning-tree, greedy-algorithms, interval-problems-pattern, bit-manipulation
 - 키워드 백링크 →: js-numbers-bigint, sql-aggregation-pitfalls, sd-maps-tiles-routing, js-array-mutation
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-binary-search, leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-climbing-stairs, leetcode-find-minimum-in-rotated-sorted-array, leetcode-koko-eating-bananas, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-median-of-two-sorted-arrays, leetcode-search-in-rotated-sorted-array, leetcode-serialize-and-deserialize-binary-tree, leetcode-two-sum, monotonic-stack-pattern, sliding-window-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-binary-search, leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-climbing-stairs, leetcode-find-minimum-in-rotated-sorted-array, leetcode-koko-eating-bananas, leetcode-lowest-common-ancestor-of-bst, leetcode-maximum-depth-of-binary-tree, leetcode-median-of-two-sorted-arrays, leetcode-product-of-array-except-self, leetcode-search-in-rotated-sorted-array, leetcode-serialize-and-deserialize-binary-tree, leetcode-two-sum, monotonic-stack-pattern, sliding-window-pattern, two-pointers-pattern
 
 ### Programming › Algorithms › LeetCode › 1-D DP (`programming/algorithms/leetcode/dp-1d`)
 
@@ -907,7 +929,7 @@
 - 소제목: 순서를 지키며 점점 커지게 고르기 / 여덟 장의 카드로 손으로 찾기 / 모든 부분 수열을 다 본다 / 고를지 말지를 재귀로 정한다 / (지금 위치, 마지막으로 고른 위치)를 적어 둔다 / 이 원소로 끝나는 가장 긴 줄 / 길이마다 가장 작은 끝값만 남긴다 / 값 순서대로 최댓값을 묻는 나무 / 정렬한 배열과의 최장 공통 부분 수열 / Python과 Java로 옮길 때 / 일곱 풀이를 나란히 놓으면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dynamic-programming, leetcode-climbing-stairs, leetcode-house-robber, leetcode-coin-change, leetcode-word-break, binary-search, leetcode-binary-search, bit-manipulation, leetcode-longest-common-subsequence
 - 키워드 백링크 →: segment-tree-fenwick
-- 이 글로 오는 글 ←: leetcode-house-robber, leetcode-longest-common-subsequence, leetcode-non-overlapping-intervals
+- 이 글로 오는 글 ←: leetcode-house-robber, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-non-overlapping-intervals
 
 #### `leetcode-word-break` — LeetCode 139. Word Break: 칸막이 자리마다 나눌 수 있는지 적는다
 
@@ -1043,7 +1065,7 @@
 - 소제목: 같은 값이 두 번 나오는지만 본다 / 손으로 해 보면 무엇을 기억하게 되나 / 모든 쌍을 비교하는 풀이 / 정렬하면 같은 값이 옆에 붙는다 / 본 값을 집합에 적어 두기 / 집합 크기를 세는 한 줄 풀이 / Python과 Java로 옮기기 / 네 풀이를 재 보면 / 헷갈리기 쉬운 입력과 실수 / 직접 풀어 보기 / 범위가 붙으면 문제가 달라진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-two-sum, ds-hash-map, sliding-window-pattern, leetcode-valid-anagram, leetcode-top-k-frequent-elements, leetcode-group-anagrams, leetcode-linked-list-cycle
 - 키워드 백링크 →: ds-binary-tree-bst, sorting-algorithms, js-memory-leak, ds-linked-list, sql-aggregation-pitfalls, js-array-mutation, bloom-filter
-- 이 글로 오는 글 ←: leetcode-group-anagrams, leetcode-single-number, leetcode-top-k-frequent-elements, leetcode-two-sum
+- 이 글로 오는 글 ←: leetcode-group-anagrams, leetcode-longest-consecutive-sequence, leetcode-product-of-array-except-self, leetcode-remove-duplicates-from-sorted-array, leetcode-single-number, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-sudoku
 
 #### `leetcode-group-anagrams` — LeetCode 49. Group Anagrams: 같은 무리면 같은 이름표를 만든다
 
@@ -1054,7 +1076,27 @@
 - 소제목: 같은 글자 구성끼리 묶는다 / 손으로 묶어 보기 / 무리를 하나씩 열어 보는 풀이 / 정렬한 글자를 이름표로 쓰기 / 글자 개수를 이름표로 쓰기 / 구분자를 빼면 무리가 섞인다 / 합이나 해시 값 하나로 줄이면 / 개수로 정렬 문자열을 다시 만들기 / Python과 Java로 옮기기 / 단어 길이에 따라 순위가 바뀐다 / 비어 있거나 하나뿐인 입력 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-valid-anagram, ds-hash-map, leetcode-top-k-frequent-elements, leetcode-contains-duplicate
 - 키워드 백링크 →: sorting-algorithms, big-o-notation, db-modeling-normalization
-- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-anagram
+- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-permutation-in-string, leetcode-top-k-frequent-elements, leetcode-two-sum, leetcode-valid-anagram
+
+#### `leetcode-longest-consecutive-sequence` — LeetCode 128. Longest Consecutive Sequence: 줄의 첫 수에서만 센다
+
+- 요약: 1씩 이어지는 수의 가장 긴 줄을 배열 뒤지기, 정렬, 시작점 확인 없는 집합, 첫 수에서만 세는 집합, 끝점 길이 해시맵, 유니온 파인드로 구한다. 안쪽 while이 있어도 O(n)인 이유와 nums를 돌면 51초가 걸리는 중복 함정, 수가 하나씩 들어오는 변형까지 본다.
+- 태그: LeetCode, Hash Table, Union-Find, Algorithm
+- 키워드: (없음)
+- 길이: 520줄
+- 소제목: 1씩 이어지는 수의 가장 긴 줄 / 손으로 줄 세워 보기 / 수마다 다음 수를 배열에서 찾는 풀이 / 정렬하고 이어진 구간 세기 / 집합에 넣고 다음 수를 묻기 / 줄의 첫 수에서만 센다 / 끝점에 길이를 적어 두고 이어 붙이기 / 유니온 파인드로 이웃끼리 묶기 / Python과 Java로 옮기기 / 여섯 풀이를 나란히 놓고 보면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: ds-hash-map, ds-union-find, leetcode-contains-duplicate, sliding-window-pattern, leetcode-merge-intervals, leetcode-longest-increasing-subsequence, leetcode-two-sum, leetcode-top-k-frequent-elements
+- 키워드 백링크 →: ds-binary-tree-bst, dynamic-programming, binary-search, big-o-notation
+
+#### `leetcode-product-of-array-except-self` — LeetCode 238. Product of Array Except Self: 왼쪽 곱과 오른쪽 곱이 한 칸에서 만난다
+
+- 요약: 자기 칸을 뺀 나머지 전부의 곱을 칸마다 다 곱하기, 0 개수를 세는 나눗셈, 왼쪽·오른쪽 누적 곱 배열, 답 배열과 변수 두 개, 양 끝 한 번 훑기로 푼다. 나눗셈이 0에서 왜 무너지는지와 적는 순서를 바꾸면 틀리는 입력, 나머지 연산과 구간 곱 변형까지 본다.
+- 태그: LeetCode, Prefix Sum, Algorithm
+- 키워드: (없음)
+- 길이: 508줄
+- 소제목: 나를 뺀 나머지 전부의 곱 / 손으로 한 칸씩 곱해 보기 / 칸마다 나머지를 다 곱하는 풀이 / 전체 곱을 나누면 안 되나 / 왼쪽 곱과 오른쪽 곱으로 쪼개기 / 답 배열에 왼쪽 곱부터 채운다 / 양 끝에서 동시에 채우는 한 번 훑기 / Python과 Java로 옮기기 / 다섯 풀이를 나란히 놓고 보면 / 0과 음수에서 틀리는 코드 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-trapping-rain-water, leetcode-study-guide, ds-array-matrix, segment-tree-fenwick, leetcode-two-sum, leetcode-contains-duplicate, leetcode-top-k-frequent-elements
+- 키워드 백링크 →: floating-point-numbers
 
 #### `leetcode-top-k-frequent-elements` — LeetCode 347. Top K Frequent Elements: 빈도를 칸 번호로 쓰면 정렬이 필요 없다
 
@@ -1065,7 +1107,7 @@
 - 소제목: 많이 나온 값 k개를 고른다 / 손으로 세어 보기 / 가장 많은 것을 k번 골라내기 / 빈도순으로 전부 정렬하기 / 크기 k인 힙만 들고 다니기 / 빈도를 칸 번호로 쓰는 버킷 / 퀵셀렉트로 경계만 찾기 / Python과 Java로 옮기기 / 재 보면 세는 데 시간이 다 간다 / 동점, 음수, k가 전부일 때 / 직접 풀어 보기 / 데이터가 끝없이 들어온다면 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-heap, sorting-algorithms, leetcode-contains-duplicate, leetcode-valid-anagram, leetcode-kth-largest-element-in-an-array, leetcode-group-anagrams
 - 키워드 백링크 →: count-min-sketch, ds-linked-list, big-o-notation, divide-and-conquer
-- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-group-anagrams, leetcode-kth-largest-element-in-an-array
+- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-group-anagrams, leetcode-kth-largest-element-in-an-array, leetcode-longest-consecutive-sequence, leetcode-product-of-array-except-self
 
 #### `leetcode-two-sum` — LeetCode 1. Two Sum: 짝을 기억해 두면 한 번에 끝난다
 
@@ -1075,7 +1117,7 @@
 - 길이: 507줄
 - 소제목: 문제를 내 말로 다시 쓰면 / 손으로 먼저 찾아 보기 / 모든 쌍을 다 대 보는 풀이 / 정렬해 놓고 양 끝에서 좁히기 / 정렬한 뒤 짝을 이분 탐색으로 찾기 / 짝을 기억해 두는 장부: 해시맵 두 번 훑기 / 한 번만 훑어도 된다 / Python과 Java로 옮길 때 / 다섯 풀이를 나란히 놓고 보면 / 틀리기 쉬운 입력들 / 직접 풀어 보기 / 면접관이 이어서 묻는 변형 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-hash-map, big-o-notation, leetcode-study-guide, two-pointers-pattern, sorting-algorithms, leetcode-two-sum-ii, binary-search, leetcode-3sum, leetcode-contains-duplicate, leetcode-group-anagrams
-- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-study-guide, leetcode-two-sum-ii, leetcode-valid-anagram, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-longest-consecutive-sequence, leetcode-product-of-array-except-self, leetcode-study-guide, leetcode-two-sum-ii, leetcode-valid-anagram, leetcode-valid-sudoku, two-pointers-pattern
 
 #### `leetcode-valid-anagram` — LeetCode 242. Valid Anagram: 글자 수를 세는 26칸이면 충분하다
 
@@ -1086,7 +1128,17 @@
 - 소제목: 글자 구성만 같으면 된다 / 종이에 글자 수를 적어 보면 / 하나씩 짝지어 지우는 풀이 / 둘 다 정렬해서 비교하기 / 글자마다 개수를 세는 해시맵 / 26칸짜리 배열 하나면 충분하다 / 세다가 음수가 되면 바로 멈춘다 / 소수를 곱하는 트릭이 위험한 이유 / Python과 Java로 옮기기 / 풀이를 나란히 놓고 재 보면 / 유니코드가 들어오면 / 길이가 다르거나 빈 문자열일 때 / 직접 풀어 보기 / 이 문제에서 이어지는 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-group-anagrams, leetcode-two-sum, js-strings-unicode, sliding-window-pattern
 - 키워드 백링크 →: message-delivery-semantics, floating-point-numbers, db-modeling-normalization
-- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-group-anagrams, leetcode-top-k-frequent-elements
+- 이 글로 오는 글 ←: leetcode-contains-duplicate, leetcode-group-anagrams, leetcode-permutation-in-string, leetcode-top-k-frequent-elements
+
+#### `leetcode-valid-sudoku` — LeetCode 36. Valid Sudoku: 칸마다 행·열·상자 출석부 세 권에 묻는다
+
+- 요약: 채워진 스도쿠 칸이 행·열·상자 규칙을 지키는지 세 번 따로 훑기, 집합 27개로 한 번 훑기, 이름표 집합 하나, 비트 27개로 확인한다. 상자 번호 식이 틀리는 두 가지 모습과 올바르지만 풀 수 없는 판, 지우기까지 받는 변형도 본다.
+- 태그: LeetCode, Hash Table, Matrix, Algorithm
+- 키워드: (없음)
+- 길이: 535줄
+- 소제목: 채운 칸만 규칙을 지키는지 본다 / 판 하나를 손으로 검사해 보기 / 상자 번호를 구하는 식 / 줄, 열, 상자를 따로 세 번 훑기 / 한 번 훑으며 출석부 27권에 적기 / 집합 하나에 이름표를 붙여 적기 / 정수 27개의 비트에 적기 / Python과 Java로 옮기기 / 네 풀이를 나란히 놓고 보면 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 조건이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-contains-duplicate, ds-hash-map, bit-manipulation, leetcode-two-sum, leetcode-n-queens, leetcode-set-matrix-zeroes
+- 키워드 백링크 →: recursion-backtracking
 
 ### Programming › Algorithms › LeetCode › Backtracking (`programming/algorithms/leetcode/backtracking`)
 
@@ -1110,7 +1162,7 @@
 - 소제목: 서로 잡지 못하게 퀸 n개를 놓는 방법 / 행마다 하나씩이라는 관찰 / 열의 순열을 다 만들고 검사하기 / 놓기 전에 위쪽 퀸들을 훑어본다 / 열과 두 대각선을 배열로 기억한다 / 열 상태를 정수 비트로 들고 다니기 / 개수만 세면 절반만 봐도 된다 / 다섯 풀이를 나란히 놓으면 / 대각선 하나를 빼먹으면 / 면접관이 조건을 바꾸면 / 줄 번호를 기억하면 확인이 한 번에 끝난다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-permutations, recursion-backtracking, bit-manipulation, leetcode-word-search, leetcode-generate-parentheses, leetcode-combination-sum, leetcode-subsets
 - 키워드 백링크 →: big-o-notation, logic-gates-alu
-- 이 글로 오는 글 ←: leetcode-generate-parentheses, leetcode-permutations, leetcode-subsets, leetcode-word-search
+- 이 글로 오는 글 ←: leetcode-generate-parentheses, leetcode-permutations, leetcode-subsets, leetcode-valid-sudoku, leetcode-word-search
 
 #### `leetcode-permutations` — LeetCode 46. Permutations: 쓴 것을 표시하고 바꾼 것은 모두 되돌린다
 
@@ -1119,7 +1171,7 @@
 - 키워드: (없음)
 - 길이: 506줄
 - 소제목: 같은 원소들을 줄 세우는 모든 방법 / 손으로 [1, 2, 3]을 줄 세워 보면 / 일단 다 만들고 겹친 걸 버리기 / 하나씩 들이며 모든 틈에 끼워 넣기 / 쓴 원소를 표시하며 자리를 채운다 / 배열 안에서 자리를 바꿔 가며 채우기 / 재귀 없이 다음 순열로 넘어가기 / 교환 한 번에 순열 하나, Heap 알고리즘 / 여섯 풀이를 나란히 놓으면 / 되돌리기를 하나만 하면 / 면접관이 조건을 바꾸면 / 순서 테스트를 실제로 돌리면 / 쓴 것을 표시하고, 바꾼 것은 모두 되돌린다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-subsets, leetcode-combination-sum, recursion-backtracking, leetcode-n-queens, leetcode-course-schedule
+- 직접 링크 →: leetcode-subsets, leetcode-combination-sum, recursion-backtracking, leetcode-n-queens, leetcode-permutation-in-string, leetcode-course-schedule
 - 키워드 백링크 →: sliding-window-pattern, ds-graph-bfs-dfs, js-destructuring
 - 이 글로 오는 글 ←: leetcode-burst-balloons, leetcode-combination-sum, leetcode-generate-parentheses, leetcode-n-queens, leetcode-subsets
 
@@ -1393,7 +1445,7 @@
 - 소제목: k번째로 큰 값 하나만 필요하다 / 손으로 먼저 찾아 본다 / 다 줄 세우고 k번째를 읽는다 / 전부 힙에 넣고 k번 꺼낸다 / 크기 k인 바구니에 큰 것만 남긴다 / 기준값 하나로 반씩 버린다 / 같은 값은 한가운데에 모은다 / 값의 범위가 좁으면 세기만 한다 / Python과 Java로 옮기기 / 같은 값만 있는 배열에서 재 봤다 / 틀리기 쉬운 자리 / 직접 풀어 보기 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-heap, randomized-algorithms, leetcode-top-k-frequent-elements, leetcode-find-median-from-data-stream, leetcode-median-of-two-sorted-arrays, leetcode-k-closest-points-to-origin
 - 키워드 백링크 →: sql-interview-problems, sorting-algorithms, divide-and-conquer
-- 이 글로 오는 글 ←: leetcode-find-median-from-data-stream, leetcode-k-closest-points-to-origin, leetcode-merge-k-sorted-lists, leetcode-top-k-frequent-elements
+- 이 글로 오는 글 ←: leetcode-find-median-from-data-stream, leetcode-k-closest-points-to-origin, leetcode-merge-k-sorted-lists, leetcode-sort-colors, leetcode-top-k-frequent-elements
 
 #### `leetcode-task-scheduler` — LeetCode 621. Task Scheduler: 가장 많은 작업이 뼈대를 세운다
 
@@ -1449,7 +1501,7 @@
 - 소제목: 순서 없는 구간을 겹치지 않게 정리한다 / 테이프 다섯 조각을 손으로 합쳐 본다 / 겹치는 짝이 없어질 때까지 합친다 / 겹치는 구간끼리 선을 그어 덩어리를 찾는다 / 시작 순으로 줄을 세우고 마지막 띠와만 비교한다 / 시작과 끝을 따로 정렬해도 된다 / 값 범위가 작으면 칸에 표시한다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 자주 틀리는 세 군데 / 풀이 비교 / 실제 코드에서 합치기가 필요한 순간 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-insert-interval, leetcode-meeting-rooms, interval-problems-pattern, ds-graph-bfs-dfs, ds-union-find, leetcode-non-overlapping-intervals, leetcode-merge-two-sorted-lists, leetcode-partition-labels
 - 키워드 백링크 →: ds-binary-tree-bst, sorting-algorithms, ds-array-matrix, js-shallow-deep-copy
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-insert-interval, leetcode-meeting-rooms, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals, leetcode-partition-labels
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-car-fleet, leetcode-insert-interval, leetcode-longest-consecutive-sequence, leetcode-meeting-rooms, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals, leetcode-partition-labels
 
 #### `leetcode-minimum-interval-to-include-each-query` — LeetCode 1851. Minimum Interval to Include Each Query: 질의를 정렬하면 끝난 구간은 버려도 된다
 
@@ -1540,7 +1592,7 @@
 - 길이: 509줄
 - 소제목: 자릿수를 제곱해서 더하는 일을 되풀이한다 / 19와 2를 손으로 굴려 보기 / 숫자가 끝없이 커지지 않는 이유 / 몇 걸음이면 끝나나 / 다음 숫자를 계산하는 함수 / 본 숫자를 집합에 적어 둔다 / 두 사람이 다른 속도로 달린다 / 걸음을 두 배씩 늘려 가며 기다린다 / 행복하지 않은 수는 모두 4를 지난다 / Python과 Java로 옮기기 / 네 풀이를 나란히 / 고리를 찾다가 자주 틀리는 곳 / 직접 돌려 보기 / 규칙이 바뀌면 무엇이 달라지나 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-linked-list-cycle, ds-hash-map, bit-manipulation, dynamic-programming, leetcode-powx-n
-- 키워드 백링크 →: ds-linked-list, js-memoization, sql-aggregation-pitfalls, ds-array-matrix
+- 키워드 백링크 →: seo-redirects-site-migration, ds-linked-list, js-memoization, sql-aggregation-pitfalls, ds-array-matrix
 - 이 글로 오는 글 ←: leetcode-linked-list-cycle, leetcode-powx-n
 
 #### `leetcode-powx-n` — LeetCode 50. Pow(x, n): 지수를 반씩 접으면 예순 번이면 끝난다
@@ -1574,7 +1626,7 @@
 - 소제목: 0 하나가 십자가를 그린다 / 3 × 4에서 손으로 지워 보기 / 원본을 한 장 복사해 두기 / 지울 칸에 다른 표시를 남긴다 / 행 장부와 열 장부 / 첫 행과 첫 열을 장부로 빌린다 / 깃발 하나로 줄이기 / Python과 Java로 옮기기 / 다섯 풀이를 나란히 / 지우다가 자주 틀리는 곳 / 직접 돌려 보기 / 행렬이 달라지면 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-rotate-image, leetcode-spiral-matrix
 - 키워드 백링크 →: js-shallow-deep-copy
-- 이 글로 오는 글 ←: leetcode-rotate-image, leetcode-spiral-matrix
+- 이 글로 오는 글 ←: leetcode-rotate-image, leetcode-spiral-matrix, leetcode-valid-sudoku
 
 #### `leetcode-spiral-matrix` — LeetCode 54. Spiral Matrix: 네 경계를 한 칸씩 안으로 민다
 
@@ -1599,6 +1651,16 @@
 - 키워드 백링크 →: string-search-algorithms, divide-and-conquer, sorting-algorithms, monotonic-stack-pattern
 - 이 글로 오는 글 ←: leetcode-gas-station, leetcode-longest-substring-without-repeating, leetcode-sliding-window-maximum, sliding-window-pattern
 
+#### `leetcode-fruit-into-baskets` — LeetCode 904. Fruit Into Baskets: 종류가 둘 이하인 가장 긴 구간
+
+- 요약: 바구니 두 개로 딸 수 있는 과일 수를 종류가 많아야 둘인 가장 긴 연속 구간으로 바꿔, 시작점마다 따 보기, 길이 이분 탐색, 해시맵 창, 줄어들지 않는 창, 마지막 위치로 건너뛰기, 마지막 덩어리 길이 풀이로 푼다. 0이 된 키를 지우지 않아 생기는 무한 루프와 바구니 K개 변형도 다룬다.
+- 태그: LeetCode, Sliding Window, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 502줄
+- 소제목: 바구니 두 개로 딸 수 있는 가장 긴 줄 / 나무 여덟 그루를 손으로 따 보기 / 나무마다 출발해 본다 / 길이를 정해 놓고 되는지 묻는다 / 종류가 셋이 되면 앞에서 덜어 낸다 / 창을 줄이지 않고 미끄러뜨리기 / 마지막 위치만 기억하고 건너뛴다 / 마지막 덩어리 길이만 들고 가기 / 바구니 창의 Python·Java 코드 / 종류 번호를 배열 칸으로 쓰기 / 여섯 가지 따기 방법 견주기 / 바구니 창 직접 채워 보기 / 바구니가 엉키는 코드 / 바구니 수와 조건을 바꾸면 / 면접에서 나올 만한 질문
+- 직접 링크 →: sliding-window-pattern, binary-search, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-permutation-in-string
+- 키워드 백링크 →: message-delivery-semantics, ds-array-matrix
+
 #### `leetcode-longest-repeating-character-replacement` — LeetCode 424. Longest Repeating Character Replacement: 최다 빈도는 줄이지 않아도 된다
 
 - 요약: 글자를 k번 바꿔 만들 수 있는 가장 긴 같은 글자 줄을 시작점마다 늘리기, 길이 이분 탐색, 목표 글자별 창, 매번 다시 세는 창, 최다 빈도를 줄이지 않는 창 다섯 가지로 푼다. 마지막 풀이가 틀린 듯 보여도 맞는 이유를 줄어들지 않는 창이라는 틀로 따져 본다.
@@ -1608,7 +1670,7 @@
 - 소제목: 글자를 k번 바꿔서 만드는 가장 긴 줄 / 구간 하나를 판정하는 식 / 손으로 먼저 풀어 보기 / 시작점마다 끝까지 늘려 보기 / 길이로 이분 탐색하기 / 목표 글자를 정해 두고 창을 민다 / 창 하나로, 최다 빈도는 매번 다시 센다 / 최다 빈도를 줄이지 않아도 되는 이유 / 줄어들지 않는 창이라는 다른 틀 / 세 언어로 쓴 최종 코드 / 다섯 풀이 비교 / 직접 풀어 보기 / 자주 틀리는 생각과 코드 / 바꿔 볼 수 있는 조건들 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-longest-substring-without-repeating, binary-search, leetcode-minimum-window-substring
 - 키워드 백링크 →: sliding-window-pattern
-- 이 글로 오는 글 ←: leetcode-longest-substring-without-repeating, leetcode-minimum-window-substring, sliding-window-pattern
+- 이 글로 오는 글 ←: leetcode-fruit-into-baskets, leetcode-longest-substring-without-repeating, leetcode-minimum-window-substring, sliding-window-pattern
 
 #### `leetcode-longest-substring-without-repeating` — LeetCode 3. Longest Substring Without Repeating Characters: 겹치면 왼쪽 끝을 겹친 글자 다음으로 옮긴다
 
@@ -1619,7 +1681,16 @@
 - 소제목: 중복 없는 가장 긴 조각 / 손으로 먼저 따라가 보기 / 모든 조각을 다 검사하기 / 시작점마다 끝까지 늘리기 / 길이를 놓고 이분 탐색하기 / 겹치면 왼쪽을 한 칸씩 당긴다 / 마지막으로 본 자리로 한 번에 점프한다 / 건너뛴 시작점에 답이 없는 이유 / 해시맵 대신 128칸 배열 / 세 언어로 쓴 최종 코드 / 여섯 풀이 비교 / 직접 풀어 보기 / 왼쪽 끝이 뒤로 가는 버그 / 조건이 바뀌면 창이 어떻게 바뀌나 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-best-time-to-buy-and-sell-stock, binary-search, sliding-window-pattern, ds-hash-map, leetcode-longest-repeating-character-replacement, leetcode-minimum-window-substring
 - 키워드 백링크 →: js-strings-unicode, sql-filtering-operators, big-o-notation, cookie-session-login
-- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-longest-repeating-character-replacement, leetcode-minimum-window-substring, leetcode-sliding-window-maximum, sliding-window-pattern
+- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-fruit-into-baskets, leetcode-longest-repeating-character-replacement, leetcode-minimum-window-substring, leetcode-permutation-in-string, leetcode-sliding-window-maximum, sliding-window-pattern
+
+#### `leetcode-minimum-size-subarray-sum` — LeetCode 209. Minimum Size Subarray Sum: 양수라서 앞을 덜어 내도 된다
+
+- 요약: 합이 target 이상인 가장 짧은 연속 구간을 출발점마다 더하기, 누적 합 위의 끝점 이분 탐색, 길이 이분 탐색, 넘치면 덜어 내는 창으로 푼다. 각 풀이가 양수 조건의 어디에 기대는지 따지고, 음수가 섞인 862번은 누적 합과 단조 덱으로 넘어간다.
+- 태그: LeetCode, Sliding Window, Binary Search, Algorithm
+- 키워드: (없음)
+- 길이: 501줄
+- 소제목: 합이 target에 닿는 가장 짧은 구간 / 일곱 칸으로 손풀기 / 출발점마다 합이 찰 때까지 더한다 / 누적 합 위에서 끝점을 이분 탐색한다 / 길이를 정해 놓고 창 합을 본다 / 넘치면 앞을 덜어 내는 창 / 덜어 낸 앞 칸이 다시 필요 없는 이유 / 창 풀이의 Python·Java 판 / 네 가지 풀이를 한눈에 / 짧은 창 손수 완성하기 / 답을 재는 자리가 틀린 코드들 / 음수가 섞이거나 조건이 바뀌면 / 면접에서 나올 만한 질문
+- 직접 링크 →: sliding-window-pattern, ds-array-matrix, binary-search, monotonic-stack-pattern, leetcode-sliding-window-maximum
 
 #### `leetcode-minimum-window-substring` — LeetCode 76. Minimum Window Substring: 다 품는 동안 왼쪽을 줄인다
 
@@ -1630,7 +1701,18 @@
 - 소제목: t를 모두 품는 가장 짧은 구간 / 손으로 먼저 풀어 보기 / 시작점마다 처음으로 다 품는 곳까지 / 길이로 이분 탐색하기 / 창을 늘이고 줄이며 매번 다 비교하기 / 모자란 글자 수 하나만 들고 다닌다 / 필요한 글자의 위치만 골라서 돈다 / 해시맵 대신 128칸 배열 / 세 언어로 쓴 최종 코드 / 여섯 풀이 비교 / 직접 풀어 보기 / 틀리기 쉬운 곳 / 조건을 바꿔 보면 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-longest-substring-without-repeating, leetcode-longest-repeating-character-replacement, binary-search, leetcode-sliding-window-maximum
 - 키워드 백링크 →: sliding-window-pattern, sql-filtering-operators, ds-array-matrix, monotonic-stack-pattern
-- 이 글로 오는 글 ←: leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-sliding-window-maximum, sliding-window-pattern
+- 이 글로 오는 글 ←: leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-permutation-in-string, leetcode-sliding-window-maximum, sliding-window-pattern
+
+#### `leetcode-permutation-in-string` — LeetCode 567. Permutation in String: 순서는 버리고 개수만 맞춘다
+
+- 요약: s1의 순열이 s2 안에 붙어 있는지를 순열 생성, 창마다 정렬, 창마다 다시 세기, 26칸 비교 창, 맞는 칸 수 하나로 끝내는 창, 빚을 갚는 가변 창 여섯 가지로 푼다. matches를 늘리고 줄이는 조건과 마지막 창을 빠뜨리는 실수를 짚는다.
+- 태그: LeetCode, Sliding Window, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 513줄
+- 소제목: 섞은 s1이 s2 안에 붙어 있나 / 순서가 아니라 개수를 본다 / 순열을 전부 만들어 찾아본다 / 창마다 정렬해서 맞대 본다 / 창마다 글자를 처음부터 센다 / 한 칸 밀 때 두 글자만 고친다 / 26칸 비교를 matches 하나로 줄인다 / 빚을 갚는 가변 창 / matches 풀이의 Python·Java 판 / 여섯 방법을 한 표에 / 순열 찾는 창 완성하기 / matches가 어긋나는 코드들 / 조건을 비틀면 바뀌는 곳 / 면접에서 나올 만한 질문
+- 직접 링크 →: sliding-window-pattern, recursion-backtracking, leetcode-minimum-window-substring, leetcode-longest-substring-without-repeating, leetcode-valid-anagram, leetcode-group-anagrams
+- 키워드 백링크 →: string-search-algorithms
+- 이 글로 오는 글 ←: leetcode-fruit-into-baskets, leetcode-permutations
 
 #### `leetcode-sliding-window-maximum` — LeetCode 239. Sliding Window Maximum: 늦게 온 큰 값이 앞의 작은 값을 지운다
 
@@ -1641,7 +1723,7 @@
 - 소제목: 길이 k인 창마다 최댓값 / 손으로 먼저 풀어 보기 / 창마다 처음부터 다 보기 / 최대 힙에 넣고 낡은 꼭대기만 버린다 / 정렬된 멀티셋에서 나간 값을 바로 지운다 / 미리 구간 최댓값 표를 만들어 두기 / k칸씩 블록으로 나눠 양쪽에서 쌓기 / 앞으로 최댓값이 될 후보만 남긴다 / 세 언어로 쓴 최종 코드 / 여섯 풀이 비교 / 직접 풀어 보기 / 값만 담으면 생기는 일 / 덱을 바꿔 쓰는 문제들 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-minimum-window-substring, ds-heap, ds-stack-queue-deque, leetcode-best-time-to-buy-and-sell-stock, leetcode-longest-substring-without-repeating, monotonic-stack-pattern, sliding-window-pattern
 - 키워드 백링크 →: sql-interview-problems, ds-binary-tree-bst, segment-tree-fenwick, ds-array-matrix, dynamic-programming
-- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-jump-game-ii, leetcode-min-stack, leetcode-minimum-window-substring, monotonic-stack-pattern, sliding-window-pattern
+- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-jump-game-ii, leetcode-min-stack, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, monotonic-stack-pattern, sliding-window-pattern
 
 #### `sliding-window-pattern` — 슬라이딩 윈도 패턴: 고정 창, 늘렸다 줄이는 창, 창이 깨지는 입력
 
@@ -1652,9 +1734,19 @@
 - 소제목: 창이 한 칸 움직일 때 바뀌는 것 / 길이가 정해진 창 / 늘렸다 줄이는 창 / 안쪽에 while이 있어도 O(n)인 이유 / 창 상태를 담는 그릇 / 창이 통하지 않는 입력 / 정확히 K개는 많아야 K개 둘의 차로 / 0을 뒤집는 창 직접 짜기 / 문제 문장에서 창을 알아보는 법 / 코드 밖에서 만나는 같은 창 / 자주 틀리는 곳 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-study-guide, leetcode-minimum-window-substring, big-o-notation, leetcode-longest-substring-without-repeating, monotonic-stack-pattern, leetcode-sliding-window-maximum, dynamic-programming, rate-limiting-algorithms, percentile-latency, leetcode-longest-repeating-character-replacement, leetcode-best-time-to-buy-and-sell-stock, two-pointers-pattern, ds-array-matrix
 - 키워드 백링크 →: tcp-reliability-congestion
-- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ddos-protection, ds-array-matrix, ds-stack-queue-deque, leetcode-best-time-to-buy-and-sell-stock, leetcode-climbing-stairs, leetcode-container-with-most-water, leetcode-contains-duplicate, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-minimum-window-substring, leetcode-permutations, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-valid-anagram, monotonic-stack-pattern, password-attacks-credential-stuffing, rate-limiting-algorithms, sd-ad-click-stream-windows, sd-rate-limiter-design, stream-processing, transformer-attention-kv-cache, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, data-structures-overview, ddos-protection, ds-array-matrix, ds-stack-queue-deque, leetcode-best-time-to-buy-and-sell-stock, leetcode-climbing-stairs, leetcode-container-with-most-water, leetcode-contains-duplicate, leetcode-fruit-into-baskets, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-consecutive-sequence, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-permutation-in-string, leetcode-permutations, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-valid-anagram, monotonic-stack-pattern, password-attacks-credential-stuffing, rate-limiting-algorithms, sd-ad-click-stream-windows, sd-rate-limiter-design, stream-processing, transformer-attention-kv-cache, two-pointers-pattern
 
 ### Programming › Algorithms › LeetCode › Stack (`programming/algorithms/leetcode/stack`)
+
+#### `leetcode-car-fleet` — LeetCode 853. Car Fleet: 만나는 시각 대신 혼자 달렸을 때의 도착 시간을 비교한다
+
+- 요약: 추월할 수 없는 도로에서 목표에 도착하는 무리 수를 앞차 전부 확인, 정렬과 스택, 변수 하나, 위치 버킷, 뒤에서 받는 단조 스택까지 다섯 가지로 센다. 같은 도착 시간의 등호, 실수 비교의 안전성, 숫자 정렬과 정수 나눗셈 실수도 다룬다.
+- 태그: LeetCode, Stack, Algorithm
+- 키워드: (없음)
+- 길이: 500줄
+- 소제목: 앞차를 넘을 수 없는 일차선 도로 / 손으로 그려 보기: 누가 누구를 따라잡나 / 차마다 앞의 모든 차를 확인하기 / 목표에 가까운 차부터 보면 바로 앞 무리만 알면 된다 / 스택 대신 변수 하나 / 위치가 좁은 범위의 정수라면 정렬도 필요 없다 / 뒤에서 들어오는 차를 받는 단조 스택 / 다섯 풀이의 시간과 쓰임 / 같은 시간, 정렬, 비교 대상에서 틀리는 코드 / 도로 조건을 바꿔 묻는 꼬리 질문 / 도착 시간 하나로 줄인 문제 / 면접에서 나올 만한 질문
+- 직접 링크 →: monotonic-stack-pattern, sorting-algorithms, leetcode-daily-temperatures, leetcode-merge-intervals
+- 키워드 백링크 →: sql-aggregation-pitfalls, floating-point-numbers, ds-stack-queue-deque
 
 #### `leetcode-daily-temperatures` — LeetCode 739. Daily Temperatures: 아직 답을 못 찾은 날들은 기온이 내려가는 순서로 줄을 선다
 
@@ -1665,7 +1757,17 @@
 - 소제목: 며칠을 기다려야 더 따뜻해지나 / 날마다 앞으로 하나씩 세어 보면 / 기온 범위가 좁다는 걸 이용하면 / 구간 최댓값 표로 크게 건너뛰기 / 아직 답을 못 찾은 날을 쌓아 두는 스택 / 오른쪽에서 왼쪽으로 후보만 남기기 / 답 배열을 건너뛰며 따라가기 / 여섯 풀이를 나란히 놓으면 / 같은 기온은 따뜻해진 게 아니다 / 면접관이 조건을 바꾸면 / 기다리는 날들은 늘 기온이 내려가는 순서다 / 면접에서 나올 만한 질문
 - 직접 링크 →: monotonic-stack-pattern, ds-stack-queue-deque, big-o-notation, ds-hash-map, leetcode-largest-rectangle-in-histogram, leetcode-trapping-rain-water
 - 키워드 백링크 →: segment-tree-fenwick, sd-latency-numbers, message-delivery-semantics, binary-search
-- 이 글로 오는 글 ←: leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-car-fleet, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-trapping-rain-water, leetcode-valid-parentheses, monotonic-stack-pattern
+
+#### `leetcode-evaluate-reverse-polish-notation` — LeetCode 150. Evaluate Reverse Polish Notation: 연산자는 바로 앞에 남은 두 값을 쓴다
+
+- 요약: 후위 표기식을 첫 연산자부터 접는 풀이, 스택, 뒤에서 읽는 재귀, 식 트리, 입력 배열을 스택으로 쓰는 풀이까지 다섯 가지로 계산한다. 꺼내는 순서, 언어마다 다른 음수 나눗셈, 중위 표기 변환과 잘못된 식 검사도 다룬다.
+- 태그: LeetCode, Stack, Algorithm
+- 키워드: (없음)
+- 길이: 509줄
+- 소제목: 연산자가 숫자 뒤에 오는 식 / 손으로 읽어 보기: 기호가 나오면 바로 앞 두 수를 묶는다 / 가장 먼저 나온 연산자부터 하나씩 접기 / 숫자를 쌓아 두었다가 연산자가 오면 두 개를 꺼낸다 / 뒤에서부터 읽으면 재귀가 된다 / 식 트리를 세워 두면 여러 번 계산할 수 있다 / 입력 배열을 스택으로 다시 쓰기 / 다섯 가지 계산법의 비용 / 빼기, 나누기, 음수에서 틀리는 코드 / 식의 모양을 바꿔 묻는 꼬리 질문 / 계산 순서가 곧 쓰는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-valid-parentheses, ds-stack-queue-deque, recursion-backtracking, leetcode-serialize-and-deserialize-binary-tree, leetcode-min-stack, monotonic-stack-pattern
+- 키워드 백링크 →: message-delivery-semantics, nodejs-web-frameworks, sql-aggregation-pitfalls, sd-maps-tiles-routing
 
 #### `leetcode-generate-parentheses` — LeetCode 22. Generate Parentheses: 잔고가 음수가 되지 않는 길만 걷는다
 
@@ -1698,7 +1800,7 @@
 - 소제목: 네 연산을 모두 O(1)로 / 물어볼 때마다 다 훑으면 / 정렬된 사본을 옆에 두면 / 변수 하나로는 왜 모자란가 / 칸마다 그때의 최솟값을 적어 둔다 / 최솟값이 바뀔 때만 적는 두 번째 스택 / 같은 최솟값은 개수로 묶는다 / 최솟값과의 차이만 저장하는 트릭 / 여섯 풀이를 나란히 놓으면 / 틀리는 코드는 대개 이렇게 생겼다 / 면접관이 이어서 묻는 것 / 최솟값의 역사를 같은 순서로 쌓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-stack-queue-deque, leetcode-valid-parentheses, binary-search, ds-heap, leetcode-sliding-window-maximum, monotonic-stack-pattern, leetcode-daily-temperatures
 - 키워드 백링크 →: ds-linked-list, big-o-notation
-- 이 글로 오는 글 ←: leetcode-valid-parentheses, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-evaluate-reverse-polish-notation, leetcode-valid-parentheses, monotonic-stack-pattern
 
 #### `leetcode-valid-parentheses` — LeetCode 20. Valid Parentheses: 닫는 괄호는 가장 최근에 연 괄호와만 짝이 된다
 
@@ -1709,7 +1811,7 @@
 - 소제목: 무엇을 확인하라는 문제인가 / 붙어 있는 짝부터 지워 나가기 / 한 종류라면 숫자 하나로 충분하다 / 아직 닫히지 않은 괄호를 쌓아 두는 스택 / 여는 괄호 대신 기다리는 닫는 괄호를 쌓는다 / 배열과 top 하나로 직접 만든 스택 / 재귀로 읽으면 콜 스택이 스택 노릇을 한다 / 여섯 풀이를 나란히 놓으면 / 틀리기 쉬운 입력들 / 면접관이 조건을 바꾸면 / 가장 최근에 연 괄호 하나만 보면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-stack-queue-deque, recursion-backtracking, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, dynamic-programming, leetcode-generate-parentheses, monotonic-stack-pattern, leetcode-min-stack
 - 키워드 백링크 →: pattern-interpreter, js-execution-context, ds-array-matrix, big-o-notation
-- 이 글로 오는 글 ←: leetcode-generate-parentheses, leetcode-min-stack, monotonic-stack-pattern
+- 이 글로 오는 글 ←: leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-min-stack, monotonic-stack-pattern
 
 #### `monotonic-stack-pattern` — 단조 스택 패턴: 다음 큰 원소에서 히스토그램까지
 
@@ -1720,7 +1822,7 @@
 - 소제목: 오른쪽에서 처음 만나는 더 큰 값 / 꺼낸 값이 다시 필요 없는 이유 / 넣을 때와 꺼낼 때, 두 번 답이 정해진다 / 안에 while이 있어도 O(n) / 배열이 원형이면 두 바퀴 돈다 / 히스토그램으로 이어지는 흐름 / 단조 덱: 창이 움직이는 단조 스택 / 꺼내는 조건이 비교가 아니라 이득일 때 / 자주 틀리는 곳 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-stack-queue-deque, leetcode-study-guide, big-o-notation, leetcode-largest-rectangle-in-histogram, leetcode-sliding-window-maximum, sliding-window-pattern, leetcode-valid-parentheses, leetcode-min-stack, leetcode-generate-parentheses, leetcode-daily-temperatures, leetcode-trapping-rain-water, two-pointers-pattern
 - 키워드 백링크 →: recursion-backtracking
-- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-generate-parentheses, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-minimum-window-substring, leetcode-partition-labels, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-valid-parentheses, sliding-window-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-best-time-to-buy-and-sell-stock, leetcode-car-fleet, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-largest-rectangle-in-histogram, leetcode-min-stack, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-partition-labels, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-valid-parentheses, sliding-window-pattern, two-pointers-pattern
 
 ### Programming › Algorithms › LeetCode › Trees (`programming/algorithms/leetcode/trees`)
 
@@ -1777,7 +1879,7 @@
 - 소제목: 무엇을 적어야 똑같이 다시 세울 수 있나 / JSON으로 통째로 적기 / 전위와 중위를 두 줄로 적기 / 빈자리까지 층 순서로 적기 / 전위 순회에 빈자리를 끼워 적기 / 재귀 없이 같은 문자열을 만들고 읽기 / 후위 순회로 적고 뒤에서부터 읽기 / 여섯 가지 형식을 나란히 놓으면 / 직접 직렬화해 보기 / 받은 문자열을 그대로 믿으면 / 면접관이 이어서 묻는 것 / 빈자리를 적어야 모양이 남는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-binary-tree-bst, leetcode-binary-tree-level-order-traversal, leetcode-maximum-depth-of-binary-tree, bit-manipulation, leetcode-binary-tree-maximum-path-sum, leetcode-study-guide
 - 키워드 백링크 →: grpc, js-execution-context, redis-basics
-- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-lowest-common-ancestor-of-bst
+- 이 글로 오는 글 ←: leetcode-binary-tree-level-order-traversal, leetcode-binary-tree-maximum-path-sum, leetcode-evaluate-reverse-polish-notation, leetcode-lowest-common-ancestor-of-bst
 
 ### Programming › Algorithms › LeetCode › Tries (`programming/algorithms/leetcode/tries`)
 
@@ -1847,7 +1949,7 @@
 - 소제목: 세 수를 고르되 같은 조합은 한 번만 / 세 겹으로 다 골라 본다 / 하나를 고정하면 Two Sum이 된다 / 정렬하고 하나 고정한 뒤 양 끝에서 좁힌다 / 값마다 개수를 세어 조합한다 / 직접 짜 보기 / 네 풀이를 나란히 놓으면 / 자주 틀리는 곳 / 면접관이 이어서 바꾸는 문제들 / 줄이고, 고정하고, 건너뛴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-two-sum-ii, two-pointers-pattern, ds-hash-map, leetcode-container-with-most-water
 - 키워드 백링크 →: sorting-algorithms
-- 이 글로 오는 글 ←: leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-remove-duplicates-from-sorted-array, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, two-pointers-pattern
 
 #### `leetcode-container-with-most-water` — LeetCode 11. Container With Most Water: 낮은 벽은 더 좋은 짝을 못 만든다
 
@@ -1860,6 +1962,39 @@
 - 키워드 백링크 →: ds-union-find, ds-array-matrix
 - 이 글로 오는 글 ←: leetcode-3sum, leetcode-largest-rectangle-in-histogram, leetcode-trapping-rain-water, two-pointers-pattern
 
+#### `leetcode-move-zeroes` — LeetCode 283. Move Zeroes: 갈 자리를 세어 두면 당길 필요가 없다
+
+- 요약: 0을 뒤로 보내는 문제를 보조 배열, splice, 안정 정렬, 쓰기 포인터 두 가지로 푼다. 쓰기 포인터가 읽기 포인터를 앞지르지 않아 덮어써도 안전한 이유와 쓰기 횟수를 줄이는 한 줄, 순서를 버리면 달라지는 점, 실무에서 목록을 제자리 압축하는 법까지 본다.
+- 태그: LeetCode, Two Pointers, Algorithm
+- 키워드: (없음)
+- 길이: 507줄
+- 소제목: 0이 아닌 값은 순서를 지키고 0만 뒤로 / 새 배열에 골라 담고 다시 옮긴다 / 0을 하나씩 빼서 뒤에 붙인다 / 안정 정렬에 맡기기 / 읽는 손과 쓰는 손 / 같은 일을 다섯 가지로 하면 / 직접 0을 뒤로 밀어 보기 / 자리를 잘못 정하면 생기는 일 / 0의 순서도 상관없다면 / 같은 틀로 푸는 다른 문제 / 목록에서 지운 항목을 걸러 낼 때 / 자리를 계산하면 당길 필요가 없다 / 면접에서 나올 만한 질문
+- 직접 링크 →: two-pointers-pattern, leetcode-sort-colors, leetcode-remove-duplicates-from-sorted-array
+- 키워드 백링크 →: sorting-algorithms, ds-array-matrix, js-array-mutation
+- 이 글로 오는 글 ←: leetcode-remove-duplicates-from-sorted-array, leetcode-sort-colors
+
+#### `leetcode-remove-duplicates-from-sorted-array` — LeetCode 26. Remove Duplicates from Sorted Array: 마지막으로 쓴 값과만 비교한다
+
+- 요약: 정렬된 배열의 중복을 Set, splice, 앞 칸 비교, 마지막으로 쓴 값 비교, 이진 탐색과 지수 탐색으로 덩어리 건너뛰기까지 여섯 가지로 푼다. 원래 배열과 비교하면 80번에서 왜 깨지는지 직접 틀려 보고, k번까지 허용, 연결 리스트, 셸의 uniq로 넓힌다.
+- 태그: LeetCode, Two Pointers, Algorithm
+- 키워드: (없음)
+- 길이: 510줄
+- 소제목: 앞쪽 k칸만 채점한다 / 집합에 담았다가 앞에 다시 쓰기 / 중복을 만날 때마다 잘라 낸다 / 읽는 포인터와 쓰는 포인터 / 같은 값 덩어리를 통째로 건너뛰기 / 한 칸, 두 칸, 네 칸씩 뛰어 보고 좁히기 / 여섯 풀이를 한 줄씩 놓고 보면 / 직접 앞쪽을 고쳐 보기 / 비교 대상이 하나 어긋나면 / 남기는 규칙을 바꾸면 생기는 문제들 / 셸의 uniq도 이웃만 본다 / 정렬이 준 선물은 이웃 비교 / 면접에서 나올 만한 질문
+- 직접 링크 →: two-pointers-pattern, leetcode-move-zeroes, binary-search, sorting-algorithms, ds-linked-list, leetcode-3sum, leetcode-contains-duplicate
+- 키워드 백링크 →: ds-array-matrix
+- 이 글로 오는 글 ←: leetcode-move-zeroes
+
+#### `leetcode-sort-colors` — LeetCode 75. Sort Colors: 뒤에서 가져온 값은 한 번 더 본다
+
+- 요약: 0, 1, 2만 든 배열을 내장 정렬, 개수 세고 다시 칠하기, 두 번 나눠 담기, 세 포인터, 덧칠하기로 푼다. 세 포인터가 지키는 네 구역을 불변식으로 따지고, 갈래 하나만 바꿔도 깨지는 입력과 안정성, k가지 색, 연결 리스트 변형까지 본다.
+- 태그: LeetCode, Two Pointers, Algorithm
+- 키워드: (없음)
+- 길이: 500줄
+- 소제목: 세 가지 값을 제자리에서 세 구역으로 / 정렬 함수 한 줄로 끝내기 / 몇 개인지 세고 다시 칠한다 / 두 번 나눠 담기 / 세 포인터가 지키는 네 구역 / 한 번 훑으며 덧칠하기 / 다섯 가지 방법의 쓰임새 / 직접 세 구역으로 나눠 보기 / 갈래 하나만 바꿔도 깨지는 입력 / 원소가 숫자가 아니라 객체라면 / 색이 k가지로 늘어난다면 / 배열이 아니라 연결 리스트라면 / 같은 칼로 자르는 다른 문제들 / 앞에서 온 값과 뒤에서 온 값 / 면접에서 나올 만한 질문
+- 직접 링크 →: two-pointers-pattern, sorting-algorithms, leetcode-move-zeroes, ds-linked-list, leetcode-kth-largest-element-in-an-array
+- 키워드 백링크 →: big-o-notation, sd-maps-tiles-routing, js-destructuring, js-array-mutation
+- 이 글로 오는 글 ←: leetcode-move-zeroes
+
 #### `leetcode-trapping-rain-water` — LeetCode 42. Trapping Rain Water: 낮은 쪽의 물 높이는 이미 정해져 있다
 
 - 요약: 칸마다 고이는 물을 양쪽 다시 훑기, 누적 최댓값 배열, 단조 스택, 가장 높은 벽으로 나누기, 투 포인터로 푼다. 세로 물기둥과 가로 층으로 세는 관점을 비교하고, 갱신 순서와 빈 스택 같은 실수, 스트림과 2차원 변형까지 다룬다.
@@ -1869,7 +2004,7 @@
 - 소제목: 한 칸의 물은 양쪽 최고 벽이 정한다 / 칸마다 양쪽을 끝까지 둘러본다 / 양쪽 최고를 미리 적어 둔다 / 웅덩이를 가로 층으로 잰다 / 가장 높은 벽을 기준으로 둘로 나눈다 / 낮은 쪽부터 물을 확정한다 / 직접 짜 보기 / 다섯 풀이를 나란히 놓으면 / 자주 틀리는 곳 / 면접관이 이어서 바꾸는 문제들 / 같은 물을 세는 다섯 가지 방법 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-container-with-most-water, two-pointers-pattern, dynamic-programming, monotonic-stack-pattern, ds-heap, shortest-path-algorithms, leetcode-largest-rectangle-in-histogram, leetcode-daily-temperatures
 - 키워드 백링크 →: ds-stack-queue-deque, ds-array-matrix, sd-maps-tiles-routing
-- 이 글로 오는 글 ←: leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-pacific-atlantic-water-flow, monotonic-stack-pattern, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-largest-rectangle-in-histogram, leetcode-pacific-atlantic-water-flow, leetcode-product-of-array-except-self, monotonic-stack-pattern, two-pointers-pattern
 
 #### `leetcode-two-sum-ii` — LeetCode 167. Two Sum II - Input Array Is Sorted: 합이 크면 큰 쪽을 버린다
 
@@ -1902,7 +2037,7 @@
 - 소제목: 포인터 두 개를 어디에 두나 / 양 끝에서 좁혀 오기 / 한 칸을 버려도 답을 놓치지 않는 이유 / 같은 방향으로 달리는 두 포인터 / 두 줄을 나란히 훑기 / 투 포인터를 쓰면 안 될 때 / 찾기에서 세기로 / 자주 틀리는 곳 / 포인터가 셋이 되는 경우 / 빗물 문제에서 만나는 다른 쓰임 / 문제 문장에서 신호 찾기 / 같은 틀을 Python과 Java로 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-study-guide, ds-array-matrix, sliding-window-pattern, leetcode-valid-palindrome, leetcode-two-sum-ii, leetcode-3sum, leetcode-container-with-most-water, ds-linked-list, leetcode-linked-list-cycle, leetcode-reorder-list, sorting-algorithms, interval-problems-pattern, leetcode-two-sum, leetcode-trapping-rain-water, monotonic-stack-pattern, leetcode-median-of-two-sorted-arrays
 - 키워드 백링크 →: binary-search, ds-stack-queue-deque
-- 이 글로 오는 글 ←: ds-array-matrix, ds-hash-map, interval-problems-pattern, js-loops-control-flow, leetcode-3sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-container-with-most-water, leetcode-gas-station, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-subsequence, leetcode-median-of-two-sorted-arrays, leetcode-regular-expression-matching, leetcode-reorder-list, leetcode-reverse-bits, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, monotonic-stack-pattern, sliding-window-pattern
+- 이 글로 오는 글 ←: ds-array-matrix, ds-hash-map, interval-problems-pattern, js-loops-control-flow, leetcode-3sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-container-with-most-water, leetcode-gas-station, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-subsequence, leetcode-median-of-two-sorted-arrays, leetcode-move-zeroes, leetcode-regular-expression-matching, leetcode-remove-duplicates-from-sorted-array, leetcode-reorder-list, leetcode-reverse-bits, leetcode-sort-colors, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, monotonic-stack-pattern, sliding-window-pattern
 
 ### Programming › Algorithms › Techniques (`programming/algorithms/techniques`)
 
@@ -1915,7 +2050,7 @@
 - 소제목: 참이 한 번만 바뀌는 곳을 찾는다 / 구간의 정의가 코드를 정한다 / 같은 값이 여러 개면 경계도 두 개다 / 정렬해 두고 여러 번 찾을 때의 계산 / 가운데를 구하다 넘치는 경우 / 실수 범위에서 찾을 때는 횟수로 끊는다 / 답을 놓고 거꾸로 찾는다 / 정렬이 반쯤 깨진 배열에서 / 연습: 처음과 끝 찾기 / 연습: 최소 트럭 용량 / 범위를 반으로 줄이는 근거 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, sorting-algorithms, ds-hash-map, ds-binary-tree-bst, db-index, git-tips-advanced, recursion-backtracking
 - 키워드 백링크 →: api-scaling-ladder, load-testing-k6, sql-filtering-operators, floating-point-numbers, bit-manipulation
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-binary-search, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-window-substring, leetcode-non-overlapping-intervals, leetcode-powx-n, leetcode-search-in-rotated-sorted-array, leetcode-single-number, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-binary-search, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-fruit-into-baskets, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-non-overlapping-intervals, leetcode-powx-n, leetcode-remove-duplicates-from-sorted-array, leetcode-search-in-rotated-sorted-array, leetcode-single-number, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
 
 #### `bit-manipulation` — 비트 연산: 플래그, 마스크, XOR 트릭과 비트마스크 DP
 
@@ -1926,7 +2061,7 @@
 - 소제목: 숫자 하나에 스위치 아홉 개 / 연산 다섯 개와 시프트 / 가장 낮은 1 비트를 다루는 두 가지 요령 / 짝이 없는 수는 XOR가 찾는다 / 정수 하나로 부분집합을 센다 / 외판원 문제를 비트마스크 DP로 / 자바스크립트는 비트 연산 앞에서 32비트로 자른다 / 바이트를 놓는 순서 / 현장에서 비트마스크를 고를 때와 피할 때 / 외판원 문제를 직접 풀어 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: logic-gates-alu, linux-files-permissions, recursion-backtracking, dynamic-programming, sd-unique-id-generator, bloom-filter, feature-flags
 - 키워드 백링크 →: db-index, sd-latency-numbers, js-numbers-bigint, floating-point-numbers, segment-tree-fenwick, js-destructuring
-- 이 글로 오는 글 ←: algorithms-overview, binary-search, character-encoding-unicode, complexity-classes-p-np, cpu-instruction-cycle, hyperloglog, js-binary-data-typed-arrays, js-numbers-bigint, layer-ip-addressing, leetcode-binary-search, leetcode-burst-balloons, leetcode-counting-bits, leetcode-happy-number, leetcode-house-robber, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-n-queens, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-partition-labels, leetcode-powx-n, leetcode-reverse-bits, leetcode-serialize-and-deserialize-binary-tree, leetcode-single-number, leetcode-study-guide, leetcode-subsets, leetcode-sum-of-two-integers, logic-gates-alu, mfa-totp, passkeys-webauthn, postgres-architecture, react-concurrent-transitions, sd-unique-id-generator, string-search-algorithms, ts-enum-vs-union, virtual-memory-paging
+- 이 글로 오는 글 ←: algorithms-overview, binary-search, character-encoding-unicode, complexity-classes-p-np, cpu-instruction-cycle, hyperloglog, js-binary-data-typed-arrays, js-numbers-bigint, layer-ip-addressing, leetcode-binary-search, leetcode-burst-balloons, leetcode-counting-bits, leetcode-happy-number, leetcode-house-robber, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-n-queens, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-partition-labels, leetcode-powx-n, leetcode-reverse-bits, leetcode-serialize-and-deserialize-binary-tree, leetcode-single-number, leetcode-study-guide, leetcode-subsets, leetcode-sum-of-two-integers, leetcode-valid-sudoku, logic-gates-alu, mfa-totp, passkeys-webauthn, postgres-architecture, react-concurrent-transitions, sd-unique-id-generator, string-search-algorithms, ts-enum-vs-union, virtual-memory-paging
 
 #### `divide-and-conquer` — 분할 정복: 반으로 쪼개는 재귀와 마스터 정리, 퀵셀렉트
 
@@ -1948,7 +2083,7 @@
 - 소제목: 같은 질문을 몇 번이나 다시 묻나 / 표의 칸 하나가 무엇을 뜻하는지부터 정한다 / 위에서 내려가기와 아래에서 쌓기 / 계단 오르기는 두 칸만 기억하면 된다 / 배낭에 넣을지 말지 / 가장 길게 올라가는 줄 / 두 단어 사이의 거리 / 표를 만들 때 반복해서 나오는 실수 / 고른 것까지 알려 줘야 할 때 / 이 문제가 DP인지 알아보는 법 / 직접 표를 채워 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: greedy-algorithms, big-o-notation, js-memoization, recursion-backtracking, ds-graph-bfs-dfs, binary-search, js-primitive-vs-reference, sorting-algorithms, algorithms-overview
 - 키워드 백링크 →: elasticsearch-inverted-index, js-numbers-bigint, complexity-classes-p-np, divide-and-conquer, shortest-path-algorithms
-- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, complexity-classes-p-np, divide-and-conquer, elasticsearch-inverted-index, greedy-algorithms, js-memoization, k8s-certifications, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-tree-maximum-path-sum, leetcode-burst-balloons, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-coin-change, leetcode-combination-sum, leetcode-counting-bits, leetcode-course-schedule, leetcode-edit-distance, leetcode-generate-parentheses, leetcode-happy-number, leetcode-house-robber, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-common-subsequence, leetcode-longest-increasing-subsequence, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-pacific-atlantic-water-flow, leetcode-powx-n, leetcode-regular-expression-matching, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-subsets, leetcode-trapping-rain-water, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-break, phishing-social-engineering, postgres-query-planner, react-reconciliation-keys, recursion-backtracking, shortest-path-algorithms, sliding-window-pattern, software-supply-chain-ci-hardening
+- 이 글로 오는 글 ←: algorithms-overview, bit-manipulation, complexity-classes-p-np, divide-and-conquer, elasticsearch-inverted-index, greedy-algorithms, js-memoization, k8s-certifications, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-tree-maximum-path-sum, leetcode-burst-balloons, leetcode-cheapest-flights-within-k-stops, leetcode-climbing-stairs, leetcode-coin-change, leetcode-combination-sum, leetcode-counting-bits, leetcode-course-schedule, leetcode-edit-distance, leetcode-generate-parentheses, leetcode-happy-number, leetcode-house-robber, leetcode-jump-game, leetcode-jump-game-ii, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-non-overlapping-intervals, leetcode-number-of-1-bits, leetcode-pacific-atlantic-water-flow, leetcode-powx-n, leetcode-regular-expression-matching, leetcode-sliding-window-maximum, leetcode-study-guide, leetcode-subsets, leetcode-trapping-rain-water, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-break, phishing-social-engineering, postgres-query-planner, react-reconciliation-keys, recursion-backtracking, shortest-path-algorithms, sliding-window-pattern, software-supply-chain-ci-hardening
 
 #### `greedy-algorithms` — 그리디 알고리즘: 지금 가장 좋아 보이는 선택이 맞을 때
 
@@ -1981,7 +2116,7 @@
 - 소제목: 더 작은 같은 문제에 맡긴다 / 고르고, 들어가고, 되돌린다 / 기록한 답이 전부 같은 배열이었다 / 다음 후보를 고르는 규칙만 다르다 / 답의 개수가 곧 걸리는 시간이다 / 같은 값이 섞이면 같은 답이 또 나온다 / 가망 없는 가지는 들어가지 않는다 / 퀸을 놓았다 물리는 N-Queens / 같은 계산을 또 하는 재귀 / 정규식 엔진 안의 백트래킹 / 깊은 트리를 만났을 때 / 연습: 합이 target이 되는 조합 / 되돌릴 수 있어서 다 볼 수 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-execution-context, js-memoization, js-primitive-vs-reference, dynamic-programming, big-o-notation, ds-binary-tree-bst, ds-graph-bfs-dfs
 - 키워드 백링크 →: regex-and-globbing, js-strict-mode
-- 이 글로 오는 글 ←: algorithms-overview, binary-search, bit-manipulation, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, input-validation-secure-coding, leetcode-binary-search, leetcode-climbing-stairs, leetcode-combination-sum, leetcode-generate-parentheses, leetcode-jump-game, leetcode-maximum-depth-of-binary-tree, leetcode-n-queens, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-reverse-linked-list, leetcode-study-guide, leetcode-subsets, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, monotonic-stack-pattern, nodejs-server-runtime, regex-and-globbing, string-search-algorithms
+- 이 글로 오는 글 ←: algorithms-overview, binary-search, bit-manipulation, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, greedy-algorithms, input-validation-secure-coding, leetcode-binary-search, leetcode-climbing-stairs, leetcode-combination-sum, leetcode-evaluate-reverse-polish-notation, leetcode-generate-parentheses, leetcode-jump-game, leetcode-maximum-depth-of-binary-tree, leetcode-n-queens, leetcode-permutation-in-string, leetcode-permutations, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-reverse-linked-list, leetcode-study-guide, leetcode-subsets, leetcode-unique-paths, leetcode-valid-palindrome, leetcode-valid-parentheses, leetcode-valid-sudoku, leetcode-word-break, leetcode-word-ladder, leetcode-word-search, leetcode-word-search-ii, monotonic-stack-pattern, nodejs-server-runtime, regex-and-globbing, string-search-algorithms
 
 #### `sorting-algorithms` — 정렬 알고리즘: 버블부터 TimSort까지, 무엇을 얼마나 옮기나
 
@@ -1992,7 +2127,7 @@
 - 소제목: 정렬을 고를 때 묻는 것들 / 옆자리끼리만 바꾸는 버블 정렬 / 손에 든 카드 사이에 끼워 넣는 삽입 정렬 / 반으로 쪼개고 줄 세워 합치는 병합 정렬 / 기준값 하나로 가르는 퀵 정렬 / 힙 정렬과 인트로 정렬 / 비교를 안 하면 n log n보다 빨라진다 / 같은 값의 순서를 지키는 안정 정렬 / V8의 sort는 TimSort다 / 비교 함수 하나가 정렬을 망친다 / 정렬 문제를 만났을 때 확인하는 순서 / 직접 짜 보는 안정 정렬 / 정렬을 고르는 감각 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, js-array-mutation, ds-heap, js-execution-context, api-pagination-sorting, db-index, event-loop, binary-search
 - 키워드 백링크 →: randomized-algorithms, ds-linked-list, db-index-design
-- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, binary-search, divide-and-conquer, ds-heap, ds-linked-list, dynamic-programming, greedy-algorithms, leetcode-3sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-search, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-group-anagrams, leetcode-kth-largest-element-in-an-array, leetcode-largest-rectangle-in-histogram, leetcode-median-of-two-sorted-arrays, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-top-k-frequent-elements, leetcode-two-sum, pattern-strategy, randomized-algorithms, sd-kv-store-write-read-path, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, big-o-notation, binary-search, divide-and-conquer, ds-heap, ds-linked-list, dynamic-programming, greedy-algorithms, leetcode-3sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-binary-search, leetcode-car-fleet, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-group-anagrams, leetcode-kth-largest-element-in-an-array, leetcode-largest-rectangle-in-histogram, leetcode-median-of-two-sorted-arrays, leetcode-meeting-rooms, leetcode-merge-intervals, leetcode-merge-k-sorted-lists, leetcode-merge-two-sorted-lists, leetcode-move-zeroes, leetcode-remove-duplicates-from-sorted-array, leetcode-sort-colors, leetcode-top-k-frequent-elements, leetcode-two-sum, pattern-strategy, randomized-algorithms, sd-kv-store-write-read-path, two-pointers-pattern
 
 #### `string-search-algorithms` — 문자열 검색: KMP, 라빈-카프, 보이어-무어, 접미사 배열
 
@@ -2003,7 +2138,7 @@
 - 소제목: 한 칸 밀 때마다 처음부터 다시 비교한다 / 이미 맞힌 글자는 다시 보지 않는다 / 실패 함수는 패턴이 자기 자신과 겹치는 길이다 / 글자 대신 숫자를 먼저 비교한다 / 뒤에서부터 비교하면 크게 건너뛴다 / 언어와 도구는 이미 섞어 쓴다 / 같은 텍스트에서 여러 번 찾을 때 / 찾을 단어가 수천 개일 때 / 무엇을 고를까 / 현장에서 검색이 느려질 때 보는 곳 / KMP를 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, bit-manipulation, ds-hash-map, rsync-algorithm, regex-and-globbing, binary-search, elasticsearch-inverted-index, ds-trie
 - 키워드 백링크 →: db-index, ids-ips, input-validation-secure-coding, character-encoding-unicode, js-numbers-bigint, event-loop, recursion-backtracking, js-strings-unicode, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-longest-common-prefix, leetcode-replace-words, leetcode-valid-palindrome
+- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-longest-common-prefix, leetcode-permutation-in-string, leetcode-replace-words, leetcode-valid-palindrome
 
 ### Programming › Backend (`programming/backend`)
 
@@ -2105,7 +2240,7 @@
 - 소제목: 다섯 칸이 정하는 시각 / 나눠 떨어지지 않는 간격 / 서버 시계는 어느 나라 시간인가 / 서머타임에는 두 번 돌거나 건너뛴다 / 앞 실행이 안 끝났는데 다음 실행이 온다 / 레플리카가 셋이면 메일도 세 통 / 쿠버네티스 CronJob의 설정들 / 한 번만 돌릴 땐 at / 두 번 돌아도 괜찮은 작업 / 안 돈 것을 알아채는 법 / 새벽 배치가 안 돌았다는 연락을 받으면 / 시각보다 회차를 믿는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: batch-processing, distributed-lock, leader-election, linux-systemd-systemctl, idempotency-key
 - 키워드 백링크 →: k8s-architecture, pessimistic-locking, linux-processes-signals, postgres-advanced-sql, os-kernel-system-calls, message-delivery-semantics, sd-start-single-server, autoscaling, shell-redirection-pipes, shell-environment-startup, linux-files-permissions, postgres-architecture, local-k8s-kind-minikube, redis-basics, webhooks
-- 이 글로 오는 글 ←: airflow-orchestration, alerting, argocd-basics, bash-scripting, batch-processing, bullmq-job-queue, global-rollout-localization, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-feature-maturity, k8s-hpa, k8s-job-cronjob, k8s-learning-roadmap, k8s-operators, k8s-secret, k8s-storageclass-snapshots, pattern-singleton, race-conditions, sd-load-balancer-stateless, sd-metrics-storage-alerting, shell-environment-startup, vim-for-servers
+- 이 글로 오는 글 ←: airflow-orchestration, alerting, argocd-basics, bash-scripting, batch-processing, bullmq-job-queue, data-engineering-lifecycle, data-orchestrators-comparison, global-rollout-localization, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-feature-maturity, k8s-hpa, k8s-job-cronjob, k8s-learning-roadmap, k8s-operators, k8s-secret, k8s-storageclass-snapshots, pattern-singleton, race-conditions, sd-load-balancer-stateless, sd-metrics-storage-alerting, shell-environment-startup, vim-for-servers
 
 #### `graphql-basics` — GraphQL 기초: 스키마와 리졸버, N+1, 200 속의 에러, 캐시와 보안
 
@@ -2149,7 +2284,7 @@
 - 소제목: 확인하고 넣으면 둘 다 통과한다 / 키 한 줄에 담는 것 / 선점하고, 작업하고, 응답을 적는다 / 키 하나가 거치는 상태 / 처리 도중에 서버가 죽으면 / 트랜잭션 하나로 묶으면 기다리게 된다 / 바깥 결제사를 부르는 단계가 끼면 / 어떤 응답을 저장할지 / 키는 누가, 언제 만드나 / 키 말고도 중복을 막는 방법 / 운영에서 이런 증상을 보면 / 키 저장소가 정확해야 재시도가 안전하다 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, http-methods, rest-api-design, distributed-lock, sql-batch-timeout-pool, message-delivery-semantics
 - 키워드 백링크 →: postgres-advanced-sql, service-mesh, redis-basics, http-status-codes, db-modeling-normalization
-- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, agent-tool-design, airflow-orchestration, api-gateway-use-cases, api-key-hmac-auth, api-styles-overview, batch-processing, bullmq-job-queue, circuit-breaker, claim-check-sequential-convoy, code-review-practices, cron-jobs, curl-for-debugging, dead-letter-queue, debugging-with-logs, distributed-lock, distributed-transactions-2pc, enterprise-system-integration, frontend-as-distributed-system, js-promise-combinators, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, mongodb-crud-operators, mongodb-replica-set-sharding, owasp-top-10-map, pattern-builder, pattern-command, pattern-decorator, pattern-facade, queue-based-load-leveling, race-conditions, rate-limiting-in-practice, react-forms-actions, resilience-patterns, retries, rolling-deployment, saga-pattern, sd-ad-click-exactly-once, sd-chat-message-storage, sd-hotel-double-booking, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-multi-datacenter, sd-news-feed-publishing, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, system-design-study-path, transactional-outbox, webhooks
+- 이 글로 오는 글 ←: acid-transactions, acid-vs-base, agent-tool-design, airflow-orchestration, api-gateway-use-cases, api-key-hmac-auth, api-styles-overview, batch-processing, bullmq-job-queue, circuit-breaker, claim-check-sequential-convoy, code-review-practices, cron-jobs, curl-for-debugging, dead-letter-queue, debugging-with-logs, distributed-lock, distributed-transactions-2pc, enterprise-system-integration, frontend-as-distributed-system, js-promise-combinators, k8s-job-cronjob, message-delivery-semantics, message-queue-basics, mongodb-crud-operators, mongodb-replica-set-sharding, owasp-top-10-map, pattern-builder, pattern-command, pattern-decorator, pattern-facade, queue-based-load-leveling, race-conditions, rate-limiting-in-practice, react-forms-actions, resilience-patterns, retries, rolling-deployment, saga-pattern, sd-ad-click-exactly-once, sd-chat-message-storage, sd-hotel-double-booking, sd-leaderboard-sorted-set, sd-load-balancer-stateless, sd-multi-datacenter, sd-news-feed-publishing, sd-payment-reliability, sd-video-upload-transcoding, sd-wallet-transfer, serverless-architecture, serverless-limits, service-mesh, sql-interview-problems, system-design-concepts-map, system-design-study-path, transactional-outbox, ux-laws-cognitive-load, webhooks
 
 #### `openapi-spec-first` — OpenAPI로 API 계약 만들기: 스펙 우선, 린트, 목 서버, 코드 생성
 
@@ -2171,7 +2306,7 @@
 - 소제목: 한 군데에서 다 막으려고 하지 않는다 / 무엇을 키로 셀지가 절반이다 / 거절할 때 돌려주는 것 / 클라이언트는 기다릴 줄 알아야 한다 / 인스턴스마다 세면 한도가 곱해진다 / Redis가 멈추면 다 막을까, 다 열까 / 요청마다 무게가 다르다 / 처음 배포할 때는 세기만 한다 / 이런 증상이면 여기부터 본다 / 알고리즘보다 오래 손대는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: rate-limiting-algorithms, nginx-https-performance, gateway, resilience-patterns, idempotency-key
 - 키워드 백링크 →: proxy-reverse-proxy, http-status-codes, graphql-basics, sd-start-single-server, nat-traversal, osi-in-practice, redis-basics, ipv6-basics, acid-transactions
-- 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, api-scaling-ladder, api-security-owasp-api-top10, api-styles-overview, authn-vs-authz, autoscaling, backpressure, circuit-breaker, claude-code-hooks-deep-dive, ddos-protection, exponential-backoff-jitter, gateway, github-apps-api, health-checks, k8s-pod-troubleshooting, linux-grep-awk-sed, linux-network-tuning, llm-api-integration, mfa-totp, multi-tenancy-isolation, nextjs-server-actions-security, owasp-top-10-map, password-attacks-credential-stuffing, pattern-singleton, rate-limiting-algorithms, rest-api-design, reverse-proxy-lb-api-gateway, route53-routing-policies, sd-notification-reliability, sd-rate-limiter-design, sd-web-crawler-politeness-dedup, spring-security-jwt-oauth2, system-design-concepts-map, system-design-study-path, threat-modeling-stride, waf
+- 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, api-scaling-ladder, api-security-owasp-api-top10, api-styles-overview, authn-vs-authz, autoscaling, backpressure, circuit-breaker, claude-code-hooks-deep-dive, ddos-protection, exponential-backoff-jitter, gateway, github-apps-api, health-checks, k8s-pod-troubleshooting, linux-grep-awk-sed, linux-network-tuning, llm-api-integration, mfa-totp, multi-tenancy-isolation, nextjs-server-actions-security, owasp-top-10-map, password-attacks-credential-stuffing, pattern-singleton, rate-limiting-algorithms, rest-api-design, reverse-etl, reverse-proxy-lb-api-gateway, route53-routing-policies, sd-notification-reliability, sd-rate-limiter-design, sd-web-crawler-politeness-dedup, spring-security-jwt-oauth2, system-design-concepts-map, system-design-study-path, threat-modeling-stride, waf
 
 #### `soap-and-soa` — SOAP과 SOA: WSDL 계약, XML 봉투, ESB에서 마이크로서비스까지
 
@@ -2285,7 +2420,7 @@
 - 소제목: 그림 한 장에 다 넣으면 아무도 못 읽는다 / 확대 단계 네 개 / 컨테이너는 도커 컨테이너가 아니다 / 그림을 코드로 그린다 / 이미 돌아가는 시스템을 처음 그릴 때 / 결정을 한 장씩 남기는 ADR / ADR은 고치지 않고 새로 쓴다 / 어떤 결정까지 남기나 / 쓸모없어지는 ADR의 모양 / 서랍장을 미리 정해 두는 arc42 / 문서가 낡지 않게 리뷰에 묶는다 / 그림과 기록이 값을 하는 순간 / UML과는 어떤 관계인가 / 면접에서 나올 만한 질문
 - 직접 링크 →: hexagonal-architecture, layered-architecture, distributed-tracing, ddd-tactical-patterns, enterprise-application-patterns, ddd-bounded-context, clean-architecture
 - 키워드 백링크 →: modular-monolith, github-repo-governance, uml-diagrams, sd-queue-logging-automation, rabbitmq-basics, pub-sub, kafka-basics, security-groups-nacl, db-types-overview, redis-basics, what-happens-google-com
-- 이 글로 오는 글 ←: architecture-patterns-overview, code-review-practices, ddd-tactical-patterns, enterprise-application-patterns, sdlc-models-agile-scrum, uml-diagrams
+- 이 글로 오는 글 ←: architecture-patterns-overview, code-review-practices, core-component-api-design, ddd-tactical-patterns, enterprise-application-patterns, sdlc-models-agile-scrum, uml-diagrams
 
 #### `architecture-patterns-overview` — 백엔드 아키텍처 패턴 고르기: 배포, 코드, 데이터 세 축으로 나눠 보기
 
@@ -2296,7 +2431,7 @@
 - 소제목: 세 가지 질문을 섞어서 하고 있다 / 배포 단위를 몇 개로 둘까 / 한 배포 단위 안의 코드는 어떻게 놓을까 / 데이터와 메시지는 어떻게 흐를까 / 한 걸음 물러서 본 모양: 아키텍처 스타일 / 패턴은 겹쳐서 쓴다 / 언제 다음 단계로 넘어가나 / 신호를 함수로 적어 보면 / 함께 바뀌는 비율을 직접 재 보기 / 잘못 고르면 생기는 일 / 처음 회의로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: monolith-architecture, modular-monolith, microservices, microservices-decomposition, serverless-architecture, serverless-limits, layered-architecture, hexagonal-architecture, clean-architecture, ddd-bounded-context, event-driven-architecture, cqrs, event-sourcing, transactional-outbox, saga-pattern, nat-traversal, crdt, cold-starts
 - 키워드 백링크 →: high-availability, k8s-deploy-pipeline-eks, js-memory-leak, schema-versioning, architecture-docs-c4-adr, db-modeling-normalization, on-call, webhooks
-- 이 글로 오는 글 ←: backend-engineer-roadmap, plugin-microkernel-architecture
+- 이 글로 오는 글 ←: backend-engineer-roadmap, core-component-api-design, plugin-microkernel-architecture
 
 #### `clean-architecture` — 클린 아키텍처: 의존은 안쪽으로, 원을 건널 때는 그 원의 모양으로
 
@@ -2461,7 +2596,7 @@
 - 소제목: 함수는 사건 하나에 반응한다 / 트리거마다 부르는 방식이 다르다 / 배치에서 하나만 실패했을 때 / 사건 하나를 여러 곳에 나눠 보낸다 / 여러 단계는 함수끼리 부르지 않는다 / 비용은 호출 수와 실행 시간으로 계산된다 / 상태는 함수 밖에 둔다 / 함수를 버전으로 묶어 내보낸다 / 서버리스가 맞지 않는 일 / 사건이 사라졌다는 문의가 오면 / 트리거가 곧 구조다 / 면접에서 나올 만한 질문
 - 직접 링크 →: serverless-limits, cold-starts, pub-sub, transactional-outbox, saga-pattern, cloud-cost-optimization, idempotency-key, nextjs-static-dynamic-rendering
 - 키워드 백링크 →: dynamodb-modeling-capacity, dead-letter-queue, nextjs-route-handlers-proxy, queue-based-load-leveling, realtime-communication, message-queue-basics, db-type-key-value, docker-container-basics, container-orchestration-choices, route53-routing-policies, message-delivery-semantics, bash-scripting, kafka-basics, resilience-patterns, http-methods
-- 이 글로 오는 글 ←: architecture-patterns-overview, autoscaling, claim-check-sequential-convoy, cloud-cost-optimization, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, cold-starts, container-orchestration-choices, iam-basics, k8s-node-autoscaling-karpenter, microservices, saga-pattern, sd-email-protocols, serverless-limits
+- 이 글로 오는 글 ←: architecture-patterns-overview, autoscaling, claim-check-sequential-convoy, cloud-cost-optimization, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, cold-starts, container-orchestration-choices, data-orchestrators-comparison, iam-basics, k8s-node-autoscaling-karpenter, microservices, saga-pattern, sd-email-protocols, serverless-limits
 
 #### `transactional-outbox` — 아웃박스 릴레이 운영: 깨우기, 순서, 실패, 청소
 
@@ -2651,7 +2786,7 @@
 - 소제목: 같은 주문 API를 네 번 만든다 / Express: 함수를 줄 세운다 / Fastify: 스키마가 검증과 직렬화를 같이 한다 / NestJS: 구조와 의존성 주입을 프레임워크가 정한다 / Hono: Request를 받아 Response를 돌려주는 함수 / 라우터는 경로를 어떻게 맞추나 / 벤치마크 숫자를 직접 재 보면 / 서버에서 HTML을 만들던 자리: 템플릿 엔진 / 팀과 서비스에 맞춰 고르기 / 마무리 / 면접에서 나올 만한 질문
 - 직접 링크 →: express-middleware, nodejs-server-runtime, fastapi-basics, api-key-hmac-auth, spring-ioc-di, serverless-limits, cold-starts, xss, rendering-ssr, hexagonal-architecture
 - 키워드 백링크 →: ts-decorators, linux-processes-signals, event-loop, code-review-practices, js-runtimes-node-deno-bun, runtime-validation-zod, frontend-build-tooling
-- 이 글로 오는 글 ←: api-scaling-ladder, ds-trie, external-secrets, helm-chart-templates, html-semantics, js-runtimes-node-deno-bun, layered-architecture, mvc-pattern, pattern-decorator, pattern-mediator, pattern-singleton, pattern-strategy, spring-mvc-request-lifecycle, ts-classes-access-modifiers, ts-decorators, xss
+- 이 글로 오는 글 ←: api-scaling-ladder, ds-trie, external-secrets, helm-chart-templates, html-semantics, js-runtimes-node-deno-bun, layered-architecture, leetcode-evaluate-reverse-polish-notation, mvc-pattern, pattern-decorator, pattern-mediator, pattern-singleton, pattern-strategy, spring-mvc-request-lifecycle, ts-classes-access-modifiers, ts-decorators, xss
 
 ### Programming › Backend › Languages (`programming/backend/languages`)
 
@@ -2708,7 +2843,7 @@
 - 소제목: pip install 한 줄이 거절당했다 / 프로젝트마다 자기 파이썬을 갖는다 / pyproject.toml과 lock 파일, 그리고 uv / import는 sys.path를 순서대로 뒤진다 / 타입을 적고 실행 전에 검사한다 / GIL: 한 번에 한 스레드만 파이썬을 돈다 / 기다리는 일과 계산하는 일을 다르게 맡긴다 / 운영 스크립트는 종료 코드로 말한다 / 현장에서 파이썬 환경이 말썽을 부릴 때 / 도구 상자부터 정리하고 시작한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: fastapi-basics, backend-language-comparison, dependency-hell, go-language-essentials, bash-scripting
 - 키워드 백링크 →: dockerfile-image-layers, docker-container-basics, js-memory-leak, runtime-validation-zod, event-loop
-- 이 글로 오는 글 ←: fastapi-basics, go-language-essentials, layer-ip-addressing, linux-package-management, phishing-social-engineering, shell-environment-startup, thread-safety
+- 이 글로 오는 글 ←: data-orchestrators-comparison, fastapi-basics, go-language-essentials, layer-ip-addressing, linux-package-management, phishing-social-engineering, shell-environment-startup, thread-safety
 
 ### Programming › Backend › Messaging (`programming/backend/messaging`)
 
@@ -2743,7 +2878,7 @@
 - 소제목: 토픽은 파티션 여러 개로 된 로그다 / 키가 파티션을 정하고, 순서는 파티션 안에서만 지킨다 / 오프셋은 컨슈머가 남기는 책갈피다 / 소비자 그룹과 리밸런싱 / 랙은 남은 일의 양이다 / 리더 하나에 팔로워 둘, 그리고 acks / 얼마나 오래 둘까: 보관 기간과 컴팩션 / 랙 알람이 울렸을 때 보는 순서 / Kafka가 맞지 않는 곳 / 파티션 수가 병렬성의 상한이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: pub-sub, message-queue-basics, event-driven-architecture, message-delivery-semantics, consistent-hashing, rabbitmq-basics
 - 키워드 백링크 →: sd-mq-replication, sd-mq-consumer-groups, sd-mq-storage-partitions, db-type-wide-column
-- 이 글로 오는 글 ←: agentic-rag, airflow-orchestration, api-scaling-ladder, api-styles-overview, api-versioning, architecture-docs-c4-adr, backend-engineer-roadmap, backpressure, block-file-object-storage, bullmq-job-queue, cache-invalidation, cdc-change-data-capture, centralized-logging-pipeline, claim-check-sequential-convoy, cloud-cost-optimization, cloud-deployment-models-multicloud, data-lake-hdfs, data-warehouse-architecture, db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-tracing, distributed-transactions-2pc, elasticsearch-inverted-index, elk-stack-basics, encryption-in-transit, etl-vs-elt, event-driven-architecture, grafana-tempo-tracing, graphql-subscriptions-defer, k8s-hpa, k8s-operators, k8s-pod-disruption-budget, k8s-service-types, k8s-statefulset, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, model-serving, modular-monolith, otel-collector-pipeline, pattern-iterator, pub-sub, queue-based-load-leveling, rabbitmq-basics, raft-consensus, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, reactive-programming, realtime-communication, redis-basics, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, sd-interview-framework, sd-maps-location-eta, sd-metrics-collection, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-mq-storage-partitions, sd-music-streaming, sd-nearby-friends, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, spark-basics, stream-processing, system-design-concepts-map, system-design-study-path, transactional-outbox, twelve-factor-app
+- 이 글로 오는 글 ←: agentic-rag, airflow-orchestration, api-scaling-ladder, api-styles-overview, api-versioning, architecture-docs-c4-adr, backend-engineer-roadmap, backpressure, block-file-object-storage, bullmq-job-queue, cache-invalidation, cdc-change-data-capture, centralized-logging-pipeline, claim-check-sequential-convoy, cloud-cost-optimization, cloud-deployment-models-multicloud, data-catalog-lineage, data-engineering-lifecycle, data-lake-hdfs, data-warehouse-architecture, db-architecture-by-scale, db-type-columnar-olap, db-type-embedded, dead-letter-queue, distributed-tracing, distributed-transactions-2pc, elasticsearch-inverted-index, elk-stack-basics, encryption-in-transit, etl-vs-elt, event-driven-architecture, grafana-tempo-tracing, graphql-subscriptions-defer, k8s-hpa, k8s-operators, k8s-pod-disruption-budget, k8s-service-types, k8s-statefulset, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, latency-bandwidth-throughput, leader-election, message-delivery-semantics, message-queue-basics, microservices, model-serving, modular-monolith, otel-collector-pipeline, pattern-iterator, pub-sub, queue-based-load-leveling, rabbitmq-basics, raft-consensus, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, reactive-programming, realtime-communication, redis-basics, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, sd-interview-framework, sd-maps-location-eta, sd-metrics-collection, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-mq-storage-partitions, sd-music-streaming, sd-nearby-friends, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, spark-basics, stream-processing, system-design-concepts-map, system-design-study-path, transactional-outbox, twelve-factor-app
 
 #### `kafka-vs-rabbitmq-replay` — Kafka와 RabbitMQ: 읽은 메시지는 어디로 가고, 어떻게 다시 처리하나
 
@@ -2765,7 +2900,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: postgres-slow-db-triage, stream-processing, transactional-outbox, js-pure-functions, db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-daily-temperatures, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
+- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-fruit-into-baskets, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, reverse-etl, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -2809,7 +2944,7 @@
 - 소제목: 기억할 것이 있는 단계와 없는 단계 / 같은 키는 같은 작업자에게 / 스트림과 테이블은 한 데이터의 두 모습 / 주문에 회원 등급을 붙이는 조인 / 두 스트림을 이으면 기다리는 동안 상태가 쌓인다 / 작업자가 죽으면 상태는 어디서 돌아오나 / 느린 단계가 앞을 막는 방식 / 단계를 하나씩 떼어 큐로 잇는 파이프와 필터 / Kafka Streams, Flink, 그냥 컨슈머 / 스트림 작업이 아플 때 보이는 증상 / 상태를 키로 나누고, 로그로 지킨다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-ad-click-stream-windows, sd-ad-click-exactly-once, kafka-basics, cdc-change-data-capture, backpressure, olap-star-schema
 - 키워드 백링크 →: kafka-to-lake-pipeline, k8s-statefulset, sliding-window-pattern, js-array-transform, message-delivery-semantics, db-type-embedded, db-type-key-value, sd-object-storage-architecture, pub-sub, tcp-reliability-congestion, postgres-architecture, dns
-- 이 글로 오는 글 ←: batch-processing, cdc-change-data-capture, data-lake-hdfs, db-type-embedded, kafka-to-lake-pipeline, lambda-kappa-architecture, message-delivery-semantics, olap-star-schema, randomized-algorithms, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-interview-framework, sd-metrics-collection
+- 이 글로 오는 글 ←: batch-processing, cdc-change-data-capture, data-catalog-lineage, data-lake-hdfs, db-type-embedded, kafka-to-lake-pipeline, lambda-kappa-architecture, message-delivery-semantics, olap-star-schema, randomized-algorithms, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-interview-framework, sd-metrics-collection
 
 ### Programming › Backend › Node.js (`programming/backend/nodejs`)
 
@@ -3101,7 +3236,7 @@
 - 소제목: 기능이 맞는지, 쓸 만한지 / 연기가 나는지부터 본다 / 고친 곳 주변만 깊게 / 어제 되던 것이 오늘도 되나 / 느려진 것도 회귀다 / 다 돌릴 수 없으면 위험한 것부터 / 바뀐 파일에서 거꾸로 따라가기 / 직접 해 보기: 영향받는 테스트 고르기 / 같은 코드, 다른 브라우저 / 자동화가 못 보는 것은 사람이 본다 / 계획서에는 범위와 멈출 기준을 적는다 / 결과를 CI에 남긴다 / 회귀 묶음이 무너지는 모습들 / 언제, 얼마나 넓게 / 면접에서 나올 만한 질문
 - 직접 링크 →: test-design-techniques, test-pyramid-unit-tests, sit-uat-testing, ci-cd-basics, api-test-automation, tdd-bdd-atdd
 - 키워드 백링크 →: frontend-testing-strategy, build-caching, code-splitting, dependency-hell, k8s-deploy-pipeline-eks, osi-in-practice, frontend-monorepo
-- 이 글로 오는 글 ←: agent-tool-design, animation-performance, api-test-automation, argocd-basics, aria-keyboard-focus, blue-green-deployment, css-color-background, css-styling-approaches, design-system-building, frontend-testing-strategy, llm-app-security-guardrails, llm-evals, load-testing-k6, rag-retrieval-quality, rendering-performance-optimization, sdlc-models-agile-scrum, tdd-bdd-atdd, terraform-testing-policy-scanning, test-design-techniques
+- 이 글로 오는 글 ←: agent-tool-design, animation-performance, api-test-automation, argocd-basics, aria-keyboard-focus, blue-green-deployment, css-color-background, css-styling-approaches, design-system-adoption-governance, design-system-building, frontend-testing-strategy, llm-app-security-guardrails, llm-evals, load-testing-k6, ml-pipelines-ci-cd, rag-retrieval-quality, rendering-performance-optimization, sdlc-models-agile-scrum, spacing-sizing-type-scale, tdd-bdd-atdd, terraform-testing-policy-scanning, test-design-techniques
 
 #### `tdd-bdd-atdd` — TDD, BDD, ATDD: 테스트를 먼저 쓰면 설계가 어떻게 바뀌나
 
@@ -3134,7 +3269,7 @@
 - 소제목: 테스트가 있으면 무엇이 빨라지나 / 피라미드와 트로피가 다투는 것 / node:test로 함수 하나를 붙잡기 / 단위는 함수가 아니라 행동이다 / 진짜 대신 세우는 것들 / 목이 거짓말을 하는 두 가지 방식 / 시계와 난수를 테스트 손에 쥐여 준다 / 혼자 돌리면 통과하는 테스트 / 커버리지 100%인데 버그가 그대로다 / 직접 만들어 보는 가짜 시계 / React 컴포넌트도 같은 질문을 받는다 / 대역이 흉내 내지 못하는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: integration-tests-real-db, hexagonal-architecture, js-pure-functions, js-microtask-macrotask, ci-cd-basics, client-data-cache
 - 키워드 백링크 →: frontend-testing-strategy, bash-control-flow-functions, event-loop, microservices, db-type-embedded, code-review-practices, react-custom-hooks-rules
-- 이 글로 오는 글 ←: api-test-automation, backend-engineer-roadmap, code-review-practices, debounce-throttle, frontend-testing-strategy, integration-tests-real-db, js-microtask-macrotask, js-pure-functions, pattern-abstract-factory, pattern-null-object, react-custom-hooks-rules, sit-uat-testing, smoke-sanity-regression-testing, solid-principles, spring-boot-testing, spring-ioc-di, tdd-bdd-atdd, terraform-testing-policy-scanning, test-design-techniques
+- 이 글로 오는 글 ←: api-test-automation, backend-engineer-roadmap, code-review-practices, debounce-throttle, frontend-testing-strategy, integration-tests-real-db, js-microtask-macrotask, js-pure-functions, ml-pipelines-ci-cd, pattern-abstract-factory, pattern-null-object, react-custom-hooks-rules, sit-uat-testing, smoke-sanity-regression-testing, solid-principles, spring-boot-testing, spring-ioc-di, tdd-bdd-atdd, terraform-testing-policy-scanning, test-design-techniques
 
 ### Programming › Common (`programming/common`)
 
@@ -3158,7 +3293,7 @@
 - 소제목: 다이아몬드 모양에서 두 벌이 깔린다 / node_modules는 왜 평평한가 / 선언하지 않은 패키지를 쓰는 유령 의존성 / pnpm은 링크로 경계를 세운다 / peer dependency가 부딪히면 ERESOLVE / 남의 의존성 버전을 바꾸는 overrides / lockfile이 기록하는 것 / 설치는 남의 코드를 실행하는 일이다 / 업데이트를 봇에게 맡기는 방법 / 현장에서 의존성이 꼬였을 때 / 범위는 바람이고 lockfile은 결정이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: semantic-versioning, build-caching, pattern-singleton, secrets-management
 - 키워드 백링크 →: frontend-first-steps, cross-platform-apps, graphql-basics, linters-formatters, software-supply-chain-ci-hardening, linux-disks-filesystems, dockerfile-image-layers, frontend-monorepo, js-hoisting-tdz
-- 이 글로 오는 글 ←: build-caching, container-supply-chain-security, frontend-build-tooling, frontend-monorepo, git-troubleshooting, github-repo-governance, js-runtimes-node-deno-bun, k8s-project-structure, monorepo-build-cache, npm-package-publishing, owasp-top-10-map, plugin-microkernel-architecture, python-essentials-for-backend, semantic-versioning, smoke-sanity-regression-testing, software-supply-chain-ci-hardening, terraform-basics, twelve-factor-app
+- 이 글로 오는 글 ←: build-caching, container-supply-chain-security, design-system-adoption-governance, frontend-build-tooling, frontend-monorepo, git-troubleshooting, github-repo-governance, js-runtimes-node-deno-bun, k8s-project-structure, monorepo-build-cache, npm-package-publishing, owasp-top-10-map, plugin-microkernel-architecture, python-essentials-for-backend, semantic-versioning, smoke-sanity-regression-testing, software-supply-chain-ci-hardening, terraform-basics, twelve-factor-app
 
 #### `local-custom-domain` — localhost 대신 내 도메인으로 개발하기
 
@@ -3237,7 +3372,7 @@
 - 소제목: 리뷰로 얻으려는 것 / 위에서부터 읽는 피라미드 / 요구사항과 API를 먼저 본다 / 구현이 맞는가 / 두 번째 PR: 쿠폰을 쓰는 API / 테스트가 행동을 확인하나 / 문서와 이름 / 스타일은 사람이 보지 않는다 / 코멘트에 등급을 붙인다 / 코드에 대해 말한다 / PR 크기와 리뷰 속도 / 작성자가 리뷰받기 좋게 만드는 법 / 리뷰가 잘 굴러가는지 재 본다 / 의견이 갈릴 때 / AI 리뷰는 어디까지 믿나 / 무엇을 막고 무엇을 넘기나 / 마지막 37건을 다시 본다면 / 면접에서 나올 만한 질문
 - 직접 링크 →: github-repo-governance, git-stacked-prs, idempotency-key, race-conditions, test-pyramid-unit-tests
 - 키워드 백링크 →: architecture-docs-c4-adr, sql-query-rewrite
-- 이 글로 오는 글 ←: ai-coding-agents, api-security-owasp-api-top10, backend-language-comparison, chaos-engineering, claude-code-extensions, curl-for-debugging, db-migration-tools, design-patterns-overview, git-first-hour, github-pull-request-flow, github-repo-governance, html-semantics, html-text-semantics, lambda-kappa-architecture, linters-formatters, llm-model-selection, load-testing-k6, model-serving, multi-agent-systems, mvc-pattern, n-plus-one-queries, nextjs-server-actions-security, nodejs-server-runtime, nodejs-web-frameworks, owasp-top-10-map, pattern-composite, pattern-decorator, pattern-factory-method, pattern-singleton, pattern-template-method, race-conditions, react-state-management-libraries, reactive-programming, sdlc-models-agile-scrum, security-compliance-for-developers, security-testing-sast-dast, solid-principles, sql-query-rewrite, sql-select-where-null, system-prompt-design, test-pyramid-unit-tests, ts-narrowing, xss, zero-trust-architecture
+- 이 글로 오는 글 ←: ai-coding-agents, api-security-owasp-api-top10, backend-language-comparison, behavior-design-models, chaos-engineering, claude-code-extensions, curl-for-debugging, data-orchestrators-comparison, db-migration-tools, design-patterns-overview, design-system-adoption-governance, git-first-hour, github-pull-request-flow, github-repo-governance, html-semantics, html-text-semantics, lambda-kappa-architecture, linters-formatters, llm-model-selection, load-testing-k6, ml-pipelines-ci-cd, model-serving, multi-agent-systems, mvc-pattern, n-plus-one-queries, nextjs-server-actions-security, nodejs-server-runtime, nodejs-web-frameworks, owasp-top-10-map, pattern-composite, pattern-decorator, pattern-factory-method, pattern-singleton, pattern-template-method, race-conditions, react-state-management-libraries, reactive-programming, sdlc-models-agile-scrum, security-compliance-for-developers, security-testing-sast-dast, solid-principles, sql-query-rewrite, sql-select-where-null, system-prompt-design, test-pyramid-unit-tests, ts-narrowing, xss, zero-trust-architecture
 
 #### `git-branch-merge` — 브랜치와 병합: 포인터 하나가 움직일 뿐
 
@@ -3545,7 +3680,7 @@
 - 소제목: 0.1 + 0.2를 여러 언어에 물어보면 / 64비트를 셋으로 나눈다 / 0.1은 2진수로 끝나지 않는다 / 비트를 직접 쪼개 보기 / 오차는 더할수록 쌓인다 / 같은지 비교하는 법 / 2의 53제곱 너머의 정수 / 0이 둘, 자기 자신과 다른 값 / 반올림에는 방법이 여러 개다 / 돈은 정수로 세거나 decimal로 다룬다 / 나누고 남은 1원은 어디로 / 더하는 순서가 결과를 바꾼다 / 실무에서 고르는 기준 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-numbers-bigint, postgres-data-types, process-vs-thread
 - 키워드 백링크 →: js-binary-data-typed-arrays, sd-latency-numbers, input-validation-secure-coding, postgres-query-planner
-- 이 글로 오는 글 ←: binary-search, bit-manipulation, cpu-pipelining-branch-prediction, ddd-tactical-patterns, deep-learning-basics, etl-vs-elt, input-validation-secure-coding, js-equality-coercion, js-numbers-bigint, js-runtimes-node-deno-bun, js-template-literals, json-crud-http, leetcode-climbing-stairs, leetcode-counting-bits, leetcode-k-closest-points-to-origin, leetcode-powx-n, leetcode-sum-of-two-integers, leetcode-valid-anagram, llm-basics-for-developers, logic-gates-alu, ml-experiment-tracking, mongodb-document-model, postgres-data-types, pythagorean-theorem, rest-api-design, sd-stock-exchange-order-book, sd-unique-id-generator, sd-wallet-transfer, soap-and-soa, sql-basics, test-design-techniques
+- 이 글로 오는 글 ←: binary-search, bit-manipulation, cpu-pipelining-branch-prediction, ddd-tactical-patterns, deep-learning-basics, etl-vs-elt, input-validation-secure-coding, js-equality-coercion, js-numbers-bigint, js-runtimes-node-deno-bun, js-template-literals, json-crud-http, leetcode-car-fleet, leetcode-climbing-stairs, leetcode-counting-bits, leetcode-k-closest-points-to-origin, leetcode-powx-n, leetcode-product-of-array-except-self, leetcode-sum-of-two-integers, leetcode-valid-anagram, llm-basics-for-developers, logic-gates-alu, ml-experiment-tracking, mongodb-document-model, postgres-data-types, pythagorean-theorem, rest-api-design, sd-stock-exchange-order-book, sd-unique-id-generator, sd-wallet-transfer, soap-and-soa, sql-basics, test-design-techniques
 
 #### `garbage-collection` — 가비지 컬렉션 안쪽: 세대, 멈춤, 그리고 컨테이너 메모리 한도
 
@@ -3681,7 +3816,40 @@
 - 소제목: 크론 두 줄 대신 의존 관계 그래프 / 10월 21일 작업은 22일에 돈다 / 원본이 오기 전에 시작하지 않게 / 실패하면 다시, 단 같은 결과로 / 지난 일주일을 다시 계산해 달라는 요청 / 태스크 사이에 넘기는 것은 이름표만 / DAG 파일은 30초마다 다시 읽힌다 / 태스크가 queued에서 멈춰 있을 때 / 시각이 아니라 구간과 조건으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: cron-jobs, batch-processing, spark-basics, data-lake-hdfs, idempotency-key, kafka-to-lake-pipeline
 - 키워드 백링크 →: data-warehouse-architecture, sd-object-storage-architecture, db-type-embedded, js-pure-functions, kafka-basics, osi-in-practice, http-methods, zero-downtime-migrations
-- 이 글로 오는 글 ←: acid-vs-base, batch-processing, data-lake-hdfs, dbt-transformations, etl-vs-elt, kafka-to-lake-pipeline, model-serving, spark-basics, what-is-mlops
+- 이 글로 오는 글 ←: acid-vs-base, batch-processing, data-catalog-lineage, data-engineering-lifecycle, data-lake-hdfs, data-orchestrators-comparison, data-quality-checks, dbt-transformations, etl-vs-elt, kafka-to-lake-pipeline, ml-pipelines-ci-cd, model-serving, reverse-etl, spark-basics, what-is-mlops
+
+#### `bi-semantic-layer` — BI와 시맨틱 레이어: 지표 정의를 한곳에 두기
+
+- 요약: 대시보드 세 개가 10월 활성 사용자를 78,053, 49,197, 58,800으로 세는 장면에서 시작해, BI 도구의 라이브 연결과 추출, LookML과 dbt 시맨틱 레이어로 지표 정의를 모으는 법, 사용자-일 집계 테이블로 대시보드 쿼리를 24배 줄이는 과정을 DuckDB로 직접 잰다. 더할 수 없는 고유 수, 집계 인식, 캐시와 Streamlit 같은 코드 대시보드도 다룬다.
+- 태그: Big Data, SQL, Database, Performance
+- 키워드: 시맨틱 레이어, BI 도구, 집계 인식, LookML
+- 길이: 382줄
+- 소제목: 같은 테이블에서 활성 사용자가 셋 / BI 도구가 웨어하우스에 묻는 방식 / 지표 정의를 한 장에 적는다 / 대시보드가 느릴 때 먼저 보는 곳 / 고유 사용자 수는 더할 수 없다 / 질문마다 가장 작은 표를 고른다 / 캐시, 추출, 파티션: 나머지 손잡이 / 개발자가 직접 만드는 대시보드 / 다시 월요일 회의로 / 면접에서 나올 만한 질문
+- 직접 링크 →: data-warehouse-architecture, dbt-transformations, data-catalog-lineage, reverse-etl, data-mesh-fabric
+- 키워드 백링크 →: hyperloglog, db-sharding, db-type-columnar-olap, etl-vs-elt
+- 이 글로 오는 글 ←: data-catalog-lineage, data-warehouse-architecture, elk-stack-basics, lambda-kappa-architecture
+
+#### `data-catalog-lineage` — 메타데이터와 데이터 계보: 이 컬럼은 어디서 와서 어디로 가나
+
+- 요약: 원본 컬럼 하나를 지웠더니 사흘 뒤 다른 팀 대시보드가 깨지는 장면에서 시작해, 기술·업무·운영 메타데이터와 카탈로그가 하는 일, SQL 파싱(sqlglot)과 실행 이벤트(OpenLineage)로 컬럼 계보를 모으는 법, 바꾸기 전의 영향 분석과 거꾸로 올라가는 원인 찾기를 직접 돌려 본다. 아무도 갱신하지 않아 실패하는 카탈로그를 메타데이터 우선 설계로 막는 법과 ML 학습 데이터의 계보도 다룬다.
+- 태그: Big Data, Database, Python, Machine Learning
+- 키워드: 데이터 계보, 데이터 카탈로그, OpenLineage, 컬럼 계보, 메타데이터 우선
+- 길이: 392줄
+- 소제목: 데이터를 설명하는 데이터를 셋으로 나눈다 / 카탈로그는 메타데이터를 한곳에 모아 찾게 해 준다 / 계보를 만드는 첫 번째 방법: SQL을 읽는다 / 두 번째 방법: 실행하면서 알린다 / 바꾸기 전에 아래쪽을 훑는다 / 틀린 숫자에서 거꾸로 올라간다 / 메타데이터를 나중에 적지 않고 먼저 내보낸다 / 모델 학습 데이터의 계보 / 카탈로그를 고를 때 보는 것 / 계보가 있어도 아무도 안 볼 때 / 지도는 길을 다니는 차가 그린다 / 면접에서 나올 만한 질문
+- 직접 링크 →: dbt-transformations, data-privacy-compliance, reverse-etl, data-quality-checks, data-warehouse-architecture, ml-experiment-tracking, what-is-mlops
+- 키워드 백링크 →: elasticsearch-inverted-index, opensearch-cluster-operations, schema-versioning, docker-container-basics, data-orchestrators-comparison, ds-graph-bfs-dfs, bi-semantic-layer, airflow-orchestration, data-lake-hdfs, db-type-relational, stream-processing, sd-mq-storage-partitions, kafka-basics, shells-posix-compat, cloud-service-models-shared-responsibility, etl-vs-elt
+- 이 글로 오는 글 ←: bi-semantic-layer, data-mesh-fabric, data-orchestrators-comparison, dbt-transformations, etl-vs-elt
+
+#### `data-engineering-lifecycle` — 데이터 엔지니어링 한 바퀴: 주문 하나가 생겨서 리포트에 닿기까지
+
+- 요약: 관리자 화면은 환불인데 아침 리포트는 매출이라는 문의에서 시작해, 주문 하나를 생성·수집·저장·변환·서빙 다섯 단계로 따라간다. 원본마다 다른 성격, 수집할 때 정할 지연·양·스키마·중복·개인정보, 운영 DB에 리포트를 바로 걸면 생기는 일, 역할 구분, 셸 스크립트 하나로 만든 첫 파이프라인이 빈 테이블을 커밋하는 함정과 웨어하우스로 넘어가는 신호를 다룬다.
+- 태그: Big Data, Database, PostgreSQL, Backend, Architecture
+- 키워드: 데이터 엔지니어링 수명 주기
+- 길이: 400줄
+- 소제목: 앱에서는 환불인데 리포트에서는 매출이다 / 주문 하나가 지나가는 다섯 단계 / 데이터가 생기는 곳 / 가져올 때 먼저 정할 것 / 어디에 담아 두나 / 쓰기 좋은 모양으로 바꾸기 / 필요한 사람에게 내주기 / 운영 DB에 바로 리포트를 걸면 / 데이터 엔지니어, 분석가, 데이터 사이언티스트 / 스크립트 하나로 만드는 첫 파이프라인 / Postgres 하나에서 웨어하우스로 넘어가는 신호 / 기술을 고르는 기준 / 단계 밑에 깔린 것들 / 숫자가 엇갈리면 길을 거꾸로 걷는다 / 면접에서 나올 만한 질문
+- 직접 링크 →: data-quality-checks, data-privacy-compliance, etl-vs-elt, cdc-change-data-capture, kafka-to-lake-pipeline, db-type-columnar-olap, data-lake-hdfs, data-warehouse-architecture, olap-star-schema, spark-basics, airflow-orchestration, cron-jobs
+- 키워드 백링크 →: db-sharding, ab-testing, bash-scripting, sd-object-storage-architecture, db-replication-sharding, kafka-basics, cloud-service-models-shared-responsibility, sd-db-replication-intro, dbt-transformations, zero-downtime-migrations
+- 이 글로 오는 글 ←: data-mesh-fabric, lambda-kappa-architecture
 
 #### `data-lake-hdfs` — 데이터 레이크와 HDFS: 블록, 복제, 작은 파일, 그리고 테이블 포맷
 
@@ -3692,7 +3860,7 @@
 - 소제목: 원본을 버리지 않고 일단 쌓아 두는 곳 / 큰 파일을 블록으로 잘라 여러 서버에 나눈다 / 쓰기는 DataNode끼리 줄을 서서 넘긴다 / DataNode 하나를 죽여 봤다 / 작은 파일 1만 개가 느린 이유 / 계산과 저장을 떼어 놓게 된 이유 / 경로를 읽으면 테이블 구조가 보인다 / 파일 더미 위에 커밋 로그를 얹는다 / 레이크가 느려졌다는 말을 들으면 / 바이트보다 파일 개수를 먼저 센다 / 면접에서 나올 만한 질문
 - 직접 링크 →: spark-basics, airflow-orchestration, kafka-to-lake-pipeline, db-type-columnar-olap, sd-object-storage-durability, sd-object-storage-architecture
 - 키워드 백링크 →: data-warehouse-architecture, db-partitioning, sd-start-single-server, mongodb-replica-set-sharding, stream-processing, kafka-basics, postgres-architecture, linux-archive-transfer, etl-vs-elt, cdc-change-data-capture
-- 이 글로 오는 글 ←: airflow-orchestration, data-center-infrastructure, data-warehouse-architecture, db-type-columnar-olap, db-type-time-series, db-type-wide-column, etl-vs-elt, grafana-tempo-tracing, kafka-to-lake-pipeline, lambda-kappa-architecture, network-flow-logs, sd-ad-click-stream-windows, sd-object-storage-durability, spark-basics, what-is-mlops
+- 이 글로 오는 글 ←: airflow-orchestration, data-catalog-lineage, data-center-infrastructure, data-engineering-lifecycle, data-quality-checks, data-warehouse-architecture, db-type-columnar-olap, db-type-time-series, db-type-wide-column, etl-vs-elt, grafana-tempo-tracing, kafka-to-lake-pipeline, lambda-kappa-architecture, network-flow-logs, sd-ad-click-stream-windows, sd-object-storage-durability, spark-basics, what-is-mlops
 
 #### `data-mesh-fabric` — 데이터 메시와 데이터 패브릭: 중앙 데이터 팀이 병목이 될 때
 
@@ -3701,9 +3869,31 @@
 - 키워드: 데이터 메시, 데이터 패브릭, 데이터 제품, 계산형 거버넌스
 - 길이: 398줄
 - 소제목: 사람을 더 뽑아도 줄이 줄지 않는다 / 도메인이 데이터를 제품처럼 낸다 / 데이터 제품에 붙는 것들 / 메시가 사일로로 끝나는 이유 / 바꾸는 쪽에서 깨짐을 먼저 본다 / 규칙은 회의가 아니라 코드로 지킨다 / 데이터 패브릭은 메타데이터에서 출발한다 / 메시와 패브릭은 고르는 대상이 아니다 / 아직 메시가 필요 없는 회사 / 첫 데이터 제품 하나를 내는 순서 / 도입하다 흔히 막히는 곳 / 마이크로서비스와 닮은 이유 / 다시 6주짜리 대시보드로 / 면접에서 나올 만한 질문
-- 직접 링크 →: data-warehouse-architecture, cdc-change-data-capture, ddd-bounded-context, microservices-decomposition
+- 직접 링크 →: data-warehouse-architecture, data-engineering-lifecycle, cdc-change-data-capture, data-catalog-lineage, data-quality-checks, ddd-bounded-context, microservices-decomposition
 - 키워드 백링크 →: elasticsearch-inverted-index, db-sharding, microservices, graph-rag, db-type-columnar-olap, schema-versioning, sli-slo
-- 이 글로 오는 글 ←: vpn-ipsec-wireguard
+- 이 글로 오는 글 ←: bi-semantic-layer, vpn-ipsec-wireguard
+
+#### `data-orchestrators-comparison` — 데이터 오케스트레이터 고르기: Airflow, Dagster, Prefect, Luigi와 관리형 ETL
+
+- 요약: Airflow로 짰던 일일 집계를 Prefect 3.9와 Dagster 1.13, Luigi 3.8로 다시 짜서 직접 돌려 보고, 태스크 중심과 자산 중심 모델이 백필을 어떻게 다르게 만드는지 본다. 빈 파티션과 오래된 파티션을 골라 다시 만드는 판단, AWS Glue·Azure Data Factory·GCP Dataflow가 맡는 범위와 비용·종속도 비교한다.
+- 태그: Big Data, Python, Automation, Cloud
+- 키워드: Prefect, Dagster, 소프트웨어 정의 자산, AWS Glue, Luigi
+- 길이: 445줄
+- 소제목: 크론으로 충분하지 않은 순간 / Prefect: 파이썬 함수에 장식만 붙인다 / Dagster: 만들 결과물을 먼저 적는다 / 자산 중심이면 백필이 빈칸 채우기가 된다 / Luigi가 먼저 했던 것 / 같은 일을 네 도구로 해 보니 / 클라우드가 대신 돌려 주는 것들 / 관리형으로 갈 때 잃는 것 / 도구를 바꿔도 남는 규칙 / 면접에서 나올 만한 질문
+- 직접 링크 →: airflow-orchestration, etl-vs-elt, dbt-transformations, cron-jobs, data-quality-checks, data-catalog-lineage, lambda-kappa-architecture
+- 키워드 백링크 →: serverless-architecture, bash-scripting, db-type-columnar-olap, python-essentials-for-backend, code-review-practices, sd-mq-storage-partitions, js-pure-functions, zero-downtime-migrations
+- 이 글로 오는 글 ←: data-catalog-lineage, ml-pipelines-ci-cd
+
+#### `data-quality-checks` — 데이터 품질 검사: 조용히 틀린 숫자를 먼저 잡는 법과 데이터 계약
+
+- 요약: 파이프라인은 초록불인데 어제 매출이 0원으로 찍힌 장면에서 시작해, 유일성·완전성·유효성·일관성·신선도를 실패 행을 돌려주는 SQL로 쓰고, 결과 지표와 같은 요일 기준으로 이상을 잡고, 정산 파일과 합계를 맞춰 본다. 적재 전 차단(Write-Audit-Publish)과 적재 후 경보, dbt test와 Great Expectations의 자리, 원본 팀과 맺는 데이터 계약, 틀린 숫자가 나갔을 때의 대응을 PostgreSQL 16으로 다룬다.
+- 태그: Big Data, Database, PostgreSQL, SQL, Testing, Troubleshooting
+- 키워드: 데이터 품질, 데이터 계약, Write-Audit-Publish, Great Expectations
+- 길이: 424줄
+- 소제목: 파이프라인은 초록불인데 어제 매출이 0원이다 / 틀린 데이터는 오류를 내지 않는다 / 품질을 다섯 갈래로 나눠 묻는다 / 행 수는 맞았다 / 다른 장부와 합계를 맞춰 본다 / 어제와 비교하면 토요일마다 알림이 온다 / 적재 전에 막을까, 적재 후에 알릴까 / 검사를 도구로 옮기면 / 원본 팀과 맺는 데이터 계약 / 틀린 숫자가 이미 나갔을 때 / 검사 결과도 테이블에 쌓는다 / 검사를 너무 많이 걸면 / 성공한 작업과 맞는 숫자는 다르다 / 면접에서 나올 만한 질문
+- 직접 링크 →: etl-vs-elt, data-warehouse-architecture, schema-versioning, airflow-orchestration
+- 키워드 백링크 →: data-lake-hdfs, sql-basics, sd-payment-reliability, alerting, postgres-getting-started, dbt-transformations, zero-downtime-migrations
+- 이 글로 오는 글 ←: data-catalog-lineage, data-engineering-lifecycle, data-mesh-fabric, data-orchestrators-comparison, data-warehouse-architecture, dbt-transformations, etl-vs-elt, lambda-kappa-architecture, ml-model-monitoring-drift, ml-pipelines-ci-cd, reverse-etl, sqld-data-modeling, what-is-mlops
 
 #### `data-warehouse-architecture` — 데이터 웨어하우스 설계: 브론즈·실버·골드, 데이터 마트, 레이크하우스
 
@@ -3712,9 +3902,9 @@
 - 키워드: 데이터 웨어하우스, 메달리온 아키텍처, 레이크하우스, 데이터 마트
 - 길이: 414줄
 - 소제목: 회의마다 매출 숫자가 세 개다 / 원본, 정제, 쓰임새로 나눈 세 칸 / 매출을 한 번만 정의하기 / 중앙부터 짓느냐, 부서별로 짓느냐 / 데이터 마트를 따로 두는 이유 / 칸마다 읽을 수 있는 사람을 나눈다 / 레이크, 웨어하우스, 그리고 레이크하우스 / 저장과 계산을 떼어 놓으면 / 읽은 만큼 내는 요금 / 데이터 허브는 무엇이 다른가 / 작은 팀에서 시작하는 순서 / 숫자가 안 맞는다는 문의를 받으면 / 숫자의 뜻을 한 칸에 모은다 / 면접에서 나올 만한 질문
-- 직접 링크 →: etl-vs-elt, olap-star-schema, db-type-columnar-olap, data-lake-hdfs, event-driven-architecture
-- 키워드 백링크 →: db-sharding, sd-object-storage-architecture, db-replication-sharding, sd-mq-storage-partitions, kafka-basics, cloud-service-models-shared-responsibility, acid-transactions, db-keys-denormalization, dbt-transformations, db-modeling-normalization
-- 이 글로 오는 글 ←: airflow-orchestration, data-lake-hdfs, data-mesh-fabric, db-architecture-by-scale, dbt-transformations, encryption-at-rest, etl-vs-elt, lambda-kappa-architecture, ml-model-monitoring-drift, model-serving, multi-tenancy-isolation, sd-ad-click-stream-windows
+- 직접 링크 →: etl-vs-elt, olap-star-schema, db-type-columnar-olap, data-lake-hdfs, event-driven-architecture, data-quality-checks
+- 키워드 백링크 →: db-sharding, bi-semantic-layer, sd-object-storage-architecture, db-replication-sharding, sd-mq-storage-partitions, kafka-basics, cloud-service-models-shared-responsibility, acid-transactions, db-keys-denormalization, dbt-transformations, db-modeling-normalization
+- 이 글로 오는 글 ←: airflow-orchestration, bi-semantic-layer, data-catalog-lineage, data-engineering-lifecycle, data-lake-hdfs, data-mesh-fabric, data-quality-checks, db-architecture-by-scale, dbt-transformations, encryption-at-rest, etl-vs-elt, lambda-kappa-architecture, ml-model-monitoring-drift, model-serving, multi-tenancy-isolation, sd-ad-click-stream-windows
 
 #### `dbt-transformations` — dbt로 SQL 변환 관리하기: 모델, ref, 증분 모델, 테스트
 
@@ -3723,9 +3913,9 @@
 - 키워드: dbt, 증분 모델, dbt 스냅숏, materialization
 - 길이: 530줄
 - 소제목: SELECT 하나가 모델 하나 / ref가 그리는 지도 / view, table, incremental 중에 고르기 / 증분 모델은 새로 온 것만 넣는다 / 스냅숏으로 등급이 바뀐 날을 남긴다 / 테스트가 모델 사이를 막는다 / Airflow와 dbt가 일을 나누는 자리 / 흔히 밟는 실수 / SQL을 파일로, 순서는 ref로 / 면접에서 나올 만한 질문
-- 직접 링크 →: etl-vs-elt, data-warehouse-architecture, olap-star-schema, cdc-change-data-capture, airflow-orchestration
-- 키워드 백링크 →: kafka-to-lake-pipeline, db-type-columnar-olap, ds-graph-bfs-dfs
-- 이 글로 오는 글 ←: data-warehouse-architecture, etl-vs-elt, model-serving, olap-star-schema
+- 직접 링크 →: etl-vs-elt, data-warehouse-architecture, data-catalog-lineage, olap-star-schema, cdc-change-data-capture, data-quality-checks, airflow-orchestration
+- 키워드 백링크 →: reverse-etl, kafka-to-lake-pipeline, db-type-columnar-olap, ds-graph-bfs-dfs
+- 이 글로 오는 글 ←: bi-semantic-layer, data-catalog-lineage, data-engineering-lifecycle, data-orchestrators-comparison, data-quality-checks, data-warehouse-architecture, etl-vs-elt, model-serving, olap-star-schema, reverse-etl
 
 #### `etl-vs-elt` — ETL과 ELT: 어디서 변환하나, 증분 추출과 스테이징, 멱등한 적재
 
@@ -3734,9 +3924,9 @@
 - 키워드: ETL, ELT, 증분 추출, 적재 워터마크
 - 길이: 509줄
 - 소제목: 밤마다 통째로 복사하던 작업이 6시간을 넘겼다 / 추출, 변환, 적재를 어디서 하나 / 바뀐 것만 가져오기 / 늦게 커밋된 주문이 빠진다 / 지워진 행은 updated_at으로 못 찾는다 / 스테이징에 원본 그대로 내려놓는다 / 다시 돌려도 숫자가 같게 적재하기 / 원본 스키마가 바뀐 날 / 끌어오기와 밀어 넣기 / 웨어하우스 안에서 변환하면 드는 비용 / 재처리를 미리 설계해 둔다 / 새벽 적재가 늦거나 숫자가 비면 / 어디서 바꾸든, 다시 돌릴 수 있게 / 면접에서 나올 만한 질문
-- 직접 링크 →: spark-basics, data-lake-hdfs, airflow-orchestration, kafka-to-lake-pipeline, db-type-columnar-olap, data-privacy-compliance, cdc-change-data-capture, clock-skew, schema-versioning, data-warehouse-architecture
-- 키워드 백링크 →: db-sharding, mysql-replication-online-ddl, sd-object-storage-architecture, db-replication-sharding, floating-point-numbers, kafka-basics, cloud-service-models-shared-responsibility, sd-db-replication-intro, dbt-transformations, http-methods, zero-downtime-migrations, webhooks
-- 이 글로 오는 글 ←: data-lake-hdfs, data-warehouse-architecture, db-type-columnar-olap, dbt-transformations, encryption-at-rest, lambda-kappa-architecture, release-cutover-hypercare
+- 직접 링크 →: spark-basics, data-lake-hdfs, airflow-orchestration, kafka-to-lake-pipeline, db-type-columnar-olap, data-privacy-compliance, cdc-change-data-capture, clock-skew, data-quality-checks, schema-versioning, data-warehouse-architecture
+- 키워드 백링크 →: db-sharding, data-catalog-lineage, mysql-replication-online-ddl, sd-object-storage-architecture, db-replication-sharding, floating-point-numbers, kafka-basics, cloud-service-models-shared-responsibility, sd-db-replication-intro, dbt-transformations, http-methods, zero-downtime-migrations, webhooks
+- 이 글로 오는 글 ←: bi-semantic-layer, data-catalog-lineage, data-engineering-lifecycle, data-lake-hdfs, data-orchestrators-comparison, data-quality-checks, data-warehouse-architecture, db-type-columnar-olap, dbt-transformations, encryption-at-rest, lambda-kappa-architecture, ml-pipelines-ci-cd, release-cutover-hypercare, reverse-etl
 
 #### `kafka-to-lake-pipeline` — Kafka에서 레이크까지: 스트리밍 적재, 정확히 한 번의 범위, 늦은 데이터
 
@@ -3747,7 +3937,7 @@
 - 소제목: 받는 쪽과 쌓는 쪽을 끊어 놓는다 / Kafka를 파일로 바꾸는 두 가지 길 / 마이크로배치 하나가 커밋되는 순서 / 실행 중에 kill -9를 날려 봤다 / 폴더를 직접 읽으면 중복이 보인다 / 5초마다 파일이 생긴다 / 늦게 온 클릭은 이미 닫힌 날로 간다 / 형식이 바뀐 날은 조용히 틀린다 / 파이프라인이 늦거나 숫자가 틀릴 때 / 오프셋과 파일 목록을 같은 리듬으로 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: data-lake-hdfs, spark-basics, airflow-orchestration, kafka-basics, message-delivery-semantics, sd-ad-click-stream-windows, sd-ad-click-exactly-once, schema-versioning
 - 키워드 백링크 →: stream-processing, sd-object-storage-architecture, pub-sub, postgres-architecture, sql-query-rewrite, zero-downtime-migrations
-- 이 글로 오는 글 ←: airflow-orchestration, cdc-change-data-capture, data-lake-hdfs, db-architecture-by-scale, db-type-columnar-olap, dbt-transformations, etl-vs-elt, event-driven-architecture, lambda-kappa-architecture, realtime-communication, spark-basics, stream-processing, transactional-outbox
+- 이 글로 오는 글 ←: airflow-orchestration, cdc-change-data-capture, data-engineering-lifecycle, data-lake-hdfs, db-architecture-by-scale, db-type-columnar-olap, dbt-transformations, etl-vs-elt, event-driven-architecture, lambda-kappa-architecture, realtime-communication, spark-basics, stream-processing, transactional-outbox
 
 #### `lambda-kappa-architecture` — 배치와 스트리밍을 함께 쓰기: 람다와 카파 아키텍처
 
@@ -3756,8 +3946,20 @@
 - 키워드: 속도 층, 서빙 층, 하이브리드 수집, 전체 재처리
 - 길이: 392줄
 - 소제목: 숫자 두 개가 갈라지는 이유 / 느린 길과 빠른 길을 나란히 두는 람다 / 두 뷰를 이어 붙이는 자리 / 같은 규칙을 두 번 짜는 값 / 로그 하나만 남기는 카파 / 카파에서 전체를 다시 계산하는 순서 / 늦은 데이터는 어느 쪽에서도 공짜가 아니다 / 테이블 포맷이 경계를 흐리게 만들었다 / 섞어 쓰는 하이브리드 수집 / 무엇을 기준으로 고르나 / 두 숫자가 다르다는 문의가 오면 / 길을 몇 개 두든 규칙은 한 벌로 / 면접에서 나올 만한 질문
-- 직접 링크 →: batch-processing, stream-processing, sd-ad-click-stream-windows, kafka-to-lake-pipeline, data-lake-hdfs, cdc-change-data-capture, etl-vs-elt, data-warehouse-architecture
-- 키워드 백링크 →: db-type-wide-column, centralized-logging-pipeline, sd-ad-click-exactly-once, sd-object-storage-architecture, kafka-basics, db-type-columnar-olap, code-review-practices, postgres-architecture, shells-posix-compat, zero-downtime-migrations
+- 직접 링크 →: batch-processing, stream-processing, sd-ad-click-stream-windows, data-quality-checks, kafka-to-lake-pipeline, data-lake-hdfs, cdc-change-data-capture, etl-vs-elt, data-engineering-lifecycle, data-warehouse-architecture
+- 키워드 백링크 →: db-type-wide-column, centralized-logging-pipeline, sd-ad-click-exactly-once, sd-object-storage-architecture, kafka-basics, db-type-columnar-olap, bi-semantic-layer, code-review-practices, postgres-architecture, shells-posix-compat, zero-downtime-migrations
+- 이 글로 오는 글 ←: data-orchestrators-comparison
+
+#### `reverse-etl` — 리버스 ETL: 웨어하우스 데이터를 업무 도구로 되돌려 보내기
+
+- 요약: 영업팀이 CRM에서 최근 30일 구매액을 보고 싶다는 요청에서 시작해, 보낼 모양의 모델, 지난번 상태와 비교하는 변경분 동기화, API 호출 한도와 재시도, 전송 뒤 죽었을 때 create와 upsert의 차이, 키 매칭과 삭제 전파를 가짜 CRM으로 직접 돌려 본다. CDP와 리버스 ETL 도구의 자리, 직접 짤 때의 기준도 정리한다.
+- 태그: Big Data, API, Backend, Automation
+- 키워드: 리버스 ETL, Customer Data Platform, 변경분 동기화, 외부 id upsert
+- 길이: 388줄
+- 소제목: 반대 방향으로 흐르는 파이프 / 보낼 모양은 웨어하우스에서 만든다 / 매번 전부 보내지 않고 달라진 것만 / 가짜 CRM으로 돌려 본 동기화 / 한도에 걸리면 기다렸다가 다시 / 동기화가 두 번 일어나면 / 키를 맞추는 일 / 사라진 행은 어떻게 전하나 / CDP와 리버스 ETL 도구의 자리 / 직접 짤까, 도구를 쓸까 / 동기화가 이상하다는 말을 들으면 / 계산은 웨어하우스에서, 전달은 조심스럽게 / 면접에서 나올 만한 질문
+- 직접 링크 →: dbt-transformations, etl-vs-elt, data-quality-checks, retries, message-delivery-semantics, data-privacy-compliance, airflow-orchestration
+- 키워드 백링크 →: rate-limiting-in-practice, db-type-columnar-olap, resilience-patterns, cloud-service-models-shared-responsibility, db-modeling-normalization, zero-downtime-migrations
+- 이 글로 오는 글 ←: bi-semantic-layer, data-catalog-lineage, dbt-transformations
 
 #### `spark-basics` — Spark 기초: 지연 평가, stage와 셔플, 파티션, 데이터 치우침
 
@@ -3768,7 +3970,7 @@
 - 소제목: 서버 한 대로 안 되는 집계를 나눠 맡긴다 / 변환은 계획만 쌓고, 액션이 실행한다 / explain()으로 계획을 펼쳐 본다 / 셔플이 stage를 자른다 / MapReduce는 잡마다 결과를 내려놓았다 / 파티션 수가 태스크 수다 / 작은 표는 통째로 보낸다 / 키 하나에 몰리면 태스크 하나가 끝나지 않는다 / RDD를 직접 쓰지 않게 된 이유 / 느린 Spark 작업을 받으면 / 셔플을 세고, 조각을 고르게 / 면접에서 나올 만한 질문
 - 직접 링크 →: data-lake-hdfs, airflow-orchestration, kafka-to-lake-pipeline
 - 키워드 백링크 →: db-partitioning, rest-api-design, sd-start-single-server, kafka-basics, db-type-relational
-- 이 글로 오는 글 ←: airflow-orchestration, data-lake-hdfs, etl-vs-elt, js-iterators-generators, kafka-to-lake-pipeline
+- 이 글로 오는 글 ←: airflow-orchestration, data-engineering-lifecycle, data-lake-hdfs, etl-vs-elt, js-iterators-generators, kafka-to-lake-pipeline
 
 ### Programming › Database (`programming/database`)
 
@@ -3792,7 +3994,7 @@
 - 소제목: 검색 인덱스가 따라오지 못한 이유 / 트리거로 바뀐 행을 한 줄씩 적어 둔다 / 이미 적고 있는 로그를 빌려 읽는다 / 처음 한 번은 통째로 복사해야 한다 / 스키마를 바꾸면 복제가 멈춘다 / 바뀌기 전 값은 어디까지 남나 / Debezium이 대신 해 주는 일 / 받는 쪽은 같은 변경을 다시 받는다 / 슬롯이 끊기는 날 / 세 방법 중 무엇을 고르나 / CDC가 늦다는 알림이 왔을 때 / 로그를 읽고, 두 번 받을 각오를 한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: event-driven-architecture, transactional-outbox, db-type-columnar-olap, zero-downtime-migrations, kafka-basics, message-delivery-semantics, stream-processing, olap-star-schema
 - 키워드 백링크 →: kafka-to-lake-pipeline, elasticsearch-inverted-index, mysql-replication-online-ddl, page-cache-disk-io, postgres-architecture, db-replication-sharding, db-type-wide-column, sql-basics
-- 이 글로 오는 글 ←: cache-invalidation, caching-strategies, data-lake-hdfs, data-mesh-fabric, db-architecture-by-scale, db-sharding, db-type-columnar-olap, db-type-graph, db-type-relational, db-types-overview, dbt-transformations, elasticsearch-bulk-indexing, elasticsearch-inverted-index, etl-vs-elt, event-driven-architecture, event-sourcing, lambda-kappa-architecture, microservices, microservices-decomposition, mysql-replication-online-ddl, olap-star-schema, postgres-jsonb-search, saga-pattern, sd-hotel-inventory-scaling, sql-vs-nosql, stream-processing, transactional-outbox, zero-downtime-migrations
+- 이 글로 오는 글 ←: cache-invalidation, caching-strategies, data-engineering-lifecycle, data-lake-hdfs, data-mesh-fabric, db-architecture-by-scale, db-sharding, db-type-columnar-olap, db-type-graph, db-type-relational, db-types-overview, dbt-transformations, elasticsearch-bulk-indexing, elasticsearch-inverted-index, etl-vs-elt, event-driven-architecture, event-sourcing, lambda-kappa-architecture, microservices, microservices-decomposition, mysql-replication-online-ddl, olap-star-schema, postgres-jsonb-search, saga-pattern, sd-hotel-inventory-scaling, sql-vs-nosql, stream-processing, transactional-outbox, zero-downtime-migrations
 
 #### `db-partitioning` — 파티셔닝: 큰 테이블을 달마다 나누기
 
@@ -3824,7 +4026,7 @@
 - 소제목: 실험에 쓸 두 테이블 / 나누기 전에 한 대부터 키운다 / 복제본은 WAL을 받아 다시 실행한다 / 스탠바이를 하나 붙여 보기 / 방금 결제한 주문이 안 보인다 / 쓴 사람에게는 쓴 것을 보여 준다 / 동기 복제는 어디까지 기다리나 / 복제본에서 긴 쿼리가 끊긴다 / MySQL은 binlog로 복제한다 / 프라이머리가 죽으면 누가 이어받나 / 언제 다음 단계로 넘어가나 / 복제는 읽기를 나누고, 늦을 수 있다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-partitioning, db-sharding, db-index, sql-query-tuning, caching-strategies, mysql-replication-online-ddl, failover
 - 키워드 백링크 →: db-consistency-cap, prometheus-basics, db-architecture-by-scale, rds-aurora-managed-db, mysql-innodb-basics, sd-start-single-server, page-cache-disk-io, sd-mq-storage-partitions, scaling-horizontal-vertical, sql-batch-timeout-pool, db-type-key-value, disaster-recovery, postgres-architecture, dns
-- 이 글로 오는 글 ←: acid-transactions, api-scaling-ladder, autoscaling, aws-core-services-map, backend-engineer-roadmap, block-file-object-storage, cache-invalidation, caching-strategies, cdc-change-data-capture, claim-check-sequential-convoy, connection-pool, consistency-models, cqrs, data-warehouse-architecture, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-performance-map, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, elasticsearch-snapshot-dr, etl-vs-elt, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, mongodb-indexes-explain, mongodb-replica-set-sharding, monolith-architecture, multi-region, multi-tenancy-isolation, mysql-replication-online-ddl, network-partitions, performance-antipatterns, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, postgres-slow-db-triage, rds-aurora-managed-db, saga-pattern, scaling-horizontal-vertical, sd-db-replication-intro, sd-mq-replication, sd-object-storage-architecture, sd-payment-reliability, sd-start-single-server, sd-url-shortener-api-redirect, spring-transactional-propagation, sql-case-when, sql-vs-nosql, system-design-concepts-map, system-design-study-path, transactional-outbox, valkey-vs-redis, zero-downtime-migrations
+- 이 글로 오는 글 ←: acid-transactions, api-scaling-ladder, autoscaling, aws-core-services-map, backend-engineer-roadmap, block-file-object-storage, cache-invalidation, caching-strategies, cdc-change-data-capture, claim-check-sequential-convoy, connection-pool, consistency-models, cqrs, data-engineering-lifecycle, data-warehouse-architecture, db-architecture-by-scale, db-consistency-cap, db-index-pitfalls, db-partitioning, db-performance-map, db-sharding, db-type-columnar-olap, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, disaster-recovery, elasticsearch-snapshot-dr, etl-vs-elt, event-driven-architecture, eventual-consistency, failover, mongodb-document-model, mongodb-indexes-explain, mongodb-replica-set-sharding, monolith-architecture, multi-region, multi-tenancy-isolation, mysql-replication-online-ddl, network-partitions, performance-antipatterns, postgres-architecture, postgres-mvcc-vacuum, postgres-operations, postgres-slow-db-triage, rds-aurora-managed-db, saga-pattern, scaling-horizontal-vertical, sd-db-replication-intro, sd-mq-replication, sd-object-storage-architecture, sd-payment-reliability, sd-start-single-server, sd-url-shortener-api-redirect, spring-transactional-propagation, sql-case-when, sql-vs-nosql, system-design-concepts-map, system-design-study-path, transactional-outbox, valkey-vs-redis, zero-downtime-migrations
 
 #### `db-sharding` — 샤딩: 데이터를 서버 여러 대에 나눠 담기
 
@@ -3835,7 +4037,7 @@
 - 소제목: 서버 여러 대에 나눠 담는다 / 샤드를 늘려도 조금만 옮기는 해시 / 샤드를 넘나드는 쿼리는 비싸다 / 주문 번호는 누가 만드나 / 샤드를 다시 나누는 일 / 읽기 모양을 따로 만들어 두기 / 샤드 키를 정하기 전에 지금 데이터로 재 본다 / 샤딩은 마지막 카드다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-replication-sharding, db-partitioning, microservices, mongodb-document-model, db-architecture-by-scale, db-index
 - 키워드 백링크 →: sd-sharding-intro, redis-cluster, db-type-newsql, db-type-wide-column, db-type-key-value, sd-start-single-server, distributed-transactions-2pc, transactional-outbox, cqrs, scaling-horizontal-vertical, redis-basics, high-availability, cdc-change-data-capture
-- 이 글로 오는 글 ←: api-scaling-ladder, autoscaling, balanced-search-trees, consistent-hashing, data-mesh-fabric, data-warehouse-architecture, db-architecture-by-scale, db-index, db-keys-denormalization, db-partitioning, db-performance-map, db-replication-sharding, db-type-columnar-olap, db-type-wide-column, ddd-tactical-patterns, ds-hash-map, etl-vs-elt, multi-region, scaling-horizontal-vertical, sd-chat-message-storage, sd-kv-store-partition-replication, sd-news-feed-publishing, sd-news-feed-retrieval, sd-object-storage-versioning-multipart, sd-sharding-intro, sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, sql-logical-order, sql-vs-nosql, system-design-concepts-map, system-design-study-path, vpc-peering-transit-privatelink
+- 이 글로 오는 글 ←: api-scaling-ladder, autoscaling, balanced-search-trees, bi-semantic-layer, consistent-hashing, data-engineering-lifecycle, data-mesh-fabric, data-warehouse-architecture, db-architecture-by-scale, db-index, db-keys-denormalization, db-partitioning, db-performance-map, db-replication-sharding, db-type-columnar-olap, db-type-wide-column, ddd-tactical-patterns, ds-hash-map, etl-vs-elt, multi-region, scaling-horizontal-vertical, sd-chat-message-storage, sd-kv-store-partition-replication, sd-news-feed-publishing, sd-news-feed-retrieval, sd-object-storage-versioning-multipart, sd-sharding-intro, sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, sql-logical-order, sql-vs-nosql, system-design-concepts-map, system-design-study-path, vpc-peering-transit-privatelink
 
 #### `elasticsearch-inverted-index` — 검색 엔진은 왜 빠른가: Elasticsearch와 역색인
 
@@ -3846,7 +4048,7 @@
 - 소제목: LIKE가 느린 이유 / 찾아보기에 올릴 단어 고르기: 분석기 / 분석기를 직접 조립하기 / 찾아보기를 만드는 과정 / 무엇을 먼저 보여 줄까: BM25 / 점수가 필요 없는 조건은 filter로 / text와 keyword는 다른 필드다 / 방금 넣은 상품이 검색에 안 나온다 / 샤드와 레플리카 / 쇼핑몰 검색에서 부딪히는 것들 / 깊은 페이지는 from으로 가지 않는다 / 원본은 DB에, 검색은 Elasticsearch에 / 클러스터가 yellow나 red로 바뀌면 / 다시 찾아보기로 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db, opensearch-cluster-operations
 - 키워드 백링크 →: elasticsearch-bulk-indexing, elasticsearch-mapping, db-index, cdc-change-data-capture, rag-retrieval-quality, mongodb-document-model, loading-patterns, dynamic-programming, global-rollout-localization, transactional-outbox, kafka-basics, elk-stack-basics, db-modeling-normalization
-- 이 글로 오는 글 ←: api-pagination-sorting, cdc-change-data-capture, centralized-logging-pipeline, cqrs, data-mesh-fabric, db-architecture-by-scale, db-types-overview, dynamic-programming, elasticsearch-aggregations, elasticsearch-bulk-indexing, elasticsearch-mapping, elasticsearch-query-dsl, elasticsearch-snapshot-dr, elk-stack-basics, embedding-models-applications, grafana-tempo-tracing, http-methods, http-streaming-sse, mongodb-crud-operators, mongodb-indexes-explain, network-partitions, opensearch-cluster-operations, ports-and-sockets, postgres-jsonb-search, rag-retrieval-quality, redis-modules-stack, sd-autocomplete-trie, sd-email-storage-search, sd-music-streaming, sd-queue-logging-automation, spring-boot-observability, string-search-algorithms, structured-logging
+- 이 글로 오는 글 ←: api-pagination-sorting, cdc-change-data-capture, centralized-logging-pipeline, cqrs, data-catalog-lineage, data-mesh-fabric, db-architecture-by-scale, db-types-overview, dynamic-programming, elasticsearch-aggregations, elasticsearch-bulk-indexing, elasticsearch-mapping, elasticsearch-query-dsl, elasticsearch-snapshot-dr, elk-stack-basics, embedding-models-applications, grafana-tempo-tracing, http-methods, http-streaming-sse, mongodb-crud-operators, mongodb-indexes-explain, network-partitions, opensearch-cluster-operations, ports-and-sockets, postgres-jsonb-search, rag-retrieval-quality, redis-modules-stack, sd-autocomplete-trie, sd-email-storage-search, sd-music-streaming, sd-queue-logging-automation, spring-boot-observability, string-search-algorithms, structured-logging
 
 #### `mongodb-document-model` — MongoDB 문서 모델: 넣을까, 가리킬까
 
@@ -3867,7 +4069,7 @@
 - 소제목: 노드마다 맡은 역할 / 프라이머리 샤드 수는 크기로 정한다 / 매핑은 처음에 닫아 둔다 / 크기로 넘기는 롤오버와 ISM / 노드 하나가 빠졌을 때 / 로그 질의는 filter로 범위부터 / 힙과 서킷 브레이커 / 보안을 켜면 누가 무엇을 읽는지 정해야 한다 / 클러스터가 이상할 때 묻는 순서 / 다시 503 앞에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: elasticsearch-inverted-index, centralized-logging-pipeline
 - 키워드 백링크 →: k8s-pod-disruption-budget, elasticsearch-aggregations, elasticsearch-bulk-indexing, k8s-statefulset, rest-api-design, sd-mq-storage-partitions, resilience-patterns, sd-object-storage-architecture, db-types-overview, http-status-codes, what-happens-google-com, token-login
-- 이 글로 오는 글 ←: centralized-logging-pipeline, cloud-cost-optimization, db-architecture-by-scale, debugging-with-logs, elasticsearch-inverted-index, elasticsearch-mapping, elasticsearch-query-dsl, elasticsearch-snapshot-dr, elk-stack-basics, logging-tools-overview, mongodb-indexes-explain, postgres-jsonb-search, redis-modules-stack
+- 이 글로 오는 글 ←: centralized-logging-pipeline, cloud-cost-optimization, data-catalog-lineage, db-architecture-by-scale, debugging-with-logs, elasticsearch-inverted-index, elasticsearch-mapping, elasticsearch-query-dsl, elasticsearch-snapshot-dr, elk-stack-basics, logging-tools-overview, mongodb-indexes-explain, postgres-jsonb-search, redis-modules-stack
 
 #### `rds-aurora-managed-db` — RDS와 Aurora: 관리형 DB가 맡아 주는 것과 내가 정해야 하는 것
 
@@ -3912,7 +4114,7 @@
 - 소제목: 주문을 받는 질문과 매출을 보는 질문 / 실험에 쓸 주문 500만 건 / 행으로 저장하면 안 쓰는 컬럼도 읽는다 / 같은 컬럼끼리 모이면 잘 눌린다 / 한 번에 값 하나가 아니라 묶음으로 계산한다 / 건너뛸 수 있는 덩어리는 아예 열지 않는다 / ClickHouse 테이블은 정렬 키부터 정한다 / 분석 DB가 잘 못 하는 것 / 클라우드 데이터 웨어하우스와 DuckDB / 운영 DB에서 분석 DB로 옮기는 길 / 컬럼형을 고르기 전에 / 읽는 방향에 맞춰 놓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-type-relational, db-type-time-series, db-type-embedded, db-architecture-by-scale, db-type-newsql
 - 키워드 백링크 →: postgres-reporting-sql, db-sharding, cdc-change-data-capture, data-lake-hdfs, kafka-to-lake-pipeline, mysql-innodb-basics, kafka-basics, db-replication-sharding, cpu-pipelining-branch-prediction, acid-transactions, db-index-design, etl-vs-elt
-- 이 글로 오는 글 ←: caching-strategies, cdc-change-data-capture, data-lake-hdfs, data-mesh-fabric, data-warehouse-architecture, db-architecture-by-scale, db-type-embedded, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, db-types-overview, dbt-transformations, etl-vs-elt, lambda-kappa-architecture, microservices, microservices-decomposition, olap-star-schema, saga-pattern, sd-ad-click-stream-windows, sd-hotel-inventory-scaling, sql-logical-order, sql-vs-nosql
+- 이 글로 오는 글 ←: bi-semantic-layer, caching-strategies, cdc-change-data-capture, data-engineering-lifecycle, data-lake-hdfs, data-mesh-fabric, data-orchestrators-comparison, data-warehouse-architecture, db-architecture-by-scale, db-type-embedded, db-type-newsql, db-type-relational, db-type-time-series, db-type-wide-column, db-types-overview, dbt-transformations, etl-vs-elt, lambda-kappa-architecture, microservices, microservices-decomposition, olap-star-schema, reverse-etl, saga-pattern, sd-ad-click-stream-windows, sd-hotel-inventory-scaling, sql-logical-order, sql-vs-nosql
 
 #### `db-type-embedded` — 임베디드 DB: SQLite, RocksDB처럼 앱 안에 들어가는 DB
 
@@ -3967,7 +4169,7 @@
 - 소제목: 미리 몰랐던 질문에 답하기 / 표와 키로 나눠 담는 이유 / 잘못된 데이터를 DB가 막는다 / 무엇을 원하는지만 쓰면 방법은 DB가 고른다 / 해시 조인을 손으로 따라가기 / 커밋이 끝났다는 건 로그가 디스크에 닿았다는 뜻 / 표 여러 개를 한 번에 바꾸는 트랜잭션 / PostgreSQL, MySQL, Oracle, SQL Server / 한 대를 넘어서면 어려워지는 것 / 다른 DB를 붙여도 원본은 여기에 둔다 / 기본값인 이유와 그 값 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-types-overview, db-modeling-normalization, sql-query-tuning, db-index, db-replication-sharding, db-transaction-isolation, sql-basics, db-type-newsql, db-type-columnar-olap, db-type-graph, db-type-wide-column, mongodb-document-model, caching-strategies, db-architecture-by-scale
 - 키워드 백링크 →: db-type-time-series, mysql-innodb-basics, db-type-key-value, rds-aurora-managed-db, ds-hash-map, sqld-top-n-hierarchical-pivot, page-cache-disk-io, scaling-horizontal-vertical, postgres-architecture, postgres-jsonb-search, db-partitioning, postgres-getting-started, cdc-change-data-capture, acid-transactions
-- 이 글로 오는 글 ←: acid-vs-base, cpu-cache-hierarchy, db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, dynamodb-modeling-capacity, elk-stack-basics, graphql-client-caching, mongodb-aggregation-pipeline, mongodb-document-model, mongodb-indexes-explain, olap-star-schema, performance-antipatterns, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, sd-chat-message-storage, sd-email-storage-search, sd-file-sync-block-upload, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-maps-location-eta, sd-metrics-collection, sd-metrics-storage-alerting, sd-music-streaming, sd-news-feed-publishing, sd-object-storage-architecture, sd-split-web-and-db, sd-url-shortener-api-redirect, serverless-limits, spark-basics, sql-subqueries-exists-lateral, sql-vs-nosql, sqld-data-modeling
+- 이 글로 오는 글 ←: acid-vs-base, cpu-cache-hierarchy, data-catalog-lineage, db-architecture-by-scale, db-type-columnar-olap, db-type-graph, db-type-key-value, db-type-time-series, db-type-wide-column, db-types-overview, dynamodb-modeling-capacity, elk-stack-basics, graphql-client-caching, mongodb-aggregation-pipeline, mongodb-document-model, mongodb-indexes-explain, olap-star-schema, performance-antipatterns, postgres-architecture, postgres-getting-started, postgres-operations, redis-basics, sd-chat-message-storage, sd-email-storage-search, sd-file-sync-block-upload, sd-kv-store-versioning, sd-kv-store-write-read-path, sd-maps-location-eta, sd-metrics-collection, sd-metrics-storage-alerting, sd-music-streaming, sd-news-feed-publishing, sd-object-storage-architecture, sd-split-web-and-db, sd-url-shortener-api-redirect, serverless-limits, spark-basics, sql-subqueries-exists-lateral, sql-vs-nosql, sqld-data-modeling
 
 #### `db-type-time-series` — 시계열 DB: 시간 순서로 쌓이는 데이터
 
@@ -4022,7 +4224,7 @@
 - 소제목: 사건은 가운데, 설명은 둘레에 / 한 줄이 무엇인지부터 정한다 / 조인이 넷인데 왜 느리지 않나 / 다 펼쳐 놓은 넓은 테이블과 비교하면 / 회원이 이사하면 지난 매출은 어느 지역 것인가 / 미리 묶어 둔 요약 테이블 / 차원을 더 쪼갤지, 아예 다른 모델로 갈지 / 분석 숫자가 안 맞는다는 문의가 오면 / 질문의 모양대로 쌓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-type-columnar-olap, cdc-change-data-capture, hyperloglog, sql-views-materialized, stream-processing
 - 키워드 백링크 →: postgres-reporting-sql, sql-query-tuning, sql-subqueries-exists-lateral, db-type-relational, db-keys-denormalization, dbt-transformations, db-modeling-normalization
-- 이 글로 오는 글 ←: cdc-change-data-capture, data-warehouse-architecture, dbt-transformations, sd-ad-click-stream-windows, stream-processing
+- 이 글로 오는 글 ←: cdc-change-data-capture, data-engineering-lifecycle, data-warehouse-architecture, dbt-transformations, sd-ad-click-stream-windows, stream-processing
 
 ### Programming › Database › Elasticsearch (`programming/database/elasticsearch`)
 
@@ -4227,7 +4429,7 @@
 - 소제목: PostgreSQL을 고르는 이유 / apt로 설치하고 서버가 떴는지 확인하기 / psql이 내 리눅스 이름을 들고 가는 이유 / 내 이름으로 역할과 데이터베이스 만들기 / 클러스터, 데이터베이스, 스키마, 테이블 / 시리즈에서 계속 쓸 서점 DB / psql에서 매일 쓰는 명령 / 현장에서 relation does not exist를 만나는 순간 / 처음 에러를 다시 읽으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-connections-pg-hba, sql-basics, postgres-data-types, postgres-roles-security
 - 키워드 백링크 →: db-migration-tools, mysql-innodb-basics, db-type-relational
-- 이 글로 오는 글 ←: acid-transactions, backend-engineer-roadmap, connection-pool, db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, distributed-transactions-2pc, integration-tests-real-db, network-partitions, optimistic-locking, performance-antipatterns, pessimistic-locking, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-connections-pg-hba, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-query-planner, postgres-reporting-sql, postgres-roles-security, postgres-slow-db-triage, sd-hotel-double-booking, security-groups-nacl, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-logical-order, sql-query-tuning, sql-select-where-null, sql-study-path, sqld-null-functions, sqld-single-row-functions, timeouts
+- 이 글로 오는 글 ←: acid-transactions, backend-engineer-roadmap, connection-pool, data-quality-checks, db-locking-deadlock, db-transaction-isolation, db-type-newsql, db-type-relational, db-types-overview, distributed-transactions-2pc, integration-tests-real-db, network-partitions, optimistic-locking, performance-antipatterns, pessimistic-locking, ports-and-sockets, postgres-advanced-sql, postgres-architecture, postgres-connections-pg-hba, postgres-data-types, postgres-functions-triggers, postgres-operations, postgres-query-planner, postgres-reporting-sql, postgres-roles-security, postgres-slow-db-triage, sd-hotel-double-booking, security-groups-nacl, sql-basics, sql-batch-timeout-pool, sql-insert-update-delete, sql-logical-order, sql-query-tuning, sql-select-where-null, sql-study-path, sqld-null-functions, sqld-single-row-functions, timeouts
 
 #### `postgres-jsonb-search` — JSONB와 전문 검색: GIN, tsvector, pg_trgm
 
@@ -4271,7 +4473,7 @@
 - 소제목: SQL 한 줄이 실행되기까지 / 비용은 페이지와 행으로 센다 / 몇 행이 나올지 짐작하는 법 / 범위 조건은 히스토그램으로 센다 / 조건 두 개를 곱하면 틀리는 경우 / 추정이 틀리면 조인 방법이 바뀐다 / 조인 순서는 몇 가지나 따져 보나 / 다섯 번 실행한 뒤에 바뀌는 계획 / 드라이버와 풀이 문장을 준비하는 방식 / 힌트 없이 계획을 바꾸는 방법 / 계획이 갑자기 바뀌었을 때 보는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-query-tuning, db-index-pitfalls, postgres-operations, connection-pool, postgres-mvcc-vacuum
 - 키워드 백링크 →: db-architecture-by-scale, dynamic-programming, ds-hash-map, db-index-design, sql-batch-timeout-pool, postgres-getting-started
-- 이 글로 오는 글 ←: build-caching, db-partitioning, floating-point-numbers, frontend-system-design-interview, greedy-algorithms, k8s-kube-proxy-modes, mongodb-indexes-explain, prompt-reasoning-techniques, sd-start-single-server
+- 이 글로 오는 글 ←: build-caching, custom-form-controls, db-partitioning, floating-point-numbers, frontend-system-design-interview, greedy-algorithms, k8s-kube-proxy-modes, mongodb-indexes-explain, prompt-reasoning-techniques, sd-start-single-server
 
 #### `postgres-reporting-sql` — PostgreSQL 리포트 쿼리: DISTINCT ON, FILTER, generate_series, 머티리얼라이즈드 뷰, COPY, LATERAL
 
@@ -4473,7 +4675,7 @@
 - 소제목: 한 테이블에 다 넣었을 때 생기는 일 / 무엇이 무엇을 정하나 (함수 종속) / 행을 하나로 집어내는 열 (키) / 제1정규형: 칸 하나에 값 하나 / 제2정규형: 키의 일부에만 기대는 열 떼어 내기 / 제3정규형: 키가 아닌 열을 거쳐 정해지는 열 / 제약 조건이 대신 막아 주는 것 / BCNF: 결정자가 모두 후보키여야 한다 / 제4정규형과 제5정규형은 짧게 / SQLD에서 묻는 정규화 / 무엇이 무엇을 정하나만 따라가면 된다 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-keys-denormalization, db-index, db-transaction-isolation
 - 키워드 백링크 →: json-crud-http, mysql-innodb-basics, db-index-design, sqld-entity-attribute-relationship
-- 이 글로 오는 글 ←: ab-testing, api-key-hmac-auth, architecture-patterns-overview, caching-concepts-map, character-encoding-unicode, cqrs, data-warehouse-architecture, db-architecture-by-scale, db-keys-denormalization, db-type-relational, deep-learning-basics, docker-local-dev-workflow, dynamodb-modeling-capacity, edge-caching, elasticsearch-inverted-index, embedding-models-applications, encryption-at-rest, fe-sd-news-feed, frontend-i18n-intl, frontend-state-architecture, git-ignore-config, git-large-files-secrets, global-rollout-localization, graph-rag, graphql-basics, graphql-client-caching, graphql-pagination-connections, graphql-schema-type-system, graphql-subscriptions-defer, http-message, idempotency-key, ids-ips, input-validation-secure-coding, jpa-entity-relationships, js-immutability-react, leetcode-group-anagrams, leetcode-longest-common-prefix, leetcode-valid-anagram, lossy-counting, mfa-totp, model-serving, mongodb-document-model, nginx-basics, olap-star-schema, path-traversal-file-upload, prompt-reasoning-techniques, rag-retrieval-quality, ray-casting, react-client-routing, rendering-ssr, sd-autocomplete-data-pipeline, sd-autocomplete-trie, sd-email-protocols, sd-email-storage-search, sd-sharding-intro, security-logging-detection-siem, sql-aggregation-pitfalls, sql-vs-nosql, sqld-data-modeling, sqld-entity-attribute-relationship, sso-saml-oidc, string-search-algorithms, terraform-dependency-graph-lifecycle, transformer-attention-kv-cache, vector-db, waf
+- 이 글로 오는 글 ←: ab-testing, api-key-hmac-auth, architecture-patterns-overview, caching-concepts-map, character-encoding-unicode, cqrs, data-warehouse-architecture, db-architecture-by-scale, db-keys-denormalization, db-type-relational, deep-learning-basics, docker-local-dev-workflow, dynamodb-modeling-capacity, edge-caching, elasticsearch-inverted-index, embedding-models-applications, encryption-at-rest, fe-sd-news-feed, frontend-i18n-intl, frontend-state-architecture, git-ignore-config, git-large-files-secrets, global-rollout-localization, graph-rag, graphql-basics, graphql-client-caching, graphql-pagination-connections, graphql-schema-type-system, graphql-subscriptions-defer, http-message, idempotency-key, ids-ips, input-validation-secure-coding, jpa-entity-relationships, js-immutability-react, leetcode-group-anagrams, leetcode-longest-common-prefix, leetcode-valid-anagram, lossy-counting, mfa-totp, model-serving, mongodb-document-model, nginx-basics, olap-star-schema, path-traversal-file-upload, prompt-reasoning-techniques, rag-retrieval-quality, ray-casting, react-client-routing, rendering-ssr, reverse-etl, sd-autocomplete-data-pipeline, sd-autocomplete-trie, sd-email-protocols, sd-email-storage-search, sd-sharding-intro, security-logging-detection-siem, sql-aggregation-pitfalls, sql-vs-nosql, sqld-data-modeling, sqld-entity-attribute-relationship, sso-saml-oidc, string-search-algorithms, terraform-dependency-graph-lifecycle, transformer-attention-kv-cache, vector-db, waf
 
 #### `db-transaction-isolation` — 트랜잭션과 격리 수준: 동시에 고치면 생기는 일
 
@@ -4528,7 +4730,7 @@
 - 소제목: 아홉 줄, 점수 다섯 개 / 같은 아홉 줄을 세는 방법이 셋이다 / 평균이 둘로 갈라진 이유 / 행이 하나도 없을 때 / LEFT JOIN 뒤의 `count(*)`는 0을 세지 못한다 / 조건별로 세면 WHERE와 FILTER가 다른 행을 지운다 / ELSE 0을 붙인 count는 전부를 센다 / WHERE에 쓸지 HAVING에 쓸지는 숫자로 정한다 / GROUP BY에는 무엇을 적어야 하나 / NULL도 한 묶음이 되고, 이어 붙이기는 순서를 적어야 한다 / 리포트 숫자가 맞지 않을 때 보는 순서 / 집계 함수를 직접 만들어 보기 / 분모부터 확인한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-logical-order, sql-filtering-operators, sqld-group-by-having, sql-joins-in-practice, sql-case-when
 - 키워드 백링크 →: db-modeling-normalization
-- 이 글로 오는 글 ←: leetcode-binary-search, leetcode-contains-duplicate, leetcode-find-median-from-data-stream, leetcode-happy-number, leetcode-median-of-two-sorted-arrays, leetcode-powx-n, leetcode-rotate-image, leetcode-study-guide, leetcode-unique-paths, linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path
+- 이 글로 오는 글 ←: leetcode-binary-search, leetcode-car-fleet, leetcode-contains-duplicate, leetcode-evaluate-reverse-polish-notation, leetcode-find-median-from-data-stream, leetcode-happy-number, leetcode-median-of-two-sorted-arrays, leetcode-powx-n, leetcode-rotate-image, leetcode-study-guide, leetcode-unique-paths, linux-namespaces-cgroups, sql-case-when, sql-filtering-operators, sql-interview-problems, sql-joins-in-practice, sql-logical-order, sql-study-path
 
 #### `sql-basics` — SQL 기본 명령어: 테이블과 제약 조건 만들기
 
@@ -4539,7 +4741,7 @@
 - 소제목: 명령어는 네 묶음으로 나뉜다 / 빈 DB에 테이블 세 개 만들기 / 칸마다 담을 값의 종류 정하기 / 잘못된 값을 DB가 막아 주는 제약 조건 / 만든 테이블 고치기 (ALTER와 RENAME) / 권한 주고 뺏기 (GRANT와 REVOKE) / 현장에서 테이블 정의를 다시 꺼내 보는 순간 / 테이블 모양이 곧 규칙이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-select-where-null, sql-insert-update-delete, db-index, db-index-pitfalls, sqld-data-modeling
 - 키워드 백링크 →: floating-point-numbers, postgres-getting-started
-- 이 글로 오는 글 ←: cdc-change-data-capture, db-architecture-by-scale, db-index, db-index-pitfalls, db-locking-deadlock, db-migration-tools, db-transaction-isolation, db-type-newsql, db-type-relational, layered-architecture, mysql-innodb-basics, mysql-replication-online-ddl, optimistic-locking, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-getting-started, postgres-operations, sd-hotel-double-booking, sql-injection, sql-insert-update-delete, sql-select-where-null, sql-study-path, sql-views-materialized, sqld-data-modeling, sqld-entity-attribute-relationship, zero-downtime-migrations
+- 이 글로 오는 글 ←: cdc-change-data-capture, data-quality-checks, db-architecture-by-scale, db-index, db-index-pitfalls, db-locking-deadlock, db-migration-tools, db-transaction-isolation, db-type-newsql, db-type-relational, layered-architecture, mysql-innodb-basics, mysql-replication-online-ddl, optimistic-locking, postgres-advanced-sql, postgres-data-types, postgres-functions-triggers, postgres-getting-started, postgres-operations, sd-hotel-double-booking, sql-injection, sql-insert-update-delete, sql-select-where-null, sql-study-path, sql-views-materialized, sqld-data-modeling, sqld-entity-attribute-relationship, zero-downtime-migrations
 
 #### `sql-batch-timeout-pool` — 쿼리 밖의 비용: 쓰기 묶기, 시간 한도, 커넥션 풀
 
@@ -4715,7 +4917,7 @@
 - 소제목: 열 하나 추가했는데 API가 멈췄다 / 잠금은 줄을 선다 / 문장마다 무슨 잠금을 잡고, 다시 쓰는가 / 기본값이 있는 열은 PostgreSQL 11부터 빠르다 / 타입 바꾸기는 대부분 다시 쓴다 / 기본 키를 bigint로 바꾸는 전 과정 / 옛 행 채우기는 잘게 나눈다 / 인덱스, 이름 바꾸기, 열 지우기 / MySQL은 어떻게 다른가 / 배포 전에 확인하는 순서 / 잠금은 짧게, 무거운 일은 잠금 밖에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: db-migration-tools, db-architecture-by-scale, db-index-pitfalls, pessimistic-locking, postgres-mvcc-vacuum, batch-processing
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, mysql-replication-online-ddl, mysql-innodb-basics, db-replication-sharding, cdc-change-data-capture, sql-basics
-- 이 글로 오는 글 ←: airflow-orchestration, api-versioning, blue-green-deployment, canary-release, cdc-change-data-capture, db-architecture-by-scale, db-migration-tools, distributed-transactions-2pc, dynamodb-modeling-capacity, error-budgets, etl-vs-elt, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, multi-tenancy-isolation, mysql-replication-online-ddl, nodejs-orm-query-builder, pessimistic-locking, prometheus-basics, release-cutover-hypercare, rollback-strategy, rolling-deployment, schema-versioning, sql-views-materialized, sql-vs-nosql
+- 이 글로 오는 글 ←: airflow-orchestration, api-versioning, blue-green-deployment, canary-release, cdc-change-data-capture, data-engineering-lifecycle, data-orchestrators-comparison, data-quality-checks, db-architecture-by-scale, db-migration-tools, distributed-transactions-2pc, dynamodb-modeling-capacity, error-budgets, etl-vs-elt, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, ml-pipelines-ci-cd, multi-tenancy-isolation, mysql-replication-online-ddl, nodejs-orm-query-builder, pessimistic-locking, prometheus-basics, release-cutover-hypercare, reverse-etl, rollback-strategy, rolling-deployment, schema-versioning, sql-views-materialized, sql-vs-nosql
 
 ### Programming › Database › SQLD (`programming/database/sqld`)
 
@@ -4738,7 +4940,7 @@
 - 길이: 527줄
 - 소제목: 현실을 줄여서 그리는 일 / 무엇을 보고 그리나: 데이터, 프로세스, 그리고 둘의 관계 / 개념에서 논리로, 논리에서 물리로 / ERD는 이 순서로 그린다 / 까마귀 발과 바커 표기 읽기 / 보는 사람마다 다른 화면, 하나의 DB / 좋은 모델인지 가늠하는 여섯 가지 / SQLD 시험 포인트 / 문서에서 테이블까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: sqld-entity-attribute-relationship, db-modeling-normalization, db-index
-- 키워드 백링크 →: postgres-data-types, db-type-relational, db-keys-denormalization, sql-basics
+- 키워드 백링크 →: postgres-data-types, data-quality-checks, db-type-relational, db-keys-denormalization, sql-basics
 - 이 글로 오는 글 ←: sql-basics, sqld-entity-attribute-relationship
 
 #### `sqld-entity-attribute-relationship` — SQLD 엔터티·속성·관계·식별자
@@ -5245,7 +5447,18 @@
 - 소제목: 지난주와 비교하면 안 되는 이유 / 배포와 공개를 떼어 놓는 스위치 / 같은 사람에게는 항상 같은 쪽을 / 직접 버킷을 계산해 보기 / 어디서 나누느냐에 따라 화면이 깜빡인다 / 보여 준 사람만 센다 / 무엇이 나아져야 이긴 건가 / 몇 명이 필요한가 / 중간에 들여다보면 거짓 승리가 늘어난다 / 처음에만 반짝하는 효과 / 반반으로 나눴는데 반반이 아니다 / 실험이 싸지려면 화면이 설정을 받아야 한다 / 끝난 플래그는 빚이 된다 / 실험 숫자가 이상할 때 먼저 보는 곳 / 다시 4.8%와 5.3%로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-caching-cdn
 - 키워드 백링크 →: rendering-strategies, input-validation-secure-coding, bloom-filter, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: canary-release, ci-cd-basics, core-web-vitals, explainable-ai-shap-lime, feature-flags, git-branching-strategy, lighthouse-explained, llm-evals, ml-experiment-tracking, ml-fundamentals, ml-model-evaluation, model-serving, nextjs-route-handlers-proxy, pattern-strategy, product-analytics-funnels, randomized-algorithms
+- 이 글로 오는 글 ←: behavior-design-models, canary-release, ci-cd-basics, core-web-vitals, data-engineering-lifecycle, explainable-ai-shap-lime, feature-flags, git-branching-strategy, lighthouse-explained, llm-evals, ml-experiment-tracking, ml-fundamentals, ml-model-evaluation, model-serving, nextjs-route-handlers-proxy, pattern-strategy, product-analytics-funnels, randomized-algorithms, seo-redirects-site-migration, ux-research-usability-testing
+
+#### `core-component-api-design` — 버튼 하나 설계하기: 기본 컴포넌트의 상태, props, 접근성 약속
+
+- 요약: 로딩 버튼의 너비가 98px에서 50px로 줄고 결제가 두 번 된 장면에서 시작해, props보다 먼저 그리는 상태 표, type 기본값, 링크와 버튼의 경계, disabled와 aria-disabled, 너비와 접근 이름을 지키는 로딩 상태를 Chromium으로 직접 확인한다. 같은 틀로 Avatar의 대체 이미지, Badge의 99+ 문구, Card의 늘린 링크, Banner와 List의 상태, 결정 기록까지 정리한다.
+- 태그: Frontend, React, Accessibility, Architecture, CSS
+- 키워드: aria-disabled, 로딩 버튼, 늘린 링크, 컴포넌트 상태 표
+- 길이: 386줄
+- 소제목: props보다 상태 표를 먼저 그린다 / 버튼의 타입 기본값부터 정한다 / 이동이면 링크, 동작이면 버튼 / 누를 수 없을 때 이유를 숨기지 않는다 / 로딩 중에도 너비와 이름을 지킨다 / 아이콘만 있는 버튼의 이름 / Avatar: 이미지가 실패하는 순간 / Badge: 99+와 스크린 리더 문구 / Card: 카드 전체를 누르게 하기 / Banner와 List도 같은 표로 / 결정을 적어 두는 기록 / 다시 결제 버튼으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-system-building, react-component-patterns, html-form-validation, aria-keyboard-focus, react-forms-actions, architecture-docs-c4-adr
+- 키워드 백링크 →: custom-form-controls, frontend-testing-strategy, architecture-patterns-overview, css-position-stacking-context, html-semantics
+- 이 글로 오는 글 ←: custom-form-controls, design-system-adoption-governance, loading-patterns, ui-overlays-tooltip-dropdown-toast, ux-laws-cognitive-load
 
 #### `cross-platform-apps` — 웹 기술로 앱 만들기: 하이브리드, React Native, Flutter, Electron, Tauri
 
@@ -5258,6 +5471,17 @@
 - 키워드 백링크 →: css-flexbox-grid, event-loop, what-happens-google-com
 - 이 글로 오는 글 ←: dependency-hell, frontend-frameworks-compared, js-short-circuit, js-truthy-falsy-typeof, pattern-bridge
 
+#### `design-system-adoption-governance` — 디자인 시스템 운영: 도입률을 재고, 기여를 받고, 망가지지 않게 지키기
+
+- 요약: 만든 디자인 시스템을 누가 얼마나 쓰는지 아무도 모르는 장면에서 출발해, 시각 감사, react-scanner로 import와 props 세기, 복제본까지 넣은 도입률, 문서 사이트와 건강 지표, 개발 모드 경고와 프로덕션 오류 수집, 파일럿 제품, 중앙형·연합형 거버넌스, RFC 기여 절차, 폐기를 끝내는 codemod를 실제로 돌려 본다.
+- 태그: Frontend, Architecture, React, Automation
+- 키워드: 디자인 시스템 도입률, react-scanner, codemod, 연합형 거버넌스
+- 길이: 433줄
+- 소제목: 디자인 시스템을 누가 쓰는지 아무도 모른다 / 처음부터 만들지, 있는 화면에서 걷어 낼지 / import를 세는 것에서 시작한다 / 복제본까지 세야 도입률이 된다 / 문서 사이트도 지표를 남긴다 / 건강 지표는 팀이 얼마나 빨리 답하는지다 / 잘못 쓰면 개발 중에 알려 준다 / v1 전에 파일럿 제품에 먼저 넣는다 / 누가 결정하나: 중앙형과 연합형 / 기여는 제안부터 릴리스까지 정해진 길로 / 폐기 날짜를 지키게 하는 codemod / 다시 분기 리뷰로 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-system-building, core-component-api-design, spacing-sizing-type-scale, product-analytics-funnels
+- 키워드 백링크 →: dependency-hell, smoke-sanity-regression-testing, code-review-practices
+- 이 글로 오는 글 ←: design-system-building, nextjs-route-handlers-proxy, react-useref-layout-effect, spacing-sizing-type-scale
+
 #### `design-system-building` — 디자인 시스템 만들기: 토큰, 헤드리스 컴포넌트, 버전 정책
 
 - 요약: 버튼이 일곱 종류가 된 조직에서 출발해 원시·의미·컴포넌트 토큰 계층과 다크 모드, 토큰 단계의 대비 검사를 본다. 헤드리스 컴포넌트 위에 모양 입히기, variant·asChild·합성으로 API 설계하기, 접근성 내장, Storybook과 시각 회귀 테스트, 깨지는 변경과 단계적 폐기, 패키지 배포와 도입 전략까지 다룬다.
@@ -5266,8 +5490,8 @@
 - 길이: 503줄
 - 소제목: 버튼이 일곱 종류가 된 회사 / 컴포넌트 묶음보다 큰 것 / 토큰을 세 층으로 쌓는다 / 다크 모드는 의미 층에서 갈라진다 / 대비는 토큰을 만들 때 검사한다 / 동작과 모양을 나눈다 / 컴포넌트 API를 좁고 예측 가능하게 / 접근성을 기본값으로 넣는다 / Storybook을 문서이자 작업대로 / 눈으로 보던 회귀를 기계가 본다 / 깨지는 변경을 알리고 옮겨 준다 / 모노레포에서 패키지로 내보내기 / 만들어도 안 쓰이는 디자인 시스템 / 재료부터 약속까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-styling-approaches, semantic-versioning, frontend-monorepo
-- 키워드 백링크 →: css-performance, frontend-testing-strategy, aria-keyboard-focus, web-accessibility, react-component-patterns, rendering-strategies, css-custom-properties, smoke-sanity-regression-testing
-- 이 글로 오는 글 ←: css-color-background, css-custom-properties, css-position-stacking-context, css-styling-approaches, frontend-testing-strategy, micro-frontend-integration-patterns, micro-frontends, web-accessibility, web-components-shadow-dom
+- 키워드 백링크 →: css-performance, frontend-testing-strategy, aria-keyboard-focus, web-accessibility, design-system-adoption-governance, react-component-patterns, rendering-strategies, css-custom-properties, smoke-sanity-regression-testing
+- 이 글로 오는 글 ←: core-component-api-design, css-color-background, css-custom-properties, css-position-stacking-context, css-styling-approaches, custom-form-controls, design-system-adoption-governance, frontend-testing-strategy, micro-frontend-integration-patterns, micro-frontends, spacing-sizing-type-scale, web-accessibility, web-components-shadow-dom
 
 #### `frontend-frameworks-compared` — React, Vue, Svelte, Solid, Angular: 화면을 다시 그리는 방법이 다르다
 
@@ -5344,6 +5568,7 @@
 - 소제목: 가입 버튼을 바꿨는데 아무도 답하지 못한다 / 결과, 행동, 행위자를 먼저 적는다 / 이벤트 이름은 대상과 과거형 동사로 / 트래킹 플랜을 코드보다 먼저 쓴다 / 브라우저에서 보낸 이벤트는 다 도착하지 않는다 / 퍼널은 단계를 어떻게 정의하느냐가 반이다 / 처음 온 날로 묶어 리텐션을 본다 / 다변량 테스트는 표본을 몇 배로 먹는다 / 동의 배너가 숫자를 바꾼다 / 숫자가 이상할 때 먼저 보는 곳 / 배운 것을 모아 다음 순서를 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ab-testing, browser-fetch, data-privacy-compliance
 - 키워드 백링크 →: k8s-batch-kueue
+- 이 글로 오는 글 ←: behavior-design-models, design-system-adoption-governance, ux-laws-cognitive-load, ux-research-usability-testing
 
 #### `web-components-shadow-dom` — Web Components: Custom Elements, Shadow DOM, template과 slot
 
@@ -5353,8 +5578,8 @@
 - 길이: 415줄
 - 소제목: 태그 이름을 브라우저에 등록한다 / 생명주기 콜백이 불리는 순서 / 그림자 트리 안쪽은 바깥 선택자가 닿지 않는다 / 경계를 넘는 것은 상속, 변수, part 셋뿐이다 / 호스트 스타일은 바깥 규칙에 진다 / template과 slot으로 내용을 꽂는다 / 이벤트는 경계에서 주인이 바뀐다 / 폼에 끼려면 ElementInternals / 서버에서 그리려면 선언형 Shadow DOM / 프레임워크 안에 넣을 때 막히는 곳 / 언제 Web Components를 고를까 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-styling-approaches, micro-frontend-integration-patterns, css-cascade-specificity, css-custom-properties, event-propagation, react-forms-actions, hydration, aria-keyboard-focus, react-component-patterns, design-system-building
-- 키워드 백링크 →: micro-frontends, event-delegation, dom-basics, rendering-strategies, ts-declaration-files-modules, css-performance
-- 이 글로 오는 글 ←: css-custom-properties, frontend-frameworks-compared, micro-frontend-integration-patterns, micro-frontends
+- 키워드 백링크 →: micro-frontends, icon-system-svg, event-delegation, dom-basics, rendering-strategies, ts-declaration-files-modules, css-performance
+- 이 글로 오는 글 ←: css-custom-properties, custom-form-controls, frontend-frameworks-compared, micro-frontend-integration-patterns, micro-frontends
 
 ### Programming › Frontend › CSS (`programming/frontend/css`)
 
@@ -5399,7 +5624,7 @@
 - 소제목: 변수는 이름이 아니라 속성이다 / var()는 쓰는 자리에서 토큰을 끼워 넣는다 / 대체값이 있어도 무효가 되는 순간 / 서로를 가리키는 변수 / @property로 타입을 붙이면 달라지는 것 / 파생 색은 변수에서 계산한다 / 테마를 바꾸는 몇 가지 방법 / 자바스크립트로 바꾸면 다시 계산하는 범위 / 자주 밟는 함정 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-styling-approaches, design-system-building, css-cascade-specificity, animation-performance, css-performance, web-components-shadow-dom
 - 키워드 백링크 →: micro-frontend-integration-patterns, css-color-background
-- 이 글로 오는 글 ←: css-cascade-specificity, css-color-background, css-performance, css-styling-approaches, design-system-building, micro-frontend-integration-patterns, micro-frontends, react-context, rendering-performance-optimization, responsive-design, web-components-shadow-dom
+- 이 글로 오는 글 ←: css-cascade-specificity, css-color-background, css-performance, css-styling-approaches, design-system-building, icon-system-svg, micro-frontend-integration-patterns, micro-frontends, react-context, rendering-performance-optimization, responsive-design, spacing-sizing-type-scale, web-components-shadow-dom
 
 #### `css-flexbox-grid` — Flexbox와 Grid: 공간을 나누는 두 가지 방법
 
@@ -5410,7 +5635,7 @@
 - 소제목: 한 방향으로 늘어놓는 flex, 칸을 먼저 긋는 grid / 주축과 교차축 / 아이템 크기가 정해지는 순서 / flex: 1은 1 1 0%다 / 직접 나눠 보기 / 줄어들지 않는 아이템과 min-width: 0 / 줄을 바꾸면 마지막 줄이 늘어난다 / Grid는 트랙을 먼저 정한다 / auto-fill과 auto-fit / 영역에 이름 붙이기 / 서브그리드로 카드 안쪽 줄 맞추기 / 칸에 넣지 않고 단을 따라 흐르는 multi-column / 개발자 도구로 트랙과 남는 공간 보기 / 무엇을 고를까 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-box-model-layout, css-sticky-scroll-snap
 - 키워드 백링크 →: responsive-design, loading-patterns
-- 이 글로 오는 글 ←: cross-platform-apps, css-box-model-layout, css-position-stacking-context, css-typography, frontend-first-steps, frontend-i18n-intl
+- 이 글로 오는 글 ←: cross-platform-apps, css-box-model-layout, css-position-stacking-context, css-typography, frontend-first-steps, frontend-i18n-intl, spacing-sizing-type-scale
 
 #### `css-performance` — CSS 성능: 첫 화면을 막는 시트, 넓게 퍼지는 재계산, 런타임 스타일의 값
 
@@ -5431,8 +5656,8 @@
 - 길이: 397줄
 - 소제목: 다섯 가지 position / absolute는 누구를 기준으로 서나 / transform이 있는 조상 안의 fixed / overflow: hidden 카드 밖으로 나가는 드롭다운 / z-index 9999가 지는 이유 / 쌓임 맥락을 만드는 속성 / 한 맥락 안에서 칠하는 순서 / 두 요소 중 누가 위인가 / 모달은 body 아래로 / sticky가 안 붙는다면 먼저 볼 것 / 무엇이 위에 있는지 찾기 / 숫자를 올리기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-box-model-layout, css-sticky-scroll-snap, css-cascade-specificity, css-flexbox-grid
-- 키워드 백링크 →: event-propagation, design-system-building
-- 이 글로 오는 글 ←: css-box-model-layout, css-cascade-specificity, css-color-background, css-sticky-scroll-snap
+- 키워드 백링크 →: ui-overlays-tooltip-dropdown-toast, event-propagation, design-system-building
+- 이 글로 오는 글 ←: core-component-api-design, css-box-model-layout, css-cascade-specificity, css-color-background, css-sticky-scroll-snap, ui-overlays-tooltip-dropdown-toast
 
 #### `css-styling-approaches` — CSS 스타일링 방식 고르기: BEM부터 CSS Modules, CSS-in-JS, Tailwind까지
 
@@ -5443,7 +5668,7 @@
 - 소제목: 버튼 색 하나 바꿨는데 다른 화면이 깨졌다 / 이름을 길게 지어 충돌을 피한다 (BEM) / 빌드가 이름을 바꿔 주는 CSS Modules / 런타임 CSS-in-JS는 렌더링하면서 CSS를 만든다 / 서버 렌더링과 서버 컴포넌트에서 막히는 지점 / 제로 런타임: 자바스크립트로 쓰고 CSS로 내보낸다 / 유틸리티 클래스는 CSS 파일이 자라지 않는다 / 동적 스타일은 CSS 변수로 넘긴다 / 테마는 CSS 변수 한 벌을 바꿔 끼우는 일 / Sass는 쓰기 전에, PostCSS는 쓴 뒤에 / 팀과 프로젝트에 따라 고르기 / 옮겨 탈 때 밟는 것들 / 고르는 기준은 네 가지 질문 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-performance, design-system-building, css-custom-properties, bundler-basics, css-cascade-specificity
 - 키워드 백링크 →: nextjs-app-router-routing, responsive-design, rendering-strategies, smoke-sanity-regression-testing
-- 이 글로 오는 글 ←: css-custom-properties, css-performance, design-system-building, micro-frontends, tsconfig-strict, web-components-shadow-dom
+- 이 글로 오는 글 ←: css-custom-properties, css-performance, design-system-building, micro-frontends, spacing-sizing-type-scale, tsconfig-strict, web-components-shadow-dom
 
 #### `css-typography` — CSS 글자 다루기: 글꼴 스택, 크기와 줄 간격, 한글 줄바꿈, 말줄임
 
@@ -5454,7 +5679,7 @@
 - 소제목: 한글 단어가 반으로 잘리고 주소가 화면을 민다 / 글꼴 목록은 글자마다 다시 고른다 / font 한 줄이 줄 간격을 지운다 / 크기는 rem, 줄 간격은 숫자로 / 굵기, 기울임, 숫자 모양 / 줄을 어디서 바꿀지 정하기 / 넘치는 글자를 말줄임으로 / 자간, 대소문자, 밑줄, 그림자 / 오른쪽에서 왼쪽으로 쓰는 글 / 글자 문제를 현장에서 좁히는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: web-font-optimization, css-cascade-specificity, responsive-design, css-flexbox-grid, web-accessibility, html-text-semantics
 - 키워드 백링크 →: html-semantics
-- 이 글로 오는 글 ←: html-text-semantics, web-font-optimization
+- 이 글로 오는 글 ←: html-text-semantics, spacing-sizing-type-scale, web-font-optimization
 
 #### `responsive-design` — 반응형 디자인: 뷰포트, 단위, 쿼리, 그리고 가로 스크롤 잡기
 
@@ -5465,7 +5690,18 @@
 - 소제목: 휴대폰에서 옆으로 밀리는 페이지 / 뷰포트 메타 태그가 없으면 980px로 그린다 / CSS 픽셀과 기기 픽셀은 다르다 / 단위마다 기준이 다르다 / 100vh가 휴대폰에서 넘치는 이유 / 모바일부터 쓰고 min-width로 넓힌다 / 화면 대신 자리를 보는 컨테이너 쿼리 / 글자 크기를 clamp로 부드럽게 / 이미지와 동영상이 상자를 넘지 않게 / 손가락이 누를 수 있는 크기 / 노치와 홈 바를 피해 가장자리 비우기 / 가로 스크롤 범인 찾기 / 작은 화면부터 쌓아 올리기 / 면접에서 나올 만한 질문
 - 직접 링크 →: image-optimization
 - 키워드 백링크 →: nextjs-app-router-routing, css-sticky-scroll-snap, js-numbers-bigint, css-custom-properties, web-accessibility
-- 이 글로 오는 글 ←: css-flexbox-grid, css-styling-approaches, css-typography, frontend-first-steps
+- 이 글로 오는 글 ←: css-flexbox-grid, css-styling-approaches, css-typography, frontend-first-steps, spacing-sizing-type-scale
+
+#### `spacing-sizing-type-scale` — 간격과 크기, 글자 단계를 숫자 체계로: 4pt 그리드와 타입 스케일 토큰
+
+- 요약: 13px, 15px, 18px 여백이 섞인 화면에서 출발해, 4·8pt 기본 단위와 점점 벌어지는 간격 스케일, 안쪽·바깥 여백 관계, 컨트롤 크기와 터치 대상, 1.2·1.25 모듈러 타입 스케일, 4px 그리드에 맞춘 줄 높이와 아이콘 상자, 유동 스케일과 브레이크포인트 토큰, 줄 길이, rem과 px 선택을 실제 값으로 계산한다.
+- 태그: CSS, Frontend, Accessibility, UX
+- 키워드: 타입 스케일, 8pt 그리드, 간격 스케일
+- 길이: 415줄
+- 소제목: 13px, 15px, 18px가 섞인 화면 / 기본 단위 하나를 정한다: 4pt와 8pt / 간격 스케일은 점점 벌어진다 / 안쪽 여백은 바깥 여백보다 작게 / 컴포넌트 크기와 손가락이 누를 자리 / 글자 크기를 비율의 계단으로 / 줄 높이를 그리드에 붙인다 / 아이콘 상자를 줄 높이에 맞춘다 / 화면 폭에 따라 스케일 자체를 바꾼다 / 브레이크포인트 토큰은 따로 둔다 / 한 줄에 몇 글자가 들어가나 / 있는 코드를 스케일로 옮기는 순서 / rem으로 정할까 px로 정할까 / 8pt 그리드를 깨야 하는 순간 / 면접에서 나올 만한 질문
+- 직접 링크 →: design-system-building, css-typography, responsive-design, design-system-adoption-governance
+- 키워드 백링크 →: css-flexbox-grid, css-styling-approaches, css-custom-properties, smoke-sanity-regression-testing, web-accessibility
+- 이 글로 오는 글 ←: design-system-adoption-governance, icon-system-svg, ux-laws-cognitive-load
 
 #### `web-font-optimization` — 웹 폰트 최적화: 한글 폰트를 늦지 않게, 밀리지 않게, 가볍게
 
@@ -5475,8 +5711,8 @@
 - 길이: 424줄
 - 소제목: 한글 폰트가 무거운 이유 / 폰트는 CSS를 읽은 뒤에야 발견된다 / 받는 동안 글자를 어떻게 보여 줄까 / 대체 폰트를 웹 폰트 크기에 맞추기 / 첫 방문은 대체 폰트로 끝내는 optional / 필요한 글자만 받는 unicode-range / 직접 호스팅과 폰트 CDN / 폰트 문제를 현장에서 좁히는 법 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-performance, core-web-vitals
-- 키워드 백링크 →: cors, frontend-testing-strategy, resource-hints-loading, http-versions, css-typography, dns
-- 이 글로 오는 글 ←: core-web-vitals, css-performance, css-typography, frontend-performance-map, performance-metrics-measurement
+- 키워드 백링크 →: cors, frontend-testing-strategy, resource-hints-loading, icon-system-svg, http-versions, css-typography, dns
+- 이 글로 오는 글 ←: core-web-vitals, css-performance, css-typography, frontend-performance-map, icon-system-svg, performance-metrics-measurement
 
 ### Programming › Frontend › HTML & A11y (`programming/frontend/html`)
 
@@ -5489,7 +5725,18 @@
 - 소제목: 탭 메뉴에 ARIA를 다 붙였는데 / ARIA를 쓰지 않는 게 첫 번째 규칙이다 / 역할, 상태, 속성 / 이름을 붙이는 세 가지 방법 / 화면이 바뀌었다고 알려 주기 / tabindex 세 가지 값 / 포커스 순서는 DOM 순서다 / 모달은 바깥을 잠근다 / 방향키로 옮겨 다니는 위젯 / SPA에서 화면이 바뀐 뒤 / 포커스가 보여야 한다 / 현장에서 키보드로 확인하는 순서 / 다시 탭 메뉴로 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-semantics, web-accessibility, frontend-system-design-interview, rendering-csr-spa
 - 키워드 백링크 →: react-client-routing, frontend-testing-strategy, smoke-sanity-regression-testing
-- 이 글로 오는 글 ←: design-system-building, html-media-embed, html-semantics, nextjs-parallel-intercepting-routes, react-component-patterns, seo-for-spa, web-accessibility, web-components-shadow-dom
+- 이 글로 오는 글 ←: core-component-api-design, custom-form-controls, design-system-building, html-media-embed, html-semantics, nextjs-parallel-intercepting-routes, react-component-patterns, seo-for-spa, ui-overlays-tooltip-dropdown-toast, web-accessibility, web-components-shadow-dom
+
+#### `custom-form-controls` — 체크박스, 라디오, 스위치, 셀렉트를 직접 꾸밀 때: 진짜 input 위에 모양만 입히기
+
+- 요약: div로 만든 동그란 체크박스가 키보드와 스크린리더에서 사라지는 상황에서 출발해, accent-color와 appearance: none, 숨긴 input 위에 그리기, indeterminate, role=switch, 라디오의 방향키 동작을 Chromium에서 재 본다. base-select와 field-sizing, disabled와 aria-disabled의 차이, 상태 토큰까지 다룬다.
+- 태그: HTML, Accessibility, CSS, Frontend, Browser
+- 키워드: indeterminate 체크박스, appearance: base-select, field-sizing, aria-disabled
+- 길이: 499줄
+- 소제목: div로 만든 체크박스가 잃어버린 것 / 진짜 input을 남기고 모양만 바꾸는 세 단계 / 반쯤 선택된 체크박스 / 스위치는 체크박스와 언제 다른가 / 라디오 그룹은 Tab 한 번, 방향키로 고른다 / 셀렉트: base-select가 열어 준 문 / 내용만큼 자라는 입력칸 / 라벨은 위에, 오류는 칸 바로 아래에 / disabled와 aria-disabled는 다르게 동작한다 / 상태를 토큰으로 묶는다 / 꾸민 컨트롤을 점검하는 순서 / 진짜 부품 위에 페인트만 / 면접에서 나올 만한 질문
+- 직접 링크 →: html-form-validation, aria-keyboard-focus, design-system-building
+- 키워드 백링크 →: web-components-shadow-dom, core-component-api-design, frontend-testing-strategy, css-sticky-scroll-snap, client-data-cache, html-semantics, web-accessibility, postgres-query-planner
+- 이 글로 오는 글 ←: core-component-api-design, ux-laws-cognitive-load
 
 #### `html-form-validation` — 폼 입력과 검증: input 타입, label, 제약 검증 API, 오류 안내
 
@@ -5500,6 +5747,7 @@
 - 소제목: 칸의 종류가 자판과 검증을 정한다 / 칸마다 이름표를 붙인다 / 브라우저가 칸마다 검사하는 것 / 제출 버튼을 누르면 일어나는 일 / 직접 만든 규칙은 setCustomValidity로 끼운다 / 처음부터 빨간 칸이 되지 않게 / 직접 그리는 오류는 칸에 잇는다 / pattern이 조용히 무시될 때 / 브라우저 검증은 보안이 아니다 / 다시 배송지 폼으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-form-http, react-forms-actions, js-numbers-bigint
 - 키워드 백링크 →: sd-payment-flow, frontend-state-architecture
+- 이 글로 오는 글 ←: core-component-api-design, custom-form-controls, ux-laws-cognitive-load
 
 #### `html-media-embed` — 영상, 소리, 남의 페이지를 내 문서에: video, audio, iframe
 
@@ -5520,8 +5768,8 @@
 - 길이: 426줄
 - 소제목: div로만 만든 상품 페이지 / 브라우저가 DOM 옆에 트리를 하나 더 만든다 / 랜드마크는 페이지의 목차다 / 제목 번호는 글자 크기가 아니다 / 눌리는 것은 button과 a 중 하나다 / 입력칸에는 이름이 붙어야 한다 / 목록과 표는 개수와 위치를 알려 준다 / 파서는 틀린 HTML도 고쳐서 읽는다 / 문서 맨 위 세 줄 / 현장에서 마크업을 의심하는 순간 / 다시 상품 페이지로 / 면접에서 나올 만한 질문
 - 직접 링크 →: web-accessibility, aria-keyboard-focus, dom-basics, html-form-http, hydration, seo-for-spa
-- 키워드 백링크 →: frontend-testing-strategy, linters-formatters, nodejs-web-frameworks, rendering-strategies, code-review-practices
-- 이 글로 오는 글 ←: aria-keyboard-focus, css-typography, frontend-first-steps, frontend-system-design-interview, frontend-testing-strategy, html-text-semantics, rendering-performance-optimization, scroll-driven-animations, seo-for-spa, web-accessibility
+- 키워드 백링크 →: frontend-testing-strategy, icon-system-svg, linters-formatters, nodejs-web-frameworks, rendering-strategies, code-review-practices
+- 이 글로 오는 글 ←: aria-keyboard-focus, core-component-api-design, css-typography, custom-form-controls, frontend-first-steps, frontend-system-design-interview, frontend-testing-strategy, html-text-semantics, icon-system-svg, rendering-performance-optimization, scroll-driven-animations, seo-for-spa, ui-overlays-tooltip-dropdown-toast, web-accessibility
 
 #### `html-text-semantics` — 글을 담는 태그들: strong과 b, em과 i, 목록, 인용, 링크
 
@@ -5534,6 +5782,17 @@
 - 키워드 백링크 →: frontend-testing-strategy, seo-for-spa, code-review-practices
 - 이 글로 오는 글 ←: css-typography, html-media-embed
 
+#### `icon-system-svg` — 아이콘 시스템: SVG 컴포넌트, 스프라이트, 아이콘 폰트와 접근성
+
+- 요약: import 한 줄로 아이콘 1,500개가 번들에 실린 상황에서 출발해 아이콘 폰트, SVG 스프라이트, 인라인 컴포넌트를 재 보고 SVGO·svgr 파이프라인을 따라간다. 24칸 그리드와 선 굵기, 크기 토큰, 아이콘 버튼의 접근 가능한 이름, 이름 규칙과 예약 아이콘까지 다룬다.
+- 태그: HTML, Accessibility, Performance, React, Frontend
+- 키워드: 아이콘 시스템, SVG 스프라이트, 아이콘 폰트, SVGO, currentColor
+- 길이: 458줄
+- 소제목: 1,500개를 실은 import 한 줄 / 아이콘을 싣는 세 가지 방법 / 그려 온 SVG를 컴포넌트로 바꾸는 길 / 아이콘에는 이름이 없다, 버튼에 있다 / 24칸 바둑판과 같은 굵기의 선 / 컴포넌트 하나로 규칙을 묶는다 / 이름은 모양으로, 찾기는 키워드로 / 예약된 아이콘은 다른 뜻으로 쓰지 않는다 / 아이콘이 문제일 때 보는 곳 / 아이콘 하나에 담긴 약속 / 면접에서 나올 만한 질문
+- 직접 링크 →: bundler-basics, ui-overlays-tooltip-dropdown-toast, spacing-sizing-type-scale
+- 키워드 백링크 →: rendering-strategies, css-custom-properties, html-semantics, web-font-optimization, code-splitting, web-accessibility, count-min-sketch
+- 이 글로 오는 글 ←: html-semantics, web-components-shadow-dom, web-font-optimization
+
 #### `seo-for-spa` — SPA와 SEO: 구글봇은 빈 HTML을 어떻게 읽나
 
 - 요약: 검색 결과에 상품 이름 대신 Shop이 뜨는 CSR 페이지에서 시작해 구글봇의 크롤링, 렌더 큐, 색인 순서를 따라간다. title과 description, canonical, noindex와 robots.txt의 차이, sitemap, Open Graph, 구조화 데이터, hreflang, 해시 라우팅, Next.js metadata, Search Console 확인과 소프트 404까지 다룬다.
@@ -5543,7 +5802,18 @@
 - 소제목: 검색 결과에 상품 이름 대신 Shop이 뜬다 / 구글봇이 페이지를 읽는 세 단계 / 첫 HTML에 있어야 하는 것 / title과 meta description / 같은 페이지, 여러 주소 / 색인하지 말라는 두 가지 방법 / sitemap은 지도일 뿐이다 / 링크 미리보기와 Open Graph / 구조화 데이터로 내용을 설명한다 / 언어마다 다른 페이지 / 해시 라우팅은 주소가 하나다 / 렌더링 방식은 페이지마다 고른다 / Next.js에서 메타데이터 쓰기 / Search Console로 구글이 본 화면 확인하기 / 배포하고 나서 터지는 실수 / 다시 Shop으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, html-semantics, aria-keyboard-focus, sd-web-crawler-politeness-dedup, rendering-strategies, rendering-ssg-isr, rendering-ssr, xss
 - 키워드 백링크 →: html-form-http, nextjs-app-router-routing, k8s-deploy-pipeline-eks, frontend-hosting-platforms, nextjs-static-dynamic-rendering, http-status-codes, what-happens-google-com
-- 이 글로 오는 글 ←: core-web-vitals, frontend-i18n-intl, html-semantics, html-text-semantics, rendering-csr-spa, rendering-ssr
+- 이 글로 오는 글 ←: core-web-vitals, frontend-i18n-intl, html-semantics, html-text-semantics, rendering-csr-spa, rendering-ssr, seo-redirects-site-migration
+
+#### `ui-overlays-tooltip-dropdown-toast` — 툴팁, 드롭다운, 토스트: 떠 있는 작은 UI의 자리와 접근성
+
+- 요약: 화면 끝에서 잘리고 스크롤하면 따로 노는 툴팁에서 출발해, flip·shift 좌표 계산, Floating UI의 autoUpdate와 CSS 앵커 포지셔닝, 툴팁과 토글팁의 차이와 WCAG 1.4.13, 메뉴 버튼·select·콤보박스 고르기, 포커스를 뺏지 않는 토스트와 시간·큐 처리, 포털의 접근성 문제를 짚는다.
+- 태그: HTML, Accessibility, Frontend, CSS, UX
+- 키워드: 앵커 포지셔닝, Floating UI, 토글팁, 토스트 큐
+- 길이: 406줄
+- 소제목: 화면 끝에서 잘리고 스크롤하면 따로 노는 툴팁 / 기준 요소 옆에 붙이는 계산 / Floating UI로 위치를 계속 맞춘다 / CSS 앵커 포지셔닝으로 자바스크립트 없이 / 툴팁은 보조 설명이다 / 닫을 수 있고, 위에 머물 수 있고, 저절로 사라지지 않게 / 누를 것이 있으면 토글팁 / 메뉴 버튼, select, 콤보박스 중 무엇인가 / 토스트는 포커스를 뺏지 않는다 / 몇 초 보여 주고, 언제 멈추나 / 여러 개가 쌓이면 줄을 세운다 / 모달까지 가야 하는 순간 / 포털로 빼면 생기는 접근성 문제 / 현장에서 확인하는 순서 / 다시 저장 버튼 툴팁으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: css-position-stacking-context, aria-keyboard-focus, frontend-system-design-interview, core-component-api-design
+- 키워드 백링크 →: html-semantics, web-accessibility, js-closures
+- 이 글로 오는 글 ←: css-position-stacking-context, icon-system-svg
 
 #### `web-accessibility` — 웹 접근성 기초: WCAG 2.2 AA를 숫자와 귀로 확인하기
 
@@ -5554,7 +5824,7 @@
 - 소제목: 자동 검사를 통과한 가입 폼 / 네 단어로 묶은 기준 / AA는 어디까지인가 / 대비 비율을 직접 계산한다 / 그림에 붙이는 말 / 틀렸다는 걸 모두에게 알리기 / 움직임과 깜빡임 / 색만으로 말하지 않는다 / 확대해도 읽혀야 한다 / 자동 검사가 잡는 것과 못 잡는 것 / 스크린리더를 직접 켜 본다 / 접근성 제보를 받았을 때 / 법이 요구하는 것 / 다시 가입 폼으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-semantics, aria-keyboard-focus, animation-performance, lighthouse-explained
 - 키워드 백링크 →: frontend-testing-strategy, design-system-building, count-min-sketch
-- 이 글로 오는 글 ←: animation-patterns, animation-performance, aria-keyboard-focus, css-color-background, css-typography, design-system-building, frontend-testing-strategy, html-media-embed, html-semantics, html-text-semantics, network-monitoring, otel-collector-pipeline, parallax-scrollytelling, rag-retrieval-quality, responsive-design, scroll-patterns-overview, sql-study-path, sqld-window-functions
+- 이 글로 오는 글 ←: animation-patterns, animation-performance, aria-keyboard-focus, css-color-background, css-typography, custom-form-controls, design-system-building, frontend-testing-strategy, html-media-embed, html-semantics, html-text-semantics, icon-system-svg, network-monitoring, otel-collector-pipeline, parallax-scrollytelling, rag-retrieval-quality, responsive-design, scroll-patterns-overview, spacing-sizing-type-scale, sql-study-path, sqld-window-functions, ui-overlays-tooltip-dropdown-toast, ux-laws-cognitive-load
 
 ### Programming › Frontend › JavaScript (`programming/frontend/javascript`)
 
@@ -5992,7 +6262,7 @@
 - 소제목: 함수는 태어난 자리를 기억한다 / 호출이 끝나도 상자는 남는다 / 값이 아니라 변수를 잡는다 / 반복문 안에서 만든 함수 / 엔진이 실제로 남기는 것 / 클로저로 만드는 것들 / React 컴포넌트에서 오래된 값을 보는 이유 / 현장에서 오래된 값을 찾는 순서 / 연습: 숨긴 상태를 가진 카운터 / 멈춘 타이머가 알려 준 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-function-forms, js-first-class-callbacks, js-scope-lexical, garbage-collection, js-var-let-const, js-memory-leak, js-iife-module-pattern, js-currying-partial, js-memoization, debounce-throttle, js-classes, react-rerender
 - 키워드 백링크 →: react-useeffect, react-state-snapshot-batching
-- 이 글로 오는 글 ←: abort-controller, browser-devtools-debugging, debounce-throttle, design-patterns-overview, ds-graph-bfs-dfs, event-delegation, fp-in-react, functional-programming-basics, go-concurrency-basics, islands-resumability, javascript-roadmap, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-loops-control-flow, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, leetcode-climbing-stairs, nextjs-caching-layers, nextjs-self-hosting-deployment, nextjs-server-actions-security, oop-four-pillars, pattern-command, pattern-interpreter, pattern-strategy, react-jsx-components, react-memoization-hooks, react-state-snapshot-batching, react-useeffect, react-useref-layout-effect, spa-auth-token-storage, sql-cte-recursive, sqld-top-n-hierarchical-pivot, typescript-roadmap
+- 이 글로 오는 글 ←: abort-controller, browser-devtools-debugging, debounce-throttle, design-patterns-overview, ds-graph-bfs-dfs, event-delegation, fp-in-react, functional-programming-basics, go-concurrency-basics, islands-resumability, javascript-roadmap, js-currying-partial, js-execution-context, js-first-class-callbacks, js-function-forms, js-iife-module-pattern, js-loops-control-flow, js-memoization, js-memory-leak, js-scope-lexical, js-this-binding, js-timers-accuracy, js-var-let-const, leetcode-climbing-stairs, nextjs-caching-layers, nextjs-self-hosting-deployment, nextjs-server-actions-security, oop-four-pillars, pattern-command, pattern-interpreter, pattern-strategy, react-jsx-components, react-memoization-hooks, react-state-snapshot-batching, react-useeffect, react-useref-layout-effect, spa-auth-token-storage, sql-cte-recursive, sqld-top-n-hierarchical-pivot, typescript-roadmap, ui-overlays-tooltip-dropdown-toast
 
 #### `js-currying-partial` — 커링과 부분 적용: 인자는 지금, 실행은 나중에
 
@@ -6058,7 +6328,7 @@
 - 소제목: 같은 입력에 같은 결과, 그리고 흔적 없음 / 숨은 입력은 테스트를 시간에 묶는다 / 숨은 출력은 두 번째 호출에서 드러난다 / 안에서 고치는 건 괜찮다 / 계산은 안쪽, 입출력은 바깥쪽 / 순수하면 얻는 것들 / React가 순수함을 요구하는 세 자리 / 연습: 결제 계산을 순수하게 / 배송비가 한 줄로 돌아오기까지 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-mutation, js-shallow-deep-copy, js-immutability-react, js-spread-rest, hexagonal-architecture, js-memoization, message-queue-basics, saga-pattern
 - 키워드 백링크 →: json-crud-http, js-strict-mode, react-concurrent-transitions, react-state-snapshot-batching, test-pyramid-unit-tests, js-es-modules, http-methods
-- 이 글로 오는 글 ←: abort-controller, airflow-orchestration, api-security-owasp-api-top10, bullmq-job-queue, clean-architecture, clean-code-practices, cors, event-sourcing, express-middleware, fp-in-react, frontend-browser-cache, frontend-testing-strategy, functional-programming-basics, graphql-authorization, http-methods, javascript-roadmap, js-array-mutation, js-array-transform, js-destructuring, js-immutability-react, js-memoization, js-primitive-vs-reference, js-short-circuit, message-delivery-semantics, message-queue-basics, mvc-pattern, npm-package-publishing, pattern-mediator, pattern-null-object, pattern-state, react-component-patterns, react-jsx-components, react-rerender, react-state-management-libraries, react-state-snapshot-batching, react-useref-layout-effect, resource-hints-loading, schema-versioning, sqld-set-operators, test-pyramid-unit-tests, ts-narrowing, tsconfig-strict
+- 이 글로 오는 글 ←: abort-controller, airflow-orchestration, api-security-owasp-api-top10, bullmq-job-queue, clean-architecture, clean-code-practices, cors, data-orchestrators-comparison, event-sourcing, express-middleware, fp-in-react, frontend-browser-cache, frontend-testing-strategy, functional-programming-basics, graphql-authorization, http-methods, javascript-roadmap, js-array-mutation, js-array-transform, js-destructuring, js-immutability-react, js-memoization, js-primitive-vs-reference, js-short-circuit, message-delivery-semantics, message-queue-basics, mvc-pattern, npm-package-publishing, pattern-mediator, pattern-null-object, pattern-state, react-component-patterns, react-jsx-components, react-rerender, react-state-management-libraries, react-state-snapshot-batching, react-useref-layout-effect, resource-hints-loading, schema-versioning, sqld-set-operators, test-pyramid-unit-tests, ts-narrowing, tsconfig-strict
 
 ### Programming › Frontend › JavaScript › Objects & Arrays (`programming/frontend/javascript/objects`)
 
@@ -6071,7 +6341,7 @@
 - 소제목: 원본을 고치는 메서드는 아홉 개다 / sort가 돌려준 배열은 원본이다 / 숫자를 정렬했더니 100이 25보다 앞선다 / 사본을 돌려주는 ES2023 메서드 / React는 같은 배열이면 다시 그리지 않는다 / 렌더링 중에 sort를 부르면 / 큐로 쓴 배열이 느려지는 순간 / 원본을 고치는 실수를 도구에 맡기기 / 할 일 리듀서를 원본을 고치지 않고 만들기 / 고치는 쪽인지 먼저 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-array-transform, js-primitive-vs-reference, js-shallow-deep-copy, js-immutability-react, js-spread-rest, js-pure-functions, js-object-methods
 - 키워드 백링크 →: ds-linked-list, js-strict-mode, bundler-basics
-- 이 글로 오는 글 ←: ds-array-matrix, ds-heap, ds-linked-list, ds-stack-queue-deque, functional-programming-basics, javascript-roadmap, js-array-transform, js-immutability-react, js-primitive-vs-reference, js-pure-functions, js-spread-rest, js-strings-unicode, leetcode-contains-duplicate, leetcode-merge-two-sorted-lists, leetcode-study-guide, sorting-algorithms
+- 이 글로 오는 글 ←: ds-array-matrix, ds-heap, ds-linked-list, ds-stack-queue-deque, functional-programming-basics, javascript-roadmap, js-array-transform, js-immutability-react, js-primitive-vs-reference, js-pure-functions, js-spread-rest, js-strings-unicode, leetcode-contains-duplicate, leetcode-merge-two-sorted-lists, leetcode-move-zeroes, leetcode-sort-colors, leetcode-study-guide, sorting-algorithms
 
 #### `js-array-transform` — 배열을 바꾸고 고르고 접는 메서드: map, filter, reduce, flatMap
 
@@ -6104,7 +6374,7 @@
 - 소제목: 꺼내 담는 일을 한 줄로 / 기본값은 undefined일 때만 들어간다 / 배열 패턴은 이터레이터를 돈다 / 매개변수 자리에서 바로 꺼내기 / 이미 있는 변수에 담을 때 생기는 두 가지 함정 / React 코드 곳곳의 구조 분해 / 반복문과 콜백에서 쓰는 패턴 / TypeScript에서 콜론의 뜻이 겹친다 / 옵션 정규화 함수 만들기 / 패턴이 하는 일을 순서대로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-spread-rest, js-optional-chaining-nullish, react-rerender, js-memoization, js-object-methods
 - 키워드 백링크 →: client-data-cache, linters-formatters, pattern-iterator, js-loops-control-flow, input-validation-secure-coding, react-useeffect, js-pure-functions, js-primitive-vs-reference
-- 이 글로 오는 글 ←: bit-manipulation, frontend-frameworks-compared, javascript-roadmap, js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-iterators-generators, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, leetcode-climbing-stairs, leetcode-permutations, pattern-proxy, react-forms-actions, react-jsx-components, ts-generics, ts-narrowing, ts-type-system-basics, tsconfig-strict, typescript-in-react, typescript-roadmap
+- 이 글로 오는 글 ←: bit-manipulation, frontend-frameworks-compared, javascript-roadmap, js-async-await, js-currying-partial, js-es-modules, js-function-forms, js-iterators-generators, js-optional-chaining-nullish, js-promise-combinators, js-spread-rest, js-strict-mode, js-this-binding, js-truthy-falsy-typeof, leetcode-climbing-stairs, leetcode-permutations, leetcode-sort-colors, pattern-proxy, react-forms-actions, react-jsx-components, ts-generics, ts-narrowing, ts-type-system-basics, tsconfig-strict, typescript-in-react, typescript-roadmap
 
 #### `js-immutability-react` — React 상태를 불변으로 바꾸기: 중첩 업데이트와 Immer
 
@@ -6283,7 +6553,7 @@
 - 길이: 502줄
 - 소제목: 요청이 페이지에 닿기 전에 거치는 곳 / 무한 리다이렉트를 고치는 matcher / proxy가 할 수 있는 일 / middleware가 proxy로 이름을 바꾼 이유 / proxy만 믿으면 안 되는 이유 / Route Handler로 API 만들기 / next.config의 규칙과 proxy 중 무엇을 쓰나 / 다시 /login으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-status-codes, express-middleware, authn-vs-authz, nextjs-server-actions-security, nextjs-caching-layers, server-sent-events, web-security-headers
-- 키워드 백링크 →: nextjs-static-dynamic-rendering, nextjs-self-hosting-deployment, proxy-reverse-proxy, ab-testing, rendering-strategies, js-memoization, input-validation-secure-coding, react-server-components, cookie-session-login, count-min-sketch, token-login, webhooks
+- 키워드 백링크 →: nextjs-static-dynamic-rendering, nextjs-self-hosting-deployment, design-system-adoption-governance, proxy-reverse-proxy, ab-testing, rendering-strategies, js-memoization, input-validation-secure-coding, react-server-components, cookie-session-login, count-min-sketch, token-login, webhooks
 - 이 글로 오는 글 ←: frontend-i18n-intl, nextjs-app-router-routing, nextjs-caching-layers, nextjs-parallel-intercepting-routes, nextjs-self-hosting-deployment, nextjs-server-actions-security, serverless-architecture
 
 #### `nextjs-self-hosting-deployment` — Next.js 직접 운영하기: Vercel 밖에서 챙길 standalone, 공유 캐시, 계측
@@ -6319,7 +6589,7 @@
 - 소제목: 진입점 하나에서 dist까지 / import 한 줄이 실제 파일이 되기까지 / 묶은 파일 안에는 무엇이 들어가나 / 직접 그래프를 펼쳐 보기 / 개발 서버는 묶지 않는다 / 문법은 바꿔 주지만 기능은 채워 주지 않는다 / 줄어든 코드에서 원래 줄을 찾는다 / 같은 앱을 여섯 도구로 묶어 보면 / 운영에서 번들러가 범인일 때 / 결국 번들러는 번역가다 / 면접에서 나올 만한 질문
 - 직접 링크 →: code-splitting, js-es-modules, js-iife-module-pattern, js-optional-chaining-nullish, frontend-error-tracking, module-federation-deep-dive, build-caching, monorepo-build-cache, resource-hints-loading
 - 키워드 백링크 →: npm-package-publishing, react-jsx-components, js-hoisting-tdz, frontend-build-tooling
-- 이 글로 오는 글 ←: code-splitting, css-styling-approaches, frontend-build-tooling, frontend-error-tracking, frontend-first-steps, frontend-performance-map, javascript-roadmap, js-array-mutation, js-iterators-generators, js-loops-control-flow, js-map-set-weak, js-optional-chaining-nullish, js-runtimes-node-deno-bun, lighthouse-explained, linters-formatters, performance-metrics-measurement, resource-hints-loading, ts-decorators, xss
+- 이 글로 오는 글 ←: code-splitting, css-styling-approaches, frontend-build-tooling, frontend-error-tracking, frontend-first-steps, frontend-performance-map, icon-system-svg, javascript-roadmap, js-array-mutation, js-iterators-generators, js-loops-control-flow, js-map-set-weak, js-optional-chaining-nullish, js-runtimes-node-deno-bun, lighthouse-explained, linters-formatters, performance-metrics-measurement, resource-hints-loading, ts-decorators, xss
 
 #### `client-data-cache` — 화면 데이터 캐시: TanStack Query와 SWR로 같은 요청 줄이기
 
@@ -6330,7 +6600,7 @@
 - 소제목: 서버에서 빌려 온 상태 / 쿼리 키 하나가 캐시 한 칸이다 / 신선한 시간과 남겨 두는 시간 / 언제 다시 받아 오나 / 옛 데이터를 먼저 보여 주고 뒤에서 바꾼다 / 바꾼 뒤에는 캐시도 바꾼다 / 누르자마자 바뀌는 화면 / 들어가기 전에 미리 받기 / 처음 값을 미리 넣어 두기 / 페이지가 여러 장인 목록 / 서버가 받아 둔 데이터를 넘겨받기 / SWR로 쓰면 / 이 블로그에서 쿼리를 두는 자리 / 캐시가 틀린 값을 보여 주는 경우 / 계산 결과를 기억하기 / 처음 세 컴포넌트로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: frontend-browser-cache, browser-fetch, react-rerender, rest-api-design, rendering-strategies, js-memory-leak
 - 키워드 백링크 →: http-caching-cdn, browser-storage, react-state-snapshot-batching, react-useeffect, rendering-performance-optimization, js-memoization, loading-patterns, react-state-management-libraries
-- 이 글로 오는 글 ←: abort-controller, browser-fetch, cqrs, curl-for-debugging, data-center-infrastructure, data-fetching-optimization, debounce-throttle, exponential-backoff-jitter, fe-sd-news-feed, fp-functors-monads-js, frontend-as-distributed-system, frontend-browser-cache, frontend-performance-map, frontend-state-architecture, frontend-system-design-interview, frontend-testing-strategy, graphql-basics, graphql-client-caching, graphql-operations-syntax, graphql-pagination-connections, hexagonal-architecture, html-form-http, http-methods, http-status-codes, javascript-roadmap, js-async-await, js-destructuring, js-immutability-react, js-iterators-generators, js-memoization, js-memory-leak, js-optional-chaining-nullish, js-promise-combinators, js-promises, json-crud-http, k8s-certifications, layered-architecture, linux-boot-process, linux-fhs-file-commands, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, openapi-spec-first, pattern-state, pattern-strategy, react-client-routing, react-custom-hooks-rules, react-forms-actions, react-rerender, react-state-management-libraries, react-suspense-error-boundary, react-useeffect, react-without-effects, reactive-programming, rendering-csr-spa, rendering-ssr, resilience-patterns, runtime-validation-zod, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, spa-auth-token-storage, test-pyramid-unit-tests, transactional-outbox
+- 이 글로 오는 글 ←: abort-controller, browser-fetch, cqrs, curl-for-debugging, custom-form-controls, data-center-infrastructure, data-fetching-optimization, debounce-throttle, exponential-backoff-jitter, fe-sd-news-feed, fp-functors-monads-js, frontend-as-distributed-system, frontend-browser-cache, frontend-performance-map, frontend-state-architecture, frontend-system-design-interview, frontend-testing-strategy, graphql-basics, graphql-client-caching, graphql-operations-syntax, graphql-pagination-connections, hexagonal-architecture, html-form-http, http-methods, http-status-codes, javascript-roadmap, js-async-await, js-destructuring, js-immutability-react, js-iterators-generators, js-memoization, js-memory-leak, js-optional-chaining-nullish, js-promise-combinators, js-promises, json-crud-http, k8s-certifications, layered-architecture, linux-boot-process, linux-fhs-file-commands, linux-processes-signals, linux-systemd-systemctl, load-balancer-basics, loading-patterns, microservices, mvc-pattern, openapi-spec-first, pattern-state, pattern-strategy, react-client-routing, react-custom-hooks-rules, react-forms-actions, react-rerender, react-state-management-libraries, react-suspense-error-boundary, react-useeffect, react-without-effects, reactive-programming, rendering-csr-spa, rendering-ssr, resilience-patterns, runtime-validation-zod, sd-web-crawler-architecture, sd-web-crawler-politeness-dedup, spa-auth-token-storage, test-pyramid-unit-tests, transactional-outbox
 
 #### `code-splitting` — 번들 쪼개기: 코드 스플리팅과 트리 셰이킹
 
@@ -6341,7 +6611,7 @@
 - 소제목: 다운로드보다 비싼 것 / import()가 번들을 가르는 자리 / 라우트로 자를까, 컴포넌트로 자를까 / 청크 그래프와 공통 청크 / 안 쓰는 export를 털어 내기 / 사이드 이펙트가 있으면 지우지 못한다 / CommonJS는 흔들어도 안 떨어진다 / 배럴 파일이 끌고 오는 것들 / 번들 안을 들여다보기 / 미리 받을까, 필요할 때 받을까 / 파일 이름에 내용의 지문을 넣는다 / 너무 잘게 쪼개면 생기는 일 / 배포 직후 쏟아지는 청크 에러, 한 줄에 불어난 번들 / 덜 보내는 게 가장 빠르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: bundler-basics, core-web-vitals
 - 키워드 백링크 →: js-es-modules, react-client-routing, nextjs-app-router-routing, debounce-throttle, frontend-hosting-platforms, http-versions, rendering-strategies, sdlc-models-agile-scrum
-- 이 글로 오는 글 ←: bundler-basics, core-web-vitals, debounce-throttle, fp-composition-pipe, frontend-as-distributed-system, frontend-browser-cache, frontend-build-tooling, frontend-error-tracking, frontend-frameworks-compared, frontend-hosting-platforms, frontend-i18n-intl, frontend-performance-map, frontend-system-design-interview, http-versions, islands-resumability, js-es-modules, js-hoisting-tdz, lazy-loading-strategies, lighthouse-explained, loading-patterns, module-federation-deep-dive, nextjs-self-hosting-deployment, npm-package-publishing, pattern-proxy, performance-metrics-measurement, react-client-routing, react-suspense-error-boundary, rendering-csr-spa, resource-hints-loading, smoke-sanity-regression-testing
+- 이 글로 오는 글 ←: bundler-basics, core-web-vitals, debounce-throttle, fp-composition-pipe, frontend-as-distributed-system, frontend-browser-cache, frontend-build-tooling, frontend-error-tracking, frontend-frameworks-compared, frontend-hosting-platforms, frontend-i18n-intl, frontend-performance-map, frontend-system-design-interview, http-versions, icon-system-svg, islands-resumability, js-es-modules, js-hoisting-tdz, lazy-loading-strategies, lighthouse-explained, loading-patterns, module-federation-deep-dive, nextjs-self-hosting-deployment, npm-package-publishing, pattern-proxy, performance-metrics-measurement, react-client-routing, react-suspense-error-boundary, rendering-csr-spa, resource-hints-loading, smoke-sanity-regression-testing
 
 #### `core-web-vitals` — Core Web Vitals: LCP, INP, CLS
 
@@ -6475,7 +6745,7 @@
 - 소제목: 모든 경우를 props로 받으면 생기는 일 / 내용은 부모가 만들어 넘긴다 / 부품끼리 안쪽에서 이야기한다 / Render Props와 HOC가 하던 일 / 로직만 주고 마크업은 맡긴다 / 제어와 비제어를 둘 다 받는다 / 어떤 태그로 그릴지 바꾼다 / 컨테이너와 프레젠테이셔널은 훅으로 옮겨 갔다 / 추상화가 비싸지는 순간 / 다시 스무 개짜리 모달로 / 면접에서 나올 만한 질문
 - 직접 링크 →: typescript-in-react, react-rerender, pattern-decorator, frontend-system-design-interview, design-patterns-overview
 - 키워드 백링크 →: react-suspense-error-boundary, react-context, aria-keyboard-focus, react-custom-hooks-rules, js-pure-functions
-- 이 글로 오는 글 ←: design-system-building, web-components-shadow-dom
+- 이 글로 오는 글 ←: core-component-api-design, design-system-building, web-components-shadow-dom
 
 #### `react-concurrent-transitions` — 동시성 렌더링과 transition: 급한 업데이트를 먼저
 
@@ -6530,7 +6800,7 @@
 - 소제목: 입력값을 누가 들고 있나 / React Hook Form이 빠른 이유 / 검증 규칙은 한 곳에 쓴다 / 빨간 글씨는 화면 낭독기에 들리지 않는다 / 두 번 누르면 두 번 가입된다 / form의 action에 함수를 넘긴다 / 서버 액션은 누구나 부를 수 있는 POST다 / 누르자마자 보이고, 실패하면 돌아간다 / 파일은 늘 비제어다 / 여러 단계로 나뉜 폼의 초안은 어디에 / 처음 회원가입 폼으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-form-http, frontend-state-architecture, frontend-system-design-interview, idempotency-key, react-server-components, loading-patterns, client-data-cache
 - 키워드 백링크 →: react-suspense-error-boundary, nextjs-app-router-routing, input-validation-secure-coding, rendering-strategies, js-destructuring, resilience-patterns, http-methods
-- 이 글로 오는 글 ←: frontend-state-architecture, html-form-validation, nextjs-server-actions-security, react-client-routing, runtime-validation-zod, web-components-shadow-dom
+- 이 글로 오는 글 ←: core-component-api-design, frontend-state-architecture, html-form-validation, nextjs-server-actions-security, react-client-routing, runtime-validation-zod, web-components-shadow-dom
 
 #### `react-jsx-components` — JSX와 컴포넌트: JSX는 무엇으로 바뀌고 엘리먼트는 무엇인가
 
@@ -6628,7 +6898,7 @@
 - 길이: 487줄
 - 소제목: 렌더링이 끝나도 남는 상자 / state로 둘까 ref로 둘까 / 렌더링 중에는 ref를 만지지 않는다 / DOM 요소를 붙잡는 ref / React 19에서 바뀐 두 가지 / 부모에게 손잡이만 열어 주기 / 그리기 전에 한 번 더: useLayoutEffect / 그리기를 붙잡는 값 / 서버에서는 돌지 않는다 / 핸들러 안에서 바로 DOM이 필요할 때 / 증상으로 거꾸로 찾기 / 다시 툴팁으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-closures, react-memoization-hooks, typescript-in-react, browser-rendering-pipeline, hydration
-- 키워드 백링크 →: dom-basics, react-useeffect, react-concurrent-transitions, react-state-snapshot-batching, js-function-forms, rendering-strategies, js-pure-functions, react-custom-hooks-rules, core-web-vitals
+- 키워드 백링크 →: dom-basics, react-useeffect, design-system-adoption-governance, react-concurrent-transitions, react-state-snapshot-batching, js-function-forms, rendering-strategies, js-pure-functions, react-custom-hooks-rules, core-web-vitals
 - 이 글로 오는 글 ←: react-fiber-render-commit, react-rerender, react-suspense-error-boundary, typescript-in-react
 
 #### `react-without-effects` — effect 없이 쓰는 법: 지우면 버그가 사라지는 useEffect
@@ -6752,7 +7022,7 @@
 - 소제목: HTML은 어디서 언제 만들어지나 / CSR: 빈 HTML과 큰 JS / SSR: 요청마다 서버가 HTML을 만든다 / 하이드레이션은 공짜가 아니다 / SSG: 빌드할 때 미리 만든다 / ISR: 정적 페이지를 뒤에서 다시 만든다 / 스트리밍: 준비된 부분부터 보낸다 / 서버 컴포넌트는 SSR과 다른 이야기다 / 큰 쇼핑몰에서 페이지마다 고르기 / 고른 전략대로 나가는지 밖에서 확인하기 / 다시 미리보기 카드로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, rendering-ssr, islands-resumability, hydration, rendering-ssg-isr, streaming-ssr-suspense, react-server-components, nextjs-static-dynamic-rendering, proxy-reverse-proxy, react-rerender
 - 키워드 백링크 →: http-caching-cdn, nextjs-app-router-routing, lighthouse-explained, lossy-counting, http-status-codes, core-web-vitals
-- 이 글로 오는 글 ←: ab-testing, browser-rendering-pipeline, client-data-cache, code-splitting, css-performance, css-styling-approaches, design-system-building, fe-sd-news-feed, frontend-error-tracking, frontend-frameworks-compared, frontend-hosting-platforms, frontend-i18n-intl, frontend-performance-map, frontend-system-design-interview, functional-programming-basics, global-rollout-localization, graphql-client-caching, graphql-subscriptions-defer, html-form-http, html-semantics, http-streaming-sse, hydration, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-prototype-chain, js-template-literals, lazy-loading-strategies, loading-patterns, micro-frontend-integration-patterns, nextjs-app-router-routing, nextjs-caching-layers, nextjs-parallel-intercepting-routes, nextjs-route-handlers-proxy, nextjs-self-hosting-deployment, nextjs-server-actions-security, nextjs-static-dynamic-rendering, pattern-observer, performance-metrics-measurement, react-client-routing, react-context, react-custom-hooks-rules, react-forms-actions, react-rerender, react-server-components, react-state-management-libraries, react-suspense-error-boundary, react-useref-layout-effect, react-without-effects, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, sd-mq-replication, seo-for-spa, streaming-ssr-suspense, system-design-study-path, typescript-in-react, web-components-shadow-dom, web-security-headers
+- 이 글로 오는 글 ←: ab-testing, browser-rendering-pipeline, client-data-cache, code-splitting, css-performance, css-styling-approaches, design-system-building, fe-sd-news-feed, frontend-error-tracking, frontend-frameworks-compared, frontend-hosting-platforms, frontend-i18n-intl, frontend-performance-map, frontend-system-design-interview, functional-programming-basics, global-rollout-localization, graphql-client-caching, graphql-subscriptions-defer, html-form-http, html-semantics, http-streaming-sse, hydration, icon-system-svg, islands-resumability, js-es-modules, js-iife-module-pattern, js-memoization, js-promise-combinators, js-promises, js-prototype-chain, js-template-literals, lazy-loading-strategies, loading-patterns, micro-frontend-integration-patterns, nextjs-app-router-routing, nextjs-caching-layers, nextjs-parallel-intercepting-routes, nextjs-route-handlers-proxy, nextjs-self-hosting-deployment, nextjs-server-actions-security, nextjs-static-dynamic-rendering, pattern-observer, performance-metrics-measurement, react-client-routing, react-context, react-custom-hooks-rules, react-forms-actions, react-rerender, react-server-components, react-state-management-libraries, react-suspense-error-boundary, react-useref-layout-effect, react-without-effects, rendering-csr-spa, rendering-ssg-isr, rendering-ssr, sd-mq-replication, seo-for-spa, seo-redirects-site-migration, streaming-ssr-suspense, system-design-study-path, typescript-in-react, web-components-shadow-dom, web-security-headers
 
 #### `streaming-ssr-suspense` — 스트리밍 SSR과 Suspense: 준비된 부분부터 보내기
 
@@ -6788,6 +7058,19 @@
 - 직접 링크 →: token-login, cookie-session-login, oauth, browser-storage, csrf, xss, frontend-as-distributed-system, gateway, browser-security-model, web-security-headers
 - 키워드 백링크 →: client-data-cache, json-crud-http, what-happens-google-com, cors, js-closures
 - 이 글로 오는 글 ←: browser-security-model, frontend-as-distributed-system, react-client-routing
+
+### Programming › Frontend › SEO (`programming/frontend/seo`)
+
+#### `seo-redirects-site-migration` — 주소를 바꿀 때 검색 순위를 지키는 법: 301·308, 리다이렉트 체인, 사이트 이전
+
+- 요약: 도메인을 옮긴 다음 주 검색 유입이 반으로 준 장면에서 시작해 3xx와 meta refresh가 검색 엔진에 주는 신호, 매핑 표 만들기, curl로 리다이렉트 체인과 루프 찾기, 주소 변경 도구, 점검 중 503과 Retry-After, 404와 410, 이전 뒤 모니터링까지 다룬다.
+- 태그: SEO, HTTP, Next.js, Nginx, Frontend
+- 키워드: 사이트 이전, 리다이렉트 체인, 주소 변경 도구, 리다이렉트 매핑
+- 길이: 453줄
+- 소제목: 도메인을 옮겼더니 다음 주 유입이 반으로 줄었다 / 3xx가 검색 엔진에 주는 신호 / 모든 구 주소를 홈으로 보내면 생기는 일 / 구 주소와 새 주소를 짝짓는 매핑 표 / 리다이렉트 체인을 한 번에 접기 / curl로 실제 응답을 따라가 보기 / 서버에 리다이렉트를 거는 자리 / 도메인과 프로토콜을 바꿀 때 / 점검 중에는 503과 Retry-After / 지운 페이지는 404인가 410인가 / 이전한 뒤 무엇을 지켜보나 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 직접 링크 →: seo-for-spa, http-status-codes, nginx-basics, https-tls
+- 키워드 백링크 →: ab-testing, rendering-strategies, frontend-hosting-platforms, what-happens-google-com, count-min-sketch
+- 이 글로 오는 글 ←: leetcode-happy-number, sd-url-shortener-api-redirect
 
 ### Programming › Frontend › System Design (`programming/frontend/system-design`)
 
@@ -6833,7 +7116,7 @@
 - 소제목: 같은 기능을 반대쪽 끝에서 본다 / 45분 안에 무엇을 언제 말하나 / 컴포넌트를 나누고 요청이 지나는 길을 긋는다 / 응답 모양은 화면이 정한다 / 키를 누를 때마다 요청하면 생기는 일 / 줄이고, 끊고, 기억한다 / 한글은 한 글자에 입력 이벤트가 여러 번 온다 / 키보드와 화면 낭독기로도 고를 수 있어야 한다 / 빠르다는 걸 숫자로 말한다 / 배포한 뒤에 잘 도는지 어떻게 아나 / 면접관이 자주 끼어드는 자리 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-autocomplete-trie, frontend-state-architecture, frontend-as-distributed-system, fe-sd-news-feed, api-pagination-sorting, race-conditions, debounce-throttle, browser-fetch, client-data-cache, react-rerender, core-web-vitals, code-splitting, performance-metrics-measurement, frontend-error-tracking, rendering-strategies, loading-patterns
 - 키워드 백링크 →: frontend-i18n-intl, html-form-http, http-caching-cdn, frontend-testing-strategy, html-semantics, sd-split-web-and-db, lossy-counting, sd-cache-and-cdn-tier, postgres-query-planner, gateway
-- 이 글로 오는 글 ←: aria-keyboard-focus, fe-sd-news-feed, frontend-as-distributed-system, frontend-state-architecture, react-component-patterns, react-forms-actions
+- 이 글로 오는 글 ←: aria-keyboard-focus, fe-sd-news-feed, frontend-as-distributed-system, frontend-state-architecture, react-component-patterns, react-forms-actions, ui-overlays-tooltip-dropdown-toast
 
 ### Programming › Frontend › Testing (`programming/frontend/testing`)
 
@@ -6846,7 +7129,7 @@
 - 소제목: 사용자가 보는 것으로 확인한다 / 트로피 모양이 나오는 이유 / 테스트 러너와 가짜 DOM / 요소를 찾는 순서에 접근성이 들어 있다 / getBy로 찾으면 운에 맡기게 된다 / userEvent는 사람처럼 누른다 / act 경고는 보지 않은 변화를 알린다 / 네트워크는 경계에서 가로챈다 / 스냅샷이 아무것도 지키지 못하는 이유 / 브라우저에서만 보이는 버그는 E2E로 / 픽셀을 비교하는 시각 회귀 / CI에서는 싼 것부터 돌린다 / 커버리지 숫자가 말해 주지 않는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: test-pyramid-unit-tests, client-data-cache, ci-cd-basics
 - 키워드 백링크 →: frontend-browser-cache, design-system-building, react-state-management-libraries, linters-formatters, smoke-sanity-regression-testing, html-semantics, web-accessibility, sd-payment-flow, event-loop, js-pure-functions, react-custom-hooks-rules
-- 이 글로 오는 글 ←: abort-controller, animation-performance, aria-keyboard-focus, browser-rendering-pipeline, browser-security-model, browser-storage, core-web-vitals, css-color-background, css-performance, data-fetching-optimization, debounce-throttle, design-system-building, dom-basics, event-delegation, event-propagation, fe-sd-news-feed, frontend-as-distributed-system, frontend-error-tracking, frontend-performance-map, frontend-state-architecture, frontend-system-design-interview, hexagonal-architecture, html-media-embed, html-semantics, html-text-semantics, hydration, islands-resumability, js-es-modules, js-var-let-const, lazy-loading-strategies, lighthouse-explained, logging-tools-overview, micro-frontend-integration-patterns, module-federation-deep-dive, nextjs-app-router-routing, nextjs-parallel-intercepting-routes, openapi-spec-first, parallax-scrollytelling, passkeys-webauthn, performance-metrics-measurement, rendering-csr-spa, rendering-performance-optimization, resource-hints-loading, scroll-driven-animations, scroll-triggered-intersection-observer, sd-url-shortener-api-redirect, smoke-sanity-regression-testing, test-pyramid-unit-tests, view-transitions-shared-element, web-accessibility, web-font-optimization, web-security-headers
+- 이 글로 오는 글 ←: abort-controller, animation-performance, aria-keyboard-focus, behavior-design-models, browser-rendering-pipeline, browser-security-model, browser-storage, core-component-api-design, core-web-vitals, css-color-background, css-performance, custom-form-controls, data-fetching-optimization, debounce-throttle, design-system-building, dom-basics, event-delegation, event-propagation, fe-sd-news-feed, frontend-as-distributed-system, frontend-error-tracking, frontend-performance-map, frontend-state-architecture, frontend-system-design-interview, hexagonal-architecture, html-media-embed, html-semantics, html-text-semantics, hydration, islands-resumability, js-es-modules, js-var-let-const, lazy-loading-strategies, lighthouse-explained, logging-tools-overview, micro-frontend-integration-patterns, module-federation-deep-dive, nextjs-app-router-routing, nextjs-parallel-intercepting-routes, openapi-spec-first, parallax-scrollytelling, passkeys-webauthn, performance-metrics-measurement, rendering-csr-spa, rendering-performance-optimization, resource-hints-loading, scroll-driven-animations, scroll-triggered-intersection-observer, sd-url-shortener-api-redirect, smoke-sanity-regression-testing, test-pyramid-unit-tests, view-transitions-shared-element, web-accessibility, web-font-optimization, web-security-headers
 
 ### Programming › Frontend › Tooling (`programming/frontend/tooling`)
 
@@ -7272,7 +7555,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: browser-rendering-pipeline, network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, webhooks, http-versions, cdn-edge-anycast, http-status-codes, ipv6-basics, first-page-from-power-on, udp-and-quic
-- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, api-key-hmac-auth, architecture-docs-c4-adr, aws-core-services-map, aws-s3-in-practice, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, config-management-tools, container-orchestration-choices, container-supply-chain-security, cookie-session-login, core-web-vitals, cross-platform-apps, csrf, css-color-background, curl-for-debugging, data-center-infrastructure, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, enterprise-auth-ldap-kerberos, firewall-types-ngfw, first-page-from-power-on, frontend-browser-cache, frontend-hosting-platforms, gateway, git-first-hour, git-remote-collaboration, go-language-essentials, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-multi-cluster, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, linux-archive-transfer, linux-package-management, local-custom-domain, network-attacks-l2-l3, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, nodejs-http-clients, opensearch-cluster-operations, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, phishing-social-engineering, ports-and-sockets, proxy-reverse-proxy, pwa-install-offline, resource-hints-loading, reverse-proxy-lb-api-gateway, route53-routing-policies, sd-email-protocols, seo-for-spa, spa-auth-token-storage, tcp-connection-lifecycle, threat-modeling-stride, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, wan-mpls-sd-wan-vrf, web-security-headers, web-server-vs-was, webhooks, wifi-standards-security, youtube-url-to-video
+- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, api-key-hmac-auth, architecture-docs-c4-adr, aws-core-services-map, aws-s3-in-practice, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, config-management-tools, container-orchestration-choices, container-supply-chain-security, cookie-session-login, core-web-vitals, cross-platform-apps, csrf, css-color-background, curl-for-debugging, data-center-infrastructure, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, enterprise-auth-ldap-kerberos, firewall-types-ngfw, first-page-from-power-on, frontend-browser-cache, frontend-hosting-platforms, gateway, git-first-hour, git-remote-collaboration, go-language-essentials, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-multi-cluster, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, linux-archive-transfer, linux-package-management, local-custom-domain, network-attacks-l2-l3, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, nodejs-http-clients, opensearch-cluster-operations, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, phishing-social-engineering, ports-and-sockets, proxy-reverse-proxy, pwa-install-offline, resource-hints-loading, reverse-proxy-lb-api-gateway, route53-routing-policies, sd-email-protocols, seo-for-spa, seo-redirects-site-migration, spa-auth-token-storage, tcp-connection-lifecycle, threat-modeling-stride, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, wan-mpls-sd-wan-vrf, web-security-headers, web-server-vs-was, webhooks, wifi-standards-security, youtube-url-to-video
 
 #### `youtube-url-to-video` — youtube.com을 입력하고 영상이 나오기까지
 
@@ -7386,7 +7669,7 @@
 - 소제목: 첫 자리 숫자가 먼저다 / 최종 응답 전에 오는 1xx / 성공에도 종류가 있다 / 리다이렉트는 두 가지를 정한다 / POST 다음에는 303 / 리다이렉트가 이어지면 왕복이 쌓인다 / 4xx는 다시 보내도 같다 / 502와 504는 앱이 만들지 않는다 / access.log에서 5xx를 갈라 보기 / 다시 보내도 되는 실패 / 에러 본문은 Problem Details로 / 실패를 200으로 감싸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-message, http-methods, http-caching-cdn, gateway, nginx-reverse-proxy, network-troubleshooting-by-layer, resilience-patterns
 - 키워드 백링크 →: html-form-http, client-data-cache, https-tls, rest-api-design, graphql-basics, proxy-reverse-proxy, token-login, sd-start-single-server, db-locking-deadlock, http-versions, osi-in-practice, claude-code-plugins-and-channels, what-happens-google-com, dns
-- 이 글로 오는 글 ←: abort-controller, api-gateway-use-cases, api-styles-overview, api-test-automation, api-versioning, authn-vs-authz, backend-engineer-roadmap, browser-fetch, canary-release, claude-code-headless-ci, clean-architecture, cors, curl-for-debugging, db-type-time-series, ddd-bounded-context, devops-networking-roadmap, distributed-tracing, divide-and-conquer, edge-caching, elk-stack-basics, enterprise-system-integration, express-middleware, fastapi-basics, first-page-from-power-on, frontend-error-tracking, frontend-hosting-platforms, grafana-dashboards, graphql-basics, grpc, health-checks, hexagonal-architecture, html-form-http, html-media-embed, http-message, http-methods, http-streaming-sse, http-versions, iam-basics, idempotency-key, integration-tests-real-db, js-error-handling, js-promises, json-crud-http, k8s-audit-logging, k8s-gateway-api, kubernetes-ingress, layer-mtu-fragmentation, layered-architecture, linux-grep-awk-sed, load-testing-k6, logging-tools-overview, mvc-pattern, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nextjs-parallel-intercepting-routes, nextjs-route-handlers-proxy, nginx-basics, nginx-reverse-proxy, nodejs-fs-streams, nodejs-http-clients, observability-basics, openapi-spec-first, opensearch-cluster-operations, optimistic-locking, osi-in-practice, password-attacks-credential-stuffing, pattern-adapter, pattern-chain-of-responsibility, percentile-latency, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, react-custom-hooks-rules, realtime-communication, release-cutover-hypercare, rendering-csr-spa, rendering-ssr, rendering-strategies, resource-hints-loading, rest-api-design, reverse-proxy-lb-api-gateway, sd-url-shortener-api-redirect, seo-for-spa, server-sent-events, service-mesh, sit-uat-testing, sli-slo, soap-and-soa, spring-boot-observability, spring-boot-testing, spring-mvc-request-lifecycle, sqld-entity-attribute-relationship, streaming-ssr-suspense, system-design-concepts-map, what-happens-google-com, youtube-url-to-video
+- 이 글로 오는 글 ←: abort-controller, api-gateway-use-cases, api-styles-overview, api-test-automation, api-versioning, authn-vs-authz, backend-engineer-roadmap, browser-fetch, canary-release, claude-code-headless-ci, clean-architecture, cors, curl-for-debugging, db-type-time-series, ddd-bounded-context, devops-networking-roadmap, distributed-tracing, divide-and-conquer, edge-caching, elk-stack-basics, enterprise-system-integration, express-middleware, fastapi-basics, first-page-from-power-on, frontend-error-tracking, frontend-hosting-platforms, grafana-dashboards, graphql-basics, grpc, health-checks, hexagonal-architecture, html-form-http, html-media-embed, http-message, http-methods, http-streaming-sse, http-versions, iam-basics, idempotency-key, integration-tests-real-db, js-error-handling, js-promises, json-crud-http, k8s-audit-logging, k8s-gateway-api, kubernetes-ingress, layer-mtu-fragmentation, layered-architecture, linux-grep-awk-sed, load-testing-k6, logging-tools-overview, mvc-pattern, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nextjs-parallel-intercepting-routes, nextjs-route-handlers-proxy, nginx-basics, nginx-reverse-proxy, nodejs-fs-streams, nodejs-http-clients, observability-basics, openapi-spec-first, opensearch-cluster-operations, optimistic-locking, osi-in-practice, password-attacks-credential-stuffing, pattern-adapter, pattern-chain-of-responsibility, percentile-latency, production-incidents, proxy-reverse-proxy, rate-limiting-in-practice, react-custom-hooks-rules, realtime-communication, release-cutover-hypercare, rendering-csr-spa, rendering-ssr, rendering-strategies, resource-hints-loading, rest-api-design, reverse-proxy-lb-api-gateway, sd-url-shortener-api-redirect, seo-for-spa, seo-redirects-site-migration, server-sent-events, service-mesh, sit-uat-testing, sli-slo, soap-and-soa, spring-boot-observability, spring-boot-testing, spring-mvc-request-lifecycle, sqld-entity-attribute-relationship, streaming-ssr-suspense, system-design-concepts-map, what-happens-google-com, youtube-url-to-video
 
 #### `http-versions` — HTTP/1.1에서 HTTP/2, HTTP/3까지
 
@@ -7838,7 +8121,7 @@
 - 소제목: 종료 코드 하나가 성공과 실패를 가른다 / 파이프는 마지막 명령의 성적만 낸다 / set -e가 멈추지 않는 자리 / 없는 변수는 빈 문자열로 펼쳐진다 / 따옴표가 인자 개수를 정한다 / 옵션 목록은 배열에 담는다 / 함수는 stdout으로 값을, stderr로 로그를 / trap으로 뒷정리를 맡긴다 / 고쳐 쓴 백업 스크립트 / shellcheck가 먼저 읽게 한다 / 스크립트를 따라가 보는 법 / bash를 그만 써야 할 때 / 실패가 들리게 만드는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: cron-jobs, backup-strategy, linux-processes-signals, linux-systemd-systemctl, iac-basics
 - 키워드 백링크 →: bash-expansions-variables, ansible-network-automation, postgres-operations, shell-redirection-pipes, shells-posix-compat
-- 이 글로 오는 글 ←: backup-strategy, bash-control-flow-functions, bash-expansions-variables, character-encoding-unicode, claude-code-headless-ci, docker-commands-workflow, docker-container-basics, dockerfile-image-layers, git-ignore-config, git-large-files-secrets, github-actions-docker-ecr, iac-basics, k8s-deploy-pipeline-eks, k8s-pod-lifecycle, k8s-project-structure, linux-archive-transfer, linux-files-permissions, linux-processes-signals, linux-systemd-systemctl, network-config-cicd, nodejs-debugging-profiling, npm-package-publishing, postgres-connections-pg-hba, proxy-reverse-proxy, python-essentials-for-backend, regex-and-globbing, sd-metrics-collection, secrets-management, serverless-architecture, shell-environment-startup, shell-redirection-pipes, shells-posix-compat, terraform-basics, what-is-mlops, yaml-for-k8s
+- 이 글로 오는 글 ←: backup-strategy, bash-control-flow-functions, bash-expansions-variables, character-encoding-unicode, claude-code-headless-ci, data-engineering-lifecycle, data-orchestrators-comparison, docker-commands-workflow, docker-container-basics, dockerfile-image-layers, git-ignore-config, git-large-files-secrets, github-actions-docker-ecr, iac-basics, k8s-deploy-pipeline-eks, k8s-pod-lifecycle, k8s-project-structure, linux-archive-transfer, linux-files-permissions, linux-processes-signals, linux-systemd-systemctl, network-config-cicd, nodejs-debugging-profiling, npm-package-publishing, postgres-connections-pg-hba, proxy-reverse-proxy, python-essentials-for-backend, regex-and-globbing, sd-metrics-collection, secrets-management, serverless-architecture, shell-environment-startup, shell-redirection-pipes, shells-posix-compat, terraform-basics, what-is-mlops, yaml-for-k8s
 
 #### `iptables-basics` — iptables로 리눅스 방화벽 이해하기
 
@@ -8047,7 +8330,7 @@
 - 소제목: 누가 스크립트를 읽을지는 실행하는 방법이 정한다 / 같은 줄이 셸마다 다르게 깨진다 / POSIX sh가 약속하는 것 / 셸 가족을 한 장에 / 대화형 셸과 스크립트 셸은 따로 고른다 / 사투리를 기계에게 찾게 한다 / PowerShell과 cmd는 텍스트가 아니라 다른 것을 넘긴다 / 스크립트를 셸에 두기로 했다면 / 면접에서 나올 만한 질문
 - 직접 링크 →: shell-environment-startup, bash-scripting, linux-grep-awk-sed, linux-package-management, linux-archive-transfer
 - 키워드 백링크 →: dockerfile-image-layers, linux-boot-process, bash-expansions-variables, shell-redirection-pipes
-- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, bash-scripting, falco-runtime-security, git-troubleshooting, grafana-dashboards, html-media-embed, hyperloglog, lambda-kappa-architecture, linux-grep-awk-sed, nextjs-app-router-routing, release-cutover-hypercare, sd-metrics-storage-alerting, sd-video-streaming-cost, shell-environment-startup, shell-redirection-pipes, sql-views-materialized, sso-saml-oidc, youtube-url-to-video
+- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, bash-scripting, data-catalog-lineage, falco-runtime-security, git-troubleshooting, grafana-dashboards, html-media-embed, hyperloglog, lambda-kappa-architecture, linux-grep-awk-sed, nextjs-app-router-routing, release-cutover-hypercare, sd-metrics-storage-alerting, sd-video-streaming-cost, shell-environment-startup, shell-redirection-pipes, sql-views-materialized, sso-saml-oidc, youtube-url-to-video
 
 #### `ssh-in-practice` — SSH 실전: 키와 known_hosts, ProxyJump, 터널, sshd_config
 
@@ -8126,7 +8409,7 @@
 - 소제목: 개인정보는 생각보다 넓다 / 한 필드가 퍼지는 길을 먼저 그린다 / 처음부터 덜 모은다 / 로그에 남기기 전에 가린다 / 암호화, 토큰화, 가명 처리는 서로 다르다 / 지워 달라는 요청은 모든 사본에 닿아야 한다 / 카드 번호는 내 서버에 두지 않는다 / 규정마다 다르지만 요구는 겹친다 / 누가 언제 봤는지 남긴다 / 지적을 받은 뒤에 하는 일 / 맡은 것만큼만 갖고 있기 / 면접에서 나올 만한 질문
 - 직접 링크 →: structured-logging, encryption-at-rest, event-sourcing, global-rollout-localization, security-logging-detection-siem, k8s-audit-logging
 - 키워드 백링크 →: cloud-service-models-shared-responsibility, sd-db-replication-intro, dns
-- 이 글로 오는 글 ←: agent-memory, encryption-at-rest, encryption-in-transit, etl-vs-elt, event-sourcing, explainable-ai-shap-lime, global-rollout-localization, llm-app-security-guardrails, llm-observability, multi-region, otel-collector-pipeline, phishing-social-engineering, product-analytics-funnels, s3-storage-classes-lifecycle, sd-payment-flow, sd-proximity-service, security-compliance-for-developers, security-incident-response
+- 이 글로 오는 글 ←: agent-memory, behavior-design-models, data-catalog-lineage, data-engineering-lifecycle, encryption-at-rest, encryption-in-transit, etl-vs-elt, event-sourcing, explainable-ai-shap-lime, global-rollout-localization, llm-app-security-guardrails, llm-observability, multi-region, otel-collector-pipeline, phishing-social-engineering, product-analytics-funnels, reverse-etl, s3-storage-classes-lifecycle, sd-payment-flow, sd-proximity-service, security-compliance-for-developers, security-incident-response, ux-laws-cognitive-load
 
 #### `ddos-protection` — DDoS 방어: 회선, 연결 표, 비싼 요청 중 무엇이 먼저 차나
 
@@ -8181,7 +8464,7 @@
 - 소제목: 자물쇠가 약속하는 세 가지 / 암호화해도 보이는 것 / 인증서 한 장 뜯어보기 / 믿음은 루트에서 내려온다 / 브라우저가 인증서를 검사하는 순서 / 인증서를 자동으로 받는 방법: ACME / TLS 1.3 핸드셰이크 한 단계씩 / 키를 보내지 않고 같은 키를 만든다 / 본문은 대칭키로 빠르게 / 다시 올 때는 0-RTT, 대신 재전송을 조심 / TLS를 어디서 끝낼까 / 서버끼리도 서로 확인한다: mTLS / 자주 마주치는 인증서 오류 / 자물쇠 하나에 들어 있는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: dns, local-custom-domain, what-happens-google-com, resilience-patterns, gateway
 - 키워드 백링크 →: digital-signatures-certificates, kubernetes-ingress, nginx-basics, zero-trust-architecture, nginx-https-performance, reverse-proxy-lb-api-gateway, webhooks, service-mesh, http-versions, web-server-vs-was, public-key-key-exchange, encryption-in-transit, symmetric-encryption-aes, first-page-from-power-on, udp-and-quic, http-methods
-- 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, authn-vs-authz, base64, browser-devtools-debugging, cilium-ebpf, cold-starts, connection-pool, container-supply-chain-security, curl-for-debugging, ddos-protection, devops-networking-roadmap, digital-signatures-certificates, encryption-in-transit, enterprise-auth-ldap-kerberos, first-page-from-power-on, frontend-hosting-platforms, gateway, http-message, http-status-codes, http-versions, ids-ips, iot-mobile-wireless-links, k8s-certificates-pki, k8s-gateway-api, k8s-learning-roadmap, k8s-multi-cluster, kubernetes-ingress, latency-bandwidth-throughput, layer-mtu-fragmentation, load-testing-k6, network-attacks-l2-l3, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, nodejs-http-clients, osi-in-practice, owasp-top-10-map, packet-capture-tcpdump, packet-encapsulation, pattern-facade, performance-antipatterns, proxy-reverse-proxy, public-key-key-exchange, resource-hints-loading, reverse-proxy-lb-api-gateway, sd-email-protocols, sd-notification-system, service-mesh, symmetric-encryption-aes, udp-and-quic, upper-layers-session-presentation-app, waf, what-happens-google-com, wifi-standards-security, youtube-url-to-video, zero-trust-architecture
+- 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, authn-vs-authz, base64, browser-devtools-debugging, cilium-ebpf, cold-starts, connection-pool, container-supply-chain-security, curl-for-debugging, ddos-protection, devops-networking-roadmap, digital-signatures-certificates, encryption-in-transit, enterprise-auth-ldap-kerberos, first-page-from-power-on, frontend-hosting-platforms, gateway, http-message, http-status-codes, http-versions, ids-ips, iot-mobile-wireless-links, k8s-certificates-pki, k8s-gateway-api, k8s-learning-roadmap, k8s-multi-cluster, kubernetes-ingress, latency-bandwidth-throughput, layer-mtu-fragmentation, load-testing-k6, network-attacks-l2-l3, network-troubleshooting-by-layer, networking-essentials-map, nginx-https-performance, nodejs-http-clients, osi-in-practice, owasp-top-10-map, packet-capture-tcpdump, packet-encapsulation, pattern-facade, performance-antipatterns, proxy-reverse-proxy, public-key-key-exchange, resource-hints-loading, reverse-proxy-lb-api-gateway, sd-email-protocols, sd-notification-system, seo-redirects-site-migration, service-mesh, symmetric-encryption-aes, udp-and-quic, upper-layers-session-presentation-app, waf, what-happens-google-com, wifi-standards-security, youtube-url-to-video, zero-trust-architecture
 
 #### `iam-basics` — IAM 기본: 거부가 이기는 정책 판정과 역할 빌리기
 
@@ -8479,7 +8762,7 @@
 - 소제목: 두 벌을 띄워 두고 방향만 바꾼다 / 어디서 방향을 바꾸나 / nginx에서 upstream 한 줄을 바꿔 본다 / reload가 요청을 떨어뜨리지 않는 이유 / 바꾸는 방법을 틀리면 실패가 생긴다 / DNS로 바꾸면 TTL만큼 섞인다 / 데이터베이스는 한 벌뿐이다 / 세션과 오래 붙은 연결 / 두 배의 비용을 어디까지 줄이나 / 되돌리기가 빠른 이유와 그 조건 / 현장에서 블루그린이 흔들리는 순간 / 방향 한 줄과 남겨 둔 한 벌 / 면접에서 나올 만한 질문
 - 직접 링크 →: canary-release, rolling-deployment, ci-cd-basics, k8s-deployment, zero-downtime-migrations, rollback-strategy, feature-flags
 - 키워드 백링크 →: iptables-nat, docker-container-basics, realtime-communication, smoke-sanity-regression-testing, reverse-proxy-lb-api-gateway, proxy-reverse-proxy, autoscaling, linux-processes-signals, sql-batch-timeout-pool, redis-basics, cookie-session-login, grpc, dns
-- 이 글로 오는 글 ←: canary-release, ci-cd-basics, ecs-fargate-task-service, k8s-certifications, k8s-learning-roadmap, linux-processes-signals, nginx-basics, release-cutover-hypercare, rollback-strategy, rolling-deployment, seccomp-apparmor
+- 이 글로 오는 글 ←: canary-release, ci-cd-basics, ecs-fargate-task-service, k8s-certifications, k8s-learning-roadmap, linux-processes-signals, ml-pipelines-ci-cd, nginx-basics, release-cutover-hypercare, rollback-strategy, rolling-deployment, seccomp-apparmor
 
 #### `build-caching` — 빌드 캐시로 CI 줄이기: 캐시 키, restore-keys, 원격 캐시와 캐시 오염
 
@@ -8501,7 +8784,7 @@
 - 소제목: 일부만 먼저 보내고 지켜본다 / 비율로 나누는 두 가지 방법 / 요청마다 나눌까, 사람마다 나눌까 / 지표가 다음 단계를 정한다 / 작은 비율은 증거가 적다 / Argo Rollouts와 Flagger가 자동으로 하는 일 / 카나리가 거짓말하는 순간 / 작게 겪고, 증거가 쌓이면 넓힌다 / 면접에서 나올 만한 질문
 - 직접 링크 →: blue-green-deployment, rolling-deployment, feature-flags, ab-testing, load-balancing-algorithms, kubernetes-ingress, gateway, service-mesh, k8s-deployment, zero-downtime-migrations, rollback-strategy
 - 키워드 백링크 →: k8s-pod-basics, docker-container-basics, js-memory-leak, sql-batch-timeout-pool, http-status-codes
-- 이 글로 오는 글 ←: blue-green-deployment, ci-cd-basics, feature-flags, gateway, gitops-argocd-vs-flux, k8s-certifications, k8s-deployment, k8s-learning-roadmap, k8s-multi-cluster, micro-frontend-integration-patterns, ml-experiment-tracking, ml-model-monitoring-drift, model-serving, release-cutover-hypercare, rollback-strategy, rolling-deployment, route53-routing-policies, vulnerability-management-cve-cvss, what-is-mlops
+- 이 글로 오는 글 ←: blue-green-deployment, ci-cd-basics, edge-ai-on-device, feature-flags, gateway, gitops-argocd-vs-flux, k8s-certifications, k8s-deployment, k8s-learning-roadmap, k8s-multi-cluster, micro-frontend-integration-patterns, ml-experiment-tracking, ml-model-monitoring-drift, ml-pipelines-ci-cd, model-serving, release-cutover-hypercare, rollback-strategy, rolling-deployment, route53-routing-policies, vulnerability-management-cve-cvss, what-is-mlops
 
 #### `ci-cd-basics` — CI/CD의 뼈대: 지속적 통합, 전달, 배포와 한 번 빌드한 아티팩트
 
@@ -8512,7 +8795,7 @@
 - 소제목: 세 단어가 가리키는 범위 / 커밋 하나가 운영까지 가는 길 / 한 번만 빌드하고 승격한다 / 환경은 무엇을 확인하려고 두나 / 합치는 주기가 파이프라인을 정한다 / 가끔 실패하는 테스트 / 파이프라인의 속도를 재는 네 가지 숫자 / 파이프라인이 느려지는 자리 / CI 도구는 잡이 어디서 도는지로 고른다 / 배포가 깨졌을 때 파이프라인에서 먼저 볼 것 / 같은 커밋이 아니라 같은 파일 / 면접에서 나올 만한 질문
 - 직접 링크 →: github-actions-docker-ecr, k8s-deploy-pipeline-eks, network-config-cicd, build-caching, feature-flags, rollback-strategy, k8s-configmap, k8s-secret, canary-release, blue-green-deployment, git-branching-strategy, github-actions-workflows, jenkins-pipeline-basics, jenkins-argocd-push-pull
 - 키워드 백링크 →: docker-container-basics, ab-testing, security-groups-nacl, osi-in-practice, cloud-service-models-shared-responsibility, frontend-monorepo, dns, on-call
-- 이 글로 오는 글 ←: api-test-automation, backend-engineer-roadmap, blue-green-deployment, build-caching, container-supply-chain-security, feature-flags, frontend-testing-strategy, github-actions-workflows, jenkins-argocd-push-pull, jenkins-pipeline-basics, k8s-certifications, load-testing-k6, rollback-strategy, sd-queue-logging-automation, sdlc-models-agile-scrum, smoke-sanity-regression-testing, test-pyramid-unit-tests, what-is-mlops
+- 이 글로 오는 글 ←: api-test-automation, backend-engineer-roadmap, blue-green-deployment, build-caching, container-supply-chain-security, feature-flags, frontend-testing-strategy, github-actions-workflows, jenkins-argocd-push-pull, jenkins-pipeline-basics, k8s-certifications, load-testing-k6, ml-pipelines-ci-cd, rollback-strategy, sd-queue-logging-automation, sdlc-models-agile-scrum, smoke-sanity-regression-testing, test-pyramid-unit-tests, what-is-mlops
 
 #### `feature-flags` — 피처 플래그 운영: 평가 규칙, 설정 배달, OpenFeature, 정리까지
 
@@ -8523,7 +8806,7 @@
 - 소제목: 네 종류의 플래그는 운영 방식이 다르다 / 규칙은 위에서부터 하나씩 / 설정은 어떻게 서버에 닿나 / 플래그 서비스가 죽으면 / 서버에서 평가할까, 브라우저에서 평가할까 / 벤더에 묶이지 않게 OpenFeature / 플래그가 늘면 테스트할 조합이 폭발한다 / 플래그를 바꾸는 것도 운영 변경이다 / 다 켠 플래그를 지우는 일 / 스위치 하나 뒤에 있는 시스템 / 면접에서 나올 만한 질문
 - 직접 링크 →: ab-testing, ci-cd-basics, rollback-strategy, canary-release
 - 키워드 백링크 →: observability-basics, autoscaling, distributed-tracing, redis-basics
-- 이 글로 오는 글 ←: bit-manipulation, blue-green-deployment, build-caching, canary-release, ci-cd-basics, debugging-with-logs, fault-tolerance, global-rollout-localization, k8s-configmap, microservices-decomposition, monolith-architecture, release-cutover-hypercare, rollback-strategy, twelve-factor-app
+- 이 글로 오는 글 ←: bit-manipulation, blue-green-deployment, build-caching, canary-release, ci-cd-basics, debugging-with-logs, edge-ai-on-device, fault-tolerance, global-rollout-localization, k8s-configmap, microservices-decomposition, monolith-architecture, release-cutover-hypercare, rollback-strategy, twelve-factor-app
 
 #### `github-actions-docker-ecr` — GitHub Actions로 이미지 빌드하고 ECR에 올리기
 
@@ -8534,7 +8817,7 @@
 - 소제목: 워크플로 파일 한 장의 뼈대 / 언제 돌지는 이벤트와 경로가 정한다 / 푸시하기 전에 actionlint로 걸러 낸다 / 오래 사는 키 대신 OIDC로 역할을 잠깐 빌린다 / 신뢰 정책의 sub 조건이 문을 정한다 / ECR에 로그인하고 올리기 / 태그는 커밋 SHA로 붙인다 / buildx 캐시를 Actions 캐시에 둔다 / 올린 이미지를 검사한다 / 같은 브랜치 배포가 겹칠 때 concurrency / secrets와 environment로 운영 배포 앞에 문을 단다 / matrix로 여러 조합을 한 번에 돌린다 / 이미지가 러너에서 노드까지 가는 길 / 실패한 잡 로그에서 먼저 볼 줄 / 키를 저장하지 않는 파이프라인 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, k8s-deploy-pipeline-eks, git-branching-strategy, k8s-project-structure
 - 키워드 백링크 →: k8s-pod-troubleshooting, eks-cluster-basics, bash-scripting, terraform-basics, container-supply-chain-security, token-login
-- 이 글로 오는 글 ←: aws-core-services-map, backend-engineer-roadmap, build-caching, ci-cd-basics, claude-code-headless-ci, claude-code-parallel-and-scheduled, cloud-cost-optimization, cloud-deployment-models-multicloud, container-supply-chain-security, docker-commands-workflow, dockerfile-image-layers, ecs-fargate-task-service, git-internals-basics, git-remote-collaboration, git-stacked-prs, github-actions-workflows, github-apps-api, github-pull-request-flow, github-repo-governance, helm-dependencies-oci-gitops, iac-basics, iam-basics, integration-tests-real-db, jenkins-argocd-push-pull, jenkins-on-kubernetes, jenkins-pipeline-basics, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-secret, k8s-serviceaccount-tokens, kustomize-basics, monorepo-build-cache, network-config-cicd, npm-package-publishing, owasp-top-10-map, secrets-management, security-compliance-for-developers, security-incident-response, software-supply-chain-ci-hardening, terraform-team-workflow-hcp-terragrunt, velero-backup, vpc-peering-transit-privatelink, vpc-subnets-route-tables, yaml-for-k8s
+- 이 글로 오는 글 ←: aws-core-services-map, backend-engineer-roadmap, build-caching, ci-cd-basics, claude-code-headless-ci, claude-code-parallel-and-scheduled, cloud-cost-optimization, cloud-deployment-models-multicloud, container-supply-chain-security, docker-commands-workflow, dockerfile-image-layers, ecs-fargate-task-service, git-internals-basics, git-remote-collaboration, git-stacked-prs, github-actions-workflows, github-apps-api, github-pull-request-flow, github-repo-governance, helm-dependencies-oci-gitops, iac-basics, iam-basics, integration-tests-real-db, jenkins-argocd-push-pull, jenkins-on-kubernetes, jenkins-pipeline-basics, k8s-deploy-pipeline-eks, k8s-project-structure, k8s-secret, k8s-serviceaccount-tokens, kustomize-basics, ml-pipelines-ci-cd, monorepo-build-cache, network-config-cicd, npm-package-publishing, owasp-top-10-map, secrets-management, security-compliance-for-developers, security-incident-response, software-supply-chain-ci-hardening, terraform-team-workflow-hcp-terragrunt, velero-backup, vpc-peering-transit-privatelink, vpc-subnets-route-tables, yaml-for-k8s
 
 #### `github-actions-workflows` — GitHub Actions 워크플로 깊게: 트리거, 러너, 컨텍스트, 아티팩트, 보안
 
@@ -8545,7 +8828,7 @@
 - 소제목: 워크플로 하나가 도는 데 필요한 네 가지 / 이벤트는 어느 커밋을 돌릴지까지 정한다 / 잡과 러너: 잡마다 새 컴퓨터 한 대 / 표현식과 컨텍스트: 값은 어디서 오나 / 잡 사이에 값과 파일을 넘기는 법 / 같은 스텝을 여러 저장소에서 쓰기 / 마켓플레이스 액션은 남의 코드다 / GITHUB_TOKEN은 필요한 만큼만 / 상태 배지와 실패를 보는 순서 / 다시 처음의 포크 PR로 / 면접에서 나올 만한 질문
 - 직접 링크 →: github-actions-docker-ecr, ci-cd-basics, github-repo-governance, yaml-for-k8s, build-caching, security-incident-response
 - 키워드 백링크 →: webhooks
-- 이 글로 오는 글 ←: ci-cd-basics, claude-code-headless-ci, jenkins-pipeline-basics, network-config-cicd, security-incident-response
+- 이 글로 오는 글 ←: ci-cd-basics, claude-code-headless-ci, jenkins-pipeline-basics, ml-pipelines-ci-cd, network-config-cicd, security-incident-response
 
 #### `jenkins-argocd-push-pull` — Jenkins와 ArgoCD로 나눠 배포하기: 개발은 push, 운영은 pull
 
@@ -8705,7 +8988,7 @@
 - 소제목: 클라우드라고 부르려면 / 몇 층까지 빌리느냐 / 클라우드의 보안과 클라우드 안의 보안 / 관리형 DB에서도 내가 맡는 것 / 사고가 나면 누구 책임인가 / 서버리스는 PaaS와 무엇이 다른가 / 모델을 고르는 기준 / 새 계정을 받은 날 내 칸에서 먼저 할 일 / Well-Architected 여섯 기둥을 내 칸 위에서 읽기 / 다시 월요일 아침으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: cloud-cost-optimization, aws-ec2-ubuntu-server-setup, ssrf, security-incident-response, serverless-limits, cold-starts, serverless-architecture, iam-basics
 - 키워드 백링크 →: container-orchestration-choices, cloud-deployment-models-multicloud, security-compliance-for-developers, rds-aurora-managed-db, db-type-key-value, docker-container-basics, linux-boot-process, aws-core-services-map, virtualization-hypervisors, backup-strategy, autoscaling, security-principles-cia-defense-in-depth, mfa-totp, security-groups-nacl, vpc-basics, sso-saml-oidc, eks-cluster-basics, on-call
-- 이 글로 오는 글 ←: aws-core-services-map, ci-cd-basics, data-privacy-compliance, data-warehouse-architecture, etl-vs-elt, firewall-types-ngfw, frontend-error-tracking, frontend-hosting-platforms, iac-basics, iam-basics, k8s-multi-cluster, logging-tools-overview, ml-experiment-tracking, multi-region, multi-tenancy-isolation, performance-antipatterns, phishing-social-engineering, sd-metrics-collection, security-compliance-for-developers, security-incident-response, sso-saml-oidc, twelve-factor-app, vpc-peering-transit-privatelink, vulnerability-management-cve-cvss, wan-mpls-sd-wan-vrf, what-is-mlops, zero-trust-architecture
+- 이 글로 오는 글 ←: aws-core-services-map, ci-cd-basics, data-catalog-lineage, data-engineering-lifecycle, data-privacy-compliance, data-warehouse-architecture, etl-vs-elt, firewall-types-ngfw, frontend-error-tracking, frontend-hosting-platforms, iac-basics, iam-basics, k8s-multi-cluster, logging-tools-overview, ml-experiment-tracking, multi-region, multi-tenancy-isolation, performance-antipatterns, phishing-social-engineering, reverse-etl, sd-metrics-collection, security-compliance-for-developers, security-incident-response, sso-saml-oidc, twelve-factor-app, vpc-peering-transit-privatelink, vulnerability-management-cve-cvss, wan-mpls-sd-wan-vrf, what-is-mlops, zero-trust-architecture
 
 #### `cold-starts` — 콜드 스타트: 실행 환경을 새로 만드는 비용
 
@@ -8760,7 +9043,7 @@
 - 소제목: 빌드 결과물에 서버가 필요한가 / 다섯 가지 자리 / 요청 하나가 가는 길 / 새로고침하면 404가 나는 이유 / 해시 파일은 오래, HTML은 짧게 / 배포 직후 하얀 화면 / 프리뷰 배포가 바꾸는 것 / 함수가 늦게 깨어나는 순간 / 환경 변수가 번들에 박히는 순간 / 도메인과 HTTPS / 비용과 락인 / 고르는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-strategies, aws-s3-in-practice, cdn-edge-anycast, nextjs-self-hosting-deployment, cloud-service-models-shared-responsibility, rendering-csr-spa, http-caching-cdn, code-splitting, cold-starts, serverless-limits, route53-routing-policies, https-tls, cloud-cost-optimization
 - 키워드 백링크 →: dockerfile-image-layers, s3-storage-classes-lifecycle, islands-resumability, react-server-components, http-status-codes, dns, what-happens-google-com, oauth
-- 이 글로 오는 글 ←: browser-fetch, code-splitting, nextjs-self-hosting-deployment, react-client-routing, rendering-csr-spa, seo-for-spa
+- 이 글로 오는 글 ←: browser-fetch, code-splitting, nextjs-self-hosting-deployment, react-client-routing, rendering-csr-spa, seo-for-spa, seo-redirects-site-migration
 
 #### `s3-storage-classes-lifecycle` — S3 운영: 스토리지 클래스, 수명 주기 규칙, 보존과 아카이브
 
@@ -8828,7 +9111,7 @@
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat, docker-commands-workflow
 - 키워드 백링크 →: process-vs-thread, docker-runtime-security, nodejs-cli-process, virtual-memory-paging, linux-namespaces-cgroups, k8s-pod-resources, iptables-basics, rest-api-design, fp-composition-pipe, k8s-security-context, virtualization-hypervisors, bash-scripting, os-kernel-system-calls, mutex-semaphore-monitor, grpc, linux-processes-signals, aws-ec2-ubuntu-server-setup, udp-and-quic
-- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, blue-green-deployment, canary-release, centralized-logging-pipeline, chaos-engineering, ci-cd-basics, cloud-cost-optimization, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cold-starts, config-management-tools, container-orchestration-choices, container-supply-chain-security, curl-for-debugging, disaster-recovery, docker-commands-workflow, docker-compose, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, dockerfile-image-layers, ecs-fargate-task-service, falco-runtime-security, frontend-build-tooling, gateway, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-dependencies-oci-gitops, jenkins-pipeline-basics, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-cri-cni-csi, k8s-etcd-backup, k8s-labels-selectors, k8s-learning-roadmap, k8s-multi-cluster, k8s-namespace, k8s-network-policy, k8s-node-maintenance, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-pod-troubleshooting, k8s-project-structure, k8s-rbac, k8s-security-context, k8s-statefulset, k8s-storageclass-snapshots, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, linux-namespaces-cgroups, linux-package-management, linux-processes-signals, linux-users-groups-sudo, load-balancer-basics, model-serving, network-layers-overview, network-troubleshooting-by-layer, os-kernel-system-calls, osi-in-practice, packet-capture-tcpdump, prometheus-basics, proxy-reverse-proxy, python-essentials-for-backend, rendering-ssr, rolling-deployment, seccomp-apparmor, serverless-architecture, shell-environment-startup, software-supply-chain-ci-hardening, structured-logging, terraform-modules-tfvars, terraform-testing-policy-scanning, traffic-shaping-qos, twelve-factor-app, velero-backup, virtualization-hypervisors, vulnerability-management-cve-cvss, what-is-mlops
+- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, blue-green-deployment, canary-release, centralized-logging-pipeline, chaos-engineering, ci-cd-basics, cloud-cost-optimization, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cold-starts, config-management-tools, container-orchestration-choices, container-supply-chain-security, curl-for-debugging, data-catalog-lineage, disaster-recovery, docker-commands-workflow, docker-compose, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, dockerfile-image-layers, ecs-fargate-task-service, falco-runtime-security, frontend-build-tooling, gateway, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-dependencies-oci-gitops, jenkins-pipeline-basics, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-cri-cni-csi, k8s-etcd-backup, k8s-labels-selectors, k8s-learning-roadmap, k8s-multi-cluster, k8s-namespace, k8s-network-policy, k8s-node-maintenance, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-pod-troubleshooting, k8s-project-structure, k8s-rbac, k8s-security-context, k8s-statefulset, k8s-storageclass-snapshots, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, linux-namespaces-cgroups, linux-package-management, linux-processes-signals, linux-users-groups-sudo, load-balancer-basics, model-serving, network-layers-overview, network-troubleshooting-by-layer, os-kernel-system-calls, osi-in-practice, packet-capture-tcpdump, prometheus-basics, proxy-reverse-proxy, python-essentials-for-backend, rendering-ssr, rolling-deployment, seccomp-apparmor, serverless-architecture, shell-environment-startup, software-supply-chain-ci-hardening, structured-logging, terraform-modules-tfvars, terraform-testing-policy-scanning, traffic-shaping-qos, twelve-factor-app, velero-backup, virtualization-hypervisors, vulnerability-management-cve-cvss, what-is-mlops
 
 #### `docker-local-dev-workflow` — 컨테이너로 개발하기: 바인드 마운트, compose watch, 디버거, Dev Container
 
@@ -9818,7 +10101,7 @@
 - 소제목: 설치하고 떠 있는지 확인하기 / master 하나와 worker 몇 개 / Ubuntu의 설정 파일 배치 / 블록은 안쪽으로 상속된다 / 요청 하나를 받을 server 고르기 / location은 이 순서로 고른다 / root와 alias는 경로를 다르게 만든다 / index와 try_files / 403이 나는 이유 / 바꾸기 전에 -t, 적용은 reload / 로그를 읽는 법 / 설정은 nginx가 읽는 순서대로 읽는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: nginx-reverse-proxy, nginx-https-performance
 - 키워드 백링크 →: blue-green-deployment, aws-ec2-ubuntu-server-setup, linux-systemd-systemctl, realtime-communication, os-kernel-system-calls, proxy-reverse-proxy, linux-processes-signals, event-loop, web-security-headers, linux-files-permissions, http-status-codes, what-happens-google-com, ipv6-basics, db-modeling-normalization
-- 이 글로 오는 글 ←: bash-expansions-variables, docker-network-volume, encryption-in-transit, first-page-from-power-on, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, process-vs-thread, rendering-csr-spa, valkey-vs-redis, vim-for-servers, web-server-vs-was, what-happens-google-com
+- 이 글로 오는 글 ←: bash-expansions-variables, docker-network-volume, encryption-in-transit, first-page-from-power-on, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, process-vs-thread, rendering-csr-spa, seo-redirects-site-migration, valkey-vs-redis, vim-for-servers, web-server-vs-was, what-happens-google-com
 
 #### `nginx-https-performance` — Nginx HTTPS·성능·보안 설정
 
@@ -9864,7 +10147,7 @@
 - 소제목: 알림 하나가 사람을 깨우는 값 / 증상에 걸고 원인은 대시보드로 / 알림 규칙 한 줄씩 읽기 / for는 조건이 버텨야 하는 시간이다 / Prometheus가 울리고 Alertmanager가 전한다 / 묶고, 누르고, 잠재운다 / 페이지와 티켓을 가르는 기준 / 알림 피로는 세어 보면 보인다 / 런북 링크가 없는 알림은 반쪽이다 / 알림이 울리지 않는 장애 / 다시 새벽 세 시로 / 면접에서 나올 만한 질문
 - 직접 링크 →: monitoring-basics, sli-slo, error-budgets, health-checks, on-call, network-monitoring
 - 키워드 백링크 →: cron-jobs, service-discovery, webhooks
-- 이 글로 오는 글 ←: centralized-logging-pipeline, cloudwatch-metrics-logs-alarms, db-type-time-series, dead-letter-queue, distributed-tracing, error-budgets, grafana-dashboards, health-checks, ml-model-monitoring-drift, monitoring-basics, network-monitoring, on-call, otel-collector-pipeline, production-incidents, prometheus-basics, release-cutover-hypercare, sd-metrics-storage-alerting, sd-notification-reliability, sd-queue-logging-automation, sli-slo
+- 이 글로 오는 글 ←: centralized-logging-pipeline, cloudwatch-metrics-logs-alarms, data-quality-checks, db-type-time-series, dead-letter-queue, distributed-tracing, error-budgets, grafana-dashboards, health-checks, ml-model-monitoring-drift, monitoring-basics, network-monitoring, on-call, otel-collector-pipeline, production-incidents, prometheus-basics, release-cutover-hypercare, sd-metrics-storage-alerting, sd-notification-reliability, sd-queue-logging-automation, sli-slo
 
 #### `centralized-logging-pipeline` — 중앙 로그 파이프라인: 수집기에서 검색 가능한 저장소까지
 
@@ -9907,7 +10190,7 @@
 - 길이: 637줄
 - 소제목: 누가 읽고, 누가 쪼개고, 누가 보여 주나 / 넣기 전에 쪼갠다: ingest pipeline / grok과 dissect, 같은 일을 다른 비용으로 / 로그는 데이터 스트림에 쌓인다 / 템플릿은 조각을 겹쳐 만든다 / 인덱스마다 타입이 다르면 질의가 깨진다 / ILM: 넘기고, 줄이고, 지운다 / 같은 2만 줄, 저장 방식마다 다른 크기 / ES|QL과 KQL로 묻기 / Loki와 비교하면 / Kibana에 로그가 안 보일 때 / 다시 message 한 줄 앞에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: centralized-logging-pipeline, elasticsearch-inverted-index, opensearch-cluster-operations, structured-logging
-- 키워드 백링크 →: elasticsearch-snapshot-dr, observability-basics, elasticsearch-query-dsl, sd-object-storage-architecture, db-type-relational, elasticsearch-mapping, kafka-basics, http-status-codes
+- 키워드 백링크 →: elasticsearch-snapshot-dr, observability-basics, elasticsearch-query-dsl, sd-object-storage-architecture, db-type-relational, bi-semantic-layer, elasticsearch-mapping, kafka-basics, http-status-codes
 - 이 글로 오는 글 ←: elasticsearch-bulk-indexing, elasticsearch-inverted-index, elasticsearch-snapshot-dr
 
 #### `error-budgets` — 에러 예산과 소진 속도: 남은 실패로 배포를 정한다
@@ -10483,7 +10766,7 @@
 - 소제목: 느린 서비스 하나가 전부를 멈추는 과정 / 기다림에 끝을 정한다: 타임아웃 / 다시 보내기: 지수 백오프와 지터 / 두 번 보내도 한 번만 처리되게 / 회로를 끊어 두는 서킷 브레이커 / 칸막이로 피해를 가두기 / 안 되면 덜 보여 주기 / 들어오는 양 자체를 줄이기 / 프런트엔드에서 본 장애 대응 / 실패를 예상하고 짜는 코드 / 면접에서 나올 만한 질문
 - 직접 링크 →: timeouts, retries, exponential-backoff-jitter, idempotency-key, circuit-breaker, gateway
 - 키워드 백링크 →: client-data-cache, tail-latency, spring-cloud-vs-kubernetes, reactive-programming, service-mesh, latency-bandwidth-throughput, backpressure, osi-in-practice, sql-batch-timeout-pool, mutex-semaphore-monitor, grpc, http-methods
-- 이 글로 오는 글 ←: acid-transactions, agent-tool-design, api-gateway-use-cases, argocd-basics, backend-engineer-roadmap, batch-processing, browser-fetch, caching-concepts-map, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, dynamodb-modeling-capacity, ecs-fargate-task-service, elasticsearch-aggregations, elasticsearch-bulk-indexing, elasticsearch-mapping, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, gateway, github-apps-api, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, java-jvm-memory-gc, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, llm-api-integration, message-delivery-semantics, message-queue-basics, microservices, mongodb-replica-set-sharding, nginx-reverse-proxy, nodejs-error-handling, nodejs-http-clients, opensearch-cluster-operations, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, performance-antipatterns, queue-based-load-leveling, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, react-forms-actions, realtime-communication, rest-api-design, retries, sd-hotel-inventory-scaling, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-architecture, serverless-limits, service-mesh, spring-ai-agents, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, uml-diagrams, webhooks
+- 이 글로 오는 글 ←: acid-transactions, agent-tool-design, api-gateway-use-cases, argocd-basics, backend-engineer-roadmap, batch-processing, browser-fetch, caching-concepts-map, caching-strategies, chaos-engineering, circuit-breaker, cqrs, curl-for-debugging, dead-letter-queue, design-patterns-overview, devops-networking-roadmap, distributed-lock, dynamodb-modeling-capacity, ecs-fargate-task-service, elasticsearch-aggregations, elasticsearch-bulk-indexing, elasticsearch-mapping, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, gateway, github-apps-api, health-checks, hexagonal-architecture, html-form-http, http-methods, http-status-codes, https-tls, idempotency-key, java-jvm-memory-gc, json-crud-http, k8s-controllers-reconcile, k8s-job-cronjob, k8s-pod-probes, llm-api-integration, message-delivery-semantics, message-queue-basics, microservices, mongodb-replica-set-sharding, nginx-reverse-proxy, nodejs-error-handling, nodejs-http-clients, opensearch-cluster-operations, optimistic-locking, osi-in-practice, pattern-builder, pattern-decorator, pattern-proxy, performance-antipatterns, queue-based-load-leveling, race-conditions, rate-limiting-algorithms, rate-limiting-in-practice, react-forms-actions, realtime-communication, rest-api-design, retries, reverse-etl, sd-hotel-inventory-scaling, sd-notification-reliability, sd-payment-flow, sd-payment-reliability, serverless-architecture, serverless-limits, service-mesh, spring-ai-agents, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, sql-interview-problems, system-design-concepts-map, tail-latency, timeouts, transactional-outbox, uml-diagrams, webhooks
 
 #### `retries` — 재시도는 공짜가 아니다: 무엇을, 몇 번, 어디서 다시 보내나
 
@@ -10494,7 +10777,7 @@
 - 소제목: 실패했다는 말에는 세 가지 뜻이 있다 / 다시 보내도 되는 실패 고르기 / 타임아웃 난 POST를 다시 보내면 / 계층마다 세 번이면 맨 아래는 스물일곱 번 / 재시도 예산으로 폭주를 막는다 / 프록시가 대신 다시 보낼 때 / 느린 요청 하나를 두 번 보내는 헤징 / 재시도 설정을 한 줄씩 읽기 / 재시도가 장애를 키우고 있다는 신호 / 면접에서 나올 만한 질문
 - 직접 링크 →: resilience-patterns, timeouts, exponential-backoff-jitter, http-methods, idempotency-key
 - 키워드 백링크 →: service-mesh, abort-controller, tail-latency, backpressure, grpc
-- 이 글로 오는 글 ←: backpressure, chaos-engineering, circuit-breaker, curl-for-debugging, dead-letter-queue, devops-networking-roadmap, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, grpc, high-availability, js-first-class-callbacks, load-testing-k6, nginx-reverse-proxy, pattern-decorator, pattern-proxy, performance-antipatterns, queue-based-load-leveling, resilience-patterns, reverse-proxy-lb-api-gateway, rolling-deployment, sd-notification-reliability, service-mesh, spring-boot-4-migration, system-design-study-path, tail-latency, timeouts, webhooks
+- 이 글로 오는 글 ←: backpressure, chaos-engineering, circuit-breaker, curl-for-debugging, dead-letter-queue, devops-networking-roadmap, exponential-backoff-jitter, fault-tolerance, frontend-as-distributed-system, grpc, high-availability, js-first-class-callbacks, load-testing-k6, nginx-reverse-proxy, pattern-decorator, pattern-proxy, performance-antipatterns, queue-based-load-leveling, resilience-patterns, reverse-etl, reverse-proxy-lb-api-gateway, rolling-deployment, sd-notification-reliability, service-mesh, spring-boot-4-migration, system-design-study-path, tail-latency, timeouts, webhooks
 
 #### `saga-pattern` — 사가 패턴 안쪽: 보상, 피벗, 재시작, 그리고 아웃박스
 
@@ -10527,7 +10810,7 @@
 - 소제목: 석 달 전 이벤트를 다시 읽는 날 / Avro는 스키마 없이는 한 바이트도 못 읽는다 / 메시지에는 스키마 번호만 붙는다 / 레지스트리가 거절하는 변경 / 최신 버전 하나와만 비교하면 놓치는 것 / 배포 순서가 규칙을 정한다 / Protobuf와 JSON Schema에서 조용히 깨지는 것 / 이미 저장된 이벤트는 읽을 때 올린다 / 현장에서 스키마 문제를 만나는 순간 / 데이터가 코드보다 오래 산다 / 면접에서 나올 만한 질문
 - 직접 링크 →: api-versioning, grpc, kafka-basics, event-driven-architecture, db-migration-tools, zero-downtime-migrations, message-delivery-semantics
 - 키워드 백링크 →: db-architecture-by-scale, sd-queue-logging-automation, rest-api-design, event-sourcing, ts-type-system-basics, js-pure-functions, dead-letter-queue
-- 이 글로 오는 글 ←: api-versioning, architecture-patterns-overview, data-mesh-fabric, db-migration-tools, etl-vs-elt, event-driven-architecture, event-sourcing, kafka-to-lake-pipeline
+- 이 글로 오는 글 ←: api-versioning, architecture-patterns-overview, data-catalog-lineage, data-mesh-fabric, data-quality-checks, db-migration-tools, etl-vs-elt, event-driven-architecture, event-sourcing, kafka-to-lake-pipeline
 
 #### `service-discovery` — 서비스 디스커버리: 목록은 누가 쓰고, 어디서 낡아지나
 
@@ -10628,7 +10911,7 @@
 - 소제목: 읽기는 많고 쓰기는 적다 / 복제본은 주 DB의 기록을 따라 쓴다 / 세 대로 복제를 걸어 보기 / 웹 앱이 읽을 곳과 쓸 곳을 고른다 / 방금 쓴 리뷰가 안 보인다 / 주 DB가 죽으면 누가 이어받나 / 장애 조치를 사람이 하면 늦다 / 복제는 백업이 아니다 / 복제본은 몇 대가 필요할까 / 현장에서 복제를 의심하는 순간 / 이어서 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-load-balancer-stateless, sd-cache-and-cdn-tier, sd-start-single-server, sd-split-web-and-db, sd-multi-datacenter, sd-queue-logging-automation, sd-sharding-intro, db-replication-sharding, sd-capacity-estimation, eventual-consistency, db-consistency-cap, failover, redis-replication-sentinel, backup-strategy
 - 키워드 백링크 →: db-architecture-by-scale, rds-aurora-managed-db, leader-election, mysql-replication-online-ddl, postgres-operations, redis-basics, postgres-architecture
-- 이 글로 오는 글 ←: api-scaling-ladder, data-privacy-compliance, db-performance-map, etl-vs-elt, performance-antipatterns, postgres-jsonb-search, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-file-sync-block-upload, sd-hotel-double-booking, sd-load-balancer-stateless, sd-multi-datacenter, sd-music-streaming, sd-object-storage-architecture, sd-payment-reliability, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-api-redirect, system-design-study-path
+- 이 글로 오는 글 ←: api-scaling-ladder, data-engineering-lifecycle, data-privacy-compliance, db-performance-map, etl-vs-elt, performance-antipatterns, postgres-jsonb-search, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-file-sync-block-upload, sd-hotel-double-booking, sd-load-balancer-stateless, sd-multi-datacenter, sd-music-streaming, sd-object-storage-architecture, sd-payment-reliability, sd-proximity-service, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-api-redirect, system-design-study-path
 
 #### `sd-interview-framework` — 수백만 사용자로 키우기 ⑪: 설계 면접 45분을 네 토막으로 나누기
 
@@ -10949,7 +11232,7 @@
 - 소제목: 세계 지도를 그림 한 장으로 보내면 / 둥근 지구를 네모로 펴기 / 확대 단계마다 넷으로 쪼갠다 / 타일은 미리 그려 CDN에 둔다 / 저장 공간과 비어 있는 바다 / 그림 대신 도형을 보내는 벡터 타일 / 교차로는 점, 도로는 선 / 가까운 곳부터 확정하는 다익스트라 / 목적지 쪽으로 기울이는 A* / 그래프가 크면 타일로 자른다 / 먼 길은 굵은 도로만 본다 / 현장에서 길 찾기가 틀리는 순간 / 다음 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-nearby-friends, sd-maps-location-eta, sd-proximity-service, http-caching-cdn, db-type-graph
 - 키워드 백링크 →: grpc, ds-graph-bfs-dfs, sd-object-storage-architecture, ds-heap
-- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-jump-game-ii, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, mutex-semaphore-monitor, routing-protocols-ospf-rip-eigrp, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, shortest-path-algorithms, system-design-study-path, web-workers
+- 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-evaluate-reverse-polish-notation, leetcode-jump-game-ii, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-sort-colors, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, mutex-semaphore-monitor, routing-protocols-ospf-rip-eigrp, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, shortest-path-algorithms, system-design-study-path, web-workers
 
 #### `sd-metrics-collection` — 지표 모니터링 시스템 설계 ①: pull과 push로 모으고 큐로 나르기
 
@@ -11004,7 +11287,7 @@
 - 소제목: 테이블 하나로 큐를 만들면 / 만들 것의 크기를 먼저 정한다 / 지우지 않고 뒤에 붙이기만 한다 / 메시지 한 건이 디스크에 놓이는 모양 / 파일 하나가 끝없이 커지면 / 오프셋 7번을 찾아가는 길 / 디스크는 느리다는 말이 반만 맞는 이유 / 한 파일로는 못 받는 양 / 파티션 수는 나중에 바꾸기 어렵다 / 몇 대, 몇 파티션이 필요한지 세어 본다 / 현장에서 이 구조가 드러나는 순간 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-maps-location-eta, sd-mq-consumer-groups, sd-mq-replication, sd-queue-logging-automation, kafka-basics, message-queue-basics, pub-sub, consistent-hashing, sd-capacity-estimation, rabbitmq-basics
 - 키워드 백링크 →: db-type-key-value, page-cache-disk-io, sd-start-single-server
-- 이 글로 오는 글 ←: data-warehouse-architecture, db-architecture-by-scale, db-partitioning, db-performance-map, db-replication-sharding, db-type-key-value, db-type-wide-column, db-types-overview, dynamodb-modeling-capacity, elasticsearch-bulk-indexing, elasticsearch-snapshot-dr, geohash, kafka-basics, kafka-vs-rabbitmq-replay, lossy-counting, message-queue-basics, opensearch-cluster-operations, postgres-architecture, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-leaderboard-scaling, sd-maps-location-eta, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-replication, sd-nearby-friends, sd-stock-exchange-low-latency, sql-vs-nosql, system-design-study-path
+- 이 글로 오는 글 ←: data-catalog-lineage, data-orchestrators-comparison, data-warehouse-architecture, db-architecture-by-scale, db-partitioning, db-performance-map, db-replication-sharding, db-type-key-value, db-type-wide-column, db-types-overview, dynamodb-modeling-capacity, elasticsearch-bulk-indexing, elasticsearch-snapshot-dr, geohash, kafka-basics, kafka-vs-rabbitmq-replay, lossy-counting, message-queue-basics, opensearch-cluster-operations, postgres-architecture, sd-ad-click-stream-windows, sd-chat-message-storage, sd-email-storage-search, sd-leaderboard-scaling, sd-maps-location-eta, sd-metrics-collection, sd-mq-consumer-groups, sd-mq-replication, sd-nearby-friends, sd-stock-exchange-low-latency, sql-vs-nosql, system-design-study-path
 
 #### `sd-music-streaming` — 음악 스트리밍 서비스 설계: 음원 600TB와 메타데이터 70GB를 따로 다루기
 
@@ -11081,7 +11364,7 @@
 - 소제목: 웹 서버 디스크에 사진을 쌓으면 / 블록, 파일, 객체는 쌓는 층이 다르다 / 버킷, 객체, 키 / 무엇을 얼마나 담을지 숫자로 정한다 / 본문과 이름표를 따로 둔다 / 사진 한 장을 올리는 길 / 창고 안을 들여다보면 / 사진 한 장을 파일 하나로 두면 / 큰 파일에 이어 쓰고 위치를 적는다 / 장부는 무엇을 담고 어떻게 나누나 / 폴더 안 보기가 느려지는 이유 / 장애가 나면 어디부터 보나 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-email-storage-search, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-leaderboard-sorted-set, sd-load-balancer-stateless, raft-consensus, consistent-hashing, sd-kv-store-partition-replication, sd-db-replication-intro, sd-sharding-intro, sd-video-upload-transcoding, sd-file-sync-block-upload
 - 키워드 백링크 →: s3-storage-classes-lifecycle, js-memory-leak, sd-start-single-server, db-type-embedded, db-type-relational, db-replication-sharding, linux-disks-filesystems
-- 이 글로 오는 글 ←: airflow-orchestration, api-scaling-ladder, aws-core-services-map, aws-s3-in-practice, backup-strategy, block-file-object-storage, centralized-logging-pipeline, claim-check-sequential-convoy, cloud-deployment-models-multicloud, data-lake-hdfs, data-warehouse-architecture, disaster-recovery, elasticsearch-snapshot-dr, elk-stack-basics, etl-vs-elt, external-secrets, git-internals-basics, grafana-tempo-tracing, http-caching-cdn, k8s-learning-roadmap, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, multi-tenancy-isolation, opensearch-cluster-operations, performance-antipatterns, prometheus-basics, scaling-horizontal-vertical, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, sd-email-protocols, sd-email-storage-search, sd-kv-store-partition-replication, sd-load-balancer-stateless, sd-maps-tiles-routing, sd-metrics-storage-alerting, sd-music-streaming, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-start-single-server, sd-web-crawler-architecture, stream-processing, system-design-study-path, twelve-factor-app, what-is-mlops
+- 이 글로 오는 글 ←: airflow-orchestration, api-scaling-ladder, aws-core-services-map, aws-s3-in-practice, backup-strategy, block-file-object-storage, centralized-logging-pipeline, claim-check-sequential-convoy, cloud-deployment-models-multicloud, data-engineering-lifecycle, data-lake-hdfs, data-warehouse-architecture, disaster-recovery, elasticsearch-snapshot-dr, elk-stack-basics, etl-vs-elt, external-secrets, git-internals-basics, grafana-tempo-tracing, http-caching-cdn, k8s-learning-roadmap, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, lambda-kappa-architecture, ml-pipelines-ci-cd, multi-tenancy-isolation, opensearch-cluster-operations, performance-antipatterns, prometheus-basics, scaling-horizontal-vertical, sd-ad-click-stream-windows, sd-autocomplete-data-pipeline, sd-email-protocols, sd-email-storage-search, sd-kv-store-partition-replication, sd-load-balancer-stateless, sd-maps-tiles-routing, sd-metrics-storage-alerting, sd-music-streaming, sd-object-storage-durability, sd-object-storage-versioning-multipart, sd-start-single-server, sd-web-crawler-architecture, stream-processing, system-design-study-path, twelve-factor-app, what-is-mlops
 
 #### `sd-object-storage-durability` — 객체 저장소 설계 ②: 복제와 이레이저 코딩, 체크섬
 
@@ -11125,7 +11408,7 @@
 - 소제목: 시간 초과는 실패가 아니다 / 같은 키로 다시 보내면 PSP가 알아본다 / 다시 보낼 실패, 멈출 실패, 모르는 실패 / 한 번만 청구하려면 구간마다 거른다 / 웹훅은 두 번 오고, 가짜가 오고, 안 온다 / 오래 멈춘 결제를 직접 물어본다 / 우리 기록과 PSP 기록을 맞춰 본다 / 어긋난 줄을 처리하는 순서 / 결제 DB의 복제와 읽기 / 결제에서 빠뜨리기 쉬운 보안 / 결제 장애가 났을 때 보는 순서 / 대사를 직접 짜 보기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-payment-flow, sd-wallet-transfer, idempotency-key, exponential-backoff-jitter, dead-letter-queue, message-delivery-semantics, webhooks, sd-db-replication-intro, distributed-transactions-2pc, saga-pattern
 - 키워드 백링크 →: db-replication-sharding, resilience-patterns, http-methods
-- 이 글로 오는 글 ←: enterprise-system-integration, oop-four-pillars, sd-ad-click-exactly-once, sd-payment-flow, sd-wallet-transfer, solid-principles, system-design-study-path
+- 이 글로 오는 글 ←: data-quality-checks, enterprise-system-integration, oop-four-pillars, sd-ad-click-exactly-once, sd-payment-flow, sd-wallet-transfer, solid-principles, system-design-study-path
 
 #### `sd-proximity-service` — 주변 검색 설계: 반경 안의 가게를 칸으로 찾기
 
@@ -11190,7 +11473,7 @@
 - 길이: 424줄
 - 소제목: 서버 한 대와 표 하나로 시작하기 / API 모양을 먼저 못 박는다 / 301을 줄까, 302를 줄까 / 하루 864만 개를 만든다면 / 테이블은 키 하나로 찾게 만든다 / 읽기가 쏟아질 때 리다이렉트 경로 / 남의 피싱 링크를 대신 보내 주지 않으려면 / 다음 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, http-status-codes, http-caching-cdn, sd-sharding-intro, sd-capacity-estimation, sd-kv-store-partition-replication, sd-load-balancer-stateless, sd-db-replication-intro, rate-limiting-algorithms
-- 키워드 백링크 →: frontend-testing-strategy, js-numbers-bigint, db-type-key-value, mysql-innodb-basics, sd-start-single-server, db-type-relational, db-replication-sharding, redis-basics
+- 키워드 백링크 →: frontend-testing-strategy, js-numbers-bigint, db-type-key-value, seo-redirects-site-migration, mysql-innodb-basics, sd-start-single-server, db-type-relational, db-replication-sharding, redis-basics
 - 이 글로 오는 글 ←: phishing-social-engineering, sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, system-design-concepts-map, system-design-study-path
 
 #### `sd-url-shortener-key-generation` — URL 단축기 설계 ②: 단축 키 만들기와 인기 링크 캐시
@@ -11292,7 +11575,18 @@
 - 소제목: 한 프레임에 쓸 수 있는 시간 / 속성마다 깨우는 단계가 다르다 / 합성 단계에서 끝나는 애니메이션 / will-change는 층을 미리 만든다 / 끊김을 재는 방법 / 움직임이 불편한 사람들 / 현장에서 버벅임을 좁히는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: animation-patterns, spring-animation, view-transitions-shared-element, what-happens-google-com, event-loop, core-web-vitals
 - 키워드 백링크 →: js-timers-accuracy, css-color-background, frontend-testing-strategy, smoke-sanity-regression-testing, web-accessibility, parallax-scrollytelling
-- 이 글로 오는 글 ←: animation-patterns, browser-rendering-pipeline, css-color-background, css-custom-properties, css-performance, css-sticky-scroll-snap, dom-basics, frontend-performance-map, js-timers-accuracy, parallax-scrollytelling, rendering-performance-optimization, scroll-driven-animations, scroll-patterns-overview, scroll-triggered-intersection-observer, spring-animation, view-transitions-shared-element, web-accessibility
+- 이 글로 오는 글 ←: animation-patterns, browser-rendering-pipeline, css-color-background, css-custom-properties, css-performance, css-sticky-scroll-snap, dom-basics, edge-ai-on-device, frontend-performance-map, js-timers-accuracy, parallax-scrollytelling, rendering-performance-optimization, scroll-driven-animations, scroll-patterns-overview, scroll-triggered-intersection-observer, spring-animation, view-transitions-shared-element, web-accessibility
+
+#### `behavior-design-models` — 행동 설계 모델: 포그 행동 모델, 훅 모델, 넛지와 다크 패턴의 경계
+
+- 요약: 알림 허용률을 올려 달라는 요청에서 출발해 이중 처리 이론, 포그 행동 모델 B=MAP와 행동 그리드, 습관 고리와 훅 모델, 손실 회피·사회적 증거 같은 넛지 장치를 묶는다. 같은 장치가 다크 패턴이 되는 지점과 EU DSA·FTC·개정 전자상거래법 규제, 넛지와 조작을 가르는 질문과 후회 지표까지 다룬다.
+- 태그: UX, Frontend, Experimentation, Accessibility
+- 키워드: 포그 행동 모델, 훅 모델, 다크 패턴, 넛지, 선택 설계
+- 길이: 401줄
+- 소제목: 알림을 켜게 만들어 달라는 요청 / 사람은 대부분 빠르게 결정한다 / 행동은 세 가지가 동시에 있을 때 일어난다 / 바꾸려는 행동이 어떤 종류인가 / 습관은 신호, 반복, 보상의 고리다 / 아주 작게 시작해 이미 있는 습관에 붙인다 / 훅 모델은 고리에 투자를 더한다 / 행동 변화 전략은 세 갈래로 나뉜다 / 행동경제학에서 가져온 장치들 / 같은 장치가 다크 패턴이 되는 순간 / 코드 리뷰에서 걸러 낼 수 있는 것 / 같은 넛지도 누구에게 쓰느냐가 다르다 / 규제는 어디까지 왔나 / 넛지와 조작을 가르는 질문 / 넛지도 실험으로 확인한다 / 다시 알림 요청으로 / 면접에서 나올 만한 질문
+- 직접 링크 →: product-analytics-funnels, ab-testing
+- 키워드 백링크 →: frontend-testing-strategy, loading-patterns, code-review-practices, data-privacy-compliance
+- 이 글로 오는 글 ←: ux-laws-cognitive-load
 
 #### `css-sticky-scroll-snap` — sticky와 scroll-snap: 스크롤에 맞춰 자리를 정하는 CSS
 
@@ -11303,7 +11597,7 @@
 - 소제목: sticky는 두 상자 사이에서 움직인다 / 붙지 않는 경우를 하나씩 재 보면 / 붙는 기준을 거슬러 올라가 찾기 / 머리글을 여러 겹 쌓을 때 / 손을 놓은 뒤 멈출 자리 / mandatory와 proximity를 재 보면 / 칸 맞춤을 직접 계산해 보기 / 현장에서 자주 만나는 증상 / 두 속성을 고르는 기준 / 면접에서 나올 만한 질문
 - 직접 링크 →: scroll-patterns-overview, parallax-scrollytelling
 - 키워드 백링크 →: scroll-triggered-intersection-observer, animation-performance, css-position-stacking-context
-- 이 글로 오는 글 ←: css-box-model-layout, css-color-background, css-flexbox-grid, css-position-stacking-context, parallax-scrollytelling, responsive-design, scroll-driven-animations, scroll-patterns-overview, scroll-triggered-intersection-observer
+- 이 글로 오는 글 ←: css-box-model-layout, css-color-background, css-flexbox-grid, css-position-stacking-context, custom-form-controls, parallax-scrollytelling, responsive-design, scroll-driven-animations, scroll-patterns-overview, scroll-triggered-intersection-observer
 
 #### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
 
@@ -11313,8 +11607,8 @@
 - 길이: 420줄
 - 소제목: 기다리는 시간이 표시를 정한다 / 얼마나 남았는지 아는가 / 무엇이 올지 모양을 아는가 / 스피너가 깜빡이면 더 느려 보인다 / 버튼을 누른 사람에게 먼저 답한다 / 내용이 조각으로 도착할 때 / 손가락으로 당겨서 새로고침 / 모든 로딩 표시에 같이 챙길 것 / 이름을 알면 부탁이 짧아진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: core-web-vitals, streaming-ssr-suspense, rendering-strategies, client-data-cache, realtime-communication, rest-api-design, code-splitting, animation-patterns
-- 키워드 백링크 →: lighthouse-explained, pattern-proxy
-- 이 글로 오는 글 ←: animation-patterns, client-data-cache, core-web-vitals, css-flexbox-grid, data-fetching-optimization, debounce-throttle, elasticsearch-inverted-index, fe-sd-news-feed, frontend-state-architecture, frontend-system-design-interview, graphql-client-caching, graphql-pagination-connections, http-streaming-sse, image-optimization, json-crud-http, react-forms-actions, rendering-performance-optimization, rest-api-design, scroll-patterns-overview, scroll-triggered-intersection-observer, server-sent-events, spring-data-repositories, sql-query-rewrite
+- 키워드 백링크 →: lighthouse-explained, core-component-api-design, pattern-proxy
+- 이 글로 오는 글 ←: animation-patterns, behavior-design-models, client-data-cache, core-web-vitals, css-flexbox-grid, data-fetching-optimization, debounce-throttle, elasticsearch-inverted-index, fe-sd-news-feed, frontend-state-architecture, frontend-system-design-interview, graphql-client-caching, graphql-pagination-connections, http-streaming-sse, image-optimization, json-crud-http, react-forms-actions, rendering-performance-optimization, rest-api-design, scroll-patterns-overview, scroll-triggered-intersection-observer, server-sent-events, spring-data-repositories, sql-query-rewrite, ux-laws-cognitive-load
 
 #### `parallax-scrollytelling` — 패럴랙스와 스크롤리텔링: sticky 무대 위에서 장면 움직이기
 
@@ -11369,6 +11663,28 @@
 - 소제목: 매 프레임 힘을 다시 계산한다 / 세 숫자가 정하는 성격 / 얼마나 넘치나 / 중간에 목표가 바뀌는 순간 / CSS만으로 흉내 내기 / 라이브러리마다 부르는 이름 / 스프링이 맞지 않는 자리 / 시간표를 쓸지 힘을 쓸지 / 면접에서 나올 만한 질문
 - 직접 링크 →: animation-patterns, view-transitions-shared-element, animation-performance
 - 이 글로 오는 글 ←: animation-patterns, animation-performance, view-transitions-shared-element
+
+#### `ux-laws-cognitive-load` — 화면을 고를 때 쓰는 UX 법칙: 힉, 피츠, 인지 부하와 기본값
+
+- 요약: 선택지와 버튼이 늘어난 결제 화면에서 출발해 힉의 법칙, 선택 과부하, 인지 부하, 기본값 효과, 피츠의 법칙을 버튼 크기와 기본 선택, 피드백 시간 같은 구현 값으로 바꿔 본다. 법칙이 맞지 않는 전문가 도구, 숫자 근거의 한계, 폼을 단계로 나눌 때의 기준도 다룬다.
+- 태그: UX, Frontend, Accessibility
+- 키워드: 힉의 법칙, 피츠의 법칙, 인지 부하, 선택 과부하, 기본값 효과
+- 길이: 377줄
+- 소제목: 선택지가 늘면 결정이 느려진다 / 너무 많이 보여 주면 아예 안 고른다 / 머리가 쓰는 힘을 어디에 쓰게 할까 / 기본값은 가장 강한 선택지다 / 큰 과녁이 가까이 있으면 빨리 누른다 / 어디를 누를지 한눈에 보이게 / 누른 다음에는 바로 대답한다 / 익숙한 자리에 두면 배우지 않아도 된다 / 복잡함은 사라지지 않고 옮겨 갈 뿐이다 / 고친 게 효과가 있었는지 화면에서 재기 / 법칙이 틀리는 곳 / 폼을 여러 단계로 나누면 항상 좋을까 / 결제 화면으로 돌아가서 / 면접에서 나올 만한 질문
+- 직접 링크 →: product-analytics-funnels, ux-research-usability-testing, html-form-validation, custom-form-controls, spacing-sizing-type-scale, loading-patterns, idempotency-key
+- 키워드 백링크 →: core-component-api-design, data-privacy-compliance, behavior-design-models, web-accessibility
+- 이 글로 오는 글 ←: ux-research-usability-testing
+
+#### `ux-research-usability-testing` — 사용성 테스트와 프로토타입: 다섯 명에게 시켜 보기 전에 정할 것
+
+- 요약: 아무도 기대한 대로 쓰지 않은 정기 배송 기능에서 출발해 페르소나, 사용자 스토리, 여정 지도, 플로차트로 흐름을 정리하고 프로토타입 충실도를 고른다. 과제 문장 쓰기, 생각 말하기, 5명 규칙의 계산과 한계, SUS 점수, 원격 테스트, 문제의 우선순위 매기기까지 다룬다.
+- 태그: UX, Testing, Frontend
+- 키워드: 사용성 테스트, SUS 점수, 생각 말하기, 여정 지도, 페르소나
+- 길이: 328줄
+- 소제목: 만들기 전에 흐름부터 적는다 / 무엇으로 시험할지: 충실도 고르기 / 개발자가 코드로 프로토타입을 만들 때의 함정 / 과제 문장 하나가 테스트를 정한다 / 한 세션은 이렇게 흘러간다 / 다섯 명이면 된다는 말의 근거와 한계 / 인상을 숫자로: SUS 점수 / 원격으로, 진행자 없이 / 사용성 테스트가 답하지 못하는 질문 / 찾은 문제를 할 일 순서로 바꾸기 / 정기 배송을 다시 만든다면 / 면접에서 나올 만한 질문
+- 직접 링크 →: ux-laws-cognitive-load, product-analytics-funnels
+- 키워드 백링크 →: ab-testing
+- 이 글로 오는 글 ←: ux-laws-cognitive-load
 
 #### `view-transitions-shared-element` — View Transitions와 FLIP: 카드가 상세 화면으로 이어지게
 
@@ -11449,6 +11765,7 @@
 - 60초 점검 → `linux-performance-triage`
 - 62진수 → `sd-url-shortener-key-generation`
 - 802.1Q → `vlan-basics`
+- 8pt 그리드 → `spacing-sizing-type-scale`
 - 가격-시간 우선 → `sd-stock-exchange-order-book`
 - 가로 스크롤 섹션 → `parallax-scrollytelling`
 - 가로채는 라우트 → `nextjs-parallel-intercepting-routes`
@@ -11467,6 +11784,7 @@
 - 가중 라운드 로빈 → `load-balancing-algorithms`
 - 가중치 라우팅 → `route53-routing-policies`
 - 가짜 타이머 → `test-pyramid-unit-tests`
+- 간격 스케일 → `spacing-sizing-type-scale`
 - 간접 프롬프트 인젝션 → `rag-classic-pipeline`
 - 간접 프롬프트 주입 → `llm-app-security-guardrails`
 - 감는 수 → `ray-casting`
@@ -11580,6 +11898,7 @@
 - 기능 수준 인가 → `api-security-owasp-api-top10`
 - 기본 거부 정책 → `k8s-network-policy`
 - 기본값 매개변수 → `js-function-forms`
+- 기본값 효과 → `ux-laws-cognitive-load`
 - 기억 오염 → `agent-memory`
 - 기여 요인 → `postmortems`
 - 기울기 소실 → `deep-learning-basics`
@@ -11601,6 +11920,7 @@
 - 내용 주소 지정 → `git-internals-basics`
 - 너비 우선 탐색 → `ds-graph-bfs-dfs`
 - 널 객체 패턴 → `pattern-null-object`
+- 넛지 → `behavior-design-models`
 - 네이티브 사이드카 → `k8s-pod-multicontainer`
 - 네이티브 VLAN → `vlan-basics`
 - 네트워크 분할 → `network-partitions`
@@ -11622,6 +11942,7 @@
 - 느린 호출 비율 → `circuit-breaker`
 - 느슨한 비교 → `js-equality-coercion`
 - 느슨한 쿼럼 → `sd-kv-store-failure-handling`
+- 늘린 링크 → `core-component-api-design`
 - 능동 헬스 체크 → `load-balancer-basics`
 - 늦은 데이터 → `kafka-to-lake-pipeline`
 - 다변량 테스트 → `product-analytics-funnels`
@@ -11632,6 +11953,7 @@
 - 다익스트라 → `sd-maps-tiles-routing`
 - 다중 문서 트랜잭션 → `acid-vs-base`
 - 다중 인증 → `mfa-totp`
+- 다크 패턴 → `behavior-design-models`
 - 다항 시간 환원 → `complexity-classes-p-np`
 - 다형성 → `oop-four-pillars`
 - 단락 평가 → `js-short-circuit`
@@ -11670,6 +11992,8 @@
 - 데드라인 전파 → `timeouts`
 - 데이터 거주 → `multi-region`
 - 데이터 경합 → `thread-safety`
+- 데이터 계보 → `data-catalog-lineage`
+- 데이터 계약 → `data-quality-checks`
 - 데이터 계층 → `sd-split-web-and-db`
 - 데이터 구간 → `airflow-orchestration`
 - 데이터 누수 → `ml-fundamentals`
@@ -11684,11 +12008,14 @@
 - 데이터 모델 비교 → `db-types-overview`
 - 데이터 센터 장애 조치 → `sd-multi-datacenter`
 - 데이터 스트림 → `elk-stack-basics`
+- 데이터 엔지니어링 수명 주기 → `data-engineering-lifecycle`
 - 데이터 웨어하우스 → `data-warehouse-architecture`
 - 데이터 접근 계층 → `nextjs-server-actions-security`
 - 데이터 제품 → `data-mesh-fabric`
 - 데이터 치우침 → `spark-basics`
+- 데이터 카탈로그 → `data-catalog-lineage`
 - 데이터 패브릭 → `data-mesh-fabric`
+- 데이터 품질 → `data-quality-checks`
 - 데이터 흐름도 → `threat-modeling-stride`
 - 데코레이터 패턴 → `pattern-decorator`
 - 델타 동기화 → `sd-file-sync-block-upload`
@@ -11735,6 +12062,7 @@
 - 디바이스 토큰 → `sd-notification-system`
 - 디바이스 플러그인 → `k8s-gpu-dra`
 - 디스크 버퍼 → `centralized-logging-pipeline`
+- 디자인 시스템 도입률 → `design-system-adoption-governance`
 - 디자인 토큰 → `design-system-building`
 - 디자인 패턴 → `design-patterns-overview`
 - 디피-헬먼 → `public-key-key-exchange`
@@ -11784,6 +12112,7 @@
 - 로그로 버그 추적 → `debugging-with-logs`
 - 로그인 셸 → `shell-environment-startup`
 - 로그포인트 → `browser-devtools-debugging`
+- 로딩 버튼 → `core-component-api-design`
 - 로딩 시점 → `lazy-loading-strategies`
 - 로빙 tabindex → `aria-keyboard-focus`
 - 로컬 갭 → `global-rollout-localization`
@@ -11796,12 +12125,15 @@
 - 롱 폴링 커서 → `long-polling`
 - 루트 사용자 → `aws-core-services-map`
 - 리다이렉션 → `shell-redirection-pipes`
+- 리다이렉트 매핑 → `seo-redirects-site-migration`
+- 리다이렉트 체인 → `seo-redirects-site-migration`
 - 리더 선출 → `leader-election`
 - 리드-솔로몬 → `sd-object-storage-durability`
 - 리랭킹 → `rag-retrieval-quality`
 - 리렌더링 → `react-rerender`
 - 리밸런싱 → `kafka-basics`
 - 리버스 프록시 → `proxy-reverse-proxy`
+- 리버스 ETL → `reverse-etl`
 - 리샤딩 → `sd-sharding-intro`
 - 리소스 서버 → `spring-security-jwt-oauth2`
 - 리소스 우선순위 → `resource-hints-loading`
@@ -11865,6 +12197,7 @@
 - 메일박스 → `actor-model`
 - 메타 프레임워크 → `frontend-frameworks-compared`
 - 메타데이터 엔드포인트 → `ssrf`
+- 메타데이터 우선 → `data-catalog-lineage`
 - 메타데이터 저장소 → `sd-object-storage-architecture`
 - 메타스페이스 → `java-jvm-memory-gc`
 - 멤테이블 → `sd-kv-store-write-read-path`
@@ -11952,6 +12285,7 @@
 - 변경 데이터 캡처 → `db-type-columnar-olap`
 - 변경 영향 분석 → `smoke-sanity-regression-testing`
 - 변경 창 → `network-config-cicd`
+- 변경분 동기화 → `reverse-etl`
 - 변이 테스트 → `test-pyramid-unit-tests`
 - 변환 웹훅 → `k8s-crd`
 - 병렬 도구 호출 → `agent-tool-design`
@@ -12054,6 +12388,7 @@
 - 사가 패턴 → `microservices`
 - 사설 대역 → `layer-ip-addressing`
 - 사실 테이블 → `olap-star-schema`
+- 사용성 테스트 → `ux-research-usability-testing`
 - 사용자 열거 → `password-attacks-credential-stuffing`
 - 사용자 인수 테스트 → `sit-uat-testing`
 - 사용자 정의 브리지 → `docker-network-volume`
@@ -12063,6 +12398,7 @@
 - 사이드카 컨테이너 → `k8s-pod-multicontainer`
 - 사이버 킬 체인 → `security-logging-detection-siem`
 - 사이트 격리 → `browser-security-model`
+- 사이트 이전 → `seo-redirects-site-migration`
 - 사일로 모델 → `multi-tenancy-isolation`
 - 사전 배포 버전 → `semantic-versioning`
 - 사회 공학 → `phishing-social-engineering`
@@ -12086,6 +12422,7 @@
 - 새 글 배너 → `fe-sd-news-feed`
 - 새니티 테스트 → `smoke-sanity-regression-testing`
 - 색 공간 → `css-color-background`
+- 생각 말하기 → `ux-research-usability-testing`
 - 생산자와 소비자 → `sd-queue-logging-automation`
 - 생성자 매개변수 속성 → `ts-classes-access-modifiers`
 - 생성자 주입 → `spring-ioc-di`
@@ -12115,6 +12452,8 @@
 - 선언 파일 → `ts-declaration-files-modules`
 - 선언형 인프라 → `iac-basics`
 - 선언형 코드 → `functional-programming-basics`
+- 선택 과부하 → `ux-laws-cognitive-load`
+- 선택 설계 → `behavior-design-models`
 - 선택도 → `postgres-query-planner`
 - 선택적 하이드레이션 → `hydration`
 - 선형화 가능성 → `db-consistency-cap`
@@ -12148,6 +12487,7 @@
 - 소크 테스트 → `load-testing-k6`
 - 소프트 404 → `seo-for-spa`
 - 소프트 내비게이션 → `nextjs-app-router-routing`
+- 소프트웨어 정의 자산 → `data-orchestrators-comparison`
 - 속도 층 → `lambda-kappa-architecture`
 - 속성 설명자 → `js-object-methods`
 - 쇼백 → `cloud-cost-optimization`
@@ -12222,12 +12562,14 @@
 - 슬라이딩 윈도 카운터 → `rate-limiting-algorithms`
 - 슬라이스 테스트 → `spring-boot-testing`
 - 슬롭스쿼팅 → `ai-coding-agents`
+- 승격 관문 → `ml-pipelines-ci-cd`
 - 승격 PR → `jenkins-argocd-push-pull`
 - 시간 복잡도 → `big-o-notation`
 - 시계 어긋남 → `clock-skew`
 - 시계열 DB → `db-type-time-series`
 - 시그니처 기반 탐지 → `ids-ips`
 - 시드 URL → `sd-web-crawler-architecture`
+- 시맨틱 레이어 → `bi-semantic-layer`
 - 시맨틱 HTML → `html-semantics`
 - 시뮬레이션 스로틀링 → `lighthouse-explained`
 - 시스템 설계 개념 지도 → `system-design-concepts-map`
@@ -12260,6 +12602,8 @@
 - 아웃라이어 감지 → `circuit-breaker`
 - 아웃박스 릴레이 → `transactional-outbox`
 - 아이덴티티 맵 → `enterprise-application-patterns`
+- 아이콘 시스템 → `icon-system-svg`
+- 아이콘 폰트 → `icon-system-svg`
 - 아일랜드 아키텍처 → `islands-resumability`
 - 아키텍처 결정 기록 → `architecture-patterns-overview`
 - 아키텍처 패턴 선택 → `architecture-patterns-overview`
@@ -12284,6 +12628,7 @@
 - 액세스 토큰 → `token-login`
 - 액터 모델 → `actor-model`
 - 액티브 레코드 → `enterprise-application-patterns`
+- 앵커 포지셔닝 → `ui-overlays-tooltip-dropdown-toast`
 - 양 끝 포인터 → `two-pointers-pattern`
 - 양자화 → `self-hosting-llm-inference`
 - 얕은 복사 → `js-shallow-deep-copy`
@@ -12311,7 +12656,9 @@
 - 에이전틱 RAG → `agentic-rag`
 - 에피소드 기억 → `agent-memory`
 - 엔디언 → `bit-manipulation`
+- 엣지 AI → `edge-ai-on-device`
 - 엣지 PoP → `cdn-edge-anycast`
+- 여정 지도 → `ux-research-usability-testing`
 - 역매핑 → `ts-enum-vs-union`
 - 역색인 → `elasticsearch-inverted-index`
 - 역전파 → `deep-learning-basics`
@@ -12323,6 +12670,7 @@
 - 연속 출석 → `sql-interview-problems`
 - 연쇄 장애 → `resilience-patterns`
 - 연쇄 effect → `react-without-effects`
+- 연합형 거버넌스 → `design-system-adoption-governance`
 - 열린 리다이렉트 → `owasp-top-10-map`
 - 열린 부하 모델 → `percentile-latency`
 - 영속성 컨텍스트 → `jpa-persistence-context`
@@ -12344,6 +12692,7 @@
 - 오프라인 outbox → `frontend-as-distributed-system`
 - 오프셋 되감기 → `kafka-vs-rabbitmq-replay`
 - 오픈 웨이트 모델 → `llm-model-selection`
+- 온디바이스 추론 → `edge-ai-on-device`
 - 온라인 저지 → `leetcode-study-guide`
 - 온라인 DDL → `mysql-replication-online-ddl`
 - 온콜 → `on-call`
@@ -12352,6 +12701,7 @@
 - 와이드 컬럼 → `db-type-wide-column`
 - 와일드카드 단어 검색 → `ds-trie`
 - 완전성 검사 → `ts-narrowing`
+- 외부 id upsert → `reverse-etl`
 - 요약 메모리 → `agent-memory`
 - 요청 단위 디버그 로그 → `debugging-with-logs`
 - 요청 메모이제이션 → `nextjs-caching-layers`
@@ -12464,6 +12814,7 @@
 - 인증과 인가 → `authn-vs-authz`
 - 인증서 자동 갱신 → `encryption-in-transit`
 - 인증서 체인 → `https-tls`
+- 인지 부하 → `ux-laws-cognitive-load`
 - 인터넷 게이트웨이 → `vpc-basics`
 - 인터페이스 엔드포인트 → `vpc-peering-transit-privatelink`
 - 인터페이스 프로젝션 → `spring-data-repositories`
@@ -12595,6 +12946,7 @@
 - 주변 검색 → `sd-proximity-service`
 - 주변 순위 → `sd-leaderboard-sorted-set`
 - 주변 친구 → `sd-nearby-friends`
+- 주소 변경 도구 → `seo-redirects-site-migration`
 - 주식별자 → `sqld-entity-attribute-relationship`
 - 중간 인증서 → `https-tls`
 - 중괄호 확장 → `bash-expansions-variables`
@@ -12635,6 +12987,7 @@
 - 지표 수집기 → `sd-metrics-collection`
 - 지표 필터 → `cloudwatch-metrics-logs-alarms`
 - 직렬화 지연 → `latency-bandwidth-throughput`
+- 집계 인식 → `bi-semantic-layer`
 - 집계 파이프라인 → `mongodb-document-model`
 - 집계 함수 → `sqld-group-by-having`
 - 집합 연산 메서드 → `js-map-set-weak`
@@ -12734,7 +13087,9 @@
 - 컨텍스트 오염 → `context-engineering`
 - 컨텍스트 캐시 → `spring-boot-testing`
 - 컨트롤 루프 → `k8s-controllers-reconcile`
+- 컬럼 계보 → `data-catalog-lineage`
 - 컬럼형 저장 → `db-type-columnar-olap`
+- 컴포넌트 상태 표 → `core-component-api-design`
 - 컴포지트 패턴 → `pattern-composite`
 - 컷 속성 → `minimum-spanning-tree`
 - 컷오버 → `release-cutover-hypercare`
@@ -12806,6 +13161,7 @@
 - 타입 넓히기 → `ts-type-system-basics`
 - 타입 매개변수 → `ts-generics`
 - 타입 수준 프로그래밍 → `ts-conditional-infer`
+- 타입 스케일 → `spacing-sizing-type-scale`
 - 타입 좁히기 → `ts-narrowing`
 - 탁상 훈련 → `security-incident-response`
 - 탈옥 → `llm-app-security-guardrails`
@@ -12825,6 +13181,8 @@
 - 템플릿 리터럴 타입 → `ts-utility-mapped-types`
 - 템플릿 메서드 → `pattern-template-method`
 - 템플릿 엔진 → `nodejs-web-frameworks`
+- 토글팁 → `ui-overlays-tooltip-dropdown-toast`
+- 토스트 큐 → `ui-overlays-tooltip-dropdown-toast`
 - 토큰 인트로스펙션 → `api-gateway-use-cases`
 - 토큰 재사용 감지 → `spa-auth-token-storage`
 - 투 포인터 → `two-pointers-pattern`
@@ -12881,6 +13239,7 @@
 - 퍼블릭 서브넷 → `vpc-subnets-route-tables`
 - 퍼사드 패턴 → `pattern-facade`
 - 펑터 → `fp-functors-monads-js`
+- 페르소나 → `ux-research-usability-testing`
 - 페어와이즈 → `test-design-techniques`
 - 페이로드 변환 → `api-gateway-use-cases`
 - 페이아웃 → `sd-payment-flow`
@@ -12895,6 +13254,7 @@
 - 평가 세트 → `llm-evals`
 - 평균 메모리 접근 시간 → `caching-concepts-map`
 - 폐기 가능성 → `twelve-factor-app`
+- 포그 행동 모델 → `behavior-design-models`
 - 포드-풀커슨 → `max-flow-bipartite-matching`
 - 포스트 양자 하이브리드 → `public-key-key-exchange`
 - 포스트모템 → `postmortems`
@@ -12960,6 +13320,7 @@
 - 피싱 저항 인증 → `passkeys-webauthn`
 - 피처 저장소 → `model-serving`
 - 피처 플래그 → `ab-testing`
+- 피츠의 법칙 → `ux-laws-cognitive-load`
 - 피크 QPS → `sd-capacity-estimation`
 - 피타고라스 수 → `pythagorean-theorem`
 - 피타고라스 정리 → `pythagorean-theorem`
@@ -13040,12 +13401,14 @@
 - 회귀 테스트 → `smoke-sanity-regression-testing`
 - 회의실 배정 → `greedy-algorithms`
 - 훅 규칙 → `react-custom-hooks-rules`
+- 훅 모델 → `behavior-design-models`
 - 휘발성 순서 → `security-incident-response`
 - 흐름 로그 → `network-flow-logs`
 - 흐름 제어 → `tcp-reliability-congestion`
 - 희소 배열 → `js-array-transform`
 - 희소 오프셋 인덱스 → `sd-mq-storage-partitions`
 - 히스토그램 버킷 → `metrics-types`
+- 힉의 법칙 → `ux-laws-cognitive-load`
 - 힌트 핸드오프 → `eventual-consistency`
 - 힙 스냅샷 → `js-memory-leak`
 - A/B 테스트 → `ab-testing`
@@ -13121,6 +13484,7 @@
 - App Router → `nextjs-app-router-routing`
 - app.kubernetes.io/name → `k8s-labels-selectors`
 - AppArmor 프로필 → `seccomp-apparmor`
+- appearance: base-select → `custom-form-controls`
 - AppendEntries → `raft-consensus`
 - appendfsync → `redis-persistence-ha`
 - application/x-www-form-urlencoded → `html-form-http`
@@ -13134,6 +13498,8 @@
 - Argo Rollouts → `canary-release`
 - Argon2id → `hash-hmac-password-hashing`
 - arguments 객체 → `js-function-forms`
+- aria-disabled → `core-component-api-design`
+- aria-disabled → `custom-form-controls`
 - ARP → `layer-link-ethernet-arp`
 - ARP 스푸핑 → `network-attacks-l2-l3`
 - ArrayBuffer → `js-binary-data-typed-arrays`
@@ -13162,6 +13528,7 @@
 - awk → `linux-grep-awk-sed`
 - AWS ALB → `reverse-proxy-lb-api-gateway`
 - AWS Budgets → `aws-core-services-map`
+- AWS Glue → `data-orchestrators-comparison`
 - AWS Nitro → `virtualization-hypervisors`
 - awsvpc 모드 → `ecs-fargate-task-service`
 - axe-core → `web-accessibility`
@@ -13189,6 +13556,7 @@
 - BFD → `routing-protocols-ospf-rip-eigrp`
 - BFF → `gateway`
 - BGP → `bgp-basics`
+- BI 도구 → `bi-semantic-layer`
 - Big Ball of Mud → `monolith-architecture`
 - Big O → `big-o-notation`
 - BigInt → `js-numbers-bigint`
@@ -13297,11 +13665,13 @@
 - ClusterRoleBinding → `k8s-rbac`
 - ClusterSecretStore → `external-secrets`
 - clusterset.local → `k8s-multi-cluster`
+- CML → `ml-pipelines-ci-cd`
 - CMS → `count-min-sketch`
 - CNAME → `dns`
 - CNI 플러그인 → `k8s-cni-pod-network`
 - COALESCE → `sqld-null-functions`
 - CockroachDB → `db-type-newsql`
+- codemod → `design-system-adoption-governance`
 - CODEOWNERS → `github-repo-governance`
 - Coffman 조건 → `deadlocks`
 - cohort → `k8s-batch-kueue`
@@ -13385,9 +13755,11 @@
 - curl -w → `curl-for-debugging`
 - curl 종료 코드 → `curl-for-debugging`
 - current-context → `kubeconfig-contexts`
+- currentColor → `icon-system-svg`
 - currying → `js-currying-partial`
 - Custom Elements → `web-components-shadow-dom`
 - custom-columns → `kubectl-essentials`
+- Customer Data Platform → `reverse-etl`
 - CustomResourceDefinition → `k8s-crd`
 - CVE-2025-29927 → `nextjs-route-handlers-proxy`
 - CVSS 벡터 → `vulnerability-management-cve-cvss`
@@ -13395,6 +13767,7 @@
 - Cypher → `db-type-graph`
 - daemon-reload → `linux-systemd-systemctl`
 - DaemonSet → `k8s-daemonset`
+- Dagster → `data-orchestrators-comparison`
 - dangerouslySetInnerHTML → `xss`
 - dangling 이미지 → `docker-commands-workflow`
 - dash → `shells-posix-compat`
@@ -13557,6 +13930,7 @@
 - EXCLUDE CURRENT ROW → `sql-window-functions-pg`
 - exec 플러그인 → `kubeconfig-contexts`
 - EXECABORT → `acid-vs-base`
+- ExecuTorch → `edge-ai-on-device`
 - exemplar → `observability-basics`
 - exhaustive-deps → `react-useeffect`
 - expand/contract → `db-architecture-by-scale`
@@ -13595,6 +13969,7 @@
 - FHRP → `gateway-link-redundancy-fhrp-lacp`
 - FHS → `linux-fhs-file-commands`
 - Fiber 아키텍처 → `react-fiber-render-commit`
+- field-sizing → `custom-form-controls`
 - fielddata → `elasticsearch-mapping`
 - FILTER 절 → `sql-aggregation-pitfalls`
 - FinalizationRegistry → `js-map-set-weak`
@@ -13611,6 +13986,7 @@
 - Flexbox → `css-flexbox-grid`
 - Flink → `stream-processing`
 - FLIP 기법 → `view-transitions-shared-element`
+- Floating UI → `ui-overlays-tooltip-dropdown-toast`
 - Floyd 순환 탐지 → `ds-linked-list`
 - Fluent Bit → `centralized-logging-pipeline`
 - flushSync → `react-useref-layout-effect`
@@ -13711,6 +14087,7 @@
 - GraphRAG → `graph-rag`
 - Gratuitous ARP → `layer-link-ethernet-arp`
 - GRE over IPsec → `wan-mpls-sd-wan-vrf`
+- Great Expectations → `data-quality-checks`
 - GROUP BY → `sqld-group-by-having`
 - group_vars → `ansible-network-automation`
 - GROUPING SETS → `sqld-rollup-cube-grouping-sets`
@@ -13812,6 +14189,7 @@
 - import map → `micro-frontend-integration-patterns`
 - in-place resize → `k8s-in-place-resize`
 - includeIf → `git-ignore-config`
+- indeterminate 체크박스 → `custom-form-controls`
 - Index Only Scan → `db-index`
 - index-free adjacency → `db-type-graph`
 - index.lock → `git-repo-errors`
@@ -13938,6 +14316,7 @@
 - kubectl logs → `kubectl-essentials`
 - kubectl port-forward → `kubectl-essentials`
 - kubectx → `kubeconfig-contexts`
+- Kubeflow Pipelines → `ml-pipelines-ci-cd`
 - kubelet → `k8s-architecture`
 - Kubernetes Secret → `k8s-secret`
 - Kubestronaut → `k8s-certifications`
@@ -14007,6 +14386,7 @@
 - LogQL → `structured-logging`
 - logrotate → `aws-ec2-ubuntu-server-setup`
 - logsdb → `elk-stack-basics`
+- LookML → `bi-semantic-layer`
 - LoRA → `fine-tuning-vs-rag-vs-prompting`
 - LoRaWAN → `iot-mobile-wireless-links`
 - Lossy Counting → `lossy-counting`
@@ -14015,6 +14395,7 @@
 - LRU 캐시 → `js-memoization`
 - LSM 트리 → `db-type-wide-column`
 - LSN → `postgres-architecture`
+- Luigi → `data-orchestrators-comparison`
 - LUKS → `encryption-at-rest`
 - LVM → `linux-disks-filesystems`
 - MAC 주소 → `layer-link-ethernet-arp`
@@ -14063,6 +14444,7 @@
 - minReadySeconds → `k8s-deployment`
 - MINUS → `sqld-set-operators`
 - mkcert → `local-custom-domain`
+- ML 파이프라인 → `ml-pipelines-ci-cd`
 - MLflow → `ml-experiment-tracking`
 - MLFQ → `cpu-scheduling-interrupts`
 - MLOps → `what-is-mlops`
@@ -14197,6 +14579,7 @@
 - ON CONFLICT → `postgres-advanced-sql`
 - onCaughtError → `react-suspense-error-boundary`
 - ONLY_FULL_GROUP_BY → `sql-aggregation-pitfalls`
+- ONNX Runtime → `edge-ai-on-device`
 - onShellReady → `streaming-ssr-suspense`
 - OOM killer → `virtual-memory-paging`
 - OOMKilled → `k8s-pod-resources`
@@ -14204,6 +14587,7 @@
 - OpenAPI 명세 → `openapi-spec-first`
 - OpenFeature → `feature-flags`
 - OpenGitOps → `gitops-argocd-vs-flux`
+- OpenLineage → `data-catalog-lineage`
 - OpenLLMetry → `llm-observability`
 - OpenRewrite → `spring-boot-4-migration`
 - OpenRouter → `llm-model-selection`
@@ -14316,6 +14700,7 @@
 - Pre-Vote → `raft-consensus`
 - PreAuthorize → `spring-security-architecture`
 - preconnect → `resource-hints-loading`
+- Prefect → `data-orchestrators-comparison`
 - prefer-const → `js-var-let-const`
 - prefers-reduced-motion → `animation-performance`
 - preflight → `cors`
@@ -14403,6 +14788,7 @@
 - React Hook Form → `react-forms-actions`
 - React Native → `cross-platform-apps`
 - React Router → `react-client-routing`
+- react-scanner → `design-system-adoption-governance`
 - React.lazy → `lazy-loading-strategies`
 - React.memo → `react-rerender`
 - ReactNode → `typescript-in-react`
@@ -14718,7 +15104,10 @@
 - suppressHydrationWarning → `hydration`
 - Suricata → `ids-ips`
 - Surrogate-Key → `cache-invalidation`
+- SUS 점수 → `ux-research-usability-testing`
 - Suspense 경계 → `streaming-ssr-suspense`
+- SVG 스프라이트 → `icon-system-svg`
+- SVGO → `icon-system-svg`
 - svh → `parallax-scrollytelling`
 - SWC → `frontend-build-tooling`
 - switchMap → `reactive-programming`
@@ -14983,6 +15372,7 @@
 - write coalescing → `cache-write-policies`
 - write concern → `mongodb-document-model`
 - write-around → `cache-write-policies`
+- Write-Audit-Publish → `data-quality-checks`
 - write-back → `cache-write-policies`
 - write-behind → `caching-strategies`
 - write-through → `caching-strategies`
@@ -15024,51 +15414,74 @@
 
 제목·소제목·태그 단어가 많이 겹치는 쌍이다. 새 글이 이 주제를 다루면 둘 중 어느 글에 넣을지, 서로 링크로 나눌지 먼저 정한다.
 
-- `leetcode-meeting-rooms` ↔ `leetcode-merge-intervals` (43%: 비교한다, 시작, 순으로, 세우고, 시작과, 끝을, 범위가, 작으면)
-- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-minimum-window-substring` (40%: 구간, 시작점마다, 길이로, 이분, 탐색하기, 창을, 매번, 언어로)
+- `leetcode-meeting-rooms` ↔ `leetcode-merge-intervals` (42%: 비교한다, 시작, 순으로, 세우고, 시작과, 끝을, 범위가, 작으면)
+- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-minimum-window-substring` (41%: 구간, 시작점마다, 길이로, 이분, 탐색하기, 창을, 매번, 언어로)
 - `leetcode-find-minimum-in-rotated-sorted-array` ↔ `leetcode-search-in-rotated-sorted-array` (38%: 꺾이는, 곳을, 정렬된, 풀이, 비교, 이렇게, 짜면, 틀린다)
 - `leetcode-longest-substring-without-repeating` ↔ `leetcode-minimum-window-substring` (38%: 시작점마다, 이분, 탐색하기, 왼쪽을, 해시맵, 128칸, 배열, 언어로)
-- `leetcode-jump-game-ii` ↔ `leetcode-jump-game` (36%: 칸마다, python과, java로, 옮기기, 풀이, 비교, 그럴듯하지만, 틀리는)
-- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-longest-substring-without-repeating` (36%: 시작점마다, 끝까지, 이분, 탐색하기, 언어로, 최종, 풀이, 비교)
+- `leetcode-longest-repeating-character-replacement` ↔ `leetcode-longest-substring-without-repeating` (37%: 시작점마다, 끝까지, 이분, 탐색하기, 언어로, 최종, 풀이, 비교)
+- `leetcode-k-closest-points-to-origin` ↔ `leetcode-kth-largest-element-in-an-array` (36%: 크기, k인, 힙에, 남긴다, 전부, 넣고, k번, 꺼낸다)
 - `sql-subqueries-exists-lateral` ↔ `sqld-correlated-subquery` (35%: 하나만, 도는, 서브쿼리, 행마다, 서브쿼리가, 이름을, 스칼라)
-- `leetcode-k-closest-points-to-origin` ↔ `leetcode-kth-largest-element-in-an-array` (35%: 크기, k인, 힙에, 남긴다, 전부, 넣고, k번, 꺼낸다)
-- `leetcode-climbing-stairs` ↔ `leetcode-house-robber` (31%: 적어, 표를, 채운다, 개만, python과, java로, 옮길, 일곱)
+- `leetcode-jump-game-ii` ↔ `leetcode-jump-game` (34%: 칸마다, python과, java로, 옮기기, 풀이, 비교, 그럴듯하지만, 조건이)
 - `mongodb-indexes-explain` ↔ `db-index-pitfalls` (30%: 주문, 인덱스, 인덱스가, 있는데, 운영, 인덱스를, index)
-- `leetcode-insert-interval` ↔ `leetcode-merge-intervals` (30%: 합친다, python과, java로, 옮기기, 틀리는, 풀이, 비교, 실제)
+- `leetcode-climbing-stairs` ↔ `leetcode-house-robber` (30%: 적어, 표를, 채운다, 개만, python과, java로, 옮길, 일곱)
 - `k8s-pod-basics` ↔ `docker-container-basics` (30%: run, 줄이, 지나가는, 띄우고, 들여다보고, 지우기, 정리하면, container)
 - `leetcode-number-of-1-bits` ↔ `leetcode-reverse-bits` (29%: 문자열로, 바꿔, 칸을, 불린다면, 표를, 틀리기, 쉬운, bit)
 - `sqld-set-operators` ↔ `sqld-correlated-subquery` (29%: 예제, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-subquery-set-operators` (29%: 연산자, 느려지는, sqld, 시험, 포인트)
 - `sqld-set-operators` ↔ `sqld-joins` (29%: 붙이는, 행을, sqld, 시험, 포인트)
-- `leetcode-container-with-most-water` ↔ `leetcode-trapping-rain-water` (29%: 낮은, 벽이, 벽을, 높은, 잰다, two, 틀리는, 이어서)
 - `mysql-innodb-basics` ↔ `pessimistic-locking` (29%: 테이블, update가, 잠금은, 행이, 잠금, 대기를, 좁혀, 가는)
-- `leetcode-coin-change` ↔ `leetcode-house-robber` (29%: 틀린다, 적어, 표를, 채운다, python과, java로, 옮길, 틀리기)
 - `leetcode-merge-intervals` ↔ `leetcode-partition-labels` (29%: 구간을, 겹치지, 조각을, 합친다, 마지막, 끝을, python과, java로)
-- `leetcode-3sum` ↔ `leetcode-container-with-most-water` (29%: two, 끝에서, 틀리는, 이어서, 문제들, 건너뛴다, pointers, sum)
-- `leetcode-container-with-most-water` ↔ `leetcode-two-sum-ii` (29%: 짝을, 끝에서, 쪽을, 버린다, two, sum, 틀리는, 이어서)
 - `leetcode-find-minimum-in-rotated-sorted-array` ↔ `leetcode-median-of-two-sorted-arrays` (28%: 곳을, 오른쪽, 풀이, 비교, 이렇게, 짜면, 틀린다, 이어서)
+- `leetcode-coin-change` ↔ `leetcode-house-robber` (28%: 틀린다, 적어, 표를, 채운다, python과, java로, 옮길, 틀리기)
+- `leetcode-longest-consecutive-sequence` ↔ `leetcode-single-number` (28%: 수마다, 수를, 세기, 적어, 틀리기, 쉬운, 조건이, 바뀌면)
 - `leetcode-gas-station` ↔ `leetcode-partition-labels` (28%: python과, java로, 옮기기, 풀이, 비교, 틀리기, 쉬운, 조건이)
+- `leetcode-insert-interval` ↔ `leetcode-merge-intervals` (28%: 합친다, python과, java로, 옮기기, 풀이, 비교, 실제, 코드에서)
 - `leetcode-merge-k-sorted-lists` ↔ `leetcode-merge-two-sorted-lists` (28%: 정렬된, 모아서, 정렬하기, 합쳐, 조건을, linked, list, merge)
 - `k8s-learning-roadmap` ↔ `devops-networking-roadmap` (27%: 지나는, 칸은, 서로, 기대고, 네트워킹, 위에, 증상이면, 글부터)
 - `leetcode-climbing-stairs` ↔ `leetcode-coin-change` (27%: 적어, 표를, 채운다, python과, java로, 옮길, 틀리기, 쉬운)
 - `javascript-roadmap` ↔ `k8s-learning-roadmap` (27%: 01, 02, 03, 04, 05, 06, 07, 증상이면)
-- `leetcode-insert-interval` ↔ `leetcode-non-overlapping-intervals` (27%: 이분, 탐색으로, python과, java로, 옮기기, 틀리는, 풀이, 비교)
+- `leetcode-longest-consecutive-sequence` ↔ `leetcode-valid-sudoku` (27%: python과, java로, 옮기기, 놓고, 틀리기, 쉬운, 조건이, 바뀌면)
+- `leetcode-container-with-most-water` ↔ `leetcode-trapping-rain-water` (27%: 낮은, 벽이, 벽을, 높은, 잰다, two, 이어서, 문제들)
 - `sqld-null-functions` ↔ `sqld-single-row-functions` (27%: 글에서, 사원, 테이블, sqld, 시험, 포인트, oracle)
 - `leetcode-cheapest-flights-within-k-stops` ↔ `leetcode-network-delay-time` (27%: 길을, 전부, dfs, bfs, 벨만, 포드, 다익스트라, 다익스트라를)
 - `leetcode-task-scheduler` ↔ `leetcode-k-closest-points-to-origin` (27%: 최대, 세운다, 개로, 봤다, python과, java로, 옮기기, 틀리기)
 - `leetcode-minimum-interval-to-include-each-query` ↔ `leetcode-k-closest-points-to-origin` (27%: 전부, 크기, 두고, 힙에, 봤다, python과, java로, 옮기기)
 - `performance-antipatterns` ↔ `caching-concepts-map` (27%: 거꾸로, 1., 2., 3., 4., 5., 6., 7.)
+- `leetcode-container-with-most-water` ↔ `leetcode-two-sum-ii` (26%: 짝을, 끝에서, 쪽을, 버린다, two, sum, 이어서, 문제들)
 - `mongodb-indexes-explain` ↔ `db-index-design` (26%: 주문, 쿼리, 인덱스, 담는, 부분, 인덱스와, 결과를, 인덱스를)
 - `sd-db-replication-intro` ↔ `db-replication-sharding` (26%: 복제본은, 대로, 방금, 보인다, 죽으면, 이어받나, 복제는, scalability)
 - `sqld-null-functions` ↔ `sqld-type-conversion` (26%: 테이블, sqld, 시험, 포인트, oracle)
 - `sqld-type-conversion` ↔ `sqld-single-row-functions` (26%: 테이블, sqld, 시험, 포인트, oracle)
-- `leetcode-longest-increasing-subsequence` ↔ `leetcode-house-robber` (26%: 마지막으로, 적어, python과, java로, 옮길, 일곱, 틀리기, 쉬운)
-- `leetcode-merge-intervals` ↔ `leetcode-non-overlapping-intervals` (26%: 구간을, 시작, 순으로, 정렬해도, python과, java로, 옮기기, 틀리는)
+- `db-index-pitfalls` ↔ `db-index-design` (26%: 주문, 100만, 인덱스, 인덱스는, 인덱스를, index)
+- `leetcode-3sum` ↔ `leetcode-container-with-most-water` (26%: two, 끝에서, 이어서, 문제들, 건너뛴다, pointers, sum)
 
 ## 서로 이어진 글
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `bi-semantic-layer` ↔ `data-catalog-lineage`
+- `bi-semantic-layer` ↔ `data-warehouse-architecture`
+- `core-component-api-design` ↔ `custom-form-controls`
+- `data-catalog-lineage` ↔ `data-orchestrators-comparison`
+- `data-catalog-lineage` ↔ `dbt-transformations`
+- `data-catalog-lineage` ↔ `etl-vs-elt`
+- `data-quality-checks` ↔ `data-warehouse-architecture`
+- `data-quality-checks` ↔ `dbt-transformations`
+- `data-quality-checks` ↔ `etl-vs-elt`
+- `design-system-adoption-governance` ↔ `spacing-sizing-type-scale`
+- `design-system-adoption-governance` ↔ `design-system-building`
+- `edge-ai-on-device` ↔ `ml-pipelines-ci-cd`
+- `edge-ai-on-device` ↔ `model-serving`
+- `icon-system-svg` ↔ `html-semantics`
+- `icon-system-svg` ↔ `web-font-optimization`
+- `ml-pipelines-ci-cd` ↔ `ml-experiment-tracking`
+- `ml-pipelines-ci-cd` ↔ `ml-model-monitoring-drift`
+- `ml-pipelines-ci-cd` ↔ `what-is-mlops`
+- `reverse-etl` ↔ `dbt-transformations`
+- `ui-overlays-tooltip-dropdown-toast` ↔ `css-position-stacking-context`
+- `ux-laws-cognitive-load` ↔ `ux-research-usability-testing`
+- `leetcode-move-zeroes` ↔ `leetcode-remove-duplicates-from-sorted-array`
+- `leetcode-move-zeroes` ↔ `leetcode-sort-colors`
 - `data-warehouse-architecture` ↔ `dbt-transformations`
 - `data-warehouse-architecture` ↔ `etl-vs-elt`
 - `data-warehouse-architecture` ↔ `data-lake-hdfs`

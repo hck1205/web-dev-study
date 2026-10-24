@@ -2,10 +2,481 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "behavior-design-models": {
+    "links": [
+      "product-analytics-funnels",
+      "ab-testing"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "loading-patterns",
+      "code-review-practices",
+      "data-privacy-compliance"
+    ]
+  },
+  "bi-semantic-layer": {
+    "links": [
+      "data-warehouse-architecture",
+      "dbt-transformations",
+      "data-catalog-lineage",
+      "reverse-etl",
+      "data-mesh-fabric"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "db-sharding",
+      "db-type-columnar-olap",
+      "etl-vs-elt"
+    ]
+  },
+  "core-component-api-design": {
+    "links": [
+      "design-system-building",
+      "react-component-patterns",
+      "html-form-validation",
+      "aria-keyboard-focus",
+      "react-forms-actions",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "custom-form-controls",
+      "frontend-testing-strategy",
+      "architecture-patterns-overview",
+      "css-position-stacking-context",
+      "html-semantics"
+    ]
+  },
+  "custom-form-controls": {
+    "links": [
+      "html-form-validation",
+      "aria-keyboard-focus",
+      "design-system-building"
+    ],
+    "mentions": [
+      "web-components-shadow-dom",
+      "core-component-api-design",
+      "frontend-testing-strategy",
+      "css-sticky-scroll-snap",
+      "client-data-cache",
+      "html-semantics",
+      "web-accessibility",
+      "postgres-query-planner"
+    ]
+  },
+  "data-catalog-lineage": {
+    "links": [
+      "dbt-transformations",
+      "data-privacy-compliance",
+      "reverse-etl",
+      "data-quality-checks",
+      "data-warehouse-architecture",
+      "ml-experiment-tracking",
+      "what-is-mlops"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "opensearch-cluster-operations",
+      "schema-versioning",
+      "docker-container-basics",
+      "data-orchestrators-comparison",
+      "ds-graph-bfs-dfs",
+      "bi-semantic-layer",
+      "airflow-orchestration",
+      "data-lake-hdfs",
+      "db-type-relational",
+      "stream-processing",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "shells-posix-compat",
+      "cloud-service-models-shared-responsibility",
+      "etl-vs-elt"
+    ]
+  },
+  "data-engineering-lifecycle": {
+    "links": [
+      "data-quality-checks",
+      "data-privacy-compliance",
+      "etl-vs-elt",
+      "cdc-change-data-capture",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "data-lake-hdfs",
+      "data-warehouse-architecture",
+      "olap-star-schema",
+      "spark-basics",
+      "airflow-orchestration",
+      "cron-jobs"
+    ],
+    "mentions": [
+      "db-sharding",
+      "ab-testing",
+      "bash-scripting",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "dbt-transformations",
+      "zero-downtime-migrations"
+    ]
+  },
+  "data-orchestrators-comparison": {
+    "links": [
+      "airflow-orchestration",
+      "etl-vs-elt",
+      "dbt-transformations",
+      "cron-jobs",
+      "data-quality-checks",
+      "data-catalog-lineage",
+      "lambda-kappa-architecture"
+    ],
+    "mentions": [
+      "serverless-architecture",
+      "bash-scripting",
+      "db-type-columnar-olap",
+      "python-essentials-for-backend",
+      "code-review-practices",
+      "sd-mq-storage-partitions",
+      "js-pure-functions",
+      "zero-downtime-migrations"
+    ]
+  },
+  "data-quality-checks": {
+    "links": [
+      "etl-vs-elt",
+      "data-warehouse-architecture",
+      "schema-versioning",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "data-lake-hdfs",
+      "sql-basics",
+      "sd-payment-reliability",
+      "alerting",
+      "postgres-getting-started",
+      "dbt-transformations",
+      "zero-downtime-migrations"
+    ]
+  },
+  "design-system-adoption-governance": {
+    "links": [
+      "design-system-building",
+      "core-component-api-design",
+      "spacing-sizing-type-scale",
+      "product-analytics-funnels"
+    ],
+    "mentions": [
+      "dependency-hell",
+      "smoke-sanity-regression-testing",
+      "code-review-practices"
+    ]
+  },
+  "edge-ai-on-device": {
+    "links": [
+      "self-hosting-llm-inference",
+      "model-serving",
+      "deep-learning-basics",
+      "fine-tuning-vs-rag-vs-prompting",
+      "canary-release",
+      "feature-flags",
+      "ml-model-monitoring-drift",
+      "ml-experiment-tracking",
+      "ml-pipelines-ci-cd"
+    ],
+    "mentions": [
+      "llm-basics-for-developers",
+      "animation-performance"
+    ]
+  },
+  "icon-system-svg": {
+    "links": [
+      "bundler-basics",
+      "ui-overlays-tooltip-dropdown-toast",
+      "spacing-sizing-type-scale"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "css-custom-properties",
+      "html-semantics",
+      "web-font-optimization",
+      "code-splitting",
+      "web-accessibility",
+      "count-min-sketch"
+    ]
+  },
+  "ml-pipelines-ci-cd": {
+    "links": [
+      "ml-experiment-tracking",
+      "ml-model-monitoring-drift",
+      "ci-cd-basics",
+      "what-is-mlops",
+      "test-pyramid-unit-tests",
+      "github-actions-workflows",
+      "airflow-orchestration",
+      "canary-release",
+      "blue-green-deployment",
+      "model-serving",
+      "edge-ai-on-device"
+    ],
+    "mentions": [
+      "data-quality-checks",
+      "github-actions-docker-ecr",
+      "data-orchestrators-comparison",
+      "smoke-sanity-regression-testing",
+      "sd-object-storage-architecture",
+      "ml-model-evaluation",
+      "llm-evals",
+      "code-review-practices",
+      "etl-vs-elt",
+      "zero-downtime-migrations"
+    ]
+  },
+  "reverse-etl": {
+    "links": [
+      "dbt-transformations",
+      "etl-vs-elt",
+      "data-quality-checks",
+      "retries",
+      "message-delivery-semantics",
+      "data-privacy-compliance",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "db-type-columnar-olap",
+      "resilience-patterns",
+      "cloud-service-models-shared-responsibility",
+      "db-modeling-normalization",
+      "zero-downtime-migrations"
+    ]
+  },
+  "seo-redirects-site-migration": {
+    "links": [
+      "seo-for-spa",
+      "http-status-codes",
+      "nginx-basics",
+      "https-tls"
+    ],
+    "mentions": [
+      "ab-testing",
+      "rendering-strategies",
+      "frontend-hosting-platforms",
+      "what-happens-google-com",
+      "count-min-sketch"
+    ]
+  },
+  "spacing-sizing-type-scale": {
+    "links": [
+      "design-system-building",
+      "css-typography",
+      "responsive-design",
+      "design-system-adoption-governance"
+    ],
+    "mentions": [
+      "css-flexbox-grid",
+      "css-styling-approaches",
+      "css-custom-properties",
+      "smoke-sanity-regression-testing",
+      "web-accessibility"
+    ]
+  },
+  "ui-overlays-tooltip-dropdown-toast": {
+    "links": [
+      "css-position-stacking-context",
+      "aria-keyboard-focus",
+      "frontend-system-design-interview",
+      "core-component-api-design"
+    ],
+    "mentions": [
+      "html-semantics",
+      "web-accessibility",
+      "js-closures"
+    ]
+  },
+  "ux-laws-cognitive-load": {
+    "links": [
+      "product-analytics-funnels",
+      "ux-research-usability-testing",
+      "html-form-validation",
+      "custom-form-controls",
+      "spacing-sizing-type-scale",
+      "loading-patterns",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "core-component-api-design",
+      "data-privacy-compliance",
+      "behavior-design-models",
+      "web-accessibility"
+    ]
+  },
+  "ux-research-usability-testing": {
+    "links": [
+      "ux-laws-cognitive-load",
+      "product-analytics-funnels"
+    ],
+    "mentions": [
+      "ab-testing"
+    ]
+  },
+  "leetcode-car-fleet": {
+    "links": [
+      "monotonic-stack-pattern",
+      "sorting-algorithms",
+      "leetcode-daily-temperatures",
+      "leetcode-merge-intervals"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "floating-point-numbers",
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-evaluate-reverse-polish-notation": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "ds-stack-queue-deque",
+      "recursion-backtracking",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-min-stack",
+      "monotonic-stack-pattern"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "nodejs-web-frameworks",
+      "sql-aggregation-pitfalls",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-fruit-into-baskets": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-permutation-in-string"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-longest-consecutive-sequence": {
+    "links": [
+      "ds-hash-map",
+      "ds-union-find",
+      "leetcode-contains-duplicate",
+      "sliding-window-pattern",
+      "leetcode-merge-intervals",
+      "leetcode-longest-increasing-subsequence",
+      "leetcode-two-sum",
+      "leetcode-top-k-frequent-elements"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "dynamic-programming",
+      "binary-search",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-minimum-size-subarray-sum": {
+    "links": [
+      "sliding-window-pattern",
+      "ds-array-matrix",
+      "binary-search",
+      "monotonic-stack-pattern",
+      "leetcode-sliding-window-maximum"
+    ],
+    "mentions": []
+  },
+  "leetcode-move-zeroes": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-sort-colors",
+      "leetcode-remove-duplicates-from-sorted-array"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "ds-array-matrix",
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-permutation-in-string": {
+    "links": [
+      "sliding-window-pattern",
+      "recursion-backtracking",
+      "leetcode-minimum-window-substring",
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-valid-anagram",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": [
+      "string-search-algorithms"
+    ]
+  },
+  "leetcode-product-of-array-except-self": {
+    "links": [
+      "leetcode-trapping-rain-water",
+      "leetcode-study-guide",
+      "ds-array-matrix",
+      "segment-tree-fenwick",
+      "leetcode-two-sum",
+      "leetcode-contains-duplicate",
+      "leetcode-top-k-frequent-elements"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-remove-duplicates-from-sorted-array": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-move-zeroes",
+      "binary-search",
+      "sorting-algorithms",
+      "ds-linked-list",
+      "leetcode-3sum",
+      "leetcode-contains-duplicate"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-sort-colors": {
+    "links": [
+      "two-pointers-pattern",
+      "sorting-algorithms",
+      "leetcode-move-zeroes",
+      "ds-linked-list",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "sd-maps-tiles-routing",
+      "js-destructuring",
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-valid-sudoku": {
+    "links": [
+      "leetcode-contains-duplicate",
+      "ds-hash-map",
+      "bit-manipulation",
+      "leetcode-two-sum",
+      "leetcode-n-queens",
+      "leetcode-set-matrix-zeroes"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
   "data-mesh-fabric": {
     "links": [
       "data-warehouse-architecture",
+      "data-engineering-lifecycle",
       "cdc-change-data-capture",
+      "data-catalog-lineage",
+      "data-quality-checks",
       "ddd-bounded-context",
       "microservices-decomposition"
     ],
@@ -25,10 +496,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "olap-star-schema",
       "db-type-columnar-olap",
       "data-lake-hdfs",
-      "event-driven-architecture"
+      "event-driven-architecture",
+      "data-quality-checks"
     ],
     "mentions": [
       "db-sharding",
+      "bi-semantic-layer",
       "sd-object-storage-architecture",
       "db-replication-sharding",
       "sd-mq-storage-partitions",
@@ -44,11 +517,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "etl-vs-elt",
       "data-warehouse-architecture",
+      "data-catalog-lineage",
       "olap-star-schema",
       "cdc-change-data-capture",
+      "data-quality-checks",
       "airflow-orchestration"
     ],
     "mentions": [
+      "reverse-etl",
       "kafka-to-lake-pipeline",
       "db-type-columnar-olap",
       "ds-graph-bfs-dfs"
@@ -64,11 +540,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "data-privacy-compliance",
       "cdc-change-data-capture",
       "clock-skew",
+      "data-quality-checks",
       "schema-versioning",
       "data-warehouse-architecture"
     ],
     "mentions": [
       "db-sharding",
+      "data-catalog-lineage",
       "mysql-replication-online-ddl",
       "sd-object-storage-architecture",
       "db-replication-sharding",
@@ -87,10 +565,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "batch-processing",
       "stream-processing",
       "sd-ad-click-stream-windows",
+      "data-quality-checks",
       "kafka-to-lake-pipeline",
       "data-lake-hdfs",
       "cdc-change-data-capture",
       "etl-vs-elt",
+      "data-engineering-lifecycle",
       "data-warehouse-architecture"
     ],
     "mentions": [
@@ -100,6 +580,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture",
       "kafka-basics",
       "db-type-columnar-olap",
+      "bi-semantic-layer",
       "code-review-practices",
       "postgres-architecture",
       "shells-posix-compat",
@@ -110,6 +591,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ml-model-evaluation",
       "git-large-files-secrets",
+      "ml-pipelines-ci-cd",
       "canary-release",
       "ml-model-monitoring-drift"
     ],
@@ -126,16 +608,18 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ml-model-evaluation",
       "ml-fundamentals",
       "observability-basics",
+      "model-serving",
       "explainable-ai-shap-lime",
       "prometheus-basics",
       "metrics-types",
       "alerting",
       "canary-release",
+      "ml-pipelines-ci-cd",
       "ml-experiment-tracking",
       "llm-observability"
     ],
     "mentions": [
-      "model-serving",
+      "data-quality-checks",
       "data-warehouse-architecture",
       "llm-evals",
       "linux-performance-triage",
@@ -155,6 +639,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dbt-transformations",
       "observability-basics",
+      "edge-ai-on-device",
       "data-warehouse-architecture",
       "ml-experiment-tracking",
       "db-type-key-value",
@@ -199,6 +684,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "llm-evals"
     ],
     "mentions": [
+      "data-quality-checks",
+      "ml-pipelines-ci-cd",
       "ml-experiment-tracking",
       "docker-container-basics",
       "bash-scripting",
@@ -245,6 +732,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-powx-n"
     ],
     "mentions": [
+      "seo-redirects-site-migration",
       "ds-linked-list",
       "js-memoization",
       "sql-aggregation-pitfalls",
@@ -1513,6 +2001,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-combination-sum",
       "recursion-backtracking",
       "leetcode-n-queens",
+      "leetcode-permutation-in-string",
       "leetcode-course-schedule"
     ],
     "mentions": [
@@ -3982,6 +4471,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "nextjs-static-dynamic-rendering",
       "nextjs-self-hosting-deployment",
+      "design-system-adoption-governance",
       "proxy-reverse-proxy",
       "ab-testing",
       "rendering-strategies",
@@ -5196,6 +5686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "micro-frontends",
+      "icon-system-svg",
       "event-delegation",
       "dom-basics",
       "rendering-strategies",
@@ -5816,6 +6307,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "css-flexbox-grid"
     ],
     "mentions": [
+      "ui-overlays-tooltip-dropdown-toast",
       "event-propagation",
       "design-system-building"
     ]
@@ -5846,6 +6338,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "aria-keyboard-focus",
       "web-accessibility",
+      "design-system-adoption-governance",
       "react-component-patterns",
       "rendering-strategies",
       "css-custom-properties",
@@ -5905,6 +6398,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-testing-strategy",
+      "icon-system-svg",
       "linters-formatters",
       "nodejs-web-frameworks",
       "rendering-strategies",
@@ -6188,6 +6682,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dom-basics",
       "react-useeffect",
+      "design-system-adoption-governance",
       "react-concurrent-transitions",
       "react-state-snapshot-batching",
       "js-function-forms",
@@ -6691,6 +7186,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-query-dsl",
       "sd-object-storage-architecture",
       "db-type-relational",
+      "bi-semantic-layer",
       "elasticsearch-mapping",
       "kafka-basics",
       "http-status-codes"
@@ -7850,6 +8346,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cors",
       "frontend-testing-strategy",
       "resource-hints-loading",
+      "icon-system-svg",
       "http-versions",
       "css-typography",
       "dns"
@@ -10574,6 +11071,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "js-numbers-bigint",
       "db-type-key-value",
+      "seo-redirects-site-migration",
       "mysql-innodb-basics",
       "sd-start-single-server",
       "db-type-relational",
@@ -17553,6 +18051,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "lighthouse-explained",
+      "core-component-api-design",
       "pattern-proxy"
     ]
   },
@@ -19216,6 +19715,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-data-types",
+      "data-quality-checks",
       "db-type-relational",
       "db-keys-denormalization",
       "sql-basics"

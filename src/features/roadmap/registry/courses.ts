@@ -211,6 +211,9 @@ export const COURSES: Course[] = [
       { label: "HTML과 CSS", roadmaps: ["frontend/html-css"] },
       { label: "접근성과 SEO", roadmaps: ["frontend/accessibility"] },
       { label: "UI·UX 패턴", roadmaps: ["frontend/ui-ux"] },
+      { label: "디자인 시스템과 컴포넌트", roadmaps: ["frontend/design-system"] },
+      { label: "UX 원칙과 리서치", roadmaps: ["frontend/ux"] },
+      { label: "검색 엔진 최적화", roadmaps: ["frontend/seo"] },
       { label: "성능", roadmaps: ["frontend/performance"] },
     ],
     next: [
