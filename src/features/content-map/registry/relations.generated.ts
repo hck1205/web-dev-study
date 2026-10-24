@@ -2,6 +2,43 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "leetcode-index-pairs-of-a-string": {
+    "links": [
+      "leetcode-implement-trie",
+      "string-search-algorithms",
+      "leetcode-extra-characters-in-a-string",
+      "leetcode-replace-words",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-merge-intervals",
+      "leetcode-word-search-ii"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-palindrome-pairs": {
+    "links": [
+      "leetcode-implement-trie",
+      "leetcode-longest-palindromic-substring",
+      "leetcode-valid-palindrome",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": [
+      "js-strings-unicode"
+    ]
+  },
+  "leetcode-search-suggestions-system": {
+    "links": [
+      "leetcode-implement-trie",
+      "sd-autocomplete-trie",
+      "binary-search",
+      "two-pointers-pattern",
+      "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-longest-common-prefix",
+      "leetcode-binary-search"
+    ],
+    "mentions": []
+  },
   "leetcode-alien-dictionary": {
     "links": [
       "leetcode-course-schedule",
@@ -130,6 +167,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-implement-trie",
       "leetcode-replace-words",
       "string-search-algorithms",
+      "leetcode-index-pairs-of-a-string",
       "leetcode-palindrome-partitioning"
     ],
     "mentions": [
@@ -336,6 +374,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "string-search-algorithms",
       "monotonic-stack-pattern",
       "leetcode-longest-common-prefix",
+      "leetcode-search-suggestions-system",
       "leetcode-largest-rectangle-in-histogram"
     ],
     "mentions": [
@@ -581,7 +620,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "leetcode-palindrome-partitioning",
       "leetcode-longest-common-subsequence",
-      "string-search-algorithms"
+      "string-search-algorithms",
+      "leetcode-palindrome-pairs"
     ],
     "mentions": [
       "sql-aggregation-pitfalls",
@@ -1083,7 +1123,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rendering-csr-spa",
-      "input-validation-secure-coding",
       "character-encoding-unicode",
       "ds-graph-bfs-dfs",
       "k8s-deploy-pipeline-eks",
@@ -1287,7 +1326,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "web-components-shadow-dom",
-      "core-component-api-design",
       "frontend-testing-strategy",
       "css-sticky-scroll-snap",
       "client-data-cache",
@@ -1384,7 +1422,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "data-lake-hdfs",
       "sql-basics",
-      "habit-features-progress-reminders",
       "sd-payment-reliability",
       "alerting",
       "postgres-getting-started",
@@ -1542,7 +1579,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key"
     ],
     "mentions": [
-      "core-component-api-design",
       "data-privacy-compliance",
       "behavior-design-models",
       "web-accessibility"
@@ -2389,7 +2425,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ab-testing"
     ],
     "mentions": [
-      "deep-learning-basics",
       "vector-db"
     ]
   },
@@ -2772,7 +2807,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-implement-trie",
       "binary-search",
       "leetcode-replace-words",
-      "leetcode-sum-of-prefix-scores-of-strings"
+      "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-search-suggestions-system"
     ],
     "mentions": [
       "string-search-algorithms",
@@ -2831,6 +2867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-implement-trie",
       "leetcode-longest-common-prefix",
+      "leetcode-index-pairs-of-a-string",
       "ds-trie",
       "leetcode-extra-characters-in-a-string",
       "leetcode-word-break"
@@ -3199,7 +3236,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-implement-trie",
       "ds-trie",
-      "leetcode-word-search-ii"
+      "leetcode-word-search-ii",
+      "leetcode-search-suggestions-system"
     ],
     "mentions": [
       "ds-graph-bfs-dfs",
@@ -3214,6 +3252,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie",
       "binary-search",
       "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-search-suggestions-system",
       "sd-autocomplete-trie",
       "leetcode-longest-common-prefix"
     ],
@@ -3384,7 +3423,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-implement-trie",
       "recursion-backtracking",
       "leetcode-design-add-and-search-words",
-      "leetcode-number-of-islands"
+      "leetcode-number-of-islands",
+      "leetcode-palindrome-pairs"
     ],
     "mentions": [
       "ds-trie",
@@ -4348,6 +4388,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "wifi-standards-security",
       "wifi-design-channels-roaming",
+      "pub-sub",
       "latency-bandwidth-throughput",
       "https-tls"
     ],
@@ -7161,7 +7202,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nodejs-orm-query-builder",
       "jpa-persistence-context",
       "js-spread-rest",
-      "input-validation-secure-coding",
       "api-security-owasp-api-top10",
       "ddd-bounded-context",
       "pattern-proxy"
@@ -7506,7 +7546,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "ids-ips",
-      "input-validation-secure-coding",
       "character-encoding-unicode",
       "js-numbers-bigint",
       "event-loop",
@@ -10799,7 +10838,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "data-privacy-compliance",
-      "input-validation-secure-coding",
       "character-encoding-unicode",
       "k8s-deploy-pipeline-eks",
       "threat-modeling-stride",
@@ -12249,7 +12287,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
-      "input-validation-secure-coding",
       "character-encoding-unicode",
       "sd-start-single-server",
       "lossy-counting",
@@ -16050,7 +16087,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "chaos-engineering"
     ],
     "mentions": [
-      "habit-features-progress-reminders",
       "osi-in-practice",
       "webhooks"
     ]
@@ -16307,7 +16343,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cron-jobs",
       "service-discovery",
-      "habit-features-progress-reminders",
       "webhooks"
     ]
   },

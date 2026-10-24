@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 1131편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 1134편 · 토픽 128개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -340,12 +340,12 @@
 
 - 요약: 손글씨 숫자를 맞히는 작은 신경망을 직접 짜서 순전파, 손실, 역전파, 갱신의 반복을 따라간다. 학습률·배치 크기·에폭과 Adam을 바꿔 돌린 결과, 기울기 소실, GPU가 빠른 이유, 학습 메모리 계산과 혼합 정밀도, PyTorch와 TensorFlow의 차이를 다룬다.
 - 태그: AI, Python, Performance
-- 키워드: 역전파, 경사 하강, 기울기 소실, 혼합 정밀도
+- 키워드: 역전파, 기울기 소실, 혼합 정밀도
 - 길이: 411줄
 - 소제목: 규칙을 적는 대신 숫자를 고친다 / 한 바퀴: 순전파, 손실, 역전파, 갱신 / 같은 반복을 수백 번 하면 / 걸음 크기: 학습률 / 한 번에 몇 장 보고 고칠까: 배치 크기 / 몇 바퀴 돌까: 에폭과 멈출 때 / 깊이 쌓으면 앞쪽 층이 안 배운다: 기울기 소실 / SGD 대신 Adam을 많이 쓰는 이유 / 같은 코드를 PyTorch로 / GPU가 빠른 이유는 행렬 곱이다 / 학습은 추론보다 메모리를 훨씬 많이 먹는다 / 16비트로 학습하기: 혼합 정밀도 / PyTorch와 TensorFlow는 어디가 다른가 / 다시 반복문 하나로 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-basics-for-developers, transformer-attention-kv-cache, k8s-gpu-dra, fine-tuning-vs-rag-vs-prompting, model-serving, floating-point-numbers, what-is-mlops, explainable-ai-shap-lime
 - 키워드 백링크 →: n-plus-one-queries, ml-experiment-tracking, ml-fundamentals, postgres-architecture, self-hosting-llm-inference, cpu-pipelining-branch-prediction, db-modeling-normalization
-- 이 글로 오는 글 ←: edge-ai-on-device, explainable-ai-shap-lime, ml-fundamentals, model-serving, what-is-mlops
+- 이 글로 오는 글 ←: edge-ai-on-device, explainable-ai-shap-lime, model-serving, what-is-mlops
 
 #### `explainable-ai-shap-lime` — 모델 설명하기: SHAP과 LIME은 예측을 어떻게 쪼개나
 
@@ -366,7 +366,7 @@
 - 길이: 360줄
 - 소제목: 규칙을 쓰는 대신 예시에서 규칙을 찾는다 / 시험지를 훔쳐보지 않게 데이터를 셋으로 나눈다 / 외운 모델과 이해한 모델 / 편향과 분산은 서로 당긴다 / 가중치에 벌금을 매긴다 / 경사 하강: 기울기를 따라 조금씩 내려간다 / 개발자가 챙길 통계 몇 가지 / 누수 1: 결과가 남긴 흔적을 특징으로 썼다 / 누수 2: 나누기 전에 전처리했다 / 누수 3: 시간을 섞어 나눴다 / 같은 사람이 양쪽에 있으면 / 모델을 넘기기 전에 확인하는 것 / 점수보다 나누는 법이 먼저다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ml-model-evaluation, embedding-models-applications, llm-evals, ab-testing
-- 키워드 백링크 →: deep-learning-basics, vector-db
+- 키워드 백링크 →: vector-db
 - 이 글로 오는 글 ←: deep-learning-basics, explainable-ai-shap-lime, fine-tuning-vs-rag-vs-prompting, ml-model-evaluation, ml-model-monitoring-drift, model-serving
 
 #### `ml-model-evaluation` — 모델 평가: 정확도가 속이는 순간, 정밀도·재현율·AUC와 교차 검증
@@ -959,9 +959,9 @@
 - 키워드: (없음)
 - 길이: 499줄
 - 소제목: 이어진 구간 중 가장 긴 회문 / 거울을 세울 자리를 손으로 찾아 본다 / 모든 구간을 잘라서 확인한다 / 안쪽이 회문이면 바깥은 양 끝만 보면 된다 / 거울 자리에서 양손을 벌린다 / Python과 Java로 옮긴 중심 확장 / 이미 본 거울 안쪽을 다시 재지 않는다 (Manacher) / 다섯 풀이를 비교 횟수로 줄 세우면 / 회문 찾기에서 틀리는 코드 / 회문을 직접 넓혀 보기 / 회문 문제가 옆으로 번질 때 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-valid-palindrome, two-pointers-pattern, dynamic-programming, leetcode-palindrome-partitioning, leetcode-longest-common-subsequence, string-search-algorithms
+- 직접 링크 →: leetcode-valid-palindrome, two-pointers-pattern, dynamic-programming, leetcode-palindrome-partitioning, leetcode-longest-common-subsequence, string-search-algorithms, leetcode-palindrome-pairs
 - 키워드 백링크 →: sql-aggregation-pitfalls, big-o-notation, binary-search
-- 이 글로 오는 글 ←: leetcode-longest-common-subsequence, leetcode-palindrome-partitioning
+- 이 글로 오는 글 ←: leetcode-longest-common-subsequence, leetcode-palindrome-pairs, leetcode-palindrome-partitioning
 
 #### `leetcode-maximum-product-subarray` — LeetCode 152. Maximum Product Subarray: 가장 작은 곱도 버리지 않는다
 
@@ -1371,7 +1371,7 @@
 - 소제목: 모든 조각이 회문이 되게 자르는 방법 / "abba"를 손으로 잘라 보면 / 자를 틈마다 자를지 말지 정하기 / 앞에서 회문 조각을 하나 떼고 나머지를 맡긴다 / 회문인지를 미리 표로 만들어 둔다 / 가운데에서 넓혀 가며 회문을 모은다 / 뒤쪽 답을 먼저 만들어 앞에 붙인다 / 다섯 풀이를 "aaaa…"로 재 보면 / 조각이 비어 나오거나 회문을 놓치는 코드 / 문제를 살짝 바꾸면 / 해시태그를 단어로 나누는 코드와 같은 모양 / 앞 조각을 떼고, 회문 확인은 표에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-subsets, leetcode-combination-sum, recursion-backtracking, dynamic-programming, bit-manipulation, leetcode-longest-palindromic-substring, leetcode-word-break, leetcode-valid-palindrome
 - 키워드 백링크 →: js-memoization, big-o-notation
-- 이 글로 오는 글 ←: leetcode-decode-ways, leetcode-extra-characters-in-a-string, leetcode-longest-palindromic-substring, leetcode-word-break
+- 이 글로 오는 글 ←: leetcode-decode-ways, leetcode-extra-characters-in-a-string, leetcode-longest-palindromic-substring, leetcode-palindrome-pairs, leetcode-word-break
 
 #### `leetcode-permutations` — LeetCode 46. Permutations: 쓴 것을 표시하고 바꾼 것은 모두 되돌린다
 
@@ -1439,7 +1439,7 @@
 - 소제목: 여덟 칸에서 17을 손으로 찾아보기 / 처음부터 끝까지 훑기 / 가운데를 보고 절반을 버린다: 재귀 / 반복문으로 옮기고 닫힌 구간을 끝까지 지킨다 / 경계를 먼저 찾고 나중에 확인한다: 반열린 구간 / 표준 라이브러리에 맡기기 / 실제로 얼마나 빨라지나 / 다섯 풀이를 한 표에 / 이렇게 짜면 틀린다 / 직접 풀어 보기 / 면접관이 이어서 묻는 것 / 구간 하나를 정하면 코드가 따라온다 / 면접에서 나올 만한 질문
 - 직접 링크 →: binary-search, recursion-backtracking, sorting-algorithms, big-o-notation, leetcode-search-in-rotated-sorted-array, leetcode-find-minimum-in-rotated-sorted-array, leetcode-koko-eating-bananas, leetcode-median-of-two-sorted-arrays, leetcode-study-guide
 - 키워드 백링크 →: sql-aggregation-pitfalls, sql-filtering-operators, bit-manipulation
-- 이 글로 오는 글 ←: leetcode-capacity-to-ship-packages-within-d-days, leetcode-find-first-last-position-sorted-array, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-koko-eating-bananas, leetcode-longest-increasing-subsequence, leetcode-median-of-two-sorted-arrays, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-time-based-key-value-store
+- 이 글로 오는 글 ←: leetcode-capacity-to-ship-packages-within-d-days, leetcode-find-first-last-position-sorted-array, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-koko-eating-bananas, leetcode-longest-increasing-subsequence, leetcode-median-of-two-sorted-arrays, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-search-suggestions-system, leetcode-time-based-key-value-store
 
 #### `leetcode-capacity-to-ship-packages-within-d-days` — LeetCode 1011. Capacity To Ship Packages Within D Days: 용량을 정하면 날수는 그리디로 센다
 
@@ -2045,7 +2045,7 @@
 - 소제목: 순서 없는 구간을 겹치지 않게 정리한다 / 테이프 다섯 조각을 손으로 합쳐 본다 / 겹치는 짝이 없어질 때까지 합친다 / 겹치는 구간끼리 선을 그어 덩어리를 찾는다 / 시작 순으로 줄을 세우고 마지막 띠와만 비교한다 / 시작과 끝을 따로 정렬해도 된다 / 값 범위가 작으면 칸에 표시한다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 자주 틀리는 세 군데 / 풀이 비교 / 실제 코드에서 합치기가 필요한 순간 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-insert-interval, leetcode-meeting-rooms, interval-problems-pattern, ds-graph-bfs-dfs, ds-union-find, leetcode-non-overlapping-intervals, leetcode-meeting-rooms-ii, leetcode-car-pooling, leetcode-merge-two-sorted-lists, leetcode-interval-list-intersections, leetcode-employee-free-time, leetcode-partition-labels
 - 키워드 백링크 →: ds-binary-tree-bst, sorting-algorithms, ds-array-matrix, js-shallow-deep-copy
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-car-fleet, leetcode-car-pooling, leetcode-employee-free-time, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-longest-consecutive-sequence, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals, leetcode-partition-labels
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-car-fleet, leetcode-car-pooling, leetcode-employee-free-time, leetcode-index-pairs-of-a-string, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-longest-consecutive-sequence, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-minimum-interval-to-include-each-query, leetcode-non-overlapping-intervals, leetcode-partition-labels
 
 #### `leetcode-minimum-interval-to-include-each-query` — LeetCode 1851. Minimum Interval to Include Each Query: 질의를 정렬하면 끝난 구간은 버려도 된다
 
@@ -2078,7 +2078,7 @@
 - 소제목: 최소로 지운다는 건 최대로 남긴다는 뜻이다 / 체육관 예약 다섯 개를 손으로 골라 본다 / 남길 조합을 전부 시험한다 / 마지막에 남긴 구간으로 상태를 정한다 / 남기거나 건너뛰거나, 재귀로 내려간다 / 이분 탐색으로 앞 구간을 바로 찾는다 / 가장 일찍 끝나는 구간을 남긴다 / 시작 순으로 정렬해도 된다, 대신 늦게 끝나는 쪽을 버린다 / 짧은 것부터 남기면 틀린다 / Python과 Java로 옮기기 / 직접 풀어 보기 / 실제로 틀리는 줄들 / 이 판단이 실제로 쓰이는 곳 / 풀이 비교 / 면접관이 조건을 바꾸면 / 면접에서 나올 만한 질문
 - 직접 링크 →: interval-problems-pattern, greedy-algorithms, leetcode-merge-intervals, leetcode-meeting-rooms, bit-manipulation, leetcode-longest-increasing-subsequence, dynamic-programming, binary-search, leetcode-my-calendar-i, leetcode-meeting-rooms-ii, leetcode-insert-interval, leetcode-minimum-interval-to-include-each-query
 - 키워드 백링크 →: ds-binary-tree-bst, js-memoization
-- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-insert-interval, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query
+- 이 글로 오는 글 ←: interval-problems-pattern, leetcode-index-pairs-of-a-string, leetcode-insert-interval, leetcode-meeting-rooms, leetcode-meeting-rooms-ii, leetcode-merge-intervals, leetcode-minimum-interval-to-include-each-query
 
 ### Programming › Algorithms › LeetCode › Linked List (`programming/algorithms/leetcode/linked-list`)
 
@@ -2662,7 +2662,7 @@
 - 키워드: (없음)
 - 길이: 555줄
 - 소제목: 점은 아무 글자 하나 / 단어마다 한 글자씩 맞춰 보기 / 길이가 다르면 볼 필요도 없다 / 점을 미리 찍어 두면 검색이 한 번에 끝난다 / 트라이에서 점을 만나면 갈래를 전부 시도한다 / 재귀 없이 한 글자씩 넓혀 가기 / 다섯 풀이를 재 보면 / 다섯 풀이를 나란히 놓으면 / 첫 갈래만 보고 돌아오는 실수 / 면접관이 이어서 묻는 것 / 모르는 글자에서만 갈래를 늘린다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, ds-trie, leetcode-word-search-ii
+- 직접 링크 →: leetcode-implement-trie, ds-trie, leetcode-word-search-ii, leetcode-search-suggestions-system
 - 키워드 백링크 →: ds-graph-bfs-dfs, js-memoization
 - 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-word-search-ii
 
@@ -2673,9 +2673,9 @@
 - 키워드: (없음)
 - 길이: 522줄
 - 소제목: 사전 단어로 덮고 남는 글자 세기 / 끊는 방법을 전부 해 보는 재귀 / 같은 자리를 다시 풀지 않게 적어 두기 / 앞에서부터 채우는 표와 끝에서부터 채우는 표 / 시작 위치마다 트라이를 한 번만 내려가기 / 다섯 풀이를 한 줄씩 대 보면 / 2,000글자로 늘려 재 보면 / 직접 dp 칸을 채워 보기 / 눈앞의 가장 긴 단어를 덮으면 틀린다 / 조건을 바꾸어 묻는 꼬리 질문 / 버리기와 덮기를 뒤에서부터 비교한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-word-break, dynamic-programming, ds-trie, leetcode-implement-trie, leetcode-replace-words, string-search-algorithms, leetcode-palindrome-partitioning
+- 직접 링크 →: leetcode-word-break, dynamic-programming, ds-trie, leetcode-implement-trie, leetcode-replace-words, string-search-algorithms, leetcode-index-pairs-of-a-string, leetcode-palindrome-partitioning
 - 키워드 백링크 →: big-o-notation, recursion-backtracking
-- 이 글로 오는 글 ←: leetcode-replace-words, leetcode-word-break
+- 이 글로 오는 글 ←: leetcode-index-pairs-of-a-string, leetcode-replace-words, leetcode-word-break
 
 #### `leetcode-implement-trie` — LeetCode 208. Implement Trie (Prefix Tree): 같은 접두사는 노드 하나로 나눠 쓴다
 
@@ -2684,9 +2684,20 @@
 - 키워드: (없음)
 - 길이: 642줄
 - 소제목: 세 연산과 끝 표시 하나 / 단어를 배열에 쌓아 두고 다 훑기 / 접두사까지 전부 집합에 넣어 두면 / 정렬해 두고 이진 탐색으로 찾기 / 글자마다 갈림길을 만든다 / 자식을 26칸 배열로 고정하면 / 노드를 객체 대신 정수 번호로 / 메모리를 재 보면 / 여섯 풀이를 나란히 놓으면 / 끝 표시와 길 끊김에서 틀린다 / 면접관이 이어서 묻는 것 / 같은 접두사는 한 번만 저장한다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-design-add-and-search-words, leetcode-word-search-ii, leetcode-replace-words, ds-trie, binary-search, leetcode-sum-of-prefix-scores-of-strings, sd-autocomplete-trie, leetcode-longest-common-prefix
+- 직접 링크 →: leetcode-design-add-and-search-words, leetcode-word-search-ii, leetcode-replace-words, ds-trie, binary-search, leetcode-sum-of-prefix-scores-of-strings, leetcode-search-suggestions-system, sd-autocomplete-trie, leetcode-longest-common-prefix
 - 키워드 백링크 →: process-vs-thread, layer-ip-routing-icmp, ds-hash-map
-- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-extra-characters-in-a-string, leetcode-longest-common-prefix, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-word-break, leetcode-word-search-ii
+- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-extra-characters-in-a-string, leetcode-index-pairs-of-a-string, leetcode-longest-common-prefix, leetcode-palindrome-pairs, leetcode-replace-words, leetcode-search-suggestions-system, leetcode-sum-of-prefix-scores-of-strings, leetcode-word-break, leetcode-word-search-ii
+
+#### `leetcode-index-pairs-of-a-string` — LeetCode 1065. Index Pairs of a String: 시작 위치마다 트라이를 내려가면 순서도 따라온다
+
+- 요약: 텍스트에서 단어 목록의 단어가 나오는 위치를 모두 찾는 문제를 모든 부분 문자열 확인, 단어마다 indexOf, 시작 위치마다 트라이, 텍스트를 한 번만 읽는 아호-코라식 네 가지로 푼다. 겹치는 등장을 놓치는 실수와 JS 기본 정렬의 함정, grep과 정규식이 겹친 단어를 내놓지 않는 이유도 함께 본다.
+- 태그: LeetCode, Trie, String, Algorithm
+- 키워드: (없음)
+- 길이: 502줄
+- 소제목: 텍스트 안의 단어 위치를 모두 적는다 / 모든 부분 문자열을 집합에 묻기 / 단어마다 indexOf로 찾기 / 시작 위치마다 트라이를 내려가기 / 텍스트를 한 번만 훑는 아호-코라식 / 텍스트를 10만 글자로 늘려 재 보면 / 네 풀이를 나란히 세우면 / 기본 정렬은 배열을 글자로 비교한다 / 직접 텍스트에서 단어를 찾아 보기 / 멈추거나 건너뛰면 겹친 단어를 놓친다 / 단어가 수천 개이거나 텍스트가 흘러들어 오면 / 시작 위치마다 내려가면 순서도 따라온다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-implement-trie, string-search-algorithms, leetcode-extra-characters-in-a-string, leetcode-replace-words, leetcode-non-overlapping-intervals, leetcode-merge-intervals, leetcode-word-search-ii
+- 키워드 백링크 →: message-delivery-semantics
+- 이 글로 오는 글 ←: leetcode-extra-characters-in-a-string, leetcode-replace-words
 
 #### `leetcode-longest-common-prefix` — LeetCode 14. Longest Common Prefix: 다른 글자를 만나는 순간 멈춘다
 
@@ -2695,9 +2706,20 @@
 - 키워드: (없음)
 - 길이: 500줄
 - 소제목: 모두가 함께 가진 앞부분 / 하나씩 비교하며 줄여 나가기 / 세로로 한 칸씩 훑는다 / 반으로 나눠 합치기 / 길이를 이진 탐색한다 / 정렬하면 처음과 끝만 보면 된다 / 정렬하지 않고 가장 작은 것과 가장 큰 것만 / 트라이로 갈림길까지 내려가기 / 글자 비교 횟수를 세어 보면 / 일곱 풀이를 나란히 놓으면 / 짧은 문자열과 빈 문자열에서 틀린다 / 면접관이 이어서 묻는 것 / 다른 글자를 만나는 순간 멈춘다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, binary-search, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings
+- 직접 링크 →: leetcode-implement-trie, binary-search, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-search-suggestions-system
 - 키워드 백링크 →: string-search-algorithms, divide-and-conquer, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-implement-trie, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings
+- 이 글로 오는 글 ←: leetcode-bitwise-and-of-numbers-range, leetcode-implement-trie, leetcode-replace-words, leetcode-search-suggestions-system, leetcode-sum-of-prefix-scores-of-strings
+
+#### `leetcode-palindrome-pairs` — LeetCode 336. Palindrome Pairs: 긴 쪽은 뒤집은 짝과 회문으로 쪼개진다
+
+- 요약: 붙였을 때 회문이 되는 단어 순서쌍을 모든 쌍 확인, 자르는 자리마다 해시맵에 묻기, 뒤집은 단어 트라이와 DFS, 노드마다 회문 목록을 적어 둔 트라이 네 가지로 푼다. 같은 쌍을 두 번 세는 경계와 빈 문자열, 자기 자신과의 짝 같은 함정, 그리고 재 보면 해시맵이 트라이보다 빠른 이유도 함께 본다.
+- 태그: LeetCode, Trie, Hash Table, Algorithm
+- 키워드: (없음)
+- 길이: 511줄
+- 소제목: 붙였을 때 회문이 되는 순서쌍 / 모든 쌍을 붙여 보기 / 회문을 가운데에서 쪼개 보면 / 단어를 자르는 자리마다 해시맵에 묻기 / 뒤집은 단어의 트라이를 내려가기 / 트라이가 해시맵보다 느린 이유 / 네 풀이가 드는 비용 / 짝을 찾아 붙여 보기 / 자기 자신과 짝짓거나 통째로만 뒤집으면 틀린다 / 개수만 세거나 단어가 늘어나면 / 뒤집은 짝과 남는 회문으로 쪼갠다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-implement-trie, leetcode-longest-palindromic-substring, leetcode-valid-palindrome, leetcode-palindrome-partitioning
+- 키워드 백링크 →: js-strings-unicode
+- 이 글로 오는 글 ←: leetcode-longest-palindromic-substring, leetcode-word-search-ii
 
 #### `leetcode-replace-words` — LeetCode 648. Replace Words: 처음 만나는 끝 표시가 가장 짧은 어근이다
 
@@ -2706,9 +2728,19 @@
 - 키워드: (없음)
 - 길이: 502줄
 - 소제목: 가장 짧은 어근으로 바꾼다 / 단어마다 어근을 전부 맞춰 보기 / 짧은 어근부터 정렬해 두기 / 앞부분을 잘라서 집합에 물어보기 / 첫 끝 표시에서 멈추는 트라이 / 문장을 쪼개지 않고 한 번만 훑기 / 다섯 풀이를 재 보면 / 다섯 풀이를 나란히 놓으면 / 끝까지 내려가거나 처음 것을 놓친다 / 면접관이 이어서 묻는 것 / 처음 만나는 끝 표시가 답이다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, leetcode-longest-common-prefix, ds-trie, leetcode-extra-characters-in-a-string, leetcode-word-break
+- 직접 링크 →: leetcode-implement-trie, leetcode-longest-common-prefix, leetcode-index-pairs-of-a-string, ds-trie, leetcode-extra-characters-in-a-string, leetcode-word-break
 - 키워드 백링크 →: layer-ip-routing-icmp, string-search-algorithms
-- 이 글로 오는 글 ←: leetcode-extra-characters-in-a-string, leetcode-implement-trie, leetcode-longest-common-prefix
+- 이 글로 오는 글 ←: leetcode-extra-characters-in-a-string, leetcode-implement-trie, leetcode-index-pairs-of-a-string, leetcode-longest-common-prefix
+
+#### `leetcode-search-suggestions-system` — LeetCode 1268. Search Suggestions System: 정렬하면 덩어리는 좁아지기만 한다
+
+- 요약: 검색어를 한 글자씩 칠 때마다 사전 순 앞의 상품 세 개를 고르는 문제를 매번 거르기, 정렬 후 거르기, 이진 탐색, 투 포인터, 트라이와 DFS, 노드마다 상위 3개를 적은 트라이 여섯 가지로 푼다. 이 문제에서는 정렬 풀이가 트라이보다 빠른데 실제 자동완성은 트라이를 쓰는 이유와 정렬 없이 넣는 실수도 함께 본다.
+- 태그: LeetCode, Trie, Binary Search, Two Pointers, Algorithm
+- 키워드: (없음)
+- 길이: 530줄
+- 소제목: 글자를 칠 때마다 앞의 세 개 / 칠 때마다 전부 거르고 정렬하기 / 한 번 정렬하고 앞에서부터 거르기 / 덩어리의 시작을 이진 탐색으로 찾기 / 덩어리를 양쪽에서 좁혀 오기 / 트라이로 내려가서 DFS로 세 개 찾기 / 노드마다 앞의 세 개를 적어 두기 / 문제에서는 정렬이, 서비스에서는 트라이가 이긴다 / 여섯 풀이를 비용으로 정리하면 / 칠 때마다 세 개 추천하기 / 정렬을 빼먹거나 끊긴 노드를 계속 따라가면 / 점수 순이거나 한글이 섞이면 / 덩어리는 좁아지기만 한다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-implement-trie, sd-autocomplete-trie, binary-search, two-pointers-pattern, leetcode-sum-of-prefix-scores-of-strings, leetcode-longest-common-prefix, leetcode-binary-search
+- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-implement-trie, leetcode-longest-common-prefix, leetcode-sum-of-prefix-scores-of-strings
 
 #### `leetcode-sum-of-prefix-scores-of-strings` — LeetCode 2416. Sum of Prefix Scores of Strings: 지나간 단어 수를 노드마다 세어 둔다
 
@@ -2716,10 +2748,10 @@
 - 태그: LeetCode, Trie, Hash Table, Algorithm
 - 키워드: (없음)
 - 길이: 513줄
-- 소제목: 앞부분마다 같은 앞부분을 가진 단어 수 / 앞부분마다 단어를 전부 맞춰 보기 / 앞부분 문자열을 해시맵에 세어 두기 / 문자열 대신 해시값을 이어서 계산하기 / 지나간 단어 수를 든 트라이 / 정렬하면 공통 접두사 길이의 합이 된다 / 1,000글자 단어 1,000개로 잰 다섯 풀이 / 직접 count를 올려 보기 / 끝 노드에만 세거나 중복을 지우면 틀린다 / 조건을 바꾸어 묻는 꼬리 질문 / 지나간 수를 세어 두면 점수가 길 위에 있다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-implement-trie, string-search-algorithms, monotonic-stack-pattern, leetcode-longest-common-prefix, leetcode-largest-rectangle-in-histogram
+- 소제목: 앞부분마다 같은 앞부분을 가진 단어 수 / 앞부분마다 단어를 전부 맞춰 보기 / 앞부분 문자열을 해시맵에 세어 두기 / 문자열 대신 해시값을 이어서 계산하기 / 지나간 단어 수를 든 트라이 / 정렬하면 공통 접두사 길이의 합이 된다 / 1,000글자 단어 1,000개로 잰 다섯 풀이 / 직접 count를 올려 보기 / 끝 노드에만 세거나 중복을 지우면 틀린다 / 단어가 늘거나 뒤에서 세라면 / 지나간 수를 세어 두면 점수가 길 위에 있다 / 면접에서 나올 만한 질문
+- 직접 링크 →: leetcode-implement-trie, string-search-algorithms, monotonic-stack-pattern, leetcode-longest-common-prefix, leetcode-search-suggestions-system, leetcode-largest-rectangle-in-histogram
 - 키워드 백링크 →: ds-stack-queue-deque, sd-autocomplete-trie, core-web-vitals
-- 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-longest-common-prefix
+- 이 글로 오는 글 ←: leetcode-implement-trie, leetcode-longest-common-prefix, leetcode-search-suggestions-system
 
 #### `leetcode-word-search-ii` — LeetCode 212. Word Search II: 판을 한 번만 걷고 찾은 가지는 잘라 낸다
 
@@ -2728,9 +2760,9 @@
 - 키워드: (없음)
 - 길이: 574줄
 - 소제목: 판 하나에 단어 여러 개 / 단어마다 Word Search를 돌리면 / 판에 없는 글자부터 걸러 낸다 / 판을 한 번만 걷고 단어를 함께 맞춘다 / 트라이를 판 위의 길과 함께 내려간다 / 찾은 단어는 트라이에서 떼어 낸다 / 고약한 입력으로 재 보면 / 다섯 풀이를 나란히 놓으면 / 같은 단어가 두 번 나오고, 판이 망가진다 / 면접관이 이어서 묻는 것 / 판을 한 번만 걷고, 찾은 가지는 버린다 / 면접에서 나올 만한 질문
-- 직접 링크 →: leetcode-word-search, leetcode-implement-trie, recursion-backtracking, leetcode-design-add-and-search-words, leetcode-number-of-islands
+- 직접 링크 →: leetcode-word-search, leetcode-implement-trie, recursion-backtracking, leetcode-design-add-and-search-words, leetcode-number-of-islands, leetcode-palindrome-pairs
 - 키워드 백링크 →: ds-trie, ds-graph-bfs-dfs
-- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-implement-trie, leetcode-word-break, leetcode-word-search
+- 이 글로 오는 글 ←: leetcode-design-add-and-search-words, leetcode-implement-trie, leetcode-index-pairs-of-a-string, leetcode-word-break, leetcode-word-search
 
 ### Programming › Algorithms › LeetCode › Two Pointers (`programming/algorithms/leetcode/two-pointers`)
 
@@ -2842,7 +2874,7 @@
 - 소제목: 무엇을 같은 글자로 볼 것인가 / 깨끗하게 만든 뒤 뒤집어 본다 / 사본은 하나만 두고 양 끝에서 맞춰 본다 / 재귀로도 같은 비교를 할 수 있다 / 원본 위에서 건너뛰며 비교한다 / toLowerCase도 빼고 숫자로만 비교한다 / 직접 짜 보기 / 다섯 풀이를 나란히 놓으면 / 여기서 자주 틀린다 / 면접관이 이어서 바꾸는 문제들 / 사본 없이, 경계를 지키며 / 면접에서 나올 만한 질문
 - 직접 링크 →: two-pointers-pattern, recursion-backtracking, big-o-notation, dynamic-programming, leetcode-reverse-linked-list, leetcode-two-sum-ii, leetcode-3sum
 - 키워드 백링크 →: js-strings-unicode, ds-linked-list, string-search-algorithms, ds-array-matrix
-- 이 글로 오는 글 ←: leetcode-longest-palindromic-substring, leetcode-palindrome-partitioning, two-pointers-pattern
+- 이 글로 오는 글 ←: leetcode-longest-palindromic-substring, leetcode-palindrome-pairs, leetcode-palindrome-partitioning, two-pointers-pattern
 
 #### `two-pointers-pattern` — 투 포인터 패턴: 양 끝, 같은 방향, 두 줄 세 가지 모양
 
@@ -2853,7 +2885,7 @@
 - 소제목: 포인터 두 개를 어디에 두나 / 양 끝에서 좁혀 오기 / 한 칸을 버려도 답을 놓치지 않는 이유 / 같은 방향으로 달리는 두 포인터 / 두 줄을 나란히 훑기 / 투 포인터를 쓰면 안 될 때 / 찾기에서 세기로 / 자주 틀리는 곳 / 포인터가 셋이 되는 경우 / 빗물 문제에서 만나는 다른 쓰임 / 문제 문장에서 신호 찾기 / 같은 틀을 Python과 Java로 / 이 묶음의 문제들 / 면접에서 나올 만한 질문
 - 직접 링크 →: leetcode-study-guide, ds-array-matrix, sliding-window-pattern, leetcode-valid-palindrome, leetcode-two-sum-ii, leetcode-3sum, leetcode-container-with-most-water, ds-linked-list, leetcode-linked-list-cycle, leetcode-reorder-list, sorting-algorithms, interval-problems-pattern, leetcode-two-sum, leetcode-trapping-rain-water, monotonic-stack-pattern, leetcode-median-of-two-sorted-arrays
 - 키워드 백링크 →: binary-search, ds-stack-queue-deque
-- 이 글로 오는 글 ←: ds-array-matrix, ds-hash-map, interval-problems-pattern, js-loops-control-flow, leetcode-3sum, leetcode-4sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-container-with-most-water, leetcode-employee-free-time, leetcode-gas-station, leetcode-interval-list-intersections, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-subsequence, leetcode-longest-palindromic-substring, leetcode-median-of-two-sorted-arrays, leetcode-move-zeroes, leetcode-regular-expression-matching, leetcode-remove-duplicates-from-sorted-array, leetcode-reorder-list, leetcode-reverse-bits, leetcode-sort-colors, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, monotonic-stack-pattern, sliding-window-pattern
+- 이 글로 오는 글 ←: ds-array-matrix, ds-hash-map, interval-problems-pattern, js-loops-control-flow, leetcode-3sum, leetcode-4sum, leetcode-best-time-to-buy-and-sell-stock, leetcode-boats-to-save-people, leetcode-container-with-most-water, leetcode-employee-free-time, leetcode-gas-station, leetcode-interval-list-intersections, leetcode-largest-rectangle-in-histogram, leetcode-longest-common-subsequence, leetcode-longest-palindromic-substring, leetcode-median-of-two-sorted-arrays, leetcode-move-zeroes, leetcode-regular-expression-matching, leetcode-remove-duplicates-from-sorted-array, leetcode-reorder-list, leetcode-reverse-bits, leetcode-search-suggestions-system, leetcode-sort-colors, leetcode-study-guide, leetcode-trapping-rain-water, leetcode-two-sum, leetcode-two-sum-ii, leetcode-valid-palindrome, monotonic-stack-pattern, sliding-window-pattern
 
 ### Programming › Algorithms › Techniques (`programming/algorithms/techniques`)
 
@@ -2866,7 +2898,7 @@
 - 소제목: 참이 한 번만 바뀌는 곳을 찾는다 / 구간의 정의가 코드를 정한다 / 같은 값이 여러 개면 경계도 두 개다 / 정렬해 두고 여러 번 찾을 때의 계산 / 가운데를 구하다 넘치는 경우 / 실수 범위에서 찾을 때는 횟수로 끊는다 / 답을 놓고 거꾸로 찾는다 / 정렬이 반쯤 깨진 배열에서 / 연습: 처음과 끝 찾기 / 연습: 최소 트럭 용량 / 범위를 반으로 줄이는 근거 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, sorting-algorithms, ds-hash-map, ds-binary-tree-bst, db-index, git-tips-advanced, recursion-backtracking
 - 키워드 백링크 →: api-scaling-ladder, load-testing-k6, sql-filtering-operators, floating-point-numbers, bit-manipulation
-- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-4sum, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-design-twitter, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-fruit-into-baskets, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-kth-largest-element-in-a-stream, leetcode-last-stone-weight, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-majority-element, leetcode-max-consecutive-ones-iii, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-missing-number, leetcode-my-calendar-i, leetcode-next-greater-element-i, leetcode-non-overlapping-intervals, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-remove-duplicates-from-sorted-array, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-single-number, leetcode-sliding-window-median, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-swim-in-rising-water, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
+- 이 글로 오는 글 ←: algorithms-overview, balanced-search-trees, big-o-notation, browser-storage, complexity-classes-p-np, divide-and-conquer, ds-graph-bfs-dfs, dynamic-programming, leetcode-4sum, leetcode-binary-search, leetcode-capacity-to-ship-packages-within-d-days, leetcode-container-with-most-water, leetcode-daily-temperatures, leetcode-design-twitter, leetcode-find-first-last-position-sorted-array, leetcode-find-median-from-data-stream, leetcode-find-minimum-in-rotated-sorted-array, leetcode-find-peak-element, leetcode-fruit-into-baskets, leetcode-house-robber, leetcode-implement-trie, leetcode-insert-interval, leetcode-interval-list-intersections, leetcode-k-closest-points-to-origin, leetcode-koko-eating-bananas, leetcode-kth-largest-element-in-a-stream, leetcode-last-stone-weight, leetcode-longest-common-prefix, leetcode-longest-common-subsequence, leetcode-longest-consecutive-sequence, leetcode-longest-increasing-subsequence, leetcode-longest-palindromic-substring, leetcode-longest-repeating-character-replacement, leetcode-longest-substring-without-repeating, leetcode-majority-element, leetcode-max-consecutive-ones-iii, leetcode-median-of-two-sorted-arrays, leetcode-min-stack, leetcode-minimum-interval-to-include-each-query, leetcode-minimum-size-subarray-sum, leetcode-minimum-window-substring, leetcode-missing-number, leetcode-my-calendar-i, leetcode-next-greater-element-i, leetcode-non-overlapping-intervals, leetcode-partition-equal-subset-sum, leetcode-powx-n, leetcode-remove-duplicates-from-sorted-array, leetcode-search-a-2d-matrix, leetcode-search-in-rotated-sorted-array, leetcode-search-suggestions-system, leetcode-single-number, leetcode-sliding-window-median, leetcode-study-guide, leetcode-subarray-product-less-than-k, leetcode-swim-in-rising-water, leetcode-time-based-key-value-store, leetcode-two-sum, leetcode-two-sum-ii, sd-kv-store-write-read-path, sorting-algorithms, string-search-algorithms, two-pointers-pattern
 
 #### `bit-manipulation` — 비트 연산: 플래그, 마스크, XOR 트릭과 비트마스크 DP
 
@@ -2953,8 +2985,8 @@
 - 길이: 442줄
 - 소제목: 한 칸 밀 때마다 처음부터 다시 비교한다 / 이미 맞힌 글자는 다시 보지 않는다 / 실패 함수는 패턴이 자기 자신과 겹치는 길이다 / 글자 대신 숫자를 먼저 비교한다 / 뒤에서부터 비교하면 크게 건너뛴다 / 언어와 도구는 이미 섞어 쓴다 / 같은 텍스트에서 여러 번 찾을 때 / 찾을 단어가 수천 개일 때 / 무엇을 고를까 / 현장에서 검색이 느려질 때 보는 곳 / KMP를 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, bit-manipulation, ds-hash-map, rsync-algorithm, regex-and-globbing, binary-search, elasticsearch-inverted-index, ds-trie
-- 키워드 백링크 →: db-index, ids-ips, input-validation-secure-coding, character-encoding-unicode, js-numbers-bigint, event-loop, recursion-backtracking, js-strings-unicode, db-modeling-normalization, core-web-vitals
-- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-extra-characters-in-a-string, leetcode-longest-common-prefix, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-permutation-in-string, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-valid-palindrome
+- 키워드 백링크 →: db-index, ids-ips, character-encoding-unicode, js-numbers-bigint, event-loop, recursion-backtracking, js-strings-unicode, db-modeling-normalization, core-web-vitals
+- 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-extra-characters-in-a-string, leetcode-index-pairs-of-a-string, leetcode-longest-common-prefix, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-permutation-in-string, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-valid-palindrome
 
 ### Programming › Backend (`programming/backend`)
 
@@ -3301,7 +3333,7 @@
 - 길이: 427줄
 - 소제목: 메서드 하나에 SQL과 규칙이 섞여 있다 / 트랜잭션 스크립트로 충분한 동안 / 규칙을 객체로 옮기면 도메인 모델 / 객체가 테이블을 아는가, 모르는가 / 리포지토리는 메모리 속 컬렉션처럼 보인다 / 같은 행이 두 객체가 되면 / 바뀐 것을 모아 한 번에 쓰는 작업 단위 / ORM 안에서 다시 만나는 패턴들 / 경계를 넘는 모양은 DTO로 / 어디까지 갖출지 고르는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: ddd-tactical-patterns, mvc-pattern, hexagonal-architecture, n-plus-one-queries, clean-architecture, architecture-docs-c4-adr
-- 키워드 백링크 →: nodejs-orm-query-builder, jpa-persistence-context, js-spread-rest, input-validation-secure-coding, api-security-owasp-api-top10, ddd-bounded-context, pattern-proxy
+- 키워드 백링크 →: nodejs-orm-query-builder, jpa-persistence-context, js-spread-rest, api-security-owasp-api-top10, ddd-bounded-context, pattern-proxy
 - 이 글로 오는 글 ←: architecture-docs-c4-adr, ddd-tactical-patterns, mvc-pattern
 
 #### `enterprise-system-integration` — 벤더·레거시 시스템 연동: 동기 API, 메시지, 파일 배치와 대사
@@ -3334,7 +3366,7 @@
 - 길이: 387줄
 - 소제목: 나라마다 다른 값은 코드 밖으로 뺀다 / 통화와 세금은 정수로 다룬다 / 같은 순간이 서울에서는 다음 날이다 / 이름, 주소, 전화번호의 모양 / 한글 검색과 정렬은 따로 챙긴다 / 데이터를 어디에 둘지가 구조를 바꾼다 / 로컬 갭은 목록으로 만들고 줄을 세운다 / 여는 순서 / 새 시장에서 처음 보는 증상들 / 미국이라는 가정을 찾아 설정으로 옮긴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: enterprise-system-integration, sit-uat-testing, release-cutover-hypercare, feature-flags, cron-jobs, hydration, pattern-strategy
-- 키워드 백링크 →: data-privacy-compliance, input-validation-secure-coding, character-encoding-unicode, k8s-deploy-pipeline-eks, threat-modeling-stride, rendering-strategies, js-strings-unicode, db-modeling-normalization
+- 키워드 백링크 →: data-privacy-compliance, character-encoding-unicode, k8s-deploy-pipeline-eks, threat-modeling-stride, rendering-strategies, js-strings-unicode, db-modeling-normalization
 - 이 글로 오는 글 ←: data-privacy-compliance, elasticsearch-inverted-index, enterprise-system-integration, frontend-i18n-intl, release-cutover-hypercare, sd-autocomplete-trie, sit-uat-testing
 
 #### `hexagonal-architecture` — 헥사고날 아키텍처: 포트를 코어가 갖고, 바깥은 어댑터로 꽂는다
@@ -3716,7 +3748,7 @@
 - 소제목: 확인이 사라지면 보낸 쪽은 모른다 / 프로듀서와 브로커 사이: 멱등 프로듀서 / Kafka 안에서 읽고 쓰기: 트랜잭션 / 같은 이름의 옛 인스턴스를 막는 펜싱 / 어디까지가 Kafka의 정확히 한 번인가 / 받는 쪽 DB에서 거르는 인박스 테이블 / 중복을 얼마나 오래 기억할까 / 중복 적립 문의를 받았을 때 볼 것 / 정확히 한 번은 구간마다 받는 쪽이 만든다 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, kafka-basics, event-driven-architecture, idempotency-key, batch-processing
 - 키워드 백링크 →: postgres-slow-db-triage, stream-processing, transactional-outbox, js-pure-functions, db-transaction-isolation, resilience-patterns, dead-letter-queue, http-methods
-- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-count-primes, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-fruit-into-baskets, leetcode-max-area-of-island, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-single-number-ii, leetcode-subarray-product-less-than-k, leetcode-sudoku-solver, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, reverse-etl, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
+- 이 글로 오는 글 ←: backend-engineer-roadmap, cache-write-policies, cdc-change-data-capture, claim-check-sequential-convoy, complexity-classes-p-np, cqrs, crdt, cron-jobs, db-architecture-by-scale, dead-letter-queue, enterprise-system-integration, event-driven-architecture, idempotency-key, js-callback-hell, k8s-job-cronjob, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, leetcode-count-primes, leetcode-daily-temperatures, leetcode-evaluate-reverse-polish-notation, leetcode-fruit-into-baskets, leetcode-index-pairs-of-a-string, leetcode-max-area-of-island, leetcode-merge-k-sorted-lists, leetcode-number-of-islands, leetcode-reconstruct-itinerary, leetcode-regular-expression-matching, leetcode-single-number-ii, leetcode-subarray-product-less-than-k, leetcode-sudoku-solver, leetcode-unique-paths, leetcode-valid-anagram, long-polling, message-queue-basics, queue-based-load-leveling, rabbitmq-basics, reverse-etl, router-vs-switch, saga-pattern, schema-versioning, sd-ad-click-exactly-once, sd-ad-click-stream-windows, sd-chat-message-storage, sd-load-balancer-stateless, sd-metrics-storage-alerting, sd-mq-consumer-groups, sd-mq-replication, sd-news-feed-publishing, sd-notification-reliability, sd-payment-reliability, sd-queue-logging-automation, sd-stock-exchange-low-latency, serverless-architecture, stream-processing, system-design-study-path, tdd-bdd-atdd, transactional-outbox
 
 #### `message-queue-basics` — 메시지 큐 기초: ack, 가시성 타임아웃, 재전달
 
@@ -3738,7 +3770,7 @@
 - 소제목: 한 명에게 주는 큐, 모두에게 주는 토픽 / Redis PUBLISH는 그 순간 듣던 사람에게만 간다 / 느린 구독자 하나는 끊긴다 / Redis Streams: 그룹마다 모두, 그룹 안에서는 나눠서 / 그룹이 얼마나 밀렸는지 보기 / 죽은 소비자의 몫 가져오기 / 스트림을 자르면 늦은 그룹은 모른 채 잃는다 / SNS 토픽 뒤에 SQS 큐를 하나씩 / 구독자가 고르게 하는 필터 / 이벤트 이름과 내용은 구독자를 위해 짓는다 / 구독자가 메시지를 못 받는다는 신고가 오면 / 복사하는 곳과 나누는 곳 / 면접에서 나올 만한 질문
 - 직접 링크 →: message-queue-basics, dead-letter-queue, event-driven-architecture, redis-basics, redis-cluster, backpressure, kafka-basics
 - 키워드 백링크 →: http-caching-cdn, dns
-- 이 글로 오는 글 ←: ai-search-grounding-geo, architecture-docs-c4-adr, backend-engineer-roadmap, bullmq-job-queue, cache-invalidation, dead-letter-queue, event-driven-architecture, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, message-queue-basics, microservices, pattern-observer, queue-based-load-leveling, rabbitmq-basics, redis-basics, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-maps-location-eta, sd-mq-consumer-groups, sd-mq-replication, sd-mq-storage-partitions, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, serverless-architecture, stream-processing, system-design-concepts-map, system-design-study-path, tail-latency, websocket-deep-dive
+- 이 글로 오는 글 ←: ai-search-grounding-geo, architecture-docs-c4-adr, backend-engineer-roadmap, bullmq-job-queue, cache-invalidation, dead-letter-queue, event-driven-architecture, iot-mobile-wireless-links, kafka-basics, kafka-to-lake-pipeline, kafka-vs-rabbitmq-replay, message-queue-basics, microservices, pattern-observer, queue-based-load-leveling, rabbitmq-basics, redis-basics, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-maps-location-eta, sd-mq-consumer-groups, sd-mq-replication, sd-mq-storage-partitions, sd-nearby-friends, sd-news-feed-publishing, sd-news-feed-retrieval, serverless-architecture, stream-processing, system-design-concepts-map, system-design-study-path, tail-latency, websocket-deep-dive
 
 #### `rabbitmq-basics` — RabbitMQ 기초: 익스체인지와 바인딩, ack와 prefetch, 쿼럼 큐
 
@@ -4708,7 +4740,7 @@
 - 길이: 424줄
 - 소제목: 파이프라인은 초록불인데 어제 매출이 0원이다 / 틀린 데이터는 오류를 내지 않는다 / 품질을 다섯 갈래로 나눠 묻는다 / 행 수는 맞았다 / 다른 장부와 합계를 맞춰 본다 / 어제와 비교하면 토요일마다 알림이 온다 / 적재 전에 막을까, 적재 후에 알릴까 / 검사를 도구로 옮기면 / 원본 팀과 맺는 데이터 계약 / 틀린 숫자가 이미 나갔을 때 / 검사 결과도 테이블에 쌓는다 / 검사를 너무 많이 걸면 / 성공한 작업과 맞는 숫자는 다르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: etl-vs-elt, data-warehouse-architecture, schema-versioning, airflow-orchestration
-- 키워드 백링크 →: data-lake-hdfs, sql-basics, habit-features-progress-reminders, sd-payment-reliability, alerting, postgres-getting-started, dbt-transformations, zero-downtime-migrations
+- 키워드 백링크 →: data-lake-hdfs, sql-basics, sd-payment-reliability, alerting, postgres-getting-started, dbt-transformations, zero-downtime-migrations
 - 이 글로 오는 글 ←: data-catalog-lineage, data-engineering-lifecycle, data-mesh-fabric, data-orchestrators-comparison, data-privacy-compliance, data-warehouse-architecture, dbt-transformations, etl-vs-elt, lambda-kappa-architecture, ml-model-monitoring-drift, ml-pipelines-ci-cd, reverse-etl, sqld-data-modeling, what-is-mlops
 
 #### `data-warehouse-architecture` — 데이터 웨어하우스 설계: 브론즈·실버·골드, 데이터 마트, 레이크하우스
@@ -6270,12 +6302,12 @@
 
 - 요약: 로딩 버튼의 너비가 98px에서 50px로 줄고 결제가 두 번 된 장면에서 시작해, props보다 먼저 그리는 상태 표, type 기본값, 링크와 버튼의 경계, disabled와 aria-disabled, 너비와 접근 이름을 지키는 로딩 상태를 Chromium으로 직접 확인한다. 같은 틀로 Avatar의 대체 이미지, Badge의 99+ 문구, Card의 늘린 링크, Banner와 List의 상태, 결정 기록까지 정리한다.
 - 태그: Frontend, React, Accessibility, Architecture, CSS
-- 키워드: aria-disabled, 로딩 버튼, 늘린 링크, 컴포넌트 상태 표
+- 키워드: 로딩 버튼, 늘린 링크, 컴포넌트 상태 표
 - 길이: 386줄
 - 소제목: props보다 상태 표를 먼저 그린다 / 버튼의 타입 기본값부터 정한다 / 이동이면 링크, 동작이면 버튼 / 누를 수 없을 때 이유를 숨기지 않는다 / 로딩 중에도 너비와 이름을 지킨다 / 아이콘만 있는 버튼의 이름 / Avatar: 이미지가 실패하는 순간 / Badge: 99+와 스크린 리더 문구 / Card: 카드 전체를 누르게 하기 / Banner와 List도 같은 표로 / 결정을 적어 두는 기록 / 다시 결제 버튼으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: design-system-building, react-component-patterns, html-form-validation, aria-keyboard-focus, react-forms-actions, architecture-docs-c4-adr
 - 키워드 백링크 →: custom-form-controls, frontend-testing-strategy, architecture-patterns-overview, css-position-stacking-context, html-semantics
-- 이 글로 오는 글 ←: custom-form-controls, design-system-adoption-governance, loading-patterns, ui-overlays-tooltip-dropdown-toast, ux-laws-cognitive-load
+- 이 글로 오는 글 ←: design-system-adoption-governance, loading-patterns, ui-overlays-tooltip-dropdown-toast
 
 #### `cross-platform-apps` — 웹 기술로 앱 만들기: 하이브리드, React Native, Flutter, Electron, Tauri
 
@@ -6552,7 +6584,7 @@
 - 길이: 499줄
 - 소제목: div로 만든 체크박스가 잃어버린 것 / 진짜 input을 남기고 모양만 바꾸는 세 단계 / 반쯤 선택된 체크박스 / 스위치는 체크박스와 언제 다른가 / 라디오 그룹은 Tab 한 번, 방향키로 고른다 / 셀렉트: base-select가 열어 준 문 / 내용만큼 자라는 입력칸 / 라벨은 위에, 오류는 칸 바로 아래에 / disabled와 aria-disabled는 다르게 동작한다 / 상태를 토큰으로 묶는다 / 꾸민 컨트롤을 점검하는 순서 / 진짜 부품 위에 페인트만 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-form-validation, aria-keyboard-focus, design-system-building
-- 키워드 백링크 →: web-components-shadow-dom, core-component-api-design, frontend-testing-strategy, css-sticky-scroll-snap, client-data-cache, html-semantics, web-accessibility, postgres-query-planner
+- 키워드 백링크 →: web-components-shadow-dom, frontend-testing-strategy, css-sticky-scroll-snap, client-data-cache, html-semantics, web-accessibility, postgres-query-planner
 - 이 글로 오는 글 ←: core-component-api-design, ux-laws-cognitive-load
 
 #### `html-form-validation` — 폼 입력과 검증: input 타입, label, 제약 검증 API, 오류 안내
@@ -6888,7 +6920,7 @@
 - 소제목: length는 글자가 아니라 16비트 칸을 센다 / 이모지 하나가 두 칸을 먹는 이유 / 칸 단위 메서드로 자르면 반쪽이 남는다 / 눈에 보이는 한 글자는 여러 코드 포인트일 수 있다 / Intl.Segmenter로 사람이 보는 글자를 센다 / 화면과 서버가 같은 단위로 세야 한다 / 같은 "한글"이 서로 다른 문자열일 때 / 문자열은 고칠 수 없다, 그럼 +=는 느릴까 / + 하나로 숫자와 문자열이 갈린다 / 정렬은 코드 유닛 순서가 아니라 사람의 순서로 / 현장에서 문자열이 말썽을 부리는 순간 / 무엇을 한 글자로 볼지 먼저 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: js-template-literals, js-equality-coercion, character-encoding-unicode, js-iterators-generators, js-primitive-vs-reference, js-array-mutation
 - 키워드 백링크 →: js-spread-rest
-- 이 글로 오는 글 ←: character-encoding-unicode, global-rollout-localization, iot-mobile-wireless-links, js-loops-control-flow, leetcode-longest-substring-without-repeating, leetcode-valid-anagram, leetcode-valid-palindrome, site-architecture-internal-linking, string-search-algorithms
+- 이 글로 오는 글 ←: character-encoding-unicode, global-rollout-localization, iot-mobile-wireless-links, js-loops-control-flow, leetcode-longest-substring-without-repeating, leetcode-palindrome-pairs, leetcode-valid-anagram, leetcode-valid-palindrome, site-architecture-internal-linking, string-search-algorithms
 
 #### `js-template-literals` — 템플릿 리터럴과 태그된 템플릿: 조각은 믿고 값은 의심한다
 
@@ -7974,7 +8006,7 @@
 - 길이: 404줄
 - 소제목: 새 글이 몇 주째 색인되지 않는다 / URL의 깊이와 클릭 깊이는 다르다 / 슬러그를 정하는 규칙 / 홈에서 몇 번 눌러야 닿나 / 링크가 하나도 없는 페이지 / 목록을 고치면 깊이가 줄어든다 / 모바일 화면에 없는 링크 / 앵커 텍스트는 링크된 페이지의 설명이다 / 빵부스러기는 위치를 알려 주는 링크 줄이다 / 허브와 토픽 클러스터 / 사이트링크는 고를 수 없다 / 링크 구조를 코드로 지킨다 / 구조를 고칠 때 순서 / 처음 그 글은 깊이 7이었다 / 면접에서 나올 만한 질문
 - 직접 링크 →: seo-log-file-analysis-search-console, seo-for-spa, seo-redirects-site-migration, react-client-routing, search-engine-ranking-pagerank, structured-data-json-ld, crawl-budget-faceted-navigation
-- 키워드 백링크 →: rendering-csr-spa, input-validation-secure-coding, character-encoding-unicode, ds-graph-bfs-dfs, k8s-deploy-pipeline-eks, loading-patterns, js-strings-unicode, db-modeling-normalization
+- 키워드 백링크 →: rendering-csr-spa, character-encoding-unicode, ds-graph-bfs-dfs, k8s-deploy-pipeline-eks, loading-patterns, js-strings-unicode, db-modeling-normalization
 - 이 글로 오는 글 ←: search-engine-ranking-pagerank, seo-log-file-analysis-search-console, sit-uat-testing
 
 #### `structured-data-json-ld` — 구조화 데이터 깊게: schema.org, JSON-LD, 리치 결과와 엔티티
@@ -8954,7 +8986,7 @@
 - 키워드: LoRaWAN, 확산 인자, 저궤도 위성, BLE 비콘
 - 길이: 225줄
 - 소제목: 거리와 속도와 전력은 서로 당긴다 / 건전지 수명은 평균 전류가 정한다 / 블루투스와 BLE: 같은 이름, 다른 목적 / 지그비와 Z-Wave: 집 안을 덮는 메시 / LoRaWAN: 수 킬로미터를 아주 느리게 / NFC: 닿아야 통한다 / 셀룰러: 어디서나, 대신 전력과 요금 / 위성: 기지국이 닿지 않는 곳 / 무선마다 보안이 붙는 자리가 다르다 / 고를 때 던지는 질문들 / 결국 거리, 속도, 전력, 토폴로지로 고른다 / 면접에서 나올 만한 질문
-- 직접 링크 →: wifi-standards-security, wifi-design-channels-roaming, latency-bandwidth-throughput, https-tls
+- 직접 링크 →: wifi-standards-security, wifi-design-channels-roaming, pub-sub, latency-bandwidth-throughput, https-tls
 - 키워드 백링크 →: js-strings-unicode
 - 이 글로 오는 글 ←: edge-caching, wifi-design-channels-roaming, wifi-standards-security
 
@@ -9408,12 +9440,12 @@
 
 - 요약: 음수 가격 주문에서 시작해 검증과 인코딩의 역할을 나누고, 허용 목록·정규화 후 검증·zod 스키마를 신뢰 경계에 두는 법을 본다. 대량 할당, 프로토타입 오염, ReDoS, 유니코드 혼동 문자를 직접 재현하고 보안을 생각한 API 설계와 검증 실패 응답까지 정리했다.
 - 태그: Security, Backend, TypeScript, Node.js, API
-- 키워드: 입력 검증, 대량 할당, 스키마 검증, 유니코드 정규화, 혼동 문자
+- 키워드: 입력 검증, 스키마 검증, 혼동 문자
 - 길이: 274줄
 - 소제목: 클라이언트 검증은 친절이지 방어가 아니다 / 경계에서 한 번, 출력에서 한 번 / 허용 목록이 먼저다 / 스키마로 경계를 지킨다 / 입력이 만드는 고전 취약점들 / 눈에 안 보이는 글자: 유니코드 / 보안을 생각한 API 설계 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: xss, sql-injection, security-testing-sast-dast, path-traversal-file-upload, regex-and-globbing, authn-vs-authz
 - 키워드 백링크 →: character-encoding-unicode, js-prototype-chain, runtime-validation-zod, threat-modeling-stride, api-security-owasp-api-top10, floating-point-numbers, recursion-backtracking, db-modeling-normalization
-- 이 글로 오는 글 ←: ab-testing, agent-reasoning-patterns, api-gateway-use-cases, api-security-owasp-api-top10, api-test-automation, claude-code-models-and-cost, debounce-throttle, enterprise-application-patterns, fault-tolerance, floating-point-numbers, fp-functors-monads-js, global-rollout-localization, http-streaming-sse, js-destructuring, js-equality-coercion, js-error-handling, js-prototype-chain, js-truthy-falsy-typeof, json-crud-http, k8s-admission-control, k8s-api-objects, k8s-architecture, k8s-certifications, llm-api-integration, llm-app-security-guardrails, model-serving, mongodb-crud-operators, nextjs-route-handlers-proxy, nextjs-server-actions-security, owasp-top-10-map, path-traversal-file-upload, react-forms-actions, runtime-validation-zod, sd-autocomplete-trie, security-principles-cia-defense-in-depth, site-architecture-internal-linking, sql-injection, string-search-algorithms, terraform-testing-policy-scanning, ts-narrowing, ts-type-system-basics, typescript-roadmap, waf, web-security-headers, xss
+- 이 글로 오는 글 ←: ab-testing, agent-reasoning-patterns, api-gateway-use-cases, api-security-owasp-api-top10, api-test-automation, claude-code-models-and-cost, debounce-throttle, fault-tolerance, floating-point-numbers, fp-functors-monads-js, http-streaming-sse, js-destructuring, js-equality-coercion, js-error-handling, js-prototype-chain, js-truthy-falsy-typeof, json-crud-http, k8s-admission-control, k8s-api-objects, k8s-architecture, k8s-certifications, llm-api-integration, llm-app-security-guardrails, model-serving, mongodb-crud-operators, nextjs-route-handlers-proxy, nextjs-server-actions-security, owasp-top-10-map, path-traversal-file-upload, react-forms-actions, runtime-validation-zod, security-principles-cia-defense-in-depth, sql-injection, terraform-testing-policy-scanning, ts-narrowing, ts-type-system-basics, typescript-roadmap, waf, web-security-headers, xss
 
 #### `network-attacks-l2-l3` — 망 안쪽을 노리는 공격: ARP 스푸핑, MAC 플러딩, DHCP·DNS 위조
 
@@ -11062,7 +11094,7 @@
 - 길이: 601줄
 - 소제목: 알림 하나가 사람을 깨우는 값 / 증상에 걸고 원인은 대시보드로 / 알림 규칙 한 줄씩 읽기 / for는 조건이 버텨야 하는 시간이다 / Prometheus가 울리고 Alertmanager가 전한다 / 묶고, 누르고, 잠재운다 / 페이지와 티켓을 가르는 기준 / 알림 피로는 세어 보면 보인다 / 런북 링크가 없는 알림은 반쪽이다 / 알림이 울리지 않는 장애 / 다시 새벽 세 시로 / 면접에서 나올 만한 질문
 - 직접 링크 →: monitoring-basics, sli-slo, error-budgets, health-checks, on-call, network-monitoring
-- 키워드 백링크 →: cron-jobs, service-discovery, habit-features-progress-reminders, webhooks
+- 키워드 백링크 →: cron-jobs, service-discovery, webhooks
 - 이 글로 오는 글 ←: centralized-logging-pipeline, cloudwatch-metrics-logs-alarms, data-quality-checks, db-type-time-series, dead-letter-queue, distributed-tracing, error-budgets, grafana-dashboards, habit-features-progress-reminders, health-checks, ml-model-monitoring-drift, monitoring-basics, network-monitoring, on-call, otel-collector-pipeline, production-incidents, prometheus-basics, release-cutover-hypercare, sd-metrics-storage-alerting, sd-notification-reliability, sd-queue-logging-automation, sli-slo
 
 #### `centralized-logging-pipeline` — 중앙 로그 파이프라인: 수집기에서 검색 가능한 저장소까지
@@ -11317,7 +11349,7 @@
 - 길이: 386줄
 - 소제목: 온콜이 맡는 일은 알림 응답만이 아니다 / 교대표를 짜는 기준 / 해를 따라 넘기는 교대 / 응답이 없으면 다음 사람에게 / 몇 번 깨우면 지속할 수 없나 / 런북의 첫 줄은 사람이 아니라 스크립트가 친다 / 교대할 때 넘기는 것 / 온콜을 오래 버티게 하는 장치들 / 온콜을 망가뜨리는 실수 / 교대표 계산해 보기 / 다시 그 석 달 뒤로 / 면접에서 나올 만한 질문
 - 직접 링크 →: alerting, sli-slo, error-budgets, production-incidents, postmortems, chaos-engineering
-- 키워드 백링크 →: habit-features-progress-reminders, osi-in-practice, webhooks
+- 키워드 백링크 →: osi-in-practice, webhooks
 - 이 글로 오는 글 ←: agentic-rag, alerting, architecture-patterns-overview, autoscaling, backup-strategy, chaos-engineering, ci-cd-basics, cloud-service-models-shared-responsibility, ddos-protection, devops-networking-roadmap, disaster-recovery, elasticsearch-snapshot-dr, graph-rag, k8s-learning-roadmap, k8s-operators, microservices, postmortems, production-incidents, rag-patterns-overview, rag-retrieval-quality, release-cutover-hypercare, security-compliance-for-developers, security-incident-response
 
 #### `postmortems` — 포스트모템: 비난 없이 쓰고, 닫히는 후속 조치로 끝낸다
@@ -11960,8 +11992,8 @@
 - 길이: 383줄
 - 소제목: 빈도표 하나와 LIKE 하나로 시작하기 / 접두사를 길로 바꾸는 트라이 / 접두사 아래를 전부 뒤지면 / 노드마다 상위 5개를 적어 둔다 / 한글은 치는 동안 글자가 바뀐다 / 키를 누를 때마다 요청을 보내지 않는다 / 서버 쪽 경로와 거르는 단계 / 추천이 이상하다는 문의가 오면 / 트라이로 상위 k개 찾기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-chat-presence, sd-autocomplete-data-pipeline, sd-video-upload-transcoding, http-caching-cdn, debounce-throttle, browser-fetch, elasticsearch-inverted-index, ds-trie
-- 키워드 백링크 →: input-validation-secure-coding, character-encoding-unicode, sd-start-single-server, lossy-counting, global-rollout-localization, osi-in-practice, vim-for-servers, db-modeling-normalization
-- 이 글로 오는 글 ←: data-structures-overview, debounce-throttle, ds-trie, frontend-system-design-interview, leetcode-implement-trie, leetcode-sum-of-prefix-scores-of-strings, sd-autocomplete-data-pipeline, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path
+- 키워드 백링크 →: character-encoding-unicode, sd-start-single-server, lossy-counting, global-rollout-localization, osi-in-practice, vim-for-servers, db-modeling-normalization
+- 이 글로 오는 글 ←: data-structures-overview, debounce-throttle, ds-trie, frontend-system-design-interview, leetcode-implement-trie, leetcode-search-suggestions-system, leetcode-sum-of-prefix-scores-of-strings, sd-autocomplete-data-pipeline, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path
 
 #### `sd-chat-connections` — 채팅 시스템 설계 ①: 폴링에서 WebSocket까지, 연결을 붙잡는 채팅 서버
 
@@ -12519,12 +12551,12 @@
 
 - 요약: 어제도 공부했는데 연속 1일로 나오는 버그에서 출발해, 사용자 시간대로 날짜를 세는 연속 기록과 보호권, 의미 있는 진행 막대, 드문 보상과 주간 리그 순위표, 실행 의도를 담은 리마인더 배치, 한 번뿐인 알림 권한을 묻는 시점과 알림 피로, 온보딩 도구를 구현과 함께 보고 홀드아웃과 코호트로 효과를 잰다.
 - 태그: UX, Frontend, Browser, PWA, Redis
-- 키워드: 스트릭, 소프트 애스크, 알림 피로, 코치 마크, 홀드아웃 그룹
+- 키워드: 스트릭, 소프트 애스크, 코치 마크, 홀드아웃 그룹
 - 길이: 413줄
 - 소제목: 어제도 공부했는데 연속 1일이라고 나온다 / 날짜는 사용자의 하루로 센다 / 하루 빠졌다고 30일이 0이 되면 / 진행 막대는 의미가 있어야 한다 / 보상은 드물어야 값이 있다 / 순위표는 아래쪽 사람을 생각해서 만든다 / 리마인더는 사용자가 정한 계획을 상기시키는 것이다 / 알림 권한은 한 번밖에 못 묻는다 / 알림이 많아지면 사람들은 끈다 / 처음 온 사람에게 보여 줄 것 / 효과는 코호트로, 알림은 홀드아웃으로 잰다 / 다시 연속 1일 문의로 / 면접에서 나올 만한 질문
 - 직접 링크 →: behavior-design-models, pwa-install-offline, product-analytics-funnels, ab-testing
 - 키워드 백링크 →: alerting, redis-basics
-- 이 글로 오는 글 ←: alerting, behavior-design-models, data-quality-checks, on-call
+- 이 글로 오는 글 ←: behavior-design-models
 
 #### `loading-patterns` — 로딩 패턴: 기다리는 화면을 고르는 법
 
@@ -12599,7 +12631,7 @@
 - 길이: 377줄
 - 소제목: 선택지가 늘면 결정이 느려진다 / 너무 많이 보여 주면 아예 안 고른다 / 머리가 쓰는 힘을 어디에 쓰게 할까 / 기본값은 가장 강한 선택지다 / 큰 과녁이 가까이 있으면 빨리 누른다 / 어디를 누를지 한눈에 보이게 / 누른 다음에는 바로 대답한다 / 익숙한 자리에 두면 배우지 않아도 된다 / 복잡함은 사라지지 않고 옮겨 갈 뿐이다 / 고친 게 효과가 있었는지 화면에서 재기 / 법칙이 틀리는 곳 / 폼을 여러 단계로 나누면 항상 좋을까 / 결제 화면으로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: product-analytics-funnels, ux-research-usability-testing, html-form-validation, custom-form-controls, spacing-sizing-type-scale, loading-patterns, idempotency-key
-- 키워드 백링크 →: core-component-api-design, data-privacy-compliance, behavior-design-models, web-accessibility
+- 키워드 백링크 →: data-privacy-compliance, behavior-design-models, web-accessibility
 - 이 글로 오는 글 ←: ux-research-usability-testing
 
 #### `ux-research-usability-testing` — 사용성 테스트와 프로토타입: 다섯 명에게 시켜 보기 전에 정할 것
@@ -12752,7 +12784,6 @@
 - 경로 압축 → `ds-union-find`
 - 경로 하이재킹 → `bgp-basics`
 - 경보 피로 → `security-logging-detection-siem`
-- 경사 하강 → `deep-learning-basics`
 - 경사 하강 → `ml-fundamentals`
 - 경쟁 상태 → `race-conditions`
 - 경쟁하는 컨슈머 → `message-queue-basics`
@@ -12902,7 +12933,6 @@
 - 닫힌 부하 모델 → `load-testing-k6`
 - 답 이분 탐색 → `algorithms-overview`
 - 대기 이벤트 → `postgres-slow-db-triage`
-- 대량 할당 → `input-validation-secure-coding`
 - 대량 할당 → `api-security-owasp-api-top10`
 - 대리 키 → `db-keys-denormalization`
 - 대비 비율 → `web-accessibility`
@@ -13559,7 +13589,6 @@
 - 알림 로그 → `sd-notification-reliability`
 - 알림 저장소 → `sd-metrics-storage-alerting`
 - 알림 평가기 → `sd-metrics-storage-alerting`
-- 알림 피로 → `habit-features-progress-reminders`
 - 알림 피로 → `alerting`
 - 암달의 법칙 → `scaling-horizontal-vertical`
 - 암시적 바인딩 → `js-this-binding`
@@ -13691,7 +13720,6 @@
 - 윈도우 프레임 → `sqld-window-functions`
 - 윈도우 함수 → `sqld-window-functions`
 - 유니온 파인드 → `ds-union-find`
-- 유니코드 정규화 → `input-validation-secure-coding`
 - 유니코드 정규화 → `character-encoding-unicode`
 - 유닛 파일 → `linux-systemd-systemctl`
 - 유동 타이포그래피 → `responsive-design`
@@ -14459,7 +14487,6 @@
 - Argo Rollouts → `canary-release`
 - Argon2id → `hash-hmac-password-hashing`
 - arguments 객체 → `js-function-forms`
-- aria-disabled → `core-component-api-design`
 - aria-disabled → `custom-form-controls`
 - ARP → `layer-link-ethernet-arp`
 - ARP 스푸핑 → `network-attacks-l2-l3`
@@ -16429,6 +16456,12 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `leetcode-index-pairs-of-a-string` ↔ `leetcode-extra-characters-in-a-string`
+- `leetcode-index-pairs-of-a-string` ↔ `leetcode-replace-words`
+- `leetcode-palindrome-pairs` ↔ `leetcode-longest-palindromic-substring`
+- `leetcode-search-suggestions-system` ↔ `leetcode-sum-of-prefix-scores-of-strings`
+- `leetcode-search-suggestions-system` ↔ `leetcode-longest-common-prefix`
+- `leetcode-search-suggestions-system` ↔ `leetcode-implement-trie`
 - `leetcode-alien-dictionary` ↔ `leetcode-course-schedule-ii`
 - `leetcode-alien-dictionary` ↔ `leetcode-course-schedule`
 - `leetcode-bitwise-and-of-numbers-range` ↔ `leetcode-power-of-two`
@@ -16565,7 +16598,6 @@
 - `ai-search-grounding-geo` ↔ `search-engine-ranking-pagerank`
 - `ai-search-grounding-geo` ↔ `structured-data-json-ld`
 - `habit-features-progress-reminders` ↔ `behavior-design-models`
-- `habit-features-progress-reminders` ↔ `alerting`
 - `search-engine-ranking-pagerank` ↔ `site-architecture-internal-linking`
 - `seo-log-file-analysis-search-console` ↔ `site-architecture-internal-linking`
 - `seo-log-file-analysis-search-console` ↔ `seo-redirects-site-migration`
@@ -16578,7 +16610,6 @@
 - `leetcode-subarray-product-less-than-k` ↔ `leetcode-minimum-size-subarray-sum`
 - `bi-semantic-layer` ↔ `data-catalog-lineage`
 - `bi-semantic-layer` ↔ `data-warehouse-architecture`
-- `core-component-api-design` ↔ `custom-form-controls`
 - `data-catalog-lineage` ↔ `data-orchestrators-comparison`
 - `data-catalog-lineage` ↔ `dbt-transformations`
 - `data-catalog-lineage` ↔ `etl-vs-elt`
@@ -16644,7 +16675,6 @@
 - `leetcode-word-break` ↔ `leetcode-coin-change`
 - `claude-code-plugins-and-channels` ↔ `claude-code-models-and-cost`
 - `claude-code-plugins-and-channels` ↔ `claude-code-extensions`
-- `deep-learning-basics` ↔ `ml-fundamentals`
 - `llm-app-security-guardrails` ↔ `llm-observability`
 - `llm-app-security-guardrails` ↔ `agent-tool-design`
 - `llm-app-security-guardrails` ↔ `system-prompt-design`

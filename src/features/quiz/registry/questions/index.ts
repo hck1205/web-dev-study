@@ -1,3 +1,6 @@
+import { LEETCODE_SEARCH_SUGGESTIONS_SYSTEM } from "./leetcode-search-suggestions-system";
+import { LEETCODE_PALINDROME_PAIRS } from "./leetcode-palindrome-pairs";
+import { LEETCODE_INDEX_PAIRS_OF_A_STRING } from "./leetcode-index-pairs-of-a-string";
 import { LEETCODE_VALID_PARENTHESIS_STRING } from "./leetcode-valid-parenthesis-string";
 import { LEETCODE_TARGET_SUM } from "./leetcode-target-sum";
 import { LEETCODE_SUM_OF_PREFIX_SCORES_OF_STRINGS } from "./leetcode-sum-of-prefix-scores-of-strings";
@@ -1132,6 +1135,9 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  LEETCODE_SEARCH_SUGGESTIONS_SYSTEM,
+  LEETCODE_PALINDROME_PAIRS,
+  LEETCODE_INDEX_PAIRS_OF_A_STRING,
   LEETCODE_VALID_PARENTHESIS_STRING,
   LEETCODE_TARGET_SUM,
   LEETCODE_SUM_OF_PREFIX_SCORES_OF_STRINGS,

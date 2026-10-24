@@ -5,6 +5,36 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "leetcode-index-pairs-of-a-string",
+    title: "LeetCode 1065. Index Pairs of a String: 시작 위치마다 트라이를 내려가면 순서도 따라온다",
+    summary: "텍스트에서 단어 목록의 단어가 나오는 위치를 모두 찾는 문제를 모든 부분 문자열 확인, 단어마다 indexOf, 시작 위치마다 트라이, 텍스트를 한 번만 읽는 아호-코라식 네 가지로 푼다. 겹치는 등장을 놓치는 실수와 JS 기본 정렬의 함정, grep과 정규식이 겹친 단어를 내놓지 않는 이유도 함께 본다.",
+    topic: "programming/algorithms/leetcode/tries",
+    tags: ["LeetCode", "Trie", "String", "Algorithm"],
+    date: "2026-10-27",
+    difficulty: "easy",
+    keywords: [],
+  },
+  {
+    slug: "leetcode-palindrome-pairs",
+    title: "LeetCode 336. Palindrome Pairs: 긴 쪽은 뒤집은 짝과 회문으로 쪼개진다",
+    summary: "붙였을 때 회문이 되는 단어 순서쌍을 모든 쌍 확인, 자르는 자리마다 해시맵에 묻기, 뒤집은 단어 트라이와 DFS, 노드마다 회문 목록을 적어 둔 트라이 네 가지로 푼다. 같은 쌍을 두 번 세는 경계와 빈 문자열, 자기 자신과의 짝 같은 함정, 그리고 재 보면 해시맵이 트라이보다 빠른 이유도 함께 본다.",
+    topic: "programming/algorithms/leetcode/tries",
+    tags: ["LeetCode", "Trie", "Hash Table", "Algorithm"],
+    date: "2026-10-27",
+    difficulty: "hard",
+    keywords: [],
+  },
+  {
+    slug: "leetcode-search-suggestions-system",
+    title: "LeetCode 1268. Search Suggestions System: 정렬하면 덩어리는 좁아지기만 한다",
+    summary: "검색어를 한 글자씩 칠 때마다 사전 순 앞의 상품 세 개를 고르는 문제를 매번 거르기, 정렬 후 거르기, 이진 탐색, 투 포인터, 트라이와 DFS, 노드마다 상위 3개를 적은 트라이 여섯 가지로 푼다. 이 문제에서는 정렬 풀이가 트라이보다 빠른데 실제 자동완성은 트라이를 쓰는 이유와 정렬 없이 넣는 실수도 함께 본다.",
+    topic: "programming/algorithms/leetcode/tries",
+    tags: ["LeetCode", "Trie", "Binary Search", "Two Pointers", "Algorithm"],
+    date: "2026-10-27",
+    difficulty: "medium",
+    keywords: [],
+  },
+  {
     slug: "leetcode-alien-dictionary",
     title: "LeetCode 269. Alien Dictionary: 이웃한 두 단어에서 규칙 하나씩",
     summary: "정렬된 외계 단어 목록에서 글자 순서를 순열 시험, 모든 쌍 비교, 세 가지 색 DFS, 칸의 알고리즘, 알파벳 순 가장 앞선 답으로 구한다. 이웃한 쌍만 보면 되는 이유와 접두사 모순, 첫 차이 뒤를 규칙으로 넣는 실수를 함께 본다.",
