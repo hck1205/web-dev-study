@@ -1,4 +1,4 @@
-import type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier } from "./types";
+import type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier, Track } from "./types";
 
 export const isRoadmap = (item: RoadmapItem): item is RoadmapNode => typeof item === "object" && "items" in item;
 export const isCheckpoint = (item: RoadmapItem): item is Checkpoint => typeof item === "object" && "checkpoint" in item;
@@ -86,4 +86,19 @@ export function validateRoadmaps(flat: FlatRoadmap[], allSlugs: string[]) {
   }
   const missing = allSlugs.filter((slug) => !seen.has(slug));
   if (missing.length) throw new Error(`[roadmap] 로드맵에 빠진 글 ${missing.length}편: ${missing.join(", ")}`);
+}
+
+/** 직무별 경로가 가리키는 로드맵이 모두 있는지, 경로 id가 겹치지 않는지 검사한다 */
+export function validateTracks(tracks: Track[], flat: FlatRoadmap[]) {
+  const keys = new Set(flat.map((roadmap) => roadmapKey(roadmap.path)));
+  const ids = new Set<string>();
+  for (const track of tracks) {
+    if (ids.has(track.id)) throw new Error(`직무별 경로 id가 겹친다: ${track.id}`);
+    ids.add(track.id);
+    for (const step of track.steps) {
+      for (const key of step.roadmaps) {
+        if (!keys.has(key)) throw new Error(`직무별 경로 ${track.id}의 "${step.label}"이 없는 로드맵을 가리킨다: ${key}`);
+      }
+    }
+  }
 }

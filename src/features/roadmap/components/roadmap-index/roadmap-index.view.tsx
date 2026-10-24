@@ -4,19 +4,20 @@ import { Badge, ChoiceChip, Container, PageHeader, color } from "@/common/design
 import { ProgressBar } from "../progress-bar";
 import { ProgressTools } from "../progress-tools";
 import { RoadmapGraph } from "../roadmap-graph";
+import { RoadmapTracks } from "../roadmap-tracks";
 import { useRoadmapIndex } from "./roadmap-index";
 import { CardDescription, CardHead, CardMeta, Cards, Legend, NextLink, NextList, RoadmapCard, Section, SectionHead, TierCard, Tiers } from "./roadmap-index.styled";
 
 const TIER_TONES = { 1: "accent", 2: "info", 3: "neutral" } as const;
 
 export function RoadmapIndex() {
-  const { tiers, tierLabels, next, roadmaps, graph, view, setView } = useRoadmapIndex();
+  const { tiers, tierLabels, next, roadmaps, graph, postCount, view, setView } = useRoadmapIndex();
 
   return (
     <Container size="narrow">
       <PageHeader
         title="학습 로드맵"
-        lead="글 661편을 읽는 순서다. 로드맵 안의 로드맵을 따라 앞 글을 먼저 이해하고 다음으로 넘어간다. 글마다 읽음 → 설명함 → 적용함 → 응용함 네 단계를 기록한다."
+        lead={`글 ${postCount}편을 읽는 순서다. 로드맵 안의 로드맵을 따라 앞 글을 먼저 이해하고 다음으로 넘어간다. 글마다 읽음 → 설명함 → 적용함 → 응용함 네 단계를 기록한다.`}
       />
 
       <Tiers>
@@ -70,6 +71,9 @@ export function RoadmapIndex() {
             <ChoiceChip selected={view === "graph"} onClick={() => setView("graph")}>
               지도
             </ChoiceChip>
+            <ChoiceChip selected={view === "tracks"} onClick={() => setView("tracks")}>
+              직무별
+            </ChoiceChip>
             <ChoiceChip selected={view === "list"} onClick={() => setView("list")}>
               목록
             </ChoiceChip>
@@ -77,6 +81,8 @@ export function RoadmapIndex() {
         </SectionHead>
         {view === "graph" ? (
           <RoadmapGraph nodes={graph.nodes} edges={graph.edges} label="최상위 로드맵 지도" />
+        ) : view === "tracks" ? (
+          <RoadmapTracks />
         ) : (
           <Cards>
           {roadmaps.map((roadmap, index) => (

@@ -1,0 +1,386 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-typography");
+
+<EasyIntro>
+  웹 페이지의 글자는 그냥 찍히는 것 같지만, 브라우저는 글자 하나하나마다 어떤 글꼴로 그릴지, 얼마나 크게 그릴지, 줄을 어디서 바꿀지를 정한다. 이 결정을 내리는 규칙이 CSS다.
+
+  글자를 다루는 일은 공책에 글씨를 쓰는 일과 비슷하다. 어떤 펜을 쓸지, 글씨를 얼마나 크게 쓸지, 줄 간격을 얼마나 띄울지, 줄 끝에 단어가 안 들어가면 다음 줄로 넘길지를 정한다. 펜이 없으면 옆 사람 펜을 빌려 쓰듯, 브라우저도 원하는 글꼴이 없으면 다음 후보 글꼴을 빌려 쓴다.
+
+  한글은 영어와 다르게 글자 하나하나 사이에서도 줄을 바꿀 수 있다. 그래서 아무 설정도 안 하면 데이터베이스 같은 단어가 줄 끝에서 둘로 쪼개진다. 반대로 띄어쓰기 없는 긴 영어 주소는 아무 데서도 끊기지 않아서 화면 밖으로 삐져나간다. 이 글은 그런 일이 왜 생기는지와 어떤 설정으로 막는지를 하나씩 살펴본다.
+</EasyIntro>
+
+## 한글 단어가 반으로 잘리고 주소가 화면을 민다
+
+모바일 카드에 "오늘은 데이터베이스 인덱스를 공부했다"라는 제목을 넣었다. 폭은 120px. 화면에서 보니 첫 줄이 "오늘은 데이터베"로 끝나고, 다음 줄이 "이스 인덱스를"로 시작한다. 같은 카드 아래 칸에는 사용자가 붙여 넣은 주소 `https://example.com/very/long/path/that/never/breaks`가 있는데, 이 줄은 카드 밖으로 삐져나와 페이지 전체에 가로 스크롤을 만든다.
+
+Chromium 141에서 같은 마크업을 열고 줄마다 어떤 글자가 들어갔는지, 요소의 `scrollWidth`가 얼마인지 쟀다(한글 글꼴은 이 실험 환경에 깔린 WenQuanYi Zen Hei였다. 글꼴이 다르면 끊기는 위치도 다르다).
+
+```text
+기본값            ["오늘은 데이터베", "이스 인덱스를 ", "공부했다"]
+keep-all         ["오늘은 ", "데이터베이스 ", "인덱스를 ", "공부했다"]
+
+주소, 기본값       폭 120px 칸의 scrollWidth = 376px (한 줄, 넘침)
+주소, overflow-wrap: anywhere   scrollWidth = 120px (네 줄)
+```
+
+두 증상은 원인이 반대다. 한글은 기본 규칙에서 글자와 글자 사이 어디서든 줄을 바꿀 수 있어서 너무 잘게 끊기고, 영어 주소는 띄어쓰기가 없으니 끊을 자리가 하나도 없어서 안 끊긴다. 줄바꿈 규칙은 뒤에서 자세히 보고, 먼저 브라우저가 글자를 그리기 전에 정하는 것들부터 순서대로 본다. 어떤 글꼴로 그릴지, 얼마나 크게 그릴지, 줄 간격을 얼마로 둘지다.
+
+웹 폰트를 언제 받고 받는 동안 무엇을 보여 줄지는 [웹 폰트 최적화](/posts/web-font-optimization)에서 다뤘다. 이 글은 글꼴이 이미 있다고 보고, 그 글꼴로 글자를 어떻게 놓는지를 다룬다.
+
+## 글꼴 목록은 글자마다 다시 고른다
+
+`font-family`에는 글꼴 이름을 쉼표로 여러 개 적는다. 이 목록을 흔히 폰트 스택이라고 부른다.
+
+```css
+body {
+  font-family:
+    "Pretendard Variable", Pretendard,  /* 웹 폰트 */
+    -apple-system, BlinkMacSystemFont,   /* macOS·iOS 시스템 글꼴 */
+    "Apple SD Gothic Neo",               /* macOS 한글 */
+    "Malgun Gothic",                     /* 윈도우 한글 */
+    "Noto Sans KR",                      /* 안드로이드·리눅스에 흔한 한글 */
+    sans-serif;                          /* 마지막 보루: 일반 글꼴 계열 */
+}
+```
+
+많이 하는 오해는 "첫 글꼴이 없으면 두 번째로 넘어간다"까지만 생각하는 것이다. 브라우저는 요소 단위가 아니라 글자 단위로 고른다. 첫 글꼴이 있어도 그 글꼴에 그 글자의 모양(글리프)이 없으면 다음 글꼴에서 찾는다. 영문 전용 글꼴을 맨 앞에 두면 영어는 그 글꼴로, 한글은 뒤의 한글 글꼴로 그려지는 이유다.
+
+아래 그림은 `"Pretendard", "DejaVu Sans", "WenQuanYi Zen Hei", sans-serif` 스택으로 `Ab 한글 ✓ 😀`를 그릴 때 글자마다 어느 글꼴이 맡는지 따라간다. Chromium 개발자 도구 프로토콜의 `CSS.getPlatformFontsForNode`로 실제로 잰 결과다. 이 환경에는 Pretendard가 없다.
+
+<AlgoTrace
+  caption="글꼴 목록을 글자마다 앞에서부터 훑는다"
+  memoryLabel="맡은 글꼴"
+  cells={["A", "b", "한", "글", "✓", "😀"]}
+  steps={[
+    { pointer: 0, memory: ["A → DejaVu"], caption: "A: Pretendard는 설치돼 있지 않아 건너뛰고, 다음 후보 DejaVu Sans에 A가 있어 여기서 멈춘다." },
+    { pointer: 1, memory: ["A → DejaVu", "b → DejaVu"], caption: "b도 DejaVu Sans에 있다. 같은 글꼴이 이어서 맡는다." },
+    { pointer: 2, memory: ["A → DejaVu", "b → DejaVu", "한 → WenQuanYi"], caption: "한: DejaVu Sans에는 한글 글리프가 없다. 다음 후보 WenQuanYi Zen Hei로 넘어간다." },
+    { pointer: 3, memory: ["A → DejaVu", "b → DejaVu", "한 → WenQuanYi", "글 → WenQuanYi"], caption: "글도 같은 이유로 WenQuanYi가 맡는다. 한 문단 안에서 글꼴이 둘로 나뉘었다." },
+    { pointer: 4, memory: ["A → DejaVu", "b → DejaVu", "한 → WenQuanYi", "글 → WenQuanYi", "✓ → DejaVu"], caption: "✓는 다시 DejaVu Sans에 있다. 앞 글자가 무엇이었든 목록 맨 앞부터 다시 훑는다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["DejaVu: 글리프 7개", "WenQuanYi: 글리프 2개"], caption: "😀까지 끝. 측정 결과는 DejaVu Sans 7개(공백 포함), WenQuanYi Zen Hei 2개였다. 목록 어디에도 없으면 시스템 대체 글꼴이 맡는다." },
+  ]}
+/>
+
+이 규칙에서 실무 규칙 몇 가지가 나온다.
+
+- 마지막에는 꼭 `sans-serif`, `serif`, `monospace` 같은 일반 계열을 둔다. 앞의 글꼴이 하나도 없을 때 브라우저 기본값(보통 명조 계열인 serif)으로 떨어지는 걸 막는다.
+- 공백이나 숫자가 들어간 이름은 따옴표로 감싼다. `Malgun Gothic`은 따옴표 없이도 동작하지만, 일반 계열 이름과 겹치는 이름(`"serif"`처럼 따옴표를 붙이면 일반 계열이 아니라 그런 이름의 글꼴을 찾는다)이 있어서 습관적으로 감싸는 편이 안전하다.
+- 영문 글꼴을 앞에, 한글 글꼴을 뒤에 두면 영문과 한글의 굵기·기준선이 미세하게 어긋나 보인다. Pretendard처럼 한글과 영문을 함께 담은 글꼴을 쓰면 이 어긋남이 없다.
+- `system-ui`는 운영체제 UI 글꼴을 쓴다. 다만 윈도우 한국어 환경에서 이 값이 맑은 고딕으로 잡히지 않는 등 운영체제·언어 설정에 따라 결과가 달라서, 한글 글꼴 이름을 뒤에 따로 적어 두는 쪽이 예측하기 쉽다.
+
+글자마다 글꼴이 나뉜다는 사실은 성능 문제와도 이어진다. 웹 폰트가 그 글자를 담고 있지 않으면 브라우저는 그 웹 폰트 파일을 받지 않거나(`unicode-range`가 맞지 않을 때) 받고도 다음 글꼴로 그린다. 서브셋 폰트에서 빠진 글자만 다른 모양으로 보이는 현상이 여기서 나온다.
+
+## font 한 줄이 줄 간격을 지운다
+
+`font`는 글꼴 관련 속성을 한 번에 쓰는 단축 속성이다. 순서는 `font-style font-variant font-weight font-stretch font-size/line-height font-family`이고, 크기와 글꼴 이름은 반드시 있어야 한다. 둘 중 하나라도 빠지면 선언 전체가 무효가 된다.
+
+문제는 단축 속성이 적지 않은 값을 초기값으로 되돌린다는 점이다. 디자인 시스템에서 본문 줄 간격을 1.7로 잡아 두고, 어느 컴포넌트에서 글꼴만 바꾸려고 `font`를 썼다고 하자.
+
+```css
+.article { font-size: 16px; line-height: 1.7; }
+.article p { font: 15px sans-serif; }   /* 크기와 글꼴만 바꾸려 했다 */
+```
+
+Chromium에서 `p`의 계산값을 확인했다.
+
+```text
+.article p  line-height: normal        ← 1.7이 사라졌다
+font-variant-caps: small-caps를 먼저 주고 font를 뒤에 쓰면 → normal
+letter-spacing: 2px를 먼저 주고 font를 뒤에 쓰면 → 2px (그대로)
+```
+
+`font`는 `line-height`, `font-variant-*`, `font-weight`, `font-style`, `font-stretch`를 모두 초기값으로 되돌린다. 같은 방식으로 확인해 보니 `font-kerning`, `font-size-adjust`, `font-feature-settings`, `font-variation-settings`, `font-optical-sizing`까지 초기값이 됐다. `letter-spacing`은 `font`의 하위 속성이 아니라서 남는다. 줄 간격이 갑자기 좁아졌는데 그 요소에는 `line-height`를 쓴 적이 없다면, 위쪽 어딘가에서 `font` 단축 속성을 썼는지부터 본다. 개발자 도구의 Styles 패널에서 `font`를 펼치면 어떤 하위 속성이 무슨 값으로 덮였는지 보인다.
+
+규칙은 간단하다. 전역 리셋처럼 모든 값을 의도적으로 정할 때만 `font`를 쓰고, 컴포넌트 안에서는 `font-size`, `font-family`처럼 개별 속성을 쓴다. 폼 요소를 부모 글꼴에 맞출 때 쓰는 `font: inherit`는 모든 하위 속성을 상속값으로 바꾸는 것이라 이 함정에 걸리지 않는다. 캐스케이드에서 단축 속성이 어떻게 이기고 지는지는 [캐스케이드와 명시도](/posts/css-cascade-specificity)에 있다.
+
+## 크기는 rem, 줄 간격은 숫자로
+
+글자 크기 단위는 몇 가지가 있지만 실무에서 고르는 기준은 하나다. 사용자가 브라우저 설정에서 기본 글자 크기를 키웠을 때 따라 커지느냐다.
+
+- `px`: 고정. 브라우저 기본 글자 크기를 20px로 바꿔도 그대로다(화면 확대는 따라간다).
+- `rem`: 루트(`html`) 글자 크기의 배수. 루트를 건드리지 않으면 브라우저 기본값(보통 16px)을 따라가서, 사용자가 기본값을 키우면 같이 커진다.
+- `em`: 부모 글자 크기의 배수. 중첩되면 곱해진다. `0.9em` 안에 `0.9em`이면 0.81배가 된다.
+- `%`: `font-size`에서는 `em`과 같다.
+
+본문 크기는 `rem`, 버튼 안의 아이콘처럼 "그 글자 크기에 비례해야 하는 것"은 `em`이 편하다. `html { font-size: 62.5% }`로 1rem을 10px로 맞추는 오래된 요령은 계산이 쉬워지는 대신 모든 컴포넌트가 이 전제에 묶인다. 서드파티 위젯이 16px 기준 `rem`으로 만들어져 있으면 그 위젯만 작아진다. 화면 폭에 따라 크기를 부드럽게 바꾸는 `clamp()`는 [반응형 디자인](/posts/responsive-design)에서 다뤘다.
+
+줄 간격은 다르다. `line-height`는 단위 없는 숫자로 쓰는 게 기본이다. 단위가 있느냐 없느냐에 따라 자식에게 물려주는 값이 달라지기 때문이다.
+
+```css
+.card       { font-size: 16px; line-height: 150%; }
+.card small { font-size: 32px; display: block; }   /* 큰 글자 */
+```
+
+Chromium에서 `small`의 계산값을 쟀다.
+
+```text
+부모 line-height: 150%  → 자식 line-height 24px (자식 글자 32px인데 줄은 24px, 글자가 겹친다)
+부모 line-height: 1.5   → 자식 line-height 48px (32px × 1.5)
+```
+
+아래 그림에서 점이 흐르는 방향이 상속 방향이다. 퍼센트와 `em`은 부모에서 이미 픽셀로 계산된 결과가 내려가고, 숫자는 비율 그대로 내려가서 자식이 자기 글자 크기로 다시 곱한다.
+
+<ConceptDiagram
+  width={400}
+  height={290}
+  caption="line-height가 자식에게 내려가는 두 가지 방식"
+  nodes={[
+    { id: "pp", label: "부모 150%", sub: "16px에서 계산", x: 100, y: 40, w: 150 },
+    { id: "pn", label: "부모 1.5", sub: "숫자 그대로", x: 300, y: 40, w: 150 },
+    { id: "vp", label: "24px", sub: "계산된 값", x: 100, y: 145, w: 130 },
+    { id: "vn", label: "1.5", sub: "비율", x: 300, y: 145, w: 130 },
+    { id: "cp", label: "자식 32px", sub: "줄 24px, 겹침", x: 100, y: 250, w: 150 },
+    { id: "cn", label: "자식 32px", sub: "줄 48px", x: 300, y: 250, w: 150 },
+  ]}
+  edges={[
+    { from: "pp", to: "vp", label: "먼저 계산" },
+    { from: "vp", to: "cp", label: "상속" },
+    { from: "pn", to: "vn" },
+    { from: "vn", to: "cn", label: "상속 후 곱함" },
+  ]}
+/>
+
+`normal`은 글꼴에 적힌 값(보통 1.2 안팎)을 쓰는데, 글꼴마다 다르고 대체 글꼴로 바뀌면 줄 높이가 같이 바뀐다. 웹 폰트가 늦게 도착할 때 문단 높이가 출렁이는 원인 중 하나라서, 본문에는 숫자를 명시한다. 한글 본문은 영어보다 글자가 빽빽해 1.6~1.8 정도를 많이 쓴다. 제목은 줄이 적고 글자가 커서 1.2~1.4가 보통이다.
+
+규칙을 함수로 옮겨 보면 헷갈리지 않는다. 부모 글자 크기, 부모에 적힌 `line-height`, 자식 글자 크기를 받아 자식의 줄 높이를 돌려주는 함수다. 루트 글자 크기는 16px로 둔다.
+
+<CodePlayground
+  caption="자식 요소의 line-height 계산하기"
+  functionName="resolveLineHeight"
+  initialCode={`// parentFontPx: 부모 글자 크기(px)
+// lineHeight: 부모에 적힌 값. "1.5", "150%", "1.5em", "24px", "2rem", "normal"
+// childFontPx: 자식 글자 크기(px)
+// 자식의 줄 높이를 px 숫자로 돌려준다. "normal"이면 "normal"을 그대로 돌려준다.
+function resolveLineHeight(parentFontPx, lineHeight, childFontPx) {
+  return 0;
+}`}
+  solution={`function resolveLineHeight(parentFontPx, lineHeight, childFontPx) {
+  if (lineHeight === "normal") return "normal";
+  const m = /^(-?[\\d.]+)(px|em|rem|%)?$/.exec(lineHeight);
+  const v = Number(m[1]);
+  switch (m[2]) {
+    case undefined: return v * childFontPx;    // 숫자: 자식이 자기 크기로 곱한다
+    case "px": return v;                       // 고정값
+    case "em": return v * parentFontPx;        // 부모에서 계산된 값이 내려온다
+    case "rem": return v * 16;                 // 루트 기준
+    case "%": return (v / 100) * parentFontPx; // em과 같다
+  }
+}`}
+  tests={[
+    { args: [16, "1.5", 32], expected: 48, label: "숫자 1.5, 자식 32px" },
+    { args: [16, "150%", 32], expected: 24, label: "150%, 자식 32px" },
+    { args: [16, "1.5em", 32], expected: 24, label: "1.5em, 자식 32px" },
+    { args: [16, "24px", 12], expected: 24, label: "24px, 자식 12px" },
+    { args: [20, "normal", 14], expected: "normal", label: "normal" },
+    { args: [16, "1.75", 16], expected: 28, label: "숫자 1.75, 자식 16px" },
+    { args: [18, "2rem", 24], expected: 32, label: "2rem" },
+  ]}
+/>
+
+## 굵기, 기울임, 숫자 모양
+
+`font-weight`는 100부터 900까지(가변 폰트는 1~1000 사이 아무 값)이고 `normal`은 400, `bold`는 700이다. 글꼴 파일에 그 굵기가 없으면 브라우저는 가까운 굵기를 고른다. 400보다 가벼운 값을 요청하면 더 가는 쪽부터, 500보다 무거운 값은 더 굵은 쪽부터 찾는다. 그래서 Regular와 Bold 두 파일만 올려 둔 상태에서 `font-weight: 600`을 쓰면 Bold가 나오고, `300`을 쓰면 Regular가 나온다. 디자인 시안의 SemiBold가 화면에서 Bold로 보인다면 그 굵기 파일이 실제로 로드됐는지 본다.
+
+아예 굵은 파일이 없으면 브라우저가 획을 두껍게 칠해 가짜 굵기를 만든다(합성 볼드). 기울임도 마찬가지로 이탤릭 파일이 없으면 글자를 비스듬히 밀어 만든다. 한글 글꼴은 대부분 이탤릭이 없어서 `em`이나 `i` 안의 한글은 이렇게 기울어진 가짜 모양이 된다. 이 모양이 싫으면 합성을 끈다.
+
+```css
+:root { font-synthesis: none; }           /* 가짜 굵기·기울임을 만들지 않는다 */
+em:lang(ko) { font-style: normal; font-weight: 600; }  /* 한글 강조는 굵기로 */
+```
+
+`font-style`의 `italic`은 글꼴 디자이너가 따로 그린 기울임체를, `oblique`는 똑바른 글자를 기울인 것을 요청한다. 대부분의 글꼴에서는 결과가 같아 보이지만, 가변 폰트는 `oblique 10deg`처럼 각도를 받아 `slnt` 축으로 그린다.
+
+가변 폰트는 파일 하나에 굵기(`wght`), 너비(`wdth`), 기울기(`slnt`), 이탤릭(`ital`), 크기 최적화(`opsz`) 같은 축을 담는다. 이 축은 가능하면 `font-weight`, `font-stretch`, `font-style`, `font-optical-sizing` 같은 일반 속성으로 조절한다. `font-variation-settings`로 직접 적으면 문제가 둘 생긴다. 하나는 축 하나만 바꾸려 해도 선언 전체가 바뀌어서 상위에서 준 다른 축 값이 사라진다는 것이다. 다른 하나는 `font-weight`를 함께 쓰면 `font-variation-settings`의 `wght`가 이긴다는 점이다. 버튼에서 `font-weight: 700`을 줬는데 굵어지지 않는다면 위쪽에 `font-variation-settings: "wght" 400`이 있는지 본다.
+
+`font-variant`는 글꼴 안에 있는 대체 글리프를 고른다. 실무에서 가장 쓸모 있는 건 숫자다.
+
+```css
+.price, td.num { font-variant-numeric: tabular-nums; }   /* 숫자 너비를 같게 */
+.lead { font-variant-numeric: proportional-nums; }      /* 본문용 비례 숫자 */
+abbr { font-variant-caps: all-small-caps; }             /* 영문 약어를 작은 대문자로 */
+```
+
+`tabular-nums`는 1과 8의 너비를 같게 만든다. 표의 금액 열, 바뀌는 타이머, 주가처럼 숫자가 바뀔 때 옆 글자가 흔들리지 않아야 하는 곳에 쓴다. 글꼴이 이 기능(OpenType `tnum`)을 갖고 있어야 효과가 있다. 앞에서 봤듯 `font` 단축 속성은 이 값들을 지운다.
+
+## 줄을 어디서 바꿀지 정하기
+
+처음 증상으로 돌아가 보자. 줄바꿈 위치를 정하는 속성은 셋이다.
+
+`word-break`는 단어 안에서 끊어도 되는지를 정한다.
+
+- `normal`: 언어 규칙을 따른다. 영어는 공백에서만, 한중일 문자는 글자 사이 어디서든 끊는다. 한글이 "데이터베 / 이스"로 갈린 이유다.
+- `keep-all`: 한중일 문자도 공백에서만 끊는다. 한글 문장은 띄어쓰기가 있으니 어절 단위로 줄이 바뀐다. 처음 실험의 두 번째 결과다.
+- `break-all`: 영어도 글자 사이 어디서든 끊는다. 해시값이나 토큰처럼 의미 단위가 없는 문자열에 쓴다.
+
+한글 본문에는 `word-break: keep-all`을 기본으로 두는 경우가 많다. 다만 띄어쓰기가 없는 긴 한글(예: "가나다라마바사아자차카타파하" 같은 상품 코드)은 끊을 자리가 없어 넘치니, 아래 `overflow-wrap`과 함께 쓴다. 일본어에는 구 단위로 끊는 `word-break: auto-phrase`(Chrome 119부터)가 있는데, 지금은 일본어에만 동작하고 한국어에는 효과가 없다.
+
+`overflow-wrap`은 "끊을 자리가 없어서 넘칠 때만" 아무 데서나 끊게 한다. 평소의 줄바꿈 규칙은 그대로 두고 비상구만 열어 주는 셈이다. 값은 `break-word`와 `anywhere` 두 가지인데, 둘의 차이는 최소 너비(min-content) 계산에서 나온다. 폭 300px 가로 flex 줄에 100px 메뉴와 주소를 나란히 놓고 쟀다.
+
+```text
+overflow-wrap 없음               주소 칸 376px, 줄 scrollWidth 476px (넘침)
+overflow-wrap: break-word         주소 칸 376px, 줄 scrollWidth 476px (넘침)
+overflow-wrap: anywhere           주소 칸 200px, 줄 scrollWidth 300px
+break-word + min-width: 0         주소 칸 200px, 줄 scrollWidth 300px
+```
+
+`break-word`는 실제로 줄을 그릴 때만 끊고, 최소 너비를 계산할 때는 주소 전체 길이를 쓴다. flex 아이템의 기본 `min-width: auto`가 이 최소 너비를 따르니 칸이 줄어들지 않는다. `anywhere`는 최소 너비 계산에도 끊는 자리를 넣어서 칸이 줄어든다. flex나 표 안에서 주소가 넘친다면 `anywhere`를 쓰거나 아이템에 `min-width: 0`을 준다. 이 최소 너비 이야기는 [Flexbox와 Grid](/posts/css-flexbox-grid)의 `min-width: 0`과 같은 문제다. 예전 이름인 `word-wrap`은 `overflow-wrap`의 별칭이고, `word-break: break-word`는 표준에서 쓰지 말라고 남겨 둔 값이다.
+
+```css
+.prose {
+  word-break: keep-all;        /* 한글은 어절 단위로 */
+  overflow-wrap: anywhere;     /* 그래도 넘치면 아무 데서나 */
+}
+.prose h2 { text-wrap: balance; }   /* 제목 줄 길이를 고르게 */
+.prose p  { text-wrap: pretty; }    /* 마지막 줄에 한 단어만 남는 것 피하기 */
+```
+
+`text-wrap: balance`는 여러 줄 제목의 줄 길이를 비슷하게 맞춘다. 비용이 커서 브라우저가 몇 줄 이하(Chromium은 6줄)에만 적용한다. `pretty`는 문단 끝 한 단어 고아 줄을 줄여 준다. Chromium 141은 둘 다 지원했고, 지원하지 않는 브라우저에서는 그냥 무시되니 넣어 두어도 손해가 없다. `hyphens: auto`는 영어 단어 중간을 하이픈으로 끊는데 `lang` 속성이 맞게 붙어 있어야 동작하고, 한글에는 해당이 없다.
+
+## 넘치는 글자를 말줄임으로
+
+목록에서 긴 상품 이름을 한 줄로 자르고 끝에 …을 붙이려면 세 가지가 함께 있어야 한다.
+
+```css
+.title {
+  white-space: nowrap;       /* 1. 줄을 바꾸지 않는다 */
+  overflow: hidden;          /* 2. 넘친 부분을 숨긴다 */
+  text-overflow: ellipsis;   /* 3. 숨긴 자리에 …을 그린다 */
+}
+```
+
+하나라도 빠지면 아무 일도 일어나지 않는다. 그리고 이 요소는 너비가 정해진 블록이어야 한다. 인라인 요소에는 효과가 없고, flex 아이템이라면 앞 절의 `min-width: 0`이 없어서 칸이 늘어나 버리면 말줄임이 생기지 않는다. 말줄임표가 안 생긴다는 질문의 절반은 이 경우다.
+
+두 줄 이상에서 자르는 건 아직 접두사가 붙은 방식을 쓴다.
+
+```css
+.summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;   /* 두 줄까지만 */
+  overflow: hidden;
+}
+```
+
+폭 200px 칸에 네 줄짜리 글을 넣고 높이를 쟀다.
+
+```text
+-webkit-line-clamp: 2         높이 42px, scrollHeight 84px (두 줄 보이고 끝에 …)
+line-clamp: 2 (접두사 없음)    높이 84px (Chromium 141은 무시)
+CSS.supports("line-clamp", "2") → false
+CSS.supports("-webkit-line-clamp", "2") → true
+```
+
+접두사 없는 `line-clamp`는 명세에는 있지만 Chromium 141은 지원하지 않았다. 지금은 `-webkit-` 버전이 크롬·사파리·파이어폭스에서 모두 동작하니 이걸 쓴다.
+
+말줄임에는 놓치기 쉬운 점이 둘 있다. 하나는 잘린 글자가 화면에서만 숨었을 뿐 DOM에는 그대로 있다는 것이다. 스크린리더는 전체를 읽고 검색(Ctrl+F)도 찾는다. 다른 하나는 눈으로 보는 사람은 잘린 뒷부분을 볼 방법이 없다는 것이다. 정말 중요한 정보라면 상세 화면에서 전문을 보여 주거나, 마우스 사용자를 위해 `title` 속성을 붙인다(`title`은 터치와 키보드로는 잘 안 보이니 이것만 믿지 않는다).
+
+## 자간, 대소문자, 밑줄, 그림자
+
+`letter-spacing`은 글자 사이를 넓히거나 좁힌다. `em`으로 쓰면 그 요소의 글자 크기를 기준으로 계산된다. 부모 20px 안에 있는 10px 요소에 `-0.02em`을 주면 `-0.2px`이 된다(측정값). 한글 제목은 기본 자간이 넓어 보여서 `-0.01em ~ -0.03em`처럼 살짝 좁히는 경우가 많다. 이 값은 상속되는데, 픽셀로 쓰면 크기가 다른 자식에게 같은 픽셀이 그대로 내려가니 `em`이 낫다. `word-spacing`은 단어 사이만 바꾼다.
+
+`text-transform: uppercase`는 화면에 그리는 모양만 바꾼다. "save draft"에 적용하고 확인했다.
+
+```text
+textContent       save draft
+innerText         SAVE DRAFT
+접근성 트리         paragraph: save draft
+```
+
+DOM과 접근성 트리에는 원래 글자가 남고, 렌더링 결과를 따르는 `innerText`만 대문자다. 그래서 테스트에서 `innerText`로 비교하는 코드는 CSS를 바꾸면 깨진다. 대문자 표기가 디자인일 뿐이라면 원문은 보통 문장으로 쓰고 CSS로 바꾼다. 반대로 "NASA"처럼 원래 대문자인 말은 원문에 대문자로 쓴다.
+
+`text-decoration`은 선 종류·스타일·색·두께를 한 번에 정하는 단축 속성이다.
+
+```css
+a {
+  text-decoration: underline 1px;          /* 선 종류와 두께 */
+  text-decoration-color: currentColor;
+  text-underline-offset: 0.2em;            /* 글자와 밑줄 사이 */
+  text-decoration-skip-ink: auto;          /* g, y 아래에서 선을 끊는다(기본값) */
+}
+```
+
+링크 밑줄을 지우고 싶다면 색만으로 링크를 구분하게 되지 않는지 먼저 본다. 본문 속 링크를 색으로만 구분하면 색각 이상이 있는 사람은 찾기 어렵고, WCAG의 1.4.1(색만으로 정보를 전달하지 않기) 기준에 걸리고, 밑줄 없이 통과하려면 주변 글자와 3:1 이상 대비를 두고 포커스·호버 때 밑줄 같은 다른 표시를 보태는 방법(기법 G183)을 쓴다. 자세한 기준은 [웹 접근성 기초](/posts/web-accessibility)에 있다.
+
+`text-shadow`는 `x y 흐림 색` 순서로 쓴다. 사진 위에 흰 글자를 올릴 때 대비를 보충하는 용도로는 쓸 만하지만, 그림자에 기대어 대비를 맞추면 사진이 바뀔 때 깨진다. 반투명 배경을 까는 편이 안정적이다.
+
+정렬은 `text-align`으로 한다. `left`, `right` 대신 `start`, `end`를 쓰면 다음 절의 오른쪽에서 왼쪽 언어에서도 맞게 뒤집힌다. `justify`는 양쪽을 맞추려고 단어 사이를 늘리는데, `keep-all`과 함께 쓴 좁은 한글 칸에서는 어절 사이가 크게 벌어진다. 모바일 본문에는 왼쪽(시작) 정렬이 무난하다.
+
+## 오른쪽에서 왼쪽으로 쓰는 글
+
+아랍어와 히브리어는 오른쪽에서 왼쪽으로 쓴다. 방향은 CSS `direction` 대신 HTML `dir` 속성으로 정한다. 방향은 스타일이 아니라 내용의 성질이라서, CSS가 꺼져 있거나 다른 곳으로 복사돼도 남아야 하기 때문이다. CSS 명세도 `direction`을 문서 작성자가 직접 쓰지 말라고 적어 두었다.
+
+```html
+<html lang="ar" dir="rtl">
+<!-- 사용자가 쓴 글처럼 방향을 모르는 내용 -->
+<p dir="auto">שלום world</p>
+<!-- 문장 안에 끼워 넣는 사용자 이름 -->
+<li>작성자: <bdi>مريم</bdi> · 댓글 3</li>
+```
+
+`dir="auto"`는 처음 나오는 강한 방향 문자(히브리어 ש)를 보고 방향을 정한다. `bdi`는 안의 글자 방향이 바깥 문장의 숫자·기호 배치를 어지럽히지 않게 격리한다. 댓글 작성자 이름처럼 어떤 언어가 들어올지 모르는 곳에 쓴다.
+
+방향을 지원하려면 레이아웃도 물리 방향(left, right) 대신 논리 방향으로 쓴다.
+
+```css
+.card {
+  margin-inline-start: 1rem;     /* ltr에서는 왼쪽, rtl에서는 오른쪽 */
+  padding-block: 0.5rem;         /* 위아래 */
+  border-inline-end: 1px solid;  /* 글이 끝나는 쪽 */
+  text-align: start;
+}
+```
+
+한국어만 다루는 서비스라도 논리 속성을 쓰는 편이 손해는 없다. 나중에 세로쓰기(`writing-mode: vertical-rl`)를 넣을 때도 `inline`과 `block`이 글 방향을 따라 함께 돈다.
+
+## 글자 문제를 현장에서 좁히는 순서
+
+글자가 시안과 다르게 보일 때는 다음 순서로 본다.
+
+1. 어떤 글꼴로 그려졌나. 크롬 개발자 도구의 Elements → Computed 맨 아래 "Rendered Fonts"에 그 요소를 실제로 그린 글꼴과 글리프 수가 나온다. 앞의 AlgoTrace와 같은 정보다. 웹 폰트 이름이 아니라 시스템 글꼴이 보이면 폰트 로딩이나 `unicode-range`, 따옴표 빠진 이름을 의심한다.
+2. 줄 간격이 왜 이 값인가. Computed의 `line-height`를 누르면 이 값을 정한 규칙으로 간다. 거기가 `font` 단축 속성이면 앞의 함정이다. 퍼센트가 상속된 경우도 여기서 보인다.
+3. 굵기가 왜 다른가. Network 패널에서 그 굵기 파일이 내려왔는지, `font-variation-settings`가 덮지 않는지 본다.
+4. 왜 넘치나. 넘치는 요소를 찾을 때는 콘솔에서 `scrollWidth`가 `clientWidth`보다 큰 요소를 골라낸다. 주소·해시·이메일 같은 긴 문자열이면 `overflow-wrap: anywhere`, flex 안이면 `min-width: 0`이다. 반응형에서 넘치는 요소를 찾는 법은 [반응형 디자인](/posts/responsive-design)에 더 있다.
+
+```js
+// 콘솔: 화면보다 넓은 요소 찾기
+[...document.querySelectorAll("*")].filter(
+  (el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX === "visible"
+);
+```
+
+글자 설정은 대부분 상속된다. 그래서 문제를 일으킨 선언이 문제가 보이는 요소가 아니라 몇 단계 위에 있는 경우가 많다. 계산값에서 출발해 "누가 이 값을 정했나"를 거꾸로 따라가는 습관이 가장 빠르다. 글의 의미를 담는 태그 쪽 이야기는 [글을 담는 태그들](/posts/html-text-semantics)로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### font-family에 여러 글꼴을 적으면 브라우저는 어떻게 고르나요?
+
+글자 하나마다 목록 앞에서부터 그 글자의 글리프를 가진 첫 글꼴을 고른다. 그래서 영문 글꼴을 앞에 두면 영어는 그 글꼴, 한글은 뒤의 한글 글꼴로 한 문단 안에서도 글꼴이 나뉜다. 목록 끝에는 `sans-serif` 같은 일반 계열을 둬서 모두 없을 때 브라우저 기본값으로 떨어지지 않게 한다.
+
+### line-height를 단위 없이 쓰라는 이유는 무엇인가요?
+
+상속 방식이 달라서다. 퍼센트나 `em`은 부모에서 픽셀로 계산된 값이 그대로 내려가서, 글자가 큰 자식은 줄 높이가 모자라 겹친다. 숫자는 비율이 내려가서 자식이 자기 글자 크기로 다시 곱하니 어떤 크기에서도 비율이 유지된다. `normal`은 글꼴마다 값이 달라 대체 글꼴로 바뀌면 높이가 출렁인다.
+
+### font 단축 속성을 쓸 때 주의할 점은요?
+
+적지 않은 하위 속성을 초기값으로 되돌린다. 크기와 글꼴만 적어도 `line-height`가 `normal`로, `font-variant-numeric`이나 `font-weight`도 초기값으로 바뀐다. 그래서 컴포넌트에서는 개별 속성을 쓰고, 단축 속성은 값을 모두 정하는 리셋에만 쓴다. 크기나 글꼴 이름이 빠지면 선언 전체가 무효가 된다.
+
+### 한글이 단어 중간에서 끊길 때 어떻게 하나요?
+
+`word-break: keep-all`로 한글도 공백에서만 끊게 한다. 띄어쓰기 없는 긴 문자열은 그러면 넘치므로 `overflow-wrap: anywhere`를 함께 줘서 넘칠 때만 아무 데서나 끊게 한다. `break-all`은 영어까지 글자 단위로 끊어서 본문에는 맞지 않다.
+
+### overflow-wrap의 break-word와 anywhere는 무엇이 다른가요?
+
+실제로 줄을 그릴 때는 둘 다 넘치는 단어를 끊는다. 차이는 최소 너비 계산이다. `anywhere`는 끊는 자리를 최소 너비에 반영해서 flex 아이템이나 표 칸이 줄어들 수 있고, `break-word`는 반영하지 않아 `min-width: auto`인 flex 아이템이 늘어난 채로 넘친다. `break-word`를 쓴다면 아이템에 `min-width: 0`을 준다.
+
+### 여러 줄 말줄임은 어떻게 만들고, 접근성에서는 무엇을 봐야 하나요?
+
+`display: -webkit-box`, `-webkit-box-orient: vertical`, `-webkit-line-clamp`, `overflow: hidden`을 함께 쓴다. 접두사 없는 `line-clamp`는 아직 Chromium이 지원하지 않는다. 잘린 글은 DOM에 남아 스크린리더는 다 읽지만 눈으로는 볼 수 없으니, 중요한 정보라면 전문을 볼 수 있는 경로를 따로 둔다.
+
+### 가변 폰트에서 font-variation-settings 대신 font-weight를 쓰라는 이유는요?
+
+`font-variation-settings`는 축 하나만 바꿔도 선언 전체가 바뀌어서 상위에서 준 다른 축이 사라지고, 같은 축을 `font-weight`보다 우선한다. 그래서 어딘가에 `wght`를 적어 두면 아래에서 `font-weight`를 바꿔도 반영되지 않는다. 굵기·너비·기울기·광학 크기는 전용 속성으로 다루고, 전용 속성이 없는 사용자 정의 축만 `font-variation-settings`로 쓴다.
+
+### 오른쪽에서 왼쪽 언어를 지원할 때 CSS direction 대신 dir 속성을 쓰는 이유는요?
+
+방향은 꾸밈이 아니라 내용의 성질이라 CSS 없이도 유지돼야 하기 때문이다. `dir`은 복사·검색·접근성 도구에도 전달되고, `dir="auto"`와 `bdi`로 방향을 모르는 사용자 입력도 다룰 수 있다. 레이아웃은 `margin-inline-start`, `text-align: start` 같은 논리 속성으로 쓰면 방향에 따라 함께 뒤집힌다.

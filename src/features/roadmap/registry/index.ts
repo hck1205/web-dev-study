@@ -1,12 +1,13 @@
 import { POSTS } from "@/features/posts/registry";
 import { ROADMAPS } from "./roadmaps";
+import { TRACKS } from "./tracks";
 import type { FlatCheckpoint, FlatRoadmap, PostPlacement } from "./types";
-import { flattenCheckpoints, flattenRoadmaps, placePosts, roadmapKey, validateRoadmaps } from "./utils";
+import { flattenCheckpoints, flattenRoadmaps, placePosts, roadmapKey, validateRoadmaps, validateTracks } from "./utils";
 
-export type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier } from "./types";
+export type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier, Track, TrackStep } from "./types";
 export { checkpointHref, isCheckpoint, isPost, isRoadmap, postSlug, roadmapHref, roadmapKey } from "./utils";
 
-export { ROADMAPS };
+export { ROADMAPS, TRACKS };
 
 /** 부모 → 자식 순으로 평탄화한 모든 로드맵 */
 export const FLAT_ROADMAPS: FlatRoadmap[] = flattenRoadmaps(ROADMAPS);
@@ -15,6 +16,7 @@ validateRoadmaps(
   FLAT_ROADMAPS,
   POSTS.map((post) => post.slug),
 );
+validateTracks(TRACKS, FLAT_ROADMAPS);
 
 const placements: Map<string, PostPlacement> = placePosts(FLAT_ROADMAPS);
 

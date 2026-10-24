@@ -1,6 +1,6 @@
 import { type StudyProgress, stageCounts, stageOf } from "../../atoms/study-progress";
 import { CHECKPOINTS, FLAT_ROADMAPS, findRoadmap, tierOf } from "../../registry";
-import type { FlatRoadmap, Tier } from "../../registry";
+import type { FlatRoadmap, Tier, Track } from "../../registry";
 import { roadmapKey } from "../../registry/utils";
 
 export interface RequirementStatus {
@@ -132,4 +132,37 @@ export function topGraph(progress: StudyProgress): { nodes: RoadmapGraphNode[]; 
     return nodeOf(roadmap, progress, open);
   });
   return { nodes, edges };
+}
+
+/** 직무별 경로의 단계 한 칸 */
+export interface TrackStepStats {
+  label: string;
+  roadmaps: { key: string; label: string; href: string }[];
+  stats: ReturnType<typeof stageCounts>;
+  /** 앞 단계를 다 읽었고 이 단계는 아직 다 읽지 않은 첫 칸 */
+  isNext: boolean;
+}
+
+/**
+ * 직무별 경로의 단계마다 진행률. 단계 안의 로드맵 글을 모아 센다.
+ * 같은 글이 앞 단계에 이미 나왔으면(인터넷, Git 같은 공통 로드맵) 뒤 단계에서는 다시 세지 않는다.
+ */
+export function trackStats(track: Track, progress: StudyProgress) {
+  const counted = new Set<string>();
+  let foundNext = false;
+  const steps: TrackStepStats[] = track.steps.map((step) => {
+    const roadmaps = step.roadmaps.map((key) => findRoadmap(key)).filter((roadmap) => roadmap !== undefined);
+    const posts = [...new Set(roadmaps.flatMap((roadmap) => roadmap.posts))].filter((slug) => !counted.has(slug));
+    for (const slug of posts) counted.add(slug);
+    const stats = stageCounts(posts, progress);
+    const isNext = !foundNext && stats.started < stats.total;
+    if (isNext) foundNext = true;
+    return {
+      label: step.label,
+      roadmaps: roadmaps.map((roadmap) => ({ key: roadmapKey(roadmap.path), label: roadmap.node.label, href: `/roadmap/${roadmapKey(roadmap.path)}` })),
+      stats,
+      isNext,
+    };
+  });
+  return { steps, total: stageCounts([...counted], progress) };
 }

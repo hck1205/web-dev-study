@@ -63,3 +63,19 @@ export interface FlatCheckpoint {
   /** 이 관문 앞에 놓인 글들 (하위 로드맵 포함) */
   posts: string[];
 }
+
+/** 직무별 경로의 한 단계. roadmaps는 로드맵 절대 경로("frontend/react") */
+export interface TrackStep {
+  label: string;
+  roadmaps: string[];
+}
+
+/** roadmap.sh 역할 로드맵의 순서를 따라 로드맵을 엮은 경로 */
+export interface Track {
+  id: string;
+  label: string;
+  description: string;
+  /** 순서를 참고한 roadmap.sh 주소 */
+  source: string;
+  steps: TrackStep[];
+}

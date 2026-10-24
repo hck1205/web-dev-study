@@ -1,0 +1,401 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("pattern-null-object");
+
+<EasyIntro>
+  학교 급식실에 이름표 상자가 있다고 해 보자. 학생은 이름표를 내고 밥을 받는데, 전학 온 첫날이라 이름표가 없는 학생도 있다. 그때마다 배식하는 분이 "이름표 없니? 그럼 반찬은 기본으로, 우유는 없어" 하고 따로 판단하면 줄이 느려지고, 배식대마다 판단이 다르게 나온다.
+
+  그래서 급식실은 "손님" 이름표를 하나 만들어 둔다. 이름표가 없는 학생에게는 이 손님 이름표를 쥐여 주고, 배식대는 누가 오든 이름표만 보고 똑같이 밥을 준다. 손님 이름표에는 "기본 반찬, 할인 없음"이 적혀 있어서 따로 물어볼 것이 없다.
+
+  하지만 이름표 상자가 통째로 사라진 날에도 모두에게 손님 이름표를 주면 안 된다. 그날은 문제가 생긴 날이니 선생님께 알려야 한다. 이름표가 없는 건 흔한 일이지만, 상자가 사라진 건 사고다.
+
+  이 글은 이 손님 이름표를 코드에서 만드는 방법과, 손님 이름표가 사고를 숨겨 버리는 경우를 함께 본다.
+</EasyIntro>
+
+구독 서비스의 결제 화면을 고치다가 같은 줄을 세 번째 봤다.
+
+```ts
+const rate = user != null && user.plan != null && user.plan.discountRate != null ? user.plan.discountRate : 0;
+```
+
+결제 금액을 계산하는 함수에 한 번, 헤더에 "프로 회원" 배지를 그리는 컴포넌트에 한 번, 영수증 메일을 만드는 곳에 또 한 번 있다. 비로그인 사용자는 `user`가 `null`이고, 가입만 하고 요금제를 고르지 않은 사용자는 `plan`이 `null`이다. 문제는 세 곳의 기본값이 미묘하게 다르다는 것이다. 결제는 할인율 0, 배지는 "무료", 메일은 요금제 이름을 빈 문자열로 찍는다. 기획자가 "요금제 없는 사람은 '베이직'으로 보여 주세요"라고 하면 세 군데를 다 찾아 고쳐야 한다.
+
+널 객체(Null Object) 패턴은 이 "없음"을 진짜 객체 하나로 만든다. 없는 사용자 대신 "손님" 객체를 돌려주고, 손님은 할인율 0, 이름 "손님", 배지 없음처럼 없을 때의 동작을 스스로 안다. 부르는 쪽은 null인지 묻지 않고 그냥 메서드를 부른다. 이 글에서는 패턴의 모양을 보고, 옵셔널 체이닝이나 `Optional`과 무엇이 다른지, 널 객체가 오류를 조용히 숨기는 경우를 본다. 뒤쪽에서는 같은 뿌리를 가진 문제인 "null과 불리언을 인자로 넘기는 함수"를 다룬다. 시리즈의 다른 패턴은 [디자인 패턴 개요](/posts/design-patterns-overview)에서 이어진다.
+
+## null 검사가 부르는 쪽마다 복사된다
+
+처음 코드를 조금 넓게 보면 이렇다.
+
+```ts
+interface Plan {
+  name: string;
+  discountRate: number; // 퍼센트
+}
+
+interface User {
+  id: string;
+  name: string;
+  plan: Plan | null; // 요금제를 고르지 않았으면 null
+}
+
+async function findUser(id: string | undefined): Promise<User | null> {
+  if (!id) return null;
+  return db.users.findById(id); // 없으면 null
+}
+
+// 결제
+function totalPrice(user: User | null, amount: number) {
+  const rate = user?.plan?.discountRate ?? 0;
+  return amount - Math.floor((amount * rate) / 100);
+}
+
+// 헤더
+function badgeLabel(user: User | null) {
+  if (!user) return null;
+  if (!user.plan) return "무료";
+  return user.plan.name;
+}
+
+// 영수증 메일
+function receiptLine(user: User | null) {
+  return `${user ? user.name : "고객"}님, ${user?.plan?.name ?? ""} 요금제로 결제했다`;
+}
+```
+
+옵셔널 체이닝 덕분에 줄은 짧아졌지만 구조는 그대로다. "사용자가 없으면 어떻게 하나"를 부르는 쪽 함수마다 따로 정한다. 그 결과 비로그인 사용자의 이름은 결제 메일에서 "고객", 헤더에서는 아예 안 보임, 다른 화면에서는 "손님"이 된다. 새 화면을 만드는 사람은 이 기본값들 중 무엇을 따라야 하는지 모른다. 검사를 하나 빼먹으면 `Cannot read properties of null (reading 'plan')`이 운영 로그에 찍힌다.
+
+없음을 다루는 지식이 데이터를 쓰는 쪽에 흩어져 있다는 게 진짜 문제다. 널 객체는 이 지식을 데이터 쪽, 즉 "없음"을 표현하는 객체 안으로 옮긴다.
+
+## 아무 일도 하지 않는 손님 만들기
+
+먼저 부르는 쪽이 필요로 하는 동작을 인터페이스로 모은다. 데이터 필드를 꺼내 판단하던 것을 메서드로 바꾸는 게 첫 단계다.
+
+```ts
+interface Customer {
+  readonly displayName: string;
+  readonly planName: string;
+  discountRate(): number;
+  badge(): string | null; // 배지가 없으면 null. 화면이 그리지 않는다
+}
+
+class RegisteredCustomer implements Customer {
+  constructor(private readonly user: User) {}
+  get displayName() {
+    return this.user.name;
+  }
+  get planName() {
+    return this.user.plan?.name ?? "베이직"; // 요금제 없음의 기본값은 여기 한 곳
+  }
+  discountRate() {
+    return this.user.plan?.discountRate ?? 0;
+  }
+  badge() {
+    return this.user.plan ? this.user.plan.name : null;
+  }
+}
+
+// 널 객체: 같은 인터페이스, 없을 때의 동작
+const GUEST: Customer = Object.freeze({
+  displayName: "손님",
+  planName: "베이직",
+  discountRate: () => 0,
+  badge: () => null,
+});
+```
+
+그리고 "없음"이 만들어지는 자리에서 null 대신 이 객체를 돌려준다.
+
+```ts
+async function findCustomer(id: string | undefined): Promise<Customer> {
+  if (!id) return GUEST; // 비로그인
+  const user = await db.users.findById(id);
+  return user ? new RegisteredCustomer(user) : GUEST; // 탈퇴했거나 없는 id
+}
+
+function totalPrice(customer: Customer, amount: number) {
+  return amount - Math.floor((amount * customer.discountRate()) / 100);
+}
+
+function receiptLine(customer: Customer) {
+  return `${customer.displayName}님, ${customer.planName} 요금제로 결제했다`;
+}
+```
+
+`totalPrice`와 `receiptLine`의 시그니처에서 `| null`이 사라졌다. 타입이 null을 허용하지 않으니 TypeScript의 `strictNullChecks`가 켜진 상태에서는 부르는 쪽이 검사를 넣을 이유도 없다. "요금제 없는 사람은 베이직"이라는 규칙은 `RegisteredCustomer.planName` 한 곳에 있다. 비로그인 사용자를 어떻게 보여 줄지는 `GUEST` 한 곳에 있다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="부르는 쪽은 Customer만 알고, 없음은 GUEST가 맡는다"
+  nodes={[
+    { id: "checkout", label: "totalPrice", sub: "결제", x: 70, y: 40, w: 110 },
+    { id: "header", label: "Header", sub: "배지", x: 200, y: 40, w: 90 },
+    { id: "mail", label: "receiptLine", sub: "메일", x: 330, y: 40, w: 110 },
+    { id: "iface", label: "Customer", sub: "discountRate(), badge()", x: 200, y: 130, w: 190 },
+    { id: "real", label: "RegisteredCustomer", sub: "DB의 사용자", x: 105, y: 215, w: 170 },
+    { id: "guest", label: "GUEST", sub: "할인 0, 배지 없음", x: 300, y: 215, w: 130 },
+  ]}
+  edges={[
+    { from: "checkout", to: "iface" },
+    { from: "header", to: "iface" },
+    { from: "mail", to: "iface" },
+    { from: "real", to: "iface", dashed: true },
+    { from: "guest", to: "iface", dashed: true },
+  ]}
+/>
+
+이 패턴은 Bobby Woolf가 1990년대 후반 패턴 모음집(Pattern Languages of Program Design 3)에 정리했다. GoF의 23개 패턴에는 들어 있지 않지만 행위 패턴처럼 다형성으로 조건문을 없앤다는 점에서 [전략 패턴](/posts/pattern-strategy)과 가깝다. 전략이 "여러 방법 중 하나"를 고른다면, 널 객체는 그 방법 중 하나가 "아무것도 하지 않기"인 경우다. Martin Fowler는 이것을 넓혀 Special Case 패턴이라고 부른다. 없는 고객만이 아니라 "정지된 고객", "확인 중인 고객"처럼 특별한 경우마다 객체를 하나씩 둘 수 있다.
+
+## 없음을 돌려주는 자리를 한 곳으로
+
+널 객체가 효과를 보려면 null이 생기는 지점이 적어야 한다. 아래 그림에서 다음을 누르면 요청 하나가 들어와 손님 객체가 만들어지고 쓰이는 순서가 보인다.
+
+<SequenceDiagram
+  caption="null이 생기는 자리는 하나, 쓰는 쪽은 null을 모른다"
+  actors={[
+    { id: "handler", label: "Handler" },
+    { id: "repo", label: "findCustomer" },
+    { id: "db", label: "DB" },
+    { id: "checkout", label: "totalPrice" },
+    { id: "guest", label: "GUEST" },
+  ]}
+  steps={[
+    { from: "handler", to: "repo", label: "findCustomer(id)", title: "세션에서 꺼낸 id로 고객을 찾는다", detail: "비로그인이면 id가 undefined다. 핸들러는 그 사실을 따로 검사하지 않는다." },
+    { from: "repo", to: "db", label: "findById", title: "DB에 묻는다", detail: "탈퇴한 사용자라 행이 없다. 드라이버는 null을 돌려준다.", payload: "findById(\"u-404\") → null" },
+    { from: "repo", to: "handler", label: "GUEST", title: "null 대신 손님 객체를 돌려준다", detail: "null을 Customer로 바꾸는 일은 여기서 한 번만 일어난다. 이 함수 밖으로 null이 나가지 않는다." },
+    { from: "handler", to: "checkout", label: "totalPrice(c, 50000)", title: "결제 계산에 그대로 넘긴다", detail: "핸들러는 받은 것이 진짜 고객인지 손님인지 모른다." },
+    { from: "checkout", to: "guest", label: "discountRate()", title: "인터페이스대로 부른다", detail: "손님은 할인율 0을 돌려준다. 결제 코드에는 if가 하나도 없다.", payload: "discountRate() → 0, total → 50000" },
+  ]}
+/>
+
+같은 원리로 컬렉션은 null 대신 빈 배열을 돌려준다. 이게 가장 흔하고 가장 덜 논쟁적인 널 객체다. `orders.map(...)`은 빈 배열에서 아무것도 하지 않고, `length`는 0이고, `for...of`는 한 번도 돌지 않는다. "주문이 없으면 null"을 돌려주는 API를 받으면 모든 호출부가 `orders?.map` 또는 `orders ?? []`를 써야 한다.
+
+```ts
+// 나쁜 예: 없음과 빈 목록이 두 가지 모양이다
+async function recentOrders(userId: string): Promise<Order[] | null> { /* ... */ }
+
+// 좋은 예: 없으면 빈 배열
+async function recentOrders(userId: string): Promise<Order[]> { /* ... */ }
+```
+
+다른 언어의 표준 라이브러리에도 같은 생각이 많다. Java의 `Collections.emptyList()`는 불변 빈 리스트를 하나만 만들어 계속 돌려준다. Go의 nil 슬라이스는 `len`이 0이고 `range`가 그냥 끝나서, 대부분의 경우 빈 슬라이스와 똑같이 쓸 수 있다. 유닉스의 `/dev/null`은 쓰기를 모두 받아서 버리는 파일이다.
+
+Python의 `logging.NullHandler`는 라이브러리 작성자를 위한 널 객체다. 라이브러리가 로그를 남기는데 쓰는 앱이 로깅을 설정하지 않았으면, Python 3은 마지막 수단 핸들러로 WARNING 이상을 표준 에러에 찍는다. 라이브러리가 자기 로거에 `NullHandler`를 달아 두면 그게 조용해진다. Python 3.13에서 돌려 봤다.
+
+```python
+import logging
+lib = logging.getLogger("payments_sdk")
+lib.warning("retrying request")          # 핸들러가 하나도 없다
+lib.addHandler(logging.NullHandler())
+lib.warning("retrying request again")    # 이제 조용하다
+```
+
+```text
+retrying request
+```
+
+두 번째 줄은 찍히지 않았다. 앱이 나중에 루트 로거에 핸들러를 달면 로그는 위로 전파되어 거기서 정상적으로 찍힌다. "설정하지 않았을 때 아무 일도 하지 않는 핸들러"가 들어 있을 뿐이다.
+
+### 널 객체는 하나만 만든다
+
+널 객체에는 상태가 없으니 매번 새로 만들 필요가 없다. 위 코드처럼 `Object.freeze`로 얼린 객체 하나를 모두가 같이 쓴다. 얼리지 않으면 누군가 `GUEST.displayName = "김철수"`처럼 고쳐서 모든 비로그인 사용자의 이름이 바뀌는 사고가 날 수 있다. 클래스로 만든다면 생성자를 숨기고 정적 인스턴스 하나만 둔다. 이건 [싱글턴](/posts/pattern-singleton)을 쓰는 몇 안 되는 무해한 경우다. 상태가 없으니 전역 상태 문제가 생기지 않는다.
+
+### isNull() 메서드를 둘까
+
+손님인지 알아야 하는 곳이 정말 있을 수 있다. "로그인하고 할인받으세요" 배너를 손님에게만 보여 주는 경우다. 이때 `customer === GUEST`로 비교하거나 인터페이스에 `isGuest()`를 둔다. 다만 이런 질문이 곳곳에서 늘어나면 null 검사를 이름만 바꿔서 되살린 것이다. 배너를 보여 줄지도 동작으로 옮길 수 있다면(`customer.promoBanner()`가 손님에게만 배너를 돌려준다) 그쪽이 낫다. 질문이 한두 곳에 머물면 `isGuest()`를 둬도 괜찮다.
+
+## 옵셔널 체이닝과 Optional은 무엇이 다른가
+
+`user?.plan?.discountRate ?? 0`도 null을 안전하게 다룬다. 그런데 이건 부르는 쪽의 문법이다. 기본값 0을 정하는 일이 여전히 부르는 곳마다 있다. 결제가 0을, 다른 화면이 `undefined`를 기본값으로 쓰면 둘이 어긋난다. 널 객체는 기본값을 정하는 일을 정의하는 쪽, 한 곳으로 옮긴다. 옵셔널 체이닝이 어디서 멈추고 무엇을 없음으로 보는지는 [옵셔널 체이닝과 ??](/posts/js-optional-chaining-nullish)에 따로 썼다.
+
+Java의 `Optional`, Rust의 `Option`, 함수형의 Maybe는 방향이 반대다. 없음을 숨기지 않고 타입에 드러내서, 부르는 쪽이 반드시 처리하게 만든다.
+
+```ts
+// 널 객체: 없음을 숨긴다. 부르는 쪽은 신경 쓰지 않는다
+const rate = customer.discountRate();
+
+// Option/Maybe 계열: 없음을 드러낸다. 부르는 쪽이 고른다
+const rate = findPlan(user).map((p) => p.discountRate).unwrapOr(0);
+```
+
+둘 중 무엇을 고를지는 "없을 때 해야 할 일이 하나로 정해져 있나"로 정한다. 비로그인 사용자의 할인율은 어느 화면에서든 0이다. 이렇게 답이 하나면 널 객체가 맞다. 반대로 "고객을 못 찾았을 때"의 처리가 화면마다 다르다면(관리자 화면은 에러를 보여 주고, 결제는 손님으로 진행하고, 배치는 건너뛴다) 없음을 숨기면 안 된다. 그때는 `Customer | null`이나 Option을 돌려주고 부르는 쪽이 고르게 둔다. map과 flatMap으로 없는 값을 다루는 방법은 [펑터와 모나드](/posts/fp-functors-monads-js)에서 이어진다.
+
+## 손님이 사고를 숨기는 경우
+
+널 객체의 가장 큰 위험은 아무 일도 하지 않는다는 바로 그 성질이다. 아무 일도 하지 않아도 되는 상황과, 아무 일도 하지 않으면 큰일 나는 상황을 섞으면 장애가 조용히 지나간다.
+
+```ts
+async function findCustomer(id: string | undefined): Promise<Customer> {
+  if (!id) return GUEST;
+  try {
+    const user = await db.users.findById(id);
+    return user ? new RegisteredCustomer(user) : GUEST;
+  } catch {
+    return GUEST; // DB가 죽어도 손님으로 진행한다
+  }
+}
+```
+
+마지막 `catch`가 문제다. DB 연결이 끊기면 모든 유료 회원이 손님으로 처리되고 할인 없이 결제된다. 에러는 어디에도 남지 않는다. 다음 날 고객센터에 "할인이 안 됐다"는 문의가 쌓이고 나서야 알게 된다. 로그인한 사람이 손님으로 보이는 화면은 에러 화면보다 원인을 찾기 어렵다.
+
+구분할 것은 "없음"과 "실패"다. 비로그인, 탈퇴한 사용자, 요금제를 고르지 않은 사용자는 정상적인 없음이다. 서비스가 설계할 때부터 예상한 상태이고, 그때 할 일이 정해져 있다. DB 타임아웃, 권한 오류, 잘못된 id 형식은 실패다. 실패는 예외로 던지거나 Result로 돌려서 위로 올려야 한다.
+
+```ts
+async function findCustomer(id: string | undefined): Promise<Customer> {
+  if (!id) return GUEST;                       // 없음: 손님
+  const user = await db.users.findById(id);    // 실패: 예외가 그대로 올라간다
+  return user ? new RegisteredCustomer(user) : GUEST;
+}
+```
+
+몇 가지 비슷한 함정이 더 있다.
+
+- `NullPaymentGateway`처럼 부수 효과가 핵심인 객체를 널 객체로 만들면, 설정이 빠진 운영 환경에서 결제가 "성공"하고 돈은 받지 않는다. 결제, 메일 발송, 감사 로그처럼 빠지면 안 되는 동작은 설정이 없으면 시작할 때 터지게 한다.
+- 널 객체가 값을 돌려줘야 하는 메서드에서 그럴듯한 가짜 값을 지어내면 안 된다. 손님의 `discountRate()`가 0인 건 사실이지만, 손님의 `email()`이 `""`이면 메일 발송 코드가 빈 주소로 보내려다 다른 곳에서 터진다. 답이 없는 질문이라면 그 메서드를 인터페이스에 두지 말거나, 손님일 때 쓰지 않는 다른 경로를 둔다.
+- 개발 환경용 `NullLogger`, `NullMetrics`는 편하지만, 운영 설정에서 실수로 이게 들어가면 관측이 통째로 사라진다. 시작할 때 어떤 구현이 붙었는지 한 줄 남긴다.
+
+정리하면 널 객체는 "없을 때의 올바른 동작이 정말로 아무것도 안 하기이거나 하나로 정해진 값일 때"만 쓴다. 그게 아니면 예외(호출자가 바로 처리할 수 없는 실패), Result 타입(호출자가 실패 종류에 따라 갈라야 하는 실패), nullable 반환(없음이 정상이지만 처리가 부르는 쪽마다 다를 때) 중에서 고른다. 예외를 언제 던지고 어떻게 감싸는지는 [자바스크립트 에러 처리](/posts/js-error-handling)를 참고하면 된다.
+
+## 불리언 인자가 함수 하나를 둘로 만든다
+
+null을 돌려주는 문제와 짝을 이루는 게 null과 불리언을 인자로 넘기는 문제다. 호출부에서 이렇게 생긴 코드를 본 적이 있을 것이다.
+
+```ts
+renderPrice(item, true);
+createUser(form, false, true);
+sendNotice(user, null, null, true);
+```
+
+`true`가 무엇인지 함수 정의를 열어 보기 전엔 알 수 없다. 열어 보면 대개 이런 모양이다.
+
+```ts
+function renderPrice(item: Item, compact: boolean) {
+  if (compact) {
+    return `${formatShort(item.price)}`;
+  }
+  const base = `${format(item.price)}원`;
+  return item.discount ? `${base} (${item.discount}% 할인)` : base;
+}
+```
+
+함수 하나 안에 서로 다른 함수 두 개가 들어 있다. 불리언 인자는 "이 함수는 두 가지 일을 한다"는 신호다. 테스트도 두 갈래를 다 만들어야 하고, 인자가 둘이 되면 네 가지, 셋이면 여덟 가지가 된다. [클린 코드](/posts/clean-code-practices)에서 짧게 다룬 "흐름을 바꾸는 플래그"가 이것이다.
+
+고치는 방법은 상황에 따라 다르다.
+
+```ts
+// 1. 두 함수로 나눈다. 갈래가 함수 전체를 가를 때
+function renderPriceCompact(item: Item) { return formatShort(item.price); }
+function renderPriceFull(item: Item) { /* ... */ }
+
+// 2. 이름 있는 옵션 객체. 설정 항목이 여럿이고 서로 독립일 때
+createUser(form, { sendWelcomeMail: false, verified: true });
+
+// 3. 문자열 유니언. 상태가 둘에서 셋으로 늘 수 있을 때
+function renderPrice(item: Item, variant: "compact" | "full" | "receipt") { /* ... */ }
+```
+
+세 번째가 특히 쓸모 있다. `isCompact: boolean`으로 시작한 인자는 "영수증용"이 생기는 순간 `isCompact`와 `isReceipt` 두 개가 되고, 둘 다 `true`인 말이 안 되는 조합이 생긴다. 유니언이면 그런 조합이 타입에서부터 없다. 갈래마다 동작이 크다면 유니언 대신 [전략](/posts/pattern-strategy)이나 [상태 패턴](/posts/pattern-state)으로 나누는 쪽으로 간다.
+
+불리언이 늘 나쁜 건 아니다. `setVisible(true)`, `toggle(enabled)`처럼 인자가 값 자체이고 함수 이름이 무엇을 바꾸는지 말해 줄 때는 괜찮다. 문제가 되는 건 불리언이 함수의 동작 방식을 고를 때다.
+
+## null을 넘기지 않는 API
+
+`sendNotice(user, null, null, true)`의 두 `null`은 "이 값은 없다"는 뜻이다. 부르는 쪽이 없는 값을 자리 채우기로 넘기고, 받는 쪽은 그 자리마다 null 검사를 한다. 결국 앞에서 본 null 검사 복사가 함수 안쪽에서 다시 일어난다.
+
+```ts
+// 나쁜 예: 순서로 맞추는 선택 인자
+function sendNotice(user: User, title: string | null, template: string | null, urgent: boolean) {}
+
+// 나은 예: 필요한 것만 필수로, 나머지는 이름과 기본값
+interface NoticeOptions {
+  title?: string;
+  template?: "default" | "marketing";
+  priority?: "normal" | "urgent";
+}
+function sendNotice(user: User, { title = "알림", template = "default", priority = "normal" }: NoticeOptions = {}) {}
+
+sendNotice(user, { priority: "urgent" });
+```
+
+기본값이 함수 선언 한 곳에 모였다. 널 객체가 하는 일과 같은 방향이다. 없을 때의 동작을 쓰는 쪽에서 정의하는 쪽으로 옮긴다.
+
+언어별로 조금씩 다르다. Java에서는 `Optional`을 메서드 인자나 필드로 쓰지 말라는 조언이 널리 퍼져 있다. `Optional`은 "결과가 없을 수 있는 반환값"을 위해 들어왔고, 인자로 받으면 부르는 쪽이 `Optional.empty()`를 만들어 넘겨야 해서 null을 넘기는 것과 크게 다르지 않다. 그 대신 오버로드로 인자 수가 다른 메서드를 둔다. Kotlin과 TypeScript는 타입에 nullable을 표시하고 컴파일러가 검사를 강제하니, 적어도 빠뜨린 검사는 잡힌다. 그래도 검사가 여러 곳에 퍼지는 문제는 타입이 해결해 주지 않는다.
+
+JSON API 경계에서는 하나 더 조심한다. `{ "nickname": null }`과 필드가 아예 없는 `{}`를 서로 다른 뜻("지워라"와 "건드리지 마라")으로 쓰는 PATCH API가 많다. 이 구분은 널 객체로 덮으면 안 된다. 경계에서 두 경우를 명시적인 값으로 바꿔 받는다.
+
+## 직접 바꿔 보는 코드
+
+아래 함수는 고객 목록, 고객 id, 금액을 받아 영수증 한 줄을 만든다. 고객이 없으면 "손님", 요금제가 없거나 `null`이면 `free`(할인 0)로 처리한다. if로 null을 하나하나 검사하지 말고, 손님 객체와 무료 요금제 객체를 만들어 써 본다. 결과는 `이름 / 요금제 / 금액` 형식이고 할인 금액은 내림한다.
+
+<CodePlayground
+  caption="null 대신 손님과 무료 요금제"
+  functionName="invoice"
+  initialCode={`function invoice(customers, id, amount) {
+  // 1. 없음을 표현하는 객체 두 개를 만든다 (손님, 무료 요금제)
+  // 2. 찾은 고객이 없거나 plan이 null이면 그 객체로 바꾼다
+  // 3. 이후 코드에는 null 검사가 없어야 한다
+  return "";
+}`}
+  solution={`function invoice(customers, id, amount) {
+  const NULL_PLAN = Object.freeze({ name: "free", discountRate: 0 });
+  const GUEST = Object.freeze({ name: "손님", plan: NULL_PLAN });
+
+  const found = customers.find((c) => c.id === id);
+  const customer = found ? { name: found.name, plan: found.plan ?? NULL_PLAN } : GUEST;
+
+  const total = amount - Math.floor((amount * customer.plan.discountRate) / 100);
+  return customer.name + " / " + customer.plan.name + " / " + total;
+}`}
+  tests={[
+    { label: "요금제가 있는 고객", args: [[{ id: "u1", name: "Kim", plan: { name: "pro", discountRate: 10 } }], "u1", 50000], expected: "Kim / pro / 45000" },
+    { label: "없는 고객은 손님", args: [[{ id: "u1", name: "Kim", plan: { name: "pro", discountRate: 10 } }], "u9", 50000], expected: "손님 / free / 50000" },
+    { label: "plan이 null", args: [[{ id: "u2", name: "Lee", plan: null }], "u2", 50000], expected: "Lee / free / 50000" },
+    { label: "할인 금액 내림", args: [[{ id: "u3", name: "Park", plan: { name: "team", discountRate: 15 } }], "u3", 19900], expected: "Park / team / 16915" },
+    { label: "빈 목록, 0원", args: [[], "u1", 0], expected: "손님 / free / 0" },
+  ]}
+/>
+
+풀이에서 `found.plan ?? NULL_PLAN`이 null을 다루는 유일한 줄이다. 그 아래 계산과 문자열 조립은 고객이 진짜인지 손님인지 모른다. 실제 코드라면 이 바꾸는 줄이 저장소 함수나 API 응답을 도메인 객체로 바꾸는 곳에 있을 것이다.
+
+## 테스트에서 만나는 널 객체
+
+테스트 대역 중 더미(dummy)가 널 객체와 거의 같다. 생성자가 로거를 요구하지만 이 테스트는 로그를 보지 않을 때 `new NullLogger()`를 넣는다. 아무 일도 하지 않으니 테스트가 로거 때문에 깨질 일이 없다.
+
+```ts
+const silentLogger: Logger = { info() {}, warn() {}, error() {} };
+const service = new BillingService(fakeRepo, silentLogger);
+```
+
+다만 "에러 로그가 한 번 찍혀야 한다"를 확인하는 테스트에서는 널 객체가 아니라 호출을 기록하는 스파이를 쓴다. 널 객체는 상호작용을 확인하지 않는 자리에만 들어간다. 테스트 대역의 종류는 [단위 테스트와 테스트 피라미드](/posts/test-pyramid-unit-tests)에서 다뤘다.
+
+널 객체의 요점은 "없음을 부르는 쪽마다 처리하지 말고, 없음을 표현하는 객체가 스스로 동작하게 하라"다. 다만 그 동작이 정말 하나로 정해져 있을 때만 그렇다. 실패를 손님으로 덮으면 장애가 조용해진다. 같은 원리로 함수 인자의 null과 불리언도 정의하는 쪽에서 이름과 기본값으로 바꿔 받으면 호출부가 읽힌다.
+
+## 면접에서 나올 만한 질문
+
+### 널 객체 패턴이 무엇이고 어떤 문제를 푸나요?
+
+null 대신 같은 인터페이스를 구현하면서 아무 일도 하지 않거나 기본 동작을 하는 객체를 돌려주는 패턴이다. 부르는 쪽마다 흩어진 null 검사와 서로 다른 기본값을 없애고, 없을 때의 동작을 그 객체 한 곳에 모은다. 비로그인 사용자를 할인율 0인 손님 객체로 표현하는 것, null 대신 빈 배열을 돌려주는 것이 대표적이다.
+
+### 옵셔널 체이닝이 있는데 왜 널 객체가 필요한가요?
+
+옵셔널 체이닝은 부르는 쪽의 문법이라 null 검사를 짧게 할 뿐, 기본값을 정하는 일은 여전히 호출부마다 남는다. 그래서 화면마다 기본값이 달라지는 문제는 그대로다. 널 객체는 기본 동작을 정의하는 쪽으로 옮겨서 하나로 맞춘다. 없을 때의 처리가 호출부마다 달라야 한다면 오히려 옵셔널 체이닝이나 nullable 반환이 맞다.
+
+### Optional이나 Maybe와는 어떻게 다른가요?
+
+방향이 반대다. 널 객체는 없음을 숨겨서 부르는 쪽이 신경 쓰지 않게 하고, Optional은 없음을 타입에 드러내서 부르는 쪽이 반드시 처리하게 한다. 없을 때 할 일이 하나로 정해져 있으면 널 객체, 상황마다 다르면 Optional을 고른다.
+
+### 널 객체가 위험한 경우는 언제인가요?
+
+실패를 없음으로 덮을 때다. DB 오류를 잡아서 손님 객체를 돌려주면 모든 회원이 할인 없이 결제되는데 에러는 어디에도 남지 않는다. 결제나 메일 발송처럼 부수 효과가 핵심인 객체를 널 객체로 바꾸면 "성공했는데 아무 일도 안 일어난" 상태가 된다. 비로그인처럼 설계상 예상한 없음에만 쓰고, 실패는 예외나 Result로 올린다.
+
+### 손님인지 확인해야 하는 곳이 있으면 isNull()을 둬도 되나요?
+
+한두 곳이면 괜찮다. 하지만 그런 질문이 곳곳에 퍼지면 null 검사를 이름만 바꿔 되살린 셈이다. 가능하면 그 판단도 동작으로 옮긴다. 예를 들어 손님에게만 배너를 돌려주는 메서드를 두면 호출부는 묻지 않고 그 메서드만 부른다.
+
+### 불리언 인자는 왜 나쁜가요? 어떻게 고치나요?
+
+호출부에서 `true`의 뜻이 보이지 않고, 대개 함수 하나 안에 두 함수가 들어 있다는 신호다. 인자가 늘면 갈래가 곱으로 늘어 테스트도 어려워진다. 갈래가 함수 전체를 가르면 두 함수로 나누고, 설정이 여럿이면 이름 있는 옵션 객체, 상태가 늘 수 있으면 문자열 유니언으로 바꾼다. 값을 설정하는 `setVisible(true)` 같은 경우는 괜찮다.
+
+### 함수에 null을 인자로 넘기지 말라는 건 무슨 뜻인가요?
+
+선택 인자를 위치로 받으면 부르는 쪽이 `null`로 자리를 채우고, 받는 쪽은 그 자리마다 검사해야 한다. 필수 인자만 위치로 받고 나머지는 옵션 객체와 기본값으로 받으면 기본값이 선언 한 곳에 모이고 호출부도 읽힌다. Java에서는 `Optional`을 인자로 쓰는 것도 같은 문제라 오버로드를 권한다. 다만 PATCH API처럼 null과 "필드 없음"이 다른 뜻인 경계에서는 그 구분을 유지해야 한다.
