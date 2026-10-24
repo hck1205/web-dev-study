@@ -286,6 +286,30 @@ React에서는 이 함수를 keydown 핸들러에 붙이고, 인덱스를 상태
 
 로빙 tabindex의 대안은 `aria-activedescendant`다. 포커스는 컨테이너에 그대로 두고, 지금 고른 항목의 `id`를 이 속성에 적어 스크린리더에 알린다. 포커스를 옮기지 않으니 입력칸에 계속 타자를 칠 수 있어서 콤보박스에 쓴다. 콤보박스 쪽은 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)의 자동완성 예제에 있다. 대신 실제 포커스가 움직이지 않아서 항목이 보이도록 스크롤하는 일과 `:focus` 스타일을 직접 처리해야 한다.
 
+### 캐러셀은 멈출 수 있어야 한다
+
+같은 묶음 위젯이라도 캐러셀(슬라이드 배너)은 방향키보다 멈춤이 먼저다. 저절로 넘어가는 슬라이드는 키보드 사용자가 링크에 닿기 전에 바뀌고, 스크린리더 사용자는 읽던 문장이 중간에 사라진다. WCAG 2.2.2(일시 정지, 정지, 숨기기, A 등급)는 저절로 시작해 5초 넘게 움직이고 다른 내용과 함께 보이는 것에 멈출 방법을 두라고 한다.
+
+APG의 캐러셀 패턴은 이렇게 짠다.
+
+```html
+<section aria-roledescription="carousel" aria-label="이번 주 기획전">
+  <!-- 자동 넘김 버튼이 Tab 순서의 맨 앞. 문구가 상태를 말한다 -->
+  <button type="button" aria-label="자동 넘김 멈추기">멈춤</button>
+  <button type="button" aria-controls="slides" aria-label="이전 슬라이드">‹</button>
+  <button type="button" aria-controls="slides" aria-label="다음 슬라이드">›</button>
+  <!-- 넘기는 중에는 off, 멈추면 polite로 바꿔 넘길 때마다 읽게 한다 -->
+  <div id="slides" aria-live="off">
+    <div role="group" aria-roledescription="slide" aria-label="1 / 5">...</div>
+    <div role="group" aria-roledescription="slide" aria-label="2 / 5">...</div>
+  </div>
+</section>
+```
+
+`aria-roledescription`은 역할 이름만 바꿔 읽게 한다. 스크린리더는 "그룹" 대신 "슬라이드 1 / 5"라고 읽는다. 역할 자체를 바꾸지는 않으니 `region`, `group` 같은 기본 역할 위에만 쓴다. 자동 넘김 버튼은 `aria-pressed` 대신 이름을 "멈추기"와 "시작"으로 바꾸는 방식을 쓴다. 그리고 캐러셀 안의 무엇이든 키보드 포커스를 받으면 넘김을 멈추고, 사용자가 시작 버튼을 다시 누르기 전까지 재개하지 않는다. 마우스를 올린 동안에도 멈춘다. 아래 점 모양 선택기를 둔다면 그건 앞에서 본 탭 패턴(`tablist`와 방향키)으로 만든다.
+
+슬라이드를 넘기는 일은 직접 위치를 계산하기보다 [scroll snap](/posts/css-sticky-scroll-snap#손을-놓은-뒤-멈출-자리) 컨테이너에 맡기면 터치 관성과 키보드 스크롤이 그대로 동작한다. 이전·다음 버튼은 `slides.scrollBy({ left: slides.clientWidth })`처럼 한 칸만큼 스크롤만 시키고, 지금 몇 번째인지는 `IntersectionObserver`로 화면에 들어온 슬라이드를 보고 정한다. `transform`으로 옮기는 방식이라면 화면 밖 슬라이드에 `inert`를 줘서 보이지 않는 링크로 Tab이 들어가지 않게 한다.
+
 ## SPA에서 화면이 바뀐 뒤
 
 일반 웹 사이트에서 링크를 누르면 새 문서가 열리고, 포커스는 문서 처음으로 가고, 스크린리더는 새 페이지의 제목을 읽는다. SPA는 문서를 다시 받지 않고 내용만 바꾼다([CSR과 SPA](/posts/rendering-csr-spa)). 그러면 포커스는 방금 누른 링크에 그대로 남거나, 그 링크가 사라졌으면 `body`로 떨어진다. 스크린리더는 아무 말도 하지 않는다. 화면이 바뀐 줄 모르는 사용자는 같은 링크를 또 누른다.

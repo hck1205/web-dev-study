@@ -2,8 +2,232 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "ai-search-grounding-geo": {
+    "links": [
+      "seo-for-spa",
+      "search-engine-ranking-pagerank",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "structured-data-json-ld"
+    ],
+    "mentions": [
+      "sd-web-crawler-politeness-dedup",
+      "seo-redirects-site-migration",
+      "llm-app-security-guardrails",
+      "ai-coding-agents",
+      "nextjs-static-dynamic-rendering",
+      "pub-sub",
+      "rendering-strategies",
+      "vector-db"
+    ]
+  },
+  "habit-features-progress-reminders": {
+    "links": [
+      "behavior-design-models",
+      "pwa-install-offline",
+      "product-analytics-funnels",
+      "ab-testing"
+    ],
+    "mentions": [
+      "alerting",
+      "redis-basics"
+    ]
+  },
+  "search-engine-ranking-pagerank": {
+    "links": [
+      "seo-for-spa",
+      "elasticsearch-inverted-index",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "core-web-vitals",
+      "xss",
+      "site-architecture-internal-linking",
+      "graph-rag",
+      "loading-patterns",
+      "ai-search-grounding-geo",
+      "structured-data-json-ld",
+      "image-optimization",
+      "db-modeling-normalization",
+      "vector-db"
+    ]
+  },
+  "seo-log-file-analysis-search-console": {
+    "links": [
+      "seo-for-spa",
+      "linux-grep-awk-sed",
+      "dns",
+      "seo-redirects-site-migration",
+      "site-architecture-internal-linking"
+    ],
+    "mentions": [
+      "sd-web-crawler-politeness-dedup",
+      "bit-manipulation",
+      "http-status-codes",
+      "ipv6-basics",
+      "layer-ip-addressing"
+    ]
+  },
+  "site-architecture-internal-linking": {
+    "links": [
+      "seo-log-file-analysis-search-console",
+      "seo-for-spa",
+      "seo-redirects-site-migration",
+      "react-client-routing",
+      "search-engine-ranking-pagerank",
+      "structured-data-json-ld"
+    ],
+    "mentions": [
+      "rendering-csr-spa",
+      "input-validation-secure-coding",
+      "character-encoding-unicode",
+      "ds-graph-bfs-dfs",
+      "k8s-deploy-pipeline-eks",
+      "loading-patterns",
+      "js-strings-unicode",
+      "db-modeling-normalization"
+    ]
+  },
+  "structured-data-json-ld": {
+    "links": [
+      "seo-for-spa",
+      "xss",
+      "ai-search-grounding-geo"
+    ],
+    "mentions": [
+      "graph-rag"
+    ]
+  },
+  "leetcode-4sum": {
+    "links": [
+      "leetcode-3sum",
+      "two-pointers-pattern",
+      "binary-search",
+      "leetcode-two-sum",
+      "leetcode-two-sum-ii",
+      "leetcode-boats-to-save-people"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-asteroid-collision": {
+    "links": [
+      "leetcode-car-fleet",
+      "ds-stack-queue-deque",
+      "leetcode-daily-temperatures",
+      "leetcode-evaluate-reverse-polish-notation",
+      "ds-heap",
+      "leetcode-valid-parentheses",
+      "leetcode-remove-k-digits"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-boats-to-save-people": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-two-sum-ii",
+      "greedy-algorithms",
+      "leetcode-container-with-most-water",
+      "bit-manipulation",
+      "leetcode-3sum",
+      "leetcode-4sum",
+      "leetcode-jump-game",
+      "leetcode-gas-station"
+    ],
+    "mentions": [
+      "complexity-classes-p-np",
+      "floating-point-numbers",
+      "sorting-algorithms",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-encode-and-decode-strings": {
+    "links": [
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "character-encoding-unicode",
+      "tcp-connection-lifecycle",
+      "http-streaming-sse",
+      "grpc",
+      "base64"
+    ],
+    "mentions": [
+      "redis-basics"
+    ]
+  },
+  "leetcode-majority-element": {
+    "links": [
+      "leetcode-top-k-frequent-elements",
+      "bit-manipulation",
+      "leetcode-two-sum",
+      "segment-tree-fenwick",
+      "binary-search",
+      "leetcode-contains-duplicate"
+    ],
+    "mentions": [
+      "lossy-counting",
+      "string-search-algorithms",
+      "sql-aggregation-pitfalls",
+      "divide-and-conquer",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-max-consecutive-ones-iii": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-minimum-size-subarray-sum",
+      "leetcode-fruit-into-baskets",
+      "leetcode-longest-repeating-character-replacement"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-remove-k-digits": {
+    "links": [
+      "monotonic-stack-pattern",
+      "greedy-algorithms",
+      "leetcode-sliding-window-maximum",
+      "leetcode-daily-temperatures",
+      "leetcode-asteroid-collision"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-search-a-2d-matrix": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-search-in-rotated-sorted-array"
+    ],
+    "mentions": [
+      "sql-filtering-operators",
+      "big-o-notation",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-subarray-product-less-than-k": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-minimum-size-subarray-sum",
+      "dynamic-programming"
+    ],
+    "mentions": [
+      "floating-point-numbers",
+      "message-delivery-semantics",
+      "sql-filtering-operators",
+      "sorting-algorithms"
+    ]
+  },
   "behavior-design-models": {
     "links": [
+      "habit-features-progress-reminders",
       "product-analytics-funnels",
       "ab-testing"
     ],
@@ -151,6 +375,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "data-lake-hdfs",
       "sql-basics",
+      "habit-features-progress-reminders",
       "sd-payment-reliability",
       "alerting",
       "postgres-getting-started",
@@ -255,11 +480,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "seo-for-spa",
       "http-status-codes",
       "nginx-basics",
-      "https-tls"
+      "https-tls",
+      "search-engine-ranking-pagerank"
     ],
     "mentions": [
       "ab-testing",
       "rendering-strategies",
+      "seo-log-file-analysis-search-console",
       "frontend-hosting-platforms",
       "what-happens-google-com",
       "count-min-sketch"
@@ -324,6 +551,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "monotonic-stack-pattern",
       "sorting-algorithms",
       "leetcode-daily-temperatures",
+      "leetcode-asteroid-collision",
       "leetcode-merge-intervals"
     ],
     "mentions": [
@@ -354,6 +582,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search",
       "leetcode-longest-repeating-character-replacement",
       "leetcode-longest-substring-without-repeating",
+      "leetcode-max-consecutive-ones-iii",
       "leetcode-permutation-in-string"
     ],
     "mentions": [
@@ -385,7 +614,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-array-matrix",
       "binary-search",
       "monotonic-stack-pattern",
-      "leetcode-sliding-window-maximum"
+      "leetcode-sliding-window-maximum",
+      "leetcode-subarray-product-less-than-k",
+      "leetcode-max-consecutive-ones-iii"
     ],
     "mentions": []
   },
@@ -436,7 +667,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sorting-algorithms",
       "ds-linked-list",
       "leetcode-3sum",
-      "leetcode-contains-duplicate"
+      "leetcode-contains-duplicate",
+      "leetcode-boats-to-save-people"
     ],
     "mentions": [
       "ds-array-matrix"
@@ -2779,8 +3011,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "structured-logging",
       "encryption-at-rest",
+      "postgres-roles-security",
       "event-sourcing",
       "global-rollout-localization",
+      "ml-experiment-tracking",
+      "data-quality-checks",
       "security-logging-detection-siem",
       "k8s-audit-logging"
     ],
@@ -3320,8 +3555,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "global-rollout-localization",
       "js-loops-control-flow",
       "nextjs-route-handlers-proxy",
-      "nextjs-static-dynamic-rendering",
       "seo-for-spa",
+      "nextjs-static-dynamic-rendering",
       "hydration",
       "css-flexbox-grid"
     ],
@@ -5900,17 +6135,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-streaming-sse",
       "server-sent-events",
       "resilience-patterns",
-      "rate-limiting-in-practice"
+      "rate-limiting-in-practice",
+      "agent-tool-design",
+      "llm-model-selection"
     ],
     "mentions": [
       "realtime-communication",
       "json-crud-http",
       "system-prompt-design",
       "rest-api-design",
-      "agent-tool-design",
+      "self-hosting-llm-inference",
       "input-validation-secure-coding",
       "llm-evals",
-      "cookie-session-login"
+      "cookie-session-login",
+      "db-modeling-normalization"
     ]
   },
   "llm-basics-for-developers": {
@@ -5940,6 +6178,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "oauth"
     ],
     "mentions": [
+      "realtime-communication",
       "system-prompt-design",
       "api-styles-overview",
       "ssrf",
@@ -5947,7 +6186,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-security-jwt-oauth2",
       "token-login",
       "agent-tool-design",
+      "threat-modeling-stride",
       "security-principles-cia-defense-in-depth",
+      "what-happens-google-com",
       "cookie-session-login",
       "dns"
     ]
@@ -6242,6 +6483,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "html-semantics",
       "web-accessibility",
       "frontend-system-design-interview",
+      "css-sticky-scroll-snap",
       "rendering-csr-spa"
     ],
     "mentions": [
@@ -6330,6 +6572,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "design-system-building": {
     "links": [
       "css-styling-approaches",
+      "design-system-adoption-governance",
+      "css-color-background",
       "semantic-versioning",
       "frontend-monorepo"
     ],
@@ -6338,7 +6582,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "aria-keyboard-focus",
       "web-accessibility",
-      "design-system-adoption-governance",
       "react-component-patterns",
       "rendering-strategies",
       "css-custom-properties",
@@ -6727,6 +6970,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "html-semantics",
       "aria-keyboard-focus",
       "sd-web-crawler-politeness-dedup",
+      "image-optimization",
       "rendering-strategies",
       "rendering-ssg-isr",
       "rendering-ssr",
@@ -6736,6 +6980,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "html-form-http",
       "nextjs-app-router-routing",
       "k8s-deploy-pipeline-eks",
+      "structured-data-json-ld",
       "frontend-hosting-platforms",
       "nextjs-static-dynamic-rendering",
       "http-status-codes",
@@ -8131,9 +8376,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "core-web-vitals",
       "resource-hints-loading",
-      "lazy-loading-strategies"
+      "lazy-loading-strategies",
+      "structured-data-json-ld"
     ],
     "mentions": [
+      "seo-for-spa",
       "loading-patterns",
       "pattern-proxy"
     ]
@@ -9068,6 +9315,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-remote-collaboration",
       "system-prompt-design",
       "claude-code-plugins-and-channels",
+      "agent-tool-design",
       "code-review-practices",
       "osi-in-practice",
       "mcp-protocol"
@@ -9435,6 +9683,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-deploy-pipeline-eks",
       "js-numbers-bigint",
+      "site-architecture-internal-linking",
       "http-status-codes",
       "webhooks"
     ]
@@ -11004,6 +11253,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bloom-filter"
     ],
     "mentions": [
+      "search-engine-ranking-pagerank",
       "db-type-key-value",
       "client-data-cache",
       "http-caching-cdn",
@@ -14701,6 +14951,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "chaos-engineering"
     ],
     "mentions": [
+      "habit-features-progress-reminders",
       "osi-in-practice",
       "webhooks"
     ]
@@ -14957,6 +15208,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cron-jobs",
       "service-discovery",
+      "habit-features-progress-reminders",
       "webhooks"
     ]
   },
@@ -18047,11 +18299,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "rest-api-design",
       "code-splitting",
+      "core-component-api-design",
       "animation-patterns"
     ],
     "mentions": [
       "lighthouse-explained",
-      "core-component-api-design",
       "pattern-proxy"
     ]
   },
@@ -20599,9 +20851,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "ab-testing": {
     "links": [
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "seo-redirects-site-migration"
     ],
     "mentions": [
+      "seo-for-spa",
       "rendering-strategies",
       "input-validation-secure-coding",
       "bloom-filter",
@@ -21015,12 +21269,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ]
   },
   "vector-db": {
-    "links": [],
+    "links": [
+      "embedding-models-applications"
+    ],
     "mentions": [
       "rag-retrieval-quality",
+      "mongodb-document-model",
       "pythagorean-theorem",
-      "embedding-models-applications",
       "db-index-design",
+      "elasticsearch-inverted-index",
+      "self-hosting-llm-inference",
       "rag-classic-pipeline",
       "db-modeling-normalization"
     ]

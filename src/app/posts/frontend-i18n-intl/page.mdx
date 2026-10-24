@@ -330,6 +330,35 @@ export const config = {
 
 검색 엔진 크롤러는 `Accept-Language` 없이 오는 경우가 많다. 그래서 로케일이 붙은 주소는 절대 다른 언어로 돌려보내지 않고, 루트처럼 로케일이 없는 주소에서만 협상한다. 그러면 크롤러도 `/en/...` 링크를 따라 모든 언어 버전을 본다.
 
+### 검색 엔진에게 언어 버전을 알리는 법
+
+주소를 나누는 세 가지 방법은 검색에서 차이가 난다. 나라별 도메인(ccTLD, `example.kr`)은 "이 사이트는 한국 사람용"이라는 가장 강한 지역 신호다. 대신 도메인마다 따로 사고 갱신해야 하고, 쌓인 링크와 평판이 도메인끼리 나뉜다. 하위 도메인(`ko.example.com`)은 서버나 CDN을 언어별로 따로 두기 쉽지만, 검색 엔진이 별개 사이트처럼 볼 여지가 있다. 경로(`example.com/ko/`)는 도메인 하나의 평판을 모든 언어가 나눠 쓰고 인증서도 하나다. 지역 신호는 약해서 hreflang에 기대야 한다. 나라마다 법인, 결제, 상품 구성이 완전히 다르면 ccTLD를, 그렇지 않으면 대개 경로를 고른다. 예전에는 Search Console에서 사이트의 대상 국가를 손으로 정할 수 있었지만 구글이 그 설정을 없앴다(2022년). 지금 쓸 수 있는 신호는 ccTLD, hreflang, 그리고 현지 주소·통화·전화번호 같은 페이지 내용이다.
+
+언어와 지역은 따로다. 영어 하나로 미국과 영국에 다른 가격을 보여 준다면 `en-US`, `en-GB` 두 페이지에 hreflang을 따로 달고, 언어만 다르면 `ko`, `en`처럼 언어 코드만 쓴다. hreflang은 모든 버전이 서로를, 그리고 자기 자신을 가리켜야 인정되고, 어느 언어에도 맞지 않는 사람에게 보일 `x-default`를 하나 둔다. 각 버전의 canonical을 다른 언어 페이지로 걸면 hreflang과 부딪친다. 이 규칙과 흔한 실수는 [SPA의 SEO 글](/posts/seo-for-spa#언어마다-다른-페이지)에 모아 두었다. App Router에서는 `generateMetadata`에서 `alternates.languages`를 채우면 이 링크가 `head`에 나간다.
+
+```ts
+// app/[lang]/products/[id]/page.tsx
+// 루트 layout에 metadataBase가 있어야 아래 상대 경로가 절대 주소로 바뀐다
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { lang, id } = await params;
+  return {
+    alternates: {
+      canonical: `/${lang}/products/${id}`,           // 자기 자신
+      languages: {
+        ko: `/ko/products/${id}`,
+        en: `/en/products/${id}`,
+        ja: `/ja/products/${id}`,
+        "x-default": `/en/products/${id}`,            // 맞는 언어가 없을 때
+      },
+    },
+  };
+}
+```
+
+앞의 proxy가 로케일 없는 주소에서만 협상하는 것도 검색 때문이다. 구글봇은 대부분 미국 IP에서, `Accept-Language` 없이 크롤링한다. 로케일이 붙은 주소까지 IP나 헤더로 돌려보내면 구글봇은 영어 페이지로만 끌려가서 한국어와 일본어 버전을 색인하지 못한다. 그래서 언어를 바꾸라는 제안은 리다이렉트가 아니라 배너로 띄운다.
+
+같은 URL 안에서 지역에 맞춰 바꾸는 것도 있다. 통화 표시나 배송 가능 여부를 IP로 고르는 개인화다. 본문이 같은 언어로 그대로라면 문제가 적지만, 구글봇은 미국 사용자가 보는 화면을 색인한다는 걸 기억해 둔다. 한국어 상품 설명이 IP에 따라 사라지는 수준이면 그건 개인화가 아니라 언어 버전이니 주소를 나눈다.
+
 ## 사전은 서버 컴포넌트에서 불러온다
 
 번역문은 언어별 JSON 사전으로 둔다. 문서 예제의 핵심은 사전을 동적 `import`로 불러오고, 파일에 `server-only`를 붙여 클라이언트에서 실수로 import하지 못하게 막는 것이다.

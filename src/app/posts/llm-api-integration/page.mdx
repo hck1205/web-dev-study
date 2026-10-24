@@ -445,6 +445,24 @@ API 연동에서 더 챙길 것은 운영이다. 시스템 프롬프트를 바�
 
 이 숫자를 보면 손댈 곳이 보인다. 입력이 출력보다 금액이 크면 붙이는 문서를 줄이거나 캐시를 맞춘다. 쉬운 분류는 작은 모델로 보낸다. 실시간일 필요가 없는 대량 작업은 공급사의 배치 API로 보내면 단가가 싸다(Anthropic은 절반). 그리고 사용자별 하루 토큰 한도를 백엔드에 걸어 둔다. 키를 숨겨도, 로그인한 사용자 하나가 스크립트로 우리 채팅 API를 두드리면 같은 청구서가 온다.
 
+## 공급사를 갈아 끼우면 깨지는 곳
+
+예제는 Anthropic Messages API로 썼지만, 공급사 API의 큰 모양은 비슷하다. 메시지 목록을 보내고, 생성된 내용과 종료 이유와 토큰 사용량을 받는다. 차이는 필드가 어디 있느냐다. 2026년 10월 문서 기준으로 자주 걸리는 것만 모았다.
+
+| | Anthropic Messages | OpenAI Chat Completions | OpenAI Responses | Gemini |
+|---|---|---|---|---|
+| 시스템 지시 | 최상위 `system` | `system`·`developer` 역할 메시지 | `instructions` | `systemInstruction` |
+| 대화 | `messages` | `messages` | `input` | `contents`(역할은 `user`·`model`) |
+| 출력 한도 | `max_tokens`(필수) | `max_completion_tokens` | `max_output_tokens` | `maxOutputTokens` |
+| 종료 이유 | `stop_reason` | `finish_reason` | `status`, `incomplete_details` | `finishReason` |
+| 캐시 적중 | `cache_read_input_tokens` | `cached_tokens` | `cached_tokens` | `cachedContentTokenCount` |
+
+OpenAI는 Chat Completions 뒤에 Responses API를 내놓고 새 기능(내장 도구, 서버에 대화를 이어 두는 `previous_response_id`)을 그쪽에 먼저 붙이고 있다. 같은 공급사 안에서도 두 API의 응답 모양이 다르니 어느 쪽을 쓰는지 코드에 분명히 적는다. 도구 호출 형식의 차이(인자가 객체냐 JSON 문자열이냐, 결과를 어떤 역할로 돌려주느냐)는 표 하나로 다 담기 어려워서 [에이전트 도구 설계 글](/posts/agent-tool-design)에 따로 정리했다.
+
+모양을 맞추는 쉬운 길은 OpenAI 호환 API다. vLLM, Ollama 같은 추론 서버와 여러 공급사가 Chat Completions와 같은 모양의 엔드포인트를 열어 두고, OpenRouter 같은 게이트웨이는 모델 이름만 바꿔 여러 공급사로 보내 준다. 기본 채팅은 그대로 돌아간다. 깨지는 건 가장자리다. 도구 호출은 형식을 번역하는 과정에서 병렬 호출이나 오류 표시가 빠지기 쉽다. 구조화 출력은 `response_format`을 받아 주기만 하고 실제로는 제약 없이 생성하는 곳이 있어서, 원래 공급사에서는 한 번도 안 깨지던 JSON이 깨진다. 캐시는 Anthropic처럼 `cache_control`로 끊는 지점을 직접 표시하는 방식이 호환 형식에 자리가 없어서 빠지고, 그러면 같은 트래픽인데 입력 비용이 몇 배로 나온다. 생각(thinking) 설정 같은 공급사 고유 파라미터도 무시되거나 거절된다.
+
+그래서 호환 계층을 쓰더라도 검증은 공급사마다 따로 한다. 도구 호출 한 번, 구조화 출력 한 번, 같은 앞부분으로 두 번 보내 캐시 적중 확인 한 번, 이렇게 세 가지 요청을 공급사별로 보내는 작은 계약 테스트를 CI에 두면 바꿔 끼운 뒤 첫 장애를 대부분 미리 본다. 종료 이유도 우리 쪽 값 하나(완료, 한도, 도구, 거절)로 정규화해서 로그에 남긴다. 게이트웨이를 끼울 때의 약관·장애 문제는 [모델 고르기 글](/posts/llm-model-selection)에서 다룬다.
+
 ## 현장에서 자주 받는 제보
 
 "답이 중간에 끊긴다"면 `stop_reason`부터 본다. `max_tokens`면 한도를 늘리거나 답을 짧게 쓰게 한다. `end_turn`인데 화면에서 끊겼다면 프록시 타임아웃이나 클라이언트 파싱을 본다.

@@ -1,3 +1,18 @@
+import { STRUCTURED_DATA_JSON_LD } from "./structured-data-json-ld";
+import { SITE_ARCHITECTURE_INTERNAL_LINKING } from "./site-architecture-internal-linking";
+import { SEO_LOG_FILE_ANALYSIS_SEARCH_CONSOLE } from "./seo-log-file-analysis-search-console";
+import { SEARCH_ENGINE_RANKING_PAGERANK } from "./search-engine-ranking-pagerank";
+import { HABIT_FEATURES_PROGRESS_REMINDERS } from "./habit-features-progress-reminders";
+import { AI_SEARCH_GROUNDING_GEO } from "./ai-search-grounding-geo";
+import { LEETCODE_SUBARRAY_PRODUCT_LESS_THAN_K } from "./leetcode-subarray-product-less-than-k";
+import { LEETCODE_SEARCH_A_2D_MATRIX } from "./leetcode-search-a-2d-matrix";
+import { LEETCODE_REMOVE_K_DIGITS } from "./leetcode-remove-k-digits";
+import { LEETCODE_MAX_CONSECUTIVE_ONES_III } from "./leetcode-max-consecutive-ones-iii";
+import { LEETCODE_MAJORITY_ELEMENT } from "./leetcode-majority-element";
+import { LEETCODE_ENCODE_AND_DECODE_STRINGS } from "./leetcode-encode-and-decode-strings";
+import { LEETCODE_BOATS_TO_SAVE_PEOPLE } from "./leetcode-boats-to-save-people";
+import { LEETCODE_ASTEROID_COLLISION } from "./leetcode-asteroid-collision";
+import { LEETCODE_4SUM } from "./leetcode-4sum";
 import { UX_RESEARCH_USABILITY_TESTING } from "./ux-research-usability-testing";
 import { UX_LAWS_COGNITIVE_LOAD } from "./ux-laws-cognitive-load";
 import { UI_OVERLAYS_TOOLTIP_DROPDOWN_TOAST } from "./ui-overlays-tooltip-dropdown-toast";
@@ -1047,6 +1062,21 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  STRUCTURED_DATA_JSON_LD,
+  SITE_ARCHITECTURE_INTERNAL_LINKING,
+  SEO_LOG_FILE_ANALYSIS_SEARCH_CONSOLE,
+  SEARCH_ENGINE_RANKING_PAGERANK,
+  HABIT_FEATURES_PROGRESS_REMINDERS,
+  AI_SEARCH_GROUNDING_GEO,
+  LEETCODE_SUBARRAY_PRODUCT_LESS_THAN_K,
+  LEETCODE_SEARCH_A_2D_MATRIX,
+  LEETCODE_REMOVE_K_DIGITS,
+  LEETCODE_MAX_CONSECUTIVE_ONES_III,
+  LEETCODE_MAJORITY_ELEMENT,
+  LEETCODE_ENCODE_AND_DECODE_STRINGS,
+  LEETCODE_BOATS_TO_SAVE_PEOPLE,
+  LEETCODE_ASTEROID_COLLISION,
+  LEETCODE_4SUM,
   UX_RESEARCH_USABILITY_TESTING,
   UX_LAWS_COGNITIVE_LOAD,
   UI_OVERLAYS_TOOLTIP_DROPDOWN_TOAST,
