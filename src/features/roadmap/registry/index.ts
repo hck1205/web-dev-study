@@ -48,6 +48,5 @@ export const findCourse = (id: string) => COURSES.find((course) => course.id ===
 
 /** 상단 메뉴의 로드맵 하위 항목 (서버 layout에서 쓰므로 React에 의존하지 않는다) */
 export const COURSE_NAV = [
-  { id: "roadmap/all", label: "전체 로드맵", href: "/roadmap" },
   ...COURSES.map((course) => ({ id: `roadmap/course/${course.id}`, label: course.label, href: courseHref(course.id) })),
 ];

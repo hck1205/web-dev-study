@@ -8,6 +8,7 @@ import { STAGE_HINTS, STAGE_LABELS, type Stage } from "../../atoms/study-progres
 import { StageMark } from "../stage-mark";
 import { useStudyPanel } from "./study-panel";
 import {
+  StageLine,
   Compare,
   Crumbs,
   Explain,
@@ -44,7 +45,9 @@ export function StudyPanel({ slug }: StudyPanelProps) {
               <Link href={panel.roadmapHref}>이 로드맵</Link>의 {panel.position.index} / {panel.position.total}번째 글 ·{" "}
             </>
           )}
-          지금 단계: <StageMark stage={panel.stage} withLabel />
+          <StageLine>
+            지금 단계: <StageMark stage={panel.stage} withLabel />
+          </StageLine>
         </Position>
         {panel.courses.length > 0 && (
           <Position>

@@ -1,6 +1,6 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
-import { color, font, motion, space } from "@/common/design-system";
+import { color, font, motion, radius, space } from "@/common/design-system";
 
 export const Lead = styled.p`
   margin: 0 0 ${space[8]};
@@ -9,8 +9,90 @@ export const Lead = styled.p`
   line-height: ${font.leading.relaxed};
 `;
 
-export const Section = styled.section`
-  margin-bottom: ${space[10]};
+export const Group = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 ${space[3]};
+  align-items: center;
+  padding: ${space[1]} 0;
+  border-bottom: 1px solid ${color.border};
+
+  > div {
+    flex-basis: 100%;
+    padding: ${space[4]} 0 ${space[2]};
+  }
+`;
+
+export const GroupToggle = styled.button`
+  display: inline-flex;
+  gap: ${space[2]};
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 ${space[2]} 0 0;
+  border: 0;
+  border-radius: ${radius.md};
+  background: transparent;
+  color: ${color.text};
+  font-family: inherit;
+  font-size: ${font.size.lg};
+  font-weight: ${font.weight.bold};
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    color: ${color.accent};
+  }
+`;
+
+export const GroupCount = styled.span`
+  color: ${color.textSubtle};
+  font-size: ${font.size.sm};
+  font-weight: ${font.weight.medium};
+`;
+
+export const GroupLink = styled(Link)`
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-left: auto;
+  color: ${color.textMuted};
+  font-size: ${font.size.sm};
+  text-decoration: none;
+
+  &:hover {
+    color: ${color.accent};
+    text-decoration: underline;
+  }
+`;
+
+/** 그룹 안의 토픽 하나. 접혀 있고 제목 줄만 보인다 */
+export const Section = styled.details`
+  border-top: 1px solid ${color.border};
+
+  > summary {
+    display: flex;
+    gap: ${space[2]};
+    align-items: center;
+    min-height: 2.75rem;
+    color: ${color.text};
+    font-weight: ${font.weight.semibold};
+    cursor: pointer;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+  > summary::-webkit-details-marker {
+    display: none;
+  }
+  > summary::before {
+    content: "▸";
+    color: ${color.textSubtle};
+  }
+  &[open] > summary::before {
+    content: "▾";
+  }
+  &[open] {
+    padding-bottom: ${space[6]};
+  }
 `;
 
 export const SectionTitle = styled(Link)`
@@ -18,11 +100,9 @@ export const SectionTitle = styled(Link)`
   align-items: center;
   min-height: 2.75rem;
   margin-bottom: ${space[2]};
-  color: ${color.text};
-  font-size: ${font.size.lg};
-  font-weight: ${font.weight.bold};
+  color: ${color.textMuted};
+  font-size: ${font.size.sm};
   text-decoration: none;
-  overflow-wrap: anywhere;
 
   &:hover {
     color: ${color.accent};
