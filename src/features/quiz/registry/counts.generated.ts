@@ -1,6 +1,20 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "fine-tuning-vs-rag-vs-prompting": 7,
+  "claude-code-models-and-cost": 7,
+  "claude-code-headless-ci": 7,
+  "claude-code-cli-and-sessions": 7,
+  "leetcode-word-search": 5,
+  "leetcode-task-scheduler": 5,
+  "leetcode-serialize-and-deserialize-binary-tree": 5,
+  "leetcode-replace-words": 5,
+  "leetcode-number-of-islands": 5,
+  "leetcode-n-queens": 5,
+  "leetcode-merge-k-sorted-lists": 5,
+  "leetcode-longest-common-prefix": 5,
+  "leetcode-find-median-from-data-stream": 5,
+  "leetcode-clone-graph": 5,
   "two-pointers-pattern": 6,
   "system-prompt-design": 7,
   "sliding-window-pattern": 6,

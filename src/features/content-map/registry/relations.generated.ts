@@ -2,6 +2,201 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "claude-code-cli-and-sessions": {
+    "links": [
+      "claude-code-fundamentals-map",
+      "claude-code-project-structure",
+      "claude-code-context-window",
+      "claude-code-extensions",
+      "claude-code-headless-ci"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "linux-files-permissions",
+      "cookie-session-login",
+      "mcp-protocol"
+    ]
+  },
+  "claude-code-headless-ci": {
+    "links": [
+      "claude-code-cli-and-sessions",
+      "claude-code-project-structure",
+      "claude-code-extensions",
+      "github-actions-workflows",
+      "llm-api-integration",
+      "claude-code-models-and-cost",
+      "software-supply-chain-ci-hardening",
+      "agent-frameworks-comparison"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "bash-scripting",
+      "http-status-codes",
+      "cookie-session-login",
+      "mcp-protocol"
+    ]
+  },
+  "claude-code-models-and-cost": {
+    "links": [
+      "claude-code-context-window",
+      "claude-code-extensions",
+      "llm-model-selection",
+      "transformer-attention-kv-cache"
+    ],
+    "mentions": [
+      "observability-basics",
+      "claude-code-project-structure",
+      "system-prompt-design",
+      "js-numbers-bigint",
+      "sli-slo",
+      "input-validation-secure-coding",
+      "mcp-protocol",
+      "dns"
+    ]
+  },
+  "fine-tuning-vs-rag-vs-prompting": {
+    "links": [
+      "system-prompt-design",
+      "context-engineering",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "llm-api-integration",
+      "embedding-models-applications",
+      "llm-evals",
+      "postgres-architecture",
+      "self-hosting-llm-inference",
+      "vector-db",
+      "llm-basics-for-developers"
+    ]
+  },
+  "leetcode-clone-graph": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "js-shallow-deep-copy",
+      "leetcode-number-of-islands"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "pattern-prototype"
+    ]
+  },
+  "leetcode-find-median-from-data-stream": {
+    "links": [
+      "ds-heap",
+      "binary-search",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "sql-aggregation-pitfalls",
+      "big-o-notation",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-longest-common-prefix": {
+    "links": [
+      "leetcode-implement-trie",
+      "binary-search",
+      "leetcode-replace-words"
+    ],
+    "mentions": [
+      "string-search-algorithms",
+      "divide-and-conquer",
+      "db-modeling-normalization",
+      "core-web-vitals"
+    ]
+  },
+  "leetcode-merge-k-sorted-lists": {
+    "links": [
+      "leetcode-merge-two-sorted-lists",
+      "ds-heap",
+      "divide-and-conquer",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "message-delivery-semantics",
+      "db-type-embedded",
+      "ds-linked-list",
+      "centralized-logging-pipeline",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-n-queens": {
+    "links": [
+      "leetcode-permutations",
+      "recursion-backtracking",
+      "bit-manipulation",
+      "leetcode-word-search",
+      "leetcode-generate-parentheses",
+      "leetcode-combination-sum",
+      "leetcode-subsets"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-number-of-islands": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "leetcode-word-search"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-replace-words": {
+    "links": [
+      "leetcode-implement-trie",
+      "leetcode-longest-common-prefix",
+      "ds-trie"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "string-search-algorithms"
+    ]
+  },
+  "leetcode-serialize-and-deserialize-binary-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-maximum-depth-of-binary-tree",
+      "bit-manipulation",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "grpc",
+      "js-execution-context",
+      "redis-basics"
+    ]
+  },
+  "leetcode-task-scheduler": {
+    "links": [
+      "greedy-algorithms",
+      "ds-heap",
+      "cpu-scheduling-interrupts"
+    ],
+    "mentions": []
+  },
+  "leetcode-word-search": {
+    "links": [
+      "leetcode-number-of-islands",
+      "recursion-backtracking",
+      "ds-graph-bfs-dfs",
+      "leetcode-word-search-ii",
+      "ds-trie",
+      "leetcode-n-queens"
+    ],
+    "mentions": [
+      "js-memoization",
+      "big-o-notation"
+    ]
+  },
   "agent-frameworks-comparison": {
     "links": [
       "ai-coding-agents",
@@ -9,6 +204,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multi-agent-systems",
       "rag-classic-pipeline",
       "rag-retrieval-quality",
+      "claude-code-headless-ci",
       "mcp-protocol"
     ],
     "mentions": [
@@ -166,6 +362,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "system-prompt-design",
       "llm-api-integration",
       "code-review-practices",
+      "fine-tuning-vs-rag-vs-prompting",
       "vector-db"
     ]
   },
@@ -235,7 +432,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "llm-basics-for-developers",
       "context-engineering",
       "llm-api-integration",
-      "rag-classic-pipeline"
+      "rag-classic-pipeline",
+      "fine-tuning-vs-rag-vs-prompting"
     ],
     "mentions": [
       "llm-evals",
@@ -271,6 +469,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-binary-tree-bst",
       "ds-graph-bfs-dfs",
       "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-serialize-and-deserialize-binary-tree",
       "leetcode-lowest-common-ancestor-of-bst",
       "leetcode-study-guide"
     ],
@@ -304,9 +503,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-design-add-and-search-words",
       "leetcode-word-search-ii",
+      "leetcode-replace-words",
       "ds-trie",
       "binary-search",
-      "sd-autocomplete-trie"
+      "sd-autocomplete-trie",
+      "leetcode-longest-common-prefix"
     ],
     "mentions": [
       "process-vs-thread",
@@ -337,6 +538,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-heap",
       "randomized-algorithms",
       "leetcode-top-k-frequent-elements",
+      "leetcode-find-median-from-data-stream",
       "leetcode-median-of-two-sorted-arrays",
       "leetcode-k-closest-points-to-origin"
     ],
@@ -364,6 +566,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "balanced-search-trees",
       "ds-union-find",
       "leetcode-binary-tree-level-order-traversal",
+      "leetcode-serialize-and-deserialize-binary-tree",
       "leetcode-study-guide"
     ],
     "mentions": [
@@ -388,6 +591,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-merge-two-sorted-lists": {
     "links": [
+      "leetcode-merge-k-sorted-lists",
       "leetcode-reorder-list",
       "ds-linked-list",
       "sorting-algorithms",
@@ -402,7 +606,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-subsets",
       "leetcode-combination-sum",
-      "recursion-backtracking"
+      "recursion-backtracking",
+      "leetcode-n-queens"
     ],
     "mentions": [
       "sliding-window-pattern",
@@ -438,6 +643,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-combination-sum",
       "leetcode-permutations",
+      "leetcode-n-queens",
       "recursion-backtracking",
       "dynamic-programming",
       "bit-manipulation",
@@ -450,9 +656,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-word-search-ii": {
     "links": [
+      "leetcode-word-search",
       "leetcode-implement-trie",
       "recursion-backtracking",
-      "leetcode-design-add-and-search-words"
+      "leetcode-design-add-and-search-words",
+      "leetcode-number-of-islands"
     ],
     "mentions": [
       "ds-trie",
@@ -659,6 +867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "load-testing-k6",
       "transformer-attention-kv-cache",
       "osi-in-practice",
+      "fine-tuning-vs-rag-vs-prompting",
       "rag-classic-pipeline",
       "vector-db"
     ]
@@ -673,6 +882,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "self-hosting-llm-inference",
       "system-prompt-design",
       "sliding-window-pattern",
+      "fine-tuning-vs-rag-vs-prompting",
       "db-modeling-normalization",
       "dns",
       "vector-db"
@@ -796,6 +1006,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-subsets",
       "leetcode-permutations",
       "leetcode-combination-sum",
+      "leetcode-n-queens",
       "monotonic-stack-pattern"
     ],
     "mentions": [
@@ -879,6 +1090,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "two-pointers-pattern",
       "leetcode-merge-two-sorted-lists",
       "ds-heap",
+      "leetcode-merge-k-sorted-lists",
+      "leetcode-find-median-from-data-stream",
       "leetcode-find-minimum-in-rotated-sorted-array",
       "leetcode-search-in-rotated-sorted-array",
       "leetcode-study-guide"
@@ -8190,6 +8403,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "embedding-models-applications",
       "llm-evals",
       "kafka-basics",
+      "fine-tuning-vs-rag-vs-prompting",
       "llm-basics-for-developers"
     ]
   },

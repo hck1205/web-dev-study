@@ -1,0 +1,518 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-clone-graph");
+
+<EasyIntro>
+  친구 네 명이 서로 손을 잡고 원을 만들고 있다. 이 모양을 그대로 본뜬 인형 네 개를 만들어 똑같이 손을 잡게 하고 싶다. 인형을 만드는 건 쉽다. 어려운 건 손을 잡히는 일이다. 첫 번째 친구가 두 번째 친구와 손을 잡고 있으니 첫 번째 인형도 두 번째 인형과 손을 잡아야 하는데, 그러려면 두 번째 인형이 이미 있는지 알아야 한다. 이미 만든 인형을 또 만들면 인형이 끝없이 늘어난다. 그래서 공책에 "이 친구의 인형은 이것"이라고 적어 둔다. 친구를 한 명씩 만날 때마다 공책을 펴 보고, 인형이 없으면 새로 만들어 적고, 있으면 그 인형을 가져다 손을 잡게 한다. 친구를 다 만나고 나면 인형들도 친구들과 똑같은 원을 이룬다.
+</EasyIntro>
+
+도형 편집기에서 점과 선으로 된 그림을 "복제"하는 기능을 짠다고 해 보자. 복제한 그림의 점을 옮겼는데 원래 그림의 점도 따라 움직인다면, 복제가 아니라 같은 그림을 두 군데서 가리키고 있는 것이다. 점끼리 서로를 가리키는 구조를 통째로 복사하는 일은 생각보다 까다롭다. 서로가 서로를 가리키니 어디서부터 복사해야 할지 정할 수가 없다.
+
+[LeetCode 133. Clone Graph](https://leetcode.com/problems/clone-graph/)가 이 문제다. 그래프 문제지만 묻는 건 탐색보다 "이미 만든 것을 기억하기"다. 이 글은 얕은 복사와 메모 없는 재귀가 왜 실패하는지부터 보고, 해시맵을 장부로 쓰는 DFS와 BFS, 배열 장부, 두 번에 나눠 만드는 풀이, 그리고 언어가 기본으로 주는 깊은 복사 함수가 이 문제에서 어떻게 되는지까지 본다. 탐색 자체는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에, 객체 복사의 일반적인 이야기는 [얕은 복사와 깊은 복사 글](/posts/js-shallow-deep-copy)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 원본과 한 칸도 나눠 쓰지 않는 복사본
+
+노드 하나는 값 `val`과 이웃 노드 목록 `neighbors`를 가진다. 연결된 무방향 그래프의 노드 하나를 받으면, 같은 모양의 그래프를 새 노드로 만들어 그 시작 노드를 돌려준다. 복사본의 어떤 노드도 원본 노드여서는 안 된다. 깊은 복사(deep copy, 안에 든 객체까지 전부 새로 만드는 복사)다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- 노드는 0개에서 100개다. 0개면 `null`이 들어오고 `null`을 돌려준다.
+- `val`은 1부터 노드 수까지 겹치지 않는다. 그래서 `val`을 노드 번호처럼 쓸 수 있다.
+- 무방향이라 1이 2의 이웃이면 2도 1의 이웃이다. 간선 하나가 양쪽 목록에 한 번씩 나온다. 자기 자신을 가리키는 간선과 중복 간선은 없다.
+- 그래프는 연결되어 있어서 시작 노드 하나에서 모든 노드에 닿는다.
+
+LeetCode는 그래프를 인접 리스트로 보여 준다. `i`번째 칸이 `val`이 `i + 1`인 노드의 이웃 목록이다. 이 글의 예시는 네 노드가 사각형으로 이어진 그래프다.
+
+```text
+adjList = [[2, 4], [1, 3], [2, 4], [1, 3]]
+
+1 ── 2
+│    │
+4 ── 3
+```
+
+1의 이웃은 2와 4, 2의 이웃은 1과 3이다. 복사본도 똑같이 1′의 이웃이 2′와 4′여야 하고, 2′의 이웃 목록에 있는 1′는 1′의 이웃 목록에서 시작한 바로 그 객체여야 한다. 1′를 두 번 만들면 모양은 같아 보여도 그래프가 둘로 갈라진다.
+
+아래 그림은 뒤에서 볼 BFS 풀이가 복사본을 잇는 순서다. 왼쪽이 원본, 오른쪽이 복사본이다.
+
+<VectorSpace
+  caption="왼쪽 원본 사각형을 보고 오른쪽 복사본을 잇는다"
+  width={400}
+  height={240}
+  groups={[{ id: "orig", label: "원본" }, { id: "copy", label: "복사본" }]}
+  points={[
+    { id: "o1", label: "1", x: 60, y: 60, group: "orig" },
+    { id: "o2", label: "2", x: 160, y: 60, group: "orig" },
+    { id: "o3", label: "3", x: 160, y: 180, group: "orig" },
+    { id: "o4", label: "4", x: 60, y: 180, group: "orig" },
+    { id: "c1", label: "1′", x: 240, y: 60, group: "copy" },
+    { id: "c2", label: "2′", x: 340, y: 60, group: "copy", labelAt: "left" },
+    { id: "c3", label: "3′", x: 340, y: 180, group: "copy", labelAt: "left" },
+    { id: "c4", label: "4′", x: 240, y: 180, group: "copy" },
+  ]}
+  edges={[["o1", "o2"], ["o2", "o3"], ["o3", "o4"], ["o4", "o1"]]}
+  steps={[
+    { caption: "왼쪽이 원본 사각형이다. 오른쪽 복사본 노드들은 아직 서로 이어지지 않았다.", showEdges: true },
+    { caption: "1을 보고 1′를 만든다. 장부에 1 → 1′를 적는다.", showEdges: true, path: ["o1", "c1"] },
+    { caption: "1의 이웃 2와 4는 처음 본다. 2′, 4′를 만들어 1′에 잇는다.", showEdges: true, path: ["c2", "c1", "c4"] },
+    { caption: "2를 꺼낸다. 1은 장부에 있어 1′를 그대로 쓰고, 3은 3′를 새로 만든다.", showEdges: true, path: ["c1", "c2", "c3"] },
+    { caption: "4를 꺼낸다. 1과 3 모두 장부에 있다. 새로 만들 노드가 없다.", showEdges: true, path: ["c1", "c4", "c3"] },
+    { caption: "3까지 잇고 나면 복사본도 같은 사각형이다. 원본 노드는 하나도 쓰지 않았다.", showEdges: true, path: ["c1", "c2", "c3", "c4", "c1"] },
+  ]}
+/>
+
+## 겉만 복사하면 이웃 목록을 함께 쓴다
+
+JavaScript에서 객체를 복사하라고 하면 먼저 떠오르는 건 펼침 문법이다.
+
+```js
+const copy = { ...node }; // val과 neighbors를 새 객체에 옮겨 담는다
+console.log(copy === node);                       // false
+console.log(copy.neighbors === node.neighbors);   // true
+```
+
+`copy` 자체는 새 객체지만, 안에 든 `neighbors` 배열은 원본 배열을 그대로 가리킨다. 이게 얕은 복사다. 복사본의 이웃에 노드를 하나 더 넣으면 원본 이웃 목록도 같이 늘어나고, 이웃 노드들은 여전히 원본 노드다. 문제의 조건 "복사본의 어떤 노드도 원본 노드가 아니다"를 첫 이웃부터 어긴다.
+
+## 이웃을 따라 그대로 복사하면 끝나지 않는다
+
+그럼 이웃도 새로 복사하면 된다. 노드를 복사할 때 이웃 하나하나를 같은 함수로 복사해서 넣는다. 트리라면 이게 정답이다.
+
+```js
+function cloneGraph(node) {
+  if (!node) return null;
+  const copy = new Node(node.val);
+  copy.neighbors = node.neighbors.map(cloneGraph); // 이웃마다 다시 복사
+  return copy;
+}
+```
+
+노드 두 개짜리 그래프 `[[2], [1]]`에서도 이 코드는 `RangeError: Maximum call stack size exceeded`로 멈춘다. 1을 복사하려면 이웃 2를 복사해야 하고, 2를 복사하려면 이웃 1을 복사해야 한다. 무방향 그래프는 간선마다 양쪽이 서로를 가리키니 간선 하나가 이미 사이클(돌고 도는 길)이다. 트리에서는 자식이 부모를 가리키지 않아서 이 문제가 없었다.
+
+두 번째 문제도 있다. 사이클이 없는 방향 그래프라도 두 노드가 같은 이웃을 가리키면, 그 이웃이 두 번 복사된다. 1과 2가 둘 다 3을 가리키면 3′가 두 개 생겨서 원본의 "같은 3"이라는 정보가 사라진다.
+
+두 문제의 원인은 같다. 이 노드를 이미 복사했는지 모른다. 그래서 장부가 필요하다.
+
+## 원본에서 복사본으로 가는 장부
+
+해시맵 하나를 장부로 둔다. 키는 원본 노드, 값은 그 노드의 복사본이다. 노드를 복사하기 전에 장부를 본다. 있으면 그 복사본을 돌려주고, 없으면 새로 만든다.
+
+```js
+function cloneGraph(node) {
+  if (!node) return null;
+  const copies = new Map(); // 원본 노드 -> 복사본
+  const clone = (n) => {
+    if (copies.has(n)) return copies.get(n); // 이미 만들었으면 그걸 쓴다
+    const c = new Node(n.val);
+    copies.set(n, c);       // 이웃을 복사하기 "전에" 적어 둔다
+    for (const nb of n.neighbors) c.neighbors.push(clone(nb));
+    return c;
+  };
+  return clone(node);
+}
+```
+
+여기서 가장 중요한 줄은 `copies.set(n, c)`의 위치다. 이웃을 복사하기 전에 적어야 한다. 1을 복사하다가 이웃 2로 들어가고, 2의 이웃 1을 만나면 장부에 1′가 이미 있어서 바로 돌아온다. 사이클이 거기서 끊긴다. 이웃을 다 복사한 뒤에 적으면 아직 장부가 비어 있으니 앞의 메모 없는 재귀와 똑같이 무한히 들어간다. 직접 돌려 보면 노드 두 개짜리에서 바로 `RangeError`가 난다.
+
+장부의 키가 노드 객체 자체인 것도 짚어 두자. JavaScript의 `Map`은 객체를 키로 쓰면 참조(같은 객체인가)로 비교한다. 일반 객체 `{}`를 장부로 쓰면 키가 문자열로 바뀌어서 모든 노드가 `"[object Object]"` 한 칸에 들어간다. 이 문제는 `val`이 겹치지 않아서 `n.val`을 키로 써도 되지만, 값이 겹칠 수 있는 일반 그래프라면 노드 객체를 키로 써야 한다.
+
+시간은 O(V + E)다. V는 노드 수, E는 간선 수다. 노드마다 복사본을 한 번 만들고, 이웃 목록의 칸마다 장부를 한 번 본다. 무방향이라 간선 하나가 이웃 목록에 두 번 나오니 이웃 칸은 2E개다. 공간은 장부 O(V)와 재귀 깊이 O(V)다.
+
+이 문제는 노드가 100개뿐이라 재귀 깊이가 문제 되지 않는다. 일반 그래프 복사라면 이야기가 다르다. 노드가 한 줄로 이어진 경로 그래프에서 재보니 Node.js 기본 설정은 노드 5,000개까지 버티고 1만 개에서 `RangeError`가 났다. 큰 그래프라면 재귀 대신 큐를 쓴다.
+
+## 장부와 큐로 한 겹씩 복사하기
+
+BFS로 바꾸면 재귀 깊이 걱정이 없어진다. 시작 노드의 복사본을 만들어 장부에 적고 큐에 넣는다. 큐에서 원본 노드를 하나 꺼낼 때마다 이웃을 하나씩 본다. 처음 보는 이웃이면 복사본을 만들어 장부에 적고 큐에 넣는다. 처음 보든 아니든, 지금 노드의 복사본 이웃 목록에 그 이웃의 복사본을 넣는다.
+
+```js
+function cloneGraph(node) {
+  if (!node) return null;
+  const copies = new Map([[node, new Node(node.val)]]); // 원본 -> 복사본
+  const queue = [node];                                  // 이웃을 아직 안 이은 원본 노드
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head];
+    for (const nb of cur.neighbors) {
+      if (!copies.has(nb)) {
+        copies.set(nb, new Node(nb.val)); // 처음 보는 노드: 만들고, 적고, 줄 세운다
+        queue.push(nb);
+      }
+      copies.get(cur).neighbors.push(copies.get(nb)); // 처음이든 아니든 잇는다
+    }
+  }
+  return copies.get(node);
+}
+```
+
+노드를 장부에 적는 시점과 큐에 넣는 시점이 같다는 점이 [Number of Islands](/posts/leetcode-number-of-islands)의 "큐에 넣는 순간 방문 표시"와 같은 원리다. 장부에 있다는 것 자체가 방문 표시다. 그래서 따로 `visited` 집합이 필요 없다.
+
+아래 그림은 사각형 예시에서 이 코드를 한 줄씩 따라간 것이다. 위 칸은 원본 노드, 아래 칸은 장부에 적힌 복사본과 지금까지 이은 이웃이다.
+
+<AlgoTrace
+  caption="BFS로 사각형 그래프 복사하기. 장부에 있으면 새로 만들지 않는다"
+  memoryLabel="장부 (복사본: 이은 이웃)"
+  cells={["1", "2", "3", "4"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1′: -"], caption: "1′를 만들어 장부에 적고, 1을 큐에 넣는다." },
+    { pointer: 0, found: [0, 1], memory: ["1′: 2′", "2′: -"], caption: "1의 이웃 2는 처음 본다. 2′를 만들고 1′에 잇는다." },
+    { pointer: 0, found: [0, 1, 3], memory: ["1′: 2′ 4′", "2′: -", "4′: -"], caption: "이웃 4도 처음이다. 4′를 만들고 잇는다. 큐에는 2, 4." },
+    { pointer: 1, found: [0, 1, 3], memory: ["1′: 2′ 4′", "2′: 1′", "4′: -"], caption: "2를 꺼낸다. 이웃 1은 장부에 있으니 1′를 그대로 잇는다." },
+    { pointer: 1, found: [0, 1, 2, 3], memory: ["1′: 2′ 4′", "2′: 1′ 3′", "4′: -", "3′: -"], caption: "이웃 3은 처음이다. 3′를 만들고 잇는다. 큐에는 4, 3." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["1′: 2′ 4′", "2′: 1′ 3′", "4′: 1′ 3′", "3′: -"], caption: "4를 꺼낸다. 1과 3 모두 장부에 있다. 잇기만 한다." },
+    { pointer: 2, found: [0, 1, 2, 3], memory: ["1′: 2′ 4′", "2′: 1′ 3′", "4′: 1′ 3′", "3′: 2′ 4′"], caption: "3을 꺼내 2′, 4′를 잇는다. 큐가 비었다. 1′를 돌려준다." },
+  ]}
+/>
+
+새 노드가 만들어진 건 네 번뿐이고, 잇기는 여덟 번 일어났다. 간선 네 개가 양쪽 목록에 한 번씩 나오니 여덟 번이 맞다. 시간 O(V + E), 공간은 장부 O(V)와 큐 O(V)다.
+
+### Python과 Java로 쓰면
+
+Python에서 사용자 정의 클래스의 객체는 기본으로 해시가 되고, 객체 정체성(`id`)으로 비교한다. 그래서 노드를 딕셔너리 키로 바로 쓸 수 있다. `__eq__`만 고쳐 놓은 클래스는 `__hash__`가 `None`이 되어 키로 쓸 수 없지만, LeetCode의 `Node`는 고치지 않았다.
+
+```python
+from collections import deque
+from typing import Optional
+
+
+class Node:
+    def __init__(self, val: int = 0, neighbors=None):
+        self.val = val
+        self.neighbors = neighbors if neighbors is not None else []
+
+
+def clone_graph(node: Optional[Node]) -> Optional[Node]:
+    if node is None:
+        return None
+    copies = {node: Node(node.val)}  # 원본 노드 -> 복사본
+    queue = deque([node])
+    while queue:
+        cur = queue.popleft()
+        for nb in cur.neighbors:
+            if nb not in copies:          # 처음 보는 노드면 복사본을 만들고 줄 세운다
+                copies[nb] = Node(nb.val)
+                queue.append(nb)
+            copies[cur].neighbors.append(copies[nb])  # 복사본끼리 잇는다
+    return copies[node]
+```
+
+```text
+[[2, 4], [1, 3], [2, 4], [1, 3]] True True
+```
+
+출력은 복사본을 인접 리스트로 바꾼 것, 시작 노드가 원본과 다른 객체인지, 첫 이웃도 원본과 다른 객체인지다. `Node` 생성자의 `neighbors=None` 기본값도 눈여겨보자. `neighbors=[]`로 쓰면 그 빈 리스트 하나를 모든 노드가 나눠 써서, 한 노드에 이웃을 넣으면 모든 노드에 들어간다. Python의 유명한 함정이고, LeetCode의 정의도 `None`을 쓴다.
+
+Java의 `Node`는 `equals`와 `hashCode`를 고치지 않았으니 `HashMap<Node, Node>`가 객체 주소로 구분한다. `IdentityHashMap`을 써도 같은 결과다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public Node cloneGraph(Node node) {
+        if (node == null) return null;
+        Map<Node, Node> copies = new HashMap<>();   // 원본 -> 복사본
+        copies.put(node, new Node(node.val));
+        ArrayDeque<Node> queue = new ArrayDeque<>();
+        queue.add(node);
+        while (!queue.isEmpty()) {
+            Node cur = queue.poll();
+            for (Node nb : cur.neighbors) {
+                if (!copies.containsKey(nb)) {       // 처음 보는 노드
+                    copies.put(nb, new Node(nb.val));
+                    queue.add(nb);
+                }
+                copies.get(cur).neighbors.add(copies.get(nb));
+            }
+        }
+        return copies.get(node);
+    }
+}
+```
+
+```text
+1->2 4 | 2->1 3 | 3->2 4 | 4->1 3 | shared=false
+```
+
+마지막 `shared=false`는 복사본을 훑으면서 원본 노드 배열의 객체와 `==`로 같은 것이 하나도 없는지 확인한 결과다.
+
+## val이 번호라면 배열이 장부다
+
+이 문제는 `val`이 1부터 100까지 겹치지 않는다. 그러면 해시맵 대신 길이 101짜리 배열을 장부로 쓸 수 있다. `copies[nb.val]`이 비어 있으면 처음 보는 노드다. 해시 계산이 없어서 상수가 작고, 순서를 따질 필요가 없으니 큐 대신 스택(배열 끝에서 넣고 빼기)을 써도 된다.
+
+```js
+function cloneGraph(node) {
+  if (!node) return null;
+  const copies = new Array(101).fill(null); // val이 1..100이라 val이 곧 칸 번호
+  copies[node.val] = new Node(node.val);
+  const stack = [node];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    for (const nb of cur.neighbors) {
+      if (copies[nb.val] === null) {
+        copies[nb.val] = new Node(nb.val);
+        stack.push(nb);
+      }
+      copies[cur.val].neighbors.push(copies[nb.val]);
+    }
+  }
+  return copies[node.val];
+}
+```
+
+시간 O(V + E), 공간 O(V)는 같다. 이 풀이는 조건에 기대는 풀이라서, 면접에서 쓰려면 "값이 겹치지 않고 범위가 작다는 조건 때문에 배열을 쓴다"고 말해야 한다. 값이 겹치거나 범위가 크면 해시맵으로 돌아간다. 노드가 100개뿐이라 실제 속도 차이는 느끼기 어렵다. 완전 그래프(노드 100개가 서로 다 이어진, 간선 4,950개)에서 재 보면 네 풀이 모두 몇 ms 안에 끝났다.
+
+## 먼저 다 만들고 나중에 잇기
+
+이웃을 잇는 일과 노드를 만드는 일을 섞지 않고 두 번에 나눌 수도 있다. 첫 번째 훑기에서 모든 원본 노드를 찾아 복사본을 만들어 장부에 적는다. 이때는 이웃을 잇지 않는다. 두 번째 훑기에서 원본 노드마다 이웃 목록을 장부로 바꿔 끼운다.
+
+```js
+function cloneGraph(node) {
+  if (!node) return null;
+  const copies = new Map([[node, new Node(node.val)]]);
+  const order = [node];
+  // 1단계: 모든 노드를 찾아 복사본만 만든다 (BFS)
+  for (let i = 0; i < order.length; i++) {
+    for (const nb of order[i].neighbors) {
+      if (!copies.has(nb)) {
+        copies.set(nb, new Node(nb.val));
+        order.push(nb);
+      }
+    }
+  }
+  // 2단계: 이웃 목록을 원본 -> 복사본으로 바꿔 끼운다
+  for (const orig of order) {
+    copies.get(orig).neighbors = orig.neighbors.map((nb) => copies.get(nb));
+  }
+  return copies.get(node);
+}
+```
+
+두 번 훑으니 상수가 두 배지만 복잡도는 O(V + E) 그대로다. 이 방식의 장점은 생각하기 쉽다는 것이다. 2단계에서는 모든 복사본이 이미 있으니 "아직 안 만든 이웃"을 걱정할 필요가 없다. 이웃 목록의 순서도 원본과 정확히 같게 유지된다. 이 생각은 [Copy List with Random Pointer](/posts/leetcode-copy-list-with-random-pointer)에서도 그대로 쓴다. 노드를 먼저 다 만들어 두고, 두 번째 훑기에서 `next`와 `random`을 장부로 바꿔 끼운다.
+
+## 언어가 주는 깊은 복사는 어떤가
+
+면접관이 "그냥 라이브러리로 복사하면 안 되나요?"라고 물을 수 있다. 실제로 해 보면 언어마다 결과가 다르다.
+
+JavaScript의 `JSON.parse(JSON.stringify(node))`는 사이클이 있으면 바로 실패한다.
+
+```text
+TypeError: Converting circular structure to JSON
+```
+
+`structuredClone(node)`은 사이클을 처리한다. 사각형 그래프를 넣으면 모양이 같은 복사본이 나온다. 그런데 복사본의 노드는 `Node` 클래스 객체가 아니라 평범한 `Object`다. `copy instanceof Node`가 `false`다. 구조화된 복제는 클래스의 프로토타입을 옮기지 않기 때문이다. 메서드가 있는 클래스였다면 복사본에서 그 메서드를 부를 수 없다.
+
+Python의 `copy.deepcopy`는 내부에 `memo` 딕셔너리를 두고 이미 복사한 객체를 기억한다. 이 글의 해시맵 장부와 같은 아이디어다. 그래서 사각형 그래프도 제대로 복사하고 클래스도 유지한다. 하지만 재귀로 구현되어 있어서, 노드가 한 줄로 이어진 경로 그래프에서는 노드 170개쯤에서 `RecursionError`가 났다. 객체 하나를 복사할 때 재귀가 여러 단계 쌓이기 때문이다. LeetCode 조건(100개)에서는 통과하지만 일반 그래프에는 쓸 수 없다.
+
+Java에는 그래프 전체를 깊게 복사해 주는 표준 함수가 없다. `Object.clone()`은 기본이 얕은 복사다. 직렬화(`ObjectOutputStream`)로 바이트에 썼다가 다시 읽는 방법이 있지만 `Serializable`을 구현해야 하고 느리다.
+
+결국 면접에서 기대하는 건 `deepcopy`가 안에서 하는 일을 직접 짜는 것이다. "deepcopy도 결국 원본에서 복사본으로 가는 memo를 쓴다"라고 연결해서 말하면 좋다.
+
+## 복사가 맞았는지 확인하는 법
+
+모양이 같다고 깊은 복사가 맞은 건 아니다. 원본 노드를 섞어 쓰거나, 같은 원본을 복사본 둘로 갈라 만들어도 인접 리스트로 찍으면 똑같아 보일 수 있다. 실무에서 복제 기능을 테스트한다면 세 가지를 확인한다. 복사본 노드가 원본 노드가 아닌지, 값과 이웃 수가 같은지, 원본 하나가 복사본 하나와만 짝지어지는지다.
+
+```js
+function isDeepCopy(orig, copy) {
+  if (!orig || !copy) return orig === copy;          // 둘 다 null이어야 맞다
+  const pair = new Map([[orig, copy]]);              // 원본 -> 짝지어진 복사본
+  const used = new Set([copy]);                      // 이미 짝지어진 복사본
+  const queue = [orig];
+  for (let head = 0; head < queue.length; head++) {
+    const o = queue[head], c = pair.get(o);
+    if (o === c || o.val !== c.val || o.neighbors.length !== c.neighbors.length) return false;
+    for (let i = 0; i < o.neighbors.length; i++) {
+      const on = o.neighbors[i], cn = c.neighbors[i];
+      if (pair.has(on)) {
+        if (pair.get(on) !== cn) return false;       // 같은 원본이 복사본 둘로 갈라졌다
+      } else {
+        if (used.has(cn)) return false;              // 다른 원본 둘이 복사본 하나로 합쳐졌다
+        pair.set(on, cn); used.add(cn); queue.push(on);
+      }
+    }
+  }
+  return true;
+}
+```
+
+두 그래프를 나란히 BFS로 걸으며 짝을 맞춘다. 원본을 그대로 넘기면 첫 노드에서 `o === c`로 걸리고, 1′의 이웃의 이웃에 1′가 아닌 새 1을 넣어 갈라 놓으면 `pair.get(on) !== cn`에서 걸린다. 이웃 순서까지 같다고 가정한 검사라서, 두 번에 나눠 만드는 풀이처럼 순서를 지키는 구현에 맞다. 이 검사도 결국 같은 장부를 쓴다. 두 구조가 같은지 보는 일과 구조를 복사하는 일은 "원본 하나에 짝 하나"라는 같은 규칙 위에 있다.
+
+## 장부 쓰는 법 다섯 가지
+
+V는 노드 수, E는 간선 수다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 메모 없는 재귀 | 끝나지 않음 | - | 사이클이 없는 트리에서만 맞다 |
+| DFS + 해시맵 장부 | O(V + E) | O(V) 장부 + O(V) 재귀 | 코드가 가장 짧다. 그래프가 작을 때 |
+| BFS + 해시맵 장부 | O(V + E) | O(V) 장부 + O(V) 큐 | 기본 답. 그래프가 커도 안전하다 |
+| 배열 장부 + 스택 | O(V + E) | O(V) | 값이 겹치지 않고 범위가 작을 때 |
+| 두 번에 나눠 만들기 | O(V + E) | O(V) | 이웃 순서를 그대로 지키고 싶을 때, 생각을 단순하게 하고 싶을 때 |
+
+아래에서 직접 짜 볼 수 있다. `solve`는 채점용 도우미로, 인접 리스트로 원본 그래프를 만들어 `cloneGraph`에 넘기고 돌아온 복사본을 다시 인접 리스트로 바꾼다. 복사본에 원본 노드가 섞여 있으면 그 사실을 문자열로 돌려준다.
+
+<CodePlayground
+  caption="Clone Graph: 원본과 노드를 공유하지 않는 복사본 만들기"
+  functionName="solve"
+  initialCode={`function cloneGraph(node) {
+  // node: 연결된 무방향 그래프의 한 노드 (없으면 null)
+  // 원본과 노드를 하나도 공유하지 않는 깊은 복사본을 돌려준다
+  return null;
+}
+
+// 아래는 채점용 도우미다. 인접 리스트로 그래프를 만들고, 복사본을 다시 인접 리스트로 바꾼다.
+class Node {
+  constructor(val = 0, neighbors = []) {
+    this.val = val;
+    this.neighbors = neighbors;
+  }
+}
+
+function solve(adjList) {
+  const nodes = adjList.map((_, i) => new Node(i + 1));
+  adjList.forEach((ns, i) => { nodes[i].neighbors = ns.map((v) => nodes[v - 1]); });
+  const copy = cloneGraph(nodes[0] ?? null);
+  if (!copy) return [];
+  const originals = new Set(nodes);
+  const byVal = new Map([[copy.val, copy]]);
+  const stack = [copy];
+  while (stack.length > 0) {
+    const x = stack.pop();
+    if (originals.has(x)) return "원본 노드를 그대로 썼다";
+    for (const y of x.neighbors) {
+      if (!byVal.has(y.val)) { byVal.set(y.val, y); stack.push(y); }
+    }
+  }
+  return [...byVal.keys()].sort((a, b) => a - b).map((v) => byVal.get(v).neighbors.map((y) => y.val));
+}`}
+  solution={`function cloneGraph(node) {
+  if (!node) return null;
+  const copies = new Map([[node, new Node(node.val)]]);
+  const queue = [node];
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head];
+    for (const nb of cur.neighbors) {
+      if (!copies.has(nb)) {
+        copies.set(nb, new Node(nb.val));
+        queue.push(nb);
+      }
+      copies.get(cur).neighbors.push(copies.get(nb));
+    }
+  }
+  return copies.get(node);
+}
+
+// 아래는 채점용 도우미다. 인접 리스트로 그래프를 만들고, 복사본을 다시 인접 리스트로 바꾼다.
+class Node {
+  constructor(val = 0, neighbors = []) {
+    this.val = val;
+    this.neighbors = neighbors;
+  }
+}
+
+function solve(adjList) {
+  const nodes = adjList.map((_, i) => new Node(i + 1));
+  adjList.forEach((ns, i) => { nodes[i].neighbors = ns.map((v) => nodes[v - 1]); });
+  const copy = cloneGraph(nodes[0] ?? null);
+  if (!copy) return [];
+  const originals = new Set(nodes);
+  const byVal = new Map([[copy.val, copy]]);
+  const stack = [copy];
+  while (stack.length > 0) {
+    const x = stack.pop();
+    if (originals.has(x)) return "원본 노드를 그대로 썼다";
+    for (const y of x.neighbors) {
+      if (!byVal.has(y.val)) { byVal.set(y.val, y); stack.push(y); }
+    }
+  }
+  return [...byVal.keys()].sort((a, b) => a - b).map((v) => byVal.get(v).neighbors.map((y) => y.val));
+}`}
+  tests={[
+    { label: "글의 사각형", args: [[[2, 4], [1, 3], [2, 4], [1, 3]]], expected: [[2, 4], [1, 3], [2, 4], [1, 3]] },
+    { label: "빈 그래프", args: [[]], expected: [] },
+    { label: "이웃 없는 노드 하나", args: [[[]]], expected: [[]] },
+    { label: "노드 두 개", args: [[[2], [1]]], expected: [[2], [1]] },
+    { label: "삼각형", args: [[[2, 3], [1, 3], [1, 2]]], expected: [[2, 3], [1, 3], [1, 2]] },
+    { label: "별 모양", args: [[[2, 3, 4], [1], [1], [1]]], expected: [[2, 3, 4], [1], [1], [1]] },
+    { label: "한 줄", args: [[[2], [1, 3], [2]]], expected: [[2], [1, 3], [2]] },
+  ]}
+/>
+
+## 잇기를 빼먹거나 원본을 돌려주거나
+
+가장 흔한 실수는 처음 보는 이웃일 때만 잇는 것이다.
+
+```js
+for (const nb of cur.neighbors) {
+  if (!copies.has(nb)) {
+    copies.set(nb, new Node(nb.val));
+    queue.push(nb);
+    copies.get(cur).neighbors.push(copies.get(nb)); // if 안에 들어가 버렸다
+  }
+}
+// 사각형 -> [[2, 4], [3], [], []]
+```
+
+노드를 만드는 일과 잇는 일을 한 덩어리로 생각하면 이렇게 쓴다. 결과는 BFS가 처음 발견할 때 지나간 간선만 남은 나무 모양이다. 2′는 1′를 이웃으로 모르고, 3′와 4′는 이웃이 하나도 없다. 잇기는 장부에 있든 없든 매번 한다.
+
+두 번째는 앞에서 본 장부 적는 시점이다. DFS에서 이웃을 다 복사한 뒤에 `copies.set`을 하면 노드 두 개짜리에서도 무한 재귀다. 만들자마자 적는다.
+
+세 번째는 원본 노드를 장부의 값으로 넣는 실수다. `copies.set(nb, nb)`처럼 쓰면 테스트 그래프 모양은 맞게 나오지만 복사본이 원본이다. 위 채점 도우미는 이 경우 "원본 노드를 그대로 썼다"를 돌려준다. LeetCode 채점기도 같은 검사를 한다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- `null` 입력. 노드가 0개면 `null`이 들어온다. `node.val`을 먼저 읽으면 `TypeError`다.
+- 이웃이 없는 노드 하나 `[[]]`. 장부에 하나 적고 큐에서 꺼내면 이웃이 없어 바로 끝난다. 이것도 복사본을 새로 만들어 돌려줘야 한다.
+- 장부를 일반 객체 `{}`로 쓰고 노드 객체를 키로 넣는 것. 키가 `"[object Object]"` 문자열로 바뀌어 모든 노드가 한 칸을 덮어쓴다. `Map`을 쓴다.
+- Python에서 `neighbors=[]` 기본 인자. 모든 노드가 같은 리스트를 나눠 쓴다.
+
+## 그래프 조건이 달라지면
+
+### 방향 그래프라면
+
+코드를 하나도 바꾸지 않아도 된다. 이웃 목록을 따라가며 복사하는 것은 방향과 상관없다. 다만 시작 노드에서 갈 수 없는 노드는 복사되지 않는다. 방향 그래프에서는 "연결되어 있다"는 보장이 더 약하니, 모든 노드에 닿는지 먼저 확인해야 한다.
+
+### 그래프가 연결되어 있지 않다면
+
+노드 하나만 받아서는 다른 덩어리에 닿을 수 없다. 노드 목록 전체를 받아야 하고, 목록의 노드마다 장부에 없으면 거기서 BFS를 새로 시작한다. [Number of Islands](/posts/leetcode-number-of-islands)에서 땅을 만날 때마다 탐색을 새로 시작한 것과 같은 틀이다.
+
+### 노드가 수백만 개라면
+
+재귀 DFS는 스택이 넘치니 BFS로 간다. 장부도 노드 수만큼 커진다. 노드에 겹치지 않는 정수 id가 있으면 해시맵 대신 배열이나 `Int32Array` 기반 장부로 메모리를 줄인다. 그래도 메모리에 다 못 올리면 그래프를 직렬화해서(id와 이웃 id 목록) 디스크에 쓰고 다시 읽는 방식이 현실적이다. 복사란 결국 "같은 id 구조를 새로 만드는 것"이라 직렬화와 같은 문제다.
+
+### 장부 없이 복사할 수 있나
+
+연결 리스트라면 가능하다. [Copy List with Random Pointer](/posts/leetcode-copy-list-with-random-pointer)는 원본 노드 바로 뒤에 복사본을 끼워 넣어서, "원본의 다음 칸이 복사본"이라는 규칙으로 장부를 대신한다. 공간이 O(1)이 된다. 일반 그래프는 이웃이 여러 개라 이런 끼워 넣기 자리가 없다. 원본 노드에 임시 필드를 붙여 복사본을 가리키게 하는 방법은 있지만, 원본을 건드리고 나중에 지워야 한다.
+
+### 비슷한 문제
+
+- [Copy List with Random Pointer](/posts/leetcode-copy-list-with-random-pointer) (138): 같은 장부, 그리고 장부 없이 끼워 넣는 O(1) 공간 풀이.
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 방문 표시와 BFS의 같은 틀.
+- [Course Schedule](/posts/leetcode-course-schedule) (207): 방향 그래프에서 사이클을 찾는다. 이 문제에서 사이클 때문에 장부가 필요했던 것과 이어진다.
+- 1485\. Clone Binary Tree With Random Pointer(프리미엄 문제), 1490. Clone N-ary Tree(프리미엄 문제): 같은 장부를 트리에 쓴다.
+
+## 이미 만든 것을 기억하는 것이 전부다
+
+서로를 가리키는 구조를 복사할 때의 어려움은 사이클과 공유다. 이웃을 따라 그대로 복사하면 사이클에서 끝없이 들어가고, 같은 이웃을 여러 번 만들어 공유가 깨진다. 원본에서 복사본으로 가는 장부 하나가 두 문제를 함께 푼다. 노드를 만들자마자 장부에 적고, 이웃을 이을 때는 장부에 있는 복사본을 쓴다. 장부에 있다는 것이 곧 방문 표시라 BFS든 DFS든 노드마다 한 번만 만들어지고, 간선마다 한 번 이어진다. Python의 `deepcopy`도 안에서 같은 일을 한다.
+
+## 면접에서 나올 만한 질문
+
+### 해시맵은 왜 필요한가요?
+
+이미 복사한 노드를 다시 만들지 않기 위해서다. 무방향 그래프는 간선마다 양쪽이 서로를 가리켜서, 장부 없이 이웃을 따라 복사하면 노드 두 개짜리에서도 무한 재귀에 빠진다. 장부는 사이클을 끊는 방문 표시이자, 원본의 "같은 노드"를 복사본에서도 같은 객체 하나로 유지하는 역할을 한다.
+
+### DFS에서 장부에 적는 시점이 왜 중요한가요?
+
+복사본을 만들자마자, 이웃을 복사하기 전에 적어야 한다. 그래야 이웃을 따라가다 다시 이 노드를 만났을 때 장부에서 찾아 돌아온다. 이웃을 다 복사한 뒤에 적으면 그때까지 장부가 비어 있어서 메모 없는 재귀와 똑같이 끝나지 않는다.
+
+### 시간과 공간 복잡도는요?
+
+시간은 O(V + E)다. 노드마다 복사본을 한 번 만들고, 이웃 목록의 칸마다 장부를 한 번 본다. 공간은 장부 O(V)에 BFS의 큐나 DFS의 재귀 스택 O(V)가 더해진다. 결과로 돌려주는 복사본 자체의 O(V + E)는 보통 추가 공간에 넣지 않는다.
+
+### BFS와 DFS 중 무엇을 쓰나요?
+
+둘 다 맞고 복잡도도 같다. 재귀 DFS는 코드가 짧지만 경로처럼 긴 그래프에서 재귀가 노드 수만큼 깊어진다. Node.js 기본 설정에서는 한 줄로 이어진 노드 1만 개에서 스택이 넘쳤다. 이 문제는 100개라 괜찮지만, 일반적인 그래프 복사라면 BFS나 직접 만든 스택을 쓴다.
+
+### 언어의 깊은 복사 함수를 쓰면 안 되나요?
+
+Python의 `deepcopy`는 안에서 memo 딕셔너리로 같은 일을 해서 이 문제는 통과한다. 하지만 재귀 구현이라 한 줄로 이어진 노드 170개쯤에서 `RecursionError`가 났다. JavaScript의 `JSON.stringify`는 사이클에서 `TypeError`를 내고, `structuredClone`은 사이클은 처리하지만 클래스가 평범한 객체로 바뀐다. 면접에서는 그 memo를 직접 구현하는 것이 문제의 요점이다.
+
+### 값이 겹칠 수 있다면 무엇이 달라지나요?
+
+`val`을 장부의 키로 쓸 수 없다. 값이 같은 서로 다른 노드가 한 칸에 겹쳐서 복사본에서 하나로 합쳐진다. 노드 객체 자체를 키로 쓰는 해시맵(JavaScript `Map`, Java의 `HashMap`이나 `IdentityHashMap`, Python 딕셔너리)으로 장부를 만들어야 한다. 배열 장부는 값이 겹치지 않고 범위가 작을 때만 쓰는 최적화다.
