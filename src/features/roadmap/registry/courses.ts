@@ -58,7 +58,9 @@ export const COURSES: Course[] = [
       { group: "LeetCode 패턴", label: "배열, 해시, 투 포인터, 슬라이딩 윈도", roadmaps: ["algorithms/leetcode/arrays-hashing", "algorithms/leetcode/two-pointers", "algorithms/leetcode/sliding-window"] },
       { group: "LeetCode 패턴", label: "스택, 이분 탐색, 연결 리스트", roadmaps: ["algorithms/leetcode/stack", "algorithms/leetcode/binary-search", "algorithms/leetcode/linked-list"] },
       { group: "LeetCode 패턴", label: "트리, 트라이, 힙", roadmaps: ["algorithms/leetcode/trees", "algorithms/leetcode/tries", "algorithms/leetcode/heap"] },
-      { group: "LeetCode 패턴", label: "백트래킹", roadmaps: ["algorithms/leetcode/backtracking"] },
+      { group: "LeetCode 패턴", label: "백트래킹과 그래프", roadmaps: ["algorithms/leetcode/backtracking", "algorithms/leetcode/graphs", "algorithms/leetcode/advanced-graphs"] },
+      { group: "LeetCode 패턴", label: "동적 계획법", roadmaps: ["algorithms/leetcode/dp-1d", "algorithms/leetcode/dp-2d"] },
+      { group: "LeetCode 패턴", label: "그리디와 구간", roadmaps: ["algorithms/leetcode/greedy", "algorithms/leetcode/intervals"] },
       { group: "더 넓게", label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
     ],
     next: [
@@ -188,6 +190,7 @@ export const COURSES: Course[] = [
     description: "LLM이 무엇을 하는지부터 API 연동, RAG, 에이전트, Claude Code까지. 개발자가 LLM 기능을 만들고 운영하는 관점으로 간다.",
     sources: ["https://roadmap.sh/ai-engineer", "https://roadmap.sh/ai-agents", "https://roadmap.sh/claude-code", "https://roadmap.sh/prompt-engineering"],
     stages: [
+      { label: "머신러닝 기초", roadmaps: ["ai/ml"] },
       { label: "LLM 기초와 연동", roadmaps: ["ai/llm"] },
       { label: "프롬프트와 컨텍스트", roadmaps: ["ai/prompt"] },
       { label: "RAG", roadmaps: ["ai/rag"] },

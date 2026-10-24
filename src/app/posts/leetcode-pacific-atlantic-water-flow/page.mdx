@@ -1,0 +1,558 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-pacific-atlantic-water-flow");
+
+<EasyIntro>
+  네모난 섬에 비가 내린다. 섬 왼쪽과 위쪽은 한 바다에, 오른쪽과 아래쪽은 다른 바다에 닿아 있다. 빗물은 옆 칸이 지금 칸보다 낮거나 같으면 그쪽으로 흘러간다. 어느 칸에 떨어진 빗물이 두 바다 모두로 갈 수 있는지 알고 싶다. 칸마다 물방울을 하나씩 떨어뜨려 따라가 보면 답은 나오지만, 칸이 많으면 같은 길을 수없이 다시 걷게 된다. 그래서 거꾸로 생각한다. 바닷물이 해안에서 섬 안쪽으로 거슬러 올라간다고 상상하는 것이다. 바닷물은 같거나 더 높은 칸으로만 올라갈 수 있다. 한 바다에서 거슬러 올라가 닿은 칸들은 빗물이 그 바다로 흘러갈 수 있는 칸들이다. 두 바다에서 각각 한 번씩 거슬러 올라간 뒤, 양쪽 바닷물이 모두 닿은 칸만 고르면 된다.
+</EasyIntro>
+
+지형도에서 빗물이 어디로 흘러가는지 계산하는 일은 수문학(물의 흐름을 다루는 학문)에서 실제로 하는 일이다. 칸마다 높이가 적힌 격자에서, 이 칸에 떨어진 비가 어느 바다까지 가는지 묻는다. 칸마다 물방울을 떨어뜨려 따라가 보는 게 가장 먼저 떠오르지만, 격자가 커지면 같은 내리막길을 수천 번 다시 걷는다.
+
+[LeetCode 417. Pacific Atlantic Water Flow](https://leetcode.com/problems/pacific-atlantic-water-flow/)는 이 질문을 두 바다로 묻는다. 이 문제의 요점은 탐색 방향을 뒤집는 것이다. 칸에서 바다로 가지 말고, 바다에서 칸으로 거슬러 올라간다. 이 글은 칸마다 따라가는 풀이부터 시작해, 그걸 기억으로 빠르게 하려다 틀리는 풀이, 바다에서 거꾸로 오르는 BFS와 DFS, 한 번의 BFS로 두 바다를 함께 처리하는 비트 풀이까지 다섯 가지를 본다. BFS·DFS 기본은 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에, 같은 격자 탐색의 기본형은 [Number of Islands](/posts/leetcode-number-of-islands)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 두 바다에 모두 닿는 칸 찾기
+
+입력은 높이가 적힌 m × n 격자 `heights`다. 태평양은 격자의 위쪽 가장자리와 왼쪽 가장자리에, 대서양은 아래쪽과 오른쪽 가장자리에 닿아 있다. 물은 위아래 양옆 칸 중 높이가 지금 칸보다 작거나 같은 칸으로 흐를 수 있고, 가장자리 칸에서는 바로 맞닿은 바다로 흘러 나간다. 빗물이 두 바다 모두로 흘러갈 수 있는 칸의 좌표 `[r, c]`를 모두 돌려준다. 순서는 상관없다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- 격자는 최대 200 × 200, 칸이 4만 개다. 칸마다 격자를 다시 훑으면 16억 번이라 안 된다.
+- "작거나 같은" 칸으로 흐른다. 높이가 같은 칸끼리는 물이 양쪽으로 오갈 수 있다. 이 등호가 뒤에서 한 풀이를 무너뜨린다.
+- 오른쪽 위 모서리는 위쪽(태평양)이면서 오른쪽(대서양)이라 항상 답이다. 왼쪽 아래 모서리도 마찬가지다.
+
+이 글에서 쓸 예시는 4 × 4 격자다.
+
+```text
+       태평양 (위)
+     1  2  2  3
+태   3  2  3  4   대
+평   2  4  5  3   서
+양   6  7  1  4   양
+       대서양 (아래)
+
+답 = [[0,3], [1,3], [2,2], [3,0], [3,1]]
+```
+
+손으로 몇 칸을 따라가 보자. 가운데 `(2,2)`의 5는 위 `(1,2)`의 3으로, 다시 위 `(0,2)`의 2로 내려가 태평양에 닿는다. 오른쪽 `(2,3)`의 3으로 내려가면 오른쪽 가장자리라 대서양에도 닿는다. 그래서 답이다. 반면 `(2,1)`의 4는 위 `(1,1)`의 2로 내려가 태평양에는 가지만, 대서양 쪽 이웃인 아래 7과 오른쪽 5가 더 높다. 왼쪽 `(2,0)`의 2로 내려가도 거기서 더 낮은 칸이 없다. 태평양에만 닿는다.
+
+아래 그림에서 다음을 누르면 물이 흐르는 길 몇 개를 보여 준다. 점 옆 숫자가 높이다.
+
+<VectorSpace
+  caption="4 × 4 지형. 위·왼쪽이 태평양, 아래·오른쪽이 대서양이다"
+  width={400}
+  height={260}
+  groups={[{ id: "both", label: "두 바다 모두" }, { id: "pac", label: "태평양만" }, { id: "atl", label: "대서양만" }]}
+  points={[
+    { id: "p00", label: "1", x: 80, y: 40, group: "pac" },
+    { id: "p01", label: "2", x: 160, y: 40, group: "pac" },
+    { id: "p02", label: "2", x: 240, y: 40, group: "pac" },
+    { id: "p03", label: "3", x: 320, y: 40, group: "both" },
+    { id: "p10", label: "3", x: 80, y: 100, group: "pac" },
+    { id: "p11", label: "2", x: 160, y: 100, group: "pac" },
+    { id: "p12", label: "3", x: 240, y: 100, group: "pac" },
+    { id: "p13", label: "4", x: 320, y: 100, group: "both" },
+    { id: "p20", label: "2", x: 80, y: 160, group: "pac" },
+    { id: "p21", label: "4", x: 160, y: 160, group: "pac" },
+    { id: "p22", label: "5", x: 240, y: 160, group: "both" },
+    { id: "p23", label: "3", x: 320, y: 160, group: "atl" },
+    { id: "p30", label: "6", x: 80, y: 220, group: "both" },
+    { id: "p31", label: "7", x: 160, y: 220, group: "both" },
+    { id: "p32", label: "1", x: 240, y: 220, group: "atl" },
+    { id: "p33", label: "4", x: 320, y: 220, group: "atl" },
+  ]}
+  steps={[
+    { caption: "색은 답이다. 두 바다 모두에 닿는 칸은 다섯 개다." },
+    { caption: "(2,2)의 5는 3, 2로 내려가 위쪽 태평양에 닿는다.", path: ["p22", "p12", "p02"] },
+    { caption: "같은 5는 오른쪽 3으로 내려가 대서양에도 닿는다. 그래서 답이다.", path: ["p22", "p23"] },
+    { caption: "(2,1)의 4는 위 2로 내려가 태평양에 간다. 아래 7, 오른쪽 5는 더 높다.", path: ["p21", "p11", "p01"] },
+    { caption: "왼쪽 2로 내려가도 거기서 더 낮은 칸이 없다. 대서양에는 못 간다.", path: ["p21", "p20"] },
+    { caption: "(3,1)의 7은 아래 줄이라 대서양에 닿고, 왼쪽 6을 거쳐 태평양에도 간다.", path: ["p31", "p30"] },
+  ]}
+/>
+
+## 칸마다 물방울을 떨어뜨려 본다
+
+가장 곧은 풀이는 문제를 그대로 옮기는 것이다. 칸마다 물방울을 떨어뜨리고, 같거나 낮은 이웃으로 갈 수 있는 데까지 모두 가 본다. 가는 도중 위쪽이나 왼쪽 가장자리를 밟으면 태평양, 아래쪽이나 오른쪽 가장자리를 밟으면 대서양에 닿은 것이다. 둘 다 닿으면 그 칸이 답이다.
+
+```js
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length, res = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      let pac = false, atl = false;
+      const seen = new Uint8Array(m * n);   // 이 물방울이 지나간 칸
+      seen[r * n + c] = 1;
+      const stack = [[r, c]];
+      while (stack.length > 0 && !(pac && atl)) {   // 둘 다 닿으면 일찍 멈춘다
+        const [cr, cc] = stack.pop();
+        if (cr === 0 || cc === 0) pac = true;           // 위쪽·왼쪽 가장자리
+        if (cr === m - 1 || cc === n - 1) atl = true;   // 아래쪽·오른쪽 가장자리
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr < 0 || nr >= m || nc < 0 || nc >= n || seen[nr * n + nc]) continue;
+          if (heights[nr][nc] > heights[cr][cc]) continue; // 물은 같거나 낮은 쪽으로만
+          seen[nr * n + nc] = 1;
+          stack.push([nr, nc]);
+        }
+      }
+      if (pac && atl) res.push([r, c]);
+    }
+  }
+  return res;
+}
+```
+
+방문 표시 `seen`이 필요한 이유는 높이가 같은 칸 때문이다. 높이 5인 두 칸이 붙어 있으면 물이 서로를 오가며 끝없이 돈다.
+
+칸마다 최악 격자 전체를 훑으니 시간은 O((m · n)²), 공간은 O(m · n)이다. 200 × 200에서 얼마나 걸리는지 재 봤다. 높이가 `r + c`인 격자, 즉 오른쪽 아래로 갈수록 높아지는 비탈에서 이 풀이는 78초가 걸렸다. 물은 모두 왼쪽 위로 흘러 태평양에는 금방 닿지만, 대서양에 닿는 길이 없는 칸들은 일찍 멈추지 못하고 자기보다 낮은 칸을 전부 훑는다. 칸 (r, c)마다 (r + 1) · (c + 1)칸쯤을 보니 합이 4억 번이 넘는다.
+
+낭비는 분명하다. 이웃한 두 칸에서 떨어진 물방울은 거의 같은 길을 걷는다. 한 번 알아낸 "이 칸에서는 태평양에 간다"를 다시 쓰고 싶어진다.
+
+## 칸마다 결과를 기억하면 같은 높이에서 틀린다
+
+칸마다 `[태평양에 닿나, 대서양에 닿나]`를 기억해 두면 될 것 같다. 내 결과는 내가 흘러갈 수 있는 이웃들의 결과를 OR한 것이다. [동적 계획법](/posts/dynamic-programming)의 메모처럼 이웃의 답을 재귀로 구해 저장해 두면 칸마다 한 번만 계산한다. 같은 높이에서 서로를 부르는 무한 재귀를 막으려고, 계산을 시작할 때 "아직 모름"을 `[false, false]`로 먼저 적어 둔다.
+
+```js
+// 틀린 풀이: 높이가 같은 칸끼리 서로를 부를 때 덜 계산된 답을 저장한다
+function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length;
+  const memo = new Array(m * n).fill(null);   // 칸마다 [pac, atl]
+  const dfs = (r, c) => {
+    const k = r * n + c;
+    if (memo[k]) return memo[k];
+    memo[k] = [false, false];                 // 계산 중 표시 (무한 재귀 방지)
+    let pac = r === 0 || c === 0, atl = r === m - 1 || c === n - 1;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= m || nc < 0 || nc >= n || heights[nr][nc] > heights[r][c]) continue;
+      const [p, a] = dfs(nr, nc);
+      pac ||= p;
+      atl ||= a;
+    }
+    memo[k] = [pac, atl];
+    return memo[k];
+  };
+  const res = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      const [p, a] = dfs(r, c);
+      if (p && a) res.push([r, c]);
+    }
+  }
+  return res;
+}
+```
+
+예시 격자와 무작위 격자에서는 맞는 답이 나온다. 그런데 무작위로 작은 격자를 20만 개 만들어 앞의 정직한 풀이와 비교해 보니 2 × 2짜리 반례가 나왔다.
+
+```text
+1 1
+3 1
+
+정답      [[0,0], [0,1], [1,0], [1,1]]
+이 풀이   [[0,0], [0,1], [1,0]]
+```
+
+오른쪽 아래 `(1,1)`이 빠졌다. 이 칸은 오른쪽 가장자리라 대서양에 닿고, 높이가 같은 위 칸 `(0,1)`로 흘러가 태평양에도 닿는다. 그런데 계산 순서를 따라가 보면 이렇다. `(0,0)`에서 시작해 높이가 같은 `(0,1)`로 들어간다. `(0,1)`은 계산 중 표시를 해 두고 높이가 같은 `(1,1)`로 들어간다. `(1,1)`은 이웃 `(0,1)`에게 묻는데, `(0,1)`은 아직 계산 중이라 `[false, false]`를 돌려준다. `(1,1)`은 "태평양에 못 간다"고 결론 내리고 그걸 영구히 저장한다. 나중에 `(0,1)`의 계산이 끝나 `[true, true]`가 되어도 `(1,1)`의 저장된 답은 고쳐지지 않는다.
+
+메모가 맞으려면 계산 순서에 고리가 없어야 한다. 높이가 엄격하게 낮은 쪽으로만 흐른다면 고리가 없어서 이 메모가 맞다. 하지만 "작거나 같은" 높이로 흐르니 같은 높이 칸끼리 고리가 생긴다. 고치려면 같은 높이로 이어진 칸들을 한 덩어리로 묶어 함께 계산해야 하는데(그래프 말로는 강한 연결 요소), 그 일을 하다 보면 결국 다음 풀이와 같은 탐색을 하게 된다. 게다가 200 × 200이 전부 같은 높이면 재귀가 4만 단계까지 깊어져 `RangeError`로 멈췄다.
+
+## 바다에서 거꾸로 거슬러 오른다
+
+질문을 뒤집어 보자. "이 칸에서 태평양으로 갈 수 있나"를 칸마다 묻는 대신, "태평양에서 거꾸로 올라가면 어느 칸에 닿나"를 한 번에 묻는다. 물이 a에서 b로 흐를 수 있으면(b가 a보다 낮거나 같으면), 거꾸로 b에서 a로 거슬러 오를 수 있다. 그러니 태평양에 닿은 가장자리 칸들에서 출발해 같거나 높은 이웃으로 계속 올라가면, 닿은 칸이 곧 빗물이 태평양으로 흘러갈 수 있는 칸이다.
+
+출발점이 여러 개인 BFS다. 태평양 쪽 가장자리 칸을 모두 큐에 넣고 시작한다. 이걸 다중 출발점 BFS라고 한다. 대서양도 같은 방식으로 한 번 더 한다. 두 결과가 모두 참인 칸이 답이다.
+
+```js
+function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length;
+  const flood = (starts) => {
+    const seen = new Uint8Array(m * n);       // 이 바다에서 거슬러 올라 닿은 칸
+    const queue = [];
+    for (const [r, c] of starts) {
+      if (!seen[r * n + c]) {                 // 모서리 칸은 두 번 들어올 수 있다
+        seen[r * n + c] = 1;
+        queue.push([r, c]);
+      }
+    }
+    for (let head = 0; head < queue.length; head++) {
+      const [r, c] = queue[head];
+      for (const [dr, dc] of DIRS) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= m || nc < 0 || nc >= n || seen[nr * n + nc]) continue;
+        if (heights[nr][nc] < heights[r][c]) continue; // 거꾸로: 같거나 높은 쪽으로만 오른다
+        seen[nr * n + nc] = 1;
+        queue.push([nr, nc]);
+      }
+    }
+    return seen;
+  };
+  const pacStarts = [], atlStarts = [];
+  for (let c = 0; c < n; c++) { pacStarts.push([0, c]); atlStarts.push([m - 1, c]); }
+  for (let r = 0; r < m; r++) { pacStarts.push([r, 0]); atlStarts.push([r, n - 1]); }
+  const pac = flood(pacStarts), atl = flood(atlStarts);
+  const res = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (pac[r * n + c] && atl[r * n + c]) res.push([r, c]);
+    }
+  }
+  return res;
+}
+```
+
+비교 방향이 바뀐 한 줄을 눈여겨보자. 물방울 풀이에서는 `heights[nr][nc] > heights[cr][cc]`이면 건너뛰었다(더 높은 칸으로는 못 흐른다). 거꾸로 오를 때는 `heights[nr][nc] < heights[r][c]`이면 건너뛴다(더 낮은 칸으로는 거슬러 오를 수 없다). 이 부등호를 그대로 두면 바다에서 내리막으로 내려가는, 전혀 다른 질문에 답하게 된다.
+
+이번에는 높이가 같은 칸이 아무 문제도 일으키지 않는다. 메모 풀이는 "답"을 저장했다가 덜 계산된 답에 속았지만, 이 풀이는 "닿았다"는 사실만 표시한다. 닿았다는 사실은 나중에 바뀔 일이 없다.
+
+아래 그림은 3 × 3 나선 격자에서 이 풀이를 따라간 것이다. 칸은 윗줄부터 세 칸씩 놓았다. 초록 칸이 지금 바다에서 거슬러 올라 닿은 칸, 아래 칸이 큐다.
+
+```text
+1 2 3
+8 9 4
+7 6 5      답: 1과 2를 뺀 일곱 칸
+```
+
+<AlgoTrace
+  caption="3 × 3 나선 지형. 태평양에서 한 번, 대서양에서 한 번 거슬러 오른다"
+  memoryLabel="큐"
+  cells={["1", "2", "3", "8", "9", "4", "7", "6", "5"]}
+  steps={[
+    { found: [0, 1, 2, 3, 6], memory: ["(0,0)", "(0,1)", "(0,2)", "(1,0)", "(2,0)"], caption: "태평양 차례. 위쪽 줄과 왼쪽 줄 다섯 칸이 출발점이다." },
+    { pointer: 1, found: [0, 1, 2, 3, 6, 4], memory: ["(0,2)", "(1,0)", "(2,0)", "(1,1)"], caption: "1에서는 오를 곳이 없다. 2에서 아래 9로 오른다." },
+    { pointer: 2, found: [0, 1, 2, 3, 6, 4, 5], memory: ["(1,0)", "(2,0)", "(1,1)", "(1,2)"], caption: "3에서 아래 4로 오른다." },
+    { pointer: 5, found: [0, 1, 2, 3, 6, 4, 5, 8], memory: ["(2,2)"], caption: "8, 7, 9는 오를 이웃이 없다. 4에서 아래 5로 오른다." },
+    { pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: [], caption: "5에서 왼쪽 6으로. 아홉 칸 모두 태평양으로 물이 간다." },
+    { found: [6, 7, 8, 2, 5], memory: ["(2,0)", "(2,1)", "(2,2)", "(0,2)", "(1,2)"], caption: "대서양 차례. 아래쪽 줄과 오른쪽 줄 다섯 칸에서 다시 출발한다." },
+    { pointer: 6, found: [6, 7, 8, 2, 5, 3], memory: ["(2,1)", "(2,2)", "(0,2)", "(1,2)", "(1,0)"], caption: "7에서 위의 8로 오른다." },
+    { pointer: 7, found: [6, 7, 8, 2, 5, 3, 4], memory: ["(2,2)", "(0,2)", "(1,2)", "(1,0)", "(1,1)"], caption: "6에서 위의 9로 오른다." },
+    { pointer: 2, found: [6, 7, 8, 2, 5, 3, 4], memory: ["(1,2)", "(1,0)", "(1,1)"], caption: "3의 왼쪽 2는 더 낮아 거슬러 오를 수 없다. 8에서 위 1도 낮다." },
+    { found: [2, 3, 4, 5, 6, 7, 8], memory: [], caption: "두 바다가 모두 닿은 칸은 1과 2를 뺀 일곱 칸이다." },
+  ]}
+/>
+
+아홉 번째 단계가 이 풀이의 감각이다. 2와 1에 떨어진 비는 태평양 쪽 가장자리로 바로 흘러 나가지만, 대서양으로 가려면 3이나 8을 넘어야 한다. 대서양 바닷물이 3에서 2로 내려갈 수 없다는 것과 같은 말이다.
+
+두 번의 BFS에서 칸마다 큐에 한 번씩만 들어가고, 칸마다 이웃 네 개를 본다. 시간 O(m · n), 공간은 표시 배열 두 개와 큐로 O(m · n)이다. 78초 걸리던 비탈 격자에서 47ms가 걸렸다.
+
+### Python과 Java로 쓰면
+
+Python은 `deque`로 큐를 만들고, 표시는 2차원 리스트로 둔다. 200 × 200이 전부 같은 높이인 격자(모든 칸이 답)에서 83ms쯤 걸렸다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def pacific_atlantic(heights: List[List[int]]) -> List[List[int]]:
+    m, n = len(heights), len(heights[0])
+
+    def flood(starts):
+        seen = [[False] * n for _ in range(m)]
+        queue = deque()
+        for r, c in starts:
+            if not seen[r][c]:
+                seen[r][c] = True
+                queue.append((r, c))
+        while queue:
+            r, c = queue.popleft()
+            for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= nr < m and 0 <= nc < n and not seen[nr][nc] \
+                        and heights[nr][nc] >= heights[r][c]:  # 거꾸로: 같거나 높은 쪽으로
+                    seen[nr][nc] = True
+                    queue.append((nr, nc))
+        return seen
+
+    pac = flood([(0, c) for c in range(n)] + [(r, 0) for r in range(m)])
+    atl = flood([(m - 1, c) for c in range(n)] + [(r, n - 1) for r in range(m)])
+    return [[r, c] for r in range(m) for c in range(n) if pac[r][c] and atl[r][c]]
+
+
+print(pacific_atlantic([[1, 2, 2, 3], [3, 2, 3, 4], [2, 4, 5, 3], [6, 7, 1, 4]]))
+```
+
+```text
+[[0, 3], [1, 3], [2, 2], [3, 0], [3, 1]]
+```
+
+`[[False] * n] * m`처럼 바깥을 곱하면 같은 행 리스트 하나를 m번 가리켜서, 한 칸을 표시하면 그 열 전체가 표시된다. 행마다 새로 만드는 컴프리헨션을 쓴다.
+
+Java는 돌려주는 타입이 `List<List<Integer>>`다. `List.of(r, c)`는 Java 9부터 쓸 수 있는 불변 리스트다.
+
+```java
+import java.util.*;
+
+class Solution {
+    private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    public List<List<Integer>> pacificAtlantic(int[][] heights) {
+        int m = heights.length, n = heights[0].length;
+        boolean[][] pac = new boolean[m][n], atl = new boolean[m][n];
+        ArrayDeque<int[]> pq = new ArrayDeque<>(), aq = new ArrayDeque<>();
+        for (int c = 0; c < n; c++) { mark(pac, pq, 0, c); mark(atl, aq, m - 1, c); }
+        for (int r = 0; r < m; r++) { mark(pac, pq, r, 0); mark(atl, aq, r, n - 1); }
+        flood(heights, pac, pq);
+        flood(heights, atl, aq);
+        List<List<Integer>> res = new ArrayList<>();
+        for (int r = 0; r < m; r++)
+            for (int c = 0; c < n; c++)
+                if (pac[r][c] && atl[r][c]) res.add(List.of(r, c));
+        return res;
+    }
+
+    private void mark(boolean[][] seen, ArrayDeque<int[]> q, int r, int c) {
+        if (!seen[r][c]) { seen[r][c] = true; q.add(new int[]{r, c}); }
+    }
+
+    private void flood(int[][] h, boolean[][] seen, ArrayDeque<int[]> q) {
+        int m = h.length, n = h[0].length;
+        while (!q.isEmpty()) {
+            int[] cur = q.poll();
+            for (int[] d : DIRS) {
+                int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                if (nr < 0 || nr >= m || nc < 0 || nc >= n || seen[nr][nc]) continue;
+                if (h[nr][nc] < h[cur[0]][cur[1]]) continue;   // 낮은 칸으로는 거슬러 오를 수 없다
+                seen[nr][nc] = true;
+                q.add(new int[]{nr, nc});
+            }
+        }
+    }
+}
+```
+
+```text
+[[0, 3], [1, 3], [2, 2], [3, 0], [3, 1]]
+```
+
+## 같은 방향을 재귀 DFS로 오르면
+
+거꾸로 오르는 생각은 그대로 두고 탐색만 DFS로 바꿀 수 있다. 가장자리 칸마다, 아직 표시되지 않았으면 거기서 재귀로 올라간다.
+
+```js
+function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length;
+  const pac = new Uint8Array(m * n), atl = new Uint8Array(m * n);
+  const climb = (r, c, seen) => {
+    seen[r * n + c] = 1;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= m || nc < 0 || nc >= n || seen[nr * n + nc]) continue;
+      if (heights[nr][nc] < heights[r][c]) continue;
+      climb(nr, nc, seen);
+    }
+  };
+  for (let c = 0; c < n; c++) {
+    if (!pac[c]) climb(0, c, pac);
+    if (!atl[(m - 1) * n + c]) climb(m - 1, c, atl);
+  }
+  for (let r = 0; r < m; r++) {
+    if (!pac[r * n]) climb(r, 0, pac);
+    if (!atl[r * n + n - 1]) climb(r, n - 1, atl);
+  }
+  const res = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) if (pac[r * n + c] && atl[r * n + c]) res.push([r, c]);
+  }
+  return res;
+}
+```
+
+시간과 공간 복잡도는 BFS와 같다. 비탈 격자에서는 BFS보다 빨랐다(16ms 대 47ms). 좌표 배열을 큐에 넣지 않아서다. 그런데 200 × 200 전부 같은 높이인 격자에서는 `RangeError`가 났다. 모든 칸이 서로 같은 높이라 재귀가 격자를 뱀처럼 훑으며 4만 단계까지 내려간다. [Number of Islands](/posts/leetcode-number-of-islands)에서 꽉 찬 섬이 재귀를 무너뜨린 것과 같은 이유다. Python이라면 기본 재귀 한도 1,000에 훨씬 먼저 걸린다. 이 문제를 DFS로 푼다면 재귀 대신 배열 스택으로 바꾼다.
+
+## 한 번의 BFS에 두 바다를 싣는다
+
+두 번 돌리던 BFS를 하나로 합칠 수도 있다. 칸마다 "닿은 바다"를 비트로 적는다. 1이면 태평양, 2면 대서양, 3이면 둘 다다. 처음에 가장자리 칸마다 해당 비트를 켜서 큐에 넣는다. 칸을 꺼내면 같거나 높은 이웃에 내 비트들을 OR해 주고, 이웃의 비트가 실제로 늘었을 때만 그 이웃을 큐에 넣는다.
+
+```js
+function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length;
+  const reach = new Uint8Array(m * n);   // 1 = 태평양, 2 = 대서양, 3 = 둘 다
+  const queue = [];
+  const add = (r, c, bits) => {
+    const k = r * n + c;
+    if ((reach[k] | bits) !== reach[k]) { // 새 비트가 생길 때만 다시 퍼뜨린다
+      reach[k] |= bits;
+      queue.push(k);
+    }
+  };
+  for (let c = 0; c < n; c++) { add(0, c, 1); add(m - 1, c, 2); }
+  for (let r = 0; r < m; r++) { add(r, 0, 1); add(r, n - 1, 2); }
+  for (let head = 0; head < queue.length; head++) {
+    const k = queue[head], r = Math.floor(k / n), c = k % n;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= m || nc < 0 || nc >= n || heights[nr][nc] < heights[r][c]) continue;
+      add(nr, nc, reach[k]);
+    }
+  }
+  const res = [];
+  for (let k = 0; k < m * n; k++) if (reach[k] === 3) res.push([Math.floor(k / n), k % n]);
+  return res;
+}
+```
+
+비트는 0에서 1이나 2로, 다시 3으로만 늘어나니 칸 하나가 큐에 들어가는 건 많아야 두 번이다. 시간 O(m · n), 공간은 `Uint8Array` 하나와 큐다. 좌표 배열 대신 칸 번호 하나를 큐에 넣어서 평지와 무작위 지형에서는 이 풀이가 가장 빨랐다(무작위 2.0ms). 바다가 셋 이상인 변형으로 넓히기도 쉽다. 바다마다 비트를 하나씩 주면 된다.
+
+다만 면접에서 처음 꺼낼 답으로는 BFS 두 번이 낫다. "태평양에서 한 번, 대서양에서 한 번 거슬러 오르고 교집합"이 말로 설명하기 훨씬 쉽다. 비트 풀이는 "두 번을 한 번으로 합칠 수 있나"라는 꼬리 질문의 답으로 둔다.
+
+## 세 지형에서 재 보면
+
+200 × 200 격자 세 가지에서 다섯 풀이를 돌렸다. Node.js 22다.
+
+```text
+지형                               물방울       메모(틀림)    거꾸로 BFS   거꾸로 DFS   비트 BFS
+비탈 (높이 r + c, 답 399칸)       78,277ms       맞음           47.0ms       16.3ms      20.3ms
+평지 (전부 같은 높이, 답 4만 칸)   3,507ms      RangeError      20.5ms     RangeError    13.9ms
+무작위 (0 ~ 99,999, 답 12칸)         684ms        맞음            4.0ms        4.9ms       2.0ms
+```
+
+물방울 풀이가 평지에서 오히려 빠른 건 일찍 멈추기 때문이다. 평지에서는 어느 칸이든 금방 두 바다에 닿는다. 비탈에서는 대서양에 못 가는 칸들이 끝까지 훑어서 거꾸로 BFS보다 1,600배 넘게 느렸다. 거꾸로 오르는 풀이들은 지형과 상관없이 칸마다 상수 번만 일한다. 이 표에서 볼 것은 두 가지다. 재귀를 쓴 두 풀이가 평지에서 함께 무너졌다는 것, 그리고 메모 풀이는 이 세 지형에서 답이 맞았다는 것이다. 큰 입력에서 맞았다고 맞는 풀이가 아니다. 2 × 2 반례 하나로 틀린다.
+
+## 다섯 풀이를 지형별로 고르면
+
+격자는 m × n이다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 칸마다 물방울 | O((m · n)²) | O(m · n) | 격자가 아주 작을 때. 정답 확인용 |
+| 칸마다 메모 | O(m · n) | O(m · n) | 틀린다. 같은 높이 고리에서 덜 계산된 답을 저장한다 |
+| 바다에서 거꾸로 BFS 두 번 | O(m · n) | O(m · n) | 기본 답. 설명하기 쉽다 |
+| 바다에서 거꾸로 재귀 DFS | O(m · n) | O(m · n) 호출 스택 | 격자가 작다고 보장될 때. 평지에서 스택이 넘친다 |
+| 비트를 싣는 BFS 한 번 | O(m · n) | O(m · n) | 바다가 여럿인 변형, 상수까지 줄이고 싶을 때 |
+
+아래에서 직접 짜 볼 수 있다. 결과 순서는 상관없어서 순서를 무시하고 비교한다.
+
+<CodePlayground
+  caption="Pacific Atlantic Water Flow: 두 바다에 모두 흘러가는 칸"
+  functionName="pacificAtlantic"
+  initialCode={`function pacificAtlantic(heights) {
+  // heights: 높이가 적힌 2차원 배열
+  // 위·왼쪽은 태평양, 아래·오른쪽은 대서양
+  // 빗물이 두 바다 모두로 흘러갈 수 있는 칸의 [r, c] 목록을 돌려준다
+  return [];
+}`}
+  solution={`function pacificAtlantic(heights) {
+  const m = heights.length, n = heights[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const flood = (starts) => {
+    const seen = new Uint8Array(m * n);
+    const queue = [];
+    for (const [r, c] of starts) {
+      if (!seen[r * n + c]) {
+        seen[r * n + c] = 1;
+        queue.push([r, c]);
+      }
+    }
+    for (let head = 0; head < queue.length; head++) {
+      const [r, c] = queue[head];
+      for (const [dr, dc] of DIRS) {
+        const nr = r + dr, nc = c + dc;
+        if (nr < 0 || nr >= m || nc < 0 || nc >= n || seen[nr * n + nc]) continue;
+        if (heights[nr][nc] < heights[r][c]) continue;
+        seen[nr * n + nc] = 1;
+        queue.push([nr, nc]);
+      }
+    }
+    return seen;
+  };
+  const pacStarts = [], atlStarts = [];
+  for (let c = 0; c < n; c++) { pacStarts.push([0, c]); atlStarts.push([m - 1, c]); }
+  for (let r = 0; r < m; r++) { pacStarts.push([r, 0]); atlStarts.push([r, n - 1]); }
+  const pac = flood(pacStarts), atl = flood(atlStarts);
+  const res = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (pac[r * n + c] && atl[r * n + c]) res.push([r, c]);
+    }
+  }
+  return res;
+}`}
+  tests={[
+    { label: "글의 4 × 4 예시", args: [[[1, 2, 2, 3], [3, 2, 3, 4], [2, 4, 5, 3], [6, 7, 1, 4]]], expected: [[0, 3], [1, 3], [2, 2], [3, 0], [3, 1]], compare: "unordered" },
+    { label: "칸 하나", args: [[[7]]], expected: [[0, 0]], compare: "unordered" },
+    { label: "같은 높이 고리 (메모 반례)", args: [[[1, 1], [3, 1]]], expected: [[0, 0], [0, 1], [1, 0], [1, 1]], compare: "unordered" },
+    { label: "나선", args: [[[1, 2, 3], [8, 9, 4], [7, 6, 5]]], expected: [[0, 2], [1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]], compare: "unordered" },
+    { label: "한 줄이면 모두 답", args: [[[3, 1, 4, 1, 5]]], expected: [[0, 0], [0, 1], [0, 2], [0, 3], [0, 4]], compare: "unordered" },
+    { label: "가운데 웅덩이", args: [[[5, 5, 5], [5, 1, 5], [5, 5, 5]]], expected: [[0, 0], [0, 1], [0, 2], [1, 0], [1, 2], [2, 0], [2, 1], [2, 2]], compare: "unordered" },
+    { label: "모서리 두 개만", args: [[[1, 2], [2, 1]]], expected: [[0, 1], [1, 0]], compare: "unordered" },
+  ]}
+/>
+
+## 부등호 방향과 모서리
+
+가장 흔한 실수는 거꾸로 오를 때 비교 방향을 물방울 풀이에서 그대로 가져오는 것이다.
+
+```js
+if (heights[nr][nc] > heights[r][c]) continue; // 내리막으로 내려가 버린다
+// [[1, 2], [2, 1]] -> [[0, 0], [0, 1], [1, 0], [1, 1]]  (정답은 [[0, 1], [1, 0]])
+```
+
+바다에서 출발해 낮은 쪽으로 내려가면, 높은 가장자리 칸에서 출발한 바닷물이 안쪽 낮은 칸으로 흘러 들어간다. 위 예에서 왼쪽 위 1은 태평양에 닿지만, 대서양으로 가려면 2를 넘어야 한다. 잘못된 비교는 대서양 쪽 2에서 1로 내려가서 1을 대서양에도 닿는다고 표시한다. 거꾸로 오를 때는 "이웃이 나보다 낮으면 건너뛴다"다.
+
+두 번째는 등호를 빼먹는 것이다. 물은 같은 높이로도 흐른다. `heights[nr][nc] <= heights[r][c]`이면 건너뛰도록 쓰면 평지가 통째로 사라진다. 2 × 2가 전부 같은 높이면 정답은 네 칸 모두지만, 이 코드는 오른쪽 위와 왼쪽 아래 모서리 두 칸만 남긴다. 처음부터 두 바다에 걸친 출발점만 살아남고, 바닷물이 같은 높이 이웃으로 한 칸도 건너가지 못해서다.
+
+세 번째는 바다와 가장자리를 헷갈리는 것이다. 태평양은 위쪽 줄 전체와 왼쪽 줄 전체다. 위쪽 줄만 넣거나, 왼쪽 위 모서리 한 칸만 넣으면 답이 줄어든다. 오른쪽 위 모서리는 태평양 출발점이면서 대서양 출발점이다. 출발 칸을 넣을 때 `seen` 검사를 하는 건 같은 바다 안에서 모서리 칸(왼쪽 위 `(0,0)`은 위쪽 줄과 왼쪽 줄 양쪽에 있다)이 두 번 들어가는 걸 막기 위해서다. 검사가 없어도 답은 맞지만 큐에 같은 칸이 두 번 들어간다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 행이 하나거나 열이 하나인 격자. 모든 칸이 양쪽 가장자리에 걸쳐 있어 전부 답이다.
+- 결과 형식. LeetCode는 `[r, c]` 쌍의 목록을 원한다. 칸 번호 `r * n + c`로 돌려주면 틀린다.
+- 높이 범위. 최대 10^5라 비교만 하고 더하지 않으니 오버플로 걱정은 없다.
+
+## 바다와 규칙이 바뀌면
+
+### 한 바다에만 닿는 칸, 어디에도 못 닿는 칸을 구하라면
+
+같은 두 표시 배열에서 조건만 바꾼다. 태평양에만 닿으면 `pac && !atl`, 어디에도 못 닿으면 `!pac && !atl`이다. 모든 칸이 어느 바다로든 흐를 것 같지만 그렇지 않다. 테스트의 "가운데 웅덩이"에서 높이 1인 가운데 칸은 사방이 5라 어디로도 흐르지 못하고, 두 표시 배열 모두에서 거짓이다. 물이 고이는 칸이다.
+
+### 물이 고이는 양을 구하라면
+
+LeetCode 407. Trapping Rain Water II다. 가장자리에서 시작한다는 점은 같지만, 가장 낮은 벽부터 꺼내야 해서 BFS의 큐 대신 최소 힙을 쓴다. 가장 낮은 가장자리 칸을 꺼내 안쪽 이웃이 더 낮으면 그 차이만큼 물이 고인다. 1차원 버전은 [Trapping Rain Water](/posts/leetcode-trapping-rain-water)에 있다.
+
+### 바다가 셋 이상이라면
+
+비트 풀이가 그대로 넓어진다. 바다마다 비트를 하나씩 주고, 마지막에 모든 비트가 켜진 칸을 고른다. 바다가 k개면 칸마다 큐에 많아야 k번 들어가서 O(k · m · n)이다. BFS를 바다마다 따로 돌려도 같은 복잡도다.
+
+### 격자가 아주 크고 질문이 칸 하나라면
+
+칸 하나만 묻는다면 물방울 풀이(그 칸에서 내리막 BFS 한 번, O(m · n))가 오히려 맞다. 거꾸로 오르는 풀이는 모든 칸의 답을 한꺼번에 낼 때 이긴다. 질문이 여러 번 들어온다면 거꾸로 BFS로 한 번 표시해 두고 표시 배열을 조회한다.
+
+### 비슷한 문제
+
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 같은 격자 BFS의 기본형.
+- [Rotting Oranges](/posts/leetcode-rotting-oranges) (994): 출발점이 여러 개인 BFS. 여기서는 층 수가 답이다.
+- 130\. Surrounded Regions: 가장자리에 닿은 `O`에서 거꾸로 탐색해 살릴 칸을 표시하고, 나머지를 덮는다. 같은 "가장자리에서 거꾸로" 생각이다.
+- 542\. 01 Matrix: 모든 0에서 동시에 BFS를 시작해 칸마다 가장 가까운 0까지의 거리를 구한다.
+- [Swim in Rising Water](/posts/leetcode-swim-in-rising-water) (778): 높이 격자 위에서 경로의 최대 높이를 최소로 만든다. 힙이나 이진 탐색을 쓴다.
+
+## 칸에서 바다로가 아니라 바다에서 칸으로
+
+칸마다 물방울을 떨어뜨리면 이웃한 칸들이 같은 내리막길을 수없이 다시 걷는다. 칸마다 결과를 기억하려 하면 같은 높이 칸끼리 생기는 고리에서 덜 계산된 답이 굳어 버린다. 방향을 뒤집으면 두 문제가 함께 사라진다. 바다에 닿은 가장자리 칸들을 출발점으로 같거나 높은 칸으로 거슬러 오르면, 닿은 칸이 곧 그 바다로 물이 흘러가는 칸이고, 칸마다 한 번씩만 본다. 두 바다에서 한 번씩 오른 뒤 교집합을 고르면 끝이다. 부등호 방향과 등호, 그리고 재귀 대신 큐만 지키면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 칸에서 바다로 가지 않고 바다에서 칸으로 가나요?
+
+칸마다 따로 출발하면 이웃한 칸들이 같은 길을 반복해서 걸어 최악 O((m · n)²)이 된다. 200 × 200 비탈에서 78초가 걸렸다. 물이 a에서 b로 흐를 수 있으면 b에서 a로 거슬러 오를 수 있으니, 바다 쪽 가장자리 전체를 출발점으로 한 번만 거슬러 오르면 모든 칸의 답이 한꺼번에 나온다. 칸마다 상수 번만 보니 O(m · n)이다.
+
+### 칸마다 결과를 메모하면 안 되나요?
+
+높이가 같은 칸으로도 물이 흐르기 때문에 칸들 사이에 고리가 생긴다. 고리 안에서 아직 계산 중인 칸이 "못 간다"를 돌려주면, 그걸 받은 칸이 틀린 답을 영구히 저장한다. `[[1,1],[3,1]]`이라는 2 × 2 격자에서 오른쪽 아래 칸이 빠졌다. 엄격하게 낮은 쪽으로만 흐른다면 고리가 없어 메모가 맞다.
+
+### 거꾸로 오를 때 비교는 어떻게 하나요?
+
+이웃이 지금 칸보다 낮으면 건너뛰고, 같거나 높으면 올라간다. 물방울 풀이의 비교를 그대로 가져오면 바다에서 내리막으로 내려가서 엉뚱한 칸을 표시한다. 등호를 빼면 같은 높이의 평지로 올라가지 못해 답이 줄어든다.
+
+### BFS와 DFS 중 무엇을 쓰나요?
+
+복잡도는 같지만 BFS를 쓴다. 재귀 DFS는 200 × 200이 전부 같은 높이일 때 재귀가 4만 단계까지 깊어져 Node 기본 설정에서 `RangeError`가 났다. DFS를 쓰고 싶다면 배열로 만든 스택을 쓴다.
+
+### 두 번의 BFS를 한 번으로 줄일 수 있나요?
+
+칸마다 닿은 바다를 비트로 적으면 된다. 태평양 1, 대서양 2를 가장자리에 켜고, 이웃에 내 비트를 OR해서 비트가 늘었을 때만 큐에 넣는다. 칸마다 많아야 두 번 들어가서 O(m · n)이고, 비트가 3인 칸이 답이다. 바다가 많아져도 비트만 늘리면 된다.
+
+### 시간과 공간 복잡도는요?
+
+거꾸로 오르는 BFS 두 번은 칸마다 큐에 한 번씩 들어가고 이웃 넷을 보니 O(m · n)이다. 공간은 바다마다 표시 배열 하나와 큐로 O(m · n)이다. 결과 목록은 최악에 모든 칸이 답이라 그것도 O(m · n)이다.

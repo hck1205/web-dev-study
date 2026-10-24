@@ -841,12 +841,16 @@ export const ROADMAPS: RoadmapNode[] = [
           { id: "stack", label: "Stack", items: ["monotonic-stack-pattern", "leetcode-valid-parentheses", "leetcode-min-stack", "leetcode-daily-temperatures", "leetcode-generate-parentheses", "leetcode-largest-rectangle-in-histogram", { checkpoint: "Stack 관문" }] },
           { id: "binary-search", label: "Binary Search", items: ["leetcode-binary-search", "leetcode-koko-eating-bananas", "leetcode-find-minimum-in-rotated-sorted-array", "leetcode-search-in-rotated-sorted-array", "leetcode-median-of-two-sorted-arrays", { checkpoint: "Binary Search 관문" }] },
           { id: "linked-list", label: "Linked List", items: ["leetcode-reverse-linked-list", "leetcode-merge-two-sorted-lists", "leetcode-linked-list-cycle", "leetcode-reorder-list", "leetcode-merge-k-sorted-lists", { checkpoint: "Linked List 관문" }] },
-          { id: "trees", label: "Trees", items: ["leetcode-maximum-depth-of-binary-tree", "leetcode-lowest-common-ancestor-of-bst", "leetcode-binary-tree-level-order-traversal", "leetcode-serialize-and-deserialize-binary-tree", { checkpoint: "Trees 관문" }] },
+          { id: "trees", label: "Trees", items: ["leetcode-maximum-depth-of-binary-tree", "leetcode-lowest-common-ancestor-of-bst", "leetcode-binary-tree-level-order-traversal", "leetcode-serialize-and-deserialize-binary-tree", "leetcode-binary-tree-maximum-path-sum", { checkpoint: "Trees 관문" }] },
           { id: "tries", label: "Tries", items: ["leetcode-implement-trie", "leetcode-design-add-and-search-words", "leetcode-word-search-ii", "leetcode-replace-words", "leetcode-longest-common-prefix", { checkpoint: "Tries 관문" }] },
           { id: "heap", label: "Heap / Priority Queue", items: ["leetcode-kth-largest-element-in-an-array", "leetcode-k-closest-points-to-origin", "leetcode-task-scheduler", "leetcode-find-median-from-data-stream", { checkpoint: "Heap / Priority Queue 관문" }] },
           { id: "backtracking", label: "Backtracking", items: ["leetcode-subsets", "leetcode-combination-sum", "leetcode-permutations", "leetcode-word-search", "leetcode-n-queens", { checkpoint: "Backtracking 관문" }] },
-          { id: "graphs", label: "Graphs", items: ["leetcode-number-of-islands", "leetcode-clone-graph"] },
-          { id: "intervals", label: "Intervals", items: ["interval-problems-pattern"] },
+          { id: "graphs", label: "Graphs", items: ["leetcode-number-of-islands", "leetcode-clone-graph", "leetcode-pacific-atlantic-water-flow", "leetcode-course-schedule", "leetcode-word-ladder", { checkpoint: "Graphs 관문" }] },
+          { id: "advanced-graphs", label: "Advanced Graphs", items: ["leetcode-network-delay-time"] },
+          { id: "dp-1d", label: "1-D Dynamic Programming", items: ["leetcode-climbing-stairs", "leetcode-house-robber", "leetcode-coin-change", { checkpoint: "1-D Dynamic Programming 관문" }] },
+          { id: "dp-2d", label: "2-D Dynamic Programming", items: ["leetcode-unique-paths", "leetcode-longest-common-subsequence", "leetcode-edit-distance", { checkpoint: "2-D Dynamic Programming 관문" }] },
+          { id: "greedy", label: "Greedy", items: ["leetcode-jump-game", "leetcode-jump-game-ii", "leetcode-gas-station", "leetcode-partition-labels", { checkpoint: "Greedy 관문" }] },
+          { id: "intervals", label: "Intervals", items: ["interval-problems-pattern", "leetcode-insert-interval", "leetcode-merge-intervals", "leetcode-non-overlapping-intervals", { checkpoint: "Intervals 관문" }] },
         ],
       },
       // leetcode:end
@@ -1326,6 +1330,7 @@ export const ROADMAPS: RoadmapNode[] = [
     tier: 3,
     requires: ["database/db-types"],
     items: [
+      { id: "ml", label: "머신러닝 기초", items: ["ml-fundamentals", "deep-learning-basics"] },
       {
         id: "llm",
         label: "LLM 기초와 연동",
@@ -1341,9 +1346,9 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "claude-code",
         label: "Claude Code",
-        items: ["claude-code-cli-and-sessions", "claude-code-project-structure", "claude-code-context-window", "claude-code-extensions", "claude-code-parallel-and-scheduled", "claude-code-headless-ci", "claude-code-models-and-cost", "claude-code-fundamentals-map"],
+        items: ["claude-code-cli-and-sessions", "claude-code-project-structure", "claude-code-context-window", "claude-code-extensions", "claude-code-hooks-deep-dive", { post: "claude-code-plugins-and-channels", tier: 3 }, "claude-code-parallel-and-scheduled", "claude-code-headless-ci", "claude-code-models-and-cost", "claude-code-fundamentals-map"],
       },
-      { id: "llm-ops", label: "LLM 운영", items: ["llm-evals", { post: "self-hosting-llm-inference", tier: 3 }] },
+      { id: "llm-ops", label: "LLM 운영", items: ["llm-evals", "llm-observability", "llm-app-security-guardrails", { post: "self-hosting-llm-inference", tier: 3 }] },
     ],
   },
 
