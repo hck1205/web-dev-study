@@ -150,6 +150,131 @@ RUN apt-get update \
 
 `COPY` 뒤에 `RUN chown -R`을 하는 것도 같은 문제다. 파일 내용은 그대로인데 소유자만 바뀐 사본이 새 레이어로 통째로 생겨서 크기가 두 배가 된다. `COPY --chown=node:node`로 복사하면서 소유자를 정한다. 비밀 파일을 `COPY`했다가 다음 줄에서 지우는 것도 소용없다. 아래 레이어를 꺼내 보면 그대로 있다.
 
+## 겹쳐진 레이어를 직접 열어 보기
+
+whiteout이 실제로 어떻게 생겼는지 보려고 일부러 나쁜 Dockerfile을 하나 만들었다. 50MB 파일을 만들고, 다음 줄에서 지운다.
+
+```dockerfile
+FROM alpine:3.20
+RUN mkdir /data && head -c 50000000 /dev/urandom > /data/big.bin && echo "v1" > /etc/app.conf
+RUN rm /data/big.bin
+```
+
+```bash
+docker build -t layers:demo .
+docker history layers:demo
+```
+
+```text
+IMAGE          CREATED          CREATED BY                                      SIZE      COMMENT
+8f1d7b6b3cae   21 seconds ago   RUN /bin/sh -c rm /data/big.bin # buildkit      0B        buildkit.dockerfile.v0
+<missing>      21 seconds ago   RUN /bin/sh -c mkdir /data && head -c 500000…   50MB      buildkit.dockerfile.v0
+<missing>      6 months ago     CMD ["/bin/sh"]                                 0B        buildkit.dockerfile.v0
+<missing>      6 months ago     ADD alpine-minirootfs-3.20.10-x86_64.tar.gz …   7.81MB    buildkit.dockerfile.v0
+```
+
+`rm` 레이어는 0B인데 이미지는 57.8MB 그대로다. 컨테이너를 띄워서 이 레이어들이 어떻게 합쳐지는지 본다. 레이어 경로가 `docker inspect`에 나오는 건 예전 `overlay2` 드라이버를 쓰는 데몬이다. Docker 29를 새로 설치한 containerd 이미지 저장소에서는 `GraphDriver`가 `null`로 비어 있어서, 아래 실험은 `--storage-driver overlay2`로 띄운 데몬(데이터 경로 `/var/lib/docker-overlay2`)에서 했다. 기본 설치라면 같은 자리가 `/var/lib/docker/overlay2`다.
+
+```bash
+docker run -d --name demo layers:demo sleep 3600
+# 읽기 전용 레이어들. 위에 적힌 것이 위에 겹친다
+docker inspect demo --format '{{.GraphDriver.Data.LowerDir}}' | tr ':' '\n'
+# 컨테이너가 쓰는 자리와 합쳐 보이는 자리
+docker inspect demo --format '{{.GraphDriver.Data.UpperDir}}'
+docker inspect demo --format '{{.GraphDriver.Data.MergedDir}}'
+```
+
+```text
+/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44-init/diff
+/var/lib/docker-overlay2/overlay2/y8x0jrq4ep13jei8qmcnjlxqg/diff
+/var/lib/docker-overlay2/overlay2/ostfqm11aotxpds9u4hoe1klm/diff
+/var/lib/docker-overlay2/overlay2/49fe189e04f75bdb9b4ed767db7fe781bf09b7c7a041c1f302ccde5bd44f1c88/diff
+/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/diff
+/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/merged
+```
+
+lowerdir 네 줄을 위에서부터 읽으면 `-init`(Docker가 `/etc/hosts`, `/etc/resolv.conf` 자리를 잡아 두는 얇은 층), `rm` 레이어, `mkdir` 레이어, alpine 베이스 순이다. 그 위에 컨테이너 전용 upperdir가 하나 얹히고, 커널의 overlayfs가 이것들을 합친 결과를 merged에 마운트한다. 컨테이너의 `/`가 바로 merged다. 호스트의 `mount`에도 그대로 보인다.
+
+```bash
+mount -t overlay
+```
+
+```text
+overlay on /var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/merged type overlay (rw,relatime,lowerdir=/var/lib/docker-overlay2/overlay2/l/EP34XFXVNS27DFVRYNYIOBQQUA:/var/lib/docker-overlay2/overlay2/l/GFKPFKLB2HC6EY4I3QCM7JG4XE:/var/lib/docker-overlay2/overlay2/l/K4GRIFRDALQ6R6B3TPXVPGNKSM:/var/lib/docker-overlay2/overlay2/l/TQJAFDOKE4QT226CEM3EFR5KMQ,upperdir=/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/diff,workdir=/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/work)
+```
+
+`l/` 아래의 짧은 이름은 레이어 디렉터리를 가리키는 심볼릭 링크다. 레이어가 많으면 마운트 옵션 문자열이 커널 한도(한 페이지)를 넘기 때문에 줄여 쓴다. containerd 이미지 저장소라면 같은 줄이 `.../io.containerd.snapshotter.v1.overlayfs/snapshots/593/fs`처럼 스냅숏 번호로 나온다. 구조는 같다.
+
+이제 지운 파일이 어디 있는지 본다.
+
+```bash
+# rm 레이어 안의 /data
+sudo ls -l /var/lib/docker-overlay2/overlay2/y8x0jrq4ep13jei8qmcnjlxqg/diff/data/
+# mkdir 레이어 안의 /data
+sudo ls -l /var/lib/docker-overlay2/overlay2/ostfqm11aotxpds9u4hoe1klm/diff/data/
+```
+
+```text
+total 0
+c--------- 2 root root 0, 0 Oct 24 00:33 big.bin
+total 48836
+-rw-r--r-- 1 root root 50000000 Oct 24 00:33 big.bin
+```
+
+`rm` 레이어에는 같은 이름의 문자 장치(맨 앞 `c`, 장치 번호 `0, 0`)가 있다. 이것이 overlay2의 whiteout이다. overlayfs는 위에서 아래로 내려가며 파일을 찾다가 whiteout을 만나면 "없다"고 답하고 멈춘다. 그래서 컨테이너 안 `ls /data`는 비어 있지만, 바로 아래 레이어에는 50MB가 그대로 있다. 레지스트리로 보내는 레이어 tar 안에서는 같은 표시가 `.wh.big.bin`이라는 빈 파일로 바뀐다. 디렉터리를 통째로 지우고 다시 만들면 `.wh..wh..opq`(opaque) 표시가 붙어 아래 디렉터리 내용을 한꺼번에 가린다.
+
+### 컨테이너의 쓰기는 복사부터 한다
+
+컨테이너가 아래 레이어에 있는 파일을 고치면 overlayfs는 그 파일을 먼저 upperdir로 통째로 복사하고, 사본을 고친다. 이걸 copy-up이라고 한다.
+
+```bash
+docker exec demo sh -c 'echo v2 >> /etc/app.conf'
+sudo find /var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/diff -mindepth 1
+# 이미지와 달라진 파일 목록. C는 변경, A는 추가, D는 삭제
+docker diff demo
+```
+
+```text
+/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/diff/etc
+/var/lib/docker-overlay2/overlay2/d05bd1370bdde66cfe746e3b7d91cf6e4dafe23f6c08140139e013a8b7448b44/diff/etc/app.conf
+C /etc
+C /etc/app.conf
+```
+
+파일이 작으면 티가 안 난다. 이미지에 500MB짜리 파일(`head -c 500000000 /dev/zero > /big.db`)을 넣고, 컨테이너에서 한 줄씩 두 번 덧붙여 봤다.
+
+```bash
+docker run -d --name big layers:big sleep 3600
+docker exec big sh -c 'time sh -c "echo x >> /big.db"; time sh -c "echo y >> /big.db"'
+# SIZE는 쓰기 계층 크기, virtual은 이미지까지 합친 크기
+docker ps -s --format 'table {{.Names}}\t{{.Size}}'
+```
+
+```text
+real	0m 0.67s
+user	0m 0.00s
+sys	0m 0.23s
+real	0m 0.00s
+user	0m 0.00s
+sys	0m 0.00s
+NAMES     SIZE
+big       500MB (virtual 1.01GB)
+demo      6B (virtual 57.8MB)
+```
+
+2바이트를 쓰려고 첫 번째에만 0.67초가 걸렸고 쓰기 계층이 500MB가 됐다. 두 번째는 이미 upperdir에 사본이 있어서 바로 끝났다. DB 파일처럼 크고 계속 고쳐 쓰는 파일을 쓰기 계층에 두면 이 복사와 overlayfs를 거치는 비용을 계속 낸다. 그리고 upperdir는 컨테이너에 딸린 디렉터리라 컨테이너를 지우면 같이 지워진다.
+
+```bash
+docker rm -f demo
+docker run --rm layers:demo cat /etc/app.conf
+```
+
+```text
+v1
+```
+
+`v2`를 덧붙였던 기록은 사라지고 이미지에 구운 `v1`만 남았다. 배포는 컨테이너를 새로 만드는 일이니, 배포할 때마다 쓰기 계층은 빈 상태로 돌아간다. 남겨야 하는 데이터는 볼륨에 둔다. 볼륨은 overlayfs를 거치지 않고 호스트 디렉터리를 그대로 바인드 마운트해서 copy-up도 없고, 컨테이너를 지워도 남는다. 볼륨 종류와 고르는 법은 [Docker 네트워크와 볼륨](/posts/docker-network-volume)에 있다. 반대로 쓸 일이 없는 컨테이너는 `--read-only`로 쓰기 계층을 막아 두면, 어디에 몰래 쓰는지가 바로 에러로 드러난다.
+
 ## 캐시는 처음 바뀐 줄에서 끊긴다
 
 BuildKit은 명령마다 결과를 캐시해 둔다. 다시 빌드할 때 한 줄씩 내려가며 "이 줄의 입력이 지난번과 같은가"를 보고, 같으면 저장해 둔 레이어를 그대로 쓴다. 입력으로 보는 것은 명령마다 다르다.

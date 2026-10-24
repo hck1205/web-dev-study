@@ -7,6 +7,7 @@ import { SITE } from "@/common/config/site";
 import { Shell } from "@/common/components/shell";
 import { AppProviders } from "@/common/providers/app-providers";
 import { SearchLauncher } from "@/features/search/components/search-launcher";
+import { COURSE_NAV } from "@/features/roadmap/registry";
 import { TOPIC_NAV } from "@/features/topics/registry";
 
 export const metadata: Metadata = {
@@ -27,7 +28,7 @@ const NAV_ITEMS = [
   ...TOPIC_NAV,
   { id: "tags", label: "Tags", href: "/tags" },
   { id: "study", label: "오늘 할 일", href: "/study" },
-  { id: "roadmap", label: "로드맵", href: "/roadmap" },
+  { id: "roadmap", label: "로드맵", href: "/roadmap", children: COURSE_NAV },
   { id: "quiz", label: "퀴즈", href: "/quiz" },
   { id: "bookmarks", label: "즐겨찾기", href: "/bookmarks" },
 ];

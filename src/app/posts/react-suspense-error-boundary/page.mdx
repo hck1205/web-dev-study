@@ -1,0 +1,452 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-suspense-error-boundary");
+
+<EasyIntro>
+  화면의 어떤 부분은 데이터가 와야 그릴 수 있다. React의 Suspense는 이런 부분을 둘러싸는 울타리다. 울타리 안의 누군가가 "아직 준비가 안 됐다"고 손을 들면, React는 울타리 안쪽 전체를 잠시 "불러오는 중" 표시로 바꿔 두고 준비가 끝나면 다시 그린다.
+
+  식당 주방으로 비유하면, 요리사가 재료가 아직 안 왔다며 손을 드는 것과 같다. 그러면 홀 직원은 그 테이블에 "조금만 기다려 주세요" 안내판을 놓고 다른 테이블 일을 계속한다. 재료가 도착하면 요리를 처음부터 다시 만든다. 그래서 재료 주문서는 요리사가 요리할 때마다 새로 쓰면 안 되고, 미리 써서 보관해 둬야 한다. 매번 새로 쓰면 재료가 영영 도착하지 않는다.
+
+  에러 경계는 비슷한 울타리인데, "준비가 안 됐다" 대신 "문제가 생겼다"를 잡는다. 울타리 안에서 그리다가 오류가 나면 페이지 전체가 하얗게 사라지는 대신 그 부분만 "문제가 생겼어요" 화면으로 바뀐다. 다만 버튼을 눌렀을 때나 나중에 실행되는 코드에서 난 오류는 그리는 도중의 오류가 아니라서 이 울타리가 잡지 못한다.
+</EasyIntro>
+
+상품 화면에서 색상 옵션을 바꾸면 재고 정보를 새로 받아 온다. 그런데 옵션을 누를 때마다 이미 보이던 상품 이름, 사진, 가격까지 한꺼번에 스켈레톤으로 바뀌었다가 0.3초쯤 뒤에 다시 나타난다. 화면 전체가 깜빡인다. 같은 화면에서 리뷰 API가 500을 돌려준 날에는 더 나빴다. 리뷰 영역만 실패했는데 페이지가 통째로 하얗게 비었다. 콘솔에는 에러 하나가 찍혀 있을 뿐이다.
+
+두 증상 모두 React가 "아직 그릴 수 없는 부분"과 "그리다 실패한 부분"을 어디까지 거슬러 올라가 처리하는지에서 나온다. 앞의 것은 Suspense 경계, 뒤의 것은 에러 경계의 일이다. 이 글은 두 경계가 클라이언트에서 동작하는 원리와 배치, 그리고 다시 시도하는 방법을 본다. 서버가 Suspense 경계 단위로 HTML을 나눠 보내는 스트리밍 SSR은 [스트리밍 SSR과 Suspense](/posts/streaming-ssr-suspense)에서, 서버 HTML에 경계 단위로 이벤트를 붙이는 순서는 [하이드레이션](/posts/hydration)에서 다뤘다. 실험은 React 19.3.1을 Node 22와 jsdom 위에서 돌렸다.
+
+## 기다리는 컴포넌트는 렌더링을 멈춘다
+
+컴포넌트가 아직 없는 데이터를 기다린다는 사실을 React에 알리는 공개 API는 React 19의 `use`다. 프로미스를 넘기면, 이미 끝난 프로미스면 결과값을 돌려주고, 아직이면 그 컴포넌트의 렌더링을 그 자리에서 멈춘다.
+
+```tsx
+function Reviews({ reviewsPromise }) {
+  const reviews = use(reviewsPromise);   // 아직이면 여기서 멈춘다
+  return <ReviewList items={reviews} />;
+}
+
+<Suspense fallback={<ReviewsSkeleton />}>
+  <Reviews reviewsPromise={reviewsPromise} />
+</Suspense>
+```
+
+"멈춘다"의 실제 구현은 예외다. 함수를 중간에 빠져나오는 방법이 JavaScript에서는 `throw`밖에 없기 때문이다. React 18까지 Suspense를 지원하던 데이터 라이브러리들은 아직 끝나지 않은 프로미스를 직접 `throw`하는 방식을 썼다. React 19의 `use`는 내부 전용 예외 객체를 던지고, 기다리는 프로미스는 따로 기록해 둔다(`trackUsedThenable`). 그래서 `use`를 `try/catch`로 감싸면 안 된다. 그 예외를 삼키면 React 19 개발 빌드는 이렇게 알려 준다.
+
+```text
+Suspense Exception: This is not a real error! It's an implementation detail of `use` to interrupt the current render. You must either rethrow it immediately, or move the `use` call outside of the `try/catch` block. Capturing without rethrowing will lead to unexpected behavior.
+```
+
+던져진 뒤의 일은 이렇게 흘러간다. 아래 그림에서 단계를 넘겨 보자.
+
+<SequenceDiagram
+  caption="use가 렌더링을 멈추고, 프로미스가 끝나면 경계 안을 처음부터 다시 렌더링한다"
+  actors={[
+    { id: "comp", label: "Reviews" },
+    { id: "react", label: "React" },
+    { id: "boundary", label: "Suspense 경계" },
+    { id: "promise", label: "프로미스" },
+  ]}
+  steps={[
+    {
+      from: "comp",
+      to: "react",
+      label: "use(promise)",
+      title: "아직 끝나지 않은 프로미스를 만난다",
+      detail: "use가 내부 예외를 던져 Reviews 함수를 그 자리에서 빠져나온다. 이 렌더링에서 Reviews가 만든 상태나 계산은 남지 않는다.",
+    },
+    {
+      from: "react",
+      to: "boundary",
+      label: "위로 거슬러 올라감",
+      title: "가장 가까운 Suspense 경계를 찾는다",
+      detail: "throwAndUnwindWorkLoop가 throwException으로 가장 가까운 Suspense 경계에 표시를 붙이고, unwindUnitOfWork로 그 경계까지 return을 따라 되감는다. 그 경계 안쪽은 이번 렌더링에서 fallback으로 바뀐다.",
+    },
+    {
+      from: "react",
+      to: "promise",
+      label: "then(ping)",
+      title: "끝나면 알려 달라고 등록한다",
+      detail: "attachPingListener가 프로미스에 콜백을 단다. 프로미스가 끝나면 이 콜백이 그 경계의 재시도를 예약한다.",
+    },
+    {
+      from: "boundary",
+      to: "boundary",
+      label: "fallback 커밋",
+      title: "경계 안을 fallback으로 그린다",
+      detail: "경계 바깥은 정상적으로 커밋된다. React 19는 fallback을 먼저 커밋한 뒤, 같은 경계 안의 다른 형제들을 따로 미리 렌더링(prewarm)해서 그쪽 데이터 요청도 일찍 시작하게 한다.",
+    },
+    {
+      from: "promise",
+      to: "react",
+      label: "resolve → ping",
+      title: "데이터가 도착한다",
+      detail: "등록해 둔 콜백이 불리고, React가 그 경계를 RetryLane으로 다시 렌더링하도록 예약한다.",
+    },
+    {
+      from: "react",
+      to: "comp",
+      label: "다시 렌더",
+      title: "경계 안을 다시 렌더링한다",
+      detail: "Reviews 함수가 처음부터 다시 불린다. 이번엔 use가 같은 프로미스의 결과를 바로 돌려준다. 성공하면 fallback 자리에 실제 내용이 커밋된다.",
+    },
+  ]}
+/>
+
+마지막 단계가 중요하다. React는 멈춘 지점부터 이어서 실행하지 않는다. 함수를 처음부터 다시 부른다. 동시성 렌더링 중이고 프로미스가 아주 빨리 끝난 경우에는 경계까지 올라가지 않고 그 컴포넌트만 다시 실행하는 최적화도 있지만(`replaySuspendedUnitOfWork`), 그때도 함수는 처음부터 다시 돈다. 그래서 다시 불렸을 때 같은 프로미스를 받을 수 있어야 한다.
+
+## 프로미스는 렌더 밖에서 만들어 둔다
+
+가장 흔한 실수는 렌더 중에 프로미스를 만드는 것이다.
+
+```tsx
+function Reviews({ id }) {
+  const reviews = use(fetch(`/api/reviews/${id}`).then((r) => r.json()));  // 렌더마다 새 요청
+  return <ReviewList items={reviews} />;
+}
+```
+
+다시 렌더링될 때마다 새 `fetch`가 나가고, 새 프로미스는 또 아직 끝나지 않았으니 또 멈춘다. 50ms 뒤에 끝나는 프로미스를 렌더 중에 새로 만드는 컴포넌트를 띄우고 렌더 횟수와 화면을 찍었다.
+
+```text
+  33ms renders=2 dom=loading...
+ 106ms renders=4 dom=loading...
+ 307ms renders=12 dom=loading...
+```
+
+데이터는 50ms면 오는데 300ms가 지나도 화면은 "loading..."이고, 렌더링과 요청만 계속 늘었다. 영영 끝나지 않는다. React 19 소스에는 이런 경우를 위한 개발 모드 경고 문구가 들어 있다. `A component was suspended by an uncached promise. Creating promises inside a Client Component or hook is not yet supported, except via a Suspense-compatible library or framework.`
+
+`useState`나 `useMemo`에 프로미스를 담아도 해결되지 않는다. 처음 마운트하다가 멈춘 컴포넌트는 커밋된 적이 없어서, 다시 렌더링될 때 그 상태가 남아 있지 않다. 프로미스는 멈출 수 있는 컴포넌트보다 오래 사는 곳에 있어야 한다. 선택지는 세 가지다.
+
+첫째, 부모나 이벤트 핸들러에서 만들어 props로 넘긴다. 서버 컴포넌트에서 만든 프로미스를 클라이언트 컴포넌트에 넘기는 것도 여기 들어간다. 둘째, 모듈 수준의 캐시에 키별로 담아 같은 키면 같은 프로미스를 돌려준다. 셋째, Suspense를 지원하는 데이터 라이브러리나 프레임워크에 맡긴다. TanStack Query의 `useSuspenseQuery`처럼 쿼리 키로 캐시하는 도구가 둘째 방식을 대신 해 준다.
+
+```ts
+const cache = new Map<string, Promise<Review[]>>();
+
+export function getReviews(id: string) {
+  if (!cache.has(id)) cache.set(id, fetchReviews(id));
+  return cache.get(id)!;   // 같은 id면 같은 프로미스
+}
+```
+
+직접 캐시를 만들면 두 가지를 함께 정해야 한다. 언제 지울지(같은 상품을 다시 열면 새로 받을지), 그리고 실패한 프로미스를 어떻게 할지다. 실패한 프로미스를 그대로 두면 다시 시도해도 같은 에러가 나온다. 뒤의 에러 경계 절에서 실제로 확인한다. 이 관리가 부담스러워서 보통은 라이브러리를 쓴다. 서버 상태를 캐시하는 일반적인 이야기는 [화면 데이터 캐시](/posts/client-data-cache)에 있다.
+
+## 경계는 사용자가 한 덩어리로 보는 단위에
+
+Suspense 경계를 어디에 두느냐는 "무엇을 함께 기다리게 할 것인가"다. 경계 하나 안의 컴포넌트는 그중 하나라도 멈추면 전부 fallback이 되고, 전부 준비돼야 함께 나타난다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="경계가 너무 위면 페이지 전체가, 너무 아래면 조각마다 따로 깜빡인다"
+  nodes={[
+    { id: "page", label: "ProductPage", sub: "경계 A (너무 위)", x: 200, y: 36, w: 150 },
+    { id: "info", label: "ProductInfo", sub: "이름·사진·가격", x: 85, y: 130, w: 130 },
+    { id: "stock", label: "StockBadge", sub: "옵션마다 새로", x: 85, y: 220, w: 130 },
+    { id: "section", label: "ReviewSection", sub: "경계 B (알맞음)", x: 300, y: 130, w: 140 },
+    { id: "list", label: "ReviewList", sub: "리뷰 API", x: 235, y: 220, w: 110 },
+    { id: "stats", label: "RatingStats", sub: "통계 API", x: 345, y: 220, w: 100 },
+  ]}
+  edges={[
+    { from: "page", to: "info" },
+    { from: "info", to: "stock" },
+    { from: "page", to: "section" },
+    { from: "section", to: "list" },
+    { from: "section", to: "stats" },
+  ]}
+/>
+
+경계가 너무 위에 있으면(그림의 A) 작은 조각 하나가 멈춰도 페이지 전체가 fallback으로 바뀐다. 처음 장면의 깜빡임 절반이 이것이었다. 재고 배지 하나가 새 데이터를 기다리는 동안 상품 이름과 사진까지 사라졌다.
+
+너무 아래에 두면 반대 문제가 생긴다. 리뷰 목록과 별점 통계에 경계를 따로 주면 둘이 각자 도착해서 화면이 팝콘처럼 여러 번 튄다. 사용자는 리뷰 영역을 하나로 보니 경계도 하나(그림의 B)로 둔다. fallback은 실제 내용과 같은 크기로 만들어 아래가 밀리지 않게 한다.
+
+React도 이 팝콘 현상을 조금 막아 준다. 경계의 fallback이 보인 뒤 내용이 준비되면 바로 바꾸지 않고, 가장 최근에 fallback을 보여 준 시점에서 300ms가 지날 때까지 모아 두었다가 한꺼번에 보여 준다. 소스에는 `FALLBACK_THROTTLE_MS = 300`으로 들어 있다. 100ms 뒤에 끝나는 프로미스로 확인하면 내용이 100ms가 아니라 300ms를 조금 넘겨서 나타난다.
+
+```text
+  53ms initial dom=loading...
+ 154ms initial dom=loading...
+ 255ms initial dom=loading...
+ 356ms initial dom=user-1
+```
+
+데이터가 빨리 오는데 왜 300ms씩 스켈레톤이 보이냐는 질문을 받으면 이게 답이다. 반대로 데이터가 300ms 안에 거의 항상 온다면 그 자리는 fallback을 보여 주는 것 자체가 손해라서, 다음 절의 transition으로 이전 화면을 유지하는 편이 낫다.
+
+경계를 중첩하면 바깥 경계가 먼저 채워지고 안쪽은 그다음이다. 페이지 골격 → 본문 → 댓글처럼 중요한 순서대로 드러나게 하고 싶을 때 쓴다.
+
+## 이미 보인 화면은 fallback으로 숨기지 않는다
+
+처음 장면의 나머지 절반은 경계 위치가 아니라 업데이트 방식 문제였다. 이미 화면에 내용이 보이던 경계가, 새 데이터를 기다리느라 다시 fallback으로 돌아갔다. 같은 컴포넌트를 두 방식으로 업데이트해서 20ms 뒤 화면에 보이는 내용을 찍었다.
+
+```tsx
+setId(2);                                  // plain
+startTransition(() => setId(2));           // transition
+```
+
+```text
+ 382ms plain 20ms later visible=loading...
+ 793ms plain after visible=user-2 renders=6
+ 379ms transition 20ms later visible=user-1
+ 791ms transition after visible=user-2 renders=5
+```
+
+일반 업데이트는 보이던 `user-1`을 숨기고 fallback을 보여 줬다. transition은 데이터가 올 때까지 `user-1`을 그대로 두었다가 `user-2`로 바꿨다. React는 transition 업데이트 때문에 이미 보이던 내용을 fallback으로 바꿔야 하는 상황이 오면, fallback을 커밋하지 않고 그 transition 렌더링 자체를 미룬다. 기다리는 동안 `isPending`이 `true`라서 옵션 버튼에 작은 표시를 하거나 이전 내용을 살짝 흐리게 할 수 있다. 옵션 버튼의 `onClick`을 `startTransition`으로 감싸면 처음 장면의 깜빡임이 사라진다.
+
+transition이 이전 화면을 지켜 주는 건 이미 보이던 경계뿐이다. 처음 나타나는 경계(새로 마운트되는 경계)는 transition이어도 fallback을 보여 준다. 보여 줄 이전 내용이 없기 때문이다. 이걸 거꾸로 이용할 수도 있다. 다른 상품으로 넘어갈 때는 이전 상품을 붙잡고 있는 것보다 스켈레톤이 맞다면, `<Suspense key={productId}>`처럼 경계에 key를 준다. key가 바뀌면 새 경계가 되니 transition이어도 fallback부터 보인다.
+
+일반 업데이트에서 fallback을 보여 줄 때 이전 내용은 DOM에서 지워지지 않는다. React는 그 요소들에 `display: none !important`를 걸어 숨기고, 컴포넌트 상태도 그대로 둔다. 앞의 실험에서 `textContent`를 그대로 찍으면 `user-1loading...`처럼 숨긴 내용이 함께 나온다. 대신 숨기는 동안 그 안의 layout effect는 정리(cleanup)되고 다시 보일 때 다시 실행된다. 숨겨진 동안 요소 크기를 재는 코드는 0을 얻는다.
+
+## 경계 안에서도 줄은 선다
+
+Suspense는 기다림을 보여 주는 방법을 바꿀 뿐, 요청을 동시에 보내 주지는 않는다. 요청이 언제 시작되는지는 여전히 코드가 정한다.
+
+```tsx
+// 워터폴: 사용자 정보를 받은 뒤에야 Orders가 렌더링되고 주문 요청이 시작된다
+function Account({ userId }) {
+  const user = use(getUser(userId));               // 300ms
+  return <Orders userId={user.id} />;               // 그 뒤 주문 요청 300ms
+}
+function Orders({ userId }) {
+  const orders = use(getOrders(userId));
+  return <OrderList orders={orders} />;
+}
+```
+
+`Orders`는 `Account`가 멈춰 있는 동안 렌더링되지 않으니 `getOrders`도 불리지 않는다. 300ms + 300ms가 이어진다. 두 요청이 서로를 기다릴 이유가 없다면 둘 다 위에서 먼저 시작한다.
+
+```tsx
+function AccountPage({ userId }) {
+  const userPromise = getUser(userId);       // 둘 다 여기서 시작
+  const ordersPromise = getOrders(userId);
+  return (
+    <Suspense fallback={<AccountSkeleton />}>
+      <Account userPromise={userPromise} ordersPromise={ordersPromise} />
+    </Suspense>
+  );
+}
+```
+
+이러면 둘 중 늦은 쪽인 약 300ms로 줄어든다. `getUser`·`getOrders`가 앞 절의 캐시를 거치니 `AccountPage`가 다시 렌더링돼도 요청이 반복되지 않는다. 더 일찍 시작하고 싶다면 링크에 마우스를 올렸을 때나 라우터가 화면을 바꾸기 전에 같은 함수를 불러 두면 된다. 같은 이야기가 서버 컴포넌트에서는 [스트리밍 SSR과 Suspense](/posts/streaming-ssr-suspense)의 "경계 안에서도 워터폴이 생긴다"는 부분과 같다.
+
+## lazy도 같은 방식으로 멈춘다
+
+`React.lazy`는 코드가 아직 도착하지 않은 컴포넌트다. 처음 렌더링될 때 넘겨준 `import()`를 부르고, 모듈이 올 때까지 데이터를 기다리는 컴포넌트와 똑같이 멈춘다. 그래서 가장 가까운 Suspense 경계의 fallback이 보인다. 어디서 무엇을 잘라 낼지는 [코드 스플리팅](/posts/code-splitting)에서 다뤘으니, 여기서는 Suspense와 맞물리는 부분만 본다.
+
+```tsx
+const ReviewEditor = lazy(() => import("./review-editor"));   // 모듈 최상위에서 한 번
+
+function ReviewSection() {
+  const [editing, setEditing] = useState(false);
+  return (
+    <>
+      <button onClick={() => startTransition(() => setEditing(true))}>리뷰 쓰기</button>
+      <Suspense fallback={<EditorSkeleton />}>
+        {editing && <ReviewEditor />}
+      </Suspense>
+    </>
+  );
+}
+```
+
+`lazy`는 반드시 모듈 최상위에서 부른다. 컴포넌트 안에서 부르면 렌더링마다 새 컴포넌트 타입이 생겨서 매번 새로 마운트되고 상태가 날아간다. 버튼을 `startTransition`으로 감싼 이유는 앞 절과 같다. 이미 보이던 내용이 있는 경계라면 코드가 올 때까지 이전 화면을 유지한다. 여기서는 `ReviewEditor`가 처음 나타나는 자리라 fallback이 보이지만, 페이지 이동처럼 이미 보이던 화면을 바꾸는 경우에는 차이가 크다.
+
+운영에서 `lazy`와 함께 꼭 생각할 것이 배포 직후의 청크 로드 실패다. 사용자가 이전 배포의 HTML을 열어 둔 채로 새 배포가 나가면, 이전 해시가 붙은 청크 파일이 서버에서 사라져 `import()`가 실패한다. 이때 에러는 가장 가까운 에러 경계로 간다. 그리고 `lazy`는 한 번 실패한 결과를 기억한다. 첫 `import()`가 실패하는 `lazy` 컴포넌트를 에러 경계로 잡은 뒤 경계를 리셋해서 다시 렌더링했다.
+
+```text
+first : 에러: Failed to fetch dynamically imported module factory calls=1
+retry : 에러: Failed to fetch dynamically imported module factory calls=1
+```
+
+다시 시도해도 `import()`는 다시 불리지 않았다(`factory calls=1`). 같은 `lazy` 객체로는 회복할 수 없다. 이 에러를 만나면 fallback에서 새로고침을 권하거나, 배포 직후의 이런 에러를 감지해 한 번만 자동으로 새로고침한다. 이전 배포의 청크를 한동안 서버에 남겨 두는 것도 방법이다.
+
+## 에러 경계는 렌더링 중의 에러만 잡는다
+
+이제 처음 장면의 두 번째 증상, 하얀 페이지로 넘어가자. React는 렌더링 중이나 커밋 중(effect, ref 콜백 포함)에 난 에러를 가장 가까운 에러 경계로 보낸다. 경계가 없으면 루트 전체를 언마운트한다. 반쯤 깨진 화면을 계속 보여 주는 것보다 아무것도 안 보여 주는 쪽이 낫다는 판단으로 React 16부터 이렇게 바뀌었다. 경계가 없는 루트에서 렌더 중 에러를 던졌더니 루트의 `innerHTML`이 빈 문자열이 됐다. 리뷰 하나 때문에 페이지가 하얗게 된 이유다.
+
+에러 경계는 아직 클래스 컴포넌트로만 만들 수 있다. 두 메서드가 역할을 나눈다.
+
+```tsx
+class ErrorBoundary extends React.Component<Props, { error: unknown }> {
+  state = { error: null };
+
+  // render 단계: 다음 렌더링에 쓸 상태만 돌려준다. 부작용 금지
+  static getDerivedStateFromError(error: unknown) {
+    return { error };
+  }
+
+  // commit 단계: 로그 전송 같은 부작용은 여기서
+  componentDidCatch(error: unknown, info: React.ErrorInfo) {
+    report(error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.error) return this.props.fallback;
+    return this.props.children;
+  }
+}
+```
+
+`getDerivedStateFromError`는 렌더 단계에서 불리니 여러 번 불릴 수 있다. 실험에서는 에러 한 번에 개발·프로덕션 빌드 모두 두 번 찍혔다. 여기서 로그를 보내면 중복된다. 로그는 커밋 단계의 `componentDidCatch`에서 보내고, `info.componentStack`에 어느 컴포넌트 아래에서 났는지가 들어 있다.
+
+경계가 잡지 못하는 에러가 있다. 이벤트 핸들러, `setTimeout` 콜백, 프로미스의 `then`처럼 렌더링이 끝난 뒤 실행되는 코드의 에러다. 이 코드들은 React가 렌더링하는 도중이 아니라 브라우저가 따로 부르니, React가 트리 위로 거슬러 올라갈 문맥이 없다. 클릭 핸들러에서 에러를 던지고 화면을 확인했다.
+
+```text
+== click handler throws
+  window error event: click failed
+  dom: clicktr
+```
+
+에러는 `window`의 `error` 이벤트로 갔고, 화면은 그대로였다. 경계 안에서 난 에러라도 경계의 fallback은 뜨지 않는다. 사용자는 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 본다.
+
+이런 에러를 경계로 보내고 싶으면 상태 업데이트에 실어 렌더링 안으로 끌고 들어온다. 업데이터 함수 안에서 다시 던지면, 그 업데이터가 렌더 단계에서 실행되면서 경계가 잡는다.
+
+```tsx
+onClick={() => {
+  saveReview().catch((e) => setState(() => { throw e; }));
+}}
+```
+
+```text
+== setState(() => throw) from async catch
+  gDSFE: async failed
+  gDSFE: async failed
+  onCaughtError: async failed | errorBoundary: Boundary
+  componentDidCatch: async failed | stack: at Profile (…/t9.cjs:12:21) / at Boundary (…/t9.cjs:4:1)
+  dom: fallback: async failed
+```
+
+`componentStack`에는 에러가 난 컴포넌트부터 바깥쪽으로 컴포넌트 이름과 파일 위치가 찍힌다(위 출력은 경로를 줄였다).
+
+React 19에서는 하나가 더 있다. `useTransition`의 `startTransition`에 넘긴 함수(async 포함)가 던진 에러는 가장 가까운 경계로 간다. 동작 방식은 [동시성 렌더링과 transition](/posts/react-concurrent-transitions)에서 봤다. 다만 모든 실패를 경계로 보낼 필요는 없다. 저장 실패처럼 사용자가 다시 누르면 되는 에러는 그 자리의 상태로 바꿔 메시지를 보여 주는 편이 낫다. 경계는 "이 영역을 더는 그릴 수 없다"는 에러에 쓴다.
+
+## 다시 시도하려면 원인도 같이 비운다
+
+경계를 쓸 때는 직접 클래스를 짜기보다 `react-error-boundary` 라이브러리를 많이 쓴다. 클래스 없이 props로 fallback과 리셋 동작을 정할 수 있다.
+
+```tsx
+import { ErrorBoundary, useErrorBoundary } from "react-error-boundary";
+
+function ReviewsFallback({ error, resetErrorBoundary }) {
+  return (
+    <div role="alert">
+      <p>리뷰를 불러오지 못했다.</p>
+      <button onClick={resetErrorBoundary}>다시 시도</button>
+    </div>
+  );
+}
+
+<ErrorBoundary
+  FallbackComponent={ReviewsFallback}
+  onReset={() => reviewsCache.delete(productId)}   // 실패한 프로미스를 비운다
+  resetKeys={[productId]}                          // 상품이 바뀌면 자동으로 리셋
+  onError={(error, info) => report(error, info.componentStack)}
+>
+  <Suspense fallback={<ReviewsSkeleton />}>
+    <Reviews productId={productId} />
+  </Suspense>
+</ErrorBoundary>
+```
+
+`resetErrorBoundary`를 부르거나 `resetKeys`의 값이 바뀌면 경계가 에러 상태를 지우고 children을 다시 렌더링한다. 이벤트 핸들러의 에러를 경계로 보내는 `useErrorBoundary()`의 `showBoundary(error)`도 있다. 앞에서 본 `setState(() => { throw e })`를 대신 해 주는 훅이다. 이 라이브러리 6.x 버전은 React 18과 19를 지원하고, fallback에 넘어오는 `error`의 타입이 `unknown`이다. 에러가 아닌 값도 던질 수 있기 때문이다.
+
+`onReset`에서 캐시를 비우는 이유를 실험으로 확인했다. 첫 요청이 500으로 실패하는 리뷰 컴포넌트를 경계로 감싸고, 실패한 뒤 경계를 리셋했다. 캐시를 그대로 둔 경우(`keep`)와 리셋하기 전에 그 키를 지운 경우(`evict`)다.
+
+```text
+keep first : 에러: 500 fetch calls=1
+keep retry : 에러: 500 fetch calls=1
+evict first : 에러: 500 fetch calls=1
+evict retry : 좋아요,별로 fetch calls=2
+```
+
+캐시를 그대로 두면 "다시 시도"를 눌러도 요청이 다시 나가지 않는다. `use`가 캐시에 남은 같은 실패한 프로미스를 받아 바로 같은 에러를 던진다. 다시 시도는 경계를 리셋하는 것과 실패의 원인을 비우는 것, 두 가지가 같이 있어야 동작한다. 데이터 라이브러리를 쓴다면 그 라이브러리의 리셋 기능(TanStack Query의 `QueryErrorResetBoundary` 같은)과 연결한다.
+
+경계는 어디에 둘까. Suspense 경계와 비슷하게, 실패해도 나머지 페이지가 성립하는 영역마다 둔다. 리뷰, 추천, 광고, 위젯이 그렇다. 그리고 앱 최상위에도 하나 둬서, 어디선가 놓친 에러가 하얀 화면이 아니라 "새로고침해 주세요" 화면으로 끝나게 한다. 에러 경계는 자기 자신의 render에서 난 에러는 잡지 못하고 바깥 경계로 넘긴다. fallback 컴포넌트는 단순하게 만든다.
+
+## React 19는 에러를 어디로 알리나
+
+React 19부터 `createRoot`와 `hydrateRoot`에 에러를 받는 옵션 세 개가 생겼다. 에러 수집 도구를 붙이는 공식 자리다.
+
+```tsx
+createRoot(container, {
+  onCaughtError(error, info) {        // 에러 경계가 잡은 에러
+    report(error, { componentStack: info.componentStack, boundary: "caught" });
+  },
+  onUncaughtError(error, info) {      // 경계가 없어 루트가 언마운트된 에러
+    report(error, { componentStack: info.componentStack, boundary: "none" });
+  },
+  onRecoverableError(error, info) {   // React가 스스로 회복한 에러 (하이드레이션 불일치 등)
+    report(error, { level: "warning" });
+  },
+});
+```
+
+옵션을 주고 앞의 실험을 다시 돌리면, 경계가 잡은 에러는 `onCaughtError`로(`info.errorBoundary`에 잡은 경계 인스턴스가 들어 있다), 경계가 없는 에러는 `onUncaughtError`로 간다.
+
+```text
+  onCaughtError: async failed | errorBoundary: Boundary
+  onUncaughtError: no boundary
+```
+
+옵션을 주지 않으면 기본 동작이 있다. 잡힌 에러는 `console.error`로 찍히고, 개발 빌드에서는 어느 컴포넌트에서 났고 어느 경계가 처리하는지 덧붙인다. 잡히지 않은 에러는 브라우저의 `reportError`로 보내져 `window`의 `error` 이벤트가 된다. React 18까지는 에러를 다시 던지는 방식이라 같은 에러가 콘솔에 두 번 찍히곤 했는데, 19에서 이렇게 정리됐다. 실제 개발 빌드의 문구는 이렇다.
+
+```text
+The above error occurred in the <Profile> component.
+
+React will try to recreate this component tree from scratch using the error boundary you provided, Boundary.
+
+An error occurred in the <NoBoundary> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+```
+
+운영에서는 `onUncaughtError`로 들어오는 에러가 곧 하얀 화면이다. 이 수치를 따로 세어 두면 "에러는 났지만 경계가 막았다"와 "사용자가 빈 화면을 봤다"를 구분할 수 있다. 처음 장면은 뒤쪽이었다.
+
+## 현장에서 두 경계를 의심하는 순간
+
+"로딩이 끝나지 않는다"는 제보에 네트워크 탭을 열어 같은 API가 계속 쌓이고 있으면, 렌더 중에 프로미스를 새로 만드는 코드다. 캐시를 거치게 하거나 위에서 만들어 넘긴다.
+
+"필터를 바꿀 때마다 화면 전체가 깜빡인다"면 경계가 너무 위에 있거나, 이미 보이던 경계를 일반 업데이트로 다시 멈추게 하고 있다. 업데이트를 `startTransition`으로 감싸고, 경계를 영역 단위로 내린다.
+
+"데이터는 빠른데 스켈레톤이 꼭 잠깐 보인다"면 300ms 묶음 때문이다. 이전 내용을 유지해도 되는 화면이라면 transition으로 fallback 자체를 피한다.
+
+"배포 직후 특정 화면만 하얗다"는 청크 로드 실패일 가능성이 높다. 에러 수집 도구에서 `Failed to fetch dynamically imported module`이나 번들러의 `ChunkLoadError`가 배포 시각부터 늘었는지 본다.
+
+"에러가 났는데 화면에는 아무 변화가 없다"면 이벤트 핸들러나 비동기 코드의 에러라서 경계를 지나쳤다. 그 자리에서 잡아 상태로 바꾸거나 `showBoundary`로 경계에 넘긴다.
+
+"페이지 전체가 하얗다"면 `onUncaughtError` 쪽이다. 최상위 경계가 있는지, 그 영역을 감싸는 경계가 있는지 본다.
+
+## 두 울타리를 다시 보면
+
+처음 화면의 깜빡임은 페이지 꼭대기에 둔 Suspense 경계와, 이미 보이던 경계를 일반 업데이트로 다시 멈추게 한 데서 왔다. `use`가 렌더링을 멈추면 React는 가장 가까운 경계까지 올라가 fallback을 보여 주고, 프로미스가 끝나면 경계 안을 처음부터 다시 렌더링한다. 그래서 프로미스는 렌더 밖에서 만들어 같은 것을 돌려줘야 하고, transition으로 업데이트하면 이미 보인 내용은 숨기지 않는다. 하얀 페이지는 경계 없이 렌더 중 에러가 난 결과였다. 에러 경계는 렌더링과 커밋 중의 에러만 잡으니 이벤트와 비동기 에러는 따로 끌어들여야 하고, 다시 시도하려면 실패한 캐시도 함께 비워야 한다.
+
+## 면접에서 나올 만한 질문
+
+### Suspense는 어떤 원리로 동작하나요?
+
+컴포넌트가 아직 끝나지 않은 프로미스를 `use`로 읽으면 React가 내부 예외로 렌더링을 멈추고, 가장 가까운 Suspense 경계까지 올라가 그 안을 fallback으로 커밋한다. 프로미스에 콜백을 달아 두었다가 끝나면 그 경계를 다시 렌더링하는데, 멈췄던 컴포넌트는 처음부터 다시 실행된다. 예전 라이브러리는 프로미스를 직접 throw했고, React 19부터는 `use`가 공개 API다.
+
+### use에 넘길 프로미스를 컴포넌트 안에서 만들면 왜 안 되나요?
+
+다시 렌더링될 때마다 새 요청과 새 프로미스가 생겨서, 또 멈추고 또 다시 렌더링되기를 끝없이 반복한다. 멈춘 채 마운트되지 못한 컴포넌트는 상태도 남지 않아 `useState`나 `useMemo`로도 붙잡을 수 없다. 부모나 이벤트에서 만들어 넘기거나, 키별 캐시나 Suspense를 지원하는 라이브러리를 써서 같은 키면 같은 프로미스를 돌려줘야 한다.
+
+### Suspense 경계는 어디에 두나요?
+
+사용자가 한 덩어리로 보는 영역 단위로 둔다. 너무 위에 두면 작은 조각 하나 때문에 페이지 전체가 fallback이 되고, 너무 잘게 나누면 조각마다 따로 나타나 화면이 튄다. fallback은 실제 내용과 같은 크기로 만들고, 중요한 순서대로 드러나게 하려면 경계를 중첩한다. React는 fallback이 보인 뒤 300ms 동안 공개를 모아 한꺼번에 보여 준다.
+
+### 데이터를 다시 받을 때 이미 보이던 화면이 스켈레톤으로 바뀌지 않게 하려면요?
+
+업데이트를 `startTransition`으로 감싼다. transition 때문에 이미 보이던 경계를 fallback으로 바꿔야 하면 React는 fallback을 커밋하지 않고 이전 화면을 유지한 채 기다리며, 그동안 `isPending`이 `true`다. 새로 나타나는 경계는 보여 줄 이전 내용이 없어 transition이어도 fallback을 보여 주고, 일부러 fallback을 보이고 싶으면 경계에 key를 준다.
+
+### 에러 경계가 잡지 못하는 에러는 무엇이고 어떻게 처리하나요?
+
+이벤트 핸들러, `setTimeout`, 프로미스 콜백처럼 렌더링 밖에서 실행되는 코드의 에러, 서버 렌더링 중의 에러, 경계 자신의 에러다. 이벤트·비동기 에러는 그 자리에서 잡아 상태로 바꾸거나, `setState(() => { throw e })`나 `react-error-boundary`의 `showBoundary`로 렌더링 안으로 끌어들여 경계로 보낸다. React 19에서는 `useTransition`의 transition 함수가 던진 에러도 경계로 간다.
+
+### getDerivedStateFromError와 componentDidCatch는 어떻게 다른가요?
+
+`getDerivedStateFromError`는 render 단계에서 불려 fallback을 그릴 상태만 돌려주는 정적 메서드이고, 여러 번 불릴 수 있어 부작용을 넣으면 안 된다. `componentDidCatch`는 commit 단계에서 한 번 불리니 에러 로그 전송 같은 부작용을 여기 둔다. 두 번째 인자의 `componentStack`으로 에러가 난 위치를 남긴다.
+
+### 에러 경계로 "다시 시도"를 만들었는데 계속 같은 에러가 납니다. 왜 그럴까요?
+
+경계만 리셋하고 실패의 원인을 그대로 뒀기 때문이다. 프로미스 캐시에 실패한 프로미스가 남아 있으면 다시 렌더링해도 `use`가 같은 에러를 바로 던진다. `onReset`에서 그 키를 캐시에서 지우거나 라이브러리의 리셋 기능과 연결한다. `lazy`도 실패한 `import()` 결과를 기억해서 같은 객체로는 회복되지 않으니, 청크 로드 실패는 새로고침으로 푼다.
+
+### React 19의 onCaughtError와 onUncaughtError는 언제 쓰나요?
+
+`createRoot`(와 `hydrateRoot`)의 옵션으로, 에러 경계가 잡은 에러와 잡지 못해 루트가 언마운트된 에러를 각각 받는다. 에러 수집 도구에 `componentStack`과 함께 보내는 공식 자리다. 옵션이 없으면 잡힌 에러는 `console.error`로, 잡히지 않은 에러는 `reportError`로 window의 error 이벤트가 된다. 하이드레이션 불일치처럼 React가 스스로 회복한 에러는 `onRecoverableError`로 온다.

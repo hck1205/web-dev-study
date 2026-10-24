@@ -1,0 +1,528 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-strings-unicode");
+
+<EasyIntro>
+  컴퓨터는 글자를 번호로 바꿔서 저장한다. 자바스크립트는 그 번호를 작은 상자에 하나씩 담는데, 처음 만들 때는 상자 하나면 세상의 모든 글자가 들어갈 줄 알았다. 그런데 이모지처럼 번호가 큰 글자가 생기면서 상자 두 개를 이어 붙여야 담기는 글자가 생겼다.
+
+  문제는 글자 수를 셀 때 자바스크립트가 글자가 아니라 상자를 센다는 점이다. 그래서 엄지 이모지 하나가 두 글자로 세어지고, 가족 이모지 하나는 여덟 글자로 세어진다. 상자 중간을 잘라 버리면 글자 반쪽만 남아서 물음표 같은 깨진 모양이 보인다.
+
+  한글도 비슷한 일이 있다. 같은 한 글자를 완성된 모양 하나로 담을 수도 있고, 자음과 모음을 따로 담을 수도 있다. 눈에는 똑같아 보여도 컴퓨터는 서로 다른 글자로 본다. 그래서 글자 수를 세거나 자르거나 비교하기 전에, 무엇을 한 글자로 볼지 먼저 정하고 모양을 한 가지로 맞춰야 한다.
+</EasyIntro>
+
+닉네임을 10자까지 받는 입력창을 만들었다. 화면에서는 남은 글자 수를 `value.length`로 보여 줬다. 그런데 "좋아요👍"를 넣은 사용자가 5자로 세어진다고 문의를 남겼다. 가족 이모지 하나를 넣은 사람은 한 글자 넣었는데 8자가 찼다고 했다. 같은 주에 다른 문의도 왔다. 맥에서 올린 "한글.png"가 검색에 안 걸린다는 것이다. 파일 이름은 분명 "한글"인데 `includes("한글")`이 `false`를 돌려준다.
+
+두 문제 모두 자바스크립트가 "글자"를 무엇으로 보느냐에서 나온다. 이 글은 `length`가 세는 단위, 이모지가 두 칸을 먹는 이유, 눈에 보이는 한 글자를 세는 법, 같은 한글이 다른 문자열이 되는 이유, 문자열 정렬까지 따라간다. 출력은 Node 22에서 돌린 결과다. 브라우저도 같은 엔진 규칙을 따르니 결과는 같다.
+
+문자열 안에 값을 끼워 넣는 규칙은 [템플릿 리터럴 글](/posts/js-template-literals)에서, `"10" + 1` 같은 변환 규칙은 [==와 === 글](/posts/js-equality-coercion)에서 다뤘다. 여기서는 문자열이 무엇으로 이루어져 있는지에 집중한다.
+
+## length는 글자가 아니라 16비트 칸을 센다
+
+유니코드 번호와 UTF-8·UTF-16 바이트가 어떻게 만들어지는지는 [문자 인코딩](/posts/character-encoding-unicode) 글에 있다. 이 글은 자바스크립트 문자열 API가 그 위에서 어떻게 움직이는지만 본다.
+
+먼저 문의를 그대로 재현했다.
+
+```js
+console.log("좋아요👍".length);
+console.log([..."좋아요👍"].length);
+
+const family = "👨‍👩‍👧";
+console.log(family.length, [...family].length);
+```
+
+```text
+5
+4
+8 5
+```
+
+`length`는 5, 펼쳐서 센 개수는 4다. 가족 이모지는 `length`가 8, 펼치면 5다. 눈에 보이는 글자 수는 각각 4와 1이다. 세 가지 숫자가 모두 다르다.
+
+자바스크립트 문자열은 16비트 숫자의 나열이다. 명세는 이 16비트 하나를 코드 유닛(code unit)이라고 부른다. `length`는 코드 유닛의 개수이고, `s[i]`와 `charCodeAt(i)`도 코드 유닛 하나를 꺼낸다. 글자가 아니라 칸을 센다고 생각하면 된다.
+
+왜 이렇게 됐는지는 역사를 보면 알 수 있다. 자바스크립트가 나온 1995년의 유니코드는 모든 글자를 16비트, 즉 65,536개 번호 안에 담겠다는 계획이었다. 그래서 언어는 글자 하나를 16비트 하나로 잡았다. 자바도 같은 결정을 했다. 그런데 1996년 유니코드 2.0이 번호 범위를 U+10FFFF까지, 110만 개가 넘게 늘렸다. 16비트 칸 하나에 안 들어가는 글자가 생겼고, 이미 퍼진 언어들은 칸 두 개를 이어 붙이는 방식으로 버텼다. 이게 UTF-16이다.
+
+## 이모지 하나가 두 칸을 먹는 이유
+
+유니코드가 글자마다 붙인 번호를 코드 포인트(code point)라고 한다. "가"는 U+AC00, "👍"는 U+1F44D다. U+0000부터 U+FFFF까지를 기본 다국어 평면(BMP)이라고 부르는데, 한글 완성형 11,172자와 한자 대부분, 라틴 문자가 여기 들어 있다. 이 범위의 글자는 칸 하나에 그대로 담긴다.
+
+U+FFFF를 넘는 글자는 칸 두 개로 쪼갠다. 이 두 칸을 서로게이트 쌍(surrogate pair)이라고 한다. 유니코드는 이 용도로 U+D800~U+DFFF 범위를 비워 두었다. 앞 칸(high surrogate)은 D800~DBFF, 뒤 칸(low surrogate)은 DC00~DFFF에서 나온다. "👍"로 계산해 보면 이렇다.
+
+```js
+const cp = 0x1f44d - 0x10000;            // 0xF44D (20비트로 줄인다)
+const high = 0xd800 + (cp >> 10);        // 위 10비트 → 0xD83D
+const low = 0xdc00 + (cp & 0x3ff);       // 아래 10비트 → 0xDC4D
+
+console.log(high.toString(16), low.toString(16));
+console.log("👍".charCodeAt(0).toString(16), "👍".charCodeAt(1).toString(16));
+console.log("👍".codePointAt(0).toString(16));
+```
+
+```text
+d83d dc4d
+d83d dc4d
+1f44d
+```
+
+계산한 값과 `charCodeAt`이 꺼낸 값이 같다. `codePointAt(0)`은 앞 칸이 서로게이트면 뒤 칸까지 읽어서 원래 번호 U+1F44D를 돌려준다. 이름이 비슷해서 헷갈리는데, `charCodeAt`은 칸 하나, `codePointAt`은 글자 번호 하나를 꺼낸다고 구분하면 된다.
+
+아래 그림은 `"a👍b"`를 두 가지 방식으로 훑는다. 다음을 누르면 인덱스로 한 칸씩 읽을 때와 `for...of`로 읽을 때 무엇이 쌓이는지 볼 수 있다.
+
+<AlgoTrace
+  caption="같은 문자열도 칸으로 읽느냐, 글자 번호로 읽느냐에 따라 조각이 다르다"
+  memoryLabel="꺼낸 조각"
+  cells={["a", "D83D", "DC4D", "b"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["a"],
+      caption: "s[0]은 'a'다. 'a'.length는 1이고, 칸 하나가 글자 하나다.",
+    },
+    {
+      pointer: 1,
+      memory: ["a", "\\uD83D"],
+      caption: "s[1]은 앞 칸 D83D만 꺼낸다. 혼자서는 아무 글자도 아니라 화면에 �로 보인다.",
+    },
+    {
+      pointer: 2,
+      memory: ["a", "\\uD83D", "\\uDC4D"],
+      caption: "s[2]는 뒤 칸 DC4D다. 인덱스 루프는 이렇게 이모지를 반쪽 두 개로 쪼갠다. length가 4인 이유다.",
+    },
+    {
+      pointer: 0,
+      memory: ["a"],
+      caption: "이번엔 for...of로 다시 훑는다. 문자열 이터레이터는 코드 포인트 단위로 움직인다.",
+    },
+    {
+      pointer: 1,
+      found: [1, 2],
+      memory: ["a", "👍"],
+      caption: "D83D가 앞 칸이라는 걸 알아보고 DC4D까지 한 번에 읽는다. 꺼낸 조각은 '👍' 하나다.",
+    },
+    {
+      pointer: 3,
+      found: [1, 2],
+      memory: ["a", "👍", "b"],
+      caption: "마지막 'b'까지 조각은 3개다. [...s].length가 3인 것과 같다.",
+    },
+  ]}
+/>
+
+`for...of`, 전개 문법 `[...s]`, `Array.from(s)`는 모두 문자열의 이터레이터를 쓴다. 이터레이터가 서로게이트 쌍을 묶어서 내놓기 때문에 코드 포인트 단위가 된다. 이터레이터가 어떻게 값을 하나씩 내놓는지는 [이터레이터와 제너레이터 글](/posts/js-iterators-generators)에서 다뤘다.
+
+```js
+console.log(Array.from("a👍b"));
+console.log(Array.from("a👍b", (c) => c.codePointAt(0).toString(16)));
+console.log("a👍b".length, [..."a👍b"].length);
+```
+
+```text
+[ 'a', '👍', 'b' ]
+[ '61', '1f44d', '62' ]
+4 3
+```
+
+코드에서 큰 번호의 글자를 직접 쓸 때는 `"\u{1F44D}"`처럼 중괄호 이스케이프를 쓰거나 `String.fromCodePoint(0x1f44d)`를 쓴다. 예전 방식 `"\uD83D\uDC4D"`도 같은 문자열이지만 읽기 어렵다.
+
+## 칸 단위 메서드로 자르면 반쪽이 남는다
+
+`slice`, `substring`, `charAt`, `split("")`, `s[i]`는 모두 칸 단위로 움직인다. 서로게이트 쌍 한가운데를 자르면 짝 잃은 반쪽(lone surrogate)이 남는다.
+
+```js
+console.log(JSON.stringify("a👍b".slice(0, 2)));
+console.log("👍".split(""));
+console.log(JSON.stringify("👍👍".split("").reverse().join("")));
+console.log([..."👍👍"].reverse().join(""));
+```
+
+```text
+"a\ud83d"
+[ '\ud83d', '\udc4d' ]
+"\udc4d👍\ud83d"
+👍👍
+```
+
+`slice(0, 2)`는 'a'와 앞 칸만 남긴다. 말줄임 처리에서 화면 끝에 �가 찍히는 게 이 경우다. 문자열 뒤집기를 `split("").reverse().join("")`으로 하면 칸 순서가 바뀌어서 뒤 칸이 앞으로 온다. 가운데 두 칸은 우연히 짝이 맞아 👍 하나가 살아남고 양 끝은 깨진다. 펼친 뒤 뒤집으면 멀쩡하다. 다만 이 방법도 뒤에서 볼 가족 이모지 같은 글자는 깨뜨린다.
+
+반쪽이 남은 문자열은 다른 곳에서 터진다. URL에 넣으려고 `encodeURIComponent`를 부르면 예외가 난다.
+
+```js
+try {
+  encodeURIComponent("검색어👍".slice(0, 4));
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+console.log("a\uD83D".isWellFormed(), "a👍".isWellFormed());
+console.log(JSON.stringify("a\uD83D".toWellFormed()));
+```
+
+```text
+URIError: URI malformed
+false true
+"a�"
+```
+
+둘째 줄에서 `isWellFormed`가 반쪽을 찾아낸다. 사용자 입력을 길이 제한으로 자른 뒤 검색 URL을 만드는 코드가 특정 이모지에서만 죽는다면 이걸 의심한다. `isWellFormed`와 `toWellFormed`는 ES2024에 들어왔고 Node 20 이상, 2023년 이후의 주요 브라우저에 있다. `toWellFormed`는 반쪽을 U+FFFD(�)로 바꿔서 적어도 예외는 막는다. 근본 해결은 애초에 칸 단위로 자르지 않는 것이다.
+
+`slice`와 `substring`의 차이도 이 자리에서 짚는다. 둘 다 칸 단위인 건 같고, 음수와 순서를 다루는 방식이 다르다.
+
+```js
+console.log("abc".slice(-2), "abc".substring(-2));
+console.log(JSON.stringify("abc".slice(2, 0)), "abc".substring(2, 0));
+```
+
+```text
+bc abc
+"" ab
+```
+
+`slice`는 음수를 뒤에서부터 센다. `substring`은 음수를 0으로 바꾸고, 시작이 끝보다 크면 둘을 바꿔 준다. 친절해 보이지만 계산이 틀렸을 때 빈 문자열 대신 엉뚱한 조각을 돌려줘서 버그를 숨긴다. 새 코드는 `slice`로 통일하는 편이 낫다. `substr`은 명세 부록(Annex B)에 남은 옛 기능이라 쓰지 않는다.
+
+정규식도 같은 문제가 있다. `.`은 기본적으로 칸 하나와 맞는다. `u` 플래그를 붙여야 코드 포인트 하나와 맞는다.
+
+```js
+console.log(/^.$/.test("👍"), /^.$/u.test("👍"));
+```
+
+```text
+false true
+```
+
+## 눈에 보이는 한 글자는 여러 코드 포인트일 수 있다
+
+코드 포인트로 세면 끝날 것 같지만 가족 이모지는 펼쳐도 5개였다. 사람이 한 글자로 보는 단위를 유니코드는 자소 클러스터(grapheme cluster)라고 부른다. 여러 코드 포인트가 모여 글자 하나를 이루는 경우가 생각보다 많다.
+
+아래 그림은 가족 이모지를 조각으로 나눈 것이다. 조각을 누르면 각각이 무엇인지 볼 수 있다.
+
+<UrlAnatomy
+  caption="👨‍👩‍👧 하나는 코드 포인트 5개, 코드 유닛 8칸이다"
+  separator=""
+  joiner=" + "
+  params={[
+    {
+      key: "man",
+      display: "👨 U+1F468",
+      title: "남자 (2칸)",
+      description: "BMP 밖의 글자라 서로게이트 쌍 D83D DC68로 저장된다. length로 2를 차지한다.",
+      code: "\"\\u{1F468}\".length // 2",
+      required: true,
+    },
+    {
+      key: "zwj1",
+      display: "ZWJ U+200D",
+      title: "폭 없는 연결자 (1칸)",
+      description: "Zero Width Joiner. 화면에 보이지 않고, 앞뒤 이모지를 하나로 그려 달라고 글꼴에 부탁하는 표시다. 글꼴이 그 조합을 모르면 이모지 세 개가 나란히 보인다.",
+      code: "\"\\u200D\".length // 1",
+      required: true,
+    },
+    {
+      key: "woman",
+      display: "👩 U+1F469",
+      title: "여자 (2칸)",
+      description: "역시 서로게이트 쌍이다. 여기까지 칸 5개가 쌓였다.",
+      required: true,
+    },
+    {
+      key: "zwj2",
+      display: "ZWJ U+200D",
+      title: "또 하나의 연결자 (1칸)",
+      description: "두 번째 연결이다. 연결자는 몇 개든 이어질 수 있어서 이론상 한 글자의 길이에 상한이 없다.",
+      required: true,
+    },
+    {
+      key: "girl",
+      display: "👧 U+1F467",
+      title: "여자아이 (2칸)",
+      description: "마지막 조각까지 합치면 코드 포인트 5개, 코드 유닛 8칸이다. 사람 눈에는 한 글자다.",
+      code: "\"👨‍👩‍👧\".length       // 8\n[...\"👨‍👩‍👧\"].length  // 5",
+      required: true,
+    },
+  ]}
+/>
+
+연결자 말고도 여러 조각이 한 글자가 되는 경우가 있다. 피부색 이모지 👍🏽는 엄지에 피부색 수식자(U+1F3FD)가 붙은 것이다. 국기 🇰🇷는 지역 표시 글자 두 개(🇰, 🇷)의 조합이다. "é"는 완성된 글자 U+00E9 하나로도, "e" 뒤에 결합용 악센트 U+0301을 붙여서도 쓸 수 있다.
+
+```js
+const seg = new Intl.Segmenter("ko", { granularity: "grapheme" });
+const count = (s) => [...seg.segment(s)].length;
+
+for (const s of ["👍🏽", "🇰🇷", "👨‍👩‍👧"]) {
+  console.log(s, s.length, [...s].length, count(s));
+}
+```
+
+```text
+👍🏽 4 2 1
+🇰🇷 4 2 1
+👨‍👩‍👧 8 5 1
+```
+
+세 숫자가 차례로 코드 유닛, 코드 포인트, 자소 클러스터다. 사람이 세는 글자 수는 마지막 열이다.
+
+## Intl.Segmenter로 사람이 보는 글자를 센다
+
+자소 클러스터를 나누는 규칙은 유니코드 표준 부속서(UAX #29)에 정해져 있고, 이모지가 새로 나올 때마다 갱신된다. 정규식으로 흉내 내기 어려운 이유다. 그래서 브라우저에 내장된 `Intl.Segmenter`를 쓴다. 크롬 87, 사파리 14.1부터 있었고 파이어폭스는 125(2024년)에서 들어왔다. 그보다 오래된 브라우저를 지원해야 하면 grapheme-splitter 같은 라이브러리를 쓰거나, 지원 여부를 확인한 뒤 코드 포인트 개수로 물러선다.
+
+`segment()`가 돌려주는 객체는 이터러블이라 펼쳐서 쓴다. 각 조각에는 `segment`(조각 문자열), `index`(원래 문자열에서의 칸 위치)가 들어 있다. `granularity`를 `"word"`로 주면 단어 단위로 나눈다. 띄어쓰기가 없는 일본어·중국어에서 특히 쓸모가 있고, 한국어는 띄어쓰기 기준으로 나뉜다.
+
+```js
+const words = new Intl.Segmenter("ko", { granularity: "word" });
+console.log(
+  [...words.segment("나는 학교에 간다.")].filter((x) => x.isWordLike).map((x) => x.segment),
+);
+```
+
+```text
+[ '나는', '학교에', '간다' ]
+```
+
+`Intl.Segmenter` 객체는 만들 때 로캘 데이터를 준비하므로 함수 밖에서 한 번 만들어 두고 재사용한다. 입력할 때마다 새로 만들면 긴 글에서 체감할 만큼 느려진다.
+
+## 화면과 서버가 같은 단위로 세야 한다
+
+처음 문의로 돌아가자. 남은 글자 수를 자소 클러스터로 세서 보여 주면 사용자의 감각과 맞는다. 그런데 서버가 다른 단위로 세면 "10자 이하"를 통과한 값이 서버에서 거절된다. 환경마다 세는 단위가 다르다.
+
+자바스크립트와 자바의 `length`는 UTF-16 코드 유닛이다. HTML `input`의 `maxlength`도 명세상 코드 유닛 기준이라, `maxlength="10"`에 이모지 다섯 개를 넣으면 꽉 찬다. 브라우저 구현이 오랫동안 엇갈렸던 부분이라 지원 대상 브라우저에서 직접 확인하는 게 안전하다. PostgreSQL은 문자 단위가 코드 포인트다. 이 컨테이너의 PostgreSQL 16으로 확인했다.
+
+```sql
+SELECT length('좋아요👍')        AS length,   -- 문자(코드 포인트) 수
+       char_length('좋아요👍')   AS chars,    -- length와 같다
+       octet_length('좋아요👍')  AS bytes,    -- UTF-8로 저장한 바이트 수
+       length(normalize('한글', NFD)) AS nfd_len;  -- 자모로 풀면 6자
+```
+
+```text
+ length | chars | bytes | nfd_len 
+--------+-------+-------+---------
+      4 |     4 |    13 |       6
+(1 row)
+```
+
+`VARCHAR(10)`도 코드 포인트 10개를 뜻한다. 같은 "좋아요👍"가 자바스크립트에서 5, PostgreSQL에서 4, 바이트로는 13이다. 한글은 UTF-8로 3바이트, 이모지는 4바이트라 13이 나온다. 브라우저에서 바이트 수를 알고 싶으면 `new TextEncoder().encode(s).length`를 쓴다. MySQL 8도 `VARCHAR(n)`이 문자 수지만, 열의 문자 집합이 `utf8mb4`가 아니라 옛 `utf8`(utf8mb3)이면 4바이트 글자를 아예 저장하지 못하고 Incorrect string value 오류를 낸다. 이모지를 받는 서비스라면 `utf8mb4`인지부터 본다.
+
+실무에서는 규칙을 하나 정해서 양쪽에 같이 둔다. 사용자에게 보이는 제한이라면 자소 클러스터로 세고, 서버 검증도 같은 단위로 맞춘다. DB 열은 그보다 넉넉하게 잡는다. 가족 이모지처럼 한 글자가 코드 포인트 여러 개일 수 있으니, 자소 10개 제한이라도 열은 코드 포인트 기준으로 몇 배 여유를 둔다. 저장 용량이 걱정이면 바이트 상한을 별도로 둔다.
+
+글자 수 제한을 지키면서 자르는 함수를 직접 고쳐 보자. 지금 코드는 칸 단위로 잘라서 이모지가 반쪽이 되고, 자모로 풀린 한글도 엉뚱하게 잘린다.
+
+<CodePlayground
+  caption="보이는 글자 기준으로 자르기"
+  functionName="truncate"
+  initialCode={`function truncate(text, max) {
+  // 지금은 코드 유닛(칸) 기준으로 자른다.
+  // 이모지가 반쪽이 되고, 자모로 풀린 한글은 엉뚱하게 잘린다.
+  if (text.length <= max) return text;
+  return text.slice(0, max) + "…";
+}`}
+  solution={`const segmenter = new Intl.Segmenter("ko", { granularity: "grapheme" });
+
+function truncate(text, max) {
+  // 1) 자모로 풀린 한글을 완성형으로 맞춘다
+  // 2) 사람이 보는 글자 단위로 나눈다
+  const parts = [...segmenter.segment(text.normalize("NFC"))].map((s) => s.segment);
+  if (parts.length <= max) return parts.join("");
+  return parts.slice(0, max).join("") + "…";
+}`}
+  tests={[
+    { args: ["안녕하세요", 3], expected: "안녕하…", label: "한글 5자를 3자로" },
+    { args: ["좋아요👍👍", 4], expected: "좋아요👍…", label: "이모지가 반쪽이 되지 않는다" },
+    { args: ["\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 가족", 2], expected: "\u{1F468}\u200D\u{1F469}\u200D\u{1F467} …", label: "가족 이모지는 한 글자" },
+    { args: ["\u1112\u1161\u11ab\u1100\u1173\u11af", 5], expected: "한글", label: "자모로 풀린 '한글'은 두 글자" },
+    { args: ["🇰🇷🇯🇵🇺🇸", 2], expected: "🇰🇷🇯🇵…", label: "국기는 두 조각이 한 글자" },
+    { args: ["짧다", 10], expected: "짧다", label: "짧으면 그대로" },
+  ]}
+/>
+
+네 번째 테스트가 다음 절의 주제다. 원래 코드는 이 입력을 5칸에서 잘라 "한그…"를 만든다. 자모 여섯 개 중 다섯 개만 남아서 마지막 받침 ㄹ이 떨어지기 때문이다.
+
+## 같은 "한글"이 서로 다른 문자열일 때
+
+두 번째 문의를 재현해 보자. 맥에서 만든 파일 이름은 한글이 자모로 풀린 채로 들어오는 경우가 많다. "한"을 완성형 U+D55C 하나로 쓰지 않고 초성 ㅎ(U+1112), 중성 ㅏ(U+1161), 종성 ㄴ(U+11AB) 세 개로 쓰는 방식이다. 화면에는 똑같이 "한"으로 그려진다.
+
+유니코드는 이런 두 표현을 정준 등가(canonical equivalence)라고 부르고, 한쪽으로 맞추는 규칙을 정해 두었다. 완성형으로 모으는 것이 NFC, 낱낱이 푸는 것이 NFD다. 자바스크립트에서는 `normalize()`로 바꾼다.
+
+```js
+const nfc = "한글";
+const nfd = nfc.normalize("NFD");
+
+console.log(nfc.length, nfd.length, nfc === nfd);
+console.log([...nfd].map((c) => c.codePointAt(0).toString(16)));
+console.log(nfd.includes("한"), nfc === nfd.normalize("NFC"));
+console.log(nfc.localeCompare(nfd));
+```
+
+```text
+2 6 false
+[ '1112', '1161', '11ab', '1100', '1173', '11af' ]
+false true
+0
+```
+
+길이가 2와 6으로 다르고 `===`도 `false`다. `includes`도 못 찾는다. NFC로 바꾸면 같아진다. 재미있는 건 마지막 줄이다. `localeCompare`는 정준 등가를 같은 글자로 보고 0을 돌려준다. 비교만 할 거라면 이걸로 충분하지만, 검색·`Map` 키·DB 저장처럼 문자열 자체가 같아야 하는 곳에서는 소용이 없다.
+
+이 표현이 왜 맥에서 자주 나오는지는 운영체제의 파일 시스템 규칙이 남긴 흔적이다. 예전 HFS+는 파일 이름을 NFD로 바꿔 저장했고, 그 관습이 앱마다 다르게 남아 있다. 업로드한 `File.name`이 어느 쪽일지 프런트엔드는 알 수 없다. 그래서 문자열이 시스템 안으로 들어오는 입구에서 한 번 맞춘다. 파일 이름, 검색어, 사용자 이름처럼 비교하거나 키로 쓰는 값은 저장하기 전에 `normalize("NFC")`를 부른다. 웹에서 쓰는 텍스트는 대부분 NFC라서 NFC로 모으는 게 일반적이다. 이미 쌓인 데이터는 PostgreSQL의 `normalize(col, NFC)`나 `col IS NFC NORMALIZED`로 찾아서 고친다.
+
+NFKC와 NFKD라는 형식도 있다. K는 호환(compatibility)의 약자로, 모양은 달라도 뜻이 같은 글자까지 합친다.
+
+```js
+console.log(["ｱ", "①", "ﬁ", "Ａ１"].map((x) => x.normalize("NFKC")));
+```
+
+```text
+[ 'ア', '1', 'fi', 'A1' ]
+```
+
+반각 가타카나, 동그라미 숫자, 합자, 전각 영숫자가 평범한 글자가 된다. 검색 색인을 만들 때 쓸 만하다. 대신 원래 글자를 잃으니 저장용으로는 쓰지 않는다. 사용자가 일부러 쓴 ①이 1이 되어 버린다.
+
+## 문자열은 고칠 수 없다, 그럼 +=는 느릴까
+
+문자열은 원시값이고 한번 만들면 바뀌지 않는다. 칸 하나를 바꾸려고 해도 조용히 무시되고, strict 모드에서는 오류가 난다.
+
+```js
+"use strict";
+const s = "hello";
+try {
+  s[0] = "H";
+} catch (e) {
+  console.log(e.constructor.name + ": " + e.message);
+}
+```
+
+```text
+TypeError: Cannot assign to read only property '0' of string 'hello'
+```
+
+`toUpperCase`, `replace`, `trim`, `padStart`는 모두 새 문자열을 돌려준다. 원래 변수에 다시 대입하지 않으면 아무 일도 일어나지 않는다. 값을 복사하는 원시값과 참조의 차이는 [원시값과 참조 글](/posts/js-primitive-vs-reference)에 있다.
+
+그렇다면 반복문에서 `+=`로 이어 붙이면 매번 전체를 복사해서 느려질까. 옛날 엔진은 실제로 그랬고, 그래서 배열에 모았다가 `join`하라는 조언이 퍼졌다. 지금의 V8은 `+=`를 로프(rope)라는 구조로 처리한다. 두 문자열을 바로 복사하지 않고 "왼쪽과 오른쪽을 이어 놓은 것"이라는 노드만 만든다. 실제로 펼치는 건 인덱스로 읽거나 정규식을 돌리는 등 내용이 필요해지는 순간이다.
+
+```js
+const N = 1_000_000;
+
+let t = performance.now();
+let s = "";
+for (let i = 0; i < N; i++) s += "ab";
+const concat = performance.now() - t;
+
+t = performance.now();
+const parts = [];
+for (let i = 0; i < N; i++) parts.push("ab");
+const joined = parts.join("");
+const join = performance.now() - t;
+
+console.log(s.length, joined.length, concat.toFixed(1), join.toFixed(1));
+```
+
+```text
+2000000 2000000 107.7 90.2
+```
+
+백만 번 이어 붙여도 둘 다 100ms 안팎이다. 이 정도 차이라면 읽기 쉬운 쪽을 고르면 된다. 단, 로프는 V8의 내부 최적화이지 명세가 보장하는 게 아니다. 이어 붙이는 도중에 `s[i]`나 정규식처럼 내용을 읽는 코드를 섞으면 그때마다 펼치는 비용이 생긴다. 큰 텍스트를 조각조각 만들어 한 번에 쓰는 코드라면 배열이나 템플릿 리터럴로 모으는 편이 예측하기 쉽다.
+
+## + 하나로 숫자와 문자열이 갈린다
+
+문자열 연산자는 사실상 `+` 하나다. 피연산자 중 하나라도 문자열이면 나머지를 문자열로 바꿔 잇는다. 다른 산술 연산자는 반대로 숫자로 바꾼다.
+
+```js
+console.log("10" + 1, "10" - 1, "b" + "a" + +"a" + "a");
+console.log("10" < "9", 10 < 9, "Z" < "a");
+```
+
+```text
+101 9 baNaNa
+true false true
+```
+
+`+"a"`는 단항 더하기라서 숫자로 바꾸다 `NaN`이 된다. 더 조심할 건 둘째 줄이다. 문자열끼리 `<`로 비교하면 숫자로 바꾸지 않고 코드 유닛 번호를 앞에서부터 비교한다. "1"이 "9"보다 번호가 작으니 `"10" < "9"`가 `true`다. 대문자 Z(U+005A)는 소문자 a(U+0061)보다 번호가 작아서 앞에 온다. 폼에서 받은 숫자 문자열을 그대로 비교하는 코드가 10 이상에서 틀리는 이유다. 비교 전에 `Number()`로 바꾼다.
+
+## 정렬은 코드 유닛 순서가 아니라 사람의 순서로
+
+`sort()`를 비교 함수 없이 부르면 바로 위의 코드 유닛 비교로 정렬한다.
+
+```js
+const names = ["가", "b", "A", "a", "나", "Z"];
+console.log([...names].sort());
+console.log([...names].sort((x, y) => x.localeCompare(y, "ko")));
+console.log(["item10", "item2", "item1"].sort(new Intl.Collator("ko", { numeric: true }).compare));
+```
+
+```text
+[ 'A', 'Z', 'a', 'b', '가', '나' ]
+[ '가', '나', 'a', 'A', 'b', 'Z' ]
+[ 'item1', 'item2', 'item10' ]
+```
+
+기본 정렬은 대문자가 소문자보다 먼저 오고, 한글은 번호가 커서 맨 뒤로 간다. `localeCompare`에 "ko"를 주면 한국어 사전 순서를 따른다. 한글이 앞에 오고, 같은 알파벳의 대소문자가 붙어 있다. 숫자가 섞인 이름은 `numeric: true`로 "item2"가 "item10" 앞에 오게 한다. 로캘마다 순서가 다르다는 것도 기억할 만하다. 독일어는 ä를 a 다음에, 스웨덴어는 z 다음에 둔다. 사용자 언어로 정렬해야 하는 이유다. `sort`가 원본을 바꾼다는 함정은 [배열 변경 메서드 글](/posts/js-array-mutation)에서 따로 다뤘다.
+
+`localeCompare`와 `Intl.Collator`는 같은 규칙을 쓴다. 차이는 속도다. `localeCompare`에 로캘을 넘기면 호출마다 비교 규칙을 찾아 준비해야 한다(엔진이 얼마나 캐시하는지는 구현마다 다르다). `Collator`는 한 번 만들어 두고 `compare`만 계속 부른다. 10만 개 문자열을 정렬해 봤다.
+
+```js
+const words = Array.from({ length: 100000 }, (_, i) => "단어" + ((i * 7919) % 100000));
+const collator = new Intl.Collator("ko");
+
+let t = performance.now();
+[...words].sort((a, b) => a.localeCompare(b, "ko"));
+console.log("localeCompare", (performance.now() - t).toFixed(0));
+
+t = performance.now();
+[...words].sort(collator.compare);
+console.log("Collator", (performance.now() - t).toFixed(0));
+```
+
+```text
+localeCompare 795
+Collator 246
+```
+
+세 배 넘게 차이가 난다. 큰 목록을 정렬하거나 표의 열 정렬처럼 자주 부르는 곳에서는 `Collator`를 밖에 만들어 두고 쓴다. 대소문자나 악센트를 무시하고 같다고 보고 싶으면 `sensitivity: "base"`를 준다. 이 옵션은 검색 필터에서 "a"로 "A"를 찾을 때 쓸모가 있다.
+
+## 현장에서 문자열이 말썽을 부리는 순간
+
+증상별로 어디부터 보는지 적어 둔다.
+
+글자 수 표시와 서버 검증이 어긋난다는 문의가 오면, 양쪽이 무엇을 세는지 먼저 확인한다. 프런트엔드 `length`(코드 유닛), `Intl.Segmenter`(자소), DB(코드 포인트), 바이트 제한(UTF-8) 중 무엇인지 적어 보면 대개 둘이 다르다.
+
+말줄임이나 미리보기 끝에 �가 찍히면 `slice`·`substring`으로 자른 자리를 찾는다. 서버 쪽에서 바이트 단위로 자르는 코드(SMS 길이 제한, 푸시 알림 본문)도 같은 증상을 만든다.
+
+특정 사용자 입력에서만 `URIError: URI malformed`가 나면 잘린 서로게이트가 원인일 가능성이 높다. `isWellFormed()`로 로그를 남겨 확인한다.
+
+맥에서 올린 파일이나 맥 사용자가 입력한 이름만 검색이 안 되면 NFD를 의심한다. 콘솔에서 `[...name].length`와 `name.normalize("NFC").length`를 비교하면 바로 보인다.
+
+한글 입력 중에 Enter를 눌렀더니 메시지가 두 번 전송되는 버그도 문자열 주변에서 자주 만난다. 문자열 자체의 문제는 아니고 입력기(IME)가 글자를 조합하는 동안에도 `keydown`이 오기 때문이다. 조합 중인지를 `event.isComposing`(React에서는 `event.nativeEvent.isComposing`)으로 확인하고, 조합 중일 때의 Enter는 무시한다.
+
+## 무엇을 한 글자로 볼지 먼저 정한다
+
+자바스크립트 문자열은 16비트 칸의 나열이다. `length`와 인덱스, `slice`는 칸을 세고, `for...of`와 전개는 코드 포인트를 세고, 사람이 보는 글자는 `Intl.Segmenter`로만 셀 수 있다. 비교하거나 저장하는 값은 입구에서 NFC로 맞추고, 정렬은 `Intl.Collator`로 사용자의 언어 순서를 따른다. 무엇을 한 글자로 볼지 먼저 정하면 나머지 선택은 따라온다.
+
+## 면접에서 나올 만한 질문
+
+### 자바스크립트에서 "👍".length가 2인 이유는 무엇인가요?
+
+`length`가 글자 수가 아니라 UTF-16 코드 유닛 수이기 때문이다. 자바스크립트는 처음에 글자 하나를 16비트로 잡았는데, 유니코드가 U+FFFF 너머로 커지면서 그 범위의 글자는 서로게이트 쌍, 즉 칸 두 개로 저장하게 됐다. 👍는 U+1F44D라서 D83D와 DC4D 두 칸이 된다.
+
+### 문자열의 글자 수를 정확히 세려면 어떻게 하나요?
+
+무엇을 글자로 볼지에 따라 다르다. 코드 포인트 수는 `[...s].length`로 세고, 사람이 보는 글자 수는 `Intl.Segmenter`를 grapheme 단위로 써서 센다. 가족 이모지나 국기, 피부색 이모지는 코드 포인트가 여러 개라 펼친 개수로도 틀린다. 사용자에게 보이는 글자 수 제한이라면 Segmenter가 맞고, 서버 검증도 같은 단위로 맞춰야 한다.
+
+### slice로 문자열을 자를 때 생기는 문제는 무엇인가요?
+
+`slice`는 코드 유닛 단위라서 서로게이트 쌍 가운데를 자를 수 있다. 짝 잃은 반쪽이 남으면 화면에 �로 보이고, `encodeURIComponent`에서 URIError가 난다. 자소 클러스터로 나눈 뒤 잘라야 하고, 이미 깨졌는지는 `isWellFormed()`로 확인할 수 있다.
+
+### NFC와 NFD는 무엇이고 언제 문제가 되나요?
+
+같은 글자를 완성형 하나로 쓰는 게 NFC, 자모나 결합 문자로 풀어 쓰는 게 NFD다. 화면에는 똑같이 보이지만 `===`, `includes`, `Map` 키에서는 다른 문자열이다. 맥에서 만든 파일 이름이 NFD로 들어와 검색이 안 되는 경우가 대표적이다. 비교하거나 저장하는 값은 입구에서 `normalize("NFC")`로 맞춘다.
+
+### NFKC는 언제 쓰고 언제 쓰면 안 되나요?
+
+전각 영숫자, 반각 가타카나, 동그라미 숫자처럼 모양만 다른 글자까지 합치고 싶을 때 쓴다. 검색 색인이나 중복 검사 키를 만들 때 유용하다. 원래 글자를 잃는 변환이라 사용자가 쓴 원문을 저장하는 데는 쓰지 않는다.
+
+### 배열 sort()로 이름을 정렬하면 왜 이상한 순서가 나오나요?
+
+비교 함수 없이 부르면 UTF-16 코드 유닛 번호 순으로 정렬한다. 대문자가 소문자보다 앞에 오고, 한글은 번호가 커서 라틴 문자 뒤로 간다. 사용자 언어의 순서가 필요하면 `Intl.Collator(locale).compare`를 쓴다. 로캘을 넘긴 `localeCompare`보다 객체를 한 번 만들어 재사용하는 `Collator`가 큰 목록에서 훨씬 빠르다.
+
+### 반복문에서 문자열을 +=로 이어 붙이면 느린가요?
+
+요즘 V8에서는 크게 느리지 않다. `+=`가 바로 복사하지 않고 로프라는 연결 노드를 만들어 두었다가, 내용이 필요할 때 한 번에 펼치기 때문이다. 백만 번 이어 붙여도 배열 `join`과 비슷한 시간이 걸렸다. 다만 명세가 보장하는 최적화는 아니고, 중간에 내용을 자주 읽으면 펼치는 비용이 반복된다.
+
+### 프런트엔드 글자 수 제한과 DB 컬럼 길이는 어떻게 맞추나요?
+
+먼저 각 층이 무엇을 세는지 확인한다. 자바스크립트는 코드 유닛, PostgreSQL과 MySQL의 `VARCHAR(n)`은 코드 포인트, 저장 용량은 UTF-8 바이트다. 사용자 제한은 자소로 정하고 서버도 같은 규칙으로 검증하며, DB 컬럼은 한 글자가 여러 코드 포인트일 수 있음을 고려해 넉넉하게 잡는다. MySQL은 열이 `utf8mb4`여야 이모지를 저장할 수 있다.

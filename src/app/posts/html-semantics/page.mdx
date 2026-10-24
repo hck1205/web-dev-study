@@ -1,0 +1,425 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("html-semantics");
+
+<EasyIntro>
+  눈으로 보면 똑같이 생긴 웹 페이지라도, 그 안의 태그가 무엇이냐에 따라 화면을 읽어 주는 프로그램이 듣는 내용은 전혀 다르다. 화면을 보지 않고 귀로 웹을 쓰는 사람은 이 프로그램이 들려주는 말만으로 페이지를 이해한다.
+
+  태그는 건물의 안내 표지판과 비슷하다. 겉모습은 페인트로 꾸미지만, 어디가 입구이고 어디가 계단인지는 표지판이 알려 준다. 모든 문에 그냥 문이라고만 써 붙이면 눈을 감고 걷는 사람은 출구를 찾을 수 없다.
+
+  버튼처럼 보이는 상자를 진짜 버튼 태그로 만들면 키보드로도 누를 수 있고, 읽어 주는 프로그램도 버튼이라고 말해 준다. 제목은 제목 태그로, 메뉴는 메뉴 태그로 쓰면 검색 엔진과 읽기 모드도 페이지를 더 잘 이해한다. 그리고 브라우저는 틀리게 쓴 태그도 몰래 고쳐서 읽기 때문에, 내가 쓴 코드와 실제 페이지 구조가 달라지는 일도 생긴다.
+</EasyIntro>
+
+## div로만 만든 상품 페이지
+
+쇼핑몰 상품 페이지를 하나 만들었다. 디자이너 시안대로 머리글에 로고와 메뉴, 가운데에 상품 이름과 가격, 사진, 구매 버튼, 아래에 저작권 표시가 있다. 화면은 시안과 픽셀 단위로 같다. 그런데 마크업은 이렇다.
+
+```html
+<div class="header">
+  <div class="logo">마켓</div>
+  <div class="menu">
+    <div class="item" onclick="location.href='/sale'">세일</div>
+    <div class="item" onclick="location.href='/new'">신상품</div>
+  </div>
+</div>
+<div class="content">
+  <div class="title">겨울 코트</div>
+  <div class="price">89,000원</div>
+  <img src="coat-01.jpg">
+  <div class="btn" onclick="buy()">구매하기</div>
+</div>
+<div class="footer">© 마켓</div>
+```
+
+마우스로 쓰면 아무 문제가 없다. 이 페이지를 Chromium 141에서 열고 Playwright로 접근성 트리를 찍어 봤다. 스크린리더(화면 낭독기)가 받아 가는 정보와 거의 같은 모양이다.
+
+```text
+- text: 마켓 세일 신상품 겨울 코트 89,000원
+- img
+- text: 구매하기 © 마켓
+```
+
+페이지 전체가 글자 덩어리 두 개와 이름 없는 그림 하나다. 메뉴가 어디서 시작하는지, 무엇이 제목인지, 무엇을 누를 수 있는지 아무것도 남지 않았다. Tab 키를 여섯 번 눌러 봐도 포커스는 `body`에서 움직이지 않는다. `div`는 포커스를 받지 않으니 키보드만 쓰는 사람은 세일 메뉴로도, 구매 버튼으로도 갈 수 없다.
+
+같은 화면을 태그만 바꿔서 다시 만들었다. CSS는 그대로 두면 되니 겉모습은 바뀌지 않는다.
+
+```html
+<header>
+  <a href="/">마켓</a>
+  <nav aria-label="주 메뉴">
+    <ul>
+      <li><a href="/sale">세일</a></li>
+      <li><a href="/new">신상품</a></li>
+    </ul>
+  </nav>
+</header>
+<main>
+  <h1>겨울 코트</h1>
+  <p>89,000원</p>
+  <img src="coat-01.jpg" alt="회색 울 코트 앞모습">
+  <button type="button">구매하기</button>
+</main>
+<footer>© 마켓</footer>
+```
+
+```text
+- banner:
+  - link "마켓":
+    - /url: /
+  - navigation "주 메뉴":
+    - list:
+      - listitem:
+        - link "세일":
+          - /url: /sale
+      - listitem:
+        - link "신상품":
+          - /url: /new
+- main:
+  - heading "겨울 코트" [level=1]
+  - paragraph: 89,000원
+  - img "회색 울 코트 앞모습"
+  - button "구매하기"
+- contentinfo: © 마켓
+```
+
+이번에는 Tab을 누를 때마다 `마켓 → 세일 → 신상품 → 구매하기` 순서로 포커스가 옮겨 갔다. 스크린리더는 "주 메뉴, 탐색, 목록 항목 2개"라고 읽어 주고, 제목만 골라 듣거나 본문(`main`)으로 바로 건너뛸 수 있다.
+
+시맨틱(semantic) HTML은 "이 요소가 무엇인지"를 태그로 말하는 것이다. 보이는 모양은 CSS가 맡고, 의미는 태그가 맡는다. 의미를 받아 가는 쪽은 스크린리더만이 아니다. 키보드 사용자, 검색 엔진 크롤러, 브라우저의 읽기 모드, 번역기, 자동 완성, 그리고 `getByRole`로 요소를 찾는 테스트 코드까지 모두 이 의미를 읽는다. 이 글은 그 의미가 어떻게 만들어지고, 어떤 태그를 언제 쓰며, 브라우저가 틀린 HTML을 어떻게 고쳐 읽는지를 따라간다. 접근성 기준 자체는 [웹 접근성 기초](/posts/web-accessibility)에서, ARIA와 키보드·포커스 관리는 [ARIA와 키보드·포커스](/posts/aria-keyboard-focus)에서 이어서 다룬다.
+
+## 브라우저가 DOM 옆에 트리를 하나 더 만든다
+
+브라우저는 HTML을 읽어 DOM 트리를 만든다(DOM 자체는 [DOM 기초](/posts/dom-basics)에 있다). 그런데 스크린리더는 DOM을 직접 읽지 않는다. 브라우저가 DOM과 CSS를 보고 따로 만든 접근성 트리(accessibility tree)를 운영체제의 접근성 API를 거쳐 받아 간다. 윈도우는 UI Automation과 IAccessible2, macOS는 NSAccessibility, 리눅스는 AT-SPI가 그 통로다.
+
+아래 그림에서 점이 흐르는 방향이 정보가 전달되는 방향이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="DOM에서 스크린리더까지 의미가 전달되는 길"
+  nodes={[
+    { id: "html", label: "HTML", sub: "태그와 속성", x: 80, y: 40, w: 120 },
+    { id: "css", label: "CSS", sub: "display, visibility", x: 320, y: 40, w: 130 },
+    { id: "dom", label: "DOM 트리", sub: "모든 노드", x: 80, y: 135, w: 120 },
+    { id: "ax", label: "접근성 트리", sub: "역할·이름·상태", x: 240, y: 135, w: 140 },
+    { id: "os", label: "OS 접근성 API", sub: "UIA, AX, AT-SPI", x: 240, y: 230, w: 150 },
+    { id: "sr", label: "스크린리더", sub: "읽고 이동", x: 80, y: 230, w: 120 },
+  ]}
+  edges={[
+    { from: "html", to: "dom", label: "파싱" },
+    { from: "dom", to: "ax" },
+    { from: "css", to: "ax", label: "숨김 반영" },
+    { from: "ax", to: "os" },
+    { from: "os", to: "sr" },
+  ]}
+/>
+
+접근성 트리의 노드 하나는 네 가지를 갖는다.
+
+- 역할(role): 버튼, 링크, 제목, 목록, 입력칸 같은 "무엇인지"
+- 이름(name): "구매하기", "회색 울 코트 앞모습"처럼 그 요소를 부르는 말
+- 상태(state): 눌림, 펼침, 선택됨, 비활성, 값이 틀림
+- 값과 관계: 입력칸의 값, 제목 수준, 목록의 항목 수, 설명으로 연결된 요소
+
+`button` 태그를 쓰면 역할은 button, 이름은 안의 글자, 상태는 `disabled` 속성에서 나온다. 브라우저가 HTML 명세의 규칙(HTML-AAM)대로 자동으로 채운다. `div`의 역할은 generic이고 이름도 없다. 그래서 접근성 트리에서는 대부분 걸러지고 안의 글자만 남는다. 처음 본 트리에서 메뉴와 버튼이 글자 덩어리로 뭉친 이유가 이것이다.
+
+CSS도 이 트리에 영향을 준다. `display: none`, `visibility: hidden`, `hidden` 속성은 요소를 트리에서 빼고, `aria-hidden="true"`는 보이는 요소를 트리에서만 뺀다. 반대로 `opacity: 0`이나 화면 밖으로 밀어낸 요소는 트리에 그대로 남아서 스크린리더가 읽는다. 눈에는 없는데 귀에는 들리는 메뉴가 이렇게 생긴다. CSS `content`로 넣은 글자도 읽힌다. 아이콘 폰트를 `::before`에 넣으면 스크린리더가 이상한 글자를 소리 내어 읽는 경우가 있다.
+
+예외도 있다. 사파리의 VoiceOver는 `list-style: none`으로 글머리표를 없앤 목록을 목록으로 알리지 않는다. WebKit이 일부러 그렇게 만들었다. 목록이라는 사실이 중요하면 `ul`에 `role="list"`를 덧붙인다. CSS가 의미를 바꾸는 드문 경우다.
+
+트리는 개발자 도구에서 직접 본다. 크롬은 Elements 패널 오른쪽의 Accessibility 탭에서 고른 요소의 역할·이름·상태와 이름이 어디서 왔는지(Computed Properties)를 보여 준다. 같은 탭의 "Enable full-page accessibility tree"를 켜면 Elements 패널을 DOM 대신 접근성 트리로 바꿔 볼 수 있다. 파이어폭스에는 Accessibility 패널이 따로 있다.
+
+## 랜드마크는 페이지의 목차다
+
+스크린리더 사용자는 페이지를 처음부터 끝까지 듣지 않는다. 눈으로 보는 사람이 화면을 훑듯이, 랜드마크와 제목으로 뛰어다닌다. NVDA에서 `D`를 누르면 다음 랜드마크로, VoiceOver에서는 로터(`VO + U`)를 열어 랜드마크 목록을 고른다. 랜드마크가 없는 페이지는 목차 없는 책이다.
+
+HTML 요소와 랜드마크 역할은 이렇게 짝지어진다.
+
+| 요소 | 역할 | 조건 |
+|---|---|---|
+| `header` | banner | `article`, `aside`, `main`, `nav`, `section` 안에 있지 않을 때만 |
+| `nav` | navigation | 항상 |
+| `main` | main | 항상. 페이지에 보이는 것은 하나만 |
+| `aside` | complementary | 본문과 따로 떼어도 되는 내용 |
+| `footer` | contentinfo | `header`와 같은 조건 |
+| `section` | region | 이름(`aria-label`이나 `aria-labelledby`)이 있을 때만 |
+| `form` | form | 이름이 있을 때만 |
+| `search` | search | 검색 영역. 크롬 118, 파이어폭스 118, 사파리 17부터 |
+
+조건이 붙은 줄을 눈여겨본다. 글 카드마다 `article` 안에 `header`와 `footer`를 넣는 건 맞는 사용법인데, 이때의 `header`는 banner가 아니다. banner는 사이트 전체의 머리글이라 페이지에 하나만 있어야 의미가 통한다. `section`도 이름이 없으면 그냥 묶음일 뿐 랜드마크가 되지 않는다. 의미 없이 감싸는 용도라면 `div`가 맞다. 시맨틱 HTML을 한다고 `div`를 모두 `section`으로 바꾸는 건 오히려 소음이다.
+
+`nav`가 여럿이면 이름을 붙여 구분한다. 랜드마크 목록에 "탐색, 탐색, 탐색"이 늘어서면 고를 수가 없다.
+
+```html
+<nav aria-label="주 메뉴">…</nav>
+<nav aria-label="이동 경로">…</nav>
+<nav aria-label="페이지 번호">…</nav>
+```
+
+`main`은 "본문 바로 가기"의 도착지이기도 하다. 머리글 메뉴가 긴 사이트는 페이지 맨 앞에 건너뛰기 링크를 둔다. 평소에는 화면 밖에 두었다가 Tab으로 포커스를 받으면 보이게 한다.
+
+```html
+<a class="skip-link" href="#content">본문 바로 가기</a>
+…
+<main id="content" tabindex="-1">…</main>
+```
+
+`tabindex="-1"`은 링크를 따라 이동했을 때 `main`에 포커스가 확실히 옮겨 가게 하려고 붙인다. 이 값의 의미는 [ARIA와 키보드·포커스](/posts/aria-keyboard-focus)에서 자세히 본다.
+
+## 제목 번호는 글자 크기가 아니다
+
+`h1`부터 `h6`까지의 숫자는 문서의 층이다. `h2`는 `h1`의 하위 절, `h3`는 `h2`의 하위 절이다. 스크린리더는 "제목 수준 2, 배송 안내"처럼 숫자까지 읽어 주고, 사용자는 `H`(다음 제목)나 `2`(다음 수준 2 제목) 키로 그 층을 따라 내려간다. WebAIM이 스크린리더 사용자에게 해마다 묻는 설문에서도 긴 페이지를 "제목으로 훑는다"는 답이 가장 많다.
+
+흔한 실수는 글자 크기에 맞춰 번호를 고르는 것이다. 사이드바 소제목이 작게 보여야 하니 `h5`를 쓰고, 카드 제목이 크게 보여야 하니 `h2`를 쓴다. 그러면 `h2` 다음에 `h5`가 와서 층이 세 단계나 건너뛰고, 듣는 사람은 중간에 제목을 놓쳤다고 생각한다. 크기는 CSS로 정하고, 번호는 문서 구조로 정한다.
+
+`section`으로 감싸면 그 안의 `h1`이 알아서 한 단계 내려간다는 이야기를 들은 적이 있을 수 있다. 예전 HTML 명세에 그런 "문서 개요(outline) 알고리즘"이 있었지만 어느 브라우저도 접근성 트리에 구현하지 않았고, 2022년에 명세에서 빠졌다. `section` 안의 `h1`은 지금도 그냥 수준 1 제목으로 읽힌다. 번호는 직접 맞춰야 한다.
+
+페이지에 `h1`은 보통 하나를 둔다. 명세가 금지하지는 않지만, 그 페이지가 무엇인지 한 줄로 말하는 자리라서 하나일 때 가장 쓸모 있다. 이 블로그도 글 제목만 `h1`이고 본문은 `h2`부터 시작한다.
+
+제목 수준이 건너뛰는 곳을 찾는 함수를 직접 써 보자. 제목 번호를 순서대로 담은 배열을 받아, 바로 앞 제목보다 두 단계 이상 깊어지는 위치를 돌려준다. 얕아지는 건 괜찮다(`h3` 다음 `h2`는 새 절이 시작된 것이다).
+
+<CodePlayground
+  caption="제목 수준이 건너뛰는 위치 찾기"
+  functionName="findHeadingSkips"
+  initialCode={`// levels: 페이지에 나오는 순서대로 제목 번호. 예) [1, 2, 3, 2]
+// 앞 제목보다 2단계 이상 깊어지는 위치(인덱스)를 배열로 돌려준다.
+function findHeadingSkips(levels) {
+  return [];
+}`}
+  solution={`function findHeadingSkips(levels) {
+  const skips = [];
+  for (let i = 1; i < levels.length; i++) {
+    // h2 다음 h3는 괜찮고, h2 다음 h4부터 건너뛴 것이다
+    if (levels[i] > levels[i - 1] + 1) skips.push(i);
+  }
+  return skips;
+}`}
+  tests={[
+    { args: [[1, 2, 3, 2, 3]], expected: [], label: "h1 h2 h3 h2 h3" },
+    { args: [[1, 3, 4]], expected: [1], label: "h1 다음 바로 h3" },
+    { args: [[2, 4, 2, 5]], expected: [1, 3], label: "두 군데 건너뜀" },
+    { args: [[1, 2, 2, 4, 1, 3]], expected: [3, 5], label: "얕아진 뒤 다시 건너뜀" },
+    { args: [[1, 2, 3, 1, 2]], expected: [], label: "얕아지는 건 괜찮다" },
+    { args: [[]], expected: [], label: "제목 없음" },
+  ]}
+/>
+
+실제 페이지에서는 콘솔에 한 줄이면 순서를 뽑을 수 있다. `[...document.querySelectorAll("h1,h2,h3,h4,h5,h6")].map((h) => Number(h.tagName[1]))`의 결과를 위 함수에 넣으면 된다. 다만 `role="heading"`과 `aria-level`로 만든 제목이나 숨긴 제목은 이 선택자가 다르게 다루니, 최종 확인은 접근성 트리에서 한다.
+
+## 눌리는 것은 button과 a 중 하나다
+
+처음 예제의 `div onclick`이 가장 흔하고 가장 아픈 실수다. 눌리는 요소는 둘 중 하나로 고른다. 다른 페이지(또는 같은 페이지의 다른 위치)로 가면 `a href`, 이 페이지에서 무언가를 일으키면 `button`이다.
+
+두 요소가 공짜로 주는 것을 나열하면 차이가 분명해진다.
+
+- `button`: 포커스를 받는다. `Enter`로 누르면 keydown 때, `Space`로 누르면 keyup 때 `click` 이벤트가 난다. 역할이 button이라 스크린리더가 "버튼"이라고 읽는다. `disabled`를 주면 포커스와 클릭이 모두 막힌다.
+- `a href`: 포커스를 받는다. `Enter`로 이동한다(`Space`는 페이지를 스크롤한다). 가운데 클릭이나 `Ctrl/⌘ + 클릭`으로 새 탭에서 열 수 있고, 주소를 복사하거나 미리보기를 띄울 수 있다. 크롤러가 따라간다.
+- `div onclick`: 위의 어느 것도 없다.
+
+`div`를 버튼처럼 만들려면 `role="button"`, `tabindex="0"`, `Enter`와 `Space`를 처리하는 keydown 핸들러, 비활성 상태 표현까지 손으로 다 붙여야 한다. 그래도 `Space`를 눌렀을 때 페이지가 스크롤되는 걸 막는 처리를 빼먹기 쉽다. `button` 한 단어로 끝날 일이다.
+
+반대 방향의 실수도 있다. 페이지를 이동하는 요소를 `button`과 `router.push`로 만들면 새 탭으로 열 수 없고, 크롤러는 그 경로를 모른다. 구글은 `href` 속성이 있는 `a` 태그만 링크로 따라간다고 문서에 밝혀 두었다. Next.js의 `Link`도 결국 `a href`를 그린다. `a`에 `href`가 없으면 링크가 아니다. 포커스도 받지 않고 역할도 generic이 된다. `href="#"`에 `onClick`을 거는 것도 버튼을 링크 모양으로 위장한 것이라, 스크린리더는 "링크"라고 읽는데 눌러 보면 페이지가 바뀌지 않아 사용자가 헷갈린다.
+
+`button`에도 함정이 하나 있다. `form` 안의 `button`은 `type`을 쓰지 않으면 기본값이 `submit`이다. 폼 안에 "비밀번호 보기" 버튼을 넣었는데 누를 때마다 폼이 제출된다면 이것 때문이다. 제출이 아닌 버튼에는 `type="button"`을 쓴다. 폼이 요청으로 바뀌는 과정은 [HTML form은 어떻게 HTTP 요청이 되나](/posts/html-form-http)에 있다.
+
+아이콘만 있는 버튼은 이름이 비어 있다. 처음 예제의 그림처럼 스크린리더는 "버튼"이라고만 읽는다. 눈에 보이는 글자가 없으면 이름을 따로 준다.
+
+```html
+<!-- 이름이 없어 "버튼"으로만 읽힌다 -->
+<button type="button"><svg>…</svg></button>
+
+<!-- 아이콘은 숨기고 이름을 준다 -->
+<button type="button" aria-label="장바구니에 담기">
+  <svg aria-hidden="true" focusable="false">…</svg>
+</button>
+```
+
+## 입력칸에는 이름이 붙어야 한다
+
+입력칸의 이름은 `label`에서 온다. `for`와 `id`로 잇거나, `label` 안에 입력칸을 넣는다.
+
+```html
+<label for="email">이메일</label>
+<input id="email" type="email" autocomplete="email" required>
+
+<!-- 감싸는 방식도 같다 -->
+<label>
+  <input type="checkbox" name="agree"> 약관에 동의한다
+</label>
+```
+
+`label`은 이름만 주는 게 아니다. 글자를 누르면 입력칸에 포커스가 가고, 체크박스라면 체크가 바뀐다. 손가락으로 작은 체크박스를 맞히지 않아도 되니 모바일에서 누르는 면적이 넓어진다.
+
+`placeholder`만 쓰고 `label`을 빼는 디자인이 많다. 크롬은 이름이 없으면 `placeholder`를 이름 대신 쓰기도 하지만, 입력을 시작하면 글자가 사라져서 무엇을 쓰던 칸인지 잊게 되고, 옅은 회색이라 대비도 대개 부족하다. 자동 검사 도구인 axe도 `placeholder`가 있으면 label 규칙을 통과시킨다. 검사를 통과했다고 괜찮은 건 아니라는 뜻이다. 보이는 `label`을 두는 게 기본이다.
+
+라디오 버튼처럼 묶음이 있는 입력은 `fieldset`과 `legend`로 감싼다. 스크린리더는 묶음에 들어갈 때 `legend`를 읽어 준다. 그래야 "빠른 배송, 라디오 버튼"이 무엇을 고르는 질문인지 알 수 있다.
+
+```html
+<fieldset>
+  <legend>배송 방법</legend>
+  <label><input type="radio" name="ship" value="fast"> 빠른 배송</label>
+  <label><input type="radio" name="ship" value="normal"> 일반 배송</label>
+</fieldset>
+```
+
+`type`과 `autocomplete`도 의미다. `type="email"`이나 `type="tel"`을 주면 모바일 키보드가 바뀌고, `autocomplete="email"`, `autocomplete="postal-code"`, `autocomplete="one-time-code"`는 브라우저와 비밀번호 관리자가 알맞은 값을 채우게 한다. WCAG의 1.3.5(입력 목적 식별) 기준이 바로 이것이다. 오류를 알리는 방법은 [웹 접근성 기초](/posts/web-accessibility)에서 이어서 본다.
+
+## 목록과 표는 개수와 위치를 알려 준다
+
+메뉴 세 개를 `ul`과 `li`로 쓰면 스크린리더는 들어가자마자 "목록, 항목 3개"라고 말한다. 듣는 사람은 이 묶음이 얼마나 긴지 먼저 알고, 건너뛸지 들을지 정한다. `div` 세 개로 쓰면 이 정보가 없다. 순서가 의미 있으면 `ol`, 용어와 설명의 짝이면 `dl`, `dt`, `dd`를 쓴다.
+
+표는 더 많은 것을 준다. 칸을 옮길 때마다 스크린리더가 "3행, 가격 열, 89,000원"처럼 행과 열 머리글을 함께 읽는다. 그러려면 머리글 칸이 `th`여야 한다.
+
+```html
+<table>
+  <caption>사이즈별 재고</caption>
+  <thead>
+    <tr><th scope="col">사이즈</th><th scope="col">재고</th><th scope="col">가격</th></tr>
+  </thead>
+  <tbody>
+    <tr><th scope="row">95</th><td>3</td><td>89,000원</td></tr>
+    <tr><th scope="row">100</th><td>0</td><td>89,000원</td></tr>
+  </tbody>
+</table>
+```
+
+`caption`은 표의 이름이 된다. CSS 그리드로 만든 "표처럼 보이는 `div`"는 이 모든 걸 잃는다. 반대로 표를 배치 도구로 쓰는 것도 안 된다. 칸을 나란히 놓으려고 `table`을 쓰면 스크린리더가 레이아웃을 데이터 표로 읽는다. 배치는 CSS 그리드나 플렉스로 한다.
+
+## 파서는 틀린 HTML도 고쳐서 읽는다
+
+HTML은 틀려도 화면이 나오는 언어다. 브라우저는 문법 오류를 만나도 멈추지 않고 HTML 명세에 적힌 복구 규칙대로 고쳐서 DOM을 만든다. 덕분에 오래된 웹 페이지가 지금도 열리지만, 내가 쓴 태그와 실제 DOM이 달라지는 원인이 된다.
+
+가장 유명한 예가 `p` 안의 `div`다. 아래 HTML을 Chromium 141에 넣고 `body.innerHTML`을 다시 읽었다.
+
+```html
+<p>안녕<div>상자</div></p>
+```
+
+```text
+<p>안녕</p><div>상자</div><p></p>
+```
+
+`div`가 `p` 밖으로 나왔고, 마지막에 빈 `p`가 하나 생겼다. 파서가 "열린 요소 스택"을 어떻게 다루는지 아래에서 한 토큰씩 넘겨 보면 이유가 보인다.
+
+<AlgoTrace
+  caption="p 안의 div를 만난 파서"
+  memoryLabel="열린 요소 스택"
+  cells={["<p>", "안녕", "<div>", "상자", "</div>", "</p>"]}
+  steps={[
+    { pointer: 0, memory: ["html", "body", "p"], caption: "p 시작 태그. 스택에 p를 올린다." },
+    { pointer: 1, memory: ["html", "body", "p"], caption: "글자 '안녕'은 맨 위 요소인 p 안에 들어간다." },
+    { pointer: 2, memory: ["html", "body"], caption: "div는 p 안에 둘 수 없다. 파서가 열린 p를 먼저 닫는다." },
+    { pointer: 2, memory: ["html", "body", "div"], caption: "그다음 div를 연다. div는 p의 형제가 된다." },
+    { pointer: 3, memory: ["html", "body", "div"], caption: "'상자'는 div 안에 들어간다." },
+    { pointer: 4, memory: ["html", "body"], caption: "div 끝 태그로 div를 닫는다." },
+    { pointer: 5, found: [5], memory: ["html", "body", "p"], caption: "p 끝 태그인데 열린 p가 없다. 빈 p를 하나 만든다." },
+    { pointer: 5, found: [5], memory: ["html", "body"], caption: "만든 p를 바로 닫는다. 결과는 p, div, 빈 p." },
+  ]}
+/>
+
+`p`는 문단이라 "흐름 내용" 중에서도 글줄 수준의 요소만 담을 수 있다. `div`, `ul`, `table`, `h2` 같은 블록 요소의 시작 태그가 오면 파서는 열려 있는 `p`를 자동으로 닫는다. 끝 태그만 남은 `</p>`는 짝이 없으니, 명세대로 빈 `p`를 만들어 닫는다.
+
+이게 실무에서 문제가 되는 곳이 SSR이다. React 컴포넌트가 `p` 안에 `div`를 그리면, 서버가 보낸 HTML은 브라우저 파서가 위처럼 바꿔 놓고, React가 기대한 트리와 실제 DOM이 달라져 하이드레이션 오류가 난다. 원인이 내 컴포넌트가 아니라 파서라서 처음엔 찾기 어렵다. 이 과정은 [하이드레이션](/posts/hydration)에 있다. `createElement`로 DOM을 직접 만들면 파서를 거치지 않으니 `p` 안의 `div`가 그대로 생긴다. 같은 컴포넌트가 CSR에서는 멀쩡하고 SSR에서만 깨지는 이유다.
+
+같은 방식으로 실험한 몇 가지 결과를 더 붙인다.
+
+```html
+<table><div>밖</div><tr><td>칸</td></tr></table>
+<ul><li>하나<li>둘</ul>
+<a href="/a">겉<a href="/b">속</a></a>
+```
+
+```text
+<div>밖</div><table><tbody><tr><td>칸</td></tr></tbody></table>
+<ul><li>하나</li><li>둘</li></ul>
+<a href="/a">겉</a><a href="/b">속</a>
+```
+
+- 표 안에 둘 수 없는 `div`는 표 앞으로 밀려난다(foster parenting). 그리고 쓰지 않은 `tbody`가 생긴다. `table > tr` 선택자가 안 맞는 이유다.
+- `li`, `p`, `td`, `tr`, `option` 같은 요소는 끝 태그를 생략해도 된다. 다음 `li`가 오면 앞의 것이 닫힌다. 명세가 허락한 문법이지 오류가 아니다. `html`, `head`, `body`도 생략하면 파서가 만든다.
+- 링크 안에 링크를 넣으면 바깥 링크가 먼저 닫혀 둘이 형제가 된다. 카드 전체를 `a`로 감싸고 안에 태그 링크를 또 넣으면 이렇게 된다. 카드 링크는 제목의 `a`를 가상 요소로 카드 전체에 늘리는 방식으로 만든다.
+- `button` 안의 `button`, `form` 안의 `form`도 같은 식으로 바깥쪽이 닫히거나 안쪽이 무시된다.
+
+틀린 중첩은 브라우저가 어떻게든 보여 주니 눈으로는 잘 안 보인다. W3C의 Nu HTML Checker(validator.w3.org/nu)에 HTML을 넣으면 이런 오류를 줄 번호와 함께 알려 준다. React에서는 개발 모드 콘솔에 "In HTML, `div` cannot be a descendant of `p`" 같은 경고가 먼저 뜬다.
+
+## 문서 맨 위 세 줄
+
+페이지 맨 위의 몇 줄은 짧지만 빠지면 페이지 전체가 바뀐다.
+
+```html
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>겨울 코트 | 마켓</title>
+```
+
+`<!doctype html>`이 없으면 브라우저는 쿼크 모드(quirks mode)로 들어간다. 1990년대 말 브라우저의 틀린 동작에 맞춰 만든 옛 페이지를 깨지 않으려고 남겨 둔 호환 모드다. 같은 HTML을 DOCTYPE만 빼고 Chromium 141에서 열어 비교했다. 스타일은 `body`에 `font-size: 20px`, `p`에 `#`을 빠뜨린 `color: ff0000`을 줬다.
+
+```text
+                  compatMode   p 색            td 글자 크기   body 높이
+DOCTYPE 없음      BackCompat   rgb(255, 0, 0)  16px           720
+<!DOCTYPE html>   CSS1Compat   rgb(0, 0, 0)    20px           80
+```
+
+쿼크 모드에서는 `#` 없는 색이 먹히고, 표 안의 글자가 `body`의 글자 크기를 물려받지 않으며, `body`가 내용과 상관없이 창 높이(720px)를 채운다. 표준 모드에서는 틀린 색이 무시되고, 표가 글자 크기를 물려받고, `body`는 내용 높이만큼만 된다. "다른 페이지에서는 되는데 이 페이지에서만 레이아웃이 이상하다"면 콘솔에서 `document.compatMode`부터 본다. `BackCompat`이면 쿼크 모드다. 템플릿 엔진이 DOCTYPE 앞에 공백이나 주석이 아닌 무언가를 출력해도 이렇게 된다.
+
+`<html lang="ko">`는 스크린리더가 어떤 언어의 음성으로 읽을지 정한다. 빠지면 한국어 글을 영어 음성이 읽는 일이 생긴다. 번역기와 하이픈 처리, 맞춤법 검사도 이 값을 쓴다. 글 중간에 다른 언어 문단이 있으면 그 요소에 `lang="en"`을 따로 준다.
+
+`<meta charset="utf-8">`는 문서의 앞 1024바이트 안에 있어야 한다. 브라우저가 그 범위에서 인코딩을 찾기 때문이다. 서버가 `Content-Type: text/html; charset=utf-8` 헤더를 주면 그게 먼저다. 둘 다 없으면 브라우저가 추측하고, 한글이 깨진다. `title` 같은 한글 태그보다 앞에 두는 습관을 들인다.
+
+`meta viewport`가 없으면 모바일 브라우저는 페이지를 980px 너비의 데스크톱 화면이라고 보고 축소해서 보여 준다. 390px 모바일 화면을 흉내 낸 Chromium에서 `window.innerWidth`를 재 보니, 이 줄이 없을 때 980, 있을 때 390이었다. 반응형 CSS의 미디어 쿼리가 하나도 안 먹는다면 이 줄부터 본다.
+
+viewport에 `maximum-scale=1`이나 `user-scalable=no`를 넣어 확대를 막는 경우가 있는데, 글자를 키워 봐야 하는 사람을 막는 설정이라 WCAG의 텍스트 크기 조절 기준(1.4.4)에 걸린다. iOS 사파리는 10 버전부터 `user-scalable=no`를 무시하고 확대를 허락한다. 입력칸을 누를 때 iOS가 화면을 확대하는 게 싫다면 확대를 막지 말고 입력칸 글자를 16px 이상으로 둔다.
+
+## 현장에서 마크업을 의심하는 순간
+
+시맨틱 HTML 문제는 버그 리포트에 "접근성"이라는 말 없이 찾아온다.
+
+- "Tab으로 버튼에 못 간다", "엔터를 쳐도 안 눌린다": `div`나 `span`에 클릭 핸들러를 건 것이다. 요소를 고르고 Accessibility 탭에서 Role이 generic인지 본다.
+- "새 탭으로 열리지 않는다", "링크 주소 복사가 메뉴에 없다": 이동을 `button`이나 `onClick`으로 만든 것이다.
+- "검색 결과에 하위 페이지가 안 잡힌다": 링크가 `a href`가 아닐 수 있다. 렌더링된 HTML에서 `a` 태그를 세어 본다. 검색에 관한 나머지는 [SPA와 SEO](/posts/seo-for-spa)에서 본다.
+- "SSR에서만 하이드레이션 오류": `p` 안의 블록 요소, `a` 안의 `a`, `table` 바로 아래의 `tr`처럼 파서가 고치는 중첩을 찾는다.
+- "Playwright 테스트에서 `getByRole('button', { name: '구매하기' })`가 요소를 못 찾는다": 테스트가 깨진 게 아니라 마크업이 버튼이 아닌 것이다. 역할로 찾는 테스트는 접근성 트리를 쓰기 때문에, 이런 테스트가 통과하면 스크린리더도 같은 요소를 찾는다.
+- "모바일에서 화면이 작게 축소돼 보인다": `meta viewport`가 빠졌다.
+- "이 페이지만 표 글자 크기가 다르다": DOCTYPE이 빠져 쿼크 모드다.
+
+코드 리뷰 단계에서는 `eslint-plugin-jsx-a11y`가 `div`의 클릭 핸들러(`click-events-have-key-events`, `no-static-element-interactions`), `href` 없는 `a`(`anchor-is-valid`), `alt` 없는 `img`를 잡는다. Next.js의 기본 ESLint 설정에도 이 플러그인이 들어 있다. 자동 검사가 잡는 것과 못 잡는 것의 경계는 [웹 접근성 기초](/posts/web-accessibility)에서 실제 결과로 본다.
+
+## 다시 상품 페이지로
+
+처음의 상품 페이지는 CSS 한 줄 바꾸지 않고 태그만 바꿔서 키보드로 쓸 수 있고, 스크린리더가 구조를 읽고, 크롤러가 링크를 따라가는 페이지가 됐다. 브라우저는 태그를 보고 역할과 이름을 채운 접근성 트리를 따로 만들고, 그 트리가 보조 기술과 테스트 도구와 검색 엔진에 전달된다. 태그를 고를 때 "어떻게 보이나"가 아니라 "이게 무엇인가"를 먼저 묻고, 파서가 내 HTML을 고쳐 읽지 않게 중첩 규칙을 지키면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 시맨틱 HTML을 써야 하는 이유는 무엇인가요?
+
+태그가 요소의 의미를 전달하고, 브라우저가 그 의미로 접근성 트리를 만들기 때문이다. `button`, `a`, `h1`, `nav`를 쓰면 역할·이름·포커스·키보드 동작이 공짜로 따라와서 스크린리더와 키보드 사용자가 페이지를 쓸 수 있다. 같은 의미를 크롤러, 읽기 모드, 번역기, `getByRole` 테스트도 읽는다. 겉모습은 CSS로 똑같이 만들 수 있으니 비용은 거의 없다.
+
+### div에 onClick을 걸면 무엇이 문제인가요?
+
+`div`는 포커스를 받지 않고 역할이 generic이라 키보드로 갈 수 없고, 스크린리더는 버튼인지 모른다. 고치려면 `role="button"`, `tabindex="0"`, `Enter`·`Space` 키 처리, 비활성 표현까지 다 붙여야 하는데, `button`은 이걸 기본으로 한다. 이동이면 `a href`, 동작이면 `button`으로 고른다.
+
+### button과 a는 어떻게 구분해서 쓰나요?
+
+주소가 바뀌는 이동이면 `a href`, 이 페이지에서 무언가를 일으키면 `button`이다. 링크는 새 탭 열기, 주소 복사, 크롤러의 링크 수집이 되고 `Enter`로만 눌린다. 버튼은 `Enter`와 `Space`로 눌리고 폼 안에서는 기본 `type`이 `submit`이라 `type="button"`을 챙겨야 한다. `href` 없는 `a`나 `href="#"`에 핸들러를 거는 건 둘 다 잘못된 선택이다.
+
+### 접근성 트리는 무엇이고 어떻게 만들어지나요?
+
+브라우저가 DOM과 CSS로 만든 별도의 트리로, 노드마다 역할·이름·상태·값을 갖는다. 태그와 속성에서 역할과 이름을 정하고, `display: none`이나 `aria-hidden` 같은 숨김을 반영해 노드를 뺀다. 이 트리가 운영체제 접근성 API를 거쳐 스크린리더로 간다. 크롬 개발자 도구의 Accessibility 탭에서 직접 볼 수 있다.
+
+### 랜드마크 요소를 쓸 때 주의할 점이 있나요?
+
+`header`와 `footer`는 `article`이나 `section` 안에 있으면 banner·contentinfo가 아니고, `section`과 `form`은 이름이 있어야 랜드마크가 된다. `main`은 페이지에 하나만 보이게 두고, `nav`가 여럿이면 `aria-label`로 구분한다. 의미 없는 묶음까지 `section`으로 바꾸면 오히려 소음이 되니 그런 곳은 `div`를 쓴다.
+
+### section으로 감싸면 h1의 수준이 자동으로 내려가나요?
+
+아니다. 예전 명세의 문서 개요 알고리즘이 그렇게 정의했지만 브라우저가 접근성 트리에 구현한 적이 없고, 2022년에 명세에서 빠졌다. `section` 안의 `h1`도 수준 1로 읽힌다. 제목 번호는 문서 구조에 맞게 직접 정하고, 글자 크기는 CSS로 맞춘다.
+
+### p 안에 div를 넣으면 어떻게 되나요?
+
+HTML 파서가 `div` 시작 태그를 만나면 열린 `p`를 먼저 닫고, 짝 없는 `</p>`에는 빈 `p`를 만든다. 그래서 DOM은 `p`, `div`, 빈 `p` 세 형제가 된다. SSR에서는 서버 HTML이 이렇게 바뀌어 React가 기대한 트리와 달라지고 하이드레이션 오류가 난다. DOM API로 직접 만들면 파서를 거치지 않아 그대로 들어가니, CSR에서는 멀쩡하고 SSR에서만 깨진다.
+
+### DOCTYPE을 빼면 무슨 일이 생기나요?
+
+브라우저가 쿼크 모드로 렌더링한다. `document.compatMode`가 `BackCompat`이 되고, 표가 글자 크기를 물려받지 않거나 `body`가 창 높이를 채우는 식으로 옛 브라우저의 동작을 흉내 낸다. `<!doctype html>` 한 줄이면 표준 모드가 되니, 레이아웃이 한 페이지에서만 이상하면 이 값부터 확인한다.

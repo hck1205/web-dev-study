@@ -1,0 +1,624 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("regex-and-globbing");
+
+<EasyIntro>
+  컴퓨터에게 "이런 모양의 글자를 찾아 줘"라고 부탁하는 말이 두 가지 있다. 하나는 파일 이름을 고를 때 쓰는 별표 같은 기호이고, 다른 하나는 글 속에서 글자 모양을 찾을 때 쓰는 정규 표현식이다.
+
+  둘은 생김새가 비슷해서 자주 헷갈린다. 별표가 파일 이름에서는 "아무 글자나 몇 개든"이라는 뜻인데, 정규 표현식에서는 "바로 앞 글자를 몇 번이든 반복"이라는 뜻이 된다.
+
+  더 헷갈리는 건 정규 표현식에도 사투리가 있다는 점이다. 같은 더하기 기호를 어떤 프로그램은 "한 번 이상 반복"으로 읽고, 어떤 프로그램은 그냥 더하기 글자로 읽는다.
+
+  그래서 찾는 말이 있는데도 아무것도 안 나오는 일이 생긴다. 내가 쓴 말을 누가, 어떤 사투리로 읽는지 알면 이런 일을 줄일 수 있다.
+
+  마지막으로, 어떤 정규 표현식은 컴퓨터가 끝없이 되돌아가며 시도하게 만들어서 서버를 멈추게 하기도 한다. 그래서 위험한 모양을 알아보고 피하는 것도 중요하다.
+</EasyIntro>
+
+응답이 느린 주문만 골라 보려고 로그에 `grep 'took=[0-9]+ms'`를 쳤다. 결과가 0건이다. 분명 `took=3012ms` 같은 줄이 있는데 왜 안 나올까. 옆에서 `grep -E`로 바꿔 보라고 해서 쳤더니 5건이 다 나온다. 플래그 하나로 결과가 0과 5로 갈린다.
+
+```bash
+# 실습용 애플리케이션 로그
+cat app.log
+```
+
+```text
+2026-10-20T14:00:01Z INFO  order=1001 user=kim status=200 took=12ms
+2026-10-20T14:00:02Z ERROR order=1002 user=lee status=502 took=3012ms
+2026-10-20T14:00:02Z WARN  order=1003 user=park status=429 took=5ms
+2026-10-20T14:00:03Z INFO  order=1004 user=kim status=200 took=8ms
+2026-10-20T14:00:04Z ERROR order=1005 user=choi status=500 took=1500ms
+```
+
+```bash
+grep -c 'took=[0-9]+ms' app.log      # 기본(BRE)
+grep -cE 'took=[0-9]+ms' app.log     # 확장(ERE)
+grep -c 'took=[0-9]\+ms' app.log     # BRE에서 +를 반복으로 쓰려면 역슬래시
+```
+
+```text
+0
+5
+5
+```
+
+기본 grep은 `+`를 "한 번 이상"이 아니라 더하기 글자 그대로 읽는다. 그래서 `took=` 뒤에 숫자 하나와 `+` 글자가 오는 줄을 찾았고, 그런 줄은 없었다. 나도 처음엔 정규 표현식은 하나의 문법이라고 생각했다. 실제로는 방언이 여럿이고, 그 앞에 셸이 패턴을 먼저 건드리는 단계도 있다.
+
+이 글은 그 두 겹을 차례로 벗긴다. 먼저 셸이 펼치는 glob, 그다음 BRE·ERE·PCRE의 차이와 도구별 방언, 탐욕적 매칭, 그리고 엔진 구조에서 오는 ReDoS까지 본다. 기준은 Ubuntu 24.04 LTS의 bash 5.2, GNU grep 3.11, GNU sed 4.9, 기본 awk인 mawk 1.3.4다. 로그를 grep·awk·sed로 세고 고치는 실전 흐름은 [grep, awk, sed로 로그 읽기](/posts/linux-grep-awk-sed)에서 다뤘으니, 여기서는 패턴 자체를 어떻게 읽는지에 집중한다.
+
+## 따옴표 밖의 별표는 셸이 먼저 펼친다
+
+명령을 치면 그 줄은 바로 grep에게 가지 않는다. bash가 먼저 읽고, 따옴표로 감싸지 않은 `*`, `?`, `[`를 보면 현재 디렉터리의 파일 이름과 맞춰 본 뒤 맞는 이름 목록으로 바꿔 넣는다. 이것이 glob(파일 이름 확장)이다. 프로그램은 펼쳐진 결과만 받는다. `ls *.log`에서 ls는 별표를 본 적이 없다.
+
+```bash
+# set -x를 켜면 bash가 실제로 실행하는 명령줄이 보인다
+bash -c 'set -x; ls *.log'
+```
+
+```text
++ ls app-1.log app-10.log app-2.log
+```
+
+아래 그림에서 다음을 누르면 같은 패턴이 따옴표가 있을 때와 없을 때 어디로 가는지 따라갈 수 있다.
+
+<SequenceDiagram
+  caption="명령줄의 패턴은 셸을 먼저 지난다"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "sh", label: "bash" },
+    { id: "fs", label: "디렉터리" },
+    { id: "cmd", label: "grep / find" },
+  ]}
+  steps={[
+    { from: "me", to: "sh", label: "grep x *.log", title: "명령줄을 넘긴다", detail: "따옴표 없는 *.log가 들어 있다. 아직 아무 프로그램도 실행되지 않았다." },
+    { from: "sh", to: "fs", label: "*.log 맞춰 보기", title: "셸이 파일 이름과 맞춘다", detail: "현재 디렉터리에서 점으로 시작하지 않고 .log로 끝나는 이름을 찾는다." },
+    { from: "fs", to: "sh", label: "3개 일치", title: "이름 목록으로 바꾼다", detail: "맞는 이름을 정렬해서 그 자리에 끼워 넣는다. 하나도 없으면 기본 설정에서는 *.log 글자를 그대로 둔다.", payload: "grep x app-1.log app-10.log app-2.log" },
+    { from: "sh", to: "cmd", label: "argv 4개", title: "프로그램은 펼친 결과만 받는다", detail: "grep에게 *.log는 처음부터 없었다. 파일 세 개를 받았을 뿐이다." },
+    { from: "me", to: "sh", label: "find . -name '*.log'", title: "따옴표로 감싸면", detail: "작은따옴표 안은 셸이 건드리지 않는다. 별표가 글자 그대로 남는다." },
+    { from: "sh", to: "cmd", label: "argv: -name *.log", title: "패턴을 프로그램이 해석한다", detail: "find가 하위 디렉터리까지 돌며 이름마다 직접 맞춘다. 같은 glob 문법이지만 펼치는 쪽이 다르다." },
+  ]}
+/>
+
+이 차이가 가장 자주 드러나는 곳이 `find -name`이다. 따옴표를 빼먹으면 셸이 먼저 현재 디렉터리의 이름으로 펼쳐 버려서 find가 엉뚱한 인자를 받는다.
+
+```bash
+# 현재 디렉터리에 app-1.log, app-10.log, app-2.log가 있을 때
+find . -name *.log
+```
+
+```text
+find: paths must precede expression: `app-10.log'
+find: possible unquoted pattern after predicate `-name'?
+```
+
+find가 받은 명령은 `find . -name app-1.log app-10.log app-2.log`였다. 더 위험한 건 현재 디렉터리에 맞는 파일이 딱 하나일 때다. 그때는 에러 없이 `-name app-1.log`로 돌아가서 그 이름 하나만 찾고 끝난다. 결과가 이상하게 적은데 에러가 없는 상황이다. 패턴을 프로그램에게 넘길 때는 항상 작은따옴표로 감싼다. `grep`의 정규 표현식도 마찬가지다. `grep [0-9]+ app.log`는 운이 나쁘면 `[0-9]+`가 파일 이름으로 바뀐다.
+
+## glob이 아는 기호는 몇 개 안 된다
+
+glob 문법은 작다. 이름 전체가 패턴에 맞아야 하고(부분 일치가 없다), 기호는 다음 정도다.
+
+```bash
+# 디렉터리: app-1.log app-2.log app-10.log app.log.gz .hidden.log notes.txt sub/deep.log
+echo *.log            # 아무 글자 0개 이상 + .log
+echo app-?.log        # 아무 글자 정확히 1개
+echo app-[0-9].log    # 대괄호 안의 글자 1개
+echo app-[!1].log     # 1이 아닌 글자 1개 (bash는 [^1]도 받는다)
+```
+
+```text
+app-1.log app-10.log app-2.log
+app-1.log app-2.log
+app-1.log app-2.log
+app-2.log
+```
+
+결과에서 볼 것이 세 가지다. 첫째, `*.log`에 `app.log.gz`는 없다. 이름 전체가 맞아야 해서 `.log`로 끝나야 한다. 둘째, `.hidden.log`도 없다. 점으로 시작하는 이름은 패턴이 점으로 시작할 때만 맞는다. 셋째, `sub/deep.log`도 없다. `*`는 `/`를 넘지 않는다. 한 디렉터리 안에서만 맞춘다.
+
+맞는 파일이 없을 때의 동작은 설정에 따라 셋으로 갈린다.
+
+```bash
+echo *.csv                                   # 기본: 패턴을 그대로 둔다
+shopt -s nullglob; echo "[" *.csv "]"        # nullglob: 빈 목록으로 바꾼다
+shopt -s failglob; echo *.csv                # failglob: 에러로 멈춘다
+```
+
+```text
+*.csv
+[ ]
+bash: line 1: no match: *.csv
+```
+
+기본 동작은 스크립트에서 함정이 된다. `for f in /data/*.csv; do process "$f"; done`은 CSV가 하나도 없으면 `/data/*.csv`라는 글자 하나로 한 번 돈다. 그래서 반복문 앞에 `shopt -s nullglob`을 켜거나, 안에서 `[ -e "$f" ] || continue`로 거른다. 스크립트에서 실패를 드러내는 다른 장치들은 [bash 스크립트 글](/posts/bash-scripting)에 모아 뒀다.
+
+중괄호는 glob처럼 생겼지만 성격이 다르다. 파일이 있든 없든 글자를 만들어 낸다.
+
+```bash
+echo {a,b}.csv         # 파일이 없어도 만들어진다
+echo app-{1..3}.log    # 범위도 된다. app-3.log는 실제로 없다
+```
+
+```text
+a.csv b.csv
+app-1.log app-2.log app-3.log
+```
+
+중괄호 확장(brace expansion)은 glob보다 먼저 일어나는 순수한 글자 조립이다. `cp config.yaml{,.bak}`처럼 쓰면 `cp config.yaml config.yaml.bak`이 된다. 파일 이름과 맞춰 보지 않기 때문에, 없는 이름도 만들어진다.
+
+하위 디렉터리까지 내려가려면 `**`가 필요한데 bash는 기본으로 꺼 두었다. 꺼진 상태에서 `**`는 `*`와 같다.
+
+```bash
+echo **/*.log                      # 꺼진 상태: */*.log와 같다
+shopt -s globstar; echo **/*.log   # 켠 상태: 현재 디렉터리와 모든 하위
+shopt -s dotglob; echo *.log       # 점으로 시작하는 이름도 맞춘다
+```
+
+```text
+sub/deep.log
+app-1.log app-10.log app-2.log sub/deep.log
+.hidden.log app-1.log app-10.log app-2.log
+```
+
+셸 말고도 glob을 직접 해석하는 프로그램이 많다. find의 `-name`, `.gitignore`, `rsync --exclude`, `grep -r --include='*.ts'`, 그리고 각종 설정 파일의 경로 패턴이 그렇다. 문법은 비슷하지만 세부가 조금씩 다르다. 예를 들어 find의 `-name '*.log'`는 `.hidden.log`도 찾는다.
+
+```bash
+find . -name '*.log' | sort
+```
+
+```text
+./.hidden.log
+./app-1.log
+./app-10.log
+./app-2.log
+./sub/deep.log
+```
+
+`.gitignore`는 `**/`와 끝의 `/` 같은 자기 규칙을 더한다. 자세한 규칙은 [.gitignore와 git config 글](/posts/git-ignore-config)에 있다.
+
+## 정규 표현식은 한 글자씩 맞춰 본다
+
+glob이 "이름 전체가 이 모양인가"를 묻는다면, 정규 표현식(regular expression)은 "이 줄 어딘가에 이 모양이 있는가"를 묻는다. `grep 'ERROR'`가 줄 중간의 ERROR도 찾는 이유다. 기호의 뜻도 다르다.
+
+- `.`은 아무 글자 하나다. glob의 `?`에 해당한다.
+- `*`는 바로 앞의 것을 0번 이상 반복한다. glob의 `*`는 정규식으로 `.*`다.
+- `^`와 `$`는 줄의 처음과 끝에 고정한다. 이것이 없으면 부분 일치다.
+- `[abc]`, `[0-9]`, `[^0-9]`는 글자 하나를 고르는 문자 클래스다. 정규식에서 부정은 `^`이고, glob은 `!`이다.
+
+POSIX는 locale에 따라 범위가 흔들리지 않는 이름 붙은 클래스도 정해 두었다. `[[:digit:]]`, `[[:alpha:]]`, `[[:space:]]`, `[[:upper:]]` 같은 것이다. 바깥 대괄호는 "글자 하나", 안쪽 `[:digit:]`는 그 안에 넣는 이름이라 괄호가 두 겹이다.
+
+```bash
+grep -E 'took=[[:digit:]]+ms' app.log | head -1
+```
+
+```text
+2026-10-20T14:00:01Z INFO  order=1001 user=kim status=200 took=12ms
+```
+
+단어 경계도 자주 쓴다. GNU 도구는 `\b`, `\<`, `\>`를 받는다(POSIX 표준에는 없다). 마침표는 아무 글자에 맞으니 IP 주소를 찾을 때는 꼭 이스케이프한다.
+
+```bash
+# ips.txt: 10.0.1.5 ok / 10a0b1c5 weird / 10.0.1.50 other
+grep '10.0.1.5' ips.txt; echo ---      # 점이 아무 글자라서 셋 다 걸린다
+grep -F '10.0.1.5' ips.txt; echo ---   # -F: 패턴을 정규식이 아닌 글자 그대로
+grep -wF '10.0.1.5' ips.txt            # -w: 단어 전체로만
+```
+
+```text
+10.0.1.5 ok
+10a0b1c5 weird
+10.0.1.50 other
+---
+10.0.1.5 ok
+10.0.1.50 other
+---
+10.0.1.5 ok
+```
+
+`-F`가 `10a0b1c5`를 빼고, `-w`가 `10.0.1.50`까지 뺐다. 찾는 말이 정해진 글자라면 `-F`가 가장 안전하고 빠르다.
+
+패턴 하나를 조각으로 읽어 보자. 아래는 로그에서 날짜와 레벨을 뽑는 ERE다. 조각을 누르면 그 부분이 무슨 일을 하는지 나온다.
+
+<UrlAnatomy
+  caption="^([0-9]{4})-([0-9]{2})-([0-9]{2})T\S+ +(ERROR|WARN)\b 를 조각으로 읽기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "anchor", display: "^", title: "줄의 처음", description: "이것이 없으면 줄 중간의 날짜 모양에도 맞는다. 로그 줄은 시각으로 시작하니 처음에 고정해 둔다.", required: true },
+    { key: "year", display: "([0-9]{4})", title: "그룹 1: 연도", description: "숫자 정확히 네 개. 괄호는 묶고 기억한다. ERE에서는 괄호와 중괄호가 그대로 특수 기호이고, BRE에서는 \\( \\) \\{ \\}로 써야 한다." },
+    { key: "d1", display: "-", title: "글자 그대로", description: "대괄호 밖의 하이픈은 특수 기호가 아니다." },
+    { key: "month", display: "([0-9]{2})", title: "그룹 2: 월", description: "숫자 두 개. 13월도 통과한다. 정규식은 모양을 볼 뿐 값이 말이 되는지는 모른다." },
+    { key: "d2", display: "-", title: "글자 그대로", description: "연도와 같은 구분자." },
+    { key: "day", display: "([0-9]{2})", title: "그룹 3: 일", description: "모양 검사만 하고, 날짜가 맞는지는 파싱한 뒤 코드에서 확인한다." },
+    { key: "time", display: "T\\S+", title: "T와 공백이 아닌 글자들", description: "\\S는 GNU grep이 ERE에서도 받아 주는 확장이다. 이식성을 원하면 [^[:space:]]+로 쓴다." },
+    { key: "sp", display: " +", title: "공백 1개 이상", description: "INFO 뒤에는 공백이 둘이라 *가 아니라 +로 받는다." },
+    { key: "level", display: "(ERROR|WARN)", title: "그룹 4: 둘 중 하나", description: "| 는 ERE의 선택이다. BRE에서는 GNU 확장인 \\|로 써야 하고, 그냥 |는 글자다." },
+    { key: "b", display: "\\b", title: "단어 경계", description: "WARNING이 들어와도 WARN에서 멈추지 않게 막는다. GNU 확장이다." },
+  ]}
+/>
+
+## BRE와 ERE는 같은 기호를 반대로 읽는다
+
+POSIX는 정규식을 두 벌로 정했다. 오래된 도구와의 호환을 위한 BRE(Basic Regular Expressions)와, 나중에 egrep에서 쓰던 문법을 정리한 ERE(Extended Regular Expressions)다. 둘의 차이는 주로 "역슬래시를 붙여야 특수 기호인가, 떼야 특수 기호인가"다.
+
+```bash
+printf 'a+b\naab\n' | grep 'a+b'      # BRE: +는 글자
+printf 'a+b\naab\n' | grep -E 'a+b'   # ERE: +는 반복
+```
+
+```text
+a+b
+aab
+```
+
+정리하면 이렇다. 이 정도는 표로 보는 편이 빠르다.
+
+<div className="mdx-table">
+
+| 뜻 | BRE (grep, sed) | ERE (grep -E, sed -E, awk) |
+|---|---|---|
+| 0번 이상 | `*` | `*` |
+| 1번 이상 | `\+` (GNU 확장) | `+` |
+| 0번 또는 1번 | `\?` (GNU 확장) | `?` |
+| 횟수 | `\{2,3\}` | `{2,3}` |
+| 묶기 | `\(...\)` | `(...)` |
+| 선택(또는) | 역슬래시 + 세로 막대 (GNU 확장) | 세로 막대 하나 |
+| 역참조 | `\1` | `\1` (GNU는 지원, POSIX ERE에는 없다) |
+
+</div>
+
+표준 BRE에는 `+`, `?`, `|`가 아예 없다. GNU가 역슬래시를 붙인 형태로 덧붙였을 뿐이다. 그래서 `grep 'a\+'`는 리눅스에서는 되지만 macOS의 BSD grep에서는 동작이 다를 수 있다. 여러 환경에서 돌아야 하는 스크립트라면 처음부터 `-E`를 쓰는 쪽이 덜 헷갈린다.
+
+반대 방향의 함정도 있다. ERE에 익숙해서 `grep 'ERROR|WARN'`을 치면 0건이다. BRE에서 `|`는 글자다.
+
+```bash
+grep -E 'ERROR|WARN' app.log | wc -l
+grep 'ERROR|WARN' app.log | wc -l
+grep 'ERROR\|WARN' app.log | wc -l
+```
+
+```text
+3
+0
+3
+```
+
+역참조(backreference)는 앞에서 괄호로 잡은 글자와 똑같은 글자가 다시 나오는지 본다. "the the"처럼 같은 단어가 연달아 나온 오타를 찾을 때 쓴다.
+
+```bash
+printf 'the the cat\nthe cat\n' | grep -E '\b(\w+) \1\b'
+```
+
+```text
+the the cat
+```
+
+역참조는 편하지만 대가가 크다. 뒤에서 보겠지만 역참조가 있으면 빠른 엔진을 쓸 수 없다.
+
+## Perl 계열은 \d와 전후방 탐색을 더한다
+
+JavaScript, Python, Java, Go를 쓰다 터미널로 오면 `\d`가 먼저 손에 붙는다. 그런데 POSIX에는 `\d`가 없다.
+
+```bash
+grep -cE 'took=\d+ms' app.log         # ERE에서 \d는 그냥 d 글자
+echo 'took=dms' | grep -E 'took=\d+ms'
+grep -cP 'took=\d+ms' app.log         # -P: PCRE로 해석
+```
+
+```text
+0
+took=dms
+5
+```
+
+`grep -E`에서 `\d`는 숫자가 아니라 글자 `d`로 맞춰졌다. 에러도 경고도 없다. 그래서 결과가 0건일 때 가장 먼저 의심할 곳이 방언이다.
+
+Perl 계열 문법은 Perl에서 시작해 PCRE(Perl Compatible Regular Expressions) 라이브러리로 퍼졌고, 대부분의 프로그래밍 언어 정규식이 이 모양을 따른다. 자주 쓰는 확장은 이렇다.
+
+- `\d`, `\w`, `\s`와 그 반대인 `\D`, `\W`, `\S`
+- 게으른 반복 `*?`, `+?`
+- 이름 붙은 그룹 `(?<name>...)`, 잡지 않는 그룹 `(?:...)`
+- 전방 탐색 `(?=...)`, `(?!...)`와 후방 탐색 `(?<=...)`, `(?<!...)`. 위치만 확인하고 글자는 결과에 넣지 않는다.
+
+전방 탐색은 "뒤에 이것이 오는 자리"만 고를 때 쓴다. 5xx 응답을 받은 사용자 이름만 뽑아 보자.
+
+```bash
+grep -oP 'user=\w+(?= status=5)' app.log
+grep -E 'user=\w+(?= status=5)' app.log; echo "rc=$?"
+```
+
+```text
+user=lee
+user=choi
+grep: warning: ? at start of expression
+rc=1
+```
+
+ERE로 같은 패턴을 주면 `(?`를 해석하지 못해 경고를 내고 아무것도 못 찾는다. PCRE의 `\K`는 그 앞까지 맞춘 부분을 결과에서 버린다. 숫자만 꺼낼 때 편하다.
+
+```bash
+echo 'took=3012ms' | grep -oP 'took=\K\d+(?=ms)'
+```
+
+```text
+3012
+```
+
+JavaScript도 같은 계열이다. 후방 탐색과 이름 붙은 그룹은 ES2018부터 표준이다.
+
+```js
+const m = "2026-10-20T14:00:02Z ERROR order=1002".match(
+  /^(?<date>\d{4}-\d{2}-\d{2})T\S+ (?<level>[A-Z]+)/,
+);
+console.log(m.groups.date, m.groups.level); // 2026-10-20 ERROR
+console.log("price: 3000원".replace(/(?<=: )\d+/, "4500")); // price: 4500원
+```
+
+`grep -P`는 grep을 PCRE 라이브러리와 함께 빌드했을 때만 있다. Ubuntu의 GNU grep은 있지만, macOS 기본 grep(BSD)에는 `-P`가 없다. 컨테이너의 BusyBox grep도 마찬가지다. 그런 곳에서는 `perl -ne` 한 줄이나 ripgrep(`rg`)을 대신 쓴다.
+
+## 도구마다 쓰는 방언이 다르다
+
+같은 터미널 안에서도 도구마다 기본 방언이 다르다. 기준을 외워 두면 0건이 나왔을 때 헤매지 않는다.
+
+<div className="mdx-table">
+
+| 도구 | 기본 | 바꾸는 옵션 | 알아 둘 점 |
+|---|---|---|---|
+| grep | BRE | `-E` ERE, `-P` PCRE, `-F` 글자 그대로 | GNU는 BRE에도 역슬래시를 붙인 `\+`, `\?`, 선택을 더했다 |
+| sed | BRE | `-E` ERE (GNU는 `-r`도 같다) | 치환의 `\1`, `&`는 둘 다 쓴다 |
+| awk | ERE | 없음 | 역참조가 없다. `\d`도 없다 |
+| find | glob (`-name`) | `-regex`는 기본 emacs 방언, `-regextype`으로 바꾼다 | `-regex`는 경로 전체에 맞춘다 |
+| bash `[[ =~ ]]` | ERE | 없음 | 패턴을 따옴표로 감싸면 글자 그대로가 된다 |
+| JS, Python, Java | Perl 계열 | 플래그 | 대부분 백트래킹 엔진이다 |
+| Go, Rust `regex` | RE2 계열 | 없음 | 역참조, 전후방 탐색이 없다 |
+
+</div>
+
+sed에서 숫자만 꺼내는 같은 일을 두 방언으로 써 보면 차이가 잘 보인다.
+
+```bash
+sed -n 's/.*took=\([0-9]\+\)ms/\1/p' app.log | tr '\n' ' '   # BRE
+sed -nE 's/.*took=([0-9]+)ms/\1/p' app.log | tr '\n' ' '     # ERE
+```
+
+```text
+12 3012 5 8 1500 
+12 3012 5 8 1500 
+```
+
+awk는 ERE를 쓰지만 역참조로 잡아 꺼내는 기능이 없다. 대신 `match()`가 맞은 위치(`RSTART`)와 길이(`RLENGTH`)를 주니 `substr`로 자른다. gawk에는 배열로 그룹을 받는 세 번째 인자가 있지만 Ubuntu 기본 awk인 mawk에는 없다.
+
+```bash
+# took= (5글자)와 ms (2글자)를 잘라 낸다
+awk 'match($0, /took=[0-9]+ms/) { print substr($0, RSTART+5, RLENGTH-7) }' app.log | tr '\n' ' '
+echo 'the the' | awk '/(the) \1/'; echo "rc=$?"   # 역참조 없음: 맞는 줄이 없다
+```
+
+```text
+12 3012 5 8 1500 
+rc=0
+```
+
+mawk는 오랫동안 `{2}` 같은 횟수 지정을 지원하지 않았다. Ubuntu 24.04의 mawk 1.3.4 20240123은 지원해서 `awk '$0 ~ /status=5[0-9]{2}/'`가 gawk와 같이 2줄을 낸다. 오래된 배포판의 mawk 1.3.3에서는 같은 줄이 0건이 될 수 있으니, 여러 서버에서 돌릴 스크립트라면 `gawk`를 명시하거나 `[0-9][0-9]`처럼 풀어 쓴다.
+
+## 탐욕적 매칭과 게으른 매칭
+
+`*`와 `+`는 기본이 탐욕적(greedy)이다. 일단 갈 수 있는 데까지 먹고, 뒤가 안 맞으면 한 글자씩 내놓는다. HTML 태그를 지우려고 `<.*>`를 쓰면 줄 전체가 사라지는 이유다.
+
+```bash
+echo '<b>bold</b> and <i>it</i>' | sed -E 's/<.*>//'        # 첫 < 부터 마지막 > 까지
+echo '<b>bold</b> and <i>it</i>' | sed -E 's/<[^>]*>//g'    # > 가 아닌 글자만
+```
+
+```text
+
+bold and it
+```
+
+첫 줄은 빈 줄이다. 첫 `<`부터 마지막 `>`까지 한 번에 맞았다. Perl 계열이라면 `?`를 붙여 게으르게(lazy) 만들 수 있다. 짧게 먹고 하나씩 늘린다. 아래 그림에서 `.*=`와 `.*?=`가 `a=1 b=2`를 맞추는 과정을 비교해 보자.
+
+<AlgoTrace
+  caption="탐욕적 .*= 와 게으른 .*?= 가 a=1 b=2 를 맞추는 과정"
+  memoryLabel="지금까지 맞은 글자"
+  cells={["a", "=", "1", " ", "b", "=", "2"]}
+  steps={[
+    { pointer: 6, memory: ["a=1 b=2"], caption: "탐욕적 .* 는 먼저 끝까지 다 먹는다. 그런데 뒤에 = 가 와야 하는데 남은 글자가 없다." },
+    { pointer: 6, memory: ["a=1 b="], caption: "한 글자를 내놓는다. 내놓은 2는 = 가 아니라서 아직 실패다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["a=1 b", "="], caption: "하나 더 내놓으니 = 가 나온다. 결과는 마지막 = 까지인 a=1 b= 다." },
+    { pointer: 0, memory: [""], caption: "게으른 .*? 는 0글자부터 시작한다. 첫 글자 a 가 = 가 아니라 실패한다." },
+    { pointer: 1, found: [0, 1], memory: ["a", "="], caption: "한 글자만 더 먹고 다시 본다. 바로 = 가 맞는다. 결과는 첫 = 까지인 a= 다." },
+  ]}
+/>
+
+```bash
+echo 'status=502 took=3012ms' | grep -oP 's.*='    # 탐욕적
+echo 'status=502 took=3012ms' | grep -oP 's.*?='   # 게으른
+echo 'status=502 took=3012ms' | grep -oE 's.*?='   # ERE에는 게으른 반복이 없다
+```
+
+```text
+status=502 took=
+status=
+status=502 took=
+```
+
+셋째 줄을 보자. ERE에서 `*?`는 "`*` 뒤에 `?`"로 읽혀 그냥 탐욕적으로 동작한다. 에러 없이 결과만 다르다.
+
+게으른 반복이 없는 방언에서는 부정 문자 클래스를 쓴다. `<[^>]*>`, `"[^"]*"`처럼 "끝 글자가 아닌 것만 반복"으로 쓰면 어느 방언에서나 같고, 되돌아갈 일도 적어서 빠르다. 나는 게으른 반복보다 이쪽을 먼저 떠올리는 편이다.
+
+## 되돌아가는 엔진과 한 번에 훑는 엔진
+
+정규식 엔진은 크게 두 방식으로 만든다.
+
+하나는 백트래킹(backtracking) 엔진이다. 패턴을 왼쪽부터 따라가다 갈림길이 나오면 하나를 고르고, 막히면 되돌아가 다른 길을 고른다. 위 그림에서 탐욕적 `.*`가 한 글자씩 내놓은 것이 바로 이 되돌아가기다. 역참조와 전후방 탐색을 쉽게 구현할 수 있어서 Perl, PCRE, JavaScript, Python, Java가 이 방식을 쓴다.
+
+다른 하나는 오토마타(automaton) 엔진이다. 패턴을 상태 기계로 바꾼 뒤 입력을 한 번만 왼쪽에서 오른쪽으로 훑는다. 갈림길에서 고르지 않고 가능한 상태를 모두 동시에 들고 간다. 그래서 걸리는 시간이 입력 길이에 비례한다. GNU grep의 `-E`와 기본 모드는 가능하면 이 방식(DFA)으로 돌고, 역참조가 있을 때만 다른 matcher로 넘어간다. Google의 RE2와 Go의 `regexp`, Rust의 `regex` 크레이트도 선형 시간을 보장하는 대신 역참조와 전후방 탐색을 빼 버렸다.
+
+차이는 나쁜 패턴에서 드러난다. `^(a+)+$`에 a 30개 뒤에 `!`를 붙인 문자열을 줘 봤다.
+
+```bash
+s=$(printf 'a%.0s' {1..30})!; echo "$s" > evil.txt
+time grep -cE '^(a+)+$' evil.txt
+time grep -cP '^(a+)+$' evil.txt
+```
+
+```text
+0
+
+real	0m0.002s
+user	0m0.000s
+sys	0m0.002s
+grep: evil.txt: exceeded PCRE's backtracking limit
+
+real	0m0.033s
+user	0m0.031s
+sys	0m0.000s
+```
+
+`-E`는 2ms 만에 "맞는 줄 0개"라고 답했다. `-P`는 PCRE2가 정해 둔 되돌아가기 한도를 넘겨서 포기했다. 한도가 없는 엔진은 끝까지 간다. Node 22와 Python 3.13에서 같은 패턴을 a의 개수를 늘려 가며 재 봤다.
+
+```text
+n=20 12.2ms
+n=22 42.9ms
+n=24 170.4ms
+n=26 664.3ms
+python n=20 74ms
+python n=22 236ms
+python n=24 849ms
+```
+
+글자 두 개가 늘 때마다 약 4배다. 바깥 `+`와 안쪽 `+`가 같은 a들을 나눠 가지는 방법이 2의 n-1제곱가지라서, 실패할 문자열에서는 그 가지를 전부 시도한다. 이것을 파국적 백트래킹(catastrophic backtracking)이라 부르고, 이걸 노린 공격이 ReDoS(정규식 서비스 거부)다. 요청 하나가 CPU 하나를 몇 초씩 붙잡으면, Node처럼 이벤트 루프 하나로 도는 서버는 그동안 다른 요청을 전혀 처리하지 못한다. 가지가 왜 2의 거듭제곱으로 늘어나는지는 [재귀와 백트래킹 글](/posts/recursion-backtracking)에서 탐색 트리로 직접 셌다.
+
+위험한 모양은 대체로 셋이다.
+
+- 반복 안의 반복: `(a+)+`, `(\w*)*`, `(.*)*`
+- 같은 글자를 둘 다 먹을 수 있는 선택: `(a|a)*`, `(\w|\d)+`
+- 그 뒤에 실패할 수 있는 조건이 오는 경우: `$`나 다른 글자
+
+이메일 검증 정규식이 대표적인 사고 지점이다. `^([a-zA-Z0-9]+\.?)+@`처럼 "단어와 선택적 점의 반복"은 점이 없는 긴 입력에서 안쪽과 바깥 반복이 같은 글자를 나눠 가진다. 막는 방법은 이 순서로 본다.
+
+1. 패턴을 고친다. 중첩 반복을 하나로 펴고(`^a+$`는 n=26에서 0.003ms였다), 선택지가 같은 글자를 겹쳐 먹지 않게 한다.
+2. 입력 길이를 먼저 자른다. 이메일이 254자를 넘으면 정규식에 넣기 전에 거절한다.
+3. 사용자가 패턴 자체를 입력하는 기능(검색 필터, 로그 규칙)은 RE2 같은 선형 엔진으로 돌린다. Node라면 `re2` 바인딩 패키지를 쓴다. 역참조를 못 쓰는 제약은 이런 곳에서는 오히려 안전장치다.
+4. 한도를 건다. PCRE의 backtrack limit, .NET의 `Regex` 시간 제한처럼 엔진이 주는 상한을 쓰거나, 정규식을 워커에서 돌리고 시간이 넘으면 끊는다.
+
+eslint-plugin-regexp나 safe-regex 같은 정적 검사 도구도 있다. 다만 모든 위험 패턴을 잡아 준다고 기대하지는 않는다. 성능 관점에서 입력 크기와 시간의 관계는 [Big O 글](/posts/big-o-notation)에서 더 다룬다.
+
+## 로그를 정규식으로 캐는 데에는 한계가 있다
+
+정규식으로 로그를 파싱하는 코드는 처음엔 잘 돈다. 문제는 로그 형식이 바뀔 때다. 누군가 `took=12ms` 앞에 `region=ap-northeast-2`를 끼워 넣거나, 사용자 이름에 공백이 들어오거나, 메시지에 줄바꿈이 섞이면 패턴이 조용히 틀린다. 정규식 파서는 깨져도 에러를 내지 않고 0건이나 엉뚱한 값을 낸다. 위에서 본 `\d`나 `*?`처럼 말이다.
+
+그래서 새로 만드는 서비스라면 로그를 처음부터 JSON 한 줄처럼 구조화해서 남기고, 정규식은 이미 있는 텍스트 로그를 그 자리에서 훑을 때만 쓰는 편이 낫다.
+
+```bash
+# 구조화된 로그라면 정규식 대신 필드 이름으로 묻는다
+echo '{"level":"ERROR","order":1002,"status":502,"took_ms":3012}' | jq 'select(.took_ms > 1000) | .order'
+```
+
+```text
+1002
+```
+
+필드 이름으로 고르면 순서가 바뀌거나 필드가 추가돼도 그대로 돈다. 숫자는 숫자로 비교한다. 구조화 로그를 어떻게 설계하고 수집하는지는 [구조화 로그 글](/posts/structured-logging)에 있다. 정규식이 여전히 쓸모 있는 곳은 로그 수집기 앞단에서 오래된 텍스트 형식을 필드로 쪼개는 파서(Fluent Bit, Logstash grok 같은 것)다. 그 경우에도 패턴은 한 번 정해 두고 테스트를 붙여 둔다.
+
+## 직접 해 보기: glob을 정규식으로 바꾸기
+
+glob과 정규식의 차이를 손으로 확인하는 가장 좋은 방법은 glob을 정규식으로 옮겨 보는 것이다. `globMatch(pattern, name)`이 셸 glob처럼 동작하게 고쳐 보자. 규칙은 이렇다. `*`는 `/`가 아닌 글자 0개 이상, `?`는 `/`가 아닌 글자 하나, `[...]`는 그대로 문자 클래스, `[!...]`는 부정, 그 밖의 글자는 정규식 특수 기호라도 글자 그대로 맞춘다. 이름 전체가 맞아야 한다.
+
+처음 코드는 `*`만 `.*`로 바꾼다. 테스트를 돌려 보면 어디서 틀리는지 보인다. 점이 아무 글자가 되고, `+`와 괄호가 반복과 그룹이 되고, `*`가 `/`를 넘는다.
+
+<CodePlayground
+  caption="glob 패턴을 정규식으로 옮기기"
+  functionName="globMatch"
+  initialCode={`// *: '/'가 아닌 글자 0개 이상, ?: '/'가 아닌 글자 1개
+// [...]: 문자 클래스, [!...]: 부정, 나머지는 글자 그대로
+function globMatch(pattern, name) {
+  const re = "^" + pattern.replace("*", ".*") + "$";
+  return new RegExp(re).test(name);
+}`}
+  solution={`function globMatch(pattern, name) {
+  let re = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end === -1) {
+        re += "\\\\["; // 닫는 괄호가 없으면 글자 그대로
+        continue;
+      }
+      let body = pattern.slice(i + 1, end);
+      if (body[0] === "!") body = "^" + body.slice(1); // glob의 ! 는 정규식의 ^
+      re += "[" + body.replace(/\\\\/g, "\\\\\\\\") + "]";
+      i = end;
+    } else {
+      re += c.replace(/[.+^(){}|$\\\\]/g, "\\\\$&"); // 정규식 특수 기호는 이스케이프
+    }
+  }
+  return new RegExp(re + "$").test(name);
+}`}
+  tests={[
+    { args: ["*.log", "app.log"], expected: true, label: "*.log / app.log" },
+    { args: ["*.log", "app.log.gz"], expected: false, label: "이름 전체가 맞아야 한다" },
+    { args: ["*.log", "sub/deep.log"], expected: false, label: "* 는 / 를 넘지 않는다" },
+    { args: ["app-?.log", "app-10.log"], expected: false, label: "? 는 정확히 한 글자" },
+    { args: ["app-[!1].log", "app-2.log"], expected: true, label: "[!1] 부정" },
+    { args: ["app-[!1].log", "app-1.log"], expected: false, label: "[!1] 에 1은 안 맞는다" },
+    { args: ["a+b.txt", "a+b.txt"], expected: true, label: "+ 는 글자 그대로" },
+    { args: ["a+b.txt", "aab.txt"], expected: false, label: "+ 가 반복이 되면 안 된다" },
+    { args: ["report.(1).csv", "reportx(1)xcsv"], expected: false, label: "점과 괄호도 글자 그대로" },
+    { args: ["[0-9][0-9]-*.md", "07-intro.md"], expected: true, label: "범위 클래스" },
+  ]}
+/>
+
+이 함수가 하는 일이 사실상 bash가 glob을 맞출 때 하는 일이다. 둘의 기호가 비슷해 보여도 한쪽에서 다른 쪽으로 옮기려면 거의 모든 글자를 다시 써야 한다.
+
+## 현장에서 자주 밟는 실수
+
+0건이 나왔는데 에러가 없으면 아래 순서로 본다. 대부분 이 중 하나다.
+
+첫째, 방언. `+`, `?`, `|`, `()`, `{}`를 썼는데 `-E` 없이 grep이나 sed를 돌렸는지, `\d`나 `*?`처럼 Perl 문법을 ERE에 넣었는지 본다. 의심되면 `grep -P`로 바꿔 보거나 `[0-9]`로 풀어 써서 결과가 달라지는지 확인한다.
+
+둘째, 셸. 패턴을 작은따옴표로 감쌌는지 본다. 큰따옴표 안에서는 `$`와 역슬래시를 셸이 먼저 처리한다. `grep "\$HOME"`과 `grep '$HOME'`은 같은 패턴이 되지만, `grep "$HOME"`은 `/root` 같은 경로를 찾는다. `bash -x`나 `set -x`로 프로그램이 실제로 받은 인자를 찍어 보면 바로 보인다.
+
+셋째, 이스케이프. 점, 괄호, 대괄호가 들어간 고정 문자열(IP, 버전 번호, 파일 경로)을 정규식으로 넣지 않았는지 본다. 고정 문자열이면 `grep -F`, 코드에서는 이스케이프 함수를 쓴다. JavaScript에는 사용자 입력을 정규식 글자로 바꾸는 표준 함수가 오래 없어서 직접 `replace(/[.*+?^$()|[\]\\]/g, "\\$&")` 같은 코드를 썼다. 최근에는 `RegExp.escape()`가 ES2025 표준에 들어와 최신 브라우저에서 쓸 수 있지만, 이 글의 Node 22에서는 아직 `undefined`다. 런타임마다 확인하고 쓴다.
+
+넷째, 줄 단위. grep, sed, awk는 기본적으로 한 줄씩 맞춘다. 여러 줄에 걸친 스택 트레이스는 `^`와 `$`가 줄마다 걸리고 `.`가 줄바꿈을 넘지 않는다. GNU grep의 `-z`, PCRE의 `(?s)` 같은 옵션이 있지만, 여러 줄 로그는 대개 수집 단계에서 한 이벤트로 묶는 편이 낫다.
+
+다섯째, 한 디렉터리 밖. `grep -r 'TODO' *.ts`는 현재 디렉터리의 ts 파일만 셸이 펼쳐서 넘긴다. 하위 디렉터리를 원하면 `grep -r --include='*.ts' 'TODO' .`처럼 glob을 grep에게 넘긴다.
+
+## 누가, 어떤 방언으로 읽나
+
+`grep 'took=[0-9]+ms'`가 0건이었던 건 기본 grep이 BRE라서 `+`를 글자로 읽었기 때문이다. 패턴을 쓸 때는 두 가지만 확인하면 된다. 셸이 먼저 펼치는지(따옴표 밖의 `*`, `?`, `[`), 그리고 그 패턴을 받는 프로그램이 BRE, ERE, Perl 계열, RE2 중 무엇으로 읽는지. 앞의 것은 작은따옴표로 막고, 뒤의 것은 `-E`나 `-P`로 정해 준다. 사용자 입력이 들어가는 정규식이라면 엔진이 되돌아가는 방식인지까지 본다.
+
+## 면접에서 나올 만한 질문
+
+### glob과 정규 표현식은 무엇이 다른가요?
+
+glob은 파일 이름 전체가 패턴과 맞는지 보는 작은 문법이고, 정규식은 문자열 어딘가에 패턴이 있는지 찾는 훨씬 큰 문법이다. glob의 `*`는 아무 글자 0개 이상이라 정규식으로는 `.*`이고, glob의 `?`는 정규식의 `.`이다. 정규식의 `*`는 바로 앞 요소의 반복이라 뜻이 다르다. glob은 보통 셸이 펼치고, 정규식은 grep이나 언어 런타임 같은 프로그램이 해석한다.
+
+### find . -name *.log 가 왜 이상하게 동작하나요?
+
+따옴표가 없어서 bash가 find를 실행하기 전에 `*.log`를 현재 디렉터리의 파일 이름으로 펼치기 때문이다. 맞는 파일이 여러 개면 find가 "paths must precede expression" 에러를 내고, 딱 하나면 에러 없이 그 이름 하나만 찾는다. 하나도 없으면 기본 설정에서 글자 그대로 넘어가 우연히 맞게 동작한다. 그래서 `find . -name '*.log'`처럼 항상 작은따옴표로 감싸서 패턴을 find에게 넘긴다.
+
+### grep 'a+' 와 grep -E 'a+' 는 왜 결과가 다른가요?
+
+기본 grep은 BRE로 읽고, BRE에서 `+`는 반복이 아니라 글자 그대로다. `-E`를 주면 ERE로 읽어서 `+`가 "한 번 이상"이 된다. GNU grep은 BRE에서도 `\+`로 쓰면 반복으로 받지만 이건 GNU 확장이라 BSD grep에서는 다를 수 있다. 괄호, 중괄호, `|`도 같은 식으로 BRE에서는 역슬래시를 붙여야 특수 기호가 된다.
+
+### grep -E 에서 \d 를 쓰면 어떻게 되나요?
+
+`\d`는 POSIX ERE에 없는 Perl 계열 문법이라 GNU grep -E는 그냥 글자 d로 맞춘다. 에러가 나지 않아서 결과가 0건이거나 엉뚱한 줄이 나올 뿐이다. `[0-9]`나 `[[:digit:]]`로 쓰거나, `grep -P`로 PCRE를 쓴다. 다만 `-P`는 macOS 기본 grep이나 BusyBox에는 없어서 이식성이 필요하면 POSIX 클래스가 안전하다.
+
+### 탐욕적 매칭과 게으른 매칭의 차이는요?
+
+탐욕적 반복은 먼저 갈 수 있는 데까지 먹은 뒤 뒤가 안 맞으면 하나씩 내놓고, 게으른 반복은 0개부터 시작해 하나씩 늘린다. 그래서 `<.*>`는 첫 `<`부터 마지막 `>`까지, `<.*?>`는 첫 태그 하나만 맞는다. 게으른 반복은 Perl 계열에만 있고 ERE에서 `*?`는 그냥 탐욕적으로 동작한다. 방언에 상관없이 쓰려면 `<[^>]*>`처럼 부정 문자 클래스로 쓰고, 이쪽이 되돌아가기도 적다.
+
+### ReDoS가 무엇이고 어떻게 막나요?
+
+백트래킹 엔진에서 `(a+)+$` 같은 중첩 반복이 실패할 입력을 만나면 나눌 수 있는 모든 방법을 시도해 시간이 지수로 늘어나는 현상을 노린 공격이다. 실측에서 Node는 a가 2개 늘 때마다 약 4배씩 느려져 26개에서 0.66초가 걸렸다. 단일 스레드 서버라면 요청 하나로 전체가 멈춘다. 중첩 반복과 겹치는 선택지를 없애고, 입력 길이를 먼저 자르고, 사용자가 패턴을 넣는 기능은 RE2 같은 선형 엔진으로 돌리고, 엔진의 시간·단계 한도를 건다.
+
+### RE2 같은 엔진은 왜 빠르고, 대신 무엇을 포기하나요?
+
+패턴을 상태 기계로 바꿔 입력을 한 번만 훑기 때문에 시간이 입력 길이에 비례한다. 갈림길에서 하나를 고르고 되돌아가는 대신 가능한 상태를 모두 동시에 들고 가서 파국적 백트래킹이 생길 수 없다. 대가로 역참조와 전후방 탐색을 지원하지 않는다. 이 기능들은 앞에서 맞춘 글자를 기억하거나 위치를 미리 봐야 해서 상태 기계 하나로 표현하기 어렵다. GNU grep -E도 역참조가 없으면 DFA로 돌아서 같은 패턴에서 2ms 만에 끝났다.
+
+### 로그 분석을 정규식으로 하는 것의 문제는 무엇인가요?
+
+로그 형식이 바뀌면 정규식은 깨져도 에러 없이 0건이나 틀린 값을 낸다. 필드 순서가 바뀌거나, 값에 공백이나 줄바꿈이 섞이거나, 새 필드가 끼어드는 일이 흔하다. 그래서 새 서비스는 JSON 같은 구조화 로그를 남기고 필드 이름으로 질의하는 편이 안전하다. 정규식은 이미 있는 텍스트 로그를 훑거나 수집 단계에서 필드로 쪼개는 데 쓰고, 그때도 패턴에 테스트를 붙여 둔다.

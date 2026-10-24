@@ -1,0 +1,476 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-component-patterns");
+
+<EasyIntro>
+  처음엔 간단했던 모달 컴포넌트가 화면이 늘 때마다 옵션을 하나씩 받다 보니 받는 값이 스무 개가 넘었다. 버튼을 두 개로 할지, 제목 옆에 아이콘을 넣을지, 바깥을 누르면 닫을지를 전부 옵션으로 정하게 만든 탓이다.
+
+  레고를 떠올리면 쉽다. 완성된 장난감 하나에 버튼을 잔뜩 달아 모양을 바꾸게 하는 것보다, 기본 블록을 주고 쓰는 사람이 원하는 대로 끼우게 하는 편이 낫다. 모달도 틀만 만들어 두고 제목과 버튼 자리에 무엇을 넣을지는 쓰는 쪽이 정하게 하면 옵션이 줄어든다.
+
+  블록끼리 몰래 연결되는 경우도 있다. 탭 메뉴는 탭 버튼과 내용 칸이 따로 놓여도 지금 어느 탭이 골라졌는지 함께 알아야 한다. 이럴 때는 겉으로 줄을 잇지 않고 안쪽에서 서로 이야기하게 만든다.
+
+  모양은 빼고 동작만 빌려주는 방법도 있다. 열고 닫는 규칙과 키보드 조작은 남이 만든 것을 쓰고, 생김새는 우리 디자인대로 입힌다. 다만 블록을 너무 잘게 나누면 조립 설명서가 더 복잡해지니, 두세 번 반복된 뒤에 나누는 편이 안전하다.
+</EasyIntro>
+
+처음에는 `Modal`이 `title`, `children`, `onClose` 세 개만 받았다. 결제 화면에서 버튼을 두 개 달아야 해서 `primaryLabel`, `secondaryLabel`, `onPrimary`, `onSecondary`가 생겼다. 삭제 확인에서는 버튼이 빨개야 해서 `danger`, 저장 중에는 돌아야 해서 `isPrimaryLoading`, 약관 모달은 바깥을 눌러도 안 닫혀야 해서 `closeOnOverlay`, 제목 옆에 아이콘이 필요해서 `titleIcon`이 붙었다. 1년 뒤에는 이렇게 됐다.
+
+```tsx
+<Modal
+  title="정말 삭제할까?" titleIcon={<WarnIcon />} hideCloseButton={false}
+  primaryLabel="삭제" onPrimary={remove} isPrimaryLoading={removing} danger
+  secondaryLabel="취소" onSecondary={close} footerAlign="end" showFooterDivider
+  closeOnOverlay={false} closeOnEsc size="sm" bodyPadding="lg"
+  /* ...그리고 여덟 개 더 */
+/>
+```
+
+`Modal` 안에는 조합마다 분기하는 `if`가 수십 개다. 새 화면이 "버튼 세 개"를 원하면 또 prop을 더한다. 이 글은 이런 컴포넌트를 쪼개고 잇는 패턴을 따라간다. 합성과 슬롯, Compound Components, Render Props와 HOC가 아직 쓰이는 자리, Headless 컴포넌트, 제어와 비제어를 둘 다 받는 컴포넌트, `as`와 `asChild`, 그리고 추상화가 오히려 비싸지는 순간이다. props와 ref의 타입을 적는 법은 [React에서 TypeScript 쓰기](/posts/typescript-in-react)에서 다뤘고, 여기서는 구조를 본다.
+
+## 모든 경우를 props로 받으면 생기는 일
+
+스무 개가 넘는 props는 증상이고, 원인은 컴포넌트가 바깥의 모든 경우를 미리 알고 결정하려 한 데 있다. `Modal`은 원래 "화면 위에 뜨고, 포커스를 가두고, Esc로 닫히는 틀"이면 됐다. 버튼이 몇 개인지, 무슨 색인지, 무엇을 하는지는 쓰는 화면이 안다. 그걸 `Modal`이 대신 정하려니 화면마다 prop이 늘었다.
+
+비슷한 증상이 반대 방향으로도 나온다. prop drilling이다. 페이지 꼭대기에 있는 `user`를 `Layout → Sidebar → Profile → Avatar` 네 단계 아래로 내려야 하는데, 중간의 `Layout`과 `Sidebar`는 `user`를 쓰지 않고 넘기기만 한다. 중간 컴포넌트의 props에 상관없는 값이 쌓이고, `Avatar`에 값 하나가 더 필요해지면 네 파일을 고친다.
+
+이걸 보면 Context부터 떠올리기 쉽다. 그런데 Context는 구독 관계를 숨겨서, 어디서 값이 오는지 따라가기 어렵게 만들고 재사용도 어렵게 한다. 그 전에 해 볼 것이 합성이다.
+
+## 내용은 부모가 만들어 넘긴다
+
+`Layout`이 `user`를 받아 `Sidebar`에 넘기는 대신, 페이지가 `Avatar`까지 다 만들어서 `Layout`에는 완성된 조각을 꽂게 한다.
+
+```tsx
+// 전: 중간 컴포넌트가 값을 받아 넘긴다
+<Layout user={user} />          // Layout → Sidebar user={user} → Profile user={user} → Avatar
+
+// 후: 페이지가 조각을 만들어 자리에 꽂는다
+<Layout sidebar={<Sidebar profile={<Profile><Avatar src={user.avatar} /></Profile>} />}>
+  <Feed />
+</Layout>
+```
+
+아래 그림에서 왼쪽 길은 값이 층마다 손을 거쳐 내려가고, 오른쪽 길은 페이지가 직접 만든 조각이 자리만 찾아 들어간다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="전달만 하던 중간 층이 user를 몰라도 된다"
+  nodes={[
+    { id: "page", label: "Page", sub: "user를 가짐", x: 200, y: 35, w: 120 },
+    { id: "layout", label: "Layout", sub: "sidebar 슬롯", x: 90, y: 120, w: 120 },
+    { id: "sidebar", label: "Sidebar", sub: "profile 슬롯", x: 90, y: 205, w: 120 },
+    { id: "avatar", label: "Avatar", sub: "src", x: 310, y: 120, w: 110 },
+    { id: "profile", label: "Profile", sub: "children", x: 310, y: 205, w: 110 },
+  ]}
+  edges={[
+    { from: "page", to: "layout", label: "렌더" },
+    { from: "layout", to: "sidebar", label: "렌더" },
+    { from: "page", to: "avatar", label: "직접 만듦" },
+    { from: "avatar", to: "profile", label: "children", dashed: true },
+    { from: "profile", to: "sidebar", label: "슬롯", dashed: true },
+  ]}
+/>
+
+`children` 하나로 부족하면 이름 있는 자리를 여러 개 둔다. 이걸 슬롯(slot) props라고 부른다. 앞의 `Modal`에 적용하면 이렇게 된다.
+
+```tsx
+type ModalProps = {
+  title: ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;   // 버튼이 몇 개든, 무슨 색이든 쓰는 쪽이 만든다
+  onClose: () => void;
+};
+
+<Modal
+  title={<><WarnIcon /> 정말 삭제할까?</>}
+  footer={<><Button onClick={close}>취소</Button><Button tone="danger" loading={removing} onClick={remove}>삭제</Button></>}
+  onClose={close}
+>
+  삭제한 글은 되돌릴 수 없다.
+</Modal>
+```
+
+`primaryLabel`, `danger`, `isPrimaryLoading` 같은 여덟 개가 `footer` 하나로 사라졌다. 버튼의 색과 로딩은 `Button`이 이미 알고 있는 일이라 `Modal`이 다시 알 필요가 없다. `Modal`은 틀의 일(포커스 가두기, Esc, 바깥 클릭, 스크롤 잠금)에만 남는다.
+
+합성에는 렌더링 이점도 따라온다. 부모가 만든 엘리먼트를 `children`으로 받은 컴포넌트는 자기 state가 바뀌어도 그 조각을 다시 렌더링하지 않는다. 이 효과는 [React는 언제 다시 그리나](/posts/react-rerender)의 "상태는 내리고 내용은 올린다"에서 측정했다.
+
+## 부품끼리 안쪽에서 이야기한다
+
+탭은 슬롯만으로 안 된다. 탭 버튼과 패널이 따로 놓이지만 "지금 어느 탭인가"를 함께 알아야 하고, 버튼을 누르면 패널이 바뀌어야 한다. 이걸 props로 하면 다시 설정 객체가 된다.
+
+```tsx
+<Tabs items={[{ id: "info", label: "정보", content: <Info /> }, { id: "review", label: "후기", content: <Reviews />, badge: 12 }]} />
+```
+
+배지를 붙이고, 특정 탭만 비활성화하고, 탭 목록 옆에 정렬 버튼을 끼우는 요구가 올 때마다 `items`의 모양이 커진다. Compound Components는 부품을 따로 내놓고 부품끼리 Context로 연결한다.
+
+```tsx
+<Tabs defaultValue="info">
+  <Tabs.List>
+    <Tabs.Tab value="info">정보</Tabs.Tab>
+    <Tabs.Tab value="review">후기 <Badge>12</Badge></Tabs.Tab>
+  </Tabs.List>
+  <SortButton />
+  <Tabs.Panel value="info"><Info /></Tabs.Panel>
+  <Tabs.Panel value="review"><Reviews /></Tabs.Panel>
+</Tabs>
+```
+
+`Tabs`가 고른 값을 Context에 넣고, `Tabs.Tab`과 `Tabs.Panel`은 그 Context를 읽는다. 부품 사이에 무엇을 끼우든, 몇 단계 아래에 놓이든 연결이 유지된다. 아래 그림에서 점이 흐르는 길이 Context다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="Tabs가 값을 들고, 부품들은 Context로 읽고 바꾼다. 사이에 무엇을 끼워도 된다"
+  nodes={[
+    { id: "tabs", label: "Tabs", sub: "value, setValue", x: 200, y: 40, w: 140 },
+    { id: "list", label: "Tabs.List", sub: "role=tablist", x: 80, y: 125, w: 120 },
+    { id: "sort", label: "SortButton", sub: "상관없는 부품", x: 200, y: 125, w: 110 },
+    { id: "panel", label: "Tabs.Panel", sub: "value가 같을 때만", x: 320, y: 125, w: 130 },
+    { id: "tab", label: "Tabs.Tab", sub: "aria-selected", x: 80, y: 215, w: 120 },
+  ]}
+  edges={[
+    { from: "tabs", to: "tab", label: "context", dashed: true },
+    { from: "tabs", to: "panel", label: "context", dashed: true },
+    { from: "tab", to: "tabs", label: "setValue" },
+    { from: "list", to: "tab", label: "children" },
+  ]}
+/>
+
+```tsx
+const TabsContext = createContext<{ value: string; setValue: (v: string) => void; baseId: string } | null>(null);
+
+function useTabs() {
+  const ctx = useContext(TabsContext);
+  if (!ctx) throw new Error("Tabs.Tab과 Tabs.Panel은 Tabs 안에서 써야 한다");
+  return ctx;
+}
+
+function Tab({ value, children }: { value: string; children: ReactNode }) {
+  const { value: selected, setValue, baseId } = useTabs();
+  const isSelected = value === selected;
+  return (
+    <button role="tab" id={baseId + "-tab-" + value} aria-selected={isSelected}
+      aria-controls={baseId + "-panel-" + value} tabIndex={isSelected ? 0 : -1}
+      onClick={() => setValue(value)}>
+      {children}
+    </button>
+  );
+}
+
+function Panel({ value, children }: { value: string; children: ReactNode }) {
+  const { value: selected, baseId } = useTabs();
+  if (value !== selected) return null;
+  return <div role="tabpanel" id={baseId + "-panel-" + value} aria-labelledby={baseId + "-tab-" + value}>{children}</div>;
+}
+
+Tabs.Tab = Tab;
+Tabs.Panel = Panel;
+```
+
+`useTabs`가 Context가 없을 때 에러를 던지는 게 작은 장치다. 부품을 `Tabs` 밖에 실수로 놓으면 조용히 아무것도 안 하는 대신 바로 알려 준다. 접근성 속성(`role="tab"`, `aria-selected`, `aria-controls`)도 부품 안에 들어 있어서 쓰는 쪽이 빠뜨릴 수 없다. 완성하려면 좌우 화살표로 탭을 옮기는 키보드 처리가 더 필요하다. 선택된 탭만 `tabIndex` 0이고 나머지는 -1이라 Tab 키로는 탭 목록에 한 번만 들어가고, 그 안에서는 화살표로 움직이는 게 WAI-ARIA의 탭 패턴이다.
+
+Context 이전에는 `React.Children.map`과 `cloneElement`로 자식들에게 props를 몰래 넣었다. `Tabs`가 직계 자식을 훑어 `Tab`이면 `isSelected`를 꽂는 식이다. 이 방식은 자식을 `div`로 한 번 감싸거나 `Tab`을 다른 컴포넌트로 포장하는 순간 끊어진다. 직계 자식만 보기 때문이다. 지금 이 방식이 남아 있는 곳은 뒤에서 볼 `asChild`처럼 자식 하나에 props를 합치는 경우 정도다.
+
+## Render Props와 HOC가 하던 일
+
+훅이 나오기 전(React 16.8 이전)에는 컴포넌트 사이에서 상태가 있는 로직을 나눠 쓸 방법이 두 가지였다. 하나는 함수를 children이나 prop으로 받아 그 함수에 상태를 넘겨 주는 Render Props다.
+
+```tsx
+<MousePosition>
+  {({ x, y }) => <Cursor x={x} y={y} />}
+</MousePosition>
+```
+
+다른 하나는 컴포넌트를 받아 기능을 덧붙인 컴포넌트를 돌려주는 고차 컴포넌트(HOC)다. react-redux의 `connect`, 예전 react-router의 `withRouter`가 대표적이었다.
+
+```tsx
+const ProfileWithUser = withUser(Profile); // Profile에 user prop을 꽂아 준다
+```
+
+둘 다 문제가 있었다. Render Props를 몇 개 겹치면 들여쓰기가 계단처럼 깊어졌다. HOC는 여러 개 겹치면 React DevTools에 감싸는 컴포넌트가 줄줄이 생겼고, 두 HOC가 같은 이름의 prop을 꽂으면 하나가 조용히 덮였고, ref가 안쪽 컴포넌트까지 가지 않았다. 감쌀수록 생기는 이런 부작용은 [데코레이터 패턴](/posts/pattern-decorator)에서 따로 다뤘다.
+
+로직을 나눠 쓰는 일은 이제 커스텀 훅이 맡는다. `const { x, y } = useMousePosition()`은 중첩도, 이름 충돌도, 감싸는 컴포넌트도 없다. 그렇다고 두 패턴이 사라진 건 아니다. 남아 있는 자리에는 이유가 있다.
+
+Render Props는 "라이브러리가 그리는 자리 한가운데에 쓰는 쪽의 마크업을 끼워야" 할 때 여전히 맞다. 가상화 목록이 화면에 보이는 줄마다 `itemContent={(index) => <Row />}`를 부르는 식이다. 훅은 값을 돌려줄 수는 있어도 라이브러리가 렌더링하는 트리 안쪽에 들어갈 수 없다. React Aria Components처럼 `className={({ isSelected, isFocusVisible }) => ...}`로 부품의 내부 상태에 따라 모양을 바꾸게 하는 것도 같은 이유다.
+
+HOC는 컴포넌트 자체를 바꿔야 할 때 남는다. `memo(Component)`가 HOC이고, MobX의 `observer`, `react-error-boundary`의 `withErrorBoundary`도 그렇다. 렌더링 방식을 바꾸거나 컴포넌트를 경계로 감싸는 일은 컴포넌트 안에서 부르는 훅으로는 할 수 없다.
+
+## 로직만 주고 마크업은 맡긴다
+
+드롭다운 메뉴 하나를 제대로 만들려면 할 일이 많다. Esc로 닫기, 바깥 클릭으로 닫기, 화살표로 항목 옮기기, 열 때 첫 항목에 포커스, 닫을 때 버튼으로 포커스 돌려주기, `aria-expanded`, `aria-controls`, `role="menu"`. 디자인은 회사마다 다르지만 이 동작은 거의 같다. Headless 컴포넌트는 이 동작만 주고 마크업과 스타일은 쓰는 쪽에 맡긴다.
+
+훅으로 주는 방식은 이렇다. `useDisclosure`라는 작은 Headless 훅을 생각해 보자. 돌려주는 값을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="Headless 훅이 돌려주는 것: 상태, 동작, prop getter"
+  base="const"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "isOpen",
+      display: "{ isOpen,",
+      title: "상태",
+      description: "지금 열려 있는지. 화살표 아이콘을 돌리거나 패널을 보여 줄지 정할 때 쓴다. 스타일은 쓰는 쪽이 이 값으로 정한다.",
+    },
+    {
+      key: "toggle",
+      display: "toggle,",
+      title: "동작",
+      description: "열고 닫는 함수. 버튼 말고 다른 곳에서도 부를 수 있다. 단축키나 다른 컴포넌트에서 열 때 쓴다.",
+    },
+    {
+      key: "getButtonProps",
+      display: "getButtonProps,",
+      title: "버튼에 펼칠 속성",
+      description: "onClick, aria-expanded, aria-controls, id를 한 번에 돌려준다. 쓰는 쪽 onClick을 인자로 넘기면 둘을 합쳐서 둘 다 부른다. 그냥 덮어쓰면 열고 닫기가 고장 나니까 합치는 게 이 함수의 일이다.",
+      required: true,
+      code: "<button {...getButtonProps({ onClick: track })}>메뉴</button>",
+    },
+    {
+      key: "getPanelProps",
+      display: "getPanelProps }",
+      title: "패널에 펼칠 속성",
+      description: "id, hidden, onKeyDown(Esc로 닫기)을 돌려준다. 버튼과 패널의 id가 서로 맞아야 aria-controls가 성립하는데, 그 짝을 훅이 맞춰 준다.",
+      required: true,
+      code: "<ul {...getPanelProps()} className={styles.menu}>...</ul>",
+    },
+    {
+      key: "useDisclosure",
+      display: "= useDisclosure()",
+      title: "훅 하나",
+      description: "마크업을 하나도 그리지 않는다. 그래서 어떤 디자인 시스템에도 붙는다.",
+    },
+  ]}
+/>
+
+prop getter가 이 방식의 열쇠다. 훅이 `onClick`을 그냥 돌려주고 쓰는 쪽이 `onClick={track}`을 따로 쓰면 하나가 다른 하나를 덮는다. `getButtonProps({ onClick: track })`처럼 쓰는 쪽 값을 넘겨받아 합쳐 주면 둘 다 살아남는다. Downshift의 `getInputProps`, `getItemProps`가 이 방식을 널리 알렸다. 자동완성 콤보박스의 접근성 요구가 얼마나 많은지는 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)에서 따라갔다.
+
+부품으로 주는 Headless 라이브러리도 있다. Radix Primitives, Headless UI, React Aria Components는 스타일 없는 Compound Components를 준다. `Dialog.Root`, `Dialog.Trigger`, `Dialog.Content`처럼 앞에서 본 구조에 포커스 가두기와 키보드 처리가 들어 있다. TanStack Table은 표의 정렬, 필터, 페이지 나누기 로직만 주고 `table` 태그는 쓰는 쪽이 그린다.
+
+언제 Headless를 쓰나. 동작은 표준적인데 디자인이 우리 것이어야 하는 UI(메뉴, 다이얼로그, 콤보박스, 탭, 툴팁)가 가장 잘 맞는다. 이런 UI의 키보드와 화면 낭독기 동작을 직접 만들면 빠뜨리는 게 반드시 생긴다. 반대로 우리 서비스에만 있는 화면이라면 Headless로 나눌 이유가 적다.
+
+## 제어와 비제어를 둘 다 받는다
+
+`Tabs`는 `defaultValue`만 받았다. 그런데 어떤 화면은 탭을 URL에 맞추고 싶다. `?tab=review`로 들어오면 후기 탭이 열려 있어야 하고, 탭을 누르면 주소가 바뀌어야 한다. 탭의 값을 바깥이 들고 있어야 한다. 그래서 잘 만든 컴포넌트는 기본 `input`처럼 두 방식을 다 받는다.
+
+```tsx
+<Tabs defaultValue="info" />                                    // 비제어: Tabs가 값을 들고 있다
+<Tabs value={tab} onValueChange={(v) => setSearch({ tab: v })} /> // 제어: 바깥이 들고 있다
+```
+
+규칙은 세 줄이다. `value`가 있으면 제어 모드로, 그 값을 그대로 보여 주고 바꾸고 싶을 때 `onChange`만 부른다. 실제로 바꿀지는 부모가 정한다. `value`가 없으면 비제어 모드로, `defaultValue`를 처음 값으로 삼아 안에서 state로 들고 바뀔 때 `onChange`로 알려만 준다. 그리고 모드는 처음 렌더링 때 정해지고 바뀌지 않는다.
+
+```tsx
+function useControllableState<T>({ value, defaultValue, onChange }: { value?: T; defaultValue: T; onChange?: (v: T) => void }) {
+  const [inner, setInner] = useState(defaultValue);
+  const isControlled = value !== undefined;
+  const current = isControlled ? value : inner;
+
+  const setValue = useCallback((next: T) => {
+    if (!isControlled) setInner(next); // 비제어일 때만 직접 바꾼다
+    onChange?.(next);                    // 어느 모드든 알린다
+  }, [isControlled, onChange]);
+
+  return [current, setValue] as const;
+}
+```
+
+Radix의 `useControllableState`가 이런 모양이다. 두 모드를 이벤트 하나로 비교해 보자. 같은 클릭이지만 제어 모드에서는 부모가 값을 바꿔 줘야 화면이 바뀐다.
+
+<SequenceDiagram
+  caption="같은 클릭, 다른 주인: 비제어는 스스로 바꾸고, 제어는 부모의 허락을 기다린다"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "toggle", label: "Toggle" },
+    { id: "parent", label: "부모" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "toggle",
+      label: "클릭",
+      title: "비제어: 클릭을 받는다",
+      detail: "value가 없으니 Toggle이 안쪽 state를 들고 있다. 처음 값은 defaultValue였다.",
+    },
+    {
+      from: "toggle",
+      to: "toggle",
+      label: "setInner(true)",
+      title: "스스로 바꾼다",
+      detail: "안쪽 state를 바꿔 다시 렌더링한다. 화면이 바로 켜진다.",
+    },
+    {
+      from: "toggle",
+      to: "parent",
+      label: "onChange(true)",
+      title: "바뀌었다고 알리기만 한다",
+      detail: "부모는 알림을 받아 저장하거나 로그를 남길 수 있지만, 값의 주인은 아니다.",
+    },
+    {
+      from: "user",
+      to: "toggle",
+      label: "클릭",
+      title: "제어: 같은 클릭을 받는다",
+      detail: "이번에는 부모가 value={false}를 넘기고 있다. Toggle은 값을 직접 바꾸지 않는다.",
+    },
+    {
+      from: "toggle",
+      to: "parent",
+      label: "onChange(true)",
+      title: "바꿔 달라고 요청한다",
+      detail: "부모가 이 콜백에서 setState를 하지 않으면 value는 계속 false고, 화면도 꺼진 채다. '눌러도 안 바뀐다'는 버그 신고의 흔한 원인이다.",
+    },
+    {
+      from: "parent",
+      to: "toggle",
+      label: "value={true}",
+      title: "부모가 허락하면 바뀐다",
+      detail: "부모가 state를 바꿔 새 value를 내려 주면 그때 켜진다. 부모는 조건이 안 맞으면 거절할 수도 있다.",
+    },
+  ]}
+/>
+
+모드가 바뀌면 안 되는 이유는 `input`에서 자주 본다. `value={user?.name}`처럼 처음에 `undefined`였다가 데이터가 오면 문자열이 되는 코드다. React는 "A component is changing an uncontrolled input to be controlled"라는 경고를 띄운다. 처음엔 비제어로 시작해 DOM이 값을 들고 있다가 갑자기 제어로 바뀌면, 그 사이 사용자가 친 값과 새 value 중 누가 주인인지 애매해진다. 처음부터 `value={user?.name ?? ""}`로 제어를 유지하거나, 데이터가 온 뒤에 렌더링한다. 직접 만든 컴포넌트도 같은 경고를 개발 모드에서 띄워 주면 쓰는 쪽이 실수를 빨리 안다.
+
+아래 함수는 이 규칙을 이벤트 목록으로 흉내 낸다. 클릭이면 다음 값을 `onChange`로 알리고, 비제어일 때만 안쪽 값을 바꾼다. 부모가 value를 바꾸는 이벤트는 제어 모드에서만 받아들이고, 비제어로 시작했는데 value가 들어오면 경고를 남긴다. 이벤트마다 그 시점에 보이는 값을 기록한다.
+
+<CodePlayground
+  caption="제어·비제어 겸용 토글 흉내 내기"
+  functionName="simulateToggle"
+  initialCode={`function simulateToggle(props, events) {
+  // props: { value?: boolean, defaultValue?: boolean }
+  // events: "click" 또는 { parent: boolean } (부모가 value를 바꿔 내려 준다)
+  // 기록 규칙
+  //   click → "onChange 다음값"을 남기고, 비제어면 안쪽 값을 바꾼다
+  //   { parent } → 제어면 value를 바꾸고, 비제어면 "warn uncontrolled->controlled"만 남기고 무시한다
+  //   (경고로 무시한 이벤트를 빼고) 이벤트마다 마지막에 "show 지금보이는값"을 남긴다
+  const log = [];
+  return log;
+}`}
+  solution={`function simulateToggle(props, events) {
+  const isControlled = props.value !== undefined;
+  let internal = props.defaultValue ?? false;
+  let value = props.value;
+  const log = [];
+  const current = () => (isControlled ? value : internal);
+  for (const event of events) {
+    if (event === "click") {
+      const next = !current();
+      log.push("onChange " + next);
+      if (!isControlled) internal = next;
+    } else if (event.parent !== undefined) {
+      if (!isControlled) {
+        log.push("warn uncontrolled->controlled");
+        continue;
+      }
+      value = event.parent;
+    }
+    log.push("show " + current());
+  }
+  return log;
+}`}
+  tests={[
+    { args: [{}, ["click", "click"]], expected: ["onChange true", "show true", "onChange false", "show false"], label: "비제어는 스스로 바뀐다" },
+    { args: [{ defaultValue: true }, ["click"]], expected: ["onChange false", "show false"], label: "defaultValue는 처음 값일 뿐이다" },
+    { args: [{ value: false }, ["click"]], expected: ["onChange true", "show false"], label: "제어인데 부모가 안 바꾸면 그대로" },
+    { args: [{ value: false }, ["click", { parent: true }]], expected: ["onChange true", "show false", "show true"], label: "부모가 바꿔 주면 켜진다" },
+    { args: [{ defaultValue: false }, [{ parent: true }, "click"]], expected: ["warn uncontrolled->controlled", "onChange true", "show true"], label: "도중에 제어로 바꾸면 경고" },
+  ]}
+/>
+
+## 어떤 태그로 그릴지 바꾼다
+
+디자인 시스템의 `Button`은 보통 `button` 태그를 그린다. 그런데 같은 모양으로 다른 페이지로 가는 링크를 만들고 싶다. `Button` 안에 `a`를 넣으면 `button` 안에 `a`가 들어가는데, HTML에서 버튼 안에 링크 같은 대화형 요소를 넣는 건 허용되지 않는다. 화면 낭독기와 키보드 동작도 엉킨다. 그래서 "모양은 Button, 태그는 a"를 표현하는 방법이 두 가지 있다.
+
+첫째는 `as` prop이다. 그릴 태그나 컴포넌트를 prop으로 받는다.
+
+```tsx
+<Button as="a" href="/pricing">요금 보기</Button>
+<Button as={Link} to="/pricing">요금 보기</Button>
+```
+
+간단하지만 타입이 어렵다. `as="a"`면 `href`를 받고 `as="button"`이면 `type`을 받아야 해서, 제네릭으로 `as`에 따라 props 타입을 바꿔야 한다. 이런 타입은 길고, 컴포넌트가 많으면 TypeScript 검사도 눈에 띄게 느려질 수 있다. styled-components와 Emotion의 `as`, 예전 Chakra UI가 이 방식이다.
+
+둘째는 Radix가 퍼뜨린 `asChild`다. 자기 태그를 그리지 않고, 자식 하나에 자기 props를 합쳐 넘긴다.
+
+```tsx
+<Button asChild>
+  <Link href="/pricing">요금 보기</Link>
+</Button>
+```
+
+`asChild`가 켜지면 `Button`은 `button` 대신 `Slot`을 그린다. `Slot`은 자식 엘리먼트를 `cloneElement`로 복제하면서 `Button`의 `className`, 이벤트 핸들러, `aria-*`, ref를 자식의 것과 합친다. 핸들러는 둘 다 불리게 이어 붙이고, `className`은 이어 붙이고, `style`은 합치고, ref는 둘 다 받게 한다. 타입은 단순하다. `Link`의 props는 `Link`가 알아서 검사한다. 대신 자식은 정확히 하나여야 하고, 그 자식이 받은 props를 실제 DOM까지 펼쳐 주고 ref를 받을 수 있어야 한다. 자식 컴포넌트가 `...rest`를 버리면 `Button`의 클래스와 핸들러가 사라진다.
+
+어느 쪽이든 의미에 맞는 태그를 고르게 하는 게 목적이다. 페이지를 옮기면 링크, 동작을 하면 버튼이다. 모양이 같다고 `div`에 `onClick`을 다는 일을 막아 주는 장치로 보면 된다.
+
+## 컨테이너와 프레젠테이셔널은 훅으로 옮겨 갔다
+
+2015년쯤 React 커뮤니티에 널리 퍼진 구분이 있었다. 데이터를 가져오고 상태를 다루는 컨테이너 컴포넌트, props만 받아 그리는 프레젠테이셔널 컴포넌트로 나누라는 것이다. 이 구분을 알린 Dan Abramov는 2019년 같은 글에 덧붙여, 훅이 나온 뒤로는 이 나눔을 권하지 않는다고 적었다. 같은 일을 컴포넌트를 둘로 쪼개지 않고 훅으로 할 수 있게 됐기 때문이다.
+
+생각 자체가 틀린 건 아니다. 상태와 부수 효과를 그리기와 떼어 두면 그리기 쪽은 테스트하기 쉽고, 다른 데이터로 재사용하기 쉽다. 바뀐 건 경계를 긋는 도구다. 예전에는 컴포넌트 두 개였다면, 지금은 커스텀 훅 하나와 컴포넌트 하나다.
+
+```tsx
+function useOrderList() {          // 예전의 컨테이너가 하던 일
+  const { data, isPending } = useOrdersQuery();
+  const [sort, setSort] = useState<"new" | "price">("new");
+  const rows = useMemo(() => sortOrders(data ?? [], sort), [data, sort]);
+  return { rows, isPending, sort, setSort };
+}
+
+function OrderList() {             // 그리기
+  const { rows, isPending, sort, setSort } = useOrderList();
+  if (isPending) return <Skeleton />;
+  return <OrderTable rows={rows} sort={sort} onSortChange={setSort} />;
+}
+```
+
+이 블로그의 코드도 이렇게 나눈다. 컴포넌트 폴더마다 상태와 핸들러를 담은 훅 파일과 마크업만 있는 view 파일을 따로 둔다. 주의할 점은 기계적으로 다 나누지 않는 것이다. state 하나와 버튼 하나짜리 컴포넌트를 훅과 view로 쪼개면 파일만 두 배가 된다. 나누는 기준은 "이 로직을 따로 테스트하거나 다른 화면에서 쓸 일이 있나"다.
+
+## 추상화가 비싸지는 순간
+
+지금까지 본 패턴은 모두 간접 단계를 하나씩 더한다. 슬롯은 내용을 어디서 만드는지 찾아가야 하고, Compound Components는 Context를 따라가야 하고, Headless는 훅과 마크업을 오가야 한다. 이 비용이 이득보다 커지는 순간이 있다.
+
+가장 흔한 건 두 번째 사용처에서 바로 일반화하는 것이다. 비슷해 보이는 카드가 두 개 생기자 `GenericCard`를 만들고, 세 번째 카드가 조금 달라서 `variant`를 더하고, 네 번째가 또 달라서 `renderHeader`를 더한다. 처음 글의 `Modal`이 걸어온 길이다. 틀린 추상화는 중복보다 비싸다. 중복은 나중에 합치면 되지만, 틀린 추상화는 쓰는 곳마다 그 모양에 맞춰 비틀어져 있어서 풀기 어렵다. 그래서 같은 코드가 세 번쯤 나오고, 세 곳이 정말 같은 이유로 바뀐다는 게 확인된 뒤에 합치는 편이 안전하다. 겉모양이 같아도 바뀌는 이유가 다르면 따로 두는 게 맞다.
+
+증상으로 알아챌 수 있다. 불리언 props가 서로 얽혀서 `isCompact`와 `isExpanded`를 같이 주면 무슨 일이 생기는지 아무도 모른다. 컴포넌트 하나를 고치려고 파일 다섯 개를 열어야 한다. 새로 온 사람이 "이 버튼 색은 어디서 정하나"를 찾는 데 10분이 걸린다. 패턴 이름을 붙인 코드가 실제로 쓰는 곳은 한 군데다. 이럴 때는 추상화를 걷어 내고 쓰는 곳에 코드를 다시 펼치는 것도 리팩터링이다.
+
+반대로 패턴이 값어치를 하는 신호도 분명하다. 같은 접근성 동작을 여러 화면이 반복해서 빠뜨린다면 Headless나 Compound로 묶을 때다. prop이 화면 수에 비례해 늘어난다면 슬롯으로 바꿀 때다. 같은 값을 받아 넘기기만 하는 층이 셋을 넘는다면 합성이나 Context를 볼 때다. 디자인 패턴 전반에서 상속보다 합성을 고르는 이유는 [디자인 패턴 개요](/posts/design-patterns-overview)에 있다.
+
+## 다시 스무 개짜리 모달로
+
+`Modal`의 props가 늘어난 건 틀이 내용까지 정하려 해서였다. 버튼과 제목을 `footer`와 `title` 슬롯으로 돌려주자 여덟 개가 하나로 줄었고, `Modal`은 포커스 가두기와 Esc 같은 틀의 일만 남았다. 탭처럼 부품끼리 상태를 나눠야 하면 Compound Components로 Context를 안쪽에 숨기고, 메뉴처럼 동작은 표준이고 모양만 다르면 Headless 훅이나 부품을 쓴다. 값을 누가 들지 바깥이 고를 수 있게 `value`, `defaultValue`, `onChange`를 함께 받고, 태그는 `as`나 `asChild`로 의미에 맞게 바꾼다. 그리고 모든 패턴은 간접 단계를 더하니, 같은 이유로 세 번 바뀌는 걸 본 뒤에 꺼낸다.
+
+## 면접에서 나올 만한 질문
+
+### props drilling은 어떻게 해결하나요? Context를 바로 쓰면 되지 않나요?
+
+먼저 합성을 본다. 중간 컴포넌트가 값을 받아 넘기는 대신, 값을 가진 컴포넌트가 아래 조각을 직접 만들어 children이나 슬롯 props로 꽂으면 중간 층은 그 값을 몰라도 된다. Context는 구독 관계를 숨겨 값의 출처를 따라가기 어렵고, 값이 바뀌면 읽는 컴포넌트가 모두 다시 렌더링된다. 테마나 로그인 사용자처럼 정말 멀리 많은 곳이 쓰는 값일 때 Context를 쓴다.
+
+### Compound Components 패턴은 무엇이고 어떻게 구현하나요?
+
+`Tabs.List`, `Tabs.Tab`, `Tabs.Panel`처럼 부품을 따로 내놓고, 부모가 상태를 Context에 넣어 부품들이 그걸 읽고 바꾸게 하는 패턴이다. 설정 객체 하나로 모든 경우를 받는 대신 쓰는 쪽이 부품 사이에 다른 요소를 자유롭게 끼울 수 있다. Context가 없으면 에러를 던지는 훅을 둬서 부품을 밖에서 쓰는 실수를 잡고, 접근성 속성은 부품 안에 넣는다. 예전의 Children.map과 cloneElement 방식은 직계 자식만 봐서 감싸면 끊어진다.
+
+### Render Props와 HOC는 아직 쓰나요?
+
+상태가 있는 로직을 나누는 용도로는 커스텀 훅이 대신한다. 중첩, prop 이름 충돌, ref 전달 문제가 없어서다. Render Props는 라이브러리가 그리는 트리 안쪽에 쓰는 쪽의 마크업을 끼워야 할 때, 가상화 목록의 행이나 부품 상태에 따른 className처럼 여전히 쓰인다. HOC는 memo, MobX의 observer, Error Boundary로 감싸기처럼 컴포넌트 자체를 바꾸거나 감싸야 할 때 남아 있다.
+
+### Headless 컴포넌트가 무엇이고 왜 쓰나요?
+
+동작과 접근성만 주고 마크업과 스타일은 쓰는 쪽에 맡기는 컴포넌트나 훅이다. 메뉴, 다이얼로그, 콤보박스처럼 키보드와 화면 낭독기 동작은 표준적인데 디자인은 서비스마다 다른 UI에 잘 맞는다. 훅으로 줄 때는 prop getter가 쓰는 쪽의 핸들러와 라이브러리의 핸들러를 합쳐서 덮어쓰기를 막는다. Radix, React Aria, Headless UI, TanStack Table이 이런 방식이다.
+
+### 제어와 비제어를 모두 지원하는 컴포넌트는 어떻게 만드나요?
+
+value가 있으면 제어 모드로 그 값을 보여 주고 변경은 onChange로 요청만 하며, 없으면 defaultValue로 안쪽 state를 만들어 스스로 바꾸고 onChange로 알린다. 모드는 처음 렌더링 때 정하고 바꾸지 않는다. 도중에 undefined에서 값으로 바뀌면 누가 주인인지 애매해져 React도 input에서 경고를 띄운다. 이 로직을 useControllableState 같은 훅으로 빼 두면 컴포넌트마다 반복하지 않는다.
+
+### as prop과 asChild는 어떻게 다른가요?
+
+as는 그릴 태그나 컴포넌트를 prop으로 받아 직접 그 태그로 렌더링하는 방식이라 간단하지만, as에 따라 받을 props가 달라져 타입이 복잡하고 무거워진다. asChild는 자기 태그를 그리지 않고 Slot으로 자식 하나에 className, 핸들러, ref 같은 props를 합쳐 넘긴다. 타입은 자식이 알아서 검사하지만 자식이 하나여야 하고 props를 DOM까지 펼쳐 줘야 한다. 둘 다 버튼 안에 링크를 넣는 식의 잘못된 중첩 없이 의미에 맞는 태그를 쓰게 하는 장치다.
+
+### 컨테이너/프레젠테이셔널 패턴은 지금도 유효한가요?
+
+생각은 유효하고 도구가 바뀌었다. 상태와 부수 효과를 그리기와 떼어 테스트와 재사용을 쉽게 하는 목적은 같지만, 지금은 컴포넌트를 둘로 쪼개지 않고 커스텀 훅이 컨테이너의 일을 한다. 이 구분을 알린 Dan Abramov도 훅 이후로는 기계적인 분리를 권하지 않는다고 덧붙였다. 따로 테스트하거나 다른 화면에서 쓸 로직일 때 훅으로 뺀다.
+
+### 컴포넌트를 너무 추상화하면 어떤 문제가 생기나요?
+
+간접 단계가 늘어 코드를 따라가기 어렵고, 틀린 추상화는 쓰는 곳마다 그 모양에 맞춰 비틀어져 중복보다 풀기 어렵다. 불리언 props가 얽혀 조합의 결과를 아무도 모르거나, 고치려고 파일 여러 개를 열어야 하거나, 실제 사용처가 하나뿐인 패턴이 신호다. 같은 이유로 세 번쯤 바뀌는 걸 확인한 뒤에 합치고, 이미 틀린 추상화는 쓰는 곳에 다시 펼치는 것도 리팩터링이다.

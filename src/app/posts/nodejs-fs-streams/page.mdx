@@ -1,0 +1,489 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-fs-streams");
+
+<EasyIntro>
+  아주 큰 기록 파일에서 실패한 줄만 세려고 했는데, 프로그램이 파일을 한 번에 다 읽으려다 기억 공간이 모자라서 멈춰 버렸다. 파일이 컴퓨터 기억 공간보다 크면 한꺼번에 담을 방법이 없다.
+
+  물을 옮기는 일을 떠올리면 쉽다. 수영장 물을 한 번에 옮기려면 수영장만 한 통이 필요하지만, 호스로 흘려보내면 호스 굵기만큼의 물만 동시에 지나간다. 프로그램도 파일을 작은 조각으로 나눠 조금씩 흘려보내면 아무리 큰 파일이라도 적은 기억 공간으로 처리할 수 있다.
+
+  조각으로 나누면 새로 생기는 문제도 있다. 한 줄이나 한 글자가 두 조각에 걸쳐 잘릴 수 있어서, 끝에 남은 반 토막을 다음 조각과 이어 붙여야 한다. 한글은 글자 하나가 여러 칸을 차지해서 특히 잘 깨진다.
+
+  호스 중간에서 물이 새면 앞뒤 수도꼭지를 모두 잠가야 한다. 그래서 조각을 흘려보내는 길을 만들 때는 어느 한 곳에서 문제가 생기면 길 전체를 한꺼번에 닫아 주는 도구를 쓴다.
+</EasyIntro>
+
+새벽 장애를 분석하려고 액세스 로그에서 500 응답만 세는 스크립트를 짰다. 개발 PC에서 250MB짜리 샘플로는 2초 만에 끝났다. 운영 서버의 하루치 로그를 넣자 이렇게 죽었다.
+
+```text
+RangeError ERR_FS_FILE_TOO_LARGE
+File size (3221225472) is greater than 2 GiB
+```
+
+`fs.readFile`은 2GiB가 넘는 파일을 아예 읽지 않는다. 그럼 1.9GB 파일은 괜찮을까. 그렇지 않다. 파일 크기보다 몇 배의 메모리가 필요해서, 컨테이너 메모리 한도가 1GiB라면 그보다 훨씬 작은 파일에서 먼저 죽는다. 이 글은 Node.js에서 파일을 다루는 API를 훑고, 큰 파일을 조각으로 흘려 처리하는 스트림을 실제로 돌려 본다. 기준은 Node.js 22.22, Ubuntu 24.04다.
+
+스트림에서 받는 쪽이 느릴 때 보내는 쪽을 멈추는 원리(백프레셔, `highWaterMark`와 `drain`)는 [백프레셔 글](/posts/backpressure)에서 자세히 다뤘다. 여기서는 그 위에서 파일을 열고, 바이트를 글자로 바꾸고, 변환을 끼워 넣고, 에러가 났을 때 파이프 전체를 닫는 쪽을 본다.
+
+## 파일을 다 읽으면 메모리가 몇 배로 든다
+
+같은 일을 두 방법으로 해 봤다. 300만 줄, 252MB짜리 액세스 로그에서 상태 코드가 500인 줄을 센다.
+
+```js
+// count-readfile.mjs: 통째로 읽는다
+import { readFile } from "node:fs/promises";
+
+const text = await readFile("/srv/logs/access.log", "utf8");
+let errors = 0;
+for (const line of text.split("\n")) if (line.includes('" 500 ')) errors++;
+console.log({ errors, maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024) });
+```
+
+```js
+// count-stream.mjs: 줄 단위로 흘려 읽는다
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
+
+const rl = createInterface({ input: createReadStream("/srv/logs/access.log"), crlfDelay: Infinity });
+let errors = 0;
+for await (const line of rl) if (line.includes('" 500 ')) errors++;
+console.log({ errors, maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024) });
+```
+
+```text
+{ errors: 499400, ms: 2017, maxRssMB: 732 }
+{ errors: 499400, ms: 2127, maxRssMB: 84 }
+```
+
+답은 같고 시간도 비슷하다. 다른 건 메모리다. 통째로 읽은 쪽은 프로세스가 쓴 최대 메모리(maxRSS)가 732MB, 파일 크기의 세 배쯤이다. 파일 바이트를 담은 Buffer, 그걸 디코딩한 문자열, `split`이 만든 300만 개의 줄 문자열이 동시에 살아 있기 때문이다. 스트림 쪽은 84MB에서 멈췄다. 파일이 10GB가 돼도 이 숫자는 거의 그대로다. 한 번에 64KiB 조각 하나와 그 안의 줄만 메모리에 있으니까.
+
+힙 한도를 256MB로 줄여서 통째로 읽기를 다시 돌리면 이렇게 끝난다.
+
+```bash
+node --max-old-space-size=256 count-readfile.mjs; echo "exit=$?"
+```
+
+```text
+<--- Last few GCs --->
+
+[10393:0x3ef0d000]      503 ms: Mark-Compact (reduce) 254.7 (264.0) -> 254.7 (261.0) MB, ...
+
+<--- JS stacktrace --->
+
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+...
+exit=134
+```
+
+이건 자바스크립트 예외가 아니라 V8이 프로세스를 중단(abort)시킨 것이라 `try/catch`로 못 잡는다. 종료 코드 134는 128에 SIGABRT(6)를 더한 값이다. 종료 코드를 읽는 법은 [Node.js 에러 처리 글](/posts/nodejs-error-handling)에, 힙 한도와 컨테이너 한도가 어떻게 따로 노는지는 [가비지 컬렉션 글](/posts/garbage-collection)에 있다.
+
+그렇다고 `readFile`이 나쁜 건 아니다. 설정 파일, 템플릿, 몇 MB짜리 JSON처럼 크기가 작고 정해진 파일은 통째로 읽는 게 가장 단순하고 빠르다. 기준은 "이 파일이 얼마나 커질 수 있나"다. 사용자가 올리는 파일, 로그, 내보내기 결과처럼 크기에 상한이 없으면 처음부터 스트림으로 짠다.
+
+## fs의 세 가지 얼굴과 스레드 풀
+
+`fs` 모듈의 거의 모든 함수는 세 벌로 있다.
+
+```js
+import fs from "node:fs";
+import { readFile } from "node:fs/promises";
+
+const a = fs.readFileSync("/srv/app/config.json", "utf8");         // 동기: 끝날 때까지 메인 스레드가 멈춘다
+fs.readFile("/srv/app/config.json", "utf8", (err, b) => { /* ... */ }); // 콜백
+const c = await readFile("/srv/app/config.json", "utf8");           // Promise
+```
+
+동기 버전은 결과가 나올 때까지 이벤트 루프 전체를 세운다. 그 동안 다른 요청은 하나도 처리되지 않는다. 서버가 뜨기 전에 설정을 한 번 읽는 자리라면 괜찮지만, 요청 핸들러 안에서는 쓰지 않는다. 콜백과 Promise 버전은 실제 `read` 시스템 콜을 libuv 스레드 풀(기본 4칸)에 맡기고 바로 돌아온다. 리눅스의 일반 파일은 epoll로 기다릴 수 없어서 그렇다. 해시 계산이 풀을 다 잡고 있으면 파일 읽기가 느려지는 장면은 [Node.js 서버 런타임 글](/posts/nodejs-server-runtime)에서 재현했다.
+
+새 코드는 `node:fs/promises`를 기본으로 쓴다. `try/catch`와 `await`로 에러가 이어지기 때문이다. 콜백 버전은 성능이 아주 조금 낫다고 알려져 있지만, 대부분의 서비스에서 차이를 느낄 일은 없다.
+
+파일 하나를 여러 번 읽고 쓸 때는 `FileHandle`을 직접 연다.
+
+```js
+import { open } from "node:fs/promises";
+
+const fh = await open("/srv/logs/access.log", "r");
+try {
+  const buf = Buffer.alloc(80);
+  const { bytesRead } = await fh.read(buf, 0, 80, 0); // 0번 바이트부터 80바이트
+  console.log(buf.subarray(0, bytesRead).toString());
+} finally {
+  await fh.close(); // 닫지 않으면 파일 디스크립터가 샌다
+}
+```
+
+`finally`의 `close`를 빠뜨리면 파일 디스크립터가 하나씩 샌다. 프로세스당 열 수 있는 개수(`ulimit -n`, 흔히 1024나 65536)에 닿으면 `EMFILE: too many open files`가 나기 시작한다. 이 에러가 보이면 어딘가에서 닫지 않은 핸들이나 소켓을 의심한다.
+
+```bash
+# 이 프로세스가 열어 둔 파일 디스크립터 수
+ls /proc/$(pgrep -f "node server.js")/fd | wc -l
+# 한도 확인
+cat /proc/$(pgrep -f "node server.js")/limits | grep "open files"
+```
+
+## 경로는 문자열로 이어 붙이지 않는다
+
+파일 경로를 `dir + "/" + name`으로 만들면 슬래시가 두 번 들어가거나, 윈도우에서 깨지거나, 더 나쁘게는 사용자 입력의 `../`가 그대로 통과한다. `node:path`가 이 일을 맡는다.
+
+```js
+import path from "node:path";
+
+path.join("/srv/uploads", "2026", "a.png");        // '/srv/uploads/2026/a.png'
+path.resolve("uploads", "a.png");                  // 현재 작업 디렉터리 기준 절대 경로
+path.extname("report.final.csv");                  // '.csv'
+path.basename("/srv/uploads/a.png", ".png");       // 'a'
+```
+
+`join`은 조각을 이어 붙이고 정리만 한다. `resolve`는 오른쪽부터 읽어서 절대 경로가 될 때까지 거슬러 가고, 끝까지 안 되면 현재 작업 디렉터리를 붙인다. 여기서 흔한 실수가 나온다. `resolve("config.json")`은 스크립트 파일 위치가 아니라 `node`를 실행한 디렉터리 기준이다. 다른 디렉터리에서 `node /srv/app/server.js`로 띄우면 엉뚱한 곳을 찾는다.
+
+스크립트 파일 기준 경로가 필요하면 CommonJS는 `__dirname`과 `__filename`을 쓴다. ES 모듈에는 이 둘이 없고, Node 20.11부터 `import.meta.dirname`과 `import.meta.filename`이 있다.
+
+```text
+$ node d.mjs     # console.log(import.meta.dirname, import.meta.filename, typeof __dirname)
+/srv/app /srv/app/d.mjs undefined
+$ node d.cjs     # console.log(__dirname, __filename)
+/srv/app /srv/app/d.cjs
+```
+
+그 전 버전을 지원해야 한다면 `path.dirname(fileURLToPath(import.meta.url))`로 만든다.
+
+사용자가 준 파일 이름으로 경로를 만들 때는 결과가 허용한 디렉터리 안에 있는지 마지막에 확인한다. `join`은 `..`를 정리해 줄 뿐 막아 주지 않는다.
+
+```js
+const ROOT = "/srv/uploads";
+function safePath(name) {
+  const full = path.resolve(ROOT, name);
+  if (!full.startsWith(ROOT + path.sep)) throw new Error("path escapes upload root");
+  return full;
+}
+safePath("2026/a.png");        // '/srv/uploads/2026/a.png'
+safePath("../../etc/passwd");  // Error
+```
+
+## 바이트와 글자 사이: Buffer와 인코딩
+
+파일과 소켓에서 오는 건 글자가 아니라 바이트다. Node는 바이트 덩어리를 `Buffer`(`Uint8Array`를 상속한 클래스)로 다룬다. 글자로 보려면 인코딩을 정해 디코딩해야 한다.
+
+```js
+const bytes = Buffer.from("주문 완료", "utf8");
+console.log(bytes.length, bytes);
+console.log("주문 완료".length, Buffer.byteLength("주문 완료"));
+```
+
+```text
+13 <Buffer ec a3 bc eb ac b8 20 ec 99 84 eb a3 8c>
+5 13
+```
+
+글자는 다섯 개인데 바이트는 13개다. UTF-8에서 한글 한 글자는 3바이트, 공백은 1바이트다. `Content-Length`나 DB 컬럼의 바이트 한도를 문자열 `length`로 재면 한글에서 세 배쯤 틀린다. 바이트 수는 `Buffer.byteLength`로 잰다.
+
+문제는 스트림이 바이트를 정해진 크기로 자른다는 데서 생긴다. 글자 경계와 상관없이 자르니까, 한글 한 글자가 두 조각에 걸칠 수 있다. 위 13바이트를 4바이트 지점에서 잘라 두 조각으로 흘려 봤다.
+
+```js
+import { Readable } from "node:stream";
+
+const chunks = [bytes.subarray(0, 4), bytes.subarray(4)];
+console.log(chunks.map((c) => c.toString("utf8")));
+
+let s = "";
+for await (const c of Readable.from(chunks)) s += c;   // 조각마다 따로 디코딩된다
+console.log(JSON.stringify(s));
+
+const r = Readable.from(chunks, { objectMode: false });
+r.setEncoding("utf8");                                  // 스트림이 경계를 이어 준다
+let t = "";
+for await (const c of r) t += c;
+console.log(JSON.stringify(t));
+```
+
+```text
+[ '주�', '�� 완료' ]
+"주��� 완료"
+"주문 완료"
+```
+
+`s += c`는 Buffer 조각마다 `toString()`을 불러서, 반 토막 난 "문"이 깨진 문자(U+FFFD) 세 개가 됐다. `setEncoding("utf8")`을 걸면 스트림 안의 `StringDecoder`가 끝에 남은 불완전한 바이트를 들고 있다가 다음 조각과 이어 준다. 아래 그림이 그 과정이다. 오른쪽 상자가 디코더가 들고 있는 바이트다.
+
+<AlgoTrace
+  caption="두 조각에 걸친 '문'을 StringDecoder가 이어 붙인다. 첫 조각은 4번째 바이트 eb에서 끝난다"
+  memoryLabel="디코더가 들고 있는 바이트"
+  cells={["ec", "a3", "bc", "eb", "ac", "b8", "20", "ec", "99", "84", "eb", "a3", "8c"]}
+  steps={[
+    { pointer: 0, memory: ["ec"], caption: "ec는 3바이트짜리 글자의 첫 바이트다. 뒤의 두 바이트를 기다린다" },
+    { pointer: 2, found: [0, 1, 2], memory: [], caption: "ec a3 bc가 모여 '주'를 내보낸다" },
+    { pointer: 3, memory: ["eb"], caption: "첫 조각이 여기서 끝난다. eb 하나로는 글자가 안 되니 들고 있는다" },
+    { pointer: 5, found: [3, 4, 5], memory: [], caption: "다음 조각의 ac b8이 오자 '문'이 완성된다" },
+    { pointer: 6, found: [6], memory: [], caption: "20은 1바이트 공백이라 바로 나간다" },
+    { pointer: 12, found: [7, 8, 9, 10, 11, 12], memory: [], caption: "'완료' 여섯 바이트까지 깨지지 않고 나온다" },
+  ]}
+/>
+
+`readline`, `setEncoding`, `TextDecoderStream`은 모두 이 일을 해 준다. 직접 `chunk.toString()`을 부르는 순간 이 보호가 사라진다. 뒤에 나올 Transform에서도 같은 함정이 있다.
+
+`Buffer`를 만들 때도 하나 주의한다. `Buffer.alloc(n)`은 0으로 채운 메모리를 주고, `Buffer.allocUnsafe(n)`은 초기화하지 않은 메모리를 준다. 이전에 쓰던 다른 요청의 데이터가 남아 있을 수 있어서, 바로 전부 덮어쓸 게 아니면 `alloc`을 쓴다.
+
+## 스트림 네 종류
+
+스트림은 데이터를 조각으로 흘려보내는 객체다. 방향에 따라 네 가지가 있다.
+
+| 종류 | 하는 일 | 흔한 예 |
+|---|---|---|
+| Readable | 조각을 내보낸다 | `fs.createReadStream`, HTTP 요청 본문, `process.stdin` |
+| Writable | 조각을 받는다 | `fs.createWriteStream`, HTTP 응답, `process.stdout` |
+| Duplex | 읽기와 쓰기가 따로 있다 | TCP 소켓 |
+| Transform | 받은 걸 바꿔서 내보낸다 | `zlib.createGzip()`, `crypto.createCipheriv()` |
+
+Duplex와 Transform은 둘 다 읽고 쓰지만 다르다. 소켓은 내가 쓴 것과 상대가 보낸 것이 서로 상관없다. Transform은 쓴 것이 바뀌어서 읽는 쪽으로 나온다.
+
+조각의 기본 크기와 버퍼 한도인 `highWaterMark`는 이렇다.
+
+```bash
+node -e '
+const { Transform, Readable, Writable } = require("node:stream");
+const t = new Transform({ objectMode: true, transform(o, _, cb) { cb(null, o); } });
+console.log(t.readableHighWaterMark, t.writableHighWaterMark,
+  new Readable().readableHighWaterMark, new Writable().writableHighWaterMark,
+  require("node:fs").createReadStream("/etc/hostname").readableHighWaterMark);'
+```
+
+```text
+16 16 65536 65536 65536
+```
+
+바이트 스트림은 64KiB다. Node 22에서 일반 스트림의 기본값이 16KiB에서 64KiB로 올라서 파일 스트림과 같아졌다. 그 전 버전에서 `new Readable()`을 찍으면 16384가 나온다. object mode는 단위가 바이트가 아니라 객체 개수라서 16개다. 한 객체가 1MB짜리 행이라면 16개만 쌓여도 16MB다. object mode 스트림에서 메모리가 예상보다 크게 잡히면 이 숫자부터 줄여 본다.
+
+## for await로 읽고 pipeline으로 잇는다
+
+Readable 스트림은 비동기 이터러블이다. `for await`로 읽으면 반복문 본문이 끝나야 다음 조각을 당기므로, 본문에서 `await`하는 동안 읽기가 자연스럽게 멈춘다.
+
+```js
+import { createReadStream } from "node:fs";
+
+for await (const chunk of createReadStream("/srv/logs/access.log")) {
+  await sendToWarehouse(chunk); // 이게 느리면 파일 읽기도 그만큼 천천히 간다
+}
+```
+
+여러 스트림을 이을 때는 `stream/promises`의 `pipeline`을 쓴다. 옛 방식의 `.pipe()`는 에러를 다음 스트림으로 넘기지 않는다. 없는 파일을 `.pipe()`로 쓰기 스트림에 이어 봤다.
+
+```js
+const src = createReadStream("/srv/logs/nope.log");
+const dst = createWriteStream("/srv/logs/out2.ndjson");
+src.on("error", (e) => console.log("src error:", e.code));
+src.pipe(dst);
+setTimeout(() => console.log({ dstDestroyed: dst.destroyed, writableEnded: dst.writableEnded }), 100);
+```
+
+```text
+src error: ENOENT
+{ dstDestroyed: false, writableEnded: false }
+```
+
+읽기 쪽은 실패했는데 쓰기 쪽은 열린 채로 남았다. 0바이트 파일과 그 파일 디스크립터가 프로세스가 끝날 때까지 남는다. 요청마다 이런 일이 생기면 앞에서 본 `EMFILE`로 간다. `src.on("error")`를 안 달았다면 더 나쁘다. 처리되지 않은 `error` 이벤트로 프로세스가 죽는다.
+
+`pipeline`은 이어진 스트림 중 하나라도 에러를 내면 나머지를 모두 `destroy`하고, 그 에러로 Promise를 거부한다. 끝까지 가면 마지막 쓰기가 다 플러시된 뒤에 이행된다. 그리고 각 단계 사이의 백프레셔도 대신 처리한다.
+
+## Transform을 직접 만든다
+
+로그 줄을 파싱해서 NDJSON(한 줄에 JSON 하나)으로 바꾸는 Transform을 만들어 보자. 조각 경계가 줄 경계와 다르니, 끝에 남은 반 줄을 `carry`에 들고 있다가 다음 조각 앞에 붙인다. 형식이 깨진 줄을 만나면 에러를 낸다.
+
+```js
+import { createReadStream, createWriteStream } from "node:fs";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { stat } from "node:fs/promises";
+
+let carry = "", n = 0;
+const toJson = new Transform({
+  transform(chunk, _enc, cb) {
+    const lines = (carry + chunk.toString("latin1")).split("\n");
+    carry = lines.pop(); // 마지막 조각은 줄이 덜 끝났을 수 있다
+    let out = "";
+    for (const line of lines) {
+      const m = line.match(/^(\S+) .*" (\d{3}) (\d+)$/);
+      if (!m) return cb(new Error(`bad line ${n + 1}: ${line.slice(0, 20)}`));
+      n++;
+      out += JSON.stringify({ ip: m[1], status: +m[2], bytes: +m[3] }) + "\n";
+    }
+    cb(null, out);
+  },
+  flush(cb) {
+    // 파일 끝에 줄바꿈 없이 남은 마지막 줄도 처리해야 한다 (생략)
+    cb();
+  },
+});
+
+const src = createReadStream("/srv/logs/small.log");
+const dst = createWriteStream("/srv/logs/out.ndjson");
+try {
+  await pipeline(src, toJson, dst);
+} catch (err) {
+  console.log("pipeline failed:", err.message);
+  console.log({ srcDestroyed: src.destroyed, dstDestroyed: dst.destroyed,
+    outBytes: (await stat("/srv/logs/out.ndjson")).size });
+}
+```
+
+2만 번째 줄 뒤에 `broken line`을 끼워 넣은 파일로 돌렸다.
+
+```text
+pipeline failed: bad line 20001: broken line
+{ srcDestroyed: true, dstDestroyed: true, outBytes: 885490 }
+```
+
+`transform` 안에서 `cb(err)`를 부르면 그 에러는 Transform의 `error` 이벤트가 되고, `pipeline`이 받아서 앞뒤 스트림을 모두 닫은 뒤 거부한다. 읽기와 쓰기 모두 `destroyed`가 참이다. `transform` 안에서 그냥 `throw`해도 Node가 잡아서 같은 길로 보내 주지만, 그 안에서 또 콜백이나 `setTimeout`을 거친 뒤에 던지면 잡히지 않는다. 비동기 일을 하는 Transform이라면 `async transform`보다는 `cb`를 명시적으로 부르는 쪽이 경계가 분명하다.
+
+여기서 눈여겨볼 숫자가 `outBytes: 885490`이다. 실패했는데도 출력 파일에 2만 줄 가까운 결과가 남았다. `pipeline`은 스트림을 닫아 줄 뿐 이미 쓴 내용을 지워 주지 않는다. 다음 단계가 이 파일을 "완성된 결과"로 읽으면 반쪽 데이터가 흘러간다. 그래서 결과 파일은 임시 이름으로 쓰고, `pipeline`이 성공했을 때만 `rename`으로 진짜 이름을 준다. 같은 파일 시스템 안의 `rename`은 원자적이라 읽는 쪽은 옛 파일 아니면 새 파일만 본다.
+
+```js
+import { rename, rm } from "node:fs/promises";
+
+const tmp = "/srv/out/report.ndjson.tmp";
+try {
+  await pipeline(createReadStream(input), toJson, createWriteStream(tmp));
+  await rename(tmp, "/srv/out/report.ndjson");
+} catch (err) {
+  await rm(tmp, { force: true });
+  throw err;
+}
+```
+
+그리고 위 Transform은 `chunk.toString("latin1")`을 썼다. 로그가 ASCII라서 괜찮지만, 한글이 섞인 파일이라면 앞 절의 깨짐이 그대로 생긴다. 그럴 때는 `readline`으로 줄을 먼저 나누거나, Transform 안에 `StringDecoder`를 두고 `decoder.write(chunk)`로 디코딩한다.
+
+아래 그림은 `pipeline`이 세 스트림 사이에서 하는 일을 순서대로 보여 준다.
+
+<SequenceDiagram
+  caption="pipeline은 조각을 흘리고, 막히면 기다리고, 한 곳이 실패하면 전부 닫는다"
+  actors={[
+    { id: "src", label: "ReadStream" },
+    { id: "tr", label: "Transform" },
+    { id: "dst", label: "WriteStream" },
+    { id: "pl", label: "pipeline" },
+  ]}
+  steps={[
+    { from: "src", to: "tr", label: "64KiB 조각", title: "파일을 조각으로 읽는다", detail: "읽기 스트림이 64KiB씩 읽어 Transform에 쓴다. 끝에 걸린 반 줄은 carry에 남는다." },
+    { from: "tr", to: "dst", label: "NDJSON 줄들", title: "바꾼 결과를 다음으로 넘긴다", detail: "Transform이 cb(null, out)으로 내보낸 문자열이 쓰기 스트림으로 간다." },
+    { from: "dst", to: "tr", label: "write() → false", title: "디스크가 느리면 앞을 멈춘다", detail: "쓰기 버퍼가 highWaterMark를 넘으면 false를 돌려준다. pipeline은 drain까지 앞 단계를 멈춘다.", payload: "writableLength > 65536" },
+    { from: "tr", to: "pl", label: "error", title: "깨진 줄에서 실패한다", detail: "transform에서 cb(err)를 불렀다. 에러는 Transform의 error 이벤트로 나온다.", payload: "Error: bad line 20001: broken line" },
+    { from: "pl", to: "src", label: "destroy()", title: "앞뒤를 모두 닫는다", detail: "pipeline이 읽기와 쓰기 스트림을 destroy한다. 파일 디스크립터가 새지 않는다." },
+    { from: "pl", to: "pl", label: "reject(err)", title: "await한 쪽이 에러를 받는다", detail: "이미 쓴 885490바이트는 남아 있다. 임시 파일이면 지우고, 성공했을 때만 rename한다." },
+  ]}
+/>
+
+## 직접 해 보기: 조각에서 줄 뽑기
+
+Transform의 핵심은 `carry` 처리다. 조각 배열을 받아 줄 배열을 돌려주는 함수를 짜 보자. 줄 끝이 `\r\n`이면 `\r`도 떼고, 마지막에 줄바꿈 없이 남은 내용도 한 줄로 친다. 빈 줄은 빈 문자열로 남긴다.
+
+<CodePlayground
+  caption="조각 경계를 넘는 줄 나누기"
+  functionName="splitLines"
+  initialCode={`function splitLines(chunks) {
+  const lines = [];
+  // 이전 조각 끝에 남은 반 줄을 기억해 둔다
+  return lines;
+}`}
+  solution={`function splitLines(chunks) {
+  const lines = [];
+  let carry = "";
+  for (const chunk of chunks) {
+    const parts = (carry + chunk).split("\\n");
+    carry = parts.pop();
+    for (const p of parts) lines.push(p.endsWith("\\r") ? p.slice(0, -1) : p);
+  }
+  if (carry !== "") lines.push(carry.endsWith("\\r") ? carry.slice(0, -1) : carry);
+  return lines;
+}`}
+  tests={[
+    { label: "한 조각", args: [["a\nb\n"]], expected: ["a", "b"] },
+    { label: "줄이 두 조각에 걸침", args: [["GET /a 2", "00\nGET /b 500\n"]], expected: ["GET /a 200", "GET /b 500"] },
+    { label: "CRLF", args: [["one\r\ntw", "o\r\n"]], expected: ["one", "two"] },
+    { label: "마지막 줄바꿈 없음", args: [["x\ny"]], expected: ["x", "y"] },
+    { label: "빈 줄 둘", args: [["\n\n"]], expected: ["", ""] },
+    { label: "빈 조각 섞임", args: [["ab", "", "c\n", "d"]], expected: ["abc", "d"] },
+  ]}
+/>
+
+세 번째 테스트에서 `\r`과 `\n`이 다른 조각으로 갈라져도 맞게 나오는지 보면, `carry`를 붙인 뒤에 `\r`을 떼야 하는 이유가 보인다. Transform의 `flush`는 마지막 `if (carry !== "")`에 해당한다. 이걸 빠뜨리면 파일 끝의 줄 하나가 조용히 사라진다.
+
+## 폴더를 지켜보고, 파일을 패턴으로 찾는다
+
+설정 파일이 바뀌면 다시 읽고 싶을 때 `fs.watch`를 쓴다. 리눅스에서는 inotify를 쓰고, Node 19.1부터(LTS로는 20부터) 리눅스에서도 `recursive: true`가 된다. 편집기처럼 파일을 한 번 저장해 봤다.
+
+```js
+import { watch } from "node:fs";
+import { writeFile } from "node:fs/promises";
+
+const events = [];
+const w = watch("/srv/app/src", { recursive: true }, (type, name) => events.push(`${type} ${name}`));
+await new Promise((r) => setTimeout(r, 100));
+await writeFile("/srv/app/src/a/x.ts", "export const x = 1;\n");
+await new Promise((r) => setTimeout(r, 300));
+console.log(events);
+w.close();
+```
+
+```text
+[ 'change a/x.ts', 'change a/x.ts' ]
+```
+
+한 번 저장했는데 이벤트는 두 번이다. 파일을 비우는 순간과 내용을 쓰는 순간이 따로 잡혔다. 임시 파일에 쓰고 `mv`로 덮는 편집기 방식으로 바꾸면 세 번이 나왔다. 운영체제와 편집기마다 이 숫자가 다르고, macOS에서는 또 다른 이벤트 이름이 온다. 그래서 `fs.watch` 콜백에서 바로 다시 읽지 않고, 100~300ms쯤 모았다가 한 번 처리(디바운스)한다. 이벤트의 `type`도 믿지 말고 `stat`으로 파일이 실제로 있는지 다시 본다.
+
+chokidar는 이 차이를 덮어 주는 라이브러리다. 플랫폼마다 다른 이벤트를 `add`, `change`, `unlink`로 정리하고, `awaitWriteFinish`로 쓰기가 끝날 때까지 기다리는 옵션도 있다. 개발 서버와 빌드 도구가 많이 쓴다. 4 버전부터는 glob 패턴을 직접 받지 않아서, 패턴으로 거르려면 `ignored`에 함수를 주거나 디렉터리를 지정한다. inotify는 감시할 수 있는 개수에 커널 한도가 있어서, 큰 저장소를 감시하다 `ENOSPC: System limit for number of file watchers reached`가 나면 한도를 올린다.
+
+```bash
+# 사용자당 inotify 감시 개수 한도 확인과 임시 변경
+cat /proc/sys/fs/inotify/max_user_watches
+sudo sysctl fs.inotify.max_user_watches=524288
+# 재부팅 뒤에도 유지
+echo 'fs.inotify.max_user_watches=524288' | sudo tee /etc/sysctl.d/90-inotify.conf
+```
+
+파일을 패턴으로 찾을 때는 Node 22부터 `fs.glob`이 내장돼 있다. 22.22에서는 경고 없이 돌았다.
+
+```js
+import { glob } from "node:fs/promises";
+
+const out = [];
+for await (const f of glob("src/**/*.ts", { exclude: (p) => p.endsWith(".test.ts") })) out.push(f);
+console.log(out.sort());
+```
+
+```text
+[ 'src/a/x.ts', 'src/b/y.ts' ]
+```
+
+이전 버전을 지원하거나 `.gitignore`를 따르는 검색이 필요하면 `glob`이나 `globby` 패키지를 쓴다. globby는 fast-glob 위에 `.gitignore` 반영과 여러 패턴 합치기를 얹은 것이다.
+
+`fs-extra`가 주던 편의 기능은 상당 부분 내장으로 들어왔다. 디렉터리를 만들며 부모까지 만드는 `mkdir(p, { recursive: true })`, 폴더째 지우는 `rm(p, { recursive: true, force: true })`, 복사하는 `cp(src, dst, { recursive: true })`가 그렇다. `fs-extra`의 `outputFile`(부모 폴더까지 만들며 쓰기)이나 `move`(다른 디스크로도 옮기기) 같은 건 아직 직접 조합해야 하니, 이것 때문에 의존성을 둘지는 팀이 정한다.
+
+## 다시 2GiB 로그로
+
+처음 스크립트를 `createReadStream`과 `readline`으로 바꾸자 3GB 로그도 84MB 근처에서 돌았다. 정리하면 이렇다. 크기에 상한이 없는 파일은 스트림으로 읽는다. 바이트를 글자로 바꾸는 일은 스트림의 디코더에 맡기고 조각마다 `toString()`하지 않는다. 스트림을 이을 때는 `pipeline`을 쓰고, 실패하면 반쪽 결과가 남는다는 걸 기억해 임시 파일과 `rename`으로 막는다. 이 스트림이 네트워크 쪽으로 가면 HTTP 요청과 응답 본문이 되는데, 그 이야기는 [Node.js HTTP 클라이언트 글](/posts/nodejs-http-clients)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### readFile과 createReadStream은 메모리에서 어떻게 다른가요?
+
+`readFile`은 파일 전체를 Buffer로 올리고, 문자열로 바꾸면 그 사본이 하나 더 생긴다. 252MB 로그를 줄로 나눠 세자 최대 메모리가 732MB였다. `createReadStream`은 기본 64KiB 조각을 하나씩 흘려서 같은 일을 84MB로 했고, 파일이 커져도 거의 늘지 않는다. 또 `readFile`은 2GiB가 넘는 파일을 `ERR_FS_FILE_TOO_LARGE`로 거부한다.
+
+### fs의 동기, 콜백, Promise API는 어떻게 고르나요?
+
+동기 API는 끝날 때까지 이벤트 루프 전체를 막아서 서버가 뜨기 전 초기화에서만 쓴다. 콜백과 Promise API는 실제 읽기를 libuv 스레드 풀에 맡기고 바로 돌아온다. 새 코드는 `try/catch`와 `await`로 에러가 이어지는 `fs/promises`를 기본으로 쓴다. 스레드 풀은 기본 4칸이라 해시 같은 다른 일과 자리를 나눠 쓴다는 점도 기억한다.
+
+### 스트림에서 한글이 깨지는 이유는 무엇인가요?
+
+스트림은 바이트를 글자 경계와 상관없이 자르기 때문에, 3바이트인 한글 한 글자가 두 조각에 걸칠 수 있다. 조각마다 `toString()`을 부르면 반 토막이 깨진 문자로 바뀐다. `setEncoding`, `readline`, `TextDecoderStream`, `StringDecoder`는 남은 바이트를 들고 있다가 다음 조각과 이어 준다. 바이트 수가 필요하면 문자열 `length`가 아니라 `Buffer.byteLength`로 잰다.
+
+### pipe 대신 pipeline을 쓰는 이유는 무엇인가요?
+
+`.pipe()`는 에러를 다음 스트림으로 넘기지 않아서, 읽기가 실패해도 쓰기 스트림과 파일 디스크립터가 열린 채 남는다. 에러 리스너가 없으면 처리되지 않은 `error` 이벤트로 프로세스가 죽기도 한다. `pipeline`은 한 곳에서 에러가 나면 모두 `destroy`하고 그 에러로 Promise를 거부하며, 단계 사이 백프레셔도 처리한다.
+
+### Transform 안에서 에러를 던지면 어디로 가나요?
+
+`cb(err)`를 부르거나 `transform` 안에서 동기로 던지면 Transform의 `error` 이벤트가 되고, `pipeline`이 그걸 받아 앞뒤 스트림을 닫은 뒤 거부한다. 다만 `setTimeout`이나 다른 콜백을 거친 뒤 던지면 Transform과 상관없는 잡히지 않은 예외가 된다. 그리고 실패해도 이미 쓴 출력은 지워지지 않으니 임시 파일에 쓰고 성공했을 때만 `rename`한다.
+
+### object mode의 highWaterMark는 무엇이 다른가요?
+
+바이트 스트림의 `highWaterMark`는 바이트 수이고 Node 22 기본값은 64KiB다. object mode에서는 단위가 객체 개수라 기본 16개다. 객체 하나가 크면 16개만 쌓여도 메모리가 크게 잡히니, 큰 행을 흘리는 object mode 스트림은 이 값을 줄인다. 22 이전에는 일반 스트림 기본값이 16KiB였다는 차이도 있다.
+
+### fs.watch를 그대로 쓰면 무엇이 문제인가요?
+
+저장 한 번에 이벤트가 여러 번 오고, 운영체제와 편집기마다 이벤트 종류와 횟수가 다르다. 그래서 짧게 모아 한 번 처리하고, 이벤트 이름 대신 `stat`으로 실제 상태를 다시 확인한다. 리눅스에서는 inotify 감시 개수 한도에 걸려 `ENOSPC`가 날 수 있어 `fs.inotify.max_user_watches`를 올린다. 이런 차이를 덮으려고 chokidar를 쓴다.

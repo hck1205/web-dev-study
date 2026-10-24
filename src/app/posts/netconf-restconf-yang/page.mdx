@@ -1,0 +1,451 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("netconf-restconf-yang");
+
+<EasyIntro>
+  네트워크 장비는 원래 사람이 화면에 명령을 치고 결과를 눈으로 읽도록 만들어졌다. 그래서 처음에는 프로그램이 사람 흉내를 냈다. 명령을 대신 치고, 화면에 나온 글자를 잘라서 읽었다. 그런데 장비 회사가 화면 모양을 조금만 바꿔도 프로그램은 엉뚱한 칸을 읽었다.
+
+  식당 주문으로 비유하면 쉽다. 손님이 종업원의 말투와 메뉴판 글씨체를 보고 눈치로 주문을 읽어 내는 대신, 정해진 주문서 양식에 칸마다 메뉴와 수량을 적어 내는 것이다. 주문서 양식이 YANG이고, 그 주문서를 주고받는 창구가 NETCONF와 RESTCONF다.
+
+  주문서에는 "음료는 한 사람에 세 잔까지" 같은 규칙도 적혀 있어서, 틀린 주문은 부엌에 들어가기 전에 돌려보낸다. 여러 메뉴를 한꺼번에 바꿀 때는 임시 주문서에 먼저 적어 두었다가 한 번에 확정하고, 문제가 생기면 확정 전으로 되돌릴 수도 있다.
+</EasyIntro>
+
+스위치 수백 대의 인터페이스 상태를 매일 모으는 스크립트가 있다. Netmiko로 SSH에 붙어 `show ip interface brief`를 치고, 화면에 나온 표를 공백으로 잘라 읽는다. 몇 달 잘 돌다가 어느 날 일부 장비에서만 상태 값이 이상하게 들어온다. `administratively`라는 상태, `down`이라는 프로토콜. 찾아보니 그 장비들에서 관리자가 포트 몇 개를 꺼 두었고, 꺼진 포트의 상태는 `administratively down`처럼 단어 두 개다. 공백으로 자르면 칸이 하나 밀린다.
+
+```text
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0     10.0.0.1        YES NVRAM  up                    up
+GigabitEthernet0/1     unassigned      YES unset  administratively down down
+```
+
+같은 종류의 고장은 펌웨어를 올려 열이 하나 늘거나, 열 이름이 바뀌거나, 경고 문구가 한 줄 끼어들 때도 생긴다. 사람이 읽으라고 만든 화면을 프로그램이 읽고 있어서다. 화면에는 약속이 없다.
+
+이 글은 그 약속을 만드는 방법들을 다룬다. CLI 화면을 긁는 Netmiko, 벤더 차이를 감춰 주는 NAPALM, 데이터 모양을 YANG 모델로 약속하고 NETCONF·RESTCONF로 주고받는 모델 기반 자동화, 그리고 장비가 값을 밀어 주는 gNMI 스트리밍 텔레메트리까지 간다. 플레이북으로 여러 장비에 같은 설정을 넣는 일은 [Ansible로 네트워크 자동화](/posts/ansible-network-automation)에, 그 설정을 git과 CI로 관리하는 흐름은 [네트워크 설정 CI/CD](/posts/network-config-cicd)에 있다. 이 글은 그 아래, 프로그램이 장비와 말하는 방식에 집중한다.
+
+실제 라우터는 없어서 장비 응답은 RFC에 정의된 형식으로만 보인다. YANG 모델 검사(pyang, yanglint)는 Ubuntu 24.04에서 직접 돌린 결과다.
+
+## 화면 긁기에서 모델까지
+
+장비를 프로그램으로 다루는 방식은 대략 네 층으로 나뉜다. 아래 그림은 위로 갈수록 "사람이 읽는 화면"에서 멀어지고 "약속된 데이터"에 가까워진다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="화면을 긁는 방식에서 모델 위의 API로 갈수록 결과의 모양이 약속된다"
+  nodes={[
+    { id: "cli", label: "Netmiko", sub: "SSH + 화면 텍스트", x: 100, y: 255, w: 150 },
+    { id: "napalm", label: "NAPALM", sub: "벤더 공통 getter", x: 100, y: 160, w: 150 },
+    { id: "nc", label: "NETCONF / RESTCONF", sub: "설정 읽기·쓰기", x: 100, y: 60, w: 170 },
+    { id: "gnmi", label: "gNMI", sub: "스트리밍 텔레메트리", x: 300, y: 60, w: 150 },
+    { id: "yang", label: "YANG 모델", sub: "데이터의 모양과 규칙", x: 300, y: 205, w: 150 },
+  ]}
+  edges={[
+    { from: "cli", to: "napalm", label: "감싼다" },
+    { from: "napalm", to: "nc", label: "일부 드라이버", dashed: true },
+    { from: "yang", to: "nc", label: "모양을 정한다" },
+    { from: "yang", to: "gnmi", label: "경로를 정한다" },
+  ]}
+/>
+
+어느 한 층이 정답이라 다른 층이 사라지는 것은 아니다. 오래된 장비는 SSH와 CLI밖에 없고, 최신 장비도 일부 기능은 CLI로만 된다. 현장에서는 장비 세대와 벤더에 따라 층을 섞어 쓴다. 각 층이 무엇을 약속하고 무엇을 약속하지 않는지 알아야 섞어 쓸 때 사고가 안 난다.
+
+## Netmiko: 사람 흉내를 내는 SSH
+
+Netmiko는 파이썬의 SSH 라이브러리(Paramiko) 위에서 네트워크 장비의 버릇을 처리해 준다. 프롬프트가 돌아올 때까지 기다리기, `--More--` 페이지 넘김 끄기, enable 모드 들어가기, 설정 모드 오가기 같은 것이다. 벤더마다 `device_type`으로 이 버릇을 고른다.
+
+```python
+from netmiko import ConnectHandler
+
+device = {
+    "device_type": "cisco_ios",
+    "host": "10.0.0.1",
+    "username": "netops",
+    "password": "...",
+}
+
+with ConnectHandler(**device) as conn:
+    # 사람이 치는 것과 같은 명령을 보내고, 화면에 나온 텍스트를 그대로 받는다
+    text = conn.send_command("show ip interface brief")
+    # 설정 명령 여러 줄을 설정 모드에서 차례로 친다
+    conn.send_config_set(["interface Gi0/1", "description uplink", "no shutdown"])
+```
+
+받은 `text`는 처음 장면의 그 표다. 이걸 데이터로 바꾸는 것이 파싱이고, 화면 긁기 자동화의 약한 고리가 여기다. 아래 함수에서 직접 겪어 볼 수 있다. 공백으로 잘라 읽는 순진한 방법은 `administratively down`에서 칸이 밀리고, 프롬프트나 빈 줄이 섞이면 엉뚱한 행이 생긴다. 줄 끝에서부터 맞추는 정규식으로 고쳐 보자.
+
+<CodePlayground
+  caption="show ip interface brief 출력 파싱하기"
+  functionName="parseIpBrief"
+  initialCode={`// text: 장비 화면 출력 전체
+// 반환: [{ name, ip, status, protocol }, ...] (머리글, 빈 줄, 프롬프트 줄은 건너뛴다)
+function parseIpBrief(text) {
+  return text.split("\\n").slice(1).filter((l) => l.trim() !== "").map((l) => {
+    const c = l.trim().split(/\\s+/);
+    return { name: c[0], ip: c[1], status: c[4], protocol: c[5] };
+  });
+}`}
+  solution={`function parseIpBrief(text) {
+  const rows = [];
+  for (const raw of text.split("\\n")) {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("Interface")) continue;
+    // 이름, IP, OK?, Method는 한 단어. 상태는 여러 단어일 수 있고, 프로토콜은 줄 끝의 up/down
+    const m = line.match(/^(\\S+)\\s+(\\S+)\\s+(YES|NO)\\s+(\\S+)\\s+(.+?)\\s+(up|down)$/);
+    if (!m) continue;
+    rows.push({ name: m[1], ip: m[2], status: m[5], protocol: m[6] });
+  }
+  return rows;
+}`}
+  tests={[
+    { label: "평범한 출력", args: ["Interface              IP-Address      OK? Method Status                Protocol\nGigabitEthernet0/0     10.0.0.1        YES NVRAM  up                    up\nLoopback0              192.168.255.1   YES manual up                    up"], expected: [{ name: "GigabitEthernet0/0", ip: "10.0.0.1", status: "up", protocol: "up" }, { name: "Loopback0", ip: "192.168.255.1", status: "up", protocol: "up" }] },
+    { label: "두 단어짜리 상태", args: ["Interface              IP-Address      OK? Method Status                Protocol\nGigabitEthernet0/0     10.0.0.1        YES NVRAM  up                    up\nGigabitEthernet0/1     unassigned      YES unset  administratively down down"], expected: [{ name: "GigabitEthernet0/0", ip: "10.0.0.1", status: "up", protocol: "up" }, { name: "GigabitEthernet0/1", ip: "unassigned", status: "administratively down", protocol: "down" }] },
+    { label: "프롬프트와 빈 줄이 섞임", args: ["\nrouter1#show ip interface brief\nInterface              IP-Address      OK? Method Status                Protocol\nGigabitEthernet0/2     10.0.2.1        YES manual down                  down\n\nrouter1#"], expected: [{ name: "GigabitEthernet0/2", ip: "10.0.2.1", status: "down", protocol: "down" }] },
+    { label: "인터페이스 없음", args: ["Interface              IP-Address      OK? Method Status                Protocol"], expected: [] },
+  ]}
+/>
+
+정규식을 고쳐도 근본 문제는 남는다. 이 정규식은 지금 보이는 화면을 기준으로 짰다. 다음 펌웨어가 열을 추가하면 또 고쳐야 한다. 그래서 직접 정규식을 쓰는 대신 TextFSM 템플릿 모음(ntc-templates)을 쓰는 경우가 많다. `send_command("show ip interface brief", use_textfsm=True)`를 주면 커뮤니티가 관리하는 템플릿으로 파싱한 결과를 바로 리스트로 받는다. 템플릿을 여러 사람이 같이 고쳐 주니 혼자 정규식을 관리하는 것보다 낫지만, 여전히 화면을 긁는 것이라 약속은 없다.
+
+설정을 넣는 쪽은 더 위험하다. `send_config_set`은 명령을 한 줄씩 친다. 다섯 줄 중 세 번째 줄에서 에러가 나면 앞의 두 줄은 이미 장비에 들어가 있다. 되돌리는 명령은 내가 따로 짜야 한다. 명령 결과가 성공인지도 화면 문구(`% Invalid input detected`)로 판단해야 한다. Netmiko는 SSH와 CLI밖에 없는 장비에서 여전히 유용하지만, 많은 장비의 설정을 바꾸는 주력 도구로 쓰기에는 이 두 가지가 걸린다.
+
+## NAPALM: 벤더 차이를 감추는 한 겹
+
+NAPALM은 여러 벤더 장비를 같은 함수로 다루게 해 주는 추상화 라이브러리다. 벤더마다 드라이버(`ios`, `eos`, `junos`, `nxos` 등)가 있고, 위에는 같은 이름의 함수가 있다.
+
+```python
+from napalm import get_network_driver
+
+driver = get_network_driver("eos")
+with driver("10.0.0.2", "netops", "...") as dev:
+    # 벤더와 상관없이 같은 모양의 딕셔너리가 돌아온다
+    facts = dev.get_facts()
+    ifaces = dev.get_interfaces()
+
+    # 설정 파일을 후보로 올리고, 지금 설정과 비교한 뒤, 확정한다
+    dev.load_merge_candidate(filename="snippets/uplink.cfg")
+    print(dev.compare_config())
+    if input("commit? [y/N] ") == "y":
+        dev.commit_config()
+    else:
+        dev.discard_config()
+```
+
+두 가지가 Netmiko와 다르다. 하나는 `get_` 함수(getter)의 결과 모양을 NAPALM이 정해 두었다는 것이다. `get_interfaces()`는 어떤 벤더든 `is_up`, `is_enabled`, `mtu` 같은 같은 키를 돌려준다. 드라이버 안쪽에서 무엇을 쓰는지는 벤더마다 다르다. 장비가 API를 주면 API를 쓰고, 없으면 결국 CLI 화면을 파싱한다. 그래도 파싱을 내 코드가 아니라 드라이버가 맡는다.
+
+다른 하나는 설정을 "후보 → 비교 → 확정 또는 폐기"로 다룬다는 것이다. `compare_config()`가 diff를 보여 주니 바꾸기 전에 확인할 수 있고, `rollback()`으로 직전 설정으로 돌아갈 수 있다. 다만 이 흐름을 장비가 기본으로 지원하는지는 벤더마다 다르다. Junos나 EOS처럼 후보 설정이 있는 장비에서는 그 기능을 그대로 쓰고, 없는 장비(IOS 같은)에서는 드라이버가 파일을 올리고 교체하는 식으로 흉내 낸다. 같은 함수 이름 뒤에서 안전성이 다를 수 있다는 뜻이다.
+
+## YANG: 데이터의 모양을 먼저 약속한다
+
+화면 긁기의 문제는 "결과가 어떤 모양일지 약속이 없다"였다. YANG(RFC 7950)은 그 약속을 적는 언어다. 장비가 어떤 설정과 상태를 갖는지, 각 값의 타입과 범위, 무엇이 필수이고 무엇이 목록의 키인지를 모델로 적는다. 인터페이스 모델을 작게 하나 만들어 봤다.
+
+```yang
+module acme-interfaces {
+  yang-version 1.1;
+  namespace "urn:acme:interfaces";
+  prefix acme-if;
+
+  revision 2026-10-01 {
+    description "first release";
+  }
+
+  typedef mtu-type {
+    type uint16 {
+      range "68..9216";
+    }
+  }
+
+  container interfaces {
+    list interface {
+      key "name";
+      leaf name {
+        type string;
+      }
+      leaf description {
+        type string {
+          length "0..64";
+        }
+      }
+      leaf enabled {
+        type boolean;
+        default "true";
+      }
+      leaf mtu {
+        type mtu-type;
+        default "1500";
+      }
+      leaf-list vlan {
+        type uint16 {
+          range "1..4094";
+        }
+      }
+      leaf oper-status {
+        config false;
+        type enumeration {
+          enum up;
+          enum down;
+        }
+      }
+    }
+  }
+}
+```
+
+용어 몇 개만 알면 읽힌다. `container`는 묶음, `list`는 키(`name`)로 구분되는 항목의 목록, `leaf`는 값 하나, `leaf-list`는 값의 목록이다. `config false`가 붙은 `oper-status`는 설정이 아니라 장비가 알려 주는 상태다. 사람이 쓸 수 없고 읽기만 한다. 모델을 큰 그림으로 볼 때는 pyang의 트리 출력을 쓴다.
+
+```bash
+# pyang은 파이썬 패키지다. 가상 환경에 설치한다
+python3 -m venv ~/venvs/yang && ~/venvs/yang/bin/pip install pyang
+# 모델 문법을 검사하고, 트리로 그린다
+~/venvs/yang/bin/pyang acme-interfaces.yang
+~/venvs/yang/bin/pyang -f tree acme-interfaces.yang
+```
+
+```text
+module: acme-interfaces
+  +--rw interfaces
+     +--rw interface* [name]
+        +--rw name           string
+        +--rw description?   string
+        +--rw enabled?       boolean
+        +--rw mtu?           mtu-type
+        +--rw vlan*          uint16
+        +--ro oper-status?   enumeration
+```
+
+`rw`는 설정(읽고 쓰기), `ro`는 상태(읽기만), `*`는 목록, `?`는 생략 가능, `[name]`은 목록의 키다. 벤더 문서에서 YANG 트리를 보여 줄 때도 이 표기를 쓴다.
+
+모델의 진가는 값을 장비에 보내기 전에 검사할 수 있다는 데 있다. libyang의 `yanglint`로 설정 데이터를 모델에 대 봤다. JSON 표기는 RESTCONF가 쓰는 형식(RFC 7951)으로, 최상위 이름 앞에 모듈 이름이 붙는다.
+
+```bash
+# yanglint는 libyang 도구 패키지에 들어 있다 (Ubuntu 24.04)
+sudo apt install -y libyang2-tools
+# 설정 데이터(config)로 검사한다
+yanglint -t config acme-interfaces.yang good.json; echo "exit=$?"
+yanglint -t config acme-interfaces.yang bad.json; echo "exit=$?"
+```
+
+```json
+{
+  "acme-interfaces:interfaces": {
+    "interface": [
+      { "name": "Ethernet1", "mtu": 9600, "vlan": [10, 5000] }
+    ]
+  }
+}
+```
+
+`good.json`(MTU 9000, VLAN 10과 20)은 `exit=0`으로 조용히 통과했다. 위의 `bad.json`은 이렇게 걸렸다.
+
+```text
+libyang err : Unsatisfied range - value "9600" is out of the allowed range. (Data location "/acme-interfaces:interfaces/interface[name='Ethernet1']/mtu", line number 4.)
+YANGLINT[E]: Failed to parse input data file "bad.json".
+exit=7
+```
+
+에러가 어느 값인지 경로로 정확히 짚는다. 첫 에러에서 멈춰서 VLAN 5000은 아직 보고되지 않았다. 상태 값을 설정에 넣으려 해도 막힌다.
+
+```text
+libyang err : Unexpected data state node "oper-status" found. (Data location "/acme-interfaces:interfaces/interface[name='Ethernet1']/oper-status", line number 4.)
+```
+
+같은 데이터를 XML로 바꾸면 NETCONF가 주고받는 모양이 된다.
+
+```bash
+# 검사한 데이터를 XML 표기로 출력한다
+yanglint -t config -f xml acme-interfaces.yang good.json
+```
+
+```xml
+<interfaces xmlns="urn:acme:interfaces">
+  <interface>
+    <name>Ethernet1</name>
+    <description>uplink to core</description>
+    <mtu>9000</mtu>
+    <vlan>10</vlan>
+    <vlan>20</vlan>
+  </interface>
+</interfaces>
+```
+
+현실의 모델은 셋으로 나뉜다. IETF 표준 모델(`ietf-interfaces`, `ietf-ip` 등), 여러 운영사가 모여 만든 OpenConfig 모델(`openconfig-interfaces` 등), 그리고 벤더 고유 모델(Cisco IOS XE의 `Cisco-IOS-XE-native` 같은 것)이다. 표준 모델은 벤더를 넘어 같은 코드를 쓰게 해 주지만 기능을 다 담지 못한다. 벤더 모델은 그 장비의 모든 기능을 담지만 벤더에 묶인다. 장비가 어떤 모델을 지원하는지는 연결할 때 장비가 알려 주는 capability 목록에서 확인한다.
+
+## NETCONF: 트랜잭션이 있는 설정 API
+
+NETCONF(RFC 6241)는 YANG 모델 위의 데이터를 XML로 주고받는 프로토콜이다. 보통 SSH 위에서 830번 포트로 돈다(RFC 6242). CLI와 가장 다른 점은 데이터스토어라는 개념이다. 장비 안에 설정이 여러 벌 있다.
+
+- running: 지금 장비가 쓰고 있는 설정.
+- candidate: 바꿀 설정을 미리 적어 두는 작업 공간. `:candidate` 기능을 지원하는 장비에만 있다. 여기 쓴 것은 commit하기 전에는 장비 동작에 반영되지 않는다.
+- startup: 재부팅 때 불러오는 설정. 지원하는 장비에만 있다.
+
+candidate가 있는 장비에서 여러 설정을 바꾸는 흐름은 이렇다. 아래 그림에서 다음을 누르며 각 메시지가 무엇을 하는지 보자.
+
+<SequenceDiagram
+  caption="candidate에 모아 쓰고, 검사하고, 한 번에 commit한다. 확인 commit은 시간 안에 다시 확인하지 않으면 스스로 되돌린다"
+  actors={[
+    { id: "cl", label: "클라이언트" },
+    { id: "dev", label: "장비" },
+    { id: "cand", label: "candidate" },
+    { id: "run", label: "running" },
+  ]}
+  steps={[
+    { from: "cl", to: "dev", label: "hello", title: "서로 할 줄 아는 것을 알린다", detail: "양쪽이 hello를 보내 capability를 교환한다. 장비는 candidate, confirmed-commit 지원 여부와 지원하는 YANG 모듈 목록을 알려 준다.", payload: "urn:ietf:params:netconf:capability:candidate:1.0\nurn:ietf:params:netconf:capability:confirmed-commit:1.1" },
+    { from: "cl", to: "cand", label: "lock", title: "다른 사람이 끼어들지 못하게 잠근다", detail: "candidate와 running을 잠근다. 다른 세션이나 CLI 사용자가 같은 설정을 동시에 바꾸지 못한다." },
+    { from: "cl", to: "cand", label: "edit-config", title: "바꿀 내용을 candidate에 쓴다", detail: "여러 번 나눠 써도 장비 동작은 아직 그대로다. 모델에 맞지 않는 값은 여기서 rpc-error로 돌아온다.", payload: "<edit-config><target><candidate/></target>..." },
+    { from: "cl", to: "cand", label: "validate", title: "확정 전에 전체를 검사한다", detail: "candidate 전체가 모델과 장비 규칙에 맞는지 본다. 바꾼 부분끼리 충돌하는 것도 여기서 드러난다." },
+    { from: "cand", to: "run", label: "commit 600s", title: "확인 commit으로 반영한다", detail: "running에 한 번에 반영하되, 정해진 시간(기본 600초) 안에 확인 commit이 다시 오지 않으면 장비가 스스로 이전 설정으로 되돌린다.", payload: "<commit><confirmed/><confirm-timeout>120</confirm-timeout></commit>" },
+    { from: "cl", to: "dev", label: "확인", title: "새 설정으로 접속되는지 보고 확정한다", detail: "새 설정으로 관리 접속이 살아 있으면 commit을 한 번 더 보내 확정한다. 접속이 끊겼다면 아무것도 안 해도 시간이 지나 되돌아온다." },
+    { from: "cl", to: "cand", label: "unlock", title: "잠금을 푼다", detail: "세션이 끊기면 잠금도 풀린다. 실패했을 때는 discard-changes로 candidate를 running과 같게 되돌린다." },
+  ]}
+/>
+
+이 흐름이 CLI와 무엇이 다른지가 면접의 핵심 질문이다. CLI에서 다섯 줄을 치면 한 줄씩 바로 반영되고, 세 번째 줄에서 실패하면 반쯤 바뀐 상태가 남는다. candidate와 commit은 다섯 줄을 하나의 트랜잭션으로 묶는다. 전부 반영되거나 아무것도 반영되지 않는다. 확인 commit은 한 걸음 더 간다. 관리 인터페이스 ACL을 잘못 바꿔 내 접속이 끊겨도, 장비가 시간이 지나 스스로 되돌린다. 원격지 장비에 사람이 직접 가야 하는 사고를 막는 장치다.
+
+candidate가 없는 장비도 많다. 그때는 running에 바로 쓴다. `edit-config`에 `error-option`으로 `rollback-on-error`를 주면(`:rollback-on-error` 기능 지원 시) 그 요청 안에서 하나라도 실패하면 요청 전체를 되돌린다. 요청 하나 단위의 트랜잭션이다.
+
+메시지 모양은 RFC에 정의되어 있다. 인터페이스 하나의 설명을 바꾸는 `edit-config`는 이런 형식이다.
+
+```xml
+<rpc message-id="101" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <edit-config>
+    <target><candidate/></target>
+    <default-operation>merge</default-operation>
+    <error-option>rollback-on-error</error-option>
+    <config>
+      <interfaces xmlns="urn:acme:interfaces">
+        <interface>
+          <name>Ethernet1</name>
+          <description>uplink to core</description>
+        </interface>
+      </interfaces>
+    </config>
+  </edit-config>
+</rpc>
+```
+
+`default-operation`은 보낸 내용을 기존 설정과 어떻게 합칠지다. `merge`는 보낸 부분만 바꾸고, `replace`는 보낸 범위를 통째로 보낸 내용으로 바꾼다. 요소마다 `operation="delete"` 같은 속성을 붙여 그 부분만 지울 수도 있다. `replace`는 강력한 만큼 위험하다. 인터페이스 하나를 고치려고 `interfaces` 전체를 `replace`로 보내면 보내지 않은 인터페이스 설정이 모두 사라진다.
+
+파이썬에서는 ncclient로 이 메시지를 보낸다.
+
+```python
+from ncclient import manager
+
+with manager.connect(host="10.0.0.3", port=830, username="netops",
+                     password="...", hostkey_verify=True) as m:
+    # 장비가 candidate를 지원하는지 먼저 본다
+    assert ":candidate" in m.server_capabilities
+
+    # 필요한 부분만 골라 읽는다 (subtree 필터)
+    running = m.get_config(source="running", filter=("subtree",
+        '<interfaces xmlns="urn:acme:interfaces"/>'))
+
+    with m.locked("candidate"):
+        m.edit_config(target="candidate", config=CONFIG_XML)
+        m.validate(source="candidate")
+        m.commit(confirmed=True, timeout="120")
+        # 여기서 새 설정으로 관리 접속이 되는지 별도로 확인한 뒤
+        m.commit()
+```
+
+`get_config`의 결과는 XML이다. 화면 텍스트가 아니라 모델대로 생긴 데이터라서, 열이 늘거나 문구가 바뀌어도 내 코드가 읽는 경로(`interfaces/interface/mtu`)는 그대로다. 모델의 revision이 바뀌면 바뀔 수 있지만, 그 변화는 모델 파일로 미리 확인할 수 있다.
+
+## RESTCONF: 같은 모델을 HTTP로
+
+RESTCONF(RFC 8040)는 YANG 모델 위의 데이터를 HTTP로 다룬다. 모델의 경로가 곧 URL이 되고, HTTP 메서드가 동작이 된다. GET은 읽기, PUT은 교체, PATCH는 병합, POST는 만들기, DELETE는 지우기다. 데이터는 `application/yang-data+json`이나 `application/yang-data+xml`로 주고받는다. 아래 URL을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="RESTCONF URL은 YANG 트리를 그대로 따라 내려간다"
+  base="https://10.0.0.4/restconf/data"
+  separator="/"
+  joiner="/"
+  params={[
+    { key: "acme-interfaces:interfaces", title: "모듈 이름과 최상위 노드", description: "최상위 노드 앞에는 그 노드를 정의한 모듈 이름을 붙인다. 같은 이름의 노드가 다른 모듈에 있어도 헷갈리지 않는다. /restconf는 장비가 /.well-known/host-meta로 알려 주는 루트로, 대부분 /restconf다." },
+    { key: "interface=Ethernet1", title: "목록 항목 고르기", description: "list는 이름=키 값으로 항목 하나를 고른다. 키가 여러 개면 쉼표로 잇는다. 키 값에 /가 들어가면(GigabitEthernet0/1) %2F로 인코딩해야 한다." },
+    { key: "mtu", title: "leaf 하나", description: "끝까지 내려가면 값 하나를 읽고 쓸 수 있다. GET이면 그 값만, PATCH나 PUT이면 그 값만 바꾼다.", code: "GET 응답 본문\n{ \"acme-interfaces:mtu\": 9000 }" },
+  ]}
+/>
+
+```bash
+# 인터페이스 하나를 JSON으로 읽는다
+curl -s -u netops:... -H 'Accept: application/yang-data+json' \
+  https://10.0.0.4/restconf/data/acme-interfaces:interfaces/interface=Ethernet1
+
+# 설명 하나만 병합으로 바꾼다 (나머지 속성은 그대로)
+curl -s -u netops:... -X PATCH \
+  -H 'Content-Type: application/yang-data+json' \
+  -d '{"acme-interfaces:interface":[{"name":"Ethernet1","description":"uplink to core"}]}' \
+  https://10.0.0.4/restconf/data/acme-interfaces:interfaces/interface=Ethernet1
+```
+
+RESTCONF의 장점은 익숙함이다. 웹 API를 다루던 사람이면 curl과 아무 HTTP 라이브러리로 바로 시작하고, JSON이라 다루기 쉽다. 대신 NETCONF의 트랜잭션 장치가 기본에는 없다. RESTCONF 요청 하나는 그 자체로 원자적이지만, candidate에 여러 요청을 모았다가 한 번에 commit하거나 잠그는 흐름은 기본 RFC에 없다(장비에 따라 NMDA 데이터스토어 확장, RFC 8527 같은 것을 제공하기도 한다). 그래서 흔한 분담은 이렇다. 상태를 읽거나 설정 하나를 바꾸는 가벼운 일은 RESTCONF, 여러 설정을 한 번에 바꾸고 실패하면 통째로 되돌려야 하는 일은 NETCONF.
+
+PUT과 PATCH의 차이는 NETCONF의 `replace`와 `merge`와 같다. 인터페이스 하나를 PUT하면서 `description`만 보내면, 보내지 않은 `mtu`와 `vlan`은 기본값으로 돌아가거나 사라진다. 일부만 바꿀 때는 PATCH다.
+
+## gNMI: 묻지 않아도 알려 주는 텔레메트리
+
+설정이 아니라 상태(인터페이스 카운터, 광 모듈 온도, BGP 상태)를 모을 때 전통적인 방법은 SNMP 폴링이다. 모니터링 서버가 몇십 초마다 장비에 묻는다. 묻는 주기 사이에 일어난 일은 놓치고, 장비가 많을수록 묻는 쪽이 바빠진다. 링크가 3초 동안 끊겼다 붙은 일은 60초 폴링에 안 보인다.
+
+gNMI(gRPC Network Management Interface)는 gRPC 위의 관리 프로토콜로, OpenConfig 쪽에서 나왔다. `Get`, `Set`, `Capabilities`, `Subscribe` 네 가지 RPC가 있는데, 핵심은 `Subscribe`다. 클라이언트가 한 번 구독하면 장비가 값을 밀어 준다.
+
+- `STREAM` 모드의 `SAMPLE`: 정해진 주기(예: 10초)마다 값을 보낸다.
+- `STREAM` 모드의 `ON_CHANGE`: 값이 바뀔 때만 보낸다. 인터페이스 상태, BGP 이웃 상태처럼 드물게 바뀌지만 바뀌면 바로 알아야 하는 값에 맞다.
+- `ONCE`와 `POLL`: 한 번 받거나, 클라이언트가 원할 때 받는다.
+
+경로는 YANG 트리를 따른다(`/interfaces/interface[name=Ethernet1]/state/counters`). 데이터는 Protocol Buffers로 인코딩되어 XML보다 훨씬 작고 빠르다. 수집 쪽에서는 gnmic 같은 클라이언트나 Telegraf의 gNMI 입력으로 받아 시계열 DB에 넣는다. 장비 상태 수집을 어떻게 경보로 잇는지는 [네트워크 모니터링](/posts/network-monitoring)에 있다.
+
+gNMI에도 `Set`이 있어 설정을 바꿀 수 있지만, 설정 변경에 gNMI를 쓰는 곳은 아직 장비와 벤더에 따라 다르다. 현장에서 흔한 조합은 "설정은 NETCONF, 텔레메트리는 gNMI"다.
+
+## Ansible, Terraform과는 어떻게 나누나
+
+지금까지는 프로그램이 장비와 말하는 방식이었다. Ansible과 Terraform은 그 위에서 "무엇을 어떤 상태로 둘지"를 적는 도구다. 둘 다 아래 층을 쓴다.
+
+Ansible의 네트워크 모듈은 연결 방식을 고를 수 있다. `ansible_connection: ansible.netcommon.network_cli`면 SSH로 CLI를 치고(Netmiko와 같은 층), `ansible.netcommon.netconf`면 NETCONF로 말한다. `cisco.ios.ios_interfaces` 같은 리소스 모듈은 장비의 현재 상태를 구조화된 데이터로 읽어 원하는 상태와 비교한 뒤 차이만 보낸다. 같은 플레이북도 연결 방식에 따라 안전성이 달라진다. 실제 플레이북은 [Ansible로 네트워크 자동화](/posts/ansible-network-automation)에서 다뤘다.
+
+Terraform은 클라우드 API처럼 장비 API를 프로바이더로 감싼다. 일부 벤더는 RESTCONF나 NETCONF, gNMI를 쓰는 프로바이더를 낸다. 장비 설정을 state로 기억하고 plan으로 차이를 보여 주니, 선언형으로 관리하기 좋은 부분(VLAN 목록, 인터페이스 설명, ACL)에 맞는다. 다만 장비는 클라우드보다 사람이 CLI로 직접 고치는 일이 잦아 drift가 많다. 클라우드 쪽 네트워크를 Terraform으로 다루는 법은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에 있다.
+
+정리하면 고르는 기준은 장비가 무엇을 말할 줄 아느냐와 변경이 얼마나 위험하냐다. NETCONF를 지원하고 candidate가 있으면 여러 설정을 한 번에 바꾸는 일은 그 길로 간다. SSH와 CLI밖에 없는 장비는 Netmiko나 `network_cli`로 하되, 파싱은 템플릿에 맡기고 변경 전후 설정을 백업해 둔다. 상태 수집은 장비가 지원하면 gNMI 스트리밍으로 옮긴다.
+
+## 현장에서 장비 API를 쓰다 막히는 순간
+
+- NETCONF 접속이 안 된다: 장비에서 NETCONF가 꺼져 있는 경우가 많다(Cisco IOS XE는 `netconf-yang` 설정이 필요하다). 830번 포트가 방화벽에서 열려 있는지, SSH 서브시스템으로 붙는지 본다.
+- edit-config가 `unknown-element`로 실패한다: 장비가 그 모델이나 revision을 지원하지 않는다. hello의 capability 목록에서 모듈 이름과 revision을 확인하고, 장비가 주는 모델 파일을 받아 pyang으로 트리를 본다.
+- RESTCONF로 인터페이스를 바꿨더니 다른 설정이 사라졌다: PATCH 자리에 PUT을 썼다. 일부만 바꿀 때는 PATCH다.
+- 키에 `/`가 든 인터페이스가 404다: `GigabitEthernet0/1`의 `/`를 `%2F`로 인코딩하지 않았다.
+- 관리 ACL을 바꾸다 장비와 연결이 끊겼다: 확인 commit을 쓰지 않았다. 원격 장비의 접속 경로에 닿는 변경은 항상 `confirmed` commit으로 하고, 확인 전에 새 설정으로 접속되는지 별도 세션으로 시험한다.
+- Netmiko 스크립트가 일부 장비에서 멈춘다: 예상한 프롬프트가 나오지 않아 기다리고 있다. 배너나 확인 질문(`[confirm]`)이 끼어든 경우다. `expect_string`과 타임아웃을 명시한다.
+
+## 화면 대신 약속을 읽는다
+
+화면 긁기는 어떤 장비에서나 되지만 약속이 없어서, 화면이 바뀌면 깨지고 실패하면 반쯤 바뀐 상태가 남는다. YANG은 데이터의 모양과 규칙을 미리 약속하고, NETCONF는 그 위에 candidate와 commit으로 트랜잭션을, 확인 commit으로 스스로 되돌리는 안전장치를 얹는다. RESTCONF는 같은 모델을 HTTP로 가볍게 열고, gNMI는 상태를 묻지 않아도 밀어 준다. 장비가 무엇을 말할 줄 아는지에 맞춰 층을 고르고, 변경이 위험할수록 트랜잭션이 있는 길로 간다.
+
+## 면접에서 나올 만한 질문
+
+### CLI 화면 긁기 자동화의 한계는 무엇인가요?
+
+사람이 읽으라고 만든 출력이라 모양에 약속이 없다. 펌웨어가 열을 추가하거나 상태가 두 단어(`administratively down`)가 되면 파싱이 깨진다. 설정도 한 줄씩 바로 반영돼서 중간에 실패하면 반쯤 바뀐 상태가 남고, 성공 여부도 화면 문구로 판단해야 한다. TextFSM 템플릿으로 파싱을 줄일 수는 있지만 약속이 없다는 점은 그대로다.
+
+### YANG은 무엇이고 왜 필요한가요?
+
+장비의 설정과 상태 데이터가 어떤 모양인지, 값의 타입과 범위, 목록의 키, 설정인지 상태인지를 적는 모델링 언어다. 모델이 있으면 장비에 보내기 전에 값을 검사할 수 있고, 펌웨어가 바뀌어도 데이터 경로는 모델이 바뀌지 않는 한 그대로다. IETF 표준, OpenConfig, 벤더 고유 모델이 있고 장비는 지원 모델을 capability로 알려 준다.
+
+### NETCONF의 running과 candidate 데이터스토어는 무엇이 다른가요?
+
+running은 지금 장비가 쓰는 설정이고 candidate는 바꿀 내용을 모아 두는 작업 공간이다. candidate에 여러 번 써도 장비 동작은 그대로이고, commit하는 순간 한 번에 running에 반영된다. 실패하면 discard-changes로 버린다. candidate는 장비가 `:candidate` 기능을 지원할 때만 있다.
+
+### 트랜잭션 커밋이 주는 안전성은 구체적으로 무엇인가요?
+
+여러 설정 변경이 전부 반영되거나 아무것도 반영되지 않는다. CLI처럼 세 번째 줄에서 실패해 반쯤 바뀐 상태가 남지 않는다. 확인 commit을 쓰면 정해진 시간 안에 다시 확인하지 않을 때 장비가 스스로 이전 설정으로 되돌려, 관리 접속을 끊는 실수에서도 복구된다. lock으로 다른 사람의 동시 변경도 막는다.
+
+### NETCONF와 RESTCONF는 어떻게 다르고 언제 무엇을 쓰나요?
+
+둘 다 YANG 모델 위의 데이터를 다루지만 NETCONF는 SSH 위의 XML RPC이고 RESTCONF는 HTTP 메서드와 URL로 다룬다. RESTCONF는 익숙하고 가볍지만 기본에는 candidate와 commit, lock 같은 여러 요청에 걸친 트랜잭션이 없다. 상태 읽기나 설정 하나 바꾸기는 RESTCONF, 여러 설정을 묶어 바꾸고 실패 시 통째로 되돌려야 하면 NETCONF를 쓴다.
+
+### RESTCONF에서 PUT과 PATCH를 헷갈리면 어떤 사고가 나나요?
+
+PUT은 그 자원을 보낸 내용으로 통째로 바꾸고 PATCH는 보낸 부분만 병합한다. 설명 하나 바꾸려고 PUT에 설명만 담아 보내면 보내지 않은 MTU나 VLAN 설정이 기본값으로 돌아가거나 사라진다. NETCONF의 `replace`와 `merge`도 같은 관계다.
+
+### SNMP 폴링 대신 gNMI 스트리밍 텔레메트리를 쓰는 이유는요?
+
+폴링은 묻는 주기 사이의 일을 놓치고 장비가 많을수록 수집 쪽 부담이 커진다. gNMI는 한 번 구독하면 장비가 주기마다(SAMPLE) 또는 값이 바뀔 때마다(ON_CHANGE) 밀어 주고, Protocol Buffers라 데이터가 작다. 몇 초짜리 링크 끊김처럼 폴링에 안 보이던 일이 보인다.
+
+### NAPALM을 쓰면 모든 장비에서 같은 안전성을 얻나요?
+
+아니다. 함수 이름과 결과 모양은 같지만 드라이버 안쪽은 벤더마다 다르다. 후보 설정이 있는 장비에서는 그 기능을 그대로 쓰지만, 없는 장비에서는 파일을 올리고 교체하는 식으로 흉내 낸다. 같은 `commit_config` 뒤에서 원자성과 롤백의 보장이 다를 수 있으니 장비별 드라이버 동작을 확인한다.

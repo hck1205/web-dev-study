@@ -1,0 +1,400 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-custom-properties");
+
+<EasyIntro>
+  CSS 변수는 색이나 간격 같은 값에 이름을 붙여 두고 여러 곳에서 그 이름으로 꺼내 쓰는 방법이다. 이름만 바꾸면 그 이름을 쓰는 곳이 한꺼번에 바뀐다.
+
+  집안의 가훈을 떠올리면 쉽다. 할머니가 정한 가훈은 부모를 거쳐 아이에게 그대로 내려온다. 그런데 어느 집이 자기 집만의 가훈을 새로 정하면 그 집 아이들은 새 가훈을 따른다. CSS 변수도 위에서 정한 값이 아래로 내려오고, 중간에서 다시 정하면 그 아래만 바뀐다.
+
+  또 하나 특이한 점이 있다. 가훈은 실제로 쓰일 때가 되어서야 읽힌다. 그래서 가훈에 엉뚱한 말이 적혀 있으면, 쓰는 순간에야 "이건 말이 안 된다"는 걸 알고 아예 없던 일로 친다.
+
+  자바스크립트로 가훈을 바꾸면 그 아래 사람들이 모두 새 가훈을 다시 확인해야 한다. 집안이 크면 확인할 사람이 많아져 시간이 걸린다. 이 글은 이 규칙들을 브라우저에서 하나씩 확인해 본다.
+</EasyIntro>
+
+다크 모드를 넣자는 요청이 왔다. 색은 이미 Sass 변수로 다 정리해 두었으니 쉬울 줄 알았다. `.dark` 클래스 안에서 `$brand`를 다시 정하면 될 것 같았다. 빌드해 보니 다크 모드에서도 색이 그대로였다.
+
+```scss
+@use "sass:color";
+$brand: #2563eb;
+.button { background: $brand; }
+.dark { $brand: #7aa2ff; }
+.card { border-color: $brand; }
+```
+
+```text
+.button {
+  background: #2563eb;
+}
+
+.card {
+  border-color: #2563eb;
+}
+```
+
+Dart Sass 1.106.1로 컴파일한 결과다. `.dark` 블록은 결과에서 통째로 사라졌다. Sass 변수는 컴파일하는 동안만 있는 이름이다. 빌드가 끝나면 값이 문자열로 박히고 이름은 남지 않는다. `.dark` 안의 `$brand`는 그 블록 안에서만 쓰이는 지역 변수였고, 블록 안에 쓰는 곳이 없으니 아무것도 나오지 않았다. 브라우저 입장에서는 `.dark`라는 규칙이 처음부터 없다.
+
+런타임에 바뀌는 테마는 CSS 사용자 정의 속성(custom properties), 흔히 CSS 변수라고 부르는 것으로 만든다. 이 글은 그 변수가 Sass 변수와 어떻게 다르게 동작하는지 따라간다. 결과는 모두 Chromium 141에서 `getComputedStyle`로 직접 확인했다. CSS 변수로 동적 스타일과 테마를 넘기는 방식을 다른 스타일링 방식과 비교한 내용은 [CSS 스타일링 방식 고르기](/posts/css-styling-approaches)에, 토큰을 몇 층으로 나눌지는 [디자인 시스템 만들기](/posts/design-system-building)에 있다. 여기서는 변수 자체의 규칙에 집중한다.
+
+## 변수는 이름이 아니라 속성이다
+
+`--brand: blue`는 변수 선언처럼 보이지만 실제로는 `color`나 `margin`과 같은 CSS 속성 선언이다. 이름이 `--`로 시작한다는 것만 다르다. 그래서 일반 속성이 따르는 규칙을 그대로 따른다.
+
+- 선택자에 맞는 요소에만 걸린다. `:root`에 적으면 루트 요소에, `.card`에 적으면 카드에 걸린다.
+- 같은 요소에 여러 번 걸리면 캐스케이드로 하나가 이긴다. 명시도와 순서, `@layer`가 다 똑같이 적용된다([캐스케이드와 명시도](/posts/css-cascade-specificity)).
+- 상속된다. 자식은 따로 정하지 않으면 부모의 값을 물려받는다.
+
+마지막 규칙 덕분에 범위를 나눌 수 있다. 같은 `.c6 { background-color: var(--brand) }` 규칙을 두 군데에 두고, 한쪽 조상에만 `--brand`를 다시 정했다.
+
+```css
+:root { --brand: rgb(0, 0, 255); }
+.scope { --brand: rgb(255, 0, 0); }
+.c6 { background-color: var(--brand); }
+```
+
+```text
+c6 bg rgb(0, 0, 255) scoped rgb(255, 0, 0)
+```
+
+`.scope` 밖의 요소는 `:root`에서 물려받은 파랑, 안의 요소는 빨강이다. Sass의 `.dark` 블록이 하려던 일이 바로 이것이다. 다크 모드는 `:root[data-theme="dark"]`에서 변수 몇 개를 다시 정하는 일이 되고, 컴포넌트는 어느 테마인지 몰라도 된다.
+
+범위를 좁히는 반대 방향도 있다. 어떤 가지에서 물려받은 변수를 끊고 싶으면 그 가지에 `--brand: initial`을 적는다. 등록하지 않은 변수의 초깃값은 "값 없음"이라서, 그 아래에서는 `--brand`가 없는 것처럼 동작하고 `var(--brand, gray)`의 대체값이 나온다. 외부 위젯을 페이지 안에 넣을 때 페이지 테마 변수가 위젯 안으로 새어 드는 걸 이렇게 막는다.
+
+변수의 값은 거의 아무 글자나 된다. CSS 문법으로 해석하지 않고 토큰 덩어리로 들고 있다가, 쓰는 자리에서 해석한다. 앞뒤 공백은 잘린다. `--raw:   blue  ;`를 읽으면 `"blue"`가 나왔다. 이름은 대소문자를 구분해서 `--Brand`와 `--brand`는 다른 변수다.
+
+## var()는 쓰는 자리에서 토큰을 끼워 넣는다
+
+`var(--gap)`은 계산값을 구하는 단계에서 변수의 토큰을 그 자리에 그대로 붙여 넣는다. 그다음에야 그 속성의 문법으로 해석한다. 이 순서를 알면 이상해 보이는 결과 몇 가지가 설명된다.
+
+```css
+:root { --gap: 20px; }
+.c7 { padding-left: calc(var(--gap) * 2); }   /* calc(20px * 2) */
+.c8 { --size: 10; width: var(--size)px; }      /* 10 과 px 가 따로 */
+.c9 { --size: 10px; width: calc(var(--size) * 3); }
+```
+
+```text
+c7 calc 40px
+c8 var(--size)px 1264px
+c9 calc 30px
+```
+
+`.c7`과 `.c9`는 기대대로다. `.c8`은 `10px`이 될 것 같지만 `width`가 화면 폭인 1264px로 나왔다. 토큰은 글자처럼 이어 붙지 않는다. `10`이라는 숫자 토큰 뒤에 `px`라는 별도 토큰이 따라온 것이라 `width`에 맞는 값이 아니다. 그래서 선언이 무효가 되어 `width`가 `auto`로 돌아갔다. 단위가 없는 숫자를 변수로 받았으면 `calc(var(--size) * 1px)`로 단위를 곱한다.
+
+대체값은 첫 쉼표 뒤의 전부다. `var(--font, Pretendard, sans-serif)`에서 대체값은 `Pretendard, sans-serif` 한 덩어리다. 쉼표가 들어간 글꼴 목록이나 그림자를 대체값으로 줄 때 편하지만, 대체값에 변수를 하나 더 두고 싶으면 `var(--a, var(--b, red))`처럼 중첩한다.
+
+## 대체값이 있어도 무효가 되는 순간
+
+여기가 CSS 변수에서 가장 헷갈리는 곳이다. 아래 네 선언을 초록 글자인 부모 아래에 두었다.
+
+```css
+.parent { color: rgb(0, 128, 0); }
+.c1 { color: red; color: var(--gap); }          /* --gap은 20px */
+.c2 { color: var(--nope, rgb(255, 165, 0)); }  /* --nope은 없다 */
+.c3 { color: var(--nope); }
+.c4 { margin-top: var(--gap); }
+```
+
+```text
+c1 color(var=20px) rgb(0, 128, 0)
+c2 fallback rgb(255, 165, 0)
+c3 missing no fallback rgb(0, 128, 0)
+c4 margin 20px
+```
+
+`.c1`이 핵심이다. `color: var(--gap)`에 `20px`이 들어가면 색으로 말이 안 된다. 일반 CSS라면 파서가 틀린 선언을 버리고 바로 앞의 `color: red`를 썼을 것이다. 그런데 결과는 빨강이 아니라 부모의 초록이다.
+
+브라우저는 CSS를 읽는 시점에 `var()`가 들어간 선언을 미리 검사할 수 없다. 값이 무엇이 될지 모르기 때문이다. 그래서 일단 유효하다고 보고 캐스케이드에서 `color: var(--gap)`을 이긴 선언으로 고른다. 진 `color: red`는 이미 버려졌다. 계산값 단계에서 `20px`을 넣어 보고서야 틀린 걸 알게 되는데, 그때는 돌아갈 선언이 없다. 그래서 그 속성은 `unset`처럼 동작한다. `color`는 상속 속성이라 부모 값을, 상속되지 않는 속성이라면 초깃값을 쓴다. 명세는 이 상태를 "계산값 시점에 무효(invalid at computed-value time)"라고 부른다.
+
+`.c2`의 대체값은 변수가 없을 때만 쓰인다. 변수가 있는데 값이 틀렸을 때는 대체값으로 가지 않는다. 예를 들어 `--nope: 20px`였다면 `.c2`도 주황이 아니라 초록이 된다. 대체값은 "값이 맞지 않을 때"의 안전망이 아니라 "변수가 없을 때"의 기본값이다.
+
+아래 그림에서 다음을 누르면 `.c1`의 `color` 하나가 정해지는 과정을 따라간다. 위 칸이 단계이고, 아래 상자가 그 단계에서 남은 값이다.
+
+<AlgoTrace
+  caption=".c1의 color가 빨강이 아니라 부모의 초록이 되는 과정"
+  memoryLabel="남은 값"
+  cells={["선언 모으기", "캐스케이드", "var() 대입", "색으로 해석", "무효 처리"]}
+  steps={[
+    { pointer: 0, memory: ["color: red", "color: var(--gap)"], caption: "같은 규칙 안에 color 선언이 둘 있다. 둘 다 문법 검사를 통과한다. var()가 든 선언은 일단 유효로 본다." },
+    { pointer: 1, memory: ["color: var(--gap)"], caption: "명시도가 같으니 나중 선언이 이긴다. color: red는 여기서 버려진다." },
+    { pointer: 2, memory: ["color: 20px"], caption: "계산값을 구하면서 --gap의 토큰 20px을 그 자리에 붙여 넣는다." },
+    { pointer: 3, memory: ["20px는 색이 아니다"], caption: "이제야 color 문법으로 해석한다. 길이 값은 색이 될 수 없다." },
+    { pointer: 4, found: [4], memory: ["unset → 상속", "rgb(0, 128, 0)"], caption: "돌아갈 선언이 없으니 unset처럼 처리한다. color는 상속 속성이라 부모의 초록을 받는다." },
+  ]}
+/>
+
+이 동작이 실무에서 나타나는 증상은 "변수가 틀렸는데 아무 경고 없이 엉뚱한 값이 나온다"이다. 개발자 도구의 Styles 패널에서는 `color: var(--gap)`에 취소선이 없다. 캐스케이드에서는 이겼기 때문이다. Computed 패널에서 실제 값을 봐야 부모 색이 와 있는 게 보인다. 그래서 변수가 섞인 스타일이 이상할 때는 Styles가 아니라 Computed부터 본다.
+
+## 서로를 가리키는 변수
+
+변수 두 개가 서로를 가리키면 어떻게 될까.
+
+```css
+:root { --a: var(--b); --b: var(--a); }
+.c5 { color: var(--a, rgb(1, 2, 3)); --x: var(--a, fallback); }
+```
+
+```text
+c5 cycle color rgb(1, 2, 3) | --a computed "" | --x "fallback"
+```
+
+순환에 걸린 변수는 둘 다 "보장된 무효 값(guaranteed-invalid value)"이 된다. 읽으면 빈 문자열이 나온다. 이 상태는 "변수가 없는 것"과 같게 취급되어서, 순환 변수를 쓰는 쪽은 대체값을 받는다. 무한 루프로 브라우저가 멈추지는 않는다. 실무에서는 토큰을 생성하는 스크립트가 별칭 토큰끼리 서로 가리키게 만들어 버렸을 때 이 증상이 나온다. 몇몇 색만 대체값이나 상속값으로 보인다면 순환을 의심한다.
+
+아래에서 이 규칙을 직접 구현해 볼 수 있다. `resolve(vars, value)`는 변수 표와 속성 값을 받아, `var()`를 모두 풀어 쓴 문자열을 돌려준다. 변수가 없는데 대체값도 없으면 무효이니 `null`을 돌려준다. 순환에 걸린 변수는 없는 변수처럼 다룬다. 토큰을 따로 해석하지 않고 문자열만 바꾸는 단순한 버전이다.
+
+<CodePlayground
+  caption="var() 풀어 쓰기"
+  functionName="resolve"
+  initialCode={`function resolve(vars, value) {
+  // vars = { "--gap": "20px", ... }
+  // value 안의 var(--name) 또는 var(--name, 대체값)을 풀어 쓴다.
+  // 풀 수 없으면 null을 돌려준다.
+  return value;
+}`}
+  solution={`function resolve(vars, value) {
+  const INVALID = null;
+  const memo = {};
+  const visiting = new Set();
+  function lookup(name) {
+    if (name in memo) return memo[name];
+    if (!(name in vars)) return INVALID;
+    if (visiting.has(name)) return "CYCLE";
+    visiting.add(name);
+    const r = substitute(vars[name]);
+    visiting.delete(name);
+    if (r === "CYCLE") { memo[name] = INVALID; return INVALID; }
+    memo[name] = r;
+    return r;
+  }
+  function substitute(text) {
+    let out = "";
+    let i = 0;
+    while (i < text.length) {
+      const start = text.indexOf("var(", i);
+      if (start === -1) { out += text.slice(i); break; }
+      out += text.slice(i, start);
+      let depth = 1, j = start + 4;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "(") depth++;
+        else if (text[j] === ")") depth--;
+        j++;
+      }
+      const inner = text.slice(start + 4, j - 1);
+      const comma = inner.indexOf(",");
+      const name = (comma === -1 ? inner : inner.slice(0, comma)).trim();
+      const fallback = comma === -1 ? undefined : inner.slice(comma + 1).trim();
+      let v = lookup(name);
+      if (v === "CYCLE") return "CYCLE";
+      if (v === INVALID) {
+        if (fallback === undefined) return INVALID;
+        v = substitute(fallback);
+        if (v === INVALID || v === "CYCLE") return v;
+      }
+      out += v;
+      i = j;
+    }
+    return out.trim();
+  }
+  const r = substitute(value);
+  return r === "CYCLE" ? INVALID : r;
+}`}
+  tests={[
+    { label: "calc 안에 끼워 넣기", args: [{ "--gap": "20px" }, "calc(var(--gap) * 2)"], expected: "calc(20px * 2)" },
+    { label: "없으면 대체값", args: [{}, "var(--brand, rgb(255, 165, 0))"], expected: "rgb(255, 165, 0)" },
+    { label: "없고 대체값도 없으면 무효", args: [{}, "var(--brand)"], expected: null },
+    { label: "대체값 안의 변수", args: [{ "--b": "blue" }, "var(--a, var(--b, red))"], expected: "blue" },
+    { label: "순환은 없는 것처럼", args: [{ "--a": "var(--b)", "--b": "var(--a)" }, "var(--a, gray)"], expected: "gray" },
+    { label: "변수 안의 변수", args: [{ "--space": "8px", "--pad": "var(--space) calc(var(--space) * 2)" }, "var(--pad)"], expected: "8px calc(8px * 2)" },
+    { label: "무효 변수를 가리키는 변수", args: [{ "--x": "var(--missing)" }, "var(--x, 1px)"], expected: "1px" },
+  ]}
+/>
+
+마지막 테스트가 브라우저와 같은지 짚어 둘 만하다. `--x: var(--missing)`에서 `--missing`이 없고 대체값도 없으니 `--x` 자체가 무효 값이 된다. 그러면 `var(--x, 1px)`은 `--x`가 없는 것과 같아서 `1px`을 쓴다. 변수 선언 단계의 무효는 "없음"으로 번지고, 일반 속성 단계의 무효는 `unset`으로 끝난다.
+
+## @property로 타입을 붙이면 달라지는 것
+
+지금까지의 변수는 타입이 없다. 그래서 브라우저가 값을 미리 검사하지 못했고, 상속을 끌 수도 없었고, 애니메이션도 못 했다. `@property`는 변수에 타입과 초깃값, 상속 여부를 등록한다. 아래 그림은 등록 규칙 하나를 조각으로 나눠 읽는다. 조각을 누르면 그 부분이 하는 일이 나온다.
+
+<UrlAnatomy
+  caption="@property 등록 규칙 한 줄 읽기"
+  base="@property --pct {"
+  separator=" "
+  joiner="; "
+  params={[
+    {
+      key: "syntax",
+      value: "'<percentage>'",
+      display: "syntax: '<percentage>'",
+      title: "값의 타입",
+      description: "이 변수가 받을 값의 문법이다. length, color, number, angle 같은 타입을 쓰고 | 로 여러 개를 허용할 수 있다. 맞지 않는 값은 계산값 단계에서 무효가 되고 초깃값으로 돌아간다.",
+      required: true,
+    },
+    {
+      key: "inherits",
+      value: "true",
+      display: "inherits: true",
+      title: "상속 여부",
+      description: "false면 자식이 부모의 값을 물려받지 않고 초깃값에서 시작한다. 값이 퍼지지 않으니 자식이 많은 곳에서 재계산 범위를 줄이는 데도 쓴다.",
+      required: true,
+    },
+    {
+      key: "initial-value",
+      value: "0%",
+      display: "initial-value: 0% }",
+      title: "초깃값",
+      description: "아무도 값을 정하지 않았거나 값이 무효일 때 쓰는 값이다. syntax가 * 이 아니면 반드시 적어야 한다. 이 값이 있으니 var()에 대체값을 매번 적지 않아도 된다.",
+      required: true,
+    },
+  ]}
+/>
+
+등록한 변수로 확인했다.
+
+```css
+@property --angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.r1 { --angle: 45deg; }   /* 자식 span이 있다 */
+.r2 { --angle: hello; }
+```
+
+```text
+registered inherits:false child "0deg" parent "45deg"
+registered invalid "0deg"
+unregistered inherits "rgb(0,0,255)"
+```
+
+`inherits: false`라서 자식은 부모의 `45deg`를 물려받지 않고 초깃값 `0deg`에서 시작한다. 등록하지 않은 `--brand`는 그대로 물려받았다. 각도가 아닌 `hello`를 넣은 `.r2`는 무효가 되어 초깃값으로 돌아갔다. 등록하지 않은 변수라면 `hello`가 그대로 들어가고, 쓰는 자리에서야 문제가 된다.
+
+가장 큰 차이는 애니메이션이다. 등록하지 않은 변수는 토큰 덩어리라 브라우저가 `0%`와 `100%` 사이의 값을 계산할 방법이 없다. 같은 `transition`을 등록한 `--pct`와 등록하지 않은 `--plain`에 함께 걸고, 1초짜리 전환을 500ms 지점에 멈춰 값을 읽었다.
+
+```js
+an.classList.add("on");                         // --pct, --plain 모두 0% → 100%
+const anims = an.getAnimations();
+anims.forEach((a) => { a.pause(); a.currentTime = 500; });
+```
+
+```text
+animations 1 --pct
+at 500ms --pct 50% --plain 100%
+```
+
+전환이 하나만 만들어졌다. 등록한 `--pct`는 중간에서 50%였고, 등록하지 않은 `--plain`은 처음부터 100%로 뛰었다. 그래서 `conic-gradient`의 각도나 그라디언트 색 위치처럼 원래 애니메이션이 안 되던 값을 변수 하나로 부드럽게 움직이는 데 `@property`를 쓴다. 주요 브라우저는 모두 지원하고, 파이어폭스는 128부터 지원한다. 같은 이름을 자바스크립트로 등록하는 `CSS.registerProperty()`도 있다.
+
+다만 애니메이션되는 변수가 레이아웃 속성에 쓰이면 매 프레임 레이아웃을 다시 계산한다. 변수로 감싸도 비용은 그 속성의 비용이다. 어떤 속성이 합성만으로 끝나는지는 [애니메이션 성능](/posts/animation-performance)에서 다뤘다.
+
+## 파생 색은 변수에서 계산한다
+
+Sass로 테마를 만들 때 많이 쓰던 게 `darken($brand, 10%)` 같은 색 함수다. 호버 색, 테두리 색, 반투명 배경을 기본 색 하나에서 뽑아냈다. 이 함수는 컴파일할 때 값을 계산해 박아 버리니, 런타임에 `--accent`를 바꿔도 호버 색은 옛 색에서 뽑은 값으로 남는다. 테마마다 파생 색을 전부 다시 정의해야 하는 이유였다.
+
+지금은 CSS가 직접 색을 섞는다. `color-mix()`와 상대 색 문법(relative color syntax)은 변수가 끼워 넣어진 뒤 계산값 단계에서 돌기 때문에, 기본 색이 바뀌면 파생 색도 같이 바뀐다.
+
+```css
+:root { --accent: #2563eb; }
+.dark { --accent: #7aa2ff; }
+
+.btn {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 80%, black);   /* 검정 20%를 섞어 어둡게 */
+  outline-color: rgb(from var(--accent) r g b / 50%);           /* 같은 색, 투명도만 50% */
+}
+```
+
+```text
+b1 bg rgb(37, 99, 235) | mix color(srgb 0.116078 0.310588 0.737255) | relative color(srgb 0.145098 0.388235 0.921569 / 0.5)
+b2 bg rgb(122, 162, 255) | mix color(srgb 0.382745 0.508235 0.8) | relative color(srgb 0.478431 0.635294 1 / 0.5)
+```
+
+`.dark` 안의 버튼(b2)은 `--accent`만 바꿨는데 섞은 테두리 색과 반투명 외곽선 색이 모두 새 색에서 다시 계산됐다. 값은 `color(srgb ...)` 형식으로 나오는데, 0~1 범위의 채널 값이라 255를 곱하면 익숙한 숫자가 된다. b1의 섞은 색은 대략 `rgb(30, 79, 188)`이다. 섞을 색 공간은 `in srgb` 대신 `in oklch`처럼 고를 수 있고, 사람 눈에 고르게 어두워지는 쪽은 보통 oklch다.
+
+이렇게 하면 테마마다 정의할 변수가 기본 색 몇 개로 줄어든다. 대신 대비는 자동으로 보장되지 않는다. 어둡게 섞은 테두리가 다크 배경에서 안 보일 수 있으니, 토큰을 만들 때 테마별로 대비를 검사하는 단계를 둔다([디자인 시스템 만들기](/posts/design-system-building)). `color-mix()`는 크롬 계열 111, 사파리 16.2, 파이어폭스 113부터 되고, 상대 색 문법은 그보다 늦어 크롬 계열 119, 파이어폭스 128, 사파리 18 무렵부터 쓸 수 있다.
+
+## 테마를 바꾸는 몇 가지 방법
+
+변수 기반 테마는 결국 "어느 조상에서 변수 한 벌을 바꿔 끼우느냐"다. 이 블로그도 `html[data-theme]`의 값에 따라 `:root`의 색 변수를 갈아 끼운다. 몇 가지 선택지를 같이 알아 두면 좋다.
+
+```css
+:root {
+  color-scheme: light dark;                       /* 폼 컨트롤과 스크롤바도 테마를 따른다 */
+  --bg: #ffffff;
+  --text: #1a1a1a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #121212; --text: #e6e6e6; }
+}
+:root[data-theme="dark"] { --bg: #121212; --text: #e6e6e6; }
+
+/* light-dark()를 쓰면 한 줄로 쓸 수 있다. color-scheme이 정해져 있어야 동작한다 */
+:root { --accent: light-dark(#2563eb, #7aa2ff); }
+```
+
+운영체제 설정을 따르면서도 사용자가 직접 고른 값이 이기게 하려면, 미디어 쿼리 안에서 "사용자가 라이트를 고르지 않았을 때"만 다크 값을 쓰고 직접 고른 다크는 따로 둔다. `light-dark()`는 색 값에만 쓸 수 있고, 크롬 계열 123, 파이어폭스 120, 사파리 17.5부터 지원한다. 지원 범위가 넓어야 하면 위의 두 블록 방식이 안전하다.
+
+테마를 첫 그림 전에 정하지 않으면 라이트로 그렸다가 다크로 번쩍 바뀐다. `head`에서 CSS보다 먼저 도는 작은 스크립트로 `data-theme`를 정하는 방법은 [CSS 스타일링 방식 고르기](/posts/css-styling-approaches)의 테마 부분에 코드와 함께 있다.
+
+## 자바스크립트로 바꾸면 다시 계산하는 범위
+
+변수는 `element.style.setProperty("--name", value)`로 바꾼다. 이름에는 `--`까지 넣고, 카멜 표기로 바꾸지 않는다. `el.style.brand` 같은 접근은 안 된다. 읽을 때는 `getComputedStyle(el).getPropertyValue("--name")`이다. React에서는 `style={{ "--progress": "40%" }}`처럼 객체 키에 그대로 쓴다.
+
+바꾼 변수를 상속하는 요소는 모두 스타일을 다시 계산해야 한다. 어디서 바꾸느냐에 따라 범위가 얼마나 달라지는지 쟀다. `color: var(--c, black)`을 쓰는 문단 20,000개를 한 컨테이너 안에 두고, 변수를 세 곳에서 번갈아 바꾸며 스타일 계산까지 걸린 시간을 30번 재서 중앙값을 냈다. 따로 떨어진 `#iso` 안에는 같은 문단이 하나뿐이다.
+
+```text
+:root setProperty median ms 62.70
+#iso setProperty median ms 0.00
+#list setProperty median ms 68.20
+:root setProperty with 3000 vars median ms 183.90
+#iso with 3000 root vars median ms 0.00
+```
+
+`:root`에서 바꾸면 문서 전체가 다시 계산 대상이 되어 63ms가 걸렸다. 문단 20,000개가 든 `#list`에서 바꿔도 비슷했다. 그 아래가 모두 변수를 쓰니 당연하다. 문단 하나뿐인 `#iso`에서 바꾸면 측정 해상도(0.1ms) 아래로 떨어졌다. 같은 변수인데 바꾸는 위치만 다르다. 한 프레임 예산이 16ms 남짓이니, 드래그 좌표처럼 1초에 수십 번 바뀌는 값을 `:root`에 두면 이 페이지에서는 프레임을 놓친다.
+
+`:root`에 쓰지 않는 변수 3,000개를 더 얹자 같은 변경이 184ms로 늘었다. 상속되는 변수는 요소마다 물려받은 변수 묶음을 들고 있어야 해서, 변수가 많을수록 다시 계산할 때 옮길 양이 커진다. 이 숫자는 이 기계, 이 페이지의 값이라 절대값보다 비율을 봐야 한다.
+
+여기서 나오는 실무 규칙은 이렇다.
+
+- 테마처럼 드물게 바뀌는 값은 `:root`에 둬도 된다. 클릭 한 번에 수십 ms는 감당할 만하다.
+- 자주 바뀌는 값(진행률, 포인터 좌표, 스크롤 위치)은 실제로 쓰는 요소에 둔다. React 상태를 거치지 말고 `ref`로 그 요소에 `setProperty`한다.
+- 토큰이 수천 개라면 컴포넌트 전용 토큰까지 `:root`에 다 펼치지 말고, 컴포넌트 루트에 범위를 좁혀 둔다. 자식에게 퍼질 필요가 없는 변수는 `@property`의 `inherits: false`로 등록하는 방법도 있다.
+- 성능 패널에서 Recalculate Style 이벤트의 영향받은 요소 수(Elements affected)를 보면 범위가 얼마나 넓었는지 바로 보인다. 스타일 재계산 일반은 [CSS 성능](/posts/css-performance)에서 다뤘다.
+
+## 자주 밟는 함정
+
+`var()`는 속성 값 안에서만 쓴다. 선택자, 속성 이름, 미디어 쿼리 조건에는 못 쓴다. `@media (min-width: var(--bp))`는 동작하지 않는다. 브레이크포인트 값을 공유하려면 빌드 단계의 상수(Sass 변수, 자바스크립트 상수)를 쓴다. 빌드 시점에 정해지는 값은 전처리기 변수가, 런타임에 바뀌는 값은 CSS 변수가 맡는 식으로 나눠 쓰면 둘이 충돌하지 않는다.
+
+Shadow DOM 안쪽으로 값을 넘길 때는 CSS 변수가 거의 유일한 길이다. 선택자는 경계를 못 넘지만 상속되는 변수는 넘어가기 때문이다. 그래서 커스텀 요소의 테마 API는 대부분 변수 목록이다([Web Components와 Shadow DOM](/posts/web-components-shadow-dom)).
+
+마지막으로, 변수 이름은 공개 API라는 점을 기억한다. 디자인 시스템이 `--ds-accent`를 문서에 적는 순간 쓰는 팀이 그 이름에 의존한다. 이름을 바꾸면 아무 오류 없이 대체값이나 상속값으로 조용히 바뀐다. 바꿔야 한다면 한동안 옛 이름이 새 이름을 가리키게(`--old: var(--new)`) 두고 단계적으로 없앤다.
+
+Sass 변수는 빌드가 끝나면 사라지는 이름이고, CSS 변수는 캐스케이드와 상속을 따르는 진짜 속성이다. 값은 쓰는 자리에서 늦게 끼워 넣어지기 때문에 틀린 값은 대체값이 아니라 `unset`으로 끝나고, `@property`로 타입을 붙여야 검사와 애니메이션이 된다. 그리고 바꾸는 위치가 재계산 범위를 정한다. 이 네 가지가 CSS 변수 문제의 대부분을 설명한다.
+
+## 면접에서 나올 만한 질문
+
+### CSS 변수와 Sass 변수의 차이는?
+
+Sass 변수는 컴파일할 때만 있는 이름이라 빌드가 끝나면 값이 박히고 사라진다. 런타임에 바꿀 수도, 요소마다 다르게 할 수도 없다. CSS 변수는 브라우저에 남는 속성이라 캐스케이드와 상속을 따르고, 조상에서 다시 정하거나 자바스크립트로 바꾸면 바로 반영된다. 미디어 쿼리 조건처럼 CSS 변수를 못 쓰는 곳은 Sass 변수로, 테마처럼 런타임에 바뀌는 값은 CSS 변수로 나눠 쓴다.
+
+### var()에 대체값을 줬는데도 대체값이 안 나오는 경우는?
+
+대체값은 변수가 없거나 무효 값일 때만 쓰인다. 변수가 있는데 그 속성에 맞지 않는 값이라면, 계산값 시점에 무효가 되어 대체값이 아니라 `unset`처럼 처리된다. 상속 속성이면 부모 값, 아니면 초깃값이 나온다. 이미 캐스케이드에서 다른 선언을 이긴 뒤라 앞의 선언으로 돌아가지도 않는다.
+
+### "계산값 시점에 무효"란 무엇이고 왜 생기나?
+
+`var()`가 들어간 선언은 읽는 시점에 값을 알 수 없어서 브라우저가 일단 유효하다고 보고 캐스케이드에서 이긴 선언으로 고른다. 계산값을 구할 때 변수를 넣어 보고서야 틀린 걸 알게 되는데, 그때는 진 선언들이 이미 버려졌다. 그래서 그 속성을 `unset`으로 처리한다. 개발자 도구의 Styles 패널에서는 취소선이 없으니 Computed 패널에서 실제 값을 확인해야 한다.
+
+### @property는 무엇을 해 주나?
+
+변수에 타입, 초깃값, 상속 여부를 등록한다. 타입이 있으니 틀린 값은 초깃값으로 돌아가고, `inherits: false`로 자식에게 퍼지지 않게 할 수 있다. 무엇보다 브라우저가 사잇값을 계산할 수 있어서 전환과 애니메이션이 된다. 등록하지 않은 변수는 0%에서 100%로 바로 뛰지만, 등록하면 중간에 50% 같은 값을 거친다.
+
+### 다크 모드를 CSS 변수로 구현하는 방법은?
+
+컴포넌트는 의미 있는 이름의 변수만 읽고, `:root[data-theme="dark"]` 같은 조상 선택자에서 변수 한 벌을 다시 정한다. 운영체제 설정을 따르려면 `prefers-color-scheme` 미디어 쿼리를 쓰되 사용자가 직접 고른 값이 이기게 조건을 나누고, `color-scheme`을 적어 폼 컨트롤도 따라오게 한다. 첫 그림 전에 `data-theme`를 정하는 스크립트를 head에 둬서 번쩍임을 막는다.
+
+### 자바스크립트로 CSS 변수를 자주 바꾸면 성능 문제가 생기나?
+
+바뀐 변수를 상속하는 모든 요소가 스타일을 다시 계산하므로 바꾸는 위치가 비용을 정한다. 측정에서 20,000개 요소가 있는 페이지의 `:root` 변수를 바꾸면 63ms, 하나만 든 컨테이너에서 바꾸면 0.1ms 미만이었다. 자주 바뀌는 값은 실제로 쓰는 요소 가까이에 두고, React 상태를 거치지 않고 ref로 `setProperty`한다.
+
+### :root에 변수를 수천 개 두면 무슨 문제가 있나?
+
+상속되는 변수는 요소마다 물려받은 묶음으로 따라다니기 때문에, 루트에서 다시 계산이 일어날 때 옮길 양이 커진다. 측정에서 쓰지 않는 변수 3,000개를 더하자 같은 `:root` 변경이 63ms에서 184ms로 늘었다. 컴포넌트 전용 토큰은 그 컴포넌트 루트에 범위를 좁히고, 퍼질 필요 없는 변수는 `inherits: false`로 등록하는 방법이 있다.
+
+### 변수가 서로를 가리키면 어떻게 되나?
+
+순환에 걸린 변수는 모두 보장된 무효 값이 되어 없는 변수처럼 취급된다. 그 변수를 쓰는 `var()`는 대체값을 받고, 대체값이 없으면 그 속성이 `unset`이 된다. 브라우저가 멈추지는 않지만 경고도 없어서, 토큰 생성기가 별칭끼리 서로 가리키게 만든 경우 일부 색만 이상하게 나오는 식으로 드러난다.

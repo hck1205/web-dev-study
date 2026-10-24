@@ -1,0 +1,381 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("bi-semantic-layer");
+
+<EasyIntro>
+  반에서 "책을 많이 읽은 친구"가 몇 명인지 세어 오라고 했더니, 세 친구가 각각 다른 숫자를 들고 왔다. 한 친구는 도서관에 한 번이라도 간 사람을 셌고, 다른 친구는 책을 빌린 사람만 셌고, 또 다른 친구는 선생님은 빼고 셌다. 누가 틀린 게 아니라, 세는 규칙이 달랐던 것이다.
+
+  회사에서도 똑같은 일이 생긴다. 화면에 숫자를 보여 주는 대시보드가 여러 개 있으면, 대시보드마다 "활동한 사용자"를 다르게 세서 회의 때마다 숫자가 다르다.
+
+  시맨틱 레이어는 세는 규칙을 한 장의 규칙표에 적어 두는 방법이다. 어떤 대시보드든 직접 세지 않고 규칙표를 보고 센다. 그러면 숫자가 같아지고, 규칙을 바꿀 때도 한 곳만 고치면 된다. 숫자가 너무 많아 세는 데 오래 걸리면, 미리 반별로 세어 둔 메모를 보고 답하는 방법도 함께 쓴다.
+</EasyIntro>
+
+월요일 경영 회의에서 10월 활성 사용자 숫자가 세 개 나왔다. 제품 대시보드는 78,053명, 그로스 팀 대시보드는 49,197명, 경영 대시보드는 58,800명이다. 세 팀 모두 같은 웨어하우스의 같은 `events` 테이블을 본다. 회의는 숫자가 왜 다른지 따지느라 30분을 썼고, 결론은 "데이터 팀이 확인해 보기로"였다.
+
+확인해 보면 누구도 틀리지 않았다. 셋은 "활성"을 다르게 셌다. 이 글은 이 장면에서 출발해 BI 도구가 웨어하우스에 쿼리를 보내는 방식(라이브 연결과 추출), 지표 정의를 한곳에 모으는 시맨틱 레이어, 대시보드가 느리거나 비쌀 때 보는 곳을 차례로 본다. 숫자는 DuckDB 1.5에 사용자 10만 명, 이벤트 2,012만 건을 만들어 직접 계산했다.
+
+웨어하우스를 원본·정제·쓰임새 층으로 나누는 설계와 쿼리 요금의 기본(읽은 바이트, 파티션 조건)은 [데이터 웨어하우스 설계](/posts/data-warehouse-architecture)에 있다. 이 글은 그 맨 위, 사람이 숫자를 보는 층을 다룬다.
+
+## 같은 테이블에서 활성 사용자가 셋
+
+세 대시보드의 쿼리를 나란히 놓으면 이유가 보인다. 기간은 모두 "10월 한 달"이다.
+
+```sql
+-- A 제품 대시보드: 이벤트가 하나라도 있으면 활성
+SELECT count(DISTINCT e.user_id) AS mau
+FROM events e
+WHERE e.ts >= TIMESTAMP '2026-10-01' AND e.ts < TIMESTAMP '2026-10-31';
+
+-- B 그로스 대시보드: 로그인한 사람만, 테스트 계정 제외
+SELECT count(DISTINCT e.user_id)
+FROM events e JOIN users u USING (user_id)
+WHERE e.event_type = 'login' AND NOT u.is_test
+  AND e.ts >= TIMESTAMP '2026-10-01' AND e.ts < TIMESTAMP '2026-10-31';
+
+-- C 경영 대시보드: 푸시 알림 열기는 빼고, 테스트 계정 제외, 한국 시각 기준 달
+SELECT count(DISTINCT e.user_id)
+FROM events e JOIN users u USING (user_id)
+WHERE e.event_type <> 'push_open' AND NOT u.is_test
+  AND e.ts + INTERVAL 9 HOUR >= TIMESTAMP '2026-10-01'
+  AND e.ts + INTERVAL 9 HOUR <  TIMESTAMP '2026-10-31';
+```
+
+```text
+┌───────────────────┬───────┐
+│     dashboard     │  mau  │
+│      varchar      │ int64 │
+├───────────────────┼───────┤
+│ A 제품 대시보드   │ 78053 │
+│ B 그로스 대시보드 │ 49197 │
+│ C 경영 대시보드   │ 58800 │
+└───────────────────┴───────┘
+```
+
+A는 푸시 알림을 열기만 한 사람까지 셌다. 실험 데이터에서 4만 명 정도는 앱을 거의 쓰지 않고 푸시만 가끔 여는 사용자라, A가 2만 명쯤 많다. B는 로그인 이벤트만 봤다. 자동 로그인으로 세션이 이어지는 사람은 로그인 이벤트를 자주 남기지 않으니 실제로 앱을 쓰는 사람도 빠진다. C는 그 중간이고, 시각도 한국 시각으로 바꿔서 달을 잘랐다.
+
+어느 정의가 맞는지는 회사가 정할 일이다. 문제는 정의가 세 대시보드의 SQL 안에 흩어져 있어서 아무도 차이를 모른다는 데 있다. 한 정의를 고쳐도 다른 두 곳은 그대로다. 그리고 다음 달 누군가 네 번째 대시보드를 만들면 네 번째 정의가 생긴다.
+
+## BI 도구가 웨어하우스에 묻는 방식
+
+정의를 모으는 법을 보기 전에, BI 도구가 숫자를 어떻게 가져오는지부터 알아야 한다. 대시보드가 느리거나 비쌀 때 어디를 볼지가 여기서 갈린다. 크게 두 방식이 있다.
+
+라이브 연결은 대시보드를 열 때마다, 필터를 바꿀 때마다 웨어하우스에 SQL을 보낸다. 숫자는 늘 최신이지만 웨어하우스가 느리면 대시보드도 느리고, 쿼리마다 웨어하우스 비용이 든다. 사람 100명이 아침 9시에 같은 대시보드를 열면 비슷한 쿼리 수백 개가 한꺼번에 들어간다.
+
+추출(import)은 정해진 시각에 데이터를 BI 도구 쪽 저장소로 복사해 두고, 대시보드는 그 사본을 읽는다. 빠르고 웨어하우스 비용이 일정하지만, 숫자는 마지막 새로 고침 시점에 머문다. 사본이 커지면 새로 고침 자체가 오래 걸린다.
+
+도구마다 이름이 다르다.
+
+- Tableau: 라이브 연결(Live)과 추출(Extract). 추출은 Tableau의 Hyper 엔진 파일로 저장되고 Tableau Server나 Cloud에서 일정에 맞춰 새로 고친다.
+- Power BI: 가져오기(Import)는 데이터를 Power BI의 메모리 엔진에 올리고, DirectQuery는 매번 원본에 묻는다. 둘을 섞는 복합 모델도 있다. 가져오기 모드의 일정 새로 고침 횟수는 라이선스에 따라 하루 몇 번으로 제한된다(Pro는 8번, Premium 용량은 48번).
+- Looker: 사본을 따로 두지 않고 늘 데이터베이스에 SQL을 보낸다. 대신 결과 캐시와, 자주 쓰는 중간 결과를 데이터베이스 안에 테이블로 만들어 두는 PDT(persistent derived table)를 쓴다.
+
+아래 그림에서 다음을 누르면 라이브 연결로 대시보드 하나가 열릴 때 무슨 일이 일어나는지, 그리고 시맨틱 레이어가 끼면 어디가 달라지는지 보인다.
+
+<SequenceDiagram
+  caption="대시보드 하나가 열릴 때: 정의는 시맨틱 레이어에서, 계산은 웨어하우스에서"
+  actors={[
+    { id: "user", label: "보는 사람" },
+    { id: "bi", label: "BI 도구" },
+    { id: "sem", label: "시맨틱 레이어" },
+    { id: "wh", label: "웨어하우스" },
+  ]}
+  steps={[
+    { from: "user", to: "bi", label: "대시보드 열기", title: "필터를 고르고 화면을 연다", detail: "10월, 플랫폼별 활성 사용자를 본다. 보는 사람은 SQL을 쓰지 않는다." },
+    { from: "bi", to: "sem", label: "active_users by platform", title: "BI 도구는 지표 이름으로 묻는다", detail: "SQL 대신 지표와 차원, 기간만 넘긴다. 정의는 BI 도구 안에 없다.", payload: "metric: active_users\ngroup_by: platform\nmonth: 2026-10" },
+    { from: "sem", to: "sem", label: "SQL 만들기", title: "정의를 SQL로 펼친다", detail: "푸시 열기 제외, 테스트 계정 제외, 한국 시각 기준이라는 정의를 붙이고, 이 질문에 답할 수 있는 가장 작은 집계 테이블을 고른다." },
+    { from: "sem", to: "wh", label: "SELECT ... FROM user_daily", title: "웨어하우스가 계산한다", detail: "원본 2,012만 행 대신 사용자-일 집계 347만 행을 읽는다. 같은 질문이 최근에 있었다면 캐시에서 바로 답한다." },
+    { from: "wh", to: "bi", label: "3행 결과", title: "결과를 돌려준다", detail: "플랫폼 세 개의 숫자가 돌아온다. 다른 대시보드가 같은 지표를 물어도 같은 정의로 같은 숫자가 나온다." },
+  ]}
+/>
+
+## 지표 정의를 한 장에 적는다
+
+시맨틱 레이어(semantic layer)는 웨어하우스 테이블과 BI 도구 사이에서 "이 회사에서 활성 사용자란 무엇인가"를 정의 파일로 들고 있는 층이다. 테이블과 컬럼 이름 대신 업무 용어(지표, 차원, 엔티티)로 묻게 하고, 그걸 SQL로 펼친다. 지표 계층(metrics layer)이라고도 부른다.
+
+정의 파일의 모양은 도구마다 다르다. Looker는 LookML이라는 자체 언어로 적는다. 앞의 C 정의라면 대략 이렇다.
+
+```lookml
+# views/events.view.lkml 일부
+dimension: is_active_event {
+  type: yesno
+  sql: ${TABLE}.event_type <> 'push_open' ;;
+}
+
+measure: active_users {
+  type: count_distinct
+  sql: ${user_id} ;;
+  filters: [is_active_event: "yes", users.is_test: "no"]
+  description: "푸시 열기를 뺀 이벤트가 하나라도 있는 실사용자. 테스트 계정 제외."
+}
+```
+
+dbt의 시맨틱 레이어(MetricFlow)는 YAML로 적는다. 의미 모델에 엔티티, 차원, 측정값을 두고, 지표는 측정값을 가리킨다.
+
+```yaml
+# models/semantic/events.yml 일부
+semantic_models:
+  - name: user_activity
+    model: ref('user_daily')
+    defaults:
+      agg_time_dimension: dt_kst
+    entities:
+      - name: user
+        type: foreign
+        expr: user_id
+    dimensions:
+      - name: dt_kst
+        type: time
+        type_params:
+          time_granularity: day
+      - name: platform
+        type: categorical
+    measures:
+      - name: active_users
+        agg: count_distinct
+        expr: case when active_events > 0 and not is_test then user_id end
+
+metrics:
+  - name: active_users
+    label: 활성 사용자
+    description: 푸시 열기를 뺀 이벤트가 하나라도 있는 실사용자. 테스트 계정 제외, 한국 시각 기준.
+    type: simple
+    type_params:
+      measure: active_users
+```
+
+dbt 모델 자체를 어떻게 쌓는지는 [dbt로 SQL 변환 관리하기](/posts/dbt-transformations)에 있다. 독립 제품으로는 Cube 같은 오픈 소스 시맨틱 레이어도 있다. 도구는 달라도 하는 일은 같다.
+
+- 정의가 한곳에 있다. 활성의 뜻을 바꾸면 그 지표를 쓰는 모든 대시보드가 함께 바뀐다.
+- 정의에 설명이 붙는다. `description`이 대시보드의 툴팁, 데이터 카탈로그의 설명으로 이어진다. 카탈로그와 계보를 다루는 이야기는 [메타데이터와 데이터 계보](/posts/data-catalog-lineage)에 있다.
+- 조인 경로를 정의가 안다. `users.is_test`를 쓰려면 `events`와 `users`를 어떤 키로 붙이는지 정의 파일이 알고 있으니, 대시보드를 만드는 사람이 조인을 잘못 걸 일이 없다.
+- 여러 도구가 같은 정의를 쓴다. BI 도구, 노트북, 스프레드시트 연동, 업무 도구로 보내는 [리버스 ETL](/posts/reverse-etl)이 모두 같은 지표 이름을 부른다.
+
+아래 그림은 시맨틱 레이어가 있기 전과 후의 정의 위치를 보여 준다.
+
+<ConceptDiagram
+  caption="정의가 대시보드 안에 흩어져 있던 것을 한 층으로 모은다"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "a", label: "제품 대시보드", x: 70, y: 40, w: 120 },
+    { id: "b", label: "그로스 대시보드", x: 210, y: 40, w: 130 },
+    { id: "c", label: "경영 대시보드", x: 350, y: 40, w: 120 },
+    { id: "sem", label: "시맨틱 레이어", sub: "active_users 하나", x: 210, y: 130, w: 170 },
+    { id: "agg", label: "user_daily", sub: "사용자-일 집계", x: 110, y: 215, w: 130 },
+    { id: "raw", label: "events", sub: "원본 2,012만 행", x: 310, y: 215, w: 130 },
+  ]}
+  edges={[
+    { from: "a", to: "sem", label: "지표 이름" },
+    { from: "b", to: "sem" },
+    { from: "c", to: "sem" },
+    { from: "sem", to: "agg", label: "대부분" },
+    { from: "sem", to: "raw", label: "세부 질문", dashed: true },
+    { from: "raw", to: "agg", label: "매일 집계" },
+  ]}
+/>
+
+시맨틱 레이어를 들이기 전에 할 일이 있다. 세 팀이 모여 어느 정의를 회사 정의로 할지 정하는 것이다. 도구는 정의를 한곳에 두게 해 줄 뿐, 정의를 대신 골라 주지 않는다. 실무에서는 정의를 하나로 합치지 못하는 경우도 있는데, 그럴 때는 `active_users`와 `logged_in_users`처럼 이름을 다르게 지어 둘 다 둔다. 같은 이름에 다른 정의가 붙는 것만 막아도 회의의 30분은 사라진다.
+
+## 대시보드가 느릴 때 먼저 보는 곳
+
+시맨틱 레이어가 정의 문제를 푼다면, 다음 문제는 속도와 비용이다. 대시보드가 느리다는 말을 들으면 이 순서로 본다.
+
+먼저 대시보드가 실제로 보낸 SQL을 꺼낸다. 대부분의 BI 도구는 타일마다 실행한 SQL을 보여 주고(Looker의 SQL 탭, Tableau의 성능 기록, Power BI의 성능 분석기), 웨어하우스의 쿼리 기록에도 남는다. 대시보드 하나에 타일이 20개면 쿼리도 20개다. 느린 타일 하나를 찾는 게 첫걸음이다.
+
+그 SQL이 원본을 직접 읽는지 본다. 위 C 정의로 일별·플랫폼별 활성 사용자를 원본에서 구하면 이렇다.
+
+```sql
+-- 원본에서 직접: 2,012만 행을 읽고 사용자를 중복 제거한다
+SELECT CAST(e.ts + INTERVAL 9 HOUR AS DATE) AS dt, u.platform,
+       count(DISTINCT e.user_id) AS dau
+FROM events e JOIN users u USING (user_id)
+WHERE e.event_type <> 'push_open' AND NOT u.is_test
+  AND e.ts + INTERVAL 9 HOUR >= TIMESTAMP '2026-10-01'
+  AND e.ts + INTERVAL 9 HOUR <  TIMESTAMP '2026-10-31'
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+매일 밤 사용자-일 단위로 한 번 묶어 두면 같은 질문을 훨씬 작은 테이블로 답할 수 있다.
+
+```sql
+-- 하루에 한 번 만드는 사용자-일 집계 (사용자 한 명이 하루에 한 행)
+CREATE OR REPLACE TABLE user_daily AS
+SELECT CAST(e.ts + INTERVAL 9 HOUR AS DATE) AS dt_kst, e.user_id, u.platform, u.is_test,
+       count(*) FILTER (WHERE e.event_type <> 'push_open') AS active_events,
+       count(*) FILTER (WHERE e.event_type = 'login') AS logins
+FROM events e JOIN users u USING (user_id)
+GROUP BY ALL;
+
+-- 같은 질문을 집계 테이블로
+SELECT dt_kst AS dt, platform, count(*) AS dau
+FROM user_daily
+WHERE active_events > 0 AND NOT is_test
+  AND dt_kst >= DATE '2026-10-01' AND dt_kst < DATE '2026-10-31'
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+4스레드로 각각 다섯 번 돌려 가장 빠른 값을 쟀다.
+
+```text
+┌─────────────┬─────────────────┐
+│ events_rows │ user_daily_rows │
+│    int64    │      int64      │
+├─────────────┼─────────────────┤
+│    20120000 │         3470392 │
+└─────────────┴─────────────────┘
+
+raw events : 2913 ms, rows=90
+user_daily : 120 ms, rows=90
+same result: True
+```
+
+결과 90행(30일 × 플랫폼 3개)은 완전히 같고, 시간은 24분의 1로 줄었다. 읽는 행이 6분의 1로 줄었고, 무거운 `count(DISTINCT)`가 단순한 `count(*)`로 바뀐 효과가 크다. 사용자-일 테이블 하나에서 10월 전체 활성 사용자도 `count(DISTINCT user_id)`로 구하면 58,800명으로 C와 같은 숫자가 나온다. 클라우드 웨어하우스에서는 이 차이가 시간만이 아니라 요금이다. 읽은 바이트로 요금을 매기는 곳에서는 읽는 테이블을 줄이는 만큼 돈이 준다.
+
+## 고유 사용자 수는 더할 수 없다
+
+집계 테이블을 만들 때 가장 흔한 실수가 있다. 일별 활성 사용자(DAU)만 저장해 두고, 월 활성 사용자를 그걸 더해서 구하는 것이다.
+
+```sql
+-- 일별 DAU를 30일 동안 더한 값과 진짜 MAU
+WITH dau AS (
+  SELECT dt_kst, platform, count(*) AS dau
+  FROM user_daily
+  WHERE active_events > 0 AND NOT is_test
+    AND dt_kst >= DATE '2026-10-01' AND dt_kst < DATE '2026-10-31'
+  GROUP BY 1, 2
+)
+SELECT sum(dau) AS sum_of_dau,
+       (SELECT count(DISTINCT user_id) FROM user_daily
+        WHERE active_events > 0 AND NOT is_test
+          AND dt_kst >= DATE '2026-10-01' AND dt_kst < DATE '2026-10-31') AS real_mau
+FROM dau;
+```
+
+```text
+┌────────────┬──────────┐
+│ sum_of_dau │ real_mau │
+│   int128   │  int64   │
+├────────────┼──────────┤
+│    1656845 │    58800 │
+└────────────┴──────────┘
+```
+
+같은 사람이 30일 중 여러 날 활동했으니 더하면 그만큼 중복된다. 매출 합계, 주문 수처럼 더해도 되는 지표(가산적 지표)와 고유 사용자 수, 중앙값, 비율처럼 더하면 안 되는 지표가 있다. 비율도 일별 전환율을 평균 내면 틀린다. 분자와 분모를 따로 더한 뒤 나눠야 한다.
+
+그래서 집계 테이블은 두 종류로 나뉜다. 위 `user_daily`처럼 `user_id`를 남겨 둔 테이블은 더 굵은 단위(주, 월)로 다시 묶을 수 있다. 플랫폼별 DAU 숫자만 남긴 테이블은 그 단위(일, 플랫폼) 질문에만 답할 수 있다. 근사값이 괜찮다면 HyperLogLog 스케치를 저장해 두고 합치는 방법도 있다. BigQuery의 `HLL_COUNT` 함수들, Snowflake의 `HLL_ACCUMULATE`와 `HLL_COMBINE`이 이걸 지원하고, 오차는 정밀도 설정에 따라 보통 몇 % 이내다.
+
+## 질문마다 가장 작은 표를 고른다
+
+집계 테이블이 여러 개가 되면, 질문이 들어올 때마다 어떤 표로 답할지 고르는 일이 생긴다. Looker는 이걸 집계 인식(aggregate awareness)이라 부르고, 탐색 정의에 `aggregate_table`을 적어 두면 질문에 맞는 가장 작은 테이블로 SQL을 바꿔 보낸다. dbt 시맨틱 레이어나 Cube에도 미리 묶어 둔 테이블을 골라 쓰는 기능이 있다.
+
+규칙은 세 가지다. 질문에 쓰인 차원이 그 표에 모두 있어야 한다. 표의 시간 단위가 질문보다 잘거나 같아야 한다(일 단위 표로 월을 답할 수는 있지만 시간 단위 질문은 못 답한다). 그리고 더 굵게 다시 묶을 수 없는 표(고유 수만 남긴 표)는 단위와 차원이 질문과 정확히 같을 때만 쓴다. 맞는 표가 없으면 원본으로 간다. 맞는 표가 여러 개면 행이 가장 적은 표를 고른다.
+
+직접 짜 보자. `rollable`이 참인 표는 더 굵은 단위로 다시 묶을 수 있는 표다.
+
+<CodePlayground
+  caption="집계 인식: 질문에 답할 수 있는 가장 작은 테이블 고르기"
+  functionName="pickTable"
+  initialCode={`// query: { grain: "hour" | "day" | "month", dims: [...] }
+// tables: [{ name, grain, dims, rollable, rows }]
+// 맞는 표가 없으면 "events"(원본)를 돌려준다
+function pickTable(query, tables) {
+  return "events";
+}`}
+  solution={`function pickTable(query, tables) {
+  const GRAINS = ["hour", "day", "month"];
+  const ok = tables.filter((t) => {
+    const covers = query.dims.every((d) => t.dims.includes(d));
+    if (!covers) return false;
+    if (t.rollable) return GRAINS.indexOf(t.grain) <= GRAINS.indexOf(query.grain);
+    return t.grain === query.grain && t.dims.length === query.dims.length;
+  });
+  if (ok.length === 0) return "events";
+  ok.sort((a, b) => a.rows - b.rows);
+  return ok[0].name;
+}`}
+  tests={[
+    { label: "일별·플랫폼별", args: [{ grain: "day", dims: ["platform"] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }, { name: "mau_by_platform", grain: "month", dims: ["platform"], rollable: false, rows: 6 }]], expected: "dau_by_platform" },
+    { label: "월별·플랫폼별", args: [{ grain: "month", dims: ["platform"] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }, { name: "mau_by_platform", grain: "month", dims: ["platform"], rollable: false, rows: 6 }]], expected: "mau_by_platform" },
+    { label: "시간별은 원본으로", args: [{ grain: "hour", dims: ["platform"] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }, { name: "mau_by_platform", grain: "month", dims: ["platform"], rollable: false, rows: 6 }]], expected: "events" },
+    { label: "월 전체(차원 없음)", args: [{ grain: "month", dims: [] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }, { name: "mau_by_platform", grain: "month", dims: ["platform"], rollable: false, rows: 6 }]], expected: "user_daily" },
+    { label: "없는 차원", args: [{ grain: "day", dims: ["country"] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }, { name: "mau_by_platform", grain: "month", dims: ["platform"], rollable: false, rows: 6 }]], expected: "events" },
+    { label: "월 표가 없을 때 DAU를 더하지 않는다", args: [{ grain: "month", dims: ["platform"] }, [{ name: "user_daily", grain: "day", dims: ["platform", "user_id"], rollable: true, rows: 3470392 }, { name: "dau_by_platform", grain: "day", dims: ["platform"], rollable: false, rows: 90 }]], expected: "user_daily" },
+  ]}
+/>
+
+마지막 테스트가 앞 절의 실수를 막는다. 월별 표가 없으면 90행짜리 DAU 표가 더 작아 보여도 그걸 더하면 165만이라는 틀린 숫자가 나오니, 347만 행짜리 `user_daily`로 간다. "월 전체" 질문에서 `mau_by_platform`을 고르지 않는 것도 같은 이유다. 플랫폼 세 개의 MAU를 더하면 여러 플랫폼을 쓰는 사람이 두 번 세어진다.
+
+## 캐시, 추출, 파티션: 나머지 손잡이
+
+집계 테이블 다음으로 손댈 곳이 몇 개 더 있다.
+
+결과 캐시. 같은 SQL이 다시 오면 웨어하우스나 BI 도구가 저장해 둔 결과를 돌려준다. BigQuery는 같은 쿼리의 결과를 약 24시간 캐시하고 이때는 요금을 매기지 않는다. 다만 테이블이 바뀌면 캐시가 무효가 되고, `CURRENT_TIMESTAMP()` 같은 비결정 함수가 들어간 쿼리는 캐시되지 않는다. 대시보드가 "최근 30일"을 `now()`로 계산하면 캐시를 못 탄다. 날짜를 정해진 값으로 넘기도록 바꾸면 캐시 적중률이 오른다. Looker는 데이터그룹(datagroup)으로 "ETL이 끝났을 때 캐시를 비운다"처럼 캐시 수명을 적재 일정에 맞춘다.
+
+추출로 돌리기. 하루에 한 번 바뀌는 데이터를 라이브 연결로 보여 줄 이유는 없다. 아침에 백 명이 여는 대시보드라면 새벽 적재가 끝난 뒤 한 번 추출하는 게 웨어하우스에 백 번 묻는 것보다 싸다. 반대로 실시간성이 필요한 운영 대시보드는 라이브로 두되 집계 테이블을 짧은 주기로 갱신한다.
+
+파티션과 클러스터링. 집계 테이블도 날짜로 파티션을 나누고, 자주 거르는 컬럼(플랫폼, 국가)으로 정렬해 두면 기간 필터가 걸린 질문이 필요한 파티션만 읽는다. 파티션 조건이 실제로 먹히는지는 [데이터 웨어하우스 설계](/posts/data-warehouse-architecture)에서 다룬 것처럼 처리 바이트로 확인한다.
+
+새로 고침 동시 접속. 9시 정각에 모든 대시보드의 예약 새로 고침이 몰리면 웨어하우스 대기열이 길어진다. 새로 고침 시각을 흩어 두고, BI 전용 계산 자원(Snowflake라면 별도 가상 웨어하우스)을 두어 적재 작업과 서로 방해하지 않게 한다.
+
+## 개발자가 직접 만드는 대시보드
+
+BI 도구 대신 코드로 대시보드를 만드는 경우도 있다. 엔지니어 몇 명이 보는 내부 도구, 모델 실험 결과 보기, 운영 화면처럼 쓰는 사람이 적고 화면이 자주 바뀌는 경우다. 파이썬에서는 Streamlit이 대표적이다.
+
+```python
+# app.py: streamlit run app.py
+import duckdb
+import streamlit as st
+
+@st.cache_data(ttl=600)                       # 같은 인자면 10분 동안 결과를 재사용한다
+def dau(month_start: str, month_end: str):
+    con = duckdb.connect("bi.duckdb", read_only=True)
+    return con.execute("""
+        SELECT dt_kst AS dt, platform, count(*) AS dau
+        FROM user_daily
+        WHERE active_events > 0 AND NOT is_test AND dt_kst >= ? AND dt_kst < ?
+        GROUP BY 1, 2 ORDER BY 1, 2""", [month_start, month_end]).df()
+
+platform = st.selectbox("플랫폼", ["ios", "android", "web"])
+df = dau("2026-10-01", "2026-10-31")
+st.line_chart(df[df.platform == platform], x="dt", y="dau")
+```
+
+Streamlit은 사용자가 위젯을 바꿀 때마다 스크립트를 위에서부터 다시 실행한다. 그래서 `st.cache_data` 없이 쿼리를 두면 선택 상자를 바꿀 때마다 웨어하우스에 다시 묻는다. 위 코드는 쿼리를 캐시하고 필터는 메모리에서 거른다.
+
+코드 대시보드는 자유롭고, Git으로 리뷰하고, 파이썬 라이브러리를 다 쓸 수 있다. 대신 권한 관리, 예약 메일, 행 수준 보안, 비개발자가 직접 화면을 만드는 기능은 직접 만들어야 한다. 그리고 SQL을 코드 안에 쓰는 순간 앞에서 본 "정의가 흩어지는" 문제가 다시 생긴다. 코드 대시보드를 쓰더라도 지표는 시맨틱 레이어의 API로 가져오거나, 최소한 정의된 집계 테이블만 읽게 하는 편이 좋다.
+
+고르는 기준은 쓰는 사람이다. 비개발자가 스스로 질문을 바꿔 가며 보는 화면이면 BI 도구, 개발자 몇 명이 쓰고 화면이 실험처럼 자주 바뀌면 코드 대시보드가 맞다.
+
+## 다시 월요일 회의로
+
+세 숫자가 나왔던 회의를 다시 보면, 고칠 것은 대시보드가 아니라 정의의 위치였다. 활성 사용자의 정의를 회사가 하나 고르고, 그 정의를 시맨틱 레이어에 한 번 적고, 대시보드는 지표 이름으로만 묻게 한다. 그다음 대시보드가 느리면 실제로 보낸 SQL을 꺼내 원본을 읽는지 보고, 더 굵게 다시 묶을 수 있는 집계 테이블을 만든다. 이때 고유 사용자 수처럼 더할 수 없는 지표는 더하지 않는다. 데이터를 누가 소유하고 정의를 누가 정하는가라는 조직 쪽 질문은 [데이터 메시와 데이터 패브릭](/posts/data-mesh-fabric)으로 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 시맨틱 레이어가 푸는 문제는 무엇인가?
+
+지표 정의가 대시보드마다 SQL 안에 흩어져 같은 지표가 서로 다른 숫자로 나오는 문제를 푼다. 지표, 차원, 조인 경로를 정의 파일 한곳에 두고, BI 도구와 노트북, 리버스 ETL이 지표 이름으로 묻게 한다. 정의를 바꾸면 모든 소비자가 함께 바뀌고, 설명이 카탈로그와 툴팁으로 이어진다. 다만 어떤 정의가 맞는지는 도구가 아니라 회사가 정한다.
+
+### BI 도구의 라이브 연결과 추출은 언제 고르나?
+
+라이브 연결은 매번 웨어하우스에 묻기 때문에 숫자가 최신이지만 속도와 비용이 웨어하우스에 달려 있다. 추출은 정해진 시각에 사본을 만들어 빠르고 비용이 일정하지만 새로 고침 시점의 숫자에 머문다. 하루 한 번 바뀌고 많은 사람이 보는 대시보드는 추출, 실시간성이 필요한 운영 화면은 라이브에 집계 테이블을 짧게 갱신하는 조합이 흔하다.
+
+### BI 쿼리 비용을 줄이려면 어디부터 보나?
+
+대시보드 타일이 실제로 보낸 SQL을 꺼내 원본 테이블을 직접 읽는지 본다. 원본 대신 사용자-일 같은 집계 테이블로 바꾸면 실험에서 2,012만 행 대신 347만 행을 읽어 시간이 24분의 1로 줄었다. 그다음 결과 캐시가 먹히도록 now() 같은 비결정 값을 정해진 날짜로 바꾸고, 파티션 조건과 새로 고침 시각 분산, BI 전용 계산 자원을 본다.
+
+### 일별 활성 사용자를 더해서 월 활성 사용자를 구하면 왜 틀리나?
+
+같은 사람이 여러 날 활동하면 날마다 한 번씩 세어져 중복되기 때문이다. 실험에서 30일 DAU 합은 1,656,845였지만 실제 MAU는 58,800이었다. 고유 수, 중앙값, 비율은 더할 수 없는 지표라서 user_id를 남긴 집계 테이블에서 다시 세거나, 근사가 괜찮으면 HyperLogLog 스케치를 저장해 합친다. 비율은 분자와 분모를 따로 더한 뒤 나눈다.
+
+### 집계 인식(aggregate awareness)은 어떻게 동작하나?
+
+질문의 차원과 시간 단위를 보고 미리 만든 집계 테이블 중 답할 수 있는 가장 작은 것을 골라 SQL을 바꿔 보낸다. 질문의 차원이 표에 모두 있어야 하고, 표의 시간 단위가 질문보다 잘거나 같아야 한다. 고유 수만 남긴 표처럼 다시 묶을 수 없는 표는 단위와 차원이 정확히 같을 때만 쓰고, 맞는 표가 없으면 원본으로 간다.
+
+### 결과 캐시가 잘 안 먹히는 대시보드는 무엇을 의심하나?
+
+쿼리 안에 현재 시각 같은 비결정 함수가 있는지 본다. BigQuery는 이런 쿼리를 캐시하지 않고, 참조 테이블이 바뀌어도 캐시가 무효가 된다. 최근 30일을 now()로 계산하는 대신 날짜를 값으로 넘기고, 캐시 수명을 적재 완료 시점에 맞춘다(Looker라면 데이터그룹).
+
+### 내부 대시보드를 Streamlit으로 만들 때 주의할 점은?
+
+위젯을 바꿀 때마다 스크립트 전체가 다시 실행되므로 쿼리를 st.cache_data로 캐시하지 않으면 웨어하우스에 매번 다시 묻는다. 권한, 예약 발송, 행 수준 보안은 직접 만들어야 한다. 그리고 SQL을 코드에 직접 쓰면 지표 정의가 다시 흩어지니, 시맨틱 레이어의 지표나 정의된 집계 테이블만 읽게 한다.

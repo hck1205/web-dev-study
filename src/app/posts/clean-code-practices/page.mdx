@@ -1,0 +1,492 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("clean-code-practices");
+
+<EasyIntro>
+  친구에게 길을 알려 주는 쪽지를 쓴다고 생각해 보자. "저기서 꺾고, 거기서 또 꺾어"라고 쓰면 쓴 사람은 알아도 읽는 친구는 길을 잃는다.
+
+  코드도 쪽지와 같다. 컴퓨터는 아무렇게나 써도 알아듣지만, 그 코드를 다시 읽고 고치는 건 사람이다. 그래서 읽는 사람이 헤매지 않게 쓰는 방법을 클린 코드라고 부른다.
+
+  이름을 보면 무엇을 하는지 알 수 있게 짓고, 갈림길이 너무 많아지면 길을 나눠서 그린다. 바꾸는 일과 물어보는 일을 한 문장에 섞지 않는다. 같은 사람이 부탁하는 일은 한곳에 모아 두면 나중에 그 부탁이 바뀌어도 한 곳만 고치면 된다.
+
+  다만 쪽지를 너무 잘게 찢으면 오히려 읽기 힘들어진다. 그래서 규칙을 외우기보다 읽는 사람이 덜 헤매는지를 기준으로 삼는다.
+</EasyIntro>
+
+리뷰를 받았는데 코멘트가 하나뿐이다. "읽기 어렵네요." 어디가 어렵다는 건지, 무엇을 고치라는 건지는 없다. 반대로 내가 리뷰할 때도 비슷한 말밖에 못 남긴 적이 있다. 분명 읽기 힘든데 이유를 말로 못 한다.
+
+```ts
+export async function proc(d: any, f: boolean) {
+  let r = [];
+  // 데이터 처리
+  for (let i = 0; i < d.length; i++) {
+    if (d[i].s == 1) {
+      if (f) {
+        if (d[i].a > 0) {
+          r.push({ ...d[i], t: d[i].a * 1.1 });
+          await save(d[i]); // 저장
+        }
+      } else {
+        r.push(d[i]);
+      }
+    }
+  }
+  return r;
+}
+```
+
+이 함수가 읽기 어려운 이유는 하나하나 이름을 붙일 수 있다. 이름이 아무것도 말하지 않고, 주석은 코드를 그대로 다시 읽어 줄 뿐이고, 들여쓰기가 네 단계이고, 플래그 `f`가 함수 전체의 갈래를 바꾸고, 결과를 돌려주면서 저장까지 한다. 이 글은 그 이유들을 이름, 포맷, 복잡도, 함수 크기, 언어 구문, 명령과 조회 분리, 코드 묶는 기준 순서로 하나씩 꺼내고, 각자 리뷰에서 어떻게 말하면 되는지 적는다. 모듈 사이의 결합 이야기는 [결합도와 응집도](/posts/coupling-cohesion-principles)에, 이미 엉킨 코드를 안전하게 옮기는 순서는 [리팩터링](/posts/refactoring-code-smells)에 따로 썼다.
+
+## 주석이 하던 일을 이름에게 넘긴다
+
+`proc`, `d`, `f`, `r`, `s == 1`, `a`, `t`. 이 함수에서 뜻을 담은 이름은 `save` 하나다. 그래서 읽는 사람은 코드를 따라가며 머릿속에 표를 만든다. "d는 주문 목록인 것 같고, s가 1이면 결제 완료인 것 같고…" 이름을 고치면 그 표가 코드에 적힌다.
+
+```ts
+const PAID = 1;
+const VAT_RATE = 0.1;
+
+export async function collectPaidOrders(orders: Order[], withVat: boolean) {
+  const result: Order[] = [];
+  for (const order of orders) {
+    if (order.status !== PAID) continue;
+    // ...
+  }
+  return result;
+}
+```
+
+이름을 지을 때 쓸 만한 기준 몇 가지가 있다.
+
+이름의 길이는 쓰이는 범위에 비례한다. 세 줄짜리 화살표 함수 안의 `o`는 괜찮지만, 모듈 밖으로 나가는 함수에 `o`를 쓰면 안 된다. 반대로 `for` 한 줄에 `currentlyProcessingOrderIndex`를 쓰면 오히려 읽기 힘들다.
+
+단위와 형식을 이름에 넣는다. `timeout`보다 `timeoutMs`, `price`보다 `priceKrw`나 `priceMinor`, `date`보다 `createdAtIso`가 낫다. 초를 밀리초로 넘겨 3초짜리 타임아웃이 3밀리초가 되는 실수는 이름 하나로 거의 막힌다.
+
+참·거짓 값은 질문으로 읽히게 짓는다. `isPaid`, `hasCoupon`, `canRefund`. `flag`, `check`, `status` 같은 이름은 무엇이 참일 때 참인지 알 수 없다.
+
+같은 개념은 같은 단어로 부른다. 한 파일에서 `fetchUser`, 다른 파일에서 `getMember`, 또 다른 곳에서 `loadAccount`가 같은 일을 하면 읽는 사람은 셋이 다른 것인지 의심한다. 반대로 다른 것을 같은 이름으로 부르는 것(`order`가 어떤 곳에서는 주문, 어떤 곳에서는 정렬 순서)은 더 나쁘다.
+
+### 그래도 주석이 필요한 자리
+
+주석을 쓰지 말라는 말이 아니다. 코드가 "무엇을, 어떻게"를 말한다면 주석은 "왜"를 말한다. 코드로는 표현할 수 없는 것들이다.
+
+```ts
+// 결제사 웹훅은 같은 이벤트를 최대 3번 보낸다(결제사 문서 4.2절). 그래서 eventId로 중복을 거른다.
+if (await seen(event.id)) return;
+
+// 사파리 17에서 이 값이 0으로 오는 버그가 있어 한 번 더 읽는다. 고쳐지면 지운다: #1234
+const width = el.getBoundingClientRect().width || el.offsetWidth;
+
+// 법정 보관 기간 5년. 줄이면 안 된다.
+const RETENTION_DAYS = 365 * 5;
+```
+
+나쁜 주석은 코드를 반복하는 주석(`// 저장`), 지운 코드를 주석으로 남긴 것(git이 기억한다), 그리고 코드가 바뀐 뒤 따라 바뀌지 않아 거짓말이 된 주석이다. 마지막이 가장 해롭다. 코드는 실행되니 틀리면 드러나지만, 주석은 아무도 검사하지 않는다.
+
+## 같은 일은 같은 모양으로 쓴다
+
+리뷰 코멘트의 상당수가 따옴표, 세미콜론, 줄바꿈, import 순서 이야기라면 그 팀은 사람이 할 일이 아닌 걸 사람이 하고 있다. 모양은 도구에게 맡긴다.
+
+포매터(Prettier, Biome의 포매터)는 코드의 모양만 바꾼다. 들여쓰기, 줄 길이, 따옴표, 괄호 위치. 의미는 건드리지 않고, 설정할 수 있는 것이 일부러 적다. 린터(ESLint, Biome의 린터)는 의미를 본다. 쓰지 않는 변수, `==` 사용, `await` 빠진 Promise, 너무 복잡한 함수 같은 것을 잡는다. 둘이 같은 규칙(예: 들여쓰기)을 놓고 다투면 안 되니, 모양 규칙은 포매터에게만 맡기고 린터에서는 끈다.
+
+```bash
+# 포매터와 린터를 프로젝트에 넣는다
+pnpm add -D prettier eslint
+
+# 전체를 한 번 포맷한다. 이 커밋에는 포맷 변경만 넣는다
+pnpm prettier --write .
+git commit -am "chore: apply prettier"
+
+# 그 커밋을 git blame에서 건너뛰게 등록한다
+git rev-parse HEAD >> .git-blame-ignore-revs
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+처음 도입할 때 포맷 변경과 로직 변경을 한 커밋에 섞으면 안 된다. 리뷰어는 수천 줄 diff에서 진짜 변경을 찾을 수 없고, 나중에 `git blame`을 하면 모든 줄의 작성자가 포맷을 돌린 사람으로 나온다. `.git-blame-ignore-revs`에 그 커밋을 적어 두면 로컬 `git blame`과 GitHub의 blame 화면이 그 커밋을 건너뛴다.
+
+일관성은 포맷보다 넓은 말이다. 에러를 던질지 `Result`를 돌려줄지, 비동기를 `async/await`로 쓸지 `.then`으로 쓸지, 파일 이름을 kebab-case로 할지. 어느 쪽이 옳은지보다 한 코드베이스 안에서 한 가지로 통일되어 있는지가 읽기에는 더 크게 작용한다. 기존 코드와 다른 방식을 쓰고 싶다면, 그 PR에서 몰래 섞지 말고 따로 합의하고 바꾼다.
+
+## 갈림길을 세는 숫자, 순환 복잡도
+
+"이 함수 너무 복잡해요"를 숫자로 말하는 방법이 있다. 1976년 토머스 매케이브가 제안한 순환 복잡도(cyclomatic complexity)는 함수 안에서 서로 다른 실행 경로가 몇 개인지 센다. 계산은 간단하다. 1에서 시작해 분기가 하나 나올 때마다 1을 더한다. `if`, `else if`, `for`, `while`, `case`, `catch`, 삼항 연산자, `&&`, `||`, `??`가 분기다.
+
+아래 배송비 함수를 보자.
+
+```ts
+export function shippingFee(order: Order): number {
+  let fee = 0;
+  if (order.status === "paid") {
+    if (order.items.length > 0) {
+      if (order.country === "KR") {
+        if (order.member && order.member.tier === "vip") {
+          fee = 0;
+        } else if (order.subtotal >= 50000) {
+          fee = 0;
+        } else {
+          fee = 3000;
+        }
+      } else {
+        const weight = order.items.reduce((s, i) => s + i.weight, 0);
+        fee = weight > 2 ? 25000 : 15000;
+      }
+    } else {
+      throw new Error("empty order");
+    }
+  } else {
+    throw new Error("not paid");
+  }
+  return fee;
+}
+```
+
+아래 그림에서 다음을 누르면 위에서부터 분기를 하나씩 만나며 숫자가 쌓인다.
+
+<AlgoTrace
+  caption="분기를 만날 때마다 하나씩 더한다. 경로가 여덟 개다"
+  memoryLabel="복잡도"
+  cells={["시작", "if 결제", "if 상품", "if 국내", "if 회원", "&& vip", "else if", "? 무게"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "분기가 하나도 없는 함수도 경로는 하나다. 1에서 시작한다." },
+    { pointer: 1, memory: ["1", "+1"], caption: "결제됐는지 묻는 if. 결제 안 된 경로가 하나 생긴다." },
+    { pointer: 2, memory: ["1", "+1", "+1"], caption: "상품이 있는지 묻는 if. 여기까지 들여쓰기가 두 단계다." },
+    { pointer: 3, memory: ["1", "+1", "+1", "+1"], caption: "국내 배송인지 묻는 if. 해외 경로가 갈라진다." },
+    { pointer: 4, memory: ["1", "+1", "+1", "+1", "+1"], caption: "회원 정보가 있는지 묻는다. 들여쓰기가 네 단계가 됐다." },
+    { pointer: 5, memory: ["1", "+1", "+1", "+1", "+1", "+1"], caption: "&&도 분기다. 회원은 있지만 vip가 아닌 경로가 따로 있다." },
+    { pointer: 6, memory: ["1", "+1", "+1", "+1", "+1", "+1", "+1"], caption: "else if로 5만 원 이상인지 한 번 더 묻는다. else는 새 분기가 아니라 세지 않는다." },
+    { pointer: 7, memory: ["1", "+1", "+1", "+1", "+1", "+1", "+1", "+1"], found: [0, 1, 2, 3, 4, 5, 6, 7], caption: "삼항 연산자까지 더하면 8이다. 이 함수를 빠짐없이 테스트하려면 경로 여덟 개를 지나는 입력이 필요하다." },
+  ]}
+/>
+
+이 숫자가 쓸모 있는 이유는 테스트와 이어지기 때문이다. 복잡도 8인 함수의 모든 분기를 한 번씩 지나려면 서로 다른 입력이 대략 그만큼 필요하다. 숫자가 커질수록 빠뜨린 경로가 생기기 쉽고, 버그는 대개 아무도 지나가 보지 않은 경로에 있다.
+
+ESLint의 `complexity` 규칙이 이 숫자를 센다. 기본 한도는 20이라 꽤 너그럽다. 매케이브는 원래 논문에서 10을 기준으로 제안했다. 아래는 한도를 일부러 5로 낮추고, 들여쓰기 깊이를 보는 `max-depth`를 3으로 둔 설정이다(ESLint 9 flat config, typescript-eslint 8).
+
+```js
+// eslint.config.mjs
+import tseslint from "typescript-eslint";
+
+export default tseslint.config({
+  files: ["src/**/*.ts"],
+  languageOptions: { parser: tseslint.parser },
+  rules: {
+    complexity: ["error", { max: 5 }],
+    "max-depth": ["error", 3],
+    "max-lines-per-function": ["warn", { max: 40, skipBlankLines: true, skipComments: true }],
+  },
+});
+```
+
+```bash
+# 함수마다 복잡도와 들여쓰기 깊이를 검사한다
+npx eslint src/
+```
+
+```text
+/home/me/shop/src/shipping.ts
+   9:8  error  Function 'shippingFee' has a complexity of 8. Maximum allowed is 5  complexity
+  14:9  error  Blocks are nested too deeply (4). Maximum allowed is 3              max-depth
+
+✖ 2 problems (2 errors, 0 warnings)
+```
+
+그림에서 센 8이 그대로 나온다. 둘째 줄은 14번째 줄의 `if (order.member && ...)`가 네 단계 안쪽에 있다는 뜻이다.
+
+## 조기 반환으로 들여쓰기를 걷어 낸다
+
+복잡도를 낮추는 가장 손쉬운 방법은 조기 반환(early return, 가드 절)이다. "이 조건이 아니면 더 볼 것 없다"는 경우를 함수 맨 위에서 먼저 끝내면, 나머지 코드는 정상 경로만 남아 왼쪽 벽에 붙는다.
+
+```ts
+const FREE_SHIPPING_MIN = 50000;
+
+export function shippingFee(order: Order): number {
+  if (order.status !== "paid") throw new Error("not paid");
+  if (order.items.length === 0) throw new Error("empty order");
+  return order.country === "KR" ? domesticFee(order) : internationalFee(order);
+}
+
+function domesticFee(order: Order): number {
+  const isVip = order.member?.tier === "vip";
+  if (isVip || order.subtotal >= FREE_SHIPPING_MIN) return 0;
+  return 3000;
+}
+
+function internationalFee(order: Order): number {
+  const weight = order.items.reduce((sum, item) => sum + item.weight, 0);
+  return weight > 2 ? 25000 : 15000;
+}
+```
+
+같은 설정으로 다시 돌리면 아무것도 출력되지 않고 종료 코드 0으로 끝난다. 한도를 1로 낮춰 함수마다 숫자를 보면 이렇다.
+
+```bash
+# 한도를 1로 낮춰 모든 함수의 복잡도를 출력시킨다
+npx eslint --rule 'complexity: ["error", 1]' --rule 'max-depth: off' src/shipping-after.ts
+```
+
+```text
+/home/me/shop/src/shipping-after.ts
+  11:8  error  Function 'shippingFee' has a complexity of 4. Maximum allowed is 1       complexity
+  17:1  error  Function 'domesticFee' has a complexity of 4. Maximum allowed is 1       complexity
+  23:1  error  Function 'internationalFee' has a complexity of 2. Maximum allowed is 1  complexity
+```
+
+여기서 짚을 게 하나 있다. 세 함수를 더하면 4 + 4 + 2 = 10으로, 원래의 8보다 오히려 크다. 옵셔널 체이닝 `?.`도 분기로 세기 때문이다. 업무 규칙이 가진 갈래 수는 리팩터링으로 줄지 않는다. 줄어든 것은 한 번에 머리에 담아야 하는 갈래 수다. `domesticFee`를 읽을 때는 결제 상태나 해외 무게를 생각하지 않아도 된다. 복잡도 지표는 "전체를 작게"가 아니라 "한 함수를 작게"를 재는 도구다.
+
+들여쓰기에 더 큰 벌점을 주는 인지 복잡도(cognitive complexity, SonarSource가 만든 지표)도 있다. 중첩된 `if`는 깊이만큼 더 세고, `else if` 사다리는 덜 센다. 사람이 느끼는 읽기 어려움에 더 가깝다는 평이 있고, ESLint에서는 `eslint-plugin-sonarjs`로 쓸 수 있다.
+
+직접 해 보자. 아래 함수는 위와 같은 규칙이지만, 예외 대신 `null`을 돌려준다. 결제되지 않았거나 상품이 없으면 `null`, 국내는 vip이거나 5만 원 이상이면 0원 아니면 3,000원, 해외는 무게 합이 2kg을 넘으면 25,000원 아니면 15,000원이다. 테스트를 통과시킨 채로 들여쓰기를 한 단계 이하로 줄여 보자.
+
+<CodePlayground
+  caption="조기 반환으로 펴기"
+  functionName="shippingFee"
+  initialCode={`function shippingFee(order) {
+  let fee = null;
+  if (order.status === "paid") {
+    if (order.items.length > 0) {
+      if (order.country === "KR") {
+        if (order.member && order.member.tier === "vip") {
+          fee = 0;
+        } else if (order.subtotal >= 50000) {
+          fee = 0;
+        } else {
+          fee = 3000;
+        }
+      } else {
+        let weight = 0;
+        for (let i = 0; i < order.items.length; i++) weight += order.items[i].weight;
+        fee = weight > 2 ? 25000 : 15000;
+      }
+    }
+  }
+  return fee;
+}`}
+  solution={`const FREE_SHIPPING_MIN = 50000;
+
+function shippingFee(order) {
+  if (order.status !== "paid") return null;
+  if (order.items.length === 0) return null;
+  if (order.country !== "KR") {
+    const weight = order.items.reduce((sum, item) => sum + item.weight, 0);
+    return weight > 2 ? 25000 : 15000;
+  }
+  const isVip = order.member?.tier === "vip";
+  if (isVip || order.subtotal >= FREE_SHIPPING_MIN) return 0;
+  return 3000;
+}`}
+  tests={[
+    { args: [{ status: "pending", items: [{ weight: 1 }], country: "KR", subtotal: 10000 }], expected: null, label: "결제 전이면 null" },
+    { args: [{ status: "paid", items: [], country: "KR", subtotal: 0 }], expected: null, label: "상품이 없으면 null" },
+    { args: [{ status: "paid", items: [{ weight: 1 }], country: "KR", subtotal: 20000, member: { tier: "vip" } }], expected: 0, label: "vip는 무료" },
+    { args: [{ status: "paid", items: [{ weight: 1 }], country: "KR", subtotal: 50000 }], expected: 0, label: "5만 원 이상 무료" },
+    { args: [{ status: "paid", items: [{ weight: 1 }], country: "KR", subtotal: 49900 }], expected: 3000, label: "5만 원 미만 3,000원" },
+    { args: [{ status: "paid", items: [{ weight: 1.5 }, { weight: 0.5 }], country: "JP", subtotal: 80000 }], expected: 15000, label: "해외 2kg은 15,000원" },
+    { args: [{ status: "paid", items: [{ weight: 1.5 }, { weight: 0.6 }], country: "US", subtotal: 80000, member: { tier: "vip" } }], expected: 25000, label: "해외는 vip여도 무게대로" },
+  ]}
+/>
+
+## 작게 나누되, 너무 잘게 찢지 않는다
+
+《클린 코드》(로버트 C. 마틴, 2008)는 함수가 한 가지 일만 해야 하고, 아주 작아야 한다고 말한다. 여기서 "한 가지 일"을 가르는 실용적인 기준은 추상화 수준이다. 한 함수 안의 문장들이 같은 높이에서 이야기하는가.
+
+```ts
+async function checkout(cartId: string) {
+  const cart = await loadCart(cartId);
+  const total = priceOf(cart);
+  await charge(cart.userId, total);
+  // 갑자기 아래로 내려간다
+  const res = await fetch(`${MAIL_API}/send`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.MAIL_KEY}` },
+    body: JSON.stringify({ to: cart.email, template: "receipt", vars: { total } }),
+  });
+  if (!res.ok) logger.warn("mail failed", await res.text());
+}
+```
+
+앞의 세 줄은 업무 언어(장바구니, 가격, 결제)로 말하다가, 넷째 줄부터 HTTP 헤더와 JSON으로 말한다. 읽는 사람은 높이를 바꿔 가며 읽어야 한다. 메일 부분을 `await sendReceipt(cart.email, total)`로 빼면 `checkout`은 위에서 아래로 한 이야기가 된다.
+
+파일도 마찬가지다. 1,500줄짜리 파일은 대개 서로 다른 이유로 바뀌는 것들이 같이 들어 있다는 신호다. 몇 줄이 정답인지는 없지만, 스크롤 없이 한 화면에서 함수 하나를 다 볼 수 있으면 리뷰가 훨씬 쉬워진다.
+
+### 잘게 찢었을 때 생기는 비용
+
+이 조언을 문자 그대로 따르면 반대 문제가 생긴다. 함수 하나가 세 줄이 될 때까지 쪼개면, 흐름 하나를 이해하려고 "정의로 이동"을 열 번 눌러야 한다. 이름이 정확하지 않으면 매번 열어 봐야 하고, 쪼갠 함수들이 서로 많은 인자를 주고받으면 결합은 오히려 늘어난다.
+
+존 아우스터하우트는 《A Philosophy of Software Design》에서 이걸 깊은 모듈과 얕은 모듈로 설명했다. 좋은 모듈은 인터페이스(이름과 인자)가 단순하고 그 뒤에 숨긴 일이 많다. 얕은 모듈은 인터페이스가 하는 일만큼 복잡해서, 감싸 봐야 읽는 사람이 기억할 이름만 늘어난다. `function addOne(n) { return n + 1 }` 같은 함수가 극단적인 예다.
+
+그래서 나누는 기준은 줄 수가 아니라 이 셋이다. 이름만 보고 안을 열지 않아도 되는가. 따로 테스트하고 싶은 규칙인가. 다른 이유로 바뀌는 부분인가. 셋 다 아니면 그대로 두는 편이 낫다. 한 번만 쓰이는 세 줄짜리 함수가 이름도 애매하다면 다시 안으로 넣는다(inline).
+
+## 언어가 준 도구를 맞는 자리에 쓴다
+
+같은 일을 하는 구문이 여럿일 때, 맞지 않는 걸 고르면 읽기 어려운 것을 넘어 버그가 된다. 자바스크립트와 TypeScript에서 리뷰에 자주 걸리는 것들을 모았다.
+
+`forEach`에 `async` 함수를 넘기면 기다리지 않는다. `forEach`는 콜백이 돌려준 Promise를 무시한다.
+
+```js
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const ids = [3, 1, 2];
+
+async function withForEach() {
+  const saved = [];
+  ids.forEach(async (id) => {
+    await wait(id * 10);
+    saved.push(id);
+  });
+  console.log("forEach 끝난 직후:", saved);
+}
+
+async function withForOf() {
+  const saved = [];
+  for (const id of ids) {
+    await wait(id * 10);
+    saved.push(id);
+  }
+  console.log("for...of 끝난 직후:", saved);
+}
+
+await withForEach();
+await withForOf();
+```
+
+```text
+forEach 끝난 직후: []
+for...of 끝난 직후: [ 3, 1, 2 ]
+```
+
+차례로 기다려야 하면 `for...of`, 동시에 돌리고 모두 기다리려면 `await Promise.all(ids.map(...))`이다. `forEach` 안의 `await`는 대개 "저장이 끝난 줄 알았는데 응답이 먼저 나갔다"는 버그로 돌아온다.
+
+`||`와 `??`는 다르다. `0 || 10`은 10이고 `0 ?? 10`은 0이다. 빈 문자열도 마찬가지로 `"" || "기본"`은 `"기본"`, `"" ?? "기본"`은 `""`이다. 수량, 할인율, 페이지 번호처럼 0이 정상 값인 곳에서 `||`로 기본값을 주면 0을 넣어도 기본값으로 바뀐다. "없을 때만" 기본값을 주려면 `??`를 쓴다.
+
+결과를 쓰지 않으면 `map`이 아니라 `for...of`다. `items.map((i) => save(i))`처럼 반환된 배열을 버리는 `map`은 읽는 사람에게 "새 배열을 만든다"는 잘못된 신호를 준다.
+
+종류에 따라 갈라지는 코드는 판별 유니언과 `switch`로 쓰고, 빠진 갈래를 컴파일러가 잡게 한다.
+
+```ts
+type Payment =
+  | { kind: "card"; last4: string }
+  | { kind: "bank"; bankCode: string }
+  | { kind: "point"; amount: number };
+
+function label(p: Payment): string {
+  switch (p.kind) {
+    case "card": return `카드 ${p.last4}`;
+    case "bank": return `계좌 ${p.bankCode}`;
+    case "point": return `포인트 ${p.amount}`;
+    default: {
+      const unreachable: never = p; // 새 kind가 추가되면 여기서 타입 에러가 난다
+      return unreachable;
+    }
+  }
+}
+```
+
+`kind: "coupon"`이 추가되면 `never`에 대입할 수 없다는 에러가 이 줄에서 난다. 문자열로 `if` 사다리를 쓰면 빠진 갈래는 조용히 기본값으로 떨어진다.
+
+## 바꾸는 함수와 묻는 함수를 나눈다
+
+버트런드 마이어가 Eiffel 언어를 설계하며 정한 명령과 조회의 분리(Command Query Separation, CQS)는 메서드를 둘로 나눈다. 상태를 바꾸고 아무것도 돌려주지 않는 명령, 값을 돌려주고 아무것도 바꾸지 않는 조회. 한 메서드가 둘 다 하면 안 된다. 마이어의 말로는 "질문을 했다고 답이 바뀌어서는 안 된다."
+
+어기는 코드는 이렇게 생겼다.
+
+```ts
+// 조회인 줄 알았는데 없으면 만든다
+async function getUser(email: string) {
+  const found = await db.user.findUnique({ where: { email } });
+  return found ?? db.user.create({ data: { email } });
+}
+
+// 검사인 줄 알았는데 값을 고친다
+function validateCart(cart: Cart): boolean {
+  cart.items = cart.items.filter((i) => i.qty > 0); // 몰래 바뀐다
+  return cart.items.length > 0;
+}
+```
+
+`getUser`를 로그 출력이나 권한 확인처럼 "그냥 한번 보는" 곳에서 부르면 회원이 생긴다. 관리자 화면에서 이메일을 잘못 입력해 검색만 했는데 유령 계정이 생기는 식이다. `validateCart`는 테스트에서 두 번 부르면 두 번째 결과가 첫 번째와 다를 수 있고, 디버거의 감시식에 넣는 순간 값이 바뀐다. 조회가 순수하면 몇 번 불러도, 어디서 불러도 안전하다.
+
+```ts
+async function findUser(email: string): Promise<User | null> { /* 조회만 */ }
+async function registerUser(email: string): Promise<void> { /* 명령만 */ }
+
+function removeEmptyItems(cart: Cart): void { /* 명령 */ }
+function hasItems(cart: Cart): boolean { /* 조회 */ }
+```
+
+예외도 분명히 있다. `stack.pop()`은 꺼내면서(명령) 값을 돌려준다(조회). `Array.prototype.push`는 새 길이를, `Map.prototype.set`은 맵 자신을 돌려준다. 이런 관례는 편의라 받아들인다. 더 중요한 예외는 동시성이다. "재고가 있는지 묻고, 있으면 줄인다"를 두 호출로 나누면 그 사이에 다른 요청이 끼어든다. 이럴 때는 `UPDATE ... SET stock = stock - 1 WHERE stock > 0 RETURNING stock`이나 Redis `INCR`처럼 바꾸면서 결과를 돌려주는 하나의 원자적 연산이 맞다. CQS는 함수 하나의 규칙이고, 같은 생각을 시스템 전체의 쓰기 모델과 읽기 모델로 넓힌 것이 [CQRS](/posts/cqrs)다.
+
+## 누가 바꿔 달라고 하는지로 묶는다
+
+코드를 어디에 둘지 정하는 기준으로 자주 쓰는 게 "이 코드를 바꿔 달라고 요청하는 사람(액터)이 누구인가"다. 로버트 C. 마틴은 《클린 아키텍처》에서 이 예를 들었다. `Employee` 클래스에 메서드가 셋 있다.
+
+아래 그림에서 점이 흐르는 방향이 "요청이 들어오는 길"이다. 세 사람의 요청이 한 클래스로 모이고, 그중 두 메서드가 같은 계산 함수를 나눠 쓴다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="세 부서의 요청이 한 클래스로 모이고, 공용 함수에서 서로 부딪친다"
+  nodes={[
+    { id: "cfo", label: "재무팀", sub: "급여 정책", x: 70, y: 40, w: 100 },
+    { id: "coo", label: "운영팀", sub: "근무 보고", x: 200, y: 40, w: 100 },
+    { id: "cto", label: "개발팀", sub: "저장 방식", x: 330, y: 40, w: 100 },
+    { id: "pay", label: "calculatePay", x: 70, y: 145, w: 120 },
+    { id: "hours", label: "reportHours", x: 200, y: 145, w: 120 },
+    { id: "save", label: "save", x: 330, y: 145, w: 90 },
+    { id: "regular", label: "regularHours", sub: "공용 계산", x: 135, y: 245, w: 130 },
+  ]}
+  edges={[
+    { from: "cfo", to: "pay" },
+    { from: "coo", to: "hours" },
+    { from: "cto", to: "save" },
+    { from: "pay", to: "regular" },
+    { from: "hours", to: "regular" },
+  ]}
+/>
+
+재무팀이 급여 계산에서 초과 근무를 세는 방식을 바꿔 달라고 한다. 개발자는 `calculatePay`가 쓰는 `regularHours`를 고친다. 그런데 운영팀의 근무 보고서도 같은 함수를 쓰고 있었다. 운영팀은 그 정책 변경을 요청한 적이 없는데 보고서 숫자가 바뀐다. 코드 모양으로는 중복을 없앤 좋은 설계였지만, 바뀌는 이유가 다른 두 액터를 한 함수에 묶은 것이다.
+
+해결은 액터마다 코드를 나누는 것이다. 급여 계산, 근무 보고, 저장을 각자의 모듈로 두고, 공통 데이터(`EmployeeData`)만 함께 쓴다. 두 시간 계산이 지금 똑같아 보여도 각자 갖는다. 이게 단일 책임 원칙의 원래 뜻으로, "한 가지 일만 한다"가 아니라 "한 액터에게만 책임진다"이다.
+
+폴더 구조에도 같은 기준이 쓰인다. `controllers/`, `services/`, `utils/`처럼 종류로 나누면 결제 기능 하나를 고칠 때 폴더 다섯 개를 돌아다닌다. `features/checkout/`, `features/refund/`처럼 업무 단위로 나누면 한 요청이 한 폴더 안에서 끝날 가능성이 높아진다. 이 블로그 코드도 `features/{scope}/`로 나눠 두었다.
+
+## 리뷰 코멘트 대신 팀의 규칙으로
+
+위의 것들을 리뷰에서 매번 사람이 말하면 지친다. 말하는 사람도 듣는 사람도 그렇다. 기계가 잡을 수 있는 것은 기계에게 넘기고, 사람은 이름과 경계처럼 기계가 못 보는 것에 집중한다.
+
+```bash
+# PR마다 CI에서 돌린다. 경고가 하나라도 있으면 실패시킨다
+npx prettier --check .
+npx eslint . --max-warnings 0
+```
+
+이미 큰 코드베이스에 규칙을 새로 넣으면 첫날 위반이 수백 개 나온다. 이때 쓰는 방법이 래칫(ratchet)이다. 새 규칙은 `warn`으로 넣고, 지금 있는 경고 수를 한도로 둔 뒤, 그 숫자가 늘지 않게만 막는다. 새로 고친 파일부터 규칙을 지키게 하고, 숫자가 충분히 줄면 `error`로 올린다. `eslint-disable` 주석은 이유를 함께 쓰게 하고(`-- 결제사 SDK 타입이 any라서`), 리뷰에서 그 이유를 본다.
+
+리뷰 코멘트에는 무게를 붙인다. "nit:"(사소함, 안 고쳐도 됨), "question:"(이해가 안 됨), "blocking:"(머지 전에 고쳐야 함)처럼 앞에 붙이는 관례가 있다. 그리고 "읽기 어렵다" 대신 이 글의 언어로 말한다. "`f`가 무엇을 바꾸는지 이름으로 드러나면 좋겠다", "이 함수가 저장도 하는데, 이름은 조회처럼 보인다", "들여쓰기 네 단계인데 결제 안 된 경우를 위에서 먼저 끝내면 어떨까".
+
+맨 처음의 `proc` 함수를 다시 보면, 고칠 것이 모두 이름이 있다. 의미 없는 이름, 코드를 반복하는 주석, 네 단계 들여쓰기, 흐름을 바꾸는 플래그, 결과를 돌려주며 저장까지 하는 CQS 위반. 클린 코드는 취향이 아니라 읽는 사람이 머릿속에 들고 있어야 하는 것을 줄이는 작업이고, 그래서 "왜 읽기 어려운지"를 말로 할 수 있게 된다. 이미 이렇게 엉켜 있는 큰 함수를 안전하게 바꾸는 순서는 [리팩터링](/posts/refactoring-code-smells)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 클린 코드란 무엇이라고 생각하나요?
+
+다른 사람이 읽고 고치기 쉬운 코드다. 구체적으로는 이름만 보고 의도를 알 수 있고, 한 함수가 한 높이의 이야기만 하고, 분기가 적어 경로를 따라가기 쉽고, 숨은 부수 효과가 없는 코드다. 취향의 문제가 아니라 읽는 사람이 머릿속에 들고 있어야 하는 것을 줄이는 작업이라고 본다.
+
+### 주석은 언제 쓰고 언제 쓰지 않나요?
+
+코드가 무엇을 하는지는 이름과 구조로 말하게 하고, 주석은 코드로 표현할 수 없는 "왜"에 쓴다. 외부 시스템의 이상한 동작, 브라우저 버그 우회, 법적 요구 같은 것이다. 코드를 반복하는 주석이나 지운 코드를 남긴 주석은 쓰지 않는다. 주석은 검사받지 않아 코드가 바뀌면 거짓말이 되기 쉽다.
+
+### 순환 복잡도는 어떻게 계산하고, 어떻게 낮추나요?
+
+1에서 시작해 if, else if, 반복문, case, catch, 삼항, &&, || 같은 분기마다 1을 더한다. 경로 수와 같아서 테스트에 필요한 입력 수의 기준이 된다. 조기 반환으로 예외 경로를 먼저 끝내고, 갈래별 계산을 이름 있는 함수로 빼면 함수마다의 복잡도가 내려간다. 다만 업무 규칙의 갈래 자체가 줄지는 않으니, 전체 합이 아니라 한 함수에서 한 번에 생각할 양을 줄이는 것이다.
+
+### 함수를 작게 나누는 것에 반대하는 의견도 있는데, 어떻게 생각하나요?
+
+동의하는 부분이 있다. 너무 잘게 쪼개면 흐름 하나를 이해하려고 여러 파일을 오가야 하고, 이름이 정확하지 않으면 결국 다 열어 봐야 한다. 그래서 줄 수가 아니라 이름만으로 안을 안 봐도 되는지, 따로 테스트할 규칙인지, 다른 이유로 바뀌는지를 보고 나눈다. 셋 다 아니면 안에 둔다.
+
+### 명령과 조회의 분리(CQS)는 무엇이고, 예외는 언제인가요?
+
+상태를 바꾸는 명령은 값을 돌려주지 않고, 값을 돌려주는 조회는 상태를 바꾸지 않게 나누는 원칙이다. 조회가 순수하면 어디서 몇 번 불러도 안전해서, 로그나 디버거에서 불렀다가 데이터가 바뀌는 사고가 없다. `stack.pop()` 같은 관례적인 예외가 있고, 재고 차감처럼 묻고 바꾸는 사이에 경쟁이 생기는 곳은 바꾸면서 결과를 돌려주는 원자적 연산 하나가 맞다.
+
+### 포매터와 린터는 어떻게 다르고, 팀에 어떻게 도입하나요?
+
+포매터는 의미를 건드리지 않고 모양만 맞추고, 린터는 쓰지 않는 변수나 위험한 패턴 같은 의미를 검사한다. 모양 규칙은 포매터에게만 맡기고 린터에서는 끈다. 도입할 때는 포맷만 바꾼 커밋을 따로 만들어 `.git-blame-ignore-revs`에 등록하고, CI에서 `--check`와 `--max-warnings 0`으로 막는다. 기존 위반이 많으면 경고 수가 늘지 않게만 막는 래칫으로 시작한다.
+
+### 액터별로 코드를 묶는다는 건 무슨 뜻인가요?
+
+코드를 바꿔 달라고 요청하는 사람이나 부서를 기준으로 나눈다는 뜻이다. 급여 계산과 근무 보고가 같은 시간 계산 함수를 공유하면, 재무팀 요청으로 고친 변경이 운영팀 보고서를 바꾼다. 지금 모양이 같아도 바뀌는 이유가 다르면 각자 갖게 한다. 단일 책임 원칙의 원래 뜻이 이것이고, 폴더를 종류가 아니라 업무 단위로 나누는 것도 같은 생각이다.

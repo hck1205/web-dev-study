@@ -1,0 +1,445 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mongodb-aggregation-pipeline");
+
+<EasyIntro>
+  공장의 컨베이어 벨트를 떠올리면 된다. 상자들이 벨트를 타고 지나가는 동안 첫 번째 사람은 불량품을 골라내고, 두 번째 사람은 상자를 열어 안의 물건을 하나씩 꺼내 놓고, 세 번째 사람은 같은 종류끼리 모아 개수를 센다.
+
+  MongoDB의 집계 파이프라인이 이 벨트다. 문서들이 단계를 차례로 지나가며 걸러지고, 펼쳐지고, 묶이고, 줄을 선다. 마지막 칸에서 나온 것이 답이다.
+
+  사람을 세우는 순서가 중요하다. 불량품을 맨 앞에서 골라내면 뒤의 사람들이 할 일이 확 줄어든다. 반대로 상자를 다 열어 물건을 꺼낸 다음에 불량품을 고르면, 꺼낸 물건 수만큼 일이 늘어난다.
+
+  또 벨트 옆 책상 크기가 정해져 있어서, 한 번에 너무 많은 물건을 펼쳐 놓으면 창고(디스크)를 빌려 써야 하고 그만큼 느려진다. 다른 공장에서 부품을 하나씩 가져와야 하는 단계가 있다면 그 단계가 가장 오래 걸린다.
+</EasyIntro>
+
+기획에서 이런 요청이 왔다. "3분기 월별로 카테고리 매출 상위 3개를 뽑아 주세요." 관계형 DB였다면 주문과 주문 상품을 조인하고, 월과 카테고리로 묶고, 윈도 함수로 순위를 매겼을 것이다. MongoDB에서는 주문 하나에 상품 배열이 들어 있으니 조인은 필요 없다. 대신 배열을 펼치고, 두 번 묶고, 순위를 자른다. 이걸 집계 파이프라인으로 짠다.
+
+파이프라인은 짜는 것 자체보다 순서가 어렵다. 같은 단계들이라도 어떤 순서로 놓느냐에 따라 인덱스를 타기도 하고 10만 건을 다 읽기도 한다. 이 글은 위 요청을 SQL과 나란히 만들어 본 뒤, 단계 순서와 옵티마이저가 단계를 옮기는 규칙, 메모리 한도, `$lookup`이 느려지는 이유를 실제 explain 출력으로 확인한다. 파이프라인의 기초 모양은 [MongoDB 문서 모델](/posts/mongodb-document-model) 끝부분에, 인덱스와 explain 읽는 법은 [MongoDB 인덱스와 explain](/posts/mongodb-indexes-explain)에 정리해 두었다.
+
+실험 환경은 Ubuntu 24.04의 MongoDB 8.0 복제본 셋, SQL 비교는 PostgreSQL 16이다. 출력은 모두 실제로 돌린 것이다.
+
+## 작은 주문 다섯 건으로 먼저 맞춰 보기
+
+큰 데이터로 가기 전에 결과를 눈으로 확인할 수 있는 다섯 건으로 시작한다. 세 번째 주문은 취소됐다.
+
+```js
+db.orders.insertMany([
+  { _id: 1, userId: "u1", status: "paid", createdAt: ISODate("2026-07-03"),
+    items: [ { cat: "book", price: 12000, qty: 1 }, { cat: "toy", price: 8000, qty: 2 } ] },
+  { _id: 2, userId: "u2", status: "paid", createdAt: ISODate("2026-07-10"),
+    items: [ { cat: "tech", price: 30000, qty: 1 }, { cat: "food", price: 4000, qty: 2 } ] },
+  { _id: 3, userId: "u1", status: "cancelled", createdAt: ISODate("2026-07-11"),
+    items: [ { cat: "tech", price: 50000, qty: 1 } ] },
+  { _id: 4, userId: "u3", status: "paid", createdAt: ISODate("2026-08-02"),
+    items: [ { cat: "food", price: 5000, qty: 2 }, { cat: "book", price: 15000, qty: 1 } ] },
+  { _id: 5, userId: "u2", status: "paid", createdAt: ISODate("2026-08-20"),
+    items: [ { cat: "toy", price: 9000, qty: 1 }, { cat: "home", price: 22000, qty: 1 } ] },
+]);
+```
+
+관계형으로는 `orders`와 `order_items` 두 테이블에 같은 데이터를 넣었다. PostgreSQL에서는 이렇게 쓴다.
+
+```sql
+WITH monthly AS (
+  -- 월, 카테고리별 매출 합계
+  SELECT to_char(o.created_at, 'YYYY-MM') AS month, i.cat, SUM(i.price * i.qty) AS sales
+  FROM orders o JOIN order_items i ON i.order_id = o.id   -- 주문 상품을 붙인다
+  WHERE o.status = 'paid'                                  -- 결제 완료만
+  GROUP BY 1, 2
+), ranked AS (
+  -- 월마다 매출 순위를 매긴다
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY month ORDER BY sales DESC) AS rn FROM monthly
+)
+SELECT month, cat, sales FROM ranked WHERE rn <= 3 ORDER BY month, rn;
+```
+
+```text
+  month  | cat  | sales
+---------+------+-------
+ 2026-07 | tech | 30000
+ 2026-07 | toy  | 16000
+ 2026-07 | book | 12000
+ 2026-08 | home | 22000
+ 2026-08 | book | 15000
+ 2026-08 | food | 10000
+(6 rows)
+```
+
+MongoDB 파이프라인은 SQL의 각 부분과 거의 일대일로 맞는다.
+
+```js
+db.orders.aggregate([
+  { $match: { status: "paid" } },                    // WHERE
+  { $unwind: "$items" },                             // JOIN order_items 대신 배열을 펼친다
+  { $group: {                                        // GROUP BY month, cat
+      _id: { month: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, cat: "$items.cat" },
+      sales: { $sum: { $multiply: ["$items.price", "$items.qty"] } },
+  } },
+  { $group: {                                        // 월마다 상위 3개 (ROW_NUMBER ... rn <= 3)
+      _id: "$_id.month",
+      top: { $topN: { n: 3, sortBy: { sales: -1 }, output: { cat: "$_id.cat", sales: "$sales" } } },
+  } },
+  { $sort: { _id: 1 } },                             // ORDER BY month
+]);
+```
+
+```text
+[{"_id":"2026-07","top":[{"cat":"tech","sales":30000},{"cat":"toy","sales":16000},{"cat":"book","sales":12000}]},
+ {"_id":"2026-08","top":[{"cat":"home","sales":22000},{"cat":"book","sales":15000},{"cat":"food","sales":10000}]}]
+```
+
+결과가 같다. 두 번째 `$group`의 `$topN`(5.2부터)은 그룹 안에서 정렬 기준으로 앞의 n개만 남기는 누산기다. 예전에는 `$sort` 뒤에 `$group`과 `$push`로 배열을 만들고 `$slice`로 자르는 방식을 많이 썼는데, 그룹 안의 순서가 앞 단계 정렬에 기대게 되고 배열 전체를 메모리에 올려야 해서 `$topN`이 낫다.
+
+## 벨트 위에서 일어나는 일
+
+아래 그림은 결제 완료 주문 네 건이 `$unwind`로 상품 여덟 개가 된 뒤, 첫 번째 `$group`을 지나는 모습이다. 금액 단위는 만 원이다. "다음"을 누르면 누산기 칸이 하나씩 생기고 더해진다.
+
+<AlgoTrace
+  caption="$unwind로 펼친 상품 8개가 $group을 지나간다"
+  memoryLabel="$group 누산기 (월 카테고리: 합계)"
+  cells={["07 book 1.2", "07 toy 1.6", "07 tech 3", "07 food 0.8", "08 food 1", "08 book 1.5", "08 toy 0.9", "08 home 2.2"]}
+  steps={[
+    { caption: "주문 4건이 $unwind를 지나 상품 8개가 됐다. 주문 하나가 상품 수만큼 복제된다." },
+    { pointer: 0, memory: ["07 book: 1.2"], caption: "7월 book 칸을 새로 만들고 1.2를 넣는다." },
+    { pointer: 1, memory: ["07 book: 1.2", "07 toy: 1.6"], caption: "toy는 8천 원짜리 2개라 1.6이다. $multiply가 단가와 수량을 곱한다." },
+    { pointer: 2, memory: ["07 book: 1.2", "07 toy: 1.6", "07 tech: 3"], caption: "취소된 5만 원 tech는 $match에서 이미 빠졌다. 여기 3은 결제된 주문 것이다." },
+    { pointer: 3, memory: ["07 book: 1.2", "07 toy: 1.6", "07 tech: 3", "07 food: 0.8"], caption: "7월 칸이 넷이 됐다." },
+    { pointer: 4, memory: ["07 book: 1.2", "07 toy: 1.6", "07 tech: 3", "07 food: 0.8", "08 food: 1"], caption: "같은 food라도 월이 다르면 다른 칸이다. 그룹 키는 월과 카테고리 둘이다." },
+    { pointer: 7, memory: ["07 book: 1.2", "07 toy: 1.6", "07 tech: 3", "07 food: 0.8", "08 food: 1", "08 book: 1.5", "08 toy: 0.9", "08 home: 2.2"], caption: "8개를 다 지나 칸이 8개 생겼다. 이 칸들이 모두 메모리에 있다." },
+    { found: [2, 1, 0, 7, 5, 4], memory: ["07: tech 3, toy 1.6, book 1.2", "08: home 2.2, book 1.5, food 1"], caption: "두 번째 $group이 월로 다시 묶고 $topN이 칸마다 상위 3개만 남긴다. 7월 food와 8월 toy는 떨어진다." },
+  ]}
+/>
+
+그림에서 볼 곳은 두 군데다. `$unwind`가 문서 수를 늘린다는 것, 그리고 `$group`은 모든 그룹의 누산기를 끝까지 메모리에 들고 있다가 입력이 다 끝나야 결과를 내보낸다는 것이다. 그래서 `$group`과 `$sort`는 앞 단계가 다 끝나야 움직이는 막는 단계(blocking stage)다. 반면 `$match`, `$project`, `$unwind`는 문서가 하나 들어오면 하나를 바로 내보낸다.
+
+같은 일을 코드로 짜 보면 각 단계가 무슨 일을 하는지 더 분명해진다. 합계가 같으면 카테고리 이름 순으로 둔다.
+
+<CodePlayground
+  caption="월별 카테고리 매출 상위 N개"
+  functionName="topCategories"
+  initialCode={`function topCategories(orders, n) {
+  // orders: [{ status, createdAt: "YYYY-MM-DD", items: [{ cat, price, qty }] }]
+  // 결과: [{ month: "YYYY-MM", top: [{ cat, sales }] }] 월 오름차순
+  return [];
+}`}
+  solution={`function topCategories(orders, n) {
+  const sums = new Map();
+  for (const o of orders) {
+    if (o.status !== "paid") continue;                 // $match
+    const month = o.createdAt.slice(0, 7);
+    for (const it of o.items) {                        // $unwind
+      const key = month + "|" + it.cat;                // $group의 _id
+      sums.set(key, (sums.get(key) ?? 0) + it.price * it.qty);
+    }
+  }
+  const byMonth = new Map();                           // 두 번째 $group
+  for (const [key, sales] of sums) {
+    const [month, cat] = key.split("|");
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month).push({ cat, sales });
+  }
+  return [...byMonth.keys()].sort().map((month) => ({  // $sort
+    month,
+    top: byMonth.get(month)
+      .sort((a, b) => b.sales - a.sales || (a.cat < b.cat ? -1 : 1))
+      .slice(0, n),                                    // $topN
+  }));
+}`}
+  tests={[
+    {
+      label: "주문 다섯 건, 상위 3개",
+      args: [[
+        { status: "paid", createdAt: "2026-07-03", items: [{ cat: "book", price: 12000, qty: 1 }, { cat: "toy", price: 8000, qty: 2 }] },
+        { status: "paid", createdAt: "2026-07-10", items: [{ cat: "tech", price: 30000, qty: 1 }, { cat: "food", price: 4000, qty: 2 }] },
+        { status: "cancelled", createdAt: "2026-07-11", items: [{ cat: "tech", price: 50000, qty: 1 }] },
+        { status: "paid", createdAt: "2026-08-02", items: [{ cat: "food", price: 5000, qty: 2 }, { cat: "book", price: 15000, qty: 1 }] },
+        { status: "paid", createdAt: "2026-08-20", items: [{ cat: "toy", price: 9000, qty: 1 }, { cat: "home", price: 22000, qty: 1 }] },
+      ], 3],
+      expected: [
+        { month: "2026-07", top: [{ cat: "tech", sales: 30000 }, { cat: "toy", sales: 16000 }, { cat: "book", sales: 12000 }] },
+        { month: "2026-08", top: [{ cat: "home", sales: 22000 }, { cat: "book", sales: 15000 }, { cat: "food", sales: 10000 }] },
+      ],
+    },
+    {
+      label: "상품이 없는 주문은 $unwind에서 사라진다",
+      args: [[{ status: "paid", createdAt: "2026-09-01", items: [] }], 3],
+      expected: [],
+    },
+    {
+      label: "합계가 같으면 이름 순",
+      args: [[{ status: "paid", createdAt: "2026-09-01", items: [{ cat: "toy", price: 1000, qty: 2 }, { cat: "book", price: 2000, qty: 1 }] }], 3],
+      expected: [{ month: "2026-09", top: [{ cat: "book", sales: 2000 }, { cat: "toy", sales: 2000 }] }],
+    },
+    { label: "빈 컬렉션", args: [[], 3], expected: [] },
+  ]}
+/>
+
+두 번째 테스트가 `$unwind`의 함정 하나를 보여 준다. 배열이 비어 있거나 필드가 없는 문서는 `$unwind`를 지나면서 사라진다. "상품 없는 주문도 0원으로 세어야 한다"면 `{ $unwind: { path: "$items", preserveNullAndEmptyArrays: true } }`를 써야 한다. 매출 합계가 기대보다 적게 나올 때 가장 먼저 의심할 곳이다.
+
+## 10만 건에서 돌려 보면
+
+이제 주문 10만 건(회원 5,000명)짜리 컬렉션에서 3분기(7~9월)로 범위를 좁혀 같은 파이프라인을 돌린다.
+
+```js
+const pipeline = [
+  { $match: { status: "paid", createdAt: { $gte: ISODate("2026-07-01"), $lt: ISODate("2026-10-01") } } },
+  { $unwind: "$items" },
+  { $group: { _id: { month: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, cat: "$items.cat" },
+              sales: { $sum: { $multiply: ["$items.price", "$items.qty"] } } } },
+  { $group: { _id: "$_id.month",
+              top: { $topN: { n: 3, sortBy: { sales: -1 }, output: { cat: "$_id.cat", sales: "$sales" } } } } },
+  { $sort: { _id: 1 } },
+];
+db.orders.aggregate(pipeline);
+```
+
+```text
+'2026-07 tech:145872000, toy:145716000, book:143858000'
+'2026-08 toy:140640000, book:140211000, tech:137090000'
+'2026-09 tech:125452000, toy:124928000, home:122403000'
+```
+
+`$match`를 지난 주문은 19,844건이고, `$unwind`를 지나면 39,585건이 된다. 주문당 상품이 평균 2개라 두 배가 됐다. 상품이 수십 개씩 든 주문이라면 수십 배가 된다.
+
+explain으로 단계가 어떻게 실행됐는지 본다.
+
+```js
+db.orders.explain("executionStats").aggregate(pipeline);
+```
+
+```text
+stages: ["$cursor","$unwind","$group","$group","$sort"]
+winning: PROJECTION_SIMPLE <- FETCH <- IXSCAN(paid_createdAt)
+```
+
+맨 앞 `$cursor`는 컬렉션에서 문서를 꺼내 오는 부분이다. 첫 `$match`가 여기로 들어가서 일반 `find`처럼 플래너가 인덱스를 고른다. 이 컬렉션에는 `status: "paid"`인 문서만 담은 `createdAt` 부분 인덱스(`paid_createdAt`)가 있어서 그걸 탔다.
+
+`PROJECTION_SIMPLE`도 눈여겨볼 만하다. 파이프라인 뒤쪽에서 `createdAt`과 `items`만 쓴다는 걸 옵티마이저가 알아내서, 문서에서 그 필드만 남겨 넘긴다. 그래서 "필요한 필드만 남기려고 `$project`를 맨 앞에 둬야 한다"는 조언은 대부분 필요 없다. 옵티마이저가 이미 한다.
+
+## 인덱스를 탈 수 있는 자리는 맨 앞뿐이다
+
+인덱스는 컬렉션에 붙어 있다. 파이프라인 중간의 문서들은 이미 컬렉션에서 꺼내 가공한 것이라, 인덱스가 닿지 않는다. 그래서 인덱스를 쓸 수 있는 건 `$cursor`로 흡수되는 맨 앞의 `$match`와 `$sort`(그리고 `$geoNear`, `$search` 같은 첫 단계 전용 연산)뿐이다.
+
+그렇다면 `$match`를 뒤에 써 두면 어떻게 될까. 옵티마이저는 의미가 바뀌지 않는 한 `$match`를 앞으로 옮긴다. 순서를 일부러 엇갈리게 쓴 파이프라인 다섯 개를 explain해 봤다.
+
+```js
+// 1) $project 뒤의 $match
+[{ $project: { userId: 1, status: 1, total: 1 } }, { $match: { userId: "u42" } }]
+// 2) $addFields 뒤의 $match: 계산한 필드와 원래 필드를 함께 건다
+[{ $addFields: { vat: { $multiply: ["$total", 0.1] } } }, { $match: { vat: { $gt: 10000 }, userId: "u42" } }]
+// 3) $sort 뒤의 $limit
+[{ $match: { status: "paid" } }, { $sort: { total: -1 } }, { $limit: 5 }]
+// 4) $group 뒤에서 그룹 키로 거른다
+[{ $group: { _id: "$userId", n: { $sum: 1 } } }, { $match: { _id: "u42" } }]
+// 5) $unwind 뒤의 $match: 펼치기 전 필드와 펼친 필드를 함께 건다
+[{ $unwind: "$items" }, { $match: { userId: "u42", "items.cat": "book" } }]
+```
+
+```text
+1) plan: PROJECTION_SIMPLE{"_id":true,"userId":true,"status":true,"total":true} <- FETCH <- IXSCAN(userId_1)
+2) stages: ["$cursor","$addFields{vat: ...}","$match{vat: {$gt: 10000}}"]   plan: FETCH <- IXSCAN(userId_1)
+3) plan: SORT <- COLLSCAN    (SORT.limitAmount: 5)
+4) plan: GROUP <- PROJECTION_COVERED{"userId":true,"_id":false} <- IXSCAN(userId_1)   bounds: userId ["u42","u42"]
+5) stages: ["$cursor","$unwind","$match{items.cat: book}"]   plan: FETCH <- IXSCAN(userId_1)
+```
+
+하나씩 보면 규칙이 보인다.
+
+1번은 `$match`가 `$project` 앞으로 넘어가 인덱스를 탔다. `userId`는 `$project`가 바꾸지 않은 필드라 순서를 바꿔도 결과가 같다.
+
+2번은 `$match`가 둘로 쪼개졌다. 원래 있던 `userId` 조건은 앞으로 가서 인덱스를 탔고, `$addFields`가 새로 만든 `vat` 조건은 계산이 끝나야 알 수 있으니 뒤에 남았다.
+
+3번은 `$sort` 바로 뒤의 `$limit`이 정렬 안으로 들어갔다(`limitAmount: 5`). 전체를 정렬한 뒤 5개를 자르는 게 아니라, 정렬하면서 상위 5개만 들고 있는 top-k 정렬이 된다. 정렬한 데이터 크기를 비교하면 차이가 크다.
+
+```text
+$sort + $limit 5   totalDataSizeSorted: 1650       memLimit: 104857600
+$sort만            totalDataSizeSorted: 16293334
+```
+
+1.6KB와 16MB다. 같은 이유로 `$sort`와 `$limit` 사이에 다른 단계를 끼우면 이 합치기가 깨진다.
+
+4번은 의외일 수 있다. `$group` 뒤의 `$match`인데도, 거르는 필드가 그룹 키(`_id`)라서 그룹을 만들기 전 `userId` 조건으로 바꿔 앞으로 보냈다. 인덱스 범위가 `["u42","u42"]`로 좁혀졌고, 필요한 필드가 `userId`뿐이라 커버드로 끝났다. 하지만 `{ $match: { n: { $gt: 10 } } }`처럼 누산 결과로 거르는 건 그룹을 다 만들어야 알 수 있으니 옮길 수 없다. SQL의 `HAVING`과 같다.
+
+5번은 2번처럼 쪼개졌다. 펼치기 전에도 알 수 있는 `userId`는 앞으로, 펼친 원소 값 `items.cat`은 뒤에 남았다. 원소 조건으로 주문을 먼저 거르고 싶다면 `$unwind` 앞에 `{ $match: { "items.cat": "book" } }`를 직접 한 번 더 써 준다. 그러면 book이 하나도 없는 주문은 펼치기 전에 빠진다.
+
+이 옮기기는 버전마다 조금씩 넓어졌고, 8.0에서는 위 1, 3, 4번처럼 파이프라인 전체가 `find`와 같은 쿼리 계층으로 내려가 `stages` 없이 계획 하나로 보이기도 한다. 그래도 옵티마이저를 믿고 아무렇게나 쓰기보다는, 거를 수 있는 건 처음부터 앞에 쓰는 습관이 안전하다. explain에서 `$cursor` 안의 `winningPlan`이 IXSCAN인지, 내가 쓴 `$match`가 뒤에 남아 있지 않은지만 확인하면 된다.
+
+## 책상 크기는 100MB
+
+`$group`, `$sort`, `$bucket`처럼 입력을 쌓아 두는 단계는 단계마다 메모리 100MB 한도가 있다. 위 explain의 `memLimit: 104857600`이 그 값이다. 넘으면 임시 파일로 내려 쓰는데(spill), 이를 허용할지는 `allowDiskUse`가 정한다. 6.0부터는 서버 기본값(`allowDiskUseByDefault`)이 `true`라서 옵션을 안 줘도 디스크를 쓴다.
+
+10만 건으로는 100MB를 넘기기 어려워서, 실험용으로 정렬 한도(`internalQueryMaxBlockingSortMemoryUsageBytes`)를 10MB로 낮추고 결제 완료 주문 전체를 정렬해 봤다. 운영 서버에서 이 값을 바꿀 일은 없다.
+
+```js
+db.adminCommand({ setParameter: 1, internalQueryMaxBlockingSortMemoryUsageBytes: 10 * 1024 * 1024 });
+
+// 디스크 사용을 막으면
+db.orders.aggregate([{ $match: { status: "paid" } }, { $sort: { total: -1 } }], { allowDiskUse: false });
+```
+
+```text
+MongoServerError[QueryExceededMemoryLimitNoDiskUseAllowed]: PlanExecutor error during aggregation :: caused by :: Sort exceeded memory limit of 10485760 bytes, but did not opt in to external sorting.
+```
+
+```text
+// 기본값(디스크 허용)으로 explain
+{"stage":"SORT","memLimit":10485760,"totalDataSizeSorted":16293334,"usedDisk":true,"spills":2}
+```
+
+막으면 에러, 허용하면 두 번 디스크에 내려 쓰고 끝났다. 문제는 허용이 기본이라는 점이다. 한도를 넘는 집계가 에러 없이 조용히 느려진다. explain이나 느린 쿼리 로그에서 `usedDisk: true`가 보이면 앞에서 더 거르거나, `$sort`가 인덱스를 타게 맨 앞으로 옮기거나, 결과를 미리 계산해 두는 쪽을 생각한다.
+
+단계 메모리와 별개로 문서 하나 크기 한도 16MB도 있다. `$group`에서 `$push`로 한 그룹에 문서를 계속 모으거나, `$lookup`의 `as` 배열이 커지면 결과 문서 하나가 16MB를 넘어 에러가 난다. "회원별 주문 전체를 배열로" 같은 집계는 회원이 클수록 터진다.
+
+## $lookup은 문서마다 다른 컬렉션을 찾아간다
+
+이번엔 "9월 결제 주문 중 VIP 회원 주문 수"를 센다. 회원 등급은 `users` 컬렉션(5,000명)에 있다.
+
+```js
+db.orders.aggregate([
+  { $match: { status: "paid", createdAt: { $gte: ISODate("2026-09-01") } } },
+  { $lookup: { from: "users", localField: "userId", foreignField: "uid", as: "u" } },
+  { $unwind: "$u" },
+  { $match: { "u.grade": "vip" } },
+  { $count: "n" },
+]);
+```
+
+`$lookup`이 실제로 하는 일은 아래 그림과 같다. 조인이라는 이름이 붙어 있지만, 기본 동작은 들어오는 주문 하나마다 `users`에 쿼리를 한 번씩 던지는 것이다.
+
+<SequenceDiagram
+  caption="$lookup은 주문 한 건마다 users를 찾는다"
+  actors={[
+    { id: "cursor", label: "$cursor" },
+    { id: "lookup", label: "$lookup" },
+    { id: "users", label: "users" },
+    { id: "next", label: "다음 단계" },
+  ]}
+  steps={[
+    {
+      from: "cursor",
+      to: "lookup",
+      label: "주문 1건",
+      title: "주문이 하나 들어온다",
+      detail: "$match를 지난 9월 결제 주문 6,064건이 하나씩 온다.",
+      payload: "{ userId: \"u42\", status: \"paid\", ... }",
+    },
+    {
+      from: "lookup",
+      to: "users",
+      label: "uid = u42",
+      title: "users에 쿼리를 던진다",
+      detail: "localField 값으로 foreignField를 찾는다. uid에 인덱스가 없으면 이 한 번이 users 5,000건 전체 훑기다.",
+      payload: "db.users.find({ uid: \"u42\", grade: \"vip\" })",
+    },
+    {
+      from: "users",
+      to: "lookup",
+      label: "회원 문서",
+      title: "찾은 문서를 배열로 붙인다",
+      detail: "뒤의 $unwind와 $match는 옵티마이저가 $lookup 안으로 흡수했다. 그래서 vip 조건도 이 쿼리에 함께 들어간다.",
+    },
+    {
+      from: "lookup",
+      to: "next",
+      label: "합친 문서",
+      title: "다음 단계로 넘긴다",
+      detail: "그리고 다음 주문을 받아 같은 일을 반복한다. 주문 수만큼 users 쿼리가 나간다.",
+    },
+  ]}
+/>
+
+그림 세 번째 단계의 흡수는 같은 모양의 파이프라인을 작은 테스트 컬렉션(`o`, `us`)에 만들어 explain으로 확인했다. `$lookup` 바로 뒤의 `$unwind`는 `unwinding` 옵션으로, 그 뒤의 `$match`는 `pipeline`으로 들어간다.
+
+```text
+{"$lookup":{"from":"us","as":"u","localField":"userId","foreignField":"uid","let":{},
+  "pipeline":[{"$match":{"grade":{"$eq":"vip"}}}],"unwinding":{"preserveNullAndEmptyArrays":false}}}
+```
+
+`users.uid`에 인덱스가 없을 때와 있을 때를 비교했다. explain의 `$lookup` 단계에 실행 통계가 따로 나온다.
+
+```text
+인덱스 없음  [{"n":1490}] 15044ms {"totalDocsExamined":30320000,"totalKeysExamined":0,"collectionScans":6064,"indexesUsed":[]}
+uid_1 있음   [{"n":1490}]   767ms {"totalDocsExamined":6064,"totalKeysExamined":6064,"collectionScans":0,"indexesUsed":["uid_1"]}
+```
+
+인덱스가 없으면 `collectionScans: 6064`, 주문 수만큼 `users`를 통째로 훑었다. 6,064 × 5,000 = 30,320,000건을 읽느라 15초가 걸렸다. `foreignField`에 인덱스를 만들자 0.8초로 줄었다. `$lookup`을 쓰면 `foreignField` 인덱스부터 확인한다. 버전과 단계 조합에 따라 SBE 엔진이 다른 조인 방식으로 바꿔 실행하기도 하지만, 이 실험 환경에서는 문서마다 찾는 방식이었고 인덱스가 결정적이었다.
+
+인덱스가 있어도 문서마다 왕복이라는 사실은 남는다. 샤드 클러스터에서는 더 비싸진다. 5.1부터 `from` 컬렉션이 샤딩돼 있어도 되지만, 주문 하나마다 찾을 회원이 다른 샤드에 있으면 샤드 사이 네트워크 요청이 된다. 그래서 큰 컬렉션끼리, 특히 샤드 클러스터에서 `$lookup`을 자주 하면 느려진다.
+
+`$lookup`에는 `let`과 `pipeline`으로 조건을 직접 쓰는 형태도 있다. 범위 조인이나 여러 필드 조건이 필요할 때 쓰는데, `$expr` 안의 비교가 인덱스를 타는지 반드시 explain으로 확인한다. 5.0부터는 `localField`/`foreignField`와 `pipeline`을 함께 쓸 수 있어서, 같음 조건은 앞쪽으로 빼 인덱스를 태우고 나머지만 `pipeline`에 두는 게 안전하다.
+
+## $lookup이 자주 보이면 모델을 다시 본다
+
+`$lookup`이 한두 군데 있는 건 문제가 아니다. 관리자 리포트, 하루 한 번 도는 배치처럼 가끔 도는 집계라면 그대로 둔다. 그런데 사용자 요청마다 도는 API에 `$lookup`이 여럿 붙어 있다면, 문서를 관계형 테이블처럼 쪼개 놓았다는 신호일 수 있다.
+
+이때 보는 질문은 [MongoDB 문서 모델](/posts/mongodb-document-model)에서 다룬 것과 같다. 주문 목록에 회원 이름과 등급이 늘 필요하다면, 주문을 만들 때 그 값을 주문 문서에 복사해 둔다(extended reference 패턴). 등급이 바뀌면 복사본이 낡는다는 대가가 있다. 주문 당시 등급이 의미 있는 값이라면 오히려 그게 맞고, 항상 최신 등급이 필요하다면 바뀔 때 배치로 갱신하거나 그 화면만 `$lookup`을 쓴다. 정답은 하나가 아니고, 얼마나 자주 읽고 얼마나 자주 바뀌는지로 고른다.
+
+## 한 번에 여러 집계: $facet과 결과 저장
+
+목록 화면은 보통 "결과 목록 + 전체 개수 + 필터별 개수"를 같이 보여 준다. 쿼리를 세 번 보내는 대신 `$facet`으로 한 번에 나눠 계산할 수 있다.
+
+```js
+db.orders.aggregate([
+  { $match: { status: "paid" } },
+  { $facet: {
+      byMonth: [ { $group: { _id: { $month: "$createdAt" }, n: { $sum: 1 } } }, { $sort: { _id: 1 } } ],
+      total:   [ { $count: "n" } ],
+  } },
+]);
+```
+
+```text
+[ { byMonth: [ { _id: 7, n: 2 }, { _id: 8, n: 2 } ], total: [ { n: 4 } ] } ]
+```
+
+(위 결과는 앞의 다섯 건 컬렉션에서 돌린 것이다.) 편하지만 조심할 게 있다. `$facet` 안의 하위 파이프라인은 인덱스를 못 쓴다. 들어오는 문서를 각 갈래가 다 받아 처리하니, `$facet` 앞의 `$match`로 최대한 줄여 둬야 한다. 결과 전체가 문서 하나로 나오니 16MB 한도에도 걸린다. 목록 자체(페이지 데이터)는 `$facet`에 넣지 말고 따로 쿼리하는 편이 낫다.
+
+대시보드처럼 같은 집계를 자주 본다면, 매번 계산하지 않고 결과를 컬렉션에 저장해 둔다. `$merge`는 결과를 다른 컬렉션에 넣거나 기존 문서와 합친다. 매시간 지난 한 시간치만 계산해서 월별 집계 컬렉션에 더하면, 화면은 작은 집계 컬렉션만 읽는다.
+
+```js
+db.orders.aggregate([
+  { $match: { status: "paid", createdAt: { $gte: lastHour, $lt: thisHour } } },
+  { $unwind: "$items" },
+  { $group: { _id: { month: { $dateToString: { format: "%Y-%m", date: "$createdAt" } }, cat: "$items.cat" },
+              sales: { $sum: { $multiply: ["$items.price", "$items.qty"] } } } },
+  { $merge: { into: "monthly_sales", on: "_id", whenMatched: [ { $set: { sales: { $add: ["$sales", "$$new.sales"] } } } ], whenNotMatched: "insert" } },
+]);
+```
+
+`whenMatched`에 파이프라인을 주면 기존 문서(`$sales`)와 새 결과(`$$new.sales`)를 더할 수 있다. 같은 시간대를 두 번 돌리면 두 번 더해진다는 점은 주의한다. 재실행이 잦다면 시간 단위로 따로 저장하고 읽을 때 합치는 편이 안전하다.
+
+## 집계가 느릴 때 보는 순서
+
+느린 집계를 받으면 이 순서로 본다. 먼저 `explain("executionStats")`에서 `$cursor`의 계획이 IXSCAN인지, `totalDocsExamined`가 결과에 비해 얼마나 큰지 본다. 그다음 `$match`가 뒤에 남아 있지 않은지, `$unwind` 앞에서 거를 수 있는 조건이 있는지 본다. `$sort` 단계에 `usedDisk: true`가 있으면 메모리 한도를 넘은 것이니 정렬을 앞으로 옮겨 인덱스를 태우거나 `$limit`을 붙인다. `$lookup`이 있으면 `foreignField` 인덱스와 `collectionScans` 값을 확인한다. 그래도 느리면 그 집계를 요청마다 돌릴 필요가 있는지, 미리 계산해 `$merge`로 저장할 수 있는지를 따진다.
+
+파이프라인은 SQL을 단계별로 풀어 쓴 것과 같다. 다만 옵티마이저가 해 주는 일의 범위가 관계형 DB보다 좁아서, 단계 순서를 사람이 더 신경 써야 한다. 맨 앞에서 인덱스로 줄이고, 펼치기 전에 거르고, 막는 단계에는 가능한 적은 문서를 넣는다. 데이터가 여러 샤드에 나뉘면 이 파이프라인이 어떻게 쪼개져 실행되는지는 [복제본 셋과 샤드 클러스터](/posts/mongodb-replica-set-sharding)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### 집계 파이프라인에서 단계 순서가 왜 중요한가요?
+
+인덱스는 컬렉션에 붙어 있어서 파이프라인 맨 앞의 `$match`와 `$sort`만 인덱스를 쓸 수 있다. 뒤에 있는 단계는 이미 꺼낸 문서를 대상으로 돈다. 그래서 거를 수 있는 조건을 앞에 두면 뒤 단계가 처리할 문서가 줄고, `$unwind`나 `$group` 뒤에 거르면 늘어난 문서를 다 처리한 다음에 버린다.
+
+### 옵티마이저는 단계를 어떻게 옮기거나 합치나요?
+
+결과가 바뀌지 않는 범위에서 `$match`를 앞으로 옮긴다. `$project`나 `$addFields`가 건드리지 않은 필드 조건은 앞으로 가고, 새로 계산한 필드 조건은 뒤에 남아 둘로 쪼개진다. `$sort` 바로 뒤의 `$limit`은 정렬에 합쳐져 top-k 정렬이 되고, `$lookup` 뒤의 `$unwind`와 `$match`는 `$lookup` 안으로 흡수된다. 그룹 키로 거르는 `$match`는 `$group` 앞으로 내려가지만, 누산 결과로 거르는 건 옮길 수 없다.
+
+### $group과 $sort의 메모리 한도는 무엇이고, 넘으면 어떻게 되나요?
+
+단계마다 100MB이고, 넘으면 임시 파일로 내려 쓴다. 6.0부터 디스크 사용이 기본으로 허용돼서 에러 없이 조용히 느려지고, `allowDiskUse: false`를 주면 에러가 난다. explain에서 `usedDisk: true`와 spills 수로 확인하고, 앞에서 더 거르거나 인덱스로 정렬하거나 `$limit`을 붙여 줄인다. 결과 문서 하나의 16MB 한도는 별개라 `$push`나 큰 `$lookup` 배열에서 걸린다.
+
+### $unwind를 쓸 때 흔한 실수는 무엇인가요?
+
+배열 원소 수만큼 문서가 복제되니 거를 수 있는 조건을 펼치기 전에 걸지 않으면 처리량이 몇 배로 는다. 또 빈 배열이나 필드가 없는 문서는 기본으로 사라져서 합계나 개수가 적게 나온다. 남겨야 하면 `preserveNullAndEmptyArrays: true`를 준다.
+
+### $lookup은 왜 느려질 수 있나요?
+
+기본 동작이 들어오는 문서마다 다른 컬렉션에 쿼리를 한 번씩 던지는 것이라, `foreignField`에 인덱스가 없으면 문서 수만큼 전체 훑기를 한다. 실험에서는 주문 6,064건 × 회원 5,000명을 다 읽어 15초가 걸렸고, 인덱스를 만들자 0.8초가 됐다. 인덱스가 있어도 문서마다 왕복이라 큰 컬렉션끼리나 샤드 클러스터에서는 샤드 사이 요청이 늘어 비싸다.
+
+### $lookup을 자주 쓴다면 모델링을 다시 봐야 한다는 신호인가요?
+
+요청마다 도는 API에 `$lookup`이 여러 개 붙어 있다면 그럴 가능성이 크다. 늘 함께 읽는 값은 문서에 복사해 두는 extended reference 패턴을 검토하고, 복사본이 낡는 문제는 그 값이 얼마나 자주 바뀌는지로 판단한다. 가끔 도는 리포트나 배치의 `$lookup`은 그대로 두어도 된다.
+
+### $facet은 언제 쓰고 무엇을 조심하나요?
+
+같은 입력으로 전체 개수, 필터별 개수처럼 여러 집계를 한 번에 낼 때 쓴다. 하위 파이프라인은 인덱스를 못 쓰고 결과가 문서 하나라 16MB 한도에 걸리니, 앞의 `$match`로 입력을 줄이고 큰 목록 자체는 넣지 않는다.

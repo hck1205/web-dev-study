@@ -1,0 +1,477 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("container-orchestration-choices");
+
+<EasyIntro>
+  컨테이너를 서버 한 대에서 돌릴 때는 사람이 직접 띄우고 내려도 된다. 서버가 여러 대가 되면 어느 서버에 무엇을 띄울지, 서로 어떻게 찾아갈지, 새 버전을 끊김 없이 어떻게 바꿀지, 서버가 죽으면 누가 다시 띄울지를 정해야 한다. 이 일을 대신 해 주는 프로그램을 오케스트레이터라고 부른다.
+
+  오케스트레이터는 학교 급식실의 배식 담당과 비슷하다. 반마다 몇 명분이 필요한지 적어 두면, 담당자가 빈 배식대를 골라 음식을 놓고, 모자라면 채우고, 배식대 하나가 고장 나면 다른 데로 옮긴다. 사람은 몇 명분인지만 적고 나머지는 담당자가 맞춘다.
+
+  이런 담당자가 여러 종류 있다. 설정이 짧고 단순한 것, 컨테이너가 아닌 프로그램도 돌리는 것, 클라우드 회사가 통째로 맡아 주는 것, 무엇이든 늘려 붙일 수 있는 대신 배울 게 많은 쿠버네티스가 있다. 어느 쪽이 좋은지는 팀 크기와 서비스 수, 어느 클라우드에 있는지에 따라 달라진다.
+</EasyIntro>
+
+서버 한 대에 Docker Compose로 웹 앱, 워커, Redis를 띄워 1년을 버텼다. 트래픽이 늘어 두 번째 서버를 띄우기로 하니 질문이 줄줄이 나온다. 웹 컨테이너는 어느 서버에 몇 개를 둘까. 로드 밸런서는 두 서버의 컨테이너를 어떻게 알까. 새 버전을 배포할 때 두 서버를 어떤 순서로 바꿀까. 한 대가 새벽에 죽으면 누가 다른 쪽에 다시 띄울까. Compose는 이 질문에 답하지 않는다. 한 대를 위한 도구이기 때문이다([Docker Compose](/posts/docker-compose)의 "Compose로 버티는 데까지").
+
+이 질문들에 답하는 도구가 컨테이너 오케스트레이터다. 후보는 여럿이다. Docker Swarm, HashiCorp Nomad, AWS ECS와 Fargate, Google Cloud Run, Red Hat OpenShift, 그리고 쿠버네티스. 이 글은 이들을 스케줄링, 서비스 발견, 롤링 배포, 운영 부담의 네 가지 기준으로 나란히 놓고, 쿠버네티스가 왜 사실상 표준이 됐는지와 그 값이 얼마인지를 본다.
+
+쿠버네티스 쪽 동작은 kwok으로 띄운 1.37.0 클러스터(노드는 가짜, API 서버·스케줄러·컨트롤러는 진짜)에서 받은 출력이다. Swarm, Nomad, ECS, Cloud Run은 이 환경에서 돌리지 않았으니 설정 파일과 명령만 보이고 출력은 싣지 않는다. 쿠버네티스를 무엇부터 공부할지는 [쿠버네티스 학습 지도](/posts/k8s-learning-roadmap)에 정리해 두었다.
+
+## 서버가 두 대가 되면 생기는 네 가지 일
+
+어떤 오케스트레이터를 고르든 하는 일은 같다.
+
+- 스케줄링: 컨테이너 하나를 어느 서버에 놓을지 고른다. 서버마다 남은 CPU와 메모리를 보고, 같은 앱이 한 서버에 몰리지 않게 펼친다.
+- 서비스 발견: 컨테이너가 어느 서버의 어느 포트에 떴는지 계속 바뀌니, 이름 하나로 찾아갈 수 있게 해 준다. DNS나 가상 IP, 로드 밸런서 대상 등록으로 한다.
+- 롤링 배포: 새 버전을 몇 개씩 띄우고, 준비됐는지 확인하고, 옛 버전을 내린다. 실패하면 멈추거나 되돌린다.
+- 자가 복구: 컨테이너나 서버가 죽으면 원하는 개수가 다시 맞을 때까지 다른 곳에 띄운다.
+
+아래 그림이 이 일을 하는 공통 구조다. 사람은 원하는 상태를 적고, 오케스트레이터가 실제 상태를 보며 차이를 메운다.
+
+<ConceptDiagram
+  width={440}
+  height={260}
+  caption="원하는 상태를 적으면 오케스트레이터가 실제 상태를 보고 차이를 메운다"
+  nodes={[
+    { id: "you", label: "사람 · CI", sub: "replicas: 3", x: 70, y: 50, w: 120 },
+    { id: "store", label: "원하는 상태", sub: "API · Raft 저장소", x: 220, y: 50, w: 140 },
+    { id: "orch", label: "스케줄러 · 컨트롤러", sub: "차이를 계산", x: 220, y: 150, w: 160 },
+    { id: "n1", label: "서버 1", sub: "에이전트", x: 90, y: 230, w: 110 },
+    { id: "n2", label: "서버 2", sub: "에이전트", x: 220, y: 230, w: 110 },
+    { id: "n3", label: "서버 3", sub: "에이전트", x: 350, y: 230, w: 110 },
+  ]}
+  edges={[
+    { from: "you", to: "store", label: "선언" },
+    { from: "store", to: "orch", label: "watch" },
+    { from: "orch", to: "n1", label: "배치" },
+    { from: "orch", to: "n2" },
+    { from: "orch", to: "n3" },
+    { from: "n3", to: "orch", label: "상태 보고", dashed: true },
+  ]}
+/>
+
+도구마다 이름만 다르다. 쿠버네티스는 API 서버와 etcd, 컨트롤러와 kubelet이고, Swarm은 매니저와 워커, Nomad는 서버와 클라이언트, ECS는 AWS가 운영하는 컨트롤 플레인과 ECS 에이전트다. 원하는 상태를 저장하는 쪽은 대개 Raft로 여러 대가 합의하는 저장소를 쓴다. 그래서 매니저나 서버를 3대, 5대처럼 홀수로 두라는 같은 조언이 모든 도구에 나온다.
+
+## 원하는 상태를 적으면 맞춰 주는 루프
+
+쿠버네티스에서 이 루프를 직접 본다. 노드 3대(각 CPU 2개)에 nginx 3개를 띄우는 Deployment를 만들었다.
+
+```yaml
+# web.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.27-alpine
+        resources:
+          requests: { cpu: 500m, memory: 256Mi }
+```
+
+```bash
+kubectl apply -f web.yaml
+kubectl get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName
+```
+
+```text
+NAME                   STATUS    NODE
+web-5f89784f8b-drccw   Running   node-c
+web-5f89784f8b-kngpf   Running   node-a
+web-5f89784f8b-p7r4z   Running   node-b
+```
+
+스케줄러가 세 개를 노드마다 하나씩 펼쳤다. 여기서 Pod 하나를 지운다. 서버가 죽거나 컨테이너가 사라진 상황을 흉내 낸 것이다.
+
+```bash
+kubectl delete pod web-5f89784f8b-drccw --wait=false
+kubectl get pods -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,NODE:.spec.nodeName
+```
+
+```text
+NAME                   STATUS    NODE
+web-5f89784f8b-cw8r4   Running   node-c
+web-5f89784f8b-kngpf   Running   node-a
+web-5f89784f8b-p7r4z   Running   node-b
+```
+
+3초 만에 이름이 다른 Pod(`cw8r4`)가 같은 자리를 채웠다. 아무도 "다시 띄워라"라고 명령하지 않았다. ReplicaSet 컨트롤러가 "원하는 건 3개, 지금은 2개"라는 차이를 보고 하나를 만들었을 뿐이다. 이벤트에 그 흔적이 남는다.
+
+```text
+ScalingReplicaSet   web                    Scaled up replica set web-5f89784f8b from 0 to 3
+SuccessfulCreate    web-5f89784f8b         Created pod: web-5f89784f8b-p7r4z
+SuccessfulCreate    web-5f89784f8b         Created pod: web-5f89784f8b-drccw
+SuccessfulCreate    web-5f89784f8b         Created pod: web-5f89784f8b-kngpf
+SuccessfulCreate    web-5f89784f8b         Created pod: web-5f89784f8b-cw8r4
+```
+
+명령형으로 "컨테이너를 하나 더 띄워라"라고 했다면, 그 명령이 실패했을 때 누군가 다시 시도해야 한다. 선언형으로 "3개여야 한다"라고 적으면 컨트롤러가 계속 확인하며 맞춘다. 이 차이가 뒤에서 볼 쿠버네티스의 확장성으로 이어진다. 컨트롤러가 이 루프를 어떻게 도는지는 [컨트롤러와 reconcile](/posts/k8s-controllers-reconcile)에 자세히 있다.
+
+## 어디에 놓을지 고르는 일
+
+스케줄러는 컨테이너가 요청한 자원(`requests`)과 노드에 남은 자원을 비교해 들어갈 수 있는 노드만 고르고, 그중에서 점수가 높은 곳에 놓는다. 들어갈 곳이 없으면 기다린다. 위 Deployment를 13개로 늘려 봤다. 500m짜리 12개면 노드 3대(CPU 6개)가 꽉 찬다.
+
+```bash
+kubectl scale deploy web --replicas=13
+kubectl get pods -o custom-columns=NODE:.spec.nodeName,STATUS:.status.phase --no-headers | sort | uniq -c
+kubectl get events --field-selector reason=FailedScheduling -o custom-columns=MESSAGE:.message --no-headers | tail -1
+```
+
+```text
+      1 <none>   Pending
+      4 node-a   Running
+      4 node-b   Running
+      4 node-c   Running
+```
+
+```text
+0/3 nodes are available: 3 Insufficient cpu. preemption: 0/3 nodes are available: 3 No preemption victims found for incoming pod.
+```
+
+노드마다 4개씩 고르게 펼쳤고, 13번째는 놓을 곳이 없어 `Pending`이다. 메시지는 노드 3대 모두 CPU가 모자라고, 우선순위가 낮은 Pod를 밀어낼 수도 없다고 말한다. 이 메시지를 보면 노드를 늘리거나(노드 오토스케일러), 요청량을 줄이거나, 다른 앱을 줄여야 한다. 실제 사용량이 아니라 `requests`로 계산한다는 것도 기억해 둔다. CPU를 10%만 쓰는 노드에서도 요청량 합이 차면 더는 못 들어간다. 요청량을 정하는 법은 [Pod 자원](/posts/k8s-pod-resources)에 있다.
+
+Swarm, Nomad, ECS도 같은 방식으로 예약량을 본다. 펼치는 전략만 이름이 다르다. 아래에서 가장 단순한 전략, "남은 CPU가 가장 많은 노드에 놓는다"를 직접 짜 본다. 노드 목록, 띄울 개수, 하나당 CPU(밀리코어)를 받아 각 복제본이 간 노드 이름을 돌려주고, 들어갈 곳이 없으면 `"Pending"`을 넣는다. 남은 양이 같으면 목록에서 앞에 있는 노드를 고른다.
+
+<CodePlayground
+  caption="남은 CPU가 가장 많은 노드에 하나씩 놓기"
+  functionName="schedule"
+  initialCode={`function schedule(nodes, replicas, cpu) {
+  // nodes: [{ name: "a", free: 2000 }, ...]  (free는 남은 밀리코어)
+  // 복제본마다: cpu가 들어가는 노드 중 free가 가장 큰 노드를 고른다
+  //   (같으면 앞에 있는 노드), 고른 노드의 free를 cpu만큼 줄인다
+  // 들어갈 노드가 없으면 "Pending"
+  return [];
+}`}
+  solution={`function schedule(nodes, replicas, cpu) {
+  const free = nodes.map((n) => ({ name: n.name, free: n.free }));
+  const out = [];
+  for (let i = 0; i < replicas; i++) {
+    let best = null;
+    for (const n of free) {
+      if (n.free >= cpu && (best === null || n.free > best.free)) best = n;
+    }
+    if (best === null) {
+      out.push("Pending");
+      continue;
+    }
+    best.free -= cpu;
+    out.push(best.name);
+  }
+  return out;
+}`}
+  tests={[
+    { args: [[{ name: "a", free: 2000 }, { name: "b", free: 2000 }, { name: "c", free: 2000 }], 3, 500], expected: ["a", "b", "c"], label: "같은 노드 셋에 3개" },
+    { args: [[{ name: "a", free: 2000 }, { name: "b", free: 1000 }], 3, 500], expected: ["a", "a", "a"], label: "남은 양이 다른 노드 둘" },
+    { args: [[{ name: "a", free: 1000 }, { name: "b", free: 1000 }, { name: "c", free: 1000 }], 7, 500], expected: ["a", "b", "c", "a", "b", "c", "Pending"], label: "자리보다 많이 띄우기" },
+    { args: [[{ name: "a", free: 1500 }, { name: "b", free: 700 }], 3, 800], expected: ["a", "Pending", "Pending"], label: "남은 양이 쪼개져 있을 때" },
+    { args: [[{ name: "a", free: 300 }], 1, 500], expected: ["Pending"], label: "처음부터 안 들어갈 때" },
+  ]}
+/>
+
+두 번째 테스트에서 세 개가 모두 `a`로 간다. 남은 양 기준으로만 고르면 큰 노드에 몰린다. `a`가 죽으면 세 개가 한꺼번에 사라진다. 그래서 실제 스케줄러는 자원 점수 말고도 "같은 앱이 이미 있는 노드는 점수를 깎는다" 같은 규칙을 더한다. 쿠버네티스의 topology spread constraints와 anti-affinity, Swarm의 placement preferences, Nomad의 `spread` 블록이 그 일을 한다. 네 번째 테스트는 합계로는 2200이 남아 있어도 한 덩어리에 800이 안 들어가 `Pending`이 나오는 단편화를 보여 준다. 쿠버네티스 쪽 배치 규칙은 [Pod 스케줄링](/posts/k8s-pod-scheduling)에서 다룬다.
+
+## 새 버전으로 바꾸는 순서
+
+롤링 배포의 모양도 도구마다 거의 같다. 아래 그림은 복제본 2개를 "새 것을 먼저 띄우고 옛 것을 내리는" 순서로 바꾸는 장면이다.
+
+<SequenceDiagram
+  caption="새 것을 먼저 띄우고, 준비되면 옛 것을 뺀다"
+  actors={[
+    { id: "o", label: "오케스트레이터" },
+    { id: "v2", label: "새 버전" },
+    { id: "lb", label: "LB · 서비스" },
+    { id: "v1", label: "옛 버전" },
+  ]}
+  steps={[
+    { from: "o", to: "v2", label: "v2 하나 띄움", title: "여유분만큼 먼저 띄운다", detail: "쿠버네티스의 maxSurge, ECS의 maximumPercent, Swarm의 order: start-first가 이 여유분을 정한다." },
+    { from: "o", to: "v2", label: "준비 확인", title: "준비됐는지 확인한다", detail: "readiness probe나 헬스 체크가 통과해야 다음으로 간다. 이 확인이 없으면 프로세스가 떴다는 것만으로 트래픽을 보낸다." },
+    { from: "o", to: "lb", label: "v2 등록", title: "트래픽 대상에 넣는다", detail: "서비스 엔드포인트나 로드 밸런서 대상 그룹에 새 인스턴스가 들어간다." },
+    { from: "o", to: "lb", label: "v1 제외", title: "옛 것을 대상에서 먼저 뺀다", detail: "새 요청이 더는 가지 않게 한 뒤에 종료 신호를 보내야 진행 중이던 요청이 끊기지 않는다." },
+    { from: "o", to: "v1", label: "SIGTERM", title: "옛 것을 내린다", detail: "유예 시간 동안 하던 요청을 마치고 종료한다. 이걸 복제본 수만큼 반복한다." },
+    { from: "o", to: "o", label: "실패 시 멈춤", title: "실패하면 멈추거나 되돌린다", detail: "새 버전이 준비되지 않으면 배포를 멈춘다. ECS의 deployment circuit breaker, Swarm의 failure_action: rollback, Nomad의 auto_revert가 자동 되돌리기다." },
+  ]}
+/>
+
+배포 전략 자체(롤링, 블루그린, 카나리)의 차이는 [롤링 배포](/posts/rolling-deployment) 글에서 다룬다. 여기서 볼 것은 각 도구가 이 순서를 어디에 적게 하느냐다.
+
+## Docker Swarm: Compose 파일 그대로 여러 대로
+
+Swarm은 Docker Engine에 들어 있는 오케스트레이션 모드다. 따로 설치할 것이 없다. 한 서버에서 `docker swarm init`을 하면 그 서버가 매니저가 되고, 출력된 토큰으로 다른 서버를 `docker swarm join`시킨다.
+
+```bash
+# 매니저가 될 서버에서
+docker swarm init --advertise-addr 10.0.1.10
+
+# 다른 서버에서 (init 출력의 토큰을 그대로)
+docker swarm join --token <워커 토큰> 10.0.1.10:2377
+
+# 서버끼리 열어야 하는 포트: 2377/tcp(관리), 7946/tcp·udp(노드 간 통신), 4789/udp(오버레이)
+```
+
+이미 쓰던 Compose 파일에 `deploy:` 블록만 더하면 여러 서버에 올라간다.
+
+```yaml
+# compose.yaml (docker stack deploy -c compose.yaml shop)
+services:
+  web:
+    image: registry.example.com/shop-web:1.4.2
+    ports:
+      - "8080:80"
+    deploy:
+      replicas: 4
+      update_config:
+        parallelism: 1          # 한 번에 하나씩
+        delay: 10s
+        order: start-first      # 새 것을 먼저 띄우고 옛 것을 내린다
+        failure_action: rollback
+      resources:
+        reservations: { cpus: "0.5", memory: 256M }
+      placement:
+        preferences:
+          - spread: node.labels.zone   # 영역 라벨 기준으로 펼친다
+```
+
+서비스 발견은 두 갈래다. 같은 오버레이 네트워크 안에서는 서비스 이름(`web`)이 가상 IP 하나로 풀리고, 그 IP로 보내면 Linux 커널의 IPVS가 살아 있는 컨테이너에 나눠 준다. 밖에서 들어오는 요청은 라우팅 메시가 받는다. 공개한 포트(8080)가 컨테이너가 없는 서버까지 포함해 모든 서버에 열리고, 어느 서버로 들어와도 컨테이너가 있는 서버로 넘겨 준다. 아래 그림에서 다음을 누르면 그 경로가 보인다.
+
+<NetworkTopology
+  width={420}
+  height={230}
+  caption="라우팅 메시: 컨테이너가 없는 서버로 들어와도 있는 서버로 넘어간다"
+  zones={[
+    { id: "sw", label: "Swarm 클러스터 (ingress 오버레이)", x: 130, y: 15, w: 280, h: 200, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cl", label: "사용자", x: 40, y: 115, icon: "client", w: 70 },
+    { id: "s1", label: "서버 1", sub: ":8080 web×2", x: 220, y: 55, icon: "server", w: 100 },
+    { id: "s2", label: "서버 2", sub: ":8080 web×2", x: 340, y: 115, icon: "server", w: 100 },
+    { id: "s3", label: "서버 3", sub: ":8080 컨테이너 없음", x: 220, y: 175, icon: "server", w: 120 },
+  ]}
+  links={[
+    { from: "cl", to: "s1" },
+    { from: "cl", to: "s3" },
+    { from: "s1", to: "s2", dashed: true },
+    { from: "s3", to: "s2", dashed: true },
+    { from: "s3", to: "s1", dashed: true },
+  ]}
+  steps={[
+    { path: ["cl", "s1"], packet: "GET /", title: "컨테이너가 있는 서버로 들어온다", detail: "서버 1의 8080으로 온 요청을 IPVS가 이 서버나 다른 서버의 web 컨테이너 중 하나로 보낸다." },
+    { path: ["cl", "s3", "s2"], packet: "GET /", title: "컨테이너가 없는 서버로 들어와도 된다", detail: "서버 3에는 web이 없지만 8080은 열려 있다. ingress 오버레이를 타고 서버 2의 컨테이너로 넘어간다." },
+    { path: ["s1"], blocked: true, title: "서버 1이 죽는다", detail: "매니저가 서버 1의 태스크 둘을 잃은 것으로 보고 남은 서버에 다시 띄운다. 앞단 LB는 서버 1을 헬스 체크로 뺀다." },
+    { path: ["cl", "s3", "s2"], packet: "GET /", highlight: ["s3"], title: "남은 서버가 계속 받는다", detail: "다시 띄운 태스크가 서버 2, 3에 올라오면 4개가 다시 맞춰진다." },
+  ]}
+/>
+
+Swarm의 장점은 배울 게 적다는 것이다. Compose를 아는 사람이라면 하루면 여러 서버에 올린다. 매니저는 Raft로 상태를 맞추고, Docker 문서는 매니저를 홀수로, 7대를 넘기지 않게 두라고 권한다.
+
+한계도 분명하다. 부하에 따라 복제본 수를 늘리는 자동 확장이 없다. 사용자 정의 리소스나 오퍼레이터 같은 확장 지점이 없어서, DB나 메시지 큐를 자동으로 운영해 주는 도구 생태계가 쿠버네티스 쪽에만 있다. 지금은 Mirantis가 유지하고 있고 기능은 그대로 쓸 수 있지만, 새로 들어오는 도구와 사람이 대부분 쿠버네티스로 간다. 서버 몇 대, 서비스 몇 개로 끝나는 온프레미스 환경이라면 여전히 합리적인 선택이다.
+
+## Nomad: 컨테이너가 아니어도 된다
+
+Nomad는 HashiCorp가 만든 스케줄러다. 바이너리 하나로 서버(컨트롤 플레인)와 클라이언트(노드 에이전트)를 모두 돌린다. 쿠버네티스와 가장 다른 점은 드라이버다. Docker 컨테이너뿐 아니라 그냥 실행 파일(`exec`, `raw_exec`), JAR(`java`), 가상 머신(`qemu`)도 같은 방식으로 스케줄링한다. 컨테이너로 옮기지 못한 레거시와 컨테이너를 한 클러스터에 섞어야 하는 곳에서 고른다.
+
+```hcl
+# web.nomad.hcl
+job "web" {
+  datacenters = ["dc1"]
+
+  group "web" {
+    count = 3
+
+    network {
+      port "http" { to = 80 }
+    }
+
+    service {
+      name     = "web"
+      port     = "http"
+      provider = "nomad"   # Consul 없이 Nomad 자체 서비스 등록
+    }
+
+    update {
+      max_parallel = 1
+      canary       = 1     # 새 버전 하나를 먼저 띄워 두고 사람이 승격
+      auto_revert  = true
+    }
+
+    task "nginx" {
+      driver = "docker"
+      config {
+        image = "nginx:1.27-alpine"
+        ports = ["http"]
+      }
+      resources {
+        cpu    = 500   # MHz 단위
+        memory = 256   # MB
+      }
+    }
+  }
+}
+```
+
+`resources.cpu`가 코어 수가 아니라 MHz라는 것이 처음에 헷갈린다. 서비스 발견은 원래 Consul과 함께 쓰는 게 전제였고, 1.3부터 Nomad 자체 서비스 등록(`provider = "nomad"`)이 생겼다. 비밀 값은 Vault와 엮는다. 구조가 단순해 운영 부담은 쿠버네티스보다 확실히 적지만, 네트워크 정책이나 인그레스, 스토리지 같은 것을 HashiCorp 제품이나 직접 만든 도구로 채워야 한다.
+
+라이선스도 고려 대상이다. HashiCorp는 2023년에 Nomad를 포함한 제품의 라이선스를 오픈 소스(MPL)에서 BSL로 바꿨고, 회사는 이후 IBM에 인수됐다. 내부에서 쓰는 데는 대개 문제가 없지만, Nomad를 얹은 서비스를 남에게 파는 경우에는 조건을 확인해야 한다.
+
+## ECS와 Fargate: 컨트롤 플레인을 AWS가 갖는다
+
+ECS(Elastic Container Service)는 AWS의 자체 오케스트레이터다. 컨트롤 플레인을 사용자가 보지도 못하고 요금도 따로 받지 않는다. 사용자는 세 가지만 다룬다. 컨테이너 묶음을 정의하는 태스크 정의, 그 태스크를 몇 개 유지할지 정하는 서비스, 태스크가 도는 자리인 클러스터다.
+
+```json
+{
+  "family": "shop-web",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "containerDefinitions": [
+    {
+      "name": "web",
+      "image": "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com/shop-web:1.4.2",
+      "portMappings": [{ "containerPort": 80 }],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"],
+        "interval": 10,
+        "retries": 3
+      }
+    }
+  ]
+}
+```
+
+태스크가 도는 자리는 두 가지다. EC2 출시 유형은 내가 띄운 EC2 인스턴스에 태스크를 놓는다. Fargate는 서버 없이 태스크마다 AWS가 격리된 실행 환경을 만들어 주고 vCPU와 메모리 사용 시간만큼 요금을 받는다. 노드 OS 패치와 용량 계획이 사라지는 대신, 특권 컨테이너를 못 쓰고, 노드마다 하나씩 띄우는 데몬 방식이 없고, 태스크 하나의 크기에 상한(최대 16 vCPU, 120GB)이 있다. Fargate는 EKS에서도 Pod를 띄우는 자리로 쓸 수 있다.
+
+롤링 배포는 서비스의 `minimumHealthyPercent`(기본 100)와 `maximumPercent`(기본 200)로 정한다. 기본값이면 원하는 개수를 하나도 줄이지 않은 채 두 배까지 띄웠다가 내린다. deployment circuit breaker를 켜면 새 태스크가 계속 실패할 때 자동으로 되돌린다. 서비스 발견은 ALB 대상 그룹 자동 등록, Cloud Map DNS, Service Connect로 한다.
+
+ECS의 장점은 AWS의 다른 서비스와 처음부터 맞물린다는 것이다. IAM 역할을 태스크마다 주고, 로그는 CloudWatch로 가고, ALB와 오토스케일링이 콘솔 몇 번으로 붙는다. 약점은 그 반대다. 설정이 전부 AWS 고유라 다른 클라우드나 온프레미스로 그대로 가져갈 수 없고, Helm 차트나 오퍼레이터 같은 쿠버네티스 생태계를 쓸 수 없다.
+
+## Cloud Run: 요청이 올 때만 뜬다
+
+Cloud Run은 컨테이너 이미지를 주면 HTTPS 주소를 하나 주는 Google Cloud 서비스다. 노드도 클러스터도 없다. 요청이 오면 인스턴스를 띄우고, 요청이 없으면 0개까지 줄인다. 인스턴스 하나가 동시에 받는 요청 수(기본 80, 최대 1000)를 넘으면 인스턴스를 늘린다. API는 쿠버네티스 위의 서버리스 프로젝트인 Knative Serving과 같은 모양이다.
+
+0까지 줄어든다는 건 첫 요청이 콜드 스타트를 맞는다는 뜻이다. JVM처럼 시작이 느린 앱이면 최소 인스턴스를 1 이상으로 두고 그만큼 요금을 낸다. 요청 하나의 처리 시간에도 상한(기본 5분, 최대 60분)이 있고, 요청 밖에서 도는 백그라운드 작업은 설정에 따라 CPU를 거의 못 받을 수 있다. 트래픽이 들쭉날쭉한 HTTP API, 웹훅 수신, 사내 도구에 잘 맞고, 연결을 오래 쥐는 서비스나 상태를 가진 서비스에는 맞지 않는다. 서버리스의 이런 제약은 [서버리스 아키텍처](/posts/serverless-architecture)에서 더 자세히 본다.
+
+## OpenShift: 쿠버네티스 위에 회사가 필요한 것을 얹었다
+
+OpenShift는 Red Hat이 파는 쿠버네티스 배포판이다. 오케스트레이터 자체는 쿠버네티스이고, 그 위에 웹 콘솔, 내장 이미지 레지스트리, 소스에서 이미지를 만드는 빌드(S2I), Ingress보다 먼저 생긴 Route, 오퍼레이터 설치 관리(OLM), 모니터링과 로깅 스택을 미리 맞춰 얹었다. 업스트림 커뮤니티판은 OKD이고, AWS(ROSA)와 Azure(ARO)에서 관리형으로도 쓸 수 있다.
+
+쿠버네티스를 쓰던 사람이 OpenShift에 처음 올라가면 가장 먼저 부딪히는 게 보안 기본값이다. 기본 SCC(Security Context Constraints)인 `restricted-v2`는 컨테이너를 네임스페이스마다 정해진 범위의 임의 UID로 돌린다. 루트로 80번 포트를 열고 `/var/cache/nginx`에 쓰려는 공식 nginx 이미지는 그대로 올리면 권한 오류로 죽는다. 비루트로 도는 이미지(예: `nginxinc/nginx-unprivileged`)를 쓰거나, 쓰기 경로의 그룹 권한을 0으로 맞춰 이미지를 고쳐야 한다. 쿠버네티스의 같은 개념은 [보안 컨텍스트](/posts/k8s-security-context)에서 다룬다.
+
+구독 비용이 들지만, 은행이나 공공기관처럼 지원 계약과 인증된 구성이 필요한 곳, 온프레미스에서 쿠버네티스를 통째로 맡길 곳이 필요한 회사가 고른다.
+
+## 쿠버네티스가 표준이 된 이유
+
+기능만 놓고 보면 위의 도구들도 스케줄링, 서비스 발견, 롤링 배포, 자가 복구를 다 한다. 쿠버네티스가 앞서 나간 건 기능보다 구조 때문이다.
+
+첫째, 모든 것이 같은 모양의 API 객체다. Deployment, Service, ConfigMap, Ingress가 전부 `apiVersion`, `kind`, `metadata`, `spec`, `status`를 갖고, 같은 `kubectl apply`로 올리고, 같은 watch로 변화를 받는다. 둘째, 그 API에 새 종류를 붙일 수 있다. kwok 클러스터에 `DbBackup`이라는 종류를 하나 등록해 봤다.
+
+```bash
+kubectl api-resources --no-headers | wc -l     # 등록 전
+kubectl apply -f dbbackup-crd.yaml              # CustomResourceDefinition 하나
+kubectl api-resources --no-headers | wc -l     # 등록 후
+kubectl api-resources | grep -E "^NAME|dbbackup"
+```
+
+```text
+71
+```
+
+```text
+customresourcedefinition.apiextensions.k8s.io/dbbackups.ops.example.com created
+```
+
+```text
+72
+```
+
+```text
+NAME                                SHORTNAMES   APIVERSION                        NAMESPACED   KIND
+dbbackups                                        ops.example.com/v1                true         DbBackup
+```
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: ops.example.com/v1
+kind: DbBackup
+metadata: { name: orders-nightly }
+spec: { database: orders, schedule: "0 3 * * *" }
+EOF
+kubectl get dbbackups
+```
+
+```text
+dbbackup.ops.example.com/orders-nightly created
+NAME             AGE
+orders-nightly   0s
+```
+
+YAML 하나로 API 서버가 `DbBackup`을 Deployment와 똑같이 저장하고, 권한을 걸고, watch를 내준다. 여기에 이 객체를 보고 실제 백업을 도는 컨트롤러를 붙이면 그게 오퍼레이터다([CRD](/posts/k8s-crd), [오퍼레이터](/posts/k8s-operators)). cert-manager, Argo CD, Prometheus Operator, 각종 DB 오퍼레이터가 모두 이 방식으로 쿠버네티스를 늘렸다. Swarm에는 이 확장 지점이 없고, ECS는 AWS가 만든 것만 쓸 수 있다.
+
+셋째, 모든 큰 클라우드에 관리형 쿠버네티스가 있다. EKS, GKE, AKS에서 같은 매니페스트와 같은 Helm 차트가 돈다. 사람을 뽑을 때도 쿠버네티스 경험자가 가장 많다.
+
+그 대신 내는 값이 있다. 쿠버네티스는 부품이다. CNI, Ingress 컨트롤러, 인증서 관리, 메트릭과 로그 수집, 오토스케일러, 비밀 관리를 고르고 조합해야 쓸 만한 플랫폼이 된다. 마이너 버전이 1년에 세 번 나오고 최근 세 개만 패치를 받으니, 업그레이드가 매년 돌아오는 일이 된다. 장애가 나면 Pod, Service, CNI, 노드, 클라우드 로드 밸런서 중 어디서 끊겼는지 층을 내려가며 봐야 한다. 관리형을 쓰면 컨트롤 플레인 일은 덜지만 이 목록은 대부분 그대로 남는다. 직접 세울 때 무엇이 더 붙는지는 [kubeadm으로 클러스터 세우기](/posts/kubeadm-cluster-setup)에서 따져 봤다.
+
+## 여섯 가지를 나란히 놓으면
+
+비교가 목적이라 표로 정리한다.
+
+| | 스케줄링·배치 | 서비스 발견 | 롤링 배포 | 운영 부담 | 묶이는 정도 |
+|---|---|---|---|---|---|
+| Docker Swarm | 예약량, placement 선호 | 서비스 이름 VIP, 라우팅 메시 | update_config, 자동 롤백 | 낮음 | 낮음 (Docker만) |
+| Nomad | 예약량, spread, 비컨테이너 | Nomad 자체 또는 Consul | update 블록, 카나리, 자동 되돌리기 | 중간 | 중간 (HashiCorp 도구) |
+| ECS · Fargate | AWS가 배치, Fargate는 노드 없음 | ALB, Cloud Map, Service Connect | min·max percent, circuit breaker | 낮음 | 높음 (AWS) |
+| Cloud Run | 요청 수 기반 자동 확장, 0까지 | HTTPS 주소 하나 | 리비전별 트래픽 비율 | 매우 낮음 | 높음 (Google Cloud) |
+| OpenShift | 쿠버네티스 + 보안 기본값 | Service, Route | 쿠버네티스와 같음 | 중간 (구독으로 지원) | 중간 (Red Hat) |
+| 쿠버네티스 | requests, affinity, spread | Service, DNS, Ingress·Gateway | Deployment, 확장 도구 | 높음 (관리형이면 중간) | 낮음 |
+
+## 무엇을 고를까
+
+팀과 서비스의 크기에서 출발하면 대부분 갈린다.
+
+- AWS에 있고, 개발자 몇 명이 무상태 웹 서비스 몇 개를 운영한다: ECS와 Fargate가 가장 덜 일한다. 컨트롤 플레인 요금도, 노드 패치도 없다.
+- HTTP 요청만 받고 트래픽이 들쭉날쭉하다: Cloud Run(또는 다른 클라우드의 비슷한 서비스)이 맞다. 상주 서버가 필요해지면 그때 옮긴다.
+- 온프레미스 서버 몇 대에 이미 Compose로 돌고 있다: Swarm이나, 서버 몇 대에 Compose를 두고 앞에 로드 밸런서를 세우는 것으로도 충분하다.
+- 컨테이너가 아닌 레거시와 컨테이너를 한 스케줄러로 돌려야 한다: Nomad.
+- 팀이 여럿이고, 서비스가 수십 개이고, DB·큐·인증서를 오퍼레이터로 자동화하고 싶고, 클라우드를 옮길 가능성이 있다: 쿠버네티스, 그것도 관리형부터.
+
+옮길 신호는 숫자로 온다. 서비스가 열 개를 넘고 팀마다 배포 방식이 달라지기 시작할 때, ECS 태스크 정의를 서비스마다 손으로 복사하고 있을 때, 플랫폼을 전담할 사람이 한두 명 생길 때가 쿠버네티스를 검토할 때다. 반대로 플랫폼을 볼 사람이 없는데 쿠버네티스를 먼저 들이면 서비스보다 클러스터를 돌보는 시간이 더 길어진다.
+
+## 도구보다 먼저 정할 것
+
+어떤 오케스트레이터든 원하는 상태를 적고, 스케줄러가 예약량으로 자리를 고르고, 컨트롤러가 차이를 메우고, 준비 확인을 거쳐 버전을 바꾼다. 도구를 가르는 건 그 위에 무엇을 더 붙일 수 있는지와 누가 컨트롤 플레인을 돌보는지다. 쿠버네티스는 API를 늘릴 수 있어서 표준이 됐고, 그 대가로 고르고 조합하고 올리는 일을 팀에 남긴다. 팀이 그 일을 감당할 수 있는지가 기술 비교보다 먼저다.
+
+## 면접에서 나올 만한 질문
+
+### 컨테이너 오케스트레이션이 해 주는 일은 무엇인가?
+
+여러 서버에 걸쳐 컨테이너를 어디에 놓을지 고르는 스케줄링, 바뀌는 위치를 이름으로 찾게 해 주는 서비스 발견, 끊김 없이 버전을 바꾸는 롤링 배포, 죽은 컨테이너를 다시 띄우는 자가 복구다. 사람은 원하는 상태를 적고 오케스트레이터가 실제 상태와의 차이를 계속 메운다. Compose는 이 일을 한 대 안에서만 한다.
+
+### 쿠버네티스가 사실상 표준이 된 이유는?
+
+모든 리소스가 같은 모양의 선언형 API 객체이고, CRD로 새 종류를 붙이고 컨트롤러로 동작을 더할 수 있어서다. 그 확장 덕분에 cert-manager, Argo CD, DB 오퍼레이터 같은 생태계가 생겼고, 모든 큰 클라우드가 관리형으로 제공해 같은 매니페스트를 어디서나 쓸 수 있다. 기능 목록만 보면 Swarm이나 Nomad도 비슷하지만 이 확장 지점이 없다.
+
+### 작은 팀에 쿠버네티스는 과한가?
+
+플랫폼을 돌볼 사람이 없다면 대개 과하다. 쿠버네티스는 CNI, Ingress, 인증서, 모니터링, 오토스케일러를 골라 조합해야 하고 1년에 세 번 업그레이드가 돌아온다. AWS의 무상태 서비스 몇 개라면 ECS와 Fargate, 요청 기반 API라면 Cloud Run이 일을 덜 남긴다. 서비스와 팀이 늘어 배포 방식이 갈라지기 시작할 때 관리형 쿠버네티스로 옮긴다.
+
+### ECS와 EKS는 무엇으로 고르나?
+
+AWS 안에서만 쓰고 쿠버네티스 생태계가 필요 없으면 ECS가 단순하고 컨트롤 플레인 요금도 없다. Helm 차트나 오퍼레이터를 쓰고 싶거나, 다른 클라우드·온프레미스와 같은 방식으로 배포하고 싶거나, 쿠버네티스를 아는 사람이 이미 있으면 EKS를 고른다. 둘 다 Fargate를 실행 자리로 쓸 수 있어서 노드 관리 여부는 기준이 아니다.
+
+### Pod가 Pending에 머물고 Insufficient cpu가 뜬다. 노드 CPU 사용률은 낮은데 왜 그런가?
+
+스케줄러는 실제 사용량이 아니라 컨테이너의 requests 합으로 자리를 계산하기 때문이다. 노드가 한가해도 이미 놓인 Pod들의 요청량 합이 노드 용량에 닿으면 더는 못 들어간다. 요청량을 실제 사용에 맞게 줄이거나 노드를 늘리고, 합계는 남아도 한 덩어리가 모자란 단편화인지도 본다.
+
+### Docker Swarm의 라우팅 메시는 어떻게 동작하나?
+
+서비스가 공개한 포트를 컨테이너가 없는 서버까지 포함해 모든 서버에 열고, 어느 서버로 들어온 요청이든 ingress 오버레이 네트워크를 거쳐 컨테이너가 있는 서버로 넘긴다. 분배는 커널의 IPVS가 한다. 그래서 앞단 로드 밸런서는 서버 목록만 알면 되고 컨테이너 위치는 몰라도 된다.
+
+### OpenShift에 일반 nginx 이미지를 올렸더니 권한 오류로 죽는다. 왜 그런가?
+
+OpenShift의 기본 SCC가 컨테이너를 네임스페이스마다 정해진 임의 UID로 돌려서, 루트를 가정하고 80번 포트를 열거나 루트 소유 디렉터리에 쓰는 이미지가 실패한다. 비루트용 이미지로 바꾸거나 쓰기 경로의 그룹 권한을 맞춘다. SCC를 풀어 주는 건 마지막 수단이다.

@@ -409,6 +409,21 @@ pgbench: error: client 13 script 0 aborted in command 1 query 0: ERROR:  prepare
 
 이런 기능이 꼭 필요한 연결(마이그레이션 도구, `LISTEN` 하는 워커, 세션 잠금을 쓰는 스케줄러)은 PgBouncer를 거치지 않고 DB에 직접 붙이거나, 그 용도만 session 모드 풀로 따로 둔다.
 
+## PgBouncer 말고 고를 수 있는 풀러
+
+PgBouncer는 연결을 나눠 쓰는 일 하나만 한다. 그래서 가볍고 오래 검증됐지만, 단일 스레드라 한 프로세스가 코어 하나를 넘지 못하고, 읽기를 복제본으로 보내는 일은 하지 않는다. 이 둘이 필요해지면 다른 풀러를 본다.
+
+| 풀러 | 잘하는 것 | 대신 감수하는 것 |
+|---|---|---|
+| Pgpool-II | 쿼리를 보고 읽기는 복제본으로, 쓰기는 프라이머리로 보낸다. 복제본 사이 부하 분산, 장애 감지(watchdog)까지 한다 | 프로세스 하나가 클라이언트 하나를 맡는 구조라 transaction 모드 같은 다중화가 없다. 설정이 많고 SQL을 해석하는 만큼 지연이 붙는다 |
+| PgCat, Odyssey | 멀티스레드라 풀러 하나가 여러 코어를 쓴다. transaction 모드를 지원하고, PgCat은 복제본 부하 분산과 샤드 라우팅도 한다 | PgBouncer보다 운영 사례가 적다. 버전마다 기능 차이가 커서 쓰려는 기능을 직접 확인해야 한다 |
+| Supavisor | 테넌트(DB)가 수천 개인 환경에서 연결 수십만 개를 받도록 만든 풀러다(Elixir) | 멀티 테넌트 플랫폼을 위한 도구라 DB 하나 앞에 두기엔 과하다 |
+| RDS Proxy | AWS가 운영한다. IAM 인증, Secrets Manager 연동, 장애 조치 중 클라이언트 연결을 붙잡아 두는 기능이 있다 | RDS·Aurora에서만 쓴다. 세션 상태를 만드는 문장을 쓰면 그 클라이언트에 DB 연결이 고정(pinning)돼 나눠 쓰기가 사라진다. DB 용량에 비례해 요금이 붙는다 |
+
+RDS Proxy의 pinning은 이 글의 transaction 모드 문제와 뿌리가 같다. PgBouncer는 세션 상태가 다음 클라이언트에게 새어 나가게 두고, RDS Proxy는 새어 나가지 않게 연결을 그 클라이언트에 묶어 버린다. 어느 쪽이든 앱이 `SET`, 임시 테이블, 세션 잠금을 쓰면 풀이 기대만큼 일하지 않는다. CloudWatch의 `DatabaseConnectionsCurrentlySessionPinned` 지표가 늘면 이걸 의심한다.
+
+고르는 순서는 이렇게 잡는다. DB 하나에 연결 상한만 필요하면 PgBouncer로 충분하고, CPU가 모자라면 PgBouncer를 여러 개(`so_reuseport`) 띄우는 것부터 해 본다. 읽기 분산이 필요하면 앱이 쓰기와 읽기 연결을 따로 들고 가는 쪽이 가장 단순하고, 그게 어려울 때 PgCat이나 Pgpool-II의 라우팅을 쓴다. AWS에서 서버리스 함수가 많다면 RDS Proxy가 운영 부담이 가장 적다. 장애 조치까지 풀러에 맡길지는 [장애 조치 글](/posts/failover)에서 본 감지·펜싱 문제를 풀러가 어떻게 푸는지부터 확인한다.
+
 ## max_connections 계산서
 
 DB 연결 수는 앱 개발자가 아니라 계산서가 정한다. PostgreSQL 16에서 일반 연결로 쓸 수 있는 수는 `max_connections - superuser_reserved_connections(기본 3) - reserved_connections(기본 0)`이다. 자리가 없으면 일반 역할은 `FATAL:  remaining connection slots are reserved for roles with the SUPERUSER attribute`를, 슈퍼유저 몫까지 다 차면 `FATAL:  sorry, too many clients already`를 받는다. 복제용 WAL sender와 autovacuum 작업자는 이 수에 들지 않는다.
@@ -563,3 +578,7 @@ session 모드는 클라이언트가 끊을 때까지 DB 연결 하나를 내주
 ### max_connections는 어떻게 계산하나?
 
 가장 많아지는 순간의 연결을 다 더한다. 서비스별 최대 파드 수 × 풀 최대치, 롤링 배포 때 더 뜨는 파드, 배치·마이그레이션·모니터링, 슈퍼유저 예약분이다. 읽기 복제본은 따로 세고, 핫 스탠바이는 `max_connections`가 프라이머리보다 작으면 제대로 동작하지 못하니 같거나 크게 맞춘다. 합이 DB가 감당할 수준을 넘으면 `max_connections`를 올리기보다 풀러를 둔다.
+
+### PgBouncer 대신 Pgpool-II나 RDS Proxy를 고르는 건 언제인가?
+
+연결 상한만 필요하면 PgBouncer가 가장 단순하다. 읽기 쿼리를 복제본으로 자동으로 보내고 싶으면 Pgpool-II나 PgCat 같은 라우팅 풀러를 보고, 풀러 하나가 코어 하나로 모자라면 멀티스레드인 PgCat, Odyssey를 본다. AWS에서 서버리스가 많으면 운영을 맡길 수 있는 RDS Proxy가 편하지만, 세션 상태를 쓰면 연결이 고정(pinning)돼 다중화가 사라진다는 점을 확인하고 쓴다.

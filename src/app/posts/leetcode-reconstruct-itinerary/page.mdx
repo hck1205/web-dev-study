@@ -1,0 +1,519 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-reconstruct-itinerary");
+
+<EasyIntro>
+  여행 가방에서 비행기 표 여러 장이 뒤섞여 나왔다. 표마다 어디서 어디로 가는지만 적혀 있고, 모든 표를 한 번씩 다 써서 한 줄짜리 여행을 만들어야 한다. 출발은 늘 같은 공항이고, 갈 수 있는 길이 여러 개면 공항 이름이 사전에서 앞서는 쪽을 고른다. 그런데 이름이 앞선다고 무작정 가면 표가 남았는데 더 갈 곳이 없는 막다른 공항에 닿을 수 있다. 막다른 곳은 여행의 마지막이 될 수밖에 없는 곳이다. 그래서 막히면 그 공항을 여행의 끝에 적어 두고, 한 발 물러나 남은 표로 다른 길을 먼저 돈다. 이렇게 끝에서부터 거꾸로 적어 나가면 표를 한 장도 버리지 않고 여행을 완성할 수 있다. 다 적은 뒤 순서를 뒤집으면 답이 된다.
+</EasyIntro>
+
+비행기 표 뭉치를 받아 전체 일정을 다시 짜는 문제다. 처음 보면 백트래킹 문제처럼 보이고, 실제로 백트래킹으로도 풀린다. 그런데 이 문제에는 더 깔끔한 정체가 있다. 모든 간선을 정확히 한 번씩 지나는 길, 오일러 경로를 찾는 문제다.
+
+[LeetCode 332. Reconstruct Itinerary](https://leetcode.com/problems/reconstruct-itinerary/)는 Hard다. 이 글은 먼저 틀리는 탐욕부터 보고, 백트래킹, 그리고 오일러 경로를 찾는 히어홀처(Hierholzer) 알고리즘을 재귀와 스택 두 가지로 짠다. 백트래킹 자체는 [재귀와 백트래킹 글](/posts/recursion-backtracking), 그래프를 인접 리스트로 담는 법과 DFS는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 표를 한 장도 남기지 않는 일정
+
+표 하나는 `[출발, 도착]` 공항 코드 쌍이다. 공항 코드는 대문자 세 글자다. 일정은 언제나 `"JFK"`에서 시작하고, 모든 표를 정확히 한 번씩 써야 한다. 가능한 일정이 여럿이면 공항 이름을 이어 붙였을 때 사전 순으로 가장 앞서는 것을 고른다. 가능한 일정이 적어도 하나는 있다고 보장한다.
+
+풀이 선택에 영향을 주는 조건은 이렇다.
+
+- 표는 최대 300장이다. 일정 길이는 표 수 + 1이다.
+- 같은 구간의 표가 여러 장 있을 수 있다. 공항을 "방문했다"로 표시하면 안 되고 표를 "썼다"로 표시해야 한다.
+- 답이 있다고 보장하니 "답이 없을 때"는 따로 처리하지 않아도 된다. 그래도 면접에서는 검사 방법을 물을 수 있어서 뒤에서 짚는다.
+
+이 글에서 쓸 예시는 표 다섯 장이다.
+
+```text
+JFK → BOS     JFK → LAX     LAX → DEN     DEN → JFK     BOS → MIA
+```
+
+<ConceptDiagram
+  caption="표 다섯 장을 간선으로 그린 그래프. JFK에서 나가는 표가 두 장이다"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "jfk", label: "JFK", sub: "출발", x: 200, y: 120, w: 64, h: 42 },
+    { id: "bos", label: "BOS", x: 70, y: 50, w: 64, h: 42 },
+    { id: "mia", label: "MIA", x: 70, y: 195, w: 64, h: 42 },
+    { id: "lax", label: "LAX", x: 330, y: 50, w: 64, h: 42 },
+    { id: "den", label: "DEN", x: 330, y: 195, w: 64, h: 42 },
+  ]}
+  edges={[
+    { from: "jfk", to: "bos" },
+    { from: "bos", to: "mia" },
+    { from: "jfk", to: "lax" },
+    { from: "lax", to: "den" },
+    { from: "den", to: "jfk" },
+  ]}
+/>
+
+손으로 풀어 보자. JFK에서 갈 수 있는 곳은 BOS와 LAX이고 사전 순으로는 BOS가 앞선다. BOS로 가면 MIA로 가는 표밖에 없고, MIA에서는 나가는 표가 없다. 표 두 장을 썼는데 세 장이 남은 채 막혔다. 그래서 JFK에서는 LAX로 먼저 가야 한다. LAX → DEN → JFK로 고리를 돌아 다시 JFK에 오면, 그때 BOS → MIA로 간다. 답은 `JFK, LAX, DEN, JFK, BOS, MIA`다.
+
+손으로 풀면서 이미 답의 모양이 보였다. 막다른 MIA는 일정의 맨 끝에 온다. 막다른 곳은 나갈 표가 없으니 마지막에만 설 수 있다.
+
+## 이름순으로만 가면 표가 남는다
+
+가장 먼저 떠오르는 방법은 매번 이름이 가장 앞선 공항으로 가는 것이다. 공항마다 갈 곳을 정렬해 두고 앞에서 하나씩 꺼내 간다.
+
+```js
+// 틀린 풀이: 늘 이름이 가장 앞선 곳으로 간다
+function findItinerary(tickets) {
+  const graph = new Map();
+  for (const [a, b] of tickets) {
+    if (!graph.has(a)) graph.set(a, []);
+    graph.get(a).push(b);
+  }
+  for (const list of graph.values()) list.sort();
+  const route = ["JFK"];
+  let cur = "JFK";
+  while (graph.has(cur) && graph.get(cur).length > 0) {
+    cur = graph.get(cur).shift(); // 가장 작은 곳으로 간다
+    route.push(cur);
+  }
+  return route;
+}
+```
+
+예시에서는 `["JFK", "BOS", "MIA"]`에서 멈춘다. 표 세 장이 남았다. 이름순 고르기가 틀린 게 아니라, 막혔을 때 물러날 방법이 없는 게 문제다.
+
+아래 그림에서 다음을 누르면 이름순으로 간 길과 실제 답의 길을 차례로 보여 준다.
+
+<VectorSpace
+  caption="이름순으로만 가면 MIA에서 막히고, 답은 고리를 먼저 돈다"
+  width={400}
+  height={260}
+  groups={[{ id: "hub", label: "출발 공항" }, { id: "air", label: "공항" }]}
+  points={[
+    { id: "jfk", label: "JFK", x: 200, y: 130, group: "hub" },
+    { id: "bos", label: "BOS", x: 80, y: 50, group: "air" },
+    { id: "mia", label: "MIA", x: 60, y: 210, group: "air" },
+    { id: "lax", label: "LAX", x: 320, y: 50, group: "air", labelAt: "left" },
+    { id: "den", label: "DEN", x: 320, y: 210, group: "air", labelAt: "left" },
+  ]}
+  edges={[["jfk", "bos"], ["bos", "mia"], ["jfk", "lax"], ["lax", "den"], ["den", "jfk"]]}
+  steps={[
+    { caption: "표 다섯 장이 선 다섯 개다. JFK에서 나가는 선이 둘이다.", showEdges: true },
+    { caption: "이름순으로 BOS, 다시 MIA. MIA에는 나가는 표가 없어 세 장이 남은 채 막힌다.", showEdges: true, path: ["jfk", "bos", "mia"] },
+    { caption: "답은 LAX, DEN을 돌아 JFK로 온 뒤에 BOS, MIA로 간다.", showEdges: true, path: ["jfk", "lax", "den", "jfk", "bos", "mia"] },
+  ]}
+/>
+
+## 막히면 물러나는 백트래킹
+
+막혔을 때 물러나면 된다. 이름순으로 표를 하나 써 보고, 그 뒤로 남은 표를 다 쓰는 일정이 안 나오면 표를 되돌려 놓고 다음 표를 써 본다. 이름순으로 시도하니 처음 찾은 완성 일정이 곧 사전 순으로 가장 앞선 일정이다.
+
+```js
+function findItinerary(tickets) {
+  const graph = new Map();
+  for (const [a, b] of tickets) {
+    if (!graph.has(a)) graph.set(a, []);
+    graph.get(a).push(b);
+  }
+  for (const list of graph.values()) list.sort();
+  // 공항이 아니라 표를 썼는지 기록한다. 같은 구간 표가 여러 장일 수 있다
+  const used = new Map();
+  for (const [a, list] of graph) used.set(a, new Array(list.length).fill(false));
+
+  const route = ["JFK"];
+  const dfs = (cur) => {
+    if (route.length === tickets.length + 1) return true; // 표를 다 썼다
+    const list = graph.get(cur) || [];
+    const u = used.get(cur);
+    for (let i = 0; i < list.length; i++) {
+      if (u[i]) continue;
+      // 바로 앞의 같은 행선지 표를 안 쓴 채로 이 표를 쓰는 건 같은 시도다
+      if (i > 0 && list[i] === list[i - 1] && !u[i - 1]) continue;
+      u[i] = true;
+      route.push(list[i]);
+      if (dfs(list[i])) return true;
+      u[i] = false; // 되돌려 놓는다
+      route.pop();
+    }
+    return false;
+  };
+  dfs("JFK");
+  return route;
+}
+```
+
+같은 행선지 표가 여러 장이면 어느 장을 먼저 쓰든 남는 상황이 같다. 첫 장으로 실패했다면 둘째 장으로도 실패한다. 그래서 정렬된 목록에서 앞의 같은 표가 쓰이지 않았으면 건너뛴다. 이 한 줄이 없으면 같은 실패를 표 장수만큼 반복한다.
+
+예시에서는 `dfs`가 8번 불리고 끝난다. 표 300장짜리 무작위 일정을 공항 4~11개로 만들어 1,000개씩 돌려 보니 호출은 대부분 300번대였고 가장 많아도 435번이었다. 막다른 길이 적어서 거의 한 번에 간다.
+
+그런데 공항을 31개로 늘리자 1,000개 중 6개에서 호출이 200만 번을 넘었다. 그중 하나를 제한 없이 돌렸더니 75초 동안 10억 번을 호출하고도 끝나지 않았다. 같은 입력을 뒤에 나올 히어홀처 풀이는 0.6ms에 풀었다. 막다른 길이 일정 깊숙한 곳에 있으면, 그 앞의 갈림길마다 모든 조합을 다 시도하고 나서야 물러나기 때문이다. 최악의 시간은 지수다.
+
+백트래킹이 낭비하는 일은 "막다른 길을 만나면 그 길을 버린다"는 데서 나온다. 사실 그 길은 버릴 필요가 없다. 손으로 풀 때 본 것처럼 막다른 길은 일정의 끝으로 보내면 된다.
+
+## 모든 간선을 한 번씩 지나는 길
+
+공항을 노드, 표를 간선으로 보면 "모든 표를 한 번씩 써서 이어지는 일정"은 모든 간선을 정확히 한 번씩 지나는 길, 오일러 경로다. 쾨니히스베르크 다리 문제로 유명한 그 개념이다.
+
+방향 그래프에 오일러 경로가 있는지는 노드마다 들어오는 표 수(진입 차수)와 나가는 표 수(진출 차수)만 보면 안다.
+
+- 모든 노드에서 들어오는 수와 나가는 수가 같으면, 어디서 출발해도 출발점으로 돌아오는 오일러 회로가 있다.
+- 출발점은 나가는 수가 하나 많고, 도착점은 들어오는 수가 하나 많고, 나머지는 같으면, 출발점에서 도착점으로 가는 오일러 경로가 있다.
+- 간선이 있는 노드는 모두 한 덩어리로 이어져 있어야 한다.
+
+예시에서 JFK는 나가는 표 2장, 들어오는 표 1장이다. MIA는 들어오는 표만 1장이다. 나머지는 같다. 그래서 JFK에서 출발해 MIA에서 끝나는 경로가 있고, MIA가 막다른 공항이 된 이유가 여기 있다. 들어오는 수가 하나 많은 노드는 일정의 끝에만 설 수 있다.
+
+## 막다른 곳을 일정 끝에 적는 히어홀처
+
+히어홀처 알고리즘은 이 성질을 그대로 쓴다. 표를 쓸 때마다 그래프에서 지우면서 DFS로 간다. 더 쓸 표가 없는 공항에 닿으면, 그 공항을 일정의 "뒤쪽"에 적고 한 칸 물러난다. 물러난 공항에 아직 쓸 표가 있으면 다시 그쪽으로 간다. 표가 모두 지워지면 적어 둔 순서를 뒤집는다.
+
+```js
+function findItinerary(tickets) {
+  const graph = new Map();
+  for (const [from, to] of tickets) {
+    if (!graph.has(from)) graph.set(from, []);
+    graph.get(from).push(to);
+  }
+  // 내림차순으로 정렬해 두면 pop()이 가장 작은 공항을 O(1)에 꺼낸다
+  for (const list of graph.values()) {
+    list.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  }
+  const route = [];
+  const visit = (airport) => {
+    const list = graph.get(airport);
+    while (list && list.length > 0) visit(list.pop()); // 표를 쓰는 순간 지운다
+    route.push(airport); // 더 나갈 표가 없을 때 경로 뒤쪽에 붙인다
+  };
+  visit("JFK");
+  return route.reverse();
+}
+```
+
+예시로 따라가 보자. JFK에서 이름순으로 BOS, 다시 MIA로 간다. MIA에는 표가 없으니 `route`에 MIA를 적는다. BOS로 물러나도 표가 없으니 BOS를 적는다. JFK로 물러나니 LAX행 표가 남아 있다. LAX, DEN을 거쳐 JFK에 오면 JFK의 표가 다 떨어졌으니 JFK를 적고, DEN, LAX, JFK 순으로 물러나며 적는다. `route`는 `MIA, BOS, JFK, DEN, LAX, JFK`이고 뒤집으면 답이 된다.
+
+백트래킹과 다른 점은 막혔을 때 무엇도 되돌리지 않는다는 것이다. BOS → MIA 갈래는 버리지 않고 그대로 일정의 끝이 된다. 그 앞에 남은 표로 고리(JFK → LAX → DEN → JFK)를 돌고, 고리는 JFK 자리에 끼워 들어간다.
+
+### 고리가 둘이면 두 번 끼워 넣는다
+
+예시는 고리가 하나라 단순했다. JFK에서 AAA와 CCC를 각각 다녀오고 마지막에 BBB로 빠지는 표 다섯 장을 보자.
+
+```text
+JFK → AAA    AAA → JFK    JFK → BBB    JFK → CCC    CCC → JFK
+```
+
+이름순으로만 가면 AAA를 다녀온 뒤 BBB로 가서 CCC 고리를 못 돈다. 재귀 버전에 들어가고 적는 순간을 찍어 보면 이렇다. 들여쓰기가 재귀 깊이다.
+
+```text
+enter JFK
+  enter AAA
+    enter JFK
+      enter BBB
+      write BBB -> BBB
+      enter CCC
+        enter JFK
+        write JFK -> BBB,JFK
+      write CCC -> BBB,JFK,CCC
+    write JFK -> BBB,JFK,CCC,JFK
+  write AAA -> BBB,JFK,CCC,JFK,AAA
+write JFK -> BBB,JFK,CCC,JFK,AAA,JFK
+```
+
+두 번째 JFK에서 이름순으로 BBB를 먼저 갔다가 막혀서 BBB가 가장 먼저 적혔다. 같은 JFK로 물러나 남은 CCC행 표로 고리를 돌았고, 그 고리가 BBB 앞에 들어갔다. 뒤집으면 `JFK, AAA, JFK, CCC, JFK, BBB`다. AAA 고리가 CCC 고리보다 앞에 온 건 첫 JFK에서 AAA가 이름순으로 먼저였기 때문이다. 고리가 몇 개든 막다른 갈래는 맨 뒤로, 고리는 이름순으로 앞에 쌓인다.
+
+### 왜 이게 사전 순으로 가장 앞서나
+
+공항마다 가장 작은 곳부터 가 본다. 가장 작은 곳으로 가서 일정 전체가 이어지면 그게 답이다. 그쪽으로 가서 막혔다면, 그 갈래는 도착점으로 빠지는 길이라 어떤 일정에서도 맨 끝에 올 수밖에 없다. 그 갈래를 끝에 고정해 두고, 남은 표로 다시 가장 작은 곳부터 고르니 일정 앞부분은 가능한 한 작은 이름으로 채워진다. 막혔을 때 다른 선택지를 포기하는 게 아니라 순서만 뒤로 미루는 것이라, 어떤 표도 버려지지 않는다.
+
+`route`를 거꾸로 적는 이유도 같다. 공항을 "더 나갈 표가 없을 때" 적으니 먼저 적히는 건 일정 뒤쪽이다. DFS가 끝나는 순서(후위 순서)를 뒤집은 것이 답이다.
+
+시간은 정렬이 O(E log E), DFS는 표마다 한 번씩 `pop`하니 O(E)다. 합쳐서 O(E log E)이고 E는 표 수다. 공간은 그래프 O(E)와 재귀 깊이 O(E)다. 재귀 깊이는 표 300장이면 301이라 문제없다.
+
+## 재귀를 스택으로 바꾸기
+
+재귀 깊이가 표 수만큼 깊어질 수 있으니 표가 수만 장이면 스택이 넘친다. 재귀 호출을 직접 만든 스택으로 바꾸면 깊이 제한이 사라진다. 스택 맨 위 공항에 쓸 표가 있으면 표를 쓰고 행선지를 쌓고, 없으면 꺼내서 `route`에 적는다.
+
+```js
+function findItinerary(tickets) {
+  const graph = new Map();
+  for (const [from, to] of tickets) {
+    if (!graph.has(from)) graph.set(from, []);
+    graph.get(from).push(to);
+  }
+  for (const list of graph.values()) {
+    list.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  }
+  const stack = ["JFK"];
+  const route = [];
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1];
+    const list = graph.get(top);
+    if (list && list.length > 0) stack.push(list.pop()); // 표를 쓰고 간다
+    else route.push(stack.pop()); // 막혔다: 일정 뒤쪽에 적는다
+  }
+  return route.reverse();
+}
+```
+
+아래 그림은 예시에서 이 코드가 표를 쓰는 순서를 따라간 것이다. 칸은 표 다섯 장이고 초록 칸이 이미 쓴 표, 아래는 스택이다. 캡션 끝의 "적음"이 `route`에 쌓인 순서다.
+
+<AlgoTrace
+  caption="스택으로 짠 히어홀처. 초록 칸이 쓴 표다"
+  memoryLabel="스택"
+  cells={["JFK→BOS", "JFK→LAX", "LAX→DEN", "DEN→JFK", "BOS→MIA"]}
+  steps={[
+    { memory: ["JFK"], caption: "JFK만 쌓고 시작한다. 적음: 없음." },
+    { pointer: 0, found: [0], memory: ["JFK", "BOS"], caption: "JFK의 표 중 이름이 앞선 BOS행을 쓴다." },
+    { pointer: 4, found: [0, 4], memory: ["JFK", "BOS", "MIA"], caption: "BOS에서 MIA행을 쓴다." },
+    { pointer: 4, found: [0, 4], memory: ["JFK", "BOS"], caption: "MIA엔 표가 없다. 꺼내서 적는다. 적음: MIA." },
+    { pointer: 0, found: [0, 4], memory: ["JFK"], caption: "BOS도 표가 없다. 적음: MIA, BOS." },
+    { pointer: 1, found: [0, 4, 1], memory: ["JFK", "LAX"], caption: "JFK에 LAX행이 남아 있다. 쓰고 간다." },
+    { pointer: 2, found: [0, 4, 1, 2], memory: ["JFK", "LAX", "DEN"], caption: "LAX에서 DEN행을 쓴다." },
+    { pointer: 3, found: [0, 4, 1, 2, 3], memory: ["JFK", "LAX", "DEN", "JFK"], caption: "DEN에서 JFK행을 쓴다. 표를 다 썼다." },
+    { pointer: 3, found: [0, 1, 2, 3, 4], memory: [], caption: "이제 하나씩 꺼내 적는다. 적음: MIA, BOS, JFK, DEN, LAX, JFK." },
+    { found: [0, 1, 2, 3, 4], memory: [], caption: "뒤집으면 JFK, LAX, DEN, JFK, BOS, MIA. 답이다." },
+  ]}
+/>
+
+네 번째와 다섯 번째 단계가 이 풀이의 요점이다. MIA와 BOS에서 막혔지만 그 표를 되돌리지 않는다. 막다른 갈래는 그대로 일정의 끝으로 적히고, 남은 표는 스택에 남은 JFK에서 이어 간다.
+
+### Python과 Java로 쓰면
+
+Python은 재귀 한도가 기본 1,000이다. JFK와 AAA를 오가는 표 1,500장으로 재귀 버전을 돌려 보니 `RecursionError: maximum recursion depth exceeded`로 멈췄고, 600장으로 줄이면 601칸 일정을 냈다. 표가 많은 변형이라면 스택 버전이 안전하다. 내림차순 정렬은 `sort(reverse=True)`로 쓴다. 문자열 비교는 유니코드 코드 포인트 순이라 대문자 세 글자에서는 사전 순과 같다.
+
+```python
+from collections import defaultdict
+from typing import List
+
+
+def find_itinerary(tickets: List[List[str]]) -> List[str]:
+    graph = defaultdict(list)
+    for src, dst in tickets:
+        graph[src].append(dst)
+    for dests in graph.values():
+        dests.sort(reverse=True)  # pop()이 가장 작은 공항을 꺼내게
+
+    stack = ["JFK"]
+    route = []
+    while stack:
+        top = stack[-1]
+        if graph[top]:
+            stack.append(graph[top].pop())  # 표를 하나 쓰고 그 공항으로 간다
+        else:
+            route.append(stack.pop())  # 더 나갈 표가 없으면 경로 뒤쪽에 붙인다
+    return route[::-1]
+
+
+print(find_itinerary([["JFK", "BOS"], ["JFK", "LAX"], ["LAX", "DEN"], ["DEN", "JFK"], ["BOS", "MIA"]]))
+print(find_itinerary([["JFK", "SFO"], ["SFO", "JFK"], ["JFK", "SFO"], ["SFO", "JFK"]]))
+```
+
+```text
+['JFK', 'LAX', 'DEN', 'JFK', 'BOS', 'MIA']
+['JFK', 'SFO', 'JFK', 'SFO', 'JFK']
+```
+
+`defaultdict(list)`라서 `graph[top]`이 없는 공항이면 빈 리스트가 새로 생긴다. 표가 없는 공항을 처음 볼 때 빈 리스트가 하나 늘 뿐이라 결과에는 영향이 없다.
+
+Java는 공항마다 `PriorityQueue<String>`을 두면 정렬을 따로 하지 않아도 `poll()`이 가장 작은 행선지를 꺼낸다. 꺼낼 때 O(log k)라 정렬 후 꺼내는 것과 전체 복잡도는 같다. `route`를 `LinkedList`로 두고 `addFirst`로 앞에 붙이면 마지막에 뒤집지 않아도 된다.
+
+```java
+import java.util.*;
+
+class Solution {
+    private final Map<String, PriorityQueue<String>> graph = new HashMap<>();
+    private final LinkedList<String> route = new LinkedList<>();
+
+    public List<String> findItinerary(List<List<String>> tickets) {
+        for (List<String> t : tickets) {
+            graph.computeIfAbsent(t.get(0), key -> new PriorityQueue<>()).offer(t.get(1));
+        }
+        visit("JFK");
+        return route;
+    }
+
+    private void visit(String airport) {
+        PriorityQueue<String> dests = graph.get(airport);
+        while (dests != null && !dests.isEmpty()) {
+            visit(dests.poll()); // 가장 작은 공항으로 가는 표를 쓰고 지운다
+        }
+        route.addFirst(airport); // 앞에 붙이면 마지막에 뒤집을 필요가 없다
+    }
+}
+```
+
+```text
+[JFK, LAX, DEN, JFK, BOS, MIA]
+```
+
+Java는 재귀 버전으로 썼다. JVM 기본 스레드 스택이면 표 300장, 깊이 301은 넉넉하다. 표가 수만 장이 되면 위의 스택 버전으로 바꾼다. `String`의 `compareTo`도 코드 단위 순이라 대문자 코드에서는 사전 순이다.
+
+## 일정 짜기를 직접 해 보기
+
+같은 구간 표가 여러 장인 경우, 표 한 장, 고리를 먼저 돌아야 하는 경우를 넣었다.
+
+<CodePlayground
+  caption="Reconstruct Itinerary"
+  functionName="findItinerary"
+  initialCode={"function findItinerary(tickets) {\n  // tickets[i] = [출발, 도착]\n  // JFK에서 시작해 모든 표를 한 번씩 쓰는, 사전 순으로 가장 앞선 일정\n  return [];\n}"}
+  solution={"function findItinerary(tickets) {\n  const graph = new Map();\n  for (const [from, to] of tickets) {\n    if (!graph.has(from)) graph.set(from, []);\n    graph.get(from).push(to);\n  }\n  // 내림차순으로 정렬해 두면 pop()이 가장 작은 공항을 O(1)에 꺼낸다\n  for (const list of graph.values()) {\n    list.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));\n  }\n  const route = [];\n  const visit = (airport) => {\n    const list = graph.get(airport);\n    while (list && list.length > 0) visit(list.pop()); // 표를 쓰는 순간 지운다\n    route.push(airport); // 더 나갈 표가 없을 때 경로 뒤쪽에 붙인다\n  };\n  visit(\"JFK\");\n  return route.reverse();\n}\n"}
+  tests={[
+    { label: "글의 예시", args: [[["JFK", "BOS"], ["JFK", "LAX"], ["LAX", "DEN"], ["DEN", "JFK"], ["BOS", "MIA"]]], expected: ["JFK", "LAX", "DEN", "JFK", "BOS", "MIA"] },
+    { label: "고리를 먼저 돈다", args: [[["JFK", "KUL"], ["JFK", "NRT"], ["NRT", "JFK"]]], expected: ["JFK", "NRT", "JFK", "KUL"] },
+    { label: "표 한 장", args: [[["JFK", "ATL"]]], expected: ["JFK", "ATL"] },
+    { label: "같은 표가 두 장씩", args: [[["JFK", "SFO"], ["SFO", "JFK"], ["JFK", "SFO"], ["SFO", "JFK"]]], expected: ["JFK", "SFO", "JFK", "SFO", "JFK"] },
+    { label: "고리 두 개와 막다른 곳", args: [[["JFK", "AAA"], ["AAA", "JFK"], ["JFK", "BBB"], ["JFK", "CCC"], ["CCC", "JFK"]]], expected: ["JFK", "AAA", "JFK", "CCC", "JFK", "BBB"] },
+    { label: "한 줄로 이어진 표", args: [[["MUC", "LHR"], ["JFK", "MUC"], ["SFO", "SJC"], ["LHR", "SFO"]]], expected: ["JFK", "MUC", "LHR", "SFO", "SJC"] },
+    { label: "갈림길이 여럿", args: [[["JFK", "SFO"], ["JFK", "ATL"], ["SFO", "ATL"], ["ATL", "JFK"], ["ATL", "SFO"]]], expected: ["JFK", "ATL", "JFK", "SFO", "ATL", "SFO"] },
+  ]}
+/>
+
+## 네 풀이를 나란히 놓으면
+
+E는 표 수다. 무작위 입력 시간은 공항 31개, 표 300장 기준이다.
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 이름순 탐욕 | O(E log E) | O(E) | 고르지 않는다. 막다른 길에서 틀린다 |
+| 백트래킹 | 최악 지수 | O(E) | 답이 없을 수도 있고 조건이 더 붙은 변형. 이 문제는 1,000개 중 6개에서 200만 번 넘게 호출했다 |
+| 히어홀처 재귀 | O(E log E) | O(E), 재귀 깊이 E | 기본 답. 표 수가 수천 이하 |
+| 히어홀처 스택 | O(E log E) | O(E) | 표가 아주 많거나 재귀 한도가 걱정될 때 |
+
+히어홀처 두 가지는 같은 알고리즘이다. 면접에서는 재귀 버전으로 설명하고, 재귀 깊이를 물으면 스택 버전으로 바꿀 수 있다고 말하면 된다. 백트래킹으로 답했다면 "막다른 길이 깊으면 지수로 느려진다"를 스스로 짚고 오일러 경로로 넘어가는 게 좋다.
+
+## 공항 표시와 문자열 정렬에서 틀린다
+
+공항에 방문 표시를 하면 틀린다. 일정은 같은 공항을 여러 번 지난다. 예시에서 JFK를 두 번 지나야 하는데, 공항을 표시하는 백트래킹은 DEN에서 JFK로 돌아가지 못해 일정을 하나도 완성하지 못한다. 표시는 표(간선)에 한다. 히어홀처는 쓴 표를 그래프에서 지우니 표시가 따로 필요 없다.
+
+JavaScript에서 문자열을 내림차순으로 정렬할 때 숫자처럼 빼면 안 된다.
+
+```js
+["LAX", "BOS", "DEN"].sort((a, b) => b - a);   // [ 'LAX', 'BOS', 'DEN' ] 그대로
+["LAX", "BOS", "DEN"].sort().reverse();         // [ 'LAX', 'DEN', 'BOS' ]
+```
+
+문자열끼리 빼면 `NaN`이 나오고, V8은 `NaN`을 "같다"로 취급해 원래 순서를 그대로 둔다. 에러 없이 정렬이 안 된 채로 넘어가서 찾기 어렵다. 비교 함수에서 `<`, `>`로 비교하거나 `sort()` 후 `reverse()`를 쓴다. 이 문제에서는 공항 코드가 대문자뿐이라 괜찮지만, 대소문자가 섞이면 기본 `sort()`는 대문자를 소문자보다 앞에 둔다(`["b", "B", "a"]`가 `["B", "a", "b"]`가 된다).
+
+오름차순으로 정렬해 두고 `shift()`로 꺼내도 답은 맞다. 다만 `shift()`는 배열 앞을 비우느라 원소를 한 칸씩 당겨서 O(k)다. 한 공항에 표가 몰리면 O(E²)까지 느려진다. 내림차순 정렬 후 `pop()`이 O(1)이다.
+
+`route.push(airport)`를 `while` 앞에 두면 전위 순서가 되어 틀린다. 뒤집지 않고 그대로 내면 예시에서 `JFK, BOS, MIA, LAX, DEN, JFK`가 나온다. MIA에서 LAX로 가는 표는 없으니 이어지지도 않는 일정이다. 공항은 나갈 표를 다 쓴 뒤에 적어야 막다른 갈래가 뒤로 간다.
+
+## 출발점이 없거나 방향이 없다면
+
+출발점을 주지 않거나 답이 없을 수도 있다면 두 가지를 더한다. 차수를 세서 출발점을 고르고, 히어홀처를 돌린 뒤 결과 길이로 끊어진 그래프를 잡는다. 진출이 진입보다 하나 많은 노드가 출발점이고, 그런 노드가 없으면 모든 노드가 같다는 뜻이라 오일러 회로이니 간선이 있는 아무 노드에서나 출발한다.
+
+```js
+// 출발점을 모르고, 답이 없을 수도 있는 일반 오일러 경로
+function eulerPath(edges) {
+  const graph = new Map();
+  const diff = new Map(); // 진출 - 진입
+  for (const [a, b] of edges) {
+    if (!graph.has(a)) graph.set(a, []);
+    graph.get(a).push(b);
+    diff.set(a, (diff.get(a) || 0) + 1);
+    diff.set(b, (diff.get(b) || 0) - 1);
+  }
+  let start = edges.length > 0 ? edges[0][0] : null;
+  let plus = 0, minus = 0;
+  for (const [node, d] of diff) {
+    if (d === 1) { plus++; start = node; }
+    else if (d === -1) minus++;
+    else if (d !== 0) return null; // 2 이상 어긋나면 불가능
+  }
+  if (plus > 1 || minus > 1 || plus !== minus) return null;
+  if (start === null) return [];
+
+  const stack = [start], route = [];
+  while (stack.length > 0) {
+    const list = graph.get(stack[stack.length - 1]);
+    if (list && list.length > 0) stack.push(list.pop());
+    else route.push(stack.pop());
+  }
+  // 끊어진 덩어리가 있으면 표가 남아 길이가 모자란다
+  return route.length === edges.length + 1 ? route.reverse() : null;
+}
+
+console.log(eulerPath([[5, 1], [4, 5], [11, 9], [9, 4]]));   // 출발점 11
+console.log(eulerPath([[1, 2], [2, 1], [3, 4], [4, 3]]));    // 차수는 맞지만 끊어져 있다
+console.log(eulerPath([[1, 2], [1, 3]]));                    // 1이 진출 +2
+```
+
+```text
+[ 11, 9, 4, 5, 1 ]
+null
+null
+```
+
+두 번째 입력은 모든 노드의 진입과 진출이 같아서 차수 검사를 통과한다. 그래도 1-2 고리와 3-4 고리가 끊어져 있어 표 두 장이 남고, 길이 검사에서 걸린다. 차수 검사만으로는 부족하고 길이 검사가 마지막 안전장치다. 이 함수가 [LeetCode 2097. Valid Arrangement of Pairs](https://leetcode.com/problems/valid-arrangement-of-pairs/)의 뼈대다. 그 문제는 쌍이 10만 개라 재귀 대신 이 스택 버전을 쓴다.
+
+방향이 없는 그래프(양방향 다리)라면 간선 하나가 양쪽 목록에 다 들어간다. 한쪽에서 쓰면 반대쪽 목록에서도 지워야 하는데, 배열 가운데서 찾아 지우면 느리다. 간선마다 번호를 붙여 "썼다" 배열에 표시하고, 목록 끝에서 꺼낼 때 이미 쓴 번호면 그냥 버리면 된다. 존재 조건은 차수가 홀수인 노드가 0개(회로)나 2개(그 둘이 출발점과 도착점)다.
+
+```js
+// 방향이 없는 그래프의 오일러 경로. 간선마다 번호를 붙여 한 번만 쓴다
+function eulerUndirected(n, edges) {
+  const adj = Array.from({ length: n }, () => []);
+  edges.forEach(([a, b], id) => {
+    adj[a].push([b, id]);
+    adj[b].push([a, id]); // 양쪽 목록에 같은 번호로 넣는다
+  });
+  const odd = [];
+  for (let v = 0; v < n; v++) if (adj[v].length % 2 === 1) odd.push(v);
+  if (odd.length !== 0 && odd.length !== 2) return null;
+  const start = odd.length === 2 ? odd[0] : edges[0][0];
+
+  const used = new Array(edges.length).fill(false);
+  const stack = [start], route = [];
+  while (stack.length > 0) {
+    const v = stack[stack.length - 1];
+    // 반대쪽에서 이미 쓴 간선은 목록 끝에서 버린다
+    while (adj[v].length > 0 && used[adj[v][adj[v].length - 1][1]]) adj[v].pop();
+    if (adj[v].length > 0) {
+      const [to, id] = adj[v].pop();
+      used[id] = true;
+      stack.push(to);
+    } else {
+      route.push(stack.pop());
+    }
+  }
+  return route.length === edges.length + 1 ? route.reverse() : null;
+}
+
+// 0-1-2-0 삼각형에 2-3 꼬리: 홀수 차수는 2와 3
+console.log(eulerUndirected(4, [[0, 1], [1, 2], [2, 0], [2, 3]]));
+// 십자 모양: 홀수 차수 노드가 넷이라 불가능
+console.log(eulerUndirected(5, [[0, 1], [0, 2], [0, 3], [0, 4]]));
+```
+
+```text
+[ 2, 0, 1, 2, 3 ]
+null
+```
+
+첫 입력은 삼각형 0-1-2에 2-3 꼬리가 달린 모양이다. 차수가 홀수인 노드가 2와 3이라 2에서 출발해 3에서 끝난다. 둘째 입력은 0번에서 네 갈래로 뻗은 십자 모양이라 홀수 차수 노드가 넷이고, 한 번에 그릴 수 없다.
+
+사전 순이 아니라 아무 일정이나 하나 내라면 정렬이 필요 없어 O(E)다.
+
+비슷한 문제로 비밀번호 자물쇠를 가장 짧은 문자열로 여는 [LeetCode 753. Cracking the Safe](https://leetcode.com/problems/cracking-the-safe/)가 있다. 가능한 모든 n자리 비밀번호를 간선으로 보는 드 브라윈 수열 문제이고, 오일러 회로로 풀린다.
+
+같은 "고급 그래프" 묶음의 다른 글로는 단일 출발 최단 거리를 다룬 [Network Delay Time](/posts/leetcode-network-delay-time), 모든 점을 가장 싸게 잇는 [Min Cost to Connect All Points](/posts/leetcode-min-cost-to-connect-all-points)가 있다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제를 오일러 경로로 보는 이유는
+
+공항을 노드, 표를 간선으로 놓으면 모든 표를 한 번씩 써서 이어지는 일정은 모든 간선을 정확히 한 번씩 지나는 길이다. 그게 오일러 경로의 정의다. 그래서 백트래킹으로 경우를 다 따지지 않고 히어홀처 알고리즘으로 O(E log E)에 찾을 수 있다.
+
+### 이름순으로만 가는 탐욕은 왜 틀리나
+
+이름이 앞선 쪽이 막다른 길이면 표가 남은 채 멈춘다. 예시에서 JFK → BOS → MIA로 가면 표 세 장이 남는다. 막다른 길은 일정의 끝에만 올 수 있는데 탐욕은 그걸 너무 일찍 밟는다.
+
+### 히어홀처는 막다른 길을 어떻게 처리하나
+
+되돌리지 않고 일정의 뒤쪽에 적는다. 공항을 "더 나갈 표가 없을 때" `route`에 넣으니 막다른 갈래가 먼저 적히고, 물러난 공항에서 남은 표로 고리를 돈 다음 그 고리가 앞쪽에 끼워진다. 마지막에 `route`를 뒤집으면 일정이 된다.
+
+### 결과가 사전 순으로 가장 앞서는 이유는
+
+공항마다 가장 작은 행선지부터 간다. 그 길로 끝까지 이어지면 그대로 답이고, 막혔다면 그 갈래는 도착점으로 빠지는 길이라 어떤 일정에서도 마지막에 와야 한다. 그래서 그 갈래를 뒤로 미루고 남은 표로 다시 가장 작은 곳부터 고르면 앞부분이 가장 작게 채워진다.
+
+### 백트래킹의 시간 복잡도는
+
+최악은 지수다. 막다른 길이 일정 깊숙이 있으면 그 앞의 갈림길 조합을 모두 시도하고 나서야 물러난다. 공항 31개, 표 300장짜리 무작위 입력 1,000개 중 6개에서 호출이 200만 번을 넘었고, 그중 하나는 75초 동안 10억 번을 넘겨도 끝나지 않았다. 같은 입력을 히어홀처는 1ms 안에 풀었다.
+
+### 오일러 경로가 있는지 미리 알 수 있나
+
+방향 그래프라면 차수를 센다. 모든 노드의 진입과 진출이 같으면 회로, 출발점이 진출 +1이고 도착점이 진입 +1이며 나머지가 같으면 경로가 있다. 간선이 있는 노드가 모두 이어져 있어야 하는데, 이건 히어홀처를 돌린 뒤 결과 길이가 간선 수 + 1인지로 확인하는 게 간단하다.
+
+### 재귀 깊이가 문제가 되나
+
+재귀 깊이는 최대 간선 수 + 1이다. 표 300장이면 문제없지만, Python은 기본 한도가 1,000이라 표가 그보다 많은 변형에서 멈춘다. 그럴 땐 호출 스택 대신 배열 스택을 쓰는 반복 버전으로 바꾸면 같은 순서로 동작한다.

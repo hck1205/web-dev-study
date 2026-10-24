@@ -1,0 +1,404 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("enterprise-auth-ldap-kerberos");
+
+<EasyIntro>
+  큰 회사에는 직원 명부가 있다. 이름, 부서, 자리 번호, 어떤 문을 열 수 있는지가 한곳에 적혀 있다. 새 직원이 오면 명부에 한 줄 더하고, 나가면 지운다. 사내 프로그램들은 저마다 직원을 기억하지 않고 이 명부에 물어본다.
+
+  명부에 물어볼 때 "이 사람 비밀번호가 맞아?"라고 묻는 방식이 있고, 아예 "출입증을 보여 줘"라고 하는 방식이 있다. 출입증은 경비실에서 한 번 신분을 확인하고 발급해 주는데, 유효 시간이 정해져 있다.
+
+  출입증에는 발급 시각이 찍혀 있어서, 경비실 시계와 건물 시계가 많이 어긋나면 출입증을 거절당한다. 그래서 건물 안 모든 시계를 맞춰 둬야 한다.
+
+  이 글은 회사가 직원 명부와 출입증으로 로그인을 어떻게 처리하는지, 그리고 그 출입증을 훔쳐 쓰는 공격이 왜 무서운지를 이야기한다.
+</EasyIntro>
+
+사내 위키에 "회사 계정으로 로그인"을 붙여 달라는 요청이 왔다. 직원이 쓰는 비밀번호는 이미 어딘가에 있을 테니, 그걸 다시 물어보면 될 것 같았다. 그런데 "어딘가"가 정확히 무엇인지 물어보니 답이 갈렸다. 어떤 팀은 LDAP라 하고, 어떤 팀은 Active Directory라 하고, 네트워크 팀은 와이파이는 RADIUS로 붙는다고 한다. 다 같은 비밀번호인데 프로토콜이 왜 이렇게 많은가.
+
+이 글은 사내 인증에서 자주 만나는 LDAP, Kerberos, RADIUS가 각각 무엇을 하고 어디서 갈리는지, 그리고 이 세계에서 가장 유명한 공격인 pass-the-hash가 왜 통하는지를 본다. 실험은 Ubuntu 24.04에 OpenLDAP(slapd 2.6)와 MIT Kerberos를 띄워 실제 출력으로 확인했다. 웹 서비스가 결국 이것들을 직접 붙지 않고 [SSO](/posts/sso-saml-oidc)로 넘기는 이유도 끝에서 짚는다.
+
+## 명부, 티켓, 중계기로 나뉜다
+
+세 프로토콜은 사실 하는 일이 다르다.
+
+- LDAP는 디렉터리(directory), 즉 조직 명부를 읽고 쓰는 프로토콜이다. "jkim이 누구고 어느 그룹인가"를 묻는다. 인증도 되지만 본업은 조회다
+- Kerberos는 인증 전용이다. 비밀번호를 한 번 확인하고 시간 제한이 있는 티켓을 발급한다. 이후엔 비밀번호 없이 티켓으로 서비스에 붙는다
+- RADIUS는 네트워크 장비(와이파이 AP, VPN 게이트웨이, 스위치)가 "이 사람 들여보내도 되나"를 물을 때 쓰는 중계 프로토콜이다. 뒤에서는 보통 LDAP나 Active Directory에 다시 물어본다
+
+Active Directory(AD)는 이 셋을 묶은 마이크로소프트의 제품이다. 안에 LDAP 서버가 있고 Kerberos KDC가 있다. 그래서 "AD에 붙는다"는 말은 맥락에 따라 LDAP로 조회한다는 뜻이기도, Kerberos로 인증한다는 뜻이기도 하다.
+
+<ConceptDiagram
+  caption="장비는 RADIUS로 묻고, 서비스는 LDAP나 Kerberos로 붙는다"
+  width={420}
+  height={250}
+  nodes={[
+    { id: "dir", label: "Directory", sub: "LDAP / AD", x: 210, y: 125, w: 130, h: 52 },
+    { id: "kdc", label: "KDC", sub: "Kerberos", x: 210, y: 215, w: 110, h: 44 },
+    { id: "wifi", label: "Wi-Fi AP", sub: "RADIUS 클라이언트", x: 70, y: 50, w: 120, h: 44 },
+    { id: "radius", label: "RADIUS 서버", x: 70, y: 150, w: 120, h: 44 },
+    { id: "wiki", label: "사내 위키", x: 350, y: 50, w: 100, h: 44 },
+  ]}
+  edges={[
+    { from: "wifi", to: "radius", label: "접속 요청" },
+    { from: "radius", to: "dir", label: "조회" },
+    { from: "wiki", to: "dir", label: "bind 조회" },
+    { from: "wiki", to: "kdc", label: "티켓 검증", dashed: true },
+  ]}
+/>
+
+## 명부는 나무 모양이다
+
+LDAP의 디렉터리는 트리다. 맨 위에 조직이 있고, 그 아래에 사람·그룹·장비가 가지처럼 달린다. 각 항목은 DN(distinguished name)이라는 전체 경로로 식별된다. 파일의 절대 경로와 같다. 실험용으로 이런 명부를 만들었다.
+
+```text
+dc=example,dc=com            (조직)
+├─ ou=people                 (사람들)
+│  ├─ uid=jkim  (Jiwoo Kim)
+│  └─ uid=hlee  (Hana Lee)
+└─ ou=groups
+   └─ cn=wiki-users          (member: uid=jkim,...)
+```
+
+`jkim`의 DN은 `uid=jkim,ou=people,dc=example,dc=com`이다. 오른쪽이 뿌리고 왼쪽으로 갈수록 구체적이다. 조회는 뿌리(base)와 범위(scope), 필터를 준다.
+
+```bash
+# ou=people 아래에서 uid가 jkim인 항목의 dn과 mail만 가져온다
+ldapsearch -x -H ldap://127.0.0.1 -D cn=admin,dc=example,dc=com -w '비밀번호' \
+  -b ou=people,dc=example,dc=com -LLL "(uid=jkim)" dn mail
+```
+
+```text
+dn: uid=jkim,ou=people,dc=example,dc=com
+mail: jkim@example.com
+```
+
+`-D`와 `-w`는 조회하는 쪽의 신원이다. LDAP에서 "로그인"에 해당하는 동작을 bind라고 부른다. 여기선 서비스 계정으로 bind해서 명부를 읽었다.
+
+## bind로 로그인하면 두 번 물어본다
+
+사내 위키가 LDAP로 로그인을 받는 전형적인 흐름은 두 단계다. 서비스 계정으로 먼저 bind해서 사용자의 DN을 찾고, 그 DN으로 사용자의 비밀번호를 써서 다시 bind한다. 두 번째 bind가 성공하면 비밀번호가 맞은 것이다.
+
+<SequenceDiagram
+  caption="LDAP bind 로그인: 찾기 위한 bind, 확인하기 위한 bind"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "app", label: "위키" },
+    { id: "ldap", label: "LDAP" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "app",
+      label: "id=jkim, pw",
+      title: "아이디와 비밀번호를 보낸다",
+      detail: "사용자는 짧은 아이디(jkim)만 안다. 전체 DN은 모른다.",
+    },
+    {
+      from: "app",
+      to: "ldap",
+      label: "서비스 bind",
+      title: "먼저 서비스 계정으로 붙는다",
+      detail: "앱이 가진 읽기 전용 서비스 계정으로 bind한다. 이 계정 정보는 앱 설정에 들어 있다.",
+    },
+    {
+      from: "app",
+      to: "ldap",
+      label: "search uid=jkim",
+      title: "짧은 아이디로 DN을 찾는다",
+      detail: "필터로 uid=jkim인 항목을 찾아 전체 DN을 얻는다. 결과가 정확히 하나가 아니면 거절한다.",
+      payload: "(&(objectClass=inetOrgPerson)(uid=jkim))",
+    },
+    {
+      from: "app",
+      to: "ldap",
+      label: "사용자 DN + pw로 bind",
+      title: "찾은 DN으로 다시 bind한다",
+      detail: "이번엔 사용자가 준 비밀번호로 bind한다. 이 bind가 비밀번호 검증 그 자체다.",
+    },
+    {
+      from: "ldap",
+      to: "app",
+      label: "성공 / 49",
+      title: "성공하면 로그인, 49면 비밀번호 틀림",
+      detail: "코드 0이면 통과, 49(invalid credentials)면 비밀번호가 틀렸다. 이제 앱은 자기 세션을 만든다.",
+    },
+  ]}
+/>
+
+실제로 `ldapts` 라이브러리로 짜서 돌려 봤다. 결과가 이렇다.
+
+```text
+["jkim","s3cret-pw"] {"ok":true,"dn":"uid=jkim,ou=people,dc=example,dc=com","mail":"jkim@example.com"}
+["jkim","wrong"]     {"ok":false,"reason":"InvalidCredentialsError"}
+["jkim",""]          {"ok":false,"reason":"empty_password"}
+["*","s3cret-pw"]    {"ok":false,"reason":"found_0"}
+["ghost","x"]        {"ok":false,"reason":"found_0"}
+```
+
+맞는 비밀번호는 통과하고 틀린 건 거절됐다. 그런데 세 번째와 네 번째 줄이 이 글의 두 함정이다.
+
+## 빈 비밀번호가 통과하는 함정
+
+LDAP 명세에는 이상한 규칙이 있다. DN은 있는데 비밀번호를 빈 문자열로 bind하면, 이걸 익명 bind(anonymous bind)로 처리한다. "비밀번호 없이 그냥 둘러보기"로 붙는 것이다. 그런데 이 익명 bind는 보통 성공한다.
+
+문제는 순진하게 짠 로그인 코드다. "두 번째 bind가 성공하면 로그인"이라고만 하면, 사용자가 비밀번호를 빈 칸으로 보냈을 때 익명 bind가 성공하면서 비밀번호 없이 로그인되어 버린다. 실제로 서버에 빈 비밀번호 bind를 보내 봤다.
+
+```text
+ldap_bind: Server is unwilling to perform (53)
+	additional info: unauthenticated bind (DN with no password) disallowed
+```
+
+이 OpenLDAP 서버는 기본 설정으로 막아서 53(unwilling to perform)을 돌려줬다. 하지만 모든 서버가 이렇게 막아 두진 않고, 과거 여러 LDAP 라이브러리가 이걸로 뚫렸다. 그래서 로그인 코드는 비밀번호가 비어 있으면 서버에 보내기도 전에 거절해야 한다. 위 실험의 `empty_password`가 그 처리다.
+
+<Callout kind="warning">
+  빈 비밀번호 익명 bind를 성공으로 처리하면 비밀번호 없이 로그인된다. 애플리케이션에서 비밀번호가 빈 문자열이면 LDAP에 보내기 전에 막고, 서버에서도 unauthenticated bind를 거부하도록 설정한다.
+</Callout>
+
+## 아이디 칸에 필터를 끼워 넣기
+
+네 번째 줄에서 아이디를 `*`로 보냈더니 `found_0`, 즉 "맞는 사람 없음"으로 거절됐다. 여기에 LDAP 주입(LDAP injection)이 숨어 있다.
+
+위키가 사용자 입력을 필터에 그대로 이어 붙였다고 하자.
+
+```text
+"(&(objectClass=inetOrgPerson)(uid=" + 입력 + "))"
+```
+
+입력이 `jkim`이면 평범하다. 하지만 입력이 `*`이면 필터가 `(uid=*)`가 되어 모든 사용자에 맞는다. 입력이 `jkim)(uid=admin`처럼 괄호를 품으면 필터 구조 자체가 바뀐다. SQL 주입과 같은 원리다. 서버에 직접 넣어 확인해 봤다. 이스케이프하지 않은 `(uid=*)`는 모든 사용자를 긁어 왔다.
+
+```text
+dn: uid=jkim,ou=people,dc=example,dc=com
+uid: jkim
+dn: uid=hlee,ou=people,dc=example,dc=com
+uid: hlee
+```
+
+막는 법은 입력의 특수 문자를 LDAP 필터 이스케이프 규칙(RFC 4515)대로 바꾸는 것이다. `*`는 `\2a`, `(`는 `\28`, `)`는 `\29`, 역슬래시는 `\5c`, 널은 `\00`이다. 직접 짠 이스케이프 함수를 돌려 봤다.
+
+<CodePlayground
+  caption="LDAP 필터 특수 문자 이스케이프 (RFC 4515)"
+  functionName="escapeFilter"
+  initialCode={`function escapeFilter(value) {
+  // *, (, ), 역슬래시, 널 문자를 \\XX (16진) 형태로 바꾼다
+  return value;
+}`}
+  solution={`function escapeFilter(value) {
+  const special = new Set([0x5c, 0x2a, 0x28, 0x29, 0x00]);
+  let out = "";
+  for (const ch of value) {
+    const code = ch.charCodeAt(0);
+    out += special.has(code)
+      ? String.fromCharCode(92) + code.toString(16).padStart(2, "0")
+      : ch;
+  }
+  return out;
+}`}
+  tests={[
+    { label: "평범한 아이디", args: ["jkim"], expected: "jkim" },
+    { label: "별표", args: ["*"], expected: "\\2a" },
+    { label: "필터 구조 깨기", args: ["jkim)(|(uid=*"], expected: "jkim\\29\\28|\\28uid=\\2a" },
+    { label: "역슬래시", args: ["a\\b"], expected: "a\\5cb" },
+    { label: "괄호 섞인 이름", args: ["Kim (QA)"], expected: "Kim \\28QA\\29" },
+  ]}
+/>
+
+세 번째 테스트가 핵심이다. `)`가 `\29`로, `(`가 `\28`로, `*`가 `\2a`로 바뀌면서 필터를 깨려던 입력이 그냥 "그런 이름의 사용자를 찾는" 평범한 검색이 됐다. 대부분의 LDAP 라이브러리가 이 이스케이프를 제공하니 필터를 직접 문자열로 잇지 말고 그 함수를 쓴다.
+
+## 명부를 평문으로 주고받으면
+
+LDAP의 bind는 기본이 평문이다. 비밀번호가 네트워크를 그대로 흐른다. 실험 서버로 bind하면서 루프백을 tcpdump로 떠 봤더니 비밀번호가 그대로 보였다.
+
+```text
+19:31:33 IP 127.0.0.1.49504 > 127.0.0.1.389: Flags [P.], length 59
+...09...`4....$uid=jkim,ou=people,dc=example,dc=com.	s3cret-pw
+```
+
+`s3cret-pw`가 패킷에 평문으로 찍혀 있다. 그래서 암호화가 필수다. 두 가지 방법이 있다.
+
+- LDAPS: 처음부터 TLS로 감싼 포트(636)로 붙는다. HTTPS가 443인 것과 같은 꼴이다
+- StartTLS: 평문 포트(389)로 붙은 뒤 "지금부터 TLS로 바꾸자"고 협상한다. HTTP에서 쓰던 방식과 비슷하다
+
+실험 서버에 자체 서명 인증서로 TLS를 켜고 StartTLS로 다시 bind해 봤다. CA 인증서 없이 붙으면 거절됐고, CA를 신뢰하게 하니 통과했다.
+
+```text
+== CA 없이 StartTLS
+ldap_start_tls: Connect error (-11)
+== CA를 신뢰하게 한 뒤
+dn:uid=jkim,ou=people,dc=example,dc=com
+```
+
+여기서 흔한 실수가 인증서 검증을 끄는 것이다. "연결이 안 돼요"를 해결한다고 검증을 꺼 버리면 중간자가 가짜 LDAP 서버로 비밀번호를 가로챌 수 있다. [HTTPS와 TLS](/posts/https-tls)에서 다룬 인증서 검증의 중요성이 여기서도 똑같다.
+
+## 비밀번호를 한 번만 보내는 방식
+
+LDAP bind는 서비스에 붙을 때마다 비밀번호를 보낸다. 서비스가 열 개면 비밀번호가 열 곳을 지난다. Kerberos는 이걸 다르게 푼다. 비밀번호는 로그인 때 KDC(key distribution center)에 한 번만 쓰고, 그 뒤엔 티켓으로 서비스에 붙는다.
+
+흐름은 세 단계다. 비밀번호로 TGT(ticket-granting ticket)를 받고, TGT로 특정 서비스의 티켓을 받고, 그 티켓을 서비스에 낸다.
+
+<SequenceDiagram
+  caption="Kerberos: 비밀번호는 KDC에 한 번, 이후는 티켓으로"
+  actors={[
+    { id: "user", label: "직원 PC" },
+    { id: "as", label: "KDC(AS)" },
+    { id: "tgs", label: "KDC(TGS)" },
+    { id: "svc", label: "위키 서버" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "as",
+      label: "AS-REQ",
+      title: "로그인: 비밀번호로 TGT를 요청한다",
+      detail: "PC는 비밀번호에서 만든 키로 현재 시각을 암호화해 보낸다(선인증). KDC는 그 사용자의 키로 풀어 보고 시각이 맞으면 진짜 사용자로 본다.",
+    },
+    {
+      from: "as",
+      to: "user",
+      label: "TGT",
+      title: "출입증에 해당하는 TGT를 받는다",
+      detail: "TGT는 KDC만 열 수 있게 암호화돼 있다. PC는 내용을 못 읽고 그냥 보관한다. 유효 시간이 박혀 있다(실험에선 10시간).",
+    },
+    {
+      from: "user",
+      to: "tgs",
+      label: "TGS-REQ + TGT",
+      title: "위키에 붙기 전, 위키용 티켓을 받는다",
+      detail: "TGT를 제시하며 HTTP/wiki.example.com 서비스의 티켓을 요청한다. 여기서 비밀번호는 쓰지 않는다.",
+    },
+    {
+      from: "tgs",
+      to: "user",
+      label: "서비스 티켓",
+      title: "위키만 열 수 있는 티켓을 받는다",
+      detail: "이 티켓은 위키 서버의 키로 암호화돼 있다. 그래서 위키만 내용을 확인할 수 있다.",
+    },
+    {
+      from: "user",
+      to: "svc",
+      label: "서비스 티켓 제시",
+      title: "위키에 티켓을 낸다",
+      detail: "위키는 자기 키로 티켓을 풀어 사용자 신원과 시각을 확인한다. KDC에 다시 물어볼 필요가 없다.",
+    },
+  ]}
+/>
+
+실험에서 `jkim`으로 로그인하고 위키 서비스 티켓을 받아 봤다.
+
+```bash
+echo '비밀번호' | kinit jkim   # TGT 발급
+kvno HTTP/wiki.example.com    # 서비스 티켓 발급
+klist                         # 받은 티켓 목록
+```
+
+```text
+Valid starting     Expires            Service principal
+10/23/26 19:30:17  10/24/26 05:30:17  krbtgt/EXAMPLE.COM@EXAMPLE.COM
+10/23/26 19:30:17  10/24/26 05:30:17  HTTP/wiki.example.com@EXAMPLE.COM
+```
+
+위에 TGT(`krbtgt/...`)와 위키 서비스 티켓이 함께 있다. 둘 다 만료 시각이 박혀 있다. 틀린 비밀번호와 없는 사용자는 이렇게 구분됐다.
+
+```text
+kinit: Password incorrect while getting initial credentials
+kinit: Client 'ghost@EXAMPLE.COM' not found in Kerberos database
+```
+
+웹의 쿠키·토큰 로그인과 닮았다. [세션 쿠키](/posts/cookie-session-login)나 [액세스 토큰](/posts/token-login)도 로그인 한 번 뒤엔 그 증표로 다닌다. 차이는 Kerberos 티켓이 대칭키 암호로 서버별로 봉인돼 있어, 받는 쪽이 자기 키로만 열 수 있다는 점이다.
+
+## 시계가 어긋나면 로그인이 안 된다
+
+Kerberos의 유명한 약점이 시계 민감성이다. AS-REQ에서 PC는 현재 시각을 암호화해 보내고, KDC는 그 시각이 자기 시계와 너무 벌어지면 재전송 공격으로 보고 거절한다. 기본 허용 오차는 5분이다.
+
+이걸 재현하려고 PC 시각을 10분 앞으로 당겨 kinit을 해 봤다. 그냥은 성공했는데, 알고 보니 MIT 클라이언트가 KDC와 시각 차이를 자동 보정(`kdc_timesync`)하고 있었다. 그 보정을 끄고 다시 하니 바로 실패했다.
+
+```text
+kinit: Clock skew too great while getting initial credentials
+```
+
+서비스 티켓을 받으려 할 때도 같다.
+
+```text
+kvno: Clock skew too great while getting credentials for HTTP/wiki.example.com
+```
+
+그래서 Kerberos를 쓰는 환경은 NTP로 모든 장비의 시계를 맞춘다. AD 도메인은 도메인 컨트롤러를 시간 기준으로 삼아 이걸 자동으로 한다. 현장에서 "어제까진 되던 로그인이 한 서버에서만 안 된다"면 그 서버의 시계부터 본다. [시계 어긋남](/posts/clock-skew)이 토큰 만료에서도 같은 증상을 내는 것과 닮았다.
+
+티켓 만료도 알아 둔다. TGT가 만료되면 다시 로그인하거나 갱신(renew)해야 하는데, 갱신도 시각이 맞아야 한다. 실험에서 시각을 11시간 앞으로 당기니 만료된 티켓으로는 새 서비스 티켓을 못 받았고 갱신도 시계 오류로 막혔다.
+
+```text
+kvno: Ticket expired while getting credentials for HTTP/other.example.com
+kinit: Clock skew too great while renewing credentials
+```
+
+## 와이파이와 VPN은 왜 RADIUS인가
+
+사내 와이파이에 회사 계정으로 붙어 본 적이 있다면 그게 보통 RADIUS다. 와이파이 AP나 VPN 게이트웨이는 사용자 명부를 직접 들고 있지 않다. 대신 접속 요청이 오면 RADIUS 서버에 "이 사람 통과시켜도 되나"를 묻고, RADIUS 서버가 뒤의 LDAP나 AD에 다시 확인해 답을 준다.
+
+RADIUS를 중간에 두는 이유가 몇 가지다.
+
+- 장비는 종류가 제각각이다. AP, 스위치, VPN이 모두 같은 RADIUS 말로 물으면 인증 정책을 한곳에서 관리한다
+- 접속 허용뿐 아니라 어떤 VLAN에 넣을지, 얼마나 썼는지(과금)까지 함께 돌려줄 수 있다. 그래서 RADIUS를 AAA(authentication, authorization, accounting)라고 부른다
+- 802.1X라는 포트 접근 제어 표준이 RADIUS를 뒤에 두도록 설계돼 있다
+
+주의할 점은 전통적 RADIUS가 UDP 위에서 돌고, 비밀번호 보호가 약하다는 것이다. 그래서 보통 RadSec(TLS 위의 RADIUS)이나 터널(EAP-TTLS, PEAP) 안에서 자격 증명을 주고받는다. 이 글의 실험 범위를 넘어서, RADIUS는 형식과 역할만 짚고 넘어간다.
+
+## 로컬 계정 공유와 pass-the-hash
+
+이제 이 세계에서 가장 유명한 공격이다. 윈도우는 비밀번호를 그대로 저장하지 않고 NT 해시(MD4로 한 번 해친 값)로 저장한다. 그런데 NTLM 인증에서는 이 해시 자체가 로그인에 쓰인다. 서버는 "원래 비밀번호"가 아니라 "비밀번호의 해시"를 알면 인증을 통과시킨다.
+
+이게 무슨 문제인지 NT 해시를 직접 계산해 보면 분명해진다. 비밀번호를 UTF-16LE로 바꿔 MD4를 돌린 것이다.
+
+```text
+Password1    64f12cddaa88057e06a81b54e73b949b
+password     8846f7eaee8fb117ad06bdd830b7586c
+Summer2026!  41aed72cec76816423703d8e545eea31
+```
+
+`password`의 해시 `8846f7ea...`는 유명해서 검색만 해도 나온다. 그런데 공격자가 노리는 건 원문 복원이 아니다. pass-the-hash는 해시를 깨지 않고 그대로 들고 다른 서버에 NTLM 인증을 한다. 서버 입장에선 올바른 해시를 제시했으니 로그인시킨다. 비밀번호가 아무리 길고 복잡해도, 해시만 손에 넣으면 소용없다.
+
+해시는 어디서 나오나. 관리자 권한으로 장악한 PC의 메모리(LSASS 프로세스)에 로그인한 사용자들의 해시가 남아 있다. 공격자는 PC 하나를 뚫은 뒤 거기 있던 다른 사용자, 특히 관리자의 해시를 꺼내 옆 서버로, 또 옆 서버로 번져 나간다. 이걸 수평 이동(lateral movement)이라고 부른다.
+
+여기에 기름을 붓는 게 로컬 계정 공유다. 회사가 모든 PC의 로컬 관리자 비밀번호를 똑같이 쓰면, 그 로컬 관리자의 NT 해시도 모든 PC에서 같다. PC 하나에서 꺼낸 해시로 수천 대에 그대로 붙는다. 마이크로소프트의 LAPS가 PC마다 로컬 관리자 비밀번호를 다르게 자동 관리하도록 나온 이유가 이것이다.
+
+<Callout kind="warning">
+  pass-the-hash는 비밀번호를 길게 만드는 것으로 막을 수 없다. 해시 자체가 자격 증명이기 때문이다. 막는 쪽은 관리자 계정을 아무 PC에나 로그인시키지 않기(권한 분리), PC마다 로컬 관리자 비밀번호를 다르게 두기(LAPS), 그리고 NTLM 대신 Kerberos를 쓰도록 좁히는 것이다.
+</Callout>
+
+Kerberos도 비슷한 공격(pass-the-ticket, 훔친 티켓 재사용)이 있지만, 티켓에 만료 시각이 박혀 있어 창이 좁다. 반면 NT 해시는 비밀번호를 바꾸기 전까지 유효하다. 그래서 보안 가이드가 레거시 NTLM을 끄라고 권하는 것이다.
+
+## 그래서 웹 서비스는 IdP에 맡긴다
+
+여기까지 보면 사내 서비스에 LDAP나 Kerberos를 직접 붙이고 싶지 않아진다. bind 로그인은 빈 비밀번호와 주입을 매번 조심해야 하고, 평문을 막으려 TLS를 붙여야 하고, Kerberos는 시계와 티켓 수명을 관리해야 한다. 서비스가 열 개면 이 걱정도 열 번이다.
+
+그래서 요즘 사내 웹 서비스는 보통 이것들을 직접 붙지 않는다. 디렉터리와 Kerberos는 IdP(identity provider) 한 곳이 맡고, 각 서비스는 [SAML이나 OIDC로 IdP에 로그인을 위임](/posts/sso-saml-oidc)한다. IdP가 뒤에서 AD에 붙어 있고, 직원은 IdP에 한 번 로그인하면 여러 서비스에 들어간다. 비밀번호 검증, MFA, 계정 비활성화가 한곳에 모인다. 이게 사내 인증의 복잡함을 서비스마다 반복하지 않는 방법이고, 더 나아가 요청마다 신원을 확인하는 [제로 트러스트](/posts/zero-trust-architecture)의 바탕이 된다.
+
+정리하면, LDAP·Kerberos·RADIUS는 지금도 디렉터리와 장비 인증의 밑바탕이지만, 웹 서비스가 직접 만지는 층이 아니라 IdP 뒤에 있는 층이다. 사내에 로그인을 붙일 때 가장 먼저 물을 것은 "우리 IdP가 무엇이고, 거기에 OIDC로 붙을 수 있나"다.
+
+## 면접에서 나올 만한 질문
+
+### LDAP와 Kerberos는 무엇이 다른가
+
+LDAP는 조직 명부를 조회하는 프로토콜이고 인증은 bind라는 부가 기능이다. 서비스에 붙을 때마다 비밀번호를 LDAP 서버에 보낸다. Kerberos는 인증 전용이고, 비밀번호는 로그인 때 KDC에 한 번만 쓴 뒤 시간 제한이 있는 티켓으로 서비스에 붙는다. LDAP는 "이 사람 누구인가"를 묻기에 좋고, Kerberos는 "비밀번호를 여러 서비스에 흘리지 않고 인증"하기에 좋다. Active Directory는 둘을 함께 제공한다.
+
+### LDAP bind로 로그인할 때 빈 비밀번호가 왜 위험한가
+
+LDAP 명세상 DN은 있는데 비밀번호가 빈 문자열이면 익명 bind로 처리되고, 익명 bind는 보통 성공한다. 로그인 코드가 "bind 성공이면 통과"라고만 하면, 비밀번호 없이 로그인된다. 그래서 애플리케이션에서 비밀번호가 비어 있으면 서버에 보내기 전에 막고, 서버에서도 unauthenticated bind를 거부하도록 설정한다.
+
+### LDAP 주입은 어떻게 막나
+
+사용자 입력을 필터 문자열에 그대로 이어 붙이면, `*`나 괄호로 필터 구조를 바꿀 수 있다. `*`는 모든 사용자에 맞고, `)(`는 조건을 덧붙인다. 막는 법은 RFC 4515 이스케이프로 `*`를 `\2a`, `(`를 `\28`처럼 바꾸는 것이다. 대부분의 LDAP 라이브러리가 이 함수를 제공하니 필터를 직접 문자열로 잇지 않는다.
+
+### Kerberos가 시계 어긋남에 민감한 이유는
+
+인증 요청에 현재 시각이 암호화돼 들어가고, KDC는 그 시각이 자기 시계와 기본 5분 넘게 벌어지면 재전송 공격으로 보고 거절한다. 그래서 KDC, 클라이언트, 서비스의 시계가 맞아야 한다. 한 서버에서만 로그인이 안 되면 그 서버 시계를 의심한다. AD 도메인은 도메인 컨트롤러를 시간 기준으로 삼아 NTP로 맞춘다.
+
+### pass-the-hash가 무엇이고 긴 비밀번호로 막히지 않는 이유는
+
+윈도우 NTLM 인증은 비밀번호의 NT 해시 자체를 자격 증명으로 쓴다. 공격자가 장악한 PC 메모리에서 다른 사용자의 해시를 꺼내면, 해시를 깨지 않고 그대로 다른 서버에 인증한다. 서버는 올바른 해시를 봤으니 통과시킨다. 비밀번호 길이는 해시 복원을 어렵게 할 뿐, 해시가 이미 손에 있으면 의미가 없다. 막는 쪽은 권한 분리, PC별 로컬 관리자 비밀번호 분리(LAPS), NTLM 대신 Kerberos다.
+
+### 로컬 관리자 비밀번호를 모든 PC에서 같게 두면 왜 위험한가
+
+로컬 관리자의 NT 해시도 모든 PC에서 같아진다. 그러면 PC 하나를 뚫어 그 해시를 꺼내는 순간, pass-the-hash로 같은 로컬 관리자를 가진 모든 PC에 수평 이동할 수 있다. LAPS는 PC마다 로컬 관리자 비밀번호를 다르게 자동 관리해 이 연쇄를 끊는다.
+
+### 사내 웹 서비스에 로그인을 붙일 때 LDAP를 직접 쓰지 않고 IdP에 맡기는 이유는
+
+LDAP bind를 직접 붙이면 빈 비밀번호, 주입, 평문 방지, 인증서 검증을 서비스마다 반복해야 하고, Kerberos는 시계와 티켓 수명까지 관리해야 한다. IdP 한 곳이 디렉터리와 Kerberos를 맡고 서비스는 SAML이나 OIDC로 위임하면, 비밀번호 검증과 MFA, 계정 비활성화가 한곳에 모이고 서비스는 표준 토큰만 검증한다. 유지 비용과 공격면이 모두 줄어든다.

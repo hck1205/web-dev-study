@@ -91,4 +91,19 @@ export const GIT_BRANCH_MERGE: QuizQuestion[] = [
       "--first-parent는 병합 커밋의 첫 번째 부모, 즉 병합할 때 서 있던 main 쪽만 따라간다. 그래서 기능 브랜치 안의 자잘한 커밋은 빠지고 PR 병합 커밋과 main에 직접 한 커밋만 남는다. --merge는 충돌 중에 충돌 파일을 건드린 커밋을 보는 옵션이다.",
     anchor: "현장에서-병합-히스토리를-읽는-순간",
   },
+  {
+    id: "git-branch-merge-7",
+    post: "git-branch-merge",
+    question: "main에서 git merge -s ours feature/limit을 실행했다. feature/limit이 새로 만든 coupon.js는 어떻게 되나?",
+    choices: [
+      "충돌이 없으니 main에 그대로 들어온다",
+      "들어오지 않는다. 트리는 main 그대로이고 병합 커밋만 생긴다",
+      "충돌로 표시되어 손으로 골라야 한다",
+      "병합이 거부되고 -X ours를 쓰라는 안내가 나온다",
+    ],
+    answer: 1,
+    explanation:
+      "-s ours는 전략 자체를 바꿔서 저쪽 브랜치의 내용을 전혀 보지 않고 부모만 둘인 병합 커밋을 만든다. 충돌 없는 변경까지 받고 충돌한 덩어리만 우리 쪽으로 고르는 건 ort에 주는 옵션인 -X ours다.",
+    anchor: "ours가-두-개라서-헷갈리는-병합-전략",
+  },
 ];

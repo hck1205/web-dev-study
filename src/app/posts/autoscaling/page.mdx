@@ -323,6 +323,22 @@ aws autoscaling describe-scaling-activities --auto-scaling-group-name web-asg --
 
 최소 대수가 너무 작은 경우다. 가용 영역 하나가 통째로 빠지면 남은 영역이 그 몫을 즉시 받아야 한다. 오토스케일링이 반응하는 몇 분 동안 버틸 수 있도록, 최소 대수는 "영역 하나가 빠져도 남은 대수로 평소 부하를 받는다"를 기준으로 잡는다.
 
+계정 한도에 막히는 경우다. 정책은 원하는 대수를 9로 올렸는데 실제 대수는 5에서 멈춰 있고, 앱 쪽에는 아무 에러도 없다. AWS는 리전마다 계정이 동시에 띄울 수 있는 온디맨드 vCPU 수에 한도(quota)를 둔다. 표준 패밀리(A, C, D, H, I, M, R, T, Z)를 다 합친 한도라서, 다른 팀의 그룹이 먼저 자리를 차지하고 있으면 내 그룹의 최대 대수가 넉넉해도 늘어나지 못한다. 새로 만든 계정은 이 값이 낮다. 이때 활동 기록의 `StatusCode`가 `Failed`로 남고 `StatusMessage`에 vCPU 한도를 넘었다는 문장(`VcpuLimitExceeded`)이 찍힌다. 비슷해 보이는 `InsufficientInstanceCapacity`는 한도가 아니라 그 AZ에 그 타입의 물리 용량이 모자란 것이라, 한도를 올려도 소용없고 다른 타입이나 다른 AZ를 섞어야 한다.
+
+vCPU만 한도가 있는 게 아니다. 스팟 vCPU, 탄력적 IP, Lambda 동시 실행(리전 기본 1,000), Fargate vCPU, 로드 밸런서당 대상 수에도 각각 한도가 있다. 서브넷의 남은 IP 주소도 비슷하게 작용한다. 쿠버네티스 노드는 Pod마다 VPC IP를 쓰니, 작은 서브넷에서는 노드는 떴는데 Pod가 IP를 못 받아 멈춘다.
+
+이런 실패는 조용하다. 그래서 장애가 나기 전에 세 가지를 해 둔다.
+
+```bash
+# 지금 리전의 표준 온디맨드 vCPU 한도를 본다
+aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A
+# 미리 올려 달라고 요청한다. 승인까지 몇 분에서 며칠이 걸린다
+aws service-quotas request-service-quota-increase \
+  --service-code ec2 --quota-code L-1216C47A --desired-value 512
+```
+
+먼저 필요한 한도를 계산해서 미리 올린다. 이 계정의 모든 그룹이 동시에 최대 대수까지 늘었을 때의 vCPU 합에, 배포 중 잠시 두 벌이 뜨는 몫과 AZ 하나가 빠졌을 때 남은 쪽이 받을 몫을 더한다. 다음으로 사용량에 경보를 건다. CloudWatch의 `AWS/Usage` 네임스페이스에 vCPU 사용량 지표(`ResourceCount`, `Resource=vCPU`)가 있고, 지표 수식의 `SERVICE_QUOTA()` 함수로 "한도 대비 사용률"을 만들어 80%를 넘으면 울리게 한다. 마지막으로 실패 자체를 알림으로 받는다. Auto Scaling 그룹은 시작에 실패할 때마다 EventBridge에 `EC2 Instance Launch Unsuccessful` 이벤트를 보내니, 이걸 온콜 채널로 보내 두면 "원하는 대수와 실제 대수가 다르다"를 그래프보다 먼저 안다.
+
 ## 정책보다 반응 시간
 
 오토스케일링은 지표를 보고 대수를 바꾸는 단순한 고리다. 어려운 건 그 고리가 도는 데 걸리는 시간이다. 반응 시간이 길면 반응형 정책은 늘 늦고, 그 공백은 여유분(낮은 목표값), 예약과 예측, 웜 풀로 메운다. 지표는 서버를 늘리면 내려가는 것을 고르고, 줄이는 쪽은 쿨다운과 안정화 창으로 천천히 한다. 그리고 최대 대수와 뒤쪽 병목을 함께 본다.
@@ -356,3 +372,7 @@ aws autoscaling describe-scaling-activities --auto-scaling-group-name web-asg --
 ### 쿠버네티스에서 HPA만으로 충분하지 않은 이유는요?
 
 HPA는 Pod 수만 늘리고 노드는 늘리지 않는다. 노드에 자리가 없으면 Pod가 Pending으로 남고, 노드 오토스케일러가 새 노드를 띄울 때까지 기다려야 한다. 그래서 Cluster Autoscaler나 Karpenter를 함께 쓰고, 급한 서비스는 낮은 우선순위의 자리 맡기 Pod로 노드 여유분을 미리 둔다.
+
+### 오토스케일링 정책은 늘리라고 했는데 인스턴스가 늘지 않습니다. 무엇을 보나요?
+
+활동 기록(`describe-scaling-activities`)에서 실패한 활동의 메시지를 먼저 본다. vCPU 한도 초과면 계정의 서비스 할당량에 막힌 것이라 Service Quotas에서 한도를 올려야 하고, `InsufficientInstanceCapacity`면 그 AZ의 물리 용량 문제라 인스턴스 타입과 AZ를 늘려 섞는다. 한도는 다른 그룹과 함께 쓰는 리전 단위 값이라 미리 계산해 올려 두고, `AWS/Usage` 지표와 `SERVICE_QUOTA()`로 사용률 경보를, `EC2 Instance Launch Unsuccessful` 이벤트로 실패 알림을 걸어 둔다.

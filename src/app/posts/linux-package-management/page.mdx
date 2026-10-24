@@ -1,0 +1,392 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-package-management");
+
+<EasyIntro>
+  리눅스 서버에 프로그램을 깔 때는 인터넷에서 아무 파일이나 받지 않고, 정해진 가게에서 물건을 산다. 이 가게를 저장소라고 하고, 가게에서 물건을 골라 계산해 주는 점원이 패키지 관리자다.
+
+  점원은 물건을 건네기 전에 상자에 붙은 도장을 확인한다. 도장이 가게 주인 것이 아니면 물건을 건네지 않는다. 누가 중간에 상자를 바꿔치기해도 들키는 이유다.
+
+  점원은 한 물건을 쓰려면 다른 물건도 필요하다는 것까지 알아서 챙겨 준다. 그런데 "새로 나온 것으로 다 바꿔 주세요"라고 하면 정말 다 바꿔 버린다. 데이터베이스처럼 함부로 바꾸면 안 되는 것도 예외가 없다.
+
+  그래서 바꾸면 안 되는 물건에는 "이건 그대로 두세요"라는 쪽지를 붙인다. 이 글은 가게와 도장, 점원이 일하는 순서, 그리고 그 쪽지를 붙이는 법을 다룬다.
+</EasyIntro>
+
+운영 DB 서버에 접속해 보안 패치를 한다며 `sudo apt upgrade -y`를 친다. 목록이 길게 지나가고 끝났다. 몇 초 뒤 애플리케이션 쪽에서 DB 연결 오류 알림이 몰려온다. 업그레이드 목록에 `postgresql-16`이 섞여 있었고, 패키지 설치 스크립트가 새 바이너리로 서버를 다시 띄운 것이다. 연결은 전부 끊겼고 마이너 버전은 한 단계 올라가 있다.
+
+`apt upgrade`는 시킨 일을 했다. 문제는 "무엇이 올라갈지"를 보지 않고 쳤다는 것, 그리고 올라가면 안 되는 패키지를 묶어 두지 않았다는 것이다. 이 글은 패키지 관리자가 어떤 계층으로 나뉘는지, 저장소와 서명이 무엇을 지켜 주는지, 버전을 어떻게 묶는지를 본다. 기준은 Ubuntu 24.04(apt 2.8)이고 22.04도 명령은 같다. RHEL 계열(dnf)과 SUSE(zypper)는 차이만 덧붙인다. 출력은 모두 이 글을 쓴 24.04 머신에서 돌린 것이다.
+
+## 패키지 관리자는 두 층이다
+
+`.deb` 파일 하나를 풀어 정해진 자리에 놓고 설치 스크립트를 돌리는 일은 `dpkg`가 한다. `dpkg`는 의존성을 확인은 하지만 모자란 것을 찾아오지는 않는다. 어디서 받을지, 무엇이 더 필요한지, 어떤 순서로 깔지 정하는 일은 그 위의 `apt`가 맡는다. RHEL 계열도 똑같이 `rpm`(낮은 층)과 `dnf`(높은 층, 예전 이름 `yum`)로 나뉜다.
+
+이 구분은 질문을 어디에 던질지 정해 준다. "이 파일은 어느 패키지가 깔았나", "이 패키지는 무엇을 깔았나"는 이미 설치된 것에 대한 질문이라 `dpkg`가 답한다.
+
+```bash
+# 이 파일을 깐 패키지 찾기
+dpkg -S /usr/bin/rsync
+# 패키지가 깐 파일 목록 (앞 5줄)
+dpkg -L rsync | head -5
+# 설치 상태와 버전 한 줄씩
+dpkg -l rsync curl | tail -2
+```
+
+```text
+rsync: /usr/bin/rsync
+/.
+/etc
+/etc/default
+/etc/default/rsync
+/etc/init.d
+ii  curl           8.5.0-2ubuntu10.15 amd64        command line tool for transferring data with URL syntax
+ii  rsync          3.2.7-1ubuntu1.5   amd64        fast, versatile, remote (and local) file-copying tool
+```
+
+`dpkg -l`의 맨 앞 두 글자가 상태다. `ii`는 "설치하라고 했고(i) 설치되어 있다(i)"는 뜻이다. `rc`는 지웠지만 설정 파일이 남은 상태라 `apt purge`로 마저 지울 수 있다. `iU`나 `iF`가 보이면 설치가 중간에 멈춘 것이니 `sudo dpkg --configure -a`로 마무리한다.
+
+"어떤 버전이 어디서 올 수 있나", "무엇에 의존하나"는 저장소까지 봐야 하는 질문이라 `apt` 쪽 도구가 답한다.
+
+```bash
+# 설치된 버전, 후보 버전, 그리고 각 버전을 주는 저장소
+apt-cache policy postgresql-16
+```
+
+```text
+postgresql-16:
+  Installed: 16.15-0ubuntu0.24.04.1
+  Candidate: 16.15-0ubuntu0.24.04.1
+  Version table:
+ *** 16.15-0ubuntu0.24.04.1 500
+        500 http://archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages
+        500 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages
+        100 /var/lib/dpkg/status
+     16.2-1ubuntu4 500
+        500 http://archive.ubuntu.com/ubuntu noble/main amd64 Packages
+```
+
+이 표를 읽을 줄 알면 업그레이드 사고 대부분을 미리 막는다. `Installed`가 지금 깔린 것, `Candidate`가 `apt upgrade`를 치면 갈 버전이다. 같은 패키지가 `noble`(출시 때 그대로, 16.2)과 `noble-updates`·`noble-security`(이후 패치, 16.15) 두 곳에 있다. 버전 옆의 500은 우선순위다. 우선순위가 같으면 버전이 높은 쪽이 후보가 된다. `***`가 붙은 줄이 설치된 버전이고, 100짜리 `/var/lib/dpkg/status`는 "지금 깔려 있는 것"을 뜻하는 가짜 저장소다.
+
+## 저장소 한 줄을 읽는다
+
+apt가 어디서 받을지는 `/etc/apt/sources.list.d/` 아래 파일이 정한다. Ubuntu 24.04부터 기본 저장소는 한 줄짜리 `sources.list`가 아니라 여러 줄짜리 deb822 형식(`ubuntu.sources`)으로 바뀌었다. 22.04는 아직 `/etc/apt/sources.list`에 한 줄 형식으로 있다.
+
+```bash
+cat /etc/apt/sources.list.d/ubuntu.sources | grep -v '^#'
+cat /etc/apt/sources.list.d/docker.list
+```
+
+```text
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.ubuntu.com/ubuntu/
+Suites: noble-security
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu   noble stable
+```
+
+아래 그림은 Docker 저장소의 한 줄 형식을 조각으로 나눈 것이다. 조각을 눌러 보면 deb822 형식의 어느 칸에 해당하는지도 함께 적어 두었다.
+
+<UrlAnatomy
+  caption="sources.list 한 줄: 무엇을, 어디서, 누구의 서명으로 받나"
+  base="deb"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "opts", display: "[arch=amd64 signed-by=/etc/apt/keyrings/docker.asc]", title: "옵션: 이 저장소를 믿는 열쇠", description: "signed-by는 이 저장소의 서명을 확인할 공개 키 파일을 못박는다. 이 키는 이 저장소에만 쓰인다. deb822 형식에서는 Signed-By 칸이다. arch는 받을 아키텍처를 줄인다.", required: true },
+    { key: "uri", display: "https://download.docker.com/linux/ubuntu", title: "저장소 주소", description: "deb822의 URIs. HTTPS가 아니어도(Ubuntu 기본 저장소는 http다) 안전한 이유는 내용 전체가 서명으로 확인되기 때문이다. HTTPS는 무엇을 받는지 숨기는 정도를 더한다.", required: true },
+    { key: "suite", display: "noble", title: "배포판 코드네임 (suite)", description: "deb822의 Suites. 24.04는 noble, 22.04는 jammy. 서버를 업그레이드한 뒤 서드파티 저장소의 코드네임이 옛것으로 남아 있으면 맞지 않는 패키지를 받는다.", required: true },
+    { key: "component", display: "stable", title: "구성 요소 (component)", description: "deb822의 Components. Ubuntu는 main(공식 지원), universe(커뮤니티), restricted, multiverse로 나뉜다. Docker는 stable, test 같은 채널 이름을 쓴다." },
+  ]}
+/>
+
+예전에는 `apt-key add`로 키를 시스템 전체 키링에 넣었다. 그러면 그 키가 모든 저장소에 대해 유효해서, 서드파티 저장소 하나의 키가 새면 Ubuntu 공식 패키지인 척하는 패키지까지 통과했다. 그래서 `apt-key`는 폐기 예정이 되었고(24.04에서도 실행하면 `Warning: apt-key is deprecated`가 먼저 찍힌다), 지금은 키를 `/etc/apt/keyrings/`에 두고 저장소마다 `signed-by`로 묶는다.
+
+```bash
+# Docker 공식 문서가 안내하는 방식: 키를 따로 받아 그 저장소에만 쓴다
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+# 받은 키의 지문을 공식 문서에 적힌 값과 맞춰 본다
+gpg --show-keys /etc/apt/keyrings/docker.asc | head -4
+```
+
+```text
+pub   rsa4096 2017-02-22 [SCEA]
+      9DC858229FC7DD38854AE2D88D81803C0EBFCD88
+uid                      Docker Release (CE deb) <docker@docker.com>
+sub   rsa4096 2017-02-22 [S]
+```
+
+## 서명이 지키는 것과 apt install이 하는 일
+
+apt는 `.deb` 파일 하나하나에 서명을 확인하지 않는다. 저장소 꼭대기의 `InRelease` 파일 하나만 서명되어 있고, 그 안에 패키지 목록(`Packages`)의 해시가 들어 있다. 목록에는 다시 각 `.deb`의 SHA256이 들어 있다. 서명 하나에서 해시 사슬을 따라 내려가며 모든 파일을 확인하는 구조다. 서명과 해시가 어떻게 위조를 막는지는 [전자 서명과 인증서](/posts/digital-signatures-certificates) 글에 있다.
+
+아래 그림에서 단계를 넘기면 `sudo apt install rsync` 한 번에 무엇이 오가는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="apt install: 서명 하나에서 해시 사슬을 따라 내려가 설치까지"
+  actors={[
+    { id: "apt", label: "apt" },
+    { id: "repo", label: "저장소" },
+    { id: "dpkg", label: "dpkg" },
+  ]}
+  steps={[
+    { from: "apt", to: "repo", label: "GET InRelease", title: "목록의 목록을 받는다", detail: "apt update가 하는 일이다. InRelease에는 Packages 파일들의 해시와, 그 전체에 대한 서명이 들어 있다." },
+    { from: "apt", to: "apt", label: "signed-by 키로 검증", title: "서명을 확인한다", detail: "그 저장소에 묶인 키로만 확인한다. 실패하면 이 저장소는 갱신하지 않고 옛 목록을 쓴다.", payload: "NO_PUBKEY 7EA0A9C3F273FCD8" },
+    { from: "repo", to: "apt", label: "Packages", title: "패키지 목록을 받는다", detail: "InRelease에 적힌 해시와 맞는지 본다. 목록에는 패키지마다 버전, 의존성, .deb의 SHA256이 있다." },
+    { from: "apt", to: "apt", label: "의존성 풀기", title: "무엇을 깔지 정한다", detail: "rsync가 요구하는 라이브러리 중 없는 것을 찾고, 버전 조건을 맞추고, 지울 것이 생기는지 계산한다." },
+    { from: "repo", to: "apt", label: "rsync.deb", title: ".deb를 받는다", detail: "/var/cache/apt/archives에 받고 목록의 SHA256과 맞춘다. 하나라도 다르면 설치하지 않는다." },
+    { from: "apt", to: "dpkg", label: "dpkg -i", title: "dpkg에 넘긴다", detail: "의존성 순서대로 하나씩 넘긴다. dpkg가 파일을 풀고 /var/lib/dpkg에 기록한다." },
+    { from: "dpkg", to: "dpkg", label: "postinst", title: "설치 스크립트가 돈다", detail: "사용자 생성, 설정 파일 처리, 서비스 재시작이 여기서 일어난다. DB 패키지가 서버를 다시 띄우는 것도 이 단계다." },
+  ]}
+/>
+
+서명 확인이 실패하면 어떻게 보이는지 일부러 만들어 봤다. Docker 저장소를 Ubuntu 키로 확인하라고 적은 목록 파일 하나만 넣고 갱신했다.
+
+```bash
+# 실험용: Docker 저장소에 엉뚱한 키를 묶는다
+echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://download.docker.com/linux/ubuntu noble stable' > wrong.list
+sudo apt-get update -o Dir::Etc::sourcelist=$PWD/wrong.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+```
+
+```text
+Err:1 https://download.docker.com/linux/ubuntu noble InRelease
+  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 7EA0A9C3F273FCD8
+Reading package lists...
+W: An error occurred during the signature verification. The repository is not updated and the previous index files will be used. GPG error: https://download.docker.com/linux/ubuntu noble InRelease: The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 7EA0A9C3F273FCD8
+W: Failed to fetch https://download.docker.com/linux/ubuntu/dists/noble/InRelease  The following signatures couldn't be verified because the public key is not available: NO_PUBKEY 7EA0A9C3F273FCD8
+```
+
+두 가지를 봐야 한다. `NO_PUBKEY` 뒤의 ID(`7EA0A9C3F273FCD8`)는 위 `gpg --show-keys`에서 본 서명용 하위 키(`[S]`)의 끝 16자리다. 이 값으로 어떤 키가 필요한지 찾는다. 그리고 결과가 오류(E)가 아니라 경고(W)다. "previous index files will be used", 옛 목록으로 계속 간다는 뜻이다. CI에서 `apt-get update`가 0으로 끝났다고 안심하면, 몇 달 전 목록으로 설치하다 404를 맞는다. 저장소 키가 만료되거나 바뀌었을 때 흔히 보는 증상이다. 같은 실험을 `apt-get update --error-on=any`로 돌리면 종료 코드가 0이 아니라 100이 된다. CI와 이미지 빌드에는 이 옵션을 붙여 경고를 실패로 다룬다.
+
+## 찾고, 깔고, 지우고, 올린다
+
+일상적인 명령은 많지 않다. `apt`는 사람이 터미널에서 쓰라고 만든 이름이고 출력 형식이 바뀔 수 있다. 스크립트와 Dockerfile에는 출력이 안정된 `apt-get`·`apt-cache`를 쓴다. 스크립트에서 `apt`를 쓰면 "WARNING: apt does not have a stable CLI interface"가 찍히는 이유다.
+
+```bash
+sudo apt update                      # 저장소 목록 갱신 (설치는 하지 않는다)
+apt search --names-only '^nginx'     # 이름으로 찾기
+apt show nginx                       # 설명, 의존성, 크기
+sudo apt install nginx               # 설치
+sudo apt install postgresql-16=16.15-0ubuntu0.24.04.1   # 버전을 정해 설치
+sudo apt install ./mytool_1.2_amd64.deb                 # 내려받은 .deb, 의존성은 apt가 채운다
+sudo apt remove nginx                # 지우기 (설정 파일은 남는다)
+sudo apt purge nginx                 # 설정 파일까지 지우기
+sudo apt autoremove                  # 의존성으로만 깔렸다가 이제 아무도 안 쓰는 것 지우기
+apt list --installed | wc -l         # 설치된 패키지 수
+apt-mark showmanual | head           # 사람이 직접 깐 것만
+```
+
+`autoremove`가 무엇을 지울지 고르는 기준이 `apt-mark`의 manual/auto 표시다. 직접 `apt install`로 깐 것은 manual, 그 의존성으로 딸려 온 것은 auto다. 다른 패키지를 지우면서 의존하던 auto 패키지가 고아가 되면 autoremove 대상이 된다. 직접 쓰던 도구가 우연히 auto로 깔려 있었다면 autoremove 한 번에 사라질 수 있으니, 지우기 전에 목록을 읽는다.
+
+올리는 명령은 둘이다. 차이가 생각보다 크다.
+
+- `apt-get upgrade`: 깔린 패키지만 올린다. 새 패키지를 깔거나 지워야 올라가는 것은 건드리지 않고 "kept back"으로 남긴다.
+- `apt upgrade`: 같지만 의존성 때문에 필요하면 새 패키지는 깐다. 지우지는 않는다.
+- `apt full-upgrade`(`apt-get dist-upgrade`): 필요하면 지우기까지 한다. 배포판 메이저 업그레이드는 이걸로도 하지 않고 `do-release-upgrade`로 한다.
+
+어느 쪽이든 먼저 시뮬레이션으로 무엇이 올라갈지 본다. `-s`는 아무것도 바꾸지 않는다.
+
+```bash
+# 무엇이 올라가는지만 본다
+apt list --upgradable 2>/dev/null | head -4
+apt-get -s upgrade | grep -E '^[0-9]+ upgraded'
+```
+
+```text
+Listing...
+ca-certificates/noble-updates,noble-security 20260816ubuntu0.24.04.1 all [upgradable from: 20260601~24.04.1]
+containerd.io/noble 2.4.2-3~ubuntu.24.04~noble amd64 [upgradable from: 2.3.6-1~ubuntu.24.04~noble]
+curl/noble-updates,noble-security 8.5.0-2ubuntu10.16 amd64 [upgradable from: 8.5.0-2ubuntu10.15]
+88 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.
+```
+
+88개 중에 `containerd.io`와 `docker-ce`가 있다. 이 서버에서 컨테이너가 돌고 있다면 둘 다 올라가는 순간 Docker 데몬이 다시 뜨고, `live-restore`를 켜 두지 않았다면 컨테이너가 모두 멈추고 재시작 정책이 있는 것만 다시 뜬다. 첫 장면의 DB와 같은 종류의 사고다.
+
+## 올라가면 안 되는 패키지를 묶는다
+
+가장 간단한 방법은 `apt-mark hold`다. 묶인 패키지는 `upgrade`와 `full-upgrade`에서 제외된다.
+
+```bash
+# 묶기 전 상태를 본다
+apt-mark showhold
+# 묶는다
+sudo apt-mark hold docker-ce docker-ce-cli
+apt-mark showhold
+# 다시 시뮬레이션
+apt-get -s upgrade | grep -A1 'kept back'
+apt-get -s upgrade | grep -E '^[0-9]+ upgraded'
+```
+
+```text
+docker-ce set on hold.
+docker-ce-cli set on hold.
+docker-ce
+docker-ce-cli
+The following packages have been kept back:
+  docker-ce docker-ce-cli
+86 upgraded, 0 newly installed, 0 to remove and 3 not upgraded.
+```
+
+`kept back` 목록에 두 패키지가 들어갔고, 올라갈 개수가 88에서 86으로 줄었다. 정기 점검 시간에 올릴 때는 `sudo apt-mark unhold docker-ce docker-ce-cli`로 풀고, 올린 뒤 다시 묶는다. 묶어 둔 사실을 잊으면 보안 패치까지 영영 막히니, 묶은 이유와 날짜를 운영 문서에 같이 남긴다.
+
+같은 시뮬레이션 출력에는 이런 줄도 있었다.
+
+```text
+The following upgrades have been deferred due to phasing:
+  tmux
+```
+
+Ubuntu는 업데이트를 모든 서버에 한꺼번에 내리지 않고 일부 비율부터 단계적으로 푼다(phased updates). 문제가 보고되면 비율을 멈춘다. 그래서 같은 날 같은 명령을 친 서버 두 대의 결과가 다를 수 있다. "스테이징에선 안 올라갔는데 운영에선 올라갔다"는 말이 나오면 이것부터 의심한다.
+
+`hold`보다 세밀하게 다루려면 우선순위(pin)를 쓴다. 특정 버전 범위에 머물게 하거나, 특정 저장소에서만 받게 할 수 있다.
+
+```bash
+# docker-ce를 29.8.x에 머물게 한다
+sudo tee /etc/apt/preferences.d/docker-pin <<'EOF'
+Package: docker-ce docker-ce-cli
+Pin: version 5:29.8.*
+Pin-Priority: 1001
+EOF
+apt-cache policy docker-ce | head -3
+```
+
+```text
+docker-ce:
+  Installed: 5:29.8.2-1~ubuntu.24.04~noble
+  Candidate: 5:29.8.2-1~ubuntu.24.04~noble
+```
+
+`Candidate`가 29.9.2에서 29.8.2로 바뀌었다. 1000을 넘는 우선순위는 "버전을 내려서라도 이걸 고른다"는 뜻이라, 더 높은 버전이 깔려 있으면 다운그레이드까지 한다. 990이나 500처럼 1000 아래면 이미 깔린 것보다 낮은 버전으로 내려가지는 않는다. 우선순위 숫자의 정확한 규칙은 `man apt_preferences`에 있다. 풀 때는 이 파일을 지우면 된다.
+
+`hold`와 pin을 고르는 기준은 간단하다. "지금 버전에서 꼼짝 마"는 hold, "29.8의 패치는 받되 29.9로는 넘어가지 마"는 pin이다. 서드파티 저장소가 Ubuntu 기본 패키지와 같은 이름을 줄 때 어느 쪽을 쓸지 정하는 것도 pin(`Pin: origin ...`)이 한다.
+
+## 자동 업데이트는 어디까지 올리나
+
+Ubuntu 서버는 `unattended-upgrades`가 매일 보안 패치를 저절로 깐다. 켜져 있는지 확인하는 법과 재부팅을 다루는 법은 [EC2 Ubuntu 서버 준비 글](/posts/aws-ec2-ubuntu-server-setup)의 "보안 패치는 매일 저절로"에 있다. 여기서는 범위만 본다. 패키지에 들어 있는 기본 설정에서 주석을 뺀 핵심 부분이다.
+
+```text
+Unattended-Upgrade::Allowed-Origins {
+	"${distro_id}:${distro_codename}";
+	"${distro_id}:${distro_codename}-security";
+	"${distro_id}ESMApps:${distro_codename}-apps-security";
+	"${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Package-Blacklist {
+};
+```
+
+`-security`는 들어 있고 `-updates`는 주석 처리되어 있다. 그리고 Docker, PGDG 같은 서드파티 저장소는 목록에 없다. 즉 자동 업데이트는 Ubuntu의 보안 패치만 올리고, 서드파티 패키지는 사람이 올리기 전까지 그대로다. 보안 패치에 `postgresql-16`이 들어 있으면 자동 업데이트도 DB를 다시 띄운다. 그런 패키지를 자동 대상에서 빼고 점검 시간에 손으로 올리려면 `Package-Blacklist`에 이름(정규식)을 적는다. `apt-mark hold`로 묶은 패키지도 자동 업데이트에서 빠진다.
+
+## Docker 이미지 안에서는 다르게 쓴다
+
+컨테이너 이미지를 만들 때 패키지 관리자는 한 번 쓰고 버리는 도구다. 그래서 줄이는 것이 목표가 된다.
+
+```dockerfile
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+`update`와 `install`을 한 `RUN`에 두는 이유는 레이어 캐시 때문이다. 따로 두면 `update` 레이어가 캐시되어 몇 달 지난 목록으로 설치하게 된다. 같은 `RUN` 끝에서 목록을 지우는 이유는 크기다. 이 머신의 `/var/lib/apt/lists`를 재 봤다.
+
+```bash
+du -sh /var/lib/apt/lists /var/cache/apt
+```
+
+```text
+53M	/var/lib/apt/lists
+12K	/var/cache/apt
+```
+
+목록만 53MB다. 컨테이너가 실행 중에 패키지를 깔 일은 없으니 이미지에 남길 이유가 없다. `/var/cache/apt`가 12KB뿐인 건 Docker 공식 Ubuntu 이미지에 받은 `.deb`를 지우는 설정(`/etc/apt/apt.conf.d/docker-clean`)이 이미 들어 있어서다. `--no-install-recommends`는 "있으면 좋은" 추천 패키지를 빼서 이미지를 더 줄인다. 레이어와 캐시가 어떻게 동작하는지는 [Dockerfile과 이미지 레이어](/posts/dockerfile-image-layers) 글에 자세히 있다.
+
+Alpine 이미지는 `apk add --no-cache curl`로 같은 일을 한 줄에 한다. 목록을 받아 쓰고 남기지 않는다. 대신 Alpine은 glibc가 아니라 musl libc를 쓰므로 미리 빌드된 바이너리가 안 도는 경우가 있다.
+
+## RHEL 계열과 SUSE는 이름만 다르다
+
+RHEL, Rocky, AlmaLinux, Amazon Linux 2023은 `rpm`과 `dnf`를 쓴다. RHEL 7과 Amazon Linux 2는 `yum`이고, RHEL 8 이후의 `yum`은 `dnf`를 가리키는 이름으로 남아 있다. 개념은 같고 이름과 몇 가지 기본값이 다르다.
+
+```bash
+sudo dnf check-update                 # apt list --upgradable
+sudo dnf install nginx                # apt install
+rpm -qf /usr/bin/rsync                # dpkg -S
+rpm -ql rsync                         # dpkg -L
+sudo dnf versionlock add postgresql-server   # apt-mark hold (RHEL 8·9는 versionlock 플러그인을 먼저 깐다)
+sudo dnf history                      # 트랜잭션 기록
+sudo dnf history undo 15              # 15번 트랜잭션 되돌리기
+```
+
+apt와 다른 점 몇 가지를 짚어 둔다. 저장소는 `/etc/yum.repos.d/*.repo` 파일에 `baseurl`, `gpgcheck=1`, `gpgkey=`로 적는다. apt가 저장소 목록에만 서명을 거는 것과 달리 RPM은 패키지 하나하나에 서명이 붙어 있어서 `rpm -K pkg.rpm`으로 파일 단위 검증을 할 수 있다. `dnf`는 명령을 칠 때 목록이 오래됐으면 알아서 갱신해서 `apt update`에 해당하는 단계를 따로 치지 않는 경우가 많다. 그리고 `dnf history undo`처럼 트랜잭션 단위로 되돌리는 기능이 기본으로 있다. apt에는 같은 기능이 없어서 `/var/log/apt/history.log`를 보고 손으로 되돌린다.
+
+SUSE는 `zypper`를 쓴다. `zypper install`, `zypper addlock`(hold), `zypper patch`(보안 패치만)처럼 이름이 다를 뿐 같은 계층이다.
+
+## 저장소 밖에서 오는 패키지들
+
+배포판 저장소는 안정성을 위해 버전을 출시 때 고정하고 보안 패치만 넣는다. 그래서 새 버전이 필요하면 다른 길로 받게 된다. 각 길은 맞바꾸는 것이 다르다.
+
+- PPA·서드파티 저장소(PGDG, Docker): apt 흐름 그대로 새 버전을 받는다. 대신 그 저장소 운영자를 믿어야 하고, 배포판 업그레이드 때 코드네임을 손봐야 한다.
+- snap: 의존성을 모두 묶은 패키지를 자동 업데이트로 받는다. 기본으로 하루 네 번 확인해서 저절로 올라가니, 서버에서는 `sudo snap refresh --hold`나 갱신 시간대(`refresh.timer`)를 정해 둔다. Ubuntu 서버의 일부 도구(예: `lxd`)가 snap으로만 나온다.
+- Homebrew: macOS의 사실상 표준이고 리눅스에서도 돈다(사용자 디렉터리 아래에 깐다). 서버보다는 개발 머신용이다.
+- 언어별 패키지 관리자(pip, npm): 시스템 패키지와 섞이면 충돌한다. Ubuntu 24.04는 시스템 Python에 `pip install`을 하면 `externally-managed-environment` 오류로 막고 가상 환경을 쓰라고 한다.
+
+## 업그레이드 전에 보는 순서
+
+첫 장면으로 돌아가면, 운영 서버 업그레이드는 이 순서로 한다.
+
+```bash
+# 1. 바꾸기 전 상태를 남긴다
+dpkg -l > ~/pkgs-before-$(date +%F).txt
+apt-mark showhold
+# 2. 무엇이 올라가는지 본다. 서비스를 다시 띄우는 패키지가 있는지 찾는다
+apt-get -s upgrade | grep '^Inst' | grep -E 'postgresql|mysql|docker|containerd|nginx'
+# 3. 점검 시간에 올린다 (DB는 장애 조치나 연결 드레인을 먼저)
+sudo apt-get upgrade
+# 4. 무엇이 바뀌었는지 기록에서 확인한다
+tail -20 /var/log/apt/history.log
+# 5. 재부팅이 필요한지 본다
+ls /var/run/reboot-required 2>/dev/null && cat /var/run/reboot-required.pkgs
+```
+
+되돌리기는 `sudo apt install 패키지=옛버전`이다. 단 `apt-cache policy`의 버전 표에 그 옛 버전이 남아 있어야 한다. Ubuntu 기본 저장소는 `noble`의 출시 버전과 `-updates`의 최신 버전 정도만 들고 있어서 중간 버전은 없다. 이것이 서버를 패키지 단위로 되돌리기보다 이미지나 스냅숏 단위로 되돌리는 방식이 늘어난 이유다.
+
+패키지 관리자는 dpkg와 apt 두 층으로 일하고, 저장소의 서명 하나에서 해시 사슬로 모든 파일을 확인하며, `upgrade`는 묶어 두지 않은 모든 것을 올린다. 업그레이드 사고는 대부분 시뮬레이션을 안 보고 친 데서 온다. 압축 파일과 전송 도구는 [tar와 압축, 파일 옮기기](/posts/linux-archive-transfer)에서, 서버에서 설정 파일을 고칠 때 쓰는 편집기는 [서버에서 vim 살아남기](/posts/vim-for-servers)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### dpkg와 apt는 무엇이 다른가요?
+
+dpkg는 `.deb` 파일 하나를 풀고 설치 스크립트를 돌리는 낮은 층이고, apt는 저장소에서 패키지를 찾아 의존성을 풀고 받아서 dpkg에 넘기는 높은 층입니다. dpkg는 의존성이 모자라면 실패할 뿐 찾아오지 않습니다. 그래서 설치된 파일에 대한 질문(`dpkg -S`, `dpkg -L`)은 dpkg에, 버전과 저장소에 대한 질문(`apt-cache policy`)은 apt에 합니다. RHEL 계열의 rpm과 dnf가 같은 관계입니다.
+
+### apt 저장소는 HTTP로 받는데 왜 안전한가요?
+
+저장소 꼭대기의 InRelease 파일이 저장소 키로 서명되어 있고, 그 안에 패키지 목록의 해시가, 목록 안에 각 `.deb`의 SHA256이 들어 있기 때문입니다. 중간에서 파일을 바꾸면 해시 사슬 어딘가에서 맞지 않아 설치를 거부합니다. HTTPS는 무엇을 받는지 숨기는 정도를 더할 뿐 무결성은 서명이 지킵니다. 다만 옛 목록을 다시 보내는 재생 공격은 서명만으로 막지 못해서, Debian 보안 저장소처럼 InRelease에 유효 기간(Valid-Until)을 두는 저장소도 있습니다.
+
+### apt-key가 폐기된 이유와 signed-by의 장점은요?
+
+apt-key로 넣은 키는 시스템 전체 키링에 들어가 모든 저장소의 서명 확인에 쓰였습니다. 서드파티 키 하나가 새면 공식 저장소 패키지를 사칭한 패키지도 통과할 수 있었습니다. signed-by는 키를 그 저장소에만 묶어서, 키가 새도 피해가 그 저장소 범위로 줄어듭니다. 키 파일은 `/etc/apt/keyrings/`에 두고 받은 뒤 지문을 공식 문서와 맞춰 봅니다.
+
+### 운영 서버에서 특정 패키지가 올라가지 않게 하려면요?
+
+`apt-mark hold 패키지`로 묶으면 upgrade와 자동 업데이트에서 빠집니다. 버전 범위를 정해 패치는 받게 하려면 `/etc/apt/preferences.d/`에 pin을 둡니다. 1000을 넘는 우선순위는 다운그레이드까지 하니 주의합니다. 어느 쪽이든 묶은 이유를 남기고 정기적으로 풀어 올립니다. 잊으면 보안 패치가 영영 막힙니다.
+
+### apt-get upgrade, apt upgrade, full-upgrade는 어떻게 다른가요?
+
+apt-get upgrade는 깔린 것만 올리고 새 패키지가 필요한 것은 kept back으로 둡니다. apt upgrade는 새 패키지 설치는 허용하고 삭제는 하지 않습니다. full-upgrade는 필요하면 지우기도 합니다. 운영에서는 어느 쪽이든 `-s` 시뮬레이션으로 목록을 먼저 보고, 서비스를 다시 띄우는 패키지가 있으면 점검 시간에 올립니다.
+
+### Dockerfile에서 apt 캐시를 지우는 이유는요?
+
+`/var/lib/apt/lists`의 패키지 목록이 수십 MB인데 실행 중인 컨테이너는 쓸 일이 없기 때문입니다. 지우는 명령은 설치와 같은 RUN 안에 있어야 합니다. 다음 RUN에서 지우면 이전 레이어에 이미 들어간 파일은 이미지 크기에서 빠지지 않습니다. update와 install을 한 RUN에 묶는 것도 update만 캐시되어 오래된 목록을 쓰는 문제를 막으려는 것입니다.
+
+### unattended-upgrades는 무엇까지 자동으로 올리나요?
+
+Ubuntu 기본 설정은 배포판의 security 포켓과 ESM 보안 포켓만 올립니다. `-updates`는 주석 처리되어 있고 Docker나 PGDG 같은 서드파티 저장소는 대상이 아닙니다. 그래도 보안 패치에 DB 패키지가 들어 있으면 서비스가 재시작되니 `Package-Blacklist`나 hold로 빼고 손으로 올립니다. 재부팅은 기본으로 하지 않으니 `/var/run/reboot-required`를 모니터링합니다.
+
+### 같은 날 같은 명령인데 서버마다 올라간 패키지가 달랐습니다. 왜일까요?
+
+Ubuntu의 phased updates일 가능성이 큽니다. 업데이트를 일정 비율의 머신부터 단계적으로 풀기 때문에 시뮬레이션에 "deferred due to phasing"으로 보류된 패키지가 머신마다 다릅니다. 그 밖에는 서버마다 hold·pin 설정이 다르거나, 한쪽의 서드파티 저장소 서명 확인이 실패해 옛 목록을 쓰고 있는 경우입니다. 후자는 apt update 출력의 W 줄을 봅니다.

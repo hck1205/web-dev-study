@@ -1,0 +1,435 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("structured-data-json-ld");
+
+<EasyIntro>
+  사람은 상품 페이지를 보면 사진 옆 숫자가 가격이고 별 모양이 평점이라는 걸 바로 안다. 하지만 검색 엔진에게 페이지는 글자와 숫자가 잔뜩 섞인 덩어리라서, 어느 숫자가 가격이고 어느 이름이 글쓴이인지 짐작해야 한다.
+
+  구조화 데이터는 그 짐작을 덜어 주는 이름표다. 택배 상자에 받는 사람, 주소, 무게를 정해진 칸에 적은 송장을 붙이는 것과 비슷하다. 상자 안에 무엇이 들었든 송장만 보면 누구에게 어디로 가야 하는지 기계가 바로 읽는다.
+
+  송장 양식은 세계 공통으로 정해져 있어서, 검색 엔진들이 함께 만든 이름표 사전을 쓴다. 이름표를 잘 붙이면 검색 결과에 별점, 가격, 이동 경로 같은 정보가 함께 보일 수 있다. 다만 이름표는 상자 안의 물건과 똑같아야 한다. 안에 든 것과 다른 내용을 송장에 적으면 검색 엔진은 그 상자를 믿지 않게 된다. 이름표끼리 서로 연결해 두면, 이 글을 쓴 사람과 이 회사가 같은 회사라는 것까지 검색 엔진이 알아챈다.
+</EasyIntro>
+
+## 별점과 가격이 검색 결과에 붙지 않는다
+
+쇼핑몰 상품 페이지에 JSON-LD를 넣었다. 경쟁 쇼핑몰의 같은 상품은 검색 결과에 별 4.6개, 리뷰 수, 가격이 붙어 나오는데 우리 페이지는 제목과 설명뿐이다. 페이지 소스를 열어 보면 `script type="application/ld+json"`도 분명히 있다.
+
+리치 결과 테스트에 주소를 넣어 보니 세 가지가 나왔다. 가격이 `"89,000원"`이라는 문자열이라 인식되지 않았고, 평점 객체에 리뷰 수가 없었고, 리뷰 별점을 페이지에 보여 주지 않으면서 마크업에만 넣고 있었다. 마지막 것은 경고가 아니라 정책 위반이다.
+
+구조화 데이터를 넣는 기본 방법과 FAQ·HowTo 리치 결과가 줄어든 이야기는 [SPA와 SEO](/posts/seo-for-spa)에서 짧게 다뤘다. 이 글은 그다음을 본다. schema.org 어휘가 어떻게 생겼는지, JSON-LD와 Microdata와 RDFa가 무엇이 다른지, `@id`와 `sameAs`로 페이지 여러 개의 정보를 하나의 그래프로 잇는 법, 상품·글·이동 경로·조직·사람·매장·동영상 유형을 Next.js에서 만드는 법, 검증하는 법, 그리고 구조화 데이터가 순위가 아니라 표시 자격이라는 점과 지식 패널까지다.
+
+## schema.org는 공용 사전이다
+
+schema.org는 구글, 마이크로소프트, 야후, 얀덱스가 2011년에 함께 만든 어휘다. "이건 상품이다", "이건 가격이다"를 모두가 같은 단어로 말하자는 약속이다. 어휘는 두 가지로 이루어진다.
+
+유형(type)은 사물의 종류다. `Product`, `Offer`, `Person`, `Organization`, `Article`처럼 대문자로 시작한다. 유형은 상속 관계를 가진다. `Thing` 아래에 `CreativeWork`가 있고, 그 아래에 `Article`, 다시 그 아래에 `NewsArticle`과 `BlogPosting`이 있다. 하위 유형은 상위 유형의 속성을 모두 쓸 수 있다. `BlogPosting`도 `Thing`의 `name`과 `url`을 쓸 수 있다는 뜻이다.
+
+속성(property)은 그 사물의 특징이다. `name`, `price`, `author`처럼 소문자로 시작한다. 속성마다 기대하는 값의 유형이 정해져 있다. `author`는 `Person`이나 `Organization`을 기대하고, `offers`는 `Offer`를 기대한다. 값으로 문자열 하나만 넣어도 문법상 틀리지는 않지만, 기대하는 유형의 객체를 넣어야 검색 엔진이 더 많이 알아듣는다.
+
+schema.org에는 유형이 800개 안팎 있다. 구글이 실제로 리치 결과에 쓰는 건 그중 일부이고, 유형마다 필수 속성과 권장 속성을 따로 정해 둔다. schema.org가 문법을 정하고, 구글 검색 센터 문서가 "이 정도는 있어야 보여 주겠다"는 조건을 정한다고 보면 된다. 두 문서를 같이 본다.
+
+## JSON-LD, Microdata, RDFa
+
+같은 정보를 페이지에 담는 형식이 셋 있고, 구글은 셋 다 읽는다. 상품 이름과 가격을 Microdata로 쓰면 HTML 속성에 섞인다.
+
+```html
+<div itemscope itemtype="https://schema.org/Product">
+  <h1 itemprop="name">회색 울 코트</h1>
+  <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+    <span itemprop="price" content="89000">89,000원</span>
+    <meta itemprop="priceCurrency" content="KRW">
+  </div>
+</div>
+```
+
+RDFa도 비슷하게 `vocab`, `typeof`, `property` 속성을 HTML에 붙인다. JSON-LD는 마크업과 떨어진 `script` 하나에 같은 정보를 쓴다.
+
+```html
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Product",
+  "name": "회색 울 코트",
+  "offers": { "@type": "Offer", "price": "89000", "priceCurrency": "KRW" }
+}
+</script>
+```
+
+구글이 JSON-LD를 권하는 이유는 관리하기 쉬워서다. 컴포넌트 구조를 바꿔도 구조화 데이터가 깨지지 않고, 데이터 객체에서 바로 만들 수 있다. Microdata의 장점은 화면에 보이는 값과 마크업이 같은 요소에 붙어 있어서 둘이 어긋나기 어렵다는 점이다. JSON-LD를 쓰면 이 장점이 없어지니, 화면과 같은 데이터에서 함께 만들어 어긋나지 않게 해야 한다. 처음 장면의 "보여 주지 않는 리뷰 별점"이 그렇게 어긋난 경우다.
+
+한 페이지에 여러 형식을 섞어도 된다. 다만 같은 사물을 두 형식으로 각각 쓰면 서로 다른 두 사물로 읽힐 수 있으니 하나로 통일한다.
+
+## 상품 객체를 조각으로 읽기
+
+처음 장면의 상품을 제대로 고쳐 쓴 JSON-LD를 조각으로 나눠 보자. 아래 조각을 하나씩 누르면 그 부분이 무슨 뜻이고 구글이 무엇을 요구하는지 나온다.
+
+<UrlAnatomy
+  caption="상품 JSON-LD 한 덩어리를 속성별로 나눠 보기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "context", display: "@context", title: "어휘 선언", description: "이 객체의 단어가 schema.org 사전의 단어라는 선언이다. 최상위 객체에 한 번만 쓰면 안쪽 객체에도 적용된다.", code: "\"@context\": \"https://schema.org\"", required: true },
+    { key: "type", display: "@type: Product", title: "유형", description: "무엇에 관한 정보인지 정한다. 구글의 상품 리치 결과는 name과 함께 offers, review, aggregateRating 중 하나가 있어야 대상이 된다.", code: "\"@type\": \"Product\",\n\"name\": \"회색 울 코트\",\n\"image\": [\"https://shop.example.com/img/42.jpg\"]", required: true },
+    { key: "id", display: "@id", title: "이 사물의 이름표", description: "다른 객체가 이 상품을 가리킬 때 쓰는 식별자다. 보통 페이지 주소에 #product처럼 조각을 붙인다. 실제로 열리는 주소일 필요는 없지만 사이트 안에서 늘 같아야 한다.", code: "\"@id\": \"https://shop.example.com/products/42#product\"" },
+    { key: "offers", display: "offers: Offer", title: "가격과 재고", description: "price는 숫자만 쓴다. 천 단위 쉼표나 '원'을 붙이면 가격으로 읽지 못한다. 통화는 ISO 4217 세 글자 코드, 재고는 schema.org의 열거 주소로 쓴다.", code: "\"offers\": {\n  \"@type\": \"Offer\",\n  \"price\": \"89000\",\n  \"priceCurrency\": \"KRW\",\n  \"availability\": \"https://schema.org/InStock\",\n  \"url\": \"https://shop.example.com/products/42\"\n}", required: true },
+    { key: "rating", display: "aggregateRating", title: "평균 평점", description: "ratingValue와 함께 reviewCount나 ratingCount가 있어야 한다. bestRating과 worstRating을 쓰지 않으면 5점과 1점으로 본다. 페이지에 같은 평점이 보여야 한다.", code: "\"aggregateRating\": {\n  \"@type\": \"AggregateRating\",\n  \"ratingValue\": 4.6,\n  \"reviewCount\": 31\n}" },
+    { key: "brand", display: "brand: Brand", title: "다른 사물과의 관계", description: "브랜드를 문자열 대신 객체로 쓰면 이 상품이 어떤 엔티티와 이어지는지 말할 수 있다. 사이트 전체의 Organization과 같은 @id로 이어 줄 수도 있다.", code: "\"brand\": { \"@type\": \"Brand\", \"name\": \"Study Wear\" }" },
+  ]}
+/>
+
+구글은 상품 정보를 두 가지 모습으로 보여 준다. 일반 검색 결과에 별점·가격·재고를 덧붙이는 상품 스니펫(product snippet)과, 쇼핑 탭과 상품 묶음에 나오는 판매자 목록(merchant listing)이다. 상품 스니펫은 리뷰 사이트처럼 직접 팔지 않는 페이지도 받을 수 있고, 판매자 목록은 그 페이지에서 살 수 있어야 하며 `offers`가 필수다. 판매자 목록은 Merchant Center에 상품 피드를 올려서 받을 수도 있다. 구조화 데이터와 피드를 같이 쓰면 구글이 두 정보를 맞춰 본다.
+
+리뷰에는 정책이 하나 더 있다. 가게나 회사가 자기 자신에 대한 리뷰를 자기 사이트에 마크업하는 것(self-serving review)은 `LocalBusiness`와 `Organization`에서 리뷰 별점 표시 대상이 아니다. 구글이 2019년에 정했다. 상품 리뷰는 대상이지만, 그 리뷰가 페이지에 실제로 보여야 한다.
+
+## 규칙을 코드로 검사해 보기
+
+리치 결과 테스트는 배포한 뒤에 확인하는 도구다. 상품 수만 개를 매번 손으로 넣어 볼 수는 없으니, 빌드나 테스트 단계에서 흔한 실수를 먼저 거르는 검사기를 하나 둔다. 아래는 구글 문서의 상품 조건 중 몇 가지를 옮긴 것이다. 빈 곳을 채워 보자.
+
+<CodePlayground
+  caption="상품 JSON-LD의 흔한 실수 찾기"
+  functionName="productIssues"
+  initialCode={`// 규칙
+// 1. @type이 Product가 아니면 ["@type이 Product가 아니다"]만 돌려준다
+// 2. name이 없으면 "name 없음"
+// 3. offers, review, aggregateRating이 모두 없으면
+//    "offers·review·aggregateRating 중 하나는 있어야 한다"
+// 4. offers(객체 또는 배열)마다
+//    price가 없으면 "offers.price 없음"
+//    숫자 모양(89000, 89000.5)이 아니면 "offers.price는 숫자만: " + price
+//    priceCurrency가 대문자 세 글자가 아니면 "offers.priceCurrency는 ISO 4217 세 글자"
+// 5. aggregateRating이 있으면
+//    ratingValue가 worstRating(기본 1)~bestRating(기본 5) 밖이면 "ratingValue가 범위 밖: " + 값
+//    reviewCount와 ratingCount가 둘 다 0 이하이거나 없으면 "reviewCount나 ratingCount가 필요하다"
+function productIssues(data) {
+  const issues = [];
+  return issues;
+}`}
+  solution={`function productIssues(data) {
+  const issues = [];
+  if (data["@type"] !== "Product") return ["@type이 Product가 아니다"];
+  if (!data.name) issues.push("name 없음");
+  if (!data.offers && !data.review && !data.aggregateRating) {
+    issues.push("offers·review·aggregateRating 중 하나는 있어야 한다");
+  }
+  const offers = data.offers ? [].concat(data.offers) : [];
+  for (const o of offers) {
+    if (o.price === undefined) issues.push("offers.price 없음");
+    else if (!/^\\d+(\\.\\d+)?$/.test(String(o.price))) issues.push("offers.price는 숫자만: " + o.price);
+    if (!/^[A-Z]{3}$/.test(o.priceCurrency ?? "")) issues.push("offers.priceCurrency는 ISO 4217 세 글자");
+  }
+  const r = data.aggregateRating;
+  if (r) {
+    const best = r.bestRating ?? 5;
+    const worst = r.worstRating ?? 1;
+    if (!(r.ratingValue >= worst && r.ratingValue <= best)) issues.push("ratingValue가 범위 밖: " + r.ratingValue);
+    if (!(r.reviewCount > 0 || r.ratingCount > 0)) issues.push("reviewCount나 ratingCount가 필요하다");
+  }
+  return issues;
+}`}
+  tests={[
+    {
+      args: [{ "@type": "Product", name: "회색 울 코트", offers: { "@type": "Offer", price: "89000", priceCurrency: "KRW" } }],
+      expected: [],
+      label: "올바른 상품",
+    },
+    {
+      args: [{ "@type": "Product", name: "회색 울 코트" }],
+      expected: ["offers·review·aggregateRating 중 하나는 있어야 한다"],
+      label: "이름만 있다",
+    },
+    {
+      args: [{ "@type": "Product", name: "회색 울 코트", offers: { price: "89,000원", priceCurrency: "won" } }],
+      expected: ["offers.price는 숫자만: 89,000원", "offers.priceCurrency는 ISO 4217 세 글자"],
+      label: "처음 장면의 가격",
+    },
+    {
+      args: [{ "@type": "Product", name: "코트", offers: [{ price: 89000, priceCurrency: "KRW" }], aggregateRating: { ratingValue: 4.6, reviewCount: 0 } }],
+      expected: ["reviewCount나 ratingCount가 필요하다"],
+      label: "리뷰 수 0",
+    },
+    {
+      args: [{ "@type": "Product", name: "코트", aggregateRating: { ratingValue: 9, bestRating: 10, ratingCount: 31 } }],
+      expected: [],
+      label: "10점 만점",
+    },
+    { args: [{ "@type": "Article", headline: "x" }], expected: ["@type이 Product가 아니다"], label: "다른 유형" },
+  ]}
+/>
+
+10점 만점 평점에서 `ratingValue: 9`가 통과하는 걸 보자. `bestRating`을 생략하면 5점 만점으로 읽히니, 10점 체계를 쓰는 사이트가 `bestRating`을 빠뜨리면 모든 평점이 범위를 벗어난 값이 된다. 이런 검사는 화면과 마크업이 어긋나는 문제는 잡지 못한다. 그건 화면과 마크업을 같은 데이터에서 만드는 구조로 막는다.
+
+## 페이지 여러 개를 하나의 그래프로 잇기
+
+블로그 글 하나에도 사물이 여럿 있다. 글(`BlogPosting`), 글쓴이(`Person`), 사이트를 운영하는 조직(`Organization`), 사이트(`WebSite`), 이동 경로(`BreadcrumbList`). 이걸 각각 따로 쓰면 검색 엔진은 "이 글의 author 김하늘"과 "소개 페이지의 Person 김하늘"이 같은 사람인지 확신하지 못한다. 이름이 같은 사람은 많다.
+
+`@id`가 그 문제를 푼다. 사물마다 고유한 식별자를 주고, 다른 곳에서는 객체를 다시 쓰는 대신 `{ "@id": "..." }`로 가리킨다. JSON-LD의 `@graph`에 사물들을 나란히 넣으면 한 페이지 안에서 서로 이어진 그래프가 된다. 다른 페이지에서도 같은 `@id`를 쓰면 페이지를 넘어서도 이어진다. 아래 그림은 글 페이지 하나의 그래프다. 화살표를 따라 흐르는 점이 "이 속성이 저 사물을 가리킨다"는 방향이다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="@id로 이은 글 페이지의 그래프. sameAs는 사이트 밖의 같은 사물을 가리킨다"
+  nodes={[
+    { id: "post", label: "BlogPosting", sub: "#article", x: 210, y: 40, w: 150 },
+    { id: "site", label: "WebSite", sub: "#website", x: 70, y: 140, w: 120 },
+    { id: "person", label: "Person", sub: "/about#me", x: 210, y: 150, w: 120 },
+    { id: "org", label: "Organization", sub: "#org", x: 350, y: 140, w: 130 },
+    { id: "gh", label: "GitHub 프로필", sub: "sameAs", x: 150, y: 255, w: 130 },
+    { id: "wd", label: "Wikidata 항목", sub: "sameAs", x: 340, y: 255, w: 130 },
+  ]}
+  edges={[
+    { from: "post", to: "person", label: "author" },
+    { from: "post", to: "org", label: "publisher" },
+    { from: "post", to: "site", label: "isPartOf" },
+    { from: "site", to: "org", label: "publisher", dashed: true },
+    { from: "person", to: "gh", dashed: true },
+    { from: "org", to: "wd", dashed: true },
+  ]}
+/>
+
+실제 JSON-LD는 이렇게 생겼다.
+
+```json
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://new.example/#org",
+      "name": "Study Notes",
+      "url": "https://new.example/",
+      "logo": "https://new.example/logo.png",
+      "sameAs": ["https://github.com/study-notes"]
+    },
+    {
+      "@type": "Person",
+      "@id": "https://new.example/about#me",
+      "name": "김하늘",
+      "url": "https://new.example/about",
+      "sameAs": ["https://github.com/haneul"]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://new.example/#website",
+      "url": "https://new.example/",
+      "name": "Study Notes",
+      "publisher": { "@id": "https://new.example/#org" }
+    },
+    {
+      "@type": "BlogPosting",
+      "@id": "https://new.example/posts/json-ld#article",
+      "headline": "구조화 데이터 깊게",
+      "datePublished": "2026-10-24",
+      "author": { "@id": "https://new.example/about#me" },
+      "publisher": { "@id": "https://new.example/#org" },
+      "isPartOf": { "@id": "https://new.example/#website" }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "글", "item": "https://new.example/posts" },
+        { "@type": "ListItem", "position": 2, "name": "구조화 데이터 깊게" }
+      ]
+    }
+  ]
+}
+```
+
+`@id` 참조는 오타 하나로 끊긴다. 그래서 페이지 HTML에서 JSON-LD를 뽑아 참조가 실제로 있는 사물을 가리키는지 보는 짧은 스크립트를 둔다. 스크래치 폴더에 위 JSON-LD를 넣은 `page.html`을 만들고 돌린 결과다.
+
+```bash
+# HTML에서 JSON-LD 블록을 꺼내 @graph의 사물과 @id 참조를 출력한다
+node graph.js page.html
+```
+
+```text
+Organization   https://new.example/#org  
+Person         https://new.example/about#me  
+WebSite        https://new.example/#website  publisher→Organization
+BlogPosting    https://new.example/posts/json-ld#article  author→Person, publisher→Organization, isPartOf→WebSite
+BreadcrumbList (id 없음)
+```
+
+글쓴이 `@id`에 슬래시 하나를 잘못 넣은 판(`/about/#me`)으로 다시 돌리면 이렇게 나온다.
+
+```text
+BlogPosting    https://new.example/posts/json-ld#article  author→?? https://new.example/about/#me, publisher→Organization, isPartOf→WebSite
+```
+
+리치 결과 테스트는 이 경우에도 오류를 내지 않는다. 문법상으로는 "이름 없는 어떤 사물을 가리키는 author"일 뿐이라서다. 하지만 검색 엔진은 글쓴이를 알아내지 못한다. 이런 끊김은 검증 도구가 아니라 우리 쪽 검사로 잡아야 한다.
+
+`@id`는 사이트 안에서 늘 같은 값이어야 한다. 소개 페이지에서는 `/about#me`, 글 페이지에서는 `/about#person`으로 쓰면 두 사람이 된다. 사이트 공통 사물(조직, 사이트, 대표 글쓴이)의 `@id`는 상수로 한 곳에 두고 가져다 쓴다.
+
+## 엔티티: 검색 엔진이 아는 사물
+
+검색 엔진은 페이지를 단어 묶음으로만 보지 않고, 그 안에 나오는 사물을 엔티티로 알아본다. 엔티티는 이름이 아니라 "그 사물 자체"다. "Apple"이라는 단어는 과일일 수도 회사일 수도 있지만, 엔티티는 둘을 다른 것으로 구분한다. 구글은 이런 엔티티와 그 사이의 관계를 모은 지식 그래프(Knowledge Graph)를 가지고 있다. 검색 결과 오른쪽에 회사나 인물 정보가 상자로 뜨는 것이 지식 패널이고, 그 내용이 지식 그래프에서 나온다.
+
+엔티티를 다룰 때 나오는 말이 몇 개 있다.
+
+속성과 관계는 엔티티를 설명하는 값과 다른 엔티티와의 연결이다. 회사의 설립일과 로고는 속성이고, 대표가 누구인지, 어느 회사의 자회사인지는 관계다. schema.org의 속성이 바로 이걸 적는 칸이다.
+
+중의성 해소(disambiguation)는 같은 이름의 여러 엔티티 중 어느 것인지 가리는 일이다. `sameAs`가 여기에 쓰인다. `sameAs`는 "이 사물은 저 주소가 설명하는 사물과 같다"는 뜻이다. Wikidata 항목, 위키백과 문서, 공식 SNS 계정, GitHub 프로필처럼 그 엔티티를 확실히 가리키는 주소를 넣는다. 특히 Wikidata 항목 주소(`https://www.wikidata.org/wiki/Q...`)는 엔티티마다 고유한 번호라서 중의성 해소에 강하다.
+
+현저성(salience)은 한 문서에서 어떤 엔티티가 얼마나 중심인지다. 구글 Cloud Natural Language API는 문서의 엔티티마다 0~1 사이 현저성 점수를 준다. 검색 엔진 내부가 이 API와 같지는 않겠지만, "이 글의 주인공이 무엇인지"를 기계가 따진다는 감은 잡을 수 있다. 제목과 첫 문단과 소제목에 주인공이 분명히 나오는 글이 그 엔티티에 관한 글로 읽히기 쉽다.
+
+일관성은 같은 엔티티를 모든 곳에서 같게 말하는 것이다. 회사 이름이 사이트 푸터에는 "Study Notes", 구조화 데이터에는 "StudyNotes Inc.", SNS에는 "스터디노트"로 다르면 검색 엔진이 같은 엔티티로 묶기 어렵다. 로고, 주소, 전화번호, 글쓴이 이름과 프로필 사진도 같다. 글쓴이와 조직 정보는 사이트 공통 상수로 한 곳에서 관리하고, 외부 프로필에서도 사이트 주소를 서로 걸어 둔다.
+
+## 지식 패널은 신청해서 받는 것이 아니다
+
+구조화 데이터를 넣으면 지식 패널이 생기느냐는 질문을 자주 받는다. 그렇지 않다. 지식 패널은 구글이 여러 출처에서 그 엔티티를 충분히 알게 됐을 때 자동으로 만든다. `Organization`의 `logo`, `sameAs`, 이름, 연락처는 구글이 이미 알고 있는 엔티티와 우리 사이트를 연결하고 패널에 들어갈 정보를 고르는 데 도움이 될 뿐이다. 구글 문서도 조직 마크업이 지식 패널의 로고 등을 고르는 데 쓰일 수 있다고만 적는다.
+
+이미 지식 패널이 있다면 그 엔티티의 당사자가 구글 계정으로 소유를 확인하고(패널 하단의 "이 지식 패널의 소유자 인증" 같은 메뉴) 수정 제안을 보낼 수 있다. 수정은 제안이고 반영은 구글이 결정한다.
+
+## 유형별로 꼭 챙길 속성
+
+자주 쓰는 유형의 구글 기준을 정리한다. 필수는 빠지면 리치 결과 대상이 아니고, 권장은 있으면 표시가 풍부해지는 속성이다. 유형마다 세부는 구글 검색 센터의 해당 문서에서 확인한다.
+
+| 유형 | 필수 | 자주 빠뜨리는 권장 속성 |
+|---|---|---|
+| `Article`, `BlogPosting` | 없음 | `headline`, `image`, `datePublished`, `dateModified`, `author`(객체 + `url`) |
+| `BreadcrumbList` | `itemListElement`의 `position`, `name`, `item` | 마지막 항목은 `item` 생략 가능 |
+| `Product` | `name` + `offers`·`review`·`aggregateRating` 중 하나 | `image`, `brand`, `gtin`·`sku` |
+| `Organization` | 없음 | `logo`, `url`, `sameAs`, `contactPoint` |
+| `LocalBusiness` | `name`, `address` | `geo`, `openingHoursSpecification`, `telephone` |
+| `VideoObject` | `name`, `thumbnailUrl`, `uploadDate` | `contentUrl` 또는 `embedUrl`, `duration`, `description` |
+
+`Article`의 `author`는 글쓴이 이름 문자열이 아니라 `Person` 객체로 쓰고 `url`에 소개 페이지를 넣는다. 구글 문서가 권하는 형태다. 여러 사람이 썼으면 배열로 넣는다. `"author": "김하늘, 이바다"`처럼 한 문자열에 몰아 쓰면 한 사람으로 읽힌다. 날짜는 `2026-10-24T09:00:00+09:00`처럼 시간대를 붙인 ISO 8601로 쓴다. 시간대가 없으면 구글은 Googlebot이 있는 시간대로 해석한다고 적고 있다.
+
+`BreadcrumbList`의 이동 경로는 사용자가 사이트에서 실제로 따라가는 경로를 나타낸다. URL 경로와 같을 필요는 없다. 상품이 여러 카테고리에 속하면 대표 경로 하나를 쓰거나, 경로마다 `BreadcrumbList`를 하나씩 넣는다. 모바일 검색 결과에서는 이동 경로가 주소 대신 표시되던 시기가 있었고, 지금은 화면 크기와 시기에 따라 표시가 달라진다.
+
+`VideoObject`는 동영상이 그 페이지의 주인공일 때 넣는다. 구글은 동영상이 페이지의 주된 내용인 페이지를 동영상 결과에 주로 쓴다. `duration`은 `PT1M54S`처럼 ISO 8601 기간 형식이다. 동영상 파일 주소(`contentUrl`)를 주면 구글이 파일을 가져가 썸네일과 핵심 장면(key moments)을 만들 수 있다. 썸네일 이미지가 로그인이나 리퍼러 검사로 막혀 있으면 동영상 결과에서 빠진다.
+
+`LocalBusiness`는 매장이 있는 가게에 쓴다. 영업시간은 `openingHoursSpecification`에 요일과 시간을 나눠 쓴다. 다만 지도와 로컬 검색에 나오는 정보는 주로 구글 비즈니스 프로필에서 온다. 구조화 데이터와 비즈니스 프로필의 주소와 전화번호를 같게 맞춘다.
+
+투어, 입장권, 체험 상품을 검색과 지도에 띄우는 "즐길 거리(Things to do)"는 페이지 마크업이 아니라 피드로 들어간다. 구글의 연결 파트너나 즐길 거리 전용 센터를 통해 상품 피드를 올리는 방식이라 구조화 데이터로는 받을 수 없다.
+
+## Next.js에서 만들기
+
+JSON-LD는 화면을 그리는 데이터와 같은 객체에서 만든다. 그래야 화면과 마크업이 어긋나지 않는다. 타입은 `schema-dts` 패키지의 schema.org 타입을 쓰면 속성 이름 오타를 컴파일 단계에서 잡는다.
+
+```tsx
+// app/products/[id]/page.tsx (서버 컴포넌트 예시)
+import type { Product, WithContext } from "schema-dts";
+import { getProduct } from "@/lib/products";
+
+const SITE = "https://shop.example.com";
+
+export default async function ProductPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const p = await getProduct(id);
+
+  const jsonLd: WithContext<Product> = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "@id": `${SITE}/products/${p.id}#product`,
+    name: p.name,
+    image: p.images,
+    offers: {
+      "@type": "Offer",
+      price: String(p.price),          // 89000 → "89000"
+      priceCurrency: "KRW",
+      availability: p.stock > 0 ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
+      url: `${SITE}/products/${p.id}`,
+    },
+    ...(p.reviewCount > 0 && {
+      aggregateRating: { "@type": "AggregateRating", ratingValue: p.rating, reviewCount: p.reviewCount },
+    }),
+  };
+
+  return (
+    <section>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }}
+      />
+      <h1>{p.name}</h1>
+      {/* 화면도 같은 p에서 그린다. 평점이 없으면 화면에도 마크업에도 없다 */}
+    </section>
+  );
+}
+```
+
+`replace(/</g, "\\u003c")`는 빼면 안 된다. 리뷰 본문처럼 사용자가 쓴 값이 들어가면 `JSON.stringify`는 `<`를 그대로 둔다. 스크래치 폴더에서 돌려 보면 차이가 보인다.
+
+```bash
+node esc.js
+```
+
+```text
+{"@type":"Review","reviewBody":"좋아요</script><script>alert(1)</script>"}
+{"@type":"Review","reviewBody":"좋아요</script><script>alert(1)</script>"}
+좋아요</script><script>alert(1)</script>
+```
+
+첫 줄을 `script` 안에 그대로 넣으면 HTML 파서는 JSON 중간의 `</script>`에서 스크립트를 끝내고, 그 뒤의 `<script>alert(1)</script>`를 새 스크립트로 실행한다. 저장형 XSS다. 둘째 줄처럼 `<`를 `<`로 바꾸면 HTML 파서에게는 태그가 아니고, JSON으로 다시 읽으면 셋째 줄처럼 원래 값으로 돌아온다. Next.js 공식 문서의 JSON-LD 예시도 같은 치환을 쓴다. XSS 전반은 [XSS](/posts/xss)에 있다.
+
+자바스크립트로 JSON-LD를 나중에 넣어도 구글은 렌더링한 뒤 읽는다. 다만 렌더링은 늦게 일어나고, 구글은 상품 마크업을 자바스크립트로 만들면 쇼핑 쪽 크롤링이 덜 자주, 덜 안정적으로 일어날 수 있다고 적고 있다. 상품처럼 가격이 자주 바뀌는 페이지일수록 서버에서 첫 HTML에 넣는다.
+
+## 검증하는 세 가지 도구
+
+리치 결과 테스트(Rich Results Test)는 구글이 지원하는 리치 결과 유형만 검사한다. "이 페이지가 어떤 리치 결과 대상인가, 필수 속성이 빠졌나"를 알려 준다. 주소를 넣으면 구글봇처럼 렌더링한 뒤 검사하고, 코드를 붙여 넣어 검사할 수도 있다.
+
+Schema Markup Validator(validator.schema.org)는 schema.org 문법 전체를 검사한다. 구글이 쓰지 않는 유형도 보여 주고, 리치 결과 자격은 판단하지 않는다. 두 도구가 서로 다른 질문에 답한다는 걸 기억하면 혼란이 줄어든다.
+
+Search Console의 개선사항(Enhancements) 보고서는 사이트 전체에서 유형별로 유효한 항목, 경고, 오류를 모아 보여 준다. 배포 뒤 오류가 갑자기 늘면 템플릿 하나가 깨진 것이다. 오류를 고친 뒤 "수정 결과 확인"을 누르면 다시 검사한다.
+
+검사를 통과해도 리치 결과가 안 붙을 수 있다. 다음 절의 이야기다.
+
+## 순위 신호가 아니라 표시 자격이다
+
+구조화 데이터를 넣으면 순위가 오르느냐는 질문에 구글은 일관되게 아니라고 답한다. 구조화 데이터는 검색 엔진이 페이지를 이해하는 걸 돕고, 리치 결과에 나올 자격을 준다. 자격이 있다고 반드시 보여 주지도 않는다. 구글은 검색어, 기기, 페이지 품질을 보고 리치 결과를 보여 줄지 정한다.
+
+그래도 효과는 있다. 같은 순위에서 별점과 가격이 붙은 결과는 더 눈에 띄고, 클릭률이 달라질 수 있다. 측정은 Search Console 실적 보고서의 "검색 노출 모양(Search appearance)" 필터로 리치 결과로 나온 노출과 클릭을 따로 본다.
+
+지원 유형은 계속 바뀐다. 2023년 8월에 FAQ 리치 결과는 정부·보건 분야의 일부 권위 있는 사이트로 줄었고 HowTo는 없어졌다. 2024년에는 사이트 링크 검색창이 사라졌고, 2025년에도 몇몇 유형이 정리됐다. 리치 결과가 사라진 유형의 마크업을 지울 필요는 없다. 구글도 남겨 둬도 문제없다고 밝혔고, 다른 검색 엔진이나 도구가 여전히 쓸 수 있다. 하지만 새로 만들 때는 지금 지원되는 목록을 먼저 확인한다.
+
+## 보이는 내용과 다른 마크업
+
+구글의 구조화 데이터 일반 지침 중 가장 자주 어기는 건 "마크업은 사용자에게 보이는 내용을 나타내야 한다"는 규칙이다. 처음 장면의 리뷰 별점이 그 예다. 다른 예도 많다.
+
+- 화면에는 품절인데 `availability`가 `InStock`
+- 페이지에 리뷰가 없는데 `aggregateRating`을 넣거나, 다른 사이트의 별점을 가져와 넣기
+- 할인 전 가격을 화면에 보여 주면서 마크업에는 할인가만, 또는 그 반대
+- 글과 상관없는 `FAQPage`를 모든 페이지에 붙이기
+- 사이트 전체의 평점을 모든 상품 페이지에 똑같이 넣기
+
+이런 마크업이 발견되면 Search Console의 수동 조치(manual action)에 "구조화된 데이터 문제"가 뜬다. 수동 조치는 구글 직원이 확인해 거는 것이라, 그 사이트 또는 해당 페이지들의 리치 결과가 모두 빠진다. 페이지 순위에 대한 조치가 아니라 리치 결과 자격을 빼는 조치다. 고친 뒤 Search Console에서 재검토를 요청하고, 결과가 나오기까지 몇 주가 걸리기도 한다.
+
+수동 조치까지 가지 않아도 구글 알고리즘이 마크업을 믿지 않게 되면 리치 결과가 조용히 사라진다. 그래서 JSON-LD를 화면과 같은 데이터에서 만든다는 원칙이 여기서도 다시 나온다.
+
+## 다시 별점으로
+
+처음 장면의 상품 페이지는 가격을 숫자로 바꾸고, 평점에 리뷰 수를 넣고, 리뷰를 화면에 보여 주자 리치 결과 테스트를 통과했다. 그 뒤 리치 결과가 붙을지는 구글이 정한다. 구조화 데이터는 schema.org라는 공용 사전으로 페이지의 사물을 설명하는 일이고, JSON-LD의 `@id`와 `sameAs`로 사이트 안팎의 사물을 이으면 검색 엔진이 엔티티 단위로 우리 사이트를 이해한다. 순위가 아니라 표시 자격이라는 점, 화면과 같아야 한다는 점, 서버에서 첫 HTML에 넣고 `<`를 이스케이프한다는 점을 챙긴다. AI 검색이 페이지를 고르고 인용하는 방식은 [AI 검색은 페이지를 어떻게 골라 인용하나](/posts/ai-search-grounding-geo)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 구조화 데이터를 넣으면 검색 순위가 오르나요?
+
+직접 오르지는 않는다. 구조화 데이터는 검색 엔진이 페이지 내용을 이해하도록 돕고 별점, 가격, 이동 경로 같은 리치 결과에 나올 자격을 준다. 자격이 있어도 보여 줄지는 구글이 검색어와 품질을 보고 정한다. 리치 결과가 붙으면 같은 순위에서 클릭률이 달라질 수 있어서, 효과는 Search Console의 검색 노출 모양 필터로 따로 잰다.
+
+### JSON-LD, Microdata, RDFa 중 무엇을 쓰나요?
+
+구글은 셋 다 읽지만 JSON-LD를 권한다. 마크업과 분리된 `script` 하나라 컴포넌트 구조가 바뀌어도 깨지지 않고, 데이터 객체에서 바로 만들 수 있다. 대신 화면과 어긋나기 쉬우니 화면과 같은 데이터에서 함께 만든다. Microdata는 화면 요소에 직접 붙어 어긋나기 어렵지만 마크업이 복잡해진다.
+
+### @id와 sameAs는 각각 무엇인가요?
+
+`@id`는 우리 사이트 안에서 사물마다 붙이는 식별자로, 다른 객체가 `{ "@id": ... }`로 가리켜 그래프를 만든다. 글의 author와 소개 페이지의 Person이 같은 사람임을 이렇게 알린다. `sameAs`는 이 사물이 사이트 밖의 어떤 주소가 설명하는 사물과 같다는 뜻으로, Wikidata 항목이나 공식 프로필을 넣어 중의성을 해소한다. `@id`는 사이트 전체에서 늘 같은 값을 써야 한다.
+
+### 상품 페이지에 별점이 안 붙는 이유를 어떻게 찾나요?
+
+먼저 리치 결과 테스트로 필수 속성과 형식을 본다. 가격에 쉼표나 통화 글자가 들어갔는지, 평점에 `reviewCount`나 `ratingCount`가 있는지, 10점 체계인데 `bestRating`이 빠졌는지가 흔하다. 그다음 화면에 그 평점과 리뷰가 실제로 보이는지, 자기 자신에 대한 리뷰를 마크업한 것이 아닌지 정책을 확인한다. 다 맞아도 표시 여부는 구글이 정하니 Search Console 개선사항 보고서와 실적의 검색 노출 모양으로 추이를 본다.
+
+### JSON-LD를 넣을 때 보안상 조심할 점은 무엇인가요?
+
+`JSON.stringify`는 `<`를 이스케이프하지 않아서, 리뷰 본문에 `</script>`가 들어가면 스크립트 태그가 닫히고 뒤의 내용이 실행되는 저장형 XSS가 된다. `<`를 `<`로 바꿔 넣으면 HTML 파서에게는 태그가 아니고 JSON으로는 원래 값이 된다. Next.js 공식 예시도 이 치환을 쓴다.
+
+### 화면과 다른 구조화 데이터를 넣으면 어떻게 되나요?
+
+구글 지침 위반이라 알고리즘이 마크업을 무시해 리치 결과가 조용히 빠지거나, 심하면 Search Console에 구조화된 데이터 문제로 수동 조치가 걸린다. 수동 조치는 순위가 아니라 리치 결과 자격을 빼는 조치이고, 고친 뒤 재검토를 요청해야 풀린다. 품절인데 InStock, 없는 리뷰 별점, 상관없는 FAQ가 흔한 예다.
+
+### 지식 패널은 구조화 데이터로 만들 수 있나요?
+
+만들 수 없다. 지식 패널은 구글이 여러 출처에서 엔티티를 충분히 알게 됐을 때 지식 그래프를 바탕으로 자동으로 만든다. `Organization`의 로고와 `sameAs`, 일관된 이름은 그 엔티티와 사이트를 연결하고 패널 정보를 고르는 데 도움이 될 뿐이다. 패널이 이미 있으면 당사자가 소유를 인증하고 수정을 제안할 수 있다.
+
+### FAQ 마크업처럼 리치 결과가 사라진 유형은 지워야 하나요?
+
+지울 필요는 없다. 구글은 지원이 끝난 마크업을 남겨 둬도 문제가 없다고 밝혔고, 다른 검색 엔진이나 도구가 여전히 읽을 수 있다. 다만 새로 마크업할 때는 지금 지원되는 유형 목록을 확인해 노력을 쓸 곳을 고른다. 페이지 내용과 상관없는 FAQ를 붙이는 건 지원 여부와 상관없이 지침 위반이다.

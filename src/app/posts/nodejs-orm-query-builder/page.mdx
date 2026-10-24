@@ -1,0 +1,474 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-orm-query-builder");
+
+<EasyIntro>
+  데이터베이스에 무언가를 물어보려면 SQL이라는 데이터베이스의 말로 써서 보내야 한다. 처음에는 그 말을 직접 썼는데, 표가 늘어나고 질문이 길어지자 오타 하나로 서비스가 멈추는 일이 생겼다. 그래서 말을 대신 만들어 주는 도구로 바꾸려고 했다.
+
+  외국 식당에서 주문하는 상황을 떠올리면 쉽다. 그 나라 말을 직접 하면 원하는 대로 정확히 주문할 수 있지만 틀리기 쉽다. 그림 메뉴판을 손가락으로 가리키면 틀릴 일은 적지만, 메뉴판에 없는 주문은 못 한다. 통역사에게 맡기면 편하지만, 통역사가 내 말을 어떻게 옮겼는지 모르면 엉뚱한 요리가 나와도 이유를 모른다.
+
+  데이터베이스 도구도 이렇게 세 단계가 있다. 직접 말하는 도구, 그림 메뉴판처럼 조각을 맞춰 말을 만드는 도구, 통역사처럼 프로그램의 물건을 표로 바꿔 주는 도구다. 어느 쪽을 골라도, 실제로 데이터베이스에 어떤 말이 전달됐는지 들여다보는 습관이 있어야 문제가 생겼을 때 고칠 수 있다.
+</EasyIntro>
+
+주문 서비스의 DB 코드는 `pg` 드라이버에 SQL 문자열을 직접 쓰는 방식으로 시작했다. 테이블이 두 개일 때는 이게 가장 빨랐다. 테이블이 스무 개가 되자 문제가 보이기 시작했다. 컬럼 이름을 바꾸면 문자열 속 SQL을 grep으로 찾아 고쳐야 했고, 결과 행의 타입은 전부 `any`였고, 누군가 트랜잭션을 잘못 짜서 환불이 반만 들어간 주문이 생겼다. 팀에서 "Prisma로 옮기자"는 말이 나왔다.
+
+옮기기 전에 따져 볼 것이 많다. 드라이버, 쿼리 빌더, ORM은 SQL을 얼마나 숨기느냐가 다르고, 그만큼 얻는 것과 잃는 것이 다르다. 이 글은 같은 `users`, `orders` 테이블 위에서 `pg`, Knex, Drizzle, Prisma를 직접 돌려 생성된 SQL을 보고, 커넥션 풀과 트랜잭션, 타입, 마이그레이션에서 어떤 차이가 나는지 본다. 기준은 Node.js 22.22, PostgreSQL 16.15다. 실행한 버전은 pg 8.23, Knex 3.3, Drizzle ORM 0.45, Prisma 6.19다.
+
+ORM이 관계를 따라가다 쿼리를 수백 번 보내는 N+1 문제는 [N+1 쿼리 글](/posts/n-plus-one-queries)에서, 마이그레이션 도구가 기록 표와 잠금을 어떻게 쓰는지는 [마이그레이션 도구 글](/posts/db-migration-tools)에서 이미 깊게 다뤘다. 여기서는 Node에서 무엇을 고를지에 집중한다.
+
+## 예제 테이블
+
+글 끝까지 이 두 테이블을 쓴다.
+
+```sql
+create table users (
+  id    bigserial primary key,
+  email text not null unique,
+  name  text not null
+);
+
+create table orders (
+  id         bigserial primary key,
+  user_id    bigint not null references users(id),
+  total      int not null check (total >= 0),
+  status     text not null default 'paid',
+  created_at timestamptz not null default now()
+);
+
+insert into users (email, name) values
+  ('kim@example.com', '김하나'), ('lee@example.com', '이두리'), ('park@example.com', '박세나');
+insert into orders (user_id, total, status) values
+  (1, 32000, 'paid'), (1, 12000, 'refunded'), (2, 54000, 'paid'), (3, 8000, 'paid');
+```
+
+```text
+ id | user_id | total |  status  |          created_at
+----+---------+-------+----------+------------------------------
+  1 |       1 | 32000 | paid     | 2026-10-23 13:03:01.55162+00
+  2 |       1 | 12000 | refunded | 2026-10-23 13:03:01.55162+00
+  3 |       2 | 54000 | paid     | 2026-10-23 13:03:01.55162+00
+  4 |       3 |  8000 | paid     | 2026-10-23 13:03:01.55162+00
+```
+
+## 세 층: 드라이버, 쿼리 빌더, ORM
+
+아래로 갈수록 SQL에 가깝고, 위로 갈수록 자바스크립트 객체에 가깝다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="위로 갈수록 SQL을 덜 쓰고, 생성된 SQL을 볼 일이 늘어난다"
+  nodes={[
+    { id: "orm", label: "ORM", sub: "Prisma, TypeORM, Sequelize", x: 200, y: 36, w: 220 },
+    { id: "qb", label: "쿼리 빌더", sub: "Knex, Drizzle", x: 200, y: 112, w: 180 },
+    { id: "drv", label: "드라이버", sub: "pg, mysql2, mongodb", x: 200, y: 188, w: 190 },
+    { id: "pool", label: "커넥션 풀", sub: "pg.Pool 등", x: 90, y: 262, w: 130 },
+    { id: "db", label: "PostgreSQL", sub: "SQL을 받는 곳", x: 310, y: 262, w: 130 },
+  ]}
+  edges={[
+    { from: "orm", to: "qb", label: "SQL 생성" },
+    { from: "qb", to: "drv", label: "SQL + 값" },
+    { from: "drv", to: "pool", label: "연결 빌림" },
+    { from: "pool", to: "db", label: "프로토콜" },
+  ]}
+/>
+
+어느 층을 쓰든 맨 아래에서는 드라이버가 SQL 문자열과 값 배열을 DB 프로토콜로 보낸다. 쿼리 빌더는 그 SQL을 함수 호출로 조립해 주고, ORM은 한 걸음 더 나가 "사용자와 그 주문들"처럼 객체 관계를 말하면 SQL을 알아서 만든다. 층이 올라갈수록 덜 쓰지만, 실제로 나간 SQL이 내가 생각한 것과 다를 가능성도 커진다.
+
+## 드라이버: SQL을 내가 쓴다
+
+`pg`로 사용자별 결제 완료 주문 수와 합계를 구해 보자.
+
+```js
+import pg from "pg";
+
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
+const { rows } = await pool.query(
+  `select u.id, u.name, count(o.*) as orders, sum(o.total) as spent
+     from users u
+     left join orders o on o.user_id = u.id and o.status = $1   -- 값은 $1 자리로
+    group by u.id
+    order by u.id`,
+  ["paid"],
+);
+console.log(rows);
+console.log(typeof rows[0].id, typeof rows[0].orders, typeof rows[0].spent);
+```
+
+```text
+[
+  { id: '1', name: '김하나', orders: '1', spent: '32000' },
+  { id: '2', name: '이두리', orders: '1', spent: '54000' },
+  { id: '3', name: '박세나', orders: '1', spent: '8000' }
+]
+string string string
+```
+
+숫자가 전부 문자열이다. `id`는 `bigint`, `count`와 `sum(int)`의 결과도 `bigint`라서 그렇다. PostgreSQL의 `bigint`는 2^63까지 담는데 자바스크립트 `number`는 2^53까지만 정확하니, `pg`는 기본으로 문자열로 준다. 이걸 모르고 `orders + 1`을 하면 `"11"`이 된다. 범위가 안전하다고 확신하면 SQL에서 `count(*)::int`로 바꾸거나, `pg.types.setTypeParser(20, BigInt)`로 `bigint`를 전부 BigInt로 받는다. MySQL의 `mysql2`는 반대로 기본이 숫자라 2^53을 넘는 값에서 조용히 정밀도를 잃는다. `supportBigNumbers`와 `bigNumberStrings` 옵션으로 바꾼다.
+
+값은 반드시 `$1` 자리표시자로 넘긴다. 문자열에 이어 붙이면 SQL 인젝션이 된다. `pg`는 값을 SQL 문과 따로 보내서(확장 쿼리 프로토콜) 값이 SQL로 해석될 여지가 없다. `mysql2`는 자리표시자가 `?`이고, `execute()`는 서버 쪽 prepared statement를, `query()`는 클라이언트 쪽 이스케이프를 쓴다.
+
+드라이버만 쓰면 SQL이 보이는 그대로라서 성능 문제를 찾기 쉽고, 윈도 함수나 CTE, `on conflict` 같은 DB 기능을 마음껏 쓴다. 대신 결과 타입을 직접 선언해야 하고, 컬럼 이름이 바뀌면 문자열 속에서 찾아 고쳐야 한다. MongoDB의 공식 `mongodb` 드라이버도 같은 위치다. SQL 대신 필터 객체를 보낼 뿐이다.
+
+## 같은 풀에서 트랜잭션을 걸면
+
+처음 장면의 "환불이 반만 들어간 주문"은 이 코드에서 나왔다.
+
+```js
+// 잘못된 트랜잭션: 쿼리마다 풀에서 아무 연결이나 빌린다
+await pool.query("BEGIN");
+await Promise.all([
+  pool.query("insert into orders (user_id, total) values ($1, $2) returning pg_backend_pid() as pid", [2, 1000]),
+  pool.query("insert into orders (user_id, total) values ($1, $2) returning pg_backend_pid() as pid", [2, 2000]),
+  pool.query("insert into orders (user_id, total) values ($1, $2) returning pg_backend_pid() as pid", [2, 3000]),
+]);
+await pool.query("ROLLBACK");
+```
+
+`pg_backend_pid()`는 그 쿼리를 처리한 DB 서버 프로세스 번호다. 연결 하나에 서버 프로세스 하나가 붙으니, 이 번호로 어느 연결에서 돌았는지 알 수 있다.
+
+```text
+insert pids: [ 22362, 22363, 22364 ]
+after ROLLBACK: [ 2000, 3000 ]
+[
+  { pid: 22362, state: 'idle in transaction' },
+  { pid: 22363, state: 'idle' },
+  { pid: 22364, state: 'active' }
+]
+```
+
+세 INSERT가 서로 다른 연결 세 개에서 돌았다. `BEGIN`은 22362에서 열렸으니 1000원짜리만 트랜잭션 안에 들어갔고, 2000원과 3000원은 각자 자동 커밋됐다. `ROLLBACK`은 또 다른 연결로 가서 "진행 중인 트랜잭션이 없다"는 경고만 남겼다. 롤백했는데 두 건이 남았고, 22362는 `idle in transaction`으로 트랜잭션을 연 채 풀에 돌아갔다. 다음에 이 연결을 빌린 요청은 남의 트랜잭션 안에서 돌게 되고, 그동안 잡은 잠금은 풀리지 않는다.
+
+`pool.query()`는 부를 때마다 연결을 빌렸다가 바로 돌려준다. 트랜잭션은 연결 하나에 묶인 상태라, 처음부터 끝까지 같은 연결을 붙잡고 있어야 한다.
+
+```js
+const client = await pool.connect(); // 연결 하나를 빌린다
+try {
+  await client.query("BEGIN");
+  await client.query("insert into orders (user_id, total) values ($1, $2)", [2, 1000]);
+  await client.query("update users set name = $1 where id = $2", ["이두리", 2]);
+  await client.query("COMMIT");
+} catch (err) {
+  await client.query("ROLLBACK");
+  throw err;
+} finally {
+  client.release(); // 빠뜨리면 풀에서 연결이 하나씩 사라진다
+}
+```
+
+아래 그림은 두 방식이 연결을 어떻게 쓰는지 보여 준다.
+
+<SequenceDiagram
+  caption="pool.query는 쿼리마다 다른 연결을 빌릴 수 있다. 트랜잭션은 연결 하나에 붙어 있다"
+  actors={[
+    { id: "app", label: "핸들러" },
+    { id: "pool", label: "pg.Pool" },
+    { id: "c1", label: "연결 22362" },
+    { id: "c2", label: "연결 22363" },
+  ]}
+  steps={[
+    { from: "app", to: "pool", label: "query(BEGIN)", title: "BEGIN도 빌린 연결 하나에서 돈다", detail: "풀이 22362를 빌려 BEGIN을 보내고 곧바로 돌려받는다. 22362에는 열린 트랜잭션이 남는다." },
+    { from: "pool", to: "c1", label: "BEGIN", title: "트랜잭션은 이 연결의 상태다", detail: "트랜잭션은 DB 서버 프로세스 하나에 묶인다. 다른 연결은 이 BEGIN을 모른다.", payload: "state: idle in transaction" },
+    { from: "app", to: "pool", label: "INSERT 3건", title: "동시에 보내면 여러 연결로 퍼진다", detail: "놀고 있는 연결이 모자라 풀이 새 연결을 연다. 첫 INSERT만 22362로 간다." },
+    { from: "pool", to: "c2", label: "INSERT (autocommit)", title: "트랜잭션 밖에서 바로 커밋된다", detail: "22363에는 BEGIN이 없으니 2000원 주문은 그 자리에서 확정된다." },
+    { from: "app", to: "pool", label: "query(ROLLBACK)", title: "ROLLBACK이 엉뚱한 연결로 간다", detail: "ROLLBACK을 받은 연결에는 트랜잭션이 없다. 경고만 남고 22362는 열린 채로 풀에 남는다." },
+    { from: "app", to: "c1", label: "client = pool.connect()", title: "고친 방법: 연결을 붙잡는다", detail: "BEGIN부터 COMMIT까지 같은 client로 보내고 finally에서 release한다. 쿼리 빌더와 ORM의 트랜잭션 API가 대신 해 주는 일이다." },
+  ]}
+/>
+
+쿼리 빌더와 ORM을 쓰는 큰 이유 하나가 이것이다. 트랜잭션 콜백 안에서 받은 객체(`trx`, `tx`)로만 쿼리를 보내게 해서, 같은 연결을 쓰도록 강제한다. 다만 콜백 안에서 실수로 바깥의 `db`나 `prisma`를 쓰면 똑같은 버그가 난다. 리뷰할 때 보는 자리다. 풀 크기와 고갈은 [커넥션 풀 글](/posts/connection-pool)에서 다뤘다.
+
+## 쿼리 빌더: SQL을 함수로 조립한다
+
+Knex로 "결제 완료이고 1만 원 이상인 주문을 큰 순서로"를 짜면 이렇다.
+
+```js
+import knex from "knex";
+
+const db = knex({ client: "pg", connection: process.env.DATABASE_URL });
+const q = db("orders as o")
+  .join("users as u", "u.id", "o.user_id")
+  .select("u.name", "o.total")
+  .where("o.status", "paid")
+  .andWhere("o.total", ">=", 10000)
+  .orderBy("o.total", "desc")
+  .limit(10);
+
+console.log(q.toSQL().toNative()); // 보낼 SQL을 미리 본다
+console.log(await q);
+```
+
+```text
+{
+  sql: 'select "u"."name", "o"."total" from "orders" as "o" inner join "users" as "u" on "u"."id" = "o"."user_id" where "o"."status" = $1 and "o"."total" >= $2 order by "o"."total" desc limit $3',
+  bindings: [ 'paid', 10000, 10 ]
+}
+[ { name: '이두리', total: 54000 }, { name: '김하나', total: 32000 } ]
+```
+
+호출 하나가 SQL 조각 하나로 거의 그대로 옮겨진다. 값은 자리표시자로 빠졌다. 조건을 `if`로 붙였다 뗐다 하는 검색 화면처럼, 문자열로 짜면 `and`와 `where` 처리로 지저분해지는 쿼리에서 쿼리 빌더가 빛난다. Knex는 트랜잭션도 콜백으로 준다.
+
+```js
+await db.transaction(async (trx) => {
+  const [o] = await trx("orders").insert({ user_id: 3, total: 15000 }).returning(["id"]);
+  await trx("orders").where({ id: o.id }).update({ status: "refunded" });
+}); // 콜백이 끝나면 COMMIT, 던지면 ROLLBACK
+```
+
+Knex의 약점은 타입이다. 결과 행의 타입을 알지 못해서 TypeScript에서는 제네릭으로 직접 선언해야 하고, 컬럼 이름 오타는 실행해야 드러난다.
+
+Drizzle은 같은 위치에 타입을 얹었다. 테이블을 TypeScript로 선언하면 그 선언에서 쿼리의 결과 타입이 나온다.
+
+```ts
+import { drizzle } from "drizzle-orm/node-postgres";
+import { pgTable, bigserial, bigint, text, integer, timestamp } from "drizzle-orm/pg-core";
+import { and, eq, gte, desc } from "drizzle-orm";
+
+export const users = pgTable("users", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull(),
+});
+export const orders = pgTable("orders", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  userId: bigint("user_id", { mode: "number" }).notNull().references(() => users.id),
+  total: integer("total").notNull(),
+  status: text("status").notNull().default("paid"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+const db = drizzle(pool, { logger: true });
+const rows = await db
+  .select({ name: users.name, total: orders.total })   // rows: { name: string; total: number }[]
+  .from(orders)
+  .innerJoin(users, eq(users.id, orders.userId))
+  .where(and(eq(orders.status, "paid"), gte(orders.total, 10000)))
+  .orderBy(desc(orders.total))
+  .limit(10);
+```
+
+```text
+Query: select "users"."name", "orders"."total" from "orders" inner join "users" on "users"."id" = "orders"."user_id" where ("orders"."status" = $1 and "orders"."total" >= $2) order by "orders"."total" desc limit $3 -- params: ["paid", 10000, 10]
+[ { name: '이두리', total: 54000 }, { name: '김하나', total: 32000 } ]
+```
+
+`logger: true`로 나간 SQL이 그대로 찍힌다. Knex와 거의 같은 SQL이다. `orders.totl`처럼 오타를 내면 실행 전에 타입 검사에서 걸린다. `mode: "number"`는 앞에서 본 `bigint` 문제를 "이 컬럼은 숫자 범위 안이다"라고 선언으로 푸는 것이다. 범위를 넘을 수 있으면 `mode: "bigint"`로 둔다. Drizzle에는 `db.query.users.findMany({ with: { orders: true } })` 같은 관계 쿼리 API도 있어서, 쿼리 빌더와 ORM 사이 어딘가에 선다.
+
+## 직접 해 보기: WHERE 절 조립기
+
+쿼리 빌더가 하는 일의 핵심은 조건을 조립하면서 값을 자리표시자로 빼는 것이다. 필터 객체를 받아 `text`와 `values`를 돌려주는 함수를 짜 보자. 규칙은 이렇다. 키 끝이 `_gte`면 `>=`, `_lte`면 `<=`, `_in`이면 `= any($n)`에 배열을 넘긴다. 접미사가 없으면 `=`다. 값이 `undefined`면 건너뛰고, `null`이면 자리표시자 없이 `is null`을 붙인다. 컬럼 이름은 소문자와 밑줄만 허용하고, 아니면 에러를 던진다. 조건이 없으면 `text`는 빈 문자열이다.
+
+<CodePlayground
+  caption="필터 객체를 WHERE 절과 값 배열로"
+  functionName="buildWhere"
+  initialCode={`function buildWhere(filters) {
+  const parts = [];
+  const values = [];
+  // 값은 절대 문자열에 넣지 말고 values에 쌓고 $n으로 가리킨다
+  return { text: "", values };
+}`}
+  solution={`function buildWhere(filters) {
+  const OPS = { gte: ">=", lte: "<=" };
+  const parts = [];
+  const values = [];
+  for (const [key, value] of Object.entries(filters)) {
+    if (value === undefined) continue;
+    const m = key.match(/^([a-z_]+?)(?:_(gte|lte|in))?$/);
+    if (!m) throw new Error("bad column: " + key);
+    const col = m[1], op = m[2];
+    if (value === null) { parts.push(col + " is null"); continue; }
+    values.push(value);
+    const ph = "$" + values.length;
+    parts.push(op === "in" ? col + " = any(" + ph + ")" : col + " " + (op ? OPS[op] : "=") + " " + ph);
+  }
+  return { text: parts.length ? "where " + parts.join(" and ") : "", values };
+}`}
+  tests={[
+    { label: "하나", args: [{ status: "paid" }], expected: { text: "where status = $1", values: ["paid"] } },
+    { label: "범위 붙이기", args: [{ status: "paid", total_gte: 10000 }], expected: { text: "where status = $1 and total >= $2", values: ["paid", 10000] } },
+    { label: "배열은 any", args: [{ user_id_in: [1, 2], total_lte: 50000 }], expected: { text: "where user_id = any($1) and total <= $2", values: [[1, 2], 50000] } },
+    { label: "undefined와 null", args: [{ status: undefined, refunded_at: null, total_gte: 0 }], expected: { text: "where refunded_at is null and total >= $1", values: [0] } },
+    { label: "조건 없음", args: [{}], expected: { text: "", values: [] } },
+  ]}
+/>
+
+네 번째 테스트가 쿼리 빌더들이 실제로 신경 쓰는 자리다. SQL에서 `= NULL`은 언제나 참이 아니라서 `is null`로 바꿔야 하고, `undefined`를 `null`과 같게 다루면 "조건을 안 걸었다"와 "값이 비어 있는 행만"이 섞인다. 그리고 값은 자리표시자로 빼도 컬럼 이름은 SQL에 그대로 들어간다. 사용자가 정렬 컬럼을 고르는 화면에서 컬럼 이름을 검사 없이 넣으면 그 자리로 인젝션이 들어온다. 그래서 허용 목록으로 거른다.
+
+## ORM: 객체를 말하면 SQL이 나온다
+
+Prisma는 `schema.prisma`에 모델을 선언하고, `prisma generate`로 그 모델에 맞는 클라이언트 코드를 만든다. 기존 테이블에 맞춰 모델을 이렇게 적었다.
+
+```text
+model User {
+  id     BigInt  @id @default(autoincrement())
+  email  String  @unique
+  name   String
+  orders Order[]
+  @@map("users")
+}
+
+model Order {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @map("user_id")
+  total     Int
+  status    String   @default("paid")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id])
+  @@map("orders")
+}
+```
+
+"결제 완료 주문이 있는 사용자와 그 주문들"을 가져오면서 나간 SQL을 찍었다.
+
+```js
+const prisma = new PrismaClient({ log: [{ emit: "event", level: "query" }] });
+prisma.$on("query", (e) => console.log("SQL:", e.query));
+
+const users = await prisma.user.findMany({
+  where: { orders: { some: { status: "paid" } } },
+  include: { orders: { where: { status: "paid" }, select: { total: true } } },
+  orderBy: { id: "asc" },
+});
+```
+
+```text
+SQL: SELECT "users"."id", "users"."email", "users"."name" FROM "users" WHERE EXISTS(SELECT "t0"."user_id" FROM "orders" AS "t0" WHERE ("t0"."status" = $1 AND ("users"."id") = ("t0"."user_id") AND "t0"."user_id" IS NOT NULL)) ORDER BY "users"."id" ASC OFFSET $2
+SQL: SELECT "orders"."id", "orders"."total", "orders"."user_id" FROM "orders" WHERE ("orders"."status" = $1 AND "orders"."user_id" IN ($2,$3,$4)) OFFSET $5
+[
+  { id: 1n, name: '김하나', orders: [ [Object] ] },
+  { id: 2n, name: '이두리', orders: [ [Object] ] },
+  { id: 3n, name: '박세나', orders: [ [Object] ] }
+]
+```
+
+(출력에서 스키마 접두사 `"public".`은 읽기 쉽게 지웠다.)
+
+코드는 짧은데 SQL은 두 개가 나갔다. 사용자를 `EXISTS` 서브쿼리로 거르고, 그 사용자들의 주문을 `IN`으로 한 번에 가져와 메모리에서 붙인다. JOIN 하나로 갈 거라 짐작했다면 틀렸다. 사용자마다 쿼리를 보내는 N+1은 아니지만, 사용자가 만 명이면 `IN`에 값이 만 개 들어간다. 이 버전의 Prisma는 관계를 기본으로 이렇게 가져오고, `relationJoins` 같은 설정으로 바꿀 수 있다. ORM을 쓸 때 쿼리 로그를 켜 보는 습관이 필요한 이유가 이것이다.
+
+`id`가 `1n`으로 나온 것도 보인다. Prisma는 `BigInt` 필드를 자바스크립트 BigInt로 준다. 그대로 API 응답에 넣으면 이렇게 깨진다.
+
+```text
+TypeError: Do not know how to serialize a BigInt
+```
+
+`JSON.stringify`가 BigInt를 모른다. 응답 직전에 문자열로 바꾸거나, 범위가 충분하면 스키마에서 `Int`로 둔다.
+
+Prisma의 대화형 트랜잭션에는 기본 시간 한도가 있다. 트랜잭션 안에서 외부 API를 6초 기다려 봤다.
+
+```js
+await prisma.$transaction(async (tx) => {
+  await tx.order.create({ data: { userId: 1n, total: 5000 } });
+  await new Promise((r) => setTimeout(r, 6000)); // 외부 API를 기다리는 척
+  await tx.order.create({ data: { userId: 1n, total: 6000 } });
+});
+```
+
+```text
+PrismaClientKnownRequestError P2028 | Transaction API error: Transaction already closed: A query cannot be executed on an expired transaction. The timeout for this transaction was 5000 ms, however 6037 ms passed since the start of the transaction. Consider increasing the interactive transaction timeout or doing less work in the transaction.
+0
+```
+
+5초가 지나자 트랜잭션이 닫혀 첫 주문도 롤백됐다(남은 행 0). 한도를 늘리기 전에, 트랜잭션 안에서 네트워크를 기다리는 설계부터 의심한다. 그 6초 동안 DB 연결 하나와 잡은 잠금이 묶인다.
+
+TypeORM과 Sequelize는 더 전통적인 ORM이다. TypeORM은 데코레이터로 엔티티 클래스를 선언하고, Sequelize는 `Model.init`으로 모델을 정의한다. 둘 다 연관 관계, 지연 로딩, 훅 같은 기능이 많다. MongoDB 쪽에는 Mongoose가 있다. 스키마가 없는 컬렉션 위에 스키마와 검증, 미들웨어를 얹는 ODM(Object Document Mapper)이다.
+
+## Active Record와 Data Mapper
+
+ORM은 객체와 DB를 잇는 방식에 따라 두 갈래로 나뉜다.
+
+Active Record는 객체가 자기 자신을 저장할 줄 안다. 행 하나가 객체 하나이고, 그 객체에 `save()`, `destroy()`가 붙어 있다. Sequelize, Mongoose, Rails의 ActiveRecord가 이쪽이다.
+
+```js
+// Active Record: 객체가 직접 저장한다 (Sequelize)
+const order = await Order.findByPk(4);
+order.status = "refunded";
+await order.save();
+```
+
+Data Mapper는 객체는 그냥 데이터이고, 저장은 따로 있는 저장소(Repository)가 맡는다. 도메인 객체가 DB를 모르니 테스트와 설계가 깔끔해지는 대신 코드가 조금 늘어난다. TypeORM은 둘 다 지원하고(`BaseEntity`를 상속하면 Active Record, `dataSource.getRepository()`를 쓰면 Data Mapper), Java의 JPA·Hibernate가 Data Mapper의 대표다.
+
+```ts
+// Data Mapper: 저장소가 저장한다 (TypeORM)
+const repo = dataSource.getRepository(Order);
+const order = await repo.findOneByOrFail({ id: 4 });
+order.status = "refunded";
+await repo.save(order);
+```
+
+Prisma와 Drizzle은 어느 쪽에도 딱 맞지 않는다. 결과가 클래스 인스턴스가 아니라 평범한 객체이고, 저장은 언제나 클라이언트의 메서드(`prisma.order.update`)로 한다. 굳이 고르면 Data Mapper에 가깝다. Active Record는 작은 CRUD 앱에서 빠르게 만들기 좋고, 업무 규칙이 복잡해질수록 도메인 객체에서 DB를 떼어 내는 Data Mapper 쪽이 버티기 쉽다. 계층을 나누는 이야기는 [헥사고날 아키텍처 글](/posts/hexagonal-architecture)과 이어진다.
+
+## 마이그레이션은 어디서 시작하나
+
+도구마다 "스키마의 원본이 어디냐"가 다르다. 이게 팀의 작업 흐름을 정한다.
+
+Prisma와 Drizzle은 스키마 선언 파일이 원본이다. 선언을 고치고 `prisma migrate dev`나 `drizzle-kit generate`를 돌리면 현재 상태와 비교해 SQL 마이그레이션 파일을 만들어 준다. 만든 SQL은 반드시 열어 본다. 컬럼 이름을 바꾸면 "옛 컬럼 삭제 + 새 컬럼 추가"로 잡혀 데이터가 날아가는 SQL이 나올 수 있다. Drizzle의 `push`와 Prisma의 `db push`는 파일 없이 DB를 바로 맞추는 개발용 명령이라 운영에서 쓰지 않는다.
+
+Knex와 Sequelize CLI는 마이그레이션 파일이 원본이다. `up`과 `down` 함수를 손으로 쓰고, 적용 기록은 `knex_migrations`, `SequelizeMeta` 테이블에 남는다. 스키마 전체 모습은 파일들을 다 적용해 봐야 안다.
+
+TypeORM은 엔티티에서 마이그레이션을 생성할 수도 있고, `synchronize: true`로 앱이 뜰 때 엔티티에 맞춰 DB를 자동으로 바꾸게 할 수도 있다. 후자는 운영 DB에서 컬럼을 지워 버릴 수 있어서 개발에서만 켠다. 이 옵션이 운영 설정에 남아 있는 사고가 생각보다 흔하다.
+
+어느 쪽이든 큰 테이블에 대한 `ALTER`는 잠금과 재작성을 일으킬 수 있다. 도구가 만든 SQL이 무중단으로 돌지는 [무중단 스키마 변경 글](/posts/zero-downtime-migrations)의 기준으로 따로 본다.
+
+## 언제 ORM이 독이 되나
+
+ORM은 단순한 CRUD와 관계 조회를 아주 빠르게 쓰게 해 준다. 문제는 그 바깥으로 나갈 때다.
+
+리포트나 통계처럼 집계, 윈도 함수, CTE가 들어간 쿼리는 ORM의 표현으로 짜기 어렵거나, 짜도 원하는 SQL이 안 나온다. 이럴 때는 버티지 말고 raw SQL로 내려간다. Prisma는 `$queryRaw`, Drizzle은 `sql` 템플릿, TypeORM은 `query()`가 있다. 태그된 템플릿으로 쓰면 값은 여전히 자리표시자로 빠진다. 문자열을 이어 붙이는 `$queryRawUnsafe` 같은 변형은 이름 그대로 위험하다.
+
+관계를 따라가는 코드가 반복문 안에 들어가면 N+1이 생기고, `include`를 겹겹이 쌓으면 위에서 본 것처럼 쿼리 여러 개와 거대한 `IN` 목록이 생긴다. 필요 없는 컬럼까지 다 가져오는 것도 흔하다. Prisma 예제에서 `select: { total: true }`만 줬는데도 연결용 `id`, `user_id`가 함께 나갔다. 화면 하나에서 수백 KB를 읽고 있다면 `select`로 필요한 필드만 고른다.
+
+그래서 ORM을 쓰는 팀일수록 SQL을 더 잘 알아야 한다. 쿼리 로그를 켜 두고, 느린 쿼리는 그 SQL을 꺼내 `EXPLAIN ANALYZE`로 본다. PostgreSQL의 `pg_stat_statements`를 켜 두면 ORM이 만든 쿼리 중 어떤 모양이 시간을 가장 많이 쓰는지 DB 쪽에서 모아 볼 수 있다.
+
+```sql
+-- 총 실행 시간이 큰 쿼리 다섯 개 (pg_stat_statements 확장이 필요하다)
+select calls, round(total_exec_time) as total_ms, round(mean_exec_time, 1) as mean_ms, left(query, 80) as query
+  from pg_stat_statements
+ order by total_exec_time desc
+ limit 5;
+```
+
+## 무엇을 고를까
+
+작은 서비스에서 출발한다면 나는 이렇게 본다.
+
+SQL을 잘 아는 팀이고 쿼리가 복잡하다면 드라이버나 쿼리 빌더가 맞다. 타입이 필요하면 Drizzle, 이미 Knex로 된 코드가 많으면 Knex에 결과 타입만 꼼꼼히 붙인다. 생성된 SQL이 내가 쓴 SQL과 거의 같아서 성능 문제를 쫓기 쉽다.
+
+CRUD가 대부분이고 관계 조회가 많으며, 스키마를 한 파일에서 보고 마이그레이션을 생성하고 싶다면 Prisma가 빠르다. 대신 쿼리 로그를 켜 두고, BigInt와 트랜잭션 한도 같은 기본값을 익힌다.
+
+도메인 규칙이 복잡하고 Java·Spring 같은 Data Mapper 경험이 있는 팀이면 TypeORM의 Repository 방식이 익숙할 수 있다. MongoDB라면 Mongoose가 사실상 기본이다.
+
+무엇을 고르든 둘은 지킨다. 트랜잭션 안의 쿼리는 그 트랜잭션 객체로만 보낸다. 그리고 실제로 나간 SQL을 볼 수 있게 해 둔다.
+
+## 다시 Prisma로 옮기자는 말로
+
+우리 팀은 결국 옮기지 않았다. 대신 Drizzle로 스키마를 선언해 타입을 얻고, 트랜잭션은 모두 `db.transaction` 콜백으로 바꿨다. 리포트 쿼리는 `sql` 템플릿으로 남겼다. 환불이 반만 들어가던 버그는 ORM이 없어서가 아니라 트랜잭션이 연결 하나에 묶인다는 걸 몰라서 생긴 것이었다. 어떤 층의 도구를 쓰든, 그 아래에서 어떤 SQL이 어느 연결로 나가는지 볼 수 있으면 고를 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 드라이버, 쿼리 빌더, ORM은 어떻게 다른가요?
+
+드라이버는 SQL 문자열과 값을 DB 프로토콜로 보내는 가장 낮은 층이다. 쿼리 빌더(Knex, Drizzle)는 그 SQL을 함수 호출로 조립해 주고, 생성된 SQL이 내가 쓴 것과 거의 같다. ORM(Prisma, TypeORM, Sequelize)은 객체와 관계를 말하면 SQL을 알아서 만들어서 CRUD가 빠르지만, 실제로 나간 SQL이 짐작과 다를 수 있다. 위로 갈수록 덜 쓰고 더 자주 들여다봐야 한다.
+
+### pg의 pool.query로 BEGIN과 COMMIT을 보내면 왜 안 되나요?
+
+`pool.query`는 부를 때마다 연결을 빌렸다 돌려줘서 쿼리마다 다른 연결에서 돌 수 있다. 트랜잭션은 연결 하나에 묶인 상태라, 실험에서 INSERT 세 개가 서로 다른 연결로 갔고 롤백 뒤에도 두 건이 남았다. BEGIN을 받은 연결은 `idle in transaction`으로 풀에 돌아가 다음 요청을 오염시킨다. `pool.connect()`로 연결 하나를 빌려 끝까지 쓰고 `finally`에서 `release`한다.
+
+### pg에서 count(*)가 문자열로 오는 이유는 무엇인가요?
+
+`count`와 `bigint` 컬럼은 PostgreSQL의 64비트 정수인데, 자바스크립트 `number`는 2^53까지만 정확하다. 그래서 `pg`는 기본으로 문자열로 준다. 범위가 안전하면 `::int`로 캐스팅하거나 타입 파서를 바꾸고, 아니면 BigInt로 받는다. BigInt는 `JSON.stringify`가 못 다루니 응답 직전에 문자열로 바꾼다.
+
+### ORM이 독이 되는 순간은 언제인가요?
+
+집계나 윈도 함수가 들어간 리포트 쿼리처럼 ORM 표현 밖으로 나갈 때, 관계 조회가 반복문 안에서 N+1이 될 때, `include`를 겹쳐 거대한 `IN` 목록이나 필요 없는 컬럼을 가져올 때다. 이때는 raw SQL로 내려가되 태그된 템플릿으로 값을 자리표시자로 넘긴다. 쿼리 로그와 `pg_stat_statements`로 실제 SQL을 보는 습관이 전제다.
+
+### Active Record와 Data Mapper는 무엇이 다른가요?
+
+Active Record는 객체가 자기 저장 방법을 알아서 `order.save()`처럼 쓴다. Sequelize와 Mongoose가 이쪽이다. Data Mapper는 객체는 데이터일 뿐이고 Repository가 저장을 맡아서 도메인 객체가 DB를 모른다. TypeORM은 둘 다 지원한다. 작은 CRUD에는 Active Record가 빠르고, 규칙이 복잡해질수록 Data Mapper가 테스트와 계층 분리에 유리하다.
+
+### Prisma 대화형 트랜잭션이 P2028로 실패했다면 무엇을 보나요?
+
+기본 시간 한도 5초를 넘긴 것이다. 실험에서 트랜잭션 안에서 6초를 기다리자 닫히면서 앞의 INSERT도 롤백됐다. 한도를 늘리기 전에 트랜잭션 안에서 외부 API 호출 같은 네트워크 대기를 하고 있지 않은지 본다. 그 시간 동안 DB 연결과 잠금이 묶이기 때문이다.
+
+### 스키마 선언에서 마이그레이션을 생성하는 도구를 쓸 때 주의할 점은?
+
+생성된 SQL을 반드시 열어 본다. 컬럼 이름 변경이 삭제와 추가로 잡혀 데이터가 날아갈 수 있고, 큰 테이블의 `ALTER`는 잠금과 재작성을 일으킬 수 있다. `db push`나 `drizzle-kit push`, TypeORM의 `synchronize: true`는 개발용이라 운영에서 쓰지 않는다. 적용 기록 테이블과 잠금 방식은 도구마다 다르니 배포 파이프라인에서 한 번만 돌게 한다.

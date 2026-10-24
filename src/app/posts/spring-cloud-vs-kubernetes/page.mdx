@@ -164,6 +164,41 @@ inventory-7x2kq   IPv4          8080    10.244.1.12,10.244.2.31   3d
 
 (위 YAML과 출력은 예시다.) 두 방법을 섞으면 안 된다. 쿠버네티스 위에서 Eureka를 그대로 두면 목록이 두 벌이 된다. Pod가 종료를 시작하면 쿠버네티스는 엔드포인트에서 바로 빼지만, Eureka에서는 인스턴스가 등록을 취소하거나 만료될 때까지 남아서 이미 내려가는 Pod로 요청이 간다. 옮길 때는 한쪽으로 정한다. 꼭 스프링 쪽 디스커버리 API가 필요하면 Spring Cloud Kubernetes가 쿠버네티스 API를 `DiscoveryClient`로 감싸 주지만, 앱이 API 서버를 읽을 RBAC 권한이 필요해진다.
 
+## 호출 코드는 Feign에서 HTTP 인터페이스로
+
+디스커버리를 바꾸는 김에 호출 코드도 같이 보게 된다. Spring Cloud로 MSA를 짠 프로젝트에는 대개 OpenFeign이 있다. 인터페이스에 `@FeignClient(name = "inventory")`를 붙이고 `@GetMapping`을 적으면 구현이 생기고, `name`이 서비스 ID라 LoadBalancer와 바로 묶인다.
+
+```java
+@FeignClient(name = "inventory")
+interface InventoryFeign {
+  @GetMapping("/stock/{sku}")
+  Stock stock(@PathVariable String sku);
+}
+```
+
+Spring Cloud 팀은 2022.0 릴리스 때 Spring Cloud OpenFeign을 기능 완료로 보고 버그 수정 위주로만 관리하겠다고 밝혔고, 문서에서도 스프링 자체의 HTTP 인터페이스로 옮기라고 권한다. 옮기는 이유는 유지 보수 상태만이 아니다. Feign은 인코더·디코더, 재시도(`Retryer`), 에러 변환(`ErrorDecoder`), 타임아웃 설정을 자기 방식으로 따로 갖는다. 그래서 같은 앱 안에서 `RestClient`에 붙인 인터셉터, 메시지 변환기, 관찰(observation) 설정이 Feign 호출에는 따로 걸린다. 동기 호출만 되는 것도 한계다.
+
+HTTP 인터페이스는 Spring Framework 6부터 들어 있는 같은 생각의 구현이다. `@HttpExchange`로 인터페이스를 쓰면 프레임워크가 프록시를 만들고, 실제 요청은 그 아래의 `RestClient`(블로킹)나 `WebClient`(리액티브)가 보낸다. 클라이언트 설정이 한 벌로 모인다.
+
+```java
+@HttpExchange("/stock")
+interface InventoryApi {
+  @GetExchange("/{sku}")
+  Stock stock(@PathVariable String sku);
+}
+
+@Bean
+InventoryApi inventoryApi(RestClient.Builder builder) {
+  // 쿠버네티스에서는 Service 이름, 아직 Eureka라면 @LoadBalanced 빌더에 서비스 ID
+  RestClient http = builder.baseUrl("http://inventory:8080").build();
+  return HttpServiceProxyFactory.builderFor(RestClientAdapter.create(http))
+      .build()
+      .createClient(InventoryApi.class);
+}
+```
+
+인터페이스 모양이 거의 같아서 옮기는 일은 어노테이션 바꾸기와 빈 등록이 대부분이다. Boot 4에서는 `@ImportHttpServices`로 이 빈 등록마저 설정 키로 대신하는데, 그 모습은 [Spring Boot 4 마이그레이션](/posts/spring-boot-4-migration)에서 돌려 봤다. 옮길 때 놓치기 쉬운 것은 실패 처리다. Feign은 4xx·5xx를 `FeignException`으로 던지고 `ErrorDecoder`로 바꿔 왔는데, `RestClient`는 `HttpClientErrorException`·`HttpServerErrorException`을 던지고 바꾸려면 `defaultStatusHandler`를 쓴다. 서킷 브레이커의 `recordExceptions`나 `@ControllerAdvice`가 Feign 예외 이름으로 걸려 있으면, 옮긴 뒤 실패가 실패로 세어지지 않는다. 타임아웃도 Feign 설정 키에서 위 데모처럼 요청 팩토리의 연결·읽기 타임아웃으로 옮긴다. Feign은 따로 주지 않아도 연결 10초, 읽기 60초가 기본이었지만, 옮긴 뒤에는 쓰는 HTTP 클라이언트 라이브러리의 기본값을 따르니 값을 명시해 둔다.
+
 ## 설정은 파일로 받는다
 
 Config Server가 하던 일은 ConfigMap과 Secret이 대부분 가져간다. 스프링 부트는 둘 다 그대로 읽는다. 환경 변수로 넣으면 `ORDER_MAXQTY` 같은 이름이 relaxed binding으로 `order.max-qty`에 묶이고([Spring Boot 자동 구성](/posts/spring-boot-auto-configuration) 참고), 볼륨으로 마운트하면 파일 이름이 키, 내용이 값이 된다. 후자를 읽는 방법이 `configtree`다. 쿠버네티스가 볼륨을 만드는 것과 같은 모양의 디렉터리를 로컬에 만들어 확인했다.

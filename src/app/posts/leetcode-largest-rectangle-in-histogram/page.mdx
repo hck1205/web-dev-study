@@ -1,0 +1,513 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-largest-rectangle-in-histogram");
+
+<EasyIntro>
+  폭이 1인 막대가 나란히 서 있는 그래프에서, 막대들 안에 쏙 들어가는 가장 큰 직사각형을 찾는 문제다. 직사각형은 막대 밖으로 삐져나오면 안 되니, 높이는 그 직사각형이 걸친 막대 중 가장 낮은 막대에 맞춰야 한다. 그래서 거꾸로 생각하면 쉽다. 막대 하나를 골라 그 막대 높이로 직사각형을 만든다고 하고, 양옆으로 그 막대보다 낮은 막대를 만날 때까지 넓힌다. 마치 천장 높이가 정해진 방에서 양옆으로 벽에 닿을 때까지 팔을 벌리는 것과 같다. 막대마다 이렇게 넓혀 본 직사각형 중 가장 큰 것이 답이다. 막대마다 양옆을 일일이 찾으면 오래 걸리니, 높이가 올라가는 순서로 막대를 쌓아 두는 스택을 쓴다. 더 낮은 막대가 나타나면 쌓여 있던 높은 막대의 오른쪽 벽이 정해지고, 그 막대 바로 아래에 쌓인 막대가 왼쪽 벽이 되어 넓이를 바로 계산할 수 있다.
+</EasyIntro>
+
+대시보드에 시간대별 동시 접속자 막대그래프가 있다. 운영팀이 "최소 몇 명 이상이 가장 오래 유지된 구간"을 알고 싶어 했다. 사람 수와 시간 길이를 곱한 값이 가장 큰 구간을 찾으면 된다. 구간의 시작과 끝을 모두 시도하는 코드를 짜서 두 달 치 분 단위 데이터(약 10만 칸)에 돌리니 30초가 넘게 걸렸다.
+
+이 계산이 [LeetCode 84. Largest Rectangle in Histogram](https://leetcode.com/problems/largest-rectangle-in-histogram/)이다. 막대그래프 안에 들어가는 가장 큰 직사각형의 넓이를 구한다. Hard 문제지만 단조 스택(monotonic stack)을 이해했는지를 가장 정확히 보는 문제라 면접에 자주 나온다. 이 글은 모든 구간을 보는 풀이부터 막대마다 넓히기, 분할 정복, 경계 배열 건너뛰기, 단조 스택 두 번, 단조 스택 한 번까지 여섯 가지를 따라간다. 단조 스택이 처음이라면 [Daily Temperatures](/posts/leetcode-daily-temperatures)를 먼저 보면 좋다. 패턴 전체는 [단조 스택 패턴 글](/posts/monotonic-stack-pattern)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 막대그래프 안에 들어가는 가장 큰 직사각형
+
+정수 배열 `heights`가 주어진다. `i`번째 값은 폭 1인 막대의 높이다. 막대들은 빈틈없이 붙어 있다. 이 막대들 안에 완전히 들어가는 직사각형 중 가장 큰 넓이를 돌려준다.
+
+직사각형이 막대 `l`부터 `r`까지 걸쳐 있다면, 폭은 `r - l + 1`이고 높이는 그 구간에서 가장 낮은 막대를 넘을 수 없다. 그래서 넓이는 `(구간의 최솟값) × (구간 길이)`다. 문제를 다시 쓰면 "모든 구간 중 최솟값 × 길이가 가장 큰 구간"을 찾는 것이다.
+
+제약은 길이 최대 10^5, 높이 0 이상 10^4 이하다. 길이 10^5이면 O(n²)은 50억 번 가까이 돌아서 안 된다. 넓이의 최댓값은 10^4 × 10^5 = 10^9이라 32비트 정수(약 21억)에 들어간다. Java에서 `int`로 계산해도 넘치지 않는다.
+
+이 글의 예시는 이렇다.
+
+```text
+index    0  1  2  3  4  5
+               ■
+            ■  ■
+            ■  ■  ■     ■
+         ■  ■  ■  ■     ■
+         ■  ■  ■  ■  ■  ■
+height   2  4  5  3  1  3
+```
+
+눈으로 후보를 찾아보자. 가장 높은 5짜리 막대 하나는 넓이 5다. 4와 5를 함께 쓰면 높이 4, 폭 2로 8이다. 4, 5, 3을 함께 쓰면 높이 3, 폭 3으로 9다. 2, 4, 5, 3을 다 쓰면 높이 2, 폭 4로 8이다. 전체 6개를 쓰면 높이 1, 폭 6으로 6이다. 답은 9이고, 가장 높은 막대도 가장 넓은 구간도 아닌 중간쯤에서 나온다. 높이와 폭이 서로 잡아당기는 문제라 어느 한쪽만 키워서는 안 된다.
+
+## 모든 구간을 하나씩 재 보면
+
+문제를 다시 쓴 그대로 모든 구간 `[i, j]`를 본다. 구간마다 최솟값을 새로 구하면 O(n³)이지만, `i`를 고정하고 `j`를 늘려 가면 최솟값을 이어서 갱신할 수 있어 O(n²)이 된다.
+
+```js
+function largestRectangleArea(heights) {
+  let best = 0;
+  for (let i = 0; i < heights.length; i++) {
+    let minH = Infinity;
+    for (let j = i; j < heights.length; j++) {
+      minH = Math.min(minH, heights[j]);            // [i, j]의 최솟값을 이어서 갱신
+      best = Math.max(best, minH * (j - i + 1));
+    }
+  }
+  return best;
+}
+```
+
+공간은 O(1)이고 시간은 항상 O(n²)이다. 입력이 어떻든 모든 구간을 다 보니 빠른 경우가 없다. 길이 10^5에서 재 보니 무작위 높이로 33초, 모두 같은 높이로 31초가 걸렸다. `minH`가 0이 되면 그 뒤로는 넓이가 0이니 끊을 수 있지만, 0이 없는 입력에서는 소용이 없다.
+
+## 막대마다 양옆으로 넓혀 보기
+
+구간이 n²/2개나 되지만, 답이 될 수 있는 구간은 훨씬 적다. 어떤 구간이 답이라면 그 구간의 높이는 구간 안에서 가장 낮은 막대의 높이와 같다. 그 막대를 `k`라고 하자. 같은 높이를 유지하면서 구간을 더 넓힐 수 있다면 넓히는 게 이득이니, 답이 되는 구간은 "막대 `k`보다 낮은 막대에 막힐 때까지 양옆으로 넓힌 구간"이다.
+
+그래서 막대마다 한 번씩 "이 막대가 가장 낮은 막대인 가장 넓은 구간"만 보면 된다. 후보가 n²개에서 n개로 줄었다.
+
+```js
+function largestRectangleArea(heights) {
+  const n = heights.length;
+  let best = 0;
+  for (let i = 0; i < n; i++) {
+    let l = i, r = i;
+    while (l > 0 && heights[l - 1] >= heights[i]) l--;     // 왼쪽으로 넓힌다
+    while (r < n - 1 && heights[r + 1] >= heights[i]) r++; // 오른쪽으로 넓힌다
+    best = Math.max(best, heights[i] * (r - l + 1));
+  }
+  return best;
+}
+```
+
+예시에서 막대마다 넓힌 범위를 보면 이렇다. 초록색 칸이 그 막대 높이로 만든 직사각형이 걸친 범위다.
+
+<AlgoTrace
+  caption="막대마다 자기보다 낮은 막대를 만날 때까지 넓힌다"
+  memoryLabel="그 막대로 만든 직사각형"
+  cells={["2", "4", "5", "3", "1", "3"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["높이 2 × 폭 4 = 8"], caption: "높이 2. 오른쪽 4, 5, 3은 2 이상이라 넓히고, 1에서 막힌다." },
+    { pointer: 1, found: [1, 2], memory: ["높이 4 × 폭 2 = 8"], caption: "높이 4. 왼쪽 2에서, 오른쪽 3에서 막힌다." },
+    { pointer: 2, found: [2], memory: ["높이 5 × 폭 1 = 5"], caption: "가장 높은 막대는 양옆이 다 낮아서 폭이 1이다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["높이 3 × 폭 3 = 9"], caption: "높이 3. 왼쪽으로 5, 4를 넘고 2에서 막힌다. 오른쪽은 1에서 막힌다. 9가 최대다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4, 5], memory: ["높이 1 × 폭 6 = 6"], caption: "가장 낮은 막대는 끝에서 끝까지 넓힐 수 있다." },
+    { pointer: 5, found: [5], memory: ["높이 3 × 폭 1 = 3"], caption: "왼쪽 1에서 막히고 오른쪽은 끝이다." },
+  ]}
+/>
+
+맞는 풀이지만 넓히는 `while`이 막대마다 O(n)까지 돌 수 있어 최악 O(n²)이다. 무작위 높이에서는 대개 금방 막혀서 15ms였는데, 높이가 같거나 계속 올라가는 입력에서는 막대마다 끝까지 넓힌다. 모두 같은 높이 10^5개에서 18초, 올라가는 높이에서 4초가 걸렸다.
+
+이 풀이에서 얻은 것은 크다. 문제가 "막대마다 왼쪽으로 처음 더 낮은 막대와 오른쪽으로 처음 더 낮은 막대 찾기"로 바뀌었다. 앞으로 볼 빠른 풀이들은 이 두 벽을 어떻게 빨리 찾느냐의 차이일 뿐이다.
+
+## 가장 낮은 막대로 반씩 나누기
+
+다른 방향의 관찰도 있다. 전체 범위에서 가장 낮은 막대 `m`을 보자. 답이 되는 직사각형은 셋 중 하나다.
+
+- `m`을 포함한다. 그러면 높이는 `heights[m]` 이하이고, 폭은 전체를 쓸 수 있으니 `heights[m] × 전체 폭`이 이 경우의 최대다.
+- `m`의 왼쪽에만 있다.
+- `m`의 오른쪽에만 있다.
+
+뒤의 두 경우는 같은 문제를 더 작은 범위에서 푸는 것이다. 분할 정복이다.
+
+```js
+function largestRectangleArea(heights) {
+  function go(lo, hi) {
+    if (lo > hi) return 0;
+    let m = lo;
+    for (let k = lo + 1; k <= hi; k++) if (heights[k] < heights[m]) m = k; // 가장 낮은 막대
+    return Math.max(
+      heights[m] * (hi - lo + 1), // m을 포함하는 경우
+      go(lo, m - 1),              // 왼쪽만
+      go(m + 1, hi),              // 오른쪽만
+    );
+  }
+  return go(0, heights.length - 1);
+}
+```
+
+가장 낮은 막대가 대체로 가운데쯤에서 나오면 범위가 반씩 줄어 O(n log n)이다. 무작위 입력에서 11ms였다. 하지만 높이가 계속 올라가면 가장 낮은 막대가 늘 맨 왼쪽이라 범위가 한 칸씩만 준다. 퀵 정렬이 정렬된 입력에서 느려지는 것과 같은 이유로 O(n²)이 되고, 재귀 깊이도 n이 된다. 실제로 올라가는 높이 10^5개를 넣으니 JavaScript에서 `RangeError: Maximum call stack size exceeded`가 났다. Python은 기본 재귀 한도가 1000이라 막대 3000개만 되어도 `RecursionError`가 난다.
+
+가장 낮은 막대를 찾는 부분을 세그먼트 트리나 sparse table로 O(log n)이나 O(1)에 바꾸면 매번의 탐색은 빨라지지만, 깊이가 n이 되는 문제는 그대로라 재귀를 반복문으로 바꿔야 한다. 그만큼 손이 많이 가서, 이 풀이는 "이런 분해도 된다"는 것을 보여 주는 정도로 꺼낸다.
+
+## 이미 찾은 벽을 따라 건너뛰기
+
+막대마다 넓히는 풀이로 돌아가서, 넓히는 `while`을 빠르게 만들어 보자. 왼쪽 벽을 `left[i]`, 즉 `i`의 왼쪽에서 처음으로 `heights[i]`보다 낮은 막대의 위치라고 하자(없으면 -1). 왼쪽부터 차례로 구한다.
+
+`i`의 왼쪽 벽을 찾을 때 `p = i - 1`부터 본다. `heights[p]`가 `heights[i]` 이상이면 `p`는 벽이 아니다. 이때 `p`와 `left[p]` 사이의 막대들은 모두 `heights[p]` 이상이니 `heights[i]` 이상이기도 하다. 그 사이는 볼 필요 없이 바로 `left[p]`로 건너뛴다.
+
+```js
+function largestRectangleArea(heights) {
+  const n = heights.length;
+  const left = new Array(n), right = new Array(n);
+  for (let i = 0; i < n; i++) {
+    let p = i - 1;
+    while (p >= 0 && heights[p] >= heights[i]) p = left[p];  // p의 벽으로 건너뛴다
+    left[i] = p;
+  }
+  for (let i = n - 1; i >= 0; i--) {
+    let p = i + 1;
+    while (p < n && heights[p] >= heights[i]) p = right[p];  // 오른쪽도 같은 방식
+    right[i] = p;
+  }
+  let best = 0;
+  for (let i = 0; i < n; i++) best = Math.max(best, heights[i] * (right[i] - left[i] - 1));
+  return best;
+}
+```
+
+[Daily Temperatures](/posts/leetcode-daily-temperatures)에서 답 배열을 따라 건너뛰던 것과 같은 방법이다. 건너뛰는 경로가 단조 스택에 쌓인 막대들을 밟는 것과 같아서 분할 상환 O(n)이다. 같은 높이, 올라가는 높이, 무작위 입력 모두 11ms 안쪽이었다. 공간은 경계 배열 둘로 O(n)이다.
+
+폭이 `right[i] - left[i] - 1`인 이유도 짚고 가자. 두 벽은 넓이에 포함되지 않는 바깥 막대다. 예시의 3번 막대(높이 3)는 왼쪽 벽이 0번(높이 2), 오른쪽 벽이 4번(높이 1)이다. 그 사이 1, 2, 3번 세 칸이 폭이고, 4 - 0 - 1 = 3이다.
+
+## 단조 스택으로 양쪽 벽 구하기
+
+경계 배열은 단조 스택으로 구하는 게 더 일반적이다. 왼쪽 벽을 구할 때, 스택에는 "앞으로 올 막대들에게 왼쪽 벽이 될 수 있는 후보"를 높이가 올라가는 순서로 둔다. `i`번 막대가 오면 스택 맨 위에서 `heights[i]` 이상인 막대를 버린다. 그 막대들은 `i`보다 왼쪽에 있으면서 더 낮지도 않으니, `i`보다 오른쪽 막대에게도 벽이 될 수 없다. `i`가 더 가깝고 더 낮거나 같기 때문이다. 버리고 남은 맨 위가 `i`의 왼쪽 벽이다.
+
+```js
+function largestRectangleArea(heights) {
+  const n = heights.length;
+  const left = new Array(n), right = new Array(n);
+  let stack = []; // 높이가 올라가는 순서의 인덱스
+  for (let i = 0; i < n; i++) {
+    while (stack.length && heights[stack[stack.length - 1]] >= heights[i]) stack.pop();
+    left[i] = stack.length ? stack[stack.length - 1] : -1;
+    stack.push(i);
+  }
+  stack = [];
+  for (let i = n - 1; i >= 0; i--) {
+    while (stack.length && heights[stack[stack.length - 1]] >= heights[i]) stack.pop();
+    right[i] = stack.length ? stack[stack.length - 1] : n;
+    stack.push(i);
+  }
+  let best = 0;
+  for (let i = 0; i < n; i++) best = Math.max(best, heights[i] * (right[i] - left[i] - 1));
+  return best;
+}
+```
+
+예시에서 구한 경계와 넓이는 이렇다.
+
+```text
+index    0   1   2   3   4   5
+height   2   4   5   3   1   3
+left    -1   0   1   0  -1   4
+right    4   3   3   4   6   6
+area     8   8   5   9   6   3
+```
+
+하나 더, CodePlayground의 마지막 테스트인 `[6, 2, 5, 4, 5, 1, 6]`도 같은 표로 보면 답이 어디서 나오는지 보인다.
+
+```text
+index    0   1   2   3   4   5   6
+height   6   2   5   4   5   1   6
+left    -1  -1   1   1   3  -1   5
+right    1   5   3   5   5   7   7
+area     6  10   5  12   5   7   6
+```
+
+3번 막대(높이 4)가 1번(높이 2)과 5번(높이 1) 사이 2~4번 칸으로 넓어져 4 × 3 = 12가 된다. 양옆의 5짜리 막대 둘은 높지만 서로 사이에 4가 끼어 있어서 각자 폭 1에 그친다. 1번 막대(높이 2)는 왼쪽의 0번 막대(높이 6)가 더 높아서 왼쪽 벽이 없고, 오른쪽은 5번에서 막혀 폭 5로 10이다.
+
+막대마다 한 번 들어가고 한 번 빠지니 반복마다 O(n), 전체 O(n)이다. 공간은 경계 배열과 스택으로 O(n)이다. 무작위 입력에서 17ms였다. 배열을 세 번 훑어서 다음 풀이보다는 조금 느리지만, 막대마다 벽이 무엇인지 표로 남아서 디버깅하기 쉽고 "구간 최솟값이 `heights[i]`인 구간 수"를 세는 변형으로 옮기기도 쉽다.
+
+## 꺼낼 때 넓이가 정해지는 한 번의 훑기
+
+두 번 훑을 필요도 없다. 왼쪽에서 오른쪽으로 한 번만 가면서, 스택에 높이가 올라가는 순서로 막대를 쌓는다. 그러다 `i`번 막대가 스택 맨 위보다 낮으면, 맨 위 막대에게는 `i`가 오른쪽 벽이다. 처음으로 나타난 더 낮은 막대이기 때문이다. 그리고 맨 위 막대의 왼쪽 벽은 스택에서 바로 그 아래 칸이다. 스택이 올라가는 순서이니 바로 아래 칸이 왼쪽에서 처음으로 더 낮은 막대다.
+
+맨 위를 꺼내는 순간 양쪽 벽이 모두 정해지니 넓이를 바로 계산한다. 꺼내고 나서 새 맨 위도 `i`보다 높으면 또 꺼내 계산한다.
+
+끝까지 갔을 때 스택에 남은 막대들은 오른쪽 벽을 못 만난 막대다. 이들의 오른쪽 벽은 배열 끝 너머다. 따로 처리하는 대신 배열 끝에 높이 0인 가상의 막대가 하나 더 있다고 치면, 그 막대가 남은 막대를 전부 꺼내 준다. 이런 가상 값을 보초(sentinel)라고 부른다.
+
+아래 그림에서 다음을 누르면 막대가 쌓이고, 더 낮은 막대가 올 때 높은 막대들이 빠지면서 넓이가 계산된다. 마지막 칸 `0`이 보초다.
+
+<AlgoTrace
+  caption="더 낮은 막대가 오면 쌓인 높은 막대가 빠지며 넓이가 정해진다"
+  memoryLabel="스택 (인덱스:높이, 왼쪽이 바닥)"
+  cells={["2", "4", "5", "3", "1", "3", "0"]}
+  steps={[
+    { pointer: 0, memory: ["0:2"], caption: "첫 막대를 쌓는다. 최대 넓이 0." },
+    { pointer: 1, memory: ["0:2", "1:4"], caption: "4는 2보다 높다. 올라가는 순서라 그대로 쌓는다." },
+    { pointer: 2, memory: ["0:2", "1:4", "2:5"], caption: "5도 쌓는다. 아직 어느 막대의 오른쪽 벽도 정해지지 않았다." },
+    { pointer: 3, found: [1, 2], memory: ["0:2", "3:3"], caption: "3이 왔다. 5를 꺼낸다: 벽 1과 3 사이 폭 1, 넓이 5. 4를 꺼낸다: 벽 0과 3 사이 폭 2, 넓이 8. 최대 8." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["4:1"], caption: "1이 왔다. 3을 꺼낸다: 벽 0과 4 사이 폭 3, 넓이 9. 2를 꺼낸다: 왼쪽 벽 없음, 폭 4, 넓이 8. 최대 9." },
+    { pointer: 5, found: [1, 2, 3], memory: ["4:1", "5:3"], caption: "3은 1보다 높다. 쌓는다." },
+    { pointer: 6, found: [1, 2, 3], memory: ["6:0"], caption: "보초 0이 남은 막대를 다 꺼낸다. 3은 폭 1로 3, 1은 폭 6으로 6. 답은 9." },
+  ]}
+/>
+
+```js
+function largestRectangleArea(heights) {
+  const n = heights.length;
+  const stack = []; // 높이가 올라가는 순서로 쌓인 막대의 인덱스
+  let best = 0;
+  for (let i = 0; i <= n; i++) {
+    const cur = i === n ? 0 : heights[i]; // 끝에 높이 0인 보초 막대가 있다고 친다
+    while (stack.length && heights[stack[stack.length - 1]] > cur) {
+      const h = heights[stack.pop()];                          // 이 막대의 넓이를 정할 차례
+      const left = stack.length ? stack[stack.length - 1] : -1; // 왼쪽 벽: 새 맨 위
+      best = Math.max(best, h * (i - left - 1));               // 오른쪽 벽: i
+    }
+    stack.push(i);
+  }
+  return best;
+}
+```
+
+시간 O(n), 공간 O(n)이다. 막대마다 한 번 들어가고 한 번 빠진다. 무작위 입력에서 5ms, 올라가는 높이에서 3ms로 여섯 풀이 중 가장 빨랐다. 스택이 가장 커지는 건 높이가 계속 올라가는 입력으로, 모든 막대가 끝까지 쌓여 있다가 보초에서 한꺼번에 빠진다.
+
+이 풀이가 맞는 이유를 불변식으로 말하면 이렇다. `i`번 막대를 처리하기 직전의 스택은 "0번부터 `i - 1`번까지 중에서 아직 오른쪽 벽을 못 만난 막대들"이고, 그 막대들은 높이가 올라가는 순서다. 오른쪽 벽을 못 만났다는 건 자기보다 오른쪽에 더 낮은 막대가 아직 없다는 뜻이라, 스택의 위쪽 막대는 아래쪽 막대보다 낮을 수 없다. 그래서 `i`가 맨 위보다 낮으면 맨 위의 오른쪽 벽은 `i`이고, 왼쪽 벽은 바로 아래 칸이다.
+
+왼쪽 벽이 없을 때 `-1`을 쓰는 것이 폭 계산을 하나로 묶어 준다. 스택이 비었다는 건 꺼낸 막대보다 낮은 막대가 왼쪽에 하나도 없다는 뜻이고, 그러면 직사각형이 0번 칸부터 시작한다. `i - (-1) - 1 = i`가 정확히 그 폭이다. 스택 바닥에 미리 `-1`을 넣어 두고 `heights[-1]`을 아주 작은 값으로 치는 방식으로 이 분기를 없애기도 한다.
+
+### Python과 Java로 쓰면
+
+Python은 리스트를 스택으로 쓴다. 보초를 위해 `heights`에 0을 붙여도 되지만, 그러면 입력 리스트를 바꾸게 되니 조건식으로 처리했다.
+
+```python
+from typing import List
+
+def largest_rectangle_area(heights: List[int]) -> int:
+    stack = []  # 높이가 올라가는 순서로 쌓인 막대의 인덱스
+    best = 0
+    n = len(heights)
+    for i in range(n + 1):
+        cur = heights[i] if i < n else 0  # 끝에 높이 0인 막대가 있다고 친다
+        while stack and heights[stack[-1]] > cur:
+            h = heights[stack.pop()]
+            left = stack[-1] if stack else -1  # 왼쪽 벽: 새 맨 위
+            best = max(best, h * (i - left - 1))  # 오른쪽 벽: i
+        stack.append(i)
+    return best
+```
+
+Java는 `int[]` 배열로 스택을 만들어 박싱을 피한다. 보초까지 들어가니 크기는 n + 1이다.
+
+```java
+class Solution {
+    public int largestRectangleArea(int[] heights) {
+        int n = heights.length;
+        int[] stack = new int[n + 1]; // 인덱스 스택. 끝의 가상 막대까지 n + 1칸
+        int top = 0;
+        int best = 0;
+        for (int i = 0; i <= n; i++) {
+            int cur = (i == n) ? 0 : heights[i];
+            while (top > 0 && heights[stack[top - 1]] > cur) {
+                int h = heights[stack[--top]];
+                int left = (top == 0) ? -1 : stack[top - 1];
+                best = Math.max(best, h * (i - left - 1)); // 최대 10^4 * 10^5 = 10^9, int 범위 안
+            }
+            stack[top++] = i;
+        }
+        return best;
+    }
+}
+```
+
+세 언어 모두 예시에서 9를 낸다. Java로 높이 10^4짜리 막대 10^5개를 넣으면 10^9가 나와 `int` 안에 들어간다. 제약이 바뀌어 높이나 길이가 더 커지면 `long`으로 곱해야 한다.
+
+## 여섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 구간 | O(n²) | O(1) | 정답 확인용. 항상 느리다 |
+| 막대마다 넓히기 | 최악 O(n²) | O(1) | 답이 되는 구간을 줄이는 관찰을 설명할 때 |
+| 분할 정복 | 평균 O(n log n), 최악 O(n²) | 재귀 O(n) | 분해 아이디어를 보여 줄 때. 정렬된 입력에 약하다 |
+| 경계 건너뛰기 | O(n) | O(n) | 스택 없이 O(n)을 보여 줄 때 |
+| 단조 스택 두 번 | O(n) | O(n) | 막대마다 벽을 표로 남기고 싶을 때 |
+| 단조 스택 한 번 + 보초 | O(n) | O(n) | 기본 답. 가장 짧고 빠르다 |
+
+면접에서는 "답이 되는 구간은 어떤 막대가 가장 낮은 막대이면서 양옆이 더 낮은 막대에 막힌 구간이다"를 먼저 말하고, 그러면 막대마다 양쪽 벽만 찾으면 된다는 데서 단조 스택으로 넘어간다.
+
+<CodePlayground
+  caption="Largest Rectangle in Histogram: 꺼낼 때 넓이를 계산하는 단조 스택"
+  functionName="largestRectangleArea"
+  initialCode={`function largestRectangleArea(heights) {
+  // 높이가 올라가는 순서로 인덱스를 쌓고,
+  // 더 낮은 막대가 오면 꺼내면서 넓이를 계산한다
+  return 0;
+}`}
+  solution={`function largestRectangleArea(heights) {
+  const n = heights.length;
+  const stack = [];
+  let best = 0;
+  for (let i = 0; i <= n; i++) {
+    const cur = i === n ? 0 : heights[i];
+    while (stack.length && heights[stack[stack.length - 1]] > cur) {
+      const h = heights[stack.pop()];
+      const left = stack.length ? stack[stack.length - 1] : -1;
+      best = Math.max(best, h * (i - left - 1));
+    }
+    stack.push(i);
+  }
+  return best;
+}`}
+  tests={[
+    { args: [[2, 4, 5, 3, 1, 3]], expected: 9, label: "본문 예시" },
+    { args: [[7]], expected: 7, label: "막대 하나" },
+    { args: [[0]], expected: 0, label: "높이 0" },
+    { args: [[2, 2, 2]], expected: 6, label: "모두 같은 높이" },
+    { args: [[1, 2, 3, 4, 5]], expected: 9, label: "올라가기만 한다" },
+    { args: [[5, 4, 3, 2, 1]], expected: 9, label: "내려가기만 한다" },
+    { args: [[2, 0, 2]], expected: 2, label: "가운데가 0" },
+    { args: [[6, 2, 5, 4, 5, 1, 6]], expected: 12, label: "가운데 세 막대" },
+  ]}
+/>
+
+## 보초와 폭 계산에서 틀린다
+
+가장 흔한 실수는 보초를 빼먹는 것이다. 반복문을 `i < n`까지만 돌리고 끝에 스택에 남은 막대를 처리하지 않으면, 오른쪽 벽을 못 만난 막대의 넓이가 계산되지 않는다.
+
+```js
+for (let i = 0; i < n; i++) { // 보초가 없다
+  while (stack.length && heights[stack[stack.length - 1]] > heights[i]) { /* ... */ }
+  stack.push(i);
+}
+return best; // 스택에 남은 막대는 계산되지 않았다
+```
+
+이 코드에 `[2, 2, 2]`나 `[1, 2, 3, 4, 5]`를 넣으면 0이 나온다. 꺼내는 일이 한 번도 일어나지 않기 때문이다. 무작위 입력 5000세트를 모든 구간 풀이와 비교했을 때 1927세트가 틀렸다. 내려가는 입력에서는 매번 꺼내서 맞게 나오니, 올라가는 입력을 꼭 테스트에 넣는다.
+
+두 번째는 폭을 `i - top`처럼 꺼낸 막대의 위치에서 재는 실수다.
+
+```js
+const top = stack.pop();
+best = Math.max(best, heights[top] * (i - top)); // 왼쪽으로 넓힐 수 있는 칸을 잊었다
+```
+
+꺼낸 막대의 왼쪽에 있다가 먼저 빠진 높은 막대들도 직사각형에 들어간다. 그 칸들은 이미 스택에서 사라져서 꺼낸 막대 위치만으로는 알 수 없다. 왼쪽 벽은 꺼낸 뒤의 새 맨 위다. `[5, 4, 3, 2, 1]`에서 정답 9 대신 5가 나온다. 3번 막대(높이 2)가 들어올 때 높이 3인 2번 막대를 꺼내면, 그 왼쪽의 5와 4도 3 이상이라 폭이 3(넓이 9)인데 `i - top`은 1만 센다.
+
+같은 높이를 어떻게 다루는지도 자주 묻는다. 꺼내는 조건을 `>`로 쓰든 `>=`로 쓰든 최종 답은 같다. `>=`로 쓰면 같은 높이의 앞 막대가 먼저 빠지면서 폭이 덜 계산되지만, 같은 높이의 마지막 막대가 빠질 때 왼쪽 벽이 더 낮은 막대가 되어 전체 폭이 계산된다. 무작위 비교에서도 두 조건 모두 틀린 세트가 없었다. 다만 두 번 훑는 풀이에서 "구간 개수"를 세는 변형으로 바꾸면 한쪽은 `>=`, 한쪽은 `>`로 비대칭을 줘야 같은 구간을 두 번 세지 않는다.
+
+높이 0인 막대는 특별히 처리할 필요가 없다. 0은 모든 막대를 꺼내는 벽 역할을 하고, 자기 넓이는 0이다. `[2, 0, 2]`의 답이 2인 이유다.
+
+## 넓이와 함께 구간도 돌려주기
+
+처음 장면의 대시보드로 돌아가 보자. 운영팀이 원한 건 넓이 숫자 하나가 아니라 "몇 분부터 몇 분까지, 최소 몇 명"이었다. 한 번 훑는 풀이는 꺼낼 때 왼쪽 벽 `left`와 오른쪽 벽 `i`를 이미 알고 있으니, 넓이가 갱신될 때 구간도 같이 적으면 된다.
+
+이번에는 스택 바닥에 `-1`을 미리 넣어 "왼쪽 벽 없음" 분기를 없앴다. 바닥의 `-1`은 꺼내지 않도록 `stack.length > 1`로 막는다.
+
+```js
+function largestRectangleWithRange(heights) {
+  const n = heights.length;
+  const stack = [-1]; // 바닥의 -1이 '왼쪽 벽 없음'을 대신한다
+  let best = { area: 0, from: -1, to: -1, height: 0 };
+  for (let i = 0; i <= n; i++) {
+    const cur = i === n ? 0 : heights[i];
+    while (stack.length > 1 && heights[stack[stack.length - 1]] > cur) {
+      const h = heights[stack.pop()];
+      const left = stack[stack.length - 1]; // 비는 일이 없다. 바닥에 -1이 있다
+      const area = h * (i - left - 1);
+      if (area > best.area) best = { area, from: left + 1, to: i - 1, height: h };
+    }
+    stack.push(i);
+  }
+  return best;
+}
+```
+
+분 단위 동시 접속자 열 개로 돌려 봤다.
+
+```text
+입력  [120, 180, 175, 190, 60, 170, 165, 172, 168, 90]
+결과  { area: 660, from: 5, to: 8, height: 165 }
+예시  [2, 4, 5, 3, 1, 3] → { area: 9, from: 1, to: 3, height: 3 }
+```
+
+5분부터 8분까지 최소 165명이 4분 동안 유지된 구간이 "사람 × 시간"이 가장 크다. 앞쪽 0~3분은 최소 120명이라 4분을 다 써도 480이고, 1~3분은 175명이지만 3분뿐이라 525다. 높이가 0인 입력처럼 넓이가 0이면 구간이 없으니 `from`이 -1로 남는다. 길이 10^5에서 모든 구간을 보는 풀이가 33초, 이 풀이가 5ms였다. 처음 장면의 30초가 바로 이 차이다.
+
+## 면접관이 이어서 묻는 것
+
+### 0과 1로 된 격자에서 가장 큰 직사각형이라면
+
+LeetCode 85 Maximal Rectangle이다. 줄마다 그 줄을 바닥으로 삼아 위로 연속된 1의 개수를 막대 높이로 보면, 줄마다 히스토그램 하나가 생긴다. 그 히스토그램에 이 글의 함수를 돌린 최댓값이 답이다.
+
+```js
+function maximalRectangle(matrix) {
+  if (matrix.length === 0) return 0;
+  const cols = matrix[0].length;
+  const heights = new Array(cols).fill(0);
+  let best = 0;
+  for (const row of matrix) {
+    // 이 줄을 바닥으로 삼은 히스토그램: 위로 연속된 1의 개수
+    for (let c = 0; c < cols; c++) heights[c] = row[c] === "1" ? heights[c] + 1 : 0;
+    best = Math.max(best, largestRectangleArea(heights));
+  }
+  return best;
+}
+```
+
+아래 격자에 돌리면 줄마다 히스토그램과 그 줄의 최대 넓이가 이렇게 나온다.
+
+```text
+줄       높이              그 줄의 최대
+10110    [1,0,1,1,0]        2
+11111    [2,1,2,2,1]        5
+01111    [0,2,3,3,2]        8
+10011    [1,0,0,4,3]        6
+```
+
+답은 8이다. 둘째와 셋째 줄의 1~4번 열이 2 × 4 직사각형을 이룬다. 0을 만나면 높이를 0으로 되돌리는 것이 포인트다. 행 R, 열 C면 O(R × C)다.
+
+### 직사각형 대신 구간의 최솟값 × 길이 말고 다른 점수라면
+
+"구간의 최솟값 × 구간의 합"이 가장 큰 구간을 찾는 LeetCode 1856 Maximum Subarray Min-Product도 같은 틀이다. 막대마다 그 막대가 최솟값인 가장 넓은 구간을 단조 스택으로 구하고, 폭 대신 누적 합으로 구간 합을 O(1)에 얻는다. 모든 구간의 최솟값을 더하는 LeetCode 907 Sum of Subarray Minimums는 막대마다 "그 막대가 최솟값인 구간의 개수"를 `(i - left) × (right - i)`로 센다. 이때 같은 값이 있으면 구간을 두 번 세지 않도록 한쪽 벽은 `<`, 다른 쪽은 `<=`로 잡는다.
+
+### 막대마다 폭이 다르다면
+
+시간 간격이 일정하지 않은 측정값처럼 막대 폭이 제각각이면, 폭을 칸 수로 세는 `i - left - 1` 대신 실제 폭의 합을 써야 한다. 폭의 누적 합 `pre`를 미리 만들어 두면 `left + 1`번부터 `i - 1`번까지의 폭이 `pre[i] - pre[left + 1]`로 O(1)에 나온다. 나머지는 그대로다.
+
+```js
+function largestRectangleWidths(heights, widths) {
+  const n = heights.length;
+  const pre = [0]; // pre[k] = 0번부터 k-1번 막대까지 폭의 합
+  for (let k = 0; k < n; k++) pre.push(pre[k] + widths[k]);
+  const stack = [];
+  let best = 0;
+  for (let i = 0; i <= n; i++) {
+    const cur = i === n ? 0 : heights[i];
+    while (stack.length && heights[stack[stack.length - 1]] > cur) {
+      const h = heights[stack.pop()];
+      const left = stack.length ? stack[stack.length - 1] : -1;
+      best = Math.max(best, h * (pre[i] - pre[left + 1])); // left+1번부터 i-1번까지의 폭
+    }
+    stack.push(i);
+  }
+  return best;
+}
+// 예시에서 4번 막대(높이 1)만 폭을 10으로 늘리면 → 15 (높이 1 × 전체 폭 15)
+// 높이 [3, 1, 2], 폭 [2, 5, 1] → 8
+```
+
+### 막대가 계속 추가되는 스트림이라면
+
+한 번 훑는 풀이는 왼쪽에서 오른쪽으로만 가니 새 막대가 올 때마다 그대로 이어서 돌릴 수 있다. 다만 "지금까지의 최대 넓이"를 실시간으로 알려면 아직 스택에 남은 막대들의 넓이도 고려해야 한다. 남은 막대는 오른쪽 벽이 정해지지 않았지만, 지금 끝을 임시 벽으로 보면 넓이의 하한을 알 수 있다. 스택에 남은 막대마다 계산하면 O(스택 크기)가 들어서, 매번 정확한 최댓값이 필요하면 비용이 커진다.
+
+### 빗물이 고이는 양이라면
+
+같은 막대그래프에서 막대 사이에 고이는 물의 양을 묻는 [Trapping Rain Water](/posts/leetcode-trapping-rain-water)는 이 문제의 반대 방향 단조 스택(높이가 내려가는 순서)으로 풀 수 있고, 투 포인터로도 풀린다. 두 문제를 함께 보면 "낮은 막대가 벽이 되는 문제"와 "높은 막대가 벽이 되는 문제"의 차이가 보인다. 두 막대만 골라 그 사이 넓이를 최대로 하는 [Container With Most Water](/posts/leetcode-container-with-most-water)는 사이 막대를 무시하니 투 포인터로 충분하다.
+
+## 막대마다 양쪽 벽을 찾으면 끝난다
+
+답이 되는 직사각형은 어떤 막대 하나가 가장 낮은 막대이고, 양옆이 그보다 낮은 막대에 막힌 구간이다. 그래서 막대마다 왼쪽과 오른쪽에서 처음으로 더 낮은 막대만 찾으면 된다. 높이가 올라가는 순서로 막대를 쌓으면 꺼내는 순간 오른쪽 벽(지금 막대)과 왼쪽 벽(새 맨 위)이 동시에 정해진다. 끝에 높이 0인 보초를 두면 남은 막대도 한 번에 처리되고, 막대마다 한 번 들어가고 한 번 빠지니 O(n)이다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 막대마다 한 번씩만 보면 되나요?
+
+어떤 직사각형이든 높이는 그 구간에서 가장 낮은 막대의 높이와 같다. 그 막대 높이를 유지한 채 넓힐 수 있으면 넓히는 게 이득이니, 답은 "어떤 막대가 가장 낮은 막대인 가장 넓은 구간" 중에 있다. 막대가 n개이니 후보도 n개다.
+
+### 단조 스택에서 꺼낼 때 왼쪽 벽이 왜 새 맨 위인가요?
+
+스택은 높이가 올라가는 순서로 쌓여 있다. 꺼낸 막대 바로 아래 칸은 그보다 낮거나 같은 막대이고, 둘 사이에 있던 막대들은 이미 더 높아서 빠진 것들이다. 그래서 바로 아래 칸이 왼쪽에서 처음으로 더 낮은 막대, 즉 왼쪽 벽이다. 스택이 비었다면 왼쪽 벽이 없어 -1로 본다.
+
+### 보초 0은 왜 넣나요?
+
+끝까지 오른쪽 벽을 못 만난 막대가 스택에 남기 때문이다. 높이 0인 막대가 끝에 있다고 치면 그 막대가 남은 막대를 모두 꺼내 주고, 오른쪽 벽이 n이 되어 같은 코드로 넓이가 계산된다. 보초가 없으면 `[1, 2, 3, 4, 5]` 같은 입력에서 0이 나온다.
+
+### 반복문이 두 겹인데 시간 복잡도가 O(n)인 이유는요?
+
+막대마다 스택에 한 번 들어가고 많아야 한 번 빠진다. 안쪽 `while`이 한 번 돌 때마다 하나가 빠지므로 전체 실행에서 `while`이 도는 횟수의 합이 n + 1을 넘지 않는다. 분할 상환 O(n)이다.
+
+### 같은 높이의 막대는 어떻게 처리하나요?
+
+꺼내는 조건이 `>`든 `>=`든 최종 최댓값은 같다. `>=`면 같은 높이의 앞 막대가 일찍 빠져 폭이 덜 계산되지만, 마지막 같은 높이 막대가 빠질 때 전체 폭이 계산된다. 다만 구간 개수를 세는 변형에서는 한쪽 벽을 `<`, 다른 쪽을 `<=`로 비대칭으로 잡아야 같은 구간을 두 번 세지 않는다.
+
+### 분할 정복으로 풀면 어떤가요?
+
+가장 낮은 막대를 기준으로 그 막대를 포함하는 경우, 왼쪽만, 오른쪽만으로 나누면 된다. 평균 O(n log n)이지만 정렬된 입력에서는 한 칸씩만 줄어 O(n²)이고 재귀 깊이도 n이라, 길이 10^5에서 JavaScript는 스택 오버플로가 났다. 그래서 단조 스택이 기본 답이다.
+
+### 0과 1의 격자에서 가장 큰 직사각형은요?
+
+줄마다 그 줄을 바닥으로 위로 연속된 1의 개수를 막대 높이로 삼으면 히스토그램이 된다. 줄마다 이 문제의 함수를 돌리고 최댓값을 고른다. 0을 만나면 높이를 0으로 되돌리고, 전체 O(행 × 열)이다.

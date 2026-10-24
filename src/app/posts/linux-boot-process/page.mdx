@@ -1,0 +1,408 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-boot-process");
+
+<EasyIntro>
+  아침에 학교 가는 과정을 떠올려 보자. 알람이 울리면 엄마가 깨워 주고, 세수하고, 옷을 입고, 가방을 챙기고, 마지막에 현관문을 나선다. 순서가 정해져 있고, 한 단계라도 막히면 그다음으로 못 간다. 가방을 못 찾으면 옷을 다 입었어도 집을 나설 수 없다.
+
+  컴퓨터가 켜질 때도 이렇게 순서대로 일이 넘어간다. 전원을 누르면 기계에 붙어 있는 작은 프로그램이 먼저 깨어나 디스크를 찾고, 다음 프로그램이 어떤 운영체제를 켤지 고르고, 운영체제의 심장이 깨어나 필요한 부품을 챙기고, 마지막으로 모든 서비스를 차례로 켠다.
+
+  서버가 켜지지 않을 때 중요한 건 "어느 단계에서 멈췄는지"를 알아내는 일이다. 화면에 마지막으로 남은 글자가 어느 단계의 말인지 알면 고칠 곳이 보인다.
+
+  이 글은 전원 버튼부터 로그인 화면까지의 단계를 하나씩 따라가면서, 각 단계에서 무엇이 잘못될 수 있고 어떻게 되돌리는지 살펴본다.
+</EasyIntro>
+
+커널 보안 업데이트를 하고 서버를 재부팅했다. 5분이 지나도 SSH가 붙지 않는다. 클라우드 콘솔에서 시리얼 출력을 열어 보니 화면 끝에 이런 줄이 남아 있다.
+
+```text
+Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)
+```
+
+다른 서버는 다르게 멈춘다. 어떤 서버는 `(initramfs)` 프롬프트에서, 어떤 서버는 `You are in emergency mode`에서, 어떤 서버는 `A start job is running for /dev/disk/by-uuid/...` 한 줄에서 1분 30초를 기다린다. 이 메시지들은 각각 부팅의 다른 단계가 남긴 말이다. 어느 단계가 무슨 말을 하는지 알면 "어디서 멈췄나"가 바로 좁혀진다.
+
+이 글은 전원을 넣은 순간부터 로그인 프롬프트까지를 펌웨어, 부트로더(GRUB), 커널, initramfs, systemd의 다섯 단계로 나눠 따라간다. 단계마다 무엇을 읽고 무엇이 실패하는지, 그리고 이전 커널로 들어가기, 커널 파라미터로 rescue 모드에 들어가기, fstab 한 줄 때문에 빠진 emergency 모드에서 빠져나오기를 다룬다. 기준은 Ubuntu 24.04(GRUB 2.12, systemd 255)이고, RHEL 계열과 다른 부분은 따로 적는다.
+
+실습 환경에 대해 먼저 밝혀 둔다. 이 글을 쓴 머신은 Firecracker 가상 머신이라 부트로더 없이 커널을 바로 띄우고, PID 1도 systemd가 아니다. 그래서 GRUB 메뉴나 `systemd-analyze blame` 출력은 직접 찍지 못했다. 그런 자리는 출력을 지어내지 않고 형식과 읽는 법만 적었다. 설정 파일 내용, systemd가 fstab을 유닛으로 바꾸는 과정, grubenv 같은 것은 직접 돌려서 확인했다. 서비스 유닛 자체를 쓰고 고치는 법은 [systemd 글](/posts/linux-systemd-systemctl)에서 다뤘다.
+
+## 다섯 단계가 바통을 넘긴다
+
+아래 그림에서 다음을 누르면 각 단계가 무엇을 읽고 누구에게 넘기는지 차례로 보인다. 화살표가 끊기는 자리가 곧 서버가 멈추는 자리다.
+
+<SequenceDiagram
+  caption="전원을 넣으면 펌웨어 → GRUB → 커널 → initramfs → systemd 순서로 제어가 넘어간다."
+  actors={[
+    { id: "fw", label: "펌웨어" },
+    { id: "grub", label: "GRUB" },
+    { id: "kern", label: "커널" },
+    { id: "init", label: "initramfs" },
+    { id: "sd", label: "systemd" },
+  ]}
+  steps={[
+    { from: "fw", to: "fw", label: "POST", title: "하드웨어를 점검한다", detail: "CPU, 메모리, 장치를 확인하고 부팅할 디스크를 찾는다. 여기서 멈추면 OS 쪽 로그는 아무것도 없다." },
+    { from: "fw", to: "grub", label: "ESP의 .efi 실행", title: "부트로더를 불러온다", detail: "UEFI는 EFI 시스템 파티션에서 shim과 GRUB을 읽는다. BIOS는 디스크 맨 앞 섹터의 코드를 실행한다.", payload: "/boot/efi/EFI/ubuntu/shimx64.efi → grubx64.efi" },
+    { from: "grub", to: "kern", label: "vmlinuz + 파라미터", title: "커널을 고르고 올린다", detail: "grub.cfg의 메뉴 항목대로 커널 이미지와 initramfs를 메모리에 올리고 커널 파라미터를 넘긴다.", payload: "linux /vmlinuz-... root=UUID=... ro quiet splash\ninitrd /initrd.img-..." },
+    { from: "kern", to: "init", label: "/init 실행", title: "임시 루트로 시작한다", detail: "커널은 메모리에 풀어 둔 initramfs를 임시 루트로 삼고 그 안의 /init을 첫 프로세스로 띄운다." },
+    { from: "init", to: "init", label: "루트 장치 찾기", title: "진짜 루트를 마운트한다", detail: "NVMe, LVM, 암호화 같은 드라이버를 올리고 root=에 적힌 장치를 찾아 마운트한다. 못 찾으면 (initramfs) 셸에 떨어진다." },
+    { from: "init", to: "sd", label: "switch_root", title: "PID 1을 넘긴다", detail: "임시 루트를 버리고 진짜 루트의 /sbin/init(systemd)을 PID 1로 실행한다." },
+    { from: "sd", to: "sd", label: "default.target", title: "타깃까지 유닛을 띄운다", detail: "fstab의 마운트, 네트워크, sshd 같은 유닛을 의존 관계대로 병렬로 띄운다. 마운트가 실패하면 emergency 모드로 간다." },
+  ]}
+/>
+
+처음에 본 메시지를 이 그림에 얹으면 이렇다. `Kernel panic ... unknown-block(0,0)`은 커널이 루트를 마운트할 수단(initramfs)을 받지 못했다는 뜻이라 3~4번 사이다. `(initramfs)` 프롬프트는 initramfs가 루트 장치를 못 찾은 5번이다. `emergency mode`와 `A start job is running`은 systemd 단계인 7번이다. 아래에서 단계별로 들어간다.
+
+## 펌웨어: BIOS와 UEFI
+
+전원을 넣으면 메인보드(가상 머신이면 하이퍼바이저)에 들어 있는 펌웨어가 먼저 돈다. 하드웨어를 점검하고 부팅할 장치를 고른 뒤 그 장치에서 부트로더를 찾는다. 찾는 방식이 BIOS와 UEFI가 다르다.
+
+BIOS는 디스크 맨 앞 512바이트(MBR)에 든 446바이트짜리 코드를 실행한다. 이 공간에 GRUB 전체가 들어갈 수 없어서 GRUB은 거기에 아주 작은 첫 단계만 두고, 나머지를 파티션 사이의 빈 공간(GPT 디스크라면 `BIOS boot` 파티션)에서 읽는다.
+
+UEFI는 디스크에서 EFI 시스템 파티션(ESP)이라는 FAT32 파티션을 찾아 그 안의 `.efi` 파일을 실행한다. Ubuntu에서는 `/boot/efi`에 마운트되어 있다. 어떤 파일을 실행할지는 펌웨어의 NVRAM에 적힌 부트 항목이 정한다. Secure Boot가 켜져 있으면 펌웨어는 마이크로소프트 키로 서명된 `shimx64.efi`만 실행하고, shim이 다시 Canonical 키로 서명된 `grubx64.efi`와 커널의 서명을 확인한다. 서명하지 않은 커널 모듈(직접 빌드한 드라이버 등)이 Secure Boot에서 안 올라가는 이유가 이 사슬이다.
+
+```bash
+# 이 서버가 UEFI로 부팅했는지 본다. 디렉터리가 있으면 UEFI다
+[ -d /sys/firmware/efi ] && echo UEFI || echo BIOS
+# UEFI 부트 항목 목록과 순서 (efibootmgr 패키지)
+sudo efibootmgr -v
+# ESP가 어디 마운트됐는지
+findmnt /boot/efi
+```
+
+EC2에서는 인스턴스와 AMI가 부팅 방식을 정한다. Graviton(ARM) 인스턴스는 UEFI로만 부팅하고, x86 인스턴스는 AMI 설정에 따라 BIOS나 UEFI로 부팅한다. 클라우드 서버에서 펌웨어 단계가 문제를 일으키는 일은 드물다. 이 단계에서 멈추면 OS 쪽에 아무 기록도 남지 않으니, 콘솔 출력이 완전히 비어 있으면 이 단계를 의심한다.
+
+## GRUB은 메뉴를 그리고 커널을 고른다
+
+GRUB의 일은 두 가지다. 어떤 커널로 부팅할지 고르고, 그 커널과 initramfs를 메모리에 올려 커널 파라미터와 함께 넘긴다. 무엇을 고를지는 `/boot/grub/grub.cfg`에 적혀 있다. 이 파일은 사람이 고치는 파일이 아니다. `update-grub`(= `grub-mkconfig -o /boot/grub/grub.cfg`)이 `/etc/default/grub`과 `/etc/grub.d/`의 스크립트를 읽어 만들어 낸다. 커널 패키지를 설치하면 `/etc/kernel/postinst.d/zz-update-grub`이 알아서 다시 만든다.
+
+Ubuntu 24.04의 grub2-common 패키지가 까는 `/etc/default/grub` 기본값은 이렇다(주석 줄은 뺐다).
+
+```text
+GRUB_DEFAULT=0
+GRUB_TIMEOUT_STYLE=hidden
+GRUB_TIMEOUT=0
+GRUB_DISTRIBUTOR=`( . /etc/os-release; echo ${NAME:-Ubuntu} ) 2>/dev/null || echo Ubuntu`
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+GRUB_CMDLINE_LINUX=""
+GRUB_DISABLE_OS_PROBER=true
+```
+
+`GRUB_TIMEOUT_STYLE=hidden`과 `GRUB_TIMEOUT=0` 때문에 평소에는 메뉴가 보이지 않고 바로 첫 항목으로 부팅한다. 메뉴를 보려면 부팅 중에 Esc(UEFI)나 Shift(BIOS)를 누른다. 클라우드 이미지는 `/etc/default/grub.d/` 아래 파일로 이 값을 덮어써서 콘솔을 시리얼로 보내는 등 설정이 조금 다르다. 바꾼 뒤에는 꼭 `sudo update-grub`을 쳐야 `grub.cfg`에 반영된다.
+
+`GRUB_CMDLINE_LINUX`는 모든 메뉴 항목에, `GRUB_CMDLINE_LINUX_DEFAULT`는 일반 항목에만(복구 모드 항목에는 빼고) 붙는 커널 파라미터다. 그래서 `quiet splash`가 DEFAULT 쪽에 있다. 복구 모드에서는 메시지를 다 보여야 하니까.
+
+### 이전 커널로 들어가기
+
+새 커널로 부팅이 안 되면 가장 빠른 길은 바로 전 커널로 들어가는 것이다. Ubuntu는 커널 패키지를 자동으로 지울 때도 지금 돌고 있는 커널과 최신 몇 개를 남겨 두어서 보통 두세 개가 `/boot`에 있다. 콘솔 메뉴에서 `Advanced options for Ubuntu`로 들어가 한 단계 아래 버전을 고르면 된다.
+
+키보드를 댈 수 없는 원격 서버라면 미리 "다음 한 번만 이 항목으로" 부팅하게 해 둘 수 있다. 메뉴 항목은 0부터 세고, 하위 메뉴 안의 항목은 `>`로 잇는다. `1>2`는 "두 번째 항목(Advanced options)의 세 번째 항목"이다.
+
+```bash
+# 메뉴 항목 이름을 확인한다
+sudo grep -E "^\s*(menuentry|submenu) " /boot/grub/grub.cfg | cut -d"'" -f2
+
+# 다음 부팅 한 번만 Advanced options 안의 세 번째 항목으로 (man 페이지 기준 GRUB_DEFAULT=saved일 때 동작한다)
+sudo grub-reboot "1>2"
+# 아예 기본값으로 바꾼다
+sudo grub-set-default "1>2"
+```
+
+이 값은 `/boot/grub/grubenv`라는 작은 파일에 저장된다. 같은 형식의 파일을 실습 폴더에 만들어 봤다.
+
+```bash
+grub-editenv ./grubenv create
+grub-editenv ./grubenv set saved_entry="1>2"
+grub-editenv ./grubenv list
+ls -l ./grubenv
+```
+
+```text
+saved_entry=1>2
+-rw-r--r-- 1 root root 1024 Oct 23 19:04 ./grubenv
+```
+
+딱 1024바이트다. 나머지는 `#`으로 채워져 있다. GRUB은 부팅 중에 파일 시스템 드라이버로 새 파일을 만들거나 크기를 바꾸지 못해서, 크기가 고정된 블록 하나를 제자리에서 덮어쓰는 방식으로 "다음 한 번" 같은 값을 기억한다. 이 파일을 편집기로 열어 줄을 지우면 크기가 바뀌어 GRUB이 읽지 못하니 항상 `grub-editenv`로 다룬다.
+
+## 커널 파라미터는 커널에게 주는 첫 지시다
+
+GRUB이 넘기는 한 줄짜리 문자열이 커널 파라미터다. 부팅한 뒤에는 `/proc/cmdline`에서 그대로 읽을 수 있다. Ubuntu 서버에서 흔히 보는 모양을 조각으로 나눠 보면 이렇다.
+
+<UrlAnatomy
+  caption="커널 파라미터 한 줄 읽기 (Ubuntu 클라우드 이미지에서 흔한 모양)"
+  base="BOOT_IMAGE=/boot/vmlinuz-…-aws"
+  separator=" "
+  joiner=" "
+  params={[
+    { key: "root", value: "UUID=…", title: "루트 파일 시스템", description: "initramfs가 찾아서 마운트할 장치다. 장치 이름 대신 UUID나 PARTUUID로 적는다. 이 값이 틀리면 (initramfs) 셸에 떨어진다.", required: true },
+    { key: "ro", title: "읽기 전용으로 시작", description: "루트를 읽기 전용으로 붙여 두고, systemd가 fsck를 마친 뒤 fstab대로 읽기·쓰기로 다시 마운트한다." },
+    { key: "console", value: "ttyS0", title: "시리얼 콘솔", description: "커널과 부팅 메시지를 시리얼 포트로도 내보낸다. 클라우드 콘솔의 시스템 로그 보기가 이 출력이다. 여러 번 적으면 마지막 것이 /dev/console이 된다." },
+    { key: "nvme_core.io_timeout", value: "4294967295", title: "NVMe 타임아웃", description: "EBS처럼 네트워크 너머의 NVMe가 잠깐 느려져도 커널이 장치를 끊지 않게 아주 길게 잡는다. 모듈 이름.옵션 형식이다." },
+    { key: "quiet splash", display: "quiet splash", title: "메시지 줄이기", description: "부팅 메시지를 줄이고 그래픽 화면을 띄운다. 문제를 볼 때는 콘솔 메뉴에서 e를 눌러 이 두 단어를 지우고 부팅한다." },
+  ]}
+/>
+
+이 중 장애 때 손대는 건 주로 systemd에게 "어느 타깃까지 갈지"를 알려 주는 파라미터다. 커널은 자기가 모르는 파라미터를 PID 1에게 넘겨 주고, systemd가 그걸 읽는다.
+
+| 파라미터 | 결과 |
+|---|---|
+| `systemd.unit=rescue.target` | 기본 시스템과 로컬 파일 시스템만 올리고 root 셸을 준다. 네트워크와 서비스는 없다 |
+| `systemd.unit=emergency.target` | 루트를 읽기 전용으로만 붙이고 바로 셸을 준다. fstab의 다른 마운트도 안 한다 |
+| `init=/bin/bash` | systemd 대신 bash를 PID 1로 띄운다. root 비밀번호를 묻지 않는다 |
+| `break=premount` | (Ubuntu initramfs-tools) 루트를 마운트하기 직전에 initramfs 셸을 연다. RHEL 계열 dracut은 `rd.break` |
+
+콘솔 메뉴에서 항목을 고르고 `e`를 누르면 그 항목의 내용을 고칠 수 있다. `linux`로 시작하는 줄 끝에 위 값 하나를 붙이고 Ctrl+X(또는 F10)로 부팅한다. 이 수정은 그 한 번만 적용되고 저장되지 않는다.
+
+`init=`이 정말로 PID 1을 바꾼다는 건 이 글의 실습 머신이 보여 준다. 이 가상 머신의 커널 파라미터 일부와 PID 1은 이렇다.
+
+```bash
+tr ' ' '\n' < /proc/cmdline | grep -E "^(console|panic|rdinit)="
+ps -p 1 -o comm=
+```
+
+```text
+console=ttyS0
+panic=1
+rdinit=/process_api
+process_api
+```
+
+`rdinit=`은 initramfs 안에서 첫 프로세스로 띄울 프로그램을, `init=`은 진짜 루트에서 띄울 프로그램을 정한다. 이 머신은 `rdinit=`으로 systemd가 아닌 프로그램을 PID 1로 띄웠다. 부팅의 마지막 단계는 "커널이 지정된 프로그램 하나를 PID 1로 실행한다"이고, 그게 systemd인 건 기본값일 뿐이다. 컨테이너에 systemd가 없는 것도 같은 이유다. PID 1이 하는 특별한 일(고아 프로세스 거두기, 시그널 기본 동작)은 [프로세스와 시그널 글](/posts/linux-processes-signals)에서 다뤘다.
+
+## initramfs는 진짜 루트를 찾기 전의 임시 루트다
+
+커널은 루트 파일 시스템을 마운트해야 `/sbin/init`을 실행할 수 있다. 그런데 루트가 NVMe 디스크 위의 LVM 위의 LUKS 암호화 볼륨이라면, 그걸 열 드라이버와 도구가 루트 안에 들어 있다. 닭과 달걀 문제다. 드라이버를 전부 커널에 넣으면 커널이 너무 커지니, 배포판 커널은 대부분을 모듈로 두고 initramfs라는 작은 임시 루트를 같이 싣는다.
+
+initramfs는 cpio로 묶은 압축 파일이다. 안에는 busybox 같은 작은 셸, 필요한 커널 모듈, `lvm`·`cryptsetup` 같은 도구, 그리고 `/init` 스크립트가 있다. 커널은 이걸 메모리에 풀어 루트로 삼고 `/init`을 실행한다. `/init`은 모듈을 올리고, `root=`의 장치가 나타날 때까지 기다렸다가 마운트하고, `switch_root`로 진짜 루트로 갈아탄 뒤 `/sbin/init`을 실행한다.
+
+```bash
+# 지금 커널의 initramfs에 무엇이 들었는지 본다 (initramfs-tools-core)
+lsinitramfs /boot/initrd.img-$(uname -r) | grep -E "nvme|lvm|cryptsetup" | head
+# 커널 모듈이나 /etc/crypttab, fstab의 루트 설정을 바꿨다면 다시 만든다
+sudo update-initramfs -u -k $(uname -r)
+# RHEL 계열은 dracut
+sudo dracut -f
+```
+
+이 단계의 실패는 두 가지로 나뉜다. initramfs 자체가 없거나 깨졌으면 커널은 루트를 마운트할 방법이 없어 처음에 본 `Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)`으로 멈춘다. initramfs는 떴는데 `root=`의 장치를 못 찾으면, Ubuntu의 initramfs-tools는 기다리다가 `ALERT! UUID=... does not exist. Dropping to a shell!`을 찍고 `(initramfs)` 프롬프트를 준다. 그 셸에서 `ls /dev/disk/by-uuid`로 실제 UUID를 보고, `cat /proc/cmdline`의 `root=`와 비교한다.
+
+initramfs가 없어지는 가장 흔한 원인은 꽉 찬 `/boot`다. `/boot`를 1GiB 정도의 작은 파티션으로 따로 둔 서버에서 옛 커널이 쌓이면, 커널 업데이트 중 `update-initramfs`가 `No space left on device`로 실패한다. apt는 경고를 찍고 끝나지만 사람이 안 보면, `grub.cfg`에는 새 커널이 들어갔는데 그 커널의 initramfs는 반쪽인 상태로 재부팅하게 된다. 커널 업데이트 전후에 이 두 줄을 본다.
+
+```bash
+df -h /boot                       # /boot가 따로 있다면 여유를 확인한다
+ls -l /boot/initrd.img-*          # 커널마다 initramfs가 있는지, 크기가 0이 아닌지
+sudo apt autoremove --purge       # 쓰지 않는 옛 커널을 지운다 (지금 커널은 남긴다)
+```
+
+## systemd는 타깃까지 유닛을 띄운다
+
+진짜 루트로 넘어오면 systemd가 PID 1이 되어 `default.target`까지 필요한 유닛을 의존 관계대로 띄운다. 타깃은 "여기까지 오면 이 상태"라는 이정표 유닛이다.
+
+```bash
+# 기본 타깃을 본다. 실습 머신의 패키지 기본값은 graphical.target으로 가는 링크다
+ls -l /usr/lib/systemd/system/default.target
+systemctl get-default                       # systemd가 PID 1인 서버라면 이걸로 본다
+sudo systemctl set-default multi-user.target  # 화면이 필요 없는 서버라면 바꿔 둔다
+```
+
+```text
+lrwxrwxrwx 1 root root 16 Oct 12 07:36 /usr/lib/systemd/system/default.target -> graphical.target
+```
+
+서버에서 알아 둘 타깃은 넷이다. `multi-user.target`은 네트워크와 서비스가 다 뜬 일반 서버 상태다. `graphical.target`은 거기에 화면 로그인을 더한 것이고, 화면 관리자가 없으면 사실상 multi-user와 같다. `rescue.target`은 기본 시스템과 로컬 파일 시스템까지만 올리고 root 셸을 준다(예전의 single user 모드). `emergency.target`은 그보다 더 앞에서, 루트만 읽기 전용으로 붙인 채 바로 셸을 준다. 문제가 파일 시스템에 있을수록 더 앞의 타깃으로 들어간다.
+
+## fstab 한 줄이 부팅을 멈추는 길
+
+systemd는 `/etc/fstab`을 직접 읽어 마운트하지 않는다. 부팅 초기에 `systemd-fstab-generator`라는 작은 프로그램이 fstab을 읽어 줄마다 `.mount` 유닛 파일을 만들고, systemd는 그 유닛을 다른 서비스처럼 다룬다. 이 생성기는 다른 디렉터리에 결과를 쓰게 해서 직접 돌려 볼 수 있다. 줄 하나는 평범하게, 하나는 `nofail`을 붙여 적었다.
+
+```bash
+cat > fstab.gen <<'EOF'
+UUID=285fc09a-7ffb-4c30-bc37-785215fd1e2d  /data    ext4  defaults  0  2
+UUID=11111111-2222-3333-4444-555555555555  /backup  ext4  defaults,nofail,x-systemd.device-timeout=10s  0  2
+EOF
+# 생성기를 손으로 돌려 gen/ 아래에 유닛을 만든다
+SYSTEMD_FSTAB=$PWD/fstab.gen /usr/lib/systemd/system-generators/systemd-fstab-generator gen gen gen
+find gen -type f -o -type l | sort
+```
+
+```text
+gen/backup.mount
+gen/data.mount
+gen/dev-disk-by\x2duuid-11111111\x2d2222\x2d3333\x2d4444\x2d555555555555.device.d/50-device-timeout.conf
+gen/local-fs.target.requires/data.mount
+gen/local-fs.target.wants/backup.mount
+gen/local-fs.target.wants/systemd-remount-fs.service
+```
+
+차이는 링크가 놓인 디렉터리 하나다. `nofail`이 없는 `/data`는 `local-fs.target.requires/`에, `nofail`이 있는 `/backup`은 `local-fs.target.wants/`에 걸렸다. Requires는 "이게 실패하면 나도 실패", Wants는 "같이 띄우되 실패해도 상관없음"이다. `x-systemd.device-timeout=10s`는 장치를 기다리는 시간을 바꾸는 드롭인 파일이 됐다. 만들어진 유닛도 열어 봤다(SourcePath 줄은 뺐다).
+
+```text
+# Automatically generated by systemd-fstab-generator
+
+[Unit]
+Documentation=man:fstab(5) man:systemd-fstab-generator(8)
+Before=local-fs.target
+Requires=systemd-fsck@dev-disk-by\x2duuid-285fc09a\x2d7ffb\x2d4c30\x2dbc37\x2d785215fd1e2d.service
+After=systemd-fsck@dev-disk-by\x2duuid-285fc09a\x2d7ffb\x2d4c30\x2dbc37\x2d785215fd1e2d.service
+After=blockdev@dev-disk-by\x2duuid-285fc09a\x2d7ffb\x2d4c30\x2dbc37\x2d785215fd1e2d.target
+
+[Mount]
+What=/dev/disk/by-uuid/285fc09a-7ffb-4c30-bc37-785215fd1e2d
+Where=/data
+Type=ext4
+```
+
+그러면 `local-fs.target`이 실패하면 무슨 일이 생기나. 그 유닛 파일에 답이 있다.
+
+```bash
+grep -v "^#" /usr/lib/systemd/system/local-fs.target | grep .
+```
+
+```text
+[Unit]
+Description=Local File Systems
+Documentation=man:systemd.special(7)
+DefaultDependencies=no
+After=local-fs-pre.target
+Conflicts=shutdown.target
+OnFailure=emergency.target
+OnFailureJobMode=replace-irreversibly
+```
+
+`OnFailure=emergency.target`이다. 사슬을 그림으로 이으면 이렇다.
+
+<ConceptDiagram
+  width={400}
+  height={320}
+  caption="nofail이 없는 줄은 Requires로 걸린다. 장치를 못 찾으면 local-fs.target이 실패하고 emergency.target으로 간다."
+  nodes={[
+    { id: "fstab", label: "/etc/fstab", sub: "한 줄에 마운트 하나", x: 200, y: 35, w: 150 },
+    { id: "gen", label: "fstab-generator", sub: "부팅 초기에 실행", x: 200, y: 105, w: 160 },
+    { id: "data", label: "data.mount", sub: "nofail 없음", x: 100, y: 180, w: 130 },
+    { id: "backup", label: "backup.mount", sub: "nofail", x: 300, y: 180, w: 130 },
+    { id: "lfs", label: "local-fs.target", sub: "OnFailure=", x: 200, y: 250, w: 150 },
+    { id: "em", label: "emergency.target", sub: "읽기 전용 루트 셸", x: 200, y: 300, w: 170, h: 34 },
+  ]}
+  edges={[
+    { from: "fstab", to: "gen" },
+    { from: "gen", to: "data" },
+    { from: "gen", to: "backup" },
+    { from: "data", to: "lfs", label: "Requires" },
+    { from: "backup", to: "lfs", label: "Wants", dashed: true },
+    { from: "lfs", to: "em", label: "실패 시" },
+  ]}
+/>
+
+장치를 못 찾을 때 바로 실패하지도 않는다. systemd는 `.device` 유닛이 나타나기를 기본 90초 기다리고, 그동안 콘솔에 `A start job is running for /dev/disk/by-uuid/... (12s / 1min 30s)` 같은 줄이 돌아간다. 처음에 본 1분 30초짜리 대기가 이거다. 시간이 다 되면 `Dependency failed for /data`, `Dependency failed for Local File Systems`가 찍히고 emergency 모드로 들어간다.
+
+### emergency 모드에서 빠져나오기
+
+emergency 모드는 root 비밀번호를 물어본다. Ubuntu 클라우드 이미지처럼 root 계정이 잠겨 있으면 `Cannot open access to console, the root account is locked.`가 나오고 셸을 얻지 못한다. 이때 길은 셋이다.
+
+- 콘솔 메뉴에서 `e`로 들어가 `linux` 줄 끝에 `init=/bin/bash`를 붙여 부팅한다. 비밀번호 없이 루트 셸이 뜬다.
+- EC2라면 시리얼 콘솔(계정에서 먼저 켜 두어야 하고, 비밀번호가 있는 사용자가 필요하다)로 들어간다.
+- 인스턴스를 멈추고 루트 볼륨을 떼어 다른 인스턴스에 붙인 뒤 그쪽에서 fstab을 고친다. 콘솔이 막혔을 때 가장 확실하다.
+
+셸을 얻었다면 순서는 같다.
+
+```bash
+# 1) 루트가 읽기 전용이라 먼저 쓰기 가능하게 다시 붙인다
+mount -o remount,rw /
+# 2) 실제 장치의 UUID와 fstab을 비교한다
+blkid
+cat /etc/fstab
+# 3) 틀린 줄을 고치거나, 데이터 디스크라면 nofail을 붙인다
+nano /etc/fstab
+# 4) 검사한다 (systemd가 PID 1인 emergency 셸이라면 daemon-reload부터)
+systemctl daemon-reload
+findmnt --verify
+mount -a
+# 5) emergency 셸이면 exit나 systemctl default로 이어서 부팅, init=/bin/bash였다면 강제로 재부팅
+systemctl default        # 또는: exec /sbin/init, 최후에는 echo b > /proc/sysrq-trigger
+```
+
+`init=/bin/bash`로 들어왔을 때는 systemd가 없어서 `systemctl`이 듣지 않는다. 고친 뒤 `sync`로 디스크에 내리고 `exec /sbin/init`으로 넘기거나 콘솔에서 재부팅한다. fstab을 처음 쓸 때 검사하는 법은 [디스크와 파일 시스템 글](/posts/linux-disks-filesystems)에 있다.
+
+## 부팅이 느릴 때 systemd-analyze
+
+부팅이 되긴 하는데 느리면 `systemd-analyze`로 시간을 나눠 본다. 이 실습 머신은 systemd가 PID 1이 아니라 출력을 직접 찍지 못했다. man 페이지의 예시가 형식을 잘 보여 준다.
+
+```text
+$ systemd-analyze time
+Startup finished in 2.584s (kernel) + 19.176s (initrd) + 47.847s (userspace) = 69.608s
+multi-user.target reached after 47.820s in userspace
+```
+
+첫 줄은 단계별 시간이다. kernel은 커널이 initramfs를 실행하기까지, initrd는 initramfs가 진짜 루트로 넘기기까지, userspace는 systemd가 타깃에 닿기까지다. 어느 칸이 큰지가 먼저 볼 곳이다. userspace가 크면 다음 두 명령으로 범인을 찾는다.
+
+```bash
+# 유닛마다 시작에 걸린 시간, 오래 걸린 순 (병렬로 뜨므로 합이 전체 시간은 아니다)
+systemd-analyze blame | head
+# 기본 타깃까지 가는 길에서 실제로 기다린 사슬. 빨간 글자가 병목이다
+systemd-analyze critical-chain
+# 특정 유닛까지의 사슬
+systemd-analyze critical-chain sshd.service
+```
+
+`blame`은 오래 걸린 유닛을 보여 주지만, 그 유닛이 다른 것을 막았는지는 말해 주지 않는다. 백그라운드에서 3분 걸린 `apt-daily.service`는 부팅을 늦추지 않는다. 그래서 `critical-chain`으로 "타깃에 닿기까지 실제로 기다린 줄"을 같이 본다. 서버에서 자주 보이는 범인은 `systemd-networkd-wait-online.service`(네트워크 인터페이스 하나가 안 올라와 기본 2분을 기다린다), `cloud-init`(메타데이터 서버 응답 대기), 그리고 앞에서 본 fstab의 장치 대기 90초다.
+
+부팅 중에 무슨 일이 있었는지는 저널에 남는다. `journalctl -b`가 이번 부팅, `journalctl -b -1`이 바로 전 부팅이다. 전 부팅 기록은 저널이 디스크에 저장될 때만 남는데, Ubuntu는 `/var/log/journal`이 있어서 기본으로 남는다. 커널 업데이트 뒤 한 번 실패하고 이전 커널로 겨우 들어왔다면 `journalctl -b -1 -p err`로 실패한 부팅의 오류만 모아 본다.
+
+## 부팅이 안 되는 서버를 만났을 때
+
+순서는 "콘솔 확보 → 마지막 메시지로 단계 판정 → 그 단계에 맞는 우회"다.
+
+```bash
+# 0) 콘솔 출력을 본다 (EC2: 콘솔의 "시스템 로그 가져오기" 또는 CLI)
+aws ec2 get-console-output --instance-id i-0abc... --latest --output text | tail -50
+```
+
+마지막 메시지로 단계를 가른다.
+
+- 아무것도 없다: 펌웨어나 부트로더 단계. 부트 디스크 설정, 인스턴스 타입과 AMI의 부팅 방식이 맞는지 본다.
+- `Kernel panic ... unknown-block(0,0)`: 그 커널의 initramfs가 없거나 깨졌다. 메뉴에서 이전 커널로 들어가 `/boot` 여유를 만들고 `update-initramfs -u -k 새버전`.
+- `(initramfs)` 셸, `ALERT! ... does not exist`: `root=`의 장치를 못 찾았다. `/proc/cmdline`과 `/dev/disk/by-uuid`를 비교하고, 디스크를 복제했거나 드라이버가 빠졌는지 본다.
+- `A start job is running for /dev/disk/...` 뒤 emergency 모드: fstab. 위의 절차로 고치고 데이터 디스크에는 `nofail`.
+- 로그인 프롬프트까지 뜨는데 SSH가 안 된다: 부팅은 끝났다. 네트워크, 방화벽, sshd 유닛 쪽이다.
+
+재부팅하기 전에 "다음 부팅이 어떤 커널로 뜨는지"를 먼저 확인해 두면, 문제가 생겼을 때 무엇이 바뀌었는지 바로 안다.
+
+```bash
+uname -r                                   # 지금 돌고 있는 커널
+ls -1 /boot/vmlinuz-*                      # 설치된 커널들. 가장 높은 버전이 기본 항목이 된다
+cat /var/run/reboot-required.pkgs 2>/dev/null   # (Ubuntu) 재부팅이 필요하게 만든 패키지
+sudo grep -m1 -E "^\s*linux\s" /boot/grub/grub.cfg   # 기본 항목이 넘길 커널과 파라미터
+```
+
+예방은 간단하다. 커널을 올리기 전에 `/boot` 여유를 보고, fstab을 고치면 `findmnt --verify`와 `mount -a`를 돌리고, 원격 서버는 시리얼 콘솔을 미리 켜 둔다. 중요한 서버는 커널 업데이트를 한 대씩 재부팅해 보며 넘긴다.
+
+## 멈춘 자리가 단계를 말해 준다
+
+부팅은 펌웨어, GRUB, 커널, initramfs, systemd가 차례로 제어를 넘기는 이어달리기다. 각 단계는 실패할 때 자기만의 말을 남긴다. 마지막 메시지가 어느 단계의 것인지 알면 이전 커널로 들어갈지, initramfs를 다시 만들지, fstab을 고칠지가 정해진다. 부팅이 끝난 뒤 서비스가 어떻게 뜨고 재시작되는지는 [systemd 글](/posts/linux-systemd-systemctl)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 리눅스 부팅 과정을 설명해 달라.
+
+펌웨어(BIOS나 UEFI)가 하드웨어를 점검하고 부트로더를 실행한다. GRUB이 커널과 initramfs를 메모리에 올리고 커널 파라미터를 넘긴다. 커널은 initramfs를 임시 루트로 삼아 드라이버를 올리고 진짜 루트를 마운트한 뒤 `switch_root`로 systemd를 PID 1로 실행한다. systemd는 `default.target`까지 유닛을 의존 관계대로 병렬로 띄운다.
+
+### initramfs는 왜 필요한가?
+
+루트 파일 시스템을 열 드라이버와 도구(NVMe 모듈, LVM, LUKS 등)가 루트 안에 있는 닭과 달걀 문제를 풀기 위해서다. 배포판 커널은 드라이버를 모듈로 두므로, 그 모듈과 작은 셸, `/init` 스크립트를 담은 임시 루트를 같이 실어 루트를 마운트한 뒤 갈아탄다. 없거나 깨지면 `VFS: Unable to mount root fs`로 커널 패닉이 난다.
+
+### BIOS와 UEFI 부팅은 무엇이 다른가?
+
+BIOS는 디스크 맨 앞 MBR의 446바이트 코드를 실행하고, 그 코드가 부트로더의 나머지를 읽는다. UEFI는 FAT32로 된 EFI 시스템 파티션에서 `.efi` 실행 파일을 직접 실행하고, NVRAM의 부트 항목으로 순서를 정한다. UEFI는 Secure Boot로 shim, GRUB, 커널의 서명을 사슬로 검증할 수 있다.
+
+### 커널 업데이트 후 부팅이 안 된다. 어떻게 복구하나?
+
+먼저 콘솔 출력으로 어느 단계에서 멈췄는지 본다. 커널이나 initramfs 문제면 GRUB의 Advanced options에서 이전 커널로 부팅하고, `/boot` 여유를 만든 뒤 `update-initramfs`로 다시 만든다. 원격 서버라면 미리 `grub-reboot`로 다음 한 번만 옛 항목으로 부팅하게 하거나, 루트 볼륨을 다른 인스턴스에 붙여 고친다.
+
+### fstab 한 줄 때문에 emergency 모드에 빠지는 이유는?
+
+systemd-fstab-generator가 fstab의 각 줄을 `.mount` 유닛으로 만들고, `nofail`이 없는 줄은 `local-fs.target`의 Requires로 건다. 장치를 90초 동안 못 찾거나 마운트가 실패하면 `local-fs.target`이 실패하고, 그 유닛의 `OnFailure=emergency.target` 때문에 emergency 모드로 간다. 데이터 디스크에 `nofail`을 붙이면 Wants로 바뀌어 부팅이 계속된다.
+
+### rescue.target과 emergency.target의 차이는?
+
+rescue는 기본 시스템과 fstab의 로컬 파일 시스템까지 올린 뒤 root 셸을 주고, emergency는 루트를 읽기 전용으로만 붙인 채 거의 아무것도 띄우지 않고 셸을 준다. 그래서 fstab 문제처럼 파일 시스템 자체가 원인이면 emergency로, 서비스 문제면 rescue로 들어간다. 둘 다 root 비밀번호가 필요해서, root가 잠긴 이미지에서는 `init=/bin/bash`나 볼륨 분리 방법을 쓴다.
+
+### 부팅이 느리다. 어디부터 보나?
+
+`systemd-analyze time`으로 kernel, initrd, userspace 중 어느 단계가 긴지 보고, userspace가 길면 `systemd-analyze critical-chain`으로 타깃까지 실제로 기다린 유닛을 찾는다. `blame`은 오래 걸린 유닛을 보여 주지만 병렬로 뜨기 때문에 부팅을 막지 않은 것도 섞여 있다. 흔한 원인은 네트워크 대기, cloud-init, 못 찾는 fstab 장치다.

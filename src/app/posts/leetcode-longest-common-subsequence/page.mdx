@@ -1,0 +1,504 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-longest-common-subsequence");
+
+<EasyIntro>
+  두 친구가 각자 좋아하는 노래 순서를 적어 왔다. 두 목록에 모두 들어 있고, 두 목록 모두에서 같은 순서로 나오는 노래를 가장 많이 골라 함께 들을 목록을 만들고 싶다. 중간에 빠지는 노래가 있어도 되지만 순서를 바꿔서는 안 된다. 노래가 몇 곡 안 되면 이리저리 골라 볼 수 있지만, 많아지면 고르는 방법이 셀 수 없이 많아진다. 그래서 큰 종이에 칸을 그린다. 가로에는 한 친구의 노래를, 세로에는 다른 친구의 노래를 적는다. 칸마다 "여기까지 두 목록에서 함께 고를 수 있는 가장 긴 길이"를 적는데, 두 노래가 같으면 왼쪽 위 칸에 1을 더하고, 다르면 위 칸과 왼쪽 칸 중 큰 수를 가져온다. 오른쪽 아래 칸까지 채우면 그 숫자가 답이다. 거꾸로 따라 올라가면 어떤 노래를 골랐는지도 알 수 있다.
+</EasyIntro>
+
+`git diff`로 두 파일을 비교하면 바뀐 줄만 빨갛고 초록색으로 표시된다. 어느 줄이 "그대로 남은 줄"인지 정하는 문제를 줄 단위로 바꾸면, 두 파일에 같은 순서로 들어 있는 줄을 가장 많이 고르는 문제가 된다. 그게 최장 공통 부분 수열(LCS, Longest Common Subsequence)이다. [LeetCode 1143. Longest Common Subsequence](https://leetcode.com/problems/longest-common-subsequence/)는 이 문제를 글자 단위로 낸 것이다.
+
+두 문자열을 가로세로에 놓고 표를 채우는 2차원 DP의 기본형이라, 이 표를 이해하면 [Edit Distance](/posts/leetcode-edit-distance), [Distinct Subsequences](/posts/leetcode-distinct-subsequences), [Interleaving String](/posts/leetcode-interleaving-string)이 같은 틀로 풀린다. 이 글에서는 풀이 여섯 개를 느린 것부터 놓는다. 부분 수열을 전부 만들어 보기, 재귀, 메모이제이션, 2차원 표, 한 줄 DP, 그리고 LIS로 바꿔 푸는 방법이다. DP의 기본 개념은 [동적 계획법 글](/posts/dynamic-programming)에, 같은 패턴의 첫 문제는 [Unique Paths](/posts/leetcode-unique-paths)에 있다. 코드는 모두 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 순서는 지키고 건너뛰는 건 자유
+
+문자열 두 개 `text1`, `text2`가 주어진다. 둘 모두의 부분 수열인 문자열 중 가장 긴 것의 길이를 돌려준다. 없으면 0이다.
+
+부분 수열(subsequence)은 원래 문자열에서 글자 몇 개를 지우고 남은 글자를 순서 그대로 이어 붙인 것이다. "stone"에서 t와 e를 지우면 "son"이 된다. 지우는 건 마음대로지만 순서를 바꾸거나 글자를 새로 넣을 수는 없다. "nos"는 "stone"의 부분 수열이 아니다.
+
+부분 문자열(substring)과 헷갈리기 쉽다. 부분 문자열은 붙어 있어야 한다. "ton"은 "stone"의 부분 문자열이면서 부분 수열이고, "son"은 부분 수열이기만 하다. 이 차이가 점화식 한 줄을 바꾼다. 뒤의 "그럴듯한데 틀리는 코드"에서 다시 본다.
+
+- 두 문자열의 길이는 1 이상 1000 이하다.
+- 영어 소문자만 들어 있다.
+
+길이가 1000이니 두 문자열의 글자 쌍은 10^6개다. 쌍마다 O(1)로 계산하면 충분히 빠르다. 반대로 부분 수열을 전부 만들어 보는 풀이는 2^1000이라 생각할 수도 없다.
+
+## stone과 longest를 손으로 맞춰 보기
+
+예시로 `text1 = "stone"`, `text2 = "longest"`를 쓴다.
+
+```text
+text1   s t o n e
+text2   l o n g e s t
+```
+
+먼저 눈으로 찾아본다. 앞에서부터 보면 "st"가 두 문자열 모두에 같은 순서로 있다. longest의 끝에 s와 t가 있기 때문이다. 길이 2다. 그런데 "one"도 있다. stone의 o, n, e가 longest에서 o(1번), n(2번), e(4번) 자리에 순서대로 있다. 길이 3이다. "ost"는 안 된다. longest에서는 o가 s보다 앞이지만 stone에서는 s가 o보다 앞이다.
+
+이걸 보면 "앞에서부터 맞는 글자를 바로 잡는" 방식이 왜 위험한지 알 수 있다. stone의 s를 longest의 s에 맞추는 순간 longest에 남은 글자는 t 하나뿐이라, 더 긴 "one"을 놓친다. 어떤 글자를 짝지을지 고를 때마다 그 선택이 뒤에 남는 기회를 바꾼다. 선택지를 다 따져 봐야 하는 이유가 여기 있고, 그 따져 보기를 겹치지 않게 정리하는 게 DP다.
+
+## 부분 수열을 전부 만들어 보기
+
+가장 단순한 방법은 짧은 쪽 문자열의 부분 수열을 모두 만들어, 하나씩 긴 쪽의 부분 수열인지 확인하는 것이다. 길이 k짜리 문자열의 부분 수열은 각 글자를 넣을지 말지로 정해지니 2^k개다. 비트마스크로 만든다.
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  const [a, b] = text1.length <= text2.length ? [text1, text2] : [text2, text1];
+  // s가 t의 부분 수열인지: t를 한 번 훑으며 s의 글자를 차례로 지운다
+  const isSub = (s, t) => { let i = 0; for (const ch of t) if (i < s.length && s[i] === ch) i++; return i === s.length; };
+  let best = 0;
+  for (let mask = 1; mask < (1 << a.length); mask++) {   // 짧은 쪽의 모든 부분 수열
+    let s = "";
+    for (let i = 0; i < a.length; i++) if (mask & (1 << i)) s += a[i];
+    if (s.length > best && isSub(s, b)) best = s.length;
+  }
+  return best;
+}
+console.log(longestCommonSubsequence("stone", "longest")); // 3
+```
+
+`isSub`는 투 포인터다. 확인하는 쪽에서는 "앞에서부터 바로 잡기"가 맞다. s가 t의 부분 수열인지만 물을 때는 가장 앞의 짝을 잡아도 손해 볼 일이 없기 때문이다. 문제는 두 문자열 모두에서 고를 때다.
+
+시간은 부분 수열 2^m개 × 확인 O(n)이라 O(2^m · n)이다. m이 20만 돼도 10^6 × n이고, 1000이면 불가능하다. `1 << a.length`는 길이가 31 이상이면 음수가 되어 깨지기도 한다. 작은 입력에서 다른 풀이를 검증하는 용도로만 쓴다. 이 글의 다른 풀이도 길이 10 이하 무작위 문자열 3000쌍에서 이 함수와 결과를 맞춰 봤다.
+
+## 맨 앞 두 글자만 보고 갈래 나누기
+
+부분 수열을 다 만들지 말고, 두 문자열의 맨 앞 글자만 본다. `go(i, j)`를 "text1의 i번째부터, text2의 j번째부터의 LCS 길이"라고 하자.
+
+- `text1[i]`와 `text2[j]`가 같으면, 이 두 글자를 짝지어 쓰는 게 손해가 아니다. 답은 `1 + go(i+1, j+1)`이다.
+- 다르면 둘 중 적어도 하나는 짝 없이 버려진다. text1의 글자를 버리는 `go(i+1, j)`와 text2의 글자를 버리는 `go(i, j+1)` 중 큰 쪽이다.
+- 한쪽이 끝나면 0이다.
+
+같을 때 "짝짓는 게 손해가 아니다"는 증명이 필요하다. 어떤 최적해가 `text1[i]`를 쓰지 않는다고 하자. 그러면 그 최적해의 첫 글자를 `text1[i]`로 바꿔 끼워도 여전히 공통 부분 수열이고 길이가 같다. `text2[j]` 쪽도 같다. 그러니 두 글자를 짝지은 최적해가 언제나 하나는 있다. 이 덕분에 같을 때는 갈래가 하나뿐이다.
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  function go(i, j) {
+    if (i === text1.length || j === text2.length) return 0;      // 한쪽이 끝났다
+    if (text1[i] === text2[j]) return 1 + go(i + 1, j + 1);       // 짝짓는다
+    return Math.max(go(i + 1, j), go(i, j + 1));                  // 한쪽 글자를 버린다
+  }
+  return go(0, 0);
+}
+```
+
+가장 느린 경우는 글자가 하나도 안 맞을 때다. 매번 두 갈래로 나뉜다. 서로 겹치는 글자가 없는 같은 길이의 문자열로 호출 횟수를 세어 봤다.
+
+```text
+길이 8   호출 25,739번       1 ms
+길이 12  호출 5,408,311번    81 ms
+길이 14  호출 80,233,199번   895 ms
+```
+
+길이가 2 늘 때마다 15배쯤 뛴다. 시간은 O(2^(m+n))로 본다. 아래 그림처럼 같은 `(i, j)`가 서로 다른 갈래에서 다시 나오기 때문이다.
+
+<ConceptDiagram
+  caption="abc와 xyz의 호출 나무. go(1,1)이 두 번 계산된다"
+  width={400}
+  height={210}
+  nodes={[
+    { id: "a", label: "go(0,0)", sub: "a ≠ x", x: 200, y: 30, w: 80 },
+    { id: "b", label: "go(1,0)", sub: "a를 버림", x: 105, y: 105, w: 80 },
+    { id: "c", label: "go(0,1)", sub: "x를 버림", x: 295, y: 105, w: 80 },
+    { id: "d", label: "go(2,0)", x: 45, y: 180, w: 70 },
+    { id: "e", label: "go(1,1)", x: 155, y: 180, w: 70 },
+    { id: "f", label: "go(1,1)", sub: "다시 계산", x: 250, y: 180, w: 76 },
+    { id: "g", label: "go(0,2)", x: 355, y: 180, w: 70 },
+  ]}
+  edges={[
+    { from: "a", to: "b" },
+    { from: "a", to: "c" },
+    { from: "b", to: "d" },
+    { from: "b", to: "e" },
+    { from: "c", to: "f" },
+    { from: "c", to: "g" },
+    { from: "e", to: "f", dashed: true, arrow: "both", label: "같은 질문" },
+  ]}
+/>
+
+"a를 버리고 x를 버린 것"과 "x를 버리고 a를 버린 것"은 같은 상태 `(1, 1)`이다. 버린 순서만 다를 뿐이다. 깊이 내려갈수록 이런 겹침이 폭발적으로 늘어난다.
+
+## 같은 (i, j)는 한 번만 계산한다
+
+상태는 `(i, j)` 쌍뿐이라 많아야 `(m+1) × (n+1)`가지다. 한 번 계산한 값을 표에 적어 두면 칸마다 한 번씩만 계산한다.
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  const m = text1.length, n = text2.length;
+  const memo = Array.from({ length: m }, () => new Array(n).fill(-1)); // -1 = 아직 모름
+  function go(i, j) {
+    if (i === m || j === n) return 0;
+    if (memo[i][j] !== -1) return memo[i][j];
+    const res = text1[i] === text2[j]
+      ? 1 + go(i + 1, j + 1)
+      : Math.max(go(i + 1, j), go(i, j + 1));
+    return (memo[i][j] = res);
+  }
+  return go(0, 0);
+}
+console.log(longestCommonSubsequence("stone", "longest")); // 3
+```
+
+여기서는 "모름"을 `-1`로 둬야 한다. LCS 길이 0은 정상적인 답이라서 `0`을 표시로 쓰면 글자가 안 맞는 칸을 매번 다시 계산한다. 결과는 맞는데 지수 시간으로 돌아가 버려서 작은 테스트로는 못 잡는다.
+
+시간은 O(mn), 공간은 메모 O(mn)에 재귀 깊이 O(m+n)이다. 재귀 깊이는 언어마다 문제가 된다. JavaScript는 깊이 2000쯤은 견딘다. `"a".repeat(1000)`과 `"b".repeat(1000)`도 문제없이 0을 돌려줬다. Python은 기본 재귀 한도가 1000이라 `lru_cache`로 같은 코드를 짜면 길이 1000짜리 입력에서 `RecursionError`가 났다. `sys.setrecursionlimit`을 올리면 지나가긴 하지만, 코딩 테스트에서는 다음 풀이처럼 반복문으로 바꾸는 게 안전하다.
+
+## 표를 왼쪽 위부터 채운다
+
+방향을 뒤집는다. `dp[i][j]`를 "text1의 앞 i글자와 text2의 앞 j글자의 LCS 길이"로 정의한다. 앞에서부터 i글자이니 `text1[i-1]`이 마지막 글자다. 0번 줄과 0번 칸은 빈 문자열과의 비교라 모두 0이다. 이렇게 한 칸씩 여유를 두면 경계 검사가 사라진다.
+
+- 마지막 글자가 같으면 `dp[i][j] = dp[i-1][j-1] + 1` (왼쪽 위 + 1)
+- 다르면 `dp[i][j] = max(dp[i-1][j], dp[i][j-1])` (위와 왼쪽 중 큰 쪽)
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  const m = text1.length, n = text2.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0)); // 0번 줄·칸은 빈 문자열
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = text1[i - 1] === text2[j - 1]
+        ? dp[i - 1][j - 1] + 1                       // 둘 다 쓰고 짝짓는다
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);      // text1 글자 버림 / text2 글자 버림
+  return dp[m][n];
+}
+```
+
+stone과 longest의 표를 찍어 보면 이렇다.
+
+```text
+    ε l o n g e s t
+ε   0 0 0 0 0 0 0 0
+s   0 0 0 0 0 0 1 1
+t   0 0 0 0 0 0 1 2
+o   0 0 1 1 1 1 1 2
+n   0 0 1 2 2 2 2 2
+e   0 0 1 2 2 3 3 3
+```
+
+t 줄의 끝 칸이 2인 건 "st"를 찾았다는 뜻이다. 그런데 o 줄로 내려가면 앞쪽에 1, n 줄에서 2, e 줄에서 3이 새로 쌓인다. 마지막 칸의 3은 "one"이다. 표는 "st" 길과 "one" 길을 둘 다 들고 가다가 마지막에 큰 쪽을 고른다. 앞에서 본 "바로 잡기"가 놓친 선택을 표가 대신 다 따져 주는 셈이다.
+
+시간 O(mn), 공간 O(mn)이다. 1000 × 1000이면 칸이 10^6개라 메모리는 숫자 배열 기준 수 MB 수준이다.
+
+### 표를 거꾸로 따라가면 문자열이 나온다
+
+길이뿐 아니라 실제 LCS 문자열도 달라는 요구가 자주 붙는다. 오른쪽 아래 칸에서 출발해, 그 칸 값이 어디서 왔는지 거꾸로 따라간다.
+
+```js
+function lcsString(text1, text2) {
+  const m = text1.length, n = text2.length;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = text1[i - 1] === text2[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  let i = m, j = n;
+  const out = [];
+  while (i > 0 && j > 0) {
+    if (text1[i - 1] === text2[j - 1]) { out.push(text1[i - 1]); i--; j--; } // 왼쪽 위에서 왔다: 이 글자를 썼다
+    else if (dp[i - 1][j] >= dp[i][j - 1]) i--;                             // 위에서 왔다
+    else j--;                                                               // 왼쪽에서 왔다
+  }
+  return out.reverse().join("");
+}
+console.log(lcsString("stone", "longest")); // one
+```
+
+뒤에서부터 모으니 마지막에 뒤집는다. 위와 왼쪽 값이 같을 때 어느 쪽으로 가느냐에 따라 길이가 같은 다른 LCS가 나올 수 있다. 문제가 "아무거나 하나"를 원하면 상관없고, "사전순으로 가장 앞선 것"을 원하면 갈림길에서 고르는 규칙을 따로 정해야 한다. 이 되짚기에는 표 전체가 필요하다. 다음 풀이에서 공간을 줄이면 이 기능을 잃는다.
+
+## 두 줄, 그리고 한 줄
+
+`dp[i][j]`가 쓰는 칸은 위, 왼쪽, 왼쪽 위 셋뿐이다. 모두 바로 윗줄이나 지금 줄에 있다. 배열 하나를 왼쪽에서 오른쪽으로 덮어쓰면 `dp[j]`(덮어쓰기 전)가 위, `dp[j-1]`이 왼쪽이다. 문제는 왼쪽 위다. `dp[j-1]`은 이미 이번 줄 값으로 바뀌어 있어서 윗줄의 `j-1` 값이 사라졌다. 그래서 덮어쓰기 직전의 값을 변수 `diag`에 잠깐 들고 간다.
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  if (text1.length < text2.length) [text1, text2] = [text2, text1]; // 배열은 짧은 쪽 길이로
+  const n = text2.length;
+  const dp = new Array(n + 1).fill(0);
+  for (let i = 1; i <= text1.length; i++) {
+    let diag = 0;                       // 왼쪽 위 칸 = 윗줄의 dp[j-1]. 줄 시작에서는 0번 칸이라 0
+    for (let j = 1; j <= n; j++) {
+      const up = dp[j];                 // 덮어쓰기 전 = 윗줄 값
+      dp[j] = text1[i - 1] === text2[j - 1] ? diag + 1 : Math.max(up, dp[j - 1]);
+      diag = up;                        // 다음 칸에서 보면 지금 칸의 윗줄 값이 왼쪽 위다
+    }
+  }
+  return dp[n];
+}
+```
+
+아래 그림은 stone을 한 글자씩 읽으며 longest 쪽 배열 하나를 덮어쓰는 모습이다. 초록 칸은 그 줄에서 글자가 맞아 왼쪽 위 + 1이 된 자리다.
+
+<AlgoTrace
+  caption="stone × longest. 배열 하나를 줄마다 덮어쓴다"
+  memoryLabel="dp 배열 (ε, l, o, n, g, e, s, t)"
+  cells={["ε", "l", "o", "n", "g", "e", "s", "t"]}
+  steps={[
+    { pointer: 0, memory: ["0", "0", "0", "0", "0", "0", "0", "0"], caption: "빈 문자열과의 LCS는 모두 0이다." },
+    { pointer: 6, found: [6], memory: ["0", "0", "0", "0", "0", "0", "1", "1"], caption: "s 줄. longest의 s에서 맞아 1. 오른쪽 t 칸은 왼쪽 1을 이어받는다." },
+    { pointer: 7, found: [7], memory: ["0", "0", "0", "0", "0", "0", "1", "2"], caption: "t 줄. t가 맞고 왼쪽 위가 1이라 2. 이게 st다." },
+    { pointer: 2, found: [2], memory: ["0", "0", "1", "1", "1", "1", "1", "2"], caption: "o 줄. o가 맞아 1. 끝 칸은 위의 2를 지킨다." },
+    { pointer: 3, found: [3], memory: ["0", "0", "1", "2", "2", "2", "2", "2"], caption: "n 줄. n이 맞고 왼쪽 위가 1이라 2. on이다." },
+    { pointer: 5, found: [5], memory: ["0", "0", "1", "2", "2", "3", "3", "3"], caption: "e 줄. e가 맞고 왼쪽 위가 2라 3. one이 st를 넘었다." },
+    { pointer: 7, found: [2, 3, 5], memory: ["0", "0", "1", "2", "2", "3", "3", "3"], caption: "마지막 칸 3이 답이다. 쓰인 글자는 o, n, e." },
+  ]}
+/>
+
+시간 O(mn), 공간 O(min(m, n))이다. 짧은 쪽을 배열 길이로 쓰도록 처음에 두 문자열을 바꿨다. LCS는 두 문자열의 순서를 바꿔도 답이 같으니 바꿔도 된다.
+
+`diag`를 빼먹고 `dp[j-1] + 1`로 쓰면 이번 줄의 왼쪽 값을 써 버린다. 같은 글자가 이번 줄에서 두 번 짝지어지는 셈이다. `"ab"`와 `"aab"`에서 2가 나와야 하는데 3이 나온다. a 줄에서 aab 쪽의 두 a가 모두 이번 줄의 왼쪽 값을 이어받아 1, 2로 쌓이기 때문이다. stone과 longest에서는 우연히 3으로 맞게 나와서 예시 하나로는 안 드러난다.
+
+이 풀이가 면접의 기본 답이다. 다만 공간을 줄였으니 문자열 복원은 안 된다. 공간 O(min(m, n))을 유지하면서 문자열까지 구하려면 Hirschberg 알고리즘이 있다. 표의 가운데 줄에서 답 경로가 지나는 칸을 찾아 문제를 반으로 나누고 양쪽을 다시 푸는 분할 정복이다. 시간은 여전히 O(mn)이고, 상수는 두 배쯤 든다. 이름과 원리 정도만 알아 두면 된다.
+
+## LIS로 바꿔 풀기
+
+전혀 다른 각도도 있다. 두 문자열에서 같은 글자끼리 선을 긋는다고 생각해 보자. text1의 글자 하나를 text2에서 같은 글자가 있는 자리 번호로 바꾸면, 공통 부분 수열은 "text1 순서대로 고른 자리 번호가 계속 커지는 것"이다. 즉 자리 번호 수열의 [최장 증가 부분 수열(LIS)](/posts/leetcode-longest-increasing-subsequence)이 된다. Hunt-Szymanski 계열의 생각이다.
+
+stone과 longest라면 text2의 자리는 l0 o1 n2 g3 e4 s5 t6이다. stone을 차례로 바꾸면 s→5, t→6, o→1, n→2, e→4다.
+
+```text
+5 6 1 2 4    → 가장 길게 커지는 수열은 1 2 4 (o n e), 길이 3
+```
+
+text2에 같은 글자가 여러 번 있으면 그 글자의 자리를 전부 넣는데, 큰 번호부터 거꾸로 넣어야 한다. 앞에서부터 넣으면 text1의 글자 하나가 text2의 여러 자리와 동시에 짝지어진 것처럼 증가 수열이 길어진다.
+
+```js
+function longestCommonSubsequence(text1, text2) {
+  const pos = new Map();                       // 글자 → text2에서의 자리 목록
+  for (let j = 0; j < text2.length; j++) {
+    if (!pos.has(text2[j])) pos.set(text2[j], []);
+    pos.get(text2[j]).push(j);
+  }
+  const tails = [];                            // tails[k] = 길이 k+1 증가 수열의 가장 작은 끝값
+  for (const ch of text1) {
+    const list = pos.get(ch);
+    if (!list) continue;
+    for (let k = list.length - 1; k >= 0; k--) { // 큰 자리부터: 한 글자가 두 번 쓰이지 않게
+      const x = list[k];
+      let lo = 0, hi = tails.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (tails[mid] < x) lo = mid + 1; else hi = mid; }
+      tails[lo] = x;
+    }
+  }
+  return tails.length;
+}
+console.log(longestCommonSubsequence("stone", "longest"), longestCommonSubsequence("a", "aaa")); // 3 1
+```
+
+자리 목록을 앞에서부터 넣도록 바꿔 보면 `("a", "aaa")`의 답이 1이 아니라 3이 된다. a 하나가 0, 1, 2와 모두 짝지어진 것처럼 증가 수열 0, 1, 2가 생기기 때문이다. 거꾸로 넣으면 2, 1, 0 순서라 증가 수열이 길이 1에서 늘지 않는다.
+
+시간은 짝이 되는 글자 쌍의 수를 r이라 하면 O(r log n)이다. tails 갱신은 [이분 탐색](/posts/binary-search)이다. 글자 종류가 많고 겹치는 글자가 드물면 r이 작아서 O(mn)보다 훨씬 빠르다. 파일 비교에서 줄 하나를 글자 하나로 보면 대부분의 줄은 고유해서 이 경우에 해당한다. 반대로 `"aaaa…"`끼리 비교하면 r = mn이라 O(mn log n)으로 표보다 느려진다. 무작위 소문자 1000글자 두 개에서는 이 방식이 4 ms, 한 줄 DP가 11 ms였고, `"a"` 1000개끼리는 이 방식이 20 ms, 한 줄 DP가 7 ms였다. 입력의 모양에 따라 승자가 바뀐다.
+
+면접에서 이 풀이를 먼저 낼 필요는 없다. 다만 "글자 종류가 아주 많고 겹침이 드물면?"이라는 꼬리 질문에 답할 거리가 된다.
+
+## Python과 Java의 한 줄 DP
+
+```python
+class Solution:
+    def longestCommonSubsequence(self, text1: str, text2: str) -> int:
+        if len(text1) < len(text2):
+            text1, text2 = text2, text1          # text2를 짧은 쪽으로
+        n = len(text2)
+        dp = [0] * (n + 1)
+        for ch in text1:
+            diag = 0                             # 왼쪽 위 칸 (윗줄의 j-1)
+            for j in range(1, n + 1):
+                up = dp[j]                       # 덮어쓰기 전 = 윗줄 값
+                dp[j] = diag + 1 if ch == text2[j - 1] else max(up, dp[j - 1])
+                diag = up
+        return dp[n]
+
+s = Solution()
+print(s.longestCommonSubsequence("stone", "longest"),
+      s.longestCommonSubsequence("ab", "aab"),
+      s.longestCommonSubsequence("abc", "xyz"))
+```
+
+```text
+3 2 0
+```
+
+Python에서는 반복문으로 써야 재귀 한도를 피한다. 1000 × 1000이면 안쪽 반복이 10^6번인데, 이 환경에서는 0.12초에 끝났다. 2차원 표를 `[[0] * (n + 1)] * (m + 1)`로 만들면 모든 줄이 같은 리스트를 가리켜 한 칸을 바꾸면 모든 줄이 바뀐다. 표를 쓸 때는 `[[0] * (n + 1) for _ in range(m + 1)]`로 만든다.
+
+```java
+class Solution {
+    public int longestCommonSubsequence(String text1, String text2) {
+        if (text1.length() < text2.length()) { String t = text1; text1 = text2; text2 = t; }
+        char[] a = text1.toCharArray(), b = text2.toCharArray();
+        int n = b.length;
+        int[] dp = new int[n + 1];
+        for (char ch : a) {
+            int diag = 0;                          // 왼쪽 위 칸
+            for (int j = 1; j <= n; j++) {
+                int up = dp[j];                    // 덮어쓰기 전 = 윗줄 값
+                dp[j] = ch == b[j - 1] ? diag + 1 : Math.max(up, dp[j - 1]);
+                diag = up;
+            }
+        }
+        return dp[n];
+    }
+
+    public static void main(String[] args) {
+        Solution s = new Solution();
+        System.out.println(s.longestCommonSubsequence("stone", "longest") + " "
+            + s.longestCommonSubsequence("ab", "aab") + " "
+            + s.longestCommonSubsequence("abc", "xyz"));
+    }
+}
+```
+
+```text
+3 2 0
+```
+
+Java는 `charAt`을 반복문 안에서 10^6번 불러도 되지만, `toCharArray()`로 한 번 바꿔 두면 경계 검사가 줄어 조금 빠르다. 답은 1000을 넘지 않으니 `int`로 충분하다. 두 언어 모두 `char` 비교는 `==`로 한다. `String`끼리는 `==`가 아니라 `equals`인 것과 헷갈리지 않는다.
+
+## 여섯 풀이를 한 표에
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 부분 수열 전부 만들기 | O(2^m · n) | O(m) | 길이 20 이하에서 다른 풀이를 검증할 때 |
+| 재귀 | O(2^(m+n)) | O(m+n) | 점화식을 말로 정리하는 출발점 |
+| 메모이제이션 | O(mn) | O(mn) | 재귀로 생각하는 게 편할 때. Python은 재귀 한도 주의 |
+| 2차원 표 | O(mn) | O(mn) | LCS 문자열까지 복원해야 할 때 |
+| 한 줄 DP | O(mn) | O(min(m, n)) | 길이만 필요할 때의 기본 답 |
+| LIS로 바꾸기 | O(r log n) | O(m + n) | 글자 종류가 많고 겹침이 드물 때. r은 맞는 글자 쌍 수 |
+
+## 그럴듯한데 틀리는 코드
+
+### 앞에서부터 바로 짝짓기
+
+두 포인터로 맞는 글자를 바로 잡는 코드는 그럴듯하지만 틀린다.
+
+```js
+function greedy(text1, text2) {
+  let j = 0, count = 0;
+  for (const ch of text1) {
+    const k = text2.indexOf(ch, j);   // 앞에서부터 처음 맞는 글자를 바로 잡는다
+    if (k !== -1) { count++; j = k + 1; }
+  }
+  return count;
+}
+console.log(greedy("stone", "longest")); // 2 (답은 3)
+```
+
+s를 longest 끝의 s에 짝지은 순간 나머지 기회가 사라진다. 이 코드는 부분 수열인지 확인할 때만 맞다. "고를 때"는 그리디가 안 되고 "확인할 때"는 된다는 구분을 말할 수 있으면 좋다. 그리디가 언제 통하는지는 [그리디 알고리즘 글](/posts/greedy-algorithms)에서 다룬다.
+
+### 부분 문자열과 섞는 경우
+
+연속해야 하는 최장 공통 부분 문자열은 점화식 한 줄이 다르다. 글자가 다르면 위·왼쪽 최댓값을 가져오지 않고 0으로 끊는다. 답도 마지막 칸이 아니라 표 전체의 최댓값이다.
+
+```js
+function longestCommonSubstring(a, b) {
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  let best = 0;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      if (a[i - 1] === b[j - 1]) { dp[i][j] = dp[i - 1][j - 1] + 1; best = Math.max(best, dp[i][j]); }
+      // 다르면 0으로 둔다: 연속이 끊겼다
+  return best;
+}
+console.log(longestCommonSubstring("abcde", "abfde")); // 2 (ab 또는 de). 부분 수열이면 abde로 4
+```
+
+### 인덱스를 한 칸 밀지 않는 경우
+
+`dp`를 `(m+1) × (n+1)`로 만들어 놓고 비교를 `text1[i] === text2[j]`로 쓰면 한 글자씩 어긋난다. 마지막 줄에서 `text1[m]`은 `undefined`라 비교가 늘 거짓이 되고, 첫 글자는 영영 비교되지 않는다. "dp의 i는 글자 수, 글자 인덱스는 i-1"을 처음에 정해 두고 그대로 쓴다.
+
+### 메모에 0을 "모름"으로 쓰는 경우
+
+앞에서 본 그대로다. 결과는 맞고 느려지기만 해서 큰 입력에서 시간 초과로만 드러난다.
+
+### 한 줄 DP에서 왼쪽 위를 잃는 경우
+
+`diag` 없이 `dp[j-1] + 1`을 쓰면 `("ab", "aab")`에서 3이 나온다. 공간 최적화를 하고 나면 표 버전과 결과를 무작위 입력으로 비교해 보는 습관이 이런 실수를 잡는다.
+
+## diag를 챙기며 직접 써 보기
+
+아래에 한 줄 DP를 써 보자. 겹치는 글자가 없는 경우, 같은 글자가 반복되는 경우, 1000글자짜리 입력을 넣었다. 마지막 테스트는 재귀만으로는 시간 안에 못 끝난다.
+
+<CodePlayground
+  caption="Longest Common Subsequence"
+  functionName="longestCommonSubsequence"
+  initialCode={`function longestCommonSubsequence(text1, text2) {
+  // 두 문자열에 같은 순서로 들어 있는 가장 긴 부분 수열의 길이
+  return 0;
+}`}
+  solution={`function longestCommonSubsequence(text1, text2) {
+  if (text1.length < text2.length) [text1, text2] = [text2, text1];
+  const n = text2.length;
+  const dp = new Array(n + 1).fill(0);
+  for (let i = 1; i <= text1.length; i++) {
+    let diag = 0; // 왼쪽 위 칸
+    for (let j = 1; j <= n; j++) {
+      const up = dp[j]; // 덮어쓰기 전 = 윗줄 값
+      dp[j] = text1[i - 1] === text2[j - 1] ? diag + 1 : Math.max(up, dp[j - 1]);
+      diag = up;
+    }
+  }
+  return dp[n];
+}`}
+  tests={[
+    { args: ["stone", "longest"], expected: 3, label: "stone / longest" },
+    { args: ["abc", "xyz"], expected: 0, label: "겹치는 글자 없음" },
+    { args: ["a", "a"], expected: 1, label: "한 글자" },
+    { args: ["ab", "aab"], expected: 2, label: "같은 글자 반복" },
+    { args: ["aaaa", "aa"], expected: 2, label: "짧은 쪽이 전부" },
+    { args: ["algorithm", "rhythm"], expected: 4, label: "algorithm / rhythm" },
+    { args: ["character", "retcarahc"], expected: 5, label: "뒤집은 문자열과" },
+    { args: ["abcd".repeat(250), "dcba".repeat(250)], expected: 499, label: "1000글자 두 개" },
+  ]}
+/>
+
+## 같은 표로 풀리는 문제들
+
+### 두 문자열을 같게 만드는 최소 삭제
+
+LeetCode 583. Delete Operation for Two Strings는 양쪽에서 글자를 지워 두 문자열을 같게 만드는 최소 삭제 수를 묻는다. 남는 게 공통 부분 수열이니 가장 많이 남기는 게 최적이고, 답은 `m + n - 2 × LCS`다. stone과 longest라면 5 + 7 - 6 = 6이다. 글자마다 지우는 비용이 다르면(LeetCode 712) 같은 표에서 길이 대신 비용을 쌓는다.
+
+### 둘을 모두 품는 가장 짧은 문자열
+
+LeetCode 1092. Shortest Common Supersequence는 두 문자열을 모두 부분 수열로 갖는 가장 짧은 문자열이다. 공통 부분은 한 번만 쓰면 되니 길이는 `m + n - LCS`, stone과 longest라면 9다. 문자열 자체를 만들려면 LCS 표를 되짚으면서 짝지어진 글자는 한 번, 아닌 글자는 각자 넣는다. 그래서 표 전체가 필요하다.
+
+### 가장 긴 회문 부분 수열
+
+LeetCode 516. Longest Palindromic Subsequence는 문자열과 그 문자열을 뒤집은 것의 LCS로 풀린다. "character"와 "retcarahc"의 LCS는 5이고, "carac"이 회문이다. 구간 DP로 직접 풀 수도 있고, 연속해야 하는 회문은 [Longest Palindromic Substring](/posts/leetcode-longest-palindromic-substring)이라 전혀 다른 방법을 쓴다.
+
+### 바꾸기까지 허용하면
+
+넣기, 지우기, 바꾸기의 최소 횟수를 묻는 게 [Edit Distance](/posts/leetcode-edit-distance)다. 같은 크기의 표에 같은 순서로 채우고, max가 min으로, "버리기"가 "비용 1"로 바뀐다. 바꾸기 없이 넣기·지우기만 허용하면 편집 거리는 정확히 `m + n - 2 × LCS`이다. `git diff`가 쓰는 Myers 알고리즘이 바로 이 최소 넣기·지우기를 찾는다.
+
+### 세 문자열이라면
+
+같은 생각을 3차원으로 늘린다. `dp[i][j][k]`이고 세 글자가 모두 같으면 +1, 아니면 하나씩 버린 세 칸 중 최댓값이다. O(mnk)다. "두 개의 LCS를 구한 뒤 그 결과와 세 번째의 LCS"는 틀린다. 첫 단계에서 고른 LCS가 여러 개일 때 세 번째와 잘 맞는 것을 버릴 수 있기 때문이다. "ab", "ba", "b"라면 앞의 둘에서 되짚기가 "a"를 고르고, "a"와 "b"의 LCS는 0이다. 진짜 답은 "b"로 1이다.
+
+### 같은 모양의 다른 문제
+
+LeetCode 1035. Uncrossed Lines는 숫자 배열 두 개 사이에 같은 값끼리 선을 긋되 선이 교차하지 않게 가장 많이 긋는 문제인데, 교차하지 않는다는 조건이 "순서를 지킨다"와 같아서 LCS 그대로다. 한 문자열이 다른 문자열에 부분 수열로 몇 번 나타나는지 세는 [Distinct Subsequences](/posts/leetcode-distinct-subsequences), 두 문자열을 섞어 세 번째를 만들 수 있는지 묻는 [Interleaving String](/posts/leetcode-interleaving-string)도 같은 표 위의 문제다.
+
+## 면접에서 나올 만한 질문
+
+### 점화식을 설명해 보세요
+
+`dp[i][j]`는 text1의 앞 i글자와 text2의 앞 j글자의 LCS 길이다. 마지막 글자가 같으면 그 둘을 짝지은 최적해가 항상 있으니 왼쪽 위 + 1이다. 다르면 둘 중 하나는 짝 없이 버려지므로 text1 쪽을 버린 위 칸과 text2 쪽을 버린 왼쪽 칸 중 큰 값이다. 0번 줄과 칸은 빈 문자열이라 0이다.
+
+### 글자가 같을 때 굳이 짝짓지 않는 경우는 안 봐도 되나요?
+
+안 봐도 된다. 어떤 최적해가 `text1[i-1]`을 안 쓴다면, 그 해의 마지막 짝을 이 글자로 바꿔 끼워도 길이가 같은 공통 부분 수열이 된다. 그러니 같은 글자끼리 짝지은 최적해가 항상 존재하고, 위나 왼쪽 칸은 왼쪽 위 + 1보다 클 수 없다. 이 성질 덕분에 같을 때는 갈래가 하나다.
+
+### 공간을 줄일 수 있나요? 무엇을 잃나요?
+
+각 칸이 위, 왼쪽, 왼쪽 위만 보니 배열 하나와 왼쪽 위를 담을 변수 하나로 O(min(m, n))까지 줄인다. 덮어쓰기 전 값을 `diag`에 옮겨 두지 않으면 같은 글자가 두 번 짝지어지는 버그가 생긴다. 대신 표가 사라져서 LCS 문자열을 되짚을 수 없다. 공간을 줄이면서 문자열도 원하면 Hirschberg의 분할 정복을 쓴다.
+
+### LCS 문자열 자체를 구하려면요?
+
+표 전체를 채운 뒤 오른쪽 아래에서 거꾸로 따라간다. 글자가 같으면 그 글자를 담고 왼쪽 위로, 다르면 값이 큰 위나 왼쪽으로 간다. 모은 글자를 뒤집으면 된다. 위와 왼쪽이 같을 때의 선택에 따라 다른 LCS가 나올 수 있다.
+
+### 그리디로는 안 되나요?
+
+안 된다. 앞에서부터 맞는 글자를 바로 짝지으면 stone과 longest에서 "st"를 잡고 끝나 2가 나오는데 답은 "one"으로 3이다. 지금의 짝이 뒤에 남는 기회를 바꾸기 때문에 모든 선택을 비교해야 한다. 반대로 "s가 t의 부분 수열인가"를 확인하는 건 그리디 투 포인터로 O(n)에 된다.
+
+### O(mn)보다 빠르게 할 수 있나요?
+
+일반 입력에서 O(mn)보다 눈에 띄게 빠른 방법은 알려져 있지 않고, 강한 지수 시간 가설(SETH)이 맞다면 O(n^(2-ε))은 불가능하다는 결과도 있다. 다만 입력의 성질을 쓰면 빨라진다. 맞는 글자 쌍이 드물면 LIS로 바꿔 O(r log n)에 풀고, 비트 연산으로 한 번에 여러 칸을 계산하는 비트 병렬 방식은 O(mn / w)(w는 워드 크기)다. 실무의 diff 도구는 두 파일이 비슷하다는 가정 아래 차이 크기에 비례하는 Myers 알고리즘을 쓴다.
+
+### 부분 문자열 버전과는 무엇이 다른가요?
+
+연속해야 하니 글자가 다르면 0으로 끊고, 답은 표 전체의 최댓값이다. 부분 수열 버전은 다르면 위와 왼쪽의 최댓값을 이어받고, 답은 마지막 칸이다. "abcde"와 "abfde"는 부분 문자열로 2, 부분 수열로 4다.

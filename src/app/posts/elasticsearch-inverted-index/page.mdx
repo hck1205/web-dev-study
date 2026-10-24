@@ -89,6 +89,47 @@ GET _analyze
 
 한 가지 원칙이 있다. 색인할 때와 검색할 때 같은 분석기를 써야 한다. 문서는 "이어폰"으로 잘라 넣었는데 검색어는 "이어폰을"로 찾으면 찾아보기에서 만날 수가 없다. 특별한 이유가 없으면 둘을 같게 두고, 동의어처럼 일부러 다르게 할 때만 `search_analyzer`를 따로 준다.
 
+## 분석기를 직접 조립하기
+
+내장 분석기로 모자라면 세 단계를 골라 끼운 커스텀 분석기를 인덱스 설정에 만든다. 위 그림의 상품명 분석기에 두 가지를 더했다. 원문의 전각 문자나 `＆`를 미리 바꾸는 `mapping` 문자 필터, 그리고 브랜드 사전이다. 검색 쪽에는 동의어만 덧붙인 분석기를 따로 둔다.
+
+```json
+PUT products
+{
+  "settings": {
+    "analysis": {
+      "char_filter": {
+        "amp": { "type": "mapping", "mappings": ["＆ => and", "& => and"] }
+      },
+      "tokenizer": {
+        "ko": { "type": "nori_tokenizer", "decompound_mode": "mixed", "user_dictionary_rules": ["에어팟", "갤럭시버즈"] }
+      },
+      "filter": {
+        "syn": { "type": "synonym_graph", "synonyms_path": "analysis/synonyms.txt", "updateable": true }
+      },
+      "analyzer": {
+        "ko_index":  { "type": "custom", "char_filter": ["html_strip", "amp"], "tokenizer": "ko", "filter": ["nori_part_of_speech", "lowercase"] },
+        "ko_search": { "type": "custom", "char_filter": ["amp"], "tokenizer": "ko", "filter": ["nori_part_of_speech", "lowercase", "syn"] }
+      }
+    },
+    "similarity": {
+      "short_title": { "type": "BM25", "k1": 1.2, "b": 0.3 }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "name": { "type": "text", "analyzer": "ko_index", "search_analyzer": "ko_search", "similarity": "short_title" }
+    }
+  }
+}
+```
+
+순서가 곧 의미다. 문자 필터는 등록한 순서대로, 토큰 필터도 배열 순서대로 돈다. `lowercase`보다 동의어를 먼저 두면 동의어 사전도 대소문자를 맞춰 적어야 한다. 만든 뒤에는 `GET products/_analyze`에 `"analyzer": "ko_search"`와 문장을 주고 토큰이 기대대로 나오는지 먼저 본다.
+
+`analyzer`와 `search_analyzer`를 다르게 두는 대표적인 경우가 둘 있다. 하나는 자동완성이다. 색인 쪽에서 `edge_ngram`으로 "이", "이어", "이어폰"을 다 넣어 두고, 검색어는 n-gram 없이 그대로 찾아야 한다. 검색어까지 n-gram으로 쪼개면 "이어폰"이 "이"와도 맞아 버려 결과가 쏟아진다. 다른 하나가 위의 동의어다. `synonym_graph`는 "블루투스 이어폰 ⇔ 무선 이어폰"처럼 여러 단어짜리 동의어를 위치가 갈라지는 그래프로 만드는데, 색인은 토큰을 한 줄로만 저장할 수 있어서 그래프가 납작하게 펴지며 구문 검색이 틀어진다. 그래서 공식 문서도 `synonym_graph`는 검색 시점용으로 쓰라고 한다. 사전 갱신이 재색인 없이 된다는 장점([쇼핑몰 검색에서 부딪히는 것들](#쇼핑몰-검색에서-부딪히는-것들))도 검색 시점에서만 누린다.
+
+`similarity`는 BM25의 손잡이를 필드마다 바꾼다. 상품명은 대부분 짧아서 길이 차이가 관련도와 별 상관이 없는데, 기본 b=0.75면 평균 6단어 필드에서 3단어 제목의 tf 부분(1.26)이 12단어 제목(0.71)의 1.8배다. b=0.3이면 1.09 대 0.86으로 1.27배까지 줄고, b=0이면 길이를 아예 보지 않는다. k1을 낮추면 같은 단어가 여러 번 나와도 점수가 더 빨리 포화한다. 필드의 `similarity`는 매핑을 만든 뒤에 바꿀 수 없으니, 바꾸려면 새 인덱스를 만들어 `_reindex`한다. 손대기 전에 `"explain": true`로 점수가 어디서 나왔는지 보고, 실제 검색어 묶음으로 전후 순위를 비교한다.
+
 ## 찾아보기를 만드는 과정
 
 분석이 끝난 토큰을 텀(term)이라고 부른다. 이제 텀마다 그 텀이 나온 문서 번호를 모은다. 이 번호 목록을 포스팅 리스트(postings list)라고 한다. 아래 그림에서 "다음"을 누르면 상품 세 개로 찾아보기가 만들어진다.

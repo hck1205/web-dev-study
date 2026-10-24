@@ -1,0 +1,420 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mongodb-security");
+
+<EasyIntro>
+  아파트 창고를 하나 빌렸다고 해 보자. 문에 자물쇠를 달지 않고 복도 쪽으로 활짝 열어 두면, 지나가던 사람이 물건을 다 가져가고 "돌려받고 싶으면 돈을 내라"는 쪽지만 남길 수 있다. 데이터베이스도 똑같아서, 인터넷 쪽으로 문을 열어 두고 비밀번호를 걸지 않으면 실제로 이런 일이 생긴다.
+
+  그래서 창고에는 여러 겹의 장치를 단다. 먼저 출입증을 확인하고, 출입증마다 들어갈 수 있는 칸을 정해 준다. 물건을 옮기는 복도는 바깥에서 들여다보지 못하게 가리고, 창고 안 상자도 잠가서 창고 벽이 뚫려도 내용물은 못 보게 한다.
+
+  가장 깐깐한 방법은 상자를 창고에 맡기기 전에 내가 직접 잠그는 것이다. 열쇠는 내가 갖고 있으니 창고 관리인도 상자 속을 볼 수 없다. 대신 관리인이 "빨간 물건 찾아 주세요" 같은 부탁을 들어주기도 어려워진다. 마지막으로 누가 언제 어느 칸에 들어갔는지 출입 기록을 남긴다.
+
+  이 글은 이 출입증, 칸 나누기, 복도 가리기, 상자 잠그기, 출입 기록이 MongoDB에서 각각 무엇인지 차례로 본다.
+</EasyIntro>
+
+아침에 출근해서 개발 서버의 MongoDB에 접속했더니 컬렉션이 전부 사라지고 `README`라는 컬렉션 하나만 남아 있다. 안에는 문서가 하나 있고 "데이터를 돌려받고 싶으면 비트코인을 이 주소로 보내라"고 적혀 있다. 백업 이야기를 꺼내기 전에 원인부터 보면 거의 항상 같다. `bindIp`를 `0.0.0.0`으로 열어 두었고, `authorization`은 켜지 않았다. 2017년 초에는 이런 식으로 비워진 MongoDB가 수만 개에 이르렀고, 돈을 보내도 데이터가 이미 지워져 돌아오지 않은 경우가 많았다.
+
+이 글은 그 문 두 개를 닫는 데서 시작해 MongoDB 보안의 층을 하나씩 본다. 누구인지 확인하는 인증 방식(SCRAM, x.509, LDAP, Kerberos)을 언제 고르는지, 역할로 최소 권한을 주는 법, 클라이언트와 멤버 사이의 TLS와 내부 인증, 디스크에 쓰인 데이터의 저장 암호화, 서버도 평문을 보지 못하게 하는 클라이언트 측 필드 암호화(CSFLE)와 Queryable Encryption, 감사 로그까지 간다. 기준은 Ubuntu 24.04와 MongoDB 8.0이다.
+
+한 가지 밝혀 둔다. 이 글을 쓴 환경에서는 MongoDB 바이너리를 내려받을 수 없어서 mongod를 직접 띄우지 못했다. 그래서 MongoDB 설정과 명령은 공식 문서의 형식을 따랐고, 출력 블록은 직접 돌린 `openssl`과 Node.js 결과만 넣었다. CSFLE의 결정적 암호화를 보여 주는 코드는 MongoDB 라이브러리(libmongocrypt)가 아니라 Node.js `crypto`로 원리만 흉내 낸 것이다. 문서 모델과 인덱스, 복제본 셋은 [MongoDB 문서 모델](/posts/mongodb-document-model)과 [복제본 셋과 샤드 클러스터](/posts/mongodb-replica-set-sharding)에서 다뤘다.
+
+## 열린 문 두 개: bindIp와 authorization
+
+MongoDB 3.6부터는 기본 설치가 `127.0.0.1`에만 바인딩한다. 사고는 대부분 "다른 서버에서 붙어야 하니까" `bindIp`만 넓히고 인증은 켜지 않은 상태에서 난다. 두 설정은 반드시 같이 바꾼다.
+
+```yaml
+# /etc/mongod.conf
+net:
+  port: 27017
+  bindIp: 127.0.0.1,10.0.1.12   # 0.0.0.0 대신 필요한 인터페이스만
+security:
+  authorization: enabled         # 이게 없으면 누구나 모든 것을 할 수 있다
+```
+
+인증을 켜기 전에 관리자 계정이 하나 있어야 한다. 사용자가 하나도 없을 때는 localhost에서 접속한 연결에 한해 첫 사용자를 만들 수 있게 해 주는데, 이걸 localhost 예외라고 부른다. 첫 사용자를 만드는 순간 예외는 닫힌다.
+
+```bash
+# 서버에서 직접 접속해 첫 관리자를 만든다 (localhost 예외)
+mongosh --port 27017
+```
+
+```js
+use admin
+db.createUser({
+  user: "dbadmin",
+  pwd: passwordPrompt(),            // 셸 기록에 비밀번호가 남지 않게
+  roles: [{ role: "userAdminAnyDatabase", db: "admin" }, { role: "clusterMonitor", db: "admin" }],
+});
+```
+
+```bash
+sudo systemctl restart mongod                       # authorization 설정 반영
+sudo ss -ltnp | grep 27017                          # 어느 주소에 열려 있는지 확인
+sudo ufw allow from 10.0.1.0/24 to any port 27017   # 앱 서브넷에서만 받는다
+```
+
+인증만으로 끝내지 않고 네트워크에서도 막는다. 클라우드라면 보안 그룹으로 앱 서버에서만 27017을 열고, 서버에서는 방화벽으로 한 번 더 좁힌다. 외부에서 열려 있는지는 바깥 서버에서 `mongosh "mongodb://공인IP:27017" --eval "db.adminCommand({listDatabases:1})"`를 날려 보면 바로 안다. 인증이 켜져 있으면 `requires authentication` 오류가 나야 정상이다.
+
+`userAdminAnyDatabase`는 이름만 보면 사용자 관리용 같지만, 이 역할을 가진 사람은 자기 자신에게 `root`를 줄 수 있다. 사실상 최고 권한이니 일상 작업 계정과 나눠 두고, 이 계정은 사람이 계정을 만들 때만 쓴다.
+
+## 누구인지 확인하는 방법 고르기
+
+MongoDB가 지원하는 인증 방식은 여러 개지만, 실무에서 고르는 기준은 "비밀을 어디에 두나"다.
+
+SCRAM-SHA-256은 기본값이다. 사용자 이름과 비밀번호로 확인하지만 비밀번호 자체는 네트워크로 가지 않는다. 서버는 솔트와 반복 횟수를 주고, 클라이언트는 그걸로 만든 증명값만 보낸다. 서버도 비밀번호 원문이 아니라 거기서 파생한 키만 저장한다. 같은 방식이 PostgreSQL에도 있어서 동작 원리는 [PostgreSQL 역할과 권한](/posts/postgres-roles-security)의 SCRAM 부분과 같다. 작은 서비스는 이것으로 충분하다. 문제는 비밀번호가 결국 앱 설정이나 비밀 저장소 어딘가에 있어야 하고, 바꾸려면 앱을 다시 배포해야 한다는 점이다.
+
+x.509는 클라이언트 인증서로 확인한다. 비밀번호가 없고, 인증서의 subject가 곧 사용자 이름이다. 인증서를 자동으로 발급·교체하는 체계(사내 CA, cert-manager)가 이미 있는 곳이라면 비밀번호 교체 문제가 사라진다. 아래에서 자세히 본다.
+
+LDAP와 Kerberos는 Enterprise Advanced(그리고 Atlas 일부 기능)에서만 된다. 회사 전체 계정이 Active Directory에 있고 DB 접근도 퇴사 처리와 같이 끊겨야 할 때 쓴다. LDAP는 비밀번호를 PLAIN 방식으로 받아 LDAP 서버에 대신 확인하므로 TLS 없이는 비밀번호가 평문으로 흐른다. LDAP 그룹을 MongoDB 역할에 대응시키는 LDAP 인가도 있다. 다만 MongoDB 8.0 문서는 LDAP 인증과 인가를 지원 중단 예정(deprecated)으로 표시하고 OIDC 쪽을 권하니, 새로 도입한다면 확인하고 시작한다. Kerberos는 GSSAPI 방식으로, 사용자 이름이 `orders@CORP.EXAMPLE.COM`처럼 영역(realm)을 포함하고 서버에 keytab 파일을 둔다. 윈도우 도메인 환경에서 사람 계정의 단일 로그인이 필요할 때 고른다.
+
+그 밖에 Enterprise 7.0부터 들어온 OIDC(사내 IdP의 토큰으로 접속)와 Atlas의 AWS IAM 인증(`MONGODB-AWS`)이 있다. 클라우드에서 앱이 IAM 역할로 DB에 붙게 하면 앱 설정에서 비밀번호가 아예 사라진다.
+
+LDAP, Kerberos, x.509처럼 MongoDB 바깥에서 신원을 확인하는 사용자는 모두 `$external`이라는 가상 데이터베이스에 만든다. 비밀번호가 MongoDB에 저장되지 않는다는 뜻이다.
+
+## 인증서 subject가 사용자 이름이 된다
+
+x.509 사용자를 만들 때 가장 흔한 실수가 subject 문자열의 순서다. MongoDB는 RFC 2253 형식, 즉 CN부터 거꾸로 적은 문자열을 사용자 이름으로 쓴다. 사내 CA로 앱 인증서를 하나 발급해서 확인해 봤다(OpenSSL 3.0.13).
+
+```bash
+# 테스트용 사내 CA
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 365 \
+  -subj "/O=shop/CN=shop-internal-ca"
+# 주문 API용 클라이언트 인증서
+openssl req -newkey rsa:2048 -nodes -keyout app.key -out app.csr \
+  -subj "/C=KR/O=shop/OU=apps/CN=orders-api"
+openssl x509 -req -in app.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out app.crt -days 90
+# 두 가지 형식으로 subject를 찍어 본다
+openssl x509 -in app.crt -noout -subject
+openssl x509 -in app.crt -noout -subject -nameopt RFC2253
+```
+
+```text
+subject=C = KR, O = shop, OU = apps, CN = orders-api
+subject=CN=orders-api,OU=apps,O=shop,C=KR
+```
+
+첫 줄은 OpenSSL 기본 출력이고 둘째 줄이 RFC 2253 형식이다. 순서가 반대이고 공백도 없다. 첫 줄을 그대로 복사해 사용자를 만들면 인증서는 맞는데 로그인이 안 되는 상태가 된다. 반드시 둘째 줄을 쓴다.
+
+```js
+db.getSiblingDB("$external").runCommand({
+  createUser: "CN=orders-api,OU=apps,O=shop,C=KR",
+  roles: [{ role: "orderWriter", db: "shop" }],
+});
+```
+
+```bash
+# 인증서로 접속. 비밀번호가 없다
+mongosh "mongodb://db1.internal:27017/?tls=true&authMechanism=MONGODB-X509&authSource=\$external" \
+  --tlsCAFile ca.pem --tlsCertificateKeyFile app.pem   # app.pem = app.crt + app.key
+```
+
+하나 더 조심할 게 있다. 복제본 셋 멤버끼리도 x.509로 인증한다면(아래에서 본다), 클라이언트 인증서는 멤버 인증서와 O, OU, DC 조합이 달라야 한다. 조합이 같으면 MongoDB가 그 연결을 클러스터 멤버로 볼 수 있어서 문서가 이를 금지한다. 그래서 위 예에서는 멤버 인증서를 `OU=db`, 앱 인증서를 `OU=apps`로 나눴다.
+
+## 권한은 리소스와 액션의 묶음이다
+
+인증이 "누구냐"라면 인가는 "무엇을 해도 되냐"다. MongoDB의 권한(privilege)은 리소스(어느 DB의 어느 컬렉션)와 액션(`find`, `insert`, `update`, `remove`, `createIndex` 같은 동작)의 묶음이다. 역할(role)은 권한 여러 개와 다른 역할을 묶은 것이고, 사용자는 역할을 받는다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="사용자는 역할을 받고, 역할은 리소스와 액션 묶음을 갖는다"
+  nodes={[
+    { id: "user", label: "orders-api", sub: "$external 사용자", x: 80, y: 45, w: 130 },
+    { id: "role", label: "orderWriter", sub: "shop DB의 역할", x: 270, y: 45, w: 150 },
+    { id: "inherit", label: "productReader", sub: "상속한 역할", x: 270, y: 140, w: 140 },
+    { id: "p1", label: "shop.orders", sub: "find insert update", x: 100, y: 225, w: 150 },
+    { id: "p2", label: "shop.products", sub: "find", x: 300, y: 225, w: 130 },
+  ]}
+  edges={[
+    { from: "user", to: "role", label: "roles" },
+    { from: "role", to: "inherit", label: "roles" },
+    { from: "role", to: "p1", label: "privileges" },
+    { from: "inherit", to: "p2", label: "privileges" },
+  ]}
+/>
+
+내장 역할로 시작하면 된다. DB 하나 단위로는 `read`, `readWrite`, `dbAdmin`(인덱스·통계, 데이터 읽기는 없음), `userAdmin`, `dbOwner`(셋을 합친 것)가 있고, 클러스터 단위로는 `clusterMonitor`, `clusterManager`, `clusterAdmin`, 백업용 `backup`과 `restore`, 모든 DB에 걸치는 `readAnyDatabase`, `readWriteAnyDatabase`, 그리고 `root`가 있다.
+
+앱 계정에 흔히 주는 `readWrite`도 넓을 때가 있다. 컬렉션을 지우는 `dropCollection`까지 들어 있기 때문이다. 주문 API가 하는 일이 주문 쓰기와 상품 읽기뿐이라면 사용자 정의 역할로 좁힌다.
+
+```js
+use shop
+db.createRole({
+  role: "productReader",
+  privileges: [{ resource: { db: "shop", collection: "products" }, actions: ["find"] }],
+  roles: [],
+});
+db.createRole({
+  role: "orderWriter",
+  privileges: [
+    { resource: { db: "shop", collection: "orders" }, actions: ["find", "insert", "update"] }, // remove는 없다
+  ],
+  roles: ["productReader"],   // 상품 읽기는 상속
+});
+```
+
+`collection: ""`은 그 DB의 모든 컬렉션, `db: ""`는 모든 DB를 뜻한다. `shop` DB에서 만든 역할은 `shop` 안의 리소스만 가리킬 수 있고, 여러 DB에 걸친 역할은 `admin`에 만든다. 내가 받은 권한이 실제로 무엇인지는 접속한 상태에서 `db.runCommand({ connectionStatus: 1, showPrivileges: true })`로 펼쳐 본다.
+
+현장에서 자주 보는 실수는 이렇다. 앱 계정에 `root`나 `readWriteAnyDatabase`를 주어서, SQL 인젝션과 비슷한 NoSQL 연산자 주입(`{"$ne": null}` 같은 값이 쿼리로 들어가는 것) 하나가 전체 DB 유출로 번진다. 백업 스크립트 계정에 `root`를 주는데, `backup` 역할이면 충분하다. 사람마다 계정을 만들지 않고 `admin` 하나를 돌려 써서 감사 로그를 봐도 누가 했는지 알 수 없다.
+
+### 권한 검사를 직접 짜 보기
+
+서버가 하는 검사를 흉내 내 본다. 사용자가 가진 역할부터 시작해 권한 목록에서 리소스와 액션이 맞는 것을 찾고, 없으면 상속한 역할로 내려간다. `db`나 `collection`이 빈 문자열이면 "아무거나"로 본다. MongoDB는 역할을 만들 때 순환 상속을 막지만, 여기서는 순환이 있어도 멈추게 짠다.
+
+<CodePlayground
+  caption="역할 상속을 따라가는 권한 검사"
+  functionName="canPerform"
+  initialCode={`function canPerform(roleDefs, userRoles, action, db, coll) {
+  // roleDefs: { 역할이름: { privileges: [{ resource: { db, collection }, actions: [] }], roles?: [역할이름] } }
+  // userRoles: 사용자가 받은 역할 이름 배열
+  // 리소스의 db나 collection이 ""이면 아무거나 맞는다
+  return false;
+}`}
+  solution={`function canPerform(roleDefs, userRoles, action, db, coll) {
+  const seen = new Set();
+  const matches = (r) => (r.db === "" || r.db === db) && (r.collection === "" || r.collection === coll);
+  function check(name) {
+    if (seen.has(name)) return false;   // 순환 방지
+    seen.add(name);
+    const role = roleDefs[name];
+    if (!role) return false;            // 없는 역할
+    if (role.privileges.some((p) => matches(p.resource) && p.actions.includes(action))) return true;
+    return (role.roles || []).some(check);
+  }
+  return userRoles.some(check);
+}`}
+  tests={[
+    { label: "주문 쓰기", args: [{ orderWriter: { privileges: [{ resource: { db: "shop", collection: "orders" }, actions: ["find", "insert", "update"] }], roles: ["productReader"] }, productReader: { privileges: [{ resource: { db: "shop", collection: "products" }, actions: ["find"] }] } }, ["orderWriter"], "insert", "shop", "orders"], expected: true },
+    { label: "주문 삭제는 없다", args: [{ orderWriter: { privileges: [{ resource: { db: "shop", collection: "orders" }, actions: ["find", "insert", "update"] }], roles: ["productReader"] }, productReader: { privileges: [{ resource: { db: "shop", collection: "products" }, actions: ["find"] }] } }, ["orderWriter"], "remove", "shop", "orders"], expected: false },
+    { label: "상속한 상품 읽기", args: [{ orderWriter: { privileges: [{ resource: { db: "shop", collection: "orders" }, actions: ["find", "insert", "update"] }], roles: ["productReader"] }, productReader: { privileges: [{ resource: { db: "shop", collection: "products" }, actions: ["find"] }] } }, ["orderWriter"], "find", "shop", "products"], expected: true },
+    { label: "users 컬렉션은 못 읽는다", args: [{ orderWriter: { privileges: [{ resource: { db: "shop", collection: "orders" }, actions: ["find", "insert", "update"] }], roles: ["productReader"] }, productReader: { privileges: [{ resource: { db: "shop", collection: "products" }, actions: ["find"] }] } }, ["orderWriter"], "find", "shop", "users"], expected: false },
+    { label: "빈 collection은 DB 전체", args: [{ reportReader: { privileges: [{ resource: { db: "report", collection: "" }, actions: ["find"] }] } }, ["reportReader"], "find", "report", "daily_sales"], expected: true },
+    { label: "다른 DB는 안 된다", args: [{ reportReader: { privileges: [{ resource: { db: "report", collection: "" }, actions: ["find"] }] } }, ["reportReader"], "find", "shop", "orders"], expected: false },
+    { label: "순환 상속에서도 멈춘다", args: [{ loopA: { privileges: [], roles: ["loopB"] }, loopB: { privileges: [], roles: ["loopA"] } }, ["loopA"], "find", "shop", "orders"], expected: false },
+    { label: "없는 역할", args: [{}, ["ghost"], "find", "shop", "orders"], expected: false },
+  ]}
+/>
+
+## 오가는 길 가리기: 클라이언트 TLS
+
+인증을 켜도 통신이 평문이면 같은 네트워크에 있는 누군가가 쿼리와 결과를 그대로 본다. SCRAM은 비밀번호를 보내지 않지만, 로그인 뒤에 오가는 문서는 그대로 보인다. MongoDB 4.2부터 설정 이름이 `ssl`에서 `tls`로 바뀌었다.
+
+```yaml
+net:
+  tls:
+    mode: requireTLS                         # TLS가 아닌 연결은 거절
+    certificateKeyFile: /etc/mongodb/tls/db1.pem   # 서버 인증서 + 키
+    CAFile: /etc/mongodb/tls/ca.pem          # 클라이언트 인증서를 검증할 CA
+    disabledProtocols: TLS1_0,TLS1_1
+```
+
+바로 `requireTLS`로 가면 아직 평문으로 붙는 앱이 한꺼번에 끊긴다. 운영 중에 켤 때는 `allowTLS`(둘 다 받음, 서버끼리는 평문) → `preferTLS`(둘 다 받음, 서버끼리는 TLS) → `requireTLS` 순서로 멤버마다 하나씩 재시작하며 올린다. 앱 연결 문자열에 `tls=true`를 다 넣은 뒤에 마지막 단계로 간다.
+
+`CAFile`을 지정하면 클라이언트도 인증서를 내야 한다. 앱은 SCRAM으로 붙고 서버 인증서만 확인하고 싶다면 `allowConnectionsWithoutCertificates: true`를 준다. 반대로 드라이버의 `tlsAllowInvalidCertificates`나 `tlsAllowInvalidHostnames`를 켜는 건 "인증서가 안 맞아서 일단 끈" 흔적인 경우가 많다. 그러면 암호화는 되지만 상대가 진짜 DB인지 확인하지 않아 중간자 공격을 막지 못한다. 내부 CA로 인증서를 발급하고 자동으로 갈아 끼우는 일은 [전송 구간 암호화](/posts/encryption-in-transit)에서 다뤘다.
+
+## 멤버끼리도 서로 확인한다: keyFile과 x.509
+
+복제본 셋이나 샤드 클러스터의 멤버들은 서로 oplog를 주고받는다. 아무나 멤버인 척 붙을 수 있으면 데이터를 통째로 복제해 갈 수 있다. 그래서 멤버 사이의 내부 인증(internal authentication)을 켠다. 내부 인증을 켜면 클라이언트 인증(`authorization`)도 함께 켜진다.
+
+가장 간단한 건 keyFile이다. 모든 멤버가 같은 비밀 문자열 파일을 갖고, 그걸로 SCRAM 인증을 한다.
+
+```bash
+# 756바이트 난수를 base64로 (문서에 나오는 예시 크기)
+openssl rand -base64 756 | sudo tee /etc/mongodb/keyfile > /dev/null
+sudo chown mongodb:mongodb /etc/mongodb/keyfile
+sudo chmod 400 /etc/mongodb/keyfile        # 권한이 넓으면 mongod가 시작을 거부한다
+openssl rand -base64 756 | wc -c           # 만들어지는 크기만 따로 확인
+```
+
+```text
+1024
+```
+
+756바이트를 base64로 만들면 1008자이고 줄바꿈이 붙어 1024바이트가 된다. MongoDB는 키 파일의 공백을 무시하고 1024자까지 받는다.
+
+```yaml
+security:
+  keyFile: /etc/mongodb/keyfile
+replication:
+  replSetName: rs0
+```
+
+keyFile은 결국 공유 비밀번호다. 모든 멤버에 같은 파일이 있으니 한 대가 털리면 전부 털린 것이고, 바꾸려면 모든 멤버에 새 파일을 배포해야 한다. 규모가 크거나 규정이 엄격하면 멤버마다 자기 인증서를 갖는 x.509 멤버 인증(`security.clusterAuthMode: x509`)으로 간다. 이미 keyFile로 돌고 있는 셋은 멈추지 않고 `keyFile` → `sendKeyFile` → `sendX509` → `x509` 순서로 멤버마다 재시작하며 옮긴다. 인증이 아예 꺼진 셋에 인증을 켤 때도 `security.transitionToAuth: true`로 "인증을 시도하되 실패해도 받아 주는" 단계를 거치면 다운타임 없이 갈 수 있다.
+
+<Callout kind="warning">
+  원격 서버에서 `requireTLS`나 `x509` 같은 마지막 단계로 바로 바꾸면, 아직 준비가 안 된 앱과 멤버가 동시에 끊기고 복제본 셋이 과반을 잃을 수 있다. 멤버 하나씩 바꾸고 `rs.status()`로 모두 건강한지 본 뒤 다음으로 넘어간다. 되돌릴 때는 직전 단계 값(`preferTLS`, `sendX509`)으로 같은 순서를 거꾸로 밟는다.
+</Callout>
+
+## 디스크에 쓰인 것: 저장 암호화가 막는 것과 못 막는 것
+
+저장 암호화(encryption at rest)는 데이터 파일이 디스크에 쓰일 때 암호화하는 것이다. MongoDB Enterprise의 WiredTiger 암호화 스토리지 엔진은 DB마다 키를 하나씩 만들어 데이터를 암호화하고(기본 AES256-CBC), 그 DB 키들을 마스터 키 하나로 다시 암호화한다. 마스터 키는 KMIP 서버(HashiCorp Vault, 클라우드 KMS를 KMIP로 연결한 것 등)에서 받아 온다.
+
+```yaml
+security:
+  enableEncryption: true
+  kmip:
+    serverName: kmip.internal
+    port: 5696
+    serverCAFile: /etc/mongodb/kmip/ca.pem
+    clientCertificateFile: /etc/mongodb/kmip/mongod.pem
+```
+
+로컬 키 파일(`encryptionKeyFile`)로도 켤 수 있지만 키가 데이터와 같은 서버에 있으니 시험용이다. 마스터 키 교체는 멤버마다 `--kmipRotateMasterKey`로 재시작해서 한다. Community 판에는 이 엔진이 없어서, 보통 LUKS나 클라우드 볼륨 암호화(EBS 암호화 등)로 디스크 전체를 암호화한다. Atlas는 기본으로 저장 암호화가 켜져 있고, 원하면 내 클라우드 KMS 키를 쓰게 할 수 있다.
+
+막는 위협을 정확히 알아 둬야 한다. 저장 암호화는 디스크를 뽑아 가거나, 스냅샷이나 데이터 파일 복사본이 새거나, 폐기한 장비에서 데이터를 복구하려는 경우를 막는다. 반대로 정상적으로 로그인한 사용자의 쿼리, 앱의 연산자 주입, 서버에 root로 들어온 공격자는 막지 못한다. mongod가 돌고 있는 동안에는 키가 메모리에 있고, 쿼리 결과는 평문으로 나간다. 특히 `mongodump`로 뜬 백업 파일은 평문 BSON이라서, 저장 암호화를 켰어도 백업은 따로 암호화해야 한다. 디스크·컬럼·봉투 암호화의 차이와 키 교체는 [저장 데이터 암호화](/posts/encryption-at-rest)에 자세히 썼다.
+
+## 서버도 평문을 못 보게: 클라이언트 측 필드 암호화
+
+주민등록번호나 카드 번호처럼 DB 관리자도 보면 안 되는 필드가 있다. 클라이언트 측 필드 암호화(CSFLE, 4.2부터)는 드라이버가 필드를 암호화한 다음에 서버로 보낸다. 서버는 처음부터 끝까지 암호문만 받고, 키도 갖지 않는다.
+
+키는 두 단계다. 필드를 실제로 암호화하는 데이터 키(DEK)는 MongoDB 안의 키 보관 컬렉션(보통 `encryption.__keyVault`)에 저장되는데, 이 DEK는 KMS(AWS KMS, Azure Key Vault, GCP KMS, KMIP)에 있는 고객 마스터 키(CMK)로 암호화된 상태로 들어 있다. 봉투 암호화다. 아래 그림에서 다음을 누르면 문서 하나가 저장되는 순서가 보인다.
+
+<SequenceDiagram
+  caption="평문과 키는 앱 쪽에만 있고, 서버에는 암호문만 간다"
+  actors={[
+    { id: "app", label: "앱 드라이버" },
+    { id: "vault", label: "키 보관 컬렉션" },
+    { id: "kms", label: "KMS" },
+    { id: "db", label: "mongod" },
+  ]}
+  steps={[
+    { from: "app", to: "vault", label: "find DEK", title: "암호화할 데이터 키를 찾는다", detail: "스키마에 적힌 키 id로 키 보관 컬렉션에서 DEK를 읽는다. 이 DEK는 아직 CMK로 잠겨 있다.", payload: "{ _id: UUID(\"...\"), keyMaterial: BinData(0, \"...\"), masterKey: { provider: \"aws\", ... } }" },
+    { from: "app", to: "kms", label: "Decrypt(DEK)", title: "KMS에 DEK를 풀어 달라고 한다", detail: "CMK는 KMS 밖으로 나오지 않는다. 앱의 IAM 권한으로 DEK만 풀어서 받는다. 드라이버는 이걸 잠깐 캐시한다." },
+    { from: "app", to: "app", label: "encrypt(ssn)", title: "드라이버 안에서 필드를 암호화한다", detail: "AEAD_AES_256_CBC_HMAC_SHA_512 알고리즘으로 ssn 필드만 암호문으로 바꾼다. 다른 필드는 평문 그대로다." },
+    { from: "app", to: "db", label: "insert", title: "암호문이 섞인 문서를 보낸다", detail: "서버에 저장되는 ssn은 BinData 서브타입 6이다. 서버 로그, 백업, 관리자 화면 어디에도 평문이 없다.", payload: "{ name: \"Kim\", ssn: BinData(6, \"AQx...\") }" },
+    { from: "db", to: "app", label: "find 결과", title: "읽을 때는 거꾸로 푼다", detail: "서버는 암호문을 돌려주고, 같은 DEK를 가진 드라이버가 풀어서 앱에 평문을 준다. 키가 없는 클라이언트는 BinData만 본다." },
+  ]}
+/>
+
+알고리즘은 두 가지다. 결정적(Deterministic)은 같은 평문이 늘 같은 암호문이 된다. 그래서 서버가 암호문끼리 같은지 비교할 수 있고, `ssn`으로 일치 검색을 할 수 있다. 무작위(Random)는 매번 다른 암호문이 나와서 검색이 안 되는 대신 더 안전하다. 원리를 Node.js `crypto`로 흉내 내 봤다. IV를 평문의 HMAC에서 만들면 결정적, 난수로 만들면 무작위가 된다.
+
+```js
+// libmongocrypt가 아니라 원리를 보이려고 만든 흉내다
+import crypto from "node:crypto";
+const key = crypto.randomBytes(64);              // 32B 암호화 키 + 32B MAC 키
+const encKey = key.subarray(0, 32), macKey = key.subarray(32);
+function enc(plain, deterministic) {
+  const iv = deterministic
+    ? crypto.createHmac("sha512", macKey).update(plain).digest().subarray(0, 16) // 평문이 같으면 IV도 같다
+    : crypto.randomBytes(16);
+  const c = crypto.createCipheriv("aes-256-cbc", encKey, iv);
+  return Buffer.concat([iv, c.update(plain), c.final()]).toString("base64").slice(0, 28) + "...";
+}
+for (const mode of [true, false]) {
+  console.log(mode ? "deterministic" : "random");
+  console.log("  ", enc("880101-1234567", mode));
+  console.log("  ", enc("880101-1234567", mode));
+}
+```
+
+```text
+deterministic
+   tx6rg/P07x3TdErskqKWF7gDxGY+...
+   tx6rg/P07x3TdErskqKWF7gDxGY+...
+random
+   qoFFRBJhe0qIHThEmiuwK4kbmift...
+   MlG7pvLsXi40AS6DPkTLrbOziZ4q...
+```
+
+같은 주민번호를 두 번 암호화했을 때 결정적 쪽은 두 줄이 똑같다. 이게 검색을 가능하게 하는 성질이자 약점이다. 값의 종류가 적은 필드(성별, 혈액형, 등급)를 결정적으로 암호화하면, 암호문 종류가 몇 개뿐이고 각각의 개수를 세면 무엇인지 추측할 수 있다. 결정적 암호화는 주민번호, 이메일처럼 값이 거의 겹치지 않는 필드에만 쓴다.
+
+자동 암호화(스키마만 주면 드라이버가 알아서 암호화)는 Enterprise와 Atlas에서 되고, 드라이버 옆에 `crypt_shared` 라이브러리나 `mongocryptd`가 있어야 한다. Community에서는 명시적 암호화를 쓴다. Node.js 드라이버 6.x 기준으로는 `mongodb-client-encryption` 패키지를 함께 설치하고 이렇게 쓴다.
+
+```ts
+import { MongoClient, ClientEncryption } from "mongodb";
+
+const client = new MongoClient(uri);
+const encryption = new ClientEncryption(client, {
+  keyVaultNamespace: "encryption.__keyVault",
+  kmsProviders: { aws: {} },   // 자격 증명은 실행 환경의 IAM 역할에서
+});
+const keyId = await encryption.createDataKey("aws", {
+  masterKey: { region: "ap-northeast-2", key: process.env.CMK_ARN! },
+});
+const ssn = await encryption.encrypt("880101-1234567", {
+  keyId,
+  algorithm: "AEAD_AES_256_CBC_HMAC_SHA_512-Deterministic",
+});
+await client.db("hr").collection("people").insertOne({ name: "Kim", ssn });
+```
+
+## Queryable Encryption: 암호문으로 범위 질의까지
+
+CSFLE의 한계는 결정적 암호화가 일치 검색만 되고, 그것도 같은 평문이 같은 암호문이라는 정보를 흘린다는 점이다. Queryable Encryption은 이 둘을 고치려고 나왔다. 7.0에서 일치 질의가 정식이 됐고, 8.0에서 범위 질의(`$gt`, `$lt` 등)가 정식이 됐다. 필드 값은 무작위로 암호화되어 같은 평문도 매번 다른 암호문이 된다. 대신 드라이버가 질의할 때 값에서 파생한 토큰을 보내고, 서버는 컬렉션 옆에 따로 두는 메타데이터 컬렉션(`enxcol_.people.esc`, `enxcol_.people.ecoc`)을 써서 평문을 모른 채로 맞는 문서를 찾는다.
+
+```js
+// 컬렉션을 만들 때 어느 필드를 어떤 질의로 쓸지 정한다
+encryptedFields: {
+  fields: [
+    { path: "ssn", bsonType: "string", keyId: ssnKeyId, queries: { queryType: "equality" } },
+    { path: "salary", bsonType: "int", keyId: salaryKeyId,
+      queries: { queryType: "range", min: 0, max: 1000000000 } },
+  ],
+}
+```
+
+공짜는 아니다. 메타데이터 컬렉션 때문에 저장 공간과 쓰기 비용이 늘고, 메타데이터가 쌓이면 압축 명령(`compactStructuredEncryptionData`)을 주기적으로 돌린다. 복제본 셋이나 샤드 클러스터에서만 되고 단독 서버에서는 안 된다. 어느 필드를 어떤 질의로 쓸지는 컬렉션을 만들 때 정해서 나중에 바꾸기 어렵다. 정렬, 부분 문자열 검색은 기본적으로 안 된다(8.2부터 접두·접미·부분 문자열 질의가 미리보기로 들어왔으니 쓰려면 버전 문서를 확인한다).
+
+| 방식 | 같은 평문의 암호문 | 서버에서 되는 질의 | 흘리는 정보 |
+|---|---|---|---|
+| CSFLE 결정적 | 늘 같다 | 일치 | 값이 같은지, 값별 개수 |
+| CSFLE 무작위 | 매번 다르다 | 없음 | 거의 없음 |
+| QE 일치 | 매번 다르다 | 일치 | 질의 패턴 일부 |
+| QE 범위 | 매번 다르다 | 일치, 범위 | 범위 질의 패턴 일부 |
+
+새로 시작한다면 지원하는 버전에서는 Queryable Encryption을 먼저 보고, 질의할 필요가 없는 필드는 CSFLE 무작위로 간다.
+
+## CSFLE를 쓰면 DB 관리자도 못 보나
+
+반은 맞다. DB에 접속하는 관리자는 `ssn` 자리에 `BinData(6, ...)`만 본다. 서버 로그, 덤프, 슬로 쿼리 로그에도 평문이 없다. 그런데 이건 관리자가 DB 권한만 가졌을 때 이야기다. 같은 사람이 KMS에서 CMK로 복호화할 권한이나 앱 서버 접근 권한도 가졌다면, DEK를 풀어서 다 읽을 수 있다. 그래서 CSFLE의 보안은 "DB 권한과 키 권한을 다른 사람이 갖는가"에 달려 있다. KMS 키 정책에서 앱의 IAM 역할만 `Decrypt`를 할 수 있게 하고, DB 관리자 계정은 빼야 의미가 있다.
+
+평문이 아닌 정보는 여전히 보인다. 문서의 크기, 필드가 있는지 없는지, 언제 몇 번 읽혔는지, 결정적 암호화라면 값의 분포까지. 그리고 암호화된 필드를 잃은 키로는 영영 못 읽는다. CMK를 지우면 그 키로 잠근 DEK가 전부 쓸모없어지고, 데이터도 함께 잃는다. KMS 키에 삭제 보호를 걸어 둔다.
+
+## 누가 무엇을 했나: 감사 로그
+
+마지막 층은 기록이다. 감사(auditing)는 Enterprise와 Atlas 기능이다. Community를 쓰면서 감사 로그가 필요하면 감사 기능이 있는 Percona Server for MongoDB 같은 배포판을 고려한다.
+
+```yaml
+auditLog:
+  destination: file
+  format: JSON
+  path: /var/log/mongodb/audit.json
+  # 로그인, 사용자·역할 변경, 컬렉션 삭제만 남긴다
+  filter: '{ atype: { $in: ["authenticate", "createUser", "dropUser", "grantRolesToUser", "dropCollection", "dropDatabase"] } }'
+setParameter:
+  auditAuthorizationSuccess: false   # true면 성공한 읽기·쓰기까지 남기지만 성능 비용이 크다
+```
+
+한 줄마다 `atype`(무슨 일), `ts`(언제), `local`과 `remote`(어디서), `users`와 `roles`(누가), `param`(대상), `result`(성공은 0, 실패는 오류 코드)가 들어간다. 실패한 `authenticate`가 한 IP에서 몰려 들어오면 비밀번호 대입 공격이고, 새벽에 `grantRolesToUser`가 찍혔다면 누가 권한을 올렸는지 바로 찾는다. 감사 로그는 DB 서버에 두기만 하면 서버를 장악한 공격자가 지울 수 있으니 SIEM이나 다른 저장소로 바로 보낸다. 앞에서 사람마다 계정을 따로 만들라고 한 이유도 여기에 있다. 공용 계정이면 감사 로그가 "admin이 했다"만 말해 준다.
+
+처음 사고 장면으로 돌아가면, 그 DB에 필요했던 건 이 모든 층이 아니라 맨 앞의 두 줄이었다. `bindIp`를 좁히고 `authorization`을 켜는 것. 그다음부터는 위협을 하나씩 정하고 거기에 맞는 층을 고른다. 엿듣기에는 TLS, 가짜 멤버에는 내부 인증, 디스크 도난에는 저장 암호화, 관리자와 덤프에서 새는 것까지 막으려면 CSFLE나 Queryable Encryption, 그리고 이 모든 것이 뚫렸을 때 무슨 일이 있었는지 알려면 감사 로그다.
+
+## 면접에서 나올 만한 질문
+
+### 인증 없이 열린 MongoDB가 털리는 이유와 막는 방법은?
+
+`bindIp`를 외부 인터페이스로 넓히면서 `security.authorization`을 켜지 않으면 누구나 접속해 모든 명령을 실행할 수 있다. 3.6부터 기본은 localhost 바인딩이지만, 원격 접속을 열면서 인증을 빠뜨린 경우가 대부분이다. 인증을 켜고, 필요한 인터페이스에만 바인딩하고, 방화벽이나 보안 그룹으로 앱 서버에서만 받게 한다.
+
+### SCRAM과 x.509 중 무엇을 고르나요?
+
+비밀을 어디에 둘지로 고른다. SCRAM은 단순하지만 비밀번호를 앱 설정에 두고 교체할 때 배포가 필요하다. 인증서를 자동으로 발급·교체하는 체계가 있으면 x.509로 비밀번호를 없앨 수 있다. x.509 사용자 이름은 RFC 2253 형식 subject라서 순서를 거꾸로 적는 실수를 조심하고, 멤버 인증서와 O·OU·DC 조합을 다르게 둔다.
+
+### 앱 계정에 readWrite를 주면 안 되나요?
+
+작은 서비스라면 시작은 괜찮지만, `readWrite`에는 컬렉션 삭제까지 들어 있다. 앱이 하는 동작만 리소스와 액션으로 묶은 사용자 정의 역할을 만들면, 연산자 주입 같은 사고가 났을 때 피해 범위가 그 컬렉션과 그 동작으로 줄어든다. `root`나 `readWriteAnyDatabase`를 앱에 주는 건 피한다.
+
+### keyFile과 x.509 멤버 인증의 차이는?
+
+keyFile은 모든 멤버가 같은 비밀 파일을 나눠 갖는 공유 비밀번호라서, 한 대가 털리면 전체가 털리고 교체하려면 모든 멤버에 배포해야 한다. x.509는 멤버마다 자기 인증서를 갖고 CA가 신뢰를 보증하니 개별 교체와 폐기가 된다. 운영 중에는 `sendKeyFile`, `sendX509` 단계를 거쳐 멤버마다 재시작하며 옮긴다.
+
+### 저장 암호화가 막는 위협과 못 막는 위협은?
+
+디스크나 스냅샷, 데이터 파일 복사본, 폐기 장비에서 데이터가 새는 것을 막는다. 로그인한 사용자의 쿼리, 앱 취약점, 서버 root 권한 탈취는 못 막는다. 실행 중에는 키가 메모리에 있고 결과는 평문으로 나가기 때문이다. `mongodump` 백업도 평문이라 따로 암호화해야 한다.
+
+### CSFLE를 쓰면 DB 관리자도 데이터를 못 보나요?
+
+DB 권한만 가진 관리자는 암호문만 본다. 키는 KMS에 있고 서버는 키를 갖지 않기 때문이다. 하지만 같은 사람이 KMS 복호화 권한이나 앱 서버 접근 권한을 가졌다면 다 읽을 수 있으니, DB 권한과 키 권한을 나누는 게 전제다. 문서 크기, 접근 패턴, 결정적 암호화의 값 분포 같은 메타데이터는 여전히 보인다.
+
+### CSFLE의 결정적 암호화와 Queryable Encryption은 무엇이 다른가요?
+
+결정적 암호화는 같은 평문이 같은 암호문이라 일치 검색이 되지만, 값이 같은지와 값별 개수가 드러나서 종류가 적은 필드에는 위험하다. Queryable Encryption은 값을 무작위로 암호화하면서 메타데이터 컬렉션과 질의 토큰으로 일치(7.0), 범위(8.0) 질의를 한다. 대신 저장 공간과 쓰기 비용이 늘고, 복제본 셋이 필요하며, 질의 종류를 컬렉션 생성 때 정해야 한다.

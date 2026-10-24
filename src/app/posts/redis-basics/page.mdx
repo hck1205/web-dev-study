@@ -276,6 +276,13 @@ OK
 
 `ACL SETUSER`로 만든 사용자는 메모리에만 있어서 재시작하면 사라진다. 계속 쓰려면 `redis.conf`에 `user shop-app on >s3cret-pass ~cache:* ~session:* +@read +@write -@dangerous` 한 줄을 넣거나, `aclfile`을 지정하고 `ACL SAVE`로 저장한다.
 
+비밀번호와 ACL은 평문으로 오간다. 응용 서버와 Redis 사이가 같은 장비나 믿을 수 있는 사설망이 아니라면(다른 VPC, 클라우드 간 연결) 6.0부터 들어온 TLS를 켠다. Ubuntu 패키지는 TLS를 넣어 빌드되어 있다. `tls-port`로 TLS 포트를 열고 `port 0`으로 평문 포트를 닫는다. `tls-auth-clients`의 기본값이 `yes`라 클라이언트도 인증서를 내야 하는데, 실험에서 `--tls --cacert`만 주고 붙자 서버 로그에 `peer did not return a certificate`가 남고 연결이 끊겼다. 비밀번호만으로 충분하면 `tls-auth-clients no`로 둔다. 복제와 클러스터 버스까지 암호화하려면 `tls-replication yes`, `tls-cluster yes`를 함께 준다. 암호화 비용 때문에 처리량이 줄어드니 [처리량 글](/posts/redis-high-throughput)의 방법으로 미리 재 본다.
+
+```bash
+# redis.conf: tls-port 6380 / port 0 / tls-cert-file, tls-key-file, tls-ca-cert-file 경로 지정 후 접속 확인
+redis-cli -p 6380 --tls --cacert /etc/redis/tls/ca.crt --cert /etc/redis/tls/client.crt --key /etc/redis/tls/client.key PING
+```
+
 ## 키 이름은 콜론으로 나눈다
 
 Redis에는 테이블이 없다. 키 공간 하나에 모든 키가 들어간다. 그래서 키 이름이 곧 분류 체계다. 관례는 콜론(`:`)으로 단계를 나누는 것이다. `user:42:profile`, `product:1001`, `cache:product:1001`, `rank:sales:2026-10-16`처럼 "무엇:누구:어떤 부분" 순서로 쓴다. Redis가 콜론에 특별한 의미를 두지는 않지만, 이렇게 지으면 ACL의 키 패턴(`~cache:*`)과 `SCAN`의 `MATCH`로 묶어 다루기 쉽고, GUI 도구도 콜론을 기준으로 트리처럼 보여 준다.
@@ -749,7 +756,11 @@ redis-cli EVAL "local s = tonumber(redis.call('HGET', KEYS[1], 'stock')) if s an
 (integer) 1
 ```
 
-왕복만 줄이려면 파이프라인, 몇 명령을 끼어들기 없이 실행하려면 `MULTI`/`EXEC`, 읽은 값으로 판단까지 원자적으로 하려면 Lua다. 7.0부터는 스크립트를 서버에 이름 붙여 등록해 두는 Functions(`FUNCTION LOAD`, `FCALL`)도 있다. Lua 스크립트는 앞에서 본 대로 길어지면 서버 전체를 멈추므로 짧게 쓴다. Redis Cluster에서는 스크립트와 `MULTI`가 다루는 키가 모두 같은 슬롯에 있어야 한다.
+운영에서는 스크립트 본문을 매번 보내지 않는다. `SCRIPT LOAD`로 한 번 올리면 본문의 SHA1(40자리 16진수)이 돌아오고, 그다음부터는 `EVALSHA <sha> 1 product:1001`로 해시만 보낸다. 이 스크립트 캐시는 재시작, 장애 조치로 바뀐 새 프라이머리, `SCRIPT FLUSH` 뒤에는 비어 있어서 `(error) NOSCRIPT No matching script. Please use EVAL.`이 돌아온다. 실험에서도 `SCRIPT FLUSH` 직후 같은 SHA로 부르자 이 에러가 났다. 그래서 클라이언트는 `NOSCRIPT`를 받으면 `EVAL`로 한 번 다시 보내는 처리를 꼭 둔다(ioredis의 `defineCommand`, redis-py의 `register_script`가 이걸 대신 해 준다).
+
+7.0의 Functions는 이 불편을 없앤다. `FUNCTION LOAD "#!lua name=shop ..."`로 올린 라이브러리 안에서 `redis.register_function('take_stock', ...)`으로 이름을 붙이고 `FCALL take_stock 1 product:1001`로 부른다. 스크립트 캐시와 달리 함수는 RDB·AOF에 저장되고 복제본에도 전달되어 재시작 뒤에도 남는다. 스크립트든 함수든 다루는 키는 본문에 적지 말고 `KEYS`로 넘긴다. 클러스터 클라이언트는 `KEYS`를 보고 어느 노드로 보낼지 정하고, 서버도 그 키들이 이 노드의 같은 슬롯인지 검사한다. 본문에서 키 이름을 만들어 쓰면 엉뚱한 노드에서 실행되거나, 7.0에서는 다른 슬롯의 키에 손댔다는 에러로 실패한다. 오래 도는 스크립트가 `BUSY`를 내는 문제는 [앞에서](#느린-명령-하나가-모두를-세운다) 본 대로 `SCRIPT KILL`로 끊는다.
+
+왕복만 줄이려면 파이프라인, 몇 명령을 끼어들기 없이 실행하려면 `MULTI`/`EXEC`, 읽은 값으로 판단까지 원자적으로 하려면 Lua다. Lua 스크립트는 길어지면 서버 전체를 멈추므로 짧게 쓴다. Redis Cluster에서는 스크립트와 `MULTI`가 다루는 키가 모두 같은 슬롯에 있어야 한다.
 
 ## 응용 로그에 Redis 타임아웃이 찍히면
 

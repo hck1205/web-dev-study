@@ -1,0 +1,502 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-longest-repeating-character-replacement");
+
+<EasyIntro>
+  알파벳 카드가 한 줄로 놓여 있고, 마법 스티커가 몇 장 있다고 해 보자. 스티커를 카드에 붙이면 그 카드를 원하는 글자로 바꿀 수 있다. 스티커를 다 쓰거나 덜 쓰면서, 같은 글자가 이어진 줄을 가장 길게 만들고 싶다.
+
+  이어진 카드 몇 장을 골랐다고 하면, 그 안에서 가장 많이 나온 글자로 나머지를 바꾸는 게 스티커를 가장 적게 쓰는 방법이다. 그러니 고른 카드 수에서 가장 많은 글자의 수를 빼면 필요한 스티커 수가 나온다. 그 수가 가진 스티커보다 많지 않으면 이 구간은 성공이다.
+
+  두 손가락으로 구간의 양 끝을 잡고, 오른손을 한 칸씩 옮기며 카드를 넣는다. 스티커가 모자라게 되면 왼손을 한 칸 옮겨 맨 앞 카드를 뺀다. 글자마다 몇 장 있는지 세어 두면 계산이 빠르다. 오른손이 끝에 닿았을 때 두 손가락 사이가 가장 길었던 길이가 답이다.
+</EasyIntro>
+
+앞 글 [Longest Substring Without Repeating Characters](/posts/leetcode-longest-substring-without-repeating)는 "창 안에 중복이 0개"라는 조건이었다. 이번 문제는 조건이 "창 안에서 바꿔야 하는 글자가 k개 이하"로 바뀐다. 겉보기엔 비슷한데, 창이 조건을 만족하는지 판단하려면 "창 안에서 가장 많이 나온 글자의 개수"가 필요해서 한 단계 어려워진다. 이 값은 왼쪽을 뺄 때 줄어들 수도 있어서 관리하기가 까다롭다.
+
+이 글의 마지막 풀이는 그 값을 아예 줄이지 않는다. 처음 보면 틀린 코드처럼 보이는데 정답이다. 그게 왜 맞는지 납득하는 게 이 문제의 가장 큰 고비다. 거기까지 가는 길에 모든 구간 늘리기, 길이 이분 탐색, 글자별 창, 매번 다시 세는 창을 차례로 본다. 문제 원문은 [LeetCode 424](https://leetcode.com/problems/longest-repeating-character-replacement/)다. 코드는 모두 Node.js 22, Python 3.13, Java로 돌렸다.
+
+## 글자를 k번 바꿔서 만드는 가장 긴 줄
+
+대문자로만 이루어진 문자열 `s`와 정수 `k`가 주어진다. 아무 글자나 골라 다른 대문자로 바꾸는 일을 최대 k번 할 수 있다. 그렇게 해서 만들 수 있는, 같은 글자만으로 이루어진 부분 문자열(이어진 구간)의 최대 길이를 구한다.
+
+풀이에 영향을 주는 제약은 이렇다.
+
+- 길이는 1 이상 10만 이하다. 구간이 50억 개쯤 되니 모든 구간을 보는 O(n²)은 위험하다.
+- 글자는 대문자 26종이다. 개수를 세는 데 길이 26 배열을 쓸 수 있고, "26을 곱해도 괜찮은가"가 풀이 선택 기준이 된다.
+- k는 0 이상 n 이하다. k = 0이면 원래 있는 같은 글자 줄 중 가장 긴 것이 답이고, k가 n 이상이면 문자열 전체가 답이다.
+
+## 구간 하나를 판정하는 식
+
+구간 하나를 골랐다고 하자. 이 구간을 전부 같은 글자로 만들려면 어떤 글자로 맞추는 게 가장 싸게 먹힐까. 이미 가장 많이 있는 글자로 맞추는 것이다. 나머지만 바꾸면 되니까.
+
+```text
+바꿔야 하는 글자 수 = 구간 길이 − 구간에서 가장 많은 글자의 개수
+```
+
+이 값이 k 이하이면 그 구간은 만들 수 있는 구간이다. 예를 들어 `"BCABBB"`는 길이 6이고 B가 4개라 바꿀 글자는 6 − 4 = 2다. k = 2면 C와 A를 B로 바꿔 `"BBBBBB"`를 만들 수 있다.
+
+이 식 덕분에 문제가 "길이 − 최다 빈도 ≤ k인 가장 긴 구간"이 된다. 어느 글자로 바꿀지는 신경 쓰지 않아도 된다.
+
+## 손으로 먼저 풀어 보기
+
+예시는 `s = "AABCABBB"`, `k = 2`다. 인덱스는 0:A, 1:A, 2:B, 3:C, 4:A, 5:B, 6:B, 7:B.
+
+몇 개 구간을 판정해 본다.
+
+```text
+구간        길이  최다 글자  바꿀 수  k=2 가능?
+AABCA        5    A 3        2       가능
+AABCAB       6    A 3        3       불가능
+BCABBB       6    B 4        2       가능
+ABCABBB      7    B 4        3       불가능
+```
+
+답은 6, 2번부터 7번까지인 `"BCABBB"`다. 길이 7인 구간은 두 개(0~6, 1~7)인데 둘 다 바꿀 글자가 3개라 안 된다.
+
+표에서 하나 더 보인다. 같은 길이 6이라도 앞쪽(`AABCAB`)은 안 되고 뒤쪽(`BCABBB`)은 된다. 구간을 왼쪽에서 오른쪽으로 밀면서 "이 길이로 되는 곳이 있나"를 찾는 게 창의 일이다.
+
+## 시작점마다 끝까지 늘려 보기
+
+시작 `i`를 고정하고 끝 `j`를 늘리면서 글자 개수와 최다 빈도를 함께 갱신한다. 구간이 늘어날 때 최다 빈도는 줄지 않으니 "방금 넣은 글자의 개수"와 비교하기만 하면 된다.
+
+```js
+function replBrute(s, k) {
+  let best = 0;
+  for (let i = 0; i < s.length; i++) {
+    const count = new Array(26).fill(0); // 시작점마다 새로 센다
+    let maxFreq = 0;
+    for (let j = i; j < s.length; j++) {
+      const c = s.charCodeAt(j) - 65; // 'A'가 0
+      count[c]++;
+      maxFreq = Math.max(maxFreq, count[c]);
+      if (j - i + 1 - maxFreq <= k) best = Math.max(best, j - i + 1);
+    }
+  }
+  return best;
+}
+```
+
+시간 O(n²), 공간 O(26)이다. 1만 자에서 0.3초 남짓, 10만 자면 그 100배인 30초쯤이다. 구간마다 개수를 처음부터 다시 셀 필요가 없다는 건 이미 반영했는데도 구간 수 자체가 너무 많다.
+
+조건을 만족하지 못한 다음에도 `j`를 계속 늘리는 것도 아깝다. 하지만 여기서는 멈출 수 없다. 길이가 늘면서 최다 글자가 따라 늘어나 다시 가능해질 수 있기 때문이다. `"ABBB"`, k = 0에서 `i = 1`이면 바로 가능하지만 `i = 0`이면 끝까지 불가능하다. 앞 글의 "중복이 생기면 그 시작점은 끝"이라는 성질이 여기선 시작점 하나 안에서는 성립하지 않는다.
+
+## 길이로 이분 탐색하기
+
+시작점 하나 안에서는 단조롭지 않지만, 길이로 보면 단조롭다. 길이 L인 가능한 구간이 있으면, 그 구간의 한쪽 끝을 하나 뺀 길이 L − 1 구간도 가능하다. 길이가 1 줄면 바꿀 글자 수는 같거나 1 준다. 그러니 "길이 L로 가능한 구간이 있나"는 L이 작을 땐 예, 어느 지점부터 아니오다. [이분 탐색](/posts/binary-search)을 쓸 수 있다.
+
+길이가 고정되면 고정 길이 창을 밀면서 각 위치에서 판정한다. 최다 빈도는 26칸을 훑어서 구한다.
+
+```js
+function replBinary(s, k) {
+  // 길이 len인 구간 중 가능한 게 있나
+  const ok = (len) => {
+    const count = new Array(26).fill(0);
+    for (let r = 0; r < s.length; r++) {
+      count[s.charCodeAt(r) - 65]++;
+      if (r >= len) count[s.charCodeAt(r - len) - 65]--; // 창 밖으로 나간 글자
+      if (r >= len - 1 && len - Math.max(...count) <= k) return true;
+    }
+    return false;
+  };
+  let lo = 0, hi = s.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2); // lo = mid를 쓰니 올림
+    if (ok(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+```
+
+판정 한 번이 O(26n), 그걸 log n번 하니 O(26·n log n)이다. 10만 자에서 140ms 정도였다. O(n²)보다 훨씬 낫지만, 아래 풀이들은 길이를 따로 정하지 않고 한 번의 훑기로 끝낸다.
+
+## 목표 글자를 정해 두고 창을 민다
+
+"어느 글자로 맞출지"를 미리 정하면 문제가 쉬워진다. 목표가 B라면, 창 안에서 B가 아닌 글자 수(`others`)가 k 이하인 가장 긴 창을 찾으면 된다. 이건 앞 글의 창과 같은 모양이다. `others`가 k를 넘으면 넘지 않을 때까지 왼쪽을 당긴다.
+
+글자가 26종뿐이니 목표를 A부터 Z까지 바꿔 가며 26번 돌린다.
+
+```js
+function replPerLetter(s, k) {
+  let best = 0;
+  for (let t = 0; t < 26; t++) {
+    const target = String.fromCharCode(65 + t); // 이번에 맞출 글자
+    let l = 0, others = 0; // 창 안에서 target이 아닌 글자 수
+    for (let r = 0; r < s.length; r++) {
+      if (s[r] !== target) others++;
+      while (others > k) { // 바꿀 글자가 너무 많으면 왼쪽을 뺀다
+        if (s[l] !== target) others--;
+        l++;
+      }
+      best = Math.max(best, r - l + 1);
+    }
+  }
+  return best;
+}
+```
+
+목표가 B일 때 예시를 따라가 본다. 위쪽 초록 칸이 지금 창이다.
+
+<AlgoTrace
+  caption="목표를 B로 정하고 AABCABBB를 훑는다 (k = 2)"
+  memoryLabel="창 상태"
+  cells={["A", "A", "B", "C", "A", "B", "B", "B"]}
+  steps={[
+    { pointer: 0, memory: ["B 아님 1", "최고 1"], caption: "A는 B가 아니다. 바꿀 글자가 1개, 창 길이 1." },
+    { pointer: 1, found: [0], memory: ["B 아님 2", "최고 2"], caption: "A가 또 들어와 바꿀 글자가 2개. k와 같으니 아직 괜찮다." },
+    { pointer: 2, found: [0, 1], memory: ["B 아님 2", "최고 3"], caption: "B는 바꿀 필요가 없다. 창 AAB, 길이 3." },
+    { pointer: 3, found: [1, 2], memory: ["B 아님 2", "최고 3"], caption: "C가 들어와 3개가 됐다. 맨 앞 A를 빼서 2개로 맞춘다. 창 ABC." },
+    { pointer: 4, found: [2, 3], memory: ["B 아님 2", "최고 3"], caption: "A가 들어와 또 3개. 1번 A를 뺀다. 창 BCA." },
+    { pointer: 5, found: [2, 3, 4], memory: ["B 아님 2", "최고 4"], caption: "B가 들어온다. 창 BCAB, 길이 4." },
+    { pointer: 6, found: [2, 3, 4, 5], memory: ["B 아님 2", "최고 5"], caption: "B. 창 BCABB, 길이 5." },
+    { found: [2, 3, 4, 5, 6, 7], memory: ["B 아님 2", "최고 6"], caption: "B. 창 BCABBB, 길이 6. 목표가 B일 때의 답이다." },
+  ]}
+/>
+
+같은 방식으로 목표를 A로 하면 5(`AABCA`), C로 하면 3이 나온다. 셋 중 최댓값 6이 답이다.
+
+시간은 O(26n), 공간 O(1)이다. 10만 자에서 28ms였다. 이 풀이는 이해하기 쉽고 맞다는 게 분명하다. 면접에서 "최다 빈도를 어떻게 관리하나"에서 막히면 이 풀이로 먼저 통과시키고 다음으로 넘어가도 된다. 글자 종류가 많아지면(예: 유니코드) 26배가 커지는 게 한계다.
+
+## 창 하나로, 최다 빈도는 매번 다시 센다
+
+목표를 정하지 않고 창 하나로 끝내려면, 창 안 글자별 개수 `count`를 들고 다니며 "길이 − 최다 빈도"를 직접 계산한다. 이 값이 k를 넘으면 넘지 않을 때까지 왼쪽을 뺀다. 최다 빈도는 26칸을 훑어 매번 새로 구한다.
+
+```js
+function replRecount(s, k) {
+  const count = new Array(26).fill(0); // 창 안 글자별 개수
+  let l = 0, best = 0;
+  for (let r = 0; r < s.length; r++) {
+    count[s.charCodeAt(r) - 65]++;
+    // 바꿀 글자가 k를 넘는 동안 왼쪽을 뺀다
+    while (r - l + 1 - Math.max(...count) > k) {
+      count[s.charCodeAt(l) - 65]--;
+      l++;
+    }
+    best = Math.max(best, r - l + 1);
+  }
+  return best;
+}
+```
+
+`l`과 `r`이 앞으로만 가니 창 이동은 2n번 이하이고, 그때마다 26칸을 훑어 O(26n)이다. 10만 자에서 22ms였다. 앞 풀이와 같은 복잡도지만 한 번만 훑는다.
+
+남은 낭비는 `Math.max(...count)`다. 오른쪽에 글자를 넣을 때는 그 글자 개수와 비교하면 되지만, 왼쪽을 뺄 때 최다 글자가 빠지면 두 번째로 많은 글자가 무엇인지 알 수 없어 다시 훑어야 한다. 이걸 O(1)로 만들려면 빈도별 버킷 같은 구조가 필요해 보인다. 그런데 사실은 줄일 필요가 없다.
+
+## 최다 빈도를 줄이지 않아도 되는 이유
+
+마지막 풀이는 `maxFreq`를 "지금까지 어떤 창에서든 본 가장 큰 빈도"로 두고 절대 줄이지 않는다. 그리고 `while` 대신 `if`로 왼쪽을 한 칸만 민다.
+
+```js
+function characterReplacement(s, k) {
+  const count = new Array(26).fill(0);
+  let l = 0;
+  let maxFreq = 0; // 지금까지 본 가장 큰 빈도. 왼쪽을 빼도 줄이지 않는다
+  for (let r = 0; r < s.length; r++) {
+    const c = s.charCodeAt(r) - 65;
+    count[c]++;
+    maxFreq = Math.max(maxFreq, count[c]);
+    // 바꿀 글자가 k를 넘으면 창을 한 칸 민다. 크기는 그대로다
+    if (r - l + 1 - maxFreq > k) {
+      count[s.charCodeAt(l) - 65]--;
+      l++;
+    }
+  }
+  return s.length - l; // 마지막 창의 크기가 곧 답
+}
+```
+
+이 코드가 맞는 이유를 세 단계로 풀어 본다.
+
+첫째, 창의 크기는 줄지 않는다. `r`이 한 칸 늘 때 `l`은 0칸 또는 1칸 움직인다. 그래서 창은 커지거나 크기를 유지한 채 오른쪽으로 미끄러진다. 창의 크기는 "지금까지 찾은 가장 긴 가능한 구간의 길이"를 기록하는 역할을 한다. 그래서 마지막에 `s.length - l`, 즉 창의 크기가 답이다.
+
+둘째, 창이 커지는 건 진짜 더 긴 답을 찾았을 때뿐이다. 창이 W에서 W + 1로 커지려면 `if`가 거짓이어야 하니 `maxFreq >= W + 1 - k`여야 한다. 지금까지의 창은 모두 크기가 W 이하였으니 그 안에서 나온 빈도로는 이 조건을 만족할 수 없었다(그랬다면 창이 이미 더 커졌다). 그러니 창이 커지는 순간에는 `maxFreq`가 방금 커진 것이고, 커질 수 있는 건 방금 넣은 글자 `s[r]`의 개수뿐이다. 그 값은 지금 창 안의 진짜 개수라서, 이 순간의 판정은 정확하다. 길이 W + 1인 구간이 진짜로 가능하다.
+
+셋째, `maxFreq`가 실제 최다 빈도보다 커서 틀린 창을 "가능"으로 잘못 보는 일은 크기 유지 단계에서만 생긴다. 그때 창은 크기가 그대로라 답(창 크기)이 부풀지 않는다. 틀린 창이 있어도 그 길이는 앞에서 이미 진짜로 찾은 길이다.
+
+정리하면, 답을 늘리는 건 진짜 최다 빈도가 기록을 넘을 때뿐이고 그 순간의 판정은 정확하다. 기록보다 작은 빈도의 창을 정확히 판정할 이유가 없다. 어차피 답을 늘려 주지 못하기 때문이다.
+
+아래 그림에서 5번 칸에 주목한다. 창 `ABCAB`의 실제 최다 빈도는 2인데 `maxFreq`는 3으로 남아 있다. 이 창은 실제로는 불가능(5 − 2 = 3 > 2)하지만 크기 5는 앞에서 `AABCA`로 이미 찾은 길이라 답이 틀어지지 않는다.
+
+<AlgoTrace
+  caption="maxFreq를 줄이지 않는 창 (AABCABBB, k = 2)"
+  memoryLabel="개수와 maxFreq"
+  cells={["A", "A", "B", "C", "A", "B", "B", "B"]}
+  steps={[
+    { pointer: 0, memory: ["A 1", "maxFreq 1"], caption: "A를 넣는다. 창 A, 바꿀 글자 0." },
+    { pointer: 1, found: [0], memory: ["A 2", "maxFreq 2"], caption: "A. 창 AA, 바꿀 글자 0." },
+    { pointer: 2, found: [0, 1], memory: ["A 2", "B 1", "maxFreq 2"], caption: "B. 창 AAB, 길이 3 − 2 = 1개만 바꾸면 된다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["A 2", "B 1", "C 1", "maxFreq 2"], caption: "C. 창 AABC, 4 − 2 = 2개. k와 같아 괜찮다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["A 3", "B 1", "C 1", "maxFreq 3"], caption: "A. maxFreq가 3으로 커졌다. 창 AABCA, 5 − 3 = 2개. 창이 5로 자란다." },
+    { pointer: 5, found: [1, 2, 3, 4], memory: ["A 2", "B 2", "C 1", "maxFreq 3"], caption: "B를 넣으면 6 − 3 = 3 > 2. 맨 앞 A를 빼 창을 민다. 실제 최다는 2지만 maxFreq는 3 그대로, 창 크기는 5 유지." },
+    { pointer: 6, found: [2, 3, 4, 5], memory: ["A 1", "B 3", "C 1", "maxFreq 3"], caption: "B를 넣어도 6 − 3 = 3. 다시 A를 빼고 민다. 창 BCABB, 크기 5." },
+    { pointer: 7, found: [2, 3, 4, 5, 6], memory: ["A 1", "B 4", "C 1", "maxFreq 4"], caption: "B가 4개가 되며 maxFreq가 4로 커진다. 6 − 4 = 2라 민 필요 없이 창이 6으로 자란다." },
+    { found: [2, 3, 4, 5, 6, 7], memory: ["답 8 − 2 = 6"], caption: "끝. 창 크기 6이 답이다. 창이 자란 순간은 진짜 최다 빈도가 기록을 넘었을 때뿐이었다." },
+  ]}
+/>
+
+시간 O(n), 공간 O(26) = O(1)이다. 10만 자에서 1ms 남짓으로, 매번 다시 세는 풀이보다 20배쯤 빨랐다.
+
+`return s.length - l` 대신 반복문 안에서 `best = Math.max(best, r - l + 1)`을 갱신해도 같은 답이다. 창이 줄지 않으니 마지막 창 크기가 곧 최댓값이다. 면접에서는 `best` 쪽이 설명하기 편하고, `s.length - l`은 창이 줄지 않는다는 성질을 이해했다는 표시가 된다.
+
+## 줄어들지 않는 창이라는 다른 틀
+
+여기서 쓴 창은 지금까지 본 창과 모양이 다르다. 보통의 가변 창은 조건이 깨지면 다시 맞을 때까지 `while`로 왼쪽을 당겨, 매 순간 창이 "조건을 만족하는 가장 긴 창"이다. 이번 창은 조건이 깨지면 왼쪽을 한 칸만 밀어 크기를 지킨다. 창이 늘 조건을 만족하지는 않지만, 크기는 늘 "지금까지의 최고 기록"이다.
+
+```text
+줄어드는 창                       줄어들지 않는 창
+for r:                            for r:
+  창에 s[r] 넣기                    창에 s[r] 넣기
+  while 조건이 깨짐:                if 조건이 깨짐:
+    s[l] 빼고 l++                     s[l] 빼고 l++
+  best = max(best, r - l + 1)     답 = n - l
+```
+
+"가장 긴 창"을 찾는 문제라면 이 틀을 대부분 쓸 수 있다. 짧은 창은 답이 될 수 없으니 굳이 줄일 이유가 없다. 아래는 0과 1 배열에서 0을 k개까지 뒤집는 문제를 같은 틀로 쓴 것이다. 줄어드는 창 버전과 무작위 배열 5000개로 비교해 같은 답이 나왔다.
+
+```js
+function longestOnesNoShrink(nums, k) {
+  let l = 0, zeros = 0;
+  for (let r = 0; r < nums.length; r++) {
+    if (nums[r] === 0) zeros++;
+    if (zeros > k) {         // 조건이 깨지면 한 칸만 민다
+      if (nums[l] === 0) zeros--;
+      l++;
+    }
+  }
+  return nums.length - l;    // 창 크기가 곧 최고 기록
+}
+longestOnesNoShrink([1, 0, 1, 1, 0, 0, 1, 1, 1, 0], 2); // 7
+```
+
+이 틀이 이 문제에서 특히 빛나는 건 조건 판정에 필요한 값(최다 빈도)을 정확히 관리하기 어렵기 때문이다. 줄어들지 않는 창에서는 "기록을 넘을 수 있는가"만 알면 되니, 그 값이 커지는 순간만 정확하면 충분하다. 반대로 "가장 짧은 창"을 찾는 [Minimum Window Substring](/posts/leetcode-minimum-window-substring)에서는 창을 적극적으로 줄여야 하니 이 틀을 쓸 수 없다.
+
+## 세 언어로 쓴 최종 코드
+
+```python
+class Solution:
+    def characterReplacement(self, s: str, k: int) -> int:
+        count = [0] * 26
+        l = max_freq = 0
+        for r, ch in enumerate(s):
+            c = ord(ch) - ord("A")
+            count[c] += 1
+            max_freq = max(max_freq, count[c])  # 지금까지 본 가장 큰 빈도. 줄이지 않는다
+            if r - l + 1 - max_freq > k:        # 바꿔야 할 글자가 k를 넘으면
+                count[ord(s[l]) - ord("A")] -= 1
+                l += 1                           # 창을 한 칸 민다 (크기는 그대로)
+        return len(s) - l
+```
+
+```java
+class Solution {
+    public int characterReplacement(String s, int k) {
+        int[] count = new int[26];
+        int l = 0, maxFreq = 0;
+        for (int r = 0; r < s.length(); r++) {
+            int c = s.charAt(r) - 'A';
+            count[c]++;
+            maxFreq = Math.max(maxFreq, count[c]); // 줄이지 않는다
+            if (r - l + 1 - maxFreq > k) {         // 바꿔야 할 글자가 k를 넘으면
+                count[s.charAt(l) - 'A']--;
+                l++;                                // 창을 한 칸 민다
+            }
+        }
+        return s.length() - l;
+    }
+}
+```
+
+`("AABCABBB", 2)`, `("ABAB", 2)`, `("AABABBA", 1)`, `("A", 0)`, `("ABCD", 0)`을 넣어 세 언어 모두 6, 4, 4, 1, 1이 나왔다. 다섯 풀이가 같은 답을 내는지는 A·B·C로 만든 길이 11 이하 무작위 문자열과 k 0~3 조합 3000개로 비교했다.
+
+언어별로 짚을 점이다.
+
+- Java는 `s.charAt(r) - 'A'`가 바로 `int`가 된다. JS는 `charCodeAt(r) - 65`, Python은 `ord(ch) - ord("A")`로 바꿔야 한다. JS에서 `s[r] - "A"`라고 쓰면 `NaN`이 되어 배열 칸이 엉뚱해진다.
+- Python에서는 `collections.Counter`를 쓰고 싶어지는데, 매번 `max(counter.values())`를 부르면 매번 다시 세는 풀이와 같아진다. 줄이지 않는 `max_freq` 하나로 충분하다.
+- JS의 `Math.max(...count)`는 26칸이라 괜찮지만, 글자 종류가 수만 개로 늘면 펼침 연산자가 인자 수 한도에 걸릴 수 있다. 큰 배열의 최댓값은 반복문으로 구한다.
+
+## 다섯 풀이 비교
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 시작점마다 늘리기 | O(n²) | O(26) | 정답 확인용 |
+| 길이 이분 탐색 | O(26·n log n) | O(26) | 길이의 단조성을 보여 줄 때 |
+| 목표 글자별 창 | O(26n) | O(1) | 이해하기 쉽고 맞다는 게 분명하다. 첫 통과용 |
+| 창 하나, 매번 다시 세기 | O(26n) | O(26) | 창 패턴의 정석 형태 |
+| maxFreq를 줄이지 않는 창 | O(n) | O(26) | 최적. 이유를 설명할 수 있을 때 |
+
+10만 자 무작위 대문자, k = 50에서 측정한 평균은 이랬다(시작점마다 늘리기는 1만 자에서 쟀다).
+
+```text
+시작점마다 늘리기 (1만 자)   311 ms
+길이 이분 탐색               139.50 ms
+목표 글자별 창               27.62 ms
+창 하나, 매번 다시 세기      21.68 ms
+maxFreq를 줄이지 않는 창     1.05 ms
+```
+
+## 직접 풀어 보기
+
+<CodePlayground
+  caption="Longest Repeating Character Replacement"
+  functionName="characterReplacement"
+  initialCode={`function characterReplacement(s, k) {
+  // 창 길이 - 창 안 최다 글자 수 <= k 를 지키며 창을 민다
+  return 0;
+}`}
+  solution={"function characterReplacement(s, k) {\n  const count = new Array(26).fill(0);\n  let l = 0, maxFreq = 0;\n  for (let r = 0; r < s.length; r++) {\n    const c = s.charCodeAt(r) - 65;\n    count[c]++;\n    maxFreq = Math.max(maxFreq, count[c]);\n    if (r - l + 1 - maxFreq > k) {\n      count[s.charCodeAt(l) - 65]--;\n      l++;\n    }\n  }\n  return s.length - l;\n}"}
+  tests={[{"label":"예시","args":["AABCABBB",2],"expected":6},{"label":"번갈아 나온다","args":["ABAB",2],"expected":4},{"label":"k = 1","args":["AABABBA",1],"expected":4},{"label":"한 글자","args":["A",0],"expected":1},{"label":"k = 0, 전부 다르다","args":["ABCD",0],"expected":1},{"label":"이미 다 같다","args":["AAAA",2],"expected":4},{"label":"k가 길이보다 크다","args":["ABCDE",10],"expected":5},{"label":"k = 0, 가운데 줄","args":["BAAAB",0],"expected":3}]}
+/>
+
+## 자주 틀리는 생각과 코드
+
+가장 많이 나온 글자 수에 k를 더한다. 글자들이 흩어져 있어도 이어 붙일 수 있다고 착각한 코드다. 구간이 붙어 있어야 한다는 조건을 잊었고, 길이를 넘을 수도 있다.
+
+```js
+function wrong(s, k) {
+  const count = {};
+  let m = 0;
+  for (const c of s) { count[c] = (count[c] || 0) + 1; m = Math.max(m, count[c]); }
+  return m + k;
+}
+wrong("AAAA", 2);   // 6. 길이 4인 문자열에서 6은 불가능하다
+wrong("ABCD", 10);  // 11. 길이가 4라 정답은 4
+```
+
+`"ABCD"`에서는 길이 4가 상한이다. `Math.min(m + k, s.length)`로 잘라도 `"ABAAB"`처럼 A가 흩어진 경우엔 틀린다. 구간을 따져야 한다.
+
+줄이지 않는 게 불안해서 최다 글자가 빠질 때 `maxFreq`를 1 줄이는 코드도 자주 보인다. 그럴듯하지만 틀린다.
+
+```js
+function wrongDec(s, k) {
+  const count = new Array(26).fill(0);
+  let l = 0, maxFreq = 0, best = 0;
+  for (let r = 0; r < s.length; r++) {
+    const c = s.charCodeAt(r) - 65;
+    count[c]++;
+    maxFreq = Math.max(maxFreq, count[c]);
+    while (r - l + 1 - maxFreq > k) {
+      const out = s.charCodeAt(l) - 65;
+      if (count[out] === maxFreq) maxFreq--; // 최다 글자가 빠지면 1 줄인다?
+      count[out]--;
+      l++;
+    }
+    best = Math.max(best, r - l + 1);
+  }
+  return best;
+}
+wrongDec("CAA", 0);  // 1. 정답은 2 ("AA")
+```
+
+`"CAA"`, k = 0에서 1번 칸의 A가 들어오면 창 `CA`가 불가능해 C를 뺀다. C의 개수가 `maxFreq`(1)와 같으니 `maxFreq`를 0으로 줄이는데, 창에 남은 A도 1개라 실제 최다는 1이다. 줄인 값으로 다시 판정하니 A까지 빼 버려 창이 빈다. 같은 개수의 글자가 여럿이면 하나가 빠져도 최다 빈도는 그대로다. 줄이려면 제대로 다시 세야 하고, 그게 매번 다시 세는 풀이다. 어설프게 줄이느니 아예 줄이지 않는 쪽이 맞다.
+
+창 크기를 `r - l`로 센다. 닫힌 구간 `[l, r]`이라 `r - l + 1`이다. `"A"`, k = 0에서 0이 나오면 이 실수다.
+
+글자를 인덱스로 바꾸는 계산을 잘못한다. JS에서 `count[s[r]]++`처럼 문자열을 배열 인덱스로 쓰면 배열에 `"A"`라는 속성이 생길 뿐 숫자 칸은 그대로라 `Math.max(...count)`가 0을 돌려준다. 맵을 쓸 거면 객체나 `Map`으로, 배열을 쓸 거면 `charCodeAt`으로 일관되게 쓴다.
+
+## 바꿔 볼 수 있는 조건들
+
+### 0과 1만 있는 배열에서 0을 k개 뒤집는다면 (LeetCode 1004)
+
+목표 글자가 1로 정해진 경우다. 창 안의 0 개수가 k 이하인 가장 긴 창을 찾는다. 목표 글자별 창 풀이를 글자 하나로 줄인 모양이다.
+
+```js
+function longestOnes(nums, k) {
+  let l = 0, zeros = 0, best = 0;
+  for (let r = 0; r < nums.length; r++) {
+    if (nums[r] === 0) zeros++;
+    while (zeros > k) { // 뒤집을 0이 너무 많으면 왼쪽을 뺀다
+      if (nums[l] === 0) zeros--;
+      l++;
+    }
+    best = Math.max(best, r - l + 1);
+  }
+  return best;
+}
+longestOnes([1, 0, 1, 1, 0, 0, 1, 1, 1, 0], 2); // 7
+```
+
+### 참·거짓 두 글자라면 (LeetCode 2024)
+
+시험 답안이 T와 F로만 되어 있고 k개를 바꿔 같은 답이 가장 길게 이어지게 하는 문제다. 목표를 T로 한 번, F로 한 번 돌려 큰 값을 고른다. 글자 종류가 2개면 목표 글자별 창이 O(2n)이라 가장 깔끔하다.
+
+### 어떤 구간인지 돌려 달라면
+
+창 크기가 커질 때의 `l`을 기록하면 된다고 생각하기 쉽다. 그런데 줄이지 않는 `maxFreq` 풀이에서는 창이 커진 순간의 창이 진짜 가능한 구간이라는 것까지만 보장된다. 그 순간을 기록하면 맞다. 크기를 유지하며 미끄러지는 동안의 창은 불가능한 구간일 수 있으니 거기서 기록하면 안 된다. 헷갈리면 매번 다시 세는 풀이에서 `r - l + 1 > best`일 때 `l`을 기록한다.
+
+```js
+function longestReplaceable(s, k) {
+  const count = new Array(26).fill(0);
+  let l = 0, best = 0, bestL = 0;
+  for (let r = 0; r < s.length; r++) {
+    count[s.charCodeAt(r) - 65]++;
+    while (r - l + 1 - Math.max(...count) > k) {
+      count[s.charCodeAt(l) - 65]--;
+      l++;
+    }
+    if (r - l + 1 > best) { best = r - l + 1; bestL = l; } // 이 창은 진짜 가능하다
+  }
+  return s.slice(bestL, bestL + best);
+}
+longestReplaceable("AABCABBB", 2); // "BCABBB"
+```
+
+### 소문자나 유니코드가 섞이면
+
+26칸 배열 대신 `Map`을 쓴다. 줄이지 않는 `maxFreq` 트릭은 글자 종류와 상관없이 그대로 O(n)이다. 오히려 종류가 많을수록 "매번 다시 세기"나 "목표 글자별 창"과의 차이가 커진다.
+
+### 바꾸는 대신 정렬된 숫자를 올린다면 (LeetCode 1838)
+
+"숫자 하나를 1 올리는 연산을 k번 해서 같은 수를 가장 많이 만들기"는 정렬한 뒤 창을 쓴다. 창의 가장 큰 수로 모두 맞추는 비용이 `max × 길이 − 창의 합`이고, 이게 k를 넘으면 왼쪽을 뺀다. 판정식이 "길이 − 최다 빈도"에서 "필요한 증가량"으로 바뀌었을 뿐 같은 틀이다.
+
+```js
+function maxFrequency(nums, k) {
+  nums.sort((a, b) => a - b); // 비교자를 꼭 준다. 기본 정렬은 문자열 순서다
+  let l = 0, sum = 0, best = 0;
+  for (let r = 0; r < nums.length; r++) {
+    sum += nums[r];
+    // 창의 모든 수를 nums[r]로 올리는 비용이 k를 넘으면 왼쪽을 뺀다
+    while (nums[r] * (r - l + 1) - sum > k) {
+      sum -= nums[l];
+      l++;
+    }
+    best = Math.max(best, r - l + 1);
+  }
+  return best;
+}
+maxFrequency([3, 9, 6, 4], 5); // 3 (3, 4를 6으로 올린다)
+```
+
+JS에서 비교자 없이 `sort()`를 부르면 `[10, 9, 1, 2]`가 `[1, 10, 2, 9]`로 정렬된다. 숫자를 문자열로 바꿔 비교하기 때문이다. Java에서는 `nums[r] * 길이`가 `int` 범위를 넘을 수 있어 `long`으로 계산한다.
+
+## 정리하며
+
+구간 하나를 같은 글자로 만드는 비용은 길이에서 최다 빈도를 뺀 값이다. 이 식을 지키며 창을 밀면 된다. 최다 빈도를 매번 다시 세면 O(26n), 목표 글자를 정해 26번 돌려도 O(26n)이고, 최다 빈도를 줄이지 않는 창은 O(n)이다. 마지막 풀이는 창이 줄지 않고, 답은 진짜 최다 빈도가 기록을 넘을 때만 커진다는 구조 덕분에 맞다. 다음 글 [Minimum Window Substring](/posts/leetcode-minimum-window-substring)은 반대로 가장 짧은 창을 찾는다. 조건을 만족하는 동안 왼쪽을 당겨 창을 줄이는 방향이다.
+
+## 면접에서 나올 만한 질문
+
+### 창이 조건을 만족하는지 어떻게 판정하나요?
+
+창 길이에서 창 안에서 가장 많이 나온 글자의 개수를 뺀 값이 바꿔야 할 글자 수다. 가장 많은 글자로 맞추는 게 가장 싸기 때문이다. 이 값이 k 이하이면 그 창은 같은 글자로 만들 수 있다. 어느 글자로 바꿀지는 따로 정하지 않아도 된다.
+
+### maxFreq를 왼쪽을 뺄 때 줄이지 않아도 되는 이유는 무엇인가요?
+
+창은 줄지 않고 크기를 유지하며 미끄러지거나 커진다. 창이 커지려면 지금까지의 기록보다 큰 최다 빈도가 실제로 나타나야 하고, 그 순간 maxFreq는 방금 넣은 글자의 진짜 개수라 판정이 정확하다. maxFreq가 실제보다 큰 동안엔 창 크기가 그대로라 답이 부풀지 않는다. 기록보다 작은 빈도의 창은 어차피 답을 늘려 주지 못하니 정확히 판정할 필요가 없다.
+
+### 왜 while이 아니라 if로 왼쪽을 한 칸만 미나요?
+
+창 크기가 "지금까지 찾은 가장 긴 가능한 길이"를 기록하도록 하려는 것이다. 오른쪽이 한 칸 늘 때 조건이 깨지면 왼쪽도 한 칸 밀어 크기를 유지한다. 더 작은 창을 만들 이유가 없다. 이미 찾은 길이보다 짧은 답은 필요 없기 때문이다. 그래서 마지막 창 크기 `n - l`이 그대로 답이 된다.
+
+### 시간 복잡도는 O(n)인가요, O(26n)인가요?
+
+maxFreq를 줄이지 않는 풀이는 글자마다 개수 갱신과 비교가 O(1)이라 O(n)이다. 매번 26칸을 훑어 최다 빈도를 구하거나 목표 글자를 26번 바꿔 돌리면 O(26n)이다. 둘 다 n에 선형이지만 상수가 26배 차이 나고, 글자 종류가 늘면 차이가 더 커진다.
+
+### 목표 글자별 창 풀이는 왜 맞다는 게 분명한가요?
+
+목표 글자를 하나 정하면 "창 안에서 그 글자가 아닌 글자 수가 k 이하"라는 조건이 창 크기와 함께 단조롭게 변한다. 창을 넓히면 그 수가 줄지 않고 좁히면 늘지 않는다. 그래서 앞 문제와 같은 정석 창으로 정확히 풀리고, 26개 목표 중 최댓값이 답이다. 최적 답도 어떤 글자로 맞춘 것이니 놓치지 않는다.
+
+### k = 0이면 어떻게 되나요?
+
+바꿀 수 없으니 원래 문자열에서 같은 글자가 이어진 가장 긴 줄이 답이다. 같은 코드가 그대로 동작한다. 창 길이와 최다 빈도가 같아야만 조건을 만족하니, 다른 글자가 섞이는 순간 창이 크기를 유지한 채 미끄러진다. `"BAAAB"`에서 3이 나온다.
+
+### 0과 1 배열에서 0을 k개까지 뒤집는 문제와는 어떤 관계인가요?
+
+목표 글자가 1로 정해진 특수한 경우다. 창 안의 0 개수가 k 이하인 가장 긴 창을 찾으면 되고, 목표 글자별 창 풀이를 글자 하나로 돌린 것과 같다. 최다 빈도를 관리할 필요가 없어 더 단순하다.

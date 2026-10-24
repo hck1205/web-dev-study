@@ -1,0 +1,414 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("route53-routing-policies");
+
+<EasyIntro>
+  큰 놀이공원에 매표소가 두 곳 있다고 해 보자. 안내 데스크는 손님이 오면 어느 매표소로 가라고 알려 준다. 서울 쪽 매표소가 고장 나면 안내원은 이제부터 도쿄 쪽으로 보내야 한다.
+
+  그런데 손님 중에는 아까 들은 안내를 쪽지에 적어 둔 사람이 있다. 그 사람은 쪽지에 적힌 시간이 지날 때까지 다시 묻지 않고 고장 난 매표소로 간다. 그래서 안내를 바꿔도 모두가 바로 새 매표소로 가지는 않는다.
+
+  인터넷 주소록도 똑같다. 주소록은 같은 이름을 물어도 상황에 따라 다른 답을 줄 수 있다. 가까운 곳을 알려 주거나, 열 명 중 한 명만 새 매표소로 보내거나, 고장 난 곳은 빼고 알려 준다.
+
+  고장 났는지는 여러 곳에서 매표소에 계속 말을 걸어 보며 확인한다. 몇 번 연달아 대답이 없으면 고장으로 보고 답에서 뺀다. 확인하는 시간과 쪽지를 들고 있는 시간을 더하면, 바뀐 안내가 모두에게 닿기까지 걸리는 시간이 나온다.
+</EasyIntro>
+
+서울 리전의 로드 밸런서 뒤 서버들이 한꺼번에 응답을 멈췄다. 도쿄 리전에 같은 서비스가 떠 있고, DNS에는 장애 조치 설정도 해 뒀다. 그런데 5분이 지나도 일부 사용자는 여전히 서울 IP로 접속하다 타임아웃을 본다. 헬스 체크는 2분 전에 이미 빨간색이 됐다. Route 53은 이미 도쿄를 답하고 있는데, 왜 서울로 가는 사람이 남아 있을까.
+
+이 장면을 이해하려면 Route 53이 "같은 이름에 다른 답"을 주는 규칙(라우팅 정책), 답에서 레코드를 빼는 헬스 체크, 그리고 답이 사용자에게 닿기까지 끼어 있는 캐시를 함께 봐야 한다. DNS가 이름을 IP로 바꾸는 기본 과정과 TTL은 [DNS 글](/posts/dns)에서 다뤘다. 장애 조치에서 감지·승격·전환의 일반론은 [장애 조치 글](/posts/failover), 리전을 여러 개 두는 설계는 [멀티 리전 글](/posts/multi-region)에 있다. 이 글은 Route 53이 실제로 무엇을 답하는지에 집중한다.
+
+계정 없이 따라 칠 수 있게 하려고 실제 AWS 출력은 싣지 않았다. 대신 AWS CLI에 넘기는 레코드 정의(JSON)는 공식 형식 그대로 쓰고, 시간 계산은 직접 해 본다.
+
+## 이름을 담는 상자: 호스팅 영역
+
+Route 53에서 도메인 하나의 레코드 묶음을 호스팅 영역(hosted zone)이라 부른다. 두 종류가 있다.
+
+퍼블릭 호스팅 영역은 인터넷 전체에 답한다. 만들면 Route 53이 네임서버 네 개를 배정해 준다. 이름이 `ns-123.awsdns-15.com`, `ns-456.awsdns-57.net`, `ns-789.awsdns-34.org`, `ns-1012.awsdns-62.co.uk`처럼 서로 다른 최상위 도메인에 걸쳐 있다. 한 TLD에 문제가 생겨도 나머지로 답할 수 있게 일부러 흩어 둔 것이다. 도메인 등록 기관에 이 네 개를 NS로 넣어야 비로소 인터넷이 이 영역을 찾아온다. 영역을 지웠다 다시 만들면 네임서버 네 개가 바뀌니 등록 기관 설정도 다시 해야 한다. 흔히 놓치는 부분이다.
+
+프라이빗 호스팅 영역은 연결한 VPC 안에서만 답한다. VPC 안의 EC2가 묻는 DNS 서버(VPC 대역의 두 번째 주소, 예를 들어 `10.0.0.2`)가 바로 Route 53 Resolver이고, 이 Resolver가 프라이빗 영역을 먼저 본다. VPC 속성 `enableDnsSupport`와 `enableDnsHostnames`가 켜져 있어야 동작한다. VPC 자체는 [VPC 기본 글](/posts/vpc-basics)에서 다뤘다.
+
+같은 이름 `example.com`으로 퍼블릭과 프라이빗 영역을 둘 다 만들 수 있다. 밖에서는 `api.example.com`이 공인 IP의 로드 밸런서로, VPC 안에서는 사설 IP로 풀리게 하는 식이다. 이걸 스플릿 뷰(split-view, split-horizon)라 한다. 여기에 함정이 하나 있다. VPC 안에서 프라이빗 영역에 없는 이름을 물으면, Resolver는 퍼블릭 영역으로 넘어가 찾아 주지 않고 바로 NXDOMAIN을 준다. 퍼블릭에만 `www`를 만들고 프라이빗에는 안 만들면, 회사 밖에서는 열리는 `www.example.com`이 VPC 안의 서버에서는 "그런 이름 없음"이 된다.
+
+## 도메인 꼭대기와 AWS 자원을 가리키는 Alias
+
+로드 밸런서는 IP가 고정되어 있지 않고 `my-alb-123456.ap-northeast-2.elb.amazonaws.com` 같은 이름만 준다. 보통은 CNAME으로 가리키면 되지만, 도메인 꼭대기(`example.com` 자체)에는 CNAME을 걸 수 없다(SOA, NS와 같은 이름에 CNAME이 올 수 없다는 DNS 규칙이다. 자세한 건 [DNS 글](/posts/dns)).
+
+Route 53의 Alias 레코드는 이 문제를 Route 53 안에서 푼다. 레코드 타입은 그대로 A(또는 AAAA)이고, 값 대신 "저 AWS 자원을 따라가라"는 표시를 둔다. 질의가 오면 Route 53이 그 자원의 현재 IP를 찾아 A 레코드로 바로 답한다. 리졸버 입장에서는 그냥 A 레코드다.
+
+```json
+{
+  "Comment": "example.com 꼭대기를 서울 ALB로",
+  "Changes": [{
+    "Action": "UPSERT",
+    "ResourceRecordSet": {
+      "Name": "example.com",
+      "Type": "A",
+      "AliasTarget": {
+        "HostedZoneId": "ZWKZPGTI48KDX",
+        "DNSName": "dualstack.my-alb-123456.ap-northeast-2.elb.amazonaws.com",
+        "EvaluateTargetHealth": true
+      }
+    }
+  }]
+}
+```
+
+`HostedZoneId`는 내 영역이 아니라 대상 자원 쪽의 고정 ID다(ELB는 리전마다 정해져 있다. 위 값은 서울 리전 ALB용). Alias에는 TTL을 정할 수 없다. 대상 자원의 TTL을 따르고, ELB를 가리키면 60초다. AWS 자원을 가리키는 Alias 질의는 요금을 받지 않는다는 것도 CNAME과의 차이다. `EvaluateTargetHealth`를 켜면 따로 헬스 체크를 만들지 않아도 대상 로드 밸런서의 상태(정상 타깃이 하나라도 있는지)를 이 레코드의 상태로 쓴다.
+
+## 같은 이름에 다른 답을 주는 규칙
+
+라우팅 정책은 "같은 이름과 타입의 레코드가 여러 개일 때 무엇을 답할까"의 규칙이다. 각 레코드에 `SetIdentifier`(구별용 이름)를 붙이고 정책별 값을 준다.
+
+단순(simple)은 정책이 없는 상태다. 레코드 하나에 IP를 여러 개 넣으면 전부를 답하고, 순서는 클라이언트가 알아서 고른다. 헬스 체크를 붙일 수 없어서 죽은 IP도 계속 답에 들어간다.
+
+가중치(weighted)는 레코드마다 0~255의 가중치를 주고, 질의마다 가중치 비율대로 하나를 고른다. 90과 10이면 질의의 약 90%가 첫 레코드를 받는다. 비율이 "사용자"가 아니라 "질의" 단위라는 점은 뒤의 카나리 절에서 다시 본다.
+
+지연 시간(latency)은 레코드마다 AWS 리전을 적고, 질의한 쪽에서 그 리전까지의 지연이 가장 작은 레코드를 답한다. 지연은 그 순간에 재는 게 아니라 AWS가 인터넷 곳곳과 리전 사이를 오래 측정해 쌓아 둔 값이다. 그래서 지리적으로 가까운 리전이 아닐 수도 있고, 측정값이 바뀌면 같은 사용자의 답이 바뀌기도 한다.
+
+장애 조치(failover)는 Primary와 Secondary 두 레코드다. Primary가 정상이면 Primary만, 비정상이면 Secondary를 답한다. 액티브-패시브 구성의 기본이다.
+
+지리(geolocation)는 질의한 쪽의 위치(대륙, 국가, 미국은 주 단위까지)로 답을 고른다. 한국 사용자에게는 한국어 사이트, 유럽 사용자에게는 데이터가 유럽에 머무는 리전을 주는 식이다. 어느 위치에도 걸리지 않는 질의를 위해 "기본(Default)" 레코드를 꼭 둔다. 없으면 그 사용자들은 답 없음(NODATA)을 받는다. IP 위치 데이터베이스에 없는 대역의 사용자가 생각보다 많다.
+
+지리 근접(geoproximity)은 지리와 비슷하지만 경계 대신 거리로 고르고, 바이어스(bias, -99~99)로 리전이 맡는 영역을 넓히거나 줄인다. 서울 리전의 바이어스를 올리면 서울과 도쿄 사이의 경계가 도쿄 쪽으로 밀린다.
+
+다중 값(multivalue answer)은 헬스 체크를 붙인 레코드 여러 개 중 정상인 것을 최대 8개까지 무작위로 답한다. 단순 정책에 헬스 체크를 붙인 것에 가깝다. 클라이언트가 여러 IP를 받아 하나가 안 되면 다음 것을 시도하니 가벼운 부하 분산이 되지만, 로드 밸런서처럼 연결 단위로 나누거나 느린 서버를 알아채지는 못한다.
+
+이 밖에 질의한 쪽의 IP 대역(CIDR 목록)으로 직접 답을 정하는 IP 기반 라우팅도 있다. 특정 통신사 사용자를 특정 엔드포인트로 보내고 싶을 때 쓴다.
+
+지연 시간과 지리 정책에서 "질의한 쪽"은 원래 사용자가 아니라 사용자의 재귀 리졸버다. 사용자는 서울에 있는데 회사 VPN 때문에 리졸버가 미국에 있으면 미국 기준의 답을 받는다. 리졸버가 EDNS Client Subnet(ECS, 사용자 IP의 앞부분을 질의에 붙여 주는 확장)을 보내면 Route 53은 그 대역을 기준으로 판단한다. 공용 리졸버 중에는 ECS를 보내는 곳도 있고, 사생활 이유로 보내지 않는 곳도 있다.
+
+## 헬스 체크가 레코드를 빼는 과정
+
+헬스 체크는 세 종류다.
+
+엔드포인트 헬스 체크는 Route 53의 헬스 체커들이 여러 리전에서 대상에 HTTP, HTTPS, TCP로 접속해 본다. 간격은 30초(표준) 또는 10초(빠름), 연속 몇 번 실패하면 비정상으로 볼지(실패 임계값)는 1~10이고 기본 3이다. HTTP라면 TCP 연결 후 2초 안에 2xx나 3xx가 와야 성공이고, 응답 본문 앞부분에서 특정 문자열을 찾게 할 수도 있다. 여러 위치의 판정을 모아서, 정상이라고 답한 헬스 체커가 18%를 넘으면 정상으로 본다. 한 위치의 네트워크 문제로 멀쩡한 서버를 빼지 않기 위해서다.
+
+계산형(calculated) 헬스 체크는 다른 헬스 체크 여러 개를 묶어 "자식 중 N개 이상 정상이면 정상"으로 판정한다. 서울 리전의 웹, API, 결제 헬스 체크 중 둘 이상 죽으면 리전 전체를 빼는 식이다.
+
+CloudWatch 경보형 헬스 체크는 CloudWatch 경보의 상태를 그대로 쓴다. 헬스 체커는 인터넷에 있어서 사설 IP에는 접속하지 못한다. 그래서 프라이빗 영역의 레코드나 내부 서비스는 이 방식으로 상태를 준다. 경보가 "데이터 부족" 상태일 때 정상으로 볼지 비정상으로 볼지도 정해 둔다.
+
+아래 그림에서 다음을 누르면 서울 리전이 죽고, 헬스 체크가 서울을 빼고, 캐시가 풀린 사용자부터 도쿄로 가는 과정을 볼 수 있다.
+
+<NetworkTopology
+  width={400}
+  height={320}
+  caption="장애 조치 레코드. Route 53이 답을 바꿔도 리졸버 캐시가 풀릴 때까지는 옛 답이 남는다"
+  zones={[
+    { id: "icn", label: "ap-northeast-2", x: 8, y: 220, w: 184, h: 92, tone: "private" },
+    { id: "nrt", label: "ap-northeast-1", x: 208, y: 220, w: 184, h: 92, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 70, y: 40, icon: "client" },
+    { id: "res", label: "리졸버", sub: "캐시 TTL 60s", x: 200, y: 40, icon: "dns" },
+    { id: "r53", label: "Route 53", x: 330, y: 40, icon: "dns" },
+    { id: "hc", label: "헬스 체커", sub: "여러 리전", x: 200, y: 140, icon: "internet" },
+    { id: "alb1", label: "ALB 서울", sub: "Primary", x: 100, y: 268, icon: "lb" },
+    { id: "alb2", label: "ALB 도쿄", sub: "Secondary", x: 300, y: 268, icon: "lb" },
+  ]}
+  links={[
+    { from: "user", to: "res" },
+    { from: "res", to: "r53" },
+    { from: "hc", to: "alb1", dashed: true },
+    { from: "hc", to: "alb2", dashed: true },
+    { from: "hc", to: "r53", dashed: true, label: "상태" },
+    { from: "user", to: "alb1" },
+    { from: "user", to: "alb2" },
+  ]}
+  steps={[
+    {
+      path: ["user", "res", "r53"],
+      packet: "A?",
+      title: "평소에는 Primary를 답한다",
+      detail: "리졸버가 api.example.com을 묻고, Route 53은 정상인 서울 ALB의 IP를 준다. 리졸버는 이 답을 60초 동안 캐시한다.",
+      payload: "api.example.com. 60 IN A 3.35.10.20",
+    },
+    {
+      path: ["user", "alb1"],
+      packet: "SYN",
+      blocked: true,
+      title: "서울 리전이 응답을 멈춘다",
+      detail: "사용자는 캐시된 서울 IP로 계속 접속하고 타임아웃을 본다. 아직 아무도 장애를 모른다.",
+    },
+    {
+      path: ["hc", "alb1"],
+      packet: "GET /health",
+      blocked: true,
+      highlight: ["r53"],
+      title: "헬스 체커가 연속 실패를 센다",
+      detail: "30초 간격으로 세 번 실패하면 비정상이다. 정상이라고 답한 위치가 18% 이하로 떨어지면 Route 53은 Primary를 답에서 뺀다.",
+      payload: "30s × 3회 ≈ 90초",
+    },
+    {
+      path: ["res", "user", "alb1"],
+      packet: "캐시",
+      blocked: true,
+      title: "Route 53은 바뀌었지만 캐시는 그대로다",
+      detail: "직전에 답을 받은 리졸버는 TTL이 끝날 때까지 Route 53에 다시 묻지 않는다. 그동안 그 리졸버를 쓰는 사용자는 서울로 간다.",
+      payload: "남은 TTL: 최대 60초",
+    },
+    {
+      path: ["user", "res", "r53"],
+      packet: "A?",
+      title: "TTL이 끝나면 다시 묻는다",
+      detail: "Route 53은 이제 Secondary인 도쿄 ALB의 IP를 답한다.",
+      payload: "api.example.com. 60 IN A 13.112.40.7",
+    },
+    {
+      path: ["user", "alb2"],
+      packet: "SYN",
+      title: "사용자가 도쿄로 넘어간다",
+      detail: "새 답을 받은 사용자부터 도쿄로 접속한다. 브라우저와 앱이 따로 들고 있던 캐시와 열린 연결은 그 뒤에 따로 정리된다.",
+    },
+  ]}
+/>
+
+설정은 이렇게 생겼다. Primary에는 헬스 체크를 붙이고, Secondary는 마지막 피난처라 헬스 체크 없이 두기도 한다.
+
+```bash
+# 서울 ALB에 HTTPS 헬스 체크를 만든다. 10초 간격, 3번 연속 실패하면 비정상
+aws route53 create-health-check \
+  --caller-reference "api-icn-$(date +%s)" \
+  --health-check-config '{
+    "Type": "HTTPS",
+    "FullyQualifiedDomainName": "icn.api.example.com",
+    "ResourcePath": "/health",
+    "Port": 443,
+    "RequestInterval": 10,
+    "FailureThreshold": 3
+  }'
+```
+
+```json
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "api.example.com", "Type": "A",
+        "SetIdentifier": "icn-primary", "Failover": "PRIMARY",
+        "TTL": 60, "ResourceRecords": [{ "Value": "3.35.10.20" }],
+        "HealthCheckId": "11111111-2222-3333-4444-555555555555"
+      }
+    },
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "api.example.com", "Type": "A",
+        "SetIdentifier": "nrt-secondary", "Failover": "SECONDARY",
+        "TTL": 60, "ResourceRecords": [{ "Value": "13.112.40.7" }]
+      }
+    }
+  ]
+}
+```
+
+헬스 체크 경로를 고를 때 주의할 점이 있다. `/health`가 DB까지 확인하는 깊은 검사라면, DB가 잠깐 느려지는 순간 두 리전이 모두 비정상이 될 수 있다. 얕은 검사와 깊은 검사의 차이는 [헬스 체크 글](/posts/health-checks)에서 다뤘다. Route 53이 레코드를 빼는 기준이 될 검사는 "이 리전을 통째로 버려야 하나"에 답하는 것이어야 한다.
+
+그리고 Route 53은 정상인 레코드가 하나도 없을 때 아무것도 답하지 않는 쪽을 택하지 않는다. 가중치, 지연 시간 같은 정책에서 레코드가 전부 비정상이면 전부 정상인 것처럼 보고 원래 규칙대로 답한다. 헬스 체크가 잘못 설정되어 전부 빨간색이 되어도 서비스가 DNS에서 사라지지 않게 하려는 장치다(fail open). 반대로 말하면 헬스 체크가 전부 빨간색인데 트래픽이 그대로 흐른다고 Route 53이 고장 난 게 아니다.
+
+## 전환이 늦어지는 시간을 계산한다
+
+처음 장면의 5분은 어디서 왔을까. 사용자 한 명이 새 답을 받기까지의 시간은 대략 이렇게 쌓인다.
+
+1. 감지: 요청 간격 × 실패 임계값. 표준 30초 × 3이면 약 90초, 빠름 10초 × 3이면 약 30초.
+2. 반영: 비정상 판정이 Route 53의 네임서버들에 퍼지는 시간. 보통 길지 않지만 0은 아니다.
+3. 리졸버 캐시: 최악이면 레코드 TTL만큼. 직전에 답을 받아 간 리졸버는 TTL 60초 동안 다시 묻지 않는다.
+4. 클라이언트 캐시와 연결: 브라우저, OS, 런타임이 따로 캐시한다. 그리고 이미 열려 있는 keep-alive 연결과 HTTP/2 연결은 DNS와 무관하게 옛 IP에 붙어 있다.
+
+표준 간격과 TTL 60초면 1과 3만 더해도 150초다. 앱 서버 쪽이 JVM이라면 `networkaddress.cache.ttl` 설정(보안 관리자가 없을 때 기본 30초)만큼 더 들고 있고, 연결 풀은 연결이 끊기기 전까지 새 IP를 보지 않는다. 연결 풀에 최대 수명을 두지 않은 서비스는 몇 분이 아니라 몇 시간 동안 죽은 IP에 매달리기도 한다. 처음 장면의 5분은 이런 층이 겹친 결과다.
+
+줄이는 방법도 층마다 다르다. 감지는 빠른 간격과 낮은 임계값으로 줄이지만 오탐이 늘고 비용도 오른다. TTL은 낮추면 전환이 빨라지는 대신 질의가 늘어난다. 평소 TTL 300초를 쓰다가 계획된 전환 하루 전에 60초로 내리는 방법이 흔하다. 클라이언트 쪽은 연결 최대 수명과 재시도 시 DNS 재조회로 다룬다. DNS로는 수십 초 아래의 전환을 약속하기 어렵다. 그보다 빨라야 하면 IP가 바뀌지 않는 방식(애니캐스트 IP를 주는 Global Accelerator 같은 서비스, 또는 하나의 로드 밸런서 뒤에서 대상만 바꾸기)을 쓴다. 같은 IP를 여러 곳에서 광고하는 원리는 [CDN 엣지와 애니캐스트 글](/posts/cdn-edge-anycast)에, 그 광고를 실어 나르는 BGP는 [BGP 글](/posts/bgp-basics)에 있다.
+
+## 가중치 라우팅이 고르는 법
+
+가중치 정책의 규칙을 정확히 적으면 이렇다. 헬스 체크가 붙어 있으면 정상인 레코드 중에서 고른다. 가중치가 0보다 큰 레코드가 있으면 그중에서만 비율대로 고르고, 0인 레코드는 0보다 큰 레코드가 모두 비정상일 때만 후보가 된다. 레코드 가중치가 전부 0이면 똑같은 확률로 고른다. 그리고 앞 절대로, 전부 비정상이면 전부 정상인 것처럼 본다.
+
+가중치 0을 대기 레코드로 쓰는 요령이 여기서 나온다. 평소엔 절대 답하지 않다가, 가중치가 있는 레코드가 모두 죽으면 그때 답한다.
+
+이 규칙을 함수로 짜 보자. `records`는 레코드 목록, `r`은 0 이상 1 미만의 난수다. 후보를 고른 뒤 목록 순서대로 가중치를 누적해, `r × 합계`가 처음으로 누적값보다 작아지는 레코드의 id를 돌려준다. 레코드가 없으면 `null`이다.
+
+<CodePlayground
+  caption="Route 53 가중치 레코드 고르기"
+  functionName="pickRecord"
+  initialCode={`function pickRecord(records, r) {
+  // records: [{ id: "blue", weight: 90, healthy: true }, ...]
+  // r: 0 이상 1 미만
+  return null;
+}`}
+  solution={`function pickRecord(records, r) {
+  if (records.length === 0) return null;
+  const choose = (pool) => {
+    const allZero = pool.every((x) => x.weight === 0);
+    const w = (x) => (allZero ? 1 : x.weight);
+    const total = pool.reduce((s, x) => s + w(x), 0);
+    let acc = 0;
+    for (const x of pool) {
+      acc += w(x);
+      if (r * total < acc) return x.id;
+    }
+    return pool[pool.length - 1].id;
+  };
+  const healthy = records.filter((x) => x.healthy);
+  const candidates = healthy.length > 0 ? healthy : records; // 전부 비정상이면 전부 정상처럼
+  const nonZero = candidates.filter((x) => x.weight > 0);
+  return choose(nonZero.length > 0 ? nonZero : candidates);
+}`}
+  tests={[
+    { label: "90:10, r=0.5", args: [[{ id: "blue", weight: 90, healthy: true }, { id: "green", weight: 10, healthy: true }], 0.5], expected: "blue" },
+    { label: "90:10, r=0.95", args: [[{ id: "blue", weight: 90, healthy: true }, { id: "green", weight: 10, healthy: true }], 0.95], expected: "green" },
+    { label: "blue가 죽음", args: [[{ id: "blue", weight: 90, healthy: false }, { id: "green", weight: 10, healthy: true }], 0.5], expected: "green" },
+    { label: "가중치 0은 대기", args: [[{ id: "seoul", weight: 1, healthy: true }, { id: "standby", weight: 0, healthy: true }], 0.99], expected: "seoul" },
+    { label: "대기 레코드가 나선다", args: [[{ id: "seoul", weight: 1, healthy: false }, { id: "standby", weight: 0, healthy: true }], 0.2], expected: "standby" },
+    { label: "전부 비정상", args: [[{ id: "a", weight: 50, healthy: false }, { id: "b", weight: 50, healthy: false }], 0.7], expected: "b" },
+    { label: "전부 가중치 0", args: [[{ id: "a", weight: 0, healthy: true }, { id: "b", weight: 0, healthy: true }], 0.6], expected: "b" },
+    { label: "레코드 없음", args: [[], 0.3], expected: null },
+  ]}
+/>
+
+## 가중치로 카나리를 하면 생기는 일
+
+가중치 라우팅은 카나리 배포 도구처럼 보인다. 새 버전 스택에 가중치 5, 기존에 95를 주면 5%만 새 버전으로 간다. 실제로 해 보면 기대와 다르게 흘러간다.
+
+첫째, 5%는 사용자의 5%가 아니라 질의의 5%다. 큰 통신사 리졸버나 공용 리졸버 하나가 수십만 명의 질의를 대신한다. 그 리졸버가 질의 한 번에 새 버전 IP를 받으면 TTL 동안 그 리졸버 뒤의 사용자가 전부 새 버전으로 간다. 짧은 구간을 잘라 보면 0%이거나 30%이고, 긴 시간 평균을 내야 5% 근처가 된다.
+
+둘째, 같은 사용자가 왔다 갔다 한다. TTL이 끝날 때마다 다시 뽑으니, 로그인 세션이 버전마다 따로 저장되거나 스키마가 다르면 사용자는 기능이 생겼다 사라지는 걸 본다.
+
+셋째, 되돌리기가 느리다. 새 버전에 문제가 있어 가중치를 0으로 내려도, 앞 절의 TTL과 클라이언트 캐시와 열린 연결만큼 트래픽이 계속 간다.
+
+넷째, 누구를 보낼지 고를 수 없다. 내부 직원만 먼저, 특정 헤더가 있는 요청만 먼저 같은 조건을 DNS는 모른다.
+
+그래서 DNS 가중치는 리전이나 스택 전체를 천천히 옮기는 데(마이그레이션, 리전 비우기) 어울린다. 요청 단위의 정밀한 카나리는 로드 밸런서의 가중치 타깃 그룹, 서비스 메시, 기능 플래그가 맡는다. 카나리 판단 자체는 [카나리 릴리스 글](/posts/canary-release)에서 다뤘다.
+
+## 회사 데이터센터와 VPC의 DNS를 잇는다
+
+하이브리드 환경에서는 두 방향의 질문이 생긴다. 회사 데이터센터의 서버가 VPC의 프라이빗 영역 이름(`db.aws.example.internal`)을 풀어야 하고, VPC의 서버가 회사 DNS에만 있는 이름(`erp.corp.example.com`)을 풀어야 한다. 둘은 [VPN이나 전용선](/posts/vpn-ipsec-wireguard)으로 이미 IP는 통하는 상태라고 하자.
+
+VPC Resolver는 VPC 밖에서 접근할 수 없다. 그래서 Route 53 Resolver 엔드포인트라는 문을 따로 낸다. 인바운드 엔드포인트는 VPC 서브넷에 IP를 가진 네트워크 인터페이스로, 회사 DNS가 질의를 이 IP로 넘기면 VPC 안에서 묻는 것처럼 프라이빗 영역을 풀어 준다. 아웃바운드 엔드포인트는 반대 방향의 문이고, "이 도메인은 저 DNS 서버로 넘겨라"라는 전달 규칙(Resolver rule)을 VPC에 연결해서 쓴다.
+
+<SequenceDiagram
+  caption="VPC의 EC2가 회사 DNS의 이름을, 회사 서버가 프라이빗 영역의 이름을 푸는 길"
+  actors={[
+    { id: "ec2", label: "EC2" },
+    { id: "vpcdns", label: "VPC Resolver" },
+    { id: "out", label: "아웃바운드 EP" },
+    { id: "corp", label: "회사 DNS" },
+    { id: "in", label: "인바운드 EP" },
+  ]}
+  steps={[
+    {
+      from: "ec2",
+      to: "vpcdns",
+      label: "erp.corp.example.com?",
+      title: "EC2는 늘 VPC Resolver에 묻는다",
+      detail: "EC2의 DNS 서버는 VPC 대역의 두 번째 주소다. 회사 이름이든 AWS 이름이든 일단 여기로 온다.",
+      payload: "nameserver 10.0.0.2",
+    },
+    {
+      from: "vpcdns",
+      to: "out",
+      label: "전달 규칙 일치",
+      title: "corp.example.com은 회사로 넘기라는 규칙이 있다",
+      detail: "Resolver rule이 VPC에 연결되어 있다. 일치하는 도메인은 아웃바운드 엔드포인트를 통해 내보낸다.",
+      payload: "Rule: corp.example.com → 192.168.10.53",
+    },
+    {
+      from: "out",
+      to: "corp",
+      label: "UDP·TCP 53",
+      title: "아웃바운드 엔드포인트가 회사 DNS에 묻는다",
+      detail: "질의는 엔드포인트 인터페이스의 사설 IP에서 VPN·전용선을 건너간다. 보안 그룹과 회사 방화벽에서 53번을 열어야 한다.",
+    },
+    {
+      from: "corp",
+      to: "in",
+      label: "db.aws.example.internal?",
+      title: "반대 방향은 회사 DNS가 조건부 전달한다",
+      detail: "회사 DNS에 aws.example.internal은 인바운드 엔드포인트 IP로 넘기라는 조건부 전달을 둔다.",
+      payload: "forwarders: 10.0.1.10, 10.0.2.10",
+    },
+    {
+      from: "in",
+      to: "corp",
+      label: "A 10.0.3.25",
+      title: "인바운드 엔드포인트가 프라이빗 영역으로 답한다",
+      detail: "VPC 안에서 물은 것처럼 프라이빗 호스팅 영역의 값을 돌려준다.",
+    },
+  ]}
+/>
+
+엔드포인트는 가용 영역 두 곳 이상에 IP를 하나씩 두라고 되어 있다(만들 때 최소 두 개를 요구한다). 하나가 죽어도 다른 하나로 묻게 하려면 회사 DNS의 전달 대상에도 두 IP를 다 넣어야 한다. 하나만 적어 두면 엔드포인트를 두 개 둔 의미가 없다.
+
+현장에서 자주 만나는 문제도 몇 가지 적어 둔다. 회사 DNS가 질의를 다시 VPC로, VPC가 다시 회사로 넘기는 규칙이 겹치면 질의가 루프를 돌다 SERVFAIL이 된다. 전달 규칙이 겹칠 때는 더 구체적인 도메인의 규칙이 이긴다. VPC Resolver는 EC2 인터페이스 하나당 초당 1024개 패킷이라는 한도가 있어서, DNS 캐시 없이 매 요청마다 이름을 푸는 프로그램은 이 한도에 걸려 간헐적인 이름 풀이 실패를 본다. 이런 경우엔 OS나 사이드카에 캐시를 둔다.
+
+## 장애 중에 답을 확인하는 순서
+
+"DNS가 안 바뀌었다"는 제보를 받으면 층을 하나씩 떼어 본다. Route 53이 무엇을 답하는지, 리졸버가 무엇을 들고 있는지, 클라이언트가 무엇을 들고 있는지를 따로 확인해야 어느 층의 문제인지 갈린다.
+
+먼저 헬스 체크가 정말 비정상인지 본다. `get-health-check-status`는 헬스 체커 위치마다 마지막 판정을 돌려준다. 몇 곳만 실패라면 대상이 아니라 그 지역의 경로 문제일 수 있다.
+
+```bash
+# 헬스 체커 위치별 최근 판정(위치 IP, 판정 시각, 상태 문자열)을 본다
+aws route53 get-health-check-status --health-check-id 11111111-2222-3333-4444-555555555555
+```
+
+다음은 캐시를 건너뛰고 Route 53 네임서버에 직접 묻는다. 영역의 네임서버 네 개 중 하나를 골라 `@`로 지정하면 리졸버 캐시가 끼지 않는다.
+
+```bash
+# 영역에 배정된 네임서버 확인
+aws route53 get-hosted-zone --id Z0123456789ABCDEFGHIJ --query 'DelegationSet.NameServers'
+# 권한 있는 네임서버에 직접 묻기. 여기 답이 바뀌었으면 Route 53은 할 일을 다 한 것이다
+dig @ns-123.awsdns-15.com api.example.com A +norecurse
+# 평소 쓰는 리졸버에 묻기. 답 옆의 TTL 숫자가 줄어드는 중이면 캐시에서 나온 답이다
+dig api.example.com A
+```
+
+지연 시간이나 지리 정책이라면 "그 사용자 위치에서 무엇을 받나"가 궁금하다. `test-dns-answer`는 리졸버 IP나 ECS 대역을 지정해 Route 53이 무엇을 답할지 시뮬레이션해 준다. 실제 DNS 질의를 보내지 않고 API로 판정만 받는다.
+
+```bash
+# 서울의 한 통신사 리졸버에서 물었을 때의 답을 시뮬레이션한다
+aws route53 test-dns-answer \
+  --hosted-zone-id Z0123456789ABCDEFGHIJ \
+  --record-name api.example.com --record-type A \
+  --resolver-ip 203.0.113.53
+```
+
+레코드를 고친 직후라면 변경이 반영됐는지도 본다. `change-resource-record-sets`는 변경 ID와 `PENDING` 상태를 돌려주고, 모든 네임서버에 반영되면 `get-change`의 상태가 `INSYNC`로 바뀐다. 배포 스크립트에서 레코드를 바꾼 뒤 바로 다음 단계로 가지 말고 `aws route53 wait resource-record-sets-changed --id 변경ID`로 기다리게 하면, "바꿨는데 왜 안 바뀌지"를 한 단계 줄일 수 있다.
+
+권한 있는 네임서버는 새 답을 주는데 사용자가 옛 IP로 간다면 남은 건 캐시와 연결이다. 앱 서버라면 런타임의 DNS 캐시 설정과 연결 풀의 최대 수명을 확인하고, 필요하면 연결 풀을 재시작해 새로 풀게 한다. 사용자 브라우저는 우리가 손댈 수 없으니 TTL이 지나기를 기다리는 수밖에 없다.
+
+## 다시 처음 장면으로
+
+서울이 죽고 5분 동안 서울로 간 사용자들은 Route 53의 잘못이 아니었다. 헬스 체크가 30초 간격 세 번으로 90초를 썼고, 리졸버 캐시가 TTL 60초를 더 들고 있었고, 앱의 연결 풀이 열린 연결을 버리지 않아 나머지를 채웠다. Route 53이 하는 일은 질의가 올 때마다 정책과 헬스 체크로 답을 고르는 것까지다. 그 답이 사용자에게 닿는 속도는 TTL과 클라이언트가 정한다. 라우팅 정책을 고를 때 "어떤 답을 줄까"와 함께 "바뀐 답이 언제 닿을까"를 같이 계산해 두면, 장애 조치 설정이 실제로 몇 분짜리인지 미리 알 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### Route 53의 라우팅 정책에는 어떤 것이 있고 언제 쓰나요?
+
+단순은 하나의 답, 가중치는 비율로 나누기, 지연 시간은 가장 빠른 리전, 장애 조치는 액티브-패시브, 지리는 사용자 위치(국가·대륙)에 따른 답, 지리 근접은 거리와 바이어스, 다중 값은 정상인 IP 최대 8개, IP 기반은 질의자 대역이다. 리전 장애 대비면 장애 조치나 헬스 체크를 붙인 지연 시간, 데이터 거주 요건이면 지리, 단계적 이전이면 가중치를 고른다.
+
+### Alias 레코드와 CNAME은 무엇이 다른가요?
+
+CNAME은 다른 이름을 가리키는 별도의 레코드 타입이라 도메인 꼭대기에 둘 수 없고, 리졸버가 한 번 더 풀어야 한다. Alias는 Route 53 안에서 대상 AWS 자원의 IP를 찾아 A나 AAAA로 바로 답하므로 꼭대기에도 둘 수 있다. TTL은 대상 자원의 것을 따르고, AWS 자원을 가리키는 질의는 요금이 없으며, EvaluateTargetHealth로 대상의 상태를 그대로 쓸 수 있다.
+
+### 헬스 체크가 비정상이 되었는데도 트래픽이 옛 리전으로 가는 이유는 무엇인가요?
+
+Route 53이 답을 바꿔도 리졸버가 TTL 동안 옛 답을 캐시하고, 브라우저와 런타임도 따로 캐시하며, 이미 열린 keep-alive 연결은 DNS와 무관하게 옛 IP에 붙어 있기 때문이다. 전환 시간은 감지(간격 × 실패 임계값)에 TTL과 클라이언트 쪽 캐시가 더해진 값이다. 표준 간격 30초 × 3에 TTL 60초면 사용자 기준 최악 150초를 넘는다.
+
+### 헬스 체크가 전부 비정상이면 Route 53은 어떻게 답하나요?
+
+가중치, 지연 시간 같은 정책에서는 레코드를 모두 정상인 것처럼 보고 원래 규칙대로 답한다. 헬스 체크 설정 실수로 서비스가 DNS에서 통째로 사라지는 것을 막는 fail open 동작이다. 그래서 전부 빨간색인데 트래픽이 흐르는 걸 보고 Route 53이 고장 났다고 판단하면 안 된다.
+
+### 사설 IP의 서비스에 헬스 체크를 붙이려면 어떻게 하나요?
+
+헬스 체커는 인터넷에서 접속하므로 사설 IP에 닿지 못한다. 그래서 VPC 안에서 측정한 지표나 Lambda로 확인한 결과를 CloudWatch 경보로 만들고, 그 경보를 상태로 쓰는 CloudWatch 경보형 헬스 체크를 붙인다. 경보가 데이터 부족일 때 정상으로 볼지 비정상으로 볼지도 정해 둔다.
+
+### 가중치 라우팅으로 카나리 배포를 하면 어떤 한계가 있나요?
+
+비율이 사용자가 아니라 질의 단위라서, 큰 리졸버 하나가 새 버전 답을 받으면 TTL 동안 그 뒤의 사용자 전부가 새 버전으로 간다. 같은 사용자가 TTL마다 버전을 오가고, 가중치를 0으로 내려도 캐시와 연결만큼 롤백이 늦으며, 직원만 먼저 같은 조건을 걸 수 없다. 그래서 리전이나 스택을 천천히 옮기는 데 쓰고, 정밀한 카나리는 로드 밸런서 가중치나 기능 플래그로 한다.
+
+### 프라이빗 호스팅 영역과 퍼블릭 영역을 같은 이름으로 두면 무엇을 조심하나요?
+
+VPC 안에서는 프라이빗 영역이 이긴다. 그리고 프라이빗 영역에 없는 이름은 퍼블릭으로 넘어가 찾지 않고 바로 NXDOMAIN이 된다. 퍼블릭에만 있는 레코드를 VPC 안에서 쓰려면 프라이빗 영역에도 같은 레코드를 만들어야 한다.
+
+### 온프레미스와 VPC 사이에서 이름을 서로 풀려면 어떻게 하나요?
+
+Route 53 Resolver 엔드포인트를 쓴다. 회사에서 VPC의 프라이빗 영역을 풀려면 인바운드 엔드포인트를 만들고 회사 DNS가 해당 도메인을 그 IP로 조건부 전달한다. VPC에서 회사 이름을 풀려면 아웃바운드 엔드포인트와 전달 규칙을 만들어 VPC에 연결한다. 엔드포인트 IP는 가용 영역 두 곳 이상에 두고, 양쪽 전달 설정에 모두 적어야 하나가 죽어도 버틴다.

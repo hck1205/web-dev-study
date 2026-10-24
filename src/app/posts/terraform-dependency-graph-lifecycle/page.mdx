@@ -1,0 +1,646 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-dependency-graph-lifecycle");
+
+<EasyIntro>
+  레고로 성을 지을 때는 바닥판을 먼저 깔고, 그 위에 벽을 세우고, 마지막에 지붕을 얹는다. 지붕부터 올릴 수는 없다. Terraform도 클라우드에 무언가를 만들 때 이런 순서를 스스로 알아낸다.
+
+  비결은 연결이다. 벽이 바닥판의 위치를 써야 한다면 바닥판이 먼저 있어야 한다. Terraform은 코드 안에서 누가 누구의 값을 쓰는지 줄을 그어 지도를 만들고, 줄이 들어오지 않는 것부터 만든다. 서로 상관없는 것들은 여러 명이 동시에 만들듯 한꺼번에 만든다.
+
+  가끔은 블록 하나를 바꾸려면 통째로 빼고 새로 끼워야 한다. 이때 빼고 끼울지, 새 것을 먼저 옆에 끼우고 헌 것을 뺄지에 따라 성이 잠깐 무너지기도 하고 멀쩡하기도 하다. 그래서 Terraform에는 "새 것부터 끼워라", "이건 절대 빼지 마라" 같은 쪽지를 붙이는 방법이 있다.
+</EasyIntro>
+
+설정 파일 맨 위의 주석 한 줄을 고쳤다. 내용은 그대로이고 주석만 바뀌었으니 plan에는 `~` 하나가 뜰 거라고 생각했다. 그런데 plan 첫 줄이 `-/+`다. 지우고 다시 만든다는 뜻이다. 게다가 이 파일을 참조하는 배포 리소스까지 덩달아 바뀐다고 나온다.
+
+```text
+  # local_file.conf must be replaced
+-/+ resource "local_file" "conf" {
+      ~ content              = <<-EOT # forces replacement
+          - # app config
+          + # app config (owner: platform)
+            name = skilled-coral
+        EOT
+      ~ id                   = "ee6a6f751921491dfdb596eefcb45eb41773c69f" -> (known after apply)
+        ...
+    }
+
+  # terraform_data.deploy will be updated in-place
+  ~ resource "terraform_data" "deploy" {
+      ~ input  = "31c152c605e1da3c890f6f3624fb234b99e59751b39d68f1abe1828783b8206a" -> (known after apply)
+    }
+
+Plan: 1 to add, 1 to change, 1 to destroy.
+```
+
+이 plan 한 장에 이 글의 질문이 다 들어 있다. 왜 `deploy`가 `conf` 다음에 오는지(의존성 그래프), 왜 주석 한 줄이 교체를 부르는지(`# forces replacement`), 교체한다면 지우는 게 먼저인지 만드는 게 먼저인지(lifecycle), 그리고 교체 뒤에 서버에 무언가를 다시 깔아야 한다면 무엇으로 할지(provisioner와 그 대안). plan을 읽는 기본기와 state는 [Terraform 기본](/posts/terraform-basics)에, 모듈과 `count`·`for_each`의 주소 규칙은 [모듈과 tfvars](/posts/terraform-modules-tfvars)에 있다. 이 글은 그 다음, "순서와 교체"를 다룬다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.6과 클라우드 계정이 필요 없는 프로바이더(`local`, `random`, 내장 `terraform_data`)로 했다. 출력은 모두 직접 돌린 결과이고, 긴 해시 줄만 `...`로 줄였다. AWS 보안 그룹처럼 진짜 클라우드에서 같은 일이 벌어지는 장면은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서 실제 출력으로 볼 수 있다.
+
+## 참조가 곧 순서다
+
+먼저 실습 코드다. 이름을 하나 뽑고, 그 이름으로 설정 파일을 쓰고, 파일 내용의 해시를 배포 리소스에 넘긴다. 그것과 상관없는 README 파일도 하나 있다.
+
+```hcl
+resource "random_pet" "name" {
+  length = 2
+}
+
+resource "local_file" "conf" {
+  filename = "${path.module}/out/app.conf"
+  content  = "# app config\nname = ${random_pet.name.id}\n"
+}
+
+resource "terraform_data" "deploy" {
+  input = local_file.conf.content_sha256
+}
+
+resource "local_file" "readme" {
+  filename = "${path.module}/out/README"
+  content  = "static\n"
+}
+```
+
+어디에도 "먼저 이름을 만들어라" 같은 순서는 없다. `local_file.conf`의 `content` 안에 `random_pet.name.id`라는 참조가 있을 뿐이다. Terraform은 이 참조를 읽어 "conf는 name이 있어야 만들 수 있다"는 간선을 긋는다. 이렇게 참조에서 저절로 생기는 의존을 암묵적 의존이라고 부른다. 간선을 다 그으면 방향이 있고 고리가 없는 그래프(DAG)가 된다. `terraform graph`로 그 그래프를 볼 수 있다.
+
+```bash
+# 리소스 사이의 의존 그래프를 DOT 형식으로 출력한다
+terraform graph
+```
+
+```text
+digraph G {
+  rankdir = "RL";
+  node [shape = rect, fontname = "sans-serif"];
+  "local_file.conf" [label="local_file.conf"];
+  "local_file.readme" [label="local_file.readme"];
+  "random_pet.name" [label="random_pet.name"];
+  "terraform_data.deploy" [label="terraform_data.deploy"];
+  "local_file.conf" -> "random_pet.name";
+  "terraform_data.deploy" -> "local_file.conf";
+}
+```
+
+화살표는 "누가 누구를 기다리나"의 방향이다. `conf -> name`은 conf가 name을 기다린다는 뜻이다. `readme`에는 들어오고 나가는 화살표가 없다. 아무도 기다리지 않으니 첫 순간부터 만들 수 있다. 실제로 apply 로그를 보면 `readme`가 `conf`보다 먼저 끝났다.
+
+```text
+random_pet.name: Creating...
+random_pet.name: Creation complete after 0s [id=skilled-coral]
+local_file.readme: Creating...
+local_file.readme: Creation complete after 0s [id=9bc224bd710f56d27affffddc764239b58c3faa0]
+local_file.conf: Creating...
+local_file.conf: Creation complete after 0s [id=ee6a6f751921491dfdb596eefcb45eb41773c69f]
+terraform_data.deploy: Creating...
+terraform_data.deploy: Creation complete after 0s [id=e26d85e9-38b2-97e4-728e-92146f6bbfb0]
+```
+
+아래 그림은 만드는 순서대로 화살표를 그렸다. 위 DOT 출력과는 화살표 방향이 반대다(기다리는 방향이 아니라 값이 흘러가는 방향).
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="참조가 간선이 된다. 값은 화살표 방향으로 흐르고, 만드는 순서도 같다"
+  nodes={[
+    { id: "name", label: "random_pet.name", sub: "id", x: 100, y: 50, w: 150 },
+    { id: "conf", label: "local_file.conf", sub: "content", x: 100, y: 135, w: 150 },
+    { id: "deploy", label: "terraform_data.deploy", sub: "input", x: 100, y: 220, w: 170 },
+    { id: "readme", label: "local_file.readme", sub: "참조 없음", x: 300, y: 135, w: 150 },
+  ]}
+  edges={[
+    { from: "name", to: "conf", label: "name.id" },
+    { from: "conf", to: "deploy", label: "sha256" },
+  ]}
+/>
+
+`terraform graph -type=plan`을 주면 프로바이더 노드(마름모), 변수 노드, 프로바이더를 닫는 `(close)` 노드까지 다 나와서 훨씬 길어진다. 리소스가 수십 개면 텍스트로는 못 읽으니 Graphviz로 그림을 만든다.
+
+```bash
+# Graphviz를 설치하고 그래프를 SVG로 그린다
+sudo apt install -y graphviz
+terraform graph | dot -Tsvg > graph.svg
+```
+
+그래프에는 리소스만 있는 게 아니다. 변수, locals, 출력, data source, 모듈 호출도 모두 노드다. 그래서 "이 출력이 왜 known after apply지?" 같은 질문도 그래프를 거슬러 올라가면 답이 나온다.
+
+## depends_on은 보이지 않는 의존에만
+
+참조가 순서를 정한다면 `depends_on`은 언제 쓸까. 코드에 참조로 드러나지 않는 의존이 있을 때다. 대표적인 경우가 권한이다. EC2 인스턴스가 부팅하자마자 S3에서 파일을 받는데, 그 권한은 `aws_iam_role_policy`가 붙여 준다. 인스턴스 코드는 역할(role)만 참조하고 정책은 참조하지 않는다. 그러면 Terraform은 정책과 인스턴스를 동시에 만들 수 있다고 판단하고, 인스턴스가 정책보다 먼저 떠서 첫 다운로드가 권한 오류로 실패한다.
+
+```hcl
+resource "aws_instance" "app" {
+  ami                  = data.aws_ami.ubuntu.id
+  instance_type        = "t3.small"
+  iam_instance_profile = aws_iam_instance_profile.app.name
+
+  # 프로파일은 참조하지만 그 역할에 붙는 정책은 참조하지 않는다.
+  # 부팅 스크립트가 S3를 읽으려면 정책이 먼저 있어야 한다.
+  depends_on = [aws_iam_role_policy.app_s3_read]
+}
+```
+
+이런 경우에 쓰라고 있는 것이니 거꾸로 말하면, 참조가 이미 있는 곳에 `depends_on`을 덧붙이는 것은 아무 의미가 없다. 의미가 없기만 하면 다행인데 비용이 있다. 가장 큰 비용은 data source에서 나온다. 아래 코드는 파일을 읽는 data source에 리소스를 `depends_on`으로 걸었다.
+
+```hcl
+resource "terraform_data" "bootstrap" {
+  input = "x"
+}
+
+data "local_file" "seed" {
+  filename   = "${path.module}/seed.txt"
+  depends_on = [terraform_data.bootstrap]
+}
+
+resource "terraform_data" "uses_seed" {
+  input = data.local_file.seed.content
+}
+```
+
+한 번 apply한 뒤 `bootstrap`의 값만 `"y"`로 바꾸고 plan을 돌렸다. `seed.txt`는 그대로다.
+
+```text
+  # data.local_file.seed will be read during apply
+  # (depends on a resource or a module with changes pending)
+ <= data "local_file" "seed" {
+      + content              = (known after apply)
+      ...
+    }
+
+  # terraform_data.bootstrap will be updated in-place
+  ~ resource "terraform_data" "bootstrap" {
+      ~ input  = "x" -> "y"
+    }
+
+  # terraform_data.uses_seed will be updated in-place
+  ~ resource "terraform_data" "uses_seed" {
+      ~ input  = <<-EOT
+            v=1
+        EOT -> (known after apply)
+    }
+
+Plan: 0 to add, 2 to change, 0 to destroy.
+```
+
+파일은 바뀌지 않았는데 `uses_seed`가 바뀐다고 나온다. data source는 원래 plan 때 읽는다. 그런데 `depends_on`이 걸린 대상에 바뀔 것이 있으면, Terraform은 "그 리소스가 바뀐 뒤에 읽어야 맞겠지"라고 보고 읽기를 apply 때로 미룬다. 읽지 못했으니 값은 모르고(`known after apply`), 그 값을 쓰는 모든 리소스가 "바뀔 수도 있음"으로 표시된다. 실제로는 아무것도 안 바뀌는 apply인데 plan은 매번 시끄럽고, 리뷰어는 진짜 변경을 가려 낼 수 없게 된다.
+
+모듈 블록에 `depends_on`을 걸면 이 효과가 모듈 안의 모든 data source로 번진다. `module "app" { depends_on = [module.network] }` 한 줄 때문에 네트워크 모듈에 태그 하나만 바뀌어도 앱 모듈의 AMI 조회, 계정 ID 조회가 전부 apply 때로 밀려 plan 전체가 `known after apply`로 덮인다. 모듈끼리는 출력값을 참조해서 연결하는 것이 정석이다.
+
+두 번째 비용은 병렬성이다. 불필요한 간선 하나는 원래 동시에 만들 수 있던 리소스를 줄 세운다. 다음 절에서 이게 시간으로 얼마인지 본다.
+
+## 동시에 몇 개를 만드나
+
+Terraform은 그래프를 돌면서 기다릴 것이 없는 노드를 동시에 처리한다. 동시에 처리하는 최대 개수가 `-parallelism`이고 기본값은 10이다. 2초씩 걸리는 리소스 여섯 개(서로 의존 없음)로 재 봤다.
+
+```hcl
+resource "terraform_data" "worker" {
+  count = 6
+  input = count.index
+
+  provisioner "local-exec" {
+    command = "sleep 2"
+  }
+}
+```
+
+```bash
+# 기본값(10)으로 만들고, 지운 뒤, 동시에 2개씩만 만들게 해서 시간을 비교한다
+time terraform apply -auto-approve
+terraform destroy -auto-approve
+time terraform apply -auto-approve -parallelism=2
+```
+
+기본값에서는 여섯 개가 한꺼번에 돌아 2.1초, `-parallelism=2`에서는 둘씩 세 번 돌아 6.2초가 걸렸다. 순서 그대로 숫자가 나온다.
+
+이 숫자를 줄일 일이 언제 있을까. 클라우드 API의 호출 한도(rate limit)에 걸릴 때다. 수백 개의 DNS 레코드나 IAM 정책을 한 번에 만들다 `ThrottlingException`이나 429가 연달아 나면 `-parallelism=3` 정도로 낮춘다. 대부분의 프로바이더가 재시도를 하지만, 재시도가 쌓이면 결국 타임아웃이다. 반대로 값을 크게 올려도 그래프가 길게 줄 서 있으면 빨라지지 않는다. 동시에 돌 수 있는 노드 수는 그래프 모양이 정하고, `-parallelism`은 상한일 뿐이다.
+
+아래 코드는 이 과정을 단순하게 흉내 낸다. 모든 리소스가 같은 시간이 걸린다고 치고, 기다릴 것이 없는 노드를 이름순으로 최대 `parallelism`개씩 묶어 한 "차례"로 만든다. 실제 Terraform은 차례를 나누지 않고 하나가 끝나는 즉시 다음을 시작하지만, 그래프 모양과 상한이 시간을 어떻게 정하는지 보기에는 충분하다. 고리가 있으면 Terraform이 `Error: Cycle`을 내듯 `null`을 돌려준다.
+
+<CodePlayground
+  caption="의존 그래프로 apply 차례 나누기"
+  functionName="applyWaves"
+  initialCode={`// deps: { 리소스: [기다리는 리소스들] }
+// 반환: [["먼저 만들 것들"], ["그다음"], ...], 고리가 있으면 null
+function applyWaves(deps, parallelism) {
+  return [];
+}`}
+  solution={`function applyWaves(deps, parallelism) {
+  const names = Object.keys(deps).sort();
+  const waiting = {};
+  const users = {};
+  for (const n of names) {
+    waiting[n] = deps[n].length;
+    for (const d of deps[n]) (users[d] ||= []).push(n);
+  }
+  let ready = names.filter((n) => waiting[n] === 0);
+  const waves = [];
+  let done = 0;
+  while (ready.length > 0) {
+    const wave = ready.slice(0, parallelism);
+    ready = ready.slice(parallelism);
+    waves.push(wave);
+    done += wave.length;
+    for (const n of wave) {
+      for (const u of users[n] || []) {
+        waiting[u] -= 1;
+        if (waiting[u] === 0) ready.push(u);
+      }
+    }
+    ready.sort();
+  }
+  return done === names.length ? waves : null;
+}`}
+  tests={[
+    { label: "VPC 하나에 셋이 매달린다", args: [{ vpc: [], subnet_a: ["vpc"], subnet_c: ["vpc"], sg: ["vpc"], app: ["subnet_a", "sg"] }, 10], expected: [["vpc"], ["sg", "subnet_a", "subnet_c"], ["app"]] },
+    { label: "같은 그래프, parallelism 2", args: [{ vpc: [], subnet_a: ["vpc"], subnet_c: ["vpc"], sg: ["vpc"], app: ["subnet_a", "sg"] }, 2], expected: [["vpc"], ["sg", "subnet_a"], ["app", "subnet_c"]] },
+    { label: "의존 없는 여섯 개, parallelism 2", args: [{ w1: [], w2: [], w3: [], w4: [], w5: [], w6: [] }, 2], expected: [["w1", "w2"], ["w3", "w4"], ["w5", "w6"]] },
+    { label: "한 줄로 선 그래프", args: [{ a: [], b: ["a"], c: ["b"] }, 10], expected: [["a"], ["b"], ["c"]] },
+    { label: "고리", args: [{ a: ["b"], b: ["a"] }, 10], expected: null },
+  ]}
+/>
+
+마지막 테스트처럼 서로를 기다리면 그래프가 성립하지 않는다. Terraform에서는 보안 그룹 두 개가 인라인 규칙으로 서로를 참조할 때 흔히 생긴다. 규칙을 별도 리소스로 빼면 그룹 둘이 먼저 생기고 규칙이 나중에 붙으니 고리가 풀린다.
+
+지울 때는 이 그래프를 거꾸로 돈다. `terraform destroy`는 `deploy`를 먼저, `name`을 마지막에 지운다. 기다리던 쪽이 먼저 사라져야 기다림을 받던 쪽을 지울 수 있기 때문이다.
+
+## 만들기, 고치기, 갈아 끼우기가 정해지는 규칙
+
+이제 처음 장면의 `# forces replacement`로 돌아가자. 리소스마다 plan이 고르는 동작은 넷 중 하나다.
+
+- 만들기(`+`): state에 없는 주소가 코드에 있다.
+- 지우기(`-`): state에 있는 주소가 코드에 없다. plan에 `(because ... is not in configuration)`가 붙는다.
+- 제자리 수정(`~`): 주소는 그대로이고 바뀐 속성을 프로바이더가 고칠 수 있다.
+- 교체(`-/+` 또는 `+/-`): 바뀐 속성 중 하나라도 프로바이더가 "이건 고칠 수 없다(ForceNew)"고 표시한 것이 있다.
+
+마지막 판단은 Terraform 본체가 아니라 프로바이더 스키마가 한다. `local_file`은 파일을 고쳐 쓰는 API가 없다고 보고 모든 인자를 교체 대상으로 표시해 두었다. 그래서 주석 한 줄도 교체다. AWS에서는 보안 그룹의 `name`·`description`, RDS의 `engine`, 서브넷의 `cidr_block`, EC2의 `ami`(인스턴스를 새로 띄워야 하니) 같은 값이 그렇다. 어떤 속성이 교체를 부르는지는 프로바이더 문서의 인자 설명에 "Changing this forces a new resource" 같은 문장으로 적혀 있지만, 가장 확실한 건 plan의 `# forces replacement` 주석이다. 이 주석이 붙은 줄이 교체의 원인이다.
+
+교체는 그 리소스 하나로 끝나지 않는다. 교체되면 `id`가 바뀌고, `id`를 참조하는 리소스는 값이 `known after apply`가 된다. 처음 plan에서 `deploy`가 제자리 수정으로 끌려온 것이 그래서다. 참조하는 속성이 하필 그쪽에서도 ForceNew라면 교체가 연쇄된다. 서브넷이 교체되면 그 서브넷 ID를 쓰는 EC2도 교체되는 식이다. plan을 볼 때 맨 아래 숫자에서 destroy가 0이 아니면 `forces replacement` 줄을 찾아 연쇄의 시작점부터 확인한다.
+
+교체할 때 기본 순서는 지우고 나서 만드는 것(`-/+`)이다. 이 순서가 기본인 이유는 이름이나 IP처럼 고유해야 하는 값이 많아서다. 같은 이름의 버킷이 두 개 있을 수 없으니 헌 것을 지워야 새 것을 만들 수 있다. 대신 그 사이 리소스가 없는 시간이 생긴다.
+
+## 교체 순서를 뒤집는 create_before_destroy
+
+`lifecycle` 블록에 `create_before_destroy = true`를 적으면 순서가 뒤집혀 `+/-`가 된다. 새 것을 먼저 만들고, 참조하던 리소스를 새 것으로 옮긴 뒤, 헌 것을 지운다. 그 사이 밀려난 헌 객체를 Terraform은 deposed라고 부른다.
+
+<SequenceDiagram
+  caption="create_before_destroy를 건 교체는 새 객체를 먼저 만들고, 의존하는 쪽을 옮긴 뒤 헌 객체를 지운다"
+  actors={[
+    { id: "tf", label: "Terraform" },
+    { id: "new", label: "새 conf" },
+    { id: "dep", label: "deploy" },
+    { id: "old", label: "헌 conf" },
+  ]}
+  steps={[
+    { from: "tf", to: "tf", label: "plan", title: "교체 순서를 정한다", detail: "conf에 create_before_destroy가 있어 +/-로 계획한다. conf가 기다리는 random_pet에도 같은 순서가 번진다.", payload: "+/- create replacement and then destroy" },
+    { from: "tf", to: "new", label: "Create", title: "새 객체를 먼저 만든다", detail: "헌 객체는 아직 state에 남아 있다. 이 순간에는 둘이 함께 있다.", payload: "local_file.conf: Creating..." },
+    { from: "tf", to: "dep", label: "Modify", title: "의존하는 쪽을 옮긴다", detail: "deploy가 새 conf의 값을 받는다. 다운타임이 없으려면 이 단계가 헌 객체를 지우기 전에 끝나야 한다.", payload: "terraform_data.deploy: Modifying..." },
+    { from: "tf", to: "old", label: "Destroy", title: "밀려난 헌 객체를 지운다", detail: "state에서는 deposed 객체로 따로 표시되어 있다가 이때 지워진다.", payload: "local_file.conf (deposed object 1356b67f): Destroying..." },
+  ]}
+/>
+
+실습 코드에 그대로 걸어 보면 로그가 이 순서로 나온다.
+
+```text
+local_file.conf: Creating...
+local_file.conf: Creation complete after 0s [id=916773b6737930fb25309dba5657c51b06e50472]
+terraform_data.deploy: Modifying... [id=e26d85e9-38b2-97e4-728e-92146f6bbfb0]
+terraform_data.deploy: Modifications complete after 0s [id=e26d85e9-38b2-97e4-728e-92146f6bbfb0]
+local_file.conf (deposed object 1356b67f): Destroying... [id=5eb493d3c32fb3f83d7cb2057f2bfa4a46698e62]
+local_file.conf: Destruction complete after 0s
+Apply complete! Resources: 1 added, 1 changed, 1 destroyed.
+```
+
+순서는 원하는 대로다. 그런데 다음 plan이 이렇게 나왔다.
+
+```text
+Note: Objects have changed outside of Terraform
+  # local_file.conf has been deleted
+  # local_file.conf will be created
+```
+
+새 파일이 사라졌다. 이유는 파일 이름이다. 헌 객체와 새 객체가 같은 경로(`out/app.conf`)를 쓰고 있었다. 새 파일을 먼저 썼고(같은 경로를 덮어썼고), 헌 객체를 지울 때 그 경로의 파일을 지웠다. 지워진 건 사실 방금 만든 새 파일이다. apply는 성공이라고 했지만 결과는 빈자리다.
+
+클라우드에서는 같은 일이 보통 에러로 나타난다. 이름이 고유해야 하는 리소스(보안 그룹 `name`, IAM 역할 이름, ALB 대상 그룹 이름)에 `create_before_destroy`만 걸면 새 것을 만드는 첫 단계에서 "이미 있는 이름"으로 실패한다. 그래서 이 설정은 이름을 겹치지 않게 만드는 장치와 짝으로 쓴다. AWS 리소스의 `name_prefix`, 또는 이름에 버전이나 해시를 넣는 방식이다. 실습 코드도 파일 이름에 릴리스를 넣자 문제가 사라졌다.
+
+```hcl
+resource "local_file" "conf" {
+  # 릴리스마다 경로가 달라 헌 객체와 새 객체가 겹치지 않는다
+  filename = "${path.module}/out/app-${var.release}.conf"
+  content  = "name = ${random_pet.name.id}\nrelease = ${var.release}\n"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+```
+
+알아 둘 성질이 하나 더 있다. `create_before_destroy`는 기다림을 받는 쪽으로 번진다. `conf`에만 걸었는데 `-replace=random_pet.name`으로 이름을 교체하게 하자 plan이 이렇게 나왔다.
+
+```text
+  # local_file.conf must be replaced
++/- resource "local_file" "conf" {
+  # random_pet.name will be replaced, as requested
++/- resource "random_pet" "name" {
+  # terraform_data.deploy will be replaced due to changes in replace_triggered_by
+-/+ resource "terraform_data" "deploy" {
+Plan: 3 to add, 0 to change, 3 to destroy.
+```
+
+`random_pet`에는 설정이 없는데 `+/-`다. conf가 "새 것 먼저"로 교체되려면 conf가 기다리는 name도 새 것이 먼저 있어야 하기 때문이다. 반면 conf를 기다리는 `deploy`는 기본 순서(`-/+`) 그대로다. 그래서 운영 트래픽을 받는 리소스라면 그 리소스뿐 아니라 그것을 참조하는 쪽까지 순서를 확인해야 한다. 보안 그룹과 규칙에서 이 차이 때문에 생기는 틈은 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서 자세히 다뤘다.
+
+## 지우면 안 되는 것, 무시할 것, 같이 바꿀 것
+
+`lifecycle`에는 순서 말고도 세 가지 장치가 더 있다.
+
+`prevent_destroy = true`는 plan이 그 리소스를 지우거나 교체하려 하면 plan 자체를 실패시킨다. 운영 DB, state 버킷, KMS 키처럼 지워지면 되돌릴 수 없는 것에 건다.
+
+```hcl
+resource "random_password" "db" {
+  length = 20
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+```
+
+```text
+Error: Instance cannot be destroyed
+
+  on main.tf line 34:
+  34: resource "random_password" "db" {
+
+Resource random_password.db has lifecycle.prevent_destroy set, but the plan
+calls for this resource to be destroyed. To avoid this error and continue
+with the plan, either disable lifecycle.prevent_destroy or reduce the scope
+of the plan using the -target option.
+```
+
+이 장치에는 구멍이 있다. 설정이 리소스 블록 안에 있으니 블록을 통째로 지우면 설정도 같이 사라진다. 블록을 지운 코드로 plan을 돌리면 아무 에러 없이 이렇게 나온다.
+
+```text
+  # random_password.db will be destroyed
+  # (because random_password.db is not in configuration)
+Plan: 0 to add, 0 to change, 1 to destroy.
+```
+
+"이 파일 이제 안 쓰는 것 같은데" 하고 리소스 파일을 지운 PR이 운영 DB를 지우는 길이 여기서 열린다. 그래서 `prevent_destroy`만 믿지 않는다. 클라우드 쪽 삭제 보호(RDS의 `deletion_protection`, EC2의 `disable_api_termination`), plan JSON에서 특정 리소스 타입의 delete를 막는 정책 검사([테스트와 정책 검사](/posts/terraform-testing-policy-scanning)), 그리고 코드에서 빼되 실제로는 남기려면 `removed` 블록([state 리팩터링](/posts/terraform-state-refactoring-import))을 함께 쓴다.
+
+`ignore_changes`는 특정 속성의 차이를 plan에서 보지 않게 한다. 다른 시스템이 그 값을 바꾸는 것이 정상일 때 쓴다. 오토스케일러가 바꾸는 `desired_capacity`, 배포 파이프라인이 바꾸는 ECS 서비스의 `task_definition`, 다른 도구가 붙이는 태그 같은 것이다.
+
+```hcl
+resource "aws_autoscaling_group" "app" {
+  # ...
+  desired_capacity = 2
+
+  lifecycle {
+    # 처음 만들 때만 2로 두고, 그 뒤로는 오토스케일링이 정한 값을 따른다
+    ignore_changes = [desired_capacity]
+  }
+}
+```
+
+`ignore_changes = all`도 있지만 피한다. 처음 만든 뒤로 코드를 아무리 고쳐도 반영되지 않아서, 코드와 실제가 조용히 갈라진다. 무시하는 속성은 이름으로 하나씩 적고, 왜 무시하는지 주석을 단다.
+
+`replace_triggered_by`(1.2 이상)는 반대 방향이다. 내 속성은 안 바뀌어도 다른 리소스가 바뀌면 나를 교체하라고 적는다. 실습에서 `deploy`에 이렇게 걸었다.
+
+```hcl
+resource "terraform_data" "deploy" {
+  input = "deploy ${local_file.conf.filename}"
+
+  lifecycle {
+    replace_triggered_by = [local_file.conf.id]
+  }
+}
+```
+
+```text
+  # terraform_data.deploy will be replaced due to changes in replace_triggered_by
+```
+
+실무에서는 시작 템플릿(launch template)의 버전이 바뀌면 그 템플릿으로 띄운 인스턴스를 교체하거나, 설정 파일이 바뀌면 그 설정을 읽어 가는 리소스를 다시 만들 때 쓴다. 목록에는 리소스 주소나 그 속성만 적을 수 있다. 변수나 local 값의 변화로 교체하고 싶으면 그 값을 `terraform_data`의 `input`에 넣고 그 `terraform_data`를 가리킨다.
+
+## 일부러 갈아 끼우기: -replace
+
+코드는 그대로인데 리소스를 새로 만들고 싶을 때가 있다. 디스크가 망가진 인스턴스, 부팅 스크립트를 다시 돌려야 하는 서버 같은 경우다. 예전에는 `terraform taint`로 state에 "망가짐" 표시를 남겼지만 0.15.2부터는 권하지 않고 `-replace`를 쓴다.
+
+```bash
+# 이 리소스만 교체하는 계획을 세운다 (state는 아직 바뀌지 않는다)
+terraform plan -replace='random_pet.name'
+# 같은 옵션으로 apply한다
+terraform apply -replace='random_pet.name'
+```
+
+```text
+  # random_pet.name will be replaced, as requested
+```
+
+차이는 언제 state가 바뀌느냐다. `taint`는 명령을 치는 순간 state에 표시가 남고, 같은 백엔드를 쓰는 다른 사람의 다음 plan에도 교체가 끼어든다. `-replace`는 plan 안에만 있어서 리뷰를 거쳐 그 apply에서만 일어난다. 여러 개를 교체하려면 옵션을 반복해서 준다. `count`나 `for_each` 리소스는 `-replace='aws_instance.web[1]'`처럼 인스턴스 주소를 따옴표로 감싸 준다.
+
+## 조건을 코드에 걸어 둔다
+
+`prevent_destroy`가 "지우지 마라"라면, `precondition`과 `postcondition`(1.2 이상)은 "이 조건이 아니면 만들지 마라"다. 변수의 `validation`은 그 변수 하나만 볼 수 있지만, `precondition`은 여러 변수와 다른 리소스, data source 값을 함께 볼 수 있다.
+
+```hcl
+resource "terraform_data" "app" {
+  input = {
+    env      = var.env
+    replicas = var.replicas
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.env != "prod" || var.replicas >= 2
+      error_message = "prod에는 replicas가 2 이상이어야 한다."
+    }
+    postcondition {
+      condition     = self.output.replicas == var.replicas
+      error_message = "만들어진 값이 요청과 다르다."
+    }
+  }
+}
+```
+
+```text
+Error: Resource precondition failed
+
+  on main.tf line 19, in resource "terraform_data" "app":
+  19:       condition     = var.env != "prod" || var.replicas >= 2
+    ├────────────────
+    │ var.env is "prod"
+    │ var.replicas is 1
+
+prod에는 replicas가 2 이상이어야 한다.
+```
+
+`precondition`은 plan 단계에서 실패하므로 아무것도 만들어지지 않는다. 에러 메시지에 조건에 쓰인 값이 같이 찍혀서 왜 실패했는지 바로 보인다. `postcondition`은 `self`로 만들어진 결과를 본다. 예를 들어 data source로 고른 AMI가 정말 `x86_64`인지, 조회한 서브넷이 정말 private인지 확인하는 데 쓴다. 결과가 apply 뒤에야 나오는 값이면 검사도 apply 때 한다.
+
+조건이 틀렸을 때 apply를 막지 않고 경고만 하고 싶으면 1.5에 들어온 `check` 블록을 쓴다. 인증서 만료가 30일 안으로 다가왔는지, 헬스 체크 URL이 200을 주는지처럼 "알고는 있어야 하는" 것을 plan과 apply 끝에 경고로 띄운다.
+
+## provisioner는 최후 수단이다
+
+여기까지가 리소스를 언제 만들고 바꿀지의 이야기였다. 남은 질문은 "만든 다음 그 안에 무언가를 해야 할 때"다. Terraform의 답은 provisioner인데, 공식 문서부터 최후 수단으로 쓰라고 적어 둘 만큼 조심스러운 기능이다. 지금 남아 있는 것은 셋이다(chef, puppet 같은 내장 provisioner는 0.15에서 빠졌다).
+
+- `local-exec`: Terraform을 돌리는 기계(내 노트북, CI 러너)에서 명령을 실행한다.
+- `remote-exec`: 만든 서버에 SSH(윈도우는 WinRM)로 들어가 명령을 실행한다. `connection` 블록이 필요하다.
+- `file`: 만든 서버로 파일이나 디렉터리를 복사한다. 역시 `connection`이 필요하다.
+
+```hcl
+resource "aws_instance" "web" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.small"
+  key_name      = "deploy"
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    host        = self.public_ip
+    private_key = file("~/.ssh/deploy.pem")
+  }
+
+  provisioner "file" {
+    source      = "files/app.service"
+    destination = "/tmp/app.service"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sudo mv /tmp/app.service /etc/systemd/system/app.service",
+      "sudo systemctl daemon-reload",
+      "sudo systemctl enable --now app",
+    ]
+  }
+}
+```
+
+왜 최후 수단일까. 이 코드에는 선언형 도구의 장점이 하나도 없다. Terraform은 명령이 무엇을 바꿨는지 모른다. state에는 "provisioner를 돌렸다"는 기록조차 없다. 코드를 고쳐도 리소스가 교체되지 않는 한 다시 돌지 않으니 drift를 잡을 수 없다. 게다가 plan 단계에서는 이 명령이 성공할지 알 수 없고, 실행하려면 Terraform을 돌리는 기계에서 서버로 SSH가 열려 있어야 한다. CI 러너에서 운영 서버로 22번을 여는 것 자체가 보안 문제다.
+
+실패했을 때의 동작도 알아 둬야 한다. 생성 시점 provisioner가 실패하면 리소스는 만들어졌지만 망가진 것(tainted)으로 state에 남는다.
+
+```text
+terraform_data.server: Creating...
+terraform_data.server: Provisioning with 'local-exec'...
+terraform_data.server (local-exec): Executing: ["/bin/sh" "-c" "echo setup web-1 && exit 1"]
+terraform_data.server (local-exec): setup web-1
+
+Error: local-exec provisioner error
+
+Error running command 'echo setup web-1 && exit 1': exit status 1. Output:
+setup web-1
+```
+
+```text
+  # terraform_data.server is tainted, so must be replaced
+Plan: 1 to add, 0 to change, 1 to destroy.
+```
+
+다음 plan은 그 리소스를 교체하겠다고 한다. 서버라면 반쯤 설정된 인스턴스를 지우고 새로 띄운다는 뜻이다. `on_failure = continue`를 주면 실패해도 tainted로 표시하지 않고 넘어가지만, 그러면 설정이 안 된 서버가 정상인 척 남는다.
+
+## 삭제 시점 provisioner가 돌지 않는 경우
+
+`when = destroy`를 주면 리소스를 지우기 직전에 명령을 실행한다. 서비스 디스커버리에서 노드를 빼거나, 외부 시스템에 등록한 것을 해제하는 용도다. 삭제 시점 provisioner는 `self`, `count.index`, `each.key`만 참조할 수 있다. 다른 리소스는 이미 지워졌을 수 있어서다.
+
+```hcl
+resource "terraform_data" "server" {
+  input = "web-1"
+
+  provisioner "local-exec" {
+    command = "echo setup ${self.input}"
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "echo cleanup ${self.input}"
+  }
+}
+```
+
+`-replace`로 교체하면 기대대로 돈다.
+
+```text
+terraform_data.server: Destroying... [id=5ce32234-94e0-2702-156b-5c46578059b9]
+terraform_data.server (local-exec): Executing: ["/bin/sh" "-c" "echo cleanup web-1"]
+terraform_data.server (local-exec): cleanup web-1
+terraform_data.server: Creating...
+terraform_data.server (local-exec): setup web-1
+```
+
+그런데 같은 실습에서 두 번은 돌지 않았다. 앞 절에서 생성 provisioner가 실패해 tainted가 된 객체를 교체할 때는 `Destroying...` 한 줄만 찍히고 cleanup이 없었다. 공식 문서도 tainted 리소스의 삭제 시점 provisioner는 돌지 않는다고 적어 둔다. 그리고 리소스 블록을 코드에서 통째로 지웠을 때도 돌지 않았다.
+
+```text
+terraform_data.server: Destroying... [id=141719df-f9bd-3005-25dc-a7025dfa1624]
+Apply complete! Resources: 0 added, 0 changed, 1 destroyed.
+```
+
+`prevent_destroy`와 같은 이유다. provisioner 설정은 리소스 블록 안에 있으니, 블록이 사라지면 Terraform은 실행할 명령을 모른다. 그래서 정리 작업을 삭제 시점 provisioner에 맡긴 리소스를 없앨 때는 두 번에 나눈다. 먼저 `count = 0`(또는 `for_each`에서 빼기)으로 블록은 남긴 채 인스턴스를 지워 provisioner를 돌리고, 그다음 PR에서 블록을 지운다. 실패한 삭제 시점 provisioner는 리소스를 지우지 않고 에러로 멈추며, 다음 apply에서 다시 시도된다.
+
+결국 정리 작업이 꼭 돌아야 한다면 provisioner보다 그 리소스 스스로 정리하게 만드는 편이 안전하다. 인스턴스 종료 시 셧다운 훅, 오토스케일링 수명 주기 훅, 서비스 디스커버리의 헬스 체크 만료처럼 Terraform 밖에서도 동작하는 장치다.
+
+## provisioner 대신 쓰는 것
+
+서버 안을 설정하는 일은 대부분 provisioner 없이 할 수 있다. 무엇을 고를지는 "설정이 얼마나 자주 바뀌나"와 "서버를 교체해도 되나"로 정한다.
+
+`user_data`와 cloud-init은 첫 부팅 때 서버가 스스로 스크립트를 실행하게 한다. Terraform은 스크립트를 넘겨주기만 하니 SSH가 필요 없고 CI 러너가 서버에 닿을 필요도 없다. 스크립트를 템플릿으로 만드는 법은 [HCL 문법과 data source](/posts/terraform-hcl-expressions-data-sources)에서 다룬다. AWS 프로바이더(4.x 이상)는 `user_data`가 바뀌면 인스턴스를 교체하지 않고 멈췄다 다시 켜는 제자리 수정을 한다. 그런데 cloud-init은 기본으로 첫 부팅에만 스크립트를 돌리니 새 스크립트가 실행되지 않는다. 바뀐 스크립트로 새 서버를 받고 싶다면 `user_data_replace_on_change = true`를 줘서 교체로 바꾼다. 단점은 실패가 Terraform에 보이지 않는다는 것이다. apply는 성공했는데 서버 안에서 스크립트가 죽었을 수 있다. `/var/log/cloud-init-output.log`를 보거나 헬스 체크로 확인한다.
+
+이미지 굽기(Packer 같은 도구로 AMI를 미리 만들기)는 패키지 설치와 설정을 이미지 안에 넣어 두고, Terraform은 그 이미지 ID만 바꾼다. 부팅이 빠르고 서버마다 상태가 똑같다. 불변 인프라의 기본 방식이다([IaC 기본 개념](/posts/iac-basics)). 이미지 ID가 바뀌면 인스턴스가 교체되니 `create_before_destroy`나 오토스케일링 그룹의 인스턴스 교체(instance refresh)와 짝을 이룬다.
+
+설정 관리 도구(Ansible 같은 것)는 서버를 교체하지 않고 안을 계속 맞춰야 할 때 쓴다. Terraform은 서버를 만들고 인벤토리를 출력으로 넘기고, 설정은 Ansible이 맡는다([Ansible로 네트워크 자동화](/posts/ansible-network-automation)). 둘을 한 파이프라인에 순서대로 둔다.
+
+그래도 `local-exec`가 맞는 자리가 있다. 프로바이더가 아직 지원하지 않는 API를 한 번 부르거나, 만든 클러스터의 kubeconfig를 받아 오는 일처럼 "Terraform을 돌리는 기계에서 한 번" 해야 하는 일이다. 이때는 리소스에 직접 붙이지 말고 `terraform_data`에 붙여 언제 다시 돌지를 `triggers_replace`로 분명히 적는다.
+
+```hcl
+resource "terraform_data" "kubeconfig" {
+  # 클러스터 엔드포인트가 바뀔 때만 다시 받는다
+  triggers_replace = [aws_eks_cluster.main.endpoint]
+
+  provisioner "local-exec" {
+    command = "aws eks update-kubeconfig --name ${aws_eks_cluster.main.name}"
+  }
+}
+```
+
+## 현장에서 plan이 이상할 때 보는 순서
+
+plan이 예상과 다를 때는 대개 이 순서로 원인이 잡힌다.
+
+1. 맨 아래 숫자에서 destroy를 본다. 0이 아니면 `forces replacement`가 붙은 줄을 찾는다. 그 속성이 연쇄의 시작이다. 바꿀 필요가 없는 값이면(설명, 이름) 태그로 옮기는 식으로 바꾸지 않는 길을 찾는다.
+2. 교체라면 기호를 본다. 운영 트래픽을 받는 리소스가 `-/+`면 그동안 비는 시간이 생긴다. `create_before_destroy`를 걸 때는 이름이 겹치지 않는지 함께 본다.
+3. 바뀐 게 없는데 `known after apply`가 잔뜩이면 `will be read during apply`가 붙은 data source를 찾는다. 대개 data source나 모듈에 걸린 `depends_on`이 원인이다.
+4. 콘솔에서 바꾼 게 아닌데 매번 같은 차이가 나오면 프로바이더가 값을 정규화하는 경우(JSON 정책의 키 순서, 대소문자)거나 다른 시스템이 그 값을 바꾸는 경우다. 앞은 `jsonencode`로 맞추고, 뒤는 `ignore_changes`를 검토한다.
+5. `Error: Cycle`이 나오면 에러에 찍힌 노드 목록을 따라 서로 참조하는 두 리소스를 찾는다. 인라인 블록을 별도 리소스로 빼는 것이 흔한 해법이다.
+6. API 한도 에러가 쌓이면 `-parallelism`을 낮춘다. 그래도 느리면 state를 쪼갤 때다([state 리팩터링](/posts/terraform-state-refactoring-import)).
+
+## 순서는 참조가, 안전은 lifecycle이
+
+Terraform은 참조로 그래프를 그리고, 그래프가 허락하는 만큼 동시에 만든다. `depends_on`은 참조로 드러나지 않는 의존에만 쓰고, 남용하면 plan이 흐려지고 느려진다. 교체는 프로바이더가 정하고, 순서와 안전장치는 `lifecycle`로 내가 정한다. provisioner는 Terraform이 추적하지 못하는 일이니 `user_data`, 이미지, 설정 관리 도구로 먼저 풀고, 남는 한 번짜리 작업만 `terraform_data`에 맡긴다.
+
+## 면접에서 나올 만한 질문
+
+### Terraform은 리소스를 만드는 순서를 어떻게 정하나요?
+
+코드 안의 참조로 정한다. 어떤 리소스가 다른 리소스의 속성을 쓰면 그 사이에 간선이 생기고, 이 간선들로 방향 있는 비순환 그래프를 만든다. 기다릴 것이 없는 노드부터 동시에 처리하고, 지울 때는 그래프를 거꾸로 돈다. `terraform graph`로 그래프를 볼 수 있다.
+
+### depends_on은 언제 쓰고, 남용하면 무엇이 문제인가요?
+
+참조로 드러나지 않는 의존이 있을 때만 쓴다. 인스턴스가 부팅 중 쓰는 IAM 정책처럼 코드상 연결은 없지만 먼저 있어야 하는 경우다. 남용하면 data source가 plan 때 읽히지 못하고 apply 때로 미뤄져, 그 값을 쓰는 리소스가 전부 `known after apply`로 표시된다. 모듈에 걸면 모듈 안 data source 전체로 번진다. 불필요한 간선은 병렬로 만들 수 있는 리소스도 줄 세운다.
+
+### plan에서 -/+와 +/-는 무엇이 다르고, 교체는 누가 결정하나요?
+
+`-/+`는 지우고 나서 만들고, `+/-`는 만들고 나서 지운다. 교체 여부는 프로바이더 스키마가 정한다. 바뀐 속성이 제자리에서 고칠 수 없다고 표시되어 있으면 plan에 `# forces replacement`가 붙는다. 순서는 기본이 `-/+`이고 `create_before_destroy`로 뒤집는다.
+
+### create_before_destroy를 걸었는데도 문제가 생기는 경우는요?
+
+이름처럼 고유해야 하는 값이 헌 객체와 새 객체에서 같으면 새 것을 만드는 단계에서 충돌하거나, 헌 것을 지울 때 새 것까지 지워질 수 있다. 실습에서 같은 경로의 파일을 교체했더니 헌 객체를 지우는 단계가 새 파일을 지워 버렸다. `name_prefix`나 버전이 들어간 이름과 함께 써야 한다. 또 이 설정은 의존받는 쪽으로만 번지고, 나를 참조하는 리소스는 기본 순서로 교체되니 그쪽 순서도 따로 확인한다.
+
+### prevent_destroy가 있으면 운영 DB가 지워질 일은 없나요?
+
+아니다. 설정이 리소스 블록 안에 있어서 블록을 통째로 지우면 설정도 사라지고, plan은 에러 없이 삭제를 계획한다. 클라우드 쪽 삭제 보호, plan JSON을 검사하는 정책, 코드에서 뺄 때는 `removed` 블록을 함께 써야 한다.
+
+### ignore_changes와 replace_triggered_by는 각각 언제 쓰나요?
+
+`ignore_changes`는 다른 시스템이 바꾸는 것이 정상인 속성을 plan에서 보지 않을 때 쓴다. 오토스케일러가 바꾸는 용량, 배포 파이프라인이 바꾸는 태스크 정의가 예다. `replace_triggered_by`는 내 속성은 그대로여도 다른 리소스가 바뀌면 나를 교체하고 싶을 때 쓴다. 시작 템플릿이 바뀌면 인스턴스를 교체하는 식이다. 변수 변화로 교체하려면 `terraform_data`를 거친다.
+
+### provisioner를 최후 수단이라고 하는 이유와 대안은요?
+
+Terraform이 명령의 결과를 추적하지 못해 drift를 잡을 수 없고, plan으로 성공 여부를 알 수 없으며, `remote-exec`는 실행 기계에서 서버로 SSH가 열려 있어야 한다. 생성 시점에 실패하면 리소스가 tainted로 남아 다음 apply에서 교체된다. 대안은 첫 부팅에 서버가 스스로 설정하는 `user_data`·cloud-init, 미리 구운 이미지, 서버를 계속 맞추는 Ansible 같은 설정 관리 도구다.
+
+### 삭제 시점 provisioner가 실행되지 않는 경우는요?
+
+리소스 블록을 코드에서 지웠을 때와 리소스가 tainted 상태일 때다. 블록이 사라지면 실행할 명령 자체가 사라지고, tainted 객체의 삭제 시점 provisioner는 건너뛴다. 그래서 정리 작업이 꼭 필요하면 먼저 `count = 0`으로 인스턴스만 지워 provisioner를 돌린 뒤 다음 변경에서 블록을 지운다.

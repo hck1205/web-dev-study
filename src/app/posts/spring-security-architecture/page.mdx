@@ -1,0 +1,426 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("spring-security-architecture");
+
+<EasyIntro>
+  보안 기능을 쓰려고 라이브러리 하나를 추가했을 뿐인데, 잘 되던 API가 전부 "누구세요?"라는 에러를 내기 시작했다. 코드는 한 줄도 바꾸지 않았다.
+
+  Spring Security는 건물 입구에 보안 검색대를 여러 개 줄 세워 두는 장치다. 첫 검색대는 출입증을 확인하고, 다음 검색대는 위조 서류를 거르고, 마지막 검색대는 이 사람이 들어가려는 층에 들어갈 자격이 있는지 본다. 라이브러리를 넣는 순간 이 줄이 생기고, 기본 규칙은 "확인되지 않은 사람은 아무도 못 들어간다"다.
+
+  이 글은 검색대가 어떤 순서로 서 있는지, 출입증을 누가 어떻게 확인하는지, 확인된 사람의 정보를 어디에 적어 두는지 따라간다. 들어올 수 없는 사람과 자격이 모자란 사람에게 서로 다른 에러를 주는 곳, 그리고 검색대의 기록을 켜서 어디서 막혔는지 보는 법도 실제로 돌려 본다.
+</EasyIntro>
+
+## 의존성 하나 넣었더니 모든 API가 401이다
+
+멀쩡하던 `/hello` API에 `spring-boot-starter-security` 의존성만 추가하고 다시 띄웠다. 코드는 그대로다.
+
+```bash
+curl -s -i http://localhost:8080/hello
+```
+
+```text
+HTTP/1.1 401
+Set-Cookie: JSESSIONID=58E7FAF79EA242B5762865AEA77B1188; Path=/; HttpOnly
+WWW-Authenticate: Basic realm="Realm", charset="UTF-8"
+X-Content-Type-Options: nosniff
+X-XSS-Protection: 0
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Frame-Options: DENY
+Content-Length: 0
+```
+
+같은 주소를 브라우저처럼 `Accept: text/html`로 부르면 401 대신 302로 `/login`에 보낸다. 시작 로그에는 이런 줄이 있다.
+
+```text
+Using generated security password: d8c3b67c-6348-4b31-9853-6a4c6ab2143c
+
+This generated password is for development use only. Your security configuration must be updated before running your application in production.
+```
+
+Spring Boot가 보안 설정이 없는 앱에 기본 설정을 깔았다. 모든 요청은 로그인해야 하고, 사용자는 `user` 하나, 비밀번호는 시작할 때마다 새로 만든다. 폼 로그인과 HTTP Basic이 켜지고, 응답에 보안 헤더가 붙는다. 컨트롤러에는 아무것도 붙이지 않았는데 이 모든 일이 컨트롤러에 닿기 전에 일어났다.
+
+이 글은 그 "닿기 전"을 연다. 서블릿 필터 체인에 보안 필터가 어떻게 끼어드는지, 인증이 어떤 객체들을 거쳐 성공하는지, 성공한 결과가 어디에 저장되는지, 401과 403이 어디서 만들어지는지를 실제 로그로 따라간다. 요청이 필터와 `DispatcherServlet`을 지나는 기본 흐름은 [Spring MVC 요청 처리](/posts/spring-mvc-request-lifecycle)에서 봤다. 인증과 인가가 무엇이 다른지는 [인증과 인가](/posts/authn-vs-authz), 세션 로그인의 원리는 [쿠키와 세션](/posts/cookie-session-login), 토큰 방식은 [토큰으로 로그인하기](/posts/token-login)에 있다.
+
+예제는 JDK 21, Spring Boot 4.1.1(Spring Security 7.1.1, Tomcat 11.0.24)로 돌렸다. Boot 3.x(Security 6.x)와 구조는 같고, 다른 곳은 따로 적었다.
+
+## 서블릿 필터 하나가 보안 필터 열여섯 개를 품는다
+
+톰캣이 아는 건 서블릿 필터뿐이다. 톰캣은 스프링 빈을 모르고, 스프링 보안 필터들은 스프링 빈이다. 그래서 둘 사이에 다리가 하나 놓인다.
+
+- `DelegatingFilterProxy`: 톰캣에 등록되는 평범한 서블릿 필터다. 자기는 아무 일도 하지 않고, 요청이 오면 스프링 컨테이너에서 `springSecurityFilterChain`이라는 이름의 빈을 찾아 넘긴다. Boot에서는 순서 값 -100으로 등록되어 Boot 기본 필터(인코딩, 폼, 요청 컨텍스트) 뒤, 순서를 따로 주지 않은 내 필터보다는 앞에 선다.
+- `FilterChainProxy`: 그 빈의 정체다. 안에 `SecurityFilterChain`을 여러 개 들고 있다가, 요청 주소에 맞는 체인 하나를 골라 그 체인의 필터들을 차례로 돌린다.
+- `SecurityFilterChain`: 보안 필터 목록과 "이 체인이 맡는 요청"을 묶은 것이다. 내가 설정 코드로 만드는 게 이것이다.
+
+체인 안에 무엇이 있는지는 DEBUG 로그로 볼 수 있다.
+
+```properties
+logging.level.org.springframework.security=DEBUG
+```
+
+```text
+DEBUG ... o.s.s.web.DefaultSecurityFilterChain : Will secure any request with filters: DisableEncodeUrlFilter, WebAsyncManagerIntegrationFilter, SecurityContextHolderFilter, HeaderWriterFilter, CsrfFilter, LogoutFilter, UsernamePasswordAuthenticationFilter, DefaultResourcesFilter, DefaultLoginPageGeneratingFilter, DefaultLogoutPageGeneratingFilter, BasicAuthenticationFilter, RequestCacheAwareFilter, SecurityContextHolderAwareRequestFilter, AnonymousAuthenticationFilter, ExceptionTranslationFilter, AuthorizationFilter
+```
+
+열여섯 개다. 다 외울 필요는 없고, 순서가 왜 이런지가 중요하다. 이 순서에는 이유가 있다.
+
+1. `SecurityContextHolderFilter`가 앞쪽에서 세션 같은 저장소에서 이전 로그인 정보를 꺼내 올 준비를 한다.
+2. `HeaderWriterFilter`가 응답에 보안 헤더를 붙인다. 앞의 401 응답에 붙어 있던 `X-Frame-Options: DENY` 같은 것들이다. 각 헤더의 뜻은 [웹 보안 헤더](/posts/web-security-headers)에 있다.
+3. `CsrfFilter`가 상태를 바꾸는 요청(POST, PUT, DELETE 등)의 CSRF 토큰을 검사한다. 인증보다 앞이다.
+4. `UsernamePasswordAuthenticationFilter`(폼 로그인), `BasicAuthenticationFilter`(Basic 헤더) 같은 인증 필터가 요청에서 자격 증명을 꺼내 로그인을 시도한다.
+5. `AnonymousAuthenticationFilter`가 여기까지 아무도 인증하지 못했으면 "익명 사용자"를 채운다. 뒤의 필터가 `null`을 다루지 않아도 되게 하려는 것이다.
+6. `ExceptionTranslationFilter`가 뒤에서 난 보안 예외를 401이나 403 응답으로 바꾼다.
+7. `AuthorizationFilter`가 마지막에서 "이 사용자가 이 요청을 해도 되나"를 판단한다.
+
+TRACE로 올리면 요청 하나가 이 필터를 하나씩 지나는 모습이 찍힌다. 로그인하지 않고 `/hello`를 부른 요청이다(줄였다).
+
+```text
+DEBUG o.s.security.web.FilterChainProxy: Securing GET /hello
+TRACE o.s.security.web.FilterChainProxy: Invoking SecurityContextHolderFilter (3/16)
+TRACE o.s.security.web.FilterChainProxy: Invoking CsrfFilter (5/16)
+TRACE o.s.security.web.csrf.CsrfFilter: Did not protect against CSRF since request did not match IsNotHttpMethod [TRACE, HEAD, GET, OPTIONS]
+TRACE o.s.security.web.FilterChainProxy: Invoking BasicAuthenticationFilter (11/16)
+TRACE o.s.s.w.a.www.BasicAuthenticationFilter: Did not process authentication request since failed to find username and password in Basic Authorization header
+TRACE o.s.security.web.FilterChainProxy: Invoking AnonymousAuthenticationFilter (14/16)
+TRACE o.s.security.web.FilterChainProxy: Invoking ExceptionTranslationFilter (15/16)
+TRACE o.s.security.web.FilterChainProxy: Invoking AuthorizationFilter (16/16)
+TRACE estMatcherDelegatingAuthorizationManager: Checking authorization on GET /hello using org.springframework.security.authorization.AuthenticatedAuthorizationManager@3904769d
+TRACE o.s.s.w.a.AnonymousAuthenticationFilter: Set SecurityContextHolder to AnonymousAuthenticationToken [Principal=anonymousUser, ...]
+TRACE o.s.s.w.a.ExceptionTranslationFilter: Sending AnonymousAuthenticationToken [Principal=anonymousUser, ...]
+DEBUG s.w.a.DelegatingAuthenticationEntryPoint: No match found. Using default entry point org.springframework.security.web.authentication.www.BasicAuthenticationEntryPoint@2b39430e
+```
+
+GET이라 CSRF 검사는 건너뛰었고, Basic 헤더가 없어 인증 필터는 아무것도 하지 않았다. 익명 사용자로 채워진 채 `AuthorizationFilter`에 닿았고, "인증된 사용자만" 규칙에 걸렸다. 그 예외를 `ExceptionTranslationFilter`가 받아 Basic 진입점으로 보냈고, 그게 `WWW-Authenticate: Basic` 헤더를 단 401이다. 브라우저 요청이면 같은 자리에서 폼 로그인 진입점이 골라져 `/login`으로 보낸다. 아래 그림에서 다음을 누르며 이 순서를 따라가 보자.
+
+<AlgoTrace
+  caption="익명 요청은 필터를 다 지난 뒤 마지막에서 막힌다"
+  memoryLabel="SecurityContext"
+  cells={["Context", "Csrf", "Basic", "Anonymous", "ExTrans", "Authz"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "SecurityContextHolderFilter가 저장된 로그인 정보를 찾을 준비를 한다. 세션이 없다." },
+    { pointer: 1, memory: [], caption: "GET 요청이라 CsrfFilter는 검사하지 않고 넘긴다." },
+    { pointer: 2, memory: [], caption: "Authorization 헤더가 없어 BasicAuthenticationFilter도 넘긴다." },
+    { pointer: 3, memory: ["anonymousUser"], caption: "아무도 인증하지 못했으니 익명 사용자를 채운다." },
+    { pointer: 4, memory: ["anonymousUser"], caption: "ExceptionTranslationFilter는 뒤에서 날 예외를 잡으려고 try로 감싸고 넘긴다." },
+    { pointer: 5, memory: ["anonymousUser"], caption: "AuthorizationFilter가 authenticated 규칙을 보고 거부한다. 예외가 앞으로 되돌아간다." },
+    { pointer: 4, found: [4], memory: ["anonymousUser"], caption: "익명이 거부됐으니 진입점을 부른다. 401과 WWW-Authenticate가 나간다." },
+  ]}
+/>
+
+## 체인은 내가 직접 만든다
+
+기본 설정을 끝내려면 `SecurityFilterChain` 빈을 하나 만든다. 이 빈이 있으면 Boot의 기본 체인은 물러난다. 공개 경로, 관리자 경로, 나머지를 나누고, 사용자 둘을 메모리에 뒀다.
+
+```java
+@Configuration
+class SecurityConfig {
+  @Bean
+  SecurityFilterChain apiChain(HttpSecurity http) throws Exception {
+    http
+      .authorizeHttpRequests(auth -> auth
+        .requestMatchers("/public/**").permitAll()
+        .requestMatchers("/admin/**").hasRole("ADMIN")
+        .anyRequest().authenticated())
+      .formLogin(withDefaults())
+      .httpBasic(withDefaults());
+    return http.build();
+  }
+
+  @Bean
+  PasswordEncoder passwordEncoder() { return PasswordEncoderFactories.createDelegatingPasswordEncoder(); }
+
+  @Bean
+  UserDetailsService users(PasswordEncoder enc) {
+    return new InMemoryUserDetailsManager(
+      User.withUsername("kim").password(enc.encode("pw1")).roles("USER").build(),
+      User.withUsername("admin").password(enc.encode("pw2")).roles("USER", "ADMIN").build());
+  }
+}
+```
+
+요청을 여러 개 보내 봤다.
+
+```bash
+curl -s -i http://localhost:8080/public/ping            # 로그인 없이 공개 경로
+curl -s -i http://localhost:8080/me                     # 로그인 없이 보호 경로
+curl -s -i -u kim:wrong http://localhost:8080/me        # 틀린 비밀번호
+curl -s -i -u kim:pw1 http://localhost:8080/admin/stats # USER가 관리자 경로
+curl -s -i -u admin:pw2 http://localhost:8080/admin/stats
+```
+
+```text
+/public/ping       200  pong
+/me                401  WWW-Authenticate: Basic realm="Realm", charset="UTF-8"
+/me (wrong)        401  WWW-Authenticate: Basic realm="Realm", charset="UTF-8"
+/admin/stats kim   403  {"timestamp":"...","status":403,"error":"Forbidden","path":"/admin/stats"}
+/admin/stats admin 200  stats
+```
+
+401과 403의 경계가 보인다. 401은 "누군지 모른다"다. 로그인하지 않았거나 비밀번호가 틀렸다. 403은 "누군지 알지만 안 된다"다. kim은 인증에 성공했지만 `ADMIN` 역할이 없다. 두 응답을 만드는 곳이 다르다. 인가가 거부되면 `ExceptionTranslationFilter`가 지금 사용자를 본다. 익명이면 인증 진입점(`AuthenticationEntryPoint`)을 불러 401을 내고, 인증된 사용자면 접근 거부 처리기(`AccessDeniedHandler`)를 불러 403을 낸다. API 에러 형식을 바꾸고 싶으면 이 두 객체를 바꿔 끼운다.
+
+```java
+http.exceptionHandling(e -> e
+    .authenticationEntryPoint((req, res, ex) -> res.sendError(401))   // 401 응답을 직접 쓴다
+    .accessDeniedHandler((req, res, ex) -> res.sendError(403)));     // 403 응답을 직접 쓴다
+```
+
+규칙은 위에서부터 맞춰 보고 처음 맞는 것을 쓴다. 그래서 좁은 규칙을 위에, 넓은 규칙을 아래에 둔다. `anyRequest()`를 중간에 두면 Security 6 이상은 시작할 때 오류로 막아 준다. 하지만 `requestMatchers("/**")`처럼 넓은 패턴을 위에 두는 실수는 막지 못하고, 그 아래의 관리자 규칙이 영영 쓰이지 않는다. 규칙 평가를 함수로 옮겨 보면 이 순서 문제가 분명해진다.
+
+`authorize(rules, path, user)`를 채워 보자. `rules`는 `pattern`과 `access`를 가진 배열이다. 패턴은 `/admin/**`처럼 `/**`로 끝나면 그 경로와 하위 경로 전부, 아니면 정확히 같은 경로에 맞는다. `access`는 `"permitAll"`, `"authenticated"`, `"denyAll"`, `"hasRole:ADMIN"` 중 하나다. `user`는 `null`(익명)이거나 `roles` 배열을 가진 객체다. 처음 맞는 규칙으로 200, 401, 403 중 하나를 돌려준다. 규칙은 반드시 하나는 맞는다고 가정한다.
+
+<CodePlayground
+  caption="첫 번째로 맞는 규칙이 이긴다"
+  functionName="authorize"
+  initialCode={`function authorize(rules, path, user) {
+  // rules: [{ pattern: "/admin/**", access: "hasRole:ADMIN" }, ...]
+  // user: null 또는 { name, roles: ["USER"] }
+  return 200;
+}`}
+  solution={`function authorize(rules, path, user) {
+  const matches = (pattern) =>
+    pattern.endsWith("/**")
+      ? path === pattern.slice(0, -3) || path.startsWith(pattern.slice(0, -2))
+      : path === pattern;
+  const rule = rules.find((r) => matches(r.pattern));
+  const access = rule.access;
+  if (access === "permitAll") return 200;
+  if (access === "denyAll") return user ? 403 : 401;
+  if (!user) return 401; // 누군지 모르면 401
+  if (access === "authenticated") return 200;
+  const role = access.slice("hasRole:".length);
+  return user.roles.includes(role) ? 200 : 403; // 알지만 자격이 없으면 403
+}`}
+  tests={[
+    { label: "공개 경로", args: [[{ pattern: "/public/**", access: "permitAll" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }, { pattern: "/**", access: "authenticated" }], "/public/ping", null], expected: 200 },
+    { label: "익명은 401", args: [[{ pattern: "/public/**", access: "permitAll" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }, { pattern: "/**", access: "authenticated" }], "/me", null], expected: 401 },
+    { label: "역할이 없으면 403", args: [[{ pattern: "/public/**", access: "permitAll" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }, { pattern: "/**", access: "authenticated" }], "/admin/stats", { name: "kim", roles: ["USER"] }], expected: 403 },
+    { label: "/admin 자체도 맞는다", args: [[{ pattern: "/public/**", access: "permitAll" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }, { pattern: "/**", access: "authenticated" }], "/admin", { name: "kim", roles: ["USER"] }], expected: 403 },
+    { label: "/administrator는 다른 경로", args: [[{ pattern: "/public/**", access: "permitAll" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }, { pattern: "/**", access: "authenticated" }], "/administrator", { name: "kim", roles: ["USER"] }], expected: 200 },
+    { label: "넓은 규칙이 위에 있으면", args: [[{ pattern: "/**", access: "authenticated" }, { pattern: "/admin/**", access: "hasRole:ADMIN" }], "/admin/stats", { name: "kim", roles: ["USER"] }], expected: 200 },
+    { label: "denyAll도 익명이면 401", args: [[{ pattern: "/internal/**", access: "denyAll" }, { pattern: "/**", access: "permitAll" }], "/internal/x", null], expected: 401 },
+  ]}
+/>
+
+여섯 번째 테스트가 운영에서 만나는 사고다. 일반 사용자가 관리자 API를 200으로 받는다. 경로 규칙을 바꿀 때는 "USER가 관리자 경로를 부르면 403"을 테스트로 남겨 둔다. 마지막 테스트도 눈여겨본다. 누구도 못 쓰게 막은 경로라도 익명에게는 401이 먼저 나간다. 실제 Spring Security도 같은 판단을 한다.
+
+## 인증은 매니저가 공급자에게 맡긴다
+
+`-u kim:pw1` 요청이 성공하기까지 안에서 일어난 일을 따라간다. `BasicAuthenticationFilter`는 비밀번호를 직접 검사하지 않는다. 헤더에서 이름과 비밀번호를 꺼내 "아직 인증되지 않은 토큰"(`UsernamePasswordAuthenticationToken`)을 만들고, `AuthenticationManager`에게 넘긴다.
+
+- `AuthenticationManager`: 인증의 입구 인터페이스다. 기본 구현 `ProviderManager`는 `AuthenticationProvider` 목록을 들고 이 토큰을 처리할 수 있는 공급자를 찾는다.
+- `DaoAuthenticationProvider`: 이름과 비밀번호 토큰을 처리하는 공급자다. `UserDetailsService`로 사용자를 불러오고, `PasswordEncoder`로 비밀번호를 비교한다.
+- `UserDetailsService`: 이름으로 사용자를 찾는 인터페이스다. 위 예제는 메모리 구현을 썼고, 실무에서는 DB를 읽는 구현을 만든다.
+- `PasswordEncoder`: 저장된 해시와 입력을 비교한다. `createDelegatingPasswordEncoder()`는 해시 앞에 `{bcrypt}`처럼 알고리즘 이름을 붙여 저장해서, 나중에 알고리즘을 바꿔도 예전 해시를 읽을 수 있다.
+
+성공하면 공급자는 권한까지 채운 "인증된 토큰"을 돌려주고, 필터는 그걸 `SecurityContext`에 넣는다. 실패하면 `BadCredentialsException`이 나고 인증 진입점이 401을 낸다. 틀린 비밀번호와 없는 사용자는 같은 401이다. 어느 쪽이 틀렸는지 알려 주면 사용자 이름을 하나씩 찔러 볼 수 있어서다. 아래 그림이 이 위임의 사슬이다.
+
+<SequenceDiagram
+  caption="필터는 꺼내고, 매니저는 고르고, 공급자가 확인한다"
+  actors={[
+    { id: "f", label: "Basic 필터" },
+    { id: "pm", label: "ProviderManager" },
+    { id: "dao", label: "DaoProvider" },
+    { id: "uds", label: "UserDetailsSvc" },
+    { id: "ctx", label: "SecurityContext" },
+  ]}
+  steps={[
+    { from: "f", to: "pm", label: "authenticate", title: "헤더에서 꺼내 토큰을 만든다", detail: "Authorization 헤더의 Base64를 풀어 kim과 pw1을 꺼내고, 인증 전 토큰으로 매니저에게 넘긴다.", payload: "Authorization: Basic a2ltOnB3MQ==" },
+    { from: "pm", to: "dao", label: "supports?", title: "처리할 공급자를 고른다", detail: "이름·비밀번호 토큰을 처리할 수 있는 DaoAuthenticationProvider를 찾아 맡긴다." },
+    { from: "dao", to: "uds", label: "loadUserByUsername", title: "사용자를 불러온다", detail: "kim의 저장된 비밀번호 해시와 역할을 가져온다.", payload: "{bcrypt}$2a$10$..." },
+    { from: "dao", to: "dao", label: "matches", title: "해시를 비교한다", detail: "PasswordEncoder가 입력한 pw1과 저장된 해시를 비교한다. 맞으면 권한을 채운 토큰을 만든다." },
+    { from: "f", to: "ctx", label: "setAuthentication", title: "결과를 컨텍스트에 둔다", detail: "인증된 토큰을 현재 스레드의 SecurityContext에 넣고 다음 필터로 넘긴다.", payload: "kim [ROLE_USER, ...]" },
+  ]}
+/>
+
+`hasRole("ADMIN")`과 `roles("ADMIN")`의 관계도 짚어 둔다. `roles()`는 권한 이름 앞에 `ROLE_`을 붙여 `ROLE_ADMIN`으로 저장하고, `hasRole("ADMIN")`은 `ROLE_ADMIN`이 있는지 본다. DB에서 권한을 읽어 `SimpleGrantedAuthority("ADMIN")`으로 직접 만들면 `hasRole`은 실패하고 `hasAuthority("ADMIN")`이 맞는다. 권한은 있는데 계속 403이 나면 이 접두사부터 본다.
+
+## SecurityContextHolder는 스레드에 붙는다
+
+인증 결과는 `SecurityContextHolder`에 들어간다. 컨트롤러에서는 `Authentication`을 인자로 받거나 `SecurityContextHolder.getContext().getAuthentication()`으로 꺼낸다. 이 홀더의 기본 전략은 스레드 로컬이다. 컨트롤러에서 꺼내 보고, 새 스레드를 하나 만들어 그 안에서도 꺼내 봤다.
+
+```java
+@GetMapping("/me")
+String me(Authentication a) throws Exception {
+  String here = Thread.currentThread().getName() + " -> "
+      + SecurityContextHolder.getContext().getAuthentication().getName();
+  String[] other = new String[1];
+  Thread t = new Thread(() -> other[0] = Thread.currentThread().getName() + " -> "
+      + SecurityContextHolder.getContext().getAuthentication());
+  t.start(); t.join();
+  return a.getName() + " " + a.getAuthorities() + "\n" + here + "\n" + other[0];
+}
+```
+
+```text
+kim [ROLE_USER, FactorGrantedAuthority [authority=FACTOR_PASSWORD, issuedAt=2026-10-23T13:12:34.879886567Z]]
+http-nio-8080-exec-6 -> kim
+Thread-1 -> null
+```
+
+요청 스레드에서는 kim이 보이고, 새 스레드에서는 `null`이다. `@Async` 메서드, 직접 만든 스레드 풀, `CompletableFuture.supplyAsync`에서 "현재 사용자"를 꺼내는 코드가 이유 없이 `NullPointerException`을 내는 장면이 이것이다. 트랜잭션이 스레드에 묶여서 다른 스레드로 넘어가지 않는 것과 같은 구조다([@Transactional 깊게](/posts/spring-transactional-propagation)). 다른 스레드로 넘기려면 `DelegatingSecurityContextExecutor`나 `DelegatingSecurityContextAsyncTaskExecutor`로 실행기를 감싸 컨텍스트를 복사한다. 홀더 전략을 `MODE_INHERITABLETHREADLOCAL`로 바꾸는 방법도 있지만, 스레드 풀은 스레드를 재사용하니 처음 만든 요청의 사용자가 남아 다른 요청에 섞일 수 있다.
+
+권한 목록 끝의 `FactorGrantedAuthority [authority=FACTOR_PASSWORD]`는 Security 7에서 생긴 것이다. 어떤 수단(여기서는 비밀번호)으로 인증했는지를 권한으로 함께 남겨, 다중 인증을 요구하는 규칙에 쓴다. Security 6에서는 이 항목이 없다.
+
+요청이 끝나면 `SecurityContextHolderFilter`가 홀더를 비운다. 톰캣 스레드는 재사용되니 비우지 않으면 다음 요청이 앞 사용자로 처리된다. 필터 밖에서 직접 컨텍스트를 채우는 코드(테스트, 배치)는 끝나고 `clearContext()`를 꼭 부른다.
+
+## 세션 로그인과 CSRF 기본값
+
+브라우저 폼 로그인은 Basic과 저장 방식이 다르다. 로그인에 성공하면 `SecurityContext`를 HTTP 세션에 저장하고, 다음 요청부터 `SecurityContextHolderFilter`가 세션에서 꺼내 온다. curl로 기본 로그인 페이지를 받아 CSRF 토큰을 꺼내고, 로그인한 뒤, 세션 쿠키로 다시 불렀다.
+
+```bash
+# 1) 로그인 페이지를 받는다. 세션 쿠키와 CSRF 토큰이 생긴다
+curl -s -c jar.txt -b jar.txt http://localhost:8080/login -o login.html
+grep -o 'name="_csrf"[^>]*' login.html
+# 2) 토큰과 함께 로그인한다
+curl -s -i -c jar.txt -b jar.txt -d "username=kim&password=pw1&_csrf=$TOKEN" http://localhost:8080/login
+# 3) 세션 쿠키로 상태를 바꾸는 요청을 보낸다 (CSRF 토큰 없이)
+curl -s -o /dev/null -w "%{http_code}\n" -b jar.txt -X POST http://localhost:8080/orders
+```
+
+```text
+name="_csrf" type="hidden" value="kGU_L-pJI8CghpqIadCJ0sX4Gcf5-uQ-7vMi0OgnDdrWdWIz8gcLSYl9FPiNtKvrUP294KDONP6cyYET3JIStotDO-rgTQMC" /
+before login: 9DB05C2B1872FD6A11E2E5263ADF7F62
+
+HTTP/1.1 302
+Set-Cookie: JSESSIONID=4E431BAFA1F9D0376CF596B6EE5C2B47; Path=/; HttpOnly
+Location: http://localhost:8080/
+after login: 4E431BAFA1F9D0376CF596B6EE5C2B47
+
+403
+```
+
+로그인 전후로 세션 ID가 바뀌었다. 세션 고정 공격을 막는 기본 동작이다. 공격자가 미리 심어 둔 세션 ID로 피해자가 로그인하면, 그 ID를 아는 공격자도 로그인 상태가 된다. 로그인 순간 ID를 새로 발급하면 미리 알던 ID가 쓸모없어진다.
+
+세 번째 요청은 로그인한 세션인데도 403이다. 세션 쿠키는 브라우저가 알아서 붙이니, 다른 사이트가 사용자 몰래 이 POST를 보낼 수 있다. 그래서 Spring Security는 세션 기반 앱에서 CSRF 검사를 기본으로 켜 둔다. 원리는 [CSRF](/posts/csrf) 글에서 다뤘다. 폼에는 `_csrf` 숨은 필드를, 자바스크립트 요청에는 `X-CSRF-TOKEN` 헤더를 붙인다.
+
+쿠키 없이 매 요청 `Authorization` 헤더로 토큰을 보내는 API라면 브라우저가 자격 증명을 자동으로 붙이지 않으니 CSRF가 생기지 않는다. 이때는 CSRF를 끄고 세션도 만들지 않게 한다.
+
+```java
+http
+  .csrf(csrf -> csrf.disable())                                   // 헤더 토큰만 쓰는 API에서만
+  .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+  .oauth2ResourceServer(o -> o.jwt(withDefaults()));              // Bearer JWT 검증 필터를 넣는다
+```
+
+Bearer 토큰 검증 필터가 체인의 어디에 서고 클레임이 어떻게 권한이 되는지는 [Spring Security로 JWT와 OAuth2](/posts/spring-security-jwt-oauth2)에서 이어 간다.
+
+"CSRF 때문에 403이 나서 껐다"는 결정은 쿠키 인증을 쓰는 한 위험하다. 토큰을 쿠키에 담아 보내는 SPA도 쿠키 인증이다. 끄기 전에 인증 수단이 쿠키인지 헤더인지부터 확인한다.
+
+### CSRF로 막혔는데 401이 나오는 이유
+
+같은 POST를 Basic 인증으로 보냈더니 403이 아니라 401이 돌아왔다. 로그를 보면 순서가 이렇다.
+
+```text
+DEBUG o.s.security.web.FilterChainProxy: Securing POST /orders
+DEBUG o.s.security.web.csrf.CsrfFilter: Invalid CSRF token found for http://localhost:8080/orders
+DEBUG o.s.s.w.access.AccessDeniedHandlerImpl: Responding with 403 status code
+DEBUG o.s.security.web.FilterChainProxy: Securing GET /error
+DEBUG o.s.s.w.a.AnonymousAuthenticationFilter: Set SecurityContextHolder to anonymous SecurityContext
+DEBUG s.w.a.DelegatingAuthenticationEntryPoint: No match found. Using default entry point org.springframework.security.web.authentication.www.BasicAuthenticationEntryPoint@6d173716
+```
+
+`CsrfFilter`가 403을 정하고 톰캣이 에러 본문을 만들려고 `/error`로 다시 보냈다. 그런데 이 에러 요청도 보안 체인을 지난다. CSRF 필터는 인증 필터보다 앞에 있어서 원래 요청은 아직 인증되지 않았고, `/error`는 "인증된 사용자만" 규칙에 걸려 401로 덮였다. `/error`를 공개로 풀자 원래 의도대로 나왔다.
+
+```java
+.requestMatchers("/public/**", "/error").permitAll()
+```
+
+```text
+HTTP/1.1 403
+Content-Type: application/json
+
+{"timestamp":"2026-10-23T13:13:38.132Z","status":403,"error":"Forbidden","path":"/orders"}
+```
+
+처음 장면의 401 응답 본문이 비어 있던 것도 같은 이유다. 에러 페이지를 공개하지 않으면 보안 실패의 원래 코드와 본문이 가려지고, 디버깅할 때 엉뚱한 방향으로 간다.
+
+## 메서드 수준 인가: @PreAuthorize
+
+경로 규칙은 URL만 본다. "자기 보고서만 볼 수 있다"처럼 인자에 따라 갈리는 규칙은 메서드에 둔다. `@EnableMethodSecurity`를 켜고 서비스 메서드에 조건을 붙였다.
+
+```java
+@SpringBootApplication
+@EnableMethodSecurity
+public class SecApp { ... }
+
+@Service
+class ReportService {
+  @PreAuthorize("hasRole('ADMIN') or #owner == authentication.name")
+  public String report(String owner) { return "report of " + owner; }
+}
+```
+
+```text
+kim   /reports/kim  200  report of kim
+kim   /reports/lee  403  {"timestamp":"...","status":403,"error":"Forbidden","path":"/reports/lee"}
+admin /reports/lee  200  report of lee
+```
+
+`@PreAuthorize`도 `@Transactional`처럼 프록시가 메서드 호출을 가로채 동작한다. 같은 클래스 안에서 `this`로 부르면 검사가 건너뛰어진다([IoC 컨테이너와 DI](/posts/spring-ioc-di)). 그리고 이 검사는 `DispatcherServlet` 안쪽, 서비스 호출에서 일어난다. 거부되면 `AuthorizationDeniedException`이 컨트롤러 밖으로 나가 필터 체인의 `ExceptionTranslationFilter`까지 올라가서 403이 된다.
+
+여기에 흔한 함정이 있다. 모든 예외를 잡는 `@ExceptionHandler(Exception.class)` 어드바이스를 두면, 인가 예외가 필터까지 올라가기 전에 어드바이스가 먼저 잡는다. 그런 어드바이스를 켜고 같은 요청을 보냈다.
+
+```text
+kim /reports/lee   500  error: AuthorizationDeniedException
+kim /admin/stats   403
+```
+
+경로 규칙(`/admin/stats`)은 필터에서 판단하니 그대로 403이고, 메서드 규칙만 500으로 바뀌었다. 전체 처리기를 두려면 `AccessDeniedException`과 `AuthenticationException`은 다시 던지거나 따로 403, 401로 처리한다. 에러 처리기가 어떤 순서로 예외를 고르는지는 [Spring MVC 요청 처리](/posts/spring-mvc-request-lifecycle)의 예외 절에 있다.
+
+## 내 필터를 넣을 때
+
+API 키나 직접 만든 토큰을 검사하는 필터를 체인에 넣을 때는 위치를 정해 준다.
+
+```java
+http.addFilterBefore(new ApiKeyFilter(), UsernamePasswordAuthenticationFilter.class);
+```
+
+여기서 두 가지를 조심한다. 하나는 이 필터를 `@Component`로 빈 등록까지 하는 것이다. Boot는 서블릿 `Filter` 타입 빈을 톰캣에도 자동으로 등록하니, 같은 필터가 서블릿 체인에서 한 번, 보안 체인에서 한 번, 두 번 돈다. 빈으로 둬야 한다면 `FilterRegistrationBean`으로 톰캣 등록을 꺼 둔다. 다른 하나는 필터 안에서 예외를 던지는 것이다. 필터 예외는 `@ControllerAdvice`에 닿지 않는다. 인증 실패는 `AuthenticationEntryPoint`로 응답을 쓰거나, 컨텍스트를 비운 채 다음 필터로 넘겨 인가 단계에서 401이 나게 한다.
+
+## 401과 403을 보면 어디부터 보나
+
+1. `logging.level.org.springframework.security=DEBUG`를 켜고 `Securing GET /...` 줄부터 읽는다. 어느 체인이 골라졌는지, 어떤 필터가 무엇을 거절했는지가 찍힌다.
+2. `Invalid CSRF token found`가 있으면 CSRF다. 응답이 401이어도 그렇다. `/error`가 공개인지도 본다.
+3. 401이면 자격 증명이 요청에 실려 왔는지(헤더, 세션 쿠키), `BadCredentialsException`이 났는지 본다.
+4. 403이면 사용자가 가진 권한 목록을 찍어 `ROLE_` 접두사와 `hasRole`·`hasAuthority`가 맞는지 본다.
+5. 메서드 규칙이 500으로 나오면 전체 예외 처리기가 인가 예외를 삼키고 있는 것이다.
+6. 다른 스레드에서 사용자가 `null`이면 `SecurityContextHolder`가 스레드 로컬이라는 걸 떠올린다.
+
+## 필터 줄을 머리에 그려 두면
+
+Spring Security는 서블릿 필터 하나(`DelegatingFilterProxy`)를 통해 보안 필터 묶음을 요청 앞에 세운다. 인증 필터는 자격 증명을 꺼내 매니저와 공급자에게 확인을 맡기고, 결과를 스레드에 붙은 `SecurityContext`에 둔다. 마지막의 인가 필터가 규칙을 보고 거부하면, 앞의 예외 변환 필터가 사용자가 익명인지에 따라 401이나 403을 만든다. 의존성 하나로 모든 API가 401이 된 처음 장면은 이 줄의 기본값이 "모두 인증 필요"라서 생긴 일이었다. 어디서 막혔는지는 이 줄의 로그를 켜면 보인다.
+
+## 면접에서 나올 만한 질문
+
+### Spring Security의 전체 구조를 설명해 주세요.
+
+톰캣에는 `DelegatingFilterProxy`라는 서블릿 필터 하나가 등록되고, 이것이 스프링 빈인 `FilterChainProxy`에 요청을 넘긴다. `FilterChainProxy`는 요청에 맞는 `SecurityFilterChain`을 골라 CSRF, 인증, 예외 변환, 인가 필터를 차례로 돌린다. 인증 필터는 `AuthenticationManager`에 확인을 맡기고, 결과를 `SecurityContextHolder`에 둔다. 마지막 `AuthorizationFilter`가 접근 규칙을 판단한다.
+
+### 인증은 내부에서 어떻게 처리되나요?
+
+인증 필터가 요청에서 자격 증명을 꺼내 인증 전 토큰을 만들고 `AuthenticationManager`에 넘긴다. 기본 구현 `ProviderManager`가 그 토큰을 처리할 `AuthenticationProvider`를 고르고, 이름·비밀번호라면 `DaoAuthenticationProvider`가 `UserDetailsService`로 사용자를 불러와 `PasswordEncoder`로 비교한다. 성공하면 권한을 채운 토큰이 `SecurityContext`에 저장된다. 실패하면 `BadCredentialsException`이 나고, 없는 사용자와 틀린 비밀번호를 구분하지 않는다.
+
+### 401과 403은 각각 어디서 만들어지나요?
+
+인가가 거부되면 `ExceptionTranslationFilter`가 현재 사용자를 본다. 익명이면 `AuthenticationEntryPoint`를 불러 401(또는 로그인 페이지로 리다이렉트)을, 인증된 사용자면 `AccessDeniedHandler`를 불러 403을 낸다. `CsrfFilter`는 토큰이 틀리면 접근 거부 처리기를 직접 불러 403을 낸다. API 에러 형식을 바꾸려면 이 두 객체를 바꿔 끼운다.
+
+### SecurityContextHolder는 어떻게 동작하고 어떤 함정이 있나요?
+
+기본 전략이 스레드 로컬이라 요청 스레드에서만 현재 사용자가 보인다. `@Async`나 직접 만든 스레드 풀에서는 `null`이 나오므로, `DelegatingSecurityContextExecutor` 같은 래퍼로 컨텍스트를 복사해 넘긴다. 상속 스레드 로컬 전략은 스레드를 재사용하는 풀에서 다른 사용자가 섞일 수 있다. 요청이 끝나면 필터가 컨텍스트를 비우고, 필터 밖에서 직접 채운 코드는 직접 비워야 한다.
+
+### CSRF는 왜 기본으로 켜져 있고 언제 꺼도 되나요?
+
+세션 쿠키는 브라우저가 자동으로 붙여서 다른 사이트가 사용자 몰래 상태 변경 요청을 보낼 수 있기 때문이다. 그래서 POST, PUT, DELETE 같은 요청에 토큰을 요구한다. 인증 수단이 쿠키가 아니라 매 요청의 `Authorization` 헤더뿐인 API라면 CSRF가 생기지 않으니 끄고 세션도 STATELESS로 둔다. 토큰을 쿠키에 담는 구성이라면 쿠키 인증이므로 켜 둬야 한다.
+
+### 필터의 URL 규칙과 @PreAuthorize는 언제 각각 쓰나요?
+
+URL 규칙은 필터에서 경로와 HTTP 메서드만 보고 넓게 막을 때 쓴다. "자기 자원만"처럼 메서드 인자나 반환값에 따라 갈리는 규칙은 `@PreAuthorize`로 서비스 메서드에 둔다. `@PreAuthorize`는 프록시로 동작하니 자기 호출에서는 건너뛰고, 거부 예외가 `@ControllerAdvice`의 전체 예외 처리기에 먹히면 403 대신 500이 된다.
+
+### CSRF로 막혔는데 401이 나오는 이유는 무엇인가요?
+
+`CsrfFilter`가 403을 정하면 톰캣이 에러 본문을 만들려고 `/error`로 다시 보내는데, 이 요청도 보안 체인을 지난다. CSRF 필터는 인증 필터보다 앞이라 아직 인증 전이었고, `/error`가 보호 경로면 익명 요청으로 보고 401로 덮는다. `/error`를 `permitAll`로 열면 원래 403과 본문이 나온다.
+
+### 로그인할 때 세션 ID가 바뀌는 이유는 무엇인가요?
+
+세션 고정 공격을 막기 위해서다. 공격자가 미리 알아 둔 세션 ID를 피해자에게 심고 피해자가 그 ID로 로그인하면, 공격자도 같은 ID로 로그인 상태를 얻는다. Spring Security는 인증 성공 순간 새 세션 ID를 발급해서 미리 알던 ID를 쓸모없게 만든다.

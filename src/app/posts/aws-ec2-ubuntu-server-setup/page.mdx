@@ -365,6 +365,62 @@ sudo ufw --dry-run limit 22/tcp | grep -E "^-A ufw-user-input"
 ufw의 기본 인바운드 정책은 거부다. SSH 허용 규칙 없이 `sudo ufw enable`을 치면 지금 세션은 conntrack 덕분에 잠시 살아 있어도 새 접속이 모두 막힌다. 순서는 `sudo ufw allow OpenSSH` → `sudo ufw allow 'Nginx Full'` → `sudo ufw enable` → 다른 터미널에서 새로 접속해 확인이다. 막혔다면 Session Manager나 EC2 직렬 콘솔로 들어가 `sudo ufw disable`로 되돌린다. 둘 다 미리 쓸 수 있게 해 두지 않았다면, 볼륨을 떼어 다른 인스턴스에서 `/etc/ufw/ufw.conf`의 `ENABLED=yes`를 고쳐야 한다.
 </Callout>
 
+## 쓰지 않는 것은 끄고, 점검은 도구에 맡긴다
+
+지금까지가 들어오는 길을 좁히는 일이었다면, 하드닝은 공격 표면 자체를 줄이는 일이다. 가장 먼저 안 쓰는 서비스와 포트를 끈다. 듣고 있는 포트를 보고, 그걸 띄우는 서비스가 정말 필요한지 따진다.
+
+```bash
+# 어떤 프로세스가 어느 포트를 듣는지
+sudo ss -tlnp
+# 부팅 때 자동으로 뜨는 유닛 목록
+systemctl list-unit-files --state=enabled
+```
+
+기본 Ubuntu 서버 이미지는 듣는 포트가 sshd 정도로 적다. 그런데 패키지를 깔다 보면 테스트용 DB, 샘플 웹 서버 같은 게 `0.0.0.0`에 붙어 자기도 모르게 열려 있곤 한다. 꼭 필요한 것만 외부에 두고, 로컬에서만 쓰는 건 `127.0.0.1`에 묶는다. 안 쓰는 서비스는 `sudo systemctl disable --now <유닛>`으로 끈다. sshd 강화(루트 로그인 금지, 비밀번호 로그인 끄기, `AllowUsers`)는 [SSH 실전](/posts/ssh-in-practice)의 `sshd_config` 부분을 그대로 따른다.
+
+커널 쪽은 `sysctl`로 네트워크 공격을 막는 기본값을 둔다. 파일로 저장해 재부팅에도 남긴다.
+
+```bash
+# /etc/sysctl.d/90-hardening.conf
+sudo tee /etc/sysctl.d/90-hardening.conf >/dev/null <<'EOF'
+net.ipv4.tcp_syncookies = 1          # SYN 플러드 때 큐가 넘쳐도 연결을 받는다
+net.ipv4.conf.all.rp_filter = 1      # 들어온 인터페이스로 되돌아갈 수 없는 위조 출발지 패킷 버림
+net.ipv4.conf.all.accept_redirects = 0   # ICMP 리다이렉트로 경로를 바꾸지 못하게
+net.ipv4.conf.all.log_martians = 1   # 말이 안 되는 출발지 패킷을 로그로 남김
+kernel.randomize_va_space = 2        # ASLR 최대 (대개 이미 2)
+EOF
+sudo sysctl --system   # 지금 적용
+```
+
+`sysctl -n kernel.randomize_va_space`로 적용 전후를 확인한다. 이 값들은 공격을 완전히 막기보다 흔한 수법의 비용을 올린다.
+
+누가 언제 무엇을 바꿨는지 남기려면 `auditd`를 깐다(`sudo apt install auditd`). `/etc/passwd`, sudoers, 로그인 기록이 바뀌면 규칙으로 잡아 두고 `ausearch`·`aureport`로 본다. 침해를 당한 뒤 "언제부터, 무엇이"를 재구성할 수 있는 거의 유일한 기록이다.
+
+항목이 워낙 많아서(CIS Ubuntu Benchmark는 수백 개다) 사람이 다 보긴 어렵다. 자동 점검 도구에 한 번 훑게 한다. lynis가 많이 쓰인다.
+
+```bash
+sudo apt install -y lynis
+sudo lynis audit system
+```
+
+```text
+  Warnings (2):
+  ----------------------------
+  ! Found one or more vulnerable packages. [PKGS-7392]
+  ! klogd is not running, which could lead to missing kernel messages [LOGG-2138]
+
+  Suggestions (50):
+  ----------------------------
+  * Install fail2ban to automatically ban hosts that commit multiple
+    authentication errors. [DEB-0880]
+  ...
+
+  Hardening index : 57 [###########         ]
+  Tests performed : 264
+```
+
+하드닝 지수와 함께 고칠 것을 번호로 짚어 준다. 위 출력은 거의 손대지 않은 머신이라 57점이고, 제안을 하나씩 따라가면 오른다. 다만 제안을 다 적용하라는 뜻은 아니다. fail2ban처럼 서버 역할에 맞는 것만 골라 적용하고, 그 선택을 적어 둔다. 그리고 이 점검도 한 번으로 끝내지 말고, 앞에서 만든 AMI나 Ansible에 넣어 두 번째 서버부터는 같은 상태로 뜨게 한다.
+
 ## 앱은 systemd 서비스로 띄운다
 
 `nohup java -jar app.jar &`로 띄운 앱은 죽어도 다시 뜨지 않고, 재부팅하면 사라진다. 유닛 파일 한 장으로 바꾼다. 유닛 파일의 각 항목과 `enable`, `daemon-reload`, 재시작 한도는 [systemd와 systemctl](/posts/linux-systemd-systemctl)에서 자세히 다뤘다. 여기서는 EC2 첫날에 쓰는 모양만 둔다.

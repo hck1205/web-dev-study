@@ -1,0 +1,517 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-min-cost-to-connect-all-points");
+
+<EasyIntro>
+  넓은 들판에 집이 여러 채 흩어져 있고, 모든 집에 전깃줄을 이어야 한다. 줄은 가로세로 길을 따라서만 깔 수 있어서 두 집 사이 줄 길이는 가로 거리와 세로 거리를 더한 값이다. 모든 집이 어떻게든 이어지기만 하면 되니 줄은 집 수보다 하나 적게만 있으면 충분하다. 줄을 가장 적게 쓰려면 이미 줄이 닿은 집들에서 아직 안 닿은 집 가운데 가장 가까운 집을 하나씩 이어 붙이면 된다. 처음엔 집 한 채에서 시작하고, 집이 하나 붙을 때마다 남은 집까지의 가장 짧은 거리를 다시 적어 둔다. 모든 집이 붙으면 그때까지 깐 줄 길이를 더한 값이 답이다. 집마다 가장 가까운 이웃하고만 이으면 동네가 둘로 갈라진 채 끝날 수 있어서 이 방법이 필요하다.
+</EasyIntro>
+
+점 여러 개를 줄로 이어 모두 연결하되 줄 길이 합을 가장 작게 하는 문제다. 그래프 문제처럼 보이지 않지만 "모든 점 쌍 사이에 선이 있고, 선의 비용은 두 점의 거리"라고 보면 최소 신장 트리(MST, 모든 정점을 고리 없이 잇는 선들 중 비용 합이 가장 작은 것) 문제 그대로다.
+
+[LeetCode 1584. Min Cost to Connect All Points](https://leetcode.com/problems/min-cost-to-connect-all-points/)는 Medium이다. 이 글은 가장 가까운 점끼리만 잇는 틀린 방법부터 시작해 크루스칼, 보루프카, 힙 프림, 배열 프림, 그리고 맨해튼 거리의 성질을 이용해 후보 선을 O(n)개로 줄이는 방법까지 여섯 가지를 본다. MST가 왜 이런 탐욕으로 구해지는지(컷 속성)와 크루스칼·프림의 일반론은 [최소 신장 트리 글](/posts/minimum-spanning-tree)에, 유니온 파인드는 [유니온 파인드 글](/posts/ds-union-find)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 모든 점을 잇는 가장 짧은 줄
+
+2차원 평면의 점 `points[i] = [x, y]`가 주어진다. 두 점을 잇는 비용은 맨해튼 거리 `|x1 - x2| + |y1 - y2|`다. 모든 점이 직접 또는 다른 점을 거쳐 이어지도록 선을 골랐을 때 비용 합의 최솟값을 구한다.
+
+풀이 선택에 영향을 주는 조건은 이렇다.
+
+- 점은 최대 1,000개이고 모두 다른 위치다. 가능한 선은 n(n - 1) / 2 = 499,500개다. 선을 전부 만드는 건 되지만 정렬까지 하면 무겁다.
+- 좌표는 -10⁶에서 10⁶ 사이다. 선 하나의 비용은 최대 400만이다.
+- 선이 따로 주어지지 않는다. 모든 쌍이 선이라 그래프가 꽉 찬 밀집 그래프다. 이 한 가지가 풀이를 고르는 기준이 된다.
+
+이 글에서 쓸 예시는 점 6개다. 번호는 0부터 붙였다.
+
+```text
+0 (0,0)   1 (2,2)   2 (3,9)   3 (6,3)   4 (8,0)   5 (7,8)
+```
+
+몇 쌍의 거리를 손으로 재 보자. 0과 1은 2 + 2 = 4, 1과 3은 4 + 1 = 5, 3과 4는 2 + 3 = 5, 3과 5는 1 + 5 = 6, 5와 2는 4 + 1 = 5다. 이 다섯 선을 고르면 모든 점이 이어지고 합은 25다. 뒤에서 보겠지만 이게 답이다.
+
+## 가장 가까운 점끼리만 이으면 갈라진다
+
+처음 떠오르는 방법은 점마다 가장 가까운 점과 잇는 것이다. 가장 짧은 선만 골랐으니 합도 작을 것 같다.
+
+```js
+// 틀린 풀이: 점마다 가장 가까운 점과 잇는다
+function minCostConnectPoints(points) {
+  const n = points.length;
+  const dist = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+  const chosen = new Set();
+  let total = 0;
+  for (let i = 0; i < n; i++) {
+    let best = -1;
+    for (let j = 0; j < n; j++) {
+      if (j !== i && (best === -1 || dist(points[i], points[j]) < dist(points[i], points[best]))) best = j;
+    }
+    if (best === -1) continue;
+    const key = Math.min(i, best) + "," + Math.max(i, best); // 같은 선을 두 번 세지 않는다
+    if (!chosen.has(key)) { chosen.add(key); total += dist(points[i], points[best]); }
+  }
+  return total;
+}
+```
+
+예시에서 19가 나온다. 답 25보다 작으니 좋아 보이지만 고른 선이 4개뿐이다. 0-1, 1-3, 3-4가 한 덩어리, 2-5가 다른 덩어리로 갈라진 채 끝났다. 점 6개를 잇는 데 필요한 선 5개 중 덩어리 둘을 잇는 선 하나가 빠졌다. 점 1,000개를 무작위로 뿌려 보면 선을 687개만 고르고 멈춘다. 999개가 필요하니 313개의 덩어리로 갈라진 것이다.
+
+가까운 이웃은 덩어리 안에서만 찾아진다. 덩어리끼리는 서로 멀리 떨어져 있으니 어느 점도 그쪽을 "가장 가깝다"고 고르지 않는다. 필요한 건 "지금 갈라진 덩어리 사이를 잇는 가장 싼 선"이다. 크루스칼과 프림이 각각 다른 방식으로 이걸 찾는다.
+
+## 싼 선부터 줍는 크루스칼
+
+모든 선을 만들어 비용 순으로 정렬하고, 싼 것부터 본다. 두 끝이 이미 같은 덩어리면 고리를 만드니 버리고, 다른 덩어리면 줍고 두 덩어리를 합친다. 덩어리 관리는 유니온 파인드가 한다.
+
+```js
+function minCostConnectPoints(points) {
+  const n = points.length;
+  const edges = [];
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++)
+      edges.push([Math.abs(points[i][0] - points[j][0]) + Math.abs(points[i][1] - points[j][1]), i, j]);
+  edges.sort((a, b) => a[0] - b[0]);
+
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const size = new Array(n).fill(1);
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]]; // 경로 절반 압축
+      x = parent[x];
+    }
+    return x;
+  };
+  let total = 0, used = 0;
+  for (const [w, a, b] of edges) {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) continue; // 이미 이어진 두 점: 이 선은 고리를 만든다
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;          // 작은 덩어리를 큰 덩어리 밑에 붙인다
+    size[ra] += size[rb];
+    total += w;
+    if (++used === n - 1) break; // 선 n - 1개면 다 이어졌다
+  }
+  return total;
+}
+```
+
+예시에서는 4짜리 0-1을 먼저 줍고, 5짜리 선 셋(1-3, 2-5, 3-4)을 줍고, 6짜리 3-5에서 두 덩어리가 이어지며 끝난다. 합 25다. 틀린 풀이가 빠뜨린 그 선이 3-5다.
+
+시간은 선을 만드는 데 O(n²), 정렬이 O(n² log n)이다. n = 1,000에서 49만 9,500개를 정렬하는 데 대부분의 시간이 든다. 무작위 점 1,000개에서 한 번 푸는 데 470ms가 걸렸다. 공간도 선 목록 O(n²)이다. 통과는 하지만 이 문제의 풀이 중 가장 느렸다.
+
+`used === n - 1`에서 멈추는 건 중요한 최적화다. 정렬된 선 49만 개 중 실제로 필요한 건 999개라 대부분을 보지 않고 끝난다. 그래도 정렬은 이미 다 해 버렸다.
+
+## 덩어리마다 가장 싼 다리를 동시에 고르는 보루프카
+
+틀린 풀이를 고치는 가장 직접적인 방법도 있다. 점마다 가장 가까운 점을 고르는 대신, 덩어리마다 "덩어리 밖으로 나가는 가장 싼 선"을 고른다. 처음엔 점 하나하나가 덩어리이니 틀린 풀이와 똑같이 시작한다. 고른 선으로 덩어리를 합치고, 합쳐진 덩어리마다 다시 밖으로 나가는 가장 싼 선을 고른다. 덩어리가 하나 남을 때까지 반복한다. 이게 보루프카(Borůvka) 알고리즘이다.
+
+```js
+function minCostConnectPoints(points) {
+  const n = points.length;
+  const dist = (i, j) => Math.abs(points[i][0] - points[j][0]) + Math.abs(points[i][1] - points[j][1]);
+  const comp = Array.from({ length: n }, (_, i) => i); // 점마다 속한 덩어리 번호
+  let groups = n, total = 0;
+  while (groups > 1) {
+    // 덩어리마다 밖으로 나가는 가장 싼 선 [비용, 안쪽 점, 바깥 점]
+    const cheapest = new Map();
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (comp[i] === comp[j]) continue;
+        const d = dist(i, j);
+        const id = Math.min(i, j) * n + Math.max(i, j); // 비용이 같을 때 쓸 선 번호
+        const cur = cheapest.get(comp[i]);
+        // 비용이 같으면 선 번호로 순서를 정한다. 모든 덩어리가 같은 기준을 써야 고리가 안 생긴다
+        if (!cur || d < cur[0] || (d === cur[0] && id < cur[3])) cheapest.set(comp[i], [d, i, j, id]);
+      }
+    }
+    for (const [d, i, j] of cheapest.values()) {
+      const a = comp[i], b = comp[j];
+      if (a === b) continue; // 같은 라운드에 이미 합쳐졌다
+      for (let k = 0; k < n; k++) if (comp[k] === b) comp[k] = a; // b 덩어리를 a로 칠한다
+      total += d;
+      groups--;
+    }
+  }
+  return total;
+}
+```
+
+예시에서는 두 바퀴 만에 끝난다. 첫 바퀴는 틀린 풀이가 고른 네 선(0-1, 1-3, 3-4, 2-5)을 그대로 골라 덩어리 둘을 만든다. 둘째 바퀴에 아래쪽 덩어리가 밖으로 나가는 가장 싼 선 3-5를 고르고 끝난다. 틀린 풀이는 첫 바퀴에서 멈춘 보루프카였던 셈이다.
+
+비용이 같은 선이 여럿일 때가 함정이다. 덩어리 A는 A-B 선을, 덩어리 B는 B-C 선을, C는 C-A 선을 고르면 비용이 모두 같을 때 셋이 고리를 이룬다. 그래서 모든 덩어리가 같은 기준(비용, 그다음 선 번호)으로 비교해야 한다. 합칠 때 이미 같은 덩어리면 건너뛰는 검사도 함께 둔다.
+
+바퀴마다 덩어리 수가 적어도 절반으로 준다. 모든 덩어리가 선 하나씩을 골라 다른 덩어리와 합쳐지기 때문이다. 그래서 바퀴는 많아야 log n번이고, 한 바퀴에 모든 점 쌍을 보니 O(n²)이라 전체는 O(n² log n)이다. 무작위 점 1,000개에서 6바퀴에 끝났고 85ms가 걸렸다. 덩어리를 다시 칠하는 부분은 단순하게 배열을 훑었는데, 바퀴마다 많아야 n번이라 전체 복잡도를 바꾸지 않는다.
+
+이 문제에서 보루프카를 고를 이유는 크지 않다. 하지만 덩어리마다 하는 일이 서로 독립이라 여러 기계에 나눠 돌리기 좋고, 그래서 아주 큰 그래프를 분산 처리할 때 쓰인다. 면접에서 "가장 가까운 점과 잇는 방법을 고칠 수 있나"라고 물으면 이 알고리즘이 그 답이다.
+
+## 트리를 한 점씩 키우는 프림, 힙으로
+
+크루스칼은 선을 전부 정렬해야 한다. 프림은 점 하나에서 시작해 "트리 안의 점과 밖의 점을 잇는 선 중 가장 싼 것"을 하나씩 붙인다. 트리 쪽과 바깥쪽으로 가른 컷에서 가장 싼 다리를 고르는 셈이다. 가장 싼 것을 꺼내는 데 최소 힙을 쓴다.
+
+```js
+function minCostConnectPoints(points) {
+  const n = points.length;
+  const inTree = new Array(n).fill(false);
+  const heap = [[0, 0]]; // [비용, 점]. push와 pop은 Network Delay Time 글의 이진 힙과 같다
+  // ... push, pop 생략
+  let total = 0, count = 0;
+  while (count < n) {
+    const [w, u] = pop();
+    if (inTree[u]) continue; // 이미 트리에 붙은 점으로 가는 낡은 후보
+    inTree[u] = true;
+    total += w;
+    count++;
+    for (let v = 0; v < n; v++) {
+      if (!inTree[v]) push([Math.abs(points[u][0] - points[v][0]) + Math.abs(points[u][1] - points[v][1]), v]);
+    }
+  }
+  return total;
+}
+```
+
+힙 코드는 [Network Delay Time 글](/posts/leetcode-network-delay-time#힙으로-다음-노드를-빨리-고른다)과 똑같아서 생략했다. 다익스트라와 모양이 거의 같다는 점이 재미있다. 다른 건 힙에 넣는 값뿐이다. 다익스트라는 "출발점부터 v까지의 거리" `t + w`를 넣고, 프림은 "트리에서 v로 가는 선 하나의 비용" `w`를 넣는다.
+
+시간은 O(n² log n)이다. 점이 트리에 붙을 때마다 바깥 점 전부를 힙에 넣으니 힙에 들어가는 건 n²/2개쯤이다. 무작위 점 1,000개에서 49만 9,501번 넣었고 129ms가 걸렸다. 크루스칼보다 빠른 건 선을 한 번에 다 정렬하지 않고 필요한 만큼만 꺼내기 때문이다.
+
+그런데 힙에 넣은 49만 개 중 실제로 쓴 건 1,000개다. 한 점 v에 대한 후보가 힙에 여러 개 쌓이는데, 결국 쓰이는 건 그중 가장 싼 것 하나다. 점마다 가장 싼 후보 하나만 기억하면 힙이 필요 없다.
+
+## 점마다 가장 싼 값 하나만 기억한다
+
+`best[v]`에 "지금 트리에서 v로 가는 가장 싼 선의 비용"을 적어 둔다. 매번 트리 밖 점 중 `best`가 가장 작은 점을 배열을 훑어 고르고, 그 점을 붙인 뒤 바깥 점들의 `best`를 새 점과의 거리로 고친다. 그래프가 꽉 차 있으니 어차피 점마다 n개의 선을 다 봐야 하고, 그렇다면 힙의 log가 붙을 이유가 없다.
+
+```js
+function minCostConnectPoints(points) {
+  const n = points.length;
+  const inTree = new Array(n).fill(false);
+  // best[v]: 지금까지 만든 트리에서 v까지 가장 싼 선의 비용
+  const best = new Array(n).fill(Infinity);
+  best[0] = 0;
+  let total = 0;
+  for (let step = 0; step < n; step++) {
+    // 트리 밖에서 가장 싸게 붙일 수 있는 점을 고른다
+    let u = -1;
+    for (let v = 0; v < n; v++) {
+      if (!inTree[v] && (u === -1 || best[v] < best[u])) u = v;
+    }
+    inTree[u] = true;
+    total += best[u];
+    // 새로 붙은 u 덕분에 더 싸게 붙일 수 있게 된 점을 고친다
+    for (let v = 0; v < n; v++) {
+      if (inTree[v]) continue;
+      const d = Math.abs(points[u][0] - points[v][0]) + Math.abs(points[u][1] - points[v][1]);
+      if (d < best[v]) best[v] = d;
+    }
+  }
+  return total;
+}
+```
+
+선을 저장하지 않는 것도 장점이다. 거리는 필요할 때 좌표로 바로 계산한다. 공간은 O(n), 시간은 O(n²)이다. 무작위 점 1,000개에서 8.4ms가 걸렸다. 크루스칼보다 50배 넘게 빠르다.
+
+아래 그림은 예시 6개 점에서 이 코드가 점을 붙이는 순서다. 칸은 점 0~5의 좌표, 초록 칸이 트리에 붙은 점이고, 아래는 아직 밖에 있는 점들의 `best` 값을 `점:비용`으로 적었다. 실제 코드에 로그를 찍어 옮긴 값이다.
+
+<AlgoTrace
+  caption="배열 프림. 초록 칸이 트리에 붙은 점, 아래는 바깥 점의 best 값이다"
+  memoryLabel="best (점:비용)"
+  cells={["(0,0)", "(2,2)", "(3,9)", "(6,3)", "(8,0)", "(7,8)"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1:4", "2:12", "3:9", "4:8", "5:15"], caption: "0번에서 시작한다. 비용 0. 바깥 점마다 0번까지의 거리를 적는다." },
+    { pointer: 1, found: [0, 1], memory: ["2:8", "3:5", "4:8", "5:11"], caption: "가장 싼 1번을 4에 붙인다. 합 4. 1번이 더 가까운 2, 3, 5가 줄었다." },
+    { pointer: 3, found: [0, 1, 3], memory: ["2:8", "4:5", "5:6"], caption: "3번을 5에 붙인다. 합 9. 4번은 8에서 5로, 5번은 11에서 6으로 준다." },
+    { pointer: 4, found: [0, 1, 3, 4], memory: ["2:8", "5:6"], caption: "4번을 5에 붙인다. 합 14. 4번이 더 가까운 점은 없다." },
+    { pointer: 5, found: [0, 1, 3, 4, 5], memory: ["2:5"], caption: "5번을 6에 붙인다. 합 20. 2번이 8에서 5로 준다." },
+    { pointer: 2, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "마지막 2번을 5에 붙인다. 합 25가 답이다." },
+  ]}
+/>
+
+다섯 번째 단계에서 3-5 선(비용 6)을 고른 게 틀린 풀이가 빠뜨린 그 다리다. 이 시점에 트리는 0, 1, 3, 4이고 바깥은 2, 5다. 두 편을 건너는 선 중 가장 싼 것이 6이라 그걸 붙인다. 2번 입장에서 가장 가까운 점은 5번이지만, 트리 쪽 점들과는 멀어서 2번은 끝까지 기다렸다.
+
+아래 그림은 같은 과정을 평면 위에서 본 것이다. 다음을 누를 때마다 선이 하나씩 붙는다.
+
+<VectorSpace
+  caption="프림이 선을 붙이는 순서. 마지막에 다섯 선, 합 25"
+  width={400}
+  height={260}
+  groups={[{ id: "pt", label: "점" }]}
+  points={[
+    { id: "p0", label: "0 (0,0)", x: 40, y: 235, group: "pt" },
+    { id: "p1", label: "1 (2,2)", x: 120, y: 187, group: "pt" },
+    { id: "p2", label: "2 (3,9)", x: 160, y: 19, group: "pt" },
+    { id: "p3", label: "3 (6,3)", x: 280, y: 163, group: "pt", labelAt: "left" },
+    { id: "p4", label: "4 (8,0)", x: 360, y: 235, group: "pt", labelAt: "left" },
+    { id: "p5", label: "5 (7,8)", x: 320, y: 43, group: "pt", labelAt: "left" },
+  ]}
+  edges={[["p0", "p1"], ["p1", "p3"], ["p3", "p4"], ["p3", "p5"], ["p5", "p2"]]}
+  steps={[
+    { caption: "0번만 트리에 있다. 가장 가까운 1번까지 4다.", path: ["p0", "p1"] },
+    { caption: "트리 0, 1에서 가장 싼 다리는 1-3, 비용 5.", path: ["p0", "p1", "p3"] },
+    { caption: "3-4도 5다. 트리가 아래쪽 네 점으로 커졌다.", path: ["p0", "p1", "p3", "p4"] },
+    { caption: "위쪽 두 점으로 건너는 가장 싼 다리는 3-5, 비용 6.", path: ["p0", "p1", "p3", "p4", "p3", "p5"] },
+    { caption: "마지막으로 5-2, 비용 5. 선 다섯 개, 합 25.", path: ["p0", "p1", "p3", "p4", "p3", "p5", "p2"] },
+    { caption: "완성된 최소 신장 트리. 고리가 없고 모든 점이 이어졌다.", showEdges: true },
+  ]}
+/>
+
+### Python과 Java로 쓰면
+
+Python은 같은 O(n²) 코드여도 반복 한 번이 무겁다. 점 1,000개에서 실행할 때마다 160~230ms가 걸렸다. 안쪽 반복에서 `points[u]`를 매번 꺼내지 않도록 `ux, uy`로 미리 풀어 두는 정도만 해도 차이가 난다. 힙 프림이나 크루스칼은 Python에서 객체를 수십만 개 만들어서 훨씬 느려진다.
+
+```python
+from typing import List
+
+
+def min_cost_connect_points(points: List[List[int]]) -> int:
+    n = len(points)
+    in_tree = [False] * n
+    best = [float("inf")] * n  # 트리에서 각 점까지 가장 싼 선
+    best[0] = 0
+    total = 0
+    for _ in range(n):
+        u = -1
+        for v in range(n):
+            if not in_tree[v] and (u == -1 or best[v] < best[u]):
+                u = v
+        in_tree[u] = True
+        total += best[u]
+        ux, uy = points[u]
+        for v in range(n):
+            if not in_tree[v]:
+                d = abs(ux - points[v][0]) + abs(uy - points[v][1])
+                if d < best[v]:
+                    best[v] = d
+    return total
+
+
+print(min_cost_connect_points([[0, 0], [2, 2], [3, 9], [6, 3], [8, 0], [7, 8]]))
+print(min_cost_connect_points([[5, 5]]))
+```
+
+```text
+25
+0
+```
+
+Python에서 크루스칼을 쓰면 차이가 더 벌어진다. 튜플 49만 개를 만들고 정렬하는 비용이 크다.
+
+```python
+def min_cost_kruskal(points):
+    n = len(points)
+    edges = []
+    for i in range(n):
+        xi, yi = points[i]
+        for j in range(i + 1, n):
+            edges.append((abs(xi - points[j][0]) + abs(yi - points[j][1]), i, j))
+    edges.sort()  # 튜플은 비용부터 비교된다
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    total = used = 0
+    for w, a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+            total += w
+            used += 1
+            if used == n - 1:
+                break
+    return total
+```
+
+```text
+min_cost_kruskal 101514 655 ms
+min_cost_connect_points 101514 226 ms
+```
+
+같은 점 1,000개(좌표 -2,000~2,000)에서 답은 같고 크루스칼이 세 배쯤 느렸다. 점이 늘면 선 목록은 n²으로 불어나니 크루스칼 쪽이 메모리에서도 먼저 한계에 닿는다.
+
+Java는 `best`를 `Integer.MAX_VALUE`로 채운다. 이 값에 무언가를 더하는 곳이 없으니 넘칠 일은 없다. 다익스트라처럼 `best[u] + d`를 계산하는 코드로 착각해 바꾸면 그때 넘친다. 반환형이 `int`인데, 거리 하나는 최대 400만이고 LeetCode가 답을 `int`로 받으니 합도 그 안에 든다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int minCostConnectPoints(int[][] points) {
+        int n = points.length;
+        boolean[] inTree = new boolean[n];
+        int[] best = new int[n];
+        Arrays.fill(best, Integer.MAX_VALUE);
+        best[0] = 0;
+        int total = 0;
+        for (int step = 0; step < n; step++) {
+            int u = -1;
+            for (int v = 0; v < n; v++) {
+                if (!inTree[v] && (u == -1 || best[v] < best[u])) u = v;
+            }
+            inTree[u] = true;
+            total += best[u];
+            for (int v = 0; v < n; v++) {
+                if (inTree[v]) continue;
+                int d = Math.abs(points[u][0] - points[v][0]) + Math.abs(points[u][1] - points[v][1]);
+                if (d < best[v]) best[v] = d;
+            }
+        }
+        return total;
+    }
+}
+```
+
+```text
+25
+0
+```
+
+## 맨해튼 거리라면 후보 선을 O(n)개로 줄인다
+
+n이 1,000이면 O(n²)으로 충분하다. 면접관이 "점이 10만 개라면?"이라고 물으면 이야기가 달라진다. O(n²)은 100억 번이다. 배열 프림으로 점 2만 개를 돌려 보니 4.8초가 걸렸고, 10만 개면 25배인 2분쯤이 된다.
+
+여기서 맨해튼 거리의 성질을 쓴다. 점 i를 중심으로 평면을 45도씩 여덟 조각(팔분면)으로 나눈다. 같은 조각 안에 점 j와 k가 있고 i에서 j가 k보다 가깝다면, j에서 k까지도 i에서 k까지보다 가깝거나 같다. 같은 조각 안에서는 방향이 비슷해서 j를 거쳐 k로 가는 것이 손해가 아니기 때문이다. 그러면 i, j, k 고리에서 i-k가 가장 비싼 선이라 MST에 필요 없다(고리 속성). 결국 점마다 조각 여덟 개에서 가장 가까운 점 하나씩만 후보로 두면 되고, 선은 많아야 8n개다. 선은 양쪽에서 같이 세어지니 실제로는 네 방향만 훑어 4n개를 만든다.
+
+조각 안에서 가장 가까운 점은 좌표를 정렬하고 펜윅 트리(구간의 최솟값을 log 시간에 고치고 묻는 배열)로 찾는다. 좌표를 뒤집고 바꿔 가며 같은 훑기를 네 번 한다.
+
+```js
+// 맨해튼 MST: 점마다 후보 선을 팔분면에서 하나씩만 남긴다
+function minCostConnectPoints(points) {
+  const n = points.length;
+  if (n <= 1) return 0;
+  const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+  const edges = [];
+  const idx = Array.from({ length: n }, (_, i) => i);
+  for (let dir = 0; dir < 4; dir++) {
+    // 좌표를 바꾸고 뒤집어서 같은 훑기로 네 방향을 본다
+    if (dir === 1 || dir === 3) { for (let i = 0; i < n; i++) { const t = xs[i]; xs[i] = ys[i]; ys[i] = t; } }
+    else if (dir === 2) { for (let i = 0; i < n; i++) xs[i] = -xs[i]; }
+    // x 큰 순(같으면 y 큰 순)으로 훑는다
+    idx.sort((a, b) => xs[b] - xs[a] || ys[b] - ys[a]);
+    // y - x 값을 0, 1, 2 ... 순위로 압축한다
+    const keys = [...new Set(idx.map((i) => ys[i] - xs[i]))].sort((a, b) => a - b);
+    const rank = new Map(keys.map((k, r) => [k, r]));
+    const m = keys.length;
+    // 펜윅 트리: y - x가 내 것 이상인 점 중 x + y가 가장 작은 점
+    const bitVal = new Array(m + 1).fill(Infinity), bitId = new Array(m + 1).fill(-1);
+    for (const i of idx) {
+      const r = m - rank.get(ys[i] - xs[i]); // 순위를 뒤집어 "이상"을 앞쪽 구간 질의로 만든다
+      let bestV = Infinity, bestJ = -1;
+      for (let k = r; k > 0; k -= k & -k) {
+        if (bitVal[k] < bestV) { bestV = bitVal[k]; bestJ = bitId[k]; }
+      }
+      if (bestJ !== -1) {
+        const w = Math.abs(points[i][0] - points[bestJ][0]) + Math.abs(points[i][1] - points[bestJ][1]);
+        edges.push([w, i, bestJ]);
+      }
+      const v = xs[i] + ys[i];
+      for (let k = r; k <= m; k += k & -k) {
+        if (v < bitVal[k]) { bitVal[k] = v; bitId[k] = i; }
+      }
+    }
+  }
+  // 후보 선 4n개 이하로 크루스칼
+  edges.sort((a, b) => a[0] - b[0]);
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (x) => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  let total = 0, used = 0;
+  for (const [w, a, b] of edges) {
+    const ra = find(a), rb = find(b);
+    if (ra === rb) continue;
+    parent[ra] = rb;
+    total += w;
+    if (++used === n - 1) break;
+  }
+  return total;
+}
+```
+
+한 방향 훑기에서 묻는 것은 "x가 나 이상이고 y - x가 나 이상인 점 중 x + y가 가장 작은 점"이다. 이 두 조건이 i에서 본 한 팔분면이고, 그 영역 안에서는 맨해튼 거리가 `(xj + yj) - (xi + yi)`로 풀려서 x + y가 가장 작은 점이 가장 가깝다. x 큰 순으로 훑으면 첫 조건은 "이미 본 점"으로 바뀌고, 둘째 조건은 펜윅 트리의 구간 질의가 맡는다.
+
+정렬 네 번과 펜윅 트리 질의 n번씩이라 O(n log n)이다. 무작위 점 1,000개에서 후보 선이 49만 9,500개가 아니라 3,814개로 줄었고 14ms가 걸렸다. 점 10만 개도 1.6초에 끝났다. 정확한지는 점 1~40개짜리 무작위 입력 3,000개로 배열 프림, 크루스칼, 힙 프림과 답을 비교해 모두 같았다.
+
+면접에서 이 코드를 처음부터 짜라고 하는 경우는 드물다. "맨해튼 거리라면 팔분면마다 가장 가까운 점만 후보로 두면 선이 O(n)개로 준다"를 말할 수 있으면 충분하다. 유클리드 거리라면 같은 역할을 들로네 삼각분할이 한다. MST의 선은 모두 들로네 삼각분할의 선 안에 있고, 그 선은 O(n)개다.
+
+## 여섯 풀이를 나란히 놓으면
+
+무작위 점 1,000개(좌표 -10⁶~10⁶)에서 JavaScript로 돌린 시간이다.
+
+| 풀이 | 시간 | 공간 | 1,000개 | 언제 고르나 |
+|---|---|---|---|---|
+| 가장 가까운 점끼리 | O(n²) | O(n) | 17ms, 오답 | 고르지 않는다. 덩어리가 갈라진다 |
+| 크루스칼 | O(n² log n) | O(n²) | 470ms | 선 목록이 따로 주어지는 희소 그래프 |
+| 보루프카 | O(n² log n) | O(n) | 85ms, 6바퀴 | 덩어리별 일을 나눠 병렬로 돌릴 때 |
+| 힙 프림 | O(n² log n) | O(n²) | 129ms | 인접 리스트가 있는 희소 그래프 |
+| 배열 프림 | O(n²) | O(n) | 8.4ms | 이 문제처럼 모든 쌍이 선인 밀집 그래프. 기본 답 |
+| 맨해튼 MST | O(n log n) | O(n) | 14ms | 점이 수만 개 이상이고 거리가 맨해튼일 때 |
+
+n = 1,000에서는 배열 프림이 맨해튼 MST보다도 빨랐다. 상수가 작고 정렬도 없어서다. 크루스칼을 먼저 떠올리는 사람이 많지만, 이 문제는 선이 주어지지 않고 모든 쌍이 선이다. 이걸 읽으면 배열 프림을 고를 수 있다. [최소 신장 트리 글의 밀집 그래프 실험](/posts/minimum-spanning-tree#간선이-적을-때와-꽉-찼을-때)에서도 같은 결론이 나왔다.
+
+## 프림을 직접 짜 보기
+
+점 하나, 점 둘, 일직선, 음수 좌표를 넣었다. 점이 하나면 이을 선이 없으니 0이다.
+
+<CodePlayground
+  caption="Min Cost to Connect All Points"
+  functionName="minCostConnectPoints"
+  initialCode={"function minCostConnectPoints(points) {\n  // points[i] = [x, y]. 두 점 비용은 |x1 - x2| + |y1 - y2|\n  // 모든 점을 잇는 최소 비용\n  return 0;\n}"}
+  solution={"function minCostConnectPoints(points) {\n  const n = points.length;\n  const inTree = new Array(n).fill(false);\n  // best[v]: 지금까지 만든 트리에서 v까지 가장 싼 선의 비용\n  const best = new Array(n).fill(Infinity);\n  best[0] = 0;\n  let total = 0;\n  for (let step = 0; step < n; step++) {\n    // 트리 밖에서 가장 싸게 붙일 수 있는 점을 고른다\n    let u = -1;\n    for (let v = 0; v < n; v++) {\n      if (!inTree[v] && (u === -1 || best[v] < best[u])) u = v;\n    }\n    inTree[u] = true;\n    total += best[u];\n    // 새로 붙은 u 덕분에 더 싸게 붙일 수 있게 된 점을 고친다\n    for (let v = 0; v < n; v++) {\n      if (inTree[v]) continue;\n      const d = Math.abs(points[u][0] - points[v][0]) + Math.abs(points[u][1] - points[v][1]);\n      if (d < best[v]) best[v] = d;\n    }\n  }\n  return total;\n}\n"}
+  tests={[
+    { label: "글의 예시", args: [[[0, 0], [2, 2], [3, 9], [6, 3], [8, 0], [7, 8]]], expected: 25 },
+    { label: "점 하나", args: [[[5, 5]]], expected: 0 },
+    { label: "점 둘", args: [[[0, 0], [3, -4]]], expected: 7 },
+    { label: "일직선", args: [[[0, 0], [0, 5], [0, 2], [0, 9]]], expected: 9 },
+    { label: "음수 좌표", args: [[[-1000000, -1000000], [1000000, 1000000], [0, 0]]], expected: 4000000 },
+    { label: "사각형 네 꼭짓점", args: [[[0, 0], [0, 4], [4, 0], [4, 4]]], expected: 12 },
+    { label: "떨어진 두 무리", args: [[[0, 0], [1, 0], [0, 1], [100, 100], [101, 100], [100, 101]]], expected: 203 },
+  ]}
+/>
+
+## 시작값과 best의 뜻에서 틀린다
+
+점이 하나면 답은 0이다. 위 풀이들은 선을 하나도 고르지 않고 0을 돌려주지만, 크루스칼 반복 안에서만 `return`하도록 짜면 점 하나일 때 반복이 한 번도 돌지 않아 `undefined`가 나온다. 돌려주는 값은 반복 밖에 둔다.
+
+배열 프림에서 `best[0] = 0`을 빠뜨리면 첫 단계에서 고르는 점의 `best`가 `Infinity`라 합이 `Infinity`가 된다. 시작점의 비용은 0이어야 한다.
+
+프림에서 트리에 이미 붙은 점의 `best`를 고치면 안 된다. 고쳐도 다시 고르지 않으니 답은 같지만, 다익스트라처럼 짜다가 `best[v] = best[u] + d`라고 쓰는 실수가 더 위험하다. 예시에서 이렇게 하면 경로 길이를 더해 버려 25가 아니라 48이 나온다. MST가 아니라 0번에서 출발하는 최단 경로 트리를 만들고 그 거리들을 더한 셈이다. 프림의 `best`는 "선 하나"의 비용이고 다익스트라의 `dist`는 "경로 전체"의 길이다. 이 차이는 [최소 신장 트리 글](/posts/minimum-spanning-tree#최소-신장-트리는-최단-경로-트리가-아니다)에서 자세히 다룬다.
+
+크루스칼의 정렬 비교자로 `(a, b) => a[0] - b[0]`은 여기서 안전하다. 비용이 400만 이하라 뺄셈이 넘치지 않는다. Java에서 `int[]` 배열을 `Arrays.sort`로 정렬하려면 `Comparator`를 써야 하고, 선 49만 개를 `int[]` 객체로 만들면 메모리와 시간이 많이 든다. 비용, i, j를 `long` 하나에 묶어 `long[]`을 정렬하는 요령이 있지만, 그럴 바엔 배열 프림이 낫다.
+
+## 거리와 조건을 바꿔 묻는다면
+
+유클리드 거리로 바꾸라고 하면 거리 계산만 `Math.hypot`으로 바꾸면 된다. MST는 비용이 무엇이든 비교만 하니 알고리즘은 같다. 제곱근을 피하고 싶으면 거리의 제곱으로 비교해도 같은 트리가 나온다. 순서만 같으면 되기 때문이다. 다만 답이 합이라 마지막엔 제곱근을 더해야 한다.
+
+이미 깔린 줄이 있다면 그 선을 먼저 비용 0으로 줍는다. 크루스칼이라면 유니온 파인드에 미리 합쳐 두고 시작한다.
+
+모든 점이 아니라 k개의 덩어리로 나누라면(클러스터링) MST를 만든 뒤 가장 비싼 선 k - 1개를 빼면 된다. 크루스칼을 n - k개에서 멈춰도 같다. 덩어리 사이 간격을 가장 크게 만드는 분할이 된다.
+
+어느 선을 빼면 MST 비용이 늘어나는지 묻는 [LeetCode 1489. Find Critical and Pseudo-Critical Edges in Minimum Spanning Tree](https://leetcode.com/problems/find-critical-and-pseudo-critical-edges-in-minimum-spanning-tree/)는 선을 하나씩 빼거나 먼저 넣고 크루스칼을 다시 돌려 비교한다.
+
+연결 여부만 묻는 [Redundant Connection](/posts/leetcode-redundant-connection)과 [Number of Connected Components](/posts/leetcode-number-of-connected-components)는 크루스칼의 유니온 파인드 부분만 떼어 낸 문제다.
+
+같은 묶음의 [Network Delay Time](/posts/leetcode-network-delay-time)은 이 글의 힙 프림과 코드 모양이 거의 같다. 힙에 넣는 값이 선 비용이냐 경로 길이냐만 다르니 둘을 나란히 짜 보면 차이가 분명해진다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제를 MST로 보는 이유는
+
+모든 점을 잇되 비용 합을 최소로 하라는 것이다. 고리가 있으면 그 고리의 한 선을 빼도 여전히 이어지고 비용만 준다. 그래서 답은 고리 없이 n개 점을 잇는 선 n - 1개, 신장 트리이고 그중 비용이 최소인 것이 MST다.
+
+### 크루스칼과 프림 중 무엇을 골랐고 왜인가
+
+배열 프림을 골랐다. 선이 주어지지 않고 모든 쌍이 선인 완전 그래프라 선이 n²/2개다. 크루스칼은 그걸 다 만들어 정렬해야 해서 O(n² log n)에 공간도 O(n²)이지만, 배열 프림은 점마다 가장 싼 값 하나만 들고 있어 O(n²) 시간에 O(n) 공간이다. 점 1,000개에서 크루스칼 470ms, 배열 프림 8.4ms였다.
+
+### 점마다 가장 가까운 점과 이으면 왜 틀리나
+
+덩어리끼리 갈라질 수 있다. 덩어리 안에서는 서로가 가장 가깝지만 덩어리 사이 다리는 어느 점의 가장 가까운 이웃도 아니라 아무도 고르지 않는다. 예시에서 선이 다섯 개 필요한데 네 개만 골라 합이 19로 답보다 작게 나왔다. 필요한 건 갈라진 두 편을 잇는 가장 싼 선이고, 그게 컷 속성이다.
+
+### 프림과 다익스트라의 차이는
+
+코드 모양은 거의 같고 힙이나 배열에 넣는 값이 다르다. 프림은 트리에서 v로 가는 선 하나의 비용 w를, 다익스트라는 출발점에서 v까지의 경로 길이 dist[u] + w를 넣는다. 그래서 프림은 전체 선 비용 합이 최소인 트리를, 다익스트라는 출발점에서 각 점까지의 거리가 최소인 트리를 만든다. 두 트리는 다를 수 있다.
+
+### 점이 10만 개라면
+
+O(n²)은 100억 번이라 안 된다. 맨해튼 거리라면 점마다 팔분면 여덟 개에서 가장 가까운 점 하나씩만 후보로 두면 MST가 바뀌지 않는다. 정렬과 펜윅 트리로 후보 선 4n개를 O(n log n)에 만들고 크루스칼을 돌린다. 점 10만 개에서 1.6초가 걸렸다.
+
+### 같은 비용의 선이 여럿이면 답이 바뀌나
+
+트리 모양은 여러 개일 수 있지만 비용 합은 같다. 예시에서도 5짜리 선이 세 개라 크루스칼이 줍는 순서는 정렬 방식에 따라 다를 수 있지만 합은 늘 25다. 문제가 합만 물으니 동률 처리는 신경 쓰지 않아도 된다.

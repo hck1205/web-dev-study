@@ -1,0 +1,449 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-cascade-specificity");
+
+<EasyIntro>
+  한 요소에 "글자를 빨갛게"와 "글자를 파랗게"라는 규칙이 동시에 걸리면 브라우저는 둘 중 하나만 골라야 한다. 이렇게 고르는 방식을 캐스케이드라고 부른다.
+
+  운동 경기의 토너먼트를 떠올리면 쉽다. 먼저 누가 만든 규칙인지로 한 번 겨루고, 비기면 어느 층에 넣었는지로 겨루고, 또 비기면 선택자가 얼마나 구체적인지로 겨룬다. 그래도 비기면 나중에 적은 규칙이 이긴다.
+
+  앞 경기에서 진 규칙은 뒤 경기에 나가지 못한다. 그래서 아무리 구체적인 선택자도 앞 단계에서 지면 소용이 없다. 반대로 아무 규칙도 없는 속성은 부모의 값을 물려받거나 처음부터 정해진 기본값을 쓴다.
+
+  내 스타일이 안 먹을 때는 이 토너먼트를 처음부터 따라가 보면 어느 경기에서 졌는지 찾을 수 있다. 브라우저 개발자 도구는 진 규칙에 줄을 그어 보여 준다.
+</EasyIntro>
+
+헤더의 구매 버튼 글자색을 흰색으로 바꾸려고 `.btn-primary { color: white; }`를 추가했다. 새로고침해도 회색 그대로다. 개발자 도구의 Styles 패널을 열면 내가 쓴 `color: white`에 줄이 그어져 있고, 그 위에 `.header .nav button { color: gray; }`라는 규칙이 버티고 있다. 다른 사람이 만든 헤더 CSS다.
+
+여기서 흔히 하는 일은 둘 중 하나다. 선택자를 `.header .nav .btn-primary`로 길게 늘리거나, `!important`를 붙인다. 둘 다 당장은 된다. 그리고 몇 달 뒤 누군가 같은 버튼을 다시 바꾸려다 똑같은 벽에 부딪혀 선택자를 하나 더 늘린다.
+
+이 글은 브라우저가 한 속성에 걸린 여러 선언 가운데 하나를 고르는 규칙, 캐스케이드(cascade)를 처음부터 끝까지 따라간다. 결과는 크로미움 141에서 `getComputedStyle`로 직접 확인했다. 선택자가 성능에 주는 영향과 명시도 계산기는 [CSS 성능](/posts/css-performance) 글에서 다뤘으니 여기서는 "왜 이 값이 이겼나"에 집중한다.
+
+## 두 선언이 부딪히면 브라우저가 묻는 순서
+
+캐스케이드는 요소 하나, 속성 하나마다 따로 일어난다. 버튼의 `color`를 정할 때 브라우저는 이 버튼에 맞는 모든 규칙에서 `color` 선언만 모은다. 그리고 아래 질문을 순서대로 던진다. 앞 질문에서 승부가 나면 뒤 질문은 보지 않는다.
+
+1. 출처와 중요도. 브라우저 기본 스타일인가, 사용자가 지정한 스타일인가, 페이지 작성자의 스타일인가. 그리고 `!important`가 붙었나.
+2. 문맥. Shadow DOM 안쪽 스타일과 바깥 스타일이 부딪힐 때만 쓴다.
+3. 요소에 직접 붙은 `style` 속성인가.
+4. 캐스케이드 레이어(`@layer`) 순서.
+5. 명시도(specificity).
+6. 등장 순서. 나중에 나온 선언이 이긴다.
+
+명시도는 다섯 번째다. 선택자를 아무리 길게 늘려도 1, 3, 4번에서 지면 명시도를 비교할 기회조차 없다. 반대로 위의 회색 버튼처럼 1, 3, 4번이 모두 같다면 그때 명시도가 승부를 낸다.
+
+아래 그림에서 다음을 누르면 버튼 하나의 `color`를 두고 다섯 선언이 한 단계씩 떨어져 나가는 모습을 볼 수 있다. 위쪽 칸이 후보 선언이고, 아래 상자가 아직 살아남은 후보다.
+
+<AlgoTrace
+  caption="button#buy.btn-primary의 color를 고르는 과정"
+  memoryLabel="남은 후보"
+  cells={["UA button", "vendor 레이어", ".btn-primary", "#buy", ".btn-primary (뒤)"]}
+  steps={[
+    {
+      memory: ["UA", "vendor", ".btn-primary", "#buy", ".btn-primary 뒤"],
+      caption: "버튼에 맞는 규칙에서 color 선언만 모은다. 다섯 개다.",
+    },
+    {
+      pointer: 0,
+      memory: ["vendor", ".btn-primary", "#buy", ".btn-primary 뒤"],
+      caption: "출처를 본다. 브라우저 기본 스타일은 important가 없으면 작성자 스타일에 진다.",
+    },
+    {
+      pointer: 1,
+      memory: [".btn-primary", "#buy", ".btn-primary 뒤"],
+      caption: "레이어를 본다. vendor 레이어에 넣은 규칙은 레이어 밖의 규칙에 진다. 명시도가 (0,2,1)이어도 상관없다.",
+    },
+    {
+      pointer: 3,
+      found: [3],
+      memory: ["#buy"],
+      caption: "명시도를 본다. #buy는 (1,0,0), .btn-primary는 (0,1,0)이다. 첫 자리에서 갈린다.",
+    },
+    {
+      pointer: 4,
+      found: [3],
+      memory: ["#buy"],
+      caption: "뒤에 나온 .btn-primary는 등장 순서까지 가지 못했다. 명시도에서 이미 졌다.",
+    },
+  ]}
+/>
+
+이 순서를 외워 두면 "내 스타일이 안 먹는다"를 "몇 번째 질문에서 졌나"로 바꿔 물을 수 있다. 이제 질문을 하나씩 본다.
+
+## 브라우저, 사용자, 작성자
+
+CSS 선언은 세 곳에서 온다. 브라우저에 들어 있는 기본 스타일시트(user-agent stylesheet), 사용자가 브라우저에 넣은 스타일, 그리고 페이지를 만든 사람이 쓴 스타일이다. `div`가 블록으로 보이고 `body`에 8px 마진이 있고 `h2`가 굵은 건 모두 기본 스타일시트 덕분이다. CSS를 한 줄도 안 써도 문서가 읽히는 이유다.
+
+`!important`가 없으면 우선순위는 `기본 스타일 < 사용자 < 작성자`다. 페이지를 만든 사람이 기본 모양을 덮어쓸 수 있어야 하니 당연하다.
+
+`!important`가 붙으면 이 순서가 뒤집힌다. `작성자 important < 사용자 important < 기본 스타일 important`. 눈이 불편한 사용자가 "모든 글자를 24px 이상으로" 같은 스타일을 important로 넣었다면, 페이지 작성자가 important를 붙여도 사용자를 이기지 못하게 한 것이다. 접근성을 위해 마지막 결정권을 사용자에게 준 설계다.
+
+여기에 애니메이션과 트랜지션이 끼어든다. 명세는 CSS 애니메이션(`@keyframes`)이 만드는 값을 작성자의 일반 선언보다 위, important 선언보다 아래에 둔다. 트랜지션이 만드는 중간 값은 맨 꼭대기다. 그래서 `!important`로 고정한 속성에는 `@keyframes` 애니메이션이 먹지 않는다. 애니메이션을 걸었는데 아무 일도 안 일어나면 같은 속성에 important가 걸려 있는지 본다.
+
+## style 속성과 !important
+
+요소에 직접 쓴 `style="..."`은 선택자가 없다. 명세는 이걸 명시도 비교 전에 따로 처리한다. 같은 출처와 중요도라면 `style` 속성이 어떤 선택자든 이긴다. id를 열 개 붙여도 진다.
+
+`!important`는 그 앞 단계인 출처와 중요도에서 갈리기 때문에 `style` 속성의 일반 선언을 이긴다. 그리고 `style` 속성에도 `!important`를 붙일 수 있다. 크로미움에서 확인해 봤다.
+
+```html
+<style>
+  @layer base { #a { color: red !important; } }
+  #b { color: red !important; }
+  .hidden { display: none !important; }
+</style>
+<p id="a" style="color: blue !important">a</p>
+<p id="b" style="color: blue !important">b</p>
+<div class="hidden" id="h">c</div>
+<script>
+  document.getElementById("h").style.display = "block";
+</script>
+```
+
+```text
+#a color   rgb(0, 0, 255)
+#b color   rgb(0, 0, 255)
+#h display none
+```
+
+`style` 속성의 important는 레이어 안의 important도, id 선택자의 important도 이긴다. 마지막 줄이 실무에서 자주 만나는 함정이다. 자바스크립트로 `el.style.display = "block"`을 넣었는데 요소가 안 보인다. `style` 속성의 일반 선언은 클래스의 `!important`를 이기지 못하기 때문이다. 슬라이더나 툴팁 라이브러리가 인라인 스타일로 위치를 옮기는데 꼼짝하지 않는다면 같은 속성에 important가 걸린 CSS가 있는지부터 찾는다.
+
+## 명시도는 자리마다 따로 센다
+
+출처, 문맥, `style` 속성, 레이어가 모두 같으면 명시도를 비교한다. 명시도는 선택자가 얼마나 구체적으로 요소를 가리키는지를 세 자리 숫자로 나타낸 값이다.
+
+- 첫째 자리: id 선택자 개수
+- 둘째 자리: 클래스, 속성 선택자(`[type="text"]`), 가상 클래스(`:hover`, `:nth-child()`) 개수
+- 셋째 자리: 태그 선택자와 가상 요소(`::before`) 개수
+
+전체 선택자 `*`와 결합자(`>`, `+`, `~`, 공백)는 점수가 없다. 아래 선택자를 조각별로 눌러 보면 각 조각이 어느 자리에 점수를 보태는지 나온다.
+
+<UrlAnatomy
+  caption="#nav .menu > li:not(.active) a::before의 명시도는 (1,2,3)"
+  joiner=" "
+  params={[
+    { key: "#nav", title: "id 선택자", description: "첫째 자리에 1을 더한다. 지금까지 (1,0,0).", required: true },
+    { key: ".menu", title: "클래스 선택자", description: "둘째 자리에 1을 더한다. 지금까지 (1,1,0)." },
+    { key: ">", title: "자식 결합자", description: "결합자는 점수가 없다. 공백, +, ~도 마찬가지다. 지금까지 그대로 (1,1,0)." },
+    { key: "li:not(.active)", title: "태그와 :not()", description: "li는 셋째 자리에 1. :not() 자체는 점수가 없고 괄호 안에서 가장 센 선택자의 점수를 쓴다. 안의 .active가 둘째 자리에 1을 더한다. 지금까지 (1,2,1)." },
+    { key: "a::before", title: "태그와 가상 요소", description: "a도 ::before도 셋째 자리다. 2를 더해 최종 (1,2,3)." },
+  ]}
+/>
+
+비교는 왼쪽 자리부터 한다. 첫째 자리가 크면 나머지는 보지 않는다. 그래서 클래스를 열한 개 붙인 `(0,11,0)`도 id 하나짜리 `(1,0,0)`을 이기지 못한다. 열 개가 모이면 윗자리로 올라가는 십진수가 아니다. 자리마다 따로 센 숫자를 나란히 놓고 비교한다고 생각하면 된다.
+
+헷갈리는 건 괄호를 받는 가상 클래스다.
+
+- `:is()`, `:not()`, `:has()`는 괄호 안 선택자 가운데 가장 센 것의 점수를 쓴다.
+- `:where()`는 괄호 안이 무엇이든 0이다.
+- `:nth-child(2n of .item)`처럼 `of`가 붙으면 가상 클래스 하나에 괄호 안의 가장 센 선택자를 더한다.
+
+`:is()`가 실무에서 사고를 부른다. "가장 센 것"은 실제로 맞은 선택자가 아니라 괄호 안에 적힌 것 중 가장 센 것이다. 크로미움에서 확인했다.
+
+```html
+<style>
+  :is(#sidebar, .card) p { color: red; }   /* (1,0,1) */
+  .card p.title { color: blue; }           /* (0,2,1) */
+
+  div:where(#wrap) .note { color: red; }   /* (0,1,1) */
+  .note { color: green; }                  /* (0,1,0) */
+</style>
+<div class="card"><p class="title" id="p1">a</p></div>
+<div id="wrap"><p class="note" id="p2">b</p></div>
+```
+
+```text
+#p1 color  rgb(255, 0, 0)
+#p2 color  rgb(255, 0, 0)
+```
+
+`#p1`은 `#sidebar` 안에 있지 않고 `.card`로 맞았다. 그래도 `:is(#sidebar, .card)`는 `#sidebar` 점수를 써서 (1,0,1)이 되고 (0,2,1)인 파란 규칙을 이긴다. 공용 스타일에 `:is()`로 id를 섞어 두면 엉뚱한 곳에서 이런 일이 생긴다.
+
+`#p2`는 반대 방향의 함정이다. `:where(#wrap)`은 0점이지만 앞에 붙은 `div`는 그대로 1점이다. 그래서 (0,1,1)이 `.note`의 (0,1,0)을 이긴다. `:where()`로 점수를 없애려면 선택자 전체를 감싸야 한다. 리셋 CSS나 라이브러리 기본 스타일을 `:where(.btn) { ... }`처럼 쓰는 이유가 이것이다. 점수가 0이면 쓰는 쪽이 클래스 하나로 쉽게 덮는다.
+
+## 점수가 같으면 나중 것이 이긴다
+
+명시도까지 같으면 마지막 질문, 등장 순서가 남는다. 문서에 나중에 나온 선언이 이긴다. 같은 파일 안이면 아래쪽, 여러 파일이면 `<link>`와 `<style>`이 문서에 들어간 순서다. `@import`로 불러온 시트는 그 `@import`가 있던 자리에 펼쳐 넣은 것처럼 계산한다.
+
+순서는 눈에 잘 안 보여서 까다롭다. 컴포넌트 A의 CSS에 `.title { margin: 0 }`이, 컴포넌트 B의 CSS에 `.title { margin: 8px }`이 있으면 결과는 어느 시트가 먼저 문서에 들어왔는지에 달렸다. 개발 서버는 모듈을 import한 순서대로 `<style>`을 넣는다. 배포 빌드는 번들러가 CSS를 청크로 묶고 나누므로, 페이지마다 시트가 들어오는 순서가 개발 때와 달라질 수 있다. "로컬에서는 멀쩡한데 배포하면 여백이 다르다"는 증상의 흔한 원인이다. webpack 계열 빌드가 내는 "Conflicting order" 경고가 이 상황을 알려 준다.
+
+이 경우 순서를 맞추려고 import 위치를 옮기는 건 임시방편이다. 같은 명시도의 선언 두 개가 같은 요소를 두고 다투지 않게 만드는 게 근본 해법이다. 클래스 이름이 겹치지 않게 모듈 단위로 이름을 나누거나, 아래에서 볼 `@layer`로 우선순위를 순서 대신 레이어로 정한다.
+
+## 아무도 정하지 않은 속성은 어디서 오나
+
+캐스케이드는 선언이 있을 때 하나를 고르는 일이다. 어떤 속성에 맞는 선언이 하나도 없으면 브라우저는 두 갈래 중 하나를 탄다.
+
+- 상속되는 속성이면 부모의 계산된 값(computed value)을 물려받는다.
+- 상속되지 않는 속성이면 그 속성의 초깃값(initial value)을 쓴다.
+
+어느 속성이 상속되는지는 명세가 속성마다 정해 두었다. 대체로 글자와 관련된 속성은 상속되고 상자와 관련된 속성은 상속되지 않는다.
+
+| 상속된다 | 상속되지 않는다 |
+|---|---|
+| `color`, `font-*`, `line-height`, `letter-spacing` | `margin`, `padding`, `border` |
+| `text-align`, `text-indent`, `white-space` | `background`, `width`, `height` |
+| `visibility`, `cursor`, `list-style` | `display`, `position`, `overflow` |
+| `direction`, `quotes` | `opacity`, `transform`, `z-index` |
+
+`border`가 상속된다고 상상해 보면 이유가 보인다. 카드에 테두리를 그으면 그 안의 제목, 문단, 글자 하나하나에 모두 테두리가 생긴다. 반대로 `color`가 상속되지 않으면 카드 글자색을 바꿀 때 안에 있는 모든 태그에 색을 다시 줘야 한다.
+
+상속되지 않는 속성도 부모 색을 따라가는 것처럼 보이는 경우가 있다. `border-color`의 초깃값이 `currentcolor`, 즉 자기 `color` 값이라서다. `color: red`인 요소에 `border: 2px solid`만 주면 테두리가 빨갛다. 크로미움에서 `borderTopColor`를 읽으면 `rgb(255, 0, 0)`이 나온다.
+
+### 폼 요소는 글꼴을 물려받지 않는다
+
+`body`에 글꼴을 정했는데 버튼과 입력창만 다른 글꼴로 나오는 건 누구나 한 번은 겪는다. `font-family`는 상속되는 속성인데도 그렇다. 기본 스타일시트가 `button`, `input`, `select`, `textarea`에 글꼴을 직접 지정하기 때문이다. 직접 지정한 선언이 있으면 상속은 일어나지 않는다. 상속은 선언이 없을 때만 쓰는 대체 경로다.
+
+```html
+<div style="font-family: serif; font-size: 20px">
+  <p id="p">문단</p>
+  <button id="b">버튼</button>
+</div>
+```
+
+```text
+p      font-family serif   font-size 20px
+button font-family Arial   font-size 13.3333px
+```
+
+리눅스 크로미움 141의 결과다. 버튼 글꼴 이름은 운영체제마다 다르지만 13.3333px(10pt)는 크로미움 계열에서 공통이다. 그래서 거의 모든 리셋 CSS에 아래 한 줄이 있다.
+
+```css
+button, input, select, textarea {
+  font: inherit; /* 기본 스타일의 글꼴 지정을 덮고 부모 값을 받는다 */
+}
+```
+
+### 물려받는 건 계산된 값이다
+
+상속은 부모가 적은 글자 그대로가 아니라 부모에서 계산을 마친 값을 넘긴다. `line-height`에서 이 차이가 드러난다.
+
+```html
+<div style="font-size: 16px; line-height: 1.5em">
+  <p id="l1" style="font-size: 32px">큰 글자</p>
+</div>
+<div style="font-size: 16px; line-height: 1.5">
+  <p id="l2" style="font-size: 32px">큰 글자</p>
+</div>
+```
+
+```text
+#l1 line-height 24px
+#l2 line-height 48px
+```
+
+`1.5em`은 부모에서 16px × 1.5 = 24px로 계산된 뒤 그 24px이 자식에게 넘어간다. 자식 글자가 32px인데 줄 간격이 24px이라 줄이 겹친다. 단위 없는 `1.5`는 숫자 그대로 넘어가서 자식이 자기 글자 크기 32px에 곱해 48px이 된다. `line-height`는 단위 없이 쓰라는 말이 여기서 나왔다.
+
+## inherit, initial, unset, revert
+
+상속과 초깃값을 직접 고르고 싶을 때 쓰는 값이 네 개 있다. 모든 속성에 쓸 수 있다.
+
+- `inherit`: 부모의 계산된 값을 받는다. 상속되지 않는 속성도 억지로 받게 할 수 있다.
+- `initial`: 명세에 적힌 그 속성의 초깃값을 쓴다.
+- `unset`: 상속되는 속성이면 `inherit`, 아니면 `initial`처럼 동작한다. "선언이 없었던 것처럼"에 가깝다.
+- `revert`: 작성자 스타일을 모두 무른다. 사용자 스타일이나 브라우저 기본 스타일이 주던 값으로 돌아간다.
+
+`initial`을 "기본값"으로 이해하면 틀린다. 크로미움에서 `div`에 하나씩 넣어 봤다.
+
+```html
+<div style="display: initial">a</div>
+<div style="display: unset">b</div>
+<div style="display: revert">c</div>
+<p style="color: red">
+  <span style="color: initial">d</span>
+  <span style="color: unset">e</span>
+</p>
+```
+
+```text
+display: initial   inline
+display: unset     inline
+display: revert    block
+color: initial     rgb(0, 0, 0)
+color: unset       rgb(255, 0, 0)
+```
+
+`display`의 명세 초깃값은 `inline`이다. `div`가 블록인 건 기본 스타일시트가 `div { display: block }`을 줬기 때문이지 `display`의 초깃값이 `block`이라서가 아니다. 그래서 `initial`과 `unset`은 `div`를 인라인으로 만들고, 기본 스타일시트로 돌아가는 `revert`만 블록으로 남긴다. "브라우저 기본 모양으로 되돌리고 싶다"면 `revert`가 맞다.
+
+`all` 속성은 이 값을 모든 속성에 한 번에 건다. 버튼 모양을 처음부터 그리려고 `all: unset`을 쓰는 코드가 많은데, 결과를 보면 조심해야 할 이유가 보인다.
+
+```text
+button { all: unset }
+display      inline
+font-family  "Times New Roman"   (부모에서 상속)
+font-size    16px
+padding      0px
+cursor       auto
+outline-style (Tab으로 포커스했을 때)  none
+```
+
+Tab 키로 포커스를 옮기면 일반 버튼은 `outline-style: auto`로 포커스 링이 생기지만 `all: unset` 버튼은 `none`이다. 브라우저가 기본 스타일로 주던 포커스 표시까지 지워져서 키보드 사용자는 지금 어디에 있는지 모른다. `all: unset`을 썼다면 `:focus-visible`에 포커스 스타일을 다시 줘야 한다.
+
+레이어를 쓴다면 `revert-layer`도 있다. 지금 레이어의 선언을 무르고 바로 아래 레이어가 주던 값으로 돌아간다. 컴포넌트 레이어에서 "이 속성만은 리셋 레이어 값을 쓰겠다"고 할 때 쓴다.
+
+## 외부 CSS를 아래 층에 깔기
+
+처음 장면으로 돌아가자. 남이 만든 `.header .nav button`을 이기려고 선택자를 늘리는 대신, 그 CSS를 아예 낮은 층에 넣을 수 있다. 캐스케이드 레이어다. 레이어 순서는 명시도보다 먼저 비교되므로, 낮은 레이어의 (1,2,1) 선택자도 높은 레이어의 (0,1,0)에 진다. 문법과 기본 동작은 [CSS 성능](/posts/css-performance) 글의 "명시도 싸움을 @layer로 끝내기"에 정리해 두었다. 여기서는 외부 CSS를 다룰 때 걸리는 지점만 본다.
+
+```css
+/* 1. 맨 위에서 레이어 순서를 먼저 못 박는다. 뒤에 적은 레이어가 이긴다 */
+@layer reset, vendor, components;
+
+/* 2. 외부 CSS를 vendor 레이어로 불러온다 */
+@import url("/vendor/date-picker.css") layer(vendor);
+
+/* 3. 내 컴포넌트 스타일 */
+@layer components {
+  .btn-primary { color: white; }
+}
+```
+
+순서 선언을 맨 위에 두는 이유가 있다. 레이어 순서는 그 이름이 처음 등장한 순서로 정해진다. 순서 선언 없이 `@layer components`를 먼저 쓰고 나중에 `@import ... layer(vendor)`가 나오면 vendor가 더 높은 레이어가 된다. `@import`는 시트 맨 앞에만 올 수 있지만 `@layer` 순서 선언은 그보다 앞에 둘 수 있다.
+
+외부 CSS가 `!important`를 쓰고 있으면 결과가 뒤집힌다. 크로미움에서 확인했다.
+
+```html
+<style>
+  @layer vendor, mine;
+  @layer vendor {
+    .tag { color: red !important; }
+    .chip { color: red; }
+  }
+  @layer mine {
+    .tag { color: blue !important; }
+  }
+  .chip { color: green; }
+  .badge { color: green; }
+  @layer vendor { .badge { color: red !important; } }
+</style>
+```
+
+```text
+.tag    rgb(255, 0, 0)
+.chip   rgb(0, 128, 0)
+.badge  rgb(255, 0, 0)
+```
+
+`.chip`은 예상대로다. 일반 선언끼리는 레이어 밖이 가장 세다. 그런데 `.tag`는 나중 레이어인 mine이 아니라 먼저 선언한 vendor가 이겼다. important 선언끼리는 레이어 순서가 거꾸로 적용되기 때문이다. 출처의 순서가 important에서 뒤집히는 것과 같은 원리다. 아래 층이 "이건 꼭 지켜야 한다"고 표시한 값은 위층이 덮지 못한다. `.badge`처럼 레이어 밖의 일반 선언으로도 vendor의 important를 이기지 못한다.
+
+그래서 외부 CSS를 레이어에 넣기 전에 그 CSS의 `!important`를 검색해 본다. 많다면 레이어로는 해결되지 않고, 그 선언만 골라 내 쪽에서도 important를 쓰거나 라이브러리가 제공하는 CSS 변수로 값을 바꾸는 편이 낫다.
+
+npm 패키지 CSS를 자바스크립트에서 `import "lib/style.css"`로 불러오면 레이어를 줄 자리가 없다. 이 경우 CSS 파일 하나를 만들어 그 안에서 `@import ... layer(vendor)`로 감싸는데, 패키지 경로를 `@import`로 풀어 주는지는 번들러와 PostCSS 설정에 따라 다르다. 도입 전에 빌드 결과물에 `@layer vendor`가 실제로 남았는지 확인한다.
+
+## !important를 하나 붙이면 생기는 일
+
+`!important`는 출처와 중요도라는 첫 번째 질문의 답을 바꾼다. 명시도를 높이는 게 아니라 다른 리그로 옮기는 것이다. 그 결과가 몇 가지 있다.
+
+첫째, 그 선언을 덮으려면 덮는 쪽도 important여야 한다. important끼리 만나면 다시 레이어, 명시도, 순서로 겨룬다. 결국 important 리그 안에서 같은 명시도 싸움이 다시 시작된다. 한 프로젝트에서 `!important`가 수백 개로 불어나는 건 대개 이 과정이다.
+
+둘째, 자바스크립트가 넣는 인라인 스타일을 막는다. 앞에서 본 `el.style.display = "block"`이 안 먹는 예다. 애니메이션 라이브러리, 드래그 앤 드롭, 가상 스크롤처럼 인라인 `style`로 위치와 크기를 바꾸는 코드는 모두 영향을 받는다.
+
+셋째, `@keyframes` 애니메이션이 그 속성을 바꾸지 못한다. 애니메이션 값은 important 선언 아래에 있기 때문이다.
+
+그래도 important가 맞는 자리가 있다. 유틸리티 클래스처럼 "이 클래스를 붙였으면 무조건 이렇게 보여야 한다"는 약속이 분명한 곳, 그리고 움직임 줄이기 설정을 켠 사용자에게 모든 애니메이션을 끄는 전역 규칙이다.
+
+```css
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;   /* 어떤 컴포넌트의 애니메이션도 즉시 끝나게 */
+    transition-duration: 0.01ms !important;
+  }
+}
+```
+
+둘 다 "어떤 선택자보다도 이겨야 한다"는 의도가 코드에 드러난다. 의도가 아니라 "일단 안 먹어서" 붙인 important는 나중에 지울 수 없게 된다.
+
+## 직접 판정해 보기
+
+지금까지 본 순서를 함수로 옮겨 보자. 선언 목록을 받아 이긴 선언의 값을 돌려준다. 각 선언에는 출처(`ua`, `user`, `author`), important 여부, `style` 속성인지, 레이어 번호(먼저 선언한 레이어가 0, 레이어 밖이면 `null`), 명시도 세 자리, 등장 순서가 들어 있다. Shadow DOM 문맥과 애니메이션은 뺐다.
+
+<CodePlayground
+  caption="캐스케이드 판정기"
+  functionName="winner"
+  initialCode={`// d = { value, origin: "ua" | "user" | "author", important, inline,
+//       layer: 0, 1, 2 ... 또는 null(레이어 밖), spec: [a, b, c], order }
+function winner(decls) {
+  // 1. 출처와 중요도  2. style 속성  3. 레이어  4. 명시도  5. 등장 순서
+  return decls[0].value;
+}`}
+  solution={`function winner(decls) {
+  const originRank = (d) => d.important
+    ? { author: 3, user: 4, ua: 5 }[d.origin]
+    : { ua: 0, user: 1, author: 2 }[d.origin];
+  const layerRank = (d) => {
+    const r = d.layer === null ? Infinity : d.layer;
+    return d.important ? -r : r; // important는 레이어 순서가 뒤집힌다
+  };
+  const key = (d) => [originRank(d), d.inline ? 1 : 0, layerRank(d), ...d.spec, d.order];
+  let best = decls[0];
+  for (const d of decls.slice(1)) {
+    const a = key(d), b = key(best);
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] !== b[i]) { if (a[i] > b[i]) best = d; break; }
+    }
+  }
+  return best.value;
+}`}
+  tests={[
+    { label: "명시도가 높은 쪽", args: [[{ value: "red", origin: "author", important: false, inline: false, layer: null, spec: [1, 2, 1], order: 0 }, { value: "blue", origin: "author", important: false, inline: false, layer: null, spec: [0, 1, 0], order: 1 }]], expected: "red" },
+    { label: "레이어가 명시도보다 먼저", args: [[{ value: "red", origin: "author", important: false, inline: false, layer: 0, spec: [1, 2, 1], order: 0 }, { value: "blue", origin: "author", important: false, inline: false, layer: 1, spec: [0, 1, 0], order: 1 }]], expected: "blue" },
+    { label: "레이어 밖이 가장 세다", args: [[{ value: "blue", origin: "author", important: false, inline: false, layer: 1, spec: [1, 0, 0], order: 0 }, { value: "green", origin: "author", important: false, inline: false, layer: null, spec: [0, 1, 0], order: 1 }]], expected: "green" },
+    { label: "important는 먼저 선언한 레이어가 이긴다", args: [[{ value: "red", origin: "author", important: true, inline: false, layer: 0, spec: [0, 1, 0], order: 0 }, { value: "blue", origin: "author", important: true, inline: false, layer: 1, spec: [0, 1, 0], order: 1 }, { value: "green", origin: "author", important: true, inline: false, layer: null, spec: [0, 1, 0], order: 2 }]], expected: "red" },
+    { label: "사용자 important가 작성자 important를 이긴다", args: [[{ value: "20px", origin: "author", important: true, inline: false, layer: null, spec: [1, 0, 0], order: 1 }, { value: "24px", origin: "user", important: true, inline: false, layer: null, spec: [0, 0, 1], order: 0 }]], expected: "24px" },
+    { label: "style 속성이 id를 이긴다", args: [[{ value: "red", origin: "author", important: false, inline: false, layer: null, spec: [1, 0, 0], order: 0 }, { value: "orange", origin: "author", important: false, inline: true, layer: null, spec: [0, 0, 0], order: 1 }]], expected: "orange" },
+    { label: "클래스의 important가 style 속성을 이긴다", args: [[{ value: "red", origin: "author", important: true, inline: false, layer: null, spec: [0, 1, 0], order: 0 }, { value: "orange", origin: "author", important: false, inline: true, layer: null, spec: [0, 0, 0], order: 1 }]], expected: "red" },
+    { label: "모두 같으면 나중 것", args: [[{ value: "red", origin: "author", important: false, inline: false, layer: null, spec: [0, 1, 0], order: 0 }, { value: "blue", origin: "author", important: false, inline: false, layer: null, spec: [0, 1, 0], order: 1 }]], expected: "blue" },
+  ]}
+/>
+
+비교 키를 배열 하나로 만들어 앞에서부터 비교하는 게 요령이다. 캐스케이드가 "앞 질문에서 갈리면 뒤는 안 본다"는 구조라서 사전 순 비교와 똑같다. important일 때 레이어 순위에 음수를 붙이는 한 줄이 순서 뒤집기를 담당한다.
+
+## 개발자 도구에서 진 선언 읽기
+
+크롬 개발자 도구의 Elements › Styles 패널은 캐스케이드 결과를 그대로 보여 준다. 읽는 법만 알면 몇 번째 질문에서 졌는지 바로 보인다.
+
+- 규칙은 이기는 순서대로 위에서 아래로 쌓인다. 맨 위 `element.style`은 `style` 속성이다. 레이어를 쓰면 규칙 위에 `@layer vendor` 같은 표시가 붙는다.
+- 줄이 그어진 선언은 더 위의 규칙에 진 것이다. 같은 속성을 위쪽에서 찾으면 이긴 선언이 있다.
+- 줄이 그어지고 노란 경고 아이콘이 붙은 선언은 진 게 아니라 브라우저가 이해하지 못한 것이다. 오타가 난 속성 이름, 단위를 빼먹은 값(`width: 100`)이 여기 해당한다. 잘못된 선언은 캐스케이드에 아예 참여하지 않는다.
+- 흐린 글씨에 정보 아이콘이 붙은 선언은 이겼지만 효과가 없는 것이다. 인라인 요소에 준 `width`, flex 컨테이너가 아닌 요소에 준 `justify-content`처럼. 아이콘에 마우스를 올리면 이유가 나온다.
+- "Inherited from div.card" 아래에는 조상에서 물려받은 규칙이 나온다. 상속되지 않는 속성은 흐리게 표시된다.
+
+선언이 너무 많아 헤맬 때는 Computed 탭이 빠르다. 속성을 찾아 펼치면 최종 값과, 그 값을 준 규칙과 진 규칙이 순서대로 나온다. 콘솔에서는 지금 선택한 요소가 `$0`이라 `getComputedStyle($0).color`로 최종 값을 바로 읽을 수 있다.
+
+처음 장면의 회색 버튼을 이 순서로 보면 이렇다. 내 선언에 줄이 그어져 있고 경고 아이콘은 없다. 값이 잘못된 건 아니다. 위의 이긴 규칙에 레이어 표시가 없고 내 규칙도 없다. 둘 다 작성자 스타일이고 레이어 밖이니 명시도에서 졌다. `.header .nav button`은 (0,2,1), 내 `.btn-primary`는 (0,1,0)이다. 고치는 방법은 셋이다. 헤더 CSS를 낮은 레이어로 옮기거나, 헤더 CSS의 선택자를 `:where(.header .nav) button`처럼 낮추거나, 버튼 색을 헤더가 노출하는 CSS 변수로 받게 바꾼다. 선택자를 늘려 이기는 건 네 번째 선택지이고, 다음 사람에게 같은 문제를 넘긴다.
+
+## 선택자를 늘리기 전에
+
+스타일이 안 먹을 때 선택자를 늘리기 전에 캐스케이드의 질문을 순서대로 따라간다. 출처와 important, `style` 속성, 레이어, 명시도, 등장 순서. 어느 단계에서 졌는지 알면 고칠 곳도 그 단계다. 선언이 없는 속성은 상속되거나 초깃값을 쓰고, 그 경로를 직접 고를 때는 `initial`보다 `revert`가 기대에 가깝다. 상자의 크기와 흐름을 정하는 규칙은 [박스 모델과 일반 흐름](/posts/css-box-model-layout)에서, 겹친 요소의 앞뒤를 정하는 규칙은 [position과 쌓임 맥락](/posts/css-position-stacking-context)에서 이어서 본다.
+
+## 면접에서 나올 만한 질문
+
+### CSS 캐스케이드란 무엇이고 어떤 순서로 우선순위를 정하나?
+
+한 요소의 한 속성에 여러 선언이 걸렸을 때 하나를 고르는 규칙이다. 출처와 중요도, Shadow DOM 문맥, `style` 속성 여부, 캐스케이드 레이어, 명시도, 등장 순서를 차례로 비교하고 앞에서 갈리면 뒤는 보지 않는다. 그래서 명시도가 아무리 높아도 레이어나 important에서 지면 소용이 없다.
+
+### 명시도는 어떻게 계산하나? 클래스 11개가 id 1개를 이길 수 있나?
+
+id 개수, 클래스·속성·가상 클래스 개수, 태그·가상 요소 개수를 세 자리로 세고 왼쪽 자리부터 비교한다. 자리 올림이 없어서 (0,11,0)은 (1,0,0)을 이기지 못한다. 전체 선택자와 결합자는 0점이다.
+
+### :is()와 :where()의 차이는?
+
+둘 다 괄호 안 선택자 중 하나라도 맞으면 맞는다. 명시도가 다르다. `:is()`는 괄호 안에서 가장 센 선택자의 점수를 쓰고, 실제로 맞은 게 약한 쪽이어도 그렇다. `:where()`는 항상 0점이라 리셋이나 라이브러리 기본 스타일처럼 쉽게 덮여야 하는 규칙에 쓴다.
+
+### !important는 왜 남용하면 안 되나?
+
+important는 명시도를 높이는 게 아니라 다른 우선순위 리그로 옮긴다. 그걸 덮으려면 다시 important가 필요해 important끼리 같은 싸움이 반복된다. 자바스크립트가 넣는 인라인 스타일과 `@keyframes` 애니메이션도 그 속성을 바꾸지 못하게 된다. 유틸리티 클래스나 움직임 줄이기 전역 규칙처럼 무조건 이겨야 한다는 의도가 분명할 때만 쓴다.
+
+### @layer를 쓰면 레이어 밖의 규칙과 important는 어떻게 되나?
+
+일반 선언끼리는 레이어 밖의 규칙이 모든 레이어를 이기고, 레이어끼리는 나중에 선언한 레이어가 이긴다. important 선언은 순서가 뒤집혀서 먼저 선언한 레이어가 이기고 레이어 밖의 important가 가장 약하다. 그래서 외부 CSS를 낮은 레이어에 넣어도 그 CSS의 important는 내 일반 선언으로 덮을 수 없다.
+
+### 어떤 속성은 상속되고 어떤 속성은 안 되는 이유는? 버튼은 왜 body 글꼴을 안 따르나?
+
+글자와 관련된 속성(`color`, `font-*`, `line-height`)은 상속되고 상자와 관련된 속성(`margin`, `border`, `background`)은 상속되지 않게 명세가 정했다. 상속은 선언이 하나도 없을 때만 일어난다. 버튼과 입력창은 기본 스타일시트가 글꼴을 직접 지정해서 상속이 끼어들 자리가 없고, 그래서 `font: inherit`로 덮는다.
+
+### initial, unset, revert는 어떻게 다른가?
+
+`initial`은 명세의 초깃값, `unset`은 상속 속성이면 `inherit` 아니면 `initial`, `revert`는 작성자 스타일을 무르고 브라우저 기본 스타일로 돌아간다. `div`에 `display: initial`을 주면 `display`의 초깃값인 `inline`이 된다. 블록은 기본 스타일시트가 준 값이라 `revert`를 써야 남는다.
+
+### 로컬에서는 맞는데 배포하면 스타일 우선순위가 달라진다. 어디를 보나?
+
+명시도가 같은 선언이 서로 다른 CSS 파일에 있고 등장 순서로 승부가 나는 경우를 먼저 의심한다. 번들러가 배포 빌드에서 CSS를 청크로 묶고 나누면 시트가 문서에 들어오는 순서가 개발 서버와 달라질 수 있다. 개발자 도구에서 두 규칙의 출처 파일과 순서를 비교하고, 클래스 이름이 겹치지 않게 나누거나 레이어로 우선순위를 명시해 순서 의존을 없앤다.

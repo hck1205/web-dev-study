@@ -91,4 +91,19 @@ export const LAZY_LOADING_STRATEGIES: QuizQuestion[] = [
       "하이드레이션을 미루면 JS 일은 줄지만, 175KB HTML과 3,000개 요소를 파싱하고 배치하는 비용은 그대로 남는다. 이건 DOM을 줄이거나 화면 밖 렌더링을 건너뛰는 방법으로 다뤄야 한다.",
     anchor: "하이드레이션을-미루면-무엇이-줄어드나",
   },
+  {
+    id: "lazy-loading-strategies-7",
+    post: "lazy-loading-strategies",
+    question: "채팅 위젯을 next/script의 strategy=\"lazyOnload\"로 넣고 버튼 핸들러에서 window.Chat.open()을 바로 불렀다. 사용자가 페이지를 열자마자 누르면 어떻게 되나?",
+    choices: [
+      "Next.js가 버튼 클릭을 큐에 쌓았다가 스크립트가 오면 대신 실행한다",
+      "lazyOnload는 클릭 순간 스크립트를 받으니 조금 늦게 열린다",
+      "스크립트가 아직 안 들어와 window.Chat이 없어서 오류가 난다",
+      "beforeInteractive로 자동 승격되어 정상 동작한다",
+    ],
+    answer: 2,
+    explanation:
+      "lazyOnload는 페이지의 다른 리소스를 다 받고 브라우저가 한가할 때 스크립트를 넣는다. 그 전에 전역 함수를 부르면 없는 값이라 터진다. 받은 뒤의 일은 onLoad나 onReady에 두고, 버튼은 준비될 때까지 막거나 파사드로 만든다.",
+    anchor: "스크립트로-붙는-서드파티는-strategy로-순서를-정한다",
+  },
 ];

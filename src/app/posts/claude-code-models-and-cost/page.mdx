@@ -1,0 +1,397 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("claude-code-models-and-cost");
+
+<EasyIntro>
+  클로드 코드를 쓰면 일주일에 쓸 수 있는 양이 정해져 있는데, 수요일쯤 벌써 바닥이 나는 일이 생긴다. 왜 그렇게 빨리 줄어드는지 알려면 무엇에 돈이 드는지부터 봐야 한다.
+
+  택시에 비유하면 이해가 쉽다. 큰 차일수록 미터기가 빨리 올라가고, 운전사가 길을 오래 고민할수록 요금이 붙는다. 그런데 이 택시는 출발할 때마다 지금까지 지나온 길 전체를 다시 달린다. 다행히 방금 달린 길은 아주 싸게 다시 갈 수 있는 지름길로 기억해 두는데, 차를 바꾸거나 오래 쉬면 그 지름길이 사라진다.
+
+  그래서 아끼는 방법은 생각보다 단순하다. 쉬운 심부름은 작은 차에 맡기고, 서로 상관없는 일을 할 때는 지나온 길을 비우고 새로 출발한다. 일하는 도중에 차를 자주 바꾸지 않고, 큰 차는 정말 어려운 길에서만 부른다.
+</EasyIntro>
+
+수요일 오후, 리팩터링을 반쯤 하다가 "You've hit your weekly limit"가 떴다. 월요일에 한 일이라고는 큰 저장소 하나를 Opus로 훑게 한 것과, 아침에 연 세션을 저녁까지 닫지 않고 이것저것 시킨 것뿐이다. 팀 동료는 같은 요금제로 금요일까지 멀쩡하다.
+
+차이는 쓰는 양이 아니라 쓰는 방식에서 났다. 어떤 모델로 돌렸는지, 모델이 얼마나 오래 생각했는지, 프롬프트 캐시가 몇 번 깨졌는지, 세션 하나에 일을 몇 개나 몰아넣었는지가 같은 작업의 비용을 열 배 넘게 벌린다. 이 글은 그 네 가지를 실제 실행 결과로 따져 본다. 구독과 API 키가 돈을 세는 방식, `/usage`와 `/context`로 새는 곳을 찾는 법, `/model`과 `opusplan`, effort 단계, 캐시를 깨는 행동, 서브에이전트에 작은 모델을 붙이는 설정 순서다.
+
+컨텍스트 창이 차고 압축되는 과정은 [컨텍스트 창 글](/posts/claude-code-context-window)에서 이미 다뤘다. 여기서는 그 과정을 돈으로 다시 본다. 서브에이전트를 만드는 법은 [Claude Code 확장](/posts/claude-code-extensions)에 있다. 모델 자체를 고르는 일반론(닫힌 모델과 오픈 웨이트, 단가표 읽기)은 [모델 고르기](/posts/llm-model-selection)로 넘긴다.
+
+기준은 Claude Code 2.1.310(Ubuntu 24.04)과 2026년 10월의 [공식 비용 문서](https://code.claude.com/docs/en/costs), [모델 설정 문서](https://code.claude.com/docs/en/model-config), API 가격표다. 이 도구는 버전마다 기본값이 바뀌어 왔다. 기본 모델과 기본 effort는 특히 그렇다. 버전이 붙은 이야기는 문서에 적힌 범위로만 쓴다.
+
+## 구독과 API 키는 한도를 세는 단위가 다르다
+
+같은 Claude Code라도 어떻게 로그인했느냐에 따라 "비용"의 뜻이 달라진다.
+
+claude.ai 구독(Pro, Max, Team, Enterprise)으로 로그인하면 돈이 아니라 사용량 창으로 센다. Team·Enterprise 문서 기준으로 좌석마다 허용량이 있고, 이 허용량은 5시간 단위로 굴러가는 창과 주간 창 두 개로 다시 채워진다. Claude 채팅, Cowork와 같은 허용량을 나눠 쓴다. 한도에 닿으면 메시지가 두 갈래로 나뉜다.
+
+- "You've hit your session limit"나 "weekly limit"는 모든 모델이 함께 쓰는 창이 찼다는 뜻이다. `/model`로 모델을 바꿔도 풀리지 않는다.
+- "You've hit your Opus limit"처럼 모델 이름이 붙은 메시지는 그 모델 계열의 몫만 찬 것이다. 이때는 다른 계열로 바꾸면 계속 일할 수 있다.
+
+허용량을 넘어서도 일하려면 usage credits(추가 사용량)를 켜야 한다. `/usage-credits`가 그 설정 화면을 연다. 이때부터 넘친 사용량은 토큰 단가로 청구된다.
+
+창이 다시 찰 때까지 기다리는 방법도 있다. 2.1.234부터는 한도에 걸린 작업을 창이 초기화된 뒤 자동으로 이어서 하게 할 수 있고, 어떤 경우에 저절로 기다리고 어떤 경우에 `/rate-limit-options`에서 골라야 하는지는 문서에 나뉘어 있다. 밤사이 돌려 둔 긴 작업이 새벽에 한도에 걸려도 아침에 처음부터 다시 시킬 필요가 없다는 뜻이다.
+
+API 키나 Claude Console 계정으로 로그인하면 처음부터 토큰마다 돈을 낸다. Console에 처음 연결하면 "Claude Code"라는 워크스페이스가 자동으로 생기고, 거기서 지출 한도를 걸고 사용량을 본다. Bedrock이나 Google Cloud, Foundry를 거치면 그 클라우드의 청구서에 찍힌다.
+
+헷갈리기 쉬운 점이 하나 있다. `/usage`의 Session 블록에 나오는 달러 금액은 Claude Code가 토큰 수에 정가를 곱해 내 컴퓨터에서 계산한 추정치다. 구독자에게 이 숫자는 청구와 상관이 없다. 구독자는 같은 화면의 사용량 막대를 봐야 한다. 그래도 달러 추정치는 "이 세션이 얼마나 무거웠나"를 비교하는 데는 쓸모가 있어서, 이 글에서도 그 숫자로 비교한다.
+
+## 토큰은 다섯 칸으로 나뉘어 청구된다
+
+API 가격표를 보면 토큰 값이 한 줄이 아니다. 입력 토큰은 처음 보낸 것인지, 캐시에 써 둔 것인지, 캐시에서 읽은 것인지에 따라 값이 다르고, 출력 토큰은 따로 비싸다. 2026년 10월 기준으로 Claude Code의 세 별칭이 가리키는 모델의 단가(백만 토큰당 달러)는 이렇다.
+
+| 모델 | 입력 | 캐시 쓰기 5분 | 캐시 쓰기 1시간 | 캐시 읽기 | 출력 |
+| :- | -: | -: | -: | -: | -: |
+| Opus 5.5 | 4 | 5 | 8 | 0.20 | 20 |
+| Sonnet 5.5 | 2 | 2.50 | 4 | 0.10 | 10 |
+| Haiku 5.5 (프롬프트 10만 토큰 이하) | 0.10 | 0.125 | 0.20 | 0.01 | 0.50 |
+
+배율로 보면 캐시 쓰기는 입력의 1.25배(5분)나 2배(1시간), 캐시 읽기는 Opus·Sonnet 5.5에서 0.05배, Haiku에서 0.1배다. 출력은 입력의 5배다. 생각하는 데 쓴 토큰(thinking)도 출력으로 청구된다. 화면에서 접혀 있어도 마찬가지다. Haiku 5.5는 프롬프트가 10만 토큰을 넘는 요청부터 모든 칸이 다섯 배 비싸진다. 1M 창을 가진 다른 모델들은 길이와 상관없이 같은 단가다.
+
+`/usage`에 찍히는 한 줄이 이 다섯 칸을 그대로 보여 준다. 아래는 Sonnet으로 짧은 질문 두 개를 한 세션에서 묻고 `/usage`를 본 실제 출력이다.
+
+```text
+Total cost:            $0.0706
+Total duration (API):  2s
+Total duration (wall): 10s
+Total code changes:    0 lines added, 0 lines removed
+Usage by model:
+   claude-sonnet-5-5:  4 input, 6 output, 55.3k cache read, 16.3k cache write ($0.0706)
+```
+
+마지막 줄을 조각으로 나눠 읽으면 돈이 어디로 갔는지 보인다. 아래 조각을 하나씩 눌러 보면 각각 얼마였는지 나온다.
+
+<UrlAnatomy
+  caption="/usage 한 줄을 다섯 칸으로 나눠 읽기"
+  base="claude-sonnet-5-5:"
+  separator=" "
+  joiner=", "
+  params={[
+    { key: "input", display: "4 input", title: "캐시를 거치지 않은 입력", description: "질문 두 개 중 캐시 경계 뒤에 붙은 몇 토큰뿐이다. 내 질문은 생각보다 작다. 백만 토큰당 2달러라 0.00001달러도 안 된다." },
+    { key: "output", display: "6 output", title: "출력", description: "숫자 하나씩 두 번 답했다. 단가는 입력의 5배지만 양이 적어 거의 0이다. 코드를 길게 쓰게 하면 이 칸이 커진다." },
+    { key: "read", display: "55.3k cache read", title: "캐시에서 읽은 입력", description: "시스템 프롬프트와 도구 정의, 앞 턴의 대화를 캐시에서 읽었다. 5만 토큰이 넘지만 0.05배 단가라 약 0.0055달러다.", code: "55,300 × $0.10 / 1M ≈ $0.0055" },
+    { key: "write", display: "16.3k cache write", title: "캐시에 새로 쓴 입력", description: "구독 세션의 본 대화는 1시간 캐시를 쓴다. 쓰기 단가가 입력의 2배라 이 칸 하나가 금액의 90% 넘게 차지한다.", code: "16,300 × $4 / 1M ≈ $0.0652" },
+    { key: "total", display: "($0.0706)", title: "합계", description: "정가로 계산한 추정치다. 구독자는 사용량 막대를, API 사용자는 Console의 청구 화면을 본다." },
+  ]}
+/>
+
+질문은 두 줄이었는데 금액의 대부분은 캐시 쓰기다. Claude Code는 메시지를 보낼 때마다 시스템 프롬프트, 도구 정의, 프로젝트 지침, 지금까지의 대화를 통째로 다시 보낸다. 내 질문이 차지하는 몫은 처음부터 작다. 그래서 비용 이야기는 대부분 "그 큰 덩어리를 얼마나 싸게 다시 보내느냐", 곧 캐시 이야기가 된다.
+
+## 같은 문제를 세 모델에 풀려 봤다
+
+모델과 effort가 결과와 돈을 얼마나 바꾸는지 직접 재 봤다. 문제는 일부러 함정이 있는 산수로 골랐다. "09:40에 출발해 13:15에 도착하는 기차가 6분씩 네 번 정차한다. 움직인 시간은 몇 분인가? 숫자만 답하라." 정답은 215분에서 24분을 뺀 191이다.
+
+```bash
+# 도구 없이 한 번에 답하게 하고, 결과와 토큰 수를 JSON으로 받는다
+claude -p "$(cat task.txt)" --model opus --effort medium \
+  --no-session-persistence --output-format json \
+  | jq '{result, usage: .usage.output_tokens_details, cost: .total_cost_usd}'
+```
+
+`--output-format json`의 `usage`에는 입력·캐시·출력 토큰이 칸별로, `output_tokens_details.thinking_tokens`에는 생각에 쓴 토큰이, `total_cost_usd`에는 정가 추정 금액이 들어 있다. 모델과 effort를 바꿔 가며 돌린 결과를 모았다.
+
+```text
+haiku  medium  result=191  out=53  think=50  cost=$0.0020
+sonnet medium  result=189  out=3   think=0   cost=$0.0416
+opus   medium  result=191  out=37  think=34  cost=$0.0838
+opus   low     result=191  out=3   think=0   cost=$0.0704
+opus   high    result=191  out=37  think=34  cost=$0.0711
+opus   max     result=191  out=64  think=61  cost=$0.0716
+--- 바로 이어서 돌린 두 번째 묶음
+sonnet medium  result=189  out=3   think=0   cost=$0.0036
+sonnet medium  result=189  out=3   think=0   cost=$0.0036
+sonnet high    result=189  out=3   think=0   cost=$0.0352
+sonnet high    result=189  out=3   think=0   cost=$0.0036
+```
+
+세 가지가 보인다.
+
+첫째, Sonnet은 medium에서도 high에서도 생각을 하지 않고(think=0) 189라고 틀렸다. 세 번을 다시 돌려도 같았다. effort는 "이만큼 생각하라"는 명령이 아니다. 지금 모델들은 단계마다 생각할지 말지를 스스로 정하는 적응형 추론을 쓰고, effort는 그 판단의 기준선만 옮긴다. "숫자만 답하라"는 요청을 받은 Sonnet은 생각할 필요가 없다고 봤다. 같은 문제에 "답하기 전에 단계별로 계산을 적어라"를 붙였더니 `215 − 24 = 191`을 적고 맞혔다. 프롬프트에 `ultrathink`를 넣은 실행은 여전히 189였다. 문서도 `ultrathink`는 그 턴에만 "더 깊이 생각하라"는 지시를 컨텍스트에 붙일 뿐, API로 가는 effort 값은 그대로라고 적는다.
+
+둘째, Haiku는 50토큰을 생각하고 맞혔는데 비용은 Opus의 40분의 1이었다. 이 문제 하나로 "Haiku가 Sonnet보다 낫다"고 말할 수는 없다. 한 문제, 몇 번의 실행이다. 다만 비싼 모델이 늘 맞고 싼 모델이 늘 틀린다는 가정은 이 정도 실험으로도 깨진다. 결과를 확인할 방법(테스트, 예상 출력)을 함께 주는 편이 모델을 올리는 것보다 확실하다.
+
+셋째, 금액을 좌우한 것은 모델보다 캐시였다. 같은 Sonnet 명령이 처음엔 0.0416달러, 바로 다시 돌리자 0.0036달러가 됐다. 첫 실행은 시스템 프롬프트와 도구 정의 약 1만 토큰을 1시간 캐시에 새로 썼고, 두 번째는 전부 캐시에서 읽었다. Opus도 캐시가 데워진 상태에서 돌리니 0.0079달러였다(차가울 때의 9분의 1). effort를 바꾼 첫 실행마다 금액이 다시 올라간 것도 보이는데, 따로 띄운 `-p` 프로세스끼리라서 생긴 일이다. 세션 안에서 effort를 바꾸는 경우는 아래 캐시 절에서 따로 본다.
+
+이 계산을 직접 해 볼 수 있게 함수로 옮겼다. 단가표와 `usage` 칸을 받아 달러를 돌려준다. 테스트의 기대값은 위 실행들의 실제 토큰 수로 계산한 것이고, Claude Code가 보고한 금액과 맞는다.
+
+<CodePlayground
+  caption="usage 칸으로 요청 비용 계산하기"
+  functionName="estimateCost"
+  initialCode={`// usage: { input, cacheWrite5m, cacheWrite1h, cacheRead, output } 토큰 수 (없는 칸은 0)
+// price: { input, write5m, write1h, read, output } 백만 토큰당 달러
+// 달러를 소수점 6자리로 반올림해 돌려준다
+function estimateCost(usage, price) {
+  return 0;
+}`}
+  solution={`function estimateCost(usage, price) {
+  const u = { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0, ...usage };
+  const dollars =
+    (u.input * price.input +
+      u.cacheWrite5m * price.write5m +
+      u.cacheWrite1h * price.write1h +
+      u.cacheRead * price.read +
+      u.output * price.output) / 1_000_000;
+  return Number(dollars.toFixed(6));
+}`}
+  tests={[
+    { label: "Haiku, 캐시 차가움", args: [{ input: 2, cacheWrite1h: 8645, cacheRead: 27800, output: 10 }, { input: 0.1, write5m: 0.125, write1h: 0.2, read: 0.01, output: 0.5 }], expected: 0.002012 },
+    { label: "Opus, 캐시 데워짐", args: [{ input: 2, cacheRead: 35724, output: 37 }, { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }], expected: 0.007893 },
+    { label: "Opus, 1시간 캐시 쓰기", args: [{ input: 2, cacheWrite1h: 8100, cacheRead: 27624, output: 3 }, { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }], expected: 0.070393 },
+    { label: "같은 요청, 5분 캐시 쓰기", args: [{ input: 2, cacheWrite5m: 8100, cacheRead: 27624, output: 3 }, { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }], expected: 0.046093 },
+    { label: "캐시 없이 전부 입력", args: [{ input: 35726, output: 37 }, { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }], expected: 0.143644 },
+    { label: "출력만 1,000토큰", args: [{ output: 1000 }, { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }], expected: 0.02 },
+  ]}
+/>
+
+다섯째 테스트가 캐시가 없을 때의 값이다. 같은 요청이 캐시를 전혀 못 쓰면 0.14달러, 앞부분을 읽기만 하면 0.008달러다. 1시간 캐시 쓰기는 5분짜리보다 비싸지만, 점심을 먹고 돌아와도 캐시가 살아 있어서 한 번만 다시 읽어도 본전을 뽑는다.
+
+## 어디에 쓰였는지 보는 명령
+
+감으로 아끼지 말고 먼저 본다. 세 명령이 서로 다른 것을 보여 준다.
+
+`/context`는 지금 창에 무엇이 얼마나 올라가 있는지를 범주별로 보여 준다. 빈 폴더에서 `claude -p "/context"`로 찍어 본 결과다.
+
+```text
+**Model:** claude-haiku-5-5
+**Tokens:** 27.2k / 1m (3%)
+
+| Category | Tokens | Percentage |
+|----------|--------|------------|
+| System prompt | 2.8k | 0.3% |
+| System tools | 18.5k | 1.9% |
+| System tools (deferred) | 20.3k | 2.0% |
+| Skills | 5.8k | 0.6% |
+| Messages | 10 | 0.0% |
+| Free space | 939.8k | 94.0% |
+| Autocompact buffer | 33k | 3.3% |
+```
+
+아무것도 묻지 않았는데 2만 7천 토큰이 깔려 있다. 내 메시지는 10토큰이다. 도구 정의가 가장 크고, 스킬 서른 개의 설명만으로 5.8k다. 아래에는 스킬마다 몇 토큰인지 표가 이어진다. MCP 서버를 붙이면 그 도구 이름과 서버 안내문이, CLAUDE.md가 있으면 그 내용이 여기에 범주로 더해진다. 이 숫자가 모든 요청에 실린다. 캐시 덕에 싸게 실리지만, 캐시가 깨지는 순간마다 이 덩어리 전체를 다시 쓴다.
+
+`/usage`(별칭 `/cost`)는 이 세션에 지금까지 든 토큰과 추정 금액이다. 위에서 본 Session 블록이 그것이다. 2.1.251부터는 그 아래 `Prompt cache (main)` 줄이 붙어 캐시에서 읽은 비율, 놓친 횟수와 그럴듯한 원인, 지금 캐시가 데워져 있는지를 알려 준다. 문서에 실린 형식은 이렇다.
+
+```text
+Prompt cache (main):   14 requests · 91% of input tokens from cache · 2 misses (last 6m 10s ago, 310.2k tokens re-cached) · 1 expected rebuild (compaction or tool-result clearing) · warm (1h TTL, last activity 40s ago)
+```
+
+구독자에게는 `/usage`가 하나 더 보여 준다. 최근 사용량이 스킬, 서브에이전트, 플러그인, MCP 서버별로 몇 퍼센트인지(attribution), 그리고 사용량의 10% 이상에 해당하는 개선 제안이 한 줄씩 나온다. "`25%  Trim ~/code/api/CLAUDE.md · 49k tokens per request`" 같은 식이다. 앞의 퍼센트는 아낄 수 있는 양이 아니라 그 줄이 해당하는 사용량의 몫이다. 2.1.305부터는 `f`를 누르면 Claude Code가 고칠 수 있는 제안(예: effort 낮추기)을 적용한다. `/loop` 같은 세션 예약 작업이 있으면 무거운 순서로 따로 보여 준다. `d`와 `w`로 24시간과 7일을 오간다. 이 숫자는 이 컴퓨터의 세션 기록으로 계산하니, 다른 컴퓨터나 claude.ai에서 쓴 양은 빠진다.
+
+숫자 대신 일하는 습관을 보고 싶으면 `/insights`를 돌린다. 최근 세션을 분석해 요청이 엇나간 지점, 버그가 난 코드 같은 마찰을 HTML 보고서로 쓴다(`~/.claude/usage-data/report.html`). 이 분석도 토큰을 쓰고 요금제 사용량에 잡힌다.
+
+작업 중에는 스피너 옆 `(10m 27s · ↓ 5.5k tokens)` 같은 숫자가 이번 턴이 만든 출력(생각 포함)을 보여 준다. 보낸 입력은 세지 않는다. 컨텍스트 크기를 늘 보고 싶으면 상태 줄에 띄운다. 상태 줄을 만드는 법은 [플러그인과 사용자화 글](/posts/claude-code-plugins-and-channels)에 있다.
+
+## /model과 별칭, 그리고 opusplan
+
+`/model`은 모델 고르는 화면을 연다. 기억할 별칭은 몇 개다. `opus`, `sonnet`, `haiku`는 Anthropic API에서 각각 최신 Opus 5.5, Sonnet 5.5, Haiku 5.5를 가리킨다. Bedrock이나 Foundry에서는 더 예전 버전을 가리킬 수 있다. `default`는 별칭이 아니라 "덮어쓴 값을 지우고 계정 기본값으로"라는 뜻이고, 2.1.280부터 Pro·Max·Team·Enterprise·API 모두 Opus 5.5가 기본이다. 그 전에는 요금제마다 Sonnet이 기본인 경우가 있었다. 글머리의 동료와 내 차이가 여기서 났을 수도 있다. 특정 버전에 고정하려면 `claude-opus-5-5`처럼 전체 이름을 쓴다.
+
+모델은 여러 곳에서 정할 수 있고, 앞의 것이 이긴다.
+
+1. 세션 안의 `/model 이름`
+2. 실행할 때 `claude --model 이름`
+3. 환경 변수 `ANTHROPIC_MODEL`
+4. 설정 파일의 `model`
+5. 새 세션 기본값 `ANTHROPIC_DEFAULT_MODEL`
+
+함정은 1번에 있다. `/model`에서 Enter를 누르거나 `/model sonnet`을 바로 치면 이번 세션만이 아니라 다음 세션 기본값으로도 저장된다(사용자 설정의 `model`에 쓴다). 이번 세션만 바꾸려면 고르는 화면에서 그 줄에 `s`를 누른다. "어제 잠깐 Opus로 바꿨더니 오늘도 Opus다"가 이렇게 생긴다. 프로젝트의 `.claude/settings.json`에 `model`이 있으면 시작 머리글에 어느 설정 파일이 정했는지 나온다.
+
+`opusplan`은 특별한 별칭이다. 플랜 모드에서는 `opus`로 계획을 세우고, 플랜 모드를 나와 실행할 때는 `sonnet`으로 코드를 쓴다. 어려운 판단은 비싼 모델에, 손이 많이 가는 구현은 싼 모델에 맡기는 구성이다. 다만 공짜가 아니다. 모델마다 캐시가 따로라서 플랜 모드를 들어가고 나올 때마다 모델 전환이 일어나고, 그때마다 대화 전체를 새 모델의 캐시에 다시 쓴다.
+
+<SequenceDiagram
+  caption="opusplan 세션에서 플랜 모드를 오갈 때 모델과 캐시가 바뀌는 순서"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "cc", label: "Claude Code" },
+    { id: "opus", label: "Opus 5.5" },
+    { id: "sonnet", label: "Sonnet 5.5" },
+  ]}
+  steps={[
+    { from: "me", to: "cc", label: "Shift+Tab", title: "플랜 모드로 들어간다", detail: "opusplan이면 이 순간 요청을 보낼 모델이 Opus로 바뀐다. 권한 모드 전환 자체는 캐시를 깨지 않지만 모델이 바뀌니 깨진다." },
+    { from: "cc", to: "opus", label: "전체 대화 + 질문", title: "Opus 캐시에 처음부터 쓴다", detail: "Sonnet이 쌓아 둔 캐시는 Opus가 읽지 못한다. 이번 요청은 앞부분 전체가 캐시 쓰기로 청구된다.", payload: "cache_creation_input_tokens: 대화 전체" },
+    { from: "opus", to: "cc", label: "계획", title: "계획을 받는다", detail: "플랜 모드에서는 파일을 고치지 않고 읽기와 조사만 한다. 여기서 몇 턴을 주고받으면 Opus 캐시가 데워진다." },
+    { from: "me", to: "cc", label: "계획 승인", title: "플랜 모드를 나온다", detail: "실행 단계로 넘어가면서 모델이 Sonnet으로 돌아간다. 또 한 번의 모델 전환이다." },
+    { from: "cc", to: "sonnet", label: "전체 대화 + 계획", title: "Sonnet 캐시를 다시 맞춘다", detail: "계획 단계에서 늘어난 대화는 Sonnet 캐시에 없다. 그 부분부터 다시 쓴다. 이후 구현 턴들은 캐시를 읽는다." },
+    { from: "sonnet", to: "me", label: "구현 결과", title: "싼 모델이 손일을 한다", detail: "파일 수정, 테스트 실행, 고치기는 Sonnet 단가로 돈다. 플랜 모드를 자주 오가지 않으면 이득이 크다." },
+  ]}
+/>
+
+그래서 `opusplan`은 "처음에 한 번 길게 계획하고, 오래 구현하는" 작업에 맞는다. 계획과 구현을 짧게 자주 오가면 전환 비용이 쌓인다. 계획 단계의 창 크기는 `opus`, 실행 단계는 `sonnet` 설정을 따른다. 지금 모델은 둘 다 기본으로 1M 창이다.
+
+## effort는 생각의 기준선이다
+
+effort는 모델이 얼마나 깊이 생각할지의 기준이다. Opus 5.5, Sonnet 5.5, Haiku 5.5는 `low`, `medium`, `high`, `xhigh`, `max` 다섯 단계를 받고, 세 모델 모두 기본이 `medium`이다. 예전 모델은 기본이 `high`였고 Opus 4.7은 `xhigh`였다. 문서는 Opus 5.5의 `medium`이 Opus 5의 `high`와 같거나 낫다고 적으며, 옮겨 갈 때 예전 단계를 그대로 가져오지 말고 `medium`에서 시작하라고 권한다. 같은 이름의 단계라도 모델마다 보정이 달라서다.
+
+| 단계 | 문서가 권하는 쓰임 |
+| :- | :- |
+| `low` | 결과를 매번 내가 보는 빠른 주고받기, 이름 바꾸기 같은 작은 수정 |
+| `medium` | 범위가 분명한 평소 작업, 새 기능 구현 |
+| `high` | 기존 코드의 버그 고치기처럼 검증과 엣지 케이스가 중요한 일 |
+| `xhigh` | 더 깊은 추론. 토큰을 더 쓴다 |
+| `max` | 내가 없어도 혼자 오래 파고들 어려운 문제. 과하게 생각하는 경향이 있어 넓게 쓰기 전에 시험해 본다 |
+
+`/effort`로 바꾸고, `/model` 화면에서 좌우 화살표로도 바꾼다. 여기서도 Enter는 기본값 저장, `s`는 이번 세션만이다. 레벨은 모델마다 따로 저장된다. `max`는 환경 변수 `CLAUDE_CODE_EFFORT_LEVEL`로 주지 않는 한 늘 이번 세션에만 적용된다. 실수로 `max`가 굳는 일을 막아 둔 것이다.
+
+생각 토큰은 출력 단가로 청구되니 effort는 곧 출력 비용이다. 위 실험에서는 차이가 수십 토큰이라 금액이 거의 같았지만, 큰 저장소의 버그를 쫓는 턴에서는 생각이 수만 토큰이 되기도 한다. 그리고 Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 모델은 생각을 끌 수 없다. `/config`의 thinking 토글이나 `MAX_THINKING_TOKENS=0`은 이 모델들에 효과가 없고, `MAX_THINKING_TOKENS`로 예산을 정하는 방식도 고정 예산을 쓰던 예전 모델(Opus 4.6, Sonnet 4.6 등)에만 통한다. 지금 모델에서 생각을 줄이는 손잡이는 effort 하나다.
+
+한 턴만 깊이 생각시키고 싶으면 프롬프트에 `ultrathink`를 넣는다. 세션 effort는 그대로 두고 그 턴에 지시를 붙인다. "think hard" 같은 다른 말은 특별 취급하지 않고 그냥 글로 전달된다. 앞의 실험처럼 이 지시가 결과를 바꾼다는 보장은 없다. 확인할 거리를 주는 쪽이 낫다.
+
+스킬과 서브에이전트 앞머리에도 `effort`를 줄 수 있다. 그 스킬이나 서브에이전트가 도는 동안만 세션 레벨을 덮어쓴다. 단순 검색 서브에이전트에 `effort: low`를 주는 식으로 쓴다.
+
+## 하루 작업에 모델을 나눠 싣기
+
+모델과 effort를 단계마다 고르라는 말은 쉽지만, 세션 중간에 바꾸면 캐시가 깨진다. 그래서 바꾸는 시점을 작업의 경계에 맞춘다. 예를 들어 하루를 이렇게 나눌 수 있다.
+
+아침에 이슈를 읽고 설계를 고민할 때는 Opus에 `high`로 새 세션을 연다. 여기서는 파일을 많이 읽고 오래 생각하는 게 맞다. 계획이 정해지면 그 계획을 파일(이슈 코멘트나 `PLAN.md`)로 남기고 세션을 닫는다. 구현은 Sonnet `medium`의 새 세션에서 그 파일을 읽히며 시작한다. 대화로 쌓인 Opus 세션의 컨텍스트를 끌고 가지 않으니 캐시 전환 비용도, 쓸데없이 실리는 탐색 기록도 없다. 반복되는 로그 확인이나 "이 함수 쓰는 곳 찾아 줘" 같은 조사는 Haiku 서브에이전트가 맡는다.
+
+두 일을 동시에 하고 싶으면 터미널마다 `claude --model opus`, `claude --model sonnet`처럼 띄운다. 문서도 터미널마다 다른 모델을 쓸 때는 `/model`로 바꾸지 말고 `--model`로 띄우라고 권한다. `/model`은 기본값까지 바꾸니 다른 터미널에서 새로 연 세션이 영향을 받는다. `--model`과 `ANTHROPIC_MODEL`은 그 세션에만 적용된다.
+
+`claude --resume`으로 연 세션은 저장될 때 쓰던 모델로 돌아온다. 어제 Opus로 하던 세션을 오늘 이어 열면 기본값이 Sonnet이어도 Opus다. 이어서 할 일이 가벼우면 `claude --resume --model sonnet`처럼 띄울 때 모델을 주면 그쪽이 이긴다. 대신 그 첫 요청은 Sonnet 캐시에 전체를 새로 쓴다.
+
+## 캐시를 깨는 행동, 지키는 행동
+
+캐시는 요청의 앞부분이 직전 요청과 글자 그대로 같을 때만 맞는다. 원리는 [컨텍스트 창 글](/posts/claude-code-context-window)과 [KV 캐시 글](/posts/transformer-attention-kv-cache)에 있으니, 여기서는 Claude Code에서 무엇을 하면 깨지는지만 모은다. 깨지면 그다음 한 턴이 느리고 비싸고, 그 뒤로는 새 앞부분이 다시 캐시된다. 아래 그림은 한 세션에서 흔히 하는 행동을 차례로 했을 때 캐시가 어떻게 되는지다.
+
+<AlgoTrace
+  caption="행동마다 다음 요청이 캐시를 얼마나 읽는지"
+  memoryLabel="다음 요청에서 캐시로 읽는 층"
+  cells={["시작", "질문", "CLAUDE.md 수정", "/effort", "/model", "MCP 연결", "점심 90분", "/compact"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "세션 첫 요청. 시스템 프롬프트, 지침, 첫 메시지를 전부 캐시에 쓴다." },
+    { pointer: 1, found: [1], memory: ["시스템", "지침", "대화"], caption: "새 질문은 끝에 붙는다. 앞의 세 층을 모두 캐시에서 읽는다." },
+    { pointer: 2, found: [1, 2], memory: ["시스템", "지침", "대화"], caption: "CLAUDE.md를 고쳐도 캐시는 그대로다. 대신 고친 내용도 /clear나 재시작 전까지 반영되지 않는다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["시스템", "지침", "대화"], caption: "Opus·Sonnet·Haiku 5.5를 API 키나 구독으로 쓰면 effort를 바꿔도 캐시가 남는다. 다른 모델과 Bedrock 등에서는 깨진다." },
+    { pointer: 4, found: [1, 2, 3], memory: [], caption: "모델을 바꾸면 캐시가 모델마다 따로라 전부 다시 쓴다. 캐시가 데워져 있으면 Claude Code가 먼저 확인을 묻는다." },
+    { pointer: 5, found: [1, 2, 3], memory: [], caption: "MCP 서버를 붙이거나 떼면 도구 목록, 곧 맨 앞 층이 바뀐다. 뒤의 층까지 모두 다시 쓴다." },
+    { pointer: 6, found: [1, 2, 3], memory: [], caption: "구독 본 대화는 1시간, API 키는 5분 동안 요청이 없으면 캐시가 식는다. 돌아와 처음 보낸 요청이 전체를 다시 처리한다." },
+    { pointer: 7, found: [1, 2, 3], memory: ["시스템", "지침"], caption: "압축은 대화 층을 요약으로 갈아 끼운다. 시스템과 지침은 읽고 짧아진 대화만 새로 쓴다." },
+  ]}
+/>
+
+문서가 꼽는 깨는 행동을 다시 적으면 이렇다. 모델 전환(`opusplan`의 플랜 모드 출입, `model`이 적힌 스킬 실행 포함), 대부분 모델에서의 effort 변경, fast mode 켜기(대화당 한 번), MCP 서버 연결·해제, 플러그인 켜고 끄기(MCP 서버를 주는 플러그인), 도구 하나를 통째로 deny, 압축, 이미지가 너무 쌓여 오래된 것이 빠질 때, Claude Code 업그레이드 뒤 첫 세션이다.
+
+반대로 캐시를 지키는 행동도 알아 두면 괜히 아끼느라 불편해지지 않는다. 저장소의 파일 수정, 세션 중 CLAUDE.md 수정, 권한 모드 전환(`opusplan`일 때의 플랜 모드는 예외), 출력 스타일 변경, 스킬과 명령 실행, `/recap`, `/rewind`, 서브에이전트 띄우기는 앞부분을 건드리지 않는다. `/rewind`는 이미 캐시된 앞부분으로 되돌아가는 것이라, 잘못 간 길을 버릴 때는 압축보다 싸다.
+
+캐시 수명(TTL)은 요금 체계에 따라 다르다. 구독 사용량 안에서는 본 대화가 1시간 캐시를 쓰고, 서브에이전트와 압축 같은 나머지 요청은 5분이다. API 키, 클라우드, usage credits로 넘어간 구독은 본 대화도 5분이다. API 키로 쓰면서 자주 자리를 비운다면 `promptCacheTtl`을 `"1h"`로 줄 수 있다(2.1.242 이상). 쓰기 단가가 1.25배에서 2배로 오르니, 쉬었다 돌아오는 일이 잦을 때만 이득이다.
+
+캐시가 닿는 범위도 생각보다 좁다. 시스템 프롬프트에 자동 메모리 경로가 들어가고 대화 첫머리에 작업 폴더와 OS 정보가 붙어서, 사실상 한 컴퓨터의 한 폴더 안에서만 캐시가 공유된다. 같은 폴더에서 동시에 띄운 세션끼리는 앞부분이 같아 서로의 캐시를 읽는다. 차례로 연 세션은 시작할 때 찍은 git 상태(브랜치, 최근 커밋)까지 같아야 공유된다. 커밋을 하나 하고 새 세션을 열면 첫 요청은 캐시를 새로 쓴다.
+
+## 서브에이전트에는 작은 모델을 붙인다
+
+서브에이전트는 메인 대화와 따로 요청을 보내니 그만큼 사용량을 더 쓴다. 결과만 돌려받아 메인 컨텍스트를 아끼는 것과, 전체 토큰을 아끼는 것은 다른 이야기다. 서브에이전트가 파일 서른 개를 읽으면 그 토큰은 서브에이전트 쪽에서 그대로 든다. 그래서 단순한 검색이나 로그 요약은 작은 모델로 돌리는 게 맞다.
+
+서브에이전트의 모델은 이 순서로 정해진다.
+
+1. Claude가 그 호출에 넘긴 `model` 인자
+2. 서브에이전트 정의 앞머리의 `model` (`inherit`이면 메인 모델)
+3. 환경 변수 `CLAUDE_CODE_SUBAGENT_MODEL`
+4. 메인 대화의 모델
+
+```markdown
+---
+name: log-digger
+description: 긴 로그에서 오류 줄과 앞뒤 맥락만 뽑아 요약한다. 로그 파일이 나오면 먼저 쓴다.
+tools: Read, Grep, Bash
+model: haiku
+effort: low
+---
+
+로그를 처음부터 다 읽지 않는다. grep으로 ERROR, FATAL, Traceback 주변 5줄만 본다.
+같은 오류가 반복되면 한 번만 적고 횟수를 붙인다. 20줄 안으로 돌려준다.
+```
+
+`CLAUDE_CODE_SUBAGENT_MODEL`은 기본값일 뿐이라 정의에 `model`이 있거나 Claude가 인자를 넘기면 진다(2.1.251 전에는 반대로 이것이 가장 앞섰다). 모든 서브에이전트, 팀원, 워크플로 에이전트를 한 모델로 묶으려면 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`도 함께 준다(2.1.257 이상).
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku",
+    "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
+  }
+}
+```
+
+모르면 돈이 새는 동작이 하나 있다. `model`을 정하지 않은 서브에이전트는 Claude가 띄우는 순간의 메인 모델을 따른다. 내장 Explore와 Plan도 메인 모델을 따른다. 그래서 어려운 질문 하나 때문에 `/model opus`로 올려 두면, 그 뒤로 Claude가 넘기는 조사와 테스트 실행도 전부 Opus로 돈다. Explore를 싸게 돌리고 싶으면 같은 이름 `Explore`로 프로젝트나 사용자 서브에이전트를 만들어 `model: haiku`를 주면 내장을 덮어쓴다. 실제로 어느 모델로 도는지는 `/tasks`에서 서브에이전트 줄마다 나온다.
+
+서브에이전트는 자기 시스템 프롬프트로 새 대화를 시작하니 메인 캐시를 읽지 못하고, 구독이어도 5분 캐시를 쓴다. 금방 끝나는 작은 일을 서브에이전트로 넘기면 시작할 때마다 캐시를 새로 쓰느라 오히려 비싸다. 여러 에이전트를 동시에 굴리는 에이전트 팀은 비용이 훨씬 크게 불어난다. 문서는 팀원이 플랜 모드로 돌 때 일반 세션의 약 7배 토큰을 쓴다고 적는다. 팀을 언제 쓰는지는 [에이전트 팀 글](/posts/claude-code-agent-teams)에서 따로 다룬다.
+
+## 상한은 어디에 거나
+
+아끼는 습관과 별개로, 넘으면 멈추는 상한을 걸어 두면 사고가 커지지 않는다. 어떻게 로그인했느냐에 따라 거는 곳이 다르다.
+
+자동화로 `claude -p`를 돌린다면 `--max-budget-usd`가 가장 가깝다. 정가 추정 금액이 그 값을 넘으면 실행을 끊는다. 실제로 걸어 보면 동작이 문서의 말보다 하나 더 보인다.
+
+```bash
+# 1센트 상한을 걸고 도구를 한 번 쓰는 일을 시킨다
+claude -p "List the files here using ls, then say done." \
+  --model sonnet --max-budget-usd 0.01 --output-format json \
+  | jq '{subtype, terminal_reason, errors, total_cost_usd}'
+```
+
+```text
+{
+  "subtype": "error_max_budget_usd",
+  "terminal_reason": "budget_exhausted",
+  "errors": [
+    "Reached maximum budget ($0.01)"
+  ],
+  "total_cost_usd": 0.038141999999999995
+}
+```
+
+1센트 상한인데 3.8센트를 쓰고 멈췄다. 상한은 요청을 보내기 전에 막는 게 아니라 응답을 받은 뒤 합계를 보고 다음 요청을 막는다. 캐시가 식은 첫 요청 하나가 이미 상한을 넘었고, `ls`를 실행하는 두 번째 요청은 나가지 않았다. 그래서 CI에서는 상한을 "첫 요청 하나 값 + 여유"보다 크게 잡고, 실패 판정은 `subtype`이 `error_max_budget_usd`인지로 한다. 결과가 비어 있다고(`result: null`) 조용히 넘어가면 안 된다.
+
+API 조직이라면 Console의 "Claude Code" 워크스페이스에 지출 한도와 분당 토큰 한도를 건다. 같은 조직의 서비스 트래픽과 한도를 나눠 쓰니, 개발자 도구가 운영 API의 몫을 먹지 않게 워크스페이스 한도로 막아 두는 것이 문서의 권고다. Team·Enterprise 구독은 좌석 허용량이 기본 상한이고, usage credits를 켰다면 조직·그룹·개인 단위로 지출 한도를 건다.
+
+관리형 설정(managed settings)으로는 모델과 effort 자체를 묶을 수 있다. `availableModels`로 고를 수 있는 모델을 제한하고, `maxEffortLevel`로 effort 상한을 건다. 조직이 할인된 계약 단가를 쓴다면 `modelPricing`에 그 단가를 넣어 `/usage`와 상태 줄의 금액을 청구서에 맞춘다. 이 설정은 보여 주는 숫자만 바꾸고 실제 청구는 바꾸지 않는다.
+
+## 한도가 수요일에 바닥나는 이유들
+
+글머리의 상황으로 돌아가서, 문서와 실험에서 본 낭비를 증상과 함께 모았다.
+
+하루 종일 열어 둔 세션이 가장 흔하다. 한 줄 질문도 그날 쌓인 대화 전체를 캐시 읽기 단가로 다시 싣는다. 캐시 읽기가 싸도 수십만 토큰에 수백 번이면 쌓인다. 서로 관계없는 일 사이에는 `/clear`를 친다. 나중에 찾으려면 그 전에 `/rename`으로 이름을 붙이고 `/resume`으로 돌아온다. `/clear`는 비용이 0이고, `/compact`는 대화 전체를 읽어 요약하는 요청이라 그 자체로 크다. 이어서 할 일이면 압축, 새 일이면 비우기다.
+
+자리를 비운 뒤의 첫 메시지가 비싸다. 캐시가 식은 상태에서 큰 세션에 질문하면 전체를 다시 쓴다. 오래된 세션을 `--resume`으로 열자마자 `/compact`를 치면 식은 캐시로 전체를 읽으니 가장 비싸다. 열자마자 그 일을 이어 할 게 아니면 새 세션이 낫다.
+
+`/loop`이나 세션 예약 작업은 내가 아무것도 안 해도 간격마다 전체 컨텍스트를 싣고 돈다. `/usage`의 Loops 줄에서 횟수와 회당 토큰을 확인한다. 목표를 걸어 둔 `/goal`의 확인 턴, 다른 세션에서 온 메시지도 비슷하게 유휴 세션을 깨운다.
+
+막연한 요청이 넓게 읽게 만든다. "이 코드베이스를 개선해 줘"는 파일을 수십 개 읽게 하고, "auth.ts의 login 함수에 입력 검증을 추가해 줘"는 몇 개만 읽게 한다. 1만 줄 로그를 통째로 읽히는 대신 훅이나 스크립트로 ERROR 줄만 넘기면 수만 토큰이 수백 토큰이 된다.
+
+쓰지 않는 MCP 서버와 플러그인도 매 요청에 이름과 안내문을 싣는다. `/mcp`에서 끄고, `gh`나 `aws`처럼 CLI가 있으면 그쪽이 컨텍스트를 덜 먹는다. 다만 세션 도중에 끄고 켜면 그때마다 캐시가 깨지니 세션 시작 전에 정리한다.
+
+아무것도 안 해도 조금씩 드는 것도 있다. `--resume` 목록에 보일 이전 대화 요약, `/usage`의 상태 조회 같은 백그라운드 요청이다. 문서 기준으로 세션당 보통 0.04달러 아래다. 응답 뒤에 다음 프롬프트를 제안하는 기능도 짧은 요청을 하나 더 보내지만 대화 캐시를 다시 읽는 것이라 대부분 캐시 읽기 값이다. 한도 근처에서는 Claude Code가 이 요청을 알아서 건너뛴다.
+
+그리고 모델이다. 문서도 API 비용이 예상보다 높을 때 대부분은 오래 비우지 않은 세션이거나 Opus를 기본으로 둔 채 쓴 경우라고 적는다. 평소 구현은 Sonnet과 `medium`, 설계 판단과 어려운 디버깅만 Opus나 `high`로 올리고, 반복 조사는 Haiku 서브에이전트에 맡긴다. 이 정도만 지켜도 같은 일에 드는 양이 크게 준다.
+
+정리하면 비용은 "무엇을 싣고(컨텍스트), 어느 차로(모델), 얼마나 고민하며(effort), 지름길을 몇 번 잃었나(캐시 미스)"의 곱이다. 넷 중 하나를 고칠 때마다 `/usage`를 다시 보고 실제로 줄었는지 확인한다.
+
+## 면접에서 나올 만한 질문
+
+### Claude Code 비용은 무엇으로 결정되나?
+
+토큰 수와 그 토큰이 어느 칸으로 청구되느냐로 정해진다. 입력은 처음 보낸 것, 캐시에 쓴 것, 캐시에서 읽은 것의 단가가 다르고 출력과 생각 토큰은 입력의 5배다. 매 요청이 시스템 프롬프트와 대화 전체를 다시 싣기 때문에 실제로는 컨텍스트 크기, 모델 단가, 캐시 적중률, effort가 비용을 좌우한다.
+
+### 구독 사용자가 "weekly limit"를 만났을 때 모델을 바꾸면 풀리나?
+
+풀리지 않는다. session limit나 weekly limit는 모든 모델이 함께 쓰는 창이라 `/model`로 바꿔도 같다. "Opus limit"처럼 모델 이름이 붙은 메시지일 때만 다른 계열로 바꿔서 계속할 수 있다. 그 밖에는 창이 다시 차기를 기다리거나 usage credits를 켜야 한다.
+
+### opusplan은 언제 이득이고 언제 손해인가?
+
+처음에 길게 계획하고 오래 구현하는 작업에서 이득이다. 판단은 Opus가, 손이 많이 가는 구현은 Sonnet이 하니 단가가 내려간다. 대신 플랜 모드를 들어가고 나올 때마다 모델이 바뀌어 대화 전체를 새 모델 캐시에 다시 쓰므로, 계획과 구현을 자주 오가면 전환 비용이 이득을 먹는다.
+
+### effort를 높이면 항상 더 정확해지나?
+
+아니다. 지금 모델은 단계마다 생각할지를 스스로 정하는 적응형 추론을 쓰고, effort는 그 기준선만 옮긴다. 직접 돌려 본 산수 문제에서 Sonnet은 high에서도 생각하지 않고 틀렸고, 단계별로 계산을 적으라고 하자 맞혔다. 결과를 확인할 테스트나 예상 출력을 함께 주는 것이 단계를 올리는 것보다 확실하다.
+
+### Opus 5.5에서 생각 토큰을 0으로 만들 수 있나?
+
+없다. Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 모델은 생각을 끌 수 없고 `MAX_THINKING_TOKENS=0`이나 thinking 토글도 효과가 없다. 생각의 양을 줄이는 손잡이는 effort이고, 생각 토큰은 접혀 있어도 출력 단가로 청구된다.
+
+### 세션 도중 하면 비용이 튀는 행동은?
+
+모델 전환, 대부분 모델에서의 effort 변경, MCP 서버나 플러그인 연결·해제, 압축, 캐시 수명을 넘긴 휴식 뒤의 첫 요청이다. 모두 요청의 앞부분이 달라지거나 캐시가 사라져서 다음 요청이 전체를 다시 쓴다. 모델과 effort는 세션 처음에 정하고, 압축은 작업 사이의 쉬는 지점에 직접 한다.
+
+### 서브에이전트를 쓰면 토큰이 줄어드나?
+
+메인 컨텍스트는 줄지만 전체 토큰은 오히려 늘 수 있다. 서브에이전트는 자기 대화로 따로 요청을 보내고 메인 캐시를 읽지 못하며 5분 캐시를 쓴다. 그래서 무거운 조사나 긴 출력 처리에 쓰고 `model: haiku`처럼 작은 모델을 붙인다. 정의에 모델이 없으면 메인 모델을 따르니, 메인을 Opus로 올리면 서브에이전트도 Opus로 돈다.
+
+### 팀의 Claude Code 비용이 갑자기 늘었다. 어디부터 보나?
+
+구독이면 각자 `/usage`의 attribution과 제안 줄로 스킬, 서브에이전트, MCP, 루프 중 무엇이 큰지 본다. API면 Console의 Claude Code 워크스페이스나 OpenTelemetry로 사용자별 토큰과 캐시 읽기·쓰기를 본다. 대개 비우지 않은 긴 세션, 기본 모델을 Opus로 둔 설정, 간격마다 도는 루프, 캐시 쓰기가 계속 높은 세션(앞부분이 자꾸 바뀜)에서 원인이 나온다.

@@ -1,0 +1,554 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-design-add-and-search-words");
+
+<EasyIntro>
+  낱말 카드 상자에서 단어를 찾는데, 친구가 첫 글자는 기억이 안 나고 둘째와 셋째 글자만 안다고 한다. 글자를 전부 아는 단어라면 첫 글자 서랍, 둘째 글자 서랍을 차례로 열면 된다. 그런데 모르는 글자가 끼어 있으면 그 자리에서는 서랍 하나만 열 수가 없다. 그 층에 있는 서랍을 하나씩 다 열어 보고, 각 서랍 안에서 다시 아는 글자로 내려가야 한다. 한 서랍에서 막히면 돌아 나와 옆 서랍을 연다. 그래도 서랍장이 글자 순서대로 정리돼 있어서, 맞지 않는 서랍은 열자마자 닫을 수 있다. 이 문제는 모르는 글자를 점으로 적은 단어를 이런 식으로 찾는 상자를 만드는 것이다.
+</EasyIntro>
+
+십자말풀이를 풀다 보면 "세 글자, 가운데가 a, 끝이 d"처럼 일부만 아는 단어를 찾게 된다. 사전 앱에 `?ad`나 `.ad`를 치면 `bad`, `dad`, `mad`가 나오는 기능이다. 정확한 단어만 찾는다면 해시 집합으로 끝나지만, 모르는 자리가 섞이면 해시를 계산할 수가 없다.
+
+[LeetCode 211. Design Add and Search Words Data Structure](https://leetcode.com/problems/design-add-and-search-words-data-structure/)가 이 사전을 만드는 문제다. [Implement Trie](/posts/leetcode-implement-trie)에서 만든 트라이에 와일드카드 검색 하나가 더해진 모양이라, 앞 글을 먼저 보고 오면 편하다. 이 글은 배열을 다 훑는 풀이, 길이로 나누는 풀이, 점을 미리 찍어 두는 풀이, 트라이 위의 재귀 DFS와 반복 BFS까지 다섯 가지를 보고, 실제로 시간과 메모리를 재어 비교한다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 점은 아무 글자 하나
+
+만들 클래스 `WordDictionary`에는 메서드가 둘 있다.
+
+- `addWord(word)`: 단어를 넣는다. 넣는 단어는 영어 소문자로만 이뤄진다.
+- `search(word)`: 넣은 단어 중 `word`와 맞는 것이 있으면 `true`. `word`에는 소문자 말고 `.`이 섞일 수 있고, `.`은 아무 글자 하나와 맞는다.
+
+길이가 같아야 맞는다는 점을 놓치기 쉽다. `.`은 "글자 하나"이지 "아무 문자열"이 아니라서, `ba.`은 세 글자 단어만 찾는다. 단어 길이는 1 이상 25 이하, `search`의 `word`에는 `.`이 최대 2개, 두 메서드 호출은 합쳐서 최대 10^4번이다. 점이 최대 2개라는 조건이 뒤에서 풀이 하나를 가능하게 한다.
+
+이 글에서 계속 쓸 예시다.
+
+```text
+addWord: bad, bit, mad
+search:  pad   bad   .ad   ..t   m.    b..   ....
+결과:    false true  true  true  false true  false
+```
+
+손으로 따라가 보자. `pad`는 넣은 적이 없다. `.ad`는 첫 글자가 무엇이든 뒤가 `ad`인 세 글자 단어라서 `bad`와 `mad`가 맞는다. `..t`는 세 글자이고 끝이 `t`인 단어, `bit`이 맞는다. `m.`은 두 글자 단어를 찾는데 넣은 단어는 모두 세 글자라 `false`다. `mad`가 `m`으로 시작하긴 하지만 길이가 다르다. `b..`은 `bad`와 `bit` 둘 다 맞고, `....`은 네 글자 단어가 없어서 `false`다.
+
+## 단어마다 한 글자씩 맞춰 보기
+
+가장 먼저 떠오르는 건 넣은 단어를 배열에 모아 두고, 검색할 때마다 단어 하나하나와 맞춰 보는 것이다. 맞춰 보기는 간단하다. 길이가 다르면 바로 실패, 같으면 자리마다 검색어 글자가 `.`이거나 단어 글자와 같아야 한다.
+
+```js
+class WordDictionary {
+  constructor() {
+    this.words = [];
+  }
+  addWord(word) {
+    this.words.push(word);
+  }
+  search(word) {
+    return this.words.some((w) => {
+      if (w.length !== word.length) return false;  // 점은 글자 하나라서 길이가 같아야 한다
+      for (let i = 0; i < w.length; i++) {
+        if (word[i] !== "." && word[i] !== w[i]) return false;
+      }
+      return true;
+    });
+  }
+}
+```
+
+`addWord`는 O(1), `search`는 넣은 단어 n개를 다 보면서 단어마다 최대 L글자를 비교하니 O(n · L)이다. 공간은 넣은 글자 수 합 O(n · L).
+
+정규식으로 짜면 한 줄이 된다. `.`이 정규식에서도 "아무 글자 하나"라서 검색어를 그대로 패턴으로 쓸 수 있다.
+
+```js
+search(word) {
+  const re = new RegExp("^" + word + "$"); // ^와 $로 길이까지 맞춘다
+  return this.words.some((w) => re.test(w));
+}
+```
+
+짧지만 하는 일은 위와 같다. 단어를 하나씩 다 보는 건 그대로이고, 검색할 때마다 정규식을 새로 컴파일하는 비용이 붙는다. `^`와 `$`를 빼면 `bad`를 찾는데 `badge`도 맞아 버린다. 검색어에 소문자와 `.`만 온다는 조건이 있으니 쓸 수 있는 것이고, `*`나 `(` 같은 글자가 올 수 있는 실제 서비스라면 사용자 입력을 그대로 정규식에 넣으면 안 된다.
+
+이 풀이의 한계는 [Implement Trie](/posts/leetcode-implement-trie)의 배열 풀이와 같다. 검색할 때마다 지금까지 넣은 모든 단어를 다시 본다.
+
+## 길이가 다르면 볼 필요도 없다
+
+예시에서 `m.`과 `....`은 길이만 보고도 답이 나왔다. 그렇다면 단어를 길이별로 나눠 두고, 검색어와 길이가 같은 묶음만 보면 된다. 검색어에 점이 하나도 없으면 정확히 같은 단어를 찾는 것이니 해시 집합으로 따로 처리한다.
+
+```js
+class WordDictionary {
+  constructor() {
+    this.byLen = new Map(); // 길이 -> 그 길이의 단어 배열
+    this.exact = new Set(); // 점 없는 검색용
+  }
+  addWord(word) {
+    this.exact.add(word);
+    if (!this.byLen.has(word.length)) this.byLen.set(word.length, []);
+    this.byLen.get(word.length).push(word);
+  }
+  search(word) {
+    if (!word.includes(".")) return this.exact.has(word); // 점이 없으면 O(L)
+    const bucket = this.byLen.get(word.length) ?? [];       // 같은 길이만 본다
+    return bucket.some((w) => {
+      for (let i = 0; i < w.length; i++) {
+        if (word[i] !== "." && word[i] !== w[i]) return false;
+      }
+      return true;
+    });
+  }
+}
+```
+
+점이 없는 검색은 O(L)로 빨라졌다. 점이 있는 검색은 같은 길이 단어 수를 n_L이라 하면 O(n_L · L)이다. 단어 길이가 1부터 25까지 고르게 퍼져 있으면 평균 25분의 1로 줄어든다.
+
+하지만 최악은 그대로다. 넣은 단어가 모두 같은 길이면 묶음이 하나뿐이라 배열 풀이와 다를 게 없다. 실제로 뒤의 측정에서 10글자 단어만 넣었더니 시간이 거의 같았다. 길이 말고 글자 쪽에서도 "볼 필요 없는 단어"를 걸러 내야 한다.
+
+## 점을 미리 찍어 두면 검색이 한 번에 끝난다
+
+방향을 바꿔 보자. 검색할 때 고생하지 말고 넣을 때 고생하는 것이다. 검색어의 점이 최대 2개라는 조건이 있으니, 단어를 넣을 때 "이 단어와 맞을 수 있는 모든 검색어"를 미리 만들어 집합에 넣어 둔다. `bad`라면 이렇다.
+
+```text
+점 0개: bad
+점 1개: .ad  b.d  ba.
+점 2개: ..d  .a.  b..
+```
+
+그러면 `search`는 검색어가 집합에 있는지만 보면 된다. 검색어 자체가 미리 만든 패턴 중 하나와 글자 하나까지 똑같기 때문이다.
+
+```js
+class WordDictionary {
+  constructor() {
+    this.patterns = new Set(); // 넣은 단어와 맞을 수 있는 모든 검색어
+  }
+  addWord(word) {
+    const L = word.length;
+    this.patterns.add(word); // 점 0개
+    for (let i = 0; i < L; i++) {
+      const a = word.slice(0, i) + "." + word.slice(i + 1);
+      this.patterns.add(a); // 점 1개: i 자리
+      for (let j = i + 1; j < L; j++) {
+        this.patterns.add(a.slice(0, j) + "." + a.slice(j + 1)); // 점 2개: i, j 자리
+      }
+    }
+  }
+  search(word) {
+    return this.patterns.has(word); // O(L)
+  }
+}
+```
+
+길이 L인 단어 하나에서 패턴이 1 + L + L(L-1)/2개 나온다. 최대 길이 25라면 1 + 25 + 300 = 326개다. 패턴 하나를 만들고 해시하는 데 O(L)이니 `addWord`는 O(L³), 길이 25 단어 하나에 대략 8,000글자를 다룬다. `search`는 O(L)로 어떤 풀이보다 빠르다.
+
+이 풀이는 점 개수 제한에 기대고 있다. 점이 k개까지 허용되면 패턴 수가 L개 중 k개를 고르는 경우의 수만큼 늘어나서, 제한이 없으면 단어 하나에 2^L개(길이 25면 3,300만 개)가 된다. 메모리도 많이 쓴다. 뒤의 측정에서 다섯 풀이 중 가장 무거웠다. 그래도 면접에서 "점이 최대 2개"라는 조건을 보고 이 풀이를 떠올리면, 조건을 읽고 트레이드오프를 따질 줄 안다는 걸 보여 줄 수 있다.
+
+## 트라이에서 점을 만나면 갈래를 전부 시도한다
+
+배열 풀이가 느린 이유는 `.ad`를 찾을 때 `bit`처럼 둘째 글자부터 틀린 단어도 끝까지 들고 다니기 때문이다. 앞부분이 같은 단어를 한데 모아 두면, 틀린 글자를 만나는 순간 그 앞부분을 나눠 쓰는 단어 전부를 한꺼번에 버릴 수 있다. 그게 트라이다.
+
+트라이는 단어를 글자 하나씩 내려가는 나무로 저장하는 구조이고, 노드마다 다음 글자로 가는 자식들과 "여기서 끝나는 단어가 있다"는 끝 표시를 든다. `addWord`는 [Implement Trie](/posts/leetcode-implement-trie)의 `insert`와 똑같다. 예시의 세 단어를 넣은 트라이는 이렇게 생겼다.
+
+<ConceptDiagram
+  caption="bad, bit, mad를 넣은 트라이. ●는 끝 표시"
+  width={400}
+  height={240}
+  nodes={[
+    { id: "root", label: "뿌리", x: 45, y: 120, w: 56 },
+    { id: "b", label: "b", x: 140, y: 70, w: 44 },
+    { id: "m", label: "m", x: 140, y: 180, w: 44 },
+    { id: "ba", label: "a", x: 235, y: 40, w: 44 },
+    { id: "bi", label: "i", x: 235, y: 110, w: 44 },
+    { id: "ma", label: "a", x: 235, y: 180, w: 44 },
+    { id: "bad", label: "d ●", sub: "bad", x: 335, y: 40, w: 56 },
+    { id: "bit", label: "t ●", sub: "bit", x: 335, y: 110, w: 56 },
+    { id: "mad", label: "d ●", sub: "mad", x: 335, y: 180, w: 56 },
+  ]}
+  edges={[
+    { from: "root", to: "b" },
+    { from: "root", to: "m" },
+    { from: "b", to: "ba" },
+    { from: "b", to: "bi" },
+    { from: "m", to: "ma" },
+    { from: "ba", to: "bad" },
+    { from: "bi", to: "bit" },
+    { from: "ma", to: "mad" },
+  ]}
+/>
+
+검색어에 점이 없으면 `Implement Trie`의 `search`와 같다. 글자를 따라 자식 하나로 내려간다. 점을 만나면 그 자리에서는 어느 자식으로 가야 할지 정할 수 없으니, 있는 자식을 하나씩 다 시도한다. 한 자식으로 내려가서 나머지 글자를 끝까지 맞추면 `true`, 막히면 돌아와서 다음 자식을 시도한다. 이렇게 한 갈래를 끝까지 가 보고 돌아오는 탐색이 DFS(깊이 우선 탐색)이고, 재귀로 짜면 자연스럽다.
+
+재귀 함수 `dfs(node, i)`는 "지금 `node`에 있고, 검색어의 `i`번째 글자부터 맞춰야 한다"는 뜻이다.
+
+1. `i`가 검색어 길이와 같으면 글자를 다 맞춘 것이다. 지금 노드에 끝 표시가 있어야 `true`.
+2. `i`번째 글자가 `.`이면 모든 자식에 `dfs(child, i + 1)`을 불러 보고, 하나라도 `true`면 바로 `true`.
+3. 보통 글자면 그 글자 자식이 있을 때만 `dfs(child, i + 1)`.
+
+```js
+class TrieNode {
+  constructor() {
+    this.children = new Array(26).fill(null); // a~z 자리
+    this.isEnd = false;
+  }
+}
+
+class WordDictionary {
+  constructor() {
+    this.root = new TrieNode();
+  }
+  addWord(word) {
+    let node = this.root;
+    for (let i = 0; i < word.length; i++) {
+      const c = word.charCodeAt(i) - 97;
+      if (node.children[c] === null) node.children[c] = new TrieNode();
+      node = node.children[c];
+    }
+    node.isEnd = true;
+  }
+  search(word) {
+    const dfs = (node, i) => {
+      if (i === word.length) return node.isEnd; // 다 맞췄다. 단어로 끝나야 한다
+      if (word[i] === ".") {
+        for (const child of node.children) {
+          if (child !== null && dfs(child, i + 1)) return true; // 한 갈래라도 맞으면 끝
+        }
+        return false; // 모든 갈래가 막혔다
+      }
+      const child = node.children[word.charCodeAt(i) - 97];
+      return child !== null && dfs(child, i + 1);
+    };
+    return dfs(this.root, 0);
+  }
+}
+```
+
+아래 그림은 `..t`를 찾는 과정이다. 위 칸은 검색어 글자, 아래 칸은 지금 DFS가 들어와 있는 길이다(왼쪽이 뿌리).
+
+<AlgoTrace
+  caption="..t 검색: 점에서 갈래를 하나씩 시도하고 막히면 돌아온다"
+  memoryLabel="지금 내려와 있는 길 (왼쪽이 뿌리)"
+  cells={[".", ".", "t"]}
+  steps={[
+    { pointer: 0, memory: ["뿌리"], caption: "첫 글자가 점이다. 뿌리의 자식 b와 m을 차례로 시도한다. 먼저 b." },
+    { pointer: 1, memory: ["뿌리", "b"], caption: "둘째 글자도 점이다. b의 자식 a와 i 중 a부터 내려간다." },
+    { pointer: 2, memory: ["뿌리", "b", "ba"], caption: "셋째 글자는 t인데 ba 아래에는 d뿐이다. 막혔으니 b로 돌아간다." },
+    { pointer: 1, memory: ["뿌리", "b", "bi"], caption: "b의 다음 자식 i로 내려간다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["뿌리", "b", "bi", "bit ●"], caption: "bi 아래에 t가 있고 끝 표시도 있다. true. m 쪽은 열어 보지도 않는다." },
+  ]}
+/>
+
+마지막 칸에서 `m` 가지를 열지 않은 데 주목하자. `..t`의 답이 `true`로 정해지는 순간 위로 `true`가 그대로 올라가서, 남은 갈래를 시도하지 않는다. `for` 안의 `if (... && dfs(...)) return true`가 그 일을 한다.
+
+복잡도를 따져 보자. 점이 없으면 `Implement Trie`처럼 O(L)이다. 점이 하나면 그 자리에서 최대 26갈래로 나뉘고, 각 갈래는 다시 한 줄로 내려가니 O(26 · L). 점이 둘이면 O(26² · L), 길이 25라면 많아야 약 1만 7천 번 노드를 밟는다. 점이 몇 개든 넘을 수 없는 상한도 있다. 트라이에서 각 노드로 가는 길은 하나뿐이라 한 번의 검색이 같은 노드를 두 번 밟지 않는다. 그래서 최악도 트라이 전체 노드 수 N을 넘지 않는다. 정리하면 `search`는 O(min(N, 26^k · L)), k는 점 개수다. 공간은 노드 수 O(n · L)와 재귀 깊이 O(L)이다.
+
+### Python과 Java로 쓰면
+
+Python은 자식을 딕셔너리로 들고, 점에서는 `any`에 제너레이터를 넘긴다. 제너레이터는 `true`가 나오는 순간 멈추니 JS의 `return true`와 같은 효과다.
+
+```python
+class TrieNode:
+    __slots__ = ("children", "is_end")
+
+    def __init__(self):
+        self.children = {}
+        self.is_end = False
+
+
+class WordDictionary:
+    def __init__(self):
+        self.root = TrieNode()
+
+    def addWord(self, word: str) -> None:
+        node = self.root
+        for ch in word:
+            if ch not in node.children:
+                node.children[ch] = TrieNode()
+            node = node.children[ch]
+        node.is_end = True
+
+    def search(self, word: str) -> bool:
+        def dfs(node: TrieNode, i: int) -> bool:
+            if i == len(word):
+                return node.is_end
+            ch = word[i]
+            if ch == ".":
+                # 자식 중 하나라도 나머지를 맞추면 된다
+                return any(dfs(child, i + 1) for child in node.children.values())
+            child = node.children.get(ch)
+            return child is not None and dfs(child, i + 1)
+
+        return dfs(self.root, 0)
+
+
+d = WordDictionary()
+for w in ["bad", "bit", "mad"]:
+    d.addWord(w)
+print([d.search(q) for q in ["pad", "bad", ".ad", "..t", "m.", "b..", "...."]])
+```
+
+```text
+[False, True, True, True, False, True, False]
+```
+
+`any([dfs(...) for ...])`처럼 대괄호를 치면 리스트를 먼저 다 만들어서 모든 갈래를 끝까지 탐색한다. 답은 같지만 일찍 멈추는 효과가 사라진다. 재귀 깊이는 단어 길이(최대 25)를 넘지 않으니 파이썬의 기본 재귀 제한(1,000)은 걱정하지 않아도 된다.
+
+Java는 26칸 배열로 들고, 재귀 함수에 검색어를 인자로 넘긴다.
+
+```java
+class WordDictionary {
+    private static class Node {
+        Node[] children = new Node[26];
+        boolean isEnd;
+    }
+
+    private final Node root = new Node();
+
+    public void addWord(String word) {
+        Node node = root;
+        for (int i = 0; i < word.length(); i++) {
+            int c = word.charAt(i) - 'a';
+            if (node.children[c] == null) node.children[c] = new Node();
+            node = node.children[c];
+        }
+        node.isEnd = true;
+    }
+
+    public boolean search(String word) {
+        return dfs(root, word, 0);
+    }
+
+    private boolean dfs(Node node, String word, int i) {
+        if (i == word.length()) return node.isEnd;
+        char ch = word.charAt(i);
+        if (ch == '.') {
+            for (Node child : node.children) {
+                if (child != null && dfs(child, word, i + 1)) return true;
+            }
+            return false;
+        }
+        Node child = node.children[ch - 'a'];
+        return child != null && dfs(child, word, i + 1);
+    }
+}
+```
+
+```text
+false true true true false true false
+```
+
+`ch - 'a'`를 점에서 계산하면 `'.'`의 코드 46에서 97을 빼 -51이 되고 바로 `ArrayIndexOutOfBoundsException`이 난다. 점 검사를 반드시 먼저 한다. JS에서는 `children[-51]`이 `undefined`를 돌려주고, `undefined !== null`이 참이라 그대로 다음 재귀로 넘어갔다가 `Cannot read properties of undefined (reading 'isEnd')`로 터진다. 원인이 점이라는 게 에러 메시지에 드러나지 않아서 찾기가 더 어렵다.
+
+## 재귀 없이 한 글자씩 넓혀 가기
+
+같은 트라이를 다르게 훑을 수도 있다. "지금 글자까지 맞춘 노드들"의 목록을 들고, 글자 하나를 읽을 때마다 목록을 다음 층으로 바꾼다. 보통 글자면 각 노드에서 그 글자 자식만, 점이면 각 노드의 모든 자식을 다음 목록에 넣는다. 글자를 다 읽은 뒤 목록에 끝 표시가 있는 노드가 하나라도 있으면 `true`다. 층 단위로 넓혀 가니 BFS(너비 우선 탐색) 모양이다.
+
+```js
+search(word) {
+  let frontier = [this.root]; // 지금 글자까지 맞춘 노드들
+  for (let i = 0; i < word.length && frontier.length > 0; i++) {
+    const next = [];
+    if (word[i] === ".") {
+      for (const node of frontier) {
+        for (const child of node.children) if (child !== null) next.push(child); // 모든 자식
+      }
+    } else {
+      const c = word.charCodeAt(i) - 97;
+      for (const node of frontier) {
+        if (node.children[c] !== null) next.push(node.children[c]); // 그 글자 자식만
+      }
+    }
+    frontier = next;
+  }
+  return frontier.some((node) => node.isEnd);
+}
+```
+
+`..t`라면 목록이 `[뿌리]` → `[b, m]` → `[ba, bi, ma]` → `[bit]`으로 바뀌고, `bit`에 끝 표시가 있어서 `true`다.
+
+밟는 노드 수의 상한은 DFS와 같다. 재귀가 없어서 콜 스택 걱정이 없고, 반복문 하나라 디버깅할 때 층마다 목록을 찍어 보기 쉽다. 대신 DFS처럼 "하나 찾으면 바로 멈추기"가 안 된다. 층 하나를 통째로 만든 뒤에야 다음으로 가기 때문에, 답이 `true`인 검색에서도 갈래를 전부 펼친다. 아래 측정에서 DFS보다 두 배쯤 느렸다. 단어 길이가 25로 짧은 이 문제에서는 재귀 깊이가 문제가 되지 않으니 DFS가 기본 답이다.
+
+## 다섯 풀이를 재 보면
+
+무작위 소문자 10글자 단어 5,000개를 넣고, 점 1~2개가 섞인 10글자 검색어 5,000개를 돌렸다(절반은 넣은 단어에서 만든 검색어). Node.js 22에서 두 번 돌린 결과 중 하나다.
+
+```text
+배열 다 훑기      add 1ms    search 186ms  mem 0.2MB
+길이별 묶음       add 1ms    search 167ms  mem 0.2MB
+점 미리 찍기      add 201ms  search 2ms    mem 18.4MB
+트라이 + DFS      add 19ms   search 28ms   mem 11.3MB
+트라이 + BFS      add 11ms   search 54ms   mem 11.3MB
+```
+
+길이별 묶음이 배열과 거의 같은 건 단어가 모두 10글자라서다. 묶음이 하나뿐이다. 점 미리 찍기는 넣기가 가장 느리고 메모리도 가장 많이 쓰지만 검색은 압도적으로 빠르다. 단어당 패턴이 1 + 10 + 45 = 56개라 최대 28만 개의 문자열을 들고 있다. 트라이는 넣기와 검색이 모두 적당히 빠르다. 넣기와 검색이 섞여 들어오고 둘 중 무엇이 많을지 모르는 이 문제에서 트라이를 고르는 이유가 이것이다.
+
+## 다섯 풀이를 나란히 놓으면
+
+n은 넣은 단어 수, L은 단어 길이, k는 검색어의 점 개수, N은 트라이 노드 수다.
+
+| 풀이 | addWord | search | 공간 | 언제 고르나 |
+|---|---|---|---|---|
+| 배열 다 훑기 | O(1) | O(n · L) | O(n · L) | 단어가 몇십 개뿐일 때 |
+| 길이별 묶음 | O(L) | 점 없으면 O(L), 있으면 O(n_L · L) | O(n · L) | 단어 길이가 고르게 퍼져 있을 때 |
+| 점 미리 찍기 | O(L³) | O(L) | O(n · L³) | 점 개수가 작게 묶여 있고 검색이 압도적으로 많을 때 |
+| 트라이 + DFS | O(L) | O(min(N, 26^k · L)) | O(N) | 기본 답 |
+| 트라이 + BFS | O(L) | DFS와 같은 상한 | O(N) + 한 층 목록 | 재귀를 피하고 싶을 때 |
+
+아래에서 직접 짜 볼 수 있다. LeetCode처럼 연산 목록과 인자 목록을 받아 결과 배열을 돌려주는 함수로 감쌌다.
+
+<CodePlayground
+  caption="Add and Search Words: 연산 목록을 받아 결과 배열 돌려주기"
+  functionName="runWordDictionary"
+  initialCode={`function runWordDictionary(ops, args) {
+  class WordDictionary {
+    constructor() {}
+    addWord(word) {}
+    search(word) {}
+  }
+  // ops[i]가 "WordDictionary"면 새로 만들고 null,
+  // 그 밖에는 메서드를 args[i]로 부르고 돌려준 값(없으면 null)을 모은다
+  const out = [];
+  let d = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "WordDictionary") { d = new WordDictionary(); out.push(null); continue; }
+    const r = d[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  solution={`function runWordDictionary(ops, args) {
+  class TrieNode {
+    constructor() {
+      this.children = new Array(26).fill(null);
+      this.isEnd = false;
+    }
+  }
+  class WordDictionary {
+    constructor() { this.root = new TrieNode(); }
+    addWord(word) {
+      let node = this.root;
+      for (let i = 0; i < word.length; i++) {
+        const c = word.charCodeAt(i) - 97;
+        if (node.children[c] === null) node.children[c] = new TrieNode();
+        node = node.children[c];
+      }
+      node.isEnd = true;
+    }
+    search(word) {
+      const dfs = (node, i) => {
+        if (i === word.length) return node.isEnd;
+        if (word[i] === ".") {
+          for (const child of node.children) {
+            if (child !== null && dfs(child, i + 1)) return true;
+          }
+          return false;
+        }
+        const child = node.children[word.charCodeAt(i) - 97];
+        return child !== null && dfs(child, i + 1);
+      };
+      return dfs(this.root, 0);
+    }
+  }
+  const out = [];
+  let d = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "WordDictionary") { d = new WordDictionary(); out.push(null); continue; }
+    const r = d[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  tests={[
+    { label: "글의 예시", args: [["WordDictionary", "addWord", "addWord", "addWord", "search", "search", "search", "search", "search", "search", "search"], [[], ["bad"], ["bit"], ["mad"], ["pad"], ["bad"], [".ad"], ["..t"], ["m."], ["b.."], ["...."]]], expected: [null, null, null, null, false, true, true, true, false, true, false] },
+    { label: "빈 사전에 점 하나", args: [["WordDictionary", "search", "addWord", "search"], [[], ["."], ["a"], ["."]]], expected: [null, false, null, true] },
+    { label: "접두사만 맞는 단어", args: [["WordDictionary", "addWord", "search", "search"], [[], ["abc"], ["ab."], ["ab"]]], expected: [null, null, true, false] },
+    { label: "첫 갈래가 막혀도 다음 갈래", args: [["WordDictionary", "addWord", "addWord", "search"], [[], ["xa"], ["yb"], [".b"]]], expected: [null, null, null, true] },
+    { label: "짧은 단어와 긴 검색어", args: [["WordDictionary", "addWord", "addWord", "search", "search"], [[], ["a"], ["ab"], ["a.."], [".."]]], expected: [null, null, null, false, true] },
+    { label: "끝의 점 두 개", args: [["WordDictionary", "addWord", "addWord", "search", "search"], [[], ["zzzz"], ["zz"], ["zz.."], ["z..z"]]], expected: [null, null, null, true, true] },
+  ]}
+/>
+
+## 첫 갈래만 보고 돌아오는 실수
+
+트라이 DFS에서 가장 많이 틀리는 곳은 점을 만났을 때의 반복문이다. 자식 하나의 결과를 그대로 돌려주면 그 갈래가 막혔을 때 다른 갈래를 시도하지 않는다.
+
+```js
+if (word[i] === ".") {
+  for (const child of node.children) {
+    if (child !== null) return dfs(child, i + 1); // 첫 자식의 결과를 그대로 돌려준다
+  }
+  return false;
+}
+// addWord("bad"), addWord("bit") 뒤에 search("..t") -> false (정답은 true)
+```
+
+`b` 아래 첫 자식 `a`로 내려갔다가 `t`가 없어서 `false`를 받고, 그 `false`를 그대로 돌려 버린다. `i` 쪽은 보지도 않는다. `true`일 때만 일찍 돌아오고, `false`면 다음 자식으로 넘어가야 한다. 위 테스트의 "첫 갈래가 막혀도 다음 갈래"가 이 실수를 잡는다.
+
+두 번째는 글자를 다 맞춘 뒤 끝 표시를 보지 않는 것이다.
+
+```js
+if (i === word.length) return true; // 끝 표시를 보지 않는다
+// addWord("bad"), addWord("bit") 뒤에 search("b.") -> true (정답은 false)
+```
+
+`b.`은 두 글자 단어를 찾는데, `ba`라는 노드가 있으니 맞았다고 한다. `ba`는 `bad`의 접두사일 뿐 넣은 단어가 아니다. 테스트의 "접두사만 맞는 단어"가 이걸 잡는다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 점 검사보다 글자 인덱스 계산을 먼저 하면 `'.' - 'a'`가 -51이 된다. Java는 배열 범위 예외, JS는 한 단계 뒤에서 `undefined`의 속성을 읽는 TypeError가 난다.
+- 재귀 함수 안에서 검색어를 `word.slice(1)`로 잘라 넘기면 호출마다 새 문자열을 만든다. 길이 25에서는 티가 안 나지만 인덱스 `i`를 넘기는 쪽이 낫다.
+- 정규식 풀이에서 `^`와 `$`를 빼먹으면 길이가 다른 단어도 맞는다.
+
+## 면접관이 이어서 묻는 것
+
+### 점 개수에 제한이 없다면
+
+점 미리 찍기 풀이는 패턴 수가 2^L로 터져서 쓸 수 없다. 트라이 DFS는 그대로 쓸 수 있고, 한 번의 검색이 트라이 노드를 많아야 한 번씩 밟으니 최악 O(N)이다. 실제 서비스라면 검색어가 `....`처럼 점으로만 되어 있을 때 사전 전체를 훑게 되니, 점 개수에 상한을 두거나 결과 수를 잘라 응답 시간을 묶어 둔다.
+
+### 길이가 다른 단어로 내려가는 걸 줄이려면
+
+`m.`처럼 사전에 그 길이의 단어가 아예 없으면 트라이를 내려갈 필요조차 없다. 단어 길이별로 트라이를 따로 두면(`Map<길이, 트라이>`) 길이가 다른 단어는 처음부터 보지 않는다. 한 트라이를 유지하고 싶다면 노드마다 "이 아래에서 끝나는 단어까지 남은 길이들"을 비트마스크로 들고, 남은 검색어 길이가 그 마스크에 없으면 가지를 바로 잘라 낸다. 둘 다 최악 복잡도는 같지만 실제 탐색 노드 수가 줄어든다.
+
+### `*`(아무 길이 문자열)까지 허용한다면
+
+`*`가 0글자 이상과 맞는다면, `*`를 만났을 때 "여기서 `*`를 끝내고 다음 글자로" 또는 "지금 노드의 자식 하나를 `*`가 삼키고 그대로 `*`에 머물기"의 두 갈래가 생긴다. 같은 (노드, 검색어 위치) 쌍을 여러 번 밟을 수 있어서 메모이제이션(이미 계산한 결과를 저장해 두고 다시 쓰기)이 필요해진다. 문자열 하나와의 와일드카드 맞추기는 LeetCode 44. Wildcard Matching이 DP로 다룬다.
+
+### 맞는 단어를 전부 돌려 달라면
+
+`return true`로 일찍 멈추던 곳을 바꿔, 끝 표시를 만날 때마다 지금까지 내려온 길을 결과에 넣고 계속 탐색한다. 결과가 많을 수 있으니 시간은 출력 크기에도 비례한다. DFS 순서로 26칸 배열을 0번부터 훑으면 결과가 사전 순으로 나온다.
+
+### 단어 삭제가 필요하다면
+
+트라이에서 단어를 지우는 방법은 [트라이 글](/posts/ds-trie)에서 다뤘다. 끝 표시를 떼고, 돌아오면서 끝 표시도 자식도 없는 노드를 부모에서 떼어 낸다. 점 미리 찍기 풀이에서는 패턴 하나를 여러 단어가 함께 쓸 수 있어서(`bad`와 `bid`가 모두 `b.d`를 만든다) 집합 대신 패턴별 개수를 세는 맵으로 바꿔야 지울 수 있다.
+
+### 비슷한 문제
+
+- [Implement Trie](/posts/leetcode-implement-trie) (208): 이 문제의 바탕. 점이 없는 검색.
+- [Word Search II](/posts/leetcode-word-search-ii) (212): 트라이를 내려가는 DFS를 격자 위의 DFS와 겹친다.
+- [Search Suggestions System](/posts/leetcode-search-suggestions-system) (1268): 접두사 노드 아래를 훑어 단어를 모은다.
+- 676. Implement Magic Dictionary: 정확히 한 글자만 다른 단어가 있는지 찾는다. 점 미리 찍기와 트라이 DFS가 둘 다 통한다.
+- 44. Wildcard Matching: `?`와 `*`가 있는 패턴과 문자열 하나를 DP로 맞춘다.
+
+## 모르는 글자에서만 갈래를 늘린다
+
+점이 섞인 검색은 해시를 계산할 수 없어서 해시 집합이 그대로는 못 푼다. 길이로 나누면 일부만 걸러지고, 점을 미리 찍어 두면 검색은 빠르지만 점 개수 제한에 기대야 한다. 트라이는 아는 글자에서는 한 갈래로 내려가고 모르는 글자에서만 갈래를 늘리며, 틀린 글자를 만나면 그 접두사를 나눠 쓰는 단어 전부를 한 번에 버린다. 점에서 자식을 하나씩 시도하되 `true`일 때만 돌아오고, 글자를 다 맞춘 뒤에는 끝 표시를 확인한다. 이 두 줄만 정확하면 나머지는 [Implement Trie](/posts/leetcode-implement-trie)와 같다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 해시 집합으로는 이 문제를 풀기 어렵나요?
+
+`.`이 섞인 검색어는 어떤 단어와 맞을지 미리 알 수 없어서 해시를 계산할 대상이 없다. 그래서 해시 집합만 쓰면 모든 단어와 하나씩 맞춰 봐야 한다. 예외는 점 개수가 작게 묶여 있을 때인데, 넣을 때 점을 찍은 패턴을 전부 만들어 두면 검색을 해시 조회 한 번으로 끝낼 수 있다. 대신 넣기가 O(L³)이 되고 메모리를 많이 쓴다.
+
+### 트라이 DFS에서 점을 만나면 정확히 무엇을 하나요?
+
+그 노드의 자식을 하나씩 골라 "다음 글자부터 맞추기"를 재귀로 부른다. 하나라도 `true`면 바로 `true`를 돌려주고, 모든 자식이 `false`면 `false`다. 흔한 실수는 첫 자식의 결과를 그대로 돌려주는 것인데, 그러면 그 갈래가 막혔을 때 다른 갈래를 보지 않는다. `true`일 때만 일찍 돌아오는 게 요점이다.
+
+### search의 최악 시간 복잡도는요?
+
+점이 k개면 점마다 최대 26갈래로 나뉘니 O(26^k · L)이다. 이 문제는 점이 최대 2개라 O(26² · L)이다. 점이 몇 개든 한 번의 검색이 같은 노드를 두 번 밟지 않으니 트라이 노드 수 N이 상한이 된다. 그래서 O(min(N, 26^k · L))로 말한다.
+
+### 점이 최대 2개라는 조건을 어떻게 쓸 수 있나요?
+
+단어를 넣을 때 점 0~2개를 찍은 모든 패턴(길이 L이면 1 + L + L(L-1)/2개)을 집합에 넣어 두면, 검색은 검색어가 집합에 있는지만 보면 된다. 길이 25 단어 하나에서 326개가 나온다. 검색이 넣기보다 압도적으로 많을 때는 이게 가장 빠르다. 직접 재 보면 검색은 트라이보다 10배 넘게 빨랐지만 넣기는 10배 넘게 느렸고 메모리는 1.6배 정도 더 썼다.
+
+### 재귀 DFS와 층별 BFS 중 무엇을 쓰나요?
+
+이 문제에서는 DFS다. 맞는 단어를 하나 찾는 순간 멈출 수 있어서 `true`인 검색이 빠르다. BFS는 층마다 노드 목록을 다 만든 뒤 넘어가서 일찍 멈추지 못하고, 측정에서도 두 배쯤 느렸다. 단어 길이가 25 이하라 재귀 깊이도 문제가 되지 않는다. 길이가 아주 길어 콜 스택이 걱정될 때 BFS나 명시적 스택으로 바꾼다.
+
+### 글자를 다 맞춘 뒤 true를 돌려주면 어떤 입력에서 틀리나요?
+
+넣은 단어의 접두사를 찾을 때 틀린다. `bad`만 넣고 `b.`을 찾으면 `ba` 노드까지 내려가는 길이 있으니 `true`가 나온다. 하지만 `ba`는 넣은 단어가 아니다. 다 맞춘 뒤에는 그 노드의 끝 표시를 돌려줘야 한다. [Implement Trie](/posts/leetcode-implement-trie)의 `search`와 `startsWith` 차이와 같은 이야기다.

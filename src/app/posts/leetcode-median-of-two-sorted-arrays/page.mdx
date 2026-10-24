@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-median-of-two-sorted-arrays");
+
+<EasyIntro>
+  두 반 학생들이 각자 키 순서대로 줄을 서 있다. 두 반을 한 줄로 합쳤을 때 정확히 가운데에 서게 될 학생의 키가 궁금하다. 가장 쉬운 방법은 두 줄을 실제로 합쳐서 키 순서대로 다시 세우고 가운데를 보는 것이다. 하지만 사람이 많으면 그건 오래 걸린다. 그 대신 "첫 번째 반에서 앞쪽 몇 명, 두 번째 반에서 앞쪽 몇 명"을 골라 왼쪽 무리를 만든다고 생각해 보자. 왼쪽 무리의 인원은 전체의 절반으로 정해져 있으니, 첫 번째 반에서 몇 명을 고르면 두 번째 반에서 고를 인원은 저절로 정해진다. 그리고 왼쪽 무리에서 가장 큰 학생이 오른쪽 무리에서 가장 작은 학생보다 작거나 같으면 제대로 나눈 것이다. 첫 번째 반에서 몇 명을 고를지를 숫자 맞히기 게임처럼 반씩 좁혀 가면 금방 맞는 나눔을 찾고, 가운데 학생도 바로 보인다.
+</EasyIntro>
+
+[LeetCode 4. Median of Two Sorted Arrays](https://leetcode.com/problems/median-of-two-sorted-arrays/)는 LeetCode 초반 번호 중 가장 악명 높은 Hard 문제다. 합쳐서 가운데를 보는 풀이는 5분이면 짜는데, 문제가 O(log(m + n))을 요구해서 어렵다. 나도 처음엔 두 배열의 중앙값을 각각 구해 비교하는 쪽으로 갔다가 홀짝과 빈 배열 처리에서 길을 잃었다. 이 문제는 "중앙값을 찾는다"가 아니라 "어디서 자를지를 찾는다"로 바꿔 생각해야 풀린다.
+
+문제를 내 말로 풀면 이렇다. 오름차순으로 정렬된 정수 배열 `nums1`(길이 m)과 `nums2`(길이 n)가 주어진다. 두 배열을 합친 m + n개의 중앙값을 구한다. 중앙값은 전체를 정렬했을 때 가운데 값이다. 개수가 홀수면 정확히 가운데 하나, 짝수면 가운데 두 값의 평균이다. 그래서 답은 실수(`double`)다.
+
+풀이에 영향을 주는 제약은 이렇다.
+
+- m, n은 각각 0 이상 1000 이하이고, m + n은 1 이상이다. 한쪽 배열이 비어 있을 수 있다.
+- 값은 -10^6 이상 10^6 이하다. 두 값을 더해도 정수 범위를 넘지 않는다. 그래도 일반화하면 넘칠 수 있어서 아래에서 짚는다.
+- 시간 복잡도는 O(log(m + n))이어야 한다. 합치는 풀이(O(m + n))도 채점은 통과하지만 문제가 원하는 답이 아니다.
+
+예시는 하나로 끝까지 간다.
+
+```text
+A = [3, 8, 13, 15, 20, 24]        m = 6
+B = [1, 2, 4, 6, 7, 10, 11]       n = 7
+합치면 1 2 3 4 6 7 8 10 11 13 15 20 24   (13개)
+```
+
+13개의 가운데는 7번째 값 8이다. 짝수 예시로는 A에서 24를 뺀 `[3, 8, 13, 15, 20]`과 B를 쓴다. 합치면 12개이고 6번째(7)와 7번째(8)의 평균 7.5가 중앙값이다.
+
+이분 탐색의 구간 정의는 [LeetCode 704 글](/posts/leetcode-binary-search)에서, 답을 놓고 찾는 방식은 [Koko Eating Bananas 글](/posts/leetcode-koko-eating-bananas)에서 다뤘다. 이 글은 느린 풀이 셋, 빠른 풀이 셋을 차례로 짜고, 가장 빠른 "자르기" 풀이를 칸 단위로 따라간다. 실행 결과는 Node.js 22, Python 3, OpenJDK에서 돌린 값이다.
+
+## 중앙값은 왼쪽 무리와 오른쪽 무리의 경계다
+
+중앙값을 다르게 정의해 보면 풀이가 보인다. 정렬된 전체를 크기가 같은(홀수면 왼쪽이 하나 더 많은) 두 무리로 나눈다.
+
+```text
+왼쪽 무리 (7개): 1 2 3 4 6 7 8
+오른쪽 무리 (6개): 10 11 13 15 20 24
+```
+
+이렇게 나누면 두 가지가 성립한다. 왼쪽 무리의 모든 값은 오른쪽 무리의 모든 값보다 작거나 같다. 그리고 왼쪽 무리의 크기는 ⌊(m + n + 1) / 2⌋다. 이 나눔이 정해지면 중앙값은 바로 나온다.
+
+- 전체 개수가 홀수면 왼쪽 무리의 가장 큰 값이 중앙값이다. 여기서는 8이다.
+- 짝수면 왼쪽 무리의 가장 큰 값과 오른쪽 무리의 가장 작은 값의 평균이다.
+
+그러니 중앙값을 찾는 문제는 "올바르게 나누는 경계를 찾는 문제"다. 이 경계를 두 배열에서 각각 어디에 긋는지가 아래 빠른 풀이의 출발점이 된다. 왼쪽 무리 7개는 A의 앞쪽 몇 개와 B의 앞쪽 몇 개로 이루어진다. 위 예시에서는 A에서 3, 8 두 개, B에서 1, 2, 4, 6, 7 다섯 개다.
+
+## 합쳐서 다시 정렬하기
+
+먼저 정의 그대로 짠다. 두 배열을 이어 붙이고 정렬한 뒤 가운데를 본다.
+
+```js
+function findMedianSortedArrays(nums1, nums2) {
+  const all = [...nums1, ...nums2].sort((a, b) => a - b); // 숫자 비교자를 꼭 준다
+  const n = all.length;
+  if (n % 2 === 1) return all[(n - 1) / 2];               // 홀수: 가운데 하나
+  return (all[n / 2 - 1] + all[n / 2]) / 2;               // 짝수: 가운데 둘의 평균
+}
+```
+
+JavaScript의 `sort()`는 비교 함수를 주지 않으면 값을 문자열로 바꿔 사전 순으로 정렬한다. 실제로 돌려 보면 이렇게 된다.
+
+```js
+console.log([10, 9, 2].sort(), [-1, 5, -10].sort());
+```
+
+```text
+[ 10, 2, 9 ] [ -1, -10, 5 ]
+```
+
+"10"이 "2"보다 앞에 오고, "-1"이 "-10"보다 앞에 온다. 이 문제에서 비교 함수를 빼면 음수나 두 자리 수가 섞이는 순간 중앙값이 틀린다. 파이썬의 `sorted`와 자바의 `Arrays.sort(int[])`는 숫자로 정렬하니 이 문제가 없다.
+
+시간은 정렬 때문에 O((m + n) log(m + n)), 공간은 합친 배열 O(m + n)이다. 두 배열이 이미 정렬돼 있다는 정보를 버리고 처음부터 다시 정렬했다.
+
+## 지퍼처럼 합치기
+
+두 배열이 이미 정렬돼 있으니 다시 정렬할 필요가 없다. 병합 정렬의 합치기 단계처럼, 두 배열의 앞에서부터 작은 쪽을 하나씩 꺼내면 정렬된 전체가 나온다. 투 포인터(두 배열에 손가락 하나씩 두고 움직이는 방식)다.
+
+```js
+function findMedianSortedArrays(nums1, nums2) {
+  const all = [];
+  let i = 0, j = 0;
+  while (i < nums1.length && j < nums2.length) {
+    all.push(nums1[i] <= nums2[j] ? nums1[i++] : nums2[j++]); // 작은 쪽을 꺼낸다
+  }
+  while (i < nums1.length) all.push(nums1[i++]); // 남은 것을 붙인다
+  while (j < nums2.length) all.push(nums2[j++]);
+  const n = all.length;
+  return n % 2 === 1 ? all[(n - 1) / 2] : (all[n / 2 - 1] + all[n / 2]) / 2;
+}
+```
+
+시간 O(m + n), 공간 O(m + n)이다. 정렬을 없애서 로그 하나를 줄였다. 합치는 방법은 [병합 정렬](/posts/sorting-algorithms)에서, 투 포인터의 일반론은 [투 포인터 패턴 글](/posts/two-pointers-pattern)에서 다룬다. 같은 합치기를 연결 리스트로 하는 문제가 [Merge Two Sorted Lists](/posts/leetcode-merge-two-sorted-lists)다.
+
+## 가운데까지만 걷기
+
+전체를 합칠 필요도 없다. 중앙값에 필요한 건 가운데 한두 개뿐이다. 합치는 과정을 ⌊(m + n) / 2⌋ + 1번만 진행하고, 마지막 두 값만 기억한다.
+
+```js
+function findMedianSortedArrays(nums1, nums2) {
+  const total = nums1.length + nums2.length;
+  let i = 0, j = 0, prev = 0, cur = 0;
+  for (let c = 0; c <= Math.floor(total / 2); c++) {
+    prev = cur;                                   // 바로 앞에 꺼낸 값
+    if (i < nums1.length && (j >= nums2.length || nums1[i] <= nums2[j])) cur = nums1[i++];
+    else cur = nums2[j++];
+  }
+  return total % 2 === 1 ? cur : (prev + cur) / 2;
+}
+```
+
+13개면 7번 꺼내고 7번째 값(8)이 `cur`다. 12개면 7번 꺼내고 6번째(7)가 `prev`, 7번째(8)가 `cur`라 평균 7.5다. 조건문의 `j >= nums2.length ||`는 B를 다 썼을 때 A에서 꺼내라는 뜻이다. 이 순서를 바꿔 `nums1[i] <= nums2[j]`를 먼저 보면, B를 다 쓴 뒤 `nums2[j]`가 `undefined`가 되고 `3 <= undefined`는 거짓이라 엉뚱하게 B에서 꺼낸다.
+
+시간은 O(m + n)(정확히는 절반만 걷는다), 공간은 O(1)이다. 이 문제의 제약(합 2000개)에서는 이것도 충분히 빠르다. 하지만 한 번 꺼낼 때 하나씩만 버린다는 점은 그대로다. 정렬돼 있다는 정보를 더 쓰면 한 번에 여러 개를 버릴 수 있다.
+
+## k번째 수를 찾으며 절반씩 버린다
+
+중앙값은 "k번째로 작은 수"의 특별한 경우다. 13개에서 중앙값은 7번째 수다. 그럼 두 정렬 배열에서 k번째 수를 빨리 찾으면 된다.
+
+생각은 이렇다. k번째 수를 찾을 때, A의 앞에서 k/2번째 값과 B의 앞에서 k/2번째 값을 비교한다. A 쪽이 더 작다고 하자. 그러면 A의 앞쪽 k/2개는 k번째 수가 될 수 없다. A의 k/2번째 값보다 작은 값은 많아야 A의 앞쪽 k/2 − 1개와 B의 앞쪽 k/2 − 1개, 합쳐서 k − 2개뿐이라 그 값의 순위는 k − 1번째를 넘을 수 없기 때문이다. 그러니 A의 앞쪽 k/2개를 버리고, 남은 곳에서 (k − k/2)번째를 찾는다. 매번 k가 절반으로 준다.
+
+```js
+function kth(a, i, b, j, k) {            // a[i..], b[j..]에서 k번째(1부터) 작은 수
+  if (i >= a.length) return b[j + k - 1]; // a를 다 버렸으면 b에서 바로 읽는다
+  if (j >= b.length) return a[i + k - 1];
+  if (k === 1) return Math.min(a[i], b[j]);
+  const h = Math.floor(k / 2);
+  const av = i + h - 1 < a.length ? a[i + h - 1] : Infinity; // 모자라면 무한대로 본다
+  const bv = j + h - 1 < b.length ? b[j + h - 1] : Infinity;
+  if (av < bv) return kth(a, i + h, b, j, k - h); // a의 앞쪽 h개는 답이 아니다
+  return kth(a, i, b, j + h, k - h);              // b의 앞쪽 h개는 답이 아니다
+}
+
+function findMedianSortedArrays(nums1, nums2) {
+  const t = nums1.length + nums2.length;
+  if (t % 2 === 1) return kth(nums1, 0, nums2, 0, (t + 1) / 2);
+  return (kth(nums1, 0, nums2, 0, t / 2) + kth(nums1, 0, nums2, 0, t / 2 + 1)) / 2;
+}
+```
+
+배열 하나가 k/2개보다 짧으면 그쪽 값을 무한대로 본다. 그러면 비교에서 반드시 다른 쪽이 버려진다. 짧은 쪽을 버리면 버린 개수가 h보다 적은데 k에서 h를 빼서 틀리기 때문이다.
+
+아래 그림은 예시에서 7번째 수를 찾는 과정이다. 앞 여섯 칸이 A, 뒤 일곱 칸이 B다.
+
+<AlgoTrace
+  caption="7번째 수 찾기: 비교할 때마다 한쪽 앞부분을 버린다"
+  memoryLabel="k와 비교"
+  cells={["3", "8", "13", "15", "20", "24", "1", "2", "4", "6", "7", "10", "11"]}
+  steps={[
+    { pointer: 8, memory: ["k 7, h 3", "A 3번째 13", "B 3번째 4"], caption: "A의 3번째 13과 B의 3번째 4를 비교한다. 4가 작으니 B의 1, 2, 4는 7번째 수가 아니다." },
+    { pointer: 10, memory: ["k 4, h 2", "A 2번째 8", "B 남은 2번째 7"], caption: "세 개를 버려 이제 4번째를 찾는다. 8과 7 중 7이 작다. B의 6, 7을 버린다." },
+    { pointer: 0, memory: ["k 2, h 1", "A 1번째 3", "B 남은 1번째 10"], caption: "2번째를 찾는다. 3이 10보다 작으니 A의 3을 버린다." },
+    { pointer: 1, memory: ["k 1", "min(8, 10)"], caption: "남은 앞자리 8과 10 중 작은 쪽이 1번째다." },
+    { found: [1], memory: ["답 8"], caption: "7번째 수는 8이다. 비교 네 번에 여섯 개를 버렸다." },
+  ]}
+/>
+
+k가 매번 절반으로 줄어서 재귀는 약 log₂ k번이다. 중앙값의 k는 (m + n) / 2라 시간은 O(log(m + n))이다. 문제가 요구하는 복잡도를 처음으로 맞췄다. 공간은 재귀 깊이만큼 O(log(m + n))이고, 재귀를 반복문으로 바꾸면 O(1)이다. 짝수일 때 `kth`를 두 번 부르는데, 로그 두 번이라 복잡도는 같다.
+
+재귀가 부담스러우면 반복문으로 바꾼다. 파이썬으로 옮기면서 "무한대로 본다" 대신 "실제로 버릴 수 있는 만큼만 버리고 k에서 그만큼 뺀다"로 바꿔 봤다. 같은 뜻이다.
+
+```python
+def kth(a, b, k):
+    i = j = 0                                   # a[i:], b[j:]가 남은 후보
+    while True:
+        if i == len(a):
+            return b[j + k - 1]
+        if j == len(b):
+            return a[i + k - 1]
+        if k == 1:
+            return min(a[i], b[j])
+        h = k // 2
+        ni = min(i + h, len(a))                 # 배열이 짧으면 끝까지만
+        nj = min(j + h, len(b))
+        if a[ni - 1] < b[nj - 1]:
+            k -= ni - i                         # 버린 개수만큼 k를 줄인다
+            i = ni
+        else:
+            k -= nj - j
+            j = nj
+```
+
+```text
+8.0 7.5 5.0 2.0 5.0
+random ok
+```
+
+예시 두 개, `[]`와 `[5]`, `[1, 3]`과 `[2]`, `[1, …, 8]`과 `[9]`의 중앙값이고, 합쳐서 정렬한 결과와 무작위 3만 쌍을 비교해 모두 같았다. 짧은 배열 쪽 `ni`가 `i + h`보다 작아도 되는 이유는, 그 배열의 마지막 값이 다른 쪽 값보다 작다면 그 배열에 남은 값이 전부 k번째 앞에 오기 때문이다.
+
+이 풀이의 장점은 k번째 수라는 더 일반적인 문제를 푼다는 것이다. "두 정렬 배열에서 k번째로 작은 수"가 면접에 따로 나오면 그대로 쓴다. 단점은 경계 처리(배열이 k/2개보다 짧을 때, 한 배열을 다 버렸을 때)가 여러 군데라 실수하기 쉽다는 것이다.
+
+## 짧은 배열을 어디서 자를지 이분 탐색한다
+
+정석 풀이다. 첫 절에서 본 "왼쪽 무리"를 두 배열에서 각각 앞쪽 몇 개로 만든다고 생각한다.
+
+- A에서 앞쪽 i개, B에서 앞쪽 j개를 왼쪽 무리로 보낸다.
+- 왼쪽 무리의 크기는 `half = ⌊(m + n + 1) / 2⌋`로 정해져 있으니 `j = half − i`다. i 하나만 정하면 j가 따라온다.
+- 각 배열은 정렬돼 있으니 A 안에서, B 안에서는 왼쪽이 오른쪽보다 작다. 남은 확인은 두 배열을 엇갈려 보는 것뿐이다. A 왼쪽의 끝 `A[i−1]`이 B 오른쪽의 처음 `B[j]` 이하이고, B 왼쪽의 끝 `B[j−1]`이 A 오른쪽의 처음 `A[i]` 이하면 올바른 나눔이다.
+
+i가 너무 크면(A에서 너무 많이 가져왔으면) `A[i−1] > B[j]`가 된다. i를 줄여야 한다. i가 너무 작으면 `B[j−1] > A[i]`가 된다. i를 늘려야 한다. i를 키울수록 `A[i−1]`은 커지고 `B[j]`는 작아지니, "i가 너무 큰가"의 답은 i를 키울수록 거짓에서 참으로 한 번만 바뀐다. 그래서 i를 0부터 m 사이에서 이분 탐색한다.
+
+```js
+function findMedianSortedArrays(nums1, nums2) {
+  let a = nums1, b = nums2;
+  if (a.length > b.length) [a, b] = [b, a];      // 짧은 쪽에서 자른다
+  const m = a.length, n = b.length;
+  const half = Math.floor((m + n + 1) / 2);      // 왼쪽 무리의 크기
+  let lo = 0, hi = m;                            // a에서 보낼 개수 i의 범위
+  while (lo <= hi) {
+    const i = Math.floor((lo + hi) / 2);
+    const j = half - i;                          // b에서 보낼 개수
+    const aLeft = i > 0 ? a[i - 1] : -Infinity;  // 경계 밖은 무한대로 본다
+    const aRight = i < m ? a[i] : Infinity;
+    const bLeft = j > 0 ? b[j - 1] : -Infinity;
+    const bRight = j < n ? b[j] : Infinity;
+    if (aLeft <= bRight && bLeft <= aRight) {    // 올바르게 나눴다
+      if ((m + n) % 2 === 1) return Math.max(aLeft, bLeft);
+      return (Math.max(aLeft, bLeft) + Math.min(aRight, bRight)) / 2;
+    }
+    if (aLeft > bRight) hi = i - 1;              // a에서 너무 많이 가져왔다
+    else lo = i + 1;                             // a에서 너무 적게 가져왔다
+  }
+}
+```
+
+i가 0이면 A에서 하나도 안 가져온 것이라 A 왼쪽의 끝이 없다. 이때 `aLeft`를 `-Infinity`로 두면 "A 왼쪽 끝 ≤ B 오른쪽 처음"이 저절로 참이 되고, 최댓값을 구할 때도 무시된다. i가 m이면 A 오른쪽이 비어 `aRight`를 `Infinity`로 둔다. 이 네 개의 무한대 덕분에 빈 배열, 한쪽을 통째로 가져오는 경우를 따로 처리하지 않는다.
+
+예시에서 따라가 보자. A가 짧으니(6개) A에서 자른다. `half = ⌊14 / 2⌋ = 7`이다. 앞 여섯 칸이 A, 뒤 일곱 칸이 B다.
+
+<AlgoTrace
+  caption="A에서 몇 개를 왼쪽 무리로 보낼지 이분 탐색"
+  memoryLabel="경계 네 값"
+  cells={["3", "8", "13", "15", "20", "24", "1", "2", "4", "6", "7", "10", "11"]}
+  steps={[
+    { memory: ["half 7", "i 범위 0~6"], caption: "왼쪽 무리는 7개다. A에서 i개를 보내면 B에서는 7 − i개를 보낸다." },
+    { pointer: 2, memory: ["i 3, j 4", "aLeft 13 > bRight 7", "hi = 2"], caption: "A에서 3개(3, 8, 13), B에서 4개를 보내 본다. A의 13이 B 오른쪽의 7보다 크다. A에서 너무 많이 가져왔다." },
+    { pointer: 11, memory: ["i 1, j 6", "bLeft 10 > aRight 8", "lo = 2"], caption: "A에서 1개, B에서 6개. 이번엔 B 왼쪽 끝 10이 A 오른쪽 처음 8보다 크다. A에서 더 가져와야 한다." },
+    { pointer: 1, memory: ["i 2, j 5", "8 ≤ 10", "7 ≤ 13"], caption: "A에서 2개, B에서 5개. 엇갈려 비교한 두 조건이 모두 맞는다. 올바른 나눔이다." },
+    { found: [0, 1, 6, 7, 8, 9, 10], memory: ["max(8, 7) = 8", "답 8"], caption: "왼쪽 무리는 3, 8과 1, 2, 4, 6, 7이다. 13개는 홀수라 왼쪽 무리의 최댓값 8이 중앙값이다." },
+  ]}
+/>
+
+짝수 예시(A에서 24를 뺀 경우)는 half가 6이라 나눔이 달라진다. i = 2(8 > 7이라 너무 많다), i = 0(10 > 3이라 너무 적다)을 거쳐 i = 1, j = 5에서 멈춘다. 왼쪽 무리는 3과 1, 2, 4, 6, 7이고, 왼쪽 최댓값 max(3, 7) = 7과 오른쪽 최솟값 min(8, 10) = 8의 평균 7.5가 중앙값이다.
+
+시간은 짧은 배열 길이 m에 대한 이분 탐색이라 O(log min(m, n))이다. O(log(m + n))보다도 작다. 공간은 O(1)이다.
+
+### 왜 짧은 쪽에서 자르나
+
+긴 쪽에서 자르면 j가 범위를 벗어난다. A가 길이 8, B가 길이 1이면 `half = 5`인데, i가 8까지 갈 수 있어서 `j = 5 − 8 = −3`이 된다. 직접 돌려 봤다.
+
+```text
+  i 4 j 1 { aL: 4, aR: 5, bL: 9, bR: Infinity }
+  i 6 j -1 { aL: 6, aR: 7, bL: -Infinity, bR: undefined }
+  i 7 j -2 { aL: 7, aR: 8, bL: -Infinity, bR: undefined }
+  i 8 j -3 { aL: 8, aR: Infinity, bL: -Infinity, bR: undefined }
+fell out
+```
+
+`[1, 2, …, 8]`과 `[9]`의 중앙값은 5인데, j가 음수가 되면서 `b[-3]`이 `undefined`가 되고 비교가 전부 거짓이라 반복을 빠져나와 아무것도 돌려주지 않았다. 짧은 쪽에서 자르면 i가 0~m이고 m ≤ n이라 j = half − i는 항상 0~n 안에 있다. 짧은 쪽을 고르는 한 줄은 정확성과 속도 둘 다를 위한 것이다.
+
+### 파이썬과 자바로 옮기면
+
+```python
+from typing import List
+
+class Solution:
+    def findMedianSortedArrays(self, nums1: List[int], nums2: List[int]) -> float:
+        a, b = nums1, nums2
+        if len(a) > len(b):
+            a, b = b, a                       # 짧은 쪽에서 자른다
+        m, n = len(a), len(b)
+        half = (m + n + 1) // 2               # 왼쪽 무리의 크기
+        lo, hi = 0, m
+        while lo <= hi:
+            i = (lo + hi) // 2                # a에서 왼쪽으로 보낼 개수
+            j = half - i                      # b에서 왼쪽으로 보낼 개수
+            a_left = a[i - 1] if i > 0 else float("-inf")
+            a_right = a[i] if i < m else float("inf")
+            b_left = b[j - 1] if j > 0 else float("-inf")
+            b_right = b[j] if j < n else float("inf")
+            if a_left <= b_right and b_left <= a_right:
+                if (m + n) % 2:
+                    return float(max(a_left, b_left))
+                return (max(a_left, b_left) + min(a_right, b_right)) / 2
+            if a_left > b_right:
+                hi = i - 1                    # a에서 너무 많이 가져왔다
+            else:
+                lo = i + 1                    # a에서 너무 적게 가져왔다
+        raise ValueError("입력이 정렬돼 있지 않다")
+```
+
+파이썬에서 조심할 곳은 `a[i - 1]`이다. i가 0일 때 `a[-1]`은 에러가 아니라 마지막 원소를 돌려준다. 그래서 `i > 0` 확인을 빠뜨리면 예외 없이 틀린 값이 들어간다. 무한대는 `float("inf")`로 쓴다. 반환은 문제 형식에 맞춰 `float`로 한다.
+
+```java
+class Solution {
+    public double findMedianSortedArrays(int[] nums1, int[] nums2) {
+        if (nums1.length > nums2.length) return findMedianSortedArrays(nums2, nums1); // 짧은 쪽에서
+        int m = nums1.length, n = nums2.length;
+        int half = (m + n + 1) / 2;
+        int lo = 0, hi = m;
+        while (lo <= hi) {
+            int i = lo + (hi - lo) / 2;
+            int j = half - i;
+            int aLeft = i > 0 ? nums1[i - 1] : Integer.MIN_VALUE;
+            int aRight = i < m ? nums1[i] : Integer.MAX_VALUE;
+            int bLeft = j > 0 ? nums2[j - 1] : Integer.MIN_VALUE;
+            int bRight = j < n ? nums2[j] : Integer.MAX_VALUE;
+            if (aLeft <= bRight && bLeft <= aRight) {
+                if ((m + n) % 2 == 1) return Math.max(aLeft, bLeft);
+                return ((long) Math.max(aLeft, bLeft) + Math.min(aRight, bRight)) / 2.0; // long으로 더한다
+            }
+            if (aLeft > bRight) hi = i - 1;
+            else lo = i + 1;
+        }
+        throw new IllegalArgumentException("입력이 정렬돼 있지 않다");
+    }
+}
+```
+
+예시(홀수, 짝수), `[]`와 `[2, 3]`, `[1, 3]`과 `[2]`의 결과는 두 언어가 같다.
+
+```text
+8.0 7.5 2.5 2.0
+```
+
+자바에서 바뀌는 곳은 세 군데다. 무한대 대신 `Integer.MIN_VALUE`와 `MAX_VALUE`를 쓴다. 짝수일 때 두 값을 `int`로 더하면 넘칠 수 있어서 `long`으로 바꿔 더한 뒤 `2.0`으로 나눈다. 그리고 `/ 2`가 아니라 `/ 2.0`이어야 한다. `(3 + 4) / 2`는 정수 나눗셈이라 3이고, `(3 + 4) / 2.0`이 3.5다. 값이 둘 다 `Integer.MAX_VALUE`인 입력으로 확인해 봤다.
+
+```text
+2.147483647E9 -1.0
+```
+
+`long`으로 더한 쪽은 21억 4,748만 3,647이 맞게 나왔고, `int`로 더한 `(2147483647 + 2147483647) / 2.0`은 넘쳐서 -1.0이 됐다. 이 문제의 값 범위(±10^6)에서는 넘치지 않지만, 면접에서 "값 범위가 int 전체라면?"을 물으면 이 줄을 짚는다.
+
+## 값의 범위에서 이분 탐색한다
+
+마지막은 전혀 다른 각도다. 인덱스가 아니라 값을 놓고 찾는다. "x 이하인 값이 몇 개인가"는 각 배열에서 upper bound(x 초과가 처음 나오는 자리)로 O(log)에 센다. 이 개수는 x를 키울수록 줄지 않으니, "개수가 k 이상인 가장 작은 x"를 이분 탐색하면 그게 k번째 수다.
+
+```js
+function findMedianSortedArrays(a, b) {
+  const t = a.length + b.length;
+  const upper = (arr, x) => {                      // arr에서 x 이하의 개수
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] <= x) lo = mid + 1; else hi = mid; }
+    return lo;
+  };
+  const kthValue = (k) => {                        // 이하 개수가 k 이상인 가장 작은 값
+    let lo = Math.min(a.length ? a[0] : Infinity, b.length ? b[0] : Infinity);
+    let hi = Math.max(a.length ? a[a.length - 1] : -Infinity, b.length ? b[b.length - 1] : -Infinity);
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (upper(a, mid) + upper(b, mid) >= k) hi = mid; else lo = mid + 1;
+    }
+    return lo;
+  };
+  return t % 2 === 1 ? kthValue((t + 1) / 2) : (kthValue(t / 2) + kthValue(t / 2 + 1)) / 2;
+}
+```
+
+예시에서 7번째 수를 찾을 때 값 범위는 1~24다.
+
+```text
+mid 12: 이하 9개 (>= 7) -> hi = 12
+mid 6 : 이하 5개        -> lo = 7
+mid 9 : 이하 7개        -> hi = 9
+mid 8 : 이하 7개        -> hi = 8
+mid 7 : 이하 6개        -> lo = 8
+답 8
+```
+
+시간은 값의 범위를 R이라 할 때 O(log R × (log m + log n))이다. 이 문제의 R은 200만이라 약 21번 × 로그 두 번이다. `mid`가 배열에 없는 값(12, 9)일 수도 있지만, 마지막에 남는 값은 "이하 개수가 처음 k가 되는 값"이라 반드시 실제 원소다.
+
+복잡도로는 자르기 풀이보다 못하다. 그리고 값이 정수일 때만 깔끔하게 끝난다(실수라면 반복 횟수로 끊어야 한다). 그런데 이 풀이는 배열이 두 개가 아니라 k개여도 그대로 쓸 수 있다. 개수를 셀 때 배열마다 upper bound를 더하기만 하면 된다. 자르기 풀이는 배열 두 개에서만 성립한다. 그래서 "정렬된 배열 여러 개의 중앙값", "행과 열이 정렬된 행렬에서 k번째 수(378번)"에서 이 방법이 다시 나온다. 답의 범위에서 찾는 생각은 [Koko 글](/posts/leetcode-koko-eating-bananas)과 같다.
+
+## 얼마나 빨라지나
+
+문제 제약(합 2000개)에서는 어떤 풀이든 1ms 안쪽이다. 차이를 보려고 짝수만 100만 개, 홀수만 100만 개 담은 두 배열로 돌려 봤다.
+
+```text
+sort 999999.5 131.42 ms
+halfmerge 999999.5 5.97 ms
+partition 999999.5 0.11 ms
+```
+
+합쳐서 정렬하기가 131ms, 가운데까지 걷기가 6ms, 자르기가 0.11ms다. 자르기 풀이는 반복을 스무 번 남짓만 돈다. 나머지 0.1ms는 대부분 함수 호출과 측정 비용이다.
+
+## 여섯 풀이 비교
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 합쳐서 정렬 | O((m+n) log(m+n)) | O(m+n) | 정렬 여부를 모를 때. 이 문제에서는 기준용 |
+| 지퍼 합치기 | O(m+n) | O(m+n) | 합친 배열이 어차피 필요할 때 |
+| 가운데까지 걷기 | O(m+n) | O(1) | 크기가 작고 코드를 짧게 쓰고 싶을 때 |
+| k번째 수 절반 버리기 | O(log(m+n)) | O(log(m+n)) 재귀 | "k번째 수"를 따로 물을 때 |
+| 짧은 배열 자르기 | O(log min(m,n)) | O(1) | 정석. 면접에서 이것을 목표로 한다 |
+| 값의 범위에서 찾기 | O(log R · (log m + log n)) | O(1) | 배열이 여러 개이거나 행렬일 때. 값이 정수일 때 |
+
+면접에서는 가운데까지 걷기를 먼저 말해 O(m + n)을 확보하고, "로그로 줄일 수 있나"가 오면 자르기로 간다. 자르기가 막히면 k번째 수 풀이도 요구 복잡도를 맞추니 충분히 좋은 답이다.
+
+## 이렇게 짜면 틀린다
+
+### half를 (m + n) / 2로 잡는다
+
+`half = ⌊(m + n) / 2⌋`로 두면 홀수일 때 왼쪽 무리가 오른쪽보다 하나 적다. 그러면 중앙값은 왼쪽 최댓값이 아니라 오른쪽 최솟값이 된다. 반환식을 그대로 두고 half만 바꿔 돌렸더니 예시에서 8 대신 7, `[1, 3]`과 `[2]`에서 2 대신 1이 나왔다. half와 "홀수일 때 어느 쪽 끝을 보나"는 짝으로 정한다. `(m + n + 1) / 2`로 두면 왼쪽이 하나 많고, 홀수 답은 왼쪽 최댓값이다.
+
+### 경계 밖을 무한대로 두지 않는다
+
+i가 0이면 `a[i - 1]`은 JavaScript에서 `a[-1]`, 즉 `undefined`다. `undefined <= 7`은 거짓이라 올바른 나눔을 놓친다. 파이썬은 `a[-1]`이 마지막 원소라 더 조용히 틀린다. 네 값 모두 경계 밖이면 `-Infinity`(왼쪽)와 `Infinity`(오른쪽)로 둔다.
+
+### 짝수일 때 평균을 정수로 낸다
+
+자바에서 `(left + right) / 2`는 정수 나눗셈이다. 3과 4의 평균이 3.5가 아니라 3이 된다. `2.0`으로 나누거나 `double`로 바꾼 뒤 나눈다. JavaScript는 `/`가 늘 실수 나눗셈이라 이 문제가 없고, 파이썬 3도 `/`는 실수 나눗셈이다(`//`가 정수 나눗셈).
+
+### 한쪽 배열이 빈 경우를 따로 처리하다 실수한다
+
+`nums1`이 비어 있으면 B의 중앙값을 바로 돌려주는 코드를 넣고 싶어진다. 자르기 풀이는 m = 0이면 i가 0 하나뿐이고, `aLeft = -Infinity`, `aRight = Infinity`라 조건이 바로 참이 된다. 결과는 B의 중앙값이다. 따로 처리하지 않는 쪽이 오히려 안전하다. `[]`와 `[5]`, `[]`와 `[2, 3]`을 테스트에 넣어 확인한다.
+
+### 각 배열의 중앙값을 비교해 버린다
+
+두 배열의 중앙값을 각각 구해 작은 쪽의 앞 절반, 큰 쪽의 뒤 절반을 버리는 방법이 있다. 길이가 같은 두 배열(교과서의 고전 문제)에서는 성립하지만, 길이가 다르면 양쪽에서 버리는 개수가 달라 중앙값이 움직인다. 이 문제처럼 길이가 다르고 한쪽이 빌 수도 있으면 k번째 수 풀이나 자르기 풀이를 쓴다.
+
+### 맞는지 확인하는 법
+
+길이 0~6, 값 -10~10(중복 포함)의 정렬 배열 두 개를 무작위로 3만 쌍 만들어, 합쳐서 정렬하는 풀이와 나머지 다섯 풀이의 결과를 비교했다. 모두 같은 값을 냈다. 중복 값과 빈 배열이 자주 나오도록 범위를 좁게 잡은 게 요령이다.
+
+```text
+random ok
+```
+
+## 직접 풀어 보기
+
+자르기 풀이를 목표로 해 보자. 테스트에는 빈 배열, 길이가 크게 다른 두 배열, 한쪽이 다른 쪽보다 전부 작은 경우, 중복, 음수가 들어 있다.
+
+<CodePlayground
+  caption="LeetCode 4. Median of Two Sorted Arrays"
+  functionName="findMedianSortedArrays"
+  initialCode={"function findMedianSortedArrays(nums1, nums2) {\n  // 짧은 쪽에서 i개, 긴 쪽에서 half - i개를 왼쪽 무리로 보낸다\n  // aLeft <= bRight && bLeft <= aRight 가 되는 i를 이분 탐색으로 찾는다\n  return 0;\n}"}
+  solution={"function findMedianSortedArrays(nums1, nums2) {\n  let a = nums1, b = nums2;\n  if (a.length > b.length) [a, b] = [b, a]; // 짧은 쪽에서 자른다\n  const m = a.length, n = b.length;\n  const half = Math.floor((m + n + 1) / 2);\n  let lo = 0, hi = m;\n  while (lo <= hi) {\n    const i = Math.floor((lo + hi) / 2);\n    const j = half - i;\n    const aLeft = i > 0 ? a[i - 1] : -Infinity;\n    const aRight = i < m ? a[i] : Infinity;\n    const bLeft = j > 0 ? b[j - 1] : -Infinity;\n    const bRight = j < n ? b[j] : Infinity;\n    if (aLeft <= bRight && bLeft <= aRight) {\n      if ((m + n) % 2 === 1) return Math.max(aLeft, bLeft);\n      return (Math.max(aLeft, bLeft) + Math.min(aRight, bRight)) / 2;\n    }\n    if (aLeft > bRight) hi = i - 1; // a에서 너무 많이 가져왔다\n    else lo = i + 1;                // a에서 너무 적게 가져왔다\n  }\n  return 0;\n}"}
+  tests={[{"label":"예시: 13개","args":[[3,8,13,15,20,24],[1,2,4,6,7,10,11]],"expected":8},{"label":"예시: 12개","args":[[3,8,13,15,20],[1,2,4,6,7,10,11]],"expected":7.5},{"label":"한쪽이 빔, 홀수","args":[[],[5]],"expected":5},{"label":"한쪽이 빔, 짝수","args":[[],[2,3]],"expected":2.5},{"label":"한쪽이 전부 작다","args":[[1,2],[3,4]],"expected":2.5},{"label":"세 개","args":[[1,3],[2]],"expected":2},{"label":"긴 쪽이 앞","args":[[5,6,7],[1,2]],"expected":5},{"label":"음수","args":[[-5,-3],[-4]],"expected":-4},{"label":"양 끝 값","args":[[1000000],[-1000000]],"expected":0},{"label":"전부 같은 값","args":[[1,1,1],[1,1]],"expected":1},{"label":"길이가 많이 다름","args":[[1,2,3,4,5,6,7,8],[9]],"expected":5}]}
+/>
+
+## 면접관이 이어서 묻는 것
+
+### 두 정렬 배열에서 k번째 수를 구하라면
+
+위의 k번째 수 풀이가 그대로 답이다. 자르기 풀이도 `half` 대신 k를 쓰면 된다. A에서 i개, B에서 k − i개를 왼쪽에 두고 같은 조건을 확인한다. 이때 i의 범위는 `max(0, k − n)`부터 `min(k, m)`까지로 좁혀야 j가 범위를 벗어나지 않는다. 답은 `max(aLeft, bLeft)`다.
+
+### 정렬된 배열이 k개라면
+
+자르기 풀이는 두 배열에서만 성립한다. 배열이 여러 개면 두 가지 길이 있다. 하나는 각 배열의 첫 원소를 최소 힙에 넣고 하나씩 꺼내 가운데까지 가는 방법으로, 전체 개수가 N이면 O(N log k)다. 힙의 동작은 [힙 글](/posts/ds-heap)에, 여러 정렬 리스트를 합치는 같은 구조는 [Merge k Sorted Lists](/posts/leetcode-merge-k-sorted-lists)에 있다. 다른 하나는 위의 값의 범위에서 찾는 풀이로, 개수를 셀 때 배열마다 upper bound를 더해 O(log R × k log N)이다.
+
+### 값이 계속 들어오는 스트림이라면
+
+배열이 정렬돼 있지도 않고 끝도 없다. 이때는 왼쪽 무리를 최대 힙, 오른쪽 무리를 최소 힙에 담고 크기를 맞춰 가며 넣는다. 이 글의 "왼쪽 무리와 오른쪽 무리의 경계"라는 생각을 자료구조로 옮긴 것이다. 넣기 O(log n), 중앙값 O(1)이다. [Find Median from Data Stream](/posts/leetcode-find-median-from-data-stream)에서 다룬다.
+
+### 메모리에 다 안 들어갈 만큼 크다면
+
+두 배열이 디스크에 정렬된 파일로 있다면 자르기 풀이가 특히 좋다. 파일 전체를 읽지 않고 i, j 위치의 값 네 개만 읽으면 되니, 위치로 바로 읽을 수 있는 파일이라면 디스크 읽기가 O(log min(m, n))번이다. 합치기 풀이는 절반을 순서대로 읽어야 한다.
+
+### 비슷한 문제
+
+- 295. Find Median from Data Stream: 스트림 중앙값, 힙 두 개.
+- 378. Kth Smallest Element in a Sorted Matrix: 값의 범위에서 이분 탐색하는 대표 문제.
+- 88. Merge Sorted Array: 두 정렬 배열 합치기를 제자리에서.
+- 719. Find K-th Smallest Pair Distance: 값의 범위에서 이분 탐색하고 개수는 투 포인터로 센다.
+
+이분 탐색 패턴의 다른 문제로 [704. Binary Search](/posts/leetcode-binary-search), [875. Koko Eating Bananas](/posts/leetcode-koko-eating-bananas), [153. Find Minimum in Rotated Sorted Array](/posts/leetcode-find-minimum-in-rotated-sorted-array), [33. Search in Rotated Sorted Array](/posts/leetcode-search-in-rotated-sorted-array)가 있다. 패턴 전체 순서는 [LeetCode 공부 가이드](/posts/leetcode-study-guide)에 있다.
+
+## 중앙값을 찾지 말고 자를 곳을 찾는다
+
+중앙값은 전체를 왼쪽 무리와 오른쪽 무리로 나누는 경계다. 왼쪽 무리의 크기는 정해져 있으니 짧은 배열에서 몇 개를 보낼지(i)만 정하면 긴 배열에서 보낼 개수(j)는 따라온다. 각 배열 안은 이미 정렬돼 있어서, 엇갈린 두 쌍(`A[i−1]`과 `B[j]`, `B[j−1]`과 `A[i]`)만 확인하면 된다. A 쪽이 크면 i를 줄이고, B 쪽이 크면 i를 늘린다. 이 판단이 i를 따라 한 번만 바뀌어서 이분 탐색이 되고, 짧은 쪽에서 잘라야 j가 범위를 벗어나지 않는다. 경계 밖은 무한대로 두면 빈 배열과 한쪽을 통째로 가져오는 경우가 저절로 처리된다.
+
+## 면접에서 나올 만한 질문
+
+### O(log(m + n))에 풀 수 있는 이유는 무엇인가요?
+
+중앙값을 "왼쪽 무리의 최댓값(과 오른쪽 무리의 최솟값)"으로 바꾸면, 찾을 것은 짧은 배열에서 왼쪽으로 보낼 개수 i 하나가 된다. i를 정하면 긴 배열 쪽 개수는 half − i로 정해지고, i가 너무 큰지 작은지는 경계의 값 네 개로 판단한다. 그 판단이 i를 키울수록 한 방향으로만 바뀌어서 0~m에서 이분 탐색하면 O(log min(m, n))이다. k번째 수를 찾으며 k/2개씩 버리는 방법으로도 O(log(m + n))을 맞출 수 있다.
+
+### 왜 짧은 배열에서 이분 탐색하나요?
+
+긴 배열에서 자르면 j = half − i가 음수가 되거나 긴 배열 길이를 넘을 수 있기 때문이다. `[1, …, 8]`과 `[9]`에서 긴 쪽을 자르면 j가 -3까지 내려가 배열 밖을 읽는다. 짧은 쪽을 자르면 i가 0~m, m ≤ n이라 j가 항상 0~n 안에 있다. 덤으로 탐색 범위가 작아서 O(log min(m, n))이 된다.
+
+### 경계 밖을 무한대로 두는 이유는 무엇인가요?
+
+i나 j가 0이면 그 배열의 왼쪽 무리가 비어 왼쪽 끝 값이 없고, 배열 길이와 같으면 오른쪽 무리가 비어 오른쪽 처음 값이 없다. 없는 왼쪽 끝을 -∞, 없는 오른쪽 처음을 +∞로 두면 비교 조건이 저절로 참이 되고 max, min에서도 무시된다. 그래서 빈 배열, 한 배열을 통째로 왼쪽에 넣는 경우를 따로 처리하지 않아도 된다. 자바는 `Integer.MIN_VALUE`, `MAX_VALUE`를 쓴다.
+
+### 홀수와 짝수는 어떻게 처리하나요?
+
+왼쪽 무리 크기를 ⌊(m + n + 1) / 2⌋로 잡아 홀수면 왼쪽이 하나 많게 한다. 그러면 홀수일 때 중앙값은 `max(aLeft, bLeft)`, 짝수일 때는 그 값과 `min(aRight, bRight)`의 평균이다. half를 ⌊(m + n) / 2⌋로 잡으면 홀수 답이 오른쪽 최솟값으로 바뀐다. 둘을 짝으로 정해야 한다.
+
+### 합치는 풀이와 비교하면 실무에서는 무엇을 쓰나요?
+
+배열이 작으면 가운데까지 걷는 O(m + n) 풀이가 짧고 틀릴 곳이 적어서 충분하다. 데이터가 크거나 디스크에 있어 위치로 바로 읽을 수 있다면, 값 네 개만 log번 읽는 자르기 풀이가 훨씬 적게 읽는다. 배열이 여러 개라면 힙으로 합치거나 값의 범위에서 이분 탐색한다.
+
+### 자바로 짤 때 주의할 점은 무엇인가요?
+
+짝수일 때 두 값을 더하면 `int`가 넘칠 수 있어서 `long`으로 더하고, 평균은 `/ 2.0`으로 낸다. `/ 2`는 정수 나눗셈이라 3.5가 3이 된다. 경계 밖은 `Integer.MIN_VALUE`, `MAX_VALUE`로 둔다. 실제 값이 그 값과 같아도 비교가 `<=`라 결과는 맞는다.
+
+### 이 풀이가 틀리는 입력이 있나요?
+
+입력이 정렬돼 있다는 전제가 깨지면 올바른 나눔이 없을 수 있다. 그때 반복이 끝나도 답을 못 찾아서, 위 코드는 파이썬과 자바에서 예외를 던지게 했다. 정렬된 입력이라면 빈 배열, 중복, 음수, 길이 차이가 큰 경우 모두 맞다. 무작위 3만 쌍을 합쳐서 정렬하는 풀이와 비교해 확인했다.

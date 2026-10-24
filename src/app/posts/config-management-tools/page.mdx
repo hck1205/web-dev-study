@@ -1,0 +1,397 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("config-management-tools");
+
+<EasyIntro>
+  학교에 교실이 쉰 개 있고, 모든 교실의 시계를 똑같이 맞춰야 한다고 해 보자. 한 사람이 교실을 하나씩 돌며 맞추면 하루가 걸리고, 꼭 한두 곳을 빠뜨린다. 그래서 서버를 많이 다루는 사람들은 "모든 서버가 이런 모습이어야 한다"를 글로 적어 두고 도구가 대신 맞추게 한다. 이런 도구를 구성 관리 도구라고 부른다.
+
+  도구마다 일하는 방식이 다르다. 어떤 도구는 관리인이 직접 교실마다 찾아가 시계를 맞추고 돌아온다. 어떤 도구는 교실마다 반장을 한 명씩 두고, 반장이 삼십 분마다 교무실에 가서 기준 시각을 받아 와 자기 교실 시계를 맞춘다.
+
+  어느 쪽이든 좋은 도구는 이미 맞는 시계는 건드리지 않는다. 그래서 같은 일을 몇 번 시켜도 결과가 같다. 요즘은 교실을 고쳐 쓰기보다 새 교실을 통째로 찍어 내는 일이 많아져서 이런 도구가 할 일은 줄었다. 그래도 새 교실의 설계도를 만들 때나 오래된 건물을 관리할 때는 여전히 쓰인다.
+</EasyIntro>
+
+보안 점검에서 지적이 나왔다. 웹 서버 50대가 응답 헤더에 nginx 버전을 그대로 내보내고 있으니 오늘 안에 `server_tokens off;`로 바꾸라는 것이다. 가장 먼저 떠오르는 건 셸 반복문이다.
+
+```bash
+# 이렇게 하면 무엇이 잘못될까
+for h in $(cat hosts.txt); do
+  ssh "$h" "echo '    server_tokens off;' | sudo tee -a /etc/nginx/conf.d/hardening.conf && sudo systemctl reload nginx"
+done
+```
+
+37번째 서버에서 SSH가 시간 초과로 멈추면 어디까지 됐는지 다시 세야 한다. 내일 누가 같은 반복문을 한 번 더 돌리면 같은 줄이 두 번 쌓인다. 석 달 뒤 새로 들인 서버는 이 반복문을 거치지 않아 원래대로 버전을 내보낸다. 무엇을 언제 바꿨는지 남은 기록도 없다.
+
+구성 관리 도구는 이 문제들을 풀려고 나왔다. 서버가 가져야 할 모습을 파일에 적어 두면 도구가 서버마다 지금 모습을 확인하고 다른 것만 고친다. 이 글은 대표적인 넷인 Ansible, Puppet, Chef, Salt를 같은 과제(nginx 설정 한 줄 바꾸기)로 비교한다. 에이전트가 있는지, 누가 먼저 연결하는지, 무엇을 적는지, 멱등성을 누가 지키는지가 기준이다. 마지막에는 Terraform 같은 프로비저닝 도구와의 경계, 그리고 컨테이너와 불변 인프라가 퍼진 뒤에 이 도구들이 남은 자리를 본다.
+
+실습은 Ubuntu 24.04에서 했다. ansible-core 2.21.5, Puppet 8.10.0(RubyGems로 설치한 `puppet apply`), Salt 3008.3(`salt-call --local`)을 직접 돌렸다. 서버 50대 대신 디렉터리 세 개를 서버로 보고 그 안의 `nginx.conf`를 고쳤다. Chef는 설치 크기와 라이선스 동의 절차 때문에 돌리지 않았고, 레시피는 형식만 보인다. 선언형과 명령형, 멱등성, 드리프트 같은 바탕 개념은 [IaC 기본 개념](/posts/iac-basics)에, Ansible을 깊게 쓰는 법은 [Ansible로 네트워크 설정 자동화](/posts/ansible-network-automation)에 있다.
+
+## 넷을 가르는 질문 넷
+
+이름은 넷이지만 설계 결정은 몇 개 안 된다. 첫째, 관리 대상 서버에 상주 프로그램(에이전트)을 깔아야 하나. 둘째, 변경을 중앙에서 밀어 넣나(push), 서버가 주기적으로 받아 가나(pull). 셋째, 원하는 상태를 선언으로 적나, 실행할 절차로 적나. 넷째, 그 파일을 무슨 언어로 적나.
+
+| | Ansible | Puppet | Chef | Salt |
+|---|---|---|---|---|
+| 에이전트 | 없음 (SSH + Python) | puppet agent | chef-client | salt-minion (salt-ssh면 없음) |
+| 기본 방향 | push | pull (30분 주기) | pull (주기 실행) | push + 주기 실행 |
+| 적는 것 | 작업 목록(YAML) | 리소스 선언(Puppet DSL) | 레시피(Ruby DSL) | 상태 선언(YAML + Jinja) |
+| 중앙 서버 | 필요 없음 | puppetserver | Chef Infra Server | salt-master |
+
+아래 그림은 넷이 서버와 이어지는 방식이다. 화살표 방향이 연결을 먼저 여는 쪽이다. Ansible만 제어 노드가 서버로 들어가고, 나머지는 서버의 에이전트가 중앙으로 나간다.
+
+<ConceptDiagram
+  caption="연결을 먼저 여는 쪽: Ansible은 들어가고, 나머지는 에이전트가 나온다"
+  width={420}
+  height={280}
+  nodes={[
+    { id: "ctl", label: "Ansible 제어 노드", sub: "노트북·CI", x: 90, y: 40, w: 150 },
+    { id: "ps", label: "puppetserver", sub: ":8140", x: 330, y: 40, w: 130 },
+    { id: "chef", label: "Chef Server", sub: ":443", x: 330, y: 140, w: 130 },
+    { id: "salt", label: "salt-master", sub: ":4505 / 4506", x: 90, y: 240, w: 150 },
+    { id: "srv", label: "웹 서버", sub: "web01~web50", x: 190, y: 140, w: 120 },
+  ]}
+  edges={[
+    { from: "ctl", to: "srv", label: "SSH" },
+    { from: "srv", to: "ps", label: "agent" },
+    { from: "srv", to: "chef", label: "client" },
+    { from: "srv", to: "salt", label: "minion" },
+  ]}
+/>
+
+연결 방향은 보안 설계와 바로 이어진다. Ansible을 쓰려면 제어 노드에서 모든 서버로 SSH가 열려 있어야 하고, 제어 노드의 SSH 키가 곧 전체 서버의 열쇠가 된다. Puppet·Chef·Salt는 서버에서 중앙으로 나가는 연결만 있으면 되니 서버 쪽에 들어오는 포트를 열 필요가 없다. 대신 중앙 서버가 뚫리면 모든 에이전트가 그 서버가 내려준 것을 root로 실행한다.
+
+## Ansible: SSH로 들어가 맞추고 떠난다
+
+Ansible은 관리 대상에 아무것도 상주시키지 않는다. 제어 노드가 SSH로 접속해 작은 Python 모듈을 보내 실행하고, 결과를 받은 뒤 지운다. 대상에 필요한 건 SSH와 Python뿐이다. 그래서 도입이 가장 가볍다. 오늘 처음 설치해 오늘 50대에 돌릴 수 있다.
+
+과제를 플레이북으로 적었다. 실습이라 서버 대신 `srv/{호스트}/nginx.conf`를 고친다.
+
+```yaml
+# site.yml
+- hosts: web
+  gather_facts: false
+  vars:
+    conf: "{{ playbook_dir }}/srv/{{ inventory_hostname }}/nginx.conf"
+  tasks:
+    - name: server_tokens 끄기
+      ansible.builtin.lineinfile:
+        path: "{{ conf }}"
+        regexp: '^\s*server_tokens\s'
+        line: "    server_tokens off;"
+```
+
+```bash
+# 첫 실행, 그리고 같은 명령을 한 번 더
+ansible-playbook -i inventory.ini site.yml
+ansible-playbook -i inventory.ini site.yml
+```
+
+```text
+TASK [server_tokens 끄기] ******************************************************
+changed: [web03]
+changed: [web02]
+changed: [web01]
+
+PLAY RECAP *********************************************************************
+web01                      : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+web02                      : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+web03                      : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+
+PLAY RECAP *********************************************************************
+web01                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+web02                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+web03                      : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+봐야 할 곳은 두 번째 PLAY RECAP의 `changed=0`이다. 이미 맞는 서버는 건드리지 않았다. 37번째 서버에서 멈췄다면 그냥 다시 돌리면 된다. 된 서버는 `ok`로 지나가고 남은 서버만 바뀐다. 첫 실행에서 호스트 순서가 web03, web02, web01로 뒤섞인 것도 눈여겨볼 만하다. 여러 서버를 동시에 처리하기 때문인데, 동시에 몇 대를 다룰지는 `forks`로 정한다.
+
+```bash
+ansible-config dump | grep -E '^DEFAULT_FORKS'
+```
+
+```text
+DEFAULT_FORKS(default) = 5
+```
+
+기본이 5라서 50대면 다섯 대씩 열 번에 나눠 돈다. 제어 노드의 CPU와 메모리가 버티는 만큼 `-f 25`처럼 올린다. 이 push 방식의 약점은 "돌린 순간"에만 맞춘다는 점이다. 다음 주에 누가 서버에 들어가 손으로 되돌려도 다음 실행 전까지는 아무도 모른다. 그래서 Ansible을 쓰는 팀은 CI나 스케줄러에서 `--check`로 주기 실행해 드리프트를 찾는다. 서버마다 cron으로 git에서 플레이북을 받아 자기 자신에게 적용하는 `ansible-pull`도 있지만 많이 쓰이지는 않는다.
+
+## Puppet: 에이전트가 30분마다 카탈로그를 받아 간다
+
+Puppet은 반대 방향이다. 모든 서버에 `puppet agent`가 돌고, 이 에이전트가 정해진 주기마다 중앙의 puppetserver에 "나는 이런 서버다"를 보내고 그 서버가 가져야 할 모습을 받아 간다. 주기는 설정값으로 확인할 수 있다.
+
+```bash
+puppet config print runinterval
+```
+
+```text
+runinterval = 1800
+```
+
+1800초, 30분이다. 아래 그림은 에이전트 한 번의 실행이다. 다음을 눌러 각 단계에서 무엇이 오가는지 본다.
+
+<SequenceDiagram
+  caption="puppet agent 한 번의 실행: 사실을 보내고, 카탈로그를 받고, 맞추고, 보고한다"
+  actors={[
+    { id: "agent", label: "web17 agent" },
+    { id: "server", label: "puppetserver" },
+    { id: "files", label: "web17 파일·서비스" },
+  ]}
+  steps={[
+    { from: "agent", to: "agent", label: "facter", title: "자기 사실을 모은다", detail: "OS, IP, 메모리, 호스트 이름 같은 값(facts)을 모은다. 서버마다 다른 설정은 이 값으로 갈린다." },
+    { from: "agent", to: "server", label: "facts (HTTPS 8140)", title: "에이전트가 먼저 연결한다", detail: "처음 설치할 때 서명받은 인증서로 상호 TLS 연결을 연다. 서버에 들어오는 포트를 열 필요가 없다." },
+    { from: "server", to: "server", label: "manifest 컴파일", title: "이 서버만을 위한 카탈로그를 만든다", detail: "매니페스트와 facts를 합쳐 web17이 가져야 할 리소스 목록과 순서를 계산한다. 조건문과 변수는 여기서 다 풀린다." },
+    { from: "server", to: "agent", label: "catalog", title: "완성된 목록만 내려간다", detail: "에이전트는 코드를 해석하지 않고, 이미 계산된 리소스 목록만 받는다.", payload: "File[/etc/nginx/conf.d/hardening.conf] content => ..." },
+    { from: "agent", to: "files", label: "다른 것만 고친다", title: "리소스마다 지금 모습과 비교한다", detail: "파일의 해시가 같으면 지나가고, 다르면 내용을 바꾼다. 바뀐 리소스가 notify한 서비스만 다시 읽힌다." },
+    { from: "agent", to: "server", label: "report", title: "무엇을 바꿨는지 보고한다", detail: "바뀐 리소스, 실패한 리소스, 걸린 시간을 보낸다. 손으로 고친 것이 되돌려졌다면 여기에 흔적이 남는다." },
+  ]}
+/>
+
+매니페스트는 절차가 아니라 리소스 선언이다. 실습에서는 서버 없이 같은 엔진을 쓰는 `puppet apply`로 돌렸다.
+
+```puppet
+# nginx.pp
+$conf = "/lab/srv/web01/nginx.conf"
+
+file { $conf:
+  ensure  => file,
+  content => "http {\n    server_tokens off;\n    keepalive_timeout 65;\n}\n",
+  mode    => '0644',
+}
+```
+
+```bash
+# 바꾸지 않고 무엇을 바꿀지만 본다, 그다음 실제 적용을 두 번
+puppet apply --noop nginx.pp
+puppet apply nginx.pp
+puppet apply nginx.pp
+```
+
+```text
+Notice: /Stage[main]/Main/File[/lab/srv/web01/nginx.conf]/content: content changed '{sha256}74aa7af264352d1e0a1ad4da8b474801c2c42b20f97c9a8dfda92a08c04cc956' to '{sha256}61c9f6b4e3791d35392d0645ba350993ed786c9616c48f16625bbcdaeb31cba8' (noop)
+Notice: Applied catalog in 0.03 seconds
+
+Notice: /Stage[main]/Main/File[/lab/srv/web01/nginx.conf]/content: content changed '{sha256}74aa7af264352d1e0a1ad4da8b474801c2c42b20f97c9a8dfda92a08c04cc956' to '{sha256}61c9f6b4e3791d35392d0645ba350993ed786c9616c48f16625bbcdaeb31cba8'
+Notice: Applied catalog in 0.08 seconds
+
+Notice: Compiled catalog for vm in environment production in 0.01 seconds
+Notice: Applied catalog in 0.08 seconds
+```
+
+출력은 세 번의 실행을 이어 붙였고 Facter 경고 같은 줄은 덜어 냈다. `--noop`은 바꾸지 않고 `(noop)` 표시만 붙인다. 실제 적용에서는 파일 해시가 바뀌었다는 줄이 나오고, 세 번째 실행에서는 바뀐 리소스가 없어 그 줄 자체가 없다. Puppet은 파일 전체 내용을 선언하는 쪽을 권한다. 한 줄만 고치는 `file_line`도 있지만 기본 기능이 아니라 `puppetlabs-stdlib` 모듈에 들어 있다. "이 파일은 이래야 한다"가 Puppet의 사고방식이다.
+
+pull 방식의 장점은 수렴이 계속된다는 점이다. 누가 손으로 `server_tokens on`으로 되돌려도 최대 30분 뒤 에이전트가 다시 맞추고 리포트에 남긴다. 단점도 같은 곳에서 나온다. 매니페스트에 잘못된 값을 머지하면 30분 안에 모든 서버가 그 값을 받아 간다. 그래서 Puppet 팀은 environment(git 브랜치와 짝지은 매니페스트 묶음)로 일부 서버만 새 코드를 먼저 받게 하고, 급하면 에이전트를 멈추거나 즉시 실행(`puppet agent -t`)으로 순서를 직접 쥔다.
+
+## Chef: 레시피는 Ruby 코드다
+
+Chef도 에이전트(chef-client)가 중앙(Chef Infra Server)에서 받아 가는 pull 구조다. 다른 점은 받아 가는 것이 계산된 카탈로그가 아니라 쿡북, 즉 Ruby 코드라는 점이다. 레시피는 각 서버의 chef-client가 직접 실행한다. 아래는 형식을 보이려는 예시로, 이 글에서 돌려 보지는 않았다.
+
+```ruby
+# cookbooks/nginx_hardening/recipes/default.rb (형식 예시)
+template '/etc/nginx/conf.d/hardening.conf' do
+  source 'hardening.conf.erb'
+  owner  'root'
+  mode   '0644'
+  notifies :reload, 'service[nginx]', :delayed
+end
+
+service 'nginx' do
+  action :nothing
+end
+
+execute 'warm-cache' do
+  command '/usr/local/bin/warm-cache.sh'
+  not_if  { ::File.exist?('/var/cache/app/.warmed') }   # 이 가드가 없으면 매번 실행된다
+end
+```
+
+`template`과 `service` 같은 리소스는 Puppet처럼 지금 모습을 확인하고 다를 때만 움직인다. 문제는 `execute`처럼 임의의 명령을 돌리는 리소스와, 레시피 안에 섞어 쓸 수 있는 평범한 Ruby 코드다. `not_if`나 `only_if` 가드를 빼먹으면 매 실행마다 명령이 돈다. 또 chef-client는 레시피를 두 단계로 돈다. 먼저 Ruby 코드를 전부 실행해 리소스 목록을 만들고(컴파일), 그다음 리소스를 차례로 적용한다(수렴). 레시피 중간의 `if File.exist?(...)` 같은 Ruby 조건은 앞 리소스가 파일을 만들기 전에 평가돼서 첫 실행에서만 결과가 다르게 나오는 버그가 흔하다.
+
+Ruby를 그대로 쓸 수 있다는 건 복잡한 로직을 짜기 좋다는 뜻이기도 하다. 개발자 비중이 높은 팀에서 Chef를 골랐던 이유가 그것이었다. 운영 측면에서 알아 둘 것은 라이선스다. Chef Infra Client 배포판은 상용 라이선스 동의가 필요하고, 같은 소스로 만든 커뮤니티 배포판으로 Cinc가 있다.
+
+## Salt: 이벤트 버스 위에 명령과 상태를 함께 얹는다
+
+Salt는 minion(에이전트)이 master에 연결해 두고, master가 그 연결로 명령을 뿌린다. minion이 먼저 4505(명령 발행)와 4506(결과 반환) 포트로 나가 연결하니 서버 쪽에 들어오는 포트는 필요 없다. 그 위에서 master가 수천 대에 동시에 명령을 보내 결과를 거의 바로 받는다. 원격 실행이 빠른 것이 Salt의 출발점이었다.
+
+```bash
+# master에서: Ubuntu인 minion 전부에 nginx 상태를 적용하고, 10%씩 나눠서
+sudo salt -G 'os:Ubuntu' state.apply nginx -b 10%
+# 같은 상태 파일을 에이전트 없이 SSH로 적용하는 길도 있다
+sudo salt-ssh 'web*' state.apply nginx
+```
+
+원하는 모습은 YAML 상태 파일(SLS)로 적는다. Jinja 템플릿이 먼저 풀리고 그 결과가 YAML로 읽힌다. 실습에서는 master 없이 `salt-call --local`로 돌렸다.
+
+```yaml
+# states/nginx.sls
+server_tokens_off:
+  file.replace:
+    - name: /lab/srv/web02/nginx.conf
+    - pattern: '^\s*server_tokens\s+\S+;'
+    - repl: '    server_tokens off;'
+```
+
+```bash
+salt-call --local state.apply nginx test=True   # 미리 보기
+salt-call --local state.apply nginx             # 적용
+salt-call --local state.apply nginx             # 한 번 더
+```
+
+```text
+          ID: server_tokens_off
+    Function: file.replace
+        Name: /lab/srv/web02/nginx.conf
+      Result: None
+     Comment: Changes would have been made
+
+          ID: server_tokens_off
+    Function: file.replace
+        Name: /lab/srv/web02/nginx.conf
+      Result: True
+     Comment: Changes were made
+     Changes:
+              ----------
+              diff:
+                  @@ -1,4 +1,4 @@
+                   http {
+                  -    server_tokens on;
+                  +    server_tokens off;
+                       keepalive_timeout 65;
+                   }
+
+          ID: server_tokens_off
+    Function: file.replace
+        Name: /lab/srv/web02/nginx.conf
+      Result: True
+     Comment: No changes needed to be made
+```
+
+세 번의 출력에서 상태 블록만 남겼다. `test=True`일 때 `Result: None`은 "바꿀 것이 있다"는 뜻이다. 실제 적용에서는 diff가 나오고, 세 번째에는 `No changes needed to be made`다. `-G 'os:Ubuntu'`의 `os`는 grains라는 minion의 사실 값이다. 실습 환경에서 뽑아 보면 이렇다.
+
+```bash
+salt-call --local grains.item os osrelease
+```
+
+```text
+local:
+    ----------
+    os:
+        Ubuntu
+    osrelease:
+        24.04
+```
+
+Salt는 이벤트 버스를 중심에 둔다. minion에서 일어난 일(디스크가 찼다, 서비스가 죽었다)을 beacon이 이벤트로 올리고, master의 reactor가 그 이벤트에 맞춰 상태를 적용할 수 있다. 구성 관리와 원격 실행, 이벤트 기반 자동화가 한 도구에 들어 있는 셈이다. 대신 master가 단일 장애 지점이 되고, 과거 master의 인증 우회 취약점(2020년 CVE-2020-11651)처럼 master가 인터넷에 노출되면 피해가 전체 minion으로 번진다는 교훈을 남겼다.
+
+## 멱등성은 도구가 아니라 모듈이 지킨다
+
+넷 모두 "몇 번 돌려도 같은 결과"를 내세운다. 그런데 그건 도구 전체의 성질이 아니라 모듈 하나하나의 성질이다. 같은 Ansible에서 모듈만 `shell`로 바꿔 두 번 돌려 봤다.
+
+```yaml
+- name: 줄 덧붙이기 (멱등하지 않음)
+  ansible.builtin.shell: echo "    server_tokens off;" >> {{ playbook_dir }}/srv/{{ inventory_hostname }}/nginx.conf
+```
+
+```text
+web01                      : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+web01                      : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+```text
+http {
+    server_tokens off;
+    keepalive_timeout 65;
+}
+    server_tokens off;
+    server_tokens off;
+```
+
+두 번 모두 `changed=1`이고 파일 끝에 같은 줄이 두 번 쌓였다. `shell`은 지금 모습을 확인하지 않고 시킨 일을 할 뿐이다. Chef의 `execute`, Salt의 `cmd.run`, Puppet의 `exec`도 같다. 그래서 이 리소스들에는 `creates`, `unless`, `not_if` 같은 가드를 붙여 "이미 됐으면 건너뛴다"를 직접 적어야 한다.
+
+멱등한 모듈이 속에서 하는 일은 단순하다. 지금 모습을 읽고, 원하는 모습과 비교하고, 다를 때만 쓴다. `lineinfile`의 동작을 줄여서 직접 만들어 본다. 정규식에 맞는 줄이 있으면 그중 마지막 줄을 바꾸고, 이미 원하는 줄이면 아무것도 하지 않는다. 맞는 줄이 없으면 끝에 붙이되, 똑같은 줄이 이미 있으면 붙이지 않는다.
+
+<CodePlayground
+  caption="lineinfile 줄여 만들기: 바뀔 때만 changed가 true"
+  functionName="ensureLine"
+  initialCode={`// lines: 파일의 줄 배열, pattern: 정규식 문자열, line: 원하는 줄
+// { lines: 새 줄 배열, changed: 바뀌었는지 } 를 돌려준다
+function ensureLine(lines, pattern, line) {
+  return { lines, changed: false };
+}`}
+  solution={`function ensureLine(lines, pattern, line) {
+  const re = new RegExp(pattern);
+  let last = -1;
+  lines.forEach((l, i) => { if (re.test(l)) last = i; });
+  if (last === -1) {
+    if (lines.includes(line)) return { lines, changed: false };
+    return { lines: [...lines, line], changed: true };
+  }
+  if (lines[last] === line) return { lines, changed: false };
+  const next = lines.slice();
+  next[last] = line;
+  return { lines: next, changed: true };
+}`}
+  tests={[
+    { label: "맞는 줄을 바꾼다", args: [["http {", "    server_tokens on;", "}"], "^\\s*server_tokens\\s", "    server_tokens off;"], expected: { lines: ["http {", "    server_tokens off;", "}"], changed: true } },
+    { label: "이미 맞으면 그대로", args: [["http {", "    server_tokens off;", "}"], "^\\s*server_tokens\\s", "    server_tokens off;"], expected: { lines: ["http {", "    server_tokens off;", "}"], changed: false } },
+    { label: "없으면 끝에 붙인다", args: [["http {", "}"], "^\\s*server_tokens\\s", "    server_tokens off;"], expected: { lines: ["http {", "}", "    server_tokens off;"], changed: true } },
+    { label: "여러 줄이 맞으면 마지막 줄만", args: [["a=1", "a=2"], "^a=", "a=3"], expected: { lines: ["a=1", "a=3"], changed: true } },
+    { label: "정규식은 안 맞아도 같은 줄이 있으면 그대로", args: [["a=3"], "^b=", "a=3"], expected: { lines: ["a=3"], changed: false } },
+  ]}
+/>
+
+네 번째 테스트는 실제 `lineinfile`로도 확인했다. `a=1`, `a=2` 두 줄짜리 파일에 `regexp=^a= line=a=3`을 주면 결과는 `a=1`, `a=3`이다. 첫 줄은 그대로 남는다. 같은 키가 여러 번 나오는 설정 파일에서 "다 바꿨겠지" 하고 넘어가면 이 남은 줄 때문에 설정이 기대와 다르게 읽힌다. 이런 경우가 바로 줄 단위보다 파일 전체를 템플릿으로 맞추는 쪽이 안전한 이유다.
+
+미리 보기 모드도 모듈이 지원해야 의미가 있다. Ansible `--check`, Puppet `--noop`, Salt `test=True`, Chef why-run 모드가 있지만, `shell`이나 `exec`는 실행해 보지 않으면 무엇이 바뀔지 모르니 미리 보기에서 건너뛰거나 "바뀔 수 있음"으로만 표시한다. 미리 보기가 깨끗하다고 실제 실행도 깨끗하다는 보장은 없다.
+
+## 50대를 한 번에 바꾸지 않는다
+
+설정 한 줄이 틀리면 50대가 동시에 nginx를 다시 읽다가 동시에 죽는다. 그래서 도구마다 나눠서 바꾸는 장치가 있다. Ansible은 `serial`로 배치 크기를 정하고 `max_fail_percentage`로 멈출 기준을 둔다(자세한 롤아웃은 [Ansible 글](/posts/ansible-network-automation)에 있다). Salt는 위에서 본 `-b 10%`가 같은 일을 한다. pull 방식인 Puppet과 Chef는 중앙에서 "누가 언제 받을지"를 정해야 해서, 일부 서버만 새 environment(Puppet)나 policy group(Chef)에 넣어 먼저 받게 하는 식으로 카나리를 만든다.
+
+nginx처럼 설정 오류가 바로 장애가 되는 서비스는 적용 직후 검사를 꼭 붙인다. `nginx.conf` 전체를 Ansible `template`으로 관리한다면 `validate: nginx -t -c %s`로 새 파일을 검사한 뒤에만 제자리에 놓는다. `conf.d` 조각 파일은 단독으로 검사가 안 되니, 놓은 뒤 `nginx -t`를 돌리고 실패하면 되돌리는 순서로 짠다. 다른 도구도 "검사가 실패하면 바꾸지 않는다"를 지원한다.
+
+## Terraform과 어디서 갈리나
+
+Terraform도 선언형이고 멱등하다. 그런데 Terraform은 클라우드 API로 서버, 네트워크, DB 같은 리소스를 만들고 지우는 프로비저닝 도구다. 무엇을 만들었는지 state에 기억한다([Terraform 기본](/posts/terraform-basics)). 구성 관리 도구는 이미 있는 서버에 들어가 그 안의 패키지, 파일, 서비스를 맞춘다. state 대신 매번 서버의 지금 모습을 읽는다.
+
+경계는 "API가 있느냐"로 그으면 거의 맞다. VPC와 인스턴스는 Terraform, 인스턴스 안의 `/etc/nginx`는 구성 관리. 두 도구가 만나는 지점은 인벤토리다. Terraform이 만든 서버 목록과 IP를 output이나 태그로 넘기면 Ansible의 동적 인벤토리가 그것을 읽는다. 겹치는 영역을 두 도구가 함께 고치면 서로 되돌리는 싸움이 난다. 보안 그룹을 Terraform과 Ansible의 클라우드 모듈이 둘 다 만지는 식이다. 리소스 하나에는 주인 하나를 정한다. Terraform 쪽을 여러 사람이 함께 돌리는 방법은 [팀으로 Terraform 돌리기](/posts/terraform-team-workflow-hcp-terragrunt)에서 이어 간다.
+
+## 컨테이너와 불변 인프라 이후에 남은 자리
+
+2010년대 중반까지 이 도구들은 서버 운영의 중심이었다. 지금은 쓰는 곳이 확실히 줄었다. 앱은 컨테이너 이미지에 구워 나가고, 설정은 쿠버네티스의 ConfigMap과 환경 변수로 들어간다. 서버를 고쳐 쓰지 않고 새 이미지로 갈아 끼우는 불변 인프라에서는 "돌고 있는 서버의 모습을 계속 맞추는 일" 자체가 없다. 클라우드 VM 처음 부팅 때의 간단한 설정은 cloud-init이 맡는다.
+
+그래도 남은 자리가 있다. 첫째, 골든 이미지를 굽는 단계다. Packer가 임시 VM을 띄우고 그 안에서 Ansible 플레이북으로 OS 보안 설정과 에이전트를 깐 뒤 이미지로 찍는다. 운영 중인 서버는 불변이지만, 그 이미지를 만드는 레시피는 여전히 구성 관리 코드다. 둘째, 갈아 끼울 수 없는 것들이다. 베어메탈 서버, 오래 사는 DB 서버, 쿠버네티스 노드 자체의 커널 값, 네트워크 장비. 셋째, 감사와 규정이다. "모든 서버가 CIS 기준을 지키는가"를 주기적으로 확인하고 보고해야 하는 조직에서는 pull 방식 에이전트의 리포트가 그대로 증거가 된다.
+
+고르는 기준은 이제 꽤 단순하다. 새로 시작하는 팀이 이미지 굽기와 남은 서버 몇 십 대를 다룬다면 에이전트가 없는 Ansible이 가장 가볍다. 수천 대의 오래 사는 서버를 계속 같은 모습으로 지키고 그 기록이 필요하면 Puppet처럼 pull 에이전트가 있는 쪽이 맞다. 대규모 원격 실행과 이벤트 반응이 함께 필요하면 Salt를 본다. Chef는 이미 쿡북 자산이 많은 조직에서 이어 쓰는 경우가 대부분이다.
+
+## 결국 같은 질문에 답한다
+
+넷은 같은 질문에 다르게 답한 도구다. 누가 먼저 연결하는가, 얼마나 자주 맞추는가, 무엇을 적는가. 어느 쪽을 고르든 멱등성은 모듈 단위로 지켜지니 `shell`과 `exec`에는 가드를 붙이고, 50대를 한 번에 바꾸지 않고, 리소스마다 주인을 하나로 정한다. 처음의 반복문이 남긴 문제(중간 실패, 중복, 새 서버, 기록 없음)를 각 도구가 어떻게 막는지 말할 수 있으면 이 주제는 충분하다.
+
+## 면접에서 나올 만한 질문
+
+### 구성 관리 도구는 왜 필요한가요? 셸 스크립트로 SSH 반복문을 돌리면 안 되나요?
+
+반복문은 시킨 일을 할 뿐 지금 모습을 확인하지 않아서, 중간에 실패하면 어디까지 됐는지 모르고 다시 돌리면 같은 변경이 쌓인다. 새로 들어온 서버는 그 반복문을 거치지 않아 다른 모습으로 남고 기록도 없다. 구성 관리 도구는 원하는 모습을 파일로 적고 서버마다 차이만 고치니 몇 번 돌려도 결과가 같고, 다시 돌리는 것으로 복구와 드리프트 수정이 된다.
+
+### 에이전트 방식과 에이전트리스 방식의 차이와 트레이드오프는 무엇인가요?
+
+Ansible 같은 에이전트리스는 SSH와 Python만 있으면 돼서 도입이 가볍지만, 제어 노드에서 모든 서버로 접속이 열려 있어야 하고 돌린 순간에만 맞춘다. Puppet·Chef·Salt 같은 에이전트 방식은 서버가 중앙으로 나가는 연결만 있으면 되고 주기적으로 계속 맞추며 리포트를 남기지만, 에이전트 설치와 인증서, 중앙 서버 운영이 필요하다. 중앙이 뚫리면 모든 에이전트가 그 내용을 root로 실행한다는 위험도 함께 진다.
+
+### push와 pull 모델은 운영에서 어떤 차이를 만드나요?
+
+push는 사람이 정한 순간에 정한 서버에만 적용되니 순서와 범위를 쥐기 쉽지만, 다음 실행 전까지 드리프트를 모른다. pull은 에이전트가 정해진 주기로 계속 수렴시켜 손으로 바꾼 것을 되돌리지만, 잘못된 코드를 머지하면 주기 안에 전 서버로 퍼진다. 그래서 pull 쪽은 environment나 policy group으로 일부 서버만 먼저 받게 하는 카나리를 둔다.
+
+### 선언형 매니페스트와 절차형 레시피는 어떻게 다른가요?
+
+Puppet 매니페스트나 Salt 상태 파일은 "이 파일은 이 내용이어야 한다"를 선언하고, 순서와 비교는 엔진이 맡는다. Chef 레시피는 Ruby 코드라 임의의 로직을 짤 수 있지만, 컴파일 단계와 수렴 단계가 나뉘어 있어 레시피 중간의 Ruby 조건이 예상보다 먼저 평가되는 함정이 있다. 표현력과 예측 가능성 사이의 선택이다.
+
+### 같은 도구인데 어떤 작업은 매번 changed가 뜹니다. 왜 그런가요?
+
+멱등성은 도구가 아니라 모듈이 지키기 때문이다. `lineinfile`, `template`, `file` 같은 모듈은 지금 모습을 읽고 다를 때만 쓰지만, `shell`, `exec`, `execute`, `cmd.run`은 확인 없이 명령을 실행한다. 이런 리소스에는 `creates`, `unless`, `not_if` 같은 가드로 이미 됐는지를 직접 적어 준다. 미리 보기 모드도 이 명령 리소스의 결과는 알지 못한다.
+
+### Terraform이 있는데 구성 관리 도구가 또 필요한가요?
+
+역할이 다르다. Terraform은 클라우드 API로 리소스를 만들고 state로 기억하는 프로비저닝 도구이고, 구성 관리는 이미 있는 서버 안의 패키지와 파일, 서비스를 맞춘다. 둘은 인벤토리에서 만나고, 같은 리소스를 둘이 함께 고치지 않도록 주인을 하나로 정한다.
+
+### 컨테이너와 불변 인프라 시대에도 구성 관리 도구를 쓰나요?
+
+돌고 있는 서버를 계속 고쳐 쓰는 용도는 크게 줄었지만 사라지지는 않았다. Packer로 골든 이미지를 구울 때 Ansible로 OS를 설정하는 식으로 이미지 레시피가 됐고, 베어메탈, 오래 사는 DB 서버, 쿠버네티스 노드 자체, 네트워크 장비처럼 갈아 끼우기 어려운 곳에는 여전히 쓴다. 규정 준수 증거를 남겨야 하는 조직에서는 pull 에이전트의 리포트가 그 역할을 한다.

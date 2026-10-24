@@ -202,6 +202,62 @@ console.log(discounted);
 
 배열을 기준값으로 묶어 객체로 만드는 `Object.groupBy`(ES2024)는 [배열 변환 메서드](/posts/js-array-transform)에서 다룬다. 그 결과가 프로토타입 없는 객체여서 앞의 `hasOwn` 이야기와 이어진다.
 
+## 심볼 키는 목록에 나오지 않는다
+
+앞에서 심볼 키가 `Object.keys`와 JSON에서 빠지는 것을 봤다. 실수로 빠진 게 아니라 심볼을 만든 목적이 그렇다. ES2015 이전에는 객체에 라이브러리용 표시를 붙이려면 `__id` 같은 문자열 키를 써야 했고, 그 키가 사용자 데이터와 이름이 겹치거나 `for...in`과 직렬화에 섞여 나왔다. `Symbol()`은 부를 때마다 다른 값을 만든다. 이름표(description)가 같아도 서로 다르니 우연히 겹칠 수 없고, 기존 코드가 돌던 문자열 키 목록에도 끼지 않는다.
+
+```js
+const id = Symbol("id");
+const order = { menu: "latte", [id]: 7 };
+console.log(Object.keys(order), JSON.stringify(order), { ...order });
+console.log(Object.getOwnPropertySymbols(order), order[id]);
+console.log(Symbol("id") === Symbol("id"), Symbol.for("app.id") === Symbol.for("app.id"));
+console.log(Symbol.keyFor(Symbol.for("app.id")), Symbol.keyFor(id));
+try { `${id}`; } catch (e) { console.log(e.constructor.name + ": " + e.message); }
+```
+
+```text
+[ 'menu' ] {"menu":"latte"} { menu: 'latte', [Symbol(id)]: 7 }
+[ Symbol(id) ] 7
+false true
+app.id undefined
+TypeError: Cannot convert a Symbol value to a string
+```
+
+목록에서 빠진다고 숨겨진 것은 아니다. 전개 문법과 `Object.assign`은 심볼 키도 복사하고, `Object.getOwnPropertySymbols`나 `Reflect.ownKeys`로 누구나 꺼낼 수 있다. 그러니 비밀 값을 감추는 용도로는 쓰지 못한다. 진짜로 밖에서 못 보게 하려면 클래스의 `#private` 필드나 `WeakMap`을 쓴다. 심볼은 템플릿 문자열이나 `+ ""`로 문자열이 되지 않고 TypeError를 낸다. 로그에 찍으려면 `String(id)`나 `id.description`을 쓴다.
+
+`Symbol.for("app.id")`는 다르다. 전역 심볼 레지스트리라는 표에서 같은 문자열로 등록된 심볼을 찾아 돌려주고, 없으면 만들어 등록한다. 같은 문자열이면 다른 파일, 다른 번들, iframe에서 불러도 같은 심볼이 나온다. 같은 패키지가 두 벌 깔렸을 때 상태를 공유하는 데 이걸 쓰는 이야기는 [싱글턴 패턴](/posts/pattern-singleton)에 있다. 대신 이름이 전역에서 겹칠 수 있으니 `"my-lib.registry"`처럼 패키지 이름을 앞에 붙인다. `Symbol.keyFor`는 레지스트리에 등록된 심볼만 문자열을 돌려주고, 그냥 `Symbol()`로 만든 것에는 `undefined`를 준다.
+
+### 언어가 미리 정해 둔 심볼
+
+`Symbol.iterator`처럼 `Symbol.`에 붙어 있는 심볼들은 well-known symbol이라고 부른다. 엔진이 특정 순간에 이 키의 메서드를 찾아 부르기로 약속해 둔 것이라, 객체에 그 키를 달면 언어의 기본 동작에 끼어들 수 있다. `for...of`와 전개가 부르는 `Symbol.iterator`는 [이터레이터와 제너레이터](/posts/js-iterators-generators)에서 자세히 본다. 여기서는 형 변환과 표시 이름에 끼어드는 두 개를 본다.
+
+```js
+const price = {
+  amount: 4500,
+  [Symbol.toPrimitive](hint) {          // 원시값으로 바꿀 때 엔진이 부른다
+    console.log("hint:", hint);
+    return hint === "string" ? `${this.amount}원` : this.amount;
+  },
+};
+console.log(`${price}`, price * 2, price + 1);
+
+class Money { get [Symbol.toStringTag]() { return "Money"; } }
+console.log(Object.prototype.toString.call(new Money()), String(new Money()));
+console.log(Object.prototype.toString.call(null), Object.prototype.toString.call(new Map()));
+```
+
+```text
+hint: string
+hint: number
+hint: default
+4500원 9000 4501
+[object Money] [object Money]
+[object Null] [object Map]
+```
+
+`Symbol.toPrimitive`는 객체가 원시값으로 바뀌어야 할 때 불리고, 어떤 쪽을 원하는지 `hint`로 알려 준다. 템플릿 문자열은 `"string"`, 곱셈은 `"number"`, `+`와 `==`는 `"default"`다. 이 메서드가 없으면 엔진은 `valueOf`와 `toString`을 순서대로 시도한다. `Symbol.toStringTag`는 `Object.prototype.toString`이 찍는 `[object ...]` 안의 이름을 정한다. 라이브러리가 값의 종류를 판별할 때 이 문자열을 쓰는 경우가 있어서, 아무 객체에나 남의 태그를 달면 판별이 틀어질 수 있다.
+
 ## 속성 하나에 스위치가 네 개 붙어 있다
 
 `product.name = "latte"`로 만든 속성은 값만 있는 것처럼 보이지만, 엔진 안에서는 속성마다 설정이 몇 개 더 붙어 있다. 이 묶음을 속성 설명자(property descriptor)라고 부르고 `Object.getOwnPropertyDescriptor`로 볼 수 있다.

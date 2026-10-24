@@ -641,6 +641,38 @@ SELECT pg_reload_conf();
 
 "누가 어느 테이블의 행을 읽었나"까지 감사(audit)해야 하면 `pgaudit` 확장을 쓴다. Ubuntu에서는 `postgresql-16-pgaudit` 패키지를 설치하고 `shared_preload_libraries = 'pgaudit'`로 올린 뒤(재시작 필요) `pgaudit.log = 'ddl, role, write'`처럼 남길 종류를 고른다. 테이블 단위로 읽기 감사를 거는 방법도 있다. 감사 로그는 양이 많으니 남길 범위를 정하고 로그 서버로 내보낸다.
 
+## 스테이징에 복사할 때는 개인정보부터 가린다
+
+"운영 데이터로 재현해 봐야 버그가 보인다"는 말에 운영 덤프를 스테이징에 그대로 붓는 일이 흔하다. 그 순간 회원 이메일과 이름이 권한도 감사 로그도 느슨한 곳으로 옮겨 간다. 스테이징 DB가 유출돼도 개인정보 유출이다. 컬럼 권한(`GRANT SELECT (id, name) ...`)은 운영 안에서 누가 볼지만 정할 뿐, 복사본에는 따라가지 않는다.
+
+PostgreSQL에는 이걸 맡는 확장으로 postgresql_anonymizer(`anon`)가 있다. 기본 패키지에는 없고 PGDG 저장소나 소스로 설치해 `shared_preload_libraries`에 올린다. 아래는 2.x 이후(지금은 3.x까지 나왔다) 기준이고 1.x와 켜는 방법이 조금 다르니 설치한 버전의 문서를 확인한다. 이 실습 클러스터에는 설치하지 않아서 출력은 싣지 않았다. 규칙은 컬럼에 보안 라벨로 붙인다.
+
+```sql
+CREATE EXTENSION anon;
+-- 컬럼마다 가리는 방법을 적는다
+SECURITY LABEL FOR anon ON COLUMN users.email IS 'MASKED WITH FUNCTION anon.partial_email(email)';
+SECURITY LABEL FOR anon ON COLUMN users.name  IS 'MASKED WITH VALUE ''(가림)''';
+```
+
+가리는 방식은 둘이다. 동적 마스킹은 원본을 그대로 두고, `MASKED`로 표시한 역할이 읽을 때만 가린 값을 보여 준다. 분석가처럼 운영 DB에 붙지만 원본을 볼 필요는 없는 역할에 쓴다.
+
+```sql
+ALTER DATABASE shop SET anon.transparent_dynamic_masking TO true;   -- 2.x부터. 1.x는 anon.start_dynamic_masking()
+SECURITY LABEL FOR anon ON ROLE analyst IS 'MASKED';
+-- analyst로 SELECT email FROM users → 'ki******@ex******.com' 모양으로 보인다
+```
+
+정적 마스킹은 테이블의 값을 실제로 덮어쓴다(`SELECT anon.anonymize_table('users');`, DB 전체는 `anon.anonymize_database()`). 되돌릴 수 없으니 운영 DB가 아니라 복사본에서만 돌린다.
+
+스테이징으로 옮기는 순서는 이렇게 잡는다. 원본이 스테이징 망을 한 번도 지나가지 않게 하는 것이 목표다.
+
+1. 운영 DB에 마스킹 규칙을 마이그레이션 파일로 관리한다. 컬럼을 추가하는 PR에 규칙도 함께 넣게 리뷰 항목으로 둔다. 규칙이 빠진 새 컬럼은 원본 그대로 새어 나간다.
+2. `MASKED` 라벨을 붙인 덤프 전용 역할을 만들고, 그 역할로 `pg_dump`를 뜬다. 동적 마스킹이 켜져 있으면 덤프에 가린 값이 들어간다. 이 방식이 어렵다면 운영과 같은 보안 구역 안의 임시 DB에 복원해 정적 마스킹을 돌린 뒤 그 DB를 덤프하고, 임시 DB는 지운다.
+3. 스테이징에 복원한 뒤 원본 값이 남지 않았는지 표본으로 확인한다(`SELECT email FROM users LIMIT 5;`).
+4. 덤프 파일은 원본이 아니어도 보관 기간을 정해 지운다.
+
+가린 데이터가 쓸모 있으려면 성질도 남아야 한다. 유니크 제약이 걸린 이메일을 모두 같은 값으로 바꾸면 복원이 실패하고, 외래 키로 쓰는 값을 바꾸면 조인이 끊긴다. 그래서 식별자 컬럼은 그대로 두고 사람을 가리키는 값만 가린다. 금액처럼 분포가 중요하면 `anon.noise(amount, 0.1)`처럼 값을 조금 흔드는 함수를 쓴다. 이름과 이메일을 가려도 생년월일, 우편번호, 성별을 합치면 사람을 다시 알아낼 수 있다는 점도 기억해 둔다. 가린 뒤에도 스테이징 접근 권한은 좁게 둔다.
+
 ## SQL 인젝션은 권한보다 앞에서 막는다
 
 지금까지의 권한은 인젝션이 일어났을 때 피해를 줄이는 장치다. 인젝션 자체는 쿼리를 문자열로 이어 붙이지 않는 것으로 막는다. 이메일로 회원을 찾는 코드가 입력값을 그대로 붙였다고 하자. 입력이 `x' OR '1'='1`이면 이런 쿼리가 된다.

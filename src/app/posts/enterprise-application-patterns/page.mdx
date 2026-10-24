@@ -1,0 +1,426 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("enterprise-application-patterns");
+
+<EasyIntro>
+  주문을 취소하는 코드가 처음에는 열 줄이었는데, 쿠폰을 돌려주고 포인트를 되돌리고 배송을 막는 규칙이 붙으면서 백 줄이 됐다. 게다가 같은 규칙이 반품 코드에도 복사돼 있어서 한쪽만 고치면 다른 쪽이 틀린다. 이 글은 이런 코드를 정리할 때 오래 써 온 이름 붙은 방법들을 소개한다. 도서관에 비유하면 이해가 쉽다. 책을 빌려 달라고 하면 사서가 서고에 가서 책을 찾아오는데, 같은 책을 두 번 달라고 하면 이미 내 손에 있는 그 책을 가리킨다. 그리고 내가 책에 메모한 내용은 반납할 때 사서가 한꺼번에 정리해 서고에 돌려놓는다. 프로그램에서도 데이터를 꺼내 주는 사서, 이미 꺼낸 것을 기억하는 목록, 바뀐 것을 모아 한 번에 저장하는 장부를 따로 둔다. 이렇게 나누면 업무 규칙은 데이터베이스를 몰라도 되고, 같은 주문이 두 개로 갈라져 서로 다른 값을 갖는 사고도 막을 수 있다.
+</EasyIntro>
+
+주문 취소 API에서 가끔 환불 금액이 틀린다는 문의가 들어왔다. 코드를 열어 보니 `cancelOrder` 메서드 하나가 120줄이다. 주문을 SQL로 읽고, 배송 상태를 확인하고, 쿠폰 할인분을 빼서 환불액을 계산하고, 포인트를 되돌리는 UPDATE를 세 번 날린다. 반품 API의 `returnOrder`에도 거의 같은 계산이 들어 있는데, 쿠폰을 빼는 순서가 달랐다. 문의가 온 건 반품 쪽이었다.
+
+이 글은 이런 코드를 정리할 때 쓰는 이름 붙은 패턴들을 다룬다. 마틴 파울러가 2002년 『Patterns of Enterprise Application Architecture』(PoEAA)에서 정리한 것들로, 지금의 JPA·Hibernate, TypeORM, MikroORM 같은 ORM이 내부에서 그대로 쓰고 있다. 패턴 이름을 알면 ORM이 왜 그렇게 동작하는지가 보이고, 이상한 동작을 만났을 때 어디를 의심할지도 정해진다.
+
+규칙을 객체 안에 담는 쪽(엔티티, 값 객체, 도메인 서비스)은 [DDD 전술 패턴 글](/posts/ddd-tactical-patterns)이 이어서 다룬다. 이 글은 그 객체들과 데이터베이스 사이를 어떻게 잇는지에 집중한다. 예제는 TypeScript를 Node 22로 돌렸고, JPA 이야기는 Hibernate 6 기준이다.
+
+## 메서드 하나에 SQL과 규칙이 섞여 있다
+
+처음 코드를 줄이면 이런 모양이다.
+
+```ts
+// order-service.ts: 요청 하나를 처리하는 절차를 위에서 아래로 쓴다
+export async function cancelOrder(db: Db, orderId: number) {
+  return db.tx(async (tx) => {
+    const order = await tx.one(
+      "SELECT id, status, total, coupon_discount, used_points FROM orders WHERE id = $1 FOR UPDATE",
+      [orderId],
+    );
+    if (order.status === "SHIPPED") throw new Error("이미 배송된 주문");
+    if (order.status === "CANCELED") return; // 두 번 눌러도 괜찮게
+
+    const refund = order.total - order.coupon_discount; // 규칙 1: 쿠폰 할인분은 돌려주지 않는다
+    await tx.none("UPDATE orders SET status = 'CANCELED', refund = $2 WHERE id = $1", [orderId, refund]);
+    await tx.none("UPDATE members SET points = points + $2 WHERE id = $1", [order.member_id, order.used_points]);
+    await tx.none("UPDATE coupons SET used = false WHERE order_id = $1", [orderId]);
+  });
+}
+```
+
+나쁜 코드가 아니다. 위에서 아래로 읽으면 무슨 일이 일어나는지 다 보인다. 트랜잭션 경계도 분명하고, 디버거로 따라가기도 쉽다. 파울러는 이런 방식을 트랜잭션 스크립트(Transaction Script)라고 불렀다. 요청 하나를 처리하는 절차를 프로시저 하나로 쓰는 방식이다.
+
+문제는 규칙이 늘 때 생긴다. "쿠폰 할인분은 돌려주지 않는다"는 규칙은 취소에도, 반품에도, 부분 취소에도 필요하다. 스크립트마다 그 규칙이 한 줄씩 들어가고, 누군가 한 곳만 고친다. 처음 장면의 버그가 정확히 이거였다.
+
+## 트랜잭션 스크립트로 충분한 동안
+
+트랜잭션 스크립트를 바로 버릴 필요는 없다. 규칙이 적고 화면 하나에 기능 하나가 대응하는 서비스라면, 이게 가장 싼 구조다. 관리자 페이지의 CRUD, 배치 작업, 리포트 집계처럼 "읽고, 조금 바꾸고, 쓴다"가 전부인 코드는 객체를 여러 개 만들어 봐야 파일만 는다.
+
+갈아탈 때를 알려 주는 신호는 꽤 구체적이다.
+
+- 같은 계산이 두 스크립트 이상에 복사돼 있고, 고칠 때 둘 다 고쳐야 한다.
+- `if (order.status === ...)` 같은 상태 검사가 여러 파일에 흩어져 있다.
+- 테스트를 쓰려면 DB를 띄워야 해서 규칙 하나를 확인하는 데 몇 초씩 걸린다.
+- 업무 담당자가 말하는 단어("부분 취소", "환불 보류")가 코드 어디에도 이름으로 없다.
+
+이 중 둘 이상이 보이면 규칙을 객체로 옮길 때다. 복사된 계산 하나라면 공용 함수로 빼는 것만으로도 충분하다. 모든 경우에 패턴 이름을 붙일 필요는 없다.
+
+## 규칙을 객체로 옮기면 도메인 모델
+
+도메인 모델(Domain Model)은 업무 규칙을 데이터와 같은 객체 안에 두는 방식이다. 취소할 수 있는지, 환불액은 얼마인지를 주문 객체가 스스로 안다.
+
+```ts
+// order.ts: DB도, SQL도 모르는 순수한 객체
+export class Order {
+  #status: "PAID" | "SHIPPED" | "CANCELED";
+  readonly id: number;
+  readonly total: number;
+  readonly couponDiscount: number;
+  #refund = 0;
+
+  constructor(id: number, status: Order["status"], total: number, couponDiscount: number) {
+    this.id = id;
+    this.#status = status;
+    this.total = total;
+    this.couponDiscount = couponDiscount;
+  }
+
+  get status() { return this.#status; }
+  get refund() { return this.#refund; }
+
+  // 규칙은 여기 한 곳에만 있다
+  cancel() {
+    if (this.#status === "SHIPPED") throw new Error("이미 배송된 주문");
+    if (this.#status === "CANCELED") return;
+    this.#status = "CANCELED";
+    this.#refund = this.total - this.couponDiscount;
+  }
+}
+```
+
+취소와 반품이 같은 `refundAmount` 계산을 부르게 되면 처음의 버그는 다시 생기지 않는다. 그리고 이 객체는 DB 없이 테스트할 수 있다. `new Order(1, "PAID", 30000, 3000).cancel()` 한 줄이면 된다.
+
+대신 새 질문이 생긴다. 이 객체를 누가 DB에서 읽어 만들고, 바뀐 값을 누가 다시 써 주나. 스크립트에서는 SQL이 바로 옆에 있었는데 이제 객체는 SQL을 모른다. PoEAA의 나머지 패턴 대부분이 이 질문에 대한 답이다.
+
+반대쪽 함정도 하나 있다. 객체를 만들긴 했는데 getter와 setter만 있고 규칙은 여전히 서비스에 있다면, 그건 트랜잭션 스크립트에 클래스 옷을 입힌 것이다. 이 모양을 부르는 이름과 왜 문제인지는 [MVC 패턴 글](/posts/mvc-pattern)에서, 언제 오히려 괜찮은지는 [DDD 전술 패턴 글](/posts/ddd-tactical-patterns)에서 다룬다.
+
+## 객체가 테이블을 아는가, 모르는가
+
+객체와 테이블을 잇는 방식은 크게 둘이다.
+
+액티브 레코드(Active Record)는 객체 하나가 테이블의 행 하나를 감싸고, 저장과 조회 메서드를 스스로 가진다. `order.save()`, `Order.find(1)`처럼 쓴다. Rails의 ActiveRecord, Laravel의 Eloquent, TypeORM에서 `BaseEntity`를 상속한 엔티티가 이 방식이다.
+
+데이터 매퍼(Data Mapper)는 객체와 테이블 사이에 별도의 매퍼를 둔다. 객체는 자기가 어떻게 저장되는지 모르고, 매퍼가 행을 읽어 객체를 만들고 객체를 보고 SQL을 만든다. Hibernate, MikroORM, TypeORM의 `Repository` 방식이 여기에 속한다.
+
+아래 그림에서 화살표를 따라 점이 흐르는 방향이 "누가 누구를 아는가"다. 위쪽은 객체가 테이블을 직접 알고, 아래쪽은 매퍼만 양쪽을 안다.
+
+<ConceptDiagram
+  caption="액티브 레코드와 데이터 매퍼: 누가 테이블을 아나"
+  width={400}
+  height={260}
+  nodes={[
+    { id: "ar", label: "Order", sub: "save(), find()", x: 90, y: 55, w: 130, h: 46 },
+    { id: "t1", label: "orders", sub: "테이블", x: 310, y: 55, w: 120, h: 46 },
+    { id: "dm", label: "Order", sub: "규칙만 안다", x: 70, y: 195, w: 120, h: 46 },
+    { id: "mapper", label: "OrderMapper", sub: "행 ↔ 객체", x: 200, y: 195, w: 120, h: 46 },
+    { id: "t2", label: "orders", sub: "테이블", x: 330, y: 195, w: 110, h: 46 },
+  ]}
+  edges={[
+    { from: "ar", to: "t1", label: "직접 SQL" },
+    { from: "mapper", to: "dm", label: "만든다" },
+    { from: "mapper", to: "t2", label: "SQL" },
+  ]}
+/>
+
+TypeORM은 둘 다 지원해서 차이가 코드로 잘 보인다.
+
+```ts
+// 액티브 레코드: 엔티티가 저장 방법까지 안다
+@Entity()
+class Order extends BaseEntity {
+  @PrimaryGeneratedColumn() id!: number;
+  @Column() status!: string;
+}
+const order = await Order.findOneBy({ id: 1 });
+order!.status = "CANCELED";
+await order!.save();
+
+// 데이터 매퍼: 엔티티는 평범한 클래스, 저장은 리포지토리가 한다
+const repo = dataSource.getRepository(Order);
+const o = await repo.findOneBy({ id: 1 });
+o!.status = "CANCELED";
+await repo.save(o!);
+```
+
+고르는 기준은 객체와 테이블이 얼마나 닮았나다. 테이블 한 줄이 객체 하나이고 규칙이 단순하면 액티브 레코드가 훨씬 빠르게 만들어진다. 객체 구조가 테이블과 달라지기 시작하면(값 객체 여러 개를 한 행에 담거나, 상속을 테이블 여러 개로 나누거나) 액티브 레코드는 객체 안에 매핑 코드가 쌓이고, 테스트할 때마다 DB가 따라온다. 그때가 데이터 매퍼로 갈 때다.
+
+## 리포지토리는 메모리 속 컬렉션처럼 보인다
+
+데이터 매퍼를 직접 쓰면 서비스 코드가 매퍼의 세부(어떤 쿼리를 언제 날리나)를 알게 된다. 리포지토리(Repository)는 그 위에 한 겹을 더 씌워서, 업무 코드가 보기에는 "주문을 담아 둔 컬렉션"처럼 보이게 한다.
+
+```ts
+// 업무의 말로 된 질문만 연다
+export interface OrderRepository {
+  findById(id: number): Promise<Order | null>;
+  findUnpaidOlderThan(cutoff: Date): Promise<Order[]>;
+  save(order: Order): Promise<void>;
+}
+```
+
+서비스는 이 인터페이스만 안다. 구현은 PostgreSQL을 쓰든, 테스트용 `Map`을 쓰든 바깥에서 꽂는다. 이 구조를 의존 방향까지 맞춰 끝까지 밀어붙인 모양이 [헥사고날 아키텍처](/posts/hexagonal-architecture)의 나가는 포트다.
+
+흔한 실수는 리포지토리를 제네릭 CRUD로 만드는 것이다.
+
+```ts
+// 이렇게 만들면 리포지토리가 그냥 테이블 래퍼가 된다
+interface Repository<T> {
+  findAll(): Promise<T[]>;
+  findBy(where: Partial<T>): Promise<T[]>;
+  update(id: number, patch: Partial<T>): Promise<void>;
+  delete(id: number): Promise<void>;
+}
+```
+
+편해 보이지만 두 가지가 무너진다. 첫째, `update(id, { status: "CANCELED" })`로 상태를 바꿀 수 있으니 `order.cancel()`의 검사를 건너뛰는 길이 열린다. 규칙을 객체에 모은 의미가 없어진다. 둘째, `findBy`에 아무 조건이나 넣을 수 있으니 "어떤 질문을 하는가"가 인터페이스에 드러나지 않고, 인덱스 없는 컬럼 조회가 아무 데서나 생긴다. 주문 리포지토리는 주문 애그리거트 단위로 하나 두고, 메서드 이름은 업무 질문(`findUnpaidOlderThan`)으로 짓는다.
+
+Spring Data JPA의 `JpaRepository`를 상속하면 `deleteAll()`까지 자동으로 따라온다. 꼭 그걸 막아야 한다면 `Repository` 인터페이스를 상속하고 필요한 메서드만 선언하는 방법이 있다.
+
+## 같은 행이 두 객체가 되면
+
+리포지토리를 두면 조회가 여러 곳에서 일어난다. 취소 서비스가 주문 1을 읽고, 그 안에서 부른 포인트 계산이 또 주문 1을 읽는다. 매번 새 객체를 만들면 같은 행이 메모리에 두 개 생긴다. 한쪽을 고치면 다른 쪽은 옛 값을 들고 있다. 둘 다 저장하면 나중에 저장한 쪽이 이긴다.
+
+Node 22로 돌려 봤다. 조회할 때마다 새 객체를 만드는 쪽과, 한 번 만든 객체를 기억해 두는 쪽이다.
+
+```ts
+// idmap.ts (Node 22, 타입 지우기로 실행)
+const loadPlain = (id: number) => { const r = selectById(id); return new Order(r.id, r.status, r.total); };
+const x = loadPlain(1);
+const y = loadPlain(1);
+x.status = "CANCELED";
+console.log("without map:", x === y, y.status, "queries =", queries);
+
+class IdentityMap {
+  private loaded = new Map<number, Order>();
+  load(id: number): Order {
+    const hit = this.loaded.get(id);
+    if (hit) return hit;          // 이미 만든 객체를 그대로 준다
+    const r = selectById(id);
+    const order = new Order(r.id, r.status, r.total);
+    this.loaded.set(id, order);
+    return order;
+  }
+}
+```
+
+```text
+without map: false PAID queries = 2
+with map:    true CANCELED queries = 1
+```
+
+첫 줄에서 `x`와 `y`는 다른 객체라 `y`는 여전히 `PAID`다. 둘째 줄에서는 같은 객체라 한쪽에서 취소한 것이 다른 쪽에도 보이고, 쿼리도 한 번만 나갔다. 이 "이미 꺼낸 객체 목록"이 아이덴티티 맵(Identity Map)이다. 키는 테이블과 기본 키, 값은 객체다.
+
+아래 그림은 한 요청 안에서 조회가 이어질 때 맵이 어떻게 자라는지 보여 준다.
+
+<AlgoTrace
+  caption="한 요청 안의 조회와 아이덴티티 맵"
+  memoryLabel="아이덴티티 맵"
+  cells={["load(1)", "load(2)", "load(1)", "load(3)", "load(2)"]}
+  steps={[
+    { pointer: 0, memory: ["Order#1"], caption: "맵이 비어 있어 SELECT를 한 번 하고 주문 1을 넣는다. 쿼리 1번." },
+    { pointer: 1, memory: ["Order#1", "Order#2"], caption: "주문 2도 처음이라 DB에 간다. 쿼리 2번." },
+    { pointer: 2, found: [0, 2], memory: ["Order#1", "Order#2"], caption: "주문 1은 맵에 있다. DB에 가지 않고 같은 객체를 준다." },
+    { pointer: 3, memory: ["Order#1", "Order#2", "Order#3"], caption: "주문 3은 처음이다. 쿼리 3번." },
+    { pointer: 4, found: [1, 4], memory: ["Order#1", "Order#2", "Order#3"], caption: "다섯 번 불렀지만 쿼리는 세 번, 객체도 주문마다 하나씩이다." },
+  ]}
+/>
+
+캐시처럼 보이지만 목적이 다르다. 캐시는 쿼리를 줄이는 게 목적이라 요청 사이에 공유하고 만료 시간을 둔다. 아이덴티티 맵은 같은 행이 객체 둘로 갈라지지 않게 하는 게 목적이라 보통 요청 하나, 트랜잭션 하나 동안만 살고 끝나면 버린다. 요청 사이에 공유하면 다른 사용자가 바꾼 값을 영영 못 보게 된다.
+
+또 하나 기억할 점은 기본 키로 찾을 때만 DB를 건너뛴다는 것이다. `findUnpaidOlderThan` 같은 조건 조회는 맵이 답을 알 수 없으니 SQL이 나간다. 다만 결과 행의 키가 이미 맵에 있으면 새 객체를 만들지 않고 맵에 있는 객체를 돌려준다. 이 동작이 뒤에서 볼 JPA의 함정과 이어진다.
+
+## 바뀐 것을 모아 한 번에 쓰는 작업 단위
+
+객체가 SQL을 모르게 되면, 누가 바뀐 것을 저장하나. 서비스에서 객체를 고칠 때마다 `repo.save()`를 부를 수도 있다. 그러면 저장을 빼먹는 실수가 생기고, 같은 객체를 세 번 고치면 UPDATE도 세 번 나간다.
+
+작업 단위(Unit of Work)는 한 업무 트랜잭션 동안 읽은 객체, 새로 만든 객체, 지운 객체를 기억해 두었다가 끝날 때 한 번에 DB에 반영한다. 아이덴티티 맵이 "무엇을 꺼냈나"를 기억한다면 작업 단위는 "무엇이 바뀌었나"를 기억한다. 실제 ORM에서는 두 역할을 한 객체가 함께 맡는다.
+
+바뀐 것을 아는 방법은 두 가지다. 객체가 바뀔 때마다 작업 단위에 알리게 하거나(호출자 등록), 처음 읽을 때 값의 사본(스냅숏)을 떠 두었다가 커밋할 때 현재 값과 비교한다(변경 감지). Hibernate는 뒤쪽을 쓴다. 이걸 흔히 더티 체킹(dirty checking)이라고 부른다.
+
+아래 그림에서 다음을 누르면, 서비스는 객체만 만지고 SQL은 커밋 시점에 작업 단위가 한꺼번에 만드는 흐름을 볼 수 있다.
+
+<SequenceDiagram
+  caption="작업 단위가 커밋 때 바뀐 것만 쓴다"
+  actors={[
+    { id: "svc", label: "취소 서비스" },
+    { id: "uow", label: "작업 단위" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "svc", to: "uow", label: "find(Order, 1)", title: "주문을 달라고 한다", detail: "작업 단위가 맵을 먼저 본다. 없으니 DB에 간다.", payload: "SELECT * FROM orders WHERE id = 1" },
+    { from: "db", to: "uow", label: "row", title: "행을 받아 객체와 사본을 만든다", detail: "객체는 서비스에 주고, 같은 값의 스냅숏은 따로 보관한다.", payload: "snapshot: { status: 'PAID', refund: 0 }" },
+    { from: "svc", to: "svc", label: "order.cancel()", title: "서비스는 객체만 고친다", detail: "SQL은 한 줄도 없다. save를 부르지도 않는다." },
+    { from: "svc", to: "uow", label: "commit()", title: "트랜잭션을 끝낸다", detail: "작업 단위가 스냅숏과 현재 값을 비교해 바뀐 객체를 찾는다." },
+    { from: "uow", to: "db", label: "UPDATE + COMMIT", title: "바뀐 것만 쓰고 커밋한다", detail: "바뀌지 않은 객체에는 SQL이 나가지 않는다.", payload: "UPDATE orders SET status = 'CANCELED', refund = 27000 WHERE id = 1" },
+  ]}
+/>
+
+이 방식의 이점은 세 가지가 함께 온다. 저장을 빼먹을 수 없고, 같은 객체를 여러 번 고쳐도 SQL은 한 번이고, 쓰기가 커밋 직전으로 몰리니 행 잠금을 잡고 있는 시간이 짧아진다. 대신 SQL이 언제 나가는지가 코드에서 안 보인다. "분명 바꿨는데 왜 UPDATE가 없지", "아무것도 안 했는데 왜 UPDATE가 나가지" 같은 질문이 여기서 나온다.
+
+변경 감지가 하는 일을 직접 짜 보자. 스냅숏과 현재 객체 목록, 지운 id 목록을 받아 나갈 SQL을 만든다. 새 객체는 INSERT, 바뀐 객체는 바뀐 컬럼만 UPDATE, 지운 객체는 DELETE다. Hibernate도 기본적으로 INSERT, UPDATE, DELETE 순서로 모아 보낸다.
+
+<CodePlayground
+  caption="스냅숏을 비교해 나갈 SQL 만들기"
+  functionName="flush"
+  initialCode={`// snapshots: 처음 읽을 때 떠 둔 사본 목록 [{ id, ...컬럼 }]
+// current:   지금 객체들 (스냅숏에 없는 id는 새로 만든 객체)
+// removed:   지운 id 목록
+// 반환: 나갈 SQL 문자열 배열. INSERT 먼저, 그다음 UPDATE, 마지막 DELETE
+//   INSERT INTO orders (id, status, total) VALUES (3, 'NEW', 1200)
+//   UPDATE orders SET status = 'CANCELED' WHERE id = 1   (바뀐 컬럼만, 순서는 객체의 키 순서)
+//   DELETE FROM orders WHERE id = 2
+// 문자열 값은 작은따옴표로 감싼다. 지운 객체는 UPDATE하지 않는다.
+function flush(snapshots, current, removed) {
+  return [];
+}`}
+  solution={`function flush(snapshots, current, removed) {
+  const sql = [];
+  const fmt = (v) => (typeof v === "string" ? "'" + v + "'" : String(v));
+  const before = new Map(snapshots.map((s) => [s.id, s]));
+  for (const row of current) {
+    if (before.has(row.id)) continue;
+    const cols = Object.keys(row);
+    sql.push("INSERT INTO orders (" + cols.join(", ") + ") VALUES (" + cols.map((c) => fmt(row[c])).join(", ") + ")");
+  }
+  for (const row of current) {
+    const old = before.get(row.id);
+    if (!old || removed.includes(row.id)) continue;
+    const changed = Object.keys(row).filter((c) => c !== "id" && row[c] !== old[c]);
+    if (changed.length === 0) continue;
+    sql.push("UPDATE orders SET " + changed.map((c) => c + " = " + fmt(row[c])).join(", ") + " WHERE id = " + row.id);
+  }
+  for (const id of removed) {
+    if (before.has(id)) sql.push("DELETE FROM orders WHERE id = " + id);
+  }
+  return sql;
+}`}
+  tests={[
+    { label: "아무것도 안 바꿈", args: [[{ id: 1, status: "PAID", total: 5000 }], [{ id: 1, status: "PAID", total: 5000 }], []], expected: [] },
+    { label: "상태만 바꿈", args: [[{ id: 1, status: "PAID", total: 5000 }], [{ id: 1, status: "CANCELED", total: 5000 }], []], expected: ["UPDATE orders SET status = 'CANCELED' WHERE id = 1"] },
+    { label: "두 컬럼을 바꿈", args: [[{ id: 1, status: "PAID", total: 5000 }], [{ id: 1, status: "REFUNDED", total: 0 }], []], expected: ["UPDATE orders SET status = 'REFUNDED', total = 0 WHERE id = 1"] },
+    { label: "추가, 수정, 삭제", args: [[{ id: 1, status: "PAID", total: 5000 }, { id: 2, status: "PAID", total: 700 }], [{ id: 1, status: "PAID", total: 4500 }, { id: 2, status: "PAID", total: 700 }, { id: 3, status: "NEW", total: 1200 }], [2]], expected: ["INSERT INTO orders (id, status, total) VALUES (3, 'NEW', 1200)", "UPDATE orders SET total = 4500 WHERE id = 1", "DELETE FROM orders WHERE id = 2"] },
+    { label: "읽지 않은 id를 지움", args: [[], [], [9]], expected: [] },
+  ]}
+/>
+
+연습에서는 바뀐 컬럼만 썼지만, Hibernate는 기본으로 엔티티의 모든 컬럼을 UPDATE에 넣는다. 문장 모양이 늘 같아서 준비된 문장을 재사용하기 좋기 때문이다. 바뀐 컬럼만 쓰고 싶으면 엔티티에 `@DynamicUpdate`를 붙인다. 컬럼이 아주 많거나, 다른 컬럼을 동시에 고치는 쓰기가 잦은 테이블에서 고려한다.
+
+## ORM 안에서 다시 만나는 패턴들
+
+이제 ORM 설명서의 낯선 단어들이 패턴 이름으로 읽힌다. JPA의 영속성 컨텍스트는 아이덴티티 맵과 작업 단위를 합친 것이다. 흔히 부르는 "1차 캐시"가 아이덴티티 맵이고, "변경 감지"가 스냅숏 비교다.
+
+```java
+// Hibernate 6 / Spring Boot 3: 같은 트랜잭션 안
+@Transactional
+public void cancel(long orderId) {
+    Order a = em.find(Order.class, orderId);   // SELECT 한 번
+    Order b = em.find(Order.class, orderId);   // 맵에서 꺼낸다. SQL 없음
+    assert a == b;                             // 같은 인스턴스
+    a.cancel();                                // save() 호출 없음
+}   // 커밋 직전 flush: 스냅숏과 비교해 UPDATE가 나간다
+```
+
+Spring Data에서 이미 읽어 온 엔티티에 `repository.save(order)`를 다시 부를 필요가 없는 이유가 이것이다. 관리되는 엔티티는 커밋 때 알아서 반영된다. 부르지 않아도 되는 `save()`를 습관처럼 넣어 두면 "save를 안 불렀는데 왜 저장됐지"를 이해하지 못한 채로 코드가 굳는다.
+
+현장에서 이 구조 때문에 생기는 증상이 몇 가지 있다.
+
+`@Modifying @Query("update Order o set o.status = 'EXPIRED' where ...")` 같은 벌크 UPDATE는 영속성 컨텍스트를 거치지 않고 바로 DB에 간다. 같은 트랜잭션에서 미리 읽어 둔 주문 객체는 여전히 옛 상태를 들고 있다. 그 뒤에 JPQL로 같은 주문을 다시 조회해도, 결과 행의 키가 이미 맵에 있으니 DB의 새 값 대신 맵의 옛 객체가 돌아온다. 벌크 쿼리 뒤에는 `clearAutomatically = true`로 컨텍스트를 비우거나, 벌크 쿼리를 먼저 하고 엔티티를 나중에 읽는다.
+
+조회만 하는 화면인데 UPDATE가 나간다면 변경 감지를 의심한다. 게터 안에서 컬렉션을 정렬해 필드에 다시 넣거나, 날짜를 보정하는 코드가 있으면 스냅숏과 값이 달라진다. 읽기 전용 메서드에 `@Transactional(readOnly = true)`를 붙이면 Spring이 Hibernate 세션의 플러시 모드를 바꿔 이런 쓰기와 스냅숏 비교 비용을 줄인다.
+
+한 트랜잭션에서 수만 건을 읽어 처리하는 배치는 맵과 스냅숏이 객체 수만큼 커져서 메모리가 터진다. 일정 건수마다 `flush()`와 `clear()`를 부르거나, 처음부터 ORM을 거치지 않는 JDBC 배치로 쓴다. 객체 그래프를 따라가다 쿼리가 수백 번 나가는 문제는 [N+1 쿼리 글](/posts/n-plus-one-queries)이 따로 다룬다.
+
+Node 쪽 ORM은 이 패턴을 다르게 고른다. TypeORM은 앞에서 본 것처럼 액티브 레코드와 데이터 매퍼를 모두 지원하지만, 같은 행을 두 번 조회하면 객체 둘을 돌려준다. 세션 단위의 아이덴티티 맵과 변경 감지를 갖춘 Node ORM을 원하면 MikroORM이 PoEAA의 작업 단위를 이름 그대로 구현하고 있다. Prisma는 아예 이 길을 가지 않는다. 결과는 평범한 객체이고, 바꾸려면 `prisma.order.update({ where, data })`로 무엇을 바꿀지 직접 말한다. 같은 틱에 나간 `findUnique`를 묶어 보내는 최적화는 있지만, 그건 쿼리를 줄이는 장치이지 아이덴티티 맵은 아니다. 그래서 Prisma로 도메인 모델을 쓰려면 리포지토리 안에서 객체를 만들고 저장하는 매핑을 손으로 쓴다.
+
+```ts
+// Prisma 위에 직접 얹은 리포지토리: 매퍼 역할을 손으로 한다
+export class PrismaOrderRepository implements OrderRepository {
+  constructor(private readonly db: PrismaClient) {}
+
+  async findById(id: number) {
+    const row = await this.db.order.findUnique({ where: { id } });
+    return row ? new Order(row.id, row.status, row.total, row.couponDiscount) : null;
+  }
+
+  async save(order: Order) {
+    await this.db.order.update({
+      where: { id: order.id },
+      data: { status: order.status, refund: order.refund },
+    });
+  }
+}
+```
+
+어느 쪽이 낫다고 말하기는 어렵다. 맵과 변경 감지가 있으면 도메인 코드가 깔끔해지는 대신 SQL이 숨는다. 없으면 무엇이 저장되는지 코드에 다 보이는 대신 매핑 코드를 직접 쓴다. 팀이 SQL 로그를 자주 들여다보는 편인지, 규칙이 얼마나 복잡한지로 고른다.
+
+## 경계를 넘는 모양은 DTO로
+
+원래 DTO(Data Transfer Object)는 원격 호출 횟수를 줄이려고 여러 객체의 값을 한 덩어리로 묶어 보내는 객체였다. 파울러가 정리할 때의 맥락은 분산 객체 시스템이다. 지금은 뜻이 조금 넓어져서, 계층이나 시스템 경계를 넘을 때 쓰는 "그 경계 전용의 데이터 모양"을 부르는 말로 쓴다. API 응답, 요청 본문, 메시지 페이로드가 모두 DTO다.
+
+엔티티를 그대로 JSON으로 내보내면 처음에는 편하다. 그러다 다음 사고들을 만난다.
+
+- 회원 엔티티에 `passwordHash`, `role` 필드가 있는데 응답에 그대로 실려 나간다.
+- 주문이 회원을, 회원이 주문 목록을 가리키는 양방향 관계가 있어서 JSON 직렬화가 끝없이 돈다.
+- 지연 로딩 프록시를 직렬화하다가 트랜잭션이 이미 끝나 `LazyInitializationException`이 난다. 이걸 피하려고 OSIV(Open Session In View)를 켜면, 이번에는 화면을 그리는 동안 DB 연결을 붙잡고 쿼리가 몰래 나간다.
+- 컬럼 이름을 바꿨을 뿐인데 API 필드 이름이 바뀌어 앱이 깨진다.
+
+받는 쪽은 더 위험하다. 요청 본문을 엔티티로 바로 받아 저장하면, 사용자가 `"role": "ADMIN"`이나 `"refund": 999999`를 끼워 보내도 그대로 들어간다. 이걸 대량 할당(mass assignment) 취약점이라고 한다. 요청 DTO에는 사용자가 바꿀 수 있는 필드만 두고, 엔티티는 그 값으로 메서드를 불러 바꾼다.
+
+```ts
+// 응답 DTO: API가 약속한 모양. 엔티티의 내부 필드와 독립적이다
+export type OrderResponse = {
+  id: number;
+  status: "PAID" | "SHIPPED" | "CANCELED";
+  refundAmount: number;
+};
+
+// 매퍼: 순수 함수 하나면 충분하다
+export function toOrderResponse(order: Order): OrderResponse {
+  return { id: order.id, status: order.status, refundAmount: order.refund };
+}
+
+// 요청 DTO: 사용자가 보낼 수 있는 것만
+export type CancelOrderRequest = { reason: string };
+```
+
+매퍼는 처음에는 손으로 쓴 함수로 충분하다. 필드가 많아지고 엔티티와 DTO 이름이 거의 같다면 Java에서는 MapStruct처럼 컴파일 시점에 매핑 코드를 만들어 주는 도구를 쓴다. 리플렉션으로 런타임에 이름이 같은 필드를 복사하는 도구는 필드 이름이 바뀌어도 조용히 빈 값을 넣는 경우가 있어서, 매핑 테스트를 함께 둔다.
+
+반대로 DTO를 너무 잘게 나누는 것도 비용이다. 화면 하나마다 DTO 세 개(요청, 응답, 내부)와 매퍼 두 개를 만들면 필드 하나 추가에 파일 다섯 개를 고친다. 경계가 실제로 있는 곳(외부 API, 메시지, 다른 모듈)에서만 DTO를 두고, 같은 모듈 안에서는 도메인 객체를 그대로 넘겨도 된다. 원을 건널 때마다 모양을 바꾸는 규칙은 [클린 아키텍처 글](/posts/clean-architecture)에서 더 자세히 본다.
+
+## 어디까지 갖출지 고르는 순서
+
+이 패턴들은 묶음으로 오지만 한 번에 다 갖출 필요는 없다. 서비스가 자라는 순서대로 하나씩 붙인다.
+
+처음에는 트랜잭션 스크립트와 SQL, 또는 액티브 레코드 ORM으로 시작한다. 이때도 외부 API의 응답은 DTO로 따로 둔다. 노출 사고는 규모와 상관없이 나기 때문이다.
+
+규칙이 복사되기 시작하면 그 규칙을 가진 객체를 만든다. 아직 ORM을 바꿀 필요는 없다. 스크립트 안에서 객체를 만들어 규칙을 부르고, 결과를 다시 SQL로 쓰는 것부터 해도 된다.
+
+객체 구조가 테이블과 달라지고, DB 없이 규칙을 테스트하고 싶어지면 데이터 매퍼와 리포지토리로 간다. 이때 아이덴티티 맵과 작업 단위가 있는 ORM을 쓰면 직접 만들 일은 없다. 다만 그 ORM이 언제 SQL을 보내는지는 반드시 안다. 개발 환경에서 SQL 로그를 켜 두고, 테스트에서 쿼리 수를 세는 습관이 그 비용을 줄인다.
+
+이렇게 나눈 객체 안에 무엇을 담는지, 값과 식별자를 어떻게 구분하는지는 [DDD 전술 패턴 글](/posts/ddd-tactical-patterns)에서 이어 간다. 왜 이 구조를 골랐는지 팀에 남기는 방법은 [아키텍처 문서 글](/posts/architecture-docs-c4-adr)의 ADR을 참고한다.
+
+## 면접에서 나올 만한 질문
+
+### 트랜잭션 스크립트와 도메인 모델은 어떻게 다르고, 언제 무엇을 고르나요?
+
+트랜잭션 스크립트는 요청 하나의 처리 절차를 프로시저 하나에 쓰고, 도메인 모델은 업무 규칙을 데이터와 같은 객체 안에 둔다. 규칙이 적고 CRUD가 대부분이면 트랜잭션 스크립트가 가장 싸고 읽기 쉽다. 같은 계산이 여러 스크립트에 복사되고 상태 검사가 흩어지기 시작하면 도메인 모델로 옮긴다. 둘을 섞어 쓰는 것도 흔하다.
+
+### 액티브 레코드와 데이터 매퍼의 차이는 무엇인가요?
+
+액티브 레코드는 객체가 자기 행을 감싸고 `save`, `find` 같은 저장 메서드를 스스로 가진다. 데이터 매퍼는 객체와 테이블 사이에 매퍼를 두어 객체가 저장 방식을 모르게 한다. 객체와 테이블이 거의 같으면 액티브 레코드가 빠르고, 객체 구조가 테이블과 달라지거나 DB 없이 규칙을 테스트하고 싶으면 데이터 매퍼가 맞다.
+
+### 아이덴티티 맵은 캐시와 무엇이 다른가요?
+
+아이덴티티 맵의 목적은 같은 행이 메모리에서 두 객체로 갈라지지 않게 하는 것이다. 그래서 보통 트랜잭션이나 요청 하나 동안만 살고 끝나면 버린다. 캐시는 쿼리를 줄이려고 요청 사이에 공유하고 만료를 둔다. JPA의 1차 캐시는 이름만 캐시이고 실제로는 아이덴티티 맵이다.
+
+### JPA에서 save를 부르지 않았는데 UPDATE가 나가는 이유는요?
+
+영속성 컨텍스트가 작업 단위 역할을 하기 때문이다. 엔티티를 읽을 때 스냅숏을 떠 두고, 플러시 시점에 현재 값과 비교해 바뀐 엔티티의 UPDATE를 만든다. 관리되는 엔티티는 커밋 때 자동으로 반영되므로 `save`가 필요 없다. 반대로 조회만 했는데 UPDATE가 나간다면 게터나 콜백에서 필드를 고치고 있지 않은지 본다.
+
+### 벌크 UPDATE 쿼리 뒤에 엔티티 값이 옛 값으로 보이는 건 왜인가요?
+
+벌크 쿼리는 영속성 컨텍스트를 거치지 않고 DB에 바로 가서, 이미 읽어 둔 엔티티는 바뀐 걸 모른다. 그 뒤에 같은 행을 JPQL로 다시 조회해도 키가 맵에 있으면 맵의 옛 객체가 돌아온다. `@Modifying(clearAutomatically = true)`로 컨텍스트를 비우거나, 벌크 쿼리를 먼저 하고 엔티티를 나중에 읽는다.
+
+### 리포지토리를 제네릭 CRUD 인터페이스로 만들면 어떤 문제가 있나요?
+
+`update(id, patch)` 같은 메서드가 도메인 객체의 규칙 메서드를 건너뛰는 길을 열어 준다. 아무 조건이나 넣을 수 있는 조회는 어떤 질문을 하는지 인터페이스에 드러나지 않게 하고, 인덱스 없는 조회를 퍼뜨린다. 리포지토리는 애그리거트마다 두고 메서드 이름을 업무 질문으로 짓는다.
+
+### 엔티티를 API 응답이나 요청에 그대로 쓰면 안 되는 이유는요?
+
+응답 쪽에서는 비밀번호 해시 같은 내부 필드 노출, 양방향 관계의 순환 직렬화, 지연 로딩 예외, 컬럼 변경이 API 변경으로 번지는 문제가 생긴다. 요청 쪽에서는 사용자가 `role`이나 금액 필드를 끼워 넣는 대량 할당 취약점이 생긴다. 경계에서는 DTO로 약속한 모양만 주고받고, 엔티티는 그 값으로 메서드를 불러 바꾼다.

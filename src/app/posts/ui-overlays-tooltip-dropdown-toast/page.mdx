@@ -1,0 +1,405 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ui-overlays-tooltip-dropdown-toast");
+
+<EasyIntro>
+  책을 읽다가 어려운 낱말 옆에 작은 쪽지를 붙여 둔다고 해 보자. 쪽지가 책 가장자리에 붙어 있으면 반쯤 잘려서 안 보이고, 책장을 넘겼는데 쪽지만 제자리에 남아 있으면 엉뚱한 쪽을 가리킨다. 쪽지는 늘 그 낱말 옆, 잘 보이는 쪽에 붙어 있어야 한다.
+
+  웹 화면에도 이런 쪽지가 많다. 버튼에 마우스를 올리면 뜨는 작은 설명, 누르면 아래로 펼쳐지는 메뉴, 저장했다고 잠깐 떴다 사라지는 알림이 그렇다. 이 쪽지들은 화면 끝에 닿으면 반대쪽으로 자리를 옮기고, 화면을 굴리면 버튼을 따라 같이 움직여야 한다.
+
+  눈으로 화면을 보지 않는 사람도 생각해야 한다. 화면을 소리로 읽어 주는 프로그램을 쓰는 사람에게도 설명이 들려야 하고, 키보드만 쓰는 사람도 메뉴를 열고 닫을 수 있어야 한다. 알림은 지금 하던 일을 빼앗지 않게 조용히 알려 주고, 너무 빨리 사라지지 않게 한다.
+</EasyIntro>
+
+## 화면 끝에서 잘리고 스크롤하면 따로 노는 툴팁
+
+저장 버튼에 마우스를 올리면 "Ctrl+S로도 저장한다"는 툴팁이 위에 뜬다. 그런데 버튼이 화면 맨 위 툴바에 있으면 툴팁 윗부분이 화면 밖으로 잘린다. 오른쪽 끝 버튼에서는 오른쪽이 잘린다. 툴팁을 띄운 채로 패널 안을 스크롤하면 버튼은 올라가는데 툴팁은 제자리에 떠 있다. 모바일에서는 아예 뜨지 않는다. 손가락에는 "올려 두기"가 없기 때문이다.
+
+툴팁, 드롭다운, 토스트는 모두 문서 흐름 밖에 떠 있는 작은 UI다. 그래서 같은 문제를 공유한다. 어디에 놓을지(위치), 무엇 위에 그릴지(쌓임), 누가 어떻게 듣고 조작하는지(접근성). 쌓임 문제, 즉 `overflow: hidden` 카드에 잘리거나 z-index 싸움에서 지는 이유와 포털·top layer는 [position과 쌓임 맥락](/posts/css-position-stacking-context)에 정리했다. 모달의 포커스 가두기와 라이브 리전 기초는 [ARIA와 키보드 포커스](/posts/aria-keyboard-focus)에 있다. 이 글은 그 위에서 위치를 계산하는 방법과 세 컴포넌트 각각의 접근성 규칙을 다룬다.
+
+## 기준 요소 옆에 붙이는 계산
+
+떠 있는 요소를 기준 요소(trigger) 옆에 붙이는 일은 결국 좌표 계산이다. 기준 요소의 `getBoundingClientRect()`를 읽고, 원하는 방향(위, 아래)에 간격을 더해 놓는다. 여기까지는 쉽다. 어려운 건 그 자리가 화면을 벗어날 때다.
+
+두 가지로 대응한다. 위에 자리가 없으면 아래로 뒤집는다(flip). 가로로 화면을 벗어나면 화면 안쪽으로 밀어 넣는다(shift). 밀어 넣으면 툴팁 화살표가 더 이상 툴팁 가운데가 아니게 되니, 화살표 위치는 기준 요소 가운데를 따로 계산한다.
+
+아래 함수로 이 계산을 직접 해 보자. 기준 요소 사각형, 떠 있는 요소 크기, 화면 크기, 원하는 방향, 간격, 화면 가장자리 여백을 받아 최종 좌표와 실제로 쓴 방향을 돌려준다.
+
+<CodePlayground
+  caption="flip과 shift로 툴팁 자리 정하기"
+  functionName="place"
+  initialCode={`function place(ref, float, viewport, placement, offset, padding) {
+  // ref: { x, y, width, height }, float: { width, height }
+  // viewport: { width, height }, placement: "top" | "bottom"
+  // 1. 원하는 방향의 y를 구한다 (top이면 위로 offset만큼 띄운다)
+  // 2. padding 안쪽에 다 들어가지 않으면 반대쪽을 시도하고, 거기 들어가면 뒤집는다
+  // 3. x는 기준 요소 가운데에 맞추고 [padding, 화면폭 - padding - 너비] 범위로 민다
+  return { x: 0, y: 0, placement };
+}`}
+  solution={`function place(ref, float, viewport, placement, offset, padding) {
+  const yFor = (side) =>
+    side === "top" ? ref.y - offset - float.height : ref.y + ref.height + offset;
+  const fits = (y) => y >= padding && y + float.height <= viewport.height - padding;
+  let side = placement;
+  let y = yFor(side);
+  if (!fits(y)) {
+    const other = side === "top" ? "bottom" : "top";
+    if (fits(yFor(other))) {
+      side = other;
+      y = yFor(other);
+    }
+  }
+  const centered = ref.x + ref.width / 2 - float.width / 2;
+  const maxX = viewport.width - padding - float.width;
+  const x = Math.min(Math.max(centered, padding), maxX);
+  return { x, y, placement: side };
+}`}
+  tests={[
+    {
+      label: "가운데 버튼: 위에 그대로",
+      args: [{ x: 100, y: 200, width: 80, height: 32 }, { width: 120, height: 40 }, { width: 390, height: 800 }, "top", 8, 8],
+      expected: { x: 80, y: 152, placement: "top" },
+    },
+    {
+      label: "맨 위 툴바: 아래로 뒤집기",
+      args: [{ x: 100, y: 20, width: 80, height: 32 }, { width: 120, height: 40 }, { width: 390, height: 800 }, "top", 8, 8],
+      expected: { x: 80, y: 60, placement: "bottom" },
+    },
+    {
+      label: "오른쪽 끝: 안쪽으로 밀기",
+      args: [{ x: 340, y: 200, width: 40, height: 32 }, { width: 120, height: 40 }, { width: 390, height: 800 }, "top", 8, 8],
+      expected: { x: 262, y: 152, placement: "top" },
+    },
+    {
+      label: "왼쪽 아래 구석: 둘 다",
+      args: [{ x: 0, y: 760, width: 32, height: 32 }, { width: 120, height: 40 }, { width: 390, height: 800 }, "bottom", 8, 8],
+      expected: { x: 8, y: 712, placement: "top" },
+    },
+  ]}
+/>
+
+이 함수는 양쪽 다 자리가 없으면 원래 방향을 그대로 둔다. 실제 라이브러리는 여기서 더 나아가 넘치는 양이 가장 적은 방향을 고르거나, 남은 공간에 맞게 떠 있는 요소의 높이를 줄인다(드롭다운 목록이 화면 아래에서 스크롤되게 만드는 것). 그리고 계산은 한 번으로 끝나지 않는다. 스크롤, 창 크기 변경, 기준 요소 크기 변화 때마다 다시 해야 처음 사례처럼 "따로 노는" 툴팁이 안 생긴다.
+
+## Floating UI로 위치를 계속 맞춘다
+
+이 계산을 매번 짜지 않으려고 쓰는 라이브러리가 Floating UI(예전 Popper.js의 후속)다. 위치 계산을 미들웨어로 쪼개 두고 필요한 것만 끼운다.
+
+```ts
+import { autoUpdate, computePosition, flip, offset, shift } from "@floating-ui/dom";
+
+function showTooltip(button: HTMLElement, tooltip: HTMLElement) {
+  // 스크롤, 크기 변화, 레이아웃 이동마다 update를 다시 부른다
+  const cleanup = autoUpdate(button, tooltip, async () => {
+    const { x, y, placement } = await computePosition(button, tooltip, {
+      placement: "top",
+      strategy: "fixed", // 스크롤 조상의 overflow에 덜 갇히게 화면 기준으로 둔다
+      middleware: [
+        offset(8),             // 기준 요소와 8px 띄운다
+        flip(),                // 위에 자리가 없으면 아래로
+        shift({ padding: 8 }), // 화면 가장자리에서 8px 안쪽으로 민다
+      ],
+    });
+    Object.assign(tooltip.style, { left: `${x}px`, top: `${y}px` });
+    tooltip.dataset.placement = placement; // 화살표 방향을 CSS에서 바꾼다
+  });
+  return cleanup; // 툴팁을 닫을 때 반드시 부른다
+}
+```
+
+미들웨어 순서가 결과를 바꾼다. `offset`이 먼저 와야 띄운 거리까지 포함해서 넘치는지 판단하고, `flip`이 `shift`보다 앞에 와야 "뒤집어서 해결되는가"를 먼저 본 뒤 남은 가로 넘침을 민다. `autoUpdate`가 돌려주는 정리 함수를 부르지 않으면, 툴팁을 닫은 뒤에도 스크롤마다 계산이 돌고 리스너가 쌓인다. 목록 한 줄마다 툴팁이 있는 화면에서 이게 새면 스크롤이 눈에 띄게 무거워진다.
+
+## CSS 앵커 포지셔닝으로 자바스크립트 없이
+
+같은 일을 CSS만으로 하는 앵커 포지셔닝(anchor positioning)이 들어오고 있다. 기준 요소에 이름을 붙이고, 떠 있는 요소가 그 이름을 기준으로 자리를 잡는다.
+
+```css
+.save-button {
+  anchor-name: --save; /* 이 요소를 --save라는 앵커로 등록한다 */
+}
+.save-tooltip {
+  position: fixed;
+  position-anchor: --save;         /* --save를 기준으로 */
+  position-area: top;              /* 앵커 위쪽 가운데 칸에 놓는다 */
+  margin-block-end: 8px;           /* 앵커와의 간격 */
+  position-try-fallbacks: flip-block, flip-inline; /* 넘치면 위아래, 그다음 좌우로 뒤집어 본다 */
+}
+```
+
+`position-area`는 앵커를 가운데 둔 3 × 3 칸 중 어디에 놓을지를 고른다. `top: anchor(bottom)`처럼 앵커의 변을 직접 가리킬 수도 있다. `position-try-fallbacks`가 flip 역할을 하고, 스크롤과 크기 변화를 따라가는 건 브라우저가 레이아웃 단계에서 알아서 한다. `autoUpdate`도, 정리 함수도 필요 없다.
+
+지원 범위는 확인하고 써야 한다. 크롬 125부터 들어왔고 사파리는 26에서 지원했다. 파이어폭스는 지원 여부를 확인해야 한다. 개발 도중 이름이 바뀌어서 예전 글에는 `inset-area`, `position-try-options`라고 적혀 있기도 한데, 지금 이름은 `position-area`, `position-try-fallbacks`다. 앵커 포지셔닝에는 아직 shift처럼 "화면 안으로 조금만 밀기"에 해당하는 기능이 없어서, 오른쪽 끝 버튼의 툴팁은 뒤집히거나 잘린다.
+
+그래서 지금 고르는 기준은 이렇다. 지원하는 브라우저만 대상이고 위치 규칙이 단순하면 앵커 포지셔닝을, 모든 브라우저에서 같은 동작이 필요하거나 shift, 남은 공간에 맞춘 크기 조절 같은 세밀한 규칙이 필요하면 Floating UI를 쓴다. `@supports (anchor-name: --a)`로 감싸 앵커 포지셔닝을 쓰고, 지원하지 않으면 Floating UI를 불러오는 점진적 적용도 가능하다.
+
+## 툴팁은 보조 설명이다
+
+위치를 맞췄으면 이제 무엇을 담을지다. 툴팁은 기준 요소에 대한 짧은 보조 설명이다. 마우스를 올리거나 키보드 포커스가 오면 뜨고, 떠나면 사라진다. 이 성격 때문에 규칙이 생긴다.
+
+```html
+<!-- 글자 있는 버튼: 툴팁은 추가 설명이라 describedby -->
+<button type="button" aria-describedby="tip-save">저장</button>
+<div role="tooltip" id="tip-save" popover="manual">Ctrl+S로도 저장한다</div>
+
+<!-- 아이콘만 있는 버튼: 툴팁 글자가 곧 이름이라 labelledby -->
+<button type="button" aria-labelledby="tip-trash"><svg aria-hidden="true">…</svg></button>
+<div role="tooltip" id="tip-trash" popover="manual">휴지통으로 옮기기</div>
+```
+
+아이콘 버튼에서 툴팁 글자를 이름으로 쓰면 스크린리더가 "휴지통으로 옮기기, 버튼"이라고 읽는다. 같은 글자를 `aria-label`과 `aria-describedby`에 둘 다 걸면 두 번 읽힌다. `popover="manual"`은 툴팁을 top layer에 올려 쌓임 맥락 문제를 피하면서, 열고 닫기는 스크립트가 맡는다는 뜻이다. 크롬 133부터는 다른 popover를 닫지 않고 뜨는 툴팁용 `popover="hint"`도 있지만 다른 브라우저 지원은 확인해야 한다.
+
+툴팁에 넣으면 안 되는 것이 있다. 링크나 버튼처럼 누를 수 있는 것이다. 툴팁은 기준 요소에서 포커스가 떠나면 닫히는데, 툴팁 안 버튼으로 가려면 포커스가 떠나야 한다. 키보드 사용자는 영원히 그 버튼에 닿을 수 없다. 스크린리더는 툴팁 내용을 기준 요소의 설명 문자열로만 읽으니 그 안의 링크는 링크로 들리지도 않는다. 누를 것이 필요하면 툴팁이 아니라 popover나 다이얼로그다.
+
+필수 정보도 넣지 않는다. 모바일에는 마우스 올리기가 없어서 툴팁이 뜨지 않고, 화면 확대를 쓰는 사람은 툴팁이 시야 밖에 뜰 수 있다. "비밀번호는 8자 이상"처럼 꼭 알아야 하는 건 입력칸 아래에 늘 보이게 쓴다.
+
+비활성 버튼의 툴팁도 흔한 함정이다. "권한이 없어서 누를 수 없다"를 툴팁으로 알리고 싶은데, `disabled` 버튼은 포커스를 받지 않고 브라우저에 따라 마우스 이벤트도 내보내지 않아서 툴팁이 뜨지 않는다. 이럴 때는 `aria-disabled="true"`로 비활성 상태를 알리고 클릭 처리만 막는다. 포커스는 받으니 툴팁이 뜨고, 스크린리더도 "흐리게 표시됨"이라고 읽는다.
+
+## 닫을 수 있고, 위에 머물 수 있고, 저절로 사라지지 않게
+
+WCAG 1.4.13(마우스 올리기나 포커스로 나타나는 콘텐츠, AA)은 툴팁 같은 콘텐츠에 세 가지를 요구한다.
+
+닫을 수 있어야 한다(dismissible). 마우스나 포커스를 옮기지 않고 닫을 방법이 있어야 한다. 보통 Esc다. 화면을 크게 확대해서 보는 사람에게 툴팁이 읽던 글을 가리면, 마우스를 움직이면 다른 툴팁이 뜨니 Esc가 유일한 방법이다.
+
+위에 머물 수 있어야 한다(hoverable). 마우스를 기준 요소에서 툴팁 위로 옮기는 동안 툴팁이 사라지면 안 된다. 확대 사용자는 툴팁의 일부만 보고 있어서 마우스를 툴팁 위로 옮겨 나머지를 읽는다. 기준 요소를 벗어나는 순간 바로 닫는 구현은 이 조건을 어긴다. 닫기에 짧은 지연을 두거나, 기준 요소에서 툴팁까지 마우스가 지나갈 삼각형 영역을 허용한다(Floating UI의 React 쪽 `safePolygon`이 이 일을 한다).
+
+계속 남아 있어야 한다(persistent). 사용자가 마우스나 포커스를 거두거나, 닫거나, 내용이 더 이상 유효하지 않을 때까지 시간이 지났다고 사라지면 안 된다.
+
+```ts
+// 툴팁 하나의 열고 닫기: 포커스와 마우스 모두, Esc로 닫기, 닫기 지연
+let closeTimer: number | undefined;
+const open = () => { clearTimeout(closeTimer); tip.showPopover(); };
+const close = () => { closeTimer = window.setTimeout(() => tip.hidePopover(), 150); };
+
+button.addEventListener("pointerenter", open);
+button.addEventListener("pointerleave", close);
+tip.addEventListener("pointerenter", open);   // 툴팁 위로 옮겨도 열린 채로
+tip.addEventListener("pointerleave", close);
+button.addEventListener("focus", open);
+button.addEventListener("blur", () => tip.hidePopover());
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && tip.matches(":popover-open")) tip.hidePopover(); // 포커스는 그대로 둔다
+});
+```
+
+여는 쪽에도 지연을 두는 경우가 많다. 툴바 위로 마우스를 쓱 지나갈 때마다 툴팁이 줄줄이 깜빡이면 시끄럽다. 300~500ms 지연으로 열고, 툴팁 하나가 열린 직후 옆 버튼으로 옮기면 지연 없이 바로 바꿔 보여 주는 방식이 흔하다.
+
+## 누를 것이 있으면 토글팁
+
+모바일에서도 보여야 하거나, 내용에 링크가 있어야 하면 토글팁(toggletip)을 쓴다. 눌러서 여는 작은 설명 버튼이다. "요금은 어떻게 계산되나요?" 옆의 물음표 버튼이 대표적이다.
+
+```html
+<button type="button" aria-expanded="false" aria-controls="fee-help">
+  <span aria-hidden="true">?</span><span class="visually-hidden">요금 계산 안내</span>
+</button>
+<div id="fee-help" popover>
+  사용한 시간만큼 분 단위로 계산한다. <a href="/pricing">요금표 보기</a>
+</div>
+```
+
+`popover` 속성의 기본값 `auto`는 바깥을 누르거나 Esc를 누르면 닫히는 동작(light dismiss)을 브라우저가 해 준다. `popovertarget` 속성으로 버튼과 이으면 스크립트 없이 열고 닫히고, 브라우저가 열림 상태도 접근성 트리에 알린다. popover를 연 버튼에서 다음 Tab을 누르면 popover 안으로 들어가도록 브라우저가 순서를 이어 주니, 안의 링크에도 키보드로 닿는다.
+
+툴팁과 토글팁을 고르는 기준은 간단하다. 짧은 설명이고 누를 것이 없으며 없어도 쓰는 데 지장이 없으면 툴팁, 그 밖은 토글팁이다.
+
+## 메뉴 버튼, select, 콤보박스 중 무엇인가
+
+"드롭다운"이라는 말은 너무 넓다. 눌러서 무언가 아래로 펼쳐진다는 겉모양만 같고, 하는 일에 따라 맞는 요소가 다르다.
+
+값을 고르는 폼 입력이면 먼저 네이티브 `select`다. 키보드 조작, 모바일의 기기 고유 선택 화면, 폼 전송, 스크린리더 지원이 모두 기본이다. 모양을 바꾸기 어렵다는 게 단점이었는데, 크롬 135부터 `appearance: base-select`로 옵션 목록까지 CSS로 꾸밀 수 있는 사용자 정의 select가 들어왔다. 다른 브라우저에서는 평범한 select로 보이니 그대로 써도 안전하다.
+
+선택지가 많아 검색이 필요하거나 직접 입력도 받아야 하면 콤보박스다. 입력칸과 목록, `aria-activedescendant`로 포커스를 입력칸에 둔 채 목록 항목을 가리키는 구조는 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)의 자동완성 부분에 있다.
+
+실행할 동작 목록이면 메뉴 버튼이다. "더 보기" 버튼을 누르면 복제, 이름 바꾸기, 삭제가 펼쳐지는 경우다. 버튼에 `aria-haspopup="menu"`와 `aria-expanded`를, 목록에 `role="menu"`, 항목에 `role="menuitem"`을 준다. 키보드 동작은 APG(ARIA 작성 지침)의 메뉴 버튼 패턴을 따른다. Enter, Space, 아래 화살표로 열면서 첫 항목에 포커스를 주고, 위 화살표로 열면 마지막 항목에 준다. 화살표로 항목 사이를 옮기고, 글자를 치면 그 글자로 시작하는 항목으로 간다. Esc는 닫고 포커스를 버튼으로 돌려준다. Tab은 메뉴를 닫고 다음 요소로 간다. 항목 사이를 화살표로 옮기는 방법은 [ARIA와 키보드 포커스](/posts/aria-keyboard-focus#방향키로-옮겨-다니는-위젯)의 로빙 tabindex와 같다.
+
+```ts
+// 열린 메뉴 안의 키보드 처리. items는 role="menuitem" 요소 배열
+menu.addEventListener("keydown", (e) => {
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  const focusAt = (n: number) => items[(n + items.length) % items.length].focus(); // 끝에서 처음으로 돈다
+  if (e.key === "ArrowDown") { e.preventDefault(); focusAt(i + 1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); focusAt(i - 1); }
+  else if (e.key === "Home") { e.preventDefault(); focusAt(0); }
+  else if (e.key === "End") { e.preventDefault(); focusAt(items.length - 1); }
+  else if (e.key === "Escape") { closeMenu(); button.focus(); } // 닫고 버튼으로 돌려준다
+  else if (e.key === "Tab") { closeMenu(); button.focus(); } // 버튼으로 돌린 뒤 기본 Tab 이동에 맡긴다
+  else if (e.key.length === 1) {
+    // 글자를 치면 그 글자로 시작하는 다음 항목으로
+    const k = e.key.toLowerCase();
+    const next = items.findIndex((el, j) => j > i && el.textContent!.trim().toLowerCase().startsWith(k));
+    const first = items.findIndex((el) => el.textContent!.trim().toLowerCase().startsWith(k));
+    if (next !== -1) focusAt(next); else if (first !== -1) focusAt(first);
+  }
+});
+```
+
+Tab에서 `preventDefault()`를 부르지 않는 게 요점이다. 포커스를 버튼으로 먼저 돌려놓으면 이어지는 기본 Tab 이동이 버튼 다음 요소로 간다. 포커스가 있던 메뉴 항목을 숨기기만 하면 포커스가 `body`로 빠져 다음 Tab이 문서 처음부터 시작될 수 있다.
+
+흔한 실수는 사이트 내비게이션에 `role="menu"`를 쓰는 것이다. 메뉴 역할을 받으면 스크린리더가 데스크톱 앱의 메뉴처럼 다루고, 항목 사이를 Tab이 아니라 화살표로만 옮겨야 한다고 안내한다. 링크 목록을 펼치는 상단 메뉴는 `aria-expanded`가 있는 버튼과 평범한 링크 목록(디스클로저 패턴)이 맞다. 이 블로그의 상단 토픽 메뉴도 그렇게 만들었다.
+
+## 토스트는 포커스를 뺏지 않는다
+
+토스트는 사용자가 한 일의 결과를 잠깐 알려 주는 알림이다. "저장했다", "링크를 복사했다", "3개를 삭제했다. 되돌리기". 화면 구석에 떴다가 몇 초 뒤 사라진다. 아래 그림은 토스트가 가장자리에서 들어오는 움직임이다.
+
+<MotionDemo
+  patterns={["slide-in"]}
+  caption="토스트는 하던 일을 가리지 않는 가장자리에서 들어와 몇 초 머문다"
+/>
+
+토스트가 떴다고 포커스를 토스트로 옮기면 안 된다. 사용자는 방금 무언가를 하고 있었다. 글을 쓰다 Ctrl+S를 눌렀는데 포커스가 "저장했다" 토스트로 가면, 계속 타이핑한 글자가 엉뚱한 곳으로 가고 키보드 사용자는 원래 자리를 다시 찾아가야 한다. 그래서 토스트는 화면에 보이게 그리면서, 스크린리더에는 라이브 리전으로 알린다. WCAG 4.1.3(상태 메시지, AA)이 바로 이 요구다. 포커스를 받지 않는 상태 메시지도 보조 기술이 알 수 있게 역할이나 속성으로 표시해야 한다.
+
+polite와 assertive 중에서는 거의 항상 polite(`role="status"`)다. 저장했다, 복사했다는 하던 말을 끊을 만큼 급하지 않다. assertive(`role="alert"`)는 "결제가 실패했다", "연결이 끊겨 저장되지 않는다"처럼 지금 알아야 다음 행동이 바뀌는 것에만 쓴다. 다만 결제 실패처럼 중요한 오류는 애초에 몇 초 뒤 사라지는 토스트가 아니라 화면 안에 남는 오류 메시지가 맞다.
+
+라이브 리전이 바뀐 내용을 듣는 방식 때문에, 토스트 영역은 처음부터 DOM에 빈 채로 둬야 한다. 토스트가 생길 때 `role="status"` 요소를 내용과 함께 새로 만들면 읽히지 않는 스크린리더가 많다. 이유는 [ARIA와 키보드 포커스](/posts/aria-keyboard-focus#화면이-바뀌었다고-알려-주기)에 정리했다.
+
+## 몇 초 보여 주고, 언제 멈추나
+
+토스트가 저절로 사라지는 건 읽을 시간을 정해 버린다는 뜻이다. 읽는 속도는 사람마다 다르고, 화면 확대를 쓰거나 인지 장애가 있는 사람은 4초 안에 구석의 글을 찾아 읽기 어렵다. WCAG 2.2.1(시간 조절, A)은 콘텐츠가 정한 시간 제한을 끄거나 늘릴 수 있게 하라고 요구한다. 몇 초 뒤 사라지는 토스트를 여기의 시간 제한으로 볼지는 해석이 갈리지만, 안전한 쪽으로 만들면 이렇다.
+
+- 마우스를 올리거나 토스트 안에 포커스가 있는 동안은 타이머를 멈춘다. 창이 가려져 있는 동안(`document.visibilityState === "hidden"`)도 멈춘다.
+- 글이 길면 오래 보여 준다. 고정 4초가 아니라 짧은 글은 4~5초, 긴 글은 그보다 길게 잡는다.
+- "되돌리기"처럼 누를 것이 있는 토스트는 저절로 사라지게 두지 않거나, 같은 동작을 다른 곳(메뉴, 단축키)에서도 할 수 있게 한다. 키보드 사용자가 토스트까지 가는 동안 사라지면 되돌릴 방법이 없다.
+- 놓친 알림을 다시 볼 곳(알림 목록)을 두면 시간 제한 문제가 사라진다.
+
+포커스를 뺏지 않으니 키보드 사용자가 토스트 안의 버튼에 가는 길도 따로 열어 둔다. Radix UI의 Toast는 F8로 토스트 영역에 포커스를 옮기는 단축키를 기본으로 둔다. 영역에는 `aria-label="알림"` 같은 이름을 붙여, 들어갔을 때 어디인지 들리게 한다.
+
+## 여러 개가 쌓이면 줄을 세운다
+
+파일 열 개를 지우면 토스트 열 개가 뜬다. 화면을 덮고, 스크린리더는 열 번 연달아 읽는다. 그래서 토스트는 큐로 다룬다. 아래 그림에서 다음을 누르면 토스트 세 개가 들어와 보이고, 읽히고, 사라지는 순서가 이어진다.
+
+<SequenceDiagram
+  caption="토스트 큐는 화면에 보일 수와 읽을 순서를 정한다"
+  actors={[
+    { id: "app", label: "앱 코드" },
+    { id: "queue", label: "토스트 큐" },
+    { id: "view", label: "토스트 영역" },
+    { id: "sr", label: "스크린리더" },
+  ]}
+  steps={[
+    {
+      from: "app",
+      to: "queue",
+      label: "push × 3",
+      title: "같은 순간 세 개가 들어온다",
+      detail: "삭제 세 건이 거의 동시에 끝났다. 큐는 같은 종류가 짧은 시간에 몰리면 하나로 합칠 수 있다.",
+      payload: "push(\"a.txt를 삭제했다\")\npush(\"b.txt를 삭제했다\")\npush(\"c.txt를 삭제했다\")",
+    },
+    {
+      from: "queue",
+      to: "queue",
+      label: "합치기",
+      title: "세 개를 하나로 묶는다",
+      detail: "\"파일 3개를 삭제했다\" 하나로 바꾼다. 묶을 수 없는 서로 다른 알림이면 화면에 보일 최대 개수(예: 3개)만 꺼내고 나머지는 기다리게 한다.",
+      payload: "{ id: \"del\", text: \"파일 3개를 삭제했다\", count: 3 }",
+    },
+    {
+      from: "queue",
+      to: "view",
+      label: "표시",
+      title: "보이는 목록에 넣는다",
+      detail: "토스트 영역은 처음부터 DOM에 있고 목록만 바뀐다. 새 토스트가 아래에서 들어오며, 이미 있던 것은 자리만 옮긴다.",
+    },
+    {
+      from: "view",
+      to: "sr",
+      label: "status 갱신",
+      title: "하던 말이 끝나면 읽는다",
+      detail: "role=\"status\"인 영역의 글자가 바뀌어서 스크린리더가 하던 말을 마친 뒤 \"파일 3개를 삭제했다\"를 읽는다. 포커스는 원래 자리에 그대로 있다.",
+    },
+    {
+      from: "view",
+      to: "queue",
+      label: "타이머 끝",
+      title: "사라지면 다음 차례를 꺼낸다",
+      detail: "마우스가 올라가 있거나 창이 가려져 있으면 타이머가 멈춰 있다. 시간이 다 되면 사라지고, 기다리던 토스트가 있으면 그다음을 꺼내 보여 준다.",
+    },
+  ]}
+/>
+
+큐를 만들 때 정할 것은 세 가지다. 화면에 동시에 몇 개까지 보일지(보통 1~3개), 같은 종류를 합칠지, 넘친 것을 기다리게 할지 버릴지. 오래된 "저장했다"를 기다리게 했다가 10초 뒤에 보여 주면 오히려 헷갈리니, 상태 알림은 최신 것 하나로 덮어쓰고 서로 다른 사건만 줄을 세우는 식으로 나눈다.
+
+```tsx
+// 토스트 영역은 앱 맨 바깥에 한 번만, 처음부터 그려 둔다
+export function ToastViewport({ toasts }: { toasts: Toast[] }) {
+  return (
+    <section aria-label="알림" className="toast-viewport">
+      <ol role="status" aria-live="polite">
+        {toasts.slice(0, 3).map((t) => (
+          <li key={t.id}>{t.text}</li> // key가 그대로면 내용만 바뀌고 다시 만들지 않는다
+        ))}
+      </ol>
+    </section>
+  );
+}
+```
+
+모바일에서는 위치도 따진다. 화면 아래 가운데는 엄지가 닿는 자리라 하단 탭 바나 주요 버튼과 겹치기 쉽다. 하단 탭이 있으면 그 위로 띄우고, 홈 바 자리는 `env(safe-area-inset-bottom)`만큼 비운다. 화면 키보드가 올라와 있으면 아래쪽 토스트가 가려지니, 입력 화면에서는 위쪽에 띄우는 쪽이 낫다. 움직임 줄이기 설정을 켠 사용자에게는 미끄러져 들어오는 대신 바로 나타나게 한다.
+
+## 모달까지 가야 하는 순간
+
+떠 있는 UI 중 가장 무거운 것이 모달이다. 툴팁, 토글팁, 메뉴, 토스트는 모두 뒤쪽 화면을 그대로 쓸 수 있게 둔다. 모달은 뒤쪽을 잠그고 "이것부터 끝내라"고 요구한다. 그래서 고르는 순서는 가벼운 쪽부터다.
+
+- 보조 설명이면 툴팁, 누를 것이 있는 설명이면 토글팁(`popover`).
+- 동작 목록이면 메뉴 버튼, 값 고르기면 select나 콤보박스.
+- 결과 알림이면 토스트, 놓치면 안 되는 오류면 화면 안에 남는 메시지.
+- 답하기 전에는 다른 일을 하면 안 되는 질문(지우면 되돌릴 수 없다, 저장하지 않은 변경이 있다)일 때만 모달.
+
+모달은 `dialog` 요소의 `showModal()`로 연다. 뒤쪽을 비활성(inert)으로 만들고, top layer에 그리고, Esc로 닫히는 동작이 기본으로 따라온다. 열 때 포커스를 어디에 둘지, 닫을 때 연 버튼으로 돌려놓는 일, 포커스를 안에 가두는 방법은 [ARIA와 키보드 포커스](/posts/aria-keyboard-focus#모달은-바깥을-잠근다)에 정리했다. 모달이 아닌 `dialog`의 `show()`나 `popover`는 뒤쪽을 잠그지 않으니, 설정 패널처럼 옆에 띄워 놓고 뒤쪽도 계속 만지는 UI에 맞다.
+
+흔한 실수는 모달 안에서 또 모달을 여는 것과, 모바일에서 화면 전체를 덮는 모달 안에 긴 폼을 넣는 것이다. 앞의 것은 Esc 한 번에 무엇이 닫히는지 헷갈리게 하고, 뒤의 것은 화면 키보드가 올라오면 입력칸이 가려진다. 긴 입력은 모달보다 별도 화면이 낫다. 이 컴포넌트들을 디자인 시스템에 넣을 때 props를 어떻게 좁게 잡을지는 [핵심 컴포넌트 API 설계](/posts/core-component-api-design)로 넘긴다.
+
+## 포털로 빼면 생기는 접근성 문제
+
+떠 있는 요소를 쌓임 맥락에서 빼내려고 React 포털로 `body` 끝에 그리는 일이 많다. 화면에서는 기준 요소 옆에 보이지만 DOM에서는 문서 맨 끝에 있다. 이 차이가 접근성 문제를 만든다.
+
+Tab 순서는 DOM 순서다. 드롭다운 버튼 다음에 Tab을 누르면 포털 안의 메뉴가 아니라 버튼 바로 다음 요소로 간다. 메뉴 안에서 Tab을 누르면 문서 맨 끝, 즉 푸터 근처로 튄다. 그래서 포털로 그린 메뉴는 열 때 포커스를 메뉴 안으로 직접 옮기고, Tab이나 Esc로 닫을 때 버튼으로 되돌려 놓아야 한다. 스크린리더로 화면을 순서대로 읽는 사람은 메뉴 내용을 문서 맨 끝에서 듣게 된다. `aria-controls`, `aria-describedby` 같은 id 참조는 DOM 위치와 상관없이 이어지니 연결 자체는 끊기지 않는다. 다만 섀도 DOM 경계를 넘는 id 참조는 동작하지 않는다.
+
+React 쪽에서는 포털 안의 이벤트가 React 트리를 따라 버블링한다는 점도 기억한다. 포털 메뉴 안의 클릭이 DOM상 바깥인데도 React 부모의 `onClick`에 잡혀서 "바깥 클릭이면 닫기" 로직이 엉킨다.
+
+`popover`와 `dialog.showModal()`은 이 문제를 덜 만든다. DOM 위치는 그대로 두고 그리기만 top layer에서 하니, 읽는 순서와 Tab 순서가 기준 요소 근처에 남는다. 지원 범위가 맞으면 포털보다 먼저 고려하고, 포털을 쓴다면 포커스 이동과 복귀를 직접 책임진다.
+
+## 현장에서 확인하는 순서
+
+떠 있는 UI 하나를 만들면 이 순서로 확인한다.
+
+1. 키보드만으로 연다. Tab으로 기준 요소에 가면 툴팁이 뜨는지, Enter로 메뉴가 열리고 첫 항목에 포커스가 가는지 본다.
+2. Esc를 누른다. 툴팁은 포커스를 그대로 둔 채 닫히고, 메뉴는 닫히면서 포커스가 버튼으로 돌아와야 한다.
+3. 마우스를 기준 요소에서 툴팁 위로 천천히 옮긴다. 중간에 사라지면 1.4.13의 위에 머물기를 어긴 것이다.
+4. 화면 가장자리 네 곳에 둔 버튼으로 열어 본다. 390px 폭에서 오른쪽 끝 버튼이 특히 잘 잘린다. 열어 둔 채 스크롤해서 따라오는지도 본다.
+5. 개발자 도구의 접근성 트리에서 기준 요소의 이름과 설명이 의도대로 계산됐는지 본다. 아이콘 버튼의 이름이 비어 있거나 같은 글자가 두 번 들어 있지 않은지 확인한다.
+6. 스크린리더(맥의 VoiceOver, 윈도의 NVDA)를 켜고 토스트를 띄운다. 포커스가 움직이지 않고, 하던 말이 끝난 뒤 한 번만 읽히는지 본다.
+7. 토스트를 연달아 다섯 번 띄운다. 화면이 덮이지 않고, 같은 알림이 다섯 번 읽히지 않는지 본다.
+
+## 다시 저장 버튼 툴팁으로
+
+처음의 툴팁은 세 가지가 동시에 틀려 있었다. 자리를 한 번만 계산해서 화면 끝에서 잘리고 스크롤을 따라가지 않았다. 마우스 올리기만 듣고 있어서 키보드와 터치에서 안 떴다. 닫는 방법이 마우스를 치우는 것뿐이었다. flip과 shift로 자리를 정하고 `autoUpdate`나 앵커 포지셔닝으로 계속 맞추고, 포커스에도 열고 Esc로 닫고, 툴팁 위로 옮겨도 남아 있게 하면 고쳐진다. 그리고 그 안에 누를 것을 넣고 싶어지면 그건 툴팁이 아니라 토글팁이다.
+
+## 면접에서 나올 만한 질문
+
+### 툴팁이 화면 끝에서 잘리지 않게 하려면 어떻게 하나요?
+
+기준 요소 위치를 읽어 원하는 방향에 놓고, 넘치면 반대 방향으로 뒤집고(flip), 가로로 넘치는 만큼은 화면 안쪽으로 민다(shift). 이 계산을 스크롤과 크기 변화 때마다 다시 해야 따로 놀지 않는다. Floating UI의 `autoUpdate`와 미들웨어로 하거나, 지원 범위가 맞으면 CSS 앵커 포지셔닝의 `position-try-fallbacks`를 쓴다.
+
+### Floating UI와 CSS 앵커 포지셔닝 중 무엇을 고르나요?
+
+앵커 포지셔닝은 자바스크립트 없이 브라우저가 레이아웃 단계에서 위치를 맞추니 가볍고 정리할 리스너도 없다. 대신 지원 브라우저가 아직 제한적이고 shift 같은 세밀한 규칙이 없다. 모든 브라우저에서 같은 동작이 필요하거나 남은 공간에 맞춘 크기 조절이 필요하면 Floating UI를 쓰고, `@supports`로 점진적으로 옮겨 갈 수 있다.
+
+### 툴팁 안에 버튼이나 링크를 넣으면 안 되는 이유는요?
+
+툴팁은 기준 요소에서 포커스가 떠나면 닫히는데, 안의 버튼으로 가려면 포커스가 떠나야 하니 키보드로는 닿을 수 없다. 스크린리더도 툴팁을 기준 요소의 설명 문자열로만 읽어 링크로 들리지 않는다. 누를 것이 필요하면 눌러서 여는 토글팁이나 popover, 다이얼로그를 쓴다.
+
+### WCAG 1.4.13은 무엇을 요구하나요?
+
+마우스 올리기나 포커스로 나타나는 콘텐츠는 포인터나 포커스를 옮기지 않고 닫을 수 있어야 하고(보통 Esc), 포인터를 그 콘텐츠 위로 옮겨도 사라지지 않아야 하며, 사용자가 거두거나 닫기 전에는 시간이 지났다고 사라지면 안 된다. 기준 요소를 벗어나는 순간 닫는 구현이 가장 흔한 위반이라 닫기 지연이나 이동 경로 허용 영역을 둔다.
+
+### 드롭다운을 만들 때 메뉴 버튼, select, 콤보박스는 어떻게 고르나요?
+
+폼에서 값을 고르면 먼저 네이티브 select, 선택지가 많아 검색이나 직접 입력이 필요하면 콤보박스, 실행할 동작 목록이면 `role="menu"`의 메뉴 버튼이다. 사이트 내비게이션 링크 목록에 menu 역할을 쓰면 스크린리더가 앱 메뉴처럼 다뤄 오히려 쓰기 어려워지니, `aria-expanded` 버튼과 링크 목록의 디스클로저 패턴을 쓴다.
+
+### 토스트가 포커스를 가져가면 안 되는 이유와 대신 어떻게 알리나요?
+
+사용자는 방금 하던 일이 있어서, 포커스를 뺏으면 이어서 친 글자가 엉뚱한 곳으로 가고 원래 자리를 다시 찾아야 한다. 대신 처음부터 DOM에 있는 `role="status"` 라이브 리전의 글자를 바꿔 스크린리더가 하던 말을 마친 뒤 읽게 한다. 이게 WCAG 4.1.3 상태 메시지의 요구이고, 키보드로 토스트 안 버튼에 가는 단축키는 따로 열어 둔다.
+
+### 토스트의 자동 사라짐 시간은 어떻게 정하나요?
+
+읽는 속도가 사람마다 달라서 고정 시간 하나로는 부족하다. 마우스를 올리거나 포커스가 있거나 창이 가려진 동안 타이머를 멈추고, 긴 글은 더 오래 보여 준다. 되돌리기처럼 누를 것이 있는 토스트는 저절로 사라지게 두지 않거나 같은 동작을 다른 곳에서도 할 수 있게 해서 WCAG 2.2.1 시간 조절 문제를 피한다.
+
+### 포털로 띄운 메뉴에서 생기는 접근성 문제는요?
+
+DOM에서는 문서 맨 끝에 있으니 Tab 순서와 스크린리더 읽기 순서가 기준 요소 근처가 아니라 문서 끝으로 간다. 그래서 열 때 포커스를 메뉴 안으로 옮기고 닫을 때 버튼으로 되돌리는 일을 직접 해야 한다. id 참조는 DOM 위치와 상관없이 이어지지만 섀도 DOM 경계는 넘지 못하고, React 이벤트는 React 트리로 버블링해서 바깥 클릭 판정이 꼬일 수 있다. popover나 dialog는 DOM 위치를 유지한 채 top layer에 그려 이 문제를 줄인다.

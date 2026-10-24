@@ -1,0 +1,505 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("bgp-basics");
+
+<EasyIntro>
+  편지를 부칠 때 우체국은 주소의 동네 이름만 보고 다음 우체국으로 넘긴다. 그런데 어느 날 옆 동네 우체국이 "그 동네 편지는 우리가 다 받을게요"라고 거짓 소문을 낸다고 해 보자.
+
+  다른 우체국들이 그 소문을 믿으면 편지가 엉뚱한 곳으로 몰려간다. 특히 "그 동네의 북쪽 절반은 우리 담당"처럼 더 자세하게 말하면, 우체국들은 자세한 말을 더 믿는 습관이 있어서 더 쉽게 속는다.
+
+  인터넷에서도 회사마다 큰 우체국 같은 장비가 있고, 이 장비들이 "이 주소 묶음은 나를 거쳐 가면 된다"는 말을 서로 주고받는다. 이 약속을 BGP라고 부른다. 누가 어떤 길을 고를지는 거리보다 회사끼리의 계약과 거쳐 가는 회사 수로 정한다.
+
+  거짓 소문을 막으려고 요즘은 "이 주소 묶음의 진짜 주인은 이 회사"라는 증명서를 공개해 두고, 장비가 소문을 들을 때마다 증명서와 맞는지 확인한다. 맞지 않는 소문은 버린다.
+
+  이 약속은 아주 크고 느리게 움직인다. 길 하나가 끊기면 온 세상 우체국이 새 길을 다시 의논해야 해서, 몇 초에서 몇 분이 걸리기도 한다.
+</EasyIntro>
+
+새벽 세 시, 해외 사용자들이 우리 서비스에 접속하면 낯선 인증서 경고가 뜬다는 제보가 들어온다. 국내에서는 멀쩡하다. traceroute를 떠 보니 우리 IP 대역으로 가는 패킷이 본 적 없는 나라의 통신사를 거쳐 그곳에서 끝난다. 서버는 아무 일도 없었다. 바뀐 건 인터넷이 우리 대역으로 가는 길이다.
+
+지어낸 이야기가 아니다. 2018년 4월, 어느 통신사가 Amazon [Route 53](/posts/route53-routing-policies)이 쓰는 IP 대역의 더 작은 조각들을 광고했고, 그 경로를 받아들인 망의 사용자들이 MyEtherWallet에 접속하려다 가짜 DNS 서버로 안내되어 피싱 사이트로 갔다. 2008년에는 한 통신사가 국내 차단용으로 만든 YouTube 대역의 경로가 바깥으로 새어 나가 전 세계 YouTube가 몇 시간 멈췄다. 두 사건 모두 BGP(Border Gateway Protocol)가 "들은 말"을 믿고 길을 정하기 때문에 일어났다.
+
+이 글은 BGP가 무엇을 주고받고, 어떻게 길을 고르고, 그 믿음이 어떻게 깨지고 어떻게 막는지를 따라간다. 패킷이 라우팅 테이블에서 다음 홉을 찾는 원리(최장 접두사 일치)는 [라우팅과 ICMP 글](/posts/layer-ip-routing-icmp)에서, 같은 IP를 여러 도시에서 광고하는 애니캐스트는 [CDN 엣지와 애니캐스트 글](/posts/cdn-edge-anycast)에서 다뤘다. 실습은 Ubuntu 24.04에서 네트워크 네임스페이스 세 개에 FRR 8.4를 띄워 라우터 세 대를 만들어 진행한다.
+
+## 인터넷은 수만 개의 망이 맺은 약속이다
+
+인터넷은 망 하나가 아니라 통신사, 클라우드, 대학, 회사가 각자 운영하는 망 수만 개가 이어진 것이다. 하나의 정책으로 운영되는 망을 AS(Autonomous System, 자율 시스템)라 하고, 각 AS는 AS 번호(ASN)를 받는다. 공인 번호는 지역 인터넷 등록 기관(아시아·태평양은 APNIC, 한국은 KISA를 거친다)이 나눠 주고, 64512~65534(16비트)와 4200000000~4294967294(32비트)는 사설 번호라 내부 망이나 실습에 쓴다. 이 글의 실습도 65001~65003을 쓴다.
+
+AS 안의 라우터들은 OSPF 같은 내부 라우팅 프로토콜로 "가장 빠른 길"을 계산한다. AS와 AS 사이에서는 그럴 수 없다. 남의 망 안의 링크 속도를 알 수도 없고, 알아도 그대로 따를 이유가 없다. 돈을 내는 상위 통신사로 보낼지, 무료로 트래픽을 교환하기로 한 상대(피어링)로 보낼지는 계약과 비용의 문제다. 그래서 AS 사이의 프로토콜은 경로 계산기가 아니라 정책을 표현하는 도구로 만들어졌고, 그게 BGP다. 지금 인터넷에서 쓰는 건 버전 4(RFC 4271)이고, 전 세계 IPv4 경로만 100만 개 안팎이다.
+
+BGP가 주고받는 말은 단순하다. "198.51.100.0/24로 가려면 나를 거쳐라. 그 길은 AS 65002, 65001을 지난다." 이 광고를 받은 라우터는 같은 대역에 대한 여러 광고 중 하나를 고르고, 고른 것만 다시 이웃에게 자기 AS 번호를 앞에 붙여 전한다. 각 라우터는 목적지까지의 전체 지도가 아니라 "이웃들이 말해 준 AS 경로 목록"만 안다. 이런 방식을 경로 벡터(path vector)라 부른다.
+
+## 두 라우터가 이웃이 되는 과정
+
+BGP 이웃(피어)은 자동으로 찾지 않는다. 양쪽 설정에 상대의 IP와 AS 번호를 직접 적어야 한다. 그리고 TCP 179번 포트로 연결을 맺고 그 위에서 메시지를 주고받는다.
+
+<SequenceDiagram
+  caption="BGP 세션이 맺어지고, 경로를 주고받고, 끊기는 과정"
+  actors={[
+    { id: "r2", label: "r2 (AS 65002)" },
+    { id: "r3", label: "r3 (AS 65003)" },
+  ]}
+  steps={[
+    {
+      from: "r2",
+      to: "r3",
+      label: "TCP SYN → 179",
+      title: "TCP 연결부터 맺는다",
+      detail: "설정에 적힌 이웃 주소로 179번 포트에 접속한다. 양쪽이 동시에 시도하면 하나만 남기고 정리한다.",
+      payload: "10.0.23.2:34990 → 10.0.23.1:179",
+    },
+    {
+      from: "r2",
+      to: "r3",
+      label: "OPEN",
+      title: "서로의 신분을 밝힌다",
+      detail: "자기 AS 번호, 라우터 ID, 원하는 hold time, 지원 기능을 보낸다. AS 번호가 설정과 다르면 여기서 끊는다.",
+      payload: "My AS 65002, Hold Time 180, BGP ID 2.2.2.2",
+    },
+    {
+      from: "r3",
+      to: "r2",
+      label: "OPEN + KEEPALIVE",
+      title: "상대도 OPEN을 보내고 받아들인다",
+      detail: "hold time은 두 값 중 작은 쪽으로 정해진다. KEEPALIVE가 오가면 Established 상태가 된다.",
+    },
+    {
+      from: "r3",
+      to: "r2",
+      label: "UPDATE",
+      title: "경로를 광고하거나 거둔다",
+      detail: "처음엔 가진 경로를 전부 보내고, 이후로는 바뀐 것만 보낸다. 광고(NLRI)와 철회(withdrawn)가 같은 메시지에 들어간다.",
+      payload: "NLRI 198.51.100.0/24\nAS_PATH 65003\nNEXT_HOP 10.0.23.1",
+    },
+    {
+      from: "r2",
+      to: "r3",
+      label: "KEEPALIVE",
+      title: "바뀐 게 없으면 살아 있다는 신호만",
+      detail: "기본은 60초마다 보낸다. hold time(기본 180초) 동안 아무 메시지도 안 오면 상대가 죽은 것으로 본다.",
+    },
+    {
+      from: "r2",
+      to: "r3",
+      label: "NOTIFICATION",
+      title: "문제가 생기면 이유를 적어 끊는다",
+      detail: "hold timer가 끝났거나 잘못된 메시지를 받으면 오류 코드를 보내고 TCP를 닫는다. 그 이웃에게 받은 경로는 모두 지운다.",
+      payload: "Hold Timer Expired",
+    },
+  ]}
+/>
+
+TCP 위에 올린 이유가 있다. BGP는 처음에 수십만 개 경로를 한꺼번에 보내고, 그 뒤로는 바뀐 것만 보낸다. 바뀐 것만 보내려면 앞에 보낸 메시지가 빠짐없이, 순서대로 도착했다는 보장이 있어야 한다. 이 일을 TCP에 맡겼기 때문에 BGP는 재전송도 순서도 신경 쓰지 않고, 주기적으로 전체 표를 다시 보내지도 않는다. 대신 TCP가 끊기면 세션이 끝나고, 그 이웃에게 받은 경로가 한꺼번에 사라진다.
+
+실습 망은 이렇게 만들었다. r1(AS 65001)이 198.51.100.0/24의 주인, r2(AS 65002)가 둘 사이의 통신사, r3(AS 65003)는 나중에 남의 대역을 광고할 망이다.
+
+```bash
+# FRR 설치(Ubuntu 24.04 저장소는 8.4). 네임스페이스마다 zebra와 bgpd를 따로 띄운다
+sudo apt install -y frr
+sudo ip netns add b25r1; sudo ip netns add b25r2; sudo ip netns add b25r3
+sudo ip link add b25a type veth peer name b25b      # r1 ↔ r2
+sudo ip link set b25a netns b25r1; sudo ip link set b25b netns b25r2
+sudo ip -n b25r1 addr add 10.0.12.1/30 dev b25a; sudo ip -n b25r1 link set b25a up
+sudo ip -n b25r2 addr add 10.0.12.2/30 dev b25b; sudo ip -n b25r2 link set b25b up
+# r2 ↔ r3 도 같은 식으로 10.0.23.0/30. r1의 lo에는 198.51.100.1/24
+sudo ip netns exec b25r2 /usr/lib/frr/zebra -d -N b25r2 -f /etc/frr/b25r2/frr.conf
+sudo ip netns exec b25r2 /usr/lib/frr/bgpd  -d -N b25r2 -f /etc/frr/b25r2/frr.conf
+```
+
+r2의 설정은 몇 줄이다.
+
+```text
+hostname r2
+router bgp 65002
+ bgp router-id 2.2.2.2
+ neighbor 10.0.12.1 remote-as 65001
+ neighbor 10.0.23.1 remote-as 65003
+```
+
+세션 상태를 보자.
+
+```bash
+sudo vtysh -N b25r2 -c "show bgp summary"
+```
+
+```text
+Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc
+10.0.12.1       4      65001         3         3        0    0    0 00:00:08     (Policy) (Policy) N/A
+10.0.23.1       4      65003         3         3        0    0    0 00:00:08     (Policy) (Policy) N/A
+```
+
+세션은 붙었는데(Up/Down이 시간으로 찍힌다) 받은 경로 칸에 숫자 대신 `(Policy)`가 있다. FRR은 RFC 8212를 따라 기본으로 eBGP 이웃에 들어오고 나가는 정책(route-map)을 명시하지 않으면 아무 경로도 받지도 보내지도 않는다. 정책 없이 붙였다가 실수로 남의 경로를 전 세계에 흘리는 사고를 막으려는 기본값이다. 처음 FRR을 써 보는 사람이 가장 먼저 만나는 벽이다. 실습에서는 모든 경로를 허용하는 route-map을 양방향에 걸었다.
+
+```text
+route-map ALL permit 10
+router bgp 65002
+ address-family ipv4 unicast
+  neighbor 10.0.12.1 route-map ALL in
+  neighbor 10.0.12.1 route-map ALL out
+```
+
+```text
+Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt Desc
+10.0.12.1       4      65001        13        11        0    0    0 00:00:19            1        1 N/A
+10.0.23.1       4      65003        13        11        0    0    0 00:00:19            0        1 N/A
+```
+
+이제 r1에게서 경로 1개를 받았고, r3에게 1개를 보냈다. State/PfxRcd 칸이 숫자면 Established다. 숫자 대신 `Active`나 `Connect`가 보이면 TCP 연결부터 안 되는 것이다.
+
+## eBGP와 iBGP는 규칙이 다르다
+
+다른 AS의 라우터와 맺는 세션이 eBGP, 같은 AS 안의 라우터끼리 맺는 세션이 iBGP다. 실습의 세션은 전부 eBGP다. 같은 프로토콜인데 두 가지 규칙이 갈린다.
+
+eBGP로 경로를 넘길 때는 AS_PATH 앞에 자기 AS 번호를 붙이고, NEXT_HOP을 자기 주소로 바꾼다. 받은 쪽은 AS_PATH에 자기 번호가 있으면 그 경로를 버린다. 이게 AS 사이의 루프 방지다. 실습에서 r2는 자기가 고른 경로(AS 65001에서 온 것)를 r1에게도 광고했지만, r1의 표에는 자기 경로 하나만 있다. 돌아온 경로의 AS_PATH에 65001이 들어 있어 버렸기 때문이다. eBGP는 기본적으로 바로 옆에 붙은 이웃과만 맺는다(패킷 TTL 1). 루프백 주소끼리 맺으려면 `ebgp-multihop`을 따로 준다.
+
+iBGP는 AS_PATH를 바꾸지 않는다. 같은 AS 안이라 붙일 번호가 없기 때문이다. 그러면 AS 안에서 루프를 막을 장치가 없어지니, 대신 "iBGP로 받은 경로는 다른 iBGP 이웃에게 넘기지 않는다"는 규칙을 둔다. 그래서 AS 안의 BGP 라우터는 서로 전부 직접 세션을 맺어야(full mesh) 모든 경로가 퍼진다. 라우터가 n대면 세션이 n(n-1)/2개다. 100대면 4,950개다. 이걸 피하려고 경로 반사기(route reflector)를 두고 모두가 반사기와만 맺게 한다. 쿠버네티스의 Calico가 노드가 많아지면 노드끼리 맺는 기본 메시 대신 반사기를 쓰라고 하는 것도 같은 이유다.
+
+iBGP는 NEXT_HOP도 기본으로 바꾸지 않는다. 경계 라우터가 eBGP로 받은 경로를 iBGP로 넘기면, 안쪽 라우터는 "다음 홉은 바깥 통신사 라우터 주소"라는 경로를 받는데 그 주소로 가는 길을 모르면 경로를 못 쓴다. 경계 라우터에 `next-hop-self`를 거는 이유다.
+
+## 같은 대역에 경로가 여럿이면 하나를 고른다
+
+r3에게도 같은 198.51.100.0/24를 광고하게 했다. r2는 이제 같은 목적지로 가는 경로를 둘 받는다.
+
+```bash
+sudo vtysh -N b25r2 -c "show ip bgp"
+sudo vtysh -N b25r2 -c "show ip bgp 198.51.100.0/24"   # 한 대역의 후보와 고른 이유
+```
+
+```text
+   Network          Next Hop            Metric LocPrf Weight Path
+*  198.51.100.0/24  10.0.23.1                0             0 65003 i
+*>                  10.0.12.1                0             0 65001 i
+```
+
+```text
+Paths: (2 available, best #2, table default)
+  65003
+    10.0.23.1 from 10.0.23.1 (3.3.3.3)
+      Origin IGP, metric 0, valid, external
+  65001
+    10.0.12.1 from 10.0.12.1 (1.1.1.1)
+      Origin IGP, metric 0, valid, external, best (Older Path)
+```
+
+`*`는 쓸 수 있는 경로, `>`는 고른 경로다. 줄 끝의 `i`는 ORIGIN 속성(IGP, 즉 `network` 문으로 광고한 것)이다. 두 경로는 AS 하나씩을 거치니 길이가 같고, 다른 속성도 같아서 끝까지 내려가 "먼저 받은 경로"(Older Path)로 정해졌다. 상세 출력의 괄호 안이 판단 근거라, 왜 그 경로가 골라졌는지 궁금할 때 가장 먼저 보는 곳이다.
+
+판단 순서는 구현마다 조금 다르지만 FRR 기준으로 앞부분은 이렇다.
+
+1. weight: 그 라우터 혼자만 쓰는 값(Cisco와 FRR의 확장). 높을수록 좋다. 직접 광고한 경로는 32768이다.
+2. LOCAL_PREF: 같은 AS 안에서 공유하는 선호도. 높을수록 좋다. 기본 100.
+3. 직접 만든 경로인가.
+4. AS_PATH 길이: 짧을수록 좋다.
+5. ORIGIN: IGP, EGP, incomplete(`?`) 순.
+6. MED: 이웃 AS가 "이 입구로 들어와 달라"고 붙이는 값. 낮을수록 좋다. 기본으로는 같은 이웃 AS에게서 온 경로끼리만 비교한다.
+7. eBGP로 받은 경로가 iBGP보다 낫다.
+8. 다음 홉까지의 내부 비용이 작은 쪽.
+9. 먼저 받은 경로, 라우터 ID가 작은 쪽.
+
+순서가 중요하다. 앞 단계에서 갈리면 뒤는 보지 않는다. 직접 확인해 봤다. r1이 광고할 때 자기 번호를 두 번 더 붙여(AS_PATH prepend) 경로를 일부러 길게 만들었다.
+
+```text
+route-map PREPEND permit 10
+ set as-path prepend 65001 65001
+router bgp 65001
+ address-family ipv4 unicast
+  neighbor 10.0.12.2 route-map PREPEND out
+```
+
+```text
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 198.51.100.0/24  10.0.23.1                0             0 65003 i
+*                   10.0.12.1                0             0 65001 65001 65001 i
+```
+
+```text
+      Origin IGP, metric 0, valid, external, best (AS Path)
+```
+
+4단계에서 갈렸다. r3 쪽이 짧아서 이겼다. prepend는 "이 입구로는 덜 들어와 달라"고 남의 AS에게 부탁하는 거의 유일한 방법이라 실무에서 자주 쓴다. 회선이 두 개인 회사가 백업 회선 쪽 광고에 prepend를 거는 식이다. 이번엔 r2가 정책으로 r1에게서 온 경로의 LOCAL_PREF를 200으로 올렸다.
+
+```text
+route-map FROM-R1 permit 10
+ set local-preference 200
+router bgp 65002
+ address-family ipv4 unicast
+  neighbor 10.0.12.1 route-map FROM-R1 in
+```
+
+```text
+   Network          Next Hop            Metric LocPrf Weight Path
+*  198.51.100.0/24  10.0.23.1                0             0 65003 i
+*>                  10.0.12.1                0    200      0 65001 65001 65001 i
+```
+
+```text
+      Origin IGP, metric 0, localpref 200, valid, external, best (Local Pref)
+```
+
+AS_PATH가 세 배로 길어도 2단계에서 끝났다. 남이 붙인 prepend보다 내 AS의 정책이 먼저다. 이게 통신사가 "돈 받는 고객 경로 > 무료 피어링 경로 > 돈 내는 상위 통신사 경로" 순으로 LOCAL_PREF를 주는 방식이고, prepend가 상대 통신사 정책 앞에서 무력해지는 이유다. 같은 시점에 r3의 표를 보면 r2에게 받은 경로에 LocPrf 칸이 비어 있다. LOCAL_PREF는 AS 밖으로 나가지 않는 속성이라 eBGP로는 전달되지 않는다.
+
+## 더 자세한 광고가 이기는 이유
+
+이제 처음 장면을 재현한다. 위의 LOCAL_PREF 실험을 하기 전, r2가 r1의 /24를 고르던 상태로 돌아가서, r3가 같은 대역을 둘로 쪼갠 198.51.100.0/25와 198.51.100.128/25를 광고하게 했다. r3의 루프백에는 198.51.100.1도 붙여 두었다. 진짜 서버인 척하는 가짜 서버다.
+
+```text
+   Network          Next Hop            Metric LocPrf Weight Path
+*  198.51.100.0/24  10.0.23.1                0             0 65003 i
+*>                  10.0.12.1                0             0 65001 i
+*> 198.51.100.0/25  10.0.23.1                0             0 65003 i
+*> 198.51.100.128/25
+                    10.0.23.1                0             0 65003 i
+```
+
+BGP 입장에서 /24와 /25는 서로 다른 목적지다. /24는 여전히 r1이 정답이다. 그런데 커널 라우팅 테이블에는 셋이 다 들어가고, 패킷을 보낼 때는 가장 길게 맞는 경로가 이긴다.
+
+```bash
+sudo ip -n b25r2 route | grep 198
+sudo ip netns exec b25r2 ip route get 198.51.100.1
+```
+
+```text
+198.51.100.0/25 nhid 8 via 10.0.23.1 dev b25d proto bgp metric 20
+198.51.100.0/24 nhid 6 via 10.0.12.1 dev b25b proto bgp metric 20
+198.51.100.128/25 nhid 8 via 10.0.23.1 dev b25d proto bgp metric 20
+198.51.100.1 via 10.0.23.1 dev b25d src 10.0.23.2 uid 0
+```
+
+198.51.100.1로 가는 패킷이 r3로 간다. 경로 선택 순서의 어느 단계도 이걸 막지 못한다. 선택은 같은 대역 안에서만 일어나고, 더 작은 조각은 아예 다른 경쟁이기 때문이다. YouTube 사건(/22 대신 /24)과 Route 53 사건(더 작은 조각들)이 정확히 이 모양이었다. 아래 그림에서 다음을 누르면 같은 일이 단계별로 펼쳐진다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="더 작은 조각을 광고한 쪽으로 패킷이 빨려 간다. 출처를 거르면 다시 돌아온다"
+  zones={[
+    { id: "as1", label: "AS 65001 (주인)", x: 8, y: 200, w: 184, h: 92, tone: "private" },
+    { id: "as3", label: "AS 65003", x: 208, y: 200, w: 184, h: 92, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 200, y: 30, icon: "client" },
+    { id: "r2", label: "r2", sub: "AS 65002", x: 200, y: 120, icon: "router" },
+    { id: "r1", label: "r1", sub: "198.51.100.0/24", x: 100, y: 250, icon: "router" },
+    { id: "r3", label: "r3", sub: "가짜 .1", x: 300, y: 250, icon: "router" },
+  ]}
+  links={[
+    { from: "user", to: "r2" },
+    { from: "r2", to: "r1", label: "eBGP" },
+    { from: "r2", to: "r3", label: "eBGP" },
+  ]}
+  steps={[
+    {
+      path: ["r1", "r2"],
+      packet: "UPDATE",
+      title: "주인이 /24를 광고한다",
+      detail: "r1이 198.51.100.0/24를 광고하고 r2는 이 경로를 고른다.",
+      payload: "198.51.100.0/24 AS_PATH 65001",
+    },
+    {
+      path: ["user", "r2", "r1"],
+      packet: "SYN",
+      title: "평소 패킷은 주인에게 간다",
+      detail: "r2의 커널 테이블에서 198.51.100.1과 가장 길게 맞는 경로는 /24, 다음 홉은 r1이다.",
+    },
+    {
+      path: ["r3", "r2"],
+      packet: "UPDATE",
+      highlight: ["as3"],
+      title: "다른 망이 /25 두 개를 광고한다",
+      detail: "BGP에게 /25는 새 목적지라 경쟁 없이 바로 채택된다. /24 경로는 그대로 r1이다.",
+      payload: "198.51.100.0/25   AS_PATH 65003\n198.51.100.128/25 AS_PATH 65003",
+    },
+    {
+      path: ["user", "r2", "r3"],
+      packet: "SYN",
+      title: "패킷은 더 긴 접두사를 따른다",
+      detail: "/25가 /24보다 길게 맞으니 패킷이 r3로 간다. r3의 가짜 서버가 대신 답한다.",
+      payload: "198.51.100.1 via 10.0.23.1 dev b25d",
+    },
+    {
+      path: ["r3", "r2"],
+      packet: "UPDATE",
+      blocked: true,
+      title: "r2가 출처를 확인해 버린다",
+      detail: "이 대역의 주인은 AS 65001이다. AS 65003에서 온 광고는 받지 않는 필터를 건다.",
+      payload: "ip prefix-list FROM-AS65003 seq 5 deny 198.51.100.0/24 le 32",
+    },
+    {
+      path: ["user", "r2", "r1"],
+      packet: "SYN",
+      title: "패킷이 주인에게 돌아온다",
+      detail: "/25 경로가 사라지고 /24만 남는다. 다음 홉은 다시 r1이다.",
+    },
+  ]}
+/>
+
+r2에서 r3로부터 오는 그 대역의 광고를 막는 필터를 걸었다.
+
+```text
+ip prefix-list FROM-AS65003 seq 5 deny 198.51.100.0/24 le 32
+ip prefix-list FROM-AS65003 seq 10 permit 0.0.0.0/0 le 24
+router bgp 65002
+ address-family ipv4 unicast
+  neighbor 10.0.23.1 prefix-list FROM-AS65003 in
+```
+
+`le 32`는 "/24와 그보다 작은 조각 전부"라는 뜻이다. 두 번째 줄은 나머지를 받되 /24보다 작은 조각은 받지 않는다. 인터넷에서는 IPv4 /24(IPv6 /48)보다 작은 조각은 받지 않는 것이 관례라서, 이 줄을 빼먹으면 /25 하나로 누구나 남의 대역을 가로챌 수 있다. 필터를 건 뒤 다시 받게 하고 확인했다.
+
+```bash
+sudo vtysh -N b25r2 -c "clear ip bgp 10.0.23.1 soft in"   # 세션을 끊지 않고 정책만 다시 적용
+sudo ip netns exec b25r2 ip route get 198.51.100.1
+```
+
+```text
+   Network          Next Hop            Metric LocPrf Weight Path
+*> 10.0.12.0/30     0.0.0.0                  0         32768 ?
+*> 10.0.23.0/30     0.0.0.0                  0         32768 ?
+*> 198.51.100.0/24  10.0.12.1                0             0 65001 i
+```
+
+```text
+198.51.100.1 via 10.0.12.1 dev b25b src 10.0.12.2 uid 0
+```
+
+맨 위 두 줄의 `?`는 r2가 `redistribute connected`로 자기 링크 대역을 광고한 것이라 ORIGIN이 incomplete로 찍혔다. 필터 덕에 패킷이 r1으로 돌아왔다. 그런데 이 필터는 r2의 운영자가 "198.51.100.0/24의 주인은 65001"이라는 사실을 알고 있어서 쓸 수 있었다. 인터넷의 수만 개 AS가 서로의 대역 주인을 손으로 관리할 수는 없다. 그 사실을 공개적으로, 위조할 수 없게 적어 두는 장치가 RPKI다.
+
+## 출처를 증명하는 RPKI
+
+RPKI(Resource Public Key Infrastructure)는 IP 대역을 나눠 준 등록 기관이 인증서를 발급하고, 대역의 주인이 그 인증서로 ROA(Route Origin Authorization)를 서명해 공개하는 구조다. ROA에는 세 가지가 적힌다. 대역, 그 대역을 광고해도 되는 AS 번호, 허용하는 가장 작은 조각 길이(maxLength)다.
+
+라우터가 ROA 파일을 직접 받지는 않는다. Routinator, rpki-client, FORT 같은 검증기가 저장소에서 ROA를 내려받아 서명을 확인하고, 그 결과(대역, 길이, AS 번호 목록)를 RTR 프로토콜로 라우터에 넘긴다. 라우터는 광고를 받을 때마다 출처 검증(ROV, RFC 6811)을 해서 셋 중 하나로 판정한다.
+
+- Valid: 광고된 대역을 덮는 ROA가 있고, 그중 하나가 출처 AS와 같고 길이도 maxLength 이하다.
+- Invalid: 덮는 ROA는 있는데 AS가 다르거나 maxLength보다 작은 조각이다.
+- NotFound: 덮는 ROA가 하나도 없다. 아직 ROA를 만들지 않은 대역이 여기에 든다.
+
+Invalid를 버리는 것만으로 앞의 실습 같은 하이재킹 대부분이 막힌다. 판정은 단순한 규칙이라 직접 짜 볼 수 있다. 출처 AS가 0인 ROA는 "이 대역은 아무도 광고하면 안 된다"는 뜻이라 어떤 출처와도 맞지 않는다.
+
+<CodePlayground
+  caption="RPKI 출처 검증(ROV) 판정"
+  functionName="rovState"
+  initialCode={`function rovState(route, roas) {
+  // route: { prefix: "198.51.100.0/25", originAs: 65003 }
+  // roas: [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }, ...]
+  // "valid" | "invalid" | "notfound"
+  return "notfound";
+}`}
+  solution={`function rovState(route, roas) {
+  const parse = (cidr) => {
+    const [ip, len] = cidr.split("/");
+    const n = ip.split(".").reduce((acc, o) => acc * 256 + Number(o), 0);
+    return { n, len: Number(len) };
+  };
+  const covers = (outer, inner) => {
+    if (outer.len > inner.len) return false;
+    const size = 2 ** (32 - outer.len);
+    return Math.floor(outer.n / size) === Math.floor(inner.n / size);
+  };
+  const r = parse(route.prefix);
+  const covering = roas.filter((roa) => covers(parse(roa.prefix), r));
+  if (covering.length === 0) return "notfound";
+  const ok = covering.some(
+    (roa) => roa.asn !== 0 && roa.asn === route.originAs && r.len <= roa.maxLength,
+  );
+  return ok ? "valid" : "invalid";
+}`}
+  tests={[
+    { label: "주인의 /24", args: [{ prefix: "198.51.100.0/24", originAs: 65001 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }]], expected: "valid" },
+    { label: "남의 AS가 같은 /24", args: [{ prefix: "198.51.100.0/24", originAs: 65003 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }]], expected: "invalid" },
+    { label: "주인이라도 maxLength 초과", args: [{ prefix: "198.51.100.0/25", originAs: 65001 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }]], expected: "invalid" },
+    { label: "maxLength 25면 허용", args: [{ prefix: "198.51.100.0/25", originAs: 65001 }, [{ prefix: "198.51.100.0/24", maxLength: 25, asn: 65001 }]], expected: "valid" },
+    { label: "ROA 없는 대역", args: [{ prefix: "203.0.113.0/24", originAs: 65003 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }]], expected: "notfound" },
+    { label: "ROA보다 큰 대역", args: [{ prefix: "198.51.0.0/16", originAs: 65001 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }]], expected: "notfound" },
+    { label: "AS 0 ROA", args: [{ prefix: "192.0.2.0/24", originAs: 65010 }, [{ prefix: "192.0.2.0/24", maxLength: 24, asn: 0 }]], expected: "invalid" },
+    {
+      label: "ROA 여러 개 중 하나와 맞음",
+      args: [{ prefix: "198.51.100.128/25", originAs: 65003 }, [{ prefix: "198.51.100.0/24", maxLength: 24, asn: 65001 }, { prefix: "198.51.100.128/25", maxLength: 25, asn: 65003 }]],
+      expected: "valid",
+    },
+  ]}
+/>
+
+세 번째 테스트가 실무에서 자주 나는 사고다. ROA를 만들 때 maxLength를 /24로 적어 놓고, 나중에 트래픽 조절이나 DDoS 방어 업체를 위해 /25를 광고하면 자기 광고가 Invalid로 버려진다. 반대로 maxLength를 넉넉히 /32까지 열어 두면, 공격자가 출처 AS를 내 번호로 위조해 작은 조각을 광고할 때(AS_PATH 맨 끝에 내 번호를 붙이는 식) Valid가 되어 버린다. 그래서 RFC 9319는 실제로 광고하는 길이만 ROA에 적으라고 권한다.
+
+ROV의 한계도 분명하다. 출처만 확인하지 경로 전체를 확인하지 않는다. 2019년 6월처럼 한 통신사가 고객에게서 받은 경로를 상위 통신사로 잘못 흘리는 경로 유출(route leak)은 출처 AS가 진짜라서 Valid로 통과한다. 경로 전체를 서명하는 BGPsec(RFC 8205)은 표준은 있지만 거의 배포되지 않았고, 이웃 관계를 등록해 유출을 잡는 ASPA가 표준화 중이다. 당장 할 수 있는 건 내 대역의 ROA를 만들어 두는 것, 고객에게서 받는 경로를 그 고객이 가진 대역으로만 제한하는 것, /24보다 작은 조각을 받지 않는 것이다. 대형 통신사와 클라우드는 이미 Invalid를 버리고 있다.
+
+## 길이 바뀌면 왜 늦게 퍼지나
+
+BGP는 느리다는 평을 듣는다. 이유가 몇 겹이다.
+
+첫째, 죽음을 늦게 안다. 링크가 끊겨 인터페이스가 내려가면 바로 알지만, 중간 스위치나 상대 프로세스가 멈추면 hold time이 끝나야 안다. 기본 hold time이 180초다. 실습에서 r2와 r3 사이를 keepalive 3초, hold 9초로 줄이고 r3에서 179번 포트를 막았다.
+
+```bash
+sudo vtysh -N b25r2 -c "conf t" -c "router bgp 65002" -c "neighbor 10.0.23.1 timers 3 9"
+sudo ip netns exec b25r3 iptables -A INPUT -p tcp --dport 179 -j DROP   # BGP 패킷만 버린다
+sudo ip netns exec b25r3 iptables -A INPUT -p tcp --sport 179 -j DROP
+sudo vtysh -N b25r2 -c "show ip bgp neighbors 10.0.23.1" | grep -E "BGP state|Last reset"
+```
+
+```text
+  BGP state = Connect
+  Last reset 00:00:01,  Notification sent (Hold Timer Expired)
+```
+
+9초 동안 아무것도 못 받자 r2가 Hold Timer Expired를 보내고 세션을 내렸고, 다시 TCP를 맺으려고 `Connect` 상태에서 맴돈다. 운영에서는 hold time을 마구 줄이는 대신 BFD(양방향 전달 감지, 수백 ms 간격으로 가벼운 패킷을 주고받는 별도 프로토콜)를 BGP에 붙여 1초 안에 죽음을 알게 한다. Direct Connect도 BFD를 권한다.
+
+둘째, 경로를 찾아 헤맨다(path hunting). 어떤 대역이 아예 사라지면, 각 라우터는 그 대역을 거둔다는 소식을 받기 전에 아직 남아 있는 다른 이웃의 옛 경로로 갈아탄다. 그 경로도 곧 사라지고, 또 다음 경로로 갈아탄다. 철회가 인터넷 전체에 퍼지는 동안 점점 긴 가짜 대안을 하나씩 시도하며 업데이트가 쏟아진다. 새 경로가 생기는 것보다 경로가 사라지는 쪽이 훨씬 오래 걸리는 이유다.
+
+셋째, 일부러 늦춘다. 같은 대역의 업데이트를 너무 자주 보내지 않도록 최소 광고 간격(MRAI)을 두는 구현이 있다. RFC 4271은 eBGP에 30초를 제안했고, 구현마다 기본값이 다르다. 짧게 오르내리는 경로를 한동안 무시하는 route flap damping도 있다. 넷째, 표 자체가 크다. 경로 100만 개를 처리하고 다시 고르는 데는 라우터 CPU 시간이 든다.
+
+2021년 10월 Facebook 장애가 이 느림과 정반대 방향의 예다. 설정 변경 중 백본이 끊기자, 자기 DNS 서버들이 데이터센터와 연결이 끊긴 걸 감지하고 스스로 DNS 대역 광고를 거뒀다. 철회는 몇 분 만에 전 세계로 퍼졌고, 사람들이 복구하러 들어갈 내부 도구도 같은 망 위에 있어서 몇 시간이 걸렸다. BGP 광고는 서비스의 문을 여닫는 스위치라서, 광고를 자동으로 거두는 장치는 그게 어떤 경우에 한꺼번에 일어나는지까지 따져야 한다.
+
+## 서비스 개발자가 BGP를 만나는 곳
+
+통신사에서 일하지 않아도 BGP는 의외로 가까이 있다.
+
+애니캐스트가 첫째다. CDN, 공용 DNS, DDoS 방어 서비스는 같은 대역을 수십 개 도시에서 광고하고, BGP가 사용자마다 가까운 곳을 고르게 한다. 원리와 TCP가 끊기는 경우는 [CDN 엣지와 애니캐스트 글](/posts/cdn-edge-anycast)에 있다.
+
+클라우드와 회사 망을 잇는 곳이 둘째다. AWS Direct Connect의 프라이빗 가상 인터페이스는 전용선 위에 VLAN을 하나 만들고 그 위에서 회사 라우터와 AWS가 eBGP를 맺는다. AWS 쪽은 VPC 대역을 광고하고, 회사는 사내 대역을 광고한다. 회사 쪽에서 프라이빗 가상 인터페이스로 광고할 수 있는 경로 수에는 한도(100개)가 있어서, 그걸 넘으면 세션이 내려간다. 사내 대역을 잘게 쪼개 그대로 광고하다 어느 날 한도를 넘겨 전용선이 통째로 끊기는 일이 생긴다. 큰 대역으로 묶어(요약) 광고하는 게 기본이다. Site-to-Site VPN도 동적 라우팅을 고르면 터널마다 BGP 세션을 맺는다. VPN 자체는 [VPN 글](/posts/vpn-ipsec-wireguard)에서 다뤘다.
+
+전용선과 VPN을 함께 두면 같은 대역의 경로가 두 길로 들어온다. AWS는 같은 대역이면 Direct Connect를 VPN보다 먼저 쓴다. 전용선이 두 개라면 앞에서 본 prepend로 들어오는 방향을, 그리고 AWS가 정해 둔 BGP 커뮤니티 값(경로에 붙이는 태그. 예를 들어 `7224:7300`은 높은 선호도)으로 AWS가 회사로 보내는 방향을 조절한다.
+
+쿠버네티스가 셋째다. 온프레미스 클러스터에는 클라우드 로드 밸런서가 없으니, `LoadBalancer` 타입 서비스에 IP를 주려면 MetalLB 같은 도구가 필요하다. MetalLB의 BGP 모드는 각 노드의 speaker가 랙 스위치와 BGP를 맺고 서비스 IP를 /32로 광고한다. 여러 노드가 같은 IP를 광고하면 스위치가 ECMP(같은 비용의 경로 여러 개로 흐름 나누기)로 연결을 흩는다. 노드 하나가 빠지면 스위치가 해시를 다시 계산하면서 다른 노드로 옮겨진 기존 연결이 끊길 수 있다는 점은 알고 써야 한다. 서비스 타입은 [쿠버네티스 Service 글](/posts/k8s-service-types)에 있다. Calico는 Pod 대역 경로를 BGP로 노드끼리, 또는 랙 스위치와 주고받아 터널 없이 Pod 트래픽을 보낸다. 그 장단점은 [Pod 네트워크 글](/posts/k8s-cni-pod-network)에서 다뤘다.
+
+## 현장에서 BGP를 의심하는 순간
+
+내 서비스가 BGP 사고에 휘말렸는지 볼 때는 바깥에서 본 경로부터 확인한다. 내 망 안에서는 멀쩡하기 때문이다. RIPEstat, bgp.tools, Cloudflare Radar 같은 공개 서비스는 전 세계 수집 지점에서 본 내 대역의 출처 AS와 경로를 보여 주고, 내 대역의 더 작은 조각이나 다른 출처 AS가 보이면 알림을 보내 주기도 한다. 대역을 가진 회사라면 이 알림을 켜 두는 것만으로 새벽 세 시의 제보보다 먼저 안다.
+
+내가 운영하는 라우터라면 순서는 이렇다. `show bgp summary`로 세션이 Established인지와 받은 경로 수가 평소와 같은지 본다. 숫자가 갑자기 줄었으면 상대가 경로를 거뒀거나 내 필터가 바뀐 것이다. 다음으로 문제 대역을 `show ip bgp 대역`으로 보고 후보 경로와 `best (...)`의 이유를 읽는다. 마지막으로 커널 테이블(`ip route get`)에서 더 긴 접두사가 끼어들었는지 본다. BGP 표의 정답과 실제 패킷의 길이 다를 수 있다는 건 앞의 실습에서 봤다.
+
+흔한 실수도 정리해 둔다. FRR에서 eBGP 정책을 안 걸어 `(Policy)`에서 멈춘다. 받는 쪽 필터 없이 고객 세션을 열어 고객의 실수를 인터넷에 그대로 전한다. 주소를 바꾸는 작업 전에 ROA를 고치지 않아 내 광고가 Invalid로 버려진다. 전용선에 사내 경로를 잘게 광고하다 한도를 넘긴다. 방화벽에서 TCP 179를 막아 놓고 BGP 설정만 들여다본다. 세션이 `Active`나 `Connect`에서 맴돌면 BGP보다 TCP부터 의심한다.
+
+## 들은 말을 믿는 프로토콜
+
+BGP는 이웃이 "이 대역은 나를 거쳐 가라"고 말해 주는 것을 TCP 위에서 받아 적고, 같은 대역의 후보 중 LOCAL_PREF, AS_PATH 길이 같은 순서로 하나를 고르는 프로토콜이다. 고른 결과는 커널 테이블에 들어가고, 실제 패킷은 그중 가장 길게 맞는 경로를 따른다. 그래서 누군가 더 작은 조각을 광고하면 선택 순서와 무관하게 패킷이 빨려 간다. 이 믿음을 보완하는 게 접두사 필터와 RPKI의 출처 검증이고, 경로 유출처럼 출처가 진짜인 사고는 아직 사람과 정책이 막는다.
+
+## 면접에서 나올 만한 질문
+
+### BGP는 무엇이고 OSPF 같은 내부 라우팅 프로토콜과 무엇이 다른가요?
+
+BGP는 서로 다른 AS(통신사, 클라우드, 회사 망) 사이에서 IP 대역으로 가는 경로를 주고받는 경로 벡터 프로토콜이다. OSPF는 한 망 안의 링크 비용으로 최단 경로를 계산하지만, BGP는 남의 망 내부를 모르고 계약과 비용 같은 정책으로 경로를 고른다. 그래서 거리보다 LOCAL_PREF, AS_PATH 길이 같은 속성이 결과를 정한다.
+
+### BGP는 왜 TCP 179번을 쓰나요?
+
+처음에 전체 경로를 보내고 그 뒤로는 바뀐 것만 보내는 방식이라, 메시지가 빠짐없이 순서대로 도착한다는 보장이 필요하다. 그 보장을 TCP에 맡겨 BGP는 재전송과 순서를 직접 다루지 않고 전체 표를 주기적으로 다시 보내지도 않는다. 대신 TCP 세션이 끊기면 그 이웃에게 받은 경로를 전부 지운다. 세션이 Active나 Connect에서 맴돌면 방화벽의 179번 포트부터 본다.
+
+### 최적 경로는 어떤 순서로 고르나요?
+
+FRR 기준으로 weight, LOCAL_PREF, 직접 만든 경로, AS_PATH 길이, ORIGIN, MED, eBGP 우선, 다음 홉까지의 내부 비용, 먼저 받은 경로나 라우터 ID 순이다. 앞에서 갈리면 뒤는 보지 않는다. 실습에서 상대가 prepend로 경로를 세 배 길게 만들어도 LOCAL_PREF 200을 준 쪽이 이겼다. 내 AS의 정책이 남이 붙인 속성보다 먼저다.
+
+### eBGP와 iBGP의 차이는 무엇이고 iBGP에 full mesh가 필요한 이유는요?
+
+eBGP는 다른 AS와, iBGP는 같은 AS 안에서 맺는다. eBGP는 AS_PATH에 자기 번호를 붙여 루프를 막지만, iBGP는 붙일 번호가 없어서 "iBGP로 받은 경로는 다른 iBGP 이웃에 넘기지 않는다"는 규칙으로 루프를 막는다. 그래서 모든 BGP 라우터가 서로 직접 세션을 맺어야 경로가 다 퍼지고, 규모가 커지면 경로 반사기로 세션 수를 줄인다.
+
+### 경로 하이재킹은 어떻게 일어나고 어떻게 막나요?
+
+남의 대역을 자기 것처럼, 특히 더 작은 조각으로 광고하면 일어난다. BGP 선택은 같은 대역 안에서만 일어나고 패킷은 가장 길게 맞는 경로를 따르므로, /25 광고가 /24의 정답을 이긴다. 받는 쪽에서 /24보다 작은 조각과 고객이 가지지 않은 대역을 걸러 내고, RPKI ROA로 출처를 검증해 Invalid를 버리는 방식으로 막는다.
+
+### RPKI가 있으면 BGP 사고가 다 막히나요?
+
+아니다. ROV는 경로의 출처 AS만 확인한다. 출처가 진짜인 경로 유출이나, AS_PATH 끝에 주인 번호를 위조해 붙인 광고는 통과할 수 있다. 그래서 ROA의 maxLength는 실제로 광고하는 길이만 허용하게 좁게 두고, 경로 전체를 검증하는 BGPsec이나 ASPA는 아직 널리 쓰이지 않는다는 점을 알고 필터를 함께 쓴다.
+
+### BGP의 경로 수렴이 느린 이유는 무엇인가요?
+
+죽음을 hold time(기본 180초)이 끝나야 아는 경우가 있고, 대역이 사라질 때 각 라우터가 남은 옛 경로를 차례로 시도하는 path hunting으로 업데이트가 쏟아지며, MRAI나 flap damping처럼 일부러 늦추는 장치가 있고, 경로 100만 개를 다시 계산하는 비용도 든다. 감지는 BFD로 1초 안으로 줄일 수 있지만 인터넷 전체의 전파는 여전히 초에서 분 단위다.
+
+### 클라우드나 쿠버네티스에서는 BGP를 어디서 쓰나요?
+
+Direct Connect의 가상 인터페이스와 동적 라우팅 Site-to-Site VPN은 회사 라우터와 AWS가 eBGP로 대역을 주고받는다. 경로 수 한도와 prepend, 커뮤니티로 방향을 조절하는 일이 실무다. 온프레미스 쿠버네티스에서는 MetalLB가 서비스 IP를 /32로 스위치에 광고하고, Calico가 Pod 대역 경로를 BGP로 퍼뜨려 터널 없이 통신하게 한다.

@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-swim-in-rising-water");
+
+<EasyIntro>
+  바둑판처럼 생긴 땅에 칸마다 높이가 다른 돌기둥이 서 있다. 비가 와서 물이 1씩 차오르고, 물이 기둥 높이만큼 차면 그 칸은 물에 잠겨 헤엄쳐 지나갈 수 있다. 헤엄은 순식간이라 물 높이만 맞으면 얼마든지 멀리 갈 수 있다. 왼쪽 위에서 오른쪽 아래까지 가려면 물이 얼마나 차야 할까. 가는 길에서 가장 높은 기둥이 잠겨야 그 길을 쓸 수 있으니, 길마다 가장 높은 기둥을 보고 그 값이 가장 낮은 길을 고르면 된다. 가장 쉬운 방법은 물이 차오르는 걸 그대로 따라 하는 것이다. 낮은 기둥부터 차례로 잠기게 하면서 잠긴 칸끼리 이어 붙이다가, 출발 칸과 도착 칸이 처음 이어지는 순간의 물 높이가 답이다.
+</EasyIntro>
+
+격자에서 길을 찾되, 길의 "길이"가 아니라 길에서 만나는 "가장 높은 값"을 최소로 하라는 문제다. 최단 경로처럼 보이지만 더하기가 아니라 최댓값을 다룬다. 이 차이 하나 때문에 풀이가 여러 갈래로 갈린다.
+
+[LeetCode 778. Swim in Rising Water](https://leetcode.com/problems/swim-in-rising-water/)는 Hard다. 이 글은 길을 전부 따라가 보는 DFS부터 시작해 물 높이를 하나씩 올리는 BFS, 이분 탐색 + BFS, 최댓값으로 바꾼 다익스트라, 낮은 칸부터 합치는 유니온 파인드까지 다섯 가지를 본다. 다익스트라 자체는 [최단 경로 알고리즘 글](/posts/shortest-path-algorithms), 유니온 파인드는 [유니온 파인드 글](/posts/ds-union-find), "답을 정해 놓고 되는지 묻는" 이분 탐색은 [이분 탐색 글](/posts/binary-search)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 길에서 가장 높은 칸이 잠길 때까지
+
+n × n 격자 `grid`의 각 칸에 높이가 적혀 있다. 시간 t에는 물 높이가 t이고, 높이가 t 이하인 칸은 물에 잠긴다. 잠긴 칸끼리는 위아래 양옆으로 순식간에 헤엄쳐 갈 수 있다. 왼쪽 위 `(0, 0)`에서 출발해 오른쪽 아래 `(n-1, n-1)`에 닿을 수 있는 가장 이른 시간을 구한다.
+
+다르게 말하면, 출발에서 도착까지 가는 모든 길 중에서 "길 위의 가장 높은 칸"이 가장 낮은 길을 찾고 그 높이를 답한다. 출발 칸과 도착 칸도 길에 포함되니 답은 적어도 두 칸의 높이 중 큰 값이다.
+
+풀이 선택에 영향을 주는 조건은 이렇다.
+
+- n은 50 이하라 칸이 2,500개다. 칸마다 BFS를 한 번씩 해도 625만 번이라 충분히 돈다.
+- 칸의 높이는 0부터 n² - 1까지 서로 다른 값이다. 높이가 곧 칸의 고유 번호라서 "높이 t인 칸이 어디인가"를 정렬 없이 배열 하나로 찾을 수 있다. 마지막 풀이가 이걸 쓴다.
+
+이 글에서 쓸 예시는 3 × 3 격자다.
+
+```text
+0 5 6
+2 8 3
+4 7 1
+```
+
+손으로 풀어 보자. 가운데 8은 피하는 게 좋다. 왼쪽으로 돌면 `0 → 2 → 4 → 7 → 1`이라 가장 높은 칸이 7이다. 오른쪽으로 돌면 `0 → 5 → 6 → 3 → 1`이라 가장 높은 칸이 6이다. 가운데를 지나면 8이다. 답은 6이다. 도착 칸 높이가 1이라도 거기 가는 길에 6을 넘어야 하니 6까지 기다려야 한다.
+
+아래 그림에서 다음을 누르면 세 가지 길을 차례로 보여 준다.
+
+<VectorSpace
+  caption="3 × 3 격자. 점의 숫자가 칸의 높이다"
+  width={400}
+  height={260}
+  groups={[{ id: "cell", label: "칸" }, { id: "end", label: "출발·도착" }]}
+  points={[
+    { id: "c00", label: "0", x: 90, y: 40, group: "end" },
+    { id: "c01", label: "5", x: 200, y: 40, group: "cell" },
+    { id: "c02", label: "6", x: 310, y: 40, group: "cell", labelAt: "left" },
+    { id: "c10", label: "2", x: 90, y: 130, group: "cell" },
+    { id: "c11", label: "8", x: 200, y: 130, group: "cell" },
+    { id: "c12", label: "3", x: 310, y: 130, group: "cell", labelAt: "left" },
+    { id: "c20", label: "4", x: 90, y: 220, group: "cell" },
+    { id: "c21", label: "7", x: 200, y: 220, group: "cell" },
+    { id: "c22", label: "1", x: 310, y: 220, group: "end", labelAt: "left" },
+  ]}
+  edges={[["c00", "c01"], ["c01", "c02"], ["c00", "c10"], ["c01", "c11"], ["c02", "c12"], ["c10", "c11"], ["c11", "c12"], ["c10", "c20"], ["c11", "c21"], ["c12", "c22"], ["c20", "c21"], ["c21", "c22"]]}
+  steps={[
+    { caption: "위아래 양옆으로 붙은 칸끼리 선을 그었다. 0에서 1까지 가야 한다.", showEdges: true },
+    { caption: "가운데로 가면 8을 넘어야 한다. 물이 8까지 차야 한다.", showEdges: true, path: ["c00", "c01", "c11", "c12", "c22"] },
+    { caption: "왼쪽으로 돌면 가장 높은 칸이 7이다.", showEdges: true, path: ["c00", "c10", "c20", "c21", "c22"] },
+    { caption: "오른쪽으로 돌면 가장 높은 칸이 6이다. 이게 가장 낮아서 답은 6.", showEdges: true, path: ["c00", "c01", "c02", "c12", "c22"] },
+  ]}
+/>
+
+## 길을 전부 따라가 보는 DFS
+
+가장 직접적인 방법은 출발에서 갈 수 있는 길을 모두 걸어 보며 "지금까지 만난 가장 높은 칸"을 들고 다니는 것이다. 도착하면 그 값을 답 후보로 기록한다. 이미 찾은 답보다 높은 칸을 만나면 더 가 볼 필요가 없으니 돌아온다.
+
+```js
+function swimInWater(grid) {
+  const n = grid.length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const onPath = Array.from({ length: n }, () => new Array(n).fill(false));
+  let best = Infinity;
+  const go = (r, c, high) => {
+    high = Math.max(high, grid[r][c]);   // 이 길에서 만난 가장 높은 칸
+    if (high >= best) return;            // 이미 더 좋은 길을 알고 있다
+    if (r === n - 1 && c === n - 1) { best = high; return; }
+    onPath[r][c] = true;                 // 같은 길에서 같은 칸을 두 번 밟지 않는다
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < n && nc >= 0 && nc < n && !onPath[nr][nc]) go(nr, nc, high);
+    }
+    onPath[r][c] = false;                // 돌아오면서 풀어 준다: 다른 길에서는 밟아도 된다
+  };
+  go(0, 0, -1);
+  return best;
+}
+```
+
+`onPath`는 방문 표시가 아니다. 지금 걷고 있는 길 위의 칸만 표시하고 돌아올 때 풀어 준다. 다른 길로 같은 칸에 더 낮은 최댓값으로 올 수 있기 때문이다. 그래서 경로 수만큼 일이 늘어난다.
+
+예시에서는 18번 호출로 끝났다. 무작위 6 × 6 격자는 대부분 수백 번이지만 10개 중 하나는 15만 번을 넘었고, 다른 시도에서는 250만 번이 나왔다. 8 × 8 무작위 격자 10개를 돌렸을 때는 100초 안에 다 끝나지 않았다. 50 × 50은 생각할 수도 없다. 격자의 경로 수는 칸 수에 지수로 늘어난다.
+
+이 풀이가 헛도는 이유는 "길"을 하나하나 따지기 때문이다. 이 문제의 답은 길이 아니라 물 높이 하나다. 물 높이를 정하면 갈 수 있는지는 길을 하나하나 걷지 않고 BFS 한 번으로 안다.
+
+## 물 높이를 하나씩 올려 본다
+
+물 높이 t를 정해 두면 질문이 쉬워진다. "높이 t 이하인 칸만 밟고 출발에서 도착까지 갈 수 있나?" 이건 BFS 한 번이면 답이 나온다. 그러면 t를 출발·도착 칸 중 높은 값부터 하나씩 올리며 처음으로 갈 수 있게 되는 t를 찾으면 된다.
+
+```js
+// 높이 t 이하인 칸만 밟고 도착까지 갈 수 있나
+function canReach(grid, t) {
+  const n = grid.length;
+  if (grid[0][0] > t) return false;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const seen = Array.from({ length: n }, () => new Array(n).fill(false));
+  seen[0][0] = true;
+  const queue = [[0, 0]];
+  for (let head = 0; head < queue.length; head++) {
+    const [r, c] = queue[head];
+    if (r === n - 1 && c === n - 1) return true;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr >= 0 && nr < n && nc >= 0 && nc < n && !seen[nr][nc] && grid[nr][nc] <= t) {
+        seen[nr][nc] = true;
+        queue.push([nr, nc]);
+      }
+    }
+  }
+  return false;
+}
+
+function swimInWater(grid) {
+  const n = grid.length;
+  let t = Math.max(grid[0][0], grid[n - 1][n - 1]); // 이보다 낮으면 출발이나 도착이 안 잠겼다
+  while (!canReach(grid, t)) t++;
+  return t;
+}
+```
+
+예시에서는 t = 1부터 시작해 6에서 처음 갈 수 있게 되니 BFS를 6번 했다. BFS 한 번이 O(n²)이고 t는 최대 n²까지 오르니 최악은 O(n⁴)이다. n = 50이면 625만이라 통과한다. 무작위 50 × 50 격자에서는 답이 2,062라 BFS를 1,248번 했고 26ms가 걸렸다.
+
+이 풀이에서 중요한 관찰이 하나 나온다. t에서 갈 수 있으면 t + 1에서도 갈 수 있다. 물이 더 차면 잠긴 칸이 늘기만 하니까. "갈 수 없음, 없음, …, 없음, 있음, 있음, …"으로 한 번만 바뀌는 단조로운 답이라 하나씩 올릴 필요가 없다.
+
+## 이분 탐색으로 물 높이를 좁힌다
+
+단조로우면 이분 탐색이다. 가능한 t의 범위는 출발·도착 중 높은 값부터 n² - 1까지다. 가운데 t로 BFS를 해서 갈 수 있으면 답은 그 이하, 없으면 그보다 크다.
+
+```js
+function swimInWater(grid) {
+  const n = grid.length;
+  let lo = Math.max(grid[0][0], grid[n - 1][n - 1]);
+  let hi = n * n - 1; // 물이 이만큼 차면 모든 칸이 잠긴다
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (canReach(grid, mid)) hi = mid; // mid에서 되면 답은 mid 이하
+    else lo = mid + 1;                 // 안 되면 mid보다 크다
+  }
+  return lo;
+}
+```
+
+`canReach`는 앞 절의 함수 그대로다. 예시에서는 범위 1~8에서 BFS를 3번 해서 6을 찾았다. 시간은 BFS O(n²)를 log(n²)번 하니 O(n² log n)이다. 무작위 50 × 50에서 BFS 10번, 1.7ms였다.
+
+`hi = mid`와 `lo = mid + 1`의 짝이 중요하다. `hi = mid - 1`로 쓰면 mid가 답일 때 답을 건너뛴다. 이분 탐색 경계를 정하는 법은 [이분 탐색 글](/posts/binary-search)에서 자세히 다뤘다.
+
+이 풀이는 충분히 빠르지만 같은 칸을 BFS마다 다시 본다. 물 높이를 낮은 값부터 올려 가면서 "지금 갈 수 있는 곳"을 이어서 넓혀 가면 칸마다 한 번씩만 보면 된다.
+
+## 낮은 칸부터 꺼내는 다익스트라
+
+출발에서 시작해, 지금까지 닿은 영역과 붙어 있는 칸 중 가장 낮은 칸부터 하나씩 영역에 넣는다. 영역을 넓히는 데 필요한 물 높이는 "지금까지 넣은 칸 중 가장 높은 값"이다. 도착 칸이 영역에 들어오는 순간 그 값이 답이다.
+
+이건 다익스트라에서 "거리 더하기"를 "최댓값"으로 바꾼 것이다. 다익스트라가 성립하는 조건은 길을 늘였을 때 비용이 줄지 않는 것인데, `Math.max(t, h)`도 `t` 이상이라 조건을 만족한다. 그래서 힙에서 꺼낸 칸의 값은 그 칸까지 가는 가장 좋은 값으로 확정된다.
+
+```js
+function swimInWater(grid) {
+  const n = grid.length;
+  const seen = Array.from({ length: n }, () => new Array(n).fill(false));
+  // [그 칸까지 가는 길에서 만난 가장 높은 값, 행, 열]을 작은 값부터 꺼내는 최소 힙
+  const heap = [[grid[0][0], 0, 0]];
+  seen[0][0] = true;
+  const push = (item) => {
+    heap.push(item);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] <= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1, r = l + 1;
+        let s = i;
+        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+        if (s === i) break;
+        [heap[s], heap[i]] = [heap[i], heap[s]];
+        i = s;
+      }
+    }
+    return top;
+  };
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  while (true) {
+    const [t, r, c] = pop();
+    if (r === n - 1 && c === n - 1) return t; // 도착 칸을 꺼내는 순간이 답
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= n || nc < 0 || nc >= n || seen[nr][nc]) continue;
+      seen[nr][nc] = true; // 넣을 때 표시해도 된다: 이 칸의 값은 처음 넣을 때가 가장 작다
+      push([Math.max(t, grid[nr][nc]), nr, nc]);
+    }
+  }
+}
+```
+
+### 넣을 때 표시해도 되는 이유
+
+[Network Delay Time](/posts/leetcode-network-delay-time#bfs-습관과-배열-크기에서-틀린다)에서는 힙에 넣을 때 방문 표시를 하면 틀린다고 했다. 처음 넣은 값보다 나중에 다른 길로 더 작은 값이 올 수 있어서다. 그런데 이 문제에서는 넣을 때 표시해도 맞다.
+
+차이는 비용이 어디 붙어 있느냐다. 이 문제에서 칸 v를 넣는 값은 `Math.max(t, grid[v])`다. `grid[v]`는 어느 이웃에서 오든 같고, `t`는 힙에서 꺼낸 순서라 점점 커지기만 한다. 그러니 v를 처음 넣을 때의 `t`가 가장 작고, 그때의 값이 v가 받을 수 있는 가장 작은 값이다. 간선마다 무게가 다른 그래프에서는 나중에 꺼낸 노드가 더 가벼운 간선으로 v에 닿을 수 있어서 이 논리가 깨진다. 무작위 격자 2,000개로 DFS 결과와 비교해 모두 같았다.
+
+넣을 때 표시하면 칸마다 힙에 한 번만 들어가서 힙 크기가 n²을 넘지 않는다. 시간은 O(n² log n), 공간은 O(n²)이다. 무작위 50 × 50에서 3.3ms였다.
+
+아래 그림은 예시 격자에서 이 코드가 칸을 꺼내는 순서다. 칸은 격자를 윗줄부터 한 줄로 늘어놓은 것이고, 초록 칸이 꺼낸 칸, 아래는 힙에 든 후보를 `값:(행,열)`로 적었다. 실제 코드에 로그를 찍어 옮긴 순서다.
+
+<AlgoTrace
+  caption="최댓값 다익스트라. 칸은 윗줄부터 한 줄로 늘어놓은 격자다"
+  memoryLabel="힙 (값:칸)"
+  cells={["0", "5", "6", "2", "8", "3", "4", "7", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["2:(1,0)", "5:(0,1)"], caption: "(0,0)을 꺼낸다. 이웃 2와 5를 넣는다." },
+    { pointer: 3, found: [0, 3], memory: ["4:(2,0)", "5:(0,1)", "8:(1,1)"], caption: "가장 낮은 2를 꺼낸다. 아래 4와 가운데 8을 넣는다." },
+    { pointer: 6, found: [0, 3, 6], memory: ["5:(0,1)", "7:(2,1)", "8:(1,1)"], caption: "4를 꺼낸다. 오른쪽 7을 넣는다. 왼쪽 길은 7을 넘어야 한다." },
+    { pointer: 1, found: [0, 3, 6, 1], memory: ["6:(0,2)", "7:(2,1)", "8:(1,1)"], caption: "5가 7보다 낮다. 위쪽 길로 넘어가 5를 꺼내고 6을 넣는다." },
+    { pointer: 2, found: [0, 3, 6, 1, 2], memory: ["6:(1,2)", "7:(2,1)", "8:(1,1)"], caption: "6을 꺼낸다. 아래 칸 높이는 3이지만 6을 넘어왔으니 6으로 넣는다." },
+    { pointer: 5, found: [0, 3, 6, 1, 2, 5], memory: ["6:(2,2)", "7:(2,1)", "8:(1,1)"], caption: "(1,2)를 6으로 꺼낸다. 도착 칸도 높이는 1이지만 6으로 들어간다." },
+    { pointer: 8, found: [0, 3, 6, 1, 2, 5, 8], memory: ["7:(2,1)", "8:(1,1)"], caption: "도착 칸을 6으로 꺼냈다. 답은 6이다. 7과 8은 꺼낼 필요가 없다." },
+  ]}
+/>
+
+네 번째 단계가 이 풀이의 요점이다. 왼쪽 길을 따라가다 7을 만나자, 힙은 그보다 낮은 5가 있는 위쪽 길로 자연스럽게 옮겨 간다. 다섯 번째와 여섯 번째 단계에서 높이 3과 1인 칸이 6으로 들어가는 것도 봐 둘 만하다. 값은 칸의 높이가 아니라 "거기까지 오는 데 필요한 물 높이"다.
+
+### Python과 Java로 쓰면
+
+Python은 `heapq`에 튜플 `(값, 행, 열)`을 넣는다. 값이 같으면 행과 열로 비교하는데, 모두 정수라 문제없다. 격자가 2,500칸뿐이라 재귀나 깊이 걱정도 없다.
+
+```python
+import heapq
+from typing import List
+
+
+def swim_in_water(grid: List[List[int]]) -> int:
+    n = len(grid)
+    seen = [[False] * n for _ in range(n)]
+    seen[0][0] = True
+    heap = [(grid[0][0], 0, 0)]  # (지금까지 만난 가장 높은 값, 행, 열)
+    while True:
+        t, r, c = heapq.heappop(heap)
+        if r == n - 1 and c == n - 1:
+            return t
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 <= nr < n and 0 <= nc < n and not seen[nr][nc]:
+                seen[nr][nc] = True
+                heapq.heappush(heap, (max(t, grid[nr][nc]), nr, nc))
+
+
+print(swim_in_water([[0, 5, 6], [2, 8, 3], [4, 7, 1]]))
+print(swim_in_water([[0]]))
+print(swim_in_water([[3, 2], [0, 1]]))
+```
+
+```text
+6
+0
+3
+```
+
+세 번째 입력은 출발 칸 높이가 3이다. 출발 칸도 잠겨야 헤엄을 시작할 수 있으니 처음 힙에 넣는 값이 0이 아니라 `grid[0][0]`이어야 한다.
+
+Java는 `PriorityQueue<int[]>`에 `[값, 행, 열]`을 넣는다. 값이 2,500 미만이라 `a[0] - b[0]` 비교도 넘치지 않지만, 습관대로 `Integer.compare`를 쓴다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int swimInWater(int[][] grid) {
+        int n = grid.length;
+        boolean[][] seen = new boolean[n][n];
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        // [지금까지 만난 가장 높은 값, 행, 열]
+        PriorityQueue<int[]> pq = new PriorityQueue<>((a, b) -> Integer.compare(a[0], b[0]));
+        pq.offer(new int[]{grid[0][0], 0, 0});
+        seen[0][0] = true;
+        while (true) {
+            int[] cur = pq.poll();
+            int t = cur[0], r = cur[1], c = cur[2];
+            if (r == n - 1 && c == n - 1) return t;
+            for (int[] d : dirs) {
+                int nr = r + d[0], nc = c + d[1];
+                if (nr < 0 || nr >= n || nc < 0 || nc >= n || seen[nr][nc]) continue;
+                seen[nr][nc] = true;
+                pq.offer(new int[]{Math.max(t, grid[nr][nc]), nr, nc});
+            }
+        }
+    }
+}
+```
+
+```text
+6
+0
+3
+```
+
+`while (true)` 안에서만 `return`해도 Java 컴파일러가 "반환문이 없다"고 하지 않는다. 무한 반복 뒤의 코드는 닿을 수 없다고 보기 때문이다. 도착 칸은 언젠가 반드시 꺼내지니 반복도 끝난다.
+
+## 물을 실제로 채우는 유니온 파인드
+
+EasyIntro에서 말한 방법을 그대로 짠다. 물 높이 t를 0부터 올리며, 높이가 t인 칸을 "잠김"으로 바꾸고 이미 잠긴 이웃과 합친다. 출발 칸과 도착 칸이 같은 덩어리가 되는 첫 t가 답이다.
+
+높이가 0부터 n² - 1까지 서로 다르다는 조건 덕분에 "높이 t인 칸"을 정렬 없이 찾는다. `pos[높이] = 칸 번호`인 배열을 한 번 만들어 두면 된다.
+
+```js
+function swimInWater(grid) {
+  const n = grid.length, N = n * n;
+  const pos = new Array(N); // pos[h]: 높이가 h인 칸의 번호 (r * n + c)
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) pos[grid[r][c]] = r * n + c;
+
+  const parent = Array.from({ length: N }, (_, i) => i);
+  const find = (x) => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  };
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const open = new Array(N).fill(false); // 물에 잠긴 칸
+  for (let t = 0; t < N; t++) {
+    const cell = pos[t], r = Math.floor(cell / n), c = cell % n;
+    open[cell] = true;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      // 이미 잠긴 이웃과만 합친다
+      if (nr >= 0 && nr < n && nc >= 0 && nc < n && open[nr * n + nc]) {
+        parent[find(nr * n + nc)] = find(cell);
+      }
+    }
+    if (open[0] && open[N - 1] && find(0) === find(N - 1)) return t;
+  }
+}
+```
+
+아래 그림은 예시 격자에 물이 차오르는 과정이다. 칸은 격자를 윗줄부터 한 줄로 늘어놓았고, 초록 칸이 잠긴 칸, 아래는 지금 이어진 덩어리들이다.
+
+<AlgoTrace
+  caption="물 높이 t를 0부터 올리며 잠긴 칸을 합친다"
+  memoryLabel="잠긴 덩어리"
+  cells={["0", "5", "6", "2", "8", "3", "4", "7", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["(0,0)"], caption: "t = 0. 출발 칸이 잠긴다." },
+    { pointer: 8, found: [0, 8], memory: ["(0,0)", "(2,2)"], caption: "t = 1. 도착 칸이 잠기지만 출발과 떨어져 있다." },
+    { pointer: 3, found: [0, 8, 3], memory: ["(0,0) (1,0)", "(2,2)"], caption: "t = 2. (1,0)이 잠겨 위의 출발 칸과 합쳐진다." },
+    { pointer: 5, found: [0, 8, 3, 5], memory: ["(0,0) (1,0)", "(1,2) (2,2)"], caption: "t = 3. (1,2)가 잠겨 아래 도착 칸과 합쳐진다." },
+    { pointer: 6, found: [0, 8, 3, 5, 6], memory: ["(0,0) (1,0) (2,0)", "(1,2) (2,2)"], caption: "t = 4. 왼쪽 아래 (2,0)이 출발 쪽 덩어리에 붙는다." },
+    { pointer: 1, found: [0, 8, 3, 5, 6, 1], memory: ["(0,0) (1,0) (2,0) (0,1)", "(1,2) (2,2)"], caption: "t = 5. (0,1)도 출발 쪽에 붙는다. 아직 두 덩어리다." },
+    { pointer: 2, found: [0, 8, 3, 5, 6, 1, 2], memory: ["출발과 도착이 한 덩어리"], caption: "t = 6. (0,2)가 잠기며 왼쪽 (0,1)과 아래 (1,2)를 함께 잇는다. 답은 6." },
+  ]}
+/>
+
+마지막 단계에서 (0,2) 하나가 두 덩어리의 다리가 된다. 다익스트라 그림에서 힙이 위쪽 길로 옮겨 간 것과 같은 순간을 다른 쪽에서 본 것이다. 7과 8은 끝까지 잠길 필요가 없었다.
+
+칸마다 한 번 열고 이웃 네 개와 합치니 유니온 파인드 연산이 O(n²)번이다. 경로 압축을 쓰면 연산 하나가 사실상 상수라 전체가 O(n² α(n²))로 다섯 풀이 중 가장 빠르다. 무작위 50 × 50에서 1.5ms, 뱀처럼 꼬인 격자에서 0.3ms였다.
+
+Python으로 옮기면 이렇다. `divmod`로 칸 번호를 행과 열로 바로 나눈다. 루프 안에서 반드시 `return`되지만, 함수 끝에 `return N - 1`을 두어 타입 검사기와 읽는 사람이 헷갈리지 않게 했다.
+
+```python
+from typing import List
+
+
+def swim_in_water_uf(grid: List[List[int]]) -> int:
+    n = len(grid)
+    N = n * n
+    pos = [0] * N  # pos[h]: 높이 h인 칸 번호
+    for r in range(n):
+        for c in range(n):
+            pos[grid[r][c]] = r * n + c
+    parent = list(range(N))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    is_open = [False] * N
+    for t in range(N):
+        cell = pos[t]
+        r, c = divmod(cell, n)
+        is_open[cell] = True
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if 0 <= nr < n and 0 <= nc < n and is_open[nr * n + nc]:
+                parent[find(nr * n + nc)] = find(cell)
+        if is_open[0] and is_open[N - 1] and find(0) == find(N - 1):
+            return t
+    return N - 1
+
+
+print(swim_in_water_uf([[0, 5, 6], [2, 8, 3], [4, 7, 1]]))
+print(swim_in_water_uf([[0]]))
+print(swim_in_water_uf([[3, 2], [0, 1]]))
+```
+
+```text
+6
+0
+3
+```
+
+이 풀이는 [최소 신장 트리 글의 병목 경로](/posts/minimum-spanning-tree#가장-무거운-선을-가장-가볍게-병목-경로)와 같은 이야기다. 낮은 칸부터 합치는 건 크루스칼이 싼 선부터 줍는 것과 같고, 두 점 사이 "가장 높은 곳을 가장 낮게" 지나는 길은 MST 위의 길이다. 크루스칼을 돌리다 두 점이 처음 이어지는 순간의 선 비용이 답이다.
+
+## 헤엄칠 시간을 직접 구해 보기
+
+칸 하나, 출발 칸이 가장 높은 경우, 뱀처럼 한 줄로만 이어지는 경우를 넣었다.
+
+<CodePlayground
+  caption="Swim in Rising Water"
+  functionName="swimInWater"
+  initialCode={"function swimInWater(grid) {\n  // grid[r][c]: 칸 높이 (0 ~ n*n-1, 모두 다르다)\n  // (0,0)에서 (n-1,n-1)까지 갈 수 있는 가장 이른 시간\n  return 0;\n}"}
+  solution={"function swimInWater(grid) {\n  const n = grid.length;\n  const seen = Array.from({ length: n }, () => new Array(n).fill(false));\n  // [그 칸까지 가는 길에서 만난 가장 높은 값, 행, 열]을 작은 값부터 꺼내는 최소 힙\n  const heap = [[grid[0][0], 0, 0]];\n  seen[0][0] = true;\n  const push = (item) => {\n    heap.push(item);\n    let i = heap.length - 1;\n    while (i > 0) {\n      const p = (i - 1) >> 1;\n      if (heap[p][0] <= heap[i][0]) break;\n      [heap[p], heap[i]] = [heap[i], heap[p]];\n      i = p;\n    }\n  };\n  const pop = () => {\n    const top = heap[0];\n    const last = heap.pop();\n    if (heap.length > 0) {\n      heap[0] = last;\n      let i = 0;\n      while (true) {\n        const l = 2 * i + 1, r = l + 1;\n        let s = i;\n        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;\n        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;\n        if (s === i) break;\n        [heap[s], heap[i]] = [heap[i], heap[s]];\n        i = s;\n      }\n    }\n    return top;\n  };\n  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];\n  while (true) {\n    const [t, r, c] = pop();\n    if (r === n - 1 && c === n - 1) return t; // 도착 칸을 꺼내는 순간이 답\n    for (const [dr, dc] of DIRS) {\n      const nr = r + dr, nc = c + dc;\n      if (nr < 0 || nr >= n || nc < 0 || nc >= n || seen[nr][nc]) continue;\n      seen[nr][nc] = true; // 넣을 때 표시해도 된다: 이 칸의 값은 처음 넣을 때가 가장 작다\n      push([Math.max(t, grid[nr][nc]), nr, nc]);\n    }\n  }\n}\n"}
+  tests={[
+    { label: "글의 예시", args: [[[0, 5, 6], [2, 8, 3], [4, 7, 1]]], expected: 6 },
+    { label: "칸 하나", args: [[[0]]], expected: 0 },
+    { label: "출발 칸이 가장 높다", args: [[[3, 2], [0, 1]]], expected: 3 },
+    { label: "2 × 2", args: [[[0, 2], [1, 3]]], expected: 3 },
+    { label: "뱀 모양 4 × 4", args: [[[0, 1, 2, 3], [7, 6, 5, 4], [8, 9, 10, 11], [15, 14, 13, 12]]], expected: 12 },
+    { label: "가운데를 돌아간다", args: [[[0, 1, 2, 3, 4], [24, 23, 22, 21, 5], [12, 13, 14, 15, 16], [11, 17, 18, 19, 20], [10, 9, 8, 7, 6]]], expected: 16 },
+  ]}
+/>
+
+## 물 높이를 구하는 다섯 방법 비교
+
+시간은 무작위 50 × 50 격자에서 잰 값이다.
+
+| 풀이 | 시간 | 공간 | 50 × 50 | 언제 고르나 |
+|---|---|---|---|---|
+| 길 전부 DFS | 지수 | O(n²) | 8 × 8도 못 끝냄 | 고르지 않는다 |
+| t를 하나씩 + BFS | O(n⁴) | O(n²) | 26ms, BFS 1,248번 | 단조성을 보기 전 첫 풀이 |
+| 이분 탐색 + BFS | O(n² log n) | O(n²) | 1.7ms, BFS 10번 | 높이가 서로 다르지 않거나 범위가 클 때도 그대로 쓴다 |
+| 최댓값 다익스트라 | O(n² log n) | O(n²) | 3.3ms | 면접 기본 답. 최소-최대 경로 문제 전반 |
+| 유니온 파인드 | O(n² α) | O(n²) | 1.5ms | 높이가 0~n² - 1 순열이라 정렬이 필요 없을 때 |
+
+이분 탐색, 다익스트라, 유니온 파인드는 이 크기에서 모두 몇 ms 안에 끝난다. 면접에서는 다익스트라를 기본으로 내고 "길이 대신 최댓값이라도 늘어나기만 하니 다익스트라가 성립한다"를 설명하면 좋다. 높이가 순열이라는 조건을 짚고 유니온 파인드를 덧붙이면 제약을 끝까지 읽었다는 걸 보여 줄 수 있다.
+
+## 출발 칸과 더하기 습관에서 틀린다
+
+처음 힙에 `[0, 0, 0]`을 넣으면 틀린다. 출발 칸 높이가 0이 아닐 수 있다. `[[3, 2], [0, 1]]`에서 답은 3인데, 0으로 시작하면 출발 칸의 3을 건너뛰고 아래 0, 오른쪽 1을 거쳐 1을 낸다. 출발 칸도 잠겨야 하니 `grid[0][0]`으로 시작한다.
+
+값을 더하면 틀린다. 다익스트라 습관대로 `t + grid[nr][nc]`를 넣으면 길 위 높이의 합을 최소로 하는 다른 문제가 된다. 예시에서 합이 가장 작은 길은 `0 → 2 → 4 → 7 → 1`과 `0 → 2 → 8 → 3 → 1`(둘 다 합 14)이고, 최댓값이 각각 7과 8이라 답 6과 다르다. 답인 오른쪽 길은 합이 15다.
+
+BFS로 찾은 "걸음 수가 가장 적은 길"의 최댓값도 답이 아니다. 예시의 길은 모두 네 걸음인데, 아래·위·오른쪽·왼쪽 순으로 이웃을 보는 BFS가 찾은 길은 `0 → 2 → 4 → 7 → 1`이라 7이 나온다. 이 문제는 걸음 수를 전혀 따지지 않는다.
+
+이분 탐색의 아래 끝을 0으로 두는 건 틀리지 않지만, `canReach`가 출발 칸이 잠겼는지 검사하지 않으면 틀린다. 출발 칸을 큐에 넣을 때 높이를 보지 않으니 t = 0에서도 출발한 것으로 친다. 위 코드는 `grid[0][0] > t`를 먼저 검사하고, 아래 끝도 출발·도착 칸 중 높은 값으로 잡아서 두 번 막았다.
+
+칸이 하나뿐인 격자 `[[0]]`은 출발이 곧 도착이다. 다익스트라는 첫 `pop`에서 도착 칸을 꺼내 0을 내고, 이분 탐색은 `lo`와 `hi`가 처음부터 0으로 같아 반복 없이 0을 낸다. 유니온 파인드는 t = 0에서 0번 칸이 열리고 `find(0) === find(0)`이라 바로 끝난다. 도착 검사를 이웃을 넣는 반복 안에만 두면 이 경우를 놓친다. 꺼낸 칸이 도착인지부터 본다.
+
+유니온 파인드에서 이웃이 잠겼는지 보지 않고 합치면 아직 물 위인 칸으로 길이 생긴다. 칸을 여는 순간에는 이미 열린 이웃과만 합친다.
+
+## 비용이 칸에서 선으로 옮겨 가면
+
+높이가 서로 다르지 않고 범위가 10⁹까지라면 유니온 파인드는 칸을 높이로 정렬해야 해서 O(n² log n)이 된다. 다익스트라와 이분 탐색은 그대로 쓴다. 이분 탐색은 범위가 커도 log 10⁹ = 30번 정도 BFS를 하면 된다.
+
+격자가 1,000 × 1,000처럼 커지면 칸이 100만 개다. t를 하나씩 올리는 풀이는 BFS 100만 번이라 바로 탈락하고, 이분 탐색은 BFS 20번 정도라 버틴다. 다익스트라와 유니온 파인드도 칸 수에 거의 비례해 문제없다. 이때는 칸마다 `[값, 행, 열]` 배열을 만드는 대신 `r * n + c` 정수 하나로 칸을 나타내고, `seen`도 `Uint8Array` 하나로 두면 메모리가 크게 준다. 유니온 파인드 풀이가 처음부터 칸 번호를 정수로 쓴 이유다.
+
+대각선 이동도 된다면 `DIRS`에 네 방향을 더하면 끝이다. 알고리즘은 바뀌지 않는다.
+
+길 위 높이의 최댓값 대신 "이웃한 두 칸의 높이 차" 중 최댓값을 최소로 하라는 게 [LeetCode 1631. Path With Minimum Effort](https://leetcode.com/problems/path-with-minimum-effort/)다. 비용이 칸이 아니라 선에 붙어서, 넣을 때 표시하던 요령은 쓸 수 없다. `dist` 배열을 두고 꺼낼 때 확정하는 일반 다익스트라로 바꾼다. 이분 탐색이나 유니온 파인드(선을 높이 차로 정렬)도 그대로 성립한다.
+
+최댓값을 최소로 하는 대신 확률을 곱해 최대로 하는 [Path with Maximum Probability](/posts/leetcode-path-with-maximum-probability), 경로 길이 합을 최소로 하는 [Network Delay Time](/posts/leetcode-network-delay-time)과 나란히 놓으면 다익스트라에서 바뀌는 건 "길을 하나 늘릴 때 값을 어떻게 합치나" 하나뿐이라는 게 보인다. 합치는 연산이 값을 줄이지 않기만 하면 다익스트라가 성립한다.
+
+이 길을 실제로 돌려달라고 하면 다익스트라에서 칸을 넣을 때 어디서 왔는지 `prev`에 적어 두고 도착에서 거꾸로 따라간다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제를 어떤 문제로 바꿔 생각했나
+
+출발에서 도착까지 가는 길 중 길 위 가장 높은 칸이 가장 낮은 길을 찾는 최소-최대 경로 문제로 봤다. 시간 t에 갈 수 있다는 건 높이 t 이하인 칸만으로 이어진 길이 있다는 뜻이라, 답은 그런 길의 최댓값 중 가장 작은 값이다.
+
+### 다익스트라를 최댓값으로 바꿔도 되는 이유는
+
+다익스트라는 길을 늘였을 때 비용이 줄지 않으면 성립한다. `Math.max(t, h)`는 언제나 t 이상이라 이 조건을 만족한다. 그래서 힙에서 가장 작은 값을 꺼낸 칸은 다른 길로 더 작아질 수 없고, 도착 칸을 꺼내는 순간 답이 확정된다.
+
+### 힙에 넣을 때 방문 표시를 해도 되나
+
+이 문제에서는 된다. 칸에 넣는 값은 `Math.max(꺼낸 값, 그 칸 높이)`인데 칸 높이는 어느 이웃에서 오든 같고, 꺼낸 값은 커지기만 한다. 그래서 처음 넣을 때가 가장 작다. 간선마다 무게가 다른 일반 그래프나 높이 차가 비용인 Path With Minimum Effort에서는 이 논리가 깨지니 꺼낼 때 확정해야 한다.
+
+### 이분 탐색이 성립하는 근거는
+
+t에서 도착할 수 있으면 t + 1에서도 도착할 수 있다. 물이 더 차면 잠긴 칸이 늘기만 하기 때문이다. 답이 "불가능 … 가능"으로 한 번만 바뀌니 가운데 t로 BFS를 해서 범위를 반씩 줄인다. O(n² log n)이다.
+
+### 가장 빠른 풀이는
+
+높이가 0부터 n² - 1까지 서로 다르다는 조건을 쓰는 유니온 파인드다. 높이 순서대로 칸을 열며 열린 이웃과 합치고, 출발과 도착이 같은 덩어리가 되는 첫 높이가 답이다. 정렬이 필요 없어서 O(n² α)이고 무작위 50 × 50에서 1.5ms였다.
+
+### 크루스칼과 무슨 관계인가
+
+낮은 칸부터 여는 건 크루스칼이 싼 선부터 줍는 것과 같다. 두 점 사이의 최소-최대 경로는 최소 신장 트리 위의 경로이고, 크루스칼을 돌리다 두 점이 처음 이어지는 순간의 비용이 그 경로의 최댓값이다. 그래서 유니온 파인드 풀이가 맞다.

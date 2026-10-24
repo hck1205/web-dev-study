@@ -91,4 +91,19 @@ export const GIT_STAGING_AREA: QuizQuestion[] = [
       "-S는 그 문자열이 나오는 횟수가 바뀐 커밋, 즉 처음 생기거나 사라진 커밋만 찾는다. --author는 작성자로 거르는 옵션이고, 줄 안에서 값만 바뀐 경우까지 찾으려면 정규식으로 diff를 훑는 -G를 쓴다.",
     anchor: "커밋하고-히스토리를-읽는-명령",
   },
+  {
+    id: "git-staging-area-7",
+    post: "git-staging-area",
+    question: "feature 브랜치는 README를 건드린 적이 없는데, git diff main..feature에 README 줄이 지워진 것으로 나온다. 왜 그럴까?",
+    choices: [
+      "feature 브랜치가 rebase되면서 README 변경이 사라졌다",
+      "인덱스에 README 삭제가 스테이징되어 있다",
+      "main이 갈라진 뒤 README에 넣은 줄이 feature 끝에는 없어서, 두 끝을 비교하면 지운 것처럼 보인다",
+      "..는 merge base부터 비교하므로 main의 변경이 거꾸로 나온다",
+    ],
+    answer: 2,
+    explanation:
+      "diff의 ..는 두 브랜치 끝을 그대로 비교한다. 그래서 main이 그 사이에 한 변경이 feature가 되돌린 것처럼 나온다. merge base부터 브랜치가 실제로 한 일만 보려면 ...를 쓴다.",
+    anchor: "git-diff에-무엇과-무엇을-넣느냐",
+  },
 ];

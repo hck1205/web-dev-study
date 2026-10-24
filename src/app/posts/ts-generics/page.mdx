@@ -455,6 +455,72 @@ hook.tsx(24,11): error TS2345: Argument of type '"blue"' is not assignable to pa
 
 여기서 실무에서 놓치기 쉬운 점이 세 가지 보인다. 첫째, 타입 인자를 생략한 `useLocalStorage("theme", "light")`는 `T = string`이다. 앞에서 본 넓히기 규칙 때문이라 `"blue"`도 통과한다. 허용 값을 좁히고 싶으면 타입 인자를 적는다. 둘째, `return [value, save] as const`가 없으면 반환 타입이 `(T | ((next: T) => void))[]` 배열이 되어 구조 분해한 두 값이 모두 유니온이 된다. 튜플을 돌려주는 훅에는 `as const`를 붙인다. 셋째, 훅 안의 `JSON.parse(raw) as T`는 앞 절의 `fetchJson<T>`와 같은 거짓말이다. 저장 형식이 배포 사이에 바뀌면 옛 값이 새 타입으로 둔갑한다. 중요한 값이라면 `parse` 함수를 받는 모양으로 바꾼다. `useState<T>` 같은 기본 훅의 타입 인자, `useRef`와 이벤트 타입은 [React에서 TypeScript 쓰기](/posts/typescript-in-react)에서 정리한다.
 
+## 오버로드로 경우를 나눌 때
+
+입력 모양에 따라 결과가 달라지는 함수는 제네릭 말고 함수 오버로드로도 적는다. id 하나를 주면 이름 하나, id 배열을 주면 이름 배열을 돌려주는 함수다.
+
+```ts
+function getItem(id: number): Promise<string>;               // 오버로드 시그니처 1
+function getItem(ids: number[]): Promise<string[]>;          // 오버로드 시그니처 2
+function getItem(idOrIds: number | number[]): Promise<string | string[]> {   // 구현 시그니처
+  return Promise.resolve(Array.isArray(idOrIds) ? idOrIds.map(String) : String(idOrIds));
+}
+
+const one = getItem(1);          // Promise<string>
+const many = getItem([1, 2]);    // Promise<string[]>
+getItem("1");
+```
+
+```text
+overload.ts(9,9): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(id: number): Promise<string>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'number'.
+  Overload 2 of 2, '(ids: number[]): Promise<string[]>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'number[]'.
+```
+
+몸통 없이 세미콜론으로 끝나는 줄이 오버로드 시그니처이고, 마지막에 몸통이 붙은 하나가 구현 시그니처다. 오류 메시지가 "2개 중"이라고 말하는 데서 보이듯, 밖에서는 오버로드 시그니처만 보이고 구현 시그니처로는 부를 수 없다. 구현은 모든 오버로드를 받을 만큼 넓어야 하고, 본문에서 인자 모양을 직접 가려야 한다. 오버로드를 지키는지 검사기가 대조하지 않는다는 점과 유니온 인자로는 부를 수 없다는 점은 [조건부 타입과 infer](/posts/ts-conditional-infer)에서 실험으로 봤다.
+
+검사기는 오버로드를 위에서부터 차례로 맞춰 보고 처음 맞는 것을 고른다. 그래서 넓은 시그니처를 위에 두면 아래 것은 영영 쓰이지 않는다.
+
+```ts
+function label(x: unknown): string;
+function label(x: Date): Date;
+function label(x: unknown) { return x; }
+export const d = label(new Date());
+```
+
+```text
+export declare const d: string;
+```
+
+`Date`를 넣었는데 `string`이 나왔다. 오류도 나지 않는다. 구체적인 시그니처를 위에, 넓은 것을 아래에 둔다.
+
+무엇으로 쓸지는 이렇게 고른다. 인자 타입만 여럿이고 반환 타입이 같으면 유니온 매개변수 하나로 충분하다(`(value: string | number) => string`). 반환 타입이 입력 타입을 그대로 따라가면 제네릭이다(`first<T>`). 경우가 몇 개로 정해져 있고 인자 개수나 모양이 경우마다 다르면 오버로드가 읽기 쉽다. `Date` 생성자나 `addEventListener`처럼 이미 굳은 API를 설명할 때가 그렇다. 경우가 늘어날 것 같으면 같은 글에서 본 `ParseMap` 같은 키-타입 표에 제네릭을 얹는 쪽이 오버로드 목록보다 관리하기 쉽다. typescript-eslint의 `unified-signatures` 규칙은 유니온 하나로 합칠 수 있는 오버로드를 찾아 준다.
+
+### 콜백의 void는 "돌려줘도 안 쓴다"는 뜻이다
+
+함수 타입을 적다 보면 반환 타입 `void`에서 한 번 놀란다.
+
+```ts
+const ids: number[] = [];
+[1, 2].forEach((n) => ids.push(n));      // push는 number를 돌려주지만 통과한다
+
+type OnSave = () => void;
+const onSave: OnSave = () => 42;         // 통과한다
+export const result = onSave();          // 타입은 void
+
+function save(): void {
+  return 42;                             // 선언문에 직접 적은 void는 막는다
+}
+```
+
+```text
+voidcb.ts(9,3): error TS2322: Type 'number' is not assignable to type 'void'.
+```
+
+`() => void` 타입 자리에는 무언가를 돌려주는 함수도 대입할 수 있다. `forEach`에 `ids.push`를 바로 넘기는 흔한 코드를 막지 않으려는 규칙이다. 부르는 쪽은 결과를 `void`로 보니 쓸 수 없고, 런타임에는 42가 그대로 돌아온다. 반면 함수 선언에 직접 `: void`를 적으면 값을 돌려주는 것이 오류다. 이 규칙 때문에 `onSave: () => void` 자리에 `async` 함수를 넘겨도 통과하는데, 그 Promise가 거부되면 아무도 받지 않는다. 콜백을 기다려야 하는 API라면 타입을 `() => void | Promise<void>`처럼 적고 실제로 `await`하며, typescript-eslint의 `no-misused-promises`로 이런 자리를 잡는다.
+
 ## 제네릭이 필요 없는 자리
 
 제네릭을 배우고 나면 모든 곳에 꺾쇠를 달고 싶어진다. 다음 경우는 없는 편이 읽기 쉽다.
