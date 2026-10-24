@@ -846,11 +846,13 @@ export const ROADMAPS: RoadmapNode[] = [
           { id: "heap", label: "Heap / Priority Queue", items: ["leetcode-kth-largest-element-in-an-array", "leetcode-k-closest-points-to-origin", "leetcode-task-scheduler", "leetcode-find-median-from-data-stream", { checkpoint: "Heap / Priority Queue 관문" }] },
           { id: "backtracking", label: "Backtracking", items: ["leetcode-subsets", "leetcode-combination-sum", "leetcode-permutations", "leetcode-word-search", "leetcode-n-queens", { checkpoint: "Backtracking 관문" }] },
           { id: "graphs", label: "Graphs", items: ["leetcode-number-of-islands", "leetcode-clone-graph", "leetcode-pacific-atlantic-water-flow", "leetcode-course-schedule", "leetcode-word-ladder", { checkpoint: "Graphs 관문" }] },
-          { id: "advanced-graphs", label: "Advanced Graphs", items: ["leetcode-network-delay-time"] },
-          { id: "dp-1d", label: "1-D Dynamic Programming", items: ["leetcode-climbing-stairs", "leetcode-house-robber", "leetcode-coin-change", { checkpoint: "1-D Dynamic Programming 관문" }] },
-          { id: "dp-2d", label: "2-D Dynamic Programming", items: ["leetcode-unique-paths", "leetcode-longest-common-subsequence", "leetcode-edit-distance", { checkpoint: "2-D Dynamic Programming 관문" }] },
+          { id: "advanced-graphs", label: "Advanced Graphs", items: ["leetcode-network-delay-time", "leetcode-reconstruct-itinerary"] },
+          { id: "dp-1d", label: "1-D Dynamic Programming", items: ["leetcode-climbing-stairs", "leetcode-house-robber", "leetcode-coin-change", "leetcode-word-break", "leetcode-longest-increasing-subsequence", { checkpoint: "1-D Dynamic Programming 관문" }] },
+          { id: "dp-2d", label: "2-D Dynamic Programming", items: ["leetcode-unique-paths", "leetcode-longest-common-subsequence", "leetcode-edit-distance", "leetcode-burst-balloons", { checkpoint: "2-D Dynamic Programming 관문" }] },
           { id: "greedy", label: "Greedy", items: ["leetcode-jump-game", "leetcode-jump-game-ii", "leetcode-gas-station", "leetcode-partition-labels", { checkpoint: "Greedy 관문" }] },
-          { id: "intervals", label: "Intervals", items: ["interval-problems-pattern", "leetcode-insert-interval", "leetcode-merge-intervals", "leetcode-non-overlapping-intervals", { checkpoint: "Intervals 관문" }] },
+          { id: "intervals", label: "Intervals", items: ["interval-problems-pattern", "leetcode-insert-interval", "leetcode-merge-intervals", "leetcode-non-overlapping-intervals", "leetcode-meeting-rooms", { checkpoint: "Intervals 관문" }] },
+          { id: "math-geometry", label: "Math & Geometry", items: ["leetcode-rotate-image", "leetcode-spiral-matrix"] },
+          { id: "bit-manipulation", label: "Bit Manipulation", items: ["leetcode-single-number"] },
         ],
       },
       // leetcode:end
@@ -1330,7 +1332,7 @@ export const ROADMAPS: RoadmapNode[] = [
     tier: 3,
     requires: ["database/db-types"],
     items: [
-      { id: "ml", label: "머신러닝 기초", items: ["ml-fundamentals", "deep-learning-basics"] },
+      { id: "ml", label: "머신러닝 기초", items: ["ml-fundamentals", "ml-model-evaluation", "deep-learning-basics", { post: "explainable-ai-shap-lime", tier: 3 }] },
       {
         id: "llm",
         label: "LLM 기초와 연동",
@@ -1346,7 +1348,7 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "claude-code",
         label: "Claude Code",
-        items: ["claude-code-cli-and-sessions", "claude-code-project-structure", "claude-code-context-window", "claude-code-extensions", "claude-code-hooks-deep-dive", { post: "claude-code-plugins-and-channels", tier: 3 }, "claude-code-parallel-and-scheduled", "claude-code-headless-ci", "claude-code-models-and-cost", "claude-code-fundamentals-map"],
+        items: ["claude-code-cli-and-sessions", "claude-code-project-structure", "claude-code-context-window", "claude-code-extensions", "claude-code-hooks-deep-dive", { post: "claude-code-plugins-and-channels", tier: 3 }, "claude-code-parallel-and-scheduled", { post: "claude-code-agent-teams", tier: 3 }, "claude-code-headless-ci", "claude-code-models-and-cost", "claude-code-fundamentals-map"],
       },
       { id: "llm-ops", label: "LLM 운영", items: ["llm-evals", "llm-observability", "llm-app-security-guardrails", { post: "self-hosting-llm-inference", tier: 3 }] },
     ],

@@ -1,6 +1,17 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "ml-model-evaluation": 7,
+  "explainable-ai-shap-lime": 6,
+  "claude-code-agent-teams": 7,
+  "leetcode-word-break": 5,
+  "leetcode-spiral-matrix": 5,
+  "leetcode-single-number": 5,
+  "leetcode-rotate-image": 5,
+  "leetcode-reconstruct-itinerary": 5,
+  "leetcode-meeting-rooms": 5,
+  "leetcode-longest-increasing-subsequence": 5,
+  "leetcode-burst-balloons": 5,
   "ml-fundamentals": 7,
   "llm-observability": 7,
   "llm-app-security-guardrails": 7,

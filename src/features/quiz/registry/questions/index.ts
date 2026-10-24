@@ -1,3 +1,14 @@
+import { ML_MODEL_EVALUATION } from "./ml-model-evaluation";
+import { EXPLAINABLE_AI_SHAP_LIME } from "./explainable-ai-shap-lime";
+import { CLAUDE_CODE_AGENT_TEAMS } from "./claude-code-agent-teams";
+import { LEETCODE_WORD_BREAK } from "./leetcode-word-break";
+import { LEETCODE_SPIRAL_MATRIX } from "./leetcode-spiral-matrix";
+import { LEETCODE_SINGLE_NUMBER } from "./leetcode-single-number";
+import { LEETCODE_ROTATE_IMAGE } from "./leetcode-rotate-image";
+import { LEETCODE_RECONSTRUCT_ITINERARY } from "./leetcode-reconstruct-itinerary";
+import { LEETCODE_MEETING_ROOMS } from "./leetcode-meeting-rooms";
+import { LEETCODE_LONGEST_INCREASING_SUBSEQUENCE } from "./leetcode-longest-increasing-subsequence";
+import { LEETCODE_BURST_BALLOONS } from "./leetcode-burst-balloons";
 import { ML_FUNDAMENTALS } from "./ml-fundamentals";
 import { LLM_OBSERVABILITY } from "./llm-observability";
 import { LLM_APP_SECURITY_GUARDRAILS } from "./llm-app-security-guardrails";
@@ -985,6 +996,17 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  ML_MODEL_EVALUATION,
+  EXPLAINABLE_AI_SHAP_LIME,
+  CLAUDE_CODE_AGENT_TEAMS,
+  LEETCODE_WORD_BREAK,
+  LEETCODE_SPIRAL_MATRIX,
+  LEETCODE_SINGLE_NUMBER,
+  LEETCODE_ROTATE_IMAGE,
+  LEETCODE_RECONSTRUCT_ITINERARY,
+  LEETCODE_MEETING_ROOMS,
+  LEETCODE_LONGEST_INCREASING_SUBSEQUENCE,
+  LEETCODE_BURST_BALLOONS,
   ML_FUNDAMENTALS,
   LLM_OBSERVABILITY,
   LLM_APP_SECURITY_GUARDRAILS,

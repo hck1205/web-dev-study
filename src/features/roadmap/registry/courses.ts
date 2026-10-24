@@ -61,6 +61,7 @@ export const COURSES: Course[] = [
       { group: "LeetCode 패턴", label: "백트래킹과 그래프", roadmaps: ["algorithms/leetcode/backtracking", "algorithms/leetcode/graphs", "algorithms/leetcode/advanced-graphs"] },
       { group: "LeetCode 패턴", label: "동적 계획법", roadmaps: ["algorithms/leetcode/dp-1d", "algorithms/leetcode/dp-2d"] },
       { group: "LeetCode 패턴", label: "그리디와 구간", roadmaps: ["algorithms/leetcode/greedy", "algorithms/leetcode/intervals"] },
+      { group: "LeetCode 패턴", label: "수학과 비트 연산", roadmaps: ["algorithms/leetcode/math-geometry", "algorithms/leetcode/bit-manipulation"] },
       { group: "더 넓게", label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
     ],
     next: [
