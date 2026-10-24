@@ -1,6 +1,7 @@
-import { type StudyProgress, stageCounts, stageOf } from "../../atoms/study-progress";
-import { CHECKPOINTS, FLAT_ROADMAPS, findRoadmap, tierOf } from "../../registry";
-import type { FlatRoadmap, Tier, Track } from "../../registry";
+import { type Stage, type StudyProgress, stageCounts, stageOf } from "../../atoms/study-progress";
+import { getPostBySlug, postHref } from "@/features/posts/registry";
+import { CHECKPOINTS, COURSES, FLAT_ROADMAPS, findRoadmap, tierOf } from "../../registry";
+import type { Course, CourseStage, FlatRoadmap, Tier } from "../../registry";
 import { roadmapKey } from "../../registry/utils";
 
 export interface RequirementStatus {
@@ -134,35 +135,116 @@ export function topGraph(progress: StudyProgress): { nodes: RoadmapGraphNode[]; 
   return { nodes, edges };
 }
 
-/** 직무별 경로의 단계 한 칸 */
-export interface TrackStepStats {
+/** 큰 로드맵 단계 한 칸이 담는 글 (로드맵 글 + 고른 글, 순서 유지) */
+const stagePosts = (stage: CourseStage) => {
+  const roadmapPosts = (stage.roadmaps ?? []).flatMap((key) => findRoadmap(key)?.posts ?? []);
+  return [...new Set([...(stage.posts ?? []), ...roadmapPosts])];
+};
+
+/** 큰 로드맵 전체 글 */
+const coursePosts = (course: Course) => [...new Set(course.stages.flatMap(stagePosts))];
+
+/** 다른 큰 로드맵에서 같은 글을 다루는 단계. 글이 겹치면 이어진 것으로 본다 */
+export interface StageLink {
+  course: string;
+  courseLabel: string;
+  stageLabel: string;
+  href: string;
+  shared: number;
+}
+
+const STAGE_LINKS: Map<string, StageLink[]> = (() => {
+  const sets = COURSES.map((course) => course.stages.map((stage) => new Set(stagePosts(stage))));
+  const links = new Map<string, StageLink[]>();
+  COURSES.forEach((course, ci) => {
+    course.stages.forEach((_, si) => {
+      const found: StageLink[] = [];
+      COURSES.forEach((other, oi) => {
+        if (oi === ci) return;
+        // 다른 로드맵마다 가장 많이 겹치는 단계 하나만
+        let best: StageLink | undefined;
+        other.stages.forEach((otherStage, osi) => {
+          let shared = 0;
+          for (const slug of sets[ci][si]) if (sets[oi][osi].has(slug)) shared += 1;
+          if (shared > 0 && (!best || shared > best.shared)) {
+            best = { course: other.id, courseLabel: other.label, stageLabel: otherStage.label, href: `/roadmap/course/${other.id}#stage-${osi + 1}`, shared };
+          }
+        });
+        if (best) found.push(best);
+      });
+      links.set(`${course.id}/${si}`, found.sort((a, b) => b.shared - a.shared));
+    });
+  });
+  return links;
+})();
+
+export interface CourseStageStats {
   label: string;
+  group?: string;
   roadmaps: { key: string; label: string; href: string }[];
+  /** 로드맵 통째가 아니라 고른 글 */
+  picks: { slug: string; title: string; href: string; stage: Stage }[];
   stats: ReturnType<typeof stageCounts>;
   /** 앞 단계를 다 읽었고 이 단계는 아직 다 읽지 않은 첫 칸 */
   isNext: boolean;
+  /** 같은 글을 다루는 다른 큰 로드맵의 단계 */
+  links: StageLink[];
 }
 
 /**
- * 직무별 경로의 단계마다 진행률. 단계 안의 로드맵 글을 모아 센다.
- * 같은 글이 앞 단계에 이미 나왔으면(인터넷, Git 같은 공통 로드맵) 뒤 단계에서는 다시 세지 않는다.
+ * 큰 로드맵의 단계마다 진행률. 같은 글이 앞 단계에 이미 나왔으면 뒤 단계에서는 다시 세지 않는다.
  */
-export function trackStats(track: Track, progress: StudyProgress) {
+export function courseStats(course: Course, progress: StudyProgress) {
   const counted = new Set<string>();
   let foundNext = false;
-  const steps: TrackStepStats[] = track.steps.map((step) => {
-    const roadmaps = step.roadmaps.map((key) => findRoadmap(key)).filter((roadmap) => roadmap !== undefined);
-    const posts = [...new Set(roadmaps.flatMap((roadmap) => roadmap.posts))].filter((slug) => !counted.has(slug));
+  const stages: CourseStageStats[] = course.stages.map((stage, index) => {
+    const posts = stagePosts(stage).filter((slug) => !counted.has(slug));
     for (const slug of posts) counted.add(slug);
     const stats = stageCounts(posts, progress);
     const isNext = !foundNext && stats.started < stats.total;
     if (isNext) foundNext = true;
     return {
-      label: step.label,
-      roadmaps: roadmaps.map((roadmap) => ({ key: roadmapKey(roadmap.path), label: roadmap.node.label, href: `/roadmap/${roadmapKey(roadmap.path)}` })),
+      label: stage.label,
+      group: stage.group,
+      roadmaps: (stage.roadmaps ?? [])
+        .map((key) => findRoadmap(key))
+        .filter((roadmap) => roadmap !== undefined)
+        .map((roadmap) => ({ key: roadmapKey(roadmap.path), label: roadmap.node.label, href: `/roadmap/${roadmapKey(roadmap.path)}` })),
+      picks: (stage.posts ?? []).map((slug) => {
+        const post = getPostBySlug(slug);
+        return { slug, title: post?.title ?? slug, href: postHref(slug), stage: stageOf(progress, slug) };
+      }),
       stats,
       isNext,
+      links: STAGE_LINKS.get(`${course.id}/${index}`) ?? [],
     };
   });
-  return { steps, total: stageCounts([...counted], progress) };
+  return { stages, total: stageCounts([...counted], progress) };
+}
+
+/** 이 큰 로드맵으로 들어오는 길 (다른 로드맵의 next) */
+export const incomingCourses = (id: string) =>
+  COURSES.flatMap((course) => course.next.filter((link) => link.course === id).map((link) => ({ id: course.id, label: course.label, why: link.why })));
+
+/** 큰 로드맵 지도. next를 화살표로, 앞 로드맵을 다 읽으면 길이 열린다 */
+export function courseGraph(progress: StudyProgress): { nodes: RoadmapGraphNode[]; edges: RoadmapGraphEdge[] } {
+  const read = new Map(COURSES.map((course) => [course.id, coursePosts(course).every((slug) => stageOf(progress, slug) >= 1)]));
+  const edges: RoadmapGraphEdge[] = COURSES.flatMap((course) =>
+    course.next.map((link) => ({ from: course.id, to: link.course, kind: "requires" as const, met: read.get(course.id) ?? false })),
+  );
+  const nodes = COURSES.map((course, index) => {
+    const stats = stageCounts(coursePosts(course), progress);
+    const incoming = edges.filter((edge) => edge.to === course.id);
+    const open = incoming.length > 0 ? incoming.some((edge) => edge.met) : stats.started === 0 && index === 0;
+    const state = stats.total > 0 && stats.done === stats.total ? "done" : stats.started > 0 ? "progress" : open ? "next" : "todo";
+    return {
+      id: course.id,
+      label: course.label,
+      sub: `글 ${stats.total}편 · 적용 ${stats.done}`,
+      href: `/roadmap/course/${course.id}`,
+      percent: stats.percent,
+      state,
+    } satisfies RoadmapGraphNode;
+  });
+  return { nodes, edges };
 }

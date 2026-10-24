@@ -65,17 +65,31 @@ export interface FlatCheckpoint {
 }
 
 /** 직무별 경로의 한 단계. roadmaps는 로드맵 절대 경로("frontend/react") */
-export interface TrackStep {
+/** 큰 로드맵의 단계 한 칸. 로드맵 경로를 통째로 읽거나, 입문 단계처럼 글 몇 편만 고른다 */
+export interface CourseStage {
   label: string;
-  roadmaps: string[];
+  /** 단계 묶음 이름 (웹 개발의 "프런트엔드", "백엔드"). 같은 group이 이어지면 한 묶음으로 보인다 */
+  group?: string;
+  /** 이 단계에서 읽을 로드맵 경로 */
+  roadmaps?: string[];
+  /** 로드맵 전체 대신 고른 글 slug */
+  posts?: string[];
 }
 
-/** roadmap.sh 역할 로드맵의 순서를 따라 로드맵을 엮은 경로 */
-export interface Track {
+/** 큰 로드맵 사이의 이음새: 여기서 저기로 넘어가면 좋은 이유 */
+export interface CourseLink {
+  course: string;
+  why: string;
+}
+
+/** 큰 로드맵(웹 개발, AI 개발, 알고리즘, CS 기초 …). 세부 로드맵을 공부 순서대로 엮는다 */
+export interface Course {
   id: string;
   label: string;
   description: string;
-  /** 순서를 참고한 roadmap.sh 주소 */
-  source: string;
-  steps: TrackStep[];
+  /** 단원 순서를 참고한 roadmap.sh 주소들 */
+  sources: string[];
+  stages: CourseStage[];
+  /** 이어서 공부하기 좋은 큰 로드맵 */
+  next: CourseLink[];
 }

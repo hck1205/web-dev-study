@@ -1,13 +1,8 @@
 import styled from "@emotion/styled";
 import Link from "next/link";
 import { anim, color, font, radius, space } from "@/common/design-system";
+import { media } from "@/common/styles/breakpoints";
 import { omitProps } from "@/common/styles/omit-props";
-
-export const Chips = styled.div`
-  display: flex;
-  flex-wrap: wrap;
-  gap: ${space[2]};
-`;
 
 export const Intro = styled.p`
   margin: ${space[3]} 0 ${space[2]};
@@ -125,4 +120,109 @@ export const StepMeta = styled.p`
   margin: ${space[1]} 0 0;
   color: ${color.textSubtle};
   font-size: ${font.size.xs};
+`;
+
+/** 웹 개발의 "프런트엔드", "백엔드"처럼 단계 묶음 이름. 세로선 위에 걸쳐 둔다 */
+export const GroupTitle = styled.li`
+  margin: ${space[4]} 0 0 calc(-1 * ${space[8]});
+  color: ${color.textMuted};
+  font-size: ${font.size.sm};
+  font-weight: ${font.weight.bold};
+  letter-spacing: 0.02em;
+
+  &:first-of-type {
+    margin-top: 0;
+  }
+`;
+
+export const Picks = styled.ul`
+  display: grid;
+  gap: ${space[1]};
+  margin: ${space[2]} 0 0;
+  padding: 0;
+  list-style: none;
+
+  a {
+    display: flex;
+    gap: ${space[2]};
+    align-items: center;
+    min-height: 2.75rem;
+    color: ${color.text};
+    font-size: ${font.size.sm};
+    text-decoration: none;
+  }
+
+  a:hover {
+    color: ${color.accent};
+  }
+`;
+
+/** 같은 글을 다루는 다른 큰 로드맵 단계로 가는 작은 링크 */
+export const Bridges = styled.p`
+  display: flex;
+  flex-wrap: wrap;
+  gap: ${space[1]} ${space[2]};
+  align-items: center;
+  margin: ${space[2]} 0 0;
+  color: ${color.textSubtle};
+  font-size: ${font.size.xs};
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0 ${space[2]};
+    border-radius: ${radius.full};
+    background: ${color.accentSoft};
+    color: ${color.accent};
+    text-decoration: none;
+  }
+`;
+
+export const Section = styled.section`
+  margin-top: ${space[8]};
+
+  h2 {
+    margin: 0 0 ${space[3]};
+    font-size: ${font.size.lg};
+  }
+`;
+
+export const LinkCards = styled.ul`
+  display: grid;
+  gap: ${space[2]};
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  ${media.tablet} {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+`;
+
+export const LinkCard = styled(Link)`
+  display: grid;
+  gap: ${space[1]};
+  height: 100%;
+  padding: ${space[3]};
+  border: 1px solid ${color.border};
+  border-radius: ${radius.md};
+  background: ${color.surface};
+  color: ${color.text};
+  text-decoration: none;
+  animation: ${anim.fadeUp} 360ms ${anim.easing.out} both;
+
+  strong {
+    font-size: ${font.size.base};
+  }
+
+  span {
+    color: ${color.textMuted};
+    font-size: ${font.size.sm};
+    line-height: ${font.leading.normal};
+  }
+
+  &:hover {
+    border-color: ${color.accent};
+  }
 `;

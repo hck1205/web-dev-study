@@ -4,20 +4,19 @@ import { Badge, ChoiceChip, Container, PageHeader, color } from "@/common/design
 import { ProgressBar } from "../progress-bar";
 import { ProgressTools } from "../progress-tools";
 import { RoadmapGraph } from "../roadmap-graph";
-import { RoadmapTracks } from "../roadmap-tracks";
 import { useRoadmapIndex } from "./roadmap-index";
 import { CardDescription, CardHead, CardMeta, Cards, Legend, NextLink, NextList, RoadmapCard, Section, SectionHead, TierCard, Tiers } from "./roadmap-index.styled";
 
 const TIER_TONES = { 1: "accent", 2: "info", 3: "neutral" } as const;
 
 export function RoadmapIndex() {
-  const { tiers, tierLabels, next, roadmaps, graph, postCount, view, setView } = useRoadmapIndex();
+  const { tiers, tierLabels, next, roadmaps, courses, courseGraph, graph, postCount, view, setView } = useRoadmapIndex();
 
   return (
     <Container size="narrow">
       <PageHeader
         title="학습 로드맵"
-        lead={`글 ${postCount}편을 읽는 순서다. 로드맵 안의 로드맵을 따라 앞 글을 먼저 이해하고 다음으로 넘어간다. 글마다 읽음 → 설명함 → 적용함 → 응용함 네 단계를 기록한다.`}
+        lead={`글 ${postCount}편을 읽는 순서다. 큰 로드맵 하나를 골라 단계대로 가면 되고, 단계마다 다른 큰 로드맵과 이어지는 곳이 표시된다. 글마다 읽음 → 설명함 → 적용함 → 응용함 네 단계를 기록한다.`}
       />
 
       <Tiers>
@@ -45,6 +44,34 @@ export function RoadmapIndex() {
       </Legend>
 
       <Section>
+        <h2>큰 로드맵</h2>
+        <CardDescription>
+          화살표는 &quot;다 읽고 나면 이어 가기 좋은 곳&quot;이다. 어디서 시작해도 결국 시스템 디자인과 AI 개발에서 다시 만난다.
+        </CardDescription>
+        <div style={{ marginTop: "0.75rem" }}>
+          <RoadmapGraph nodes={courseGraph.nodes} edges={courseGraph.edges} label="큰 로드맵 지도" />
+        </div>
+        <Cards>
+          {courses.map((course, index) => (
+            <li key={course.id} style={{ animationDelay: `${index * 40}ms` }}>
+              <RoadmapCard href={course.href} locked={false}>
+                <CardHead>
+                  <h3>{course.label}</h3>
+                </CardHead>
+                <CardDescription>{course.description}</CardDescription>
+                <ProgressBar counts={course.total.counts} total={course.total.total} />
+                <CardMeta>
+                  <span>{course.stageCount}단계</span>
+                  <span>글 {course.total.total}편</span>
+                  <span>적용 {course.total.done}편</span>
+                </CardMeta>
+              </RoadmapCard>
+            </li>
+          ))}
+        </Cards>
+      </Section>
+
+      <Section>
         <h2>다음에 읽을 글</h2>
         {next.length === 0 ? (
           <CardDescription>등급 3까지 모두 열어 봤다. 이제 /study에서 복습과 응용만 돌리면 된다.</CardDescription>
@@ -66,13 +93,10 @@ export function RoadmapIndex() {
 
       <Section>
         <SectionHead>
-          <h2>로드맵</h2>
+          <h2>세부 로드맵</h2>
           <div role="group" aria-label="보기 방식">
             <ChoiceChip selected={view === "graph"} onClick={() => setView("graph")}>
               지도
-            </ChoiceChip>
-            <ChoiceChip selected={view === "tracks"} onClick={() => setView("tracks")}>
-              직무별
             </ChoiceChip>
             <ChoiceChip selected={view === "list"} onClick={() => setView("list")}>
               목록
@@ -81,8 +105,6 @@ export function RoadmapIndex() {
         </SectionHead>
         {view === "graph" ? (
           <RoadmapGraph nodes={graph.nodes} edges={graph.edges} label="최상위 로드맵 지도" />
-        ) : view === "tracks" ? (
-          <RoadmapTracks />
         ) : (
           <Cards>
           {roadmaps.map((roadmap, index) => (

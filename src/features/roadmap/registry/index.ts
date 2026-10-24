@@ -1,13 +1,13 @@
 import { POSTS } from "@/features/posts/registry";
 import { ROADMAPS } from "./roadmaps";
-import { TRACKS } from "./tracks";
+import { COURSES } from "./courses";
 import type { FlatCheckpoint, FlatRoadmap, PostPlacement } from "./types";
-import { flattenCheckpoints, flattenRoadmaps, placePosts, roadmapKey, validateRoadmaps, validateTracks } from "./utils";
+import { flattenCheckpoints, flattenRoadmaps, placePosts, roadmapKey, validateCourses, validateRoadmaps } from "./utils";
 
-export type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier, Track, TrackStep } from "./types";
+export type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Course, CourseLink, CourseStage, Tier } from "./types";
 export { checkpointHref, isCheckpoint, isPost, isRoadmap, postSlug, roadmapHref, roadmapKey } from "./utils";
 
-export { ROADMAPS, TRACKS };
+export { COURSES, ROADMAPS };
 
 /** 부모 → 자식 순으로 평탄화한 모든 로드맵 */
 export const FLAT_ROADMAPS: FlatRoadmap[] = flattenRoadmaps(ROADMAPS);
@@ -16,7 +16,7 @@ validateRoadmaps(
   FLAT_ROADMAPS,
   POSTS.map((post) => post.slug),
 );
-validateTracks(TRACKS, FLAT_ROADMAPS);
+validateCourses(COURSES, FLAT_ROADMAPS);
 
 const placements: Map<string, PostPlacement> = placePosts(FLAT_ROADMAPS);
 
@@ -41,3 +41,13 @@ export const childRoadmaps = (roadmap: FlatRoadmap) =>
 
 /** 로드맵 안(하위 포함)의 글마다 등급 */
 export const tierOf = (slug: string) => placements.get(slug)?.tier ?? 2;
+
+export const courseHref = (id: string) => `/roadmap/course/${id}`;
+
+export const findCourse = (id: string) => COURSES.find((course) => course.id === id);
+
+/** 상단 메뉴의 로드맵 하위 항목 (서버 layout에서 쓰므로 React에 의존하지 않는다) */
+export const COURSE_NAV = [
+  { id: "roadmap/all", label: "전체 로드맵", href: "/roadmap" },
+  ...COURSES.map((course) => ({ id: `roadmap/course/${course.id}`, label: course.label, href: courseHref(course.id) })),
+];

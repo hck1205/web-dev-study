@@ -1,0 +1,207 @@
+import type { Course } from "./types";
+
+/**
+ * 큰 로드맵. 세부 로드맵(roadmaps.ts)을 공부 순서대로 엮어 "웹 개발", "AI 개발" 같은 길 하나로 보여 준다.
+ * - 글은 여전히 세부 로드맵 하나에만 들어 있다. 큰 로드맵은 그 로드맵들을 읽는 순서만 정한다.
+ * - 같은 세부 로드맵이 여러 큰 로드맵에 나와도 된다. 화면에서 "여기서도 배운다"로 서로 이어 보여 준다.
+ * - next는 다 읽은 뒤(또는 도중에) 넘어가기 좋은 큰 로드맵과 그 이유. 지도에서 화살표가 된다.
+ * - 단원 순서는 roadmap.sh의 역할·기술 로드맵을 참고했다.
+ */
+export const COURSES: Course[] = [
+  {
+    id: "start",
+    label: "개발 첫걸음",
+    description: "처음 시작하는 사람을 위한 길. 인터넷이 도는 법, 첫 웹 페이지, Git, 첫 서버, 첫 배포를 한 번씩 손에 익히고 나서 원하는 큰 로드맵으로 갈라진다.",
+    sources: ["https://roadmap.sh/frontend-beginner", "https://roadmap.sh/backend-beginner", "https://roadmap.sh/devops-beginner", "https://roadmap.sh/git-github-beginner"],
+    stages: [
+      { label: "인터넷과 웹이 도는 법", posts: ["what-happens-google-com", "dns", "http-message", "http-methods", "http-status-codes"] },
+      { label: "첫 웹 페이지", posts: ["html-semantics", "css-box-model-layout", "css-flexbox-grid", "js-var-let-const", "js-loops-control-flow"] },
+      { label: "Git으로 저장하고 나누기", posts: ["git-internals-basics", "git-staging-area", "git-branch-merge", "git-remote-collaboration"] },
+      { label: "첫 서버와 첫 데이터", posts: ["json-crud-http", "rest-api-design", "nodejs-server-runtime", "sql-basics"] },
+      { label: "첫 배포", posts: ["linux-files-permissions", "ssh-in-practice", "docker-container-basics", "ci-cd-basics", "aws-ec2-ubuntu-server-setup"] },
+    ],
+    next: [
+      { course: "cs", why: "방금 써 본 것들이 왜 그렇게 도는지 아래층부터 알고 싶다면" },
+      { course: "web", why: "화면이든 서버든 웹 서비스를 직접 만들고 싶다면" },
+      { course: "algorithms", why: "코딩 테스트를 준비해야 한다면" },
+    ],
+  },
+  {
+    id: "cs",
+    label: "CS 기초",
+    description: "직무와 상관없이 모든 로드맵이 기대는 바닥. 컴퓨터가 계산하는 법부터 프로그램, 운영체제, 네트워크, 자료구조, 설계 원칙까지.",
+    sources: ["https://roadmap.sh/computer-science"],
+    stages: [
+      { label: "컴퓨터 구조", roadmaps: ["foundations/computer-architecture"] },
+      { label: "프로그램이 도는 법", roadmaps: ["foundations/programs"] },
+      { label: "리눅스", roadmaps: ["foundations/linux"] },
+      { label: "네트워크 계층", roadmaps: ["foundations/network"] },
+      { label: "HTTP와 웹", roadmaps: ["foundations/http"] },
+      { label: "자료구조", roadmaps: ["algorithms/data-structures"] },
+      { label: "설계 원칙과 디자인 패턴", roadmaps: ["design-patterns"] },
+    ],
+    next: [
+      { course: "algorithms", why: "자료구조를 문제 풀이에 써 먹는 다음 단계" },
+      { course: "web", why: "HTTP와 프로세스를 알면 웹 서비스가 어디서 느려지는지 보인다" },
+      { course: "devops", why: "리눅스와 네트워크가 그대로 인프라 운영의 바닥이 된다" },
+    ],
+  },
+  {
+    id: "algorithms",
+    label: "알고리즘·코딩 테스트",
+    description: "복잡도와 자료구조에서 시작해 풀이 기법을 익히고, LeetCode 문제를 패턴별로 푼다. 마지막은 분산 시스템에서 쓰는 알고리즘으로 시스템 디자인과 만난다.",
+    sources: ["https://roadmap.sh/datastructures-and-algorithms", "https://roadmap.sh/leetcode"],
+    stages: [
+      { label: "복잡도와 자료구조", roadmaps: ["algorithms/data-structures"] },
+      { label: "풀이 기법", roadmaps: ["algorithms/techniques"] },
+      { label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
+    ],
+    next: [
+      { course: "system-design", why: "해시, 트라이, 힙이 대규모 시스템에서는 샤딩, 자동 완성, 랭킹이 된다" },
+      { course: "ai", why: "최근접 탐색과 그래프 탐색이 벡터 검색과 에이전트 계획의 바탕이다" },
+    ],
+  },
+  {
+    id: "web",
+    label: "웹 개발",
+    description: "HTTP와 자바스크립트를 공통 바닥으로 깔고, 프런트엔드와 백엔드 갈래를 지나 보안, 설계, 배포에서 다시 만난다. 어느 한쪽만 해도 되지만 반대쪽을 알면 협업이 쉬워진다.",
+    sources: ["https://roadmap.sh/frontend", "https://roadmap.sh/backend", "https://roadmap.sh/full-stack"],
+    stages: [
+      { group: "공통 바닥", label: "인터넷과 HTTP", roadmaps: ["foundations/http"] },
+      { group: "공통 바닥", label: "Git과 개발 도구", roadmaps: ["foundations/git", "foundations/tooling"] },
+      {
+        group: "공통 바닥",
+        label: "자바스크립트",
+        roadmaps: ["javascript/basics", "javascript/functions", "javascript/objects", "javascript/oop", "javascript/async", "javascript/browser"],
+      },
+      { group: "공통 바닥", label: "TypeScript", roadmaps: ["javascript/typescript"] },
+      { group: "프런트엔드", label: "HTML과 CSS", roadmaps: ["frontend/html-css"] },
+      { group: "프런트엔드", label: "접근성과 SEO", roadmaps: ["frontend/accessibility"] },
+      { group: "프런트엔드", label: "React", roadmaps: ["frontend/react"] },
+      { group: "프런트엔드", label: "렌더링 전략과 Next.js", roadmaps: ["frontend/rendering", "frontend/nextjs"] },
+      { group: "프런트엔드", label: "성능", roadmaps: ["frontend/performance"] },
+      { group: "프런트엔드", label: "UI·UX 패턴", roadmaps: ["frontend/ui-ux"] },
+      { group: "프런트엔드", label: "테스트, 구조, 배포", roadmaps: ["frontend/architecture"] },
+      { group: "백엔드", label: "SQL과 모델링", roadmaps: ["database/sql", "database/modeling"] },
+      { group: "백엔드", label: "인덱스와 트랜잭션", roadmaps: ["database/index", "database/transactions"] },
+      { group: "백엔드", label: "API 설계", roadmaps: ["backend/api", "backend/graphql"] },
+      { group: "백엔드", label: "인증과 인가", roadmaps: ["backend/auth"] },
+      { group: "백엔드", label: "런타임과 프레임워크", roadmaps: ["backend/runtime", "backend/spring"] },
+      { group: "백엔드", label: "캐시", roadmaps: ["database/redis"] },
+      { group: "백엔드", label: "테스트", roadmaps: ["backend/testing"] },
+      { group: "백엔드", label: "아키텍처와 메시징", roadmaps: ["backend/architecture", "backend/messaging"] },
+      { group: "다시 만나는 곳", label: "웹 보안", roadmaps: ["security/web-attacks"] },
+      { group: "다시 만나는 곳", label: "설계 원칙과 패턴", roadmaps: ["design-patterns"] },
+      { group: "다시 만나는 곳", label: "컨테이너로 배포", roadmaps: ["infra/docker"] },
+      { group: "다시 만나는 곳", label: "프런트엔드 시스템 디자인", roadmaps: ["frontend/system-design"] },
+    ],
+    next: [
+      { course: "devops", why: "만든 서비스를 컨테이너, 쿠버네티스, CI/CD로 직접 굴려 보고 싶다면" },
+      { course: "data", why: "DB를 더 깊게: 운영, 복제, 다른 저장소, 데이터 파이프라인" },
+      { course: "security", why: "웹 공격 다음은 암호와 인프라 보안이다" },
+      { course: "design", why: "화면을 더 잘 만들고 싶다면 디자인 시스템과 UX로" },
+    ],
+  },
+  {
+    id: "data",
+    label: "데이터베이스와 데이터",
+    description: "SQL과 트랜잭션을 단단히 하고, PostgreSQL 운영, 캐시·문서·검색 저장소, 복제와 샤딩, 데이터 파이프라인까지 데이터가 커지는 순서대로 간다.",
+    sources: ["https://roadmap.sh/sql", "https://roadmap.sh/postgresql-dba", "https://roadmap.sh/data-engineer"],
+    stages: [
+      { label: "SQL 기본과 모델링", roadmaps: ["database/sql", "database/modeling"] },
+      { label: "인덱스와 트랜잭션", roadmaps: ["database/index", "database/transactions"] },
+      { label: "PostgreSQL 깊게", roadmaps: ["database/postgresql", "database/operations"] },
+      { label: "Redis, MongoDB, Elasticsearch", roadmaps: ["database/redis", "database/mongodb", "database/elasticsearch"] },
+      { label: "저장소 고르기", roadmaps: ["database/db-types"] },
+      { label: "복제와 샤딩", roadmaps: ["database/scaling"] },
+      { label: "데이터 엔지니어링", roadmaps: ["data-engineering"] },
+      { label: "SQLD 시험", roadmaps: ["database/sqld"] },
+    ],
+    next: [
+      { course: "system-design", why: "복제, 샤딩, 파이프라인이 설계 사례의 재료가 된다" },
+      { course: "ai", why: "벡터 DB와 데이터 파이프라인이 RAG와 모델 운영으로 이어진다" },
+    ],
+  },
+  {
+    id: "devops",
+    label: "인프라·DevOps",
+    description: "리눅스와 네트워크 위에 웹 서버, 컨테이너, 클라우드, IaC, CI/CD, 쿠버네티스, 관측, SRE를 차례로 쌓는다.",
+    sources: ["https://roadmap.sh/devops", "https://roadmap.sh/docker", "https://roadmap.sh/kubernetes", "https://roadmap.sh/terraform", "https://roadmap.sh/aws"],
+    stages: [
+      { label: "리눅스와 셸", roadmaps: ["foundations/linux"] },
+      { label: "Git", roadmaps: ["foundations/git"] },
+      { label: "네트워크와 프로토콜", roadmaps: ["foundations/network", "foundations/http"] },
+      { label: "웹 서버와 프록시", roadmaps: ["infra/nginx"] },
+      { label: "컨테이너", roadmaps: ["infra/docker"] },
+      { label: "클라우드 네트워킹", roadmaps: ["infra/cloud-network"] },
+      { label: "클라우드", roadmaps: ["infra/cloud"] },
+      { label: "IaC", roadmaps: ["infra/iac"] },
+      { label: "CI/CD", roadmaps: ["infra/ci-cd"] },
+      { label: "쿠버네티스", roadmaps: ["infra/kubernetes"] },
+      { label: "관측", roadmaps: ["infra/observability"] },
+      { label: "SRE와 장애 대응", roadmaps: ["infra/sre"] },
+      { label: "인프라 보안", roadmaps: ["security/infra-security"] },
+    ],
+    next: [
+      { course: "security", why: "인프라 보안 다음은 보안 운영과 암호다" },
+      { course: "system-design", why: "운영해 본 부품들로 큰 시스템을 설계한다" },
+    ],
+  },
+  {
+    id: "security",
+    label: "보안",
+    description: "웹 공격과 방어에서 시작해 인증, 암호학, 인프라 보안, 보안 운영까지. 어느 직무든 결국 한 번은 지나간다.",
+    sources: ["https://roadmap.sh/cyber-security", "https://roadmap.sh/devsecops"],
+    stages: [
+      { label: "웹 공격과 방어", roadmaps: ["security/web-attacks"] },
+      { label: "인증과 인가", roadmaps: ["backend/auth"] },
+      { label: "암호학", roadmaps: ["security/cryptography"] },
+      { label: "인프라 보안", roadmaps: ["security/infra-security"] },
+      { label: "보안 운영", roadmaps: ["security/operations"] },
+    ],
+    next: [{ course: "system-design", why: "인증, 암호, 권한 경계가 설계 단계의 결정이 된다" }],
+  },
+  {
+    id: "system-design",
+    label: "시스템 디자인",
+    description: "다른 큰 로드맵이 모두 모이는 곳. 서버 한 대를 수백만 사용자 규모로 키우며 캐시, 큐, 샤딩, 합의를 쓰고 실제 서비스를 설계해 본다.",
+    sources: ["https://roadmap.sh/system-design", "https://roadmap.sh/software-architect"],
+    stages: [
+      { label: "수백만 사용자로 키우기", roadmaps: ["system-design/fundamentals"] },
+      { label: "핵심 개념", roadmaps: ["system-design/concepts"] },
+      { label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
+      { label: "설계 사례", roadmaps: ["system-design/cases"] },
+      { label: "프런트엔드 시스템 디자인", roadmaps: ["frontend/system-design"] },
+    ],
+    next: [
+      { course: "ai", why: "LLM 서비스 설계는 검색, 캐시, 큐를 새로 조합하는 문제다" },
+    ],
+  },
+  {
+    id: "ai",
+    label: "AI 개발",
+    description: "LLM이 무엇을 하는지부터 API 연동, RAG, 에이전트, Claude Code까지. 개발자가 LLM 기능을 만들고 운영하는 관점으로 간다.",
+    sources: ["https://roadmap.sh/ai-engineer", "https://roadmap.sh/ai-agents", "https://roadmap.sh/claude-code", "https://roadmap.sh/prompt-engineering"],
+    stages: [
+      { label: "LLM 기초와 연동", roadmaps: ["ai/llm"] },
+      { label: "RAG", roadmaps: ["ai/rag"] },
+      { label: "Claude Code", roadmaps: ["ai/claude-code"] },
+    ],
+    next: [],
+  },
+  {
+    id: "design",
+    label: "UI·UX와 디자인 시스템",
+    description: "화면을 쓰기 좋게 만드는 길. 접근성, 움직임과 로딩 패턴, 디자인 시스템, 검색 엔진에 잘 보이는 페이지까지 프런트엔드 개발자가 직접 구현하는 부분을 다룬다.",
+    sources: ["https://roadmap.sh/ux-design", "https://roadmap.sh/design-system", "https://roadmap.sh/seo"],
+    stages: [
+      { label: "HTML과 CSS", roadmaps: ["frontend/html-css"] },
+      { label: "접근성과 SEO", roadmaps: ["frontend/accessibility"] },
+      { label: "UI·UX 패턴", roadmaps: ["frontend/ui-ux"] },
+      { label: "성능", roadmaps: ["frontend/performance"] },
+    ],
+    next: [
+      { course: "ai", why: "LLM 응답을 스트리밍하는 화면도 결국 UX 문제다" },
+    ],
+  },
+];
