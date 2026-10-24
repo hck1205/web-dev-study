@@ -1,0 +1,232 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("path-traversal-file-upload");
+
+<EasyIntro>
+  어떤 사이트가 파일을 내려받게 해 준다. 주소에 파일 이름을 적으면 그 파일을 준다. 그런데 파일 이름 자리에 "위층으로 올라가라"는 기호를 섞어 적으면, 서버가 시키는 대로 위로 위로 올라가서 원래 주면 안 되는 서버의 비밀 파일까지 꺼내 준다. 폴더를 거슬러 올라가는 이 기호가 바로 점 두 개 슬래시다. 건물에서 내 방 열쇠로 윗층 사장실까지 열려 버리는 셈이다. 막는 방법은 생각보다 까다롭다. 같은 "위로 올라가라"를 적는 방법이 글자를 바꿔 가며 여러 가지라서, 특정 글자만 막으면 다른 표기로 새어 나간다. 그래서 글자를 막는 대신, 최종적으로 어느 파일을 가리키는지 계산해 보고 그게 허락된 방 안이면 주고 아니면 거절하는 쪽이 안전하다. 파일을 올리는 기능도 똑같이 조심해야 한다.
+</EasyIntro>
+
+다운로드 API를 하나 만들었다. `/download?file=report.txt`를 부르면 서버가 `files/` 폴더에서 그 파일을 읽어 돌려준다. 잘 돌아간다. 그런데 QA가 장난으로 이렇게 넣어 봤다. `/download?file=../../etc/passwd`. 리눅스 시스템 파일이 그대로 내려왔다. 서버는 `files/` 안의 파일을 주는 대신, `..`를 따라 두 칸 위로 올라가 루트의 시스템 파일을 읽어 준 것이다.
+
+이게 경로 순회(path traversal, directory traversal)다. 공격자가 파일 이름에 `..`를 섞어 **정해진 디렉터리 밖으로 서버를 데려가는** 공격이다. 서버가 읽을 수 있는 모든 파일이 표적이 된다. 설정 파일, 비밀 키, 소스 코드, 다른 사용자의 업로드. 이 글은 로컬 실험 서버에 취약한 버전과 안전한 버전을 띄워 실제로 뚫고 막는다. 그다음 파일을 **올리는** 쪽(업로드)으로 넘어가 확장자·MIME 검사의 한계, zip slip, 이미지 폴리글랏, 저장 설계까지 본다. 사용자 입력을 경계에서 거르는 큰 원칙은 [입력 검증과 시큐어 코딩](/posts/input-validation-secure-coding)에서 다룬다. 이 글은 그중 파일 경로 하나를 깊게 판다.
+
+OS 기준은 Ubuntu 24.04, 런타임은 Node.js 22를 쓴다. 다른 OS와 다른 부분은 그때그때 짚는다.
+
+## 파일 이름 자리를 뜯어본다
+
+먼저 문제의 URL을 조각으로 나눠 보자. 공격은 전부 `file` 파라미터 하나에서 일어난다.
+
+<UrlAnatomy
+  base="https://files.example.com/download"
+  caption="공격은 file 파라미터 하나에 집중된다. 여기에 ../를 섞는다."
+  params={[
+    {
+      key: "file",
+      value: "report.txt",
+      title: "정상 요청",
+      description: "서버는 files/report.txt 를 읽어 돌려준다. 여기까진 의도대로다.",
+    },
+    {
+      key: "file",
+      value: "../../etc/passwd",
+      display: "file=../../etc/passwd",
+      title: "경로 순회",
+      description: "../ 두 번으로 files/ 밖, 루트까지 올라가 시스템 파일을 가리킨다. 서버가 그대로 읽으면 유출된다.",
+      code: "files/../../etc/passwd  →  /etc/passwd",
+    },
+    {
+      key: "file",
+      value: "%252e%252e%252fsecret",
+      display: "file=%252e%252e%252fsecret",
+      title: "이중 인코딩 우회",
+      description: "'..'를 차단해도, %252e는 한 번 풀면 %2e, 또 풀면 . 이 된다. 어딘가에서 두 번 디코딩되면 ..가 되살아난다.",
+      code: "%252e → %2e → .",
+    },
+  ]}
+/>
+
+취약한 서버를 실제로 띄워 공격해 봤다. `files/` 안에는 `report.txt`를, 그 바깥 `secret/`에는 `.env`(가짜 비밀번호)를 두었다. 서버는 받은 이름을 `files/`에 그냥 이어 붙여 읽는다.
+
+```text
+== vulnerable?file=report.txt
+hello report
+== vulnerable?file=../secret/.env
+DB_PASSWORD=not-a-real-secret
+```
+
+`../secret/.env` 한 줄로 디렉터리 밖 파일이 내려왔다. `files/` + `../secret/.env`를 그대로 합치면 `secret/.env`를 가리키기 때문이다.
+
+## 글자를 막으면 다른 글자로 샌다
+
+처음 떠오르는 방어는 "`..`가 들어오면 거부"다. 해 봤다. 문자열에 `..`가 있으면 막되, 들어온 이름을 한 번 `decodeURIComponent`로 푸는 서버다.
+
+```text
+== naiveFilter?file=../secret/.env
+error: blocked
+== naiveFilter?file=%252e%252e%252fsecret%252f.env
+DB_PASSWORD=not-a-real-secret
+```
+
+날것 `..`는 막혔다. 하지만 **이중 인코딩**에 뚫렸다. `%252e`를 서버가 한 번 디코딩하면 `%2e`가 되고, URL 처리기나 다음 단계가 또 한 번 디코딩하면 `.`이 된다. 검사하는 시점과 디코딩하는 시점이 어긋나면 `..`가 검사를 지나친 뒤 되살아난다. 이 종류가 한둘이 아니다.
+
+- `%2e%2e%2f` — 단순 URL 인코딩
+- `%252e%252e%252f` — 이중 인코딩
+- `..\\` — 윈도는 역슬래시도 경로 구분자로 받는다
+- `....//` — `..`를 지우는 필터가 `....//`에서 가운데 `..`를 지우면 남은 게 `../`
+- `report.txt%00.png` — 널 바이트로 뒤를 잘라 확장자 검사를 속인다(옛 언어·라이브러리)
+
+블랙리스트(차단 목록)로 이 모든 표기를 쫓는 건 지는 싸움이다. 하나 막으면 하나가 나온다. 방향을 바꿔야 한다. **글자를 보지 말고, 최종적으로 가리키는 경로를 계산해서 그게 허락된 폴더 안인지 본다.**
+
+## 정규화한 뒤 기준 폴더 안인지 확인한다
+
+핵심 절차는 세 단계다. (1) 입력을 완전히 디코딩하고 경로를 정규화한다. (2) 기준 디렉터리에 합쳐 **절대 경로로 해석**한다. (3) 그 절대 경로가 **기준 디렉터리로 시작하는지** 확인한다. Node의 `path.resolve`가 `..`를 눌러 평평하게 만들어 준다.
+
+안전한 버전으로 같은 공격을 받아 봤다.
+
+```text
+== safe?file=../secret/.env
+error: outside base
+== safe?file=%252e%252e%252fsecret%252f.env
+error: ENOENT
+== safe?file=/etc/hostname
+error: outside base
+```
+
+`../secret/.env`는 해석하면 `files/` 밖이라 "outside base"로 거부됐다. 절대 경로 `/etc/hostname`을 통째로 넣어도, `path.resolve(base, "/etc/hostname")`는 절대 경로를 만나면 그걸 채택하므로 `files/`로 시작하지 않아 거부된다. 이중 인코딩은 디코딩된 이름이 실제 파일로 존재하지 않아 ENOENT다.
+
+서버가 받은 이름을 정규화하면서 `..` 스택이 어떻게 눌리는지 단계로 보자.
+
+<AlgoTrace
+  cells={["a", "b", "..", "..", "..", "etc", "passwd"]}
+  memoryLabel="경로 스택"
+  caption="세그먼트를 훑으며 ..를 만나면 위를 하나 지운다. 기준 밖으로 나가려 하면 거부한다."
+  steps={[
+    { pointer: 0, memory: ["a"], caption: "a 를 쌓는다." },
+    { pointer: 1, memory: ["a", "b"], caption: "b 를 쌓는다. 지금 files/a/b 안이다." },
+    { pointer: 2, memory: ["a"], caption: ".. : 위로 한 칸. b 를 지운다." },
+    { pointer: 3, memory: [], caption: ".. : a 를 지운다. 이제 기준 폴더에 와 있다." },
+    { pointer: 4, memory: [], found: [4], caption: ".. : 스택이 비었는데 또 올라가려 한다 → 기준 밖. 거부한다." },
+  ]}
+/>
+
+이 로직을 직접 짜 보자. 아래 틀을 채운다. 입력을 디코딩하고, 널 바이트를 거르고, `/`와 `\`로 쪼갠 뒤 `..`를 스택으로 눌러 기준 밖으로 나가면 `null`을 돌려준다.
+
+<CodePlayground
+  caption="기준 폴더를 벗어나지 않는 경로만 돌려준다"
+  functionName="resolveUnder"
+  initialCode={`function resolveUnder(base, name) {\n  // 1) name을 decodeURIComponent로 풀고(실패하면 null)\n  // 2) 널 바이트가 있으면 null\n  // 3) / 와 \\\\ 로 쪼개 ..를 스택으로 누른다.\n  //    스택이 빈 상태에서 ..면 기준 밖 → null\n  // 4) base + "/" + 남은 조각\n  return null;\n}`}
+  solution={`function resolveUnder(base, name) {\n  if (name == null) return null;\n  let decoded;\n  try { decoded = decodeURIComponent(name); } catch { return null; }\n  if (decoded.includes("\\u0000")) return null;\n  const stack = [];\n  for (const s of decoded.split(/[\\\\/]+/)) {\n    if (s === "" || s === ".") continue;\n    if (s === "..") {\n      if (stack.length === 0) return null;\n      stack.pop();\n    } else stack.push(s);\n  }\n  return base.replace(/\\/+$/, "") + "/" + stack.join("/");\n}`}
+  tests={[
+    { args: ["/srv/files", "report.txt"], expected: "/srv/files/report.txt" },
+    { args: ["/srv/files", "sub/../report.txt"], expected: "/srv/files/report.txt" },
+    { args: ["/srv/files", "../secret/.env"], expected: null },
+    { args: ["/srv/files", "%2e%2e/secret/.env"], expected: null },
+    { args: ["/srv/files", "a/b/../../../etc/passwd"], expected: null },
+  ]}
+/>
+
+두 번째 테스트가 보여 주듯, 폴더 안에서 오르내리는 `sub/../report.txt`는 허용된다. 세 번째처럼 기준을 벗어나는 순간만 막는다. 이게 "글자 막기"와 다른 점이다. 정상적인 상대 경로는 살리고 탈출만 거른다.
+
+### prefix 검사의 함정 하나
+
+"절대 경로가 base로 시작하는지"를 문자열 `startsWith(base)`로만 확인하면 함정이 있다. 기준이 `/srv/files`일 때 `/srv/files-backup/db.sql`도 `/srv/files`로 시작한다.
+
+```text
+prefix trap: true   (resolve("/srv/files", "../files-backup/db.sql").startsWith("/srv/files"))
+```
+
+그래서 반드시 **구분자까지 붙여** `base + "/"` 로 시작하는지 본다. 위 playground 코드는 조각을 다시 이어 붙이므로 이 문제가 없지만, `path.resolve` 결과를 문자열로 비교하는 코드라면 꼭 트레일링 슬래시를 넣어야 한다.
+
+## 심볼릭 링크와 TOCTOU
+
+경로 검사를 통과해도 끝이 아니다. 공격자가(또는 다른 경로로 침투한 뒤) `files/` 안에 **심볼릭 링크**를 심어 두면, 링크 이름은 `files/` 안이지만 실제로는 밖을 가리킨다. 실험으로 확인했다. `files/notes.txt`를 `../secret/.env`로 가는 심링크로 만들고 검사했다.
+
+```text
+resolve check passes: true
+content: DB_PASSWORD=not-a-real-secret
+realpath: secret/.env inside: false
+```
+
+`path.resolve`로 본 경로는 `files/notes.txt`라 검사를 통과한다. 하지만 `fs.realpathSync`로 **실제 실체 경로**를 풀면 `secret/.env`, 기준 밖이다. 그래서 민감한 환경에서는 검사를 `realpath`(심링크를 끝까지 따라간 경로)에 대고 다시 한다. 리눅스에서는 열 때 `O_NOFOLLOW`로 마지막 경로 조각이 링크면 열기를 거부하게 할 수 있다. Node에서는 `fs.open(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)`처럼 플래그로 준다(리눅스·macOS, 윈도에는 없다).
+
+TOCTOU(Time-Of-Check to Time-Of-Use, 검사 시점과 사용 시점 사이의 틈)도 같은 결의 문제다. 경로를 검사한 **뒤**, 파일을 여는 **사이**에 공격자가 그 이름을 심링크로 바꿔치기하면, 검사는 안전한 파일을 보고 통과했는데 실제로 열리는 건 바뀐 쪽이다. 막는 법은 "검사한 그 핸들로 작업하기"다. 경로로 두 번 접근(검사 때 한 번, 사용 때 한 번)하지 말고, 한 번 열어서 얻은 파일 디스크립터로만 읽는다.
+
+## 올리는 쪽: 확장자·MIME·매직 바이트
+
+내려받기만큼 위험한 게 올리기다. 사용자가 `avatar.jpg`를 올린다고 해서 그게 정말 이미지라는 보장은 없다. 세 가지 검사가 있는데, 각각 한계가 뚜렷하다.
+
+- **확장자 검사**: 이름 끝의 `.jpg`만 본다. 공격자가 `shell.php.jpg`나 `shell.jpg`(내용은 PHP)로 이름만 맞추면 통과한다. 이름은 공격자가 정한다.
+- **MIME 타입(Content-Type) 검사**: 브라우저가 보낸 헤더를 본다. 이것도 공격자가 임의로 보낸다. 믿을 수 없다.
+- **매직 바이트 검사**: 파일 **내용**의 앞 몇 바이트를 본다. JPEG는 `FF D8 FF`, PNG는 `89 50 4E 47`로 시작한다. 이름이나 헤더보다 믿을 만하다. 하지만 이것도 완벽하진 않다(아래 폴리글랏).
+
+실무 원칙은 세 가지를 **모두**, 그리고 **허용 목록**으로 한다. "위험한 확장자 차단"(블랙리스트)이 아니라 "이 몇 가지만 허용"(화이트리스트)이다. 매직 바이트로 실제 타입을 확인하고, 그 타입에 맞는 확장자로 **서버가 새 이름을 붙여** 저장한다. 사용자가 준 이름은 표시용으로만 쓰고 저장 경로에 넣지 않는다. 이름이 곧 경로가 되면 그 이름이 다시 경로 순회가 된다.
+
+## 이미지인데 스크립트다: 폴리글랏
+
+매직 바이트 검사도 뚫는 수가 폴리글랏(polyglot) 파일이다. 여러 형식으로 동시에 유효한 파일이다. GIF로 시작하면서 동시에 자바스크립트로도 돌아가는 파일을 만들어 봤다.
+
+```text
+avatar.gif: GIF image data, version 89a   (file 명령이 진짜 GIF로 인식)
+ran as JS                                  (같은 바이트를 JS로 실행하자 코드가 돌았다)
+```
+
+`GIF89a`로 시작해 매직 바이트·`file` 명령·이미지 뷰어를 모두 통과한다. 그런데 그 뒤에 자바스크립트를 숨겨 두면, 이 파일을 `<script src="avatar.gif">`로 불러오거나 서버가 잘못 해석하면 코드가 실행된다. 업로드한 파일이 [XSS](/posts/xss)가 되는 경로다. 막는 법은 "타입 확인"을 넘어선다.
+
+- 업로드 파일은 앱과 **다른 출처(origin)** 에서 서빙한다. 쿠키·DOM을 공유하지 않는 별도 도메인이면, 거기서 스크립트가 돌아도 우리 세션엔 못 닿는다.
+- 응답에 `Content-Disposition: attachment`와 `X-Content-Type-Options: nosniff`를 붙인다. 브라우저가 내용을 보고 타입을 멋대로 추측(sniffing)하지 못하게 하고, 인라인 렌더 대신 다운로드하게 한다.
+- 이미지는 재인코딩한다. 받은 바이트를 그대로 저장하지 말고 이미지 라이브러리로 다시 그려 저장하면, 숨어 있던 비이미지 바이트가 떨어져 나간다.
+
+보안 헤더가 무엇을 막고 무엇을 깨뜨리는지는 [웹 보안 헤더](/posts/web-security-headers)에 자세하다.
+
+## 압축 파일을 풀 때: zip slip
+
+압축 파일 업로드도 같은 함정을 품는다. zip 안의 엔트리 이름에 `../../`를 넣어 두면, 순진하게 "대상 폴더 + 엔트리 이름"으로 풀 때 대상 밖으로 파일이 튀어나간다. 이걸 zip slip이라 부른다. 실험으로 `../../escaped.txt`를 품은 zip을 만들어 풀어 봤다.
+
+```text
+photos/cat.jpg      -> out/a/b/photos/cat.jpg   inside=True
+../../escaped.txt   -> out/escaped.txt          inside=False
+```
+
+엔트리 이름을 대상에 합쳐 실체 경로로 풀어 보니 하나는 대상 밖을 가리켰다. 방어는 다운로드와 똑같다. 엔트리마다 "대상 폴더에 합쳐 해석한 절대 경로가 대상 폴더 안인지" 확인하고, 아니면 건너뛴다. 심링크 엔트리도 풀지 않는다. (좋은 `unzip` 구현은 `../`를 자동으로 떼어 내지만, 직접 압축을 푸는 코드를 짜면 이 검사를 손으로 넣어야 한다.)
+
+## 큰 설계: 서버를 거치지 않게 한다
+
+지금까지는 "서버가 파일 바이트를 직접 다룬다"는 전제였다. 규모가 커지면 그 전제를 바꾸는 게 가장 깔끔한 방어다.
+
+- **오브젝트 스토리지 + presigned URL**: 파일을 앱 서버 디스크가 아니라 S3 같은 오브젝트 스토리지에 둔다. 다운로드는 앱이 "이 키를 5분간 읽어도 된다"는 서명된 URL을 발급하고, 실제 전송은 스토리지가 한다. 앱 서버에는 경로라는 개념 자체가 없어 경로 순회가 성립하지 않는다. 업로드도 클라이언트가 presigned URL로 스토리지에 직접 올린다. 이 설계의 트레이드오프는 [업로드·트랜스코딩 설계](/posts/sd-video-upload-transcoding)에서 더 본다.
+- **키는 서버가 만든다**: 저장 키를 사용자 이름이 아니라 서버가 만든 UUID로 한다. `users/42/a1b2c3d4.jpg`처럼. 사용자가 경로에 영향을 못 미치게 한다.
+- **크기·개수 제한**: 업로드 크기 상한을 둔다. 안 그러면 디스크를 채워 가용성을 떨어뜨리는(압축 폭탄 zip 포함) 공격이 된다.
+
+## 정리
+
+경로 순회는 사용자가 준 이름이 그대로 파일 경로가 될 때 생긴다. `..`를 글자로 막는 블랙리스트는 인코딩·역슬래시·널 바이트로 계속 샌다. 방향을 바꿔, 입력을 정규화해 절대 경로로 해석하고 기준 디렉터리(구분자까지 붙여) 안인지 확인한다. 심링크·TOCTOU까지 보려면 realpath나 열린 핸들로 다시 확인한다. 올리는 쪽은 확장자·MIME·매직 바이트를 허용 목록으로 함께 보고, 폴리글랏·zip slip을 염두에 두고, 가능하면 파일을 다른 출처와 오브젝트 스토리지로 밀어 서버가 경로를 직접 다루지 않게 한다.
+
+## 면접에서 나올 만한 질문
+
+### 경로 순회를 블랙리스트로 막으면 왜 안 되나?
+
+같은 "위로 올라가라"를 적는 표기가 너무 많기 때문이다. 날것 `..`를 막아도 URL 인코딩, 이중 인코딩, 역슬래시, 널 바이트, 필터가 지운 뒤 되살아나는 `....//` 등으로 샌다. 실험에서도 `..` 차단이 이중 인코딩 `%252e`에 뚫렸다. 그래서 글자를 막는 대신 최종 경로를 해석해 기준 폴더 안인지 보는 화이트리스트식 방어로 바꿔야 한다.
+
+### 안전한 경로 검사는 어떻게 하나?
+
+입력을 디코딩·정규화한 뒤 기준 디렉터리에 합쳐 절대 경로로 해석하고, 그 절대 경로가 기준 디렉터리로 시작하는지 본다. 이때 반드시 구분자까지 붙여 `base + "/"`로 비교해야 한다. 안 그러면 `/srv/files-backup`이 `/srv/files`로 시작해 통과하는 함정에 빠진다. 절대 경로를 통째로 넣는 경우도 resolve가 그걸 채택하므로 같은 prefix 검사로 걸린다.
+
+### 심볼릭 링크와 TOCTOU는 왜 추가로 봐야 하나?
+
+경로 문자열은 기준 안이지만 실제 실체는 밖을 가리킬 수 있기 때문이다. 심링크가 그렇다. resolve로 본 경로는 통과하지만 realpath로 풀면 기준 밖인 경우가 있다. TOCTOU는 검사한 뒤 여는 사이에 이름을 바꿔치기하는 틈이다. 둘 다 "경로로 두 번 접근"에서 생기므로, realpath로 재확인하거나 한 번 연 파일 디스크립터로만 작업해 막는다.
+
+### 업로드 파일 타입을 확장자나 Content-Type으로 믿으면 안 되는 이유는?
+
+둘 다 공격자가 정하는 값이기 때문이다. 이름 끝의 확장자도, 브라우저가 보낸 Content-Type 헤더도 임의로 조작된다. 그나마 파일 내용 앞부분의 매직 바이트가 믿을 만하지만 그것도 폴리글랏으로 우회될 수 있다. 그래서 세 가지를 허용 목록으로 함께 보고, 매직 바이트로 확인한 타입에 맞춰 서버가 새 이름을 붙여 저장한다.
+
+### 업로드한 이미지가 어떻게 XSS가 되나?
+
+폴리글랏 파일 때문이다. `GIF89a`로 시작해 이미지 검사를 통과하면서 뒤에 자바스크립트를 숨긴 파일을 만들 수 있다. 이 파일을 스크립트로 불러오거나 브라우저가 내용을 보고 타입을 추측하면 코드가 실행된다. 막으려면 업로드 파일을 앱과 다른 출처에서 서빙하고, nosniff와 Content-Disposition attachment를 붙이고, 이미지를 재인코딩해 숨은 바이트를 떨어뜨린다.
+
+### zip slip이 무엇이고 어떻게 막나?
+
+압축 파일 안 엔트리 이름에 `../../`를 넣어, 풀 때 대상 폴더 밖으로 파일이 튀어나가게 하는 공격이다. 다운로드 경로 순회와 원리가 같다. 막는 법도 같다. 엔트리마다 대상 폴더에 합쳐 해석한 절대 경로가 대상 안인지 확인하고, 아니면 건너뛴다. 심링크 엔트리도 풀지 않는다.
+
+### presigned URL 설계는 경로 순회를 어떻게 없애나?
+
+파일을 앱 서버 디스크가 아니라 오브젝트 스토리지에 두고, 앱은 특정 키를 짧은 시간 접근하도록 서명한 URL만 발급한다. 실제 전송은 스토리지가 한다. 앱 서버에 파일 시스템 경로라는 개념 자체가 없어지므로 `..`로 올라갈 대상이 없다. 저장 키를 서버가 만든 UUID로 두면 사용자가 경로에 영향을 줄 여지도 사라진다.

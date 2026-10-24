@@ -1,0 +1,361 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("docker-runtime-security");
+
+<EasyIntro>
+  회사에서 코드를 자동으로 빌드하고 테스트하는 로봇 팔이 있다고 하자. 이 로봇 팔은 상자(컨테이너) 안에서만 움직이게 해 두었다. 그런데 어느 날 "상자 안에서 다른 상자도 만들 수 있게 해 줘"라는 요청을 들어주려고 공장 전체를 여닫는 중앙 리모컨을 상자 안에 넣어 줬다. 이제 상자 안의 팔은 공장 전체를 움직일 수 있다. 상자에 가둔 의미가 사라진 것이다.
+
+  컨테이너는 벽이 얇은 상자다. 가상 머신처럼 벽이 두껍지 않고, 바로 옆에 진짜 컴퓨터(호스트)가 붙어 있다. 그래서 상자 안에 무엇을 넣어 주느냐가 안전을 좌우한다. 중앙 리모컨을 넣으면 벽이 있으나 마나다. 반대로 상자가 쓸 공구를 딱 필요한 만큼만 남기고 나머지를 다 빼면, 누가 상자 안으로 쳐들어와도 할 수 있는 일이 별로 없다.
+
+  이 글은 상자 안에서 공구를 빼고 벽을 두껍게 하는 방법을 다룬다. 관리자 권한을 조각내서 필요한 것만 주고, 더 센 권한을 몰래 꺼내지 못하게 막고, 상자 안을 읽기만 하게 바꾼다. 하나씩 실제로 해 보면 무엇이 막히고 무엇이 풀리는지 눈으로 보인다. 겁먹을 것 없다. 리모컨을 빼는 일이지 새로 만드는 일이 아니다.
+</EasyIntro>
+
+CI 파이프라인에서 컨테이너 안에 이미지를 빌드해야 했다. 컨테이너 안에서 `docker build`를 돌리려면 데몬이 필요하니, 다들 하듯이 호스트의 `/var/run/docker.sock`을 컨테이너에 마운트했다.
+
+```yaml
+# .gitlab-ci.yml 또는 compose의 흔한 한 줄
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+파이프라인은 잘 돌았다. 그런데 보안 점검에서 이 한 줄이 치명적이라는 지적을 받았다. 저 소켓은 호스트 Docker 데몬에 명령하는 창구다. 데몬은 호스트의 root로 돈다. 그러니 소켓이 닿는 컨테이너는 `-v /:/host`로 호스트 루트를 통째로 마운트한 컨테이너를 새로 띄울 수 있고, 그 컨테이너 안에서 호스트 파일을 아무거나 고칠 수 있다. 컨테이너에 갇혀 있는 것 같지만 사실 호스트 root를 넘겨준 셈이다.
+
+이 글은 "컨테이너가 호스트에 얼마나 가까운가"를 Docker 데몬·호스트 관점에서 다룬다. 컨테이너를 만드는 [namespace와 cgroup](/posts/linux-namespaces-cgroups)이 격리의 바닥이고, 이 글은 그 바닥 위에서 "컨테이너 프로세스가 호스트 커널에 무엇을 요청할 수 있나"를 줄인다. 쿠버네티스에서 같은 설정을 Pod 단위로 거는 [securityContext](/posts/k8s-security-context)·[Pod Security Admission](/posts/k8s-pod-security-admission), 그리고 시스템 콜 자체를 거르는 [seccomp와 AppArmor](/posts/seccomp-apparmor)는 따로 있다. 여기서는 `docker run` 플래그와 데몬 설정에 집중한다.
+
+아래 실행 출력은 Ubuntu 24.04(커널 6.18), Docker 29.8, cgroup v1 호스트에서 busybox를 `docker import`로 만든 작은 이미지로 직접 돌려 얻은 것이다. 컨테이너가 보는 자기 권한은 전부 `/proc/self/status`에서 읽었다.
+
+## 컨테이너 root는 호스트 root와 같은 숫자다
+
+먼저 오해 하나를 풀고 가자. 컨테이너 안에서 `id`를 치면 `uid=0(root)`이 나온다. 이 0은 호스트의 0과 같은 숫자다. user namespace를 따로 켜지 않는 한, 컨테이너의 root는 커널 입장에서 호스트의 root다. namespace가 "보는 범위"를 좁혀 줄 뿐, UID 숫자를 바꾸지는 않는다.
+
+그렇다면 컨테이너 root는 호스트를 마음대로 할까? 그렇지는 않다. Docker는 컨테이너 root에게서 리눅스 capability 대부분을 미리 빼 둔다. capability는 옛날에 전부 아니면 전무였던 root 권한을 40여 개 조각으로 나눈 것이다. 기본 컨테이너가 가진 capability를 직접 꺼내 보면 이렇다.
+
+```bash
+# busybox 컨테이너를 띄워 유효 capability 비트를 읽는다
+docker run --rm b33/bb sh -c 'grep -E "^CapEff|NoNewPrivs|Seccomp:" /proc/self/status'
+```
+
+```text
+CapEff:	00000000a80425fb
+NoNewPrivs:	0
+Seccomp:	2
+```
+
+이 16진수를 사람이 읽을 수 있게 풀면 Docker가 root에게 남겨 둔 공구 목록이 나온다.
+
+```bash
+capsh --decode=00000000a80425fb
+```
+
+```text
+0x00000000a80425fb=cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,
+cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,
+cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap
+```
+
+14개다. 호스트 root가 쥐는 40개에서 26개를 뺀 셈이다. 빠진 것 중에는 `CAP_SYS_ADMIN`(마운트, 거의 모든 관리 작업), `CAP_NET_ADMIN`(방화벽·라우팅 변경), `CAP_SYS_MODULE`(커널 모듈 적재), `CAP_SYS_PTRACE`(다른 프로세스 들여다보기) 같은 위험한 것들이 있다. `Seccomp: 2`는 seccomp 필터가 걸려 있다는 뜻이고(모드 2 = SECCOMP_MODE_FILTER), 기본 프로필이 60개 가까운 시스템 콜을 추가로 막는다. 이 기본 뼈대 위에서 더 줄이거나, 실수로 다시 열어 주는 일이 벌어진다.
+
+<ConceptDiagram
+  width={440}
+  height={280}
+  caption="컨테이너 프로세스가 호스트 커널에 닿기까지 거치는 관문"
+  nodes={[
+    { id: "proc", label: "컨테이너 프로세스", sub: "uid 0 = 호스트 uid 0", x: 220, y: 40, w: 190 },
+    { id: "cap", label: "capabilities", sub: "root의 특권 조각 14개", x: 110, y: 135, w: 150 },
+    { id: "sec", label: "seccomp", sub: "막는 시스템 콜", x: 330, y: 135, w: 140 },
+    { id: "nnp", label: "no_new_privs", sub: "exec로 승격 금지", x: 110, y: 230, w: 150 },
+    { id: "kernel", label: "호스트 커널", sub: "공유한다", x: 330, y: 230, w: 140 },
+  ]}
+  edges={[
+    { from: "proc", to: "cap" },
+    { from: "proc", to: "sec" },
+    { from: "cap", to: "kernel" },
+    { from: "sec", to: "kernel" },
+    { from: "nnp", to: "cap", dashed: true, label: "막는다" },
+  ]}
+/>
+
+## 권한을 몰래 올리는 길: setuid와 no-new-privileges
+
+컨테이너를 비 root 사용자로 돌리면 안전할까. 대개는 그렇지만 한 가지 샛길이 있다. 이미지 안에 setuid 비트가 붙은 바이너리가 있으면, 비 root 프로세스가 그걸 실행하는 순간 그 파일 소유자(보통 root)의 권한으로 올라선다. 작은 C 프로그램으로 재현해 보자. `whoami-suid`는 실행하면 자기 실제 UID와 유효 UID를 찍는데, setuid root로 설치해 두었다.
+
+```bash
+# 컨테이너를 비 root(uid 65534)로 띄우고 setuid root 바이너리를 실행한다
+docker run --rm --user 65534:65534 b33/bb /bin/whoami-suid
+```
+
+```text
+ruid=65534 euid=0
+```
+
+실제 UID는 65534인데 유효 UID가 0으로 올라갔다. 비 root로 시작했는데 root 권한을 손에 쥔 것이다. 이걸 막는 스위치가 `no-new-privileges`다. 커널의 `prctl(PR_SET_NO_NEW_PRIVS)` 비트를 켜서, 이후 `exec`가 setuid 비트나 file capability로 권한을 올리지 못하게 한다.
+
+```bash
+# 같은 바이너리를 no-new-privileges를 켜고 실행한다
+docker run --rm --user 65534:65534 --security-opt no-new-privileges b33/bb /bin/whoami-suid
+```
+
+```text
+ruid=65534 euid=65534
+```
+
+유효 UID가 65534로 머문다. setuid가 무력화된 것이다. `/proc/self/status`로 비트도 확인된다.
+
+```bash
+docker run --rm --user 65534 --security-opt no-new-privileges b33/bb sh -c 'grep NoNewPrivs /proc/self/status'
+```
+
+```text
+NoNewPrivs:	1
+```
+
+쿠버네티스의 `allowPrivilegeEscalation: false`가 커널에서 하는 일이 바로 이 비트다. 비 root로 돌리기만 하고 이 비트를 켜지 않으면, 이미지에 숨은 setuid 바이너리 하나로 애써 내린 권한이 도로 올라갈 수 있다.
+
+## 공구를 다 빼고 쓸 것만 되돌린다
+
+가장 효과가 큰 설정은 capability를 전부 빼고(`--cap-drop ALL`) 꼭 필요한 것만 되돌리는(`--cap-add`) 것이다. 기본 컨테이너는 root로서 `chown`을 할 수 있다. `CAP_CHOWN`이 남아 있기 때문이다.
+
+```bash
+docker run --rm b33/bb sh -c 'touch /tmp/f && chown 65534 /tmp/f && echo chown ok'
+```
+
+```text
+chown ok
+```
+
+여기서 capability를 전부 빼면 root인데도 `chown`이 막힌다.
+
+```bash
+docker run --rm --cap-drop ALL b33/bb sh -c 'touch /tmp/f && chown 65534 /tmp/f; grep CapEff /proc/self/status'
+```
+
+```text
+chown: /tmp/f: Operation not permitted
+CapEff:	0000000000000000
+```
+
+`CapEff`가 전부 0이다. UID는 여전히 0이지만 특권이 하나도 없는 root다. 이제 80번 포트에 바인딩이 필요하면 그 한 가지만 되돌린다. 1024 미만 포트 바인딩은 `CAP_NET_BIND_SERVICE`가 있어야 한다.
+
+```bash
+# capability를 다 빼면 80번 바인딩이 막히고, NET_BIND_SERVICE만 되돌리면 뜬다
+docker run --rm --cap-drop ALL --cap-add NET_BIND_SERVICE b33/bb sh -c 'timeout 1 nc -l -p 80; echo tried'
+```
+
+<AlgoTrace
+  caption="--cap-drop ALL 뒤 필요한 capability만 되돌리는 과정"
+  memoryLabel="유효 capability"
+  cells={["시작: root 14개", "--cap-drop ALL", "80번 바인딩 시도", "--cap-add NET_BIND_SERVICE", "다시 바인딩", "--cap-add CHOWN"]}
+  steps={[
+    { pointer: 0, memory: ["chown", "net_bind", "net_raw", "...(14)"], caption: "기본 컨테이너는 root 특권 14개를 쥔다" },
+    { pointer: 1, memory: [], caption: "ALL을 빼면 유효 capability가 0이 된다. UID는 여전히 0" },
+    { pointer: 2, memory: [], caption: "80번 포트 바인딩이 Operation not permitted로 막힌다" },
+    { pointer: 3, memory: ["net_bind"], caption: "필요한 한 가지만 add로 되돌린다" },
+    { pointer: 4, found: [4], memory: ["net_bind"], caption: "이제 80번이 열린다. 다른 특권은 여전히 없다" },
+    { pointer: 5, found: [4, 5], memory: ["net_bind", "chown"], caption: "chown도 필요하면 그것만 더 되돌린다. 최소 권한" },
+  ]}
+/>
+
+한 가지 함정이 있다. capability를 비 root 사용자에게 `--cap-add`로 더해도 그대로 쓰지 못할 수 있다. 위 명령을 `--user 65534`까지 붙여 돌리면 바인딩이 `Permission denied`로 막힌다. capability가 유효 집합(effective)에 들어가려면 root이거나 ambient capability·file capability 설정이 필요하기 때문이다. `--cap-add`는 bounding·permitted 집합에만 넣어 줄 뿐, 비 root 프로세스가 자동으로 쓰게 해 주지는 않는다. 비 root로 낮은 포트를 열어야 하면 capability 대신 `net.ipv4.ip_unprivileged_port_start`를 낮추거나, 앞단 리버스 프록시가 80·443을 받고 앱은 높은 포트를 쓰게 하는 편이 단순하다.
+
+## 루트 파일 시스템을 읽기만 하게
+
+공격자가 컨테이너에 침입하면 보통 추가 도구를 내려받아 디스크에 쓴다. 루트 파일 시스템을 읽기 전용으로 올리면(`--read-only`) 그 자리가 사라진다.
+
+```bash
+docker run --rm --read-only b33/bb sh -c 'touch /etc/x; touch /tmp/x; echo done'
+```
+
+```text
+touch: /etc/x: Read-only file system
+touch: /tmp/x: Read-only file system
+done
+```
+
+`/etc`도 `/tmp`도 못 쓴다. 문제는 멀쩡한 앱도 임시 파일을 어딘가 써야 한다는 것이다(nginx의 `/var/cache/nginx`, 세션 파일 등). 그래서 쓸 곳만 tmpfs로 따로 연다.
+
+```bash
+# 루트는 읽기 전용, /tmp만 메모리 tmpfs로 쓰기 허용
+docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m b33/bb \
+  sh -c 'touch /tmp/x && echo "tmp ok"; mount | grep " /tmp "'
+```
+
+```text
+tmp ok
+tmpfs on /tmp type tmpfs (rw,nosuid,nodev,noexec,relatime,size=16384k,mode=755)
+```
+
+`noexec`로 이 tmpfs에 내려받은 것을 실행조차 못 하게 막았다. 쿠버네티스에서는 `readOnlyRootFilesystem: true`에 `emptyDir`를 마운트해 같은 모양을 만든다. 쓰기 경로를 미리 알아야 하니 앱의 동작을 한 번은 관찰해야 한다.
+
+## --privileged가 실제로 푸는 것
+
+`--privileged`는 "안 되면 일단 이거"로 남발되는 플래그다. 무엇을 푸는지 숫자로 보면 왜 위험한지 분명해진다.
+
+```bash
+docker run --rm --privileged b33/bb sh -c 'grep -E "^CapEff|Seccomp:" /proc/self/status; echo "dev count:"; ls /dev | wc -l'
+```
+
+```text
+CapEff:	000001fffeffffff
+Seccomp:	0
+dev count:
+114
+```
+
+세 가지가 한꺼번에 벌어진다. 첫째, `CapEff`가 40개 capability를 전부 쥔다(기본의 14개와 비교된다). 둘째, `Seccomp: 0` — 시스템 콜 필터가 아예 꺼진다. 기본 컨테이너의 `Seccomp: 2`와 대비된다. 셋째, `/dev`에 호스트의 블록 장치가 그대로 보인다. 기본 컨테이너는 `/dev`에 14개 장치(null, zero, random 정도)만 보이는데, privileged에서는 114개가 보이고 그 안에 호스트 디스크(`vda`, `vdb` 같은)가 들어 있다. 호스트 디스크가 보인다는 건 그걸 마운트해 호스트 파일 시스템을 읽고 쓸 수 있다는 뜻이다. 사실상 격리를 끈 것이다.
+
+```text
+# 기본 컨테이너의 /dev — 호스트 디스크가 없다
+fd  full  mqueue  null  ptmx  pts  random  shm  stderr  stdin  stdout  tty  urandom  zero
+```
+
+필요한 게 장치 하나뿐이라면 `--device /dev/xxx`로 그것만 주고, 네트워크 관리 권한이 필요하면 `--cap-add NET_ADMIN`만 더하면 된다. `--privileged`는 "컨테이너 안에서 컨테이너 런타임을 돌려야 한다"처럼 정말 호스트급 권한이 필요한 좁은 경우에만, 그것도 전용 노드에서 쓴다.
+
+## docker.sock을 넘겨주는 것은 호스트 root를 넘겨주는 것
+
+맨 앞 사례로 돌아가자. `--privileged`도 아니고 `--cap-add`도 없는데, `/var/run/docker.sock`을 마운트하면 왜 호스트 전체를 내준 셈이 될까.
+
+소켓 너머의 Docker 데몬은 호스트의 root로 돈다. 소켓에 명령을 보낼 수 있는 프로세스는 데몬에게 "호스트 루트(`/`)를 마운트한 privileged 컨테이너를 새로 띄워 줘"라고 시킬 수 있다. 데몬은 root 권한으로 그 컨테이너를 만들고, 그 안에서 호스트 파일을 자유롭게 고친다. 내 컨테이너의 capability가 0이든 user가 nobody든 상관없다. 권한은 소켓 너머 데몬이 행사하기 때문이다.
+
+<SequenceDiagram
+  caption="docker.sock을 마운트한 CI 컨테이너가 호스트 root에 닿는 길"
+  actors={[
+    { id: "ci", label: "CI 컨테이너" },
+    { id: "sock", label: "docker.sock" },
+    { id: "daemon", label: "호스트 데몬" },
+    { id: "host", label: "호스트 파일" },
+  ]}
+  steps={[
+    {
+      from: "ci",
+      to: "sock",
+      label: "run -v /:/host",
+      title: "컨테이너가 소켓에 새 컨테이너 생성을 요청한다",
+      detail: "CI 컨테이너 자신의 권한은 낮아도 된다. 소켓에 쓸 수만 있으면 된다.",
+      payload: "POST /containers/create\\nBinds: [\"/:/host\"]",
+    },
+    {
+      from: "sock",
+      to: "daemon",
+      label: "요청 전달",
+      title: "소켓은 데몬으로 가는 창구다",
+      detail: "데몬은 소켓에 온 요청을 그대로 처리한다. 누가 보냈는지 따로 인증하지 않는다.",
+    },
+    {
+      from: "daemon",
+      to: "host",
+      label: "root로 마운트",
+      title: "데몬은 호스트 root로 호스트 루트를 마운트한 컨테이너를 만든다",
+      detail: "새 컨테이너의 /host가 호스트의 /다. 여기서 /host/etc/shadow든 /host/root/.ssh든 다 쓸 수 있다.",
+      payload: "chroot /host sh",
+    },
+    {
+      from: "host",
+      to: "ci",
+      label: "호스트 장악",
+      title: "공격자는 호스트 root 권한을 손에 넣는다",
+      detail: "cron 심기, SSH 키 추가, 다른 컨테이너 접근까지. 컨테이너 격리가 의미를 잃는다.",
+    },
+  ]}
+/>
+
+그러면 CI 안에서 이미지는 어떻게 빌드하나. 방법이 여럿이다. 데몬 없이 빌드하는 [BuildKit](/posts/dockerfile-image-layers)의 `buildkitd`·`buildctl`이나 Kaniko·Buildah를 쓰면 소켓이 필요 없다. 소켓을 꼭 써야 한다면 그 러너를 전용 노드로 격리하고, 신뢰할 수 없는 PR 코드가 그 위에서 돌지 않게 한다. 쿠버네티스 환경이라면 노드의 소켓을 Pod에 마운트하는 것도 같은 위험이다.
+
+<Callout kind="warning">
+`-v /var/run/docker.sock:/var/run/docker.sock`은 그 컨테이너에 호스트 root를 주는 것과 같다. "컨테이너 안에서 Docker를 쓴다(Docker-in-Docker)"는 말이 대개 이 소켓 마운트를 뜻하니, CI 설정에서 이 줄을 보면 신뢰 경계를 먼저 따진다. 데몬 없이 빌드하는 도구로 바꾸는 것이 근본 해결이다.
+</Callout>
+
+## 컨테이너 root를 호스트의 평범한 사용자로 바꾸기
+
+지금까지는 컨테이너 root가 곧 호스트 root(숫자 0)라는 전제였다. user namespace를 켜면 이 전제가 깨진다. 컨테이너 안에서는 root(0)로 보이지만 호스트에서는 매핑된 비특권 UID(예: 100000)로 보이게 만든다. 그러면 컨테이너가 혹시 파일 시스템 밖으로 새어 나가도 호스트에서는 아무 권한 없는 사용자다.
+
+Docker에는 두 갈래가 있다. 하나는 데몬은 그대로 root로 두되 컨테이너의 UID만 매핑하는 `userns-remap`이다. `/etc/docker/daemon.json`에 설정한다.
+
+```json
+{
+  "userns-remap": "default"
+}
+```
+
+```bash
+# 설정 뒤 데몬을 재시작하고 매핑을 확인한다
+sudo systemctl restart docker
+cat /etc/subuid   # dockremap 사용자에게 할당된 UID 범위가 보인다
+```
+
+```text
+dockremap:100000:65536
+```
+
+컨테이너의 root(0)는 호스트의 100000으로, 컨테이너의 1은 100001로 매핑된다. 장점은 커 보이지만 비용도 있다. 이미 받아 둔 이미지·볼륨의 파일 소유권이 새 매핑과 어긋나 권한 오류가 나기 쉽고, `--privileged`나 일부 볼륨 공유와 함께 쓰기 어렵다. 그래서 의외로 운영에서 덜 쓴다.
+
+다른 갈래는 데몬 자체를 비 root 사용자로 돌리는 **rootless Docker**다. 데몬도 컨테이너도 호스트에서 전부 한 일반 사용자 권한으로 돈다. 설치는 패키지 하나와 사용자 단위 서비스로 한다.
+
+```bash
+# rootless 모드 설치 (일반 사용자로)
+dockerd-rootless-setuptool.sh install
+# 이후 이 사용자의 docker가 사용자 소켓을 쓴다
+docker context use rootless
+```
+
+rootless에서는 설령 docker.sock이 새어도 그 소켓의 데몬이 일반 사용자 권한뿐이라 호스트 root를 못 준다. 대신 제약이 있다. 1024 미만 포트 바인딩, 일부 cgroup 제어, overlay 네트워크 같은 기능이 추가 설정 없이는 안 되고, 성능이 조금 떨어진다. 둘의 차이를 한 줄로 말하면, `userns-remap`은 "데몬은 root, 컨테이너 UID만 비특권으로", rootless는 "데몬까지 전부 비특권으로"다.
+
+## 컨테이너 탈출이 실제로 일어나는 경로
+
+"격리가 뚫린다"는 말이 막연하면, 실제로 보고된 탈출 경로가 어디로 나는지 보면 구체적이 된다. 크게 셋이다.
+
+첫째, **설정으로 열어 준 문**이다. 지금까지 본 `--privileged`, docker.sock 마운트, 호스트 경로 bind 마운트(`-v /:/host`), `--pid=host`·`--net=host`가 여기다. 취약점이 아니라 사람이 연 문이라 가장 흔하고 가장 쉽게 막힌다.
+
+둘째, **마운트와 장치를 통한 길**이다. 호스트 디렉터리를 쓰기로 마운트하면 그 경로를 통해 호스트 파일을 고칠 수 있고, `--device`로 블록 장치를 주면 그 디스크의 다른 파티션까지 읽을 수 있다. privileged에서 `/dev`에 호스트 디스크가 보이던 것이 이 길이다.
+
+셋째, **커널 취약점**이다. 컨테이너는 호스트 커널을 공유하므로 커널 버그 하나가 탈출로 이어진다. 대표적으로 runc의 CVE-2019-5736은 컨테이너가 `/proc/self/exe`를 통해 호스트의 runc 바이너리를 덮어써서 다음 `docker exec` 때 호스트 코드 실행으로 이어졌다. 이 종류는 seccomp로 위험한 시스템 콜을 막고 capability를 줄이면 공격 표면이 작아지고, 런타임(runc·containerd)과 커널을 꾸준히 올려야 막힌다. gVisor나 Kata Containers처럼 커널을 아예 분리하는 런타임을 쓰면 이 공유 자체를 끊는다.
+
+세 경로를 한 문장으로 요약하면, 처음 둘은 "덜 열어 주기"로, 셋째는 "줄여서 표면을 작게 하고 최신으로 유지하기"로 막는다.
+
+## 운영에서 거는 기본 묶음
+
+새 서비스를 컨테이너로 올릴 때 거의 항상 거는 조합은 이렇다. 하나하나 위에서 이유를 봤다.
+
+```bash
+docker run -d \
+  --user 10001:10001 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --read-only --tmpfs /tmp:rw,noexec,nosuid,size=32m \
+  --pids-limit 200 \
+  --memory 512m --cpus 1 \
+  myapp:sha-abc123
+```
+
+`--user`로 비 root, `--cap-drop ALL`로 특권 제거, `no-new-privileges`로 승격 차단, `--read-only`로 쓰기 차단에 tmpfs로 쓸 곳만, `--pids-limit`로 포크 폭탄 방어, `--memory`·`--cpus`로 자원 상한을 둔다. 이 상태에서 앱이 깨지면 하나씩 풀어 주며 원인을 좁힌다. "일단 privileged로 돌려 보자"는 반대 방향이라, 한 번 열면 왜 됐는지 모른 채 그대로 굳기 쉽다.
+
+막힌 원인을 가려내는 순서도 정해 두면 빠르다. root인데 작업이 막히면 capability를 본다(`CapEff`). 비 root인데 막히면 UID·파일 권한을 본다. 파일 쓰기가 막히면 `--read-only`·마운트를 본다. 시스템 콜 자체가 `EPERM`으로 떨어지면 seccomp·AppArmor를 본다. 증상과 관문을 짝지어 두면 "안 되니까 privileged"로 뛰지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### 컨테이너 안의 root는 호스트 root와 같은가
+
+user namespace를 켜지 않았다면 같은 UID 0이다. 다만 Docker가 기본으로 capability를 14개만 남기고 나머지를 빼 두고 seccomp 필터를 걸어 두기 때문에, 호스트를 마음대로 하는 진짜 root는 아니다. user namespace(`userns-remap`이나 rootless)를 켜면 컨테이너 root가 호스트의 비특권 UID로 매핑되어 숫자부터 달라진다.
+
+### docker.sock을 컨테이너에 마운트하면 왜 위험한가
+
+소켓 너머의 Docker 데몬이 호스트 root로 돌기 때문이다. 소켓에 명령을 보낼 수 있으면 호스트 루트를 마운트한 privileged 컨테이너를 새로 띄워 호스트 파일을 고칠 수 있다. 내 컨테이너의 권한이 아무리 낮아도 권한은 데몬이 행사하므로 소용없다. CI에서 이미지를 빌드해야 하면 소켓 대신 BuildKit·Kaniko·Buildah처럼 데몬 없이 빌드하는 도구를 쓴다.
+
+### --privileged는 정확히 무엇을 푸는가
+
+세 가지다. capability를 전부(40여 개) 부여하고, seccomp 필터를 끄고, 호스트의 모든 장치를 `/dev`에 노출한다. 호스트 디스크가 보이니 마운트해서 호스트 파일 시스템에 접근할 수 있어 사실상 격리가 사라진다. 장치 하나만 필요하면 `--device`, 특정 관리 권한만 필요하면 `--cap-add`로 그것만 주는 게 맞다.
+
+### 비 root로 돌리기만 하면 안전하지 않은 이유는
+
+이미지에 setuid root 바이너리가 있으면 비 root 프로세스가 그걸 실행하는 순간 유효 UID가 0으로 올라간다. 이걸 막으려면 `--security-opt no-new-privileges`로 커널의 no_new_privs 비트를 켜서 exec가 권한을 승격하지 못하게 해야 한다. 쿠버네티스의 `allowPrivilegeEscalation: false`가 이 비트다.
+
+### --cap-drop ALL 뒤 --cap-add로 더해도 비 root가 그 권한을 못 쓰는 경우가 있던데
+
+`--cap-add`는 capability를 bounding·permitted 집합에 넣어 줄 뿐이다. 비 root 프로세스가 그걸 유효 집합에서 쓰려면 ambient capability나 file capability가 추가로 필요하다. 그래서 비 root로 낮은 포트를 열어야 하면 capability를 더하기보다 `net.ipv4.ip_unprivileged_port_start`를 낮추거나 앞단 프록시가 낮은 포트를 받게 하는 편이 단순하다.
+
+### userns-remap과 rootless Docker의 차이는
+
+`userns-remap`은 데몬은 그대로 root로 두고 컨테이너의 UID만 호스트 비특권 범위로 매핑한다. rootless Docker는 데몬 자체를 일반 사용자로 돌린다. rootless가 더 안전하지만(소켓이 새도 호스트 root를 못 줌) 낮은 포트 바인딩·overlay 네트워크·일부 cgroup 제어에 제약이 있다. userns-remap은 기존 이미지·볼륨의 파일 소유권이 매핑과 어긋나 권한 문제가 생기기 쉽다.
+
+### 컨테이너 탈출은 어떤 경로로 일어나나
+
+셋으로 나뉜다. 설정으로 열어 준 문(privileged, 소켓·호스트 경로 마운트, `--pid=host`), 마운트·장치를 통한 접근, 그리고 공유 커널의 취약점(예: runc CVE-2019-5736)이다. 앞 둘은 "덜 열어 주기"로 막고, 커널 쪽은 capability·seccomp로 표면을 줄이고 런타임·커널을 최신으로 유지하며, 더 강하게는 gVisor·Kata처럼 커널을 분리하는 런타임으로 공유 자체를 끊는다.

@@ -2,6 +2,132 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "docker-runtime-security": {
+    "links": [
+      "linux-namespaces-cgroups",
+      "k8s-security-context",
+      "k8s-pod-security-admission",
+      "seccomp-apparmor",
+      "dockerfile-image-layers"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "proxy-reverse-proxy",
+      "linux-files-permissions",
+      "threat-modeling-stride",
+      "security-principles-cia-defense-in-depth"
+    ]
+  },
+  "ec2-instance-types-launch-templates": {
+    "links": [
+      "cloud-cost-optimization",
+      "aws-ec2-ubuntu-server-setup",
+      "ecs-fargate-task-service",
+      "ansible-network-automation"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "autoscaling",
+      "security-groups-nacl",
+      "ipv6-basics"
+    ]
+  },
+  "ecs-fargate-task-service": {
+    "links": [
+      "eks-cluster-basics",
+      "docker-container-basics",
+      "iam-basics",
+      "ec2-instance-types-launch-templates",
+      "blue-green-deployment",
+      "autoscaling"
+    ],
+    "mentions": [
+      "vpc-subnets-route-tables",
+      "db-type-key-value",
+      "resilience-patterns",
+      "rollback-strategy",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "github-actions-docker-ecr",
+      "vpc-basics"
+    ]
+  },
+  "input-validation-secure-coding": {
+    "links": [
+      "xss",
+      "sql-injection",
+      "security-testing-sast-dast",
+      "path-traversal-file-upload",
+      "regex-and-globbing",
+      "authn-vs-authz"
+    ],
+    "mentions": [
+      "character-encoding-unicode",
+      "js-prototype-chain",
+      "runtime-validation-zod",
+      "threat-modeling-stride",
+      "api-security-owasp-api-top10",
+      "floating-point-numbers",
+      "recursion-backtracking",
+      "db-modeling-normalization"
+    ]
+  },
+  "path-traversal-file-upload": {
+    "links": [
+      "input-validation-secure-coding",
+      "xss",
+      "web-security-headers",
+      "sd-video-upload-transcoding"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "race-conditions",
+      "db-modeling-normalization"
+    ]
+  },
+  "security-testing-sast-dast": {
+    "links": [
+      "sql-injection",
+      "software-supply-chain-ci-hardening",
+      "xss",
+      "secrets-management",
+      "git-large-files-secrets",
+      "authn-vs-authz",
+      "threat-modeling-stride",
+      "code-review-practices"
+    ],
+    "mentions": [
+      "vulnerability-management-cve-cvss",
+      "web-security-headers",
+      "k8s-pod-scheduling"
+    ]
+  },
+  "software-supply-chain-ci-hardening": {
+    "links": [
+      "container-supply-chain-security",
+      "dependency-hell",
+      "github-actions-docker-ecr",
+      "github-repo-governance"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "frontend-monorepo",
+      "security-principles-cia-defense-in-depth",
+      "dynamic-programming",
+      "security-testing-sast-dast"
+    ]
+  },
+  "threat-modeling-stride": {
+    "links": [
+      "rate-limiting-in-practice",
+      "xss"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "security-principles-cia-defense-in-depth",
+      "what-happens-google-com"
+    ]
+  },
   "api-security-owasp-api-top10": {
     "links": [
       "owasp-top-10-map",
@@ -18,7 +144,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "api-styles-overview",
       "graphql-basics",
+      "input-validation-secure-coding",
       "sd-payment-flow",
+      "threat-modeling-stride",
       "code-review-practices",
       "js-pure-functions",
       "db-types-overview",
@@ -115,6 +243,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "process-vs-thread",
+      "ec2-instance-types-launch-templates",
       "dockerfile-image-layers"
     ]
   },
@@ -223,6 +352,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ab-testing",
       "rendering-strategies",
       "js-memoization",
+      "input-validation-secure-coding",
       "react-server-components",
       "cookie-session-login",
       "count-min-sketch",
@@ -243,6 +373,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "rendering-strategies",
+      "input-validation-secure-coding",
       "js-memoization",
       "code-review-practices",
       "rolling-deployment",
@@ -594,8 +725,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "gateway",
       "k8s-deploy-pipeline-eks",
+      "threat-modeling-stride",
       "sd-start-single-server",
       "ssrf",
+      "input-validation-secure-coding",
       "sso-saml-oidc"
     ]
   },
@@ -669,6 +802,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64"
     ],
     "mentions": [
+      "path-traversal-file-upload",
       "bash-scripting",
       "upper-layers-session-presentation-app",
       "bit-manipulation",
@@ -698,6 +832,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-latency-numbers",
+      "input-validation-secure-coding",
       "postgres-query-planner"
     ]
   },
@@ -724,6 +859,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-promise-combinators",
       "event-loop",
+      "input-validation-secure-coding",
       "http-status-codes",
       "js-hoisting-tdz"
     ]
@@ -829,6 +965,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "html-form-http",
       "client-data-cache",
+      "input-validation-secure-coding",
+      "threat-modeling-stride",
       "react-suspense-error-boundary",
       "frontend-performance-map",
       "api-versioning",
@@ -959,6 +1097,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-query-rewrite",
       "mongodb-indexes-explain",
+      "input-validation-secure-coding",
       "db-index-design",
       "mongodb-replica-set-sharding",
       "dns"
@@ -1440,6 +1579,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ci-cd-basics",
       "tdd-bdd-atdd",
       "js-array-transform",
+      "input-validation-secure-coding",
       "load-testing-k6",
       "http-status-codes",
       "oauth",
@@ -1531,6 +1671,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nodejs-orm-query-builder",
       "jpa-persistence-context",
       "js-spread-rest",
+      "input-validation-secure-coding",
       "api-security-owasp-api-top10",
       "ddd-bounded-context",
       "pattern-proxy"
@@ -1604,6 +1745,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "json-crud-http",
       "rest-api-design",
+      "input-validation-secure-coding",
       "cookie-session-login"
     ]
   },
@@ -1845,6 +1987,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "ids-ips",
+      "input-validation-secure-coding",
       "character-encoding-unicode",
       "js-numbers-bigint",
       "event-loop",
@@ -2208,6 +2351,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "react-suspense-error-boundary",
       "nextjs-app-router-routing",
+      "input-validation-secure-coding",
       "rendering-strategies",
       "js-destructuring",
       "resilience-patterns",
@@ -2690,6 +2834,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "k8s-pod-troubleshooting",
       "k8s-pod-lifecycle",
+      "docker-runtime-security",
       "k8s-pv-pvc",
       "k8s-statefulset",
       "dockerfile-image-layers",
@@ -2742,6 +2887,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file",
       "k8s-daemonset",
       "docker-container-basics",
+      "docker-runtime-security",
       "k8s-security-context",
       "helm-basics",
       "k8s-node-maintenance",
@@ -3315,7 +3461,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "password-attacks-credential-stuffing",
+      "threat-modeling-stride",
       "hash-hmac-password-hashing",
+      "input-validation-secure-coding",
       "code-review-practices"
     ]
   },
@@ -3332,6 +3480,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "cpu-pipelining-branch-prediction",
       "rendering-strategies",
+      "input-validation-secure-coding",
       "what-happens-google-com"
     ]
   },
@@ -3464,6 +3613,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-storage",
       "json-crud-http",
       "js-template-literals",
+      "input-validation-secure-coding",
       "react-custom-hooks-rules",
       "js-destructuring",
       "frontend-monorepo",
@@ -3590,6 +3740,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "js-numbers-bigint",
+      "input-validation-secure-coding",
       "js-function-forms",
       "js-pure-functions",
       "js-destructuring"
@@ -3620,6 +3771,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-prototype-chain",
+      "input-validation-secure-coding",
       "runtime-validation-zod",
       "ts-declaration-files-modules",
       "js-destructuring",
@@ -4000,6 +4152,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "fp-in-react"
     ],
     "mentions": [
+      "input-validation-secure-coding",
       "nodejs-orm-query-builder"
     ]
   },
@@ -4182,6 +4335,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-methods",
       "resilience-patterns",
       "service-mesh",
+      "input-validation-secure-coding",
       "build-caching",
       "vpc-basics",
       "osi-in-practice",
@@ -4538,6 +4692,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "rendering-strategies",
       "nodejs-http-clients",
+      "input-validation-secure-coding",
       "http-status-codes",
       "what-happens-google-com",
       "grpc"
@@ -5011,8 +5166,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-strategy"
     ],
     "mentions": [
+      "input-validation-secure-coding",
       "character-encoding-unicode",
       "k8s-deploy-pipeline-eks",
+      "threat-modeling-stride",
       "rendering-strategies",
       "js-strings-unicode",
       "db-modeling-normalization"
@@ -6417,6 +6574,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "input-validation-secure-coding",
       "character-encoding-unicode",
       "sd-start-single-server",
       "lossy-counting",
@@ -7103,6 +7261,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "sd-autocomplete-trie",
       "test-pyramid-unit-tests",
+      "input-validation-secure-coding",
       "pattern-proxy"
     ]
   },
@@ -7455,6 +7614,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rendering-strategies",
+      "input-validation-secure-coding",
       "js-es-modules",
       "runtime-validation-zod",
       "js-primitive-vs-reference"
@@ -8084,6 +8244,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "route53-routing-policies",
       "k8s-architecture",
       "event-loop",
+      "input-validation-secure-coding",
       "security-principles-cia-defense-in-depth",
       "osi-in-practice",
       "db-type-key-value",
@@ -8254,6 +8415,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "pattern-iterator",
+      "input-validation-secure-coding",
       "react-useeffect",
       "js-pure-functions",
       "js-primitive-vs-reference"
@@ -8491,6 +8653,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "input-validation-secure-coding",
       "js-numbers-bigint",
       "ts-narrowing",
       "js-destructuring"
@@ -8509,7 +8672,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-template-literals",
       "js-numbers-bigint",
       "runtime-validation-zod",
-      "react-useeffect"
+      "react-useeffect",
+      "input-validation-secure-coding"
     ]
   },
   "js-primitive-vs-reference": {
@@ -8744,6 +8908,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "cron-jobs",
       "microservices",
+      "input-validation-secure-coding",
       "cilium-ebpf",
       "ci-cd-basics",
       "autoscaling",
@@ -9129,6 +9294,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
+      "input-validation-secure-coding",
       "container-supply-chain-security",
       "authn-vs-authz",
       "what-happens-google-com",
@@ -9213,6 +9379,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cron-jobs",
       "k8s-coredns",
       "helm-basics",
+      "ec2-instance-types-launch-templates",
       "rollback-strategy",
       "k8s-pod-scheduling",
       "local-k8s-kind-minikube",
@@ -9519,6 +9686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "seccomp-apparmor",
       "docker-container-basics",
+      "docker-runtime-security",
       "k8s-architecture",
       "js-numbers-bigint",
       "local-k8s-kind-minikube"
@@ -9745,6 +9913,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "cron-jobs",
       "kubernetes-ingress",
+      "input-validation-secure-coding",
       "db-locking-deadlock",
       "what-happens-google-com",
       "local-k8s-kind-minikube",
@@ -9936,6 +10105,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection"
     ],
     "mentions": [
+      "docker-runtime-security",
       "virtual-memory-paging",
       "k8s-pod-basics",
       "docker-commands-workflow",
@@ -9985,6 +10155,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "graphql-basics",
+      "software-supply-chain-ci-hardening",
       "linux-disks-filesystems",
       "dockerfile-image-layers",
       "frontend-monorepo",
@@ -10028,6 +10199,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "health-checks",
       "db-type-key-value",
       "kubernetes-ingress",
+      "input-validation-secure-coding",
       "cilium-ebpf",
       "page-cache-disk-io",
       "osi-in-practice",
@@ -10477,6 +10649,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "owasp-top-10-map",
       "upper-layers-session-presentation-app",
+      "input-validation-secure-coding",
       "security-principles-cia-defense-in-depth"
     ]
   },
@@ -10491,6 +10664,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "nodejs-web-frameworks",
       "sql-injection",
+      "input-validation-secure-coding",
       "code-review-practices",
       "bundler-basics"
     ]
@@ -10524,6 +10698,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "html-form-http",
+      "input-validation-secure-coding",
       "what-happens-google-com",
       "https-tls",
       "vpc-basics",
@@ -11860,6 +12035,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics",
       "k8s-architecture",
       "helm-basics",
+      "ec2-instance-types-launch-templates",
       "k8s-node-maintenance",
       "iam-basics",
       "ssrf",
@@ -11884,6 +12060,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "docker-container-basics",
+      "ec2-instance-types-launch-templates",
       "security-groups-nacl",
       "ipv6-basics",
       "vpc-basics"
@@ -15145,6 +15322,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "postgres-operations",
       "postgres-jsonb-search",
+      "path-traversal-file-upload",
       "db-partitioning",
       "sql-basics"
     ]
@@ -15411,6 +15589,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cors",
       "js-prototype-chain",
       "optimistic-locking",
+      "input-validation-secure-coding",
       "character-encoding-unicode",
       "loading-patterns",
       "upper-layers-session-presentation-app",
@@ -15449,6 +15628,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-compose"
     ],
     "mentions": [
+      "docker-runtime-security",
       "nginx-basics",
       "iptables-basics",
       "k8s-cni-pod-network",
@@ -15494,6 +15674,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "process-vs-thread",
+      "docker-runtime-security",
       "virtual-memory-paging",
       "linux-namespaces-cgroups",
       "k8s-pod-resources",
@@ -15861,6 +16042,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rendering-strategies",
+      "input-validation-secure-coding",
       "bloom-filter",
       "db-modeling-normalization",
       "core-web-vitals"

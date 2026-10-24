@@ -1,6 +1,14 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "threat-modeling-stride": 7,
+  "software-supply-chain-ci-hardening": 7,
+  "security-testing-sast-dast": 7,
+  "path-traversal-file-upload": 7,
+  "input-validation-secure-coding": 7,
+  "ecs-fargate-task-service": 7,
+  "ec2-instance-types-launch-templates": 7,
+  "docker-runtime-security": 7,
   "vulnerability-management-cve-cvss": 7,
   "shell-redirection-pipes": 6,
   "security-logging-detection-siem": 7,

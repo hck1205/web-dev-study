@@ -1,3 +1,11 @@
+import { THREAT_MODELING_STRIDE } from "./threat-modeling-stride";
+import { SOFTWARE_SUPPLY_CHAIN_CI_HARDENING } from "./software-supply-chain-ci-hardening";
+import { SECURITY_TESTING_SAST_DAST } from "./security-testing-sast-dast";
+import { PATH_TRAVERSAL_FILE_UPLOAD } from "./path-traversal-file-upload";
+import { INPUT_VALIDATION_SECURE_CODING } from "./input-validation-secure-coding";
+import { ECS_FARGATE_TASK_SERVICE } from "./ecs-fargate-task-service";
+import { EC2_INSTANCE_TYPES_LAUNCH_TEMPLATES } from "./ec2-instance-types-launch-templates";
+import { DOCKER_RUNTIME_SECURITY } from "./docker-runtime-security";
 import { VULNERABILITY_MANAGEMENT_CVE_CVSS } from "./vulnerability-management-cve-cvss";
 import { SHELL_REDIRECTION_PIPES } from "./shell-redirection-pipes";
 import { SECURITY_LOGGING_DETECTION_SIEM } from "./security-logging-detection-siem";
@@ -802,6 +810,14 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  THREAT_MODELING_STRIDE,
+  SOFTWARE_SUPPLY_CHAIN_CI_HARDENING,
+  SECURITY_TESTING_SAST_DAST,
+  PATH_TRAVERSAL_FILE_UPLOAD,
+  INPUT_VALIDATION_SECURE_CODING,
+  ECS_FARGATE_TASK_SERVICE,
+  EC2_INSTANCE_TYPES_LAUNCH_TEMPLATES,
+  DOCKER_RUNTIME_SECURITY,
   VULNERABILITY_MANAGEMENT_CVE_CVSS,
   SHELL_REDIRECTION_PIPES,
   SECURITY_LOGGING_DETECTION_SIEM,

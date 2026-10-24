@@ -727,11 +727,12 @@ export const ROADMAPS: RoadmapNode[] = [
     requires: ["foundations/http", "backend/auth"],
     items: [
       "security-principles-cia-defense-in-depth",
+      "threat-modeling-stride",
       {
         id: "web-attacks",
         label: "웹 공격과 방어",
         tier: 1,
-        items: ["browser-security-model", "xss", "csrf", "sql-injection", "ssrf", "api-security-owasp-api-top10", "web-security-headers", "spa-auth-token-storage", "owasp-top-10-map", { checkpoint: "웹 공격 관문" }],
+        items: ["browser-security-model", "input-validation-secure-coding", "xss", "csrf", "sql-injection", "ssrf", "path-traversal-file-upload", "api-security-owasp-api-top10", "web-security-headers", "spa-auth-token-storage", "owasp-top-10-map", { checkpoint: "웹 공격 관문" }],
       },
       {
         id: "cryptography",
@@ -747,7 +748,7 @@ export const ROADMAPS: RoadmapNode[] = [
         id: "operations",
         label: "보안 운영",
         tier: 2,
-        items: ["vulnerability-management-cve-cvss", "security-logging-detection-siem", "security-incident-response"],
+        items: ["security-testing-sast-dast", "software-supply-chain-ci-hardening", "vulnerability-management-cve-cvss", "security-logging-detection-siem", "security-incident-response"],
       },
     ],
   },
@@ -845,7 +846,7 @@ export const ROADMAPS: RoadmapNode[] = [
         id: "docker",
         label: "Docker",
         tier: 1,
-        items: ["docker-container-basics", "dockerfile-image-layers", "docker-commands-workflow", "docker-network-volume", "docker-network-drivers", "docker-compose", { checkpoint: "Docker 관문" }],
+        items: ["docker-container-basics", "dockerfile-image-layers", "docker-commands-workflow", "docker-network-volume", "docker-network-drivers", "docker-compose", { checkpoint: "Docker 관문" }, { post: "docker-runtime-security", tier: 2 }],
       },
       {
         id: "nginx",
@@ -1019,7 +1020,7 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "cloud",
         label: "클라우드 운영",
-        items: ["cloud-service-models-shared-responsibility", "serverless-limits", "cold-starts", "cloud-cost-optimization"],
+        items: ["cloud-service-models-shared-responsibility", "ec2-instance-types-launch-templates", "ecs-fargate-task-service", "serverless-limits", "cold-starts", "cloud-cost-optimization"],
       },
       {
         id: "observability",

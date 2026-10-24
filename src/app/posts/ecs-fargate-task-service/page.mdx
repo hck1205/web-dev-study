@@ -1,0 +1,278 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ecs-fargate-task-service");
+
+<EasyIntro>
+  식당을 운영한다고 하자. 손님에게 내는 요리는 정해진 레시피대로 만든다. 레시피에는 재료와 양, 불 세기가 적혀 있다. 매니저는 "이 요리를 항상 세 접시씩 준비해 둬라"라고 정하고, 한 접시가 쏟아지면 바로 새로 만들게 한다. 그리고 요리를 할 주방이 필요한데, 주방을 직접 빌려 관리할 수도 있고, "주문만 넣으면 알아서 요리가 나오는" 서비스를 쓸 수도 있다.
+
+  클라우드에서 컨테이너를 돌리는 일이 이것과 똑같다. 레시피는 "이 컨테이너를 이만큼의 CPU와 메모리로 띄워라"라고 적은 정의다. 매니저는 "항상 세 개를 띄워 두라"라고 정하고 하나가 죽으면 새로 띄운다. 주방은 내가 서버를 직접 관리하거나, 서버를 아예 안 보이게 해 주는 서비스를 고른다.
+
+  그런데 요리가 자꾸 실패해 접시가 비는 일이 있다. 알고 보니 재료 창고 열쇠를 요리사에게 안 줘서 재료를 못 꺼낸 것이다. 이 글은 그 레시피와 매니저와 주방이 각각 무엇이고, 창고 열쇠(권한)가 두 종류로 나뉘는 이유, 그리고 언제 이 방식을 고르는지를 다룬다. 겁먹을 것 없다. 레시피 쓰고, 몇 개 띄울지 정하고, 주방을 고르는 세 가지다.
+</EasyIntro>
+
+새 서비스를 ECS에 올렸는데 태스크가 뜨자마자 STOPPED로 떨어졌다. 다시 시작하고, 또 STOPPED. 무한 반복이다. 이벤트를 열어 보니 이유가 적혀 있었다.
+
+```text
+STOPPED (CannotPullContainerError: pull image manifest has been retried 1 time(s):
+failed to resolve ref ...: 403 Forbidden)
+```
+
+앱 코드 문제가 아니었다. 이미지를 ECR에서 **가져올 권한**이 없었던 것이다. ECS에는 권한이 두 종류로 나뉘는데, 그중 "컨테이너를 띄우기 위해 ECS가 쓰는 권한"이 빠져 있었다. 이 구분을 모르면 이 STOPPED 루프 앞에서 한참 헤맨다.
+
+이 글은 ECS와 Fargate로 컨테이너를 운영하는 구조를 따라간다. 클러스터와 에이전트, 태스크 정의, 태스크 역할과 실행 역할의 차이, 서비스와 배포, EC2 시작 유형과 Fargate의 차이, 그리고 [EKS](/posts/eks-cluster-basics)와 비교해 언제 ECS를 고르는지다. 컨테이너 자체는 [컨테이너는 무엇인가](/posts/docker-container-basics), IAM 정책 판정은 [IAM 기본](/posts/iam-basics), 인스턴스 고르기는 [EC2 고르기와 띄우기](/posts/ec2-instance-types-launch-templates)에 있다. 클라우드 계정 출력을 지어낼 수 없으니, CLI가 내는 형식은 짧게만 보이고 설명으로 대신한다.
+
+## 클러스터, 태스크, 서비스가 각각 맡는 일
+
+ECS의 구성 요소는 세 겹이다. 식당 비유로 묶으면 레시피(태스크 정의), 매니저(서비스), 주방(클러스터·용량)이다.
+
+<ConceptDiagram
+  width={460}
+  height={300}
+  caption="ECS의 구성 요소와 쿠버네티스에서 대응하는 것"
+  nodes={[
+    { id: "cluster", label: "클러스터", sub: "논리적 묶음", x: 110, y: 50, w: 150 },
+    { id: "service", label: "서비스", sub: "원하는 수 유지", x: 350, y: 50, w: 150 },
+    { id: "taskdef", label: "태스크 정의", sub: "레시피 (불변 버전)", x: 110, y: 160, w: 170 },
+    { id: "task", label: "태스크", sub: "실행 중인 컨테이너 묶음", x: 350, y: 160, w: 200 },
+    { id: "capacity", label: "용량", sub: "EC2 또는 Fargate", x: 230, y: 260, w: 180 },
+  ]}
+  edges={[
+    { from: "service", to: "task", label: "N개 유지" },
+    { from: "taskdef", to: "task", label: "찍어 냄" },
+    { from: "cluster", to: "service", arrow: "none", dashed: true },
+    { from: "task", to: "capacity", label: "어디서 도나" },
+  ]}
+/>
+
+**클러스터**는 태스크와 서비스를 담는 논리적 경계다. 쿠버네티스의 네임스페이스보다는 클러스터 그 자체에 가깝다. EC2 시작 유형에서는 클러스터에 등록된 EC2 인스턴스마다 **컨테이너 에이전트**가 돌면서 "이 노드에서 어떤 태스크를 띄워라"라는 지시를 받아 컨테이너를 실행한다. Fargate에서는 이 에이전트도, 노드도 내가 볼 일이 없다.
+
+**태스크 정의**는 레시피다. "어떤 이미지를, CPU·메모리 얼마로, 어떤 포트·환경변수·로그 설정으로 띄울지"를 적은 JSON이다. 시작 템플릿처럼 **불변 버전**을 쌓는다(`myapp:1`, `myapp:2`…). 바꾸면 새 리비전이 생긴다. **태스크**는 그 레시피로 실제로 띄운 컨테이너(들)의 묶음이다. 한 태스크 안의 컨테이너들은 같은 네트워크·수명을 공유한다. 쿠버네티스의 Pod에 해당한다.
+
+**서비스**는 매니저다. "이 태스크를 항상 N개 유지하라"를 책임진다. 하나가 죽으면 새로 띄우고, 배포할 때 옛 태스크를 새 태스크로 점진적으로 바꾸고, 로드 밸런서에 태스크를 등록·해제한다. 쿠버네티스의 Deployment에 가깝다.
+
+## 태스크 정의 한 장 읽기
+
+태스크 정의에서 자주 걸려 넘어지는 필드를 보자.
+
+```json
+{
+  "family": "web",
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "requiresCompatibilities": ["FARGATE"],
+  "executionRoleArn": "arn:aws:iam::111122223333:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::111122223333:role/webTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "web",
+      "image": "111122223333.dkr.ecr.ap-northeast-2.amazonaws.com/web:sha-abc123",
+      "portMappings": [{ "containerPort": 8080 }],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/web",
+          "awslogs-region": "ap-northeast-2",
+          "awslogs-stream-prefix": "web"
+        }
+      }
+    }
+  ]
+}
+```
+
+`cpu`·`memory`는 태스크 수준에도, 컨테이너 수준에도 둘 수 있다. Fargate는 태스크 수준 값으로 과금하므로 둘을 맞춰 정하는 게 중요하다(512 CPU = 0.5 vCPU, 1024 memory = 1GiB). 조합이 정해져 있어서 아무 값이나 못 쓴다(예: 0.5 vCPU면 메모리는 1~4GiB).
+
+`networkMode: awsvpc`는 Fargate의 유일한 모드이고, EC2에서도 권장된다. 이 모드에서는 **태스크마다 ENI(가상 네트워크 카드)와 VPC 사설 IP를 하나씩 받는다.** 그래서 태스크가 VPC의 보안 그룹·서브넷을 직접 쓰고, 다른 태스크와 포트가 안 겹친다. 반면 EC2의 `bridge` 모드는 호스트 포트를 공유해서 동적 포트 매핑과 로드 밸런서의 연동이 필요하다. awsvpc는 깔끔하지만 서브넷 IP를 태스크 수만큼 먹으니, [EKS의 VPC CNI IP 고갈](/posts/eks-cluster-basics)과 같은 고민이 생긴다.
+
+## 권한이 두 종류로 나뉘는 이유
+
+맨 앞 STOPPED 루프의 원인이 여기 있다. ECS에는 **실행 역할(execution role)**과 **태스크 역할(task role)**이 따로 있다.
+
+- **실행 역할**: 컨테이너를 **띄우기 위해 ECS/Fargate 인프라가** 쓰는 권한이다. ECR에서 이미지 가져오기, CloudWatch Logs에 로그 쓰기, Secrets Manager·SSM에서 환경변수 가져오기가 여기 든다. 이게 없거나 ECR 권한이 빠지면 `CannotPullContainerError`로 태스크가 뜨기도 전에 죽는다.
+- **태스크 역할**: 컨테이너 안의 **앱 코드가** 쓰는 권한이다. 앱이 S3에 파일을 올리거나 DynamoDB를 읽는 권한이 여기 든다. 없으면 앱은 뜨지만 그 AWS 호출에서 AccessDenied가 난다.
+
+<SequenceDiagram
+  caption="태스크가 뜨기까지 — 실행 역할과 태스크 역할이 각각 쓰이는 지점"
+  actors={[
+    { id: "ecs", label: "ECS" },
+    { id: "exec", label: "실행 역할" },
+    { id: "ecr", label: "ECR·로그" },
+    { id: "app", label: "앱 컨테이너" },
+    { id: "s3", label: "S3 (태스크역할)" },
+  ]}
+  steps={[
+    {
+      from: "ecs",
+      to: "exec",
+      label: "자격 증명 얻기",
+      title: "ECS가 먼저 실행 역할을 빌린다",
+      detail: "컨테이너를 띄우려면 이미지를 가져와야 한다. 이건 앱이 아니라 ECS 인프라가 하는 일이다.",
+    },
+    {
+      from: "exec",
+      to: "ecr",
+      label: "이미지 pull · 로그 설정",
+      title: "실행 역할로 ECR에서 이미지를 가져온다",
+      detail: "여기서 권한이 없으면 CannotPullContainerError로 태스크가 STOPPED가 된다. 앱은 시작도 못 한다.",
+      payload: "403 Forbidden → STOPPED",
+    },
+    {
+      from: "ecr",
+      to: "app",
+      label: "컨테이너 시작",
+      title: "이미지를 받으면 앱이 뜬다",
+      detail: "이제부터는 앱 코드가 돈다. 로그는 awslogs 드라이버로 CloudWatch에 흘러간다.",
+    },
+    {
+      from: "app",
+      to: "s3",
+      label: "S3 호출",
+      title: "앱이 AWS를 호출할 때는 태스크 역할을 쓴다",
+      detail: "여기서 권한이 없으면 앱은 떠 있지만 S3 호출에서 AccessDenied가 난다. 실행 역할과 혼동하기 쉬운 지점이다.",
+      payload: "GetObject → AccessDenied(태스크역할 문제)",
+    },
+  ]}
+/>
+
+증상으로 어느 역할 문제인지 가른다. **태스크가 뜨기도 전에 STOPPED**면 실행 역할(이미지·로그·시크릿)을 보고, **앱은 떠 있는데 특정 AWS 호출만 AccessDenied**면 태스크 역할을 본다. [IAM 기본](/posts/iam-basics)에서 본 "거부가 이기는 판정"과 같은 디버깅이지만, 먼저 어느 역할인지부터 짚어야 한다.
+
+## 서비스가 원하는 수를 유지하고 배포한다
+
+서비스의 핵심은 **원하는 개수(desired count)**다. 3으로 두면 ECS가 항상 3개를 유지한다. 하나가 헬스 체크에 실패하거나 노드가 죽으면 새로 띄운다.
+
+배포는 태스크 정의 리비전을 바꾸면서 일어난다. 기본은 **롤링 업데이트**다. 두 숫자로 속도와 안전을 조절한다.
+
+- `minimumHealthyPercent`: 배포 중에도 유지할 최소 건강한 태스크 비율. 100이면 "옛 것을 내리기 전에 새 것을 먼저 띄운다".
+- `maximumPercent`: 배포 중 허용할 최대 태스크 비율. 200이면 "원하는 수의 두 배까지 잠깐 띄울 수 있다".
+
+예를 들어 desired 3, min 100, max 200이면 새 태스크 3개를 먼저 띄워 6개가 됐다가 옛 3개를 내린다. 서비스가 안 끊긴다. 반대로 min 50, max 100이면 추가 용량 없이 절반씩 교체해 느리지만 비용이 안 든다.
+
+<AlgoTrace
+  caption="롤링 업데이트 (desired 3, min 100%, max 200%) — 끊김 없이 교체"
+  memoryLabel="떠 있는 태스크"
+  cells={["시작", "새 버전 추가", "준비 완료", "옛 버전 제거", "완료"]}
+  steps={[
+    { pointer: 0, memory: ["v1", "v1", "v1"], caption: "v1 세 개가 트래픽을 받는 중" },
+    { pointer: 1, memory: ["v1", "v1", "v1", "v2", "v2", "v2"], caption: "v2 세 개를 먼저 띄운다. max 200%까지 허용되어 6개" },
+    { pointer: 2, found: [2], memory: ["v1", "v1", "v1", "v2", "v2", "v2"], caption: "v2가 헬스 체크를 통과해 로드 밸런서에 등록된다" },
+    { pointer: 3, memory: ["v2", "v2", "v2"], caption: "옛 v1을 로드 밸런서에서 빼고 내린다. 내리는 동안에도 건강한 수가 3 이상" },
+    { pointer: 4, found: [4], memory: ["v2", "v2", "v2"], caption: "교체 끝. 한 순간도 3개 아래로 안 떨어졌다" },
+  ]}
+/>
+
+끊김 없이, 한 번에, 되돌릴 수 있게 배포하려면 **블루/그린**을 쓴다. ECS는 CodeDeploy와 엮어 블루/그린을 지원한다. 새 버전(그린)을 완전히 띄우고 로드 밸런서의 리스너를 한 번에 그린으로 돌린다. 문제가 생기면 리스너를 블루로 되돌리면 끝이라 롤백이 빠르다. 대신 배포 동안 두 벌을 다 띄워 비용이 두 배가 된다. 롤링과 블루/그린의 트레이드오프는 [블루/그린 배포](/posts/blue-green-deployment)에 더 있다.
+
+로드 밸런서 연결도 서비스가 맡는다. 서비스를 ALB의 대상 그룹(target group)에 연결하면, 태스크가 뜨고 질 때마다 서비스가 대상 그룹에 자동으로 등록·해제한다. awsvpc 모드에서는 태스크의 사설 IP가 대상으로 등록된다.
+
+## 스스로 개수를 조절하기: 서비스 오토스케일링
+
+원하는 수를 사람이 손으로 바꾸는 대신, 지표에 따라 자동으로 바꾸게 할 수 있다. ECS 서비스 오토스케일링은 **Application Auto Scaling**을 통해 동작하며, 세 방식이 있다.
+
+- **타깃 추적(target tracking)**: "평균 CPU를 50%로 유지해라" 같은 목표를 주면 ECS가 알아서 개수를 늘리고 줄인다. 가장 많이 쓴다.
+- **단계(step) 스케일링**: 지표 구간마다 "얼마나 늘릴지"를 계단식으로 정한다.
+- **예약(scheduled) 스케일링**: "평일 9시에 10개로" 같은 시간표로 바꾼다.
+
+```bash
+# 서비스를 Application Auto Scaling에 등록하고 (형식 예시)
+aws application-autoscaling register-scalable-target \
+  --service-namespace ecs --resource-id service/prod/web \
+  --scalable-dimension ecs:service:DesiredCount --min-capacity 2 --max-capacity 20
+# CPU 50% 타깃 추적 정책을 건다
+aws application-autoscaling put-scaling-policy \
+  --policy-type TargetTrackingScaling --policy-name cpu50 ...
+```
+
+여기서 주의할 게 하나 있다. 서비스 오토스케일링은 "태스크를 몇 개 띄울지"를 조절할 뿐, EC2 시작 유형에서 **그 태스크를 받을 노드가 없으면** 태스크가 `PROVISIONING`에 멈춘다. 그래서 EC2에서는 노드도 함께 늘어나게 **용량 공급자(capacity provider)**로 EC2 오토스케일링 그룹을 엮는다. Fargate에서는 노드가 없으니 이 걱정이 없다. 오토스케일링 일반 원리는 [오토스케일링](/posts/autoscaling)에 있다.
+
+## EC2 시작 유형과 Fargate의 차이
+
+같은 태스크를 어디서 돌릴지가 시작 유형이다.
+
+**EC2 시작 유형**은 내가 EC2 인스턴스를 클러스터에 등록해 두면 그 위에서 태스크가 돈다. 노드의 OS 패치, 스케일링, 빈 공간(bin packing)을 내가 관리한다. 대신 인스턴스 요금만 내므로 꾸준히 꽉 채워 돌리면 싸고, GPU·특수 인스턴스·데몬 성격의 컨테이너를 쓸 수 있다.
+
+**Fargate**는 노드가 없다. 태스크가 필요한 CPU·메모리를 지정하면 AWS가 그만큼의 격리된 실행 환경을 만들어 돌린다. 패치·스케일링·노드 관리가 사라진다. 대신 태스크가 요청한 vCPU·메모리에 분 단위로 과금되어, 띄엄띄엄 도는 워크로드나 운영 부담을 줄이고 싶을 때 유리하다. 제약도 있다. `privileged`·호스트 네트워크·일부 볼륨을 못 쓰고, awsvpc만 되며, 임시 저장소가 기본 20GiB다.
+
+| 기준 | EC2 시작 유형 | Fargate |
+|---|---|---|
+| 노드 관리 | 내가 함 (패치·스케일) | 없음 |
+| 과금 | 인스턴스 시간 | 태스크 vCPU·메모리 분 단위 |
+| 꽉 채워 돌릴 때 비용 | 유리 | 상대적으로 비쌈 |
+| 특수 요구 | GPU·privileged 가능 | 제약 있음 |
+| 빠른 시작·운영 부담 | 노드 떠 있어야 | 작음 |
+
+둘을 **용량 공급자**로 섞을 수도 있다. 기본 용량은 Fargate로, 급증분은 더 싼 `FARGATE_SPOT`으로 받는 식이다.
+
+## ECS를 고를까, EKS를 고를까
+
+[EKS](/posts/eks-cluster-basics)는 관리형 쿠버네티스다. 둘 다 컨테이너를 오케스트레이션하지만 결이 다르다.
+
+ECS는 AWS 전용이고 개념이 적다(태스크·서비스·클러스터). 컨트롤 플레인 요금이 없고 IAM·ALB·CloudWatch와 바로 엮인다. 쿠버네티스를 배울 필요 없이 AWS 안에서 빠르게 컨테이너를 돌리고 싶을 때, 팀이 작고 멀티 클라우드 계획이 없을 때 잘 맞는다.
+
+EKS는 쿠버네티스 생태계(Helm, 오퍼레이터, 커스텀 리소스)를 그대로 쓰고 다른 클라우드·온프레미스로 옮기기 쉽다. 대신 컨트롤 플레인 요금(시간당 약 $0.10)과 더 가파른 학습 곡선, 버전 업그레이드·애드온 관리 같은 운영 부담이 따라온다. 팀에 이미 쿠버네티스 숙련도가 있거나, 복잡한 배포·포터빌리티가 필요하면 EKS다.
+
+한 줄로 정하면, "AWS 안에서 단순하게"면 ECS, "쿠버네티스 생태계·포터빌리티가 필요"면 EKS다. 둘 다 Fargate로 노드를 없앨 수 있다.
+
+## 배포가 실패할 때: 서킷 브레이커와 헬스 체크
+
+새 버전이 깨져서 계속 죽는데 서비스가 눈치 없이 새 태스크를 무한히 띄우면, 비용만 쓰고 배포가 영원히 안 끝난다. 이걸 막는 게 **배포 서킷 브레이커(deployment circuit breaker)**다. 켜 두면 새 태스크가 반복해서 뜨지 못할 때 ECS가 배포를 실패로 선언하고, `rollback: true`면 직전에 잘 돌던 태스크 정의로 자동으로 되돌린다.
+
+```json
+"deploymentConfiguration": {
+  "deploymentCircuitBreaker": { "enable": true, "rollback": true },
+  "minimumHealthyPercent": 100,
+  "maximumPercent": 200
+}
+```
+
+서킷 브레이커가 "실패"를 판정하는 근거는 태스크가 **안정 상태(steady state)**에 못 드는 것이다. 태스크가 안정 상태에 들려면 헬스 체크를 통과해야 하는데, 헬스 체크는 두 겹이다. 하나는 로드 밸런서의 대상 그룹 헬스 체크(ALB가 지정 경로로 HTTP 200을 받는지), 다른 하나는 컨테이너 헬스 체크(태스크 정의의 `healthCheck`로 컨테이너 안에서 명령을 돌려 확인). 둘 중 하나라도 실패하면 태스크는 비정상으로 간주되어 교체 대상이 된다.
+
+<Callout kind="tip">
+배포가 안 끝나고 "새 태스크가 떴다가 죽기"를 반복하면 서비스 이벤트와 멈춘 태스크의 STOPPED 사유를 먼저 본다. 사유가 헬스 체크 실패면 대상 그룹의 헬스 체크 경로·포트·타임아웃과 앱의 기동 시간을 맞춘다. 앱이 뜨는 데 60초가 걸리는데 헬스 체크가 30초 만에 포기하면, 멀쩡한 앱도 영원히 교체된다. 이럴 때는 헬스 체크 유예 기간(`healthCheckGracePeriodSeconds`)을 늘린다.
+</Callout>
+
+이 조합이 배포 사고를 막는 안전망이다. 서킷 브레이커로 자동 롤백을 켜 두고, 헬스 체크를 앱의 실제 기동 시간에 맞춰 두면, 깨진 배포가 사용자에게 닿기 전에 직전 버전으로 돌아간다.
+
+## 다시 STOPPED 루프로
+
+처음 문제로 돌아가자. 태스크가 뜨자마자 STOPPED가 반복된 것은 앱이 아니라 **실행 역할**에 ECR 권한이 없어 이미지를 못 가져왔기 때문이다. `ecsTaskExecutionRole`에 ECR pull과 CloudWatch Logs 권한을 붙이면 풀린다. 만약 앱이 떠 있는데 S3 호출만 막혔다면 그건 **태스크 역할** 문제다. 두 역할을 구분하는 것이 ECS 디버깅의 첫걸음이다.
+
+ECS를 한 번에 그리면 이렇다. 레시피(태스크 정의)를 불변 버전으로 쓰고, 매니저(서비스)가 원하는 수를 유지하며 롤링·블루그린으로 배포하고, 주방(EC2 또는 Fargate)을 고르고, 창고 열쇠를 실행 역할과 태스크 역할로 나눠 준다. 이 틀이 잡히면 STOPPED 하나를 봐도 어디를 열어 볼지 바로 안다.
+
+## 면접에서 나올 만한 질문
+
+### ECS의 클러스터·태스크 정의·태스크·서비스는 각각 무엇인가
+
+클러스터는 태스크·서비스를 담는 논리적 경계다. 태스크 정의는 "어떤 이미지를 CPU·메모리 얼마로 띄울지" 적은 불변 버전의 레시피다. 태스크는 그 레시피로 실제로 띄운 컨테이너 묶음(쿠버네티스 Pod에 해당)이다. 서비스는 "태스크를 N개 유지하라"를 책임지고 배포와 로드 밸런서 연동을 맡는다(Deployment에 해당).
+
+### ECS의 실행 역할과 태스크 역할은 어떻게 다른가
+
+실행 역할은 컨테이너를 띄우기 위해 ECS/Fargate 인프라가 쓰는 권한으로, ECR 이미지 pull·CloudWatch 로그·시크릿 가져오기가 든다. 태스크 역할은 컨테이너 안 앱 코드가 쓰는 권한으로, S3·DynamoDB 같은 AWS 호출에 쓰인다. 태스크가 뜨기도 전에 STOPPED면 실행 역할을, 앱은 떠 있는데 특정 호출만 AccessDenied면 태스크 역할을 본다.
+
+### 태스크가 CannotPullContainerError로 계속 STOPPED가 된다. 어디를 보나
+
+이미지를 가져오지 못한 것이므로 앱 코드가 아니라 인프라 쪽 문제다. 실행 역할에 ECR pull 권한(AmazonECSTaskExecutionRolePolicy 등)이 있는지, 프라이빗 서브넷이라면 ECR로 가는 경로(NAT나 VPC 엔드포인트)가 있는지, 이미지 태그·리전이 맞는지 본다. awsvpc·Fargate에서는 네트워크 경로가 없어 pull이 막히는 경우도 흔하다.
+
+### awsvpc 네트워크 모드는 무엇이 다른가
+
+태스크마다 ENI와 VPC 사설 IP를 하나씩 받는다. 그래서 태스크가 보안 그룹·서브넷을 직접 쓰고 포트가 안 겹친다. Fargate는 awsvpc만 쓰고 EC2에서도 권장된다. 단점은 태스크 수만큼 서브넷 IP를 먹어서, EKS의 VPC CNI처럼 서브넷 IP 고갈을 신경 써야 한다는 점이다. bridge 모드는 호스트 포트를 공유해 동적 포트 매핑이 필요하다.
+
+### ECS 서비스의 롤링 업데이트에서 minimumHealthyPercent와 maximumPercent는 무슨 역할인가
+
+배포 중 유지할 최소 건강한 태스크 비율과 허용할 최대 태스크 비율이다. desired 3에 min 100·max 200이면 새 태스크 3개를 먼저 띄워 6개가 됐다가 옛 것을 내려 끊김이 없다. min 50·max 100이면 추가 용량 없이 절반씩 교체해 느리지만 비용이 안 든다. 무중단과 비용 사이를 이 두 숫자로 조절한다.
+
+### EC2 시작 유형과 Fargate는 언제 무엇을 고르나
+
+EC2는 노드를 내가 관리하는 대신 인스턴스를 꽉 채워 돌리면 싸고 GPU·privileged 같은 특수 요구를 쓸 수 있다. Fargate는 노드가 없어 패치·스케일링 부담이 사라지고 태스크 단위 분 과금이라, 띄엄띄엄 도는 워크로드나 운영 부담을 줄이고 싶을 때 유리하다. 대신 privileged·호스트 네트워크를 못 쓰고 꽉 채워 돌리면 상대적으로 비싸다. 용량 공급자로 둘을 섞기도 한다.
+
+### 서비스 오토스케일링을 걸었는데 EC2 시작 유형에서 태스크가 PROVISIONING에 멈춘다. 왜인가
+
+서비스 오토스케일링은 태스크 개수만 늘릴 뿐, 그 태스크를 받을 노드가 없으면 스케줄되지 못하고 멈춘다. EC2에서는 용량 공급자로 EC2 오토스케일링 그룹을 엮어 노드도 함께 늘어나게 해야 한다. Fargate는 노드가 없어 이 문제가 없다.
+
+### 새 버전이 깨져 배포가 끝나지 않고 태스크가 떴다 죽기를 반복한다. 어떻게 막나
+
+배포 서킷 브레이커를 켜면(enable: true) ECS가 새 태스크가 반복해서 안정 상태에 못 들 때 배포를 실패로 선언하고, rollback: true면 직전의 잘 돌던 태스크 정의로 자동으로 되돌린다. 실패 판정의 근거는 헬스 체크다. 대상 그룹 헬스 체크(ALB가 200을 받는지)와 컨테이너 헬스 체크 중 하나라도 실패하면 태스크는 교체된다. 앱 기동이 느려 헬스 체크가 먼저 포기하면 healthCheckGracePeriodSeconds를 늘린다.
+
+### ECS와 EKS 중 무엇을 고르나
+
+AWS 안에서 단순하게 컨테이너를 돌리고 쿠버네티스 숙련도나 멀티 클라우드 계획이 없으면 ECS가 맞다. 컨트롤 플레인 요금이 없고 IAM·ALB와 바로 엮이며 개념이 적다. 쿠버네티스 생태계(Helm, 오퍼레이터)를 쓰거나 포터빌리티·복잡한 배포가 필요하면 EKS다. 대신 컨트롤 플레인 요금과 학습 곡선, 버전·애드온 운영 부담을 진다.
