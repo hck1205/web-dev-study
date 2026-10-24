@@ -5,6 +5,42 @@ import { withCompanyTags } from "./utils";
 // 채용 공고에서 나온 글은 companies에 회사 이름을 적는다 (라벨 + 같은 이름의 해시태그가 붙는다).
 const ENTRIES: Post[] = [
   {
+    slug: "linux-archive-transfer",
+    title: "tar와 압축, 파일 옮기기: gzip·xz·zstd, scp·sftp·rsync",
+    summary: "로그 몇 GB를 다른 서버로 옮기는 장면에서 출발해 tar가 묶기만 하는 구조, 같은 로그로 잰 gzip·bzip2·xz·zstd의 크기와 시간, 회선 속도에 따라 압축이 손해가 되는 지점, tar | zstd | ssh 파이프, zip과의 차이, 경로 탈출을 본다. scp·sftp·rsync 옵션과 FTP·FTPS·SFTP의 프로토콜 차이도 비교한다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "DevOps", "Network", "Security"],
+    date: "2026-10-27",
+    keywords: ["zstd", "tar.gz", "SFTP", "scp"],
+  },
+  {
+    slug: "linux-package-management",
+    title: "패키지 관리자: apt와 dnf, 저장소와 서명, 버전 고정",
+    summary: "apt upgrade 한 번에 운영 DB가 재시작된 장면에서 출발해 dpkg와 apt의 두 층, sources 한 줄과 signed-by, InRelease 서명에서 시작하는 해시 사슬, apt-mark hold와 pin을 실제 출력으로 본다. unattended-upgrades의 범위, Dockerfile에서 목록을 지우는 이유, dnf·zypper·snap과의 차이도 짚는다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "DevOps", "Security", "Docker"],
+    date: "2026-10-27",
+    keywords: ["apt-mark hold", "signed-by", "dpkg", "apt-cache policy"],
+  },
+  {
+    slug: "shells-posix-compat",
+    title: "sh, bash, dash, zsh: 같은 스크립트가 셸마다 다르게 도는 이유",
+    summary: "#!/bin/sh에 bash 문법을 쓴 스크립트가 Ubuntu의 dash와 Alpine의 ash에서 깨지는 장면에서 출발해, 실행 방법이 해석기를 정하는 원리, 다섯 셸로 돌린 결과, POSIX sh로 옮겨 쓰는 법, 셸 계보와 성격, checkbashisms와 shellcheck --shell=sh 검사, PowerShell의 객체 파이프를 본다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "DevOps", "Troubleshooting"],
+    date: "2026-10-27",
+    keywords: ["POSIX sh", "dash", "checkbashisms", "zsh"],
+  },
+  {
+    slug: "vim-for-servers",
+    title: "서버에서 vim 살아남기: 모드, 저장, 검색과 치환, 그리고 nano",
+    summary: "SSH로 들어간 서버에 vi밖에 없고 :q가 안 먹는 장면에서 출발해 모드라는 발상, 설정 한 줄을 고치는 최소 명령, :%s 치환, 권한 없는 파일을 :w !sudo tee %와 sudoedit로 저장하는 법, E325 스왑 파일 경고 읽기, YAML의 숨은 탭, git과 crontab이 여는 편집기 바꾸기를 실제 화면으로 본다.",
+    topic: "programming/os/linux",
+    tags: ["Linux", "DevOps"],
+    date: "2026-10-27",
+    keywords: ["vim", "sudoedit", "nano"],
+  },
+  {
     slug: "config-management-tools",
     title: "구성 관리 도구: Ansible, Puppet, Chef, Salt는 무엇이 다른가",
     summary: "서버 50대의 nginx 설정 한 줄을 오늘 안에 바꿔야 하는 상황에서 출발해 에이전트 유무, push와 pull, 선언형 매니페스트와 Ruby 레시피, 모듈 단위로 지켜지는 멱등성을 Ansible·Puppet·Salt 실제 실행으로 비교한다. Terraform과의 경계, 불변 인프라 이후에 남은 자리(골든 이미지, 베어메탈)도 정리한다.",

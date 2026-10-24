@@ -1,3 +1,7 @@
+import { VIM_FOR_SERVERS } from "./vim-for-servers";
+import { SHELLS_POSIX_COMPAT } from "./shells-posix-compat";
+import { LINUX_PACKAGE_MANAGEMENT } from "./linux-package-management";
+import { LINUX_ARCHIVE_TRANSFER } from "./linux-archive-transfer";
 import { TERRAFORM_TEAM_WORKFLOW_HCP_TERRAGRUNT } from "./terraform-team-workflow-hcp-terragrunt";
 import { SECURITY_COMPLIANCE_FOR_DEVELOPERS } from "./security-compliance-for-developers";
 import { PHISHING_SOCIAL_ENGINEERING } from "./phishing-social-engineering";
@@ -877,6 +881,10 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  VIM_FOR_SERVERS,
+  SHELLS_POSIX_COMPAT,
+  LINUX_PACKAGE_MANAGEMENT,
+  LINUX_ARCHIVE_TRANSFER,
   TERRAFORM_TEAM_WORKFLOW_HCP_TERRAGRUNT,
   SECURITY_COMPLIANCE_FOR_DEVELOPERS,
   PHISHING_SOCIAL_ENGINEERING,

@@ -3,7 +3,7 @@
 > 자동 생성 문서다. 직접 고치지 말고 `pnpm content:index`로 다시 만든다.
 > 새 글을 쓰기 전에 이 문서를 먼저 읽는다: 같은 주제의 글이 있는지, 어느 토픽에 둘지, 어떤 글로 링크할지, 어떤 키워드가 이미 쓰였는지 확인한다.
 
-글 876편 · 토픽 103개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
+글 880편 · 토픽 103개 · 생성 기준: posts.ts + src/app/posts/*/page.mdx
 
 ## 토픽별 글
 
@@ -422,7 +422,7 @@
 - 길이: 410줄
 - 소제목: 동전을 몇 번 연속 뒷면이 나왔나 / 레지스터에 최댓값만 남긴다 / 평균은 조화 평균으로 낸다 / 오차가 정말 √m에 반비례하나 / 아주 적을 때와 아주 많을 때 / Redis에서 세기 / Set과 나란히 놓고 재 보기 / 교집합은 잘 못 센다 / 다른 방법과 고르는 기준 / 레지스터와 조화 평균을 코드로 / 숫자가 이상할 때 의심할 것 / 12KB로 세는 대신 포기하는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: bloom-filter, lossy-counting, count-min-sketch
-- 키워드 백링크 →: ds-hash-map, redis-basics, cookie-session-login
+- 키워드 백링크 →: ds-hash-map, redis-basics, cookie-session-login, shells-posix-compat
 - 이 글로 오는 글 ←: bloom-filter, count-min-sketch, elasticsearch-aggregations, lossy-counting, olap-star-schema, password-attacks-credential-stuffing, randomized-algorithms, sd-ad-click-exactly-once, sd-autocomplete-data-pipeline
 
 #### `lossy-counting` — Lossy Counting: 덜 세는 대신 빠짐없이 인기 항목 찾기
@@ -499,7 +499,8 @@
 - 길이: 460줄
 - 소제목: 두 쪽이 서로의 파일을 모른다 / 받는 쪽이 먼저 블록 지문을 보낸다 / 한 칸씩 미는 체크섬 / 약한 체크섬과 강한 해시를 같이 쓰는 이유 / 46MB 파일 한 줄을 고쳐 보내 보기 / 블록 크기가 정하는 것 / 델타 전송이 통하지 않는 파일 / 아예 보내지 않고 건너뛰는 판단 / 백업이 느리거나 이상할 때 보는 곳 / 다른 도구들이 고른 방법 / 굴려서 찾고 해시로 확인한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: merkle-tree, traffic-shaping-qos, sd-file-sync-block-upload
-- 이 글로 오는 글 ←: merkle-tree, sd-file-sync-block-upload, string-search-algorithms
+- 키워드 백링크 →: linux-archive-transfer
+- 이 글로 오는 글 ←: linux-archive-transfer, merkle-tree, sd-file-sync-block-upload, string-search-algorithms
 
 ### Programming › Algorithms › Techniques (`programming/algorithms/techniques`)
 
@@ -702,7 +703,7 @@
 - 소제목: 다섯 칸이 정하는 시각 / 나눠 떨어지지 않는 간격 / 서버 시계는 어느 나라 시간인가 / 서머타임에는 두 번 돌거나 건너뛴다 / 앞 실행이 안 끝났는데 다음 실행이 온다 / 레플리카가 셋이면 메일도 세 통 / 쿠버네티스 CronJob의 설정들 / 두 번 돌아도 괜찮은 작업 / 안 돈 것을 알아채는 법 / 새벽 배치가 안 돌았다는 연락을 받으면 / 시각보다 회차를 믿는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: batch-processing, distributed-lock, leader-election, linux-systemd-systemctl, idempotency-key
 - 키워드 백링크 →: k8s-architecture, pessimistic-locking, postgres-advanced-sql, message-delivery-semantics, sd-start-single-server, autoscaling, shell-redirection-pipes, shell-environment-startup, linux-files-permissions, postgres-architecture, local-k8s-kind-minikube, redis-basics, webhooks
-- 이 글로 오는 글 ←: airflow-orchestration, alerting, argocd-basics, bash-scripting, batch-processing, bullmq-job-queue, global-rollout-localization, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-feature-maturity, k8s-hpa, k8s-job-cronjob, k8s-learning-roadmap, k8s-operators, k8s-secret, k8s-storageclass-snapshots, pattern-singleton, race-conditions, sd-load-balancer-stateless, sd-metrics-storage-alerting, shell-environment-startup
+- 이 글로 오는 글 ←: airflow-orchestration, alerting, argocd-basics, bash-scripting, batch-processing, bullmq-job-queue, global-rollout-localization, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-certifications, k8s-cluster-upgrade, k8s-crd, k8s-feature-maturity, k8s-hpa, k8s-job-cronjob, k8s-learning-roadmap, k8s-operators, k8s-secret, k8s-storageclass-snapshots, pattern-singleton, race-conditions, sd-load-balancer-stateless, sd-metrics-storage-alerting, shell-environment-startup, vim-for-servers
 
 #### `graphql-basics` — GraphQL 기초: 스키마와 리졸버, N+1, 200 속의 에러, 캐시와 보안
 
@@ -958,7 +959,7 @@
 - 길이: 405줄
 - 소제목: 붙이는 방법은 세 가지로 갈린다 / 벤더의 말은 경계에서 우리 말로 바꾼다 / 타임아웃은 실패가 아니라 모른다는 뜻이다 / 들어오는 쪽은 버전을 보고 덮어쓴다 / 다시 보낼 것과 포기할 것 / 매일 밤 두 장부를 맞춰 본다 / 벤더가 계약을 바꿀 때 / 연동이 이상할 때 보는 순서 / 남의 시스템은 우리 말로 감싸고, 매일 맞춰 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: global-rollout-localization, sit-uat-testing, release-cutover-hypercare, webhooks, batch-processing, pattern-adapter, hexagonal-architecture, ddd-bounded-context, idempotency-key, timeouts, message-delivery-semantics, exponential-backoff-jitter, circuit-breaker, dead-letter-queue, transactional-outbox, sd-payment-reliability, api-versioning
-- 키워드 백링크 →: character-encoding-unicode, http-status-codes
+- 키워드 백링크 →: character-encoding-unicode, http-status-codes, linux-archive-transfer
 - 이 글로 오는 글 ←: global-rollout-localization, release-cutover-hypercare, sit-uat-testing, soap-and-soa
 
 #### `event-sourcing` — 이벤트 소싱 구현: decide와 evolve, 스냅숏, 업캐스팅, 크립토 셰딩
@@ -1179,7 +1180,7 @@
 - 길이: 561줄
 - 소제목: 로그인을 한곳에 모으면 / SAML 로그인 한 번 따라가기 / Assertion 한 장 뜯어보기 / 서명이 맞아도 확인할 것이 남는다 / 서명은 맞는데 다른 사람으로 들어온다 / IdP가 먼저 보내는 로그인 / OIDC로 하면 같은 일이 이렇게 보인다 / 로그아웃은 로그인보다 어렵다 / 계정은 누가 만들고 누가 지우나 / SSO를 붙인 뒤 걸려 오는 문의 / 정리하며 / 면접에서 나올 만한 질문
 - 직접 링크 →: oauth, jwt-key-rotation, passkeys-webauthn, csrf
-- 키워드 백링크 →: cookie-session-login, html-form-http, token-login, cloud-service-models-shared-responsibility, sli-slo, db-modeling-normalization
+- 키워드 백링크 →: cookie-session-login, html-form-http, token-login, shells-posix-compat, cloud-service-models-shared-responsibility, sli-slo, db-modeling-normalization
 - 이 글로 오는 글 ←: cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cold-starts, eks-cluster-basics, enterprise-auth-ldap-kerberos, gitops-argocd-vs-flux, iam-basics, kubeconfig-contexts, mfa-totp, owasp-top-10-map, passkeys-webauthn, password-attacks-credential-stuffing, security-compliance-for-developers, security-principles-cia-defense-in-depth, soap-and-soa, spring-security-jwt-oauth2, terraform-team-workflow-hcp-terragrunt, vpn-ipsec-wireguard, zero-trust-architecture
 
 #### `token-login` — 토큰으로 로그인하기: JWT와 리프레시 토큰
@@ -1985,7 +1986,7 @@
 - 길이: 529줄
 - 소제목: 문제가 어디서 났는지부터 가른다 / 푸시가 fetch first로 거절된다 / pull이 divergent branches라며 멈춘다 / refusing to merge unrelated histories / 바꾼 파일이 덮어써진다며 브랜치를 못 바꾼다 / stash pop에서 충돌이 났다 / detached HEAD에서 만든 커밋이 사라졌다 / 브랜치를 실수로 지웠다 / 이미 푸시한 커밋 메시지가 틀렸다 / rebase가 끝나지 않은 채로 남아 있다 / pnpm-lock.yaml에서 충돌이 났다 / 오류를 만났을 때의 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-large-files-secrets, git-repo-errors, git-undo, git-rebase, git-remote-collaboration, git-tips-advanced
-- 키워드 백링크 →: git-branch-merge, git-ignore-config, dependency-hell, git-staging-area, git-stash-reflog
+- 키워드 백링크 →: git-branch-merge, git-ignore-config, dependency-hell, git-staging-area, git-stash-reflog, shells-posix-compat
 - 이 글로 오는 글 ←: git-features-map, git-ignore-config, git-internals-basics, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-stash-reflog, git-tips-advanced, git-undo
 
 #### `git-undo` — 되돌리기: restore, reset, revert와 히스토리 속 비밀 값
@@ -2244,7 +2245,7 @@
 - 길이: 490줄
 - 소제목: 원본을 버리지 않고 일단 쌓아 두는 곳 / 큰 파일을 블록으로 잘라 여러 서버에 나눈다 / 쓰기는 DataNode끼리 줄을 서서 넘긴다 / DataNode 하나를 죽여 봤다 / 작은 파일 1만 개가 느린 이유 / 계산과 저장을 떼어 놓게 된 이유 / 경로를 읽으면 테이블 구조가 보인다 / 파일 더미 위에 커밋 로그를 얹는다 / 레이크가 느려졌다는 말을 들으면 / 바이트보다 파일 개수를 먼저 센다 / 면접에서 나올 만한 질문
 - 직접 링크 →: spark-basics, airflow-orchestration, kafka-to-lake-pipeline, db-type-columnar-olap, sd-object-storage-durability, sd-object-storage-architecture
-- 키워드 백링크 →: db-partitioning, sd-start-single-server, mongodb-replica-set-sharding, stream-processing, kafka-basics, postgres-architecture, cdc-change-data-capture
+- 키워드 백링크 →: db-partitioning, sd-start-single-server, mongodb-replica-set-sharding, stream-processing, kafka-basics, postgres-architecture, linux-archive-transfer, cdc-change-data-capture
 - 이 글로 오는 글 ←: airflow-orchestration, data-center-infrastructure, db-type-columnar-olap, db-type-time-series, db-type-wide-column, grafana-tempo-tracing, kafka-to-lake-pipeline, network-flow-logs, sd-ad-click-stream-windows, sd-object-storage-durability, spark-basics
 
 #### `kafka-to-lake-pipeline` — Kafka에서 레이크까지: 스트리밍 적재, 정확히 한 번의 범위, 늦은 데이터
@@ -3191,7 +3192,7 @@
 - 길이: 657줄
 - 소제목: 뷰는 조회할 때 원래 쿼리로 펼쳐진다 / SELECT *는 만든 날의 컬럼 목록으로 굳는다 / 뷰를 지나 쓰기와 WITH CHECK OPTION / 뷰로 숨긴 행이 함수로 새어 나간다 / 결과를 저장하는 머티리얼라이즈드 뷰 / REFRESH가 잡는 잠금을 직접 본다 / CONCURRENTLY는 공짜가 아니다 / 뷰, 머티리얼라이즈드 뷰, 요약 테이블 고르기 / 바뀐 행만 고치는 비교를 짜 보기 / 이름은 같아도 저장하는 것이 다르다 / 면접에서 나올 만한 질문
 - 직접 링크 →: postgres-reporting-sql, sql-logical-order, postgres-functions-triggers, postgres-roles-security, sql-window-functions-pg, caching-strategies, sql-cte-recursive
-- 키워드 백링크 →: sqld-correlated-subquery, json-crud-http, zero-downtime-migrations, postgres-mvcc-vacuum, sqld-group-by-having, sqld-window-functions, sql-basics
+- 키워드 백링크 →: sqld-correlated-subquery, json-crud-http, zero-downtime-migrations, postgres-mvcc-vacuum, sqld-group-by-having, sqld-window-functions, shells-posix-compat, sql-basics
 - 이 글로 오는 글 ←: olap-star-schema, sql-cte-recursive, sql-interview-problems, sql-study-path
 
 #### `sql-window-functions-pg` — PostgreSQL 윈도우 함수 실전: RANGE·GROUPS 프레임, Run Condition, 정렬 비용
@@ -3987,7 +3988,7 @@
 - 길이: 365줄
 - 소제목: 모바일에서 안 도는 배경 영상과 무거운 지도 / video 하나에 파일 여러 개 / 자동 재생은 브라우저가 허락해야 돈다 / 받기 시작하는 시점: preload와 poster / 자리부터 잡아 두기 / 자막은 track과 WebVTT로 / audio는 화면 없는 video다 / 남의 페이지를 넣는 iframe / 파일 하나로 안 될 때: HLS와 MSE / 영상이 안 나올 때 보는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: image-optimization, core-web-vitals, cors, aria-keyboard-focus, browser-security-model, web-security-headers, lazy-loading-strategies, sd-video-streaming-cost, youtube-url-to-video, html-text-semantics
-- 키워드 백링크 →: frontend-testing-strategy, http-status-codes, web-accessibility, sd-music-streaming
+- 키워드 백링크 →: frontend-testing-strategy, http-status-codes, shells-posix-compat, web-accessibility, sd-music-streaming
 - 이 글로 오는 글 ←: html-text-semantics, lazy-loading-strategies
 
 #### `html-semantics` — 시맨틱 HTML: 태그가 말하는 의미는 누가 읽나
@@ -4426,7 +4427,7 @@
 - 소제목: 수학의 합성은 오른쪽부터 읽는다 / 이어 붙일 수 있는 함수의 조건 / 중간값을 엿보는 tap / 비동기 단계가 섞이면 값 대신 Promise가 흐른다 / 메서드 체이닝으로 충분할 때 / TypeScript에서 pipe의 타입 / 표준에 들어오려는 파이프라인 연산자 / 연습: pipe와 compose 직접 만들기 / 다시 검색어로 / 면접에서 나올 만한 질문
 - 직접 링크 →: functional-programming-basics, js-currying-partial, js-async-await, js-promise-combinators, fp-functors-monads-js, code-splitting, fp-in-react
 - 키워드 백링크 →: pattern-decorator, js-function-forms
-- 이 글로 오는 글 ←: claude-code-project-structure, docker-compose, docker-container-basics, docker-local-dev-workflow, docker-network-drivers, fp-functors-monads-js, fp-in-react, functional-programming-basics, helm-dependencies-oci-gitops, js-currying-partial, local-custom-domain, pattern-chain-of-responsibility, ts-decorators, typescript-roadmap
+- 이 글로 오는 글 ←: claude-code-project-structure, docker-compose, docker-container-basics, docker-local-dev-workflow, docker-network-drivers, fp-functors-monads-js, fp-in-react, functional-programming-basics, helm-dependencies-oci-gitops, js-currying-partial, local-custom-domain, pattern-chain-of-responsibility, ts-decorators, typescript-roadmap, vim-for-servers
 
 #### `fp-functors-monads-js` — 펑터와 모나드: map과 flatMap으로 실패를 다루기
 
@@ -4728,7 +4729,7 @@
 - 길이: 407줄
 - 소제목: 폴더가 주소가 되는 규칙 / 대괄호 세 가지 / 주소에 나오지 않는 폴더 / 화면 조각이 겹치는 순서 / 레이아웃은 남고 템플릿은 다시 태어난다 / 링크를 누르면 일어나는 일 / 이동이 느리거나 상태가 이상할 때 보는 곳 / Pages Router에서 넘어올 때 / 다시 대시보드 필터로 / 면접에서 나올 만한 질문
 - 직접 링크 →: nextjs-static-dynamic-rendering, react-server-components, nextjs-route-handlers-proxy, streaming-ssr-suspense, react-suspense-error-boundary, react-reconciliation-keys, nextjs-caching-layers, nextjs-parallel-intercepting-routes
-- 키워드 백링크 →: frontend-testing-strategy, rendering-csr-spa, rendering-strategies, n-plus-one-queries
+- 키워드 백링크 →: frontend-testing-strategy, rendering-csr-spa, rendering-strategies, n-plus-one-queries, shells-posix-compat
 - 이 글로 오는 글 ←: code-splitting, css-performance, css-styling-approaches, frontend-browser-cache, frontend-i18n-intl, graphql-client-caching, hydration, islands-resumability, js-es-modules, nextjs-caching-layers, nextjs-parallel-intercepting-routes, nextjs-static-dynamic-rendering, performance-metrics-measurement, pwa-install-offline, react-client-routing, react-forms-actions, react-server-components, rendering-ssg-isr, rendering-strategies, responsive-design, seo-for-spa, streaming-ssr-suspense, view-transitions-shared-element, web-security-headers
 
 #### `nextjs-caching-layers` — Next.js 캐시 네 겹: 요청 메모이제이션, 데이터 캐시, 전체 라우트 캐시, 클라이언트 캐시
@@ -5527,7 +5528,7 @@
 - 길이: 691줄
 - 소제목: 다섯 개 시험이 재는 것은 서로 다르다 / 숫자로 보는 시험 형식 / 영역 비중이 공부 순서를 정한다 / 플랫폼 쪽으로 넓어진 자격증 / 시험 당일 화면 안에서 일어나는 일 / 문제마다 컨텍스트부터 바꾼다 / YAML은 쓰지 말고 뽑는다 / 필드 이름이 기억나지 않을 때 / 명령형으로 끝나는 문제들 / 연습 환경은 셋으로 나눠 쓴다 / 6주 준비 계획 / 120분을 나눠 쓰는 법 / 시험장에서 자주 잃는 점수 / 자격증이 증명하는 것과 증명하지 못하는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-learning-roadmap, k8s-pod-troubleshooting, kubectl-essentials, k8s-architecture, k8s-node-maintenance, k8s-coredns, k8s-rbac, k8s-cluster-upgrade, k8s-etcd-backup, k8s-certificates-pki, helm-basics, kustomize-basics, k8s-crd, k8s-operators, k8s-service-types, k8s-network-policy, k8s-gateway-api, kubernetes-ingress, k8s-cni-pod-network, k8s-deployment, k8s-configmap, k8s-secret, k8s-hpa, k8s-pod-scheduling, k8s-pod-resources, k8s-pv-pvc, k8s-storageclass-snapshots, dockerfile-image-layers, k8s-job-cronjob, k8s-daemonset, k8s-pod-multicontainer, blue-green-deployment, canary-release, k8s-feature-maturity, k8s-pod-probes, k8s-admission-control, k8s-serviceaccount-tokens, k8s-security-context, linux-files-permissions, k8s-pod-security-admission, service-mesh, k8s-audit-logging, cis-benchmark-kube-bench, seccomp-apparmor, container-supply-chain-security, falco-runtime-security, helm-dependencies-oci-gitops, k8s-deploy-pipeline-eks, distributed-tracing, k8s-kube-proxy-modes, packet-capture-tcpdump, kubeconfig-contexts, yaml-for-k8s, local-k8s-kind-minikube, linux-systemd-systemctl, k8s-api-objects, k8s-labels-selectors
-- 키워드 백링크 →: observability-basics, container-orchestration-choices, kubeadm-cluster-setup, k8s-statefulset, gateway, iptables-basics, cron-jobs, microservices, multi-tenancy-isolation, input-validation-secure-coding, cilium-ebpf, ci-cd-basics, autoscaling, dynamic-programming, client-data-cache, db-type-key-value, linux-performance-triage, dns, webhooks
+- 키워드 백링크 →: observability-basics, container-orchestration-choices, kubeadm-cluster-setup, k8s-statefulset, gateway, iptables-basics, cron-jobs, microservices, multi-tenancy-isolation, input-validation-secure-coding, cilium-ebpf, ci-cd-basics, autoscaling, dynamic-programming, client-data-cache, db-type-key-value, vim-for-servers, linux-performance-triage, dns, webhooks
 - 이 글로 오는 글 ←: cis-benchmark-kube-bench, container-supply-chain-security, falco-runtime-security, k8s-learning-roadmap, seccomp-apparmor
 
 #### `k8s-deploy-pipeline-eks` — push에서 EKS까지 배포 파이프라인
@@ -5637,7 +5638,7 @@
 - 길이: 408줄
 - 소제목: 평소 배포와 컷오버는 무엇이 다른가 / 런북에는 시각과 이름을 적는다 / 되돌릴 수 있는 마지막 시각을 거꾸로 센다 / 데이터 이관은 리허설에서 숫자를 얻는다 / 그 밤의 순서 / 사용자보다 먼저 보려면 / 하이퍼케어는 끝나는 날을 정하고 시작한다 / 컷오버가 흔들릴 때 보는 것 / 시각을 적어 두면 새벽의 결정이 쉬워진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: enterprise-system-integration, global-rollout-localization, sit-uat-testing, rollback-strategy, microservices-decomposition, zero-downtime-migrations, on-call, blue-green-deployment, feature-flags, canary-release, sli-slo, alerting, distributed-tracing, structured-logging, production-incidents, postmortems
-- 키워드 백링크 →: http-status-codes, dns
+- 키워드 백링크 →: http-status-codes, shells-posix-compat, dns
 - 이 글로 오는 글 ←: enterprise-system-integration, global-rollout-localization, sit-uat-testing
 
 ### Programming › Network (`programming/network`)
@@ -5750,7 +5751,7 @@
 - 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
 - 직접 링크 →: browser-rendering-pipeline, network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, webhooks, http-versions, cdn-edge-anycast, http-status-codes, ipv6-basics, first-page-from-power-on, udp-and-quic
-- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, api-key-hmac-auth, architecture-docs-c4-adr, aws-s3-in-practice, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, config-management-tools, container-orchestration-choices, container-supply-chain-security, cookie-session-login, core-web-vitals, cross-platform-apps, csrf, css-color-background, curl-for-debugging, data-center-infrastructure, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, enterprise-auth-ldap-kerberos, firewall-types-ngfw, first-page-from-power-on, frontend-browser-cache, frontend-hosting-platforms, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-multi-cluster, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, local-custom-domain, network-attacks-l2-l3, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, nodejs-http-clients, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, phishing-social-engineering, ports-and-sockets, proxy-reverse-proxy, pwa-install-offline, resource-hints-loading, reverse-proxy-lb-api-gateway, route53-routing-policies, seo-for-spa, spa-auth-token-storage, tcp-connection-lifecycle, threat-modeling-stride, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, wan-mpls-sd-wan-vrf, web-security-headers, web-server-vs-was, webhooks, wifi-standards-security, youtube-url-to-video
+- 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, api-key-hmac-auth, architecture-docs-c4-adr, aws-s3-in-practice, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, config-management-tools, container-orchestration-choices, container-supply-chain-security, cookie-session-login, core-web-vitals, cross-platform-apps, csrf, css-color-background, curl-for-debugging, data-center-infrastructure, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, enterprise-auth-ldap-kerberos, firewall-types-ngfw, first-page-from-power-on, frontend-browser-cache, frontend-hosting-platforms, gateway, git-remote-collaboration, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-multi-cluster, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, linux-archive-transfer, linux-package-management, local-custom-domain, network-attacks-l2-l3, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, nodejs-http-clients, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, phishing-social-engineering, ports-and-sockets, proxy-reverse-proxy, pwa-install-offline, resource-hints-loading, reverse-proxy-lb-api-gateway, route53-routing-policies, seo-for-spa, spa-auth-token-storage, tcp-connection-lifecycle, threat-modeling-stride, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, wan-mpls-sd-wan-vrf, web-security-headers, web-server-vs-was, webhooks, wifi-standards-security, youtube-url-to-video
 
 #### `youtube-url-to-video` — youtube.com을 입력하고 영상이 나오기까지
 
@@ -5760,8 +5761,8 @@
 - 길이: 494줄
 - 소제목: 이 글에서 직접 잰 것과 못 잰 것 / 주소창이 https 주소를 만들기까지 / 이름 하나에 답이 여러 개 / 엣지에서 TLS가 끝나고 안쪽으로 넘어간다 / 두 번째 방문은 QUIC으로 간다 / HTML은 껍데기이고 내용은 API로 온다 / 영상은 다른 이름에서 조각으로 온다 / 화질은 처리량과 버퍼가 같이 정한다 / 화질 고르는 함수 직접 짜 보기 / 영상만 안 나올 때와 페이지가 안 뜰 때 / 큰 서비스가 바꾸는 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, first-page-from-power-on, cdn-edge-anycast, reverse-proxy-lb-api-gateway, http-versions, udp-and-quic, https-tls, rendering-csr-spa, hydration, sd-video-streaming-cost, cors, network-troubleshooting-by-layer, packet-capture-tcpdump
-- 키워드 백링크 →: sd-video-upload-transcoding, sd-multi-datacenter, sd-start-single-server, http-status-codes, dns, authn-vs-authz, ipv6-basics
-- 이 글로 오는 글 ←: html-media-embed, sd-music-streaming, upper-layers-session-presentation-app
+- 키워드 백링크 →: sd-video-upload-transcoding, sd-multi-datacenter, sd-start-single-server, http-status-codes, dns, shells-posix-compat, authn-vs-authz, ipv6-basics
+- 이 글로 오는 글 ←: html-media-embed, linux-archive-transfer, sd-music-streaming, upper-layers-session-presentation-app
 
 ### Programming › Network › Cloud Networking (`programming/network/cloud`)
 
@@ -5841,7 +5842,7 @@
 - 길이: 572줄
 - 소제목: curl로 날것의 메시지를 본다 / 텍스트 몇 줄이 전부다 / 응답도 같은 모양이다 / Host가 없으면 400이다 / 본문이 어디서 끝나는지 알려 주기 / 연결을 끊을지 말지 / 같은 주소, 다른 표현 / 압축은 Accept-Encoding으로 고른다 / 본문 형식은 Content-Type이 말한다 / 헤더 이름과 크기에 관한 규칙 / HTTP/2에서는 모양이 바뀐다 / 헤더 한 줄이 장애가 되는 순간 / 다시 415로 돌아가서 / 면접에서 나올 만한 질문
 - 직접 링크 →: what-happens-google-com, http-status-codes, http-methods, http-caching-cdn, cookie-session-login, token-login, http-versions, packet-capture-tcpdump, network-troubleshooting-by-layer
-- 키워드 백링크 →: https-tls, html-form-http, reverse-proxy-lb-api-gateway, kubernetes-ingress, base64, image-optimization, first-page-from-power-on, db-modeling-normalization
+- 키워드 백링크 →: https-tls, html-form-http, reverse-proxy-lb-api-gateway, kubernetes-ingress, base64, linux-archive-transfer, image-optimization, first-page-from-power-on, db-modeling-normalization
 - 이 글로 오는 글 ←: backend-engineer-roadmap, character-encoding-unicode, curl-for-debugging, first-page-from-power-on, html-form-http, http-caching-cdn, http-methods, http-status-codes, http-versions, json-crud-http, networking-essentials-map, rest-api-design, server-sent-events, upper-layers-session-presentation-app
 
 #### `http-methods` — HTTP 메서드와 안전성·멱등성
@@ -6153,7 +6154,7 @@
 - 소제목: IP가 건물 주소라면 포트는 호수다 / 연결 하나를 가르는 다섯 값 / 듣는 소켓과 연결된 소켓 / 커널이 패킷을 소켓에 넘기는 순서 / 어느 주소에서 들을 것인가 / 이미 쓰는 중인 포트 / 임시 포트가 바닥나는 순간 / 소켓도 파일이다 / 현장에서 포트를 확인하는 순서 / 마지막 주소까지 찾아가는 길 / 면접에서 나올 만한 질문
 - 직접 링크 →: tcp-connection-lifecycle, docker-network-volume, iptables-nat, udp-and-quic, linux-network-tuning, network-troubleshooting-by-layer, upper-layers-session-presentation-app
 - 키워드 백링크 →: elasticsearch-inverted-index, vpc-subnets-route-tables, iptables-basics, postgres-getting-started, linux-systemd-systemctl, linux-files-permissions, security-groups-nacl, sql-batch-timeout-pool, redis-basics, what-happens-google-com, ipv6-basics, layer-ip-routing-icmp, aws-ec2-ubuntu-server-setup, dns
-- 이 글로 오는 글 ←: devops-networking-roadmap, http-versions, integration-tests-real-db, k8s-learning-roadmap, layer-ip-addressing, linux-grep-awk-sed, linux-network-tuning, load-balancer-basics, network-flow-logs, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, osi-in-practice, packet-capture-tcpdump, performance-antipatterns, proxy-reverse-proxy, security-groups-nacl, ssh-in-practice, tcp-connection-lifecycle, udp-and-quic, vpc-peering-transit-privatelink
+- 이 글로 오는 글 ←: devops-networking-roadmap, http-versions, integration-tests-real-db, k8s-learning-roadmap, layer-ip-addressing, linux-archive-transfer, linux-grep-awk-sed, linux-network-tuning, load-balancer-basics, network-flow-logs, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, osi-in-practice, packet-capture-tcpdump, performance-antipatterns, proxy-reverse-proxy, security-groups-nacl, ssh-in-practice, tcp-connection-lifecycle, udp-and-quic, vpc-peering-transit-privatelink
 
 #### `tcp-connection-lifecycle` — TCP 연결의 일생: 3-way handshake부터 TIME_WAIT까지
 
@@ -6269,7 +6270,7 @@
 - 소제목: 띄우기 전에 정하는 것들 / 첫 접속과 계정 정리 / 보안 패치는 매일 저절로 / 시간대는 UTC로 두고 읽을 때 바꾼다 / 메모리 1GiB 서버에는 스왑을 둔다 / ufw는 켜기 전에 SSH부터 연다 / 앱은 systemd 서비스로 띄운다 / nginx를 앞에 두고 인증서를 붙인다 / 로그가 디스크를 채우지 않게 / 서버 밖에서 지켜보고, 서버 밖에 남긴다 / 다시 그 아침의 서버 / 면접에서 나올 만한 질문
 - 직접 링크 →: ssh-in-practice, linux-systemd-systemctl, security-groups-nacl, nginx-https-performance, linux-files-permissions, iptables-basics, nginx-reverse-proxy, ssrf
 - 키워드 백링크 →: virtual-memory-paging, terraform-basics, linux-users-groups-sudo, ansible-network-automation, proxy-reverse-proxy, virtualization-hypervisors, page-cache-disk-io, sd-start-single-server, js-memory-leak, linux-disks-filesystems, dockerfile-image-layers, layer-ip-addressing, rds-aurora-managed-db, vpc-basics, dns
-- 이 글로 오는 글 ←: centralized-logging-pipeline, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, docker-container-basics, docker-network-drivers, docker-network-volume, ec2-instance-types-launch-templates, iptables-basics, iptables-nat, kubeadm-cluster-setup, linux-disks-filesystems, linux-fhs-file-commands, linux-processes-signals, linux-users-groups-sudo, nginx-basics, osi-in-practice, ports-and-sockets, postgres-connections-pg-hba
+- 이 글로 오는 글 ←: centralized-logging-pipeline, cloud-service-models-shared-responsibility, cloudwatch-metrics-logs-alarms, docker-container-basics, docker-network-drivers, docker-network-volume, ec2-instance-types-launch-templates, iptables-basics, iptables-nat, kubeadm-cluster-setup, linux-disks-filesystems, linux-fhs-file-commands, linux-package-management, linux-processes-signals, linux-users-groups-sudo, nginx-basics, osi-in-practice, ports-and-sockets, postgres-connections-pg-hba, vim-for-servers
 
 #### `bash-control-flow-functions` — bash 조건문과 함수: test, [[ ]], 종료 코드로 갈리는 분기
 
@@ -6279,7 +6280,7 @@
 - 길이: 810줄
 - 소제목: if는 조건이 아니라 명령의 성적을 본다 / 대괄호 하나는 명령이고 두 개는 문법이다 / 숫자, 문자열, 파일을 묻는 연산자 / A && B || C는 if-else가 아니다 / case는 패턴으로 고른다 / 반복문 셋과 break, continue / while read는 생각보다 많이 틀린다 / 함수는 값을 돌려주지 않는다 / local은 부른 쪽까지 보인다 / 재귀는 되지만 깊어질수록 느려진다 / 사람에게 묻기: read / 옵션 받기: getopts / 조건을 직접 판정해 보기 / 처음 그 if를 다시 쓰면 / 면접에서 나올 만한 질문
 - 직접 링크 →: bash-scripting, shell-environment-startup, regex-and-globbing, linux-files-permissions, linux-grep-awk-sed, secrets-management
-- 키워드 백링크 →: shell-redirection-pipes, bash-expansions-variables, js-scope-lexical
+- 키워드 백링크 →: shell-redirection-pipes, bash-expansions-variables, js-scope-lexical, shells-posix-compat
 - 이 글로 오는 글 ←: bash-expansions-variables, shell-environment-startup, shell-redirection-pipes, test-pyramid-unit-tests
 
 #### `bash-expansions-variables` — bash가 명령을 펼치는 순서: 변수, 명령 치환, 산술, 문자열 조작
@@ -6290,8 +6291,8 @@
 - 길이: 578줄
 - 소제목: bash는 명령을 실행하기 전에 줄을 고쳐 쓴다 / 중괄호 확장은 변수보다 먼저 펼쳐진다 / 틸드는 홈 디렉터리로 바뀐다 / 매개변수 확장으로 기본값과 필수값을 정한다 / 문자열은 앞뒤를 자르고 바꿔서 다룬다 / 명령 치환은 출력을 끼워 넣는다 / 산술 확장은 정수만 안다 / 배열과 연관 배열 / 위치 매개변수와 shift / echo 대신 printf / 중괄호 확장을 직접 구현해 보기 / 줄이 명령에 닿기 전에 / 면접에서 나올 만한 질문
 - 직접 링크 →: bash-scripting, shell-redirection-pipes, bash-control-flow-functions, linux-grep-awk-sed
-- 키워드 백링크 →: nginx-basics, js-array-transform
-- 이 글로 오는 글 ←: bash-control-flow-functions, bash-scripting, linux-fhs-file-commands, linux-grep-awk-sed, regex-and-globbing, shell-redirection-pipes
+- 키워드 백링크 →: nginx-basics, shells-posix-compat, js-array-transform
+- 이 글로 오는 글 ←: bash-control-flow-functions, bash-scripting, linux-fhs-file-commands, linux-grep-awk-sed, regex-and-globbing, shell-redirection-pipes, shells-posix-compat
 
 #### `bash-scripting` — bash 스크립트가 실패를 숨기지 않게: set -euo pipefail, 따옴표, trap, shellcheck
 
@@ -6301,8 +6302,8 @@
 - 길이: 705줄
 - 소제목: 종료 코드 하나가 성공과 실패를 가른다 / 파이프는 마지막 명령의 성적만 낸다 / set -e가 멈추지 않는 자리 / 없는 변수는 빈 문자열로 펼쳐진다 / 따옴표가 인자 개수를 정한다 / 옵션 목록은 배열에 담는다 / 함수는 stdout으로 값을, stderr로 로그를 / trap으로 뒷정리를 맡긴다 / 고쳐 쓴 백업 스크립트 / shellcheck가 먼저 읽게 한다 / 스크립트를 따라가 보는 법 / bash를 그만 써야 할 때 / 실패가 들리게 만드는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: cron-jobs, backup-strategy, linux-processes-signals, linux-systemd-systemctl, iac-basics
-- 키워드 백링크 →: bash-expansions-variables, ansible-network-automation, postgres-operations, shell-redirection-pipes
-- 이 글로 오는 글 ←: backup-strategy, bash-control-flow-functions, bash-expansions-variables, character-encoding-unicode, docker-commands-workflow, docker-container-basics, dockerfile-image-layers, git-ignore-config, git-large-files-secrets, github-actions-docker-ecr, iac-basics, k8s-deploy-pipeline-eks, k8s-pod-lifecycle, k8s-project-structure, linux-files-permissions, linux-processes-signals, linux-systemd-systemctl, network-config-cicd, nodejs-debugging-profiling, npm-package-publishing, postgres-connections-pg-hba, proxy-reverse-proxy, regex-and-globbing, sd-metrics-collection, secrets-management, shell-environment-startup, shell-redirection-pipes, terraform-basics, yaml-for-k8s
+- 키워드 백링크 →: bash-expansions-variables, ansible-network-automation, postgres-operations, shell-redirection-pipes, shells-posix-compat
+- 이 글로 오는 글 ←: backup-strategy, bash-control-flow-functions, bash-expansions-variables, character-encoding-unicode, docker-commands-workflow, docker-container-basics, dockerfile-image-layers, git-ignore-config, git-large-files-secrets, github-actions-docker-ecr, iac-basics, k8s-deploy-pipeline-eks, k8s-pod-lifecycle, k8s-project-structure, linux-archive-transfer, linux-files-permissions, linux-processes-signals, linux-systemd-systemctl, network-config-cicd, nodejs-debugging-profiling, npm-package-publishing, postgres-connections-pg-hba, proxy-reverse-proxy, regex-and-globbing, sd-metrics-collection, secrets-management, shell-environment-startup, shell-redirection-pipes, shells-posix-compat, terraform-basics, yaml-for-k8s
 
 #### `iptables-basics` — iptables로 리눅스 방화벽 이해하기
 
@@ -6326,6 +6327,17 @@
 - 키워드 백링크 →: k8s-kube-proxy-modes, k8s-service-types, vpc-subnets-route-tables, osi-in-practice, packet-capture-tcpdump, proxy-reverse-proxy, ds-hash-map, reverse-proxy-lb-api-gateway, cilium-ebpf, http-versions, sql-batch-timeout-pool, what-happens-google-com, dhcp, grpc, ipv6-basics, aws-ec2-ubuntu-server-setup, udp-and-quic, dns
 - 이 글로 오는 글 ←: ansible-network-automation, blue-green-deployment, cilium-ebpf, curl-for-debugging, devops-networking-roadmap, docker-compose, docker-container-basics, docker-network-drivers, docker-network-volume, express-middleware, first-page-from-power-on, grpc, iptables-basics, ipv6-basics, k8s-architecture, k8s-audit-logging, k8s-cluster-upgrade, k8s-cni-pod-network, k8s-coredns, k8s-cri-cni-csi, k8s-daemonset, k8s-kube-proxy-modes, k8s-labels-selectors, k8s-learning-roadmap, k8s-namespace, k8s-network-policy, k8s-pod-basics, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-service-types, k8s-statefulset, kubeadm-cluster-setup, kubectl-essentials, kubernetes-ingress, layer-ip-addressing, layer-ip-routing-icmp, linux-network-tuning, linux-users-groups-sudo, load-balancer-basics, load-balancing-algorithms, local-k8s-kind-minikube, nat-traversal, network-layers-overview, networking-essentials-map, osi-in-practice, packet-capture-tcpdump, ports-and-sockets, router-vs-switch, service-discovery, service-mesh, spring-boot-on-kubernetes, spring-cloud-vs-kubernetes, ssh-in-practice, twelve-factor-app, udp-and-quic, vpc-basics, vpc-peering-transit-privatelink, vpc-subnets-route-tables
 
+#### `linux-archive-transfer` — tar와 압축, 파일 옮기기: gzip·xz·zstd, scp·sftp·rsync
+
+- 요약: 로그 몇 GB를 다른 서버로 옮기는 장면에서 출발해 tar가 묶기만 하는 구조, 같은 로그로 잰 gzip·bzip2·xz·zstd의 크기와 시간, 회선 속도에 따라 압축이 손해가 되는 지점, tar | zstd | ssh 파이프, zip과의 차이, 경로 탈출을 본다. scp·sftp·rsync 옵션과 FTP·FTPS·SFTP의 프로토콜 차이도 비교한다.
+- 태그: Linux, DevOps, Network, Security
+- 키워드: zstd, tar.gz, SFTP, scp
+- 길이: 354줄
+- 소제목: tar는 묶기만 한다 / 같은 로그로 재 본 압축 도구들 / 압축할지 말지는 회선이 정한다 / 디스크에 쓰지 않고 바로 보낸다 / zip은 다르게 묶는다 / 남이 준 tar를 풀 때 / 옮기는 도구: scp, sftp, rsync, wget / FTP, FTPS, SFTP는 이름만 비슷하다 / 처음의 로그 앞에서 / 면접에서 나올 만한 질문
+- 직접 링크 →: rsync-algorithm, linux-files-permissions, bash-scripting, shell-redirection-pipes, ssh-in-practice, linux-package-management, vim-for-servers
+- 키워드 백링크 →: youtube-url-to-video, linux-disks-filesystems, ports-and-sockets, what-happens-google-com
+- 이 글로 오는 글 ←: data-lake-hdfs, enterprise-system-integration, gitops-argocd-vs-flux, http-message, iam-basics, linux-package-management, rsync-algorithm, shells-posix-compat, ssh-in-practice, velero-backup, vim-for-servers
+
 #### `linux-boot-process` — 전원 버튼에서 로그인까지: UEFI, GRUB, 커널, initramfs, systemd
 
 - 요약: 커널 업데이트 뒤 서버가 부팅되지 않는 장면에서 출발해 펌웨어, GRUB, 커널 파라미터, initramfs, systemd 타깃까지 단계마다 무엇이 실패하고 어떤 메시지를 남기는지 본다. 이전 커널로 들어가기, fstab 한 줄이 emergency 모드를 부르는 경로와 빠져나오는 법, systemd-analyze로 느린 부팅을 좁히는 법을 다룬다.
@@ -6335,7 +6347,7 @@
 - 소제목: 다섯 단계가 바통을 넘긴다 / 펌웨어: BIOS와 UEFI / GRUB은 메뉴를 그리고 커널을 고른다 / 커널 파라미터는 커널에게 주는 첫 지시다 / initramfs는 진짜 루트를 찾기 전의 임시 루트다 / systemd는 타깃까지 유닛을 띄운다 / fstab 한 줄이 부팅을 멈추는 길 / 부팅이 느릴 때 systemd-analyze / 부팅이 안 되는 서버를 만났을 때 / 멈춘 자리가 단계를 말해 준다 / 면접에서 나올 만한 질문
 - 직접 링크 →: linux-systemd-systemctl, linux-processes-signals, linux-disks-filesystems
 - 키워드 백링크 →: virtualization-hypervisors, client-data-cache, encryption-at-rest
-- 이 글로 오는 글 ←: cloud-service-models-shared-responsibility, linux-disks-filesystems
+- 이 글로 오는 글 ←: cloud-service-models-shared-responsibility, linux-disks-filesystems, shells-posix-compat
 
 #### `linux-disks-filesystems` — 디스크를 붙이고 쓰기까지: 파티션, 파일 시스템, 마운트, LVM, inode
 
@@ -6346,7 +6358,7 @@
 - 소제목: 디스크가 파일을 담기까지 네 층 / lsblk로 장치부터 찾는다 / 파티션 표는 GPT로 만든다 / ext4와 XFS 중 하나를 고른다 / df가 보여 주는 크기가 만든 크기보다 작다 / 마운트는 fstab에 UUID로 적는다 / 볼륨을 키우면 세 층을 차례로 키운다 / LVM은 디스크와 파일 시스템 사이에 한 층을 더 둔다 / 파일 이름 뒤에는 inode 번호가 있다 / 하드 링크와 심볼릭 링크 / 공간이 남았는데 No space left on device / df와 du가 다른 이유 / 디스크 경보가 울렸을 때 보는 순서 / 층을 알면 증상이 읽힌다 / 면접에서 나올 만한 질문
 - 직접 링크 →: page-cache-disk-io, linux-files-permissions, linux-boot-process, aws-ec2-ubuntu-server-setup
 - 키워드 백링크 →: process-vs-thread, ec2-instance-types-launch-templates, dockerfile-image-layers
-- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, block-file-object-storage, claude-code-context-window, dependency-hell, http-caching-cdn, linux-boot-process, linux-fhs-file-commands, linux-files-permissions, linux-grep-awk-sed, linux-namespaces-cgroups, logging-tools-overview, page-cache-disk-io, postgres-operations, sd-object-storage-architecture, virtual-memory-paging
+- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, block-file-object-storage, claude-code-context-window, dependency-hell, http-caching-cdn, linux-archive-transfer, linux-boot-process, linux-fhs-file-commands, linux-files-permissions, linux-grep-awk-sed, linux-namespaces-cgroups, logging-tools-overview, page-cache-disk-io, postgres-operations, sd-object-storage-architecture, virtual-memory-paging
 
 #### `linux-fhs-file-commands` — 리눅스 디렉터리 지도와 파일 명령: /etc, /var, /proc, find, rm -rf
 
@@ -6368,7 +6380,7 @@
 - 소제목: ls -l 한 줄 읽기 / 커널은 세 칸 중 하나만 고른다 / 디렉터리의 r, w, x는 뜻이 다르다 / 경로의 모든 칸을 지나야 파일에 닿는다 / 숫자 세 자리로 쓰는 권한 / 새 파일의 권한은 umask가 깎는다 / 세 개의 특수 비트 / 한 사람만 더 허락하는 ACL / 그룹에 넣었는데 여전히 거부된다 / 컨테이너에서는 숫자가 맞아야 한다 / Permission denied를 만났을 때 보는 순서 / 칸 하나를 고르고, 경로를 다 지난다 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-network-volume, dockerfile-image-layers, k8s-security-context, linux-processes-signals
 - 키워드 백링크 →: k8s-pod-multicontainer, k8s-architecture, bash-scripting, linux-disks-filesystems, shell-environment-startup, linux-systemd-systemctl
-- 이 글로 오는 글 ←: authn-vs-authz, aws-ec2-ubuntu-server-setup, bash-control-flow-functions, bit-manipulation, cis-benchmark-kube-bench, cron-jobs, docker-runtime-security, encryption-at-rest, git-large-files-secrets, hosts-file, k8s-certifications, k8s-learning-roadmap, k8s-secret, k8s-security-context, kubeconfig-contexts, linux-disks-filesystems, linux-fhs-file-commands, linux-namespaces-cgroups, linux-processes-signals, linux-systemd-systemctl, linux-users-groups-sudo, nginx-basics, ports-and-sockets, postgres-operations, seccomp-apparmor, shell-environment-startup, ssh-in-practice, yaml-for-k8s
+- 이 글로 오는 글 ←: authn-vs-authz, aws-ec2-ubuntu-server-setup, bash-control-flow-functions, bit-manipulation, cis-benchmark-kube-bench, cron-jobs, docker-runtime-security, encryption-at-rest, git-large-files-secrets, hosts-file, k8s-certifications, k8s-learning-roadmap, k8s-secret, k8s-security-context, kubeconfig-contexts, linux-archive-transfer, linux-disks-filesystems, linux-fhs-file-commands, linux-namespaces-cgroups, linux-processes-signals, linux-systemd-systemctl, linux-users-groups-sudo, nginx-basics, ports-and-sockets, postgres-operations, seccomp-apparmor, shell-environment-startup, ssh-in-practice, yaml-for-k8s
 
 #### `linux-grep-awk-sed` — grep, awk, sed로 로그 읽기: 접근 로그로 장애 좁히기
 
@@ -6378,8 +6390,8 @@
 - 길이: 596줄
 - 소제목: 로그 한 줄을 칸으로 나눠 본다 / grep은 줄을 고른다 / awk는 칸을 세고 더한다 / 파이프로 이어 붙인다 / sed는 줄을 고쳐 쓴다 / sed -i가 파일을 바꾸는 방식 / 로그 한 줄을 코드로 나눠 보기 / 장애 때 쓰는 명령 묶음 / 고르고, 세고, 고친다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ports-and-sockets, linux-systemd-systemctl, iptables-basics, rate-limiting-in-practice
-- 키워드 백링크 →: proxy-reverse-proxy, centralized-logging-pipeline, sd-start-single-server, bash-expansions-variables, linux-disks-filesystems, osi-in-practice, http-status-codes
-- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, k8s-learning-roadmap, linux-fhs-file-commands, linux-systemd-systemctl, regex-and-globbing, structured-logging
+- 키워드 백링크 →: proxy-reverse-proxy, centralized-logging-pipeline, sd-start-single-server, bash-expansions-variables, linux-disks-filesystems, osi-in-practice, http-status-codes, shells-posix-compat
+- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, k8s-learning-roadmap, linux-fhs-file-commands, linux-systemd-systemctl, regex-and-globbing, shells-posix-compat, structured-logging, vim-for-servers
 
 #### `linux-namespaces-cgroups` — 리눅스 네임스페이스와 cgroup: unshare로 만들어 보는 컨테이너
 
@@ -6402,6 +6414,17 @@
 - 직접 링크 →: tcp-connection-lifecycle, ports-and-sockets, linux-namespaces-cgroups, rate-limiting-in-practice, connection-pool, linux-systemd-systemctl, iptables-basics, k8s-kube-proxy-modes, network-monitoring
 - 키워드 백링크 →: iptables-nat, vpc-subnets-route-tables, k8s-architecture, sd-start-single-server, shell-environment-startup, sql-batch-timeout-pool, linux-users-groups-sudo, udp-and-quic, dns
 - 이 글로 오는 글 ←: linux-fhs-file-commands, network-monitoring, performance-antipatterns, ports-and-sockets, shell-redirection-pipes, tcp-connection-lifecycle
+
+#### `linux-package-management` — 패키지 관리자: apt와 dnf, 저장소와 서명, 버전 고정
+
+- 요약: apt upgrade 한 번에 운영 DB가 재시작된 장면에서 출발해 dpkg와 apt의 두 층, sources 한 줄과 signed-by, InRelease 서명에서 시작하는 해시 사슬, apt-mark hold와 pin을 실제 출력으로 본다. unattended-upgrades의 범위, Dockerfile에서 목록을 지우는 이유, dnf·zypper·snap과의 차이도 짚는다.
+- 태그: Linux, DevOps, Security, Docker
+- 키워드: apt-mark hold, signed-by, dpkg, apt-cache policy
+- 길이: 393줄
+- 소제목: 패키지 관리자는 두 층이다 / 저장소 한 줄을 읽는다 / 서명이 지키는 것과 apt install이 하는 일 / 찾고, 깔고, 지우고, 올린다 / 올라가면 안 되는 패키지를 묶는다 / 자동 업데이트는 어디까지 올리나 / Docker 이미지 안에서는 다르게 쓴다 / RHEL 계열과 SUSE는 이름만 다르다 / 저장소 밖에서 오는 패키지들 / 업그레이드 전에 보는 순서 / 면접에서 나올 만한 질문
+- 직접 링크 →: digital-signatures-certificates, aws-ec2-ubuntu-server-setup, dockerfile-image-layers, linux-archive-transfer, vim-for-servers
+- 키워드 백링크 →: docker-container-basics, what-happens-google-com
+- 이 글로 오는 글 ←: linux-archive-transfer, shells-posix-compat, vim-for-servers
 
 #### `linux-performance-triage` — 리눅스 성능 점검 60초: uptime부터 perf까지 열 줄로 범인 좁히기
 
@@ -6434,7 +6457,7 @@
 - 소제목: 유닛은 systemd가 다루는 단위 / 서비스 유닛 파일 한 장 쓰기 / enable과 start는 다른 일이다 / daemon-reload를 잊으면 / systemctl status 읽기 / 죽으면 다시 띄운다, 한도까지 / 멈출 때는 cgroup 전체를 정리한다 / 남의 유닛은 drop-in으로 고친다 / journalctl로 로그 좁히기 / cron 대신 timer / 서비스가 안 뜰 때 따라가는 순서 / 컨테이너 안에는 systemd가 없다 / nohup 대신 유닛 파일 한 장 / 면접에서 나올 만한 질문
 - 직접 링크 →: linux-files-permissions, linux-processes-signals, linux-grep-awk-sed
 - 키워드 백링크 →: virtual-memory-paging, dockerfile-image-layers, k8s-deploy-pipeline-eks, k8s-architecture, bash-scripting, client-data-cache, data-center-infrastructure
-- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, bash-scripting, cron-jobs, k8s-certifications, k8s-learning-roadmap, linux-boot-process, linux-fhs-file-commands, linux-files-permissions, linux-grep-awk-sed, linux-namespaces-cgroups, linux-network-tuning, linux-processes-signals, linux-users-groups-sudo, logging-tools-overview, nginx-basics, ports-and-sockets, postgres-slow-db-triage, shell-environment-startup, shell-redirection-pipes, ssh-in-practice
+- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, bash-scripting, cron-jobs, k8s-certifications, k8s-learning-roadmap, linux-boot-process, linux-fhs-file-commands, linux-files-permissions, linux-grep-awk-sed, linux-namespaces-cgroups, linux-network-tuning, linux-processes-signals, linux-users-groups-sudo, logging-tools-overview, nginx-basics, ports-and-sockets, postgres-slow-db-triage, shell-environment-startup, shell-redirection-pipes, ssh-in-practice, vim-for-servers
 
 #### `linux-users-groups-sudo` — 리눅스 사용자와 sudo: passwd, shadow, sudoers, PAM, 인증 로그
 
@@ -6445,7 +6468,7 @@
 - 소제목: 계정은 텍스트 파일 세 개에 적혀 있다 / shadow 한 줄 읽기 / UID는 숫자라서 다시 쓰일 수 있다 / useradd와 usermod에서 자주 밟는 것 / 서비스 계정에는 셸도 홈도 주지 않는다 / 계정을 지우기 전에 잠그고 기다린다 / su는 사람이 되고, sudo는 명령을 빌린다 / sudoers 문법과 visudo / PAM이 인증 사이에 끼어든다 / 인증 로그로 누가 들어왔는지 본다 / 계정은 사람과 서비스를 구분하는 경계다 / 면접에서 나올 만한 질문
 - 직접 링크 →: linux-files-permissions, aws-ec2-ubuntu-server-setup, hash-hmac-password-hashing, linux-systemd-systemctl
 - 키워드 백링크 →: ssh-in-practice, docker-container-basics, iptables-nat, shell-environment-startup, postgres-architecture
-- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, linux-network-tuning, shell-environment-startup
+- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, linux-network-tuning, shell-environment-startup, vim-for-servers
 
 #### `page-cache-disk-io` — 페이지 캐시와 디스크 I/O: dirty 페이지, fsync, O_DIRECT, iostat
 
@@ -6466,8 +6489,8 @@
 - 길이: 521줄
 - 소제목: 셸 변수와 환경 변수는 사는 곳이 다르다 / 자식은 복사본을 받는다 / 명령 이름이 파일이 되기까지 / 로그인 셸과 대화형 셸이 읽는 파일 / .bashrc에 넣을 것과 .profile에 넣을 것 / alias는 사람을 위한 것이다 / 스크립트를 실행하는 세 가지 방법 / shebang과 실행 권한 / cron과 systemd에는 내 셸이 없다 / 손에 익혀 두면 좋은 것들 / 직접 찾아 보기: 명령 이름 풀기 / 다시 cron 앞에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: bash-control-flow-functions, bash-scripting, secrets-management, linux-files-permissions, cron-jobs, linux-systemd-systemctl
-- 키워드 백링크 →: k8s-configmap, docker-container-basics, linux-users-groups-sudo, ds-hash-map
-- 이 글로 오는 글 ←: bash-control-flow-functions, cron-jobs, linux-files-permissions, linux-network-tuning, linux-users-groups-sudo
+- 키워드 백링크 →: k8s-configmap, docker-container-basics, linux-users-groups-sudo, ds-hash-map, shells-posix-compat
+- 이 글로 오는 글 ←: bash-control-flow-functions, cron-jobs, linux-files-permissions, linux-network-tuning, linux-users-groups-sudo, shells-posix-compat, vim-for-servers
 
 #### `shell-redirection-pipes` — 리다이렉션과 파이프: 파일 디스크립터 0, 1, 2로 읽는 셸
 
@@ -6477,8 +6500,19 @@
 - 길이: 511줄
 - 소제목: 프로세스는 번호 붙은 구멍 세 개로 시작한다 / 리다이렉션은 왼쪽부터 표의 칸을 바꾼다 / 출력 리다이렉션은 명령보다 먼저 파일을 연다 / 입력 리다이렉션은 0번을 바꾼다 / here document와 here string / 파이프는 두 프로세스를 동시에 띄운다 / sudo echo가 Permission denied를 내는 이유 / tee로 화면과 파일에 동시에 / 프로세스 치환은 출력을 파일 이름처럼 쓴다 / stderr만 따로 모으는 패턴 / 리다이렉션을 직접 따라가 보기 / 구멍 세 개와 왼쪽부터 / 면접에서 나올 만한 질문
 - 직접 링크 →: bash-scripting, bash-control-flow-functions, linux-network-tuning, linux-systemd-systemctl, bash-expansions-variables
-- 키워드 백링크 →: centralized-logging-pipeline
-- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, bash-scripting, claude-code-project-structure, cron-jobs, linux-fhs-file-commands
+- 키워드 백링크 →: shells-posix-compat, centralized-logging-pipeline
+- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, bash-scripting, claude-code-project-structure, cron-jobs, linux-archive-transfer, linux-fhs-file-commands, shells-posix-compat
+
+#### `shells-posix-compat` — sh, bash, dash, zsh: 같은 스크립트가 셸마다 다르게 도는 이유
+
+- 요약: #!/bin/sh에 bash 문법을 쓴 스크립트가 Ubuntu의 dash와 Alpine의 ash에서 깨지는 장면에서 출발해, 실행 방법이 해석기를 정하는 원리, 다섯 셸로 돌린 결과, POSIX sh로 옮겨 쓰는 법, 셸 계보와 성격, checkbashisms와 shellcheck --shell=sh 검사, PowerShell의 객체 파이프를 본다.
+- 태그: Linux, DevOps, Troubleshooting
+- 키워드: POSIX sh, dash, checkbashisms, zsh
+- 길이: 365줄
+- 소제목: 누가 스크립트를 읽을지는 실행하는 방법이 정한다 / 같은 줄이 셸마다 다르게 깨진다 / POSIX sh가 약속하는 것 / 셸 가족을 한 장에 / 대화형 셸과 스크립트 셸은 따로 고른다 / 사투리를 기계에게 찾게 한다 / PowerShell과 cmd는 텍스트가 아니라 다른 것을 넘긴다 / 스크립트를 셸에 두기로 했다면 / 면접에서 나올 만한 질문
+- 직접 링크 →: shell-environment-startup, bash-scripting, linux-grep-awk-sed, linux-package-management, linux-archive-transfer
+- 키워드 백링크 →: dockerfile-image-layers, linux-boot-process, bash-expansions-variables, shell-redirection-pipes
+- 이 글로 오는 글 ←: bash-control-flow-functions, bash-expansions-variables, bash-scripting, falco-runtime-security, git-troubleshooting, grafana-dashboards, html-media-embed, hyperloglog, linux-grep-awk-sed, nextjs-app-router-routing, release-cutover-hypercare, sd-metrics-storage-alerting, sd-video-streaming-cost, shell-environment-startup, shell-redirection-pipes, sql-views-materialized, sso-saml-oidc, youtube-url-to-video
 
 #### `ssh-in-practice` — SSH 실전: 키와 known_hosts, ProxyJump, 터널, sshd_config
 
@@ -6488,8 +6522,19 @@
 - 길이: 699줄
 - 소제목: 비밀번호 대신 서명으로 증명한다 / 접속 한 번에 오가는 것 / 키는 ed25519로, passphrase는 agent에게 / 처음 보는 서버의 지문 / 긴 명령을 config 파일 한 장으로 / 배스천을 건너 들어간다 / agent 포워딩을 쉽게 켜지 않는다 / 터널 세 가지: -L, -R, -D / authorized_keys 한 줄로 키의 권한을 줄인다 / sshd_config를 단단하게 / Permission denied (publickey)를 만났을 때 / 느리고 자주 끊길 때 / 키, 지문, 채널 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-remote-collaboration, linux-systemd-systemctl, iptables-basics, linux-files-permissions, tcp-connection-lifecycle, linux-processes-signals, ports-and-sockets
-- 키워드 백링크 →: browser-fetch, vpc-subnets-route-tables, ansible-network-automation, public-key-key-exchange, autoscaling, iptables-nat, cookie-session-login, dns
-- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, linux-users-groups-sudo, nodejs-debugging-profiling
+- 키워드 백링크 →: browser-fetch, vpc-subnets-route-tables, ansible-network-automation, public-key-key-exchange, autoscaling, iptables-nat, cookie-session-login, linux-archive-transfer, dns
+- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, linux-archive-transfer, linux-users-groups-sudo, nodejs-debugging-profiling
+
+#### `vim-for-servers` — 서버에서 vim 살아남기: 모드, 저장, 검색과 치환, 그리고 nano
+
+- 요약: SSH로 들어간 서버에 vi밖에 없고 :q가 안 먹는 장면에서 출발해 모드라는 발상, 설정 한 줄을 고치는 최소 명령, :%s 치환, 권한 없는 파일을 :w !sudo tee %와 sudoedit로 저장하는 법, E325 스왑 파일 경고 읽기, YAML의 숨은 탭, git과 crontab이 여는 편집기 바꾸기를 실제 화면으로 본다.
+- 태그: Linux, DevOps
+- 키워드: vim, sudoedit, nano
+- 길이: 348줄
+- 소제목: 리모컨을 든 상태로 시작한다 / 저장하고 나오는 다섯 가지 / 설정 한 줄을 고치는 데 필요한 만큼 / 찾고, 한꺼번에 바꾼다 / 권한이 없는 파일을 열어 버렸을 때 / 스왑 파일 경고를 읽는다 / git commit과 crontab -e가 여는 편집기 / YAML을 고칠 때 보이지 않는 탭 / nano와 emacs는 언제 / 다시 그 서버에서 / 면접에서 나올 만한 질문
+- 직접 링크 →: linux-systemd-systemctl, linux-grep-awk-sed, linux-users-groups-sudo, shell-environment-startup, cron-jobs, linux-archive-transfer, linux-package-management
+- 키워드 백링크 →: docker-compose, nginx-basics, fp-composition-pipe, aws-ec2-ubuntu-server-setup
+- 이 글로 오는 글 ←: ec2-instance-types-launch-templates, k8s-certifications, linux-archive-transfer, linux-package-management, sd-autocomplete-trie
 
 #### `virtual-memory-paging` — 가상 메모리와 페이징: 페이지 테이블, TLB, page fault, overcommit, OOM killer
 
@@ -6610,7 +6655,7 @@
 - 길이: 491줄
 - 소제목: 요청 하나에 담기는 것 / 사람에게는 사용자, 일에는 역할 / 정책 한 장 뜯어보기 / 거부가 언제나 이긴다 / 정책이 여러 겹일 때 / 역할을 빌리는 과정 / 서버는 자격 증명을 어디서 받나 / 역할로 묶을까, 태그로 고를까 / 최소 권한은 한 번에 정해지지 않는다 / AccessDenied가 났을 때 보는 순서 / 면접에서 나올 만한 질문
 - 직접 링크 →: eks-cluster-basics, github-actions-docker-ecr, secrets-management, ssrf, k8s-rbac
-- 키워드 백링크 →: serverless-architecture, security-principles-cia-defense-in-depth, http-status-codes, cloud-service-models-shared-responsibility, sso-saml-oidc
+- 키워드 백링크 →: serverless-architecture, security-principles-cia-defense-in-depth, http-status-codes, cloud-service-models-shared-responsibility, linux-archive-transfer, sso-saml-oidc
 - 이 글로 오는 글 ←: authn-vs-authz, aws-s3-in-practice, cloud-service-models-shared-responsibility, devops-networking-roadmap, dynamodb-modeling-capacity, ecs-fargate-task-service, eks-cluster-basics, encryption-at-rest, external-secrets, graphql-authorization, k8s-rbac, multi-tenancy-isolation, owasp-top-10-map, secrets-management, security-compliance-for-developers, security-incident-response, security-principles-cia-defense-in-depth, serverless-limits, system-design-concepts-map, terraform-dependency-graph-lifecycle, terraform-state-refactoring-import, terraform-testing-policy-scanning
 
 #### `ids-ips` — IDS와 IPS: 패킷 내용을 보고 공격을 찾는 장치
@@ -6854,7 +6899,7 @@
 - 소제목: 거꾸로 쓰는 자물쇠 / 서명마다 달라지는 값과 그 함정 / 인증서는 서명된 공개 키다 / 사슬을 손으로 만들고 끊어 본다 / 체인 검증 규칙을 코드로 / 서명이 맞아도 남는 문제 / 서명 하나가 받치는 신뢰 / 면접에서 나올 만한 질문
 - 직접 링크 →: https-tls, k8s-certificates-pki, public-key-key-exchange, hash-hmac-password-hashing, encryption-in-transit
 - 키워드 백링크 →: what-happens-google-com
-- 이 글로 오는 글 ←: api-key-hmac-auth, container-supply-chain-security, dns, https-tls, merkle-tree, passkeys-webauthn, phishing-social-engineering, public-key-key-exchange
+- 이 글로 오는 글 ←: api-key-hmac-auth, container-supply-chain-security, dns, https-tls, linux-package-management, merkle-tree, passkeys-webauthn, phishing-social-engineering, public-key-key-exchange
 
 #### `hash-hmac-password-hashing` — 해시, HMAC, 비밀번호 저장: 빠른 해시가 독이 되는 자리
 
@@ -7031,7 +7076,7 @@
 - 길이: 565줄
 - 소제목: GitOps가 약속하는 네 가지 / Flux는 컨트롤러 여러 개가 리소스로 이어진다 / 리소스 모양이 다르면 생각하는 단위가 다르다 / 화면이 필요한 팀과 필요 없는 팀 / 팀을 나눌 때: AppProject와 ServiceAccount / 클라이언트 쪽 apply와 서버 쪽 apply / Helm 차트를 다루는 방식 / 새 이미지가 나오면 누가 git을 고치나 / git에 비밀 값을 어떻게 두나 / 둘 중 하나를 고를 때 / 같은 약속, 다른 조립 / 면접에서 나올 만한 질문
 - 직접 링크 →: argocd-basics, k8s-deploy-pipeline-eks, helm-dependencies-oci-gitops, k8s-rbac, k8s-serviceaccount-tokens, kubectl-apply-ssa, helm-release-lifecycle, external-secrets, secrets-management, helm-values-secrets, canary-release, kustomize-basics
-- 키워드 백링크 →: jenkins-argocd-push-pull, helm-chart-templates, kubernetes-ingress, git-undo, k8s-configmap, docker-container-basics, helm-basics, multi-tenancy-isolation, rollback-strategy, local-k8s-kind-minikube, eks-cluster-basics, sso-saml-oidc, k8s-hpa, webhooks
+- 키워드 백링크 →: jenkins-argocd-push-pull, helm-chart-templates, kubernetes-ingress, git-undo, k8s-configmap, docker-container-basics, helm-basics, linux-archive-transfer, multi-tenancy-isolation, rollback-strategy, local-k8s-kind-minikube, eks-cluster-basics, sso-saml-oidc, k8s-hpa, webhooks
 - 이 글로 오는 글 ←: argocd-basics, jenkins-argocd-push-pull, k8s-learning-roadmap
 
 ### Programming › Server/Infra › CI/CD › Jenkins (`programming/server-infra/ci-cd/jenkins`)
@@ -7145,7 +7190,7 @@
 - 길이: 273줄
 - 소제목: 인스턴스 이름에 성격이 적혀 있다 / 버스트 크레딧이 쌓이고 떨어지는 셈 / AMI는 서버를 찍어 내는 틀이다 / user data는 첫 부팅에 한 번만 돈다 / 시작 템플릿은 띄우는 방법을 버전으로 고정한다 / 디스크는 수명이 다르다: EBS와 인스턴스 스토어 / 탄력적 IP와 공인 IPv4 요금 / 타입을 바꾸는 순서와 흔한 실수 / 다시 금요일 오후로 / 면접에서 나올 만한 질문
 - 직접 링크 →: cloud-cost-optimization, aws-ec2-ubuntu-server-setup, ecs-fargate-task-service, ansible-network-automation
-- 키워드 백링크 →: config-management-tools, sd-start-single-server, autoscaling, security-groups-nacl, ipv6-basics
+- 키워드 백링크 →: config-management-tools, sd-start-single-server, autoscaling, security-groups-nacl, vim-for-servers, ipv6-basics
 - 이 글로 오는 글 ←: block-file-object-storage, data-center-infrastructure, ecs-fargate-task-service, eks-cluster-basics, k8s-cluster-upgrade, linux-disks-filesystems, terraform-dependency-graph-lifecycle, terraform-hcl-expressions-data-sources, terraform-modules-tfvars, virtualization-hypervisors
 
 #### `ecs-fargate-task-service` — ECS와 Fargate: 태스크 정의, 서비스, 그리고 쿠버네티스와 다른 점
@@ -7225,7 +7270,7 @@
 - 소제목: docker-compose와 docker compose / 서비스 넷을 파일 하나에 / 서비스 블록 하나 뜯어보기 / .env는 컨테이너에 들어가지 않는다 / up 한 번에 일어나는 순서 / 요청 하나가 서비스를 건너가는 길 / 매일 쓰는 명령 / down과 down -v는 한 글자 차이다 / 개발과 운영을 파일로 나누기 / 비밀 값은 어디에 두나 / Compose로 버티는 데까지 / 파일 하나가 구성 전체를 말한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-network-volume, docker-container-basics, dockerfile-image-layers, kubernetes-ingress
 - 키워드 백링크 →: k8s-pod-probes, container-orchestration-choices, iptables-basics, fp-composition-pipe, proxy-reverse-proxy, docker-commands-workflow, redis-basics, iptables-nat, redis-persistence-ha, dns
-- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-parallel-and-scheduled, container-orchestration-choices, docker-commands-workflow, docker-local-dev-workflow, docker-network-volume, dockerfile-image-layers, k8s-learning-roadmap, twelve-factor-app
+- 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-parallel-and-scheduled, container-orchestration-choices, docker-commands-workflow, docker-local-dev-workflow, docker-network-volume, dockerfile-image-layers, k8s-learning-roadmap, twelve-factor-app, vim-for-servers
 
 #### `docker-container-basics` — 컨테이너는 무엇인가: Docker로 처음 띄워 보기
 
@@ -7236,7 +7281,7 @@
 - 소제목: 서버마다 환경이 달라서 생기는 일 / 가상 머신은 커널까지, 컨테이너는 그 위만 / 프로세스마다 다른 세상을 보여 주는 namespace / 쓸 수 있는 양을 묶는 cgroups / 이미지는 틀, 컨테이너는 찍어 낸 것 / Ubuntu 24.04에 Docker Engine 설치하기 / docker run 한 줄이 지나가는 길 / docker run 옵션 뜯어보기 / 띄우고, 들여다보고, 멈추고, 지우기 / 재시작 정책과 PID 1 / 자원과 디스크 들여다보기 / 이미지 이름은 레지스트리부터 다이제스트까지 / 컨테이너를 다시 정리하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: dockerfile-image-layers, iptables-nat, docker-commands-workflow
 - 키워드 백링크 →: process-vs-thread, docker-runtime-security, nodejs-cli-process, virtual-memory-paging, linux-namespaces-cgroups, k8s-pod-resources, iptables-basics, rest-api-design, fp-composition-pipe, k8s-security-context, virtualization-hypervisors, bash-scripting, mutex-semaphore-monitor, grpc, linux-processes-signals, aws-ec2-ubuntu-server-setup, udp-and-quic
-- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, blue-green-deployment, canary-release, centralized-logging-pipeline, chaos-engineering, cloud-cost-optimization, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cold-starts, config-management-tools, container-orchestration-choices, container-supply-chain-security, curl-for-debugging, disaster-recovery, docker-commands-workflow, docker-compose, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, dockerfile-image-layers, ecs-fargate-task-service, falco-runtime-security, frontend-build-tooling, gateway, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-dependencies-oci-gitops, jenkins-pipeline-basics, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-cri-cni-csi, k8s-etcd-backup, k8s-labels-selectors, k8s-learning-roadmap, k8s-multi-cluster, k8s-namespace, k8s-network-policy, k8s-node-maintenance, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-pod-troubleshooting, k8s-project-structure, k8s-rbac, k8s-security-context, k8s-statefulset, k8s-storageclass-snapshots, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, linux-namespaces-cgroups, linux-processes-signals, linux-users-groups-sudo, load-balancer-basics, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, prometheus-basics, proxy-reverse-proxy, rendering-ssr, rolling-deployment, seccomp-apparmor, shell-environment-startup, software-supply-chain-ci-hardening, structured-logging, terraform-modules-tfvars, terraform-testing-policy-scanning, traffic-shaping-qos, twelve-factor-app, velero-backup, virtualization-hypervisors, vulnerability-management-cve-cvss
+- 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, blue-green-deployment, canary-release, centralized-logging-pipeline, chaos-engineering, cloud-cost-optimization, cloud-deployment-models-multicloud, cloud-service-models-shared-responsibility, cold-starts, config-management-tools, container-orchestration-choices, container-supply-chain-security, curl-for-debugging, disaster-recovery, docker-commands-workflow, docker-compose, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, dockerfile-image-layers, ecs-fargate-task-service, falco-runtime-security, frontend-build-tooling, gateway, gitops-argocd-vs-flux, grafana-dashboards, helm-basics, helm-dependencies-oci-gitops, jenkins-pipeline-basics, k8s-admission-control, k8s-api-aggregation-schedulers, k8s-api-objects, k8s-audit-logging, k8s-cri-cni-csi, k8s-etcd-backup, k8s-labels-selectors, k8s-learning-roadmap, k8s-multi-cluster, k8s-namespace, k8s-network-policy, k8s-node-maintenance, k8s-pod-basics, k8s-pod-disruption-budget, k8s-pod-lifecycle, k8s-pod-security-admission, k8s-pod-troubleshooting, k8s-project-structure, k8s-rbac, k8s-security-context, k8s-statefulset, k8s-storageclass-snapshots, kubectl-essentials, kubernetes-ingress, latency-bandwidth-throughput, layer-ip-addressing, layer-ip-routing-icmp, layer-link-ethernet-arp, linux-namespaces-cgroups, linux-package-management, linux-processes-signals, linux-users-groups-sudo, load-balancer-basics, network-layers-overview, network-troubleshooting-by-layer, osi-in-practice, packet-capture-tcpdump, prometheus-basics, proxy-reverse-proxy, rendering-ssr, rolling-deployment, seccomp-apparmor, shell-environment-startup, software-supply-chain-ci-hardening, structured-logging, terraform-modules-tfvars, terraform-testing-policy-scanning, traffic-shaping-qos, twelve-factor-app, velero-backup, virtualization-hypervisors, vulnerability-management-cve-cvss
 
 #### `docker-local-dev-workflow` — 컨테이너로 개발하기: 바인드 마운트, compose watch, 디버거, Dev Container
 
@@ -7290,7 +7335,7 @@
 - 소제목: 문제가 된 Dockerfile / 명령어 한 줄씩 읽기 / ENTRYPOINT와 CMD, exec 형식과 셸 형식 / 명령 하나가 레이어 한 장 / 캐시는 처음 바뀐 줄에서 끊긴다 / 잘 안 바뀌는 것을 위에 둔다 / .dockerignore로 보내는 것부터 줄인다 / 빌드 도구는 두고 결과만 옮기는 멀티 스테이지 빌드 / 베이스 이미지: slim, alpine, distroless / root가 아닌 사용자로, 상태는 HEALTHCHECK로 / BuildKit 캐시 마운트와 여러 아키텍처 빌드 / 태그 붙여 올리고, 올리기 전에 검사하기 / 빌드는 됐는데 서버에서 안 뜰 때 / 처음 문제로 돌아가면 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-container-basics, docker-network-volume
 - 키워드 백링크 →: k8s-pod-probes, github-actions-docker-ecr, docker-compose, k8s-architecture, k8s-pod-troubleshooting, bash-scripting, dns
-- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, backend-engineer-roadmap, backend-language-comparison, build-caching, container-supply-chain-security, curl-for-debugging, dependency-hell, docker-commands-workflow, docker-compose, docker-container-basics, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, frontend-hosting-platforms, git-tips-advanced, github-actions-docker-ecr, iac-basics, jenkins-on-kubernetes, k8s-certifications, k8s-cri-cni-csi, k8s-learning-roadmap, k8s-pod-lifecycle, k8s-pod-troubleshooting, k8s-project-structure, kubectl-essentials, linux-disks-filesystems, linux-files-permissions, linux-namespaces-cgroups, linux-systemd-systemctl, monorepo-build-cache, nextjs-self-hosting-deployment, owasp-top-10-map, secrets-management, spring-boot-on-kubernetes, terraform-testing-policy-scanning, twelve-factor-app
+- 이 글로 오는 글 ←: aws-ec2-ubuntu-server-setup, backend-engineer-roadmap, backend-language-comparison, build-caching, container-supply-chain-security, curl-for-debugging, dependency-hell, docker-commands-workflow, docker-compose, docker-container-basics, docker-local-dev-workflow, docker-network-drivers, docker-network-volume, docker-runtime-security, frontend-hosting-platforms, git-tips-advanced, github-actions-docker-ecr, iac-basics, jenkins-on-kubernetes, k8s-certifications, k8s-cri-cni-csi, k8s-learning-roadmap, k8s-pod-lifecycle, k8s-pod-troubleshooting, k8s-project-structure, kubectl-essentials, linux-disks-filesystems, linux-files-permissions, linux-namespaces-cgroups, linux-package-management, linux-systemd-systemctl, monorepo-build-cache, nextjs-self-hosting-deployment, owasp-top-10-map, secrets-management, shells-posix-compat, spring-boot-on-kubernetes, terraform-testing-policy-scanning, twelve-factor-app
 
 ### Programming › Server/Infra › IaC (`programming/server-infra/iac`)
 
@@ -7842,7 +7887,7 @@
 - 길이: 491줄
 - 소제목: etcd 스냅숏과 무엇이 다른가 / 설치하면 생기는 것들 / 백업이 쌓이는 곳, BackupStorageLocation / 백업 하나, 그리고 매일 밤의 스케줄 / 백업 순간을 맞추는 훅 / 볼륨을 백업하는 세 가지 길 / 다른 이름으로 되살리기 / 다른 클러스터로 옮기기와 재해 복구 / 백업이 조용히 실패하는 자리 / API로 뜨고 API로 되살린다 / 면접에서 나올 만한 질문
 - 직접 링크 →: k8s-etcd-backup, backup-strategy, disaster-recovery, k8s-storageclass-snapshots, k8s-pod-security-admission
-- 키워드 백링크 →: k8s-rbac, k8s-pod-scheduling, k8s-pod-resources, k8s-daemonset, k8s-configmap, k8s-pod-multicontainer, docker-container-basics, k8s-cri-cni-csi, k8s-service-types, k8s-architecture, kubernetes-ingress, postgres-architecture, postgres-operations, local-k8s-kind-minikube, eks-cluster-basics, db-type-key-value, github-actions-docker-ecr, dns
+- 키워드 백링크 →: k8s-rbac, k8s-pod-scheduling, k8s-pod-resources, k8s-daemonset, k8s-configmap, k8s-pod-multicontainer, docker-container-basics, k8s-cri-cni-csi, k8s-service-types, k8s-architecture, kubernetes-ingress, linux-archive-transfer, postgres-architecture, postgres-operations, local-k8s-kind-minikube, eks-cluster-basics, db-type-key-value, github-actions-docker-ecr, dns
 - 이 글로 오는 글 ←: backup-strategy, k8s-cluster-upgrade, k8s-etcd-backup, k8s-learning-roadmap, k8s-storageclass-snapshots
 
 ### Programming › Server/Infra › Kubernetes › Platform (`programming/server-infra/kubernetes/platform`)
@@ -8023,7 +8068,7 @@
 - 길이: 434줄
 - 소제목: 막는 장치와 알아채는 장치 / 커널에서 규칙까지 이벤트가 가는 길 / 규칙 한 줄씩 읽기 / 내 규칙을 쓰고 검증하기 / 시끄러운 알림 줄이기 / 알림을 받은 다음 / 탐지는 마지막 그물이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: cis-benchmark-kube-bench, seccomp-apparmor, container-supply-chain-security, k8s-audit-logging, cilium-ebpf
-- 키워드 백링크 →: k8s-pod-lifecycle, k8s-network-policy, hosts-file, k8s-daemonset, docker-container-basics, docker-runtime-security, k8s-security-context, helm-basics, k8s-node-maintenance, k8s-certifications, webhooks
+- 키워드 백링크 →: k8s-pod-lifecycle, k8s-network-policy, hosts-file, k8s-daemonset, docker-container-basics, docker-runtime-security, k8s-security-context, helm-basics, k8s-node-maintenance, shells-posix-compat, k8s-certifications, webhooks
 - 이 글로 오는 글 ←: cis-benchmark-kube-bench, container-supply-chain-security, ids-ips, k8s-certifications, k8s-daemonset, seccomp-apparmor
 
 #### `k8s-admission-control` — 어드미션 컨트롤: etcd에 저장되기 직전의 관문
@@ -8226,7 +8271,7 @@
 - 소제목: 설치하고 떠 있는지 확인하기 / master 하나와 worker 몇 개 / Ubuntu의 설정 파일 배치 / 블록은 안쪽으로 상속된다 / 요청 하나를 받을 server 고르기 / location은 이 순서로 고른다 / root와 alias는 경로를 다르게 만든다 / index와 try_files / 403이 나는 이유 / 바꾸기 전에 -t, 적용은 reload / 로그를 읽는 법 / 설정은 nginx가 읽는 순서대로 읽는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: nginx-reverse-proxy, nginx-https-performance
 - 키워드 백링크 →: blue-green-deployment, aws-ec2-ubuntu-server-setup, linux-systemd-systemctl, realtime-communication, proxy-reverse-proxy, linux-processes-signals, event-loop, web-security-headers, linux-files-permissions, http-status-codes, what-happens-google-com, ipv6-basics, db-modeling-normalization
-- 이 글로 오는 글 ←: bash-expansions-variables, docker-network-volume, encryption-in-transit, first-page-from-power-on, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, process-vs-thread, rendering-csr-spa, valkey-vs-redis, web-server-vs-was, what-happens-google-com
+- 이 글로 오는 글 ←: bash-expansions-variables, docker-network-volume, encryption-in-transit, first-page-from-power-on, https-tls, local-custom-domain, nginx-https-performance, nginx-reverse-proxy, process-vs-thread, rendering-csr-spa, valkey-vs-redis, vim-for-servers, web-server-vs-was, what-happens-google-com
 
 #### `nginx-https-performance` — Nginx HTTPS·성능·보안 설정
 
@@ -8336,7 +8381,7 @@
 - 길이: 507줄
 - 소제목: 패널 한 칸이 그려지기까지 / $__interval과 $__rate_interval / 변수는 쿼리 문자열을 바꾸는 치환이다 / 질문 하나에 패널 하나를 화면에 옮기기 / 대시보드를 코드로 두는 세 가지 방법 / Grafana 알림과 Alertmanager / 지표에서 로그와 trace로 건너가기 / 대시보드가 말을 안 들을 때 / 그리는 도구, 묻는 쪽, 답하는 쪽 / 면접에서 나올 만한 질문
 - 직접 링크 →: prometheus-basics, monitoring-basics, metrics-types, alerting, optimistic-locking, argocd-basics, observability-basics, structured-logging, distributed-tracing
-- 키워드 백링크 →: terraform-basics, k8s-configmap, docker-container-basics, db-locking-deadlock, http-status-codes
+- 키워드 백링크 →: terraform-basics, k8s-configmap, docker-container-basics, db-locking-deadlock, http-status-codes, shells-posix-compat
 - 이 글로 오는 글 ←: cloudwatch-metrics-logs-alarms, grafana-tempo-tracing, k8s-learning-roadmap, logging-tools-overview, prometheus-basics, sd-metrics-storage-alerting, spring-boot-observability
 
 #### `grafana-tempo-tracing` — Grafana Tempo: 찾아보기 없이 trace를 저장하고 찾기
@@ -9168,7 +9213,7 @@
 - 길이: 383줄
 - 소제목: 빈도표 하나와 LIKE 하나로 시작하기 / 접두사를 길로 바꾸는 트라이 / 접두사 아래를 전부 뒤지면 / 노드마다 상위 5개를 적어 둔다 / 한글은 치는 동안 글자가 바뀐다 / 키를 누를 때마다 요청을 보내지 않는다 / 서버 쪽 경로와 거르는 단계 / 추천이 이상하다는 문의가 오면 / 트라이로 상위 k개 찾기 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-chat-presence, sd-autocomplete-data-pipeline, sd-video-upload-transcoding, http-caching-cdn, debounce-throttle, browser-fetch, elasticsearch-inverted-index, ds-trie
-- 키워드 백링크 →: input-validation-secure-coding, character-encoding-unicode, sd-start-single-server, lossy-counting, global-rollout-localization, osi-in-practice, db-modeling-normalization
+- 키워드 백링크 →: input-validation-secure-coding, character-encoding-unicode, sd-start-single-server, lossy-counting, global-rollout-localization, osi-in-practice, vim-for-servers, db-modeling-normalization
 - 이 글로 오는 글 ←: data-structures-overview, debounce-throttle, ds-trie, frontend-system-design-interview, sd-autocomplete-data-pipeline, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path
 
 #### `sd-chat-connections` — 채팅 시스템 설계 ①: 폴링에서 WebSocket까지, 연결을 붙잡는 채팅 서버
@@ -9377,7 +9422,7 @@
 - 길이: 404줄
 - 소제목: 원본을 1년 동안 다 두면 / 쓰기는 쉬지 않고 읽기는 몰려서 온다 / 1년을 세 해상도로 나눠 담는다 / 스파이크는 평균 속에 묻힌다 / 패널 폭이 읽을 해상도를 정한다 / 조회 서비스 앞에 캐시를 둔다 / 알림은 규칙을 주기적으로 묻는 일이다 / 알림 상태를 어디에 두나 / 알림 시스템이 죽으면 누가 알려 주나 / 만들지, 가져다 쓸지 / 현장에서 이 구조가 드러나는 순간 / 다음에 읽을 글 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-metrics-collection, sd-ad-click-stream-windows, db-type-time-series, alerting, metrics-types, prometheus-basics, message-delivery-semantics, grafana-dashboards
-- 키워드 백링크 →: cron-jobs, db-type-wide-column, db-type-key-value, sd-object-storage-architecture, db-type-relational, kafka-basics, webhooks
+- 키워드 백링크 →: cron-jobs, db-type-wide-column, db-type-key-value, sd-object-storage-architecture, db-type-relational, kafka-basics, shells-posix-compat, webhooks
 - 이 글로 오는 글 ←: centralized-logging-pipeline, sd-ad-click-stream-windows, sd-metrics-collection, system-design-study-path
 
 #### `sd-mq-consumer-groups` — 분산 메시지 큐 설계 ②: 소비자 그룹과 리밸런싱
@@ -9619,7 +9664,7 @@
 - 길이: 446줄
 - 소제목: 파일 하나를 통째로 보내면 생기는 일 / 목록 두 겹과 4초짜리 조각 / 회선에 맞춰 화질을 바꾸는 플레이어 / 엣지가 조각을 들고 있으면 / 하루 수 페타바이트를 내보내는 값 / 인기 없는 영상까지 CDN에 둘 필요는 없다 / 남이 퍼 가지 못하게 / 재생 중에 터지는 오류들 / 다음 장: 동영상에서 파일 동기화로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-video-upload-transcoding, sd-file-sync-block-upload, http-caching-cdn, cdn-edge-anycast, edge-caching, cloud-cost-optimization
-- 키워드 백링크 →: packet-encapsulation, sd-music-streaming
+- 키워드 백링크 →: packet-encapsulation, shells-posix-compat, sd-music-streaming
 - 이 글로 오는 글 ←: html-media-embed, routing-protocols-ospf-rip-eigrp, sd-file-sync-block-upload, sd-music-streaming, sd-video-upload-transcoding, system-design-study-path, youtube-url-to-video
 
 #### `sd-video-upload-transcoding` — 동영상 서비스 설계 ①: 서명된 업로드와 트랜스코딩 DAG
@@ -11404,6 +11449,8 @@
 - application/x-www-form-urlencoded → `html-form-http`
 - ApplicationSet → `argocd-basics`
 - AppProject → `argocd-basics`
+- apt-cache policy → `linux-package-management`
+- apt-mark hold → `linux-package-management`
 - AQE → `spark-basics`
 - arc42 → `architecture-docs-c4-adr`
 - Argo CD Image Updater → `jenkins-argocd-push-pull`
@@ -11523,6 +11570,7 @@
 - ChatClient → `spring-ai-agents`
 - check-expiration → `k8s-certificates-pki`
 - check-then-act → `race-conditions`
+- checkbashisms → `shells-posix-compat`
 - Chef → `config-management-tools`
 - cherry-pick → `git-tips-advanced`
 - ChunkLoadError → `frontend-hosting-platforms`
@@ -11659,6 +11707,7 @@
 - DaemonSet → `k8s-daemonset`
 - dangerouslySetInnerHTML → `xss`
 - dangling 이미지 → `docker-commands-workflow`
+- dash → `shells-posix-compat`
 - DAST → `security-testing-sast-dast`
 - Data Access Layer → `nextjs-server-actions-security`
 - Data Mapper → `nodejs-orm-query-builder`
@@ -11736,6 +11785,7 @@
 - DOMPurify → `xss`
 - DORA 지표 → `ci-cd-basics`
 - Dotted Version Vector → `sd-kv-store-versioning`
+- dpkg → `linux-package-management`
 - Draft Mode → `rendering-ssg-isr`
 - drain 이벤트 → `backpressure`
 - drift 감지 → `network-config-cicd`
@@ -12338,6 +12388,7 @@
 - namespace → `docker-container-basics`
 - namespaceSelector → `k8s-network-policy`
 - NAND 게이트 → `logic-gates-alu`
+- nano → `vim-for-servers`
 - NAT 게이트웨이 → `vpc-subnets-route-tables`
 - NAT traversal → `nat-traversal`
 - NAT64 → `ipv6-basics`
@@ -12527,6 +12578,7 @@
 - PodSecurityPolicy → `k8s-pod-security-admission`
 - podTemplate → `jenkins-on-kubernetes`
 - poison record → `batch-processing`
+- POSIX sh → `shells-posix-compat`
 - postinstall → `software-supply-chain-ci-hardening`
 - Power of Two Choices → `load-balancing-algorithms`
 - pre-receive 훅 → `git-hooks`
@@ -12745,6 +12797,7 @@
 - schema_migrations → `db-migration-tools`
 - SCIM → `sso-saml-oidc`
 - SCMP_ACT_LOG → `seccomp-apparmor`
+- scp → `linux-archive-transfer`
 - scram-sha-256 → `postgres-roles-security`
 - Screaming Architecture → `clean-architecture`
 - scroll-snap-type → `css-sticky-scroll-snap`
@@ -12794,6 +12847,7 @@
 - setImmediate → `event-loop`
 - settings.local.json → `claude-code-project-structure`
 - setuid → `linux-files-permissions`
+- SFTP → `linux-archive-transfer`
 - Shadow DOM → `micro-frontend-integration-patterns`
 - shared_buffers → `postgres-architecture`
 - ShareDB → `operational-transform`
@@ -12802,6 +12856,7 @@
 - short-circuit evaluation → `js-short-circuit`
 - SIEM 상관 규칙 → `security-logging-detection-siem`
 - SIGHUP → `linux-processes-signals`
+- signed-by → `linux-package-management`
 - Sigstore → `container-supply-chain-security`
 - SIGUSR1 → `nodejs-debugging-profiling`
 - SigV4 → `api-key-hmac-auth`
@@ -12913,6 +12968,7 @@
 - Subresource Integrity → `owasp-top-10-map`
 - SUBSTR → `sqld-single-row-functions`
 - subtreeFlags → `react-fiber-render-commit`
+- sudoedit → `vim-for-servers`
 - sudoers → `linux-users-groups-sudo`
 - Sunset 헤더 → `api-versioning`
 - suppressHydrationWarning → `hydration`
@@ -12937,6 +12993,7 @@
 - TanStack Query → `client-data-cache`
 - TanStack Router → `react-client-routing`
 - tapable → `plugin-microkernel-architecture`
+- tar.gz → `linux-archive-transfer`
 - Tauri → `cross-platform-apps`
 - TC/C → `sd-wallet-transfer`
 - tcp_tw_reuse → `linux-network-tuning`
@@ -13119,6 +13176,7 @@
 - Vertical Pod Autoscaler → `k8s-vpa`
 - View Transitions API → `view-transitions-shared-element`
 - view-transition-name → `view-transitions-shared-element`
+- vim → `vim-for-servers`
 - visibility map → `postgres-mvcc-vacuum`
 - Visitor 패턴 → `pattern-visitor`
 - visudo → `linux-users-groups-sudo`
@@ -13208,6 +13266,8 @@
 - zip slip → `path-traversal-file-upload`
 - zod → `runtime-validation-zod`
 - Zone.js → `frontend-frameworks-compared`
+- zsh → `shells-posix-compat`
+- zstd → `linux-archive-transfer`
 - Zustand → `react-state-management-libraries`
 
 ## 겹칠 수 있는 글 (자동 추정)
@@ -13259,6 +13319,16 @@
 
 양쪽이 서로를 링크하거나 키워드로 가리키는 쌍이다. 내용 경계가 맞닿아 있으니 한쪽 글을 고칠 때 다른 쪽과 겹치지 않는지 본다.
 
+- `linux-archive-transfer` ↔ `linux-package-management`
+- `linux-archive-transfer` ↔ `vim-for-servers`
+- `linux-archive-transfer` ↔ `ssh-in-practice`
+- `linux-archive-transfer` ↔ `rsync-algorithm`
+- `linux-package-management` ↔ `vim-for-servers`
+- `shells-posix-compat` ↔ `bash-expansions-variables`
+- `shells-posix-compat` ↔ `shell-redirection-pipes`
+- `shells-posix-compat` ↔ `shell-environment-startup`
+- `shells-posix-compat` ↔ `bash-scripting`
+- `shells-posix-compat` ↔ `linux-grep-awk-sed`
 - `config-management-tools` ↔ `terraform-team-workflow-hcp-terragrunt`
 - `config-management-tools` ↔ `iac-basics`
 - `data-privacy-compliance` ↔ `global-rollout-localization`

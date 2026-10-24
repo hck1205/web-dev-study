@@ -2,6 +2,68 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "linux-archive-transfer": {
+    "links": [
+      "rsync-algorithm",
+      "linux-files-permissions",
+      "bash-scripting",
+      "shell-redirection-pipes",
+      "ssh-in-practice",
+      "linux-package-management",
+      "vim-for-servers"
+    ],
+    "mentions": [
+      "youtube-url-to-video",
+      "linux-disks-filesystems",
+      "ports-and-sockets",
+      "what-happens-google-com"
+    ]
+  },
+  "linux-package-management": {
+    "links": [
+      "digital-signatures-certificates",
+      "aws-ec2-ubuntu-server-setup",
+      "dockerfile-image-layers",
+      "linux-archive-transfer",
+      "vim-for-servers"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "what-happens-google-com"
+    ]
+  },
+  "shells-posix-compat": {
+    "links": [
+      "shell-environment-startup",
+      "bash-scripting",
+      "linux-grep-awk-sed",
+      "linux-package-management",
+      "linux-archive-transfer"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "linux-boot-process",
+      "bash-expansions-variables",
+      "shell-redirection-pipes"
+    ]
+  },
+  "vim-for-servers": {
+    "links": [
+      "linux-systemd-systemctl",
+      "linux-grep-awk-sed",
+      "linux-users-groups-sudo",
+      "shell-environment-startup",
+      "cron-jobs",
+      "linux-archive-transfer",
+      "linux-package-management"
+    ],
+    "mentions": [
+      "docker-compose",
+      "nginx-basics",
+      "fp-composition-pipe",
+      "aws-ec2-ubuntu-server-setup"
+    ]
+  },
   "config-management-tools": {
     "links": [
       "iac-basics",
@@ -262,6 +324,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "frontend-testing-strategy",
       "http-status-codes",
+      "shells-posix-compat",
       "web-accessibility",
       "sd-music-streaming"
     ]
@@ -1393,6 +1456,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "autoscaling",
       "security-groups-nacl",
+      "vim-for-servers",
       "ipv6-basics"
     ]
   },
@@ -1531,6 +1595,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "nginx-basics",
+      "shells-posix-compat",
       "js-array-transform"
     ]
   },
@@ -1669,7 +1734,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-testing-strategy",
       "rendering-csr-spa",
       "rendering-strategies",
-      "n-plus-one-queries"
+      "n-plus-one-queries",
+      "shells-posix-compat"
     ]
   },
   "nextjs-caching-layers": {
@@ -1805,6 +1871,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-expansions-variables"
     ],
     "mentions": [
+      "shells-posix-compat",
       "centralized-logging-pipeline"
     ]
   },
@@ -1834,7 +1901,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "shell-redirection-pipes",
       "bash-expansions-variables",
-      "js-scope-lexical"
+      "js-scope-lexical",
+      "shells-posix-compat"
     ]
   },
   "bgp-basics": {
@@ -2124,7 +2192,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "linux-users-groups-sudo",
-      "ds-hash-map"
+      "ds-hash-map",
+      "shells-posix-compat"
     ]
   },
   "ts-classes-access-modifiers": {
@@ -4096,6 +4165,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "stream-processing",
       "kafka-basics",
       "postgres-architecture",
+      "linux-archive-transfer",
       "cdc-change-data-capture"
     ]
   },
@@ -4307,6 +4377,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "helm-basics",
       "k8s-node-maintenance",
+      "shells-posix-compat",
       "k8s-certifications",
       "webhooks"
     ]
@@ -4756,7 +4827,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-expansions-variables",
       "ansible-network-automation",
       "postgres-operations",
-      "shell-redirection-pipes"
+      "shell-redirection-pipes",
+      "shells-posix-compat"
     ]
   },
   "ssh-in-practice": {
@@ -4777,6 +4849,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "iptables-nat",
       "cookie-session-login",
+      "linux-archive-transfer",
       "dns"
     ]
   },
@@ -4919,6 +4992,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "html-form-http",
       "token-login",
+      "shells-posix-compat",
       "cloud-service-models-shared-responsibility",
       "sli-slo",
       "db-modeling-normalization"
@@ -6578,6 +6652,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-status-codes",
+      "shells-posix-compat",
       "dns"
     ]
   },
@@ -6640,7 +6715,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "character-encoding-unicode",
-      "http-status-codes"
+      "http-status-codes",
+      "linux-archive-transfer"
     ]
   },
   "parallax-scrollytelling": {
@@ -6933,6 +7009,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "http-status-codes",
       "dns",
+      "shells-posix-compat",
       "authn-vs-authz",
       "ipv6-basics"
     ]
@@ -7507,6 +7584,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture",
       "db-type-relational",
       "kafka-basics",
+      "shells-posix-compat",
       "webhooks"
     ]
   },
@@ -7904,6 +7982,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "packet-encapsulation",
+      "shells-posix-compat",
       "sd-music-streaming"
     ]
   },
@@ -8032,6 +8111,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "lossy-counting",
       "global-rollout-localization",
       "osi-in-practice",
+      "vim-for-servers",
       "db-modeling-normalization"
     ]
   },
@@ -8664,6 +8744,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-mvcc-vacuum",
       "sqld-group-by-having",
       "sqld-window-functions",
+      "shells-posix-compat",
       "sql-basics"
     ]
   },
@@ -10399,6 +10480,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "dynamic-programming",
       "client-data-cache",
       "db-type-key-value",
+      "vim-for-servers",
       "linux-performance-triage",
       "dns",
       "webhooks"
@@ -10421,7 +10503,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "db-locking-deadlock",
-      "http-status-codes"
+      "http-status-codes",
+      "shells-posix-compat"
     ]
   },
   "prometheus-basics": {
@@ -10469,6 +10552,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "helm-basics",
+      "linux-archive-transfer",
       "multi-tenancy-isolation",
       "rollback-strategy",
       "local-k8s-kind-minikube",
@@ -10809,6 +10893,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types",
       "k8s-architecture",
       "kubernetes-ingress",
+      "linux-archive-transfer",
       "postgres-architecture",
       "postgres-operations",
       "local-k8s-kind-minikube",
@@ -11962,6 +12047,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-principles-cia-defense-in-depth",
       "http-status-codes",
       "cloud-service-models-shared-responsibility",
+      "linux-archive-transfer",
       "sso-saml-oidc"
     ]
   },
@@ -13051,7 +13137,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "traffic-shaping-qos",
       "sd-file-sync-block-upload"
     ],
-    "mentions": []
+    "mentions": [
+      "linux-archive-transfer"
+    ]
   },
   "merkle-tree": {
     "links": [
@@ -13435,7 +13523,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "ds-hash-map",
       "redis-basics",
-      "cookie-session-login"
+      "cookie-session-login",
+      "shells-posix-compat"
     ]
   },
   "bloom-filter": {
@@ -13620,7 +13709,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-expansions-variables",
       "linux-disks-filesystems",
       "osi-in-practice",
-      "http-status-codes"
+      "http-status-codes",
+      "shells-posix-compat"
     ]
   },
   "linux-systemd-systemctl": {
@@ -16633,7 +16723,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-ignore-config",
       "dependency-hell",
       "git-staging-area",
-      "git-stash-reflog"
+      "git-stash-reflog",
+      "shells-posix-compat"
     ]
   },
   "git-tips-advanced": {
@@ -17354,6 +17445,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "reverse-proxy-lb-api-gateway",
       "kubernetes-ingress",
       "base64",
+      "linux-archive-transfer",
       "image-optimization",
       "first-page-from-power-on",
       "db-modeling-normalization"
