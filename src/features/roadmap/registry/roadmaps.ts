@@ -596,6 +596,7 @@ export const ROADMAPS: RoadmapNode[] = [
           "cron-jobs",
           "batch-processing",
           { checkpoint: "API 관문" },
+          { post: "soap-and-soa", tier: 3 },
         ],
       },
       {
@@ -617,7 +618,7 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "auth",
         label: "인증과 인가",
-        items: ["cookie-session-login", "token-login", "oauth", "jwt-key-rotation", "sso-saml-oidc", "mfa-totp", "passkeys-webauthn", "password-attacks-credential-stuffing", "api-key-hmac-auth", { checkpoint: "인증 관문" }],
+        items: ["cookie-session-login", "token-login", "oauth", "jwt-key-rotation", "sso-saml-oidc", "mfa-totp", "passkeys-webauthn", "password-attacks-credential-stuffing", "api-key-hmac-auth", { checkpoint: "인증 관문" }, { post: "enterprise-auth-ldap-kerberos", tier: 2 }],
       },
       {
         id: "runtime",
@@ -632,6 +633,7 @@ export const ROADMAPS: RoadmapNode[] = [
           "nodejs-debugging-profiling",
           "express-middleware",
           "nodejs-web-frameworks",
+          "js-runtimes-node-deno-bun",
           "fastapi-basics", "java-jvm-memory-gc",
           "go-concurrency-basics",
         ],
@@ -657,6 +659,7 @@ export const ROADMAPS: RoadmapNode[] = [
           "twelve-factor-app",
           "architecture-patterns-overview",
           { checkpoint: "아키텍처 관문" },
+          { post: "plugin-microkernel-architecture", tier: 2 },
           { post: "architecture-docs-c4-adr", tier: 2 },
           { post: "enterprise-system-integration", tier: 2 },
           { post: "global-rollout-localization", tier: 2 },
@@ -761,6 +764,7 @@ export const ROADMAPS: RoadmapNode[] = [
     requires: ["foundations/computer-architecture"],
     items: [
       "big-o-notation",
+      { post: "complexity-classes-p-np", tier: 3 },
       {
         id: "data-structures",
         label: "자료구조",
@@ -779,13 +783,14 @@ export const ROADMAPS: RoadmapNode[] = [
           "minimum-spanning-tree",
           { checkpoint: "자료구조 관문" },
           { post: "segment-tree-fenwick", tier: 2 },
+          { post: "max-flow-bipartite-matching", tier: 3 },
           { post: "data-structures-overview", tier: 3 },
         ],
       },
       {
         id: "techniques",
         label: "풀이 기법",
-        items: ["sorting-algorithms", "binary-search", "recursion-backtracking", "dynamic-programming", "greedy-algorithms", { checkpoint: "기법 관문" }, { post: "string-search-algorithms", tier: 2 }, { post: "bit-manipulation", tier: 2 }, { post: "algorithms-overview", tier: 3 }],
+        items: ["sorting-algorithms", "binary-search", "recursion-backtracking", "divide-and-conquer", "dynamic-programming", "greedy-algorithms", { checkpoint: "기법 관문" }, { post: "string-search-algorithms", tier: 2 }, { post: "bit-manipulation", tier: 2 }, { post: "randomized-algorithms", tier: 3 }, { post: "algorithms-overview", tier: 3 }],
       },
     ],
   },
@@ -851,7 +856,7 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "nginx",
         label: "Nginx",
-        items: ["nginx-basics", "nginx-reverse-proxy", "nginx-https-performance"],
+        items: ["web-server-vs-was", "nginx-basics", "nginx-reverse-proxy", "nginx-https-performance"],
       },
       {
         id: "cloud-network",
@@ -884,6 +889,7 @@ export const ROADMAPS: RoadmapNode[] = [
         tier: 1,
         requires: ["infra/docker"],
         items: [
+          { post: "container-orchestration-choices", tier: 2 },
           {
             id: "foundation",
             label: "구조와 kubectl",
@@ -972,7 +978,7 @@ export const ROADMAPS: RoadmapNode[] = [
             id: "operations",
             label: "운영",
             tier: 2,
-            items: ["k8s-node-maintenance", "k8s-cluster-upgrade", "k8s-certificates-pki", "k8s-etcd-backup", "velero-backup"],
+            items: ["kubeadm-cluster-setup", "k8s-node-maintenance", "k8s-cluster-upgrade", "k8s-certificates-pki", "k8s-etcd-backup", "velero-backup"],
           },
           {
             id: "platform",
@@ -1015,12 +1021,32 @@ export const ROADMAPS: RoadmapNode[] = [
       {
         id: "iac",
         label: "IaC",
-        items: ["iac-basics", "terraform-basics", "terraform-modules-tfvars", "terraform-network-iac", "ansible-network-automation", "network-config-cicd"],
+        items: [
+          "iac-basics",
+          "terraform-basics",
+          "terraform-hcl-expressions-data-sources",
+          "terraform-dependency-graph-lifecycle",
+          "terraform-modules-tfvars",
+          "terraform-state-refactoring-import",
+          "terraform-testing-policy-scanning",
+          "terraform-network-iac",
+          "ansible-network-automation",
+          "netconf-restconf-yang",
+          "network-config-cicd",
+        ],
       },
       {
         id: "cloud",
         label: "클라우드 운영",
-        items: ["cloud-service-models-shared-responsibility", "ec2-instance-types-launch-templates", "ecs-fargate-task-service", "serverless-limits", "cold-starts", "cloud-cost-optimization"],
+        items: [
+          "cloud-service-models-shared-responsibility",
+          "virtualization-hypervisors",
+          "cloud-deployment-models-multicloud",
+          "block-file-object-storage",
+          "s3-storage-classes-lifecycle",
+          "aws-s3-in-practice",
+          "ec2-instance-types-launch-templates", "ecs-fargate-task-service", "serverless-limits", "cold-starts", "cloud-cost-optimization",
+        ],
       },
       {
         id: "observability",
@@ -1132,6 +1158,9 @@ export const ROADMAPS: RoadmapNode[] = [
           "schema-versioning",
           "microservices",
           "authn-vs-authz",
+          "queue-based-load-leveling",
+          "multi-tenancy-isolation",
+          "performance-antipatterns",
           { checkpoint: "분산 시스템 관문" },
           { post: "system-design-concepts-map", tier: 3 },
           { post: "system-design-study-path", tier: 3 },
@@ -1232,7 +1261,7 @@ export const ROADMAPS: RoadmapNode[] = [
     tier: 3,
     requires: ["database/db-types"],
     items: [
-      { id: "llm", label: "LLM 기초와 연동", items: ["llm-basics-for-developers", "llm-api-integration", "mcp-protocol"] },
+      { id: "llm", label: "LLM 기초와 연동", items: ["llm-basics-for-developers", "llm-api-integration", "mcp-protocol", "ai-coding-agents"] },
       { id: "rag", label: "RAG", items: ["rag-classic-pipeline", "rag-retrieval-quality", "graph-rag", "agentic-rag", "rag-patterns-overview"] },
       {
         id: "claude-code",

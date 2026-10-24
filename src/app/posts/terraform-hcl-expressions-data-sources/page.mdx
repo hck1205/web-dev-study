@@ -1,0 +1,607 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-hcl-expressions-data-sources");
+
+<EasyIntro>
+  Terraform 코드는 HCL이라는 말로 쓴다. 이 말에는 "이건 숫자다", "이건 이름표가 붙은 상자다" 같은 규칙이 있어서, 틀린 값을 넣으면 실제로 만들기 전에 미리 알려 준다. 같은 일을 여러 번 적지 않도록 목록을 돌며 값을 만들어 내는 방법도 있다.
+
+  코드에 바깥 정보를 직접 적어 넣으면 문제가 생긴다. 이사 간 친구 집 주소를 수첩에 볼펜으로 적어 두면, 친구가 또 이사하는 순간 수첩이 틀려진다. 그래서 주소를 적는 대신 "친구 집 주소는 그때그때 전화로 물어본다"고 적어 두는 게 낫다. Terraform의 data source가 그 전화다.
+
+  전화는 보통 계획을 세울 때 건다. 그런데 아직 생기지 않은 집의 주소를 물어보면 답을 못 듣는다. 그러면 Terraform은 그 부분을 "만들어 봐야 안다"고 표시하고, 계획 단계에서 정해야 하는 개수 같은 것은 정하지 못해 멈춘다. 이 글은 그런 규칙들을 하나씩 직접 돌려 본다.
+</EasyIntro>
+
+운영 계정에서 잘 돌던 모듈을 스테이징에 붙였더니 plan이 바로 실패한다.
+
+```text
+Error: creating EC2 Instance: InvalidSubnetID.NotFound: The subnet ID 'subnet-0a1b2c3d4e5f60718' does not exist
+```
+
+누군가 운영의 서브넷 ID를 코드에 그대로 적어 두었다. 운영에서는 맞는 값이고 스테이징에는 없는 값이다. 그 서브넷이 다른 팀의 Terraform이 관리하는 것이라 내 코드가 만들 수도 없다. 필요한 건 "이 계정에서 `tier=private` 태그가 붙은 서브넷"을 그때그때 찾아오는 코드다.
+
+```hcl
+# 이름표로 VPC와 서브넷을 찾는다. 계정이 바뀌어도 코드는 그대로다
+data "aws_vpc" "main" {
+  tags = {
+    Name = "shop-${var.env}"
+  }
+}
+
+data "aws_subnets" "private" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.main.id]
+  }
+  tags = {
+    tier = "private"
+  }
+}
+
+resource "aws_instance" "app" {
+  subnet_id = data.aws_subnets.private.ids[0]
+  # ...
+}
+```
+
+이게 data source다. 이 글은 data source를 포함해 Terraform 코드를 이루는 문법, HCL을 다룬다. 블록과 표현식의 구조, 잘못된 값을 plan 전에 거르는 타입 제약, 반복을 줄이는 `for` 표현식과 `dynamic` 블록, 서버 초기화 스크립트를 만드는 `templatefile`, 그리고 data source가 언제 읽히고 언제 못 읽히는지까지 간다. 변수·locals·출력과 모듈 구조는 [모듈과 tfvars](/posts/terraform-modules-tfvars)에서 다뤘으니 여기서는 그 안에 들어가는 표현식에 집중한다. 리소스 사이의 순서와 교체는 [의존성 그래프와 lifecycle](/posts/terraform-dependency-graph-lifecycle)에 있다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.6으로 했다. AWS 예시는 코드만 보이고, 출력은 계정이 필요 없는 `local`·`random` 프로바이더와 `terraform console`로 직접 얻은 것만 실었다.
+
+## 블록, 인자, 표현식
+
+HCL(HashiCorp Configuration Language)은 세 가지로 이루어진다.
+
+```hcl
+resource "aws_security_group" "app" {   # 블록: 종류 + 라벨 두 개
+  name   = "app-${var.env}"             # 인자: 이름 = 표현식
+  vpc_id = data.aws_vpc.main.id         # 표현식은 다른 값을 참조할 수 있다
+
+  ingress {                             # 중첩 블록: 라벨 없이 이름만
+    from_port = 443
+    to_port   = 443
+    protocol  = "tcp"
+  }
+}
+```
+
+블록은 `resource`, `data`, `variable`, `module`, `terraform`처럼 종류가 정해져 있고, 종류마다 라벨 개수가 다르다(`resource`는 둘, `variable`은 하나, `terraform`은 없음). 인자는 `이름 = 값`이고, 값 자리에는 리터럴(`"t3.small"`, `443`, `true`)부터 참조, 함수 호출, 조건식, `for` 표현식까지 어떤 표현식이든 올 수 있다. 중첩 블록(`ingress { ... }`)은 인자와 비슷해 보이지만 `=`가 없다. 이 차이가 뒤에서 `dynamic` 블록이 필요한 이유가 된다. 인자는 표현식으로 통째로 바꿀 수 있지만 블록은 그럴 수 없다.
+
+HCL은 선언형이라 같은 디렉터리의 `.tf` 파일 순서나 파일 이름은 의미가 없다. Terraform은 디렉터리 안의 `.tf`를 전부 읽어 하나로 합친다. `main.tf`, `variables.tf`, `outputs.tf`로 나누는 것은 사람이 읽기 위한 관습이다. 같은 내용을 JSON으로 적은 `.tf.json`도 읽는데, 다른 프로그램이 코드를 생성할 때 쓴다.
+
+표현식을 시험할 때는 `terraform console`이 가장 빠르다. 현재 디렉터리의 변수와 locals를 읽은 채로 표현식을 바로 계산해 준다.
+
+```bash
+# 현재 설정을 읽은 상태로 표현식을 하나 계산한다 (state는 바꾸지 않는다)
+echo 'cidrsubnet("10.20.0.0/16", 8, 3)' | terraform console
+```
+
+```text
+"10.20.3.0/24"
+```
+
+## 타입을 적어 두면 잘못된 값이 plan 전에 걸린다
+
+변수에는 타입을 적는다. 원시 타입(`string`, `number`, `bool`), 같은 타입을 모은 컬렉션(`list(...)`, `set(...)`, `map(...)`), 서로 다른 타입을 섞는 구조 타입(`object({...})`, `tuple([...])`)이 있다. 서비스 목록을 받는 변수를 이렇게 적었다.
+
+```hcl
+variable "services" {
+  type = map(object({
+    port     = number
+    public   = optional(bool, false)
+    replicas = optional(number, 2)
+    cidrs    = optional(list(string), [])
+  }))
+  default = {
+    api   = { port = 8080, public = true, cidrs = ["0.0.0.0/0"] }
+    admin = { port = 9000, cidrs = ["10.0.0.0/8"] }
+    batch = { port = 7000, replicas = 1 }
+  }
+}
+```
+
+`optional(타입, 기본값)`(1.3 이상)을 쓰면 호출하는 쪽이 그 속성을 빼도 된다. `admin`에는 `public`도 `replicas`도 없지만 계산된 값에는 기본값이 채워져 있다.
+
+```text
+> var.services["admin"]
+{
+  "cidrs" = tolist([
+    "10.0.0.0/8",
+  ])
+  "port" = 9000
+  "public" = false
+  "replicas" = 2
+}
+```
+
+타입이 맞지 않으면 plan이 시작하기도 전에 멈춘다. 포트에 문자열을 넣어 봤다.
+
+```bash
+terraform plan -var 'services={api={port="eighty"}}'
+```
+
+```text
+Error: Invalid value for input variable
+
+  on main.tf line 1:
+   1: variable "services" {
+
+Unsuitable value for var.services set using -var="services=...": a number is
+required.
+```
+
+여기까지는 기대대로다. 그런데 오타는 걸러지지 않는다. `public`을 `pubic`으로 잘못 적어 넣었다.
+
+```bash
+# 환경 변수로 변수 값을 넣는다 (TF_VAR_ 뒤가 변수 이름)
+export TF_VAR_services='{web={port=80, pubic=true}}'
+echo 'var.services' | terraform console
+```
+
+```text
+tomap({
+  "web" = {
+    "cidrs" = tolist([])
+    "port" = 80
+    "public" = false
+    "replicas" = 2
+  }
+})
+```
+
+에러도 경고도 없다. 객체 타입으로 바꿀 때 타입에 없는 속성(`pubic`)은 조용히 버려지고, 빠진 `public`에는 기본값 `false`가 들어갔다. tfvars 파일로 넣어도 같았다. 공개하려던 서비스가 비공개로 만들어지고, 반대 방향이면 비공개여야 할 것이 공개된다. `optional`의 기본값이 편한 만큼 오타를 숨긴다. 기본값을 안전한 쪽(비공개, 최소 권한)으로 두고, 중요한 플래그는 `optional` 없이 필수로 받는 것이 방어책이다.
+
+`any`에는 다른 함정이 있다. `any`는 "아무 타입이나"가 아니라 "Terraform이 알아서 하나로 맞춰라"에 가깝다.
+
+```hcl
+variable "anything" {
+  type    = any
+  default = [1, "2", true]
+}
+
+variable "tags_list" {
+  type    = list(any)
+  default = [1, "2"]
+}
+```
+
+```text
+> type(var.anything)
+tuple([
+    number,
+    string,
+    bool,
+])
+> var.tags_list
+tolist([
+  "1",
+  "2",
+])
+```
+
+`any` 하나는 값을 그대로 튜플로 받았다. 그런데 `list(any)`는 "모든 원소가 같은 타입인 리스트"라서 Terraform이 공통 타입을 찾았고, 숫자 `1`이 문자열 `"1"`로 바뀌었다. 모듈 안에서 `var.tags_list[0] + 1`을 계산하던 코드라면 여기서 깨진다. 섞인 값이 필요하면 `object`나 `tuple`로 구조를 적고, 정말 형태가 정해지지 않은 값(그대로 `jsonencode`해서 넘길 정책 문서 같은 것)에만 `any`를 쓴다.
+
+## for 표현식과 splat
+
+같은 모양의 값을 목록에서 뽑아낼 때는 `for` 표현식을 쓴다. 대괄호로 감싸면 리스트, 중괄호로 감싸면 맵이 나온다. `if`로 거를 수 있다.
+
+```text
+> [for k, s in var.services : k if s.public]
+[
+  "api",
+]
+> { for k, s in var.services : k => s.port }
+{
+  "admin" = 9000
+  "api" = 8080
+  "batch" = 7000
+}
+```
+
+결과에서 `admin`이 `api`보다 먼저 나온다. 코드에는 `api`를 먼저 적었다. 맵을 돌 때 Terraform은 키의 사전순으로 돈다. 맵에는 순서가 없으니 순서에 기대는 코드를 쓰지 말라는 뜻이다. 리스트는 적은 순서 그대로다.
+
+속성 하나만 모을 때는 splat(`[*]`)이 짧다.
+
+```hcl
+locals {
+  subnets = [
+    { name = "pub-a", az = "a", public = true },
+    { name = "pub-c", az = "c", public = true },
+    { name = "app-a", az = "a", public = false },
+  ]
+}
+```
+
+```text
+> local.subnets[*].name
+[
+  "pub-a",
+  "pub-c",
+  "app-a",
+]
+```
+
+`local.subnets[*].name`은 `[for s in local.subnets : s.name]`과 같다. splat은 리스트에만 쓴다. `for_each`로 만든 리소스는 맵이라 `aws_subnet.this[*].id`가 동작하지 않고 `values(aws_subnet.this)[*].id`나 `for` 표현식을 써야 한다.
+
+맵을 만들 때 같은 키가 두 번 나오면 에러다. 키마다 값을 모으고 싶으면 값 뒤에 `...`을 붙인다. AZ별로 서브넷 이름을 모아 봤다. 아래 그림에서 다음을 누르면 목록을 한 칸씩 훑으며 맵이 어떻게 자라는지 보인다.
+
+<AlgoTrace
+  caption="{ for s in local.subnets : s.az => s.name... } 를 한 칸씩 계산한다"
+  memoryLabel="결과 맵"
+  cells={["pub-a (a)", "pub-c (c)", "app-a (a)"]}
+  steps={[
+    { caption: "맵이 비어 있다. 키는 s.az, 값은 s.name이고 ... 이 있으니 같은 키의 값을 리스트로 모은다.", memory: [] },
+    { pointer: 0, caption: "pub-a의 az는 a다. 키 a가 처음 나왔으니 리스트를 새로 만든다.", memory: ["a: [pub-a]"] },
+    { pointer: 1, caption: "pub-c의 az는 c다. 새 키 c를 만든다.", memory: ["a: [pub-a]", "c: [pub-c]"] },
+    { pointer: 2, caption: "app-a의 az는 다시 a다. ... 이 없었다면 여기서 키 중복 에러가 난다. 지금은 a의 리스트 뒤에 붙인다.", memory: ["a: [pub-a, app-a]", "c: [pub-c]"] },
+    { found: [0, 2], caption: "끝. a에는 두 개, c에는 하나가 모였다. 결과 맵을 출력하면 키 사전순(a, c)으로 나온다.", memory: ["a: [pub-a, app-a]", "c: [pub-c]"] },
+  ]}
+/>
+
+```text
+> { for s in local.subnets : s.az => s.name... }
+{
+  "a" = [
+    "pub-a",
+    "app-a",
+  ]
+  "c" = [
+    "pub-c",
+  ]
+}
+```
+
+실무에서 가장 자주 쓰는 모양은 중첩 목록을 펴서 `for_each`에 넣는 것이다. 서비스마다 허용 CIDR이 여러 개면, 규칙 리소스 하나에 (서비스, CIDR) 쌍 하나가 대응해야 한다. `flatten`으로 펴고, 다시 맵으로 바꿔 키를 정한다.
+
+```hcl
+locals {
+  rules = {
+    for r in flatten([
+      for k, s in var.services : [
+        for c in s.cidrs : { key = "${k}-${c}", svc = k, cidr = c, port = s.port }
+      ]
+    ]) : r.key => r
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "svc" {
+  for_each = local.rules
+
+  security_group_id = aws_security_group.app.id
+  cidr_ipv4         = each.value.cidr
+  from_port         = each.value.port
+  to_port           = each.value.port
+  ip_protocol       = "tcp"
+}
+```
+
+```text
+> { for r in flatten([for k, s in var.services : [for c in s.cidrs : { key = "${k}-${c}", svc = k, cidr = c, port = s.port }]]) : r.key => r.port }
+{
+  "admin-10.0.0.0/8" = 9000
+  "api-0.0.0.0/0" = 8080
+}
+```
+
+키를 `"admin-10.0.0.0/8"`처럼 내용으로 만드는 것이 중요하다. 리스트 인덱스를 키로 쓰면 CIDR 하나를 지울 때 뒤의 규칙이 전부 한 칸씩 밀려 교체된다. 이 문제는 [모듈과 tfvars](/posts/terraform-modules-tfvars)의 `count`와 `for_each` 비교에서 자세히 다뤘다. 아래에서 같은 변환을 자바스크립트로 직접 써 볼 수 있다. HCL처럼 서비스 키를 사전순으로 돌아야 테스트를 통과한다.
+
+<CodePlayground
+  caption="서비스별 CIDR 목록을 규칙 목록으로 펴기"
+  functionName="flattenRules"
+  initialCode={`// services: { 서비스: { port, cidrs? } }
+// 반환: [{ key, svc, cidr, port }, ...] (서비스 키 사전순, cidrs는 적힌 순서)
+function flattenRules(services) {
+  return [];
+}`}
+  solution={`function flattenRules(services) {
+  const out = [];
+  for (const svc of Object.keys(services).sort()) {
+    for (const cidr of services[svc].cidrs || []) {
+      out.push({ key: svc + "-" + cidr, svc, cidr, port: services[svc].port });
+    }
+  }
+  return out;
+}`}
+  tests={[
+    { label: "cidrs가 없는 batch는 빠진다", args: [{ api: { port: 8080, cidrs: ["0.0.0.0/0"] }, admin: { port: 9000, cidrs: ["10.0.0.0/8"] }, batch: { port: 7000 } }], expected: [{ key: "admin-10.0.0.0/8", svc: "admin", cidr: "10.0.0.0/8", port: 9000 }, { key: "api-0.0.0.0/0", svc: "api", cidr: "0.0.0.0/0", port: 8080 }] },
+    { label: "한 서비스에 CIDR 두 개", args: [{ web: { port: 443, cidrs: ["10.0.0.0/8", "192.168.0.0/16"] } }], expected: [{ key: "web-10.0.0.0/8", svc: "web", cidr: "10.0.0.0/8", port: 443 }, { key: "web-192.168.0.0/16", svc: "web", cidr: "192.168.0.0/16", port: 443 }] },
+    { label: "빈 입력", args: [{}], expected: [] },
+  ]}
+/>
+
+## 자주 쓰는 함수
+
+Terraform 함수는 모두 내장이고, 사용자가 함수를 정의할 수는 없다(1.8부터 프로바이더가 함수를 제공할 수는 있다. `provider::이름::함수` 형태로 부른다). 함수는 순수해서 같은 입력에 같은 출력을 낸다. 예외는 `timestamp()`, `uuid()`처럼 부를 때마다 값이 바뀌는 몇 개뿐이고, 이런 함수를 리소스 인자에 넣으면 plan마다 차이가 생긴다.
+
+현장에서 자주 쓰는 것만 골라 직접 돌려 봤다.
+
+```text
+> lookup({ a = 1 }, "b", 0)
+0
+> try(var.services["web"].port, 80)
+80
+> merge({ a = 1, b = 2 }, { b = 3 })
+{
+  "a" = 1
+  "b" = 3
+}
+> coalesce("", "fallback")
+"fallback"
+> format("%s-%03d", "web", 7)
+"web-007"
+> join(",", sort(keys(var.services)))
+"admin,api,batch"
+> can(regex("^[a-z]+$", "Api"))
+false
+```
+
+`try`는 앞의 표현식이 에러면 다음 값을 쓴다. 없을 수도 있는 키나 속성을 다룰 때 `lookup`보다 넓게 쓸 수 있다. 다만 오타까지 삼키니 남용하면 버그가 숨는다. `can`은 에러가 나는지만 참거짓으로 돌려줘서 변수 `validation`에 잘 맞는다. `merge`는 뒤의 맵이 이긴다. 공통 태그에 리소스별 태그를 덮어쓰는 `merge(local.common_tags, { Name = "app" })` 모양으로 많이 쓴다. `cidrsubnet` 같은 네트워크 함수는 [네트워크를 Terraform으로](/posts/terraform-network-iac)에서 주소 계획과 함께 다룬다.
+
+## dynamic 블록은 반복이 필요한 중첩 블록에만
+
+앞에서 중첩 블록은 인자가 아니라서 표현식으로 바꿀 수 없다고 했다. 그래서 `ingress { ... }`를 목록 길이만큼 만들고 싶으면 `dynamic` 블록을 쓴다.
+
+```hcl
+resource "aws_security_group" "legacy" {
+  name   = "legacy-${var.env}"
+  vpc_id = data.aws_vpc.main.id
+
+  dynamic "ingress" {
+    for_each = var.legacy_ports        # 반복할 컬렉션
+    content {                          # 블록 하나의 내용
+      from_port   = ingress.value      # 반복 변수 이름은 블록 이름(ingress)
+      to_port     = ingress.value
+      protocol    = "tcp"
+      cidr_blocks = ["10.0.0.0/8"]
+    }
+  }
+}
+```
+
+`for_each`에 준 컬렉션의 원소마다 `content`가 한 번씩 펼쳐진다. 반복 변수 이름은 블록 이름(`ingress`)이고, `iterator = port`로 바꿀 수 있다. `ingress.key`는 리스트면 인덱스, 맵이면 키다.
+
+편하다고 아무 데나 쓰면 안 된다. 이유는 세 가지다. 첫째, 읽기 어렵다. 블록 세 개를 그대로 적으면 plan과 코드가 일대일로 보이는데, `dynamic` 안에 `for` 표현식과 조건식이 겹치면 "그래서 무엇이 생기나"를 머릿속으로 계산해야 한다. 둘째, 중첩 블록은 리소스 하나의 일부라서 원소 하나만 바뀌어도 리소스 전체의 제자리 수정이고, 블록마다 따로 import하거나 옮길 수 없다. 보안 그룹 규칙이라면 [인라인 블록 대신 규칙 리소스](/posts/terraform-network-iac)를 `for_each`로 만드는 편이 주소도 따로 생기고 변경도 작다. 셋째, 모듈 입력을 `dynamic`으로 그대로 펼치는 범용 모듈은 프로바이더 리소스를 한 겹 감싼 것에 지나지 않아 모듈의 의미가 사라진다. HashiCorp 문서도 `dynamic`을 남용하면 설정을 읽고 고치기 어려워진다며, 재사용 모듈의 깔끔한 입력을 만들려고 세부를 감출 때 정도로만 쓰라고 권한다.
+
+`dynamic`이 제자리를 찾는 곳은 블록 개수가 입력에 따라 정말 달라지는 경우다. 0개 아니면 1개인 선택적 블록(로깅 설정을 켤 때만 `logging { ... }`)이 대표적이다. 이때는 `for_each = var.log_bucket == null ? [] : [var.log_bucket]`처럼 길이 0 또는 1인 리스트를 준다.
+
+## templatefile로 user_data 만들기
+
+서버 초기화 스크립트(`user_data`)는 길고 변수가 섞인다. HCL 문자열 안에 heredoc으로 적을 수도 있지만, 셸의 `${...}`와 Terraform의 `${...}`가 섞여 이스케이프(`$${HOME}`)가 지저분해진다. 스크립트를 파일로 빼고 `templatefile`로 채운다.
+
+```bash
+#!/bin/bash
+# templates/user_data.sh.tftpl
+set -euo pipefail
+hostnamectl set-hostname ${hostname}
+%{ for port in ports ~}
+ufw allow ${port}/tcp
+%{ endfor ~}
+echo "env=${env}" > /etc/app.env
+```
+
+```hcl
+locals {
+  user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
+    hostname = "web-1"
+    env      = "prod"
+    ports    = [80, 443]
+  })
+}
+```
+
+```text
+> local.user_data
+<<EOT
+#!/bin/bash
+set -euo pipefail
+hostnamectl set-hostname web-1
+ufw allow 80/tcp
+ufw allow 443/tcp
+echo "env=prod" > /etc/app.env
+
+EOT
+```
+
+`%{ for }`와 `%{ endfor }` 지시어 줄이 결과에서 빈 줄로 남지 않은 것은 `~` 덕분이다. `~`는 그쪽 공백과 줄바꿈을 잘라 낸다. 템플릿에 넘기지 않은 변수를 쓰면 plan에서 에러가 나므로, 셸 변수를 그대로 쓰고 싶으면 `$${HOME}`처럼 `$`를 두 번 적는다. 템플릿 파일 확장자는 `.tftpl`이 관례이고 편집기가 문법을 알아본다.
+
+cloud-init의 YAML을 만들 때는 문자열을 이어 붙이지 말고 `yamlencode`로 만든 뒤 앞에 `#cloud-config` 줄을 붙인다. 들여쓰기를 손으로 맞추다 깨지는 일이 없다. 이렇게 넘긴 스크립트가 언제 다시 실행되는지, provisioner와 무엇이 다른지는 [의존성 그래프와 lifecycle](/posts/terraform-dependency-graph-lifecycle)의 provisioner 대안 부분에 있다.
+
+## data source는 plan 때 읽힌다
+
+다시 data source다. 리소스는 Terraform이 만들고 관리하지만, data source는 이미 있는 것을 읽기만 한다. state에는 마지막으로 읽은 값이 남지만 그건 기록일 뿐이고, 다음 plan에서 다시 읽는다. 읽는 시점은 보통 plan이다. 파일을 읽는 data source로 확인했다.
+
+```hcl
+data "local_file" "list" {
+  filename = "${path.module}/list.csv"   # 내용: a,b,c
+}
+
+resource "terraform_data" "each" {
+  for_each = toset(split(",", trimspace(data.local_file.list.content)))
+  input    = each.key
+}
+```
+
+```text
+data.local_file.list: Reading...
+data.local_file.list: Read complete after 0s [id=0f8ae3519acea73e158af005549dc58e8eb5d0df]
+...
+  # terraform_data.each["a"] will be created
+  # terraform_data.each["b"] will be created
+  # terraform_data.each["c"] will be created
+```
+
+plan 맨 앞에서 읽었고, 읽은 값으로 `for_each`의 키 세 개를 정했다. 읽기가 plan으로 미뤄지지 않고 apply 때로 밀리는 경우는 둘이다. 하나는 data source의 인자에 아직 모르는 값이 들어갈 때다.
+
+```hcl
+resource "random_pet" "id" {}
+
+data "local_file" "by_name" {
+  # random_pet은 아직 안 만들어졌으니 파일 이름을 모른다
+  filename = "${path.module}/out-${random_pet.id.id}.txt"
+}
+```
+
+```text
+  # data.local_file.by_name will be read during apply
+  # (config refers to values not yet known)
+ <= data "local_file" "by_name" {
+      + content              = (known after apply)
+      + filename             = (known after apply)
+      ...
+    }
+```
+
+다른 하나는 `depends_on`이 걸린 대상에 바뀔 것이 있을 때다. plan에는 `(depends on a resource or a module with changes pending)`로 나온다. 이 경우가 왜 plan을 시끄럽게 만드는지는 [의존성 그래프와 lifecycle](/posts/terraform-dependency-graph-lifecycle)에서 실제 출력으로 다뤘다.
+
+<SequenceDiagram
+  caption="data source는 인자를 모두 알 때 plan에서 읽고, 모르는 값이 섞이면 apply로 미룬다"
+  actors={[
+    { id: "tf", label: "Terraform" },
+    { id: "ds", label: "data source" },
+    { id: "api", label: "API" },
+    { id: "res", label: "리소스" },
+  ]}
+  steps={[
+    { from: "tf", to: "ds", label: "인자 평가", title: "인자를 계산한다", detail: "filename, tags 같은 인자에 아직 모르는 값이 있는지 본다. 모두 알면 지금 읽는다.", payload: "filename = \"./list.csv\"" },
+    { from: "ds", to: "api", label: "Read", title: "plan 단계에서 읽는다", detail: "프로바이더가 API를 불러 지금 값을 가져온다. 리소스와 달리 무언가를 만들지 않는다.", payload: "data.local_file.list: Reading..." },
+    { from: "ds", to: "res", label: "content", title: "읽은 값으로 계획을 세운다", detail: "for_each의 키, count의 개수처럼 plan에서 정해야 하는 값을 여기서 정할 수 있다.", payload: "terraform_data.each[\"a\"] will be created" },
+    { from: "tf", to: "ds", label: "unknown", title: "모르는 값이 섞이면 미룬다", detail: "인자가 아직 안 만들어진 리소스의 속성을 쓰면 읽기를 apply로 미룬다. 결과는 known after apply다.", payload: "will be read during apply\n(config refers to values not yet known)" },
+    { from: "ds", to: "res", label: "?", title: "모르는 값으로는 개수를 못 정한다", detail: "그 결과로 for_each 키나 count를 정하려 하면 plan이 멈춘다. 키는 코드에 고정하고 값만 나중에 채운다.", payload: "Error: Invalid for_each argument" },
+  ]}
+/>
+
+마지막 단계가 현장에서 가장 자주 만나는 에러다. `for_each`의 키는 plan에서 정해야 리소스 주소를 만들 수 있다. 키가 apply 뒤에야 나오는 값이면 Terraform은 멈춘다.
+
+```hcl
+resource "terraform_data" "bad" {
+  for_each = toset([random_pet.p.id])
+  input    = each.key
+}
+```
+
+```text
+Error: Invalid for_each argument
+
+  on main.tf line 13, in resource "terraform_data" "bad":
+  13:   for_each = toset([random_pet.p.id])
+    ├────────────────
+    │ random_pet.p.id is a string, known only after apply
+
+The "for_each" set includes values derived from resource attributes that
+cannot be determined until apply, and so Terraform cannot determine the full
+set of keys that will identify the instances of this resource.
+
+When working with unknown values in for_each, it's better to use a map value
+where the keys are defined statically in your configuration and where only
+the values contain apply-time results.
+```
+
+에러 메시지가 해법도 알려 준다. 키는 코드에 고정된 값(서브넷 이름 `"pub-a"`, `"pub-c"`)으로 쓰고, apply 뒤에 나오는 값(서브넷 ID)은 맵의 값 쪽에만 둔다. 메시지 끝에 나오는 `-target`으로 먼저 일부만 apply하는 방법은 급할 때의 우회일 뿐이다. 다음 사람이 같은 코드를 처음부터 apply하면 또 막힌다.
+
+## 매 plan마다 diff를 만드는 data source
+
+data source는 매번 다시 읽으니, 읽을 때마다 답이 바뀌는 질문을 하면 plan도 매번 바뀐다. 대표적인 것이 "가장 최신 이미지"다.
+
+```hcl
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+}
+
+resource "aws_instance" "app" {
+  ami = data.aws_ami.ubuntu.id
+  # ...
+}
+```
+
+Canonical이 새 이미지를 올리는 날, 아무 코드도 안 바꾼 PR의 plan에 `ami`가 바뀐다며 `# forces replacement`가 뜬다. 상관없는 태그 하나를 고치려던 PR이 운영 인스턴스를 교체하게 된다. 방법은 몇 가지가 있다.
+
+- 이미지 ID를 변수로 받아 고정하고, 이미지를 올리는 일은 별도 PR로 한다. 언제 서버가 교체되는지 사람이 정한다.
+- 이미지 파이프라인(Packer 같은 것)이 결과 ID를 SSM 파라미터에 쓰고, Terraform은 그 파라미터를 읽는다. 파라미터를 바꾸는 순간이 곧 배포다.
+- 정말 최신을 따라가야 하는 오토스케일링 그룹이라면 시작 템플릿 쪽만 바뀌게 두고, 인스턴스 교체는 instance refresh 같은 롤링 장치에 맡긴다.
+
+`ignore_changes = [ami]`로 막는 방법도 있지만, 그러면 코드가 말하는 이미지와 실제 이미지가 갈라진다. 마지막 수단으로 두고 주석으로 이유를 남긴다.
+
+같은 문제가 덜 눈에 띄게 나타나는 경우도 있다. API가 순서를 약속하지 않는 목록(`aws_subnets.ids` 같은 것)에서 `ids[0]`을 고르면, 서브넷이 하나 늘거나 응답 순서가 달라지는 날 다른 서브넷을 가리켜 교체가 생긴다. 목록에서 하나를 고를 때는 `sort()`를 거치거나 태그로 정확히 하나만 걸리게 필터를 좁힌다. 정책 문서를 문자열로 쓰면 키 순서나 공백 차이로 매번 diff가 나는 일이 있으니 `jsonencode`나 `aws_iam_policy_document` data source로 만든다.
+
+## 환경 변수로 Terraform 다루기
+
+CI에서는 명령줄 옵션보다 환경 변수가 편할 때가 많다. Terraform이 읽는 것 중 실무에서 쓰는 것들이다.
+
+`TF_VAR_이름`은 변수 값을 넣는다. 앞에서 `TF_VAR_services`로 객체를 넣었듯 HCL 문법으로 리스트와 맵도 넣을 수 있다. 우선순위는 낮아서 tfvars 파일과 `-var`가 이긴다. 비밀 값을 넣을 때 쓰지만 프로세스 환경에 남고 CI 로그에 찍힐 수 있으니, 변수에 `sensitive = true`를 같이 건다. 값이 들어오는 전체 순서는 [모듈과 tfvars](/posts/terraform-modules-tfvars)에 있다.
+
+`TF_LOG`는 로그 수준(`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`)을 정한다. 프로바이더가 이상한 에러를 낼 때 실제 API 요청과 응답을 보려면 `TRACE`나 `DEBUG`를 켜고 `TF_LOG_PATH`로 파일에 쓴다. 본체만 보려면 `TF_LOG_CORE`, 프로바이더만 보려면 `TF_LOG_PROVIDER`를 따로 줄 수 있다.
+
+```bash
+# 디버그 로그를 파일로 남기고 plan을 돌린다
+TF_LOG=DEBUG TF_LOG_PATH=./tf-debug.log terraform plan
+head -3 tf-debug.log
+```
+
+```text
+2026-10-23T19:19:13.143Z [INFO]  Terraform version: 1.16.6
+2026-10-23T19:19:13.144Z [DEBUG] using github.com/hashicorp/go-tfe v1.110.0
+2026-10-23T19:19:13.145Z [DEBUG] using github.com/hashicorp/hcl/v2 v2.24.0
+```
+
+`TRACE` 로그에는 요청 헤더와 응답 본문이 들어가서 자격 증명이나 비밀 값이 찍힐 수 있다. 이슈에 붙이기 전에 반드시 지운다.
+
+`TF_CLI_ARGS`와 `TF_CLI_ARGS_명령`은 명령줄 옵션을 덧붙인다. `TF_CLI_ARGS_plan="-lock-timeout=5m"`처럼 특정 명령에만 붙일 수 있다. 실제로 어떻게 붙는지 로그로 확인했다.
+
+```text
+[INFO]  CLI args: []string{"terraform", "plan", "-no-color"}
+[INFO]  TF_CLI_ARGS_plan value: "-compact-warnings -lock=false"
+[INFO]  CLI command args: []string{"plan", "-compact-warnings", "-lock=false", "-no-color"}
+```
+
+환경 변수의 옵션이 명령 이름 바로 뒤, 직접 친 옵션보다 앞에 끼어든다. 편하지만 보이지 않는 곳에서 동작을 바꾸므로, CI 설정 파일 한곳에만 두고 개인 셸 설정에는 넣지 않는다. 위 예처럼 `-lock=false`가 숨어 들어가면 잠금 없이 apply하는 사고가 난다.
+
+그 밖에 CI에서 자주 쓰는 것으로 `TF_INPUT=0`(변수 값을 묻지 않고 실패), `TF_IN_AUTOMATION=1`(출력에서 "다음에 이 명령을 치세요" 같은 안내를 줄임), `TF_PLUGIN_CACHE_DIR`(프로바이더를 한 번만 내려받게 캐시), `TF_DATA_DIR`(`.terraform` 디렉터리 위치 변경), `TF_WORKSPACE`(작업 공간 선택)가 있다.
+
+## 현장에서 HCL 때문에 막히는 순간
+
+- 스테이징에서만 "없는 ID"로 실패한다: 코드에 박힌 ID를 찾아 data source나 원격 state 출력으로 바꾼다. 값을 넘기는 방법들의 비교는 [state 리팩터링](/posts/terraform-state-refactoring-import)에 있다.
+- 플래그를 켰는데 반영이 안 된다: 객체 변수의 속성 이름 오타를 의심한다. `terraform console`에서 `var.이름`을 찍어 실제로 들어간 값을 본다.
+- 숫자 비교가 이상하다: `list(any)`나 `map(any)`가 값을 문자열로 바꿨는지 `type()`으로 확인한다.
+- `Invalid for_each argument`가 뜬다: 키에 apply 뒤 값이 섞였다. 키를 코드에 고정된 값으로 바꾼다.
+- 아무것도 안 바꿨는데 교체가 뜬다: `most_recent`, `timestamp()`, 정렬되지 않은 목록의 `[0]`처럼 매번 답이 바뀌는 표현식을 찾는다.
+
+## 값은 묻고, 형태는 적는다
+
+환경마다 다른 값은 코드에 적지 말고 data source로 묻는다. 대신 data source가 언제 읽히는지, 모르는 값이 무엇을 막는지를 알아야 plan이 조용하다. 입력의 형태는 타입으로 적어 두되 `optional`과 `any`가 오타와 변환을 숨긴다는 것을 기억한다. 반복은 `for` 표현식과 `for_each`로 하고, `dynamic`은 블록 개수가 정말 입력에 따라 달라질 때만 쓴다.
+
+## 면접에서 나올 만한 질문
+
+### resource와 data source는 무엇이 다른가요?
+
+resource는 Terraform이 만들고 고치고 지우는 대상이고, data source는 이미 있는 것을 읽기만 한다. data source의 값도 state에 기록되지만 기록일 뿐이고 plan마다 다시 읽는다. 다른 팀이 관리하는 VPC, 최신 AMI, 계정 ID처럼 환경마다 다른 값을 코드에 박지 않고 가져올 때 쓴다.
+
+### data source는 언제 읽히나요? known after apply는 왜 생기나요?
+
+인자를 모두 알 수 있으면 plan 단계에서 읽는다. 인자에 아직 만들어지지 않은 리소스의 속성이 섞이거나, `depends_on` 대상에 바뀔 것이 있으면 읽기가 apply로 미뤄진다. 그러면 결과가 `known after apply`가 되고, 그 값을 쓰는 리소스도 전부 변경 후보로 plan에 나온다.
+
+### for_each에 apply 뒤에야 알 수 있는 값을 넣으면 어떻게 되나요?
+
+`Invalid for_each argument`로 plan이 멈춘다. 리소스 주소를 만들려면 키를 plan에서 알아야 하기 때문이다. 키는 코드에 고정된 값으로 쓰고, apply 뒤에 나오는 ID 같은 값은 맵의 값 쪽에만 둔다. `-target`으로 일부를 먼저 apply하는 방법은 다음 사람도 같은 일을 겪게 하는 임시방편이다.
+
+### 변수 타입을 any로 두면 무엇이 문제인가요?
+
+`list(any)`나 `map(any)`는 원소가 모두 같은 타입이어야 해서 Terraform이 공통 타입으로 바꾼다. 숫자와 문자열을 섞으면 숫자가 문자열로 바뀌어 계산이 깨진다. 또 타입이 문서 역할을 못 해서 모듈 사용자가 무엇을 넣어야 할지 모른다. 구조가 정해진 값은 `object`와 `optional`로 적는다.
+
+### optional 기본값을 쓸 때 조심할 점은요?
+
+객체 타입으로 바꿀 때 타입에 없는 속성은 에러 없이 버려진다. 실습에서 `public`을 `pubic`으로 잘못 적었더니 경고 없이 기본값 `false`가 들어갔다. 그래서 기본값은 안전한 쪽으로 두고, 결과가 크게 갈리는 플래그는 필수 속성으로 받는다.
+
+### dynamic 블록을 남용하면 안 되는 이유는요?
+
+코드와 plan이 일대일로 보이지 않아 리뷰가 어려워지고, 중첩 블록은 리소스의 일부라 원소 하나만 바뀌어도 리소스 전체가 수정되며 따로 import하거나 옮길 수 없다. 보안 그룹 규칙처럼 별도 리소스가 있는 경우는 그 리소스를 `for_each`로 만드는 편이 낫다. 선택적 블록처럼 개수가 정말 입력에 따라 0 또는 1로 바뀔 때 쓴다.
+
+### 아무것도 안 바꿨는데 data source 때문에 매번 diff가 나면 어떻게 하나요?
+
+읽을 때마다 답이 바뀌는 질문을 하고 있는지 본다. `most_recent = true`인 AMI 조회가 대표적이다. 이미지 ID를 변수나 SSM 파라미터로 고정해 교체 시점을 사람이 정하게 하고, 목록에서 하나를 고를 때는 정렬하거나 필터를 좁힌다. `ignore_changes`는 코드와 실제가 갈라지니 마지막 수단이다.
+
+### TF_VAR_와 TF_CLI_ARGS는 어떻게 쓰고, 조심할 점은요?
+
+`TF_VAR_이름`은 변수 값을, `TF_CLI_ARGS_명령`은 그 명령의 옵션을 환경 변수로 넣는다. CI에서 편하지만 둘 다 눈에 보이지 않는 곳에서 동작을 바꾼다. 비밀 값은 변수에 `sensitive`를 걸고, `TF_LOG=TRACE` 로그에는 비밀이 찍힐 수 있으니 공유하기 전에 지운다. 옵션 환경 변수는 CI 설정 한곳에만 둔다.

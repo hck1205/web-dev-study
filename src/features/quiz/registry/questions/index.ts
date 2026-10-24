@@ -1,3 +1,28 @@
+import { WEB_SERVER_VS_WAS } from "./web-server-vs-was";
+import { VIRTUALIZATION_HYPERVISORS } from "./virtualization-hypervisors";
+import { TERRAFORM_TESTING_POLICY_SCANNING } from "./terraform-testing-policy-scanning";
+import { TERRAFORM_STATE_REFACTORING_IMPORT } from "./terraform-state-refactoring-import";
+import { TERRAFORM_HCL_EXPRESSIONS_DATA_SOURCES } from "./terraform-hcl-expressions-data-sources";
+import { TERRAFORM_DEPENDENCY_GRAPH_LIFECYCLE } from "./terraform-dependency-graph-lifecycle";
+import { SOAP_AND_SOA } from "./soap-and-soa";
+import { S3_STORAGE_CLASSES_LIFECYCLE } from "./s3-storage-classes-lifecycle";
+import { RANDOMIZED_ALGORITHMS } from "./randomized-algorithms";
+import { QUEUE_BASED_LOAD_LEVELING } from "./queue-based-load-leveling";
+import { PLUGIN_MICROKERNEL_ARCHITECTURE } from "./plugin-microkernel-architecture";
+import { PERFORMANCE_ANTIPATTERNS } from "./performance-antipatterns";
+import { NETCONF_RESTCONF_YANG } from "./netconf-restconf-yang";
+import { MULTI_TENANCY_ISOLATION } from "./multi-tenancy-isolation";
+import { MAX_FLOW_BIPARTITE_MATCHING } from "./max-flow-bipartite-matching";
+import { KUBEADM_CLUSTER_SETUP } from "./kubeadm-cluster-setup";
+import { JS_RUNTIMES_NODE_DENO_BUN } from "./js-runtimes-node-deno-bun";
+import { ENTERPRISE_AUTH_LDAP_KERBEROS } from "./enterprise-auth-ldap-kerberos";
+import { DIVIDE_AND_CONQUER } from "./divide-and-conquer";
+import { CONTAINER_ORCHESTRATION_CHOICES } from "./container-orchestration-choices";
+import { COMPLEXITY_CLASSES_P_NP } from "./complexity-classes-p-np";
+import { CLOUD_DEPLOYMENT_MODELS_MULTICLOUD } from "./cloud-deployment-models-multicloud";
+import { BLOCK_FILE_OBJECT_STORAGE } from "./block-file-object-storage";
+import { AWS_S3_IN_PRACTICE } from "./aws-s3-in-practice";
+import { AI_CODING_AGENTS } from "./ai-coding-agents";
 import { THREAT_MODELING_STRIDE } from "./threat-modeling-stride";
 import { SOFTWARE_SUPPLY_CHAIN_CI_HARDENING } from "./software-supply-chain-ci-hardening";
 import { SECURITY_TESTING_SAST_DAST } from "./security-testing-sast-dast";
@@ -810,6 +835,31 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  WEB_SERVER_VS_WAS,
+  VIRTUALIZATION_HYPERVISORS,
+  TERRAFORM_TESTING_POLICY_SCANNING,
+  TERRAFORM_STATE_REFACTORING_IMPORT,
+  TERRAFORM_HCL_EXPRESSIONS_DATA_SOURCES,
+  TERRAFORM_DEPENDENCY_GRAPH_LIFECYCLE,
+  SOAP_AND_SOA,
+  S3_STORAGE_CLASSES_LIFECYCLE,
+  RANDOMIZED_ALGORITHMS,
+  QUEUE_BASED_LOAD_LEVELING,
+  PLUGIN_MICROKERNEL_ARCHITECTURE,
+  PERFORMANCE_ANTIPATTERNS,
+  NETCONF_RESTCONF_YANG,
+  MULTI_TENANCY_ISOLATION,
+  MAX_FLOW_BIPARTITE_MATCHING,
+  KUBEADM_CLUSTER_SETUP,
+  JS_RUNTIMES_NODE_DENO_BUN,
+  ENTERPRISE_AUTH_LDAP_KERBEROS,
+  DIVIDE_AND_CONQUER,
+  CONTAINER_ORCHESTRATION_CHOICES,
+  COMPLEXITY_CLASSES_P_NP,
+  CLOUD_DEPLOYMENT_MODELS_MULTICLOUD,
+  BLOCK_FILE_OBJECT_STORAGE,
+  AWS_S3_IN_PRACTICE,
+  AI_CODING_AGENTS,
   THREAT_MODELING_STRIDE,
   SOFTWARE_SUPPLY_CHAIN_CI_HARDENING,
   SECURITY_TESTING_SAST_DAST,
