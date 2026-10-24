@@ -57,13 +57,71 @@ function orderByParents(layers: GraphNode[][], incoming: Map<string, string[]>):
   });
 }
 
-/** 위 노드의 아래 가운데에서 아래 노드의 위 가운데로 내려가는 부드러운 곡선 */
-export function edgeCurve(from: DOMRect, to: DOMRect, box: DOMRect) {
-  const x1 = from.left + from.width / 2 - box.left;
+/** 값을 [lo, hi] 사이로 자른다 */
+const clamp = (value: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, value));
+
+/** 선이 카드 옆을 지날 때 카드와 띄우는 거리(px) */
+const CHANNEL_MARGIN = 20;
+
+/**
+ * 중간 층을 지나갈 때 카드를 피해 갈 x 좌표를 고른다.
+ * 후보는 층 양 바깥과 카드 사이 틈이고, 그중 직선으로 갔을 때의 x에 가장 가까운 것을 쓴다.
+ */
+function pickChannel(layer: DOMRect[], ideal: number, box: DOMRect): number {
+  const rects = [...layer].sort((a, b) => a.left - b.left);
+  const left = (rect: DOMRect) => rect.left - box.left;
+  const right = (rect: DOMRect) => rect.right - box.left;
+  const candidates: number[] = [];
+  if (rects.length === 0) return ideal;
+  candidates.push(clamp(left(rects[0]) - CHANNEL_MARGIN, 6, box.width - 6));
+  for (let i = 0; i < rects.length - 1; i += 1) {
+    const gap = left(rects[i + 1]) - right(rects[i]);
+    if (gap >= 12) candidates.push(right(rects[i]) + gap / 2);
+  }
+  candidates.push(clamp(right(rects[rects.length - 1]) + CHANNEL_MARGIN, 6, box.width - 6));
+  return candidates.reduce((best, x) => (Math.abs(x - ideal) < Math.abs(best - ideal) ? x : best));
+}
+
+/** 위에서 아래로 내려가는 S자 곡선 조각. x가 같으면 직선이 된다 */
+function segment(x1: number, y1: number, x2: number, y2: number) {
+  if (Math.abs(x1 - x2) < 0.5) return `L ${x2} ${y2}`;
+  const bend = Math.max(14, (y2 - y1) / 2);
+  return `C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
+}
+
+/**
+ * 위 노드 아래에서 아래 노드 위로 내려가는 선.
+ * 출발·도착점은 상대 노드 쪽으로 조금 치우쳐서 한 노드에서 여러 선이 나가도 겹치지 않는다.
+ * 층을 건너뛰는 선은 중간 층의 카드를 지나지 않고 카드 사이 틈이나 바깥으로 돌아간다.
+ */
+export function edgeCurve(from: DOMRect, to: DOMRect, box: DOMRect, between: DOMRect[][] = []) {
+  const fromCenter = from.left + from.width / 2 - box.left;
+  const toCenter = to.left + to.width / 2 - box.left;
+  const x1 = fromCenter + clamp((toCenter - fromCenter) * 0.25, -from.width * 0.35, from.width * 0.35);
+  const x2 = toCenter + clamp((fromCenter - toCenter) * 0.25, -to.width * 0.35, to.width * 0.35);
   const y1 = from.bottom - box.top;
-  const x2 = to.left + to.width / 2 - box.left;
   // 화살촉이 카드에 묻히지 않게 살짝 위에서 멈춘다
   const y2 = to.top - box.top - 4;
-  const bend = Math.max(18, (y2 - y1) / 2);
-  return `M ${x1} ${y1} C ${x1} ${y1 + bend}, ${x2} ${y2 - bend}, ${x2} ${y2}`;
+
+  // 중간 층마다 지나갈 x와, 그 층 위아래 틈의 세로 위치를 정한다
+  const points: [number, number][] = [[x1, y1]];
+  let prevBottom = y1;
+  for (const layer of between) {
+    if (layer.length === 0) continue;
+    const top = Math.min(...layer.map((rect) => rect.top)) - box.top;
+    const bottom = Math.max(...layer.map((rect) => rect.bottom)) - box.top;
+    const ideal = x1 + ((x2 - x1) * ((top + bottom) / 2 - y1)) / Math.max(1, y2 - y1);
+    const x = pickChannel(layer, ideal, box);
+    points.push([x, (prevBottom + top) / 2], [x, bottom]);
+    prevBottom = bottom;
+  }
+  points.push([x2, y2]);
+
+  let d = `M ${points[0][0]} ${points[0][1]}`;
+  for (let i = 1; i < points.length; i += 1) {
+    const [px, py] = points[i - 1];
+    const [x, y] = points[i];
+    d += ` ${segment(px, py, x, y)}`;
+  }
+  return d;
 }

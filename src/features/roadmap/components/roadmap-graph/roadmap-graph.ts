@@ -21,14 +21,26 @@ export function useRoadmapGraph({ nodes, edges }: RoadmapGraphProps) {
     const root = rootRef.current;
     if (!root) return;
     const box = root.getBoundingClientRect();
+    // 층을 건너뛰는 선이 중간 카드를 피해 가도록 층마다 카드 위치를 모아 둔다
+    const layerOf = new Map<string, number>();
+    layers.forEach((layer, index) => layer.forEach((node) => layerOf.set(node.id, index)));
+    const layerRects = layers.map((layer) =>
+      layer.flatMap((node) => {
+        const element = nodeRefs.current.get(node.id);
+        return element ? [element.getBoundingClientRect()] : [];
+      }),
+    );
     const next: EdgePath[] = [];
     for (const edge of edges) {
       const from = nodeRefs.current.get(edge.from);
       const to = nodeRefs.current.get(edge.to);
       if (!from || !to) continue;
+      const fromLayer = layerOf.get(edge.from) ?? 0;
+      const toLayer = layerOf.get(edge.to) ?? 0;
+      const between = toLayer > fromLayer + 1 ? layerRects.slice(fromLayer + 1, toLayer) : [];
       next.push({
         key: `${edge.from}->${edge.to}`,
-        d: edgeCurve(from.getBoundingClientRect(), to.getBoundingClientRect(), box),
+        d: edgeCurve(from.getBoundingClientRect(), to.getBoundingClientRect(), box, between),
         from: edge.from,
         to: edge.to,
         kind: edge.kind,
@@ -37,7 +49,7 @@ export function useRoadmapGraph({ nodes, edges }: RoadmapGraphProps) {
     }
     setPaths(next);
     setSize({ width: box.width, height: box.height });
-  }, [edges]);
+  }, [edges, layers]);
 
   useLayoutEffect(() => {
     measure();
