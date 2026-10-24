@@ -1,0 +1,504 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-next-greater-element-i");
+
+<EasyIntro>
+  긴 줄에 숫자 카드들이 서 있고, 짧은 목록에는 그중 몇 장의 숫자가 적혀 있다. 짧은 목록의 숫자마다 긴 줄에서 그 카드를 찾은 다음, 오른쪽으로 가다가 처음 만나는 더 큰 카드를 적는 문제다. 더 큰 카드가 없으면 -1을 적는다. 숫자마다 줄을 처음부터 다시 훑으면 시간이 오래 걸린다. 대신 긴 줄을 한 번만 걸으면서 모든 카드의 답을 공책에 적어 두면, 짧은 목록은 공책만 보고 바로 답할 수 있다. 공책을 채우는 방법은 이렇다. 아직 더 큰 카드를 못 만난 카드들을 손에 쌓아 들고 걷다가, 새 카드가 손 맨 위 카드보다 크면 그 카드의 답을 공책에 적고 내려놓는다. 끝까지 손에 남은 카드는 답이 없으니 -1이다.
+</EasyIntro>
+
+어떤 값의 "오른쪽에서 처음 나보다 큰 값"을 묻는 질문은 [Daily Temperatures](/posts/leetcode-daily-temperatures)에서 이미 풀었다. 그런데 질문이 배열 전체가 아니라 그중 몇 개에만 들어온다면 어떻게 할까. 한 번에 다 구해 두고 필요한 것만 꺼내 쓰는 게 낫다.
+
+[LeetCode 496. Next Greater Element I](https://leetcode.com/problems/next-greater-element-i/)이 이 상황이다. 난이도는 Easy이고 브루트포스로도 통과하지만, 문제 끝에 O(n1 + n2)로 풀 수 있느냐는 후속 질문이 붙어 있다. 그 답이 단조 스택과 해시맵의 조합이다. 이 글은 하나씩 훑는 풀이, 위치를 해시맵으로 찾는 풀이, 단조 스택 두 방향, 큰 값부터 넣는 정렬 집합 풀이, 필요한 값만 적는 풀이, 값 범위 배열 풀이까지 일곱 가지를 본다. 원형 배열 버전(503번)은 [단조 스택 패턴 글](/posts/monotonic-stack-pattern)에서 직접 풀어 볼 수 있고, 해시맵은 [해시맵 글](/posts/ds-hash-map)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 질문은 작은 배열에서, 답은 큰 배열에서
+
+두 정수 배열 `nums1`, `nums2`가 주어진다. 각 배열 안의 값은 서로 다르고, `nums1`의 값은 모두 `nums2`에도 있다. `nums1`의 값 `x`마다 `nums2`에서 `x`가 있는 자리를 찾고, 그 오른쪽에서 처음 나오는 `x`보다 큰 값을 구한다. 없으면 -1이다. 답은 `nums1` 순서대로 배열로 돌려준다.
+
+제약은 작다. `nums1`의 길이는 `nums2` 이하이고 `nums2`는 1000개 이하, 값은 0 이상 10^4 이하다. 그래서 O(n1 · n2) 풀이도 최대 100만 번 비교라 통과한다. 이 문제에서 실제로 물어보는 건 문제 끝의 후속 질문, O(n1 + n2) 풀이다.
+
+조건 하나를 눈여겨본다. 값이 서로 다르다. 그래서 "값 → 그 값의 다음 큰 값"이 하나로 정해진다. 이 조건이 해시맵 풀이를 가능하게 한다.
+
+## 손으로 풀어 보는 예시 하나
+
+이 글에서 계속 쓸 예시다.
+
+```text
+nums2 = [5, 2, 7, 3, 1, 4, 8, 6]
+nums1 = [3, 8, 2, 1]
+```
+
+`nums1`의 값마다 `nums2`에서 찾아 오른쪽을 본다.
+
+```text
+3  → nums2의 3번 칸. 오른쪽 1, 4, ... 처음 더 큰 값은 4
+8  → nums2의 6번 칸. 오른쪽 6뿐이고 8보다 작다. -1
+2  → nums2의 1번 칸. 오른쪽 7이 바로 크다. 7
+1  → nums2의 4번 칸. 오른쪽 4가 바로 크다. 4
+```
+
+답은 `[4, -1, 7, 4]`다. 3과 1을 볼 때 둘 다 오른쪽의 4를 거쳤다.
+
+`nums2`의 모든 값에 같은 질문을 던져 보면 표가 하나 나온다.
+
+```text
+nums2        5   2   7   3   1   4   8   6
+다음 큰 값   7   7   8   4   4   8  -1  -1
+```
+
+`nums1`의 답은 이 표에서 3, 8, 2, 1 칸을 읽은 것이다. 질문이 많아지면 같은 구간을 여러 번 훑게 된다. `nums2` 전체의 답을 한 번에 구해 둘 수 있다면 질문마다 다시 훑을 필요가 없다.
+
+## 질문마다 큰 배열을 훑는다
+
+먼저 문제를 그대로 옮긴다. `nums1`의 값마다 `nums2`에서 위치를 찾고, 그 오른쪽을 훑는다.
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  return nums1.map((x) => {
+    const j = nums2.indexOf(x); // 위치 찾기: O(n2)
+    for (let i = j + 1; i < nums2.length; i++) {
+      if (nums2[i] > x) return nums2[i]; // 처음 만난 더 큰 값
+    }
+    return -1;
+  });
+}
+```
+
+`indexOf`가 O(n2), 오른쪽 훑기가 O(n2)라 질문 하나에 O(n2), 전체 O(n1 · n2)다. 추가 공간은 답 배열을 빼면 O(1)이다.
+
+최악은 `nums2`가 내려가기만 하는 배열이다. 오른쪽 어디에도 더 큰 값이 없으니 매번 끝까지 훑는다. 제약보다 큰 10^4개로 재 보니 105ms였다. 제약 안의 1000개에서는 1ms 남짓이라 통과는 한다.
+
+### 위치 찾기만 해시맵으로 줄이면
+
+`indexOf`는 매번 앞에서부터 찾는다. `nums2`의 값이 서로 다르니 "값 → 위치"를 해시맵에 한 번 담아 두면 위치를 O(1)에 찾는다.
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  const pos = new Map(nums2.map((v, i) => [v, i])); // 값 → nums2에서의 위치
+  return nums1.map((x) => {
+    for (let i = pos.get(x) + 1; i < nums2.length; i++) {
+      if (nums2[i] > x) return nums2[i];
+    }
+    return -1;
+  });
+}
+```
+
+같은 입력에서 66ms로 줄었지만 차수는 그대로 O(n1 · n2)다. 오른쪽을 훑는 일이 그대로 남았다. 위치 찾기보다 비싼 건 "처음 더 큰 값 찾기"이고, 이걸 질문마다 하지 않으려면 `nums2`의 모든 값의 답을 미리 구해 둬야 한다.
+
+## 큰 배열을 한 번 훑어 모든 답을 장부에 적는다
+
+`nums2`를 왼쪽부터 한 번 훑으면서 모든 값의 "다음 큰 값"을 구해 해시맵 장부에 적는다. 그다음 `nums1`의 값마다 장부를 읽는다. 장부를 만드는 방법이 단조 스택이다.
+
+- 아직 더 큰 값을 못 만난 값들을 스택에 쌓아 둔다. 이 값들은 쌓인 순서대로 내려가는 순서다. 만약 어떤 값 뒤에 그보다 큰 값이 쌓였다면, 그 순간 앞의 값은 답을 찾았을 것이기 때문이다.
+- 새 값 `v`가 오면 스택 맨 위와 비교한다. 맨 위가 `v`보다 작으면 맨 위의 다음 큰 값은 `v`다. 장부에 적고 꺼낸다. 다음 맨 위와 또 비교한다.
+- 맨 위가 `v`보다 크거나 스택이 비면 멈추고 `v`를 쌓는다.
+- 끝까지 스택에 남은 값은 다음 큰 값이 없다. 장부에 없으니 읽을 때 -1로 돌려준다.
+
+아래 그림에서 다음을 누르면 `nums2`를 훑으며 스택이 바뀌는 모습을 볼 수 있다. 초록색 칸은 장부에 답이 적힌 값이다.
+
+<AlgoTrace
+  caption="새 값이 맨 위보다 크면, 맨 위의 다음 큰 값이 정해져 장부에 적힌다"
+  memoryLabel="스택 (아직 답을 못 찾은 값, 왼쪽이 바닥)"
+  cells={["5", "2", "7", "3", "1", "4", "8", "6"]}
+  steps={[
+    { pointer: 0, memory: ["5"], caption: "5를 쌓는다. 장부는 비어 있다." },
+    { pointer: 1, memory: ["5", "2"], caption: "2는 5보다 작다. 그대로 쌓는다." },
+    { pointer: 2, found: [0, 1], memory: ["7"], caption: "7이 2와 5를 꺼낸다. 장부에 2→7, 5→7." },
+    { pointer: 3, found: [0, 1], memory: ["7", "3"], caption: "3은 7보다 작다. 쌓는다." },
+    { pointer: 4, found: [0, 1], memory: ["7", "3", "1"], caption: "1도 쌓는다. 스택은 7, 3, 1로 내려간다." },
+    { pointer: 5, found: [0, 1, 3, 4], memory: ["7", "4"], caption: "4가 1과 3을 꺼낸다. 장부에 1→4, 3→4. 7 앞에서 멈춘다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5], memory: ["8"], caption: "8이 4와 7을 꺼낸다. 장부에 4→8, 7→8." },
+    { pointer: 7, found: [0, 1, 2, 3, 4, 5], memory: ["8", "6"], caption: "6은 8보다 작다. 끝까지 남은 8과 6은 답이 없다." },
+  ]}
+/>
+
+장부가 다 차면 `nums1`은 읽기만 하면 된다. 아래 그림의 칸은 `nums1`이고, 기억 장소는 방금 만든 장부다.
+
+<AlgoTrace
+  caption="장부를 다 만든 뒤에는 질문마다 한 번씩 읽기만 한다"
+  memoryLabel="장부 (값 → 다음 큰 값)"
+  cells={["3", "8", "2", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["2→7", "5→7", "1→4", "3→4", "4→8", "7→8"], caption: "3을 찾는다. 장부에 3→4가 있다. 답 4." },
+    { pointer: 1, found: [0, 1], memory: ["2→7", "5→7", "1→4", "3→4", "4→8", "7→8"], caption: "8은 장부에 없다. 끝까지 스택에 남은 값이라 -1." },
+    { pointer: 2, found: [0, 1, 2], memory: ["2→7", "5→7", "1→4", "3→4", "4→8", "7→8"], caption: "2→7. 답 7." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["2→7", "5→7", "1→4", "3→4", "4→8", "7→8"], caption: "1→4. 답 4. 결과는 [4, -1, 7, 4]다." },
+  ]}
+/>
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  const next = new Map(); // 장부: 값 → 오른쪽에서 처음 만나는 더 큰 값
+  const stack = [];       // 아직 더 큰 값을 못 만난 값들. 내려가는 순서
+  for (const v of nums2) {
+    while (stack.length && stack[stack.length - 1] < v) {
+      next.set(stack.pop(), v); // 꺼내는 순간 답이 정해진다
+    }
+    stack.push(v);
+  }
+  return nums1.map((x) => next.get(x) ?? -1); // 끝까지 남은 값은 장부에 없다
+}
+```
+
+`nums2`의 값마다 스택에 한 번 들어가고 많아야 한 번 나오니 장부 만들기는 O(n2)다. `while`이 안에 있어도 O(n)인 이유는 [Daily Temperatures 글](/posts/leetcode-daily-temperatures)에서 자세히 다뤘다. 장부 읽기는 질문마다 O(1)이라 O(n1)이다. 전체 O(n1 + n2), 공간은 장부와 스택 O(n2)다. 10^4개 입력에서 0.4ms였다.
+
+### 끝까지 스택에 남는 값들
+
+예시를 다 훑으면 스택에 8과 6이 남는다. 이 값들은 오른쪽에 더 큰 값이 없는 값, 곧 오른쪽 끝에서 왼쪽을 바라볼 때 최고 기록을 세운 값들이다. 6이 첫 기록이고 8이 그 기록을 깼다. 그래서 바닥부터 내려가는 순서다. 반복문의 어느 시점에서 멈춰도 같은 말이 성립한다. 지금까지 본 부분만 놓고 볼 때 오른쪽에서 기록을 세운 값들이 스택이다. 새 값이 오면 그보다 작은 기록들은 더는 기록이 아니게 되어 빠지고, 빠지는 순간 그 값의 다음 큰 값이 처음으로 나타난 것이다. 이 불변식이 풀이가 맞는 이유다.
+
+### 값이 서로 다르다는 조건이 하는 일
+
+장부의 열쇠가 인덱스가 아니라 값이다. `nums1`이 값으로 질문하기 때문이다. 값이 서로 다르니 값 하나가 `nums2`의 자리 하나를 가리키고, 열쇠가 겹치지 않는다.
+
+만약 `nums2`에 같은 값이 두 번 나온다면 이 장부는 깨진다. `[2, 5, 2, 1]`에서 첫 2의 다음 큰 값은 5인데 두 번째 2는 없다. 값 2 하나에 답이 둘이다. 그때는 [Daily Temperatures](/posts/leetcode-daily-temperatures)처럼 스택에 인덱스를 넣고 답을 인덱스 배열에 적은 뒤, 질문이 어느 자리를 뜻하는지 정해야 한다. 이 문제는 그 고민을 조건으로 없애 준 것이다.
+
+같은 이유로 비교의 등호도 신경 쓸 필요가 없다. 값이 다르니 `<`와 `<=`의 결과가 같다. 원형 배열인 503번처럼 같은 값이 있을 수 있는 문제에서는 "더 큰"이니 `<`가 맞다.
+
+### 세 언어에서 장부를 만드는 법
+
+Python은 딕셔너리를 장부로, 리스트를 스택으로 쓴다. 장부에 없는 값은 `get(x, -1)`로 읽는다.
+
+```python
+from typing import List
+
+def next_greater_element(nums1: List[int], nums2: List[int]) -> List[int]:
+    nxt = {}    # 값 → 오른쪽에서 처음 만나는 더 큰 값
+    stack = []  # 아직 더 큰 값을 못 만난 값들. 내려가는 순서
+    for v in nums2:
+        while stack and stack[-1] < v:
+            nxt[stack.pop()] = v  # 꺼내는 순간 답이 정해진다
+        stack.append(v)
+    return [nxt.get(x, -1) for x in nums1]  # 끝까지 남은 값은 장부에 없다 → -1
+```
+
+Java는 `HashMap<Integer, Integer>`와 `ArrayDeque<Integer>`를 쓴다. `ArrayDeque`의 `push`, `pop`, `peek`은 모두 앞쪽에서 일어나서 스택처럼 동작한다. `Stack` 클래스는 동기화 비용이 있는 옛 클래스라 쓰지 않는다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int[] nextGreaterElement(int[] nums1, int[] nums2) {
+        Map<Integer, Integer> next = new HashMap<>(); // 값 → 다음 큰 값
+        Deque<Integer> stack = new ArrayDeque<>();     // push/pop/peek은 모두 앞쪽에서 일어난다
+        for (int v : nums2) {
+            while (!stack.isEmpty() && stack.peek() < v) {
+                next.put(stack.pop(), v);
+            }
+            stack.push(v);
+        }
+        int[] ans = new int[nums1.length];
+        for (int i = 0; i < nums1.length; i++) ans[i] = next.getOrDefault(nums1[i], -1);
+        return ans;
+    }
+}
+```
+
+`stack.peek() < v`는 `Integer`가 `int`로 풀린 뒤 비교되니 안전하다. 위험한 건 `Integer` 두 개를 `==`로 비교할 때다. 자바는 -128부터 127까지의 `Integer`만 미리 만들어 두고 같은 객체를 돌려주기 때문에, `Integer x = 1000, y = 1000`에서 `x == y`는 `false`, `x.equals(y)`는 `true`였다. 100끼리는 `true`가 나와서 작은 테스트로는 이 버그가 안 보인다. 세 언어 모두 예시에서 `[4, -1, 7, 4]`를 낸다.
+
+## 뒤에서부터 훑으며 답이 될 후보만 남기기
+
+같은 장부를 반대 방향으로 만들 수도 있다. `nums2`를 오른쪽 끝에서 왼쪽으로 가면서, 스택에는 "앞으로 볼 값들에게 답이 될 수 있는 후보"만 남긴다. 새 값 `v`보다 작거나 같은 후보는 버린다. `v`가 더 가깝고 더 크니, `v`보다 왼쪽 값들에게 그 후보가 답이 될 일은 없다. 버린 뒤 맨 위가 `v`의 답이다.
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  const next = new Map();
+  const stack = []; // 오른쪽에서 답이 될 수 있는 후보들. 위로 갈수록 가깝고 작다
+  for (let i = nums2.length - 1; i >= 0; i--) {
+    const v = nums2[i];
+    while (stack.length && stack[stack.length - 1] <= v) stack.pop(); // v에게도, 왼쪽에게도 답이 아니다
+    next.set(v, stack.length ? stack[stack.length - 1] : -1); // 이 방향에서는 -1도 장부에 적는다
+    stack.push(v);
+  }
+  return nums1.map((x) => next.get(x));
+}
+```
+
+예시를 오른쪽부터 돌리면 스택이 이렇게 바뀐다. 각 줄은 그 값을 처리하고 넣은 뒤의 스택이다.
+
+```text
+6  버림: -     답: -1   스택: 6
+8  버림: 6     답: -1   스택: 8
+4  버림: -     답: 8    스택: 8 4
+1  버림: -     답: 4    스택: 8 4 1
+3  버림: 1     답: 4    스택: 8 4 3
+7  버림: 3, 4  답: 8    스택: 8 7
+2  버림: -     답: 7    스택: 8 7 2
+5  버림: 2     답: 7    스택: 8 7 5
+```
+
+Python으로 옮기면 `reversed`로 뒤에서부터 돌고, 장부를 읽을 때 기본값 없이 `nxt[x]`로 바로 읽는다. 모든 값이 장부에 들어가기 때문이다.
+
+```python
+def next_greater_element(nums1, nums2):
+    nxt = {}
+    stack = []  # 오른쪽 후보들. 위로 갈수록 가깝고 작다
+    for v in reversed(nums2):
+        while stack and stack[-1] <= v:
+            stack.pop()  # v보다 작거나 같은 후보는 누구에게도 답이 아니다
+        nxt[v] = stack[-1] if stack else -1  # 답이 없어도 -1로 적는다
+        stack.append(v)
+    return [nxt[x] for x in nums1]  # 모든 값이 장부에 있으니 기본값이 필요 없다
+```
+
+예시에서 `[4, -1, 7, 4]`, `nums1 = [6, 5]`에서 `[-1, 7]`이 나온다. 위의 기록에서 7이 들어오면서 3과 4를 버린다. 7보다 왼쪽 값들에게는 7이 3, 4보다 가깝고 크니 3과 4는 다시 답이 될 일이 없다. 그래서 그 왼쪽의 2와 5는 바로 7을 답으로 얻는다. 장부에 적힌 값은 왼쪽에서 훑은 결과와 같다.
+
+복잡도는 똑같이 O(n1 + n2)다. 차이는 장부를 채우는 시점이다. 왼쪽에서 오른쪽 방향은 값이 "꺼내질 때" 답이 적히고, 끝까지 남은 값은 장부에 없다. 오른쪽에서 왼쪽 방향은 값을 "넣기 직전에" 답이 적히고, 답이 없는 값도 -1로 적힌다. 그래서 장부를 읽을 때 기본값이 필요 없다. 예시에서 6을 처음 넣을 때 스택이 비어 6→-1이 적히고, 8이 6을 버리면서 8→-1이 적힌다.
+
+## 큰 값부터 넣으며 가장 가까운 오른쪽 자리를 찾기
+
+단조 스택을 떠올리지 못했을 때 나올 수 있는 다른 길도 있다. 값을 큰 것부터 차례로 처리한다. 값 `v`를 처리하는 순간, 이미 처리한 값들은 모두 `v`보다 크다. 그 값들의 인덱스를 정렬된 집합에 넣어 두면, `v`의 다음 큰 값은 그 집합에서 `v`의 인덱스보다 큰 인덱스 중 가장 작은 것이다. 정렬된 집합의 "바로 다음 원소 찾기"가 이걸 O(log n)에 해 준다.
+
+JavaScript에는 정렬된 집합이 기본으로 없어서 Java의 `TreeSet`으로 쓴다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int[] nextGreaterElement(int[] nums1, int[] nums2) {
+        int n = nums2.length;
+        Integer[] order = new Integer[n];
+        for (int i = 0; i < n; i++) order[i] = i;
+        Arrays.sort(order, (a, b) -> Integer.compare(nums2[b], nums2[a])); // 큰 값부터
+        Map<Integer, Integer> next = new HashMap<>();
+        TreeSet<Integer> bigger = new TreeSet<>(); // 지금 값보다 큰 값들의 인덱스
+        for (int i : order) {
+            Integer j = bigger.higher(i); // i보다 오른쪽에서 가장 가까운 큰 값의 인덱스
+            next.put(nums2[i], j == null ? -1 : nums2[j]);
+            bigger.add(i);
+        }
+        int[] ans = new int[nums1.length];
+        for (int k = 0; k < nums1.length; k++) ans[k] = next.get(nums1[k]);
+        return ans;
+    }
+}
+```
+
+예시에서 가장 큰 8(6번 칸)이 먼저 처리된다. 집합이 비어 있으니 -1이다. 다음 7(2번 칸)은 집합 `{6}`에서 2보다 큰 첫 인덱스 6을 찾아 8을 얻는다. 6(7번 칸)은 집합 `{2, 6}`에서 7보다 큰 인덱스가 없어 -1이다. 이렇게 내려가면 결과가 `[4, -1, 7, 4]`로 같다.
+
+Python에도 정렬된 집합이 기본으로는 없다. `bisect` 모듈로 정렬된 리스트를 들고 가면 같은 생각을 옮길 수 있다.
+
+```python
+from bisect import bisect_right, insort
+from typing import List
+
+def next_greater_element(nums1: List[int], nums2: List[int]) -> List[int]:
+    order = sorted(range(len(nums2)), key=lambda i: -nums2[i])  # 큰 값부터
+    nxt = {}
+    bigger = []  # 지금 값보다 큰 값들의 인덱스, 정렬된 리스트
+    for i in order:
+        k = bisect_right(bigger, i)  # i보다 큰 인덱스 중 가장 작은 것의 자리
+        nxt[nums2[i]] = nums2[bigger[k]] if k < len(bigger) else -1
+        insort(bigger, i)  # 정렬을 지키며 끼워 넣는다. 리스트라 O(n)
+    return [nxt[x] for x in nums1]
+```
+
+찾기는 이분 탐색이라 O(log n)이지만 `insort`가 리스트 중간에 끼워 넣느라 뒤를 당겨서 O(n)이다. 그래서 Python 버전은 최악 O(n²)이다. 제약이 1000개라 문제는 없고, 크게 쓰려면 `sortedcontainers` 같은 외부 라이브러리가 필요하다. 이분 탐색은 [이분 탐색 글](/posts/binary-search)에 있다.
+
+Java 버전은 정렬이 O(n log n), 집합 연산이 값마다 O(log n)이라 전체 O(n log n)이다. 길이 10^5짜리 내려가는 배열에서 227ms가 걸렸다. 단조 스택보다 느리고 코드도 길지만, "값을 크기 순으로 처리하면서 위치를 묻는" 이 틀은 단조 스택이 통하지 않는 변형에서 쓸모가 있다. 예를 들어 "오른쪽에서 처음 나오는, 나보다 k 이상 큰 값"처럼 기준이 바뀌면 단조 스택의 "꺼낸 값은 다시 필요 없다"가 깨지지만, 이 방식은 처리 순서만 바꿔 그대로 쓸 수 있다.
+
+## 필요한 값만 장부에 적기
+
+장부에는 `nums2`의 모든 값이 들어가는데, 질문은 `nums1`의 값에만 들어온다. `nums1`이 아주 작고 `nums2`가 크다면 장부의 대부분이 쓰이지 않는다. 그럴 때는 `nums1`의 "값 → 답 배열에서의 위치"를 먼저 담아 두고, 스택에서 꺼낸 값이 질문에 있을 때만 답 배열에 바로 쓴다.
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  const want = new Map(nums1.map((v, i) => [v, i])); // 질문 값 → 답 배열의 자리
+  const ans = new Array(nums1.length).fill(-1);      // 답을 못 찾은 질문은 -1로 남는다
+  const stack = [];
+  for (const v of nums2) {
+    while (stack.length && stack[stack.length - 1] < v) {
+      const u = stack.pop();
+      if (want.has(u)) ans[want.get(u)] = v; // 질문에 있는 값만 적는다
+    }
+    stack.push(v);
+  }
+  return ans;
+}
+```
+
+해시맵 크기가 O(n2)에서 O(n1)로 줄었다. 스택은 여전히 O(n2)까지 커질 수 있다. 내려가기만 하는 `nums2`라면 전부 쌓인다. 그래서 공간 차수는 O(n2) 그대로지만, 스택은 반복이 끝나면 버리는 임시 공간이고 해시맵은 결과를 만들 때까지 들고 있어야 하는 공간이라, 질문이 적을 때 실제 메모리 사용이 줄어든다. 해시맵 조회가 하나 더 들어가서 10^4개 입력에서는 4.7ms로 오히려 느렸다.
+
+### 값의 범위가 좁으면 배열이 장부가 된다
+
+값이 0 이상 10^4 이하라는 제약을 쓰면 해시맵 대신 길이 10001인 배열을 장부로 쓸 수 있다. 칸 번호가 값이다.
+
+```js
+function nextGreaterElement(nums1, nums2) {
+  const next = new Int32Array(10001).fill(-1); // next[값] = 다음 큰 값, 기본 -1
+  const stack = [];
+  for (const v of nums2) {
+    while (stack.length && stack[stack.length - 1] < v) next[stack.pop()] = v;
+    stack.push(v);
+  }
+  return nums1.map((x) => next[x]);
+}
+```
+
+해싱이 없어 가장 단순하고, 기본값을 -1로 채워 두니 읽을 때 따로 처리할 것도 없다. 10^4개 입력에서 0.5ms였다.
+
+Java에서는 차이가 더 크게 난다. `HashMap<Integer, Integer>`와 `ArrayDeque<Integer>`는 값마다 `Integer` 객체를 만들고 해시를 계산한다. 원시 배열로 장부와 스택을 모두 만들면 이 비용이 사라진다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int[] nextGreaterElement(int[] nums1, int[] nums2) {
+        int[] next = new int[10001];         // next[값] = 다음 큰 값
+        Arrays.fill(next, -1);
+        int[] stack = new int[nums2.length]; // 값을 담는 배열 스택
+        int top = 0;
+        for (int v : nums2) {
+            while (top > 0 && stack[top - 1] < v) next[stack[--top]] = v;
+            stack[top++] = v;
+        }
+        int[] ans = new int[nums1.length];
+        for (int i = 0; i < nums1.length; i++) ans[i] = next[nums1[i]];
+        return ans;
+    }
+}
+```
+
+값 10001개가 내려가는 입력으로 세 번 재 보니 배열 버전이 0.8~1.4ms, `HashMap` 버전이 8.9~17ms였다. 제약 안에서는 둘 다 충분히 빠르지만, 같은 패턴을 큰 데이터에 쓸 때 기억해 둘 만한 차이다. 공간은 값 범위 O(W)이고 W = 10001이다. 값 범위가 10^9이면 쓸 수 없고, 음수가 섞이면 칸 번호를 옮겨야 한다.
+
+## 장부를 만드는 일곱 가지 방법의 비용
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 질문마다 훑기 | O(n1 · n2) | O(1) | 제약이 작을 때, 정답 확인용 |
+| 위치는 해시맵, 오른쪽은 훑기 | O(n1 · n2) | O(n2) | 위치 찾기가 병목인 경우만 |
+| 단조 스택 + 장부 | O(n1 + n2) | O(n2) | 기본 답. 후속 질문의 답 |
+| 오른쪽부터 단조 스택 | O(n1 + n2) | O(n2) | 답이 없는 값도 장부에 적고 싶을 때 |
+| 큰 값부터 정렬 집합 | O(n2 log n2 + n1) | O(n2) | 값을 크기 순으로 처리해야 하는 변형 |
+| 필요한 값만 적기 | O(n1 + n2) | O(n1) 장부 + O(n2) 스택 | 질문이 아주 적을 때 |
+| 값 범위 배열 | O(n1 + n2 + W) | O(W) | 값 범위가 좁다는 제약이 있을 때 |
+
+면접에서는 브루트포스가 질문마다 같은 구간을 훑는다는 걸 짚고, "`nums2` 전체의 답을 한 번에 구해 장부에 적는다"로 넘어간다. 장부를 만드는 단조 스택이 왜 O(n)인지, 장부의 열쇠가 왜 값이어도 되는지(값이 서로 다르니까)를 말하면 후속 질문까지 답한 셈이다.
+
+<CodePlayground
+  caption="Next Greater Element I: 단조 스택으로 장부 만들기"
+  functionName="nextGreaterElement"
+  initialCode={"function nextGreaterElement(nums1, nums2) {\n  // nums1의 값마다 nums2에서 오른쪽으로 처음 만나는 더 큰 값, 없으면 -1\n  return [];\n}"}
+  solution={"function nextGreaterElement(nums1, nums2) {\n  const next = new Map();\n  const stack = [];\n  for (const v of nums2) {\n    while (stack.length && stack[stack.length - 1] < v) {\n      next.set(stack.pop(), v);\n    }\n    stack.push(v);\n  }\n  return nums1.map((x) => next.get(x) ?? -1);\n}"}
+  tests={[
+    { args: [[3, 8, 2, 1], [5, 2, 7, 3, 1, 4, 8, 6]], expected: [4, -1, 7, 4], label: "본문 예시" },
+    { args: [[4], [4]], expected: [-1], label: "값 하나뿐" },
+    { args: [[1, 2, 3], [1, 2, 3]], expected: [2, 3, -1], label: "오르기만 한다" },
+    { args: [[3, 2, 1], [3, 2, 1]], expected: [-1, -1, -1], label: "내려가기만 한다" },
+    { args: [[6, 5], [5, 2, 7, 3, 1, 4, 8, 6]], expected: [-1, 7], label: "마지막 값과 첫 값" },
+    { args: [[0, 10000], [10000, 0]], expected: [-1, -1], label: "값 범위 양 끝" },
+    { args: [[2, 4], [1, 2, 3, 4]], expected: [3, -1], label: "질문이 일부만" },
+  ]}
+/>
+
+## 장부의 열쇠, 기본값, 순서에서 틀리는 코드
+
+### 인덱스를 쌓아 놓고 값으로 찾는다
+
+Daily Temperatures를 먼저 푼 사람은 습관처럼 스택에 인덱스를 넣는다. 그 자체는 괜찮은데, 장부에도 인덱스를 열쇠로 적고 `nums1`의 값으로 찾으면 엉뚱한 칸을 읽는다.
+
+```js
+for (let i = 0; i < nums2.length; i++) {
+  while (stack.length && nums2[stack.at(-1)] < nums2[i]) next.set(stack.pop(), nums2[i]); // 열쇠가 인덱스
+  stack.push(i);
+}
+return nums1.map((x) => next.get(x) ?? -1); // 틀림: 값으로 인덱스 장부를 찾는다
+```
+
+예시에서 `[4, -1, 7, 4]` 대신 `[4, -1, 8, 7]`이 나왔다. 첫 칸은 값 3이 마침 인덱스 3에 있어서, 둘째 칸은 인덱스 8이 없어 기본값 -1이 나와서 우연히 맞았다. 값 2로 인덱스 2(값 7)의 답 8을, 값 1로 인덱스 1(값 2)의 답 7을 읽었다. 오류 없이 그럴듯한 숫자가 나와서 찾기 어렵다. 인덱스를 쌓았다면 장부에는 `nums2[인덱스]`를 열쇠로 적는다.
+
+### 장부에 없는 값을 `||`로 처리한다
+
+`next.get(x) || -1`은 다음 큰 값이 0이면 -1로 바꿔 버린다. 이 문제는 값이 0 이상이라 다음 큰 값이 0일 수 없어서 우연히 맞는다. 음수가 섞인 변형에서 `nums2 = [-3, 0, 5]`, `nums1 = [-3, 5]`를 넣으면 -3의 답 0이 -1로 바뀌어 `[0, -1]` 대신 `[-1, -1]`이 나왔다. 없을 때만 기본값을 쓰는 `??`나 `has`로 확인한다. Python의 `get(x, -1)`과 Java의 `getOrDefault`는 처음부터 이 문제가 없다.
+
+### `nums1`을 기준으로 스택을 돌린다
+
+스택을 `nums1` 위에서 돌리면 `nums1` 안에서의 "다음 큰 값"이 나온다. 묻는 건 `nums2`에서의 다음 큰 값이다. 예시의 `nums1 = [3, 8, 2, 1]`에서 3의 다음 큰 값을 `nums1` 안에서 찾으면 8이 되지만, 정답은 `nums2`에서 찾은 4다. 장부는 언제나 큰 배열에서 만들고, 작은 배열은 읽기만 한다.
+
+### 질문 값이 큰 배열에 없을 때 `indexOf`의 -1을 그대로 쓴다
+
+문제는 `nums1`이 `nums2`의 부분집합이라고 보장하지만, 실무에서 같은 함수를 쓰면 이 보장이 깨지기 쉽다. 브루트포스에서 `indexOf`가 -1을 돌려주면 `j + 1`이 0이 되어 배열 전체를 처음부터 훑는다. `nums1 = [0]`, `nums2 = [5, 2, 7]`을 넣으면 0이 `nums2`에 없는데도 5가 나왔다. 장부 풀이는 없는 값을 -1로 돌려주니 이런 엉뚱한 답이 나오지 않는다. 없는 값을 오류로 처리할지 -1로 처리할지는 정해서 쓴다.
+
+질문 쪽에 같은 값이 여러 번 나오는 건 괜찮다. 장부는 `nums2`로만 만들고 `nums1`은 읽기만 하니, `[3, 3, 1]`을 물으면 `[4, 4, 4]`가 나온다. 값이 서로 달라야 하는 건 장부를 만드는 `nums2` 쪽이다.
+
+### 끝까지 남은 값을 잊는다
+
+왼쪽에서 오른쪽 방향은 끝까지 스택에 남은 값이 장부에 없다. `next.get(x)`를 그대로 돌려주면 `undefined`가 섞인다. 예시의 8과 6이 그렇다. 기본값 -1을 주거나, 반복이 끝난 뒤 스택에 남은 값들을 -1로 장부에 적어 둔다.
+
+## 배열 모양을 바꿔 묻는 꼬리 질문
+
+### 배열이 원형이라면
+
+LeetCode 503 Next Greater Element II다. 마지막 값의 오른쪽이 첫 값으로 이어진다. 값이 서로 다르다는 조건이 없어서 장부 대신 인덱스로 답 배열을 채우고, 배열을 두 바퀴 돈다. 두 번째 바퀴에서는 새로 쌓지 않고 남은 값의 답만 채운다. [단조 스택 패턴 글](/posts/monotonic-stack-pattern)에 코드와 직접 풀어 보는 칸이 있다.
+
+### 다음 큰 값이 아니라 거리를 묻는다면
+
+[Daily Temperatures](/posts/leetcode-daily-temperatures)가 그 문제다. 거리를 계산하려면 꺼낼 때 위치가 필요하니 스택에 인덱스를 넣는다. 이 글의 풀이에서 장부에 값 대신 `i - 꺼낸 인덱스`를 적으면 된다.
+
+### 왼쪽에서 처음 만나는 큰 값이나, 오른쪽에서 처음 만나는 작은 값이라면
+
+방향과 비교만 바꾼다. 왼쪽에서 처음 만나는 큰 값은 오른쪽에서 왼쪽으로 훑으며 꺼낼 때 적거나, 왼쪽에서 오른쪽으로 훑으며 후보를 남긴다. 작은 값은 비교 방향을 뒤집는다. 네 조합을 모두 쓰는 게 [Largest Rectangle in Histogram](/posts/leetcode-largest-rectangle-in-histogram)이다. 막대마다 양쪽에서 처음 만나는 더 낮은 막대가 넓이의 경계가 된다.
+
+### 질문이 계속 들어온다면
+
+장부를 한 번 만들어 두면 질문마다 O(1)이다. `nums2`가 바뀌지 않는 한 장부를 다시 만들 필요가 없다. 반대로 `nums2` 뒤에 값이 계속 붙는다면, 왼쪽에서 오른쪽 방향 스택을 그대로 들고 있다가 새 값이 올 때마다 꺼내며 장부를 채운다. 아직 스택에 있는 값의 질문에는 "아직 없다"고 답하면 된다. 나중에 답이 생길 수 있어서 -1로 확정할 수는 없다.
+
+```js
+class NextGreaterBook {
+  constructor() { this.next = new Map(); this.stack = []; }
+  push(v) { // nums2 뒤에 값이 하나 붙는다
+    while (this.stack.length && this.stack[this.stack.length - 1] < v) this.next.set(this.stack.pop(), v);
+    this.stack.push(v);
+  }
+  query(x) { return this.next.has(x) ? this.next.get(x) : null; } // null = 아직 모른다
+}
+// 5, 2, 7, 3을 넣은 뒤: query(2) → 7, query(3) → null, query(7) → null
+// 1, 4, 8, 6을 더 넣은 뒤: query(3) → 4, query(7) → 8, query(8) → null
+```
+
+오른쪽에서 왼쪽으로 훑는 방법은 끝을 알아야 시작할 수 있어서 이 상황에 쓸 수 없다. 두 방향의 차이가 실제로 드러나는 곳이다.
+
+### 두 번째로 큰 값을 묻는다면
+
+LeetCode 2454 Next Greater Element IV(Hard)는 오른쪽에서 두 번째로 만나는 더 큰 값을 묻는다. 스택을 두 개 쓴다. 첫 스택에서 한 번 꺼내진 값(첫 번째 큰 값을 만난 값)을 둘째 스택으로 옮기고, 둘째 스택에서 꺼내질 때가 답이다. 옮길 때 순서를 지키려면 꺼낸 묶음을 거꾸로 넣어야 한다.
+
+### 비슷한 문제
+
+- [Daily Temperatures](/posts/leetcode-daily-temperatures): 같은 단조 스택, 답이 거리다.
+- [Car Fleet](/posts/leetcode-car-fleet): 뒤에서부터 보면 같은 모양의 단조 스택이다.
+- [Remove K Digits](/posts/leetcode-remove-k-digits): 꺼내는 조건에 "지울 기회"가 붙은 단조 스택.
+- [Two Sum](/posts/leetcode-two-sum): 한 번 훑으며 해시맵 장부를 채우고 읽는 흐름이 같다.
+- LeetCode 556 Next Greater Element III: 이름은 비슷하지만 숫자의 자릿수를 재배열하는 다음 순열 문제다. 스택 문제가 아니다.
+
+## 한 번 훑어 적어 두고, 질문은 읽기만
+
+질문마다 큰 배열을 다시 훑으면 같은 구간을 여러 번 본다. 큰 배열을 한 번 훑으면서 단조 스택으로 모든 값의 다음 큰 값을 장부에 적어 두면, 질문은 장부를 읽기만 해서 O(n1 + n2)가 된다. 스택에서 값이 꺼내지는 순간이 답이 정해지는 순간이고, 끝까지 남은 값은 -1이다. 값이 서로 다르다는 조건 덕분에 장부의 열쇠를 값으로 쓸 수 있다는 점까지 말하면 이 문제의 후속 질문에 답한 것이다.
+
+## 면접에서 나올 만한 질문
+
+### O(n1 + n2)로 어떻게 푸나요?
+
+`nums2`를 왼쪽부터 한 번 훑으며 아직 더 큰 값을 못 만난 값들을 스택에 쌓는다. 새 값이 맨 위보다 크면 맨 위의 답을 해시맵에 적고 꺼낸다. 다 훑은 뒤 `nums1`의 값마다 해시맵을 읽고, 없으면 -1이다. 값마다 한 번 넣고 한 번 빼니 장부 만들기가 O(n2), 읽기가 O(n1)이다.
+
+### 브루트포스로도 통과하는데 왜 스택 풀이를 말해야 하나요?
+
+제약이 1000개라 O(n1 · n2)도 통과하지만, 문제가 직접 O(n1 + n2) 풀이를 후속 질문으로 묻는다. 질문마다 같은 구간을 다시 훑는 낭비를 짚고, 큰 배열의 답을 한 번에 구해 두는 쪽으로 바꾸는 과정이 면접에서 보려는 부분이다. 브루트포스를 먼저 말하고 왜 느린지 설명한 뒤 스택으로 넘어가면 된다.
+
+### 스택 안의 값은 왜 늘 내려가는 순서인가요?
+
+어떤 값 뒤에 그보다 큰 값이 쌓였다면, 그 큰 값이 들어오는 순간 앞의 값은 답을 찾아 꺼내졌을 것이다. 그래서 스택에 함께 남아 있는 값들은 아래에서 위로 내려가는 순서일 수밖에 없다. 새 값이 맨 위를 못 넘으면 그 아래도 못 넘으니 거기서 멈춰도 된다.
+
+### 해시맵의 열쇠를 값으로 써도 되는 이유는요?
+
+문제가 각 배열의 값이 서로 다르다고 보장하기 때문이다. 값 하나가 `nums2`의 자리 하나를 가리키니 "값 → 다음 큰 값"이 하나로 정해진다. 같은 값이 여러 번 나올 수 있다면 값 하나에 답이 여럿이 되어, 인덱스로 답을 적고 질문이 어느 자리를 뜻하는지 정해야 한다.
+
+### `nums1`이 아주 작다면 메모리를 줄일 수 있나요?
+
+`nums1`의 값을 먼저 해시맵에 담아 두고, 스택에서 꺼낸 값이 질문에 있을 때만 답 배열에 바로 쓰면 장부가 O(n1)으로 준다. 스택은 내려가기만 하는 입력에서 여전히 n2까지 커지지만, 반복이 끝나면 버리는 임시 공간이다.
+
+### 왼쪽에서 훑는 방법과 오른쪽에서 훑는 방법은 무엇이 다른가요?
+
+왼쪽에서 훑으면 값이 스택에서 꺼내질 때 답이 정해지고, 끝까지 남은 값은 장부에 없어 기본값 -1이 필요하다. 오른쪽에서 훑으면 작거나 같은 후보를 버린 뒤 맨 위가 바로 답이라 넣기 직전에 정해지고, 답이 없는 값도 -1로 적힌다. 복잡도는 같고, 값이 계속 뒤에 붙는 상황이면 왼쪽에서 훑는 방법만 쓸 수 있다.
+
+### 배열이 원형이면 무엇이 바뀌나요?
+
+배열을 두 바퀴 돌면서 인덱스를 `i % n`으로 읽는다. 두 번째 바퀴에서는 새로 쌓지 않고 남은 값의 답만 채운다. 원형 버전은 값이 서로 다르다는 조건이 없어서 장부 대신 인덱스 기준 답 배열을 쓴다. 시간은 여전히 O(n)이다.

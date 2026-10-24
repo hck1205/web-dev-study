@@ -1,0 +1,557 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-max-area-of-island");
+
+<EasyIntro>
+  모눈종이 지도에 땅과 바다가 칠해져 있다. 위아래나 옆으로 붙은 땅은 같은 섬이다. 이번에는 섬이 몇 개인지가 아니라, 가장 큰 섬이 몇 칸인지 알고 싶다. 지도를 왼쪽 위부터 훑다가 땅을 만나면, 그 땅과 이어진 칸을 하나씩 찾아가며 스티커를 붙인다. 스티커를 붙일 때마다 한 칸씩 세면, 섬 하나를 다 돌았을 때 그 섬의 넓이가 나온다. 스티커가 붙은 칸은 다시 세지 않으니 같은 섬을 두 번 잴 일도 없다. 섬마다 잰 넓이 중 가장 큰 값을 기억해 두면 끝이다. 스티커를 너무 늦게 붙이면 같은 칸을 여러 번 세어서 섬이 실제보다 크게 나오니 조심해야 한다.
+</EasyIntro>
+
+[섬 개수 세기](/posts/leetcode-number-of-islands)를 풀고 나면 거의 바로 이어서 나오는 문제다. 같은 격자, 같은 섬인데 이번에는 섬마다 칸 수를 세고 가장 큰 값을 돌려준다. 섬 하나를 지우는 탐색이 그대로 쓰이니 새로 배울 건 적다. 대신 "넓이를 언제 세나"라는 질문이 하나 생기고, 거기서 실수가 많이 나온다.
+
+[LeetCode 695. Max Area of Island](https://leetcode.com/problems/max-area-of-island/)는 Medium이다. 이 글은 땅마다 섬을 처음부터 다시 재는 느린 풀이부터 시작해 재귀 DFS, BFS, 스택 DFS, 크기를 들고 다니는 유니온 파인드까지 다섯 가지를 보고, 방문 표시를 늦게 했을 때 넓이가 몇 배로 부풀어 오르는지 직접 잰다. 격자를 그래프로 보는 법과 BFS·DFS의 원리는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)과 섬 개수 글에서 다뤘으니 여기서는 짧게 넘긴다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 가장 큰 섬은 몇 칸인가
+
+입력은 `0`(물)과 `1`(땅)로 채운 m × n 격자다. 위아래 양옆으로 붙은 땅은 같은 섬이고, 대각선으로만 닿으면 다른 섬이다. 섬의 넓이는 그 섬에 속한 땅 칸의 수다. 가장 넓은 섬의 넓이를 돌려주고, 땅이 하나도 없으면 0을 돌려준다.
+
+풀이를 고를 때 볼 조건은 세 가지다.
+
+- m, n은 50 이하라서 칸이 많아야 2,500개다. 칸마다 상수 번만 보면 순식간이고, 뒤에서 보듯 O((mn)²)도 625만 번이라 통과는 한다.
+- 칸 값은 숫자 `0`, `1`이다. 섬 개수 문제는 글자 `"1"`이었는데 여기는 숫자다. 두 문제를 이어서 풀다가 비교 대상을 헷갈리기 쉽다.
+- 칸이 2,500개뿐인데도 재귀 깊이가 문제가 된다. Python 기본 재귀 한도 1,000보다 섬이 클 수 있어서다.
+
+이 글의 예시는 4 × 5 격자다.
+
+```text
+1 1 0 1 1
+1 0 0 0 1
+0 1 1 0 1
+0 1 0 0 0
+```
+
+손으로 세 보자. 왼쪽 위 `(0,0) (0,1) (1,0)`이 세 칸짜리 섬이다. 오른쪽 위 `(0,3) (0,4) (1,4) (2,4)`는 ㄱ자로 꺾인 네 칸짜리 섬이다. 가운데 아래 `(2,1) (2,2) (3,1)`도 세 칸이다. `(1,0)`과 `(2,1)`은 대각선으로만 닿아서 다른 섬이다. 가장 큰 섬은 4칸이다.
+
+아래 그림에서 다음을 누르면 섬을 하나씩 따라가며 칸 수를 센다. 진한 점이 땅, 옅은 점이 물이고, 선은 붙어 있는 땅끼리만 그었다.
+
+<VectorSpace
+  caption="4 × 5 격자의 세 섬. 넓이는 3, 4, 3이다"
+  width={400}
+  height={260}
+  groups={[{ id: "land", label: "땅 (1)" }, { id: "sea", label: "물 (0)" }]}
+  points={[
+    { id: "p00", label: "1", x: 60, y: 40, group: "land" },
+    { id: "p01", label: "1", x: 130, y: 40, group: "land" },
+    { id: "p02", label: "0", x: 200, y: 40, group: "sea" },
+    { id: "p03", label: "1", x: 270, y: 40, group: "land" },
+    { id: "p04", label: "1", x: 340, y: 40, group: "land", labelAt: "left" },
+    { id: "p10", label: "1", x: 60, y: 100, group: "land" },
+    { id: "p11", label: "0", x: 130, y: 100, group: "sea" },
+    { id: "p12", label: "0", x: 200, y: 100, group: "sea" },
+    { id: "p13", label: "0", x: 270, y: 100, group: "sea" },
+    { id: "p14", label: "1", x: 340, y: 100, group: "land", labelAt: "left" },
+    { id: "p20", label: "0", x: 60, y: 160, group: "sea" },
+    { id: "p21", label: "1", x: 130, y: 160, group: "land" },
+    { id: "p22", label: "1", x: 200, y: 160, group: "land" },
+    { id: "p23", label: "0", x: 270, y: 160, group: "sea" },
+    { id: "p24", label: "1", x: 340, y: 160, group: "land", labelAt: "left" },
+    { id: "p30", label: "0", x: 60, y: 220, group: "sea" },
+    { id: "p31", label: "1", x: 130, y: 220, group: "land" },
+    { id: "p32", label: "0", x: 200, y: 220, group: "sea" },
+    { id: "p33", label: "0", x: 270, y: 220, group: "sea" },
+    { id: "p34", label: "0", x: 340, y: 220, group: "sea", labelAt: "left" },
+  ]}
+  edges={[["p00", "p01"], ["p00", "p10"], ["p03", "p04"], ["p04", "p14"], ["p14", "p24"], ["p21", "p22"], ["p21", "p31"]]}
+  steps={[
+    { caption: "선은 위아래 양옆으로 붙은 땅끼리만 있다. 선으로 이어진 덩어리 하나가 섬이다.", showEdges: true },
+    { caption: "첫 섬은 (1,0), (0,0), (0,1) 세 칸이다. 지금까지 가장 큰 넓이는 3.", showEdges: true, path: ["p10", "p00", "p01"] },
+    { caption: "두 번째 섬은 (0,3)에서 오른쪽으로 갔다가 아래로 두 칸 꺾인다. 네 칸이라 최댓값이 4로 바뀐다.", showEdges: true, path: ["p03", "p04", "p14", "p24"] },
+    { caption: "세 번째 섬은 세 칸이다. (1,0)과 대각선으로 닿지만 이어진 것으로 치지 않는다. 답은 4.", showEdges: true, path: ["p22", "p21", "p31"] },
+  ]}
+/>
+
+섬 개수 문제와 다른 건 섬 하나가 끝날 때마다 숫자 하나를 들고 나와야 한다는 것뿐이다. 그 숫자를 어디서 어떻게 세는지가 풀이마다 다르다.
+
+## 땅마다 섬을 처음부터 다시 잰다
+
+가장 단순한 생각은 이렇다. 땅 칸 하나를 골라 거기서 BFS를 하면 그 칸이 속한 섬의 넓이가 나온다. 모든 땅 칸에서 그렇게 재고 가장 큰 값을 고른다. 칸마다 방문 표시를 새로 만들어서 다른 칸의 탐색과 섞이지 않게 한다.
+
+```js
+// 느린 풀이: 땅 칸마다 방문 표시를 새로 만들어 섬 넓이를 잰다
+function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let best = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      const seen = new Uint8Array(m * n);   // 매번 새 방문 표시
+      seen[r * n + c] = 1;
+      const queue = [[r, c]];
+      for (let head = 0; head < queue.length; head++) {
+        const [cr, cc] = queue[head];
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1 && !seen[nr * n + nc]) {
+            seen[nr * n + nc] = 1;
+            queue.push([nr, nc]);
+          }
+        }
+      }
+      best = Math.max(best, queue.length);  // 큐에 들어간 칸 수 = 섬 넓이
+    }
+  }
+  return best;
+}
+```
+
+답은 맞다. 예시에서 4가 나온다. 문제는 같은 섬을 칸 수만큼 반복해서 잰다는 것이다. 네 칸짜리 섬은 네 번, 2,500칸짜리 섬은 2,500번 잰다. 섬 하나의 넓이가 k라면 그 섬에만 k²번 일한다.
+
+시간은 최악에 O((mn)²)이다. 50 × 50이 전부 땅이면 2,500칸에서 각각 2,500칸을 훑어 칸 방문이 정확히 6,250,000번이었다. Node.js에서 443ms가 걸렸다. 제약이 작아서 통과는 하지만, 다음 풀이들은 같은 입력을 0.1~2ms에 끝낸다. 200배 넘게 차이 난다. 격자가 300 × 300만 돼도 81억 번이라 못 쓴다.
+
+낭비는 "같은 섬을 다시 재는 것"이다. 한 번 잰 섬에 속한 칸은 다시 출발점으로 쓸 필요가 없다. 방문 표시를 칸마다 새로 만들지 말고 하나를 끝까지 같이 쓰면 된다.
+
+## 가라앉히면서 칸 수를 돌려주는 재귀
+
+섬 개수 문제의 "땅을 밟으면 섬 전체를 가라앉힌다"를 그대로 쓰되, 가라앉힌 칸 수를 돌려주게 바꾼다. 칸 하나를 가라앉히면 자기 몫 1에 네 방향 이웃이 가라앉힌 칸 수를 더해 돌려준다.
+
+```js
+function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const sink = (r, c) => {
+    // 격자 밖이거나 물(또는 이미 가라앉힌 칸)이면 넓이 0
+    if (r < 0 || r >= m || c < 0 || c >= n || grid[r][c] !== 1) return 0;
+    grid[r][c] = 0;                 // 이웃을 부르기 전에 가라앉힌다
+    return 1 + sink(r + 1, c) + sink(r - 1, c) + sink(r, c + 1) + sink(r, c - 1);
+  };
+  let best = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] === 1) best = Math.max(best, sink(r, c));
+    }
+  }
+  return best;
+}
+```
+
+`1 + sink(...) + ...` 한 줄이 넓이를 센다. 어떤 칸의 `sink`는 "나와, 나를 거쳐서만 닿은 칸들"의 수를 돌려준다. 네 방향 중 이미 다른 경로로 가라앉은 칸은 0을 돌려주니, 섬의 칸은 정확히 한 번씩만 1로 더해진다. 출발 칸의 `sink`가 돌려준 값이 섬 전체의 넓이다.
+
+방문 표시 `grid[r][c] = 0`이 재귀 호출보다 먼저 와야 하는 이유는 섬 개수 글과 같다. 순서를 바꾸면 이웃이 다시 나를 불러 무한히 돈다. 여기서는 그에 더해 넓이도 틀어진다. 표시를 늦게 하면 같은 칸이 두 경로에서 1로 더해진다.
+
+시간 O(m · n)이다. 칸마다 바깥 반복에서 한 번 보고, 땅 칸은 가라앉힐 때 한 번만 일한다. 추가 공간은 재귀 깊이이고, 섬이 격자 전체를 덮으면 O(m · n)까지 깊어진다.
+
+전역 변수 하나에 넓이를 쌓는 방식으로 써도 된다. `let area = 0`을 바깥에 두고 `sink`에서 `area++`만 한 뒤, 섬이 끝날 때 최댓값과 비교하고 0으로 되돌린다. 이 방식은 "0으로 되돌리기"를 빼먹으면 두 섬의 넓이가 더해져서 틀린다. 돌려주는 값으로 세면 이 실수가 생길 자리가 없다.
+
+## 32 × 32만 돼도 Python 재귀가 멈춘다
+
+칸이 2,500개뿐이라 재귀 깊이도 걱정 없을 것 같지만 그렇지 않다. 섬이 격자 전체를 덮으면 재귀가 격자를 뱀처럼 훑으며 칸 수만큼 쌓인다. 정사각형 격자를 전부 땅으로 채우고 Python으로 재귀 풀이를 돌려 봤다.
+
+```text
+31 × 31  961
+32 × 32  RecursionError: maximum recursion depth exceeded
+50 × 50  RecursionError: maximum recursion depth exceeded
+```
+
+Python의 기본 재귀 한도는 1,000이다. 31 × 31은 961칸이라 버티고, 32 × 32는 1,024칸이라 넘친다. 문제 조건의 최대 크기인 50 × 50은 2,500단계가 필요하다. 채점 서버의 설정은 내가 알 수 없으니, 로컬에서 기본값으로 돌리면 이렇게 멈춘다고 보고 짜는 게 맞다. `sys.setrecursionlimit(10000)`으로 올리면 된다는 답도 있는데, 그건 이 문제의 크기가 작다는 데 기대는 것이다.
+
+JavaScript와 Java는 2,500단계 재귀를 문제없이 버틴다. 같은 코드를 300 × 300 꽉 찬 격자(9만 단계)에 돌리면 Node.js도 `RangeError: Maximum call stack size exceeded`로 멈춘다. 이 문제에서는 JS와 Java라면 재귀로 써도 되고, Python이라면 다음의 BFS로 쓰는 편이 마음 편하다.
+
+## 큐에서 꺼낸 칸 수가 곧 넓이다
+
+재귀 대신 큐를 쓰면 깊이 걱정이 사라진다. 땅을 만나면 가라앉히고 큐에 넣는다. 큐에서 칸을 하나 꺼낼 때마다 넓이를 1 올리고, 아직 땅인 이웃을 가라앉혀 큐에 넣는다. 큐가 비면 섬 하나가 끝났고, 그때의 넓이를 최댓값과 비교한다.
+
+```js
+function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let best = 0;
+  const queue = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      grid[r][c] = 0;                    // 큐에 넣는 순간 가라앉힌다
+      queue.length = 0;
+      queue.push(r * n + c);             // 좌표를 숫자 하나로 넣는다
+      for (let head = 0; head < queue.length; head++) {
+        const cur = queue[head];
+        const cr = Math.floor(cur / n), cc = cur % n;
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) {
+            grid[nr][nc] = 0;
+            queue.push(nr * n + nc);
+          }
+        }
+      }
+      // 꺼낸 칸을 지우지 않았으니 큐 길이 = 이 섬에 넣은 칸 수 = 넓이
+      best = Math.max(best, queue.length);
+    }
+  }
+  return best;
+}
+```
+
+이 코드는 넓이를 따로 세지 않는다. 큐에서 꺼낸 칸을 배열에서 지우지 않고 `head`만 앞으로 옮기니, 섬이 끝났을 때 `queue.length`가 그 섬에서 큐에 넣은 칸 수다. 칸은 넣을 때 가라앉히므로 한 번씩만 들어가고, 그 수가 곧 넓이다. 좌표를 `[r, c]` 배열 대신 `r * n + c` 숫자 하나로 넣으면 칸마다 작은 배열을 만들지 않아 조금 더 빠르다.
+
+아래 그림은 2 × 5 격자에서 이 풀이를 따라간 것이다. 앞 다섯 칸이 윗줄, 뒤 다섯 칸이 아랫줄이고, 초록 칸이 가라앉힌 땅, 아래 칸이 큐에서 아직 꺼내지 않은 칸이다.
+
+```text
+1 0 1 1 0
+1 0 0 1 1     섬 넓이 2와 4, 답 4
+```
+
+<AlgoTrace
+  caption="2 × 5 격자를 BFS로 훑으며 섬 넓이를 잰다"
+  memoryLabel="큐 (아직 꺼내지 않은 칸)"
+  cells={["1", "0", "1", "1", "0", "1", "0", "0", "1", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["(0,0)"], caption: "(0,0)이 땅이다. 가라앉히고 큐에 넣는다." },
+    { pointer: 0, found: [0, 5], memory: ["(1,0)"], caption: "(0,0)을 꺼낸다. 넓이 1. 아래 (1,0)이 땅이라 가라앉히고 넣는다." },
+    { pointer: 5, found: [0, 5], memory: [], caption: "(1,0)을 꺼낸다. 넓이 2. 이웃에 땅이 없어 큐가 빈다. 최댓값 2." },
+    { pointer: 2, found: [0, 5, 2], memory: ["(0,2)"], caption: "훑기로 돌아와 (0,1)은 물, (0,2)에서 새 섬을 만난다." },
+    { pointer: 2, found: [0, 5, 2, 3], memory: ["(0,3)"], caption: "(0,2)를 꺼낸다. 넓이 1. 오른쪽 (0,3)을 넣는다." },
+    { pointer: 3, found: [0, 5, 2, 3, 8], memory: ["(1,3)"], caption: "(0,3)을 꺼낸다. 넓이 2. 아래 (1,3)을 넣는다." },
+    { pointer: 8, found: [0, 5, 2, 3, 8, 9], memory: ["(1,4)"], caption: "(1,3)을 꺼낸다. 넓이 3. 오른쪽 (1,4)를 넣는다." },
+    { pointer: 9, found: [0, 5, 2, 3, 8, 9], memory: [], caption: "(1,4)를 꺼낸다. 넓이 4. 큐가 비었다. 최댓값이 4로 바뀐다." },
+    { pointer: 9, found: [0, 5, 2, 3, 8, 9], memory: [], caption: "남은 칸은 물이거나 이미 가라앉힌 칸이다. 답은 4." },
+  ]}
+/>
+
+네 번째 단계에서 훑기가 `(0,1)`을 지나 `(0,2)`로 간다. 첫 섬이 끝나고 다시 바깥 반복으로 돌아온 것이다. 그리고 마지막 단계에서 아랫줄 `(1,0)`, `(1,3)`, `(1,4)`를 지날 때 이미 `0`이 된 칸이라 새 섬으로 보지 않는다. 바깥 반복은 섬의 출발점을 찾는 일만 하고, 섬 하나의 칸은 BFS가 한꺼번에 처리한다.
+
+시간 O(m · n), 공간은 큐가 최악에 섬 크기만큼인 O(m · n)이다.
+
+### Python과 Java로 쓰면
+
+Python은 `collections.deque`를 쓰고, 꺼낼 때마다 넓이를 1 올린다. `list.pop(0)`은 앞을 비우느라 O(k)라서 쓰지 않는다. 재귀가 없으니 50 × 50 꽉 찬 섬도 그대로 돈다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def max_area_of_island(grid: List[List[int]]) -> int:
+    m, n = len(grid), len(grid[0])
+    best = 0
+    for r in range(m):
+        for c in range(n):
+            if grid[r][c] != 1:
+                continue
+            grid[r][c] = 0  # 큐에 넣는 순간 가라앉힌다
+            queue = deque([(r, c)])
+            area = 0
+            while queue:
+                cr, cc = queue.popleft()
+                area += 1  # 꺼낸 칸 하나가 넓이 1
+                for nr, nc in ((cr + 1, cc), (cr - 1, cc), (cr, cc + 1), (cr, cc - 1)):
+                    if 0 <= nr < m and 0 <= nc < n and grid[nr][nc] == 1:
+                        grid[nr][nc] = 0
+                        queue.append((nr, nc))
+            best = max(best, area)
+    return best
+
+
+print(max_area_of_island([[1, 1, 0, 1, 1], [1, 0, 0, 0, 1], [0, 1, 1, 0, 1], [0, 1, 0, 0, 0]]))
+print(max_area_of_island([[1] * 50 for _ in range(50)]))
+```
+
+```text
+4
+2500
+```
+
+Java는 `int[][]`라서 `grid[r][c] != 1`을 숫자로 비교한다. 섬 개수 문제의 `char[][]`에서 쓰던 `'1'`을 그대로 옮겨 오면 `'1'`이 글자 코드 49라서 항상 다르다고 나온다. 큐는 `ArrayDeque`를 쓴다.
+
+```java
+import java.util.ArrayDeque;
+
+class Solution {
+    public int maxAreaOfIsland(int[][] grid) {
+        int m = grid.length, n = grid[0].length, best = 0;
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        ArrayDeque<int[]> queue = new ArrayDeque<>();
+        for (int r = 0; r < m; r++) {
+            for (int c = 0; c < n; c++) {
+                if (grid[r][c] != 1) continue;
+                grid[r][c] = 0;                       // 큐에 넣는 순간 가라앉힌다
+                queue.add(new int[]{r, c});
+                int area = 0;
+                while (!queue.isEmpty()) {
+                    int[] cur = queue.poll();
+                    area++;
+                    for (int[] d : dirs) {
+                        int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                        if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] == 1) {
+                            grid[nr][nc] = 0;
+                            queue.add(new int[]{nr, nc});
+                        }
+                    }
+                }
+                best = Math.max(best, area);
+            }
+        }
+        return best;
+    }
+}
+```
+
+```text
+4
+2500
+```
+
+넓이는 최대 2,500이라 어느 언어든 정수 범위 걱정은 없다. 격자가 커지는 변형이라도 칸 수가 21억을 넘을 일은 메모리가 먼저 막는다.
+
+## 스택으로 바꿔도 넓이는 같다
+
+BFS 코드에서 큐를 스택으로 바꾸면 DFS가 된다. `queue[head++]` 대신 `stack.pop()`으로 꺼내고, 꺼낼 때마다 넓이를 센다.
+
+```js
+function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let best = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      grid[r][c] = 0;
+      const stack = [[r, c]];
+      let area = 0;
+      while (stack.length > 0) {
+        const [cr, cc] = stack.pop();     // 가장 최근에 찾은 칸부터
+        area++;
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) {
+            grid[nr][nc] = 0;
+            stack.push([nr, nc]);
+          }
+        }
+      }
+      best = Math.max(best, area);
+    }
+  }
+  return best;
+}
+```
+
+넓이는 "섬에 속한 칸의 수"라서 어떤 순서로 세든 같다. BFS냐 DFS냐가 답을 바꾸는 건 거리나 순서를 물을 때다. 여러 칸에서 동시에 번지며 걸린 시간을 묻는 [Rotting Oranges](/posts/leetcode-rotting-oranges)가 그런 문제다. 이 문제에서는 셋 중 손에 익은 것을 쓰면 된다.
+
+스택 버전은 `pop()`한 칸을 배열에서 지우니 BFS 코드처럼 `queue.length`로 넓이를 대신할 수 없다. `area`를 따로 센다.
+
+## 합칠 때 크기를 더하는 유니온 파인드
+
+탐색 없이 넓이를 구하는 길도 있다. 땅 칸마다 크기 1짜리 묶음으로 시작하고, 붙어 있는 두 땅을 합칠 때마다 대표의 크기에 다른 쪽 크기를 더한다. 합칠 때마다 가장 큰 크기를 갱신하면 끝났을 때 최댓값이 답이다. [유니온 파인드](/posts/ds-union-find)의 "크기로 합치기"에서 쓰는 `size` 배열이 바로 섬 넓이다.
+
+```js
+function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const parent = new Int32Array(m * n);   // 칸 (r, c)는 r * n + c 번
+  const size = new Int32Array(m * n);     // 대표 칸에만 의미가 있다: 묶음의 칸 수
+  let best = 0;
+  for (let i = 0; i < m * n; i++) {
+    parent[i] = i;
+    if (grid[Math.floor(i / n)][i % n] === 1) {
+      size[i] = 1;
+      best = 1;                           // 땅이 하나라도 있으면 최소 1
+    }
+  }
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];      // 경로 절반 압축
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a, b) => {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) return;                // 이미 같은 섬
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;                      // 작은 묶음을 큰 묶음 밑에 붙인다
+    size[ra] += size[rb];                 // 넓이를 합친다
+    if (size[ra] > best) best = size[ra];
+  };
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      if (r + 1 < m && grid[r + 1][c] === 1) union(r * n + c, (r + 1) * n + c);
+      if (c + 1 < n && grid[r][c + 1] === 1) union(r * n + c, r * n + c + 1);
+    }
+  }
+  return best;
+}
+```
+
+`best = 1`을 초기화 반복에서 넣는 이유가 있다. 한 칸짜리 섬만 있는 격자에서는 `union`이 한 번도 일어나지 않는다. 그러면 `best`가 0으로 남아 답 1을 놓친다. 테스트의 체스판 모양 격자가 이 경우다.
+
+`ra === rb`일 때 바로 돌아가는 것도 넓이에는 중요하다. 2 × 2 꽉 찬 섬처럼 고리가 있으면 이미 같은 묶음인 두 칸이 또 붙어 있다. 이때 크기를 더하면 4칸 섬이 5나 6으로 나온다. 섬 개수 문제에서는 같은 상황에서 개수를 한 번 덜 빼는 정도였지만, 여기서는 넓이가 직접 틀린다.
+
+시간 O(m · n · α(mn))로 사실상 선형이고, 공간은 `parent`와 `size`로 O(m · n)이다. 입력을 바꾸지 않는다. 이 문제 하나만 보면 BFS보다 길지만, 땅이 하나씩 생기면서 매번 가장 큰 섬을 물을 때는 이 풀이만 칸마다 거의 상수 시간에 답한다.
+
+## 50 × 50 꽉 찬 섬으로 재 보면
+
+문제 조건의 최대 크기에서 다섯 풀이를 다섯 번씩 돌려 가장 빠른 값을 적었다. Node.js 22다.
+
+```text
+땅마다 다시 재기     443.78ms
+재귀 DFS              0.18ms
+BFS (숫자 좌표)       1.87ms
+스택 DFS              2.36ms
+유니온 파인드         0.61ms
+```
+
+느린 풀이만 다른 세상에 있다. 나머지는 2,500칸을 한 번씩 보는 일이라 모두 몇 ms 안이다. 재귀가 가장 빠른 건 작은 배열을 만들지 않고 호출 스택만 쓰기 때문이고, 스택 DFS가 BFS보다 느린 건 `[r, c]` 배열을 칸마다 만들어서다. 이 정도 차이는 면접에서 고를 이유가 되지 못한다. 고르는 기준은 재귀 깊이와 입력을 바꿔도 되는지다.
+
+## 넓이 재기 다섯 가지
+
+격자는 m × n이다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 땅마다 다시 재기 | O((mn)²) | O(m · n) | 쓰지 않는다. 같은 섬을 칸 수만큼 다시 잰다 |
+| 재귀 DFS로 넓이 돌려주기 | O(m · n) | O(m · n) 호출 스택 | JS·Java에서 가장 짧다. Python은 32 × 32부터 막힌다 |
+| BFS로 넓이 세기 | O(m · n) | O(m · n) 큐 | 기본 답. 언어와 상관없이 안전하다 |
+| 스택 DFS | O(m · n) | O(m · n) 스택 | BFS와 같다. 재귀 코드를 옮기고 싶을 때 |
+| 크기를 더하는 유니온 파인드 | O(m · n · α) | O(m · n) | 입력을 바꾸면 안 될 때, 땅이 하나씩 생길 때 |
+
+아래에서 직접 짜 볼 수 있다. 칸은 숫자 `0`, `1`이다.
+
+<CodePlayground
+  caption="Max Area of Island: 가장 큰 섬의 넓이"
+  functionName="maxAreaOfIsland"
+  initialCode={`function maxAreaOfIsland(grid) {
+  // grid: 0(물)과 1(땅)로 된 2차원 배열
+  // 위아래 양옆으로 이어진 땅 덩어리 중 가장 큰 것의 칸 수를 돌려준다
+  return 0;
+}`}
+  solution={`function maxAreaOfIsland(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let best = 0;
+  const queue = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      grid[r][c] = 0;
+      queue.length = 0;
+      queue.push(r * n + c);
+      for (let head = 0; head < queue.length; head++) {
+        const cur = queue[head];
+        const cr = Math.floor(cur / n), cc = cur % n;
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) {
+            grid[nr][nc] = 0;
+            queue.push(nr * n + nc);
+          }
+        }
+      }
+      best = Math.max(best, queue.length);
+    }
+  }
+  return best;
+}`}
+  tests={[
+    { label: "글의 예시", args: [[[1, 1, 0, 1, 1], [1, 0, 0, 0, 1], [0, 1, 1, 0, 1], [0, 1, 0, 0, 0]]], expected: 4 },
+    { label: "땅이 없다", args: [[[0, 0, 0]]], expected: 0 },
+    { label: "땅 한 칸", args: [[[1]]], expected: 1 },
+    { label: "U자 모양은 한 섬", args: [[[1, 0, 1], [1, 1, 1]]], expected: 5 },
+    { label: "대각선은 이어지지 않는다", args: [[[1, 0, 1], [0, 1, 0], [1, 0, 1]]], expected: 1 },
+    { label: "2 × 2 꽉 찬 섬", args: [[[1, 1], [1, 1]]], expected: 4 },
+    { label: "그림의 2 × 5 격자", args: [[[1, 0, 1, 1, 0], [1, 0, 0, 1, 1]]], expected: 4 },
+  ]}
+/>
+
+## 꺼낼 때 표시하면 섬이 부풀어 오른다
+
+섬 개수 문제에서는 방문 표시를 큐에서 꺼낼 때 해도 답은 맞고 헛일만 늘었다. 넓이 문제에서는 답이 틀린다. 아래 코드는 꺼낼 때 가라앉히고, 꺼낼 때마다 넓이를 센다.
+
+```js
+// 틀린 풀이: 꺼낼 때 표시하고, 이미 가라앉은 칸인지 다시 보지 않는다
+for (let head = 0; head < queue.length; head++) {
+  const [cr, cc] = queue[head];
+  grid[cr][cc] = 0;
+  area++;
+  for (const [dr, dc] of DIRS) {
+    const nr = cr + dr, nc = cc + dc;
+    if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) queue.push([nr, nc]);
+  }
+}
+```
+
+2 × 2 꽉 찬 섬에서 4가 아니라 5가 나온다. `(0,0)`을 꺼내면 오른쪽 `(0,1)`과 아래 `(1,0)`을 넣는다. 둘을 꺼낼 때 둘 다 `(1,1)`을 아직 땅으로 보고 큐에 넣는다. `(1,1)`이 두 번 꺼내지고 두 번 세어진다. 격자가 커지면 이 중복이 다시 중복을 낳는다. 정사각형 꽉 찬 섬에서 이 코드가 돌려준 넓이다.
+
+```text
+2 × 2   5        (정답 4)
+4 × 4   69       (정답 16)
+6 × 6   923      (정답 36)
+8 × 8   12869    (정답 64)
+```
+
+한 변이 1 늘 때마다 거의 네 배씩 불어난다. 50 × 50을 넣었더니 Node.js가 2GB 넘게 메모리를 쓰다가 `JavaScript heap out of memory`로 죽었다. 큐에 같은 칸이 폭발적으로 쌓인 것이다. 고치는 법은 둘 중 하나다. 넣을 때 표시하거나, 꺼낼 때 "이미 0이면 건너뛴다"는 줄을 넣는다. 앞의 BFS처럼 넣을 때 표시하는 쪽이 큐도 작고 실수할 자리도 없다.
+
+그 밖에 이 문제에서 자주 틀리는 자리다.
+
+- 땅이 없는 격자. `best`를 0으로 시작하면 자연히 0이 나온다. `-Infinity`로 시작했다가 그대로 돌려주는 실수를 조심한다.
+- 숫자와 글자. 이 문제는 숫자 `1`이다. 섬 개수 문제의 `=== "1"`을 그대로 쓰면 어떤 격자든 0이 나온다.
+- 전역 넓이 변수를 섬마다 0으로 되돌리지 않으면 지금까지 지난 모든 땅의 합이 나온다. 예시에서 4 대신 10이 나온다.
+- 유니온 파인드에서 `best`를 1로 올려 두지 않으면 한 칸짜리 섬만 있는 격자에서 0이 나온다.
+
+## 섬 넓이 문제가 바뀌면
+
+### 섬 하나를 더 이을 수 있다면
+
+물 칸 하나를 땅으로 바꿀 수 있을 때 만들 수 있는 가장 큰 섬은? LeetCode 827. Making A Large Island(Hard)다. 물 칸마다 BFS를 다시 하면 O((mn)²)이다. 대신 먼저 섬마다 번호를 붙이고 번호별 넓이를 표에 적는다. 그다음 물 칸마다 네 이웃의 섬 번호를 중복 없이 모아 넓이를 더하고 1을 더한다. 같은 섬이 두 방향에서 닿을 수 있으니 번호를 집합으로 모아야 한다. 격자가 전부 땅이면 바꿀 물이 없으니 전체 칸 수가 답이다.
+
+### 둘레를 구하라면
+
+LeetCode 463. Island Perimeter다. 탐색도 필요 없다. 땅 칸마다 네 방향을 보고, 격자 밖이거나 물인 방향의 수를 더한다. 또는 땅 칸 수 × 4에서 붙어 있는 땅 쌍 수 × 2를 뺀다.
+
+### 대각선도 이어진 것으로 본다면
+
+방향 배열에 대각선 네 개를 더한다. 예시의 `(1,0)`과 `(2,1)`이 이어지면서 왼쪽 두 섬이 합쳐져 넓이 6이 답이 된다.
+
+### 모든 섬의 넓이를 큰 순서로 달라면
+
+섬이 끝날 때마다 넓이를 배열에 넣고 정렬한다. 섬 수를 k라 하면 O(m · n + k log k)다. 상위 몇 개만 필요하면 크기 제한 [힙](/posts/ds-heap)을 쓴다.
+
+### 입력을 바꾸면 안 된다면
+
+방문 표시용 `Uint8Array(m * n)`를 따로 둔다. 유니온 파인드는 원래 격자를 읽기만 한다. 실무 코드라면 남이 넘긴 배열을 몰래 0으로 바꾸지 않는 게 기본이다.
+
+### 비슷한 문제
+
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 섬의 넓이 대신 개수를 센다.
+- [Pacific Atlantic Water Flow](/posts/leetcode-pacific-atlantic-water-flow) (417): 같은 격자 탐색을 가장자리에서 거꾸로 시작한다.
+- [Rotting Oranges](/posts/leetcode-rotting-oranges) (994): 여러 칸에서 동시에 번지며 걸린 시간을 센다.
+- [Number of Connected Components in an Undirected Graph](/posts/leetcode-number-of-connected-components) (323, 프리미엄 문제): 격자가 아닌 그래프에서 연결 요소를 센다.
+- 827\. Making A Large Island, 463. Island Perimeter, 1905. Count Sub Islands.
+
+## 섬이 끝날 때 숫자 하나를 들고 나온다
+
+가장 큰 섬 찾기는 섬 개수 세기에서 한 가지만 바뀐다. 섬을 다 지운 순간 지운 칸 수를 들고 나와 최댓값과 비교한다. 칸 수는 재귀라면 `1 + 이웃들의 합`으로, BFS라면 큐에 넣은 칸 수로 센다. 어느 쪽이든 칸이 한 번씩만 세어지도록 들어가는 순간 표시해야 하고, 그걸 어기면 넓이가 몇 배로 부풀어 오른다. 칸이 2,500개뿐이라도 Python 재귀는 32 × 32에서 막히니 큐를 쓰는 편이 안전하다.
+
+## 면접에서 나올 만한 질문
+
+### 섬 개수 문제와 무엇이 다른가요?
+
+탐색은 같고, 섬 하나를 다 지웠을 때 지운 칸 수를 돌려준다는 점만 다르다. 재귀 DFS는 `1 + 네 이웃의 결과`를 돌려주고, BFS는 큐에서 꺼낸 칸 수를 센다. 섬마다 그 값을 최댓값과 비교한다. 칸 값이 글자가 아니라 숫자라는 것도 실수하기 쉬운 차이다.
+
+### 시간 복잡도가 왜 O(m · n)인가요?
+
+칸마다 바깥 반복에서 한 번 보고, 땅 칸은 가라앉힐 때 한 번만 탐색에 들어간다. 한 번 0이 된 칸은 다시 들어가지 않으니 섬이 몇 개든 전체 일은 칸 수에 비례한다. 땅 칸마다 방문 표시를 새로 만들어 섬을 다시 재면 같은 섬을 칸 수만큼 재서 O((mn)²)이 되고, 50 × 50에서 625만 번 일했다.
+
+### 칸이 2,500개뿐인데 재귀를 써도 되나요?
+
+JavaScript와 Java는 2,500단계 재귀를 버텨서 괜찮다. Python은 기본 재귀 한도가 1,000이라 32 × 32 꽉 찬 섬부터 `RecursionError`가 났다. 한도를 올릴 수도 있지만, 언어와 상관없이 안전한 BFS로 쓰는 편을 고른다.
+
+### 방문 표시를 큐에서 꺼낼 때 하면 어떻게 되나요?
+
+섬 개수는 맞아도 넓이는 틀린다. 큐에서 기다리는 칸을 다른 이웃이 또 넣어서 같은 칸이 여러 번 꺼내지고 여러 번 세어진다. 2 × 2 꽉 찬 섬이 5로, 8 × 8이 12,869로 나왔고 50 × 50은 메모리가 터졌다. 넣는 순간 표시하면 칸마다 정확히 한 번 들어간다.
+
+### 유니온 파인드로는 어떻게 넓이를 구하나요?
+
+대표 칸마다 묶음의 칸 수를 `size`에 들고 있다가, 두 묶음을 합칠 때 크기를 더하고 최댓값을 갱신한다. 이미 같은 묶음이면 더하지 않아야 2 × 2 섬처럼 고리가 있는 모양에서 넓이가 부풀지 않는다. 한 칸짜리 섬만 있으면 합치기가 없으니 땅이 하나라도 있을 때 최댓값을 1로 시작한다. 땅이 하나씩 생기면서 가장 큰 섬을 계속 물을 때 쓴다.
+
+### 물 한 칸을 땅으로 바꿀 수 있다면 가장 큰 섬은 어떻게 구하나요?
+
+먼저 섬마다 번호를 붙이고 번호별 넓이를 적어 둔다. 그다음 물 칸마다 네 이웃의 섬 번호를 집합으로 모아 넓이를 더하고 1을 더한다. 같은 섬이 두 방향에서 닿을 수 있어 집합이 필요하다. 전체 O(m · n)이고, 물 칸마다 BFS를 다시 하는 O((mn)²)을 피한다.

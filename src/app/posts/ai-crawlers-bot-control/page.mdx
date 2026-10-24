@@ -1,0 +1,402 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ai-crawlers-bot-control");
+
+<EasyIntro>
+  웹 사이트에는 사람만 오는 게 아니다. 검색 엔진이 보낸 로봇, 인공지능 회사가 보낸 로봇이 쉬지 않고 찾아와 페이지를 읽어 간다. 어떤 로봇은 검색 결과에 내 글을 보여 주려고 오고, 어떤 로봇은 인공지능에게 공부시킬 글을 모으러 오고, 어떤 로봇은 사람이 질문한 그 순간 대신 읽으러 온다.
+
+  사이트 입구에는 "이 로봇은 들어와도 되고 저 로봇은 안 된다"라고 적은 안내문을 붙여 둘 수 있다. 하지만 안내문은 부탁일 뿐이라 예의 바른 로봇만 지킨다. 아파트 경비실을 떠올리면 된다. 출입 명단을 붙여 두는 것과, 경비원이 신분증을 확인하고 문을 잠그는 것은 다른 일이다.
+
+  게다가 어떤 로봇은 유명한 로봇의 이름표를 훔쳐 달고 온다. 그래서 이름표만 보지 않고 진짜 어디서 왔는지 확인해야 한다. 너무 자주 오는 로봇은 천천히 오게 하고, 끝까지 말을 안 듣는 로봇은 문 앞에서 돌려보낸다. 막는 것만 답은 아니라서, 정해진 창구로 오면 정리된 자료를 주는 방법도 있다.
+</EasyIntro>
+
+## 트래픽 그래프가 튀었는데 사람이 아니었다
+
+새벽 3시에 서버 응답 시간 알림이 울렸다. 대시보드를 보니 요청 수가 평소의 다섯 배인데 가입이나 결제는 그대로다. 접근 로그에서 User-Agent별로 세어 보니 처음 보는 이름들이 위에 있었다. 스크래치 폴더에 그 모양을 줄여 만든 열 줄짜리 로그로 같은 명령을 돌렸다.
+
+```bash
+# 로그에서 알려진 봇 이름을 뽑아 많이 나온 순으로 센다
+grep -oE 'GPTBot|OAI-SearchBot|ChatGPT-User|ClaudeBot|Claude-User|Claude-SearchBot|PerplexityBot|Perplexity-User|Googlebot|Bingbot|CCBot|Bytespider|Applebot' \
+  bots.log | sort | uniq -c | sort -rn
+```
+
+```text
+      4 GPTBot
+      2 ClaudeBot
+      1 PerplexityBot
+      1 Googlebot
+      1 ChatGPT-User
+```
+
+여기서 바로 "AI 봇은 다 막자"로 가면 실수하기 쉽다. 이 이름들은 하는 일이 서로 다르다. 어떤 건 모델 학습용 수집이고, 어떤 건 AI 검색 결과에 내 글을 보여 주기 위한 색인이고, 어떤 건 사람이 지금 질문해서 대신 페이지를 읽으러 온 요청이다. 막는 대상을 잘못 고르면 학습은 그대로 당하면서 AI 검색 유입만 잃는다. 그리고 로그의 이름은 누구나 쓸 수 있는 문자열이다. 위 로그의 GPTBot 네 줄 중 하나는 OpenAI가 아닌 IP에서 왔다.
+
+이 글은 그 새벽부터 시작한다. AI 봇을 용도별로 나누고, robots.txt로 할 수 있는 것과 없는 것, 진짜 봇인지 확인하는 법, 지키지 않는 봇을 레이트 리밋과 WAF로 다루는 법, Cloudflare의 AI 봇 차단과 pay-per-crawl, 그리고 사람 대신 브라우징하는 에이전트와 API·피드·MCP로 길을 따로 열어 주는 선택지까지 본다. AI 검색이 가져간 페이지를 어떻게 인용하는지는 [AI 검색은 페이지를 어떻게 골라 인용하나](/posts/ai-search-grounding-geo)에, robots.txt 해석 규칙 자체는 [웹 크롤러 설계 ②](/posts/sd-web-crawler-politeness-dedup)에 있다.
+
+## AI 봇은 세 종류다
+
+회사마다 봇 이름은 다르지만 용도는 대체로 세 갈래로 나뉜다. 아래 그림은 주요 봇을 용도별로 묶은 것이다. 점이 흐르는 방향은 "이 봇이 가져간 내용이 어디에 쓰이나"다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="같은 회사의 봇이라도 학습, 검색 색인, 사용자 요청으로 용도가 갈린다"
+  nodes={[
+    { id: "train", label: "학습용 수집", sub: "GPTBot · ClaudeBot · CCBot", x: 110, y: 50, w: 190 },
+    { id: "search", label: "검색 색인", sub: "OAI-SearchBot · PerplexityBot", x: 110, y: 150, w: 190 },
+    { id: "user", label: "사용자 요청", sub: "ChatGPT-User · Claude-User", x: 110, y: 250, w: 190 },
+    { id: "model", label: "다음 모델", sub: "출처 없이 기억", x: 340, y: 50, w: 140 },
+    { id: "answer", label: "AI 검색 답변", sub: "출처 링크", x: 340, y: 150, w: 140 },
+    { id: "now", label: "지금 이 대화", sub: "한 번 읽고 답", x: 340, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "train", to: "model" },
+    { from: "search", to: "answer" },
+    { from: "user", to: "now" },
+    { from: "user", to: "answer", dashed: true },
+  ]}
+/>
+
+학습용 수집 봇은 다음 모델을 학습시킬 문서를 모은다. OpenAI의 GPTBot, Anthropic의 ClaudeBot, 공개 웹 아카이브를 만드는 Common Crawl의 CCBot이 여기에 든다. Common Crawl 데이터는 여러 회사가 학습에 쓰니, CCBot을 막는 것은 특정 회사 하나를 막는 것과 효과가 다르다. 이 봇들이 가져간 내용은 출처 링크 없이 모델의 지식이 된다. 사이트로 돌아오는 유입은 거의 없다.
+
+검색 색인 봇은 AI 검색 서비스의 색인을 만든다. OpenAI의 OAI-SearchBot, Anthropic의 Claude-SearchBot, Perplexity의 PerplexityBot이 여기에 든다. 이 봇이 가져간 페이지는 AI 검색 답변의 근거로 인용되고 출처 링크가 붙는다. 기존 검색 엔진 봇과 하는 일이 가장 비슷하다. OpenAI와 Perplexity는 각 문서에서 이 봇이 모은 것을 모델 학습에 쓰지 않는다고 적고 있다.
+
+사용자 요청 봇은 사람이 대화 중에 "이 페이지 읽어 줘"라고 하거나, 모델이 답하려고 특정 페이지를 열어야 할 때 그 자리에서 한 번 가져간다. ChatGPT-User, Claude-User, Perplexity-User가 여기에 든다. 크롤러라기보다 사람의 브라우저에 가깝다. 그래서 OpenAI와 Perplexity의 문서에는 이 요청이 사용자가 시작한 것이라 robots.txt 규칙이 적용되지 않을 수 있다는 취지의 문구가 들어 있다(2025년 기준 문서). 이 부분은 회사마다 입장이 다르고 바뀌기도 하니 각 회사의 봇 문서를 직접 확인한다.
+
+구글과 애플은 구조가 조금 다르다. 다음 절에서 따로 본다.
+
+## Google-Extended는 크롤러가 아니다
+
+구글에는 AI 학습 전용 크롤러가 따로 없다. 구글 검색용으로 가져가는 건 늘 Googlebot이고, 그 내용을 Gemini 학습과 일부 그라운딩에 써도 되는지를 robots.txt의 `Google-Extended`라는 이름(제품 토큰)으로 정한다. 2023년 9월에 나왔다.
+
+```text
+User-agent: Google-Extended
+Disallow: /
+```
+
+이렇게 쓰면 Gemini 모델 학습과 Gemini 앱·Vertex AI의 그라운딩에 내 사이트 내용을 쓰지 말라는 뜻이 된다. 구글은 이 설정이 구글 검색 포함 여부와 순위에 영향을 주지 않는다고 밝혔다. 그리고 반대로, AI 개요와 AI 모드는 검색 기능이라 `Google-Extended`로 끌 수 없다. 그쪽은 스니펫 제어(`nosnippet`, `max-snippet`)의 영역이고, [AI 검색 글](/posts/ai-search-grounding-geo)에서 다뤘다.
+
+로그에 `Google-Extended`라는 User-Agent가 찍히는 일은 없다. 요청은 여전히 Googlebot으로 온다. 그래서 "Google-Extended를 막았는데 로그에 구글 요청이 그대로다"는 정상이다. Googlebot을 막으면 검색에서 사라지니 절대 그렇게 하지 않는다.
+
+애플도 같은 방식이다. Applebot은 Siri와 Spotlight 검색에 쓰이고, `Applebot-Extended` 토큰을 막으면 애플의 생성형 모델 학습에 쓰지 않는다. 역시 별도 크롤러가 아니다.
+
+## robots.txt로 용도별로 고르기
+
+용도를 나눴으면 robots.txt에서 따로 고를 수 있다. 예를 들어 "학습에는 쓰지 말고, AI 검색에는 나오고 싶다"는 정책은 이렇게 쓴다.
+
+```text
+# 학습용 수집은 막는다
+User-agent: GPTBot
+User-agent: ClaudeBot
+User-agent: CCBot
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+Disallow: /
+
+# AI 검색 색인은 허용한다. 공통 규칙을 다시 적는다
+User-agent: OAI-SearchBot
+User-agent: Claude-SearchBot
+User-agent: PerplexityBot
+Disallow: /admin/
+Disallow: /cart
+
+# 그 밖의 모든 봇
+User-agent: *
+Disallow: /admin/
+Disallow: /cart
+
+Sitemap: https://new.example/sitemap.xml
+```
+
+`User-agent` 줄을 여러 개 연달아 쓰면 그 봇들이 같은 그룹을 공유한다. RFC 9309 기준으로 크롤러는 자기 이름과 맞는 그룹이 있으면 그 그룹만 따르고 `*` 그룹은 보지 않는다. 그래서 검색 봇 그룹에 `/admin/` 규칙을 다시 적었다. 빼먹으면 이 봇들에게는 관리자 경로가 열린다. 이 함정은 [웹 크롤러 설계 ②](/posts/sd-web-crawler-politeness-dedup)의 실험 결과에서 그대로 볼 수 있다.
+
+robots.txt는 바뀐 뒤 바로 반영되지 않는다. 크롤러는 보통 하루 정도 캐시한다. 바꾸고 나서 한동안 기존 규칙대로 오는 건 정상이다.
+
+정책을 고르는 기준은 사이트마다 다르다. 광고나 구독으로 버는 뉴스·미디어 사이트는 학습과 검색 둘 다 막고 라이선스 계약으로 가는 경우가 많다. 개발 문서나 오픈소스 프로젝트는 오히려 모델이 자기 API를 정확히 알기를 바라서 모두 연다. 쇼핑몰은 상품이 AI 검색 답변에 나오는 게 이득이라 검색 봇은 열고, 학습은 상관없다고 보거나 막는다. 정답이 하나인 문제가 아니다. 다만 "검색 색인 봇을 막으면 AI 검색 유입을 포기하는 것"이라는 결과는 알고 고른다.
+
+## robots.txt는 부탁이다
+
+robots.txt는 표준이지만 강제력이 없다. RFC 9309도 이 규칙이 접근 권한 부여 수단이 아니라고 적고 있다. 지키는지는 크롤러 운영자의 선택이고, 지키지 않아도 기술적으로 막히는 건 없다.
+
+실제로 지키지 않는 사례들이 보고된다. 공개된 User-Agent로는 robots.txt를 지키면서, 막히면 브라우저처럼 보이는 User-Agent와 다른 IP 대역으로 다시 오는 크롤링이 문제가 된다. Cloudflare는 2025년 8월 Perplexity가 이런 방식으로 크롤링한다고 공개적으로 지적했고, Perplexity는 반박했다. 누가 맞든 운영자 입장의 결론은 같다. robots.txt만으로는 막을 수 없는 요청이 있다는 것이다.
+
+그래서 단계를 나눈다. robots.txt로 의사를 밝히고, 그다음 진짜 봇인지 확인하고, 지키지 않거나 사칭하는 요청은 서버나 엣지에서 기술적으로 막는다.
+
+## 진짜 봇인지 확인하기
+
+User-Agent는 요청자가 마음대로 쓰는 문자열이다. `curl -A "GPTBot"` 한 줄이면 누구나 GPTBot이 된다. 처음 로그의 GPTBot 네 줄을 IP로 다시 보면 이렇다.
+
+```bash
+# GPTBot이라고 자칭한 요청의 출발 IP
+grep 'GPTBot' bots.log | awk '{print $1}' | sort -u
+```
+
+```text
+198.51.100.9
+20.171.206.15
+20.171.206.16
+20.171.206.17
+```
+
+세 개는 같은 대역이고 하나는 혼자 다르다. 어느 쪽이 진짜인지는 봇 운영자가 공개한 정보와 맞춰 봐야 안다. 확인 방법은 두 가지다.
+
+첫째는 공개 IP 목록이다. OpenAI는 GPTBot, OAI-SearchBot, ChatGPT-User의 IP 대역을 각각 JSON 파일로 공개하고(`openai.com/gptbot.json` 등), 구글은 Googlebot과 다른 크롤러의 대역을 JSON으로, Perplexity도 자기 봇의 대역을 공개한다. 요청 IP가 이 대역 안에 있는지 보면 된다. 대역은 바뀌니 하루 한 번쯤 다시 받아 둔다. 모든 회사가 목록을 공개하지는 않으니 공개하지 않는 봇은 다른 방법을 쓴다.
+
+둘째는 역방향 DNS 확인이다. 구글과 빙이 권하는 방법이다. 아래 그림에서 다음을 누르면 순서가 보인다.
+
+<SequenceDiagram
+  caption="User-Agent는 주장이고, IP에서 시작한 DNS 왕복이 증거다"
+  actors={[
+    { id: "bot", label: "요청자" },
+    { id: "server", label: "내 서버" },
+    { id: "dns", label: "DNS" },
+  ]}
+  steps={[
+    {
+      from: "bot",
+      to: "server",
+      label: "GET + Googlebot UA",
+      title: "자기가 Googlebot이라고 말하는 요청이 온다",
+      detail: "User-Agent 헤더는 요청자가 정한다. 이것만으로는 아무것도 증명하지 못한다. 서버가 믿을 수 있는 건 TCP 연결의 출발 IP다.",
+      payload: "66.249.66.1\nUser-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    },
+    {
+      from: "server",
+      to: "dns",
+      label: "PTR 조회",
+      title: "IP의 이름을 묻는다",
+      detail: "역방향 조회로 이 IP에 붙은 호스트 이름을 얻는다. 구글이면 googlebot.com이나 google.com, google 하위 도메인으로 끝나야 한다.",
+      payload: "host 66.249.66.1",
+    },
+    {
+      from: "dns",
+      to: "server",
+      label: "crawl-...googlebot.com",
+      title: "이름이 돌아온다",
+      detail: "PTR 기록은 IP 주인이 정하는 값이라 이것만으로는 부족하다. 남의 이름을 PTR에 적어 둘 수도 있다.",
+      payload: "1.66.249.66.in-addr.arpa domain name pointer crawl-66-249-66-1.googlebot.com.",
+    },
+    {
+      from: "server",
+      to: "dns",
+      label: "A 조회",
+      title: "그 이름의 IP를 다시 묻는다",
+      detail: "정방향 조회는 googlebot.com 도메인 주인, 즉 구글만 설정할 수 있다. 여기서 원래 IP가 나와야 진짜다.",
+      payload: "host crawl-66-249-66-1.googlebot.com",
+    },
+    {
+      from: "dns",
+      to: "server",
+      label: "66.249.66.1",
+      title: "원래 IP와 같으면 확인 끝",
+      detail: "역방향과 정방향이 같은 IP로 닫히면 구글이 운영하는 봇이다. 결과는 캐시해 두고, 다르면 사칭으로 본다.",
+      payload: "crawl-66-249-66-1.googlebot.com has address 66.249.66.1",
+    },
+  ]}
+/>
+
+그림의 출력은 구글 문서에 실린 형식이다. 이 실험 환경은 외부 DNS 조회가 막혀 있어서 직접 돌린 결과를 싣지 못했다. 서버에서는 `host`나 `dig -x`로 똑같이 확인한다.
+
+```bash
+# 1. IP로 이름 찾기 (역방향)
+host 66.249.66.1
+# 2. 그 이름으로 IP 찾기 (정방향). 1의 IP와 같아야 한다
+host crawl-66-249-66-1.googlebot.com
+```
+
+요청마다 DNS를 두 번 조회하면 느리니 실시간 차단에는 IP 목록 방식을 쓰고, DNS 확인은 로그를 분석하거나 의심스러운 IP를 조사할 때 쓴다. IP 목록 확인 함수를 직접 만들어 보자. IPv4 주소가 CIDR 대역 목록 중 하나에 들어가는지 본다.
+
+<CodePlayground
+  caption="요청 IP가 공개된 봇 대역 안에 있는지 확인하기 (IPv4)"
+  functionName="ipInCidrs"
+  initialCode={`// ip: "20.171.206.15" 같은 IPv4 문자열
+// cidrs: ["20.171.206.0/24", ...]
+// 하나라도 들어가면 true
+// 힌트: 주소를 32비트 정수로 바꾸고, /n이면 앞 n비트가 같은지 본다.
+//       자바스크립트 비트 연산은 부호 있는 32비트라 2 ** (32 - n)으로 나누는 편이 안전하다.
+function ipInCidrs(ip, cidrs) {
+  return false;
+}`}
+  solution={`function ipInCidrs(ip, cidrs) {
+  const toInt = (s) => s.split(".").reduce((acc, p) => acc * 256 + Number(p), 0);
+  const n = toInt(ip);
+  return cidrs.some((c) => {
+    const [base, bitsStr] = c.split("/");
+    const size = 2 ** (32 - Number(bitsStr));
+    const start = Math.floor(toInt(base) / size) * size;
+    return n >= start && n < start + size;
+  });
+}`}
+  tests={[
+    { args: ["20.171.206.15", ["20.171.206.0/24", "52.230.152.0/24", "66.249.64.0/19"]], expected: true, label: "/24 안" },
+    { args: ["20.171.207.15", ["20.171.206.0/24", "52.230.152.0/24", "66.249.64.0/19"]], expected: false, label: "옆 대역" },
+    { args: ["66.249.66.1", ["20.171.206.0/24", "52.230.152.0/24", "66.249.64.0/19"]], expected: true, label: "/19 안" },
+    { args: ["66.249.96.1", ["20.171.206.0/24", "52.230.152.0/24", "66.249.64.0/19"]], expected: false, label: "/19 바로 밖" },
+    { args: ["10.0.0.1", ["0.0.0.0/0"]], expected: true, label: "/0은 전부" },
+    { args: ["192.0.2.7", ["192.0.2.7/32"]], expected: true, label: "/32는 한 주소" },
+    { args: ["192.0.2.8", ["192.0.2.7/32"]], expected: false, label: "/32 옆 주소" },
+    { args: ["1.2.3.4", []], expected: false, label: "빈 목록" },
+  ]}
+/>
+
+테스트의 대역은 설명을 위한 예다. 실제로는 각 회사가 공개한 JSON을 받아 넣는다. `66.249.64.0/19`는 `66.249.64.0`부터 `66.249.95.255`까지라서 `66.249.96.1`은 바로 밖이다. 비트 연산(`>>>`, `&`)으로 짜도 되지만 자바스크립트의 비트 연산은 부호 있는 32비트로 계산해서 `128.0.0.0` 이상의 주소에서 음수가 나와 헷갈리기 쉽다. 실서비스에서는 IPv6도 함께 다뤄야 하니 검증된 라이브러리나 웹 서버의 `geo` 모듈, WAF의 IP 목록 기능을 쓴다.
+
+## 지키지 않는 봇은 서버에서 다룬다
+
+봇을 다루는 수단은 강한 순서로 네 가지다. 사칭 차단(User-Agent는 봇인데 IP가 목록 밖), 완전 차단(특정 봇을 403으로), 속도 제한(받되 천천히), 그리고 그냥 두기. 대부분의 사이트에서 가장 쓸모 있는 건 속도 제한이다. 막으면 잃는 게 생기고, 그냥 두면 서버가 아프다.
+
+Nginx로 둘을 함께 걸어 봤다. 특정 봇은 403, 학습·검색 봇은 봇마다 초당 2개로 제한한다. 레이트 리밋의 원리와 알고리즘은 [레이트 리밋 실전](/posts/rate-limiting-in-practice)에 있다.
+
+```nginx
+http {
+  # 아예 받지 않을 봇
+  map $http_user_agent $ai_block {
+    default 0;
+    ~*Bytespider 1;
+  }
+  # 속도를 제한할 봇. 키가 빈 문자열이면 limit_req가 적용되지 않는다
+  map $http_user_agent $ai_limit_key {
+    default "";
+    ~*(GPTBot|ClaudeBot|PerplexityBot|CCBot) $http_user_agent;
+  }
+  limit_req_zone $ai_limit_key zone=aibots:1m rate=2r/s;
+  limit_req_status 429;
+
+  server {
+    listen 4318;
+    location / {
+      if ($ai_block) { return 403; }
+      limit_req zone=aibots burst=3 nodelay;
+    }
+  }
+}
+```
+
+스크래치 폴더에서 이 설정으로 Nginx를 띄우고, User-Agent를 바꿔 가며 열 번씩 빠르게 요청했다.
+
+```bash
+# UA를 바꿔 10번씩 요청하고 응답 코드를 센다
+for ua in "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+          "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot" \
+          "Mozilla/5.0 (Linux; Android 5.0) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36 (compatible; Bytespider; spider-feedback@bytedance.com)"; do
+  for i in $(seq 1 10); do curl -s -o /dev/null -w "%{http_code}\n" -A "$ua" localhost:4318/; done \
+    | sort | uniq -c | tr '\n' ' '; echo
+done
+```
+
+```text
+     10 200 
+      4 200       6 429 
+     10 403 
+```
+
+첫 줄은 일반 브라우저라 제한 키가 비어 모두 200이다. 둘째 줄의 GPTBot은 처음 1개에 `burst=3`만큼 더해 4개가 통과하고 나머지 6개가 429를 받았다. 셋째 줄은 모두 403이다. Nginx 오류 로그에는 제한에 걸린 요청이 이렇게 남는다.
+
+```text
+2026/10/24 10:45:39 [error] 4266#4266: *20 limiting requests, excess: 3.848 by zone "aibots", client: 127.0.0.1, server: , request: "GET / HTTP/1.1", host: "localhost:4318"
+```
+
+제한 키를 User-Agent 문자열로 잡았으니, 같은 봇의 여러 IP가 한 버킷을 나눠 쓴다. 봇 하나가 IP 수십 개로 나눠 와도 합산해서 제한된다는 뜻이다. 대신 User-Agent를 바꿔 오는 요청은 이 규칙을 피한다. 사칭과 위장은 앞 절의 IP 확인으로 잡아야 한다. 429 대신 503과 `Retry-After`를 주는 방법도 있는데, 구글은 5xx와 429를 받으면 크롤링 속도를 줄인다고 밝히고 있다. 다른 AI 봇이 이 신호를 얼마나 존중하는지는 회사마다 다르다.
+
+규칙을 바꾸기 전과 후로 확인 순서를 지킨다. 지금 로그에서 봇별 요청 수와 응답 코드를 먼저 세고, 규칙을 넣은 뒤 `nginx -t`로 문법을 확인하고 다시 읽어 들이고(`sudo nginx -t && sudo systemctl reload nginx`), 위처럼 `curl -A`로 동작을 확인하고, 하루 뒤 같은 집계를 다시 본다.
+
+<Callout kind="warning">
+User-Agent 정규식에 `bot`이나 `spider` 같은 넓은 말을 넣으면 Googlebot과 Bingbot까지 걸린다. 검색 봇이 403이나 429를 오래 받으면 크롤링이 줄고 결국 색인에서 빠진다. 차단 목록은 정확한 봇 이름으로만 쓰고, 넣은 뒤 `curl -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"`로 검색 봇이 200을 받는지 꼭 확인한다. 문제가 생기면 해당 `map` 줄을 지우고 다시 읽어 들이면 바로 되돌아간다.
+</Callout>
+
+## 규칙이 지켜지는지 로그로 확인하기
+
+robots.txt를 바꾸고 레이트 리밋을 건 뒤에는 정말로 줄었는지, 누가 여전히 막은 경로로 오는지를 숫자로 본다. 봇별 요청 수와 전송량, 그리고 막은 경로(여기서는 `/tags/`)에 들어온 횟수를 한 번에 세는 명령이다. 처음의 열 줄짜리 로그로 돌렸다.
+
+```bash
+# combined 로그: $2 요청 줄, $3 상태·바이트, $6 User-Agent (따옴표로 나눈 칸)
+awk -F'"' '{
+  ua=$6; split($3, a, " "); code=a[1]; bytes=a[2]; split($2, r, " "); path=r[2]
+  bot="other"
+  if (match(ua, /GPTBot|OAI-SearchBot|ChatGPT-User|ClaudeBot|PerplexityBot|Googlebot|CCBot/)) bot=substr(ua, RSTART, RLENGTH)
+  n[bot]++; b[bot]+=bytes
+  if (path ~ /^\/tags\//) t[bot]++
+} END { for (k in n) printf "%-14s req=%d bytes=%d tags=%d\n", k, n[k], b[k], t[k] }' bots.log | sort -t= -k2 -nr
+```
+
+```text
+GPTBot         req=4 bytes=31480 tags=1
+ClaudeBot      req=2 bytes=18240 tags=0
+other          req=1 bytes=9120 tags=0
+PerplexityBot  req=1 bytes=9120 tags=0
+Googlebot      req=1 bytes=9120 tags=0
+ChatGPT-User   req=1 bytes=9120 tags=0
+```
+
+`GPTBot`의 `tags=1`이 볼 곳이다. robots.txt에서 `/tags/`를 막은 뒤 하루 이틀이 지나도 이 숫자가 0이 되지 않으면, 그 요청이 진짜 GPTBot인지 IP부터 확인한다. 진짜인데 계속 온다면 캐시가 아직 남았거나 그룹 규칙을 잘못 쓴 것이고, 가짜라면 robots.txt가 아니라 엣지에서 막을 대상이다. 전송량(`bytes`)은 비용과 직결된다. CDN 요금이 전송량으로 매겨지는 사이트에서는 요청 수보다 이 숫자가 의사 결정에 더 쓸모 있다.
+
+이 집계를 매일 돌려 봇별 추이를 대시보드에 올려 두면 새 봇이 나타나거나 기존 봇이 갑자기 늘어나는 순간을 알림으로 받을 수 있다. 새벽의 알림을 응답 시간이 아니라 봇 요청 비율로 걸어 두면, 서버가 느려지기 전에 먼저 알 수 있다.
+
+## 엣지에서 막기: WAF와 Cloudflare의 AI 봇 기능
+
+봇 트래픽이 많으면 오리진까지 오기 전에 CDN이나 WAF에서 거르는 편이 싸다. WAF는 User-Agent, IP 평판, TLS 지문, 요청 패턴 같은 신호를 함께 보고 봇을 분류한다. 서버의 `map` 규칙보다 위장한 봇을 잘 잡는다. WAF 일반은 [WAF](/posts/waf)에 있다.
+
+Cloudflare는 AI 봇을 따로 다루는 기능을 여럿 내놨다. 대시보드에서 알려진 AI 봇을 한 번에 막는 설정이 있고, 2025년 7월부터는 새로 추가하는 도메인에 이 차단을 기본으로 켜도록 바꿨다. robots.txt를 대신 관리해 주는 기능도 있다.
+
+같은 시기에 발표한 pay-per-crawl은 막거나 열거나 둘 중 하나가 아니라 "돈을 내면 열어 준다"는 세 번째 선택지다. Cloudflare 블로그가 설명한 흐름은 이렇다. 등록된 크롤러가 요청하면 사이트가 정한 값에 따라 그냥 200을 주거나, 막거나, `402 Payment Required`와 `crawler-price` 헤더로 가격을 알린다. 크롤러는 그 가격을 받아들인다는 헤더(`crawler-exact-price`)를 붙여 다시 요청하거나 처음부터 낼 수 있는 최대 가격(`crawler-max-price`)을 붙여 보내고, 결제가 되면 200과 함께 청구 금액 헤더를 받는다. 크롤러가 정말 그 회사인지는 HTTP 메시지 서명으로 확인한다. 2025년 발표 당시 비공개 베타였고 세부는 바뀔 수 있다.
+
+이 방식의 의미는 HTTP에 오래 있었지만 거의 안 쓰이던 402 코드를 실제 거래에 쓰고, 봇 신원 확인을 User-Agent가 아닌 암호 서명으로 옮긴다는 데 있다. 한계도 분명하다. Cloudflare 뒤에 있는 사이트에서만 되고, 크롤러 쪽이 참여해야 한다. 참여하지 않는 크롤러에게는 결국 차단과 같다.
+
+Cloudflare는 robots.txt에 용도별 의사를 적는 Content Signals라는 확장도 제안했다. `search`, `ai-input`, `ai-train` 같은 용도마다 예·아니오를 적는 형식이다. 표준이 아니고 크롤러가 지킬 의무도 없지만, 봇 이름 대신 용도로 말한다는 점에서 지금 robots.txt의 약점을 짚는다. 봇 이름 기반 규칙은 회사가 새 봇을 낼 때마다 따라가야 한다.
+
+## 사람 대신 브라우징하는 에이전트
+
+마지막 종류는 봇처럼 보이지 않는다. ChatGPT의 에이전트 기능이나 브라우저를 직접 조작하는 AI 도구는 원격이나 사용자 컴퓨터의 실제 브라우저로 페이지를 열고, 클릭하고, 폼을 채운다. User-Agent는 보통의 크롬과 비슷하고, 자바스크립트도 실행하고, 쿠키도 받는다. 서버 입장에서는 조금 빠르고 규칙적인 사람이다.
+
+이런 요청을 User-Agent로 구분하는 건 거의 불가능하다. 그래서 두 방향이 나오고 있다. 하나는 에이전트 쪽이 스스로 밝히는 것이다. OpenAI는 ChatGPT 에이전트의 요청에 HTTP 메시지 서명을 붙여, 사이트가 서명을 검증해 OpenAI의 에이전트임을 확인할 수 있게 한다고 안내한다. 앞의 pay-per-crawl과 같은 계열의 신원 확인이다. 다른 하나는 사이트가 행동으로 판단하는 것이다. 사람 확인(CAPTCHA), 봇 관리 점수, 계정 단위 레이트 리밋이 여기에 든다.
+
+에이전트를 막을지는 사이트의 일에 달렸다. 사용자를 대신해 상품을 찾고 장바구니에 넣는 에이전트는 쇼핑몰에 손님을 데려오는 셈이다. 막으면 손님을 막는 것이다. 반면 티켓 예매나 한정판 판매처럼 공정성이 중요한 곳은 사람 확인을 더 세게 건다. 어느 쪽이든 로그인과 결제 같은 민감한 동작은 에이전트 여부와 상관없이 기존 보안 장치(인증, CSRF 방어, 레이트 리밋)를 그대로 둔다.
+
+## 막는 대신 창구를 연다: API, 피드, MCP
+
+AI 봇이 HTML을 긁어 가는 건 양쪽 모두에게 비효율이다. 봇은 레이아웃과 광고 사이에서 본문을 추려 내야 하고, 사이트는 렌더링 비용을 쓴다. 구조화된 창구를 따로 열어 두면 봇이 그쪽으로 가게 만들 수 있다.
+
+가장 오래된 창구는 RSS·Atom 피드와 sitemap이다. 새 글과 바뀐 글을 알려 주니 크롤러가 사이트 전체를 다시 훑을 필요가 줄어든다. sitemap의 `lastmod`를 정확히 쓰는 것만으로도 불필요한 재크롤링이 준다.
+
+공개 API는 상품, 가격, 재고처럼 자주 바뀌는 데이터에 맞다. API 키로 누가 얼마나 쓰는지 알 수 있고, 요금이나 사용량 한도를 정할 수 있다. 크롤링을 막고 API로 유도하면 "누가 가져가는지 모르는 수집"이 "계약된 사용"이 된다.
+
+MCP(Model Context Protocol) 서버는 AI 에이전트가 도구로 부를 수 있는 창구다. "상품 검색", "재고 확인", "문서 조회" 같은 기능을 MCP 도구로 공개하면 에이전트는 화면을 조작하지 않고 그 도구를 부른다. 구조와 동작은 [MCP](/posts/mcp-protocol)에 있다. 사이트가 결과의 모양과 권한을 정할 수 있다는 점이 HTML 크롤링과 가장 다르다.
+
+창구를 연다고 크롤러가 알아서 그쪽으로 가지는 않는다. robots.txt의 `Sitemap` 줄, HTML의 `link rel="alternate"`로 피드를 알리고, 개발자 문서에 API와 MCP 서버를 안내한다. 그리고 창구를 열었으니 HTML 크롤링은 더 엄격하게 제한하는 식으로 둘을 짝지어 운영한다.
+
+## 새벽의 그래프로 돌아가서
+
+처음 장면의 트래픽은 학습 봇 하나가 태그 페이지의 페이지 번호를 끝없이 따라 들어간 것이 대부분이었고, 그중 일부는 같은 이름을 단 다른 IP였다. 정책은 이렇게 정했다. robots.txt로 학습용 봇은 막고 검색 색인 봇은 열되 공통 규칙을 다시 적는다. 공개 IP 목록 밖에서 온 자칭 봇은 엣지에서 막는다. 남은 봇은 봇별로 속도를 제한한다. 태그 페이지의 끝없는 페이지 번호는 크롤링 자체를 막는 규칙으로 정리했다. 이런 페이지가 크롤 예산을 먹는 문제는 [크롤 예산과 패싯 내비게이션](/posts/crawl-budget-faceted-navigation)에서 이어진다. robots.txt는 의사 표시이고, 신원은 IP와 서명으로 확인하고, 강제는 서버와 엣지가 한다. 이 세 층을 나눠 생각하면 새로운 봇이 나타나도 어디에 무엇을 걸지 정할 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### GPTBot, OAI-SearchBot, ChatGPT-User는 무엇이 다른가요?
+
+GPTBot은 모델 학습용 수집, OAI-SearchBot은 ChatGPT 검색 색인, ChatGPT-User는 사용자가 대화 중에 요청해서 그 자리에서 한 번 페이지를 읽는 요청이다. 학습용을 막아도 검색 결과에는 나올 수 있고, 검색용을 막으면 ChatGPT 검색에서 빠진다. 사용자 요청은 사용자가 시작한 것이라 robots.txt가 적용되지 않을 수 있다고 문서에 적혀 있다. Anthropic과 Perplexity도 비슷하게 용도별로 봇을 나눈다.
+
+### Google-Extended를 막으면 AI 개요에서 빠지나요?
+
+빠지지 않는다. Google-Extended는 별도 크롤러가 아니라 Googlebot이 가져간 내용을 Gemini 학습과 일부 그라운딩에 쓸지 정하는 robots.txt 토큰이다. 구글 검색과 AI 개요 포함 여부에는 영향이 없다고 구글이 밝혔다. AI 개요에서 빼려면 스니펫 제어를 써야 하고 그러면 일반 검색 설명도 함께 빠진다.
+
+### robots.txt로 AI 크롤러를 확실히 막을 수 있나요?
+
+없다. robots.txt는 표준이지만 강제력이 없는 의사 표시이고, 지키는지는 크롤러가 정한다. 지키지 않거나 User-Agent를 바꿔 오는 요청은 서버나 엣지에서 IP 확인, 레이트 리밋, WAF로 기술적으로 막아야 한다. 또 자기 이름 그룹이 있는 봇은 `*` 그룹을 보지 않으니 공통 규칙을 다시 적어야 한다.
+
+### 요청이 진짜 Googlebot인지 어떻게 확인하나요?
+
+User-Agent는 위조할 수 있으니 출발 IP로 확인한다. 역방향 DNS로 IP의 호스트 이름이 googlebot.com이나 google.com으로 끝나는지 보고, 그 이름을 정방향으로 다시 조회해 원래 IP가 나오는지 본다. PTR은 IP 주인이 아무 이름이나 쓸 수 있어서 정방향 확인까지 해야 한다. 실시간 차단에는 구글이 공개한 IP 대역 JSON과 비교하는 편이 빠르다.
+
+### AI 봇 트래픽이 서버를 괴롭힐 때 무엇부터 하나요?
+
+로그에서 봇별 요청 수, 응답 코드, 요청 경로를 세서 누가 무엇을 가져가는지 본다. 그다음 자칭 봇의 IP를 공개 목록과 대조해 사칭을 걸러 내고, robots.txt로 용도별 정책을 밝히고, 남은 봇은 봇 단위로 속도를 제한한다. 끝없는 페이지 번호나 필터 조합처럼 크롤링을 빨아들이는 경로가 있으면 그 경로부터 정리한다. 차단 규칙이 검색 봇까지 잡지 않는지 꼭 확인한다.
+
+### pay-per-crawl은 어떤 방식인가요?
+
+Cloudflare가 2025년에 발표한 방식으로, 등록된 크롤러에게 사이트가 정한 가격을 `402 Payment Required`와 가격 헤더로 알리고, 크롤러가 가격을 받아들이는 헤더를 붙여 다시 요청하면 결제와 함께 200을 준다. 크롤러 신원은 HTTP 메시지 서명으로 확인한다. 막거나 여는 것 사이에 거래라는 선택지를 만든 것이지만 Cloudflare 뒤의 사이트와 참여한 크롤러 사이에서만 작동한다.
+
+### 사람 대신 브라우징하는 AI 에이전트는 어떻게 다루나요?
+
+실제 브라우저로 자바스크립트까지 실행하니 User-Agent로는 거의 구분되지 않는다. 에이전트가 HTTP 메시지 서명으로 스스로 신원을 밝히는 방식이 나오고 있고, 사이트는 봇 관리 점수와 계정 단위 레이트 리밋 같은 행동 기반 판단을 쓴다. 막을지는 사업에 달렸다. 쇼핑몰에는 손님이고 예매 사이트에는 공정성 문제다. 로그인과 결제의 보안 장치는 에이전트 여부와 상관없이 유지한다.
+
+### 크롤링을 막는 것 말고 어떤 선택지가 있나요?
+
+구조화된 창구를 연다. 피드와 정확한 sitemap은 재크롤링을 줄이고, 공개 API는 누가 얼마나 쓰는지 알고 한도와 요금을 정할 수 있게 하고, MCP 서버는 에이전트가 화면을 조작하지 않고 도구로 데이터를 가져가게 한다. 창구를 알린 뒤 HTML 크롤링은 더 엄격하게 제한하는 식으로 짝지어 운영한다.

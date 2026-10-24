@@ -1,0 +1,516 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-time-based-key-value-store");
+
+<EasyIntro>
+  교실 칠판 옆에 "오늘의 당번" 이름을 적는 공책이 있다고 해 보자. 당번이 바뀔 때마다 시각과 이름을 새 줄에 적고, 지우지는 않는다. 그래서 공책에는 시간 순서대로 기록이 쌓인다. 누가 "오후 2시 반에 당번이 누구였어?"라고 물으면, 2시 반보다 늦지 않은 기록 중 가장 마지막 줄을 찾으면 된다. 기록이 몇 줄 안 되면 처음부터 읽어도 되지만, 천 줄이 넘으면 오래 걸린다. 그런데 공책은 이미 시간순이라, 사전 찾듯 가운데를 펴서 앞쪽인지 뒤쪽인지 정하며 좁혀 가면 몇 번 만에 찾는다. 이 문제는 이런 공책을 이름표마다 하나씩 두고, 질문에 빠르게 답하는 문제다.
+</EasyIntro>
+
+[LeetCode 981. Time Based Key-Value Store](https://leetcode.com/problems/time-based-key-value-store/)는 이분 탐색이 클래스 설계 안에 숨어 있는 문제다. 문제를 읽으면 해시맵부터 떠오르고, 그 생각도 맞다. 다만 해시맵은 "어느 키의 기록인가"까지만 답해 주고, "그 시각에 무슨 값이었나"는 해시맵이 못 한다. 그 두 번째 질문을 무엇으로 푸느냐가 이 문제의 전부다.
+
+문제를 내 말로 풀면 이렇다. `TimeMap` 클래스를 만든다.
+
+- `set(key, value, timestamp)`: 키 `key`의 값이 시각 `timestamp`부터 `value`라고 기록한다.
+- `get(key, timestamp)`: 키 `key`의 기록 중 시각이 `timestamp` 이하인 기록 중 가장 늦은 기록의 값을 돌려준다. 그런 기록이 없으면 빈 문자열 `""`을 돌려준다.
+
+풀이를 정하는 조건은 셋이다.
+
+- `set`에 들어오는 timestamp는 호출할 때마다 엄격하게 커진다. 모든 키를 통틀어서 그렇다.
+- timestamp는 1 이상 10^7 이하다.
+- `set`과 `get`을 합쳐 최대 2 × 10^5번 부른다. 키 하나에 기록이 10만 개 쌓이고 질문이 10만 번 오면, 질문마다 기록을 다 훑는 O(n)은 10^10번 계산이라 안 된다.
+
+첫 번째 조건이 가장 중요하다. 이 조건 덕분에 따로 정렬하지 않아도 키마다 기록이 시간순으로 쌓인다. 이분 탐색 경계를 어떻게 잡는지는 [LeetCode 704 글](/posts/leetcode-binary-search)에서, "x 이하인 마지막 자리"를 upper bound로 구하는 방법은 [이분 탐색 글](/posts/binary-search)의 경계 절에서 다뤘다. 해시맵 자체는 [해시맵 글](/posts/ds-hash-map)에 있다. 실행 결과는 Node.js 22, Python 3.13, OpenJDK에서 돌린 값이다.
+
+## 키마다 시간순 기록장이 하나씩 있다
+
+예시 하나로 끝까지 간다. 신호등 `light`의 색이 이렇게 바뀌었다.
+
+```text
+시각  2: red
+시각  5: green
+시각  8: blue
+시각 11: white
+시각 15: black
+```
+
+이제 몇 가지를 물어본다.
+
+- `get("light", 9)`: 9 이하의 기록은 2, 5, 8이다. 그중 가장 늦은 8의 값 `blue`.
+- `get("light", 5)`: 5 이하는 2, 5다. 정확히 5에 기록이 있으니 `green`. "이하"라서 같은 시각도 포함된다.
+- `get("light", 14)`: 11의 `white`. 15는 아직 오지 않은 미래다.
+- `get("light", 100)`: 마지막 기록 15의 `black`.
+- `get("light", 1)`: 1 이하의 기록이 없다. `""`.
+- `get("door", 5)`: 키 자체가 없다. `""`.
+
+시각을 줄 위에 놓으면 질문이 더 단순해진다. 기록 시각들 `[2, 5, 8, 11, 15]`가 정렬돼 있고, 질문은 "t 이하인 마지막 칸"이다. 줄 위에서 보면 앞쪽은 "t 이하"가 참이고, 어느 칸부터 거짓이 된다. 참과 거짓이 한 번만 바뀌는 경계를 찾는 일이라 이분 탐색이 맞는다.
+
+```text
+시각      :  2   5   8  11  15
+9 이하?   :  T   T   T   F   F
+                     ↑ 마지막 T = blue
+```
+
+그러면 구조는 두 겹이다. 바깥은 키로 찾는 해시맵이고, 안쪽은 키마다 시간순으로 쌓인 기록 배열이다. 아래 풀이들은 바깥은 모두 같고, 안쪽에서 "t 이하인 마지막 기록"을 어떻게 찾느냐만 다르다.
+
+## 시각을 1씩 거슬러 내려간다
+
+가장 먼저 떠오르는 건 시각마다 값을 저장해 두고, 질문 시각에서 1씩 내려가며 기록이 있는 시각을 만나면 멈추는 방법이다. 키마다 `Map(시각 → 값)`을 하나씩 둔다.
+
+```js
+class TimeMap {
+  constructor() {
+    this.store = new Map(); // key -> Map(timestamp -> value)
+  }
+  set(key, value, timestamp) {
+    if (!this.store.has(key)) this.store.set(key, new Map());
+    this.store.get(key).set(timestamp, value);
+  }
+  get(key, timestamp) {
+    const byTime = this.store.get(key);
+    if (!byTime) return "";
+    for (let t = timestamp; t >= 1; t--) {   // 질문 시각부터 거꾸로
+      if (byTime.has(t)) return byTime.get(t); // 처음 만난 기록이 t 이하인 마지막 기록
+    }
+    return "";
+  }
+}
+```
+
+`set`은 O(1)이다. `get`은 질문 시각에서 앞 기록까지의 거리만큼 돈다. 시각이 최대 10^7이니 최악에는 질문 하나에 1000만 번이다. 기록 개수가 아니라 시각의 크기에 비례한다는 게 이 풀이의 약점이다. 기록이 10개뿐이어도 시각이 100만 단위로 띄엄띄엄 있으면 매번 수십만 칸을 헛돈다.
+
+실제로 재 봤다. 기록 10개를 시각 100만, 200만, …, 1000만에 두고 무작위 시각으로 1000번 물었다.
+
+```text
+TimeMapCountdown  get x1000 6108.1 ms
+```
+
+질문 하나에 6ms씩 쓴다. 질문이 10만 번이면 10분이다.
+
+## 기록을 뒤에서부터 훑는다
+
+시각을 하나하나 보지 말고 실제 기록만 보자. 키마다 `[시각, 값]` 쌍을 배열에 순서대로 쌓는다. 조건상 시각이 커지며 들어오니 배열은 저절로 시간순이다. 질문이 오면 배열 끝에서부터 앞으로 오면서 시각이 t 이하인 첫 기록을 만나면 그게 답이다.
+
+```js
+class TimeMap {
+  constructor() {
+    this.store = new Map(); // key -> [[timestamp, value], ...] (시간순)
+  }
+  set(key, value, timestamp) {
+    if (!this.store.has(key)) this.store.set(key, []);
+    this.store.get(key).push([timestamp, value]); // 맨 뒤에 붙이기만 한다
+  }
+  get(key, timestamp) {
+    const list = this.store.get(key);
+    if (!list) return "";
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i][0] <= timestamp) return list[i][1]; // 뒤에서 처음 만난 t 이하 기록
+    }
+    return "";
+  }
+}
+```
+
+이제 `get`은 기록 개수 k에 비례해 O(k)다. 앞 풀이에서 6초 걸리던 띄엄띄엄한 입력은 이 풀이로 0.5ms면 끝난다. 최근 시각을 많이 묻는 경우라면 끝에서 금방 멈추니 실제로도 빠르다.
+
+하지만 오래된 시각을 물으면 기록을 거의 다 훑는다. 키 하나에 기록 10만 개(시각 100, 200, …, 1000만)를 쌓고 무작위 시각 10만 개를 물었다.
+
+```text
+TimeMapScan       set 31.1 ms  get 25741.8 ms
+```
+
+질문마다 평균 5만 개를 훑어서 26초가 걸렸다. 문제 크기 그대로라 LeetCode에서는 시간 초과다. 기록 배열이 이미 시간순인데, 그 정렬을 한쪽 방향으로 훑는 데만 썼다.
+
+## 시각이 커지며 들어오니 이미 정렬돼 있다
+
+배열이 정렬돼 있고 찾는 게 "t 이하인 마지막 자리"라면 이분 탐색이다. "t 이하인 마지막 자리"는 "t보다 큰 첫 자리 바로 앞"과 같다. t보다 큰 첫 자리를 upper bound라고 부른다. upper bound를 `lo`로 구하면 답은 `lo - 1`번 기록이고, `lo`가 0이면 t 이하인 기록이 하나도 없다는 뜻이다.
+
+시각과 값을 쌍으로 묶지 않고 두 배열로 나눠 두면 이분 탐색이 숫자 배열만 보게 되어 코드가 간단해진다.
+
+```js
+class TimeMap {
+  constructor() {
+    this.store = new Map(); // key -> { times: [], values: [] }
+  }
+  set(key, value, timestamp) {
+    let rec = this.store.get(key);
+    if (!rec) {
+      rec = { times: [], values: [] };
+      this.store.set(key, rec);
+    }
+    rec.times.push(timestamp); // 시각이 항상 커지며 들어오니 push만 해도 정렬이 유지된다
+    rec.values.push(value);
+  }
+  get(key, timestamp) {
+    const rec = this.store.get(key);
+    if (!rec) return "";
+    const { times, values } = rec;
+    // timestamp보다 큰 첫 자리(upper bound)를 찾는다. [lo, hi) 반열린 구간
+    let lo = 0, hi = times.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (times[mid] <= timestamp) lo = mid + 1; // mid까지는 timestamp 이하: 답 후보는 mid 이후에도 있다
+      else hi = mid;                             // mid는 너무 늦다: mid 이후는 전부 늦다
+    }
+    return lo === 0 ? "" : values[lo - 1]; // 그 바로 앞이 timestamp 이하인 마지막 기록
+  }
+}
+```
+
+`get("light", 9)`가 어떻게 좁혀 가는지 따라가 보자.
+
+<AlgoTrace
+  caption='get("light", 9): 9보다 늦은 첫 기록을 찾고 한 칸 앞을 읽는다'
+  memoryLabel="구간 [lo, hi)"
+  cells={["2 red", "5 green", "8 blue", "11 white", "15 black"]}
+  steps={[
+    { memory: ["lo 0", "hi 5"], caption: "기록 다섯 개 전체가 후보다. 9보다 늦은 첫 자리를 찾는다." },
+    { pointer: 2, memory: ["mid 2: 시각 8", "8 ≤ 9", "lo = 3"], caption: "8은 9 이하다. 늦은 첫 자리는 8보다 뒤에 있다." },
+    { pointer: 4, memory: ["mid 4: 시각 15", "15 > 9", "hi = 4"], caption: "15는 9보다 늦다. 15 뒤는 볼 필요가 없다." },
+    { pointer: 3, memory: ["mid 3: 시각 11", "11 > 9", "hi = 3"], caption: "11도 늦다. lo와 hi가 3에서 만났다." },
+    { found: [2], memory: ["lo 3", "lo - 1 = 2", "blue"], caption: "9보다 늦은 첫 자리가 3이니, 바로 앞 2번 기록 blue가 답이다." },
+  ]}
+/>
+
+같은 코드로 `get("light", 1)`을 하면 세 번 모두 "늦다" 쪽으로 가서 `hi`가 0까지 내려오고 `lo = 0`으로 끝난다. 앞에 기록이 없으니 `""`이다. `get("light", 100)`은 두 번 모두 "이하" 쪽으로 가서 `lo = 5`, 마지막 기록 `black`이 나온다. 특별한 경우를 따로 처리하지 않아도 반열린 구간이 양 끝을 알아서 다룬다.
+
+`set`은 O(1)(배열 끝에 붙이기, 가끔 배열이 커질 때 복사가 일어나지만 평균 O(1)), `get`은 키를 찾는 O(1)과 이분 탐색 O(log k)다. k는 그 키의 기록 개수다. 공간은 전체 기록 수를 n이라 하면 O(n)이다. 앞의 26초짜리 입력을 이 풀이로 돌리면 이렇다.
+
+```text
+TimeMapCountdown  set 68.0 ms  get 342.4 ms
+TimeMapScan       set 31.1 ms  get 25741.8 ms
+TimeMap           set 49.2 ms  get 83.6 ms
+```
+
+질문 10만 개에 84ms다. 시각을 1씩 내려가는 풀이가 이 입력에서는 342ms로 나쁘지 않은데, 기록이 100 간격으로 촘촘해서 몇십 칸만 내려가면 기록을 만나기 때문이다. 앞 절의 띄엄띄엄한 입력에서는 6초였다. 이분 탐색은 두 입력 모두에서 빠르다. 입력 모양에 따라 성능이 크게 흔들리지 않는다는 게 O(log k)의 진짜 장점이다.
+
+전체 연산 순서 속에서 기록장이 어떻게 자라는지도 보자. `set`과 `get`이 섞여 들어와도 `get`은 그 시점까지 쌓인 기록만 본다.
+
+<AlgoTrace
+  caption="연산이 차례로 들어올 때 light의 기록장"
+  memoryLabel="light의 times / 결과"
+  cells={["set red 2", "set green 5", "get 4", "set blue 8", "get 9", "get 1"]}
+  steps={[
+    { pointer: 0, memory: ["times [2]", "values [red]"], caption: "첫 기록이다. 키가 없으니 빈 기록장을 만들고 붙인다." },
+    { pointer: 1, memory: ["times [2, 5]", "values [red, green]"], caption: "5는 2보다 크다. 끝에 붙여도 시간순이 유지된다." },
+    { pointer: 2, memory: ["times [2, 5]", "4보다 큰 첫 자리 1", "→ red"], caption: "4보다 늦은 첫 기록은 1번(5)이다. 그 앞 0번 red를 돌려준다." },
+    { pointer: 3, memory: ["times [2, 5, 8]", "values [red, green, blue]"], caption: "8을 끝에 붙인다. 정렬은 여전히 공짜다." },
+    { pointer: 4, memory: ["times [2, 5, 8]", "9보다 큰 첫 자리 3", "→ blue"], caption: "9 이하인 기록이 모두다. 마지막 blue가 답이다." },
+    { pointer: 5, found: [5], memory: ["times [2, 5, 8]", "1보다 큰 첫 자리 0", "→ 빈 문자열"], caption: "가장 이른 기록도 1보다 늦다. 돌려줄 값이 없다." },
+  ]}
+/>
+
+이 풀이가 성립하는 이유는 하나뿐이다. timestamp가 커지며 들어오니 `push`만으로 정렬이 유지된다. 이 조건이 깨지면 `push` 대신 제자리에 끼워 넣어야 하고, 그때는 구조를 바꿔야 한다. 아래 "시각이 뒤섞여 들어온다면"에서 다룬다.
+
+### 세 풀이를 무작위 연산으로 맞춰 보기
+
+시각을 1씩 내려가는 풀이는 느리지만 틀릴 곳이 거의 없다. 그래서 채점관으로 쓴다. 키 세 개에 `set`과 `get`을 무작위로 섞어 30번씩, 3000묶음을 세 풀이에 똑같이 넣고 `get` 답을 비교했다.
+
+```js
+const { TimeMapCountdown, TimeMapScan, TimeMap } = require("./sol.js");
+
+let mismatch = 0, gets = 0;
+for (let round = 0; round < 3000; round++) {
+  const maps = [new TimeMapCountdown(), new TimeMapScan(), new TimeMap()];
+  let t = 0;
+  for (let op = 0; op < 30; op++) {
+    const key = "k" + Math.floor(Math.random() * 3);     // 키 세 개를 섞는다
+    if (Math.random() < 0.5) {
+      t += 1 + Math.floor(Math.random() * 3);            // 시각은 1~3씩 커진다
+      for (const m of maps) m.set(key, "v" + t, t);
+    } else {
+      const q = 1 + Math.floor(Math.random() * (t + 5)); // 미래 시각도 묻는다
+      const answers = maps.map((m) => m.get(key, q));
+      gets++;
+      if (new Set(answers).size > 1) mismatch++;
+    }
+  }
+}
+console.log("get", gets, "mismatch", mismatch);
+```
+
+```text
+get 45064 mismatch 0
+```
+
+시각을 1~3씩 올려서 기록 사이에 빈 시각이 생기고, 질문 시각은 마지막 기록보다 늦은 미래까지 섞었다. 앞 절의 `<` 실수나 `lo - 1` 실수를 넣으면 첫 묶음 안에서 바로 어긋난다. 클래스 설계 문제는 연산 순서에 따라 상태가 달라져서 손으로 고른 테스트 몇 개로는 빠지는 경우가 많다. 무작위 연산을 섞는 습관이 특히 쓸모 있다.
+
+### 최근 몇 칸을 먼저 보면 더 빨라질까
+
+실제 서비스에서는 "지금 값"이나 "조금 전 값"을 묻는 경우가 대부분이다. 그렇다면 끝에서 몇 칸만 먼저 보고, 거기서 못 찾을 때만 이분 탐색으로 넘어가면 흔한 경우를 더 빨리 처리할 수 있지 않을까. 그렇게 짜 봤다.
+
+```js
+get(key, timestamp) {
+  const rec = this.store.get(key);
+  if (!rec) return "";
+  const { times, values } = rec;
+  const n = times.length;
+  // 최근 기록 8칸을 먼저 본다
+  for (let i = n - 1; i >= Math.max(0, n - 8); i--) {
+    if (times[i] <= timestamp) return values[i];
+  }
+  // 못 찾으면 남은 앞부분 [0, n - 8)에서 upper bound
+  let lo = 0, hi = Math.max(0, n - 8);
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (times[mid] <= timestamp) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo === 0 ? "" : values[lo - 1];
+}
+```
+
+무작위 연산 2000묶음에서 원래 풀이와 답이 어긋난 경우는 0건이었다. 기록 10만 개에 "최근 5칸 안쪽 시각" 질문 100만 개와 "아무 시각" 질문 100만 개를 던지고, 실행 순서를 바꿔 두 번 쟀다.
+
+```text
+순서 1  TimeMap        recent 91.3 ms   uniform 466.2 ms
+        TimeMapHybrid  recent 93.6 ms   uniform 268.4 ms
+순서 2  TimeMapHybrid  recent 128.2 ms  uniform 215.1 ms
+        TimeMap        recent 82.9 ms   uniform 171.5 ms
+```
+
+같은 코드가 실행 순서에 따라 두 배 가까이 흔들렸고, 어느 쪽이 빠른지도 뒤집혔다. 기록 10만 개의 이분 탐색은 비교 17번이라 원래 충분히 싸서, 최근 칸을 먼저 보는 최적화가 얻을 게 측정 잡음보다 작다. 이런 최적화는 감으로 넣지 말고 재 보고 넣는다는 걸 보여 주는 결과라 남겨 둔다. 기록이 디스크에 있어서 칸 하나 읽는 비용이 크다면 이야기가 달라진다.
+
+### 파이썬과 자바로 옮기면
+
+파이썬은 `bisect_right`가 upper bound 그 자체다. 키마다 시각 리스트와 값 리스트를 따로 둔다.
+
+```python
+from bisect import bisect_right
+from collections import defaultdict
+
+class TimeMap:
+    def __init__(self):
+        self.times = defaultdict(list)   # key -> [timestamp, ...] (항상 오름차순)
+        self.values = defaultdict(list)  # key -> [value, ...] (같은 자리끼리 짝)
+
+    def set(self, key: str, value: str, timestamp: int) -> None:
+        self.times[key].append(timestamp)
+        self.values[key].append(value)
+
+    def get(self, key: str, timestamp: int) -> str:
+        if key not in self.times:        # defaultdict라도 get에서 빈 리스트를 만들지 않게
+            return ""
+        i = bisect_right(self.times[key], timestamp)  # timestamp보다 큰 첫 자리
+        return self.values[key][i - 1] if i else ""
+```
+
+`get`에서 `self.times[key]`를 바로 읽으면 `defaultdict`가 없는 키마다 빈 리스트를 만들어 둔다. 결과는 맞지만 없는 키를 물을 때마다 메모리가 조금씩 늘어난다. 그래서 `in`으로 먼저 확인한다.
+
+자바는 `ArrayList<Integer>`에 시각을 담는다. 직접 이분 탐색을 짜면 이렇다.
+
+```java
+import java.util.*;
+
+class TimeMap {
+    private final Map<String, List<Integer>> times = new HashMap<>();
+    private final Map<String, List<String>> values = new HashMap<>();
+
+    public void set(String key, String value, int timestamp) {
+        times.computeIfAbsent(key, k -> new ArrayList<>()).add(timestamp);
+        values.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
+    }
+
+    public String get(String key, int timestamp) {
+        List<Integer> ts = times.get(key);
+        if (ts == null) return "";
+        int lo = 0, hi = ts.size();          // [lo, hi) 반열린 구간
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (ts.get(mid) <= timestamp) lo = mid + 1;  // Integer 언박싱 후 비교
+            else hi = mid;
+        }
+        return lo == 0 ? "" : values.get(key).get(lo - 1);
+    }
+}
+```
+
+예시 기록에 시각 1, 2, 4, 5, 9, 11, 14, 15, 100을 물으면 세 언어 모두 같은 답이 나온다.
+
+```text
+"" red red green blue white white black black   (door 키는 "")
+```
+
+자바에서 조심할 곳은 `Integer` 비교다. `ts.get(mid) <= timestamp`는 한쪽이 `int`라 언박싱되어 숫자로 비교되니 안전하다. 그런데 리스트 두 개의 원소를 `==`로 비교하면 객체 주소를 비교한다. 자바는 -128~127의 `Integer`만 캐시해서 같은 객체를 주므로, 작은 값에서는 맞다가 128부터 틀린다. 실제로 돌려 보면 이렇다.
+
+```text
+127==true 128==false equals=true
+```
+
+시각은 최대 10^7이라 이 함정에 바로 걸린다. `Integer`끼리는 `equals`나 `intValue()`로 비교한다.
+
+### 튜플 하나에 담고 bisect하기
+
+파이썬에서 많이 보는 풀이는 `(시각, 값)` 튜플 리스트 하나에 bisect를 거는 것이다. 튜플은 앞 원소부터 비교하니 시각 순서로 정렬된다. 문제는 같은 시각을 찾을 때 두 번째 원소(값 문자열)까지 비교한다는 점이다.
+
+```python
+def get(self, key, timestamp):
+    arr = self.store.get(key, [])
+    # (timestamp, chr(127))은 같은 시각의 어떤 값 문자열보다 뒤에 온다
+    i = bisect_right(arr, (timestamp, chr(127)))
+    return arr[i - 1][1] if i else ""
+```
+
+`chr(127)`은 ASCII에서 가장 뒤쪽 글자라, 값이 영문 소문자와 숫자뿐인 이 문제에서는 같은 시각의 어떤 튜플보다 크다. 그래서 `bisect_right`가 정확히 "그 시각까지 포함한 다음 자리"를 준다. 짧게 `(timestamp,)`로 쓰면 틀린다. 길이 1짜리 튜플은 같은 시각의 길이 2짜리 튜플보다 작다고 비교되기 때문이다.
+
+```text
+bisect_right([(2, "red"), (5, "green")], (5,)) → 1   → 앞 값 (2, 'red')
+```
+
+시각 5를 물었는데 5의 `green`이 아니라 2의 `red`가 나왔다. 값에 어떤 글자가 들어올지 모르는 실무 코드라면 이 트릭보다 시각 리스트를 따로 두는 쪽이 안전하다.
+
+## 자바 TreeMap에 맡기기
+
+자바에는 "이 키 이하 중 가장 큰 키"를 바로 주는 자료구조가 있다. `TreeMap`은 키를 정렬된 상태로 유지하는 균형 이진 탐색 트리(레드-블랙 트리)이고, `floorEntry(t)`가 정확히 이 문제의 질문이다.
+
+```java
+class TimeMap {
+    private final Map<String, TreeMap<Integer, String>> store = new HashMap<>();
+
+    public void set(String key, String value, int timestamp) {
+        store.computeIfAbsent(key, k -> new TreeMap<>()).put(timestamp, value);
+    }
+
+    public String get(String key, int timestamp) {
+        TreeMap<Integer, String> tm = store.get(key);
+        if (tm == null) return "";
+        Map.Entry<Integer, String> e = tm.floorEntry(timestamp); // timestamp 이하 중 가장 큰 키
+        return e == null ? "" : e.getValue();
+    }
+}
+```
+
+같은 질문에 같은 답이 나온다. `set`과 `get`이 모두 O(log k)다. 배열 풀이보다 `set`이 느리고(배열은 O(1)), 노드마다 객체를 만들어 메모리도 몇 배 더 쓴다. 대신 timestamp가 뒤섞여 들어와도 그대로 맞는다는 큰 장점이 있다. 이 문제의 조건에서는 배열 + 이분 탐색이 더 가볍고, 조건이 약해지면 TreeMap이 답이 된다.
+
+자바스크립트와 파이썬 표준 라이브러리에는 TreeMap 같은 정렬된 맵이 없다. 파이썬은 서드파티 `sortedcontainers`의 `SortedDict`가 비슷한 역할을 하지만 LeetCode 밖 코딩 테스트에서는 못 쓰는 경우가 많다. 균형 트리 자체는 [이진 탐색 트리 글](/posts/ds-binary-tree-bst)에서 다뤘다.
+
+## 기록장 네 가지를 견주면
+
+| 풀이 | set | get | 공간 | 언제 고르나 |
+|---|---|---|---|---|
+| 시각을 1씩 내려가기 | O(1) | O(T) (T = 시각 범위) | O(n) | 시각 범위가 아주 작을 때만 |
+| 뒤에서부터 훑기 | O(1) | O(k) | O(n) | 거의 최근 시각만 물을 때 |
+| 배열 + 이분 탐색 | O(1) 평균 | O(log k) | O(n) | 시각이 커지며 들어오는 이 문제의 기본 답 |
+| TreeMap floorEntry | O(log k) | O(log k) | O(n), 상수 큼 | 시각이 뒤섞여 들어오거나 지워야 할 때 |
+
+n은 전체 기록 수, k는 한 키의 기록 수다. 시각을 내려가는 풀이만 기록 수가 아니라 시각의 크기에 묶여 있다는 게 눈에 띈다. 뒤에서 훑기는 최악이 나쁘지만, "대부분 최근 값을 묻는다"는 실제 사용 패턴에서는 첫 몇 칸에서 끝나서 이분 탐색보다 빠를 수도 있다. 면접에서 이 점을 짚으면 입력 분포를 생각하고 있다는 신호가 된다.
+
+## 경계 한 칸이 답을 바꾼다
+
+### `<=` 대신 `<`로 비교한다
+
+`times[mid] < timestamp`로 쓰면 upper bound가 아니라 lower bound(timestamp 이상인 첫 자리)를 찾는다. 그 앞 자리는 "timestamp보다 작은 마지막 기록"이라, 질문 시각과 정확히 같은 기록을 건너뛴다.
+
+```text
+get(5)  → "red"    (정답 green)
+get(9)  → "blue"   (정답 blue)
+get(2)  → ""       (정답 red)
+get(15) → "white"  (정답 black)
+```
+
+9처럼 기록 사이에 떨어지는 시각은 맞게 나와서, 그런 값으로만 테스트하면 버그가 안 보인다. 기록 시각과 정확히 같은 시각을 꼭 테스트에 넣는다.
+
+### `lo - 1`이 아니라 `lo`를 읽는다
+
+upper bound를 구해 놓고 `values[lo]`를 돌려주는 실수다. 그 칸은 timestamp보다 늦은 첫 기록, 즉 미래의 값이다.
+
+```text
+get(5)   → "blue"   (정답 green)
+get(9)   → "white"  (정답 blue)
+get(1)   → "red"    (정답 "")
+get(100) → ""       (정답 black)
+```
+
+모든 질문이 한 칸씩 밀렸다. 자바나 파이썬이면 `get(100)`에서 범위 밖 인덱스로 예외가 나서 금방 알아채지만, 자바스크립트는 `undefined`를 주고 `?? ""`가 그걸 덮어서 조용히 틀린다.
+
+### 없는 키에서 바로 배열을 읽는다
+
+`this.store.get(key).times`처럼 쓰면 처음 보는 키에서 `undefined.times`로 `TypeError`가 난다. 키가 없을 때 빈 문자열을 돌려주는 확인은 `get`의 첫 줄이다. 파이썬 `defaultdict`는 반대로 예외는 안 나지만 앞에서 본 대로 빈 리스트를 몰래 만든다.
+
+### 값이 빈 문자열일 수 있다고 가정한다
+
+이 문제는 값 길이가 1 이상이라 `""`이 "없음"과 겹치지 않는다. 일반적인 키-값 저장소에서는 빈 문자열도 정상 값일 수 있다. 그때는 `null`을 돌려주거나 `{ found, value }`처럼 따로 표시해야 "값이 빈 문자열"과 "기록 없음"을 구분할 수 있다. 면접에서 API를 설계해 보라고 하면 이 구분을 먼저 말하는 게 좋다.
+
+## TimeMap을 직접 구현해 보기
+
+빈 클래스를 채워 실행해 보자. `runTimeMap`은 LeetCode처럼 연산 이름 목록과 인자 목록을 받아 결과 목록을 돌려주는 감싸기 함수라 고치지 않아도 된다. 테스트에는 정확히 같은 시각, 첫 기록보다 이른 시각, 없는 키, 두 키가 섞이는 경우, 시각 10^7이 들어 있다.
+
+<CodePlayground
+  caption="LeetCode 981. Time Based Key-Value Store"
+  functionName="runTimeMap"
+  initialCode={"class TimeMap {\n  constructor() {\n  }\n  set(key, value, timestamp) {\n  }\n  get(key, timestamp) {\n    return \"\";\n  }\n}\n\n// LeetCode 형식: 연산 이름 목록과 인자 목록을 받아 결과 목록을 돌려준다\nfunction runTimeMap(ops, args) {\n  let tm = null;\n  return ops.map((op, i) => {\n    if (op === \"TimeMap\") { tm = new TimeMap(); return null; }\n    if (op === \"set\") { tm.set(...args[i]); return null; }\n    return tm.get(...args[i]);\n  });\n}"}
+  solution={"class TimeMap {\n  constructor() {\n    this.store = new Map(); // key -> { times: [], values: [] }\n  }\n  set(key, value, timestamp) {\n    let rec = this.store.get(key);\n    if (!rec) {\n      rec = { times: [], values: [] };\n      this.store.set(key, rec);\n    }\n    rec.times.push(timestamp); // 시각이 커지며 들어오니 정렬이 유지된다\n    rec.values.push(value);\n  }\n  get(key, timestamp) {\n    const rec = this.store.get(key);\n    if (!rec) return \"\";\n    const { times, values } = rec;\n    let lo = 0, hi = times.length; // timestamp보다 큰 첫 자리를 찾는다\n    while (lo < hi) {\n      const mid = (lo + hi) >>> 1;\n      if (times[mid] <= timestamp) lo = mid + 1;\n      else hi = mid;\n    }\n    return lo === 0 ? \"\" : values[lo - 1];\n  }\n}\n\nfunction runTimeMap(ops, args) {\n  let tm = null;\n  return ops.map((op, i) => {\n    if (op === \"TimeMap\") { tm = new TimeMap(); return null; }\n    if (op === \"set\") { tm.set(...args[i]); return null; }\n    return tm.get(...args[i]);\n  });\n}"}
+  tests={[{"label":"신호등 기록","args":[["TimeMap","set","set","set","get","get","get","get"],[[],["light","red",2],["light","green",5],["light","blue",8],["light",1],["light",5],["light",7],["light",100]]],"expected":[null,null,null,null,"","green","green","blue"]},{"label":"없는 키","args":[["TimeMap","set","get","get"],[[],["light","red",2],["door",2],["door",10]]],"expected":[null,null,"",""]},{"label":"키 두 개가 섞인다","args":[["TimeMap","set","set","set","set","get","get","get","get"],[[],["a","x",1],["b","p",2],["a","y",3],["b","q",4],["a",2],["b",3],["a",3],["b",1]]],"expected":[null,null,null,null,null,"x","p","y",""]},{"label":"정확히 같은 시각","args":[["TimeMap","set","set","get","get"],[[],["k","v1",10],["k","v2",20],["k",10],["k",20]]],"expected":[null,null,null,"v1","v2"]},{"label":"첫 기록보다 이른 시각","args":[["TimeMap","set","set","get"],[[],["k","v1",10],["k","v2",20],["k",9]]],"expected":[null,null,null,""]},{"label":"기록 하나","args":[["TimeMap","set","get","get","get"],[[],["k","only",5],["k",4],["k",5],["k",6]]],"expected":[null,null,"","only","only"]},{"label":"큰 시각","args":[["TimeMap","set","set","get","get"],[[],["k","old",1],["k","new",10000000],["k",9999999],["k",10000000]]],"expected":[null,null,null,"old","new"]}]}
+/>
+
+## 시각이 뒤섞여 들어오거나 지워야 한다면
+
+### 시각이 뒤섞여 들어온다면
+
+조건 "timestamp가 커지며 들어온다"가 빠지면 `push`로는 정렬이 깨진다. 배열을 유지하려면 `set`에서도 이분 탐색으로 자리를 찾고 끼워 넣는다.
+
+```js
+set(key, value, timestamp) {
+  // ... rec 준비는 같다
+  const { times, values } = rec;
+  let lo = 0, hi = times.length;           // timestamp 이상인 첫 자리 (lower bound)
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (times[mid] < timestamp) lo = mid + 1;
+    else hi = mid;
+  }
+  if (times[lo] === timestamp) { values[lo] = value; return; } // 같은 시각이면 덮어쓴다
+  times.splice(lo, 0, timestamp);          // O(k): 뒤쪽을 한 칸씩 민다
+  values.splice(lo, 0, value);
+}
+```
+
+11, 2, 8, 5 순서로 넣고 8을 한 번 더 넣으면 기록장은 `times [2, 5, 8, 11]`, 8의 값은 나중 것으로 바뀐다. `get`은 그대로 두면 된다. 다만 `splice`가 O(k)라 `set`이 많고 순서가 많이 뒤섞이면 느리다. 그때는 자바 `TreeMap`처럼 넣기와 찾기가 모두 O(log k)인 균형 트리를 쓴다. 같은 시각에 두 번 쓰는 경우를 덮어쓸지, 둘 다 남길지는 요구사항으로 먼저 정해야 한다.
+
+### 특정 시각 이전 기록을 지워야 한다면
+
+"1시간보다 오래된 기록은 버린다" 같은 보존 정책이다. 기록이 시간순이니 지울 범위는 늘 배열 앞쪽이다. upper bound로 자를 자리를 찾고 앞을 잘라 낸다. `times.splice(0, cut)`은 O(k)라, 자주 지운다면 시작 위치 `head`만 옮기고 가끔 한꺼번에 배열을 새로 만드는 방식이 낫다. 다만 지운 뒤에도 "지운 시각 직후"를 물으면 마지막으로 남겨 둔 값이 필요할 수 있으니, 경계 기록 하나는 남겨 둘지 정해야 한다.
+
+### 모든 키를 한 시점으로 보고 싶다면
+
+"시각 t의 전체 상태"를 묻는 건 데이터베이스의 스냅숏 읽기와 같은 질문이다. PostgreSQL의 MVCC는 행마다 여러 버전을 남기고, 트랜잭션은 자기 시작 시점에 보이는 버전만 읽는다. 키마다 버전 목록을 두고 "t 이하인 마지막 버전"을 고르는 이 문제와 같은 생각이다. 오래된 버전을 치우는 VACUUM이 바로 위의 "지우기" 문제다. 자세한 동작은 [PostgreSQL MVCC 글](/posts/postgres-mvcc-vacuum)에 있다.
+
+### 같은 모양의 문제들
+
+- 1146. Snapshot Array: `snap()`을 부를 때마다 버전 번호가 커지고, `get(index, snap_id)`는 그 번호 이하인 마지막 기록을 찾는다. 칸마다 기록장을 두고 upper bound를 쓰는 이 문제와 같은 풀이다.
+- 2034. Stock Price Fluctuation: 시각이 뒤섞여 들어오고 같은 시각을 고쳐 쓴다. 해시맵에 더해 최댓값·최솟값을 위한 정렬 구조나 힙이 필요하다.
+- [LeetCode 34. Find First and Last Position of Element in Sorted Array](/posts/leetcode-find-first-last-position-sorted-array): lower bound와 upper bound를 둘 다 쓰는 연습이다. 이 문제의 `<` 대 `<=` 차이를 그대로 연습할 수 있다.
+- [LeetCode 146. LRU Cache](/posts/leetcode-lru-cache): 같은 "클래스로 키-값 저장소 설계" 문제인데, 시간 대신 최근 사용 순서를 해시맵 + 연결 리스트로 관리한다.
+
+## 해시맵 안에 정렬된 기록장
+
+해시맵은 키를 O(1)에 찾아 주지만 "어느 시점의 값"이라는 순서 질문에는 답하지 못한다. 그래서 키마다 시간순 기록장을 하나씩 두고, 기록장 안에서는 "t보다 늦은 첫 기록"을 이분 탐색으로 찾아 그 바로 앞을 읽는다. 이 문제에서는 시각이 커지며 들어와서 정렬이 공짜였다. 그 조건이 사라지면 정렬을 유지하는 비용이 생기고, 그때는 TreeMap 같은 균형 트리가 그 비용을 log로 묶어 준다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 해시맵만으로는 부족한가요?
+
+해시맵은 정확히 같은 키만 찾을 수 있어서 "t 이하인 가장 늦은 시각" 같은 범위 질문에 답하지 못한다. 시각까지 키로 넣으면 질문 시각에 정확히 기록이 없을 때 1씩 내려가며 찾아야 하고, 시각 범위가 10^7이라 너무 느리다. 그래서 바깥은 키를 찾는 해시맵, 안쪽은 시간순 배열과 이분 탐색으로 두 질문을 나눠 맡긴다.
+
+### 키마다 배열이 정렬돼 있다는 걸 어떻게 보장하나요?
+
+문제가 `set`의 timestamp가 엄격하게 커진다고 보장하기 때문이다. 그래서 배열 끝에 붙이기만 해도 시간순이 유지되고, 정렬 비용이 들지 않는다. 이 보장이 없다면 이분 탐색으로 자리를 찾아 끼워 넣거나 TreeMap 같은 정렬 구조를 써야 한다.
+
+### get에서 이분 탐색 경계는 어떻게 잡나요?
+
+"timestamp보다 큰 첫 자리", 즉 upper bound를 반열린 구간 `[0, k)`에서 찾는다. `times[mid] <= timestamp`면 `lo = mid + 1`, 아니면 `hi = mid`다. 끝난 `lo`의 바로 앞 `lo - 1`이 timestamp 이하인 마지막 기록이고, `lo`가 0이면 그런 기록이 없어 빈 문자열을 돌려준다. `<`로 바꾸면 질문 시각과 같은 시각의 기록을 건너뛰는 버그가 생긴다.
+
+### 시간·공간 복잡도는 어떻게 되나요?
+
+`set`은 해시맵 조회와 배열 끝 붙이기라 평균 O(1)이다. `get`은 해시맵 조회 O(1)과 그 키의 기록 k개 위의 이분 탐색 O(log k)다. 공간은 전체 기록 수를 n이라 하면 O(n)이다. 2 × 10^5번 호출이면 질문당 비교가 17번 안팎이라 충분히 빠르다.
+
+### 자바에서 TreeMap을 쓰면 무엇이 달라지나요?
+
+`floorEntry(t)`가 "t 이하 중 가장 큰 키"를 O(log k)에 주니 이분 탐색을 직접 짤 필요가 없다. 대신 `set`도 O(log k)가 되고, 노드 객체 때문에 메모리를 더 쓴다. 이 문제처럼 시각이 커지며 들어오면 배열이 더 가볍고, 시각이 뒤섞이거나 중간 기록을 지워야 하면 TreeMap이 맞다.
+
+### 대부분의 질문이 최근 시각이라면 어떤 풀이를 고르나요?
+
+뒤에서부터 훑는 풀이도 첫 한두 칸에서 끝나지만, 오래된 시각이 한 번씩 섞이면 O(k)로 튀니 기본은 이분 탐색으로 둔다. 최근 몇 칸을 먼저 보고 이분 탐색으로 넘어가는 방법도 짜서 재 봤는데, 기록 10만 개에서 이분 탐색이 비교 17번이라 차이가 측정 잡음 안에 묻혔다. 칸 하나 읽는 비용이 큰 디스크 기반 저장소라면 그런 최적화가 의미가 생긴다. 어느 쪽이든 측정해 보고 정한다.
+
+### 이 구조가 실무에서 어디에 쓰이나요?
+
+여러 버전을 남기고 특정 시점의 값을 읽는 곳이면 같은 모양이다. 데이터베이스의 MVCC는 행 버전 중 트랜잭션 시작 시점에 보이는 것을 고르고, 설정 저장소나 시계열 저장소도 "그 시각의 값"을 묻는다. 기록이 계속 쌓이니 오래된 버전을 언제 지울지(보존 정책)가 실무에서는 함께 따라오는 문제다.
