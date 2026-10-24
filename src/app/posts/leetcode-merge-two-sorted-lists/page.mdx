@@ -1,0 +1,503 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-merge-two-sorted-lists");
+
+<EasyIntro>
+  키 순서대로 줄을 선 두 반이 있다. 두 반을 합쳐서 다시 키 순서대로 한 줄을 만들고 싶다. 모두를 흩어 놓고 처음부터 다시 줄 세울 필요는 없다. 두 줄 모두 이미 키 순서대로 서 있으니, 각 줄의 맨 앞사람 두 명만 보면 된다. 둘 중 키가 작은 사람을 새 줄 뒤에 세우고, 그 사람이 빠진 줄은 다음 사람이 맨 앞이 된다. 이걸 계속 반복하다가 한 줄이 먼저 비면, 남은 줄은 이미 순서대로 서 있으니 그대로 새 줄 뒤에 통째로 붙이면 끝이다. 한 번에 두 사람만 비교하니까 사람이 아무리 많아도 금방 끝난다.
+</EasyIntro>
+
+정렬된 목록 두 개를 하나로 합쳐야 하는 일은 생각보다 자주 생긴다. 두 서버에서 시간순으로 쌓인 로그를 한 화면에 보여 줄 때, 날짜순으로 정렬된 두 피드를 섞을 때가 그렇다. 둘을 이어 붙인 다음 통째로 정렬하면 쉽지만, 이미 정렬돼 있다는 정보를 버리는 셈이다.
+
+[LeetCode 21. Merge Two Sorted Lists](https://leetcode.com/problems/merge-two-sorted-lists/)는 그 정보를 살려서 두 정렬된 연결 리스트를 하나로 합치는 문제다. 병합 정렬(merge sort)의 "병합" 단계를 연결 리스트로 짜는 것과 같고, [Merge k Sorted Lists](/posts/leetcode-merge-k-sorted-lists)와 [Reorder List](/posts/leetcode-reorder-list)에 부품으로 그대로 들어간다. 이 글에서는 다시 정렬하는 느린 방법부터 가짜 머리 노드(dummy)를 쓰는 기본 답, 재귀 풀이까지 다섯 가지를 따라간다. 연결 리스트의 기본 구조는 [연결 리스트 글](/posts/ds-linked-list)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 정렬된 두 줄을 하나로 잇는다
+
+오름차순(같은 값이 이어져도 되는 비감소 순서)으로 정렬된 연결 리스트 두 개 `list1`, `list2`의 머리가 주어진다. 두 리스트의 노드를 이어 붙여서 하나의 정렬된 리스트를 만들고, 그 머리를 돌려준다. 새 노드를 만들라는 게 아니라 원래 노드들을 다시 엮으라는 뜻이다.
+
+```text
+list1:  1 → 3 → 5
+list2:  2 → 3 → 6
+결과:   1 → 2 → 3 → 3 → 5 → 6
+```
+
+각 리스트의 노드는 0개에서 50개, 값은 -100에서 100 사이다. 둘 다 비어 있을 수도 있고 한쪽만 비어 있을 수도 있다. 크기가 작아서 어떤 풀이든 시간 안에 들어오지만, 면접에서는 두 리스트 길이를 n과 m이라고 할 때 O(n + m) 시간, O(1) 추가 공간을 기대한다.
+
+노드 정의는 LeetCode와 같다.
+
+```js
+function ListNode(val, next) {
+  this.val = val === undefined ? 0 : val;
+  this.next = next === undefined ? null : next;
+}
+```
+
+## 두 더미의 맨 위 카드만 본다
+
+위 예시를 손으로 합쳐 보자. 카드 두 더미가 있고 각 더미는 위에서부터 작은 순으로 쌓여 있다고 생각하면 쉽다.
+
+```text
+더미 A: 1 3 5      더미 B: 2 3 6      결과
+1 vs 2 → 1        A: 3 5            1
+3 vs 2 → 2        B: 3 6            1 2
+3 vs 3 → A의 3    A: 5              1 2 3
+5 vs 3 → B의 3    B: 6              1 2 3 3
+5 vs 6 → 5        A: (빔)           1 2 3 3 5
+A가 비었다 → B의 남은 6을 그대로    1 2 3 3 5 6
+```
+
+매번 두 더미의 맨 위 카드만 비교했다. 더미 A의 맨 위가 1이면, 더미 A의 나머지는 모두 1 이상이다. 그러니 "아직 안 쓴 카드 중 가장 작은 것"은 반드시 두 맨 위 카드 중 하나다. 두 장만 보면 다음 카드가 정해진다는 이 성질 덕분에 카드 한 장마다 비교 한 번으로 끝난다.
+
+한 더미가 먼저 비었을 때도 다시 볼 필요가 없다. 남은 더미는 이미 정렬돼 있고, 그 안의 카드는 지금까지 결과에 놓인 어떤 카드보다도 크거나 같다. 그래서 통째로 뒤에 붙인다.
+
+## 값을 모아서 다시 정렬하기
+
+정렬돼 있다는 걸 무시하면 가장 단순한 풀이가 나온다. 두 리스트의 값을 배열 하나에 모으고, 정렬하고, 새 노드로 리스트를 만든다.
+
+```js
+function mergeTwoLists(list1, list2) {
+  const vals = [];
+  for (let n = list1; n; n = n.next) vals.push(n.val);
+  for (let n = list2; n; n = n.next) vals.push(n.val);
+
+  vals.sort((a, b) => a - b); // 숫자 비교자를 꼭 넘긴다
+
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of vals) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+```
+
+시간은 정렬 때문에 O((n + m) log(n + m)), 공간은 배열과 새 노드 때문에 O(n + m)이다.
+
+JavaScript에서 `sort()`에 비교자를 빼면 값을 문자열로 바꿔서 사전순으로 정렬한다. `[10, 9, 1, -3, 2].sort()`는 `[-3, 1, 10, 2, 9]`가 된다. 이 문제는 음수와 두 자리 수가 섞이니 `(a, b) => a - b`가 꼭 필요하다. 자세한 건 [정렬 알고리즘 글](/posts/sorting-algorithms)에 있다.
+
+동작은 하지만 문제가 원하는 답과 거리가 있다. 새 노드를 만들어서 "원래 노드를 이어 붙이라"는 요구를 어겼고, 이미 정렬된 입력을 다시 정렬하느라 log만큼 손해를 봤다.
+
+## 노드를 배열에 담아 정렬하고 다시 잇기
+
+새 노드를 만들지 않으려면 값 대신 노드를 배열에 모아서, 노드의 값으로 정렬한 뒤 배열 순서대로 `next`를 다시 이으면 된다.
+
+```js
+function mergeTwoLists(list1, list2) {
+  const nodes = [];
+  for (let n = list1; n; n = n.next) nodes.push(n);
+  for (let n = list2; n; n = n.next) nodes.push(n);
+
+  nodes.sort((a, b) => a.val - b.val);
+
+  // 배열 순서대로 화살표를 다시 잇는다. 마지막 노드는 null을 가리킨다
+  for (let i = 0; i < nodes.length; i++) {
+    nodes[i].next = nodes[i + 1] ?? null;
+  }
+  return nodes[0] ?? null; // 둘 다 비었으면 null
+}
+```
+
+이제 원래 노드를 재사용한다. 그래도 시간 O((n + m) log(n + m)), 공간 O(n + m)은 그대로다. 마지막 노드의 `next`를 `null`로 바꾸는 부분을 빼먹으면 그 노드가 원래 리스트에서 가리키던 다음 노드를 계속 가리켜서 고리가 생길 수 있다. `nodes[i + 1] ?? null`이 그 처리를 한 줄로 해 준다.
+
+정렬을 버려야 빨라진다. 두 리스트가 이미 정렬돼 있으니, 앞 절에서 손으로 했던 "맨 앞 두 개만 비교하기"를 그대로 코드로 옮기면 정렬이 필요 없다.
+
+## 맨 앞끼리만 비교해서 꼬리에 붙인다
+
+결과 리스트를 만들어 가면서, 그 리스트의 마지막 노드를 `tail`이라는 포인터로 들고 다닌다. 매번 `list1`과 `list2`의 머리를 비교해서 작은 쪽을 `tail` 뒤에 붙이고, 붙인 쪽 리스트의 머리를 한 칸 옮긴다.
+
+여기서 걸리는 게 하나 있다. 처음에는 결과 리스트가 비어 있어서 붙일 `tail`이 없다. 첫 노드만 따로 처리하는 코드를 쓰는 대신, 값이 의미 없는 가짜 노드(dummy)를 하나 만들어 결과의 맨 앞에 세워 둔다. 그러면 첫 노드도 "dummy 뒤에 붙이기"로 다른 노드와 똑같이 처리되고, 다 끝난 뒤 `dummy.next`를 돌려주면 진짜 머리가 나온다.
+
+아래 그림에서 왼쪽 세 칸은 `list1`(1, 3, 5), 오른쪽 세 칸은 `list2`(2, 3, 6)의 노드다. 다음을 누르면 두 머리 중 작은 쪽이 결과에 붙고, 초록 칸이 늘어난다.
+
+<AlgoTrace
+  caption="1→3→5와 2→3→6 병합: 두 머리 중 작은 쪽을 tail 뒤에 붙인다"
+  memoryLabel="결과와 남은 두 리스트"
+  cells={["1", "3", "5", "2", "3", "6"]}
+  steps={[
+    { memory: ["결과 = (dummy만)", "list1 = 1→3→5", "list2 = 2→3→6"], caption: "왼쪽 세 칸이 list1, 오른쪽 세 칸이 list2다." },
+    { pointer: 0, found: [0], memory: ["결과 = 1", "list1 = 3→5", "list2 = 2→3→6"], caption: "1과 2를 비교한다. 1이 작아서 붙이고 list1을 한 칸 옮긴다." },
+    { pointer: 3, found: [0, 3], memory: ["결과 = 1→2", "list1 = 3→5", "list2 = 3→6"], caption: "3과 2를 비교한다. 2를 붙이고 list2를 옮긴다." },
+    { pointer: 1, found: [0, 3, 1], memory: ["결과 = 1→2→3", "list1 = 5", "list2 = 3→6"], caption: "3과 3이 같다. 같으면 list1 쪽을 먼저 붙인다." },
+    { pointer: 4, found: [0, 3, 1, 4], memory: ["결과 = 1→2→3→3", "list1 = 5", "list2 = 6"], caption: "5와 3을 비교한다. list2의 3을 붙인다." },
+    { pointer: 2, found: [0, 3, 1, 4, 2], memory: ["결과 = 1→2→3→3→5", "list1 = null", "list2 = 6"], caption: "5와 6을 비교한다. 5를 붙이자 list1이 비었다." },
+    { pointer: 5, found: [0, 3, 1, 4, 2, 5], memory: ["결과 = 1→2→3→3→5→6"], caption: "남은 list2를 통째로 tail 뒤에 붙인다. 비교는 다섯 번이었다." },
+  ]}
+/>
+
+비교는 다섯 번, 노드는 여섯 개다. 마지막 노드는 비교 없이 붙었다. 비교 횟수는 많아야 n + m - 1번이고, 한쪽이 일찍 끝나면 훨씬 적다. `[1, 2, 3]`과 `[7, 8, 9]`라면 세 번 비교하고 `list1`이 비는 순간 `7→8→9`를 한 번에 붙인다.
+
+```js
+function mergeTwoLists(list1, list2) {
+  const dummy = new ListNode(); // 결과 맨 앞의 가짜 노드
+  let tail = dummy;             // 결과의 마지막 노드
+
+  while (list1 && list2) {
+    if (list1.val <= list2.val) {  // 같으면 list1 먼저 (안정성)
+      tail.next = list1;
+      list1 = list1.next;
+    } else {
+      tail.next = list2;
+      list2 = list2.next;
+    }
+    tail = tail.next;              // 방금 붙인 노드가 새 꼬리
+  }
+
+  // 한쪽이 비었다. 남은 쪽은 이미 정렬돼 있으니 통째로 붙인다
+  tail.next = list1 ?? list2;
+  return dummy.next;               // dummy 다음이 진짜 머리
+}
+```
+
+시간은 O(n + m)이다. 반복 한 번에 노드 하나가 결과에 붙고, 남은 꼬리는 대입 한 번으로 붙는다. 공간은 O(1)이다. 새로 만드는 건 dummy 하나와 포인터 몇 개뿐이고, 노드는 전부 원래 것을 재사용한다.
+
+### 남은 꼬리를 한 번에 붙여도 되는 이유
+
+반복문 조건이 `list1 && list2`라서 한쪽이 비면 바로 빠져나온다. 이때 남은 리스트를 하나씩 붙일 필요가 없다. 남은 리스트의 노드들은 원래부터 `next`로 서로 정렬된 순서대로 이어져 있으니, 그 머리 하나만 `tail.next`에 걸면 전체가 딸려 온다. 남은 리스트가 길수록 이 차이가 크다.
+
+남은 리스트의 첫 값이 지금까지 결과의 마지막 값보다 크거나 같다는 것도 보장된다. 결과에 마지막으로 붙은 노드는 비교에서 남은 리스트의 머리를 이긴(작거나 같았던) 노드이기 때문이다.
+
+### 같은 값이면 list1 먼저인 이유
+
+비교를 `<=`로 쓰면 값이 같을 때 `list1`의 노드가 먼저 붙는다. 이 문제의 채점은 값만 보니 `<`로 써도 통과한다. 하지만 노드에 값 말고 다른 정보가 붙어 있다면 차이가 생긴다. 값이 3인 노드 두 개에 각각 a, b라는 꼬리표를 붙여 돌려 보면, `<=`는 a, b 순서를 지키고 `<`는 b, a로 뒤집는다. 같은 값끼리 원래 순서를 지키는 성질을 안정성(stability)이라고 하고, 병합 정렬이 안정 정렬인 이유가 바로 이 `<=`다. 두 서버 로그를 시간순으로 합칠 때 같은 시각의 로그가 서버 순서대로 나오길 원한다면 `<=`가 맞다.
+
+### Python과 Java로 쓰면
+
+Python은 `or`가 "앞이 참이면 앞, 아니면 뒤"를 돌려주므로 남은 쪽 붙이기를 `list1 or list2`로 쓴다. 노드 객체는 `None`이 아니면 참이다.
+
+```python
+class ListNode:
+    def __init__(self, val=0, next=None):
+        self.val = val
+        self.next = next
+
+def merge_two_lists(list1, list2):
+    dummy = ListNode()
+    tail = dummy
+    while list1 and list2:
+        if list1.val <= list2.val:
+            tail.next, list1 = list1, list1.next
+        else:
+            tail.next, list2 = list2, list2.next
+        tail = tail.next
+    tail.next = list1 or list2  # 남은 쪽을 통째로 붙인다
+    return dummy.next
+```
+
+여기서의 다중 대입 `tail.next, list1 = list1, list1.next`는 오른쪽 `list1`과 `list1.next`를 먼저 계산하니 안전하다. 왼쪽에 서로를 참조하는 식이 없기 때문이다.
+
+Java는 `null` 비교를 직접 쓴다. JavaScript의 `??` 자리에 삼항 연산자가 들어간다.
+
+```java
+class Solution {
+    public ListNode mergeTwoLists(ListNode list1, ListNode list2) {
+        ListNode dummy = new ListNode();
+        ListNode tail = dummy;
+        while (list1 != null && list2 != null) {
+            if (list1.val <= list2.val) { tail.next = list1; list1 = list1.next; }
+            else { tail.next = list2; list2 = list2.next; }
+            tail = tail.next;
+        }
+        tail.next = (list1 != null) ? list1 : list2;
+        return dummy.next;
+    }
+}
+```
+
+세 언어 모두 같은 결과가 나온다.
+
+```text
+[1,3,5] + [2,3,6]    → [1, 2, 3, 3, 5, 6]
+[] + []              → []
+[] + [0]             → [0]
+[4] + []             → [4]
+[1,2,4] + [1,3,4]    → [1, 1, 2, 3, 4, 4]
+[-5,-1] + [-3,0,8]   → [-5, -3, -1, 0, 8]
+[1,1,1] + [1,1]      → [1, 1, 1, 1, 1]
+```
+
+## 가짜 머리 없이 첫 노드부터 고르기
+
+dummy 노드를 쓰지 않고 짜라는 요구를 받을 수도 있다. 그러면 결과의 첫 노드를 반복문 전에 따로 정한다. 둘 중 하나가 비었으면 다른 쪽이 답이고, 둘 다 있으면 머리끼리 비교해서 작은 쪽이 결과의 머리가 된다.
+
+```js
+function mergeTwoLists(list1, list2) {
+  if (!list1) return list2;
+  if (!list2) return list1;
+
+  // 첫 노드를 먼저 고른다
+  let head;
+  if (list1.val <= list2.val) { head = list1; list1 = list1.next; }
+  else { head = list2; list2 = list2.next; }
+
+  let tail = head;
+  while (list1 && list2) {
+    if (list1.val <= list2.val) { tail.next = list1; list1 = list1.next; }
+    else { tail.next = list2; list2 = list2.next; }
+    tail = tail.next;
+  }
+  tail.next = list1 ?? list2;
+  return head;
+}
+```
+
+복잡도는 dummy 풀이와 같다. 차이는 코드다. 첫 노드를 고르는 비교가 반복문 안의 비교와 똑같이 한 번 더 나온다. 이 중복이 dummy를 쓰는 이유다. 노드 하나를 더 만드는 비용(객체 하나)과 맞바꿔 경계 처리를 없앤다. 연결 리스트에서 머리가 바뀔 수 있는 문제라면 거의 다 dummy를 쓴다. 노드 삭제, 구간 뒤집기, 분할 문제가 그렇다.
+
+## 작은 머리 뒤에 나머지 병합을 붙이는 재귀
+
+이 문제는 정의 자체가 재귀적이다. 두 리스트를 합친 결과의 머리는 두 머리 중 작은 쪽이다. 그 뒤에는 "작은 쪽을 뺀 나머지와 다른 리스트를 합친 결과"가 온다.
+
+```js
+function mergeTwoLists(list1, list2) {
+  // 한쪽이 비면 다른 쪽이 그대로 답
+  if (!list1) return list2;
+  if (!list2) return list1;
+
+  if (list1.val <= list2.val) {
+    // list1의 머리가 결과의 머리. 그 뒤는 나머지를 합친 결과
+    list1.next = mergeTwoLists(list1.next, list2);
+    return list1;
+  }
+  list2.next = mergeTwoLists(list1, list2.next);
+  return list2;
+}
+```
+
+반복 풀이에서 `tail`이 하던 일을 호출 하나하나가 나눠 맡는다. 각 호출은 "내 머리를 정하고, 내 머리의 `next`에 아래 호출의 결과를 건다"는 일만 한다. 아래 그림은 `1→4`와 `2→3`을 합칠 때 호출이 쌓였다가 풀리는 모습이다.
+
+<AlgoTrace
+  caption="재귀 병합: 내려가며 머리를 고르고, 돌아오며 next를 건다"
+  memoryLabel="콜 스택 (왼쪽이 먼저 부른 호출)"
+  cells={["1", "4", "2", "3"]}
+  steps={[
+    { pointer: 0, memory: ["m(1→4, 2→3)"], caption: "1이 2보다 작다. 1이 머리이고 뒤는 m(4, 2→3)에 맡긴다." },
+    { pointer: 2, memory: ["m(1→4, 2→3)", "m(4, 2→3)"], caption: "4와 2 중 2가 작다. 뒤는 m(4, 3)에 맡긴다." },
+    { pointer: 3, memory: ["m(1→4, 2→3)", "m(4, 2→3)", "m(4, 3)"], caption: "4와 3 중 3이 작다. 뒤는 m(4, null)에 맡긴다." },
+    { pointer: 1, found: [1], memory: ["m(1→4, 2→3)", "m(4, 2→3)", "m(4, 3)", "m(4, null)"], caption: "list2가 비었다. 4를 그대로 돌려준다." },
+    { pointer: 3, found: [3, 1], memory: ["m(1→4, 2→3)", "m(4, 2→3)", "m(4, 3): 3→4"], caption: "3의 next에 4를 건다." },
+    { pointer: 2, found: [2, 3, 1], memory: ["m(1→4, 2→3)", "m(4, 2→3): 2→3→4"], caption: "2의 next에 3→4를 건다." },
+    { pointer: 0, found: [0, 2, 3, 1], memory: ["m(1→4, 2→3): 1→2→3→4"], caption: "1의 next에 2→3→4를 건다. 결과의 머리는 1이다." },
+  ]}
+/>
+
+시간은 O(n + m)으로 반복 풀이와 같다. 공간은 콜 스택에 호출이 최대 n + m개 쌓여서 O(n + m)이다. 이 문제의 제약(합쳐서 100개)에서는 아무 문제가 없다. 하지만 리스트가 길면 터진다. 직접 재 보니 Node.js에서는 합쳐서 8000개는 됐고 10000개에서 `RangeError`가 났다. Python은 기본 재귀 한도가 1000이라 합쳐서 2000개에서 `RecursionError`가 났다.
+
+코드가 짧고 정의를 그대로 옮긴 모양이라 면접에서 보여 주기 좋다. 다만 "이걸 병합 정렬 안에서 쓰면 어떻게 되나"라는 질문이 따라올 수 있다. 큰 리스트를 병합 정렬하면 마지막 병합 단계에서 리스트 전체 길이만큼 재귀가 깊어지니, 실제 구현에는 반복 버전을 쓴다.
+
+## 다섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 값 모아 정렬, 새 노드 | O((n+m) log(n+m)) | O(n+m) | 정렬 여부를 모를 때. 이 문제에는 맞지 않는다 |
+| 노드 모아 정렬, 다시 잇기 | O((n+m) log(n+m)) | O(n+m) | 입력이 정렬돼 있지 않은 리스트를 합칠 때 |
+| dummy + tail 반복 | O(n+m) | O(1) | 기본 답. 제출과 실무 모두 이것 |
+| dummy 없는 반복 | O(n+m) | O(1) | dummy 없이 짜라고 할 때. 첫 노드 처리가 따로 필요하다 |
+| 재귀 | O(n+m) | O(n+m) 콜 스택 | 짧은 코드로 정의를 보여 줄 때. 긴 리스트에서는 터진다 |
+
+모든 노드가 결과에 한 번씩은 들어가야 하니 O(n + m)보다 빠를 수는 없다. 그래서 반복 풀이가 시간과 공간 모두 최선이다.
+
+## 직접 합쳐 보기
+
+아래 칸에서 `merge` 함수를 채워 보자. 함수는 배열 두 개를 받아 안에서 연결 리스트를 만들고, 합친 결과를 다시 배열로 돌려준다.
+
+<CodePlayground
+  caption="Merge Two Sorted Lists: dummy와 tail로 병합하기"
+  functionName="mergeTwoLists"
+  initialCode={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  for (let n = head; n; n = n.next) out.push(n.val);
+  return out;
+}
+
+function merge(list1, list2) {
+  // dummy 노드를 하나 두고, 두 머리 중 작은 쪽을 tail 뒤에 붙여 보자
+  return null;
+}
+
+function mergeTwoLists(a, b) {
+  return toArray(merge(build(a), build(b)));
+}`}
+  solution={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  for (let n = head; n; n = n.next) out.push(n.val);
+  return out;
+}
+
+function merge(list1, list2) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  while (list1 && list2) {
+    if (list1.val <= list2.val) {
+      tail.next = list1;
+      list1 = list1.next;
+    } else {
+      tail.next = list2;
+      list2 = list2.next;
+    }
+    tail = tail.next;
+  }
+  tail.next = list1 ?? list2;
+  return dummy.next;
+}
+
+function mergeTwoLists(a, b) {
+  return toArray(merge(build(a), build(b)));
+}`}
+  tests={[
+    { args: [[1, 3, 5], [2, 3, 6]], expected: [1, 2, 3, 3, 5, 6], label: "엇갈린 두 리스트" },
+    { args: [[], []], expected: [], label: "둘 다 빔" },
+    { args: [[], [0]], expected: [0], label: "한쪽만 빔" },
+    { args: [[4], []], expected: [4], label: "다른 쪽만 빔" },
+    { args: [[1, 2, 4], [1, 3, 4]], expected: [1, 1, 2, 3, 4, 4], label: "같은 값이 섞임" },
+    { args: [[-5, -1], [-3, 0, 8]], expected: [-5, -3, -1, 0, 8], label: "음수" },
+    { args: [[1, 2, 3], [7, 8, 9]], expected: [1, 2, 3, 7, 8, 9], label: "겹치지 않음" },
+    { args: [[5], [1, 2, 3]], expected: [1, 2, 3, 5], label: "길이가 다름" },
+  ]}
+/>
+
+## 꼬리를 놓치는 실수들
+
+남은 리스트를 붙이지 않는 실수가 가장 흔하다. 반복문은 한쪽이 비는 순간 끝나니, 다른 쪽에 남은 노드는 결과에 들어가지 못한다.
+
+```js
+// 남은 꼬리를 붙이지 않은 코드
+while (list1 && list2) { /* ... */ }
+return dummy.next;
+// [1,3,5] + [2,3,6] → [1, 2, 3, 3, 5]   6이 빠졌다
+// [1,2,3] + [7,8,9] → [1, 2, 3]         뒤쪽 리스트가 통째로 빠졌다
+```
+
+재미있게도 첫 번째 입력은 결과가 `[1, 2, 3, 3, 5]`다. 마지막에 붙은 5는 원래 `list1`의 꼬리라서 `next`가 `null`이었다. 그래서 고리도 안 생기고 오류도 안 나고 조용히 6만 빠진다. 테스트를 길이가 다른 입력, 한쪽이 먼저 끝나는 입력으로 꼭 돌려 봐야 하는 이유다.
+
+`tail = tail.next`를 빼먹으면 `tail`이 계속 dummy에 머물러서 `dummy.next`만 계속 덮어쓴다. 마지막에 남은 꼬리를 붙이는 줄까지 `dummy.next`를 덮어쓰니, `[1,3,5] + [2,3,6]`의 결과는 `[6]` 하나가 된다.
+
+`return dummy`로 dummy 자체를 돌려주면 결과 맨 앞에 값 0인 노드가 하나 더 붙는다. `[0, 1, 2, 3, 3, 5, 6]`처럼 나온다. 입력에 0이 들어 있는 테스트에서는 눈으로 찾기도 어렵다.
+
+빈 리스트는 dummy 풀이에서 따로 처리하지 않아도 된다. 둘 다 비었으면 반복문을 건너뛰고 `tail.next = null ?? null`로 `null`을 걸어 `dummy.next`인 `null`을 돌려준다. 한쪽만 비었으면 바로 다른 쪽을 통째로 붙인다. dummy 없는 풀이와 재귀 풀이는 맨 앞의 빈 리스트 확인이 꼭 있어야 한다. 빠지면 `null.val`을 읽다가 `TypeError`가 난다.
+
+비교를 `list1.val <= list2.val` 대신 `list1.val < list2.val`로 써도 이 문제는 통과하지만, 앞에서 본 것처럼 같은 값의 순서가 뒤집힌다. 정렬 안정성이 필요한 쓰임새에서는 버그가 된다.
+
+## 면접관이 조건을 바꾸면
+
+### 리스트가 k개라면
+
+[LeetCode 23. Merge k Sorted Lists](/posts/leetcode-merge-k-sorted-lists)다. 이 글의 함수를 그대로 써서 둘씩 짝지어 합치는 걸 반복하면(토너먼트처럼) 전체 노드 수를 N이라 할 때 O(N log k)가 된다. 하나씩 순서대로 합치면 앞쪽 결과가 계속 길어져서 O(N·k)로 느려진다. k개 머리 중 최솟값을 매번 고르는 데 힙을 쓰는 방법도 있다. 자세한 비교는 그 글에서 한다.
+
+### 배열이라면
+
+LeetCode 88 Merge Sorted Array는 같은 병합을 배열로 한다. `nums1`이 결과를 담을 만큼 뒤쪽에 빈칸을 갖고 있고, 거기에 `nums2`를 합쳐 넣어야 한다. 앞에서부터 채우면 아직 안 읽은 `nums1` 값을 덮어쓰니, 뒤에서부터 큰 값을 채운다.
+
+```js
+function merge(nums1, m, nums2, n) {
+  let i = m - 1, j = n - 1, k = m + n - 1; // 각자 마지막 칸에서 시작
+  while (j >= 0) {                          // nums2를 다 넣으면 끝
+    if (i >= 0 && nums1[i] > nums2[j]) nums1[k--] = nums1[i--];
+    else nums1[k--] = nums2[j--];
+  }
+}
+// [1,3,5,0,0,0], 3, [2,3,6], 3 → [1, 2, 3, 3, 5, 6]
+// [0], 0, [4], 1               → [4]
+```
+
+연결 리스트는 노드를 끼워 넣는 데 공간이 안 들어서 앞에서부터 해도 되지만, 배열은 자리가 고정돼 있어서 빈칸이 있는 뒤쪽부터 채우는 게 요령이다. `nums2`가 다 들어가면 남은 `nums1`은 이미 제자리에 있으니 반복 조건이 `j >= 0` 하나로 충분하다.
+
+### 연결 리스트 하나를 정렬하라면
+
+LeetCode 148 Sort List는 연결 리스트 하나를 O(n log n)으로 정렬한다. 병합 정렬을 쓰면 된다. 빠른·느린 포인터로 가운데를 찾아 리스트를 반으로 자르고, 양쪽을 재귀로 정렬한 뒤, 이 글의 `mergeTwoLists`로 합친다.
+
+```js
+function sortList(head) {
+  if (!head || !head.next) return head;
+  // 가운데 찾기: fast가 끝에 닿을 때 slow는 앞쪽 절반의 끝
+  let slow = head, fast = head.next;
+  while (fast && fast.next) { slow = slow.next; fast = fast.next.next; }
+  const right = slow.next;
+  slow.next = null;                       // 반으로 자른다
+  return mergeTwoLists(sortList(head), sortList(right));
+}
+// [4,1,3,2,5] → [1, 2, 3, 4, 5]
+```
+
+배열 병합 정렬은 병합할 때 O(n) 보조 배열이 필요하지만, 연결 리스트는 화살표만 다시 이으면 되니 병합에 추가 공간이 없다. 그래서 연결 리스트 정렬에는 병합 정렬이 잘 맞는다. 재귀 깊이는 O(log n)이다. 분할 정복의 큰 그림은 [분할 정복 글](/posts/divide-and-conquer)에서 볼 수 있다.
+
+### 중복 없이 합치라면
+
+두 리스트를 합치면서 같은 값은 한 번만 남기는 합집합이다. 붙이기 직전에 "결과의 마지막 값과 같은가"만 확인한다. 두 입력이 각각 정렬돼 있으니 같은 값은 결과에서 항상 이웃하게 된다.
+
+```js
+function mergeUnique(l1, l2) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  const push = (node) => {
+    // 결과가 비었거나 마지막 값과 다를 때만 붙인다
+    if (tail === dummy || tail.val !== node.val) { tail.next = node; tail = node; }
+  };
+  while (l1 || l2) {
+    if (!l2 || (l1 && l1.val <= l2.val)) { const n = l1; l1 = l1.next; push(n); }
+    else { const n = l2; l2 = l2.next; push(n); }
+  }
+  tail.next = null; // 버린 노드를 가리키지 않게 끊는다
+  return dummy.next;
+}
+// [1,2,2,4] + [2,3,4,4] → [1, 2, 3, 4]
+```
+
+이번에는 남은 꼬리를 통째로 붙일 수 없다. 남은 쪽에도 중복이 있을 수 있으니 끝까지 하나씩 확인한다. `tail === dummy`로 빈 결과를 확인하는 이유는 dummy의 값 0이 진짜 값 0과 섞이지 않게 하려는 것이다. 교집합이라면 반대로 두 머리가 같을 때만 붙이고, 다르면 작은 쪽만 한 칸 옮긴다.
+
+### 두 리스트가 내림차순이라면
+
+비교 방향만 뒤집는다. `list1.val >= list2.val`이면 `list1`을 붙인다. 한쪽은 오름차순, 다른 쪽은 내림차순이라면 [Reverse Linked List](/posts/leetcode-reverse-linked-list)로 한쪽을 먼저 뒤집어서 방향을 맞춘 다음 합친다. 추가 공간 없이 O(n + m)이 유지된다.
+
+### 결과가 너무 커서 메모리에 다 못 올린다면
+
+두 리스트가 디스크에 있는 거대한 정렬 파일이라도 이 방법은 그대로 통한다. 매 순간 필요한 건 두 파일의 현재 줄 하나씩뿐이라서, 각 파일을 앞에서부터 흘려 읽으며 작은 쪽을 출력 파일에 쓰면 된다. 메모리에 다 안 들어가는 데이터를 정렬하는 외부 정렬(external sort)이 조각별로 정렬한 파일을 이렇게 합친다. 데이터베이스의 정렬 병합 조인(sort-merge join)도 같은 원리다.
+
+## 두 머리 중 작은 쪽만 고른다
+
+정렬된 두 리스트에서 아직 안 쓴 값 중 가장 작은 것은 반드시 두 머리 중 하나다. 그래서 머리 두 개만 비교해 작은 쪽을 꼬리에 붙이고, 한쪽이 비면 남은 쪽을 통째로 붙인다. dummy 노드를 앞에 세우면 첫 노드도 같은 규칙으로 처리되고, `<=`로 비교하면 같은 값의 순서까지 지켜진다. O(n + m) 시간, O(1) 공간이 최선이고, 이 병합 하나가 병합 정렬, k개 병합, 외부 정렬의 바탕이 된다.
+
+## 면접에서 나올 만한 질문
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+시간 O(n + m), 공간 O(1)이다. 반복 한 번에 노드 하나가 결과에 붙고, 한쪽이 비면 남은 리스트를 대입 한 번으로 붙인다. 원래 노드를 재사용하고 새로 만드는 건 dummy 노드 하나뿐이다.
+
+### dummy 노드는 왜 쓰나요?
+
+결과 리스트의 첫 노드를 다른 노드와 똑같이 "tail 뒤에 붙이기"로 처리하려고 쓴다. dummy가 없으면 반복문 전에 머리를 따로 고르는 코드가 필요하고, 빈 리스트 처리도 따로 해야 한다. 노드 하나를 더 만드는 대가로 경계 처리가 사라진다.
+
+### 한쪽이 먼저 끝나면 왜 남은 쪽을 통째로 붙여도 되나요?
+
+남은 리스트는 이미 정렬된 채로 서로 이어져 있고, 그 첫 값은 결과의 마지막 값보다 크거나 같다. 결과에 마지막으로 붙은 노드가 비교에서 그 머리를 이긴 노드이기 때문이다. 그래서 머리 하나만 `tail.next`에 걸면 나머지가 딸려 온다.
+
+### `<=` 대신 `<`로 비교하면 어떻게 되나요?
+
+이 문제는 값만 채점하니 통과한다. 하지만 값이 같을 때 `list2`의 노드가 먼저 붙어서 원래 순서가 뒤집힌다. 병합 정렬이 안정 정렬인 이유가 이 `<=`라서, 같은 값의 순서가 의미 있는 데이터를 합칠 때는 `<=`를 써야 한다.
+
+### 재귀로 풀면 무엇이 달라지나요?
+
+작은 머리를 고르고 그 `next`에 나머지를 합친 결과를 거는 식으로, 코드가 짧고 정의를 그대로 옮긴다. 시간은 같지만 호출이 노드 수만큼 쌓여 공간이 O(n + m)이다. 직접 재 보니 Node.js는 합쳐서 1만 개, Python은 2천 개에서 스택이 터졌다.
+
+### 리스트가 k개면 어떻게 하나요?
+
+이 함수로 둘씩 짝지어 합치기를 반복하면 각 노드가 log k번 병합에 참여해서 O(N log k)가 된다. 하나씩 차례로 합치면 앞쪽 결과가 계속 길어져 O(N·k)가 된다. k개 머리를 최소 힙에 넣고 가장 작은 것을 꺼내는 방법도 O(N log k)다.
+
+### 배열 두 개를 제자리에서 합치려면요?
+
+결과를 담을 배열 뒤쪽에 빈칸이 있다면 뒤에서부터 큰 값을 채운다. 앞에서부터 채우면 아직 안 읽은 값을 덮어쓰기 때문이다. 두 번째 배열을 다 넣으면 첫 번째 배열의 남은 값은 이미 제자리에 있어서 따로 옮길 필요가 없다.

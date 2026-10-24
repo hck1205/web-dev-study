@@ -1,0 +1,507 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-lowest-common-ancestor-of-bst");
+
+<EasyIntro>
+  커다란 나무 모양 길 안내판이 있다고 생각해 보자. 맨 위 갈림길에는 숫자가 하나 적혀 있고, 찾는 숫자가 그보다 작으면 왼쪽 길, 크면 오른쪽 길로 가라고 되어 있다. 내려가다 만나는 갈림길마다 똑같은 규칙이 적혀 있다. 이제 두 친구가 각자 다른 숫자를 찾아 맨 위에서 함께 출발한다. 두 숫자가 모두 작으면 둘은 같이 왼쪽으로 가고, 모두 크면 같이 오른쪽으로 간다. 그러다 어느 갈림길에서 한 친구는 왼쪽, 다른 친구는 오른쪽으로 가야 하는 순간이 온다. 두 친구가 마지막으로 함께 서 있던 그 갈림길이 이 문제가 찾는 답이다. 둘 중 한 친구의 목적지가 바로 그 갈림길이어도 마찬가지로 그곳이 답이다. 숫자만 비교하며 한 줄로 내려가면 되니, 나무 전체를 다 돌아다닐 필요가 없다.
+</EasyIntro>
+
+[LeetCode 235. Lowest Common Ancestor of a Binary Search Tree](https://leetcode.com/problems/lowest-common-ancestor-of-a-binary-search-tree/)는 문제 이름에서 "Binary Search"를 빼면 완전히 다른 문제가 된다. 일반 이진 트리에서 두 노드의 공통 조상을 찾으려면 트리 전체를 뒤져야 하지만, 이진 탐색 트리(BST)라면 값 비교만으로 길 하나를 따라 내려가면 끝난다. 이 차이를 알아보는지가 이 문제에서 면접관이 보는 지점이다.
+
+이 글은 BST라는 조건을 쓰지 않는 풀이 둘부터 시작해, 조건을 조금씩 더 써 가며 풀이 다섯 개를 따라간다. 풀이마다 "BST 성질을 얼마나 쓰고 있나"를 보면 왜 마지막 풀이가 O(h) 시간, O(1) 공간이 되는지 자연스럽게 보인다. BST의 기본 성질과 최소 공통 조상의 개념은 [이진 트리와 BST 글](/posts/ds-binary-tree-bst)에서 짧게 다뤘고, 여기서는 이 문제 하나를 깊게 판다. 트리를 재귀로 다루는 기본 모양은 [Maximum Depth of Binary Tree](/posts/leetcode-maximum-depth-of-binary-tree)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 가장 가까운 공통 조상이 무엇인가
+
+BST의 뿌리 노드와 트리 안의 서로 다른 두 노드 `p`, `q`가 주어진다. 두 노드를 모두 자손으로 두는 노드 가운데 가장 깊은(뿌리에서 가장 먼) 노드를 돌려준다. 이걸 최소 공통 조상(LCA, lowest common ancestor)이라 부른다. "최소"는 값이 작다는 뜻이 아니라 트리에서 가장 아래쪽이라는 뜻이다.
+
+중요한 약속이 하나 있다. 노드는 자기 자신의 자손으로 친다. 그래서 `p`가 `q`의 조상이면 답은 `p`다.
+
+풀이에 영향을 주는 제약은 이 정도다.
+
+- 노드 수는 2 이상 10^5 이하다. 한 번 묻는 데 O(n)이어도 통과는 하지만, BST 문제라 O(h)를 기대한다.
+- 모든 값이 서로 다르다. 같은 값이 있으면 "왼쪽은 작고 오른쪽은 크다"가 애매해지는데, 그 걱정을 덜어 준다.
+- `p`와 `q`는 반드시 트리 안에 있다. 없는 경우를 처리하지 않아도 된다(변형에서 다시 본다).
+- 값은 -10^9 이상 10^9 이하다. 두 값의 차를 곱하는 지름길을 쓰면 넘친다. 뒤에서 실제로 넘쳐 본다.
+
+이 글 내내 쓸 BST다.
+
+```text
+[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18]
+
+            20
+         /      \
+       10        30
+      /  \      /  \
+     5    15   25   35
+         /  \
+       12    18
+```
+
+몇 쌍을 손으로 풀어 보자.
+
+```text
+p, q      답    이유
+12, 18    15    15 아래에서 12는 왼쪽, 18은 오른쪽으로 갈린다
+12, 5     10    10 아래에서 5는 왼쪽, 12는 오른쪽이다
+10, 18    10    10이 18의 조상이다. 자기 자신도 자손으로 친다
+5, 35     20    뿌리에서 바로 갈린다
+25, 35    30    오른쪽 서브트리 안에서 갈린다
+```
+
+아래 그림에서 다음을 누르면 쌍마다 뿌리에서 답까지 내려가는 길이 그려진다.
+
+<VectorSpace
+  caption="두 값이 처음으로 다른 쪽을 가리키는 노드가 답이다"
+  points={[
+    { id: "n20", label: "20", x: 200, y: 35 },
+    { id: "n10", label: "10", x: 110, y: 95 },
+    { id: "n30", label: "30", x: 290, y: 95 },
+    { id: "n5", label: "5", x: 55, y: 160 },
+    { id: "n15", label: "15", x: 165, y: 160 },
+    { id: "n25", label: "25", x: 250, y: 160 },
+    { id: "n35", label: "35", x: 340, y: 160 },
+    { id: "n12", label: "12", x: 130, y: 225 },
+    { id: "n18", label: "18", x: 200, y: 225 },
+  ]}
+  edges={[["n20", "n10"], ["n20", "n30"], ["n10", "n5"], ["n10", "n15"], ["n30", "n25"], ["n30", "n35"], ["n15", "n12"], ["n15", "n18"]]}
+  steps={[
+    { showEdges: true, caption: "노드 아홉 개짜리 BST다. 어느 노드에서 봐도 왼쪽은 작고 오른쪽은 크다." },
+    { showEdges: true, path: ["n20", "n10", "n15"], caption: "12와 18: 20보다 둘 다 작고 10보다 둘 다 크다. 15에서 갈라지니 답은 15다." },
+    { showEdges: true, path: ["n20", "n10"], caption: "10과 18: 20에서 왼쪽으로 가면 p가 바로 10이다. 자기 자신도 자손이라 답은 10이다." },
+    { showEdges: true, path: ["n20"], caption: "5와 35: 5는 20보다 작고 35는 크다. 뿌리에서 바로 갈라져 답은 20이다." },
+  ]}
+/>
+
+손으로 풀 때 우리는 이미 BST 성질을 쓰고 있다. 하지만 일단 그 성질을 모른 척하고, 아무 이진 트리에서나 통하는 풀이부터 보자. 그래야 BST 조건이 무엇을 줄여 주는지 보인다.
+
+## 부모를 적어 두고 조상 목록을 맞대기
+
+공통 조상을 찾는 가장 직접적인 방법은 이렇다. `p`의 조상을 전부 목록으로 만들고, `q`에서 위로 올라가며 그 목록에 처음 걸리는 노드를 찾는다. 위에서부터가 아니라 `q` 쪽 아래에서부터 올라가니, 처음 걸리는 게 가장 깊은 공통 조상이다.
+
+문제는 트리 노드에 부모 포인터가 없다는 것이다. 그래서 먼저 트리를 훑으며 "자식 → 부모" 표를 만든다. `p`와 `q`를 둘 다 표에 올리면 훑기를 멈춘다.
+
+```js
+function lowestCommonAncestor(root, p, q) {
+  // 1. 자식 → 부모 표를 만든다. p와 q가 모두 들어오면 멈춘다
+  const parent = new Map([[root, null]]);
+  const stack = [root];
+  while (!parent.has(p) || !parent.has(q)) {
+    const node = stack.pop();
+    if (node.left) { parent.set(node.left, node); stack.push(node.left); }
+    if (node.right) { parent.set(node.right, node); stack.push(node.right); }
+  }
+  // 2. p에서 뿌리까지 조상을 모두 모은다 (p 자신 포함)
+  const ancestors = new Set();
+  for (let x = p; x; x = parent.get(x)) ancestors.add(x);
+  // 3. q에서 위로 올라가다 처음 겹치는 노드가 답이다
+  let y = q;
+  while (!ancestors.has(y)) y = parent.get(y);
+  return y;
+}
+```
+
+`p` 자신을 조상 목록에 넣었기 때문에, `p`가 `q`의 조상인 경우도 따로 처리하지 않아도 된다. `q`에서 올라가다 `p`를 만나면 그게 답이다.
+
+시간은 최악 O(n)이다. 부모 표를 만들려고 트리를 거의 다 훑을 수 있다. 공간도 O(n)으로, 표와 조상 집합이 노드 수만큼 커진다. 노드 10만 개짜리 균형 BST에 무작위 쌍 1000개를 물어봤더니 13.5초가 걸렸다. 질문 하나에 13ms다. 한 번만 묻는다면 괜찮지만, 매번 표를 새로 만드는 게 낭비다. 그리고 표를 만들지 않고 재귀 한 번으로 답을 받아 올리는 방법이 있다.
+
+## 양쪽 서브트리에 물어서 받아 올리기
+
+LeetCode 236 Lowest Common Ancestor of a Binary Tree의 표준 풀이다. 이것도 BST 성질은 쓰지 않는다. 각 노드에서 "네 아래에 `p`나 `q`가 있니?"를 양쪽 자식에게 묻는다.
+
+- 지금 노드가 비어 있으면 아무것도 없으니 `null`을 돌려준다.
+- 지금 노드가 `p`나 `q`면 자기 자신을 돌려준다. 그 아래를 더 볼 필요가 없다. 나머지 하나가 내 아래에 있다면 내가 답이고, 다른 곳에 있다면 위에서 갈림길이 정해진다.
+- 그 밖에는 왼쪽과 오른쪽에 묻는다. 양쪽 다 무언가를 돌려주면 `p`와 `q`가 나를 사이에 두고 갈라진 것이니 내가 답이다. 한쪽만 돌려주면 그 결과를 그대로 위로 올린다.
+
+```js
+function lowestCommonAncestor(root, p, q) {
+  if (!root || root === p || root === q) return root;
+  const left = lowestCommonAncestor(root.left, p, q);
+  const right = lowestCommonAncestor(root.right, p, q);
+  if (left && right) return root; // 양쪽에서 하나씩 찾았다: 여기서 갈라진다
+  return left ?? right; // 한쪽에서만 찾았다: 그걸 위로 올린다
+}
+```
+
+아래 그림은 `p = 5`, `q = 18`일 때 호출이 쌓이고 돌아오는 모습이다. 칸은 트리를 층 순서로 펼친 것이고, 기억 칸은 지금 쌓인 호출이다.
+
+<AlgoTrace
+  caption="일반 트리 풀이: 5와 18을 찾느라 오른쪽 서브트리까지 다 본다"
+  memoryLabel="호출 스택 (왼쪽이 바닥)"
+  cells={["20", "10", "30", "5", "15", "25", "35", "12", "18"]}
+  steps={[
+    { pointer: 3, found: [3], memory: ["20", "10", "5"], caption: "20에서 왼쪽 10, 다시 왼쪽 5로 내려왔다. 5가 p라서 자기 자신을 돌려준다." },
+    { pointer: 7, found: [3], memory: ["20", "10", "15", "12"], caption: "10이 오른쪽 15에 묻고, 15는 왼쪽 12에 묻는다. 12 아래에는 아무것도 없다. null." },
+    { pointer: 8, found: [3, 8], memory: ["20", "10", "15", "18"], caption: "15의 오른쪽 18이 q다. 18을 돌려준다." },
+    { pointer: 4, found: [3, 8], memory: ["20", "10", "15"], caption: "15는 왼쪽 null, 오른쪽 18을 받았다. 한쪽만 찾았으니 18을 위로 올린다." },
+    { pointer: 1, found: [1], memory: ["20", "10"], caption: "10은 왼쪽에서 5, 오른쪽에서 18을 받았다. 양쪽에서 찾았으니 10이 답이다." },
+    { pointer: 2, found: [1], memory: ["20", "30"], caption: "그래도 20은 오른쪽 30에게 묻는다. 30, 25, 35를 다 돌고 null을 받는다." },
+    { pointer: 0, found: [1], memory: ["20"], caption: "20은 왼쪽 10, 오른쪽 null을 받아 10을 올린다. 최종 답은 10이다." },
+  ]}
+/>
+
+답은 맞게 나오지만 그림의 마지막 두 단계가 아깝다. 10에서 이미 답이 정해졌는데, 20은 그걸 모르니 오른쪽 서브트리 전체를 다 돈다. 이 풀이는 최악에 모든 노드를 보니 O(n) 시간, 재귀 깊이만큼 O(h) 공간이다. 앞의 10만 노드 실험에서 쌍 1000개에 1.5초, 질문 하나에 1.5ms였다. 부모 표 풀이보다 아홉 배쯤 빠르지만, 여전히 트리 전체를 볼 수 있다.
+
+그림에서 20이 오른쪽에 물어볼 필요가 없다는 걸 우리는 한눈에 안다. 5와 18이 둘 다 20보다 작으니 오른쪽에 있을 리 없다. 이게 BST 성질이고, 이제부터 그걸 쓴다.
+
+## 두 노드까지 가는 길을 각각 그려서 비교하기
+
+BST에서는 값 하나를 찾아가는 길이 정해져 있다. 뿌리에서 시작해 찾는 값이 작으면 왼쪽, 크면 오른쪽으로 내려가면 된다. 그러니 `p`까지의 길과 `q`까지의 길을 각각 구하고, 두 길이 마지막으로 같은 노드를 찾으면 된다.
+
+```js
+// 뿌리에서 target까지 지나가는 노드 목록
+function pathTo(root, target) {
+  const path = [];
+  let cur = root;
+  while (cur) {
+    path.push(cur);
+    if (target.val === cur.val) break;
+    cur = target.val < cur.val ? cur.left : cur.right;
+  }
+  return path;
+}
+
+function lowestCommonAncestor(root, p, q) {
+  const a = pathTo(root, p);
+  const b = pathTo(root, q);
+  // 앞에서부터 같은 동안 전진한다. 마지막으로 같았던 노드가 답이다
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return a[i - 1];
+}
+```
+
+`p = 12`, `q = 18`이면 길은 `20 → 10 → 15 → 12`와 `20 → 10 → 15 → 18`이다. 세 번째까지 같고 네 번째에서 갈라지니 15가 답이다. `p = 10`, `q = 18`이면 `20 → 10`과 `20 → 10 → 15 → 18`이고, 짧은 쪽이 끝날 때까지 같으니 10이 답이다. 뿌리는 두 길에 항상 있으니 `i`는 최소 1이 되어 `a[i - 1]`이 비는 일은 없다.
+
+이제 트리 전체가 아니라 길 두 개만 본다. 길이는 각각 트리 높이 h 이하라서 시간은 O(h)다. 균형 잡힌 BST면 log n 정도라, 노드 10만 개짜리 트리에서 쌍 1000개에 2.5ms가 걸렸다. 앞의 풀이보다 수백 배 빠르다.
+
+남은 낭비는 길을 배열에 담는다는 것이다. O(h) 공간을 쓰는데, 생각해 보면 두 길은 갈라지기 전까지 완전히 같다. 같은 길을 두 번 그려서 비교할 필요 없이, 처음부터 둘을 같이 내려보내다 갈라지는 순간 멈추면 된다.
+
+## 둘이 같은 쪽이면 같이 내려간다
+
+두 길을 동시에 그린다고 생각해 보자. 지금 노드 `cur`에서 두 값의 방향을 본다.
+
+- `p`와 `q`가 둘 다 `cur`보다 작으면, 두 길이 모두 왼쪽으로 간다. 공통 조상은 왼쪽 서브트리 안에 있다.
+- 둘 다 `cur`보다 크면, 공통 조상은 오른쪽 서브트리 안에 있다.
+- 그 밖의 경우가 갈라지는 순간이다. 하나는 작고 하나는 크거나, 둘 중 하나가 `cur`와 같다. 이때 `cur`가 답이다.
+
+세 번째 경우가 왜 답인지 따져 보자. 하나가 왼쪽, 하나가 오른쪽에 있다면 `cur`보다 깊은 노드 중에는 둘을 함께 품는 노드가 없다. 왼쪽 서브트리의 어떤 노드도 오른쪽에 있는 값을 자손으로 둘 수 없기 때문이다. 그러니 둘을 품는 가장 깊은 노드는 `cur` 자신이다. 둘 중 하나가 `cur`와 같다면 `cur`는 그 노드 자신이면서 다른 노드의 조상이니 역시 답이다. 그리고 여기까지 내려오는 동안 두 값은 늘 같은 쪽에 있었으니, `cur`는 둘의 공통 조상이 맞다.
+
+재귀로 쓰면 이 세 줄이 그대로 코드가 된다.
+
+```js
+function lowestCommonAncestor(root, p, q) {
+  if (p.val < root.val && q.val < root.val) return lowestCommonAncestor(root.left, p, q);
+  if (p.val > root.val && q.val > root.val) return lowestCommonAncestor(root.right, p, q);
+  return root; // 갈라지거나 한쪽이 여기다
+}
+```
+
+`root`가 `null`이 되는지 확인하지 않는 이유가 있다. `p`와 `q`가 트리 안에 있다는 약속 덕분에, 둘 다 작다면 왼쪽 서브트리가 비어 있을 수 없다. 둘이 거기 있으니까. 약속이 깨지는 변형에서는 이 확인을 다시 넣어야 한다.
+
+시간은 O(h)다. 한 층에 한 번씩 비교하고 내려간다. 공간은 재귀 호출이 h개까지 쌓여 O(h)다. 그런데 이 재귀는 자기 자신을 부른 결과를 그대로 돌려줄 뿐, 돌아와서 할 일이 없다. 이런 꼴을 꼬리 재귀(tail recursion)라 부른다. 돌아와서 할 일이 없으니 호출 스택에 기억해 둘 것도 없고, 반복문으로 바로 옮길 수 있다.
+
+## 반복문 하나로 끝내기
+
+꼬리 재귀를 반복문으로 바꾸면 `root`를 다시 부르는 대신 `cur`를 바꾸고 다시 돈다. 이게 이 문제의 가장 좋은 풀이다.
+
+```js
+function lowestCommonAncestor(root, p, q) {
+  let cur = root;
+  while (cur) {
+    if (p.val < cur.val && q.val < cur.val) {
+      cur = cur.left; // 둘 다 작다: 같이 왼쪽으로
+    } else if (p.val > cur.val && q.val > cur.val) {
+      cur = cur.right; // 둘 다 크다: 같이 오른쪽으로
+    } else {
+      return cur; // 갈라지거나 한쪽이 여기다
+    }
+  }
+  return null; // p, q가 트리에 있다면 여기까지 오지 않는다
+}
+```
+
+`p = 12`, `q = 18`로 따라가 보자. 앞의 일반 트리 풀이가 아홉 노드를 다 돌았던 것과 달리, 이번에는 세 노드만 본다.
+
+<AlgoTrace
+  caption="BST 반복 풀이: 두 값의 방향이 처음 갈리는 노드에서 멈춘다"
+  memoryLabel="비교"
+  cells={["20", "10", "30", "5", "15", "25", "35", "12", "18"]}
+  steps={[
+    { pointer: 0, found: [7, 8], memory: ["p = 12", "q = 18", "cur = 20"], caption: "12와 18이 둘 다 20보다 작다. 두 노드 모두 왼쪽에 있으니 10으로 간다." },
+    { pointer: 1, found: [7, 8], memory: ["p = 12", "q = 18", "cur = 10"], caption: "이번에는 둘 다 10보다 크다. 같이 오른쪽 15로 간다." },
+    { pointer: 4, found: [4, 7, 8], memory: ["p = 12", "q = 18", "cur = 15"], caption: "15에서 12는 작고 18은 크다. 처음으로 방향이 갈렸다. 15를 돌려준다." },
+  ]}
+/>
+
+시간은 O(h), 추가 공간은 `cur` 하나라 O(1)이다. 노드 10만 개짜리 균형 BST에서 쌍 1000개에 0.4ms였다. 처음의 부모 표 풀이와 비교하면 3만 배 넘게 빠르다. 다만 h는 트리 모양에 달려 있다. BST가 한쪽으로 기울어 h가 n이 되면 O(n)이 된다. 정렬된 값을 차례로 넣어 만든 BST가 그렇다. 이건 이 풀이가 아니라 트리의 문제라서, 높이를 log n으로 지켜 주는 균형 트리(AVL, 레드-블랙)가 필요하다. 균형 트리는 [균형 탐색 트리 글](/posts/balanced-search-trees)에서 다룬다.
+
+### Python과 Java로 쓰면
+
+```python
+class Solution:
+    def lowestCommonAncestor(self, root, p, q):
+        cur = root
+        while cur:
+            if p.val < cur.val and q.val < cur.val:
+                cur = cur.left
+            elif p.val > cur.val and q.val > cur.val:
+                cur = cur.right
+            else:
+                return cur
+        return None
+```
+
+```java
+class Solution {
+    public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
+        TreeNode cur = root;
+        while (cur != null) {
+            if (p.val < cur.val && q.val < cur.val) cur = cur.left;
+            else if (p.val > cur.val && q.val > cur.val) cur = cur.right;
+            else return cur;
+        }
+        return null;
+    }
+}
+```
+
+반복문이라 세 언어 모두 재귀 깊이 걱정이 없다. 기울어진 트리에서 재귀 버전을 쓰면 Python은 깊이 1000 근처에서 `RecursionError`가 나는데, 반복 버전은 그대로 돈다. 비교도 값(`val`)끼리 한다. 노드 객체끼리 크기를 비교할 수는 없으니 당연해 보이지만, 같은지 볼 때 Java에서 `p.val == cur.val` 대신 `p == cur`를 쓰면 같은 노드인지 보는 참조 비교가 된다. 이 문제에서는 값이 서로 다르고 `p`, `q`가 실제 트리 노드라 둘이 같은 결과를 내지만, 값만 같은 새 노드를 만들어 넘기는 테스트 코드에서는 갈린다.
+
+### 곱의 부호로 줄이는 코드와 정수 오버플로
+
+두 조건을 한 줄로 줄이는 코드가 자주 보인다. `(cur.val - p.val)`과 `(cur.val - q.val)`의 부호가 같으면 둘이 같은 쪽이니, 곱이 양수인 동안 내려간다.
+
+```java
+// 곱의 부호로 같은 쪽인지 본다: int에서 넘친다
+while ((cur.val - p.val) * (cur.val - q.val) > 0)
+    cur = p.val < cur.val ? cur.left : cur.right;
+return cur;
+```
+
+Java에서 이 코드는 틀린다. 뿌리 0, 그 오른쪽 150000, 그 아래 양쪽에 100000과 200000이 있는 BST에서 `p = 100000`, `q = 200000`을 넣어 돌려 봤다.
+
+```text
+if 두 개로 쓴 풀이      150000
+int 곱셈 풀이           0
+(long)으로 바꾼 곱셈    150000
+(0 - 100000) * (0 - 200000) = -1474836480
+```
+
+곱은 원래 2×10^10인데 int 범위(약 ±21억)를 넘어 음수가 됐다. 그래서 뿌리에서 "갈라졌다"고 잘못 판단하고 0을 돌려준다. 값이 ±10^9까지라 차는 최대 2×10^9로 int 안에 들어오지만, 곱은 4×10^18까지 커진다. 곱하기 전에 `(long)`으로 바꾸면 맞는다. JavaScript는 숫자가 64비트 실수라 곱이 커져도 부호는 정확하고, Python은 정수 크기에 제한이 없어서 이 문제가 없다. 그래도 곱셈 한 줄은 읽는 사람이 부호 규칙을 머릿속으로 다시 풀어야 하니, `if` 두 개가 더 낫다.
+
+## 다섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 추가 공간 | BST 성질 | 언제 고르나 |
+|---|---|---|---|---|
+| 부모 표 + 조상 집합 | O(n) | O(n) | 안 씀 | 같은 트리에 질문이 많아 부모 표를 한 번 만들어 재사용할 때 |
+| 양쪽에 묻는 재귀 (236) | O(n) | O(h) | 안 씀 | BST가 아닌 일반 이진 트리 |
+| 두 길 비교 | O(h) | O(h) | 길 찾기에 씀 | 길 자체도 필요할 때 (두 노드 사이 경로 출력) |
+| 꼬리 재귀 | O(h) | O(h) | 방향 결정에 씀 | 코드를 가장 짧게 보여 줄 때 |
+| 반복문 | O(h) | O(1) | 방향 결정에 씀 | 기본 답 |
+
+위 두 줄과 아래 세 줄 사이에 큰 간격이 있다. BST 성질을 쓰는 순간 "어디를 볼지"를 값이 알려 주니, 트리 전체가 아니라 길 하나만 보면 된다. 그 길의 길이가 h라서, h가 log n인 균형 트리에서 이득이 가장 크다.
+
+## 직접 갈림길을 찾아 보기
+
+아래 칸에서 함수를 채워 보자. 입력은 층 순서 배열과 두 값 `p`, `q`이고, 답 노드의 값을 돌려준다. 위쪽의 `buildTree`가 배열을 트리로 바꿔 준다.
+
+<CodePlayground
+  caption="Lowest Common Ancestor of a BST"
+  functionName="lowestCommonAncestor"
+  initialCode={`// 층 순서 배열을 트리로 바꾸는 도우미 (그대로 두면 된다)
+function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function lowestCommonAncestor(values, p, q) {
+  const root = buildTree(values);
+  // p와 q의 가장 가까운 공통 조상 노드의 값을 돌려준다
+  return null;
+}`}
+  solution={`function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function lowestCommonAncestor(values, p, q) {
+  let cur = buildTree(values);
+  while (cur) {
+    if (p < cur.val && q < cur.val) cur = cur.left;
+    else if (p > cur.val && q > cur.val) cur = cur.right;
+    else return cur.val;
+  }
+  return null;
+}`}
+  tests={[
+    { args: [[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18], 12, 18], expected: 15, label: "15에서 갈라진다" },
+    { args: [[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18], 18, 12], expected: 15, label: "p가 q보다 큰 경우" },
+    { args: [[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18], 10, 18], expected: 10, label: "한쪽이 다른 쪽의 조상" },
+    { args: [[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18], 5, 35], expected: 20, label: "뿌리에서 갈라진다" },
+    { args: [[20, 10, 30, 5, 15, 25, 35, null, null, 12, 18], 25, 35], expected: 30, label: "오른쪽 서브트리 안" },
+    { args: [[2, 1], 2, 1], expected: 2, label: "노드 둘, 뿌리가 답" },
+    { args: [[0, -5, 5, -8, -2], -8, -2], expected: -5, label: "음수 값" },
+    { args: [[1, null, 2, null, 3, null, 4], 3, 4], expected: 3, label: "오른쪽으로 기운 트리" },
+  ]}
+/>
+
+## 갈림길 판정에서 틀리는 곳
+
+### 같다를 작다 쪽에 넣는 경우
+
+비교에 `<=`를 쓰면 한쪽이 조상인 경우를 놓친다.
+
+```js
+// <= 와 >= 로 쓴 코드
+if (p.val <= cur.val && q.val <= cur.val) cur = cur.left;
+else if (p.val >= cur.val && q.val >= cur.val) cur = cur.right;
+else return cur;
+// p = 10, q = 5 → null
+```
+
+10에 도착했을 때 10과 5는 둘 다 "10 이하"라서 왼쪽 5로 내려간다. 5에서는 둘 다 "5 이상"이라 오른쪽으로 가고, 비어 있으니 `null`이 나온다. 정답 10은 이미 지나쳤다. 같은 값은 "여기가 그 노드"라는 뜻이라 갈라지는 경우에 들어가야 한다. 엄격한 `<`, `>`로 두면 같을 때 자연스럽게 `else`로 빠진다.
+
+### p가 q보다 작다고 가정하는 경우
+
+예시를 `p = 12`, `q = 18`처럼 작은 값부터 주면 무심코 `p < q`를 가정한 코드를 쓴다.
+
+```js
+// p가 작고 q가 크다고 가정한 코드
+if (q.val < cur.val) cur = cur.left;       // 큰 쪽도 작으면 왼쪽
+else if (p.val > cur.val) cur = cur.right; // 작은 쪽도 크면 오른쪽
+else return cur;
+// p = 12, q = 18 → 15,  p = 18, q = 12 → undefined
+```
+
+비교를 하나씩 줄여서 깔끔해 보이지만, 입력 순서가 바뀌면 엉뚱한 쪽으로 내려가 트리 밖으로 떨어진다. 문제는 `p`와 `q`의 크기 순서를 약속하지 않는다. 이 코드를 쓰고 싶다면 처음에 두 값을 정렬해 두거나, 두 조건을 모두 비교하는 원래 코드를 쓴다.
+
+### BST가 아닌데 BST 풀이를 쓰는 경우
+
+LeetCode 236처럼 일반 이진 트리가 들어오면 값 비교가 방향을 알려 주지 않는다. 층 순서로 `[1, 2, 3, 4, 5]`인 트리에서 4와 5의 공통 조상은 2인데, BST 풀이는 1에서 둘 다 크다고 오른쪽 3으로 가고, 3에서 다시 오른쪽으로 가 `null`이 된다. 문제가 BST라고 말하지 않으면 양쪽에 묻는 재귀를 쓴다. 실무에서 "정렬된 트리라고 들었다"는 가정은 데이터가 바뀌면서 깨지기 쉽다. 가정이 깨졌을 때 조용히 틀린 답을 내는 코드라는 걸 알고 써야 한다.
+
+## 면접관이 이어서 묻는 것
+
+### 일반 이진 트리라면
+
+LeetCode 236이다. 앞에서 본 양쪽에 묻는 재귀가 정석이고 O(n) 시간, O(h) 공간이다. 값으로 방향을 정할 수 없으니 트리 전체를 볼 수밖에 없다. 이 풀이는 `p`와 `q`가 둘 다 트리에 있다고 가정한다는 것도 같이 말한다. 하나만 있으면 그 노드를 답으로 돌려준다.
+
+### p나 q가 트리에 없을 수도 있다면
+
+LeetCode 1644(프리미엄 문제)의 조건이다. BST라면 답을 찾기 전에 두 값을 각각 검색해 둘 다 있는지 확인하면 된다. 검색이 O(h)라서 전체 복잡도는 그대로다.
+
+```js
+function lcaMaybeMissing(root, pVal, qVal) {
+  const exists = (v) => {
+    let c = root;
+    while (c) {
+      if (c.val === v) return true;
+      c = v < c.val ? c.left : c.right;
+    }
+    return false;
+  };
+  if (!exists(pVal) || !exists(qVal)) return null;
+  let cur = root;
+  while (true) {
+    if (pVal < cur.val && qVal < cur.val) cur = cur.left;
+    else if (pVal > cur.val && qVal > cur.val) cur = cur.right;
+    else return cur.val;
+  }
+}
+// (12, 99) → null,  (12, 18) → 15
+```
+
+### 노드에 부모 포인터가 있다면
+
+LeetCode 1650(프리미엄 문제)이다. 뿌리 없이 두 노드만 주어진다. `p`와 `q`에서 각각 위로 올라가다 뿌리를 지나면 상대의 출발점으로 건너가게 하면, 두 포인터가 같은 거리를 걸은 뒤 공통 조상에서 만난다. 두 연결 리스트가 처음 만나는 지점을 찾는 문제(LeetCode 160)와 같은 원리다.
+
+```js
+function lcaWithParent(p, q) {
+  let a = p, b = q;
+  while (a !== b) {
+    a = a.parent ? a.parent : q; // 뿌리를 지나면 상대 출발점으로
+    b = b.parent ? b.parent : p;
+  }
+  return a;
+}
+// (12, 18) → 15,  (10, 18) → 10,  (5, 35) → 20
+```
+
+뿌리의 깊이를 0으로 두고 `p`, `q`, 공통 조상의 깊이를 dp, dq, dl이라 하자. `p`에서 출발한 포인터는 뿌리까지 dp걸음, `q`로 건너가는 1걸음, 다시 공통 조상까지 dq - dl걸음을 걷는다. 반대쪽도 dq + 1 + dp - dl걸음이라 둘이 같은 걸음 수에 같은 노드에 선다. 추가 공간 O(1), 시간 O(h)다.
+
+### 두 노드 사이 거리를 구하라면
+
+공통 조상을 찾은 뒤, 거기서 `p`까지와 `q`까지 내려가는 걸음 수를 더한다. BST라 각각 O(h)다. 예시 트리에서 12와 5는 공통 조상 10에서 각각 2걸음, 1걸음이라 거리 3이고, 18과 25는 뿌리 20을 거쳐 3 + 2 = 5다. 네트워크 경로, 조직도에서 두 사람 사이의 보고 단계 수가 이 계산이다.
+
+### 같은 트리에 질문이 수십만 번 들어온다면
+
+BST의 반복 풀이는 질문마다 O(h)라 균형 트리면 이미 충분히 빠르다. 일반 트리라면 질문마다 O(n)은 버틸 수 없어서 전처리를 한다. 노드마다 깊이와 2^k번째 조상을 표로 만들어 두면(이진 리프팅) 전처리 O(n log n), 질문당 O(log n)이 된다. 질문을 미리 다 받을 수 있으면 Tarjan의 오프라인 LCA가 [유니온 파인드](/posts/ds-union-find)로 거의 선형에 처리한다.
+
+### 같은 패턴의 다음 문제
+
+BST의 "왼쪽은 작고 오른쪽은 크다"를 범위로 들고 내려가는 [Validate Binary Search Tree](/posts/leetcode-validate-binary-search-tree)가 바로 이어진다. 트리를 층별로 훑는 [Binary Tree Level Order Traversal](/posts/leetcode-binary-tree-level-order-traversal), 트리를 문자열로 바꿨다 되돌리는 [Serialize and Deserialize Binary Tree](/posts/leetcode-serialize-and-deserialize-binary-tree)도 같은 트리 묶음이다. 전체 순서는 [LeetCode 공부 가이드](/posts/leetcode-study-guide)에 있다.
+
+## 같이 가다 처음 갈라지는 곳
+
+BST에서 두 노드의 가장 가까운 공통 조상은 뿌리에서 두 값을 함께 내려보냈을 때 처음으로 방향이 갈리는 노드다. 둘 다 작으면 왼쪽, 둘 다 크면 오른쪽, 그 밖이면 지금 노드가 답이고, 같은 값은 갈라지는 쪽으로 친다. 값이 방향을 알려 주니 트리 전체가 아니라 길 하나만 보면 되고, 그래서 O(n)이 O(h)로, 반복문으로 쓰면 공간도 O(1)로 줄어든다. 일반 트리라면 이 지름길이 없어서 양쪽에 묻는 O(n) 재귀로 돌아가야 한다는 것까지 함께 기억하면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 갈라지는 첫 노드가 가장 가까운 공통 조상인가요?
+
+그 노드까지는 두 값이 늘 같은 쪽에 있었으니 둘의 공통 조상이 맞다. 그 노드에서 하나는 왼쪽, 하나는 오른쪽으로 가는데, 왼쪽 서브트리의 어떤 노드도 오른쪽에 있는 값을 자손으로 둘 수 없다. 그래서 그보다 깊은 공통 조상은 없다. 한쪽 값이 그 노드와 같다면 그 노드 자신이 답이다.
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+반복 풀이는 한 층에 한 번 비교하며 내려가서 O(h) 시간, 변수 하나만 써서 O(1) 공간이다. 균형 트리면 h가 log n 정도지만, 정렬된 순서로 넣어 기울어진 BST라면 h가 n이라 O(n)이 된다. 재귀로 쓰면 호출 스택 때문에 공간이 O(h)가 된다.
+
+### BST가 아니라 일반 이진 트리면 어떻게 하나요?
+
+값이 방향을 알려 주지 않으니 양쪽 서브트리에 `p`나 `q`가 있는지 묻는 후위 순회 재귀를 쓴다. 양쪽에서 하나씩 돌아오면 지금 노드가 답이고, 한쪽만 돌아오면 그걸 위로 올린다. O(n) 시간, O(h) 공간이고, `p`와 `q`가 모두 트리에 있다는 가정 위에서 맞다.
+
+### 비교에 `<=`를 쓰면 무엇이 틀리나요?
+
+한쪽이 다른 쪽의 조상인 경우를 놓친다. `p = 10`, `q = 5`에서 10에 도착하면 둘 다 "10 이하"라 왼쪽으로 내려가 버리고, 결국 `null`이 나온다. 값이 같다는 건 그 노드가 바로 찾는 노드라는 뜻이라 갈라지는 경우로 처리해야 한다.
+
+### 두 차의 곱이 양수인지로 판정하면 안 되나요?
+
+JavaScript와 Python에서는 동작하지만 Java의 int에서는 넘친다. 값이 ±10^9까지라 곱이 4×10^18까지 커지는데 int는 약 21억까지라, 부호가 뒤집혀 엉뚱한 노드를 답으로 낸다. `long`으로 바꿔 곱하면 맞지만, `if` 두 개로 쓰는 편이 넘칠 걱정도 없고 읽기도 쉽다.
+
+### 재귀와 반복 중 무엇을 쓰나요?
+
+이 문제의 재귀는 결과를 그대로 돌려주는 꼬리 재귀라 반복문으로 바로 옮길 수 있고, 옮기면 공간이 O(h)에서 O(1)이 된다. Node.js(V8), Python, Java는 꼬리 호출을 최적화해 주지 않아서 기울어진 트리에서는 재귀가 스택을 넘칠 수 있다. 그래서 반복문을 기본 답으로 낸다.
+
+### 같은 트리에 LCA 질문이 아주 많이 들어오면요?
+
+BST가 균형 잡혀 있으면 질문당 O(log n)이라 그대로 써도 된다. 일반 트리라면 노드마다 깊이와 2^k번째 조상을 미리 계산하는 이진 리프팅으로 전처리 O(n log n), 질문당 O(log n)을 만든다. 질문을 한꺼번에 받을 수 있으면 유니온 파인드를 쓰는 Tarjan 오프라인 알고리즘도 있다.

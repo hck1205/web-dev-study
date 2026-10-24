@@ -2,6 +2,463 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "agent-frameworks-comparison": {
+    "links": [
+      "ai-coding-agents",
+      "llm-api-integration",
+      "multi-agent-systems",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "mcp-protocol"
+    ],
+    "mentions": [
+      "observability-basics",
+      "system-prompt-design",
+      "spring-ai-agents",
+      "transformer-attention-kv-cache",
+      "agentic-rag",
+      "db-type-embedded",
+      "agent-tool-design",
+      "postgres-architecture",
+      "pattern-abstract-factory",
+      "vector-db"
+    ]
+  },
+  "agent-memory": {
+    "links": [
+      "llm-api-integration",
+      "spring-ai-agents",
+      "rag-classic-pipeline",
+      "vector-db",
+      "claude-code-context-window",
+      "llm-evals",
+      "agent-tool-design",
+      "agent-reasoning-patterns"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "data-privacy-compliance",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "agent-reasoning-patterns": {
+    "links": [
+      "llm-api-integration",
+      "prompt-reasoning-techniques",
+      "agentic-rag",
+      "agent-tool-design",
+      "llm-evals",
+      "agent-memory",
+      "llm-model-selection"
+    ],
+    "mentions": [
+      "multi-agent-systems",
+      "system-prompt-design",
+      "spring-ai-agents",
+      "input-validation-secure-coding",
+      "sd-video-upload-transcoding",
+      "rag-classic-pipeline"
+    ]
+  },
+  "agent-tool-design": {
+    "links": [
+      "llm-api-integration",
+      "mcp-protocol",
+      "agent-reasoning-patterns",
+      "idempotency-key",
+      "llm-evals",
+      "agent-memory",
+      "llm-model-selection"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "spring-ai-agents",
+      "agentic-rag",
+      "smoke-sanity-regression-testing",
+      "resilience-patterns",
+      "js-strict-mode",
+      "ssrf",
+      "http-methods"
+    ]
+  },
+  "context-engineering": {
+    "links": [
+      "system-prompt-design",
+      "llm-basics-for-developers",
+      "claude-code-context-window",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "llm-api-integration",
+      "agent-memory",
+      "llm-evals"
+    ]
+  },
+  "embedding-models-applications": {
+    "links": [
+      "vector-db",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "cold-starts",
+      "db-index-design",
+      "llm-evals",
+      "elasticsearch-inverted-index",
+      "self-hosting-llm-inference",
+      "db-modeling-normalization"
+    ]
+  },
+  "interval-problems-pattern": {
+    "links": [
+      "greedy-algorithms",
+      "leetcode-study-guide",
+      "ds-heap",
+      "two-pointers-pattern",
+      "segment-tree-fenwick"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-study-guide": {
+    "links": [
+      "algorithms-overview",
+      "big-o-notation",
+      "two-pointers-pattern",
+      "sliding-window-pattern",
+      "monotonic-stack-pattern",
+      "leetcode-two-sum",
+      "ds-hash-map",
+      "binary-search",
+      "ds-linked-list",
+      "ds-binary-tree-bst",
+      "ds-trie",
+      "ds-heap",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "ds-graph-bfs-dfs",
+      "shortest-path-algorithms",
+      "minimum-spanning-tree",
+      "greedy-algorithms",
+      "interval-problems-pattern",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "sql-aggregation-pitfalls",
+      "sd-maps-tiles-routing",
+      "js-array-mutation"
+    ]
+  },
+  "llm-model-selection": {
+    "links": [
+      "llm-basics-for-developers",
+      "self-hosting-llm-inference",
+      "llm-evals",
+      "prompt-reasoning-techniques",
+      "agent-tool-design",
+      "agent-reasoning-patterns"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "llm-api-integration",
+      "code-review-practices",
+      "vector-db"
+    ]
+  },
+  "monotonic-stack-pattern": {
+    "links": [
+      "ds-stack-queue-deque",
+      "leetcode-study-guide",
+      "big-o-notation",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-sliding-window-maximum",
+      "sliding-window-pattern",
+      "leetcode-valid-parentheses",
+      "leetcode-min-stack",
+      "leetcode-generate-parentheses",
+      "leetcode-daily-temperatures",
+      "leetcode-trapping-rain-water",
+      "two-pointers-pattern"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
+  "multi-agent-systems": {
+    "links": [
+      "ai-coding-agents",
+      "agentic-rag",
+      "agent-frameworks-comparison",
+      "claude-code-extensions",
+      "claude-code-context-window",
+      "llm-api-integration",
+      "claude-code-parallel-and-scheduled",
+      "distributed-tracing",
+      "llm-evals"
+    ],
+    "mentions": [
+      "observability-basics",
+      "agent-reasoning-patterns",
+      "system-prompt-design",
+      "git-tips-advanced",
+      "transformer-attention-kv-cache",
+      "agent-tool-design",
+      "code-review-practices"
+    ]
+  },
+  "sliding-window-pattern": {
+    "links": [
+      "leetcode-study-guide",
+      "leetcode-minimum-window-substring",
+      "big-o-notation",
+      "leetcode-longest-substring-without-repeating",
+      "monotonic-stack-pattern",
+      "leetcode-sliding-window-maximum",
+      "dynamic-programming",
+      "rate-limiting-algorithms",
+      "percentile-latency",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "two-pointers-pattern",
+      "ds-array-matrix"
+    ],
+    "mentions": [
+      "tcp-reliability-congestion"
+    ]
+  },
+  "system-prompt-design": {
+    "links": [
+      "llm-basics-for-developers",
+      "context-engineering",
+      "llm-api-integration",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "llm-evals",
+      "code-review-practices"
+    ]
+  },
+  "two-pointers-pattern": {
+    "links": [
+      "leetcode-study-guide",
+      "ds-array-matrix",
+      "sliding-window-pattern",
+      "leetcode-valid-palindrome",
+      "leetcode-two-sum-ii",
+      "leetcode-3sum",
+      "leetcode-container-with-most-water",
+      "ds-linked-list",
+      "leetcode-linked-list-cycle",
+      "leetcode-reorder-list",
+      "sorting-algorithms",
+      "interval-problems-pattern",
+      "leetcode-two-sum",
+      "leetcode-trapping-rain-water",
+      "monotonic-stack-pattern",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "binary-search",
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-binary-tree-level-order-traversal": {
+    "links": [
+      "ds-binary-tree-bst",
+      "ds-graph-bfs-dfs",
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-linked-list"
+    ]
+  },
+  "leetcode-combination-sum": {
+    "links": [
+      "leetcode-subsets",
+      "recursion-backtracking",
+      "greedy-algorithms",
+      "leetcode-permutations"
+    ],
+    "mentions": [
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-design-add-and-search-words": {
+    "links": [
+      "leetcode-implement-trie",
+      "ds-trie",
+      "leetcode-word-search-ii"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "js-memoization"
+    ]
+  },
+  "leetcode-implement-trie": {
+    "links": [
+      "leetcode-design-add-and-search-words",
+      "leetcode-word-search-ii",
+      "ds-trie",
+      "binary-search",
+      "sd-autocomplete-trie"
+    ],
+    "mentions": [
+      "process-vs-thread",
+      "layer-ip-routing-icmp",
+      "ds-hash-map"
+    ]
+  },
+  "leetcode-k-closest-points-to-origin": {
+    "links": [
+      "leetcode-kth-largest-element-in-an-array",
+      "ds-heap",
+      "leetcode-koko-eating-bananas",
+      "binary-search",
+      "quadtree",
+      "geohash",
+      "sd-proximity-service",
+      "vector-db"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "floating-point-numbers",
+      "js-shallow-deep-copy",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-kth-largest-element-in-an-array": {
+    "links": [
+      "ds-heap",
+      "randomized-algorithms",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-k-closest-points-to-origin"
+    ],
+    "mentions": [
+      "sql-interview-problems",
+      "sorting-algorithms",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-linked-list-cycle": {
+    "links": [
+      "ds-linked-list",
+      "ds-hash-map",
+      "leetcode-reverse-linked-list",
+      "leetcode-reorder-list"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-lowest-common-ancestor-of-bst": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-maximum-depth-of-binary-tree",
+      "balanced-search-trees",
+      "ds-union-find",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-maximum-depth-of-binary-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "recursion-backtracking",
+      "leetcode-binary-tree-level-order-traversal",
+      "sql-cte-recursive",
+      "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "dom-basics",
+      "sqld-top-n-hierarchical-pivot"
+    ]
+  },
+  "leetcode-merge-two-sorted-lists": {
+    "links": [
+      "leetcode-reorder-list",
+      "ds-linked-list",
+      "sorting-algorithms",
+      "divide-and-conquer",
+      "leetcode-reverse-linked-list"
+    ],
+    "mentions": [
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-permutations": {
+    "links": [
+      "leetcode-subsets",
+      "leetcode-combination-sum",
+      "recursion-backtracking"
+    ],
+    "mentions": [
+      "sliding-window-pattern",
+      "ds-graph-bfs-dfs",
+      "js-destructuring"
+    ]
+  },
+  "leetcode-reorder-list": {
+    "links": [
+      "leetcode-linked-list-cycle",
+      "leetcode-reverse-linked-list",
+      "leetcode-merge-two-sorted-lists",
+      "two-pointers-pattern"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-reverse-linked-list": {
+    "links": [
+      "leetcode-reorder-list",
+      "ds-linked-list",
+      "recursion-backtracking",
+      "leetcode-linked-list-cycle",
+      "leetcode-merge-two-sorted-lists"
+    ],
+    "mentions": [
+      "js-execution-context"
+    ]
+  },
+  "leetcode-subsets": {
+    "links": [
+      "leetcode-combination-sum",
+      "leetcode-permutations",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "bit-manipulation",
+      "leetcode-generate-parentheses"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "test-design-techniques"
+    ]
+  },
+  "leetcode-word-search-ii": {
+    "links": [
+      "leetcode-implement-trie",
+      "recursion-backtracking",
+      "leetcode-design-add-and-search-words"
+    ],
+    "mentions": [
+      "ds-trie",
+      "ds-graph-bfs-dfs"
+    ]
+  },
   "aws-core-services-map": {
     "links": [
       "iam-basics",
@@ -115,9 +572,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "prompt-reasoning-techniques"
     ],
     "mentions": [
+      "system-prompt-design",
       "agentic-rag",
       "ab-testing",
       "smoke-sanity-regression-testing",
+      "agent-tool-design",
       "rag-classic-pipeline",
       "vector-db"
     ]
@@ -132,6 +591,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "self-hosting-llm-inference"
     ],
     "mentions": [
+      "agent-frameworks-comparison",
+      "system-prompt-design",
       "sd-start-single-server",
       "vector-db"
     ]
@@ -193,6 +654,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multimodal-llm-apps"
     ],
     "mentions": [
+      "system-prompt-design",
       "api-scaling-ladder",
       "load-testing-k6",
       "transformer-attention-kv-cache",
@@ -209,6 +671,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rag-classic-pipeline",
       "self-hosting-llm-inference",
+      "system-prompt-design",
+      "sliding-window-pattern",
       "db-modeling-normalization",
       "dns",
       "vector-db"
@@ -217,6 +681,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-3sum": {
     "links": [
       "leetcode-two-sum-ii",
+      "two-pointers-pattern",
       "ds-hash-map",
       "leetcode-container-with-most-water"
     ],
@@ -229,13 +694,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-array-matrix",
       "greedy-algorithms",
       "dynamic-programming",
+      "sliding-window-pattern",
       "leetcode-longest-substring-without-repeating",
+      "two-pointers-pattern",
       "leetcode-sliding-window-maximum"
     ],
     "mentions": [
       "string-search-algorithms",
       "divide-and-conquer",
-      "sorting-algorithms"
+      "sorting-algorithms",
+      "monotonic-stack-pattern"
     ]
   },
   "leetcode-binary-search": {
@@ -247,7 +715,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-search-in-rotated-sorted-array",
       "leetcode-find-minimum-in-rotated-sorted-array",
       "leetcode-koko-eating-bananas",
-      "leetcode-median-of-two-sorted-arrays"
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
     ],
     "mentions": [
       "sql-aggregation-pitfalls",
@@ -257,10 +726,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-container-with-most-water": {
     "links": [
+      "two-pointers-pattern",
       "leetcode-trapping-rain-water",
       "leetcode-two-sum-ii",
       "leetcode-largest-rectangle-in-histogram",
-      "binary-search"
+      "binary-search",
+      "monotonic-stack-pattern",
+      "sliding-window-pattern"
     ],
     "mentions": [
       "ds-union-find",
@@ -271,9 +743,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-two-sum",
       "ds-hash-map",
+      "sliding-window-pattern",
       "leetcode-valid-anagram",
       "leetcode-top-k-frequent-elements",
-      "leetcode-group-anagrams"
+      "leetcode-group-anagrams",
+      "leetcode-linked-list-cycle"
     ],
     "mentions": [
       "ds-binary-tree-bst",
@@ -287,6 +761,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-daily-temperatures": {
     "links": [
+      "monotonic-stack-pattern",
       "ds-stack-queue-deque",
       "big-o-notation",
       "ds-hash-map",
@@ -306,7 +781,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-search-in-rotated-sorted-array",
       "binary-search",
       "leetcode-koko-eating-bananas",
-      "leetcode-median-of-two-sorted-arrays"
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
     ],
     "mentions": [
       "divide-and-conquer"
@@ -316,7 +792,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-valid-parentheses",
       "recursion-backtracking",
-      "dynamic-programming"
+      "dynamic-programming",
+      "leetcode-subsets",
+      "leetcode-permutations",
+      "leetcode-combination-sum",
+      "monotonic-stack-pattern"
     ],
     "mentions": [
       "ds-graph-bfs-dfs",
@@ -343,19 +823,22 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search",
       "leetcode-find-minimum-in-rotated-sorted-array",
       "leetcode-search-in-rotated-sorted-array",
-      "leetcode-median-of-two-sorted-arrays"
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
     ],
     "mentions": []
   },
   "leetcode-largest-rectangle-in-histogram": {
     "links": [
       "leetcode-daily-temperatures",
+      "monotonic-stack-pattern",
       "leetcode-trapping-rain-water",
       "leetcode-container-with-most-water"
     ],
     "mentions": [
       "segment-tree-fenwick",
       "js-execution-context",
+      "two-pointers-pattern",
       "divide-and-conquer",
       "ds-stack-queue-deque",
       "big-o-notation",
@@ -368,12 +851,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search",
       "leetcode-minimum-window-substring"
     ],
-    "mentions": []
+    "mentions": [
+      "sliding-window-pattern"
+    ]
   },
   "leetcode-longest-substring-without-repeating": {
     "links": [
       "leetcode-best-time-to-buy-and-sell-stock",
       "binary-search",
+      "sliding-window-pattern",
       "ds-hash-map",
       "leetcode-longest-repeating-character-replacement",
       "leetcode-minimum-window-substring"
@@ -390,9 +876,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-binary-search",
       "leetcode-koko-eating-bananas",
       "sorting-algorithms",
+      "two-pointers-pattern",
+      "leetcode-merge-two-sorted-lists",
       "ds-heap",
       "leetcode-find-minimum-in-rotated-sorted-array",
-      "leetcode-search-in-rotated-sorted-array"
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-study-guide"
     ],
     "mentions": [
       "binary-search",
@@ -408,6 +897,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search",
       "ds-heap",
       "leetcode-sliding-window-maximum",
+      "monotonic-stack-pattern",
       "leetcode-daily-temperatures"
     ],
     "mentions": [
@@ -423,8 +913,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-sliding-window-maximum"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "sql-filtering-operators",
-      "ds-array-matrix"
+      "ds-array-matrix",
+      "monotonic-stack-pattern"
     ]
   },
   "leetcode-search-in-rotated-sorted-array": {
@@ -433,7 +925,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search",
       "leetcode-binary-search",
       "leetcode-koko-eating-bananas",
-      "leetcode-median-of-two-sorted-arrays"
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
     ],
     "mentions": [
       "big-o-notation"
@@ -445,7 +938,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-heap",
       "ds-stack-queue-deque",
       "leetcode-best-time-to-buy-and-sell-stock",
-      "leetcode-longest-substring-without-repeating"
+      "leetcode-longest-substring-without-repeating",
+      "monotonic-stack-pattern",
+      "sliding-window-pattern"
     ],
     "mentions": [
       "sql-interview-problems",
@@ -461,6 +956,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sorting-algorithms",
       "leetcode-contains-duplicate",
       "leetcode-valid-anagram",
+      "leetcode-kth-largest-element-in-an-array",
       "leetcode-group-anagrams"
     ],
     "mentions": [
@@ -473,7 +969,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-trapping-rain-water": {
     "links": [
       "leetcode-container-with-most-water",
+      "two-pointers-pattern",
       "dynamic-programming",
+      "monotonic-stack-pattern",
       "ds-heap",
       "shortest-path-algorithms",
       "leetcode-largest-rectangle-in-histogram",
@@ -488,6 +986,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "leetcode-two-sum-ii": {
     "links": [
       "leetcode-two-sum",
+      "two-pointers-pattern",
       "ds-hash-map",
       "binary-search",
       "leetcode-3sum"
@@ -501,6 +1000,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "ds-hash-map",
       "big-o-notation",
+      "leetcode-study-guide",
+      "two-pointers-pattern",
       "sorting-algorithms",
       "leetcode-two-sum-ii",
       "binary-search",
@@ -514,7 +1015,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "leetcode-group-anagrams",
       "leetcode-two-sum",
-      "js-strings-unicode"
+      "js-strings-unicode",
+      "sliding-window-pattern"
     ],
     "mentions": [
       "message-delivery-semantics",
@@ -524,9 +1026,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "leetcode-valid-palindrome": {
     "links": [
+      "two-pointers-pattern",
       "recursion-backtracking",
       "big-o-notation",
       "dynamic-programming",
+      "leetcode-reverse-linked-list",
       "leetcode-two-sum-ii",
       "leetcode-3sum"
     ],
@@ -545,6 +1049,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leetcode-largest-rectangle-in-histogram",
       "dynamic-programming",
       "leetcode-generate-parentheses",
+      "monotonic-stack-pattern",
       "leetcode-min-stack"
     ],
     "mentions": [
@@ -1290,6 +1795,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linters-formatters",
       "js-function-forms",
       "event-loop",
+      "two-pointers-pattern",
       "tcp-reliability-congestion",
       "bundler-basics",
       "js-closures",
@@ -1428,8 +1934,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-async-await",
+      "system-prompt-design",
       "tdd-bdd-atdd",
-      "thread-safety"
+      "thread-safety",
+      "agent-tool-design"
     ]
   },
   "aws-s3-in-practice": {
@@ -3783,7 +4291,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "realtime-communication",
       "json-crud-http",
+      "system-prompt-design",
       "rest-api-design",
+      "agent-tool-design",
       "input-validation-secure-coding",
       "llm-evals",
       "cookie-session-login"
@@ -3797,6 +4307,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-context-window"
     ],
     "mentions": [
+      "system-prompt-design",
       "ai-coding-agents",
       "llm-evals",
       "prompt-reasoning-techniques",
@@ -3814,11 +4325,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "oauth"
     ],
     "mentions": [
+      "system-prompt-design",
       "api-styles-overview",
       "ssrf",
       "ai-coding-agents",
       "spring-security-jwt-oauth2",
       "token-login",
+      "agent-tool-design",
       "security-principles-cia-defense-in-depth",
       "cookie-session-login",
       "dns"
@@ -3985,6 +4498,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "hyperloglog",
+      "sliding-window-pattern",
       "redis-basics",
       "http-status-codes",
       "sso-saml-oidc"
@@ -4798,8 +5312,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mcp-protocol",
+      "system-prompt-design",
       "api-styles-overview",
       "resilience-patterns",
+      "agent-tool-design",
       "redis-basics",
       "vector-db"
     ]
@@ -5636,6 +6152,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "kafka-to-lake-pipeline",
       "k8s-statefulset",
+      "sliding-window-pattern",
       "js-array-transform",
       "message-delivery-semantics",
       "db-type-embedded",
@@ -5896,6 +6413,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "shortest-path-algorithms",
       "js-numbers-bigint",
       "bit-manipulation",
@@ -6579,6 +7097,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bloom-filter"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "js-memoization",
       "sd-autocomplete-trie"
     ]
@@ -6686,6 +7205,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-latency-numbers",
       "db-sharding",
       "event-loop",
+      "two-pointers-pattern",
       "big-o-notation"
     ]
   },
@@ -6707,6 +7227,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "data-structures-overview"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "sd-latency-numbers",
       "centralized-logging-pipeline",
       "js-memory-leak"
@@ -6748,6 +7269,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cpu-cache-hierarchy",
       "js-prototype-chain",
+      "sliding-window-pattern",
+      "two-pointers-pattern",
       "segment-tree-fenwick",
       "js-memoization"
     ]
@@ -6872,6 +7395,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
+      "system-prompt-design",
       "linters-formatters",
       "git-tips-advanced",
       "postgres-architecture",
@@ -6900,6 +7424,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
+      "system-prompt-design",
       "linux-disks-filesystems",
       "postgres-architecture",
       "mcp-protocol"
@@ -6913,6 +7438,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-remote-collaboration",
+      "system-prompt-design",
       "code-review-practices",
       "osi-in-practice",
       "mcp-protocol"
@@ -7490,6 +8016,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "embedding-models-applications",
       "llm-evals",
       "kafka-basics",
       "on-call"
@@ -7505,7 +8032,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "embedding-models-applications",
       "llm-evals",
+      "agent-reasoning-patterns",
+      "agent-tool-design",
       "security-principles-cia-defense-in-depth",
       "kafka-basics",
       "vector-db",
@@ -7523,6 +8053,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ds-graph-bfs-dfs",
+      "embedding-models-applications",
       "sqld-top-n-hierarchical-pivot",
       "db-modeling-normalization",
       "vector-db",
@@ -7638,6 +8169,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
+      "embedding-models-applications",
       "smoke-sanity-regression-testing",
       "db-index-design",
       "llm-evals",
@@ -7655,6 +8187,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
+      "embedding-models-applications",
       "llm-evals",
       "kafka-basics",
       "llm-basics-for-developers"
@@ -8183,6 +8716,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
+      "sliding-window-pattern",
       "data-lake-hdfs",
       "stream-processing",
       "olap-star-schema",
@@ -9035,6 +9569,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "waf"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "proxy-reverse-proxy",
       "autoscaling",
       "redis-basics"
@@ -10918,6 +11453,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-monitoring"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "layer-link-ethernet-arp",
       "sql-injection",
       "packet-capture-tcpdump",
@@ -15754,6 +16290,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tail-latency",
       "redis-cluster",
       "redis-modules-stack",
+      "sliding-window-pattern",
       "backpressure",
       "redis-basics"
     ]
@@ -18837,6 +19374,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rag-retrieval-quality",
       "pythagorean-theorem",
+      "embedding-models-applications",
       "db-index-design",
       "rag-classic-pipeline",
       "db-modeling-normalization"

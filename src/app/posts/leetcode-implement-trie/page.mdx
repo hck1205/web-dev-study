@@ -1,0 +1,641 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-implement-trie");
+
+<EasyIntro>
+  도서관 책장에 책 제목을 적은 카드를 넣어 둔다고 해 보자. 카드를 아무렇게나 상자에 던져 두면, 누가 자동차라는 말로 시작하는 책이 있느냐고 물을 때 카드를 전부 꺼내 봐야 한다. 그래서 첫 글자마다 서랍을 만들고, 그 서랍 안에 다시 둘째 글자 서랍을 만드는 식으로 정리해 본다. 그러면 자동차로 시작하는 책은 자, 동, 차 서랍을 차례로 열기만 하면 찾을 수 있다. 책이 백 권이든 백만 권이든 여는 서랍 수는 글자 수와 같다. 다만 자동이라는 서랍이 있다고 자동이라는 책이 있는 것은 아니라서, 여기서 끝나는 제목이 있다는 작은 스티커를 따로 붙여 둔다. 이 문제는 이 서랍장, 트라이를 직접 만들어 보는 연습이다.
+</EasyIntro>
+
+검색창에 `ca`까지 쳤을 때 아래에 `car`, `cat`, `cave`가 뜨는 자동완성을 만든다고 해 보자. 단어 목록을 배열로 들고 있다가 글자를 칠 때마다 `startsWith`로 전부 훑으면, 단어가 수십만 개일 때 키를 누를 때마다 수십만 번 비교한다. 그래서 단어를 글자 단위의 나무로 저장해 두는 트라이(trie, 접두사 나무)가 나온다.
+
+[LeetCode 208. Implement Trie (Prefix Tree)](https://leetcode.com/problems/implement-trie-prefix-tree/)는 이 트라이를 직접 짜라는 설계 문제다. 트라이 패턴 문제들의 출발점이라서, 여기서 만든 클래스를 [Design Add and Search Words](/posts/leetcode-design-add-and-search-words), [Word Search II](/posts/leetcode-word-search-ii), [Replace Words](/posts/leetcode-replace-words)가 그대로 가져다 쓴다. 이 글은 배열을 다 훑는 풀이부터 노드를 정수 번호로 바꾸는 풀이까지 여섯 가지를 차례로 보고, 메모리를 실제로 재어 비교한다. 트라이라는 자료구조 자체의 개념, 삭제, 해시 집합과의 비교는 [트라이 글](/posts/ds-trie)에 자세히 있어서 여기서는 문제 풀이 쪽에 집중한다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 세 연산과 끝 표시 하나
+
+만들 클래스 `Trie`에는 메서드가 셋 있다.
+
+- `insert(word)`: 단어를 넣는다.
+- `search(word)`: 그 단어가 정확히 들어 있으면 `true`.
+- `startsWith(prefix)`: 넣은 단어 중 그 접두사(앞부분)로 시작하는 단어가 하나라도 있으면 `true`.
+
+단어는 영어 소문자로만 이뤄지고 길이는 1 이상 2,000 이하, 세 메서드를 합친 호출은 최대 3 × 10^4번이다. 글자가 소문자 26개뿐이라는 조건이 뒤에서 풀이 하나를 가능하게 한다. 호출 수만 보면 느린 풀이도 통과할 수 있어서, 면접에서는 "통과하느냐"보다 "각 연산이 단어 수와 상관없이 도느냐"를 본다.
+
+LeetCode는 설계 문제를 연산 이름 목록과 인자 목록으로 채점한다. 이 글에서 계속 쓸 예시는 이렇다.
+
+```text
+연산:  insert car, insert cat, search ca, startsWith ca, insert ca, search ca, search cart, startsWith do
+결과:                          false      true                     true       false        false
+```
+
+손으로 따라가 보자. `car`와 `cat`을 넣은 뒤 `search("ca")`는 `false`다. `ca`라는 단어는 넣은 적이 없다. 그런데 `startsWith("ca")`는 `true`다. `car`가 `ca`로 시작하니까. 이제 `ca`를 넣으면 `search("ca")`가 `true`로 바뀐다. `cart`는 `car`보다 한 글자 길어서 없고, `do`로 시작하는 단어도 없다.
+
+이 예시에서 문제의 어려운 부분이 다 보인다. "접두사로 있다"와 "단어로 있다"는 다른 질문이고, 같은 문자열 `ca`가 넣기 전과 후에 답이 달라진다. 어떤 풀이든 이 둘을 구분할 수 있어야 한다.
+
+## 단어를 배열에 쌓아 두고 다 훑기
+
+가장 먼저 떠오르는 건 넣은 단어를 배열에 그대로 모아 두는 것이다. `search`는 배열에서 같은 단어를 찾고, `startsWith`는 단어마다 `startsWith`를 불러 본다.
+
+```js
+class Trie {
+  constructor() {
+    this.words = [];
+  }
+  insert(word) {
+    this.words.push(word); // 중복이 들어가도 답은 틀리지 않는다
+  }
+  search(word) {
+    return this.words.includes(word); // 단어 하나하나와 비교
+  }
+  startsWith(prefix) {
+    return this.words.some((w) => w.startsWith(prefix)); // 하나라도 맞으면 멈춘다
+  }
+}
+```
+
+단어가 n개, 길이가 L 정도라면 `insert`는 O(1)이지만 `search`와 `startsWith`는 단어마다 최대 L글자를 비교하므로 O(n · L)이다. 공간은 넣은 글자 수 합만큼 O(n · L).
+
+틀린 답은 내지 않는다. 문제는 질문이 들어올 때마다 지금까지 넣은 모든 단어를 다시 본다는 점이다. 3 × 10^4번 호출 중 절반이 `insert`, 절반이 `startsWith`라면 비교 횟수가 대략 1.5만 × 1.5만 / 2, 1억 번을 넘는다. 단어끼리 앞부분이 겹쳐도 그걸 전혀 써먹지 못한다.
+
+## 접두사까지 전부 집합에 넣어 두면
+
+`search`만 보면 해시 집합(`Set`)을 쓰면 된다. 해시 집합은 값을 해시 함수로 칸 번호로 바꿔 넣어 두는 구조라, 있는지 묻는 데 평균 O(L)이면 된다(문자열을 한 번 읽어 해시를 계산하니 상수가 아니라 L이다).
+
+`startsWith`가 문제인데, 발상을 바꾸면 이것도 집합으로 풀린다. 단어를 넣을 때 그 단어의 접두사를 전부 미리 넣어 두는 것이다. `car`를 넣으면 `c`, `ca`, `car`가 접두사 집합에 들어간다. 그러면 `startsWith("ca")`는 접두사 집합에 `ca`가 있는지만 보면 된다.
+
+```js
+class Trie {
+  constructor() {
+    this.words = new Set();    // 넣은 단어
+    this.prefixes = new Set(); // 넣은 단어들의 모든 접두사
+  }
+  insert(word) {
+    this.words.add(word);
+    for (let i = 1; i <= word.length; i++) {
+      this.prefixes.add(word.slice(0, i)); // 길이 1, 2, ..., L짜리 앞부분
+    }
+  }
+  search(word) {
+    return this.words.has(word);
+  }
+  startsWith(prefix) {
+    return this.prefixes.has(prefix);
+  }
+}
+```
+
+`search`와 `startsWith`는 O(L)이 됐다. 대신 `insert`가 비싸졌다. 길이 1부터 L까지의 문자열을 새로 만들어 해시하니 1 + 2 + ... + L, 즉 O(L²)이다. 길이 2,000짜리 단어 하나를 넣는 데 약 200만 글자를 복사한다. 공간도 최악 O(n · L²)이다.
+
+질문이 압도적으로 많고 단어가 짧으면 이 풀이는 실제로 쓸 만하다. 하지만 같은 접두사 `c`, `ca`를 단어마다 문자열로 따로 들고 있는 게 아깝다. `car`와 `cat`은 `ca`까지 같은데, 집합은 그 사실을 모른다.
+
+## 정렬해 두고 이진 탐색으로 찾기
+
+단어를 사전 순으로 정렬해 두면 같은 접두사를 가진 단어들이 한데 모인다. `ca`로 시작하는 단어는 정렬된 배열에서 연속된 구간을 이룬다. 그러면 이진 탐색(정렬된 배열의 가운데를 보고 절반씩 버리는 탐색, [이진 탐색 글](/posts/binary-search))으로 그 구간의 시작을 찾을 수 있다.
+
+여기서 쓰는 도구가 `lowerBound(s)`, 즉 "`s`보다 작지 않은 첫 위치"다. `startsWith(prefix)`는 `lowerBound(prefix)` 자리의 단어가 `prefix`로 시작하는지만 보면 된다. 왜 그 한 칸만 봐도 될까. `prefix`로 시작하는 단어는 모두 사전 순으로 `prefix`보다 크거나 같다. 그리고 `prefix`보다 크거나 같으면서 `prefix`로 시작하지 않는 단어(예: `prefix`가 `ca`일 때 `cb`)는 `prefix`로 시작하는 어떤 단어보다도 뒤에 온다. 그러니 `prefix`로 시작하는 단어가 하나라도 있다면, `prefix` 이상인 첫 단어가 반드시 그중 하나다.
+
+```js
+class Trie {
+  constructor() {
+    this.words = []; // 항상 사전 순으로 정렬된 상태를 유지한다
+  }
+  #lowerBound(s) {
+    // s보다 작지 않은 첫 위치
+    let lo = 0, hi = this.words.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (this.words[mid] < s) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  insert(word) {
+    const i = this.#lowerBound(word);
+    if (this.words[i] !== word) this.words.splice(i, 0, word); // 자리에 끼워 넣기
+  }
+  search(word) {
+    return this.words[this.#lowerBound(word)] === word;
+  }
+  startsWith(prefix) {
+    const w = this.words[this.#lowerBound(prefix)];
+    return w !== undefined && w.startsWith(prefix);
+  }
+}
+```
+
+`search`와 `startsWith`는 비교를 log n번 하고 비교 한 번에 최대 L글자를 보니 O(L log n)이다. `insert`는 자리를 찾는 데 O(L log n), 끼워 넣느라 뒤 칸을 한 칸씩 미는 데 O(n)이다.
+
+단어 목록이 한 번 만들어지고 거의 안 바뀌는 사전이라면, 이 풀이는 메모리도 적고 꽤 빠르다. 하지만 `insert`가 질문과 섞여 계속 들어오는 이 문제에서는 끼워 넣기의 O(n)이 발목을 잡는다. 그리고 여전히 단어 수 n이 식에 남아 있다. 단어 수와 상관없이 글자 수만큼만 일하고 싶다.
+
+## 글자마다 갈림길을 만든다
+
+접두사 집합 풀이에서 아까웠던 건 `ca`를 단어마다 따로 들고 있는 것이었다. 정렬 풀이에서 좋았던 건 같은 접두사를 가진 단어들이 모여 있다는 것이었다. 둘을 합치면 트라이가 된다. 같은 접두사는 한 번만 저장하고, 그 뒤에서 갈라지게 만든다.
+
+트라이의 노드 하나는 두 가지만 든다. 다음 글자로 가는 자식들, 그리고 "여기서 끝나는 단어가 있다"는 끝 표시(`isEnd`)다. 뿌리 노드는 빈 문자열이고, 뿌리에서 `c`, `a`, `r`로 내려간 노드가 `car`를 뜻한다. 문자열은 노드 안에 저장되지 않는다. 뿌리에서 그 노드까지 내려온 길이 곧 문자열이다.
+
+아래는 예시를 끝까지 돌린 뒤의 트라이다. `ca`, `car`, `cat` 세 단어가 `c → a` 두 노드를 함께 쓴다.
+
+<ConceptDiagram
+  caption="car, cat, ca를 넣은 트라이. ●는 끝 표시"
+  width={400}
+  height={220}
+  nodes={[
+    { id: "root", label: "뿌리", x: 50, y: 110, w: 56 },
+    { id: "c", label: "c", x: 140, y: 110, w: 44 },
+    { id: "ca", label: "a ●", sub: "ca", x: 230, y: 110, w: 56 },
+    { id: "car", label: "r ●", sub: "car", x: 330, y: 55, w: 56 },
+    { id: "cat", label: "t ●", sub: "cat", x: 330, y: 165, w: 56 },
+  ]}
+  edges={[
+    { from: "root", to: "c" },
+    { from: "c", to: "ca" },
+    { from: "ca", to: "car" },
+    { from: "ca", to: "cat" },
+  ]}
+/>
+
+세 연산은 모두 뿌리에서 글자를 따라 한 칸씩 내려가는 같은 움직임이다.
+
+1. `insert(word)`: 글자마다 그 글자의 자식이 있으면 내려가고, 없으면 새로 만들고 내려간다. 마지막 노드에 끝 표시를 단다.
+2. `search(word)`: 글자마다 자식을 따라 내려간다. 중간에 길이 끊기면 `false`. 끝까지 내려가면 그 노드에 끝 표시가 있어야 `true`.
+3. `startsWith(prefix)`: `search`와 똑같이 내려가되, 끝까지 갔으면 끝 표시와 상관없이 `true`.
+
+`search`와 `startsWith`가 같은 "내려가기"를 쓰므로 그 부분을 `walk`라는 함수 하나로 빼 둔다. 자식은 먼저 `Map`(글자 → 자식 노드)으로 들고 있자.
+
+```js
+class TrieNode {
+  constructor() {
+    this.children = new Map(); // 글자 -> TrieNode
+    this.isEnd = false;        // 여기서 끝나는 단어가 있나
+  }
+}
+
+class Trie {
+  constructor() {
+    this.root = new TrieNode(); // 빈 문자열을 뜻하는 뿌리
+  }
+  insert(word) {
+    let node = this.root;
+    for (const ch of word) {
+      if (!node.children.has(ch)) node.children.set(ch, new TrieNode()); // 없는 길만 만든다
+      node = node.children.get(ch);
+    }
+    node.isEnd = true; // 단어가 여기서 끝난다
+  }
+  #walk(s) {
+    // s를 따라 내려가 도착한 노드. 길이 끊기면 null
+    let node = this.root;
+    for (const ch of s) {
+      node = node.children.get(ch);
+      if (!node) return null;
+    }
+    return node;
+  }
+  search(word) {
+    const node = this.#walk(word);
+    return node !== null && node.isEnd; // 길도 있고 끝 표시도 있어야 단어
+  }
+  startsWith(prefix) {
+    return this.#walk(prefix) !== null; // 길만 있으면 된다
+  }
+}
+```
+
+아래 그림에서 다음을 누르면 예시 연산을 하나씩 실행한다. 아래 칸에는 지금 트라이에 있는 노드를 뿌리에서 내려온 문자열로 적었다.
+
+<AlgoTrace
+  caption="연산마다 트라이가 어떻게 바뀌고 무엇을 답하나"
+  memoryLabel="트라이의 노드 (●는 끝 표시)"
+  cells={["insert car", "insert cat", "search ca", "startsWith ca", "insert ca", "search ca", "search cart", "startsWith do"]}
+  steps={[
+    { pointer: 0, memory: ["c", "ca", "car ●"], caption: "빈 트라이라 c, a, r 노드를 모두 새로 만들고 r에 끝 표시를 단다." },
+    { pointer: 1, memory: ["c", "ca", "car ●", "cat ●"], caption: "c와 a는 이미 있어서 따라 내려간다. t만 새로 만든다." },
+    { pointer: 2, memory: ["c", "ca", "car ●", "cat ●"], caption: "c, a까지 내려갔지만 a에 끝 표시가 없다. false." },
+    { pointer: 3, found: [3], memory: ["c", "ca", "car ●", "cat ●"], caption: "같은 a 노드에 도착했다. 길이 있으니 true." },
+    { pointer: 4, memory: ["c", "ca ●", "car ●", "cat ●"], caption: "새 노드는 없다. 이미 있던 a 노드에 끝 표시만 붙인다." },
+    { pointer: 5, found: [3, 5], memory: ["c", "ca ●", "car ●", "cat ●"], caption: "이번엔 a에 끝 표시가 있다. true." },
+    { pointer: 6, memory: ["c", "ca ●", "car ●", "cat ●"], caption: "c, a, r까지 내려간 뒤 r 아래에 t가 없다. false." },
+    { pointer: 7, found: [3, 5], memory: ["c", "ca ●", "car ●", "cat ●"], caption: "뿌리 아래에 d가 없어서 첫 글자에서 끝난다. false." },
+  ]}
+/>
+
+세 번째와 다섯 번째 칸을 보면 `search("ca")`의 답이 바뀐 이유가 보인다. 노드는 그대로이고 끝 표시만 붙었다. "접두사로 있다"는 노드가 있다는 뜻이고, "단어로 있다"는 노드에 끝 표시가 있다는 뜻이다.
+
+세 연산 모두 글자 하나에 `Map` 조회 한 번(평균 상수 시간)을 하므로 O(L)이다. 단어 수 n이 식에서 사라졌다. 공간은 노드 수만큼인데, 노드는 서로 다른 접두사 하나당 하나라서 최악(겹치는 접두사가 없을 때) 넣은 글자 수의 합 O(n · L)이다. 접두사 집합 풀이의 O(n · L²)보다 작다. 같은 접두사를 문자열로 들고 있지 않고 노드 하나로 나눠 쓰기 때문이다.
+
+남은 아쉬움은 상수다. `Map`은 해시 테이블이라 노드마다 꽤 무거운 객체가 붙고, 글자마다 해시를 계산한다. 글자가 26개뿐이라는 조건을 아직 쓰지 않았다.
+
+## 자식을 26칸 배열로 고정하면
+
+글자가 `a`부터 `z`까지뿐이니 자식을 길이 26짜리 배열로 들 수 있다. `a`는 0번 칸, `b`는 1번 칸, `z`는 25번 칸이다. 글자를 칸 번호로 바꾸는 건 `charCodeAt(i) - 97`이다(`a`의 문자 코드가 97). 해시를 계산할 필요가 없고, 자식이 있는지는 그 칸이 `null`인지만 보면 된다.
+
+```js
+class TrieNode {
+  constructor() {
+    this.children = new Array(26).fill(null); // a~z 자리, 없으면 null
+    this.isEnd = false;
+  }
+}
+
+class Trie {
+  constructor() {
+    this.root = new TrieNode();
+  }
+  insert(word) {
+    let node = this.root;
+    for (let i = 0; i < word.length; i++) {
+      const c = word.charCodeAt(i) - 97; // 'a' -> 0, 'z' -> 25
+      if (node.children[c] === null) node.children[c] = new TrieNode();
+      node = node.children[c];
+    }
+    node.isEnd = true;
+  }
+  #walk(s) {
+    let node = this.root;
+    for (let i = 0; i < s.length; i++) {
+      node = node.children[s.charCodeAt(i) - 97];
+      if (node === null) return null; // 길이 끊겼다
+    }
+    return node;
+  }
+  search(word) {
+    const node = this.#walk(word);
+    return node !== null && node.isEnd;
+  }
+  startsWith(prefix) {
+    return this.#walk(prefix) !== null;
+  }
+}
+```
+
+복잡도는 `Map` 트라이와 같은 O(L)이다. 달라진 건 상수다. 칸 조회가 배열 인덱싱 한 번이라 빠르고, 자식을 순서대로 훑으면 저절로 사전 순이 된다(자동완성에서 사전 순 결과가 필요할 때 따로 정렬하지 않아도 된다).
+
+대가는 메모리다. 자식이 하나뿐인 노드도 26칸을 다 들고 있다. 깊은 곳의 노드는 대부분 자식이 0~1개라서 칸 대부분이 `null`로 비어 있다. 글자 종류가 26개가 아니라 유니코드 전체라면 이 방식은 쓸 수 없다. 그때는 `Map` 트라이로 돌아간다.
+
+코딩 테스트에서는 이 26칸 배열 트라이가 가장 무난한 답이다. 면접관이 기대하는 모양이고, 211번과 212번 문제로 그대로 이어진다.
+
+### Python과 Java로 쓰면
+
+Python은 26칸 리스트보다 딕셔너리가 더 빠르고 짧다. 리스트 인덱싱도 결국 파이썬 객체를 다루는 일이라 배열 이점이 거의 없고, `ord(ch) - 97` 계산이 오히려 한 단계 더 붙는다. 노드가 많아지면 `__slots__`로 인스턴스마다 붙는 속성 딕셔너리를 없애 메모리를 줄인다.
+
+```python
+class TrieNode:
+    __slots__ = ("children", "is_end")
+
+    def __init__(self):
+        self.children = {}  # 글자 -> TrieNode
+        self.is_end = False
+
+
+class Trie:
+    def __init__(self):
+        self.root = TrieNode()
+
+    def insert(self, word: str) -> None:
+        node = self.root
+        for ch in word:
+            # 없으면 만들고, 있으면 그 노드를 그대로 돌려준다
+            node = node.children.setdefault(ch, TrieNode())
+        node.is_end = True
+
+    def _walk(self, s: str):
+        node = self.root
+        for ch in s:
+            node = node.children.get(ch)
+            if node is None:
+                return None
+        return node
+
+    def search(self, word: str) -> bool:
+        node = self._walk(word)
+        return node is not None and node.is_end
+
+    def startsWith(self, prefix: str) -> bool:
+        return self._walk(prefix) is not None
+
+
+t = Trie()
+t.insert("car"); t.insert("cat")
+print(t.search("ca"), t.startsWith("ca"))
+t.insert("ca")
+print(t.search("ca"), t.search("cart"), t.startsWith("do"))
+```
+
+```text
+False True
+True False False
+```
+
+`setdefault(ch, TrieNode())`는 짧아서 자주 쓰지만, 자식이 이미 있어도 `TrieNode()`를 하나 만들었다 버린다. 넣기가 아주 많으면 `if ch not in node.children:`으로 나눠 쓰는 편이 빠르다. 메서드 이름 `startsWith`는 파이썬 관례(snake_case)와 다르지만 LeetCode가 정한 이름이라 그대로 둔다.
+
+Java는 `Node[] children = new Node[26]`이 표준이다. 배열이 만들어질 때 모든 칸이 `null`로 채워지니 따로 초기화하지 않아도 된다.
+
+```java
+class Trie {
+    private static class Node {
+        Node[] children = new Node[26]; // 'a'~'z' 자리, 없으면 null
+        boolean isEnd;
+    }
+
+    private final Node root = new Node();
+
+    public void insert(String word) {
+        Node node = root;
+        for (int i = 0; i < word.length(); i++) {
+            int c = word.charAt(i) - 'a';
+            if (node.children[c] == null) node.children[c] = new Node();
+            node = node.children[c];
+        }
+        node.isEnd = true;
+    }
+
+    private Node walk(String s) {
+        Node node = root;
+        for (int i = 0; i < s.length(); i++) {
+            node = node.children[s.charAt(i) - 'a'];
+            if (node == null) return null;
+        }
+        return node;
+    }
+
+    public boolean search(String word) {
+        Node node = walk(word);
+        return node != null && node.isEnd;
+    }
+
+    public boolean startsWith(String prefix) {
+        return walk(prefix) != null;
+    }
+}
+
+public class Main {
+    public static void main(String[] args) {
+        Trie t = new Trie();
+        t.insert("car"); t.insert("cat");
+        System.out.println(t.search("ca") + " " + t.startsWith("ca"));
+        t.insert("ca");
+        System.out.println(t.search("ca") + " " + t.search("cart") + " " + t.startsWith("do"));
+    }
+}
+```
+
+```text
+false true
+true false false
+```
+
+`Node`를 `static` 중첩 클래스로 둔 데는 이유가 있다. `static`을 빼면 내부 클래스가 되어 노드마다 바깥 `Trie`를 가리키는 숨은 참조가 하나씩 붙는다. 노드가 수만 개면 그만큼 메모리가 늘어난다. `charAt(i) - 'a'`는 `char`끼리 빼서 `int`가 되므로 바로 인덱스로 쓸 수 있다.
+
+## 노드를 객체 대신 정수 번호로
+
+26칸 배열 트라이의 노드는 객체 하나에 배열 하나가 붙은 모양이다. 노드가 수십만 개가 되면 객체 머리(header)와 포인터만으로도 메모리가 크게 늘고, 가비지 컬렉터가 훑을 객체도 많아진다. 경쟁 프로그래밍에서 자주 쓰는 방법은 노드를 객체로 만들지 않고 번호로 부르는 것이다.
+
+노드 v의 글자 c 자식 번호를 큰 정수 배열 하나의 `v * 26 + c` 칸에 적는다. 0번 노드는 뿌리이고, 뿌리는 누구의 자식도 될 수 없으니 칸 값 0을 "길 없음"으로 쓸 수 있다. 끝 표시는 노드 번호로 찾는 바이트 배열에 둔다. 새 노드가 필요하면 `size`를 하나 늘려 그 번호를 준다.
+
+```js
+class Trie {
+  constructor(maxNodes = 1 << 16) {
+    this.next = new Int32Array(maxNodes * 26); // next[v*26 + c] = 자식 번호, 0이면 길 없음
+    this.end = new Uint8Array(maxNodes);       // end[v] = 1이면 끝 표시
+    this.size = 1;                             // 0번은 뿌리. 다음에 줄 번호
+  }
+  insert(word) {
+    let v = 0;
+    for (let i = 0; i < word.length; i++) {
+      const k = v * 26 + word.charCodeAt(i) - 97;
+      if (this.next[k] === 0) this.next[k] = this.size++; // 새 노드 번호 발급
+      v = this.next[k];
+    }
+    this.end[v] = 1;
+  }
+  #walk(s) {
+    let v = 0;
+    for (let i = 0; i < s.length; i++) {
+      v = this.next[v * 26 + s.charCodeAt(i) - 97];
+      if (v === 0) return -1; // 0은 뿌리로 돌아가는 길이 아니라 "길 없음"
+    }
+    return v;
+  }
+  search(word) {
+    const v = this.#walk(word);
+    return v !== -1 && this.end[v] === 1;
+  }
+  startsWith(prefix) {
+    return this.#walk(prefix) !== -1;
+  }
+}
+```
+
+복잡도는 그대로 O(L)이고, 배열 두 개만 있으니 객체가 거의 생기지 않는다. 노드 하나가 `Int32Array`에서 104바이트(26 × 4)와 끝 표시 1바이트를 쓴다.
+
+대신 노드 수의 상한을 미리 알아야 한다. 이 문제에서는 넣는 글자 수 합이 상한이 된다. 넉넉하게 잡으면 그만큼 메모리를 미리 차지하고, 모자라면 배열을 두 배로 키워 복사하는 코드를 따로 붙여야 한다. 코드를 읽는 사람도 `v * 26 + c`가 무슨 뜻인지 한 번 더 생각해야 한다. 면접에서 이걸 첫 답으로 낼 이유는 없고, "노드가 수백만 개라 GC가 문제가 된다"는 꼬리 질문에 꺼내는 카드다.
+
+## 메모리를 재 보면
+
+말로만 무겁다 가볍다 하지 말고 재 봤다. 무작위 소문자 8글자 단어 2만 개를 넣고, 넣기 전후의 힙과 `ArrayBuffer` 사용량 차이를 Node.js 22에서 `--expose-gc`로 GC를 돌린 뒤 쟀다. 서로 다른 접두사, 즉 트라이 노드는 34,282개 생겼다.
+
+```text
+접두사 집합 (Set 두 개)       2.1MB
+Map 트라이                   7.5MB
+26칸 배열 트라이              9.7MB
+정수 번호 트라이 (34,283칸)    3.4MB
+```
+
+몇 가지가 눈에 띈다. 접두사 집합이 가장 가볍게 나왔다. 단어가 8글자로 짧고, 무작위 단어라 앞 세 글자 이후로는 겹치는 접두사가 거의 없어서다. 노드 하나당 짧은 문자열 하나를 들고 있는 셈이라 트라이와 저장하는 개수가 같다. 단어가 길어지면 접두사 문자열 길이가 L에 비례해 늘어나니 이 순위는 뒤집힌다.
+
+26칸 배열 트라이가 `Map` 트라이보다 무겁다. 깊은 노드는 자식이 0~1개라 26칸 중 25칸이 비어 있기 때문이다. 속도는 배열이 빠르지만 메모리는 `Map`이 낫다. 정수 번호 트라이는 같은 26칸을 쓰면서도 객체가 없어서 26칸 배열 트라이의 3분의 1 정도다. 이 규모에서 걸린 시간은 수십 ms 안쪽이고 돌릴 때마다 들쭉날쭉해서 여기 적지 않았다.
+
+## 여섯 풀이를 나란히 놓으면
+
+L은 단어나 접두사의 길이, n은 넣은 단어 수다.
+
+| 풀이 | insert | search / startsWith | 공간 | 언제 고르나 |
+|---|---|---|---|---|
+| 배열 다 훑기 | O(1) | O(n · L) | O(n · L) | 단어가 수십 개뿐일 때 |
+| 접두사 집합 | O(L²) | O(L) | O(n · L²) | 단어가 짧고 질문이 압도적으로 많을 때 |
+| 정렬 + 이진 탐색 | O(n + L log n) | O(L log n) | O(n · L) | 사전이 거의 안 바뀔 때, 메모리가 빠듯할 때 |
+| Map 트라이 | O(L) | O(L) | O(n · L) | 글자 종류가 많을 때(유니코드), 메모리를 아낄 때 |
+| 26칸 배열 트라이 | O(L) | O(L) | O(n · L · 26) | 코딩 테스트의 기본 답 |
+| 정수 번호 트라이 | O(L) | O(L) | O(노드 상한 · 26) | 노드가 수백만 개라 객체와 GC가 부담일 때 |
+
+26칸 배열 트라이의 공간을 O(n · L · 26)으로 적은 건, 노드 수는 Map 트라이와 같지만 노드마다 26칸을 들기 때문이다. 알파벳 크기를 상수로 보면 O(n · L)이라고 말해도 틀리지 않는다. 면접에서는 "알파벳 크기 Σ만큼 곱해진다"고 짚어 주면 된다.
+
+아래에서 직접 짜 볼 수 있다. LeetCode처럼 연산 목록과 인자 목록을 받아 결과 배열을 돌려주는 함수로 감쌌다. `Trie`를 만드는 연산과 반환값이 없는 `insert`는 `null`을 돌려준다.
+
+<CodePlayground
+  caption="Implement Trie: 연산 목록을 받아 결과 배열 돌려주기"
+  functionName="runTrie"
+  initialCode={`function runTrie(ops, args) {
+  class Trie {
+    constructor() {}
+    insert(word) {}
+    search(word) {}
+    startsWith(prefix) {}
+  }
+  // ops[i]가 "Trie"면 새로 만들고 null,
+  // 그 밖에는 메서드를 args[i]로 부르고 돌려준 값(없으면 null)을 모은다
+  const out = [];
+  let t = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "Trie") { t = new Trie(); out.push(null); continue; }
+    const r = t[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  solution={`function runTrie(ops, args) {
+  class TrieNode {
+    constructor() {
+      this.children = new Array(26).fill(null);
+      this.isEnd = false;
+    }
+  }
+  class Trie {
+    constructor() { this.root = new TrieNode(); }
+    insert(word) {
+      let node = this.root;
+      for (let i = 0; i < word.length; i++) {
+        const c = word.charCodeAt(i) - 97;
+        if (node.children[c] === null) node.children[c] = new TrieNode();
+        node = node.children[c];
+      }
+      node.isEnd = true;
+    }
+    walk(s) {
+      let node = this.root;
+      for (let i = 0; i < s.length; i++) {
+        node = node.children[s.charCodeAt(i) - 97];
+        if (node === null) return null;
+      }
+      return node;
+    }
+    search(word) {
+      const node = this.walk(word);
+      return node !== null && node.isEnd;
+    }
+    startsWith(prefix) { return this.walk(prefix) !== null; }
+  }
+  const out = [];
+  let t = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "Trie") { t = new Trie(); out.push(null); continue; }
+    const r = t[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  tests={[
+    { label: "글의 예시", args: [["Trie", "insert", "insert", "search", "startsWith", "insert", "search", "search", "startsWith"], [[], ["car"], ["cat"], ["ca"], ["ca"], ["ca"], ["ca"], ["cart"], ["do"]]], expected: [null, null, null, false, true, null, true, false, false] },
+    { label: "넣기 전에 묻기", args: [["Trie", "search", "startsWith", "insert", "search"], [[], ["a"], ["a"], ["a"], ["a"]]], expected: [null, false, false, null, true] },
+    { label: "단어 자체도 접두사다", args: [["Trie", "insert", "startsWith", "search"], [[], ["apple"], ["apple"], ["apple"]]], expected: [null, null, true, true] },
+    { label: "넣은 단어보다 긴 질문", args: [["Trie", "insert", "search", "startsWith"], [[], ["app"], ["apple"], ["apple"]]], expected: [null, null, false, false] },
+    { label: "같은 단어를 두 번", args: [["Trie", "insert", "insert", "search", "search"], [[], ["zz"], ["zz"], ["zz"], ["z"]]], expected: [null, null, null, true, false] },
+    { label: "긴 단어 안에 짧은 단어", args: [["Trie", "insert", "insert", "search", "search", "search", "startsWith"], [[], ["abcde"], ["abc"], ["abc"], ["abcd"], ["abcde"], ["abcd"]]], expected: [null, null, null, true, false, true, true] },
+  ]}
+/>
+
+## 끝 표시와 길 끊김에서 틀린다
+
+가장 흔한 실수는 `search`를 `startsWith`처럼 짜서 끝 표시를 보지 않는 것이다. 이건 [트라이 글](/posts/ds-trie)에서 실행 결과와 함께 자세히 봤다. `apple`만 넣었는데 `search("app")`이 `true`가 된다. 위 테스트 중 "긴 단어 안에 짧은 단어"가 이 실수를 잡는다.
+
+두 번째는 길이 끊겼는데 계속 내려가는 코드다. 자식이 없을 때 멈추지 않으면 다음 줄에서 `undefined`의 속성을 읽는다.
+
+```js
+search(word) {
+  let node = this.root;
+  for (const ch of word) node = node.children[ch]; // 길이 끊겨도 계속 간다
+  return node.isEnd;
+}
+// insert("car") 뒤에
+// search("car") -> true
+// search("dog") -> TypeError: Cannot read properties of undefined (reading 'children')
+```
+
+`d`에서 이미 `undefined`가 됐는데 루프가 `o`에서 `undefined.children`을 읽으려다 터진다. 넣은 단어로만 테스트하면 안 보이는 버그라서, 없는 단어를 꼭 한 번 물어봐야 한다.
+
+세 번째는 Python에서만 생긴다. 노드의 자식 딕셔너리를 기본 인자로 받으면 모든 노드가 같은 딕셔너리 하나를 나눠 쓴다.
+
+```python
+class TrieNode:
+    def __init__(self, children={}):  # 기본값 딕셔너리가 모든 노드에 공유된다
+        self.children = children
+        self.is_end = False
+
+# insert("ab") 뒤에
+print(t.startsWith("ba"), t.startsWith("bbbb"))
+```
+
+```text
+True True
+```
+
+`ab`만 넣었는데 `ba`도 `bbbb`도 있다고 한다. 파이썬의 기본 인자는 함수가 정의될 때 한 번만 만들어진다. 그래서 뿌리와 `a` 노드와 `b` 노드가 모두 같은 `{'a': ..., 'b': ...}`를 자식으로 들고, 어느 노드에서든 `a`와 `b`로 끝없이 내려갈 수 있게 된다. 기본값은 `None`으로 두고 함수 안에서 `{}`를 만든다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 26칸 배열 풀이에 대문자나 숫자가 섞이면 `charCodeAt - 97`이 음수나 26 이상이 된다. JS 배열은 음수 인덱스에 에러 없이 `undefined`를 돌려주고, Java는 `ArrayIndexOutOfBoundsException`을 던진다. 입력 조건이 바뀌면 `Map` 트라이로 간다.
+- 정수 번호 트라이에서 "길 없음"을 0으로 쓰는 건 뿌리가 0번이라 가능한 것이다. 뿌리를 1번으로 시작하도록 바꾸면 0번 칸이 비게 되니 둘을 함께 맞춘다.
+- 같은 단어를 두 번 넣는 건 문제가 없다. 이미 있는 길을 따라가 이미 붙은 끝 표시를 다시 붙일 뿐이다. 다만 뒤에서 볼 "몇 번 넣었나"를 세는 변형에서는 `isEnd`를 숫자로 바꿔야 한다.
+
+## 면접관이 이어서 묻는 것
+
+### 단어를 지우려면
+
+`delete(word)`가 추가되면 끝 표시를 떼기만 해서는 메모리가 줄지 않는다. 지운 단어만 쓰던 가지가 남는다. 재귀로 내려갔다가 돌아오면서, 끝 표시도 없고 자식도 없는 노드를 부모에서 떼어 낸다. 이 코드와 실행 결과는 [트라이 글의 삭제 부분](/posts/ds-trie)에 있다. 노드마다 "이 노드를 지나는 단어 수"(`pass`)를 세어 두면 재귀 없이 내려가면서 수를 줄이고, 0이 되는 순간 그 아래를 통째로 끊을 수 있다.
+
+### 접두사로 시작하는 단어가 몇 개인지 묻는다면
+
+`startsWith`가 `true`/`false`가 아니라 개수를 돌려줘야 하는 변형이다(LeetCode 1804. Implement Trie II, 프리미엄 문제). 노드마다 `pass`(이 노드를 지나간 단어 수)와 `count`(여기서 끝나는 단어 수)를 숫자로 둔다. `insert`에서 내려가며 지나는 노드의 `pass`를 하나씩 올리면, 접두사 노드의 `pass`가 곧 답이다. 여전히 O(L)이다. [Sum of Prefix Scores of Strings](/posts/leetcode-sum-of-prefix-scores-of-strings)가 이 `pass` 값을 그대로 쓴다.
+
+### 접두사로 시작하는 단어를 사전 순으로 몇 개 보여 달라면
+
+자동완성이다. 접두사 노드까지 내려간 뒤 그 아래를 DFS(한 갈래를 끝까지 가 본 뒤 돌아오는 탐색)로 훑으며 끝 표시를 만날 때마다 단어를 모은다. 26칸 배열은 0번 칸부터 훑으면 사전 순이 된다. 질문이 아주 많으면 노드마다 상위 k개를 미리 적어 둔다. 이 문제가 [Search Suggestions System](/posts/leetcode-search-suggestions-system)이고, 서비스 규모의 설계는 [검색어 자동완성 글](/posts/sd-autocomplete-trie)에서 다뤘다.
+
+### 메모리를 더 줄이려면
+
+자식이 하나뿐인 노드가 길게 이어지는 구간을 한 노드로 합친다. 노드가 글자 하나가 아니라 문자열 조각을 들게 되는데, 이걸 압축 트라이(radix tree, Patricia trie)라고 한다. 리눅스 커널의 라우팅 테이블이나 HTTP 라우터가 이 모양을 쓴다. 단어 목록이 고정이면 같은 접미사까지 합친 DAWG나 비트 배열로 줄인 succinct trie까지 간다. 면접에서는 "노드를 합친다"는 방향만 말할 수 있으면 충분하다.
+
+### 여러 스레드가 동시에 쓴다면
+
+`insert` 두 개가 같은 노드에 같은 글자 자식을 동시에 만들면 하나가 덮여 사라질 수 있다. 가장 쉬운 답은 트라이 전체에 읽기·쓰기 잠금을 거는 것이다. 읽기가 대부분이라면 새로 다 만든 트라이로 통째로 바꿔 끼우는 방식(copy-on-write)이 단순하고 읽기를 막지 않는다.
+
+### 비슷한 문제
+
+- [Design Add and Search Words](/posts/leetcode-design-add-and-search-words) (211): `search`에 아무 글자 하나를 뜻하는 `.`이 들어온다.
+- [Word Search II](/posts/leetcode-word-search-ii) (212): 단어 목록으로 트라이를 만들고 격자 위에서 DFS와 함께 내려간다.
+- [Replace Words](/posts/leetcode-replace-words) (648): 문장의 각 단어를 사전에 있는 가장 짧은 어근으로 바꾼다. 트라이를 내려가다 첫 끝 표시에서 멈춘다.
+- [Longest Common Prefix](/posts/leetcode-longest-common-prefix) (14): 트라이로도 풀리지만 더 간단한 풀이가 많은 문제다.
+- 720. Longest Word in Dictionary: 끝 표시가 이어진 길로만 내려가며 가장 긴 단어를 찾는다.
+
+## 같은 접두사는 한 번만 저장한다
+
+이 문제의 풀이들은 "같은 접두사를 어떻게 다루나"로 갈린다. 배열은 그 사실을 모르고, 접두사 집합은 접두사를 단어마다 따로 저장하고, 정렬 배열은 같은 접두사를 한데 모은다. 트라이는 같은 접두사를 노드 하나로 나눠 쓰고, 그 노드에 끝 표시를 붙여 "접두사로 있다"와 "단어로 있다"를 구분한다. 그래서 세 연산 모두 단어 수와 상관없이 글자 수만큼만 내려간다. 자식을 `Map`으로 들지 26칸 배열로 들지, 정수 번호로 들지는 글자 종류와 메모리 사정에 따라 고르는 구현 선택이다.
+
+## 면접에서 나올 만한 질문
+
+### 트라이의 insert, search, startsWith는 각각 시간 복잡도가 어떻게 되나요?
+
+셋 다 O(L)이고, L은 단어나 접두사의 길이다. 뿌리에서 글자 하나씩 자식으로 내려가는 일을 L번 하기 때문이다. 저장된 단어 수 n이 식에 없다는 게 배열이나 정렬 배열 풀이와의 차이다. 자식을 `Map`으로 들면 조회가 평균 상수 시간이라는 가정이 붙고, 26칸 배열이면 최악에도 상수다.
+
+### search와 startsWith는 무엇이 다른가요?
+
+내려가는 과정은 같고, 끝까지 내려간 뒤 끝 표시를 보느냐만 다르다. `startsWith`는 길이 있으면 `true`이고, `search`는 도착한 노드에 끝 표시가 있어야 `true`다. 그래서 두 메서드는 "내려가서 도착한 노드를 돌려주는" 함수 하나를 함께 쓰게 짠다. 끝 표시 없이 짜면 `apple`만 넣고 `app`을 찾아도 `true`가 나온다.
+
+### 해시 집합으로도 startsWith를 O(L)에 할 수 있지 않나요?
+
+넣을 때 모든 접두사를 집합에 함께 넣으면 된다. 그 대신 `insert`가 길이 1부터 L까지의 문자열을 만들어 해시하느라 O(L²)이 되고, 공간도 O(n · L²)까지 커진다. 트라이는 같은 접두사를 노드 하나로 나눠 써서 `insert`도 O(L), 공간도 O(n · L)이다. 단어가 짧고 질문만 많다면 접두사 집합이 실제로 더 가볍게 나오기도 해서, 무조건 틀린 풀이는 아니다.
+
+### 자식을 26칸 배열로 들 때와 해시맵으로 들 때를 어떻게 고르나요?
+
+글자가 영어 소문자처럼 적고 고정이면 배열이 빠르고 코드도 간단하다. 해시 계산이 없고, 0번 칸부터 훑으면 사전 순이 된다. 대신 깊은 노드는 26칸 중 대부분이 비어서 메모리를 더 쓴다. 직접 재 보면 무작위 8글자 단어 2만 개에서 배열 트라이가 9.7MB, Map 트라이가 7.5MB였다. 글자 종류가 많거나(유니코드) 메모리가 중요하면 해시맵을 쓴다.
+
+### 트라이의 공간 복잡도는요? 줄이는 방법이 있나요?
+
+노드는 서로 다른 접두사 하나당 하나라서 최악은 넣은 글자 수의 합, O(n · L)이다. 26칸 배열이면 노드마다 26칸이 붙으니 알파벳 크기만큼 곱해진다. 줄이는 방법은 자식이 하나인 노드 사슬을 한 노드로 합치는 압축 트라이, 노드를 객체 대신 정수 번호와 큰 배열 하나로 표현하는 방법이 있다. 후자는 객체와 GC 부담이 줄어서, 같은 데이터에서 26칸 배열 트라이의 3분의 1 정도 메모리를 썼다.
+
+### Python에서 트라이를 짰는데 넣지 않은 단어도 있다고 나옵니다. 어디부터 보나요?
+
+노드 생성자의 기본 인자에 `children={}`를 썼는지 본다. 파이썬 기본 인자는 함수 정의 때 한 번만 만들어져서 모든 노드가 같은 딕셔너리를 나눠 쓰고, 어느 노드에서든 아무 글자로 내려갈 수 있게 된다. `ab`만 넣었는데 `startsWith("bbbb")`가 `True`가 되는 식이다. 기본값을 `None`으로 두고 생성자 안에서 새 딕셔너리를 만들면 고쳐진다.
+
+### 단어 삭제나 접두사 개수 세기가 추가되면 무엇을 바꾸나요?
+
+노드에 숫자 두 개를 둔다. 이 노드를 지나간 단어 수 `pass`와 여기서 끝나는 단어 수 `count`다. `insert`는 지나는 노드의 `pass`를 올리고 마지막 노드의 `count`를 올린다. 접두사 개수는 접두사 노드의 `pass`, 단어 삭제는 `pass`를 내리며 내려가다 0이 되는 곳에서 가지를 끊으면 된다. 모두 O(L)을 유지한다.

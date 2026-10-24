@@ -54,8 +54,11 @@ export const COURSES: Course[] = [
     stages: [
       { label: "복잡도와 자료구조", roadmaps: ["algorithms/data-structures"] },
       { label: "풀이 기법", roadmaps: ["algorithms/techniques"] },
+      { group: "LeetCode 패턴", label: "LeetCode 공부법", posts: ["leetcode-study-guide"] },
       { group: "LeetCode 패턴", label: "배열, 해시, 투 포인터, 슬라이딩 윈도", roadmaps: ["algorithms/leetcode/arrays-hashing", "algorithms/leetcode/two-pointers", "algorithms/leetcode/sliding-window"] },
-      { group: "LeetCode 패턴", label: "스택과 이분 탐색", roadmaps: ["algorithms/leetcode/stack", "algorithms/leetcode/binary-search"] },
+      { group: "LeetCode 패턴", label: "스택, 이분 탐색, 연결 리스트", roadmaps: ["algorithms/leetcode/stack", "algorithms/leetcode/binary-search", "algorithms/leetcode/linked-list"] },
+      { group: "LeetCode 패턴", label: "트리, 트라이, 힙", roadmaps: ["algorithms/leetcode/trees", "algorithms/leetcode/tries", "algorithms/leetcode/heap"] },
+      { group: "LeetCode 패턴", label: "백트래킹", roadmaps: ["algorithms/leetcode/backtracking"] },
       { group: "더 넓게", label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
     ],
     next: [
@@ -188,6 +191,7 @@ export const COURSES: Course[] = [
       { label: "LLM 기초와 연동", roadmaps: ["ai/llm"] },
       { label: "프롬프트와 컨텍스트", roadmaps: ["ai/prompt"] },
       { label: "RAG", roadmaps: ["ai/rag"] },
+      { label: "에이전트", roadmaps: ["ai/agents"] },
       { label: "Claude Code", roadmaps: ["ai/claude-code"] },
       { label: "평가와 운영", roadmaps: ["ai/llm-ops"] },
     ],
