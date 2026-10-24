@@ -478,6 +478,60 @@ asserts.ts(20,1): error TS2775: Assertions require every name in the call target
 
 단언 함수는 "여기 오면 반드시 이래야 한다"는 불변 조건에 쓴다. 필수 DOM 요소, 필수 환경 변수, 테스트의 전제 조건이 그런 자리다. 사용자 입력처럼 틀릴 수 있는 값을 검사할 때는 예외 대신 결과를 돌려주는 타입 가드나 파서가 흐름을 다루기 쉽다.
 
+## 확인하지 않고 우기는 as와 !
+
+좁히기와 자주 헷갈리는 것이 타입 단언(type assertion)이다. 둘 다 결과로 더 좁은 타입을 얻지만, 좁히기는 런타임 검사를 지나서 얻고 단언은 개발자가 "이 타입이 맞다"고 적어서 얻는다. 단언은 자바스크립트로 바꿀 때 흔적 없이 지워진다. 앞의 가드 예제에서 쓴 `nickname` 응답으로 해 봤다.
+
+```ts
+type User = { id: number; name: string };
+const raw: unknown = JSON.parse('{"id":1,"nickname":"kim"}');
+
+const user = raw as User;                    // 확인 없이 User라고 우긴다
+const n1 = 42 as string;                     // 겹치는 데가 없으면 막는다
+const n2 = 42 as unknown as string;          // 이중 단언은 무엇이든 통과한다
+
+const users = new Map<number, User>();
+try { console.log(users.get(1)!.name); } catch (e) { console.log("!:", (e as Error).message); }
+try { console.log(user.name.toUpperCase()); } catch (e) { console.log("as:", (e as Error).message); }
+console.log("n2:", n2.length);
+```
+
+`tsc`가 막은 것은 한 줄뿐이다.
+
+```text
+assert.ts(5,12): error TS2352: Conversion of type 'number' to type 'string' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+```
+
+타입을 지우고 Node 22로 돌린 결과다.
+
+```text
+!: Cannot read properties of undefined (reading 'name')
+as: Cannot read properties of undefined (reading 'toUpperCase')
+n2: undefined
+```
+
+`as`는 두 타입이 한쪽으로라도 대입 가능할 때만 허락한다. `unknown`은 무엇과도 겹치니 `raw as User`는 그대로 통과하고, `number`와 `string`처럼 전혀 겹치지 않을 때만 TS2352로 막는다. 오류 메시지가 `unknown`을 거치라고 알려 주는데, `as unknown as string`이 바로 그 이중 단언이다. 이건 검사를 끄는 스위치라서 숫자가 문자열이 되고 `n2.length`가 `undefined`로 찍힌다. `as any`도 같다. 게다가 `any`는 그 뒤로 이어지는 속성과 호출까지 검사를 꺼 버려서 피해가 번진다.
+
+뒤에 붙이는 `!`는 non-null 단언이다. `null`과 `undefined`를 타입에서 빼라는 뜻이고, 런타임에는 아무 검사도 하지 않는다. `Map.get`, `find`, `querySelector`, `useRef`의 `current`처럼 "없을 수도 있다"고 선언된 값에 붙이면 컴파일 오류가 사라지는 대신 실패가 몇 줄 뒤의 엉뚱한 자리로 밀려난다. 위 출력의 첫 줄이 그 모습이다. 에러 메시지만 보면 `name`을 읽다 터진 것 같지만 원인은 `get(1)`이 비었다는 사실이다.
+
+단언이 필요한 자리는 있다. 라이브러리 타입이 실제보다 넓게 선언됐거나, 테스트에서 일부만 채운 가짜 객체를 만들 때다. 그 밖의 자리에서는 대안을 먼저 본다. 값을 확인할 수 있으면 `if (!found) return;` 같은 좁히기나 앞의 타입 가드를 쓴다. 없으면 안 되는 값이면 단언 함수로 확인하고 던진다. 객체 리터럴의 모양을 맞추고 싶을 뿐이라면 `as` 대신 `satisfies`(TypeScript 4.9부터)를 쓴다.
+
+```ts
+type Route = { path: string; auth: boolean };
+
+const r1 = { path: "/admin" } as Route;            // auth가 빠졌는데 통과한다
+const r2: Route = { path: "/admin" };               // 타입 표기는 막는다
+const r3 = { path: "/admin" } satisfies Route;      // satisfies도 막는다
+```
+
+```text
+sat.ts(4,7): error TS2741: Property 'auth' is missing in type '{ path: string; }' but required in type 'Route'.
+sat.ts(5,31): error TS1360: Type '{ path: string; }' does not satisfy the expected type 'Route'.
+  Property 'auth' is missing in type '{ path: string; }' but required in type 'Route'.
+```
+
+`Route`는 `{ path: string }`에 대입할 수 있으니 `as`는 두 타입이 겹친다고 보고 통과시킨다. 빠진 속성이 그대로 숨는다. 타입 표기와 `satisfies`는 둘 다 빠진 `auth`를 잡는데, `satisfies`는 검사만 하고 값의 타입은 추론한 그대로 둔다는 점이 다르다. `auth: true`로 적었다면 `true`라는 리터럴 타입이 남아서 이후의 좁히기에도 쓸 수 있다. 코드 리뷰에서 `as`나 `!`가 보이면 "이걸 확인하는 코드로 바꿀 수 있나"부터 묻고, 남겨야 한다면 왜 안전한지 주석을 단다. 이런 단언을 찾아내는 린트 규칙(`@typescript-eslint/no-non-null-assertion`, `no-unsafe-type-assertion`)도 있다.
+
 ## React 상태와 액션을 갈래로 나눈다
 
 React 코드에서 좁히기가 가장 많이 쓰이는 곳은 `useReducer`의 액션과 요청 상태다. 액션을 판별 유니온으로 만들면 `type`마다 필요한 값이 다르다는 사실을 타입이 기억한다.

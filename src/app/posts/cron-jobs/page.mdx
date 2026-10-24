@@ -525,6 +525,43 @@ kubectl get events --field-selector involvedObject.name=settle-forbid --sort-by=
 
 리눅스 서버 한 대에서 돌린다면 cron 대신 systemd timer도 좋은 선택이다. 실행 기록이 journal에 남고, 같은 서비스가 돌고 있으면 다시 시작하지 않으니 겹침이 기본으로 막힌다. `Persistent=true`는 서버가 꺼져 있던 동안 놓친 회차를 부팅 뒤 한 번 실행하고, `RandomizedDelaySec=`은 여러 서버가 같은 순간 몰리지 않게 시작을 흩뜨린다. 유닛 파일 작성은 [systemd와 systemctl](/posts/linux-systemd-systemctl)의 timer 부분에 있다.
 
+## 한 번만 돌릴 땐 at
+
+지금까지는 되풀이 작업이었다. "딱 한 번, 10분 뒤에" 또는 "내일 새벽 3시에만" 돌릴 거라면 cron이 아니라 `at`이 맞다. `atd` 데몬이 큐를 들고 있다가 그 시각이 되면 명령을 `/bin/sh`로 한 번 돌리고 큐에서 지운다.
+
+```bash
+echo '/usr/local/bin/reindex.sh' | at now + 10 minutes   # 상대 시각
+echo '/usr/local/bin/reindex.sh' | at 03:00 tomorrow      # 절대 시각
+atq                                                       # 대기 목록
+```
+
+```text
+warning: commands will be executed using /bin/sh
+job 1 at Sat Oct 24 00:44:00 2026
+warning: commands will be executed using /bin/sh
+job 2 at Sun Oct 25 03:00:00 2026
+2	Sun Oct 25 03:00:00 2026 a root
+1	Sat Oct 24 00:44:00 2026 a root
+```
+
+`atq`로 번호를 보고 `atrm 2`로 취소한다. `at -c 2`를 치면 그 작업이 실제로 돌릴 스크립트가 나오는데, 여기에 cron과 다른 중요한 점이 보인다.
+
+```bash
+at -c 2 | grep -E '^(umask|cd |PATH=)'
+```
+
+```text
+umask 22
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+cd /home/user || {
+```
+
+큐에 넣는 그 순간의 환경 변수(PATH까지 그대로), 작업 디렉터리, umask를 통째로 복사해 둔다. 그래서 cron에서 자주 겪는 "셸에선 되는데 cron에선 PATH가 짧아 안 된다" 함정이 at에는 덜하다. 명령을 넣은 셸의 환경 그대로 돌기 때문이다.
+
+출력은 작업을 넣은 사용자에게 메일로 간다. 메일을 받을 곳이 없는 서버가 많으니, 결과가 중요하면 명령 안에서 로그 파일로 돌린다(`... >> /var/log/reindex.log 2>&1`). 시각 대신 "시스템이 한가할 때"에 돌리고 싶으면 `batch`를 쓴다. load average가 기본값(보통 1.5) 아래로 내려갈 때까지 기다렸다가 돈다. 무거운 일회성 작업을 피크 시간과 떼어 놓을 때 쓴다.
+
+systemd가 있는 서버라면 같은 일을 임시 타이머로도 한다. 상대 시각은 `sudo systemd-run --on-active=10min /usr/local/bin/reindex.sh`, 절대 시각은 `--on-calendar='2026-10-25 03:00'`이다. 차이는 기록이다. at의 출력은 메일로 흩어지지만, `systemd-run`이 만든 일회성 유닛은 실행 결과가 journal에 남고 `systemctl status`로 상태를 본다. 앞의 경고 상자에서 sshd 설정을 되돌릴 때 쓴 `systemd-run --on-active=5min ...`이 바로 이 일회성 타이머였다. 다만 `at`은 `atd`가, `systemd-run`은 systemd가 PID 1로 떠 있어야 한다. 둘 다 없는 컨테이너에서는 쓸 수 없고, 거기서는 스케줄 자체를 쿠버네티스 CronJob이나 바깥 스케줄러에 맡긴다.
+
 ## 두 번 돌아도 괜찮은 작업
 
 지금까지 본 장치는 모두 "한 번만 실행되게" 하려는 시도였다. 그런데 스케줄러는 실패한 작업을 다시 돌리고, 사람은 재시작 버튼을 누르고, CronJob은 드물게 두 번 만든다. 그래서 설계 목표를 "정확히 한 번 실행"이 아니라 "여러 번 실행돼도 결과가 한 번"으로 잡는다.

@@ -371,6 +371,44 @@ overflow-x: clip   만 준 div → overflow-y 계산값 visible
 
 일반 블록에서는 둘 다 끊어 준다. flex 아이템처럼 내용의 최소 너비로 크기를 정하는 곳에서는 `break-word`가 최소 너비 계산에 반영되지 않아 아이템이 URL 길이만큼 넓어진다. `anywhere`는 최소 너비 계산에서도 끊을 수 있다고 보기 때문에 200px에 맞는다. flex 아이템이 줄어들지 않는 문제는 [Flexbox와 Grid](/posts/css-flexbox-grid)에서 `min-width: 0`과 함께 다시 본다.
 
+## 표는 칸 너비를 내용에게 묻는다
+
+`table`은 일반 블록과 크기를 정하는 방식이 다르다. 기본값 `table-layout: auto`에서 브라우저는 모든 행의 모든 칸을 읽어 열마다 최소 폭(가장 긴 단어)과 희망 폭(줄을 안 바꿨을 때)을 구하고, 그걸로 열 너비를 나눈다. 그래서 `width: 100%`를 줘도 어떤 열의 최소 폭 합이 컨테이너보다 크면 표가 그만큼 넓어진다. 맨 아래 행에 긴 URL 하나가 들어오면 그 열 전체가 넓어지고, 행이 수천 개면 이 계산도 그만큼 무겁다.
+
+```css
+.price-table {
+  width: 100%;
+  table-layout: fixed;      /* 열 너비를 첫 행과 col만 보고 정한다 */
+  border-collapse: collapse;
+}
+.price-table th:first-child { width: 8rem; }
+.price-table td {
+  overflow-wrap: anywhere;  /* 고정된 칸 안에서 긴 문자열을 끊는다 */
+}
+```
+
+`table-layout: fixed`는 표에 `width`가 있을 때만 동작한다. 열 너비를 `col` 요소와 첫 행의 칸 너비로만 정하고, 정해 두지 않은 열은 남은 너비를 똑같이 나눈다. 나머지 행의 내용은 계산에 끼지 않으니 데이터가 바뀌어도 열이 들썩이지 않고, 첫 행만 읽으면 그리기 시작할 수 있다. 대신 칸보다 긴 내용은 칸 밖으로 넘치니 `overflow-wrap`이나 말줄임표(`overflow: hidden`, `white-space: nowrap`, `text-overflow: ellipsis`)를 같이 준다.
+
+`border-collapse`는 칸의 테두리를 어떻게 그릴지 정한다. 기본값 `separate`는 칸마다 자기 테두리를 갖고 칸 사이에 `border-spacing`(크롬 기본 스타일 2px)만큼 틈이 있어 이웃 칸의 선이 두 줄로 보인다. `collapse`는 맞닿은 테두리를 한 줄로 합친다. 두 칸의 테두리가 다르면 굵은 쪽이, 굵기가 같으면 스타일 순서(`double`, `solid`, `dashed`, `dotted` …)가 앞인 쪽이 이긴다. `collapse`에서는 표에 `border-radius`와 `padding`이 먹지 않는다. 둥근 모서리 표가 필요하면 `separate`에 `border-spacing: 0`을 주고 바깥 칸에만 테두리를 그린다.
+
+### 모바일에서 표는 감싸서 가로로 스크롤한다
+
+390px 화면에 열이 다섯 개인 표를 억지로 넣으면 글자가 한 줄에 두세 자씩 깨진다. 표는 읽을 만한 최소 폭을 주고, 감싸는 상자에서 가로로 스크롤하게 둔다. 표 자체에 `overflow`를 주면 스크롤이 생기지 않는다.
+
+```html
+<div class="table-scroll" role="region" aria-label="요금제 비교" tabindex="0">
+  <table class="price-table">…</table>
+</div>
+```
+
+```css
+.table-scroll { overflow-x: auto; }
+.table-scroll table { min-width: 36rem; }               /* 이보다 좁아지면 스크롤 */
+.table-scroll th:first-child { position: sticky; left: 0; background: var(--color-bg); }
+```
+
+`tabindex="0"`이 있어야 키보드 사용자가 이 상자에 들어와 화살표로 스크롤할 수 있고, `role`과 `aria-label`은 스크린 리더에 이 영역이 무엇인지 알려 준다. 감싼 상자가 스크롤 컨테이너라서 첫 열의 `position: sticky; left: 0`이 상자 기준으로 붙어, 가로로 넘겨도 행 이름이 남는다. 배경을 주지 않으면 지나가는 칸의 글자가 비쳐 보인다. 감싸지 않고 `table { display: block; overflow-x: auto }`로 처리하는 방법도 있는데, `display`를 바꾸면 일부 브라우저와 스크린 리더 조합에서 표로 읽어 주지 않는다.
+
 ## 390px에서 가로 스크롤을 일으킨 상자 찾기
 
 처음 증상으로 돌아가자. 모바일에서 화면이 옆으로 밀리면 어떤 요소가 뷰포트보다 오른쪽으로 삐져나갔는지부터 찾는다. 개발자 도구의 기기 모드를 390px로 맞추고 콘솔에서 아래를 실행한다.

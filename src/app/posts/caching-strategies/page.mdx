@@ -531,6 +531,67 @@ Redis도 결국 네트워크 너머에 있다. 왕복이 0.3ms라도 요청 하�
 
 `Map`의 `delete`와 `set`, 첫 키 꺼내기는 모두 상수 시간이라 `get`과 `put`이 O(1)이다. 언어에 순서를 기억하는 맵이 없다면 해시맵과 이중 연결 리스트를 함께 써서 같은 일을 한다. 면접에서 LRU를 짜 보라고 하면 보통 이 구조를 묻는 것이다. 실제 라이브러리는 여기에 항목별 TTL과 크기 기준 상한을 더한다. Redis가 메모리가 찼을 때 쓰는 LRU는 이렇게 정확한 순서를 유지하지 않고 표본을 뽑아 근사하는데, 그 이야기는 [메모리와 축출 정책 글](/posts/redis-memory-eviction)에서 다룬다.
 
+## 몇 번 읽혔는지로 고르는 LFU
+
+LRU에는 약점이 하나 있다. 관리자 배치가 상품 10만 개를 한 번씩 읽고 지나가면, 그 10만 개가 모두 "방금 쓴 키"가 되어 하루 종일 읽히던 1001번을 밀어낸다. LFU(Least Frequently Used)는 최근이 아니라 횟수를 본다. 가장 적게 읽힌 키부터 내보내니, 한 번 읽히고 끝난 키가 오래 버티지 못한다.
+
+순진하게 짜면 꽉 찼을 때 모든 키의 횟수를 훑어야 해서 O(n)이고, 힙에 넣어도 읽을 때마다 자리를 고치느라 O(log n)이다. O(1)로 만드는 방법은 횟수별로 키 목록을 따로 두는 것이다. 횟수 1인 키들, 횟수 2인 키들처럼 칸을 나누고, 지금 가장 작은 횟수 `minFreq`를 기억해 둔다. 읽으면 키를 한 칸 위로 옮기고, 내보낼 때는 `minFreq` 칸에서 가장 오래된 키를 꺼낸다. 같은 횟수끼리는 LRU로 승부를 가르는 셈이다.
+
+```js
+class LfuCache {
+  constructor(capacity) {
+    this.capacity = capacity;
+    this.items = new Map();   // key -> { value, freq }
+    this.buckets = new Map(); // freq -> Set(key), Set은 넣은 순서를 기억한다
+    this.minFreq = 0;
+  }
+  touch(key) {
+    const item = this.items.get(key);
+    const bucket = this.buckets.get(item.freq);
+    bucket.delete(key);
+    if (bucket.size === 0) {
+      this.buckets.delete(item.freq);
+      if (this.minFreq === item.freq) this.minFreq += 1; // 비운 칸이 최소였다면 한 칸만 오른다
+    }
+    item.freq += 1;
+    if (!this.buckets.has(item.freq)) this.buckets.set(item.freq, new Set());
+    this.buckets.get(item.freq).add(key);
+  }
+  get(key) {
+    if (!this.items.has(key)) return null;
+    this.touch(key);
+    return this.items.get(key).value;
+  }
+  put(key, value) {
+    if (this.capacity === 0) return;
+    if (this.items.has(key)) {
+      this.items.get(key).value = value;
+      this.touch(key);
+      return;
+    }
+    if (this.items.size >= this.capacity) {
+      const bucket = this.buckets.get(this.minFreq);
+      const victim = bucket.values().next().value; // 가장 적게 쓴 키 중 가장 오래된 것
+      bucket.delete(victim);
+      if (bucket.size === 0) this.buckets.delete(this.minFreq);
+      this.items.delete(victim);
+    }
+    this.items.set(key, { value, freq: 1 });
+    if (!this.buckets.has(1)) this.buckets.set(1, new Set());
+    this.buckets.get(1).add(key);
+    this.minFreq = 1; // 새 키는 언제나 횟수 1이니 최소도 1이 된다
+  }
+}
+```
+
+`minFreq`를 다시 찾느라 훑을 필요가 없다는 게 이 구조의 요점이다. 읽기는 키 하나를 한 칸 올릴 뿐이라 최소가 바뀌어도 딱 1 오르고, 새 키가 들어오면 최소는 무조건 1이다. 용량 2에 a, b를 넣고 a를 두 번 읽은 뒤 c를 넣으면 b가 나간다. 이어서 c를 한 번 읽고 d를 넣으면 횟수 2인 c가 횟수 3인 a보다 먼저 나간다. 그 뒤 `get("c")`는 `null`, `get("a")`는 그대로 1이다.
+
+LFU도 공짜는 아니다. 지난달 세일 때 백만 번 읽힌 키는 세일이 끝나도 횟수가 높아 계속 남는다. 그래서 실제 구현은 횟수를 시간이 지나면 깎는다. Redis의 `allkeys-lfu`가 `lfu-decay-time`으로 카운터를 줄이는 것이 그 예다([메모리와 축출 정책 글](/posts/redis-memory-eviction)). 반대로 막 들어온 키는 횟수가 1이라, 앞으로 인기를 얻을 키도 들어오자마자 쫓겨나기 쉽다. 자바의 Caffeine이 쓰는 W-TinyLFU는 새 키를 작은 LRU 창에 먼저 두고, 기존 키를 밀어낼 자격이 있는지는 [Count-Min Sketch](/posts/count-min-sketch)로 대략 센 횟수로 판단해 두 약점을 함께 줄인다.
+
+반대로 가장 많이 쓴 것부터 내보내는 MFU(Most Frequently Used)도 있다. "많이 쓴 건 이제 볼 일이 끝났고, 횟수가 적은 건 막 들어와서 아직 쓸 차례가 남았다"는 가정이다. 각 항목을 정해진 횟수만큼 처리하고 버리는 작업처럼 접근 패턴이 그 가정에 맞을 때만 이긴다. 운영체제 교과서의 페이지 교체 알고리즘 목록에 나오는 정도이고, 범용 캐시 라이브러리가 기본 정책으로 주는 경우는 드물다.
+
+LRU와 LFU 중에서는 LRU로 시작하는 게 무난하다. 싸고, 인기가 바뀌면 금방 따라간다. 뉴스나 실시간 인기 검색어처럼 무엇이 뜨는지가 몇 시간 단위로 바뀌는 데이터라면 LRU가 맞다. 상품 상세처럼 인기 키가 오래 유지되고, 배치나 크롤러가 한 번씩 훑는 접근이 섞인다면 LFU 쪽이 낫다. 배치가 도는 시간대에 히트율이 뚝 떨어졌다가 천천히 회복된다면 바로 그 신호다.
+
 ## 캐시가 일하는지 숫자로 본다
 
 캐시를 넣었으면 제 몫을 하는지 숫자로 확인한다. 가장 먼저 보는 건 히트율이다. Redis가 서버 전체 기준으로 세어 둔 값이 있다.

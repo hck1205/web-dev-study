@@ -503,6 +503,72 @@ Resources:
       BucketName: shop-logs-prod
 ```
 
+### AWS 안에서만 쓰는 CloudFormation과 CDK
+
+CloudFormation은 템플릿 하나로 만든 리소스 묶음을 스택(stack)이라고 부르고, Terraform의 state에 해당하는 기억을 AWS가 스택 안에 보관한다. 잠금도 따로 없다. 한 스택에 업데이트가 진행 중이면 다음 업데이트는 거절된다. 대신 세 가지를 알아 둬야 실무에서 덜 당황한다.
+
+변경 세트(change set)는 CloudFormation의 plan이다. 템플릿을 바로 적용하지 않고 변경 세트를 만들어 무엇이 추가·수정·삭제되는지, 특히 `Replacement`가 `True`인 리소스가 있는지 먼저 본다. 이 값이 `Conditional`이면 실제 값에 따라 교체될 수도 있다는 뜻이라 더 조심한다.
+
+```bash
+# 템플릿으로 변경 세트를 만든다 (아직 적용하지 않는다)
+aws cloudformation create-change-set --stack-name shop-logs \
+  --change-set-name add-versioning --template-body file://template.yaml
+# 무엇이 바뀌는지, 교체되는 리소스가 있는지 본다
+aws cloudformation describe-change-set --stack-name shop-logs \
+  --change-set-name add-versioning
+# 확인했으면 그 변경 세트 그대로 적용한다
+aws cloudformation execute-change-set --stack-name shop-logs \
+  --change-set-name add-versioning
+```
+
+업데이트 중 하나라도 실패하면 스택 전체가 이전 상태로 자동 롤백된다. Terraform처럼 반쯤 만든 채로 멈추지 않는 게 장점인데, 롤백마저 실패하면 `UPDATE_ROLLBACK_FAILED`에 걸려 아무 업데이트도 받지 않는다. 콘솔에서 지운 리소스를 롤백이 되살리려다 실패하는 경우가 흔하고, 원인을 고친 뒤 `continue-update-rollback`(필요하면 문제 리소스를 건너뛰는 옵션)으로 빠져나온다.
+
+드리프트 감지는 따로 실행해야 한다. Terraform은 plan마다 실제를 다시 읽지만, CloudFormation은 템플릿에 적힌 값만 기억하고 있다가 `detect-stack-drift`를 돌렸을 때 실제와 비교한다. 결과는 `describe-stack-resource-drifts`로 리소스별로 본다. 감지만 할 뿐 되돌려 주지 않고, 지원하지 않는 리소스 타입과 속성도 있다. 콘솔에서 고친 값은 템플릿에 반영해 다시 배포하거나, 템플릿 값으로 덮어써서 맞춘다. 지우면 안 되는 리소스에는 `DeletionPolicy: Retain`(DB는 `Snapshot`)과 스택 삭제 방지를 건다.
+
+CDK는 TypeScript, Python, Java 같은 일반 언어로 코드를 쓰면 CloudFormation 템플릿을 만들어(synth) 주는 도구다. 배포는 결국 CloudFormation이 한다. 위의 S3 버킷을 CDK(aws-cdk-lib 2.274)로 적고 `cdk synth`를 돌려 봤다.
+
+```ts
+// app.ts
+import { App, Stack, RemovalPolicy } from "aws-cdk-lib";
+import * as s3 from "aws-cdk-lib/aws-s3";
+
+const app = new App();
+const stack = new Stack(app, "ShopLogs");
+new s3.Bucket(stack, "Logs", {
+  bucketName: "shop-logs-prod",
+  versioned: true,
+  removalPolicy: RemovalPolicy.RETAIN,
+});
+```
+
+```bash
+# 계정 없이도 템플릿 생성까지는 된다. 결과는 cdk.out/ 에도 남는다
+npx cdk synth --version-reporting false
+```
+
+```text
+Resources:
+  Logs6819BB44:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: shop-logs-prod
+      VersioningConfiguration:
+        Status: Enabled
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      aws:cdk:path: ShopLogs/Logs/Resource
+Parameters:
+  BootstrapVersion:
+    Type: AWS::SSM::Parameter::Value<String>
+```
+
+`versioned: true` 한 줄이 `VersioningConfiguration`으로, `RETAIN`이 `DeletionPolicy`로 펼쳐졌다. `BootstrapVersion` 파라미터는 `cdk bootstrap`이 계정마다 미리 만들어 두는 스택(템플릿과 에셋을 올릴 S3 버킷, ECR, 배포용 역할)을 가리킨다. 처음 배포할 때 bootstrap을 빼먹으면 여기서 막힌다.
+
+`Logs6819BB44`라는 이름(논리 ID)은 코드 안의 경로 `ShopLogs/Logs`에서 해시로 만든다. 코드를 다듬는다고 `"Logs"`를 `"AppLogs"`로 바꾸고 다시 synth하면 `AppLogsC5DF83A6`가 나온다. CloudFormation 눈에는 리소스 하나를 지우고 새로 만드는 변경이다. 이름이 고정된 버킷이라 새로 만들기가 실패하거나, 이름이 없는 리소스라면 정말 교체된다. Terraform에서 `moved` 없이 이름을 바꾸는 것과 같은 사고이고, 배포 전 `cdk diff`로 확인하는 습관이 그래서 필요하다.
+
+Terraform·Pulumi와 나란히 보면 이렇다. 기억과 롤백은 AWS가 맡아 줘서 state 버킷과 잠금을 운영할 필요가 없다. 대신 AWS 밖(DNS 업체, GitHub, 모니터링 SaaS)은 다루지 못하고, 큰 스택은 배포가 느리며, 스택 하나에 넣을 수 있는 리소스 수에도 한도(500개)가 있다. CDK는 Pulumi처럼 일반 언어의 반복문과 타입, 테스트를 쓰게 해 주지만, 리뷰할 것이 코드가 아니라 합성된 템플릿과 변경 세트인 것은 Pulumi에서 preview를 보는 것과 같다.
+
 고르는 기준은 대개 기술보다 팀이다. AWS만 쓰고 state 관리를 하기 싫으면 CloudFormation이나 CDK, 여러 클라우드와 SaaS(DNS, 모니터링, GitHub)를 한 곳에서 다루려면 Terraform, 인프라 담당 없이 애플리케이션 개발자가 직접 인프라를 다루고 테스트까지 쓰려면 Pulumi가 맞는 경우가 많다. 이미 한 도구로 상당한 인프라를 관리하고 있다면 갈아타는 비용(state 이전, import)이 대부분의 장점보다 크다.
 
 ## 코드로 바꾸면 리뷰할 수 있다
@@ -575,3 +641,7 @@ IaC는 인프라의 원하는 모습을 코드로 적고, 도구가 지금 모�
 ### Terraform, Pulumi, CloudFormation, Ansible은 어떻게 고르나요?
 
 먼저 층을 나눈다. 클라우드에 무엇을 만들지는 Terraform·Pulumi·CloudFormation이, 서버 안의 설정은 Ansible 같은 구성 관리 도구가 맡는다. 프로비저닝 중에서는 AWS만 쓰고 state 관리를 피하고 싶으면 CloudFormation·CDK, 여러 클라우드와 SaaS를 한 문법으로 다루려면 Terraform이나 OpenTofu, 일반 언어의 추상화와 테스트가 필요하면 Pulumi를 고른다. 이미 쓰는 도구가 있으면 옮기는 비용을 먼저 따진다.
+
+### CloudFormation과 CDK를 쓸 때 Terraform과 다르게 조심할 점은요?
+
+state와 잠금, 실패 시 롤백은 AWS가 스택 단위로 맡아 주지만 드리프트는 저절로 보이지 않는다. Terraform은 plan마다 실제를 다시 읽는데, CloudFormation은 `detect-stack-drift`를 따로 돌려야 차이를 알려 주고 되돌려 주지도 않는다. 적용 전에는 변경 세트에서 `Replacement`가 `True`인 리소스를 확인한다. CDK는 코드 경로로 논리 ID를 만들기 때문에 construct 이름만 바꿔도 리소스 교체가 되니, 배포 전에 `cdk diff`로 합성된 변경을 본다.

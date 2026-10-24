@@ -496,6 +496,12 @@ psql -h 127.0.0.1 -U v2mq -d v2mq_demo -f explain.sql
 
 `Index Cond`로 보이는 5줄만 읽고 정렬했다. 38ms에서 0.2ms가 됐다. 처리가 끝난 행을 지우지 않고 `status = 'done'`으로 남기는 설계라면 `WHERE status = 'ready'` 같은 부분 인덱스를 쓴다.
 
+테이블과 꺼내는 쿼리를 직접 짜는 게 부담스러우면 확장을 쓴다. pgmq는 이 글의 개념을 SQS 모양의 SQL 함수로 묶은 확장이다. `pgmq.create('mail')`로 큐(테이블)를 만들고, `pgmq.send('mail', '{"to": "kim@example.com"}')`로 넣고, `pgmq.read('mail', 30, 5)`로 가시성 타임아웃 30초를 걸어 5개를 꺼내고, 끝나면 `pgmq.delete`나 `pgmq.archive`로 지운다. 안에서는 위와 같은 `visible_at` 열과 `SKIP LOCKED`로 돈다. 그래서 장점(같은 트랜잭션으로 넣기)도 약점(죽은 튜플과 vacuum)도 그대로다.
+
+PgQ는 결이 다르다. Skype가 만든 확장으로, 이벤트를 행 단위로 꺼내 지우지 않고 별도 데몬(`pgqd`)이 찍는 틱 사이의 이벤트를 배치로 나눠 준다. 소비자마다 자기 위치를 따로 기억해서 여러 소비자가 같은 이벤트를 각자 다 읽는다. 큐라기보다 작은 로그에 가깝다. 다 읽은 이벤트 테이블은 행을 지우는 대신 테이블을 돌려가며 통째로 비워서 죽은 튜플이 쌓이지 않는다. 대신 데몬을 하나 더 운영해야 하고, 관리형 PostgreSQL에서 쓸 수 있는 곳이 드물다.
+
+DB 큐를 떠나 브로커로 옮길 때가 됐다는 신호는 숫자로 보인다. 꺼내기와 지우기가 초당 수천 건을 넘어 큐 테이블의 `n_dead_tup`(`pg_stat_user_tables`)이 autovacuum 주기마다 줄지 않고 늘기만 할 때, 워커들의 폴링이 DB CPU와 연결 수의 상당 부분을 차지할 때, 같은 이벤트를 여러 팀의 서비스가 각자 받아야 하거나 며칠 전 이벤트부터 다시 읽어야 할 때다. 앞의 둘은 DB가 업무 쿼리를 받을 여력을 큐에 빼앗기는 것이고, 마지막은 큐가 아니라 로그가 필요하다는 뜻이다. 옮기더라도 "저장과 발행을 한 트랜잭션에" 묶는 장점은 [트랜잭셔널 아웃박스](/posts/transactional-outbox)로 남길 수 있다. 폴링 지연만 문제라면 넣을 때 `NOTIFY`로 워커를 깨우는 방법도 있다([함수와 트리거](/posts/postgres-functions-triggers)의 LISTEN/NOTIFY).
+
 Redis 리스트나 스트림은 처리량이 훨씬 높고 지연이 짧다. 대신 영속성은 설정에 달려 있다. AOF를 `everysec`로 두면 장애 때 마지막 1초 안쪽의 메시지를 잃을 수 있다([Redis 영속성](/posts/redis-persistence-ha)). 메모리가 차면 `maxmemory-policy`에 따라 큐 키가 축출될 수도 있으니, 큐를 담는 Redis에는 `noeviction`을 쓴다([Redis 메모리](/posts/redis-memory-eviction)). Node에서 이 위에 재시도, 지연, 락까지 얹은 라이브러리가 BullMQ이고, 동작은 [BullMQ 작업 큐](/posts/bullmq-job-queue)에서 따로 따라갔다.
 
 SQS 같은 관리형 큐는 운영할 서버가 없고, 가시성 타임아웃·재전달·데드 레터 큐가 기본으로 있다. 표준 큐는 순서를 보장하지 않고 드물게 중복을 준다. FIFO 큐는 그룹별 순서와 5분 안의 중복 제거(`MessageDeduplicationId`)를 주는 대신 처리량 상한이 낮다. 메시지를 오래 보관하며 여러 번 다시 읽어야 하거나(재처리, 새 서비스가 과거 이벤트부터 읽기) 처리량이 매우 크면 Kafka 같은 로그가 맞고, 라우팅 규칙이 복잡하면 RabbitMQ가 맞다. 둘의 차이는 각 글에서 다룬다.

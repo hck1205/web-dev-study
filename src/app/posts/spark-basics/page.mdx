@@ -197,6 +197,62 @@ stage가 잡히는 순서를 드라이버 쪽에서 보면 이렇다.
 
 마지막 단계가 흔한 사고다. 수천만 줄짜리 DataFrame에 `collect()`나 `toPandas()`를 부르면 결과가 드라이버 한 대로 몰린다. `spark.driver.maxResultSize`(기본 1g)를 넘으면 작업이 실패하고, 그보다 드라이버 메모리가 먼저 차면 드라이버가 죽는다. 큰 결과는 `write`로 파일에 쓰고, 눈으로 볼 것만 `limit` 뒤에 가져온다.
 
+## MapReduce는 잡마다 결과를 내려놓았다
+
+셔플은 Spark가 새로 만든 개념이 아니다. 하둡 MapReduce가 이미 맵, 셔플, 리듀스의 세 마디로 일을 나눴다. 맵은 입력 조각 하나를 읽어 (키, 값) 쌍을 내놓고, 셔플은 그 쌍을 키로 정렬해 같은 키를 같은 리듀서로 보내고, 리듀스는 같은 키의 값들을 합친다. 하둡 스트리밍은 맵과 리듀스를 아무 프로그램으로나 쓰게 해 주는데, 그 모양을 셸 파이프로 그대로 흉내 낼 수 있다. 셔플 자리에 `sort`가 들어간다.
+
+```python
+# mapper.py: 입력 ad_id,country,cost → 출력 ad_id \t 1 (한국 클릭만)
+import sys
+for line in sys.stdin:
+    ad_id, country, cost = line.rstrip("\n").split(",")
+    if country == "KR":
+        print(f"{ad_id}\t1")
+```
+
+```python
+# reducer.py: 입력은 키로 정렬돼 있다. 같은 키가 이어지는 동안 더하고, 키가 바뀌면 내보낸다
+import sys
+current, total = None, 0
+for line in sys.stdin:
+    key, value = line.rstrip("\n").split("\t")
+    if key != current:
+        if current is not None:
+            print(f"{current}\t{total}")
+        current, total = key, 0
+    total += int(value)
+if current is not None:
+    print(f"{current}\t{total}")
+```
+
+```bash
+# 잡 1: 맵 → 셔플(정렬) → 리듀스. 결과는 파일로 내려놓는다
+python3 mapper.py < clicks.csv | sort -k1,1 | python3 reducer.py > job1-out.tsv
+cat job1-out.tsv
+
+# 잡 2: 잡 1의 결과 파일을 다시 읽어 클릭 수 상위 3개를 뽑는다
+sort -t$'\t' -k2,2nr job1-out.tsv | head -3
+```
+
+```text
+15	12
+210	293
+458	176
+77	56
+903	88
+210	293
+458	176
+903	88
+```
+
+클릭 1000줄로 돌린 결과다. 키를 글자로 정렬해서 15, 210, 458, 77, 903 순서로 나온다. 리듀서가 "키가 바뀌면 내보낸다"만으로 일할 수 있는 건 셔플이 같은 키를 붙여 줬기 때문이다.
+
+눈여겨볼 곳은 `job1-out.tsv`다. MapReduce 잡 하나는 맵 한 번과 리듀스 한 번으로 끝난다. "광고별로 세고, 그중 상위 3개" 같은 두 마디짜리 일은 잡 두 개를 이어 붙여야 하고, 잡 사이의 결과는 HDFS에 파일로 쓴다. HDFS는 블록마다 기본 세 벌을 복제하니, 중간 결과 하나를 쓸 때마다 디스크 쓰기 세 번과 네트워크 복사가 따라온다. 다음 잡은 그걸 다시 디스크에서 읽는다. 맵의 출력도 리듀서가 가져가기 전까지 로컬 디스크에 쌓인다. 게다가 태스크마다 JVM을 새로 띄웠다. 열 번 반복하는 머신러닝 학습이면 같은 입력을 열 번 디스크에서 읽고, 결과를 열 번 HDFS에 쓴다.
+
+Spark도 셔플 경계에서는 로컬 디스크에 쓴다. 앞 절에서 본 셔플 파일이 그것이다. 달라진 건 나머지다. 여러 마디의 일이 잡 하나의 DAG로 표현되고, 셔플이 없는 구간은 한 태스크 안에서 메모리로 이어 처리된다. 잡 사이에 HDFS를 거치지 않으니 복제 비용도 없다. 반복해 쓸 데이터는 `cache()`로 익스큐터 메모리에 올려 두고, 익스큐터는 작업 내내 살아 있는 JVM이라 태스크마다 프로세스를 띄우지 않는다. 장애 복구도 바뀌었다. MapReduce는 HDFS에 내려놓은 결과가 복구 지점이었다. Spark는 lineage를 따라 잃어버린 파티션만 다시 계산한다.
+
+그래도 MapReduce가 남긴 생각은 그대로다. 같은 키를 한곳으로 모으는 셔플이 가장 비싸고, 셔플 전에 맵 쪽에서 미리 더해 두면(MapReduce의 combiner, Spark의 partial agg) 건너가는 양이 준다. 지금 하둡 클러스터에 새로 MapReduce 잡을 짜는 일은 드물지만, Spark 계획에서 `Exchange` 한 줄이 왜 비싼지는 이 구조로 설명된다. 저장 쪽인 HDFS는 [데이터 레이크와 HDFS](/posts/data-lake-hdfs)에서 다룬다.
+
 ## 파티션 수가 태스크 수다
 
 태스크 하나는 파티션 하나를 처리한다. 그러니 파티션 수가 병렬성의 상한이고, 파티션 크기가 태스크 하나의 일감이다. 같은 클릭 10만 줄을 파일 1만 개, 파일 하나, Parquet 파일 셋으로 읽어 `count()`했다.

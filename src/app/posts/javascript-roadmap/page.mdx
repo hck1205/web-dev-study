@@ -211,6 +211,31 @@ undefined → []
 
 네 번째 줄이 함정이다. 서버가 `items: null`을 보내면 기본값이 끼어들지 않아 `items.map`에서 터진다. 기본값은 `undefined`에만 반응한다.
 
+### 새 문법이 언어에 들어오는 길
+
+"최신 문법"의 기준은 ECMAScript라는 명세다. 자바스크립트는 1995년 넷스케이프 브라우저에서 시작했고, 브라우저마다 따로 놀지 않게 하려고 Ecma International이라는 표준 단체에 명세를 맡겼다. 명세를 고치는 위원회가 TC39다. ES5(2009) 뒤로 한참 멈췄다가 ES2015(흔히 ES6)에서 `let`·`const`, 화살표 함수, 클래스, Promise, 모듈이 한꺼번에 들어왔다. 그 뒤로는 큰 개정 대신 해마다 6월쯤 그해 판을 낸다. 판 이름이 연도인 이유다.
+
+새 기능은 제안 하나씩 단계를 밟는다. Stage 0은 아이디어, 1은 풀 문제와 대략의 모양을 정식 제안으로 받아들인 상태, 2는 명세 초안이 있는 상태다. 2023년 말에 생긴 2.7은 명세 문장은 확정됐고 테스트(test262)를 쓰는 중인 상태, 3은 브라우저가 구현해 써 보는 후보 단계다. 4는 서로 다른 엔진 두 곳 이상이 실제로 내보냈고 테스트가 합쳐진 상태로, 다음 해 판에 들어간다. 실무에서 기억할 선은 3이다. TypeScript는 보통 Stage 3에 온 문법부터 지원하고, 그 전 단계는 이름과 모양이 바뀔 수 있어 제품 코드에 쓰기엔 이르다. 데코레이터가 예전 제안의 모양(TypeScript `experimentalDecorators`)과 Stage 3 모양이 달라 지금도 두 가지가 섞여 있는 것이 그 예다([TypeScript 데코레이터](/posts/ts-decorators)).
+
+이 블로그 글에 나오는 기능을 판별로 짚으면 이렇다. ES2017 `async`/`await`, ES2018 객체 전개와 나머지, ES2019 `Object.fromEntries`와 `flat`, ES2020 `?.`·`??`·`BigInt`·`Promise.allSettled`, ES2021 `??=`·`Promise.any`·`replaceAll`, ES2022 클래스 `#private` 필드·최상위 `await`·`at`·`Object.hasOwn`, ES2023 `toSorted`·`findLast`, ES2024 `Object.groupBy`·`Promise.withResolvers`, ES2025 `Set`의 `union` 같은 집합 메서드·이터레이터 헬퍼·`Promise.try`·`RegExp.escape`다.
+
+판에 들어갔다고 내 사용자의 브라우저에 있다는 뜻은 아니다. 명세보다 엔진이 늦거나 빠르기도 하다. Node 22에서 확인해 봤다.
+
+```text
+v22.22.0
+ES2022 Object.hasOwn   function
+ES2023 toSorted        function
+ES2024 Object.groupBy  function
+ES2025 Set#union       function
+ES2025 Iterator#map    function
+ES2025 Promise.try     undefined
+ES2025 RegExp.escape   undefined
+```
+
+같은 ES2025인데 집합 메서드와 이터레이터 헬퍼는 있고 `Promise.try`와 `RegExp.escape`는 없다. Node 22가 쓰는 V8 12.4가 그 뒤에 들어온 기능을 모르기 때문이다(더 새 V8을 쓰는 Node 24에는 둘 다 있다). 그래서 "ES2025를 지원한다"보다 기능 하나하나를 본다. 브라우저는 MDN 문서 아래의 호환성 표나 caniuse, Node는 node.green에서 확인하고, 서버라면 배포할 Node 버전에서 `typeof`로 직접 찍어 보는 게 가장 확실하다.
+
+그다음은 트랜스파일 판단이다. 쓰려는 것이 문법(`?.`, `#private`)이면 빌드 도구가 옛 문법으로 풀어 쓸 수 있고, 함수(`Object.groupBy`, `Set.prototype.union`)면 풀어 쓸 수 없어 폴리필을 넣어야 한다. 대상 브라우저는 실제 사용자 통계로 browserslist에 적고, 그 범위가 이미 지원하는 기능은 낮추지 않는다. 낮출수록 번들이 커지기 때문이다. 이 차이와 크기 측정은 [번들러 기초](/posts/bundler-basics)와 [개발 서버와 빌드 도구](/posts/frontend-build-tooling)에서 실제 빌드로 봤다.
+
 ## 09 this, 프로토타입, 객체 지향
 
 [this 바인딩](/posts/js-this-binding)은 "메서드를 변수에 담거나 `setTimeout`에 넘기면 왜 터지나"에 답한다. 위 5번 줄의 `TypeError`가 정확히 이 장면이고, `this`가 함수가 아니라 호출에 붙는다는 네 가지 규칙을 따라간다.
@@ -437,3 +462,7 @@ function routeSymptom(text) {
 ### React를 잘 쓰려면 자바스크립트의 어느 부분이 특히 중요한가요?
 
 참조와 얕은 복사, 클로저, 단락 평가, 비동기 취소다. React는 상태를 참조로 비교하니 배열과 객체를 사본으로 바꿔야 다시 그리고, 핸들러와 effect는 그 렌더의 값을 클로저로 잡는다. `&&` 렌더링은 `0`을 찍을 수 있고, effect의 요청은 정리 함수에서 취소해야 늦은 응답이 화면을 덮지 않는다.
+
+### 새 ECMAScript 기능을 언제부터 제품 코드에 써도 되나요?
+
+명세의 판보다 대상 환경의 지원을 기준으로 정한다. TC39 제안은 Stage 3부터 모양이 거의 굳고 엔진이 구현하기 시작하며, Stage 4가 되면 다음 해 판에 들어간다. 하지만 같은 판의 기능도 엔진마다 들어온 시기가 달라서, Node 22에는 ES2025의 `Set.prototype.union`은 있고 `Promise.try`는 없다. 그래서 caniuse나 node.green, 배포할 런타임에서 직접 확인하고, 없으면 문법은 트랜스파일로 낮추고 함수는 폴리필로 채운다. 대상 브라우저는 browserslist로 정해 필요 이상으로 낮추지 않는다.

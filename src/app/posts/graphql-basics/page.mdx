@@ -14,7 +14,7 @@ export const metadata = getPostMetadata("graphql-basics");
 
 GraphQL은 이 문제를 클라이언트가 "이 모양으로 달라"고 적어 보내게 해서 푼다. 이 글은 그 방식이 서버 안에서 어떻게 돌아가는지, 그리고 그 편리함 때문에 생기는 비용(N+1, 캐시, 에러, 보안)을 직접 돌려 보며 따라간다. 데모는 Node.js 22, graphql-js 16.14, GraphQL over HTTP 참조 구현인 graphql-http 1.23으로 만들었다. 데이터는 메모리에 둔 가짜 DB이고, DB 호출마다 2ms를 쉬며 호출 수를 센다.
 
-API 스타일 전체에서 GraphQL이 어디에 서는지는 [API 스타일 한눈에 보기](/posts/api-styles-overview)에, REST 쪽 설계는 [REST API 설계](/posts/rest-api-design)에 있다.
+API 스타일 전체에서 GraphQL이 어디에 서는지는 [API 스타일 한눈에 보기](/posts/api-styles-overview)에, REST 쪽 설계는 [REST API 설계](/posts/rest-api-design)에 있다. 이 글은 GraphQL 시리즈의 첫 글이라 큰 그림만 잡고, 스키마·문법·실행기·페이지네이션·실시간·인가·클라이언트 캐시는 각각 따로 판 글로 넘긴다. 목록은 글 끝에 있다.
 
 ## 화면 하나에 요청 다섯 번, 20KB
 
@@ -123,7 +123,9 @@ type Comment {
 
 `User.posts`와 `Post.author`가 서로를 가리키는 고리가 보인다. 이 고리 덕분에 "글쓴이의 다른 글"을 한 번에 받을 수 있지만, 같은 고리를 끝없이 도는 쿼리도 만들 수 있다. 보안 이야기에서 이 고리로 돌아온다.
 
-스키마는 문서이자 계약이다. 서버는 스키마에 없는 필드를 묻는 쿼리를 실행 전에 거절하고, 클라이언트 도구는 스키마를 읽어 자동 완성과 타입을 만든다(GraphQL Code Generator 같은 도구). REST에서 OpenAPI 문서를 따로 관리하던 일이 스키마 하나로 모인다.
+스키마는 문서이자 계약이다. 서버는 스키마에 없는 필드를 묻는 쿼리를 실행 전에 거절하고, 클라이언트 도구는 스키마를 읽어 자동 완성과 타입을 만든다(GraphQL Code Generator 같은 도구). REST에서 OpenAPI 문서를 따로 관리하던 일이 스키마 하나로 모인다. 스칼라·열거형·인터페이스·유니언과 느낌표를 어디에 붙일지는 [GraphQL 스키마 설계](/posts/graphql-schema-type-system)에서 따로 다룬다.
+
+서버 라이브러리를 고를 때 먼저 갈리는 것은 이 스키마를 누가 먼저 쓰느냐다. 스키마 우선(schema-first)은 SDL 파일을 먼저 쓰고 리졸버를 이름에 맞춰 붙인다. Apollo Server와 graphql-tools, 자바의 Spring for GraphQL과 Netflix DGS가 이쪽이고, 이 글의 데모도 SDL을 먼저 썼다. 프론트엔드와 백엔드가 SDL 파일 하나로 먼저 합의하고 리뷰하기 좋은 대신, SDL과 리졸버의 인자·반환 타입이 어긋나도 실행해 보기 전에는 모른다. 그래서 보통 GraphQL Code Generator로 리졸버 타입을 만들어 그 틈을 메운다. 코드 우선(code-first)은 언어의 타입이나 클래스로 스키마를 만들고 SDL은 결과물로 뽑는다. TypeScript의 Pothos와 TypeGraphQL, 파이썬의 Strawberry가 이쪽이다. 타입이 한곳에만 있으니 어긋날 일이 없고 리팩터링이 쉽지만, 스키마 변경이 코드 diff 속에 묻혀 리뷰에서 덜 보인다. 이쪽을 쓰면 뽑은 SDL을 저장소에 커밋해 두고 PR마다 그 diff를 따로 본다. 어느 쪽이든 운영에 나가는 계약은 SDL이라는 점은 같다.
 
 ## 요청 한 번을 뜯어보면
 
@@ -154,7 +156,7 @@ curl -s http://127.0.0.1:18200/graphql -H 'content-type: application/json' \
 {"data":{"addComment":{"id":"31","body":"좋은 글","author":{"name":"kim"}}}}
 ```
 
-쓰기 결과를 받으면서 `author { name }`처럼 관계까지 한 번에 고를 수 있다. 쓰고 나서 화면을 다시 그리려고 따로 조회하지 않아도 된다.
+쓰기 결과를 받으면서 `author { name }`처럼 관계까지 한 번에 고를 수 있다. 쓰고 나서 화면을 다시 그리려고 따로 조회하지 않아도 된다. 변수·별칭·프래그먼트·디렉티브 같은 문법은 [GraphQL 쿼리 문법](/posts/graphql-operations-syntax)에서 실제 요청으로 하나씩 본다.
 
 GET으로도 보낼 수 있다. 쿼리를 URL 파라미터에 싣는다. 대신 GET은 읽기 전용이어야 하므로 mutation을 GET으로 보내면 GraphQL over HTTP 명세대로 거절된다. 링크 하나로 쓰기가 일어나는 CSRF 구멍을 막는 규칙이다.
 
@@ -290,7 +292,7 @@ event {"data":{"commentAdded":{"id":"33","body":"두 번째"}}}
 mutation postId=3
 ```
 
-4번 글에 단 댓글은 걸러져 오지 않았다. GraphQL 명세는 구독 결과를 어떻게 실어 나를지 정하지 않는다. 실무에서는 WebSocket 위의 `graphql-ws` 프로토콜이나 SSE 위의 `graphql-sse`를 많이 쓴다. 연결을 오래 쥐는 데서 오는 문제(하트비트, 서버 여러 대로 늘릴 때의 메시지 버스)는 [WebSocket 깊게 보기](/posts/websocket-deep-dive)와 [HTTP 스트리밍](/posts/http-streaming-sse)에서 다룬 것이 그대로 적용된다.
+4번 글에 단 댓글은 걸러져 오지 않았다. GraphQL 명세는 구독 결과를 어떻게 실어 나를지 정하지 않는다. 실무에서는 WebSocket 위의 `graphql-ws` 프로토콜이나 SSE 위의 `graphql-sse`를 많이 쓴다. 연결을 오래 쥐는 데서 오는 문제(하트비트, 서버 여러 대로 늘릴 때의 메시지 버스)는 [WebSocket 깊게 보기](/posts/websocket-deep-dive)와 [HTTP 스트리밍](/posts/http-streaming-sse)에서 다룬 것이 그대로 적용된다. graphql-ws의 메시지 흐름, 서버를 두 대로 늘렸을 때의 이벤트 분배, 응답을 나눠 받는 `@defer`·`@stream`은 [GraphQL 실시간](/posts/graphql-subscriptions-defer)에 있다.
 
 ## 에러가 나도 200이 온다
 
@@ -309,7 +311,7 @@ status=200
 
 상태 코드는 200이다. 응답 하나에 성공한 부분(`a`)과 실패한 부분(`errors`의 `path: ["b","email"]`)이 함께 들어 있으니 HTTP 상태 하나로는 표현할 수 없다. 이게 부분 성공이다.
 
-더 볼 것은 `b`가 통째로 null이 된 점이다. 에러가 난 건 `email`인데 `name`까지 사라졌다. `email: String!`이 null이 될 수 없으니, 실행기는 null을 한 단계 위로 올려 null이 허용되는 가장 가까운 부모(`user: User`)를 null로 만든다. 그 부모도 `!`였다면 더 위로 올라가서 결국 `data` 전체가 null이 된다. 실패할 수 있는 필드(권한, 외부 서비스 호출)에 `!`를 붙이면 에러 하나가 화면 전체를 지운다. 스키마를 설계할 때 느낌표를 아끼는 이유다.
+더 볼 것은 `b`가 통째로 null이 된 점이다. 에러가 난 건 `email`인데 `name`까지 사라졌다. `email: String!`이 null이 될 수 없으니, 실행기는 null을 한 단계 위로 올려 null이 허용되는 가장 가까운 부모(`user: User`)를 null로 만든다. 그 부모도 `!`였다면 더 위로 올라가서 결국 `data` 전체가 null이 된다. 실패할 수 있는 필드(권한, 외부 서비스 호출)에 `!`를 붙이면 에러 하나가 화면 전체를 지운다. 스키마를 설계할 때 느낌표를 아끼는 이유다. 파싱·검증·실행 단계에서 null이 어떤 순서로 퍼지는지는 [GraphQL 실행 엔진 안쪽](/posts/graphql-execution-validation)에서 실행기를 따라가며 본다.
 
 모든 에러가 200은 아니다. 요청은 파싱, 검증, 실행 세 단계를 지나고, 앞의 두 단계에서 실패하면 실행 자체를 안 한다. 아래 그림에서 단계별로 어떤 응답이 나가는지 보자.
 
@@ -407,7 +409,7 @@ HTTP/1.1 200 OK X-Cache-Status: HIT  <- GET hash 3
 
 여기서 두 가지를 구분해야 한다. 런타임에 아무 클라이언트나 쿼리를 등록할 수 있는 APQ는 대역폭과 캐시를 위한 장치다. 공격자도 자기 쿼리를 등록할 수 있으니 보안 장치가 아니다. 빌드할 때 앱이 쓰는 쿼리만 추출해 서버에 올려 두고 목록에 없는 쿼리는 거절하는 방식(trusted documents, persisted operations라고 부른다)은 허용 목록이라 보안 장치가 된다. 자사 앱만 쓰는 API라면 이쪽이 가장 강한 방어다.
 
-캐시 키를 모든 사용자가 공유하는 것도 조심한다. 로그인한 사용자에 따라 결과가 달라지는 쿼리에 `public` 캐시를 붙이면 남의 데이터가 나간다. HTTP 캐시는 공개 데이터 쿼리에만 쓰고, 개인화된 데이터는 클라이언트 쪽 정규화 캐시(Apollo Client, urql이 `__typename`과 `id`로 객체를 쪼개 저장한다)에 맡긴다. 클라이언트 캐시의 일반적인 원리는 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있다.
+캐시 키를 모든 사용자가 공유하는 것도 조심한다. 로그인한 사용자에 따라 결과가 달라지는 쿼리에 `public` 캐시를 붙이면 남의 데이터가 나간다. HTTP 캐시는 공개 데이터 쿼리에만 쓰고, 개인화된 데이터는 클라이언트 쪽 정규화 캐시(Apollo Client, urql이 `__typename`과 `id`로 객체를 쪼개 저장한다)에 맡긴다. 클라이언트 캐시의 일반적인 원리는 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있고, Apollo Client·urql·Relay가 응답을 실제로 어떻게 쪼개 저장하는지는 [GraphQL 클라이언트 캐시](/posts/graphql-client-caching)에서 재현했다.
 
 ## 클라이언트가 쿼리를 쓰니 서버가 막아야 할 것
 
@@ -553,6 +555,8 @@ URL이 모두 `/graphql`이라 nginx access log의 요청 시간 분포만으로
 ## 화면이 쿼리를 쓰고, 서버는 그 값을 치른다
 
 GraphQL은 화면이 필요한 모양을 쿼리로 적고 서버가 그 모양대로 채워 주는 방식이다. 오버페칭과 언더페칭이 사라지는 대신, 일의 양을 클라이언트가 정하게 된다. 그래서 서버는 같은 틱의 키를 묶어 N+1을 막고, 깊이와 비용을 실행 전에 재고, 상태 코드 대신 errors를 세고, 캐시가 필요하면 쿼리를 해시로 바꿔 GET으로 돌려야 한다. 이 값을 치를 만큼 화면이 다양한지가 GraphQL을 고르는 기준이다.
+
+이 주제의 다른 글은 여기서 이어진다. 타입을 고르고 느낌표를 붙이는 일은 [스키마 설계](/posts/graphql-schema-type-system), 쿼리를 쓰는 문법은 [쿼리 문법](/posts/graphql-operations-syntax), 서버가 요청을 받아 응답을 만드는 과정은 [실행 엔진 안쪽](/posts/graphql-execution-validation)에 있다. 목록을 나눠 받는 법은 [Relay 커넥션 페이지네이션](/posts/graphql-pagination-connections), 서버가 밀어 주는 데이터는 [구독과 @defer](/posts/graphql-subscriptions-defer), 엔드포인트 하나에서 권한을 어디서 막을지는 [GraphQL 인가](/posts/graphql-authorization), 받은 응답을 화면 쪽에 저장하는 법은 [클라이언트 캐시](/posts/graphql-client-caching)에서 다룬다.
 
 ## 면접에서 나올 만한 질문
 

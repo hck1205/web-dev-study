@@ -91,4 +91,19 @@ export const AUTOSCALING: QuizQuestion[] = [
       "HPA는 Pod 수만 늘리고 노드는 늘리지 않는다. 노드에 requests를 받아 줄 자리가 없으면 Pod는 Pending이고, 노드 오토스케일러가 새 노드를 만들어야 들어간다. 그 시간이 반응 시간에 더해진다.",
     anchor: "쿠버네티스에서는-두-층이-따로-늘어난다",
   },
+  {
+    id: "autoscaling-7",
+    post: "autoscaling",
+    question: "정책이 원하는 대수를 5에서 9로 올렸는데 활동 기록에 vCPU 한도 초과로 실패가 남았다. 가장 맞는 조치는?",
+    choices: [
+      "그룹의 최대 대수를 더 높인다",
+      "다른 AZ의 서브넷만 추가한다",
+      "Service Quotas에서 리전의 온디맨드 vCPU 한도를 올리고 사용률 경보를 건다",
+      "대상 추적 목표값을 낮춘다",
+    ],
+    answer: 2,
+    explanation:
+      "vCPU 한도는 계정·리전 단위라 그룹 설정을 아무리 바꿔도 넘을 수 없다. AZ나 타입을 섞는 것은 InsufficientInstanceCapacity처럼 물리 용량이 모자랄 때의 처방이다.",
+    anchor: "오토스케일링이-도와주지-못할-때",
+  },
 ];

@@ -8765,6 +8765,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "Kafka Streams와 Flink 중 무엇을 고르나요?",
       "answer": "입력과 출력이 모두 Kafka이고 별도 클러스터를 운영하고 싶지 않다면 Kafka Streams가 가볍다. 앱처럼 배포하고 소비자 그룹으로 확장한다. 상태가 아주 크거나, 이벤트 시간 처리가 복잡하거나, Kafka 밖의 소스와 싱크가 많다면 Flink가 맞다. 상태 없는 변환뿐이라면 엔진 없이 컨슈머로 충분하다."
+    },
+    {
+      "question": "파이프와 필터 패턴은 스트림 처리와 어떤 관계인가요?",
+      "answer": "스트림 처리의 연산자 사슬이 곧 파이프와 필터다. 한 가지 일만 하는 필터를 파이프로 이어서, 필터끼리는 서로를 모르고 통로만 알게 한다. 서비스 단위로 나누면 파이프 자리에 토픽을 두고 필터마다 따로 배포하고 늘린다. 다만 단계마다 직렬화와 네트워크 비용이 붙으니, 엔진은 재분배가 필요 없는 연산자를 한 스레드로 묶고 키를 다시 나눠야 하는 곳에서만 끊는다."
     }
   ],
   "olap-star-schema": [
@@ -8915,6 +8919,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "프로젝트 참조는 어떤 문제를 풀고, 쓸 때 흔한 실수는 무엇인가요?",
       "answer": "큰 저장소를 여러 tsconfig로 나누고 의존 방향을 적어 두어, 바뀐 프로젝트만 다시 검사하게 하고 잘못된 방향의 import를 막는다. 참조되는 쪽은 composite를 켜고, 참조하는 쪽은 소스가 아니라 빌드된 .d.ts를 읽는다. 그래서 tsc -b 대신 tsc -p로 한 프로젝트만 돌리거나 공용 패키지 빌드를 잊으면 \"Cannot find module\"이나 예전 타입을 보는 문제가 생긴다."
+    },
+    {
+      "question": "Node나 tsx로 .ts를 바로 실행하면 타입 검사는 누가 하나요?",
+      "answer": "아무도 하지 않으니 tsc --noEmit을 따로 돌려야 한다. Node 22.18·23.6 이후의 타입 제거와 tsx, SWC 같은 도구는 파일 하나씩 타입 표기만 지우고 실행해서, number라고 적은 문자열도 그대로 돈다. 그래서 실행은 빠른 도구에 맡기고 검사는 에디터와 CI의 tsc --noEmit이 맡는 식으로 나눈다. Node로 바로 실행할 코드라면 enum처럼 지울 수 없는 문법을 erasableSyntaxOnly로 막고, import에 .ts 확장자를 적는다."
     }
   ],
   "ts-utility-mapped-types": [
@@ -12337,6 +12345,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
       "answer": "인증 세 가지를 갖추고, DMARC는 p=none으로 시작해 보고서로 발송처를 모두 맞춘 뒤 올린다. 새 IP는 적은 양에서 시작해 몇 주에 걸쳐 늘리고, 거래성 메일과 마케팅 메일은 IP나 하위 도메인을 나눈다. 반송과 스팸 신고는 바로 목록에 반영하고, 마케팅 메일에는 한 번에 구독을 끊는 방법을 넣는다."
     },
     {
+      "question": "메일 앱의 993 포트와 STARTTLS, 그리고 S/MIME은 무엇이 다른가요?",
+      "answer": "993(IMAPS), 995(POP3S), 465는 연결하자마자 TLS를 시작하고, 143, 110, 587, 25는 평문으로 연결한 뒤 STARTTLS로 갈아탄다. STARTTLS는 공격자가 STARTTLS 광고를 지우면 평문으로 떨어질 수 있어서, 앱에는 처음부터 TLS인 포트를 권하고 서버끼리의 25번은 MTA-STS나 DANE으로 TLS를 강제한다. 이건 모두 길만 잠그는 것이라 서버에 도착하면 본문은 평문이다. 서버 운영자도 못 읽게 하려면 S/MIME이나 PGP로 본문을 종단 간 암호화해야 하고, 대신 서버 쪽 스팸 검사와 검색을 포기한다."
+    },
+    {
       "question": "발송량이 10배로 늘면 어디가 먼저 막히나요?",
       "answer": "SMTP 작업자 수와 받는 도메인 쪽 한도다. 작업자는 큐 뒤에 있으니 늘리기 쉽지만, 큰 메일 서비스는 한 발신 IP에서 오는 동시 연결과 속도를 제한해서 우리를 4xx로 늦춘다. 그래서 큐 길이를 받는 도메인별로 보고, 도메인별로 동시 연결과 속도를 조절하며, 발신 IP를 여러 개로 나눠 각각 평판을 쌓는다."
     }
@@ -12897,6 +12909,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "React를 잘 쓰려면 자바스크립트의 어느 부분이 특히 중요한가요?",
       "answer": "참조와 얕은 복사, 클로저, 단락 평가, 비동기 취소다. React는 상태를 참조로 비교하니 배열과 객체를 사본으로 바꿔야 다시 그리고, 핸들러와 effect는 그 렌더의 값을 클로저로 잡는다. && 렌더링은 0을 찍을 수 있고, effect의 요청은 정리 함수에서 취소해야 늦은 응답이 화면을 덮지 않는다."
+    },
+    {
+      "question": "새 ECMAScript 기능을 언제부터 제품 코드에 써도 되나요?",
+      "answer": "명세의 판보다 대상 환경의 지원을 기준으로 정한다. TC39 제안은 Stage 3부터 모양이 거의 굳고 엔진이 구현하기 시작하며, Stage 4가 되면 다음 해 판에 들어간다. 하지만 같은 판의 기능도 엔진마다 들어온 시기가 달라서, Node 22에는 ES2025의 Set.prototype.union은 있고 Promise.try는 없다. 그래서 caniuse나 node.green, 배포할 런타임에서 직접 확인하고, 없으면 문법은 트랜스파일로 낮추고 함수는 폴리필로 채운다. 대상 브라우저는 browserslist로 정해 필요 이상으로 낮추지 않는다."
     }
   ],
   "abort-controller": [
@@ -15613,6 +15629,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "서버리스 함수를 멱등하게 만들어야 하는 이유는?",
       "answer": "S3 알림, SQS, EventBridge 같은 트리거 대부분이 같은 사건을 한 번 이상 전달하고, 비동기 재시도와 배치 재전달도 같은 사건을 다시 준다. 함수 인스턴스는 언제든 바뀌니 처리 기록은 메모리가 아니라 DynamoDB 같은 바깥 저장소에 조건부 쓰기로 남겨 중복을 거른다."
+    },
+    {
+      "question": "Lambda를 무중단으로, 조금씩 배포하려면 어떻게 하나요?",
+      "answer": "트리거를 $LATEST가 아니라 별칭에 붙이고, 배포할 때마다 버전을 발행해 별칭이 가리키는 버전을 옮긴다. 별칭의 가중치 라우팅으로 새 버전에 10%만 보내 본 뒤 늘리고, 이 과정을 CodeDeploy의 Canary·Linear 설정과 CloudWatch 경보에 맡기면 이상이 있을 때 자동으로 이전 버전으로 돌아간다. 가중치는 호출마다 나뉘어 한 사용자가 두 버전을 오갈 수 있으니 두 버전이 같이 돌아도 깨지지 않게 만든다."
     }
   ],
   "transactional-outbox": [
@@ -18099,6 +18119,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "Terraform, Pulumi, CloudFormation, Ansible은 어떻게 고르나요?",
       "answer": "먼저 층을 나눈다. 클라우드에 무엇을 만들지는 Terraform·Pulumi·CloudFormation이, 서버 안의 설정은 Ansible 같은 구성 관리 도구가 맡는다. 프로비저닝 중에서는 AWS만 쓰고 state 관리를 피하고 싶으면 CloudFormation·CDK, 여러 클라우드와 SaaS를 한 문법으로 다루려면 Terraform이나 OpenTofu, 일반 언어의 추상화와 테스트가 필요하면 Pulumi를 고른다. 이미 쓰는 도구가 있으면 옮기는 비용을 먼저 따진다."
+    },
+    {
+      "question": "CloudFormation과 CDK를 쓸 때 Terraform과 다르게 조심할 점은요?",
+      "answer": "state와 잠금, 실패 시 롤백은 AWS가 스택 단위로 맡아 주지만 드리프트는 저절로 보이지 않는다. Terraform은 plan마다 실제를 다시 읽는데, CloudFormation은 detect-stack-drift를 따로 돌려야 차이를 알려 주고 되돌려 주지도 않는다. 적용 전에는 변경 세트에서 Replacement가 True인 리소스를 확인한다. CDK는 코드 경로로 논리 ID를 만들기 때문에 construct 이름만 바꿔도 리소스 교체가 되니, 배포 전에 cdk diff로 합성된 변경을 본다."
     }
   ],
   "dependency-hell": [
@@ -18491,6 +18515,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "장애 조치 뒤 주문 번호가 건너뛰는 건 문제인가요?",
       "answer": "데이터 손실은 아니다. PostgreSQL 시퀀스는 WAL 기록을 줄이려고 32개 앞의 값을 미리 기록하고, 승격된 스탠바이는 그 값부터 이어 간다. 실험에서도 42 다음이 67이었다. 다만 번호가 연속이라고 가정하는 정산 검사나 코드는 거짓 경보를 내니, 시퀀스 값은 유일성만 믿는다."
+    },
+    {
+      "question": "Patroni 대신 repmgr나 pgautofailover를 쓰면 무엇이 달라지나요?",
+      "answer": "결정을 누가 하고 펜싱을 누가 하는지가 달라진다. Patroni는 etcd 같은 합의 저장소의 리더 키로 결정하고 키를 잃은 노드가 스스로 내려간다. repmgr는 합의 저장소 없이 노드끼리 판단해서 망 분리는 witness 서버로, 펜싱은 직접 짠 스크립트로 막아야 한다. pgautofailover는 monitor 노드가 결정하고 동기 복제가 기본이라 단순하지만, monitor가 죽으면 자동 장애 조치가 멈춘다."
     }
   ],
   "backup-strategy": [
@@ -19517,6 +19545,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "쿠버네티스에서 HPA만으로 충분하지 않은 이유는요?",
       "answer": "HPA는 Pod 수만 늘리고 노드는 늘리지 않는다. 노드에 자리가 없으면 Pod가 Pending으로 남고, 노드 오토스케일러가 새 노드를 띄울 때까지 기다려야 한다. 그래서 Cluster Autoscaler나 Karpenter를 함께 쓰고, 급한 서비스는 낮은 우선순위의 자리 맡기 Pod로 노드 여유분을 미리 둔다."
+    },
+    {
+      "question": "오토스케일링 정책은 늘리라고 했는데 인스턴스가 늘지 않습니다. 무엇을 보나요?",
+      "answer": "활동 기록(describe-scaling-activities)에서 실패한 활동의 메시지를 먼저 본다. vCPU 한도 초과면 계정의 서비스 할당량에 막힌 것이라 Service Quotas에서 한도를 올려야 하고, InsufficientInstanceCapacity면 그 AZ의 물리 용량 문제라 인스턴스 타입과 AZ를 늘려 섞는다. 한도는 다른 그룹과 함께 쓰는 리전 단위 값이라 미리 계산해 올려 두고, AWS/Usage 지표와 SERVICE_QUOTA()로 사용률 경보를, EC2 Instance Launch Unsuccessful 이벤트로 실패 알림을 걸어 둔다."
     }
   ],
   "backpressure": [
@@ -20165,6 +20197,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
       "answer": "나눠도 같은 칸으로 가니 용량을 넘는 상태가 끝나지 않아 분할이 무한히 반복된다. 깊이 제한이 없으면 재귀가 스택을 넘쳐 죽는다. 그래서 최대 깊이를 두고, 그 깊이의 잎은 용량을 넘어도 담게 한다. 같은 좌표가 흔하면 좌표 하나에 목록을 매다는 편이 낫다."
     },
     {
+      "question": "k-d 트리는 쿼드트리와 무엇이 다른가요?",
+      "answer": "k-d 트리는 한 번에 한 축만, 그 칸 점들의 중앙값에서 잘라 축을 번갈아 쓰는 이진 트리라서 균형이 맞고 차원 수에 상관없이 만들 수 있다. 쿼드트리는 공간 한가운데에서 모든 축을 동시에 잘라 2ᵈ개로 나누고, 균형은 데이터에 달려 있다. 최근접 검색은 둘 다 경계까지의 거리가 지금 답보다 먼 칸을 버리는 식이다. k-d 트리는 넣고 빼면 균형이 틀어져 정적인 데이터에 맞고, 차원이 십수 개를 넘으면 가지치기가 거의 듣지 않아 근사 탐색으로 넘어간다."
+    },
+    {
       "question": "R-tree와는 무엇이 다른가요?",
       "answer": "쿼드트리는 공간을 정해진 위치에서 겹치지 않게 나누고 균형을 맞추지 않는다. R-tree는 데이터를 묶어 그 최소 사각형을 노드로 삼고, 사각형끼리 겹칠 수 있으며 모든 잎의 깊이가 같다. R-tree는 크기가 있는 도형을 담기 쉽고 디스크 페이지 단위 구성에 잘 맞아서 DB 공간 인덱스로 많이 쓰인다. PostgreSQL에서는 GiST가 R-tree 방식, SP-GiST의 quadpointops가 쿼드트리다."
     },
@@ -20561,6 +20597,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "옵서버 패턴에서 메모리 누수는 왜 생기나요?",
       "answer": "주체가 관찰자 목록으로 관찰자를 강하게 참조하기 때문이다. 관찰자가 더 이상 쓰이지 않아도 구독을 끊지 않으면 GC가 치우지 못하고, 요청이나 화면 전환마다 구독이 쌓인다. Node.js의 MaxListenersExceededWarning은 같은 이벤트에 리스너가 10개를 넘을 때 이 가능성을 알려 준다. 구독할 때 받은 해제 함수나 AbortSignal로 짝을 맞춰 끊는다."
+    },
+    {
+      "question": "EventEmitter의 이벤트를 await로 받을 수 있나요?",
+      "answer": "node:events의 once는 다음 한 번을 Promise로 바꾸고, 기다리는 사이에 'error'가 오면 거부되어 try...catch로 잡힌다. 계속 받으려면 on이 돌려주는 비동기 이터레이터를 for await로 돈다. on은 처리하는 동안 온 이벤트를 한도 없는 큐에 쌓으니 처리 속도가 느리면 메모리가 는다. 루프를 끝내야 리스너가 떨어지므로 AbortSignal로 끝낼 시점을 정해 둔다."
     },
     {
       "question": "알림 도중에 관찰자가 구독을 끊으면 어떤 문제가 생기나요?",
@@ -20993,6 +21033,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "HLL을 쓰면 안 되는 경우는?",
       "answer": "정확해야 하는 숫자, 예를 들어 과금 인원이나 정산에는 쓰지 않는다. 누가 들어 있는지 목록이 필요하거나 원소를 지워야 할 때, 교집합이 주요 지표일 때도 맞지 않다. 원소가 수만 개 이하라면 정확한 Set으로도 충분히 작다. 외부 입력을 세는데 숫자가 중요한 결정에 쓰인다면 공격자가 해시를 골라 숫자를 부풀릴 수 있으니 키를 섞은 해시를 쓴다."
+    },
+    {
+      "question": "Redis 비트맵으로 DAU를 셀 때 주의할 점은?",
+      "answer": "사용자 ID를 오프셋으로 쓰는 비트맵은 정확하고 BITOP AND로 교집합도 정확하게 나온다. 대신 문자열이 가장 큰 오프셋까지 한 번에 늘어나서, ID가 8억에서 시작하면 한 명만 찍어도 100MB가 잡히고 그 SETBIT이 수십 ms 동안 다른 명령을 막는다. ID에서 기준값을 빼거나 키를 ID 구간별로 나누고, ID가 듬성듬성하면 HLL이나 Roaring Bitmap을 고른다."
     }
   ],
   "bloom-filter": [
@@ -21207,6 +21251,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "이미 콘솔로 만든 리소스를 Terraform으로 관리하려면 어떻게 하나요?",
       "answer": "코드에 import 블록을 적고 plan으로 1 to import가 나오는지 본 뒤 apply한다. 1.5부터는 -generate-config-out으로 리소스 코드 초안을 받을 수 있다. 가져온 뒤 첫 plan이 No changes가 될 때까지 코드를 실제에 맞추는 것이 마무리다. terraform import 명령도 있지만 리뷰를 거치지 않고 state를 바로 바꾼다."
+    },
+    {
+      "question": "sensitive = true로 표시하면 비밀이 안전한가요?",
+      "answer": "아니다. sensitive는 plan·apply 화면과 terraform output 목록에서 값을 가려 줄 뿐이고, state와 저장한 plan 파일에는 평문으로 남는다. terraform output -raw로 물으면 그대로 나온다. state에 남기지 않으려면 1.10부터 생긴 ephemeral 값과 1.11의 write-only 인자(passwordwo 같은)를 쓰거나, RDS의 managemasteruserpassword처럼 비밀을 Terraform이 아예 만지지 않게 한다. 그래도 남는 것이 있으니 state 버킷은 KMS 암호화와 좁은 접근 권한으로 비밀 저장소처럼 잠근다."
     }
   ],
   "linux-grep-awk-sed": [
@@ -21237,6 +21285,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "Ubuntu에서 awk 스크립트가 다른 서버에서는 안 도는 경우가 있습니다. 이유는요?",
       "answer": "Ubuntu의 기본 awk는 mawk이고 gawk를 설치하면 awk가 gawk로 바뀐다. asort 같은 gawk 전용 함수는 mawk에서 \"function asort never defined\"로 멈춘다. 공유할 스크립트는 POSIX awk 기능만 쓰거나, gawk를 명시하고 설치 목록에 넣는다."
+    },
+    {
+      "question": "cut과 awk는 칸을 나누는 방식이 어떻게 다른가요?",
+      "answer": "cut은 구분자 한 글자를 기준으로 자르고 연속된 구분자를 빈 칸으로 센다. 그래서 공백이 두 칸씩 들어간 줄에서 cut -d' ' -f9는 자리가 밀린다. awk는 기본으로 연속 공백을 한 덩어리로 보고 칸을 나누니 이 문제가 없다. cut을 쓰려면 앞에 tr -s ' '로 공백을 하나로 눌러 주거나, 애초에 awk로 나눈다. 대신 단순한 고정 구분자 파일(CSV, /etc/passwd의 :)은 cut이 가볍고 빠르다."
     }
   ],
   "linux-systemd-systemctl": [
@@ -21647,6 +21699,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "사가 단계가 타임아웃으로 끝났다면 보상해야 하나요?",
       "answer": "보상 목록에 넣어야 한다. 타임아웃은 실패가 아니라 결과를 모른다는 뜻이라 상대 쪽에서는 처리됐을 수 있다. 그래서 보상은 원래 요청이 도착하지 않았거나 나중에 도착하는 경우까지 견뎌야 하고, 보상이 먼저 처리된 사가 ID의 원래 요청은 거절하게 만든다. 보상을 앞 단계의 응답 값에 기대지 않고 사가 ID만으로 찾을 수 있게 짜는 이유도 이것이다."
+    },
+    {
+      "question": "멈춘 사가는 누가 다시 움직이나요?",
+      "answer": "상태 저장소를 주기적으로 훑는 감독자가 맡는다. 스케줄러-에이전트-수퍼바이저 패턴에서 스케줄러는 단계를 시키며 기록하고, 에이전트는 단계를 실행하고, 수퍼바이저는 시한이 지난 사가를 찾아 재시도시키거나 보상으로 돌린다. 수퍼바이저를 여러 대 띄우면 사가마다 임대를 걸어 한 대만 잡게 하고, 임대가 만료돼 두 번 실행되는 경우는 단계의 멱등성으로 견딘다."
     }
   ],
   "distributed-transactions-2pc": [
@@ -22481,6 +22537,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "max_connections는 어떻게 계산하나?",
       "answer": "가장 많아지는 순간의 연결을 다 더한다. 서비스별 최대 파드 수 × 풀 최대치, 롤링 배포 때 더 뜨는 파드, 배치·마이그레이션·모니터링, 슈퍼유저 예약분이다. 읽기 복제본은 따로 세고, 핫 스탠바이는 maxconnections가 프라이머리보다 작으면 제대로 동작하지 못하니 같거나 크게 맞춘다. 합이 DB가 감당할 수준을 넘으면 maxconnections를 올리기보다 풀러를 둔다."
+    },
+    {
+      "question": "PgBouncer 대신 Pgpool-II나 RDS Proxy를 고르는 건 언제인가?",
+      "answer": "연결 상한만 필요하면 PgBouncer가 가장 단순하다. 읽기 쿼리를 복제본으로 자동으로 보내고 싶으면 Pgpool-II나 PgCat 같은 라우팅 풀러를 보고, 풀러 하나가 코어 하나로 모자라면 멀티스레드인 PgCat, Odyssey를 본다. AWS에서 서버리스가 많으면 운영을 맡길 수 있는 RDS Proxy가 편하지만, 세션 상태를 쓰면 연결이 고정(pinning)돼 다중화가 사라진다는 점을 확인하고 쓴다."
     }
   ],
   "circuit-breaker": [
@@ -23273,6 +23333,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "S3로 가는 대용량 트래픽 때문에 NAT 비용이 많이 나옵니다. 어떻게 줄이나요?",
       "answer": "S3 게이트웨이 엔드포인트를 만들어 라우트 테이블에 연결한다. S3 대역 묶음 경로가 기본 경로보다 구체적이라 S3 트래픽이 NAT를 건너뛰고, 게이트웨이 엔드포인트 자체는 요금이 없다. 같은 리전의 S3에만 쓸 수 있고, 다른 서비스는 요금이 있는 인터페이스 엔드포인트를 쓴다."
+    },
+    {
+      "question": "온프레미스의 DMZ는 AWS VPC에서 어떻게 구성하나요?",
+      "answer": "퍼블릭 서브넷이 DMZ 자리지만, 거기에는 ALB와 NAT 게이트웨이만 두고 서버는 프라이빗 서브넷에 둔다. 바깥 방화벽의 역할은 IGW 경로를 가진 라우트 테이블과 ALB 보안 그룹이 나눠 갖고, 안쪽 구역 나누기는 서로를 참조하는 보안 그룹과 NACL, 격리 서브넷이 맡는다. 프라이빗 서브넷이라고 VPC 대역 전체를 열어 두면 한 대가 뚫렸을 때 전부 닿으니, 역할 단위로 좁게 연다. 패킷 검사가 필요하면 검사 장비 서브넷으로 경로를 일부러 돌린다."
     }
   ],
   "vpc-basics": [
@@ -24269,6 +24333,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "git log -S와 -G는 어떻게 다른가요?",
       "answer": "-S문자열은 그 문자열이 나오는 횟수가 바뀐 커밋, 즉 처음 생기거나 사라진 커밋만 찾는다. 함수가 언제 생겼는지, 설정값을 누가 지웠는지 찾을 때 빠르다. -G정규식은 diff에서 바뀐 줄이 정규식에 맞으면 다 찾아서, 줄 안에서 값만 바뀐 경우까지 잡는다."
+    },
+    {
+      "question": "git diff A..B와 A...B는 어떻게 다른가요?",
+      "answer": "A..B는 두 끝 스냅샷을 그대로 비교하고, A...B는 두 브랜치의 merge base와 B를 비교한다. 그래서 A가 그 사이에 따로 바꾼 내용이 ..에서는 B가 되돌린 것처럼 보이고, ...에서는 B가 실제로 한 변경만 남는다. PR의 Files changed가 ... 쪽이다. git log에서는 A..B가 B에만 있는 커밋, A...B가 한쪽에만 있는 커밋이라 뜻이 엇갈린다."
     }
   ],
   "packet-capture-tcpdump": [
@@ -24321,6 +24389,14 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "HTTPS에서 특정 클라이언트만 인증서 오류가 납니다. 무엇을 보나요?",
       "answer": "openssl s_client -servername으로 그 클라이언트가 보내는 이름 그대로 붙어서 서버가 어떤 인증서를 주는지 본다. 서버가 여러 인증서를 SNI로 골라 주는데 클라이언트가 SNI를 안 보내거나 다른 이름을 보내면 기본 인증서가 가서 이름 불일치가 난다. 오래된 클라이언트라면 중간 인증서가 빠진 체인을 스스로 채우지 못하는 경우도 있다. 클라이언트의 시계가 틀려서 아직 유효하지 않거나 만료된 것으로 보이는 경우도 확인한다."
+    },
+    {
+      "question": "nmap에서 closed와 filtered는 어떻게 다른가요?",
+      "answer": "closed는 SYN에 RST가 돌아온 것이라 서버까지는 닿았고 그 포트에서 듣는 프로그램이 없다는 뜻이다. filtered는 답이 없거나 ICMP 거부가 온 것이라 중간의 방화벽, 보안 그룹, 서버의 iptables 같은 필터가 막고 있다는 뜻이다. 그래서 closed면 서버에서 ss -ltnp로 프로세스를 보고, filtered면 경로의 필터를 본다. --reason을 붙이면 무응답인지 ICMP인지까지 나와서 DROP과 REJECT를 구분할 수 있다."
+    },
+    {
+      "question": "\"서버가 느리다\"는 신고에 speedtest와 iperf3 중 무엇을 쓰나요?",
+      "answer": "speedtest는 내 회선에서 가까운 측정 서버까지를 재니 회선 자체가 계약만큼 나오는지 볼 때 쓰고, 내 서버까지의 길은 iperf3로 두 지점 사이를 직접 잰다. 방향마다 길이 다를 수 있어 -R로 반대 방향도 재고, UDP 모드로 손실과 지터를 본다. 한 줄기만 느리고 -P로 줄기를 늘렸을 때 합이 오르면 대역폭보다 지연과 윈도가 한계다."
     }
   ],
   "osi-in-practice": [
@@ -24823,6 +24899,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "/31과 /32는 언제 쓰나요?",
       "answer": "/32는 주소 하나를 가리켜서 방화벽이나 보안 그룹에서 특정 IP 하나만 허용할 때 쓴다. /31은 RFC 3021에 따라 망 주소와 브로드캐스트 없이 두 주소를 모두 쓰는 대역으로, 라우터 두 대를 잇는 점대점 링크에서 주소를 아끼려고 쓴다. 예전에는 같은 용도로 /30을 써서 네 개 중 두 개만 썼다."
+    },
+    {
+      "question": "VLSM으로 나눌 때와 경로를 요약할 때 무엇을 조심하나요?",
+      "answer": "VLSM은 망마다 필요한 크기만큼 마스크를 다르게 주는 것이고, 큰 망부터 배치해야 연속 공간이 깨지지 않는다. 호스트 수에 2를 더한 값 이상의 2의 거듭제곱으로 크기를 정하고, 늘어날 망은 한 단계 크게 잡는다. 경로 요약은 반대로 연속한 대역을 짧은 프리픽스로 묶는데, 개수와 경계가 맞지 않으면 갖지 않은 대역까지 알리게 된다. 요약 안의 작은 망이 죽어도 바깥은 모르고 계속 보낸다는 점도 감수해야 한다."
     },
     {
       "question": "IPv6는 IPv4와 주소 면에서 무엇이 다른가요?",
@@ -25517,6 +25597,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "병합 커밋의 첫 번째 부모와 두 번째 부모는 어떻게 다른가요?",
       "answer": "첫 번째 부모는 병합을 실행할 때 서 있던 브랜치의 이전 끝이고, 두 번째 부모는 합쳐 들어온 브랜치의 끝이다. git log --first-parent는 첫 번째 부모만 따라가서 main에 들어온 기능 단위 히스토리를 보여 준다. 병합을 되돌리는 git revert -m 1의 1도 첫 번째 부모를 기준으로 삼아 그쪽으로 되돌리겠다는 뜻이다."
+    },
+    {
+      "question": "git merge -s ours와 -X ours는 어떻게 다른가요?",
+      "answer": "-s ours는 병합 전략을 ours로 바꿔서 저쪽 브랜치의 내용을 전혀 반영하지 않고, 트리는 그대로 둔 채 부모가 둘인 병합 커밋만 만든다. -X ours는 기본 ort 전략에 주는 옵션이라 충돌 없는 변경은 다 받고, 충돌한 덩어리만 우리 쪽으로 고른다. -X는 줄이 아니라 덩어리 단위라서 붙어 있는 줄의 한쪽 변경이 같이 버려질 수 있다. -X theirs는 있지만 -s theirs는 없다."
     }
   ],
   "git-rebase": [
@@ -25691,8 +25775,8 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
       "answer": "blame은 지금 있는 줄만 다루니 git log -S \"문자열\"을 쓴다. 그 문자열의 등장 횟수가 바뀐 커밋, 즉 생기거나 사라진 커밋을 찾아 준다. 같은 줄 안의 수정까지 찾으려면 정규식으로 diff를 거르는 -G를 쓰고, 함수 하나의 변천은 git log -L :함수명:파일로 본다."
     },
     {
-      "question": "Git 훅으로 커밋 규칙을 강제하면 충분한가요?",
-      "answer": "충분하지 않다. 로컬 훅은 .git/hooks에 있어서 저장소에 커밋되지 않고, --no-verify로 언제든 건너뛸 수 있다. 팀 공유는 core.hooksPath나 husky, lefthook으로 하되, 반드시 지켜야 할 규칙은 CI와 서버 쪽(브랜치 보호 규칙, pre-receive 훅)에서 한 번 더 검사한다. 로컬 훅은 빨리 알려 주는 편의 장치로 본다."
+      "question": "git format-patch와 git am, git apply는 어떻게 다른가요?",
+      "answer": "format-patch는 커밋마다 작성자, 날짜, 메시지, diff를 담은 메일 형식의 패치 파일을 만든다. git am은 그 파일을 읽어 작성자와 메시지까지 살린 커밋으로 다시 만들고, git apply는 diff만 작업 트리에 적용할 뿐 커밋하지 않는다. 받기 전에 git apply --check로 적용되는지 먼저 보고, am이 실패하면 -3으로 3-way 병합을 시도하거나 --abort로 되돌린다."
     },
     {
       "question": "서브모듈과 subtree는 어떻게 다른가요?",
@@ -25925,6 +26009,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "LTRIM의 두 번째 인자는 어떻게 동작하나요?",
       "answer": "문자열이 아니라 문자 집합으로 읽힌다. LTRIM('xyxSMITH', 'xy')는 왼쪽에서 x나 y를 만나는 동안 계속 지워서 SMITH가 된다. 가운데 문자는 건드리지 않고, TRIM('0' FROM '0012300')처럼 양쪽을 지우면 숫자 끝의 0까지 사라져 123이 되니 숫자 문자열을 다룰 때 조심한다."
+    },
+    {
+      "question": "SQL Server의 DATEADD와 DATEPART는 PostgreSQL에서 무엇으로 쓰나요?",
+      "answer": "더하기는 interval, 꺼내기는 extract, 자르기는 date_trunc로 쓴다. DATEADD(month, 3, d)는 d + interval '3 months'인데, date에 interval을 더하면 timestamp가 되니 날짜가 필요하면 ::date로 돌린다. 요일은 extract(dow ...)가 일요일 0이라 SQL Server의 DATEPART(weekday, ...)와 번호가 다르다. 옮길 때는 같은 날짜 몇 개로 두 쪽 결과를 비교해 본다."
     }
   ],
   "sqld-group-by-having": [
@@ -26141,6 +26229,10 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     {
       "question": "실행 계획에 Batches가 1보다 크거나 external merge가 보이면 무슨 뜻인가요?",
       "answer": "해시나 정렬에 쓸 메모리가 모자라 임시 파일을 썼다는 뜻이다. Hash Join의 해시 테이블은 workmem에 hashmemmultiplier를 곱한 한도 안에 들어가야 Batches: 1이고, 넘으면 2, 4, 8로 나눠 디스크에 썼다 다시 읽는다. 정렬은 Sort Method: external merge  Disk: ...로 나온다. 그 쿼리를 도는 세션에서만 workmem을 올려 보고, 서버 전체 값은 연결 수 × 노드 수만큼 곱해질 수 있어 크게 올리지 않는다."
+    },
+    {
+      "question": "계획이 너무 길어서 읽기 어려우면 어떻게 하나요?",
+      "answer": "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)으로 뽑아 PEV2(explain.dalibo.com)나 explain.depesz.com에 넣는다. 두 도구는 노드마다 자기 몫의 시간을 계산하고 오래 걸린 노드와 예상이 틀린 노드를 표시해 줘서, 손으로 누적 시간을 빼지 않아도 된다. 다만 계획에는 테이블 이름과 조건 값이 그대로 들어가니, 회사 데이터라면 이름 가리기 옵션을 쓰거나 PEV2를 내려받아 로컬에서 연다."
     }
   ],
   "nginx-basics": [
@@ -26540,7 +26632,7 @@ export const INTERVIEW_QUESTIONS: Record<string, InterviewQuestion[]> = {
     },
     {
       "question": "Big O, Big Θ, Big Ω는 어떻게 다른가요?",
-      "answer": "O는 상한, Ω는 하한, Θ는 상한과 하한이 같은 딱 맞는 증가율이다. 선형 탐색을 O(n²)이라고 해도 틀리진 않지만 의미가 없어서, 실무에서 말하는 O는 대개 Θ처럼 딱 맞는 상한을 뜻한다. 비교 기반 정렬이 Ω(n log n)이라는 건 어떤 비교 정렬도 최악의 경우 이보다 빠를 수 없다는 하한이다. 최선·최악 경우와는 다른 축이라 \"최악의 경우 Θ(n²)\"처럼 함께 쓸 수 있다."
+      "answer": "O는 상한, Ω는 하한, Θ는 상한과 하한이 같은 딱 맞는 증가율이다. 선형 탐색을 O(n²)이라고 해도 틀리진 않지만 의미가 없어서, 실무에서 말하는 O는 대개 Θ처럼 딱 맞는 상한을 뜻한다. 비교 기반 정렬이 Ω(n log n)이라는 건 어떤 비교 정렬도 최악의 경우 이보다 빠를 수 없다는 하한이다. 최선·최악 경우와는 다른 축이라 \"최악의 경우 Θ(n²)\"처럼 함께 쓸 수 있다. 소문자 o와 ω는 같음을 뺀 엄격한 상한과 하한이라, n = o(n²)이지만 2n은 o(n)이 아니다."
     }
   ],
   "docker-network-volume": [

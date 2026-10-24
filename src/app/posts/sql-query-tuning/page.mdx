@@ -221,6 +221,39 @@ WHERE o.id > 990000                        -- 최근 주문 1만 건
 
 예상이 틀리는 흔한 원인은 이렇다. 통계가 낡았거나(대량 변경 직후, `ANALYZE`로 해결), 위처럼 컬럼끼리 관련이 있거나, 컬럼에 함수를 씌워 통계를 못 쓰거나(`lower(email)`의 기본 추정 0.5%), 값을 바인딩 파라미터로 넘겨 플래너가 값을 모르는 일반 계획을 쓰는 경우다. `city`와 `zip_code`처럼 같다로 비교하는 컬럼끼리 관련이 있다면 `CREATE STATISTICS ... (dependencies) ON city, zip_code FROM ...`로 그 관계를 알려 줄 수 있다.
 
+## 긴 계획은 그림으로 펴서 본다
+
+위 계획은 13줄이라 눈으로 읽을 만하다. 조인이 다섯 개 넘고 서브쿼리와 CTE가 섞이면 계획이 100줄을 넘고, 들여쓰기만으로는 어느 노드가 시간을 먹었는지 찾기 어렵다. 이럴 때 쓰는 웹 도구가 셋 있다.
+
+explain.depesz.com은 텍스트 계획을 붙여 넣으면 노드마다 자기 몫의 시간(exclusive)을 계산해 표로 보여 주고, 오래 걸린 노드와 예상이 크게 틀린 노드를 색으로 칠한다. 위에서 "바깥과 안쪽의 차이"를 손으로 빼던 일을 대신 해 준다. PEV2는 dalibo가 만든 계획 시각화 도구로, 노드를 나무 그림으로 그리고 시간·행 수·버퍼 중 무엇을 기준으로 볼지 고를 수 있다. explain.dalibo.com이 PEV2를 웹에서 바로 쓰게 해 둔 곳이다. 텍스트와 JSON을 다 받지만 JSON을 넣으면 필드가 정확히 나뉘어 들어간다.
+
+JSON 계획은 `FORMAT JSON`을 붙여 뽑는다. psql의 표 테두리와 머리글이 섞이면 붙여 넣을 때 깨지니, 정렬 없이(`-A`) 값만(`-t`) 파일로 받는다.
+
+```bash
+# q.sql 안: EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT ...;
+psql -XqAt -d shop -f q.sql -o plan.json   # 표 테두리 없이 JSON만 파일로
+head -12 plan.json
+```
+
+```text
+[
+  {
+    "Plan": {
+      "Node Type": "Nested Loop",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Join Type": "Inner",
+      "Startup Cost": 0.72,
+      "Total Cost": 91.70,
+      "Plan Rows": 10,
+      "Plan Width": 22,
+      "Actual Startup Time": 0.018,
+```
+
+조인 하나짜리 쿼리인데도 107줄이 나왔다. 사람이 읽을 포맷은 아니고, 도구에 넣으라고 있는 포맷이다. 텍스트 계획을 붙여 넣을 때는 psql 출력의 `QUERY PLAN` 머리글과 `(13 rows)`까지 통째로 넣어도 대부분 알아서 걷어 낸다.
+
+조심할 점이 하나 있다. 계획에는 테이블·컬럼 이름과 `WHERE`에 넣은 실제 값(이메일, 주문 번호)이 그대로 들어 있고, 두 사이트 모두 붙여 넣은 계획을 서버에 저장해 링크로 공유하게 만든다. 회사 DB의 계획이라면 depesz의 이름 가리기(obfuscate) 옵션을 켜거나, PEV2를 받아 브라우저 안에서만 돌리는 쪽이 낫다. PEV2는 HTML 파일 하나로 내려받아 인터넷 없이 열 수 있다.
+
 ## 조인을 처리하는 세 가지 방법
 
 위에서 Nested Loop와 Hash Join이 나왔다. PostgreSQL이 두 테이블을 조인하는 방법은 세 가지이고, 플래너는 양쪽 행 수와 인덱스, 정렬 상태를 보고 고른다.
@@ -369,3 +402,7 @@ Nested Loop는 바깥 행 하나마다 안쪽을 찾는 방식이라, 바깥이 
 ### 실행 계획에 Batches가 1보다 크거나 external merge가 보이면 무슨 뜻인가요?
 
 해시나 정렬에 쓸 메모리가 모자라 임시 파일을 썼다는 뜻이다. Hash Join의 해시 테이블은 `work_mem`에 `hash_mem_multiplier`를 곱한 한도 안에 들어가야 `Batches: 1`이고, 넘으면 2, 4, 8로 나눠 디스크에 썼다 다시 읽는다. 정렬은 `Sort Method: external merge  Disk: ...`로 나온다. 그 쿼리를 도는 세션에서만 `work_mem`을 올려 보고, 서버 전체 값은 연결 수 × 노드 수만큼 곱해질 수 있어 크게 올리지 않는다.
+
+### 계획이 너무 길어서 읽기 어려우면 어떻게 하나요?
+
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`으로 뽑아 PEV2(explain.dalibo.com)나 explain.depesz.com에 넣는다. 두 도구는 노드마다 자기 몫의 시간을 계산하고 오래 걸린 노드와 예상이 틀린 노드를 표시해 줘서, 손으로 누적 시간을 빼지 않아도 된다. 다만 계획에는 테이블 이름과 조건 값이 그대로 들어가니, 회사 데이터라면 이름 가리기 옵션을 쓰거나 PEV2를 내려받아 로컬에서 연다.

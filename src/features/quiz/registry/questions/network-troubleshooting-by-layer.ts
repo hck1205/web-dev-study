@@ -91,4 +91,19 @@ export const NETWORK_TROUBLESHOOTING_BY_LAYER: QuizQuestion[] = [
       "서버가 여러 인증서를 들고 있으면 ClientHello의 SNI를 보고 고른다. IP로만 붙어서 SNI를 보내지 않으면 기본 인증서가 온다. -CAfile은 검증에 쓸 CA를 정할 뿐 어떤 인증서가 오는지는 바꾸지 않는다.",
     anchor: "tls가-맺어지는지",
   },
+  {
+    id: "network-troubleshooting-by-layer-7",
+    post: "network-troubleshooting-by-layer",
+    question: "nmap 결과에서 8443/tcp가 filtered이고 이유가 no-response로 나왔다. 가장 먼저 의심할 곳은?",
+    choices: [
+      "서버에서 8443을 듣는 프로세스가 떠 있지 않다",
+      "TLS 인증서가 만료되었다",
+      "DNS가 엉뚱한 주소를 돌려주고 있다",
+      "서버 앞이나 서버 안의 필터(보안 그룹, iptables DROP)가 SYN을 버리고 있다",
+    ],
+    answer: 3,
+    explanation:
+      "듣는 프로세스가 없으면 서버가 RST를 돌려줘서 closed로 나온다. filtered에 no-response는 SYN에 아무 답이 없었다는 뜻이라 중간이나 서버의 필터가 패킷을 버린 것이다. TLS는 TCP 연결이 맺어진 뒤의 일이라 포트 상태와 관계없다.",
+    anchor: "포트가-열려-있는지",
+  },
 ];

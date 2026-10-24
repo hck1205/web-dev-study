@@ -516,6 +516,72 @@ SELECT COUNT(*) FROM t WHERE created >= DATE '2026-10-17' AND created < DATE '20
 
 PostgreSQL에서는 `TRUNC(created)` 자리에 `date_trunc('day', created)`를 써서 같은 값(1, 2, 2)이 나왔다. 두 번째와 세 번째는 결과가 같지만, 컬럼에 인덱스가 있으면 세 번째가 낫다. 컬럼에 함수를 씌우면 인덱스를 못 쓰기 때문이다. 실행 계획으로 확인하는 과정은 [형 변환 글](/posts/sqld-type-conversion)에서 본다.
 
+## SQL Server 함수를 PostgreSQL에서 찾기
+
+시험 문제는 Oracle과 SQL Server 사이를 오가지만, 실제로 손에 잡히는 DB가 PostgreSQL이면 이름부터 다르다. 자주 찾는 것만 짝지어 두면 이렇다.
+
+| SQL Server | PostgreSQL 16 | 다른 점 |
+|---|---|---|
+| `DATEADD(month, 3, d)` | `d + interval '3 months'` | `date + interval`의 결과는 `timestamp`다 |
+| `DATEADD(day, 7, d)` | `d + 7` | `date + 정수`는 `date` 그대로 |
+| `DATEPART(year, d)`, `YEAR(d)` | `extract(year FROM d)` | 결과가 `numeric`이다 |
+| `DATEPART(weekday, d)` | `extract(dow FROM d)` | `dow`는 일요일 0, `isodow`는 월요일 1. SQL Server는 `DATEFIRST` 설정을 따른다 |
+| `DATETRUNC(month, d)` (2022부터) | `date_trunc('month', d)` | `date`를 넣으면 `timestamptz`가 나온다 |
+| `CAST(ts AS date)`, `CAST(ts AS time)` | `ts::date`, `ts::time` | 같다 |
+| `LEN(s)` | `length(s)`, `char_length(s)` | 글자 수. 바이트는 `octet_length` |
+| `DATALENGTH(s)` | `octet_length(s)` | 바이트 수 |
+| `SUBSTRING(s, 2, 3)` | `substring(s FROM 2 FOR 3)`, `substr(s, 2, 3)` | PostgreSQL은 길이를 빼도 된다 |
+| `CEILING(n)`, `n % m` | `ceil(n)`, `mod(n, m)` 또는 `n % m` | 이름만 다르다 |
+
+사원 데이터에 날짜 쪽을 돌려 보면 결과 타입이 섞여 나오는 게 보인다.
+
+```sql
+SELECT ename, hiredate,
+       date_trunc('month', hiredate)::date AS month_start,  -- 그달 1일
+       extract(year FROM hiredate)         AS y,
+       extract(dow FROM hiredate)          AS dow,          -- 0 = 일요일
+       hiredate + interval '3 months'      AS plus3m,       -- timestamp가 된다
+       hiredate + 7                        AS plus7         -- date 그대로
+FROM emp WHERE deptno = 10 ORDER BY empno;
+```
+
+```text
+ ename  |  hiredate  | month_start |  y   | dow |       plus3m        |   plus7
+--------+------------+-------------+------+-----+---------------------+------------
+ CLARK  | 1981-06-09 | 1981-06-01  | 1981 |   2 | 1981-09-09 00:00:00 | 1981-06-16
+ KING   | 1981-11-17 | 1981-11-01  | 1981 |   2 | 1982-02-17 00:00:00 | 1981-11-24
+ MILLER | 1982-01-23 | 1982-01-01  | 1982 |   6 | 1982-04-23 00:00:00 | 1982-01-30
+(3 rows)
+```
+
+`plus3m`에는 시각이 붙었고 `plus7`에는 없다. `date_trunc`도 `date`를 받으면 세션 시간대가 붙은 `timestamptz`를 돌려주니, 날짜만 원하면 `::date`로 다시 바꾼다. 날짜와 시각을 합친 `timestamp`에서 날짜만, 시각만 떼어 낼 때도 `::date`, `::time`이면 된다.
+
+숫자 함수는 이름이 같아도 음수와 타입에서 갈린다. 앞에서 본 규칙을 PostgreSQL 값으로 한 줄에 모았다.
+
+```sql
+SELECT round(-2.5) AS rn, round(-2.5::float8) AS rf, ceil(-0.5) AS c, floor(-0.5) AS f,
+       mod(-7, 3) AS m, -7 % 3 AS pct, abs(-7.25) AS a, round(7.25, 1) AS r1, trunc(-7.99) AS t;
+
+SELECT length('데이터') AS len, octet_length('데이터') AS bytes,
+       length('ab  '::char(4)) AS ch_len, length('ab  '::varchar) AS vc_len;
+```
+
+```text
+ rn | rf | c | f  | m  | pct |  a   | r1  | t
+----+----+---+----+----+-----+------+-----+----
+ -3 | -2 | 0 | -1 | -1 |  -1 | 7.25 | 7.3 | -7
+(1 row)
+
+ len | bytes | ch_len | vc_len
+-----+-------+--------+--------
+   3 |     9 |      2 |      4
+(1 row)
+```
+
+`numeric`의 `round(-2.5)`는 0에서 먼 -3, `float8`은 짝수인 -2다. `mod`와 `%`는 같고 부호는 첫 인자를 따른다. UTF-8에서 한글은 한 글자가 3바이트라 `length`는 3, `octet_length`는 9다. `varchar(10)`이 "10바이트"가 아니라 "10글자"라는 것도 여기서 나온다. `char(n)`은 끝 공백을 세지 않는다. SQL Server의 `LEN`이 끝 공백을 빼고 세는 것과 비슷하지만, `varchar`에서는 PostgreSQL이 공백까지 센다.
+
+문자열을 이을 때 PostgreSQL의 `||`는 NULL이 하나라도 끼면 결과가 NULL이고, `concat`은 NULL을 건너뛴다(`'A' || NULL`은 NULL, `concat('A', NULL)`은 `A`). 구분자를 넣으며 이으려면 `concat_ws('-', 'A', NULL, 'C')`가 `A-C`를 돌려준다. Oracle과 반대로 움직이는 부분이라 [NULL 글](/posts/sqld-null-functions)에서 자세히 본다.
+
 ## 현장에서 함수 결과가 조용히 달라지는 순간
 
 함수 문제는 시험에서는 값 하나를 고르는 일이지만, 현장에서는 에러 없이 틀린 값이 쌓이는 일이다. 자주 만나는 경우를 PostgreSQL 16에서 돌려 본다.
@@ -619,3 +685,7 @@ ERROR:  division by zero
 ### LTRIM의 두 번째 인자는 어떻게 동작하나요?
 
 문자열이 아니라 문자 집합으로 읽힌다. `LTRIM('xyxSMITH', 'xy')`는 왼쪽에서 x나 y를 만나는 동안 계속 지워서 `SMITH`가 된다. 가운데 문자는 건드리지 않고, `TRIM('0' FROM '0012300')`처럼 양쪽을 지우면 숫자 끝의 0까지 사라져 `123`이 되니 숫자 문자열을 다룰 때 조심한다.
+
+### SQL Server의 DATEADD와 DATEPART는 PostgreSQL에서 무엇으로 쓰나요?
+
+더하기는 `interval`, 꺼내기는 `extract`, 자르기는 `date_trunc`로 쓴다. `DATEADD(month, 3, d)`는 `d + interval '3 months'`인데, `date`에 `interval`을 더하면 `timestamp`가 되니 날짜가 필요하면 `::date`로 돌린다. 요일은 `extract(dow ...)`가 일요일 0이라 SQL Server의 `DATEPART(weekday, ...)`와 번호가 다르다. 옮길 때는 같은 날짜 몇 개로 두 쪽 결과를 비교해 본다.
