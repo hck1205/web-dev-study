@@ -1,0 +1,514 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-valid-palindrome");
+
+<EasyIntro>
+  앞으로 읽어도 뒤로 읽어도 같은 말을 회문이라고 한다. 토마토나 기러기 같은 낱말이 그렇다. 이 문제는 문장 하나를 주고, 쉼표나 띄어쓰기 같은 기호는 빼고 대문자와 소문자도 같은 글자로 쳤을 때 회문인지 묻는다.
+
+  가장 쉬운 방법은 기호를 다 지운 깨끗한 문장을 새로 하나 쓰고, 그걸 거꾸로 뒤집은 것과 비교하는 것이다. 그런데 이러면 종이를 두 장이나 더 써야 한다. 더 좋은 방법은 양손 검지를 문장 맨 앞과 맨 뒤에 올려놓는 것이다. 두 손가락이 가리키는 글자가 같은지 보고, 같으면 두 손가락을 한 칸씩 가운데로 모은다. 손가락 아래에 기호가 있으면 그 칸은 그냥 건너뛴다. 두 손가락이 만나거나 엇갈릴 때까지 한 번도 다른 글자가 안 나오면 회문이다. 종이를 더 쓰지 않고도 한 번 훑으면 끝난다.
+</EasyIntro>
+
+회원 가입 폼에 "닉네임이 회문이면 배지를 준다"는 이벤트를 붙인다고 해 보자. 처음엔 문자열을 뒤집어 비교하는 한 줄로 끝냈더니 `Taco cat!`이 배지를 못 받았다. 공백과 느낌표 때문이다. 그래서 영문자만 남기게 고쳤더니 이번엔 숫자가 섞인 `0P`가 배지를 받았다. 숫자를 지워 버려서 `p` 한 글자만 남았기 때문이다. 정규식을 `\W`로 바꾸자 이번엔 `ab_a`가 떨어졌다. 회문 검사 자체는 쉬운데, "무엇을 글자로 칠 것인가"를 정하는 부분에서 계속 틀린다.
+
+[LeetCode 125. Valid Palindrome](https://leetcode.com/problems/valid-palindrome/)이 정확히 이 문제다. 투 포인터 패턴의 첫 문제로 자주 꼽히는데, 알고리즘은 쉽고 함정은 경계 조건과 문자 판정에 몰려 있다. 이 글은 가장 단순한 "정리하고 뒤집기"에서 시작해 원본 문자열 위에서 추가 메모리 없이 끝내는 풀이까지 다섯 가지를 차례로 본다. 투 포인터가 무엇인지는 [투 포인터 패턴 글](/posts/two-pointers-pattern)에서 따로 정리했고, 이 문제는 그중 "양 끝에서 가운데로 모이는" 모양이다. 실행 결과는 모두 Node.js 22, Python 3, Java 21에서 돌려 본 값이다.
+
+## 무엇을 같은 글자로 볼 것인가
+
+문제를 내 말로 줄이면 이렇다. 문자열 `s`가 주어진다. 영문자와 숫자만 남기고 나머지(공백, 쉼표, 따옴표, 밑줄 같은 것)는 모두 지운다. 대문자는 소문자로 바꾼다. 그렇게 만든 문자열이 앞뒤로 같으면 `true`, 아니면 `false`를 돌려준다.
+
+손으로 몇 개 해 보자.
+
+```text
+입력                              정리한 결과          회문?
+"Was it a car, or a cat I saw?"   wasitacaroracatisaw  true
+"race a car"                      raceacar             false  (e ≠ a)
+" "                               (빈 문자열)          true
+"0P"                              0p                   false
+"ab_a"                            aba                  true
+```
+
+세 번째 줄이 처음엔 어색하다. 공백 하나뿐인 문자열은 정리하면 빈 문자열이 되고, 빈 문자열은 뒤집어도 빈 문자열이라 회문이다. "비교할 글자가 하나도 없으면 참"이라고 정해 두면 뒤에 나오는 코드들이 모두 이 경우를 따로 처리하지 않아도 된다.
+
+다섯 번째 줄의 밑줄도 기억해 두자. 밑줄은 영문자도 숫자도 아니라서 지워야 한다. 정규식에서 `\w`가 밑줄을 글자로 치기 때문에 여기서 많이 틀린다. 뒤에서 실제로 틀리는 코드와 함께 다시 본다.
+
+제약 조건에서 풀이를 고를 때 영향을 주는 건 두 가지다. 길이가 최대 2 × 10^5이라 O(n²)는 아슬아슬하고 O(n)이면 넉넉하다. 그리고 문자는 출력 가능한 ASCII로 한정돼 있다. 한글이나 이모지는 나오지 않는다는 뜻이라 "영문자와 숫자"를 판정하는 코드를 단순하게 짤 수 있다. 실무 입력은 그렇지 않으니 이것도 뒤에서 따로 짚는다.
+
+## 깨끗하게 만든 뒤 뒤집어 본다
+
+회문의 정의가 "뒤집어도 같다"이니 그대로 코드로 옮기는 게 가장 먼저 떠오른다.
+
+1. 소문자로 바꾼다.
+2. 영문자와 숫자가 아닌 것을 지운다.
+3. 뒤집은 문자열과 비교한다.
+
+```js
+// 풀이 1: 정리한 뒤 뒤집어서 비교
+function isPalindrome(s) {
+  const cleaned = s.toLowerCase().replace(/[^a-z0-9]/g, ""); // 소문자로 바꾼 뒤 a-z, 0-9만 남긴다
+  return cleaned === cleaned.split("").reverse().join("");   // 뒤집은 것과 같은가
+}
+```
+
+순서가 중요하다. 소문자로 먼저 바꿔야 정규식이 `[^a-z0-9]` 하나로 끝난다. 거꾸로 하려면 `[^A-Za-z0-9]`로 지운 뒤 소문자로 바꾸면 된다. 결과는 같다.
+
+시간은 O(n)이다. 소문자 변환, 정규식 치환, 쪼개기, 뒤집기, 합치기, 비교가 각각 문자열을 한 번씩 훑는다. 한 번씩이 여섯 번이라도 n에 비례하니 O(n)이다. 공간도 O(n)이다. `cleaned`, 쪼갠 배열, 뒤집어 합친 문자열이 각각 n 크기까지 새로 생긴다.
+
+Python과 Java로도 거의 그대로 옮겨진다. Python은 리스트 컴프리헨션으로 거르고 슬라이스 `[::-1]`로 뒤집는다.
+
+```python
+def is_palindrome(s: str) -> bool:
+    t = [c.lower() for c in s if c.isalnum()]  # 글자·숫자만 소문자로 모은다
+    return t == t[::-1]                        # 뒤집은 리스트와 비교
+```
+
+Java는 `StringBuilder`에 모은 뒤 `reverse()`를 쓴다. `reverse()`가 빌더 자체를 뒤집기 때문에, 뒤집기 전에 `toString()`으로 한 번 떠 두는 순서가 중요하다.
+
+```java
+public static boolean isPalindrome(String s) {
+    StringBuilder sb = new StringBuilder();
+    for (char c : s.toCharArray()) {
+        if (Character.isLetterOrDigit(c)) sb.append(Character.toLowerCase(c));
+    }
+    String t = sb.toString();                // 뒤집기 전 모습
+    return t.equals(sb.reverse().toString()); // reverse()는 sb를 직접 바꾼다
+}
+```
+
+Java에서 문자열 비교를 `==`로 하면 내용이 아니라 객체가 같은지를 본다. 여기서 `t == sb.reverse().toString()`이라고 쓰면 회문이어도 `false`가 나온다. `equals`를 써야 한다.
+
+이 풀이는 틀리지 않는다. 코딩 테스트에서 시간이 급하면 이걸 내도 통과한다. 다만 면접에서는 바로 "메모리를 덜 쓸 수 있나요?"라는 질문이 따라온다. 뒤집은 사본을 통째로 만들 필요가 정말 있을까.
+
+## 사본은 하나만 두고 양 끝에서 맞춰 본다
+
+뒤집은 문자열과 비교한다는 건, 결국 앞에서 i번째 글자와 뒤에서 i번째 글자를 비교한다는 말이다. 그렇다면 뒤집은 사본을 만들 필요 없이, 인덱스 두 개로 앞과 뒤를 동시에 가리키며 비교하면 된다.
+
+```js
+// 풀이 2: 정리한 문자열 위에서 양 끝 비교
+function isPalindrome(s) {
+  const t = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  let l = 0, r = t.length - 1;      // 앞을 가리키는 l, 뒤를 가리키는 r
+  while (l < r) {                    // 둘이 만나거나 엇갈리면 끝
+    if (t[l] !== t[r]) return false; // 한 쌍이라도 다르면 바로 false
+    l++;
+    r--;
+  }
+  return true;
+}
+```
+
+여기서 처음으로 포인터가 등장한다. 포인터라고 해서 C의 메모리 주소가 아니라, 배열이나 문자열의 "지금 보고 있는 칸 번호"를 담은 변수다. `l`은 왼쪽(left), `r`은 오른쪽(right)이다.
+
+반복 조건이 `l < r`인 이유도 짚고 가자. 길이가 홀수면 마지막에 두 포인터가 가운데 칸에서 만난다(`l === r`). 가운데 글자는 짝이 없으니 비교할 필요가 없다. 길이가 짝수면 두 포인터가 엇갈리며(`l > r`) 끝난다. 둘 다 `l < r`이 거짓이 되는 순간이다.
+
+공간이 조금 줄었다. 뒤집은 사본이 없어졌고, 정리한 문자열 `t` 하나만 남는다. 그래도 O(n)이다. 그리고 하나 더 좋아진 점이 있다. 앞쪽에서 다른 글자를 만나면 그 자리에서 `false`를 돌려주고 끝낸다. 풀이 1은 회문이 아닌 게 첫 글자부터 드러나도 끝까지 뒤집고 나서야 안다.
+
+## 재귀로도 같은 비교를 할 수 있다
+
+"양 끝이 같고, 양 끝을 뗀 안쪽도 회문이면 회문이다"라는 정의는 그대로 재귀가 된다. 재귀가 처음이라면 [재귀와 백트래킹 글](/posts/recursion-backtracking)에서 기본을 먼저 보자.
+
+```js
+// 풀이 3: 재귀
+function isPalindrome(s) {
+  const t = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const check = (l, r) => {
+    if (l >= r) return true;           // 남은 글자가 0개나 1개면 회문
+    if (t[l] !== t[r]) return false;   // 양 끝이 다르면 아니다
+    return check(l + 1, r - 1);        // 안쪽을 다시 묻는다
+  };
+  return check(0, t.length - 1);
+}
+```
+
+코드는 정의를 그대로 읽는 것 같아서 보기 좋다. 하지만 함수 호출 하나가 스택에 한 층씩 쌓이고, 깊이가 n/2까지 간다. 실제로 `"a"`를 20만 개 이어 붙여 넣어 봤다.
+
+```text
+rec error: RangeError Maximum call stack size exceeded
+```
+
+Node.js 22의 기본 스택으로는 10만 층을 버티지 못한다. JavaScript 명세에는 꼬리 호출 최적화(마지막 호출이 재귀면 스택을 쌓지 않는 기능)가 있지만 V8은 구현하지 않았다. Python은 기본 재귀 한도가 1000이라 더 빨리 터진다(`sys.getrecursionlimit()`이 1000을 돌려준다). 시간 O(n), 공간은 호출 스택 때문에 O(n)이다.
+
+이 풀이는 면접에서 "재귀로도 써 보세요"라는 요청을 받았을 때 꺼내고, 바로 이 스택 깊이 문제를 함께 말하면 된다. 실제 제출용으로는 쓰지 않는다.
+
+## 원본 위에서 건너뛰며 비교한다
+
+풀이 2와 3은 여전히 정리한 사본 `t`를 만든다. 사본이 필요한 이유는 "기호를 건너뛰기 위해서"뿐이다. 그렇다면 원본 문자열 위에서 포인터를 움직이다가, 포인터 아래에 기호가 있으면 그 칸을 그냥 지나치면 된다. 대소문자는 비교하는 순간에 한 글자씩만 소문자로 바꾼다.
+
+단계로 쓰면 이렇다.
+
+1. `l = 0`, `r = s.length - 1`에서 시작한다.
+2. `l`이 영문자나 숫자를 가리킬 때까지 `l`을 오른쪽으로 민다.
+3. `r`도 영문자나 숫자를 가리킬 때까지 왼쪽으로 당긴다.
+4. 두 글자를 소문자로 바꿔 비교한다. 다르면 `false`.
+5. 같으면 `l++`, `r--` 하고 2번으로 돌아간다.
+6. `l < r`이 깨지면 `true`.
+
+아래 그림에서 다음을 누르면 `"No, on!"`을 이 순서로 따라간다. ▼가 `l`이고, 색칠된 칸이 `r`이다.
+
+<AlgoTrace
+  caption={"\"No, on!\"을 양 끝에서 좁혀 오며 비교한다 (▼는 l, 색칠한 칸은 r)"}
+  memoryLabel={"포인터"}
+  cells={["N","o",",","␣","o","n","!"]}
+  steps={[
+    {"pointer":0,"found":[6],"memory":["l=0 'N'","r=6 '!'"],"caption":"l은 맨 앞, r은 맨 뒤에서 출발한다."},
+    {"pointer":0,"found":[6],"memory":["l=0 'N'","r=6 '!'"],"caption":"r 자리의 느낌표는 문장 부호다. 비교하지 않고 r을 한 칸 당긴다."},
+    {"pointer":0,"found":[5],"memory":["l=0 'N'","r=5 'n'"],"caption":"N과 n을 소문자로 바꾸면 둘 다 n이다. 같으니 양쪽을 한 칸씩 좁힌다."},
+    {"pointer":1,"found":[4],"memory":["l=1 'o'","r=4 'o'"],"caption":"o와 o, 같다. 다시 한 칸씩 좁힌다."},
+    {"pointer":2,"found":[3],"memory":["l=2 ','","r=3 '␣'"],"caption":"l 자리의 쉼표는 건너뛴다. l을 민다. 이때 안쪽 while도 l < r을 지켜서 r을 넘어가지 않는다."},
+    {"pointer":3,"found":[3],"memory":["l=3 '␣'","r=3 '␣'"],"caption":"l과 r이 같은 칸에서 만났다. 자기 자신과 비교하니 같다고 나오고 한 칸씩 움직인다."},
+    {"found":[0,1,4,5],"memory":["l=4","r=2","l ≥ r → 끝"],"caption":"l이 r을 넘어섰다. 짝지은 N–n, o–o가 모두 같았으니 true다."},
+  ]}
+/>
+
+느낌표, 쉼표, 공백은 비교 대상이 되기 전에 포인터가 지나가 버린다. 정리한 사본은 한 번도 만들어지지 않았다. 그림의 여섯 번째 단계처럼 `l`과 `r`이 같은 칸에서 만나 자기 자신과 비교하는 경우가 생기는데, 결과는 언제나 "같다"라 문제가 없다.
+
+회문이 아닐 때는 어디서 멈추는지도 보자. `"race a car"`는 바깥쪽 세 쌍이 같고 네 번째에서 갈린다.
+
+<AlgoTrace
+  caption={"\"race a car\"는 네 번째 비교에서 멈춘다"}
+  memoryLabel={"포인터"}
+  cells={["r","a","c","e","␣","a","␣","c","a","r"]}
+  steps={[
+    {"pointer":0,"found":[9],"memory":["l=0 'r'","r=9 'r'"],"caption":"r과 r, 같다. 한 칸씩 좁힌다."},
+    {"pointer":1,"found":[8],"memory":["l=1 'a'","r=8 'a'"],"caption":"a와 a, 같다."},
+    {"pointer":2,"found":[7],"memory":["l=2 'c'","r=7 'c'"],"caption":"c와 c, 같다."},
+    {"pointer":3,"found":[6],"memory":["l=3 'e'","r=6 '␣'"],"caption":"r 자리가 공백이라 건너뛴다. r을 5로 당긴다."},
+    {"pointer":3,"found":[5],"memory":["l=3 'e'","r=5 'a'","e ≠ a → false"],"caption":"e와 a가 다르다. 그 자리에서 false를 돌려준다. 4번 공백은 끝내 보지 않았다."},
+  ]}
+/>
+
+```js
+// 풀이 4: 원본 위에서 건너뛰며 비교
+function isAlnum(c) {
+  const code = c.charCodeAt(0);
+  return (code >= 48 && code <= 57)    // '0' ~ '9'
+      || (code >= 65 && code <= 90)    // 'A' ~ 'Z'
+      || (code >= 97 && code <= 122);  // 'a' ~ 'z'
+}
+
+function isPalindrome(s) {
+  let l = 0, r = s.length - 1;
+  while (l < r) {
+    while (l < r && !isAlnum(s[l])) l++; // 왼쪽: 비교할 글자가 나올 때까지 민다
+    while (l < r && !isAlnum(s[r])) r--; // 오른쪽: 비교할 글자가 나올 때까지 당긴다
+    if (s[l].toLowerCase() !== s[r].toLowerCase()) return false;
+    l++;
+    r--;
+  }
+  return true;
+}
+```
+
+안쪽 `while` 두 개에도 `l < r`이 붙어 있는 게 중요하다. 이 조건이 없으면 `".,"`처럼 기호만 있는 입력에서 `l`이 문자열 끝을 넘어간다. 그 결과는 뒤에서 실제 에러 메시지와 함께 본다.
+
+시간 복잡도를 셀 때 `while` 안에 `while`이 있으니 O(n²)처럼 보인다. 그런데 `l`은 처음부터 끝까지 오른쪽으로만 움직이고 되돌아가지 않는다. `r`도 왼쪽으로만 움직인다. 바깥 반복과 안쪽 반복을 다 합쳐도 `l`이 움직인 거리와 `r`이 움직인 거리의 합은 n을 넘지 못한다. 그래서 O(n)이다. 중첩 반복문을 보면 반사적으로 곱하지 말고, "각 포인터가 전체에서 몇 번 움직이나"를 세는 습관이 투 포인터 문제의 복잡도 분석에서 가장 많이 쓰인다. 공간은 변수 몇 개뿐이라 O(1)이다.
+
+### Python과 Java로 옮기면
+
+Python에는 `str.isalnum()`이 있어서 판정 함수를 직접 짤 필요가 없다.
+
+```python
+def is_palindrome(s: str) -> bool:
+    l, r = 0, len(s) - 1
+    while l < r:
+        while l < r and not s[l].isalnum():  # 왼쪽 기호 건너뛰기
+            l += 1
+        while l < r and not s[r].isalnum():  # 오른쪽 기호 건너뛰기
+            r -= 1
+        if s[l].lower() != s[r].lower():
+            return False
+        l += 1
+        r -= 1
+    return True
+```
+
+Java는 `Character.isLetterOrDigit`과 `Character.toLowerCase`를 쓴다. `String`의 글자는 `charAt`으로 꺼내고, `char`끼리는 `!=`로 비교해도 된다(값 비교다).
+
+```java
+class Solution {
+    public boolean isPalindrome(String s) {
+        int l = 0, r = s.length() - 1;
+        while (l < r) {
+            while (l < r && !Character.isLetterOrDigit(s.charAt(l))) l++;
+            while (l < r && !Character.isLetterOrDigit(s.charAt(r))) r--;
+            if (Character.toLowerCase(s.charAt(l)) != Character.toLowerCase(s.charAt(r))) {
+                return false;
+            }
+            l++;
+            r--;
+        }
+        return true;
+    }
+}
+```
+
+세 언어 모두 같은 입력에 같은 결과를 냈다.
+
+```text
+"Was it a car, or a cat I saw?" true
+"race a car" false
+" " true
+"0P" false
+"ab_a" true
+".," true
+```
+
+언어별로 다른 점이 하나 있다. Python의 `isalnum()`과 Java의 `isLetterOrDigit()`은 유니코드 기준이다. `"é".isalnum()`도, `"²".isalnum()`도 `True`다. 이 문제는 ASCII만 나오니 상관없지만, 같은 코드를 한글 닉네임 검사에 그대로 쓰면 JavaScript 버전(ASCII만 통과)과 결과가 달라진다. 어떤 문자를 글자로 칠지가 언어 기본 함수마다 다르다는 걸 알고 골라야 한다.
+
+## toLowerCase도 빼고 숫자로만 비교한다
+
+풀이 4를 더 다듬을 수 있다. ASCII 코드에서 대문자 `A`는 65, 소문자 `a`는 97이다. 차이가 정확히 32, 이진수로 `0b100000`이다. 대문자의 다섯 번째 비트(0부터 셈)만 켜면 소문자가 된다. 그래서 `code | 32`는 대문자를 소문자로 바꾸고, 원래 소문자는 그대로 둔다.
+
+숫자는 어떨까. `'0'`은 48, 이진수로 `0b110000`이라 그 비트가 이미 켜져 있다. `'0'`부터 `'9'`까지(48~57) 모두 그렇다. 그래서 `| 32`를 해도 숫자는 변하지 않는다. 숫자는 48~57, 소문자는 97~122라서 서로 겹칠 일도 없다.
+
+```js
+// 풀이 5: 문자 코드만으로 비교
+function isPalindrome(s) {
+  const alnum = (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+  let l = 0, r = s.length - 1;
+  while (l < r) {
+    const a = s.charCodeAt(l), b = s.charCodeAt(r);
+    if (!alnum(a)) { l++; continue; }       // 한 칸 밀고 다시 본다
+    if (!alnum(b)) { r--; continue; }
+    if ((a | 32) !== (b | 32)) return false; // 대문자는 소문자로, 숫자는 그대로
+    l++;
+    r--;
+  }
+  return true;
+}
+```
+
+이번엔 안쪽 `while` 대신 `continue`로 한 칸씩 움직였다. 바깥 `while`의 `l < r` 하나가 경계를 지키니 안쪽 조건을 잊을 일이 없다. 두 가지 쓰는 법 모두 흔하다.
+
+`| 32`는 영문자와 숫자로 걸러 낸 다음에만 안전하다. 예를 들어 `@`(64)에 `| 32`를 하면 96, 백틱(`` ` ``)이 된다. 거르기 전에 비교하면 서로 다른 기호가 같다고 나올 수 있다.
+
+실제로 얼마나 빨라질까. 60만 글자짜리 회문을 20번 돌려 봤다(Node.js 22, 내 노트북 기준이라 숫자 자체보다 비율을 보자).
+
+```text
+code 89.6
+clean 543.1 600000
+```
+
+문자 코드 비교(풀이 5)가 약 90ms, 정리하고 뒤집기(풀이 1)가 약 540ms였다. 정리하고 뒤집는 쪽은 중간 문자열과 배열을 여러 개 만들어 메모리 할당과 복사가 많다. 시간 복잡도는 둘 다 O(n)인데 상수 차이가 여섯 배쯤 난다. 이 정도 차이는 면접에서 "빅오는 같아도 실제 속도가 다를 수 있는 이유"를 물을 때 좋은 예시가 된다. 빅오가 무엇을 숨기는지는 [Big O 글](/posts/big-o-notation)에 정리했다.
+
+## 직접 짜 보기
+
+아래에서 풀이 4를 직접 써 보자. 마지막 몇 개 테스트가 앞에서 본 함정들이다. `0P`가 통과하지 않으면 숫자를 빼먹은 것이고, `ab_a`가 실패하면 밑줄을 글자로 친 것이다.
+
+<CodePlayground
+  caption={"Valid Palindrome: 원본 위에서 두 포인터로"}
+  functionName={"isPalindrome"}
+  initialCode={"function isPalindrome(s) {\n  // 글자·숫자만 보고, 대소문자는 무시한다\n  // 양 끝에서 가운데로 좁혀 오며 비교해 보자\n  return false;\n}"}
+  solution={"function isPalindrome(s) {\n  const isAlnum = (c) => /[A-Za-z0-9]/.test(c);\n  let l = 0, r = s.length - 1;\n  while (l < r) {\n    while (l < r && !isAlnum(s[l])) l++; // 왼쪽에서 비교할 글자를 찾는다\n    while (l < r && !isAlnum(s[r])) r--; // 오른쪽에서도\n    if (s[l].toLowerCase() !== s[r].toLowerCase()) return false;\n    l++;\n    r--;\n  }\n  return true;\n}"}
+  tests={[{"label":"문장 부호가 섞인 회문","args":["Was it a car, or a cat I saw?"],"expected":true},{"label":"회문이 아닌 문장","args":["race a car"],"expected":false},{"label":"공백 하나","args":[" "],"expected":true},{"label":"숫자와 글자 (0P)","args":["0P"],"expected":false},{"label":"밑줄은 글자가 아니다","args":["ab_a"],"expected":true},{"label":"문장 부호만","args":[".,!?"],"expected":true},{"label":"대소문자만 다르다","args":["aA"],"expected":true},{"label":"숫자가 가운데","args":["1a2"],"expected":false}]}
+/>
+
+## 다섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 1. 정리하고 뒤집기 | O(n) | O(n) | 가장 빨리 맞는 답을 내야 할 때. 읽기 쉽다 |
+| 2. 정리한 사본에 투 포인터 | O(n) | O(n) | 사본 하나는 괜찮고, 다른 글자를 만나면 바로 끝내고 싶을 때 |
+| 3. 재귀 | O(n) | O(n) 호출 스택 | 재귀 정의를 보여 달라는 요청이 있을 때. 긴 입력에서 스택이 넘친다 |
+| 4. 원본 위 투 포인터 | O(n) | O(1) | 면접 기본 답. 메모리를 더 쓰지 않는다 |
+| 5. 문자 코드 비교 | O(n) | O(1) | 입력이 ASCII로 정해져 있고 상수까지 줄이고 싶을 때 |
+
+어떤 풀이든 문자열은 적어도 한 번 끝까지 봐야 회문인지 알 수 있으니 O(n)보다 빠를 수는 없다. 줄일 수 있는 건 공간과 상수뿐이다. 그래서 이 문제의 면접 포인트는 시간 복잡도가 아니라 "추가 메모리 없이 쓸 수 있나"와 "경계 조건을 놓치지 않나"다.
+
+## 여기서 자주 틀린다
+
+### 안쪽 while에서 경계를 빼먹는다
+
+```js
+// 틀린 코드: 안쪽 while에 l < r이 없다
+while (l < r) {
+  while (!isAlnum(s[l])) l++;
+  while (!isAlnum(s[r])) r--;
+  // ...
+}
+```
+
+`".,"`를 넣으면 이렇게 터진다.
+
+```text
+buggy error: Cannot read properties of undefined (reading 'charCodeAt')
+```
+
+두 글자 모두 기호라서 `l`이 0, 1, 2로 계속 밀린다. `s[2]`는 `undefined`이고, `isAlnum` 안에서 `undefined.charCodeAt`을 부르다 에러가 난다. Java라면 `StringIndexOutOfBoundsException`, Python이라면 `IndexError`다. 기호만 있는 입력, 기호로 시작하거나 끝나는 입력을 꼭 테스트에 넣자.
+
+### 숫자를 빼고 영문자만 남긴다
+
+"글자만 남긴다"를 `[^a-z]`로 옮기면 숫자가 사라진다.
+
+```js
+const lettersOnly = (s) => {
+  const t = s.toLowerCase().replace(/[^a-z]/g, "");
+  return t === [...t].reverse().join("");
+};
+```
+
+```text
+lettersOnly 0P true 1a2 true
+```
+
+`"0P"`는 `"p"`만 남아 회문이 되고, `"1a2"`는 `"a"`만 남아 회문이 된다. 둘 다 정답은 `false`다. 문제에서 "alphanumeric"이라고 했으면 숫자도 포함이다.
+
+### \w가 밑줄을 글자로 친다
+
+정규식에서 `\W`는 "단어 글자가 아닌 것"인데, 단어 글자 `\w`에는 `[A-Za-z0-9_]`, 즉 밑줄이 들어 있다. 그래서 `replace(/\W/g, "")`로 지우면 밑줄이 남는다.
+
+```text
+false ab_a
+```
+
+`"ab_a"`를 정리했더니 `"ab_a"` 그대로 남았고, 뒤집은 `"a_ba"`와 달라 `false`가 나왔다. 정답은 `true`다. `/[^a-z0-9]/g`처럼 범위를 직접 쓰거나 `/[\W_]/g`로 밑줄까지 지운다.
+
+### 이모지가 있는 문자열을 split("")으로 뒤집는다
+
+이 문제의 입력은 ASCII뿐이지만, 같은 코드를 실무에 가져가면 문제가 된다. JavaScript 문자열은 UTF-16 코드 단위의 나열이라, 이모지 하나가 두 칸(서로게이트 쌍)을 차지한다. `split("")`은 그 두 칸을 따로 떼어 뒤집기 때문에 짝이 깨진다.
+
+```text
+false true
+```
+
+`"a😀a"`를 `split("")`으로 뒤집은 결과는 원본과 달랐고(`false`), `[...s]`로 쪼개 뒤집은 결과는 같았다(`true`). 스프레드 문법과 `Array.from`은 코드 포인트 단위로 쪼갠다. 그래도 피부색이 붙은 이모지나 국기처럼 여러 코드 포인트가 하나로 보이는 글자는 여전히 깨진다. 그런 경우는 `Intl.Segmenter`로 화면에 보이는 글자 단위(grapheme)로 쪼개야 한다.
+
+## 면접관이 이어서 바꾸는 문제들
+
+### 한 글자는 지워도 된다면
+
+LeetCode 680(Valid Palindrome II)이다. 양 끝에서 비교하다가 처음으로 다른 글자를 만나면, 왼쪽 글자를 지운 경우와 오른쪽 글자를 지운 경우 두 가지만 남는다. 둘 중 하나라도 회문이면 `true`다.
+
+```js
+function validPalindrome(s) {
+  const isPal = (l, r) => {          // s[l..r]이 회문인가
+    while (l < r) {
+      if (s[l] !== s[r]) return false;
+      l++;
+      r--;
+    }
+    return true;
+  };
+  let l = 0, r = s.length - 1;
+  while (l < r) {
+    if (s[l] !== s[r]) return isPal(l + 1, r) || isPal(l, r - 1); // 왼쪽을 지우거나, 오른쪽을 지우거나
+    l++;
+    r--;
+  }
+  return true;
+}
+```
+
+```text
+abca true
+abc false
+deeee true
+eeeed true
+cbbcc true
+a true
+```
+
+처음 다른 곳에서 갈림길이 딱 두 개이고, 각각 O(n)이니 전체도 O(n)이다. "그 앞부분은 이미 같다고 확인했으니 다시 볼 필요가 없다"는 게 이 풀이가 빠른 이유다. 지워도 되는 글자가 k개로 늘어나면 갈림길이 지수로 늘어나니, 그때는 "가장 긴 회문 부분 수열" 길이를 [동적 계획법](/posts/dynamic-programming)으로 구해 `n - LPS ≤ k`인지 본다.
+
+### 연결 리스트라면
+
+LeetCode 234(Palindrome Linked List)다. 연결 리스트는 뒤에서 앞으로 갈 수 없어서 `r--`가 안 된다. 배열에 옮겨 담으면 O(n) 공간으로 바로 풀리고, O(1) 공간이 필요하면 느린 포인터와 빠른 포인터로 가운데를 찾고, 뒤쪽 절반을 [뒤집은 뒤](/posts/leetcode-reverse-linked-list) 앞쪽 절반과 나란히 비교한다. 검사가 끝나면 뒤집은 절반을 다시 되돌려 놓는 것까지 말하면 좋다. 입력을 망가뜨린 채 돌려주면 호출한 쪽이 곤란해진다.
+
+```js
+function isPalindromeList(head) {
+  let slow = head, fast = head;
+  while (fast && fast.next) {        // fast가 끝에 닿으면 slow는 가운데
+    slow = slow.next;
+    fast = fast.next.next;
+  }
+  let prev = null, cur = slow;       // 뒤쪽 절반을 뒤집는다
+  while (cur) {
+    const next = cur.next;
+    cur.next = prev;
+    prev = cur;
+    cur = next;
+  }
+  let a = head, b = prev, ok = true;
+  while (b) {                        // 앞쪽 절반과 뒤집힌 뒤쪽 절반을 나란히 비교
+    if (a.val !== b.val) { ok = false; break; }
+    a = a.next;
+    b = b.next;
+  }
+  return ok;                         // 실무라면 여기서 prev를 다시 뒤집어 원래 모양으로 돌려놓는다
+}
+```
+
+```text
+[1,2,2,1] true
+[1,2,3,2,1] true
+[1,2] false
+[7] true
+[1,2,1,1] false
+```
+
+여기서도 투 포인터가 쓰였다. 다만 양 끝에서 모이는 모양이 아니라, 같은 방향으로 한 칸과 두 칸씩 달리는 모양이다. 빠른 쪽이 끝에 닿았을 때 느린 쪽이 가운데에 있다. 비교하는 단계에서는 두 포인터(`a`, `b`)가 다시 나란히 한 칸씩 움직인다.
+
+### 문자열이 스트림으로 한 글자씩 들어온다면
+
+전체를 저장하지 않고 회문인지 알 수는 없다. 양 끝을 비교하려면 앞부분을 기억해야 하기 때문이다. 다만 "아마 회문일 것"이라는 확률적 답은 가능하다. 앞에서 읽은 글자로 다항식 해시를 정방향과 역방향으로 동시에 갱신하고, 두 해시가 같으면 회문으로 본다. 라빈-카프에서 쓰는 롤링 해시와 같은 아이디어이고, 해시 충돌로 틀릴 확률이 아주 작게 남는다.
+
+### 가장 긴 회문 부분 문자열을 구하라면
+
+LeetCode 5(Longest Palindromic Substring)다. 같은 투 포인터를 반대 방향으로 쓴다. 가운데에서 시작해 양쪽으로 넓혀 가며 같은 동안 늘린다. 가운데 후보가 2n − 1개(글자 위, 글자 사이)이고 각각 O(n)까지 넓어지니 O(n²)이다. O(n)이 필요하면 Manacher 알고리즘이 있다. 숫자 하나가 회문인지 묻는 LeetCode 9(Palindrome Number)는 문자열로 바꾸지 말라는 조건이 붙어서, 숫자의 뒤쪽 절반을 나머지 연산으로 뒤집어 앞쪽 절반과 비교한다.
+
+```js
+function isPalindromeNumber(x) {
+  if (x < 0 || (x % 10 === 0 && x !== 0)) return false; // 음수, 0으로 끝나는 수(0 제외)는 아니다
+  let half = 0;
+  while (x > half) {                 // 뒤쪽 절반을 뒤집어 half에 쌓는다
+    half = half * 10 + (x % 10);
+    x = Math.floor(x / 10);
+  }
+  return x === half || x === Math.floor(half / 10); // 자릿수가 홀수면 가운데 한 자리를 버린다
+}
+```
+
+```text
+1221 true
+12321 true
+-121 false
+10 false
+0 true
+```
+
+수를 통째로 뒤집지 않고 절반만 뒤집는 이유는 오버플로다. Java나 C++에서 `int` 최댓값 근처의 수를 통째로 뒤집으면 범위를 넘을 수 있다. 절반만 뒤집으면 그럴 일이 없다. 12321처럼 자릿수가 홀수면 반복이 끝났을 때 `x`가 12, `half`가 123이라 가운데 3을 10으로 나눠 버리고 비교한다.
+
+같은 투 포인터라도 정렬된 배열에서 두 수의 합을 찾는 [Two Sum II](/posts/leetcode-two-sum-ii)는 "어느 쪽을 움직일지"를 합의 크기로 고른다는 점이 다르다. 이 문제에서는 두 포인터가 늘 함께 움직였다.
+
+## 사본 없이, 경계를 지키며
+
+회문 검사는 "앞에서 i번째와 뒤에서 i번째가 같은가"를 반복하는 것이다. 그 비교를 뒤집은 사본으로 하느냐, 인덱스 두 개로 하느냐가 공간 O(n)과 O(1)을 가른다. 기호를 건너뛸 때는 안쪽 반복에도 `l < r`을 붙여 경계를 지키고, 숫자와 밑줄을 어떻게 다룰지 문제의 정의대로 맞춘다. 중첩 반복문이어도 포인터가 되돌아가지 않으면 O(n)이라는 셈법은 다음 문제인 [Two Sum II](/posts/leetcode-two-sum-ii)와 [3Sum](/posts/leetcode-3sum)에서도 그대로 쓴다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제를 추가 메모리 없이 풀 수 있나요?
+
+있다. 원본 문자열 위에 왼쪽과 오른쪽 포인터를 두고, 영문자나 숫자가 아니면 그 칸을 건너뛰고, 비교할 때만 한 글자씩 소문자로 바꾼다. 정리한 사본이나 뒤집은 사본을 만들지 않으니 추가 공간은 O(1)이다. 시간은 그대로 O(n)이다.
+
+### while 안에 while이 있는데 왜 O(n)인가요?
+
+각 포인터가 한 방향으로만 움직이고 되돌아가지 않기 때문이다. `l`은 오른쪽으로만, `r`은 왼쪽으로만 가고, 둘이 만나면 끝난다. 바깥과 안쪽 반복을 모두 합쳐도 두 포인터가 움직인 거리의 합은 문자열 길이를 넘지 않는다. 반복문의 중첩 깊이보다 "포인터가 전체에서 몇 번 움직이나"를 세야 한다.
+
+### 정리하고 뒤집는 풀이와 투 포인터 풀이는 빅오가 같은데 무엇이 다른가요?
+
+시간은 둘 다 O(n)이지만, 공간이 O(n)과 O(1)로 다르고 실제 속도도 다르다. 뒤집는 풀이는 소문자 문자열, 정리한 문자열, 배열, 뒤집어 합친 문자열을 차례로 만들어 할당과 복사가 많다. 60만 글자로 재 보니 문자 코드로 비교하는 투 포인터가 여섯 배쯤 빨랐다. 그리고 투 포인터는 다른 글자를 만나는 즉시 끝나지만 뒤집는 풀이는 항상 끝까지 만든다.
+
+### 공백만 있는 문자열은 왜 true인가요?
+
+영문자와 숫자만 남기면 빈 문자열이 되고, 빈 문자열은 뒤집어도 빈 문자열이라 회문이다. 코드로 보면 비교할 쌍이 하나도 없어서 `false`를 돌려줄 일이 없다. 이 경우를 따로 `if`로 처리하지 않아도 되도록 반복 조건과 반환값을 정하는 게 깔끔하다.
+
+### 재귀로 풀면 어떤 문제가 있나요?
+
+양 끝을 떼고 안쪽을 다시 묻는 재귀는 깊이가 n/2까지 쌓인다. Node.js에서 20만 글자를 넣으면 `Maximum call stack size exceeded`가 났고, Python은 기본 재귀 한도가 1000이라 더 빨리 터진다. V8은 꼬리 호출 최적화를 하지 않아서 꼬리 재귀로 써도 마찬가지다. 그래서 같은 로직을 반복문으로 바꾼 투 포인터를 쓴다.
+
+### 한 글자까지 지워도 된다면 어떻게 바꾸나요?
+
+양 끝에서 비교하다 처음 다른 글자를 만났을 때, 왼쪽을 지운 구간과 오른쪽을 지운 구간이 각각 회문인지 확인한다. 둘 중 하나만 회문이면 된다. 갈림길은 처음 한 번뿐이고 각각 O(n)이니 전체도 O(n), 공간은 O(1)이다. 지울 수 있는 글자가 k개라면 가장 긴 회문 부분 수열을 DP로 구해 비교한다.
+
+### 한글이나 이모지가 섞인 입력에서도 이 코드를 쓸 수 있나요?
+
+그대로는 안 된다. JavaScript의 ASCII 판정은 한글을 기호로 보고 지워 버리고, Python `isalnum()`과 Java `isLetterOrDigit()`은 유니코드 글자를 통과시켜 언어마다 결과가 달라진다. 이모지는 UTF-16에서 두 칸이라 인덱스로 하나씩 비교하면 쌍이 깨진다. 무엇을 글자로 칠지 먼저 정하고, 코드 포인트(`[...s]`)나 화면 글자 단위(`Intl.Segmenter`)로 쪼갠 배열 위에서 투 포인터를 돌린다.

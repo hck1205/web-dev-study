@@ -15,10 +15,10 @@ export const COURSES: Course[] = [
     sources: ["https://roadmap.sh/frontend-beginner", "https://roadmap.sh/backend-beginner", "https://roadmap.sh/devops-beginner", "https://roadmap.sh/git-github-beginner"],
     stages: [
       { label: "인터넷과 웹이 도는 법", posts: ["what-happens-google-com", "dns", "http-message", "http-methods", "http-status-codes"] },
-      { label: "첫 웹 페이지", posts: ["html-semantics", "css-box-model-layout", "css-flexbox-grid", "js-var-let-const", "js-loops-control-flow"] },
-      { label: "Git으로 저장하고 나누기", posts: ["git-internals-basics", "git-staging-area", "git-branch-merge", "git-remote-collaboration"] },
-      { label: "첫 서버와 첫 데이터", posts: ["json-crud-http", "rest-api-design", "nodejs-server-runtime", "sql-basics"] },
-      { label: "첫 배포", posts: ["linux-files-permissions", "ssh-in-practice", "docker-container-basics", "ci-cd-basics", "aws-ec2-ubuntu-server-setup"] },
+      { label: "첫 웹 페이지", posts: ["frontend-first-steps", "html-semantics", "css-box-model-layout", "css-flexbox-grid", "js-var-let-const", "js-loops-control-flow"] },
+      { label: "Git으로 저장하고 나누기", posts: ["git-first-hour", "git-branch-merge", "git-remote-collaboration", "github-pull-request-flow"] },
+      { label: "첫 서버와 첫 데이터", posts: ["json-crud-http", "rest-api-design", "nodejs-server-runtime", "python-essentials-for-backend", "sql-basics"] },
+      { label: "첫 배포", posts: ["os-kernel-system-calls", "linux-files-permissions", "ssh-in-practice", "docker-container-basics", "ci-cd-basics", "aws-core-services-map", "aws-ec2-ubuntu-server-setup"] },
     ],
     next: [
       { course: "cs", why: "방금 써 본 것들이 왜 그렇게 도는지 아래층부터 알고 싶다면" },
@@ -54,7 +54,9 @@ export const COURSES: Course[] = [
     stages: [
       { label: "복잡도와 자료구조", roadmaps: ["algorithms/data-structures"] },
       { label: "풀이 기법", roadmaps: ["algorithms/techniques"] },
-      { label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
+      { group: "LeetCode 패턴", label: "배열, 해시, 투 포인터, 슬라이딩 윈도", roadmaps: ["algorithms/leetcode/arrays-hashing", "algorithms/leetcode/two-pointers", "algorithms/leetcode/sliding-window"] },
+      { group: "LeetCode 패턴", label: "스택과 이분 탐색", roadmaps: ["algorithms/leetcode/stack", "algorithms/leetcode/binary-search"] },
+      { group: "더 넓게", label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
     ],
     next: [
       { course: "system-design", why: "해시, 트라이, 힙이 대규모 시스템에서는 샤딩, 자동 완성, 랭킹이 된다" },
@@ -184,8 +186,10 @@ export const COURSES: Course[] = [
     sources: ["https://roadmap.sh/ai-engineer", "https://roadmap.sh/ai-agents", "https://roadmap.sh/claude-code", "https://roadmap.sh/prompt-engineering"],
     stages: [
       { label: "LLM 기초와 연동", roadmaps: ["ai/llm"] },
+      { label: "프롬프트와 컨텍스트", roadmaps: ["ai/prompt"] },
       { label: "RAG", roadmaps: ["ai/rag"] },
       { label: "Claude Code", roadmaps: ["ai/claude-code"] },
+      { label: "평가와 운영", roadmaps: ["ai/llm-ops"] },
     ],
     next: [],
   },

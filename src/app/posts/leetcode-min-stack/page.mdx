@@ -1,0 +1,543 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-min-stack");
+
+<EasyIntro>
+  책을 한 권씩 위에 쌓고, 꺼낼 때도 맨 위에서만 꺼내는 책 더미가 있다고 해 보자. 누가 갑자기 지금 더미에서 가장 얇은 책이 몇 쪽이냐고 물으면, 보통은 책을 전부 들춰 봐야 한다. 이 문제는 그 질문에 들춰 보지 않고 바로 답하는 더미를 만들라는 것이다. 방법은 간단하다. 책을 올릴 때마다 책등에 포스트잇을 붙이고, 그 책까지 쌓았을 때 가장 얇은 책의 쪽수를 적어 둔다. 그러면 맨 위 책의 포스트잇만 보면 지금 가장 얇은 책을 바로 알 수 있다. 맨 위 책을 꺼내도 그 아래 책의 포스트잇에는 그 시점의 답이 이미 적혀 있으니 다시 셀 필요가 없다. 조금 더 아끼고 싶으면 가장 얇은 책이 바뀔 때만 따로 메모해 두는 방법도 있다.
+</EasyIntro>
+
+가격을 입력하면 기록이 쌓이고, 실행 취소를 누르면 마지막 입력부터 하나씩 사라지는 화면을 만들었다. 기획자가 한 가지를 더 원했다. 지금 남아 있는 기록 중 가장 낮은 가격을 화면 위에 늘 띄워 달라는 것이다. 처음엔 화면을 그릴 때마다 배열을 훑어서 최솟값을 찾았다. 기록이 수만 개가 되자 실행 취소를 누를 때마다 화면이 버벅였다.
+
+[LeetCode 155. Min Stack](https://leetcode.com/problems/min-stack/)이 이 상황을 그대로 옮긴 설계 문제다. 스택의 네 연산 `push`, `pop`, `top`, `getMin`을 모두 O(1)에 해내는 클래스를 만들어야 한다. 알고리즘보다는 "무엇을 미리 기억해 두면 나중 질문에 바로 답할 수 있나"를 묻는 문제라서, 면접에서 자료구조 설계 감각을 볼 때 자주 나온다. 이 글은 매번 훑는 풀이부터 차이만 저장하는 트릭까지 여섯 가지를 차례로 보고, 최소 큐 같은 꼬리 질문으로 넘어간다. 스택 자체는 [스택·큐·덱 글](/posts/ds-stack-queue-deque)에서, 같은 패턴의 앞 문제는 [Valid Parentheses](/posts/leetcode-valid-parentheses)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 네 연산을 모두 O(1)로
+
+만들 클래스는 이렇다.
+
+- `push(val)`: 값을 맨 위에 올린다.
+- `pop()`: 맨 위 값을 버린다.
+- `top()`: 맨 위 값을 돌려준다.
+- `getMin()`: 지금 스택에 있는 값 중 가장 작은 값을 돌려준다.
+
+값은 32비트 정수 범위(-2^31 이상 2^31 - 1 이하)이고, `pop`, `top`, `getMin`은 스택이 비어 있지 않을 때만 불린다. 연산은 최대 3 × 10^4번이다. 문제가 대놓고 "각 연산을 O(1)에"라고 요구하므로, 개수만 보면 O(n)도 통과할 것 같아도 면접에서는 O(1)이 답이다.
+
+LeetCode는 이런 설계 문제를 "연산 이름 목록과 인자 목록"으로 채점한다. 아래가 이 글에서 계속 쓸 예시다.
+
+```text
+연산:  push 5, push 3, push 7, push 3, getMin, pop, pop, getMin, pop, getMin
+결과:                                  3                    3          5
+```
+
+손으로 따라가 보자. 5, 3, 7, 3을 쌓으면 스택은 바닥부터 `[5, 3, 7, 3]`이고 최솟값은 3이다. 두 번 꺼내면 `[5, 3]`, 최솟값은 여전히 3이다. 한 번 더 꺼내면 `[5]`가 되고 최솟값은 5로 올라간다. 최솟값은 값이 들어올 때 내려가고, 값이 빠질 때 다시 올라갈 수 있다. 올라갈 때 "그 전의 최솟값이 뭐였지?"를 알아야 한다는 게 이 문제의 어려운 부분이다.
+
+## 물어볼 때마다 다 훑으면
+
+가장 단순한 방법은 평범한 스택을 두고, `getMin`이 불릴 때마다 전체를 훑는 것이다.
+
+```js
+class MinStack {
+  constructor() { this.stack = []; }
+  push(val) { this.stack.push(val); }
+  pop() { this.stack.pop(); }
+  top() { return this.stack[this.stack.length - 1]; }
+  getMin() {
+    let min = Infinity;
+    for (const v of this.stack) if (v < min) min = v; // 매번 전부 본다
+    return min;
+  }
+}
+```
+
+`push`, `pop`, `top`은 O(1)이지만 `getMin`이 O(n)이다. 처음 장면처럼 화면을 그릴 때마다 `getMin`을 부르면 기록 수에 비례해 느려진다. 이 풀이는 랜덤 연산 3000세트로 다른 풀이를 검증하는 기준 답으로만 썼다.
+
+## 정렬된 사본을 옆에 두면
+
+훑기 싫으면 값을 정렬된 상태로 하나 더 들고 있으면 된다. 맨 앞이 늘 최솟값이다.
+
+```js
+class MinStack {
+  constructor() {
+    this.stack = [];
+    this.sorted = []; // 같은 값들을 오름차순으로
+  }
+  lowerBound(x) { // x 이상이 처음 나오는 자리
+    let lo = 0, hi = this.sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.sorted[mid] < x) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+  push(val) {
+    this.stack.push(val);
+    this.sorted.splice(this.lowerBound(val), 0, val); // 자리 찾기 O(log n), 끼우기 O(n)
+  }
+  pop() {
+    const val = this.stack.pop();
+    this.sorted.splice(this.lowerBound(val), 1);      // 같은 값 하나를 뺀다
+  }
+  top() { return this.stack[this.stack.length - 1]; }
+  getMin() { return this.sorted[0]; }
+}
+```
+
+`getMin`은 O(1)이 됐지만 이번엔 `push`와 `pop`이 O(n)이다. 자리는 [이분 탐색](/posts/binary-search)으로 O(log n)에 찾아도, 배열 중간에 끼우고 빼려면 뒤 칸을 전부 밀어야 하기 때문이다. Java라면 `TreeMap<값, 개수>`를 쓰면 끼우고 빼는 것도 O(log n)이 된다.
+
+```java
+class MinStack {
+    private final Deque<Integer> stack = new ArrayDeque<>();
+    private final TreeMap<Integer, Integer> count = new TreeMap<>(); // 값 → 개수
+
+    public void push(int val) { stack.push(val); count.merge(val, 1, Integer::sum); }
+    public void pop() {
+        int v = stack.pop();
+        if (count.merge(v, -1, Integer::sum) == 0) count.remove(v);
+    }
+    public int top() { return stack.peek(); }
+    public int getMin() { return count.firstKey(); }
+}
+```
+
+모든 연산이 O(log n)이다. 이 풀이는 "최솟값뿐 아니라 k번째로 작은 값도 달라"처럼 요구가 넓어지면 쓸모가 있다. 그런데 스택에서는 이렇게까지 할 필요가 없다. 정렬 구조는 "아무 값이나 빠질 수 있다"는 상황을 대비하지만, 스택에서는 늘 맨 위만 빠진다. 빠지는 순서가 정해져 있다는 성질을 아직 쓰지 않았다.
+
+## 변수 하나로는 왜 모자란가
+
+빠지는 순서가 정해져 있다면 최솟값을 변수 하나에 들고 있으면 될까. `push`할 때 더 작은 값이 오면 갱신하면 된다. 문제는 `pop`이다.
+
+```text
+push 5 → min 5
+push 3 → min 3
+pop    → 3이 빠졌다. min은 이제 얼마?
+```
+
+3이 빠졌으니 3은 아니다. 그 전의 최솟값은 5였는데, 변수 하나에는 지금 값만 있고 이전 값은 덮어써서 사라졌다. 다시 찾으려면 남은 값을 훑어야 하니 첫 번째 풀이로 돌아간다.
+
+여기서 필요한 게 분명해진다. 최솟값의 현재 값이 아니라 역사를 기억해야 한다. 그리고 스택은 맨 위부터 빠지니, 역사도 "가장 최근 것부터 되돌린다". 역사를 되돌리는 순서와 스택이 빠지는 순서가 같다. 그래서 최솟값의 역사도 스택에 담으면 된다.
+
+## 칸마다 그때의 최솟값을 적어 둔다
+
+가장 직관적인 방법은 값을 넣을 때 "이 칸까지 쌓았을 때의 최솟값"을 함께 넣는 것이다. 각 칸이 `[값, 그때까지의 최솟값]` 한 쌍이 된다.
+
+- `push(val)`: 새 최솟값은 `val`과 바로 아래 칸의 최솟값 중 작은 것이다. 비어 있으면 `val` 자신이다.
+- `pop()`: 칸 하나를 버린다. 아래 칸에는 그 시점의 최솟값이 이미 적혀 있으니 따로 할 일이 없다.
+- `getMin()`: 맨 위 칸의 최솟값을 읽는다.
+
+아래 그림은 예시 연산을 차례로 실행하는 모습이다. 오른쪽의 기억 장소가 쌍으로 이뤄진 스택이다. `pop`이 일어나도 아래 칸의 최솟값은 그대로 남아 있어서 바로 답이 나온다.
+
+<AlgoTrace
+  caption="칸마다 그때의 최솟값을 함께 쌓는다"
+  memoryLabel="스택 (값 / 그때의 최솟값, 왼쪽이 바닥)"
+  cells={["push 5", "push 3", "push 7", "push 3", "getMin", "pop", "pop", "getMin", "pop", "getMin"]}
+  steps={[
+    { pointer: 0, memory: ["5 / 5"], caption: "비어 있었으니 최솟값은 5 자신이다." },
+    { pointer: 1, memory: ["5 / 5", "3 / 3"], caption: "3과 아래 칸 최솟값 5 중 작은 3을 적는다." },
+    { pointer: 2, memory: ["5 / 5", "3 / 3", "7 / 3"], caption: "7은 크다. 아래 칸의 3을 그대로 물려받는다." },
+    { pointer: 3, memory: ["5 / 5", "3 / 3", "7 / 3", "3 / 3"], caption: "3이 또 왔다. 최솟값은 3." },
+    { pointer: 4, found: [4], memory: ["5 / 5", "3 / 3", "7 / 3", "3 / 3"], caption: "맨 위 칸의 최솟값을 읽는다. 3." },
+    { pointer: 5, memory: ["5 / 5", "3 / 3", "7 / 3"], caption: "맨 위 칸을 버린다. 아래 칸에 3이 이미 적혀 있다." },
+    { pointer: 6, memory: ["5 / 5", "3 / 3"], caption: "7을 버린다. 계산할 것이 없다." },
+    { pointer: 7, found: [7], memory: ["5 / 5", "3 / 3"], caption: "맨 위는 3 / 3이다. 답은 3." },
+    { pointer: 8, memory: ["5 / 5"], caption: "3을 버리면 바닥 칸만 남는다." },
+    { pointer: 9, found: [9], memory: ["5 / 5"], caption: "바닥 칸에 적힌 5가 바로 답이다. 다시 훑지 않았다." },
+  ]}
+/>
+
+```js
+class MinStack {
+  constructor() {
+    this.stack = []; // 칸마다 [값, 이 칸까지의 최솟값]
+  }
+  push(val) {
+    const n = this.stack.length;
+    const min = n === 0 ? val : Math.min(val, this.stack[n - 1][1]);
+    this.stack.push([val, min]);
+  }
+  pop() { this.stack.pop(); }
+  top() { return this.stack[this.stack.length - 1][0]; }
+  getMin() { return this.stack[this.stack.length - 1][1]; }
+}
+```
+
+네 연산이 모두 O(1)이다. 공간은 값 n개에 최솟값 n개를 더 들고 있으니 2n, 차수로는 O(n)이다. 이 풀이는 틀릴 곳이 거의 없다는 게 가장 큰 장점이다. 같은 값이 여러 번 들어와도, 음수가 와도 특별히 처리할 것이 없다. 면접에서 시간이 촉박하면 이걸로 쓴다.
+
+아쉬운 점은 최솟값이 거의 안 바뀌는 입력에서도 칸마다 최솟값을 한 번씩 더 적는다는 것이다. `[1, 9, 8, 7, 6, ...]`처럼 맨 처음 값이 계속 최솟값이면, 두 번째 열은 전부 1이다. 같은 값을 n번 적고 있다.
+
+## 최솟값이 바뀔 때만 적는 두 번째 스택
+
+같은 최솟값을 반복해서 적지 않으려면, 최솟값 기록을 별도의 스택으로 떼어 내고 최솟값이 바뀌거나 같을 때만 넣는다.
+
+- `push(val)`: 본 스택에 넣는다. 최소 스택이 비었거나 `val`이 최소 스택 맨 위보다 작거나 같으면 최소 스택에도 넣는다.
+- `pop()`: 본 스택에서 뺀 값이 최소 스택 맨 위와 같으면 최소 스택에서도 뺀다.
+- `getMin()`: 최소 스택 맨 위.
+
+"작거나 같으면"의 "같으면"이 이 풀이의 전부다. 아래 그림의 4번째 연산에서 3이 한 번 더 들어올 때 최소 스택에도 3이 하나 더 들어간다. 그래서 그 3이 빠질 때 최소 스택의 3도 하나만 빠지고, 먼저 쌓인 다른 3을 위한 기록은 남는다.
+
+<AlgoTrace
+  caption="최소 스택에는 최솟값이 같거나 작아질 때만 넣는다"
+  memoryLabel="최소 스택 (왼쪽이 바닥)"
+  cells={["push 5", "push 3", "push 7", "push 3", "getMin", "pop", "pop", "getMin", "pop", "getMin"]}
+  steps={[
+    { pointer: 0, memory: ["5"], caption: "본 스택 [5]. 최소 스택이 비어 있으니 5를 넣는다." },
+    { pointer: 1, memory: ["5", "3"], caption: "본 스택 [5, 3]. 3은 5보다 작다. 넣는다." },
+    { pointer: 2, memory: ["5", "3"], caption: "본 스택 [5, 3, 7]. 7은 3보다 크니 최소 스택은 그대로다." },
+    { pointer: 3, memory: ["5", "3", "3"], caption: "본 스택 [5, 3, 7, 3]. 3은 맨 위 3과 같다. 같아도 넣는다." },
+    { pointer: 4, found: [4], memory: ["5", "3", "3"], caption: "최소 스택 맨 위를 읽는다. 3." },
+    { pointer: 5, memory: ["5", "3"], caption: "본 스택에서 3이 빠졌다. 맨 위 3과 같으니 하나 뺀다." },
+    { pointer: 6, memory: ["5", "3"], caption: "7이 빠졌다. 맨 위 3과 다르니 최소 스택은 그대로다." },
+    { pointer: 7, found: [7], memory: ["5", "3"], caption: "답은 3. 같을 때도 넣어 둔 덕분에 남아 있다." },
+    { pointer: 8, memory: ["5"], caption: "본 스택에서 마지막 3이 빠진다. 최소 스택에서도 뺀다." },
+    { pointer: 9, found: [9], memory: ["5"], caption: "본 스택 [5]. 답은 5." },
+  ]}
+/>
+
+```js
+class MinStack {
+  constructor() {
+    this.stack = [];
+    this.mins = []; // 맨 위가 지금 스택의 최솟값
+  }
+  push(val) {
+    this.stack.push(val);
+    // 같은 값도 넣는다. 그래야 중복 최솟값 하나가 빠져도 남는다
+    if (this.mins.length === 0 || val <= this.mins[this.mins.length - 1]) {
+      this.mins.push(val);
+    }
+  }
+  pop() {
+    const val = this.stack.pop();
+    if (val === this.mins[this.mins.length - 1]) this.mins.pop();
+  }
+  top() { return this.stack[this.stack.length - 1]; }
+  getMin() { return this.mins[this.mins.length - 1]; }
+}
+```
+
+시간은 네 연산 모두 O(1)이다. 공간은 최악 O(n)이다. `[5, 4, 3, 2, 1]`처럼 계속 작아지는 입력이면 모든 값이 최소 스택에 들어간다. 대신 최솟값이 자주 안 바뀌는 입력에서는 최소 스택이 훨씬 작다. 앞 풀이의 쌍 스택이 항상 2n칸이라면, 이 풀이는 n칸에서 2n칸 사이다.
+
+이 풀이가 맞는 이유를 한 문장으로 말하면, "최소 스택은 본 스택의 각 시점에서 최솟값이 바뀐 순간들만 모아 둔 기록이고, 빠지는 순서가 같아서 기록이 늘 현재와 맞는다"이다. 본 스택에서 어떤 값이 빠질 때 그 값이 최소 스택 맨 위와 같다면, 그 값이 들어올 때 최소 스택에도 들어갔다는 뜻이다. 같지 않다면 들어올 때 최소 스택에 들어가지 않은 값이다.
+
+### Python과 Java로 쓰면
+
+Python은 리스트 두 개로 그대로 옮긴다. 값이 임의 정밀도 정수라 오버플로 걱정이 없다.
+
+```python
+class MinStack:
+    def __init__(self):
+        self.stack = []
+        self.mins = []  # 맨 위가 지금 스택의 최솟값
+
+    def push(self, val: int) -> None:
+        self.stack.append(val)
+        # 같은 값도 넣는다. 그래야 중복 최솟값을 하나 빼도 남는다
+        if not self.mins or val <= self.mins[-1]:
+            self.mins.append(val)
+
+    def pop(self) -> None:
+        if self.stack.pop() == self.mins[-1]:
+            self.mins.pop()
+
+    def top(self) -> int:
+        return self.stack[-1]
+
+    def getMin(self) -> int:
+        return self.mins[-1]
+```
+
+Java는 `ArrayDeque<Integer>` 두 개를 쓴다. 여기에 이 문제에서 가장 유명한 함정이 있다.
+
+```java
+import java.util.ArrayDeque;
+import java.util.Deque;
+
+class MinStack {
+    private final Deque<Integer> stack = new ArrayDeque<>();
+    private final Deque<Integer> mins = new ArrayDeque<>(); // 맨 위가 현재 최솟값
+
+    public void push(int val) {
+        stack.push(val);
+        if (mins.isEmpty() || val <= mins.peek()) mins.push(val);
+    }
+
+    public void pop() {
+        // Integer끼리 == 는 참조 비교다. -128~127 밖에서 틀리므로 equals로 비교한다
+        if (stack.pop().equals(mins.peek())) mins.pop();
+    }
+
+    public int top() { return stack.peek(); }
+
+    public int getMin() { return mins.peek(); }
+}
+```
+
+`pop`에서 `stack.pop() == mins.peek()`로 쓰면 양쪽이 모두 `Integer` 객체라서 값이 아니라 참조를 비교한다. Java는 -128부터 127까지의 `Integer`만 캐시해 같은 객체를 돌려주므로, 작은 값으로 테스트하면 통과하고 큰 값에서 틀린다. 실제로 돌려 봤다.
+
+```text
+push 2000, push 1000, pop 후 getMin
+  == 로 비교     → 1000   (최소 스택의 1000이 안 빠졌다)
+  equals로 비교  → 2000
+```
+
+`push`의 `val <= mins.peek()`는 왼쪽이 `int`라서 오른쪽이 언박싱되어 괜찮다. 비교하는 양쪽이 모두 객체일 때만 문제가 된다. `int` 변수에 먼저 받아 두는 것도 방법이다.
+
+## 같은 최솟값은 개수로 묶는다
+
+두 번째 스택 풀이도 `[1, 1, 1, 1, ...]`처럼 같은 최솟값이 반복되면 최소 스택에 똑같은 1이 계속 쌓인다. 이걸 `[값, 개수]`로 묶으면 연속으로 같은 최솟값은 한 칸이 된다.
+
+```js
+class MinStack {
+  constructor() {
+    this.stack = [];
+    this.mins = []; // [최솟값, 그 값이 최소 스택에 들어간 횟수]
+  }
+  push(val) {
+    this.stack.push(val);
+    const t = this.mins[this.mins.length - 1];
+    if (!t || val < t[0]) this.mins.push([val, 1]); // 더 작으면 새 칸
+    else if (val === t[0]) t[1]++;                  // 같으면 개수만 올린다
+  }
+  pop() {
+    const val = this.stack.pop();
+    const t = this.mins[this.mins.length - 1];
+    if (val === t[0] && --t[1] === 0) this.mins.pop();
+  }
+  top() { return this.stack[this.stack.length - 1]; }
+  getMin() { return this.mins[this.mins.length - 1][0]; }
+}
+```
+
+복잡도는 그대로지만 최소 스택의 칸 수가 "서로 다른 최솟값의 수"로 줄어든다. 중복이 많은 데이터에서 효과가 있고, 계속 작아지는 입력에서는 칸마다 개수까지 들고 있어 오히려 더 크다. 면접에서는 "중복이 많으면 이렇게 줄일 수 있다"고 한마디 덧붙이는 정도로 충분하다.
+
+## 최솟값과의 차이만 저장하는 트릭
+
+추가 스택 없이 변수 하나로 끝내는 방법도 있다. 앞에서 변수 하나로는 이전 최솟값을 잃어버린다고 했다. 이 트릭은 이전 최솟값을 스택 칸 안에 숨겨 둔다.
+
+스택에는 값 대신 `값 - 그때의 최솟값`을 넣는다. 이 차이가 음수라면 새 값이 기존 최솟값보다 작았다는 뜻이고, 그 순간 최솟값이 바뀐다. 이 음수 칸이 빠질 때 이전 최솟값을 `min - 차이`로 되살릴 수 있다.
+
+```js
+class MinStack {
+  constructor() {
+    this.stack = []; // 값 - (넣기 직전의 최솟값)
+    this.min = 0;
+  }
+  push(val) {
+    if (this.stack.length === 0) {
+      this.stack.push(0);
+      this.min = val;
+    } else {
+      this.stack.push(val - this.min);
+      if (val < this.min) this.min = val; // 음수 칸 = 최솟값이 바뀐 자리
+    }
+  }
+  pop() {
+    const d = this.stack.pop();
+    // d < 0 이면 빠진 값이 곧 현재 최솟값이었다. 이전 최솟값 = min - d
+    if (d < 0) this.min = this.min - d;
+  }
+  top() {
+    const d = this.stack[this.stack.length - 1];
+    return d < 0 ? this.min : this.min + d; // 음수 칸의 실제 값은 min 자신
+  }
+  getMin() { return this.min; }
+}
+```
+
+예시를 넣으면 스택에 이렇게 쌓인다.
+
+```text
+push 5  stack [0]           min 5
+push 3  stack [0, -2]       min 3   (3 - 5 = -2, 음수라서 min이 3으로 바뀐다)
+push 7  stack [0, -2, 4]    min 3   (7 - 3 = 4)
+push 3  stack [0, -2, 4, 0] min 3   (3 - 3 = 0, 같으면 min은 그대로)
+pop     d = 0               min 3
+pop     d = 4               min 3
+pop     d = -2              min 3 - (-2) = 5   ← 이전 최솟값을 되살렸다
+```
+
+추가 공간이 변수 하나라서 "O(1) 추가 공간"이라고 부른다. 엄밀히는 칸마다 값을 하나 담는 건 같으니 스택 하나 분량은 쓴다. 대신 칸에 담는 값이 원래 범위보다 넓어진다. 32비트 정수 범위에서 `2^31 - 1`을 넣은 뒤 `-2^31`을 넣으면 차이가 약 -4.3 × 10^9이라 `int`에 안 들어간다. Java에서 `int`로 짜고 돌려 보면 이렇게 깨진다.
+
+```text
+push MAX, push MIN, push MAX 후
+  long으로 저장  top = 2147483647   두 번 pop 후 min = 2147483647
+  int로 저장     top = -2147483648  두 번 pop 후 min = -2147483647   (틀림)
+```
+
+그래서 Java에서는 `Deque<Long>`과 `long min`을 쓰고, 넣을 때 `(long) val - min`처럼 먼저 넓혀서 뺀다. JavaScript의 숫자는 2^53까지 정확한 정수라 이 범위에서는 문제가 없고, Python 정수는 크기 제한이 없다. 코드가 짧은 대신 읽는 사람이 원리를 알아야 이해할 수 있어서, 실무 코드보다는 "공간을 더 줄일 수 있나"라는 꼬리 질문의 답으로 쓴다.
+
+## 여섯 풀이를 나란히 놓으면
+
+| 풀이 | push / pop | getMin | 추가 공간 | 언제 고르나 |
+|---|---|---|---|---|
+| 매번 훑기 | O(1) | O(n) | 없음 | `getMin`이 아주 드물 때. 정답 확인용 |
+| 정렬 사본 (배열) | O(n) | O(1) | O(n) | 거의 쓰지 않는다 |
+| 정렬 사본 (TreeMap) | O(log n) | O(log n) | O(n) | k번째 값처럼 순서 질문이 더 있을 때 |
+| 쌍 스택 | O(1) | O(1) | 항상 n칸 | 가장 안전한 기본 답 |
+| 최소 스택 | O(1) | O(1) | 0 ~ n칸 | 최솟값이 자주 안 바뀌는 데이터. 면접 정석 |
+| 최소 스택 + 개수 | O(1) | O(1) | 서로 다른 최솟값 수 | 같은 최솟값이 많이 반복될 때 |
+| 차이 저장 | O(1) | O(1) | 변수 하나 (칸 값이 넓어짐) | 공간을 극한까지 줄이라고 할 때 |
+
+정렬 사본을 배열과 TreeMap으로 나눠 적어서 일곱 줄이지만 아이디어로는 여섯 가지다. 면접에서는 "변수 하나로는 pop 후 이전 최솟값을 잃는다 → 최솟값의 역사를 스택에 둔다"는 흐름을 먼저 말하고, 쌍 스택이나 최소 스택을 쓴다. 공간을 줄이라는 질문이 오면 개수 묶기와 차이 저장을 꺼낸다.
+
+<CodePlayground
+  caption="Min Stack: 연산 목록을 받아 결과 배열 돌려주기"
+  functionName="runMinStack"
+  initialCode={`function runMinStack(ops, args) {
+  class MinStack {
+    constructor() {}
+    push(val) {}
+    pop() {}
+    top() {}
+    getMin() {}
+  }
+  // ops[i]가 "MinStack"이면 새로 만들고 null,
+  // 그 밖에는 메서드를 args[i]로 부르고 돌려준 값(없으면 null)을 모은다
+  const out = [];
+  let s = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "MinStack") { s = new MinStack(); out.push(null); continue; }
+    const r = s[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  solution={`function runMinStack(ops, args) {
+  class MinStack {
+    constructor() {
+      this.stack = [];
+      this.mins = []; // 맨 위가 지금 스택의 최솟값
+    }
+    push(val) {
+      this.stack.push(val);
+      if (this.mins.length === 0 || val <= this.mins[this.mins.length - 1]) this.mins.push(val);
+    }
+    pop() {
+      const val = this.stack.pop();
+      if (val === this.mins[this.mins.length - 1]) this.mins.pop();
+    }
+    top() { return this.stack[this.stack.length - 1]; }
+    getMin() { return this.mins[this.mins.length - 1]; }
+  }
+  const out = [];
+  let s = null;
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "MinStack") { s = new MinStack(); out.push(null); continue; }
+    const r = s[ops[i]](...args[i]);
+    out.push(r === undefined ? null : r);
+  }
+  return out;
+}`}
+  tests={[
+    { args: [["MinStack", "push", "push", "push", "push", "getMin", "pop", "pop", "getMin", "pop", "getMin"], [[], [5], [3], [7], [3], [], [], [], [], [], []]], expected: [null, null, null, null, null, 3, null, null, 3, null, 5], label: "본문 예시" },
+    { args: [["MinStack", "push", "push", "getMin", "top", "pop", "getMin"], [[], [2], [-4], [], [], [], []]], expected: [null, null, null, -4, -4, null, 2], label: "음수 최솟값이 빠진다" },
+    { args: [["MinStack", "push", "push", "push", "getMin", "pop", "getMin", "pop", "getMin"], [[], [1], [1], [1], [], [], [], [], []]], expected: [null, null, null, null, 1, null, 1, null, 1], label: "같은 최솟값이 세 번" },
+    { args: [["MinStack", "push", "getMin", "top"], [[], [-7], [], []]], expected: [null, null, -7, -7], label: "원소 하나" },
+    { args: [["MinStack", "push", "push", "push", "getMin", "pop", "getMin", "top"], [[], [1], [2], [3], [], [], [], []]], expected: [null, null, null, null, 1, null, 1, 2], label: "커지는 순서" },
+    { args: [["MinStack", "push", "push", "push", "getMin", "pop", "getMin", "pop", "getMin"], [[], [3], [2], [1], [], [], [], [], []]], expected: [null, null, null, null, 1, null, 2, null, 3], label: "작아지는 순서" },
+    { args: [["MinStack", "push", "push", "getMin", "pop", "push", "getMin"], [[], [2147483647], [-2147483648], [], [], [0], []]], expected: [null, null, null, -2147483648, null, null, 0], label: "32비트 양 끝 값" },
+  ]}
+/>
+
+## 틀리는 코드는 대개 이렇게 생겼다
+
+가장 흔한 실수는 최소 스택에 넣는 조건을 `<`로 쓰는 것이다. 같은 최솟값이 두 번 들어오면 최소 스택에는 한 번만 들어가고, 첫 번째가 빠질 때 최소 스택에서 그 값이 빠져 버린다.
+
+```js
+push(val) {
+  this.stack.push(val);
+  if (this.mins.length === 0 || val < this.mins[this.mins.length - 1]) { // < 로 썼다
+    this.mins.push(val);
+  }
+}
+```
+
+본문 예시에 돌리면 두 번 `pop`한 뒤의 `getMin`이 3이 아니라 5가 나온다. 본 스택에는 3이 아직 남아 있는데 최소 스택에는 5만 남았기 때문이다. 랜덤 연산 3000세트로 기준 답과 비교했을 때도 이 버전만 374세트에서 결과가 달랐다. 테스트에 "같은 최솟값을 두 번 넣고 하나 빼기"를 꼭 넣는다.
+
+두 번째는 앞에서 본 Java의 `Integer` 참조 비교다. 작은 값으로 테스트하면 통과해서 더 위험하다. 세 번째는 차이 저장 트릭을 `int`로 짜는 것이다. 경계값 `2147483647`, `-2147483648`을 함께 넣어 봐야 드러난다.
+
+빈 스택은 LeetCode 제약상 `pop`, `top`, `getMin`이 불리지 않지만, 실무 코드로 쓴다면 정해야 한다. 위 JavaScript 코드는 빈 스택의 `top`과 `getMin`에서 `undefined`를 돌려준다. 예외를 던질지 `null`을 돌려줄지 정해서 문서에 적어 두는 편이 낫다. 쌍 스택 풀이에서 빈 스택의 `top()`은 `undefined[0]`이 되어 `TypeError`가 난다.
+
+## 면접관이 이어서 묻는 것
+
+### 최댓값도 같이 달라면
+
+`getMax`를 더하는 건 최대 스택을 하나 더 두면 끝난다. 조건만 `>=`로 바뀐다. 쌍 스택이라면 칸을 `[값, 최솟값, 최댓값]` 셋으로 늘린다.
+
+어려워지는 건 LeetCode 716 Max Stack의 `popMax`처럼 "최댓값을 꺼내라"고 할 때다. 이제 맨 위가 아닌 값이 빠질 수 있으니 "빠지는 순서가 정해져 있다"는 전제가 깨진다. 그러면 이 글의 O(1) 풀이들은 쓸 수 없고, 앞에서 본 정렬 구조로 돌아간다. 값 순서를 담은 TreeMap과 넣은 순서를 담은 이중 연결 리스트를 함께 두면 모든 연산이 O(log n)이 된다. 힙 두 개와 "지운 표시"를 쓰는 지연 삭제로도 풀린다. 힙은 [힙 글](/posts/ds-heap)에서 다뤘다.
+
+### 스택이 아니라 큐라면
+
+먼저 들어온 것이 먼저 빠지는 큐에서 최솟값을 O(1)에 달라는 질문이다. 큐는 앞에서 빠지니 이 글의 "역사를 거꾸로 되돌린다"가 바로 성립하지 않는다. 두 가지 방법이 있다.
+
+하나는 스택 두 개로 큐를 만드는 고전 기법에 최소 스택을 얹는 것이다. 넣을 때는 inbox에, 꺼낼 때 outbox가 비었으면 inbox를 통째로 뒤집어 옮긴다. 두 스택이 모두 쌍 스택이면 큐 전체의 최솟값은 두 맨 위 최솟값 중 작은 쪽이다.
+
+```js
+class MinQueue {
+  constructor() {
+    this.inbox = [];  // [값, 이 칸까지의 최솟값]
+    this.outbox = [];
+  }
+  static push(st, x) {
+    const m = st.length ? Math.min(x, st[st.length - 1][1]) : x;
+    st.push([x, m]);
+  }
+  enqueue(x) { MinQueue.push(this.inbox, x); }
+  dequeue() {
+    if (this.outbox.length === 0) {
+      // inbox를 뒤집어 옮기면 가장 먼저 온 값이 outbox 맨 위에 온다
+      while (this.inbox.length) MinQueue.push(this.outbox, this.inbox.pop()[0]);
+    }
+    return this.outbox.pop()[0];
+  }
+  getMin() {
+    const a = this.inbox.length ? this.inbox[this.inbox.length - 1][1] : Infinity;
+    const b = this.outbox.length ? this.outbox[this.outbox.length - 1][1] : Infinity;
+    return Math.min(a, b);
+  }
+}
+// 4, 2, 6을 넣고: getMin 2 → dequeue 4 → dequeue 2 → getMin 6
+// 1을 넣고: getMin 1 → dequeue 6 → getMin 1
+```
+
+옮기는 작업이 가끔 O(n)이지만 값마다 한 번씩만 옮겨지니 분할 상환 O(1)이다. 다른 하나는 값이 단조 증가하도록 유지하는 덱이다. 크기 k인 창이 밀려가며 창 안의 최솟값이나 최댓값을 구하는 문제가 바로 이 구조를 쓴다. 덱 풀이는 [Sliding Window Maximum](/posts/leetcode-sliding-window-maximum)에서, 단조 구조 전반은 [단조 스택 패턴 글](/posts/monotonic-stack-pattern)에서 이어진다. 위 `MinQueue`로 `[4, 2, 6, 1, 5, 3, 7]`에서 크기 3 창의 최솟값을 구하면 `[2, 1, 1, 1, 3]`이 나온다.
+
+### 여러 스레드가 함께 쓴다면
+
+`push` 한 번이 본 스택과 최소 스택 두 곳을 바꾸니, 두 스레드가 동시에 넣으면 두 스택의 순서가 어긋날 수 있다. 한 스택에 A가 먼저, 다른 스택에 B가 먼저 들어가는 식이다. 메서드 전체를 하나의 락으로 감싸거나, 쌍 스택처럼 한 번의 push로 값과 최솟값이 함께 들어가는 구조를 쓰면 이 어긋남이 생길 틈이 줄어든다. 쌍 스택이 동시성에서도 다루기 쉬운 이유다.
+
+### 비슷한 문제
+
+같은 "기록을 함께 쌓는다" 아이디어는 다른 문제에도 나온다. 주식 가격 스팬(LeetCode 901 Online Stock Span)은 스택에 `[가격, 묶은 날 수]`를 쌓고, 다음 더 따뜻한 날을 찾는 [Daily Temperatures](/posts/leetcode-daily-temperatures)는 아직 답을 못 찾은 날을 스택에 쌓는다. 스택 두 개로 큐 만들기는 LeetCode 232 Implement Queue using Stacks다.
+
+## 최솟값의 역사를 같은 순서로 쌓는다
+
+이 문제에서 기억할 것은 하나다. 변수 하나에 최솟값을 들고 있으면 pop했을 때 이전 최솟값을 잃는다. 스택은 맨 위부터 빠지니, 최솟값의 역사도 스택에 쌓아 두면 같은 순서로 되돌릴 수 있다. 그 역사를 칸마다 적으면 쌍 스택, 바뀔 때만 적으면 최소 스택, 칸 안에 숨기면 차이 저장 트릭이 된다. 최소 스택이라면 "같을 때도 넣는다"를, Java라면 `equals`를 잊지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### 최솟값을 변수 하나로 관리하면 왜 안 되나요?
+
+push는 문제없지만 pop에서 막힌다. 지금 최솟값이 빠지면 그 전의 최솟값이 필요한데, 변수 하나에는 덮어쓴 이전 값이 남아 있지 않다. 다시 찾으려면 전체를 훑어야 해서 O(n)이 된다. 그래서 최솟값의 이력을 스택처럼 쌓아 둔다.
+
+### 최소 스택에 넣는 조건을 왜 `<=`로 하나요?
+
+같은 최솟값이 여러 번 들어올 수 있기 때문이다. `<`로 쓰면 두 번째 같은 값은 최소 스택에 안 들어가고, 하나가 빠질 때 최소 스택의 기록이 사라져 남은 같은 값을 놓친다. 5, 3, 3을 넣고 3을 하나 빼면 최솟값은 3이어야 하는데 5가 나온다.
+
+### 쌍 스택과 최소 스택 중 무엇을 고르나요?
+
+둘 다 모든 연산이 O(1)이다. 쌍 스택은 칸마다 최솟값을 적어서 항상 2n칸을 쓰지만 중복이나 음수에 신경 쓸 게 없다. 최소 스택은 최솟값이 바뀔 때만 적어서 보통 더 적게 쓰지만 `<=`와 Java의 `equals` 같은 세부를 지켜야 한다. 시간이 촉박하면 쌍 스택, 공간을 이야기할 여유가 있으면 최소 스택을 쓴다.
+
+### 추가 공간을 O(1)로 줄일 수 있나요?
+
+스택에 값 대신 `값 - 그때의 최솟값`을 넣으면 최솟값 변수 하나로 된다. 차이가 음수인 칸이 최솟값이 바뀐 자리라서, 그 칸이 빠질 때 `min - 차이`로 이전 최솟값을 되살린다. 다만 차이가 32비트 범위를 넘을 수 있어서 Java는 `long`으로 저장해야 한다.
+
+### Java로 짰는데 작은 수에서는 맞고 큰 수에서 틀립니다. 왜 그럴까요?
+
+`Integer` 객체끼리 `==`로 비교했을 가능성이 크다. Java는 -128부터 127까지만 `Integer`를 캐시해 같은 객체를 주므로, 그 밖의 값은 같은 숫자라도 다른 객체라서 `==`가 false다. `equals`로 비교하거나 `int`로 받아서 비교한다.
+
+### `popMax`가 추가되면 어떻게 되나요?
+
+맨 위가 아닌 값이 빠질 수 있으니 빠지는 순서가 정해져 있다는 전제가 깨지고, O(1) 풀이들은 쓸 수 없다. 값 순서를 담은 TreeMap과 넣은 순서를 담은 이중 연결 리스트를 함께 두면 연산이 O(log n)이 된다. 힙 두 개에 지연 삭제를 써도 된다.
+
+### 큐에서 최솟값을 O(1)에 구하려면요?
+
+최소 스택 두 개로 큐를 만들거나 단조 덱을 쓴다. 스택 두 개 방식은 넣을 때 inbox에, 꺼낼 때 outbox가 비면 inbox를 뒤집어 옮기고, 두 맨 위 최솟값 중 작은 쪽이 답이다. 값마다 한 번만 옮겨지므로 분할 상환 O(1)이다.

@@ -2,6 +2,558 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "aws-core-services-map": {
+    "links": [
+      "iam-basics",
+      "cloud-service-models-shared-responsibility",
+      "multi-region",
+      "vpc-basics",
+      "vpc-subnets-route-tables",
+      "security-groups-nacl",
+      "ec2-instance-types-launch-templates",
+      "aws-ec2-ubuntu-server-setup",
+      "rds-aurora-managed-db",
+      "aws-s3-in-practice",
+      "high-availability",
+      "route53-routing-policies",
+      "cloudwatch-metrics-logs-alarms",
+      "cloud-cost-optimization",
+      "terraform-basics"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "vpc-peering-transit-privatelink",
+      "db-type-key-value",
+      "container-orchestration-choices",
+      "sd-object-storage-architecture",
+      "sd-start-single-server",
+      "db-replication-sharding",
+      "security-principles-cia-defense-in-depth",
+      "disaster-recovery",
+      "osi-in-practice",
+      "what-happens-google-com",
+      "sso-saml-oidc",
+      "github-actions-docker-ecr",
+      "eks-cluster-basics"
+    ]
+  },
+  "frontend-first-steps": {
+    "links": [
+      "html-semantics",
+      "css-cascade-specificity",
+      "css-box-model-layout",
+      "css-flexbox-grid",
+      "dom-basics",
+      "event-delegation",
+      "browser-rendering-pipeline",
+      "browser-devtools-debugging",
+      "bundler-basics",
+      "js-es-modules",
+      "frontend-frameworks-compared",
+      "react-jsx-components",
+      "responsive-design",
+      "javascript-roadmap"
+    ],
+    "mentions": []
+  },
+  "git-first-hour": {
+    "links": [
+      "git-internals-basics",
+      "git-staging-area",
+      "git-ignore-config",
+      "git-large-files-secrets",
+      "git-remote-collaboration",
+      "git-merge-conflict",
+      "git-rebase",
+      "git-troubleshooting",
+      "git-branch-merge",
+      "github-pull-request-flow",
+      "git-undo"
+    ],
+    "mentions": [
+      "token-login",
+      "code-review-practices",
+      "what-happens-google-com"
+    ]
+  },
+  "github-pull-request-flow": {
+    "links": [
+      "git-first-hour",
+      "git-remote-collaboration",
+      "github-repo-governance",
+      "code-review-practices",
+      "git-branching-strategy",
+      "git-stacked-prs"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "git-tips-advanced"
+    ]
+  },
+  "go-language-essentials": {
+    "links": [
+      "python-essentials-for-backend",
+      "go-concurrency-basics",
+      "backend-language-comparison"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "terraform-basics",
+      "db-type-embedded",
+      "what-happens-google-com",
+      "db-type-key-value",
+      "dns",
+      "vector-db"
+    ]
+  },
+  "llm-evals": {
+    "links": [
+      "rag-retrieval-quality",
+      "llm-basics-for-developers",
+      "ai-coding-agents",
+      "llm-api-integration",
+      "prompt-reasoning-techniques"
+    ],
+    "mentions": [
+      "agentic-rag",
+      "ab-testing",
+      "smoke-sanity-regression-testing",
+      "rag-classic-pipeline",
+      "vector-db"
+    ]
+  },
+  "multimodal-llm-apps": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "llm-evals",
+      "rag-retrieval-quality",
+      "rag-classic-pipeline",
+      "self-hosting-llm-inference"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "vector-db"
+    ]
+  },
+  "os-kernel-system-calls": {
+    "links": [
+      "process-vs-thread",
+      "virtual-memory-paging",
+      "cpu-scheduling-interrupts",
+      "page-cache-disk-io",
+      "linux-namespaces-cgroups",
+      "nodejs-server-runtime",
+      "seccomp-apparmor",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "cpu-pipelining-branch-prediction",
+      "k8s-security-context",
+      "redis-basics"
+    ]
+  },
+  "prompt-reasoning-techniques": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-evals",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof",
+      "llm-api-integration",
+      "postgres-query-planner",
+      "rag-classic-pipeline",
+      "db-modeling-normalization"
+    ]
+  },
+  "python-essentials-for-backend": {
+    "links": [
+      "fastapi-basics",
+      "backend-language-comparison",
+      "dependency-hell",
+      "go-language-essentials",
+      "bash-scripting"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "docker-container-basics",
+      "js-memory-leak",
+      "runtime-validation-zod",
+      "event-loop"
+    ]
+  },
+  "self-hosting-llm-inference": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "llm-evals",
+      "k8s-gpu-dra",
+      "multimodal-llm-apps"
+    ],
+    "mentions": [
+      "api-scaling-ladder",
+      "load-testing-k6",
+      "transformer-attention-kv-cache",
+      "osi-in-practice",
+      "rag-classic-pipeline",
+      "vector-db"
+    ]
+  },
+  "transformer-attention-kv-cache": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration"
+    ],
+    "mentions": [
+      "rag-classic-pipeline",
+      "self-hosting-llm-inference",
+      "db-modeling-normalization",
+      "dns",
+      "vector-db"
+    ]
+  },
+  "leetcode-3sum": {
+    "links": [
+      "leetcode-two-sum-ii",
+      "ds-hash-map",
+      "leetcode-container-with-most-water"
+    ],
+    "mentions": [
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-best-time-to-buy-and-sell-stock": {
+    "links": [
+      "ds-array-matrix",
+      "greedy-algorithms",
+      "dynamic-programming",
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-sliding-window-maximum"
+    ],
+    "mentions": [
+      "string-search-algorithms",
+      "divide-and-conquer",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-binary-search": {
+    "links": [
+      "binary-search",
+      "recursion-backtracking",
+      "sorting-algorithms",
+      "big-o-notation",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "sql-filtering-operators",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-container-with-most-water": {
+    "links": [
+      "leetcode-trapping-rain-water",
+      "leetcode-two-sum-ii",
+      "leetcode-largest-rectangle-in-histogram",
+      "binary-search"
+    ],
+    "mentions": [
+      "ds-union-find",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-contains-duplicate": {
+    "links": [
+      "leetcode-two-sum",
+      "ds-hash-map",
+      "leetcode-valid-anagram",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "js-memory-leak",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "js-array-mutation",
+      "bloom-filter"
+    ]
+  },
+  "leetcode-daily-temperatures": {
+    "links": [
+      "ds-stack-queue-deque",
+      "big-o-notation",
+      "ds-hash-map",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-trapping-rain-water"
+    ],
+    "mentions": [
+      "segment-tree-fenwick",
+      "sd-latency-numbers",
+      "message-delivery-semantics",
+      "binary-search"
+    ]
+  },
+  "leetcode-find-minimum-in-rotated-sorted-array": {
+    "links": [
+      "leetcode-binary-search",
+      "leetcode-search-in-rotated-sorted-array",
+      "binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-generate-parentheses": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "recursion-backtracking",
+      "dynamic-programming"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "ds-binary-tree-bst",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-group-anagrams": {
+    "links": [
+      "leetcode-valid-anagram",
+      "ds-hash-map",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-contains-duplicate"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "big-o-notation",
+      "db-modeling-normalization"
+    ]
+  },
+  "leetcode-koko-eating-bananas": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": []
+  },
+  "leetcode-largest-rectangle-in-histogram": {
+    "links": [
+      "leetcode-daily-temperatures",
+      "leetcode-trapping-rain-water",
+      "leetcode-container-with-most-water"
+    ],
+    "mentions": [
+      "segment-tree-fenwick",
+      "js-execution-context",
+      "divide-and-conquer",
+      "ds-stack-queue-deque",
+      "big-o-notation",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-longest-repeating-character-replacement": {
+    "links": [
+      "leetcode-longest-substring-without-repeating",
+      "binary-search",
+      "leetcode-minimum-window-substring"
+    ],
+    "mentions": []
+  },
+  "leetcode-longest-substring-without-repeating": {
+    "links": [
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "binary-search",
+      "ds-hash-map",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-minimum-window-substring"
+    ],
+    "mentions": [
+      "js-strings-unicode",
+      "sql-filtering-operators",
+      "big-o-notation",
+      "cookie-session-login"
+    ]
+  },
+  "leetcode-median-of-two-sorted-arrays": {
+    "links": [
+      "leetcode-binary-search",
+      "leetcode-koko-eating-bananas",
+      "sorting-algorithms",
+      "ds-heap",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-search-in-rotated-sorted-array"
+    ],
+    "mentions": [
+      "binary-search",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-min-stack": {
+    "links": [
+      "ds-stack-queue-deque",
+      "leetcode-valid-parentheses",
+      "binary-search",
+      "ds-heap",
+      "leetcode-sliding-window-maximum",
+      "leetcode-daily-temperatures"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-minimum-window-substring": {
+    "links": [
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-longest-repeating-character-replacement",
+      "binary-search",
+      "leetcode-sliding-window-maximum"
+    ],
+    "mentions": [
+      "sql-filtering-operators",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-search-in-rotated-sorted-array": {
+    "links": [
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "binary-search",
+      "leetcode-binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-sliding-window-maximum": {
+    "links": [
+      "leetcode-minimum-window-substring",
+      "ds-heap",
+      "ds-stack-queue-deque",
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "leetcode-longest-substring-without-repeating"
+    ],
+    "mentions": [
+      "sql-interview-problems",
+      "ds-binary-tree-bst",
+      "segment-tree-fenwick",
+      "ds-array-matrix",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-top-k-frequent-elements": {
+    "links": [
+      "ds-heap",
+      "sorting-algorithms",
+      "leetcode-contains-duplicate",
+      "leetcode-valid-anagram",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": [
+      "count-min-sketch",
+      "ds-linked-list",
+      "big-o-notation",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-trapping-rain-water": {
+    "links": [
+      "leetcode-container-with-most-water",
+      "dynamic-programming",
+      "ds-heap",
+      "shortest-path-algorithms",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-daily-temperatures"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque",
+      "ds-array-matrix",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-two-sum-ii": {
+    "links": [
+      "leetcode-two-sum",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-3sum"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-two-sum": {
+    "links": [
+      "ds-hash-map",
+      "big-o-notation",
+      "sorting-algorithms",
+      "leetcode-two-sum-ii",
+      "binary-search",
+      "leetcode-3sum",
+      "leetcode-contains-duplicate",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": []
+  },
+  "leetcode-valid-anagram": {
+    "links": [
+      "leetcode-group-anagrams",
+      "leetcode-two-sum",
+      "js-strings-unicode"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "floating-point-numbers",
+      "db-modeling-normalization"
+    ]
+  },
+  "leetcode-valid-palindrome": {
+    "links": [
+      "recursion-backtracking",
+      "big-o-notation",
+      "dynamic-programming",
+      "leetcode-two-sum-ii",
+      "leetcode-3sum"
+    ],
+    "mentions": [
+      "js-strings-unicode",
+      "ds-linked-list",
+      "string-search-algorithms",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-valid-parentheses": {
+    "links": [
+      "ds-stack-queue-deque",
+      "recursion-backtracking",
+      "leetcode-daily-temperatures",
+      "leetcode-largest-rectangle-in-histogram",
+      "dynamic-programming",
+      "leetcode-generate-parentheses",
+      "leetcode-min-stack"
+    ],
+    "mentions": [
+      "pattern-interpreter",
+      "js-execution-context",
+      "ds-array-matrix",
+      "big-o-notation"
+    ]
+  },
   "linux-archive-transfer": {
     "links": [
       "rsync-algorithm",
@@ -29,6 +581,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "docker-container-basics",
+      "python-essentials-for-backend",
       "what-happens-google-com"
     ]
   },
@@ -185,6 +738,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "aws-ec2-ubuntu-server-setup",
       "page-cache-disk-io",
+      "os-kernel-system-calls",
       "client-data-cache"
     ]
   },
@@ -203,6 +757,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "owasp-top-10-map",
       "sd-url-shortener-api-redirect",
+      "python-essentials-for-backend",
       "network-attacks-l2-l3",
       "dynamic-programming",
       "what-happens-google-com",
@@ -761,6 +1316,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-async-await",
+      "os-kernel-system-calls",
       "centralized-logging-pipeline",
       "event-loop"
     ]
@@ -1275,7 +1831,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "serverless-limits",
       "queue-based-load-leveling",
       "centralized-logging-pipeline",
-      "data-privacy-compliance"
+      "data-privacy-compliance",
+      "aws-core-services-map"
     ]
   },
   "soap-and-soa": {
@@ -1398,6 +1955,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ec2-instance-types-launch-templates",
       "multi-tenancy-isolation",
       "k8s-security-context",
+      "os-kernel-system-calls",
       "security-groups-nacl",
       "eks-cluster-basics",
       "vpc-basics",
@@ -1417,6 +1975,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "streaming-ssr-suspense",
       "osi-in-practice",
+      "os-kernel-system-calls",
       "kubernetes-ingress",
       "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
@@ -1440,6 +1999,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "proxy-reverse-proxy",
       "linux-files-permissions",
+      "os-kernel-system-calls",
       "threat-modeling-stride",
       "security-principles-cia-defense-in-depth"
     ]
@@ -1511,6 +2071,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-limits",
+      "os-kernel-system-calls",
       "race-conditions",
       "db-modeling-normalization"
     ]
@@ -1618,6 +2179,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "docker-container-basics",
       "linux-boot-process",
+      "aws-core-services-map",
       "virtualization-hypervisors",
       "backup-strategy",
       "autoscaling",
@@ -1681,6 +2243,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "process-vs-thread",
+      "os-kernel-system-calls",
       "ec2-instance-types-launch-templates",
       "dockerfile-image-layers"
     ]
@@ -1871,6 +2434,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-expansions-variables"
     ],
     "mentions": [
+      "os-kernel-system-calls",
       "shells-posix-compat",
       "centralized-logging-pipeline"
     ]
@@ -2071,6 +2635,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "pessimistic-locking",
       "sd-latency-numbers",
+      "os-kernel-system-calls",
       "page-cache-disk-io",
       "linux-systemd-systemctl",
       "db-replication-sharding",
@@ -2175,6 +2740,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "threat-modeling-stride",
       "sd-start-single-server",
       "ssrf",
+      "os-kernel-system-calls",
       "input-validation-secure-coding",
       "sso-saml-oidc"
     ]
@@ -2193,6 +2759,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "linux-users-groups-sudo",
       "ds-hash-map",
+      "python-essentials-for-backend",
       "shells-posix-compat"
     ]
   },
@@ -2270,7 +2837,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "virtual-memory-paging",
       "ds-binary-tree-bst",
       "k8s-architecture",
-      "virtualization-hypervisors"
+      "virtualization-hypervisors",
+      "os-kernel-system-calls"
     ]
   },
   "floating-point-numbers": {
@@ -2355,6 +2923,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sd-queue-logging-automation",
+      "os-kernel-system-calls",
       "cpu-cache-hierarchy",
       "sd-maps-tiles-routing",
       "sql-batch-timeout-pool",
@@ -2382,6 +2951,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-security-model",
+      "os-kernel-system-calls",
       "cpu-pipelining-branch-prediction",
       "event-loop",
       "sql-batch-timeout-pool",
@@ -2880,6 +3450,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "https-tls",
+      "os-kernel-system-calls",
       "api-scaling-ladder",
       "smoke-sanity-regression-testing",
       "latency-bandwidth-throughput",
@@ -3153,6 +3724,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "github-actions-docker-ecr",
       "github-apps-api",
+      "github-pull-request-flow",
       "k8s-deploy-pipeline-eks",
       "rest-api-design",
       "token-login",
@@ -3213,6 +3785,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "rest-api-design",
       "input-validation-secure-coding",
+      "llm-evals",
       "cookie-session-login"
     ]
   },
@@ -3225,7 +3798,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ai-coding-agents",
-      "floating-point-numbers"
+      "llm-evals",
+      "prompt-reasoning-techniques",
+      "floating-point-numbers",
+      "self-hosting-llm-inference"
     ]
   },
   "mcp-protocol": {
@@ -3291,6 +3867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "centralized-logging-pipeline",
       "event-loop",
+      "os-kernel-system-calls",
       "nodejs-cli-process",
       "osi-in-practice",
       "connection-pool",
@@ -3306,6 +3883,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nodejs-http-clients"
     ],
     "mentions": [
+      "os-kernel-system-calls",
       "regex-and-globbing",
       "http-streaming-sse",
       "event-loop",
@@ -4383,6 +4961,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "helm-basics",
       "k8s-node-maintenance",
+      "os-kernel-system-calls",
       "shells-posix-compat",
       "k8s-certifications",
       "webhooks"
@@ -4425,6 +5004,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-daemonset",
       "docker-container-basics",
       "k8s-architecture",
+      "os-kernel-system-calls",
       "linux-processes-signals",
       "linux-files-permissions",
       "osi-in-practice",
@@ -4447,6 +5027,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "helm-basics",
       "authn-vs-authz",
+      "os-kernel-system-calls",
       "linux-files-permissions",
       "osi-in-practice",
       "local-k8s-kind-minikube",
@@ -4527,6 +5108,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "observability-basics",
       "linux-processes-signals",
+      "os-kernel-system-calls",
       "ds-hash-map",
       "event-loop",
       "vpc-basics"
@@ -4816,6 +5398,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-nat",
       "vpc-subnets-route-tables",
+      "os-kernel-system-calls",
       "k8s-architecture",
       "sd-start-single-server",
       "shell-environment-startup",
@@ -4878,6 +5461,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "json-crud-http",
       "linux-namespaces-cgroups",
       "virtualization-hypervisors",
+      "os-kernel-system-calls",
       "pattern-prototype",
       "redis-basics",
       "block-file-object-storage"
@@ -4892,6 +5476,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mysql-innodb-basics",
+      "os-kernel-system-calls",
       "linux-disks-filesystems",
       "sd-kv-store-write-read-path",
       "message-queue-basics",
@@ -5898,6 +6483,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-tips-advanced"
     ],
     "mentions": [
+      "github-pull-request-flow",
       "github-actions-docker-ecr"
     ]
   },
@@ -6216,6 +6802,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "elasticsearch-inverted-index",
       "json-crud-http",
       "rendering-strategies",
+      "self-hosting-llm-inference",
       "nodejs-http-clients",
       "input-validation-secure-coding",
       "http-status-codes",
@@ -6647,6 +7234,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-resources",
       "load-testing-k6",
+      "os-kernel-system-calls",
       "abort-controller",
       "tail-latency",
       "sql-batch-timeout-pool",
@@ -6830,6 +7418,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "python-essentials-for-backend",
       "load-testing-k6",
       "spring-ioc-di",
       "autoscaling",
@@ -6901,6 +7490,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "llm-evals",
       "kafka-basics",
       "on-call"
     ]
@@ -6915,6 +7505,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "llm-evals",
       "security-principles-cia-defense-in-depth",
       "kafka-basics",
       "vector-db",
@@ -7049,6 +7640,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "smoke-sanity-regression-testing",
       "db-index-design",
+      "llm-evals",
       "web-accessibility",
       "kafka-basics",
       "db-modeling-normalization",
@@ -7063,6 +7655,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
+      "llm-evals",
       "kafka-basics",
       "llm-basics-for-developers"
     ]
@@ -7409,6 +8002,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "event-loop",
+      "os-kernel-system-calls",
       "cpu-cache-hierarchy",
       "page-cache-disk-io",
       "kafka-basics"
@@ -8102,6 +8696,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "osi-in-practice",
+      "os-kernel-system-calls",
       "sd-start-single-server",
       "redis-basics",
       "db-type-key-value"
@@ -10440,6 +11035,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "cron-jobs",
       "centralized-logging-pipeline",
+      "os-kernel-system-calls",
       "sd-object-storage-architecture",
       "sdn-vxlan-overlay",
       "grpc",
@@ -10680,6 +11276,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-coredns",
       "packet-capture-tcpdump",
       "db-type-key-value",
+      "os-kernel-system-calls",
       "sdn-vxlan-overlay",
       "osi-in-practice",
       "ddos-protection",
@@ -11308,6 +11905,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "docker-runtime-security",
       "k8s-architecture",
+      "os-kernel-system-calls",
       "js-numbers-bigint",
       "local-k8s-kind-minikube"
     ]
@@ -11736,6 +12334,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "page-cache-disk-io",
       "sql-aggregation-pitfalls",
+      "os-kernel-system-calls",
       "linux-disks-filesystems",
       "osi-in-practice",
       "mutex-semaphore-monitor",
@@ -11777,6 +12376,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
+      "frontend-first-steps",
       "cross-platform-apps",
       "graphql-basics",
       "linters-formatters",
@@ -11795,6 +12395,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops"
     ],
     "mentions": [
+      "frontend-first-steps",
       "helm-basics",
       "frontend-monorepo"
     ]
@@ -11843,6 +12444,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "s3-storage-classes-lifecycle",
+      "aws-core-services-map",
       "serverless-architecture",
       "opensearch-cluster-operations",
       "k8s-node-autoscaling-karpenter",
@@ -12045,6 +12647,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multi-region"
     ],
     "mentions": [
+      "aws-core-services-map",
       "linux-fhs-file-commands",
       "bash-scripting",
       "sd-object-storage-architecture",
@@ -12095,6 +12698,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-architecture",
+      "aws-core-services-map",
       "security-principles-cia-defense-in-depth",
       "http-status-codes",
       "cloud-service-models-shared-responsibility",
@@ -12791,6 +13395,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "python-essentials-for-backend",
       "web-security-headers",
       "web-workers",
       "load-testing-k6",
@@ -12838,6 +13443,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-advanced-sql",
+      "os-kernel-system-calls",
       "load-testing-k6",
       "react-state-snapshot-batching",
       "sd-start-single-server",
@@ -12907,6 +13513,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "os-kernel-system-calls",
       "sd-queue-logging-automation",
       "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
@@ -13044,6 +13651,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "linux-processes-signals",
       "postgres-advanced-sql",
+      "os-kernel-system-calls",
       "message-delivery-semantics",
       "sd-start-single-server",
       "autoscaling",
@@ -13095,7 +13703,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-mq-storage-partitions",
       "sd-proximity-service",
       "db-index-design",
-      "redis-basics"
+      "redis-basics",
+      "self-hosting-llm-inference"
     ]
   },
   "distributed-tracing": {
@@ -13772,6 +14381,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "proxy-reverse-proxy",
       "aws-ec2-ubuntu-server-setup",
+      "os-kernel-system-calls",
       "centralized-logging-pipeline",
       "sd-start-single-server",
       "bash-expansions-variables",
@@ -13811,6 +14421,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
+      "os-kernel-system-calls",
       "nodejs-debugging-profiling",
       "js-numbers-bigint",
       "spring-boot-on-kubernetes",
@@ -13834,6 +14445,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-users-groups-sudo",
       "k8s-architecture",
       "bash-scripting",
+      "os-kernel-system-calls",
       "linux-disks-filesystems",
       "shell-environment-startup",
       "linux-systemd-systemctl"
@@ -13881,6 +14493,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "load-testing-k6",
       "reverse-proxy-lb-api-gateway",
+      "os-kernel-system-calls",
       "falco-runtime-security",
       "layer-ip-addressing",
       "what-happens-google-com",
@@ -15901,6 +16514,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "service-mesh",
       "http-versions",
+      "os-kernel-system-calls",
       "security-groups-nacl",
       "what-happens-google-com",
       "encryption-in-transit",
@@ -16085,6 +16699,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-network-tuning",
       "vpc-subnets-route-tables",
       "browser-fetch",
+      "os-kernel-system-calls",
       "iptables-basics",
       "reverse-proxy-lb-api-gateway",
       "ddos-protection",
@@ -16149,6 +16764,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "elasticsearch-inverted-index",
       "vpc-subnets-route-tables",
+      "os-kernel-system-calls",
       "iptables-basics",
       "postgres-getting-started",
       "linux-systemd-systemctl",
@@ -16269,6 +16885,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-latency-numbers",
       "k8s-cni-pod-network",
       "ssrf",
+      "python-essentials-for-backend",
       "bit-manipulation",
       "nat-traversal",
       "security-groups-nacl",
@@ -16731,6 +17348,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "git-tips-advanced",
       "git-branching-strategy",
+      "git-first-hour",
       "js-binary-data-typed-arrays",
       "git-large-files-secrets",
       "sd-object-storage-architecture",
@@ -16803,6 +17421,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "semantic-versioning"
     ],
     "mentions": [
+      "github-pull-request-flow",
       "github-repo-governance",
       "k8s-deploy-pipeline-eks",
       "ab-testing",
@@ -17107,6 +17726,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "aws-ec2-ubuntu-server-setup",
       "linux-systemd-systemctl",
       "realtime-communication",
+      "os-kernel-system-calls",
       "proxy-reverse-proxy",
       "linux-processes-signals",
       "event-loop",
@@ -17247,6 +17867,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "pub-sub",
       "db-type-relational",
+      "os-kernel-system-calls",
       "kafka-basics",
       "db-transaction-isolation",
       "mysql-innodb-basics",
@@ -17435,6 +18056,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "virtualization-hypervisors",
       "bash-scripting",
+      "os-kernel-system-calls",
       "mutex-semaphore-monitor",
       "grpc",
       "linux-processes-signals",
@@ -17448,6 +18070,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume"
     ],
     "mentions": [
+      "frontend-first-steps",
       "k8s-pod-probes",
       "github-actions-docker-ecr",
       "docker-compose",

@@ -25,6 +25,7 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "프로그램이 도는 법",
         description: "메모리 관리, 동시성, 그리고 서로 기다리다 멈추는 일",
         items: [
+          "os-kernel-system-calls",
           "process-vs-thread",
           "cpu-scheduling-interrupts",
           "garbage-collection",
@@ -148,10 +149,12 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "Git",
         description: "스냅샷 저장부터 브랜치 전략, 꼬였을 때 풀기까지",
         items: [
+          "git-first-hour",
           "git-internals-basics",
           "git-staging-area",
           "git-branch-merge",
           "git-remote-collaboration",
+          "github-pull-request-flow",
           "git-undo",
           "git-rebase",
           "git-merge-conflict",
@@ -304,6 +307,7 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "HTML·CSS 기초",
         tier: 1,
         items: [
+          "frontend-first-steps",
           "html-semantics",
           "html-text-semantics",
           "html-form-validation",
@@ -662,6 +666,8 @@ export const ROADMAPS: RoadmapNode[] = [
           "js-runtimes-node-deno-bun",
           "fastapi-basics", "java-jvm-memory-gc",
           "go-concurrency-basics",
+          { post: "python-essentials-for-backend", tier: 2 },
+          { post: "go-language-essentials", tier: 2 },
           { post: "backend-language-comparison", tier: 3 },
         ],
       },
@@ -820,6 +826,22 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "풀이 기법",
         items: ["sorting-algorithms", "binary-search", "recursion-backtracking", "divide-and-conquer", "dynamic-programming", "greedy-algorithms", { checkpoint: "기법 관문" }, { post: "string-search-algorithms", tier: 2 }, { post: "bit-manipulation", tier: 2 }, { post: "randomized-algorithms", tier: 3 }, { post: "algorithms-overview", tier: 3 }],
       },
+      // leetcode:start (scratchpad leet_roadmap.py가 만든다)
+      {
+        id: "leetcode",
+        label: "LeetCode 패턴별 풀이",
+        description: "18개 패턴 순서로 문제를 푼다. 한 문제에 느린 풀이부터 빠른 풀이까지 여러 개, JS·Python·Java 코드.",
+        tier: 2,
+        requires: ["algorithms/data-structures", "algorithms/techniques"],
+        items: [
+          { id: "arrays-hashing", label: "Arrays & Hashing", items: ["leetcode-two-sum", "leetcode-contains-duplicate", "leetcode-valid-anagram", "leetcode-group-anagrams", "leetcode-top-k-frequent-elements", { checkpoint: "Arrays & Hashing 관문" }] },
+          { id: "two-pointers", label: "Two Pointers", items: ["leetcode-valid-palindrome", "leetcode-two-sum-ii", "leetcode-3sum", "leetcode-container-with-most-water", "leetcode-trapping-rain-water", { checkpoint: "Two Pointers 관문" }] },
+          { id: "sliding-window", label: "Sliding Window", items: ["leetcode-best-time-to-buy-and-sell-stock", "leetcode-longest-substring-without-repeating", "leetcode-longest-repeating-character-replacement", "leetcode-minimum-window-substring", "leetcode-sliding-window-maximum", { checkpoint: "Sliding Window 관문" }] },
+          { id: "stack", label: "Stack", items: ["leetcode-valid-parentheses", "leetcode-min-stack", "leetcode-daily-temperatures", "leetcode-generate-parentheses", "leetcode-largest-rectangle-in-histogram", { checkpoint: "Stack 관문" }] },
+          { id: "binary-search", label: "Binary Search", items: ["leetcode-binary-search", "leetcode-koko-eating-bananas", "leetcode-find-minimum-in-rotated-sorted-array", "leetcode-search-in-rotated-sorted-array", "leetcode-median-of-two-sorted-arrays", { checkpoint: "Binary Search 관문" }] },
+        ],
+      },
+      // leetcode:end
     ],
   },
 
@@ -1071,6 +1093,7 @@ export const ROADMAPS: RoadmapNode[] = [
         id: "cloud",
         label: "클라우드 운영",
         items: [
+          "aws-core-services-map",
           "cloud-service-models-shared-responsibility",
           "virtualization-hypervisors",
           "cloud-deployment-models-multicloud",
@@ -1291,17 +1314,23 @@ export const ROADMAPS: RoadmapNode[] = [
   {
     id: "ai",
     label: "AI와 에이전트",
-    description: "RAG가 답을 만드는 과정과 Claude Code를 일 시키는 법.",
+    description: "LLM이 다음 토큰을 고르는 법부터 프롬프트, RAG, 에이전트, Claude Code, 평가와 운영까지.",
     tier: 3,
     requires: ["database/db-types"],
     items: [
-      { id: "llm", label: "LLM 기초와 연동", items: ["llm-basics-for-developers", "llm-api-integration", "mcp-protocol", "ai-coding-agents"] },
+      {
+        id: "llm",
+        label: "LLM 기초와 연동",
+        items: ["llm-basics-for-developers", "transformer-attention-kv-cache", "llm-api-integration", "mcp-protocol", "ai-coding-agents", { post: "multimodal-llm-apps", tier: 3 }],
+      },
+      { id: "prompt", label: "프롬프트와 컨텍스트", items: ["prompt-reasoning-techniques"] },
       { id: "rag", label: "RAG", items: ["rag-classic-pipeline", "rag-retrieval-quality", "graph-rag", "agentic-rag", "rag-patterns-overview"] },
       {
         id: "claude-code",
         label: "Claude Code",
         items: ["claude-code-project-structure", "claude-code-context-window", "claude-code-extensions", "claude-code-parallel-and-scheduled", "claude-code-fundamentals-map"],
       },
+      { id: "llm-ops", label: "LLM 운영", items: ["llm-evals", { post: "self-hosting-llm-inference", tier: 3 }] },
     ],
   },
 

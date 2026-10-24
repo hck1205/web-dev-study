@@ -1,0 +1,613 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("python-essentials-for-backend");
+
+<EasyIntro>
+  파이썬으로 작은 서버를 만들려고 필요한 도구를 컴퓨터에 깔았더니, 컴퓨터가 "여기는 내가 관리하는 곳이니 함부로 깔지 마라"며 거절했다. 억지로 깔았다면 컴퓨터가 쓰는 다른 프로그램이 망가질 수도 있었다.
+
+  프로젝트마다 따로 쓰는 도구 상자를 생각하면 쉽다. 공용 공구함에 아무 공구나 넣고 빼면 다른 사람이 쓰던 공구가 바뀌어 버린다. 그래서 프로젝트마다 자기 도구 상자를 하나씩 만들고, 상자 안에 무엇이 몇 번 버전으로 들어 있는지 목록을 적어 둔다. 그 목록만 있으면 다른 컴퓨터에서도 똑같은 상자를 다시 만들 수 있다.
+
+  파이썬은 값의 종류를 미리 적지 않아도 돌아가는 언어라서 실수가 늦게 드러난다. 그래서 종류를 적어 두고 검사기로 미리 확인한다. 또 파이썬은 한 번에 한 일꾼만 계산할 수 있게 막아 두는 자물쇠가 있어서, 무거운 계산은 일꾼을 늘리는 대신 작업장을 여러 개 차려야 빨라진다. 기다리는 일이 많을 때는 한 사람이 여러 일을 번갈아 돌보는 방법이 잘 맞는다.
+</EasyIntro>
+
+## pip install 한 줄이 거절당했다
+
+새로 받은 Ubuntu 24.04 서버에서 HTTP 클라이언트 하나를 깔려고 했다. 예전처럼 `pip install requests`를 쳤더니 이런 답이 돌아왔다.
+
+```bash
+# Ubuntu가 관리하는 시스템 파이썬에 바로 패키지를 깔아 본다
+python3.12 -m pip install requests
+```
+
+```text
+error: externally-managed-environment
+
+× This environment is externally managed
+╰─> To install Python packages system-wide, try apt install
+    python3-xyz, where xyz is the package you are trying to
+    install.
+
+    If you wish to install a non-Debian-packaged Python package,
+    create a virtual environment using python3 -m venv path/to/venv.
+    Then use path/to/venv/bin/python and path/to/venv/bin/pip. Make
+    sure you have python3-full installed.
+...
+hint: See PEP 668 for the detailed specification.
+```
+
+처음엔 고장인 줄 알았다. 실은 운영체제가 일부러 막은 것이다. Ubuntu의 `apt`, 네트워크 설정 도구, 클라우드 초기화 스크립트(cloud-init) 같은 것들이 시스템 파이썬 위에서 돈다. 여기에 pip로 아무 버전이나 덮어쓰면 apt가 깔아 둔 라이브러리와 버전이 엇갈리고, 어느 날 `apt upgrade`나 부팅 스크립트가 깨진다. PEP 668은 배포판이 `EXTERNALLY-MANAGED`라는 표시 파일을 두면 pip가 시스템 경로 설치를 거부하도록 정한 규칙이고, Ubuntu는 23.04부터, Debian은 12부터 이 파일을 둔다.
+
+오류 마지막 줄에 `--break-system-packages`로 우회할 수 있다고 나오지만, 이름이 말하는 그대로의 옵션이다. 답은 오류 메시지 안에 이미 있다. 프로젝트마다 가상 환경을 만든다.
+
+이 글은 백엔드나 운영 일을 파이썬으로 처음 시작할 때 꼭 알아야 하는 것을 순서대로 본다. 가상 환경과 패키지 관리, import 규칙, 타입 힌트와 mypy, GIL과 동시성 고르기, 그리고 운영 스크립트를 짤 때의 습관이다. 웹 프레임워크 이야기는 [FastAPI 글](/posts/fastapi-basics)에, 다른 언어와 런타임 모델을 비교한 이야기는 [백엔드 언어 고르기 글](/posts/backend-language-comparison)에 있다.
+
+실행 결과는 코어 4개짜리 Ubuntu 24.04 컨테이너에서 Python 3.13.16, uv 0.11, mypy 2.4로 직접 돌린 것이다. 긴 경로는 줄였다.
+
+## 프로젝트마다 자기 파이썬을 갖는다
+
+가상 환경(virtual environment)은 프로젝트 폴더 안에 만드는 작은 파이썬 설치본이다. 인터프리터는 시스템 것을 가리키되, 패키지를 까는 `site-packages` 폴더만 따로 갖는다.
+
+```bash
+# 프로젝트 폴더 안에 .venv라는 가상 환경을 만든다
+python3 -m venv .venv
+
+# 이 셸에서 python, pip가 .venv 안의 것을 가리키게 한다
+source .venv/bin/activate
+
+# 이제 pip install은 .venv/lib/python3.13/site-packages에 깔린다
+pip install requests==2.32.3
+```
+
+`.venv` 안을 열어 보면 생각보다 단순하다.
+
+```text
+.venv/
+  bin/        python, pip, activate 스크립트
+  include/
+  lib/        python3.13/site-packages (여기에 패키지가 깔린다)
+  lib64/
+  pyvenv.cfg
+```
+
+```text
+home = /usr/bin
+include-system-site-packages = false
+version = 3.13.16
+executable = /usr/bin/python3.13
+```
+
+`pyvenv.cfg`가 "진짜 인터프리터는 `/usr/bin/python3.13`이고, 시스템 패키지는 보지 않는다"고 적어 둔 것이다. 파이썬은 시작할 때 실행 파일 옆이나 한 단계 위에서 이 파일을 찾고, 찾으면 `sys.prefix`를 가상 환경 폴더로 바꾼다.
+
+```bash
+# 가상 환경 안 파이썬이 자기 위치를 어떻게 알고 있는지 본다
+.venv/bin/python -c "import sys; print(sys.prefix); print(sys.base_prefix)"
+```
+
+```text
+/home/dev/orders-api/.venv
+/usr
+```
+
+`sys.prefix`와 `sys.base_prefix`가 다르면 가상 환경 안이다. 스크립트에서 "가상 환경 밖에서 돌리면 멈춰라" 같은 검사를 할 때 이 비교를 쓴다.
+
+`activate`는 마법이 아니다. `PATH` 맨 앞에 `.venv/bin`을 끼워 넣고 프롬프트에 이름을 붙일 뿐이다. 그래서 cron이나 systemd처럼 셸을 거치지 않는 곳에서는 activate할 필요 없이 `/srv/app/.venv/bin/python main.py`처럼 가상 환경의 파이썬을 절대 경로로 부르면 된다. 반대로 activate했다고 믿고 `sudo pip install`을 치면 sudo가 환경 변수를 버리면서 시스템 pip가 불린다. 가상 환경 안에서는 sudo가 필요 없다.
+
+아래 그림은 한 서버에 시스템 파이썬 하나와 프로젝트 둘이 있는 모습이다. 프로젝트마다 같은 인터프리터를 쓰지만 패키지는 서로 보지 않는다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="인터프리터는 함께 쓰고, site-packages는 프로젝트마다 따로"
+  nodes={[
+    { id: "sys", label: "/usr/bin/python3.13", sub: "시스템 파이썬", x: 200, y: 40, w: 170, h: 46 },
+    { id: "apt", label: "apt 패키지", sub: "dist-packages", x: 330, y: 140, w: 110, h: 46 },
+    { id: "va", label: "orders-api/.venv", sub: "httpx 0.28", x: 80, y: 150, w: 130, h: 46 },
+    { id: "vb", label: "batch-job/.venv", sub: "httpx 0.27", x: 200, y: 250, w: 130, h: 46 },
+    { id: "la", label: "uv.lock", sub: "버전 목록", x: 70, y: 255, w: 90, h: 40 },
+  ]}
+  edges={[
+    { from: "va", to: "sys", label: "인터프리터" },
+    { from: "vb", to: "sys", label: "인터프리터" },
+    { from: "apt", to: "sys", dashed: true },
+    { from: "la", to: "va", label: "재현" },
+  ]}
+/>
+
+pip만 쓸 때는 `pip freeze > requirements.txt`로 지금 깔린 버전을 적어 두고, 다른 곳에서 `pip install -r requirements.txt`로 되살린다. 문제는 freeze가 "직접 고른 것"과 "딸려 온 것"을 구분하지 않는다는 점이다.
+
+```text
+certifi==2026.10.23
+charset-normalizer==3.5.2
+idna==3.20
+requests==2.32.3
+urllib3==2.8.0
+```
+
+requests 하나를 깔았는데 다섯 줄이 나왔다. 몇 달 뒤 requests를 빼도 나머지 넷은 남는다. 그래서 직접 고른 의존성 목록과 실제로 깔린 전체 버전 목록(lock 파일)을 나눠 관리하는 도구가 나왔다.
+
+## pyproject.toml과 lock 파일, 그리고 uv
+
+요즘 파이썬 프로젝트의 설정 파일은 `pyproject.toml` 하나다. 패키지 이름, 지원하는 파이썬 버전, 직접 쓰는 의존성, 도구 설정(mypy, ruff, pytest)이 모두 여기 들어간다. npm의 `package.json`에 해당한다.
+
+여기에 lock 파일을 만들어 주는 도구로 pip-tools, Poetry, PDM, uv가 있다. 최근에는 Rust로 만들어 빠른 uv를 많이 고른다. 가상 환경 만들기, 의존성 풀기, lock 파일 쓰기, 파이썬 버전 설치까지 한 도구로 한다.
+
+```bash
+# 새 프로젝트를 만든다 (pyproject.toml, .python-version, main.py, git 저장소가 생긴다)
+uv init orders-api && cd orders-api
+
+# 런타임 의존성을 추가한다. .venv와 uv.lock이 함께 생긴다
+uv add httpx
+
+# 개발할 때만 쓰는 의존성은 dev 그룹으로 넣는다
+uv add --dev mypy
+```
+
+```text
+Using CPython 3.13.16 interpreter at: /usr/bin/python3.13
+Creating virtual environment at: .venv
+Resolved 8 packages in 235ms
+Prepared 7 packages in 203ms
+Installed 7 packages in 6ms
+ + anyio==4.15.1
+ + certifi==2026.10.23
+ + h11==0.16.0
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + idna==3.20
+ + typing-extensions==4.16.0
+```
+
+`pyproject.toml`에는 내가 고른 것만 범위로 남는다.
+
+```toml
+[project]
+name = "orders-api"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+]
+```
+
+딸려 온 패키지와 정확한 버전, 내려받을 파일의 해시는 `uv.lock`에 있다. `uv tree`로 누가 누구를 끌고 왔는지 본다.
+
+```text
+orders-api v0.1.0
+├── httpx v0.28.1
+│   ├── anyio v4.15.1
+│   │   ├── idna v3.20
+│   │   └── typing-extensions v4.16.0
+│   ├── certifi v2026.10.23
+│   ├── httpcore v1.0.9
+│   │   ├── certifi v2026.10.23
+│   │   └── h11 v0.16.0
+│   └── idna v3.20
+└── mypy v2.4.0 (group: dev)
+    ├── ast-serialize v0.13.1
+    ├── librt v0.16.0
+    ├── mypy-extensions v1.1.0
+    ├── pathspec v1.1.1
+    └── typing-extensions v4.16.0
+```
+
+lock 파일은 커밋한다. CI와 Docker 빌드에서는 lock 파일 그대로만 설치하게 한다. 누군가 `pyproject.toml`만 고치고 lock을 다시 만들지 않았다면 여기서 멈춰야 한다.
+
+```bash
+# lock 파일과 pyproject.toml이 맞지 않으면 실패하게 하고, 맞으면 그대로 설치한다
+uv sync --locked
+```
+
+`pyproject.toml`에 `rich`를 손으로 한 줄 넣고 lock을 갱신하지 않은 채 돌리면 이렇게 끊긴다.
+
+```text
+Resolved 17 packages in 163ms
+error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.
+
+hint: To update the lockfile, run `uv lock`.
+```
+
+종료 코드는 1이다. CI가 바로 빨간불을 켠다. lock 없이 범위만으로 설치하면 오늘 빌드와 내일 빌드가 다른 버전을 받을 수 있다. "어제까지 되던 배포가 코드 변경 없이 깨졌다"는 일은 대부분 여기서 나온다. 범위와 lock이 왜 둘 다 필요한지는 [의존성 지옥 글](/posts/dependency-hell)에서 더 자세히 다룬다.
+
+가상 환경을 activate하지 않아도 된다는 점도 uv의 편한 부분이다. `uv run`이 프로젝트의 `.venv`로 명령을 돌린다.
+
+```bash
+# .venv 안의 파이썬으로 실행된다
+uv run python -c "import sys; print(sys.executable)"
+```
+
+```text
+/home/dev/orders-api/.venv/bin/python3
+```
+
+`.venv`는 커밋하지 않는다. 경로가 절대 경로로 박혀 있어서 다른 컴퓨터로 옮기면 안 돌고, lock 파일만 있으면 몇 초 만에 다시 만든다. Docker 이미지에서도 같은 이유로 이미지 안에서 `uv sync --locked`를 돌린다. 실행 파일 하나만 복사하면 끝나는 Go와는 배포 방식이 이만큼 다르다. 그 이야기는 [Go 기본기 글](/posts/go-language-essentials)에 있다.
+
+## import는 sys.path를 순서대로 뒤진다
+
+파이썬에서 `.py` 파일 하나가 모듈이고, 모듈을 담은 폴더가 패키지다. `import app.db`를 만나면 파이썬은 `sys.path`에 적힌 폴더를 앞에서부터 차례로 뒤져 `app/db.py`를 찾는다. 맨 앞에는 실행한 스크립트가 있는 폴더(또는 `-m`으로 실행할 때는 현재 폴더)가 들어간다. 그다음이 표준 라이브러리, 마지막이 `site-packages`다.
+
+이 순서 때문에 처음에 꼭 한 번은 당하는 실수가 있다. 연습용 파일 이름을 `random.py`로 지었다.
+
+```python
+# random.py
+import random; print(random.randint(1, 6))
+```
+
+```text
+AttributeError: module 'random' has no attribute 'randint' (consider renaming
+'/home/dev/sh/random.py' since it has the same name as the standard library
+module named 'random' and prevents importing that standard library module)
+```
+
+스크립트 폴더가 표준 라이브러리보다 먼저 검색되니 `import random`이 자기 자신을 불러왔다. 3.13부터는 오류 메시지가 이렇게 친절하게 알려 주지만, 그 이전 버전에서는 `has no attribute`만 보고 한참 헤맨다. `json.py`, `email.py`, `logging.py`, `test.py` 같은 이름은 피한다.
+
+두 번째로 자주 만나는 건 상대 import 오류다. 이런 구조가 있다고 하자.
+
+```text
+app/
+  __init__.py
+  db.py
+  services/
+    __init__.py
+    orders.py      # from ..db import connect
+```
+
+```bash
+# 파일 경로로 실행한다
+python3 app/services/orders.py
+```
+
+```text
+Traceback (most recent call last):
+  File "/home/dev/imp/app/services/orders.py", line 1, in <module>
+    from ..db import connect
+ImportError: attempted relative import with no known parent package
+```
+
+파일 경로로 실행하면 그 파일은 패키지의 일부가 아니라 `__main__`이라는 이름의 외톨이 모듈이 된다. 위로 올라갈 부모 패키지가 없으니 `..`가 실패한다. 프로젝트 루트에서 모듈 이름으로 실행하면 된다.
+
+```bash
+# 프로젝트 루트에서 패키지 경로로 실행한다
+python3 -m app.services.orders
+```
+
+```text
+__main__ db-connection
+```
+
+`-m`은 현재 폴더를 `sys.path`에 넣고 `app` 패키지를 먼저 불러온 뒤 그 안의 모듈을 실행한다. 이 구조가 늘 헷갈리면 소스를 `src/app/`에 두고 패키지로 설치하는 src 레이아웃을 쓴다. 테스트도 설치된 패키지를 import하게 되어 "내 컴퓨터에서만 import가 되는" 일이 줄어든다.
+
+`__init__.py`는 3.3부터 없어도 패키지로 인정된다(namespace package). 그래도 보통은 둔다. 없으면 같은 이름 폴더가 여러 경로에 있을 때 하나로 합쳐 버리는 동작이 생기고, mypy나 pytest가 패키지 경계를 다르게 읽는다.
+
+## 타입을 적고 실행 전에 검사한다
+
+파이썬은 동적 타입 언어다. 변수에 타입을 정하지 않고, 값이 실제로 어떤 종류인지는 그 줄이 실행될 때 정해진다. 그래서 이런 코드가 아무 오류 없이 돈다.
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass
+class Order:
+    id: int
+    qty: int
+    coupon: str | None = None
+
+
+def total(order: Order, unit_price: int) -> int:
+    return order.qty * unit_price
+
+
+def discount_code(order: Order) -> str:
+    return order.coupon.upper()
+
+
+print(total(Order(id=1, qty="3"), 4))
+```
+
+```text
+3333
+```
+
+`qty`에 문자열 `"3"`이 들어갔고, 문자열 곱하기 4는 문자열을 네 번 이어 붙이는 연산이라 `"3333"`이 나왔다. 타입 힌트(`qty: int`)는 적어 두었지만 파이썬 인터프리터는 힌트를 검사하지 않는다. 힌트는 함수의 `__annotations__`에 기록만 될 뿐이다. `discount_code`는 쿠폰이 없는 주문이 들어오는 순간 `AttributeError`로 죽을 텐데, 그런 주문이 올 때까지는 아무도 모른다.
+
+그래서 힌트를 읽어 실행 전에 검사하는 별도 도구를 쓴다. 가장 오래된 것이 mypy다.
+
+```bash
+# 실행하지 않고 타입만 검사한다
+uv run mypy orders.py
+```
+
+```text
+orders.py:16: error: Item "None" of "str | None" has no attribute "upper"  [union-attr]
+orders.py:19: error: Argument "qty" to "Order" has incompatible type "str"; expected "int"  [arg-type]
+Found 2 errors in 1 file (checked 1 source file)
+```
+
+두 실수가 실행 없이 잡혔다. 종료 코드는 1이라 CI에 바로 넣을 수 있다. 첫 번째 오류는 `if order.coupon is None: return ""`처럼 None을 먼저 걸러 내야 사라진다. 이렇게 조건문으로 타입 범위를 좁히는 것을 narrowing이라고 하고, TypeScript에서 하던 것과 거의 같다.
+
+기존 코드베이스에 mypy를 들이는 순서도 정해져 있다. mypy는 기본으로 힌트가 없는 함수 안은 검사하지 않는다. 그래서 처음 켜면 오류가 적게 나오고, 힌트를 붙인 함수부터 점점 검사 범위가 넓어진다. 새 프로젝트라면 처음부터 `--strict`로 시작하는 게 편하다. 힌트 빠진 함수, `Any`로 새는 값, 반환 타입 없는 함수를 모두 오류로 본다.
+
+```toml
+# pyproject.toml에 둔다
+[tool.mypy]
+python_version = "3.13"
+strict = true
+```
+
+몇 가지 기억해 둘 점이 있다.
+
+- 힌트는 런타임 검증이 아니다. 외부에서 들어오는 JSON처럼 실행 중에 모양이 정해지는 값은 Pydantic 같은 라이브러리로 검사해야 한다. FastAPI가 힌트를 검증 규칙으로 쓰는 건 프레임워크가 따로 읽어서 하는 일이다([FastAPI 글](/posts/fastapi-basics) 참고).
+- 타입이 없는 서드파티 라이브러리를 import하면 mypy가 "library stubs not installed"라고 경고한다. `types-requests`처럼 별도 스텁 패키지를 dev 의존성으로 깔거나, 설정에서 그 모듈만 `ignore_missing_imports`로 둔다.
+- `# type: ignore`는 줄 끝에 붙여 그 줄만 넘긴다. 남발하면 검사기를 둔 의미가 사라지니 `# type: ignore[arg-type]`처럼 어떤 오류를 넘기는지 적는다.
+
+mypy 말고 pyright(VS Code의 Pylance가 쓰는 엔진)도 많이 쓴다. 더 빠르고 추론이 공격적이라, 같은 코드에 두 도구가 다른 결과를 내기도 한다. 팀에서 하나를 정해 CI에 거는 게 중요하지, 어느 쪽이 정답인 건 아니다.
+
+## GIL: 한 번에 한 스레드만 파이썬을 돈다
+
+CPython(우리가 보통 쓰는 파이썬 구현)에는 GIL(Global Interpreter Lock)이라는 자물쇠가 하나 있다. 한 프로세스 안에서 파이썬 바이트코드를 실행할 수 있는 스레드를 한 번에 하나로 제한한다. 객체의 참조 카운트를 고칠 때마다 잠금을 걸지 않아도 되게 하려고 둔 장치다. 덕분에 인터프리터 내부와 C 확장이 단순해졌지만, 대가로 스레드를 늘려도 파이썬 계산은 동시에 돌지 않는다.
+
+GIL은 영원히 한 스레드가 쥐고 있는 게 아니다. 실행 중인 스레드는 일정 시간(기본 5ms, `sys.getswitchinterval()`)마다 다른 스레드에게 양보 요청을 받고, I/O를 기다리는 시스템 호출(소켓 읽기, `time.sleep`, 파일 읽기)에 들어갈 때도 GIL을 내려놓는다. 아래 그림에서 스레드 둘이 GIL을 주고받는 모습을 따라가 보자.
+
+<AlgoTrace
+  caption="CPU 일은 번갈아 돌고, I/O 대기는 GIL을 내려놓는다"
+  memoryLabel="GIL을 쥔 스레드"
+  cells={["T1 계산", "T2 계산", "T1 계산", "T1 recv()", "T2 계산", "T1 깨어남", "T1 계산"]}
+  steps={[
+    { pointer: 0, memory: ["T1"], caption: "T1이 GIL을 쥐고 파이썬 코드를 돈다. T2는 기다린다." },
+    { pointer: 1, memory: ["T2"], caption: "5ms가 지나 T1이 양보했다. 이제 T2가 돈다. 둘이 동시에 도는 순간은 없다." },
+    { pointer: 2, memory: ["T1"], caption: "다시 T1 차례다. 계산만 하는 스레드 둘은 번갈아 돌 뿐이라 합친 시간이 줄지 않는다." },
+    { pointer: 3, memory: [], caption: "T1이 소켓 응답을 기다리는 시스템 호출에 들어가며 GIL을 내려놓는다." },
+    { pointer: 4, memory: ["T2"], caption: "T1이 기다리는 동안 T2가 계산한다. 기다림과 계산이 겹치는 이 구간이 스레드로 얻는 이득이다." },
+    { pointer: 5, memory: ["T2"], caption: "응답이 왔다. T1은 깨어났지만 GIL을 다시 얻을 때까지 기다린다." },
+    { pointer: 6, found: [3, 4], memory: ["T1"], caption: "T1이 GIL을 다시 쥐었다. I/O를 기다리던 시간만큼 전체가 빨라졌다." },
+  ]}
+/>
+
+말로만 들으면 감이 안 와서 직접 쟀다. 5백만 번 더하는 CPU 작업 4개와 0.2초씩 잠드는 I/O 작업 10개를 여러 방식으로 돌렸다.
+
+```python
+import asyncio
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+
+def cpu(n: int = 5_000_000) -> int:
+    s = 0
+    for i in range(n):
+        s += i * i
+    return s
+
+
+def io() -> None:
+    time.sleep(0.2)   # 네트워크 응답을 기다리는 대신 잠든다
+```
+
+```text
+cpu x4 sequential     0.92s
+cpu x4 threads        0.93s
+cpu x4 processes      0.26s
+io x10 sequential     2.00s
+io x10 threads        0.20s
+io x10 asyncio        0.20s
+io x10 asyncio+block  2.00s
+```
+
+숫자가 GIL을 그대로 보여 준다. CPU 작업은 스레드 4개로 나눠도 0.92초에서 0.93초로 전혀 빨라지지 않았다. 프로세스 4개로 나누면 각자 자기 인터프리터와 자기 GIL을 가지니 코어 4개를 다 써서 0.26초가 됐다. I/O 작업은 스레드로도 asyncio로도 10배 빨라졌다. 기다리는 동안 GIL을 놓기 때문이다.
+
+마지막 줄이 실무에서 제일 자주 만나는 함정이다. `async def` 안에서 `asyncio.sleep` 대신 `time.sleep`을 불렀더니 2초, 순서대로 돌린 것과 같아졌다. 이건 GIL이 아니라 이벤트 루프 문제고, 다음 절에서 본다.
+
+예외도 있다. NumPy, 이미지 처리, 압축, 암호화처럼 C로 짠 확장은 무거운 계산 구간에서 GIL을 직접 내려놓는다. 그래서 NumPy 행렬 곱은 스레드로도 코어를 여러 개 쓴다. "파이썬은 멀티스레드가 안 된다"는 말은 "순수 파이썬 코드의 계산은 스레드로 빨라지지 않는다"가 정확하다.
+
+### GIL 없는 파이썬은 어디까지 왔나
+
+PEP 703에 따라 3.13부터 GIL을 끈 free-threaded 빌드가 따로 나온다. 3.13에서는 실험 단계였고, 3.14에서는 공식 지원 단계로 올라갔지만 여전히 기본 빌드는 아니다. 실행 파일 이름이 `python3.14t`처럼 `t`로 끝나고, 따로 설치해야 한다. uv로 깔아서 같은 벤치마크를 돌려 봤다.
+
+```bash
+# GIL 없는 빌드를 설치한다
+uv python install 3.14t
+
+# GIL이 켜져 있는지 확인한다 (False면 꺼진 것)
+python3.14t -c "import sys; print(sys._is_gil_enabled())"
+```
+
+```text
+cpu x4 sequential     0.85s
+cpu x4 threads        0.37s
+cpu x4 processes      0.40s
+```
+
+스레드 4개가 처음으로 빨라졌다. 다만 운영에 바로 쓰기에는 걸리는 게 있다. 단일 스레드 성능이 기본 빌드보다 조금 느리고, C 확장이 free-threaded를 지원한다고 표시하지 않으면 import하는 순간 GIL이 다시 켜진다. 쓰는 라이브러리가 모두 지원하는지부터 확인해야 한다. 지금 서버를 짠다면 기본 빌드를 가정하고 설계하는 게 맞다.
+
+## 기다리는 일과 계산하는 일을 다르게 맡긴다
+
+결국 동시성 도구는 작업의 성격으로 고른다.
+
+| 작업 | 고르는 도구 | 이유 |
+|---|---|---|
+| 순수 파이썬 계산 (파싱, 집계, 변환) | `multiprocessing`, `ProcessPoolExecutor` | 프로세스마다 GIL이 따로라 코어를 다 쓴다 |
+| 블로킹 I/O를 몇십 개 동시에 (requests, DB 드라이버) | `threading`, `ThreadPoolExecutor` | 기다리는 동안 GIL을 놓는다. 기존 동기 라이브러리를 그대로 쓴다 |
+| 수천 개의 연결을 동시에 기다림 (HTTP, 웹소켓) | `asyncio` | 스레드 하나로 여러 작업을 번갈아 돌봐서 연결당 비용이 작다 |
+
+프로세스는 공짜가 아니다. 프로세스를 띄우는 데 수십 ms가 들고, 인자와 결과를 pickle로 직렬화해서 넘긴다. 작은 작업 수만 개를 하나씩 넘기면 계산보다 넘기는 비용이 더 크다. `chunksize`로 묶어 넘기거나 작업을 크게 쪼갠다. 메모리도 프로세스 수만큼 늘어난다.
+
+asyncio는 이벤트 루프 하나가 코루틴(멈췄다 이어서 실행할 수 있는 함수) 여러 개를 돌보는 방식이다. 코루틴은 `await`를 만날 때만 루프에 제어권을 돌려준다. 아래 그림에서 다음을 누르면 루프가 두 요청을 어떻게 번갈아 돌보는지 보인다.
+
+<SequenceDiagram
+  caption="await에서만 차례가 넘어간다"
+  actors={[
+    { id: "loop", label: "이벤트 루프" },
+    { id: "a", label: "요청 A" },
+    { id: "b", label: "요청 B" },
+    { id: "net", label: "주문 API" },
+  ]}
+  steps={[
+    { from: "loop", to: "a", label: "실행", title: "A를 시작한다", detail: "루프가 A 코루틴을 돌린다. A는 주문 API를 부르는 줄까지 간다." },
+    { from: "a", to: "net", label: "await get()", title: "A가 기다리며 양보한다", detail: "요청을 보내고 await에서 멈춘다. 소켓을 루프에 맡기고 제어권을 돌려준다.", payload: "r = await client.get(\"/orders/1\")" },
+    { from: "loop", to: "b", label: "실행", title: "그 사이 B를 돌린다", detail: "A가 기다리는 동안 루프는 B를 시작한다. 스레드는 여전히 하나다." },
+    { from: "b", to: "net", label: "await get()", title: "B도 기다린다", detail: "B도 요청을 보내고 양보한다. 이제 두 요청이 동시에 대기 중이다." },
+    { from: "net", to: "loop", label: "A 응답", title: "소켓이 준비됐다", detail: "운영체제(epoll)가 A의 소켓에 데이터가 왔다고 알려 준다." },
+    { from: "loop", to: "a", label: "재개", title: "A를 멈춘 줄부터 이어 간다", detail: "A가 await 다음 줄부터 돈다. 만약 여기서 time.sleep을 부르면 루프 전체가 그동안 멈춘다." },
+  ]}
+/>
+
+그림 마지막 단계의 경고가 핵심 위험이다. 코루틴은 스스로 양보할 때만 차례가 넘어가니, `await` 없이 오래 걸리는 줄 하나가 루프 전체를 세운다. `requests.get`, `time.sleep`, 동기 DB 드라이버, 큰 JSON을 파싱하는 계산이 모두 그렇다. 벤치마크의 `asyncio+block` 2초가 바로 이 상황이다. 막는 함수를 어쩔 수 없이 불러야 하면 스레드로 보낸다.
+
+```python
+import asyncio
+import time
+
+
+def legacy_report() -> str:
+    time.sleep(0.2)           # 바꿀 수 없는 동기 라이브러리라고 하자
+    return "ok"
+
+
+async def handler() -> str:
+    # 기본 스레드 풀에서 돌리고, 그동안 이벤트 루프는 다른 요청을 본다
+    return await asyncio.to_thread(legacy_report)
+```
+
+asyncio에서 여러 작업을 함께 돌릴 때는 3.11부터 들어온 `TaskGroup`과 `asyncio.timeout`을 쓴다. 하나가 실패하면 나머지를 취소해 주고, 시간 제한을 블록 단위로 건다.
+
+```python
+async def fetch_all(client, ids: list[int]) -> list[dict]:
+    async with asyncio.timeout(2):                       # 전체를 2초로 제한한다
+        async with asyncio.TaskGroup() as tg:            # 하나가 실패하면 나머지를 취소한다
+            tasks = [tg.create_task(client.get(f"/orders/{i}")) for i in ids]
+    return [t.result().json() for t in tasks]
+```
+
+`asyncio.create_task`로 만든 작업은 결과를 변수에 잡아 두지 않으면 중간에 가비지 컬렉션될 수 있다고 공식 문서가 경고한다. "가끔 백그라운드 작업이 사라진다"는 증상이 이것이다. TaskGroup 안에서 만들면 그룹이 참조를 쥐고 있어서 이 문제가 없다.
+
+서버에서는 이 선택을 프레임워크가 대신 하는 경우가 많다. uvicorn 워커 여러 개(프로세스)로 코어를 쓰고, 워커 안에서는 asyncio로 연결을 돌본다. gunicorn 같은 동기 서버라면 워커 프로세스와 스레드 수로 조절한다. 이 조합이 실제 처리량을 어떻게 정하는지는 [FastAPI 글](/posts/fastapi-basics)에서 숫자로 봤다.
+
+## 운영 스크립트는 종료 코드로 말한다
+
+배포 전에 디스크를 확인하거나, 로그를 모으거나, 다른 명령을 차례로 부르는 스크립트도 파이썬으로 자주 짠다. 셸 스크립트가 길어지고 조건문이 늘어나면 파이썬으로 옮기는 게 읽기 쉽다. 이때 지킬 것은 하나다. 성공과 실패를 종료 코드로 알려야 cron, systemd, CI가 알아듣는다.
+
+```python
+import argparse
+import shutil
+import subprocess
+import sys
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="디스크 사용률을 확인한다")
+    parser.add_argument("path", nargs="?", default="/")
+    parser.add_argument("--max", type=int, default=80, help="경고 기준 퍼센트")
+    args = parser.parse_args()
+
+    usage = shutil.disk_usage(args.path)
+    percent = usage.used * 100 // usage.total
+    print(f"{args.path}: {percent}% used")
+
+    # 셸을 거치지 않고 인자를 리스트로 넘긴다
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if result.returncode != 0:
+        print(f"git 실패: {result.stderr.strip()}", file=sys.stderr)
+        return 3
+
+    return 1 if percent >= args.max else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+```bash
+# 도움말은 argparse가 만들어 준다
+python3 check_disk.py --help
+
+# git 저장소가 아닌 곳에서 돌려 본다
+python3 check_disk.py / --max 90; echo "exit=$?"
+
+# 잘못된 인자를 넣어 본다
+python3 check_disk.py --max abc; echo "exit=$?"
+```
+
+```text
+usage: check_disk.py [-h] [--max MAX] [path]
+
+디스크 사용률을 확인한다
+
+positional arguments:
+  path
+
+options:
+  -h, --help  show this help message and exit
+  --max MAX   경고 기준 퍼센트
+/: 12% used
+git 실패: fatal: not a git repository (or any of the parent directories): .git
+exit=3
+usage: check_disk.py [-h] [--max MAX] [path]
+check_disk.py: error: argument --max: invalid int value: 'abc'
+exit=2
+```
+
+봐야 할 곳은 `exit=` 값이다. 정상은 0, 기준 초과는 1, git 실패는 3, 인자 오류는 argparse가 알아서 2로 끝낸다. 이렇게 나눠 두면 호출하는 쪽이 이유별로 다르게 반응할 수 있다. 오류 메시지는 `sys.stderr`로 보내서 정상 출력을 파이프로 넘겨도 섞이지 않게 한다.
+
+subprocess에서 흔히 하는 실수가 몇 가지 있다.
+
+- `subprocess.run("git log " + branch, shell=True)`처럼 문자열과 `shell=True`를 쓰면 `branch`에 `; rm -rf ~`가 들어올 때 그대로 실행된다. 인자는 리스트로 넘기고 셸을 거치지 않는다.
+- 반환값을 보지 않으면 실패해도 스크립트가 계속 간다. 바로 멈추고 싶으면 `check=True`를 주고 `CalledProcessError`를 잡는다. 이 예외의 메시지는 `Command '['ls', '/nope']' returned non-zero exit status 2.` 형식이다.
+- `timeout`이 없으면 멈춘 명령 하나에 스크립트가 영원히 기다린다. 넘기면 `TimeoutExpired`가 난다.
+- `capture_output=True`로 큰 출력을 받으면 전부 메모리에 쌓인다. 로그처럼 큰 출력은 파일로 바로 흘린다.
+
+셸 스크립트를 쓸 때 `set -euo pipefail`로 하는 일을 파이썬에서는 `check=True`와 예외가 맡는다고 생각하면 된다. 셸 쪽 이야기는 [bash 스크립트 글](/posts/bash-scripting)에 있다.
+
+## 현장에서 파이썬 환경이 말썽을 부릴 때
+
+`ModuleNotFoundError: No module named 'httpx'`가 나는데 분명 설치했다면, 거의 항상 다른 파이썬으로 실행하고 있는 것이다. `which python`과 `python -c "import sys; print(sys.executable)"`로 지금 쓰는 인터프리터를 확인하고, 설치도 `python -m pip install`로 그 인터프리터에 붙여 한다. `pip`와 `python`이 서로 다른 설치본을 가리키는 일이 생각보다 흔하다.
+
+cron에서만 실패하는 스크립트는 `PATH`와 작업 디렉터리를 의심한다. cron은 activate하지 않고, 홈 디렉터리에서 짧은 `PATH`로 돈다. 가상 환경의 파이썬을 절대 경로로 부르고, 스크립트 안에서 파일 경로를 `Path(__file__).parent` 기준으로 만든다.
+
+Docker 이미지가 이유 없이 커졌다면 pip 캐시와 빌드 도구가 남은 경우가 많다. 멀티 스테이지 빌드에서 앞 단계에 `uv sync --locked --no-dev`로 가상 환경을 만들고 뒤 단계에 `.venv`만 복사한다. 테스트·타입 검사 도구가 운영 이미지에 들어가지 않는다.
+
+API 서버의 지연이 들쭉날쭉한데 CPU는 한 코어만 바쁘다면 이벤트 루프를 막는 코드를 찾는다. `PYTHONASYNCIODEBUG=1`을 켜고 돌리면 asyncio가 100ms 넘게 루프를 잡은 콜백을 경고로 남긴다(`loop.slow_callback_duration`으로 기준을 바꾼다). 워커가 여러 개인데 CPU 사용률이 코어 하나만큼에서 멈춘다면 워커 수가 실제로 몇인지, 컨테이너 CPU 제한이 몇인지부터 본다.
+
+## 도구 상자부터 정리하고 시작한다
+
+파이썬으로 일을 시작할 때 처음 막히는 곳은 언어 문법보다 환경이다. 시스템 파이썬은 운영체제 몫으로 남겨 두고, 프로젝트마다 가상 환경을 만들고, `pyproject.toml`에 직접 고른 것을, lock 파일에 실제 버전을 적는다. 힌트는 실행 중에 아무것도 막지 않으니 mypy를 CI에 건다. 동시성은 작업 성격으로 고른다. 계산은 프로세스, 블로킹 I/O는 스레드, 연결이 많으면 asyncio다. 그리고 asyncio 안에서는 막는 호출 하나가 모두를 세운다는 것만 기억해도 사고의 대부분을 피한다.
+
+## 면접에서 나올 만한 질문
+
+### 가상 환경은 왜 쓰나요?
+
+프로젝트마다 패키지와 버전을 따로 두려고 쓴다. 시스템 파이썬에 직접 깔면 다른 프로젝트나 운영체제 도구가 쓰는 버전을 덮어써서 깨뜨릴 수 있고, Ubuntu 23.04 이후처럼 PEP 668을 따르는 배포판은 아예 설치를 거부한다. 가상 환경은 인터프리터는 함께 쓰고 `site-packages`만 따로 갖는 폴더라서 만들기도 지우기도 싸다.
+
+### requirements.txt와 lock 파일은 무엇이 다른가요?
+
+`pip freeze`로 만든 requirements.txt는 지금 깔린 모든 패키지를 평평하게 적을 뿐, 직접 고른 것과 딸려 온 것을 구분하지 않는다. 요즘 방식은 `pyproject.toml`에 직접 쓰는 의존성을 범위로 적고, 도구(uv, Poetry, pip-tools)가 전이 의존성까지 정확한 버전과 해시를 lock 파일에 남긴다. CI와 배포에서는 `uv sync --locked`처럼 lock 파일 그대로만 설치해서 빌드마다 같은 버전이 깔리게 한다.
+
+### 파이썬의 타입 힌트는 실행할 때 타입을 검사하나요?
+
+검사하지 않는다. 인터프리터는 힌트를 `__annotations__`에 기록만 하고, `qty: int`에 문자열을 넣어도 그대로 돈다. 검사는 mypy나 pyright 같은 정적 검사기가 실행 전에 하고, 실행 중 검증이 필요한 외부 입력은 Pydantic 같은 라이브러리가 힌트를 읽어 따로 검증한다.
+
+### GIL이 무엇이고 어떤 영향을 주나요?
+
+CPython에서 한 프로세스 안의 파이썬 바이트코드를 한 번에 한 스레드만 실행하게 하는 잠금이다. 그래서 순수 파이썬 계산은 스레드를 늘려도 빨라지지 않고, 실제로 CPU 작업 4개를 스레드 4개로 돌려도 순서대로 돌린 것과 시간이 같았다. 반면 I/O 대기 중에는 GIL을 놓기 때문에 네트워크·파일 작업은 스레드로 충분히 빨라지고, C 확장(NumPy 등)도 계산 구간에서 GIL을 놓는다.
+
+### CPU 작업과 I/O 작업이 섞인 서비스에서 동시성을 어떻게 고르나요?
+
+계산은 프로세스(`ProcessPoolExecutor`, 워커 프로세스 여러 개)로, 블로킹 I/O는 스레드로, 동시 연결이 많은 네트워크 I/O는 asyncio로 맡긴다. 웹 서버라면 보통 워커 프로세스로 코어를 쓰고 워커 안에서 asyncio를 돌린다. 프로세스는 시작 비용과 pickle 직렬화 비용이 있어서 작은 작업은 묶어서 넘긴다.
+
+### asyncio 코드에서 time.sleep이나 requests를 부르면 어떻게 되나요?
+
+이벤트 루프 전체가 그 시간 동안 멈춘다. 코루틴은 `await`에서만 제어권을 돌려주는데 `time.sleep`은 await 없이 스레드를 붙잡기 때문이다. 0.2초짜리 작업 10개가 asyncio로는 0.2초였지만 안에 `time.sleep`을 넣자 2초가 됐다. 비동기 라이브러리(httpx, asyncpg)로 바꾸거나 `asyncio.to_thread`로 스레드에 보낸다.
+
+### GIL 없는 파이썬(free-threaded)은 쓸 만한가요?
+
+3.13에서 실험으로 나왔고 3.14에서 공식 지원 단계가 됐지만 아직 기본 빌드는 아니다. 스레드로 CPU 계산이 실제로 병렬화되어 4개 작업이 0.85초에서 0.37초로 줄었다. 대신 단일 스레드 성능이 조금 떨어지고, 지원 표시가 없는 C 확장을 import하면 GIL이 다시 켜지므로 의존성이 모두 지원하는지 확인하고 들여야 한다.
+
+### 운영 자동화 스크립트에서 subprocess를 쓸 때 주의할 점은?
+
+인자는 리스트로 넘기고 `shell=True`를 피해서 셸 주입을 막는다. 반환 코드를 반드시 확인하거나 `check=True`로 실패를 예외로 만들고, `timeout`을 걸어 멈춘 명령에 묶이지 않게 한다. 스크립트 자체도 결과를 종료 코드로 알려야 cron·CI가 실패를 알아듣고, 오류 메시지는 stderr로 보낸다.
