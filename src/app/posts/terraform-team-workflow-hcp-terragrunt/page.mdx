@@ -1,0 +1,419 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("terraform-team-workflow-hcp-terragrunt");
+
+<EasyIntro>
+  Terraform은 클라우드에 만들 것을 글로 적어 두면 그대로 만들어 주는 도구다. 혼자 쓸 때는 내 컴퓨터에서 명령 한 번이면 끝난다. 그런데 같이 쓰는 사람이 열 명이 되면 문제가 생긴다. 누가 언제 무엇을 바꿨는지 모르고, 두 사람이 동시에 바꾸다 서로의 작업을 망가뜨리기도 한다.
+
+  공사 현장을 떠올려 보자. 처음에는 목수 한 명이 망치를 들고 마음대로 고쳤다. 사람이 늘자 현장에 사무실이 생긴다. 고칠 사람은 설계 변경서를 내고, 감독이 그 종이를 확인해 도장을 찍고, 도장이 찍힌 종이대로만 공사가 진행된다. 공구 창고 열쇠도 사무실만 가지고 있다.
+
+  팀으로 Terraform을 돌린다는 건 이런 사무실을 만드는 일이다. 사무실을 직접 차릴 수도 있고, 이미 차려진 사무실을 빌릴 수도 있다. 이 글은 어떤 사무실이 어떤 팀에 맞는지, 그리고 현장이 여러 개로 늘어날 때 설계도를 어떻게 정리하는지 이야기한다.
+</EasyIntro>
+
+인프라 팀이 세 명일 때는 각자 노트북에서 `terraform apply`를 쳤다. 원격 state와 잠금은 처음부터 걸어 뒀으니([Terraform 기본](/posts/terraform-basics)) 큰 사고는 없었다. 팀이 열 명이 되자 금요일 오후에 이런 일이 연달아 생겼다. 한 사람은 리뷰가 끝나지 않은 브랜치에서 apply했다. 다른 사람은 잠금을 기다리다 지쳐 `force-unlock`을 쳤다. 퇴사자의 노트북에 운영 계정의 액세스 키가 남아 있다는 것을 감사에서 지적받았다. 그리고 누구도 "지난주 화요일에 운영 DB 파라미터를 바꾼 plan"을 다시 보여 줄 수 없었다.
+
+문제는 Terraform이 아니라 Terraform을 어디서, 누구의 권한으로 돌리느냐다. 이 글은 그 실행 장소를 고르는 이야기다. CI 파이프라인에서 직접 돌리는 법, HashiCorp의 관리형 서비스인 HCP Terraform, 셀프 호스팅 PR 봇인 Atlantis, 그리고 스택이 수십 개로 늘어날 때 설정 중복과 실행 순서를 맡는 Terragrunt를 본다. 저장한 plan만 apply하는 원리와 plan·apply 권한 분리, drift 감지는 [네트워크 설정 CI/CD](/posts/network-config-cicd)에서 GitHub Actions로 자세히 짰으니, 여기서는 그 위에서 무엇을 고를지에 집중한다.
+
+실습은 Ubuntu 24.04에서 Terraform 1.16.7로 했다. 클라우드 계정 없이 돌도록 `terraform_data` 리소스만 썼다. HCP Terraform, Atlantis, Terragrunt는 계정과 서버가 필요해서 돌리지 않았고, 설정은 공식 문서의 형식대로 적었다.
+
+## 노트북에서 apply하면 무엇이 빠지나
+
+노트북 apply에 빠진 것을 나열하면 팀 워크플로가 갖춰야 할 것이 그대로 나온다.
+
+첫째, 리뷰한 것과 적용한 것이 같다는 보장. 리뷰어는 PR의 plan을 봤는데 apply는 다른 브랜치의 코드로 일어났다. 둘째, 실행 순서. 두 사람의 변경이 같은 state를 노리면 잠금이 막아 주긴 하지만, 누가 먼저 갈지는 우연이다. 셋째, 자격 증명의 위치. 운영 계정에 쓸 수 있는 키가 사람마다 하나씩 흩어져 있다. 넷째, 기록. 누가 어떤 plan을 승인하고 언제 적용했는지가 남지 않는다.
+
+어느 플랫폼을 고르든 해법의 뼈대는 같다. 사람은 코드를 PR로 올리고 plan을 본다. apply는 한 곳(CI 러너, HCP의 실행 환경, Atlantis 서버)만 하고, 그곳만 클라우드 쓰기 권한을 가진다. 차이는 그 한 곳을 직접 운영하느냐, 빌리느냐, 그리고 승인과 정책을 어디에 붙이느냐다.
+
+## plan 파일은 그 자체로 민감한 산출물이다
+
+CI에서 돌릴 때 가장 먼저 짜는 것이 "plan을 파일로 남기고, 승인 뒤 그 파일만 apply한다"다. 이 plan 파일을 잡 사이에 아티팩트로 넘기는데, 안에 무엇이 들었는지 열어 본 사람은 많지 않다. 비밀번호 변수를 하나 둔 설정으로 plan을 만들어 봤다.
+
+```hcl
+variable "env" { type = string }
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+
+resource "terraform_data" "app" {
+  input = {
+    name = "api-${var.env}"
+    pw   = var.db_password
+  }
+}
+```
+
+```bash
+terraform plan -input=false -var env=dev -var db_password=hunter2-example -out=dev.tfplan
+unzip -l dev.tfplan          # plan 파일은 zip이다
+```
+
+```text
+Archive:  dev.tfplan
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+      484  2026-10-24 00:13   tfplan
+      145  2026-10-24 00:13   tfstate
+      145  2026-10-24 00:13   tfstate-prev
+      264  2026-10-24 00:13   tfconfig/m-/main.tf
+       41  2026-10-24 00:13   tfconfig/modules.json
+      107  2026-10-24 00:13   .terraform.lock.hcl
+---------                     -------
+     1186                     6 files
+```
+
+plan 파일에는 계획만 있는 게 아니다. 만들 당시의 state 사본, 설정 소스, 프로바이더 잠금 파일까지 들어 있다. 화면의 plan은 비밀번호를 가린다. 그런데 JSON으로 꺼내면 다르다.
+
+```bash
+terraform show -json dev.tfplan | jq '.variables'
+```
+
+```text
+{
+  "db_password": {
+    "value": "hunter2-example"
+  },
+  "env": {
+    "value": "dev"
+  }
+}
+```
+
+`sensitive = true`는 화면 출력을 가릴 뿐, plan 파일에는 값이 그대로 들어 있다. 이 파일을 아티팩트로 올리면 저장소에 읽기 권한이 있는 사람이면 누구나 운영 비밀번호를 내려받을 수 있다. 그래서 아티팩트 보존 기간을 하루 이틀로 짧게 잡고, 가능하면 비밀은 변수로 넘기지 않고 비밀 저장소에서 프로바이더가 직접 읽게 한다. 이 점은 아래에서 볼 모든 플랫폼에 똑같이 해당한다.
+
+plan 파일은 만든 환경에 묶여 있기도 하다. dev 워크스페이스에서 만든 plan을 prod를 선택한 상태로 apply해 봤다.
+
+```bash
+terraform workspace select prod
+terraform apply -input=false dev.tfplan
+```
+
+```text
+Error: The plan file describes changes to the "dev" workspace, but the "prod" workspace is currently in use.
+
+Applying this plan with the incorrect workspace selected could result in state being stored in an unexpected location, or a downstream error when Terraform attempts apply a plan using the other workspace's state. If you'd like to continue to use the plan file, you must run "terraform workspace select dev" to select the matching workspace.
+In future make sure the selected workspace is not changed between creating and applying a plan file.
+```
+
+Terraform이 막아 줬다. 이 성질 때문에 "dev에서 승인한 plan을 prod에 그대로 쓴다"는 승격은 불가능하다. 환경 승격에서 옮기는 것은 plan이 아니라 코드(모듈 버전)이고, 환경마다 plan을 새로 만들어 각각 승인한다.
+
+## CI에서 직접 돌리기: 무엇을 하든 뼈대는 같다
+
+GitHub Actions든 GitLab CI든 Jenkins든 CircleCI든, 직접 짜는 파이프라인은 네 가지를 갖춘다. PR에서 plan을 만들어 보여 주는 잡, main에서 plan을 파일로 남기는 잡, 사람이 승인해야 넘어가는 문, 그 파일만 apply하는 잡. 여기에 같은 스택의 실행이 겹치지 않게 줄 세우는 장치와, 오래 사는 키 대신 OIDC로 클라우드 역할을 잠깐 빌리는 설정을 더한다.
+
+GitHub Actions에서 이 넷은 각각 잡, `upload-artifact`, `environment`의 필수 리뷰어, `concurrency` 그룹이다.
+
+```yaml
+# .github/workflows/terraform-prod-network.yml (뼈대만)
+on:
+  push:
+    branches: [main]
+    paths: ["live/prod/network/**"]
+
+concurrency:
+  group: tf-prod-network        # 같은 스택은 한 번에 하나만
+  cancel-in-progress: false     # 돌고 있는 apply를 끊지 않는다
+
+permissions:
+  id-token: write               # OIDC 토큰 발급
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/tf-plan-readonly
+          aws-region: ap-northeast-2
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=live/prod/network init -input=false
+      - run: terraform -chdir=live/prod/network plan -input=false -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: live/prod/network/tfplan
+          retention-days: 1     # plan 파일에는 비밀이 들어 있다
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-24.04
+    environment: production     # 필수 리뷰어가 승인해야 이 잡이 시작된다
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: tfplan, path: live/prod/network }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::111122223333:role/tf-apply-prod
+          aws-region: ap-northeast-2
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=live/prod/network init -input=false
+      - run: terraform -chdir=live/prod/network apply -input=false tfplan
+```
+
+쓰기 역할(`tf-apply-prod`)의 신뢰 정책은 토큰의 `sub`가 `repo:acme/infra:environment:production`일 때만 맡을 수 있게 좁힌다. 그러면 승인 문을 통과한 잡만 쓰기 권한을 얻는다. OIDC 신뢰 정책을 짜는 법은 [GitHub Actions로 ECR에 이미지 올리기](/posts/github-actions-docker-ecr)에 있다.
+
+다른 CI도 같은 네 조각을 이름만 바꿔 갖고 있다. GitLab CI는 `when: manual` 잡이 승인 문이고, `resource_group`이 같은 스택의 잡을 한 줄로 세우며, 자체 HTTP state 백엔드도 준다. GitLab은 Terraform 라이선스 변경 이후 공식 Terraform CI 템플릿을 정리하고 OpenTofu 컴포넌트 쪽으로 옮겨 갔으니, 예전 템플릿을 복사해 쓰고 있다면 확인해 볼 만하다. Jenkins는 `input` 스텝이 승인 문, `stash`·`unstash`가 plan 전달, Lockable Resources 플러그인의 `lock`이 줄 세우기다. CircleCI는 `type: approval` 잡과 워크스페이스(`persist_to_workspace`), 그리고 `$CIRCLE_OIDC_TOKEN`으로 같은 구조를 만든다.
+
+직접 짜는 쪽의 장점은 이미 쓰는 CI 하나로 끝나고 비용이 러너 값뿐이라는 점이다. 단점은 위의 모든 조각을 스택마다 직접 이어 붙이고 고쳐야 한다는 점이다. 스택이 다섯 개면 견딜 만하고, 오십 개면 워크플로 파일 관리가 일이 된다.
+
+## HCP Terraform: 실행 장소째로 빌린다
+
+HCP Terraform(2024년에 Terraform Cloud에서 이름이 바뀌었다)은 위의 조각들을 서비스로 제공한다. state 저장과 잠금, 원격 실행 환경, plan 기록, 승인, 정책 검사가 한곳에 있다. 같은 기능을 사내에 직접 설치하는 판이 Terraform Enterprise다.
+
+먼저 용어 하나를 정리해야 한다. HCP Terraform의 워크스페이스는 CLI의 `terraform workspace`와 이름만 같고 다른 것이다. CLI 워크스페이스는 같은 디렉터리에서 state 파일만 바꿔 끼우는 기능이다([Terraform 모듈과 tfvars](/posts/terraform-modules-tfvars)). HCP의 워크스페이스는 state 하나와 그 실행에 필요한 변수, 자격 증명, 실행 기록, 권한을 묶은 단위다. 보통 "스택 하나 × 환경 하나"가 워크스페이스 하나다(`network-prod`, `network-dev`).
+
+워크스페이스에 코드를 넣는 길은 셋이다. VCS 연동은 저장소와 브랜치, 작업 디렉터리를 연결해 두면 PR이 올라올 때 plan만 하는 speculative plan을 돌려 PR에 결과를 붙이고, 머지되면 실제 실행을 큐에 넣는다. CLI 연동은 코드에 `cloud` 블록을 두고 로컬이나 CI에서 `terraform plan`을 치면 실행은 HCP에서 일어나고 로그만 내 터미널로 흘러온다. API 연동은 다른 시스템이 설정 묶음을 올려 실행을 만든다.
+
+```hcl
+# CLI 연동: 실행은 HCP에서, 명령은 여기서
+terraform {
+  cloud {
+    organization = "acme"
+    workspaces {
+      name = "network-prod"
+    }
+  }
+}
+```
+
+```bash
+terraform login        # 브라우저로 사용자 토큰을 받아 ~/.terraform.d/credentials.tfrc.json에 저장
+# CI에서는 파일 대신 환경 변수로 넘긴다
+export TF_TOKEN_app_terraform_io="$HCP_TEAM_TOKEN"
+```
+
+VCS 연동 워크스페이스에서 PR 하나가 운영에 닿기까지의 순서는 아래와 같다. 다음을 누르며 각 단계에서 무엇이 자동이고 어디서 사람이 멈추는지 본다.
+
+<SequenceDiagram
+  caption="VCS 연동 워크스페이스: PR에서 speculative plan, 머지 뒤 실행과 승인"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "gh", label: "GitHub" },
+    { id: "hcp", label: "HCP Terraform" },
+    { id: "task", label: "run task·정책" },
+    { id: "aws", label: "AWS" },
+  ]}
+  steps={[
+    { from: "dev", to: "gh", label: "PR 열기", title: "코드만 올린다", detail: "개발자는 클라우드 자격 증명이 없다. 바꾸고 싶은 것을 PR로 올릴 뿐이다." },
+    { from: "gh", to: "hcp", label: "webhook", title: "speculative plan을 돌린다", detail: "PR 커밋으로 plan만 한다. 이 실행은 apply로 이어질 수 없고, 결과는 PR의 상태 체크로 붙는다.", payload: "Plan: 1 to add, 1 to change, 0 to destroy." },
+    { from: "gh", to: "hcp", label: "머지", title: "main 기준으로 실제 실행이 큐에 들어간다", detail: "같은 워크스페이스의 실행은 하나씩 순서대로 돈다. 잠금과 순서를 플랫폼이 맡는다." },
+    { from: "hcp", to: "task", label: "post-plan", title: "plan 결과를 검사기에 넘긴다", detail: "run task는 외부 서비스(보안 스캐너, 비용 검사)에 plan을 보내 통과·실패를 받는다. Sentinel이나 OPA 정책도 이 시점에 plan을 본다." },
+    { from: "dev", to: "hcp", label: "Confirm & apply", title: "권한 있는 사람이 승인한다", detail: "자동 적용을 끈 워크스페이스는 여기서 멈춘다. 누가 어떤 plan을 승인했는지가 실행 기록에 남는다." },
+    { from: "hcp", to: "aws", label: "apply (동적 자격 증명)", title: "실행 환경이 역할을 잠깐 빌려 적용한다", detail: "워크스페이스에 정적 키를 넣지 않고, 실행마다 OIDC 토큰으로 AWS 역할을 맡는다. plan과 apply 단계에 다른 역할을 줄 수 있다." },
+  ]}
+/>
+
+이 흐름에서 직접 짜지 않아도 되는 것이 꽤 많다. 잠금과 실행 순서, plan 저장과 그 plan만 apply하기, 실행 기록. 그리고 몇 가지는 직접 짜기 어려운 기능이다.
+
+run task는 실행의 정해진 지점(plan 전, plan 후, apply 전, apply 후)에 외부 서비스를 끼워 넣는다. 보안 스캐너나 비용 검사 서비스가 plan을 받아 결과를 돌려주고, 필수(mandatory)로 걸면 실패했을 때 apply로 넘어가지 못한다. 정책은 Sentinel이나 OPA로 쓰고 여러 워크스페이스에 정책 묶음(policy set)으로 건다. Sentinel은 강제 수준을 권고, 승인자가 무시할 수 있는 필수, 무시할 수 없는 필수로 나눈다. 어떤 검사를 파이프라인 어디에 둘지는 [Terraform 테스트와 정책 검사](/posts/terraform-testing-policy-scanning)에서 다뤘다.
+
+자격 증명은 동적 자격 증명(dynamic provider credentials)으로 받는다. 워크스페이스 변수에 `TFC_AWS_PROVIDER_AUTH=true`와 `TFC_AWS_RUN_ROLE_ARN`을 두면, 실행마다 HCP가 OIDC 토큰을 만들어 그 역할을 맡는다. 토큰의 `sub`에 조직, 프로젝트, 워크스페이스, 실행 단계(plan/apply)가 들어가서 신뢰 정책으로 "network-prod 워크스페이스의 apply 단계만"까지 좁힐 수 있다.
+
+토큰도 종류를 나눈다. 사용자 토큰은 사람에게, 팀 토큰은 그 팀 권한으로 도는 CI에, 조직 토큰은 워크스페이스를 만들고 설정하는 관리 자동화에 쓴다. CI에 조직 토큰을 넣으면 그 CI가 모든 워크스페이스의 변수를 읽고 바꿀 수 있게 되니 피한다.
+
+그 밖에 엔터프라이즈 쪽 기능으로 SSO와 팀 권한, 감사 로그, 사내 모듈을 버전과 함께 올려 두는 프라이빗 레지스트리, 정기적으로 drift를 확인하는 상태 점검, 그리고 사설망 안의 리소스를 다루기 위해 실행을 내 네트워크의 에이전트에서 돌리는 기능이 있다. 어떤 기능이 어느 요금제에 들어 있는지는 자주 바뀌고, 과금은 관리하는 리소스 수를 기준으로 한다. 도입 전에 요금표를 직접 확인한다.
+
+HCP Terraform의 약점은 대부분 "빌린다"에서 나온다. 실행 환경이 HashiCorp 쪽에 있으니 사설망에 접근하려면 에이전트를 따로 운영해야 한다. state와 plan, 변수가 외부 서비스에 저장되는 것을 규정상 허용하지 않는 조직도 있다. 2023년 Terraform이 BSL 라이선스로 바뀐 뒤 OpenTofu로 옮긴 팀은 HCP 대신 다른 플랫폼을 찾는다. 그리고 리소스 수에 따라 비용이 늘어난다.
+
+## Atlantis: PR 댓글로 plan과 apply를 시킨다
+
+Atlantis는 직접 띄우는 작은 서버다. 저장소의 웹훅을 받아 PR이 열리면 바뀐 디렉터리에서 plan을 돌려 댓글로 결과를 단다. 리뷰어가 승인하면 누군가 PR에 `atlantis apply`라고 댓글을 달고, Atlantis가 apply한 뒤 결과를 다시 댓글로 남긴다.
+
+```yaml
+# 저장소 루트의 atlantis.yaml (형식 예시)
+version: 3
+projects:
+  - name: prod-network
+    dir: live/prod/network
+    autoplan:
+      when_modified: ["*.tf", "../../modules/network/**/*.tf"]
+    apply_requirements: [approved, mergeable]
+```
+
+특징은 apply가 머지 전에 일어난다는 점이다. PR이 apply까지 끝나야 머지된다. 그래서 main은 "이미 적용된 것"을 뜻하게 된다. 같은 디렉터리를 건드리는 다른 PR이 끼어들지 않도록, plan을 돌린 PR이 그 디렉터리와 워크스페이스에 잠금을 잡고 머지나 plan 삭제 때까지 놓지 않는다. 대신 apply는 성공했는데 머지 전에 다른 변경이 main에 들어오면, main의 코드와 실제 인프라가 잠깐 어긋난다.
+
+Atlantis는 무료이고 내 네트워크 안에서 돌아 사설 리소스에 바로 닿는다. OpenTofu도 지원한다. 그 대가로 서버 자체를 운영해야 하고, 그 서버가 모든 스택의 쓰기 권한을 쥔다. 웹훅 비밀값과 저장소 허용 목록을 제대로 두지 않으면 아무 PR이나 그 권한으로 코드를 돌릴 수 있다. 감사 기록은 PR 댓글이 전부라서, 규정상 승인 기록을 따로 보관해야 하면 부족하다.
+
+## Terragrunt: 스택이 늘어날 때 생기는 중복과 순서
+
+플랫폼을 정해도 저장소 안의 문제가 남는다. 환경 셋(dev, stage, prod)에 스택 다섯(network, iam, db, eks, app)이면 디렉터리가 열다섯이다. 디렉터리마다 거의 같은 `backend` 블록과 `provider` 블록이 있고, 바뀌는 건 state 키와 몇 개의 변수뿐이다. 그리고 app 스택은 db와 eks의 output이 필요해서, 처음 환경을 만들 때는 순서대로 apply해야 한다.
+
+Terragrunt는 Terraform(또는 OpenTofu)을 감싸는 얇은 도구로 이 두 문제를 푼다. 공통 설정은 상위 디렉터리의 파일 하나에 두고, 각 스택(Terragrunt는 unit이라고 부른다)은 그 파일을 include한 뒤 자기만의 값만 적는다.
+
+```hcl
+# live/root.hcl: 모든 unit이 함께 쓰는 설정
+remote_state {
+  backend = "s3"
+  generate = {
+    path      = "backend.tf"
+    if_exists = "overwrite_terragrunt"
+  }
+  config = {
+    bucket       = "acme-tfstate"
+    key          = "${path_relative_to_include()}/terraform.tfstate"
+    region       = "ap-northeast-2"
+    encrypt      = true
+    use_lockfile = true        # S3 자체 잠금 (Terraform 1.10 이상)
+  }
+}
+```
+
+```hcl
+# live/prod/app/terragrunt.hcl
+include "root" {
+  path = find_in_parent_folders("root.hcl")
+}
+
+terraform {
+  source = "git::https://github.com/acme/infra-modules.git//app?ref=v1.4.0"
+}
+
+dependency "db" {
+  config_path = "../db"
+  mock_outputs = {
+    endpoint = "mock.cluster.local"
+  }
+  mock_outputs_allowed_terraform_commands = ["validate", "plan"]
+}
+
+inputs = {
+  env         = "prod"
+  db_endpoint = dependency.db.outputs.endpoint
+}
+```
+
+`path_relative_to_include()`가 디렉터리 경로를 state 키로 바꿔 주니 열다섯 개 unit의 state 키를 손으로 적을 일이 없다. `dependency`는 다른 unit의 output을 읽어 오는 동시에 실행 순서를 정한다. `terragrunt run --all apply`(예전 버전은 `run-all apply`)를 치면 Terragrunt가 이 의존 관계로 그래프를 만들어, 앞 unit이 끝난 것부터 동시에 실행한다. destroy는 순서를 거꾸로 돈다.
+
+아래 그림이 prod 환경의 unit 그래프다. 화살표가 실행이 흐르는 방향이다.
+
+<ConceptDiagram
+  caption="prod의 unit 의존 그래프: 앞이 끝나야 뒤가 시작한다"
+  width={420}
+  height={240}
+  nodes={[
+    { id: "network", label: "network", sub: "VPC·서브넷", x: 70, y: 70, w: 110 },
+    { id: "iam", label: "iam", sub: "역할", x: 70, y: 180, w: 110 },
+    { id: "db", label: "db", sub: "RDS", x: 215, y: 70, w: 100 },
+    { id: "eks", label: "eks", sub: "클러스터", x: 215, y: 180, w: 100 },
+    { id: "app", label: "app", sub: "서비스", x: 355, y: 125, w: 100 },
+  ]}
+  edges={[
+    { from: "network", to: "db" },
+    { from: "network", to: "eks" },
+    { from: "iam", to: "eks" },
+    { from: "db", to: "app" },
+    { from: "eks", to: "app" },
+  ]}
+/>
+
+network와 iam은 서로 기다리지 않으니 동시에 시작한다. eks는 둘 다 끝나야 시작하고, app은 마지막이다. 이 순서를 직접 계산해 본다. 각 unit이 기다리는 unit 목록을 받아, 동시에 시작할 수 있는 묶음을 차례로 돌려준다. 순환이 있으면 어떤 순서로도 돌 수 없으니 `null`을 돌려준다.
+
+<CodePlayground
+  caption="unit 의존 관계로 실행 묶음 만들기"
+  functionName="runGroups"
+  initialCode={`// deps: { unit 이름: [먼저 끝나야 하는 unit들] }
+// 동시에 시작할 수 있는 묶음의 배열을 돌려준다. 묶음 안은 이름순.
+// 순환이 있으면 null
+function runGroups(deps) {
+  return [];
+}`}
+  solution={`function runGroups(deps) {
+  const names = Object.keys(deps);
+  const done = new Set();
+  const groups = [];
+  while (done.size < names.length) {
+    const ready = names
+      .filter((n) => !done.has(n) && deps[n].every((d) => done.has(d)))
+      .sort();
+    if (ready.length === 0) return null;
+    groups.push(ready);
+    ready.forEach((n) => done.add(n));
+  }
+  return groups;
+}`}
+  tests={[
+    { label: "기본 네 개", args: [{ vpc: [], db: ["vpc"], eks: ["vpc"], app: ["db", "eks"] }], expected: [["vpc"], ["db", "eks"], ["app"]] },
+    { label: "앞에서 셋이 동시에", args: [{ vpc: [], dns: [], iam: [], eks: ["vpc", "iam"], app: ["eks", "dns"] }], expected: [["dns", "iam", "vpc"], ["eks"], ["app"]] },
+    { label: "의존 없는 unit 섞기", args: [{ vpc: [], db: ["vpc"], cache: ["vpc"], app: ["db"], monitor: [] }], expected: [["monitor", "vpc"], ["cache", "db"], ["app"]] },
+    { label: "unit 하나", args: [{ solo: [] }], expected: [["solo"]] },
+    { label: "순환", args: [{ a: ["b"], b: ["a"] }], expected: null },
+  ]}
+/>
+
+실제 Terragrunt는 묶음 단위로 기다리지 않고, 의존하는 unit이 끝나는 즉시 다음 unit을 시작한다. 그래도 "무엇이 무엇을 기다리는가"를 따지는 방식은 같다.
+
+여기서 조심할 것이 `mock_outputs`다. 아직 db가 만들어지지 않은 새 환경에서 `run --all plan`을 하면 app의 plan은 db의 진짜 output 대신 가짜 값으로 계산된다. 그 plan은 리뷰용 참고일 뿐, 실제 apply 때의 계획과 다르다. 그래서 `mock_outputs_allowed_terraform_commands`로 가짜 값을 validate와 plan에만 허용하고, 운영 파이프라인에서는 `run --all apply`로 한꺼번에 밀기보다 unit마다 plan을 만들고 승인해 차례로 적용한다. `run --all`은 새 환경을 처음 세우거나 dev를 통째로 다시 만들 때 쓰는 편이 안전하다.
+
+Terragrunt는 실행 플랫폼이 아니라 저장소 구조 도구라서 위의 플랫폼과 함께 쓴다. GitHub Actions에서 `terragrunt plan`을 돌려도 되고, Atlantis도 Terragrunt를 지원한다. HCP Terraform과는 결이 조금 다르다. HCP는 워크스페이스 사이의 의존을 run trigger(앞 워크스페이스가 apply되면 뒤 워크스페이스 실행을 큐에 넣기)와 output 공유로 풀기 때문에, 둘을 겹쳐 쓰면 의존 관계를 두 곳에서 관리하게 된다. 최근 Terraform에는 여러 구성 요소를 묶어 배포하는 Terraform Stacks라는 기능도 HCP 쪽에 나왔으니, HCP를 쓴다면 그쪽도 함께 본다.
+
+## 환경 승격: plan이 아니라 모듈 버전을 옮긴다
+
+앞에서 본 대로 plan 파일은 환경을 넘을 수 없다. 그래서 dev에서 검증한 변경을 prod로 올릴 때 옮기는 것은 코드 버전이다. 모듈을 별도 저장소에 두고 태그로 버전을 붙이면 승격은 한 줄 변경이 된다.
+
+```text
+live/
+  root.hcl
+  dev/
+    app/terragrunt.hcl     source = "...//app?ref=v1.5.0"   ← 새 버전을 먼저
+  stage/
+    app/terragrunt.hcl     source = "...//app?ref=v1.5.0"
+  prod/
+    app/terragrunt.hcl     source = "...//app?ref=v1.4.0"   ← 승격 PR이 이 줄을 바꾼다
+```
+
+prod로 올리는 PR은 `v1.4.0`을 `v1.5.0`으로 바꾸는 한 줄이고, 그 PR의 plan이 "prod에서 실제로 무엇이 바뀌는가"를 보여 준다. dev에서 문제가 없었는데 prod plan에 교체(`-/+`)가 보이면 환경마다 다른 변수나 이미 생긴 drift 때문이다. 그 차이가 바로 승격 PR에서 잡으려던 것이다. Terragrunt 없이 디렉터리와 tfvars만 쓰는 구조에서도 모듈 `source`의 `?ref=`를 옮기는 원리는 같다. HCP Terraform이라면 프라이빗 레지스트리에 모듈을 올리고 워크스페이스마다 `version`을 고정한다.
+
+## 무엇을 고르나
+
+정답 하나는 없고, 팀이 무엇을 직접 운영할 여력이 있는지와 규정이 무엇을 허락하는지로 갈린다.
+
+스택이 열 개 안팎이고 이미 GitHub Actions나 GitLab CI를 쓰고 있다면 CI에서 직접 돌리는 것으로 충분하다. 추가 비용이 없고, 승인과 OIDC를 CI의 기능으로 해결한다. 스택이 늘어 워크플로 파일 관리가 일이 되기 시작하면 다음 단계를 본다.
+
+PR 중심으로 일하고, 사설망 안에서 돌아야 하고, 비용을 아끼고 싶으면 Atlantis다. 서버 하나를 운영할 사람이 있어야 하고, 그 서버의 권한을 단단히 묶어야 한다. OpenTofu로 옮긴 팀에게도 자연스러운 선택이다.
+
+정책 검사, 감사 기록, SSO, 팀 권한 같은 거버넌스가 필요하고 그것을 직접 만들고 싶지 않으면 HCP Terraform이다. 외부 서비스에 state를 둘 수 없으면 같은 기능을 사내에 설치하는 Terraform Enterprise가 있다. 비용은 관리 리소스 수에 따라 늘어난다.
+
+서버 안의 패키지와 설정 파일까지 이 파이프라인으로 다루려 하지는 않는다. 그건 Ansible 같은 구성 관리 도구의 몫이다([구성 관리 도구 비교](/posts/config-management-tools)).
+
+Terragrunt는 이 선택과 따로 결정한다. 환경과 스택이 곱해져 디렉터리가 수십 개가 되고 backend·provider 블록 중복이 괴로워지면 들인다. 스택이 몇 개뿐이면 Terraform만으로 충분하고, 도구를 하나 더 배우는 비용이 더 크다.
+
+## 실행 장소를 하나로 모은 뒤
+
+처음의 금요일 사고는 모두 "apply가 여러 곳에서 여러 사람의 권한으로 일어난다"에서 나왔다. 어느 플랫폼을 고르든 해법은 apply를 한 곳으로 모으고, 그곳만 짧게 빌린 쓰기 권한을 갖게 하고, 리뷰한 plan만 적용하게 하는 것이다. plan 파일은 비밀을 품은 산출물로 다루고, 환경 사이에서는 plan이 아니라 모듈 버전을 옮긴다. 스택이 늘면 Terragrunt 같은 도구로 중복과 순서를 정리한다.
+
+## 면접에서 나올 만한 질문
+
+### 팀으로 Terraform을 쓸 때 노트북에서 apply하면 어떤 문제가 생기나요?
+
+리뷰한 코드와 적용한 코드가 같다는 보장이 없고, 실행 순서가 우연에 맡겨지며, 운영 쓰기 권한이 사람마다 흩어지고, 누가 어떤 plan을 승인해 적용했는지 기록이 남지 않는다. 그래서 apply를 CI나 HCP Terraform, Atlantis 같은 한 곳으로 모으고 그곳만 쓰기 권한을 갖게 한다. 사람은 PR로 코드를 올리고 plan을 본다.
+
+### CI에서 plan 파일을 아티팩트로 넘길 때 주의할 점은 무엇인가요?
+
+plan 파일에는 state 사본과 설정, 변수 값이 들어 있고 `sensitive` 변수도 평문으로 남는다. `terraform show -json`으로 꺼내면 그대로 보인다. 그래서 보존 기간을 짧게 잡고 접근 권한을 좁히며, 가능하면 비밀은 변수로 넘기지 않고 프로바이더가 비밀 저장소에서 직접 읽게 한다. 또 plan 파일은 만든 워크스페이스와 state에 묶여 있어 다른 환경에 쓸 수 없다.
+
+### dev에서 승인한 plan을 prod에 그대로 적용할 수 있나요?
+
+없다. plan은 만든 환경의 state와 변수로 계산된 것이라 Terraform이 다른 워크스페이스에서의 적용을 막는다. 환경 승격에서 옮기는 것은 모듈 버전 같은 코드이고, prod에서 plan을 새로 만들어 따로 승인한다. 그 prod plan이 dev와 다르게 나오면 그 차이가 승격 PR에서 잡으려던 것이다.
+
+### HCP Terraform을 쓰면 직접 짠 CI 파이프라인과 비교해 무엇을 얻나요?
+
+state 저장과 잠금, 실행 순서, 저장한 plan만 apply하기, 실행 기록이 기본으로 들어 있고, run task와 Sentinel·OPA 정책, 동적 자격 증명, 팀 권한, 감사 로그를 직접 만들지 않아도 된다. 대신 실행 환경과 state가 외부 서비스에 있어 사설망 접근에는 에이전트가 필요하고, 관리 리소스 수에 따라 비용이 늘어난다. 규정상 외부 저장이 안 되면 Terraform Enterprise를 쓴다.
+
+### HCP Terraform의 워크스페이스와 CLI의 terraform workspace는 같은 것인가요?
+
+이름만 같다. CLI 워크스페이스는 같은 디렉터리에서 state 파일만 바꿔 끼우는 기능이고, HCP 워크스페이스는 state 하나와 변수, 자격 증명, 실행 기록, 권한을 묶은 관리 단위다. 보통 스택 하나와 환경 하나의 조합이 HCP 워크스페이스 하나가 된다.
+
+### Atlantis는 어떤 방식으로 동작하고, 단점은 무엇인가요?
+
+셀프 호스팅 서버가 PR 웹훅을 받아 plan을 댓글로 달고, 승인 뒤 `atlantis apply` 댓글로 apply한다. apply가 머지 전에 일어나 main이 적용된 상태를 뜻하고, PR이 디렉터리 잠금을 잡아 다른 PR이 끼어들지 못한다. 단점은 서버를 직접 운영해야 하고 그 서버가 모든 스택의 쓰기 권한을 쥔다는 점, 감사 기록이 PR 댓글뿐이라는 점이다.
+
+### Terragrunt는 무엇을 풀어 주고, mock_outputs는 왜 조심해야 하나요?
+
+환경과 스택이 곱해져 생기는 backend·provider 설정 중복을 상위 파일 하나로 모으고, `dependency`로 unit 사이의 output 전달과 실행 순서를 정해 `run --all`로 그래프 순서대로 돌린다. `mock_outputs`는 앞 unit이 아직 없을 때 가짜 값으로 plan을 계산하게 해 주는데, 그 plan은 실제 apply의 계획과 다르다. 그래서 가짜 값은 validate와 plan에만 허용하고 운영에서는 unit마다 plan을 승인해 차례로 적용한다.
+
+### OIDC로 CI에 클라우드 권한을 줄 때 무엇을 좁혀야 하나요?
+
+신뢰 정책에서 토큰의 `sub` 조건으로 저장소와 브랜치, environment까지 좁혀 승인 문을 통과한 잡만 쓰기 역할을 맡게 한다. plan 잡에는 읽기 전용 역할, apply 잡에는 쓰기 역할을 따로 준다. HCP Terraform의 동적 자격 증명도 `sub`에 워크스페이스와 실행 단계가 들어 있어 같은 방식으로 좁힌다.

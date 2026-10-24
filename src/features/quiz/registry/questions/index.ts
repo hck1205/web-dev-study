@@ -1,3 +1,12 @@
+import { TERRAFORM_TEAM_WORKFLOW_HCP_TERRAGRUNT } from "./terraform-team-workflow-hcp-terragrunt";
+import { SECURITY_COMPLIANCE_FOR_DEVELOPERS } from "./security-compliance-for-developers";
+import { PHISHING_SOCIAL_ENGINEERING } from "./phishing-social-engineering";
+import { LINUX_FHS_FILE_COMMANDS } from "./linux-fhs-file-commands";
+import { FRONTEND_HOSTING_PLATFORMS } from "./frontend-hosting-platforms";
+import { DOCKER_LOCAL_DEV_WORKFLOW } from "./docker-local-dev-workflow";
+import { DATA_PRIVACY_COMPLIANCE } from "./data-privacy-compliance";
+import { DATA_CENTER_INFRASTRUCTURE } from "./data-center-infrastructure";
+import { CONFIG_MANAGEMENT_TOOLS } from "./config-management-tools";
 import { WIFI_STANDARDS_SECURITY } from "./wifi-standards-security";
 import { WIFI_DESIGN_CHANNELS_ROAMING } from "./wifi-design-channels-roaming";
 import { WAN_MPLS_SD_WAN_VRF } from "./wan-mpls-sd-wan-vrf";
@@ -868,6 +877,15 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  TERRAFORM_TEAM_WORKFLOW_HCP_TERRAGRUNT,
+  SECURITY_COMPLIANCE_FOR_DEVELOPERS,
+  PHISHING_SOCIAL_ENGINEERING,
+  LINUX_FHS_FILE_COMMANDS,
+  FRONTEND_HOSTING_PLATFORMS,
+  DOCKER_LOCAL_DEV_WORKFLOW,
+  DATA_PRIVACY_COMPLIANCE,
+  DATA_CENTER_INFRASTRUCTURE,
+  CONFIG_MANAGEMENT_TOOLS,
   WIFI_STANDARDS_SECURITY,
   WIFI_DESIGN_CHANNELS_ROAMING,
   WAN_MPLS_SD_WAN_VRF,

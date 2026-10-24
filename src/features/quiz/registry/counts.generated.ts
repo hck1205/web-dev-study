@@ -1,6 +1,15 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "terraform-team-workflow-hcp-terragrunt": 7,
+  "security-compliance-for-developers": 6,
+  "phishing-social-engineering": 7,
+  "linux-fhs-file-commands": 6,
+  "frontend-hosting-platforms": 7,
+  "docker-local-dev-workflow": 7,
+  "data-privacy-compliance": 6,
+  "data-center-infrastructure": 7,
+  "config-management-tools": 7,
   "wifi-standards-security": 7,
   "wifi-design-channels-roaming": 7,
   "wan-mpls-sd-wan-vrf": 7,
