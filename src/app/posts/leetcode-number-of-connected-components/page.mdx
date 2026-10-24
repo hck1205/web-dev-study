@@ -1,0 +1,501 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-number-of-connected-components");
+
+<EasyIntro>
+  반 친구 일곱 명이 있고, 누가 누구와 전화번호를 주고받았는지 적은 쪽지가 있다. 전화번호를 주고받은 사이끼리는 서로 소식이 전해지고, 친구의 친구에게도 결국 소식이 간다. 이렇게 소식이 오갈 수 있는 친구들끼리 한 무리라고 하면, 반에는 무리가 몇 개 있을까. 처음에는 모두가 혼자 한 무리라고 치고 일곱 개에서 시작한다. 쪽지를 한 장씩 읽으면서, 두 친구가 아직 다른 무리라면 두 무리를 하나로 합치고 개수를 하나 뺀다. 이미 같은 무리라면 아무것도 하지 않는다. 쪽지를 다 읽고 남은 숫자가 무리의 개수다. 무리마다 대장을 정해 두고 대장이 같은지만 보면 같은 무리인지 금방 알 수 있다.
+</EasyIntro>
+
+그래프에서 서로 오갈 수 있는 정점들의 묶음을 연결 요소라고 한다. 격자에서 섬을 세는 [Number of Islands](/posts/leetcode-number-of-islands)가 바로 연결 요소 세기였다. [LeetCode 323. Number of Connected Components in an Undirected Graph](https://leetcode.com/problems/number-of-connected-components-in-an-undirected-graph/)(프리미엄 문제)는 격자 없이 정점과 간선 목록으로 같은 걸 묻는다. 격자 문제에서는 이웃이 위아래 양옆으로 정해져 있었지만, 여기서는 간선 목록으로 그래프를 직접 만들어야 한다.
+
+이 글은 "정점 수 - 간선 수"라는 흔한 착각부터 시작해, 인접 행렬 DFS, 번호를 다시 칠하는 quick-find, 인접 리스트 DFS, BFS, 유니온 파인드까지 여섯 가지를 본다. 그래프를 메모리에 담는 두 방법과 BFS·DFS의 원리는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에, 유니온 파인드의 원리는 [유니온 파인드 글](/posts/ds-union-find)에 있으니 여기서는 이 문제에 쓰는 부분만 본다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 따로 노는 무리는 몇 개인가
+
+정점은 `0`부터 `n - 1`까지 n개다. `edges`의 쌍 `[a, b]`는 a와 b를 잇는 무방향 간선이다. 연결 요소의 개수를 돌려준다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- n은 2,000 이하, 간선은 5,000개 이하다. O(n + E)면 몇천 번이고, O(n²)도 400만 번이라 통과한다.
+- 같은 간선이 두 번 나오지 않고, 자기 자신으로 가는 간선도 없다.
+- 간선에 한 번도 나오지 않는 정점이 있을 수 있다. 그런 정점은 혼자 한 연결 요소다.
+
+이 글의 예시는 정점 일곱 개다.
+
+```text
+n = 7
+edges = [[0,1], [1,2], [3,4], [5,4], [3,5]]
+
+0 ─ 1 ─ 2        3 ─ 4        6
+                  \  /
+                   5
+```
+
+0, 1, 2가 한 줄로 이어져 한 묶음이다. 3, 4, 5는 삼각형으로 이어져 한 묶음이다. 6은 어떤 간선에도 없으니 혼자 한 묶음이다. 답은 3이다.
+
+아래 그림에서 다음을 누르면 연결 요소를 하나씩 짚는다.
+
+<VectorSpace
+  caption="정점 일곱 개, 간선 다섯 개. 연결 요소는 세 개다"
+  width={400}
+  height={260}
+  groups={[{ id: "a", label: "0, 1, 2 묶음" }, { id: "b", label: "3, 4, 5 묶음" }, { id: "c", label: "혼자인 정점" }]}
+  points={[
+    { id: "v0", label: "0", x: 50, y: 60, group: "a" },
+    { id: "v1", label: "1", x: 120, y: 130, group: "a" },
+    { id: "v2", label: "2", x: 50, y: 210, group: "a" },
+    { id: "v3", label: "3", x: 260, y: 50, group: "b" },
+    { id: "v4", label: "4", x: 350, y: 120, group: "b", labelAt: "left" },
+    { id: "v5", label: "5", x: 260, y: 200, group: "b" },
+    { id: "v6", label: "6", x: 180, y: 230, group: "c" },
+  ]}
+  edges={[["v0", "v1"], ["v1", "v2"], ["v3", "v4"], ["v5", "v4"], ["v3", "v5"]]}
+  steps={[
+    { caption: "간선 다섯 개. 선으로 오갈 수 있는 정점끼리 한 묶음이다.", showEdges: true },
+    { caption: "첫 묶음: 0에서 1을 거쳐 2까지 간다.", showEdges: true, path: ["v0", "v1", "v2"] },
+    { caption: "둘째 묶음: 3, 4, 5는 삼각형이다. 간선이 셋인데 정점도 셋이다.", showEdges: true, path: ["v3", "v4", "v5", "v3"] },
+    { caption: "6은 어떤 간선에도 없다. 혼자 한 묶음이다. 답은 3.", showEdges: true, path: ["v6"] },
+  ]}
+/>
+
+둘째 묶음을 눈여겨보자. 정점 셋을 잇는 데는 간선 둘이면 충분한데 셋이 있다. 이 남는 간선 하나가 다음 절의 착각을 깨뜨린다.
+
+## 정점 수에서 간선 수를 빼면 된다는 착각
+
+연결 요소를 처음 배우면 이런 계산이 떠오른다. 정점 n개가 모두 따로 있으면 묶음이 n개다. 간선 하나를 더하면 두 묶음이 하나가 되니 묶음이 하나 준다. 그러면 답은 `n - edges.length`다.
+
+```js
+// 틀린 풀이: 간선마다 묶음이 하나씩 준다고 본다
+function countComponents(n, edges) {
+  return n - edges.length;
+}
+```
+
+예시에서 7 - 5 = 2가 나온다. 정답은 3이다. 삼각형의 세 번째 간선 `[3,5]`는 이미 같은 묶음인 3과 5를 잇는다. 묶음 수를 줄이지 않는 간선이다. 간선이 묶음을 하나 줄이는 건 서로 다른 두 묶음을 이을 때뿐이다. 극단적인 예로 정점 넷에 `[[0,1],[1,2],[2,0],[0,3]]`이면 4 - 4 = 0이 나오는데, 묶음이 0개인 그래프는 없다. 정답은 1이다.
+
+이 식은 그래프에 고리가 하나도 없을 때(숲일 때)만 맞다. 일반적으로는 다음이 성립한다.
+
+```text
+연결 요소 수 = n - (묶음을 실제로 합친 간선 수)
+            = n - E + (고리를 닫는 간선 수)
+```
+
+고리를 닫는 간선 수를 세려면 결국 간선마다 "두 끝이 이미 이어져 있나"를 알아야 한다. 이 착각을 고치는 것이 뒤의 유니온 파인드 풀이다.
+
+## 인접 행렬에서 이웃을 한 줄씩 훑는다
+
+그래프를 n × n 표에 담는 방법부터 보자. `adj[a][b] = 1`이면 a와 b가 이어져 있다. 아직 방문하지 않은 정점을 만나면 묶음을 하나 세고, 그 정점에서 DFS로 닿는 정점을 모두 방문 표시한다.
+
+```js
+function countComponents(n, edges) {
+  const adj = Array.from({ length: n }, () => new Uint8Array(n));   // n × n 표
+  for (const [a, b] of edges) { adj[a][b] = 1; adj[b][a] = 1; }       // 무방향이라 양쪽에
+  const seen = new Uint8Array(n);
+  let count = 0;
+  for (let s = 0; s < n; s++) {
+    if (seen[s]) continue;
+    count++;                       // 아직 안 본 정점 = 새 묶음
+    seen[s] = 1;
+    const stack = [s];
+    while (stack.length > 0) {
+      const u = stack.pop();
+      for (let v = 0; v < n; v++) {            // 이웃을 찾으려고 한 줄 전체를 훑는다
+        if (adj[u][v] && !seen[v]) { seen[v] = 1; stack.push(v); }
+      }
+    }
+  }
+  return count;
+}
+```
+
+정점마다 이웃을 찾으려고 표의 한 줄 n칸을 다 본다. 간선이 몇 개든 시간이 O(n²), 공간도 O(n²)이다. n = 2,000이면 표가 400만 칸, `Uint8Array`로 4MB다. 2,000 정점 사슬에서 11.96ms였다. 간선이 5,000개뿐인 그래프에서 대부분의 칸은 0이다. 이웃이 몇 개 없는데 n칸을 다 보는 게 낭비다. 간선이 n²에 가까운 빽빽한 그래프라면 이 방법도 나쁘지 않다. LeetCode 547. Number of Provinces는 입력이 아예 인접 행렬로 주어져서 이 풀이가 그대로 맞는다.
+
+## 번호를 다시 칠하는 quick-find
+
+탐색 없이 묶음을 관리하는 가장 단순한 방법도 있다. 정점마다 묶음 번호 `id`를 적어 둔다. 처음엔 자기 번호다. 간선 `[a, b]`를 볼 때 두 번호가 다르면, b의 묶음 번호를 가진 정점을 전부 찾아 a의 묶음 번호로 다시 칠하고 개수를 하나 뺀다.
+
+```js
+function countComponents(n, edges) {
+  const id = Array.from({ length: n }, (_, i) => i);   // 정점마다 묶음 번호
+  let count = n;
+  for (const [a, b] of edges) {
+    const ia = id[a], ib = id[b];
+    if (ia === ib) continue;                  // 이미 같은 묶음: 고리를 닫는 간선
+    for (let i = 0; i < n; i++) {             // b 묶음 전체를 a 묶음으로 다시 칠한다
+      if (id[i] === ib) id[i] = ia;
+    }
+    count--;
+  }
+  return count;
+}
+```
+
+같은 묶음인지 묻는 건 `id[a] === id[b]` 한 번이라 빠르다. 그래서 이름이 quick-find다. 대신 합칠 때마다 정점 n개를 모두 훑는다. 앞 절의 착각을 고친 첫 풀이이기도 하다. 이미 같은 번호면 개수를 빼지 않는다.
+
+시간은 합치기가 최대 n - 1번이고 매번 n칸이니 O(n²)이다. 2,000 정점 사슬에서 칸을 3,998,000번 훑었고 9.97ms였다. 다시 칠할 정점을 찾으려고 전부 훑는 대신, 묶음의 대표 하나만 바꾸면 끝나게 만든 것이 유니온 파인드다.
+
+## 인접 리스트에서 이웃만 따라간다
+
+인접 행렬의 낭비를 없애려면 정점마다 실제 이웃만 담은 목록을 둔다. 인접 리스트다. 그리고 [섬 개수 세기](/posts/leetcode-number-of-islands)와 똑같이, 아직 안 본 정점을 만나면 하나를 세고 그 묶음 전체를 방문 표시한다.
+
+```js
+function countComponents(n, edges) {
+  const graph = Array.from({ length: n }, () => []);
+  for (const [a, b] of edges) { graph[a].push(b); graph[b].push(a); }
+  const seen = new Uint8Array(n);
+  const visit = (u) => {
+    seen[u] = 1;                                 // 들어가자마자 표시한다
+    for (const v of graph[u]) if (!seen[v]) visit(v);
+  };
+  let count = 0;
+  for (let s = 0; s < n; s++) {
+    if (!seen[s]) { count++; visit(s); }         // 간선 없는 정점도 여기서 하나로 센다
+  }
+  return count;
+}
+```
+
+바깥 반복이 정점 `0`부터 `n - 1`까지 모두 훑으니, 간선에 안 나오는 정점 6도 혼자 한 묶음으로 세어진다. 정점마다 한 번 방문하고, 간선마다 양쪽 목록에서 한 번씩 보니 시간 O(n + E), 공간 O(n + E)다.
+
+문제는 재귀 깊이다. 정점이 한 줄로 이어져 있으면 재귀가 n단계까지 깊어진다. 정점 사슬로 재 봤다.
+
+```text
+Python 3.13   990개 사슬    1
+Python 3.13   1,000개 사슬  RecursionError
+Node.js 22    100,000개 사슬 RangeError: Maximum call stack size exceeded
+```
+
+Python은 기본 재귀 한도가 1,000이라 문제 조건 안의 2,000개 사슬에서 멈춘다. JavaScript와 Java는 2,000단계를 버티지만, 정점이 10만 개로 늘면 Node.js도 넘쳤다. 재귀를 피하려면 큐나 스택을 쓴다.
+
+## 큐로 한 겹씩 번지는 BFS
+
+재귀 대신 큐에 넣고 꺼낸다. 큐에 넣는 순간 방문 표시를 해야 같은 정점이 두 번 들어가지 않는다.
+
+```js
+function countComponents(n, edges) {
+  const graph = Array.from({ length: n }, () => []);
+  for (const [a, b] of edges) { graph[a].push(b); graph[b].push(a); }
+  const seen = new Uint8Array(n);
+  const queue = [];
+  let count = 0;
+  for (let s = 0; s < n; s++) {
+    if (seen[s]) continue;
+    count++;
+    seen[s] = 1;
+    queue.length = 0;
+    queue.push(s);
+    for (let head = 0; head < queue.length; head++) {     // shift() 대신 head를 옮긴다
+      for (const v of graph[queue[head]]) {
+        if (!seen[v]) { seen[v] = 1; queue.push(v); }
+      }
+    }
+  }
+  return count;
+}
+```
+
+시간 O(n + E), 공간 O(n + E)다. 재귀가 없으니 10만 정점 사슬도 68.78ms에 끝났다. 큐를 스택으로 바꾸면 DFS가 되고 답은 같다. 묶음의 정점을 모두 표시하기만 하면 되니 순서는 상관없다.
+
+## 합칠 때마다 하나씩 빼는 유니온 파인드
+
+그래프를 만들지 않고 간선 목록만 한 번 훑어도 된다. 처음에 묶음 수를 n으로 두고, 간선마다 두 끝의 대표를 찾는다. 대표가 다르면 두 묶음을 합치고 개수를 하나 뺀다. 대표가 같으면 고리를 닫는 간선이니 아무것도 하지 않는다. 처음의 착각에 "대표가 같으면 빼지 않는다"는 조건 하나를 더한 셈이다.
+
+```js
+function countComponents(n, edges) {
+  const parent = Array.from({ length: n }, (_, i) => i);   // 처음엔 자기가 대표
+  const size = new Array(n).fill(1);
+  let count = n;                                           // 정점마다 혼자 한 묶음
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];   // 경로 절반 압축
+      x = parent[x];
+    }
+    return x;
+  };
+  for (const [a, b] of edges) {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) continue;           // 이미 같은 묶음: 개수는 그대로
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;                   // 작은 묶음을 큰 묶음 밑에
+    size[ra] += size[rb];
+    count--;                           // 두 묶음이 하나가 됐다
+  }
+  return count;
+}
+```
+
+아래 그림은 예시를 이 풀이로 따라간 것이다. 칸은 간선 목록이고, 아래 칸은 지금 묶음들이다.
+
+<AlgoTrace
+  caption="묶음 7개에서 시작해, 다른 묶음을 잇는 간선마다 하나씩 뺀다"
+  memoryLabel="묶음"
+  cells={["0-1", "1-2", "3-4", "5-4", "3-5"]}
+  steps={[
+    { memory: ["0", "1", "2", "3", "4", "5", "6"], caption: "정점마다 혼자 한 묶음이다. 개수 7." },
+    { pointer: 0, found: [0], memory: ["01", "2", "3", "4", "5", "6"], caption: "0과 1의 대표가 다르다. 합치고 개수 6." },
+    { pointer: 1, found: [0, 1], memory: ["012", "3", "4", "5", "6"], caption: "1-2도 다른 묶음을 잇는다. 개수 5." },
+    { pointer: 2, found: [0, 1, 2], memory: ["012", "34", "5", "6"], caption: "3-4를 합친다. 개수 4." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["012", "345", "6"], caption: "5-4로 5가 3, 4 묶음에 들어온다. 개수 3." },
+    { pointer: 4, memory: ["012", "345", "6"], caption: "3과 5는 이미 대표가 같다. 고리를 닫는 간선이라 빼지 않는다. 답은 3." },
+  ]}
+/>
+
+마지막 간선이 착각과 이 풀이의 차이를 보여 준다. `n - E`는 이 간선에서도 하나를 빼서 2를 냈다. 유니온 파인드는 대표가 같으니 그대로 둔다. 6은 어떤 간선에도 나오지 않아 처음 셀 때의 1이 끝까지 남는다.
+
+경로 압축과 크기 합치기를 함께 쓰면 `find`가 O(α(n))이라 사실상 상수다. 전체 시간 O(n + E · α(n)), 공간 O(n)이다. 인접 리스트를 만들지 않으니 메모리도 가장 적다. 2,000 정점 사슬에서 1.14ms, 10만 정점 사슬에서 39.61ms로 가장 빨랐다.
+
+### Python과 Java로 쓰면
+
+Python은 `find`를 반복문으로 써서 재귀 한도를 피한다. 재귀 DFS가 1,000개 사슬에서 멈췄던 것과 달리 조건의 최대 크기에서도 문제없다.
+
+```python
+from typing import List
+
+
+def count_components(n: int, edges: List[List[int]]) -> int:
+    parent = list(range(n))
+    size = [1] * n
+    count = n  # 처음엔 정점마다 혼자 한 묶음
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # 경로 절반 압축
+            x = parent[x]
+        return x
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            continue  # 이미 같은 묶음: 개수는 그대로
+        if size[ra] < size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        size[ra] += size[rb]
+        count -= 1  # 두 묶음이 하나가 됐다
+    return count
+
+
+print(count_components(7, [[0, 1], [1, 2], [3, 4], [5, 4], [3, 5]]))
+print(count_components(4, []))
+```
+
+```text
+3
+4
+```
+
+Java는 `parent`와 `size`를 필드로 두고 `find`를 메서드로 뺀다. 간선이 없으면 `edges`가 길이 0인 배열로 들어오니 반복이 돌지 않고 n이 그대로 답이다.
+
+```java
+class Solution {
+    private int[] parent, size;
+
+    private int find(int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];   // 경로 절반 압축
+            x = parent[x];
+        }
+        return x;
+    }
+
+    public int countComponents(int n, int[][] edges) {
+        parent = new int[n];
+        size = new int[n];
+        for (int i = 0; i < n; i++) { parent[i] = i; size[i] = 1; }
+        int count = n;
+        for (int[] e : edges) {
+            int ra = find(e[0]), rb = find(e[1]);
+            if (ra == rb) continue;          // 이미 같은 묶음
+            if (size[ra] < size[rb]) { int t = ra; ra = rb; rb = t; }
+            parent[rb] = ra;
+            size[ra] += size[rb];
+            count--;                         // 두 묶음이 하나가 됐다
+        }
+        return count;
+    }
+}
+```
+
+```text
+3
+4
+```
+
+## 2,000개 정점으로 재 보면
+
+문제 조건의 최대 크기에 가까운 두 입력으로 세 번씩 돌려 가장 빠른 값을 적었다. 사슬은 0 - 1 - ... - 1999 한 줄, 무작위는 정점 2,000개에 간선 5,000개를 무작위로 고른 그래프(연결 요소 18개)다. Node.js 22다.
+
+```text
+                     사슬 2,000      무작위 2,000 × 5,000
+인접 행렬 DFS          11.96ms          15.54ms
+quick-find              9.97ms          12.56ms
+재귀 DFS                2.13ms           2.39ms
+BFS                     2.24ms           1.61ms
+유니온 파인드           1.14ms           2.83ms
+```
+
+O(n²) 두 풀이는 O(n + E) 풀이보다 5~10배 느리지만 이 크기에서는 통과한다. O(n + E) 셋은 비슷해서 입력에 따라 순위가 바뀐다. 고르는 기준은 속도보다 재귀 깊이와 "간선이 한꺼번에 주어지는가"다. 정점 1~12개짜리 무작위 그래프 3,000개에서 BFS와 나머지 네 풀이의 답을 비교했더니 모두 같았다.
+
+## 연결 요소 세기 여섯 가지
+
+V는 정점 수 n, E는 간선 수다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 정점 수 - 간선 수 | O(1) | O(1) | 틀린다. 고리가 있으면 묶음을 더 적게 센다 |
+| 인접 행렬 DFS | O(V²) | O(V²) | 입력이 인접 행렬로 올 때(547번), 빽빽한 그래프 |
+| quick-find | O(V · E) | O(V) | 원리 설명용. 같은 묶음 확인은 빠르지만 합치기가 느리다 |
+| 인접 리스트 재귀 DFS | O(V + E) | O(V + E) | 코드가 짧다. Python은 1,000개 사슬에서 멈춘다 |
+| BFS (또는 스택 DFS) | O(V + E) | O(V + E) | 그래프가 고정일 때의 기본 답. 경로·거리도 함께 필요하면 |
+| 유니온 파인드 | O(V + E · α(V)) | O(V) | 기본 답. 간선이 하나씩 들어오며 개수를 계속 물을 때 |
+
+아래에서 직접 짜 볼 수 있다. 정점은 `0`부터 `n - 1`까지다.
+
+<CodePlayground
+  caption="Number of Connected Components: 연결 요소 개수"
+  functionName="countComponents"
+  initialCode={`function countComponents(n, edges) {
+  // 정점 0..n-1, edges[i] = [a, b]는 무방향 간선
+  // 서로 오갈 수 있는 정점 묶음의 개수를 돌려준다
+  return 0;
+}`}
+  solution={`function countComponents(n, edges) {
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const size = new Array(n).fill(1);
+  let count = n;
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  for (const [a, b] of edges) {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) continue;
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;
+    size[ra] += size[rb];
+    count--;
+  }
+  return count;
+}`}
+  tests={[
+    { label: "글의 예시", args: [7, [[0, 1], [1, 2], [3, 4], [5, 4], [3, 5]]], expected: 3 },
+    { label: "정점 하나", args: [1, []], expected: 1 },
+    { label: "간선 없음", args: [4, []], expected: 4 },
+    { label: "고리 없는 두 묶음", args: [5, [[0, 1], [1, 2], [3, 4]]], expected: 2 },
+    { label: "한 줄", args: [5, [[0, 1], [1, 2], [2, 3], [3, 4]]], expected: 1 },
+    { label: "고리에 꼬리 (n - E = 0)", args: [4, [[0, 1], [1, 2], [2, 0], [0, 3]]], expected: 1 },
+    { label: "따로 자라다 만난다", args: [6, [[0, 1], [2, 3], [4, 5], [1, 2], [3, 4]]], expected: 1 },
+    { label: "간선에 없는 정점들", args: [6, [[5, 4], [4, 3], [0, 2]]], expected: 3 },
+  ]}
+/>
+
+## 간선에 없는 정점, 대표 대신 부모, 단방향 간선
+
+가장 흔한 실수는 간선에 나온 정점만 세는 것이다. 객체나 `Map`으로 그래프를 만들고 그 키만 훑으면 그렇게 된다.
+
+```js
+const graph = new Map();
+for (const [a, b] of edges) {
+  if (!graph.has(a)) graph.set(a, []);
+  if (!graph.has(b)) graph.set(b, []);
+  graph.get(a).push(b); graph.get(b).push(a);
+}
+// for (const s of graph.keys()) ... -> 간선이 없는 정점은 키가 없어 세지 못한다
+```
+
+테스트의 "간선에 없는 정점들"에서 이렇게 세면 정점 1을 놓쳐 3이 아니라 2가 나온다. 간선이 하나도 없으면 0이 나온다. 바깥 반복은 반드시 `0`부터 `n - 1`까지 돈다.
+
+두 번째는 무방향 간선을 한쪽에만 넣는 것이다.
+
+```js
+for (const [a, b] of edges) graph[a].push(b);   // b → a 방향이 없다
+```
+
+예시에서는 3에서 4와 5로 모두 갈 수 있어서 우연히 3이 맞게 나온다. 테스트의 "간선에 없는 정점들" `[[5,4],[4,3],[0,2]]`에서는 다르다. 간선이 모두 번호가 큰 쪽에서 작은 쪽으로만 들어가서, 바깥 반복이 3에 왔을 때 3에서는 아무 데도 못 가고 4와 5도 각각 새 묶음으로 세어진다. 정답 3 대신 5가 나왔다. 무방향이면 양쪽 목록에 모두 넣는다.
+
+세 번째는 유니온 파인드에서 대표가 아니라 바로 위 부모를 비교하는 것이다.
+
+```js
+if (parent[a] === parent[b]) continue;   // 대표가 아니라 부모를 비교했다
+parent[b] = a;                           // 대표가 아니라 정점 b를 옮겼다
+count--;
+```
+
+같은 묶음인데 부모가 달라 개수를 또 빼거나, b만 떼어 와서 b 밑에 있던 정점의 연결 정보가 깨진다. 늘 `find`로 대표를 구해 대표끼리 비교하고 대표를 붙인다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 간선이 없으면 답은 n이다. 정점이 하나뿐이면 1이다.
+- 같은 간선이 두 번 들어오는 실제 데이터라도 유니온 파인드와 탐색은 맞는다. 두 번째는 대표가 같아 빼지 않고, 탐색은 이미 본 정점이라 넘어간다. `n - E`는 여기서도 틀린다.
+- 인접 행렬은 n이 커지면 메모리가 먼저 터진다. 정점 10만 개면 `Uint8Array`로도 10GB다.
+
+## 연결 요소 문제가 바뀌면
+
+### 간선이 하나씩 들어오며 매번 개수를 묻는다면
+
+유니온 파인드가 그대로 맞는다. 간선이 들어올 때마다 `union`하고 `count`를 돌려주면 된다. 탐색 풀이는 간선이 들어올 때마다 전체를 다시 훑어야 한다. 소셜 서비스에서 "친구 관계가 추가될 때마다 친구 무리 수"를 갱신하거나, 네트워크 장비가 하나씩 연결될 때 끊긴 구역이 몇 개 남았는지 보는 경우다.
+
+### 간선이 지워진다면
+
+유니온 파인드는 쪼개기를 못 한다. 질의를 미리 모두 알면 시간을 거꾸로 돌린다. 마지막 상태에서 시작해 지워진 간선을 거꾸로 하나씩 "추가"하며 답을 모은 뒤 뒤집는다. 질의가 실시간으로 섞여 들어오면 훨씬 어려운 자료구조가 필요하다는 이야기는 [유니온 파인드 글](/posts/ds-union-find)에 있다.
+
+### 이 그래프가 나무인지 판별하라면
+
+LeetCode 261. Graph Valid Tree(프리미엄 문제)다. 나무는 연결 요소가 하나이고 고리가 없는 그래프다. 간선 수가 정확히 n - 1이고 연결 요소가 1이면 나무다. 유니온 파인드로 간선을 넣다가 대표가 같은 간선이 나오면 바로 `false`다. 고리를 닫는 그 간선을 찾는 문제가 [Redundant Connection](/posts/leetcode-redundant-connection)이다.
+
+### 끊긴 묶음을 모두 이으려면 선을 몇 번 옮겨야 하나
+
+LeetCode 1319. Number of Operations to Make Network Connected다. 묶음 c개를 잇는 데 선이 c - 1개 필요하다. 고리를 닫는 남는 간선이 c - 1개 이상이면 답은 c - 1, 모자라면 `-1`이다. 남는 간선 수는 유니온 파인드에서 대표가 같았던 간선 수이고, 간선이 n - 1개 미만이면 처음부터 불가능하다.
+
+### 가장 큰 묶음의 크기를 달라면
+
+유니온 파인드의 `size`가 그대로 답이다. 합칠 때마다 최댓값을 갱신한다. 격자 버전이 [Max Area of Island](/posts/leetcode-max-area-of-island)다.
+
+### 정점이 숫자가 아니라 문자열이라면
+
+이메일이나 계정 ID처럼 문자열이면 [해시맵](/posts/ds-hash-map)으로 처음 본 순서대로 번호를 붙인 뒤 배열을 쓴다. LeetCode 721. Accounts Merge가 이 모양이고, 990. Satisfiability of Equality Equations는 `a==b`로 묶고 `a!=b`가 같은 묶음인지 확인한다.
+
+### 비슷한 문제
+
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 격자에서 연결 요소를 센다.
+- [Redundant Connection](/posts/leetcode-redundant-connection) (684): 대표가 같은 첫 간선을 돌려준다.
+- [Clone Graph](/posts/leetcode-clone-graph) (133): 연결된 그래프 하나를 탐색하며 복사한다.
+- [Max Area of Island](/posts/leetcode-max-area-of-island) (695): 묶음마다 크기를 센다.
+- 547\. Number of Provinces, 261. Graph Valid Tree(프리미엄 문제), 1319. Number of Operations to Make Network Connected, 721. Accounts Merge.
+
+## 묶음을 실제로 합친 간선만 센다
+
+연결 요소의 수는 n에서 "서로 다른 두 묶음을 이은 간선 수"를 뺀 값이다. 모든 간선을 빼면 고리를 닫는 간선까지 빼서 틀린다. 그래프를 만들어 탐색한다면 바깥 반복을 모든 정점에 돌려 간선 없는 정점까지 세고, 재귀 깊이가 걱정되면 큐를 쓴다. 간선 목록만 한 번 훑고 싶거나 간선이 계속 추가된다면, 유니온 파인드로 대표가 다를 때만 하나씩 뺀다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 정점 수에서 간선 수를 빼면 안 되나요?
+
+간선이 묶음 수를 하나 줄이는 건 서로 다른 두 묶음을 이을 때뿐이기 때문이다. 이미 같은 묶음인 두 정점을 잇는 간선은 고리를 닫을 뿐 묶음 수를 바꾸지 않는다. 그래서 `n - E`는 고리가 없는 숲에서만 맞고, 예시의 삼각형처럼 고리가 있으면 실제보다 적게 센다.
+
+### DFS·BFS와 유니온 파인드 중 무엇을 고르나요?
+
+간선이 한꺼번에 주어지고 개수만 필요하면 어느 쪽이든 O(V + E)라 비슷하다. 간선이 하나씩 들어오며 매번 개수를 묻는다면 유니온 파인드가 맞고, 묶음 안의 경로나 거리까지 필요하면 BFS가 맞다. 유니온 파인드는 인접 리스트를 만들지 않아 메모리도 적다.
+
+### 인접 행렬과 인접 리스트는 어떻게 고르나요?
+
+인접 행렬은 이웃을 찾을 때마다 한 줄 n칸을 다 봐서 O(V²) 시간과 공간이 든다. 간선이 정점 수에 비해 적은 그래프에서는 인접 리스트가 O(V + E)라 훨씬 낫다. 입력이 처음부터 행렬로 오거나 간선이 V²에 가까운 빽빽한 그래프라면 행렬도 괜찮다.
+
+### 재귀 DFS의 위험은 무엇인가요?
+
+정점이 한 줄로 이어지면 재귀가 정점 수만큼 깊어진다. Python은 기본 재귀 한도가 1,000이라 문제 조건 안의 1,000개 사슬에서 `RecursionError`가 났고, Node.js도 10만 개 사슬에서 스택이 넘쳤다. BFS나 직접 만든 스택, 또는 유니온 파인드로 피한다.
+
+### 유니온 파인드의 복잡도는요?
+
+경로 압축과 크기(또는 랭크) 합치기를 함께 쓰면 `find` 한 번이 O(α(n))이다. α는 아커만 함수의 역함수라 현실의 어떤 입력에서도 4를 넘지 않아 사실상 상수다. 전체는 O(V + E · α(V)), 공간은 O(V)다. 둘 중 하나만 쓰면 최악이나 분할 상환으로 O(log n)이 된다.
+
+### 간선 없는 정점은 어떻게 세나요?
+
+탐색이라면 바깥 반복을 `0`부터 `n - 1`까지 모든 정점에 돌린다. 간선이 없는 정점은 아무 탐색에도 걸리지 않으니 바깥 반복에서 혼자 한 묶음으로 세어진다. 유니온 파인드는 개수를 n에서 시작하니 따로 신경 쓸 필요가 없다. `Map`의 키만 훑으면 이 정점들을 놓친다.
+
+### 이 그래프가 나무인지 판별하려면요?
+
+간선 수가 정확히 n - 1이고 연결 요소가 하나면 나무다. 유니온 파인드로 간선을 넣다가 대표가 같은 간선이 하나라도 나오면 고리가 있으니 나무가 아니다. 간선 수가 n - 1인데 고리가 없으면 저절로 모두 이어져 있다.

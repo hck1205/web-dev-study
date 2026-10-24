@@ -1,0 +1,498 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-longest-palindromic-substring");
+
+<EasyIntro>
+  앞으로 읽어도 뒤로 읽어도 똑같은 말을 회문이라고 한다. 기러기, 토마토 같은 말이다. 긴 글자 줄이 하나 주어졌을 때, 그 안에서 끊기지 않고 이어진 가장 긴 회문을 찾는 문제다.
+
+  가장 쉬운 방법은 가능한 모든 구간을 하나씩 잘라서 회문인지 확인하는 것이다. 맞기는 하지만, 글자가 천 개만 돼도 잘라 볼 구간이 50만 개가 넘어서 오래 걸린다.
+
+  더 좋은 방법은 거울을 떠올리는 것이다. 회문은 가운데에 거울을 세운 것처럼 양쪽이 똑같다. 그러니 거울을 놓을 자리를 하나 정하고, 거기서 양손을 한 칸씩 바깥으로 벌려 가며 두 글자가 같은지 본다. 같으면 계속 벌리고, 다르면 멈춘다. 멈추기 직전까지가 그 자리에서 만들 수 있는 가장 긴 회문이다.
+
+  거울은 글자 위에 놓을 수도 있고 두 글자 사이에 놓을 수도 있다. 토마토처럼 길이가 홀수인 회문은 가운데 글자 위에, 아빠빠아처럼 길이가 짝수인 회문은 두 글자 사이에 거울이 있다. 모든 자리에 거울을 한 번씩 놓아 보면 가장 긴 회문을 찾을 수 있다.
+</EasyIntro>
+
+[Longest Palindromic Substring](https://leetcode.com/problems/longest-palindromic-substring/)은 LeetCode 5번이다. roadmap.sh의 LeetCode 로드맵에서는 1차원 DP 묶음에 들어 있지만, 실제로 면접에서 가장 많이 쓰는 풀이는 표를 채우는 DP가 아니라 "가운데에서 양쪽으로 넓히기"다. DP 표 풀이는 그 생각으로 가는 다리 역할을 한다. 그래서 이 글은 모든 구간을 잘라 보는 풀이에서 시작해 2차원 표, 중심 확장, 그리고 O(n)에 끝나는 Manacher 알고리즘까지 다섯 가지를 차례로 놓는다.
+
+회문인지 확인하는 기본기는 [Valid Palindrome](/posts/leetcode-valid-palindrome)에서 양 끝 포인터로 다뤘고, 그 포인터 움직임은 [투 포인터 글](/posts/two-pointers-pattern)에 있다. 표를 채우는 DP의 기본은 [동적 계획법 글](/posts/dynamic-programming)을 보면 된다. 코드는 Node.js 22, Python 3, Java 21에서 직접 돌렸다.
+
+## 이어진 구간 중 가장 긴 회문
+
+문자열 `s`에서 연속한 부분 문자열(substring) 중 회문인 것 가운데 가장 긴 것을 돌려준다. 회문은 앞에서 읽으나 뒤에서 읽으나 같은 문자열이다. 길이가 같은 답이 여럿이면 아무거나 돌려줘도 된다. `"babad"`에서는 `"bab"`도 `"aba"`도 정답이다.
+
+"부분 문자열"은 끊기지 않고 이어진 구간이다. 띄엄띄엄 골라도 되는 "부분 수열"(subsequence)과 다르다. 부분 수열로 바꾸면 LeetCode 516 Longest Palindromic Subsequence라는 다른 문제가 되고, 그쪽은 2차원 DP가 정답이다. 면접에서 이 둘을 섞어 말하면 바로 꼬리 질문이 들어온다.
+
+제약은 길이 1 이상 1000 이하, 영문자와 숫자다. 길이 1000이면 O(n²) = 100만 번은 넉넉하고, O(n³) = 10억 번은 언어에 따라 위험하다. 답은 최소 한 글자짜리 회문이니 빈 문자열을 돌려줄 일은 없다.
+
+## 거울을 세울 자리를 손으로 찾아 본다
+
+글 끝까지 쓸 예시다.
+
+```text
+인덱스   0   1   2   3   4   5   6   7   8
+s        x   a   b   a   c   c   a   b   y
+```
+
+한 글자짜리는 모두 회문이니 길이 2 이상만 찾아보자.
+
+```text
+1~3   aba      (가운데 글자 b)
+4~5   cc       (가운데가 c와 c 사이)
+3~6   acca     (가운데가 c와 c 사이)
+2~7   baccab   (가운데가 c와 c 사이)
+```
+
+가장 긴 건 `"baccab"`이고 길이 6이다. 눈여겨볼 점이 두 가지 있다. 하나는 `cc`, `acca`, `baccab`이 모두 같은 가운데를 공유한다는 것이다. 안쪽이 회문이고 양 끝 글자가 같으면 바깥도 회문이다. 다른 하나는 가운데가 글자 위(`aba`의 b)일 수도 있고 두 글자 사이(`cc`의 c와 c 사이)일 수도 있다는 것이다. 이 두 관찰이 뒤의 풀이 전부를 끌고 간다.
+
+## 모든 구간을 잘라서 확인한다
+
+가장 먼저 떠오르는 방법이다. 시작 i와 끝 j를 모두 골라 `s[i..j]`가 회문인지 양 끝 포인터로 확인한다.
+
+```js
+function isPal(s, l, r) {
+  while (l < r) {
+    if (s[l] !== s[r]) return false; // 양 끝이 다르면 회문이 아니다
+    l++;
+    r--;
+  }
+  return true;
+}
+
+function longestPalindrome(s) {
+  let best = "";
+  for (let i = 0; i < s.length; i++) {
+    for (let j = i; j < s.length; j++) {
+      if (isPal(s, i, j) && j - i + 1 > best.length) {
+        best = s.slice(i, j + 1);
+      }
+    }
+  }
+  return best;
+}
+```
+
+구간이 n(n+1)/2개, 하나를 확인하는 데 최대 n/2번 비교라 시간 O(n³)이다. 추가 공간은 답 문자열 말고는 O(1)이다.
+
+얼마나 느린지 재 봤다. 확인이 끝까지 가는 최악의 입력은 `"aaaa…a"`다. 1000글자에서 JavaScript는 약 0.7초가 걸렸다. Python으로 같은 이중 반복과 포인터 비교를 쓰면 약 6.3초였다. 그런데 Python에서 `sub == sub[::-1]`로 잘라서 뒤집어 비교하면 0.2초로 줄었다. 시간 복잡도는 똑같이 O(n³)이지만 비교가 C로 짜인 내장 연산 안에서 돌아서다. 복잡도와 실제 시간이 다르게 움직이는 좋은 예라, 면접에서 "Python이면 왜 슬라이스가 빠른가"로 이어질 수 있다.
+
+### 긴 구간부터 보면 일찍 끝날까
+
+길이를 n부터 1까지 줄여 가며 보면 처음 찾은 회문이 곧 답이라 바로 멈출 수 있다. `"aaaa…a"`에서는 첫 구간이 답이라 즉시 끝난다. 하지만 회문이 짧은 무작위 문자열에서는 긴 구간을 거의 다 보고 나서야 답을 찾으니, 최악은 여전히 O(n³)이다. a와 b만 섞은 무작위 1000글자에서 앞의 풀이가 약 39ms, 이 풀이가 약 43ms로 오히려 조금 느렸다. 무작위 문자열에서는 대부분의 구간이 첫 비교나 두 번째 비교에서 회문이 아니라고 판정돼서, 두 풀이 모두 실제로는 O(n²)에 가깝게 돈다. 순서를 바꾸는 것만으로는 근본적으로 빨라지지 않는다. 같은 구간 안쪽을 매번 처음부터 다시 비교하는 낭비를 없애야 한다.
+
+## 안쪽이 회문이면 바깥은 양 끝만 보면 된다
+
+손으로 풀 때 본 관찰을 식으로 옮긴다. `s[i..j]`가 회문이려면 양 끝 `s[i]`와 `s[j]`가 같고, 그 안쪽 `s[i+1..j-1]`이 회문이면 된다. 안쪽이 이미 확인됐다면 바깥은 비교 한 번으로 끝난다.
+
+`dp[i][j]`를 "s의 i번부터 j번까지가 회문인가"로 정한다.
+
+```text
+dp[i][j] = s[i] === s[j]  그리고  (j - i < 3  또는  dp[i+1][j-1])
+```
+
+`j - i < 3`은 길이 1, 2, 3인 경우다. 길이 1은 늘 회문이고, 길이 2와 3은 양 끝만 같으면 안쪽이 0글자나 1글자라 따로 볼 게 없다. 이 처리 덕분에 `dp[i+1][j-1]`에서 i+1이 j-1보다 커지는 칸을 읽지 않는다.
+
+채우는 순서가 중요하다. `dp[i][j]`는 `dp[i+1][j-1]`, 즉 한 줄 아래 칸을 본다. 그러니 i를 큰 쪽부터 내려오며 채우거나, 구간 길이를 짧은 것부터 늘려 가며 채운다.
+
+```js
+function longestPalindrome(s) {
+  const n = s.length;
+  const dp = Array.from({ length: n }, () => new Array(n).fill(false));
+  let start = 0, maxLen = 1;
+  for (let i = n - 1; i >= 0; i--) {       // 아래 줄(i+1)이 먼저 채워져 있어야 한다
+    for (let j = i; j < n; j++) {
+      if (s[i] === s[j] && (j - i < 3 || dp[i + 1][j - 1])) {
+        dp[i][j] = true;                   // 양 끝이 같고 안쪽이 회문
+        if (j - i + 1 > maxLen) {
+          maxLen = j - i + 1;
+          start = i;
+        }
+      }
+    }
+  }
+  return s.slice(start, start + maxLen);
+}
+```
+
+예시에서 `dp`가 참인 칸 중 길이 2 이상은 손으로 찾은 넷 그대로다. `dp[2][7]`(baccab)은 `s[2] = b`와 `s[7] = b`가 같고 `dp[3][6]`(acca)이 참이라서 참이 되고, `dp[3][6]`은 다시 `dp[4][5]`(cc)에 기댄다.
+
+구간 길이를 짧은 것부터 늘려 가며 채우면 참이 되는 칸이 아래처럼 늘어난다. 다음을 누르면 길이가 하나씩 커진다.
+
+<AlgoTrace
+  caption="길이별로 참이 되는 dp 칸"
+  memoryLabel="회문인 구간"
+  cells={["x", "a", "b", "a", "c", "c", "a", "b", "y"]}
+  steps={[
+    { found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: ["한 글자 9개"], caption: "길이 1. 한 글자는 모두 회문이다." },
+    { pointer: 4, found: [4, 5], memory: ["4~5 cc"], caption: "길이 2. 양 끝만 같으면 된다. cc 하나뿐이다." },
+    { pointer: 2, found: [1, 2, 3], memory: ["4~5 cc", "1~3 aba"], caption: "길이 3. 양 끝 a와 a가 같다. 가운데 한 글자는 볼 필요가 없다." },
+    { pointer: 3, found: [3, 4, 5, 6], memory: ["4~5 cc", "1~3 aba", "3~6 acca"], caption: "길이 4. a와 a가 같고 안쪽 dp[4][5]가 참이다." },
+    { pointer: 2, found: [2, 3, 4, 5, 6, 7], memory: ["4~5 cc", "1~3 aba", "3~6 acca", "2~7 baccab"], caption: "길이 6. b와 b가 같고 안쪽 dp[3][6]이 참이다. 길이 5와 7 이상은 없다." }
+  ]}
+/>
+
+칸이 n²개이고 칸마다 O(1)이라 시간 O(n²), 표 때문에 공간 O(n²)이다. 길이 1000이면 칸 100만 개다. JavaScript에서는 배열 1000개를 만드는 비용이 붙어 같은 O(n²)인 다음 풀이보다 몇 배 느렸다(`"aaaa…a"` 1000글자에서 약 22ms 대 4ms).
+
+이 표는 쓸모가 있다. 모든 구간의 회문 여부를 한 번에 알려 주기 때문에, 문자열을 회문 조각으로 나누는 [Palindrome Partitioning](/posts/leetcode-palindrome-partitioning)처럼 "이 구간이 회문인가"를 여러 번 묻는 문제에서는 이 표를 미리 만들어 두고 쓴다. 하지만 가장 긴 것 하나만 필요하면 n² 칸을 다 들고 있을 이유가 없다. 표를 다시 보면 참인 칸들은 같은 가운데에서 바깥으로 이어진 사슬이다. `dp[4][5]` → `dp[3][6]` → `dp[2][7]`. 사슬을 가운데에서 직접 따라가면 표가 필요 없다.
+
+## 거울 자리에서 양손을 벌린다
+
+회문에는 가운데가 있다. 길이가 홀수면 가운데 글자 하나, 짝수면 가운데 두 글자 사이다. 문자열 길이가 n이면 글자 위가 n자리, 글자 사이가 n-1자리라 가운데 후보는 2n-1개다.
+
+가운데 하나를 정하면 그 가운데를 갖는 가장 긴 회문은 바깥으로 넓혀 가며 바로 찾을 수 있다.
+
+1. 왼손 l과 오른손 r을 가운데에 둔다. 홀수 중심이면 `l = r = i`, 짝수 중심이면 `l = i`, `r = i + 1`.
+2. `s[l]`과 `s[r]`이 같으면 양손을 한 칸씩 바깥으로 벌린다(`l--`, `r++`).
+3. 다르거나 문자열 밖으로 나가면 멈춘다. 멈춘 자리의 바로 안쪽, 즉 `l+1`부터 `r-1`까지가 그 가운데의 가장 긴 회문이고 길이는 `r - l - 1`이다.
+
+아래 그림은 4번과 5번 사이(c와 c 사이)를 가운데로 정했을 때 양손이 벌어지는 모습이다. 다음을 누르면 손이 한 칸씩 나간다.
+
+<AlgoTrace
+  caption="c와 c 사이에서 양손 벌리기"
+  memoryLabel="양손 위치"
+  cells={["x", "a", "b", "a", "c", "c", "a", "b", "y"]}
+  steps={[
+    { pointer: 4, found: [4, 5], memory: ["l=4", "r=5"], caption: "가운데는 4번과 5번 사이다. c와 c가 같다. 길이 2." },
+    { pointer: 3, found: [3, 4, 5, 6], memory: ["l=3", "r=6"], caption: "한 칸씩 벌린다. a와 a가 같다. 길이 4." },
+    { pointer: 2, found: [2, 3, 4, 5, 6, 7], memory: ["l=2", "r=7"], caption: "또 벌린다. b와 b가 같다. 길이 6." },
+    { pointer: 1, found: [2, 3, 4, 5, 6, 7], memory: ["l=1", "r=8"], caption: "a와 y가 다르다. 멈춘다. 안쪽 2~7번 baccab이 이 가운데의 답이다." }
+  ]}
+/>
+
+DP 표의 사슬 `dp[4][5]` → `dp[3][6]` → `dp[2][7]`을 표 없이 그대로 걸은 것이다. 안쪽이 회문이라는 사실을 손 위치로 들고 다니니 저장할 게 없다.
+
+```js
+function longestPalindrome(s) {
+  let start = 0, maxLen = 0;
+
+  // l, r에서 시작해 같으면 바깥으로 넓힌다. 회문의 길이를 돌려준다
+  function expand(l, r) {
+    while (l >= 0 && r < s.length && s[l] === s[r]) {
+      l--;
+      r++;
+    }
+    return r - l - 1;               // 멈춘 자리 바로 안쪽이 회문
+  }
+
+  for (let i = 0; i < s.length; i++) {
+    const odd = expand(i, i);       // 글자 위 가운데 (홀수 길이)
+    const even = expand(i, i + 1);  // 두 글자 사이 가운데 (짝수 길이)
+    const len = Math.max(odd, even);
+    if (len > maxLen) {
+      maxLen = len;
+      start = i - Math.floor((len - 1) / 2); // 가운데 i에서 시작 위치 되돌리기
+    }
+  }
+  return s.slice(start, start + maxLen);
+}
+```
+
+시작 위치 계산 `i - Math.floor((len - 1) / 2)`는 홀수와 짝수를 한 식으로 처리한다. 홀수 길이 3, 가운데 i = 2면 2 - 1 = 1부터다(aba). 짝수 길이 6, 가운데가 4와 5 사이(i = 4)면 4 - 2 = 2부터다(baccab). 짝수일 때 가운데 왼쪽 글자가 i라서 왼쪽으로 (len - 2) / 2칸 가야 하는데, `(len - 1) / 2`를 내림하면 그 값이 된다.
+
+이제 모든 가운데에서 이걸 한다. 아래 그림은 i를 0부터 8까지 옮기며 홀수·짝수 가운데 두 번씩 넓혀 본 결과다.
+
+<AlgoTrace
+  caption="모든 가운데에서 넓혀 보기"
+  memoryLabel="지금까지 가장 긴 회문"
+  cells={["x", "a", "b", "a", "c", "c", "a", "b", "y"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["x (1)"], caption: "i=0. 홀수는 x 하나, 짝수는 x와 a가 달라 0. 가장 긴 건 x." },
+    { pointer: 1, found: [0], memory: ["x (1)"], caption: "i=1. 홀수는 a 하나(x와 b가 다르다). 짝수는 0. 그대로다." },
+    { pointer: 2, found: [1, 2, 3], memory: ["aba (3)"], caption: "i=2. 홀수 가운데 b에서 a와 a가 같아 aba. 길이 3으로 바뀐다." },
+    { pointer: 3, found: [1, 2, 3], memory: ["aba (3)"], caption: "i=3. 홀수는 a 하나, 짝수는 a와 c가 달라 0. 그대로다." },
+    { pointer: 4, found: [2, 3, 4, 5, 6, 7], memory: ["baccab (6)"], caption: "i=4. 짝수 가운데 c와 c 사이에서 baccab까지 넓어진다. 길이 6." },
+    { pointer: 5, found: [2, 3, 4, 5, 6, 7], memory: ["baccab (6)"], caption: "i=5. 홀수는 c 하나, 짝수는 c와 a가 달라 0." },
+    { pointer: 6, found: [2, 3, 4, 5, 6, 7], memory: ["baccab (6)"], caption: "i=6. a 하나뿐이다." },
+    { pointer: 7, found: [2, 3, 4, 5, 6, 7], memory: ["baccab (6)"], caption: "i=7. b 하나뿐이다." },
+    { pointer: 8, found: [2, 3, 4, 5, 6, 7], memory: ["baccab (6)"], caption: "i=8. y 하나뿐이다. 답은 baccab이다." }
+  ]}
+/>
+
+시간은 가운데 2n-1개에서 각각 최대 n/2번 넓히니 O(n²)이다. 최악은 같은 글자만 있는 `"aaaa…a"`로, 가운데마다 끝까지 넓어진다. 회문이 드문 보통 문자열에서는 대부분의 가운데가 한두 번 만에 멈춰서 거의 O(n)처럼 돈다. 공간은 O(1)이다.
+
+면접에서 기본으로 내놓을 답이 이것이다. 코드가 짧고, 표가 필요 없고, 왜 O(n²)인지 설명하기 쉽다. 길이 1부터 14까지 a, b, c만 섞은 무작위 문자열 3,000개로 이 글의 다섯 풀이가 같은 길이를 내는지, 돌려준 문자열이 실제로 회문이고 s 안에 있는지 확인했다.
+
+## Python과 Java로 옮긴 중심 확장
+
+```python
+class Solution:
+    def longestPalindrome(self, s: str) -> str:
+        def expand(l: int, r: int) -> int:
+            while l >= 0 and r < len(s) and s[l] == s[r]:
+                l -= 1
+                r += 1
+            return r - l - 1                    # 멈춘 자리 바로 안쪽이 회문
+
+        start, max_len = 0, 0
+        for i in range(len(s)):
+            length = max(expand(i, i), expand(i, i + 1))  # 홀수 중심, 짝수 중심
+            if length > max_len:
+                max_len = length
+                start = i - (length - 1) // 2
+        return s[start:start + max_len]
+```
+
+Python의 `//`는 내림 나눗셈이라 JavaScript의 `Math.floor`와 같다. 음수에서도 내림이지만 여기서는 `length - 1`이 0 이상이라 상관없다. 경계 조건 `l >= 0`을 빼먹으면 언어마다 다르게 틀린다. Python은 `s[-1]`이 에러 없이 마지막 글자라 비교를 이어 가고, `"aa"`에서 길이 3이라는 있을 수 없는 값이 나온다. JavaScript는 `s[-1]`이 `undefined`라 보통은 비교가 거짓이 되어 멈추지만, 회문이 문자열 전체라 양손이 동시에 밖으로 나가면 `undefined === undefined`가 참이 되어 반복이 끝나지 않는다. `"aba"`가 그렇다.
+
+```java
+class Solution {
+    public String longestPalindrome(String s) {
+        int start = 0, maxLen = 0;
+        for (int i = 0; i < s.length(); i++) {
+            int len = Math.max(expand(s, i, i), expand(s, i, i + 1)); // 홀수, 짝수 중심
+            if (len > maxLen) {
+                maxLen = len;
+                start = i - (len - 1) / 2;
+            }
+        }
+        return s.substring(start, start + maxLen);
+    }
+
+    private int expand(String s, int l, int r) {
+        while (l >= 0 && r < s.length() && s.charAt(l) == s.charAt(r)) {
+            l--;
+            r++;
+        }
+        return r - l - 1;
+    }
+}
+```
+
+Java의 정수 나눗셈 `/`는 0 쪽으로 버린다. `len - 1`이 0 이상이라 내림과 결과가 같다. `s.charAt`은 범위 밖이면 예외를 던지니 경계 조건을 앞에 두는 순서가 중요하다(`&&`는 앞이 거짓이면 뒤를 안 본다). `substring(start, end)`는 끝을 포함하지 않는다. 세 언어 모두 예시에 `baccab`, `"cbbd"`에 `bb`, `"aaaa"`에 `aaaa`가 나왔다.
+
+속도도 재 봤다. Python 중심 확장은 최악인 `"a" * 1000`에서 약 53ms, a와 b를 섞은 무작위 1000글자에서 약 1ms였다. 같은 최악 입력에서 포인터로 비교하는 브루트포스가 6초 넘게 걸렸으니, O(n³)에서 O(n²)로 내려온 차이가 Python에서 특히 크게 보인다.
+
+## 이미 본 거울 안쪽을 다시 재지 않는다 (Manacher)
+
+중심 확장이 O(n²)인 이유는 가운데마다 넓히기를 처음부터 다시 하기 때문이다. 그런데 큰 회문 안쪽에 있는 가운데는 거울 반대편 가운데와 모양이 같다. 이 사실을 쓰면 넓히기를 이어서 할 수 있고, 전체가 O(n)이 된다. 1975년에 Glenn Manacher가 발표한 방법이다.
+
+### 짝수와 홀수를 하나로 맞추기
+
+먼저 글자 사이에 `#`을 끼워 넣는다. 그러면 짝수 회문의 가운데(두 글자 사이)가 `#` 글자 위로 오고, 모든 회문이 홀수 길이가 된다. 양 끝에는 서로 다른 보초 글자(`^`, `$`)를 붙여 경계 검사를 없앤다.
+
+```text
+s = x a b a c c a b y
+t = ^ # x # a # b # a # c # c # a # b # y # $
+p = 0 0 1 0 1 0 3 0 1 0 1 6 1 0 1 0 1 0 1 0 0
+```
+
+`p[i]`는 t에서 i를 가운데로 하는 회문의 반지름(한쪽으로 넓힌 칸 수)이다. 이 반지름이 그대로 s에서의 회문 길이가 된다. c와 c 사이의 `#`(t의 11번)이 6이고, 이게 `baccab`이다. b 위(t의 6번)의 3은 `aba`다.
+
+### 거울에 비친 값을 먼저 빌려 온다
+
+지금까지 찾은 회문 중 오른쪽 끝이 가장 먼 것의 가운데를 c, 오른쪽 끝을 r이라 하자. 새 가운데 i가 r 안쪽에 있으면, c를 기준으로 i와 대칭인 자리 `mirror = 2c - i`가 있다. 큰 회문 안에서는 왼쪽과 오른쪽이 거울처럼 같으니, i의 반지름은 적어도 `min(r - i, p[mirror])`이다. 그만큼은 비교하지 않고 건너뛰고, 그 바깥부터만 넓혀 본다.
+
+```js
+function longestPalindrome(s) {
+  const t = "^#" + s.split("").join("#") + "#$"; // 짝수·홀수를 하나로, 양 끝 보초
+  const p = new Array(t.length).fill(0);
+  let c = 0, r = 0;                    // 오른쪽 끝이 가장 먼 회문의 가운데와 오른쪽 끝
+  for (let i = 1; i < t.length - 1; i++) {
+    const mirror = 2 * c - i;
+    if (i < r) p[i] = Math.min(r - i, p[mirror]); // 거울에 비친 값만큼은 이미 안다
+    while (t[i + p[i] + 1] === t[i - p[i] - 1]) p[i]++; // 그 바깥만 넓힌다
+    if (i + p[i] > r) {                // 더 오른쪽까지 닿으면 기준을 옮긴다
+      c = i;
+      r = i + p[i];
+    }
+  }
+  let best = 0, center = 0;
+  for (let i = 1; i < t.length - 1; i++) {
+    if (p[i] > best) { best = p[i]; center = i; }
+  }
+  const start = (center - best - 1) / 2; // t의 위치를 s의 위치로 되돌린다
+  return s.slice(start, start + best);
+}
+```
+
+예시에서 c와 c 사이의 `#`(t의 11번)이 반지름 6으로 넓어진 뒤를 따라가 보면 빌려 오기가 어떻게 일하는지 보인다. 이때 c = 11, r = 17이다.
+
+```text
+i    t[i]  mirror  p[mirror]  r - i  빌려 온 값  더 넓힘  p[i]
+12   c     10      1          5      1           0        1
+13   #     9       0          4      0           0        0
+14   a     8       1          3      1           0        1
+15   #     7       0          2      0           0        0
+16   b     6       3          1      1           0        1
+17   #     -       -          0      0           0        0
+18   y     -       -          -      0           1        1
+```
+
+12번부터 16번까지는 비교를 한 번도 성공하지 않고 값이 정해졌다. 거울 반대편(10번부터 6번)의 값을 가져온 것이다. 16번이 재미있다. 거울 반대편 6번은 `aba`의 가운데라 반지름이 3인데, 그대로 빌려 오면 r = 17 바깥까지 같다고 장담하는 셈이다. 큰 회문이 보장해 주는 건 r까지뿐이라 `r - i = 1`로 자른다. 실제로 그 바깥은 b 오른쪽이 y라서 더 넓어지지 않는다. `Math.min(r - i, p[mirror])`의 `min`이 하는 일이 이것이다.
+
+r은 줄어들지 않고 오른쪽으로만 간다. `while`에서 넓히기가 한 번 성공할 때마다 r이 한 칸씩 밀리거나(r 바깥을 넓히는 경우), 아니면 거울 값이 정확해서 바로 멈춘다. 그래서 넓히기 성공 횟수의 합이 t의 길이를 넘지 않고, 전체가 O(n)이다. 공간은 t와 p로 O(n)이다.
+
+마지막 줄의 위치 변환도 짚어 두자. 앞에 `^#` 두 칸이 붙어서 s의 k번 글자는 t의 2k+2번에 있다. t에서 회문의 왼쪽 끝은 `center - best`번이고 이 자리는 늘 `#`이다. 그 바로 오른쪽 칸이 s의 첫 글자라서, `center - best = 2k + 1`을 풀면 `(center - best - 1) / 2`가 s에서의 시작 위치 k다. 예시는 center 11, best 6이라 (11 - 6 - 1) / 2 = 2, `s.slice(2, 8)`이 `baccab`이다.
+
+Manacher는 면접에서 직접 짜라고 하는 경우가 드물다. "O(n)이 가능한가"에 "Manacher 알고리즘이 있고, 거울 반대편의 반지름을 빌려 와서 넓히기를 이어 간다"고 원리를 말할 수 있으면 충분한 경우가 많다. 코드가 길고 인덱스 변환에서 틀리기 쉬워서, 실전 코딩 테스트의 n ≤ 1000에서는 중심 확장이 낫다.
+
+## 다섯 풀이를 비교 횟수로 줄 세우면
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 구간 확인 | O(n³) | O(1) | 정답 확인용, n이 수백 이하 |
+| 긴 구간부터 확인 | O(n³) 최악 | O(1) | 긴 회문이 있다고 알 때만 일찍 끝남 |
+| 2차원 회문 표 | O(n²) | O(n²) | 모든 구간의 회문 여부가 필요할 때 |
+| 중심 확장 | O(n²) | O(1) | 기본 답 |
+| Manacher | O(n) | O(n) | n이 10만 이상이거나 O(n)을 요구할 때 |
+
+## 회문 찾기에서 틀리는 코드
+
+### 짝수 가운데를 빼먹는 경우
+
+```js
+for (let i = 0; i < s.length; i++) {
+  const len = expand(i, i);          // 홀수 가운데만 본다
+  // ...
+}
+```
+
+`"cbbd"`에서 `bb`를 못 찾고 한 글자를 돌려준다. 예시에서는 `baccab`을 놓치고 `aba`를 돌려준다. 짝수 회문의 가운데는 글자 위에 없다는 걸 놓친 실수다. 가장 흔하다.
+
+### 뒤집은 문자열과의 공통 부분 문자열로 푸는 경우
+
+s와 s를 뒤집은 문자열의 가장 긴 공통 부분 문자열을 구하면 회문이 나올 것 같다. 그럴듯하지만 틀린다.
+
+```text
+s           = abacdfgdcaba
+reverse(s)  = abacdgfdcaba
+공통 최장   = abacd   (회문이 아니다)
+```
+
+s 앞쪽의 `abacd`와 뒤쪽 `dcaba`가 서로 뒤집힌 모양이라, 뒤집은 문자열에서 같은 글자로 보일 뿐이다. 공통 구간을 찾을 때마다 그 구간이 s의 같은 위치에서 뒤집힌 것인지(인덱스가 맞는지) 따로 확인해야 하고, 그렇게 고쳐도 O(n²) 시간에 O(n²)(또는 O(n)) 공간이라 중심 확장보다 나을 게 없다.
+
+### 시작 위치를 잘못 되돌리는 경우
+
+`start = i - len / 2`처럼 쓰면 짝수와 홀수 모두에서 한 칸 왼쪽으로 밀린다. 짝수 길이 6, i = 4면 1이 되어 예시에서 `abacca`를 돌려준다. 홀수 길이 3, i = 1이면 -0.5가 나오고, `slice`가 소수를 0 쪽으로 버려서 `"aba"`에서 `ab`를 돌려준다. 에러가 나지 않으니 테스트 결과를 봐야 안다. `(len - 1) / 2`를 내림하는 식이 홀수와 짝수를 함께 맞춘다.
+
+### 회문 표를 i 오름차순으로 채우는 경우
+
+```js
+for (let i = 0; i < n; i++) {             // 위에서 아래로 채운다
+  for (let j = i; j < n; j++) {
+    if (s[i] === s[j] && (j - i < 3 || dp[i + 1][j - 1])) dp[i][j] = true;
+  }
+}
+```
+
+`dp[i][j]`를 채울 때 `dp[i+1][j-1]`은 아직 한 번도 채우지 않은 줄이라 늘 `false`다. 그러면 길이 3 이하 회문만 참이 되고, 그보다 긴 회문은 모두 놓친다. 예시에서 `aba`, `"racecar"`에서 `cec`, `"abba"`에서 `bb`, `"aaaa"`에서 `aaa`가 나왔다. 짧은 테스트만 돌리면 통과해 버리는 실수라, 길이 4 이상 회문이 답인 입력을 꼭 넣어 본다. 표 풀이는 "이 칸이 기대는 칸이 먼저 채워졌는가"를 늘 먼저 확인한다.
+
+### 넓히기가 끝난 뒤 길이를 r - l + 1로 세는 경우
+
+반복문이 끝난 시점의 l, r은 이미 "다른 글자"이거나 범위 밖이다. 회문은 그 안쪽 `l+1`부터 `r-1`이라 길이는 `r - l - 1`이다. `r - l + 1`로 세면 길이가 2씩 커진다. `"cbbd"`에서 `cbbd` 전체를, 예시에서 `abaccaby`를 돌려준다. `"a"`처럼 `slice`가 문자열 끝에서 잘려 우연히 맞는 입력도 있어서 더 헷갈린다.
+
+## 회문을 직접 넓혀 보기
+
+빈 함수를 채워서 실행해 보자. 테스트는 가장 긴 회문이 하나뿐인 입력으로만 골랐다.
+
+<CodePlayground
+  caption="Longest Palindromic Substring"
+  functionName="longestPalindrome"
+  initialCode={`function longestPalindrome(s) {
+  // 이어진 구간 중 가장 긴 회문을 돌려준다
+  return "";
+}`}
+  solution={`function longestPalindrome(s) {
+  let start = 0, maxLen = 0;
+  function expand(l, r) {
+    while (l >= 0 && r < s.length && s[l] === s[r]) {
+      l--;
+      r++;
+    }
+    return r - l - 1;
+  }
+  for (let i = 0; i < s.length; i++) {
+    const len = Math.max(expand(i, i), expand(i, i + 1));
+    if (len > maxLen) {
+      maxLen = len;
+      start = i - Math.floor((len - 1) / 2);
+    }
+  }
+  return s.slice(start, start + maxLen);
+}`}
+  tests={[
+    { args: ["xabaccaby"], expected: "baccab", label: "글의 예시 (짝수)" },
+    { args: ["cbbd"], expected: "bb", label: "짝수 가운데" },
+    { args: ["racecar"], expected: "racecar", label: "전체가 회문 (홀수)" },
+    { args: ["a"], expected: "a", label: "한 글자" },
+    { args: ["aaaa"], expected: "aaaa", label: "같은 글자만" },
+    { args: ["abacdfgdcaba"], expected: "aba", label: "뒤집기 함정" },
+    { args: ["forgeeksskeegfor"], expected: "geeksskeeg", label: "가운데가 깊음" }
+  ]}
+/>
+
+## 회문 문제가 옆으로 번질 때
+
+### 회문인 부분 문자열의 개수를 세라면
+
+LeetCode 647 Palindromic Substrings다. 중심 확장을 그대로 쓰고, 넓히기에 한 번 성공할 때마다 개수를 하나씩 더한다. 가운데마다 성공한 횟수가 그 가운데를 갖는 회문의 수다. 예시 `"xabaccaby"`는 한 글자 9개에 aba, cc, acca, baccab을 더해 13개다. 시간 O(n²), 공간 O(1)이다.
+
+```js
+function countSubstrings(s) {
+  let count = 0;
+  for (let i = 0; i < s.length; i++) {
+    for (const [l0, r0] of [[i, i], [i, i + 1]]) { // 홀수 가운데, 짝수 가운데
+      let l = l0, r = r0;
+      while (l >= 0 && r < s.length && s[l] === s[r]) {
+        count++;          // 넓히기에 성공한 횟수 = 이 가운데를 갖는 회문 수
+        l--;
+        r++;
+      }
+    }
+  }
+  return count;
+}
+```
+
+예시에 13, `"aaa"`에 6, `"abc"`에 3이 나왔다. 같은 내용이라도 위치가 다르면 다른 회문으로 센다. `"aaa"`의 a 세 개, aa 두 개, aaa 하나다.
+
+### 같은 길이의 답이 여럿이라면
+
+`"babad"`처럼 `bab`과 `aba`가 같은 길이면 어느 쪽을 돌려줘도 정답이다. 중심 확장은 길이가 더 길 때만(`>`) 바꾸니 왼쪽에서 먼저 만난 `bab`을, i를 뒤에서부터 채우는 DP 표는 `aba`를 돌려줬다. 길이가 같은 두 회문은 홀짝도 같아서, 가운데가 왼쪽일수록 시작 위치도 왼쪽이다. 그래서 중심 확장은 이미 같은 길이 중 가장 왼쪽 것을 돌려준다. "모두 달라"고 하면 최대 길이를 먼저 구한 뒤 그 길이를 내는 가운데를 모두 모은다.
+
+### 띄엄띄엄 골라도 된다면
+
+LeetCode 516 Longest Palindromic Subsequence다. 연속 조건이 없으니 가운데에서 넓히기가 통하지 않는다. `dp[i][j]`를 "i부터 j까지에서 고를 수 있는 가장 긴 회문 부분 수열의 길이"로 두고, 양 끝이 같으면 `dp[i+1][j-1] + 2`, 다르면 `max(dp[i+1][j], dp[i][j-1])`이다. s와 뒤집은 s의 [가장 긴 공통 부분 수열](/posts/leetcode-longest-common-subsequence)과 같은 값이 된다. 부분 문자열에서는 틀렸던 "뒤집어서 공통 찾기"가 부분 수열에서는 맞는다는 대비가 좋은 꼬리 질문이다.
+
+### 문자열을 회문 조각으로 나누라면
+
+[Palindrome Partitioning](/posts/leetcode-palindrome-partitioning)(131)은 모든 나누는 법을, LeetCode 132는 최소 자르기 횟수를 묻는다. 둘 다 "이 구간이 회문인가"를 여러 번 물어서 앞의 2차원 회문 표를 먼저 만들어 두는 풀이가 잘 맞는다.
+
+### 앞에 글자를 붙여 가장 짧은 회문을 만들라면
+
+LeetCode 214 Shortest Palindrome이다. "s의 앞부분 중 가장 긴 회문"을 찾으면 나머지를 뒤집어 앞에 붙이면 된다. `s + "#" + reverse(s)`에 KMP 실패 함수를 돌려 O(n)에 구하는 풀이가 유명하다. [문자열 검색 알고리즘 글](/posts/string-search-algorithms)의 KMP가 그대로 쓰인다.
+
+### 문자열이 아주 길다면
+
+n이 10만을 넘으면 O(n²)은 100억이라 안 된다. Manacher로 O(n)에 끝내거나, 문자열 해시와 이분 탐색으로 "길이 L인 회문이 있는가"를 판정해 O(n log n)에 푼다. 홀수 길이와 짝수 길이는 따로 이분 탐색해야 한다(길이 L의 회문이 있으면 L-2도 있지만 L-1은 없을 수 있다).
+
+비슷한 문제로는 [Valid Palindrome](/posts/leetcode-valid-palindrome), Palindromic Substrings(647), Longest Palindromic Subsequence(516), [Palindrome Partitioning](/posts/leetcode-palindrome-partitioning), 두 단어를 이어 회문을 만드는 [Palindrome Pairs](/posts/leetcode-palindrome-pairs)가 있다.
+
+## 면접에서 나올 만한 질문
+
+### DP 표와 중심 확장 중 무엇을 쓰나요?
+
+가장 긴 회문 하나만 필요하면 중심 확장을 쓴다. 시간은 둘 다 O(n²)이지만 표는 n² 칸의 메모리를 쓰고, 중심 확장은 O(1)이다. 여러 구간의 회문 여부를 반복해서 물어야 하는 문제, 예를 들어 회문 조각으로 나누기에서는 표를 한 번 만들어 두는 쪽이 낫다.
+
+### 왜 중심 확장을 골랐나요?
+
+회문은 가운데를 기준으로 대칭이라, 가운데를 정하면 양쪽으로 넓히는 것만으로 그 가운데의 가장 긴 회문이 나온다. 가운데 후보가 2n-1개이고 각각 최대 n/2번 넓히니 O(n²)이고, 표가 필요 없어 공간이 O(1)이다. 같은 O(n²)인 DP 표보다 메모리가 적고 코드가 짧다.
+
+### 짝수 길이 회문은 어떻게 처리하나요?
+
+가운데가 두 글자 사이에 있으니 `expand(i, i + 1)`로 따로 넓힌다. 글자마다 홀수 가운데와 짝수 가운데를 둘 다 보고 긴 쪽을 쓴다. 이걸 빼먹으면 `"cbbd"`에서 `bb`를 놓친다.
+
+### DP 표 풀이의 점화식과 채우는 순서는요?
+
+`dp[i][j]`는 양 끝이 같고 안쪽 `dp[i+1][j-1]`이 참이면 참이다. 길이 3 이하는 양 끝만 같으면 된다. `dp[i][j]`가 한 줄 아래 칸을 보니 i를 큰 쪽부터 채우거나 구간 길이를 짧은 것부터 늘려 채운다.
+
+### O(n)으로 풀 수 있나요?
+
+Manacher 알고리즘으로 가능하다. 글자 사이에 구분자를 넣어 모든 회문을 홀수 길이로 맞추고, 지금까지 가장 오른쪽까지 닿은 회문 안에서는 거울 반대편 반지름을 빌려 와서 넓히기를 이어서 한다. 오른쪽 끝이 뒤로 가지 않으니 전체 넓히기 횟수가 O(n)이다.
+
+### 문자열을 뒤집어서 공통 부분 문자열을 찾으면 안 되나요?
+
+그대로는 틀린다. `"abacdfgdcaba"`에서 `abacd`가 나오는데, 앞의 abacd와 뒤의 dcaba가 서로 뒤집힌 모양이라 생긴 가짜다. 위치가 맞는지 따로 검사해야 하고 그래도 O(n²)이라 이점이 없다. 부분 수열 문제(516)에서는 이 방법이 맞는다.
+
+### 최악의 입력은 무엇인가요?
+
+중심 확장에서는 같은 글자만 있는 `"aaaa…a"`다. 모든 가운데에서 문자열 끝까지 넓어져 정확히 O(n²)이 된다. 회문이 드문 보통 문자열에서는 대부분 한두 번 만에 멈춰 거의 선형으로 돈다.
