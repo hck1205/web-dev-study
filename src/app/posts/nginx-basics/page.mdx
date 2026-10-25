@@ -717,7 +717,7 @@ master의 PID는 그대로이고 worker의 PID만 바뀌었다. restart가 꼭 �
 설정이 틀린 상태에서 `systemctl restart nginx`를 하면 nginx가 꺼진 뒤 다시 뜨지 못해 모든 사이트가 내려간다. reload는 실패해도 옛 설정으로 계속 돌지만, restart는 그렇지 않다. 문제가 생기면 백업을 풀어 되돌린다: `sudo tar xzf ~/nginx-backup-날짜.tgz -C /etc` 다음에 `sudo nginx -t && sudo systemctl start nginx`. 사이트 하나만 문제라면 `sites-enabled`의 링크만 지우고 reload해도 된다.
 </Callout>
 
-설정 파일을 git으로 관리하면 되돌리기가 더 쉽다. `/etc/nginx`에서 `sudo git init` 후 변경할 때마다 커밋해 두면 `git diff`로 무엇이 바뀌었는지 바로 보이고, `git checkout`으로 되돌린다. etckeeper 패키지는 이걸 `/etc` 전체에 대해 apt 설치 때마다 자동으로 해 준다.
+설정 파일을 git으로 관리하면 되돌리기가 더 쉽다. `/etc/nginx`에서 `sudo git init` 후 변경할 때마다 커밋해 두면 `git diff`로 무엇이 바뀌었는지 바로 보이고, `git checkout`으로 되돌린다. etckeeper 패키지는 이걸 `/etc` 전체를 대상으로 apt 설치 때마다 자동으로 해 준다.
 
 ## 로그를 읽는 법
 

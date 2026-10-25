@@ -349,7 +349,7 @@ interface OrderDocRepository extends MongoRepository<OrderDoc, String> {
 
 다른 점도 분명하다. 여러 문서에 걸친 트랜잭션은 레플리카 셋이나 샤드 클러스터에서만 되고, 스프링 부트는 `MongoTransactionManager`를 자동으로 등록하지 않아서 직접 빈을 만들어야 `@Transactional`이 몽고 작업을 묶는다. 인덱스 없이 파생 쿼리를 늘리면 컬렉션 전체 스캔이 된다. 문서 설계와 인덱스는 [MongoDB 문서 모델 글](/posts/mongodb-document-model)과 [MongoDB 인덱스 글](/posts/mongodb-indexes-explain)에서 이어진다.
 
-## 무엇을 고르나
+## 같은 겉모습, 다른 저장 경로
 
 세 모듈은 리포지토리 인터페이스라는 겉모습을 공유하고, 그 아래는 다르다. 아래 그림은 같은 `save(order)`가 각 모듈에서 무엇을 거쳐 저장소에 닿는지 이은 것이다.
 

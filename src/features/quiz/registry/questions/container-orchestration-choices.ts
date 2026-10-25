@@ -74,7 +74,7 @@ export const CONTAINER_ORCHESTRATION_CHOICES: QuizQuestion[] = [
     answer: 1,
     explanation:
       "ECS는 컨트롤 플레인을 AWS가 갖고 요금도 따로 받지 않으며, Fargate를 쓰면 노드 패치와 용량 계획도 사라진다. 쿠버네티스 생태계가 필요하거나 다른 환경과 같은 방식으로 배포해야 할 때 EKS를 검토한다.",
-    anchor: "무엇을-고를까",
+    anchor: "팀-크기에서-출발하면-갈린다",
   },
   {
     id: "container-orchestration-choices-6",

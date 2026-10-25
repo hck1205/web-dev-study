@@ -105,7 +105,7 @@ deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.
   ]}
 />
 
-예전에는 `apt-key add`로 키를 시스템 전체 키링에 넣었다. 그러면 그 키가 모든 저장소에 대해 유효해서, 서드파티 저장소 하나의 키가 새면 Ubuntu 공식 패키지인 척하는 패키지까지 통과했다. 그래서 `apt-key`는 폐기 예정이 되었고(24.04에서도 실행하면 `Warning: apt-key is deprecated`가 먼저 찍힌다), 지금은 키를 `/etc/apt/keyrings/`에 두고 저장소마다 `signed-by`로 묶는다.
+예전에는 `apt-key add`로 키를 시스템 전체 키링에 넣었다. 그러면 그 키가 모든 저장소에 유효해서, 서드파티 저장소 하나의 키가 새면 Ubuntu 공식 패키지인 척하는 패키지까지 통과했다. 그래서 `apt-key`는 폐기 예정이 되었고(24.04에서도 실행하면 `Warning: apt-key is deprecated`가 먼저 찍힌다), 지금은 키를 `/etc/apt/keyrings/`에 두고 저장소마다 `signed-by`로 묶는다.
 
 ```bash
 # Docker 공식 문서가 안내하는 방식: 키를 따로 받아 그 저장소에만 쓴다

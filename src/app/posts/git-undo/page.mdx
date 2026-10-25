@@ -563,7 +563,7 @@ BFG Repo-Cleaner도 같은 일을 하는 도구로 많이 쓰인다. Java로 돌
 
 다시는 같은 일이 없게 하려면 커밋 전에 막는다. `.env`는 프로젝트를 만들 때 `.gitignore`에 넣고, 예시는 `.env.example`로 올린다. gitleaks 같은 비밀 탐지 도구를 pre-commit 훅이나 CI에 걸고, GitHub를 쓴다면 저장소의 push protection(알려진 형식의 키가 든 푸시를 거부하는 기능)을 켠다.
 
-## 다시 정리하면
+## 실수가 난 자리로 명령을 고른다
 
 되돌리기는 실수가 있는 자리로 명령을 고르는 일이다. 작업 트리의 변경은 `restore`, 인덱스는 `restore --staged`, 푸시하지 않은 커밋은 `reset`(soft는 이름표만, mixed는 인덱스까지, hard는 작업 트리까지), 푸시한 커밋은 반대 커밋을 쌓는 `revert`다. 병합을 revert했다면 다시 합치기 전에 그 revert를 되돌려야 하고, 비밀 값은 revert로는 지워지지 않아 키를 교체한 뒤 filter-repo로 히스토리를 다시 쓴다. 커밋도 add도 안 한 변경과 이미 새어 나간 키만은 Git이 되살려 주지 못한다. reset으로 날린 커밋을 찾는 법은 [다음 글](/posts/git-stash-reflog)에, 상황별 대처는 [문제 해결 글](/posts/git-troubleshooting)에 더 모아 두었다.
 

@@ -22,7 +22,7 @@ Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)
 
 이 글은 전원을 넣은 순간부터 로그인 프롬프트까지를 펌웨어, 부트로더(GRUB), 커널, initramfs, systemd의 다섯 단계로 나눠 따라간다. 단계마다 무엇을 읽고 무엇이 실패하는지, 그리고 이전 커널로 들어가기, 커널 파라미터로 rescue 모드에 들어가기, fstab 한 줄 때문에 빠진 emergency 모드에서 빠져나오기를 다룬다. 기준은 Ubuntu 24.04(GRUB 2.12, systemd 255)이고, RHEL 계열과 다른 부분은 따로 적는다.
 
-실습 환경에 대해 먼저 밝혀 둔다. 이 글을 쓴 머신은 Firecracker 가상 머신이라 부트로더 없이 커널을 바로 띄우고, PID 1도 systemd가 아니다. 그래서 GRUB 메뉴나 `systemd-analyze blame` 출력은 직접 찍지 못했다. 그런 자리는 출력을 지어내지 않고 형식과 읽는 법만 적었다. 설정 파일 내용, systemd가 fstab을 유닛으로 바꾸는 과정, grubenv 같은 것은 직접 돌려서 확인했다. 서비스 유닛 자체를 쓰고 고치는 법은 [systemd 글](/posts/linux-systemd-systemctl)에서 다뤘다.
+실습 환경을 먼저 밝혀 둔다. 이 글을 쓴 머신은 Firecracker 가상 머신이라 부트로더 없이 커널을 바로 띄우고, PID 1도 systemd가 아니다. 그래서 GRUB 메뉴나 `systemd-analyze blame` 출력은 직접 찍지 못했다. 그런 자리는 출력을 지어내지 않고 형식과 읽는 법만 적었다. 설정 파일 내용, systemd가 fstab을 유닛으로 바꾸는 과정, grubenv 같은 것은 직접 돌려서 확인했다. 서비스 유닛 자체를 쓰고 고치는 법은 [systemd 글](/posts/linux-systemd-systemctl)에서 다뤘다.
 
 ## 다섯 단계가 바통을 넘긴다
 

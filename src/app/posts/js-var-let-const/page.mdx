@@ -204,7 +204,7 @@ let y = 2;
 SyntaxError: Identifier 'y' has already been declared
 ```
 
-`SyntaxError`라는 점이 중요하다. 첫 줄도 실행되지 않는다. 엔진이 코드를 읽는 단계에서 이미 거절한다.
+주목할 것은 `SyntaxError`라는 사실이다. 첫 줄도 실행되지 않는다. 엔진이 코드를 읽는 단계에서 이미 거절한다.
 
 바깥 블록과 안쪽 블록에서 같은 이름을 쓰는 건 재선언이 아니라 가리기(shadowing)다. 이건 허용된다. 가리기가 언제 버그가 되는지는 [스코프 글](/posts/js-scope-lexical)에서 다룬다.
 

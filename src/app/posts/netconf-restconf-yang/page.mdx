@@ -383,7 +383,7 @@ PUT과 PATCH의 차이는 NETCONF의 `replace`와 `merge`와 같다. 인터페�
 
 설정이 아니라 상태(인터페이스 카운터, 광 모듈 온도, BGP 상태)를 모을 때 전통적인 방법은 SNMP 폴링이다. 모니터링 서버가 몇십 초마다 장비에 묻는다. 묻는 주기 사이에 일어난 일은 놓치고, 장비가 많을수록 묻는 쪽이 바빠진다. 링크가 3초 동안 끊겼다 붙은 일은 60초 폴링에 안 보인다.
 
-gNMI(gRPC Network Management Interface)는 gRPC 위의 관리 프로토콜로, OpenConfig 쪽에서 나왔다. `Get`, `Set`, `Capabilities`, `Subscribe` 네 가지 RPC가 있는데, 핵심은 `Subscribe`다. 클라이언트가 한 번 구독하면 장비가 값을 밀어 준다.
+gNMI(gRPC Network Management Interface)는 gRPC 위의 관리 프로토콜로, OpenConfig 쪽에서 나왔다. `Get`, `Set`, `Capabilities`, `Subscribe` 네 가지 RPC가 있는데, 중요한 건 `Subscribe`다. 클라이언트가 한 번 구독하면 장비가 값을 밀어 준다.
 
 - `STREAM` 모드의 `SAMPLE`: 정해진 주기(예: 10초)마다 값을 보낸다.
 - `STREAM` 모드의 `ON_CHANGE`: 값이 바뀔 때만 보낸다. 인터페이스 상태, BGP 이웃 상태처럼 드물게 바뀌지만 바뀌면 바로 알아야 하는 값에 맞다.

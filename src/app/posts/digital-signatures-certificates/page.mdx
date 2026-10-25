@@ -122,7 +122,7 @@ Subject Alternative Name: DNS:shop.example.com
 Signature Algorithm: ecdsa-with-SHA256  # 발급자가 ECDSA로 서명
 ```
 
-각 필드가 왜 거기 있는지는 [HTTPS 글의 인증서 뜯어보기](/posts/https-tls#인증서-한-장-뜯어보기)에서 자세히 봤으니 여기서는 서명과 체인에 집중한다. 핵심은 `issuer`와 `Signature Algorithm`이다. 이 인증서의 서명은 `Demo Issuing CA`의 공개 키로 검증된다. 그 `Demo Issuing CA` 인증서의 서명은 또 그 위 발급자의 공개 키로 검증된다. 이렇게 거슬러 올라가는 게 체인이다.
+각 필드가 왜 거기 있는지는 [HTTPS 글의 인증서 뜯어보기](/posts/https-tls#인증서-한-장-뜯어보기)에서 자세히 봤으니 여기서는 서명과 체인에 집중한다. 볼 곳은 `issuer`와 `Signature Algorithm`이다. 이 인증서의 서명은 `Demo Issuing CA`의 공개 키로 검증된다. 그 `Demo Issuing CA` 인증서의 서명은 또 그 위 발급자의 공개 키로 검증된다. 이렇게 거슬러 올라가는 게 체인이다.
 
 <UrlAnatomy
   caption="리프 인증서에서 체인으로 이어지는 필드"

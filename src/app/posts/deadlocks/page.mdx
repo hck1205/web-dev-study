@@ -220,7 +220,7 @@ Found 1 deadlock.
   ]}
 />
 
-`Found one Java-level deadlock`은 `synchronized`와 `java.util.concurrent`의 락에 대해서만 나온다. 락이 아니라 큐나 `Future.get()`을 서로 기다리는 경우는 덤프가 알려 주지 않으니, `WAITING` 상태 스레드들의 스택을 직접 읽어야 한다.
+`Found one Java-level deadlock`은 `synchronized`와 `java.util.concurrent`의 락에만 나온다. 락이 아니라 큐나 `Future.get()`을 서로 기다리는 경우는 덤프가 알려 주지 않으니, `WAITING` 상태 스레드들의 스택을 직접 읽어야 한다.
 
 파이썬에는 `py-spy`가 있다. 실행 중인 프로세스에 붙어서 모든 스레드의 스택을 찍고, 프로세스를 멈추거나 코드를 바꿀 필요가 없다. 주문 처리와 재입고가 두 락을 반대 순서로 잡는 코드를 멈춘 뒤 떴다.
 

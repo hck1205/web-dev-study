@@ -256,7 +256,7 @@ Query: select "users"."name", "orders"."total" from "orders" inner join "users" 
 
 ## 직접 해 보기: WHERE 절 조립기
 
-쿼리 빌더가 하는 일의 핵심은 조건을 조립하면서 값을 자리표시자로 빼는 것이다. 필터 객체를 받아 `text`와 `values`를 돌려주는 함수를 짜 보자. 규칙은 이렇다. 키 끝이 `_gte`면 `>=`, `_lte`면 `<=`, `_in`이면 `= any($n)`에 배열을 넘긴다. 접미사가 없으면 `=`다. 값이 `undefined`면 건너뛰고, `null`이면 자리표시자 없이 `is null`을 붙인다. 컬럼 이름은 소문자와 밑줄만 허용하고, 아니면 에러를 던진다. 조건이 없으면 `text`는 빈 문자열이다.
+쿼리 빌더가 하는 일은 결국 조건을 조립하면서 값을 자리표시자로 빼는 것이다. 필터 객체를 받아 `text`와 `values`를 돌려주는 함수를 짜 보자. 규칙은 이렇다. 키 끝이 `_gte`면 `>=`, `_lte`면 `<=`, `_in`이면 `= any($n)`에 배열을 넘긴다. 접미사가 없으면 `=`다. 값이 `undefined`면 건너뛰고, `null`이면 자리표시자 없이 `is null`을 붙인다. 컬럼 이름은 소문자와 밑줄만 허용하고, 아니면 에러를 던진다. 조건이 없으면 `text`는 빈 문자열이다.
 
 <CodePlayground
   caption="필터 객체를 WHERE 절과 값 배열로"
@@ -427,7 +427,7 @@ select calls, round(total_exec_time) as total_ms, round(mean_exec_time, 1) as me
  limit 5;
 ```
 
-## 무엇을 고를까
+## 팀이 SQL을 아는가, CRUD가 대부분인가
 
 작은 서비스에서 출발한다면 나는 이렇게 본다.
 

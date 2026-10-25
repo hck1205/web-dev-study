@@ -119,7 +119,7 @@ target: button | matches(button): true | closest: delete
 
 `e.target.matches("button")`이나 `e.target.tagName === "BUTTON"`으로 검사하면 아이콘을 눌렀을 때 아무 일도 일어나지 않는다. 데스크톱에서 버튼 가운데를 누르며 테스트하면 잘 되고, 손가락이 큰 모바일에서 "가끔 안 눌린다"는 제보가 온다. `closest`는 자기 자신부터 검사하니 버튼을 직접 눌러도, 안쪽을 눌러도 같은 결과를 준다.
 
-위임 핸들러의 핵심은 결국 아래 한 줄이다. 조각을 하나씩 눌러 보자.
+위임 핸들러는 결국 아래 한 줄이 전부다. 조각을 하나씩 눌러 보자.
 
 <UrlAnatomy
   caption="위임 핸들러에서 동작 이름을 꺼내는 한 줄"

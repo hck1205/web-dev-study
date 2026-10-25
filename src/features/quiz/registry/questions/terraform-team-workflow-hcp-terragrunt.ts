@@ -110,6 +110,6 @@ export const TERRAFORM_TEAM_WORKFLOW_HCP_TERRAGRUNT: QuizQuestion[] = [
     answer: 1,
     explanation:
       "스택이 적고 CI가 이미 있으면 승인과 OIDC를 CI 기능으로 풀 수 있어 추가 비용이 없다. Terragrunt는 실행 플랫폼과 별개로 설정 중복과 순서가 문제될 때 들이는 도구라, 스택이 몇 개뿐이면 배우는 비용이 더 크다.",
-    anchor: "무엇을-고르나",
+    anchor: "운영-여력과-규정이-고른다",
   },
 ];

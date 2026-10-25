@@ -334,7 +334,7 @@ spec:
 - ESO: 외부 저장소의 값을 주기적으로 Secret으로 복사한다. 앱은 바꿀 게 없고 저장소 장애에 강하다. 대신 값이 etcd에 한 벌 더 있고, 교체가 앱까지 닿는 데 시간이 걸린다.
 - Secrets Store CSI Driver: Pod가 뜰 때 저장소에서 읽어 파일로 꽂는다. etcd에 값이 없고 Pod의 권한으로 읽는다. 저장소가 Pod 시작 경로에 들어오고, 환경 변수로 쓰려면 Secret 동기화 옵션을 켜야 해서 장점 일부를 내준다.
 - Sealed Secrets: 클러스터의 컨트롤러가 가진 키로만 풀리는 `SealedSecret`을 git에 둔다. `kubeseal`로 암호화하고, 컨트롤러가 풀어 Secret을 만든다. 외부 저장소가 필요 없다. 대신 암호화 키를 잃으면 git의 모든 SealedSecret을 다시 만들어야 하니 키 백업이 운영의 핵심이고, 값을 바꾸려면 다시 봉인해 커밋해야 한다.
-- SOPS: 파일의 값만 age나 KMS 키로 암호화해 git에 둔다. 배포 도구(Flux의 kustomize-controller, helm-secrets 플러그인 등)가 배포할 때 푼다. 쿠버네티스 밖에서도 쓰이는 일반 도구라는 점이 장점이다.
+- SOPS: 파일의 값만 age나 KMS 키로 암호화해 git에 둔다. 배포 도구(Flux의 kustomize-controller, helm-secrets 플러그인 등)가 배포할 때 푼다. 쿠버네티스 밖에서도 쓰이는 일반 도구라는 게 장점이다.
 
 외부 저장소가 이미 있고 비밀 교체를 배포와 떼어 두고 싶으면 ESO가 무난하다. 비밀이 많지 않고 git만으로 끝내고 싶으면 Sealed Secrets나 SOPS다. etcd에 값이 남으면 안 되면 CSI 드라이버다. 한 클러스터에서 섞어 쓰는 경우도 흔하다. 앱 비밀은 ESO로, ESO 자체가 저장소에 로그인하는 첫 자격 증명(이른바 secret zero)은 IRSA나 Pod Identity로 아예 없애는 식이다.
 

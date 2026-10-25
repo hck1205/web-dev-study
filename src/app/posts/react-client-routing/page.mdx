@@ -513,7 +513,7 @@ ts-router.tsx(51,47): error TS2322: Type '"cheap"' is not assignable to type '"p
 
 실무에서는 `createRoute`를 손으로 엮기보다 파일 기반 라우팅을 쓴다. Vite 플러그인이 `src/routes/products.$productId.tsx` 같은 파일 이름에서 라우트 트리와 타입을 생성하고, `autoCodeSplitting`을 켜면 라우트 컴포넌트를 자동으로 별도 청크로 뺀다. 설치된 플러그인의 기본 분할 묶음을 열어 보면 `component`, `errorComponent`, `notFoundComponent`만 있고 `loader`는 빠져 있다. 앞 절의 폭포를 피하려고 loader는 처음 번들에 남기는 것이다. 생성된 `routeTree.gen.ts`는 커밋하고 손으로 고치지 않는다.
 
-## 무엇을 고를까
+## 서버를 얼마나 쓰고 타입을 얼마나 원하나
 
 셋 다 중첩 라우트, 라우트 단위 데이터 로딩, 코드 분할을 한다. 갈리는 지점은 "서버를 얼마나 쓰느냐"와 "타입을 얼마나 원하느냐"다.
 
