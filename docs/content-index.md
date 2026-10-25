@@ -25,7 +25,7 @@
 - 요약: 사내 용어와 말투를 모델이 모른다며 파인튜닝부터 하려는 팀의 요구를 지식과 형식으로 나눠 본다. 세 방법이 바꾸는 곳, 사전 학습·지시 튜닝·선호 학습, LoRA와 QLoRA의 파라미터와 메모리 계산, 데이터 만들기, 과적합과 망각, 증류, 언제 파인튜닝하는지의 신호까지 다룬다.
 - 태그: AI, LLM, RAG, Performance
 - 키워드: 파인튜닝, LoRA, QLoRA, 증류, DPO
-- 길이: 365줄
+- 길이: 361줄
 - 소제목: 세 가지는 바꾸는 곳이 다르다 / 모델이 지금의 모습이 되기까지 / 지식이 필요하면 먼저 붙여 준다 / 형식과 습관은 예시로 가르친다 / 전체 학습과 LoRA, QLoRA / 데이터 수백 건을 만드는 일 / 파인튜닝 한 바퀴 / 과적합과 망각 / API에 맡길까, 직접 돌릴까 / 파인튜닝을 했는데 효과가 없을 때 / 비용, 갱신 속도, 평가를 나란히 놓으면 / '지식은 RAG, 형식은 파인튜닝'의 한계 / 큰 모델로 작은 모델 가르치기 / 언제 파인튜닝하나: 신호와 순서 / 무엇을 모르는지가 길을 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: system-prompt-design, context-engineering, rag-classic-pipeline
 - 키워드 백링크 →: llm-api-integration, embedding-models-applications, llm-evals, postgres-architecture, self-hosting-llm-inference, ml-fundamentals, vector-db, llm-basics-for-developers
@@ -102,7 +102,7 @@
 - 요약: 입력이 길어지면 첫 토큰이 늦어지고 프롬프트 캐시는 앞부분이 바이트 단위로 같아야 맞는 이유를 트랜스포머 안쪽에서 설명한다. 작은 숫자로 셀프 어텐션을 계산해 보고, 프리필과 디코드, KV 캐시 크기 계산, 프롬프트 캐싱의 수명과 비용, 긴 컨텍스트의 한계까지 다룬다.
 - 태그: AI, LLM, Performance, Cache
 - 키워드: 셀프 어텐션, KV 캐시, 프롬프트 캐싱, 프리필
-- 길이: 297줄
+- 길이: 291줄
 - 소제목: 토큰이 다음 토큰 확률이 되기까지 / 어텐션은 질문과 열쇠를 맞춰 보는 일 / 길이가 두 배면 어텐션은 네 배 / 첫 토큰과 그다음 토큰은 다른 일을 한다 / KV 캐시는 몇 GB인가 / 프롬프트 캐싱은 KV 캐시를 요청 사이에 남겨 두는 것 / 긴 컨텍스트는 다 읽지만 고르게 보지는 않는다 / 이 구조가 만들어지는 과정 / 현장에서 숫자가 이상할 때 / 다시 두 숫자 앞에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-basics-for-developers, llm-api-integration
 - 키워드 백링크 →: rag-classic-pipeline, self-hosting-llm-inference, system-prompt-design, sliding-window-pattern, fine-tuning-vs-rag-vs-prompting, db-modeling-normalization, dns, vector-db
@@ -115,8 +115,8 @@
 - 요약: 직접 짠 도구 호출 루프를 기준으로 LangChain·LangGraph, LlamaIndex·Haystack, CrewAI·AutoGen, smolagents·Agno, 공급사 에이전트 SDK가 각각 어느 층을 대신해 주는지 비교한다. LangGraph의 체크포인트와 사람 승인을 실제로 돌려 보고, 추상화가 숨기는 프롬프트, 잠김, 버전 변화 속도를 기준으로 고르는 순서를 정리했다.
 - 태그: AI, LLM, RAG, Architecture, Python
 - 키워드: 에이전트 프레임워크, LangGraph, LlamaIndex, CrewAI, Claude Agent SDK
-- 길이: 401줄
-- 소제목: 직접 짠 루프가 이미 하는 일 / 프레임워크마다 맡는 층이 다르다 / LangChain과 LangGraph: 체인에서 상태 그래프로 / LlamaIndex와 Haystack: 검색 파이프라인이 먼저다 / CrewAI와 AutoGen: 역할을 나눈 에이전트들 / smolagents와 Agno: 가볍게, 코드로 행동하기 / 공급사 SDK: OpenAI Agents SDK, Claude Agent SDK, Google ADK / 추상화가 숨기는 프롬프트 / 잠김과 버전 변화 속도 / 무엇을 고를까 / 면접에서 나올 만한 질문
+- 길이: 397줄
+- 소제목: 직접 짠 루프가 이미 하는 일 / 프레임워크마다 맡는 층이 다르다 / LangChain과 LangGraph: 체인에서 상태 그래프로 / LlamaIndex와 Haystack: 검색 파이프라인이 먼저다 / CrewAI와 AutoGen: 역할을 나눈 에이전트들 / smolagents와 Agno: 가볍게, 코드로 행동하기 / 공급사 SDK: OpenAI Agents SDK, Claude Agent SDK, Google ADK / 추상화가 숨기는 프롬프트 / 잠김과 버전 변화 속도 / SDK로 시작하고, 다시 만들기 시작하면 프레임워크로 / 면접에서 나올 만한 질문
 - 직접 링크 →: ai-coding-agents, llm-api-integration, multi-agent-systems, rag-classic-pipeline, rag-retrieval-quality, claude-code-headless-ci, mcp-protocol
 - 키워드 백링크 →: observability-basics, llm-observability, system-prompt-design, spring-ai-agents, llm-app-security-guardrails, transformer-attention-kv-cache, agentic-rag, db-type-embedded, agent-tool-design, postgres-architecture, pattern-abstract-factory, vector-db
 - 이 글로 오는 글 ←: claude-code-headless-ci, llm-observability, multi-agent-systems, multimodal-llm-apps
@@ -148,7 +148,7 @@
 - 요약: 모델이 도구를 엉뚱하게 고르고 같은 인자를 반복하는 증상에서 시작해 이름과 설명, 허용 값만 남긴 스키마, 고칠 방법을 담은 오류, 잘랐다고 알려 주는 결과, 도구 종류별 위험, 준비와 실행을 나눈 부작용 도구, 도구 수와 선택 정확도, 공급사별 도구 호출 형식과 상태 저장 API, 추상화 계층을 둘지까지 직접 돌려 보며 따라간다.
 - 태그: AI, LLM, API, Security
 - 키워드: 도구 설명, 도구 스키마, tool_choice, 병렬 도구 호출, Responses API
-- 길이: 355줄
+- 길이: 351줄
 - 소제목: 모델은 도구를 이름과 설명으로만 안다 / 이름과 설명은 고르는 기준을 담는다 / 스키마는 고를 수 있는 값만 남긴다 / 오류는 고치는 방법까지 돌려준다 / 결과는 모델이 읽을 만큼만 돌려준다 / 도구 종류마다 조심할 곳이 다르다 / 되돌릴 수 없는 도구는 두 단계로 나눈다 / 도구가 많아지면 고르기가 어려워진다 / 공급사마다 다른 도구 호출 형식 / 상태를 서버에 두는 API, 두지 않는 API / 추상화 계층을 둘까 / 현장에서 도구 호출이 이상할 때 / 도구는 모델이 읽는 API다 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-api-integration, mcp-protocol, agent-reasoning-patterns, idempotency-key, llm-evals, agent-memory, llm-model-selection
 - 키워드 백링크 →: system-prompt-design, spring-ai-agents, llm-app-security-guardrails, agentic-rag, smoke-sanity-regression-testing, resilience-patterns, js-strict-mode, ssrf, http-methods
@@ -328,7 +328,7 @@
 - 요약: 환자 기록을 외부 API로 보낼 수 없는 상황에서 시작해 Hugging Face Hub에서 모델과 라이선스 고르기, Ollama와 vLLM의 차이, 가중치와 KV 캐시로 나눈 GPU 메모리 계산, numpy로 재 본 4비트 양자화 오차, 연속 배칭과 PagedAttention, OpenAI 호환 엔드포인트, API와의 손익분기, 브라우저 추론까지 따라간다.
 - 태그: AI, LLM, Performance, Python, Linux
 - 키워드: vLLM, Ollama, 양자화, PagedAttention, 연속 배칭
-- 길이: 363줄
+- 길이: 359줄
 - 소제목: 데이터를 밖으로 보낼 수 없을 때 / 모델은 Hugging Face Hub에서 고른다 / 노트북의 Ollama와 서버의 vLLM은 하는 일이 다르다 / GPU 메모리는 가중치와 KV 캐시로 나뉜다 / 4비트로 줄이면 무엇을 잃나 / 한 요청씩 처리하면 GPU가 논다 / 동시 사용자와 지연은 맞바꾼다 / OpenAI 호환 엔드포인트로 연다 / API보다 싸지는 지점 / 아주 작은 모델은 브라우저에서 돌린다 / 직접 띄운 서버에서 받는 제보 / 직접 띄운다는 건 GPU 메모리를 관리하는 일이다 / 면접에서 나올 만한 질문
 - 직접 링크 →: llm-basics-for-developers, llm-api-integration, llm-evals, k8s-gpu-dra, multimodal-llm-apps
 - 키워드 백링크 →: system-prompt-design, api-scaling-ladder, load-testing-k6, transformer-attention-kv-cache, osi-in-practice, fine-tuning-vs-rag-vs-prompting, rag-classic-pipeline, vector-db
@@ -352,7 +352,7 @@
 - 요약: 대출 거절 사유를 설명해 달라는 요청에서 시작해 전역 설명과 지역 설명, 섀플리 값을 손으로 계산한 결과와 SHAP 라이브러리 비교, 주변을 흔들어 근사하는 LIME을 작은 데이터로 돌려 본다. 상관된 특징이 설명을 왜곡하는 경우, 설명이 인과가 아닌 이유, 계산 비용, 규제가 요구하는 기록까지 다룬다.
 - 태그: AI, Python
 - 키워드: SHAP, LIME, 섀플리 값, 설명 가능한 AI
-- 길이: 401줄
+- 길이: 397줄
 - 소제목: 모델 전체를 설명할까, 이 한 건을 설명할까 / 기여를 공정하게 나누는 방법: 섀플리 값 / 평균 63%에서 이 고객의 2%까지 / 특징이 많아지면 계산이 폭발한다 / LIME: 주변을 흔들어 직선으로 근사한다 / 같은 고객에 대한 두 설명이 다른 이유 / 비슷한 특징 둘이 공을 나눠 갖는다 / 설명은 원인이 아니다 / 표가 아닌 데이터는 무엇을 특징으로 볼까 / 규제가 요구하는 설명 / 현장에서 설명이 쓸모 있는 순간 / 숫자를 나눠 주는 두 방식 / 면접에서 나올 만한 질문
 - 직접 링크 →: deep-learning-basics, model-serving, ab-testing, llm-evals, what-is-mlops
 - 키워드 백링크 →: ml-fundamentals, css-box-model-layout, data-privacy-compliance, sdlc-models-agile-scrum
@@ -419,7 +419,7 @@
 - 요약: 손으로 돌리던 재학습이 신규 사용자 행이 빠진 데이터로 전체 AUC만 올린 모델을 내보낸 장면에서 시작해, 데이터 검증부터 배포까지 단계를 나누고 코드·데이터·모델을 따로 시험한다. 구간별 승격 관문과 pytest 행동 테스트, PR마다 지표 차이를 붙이는 CML, Kubeflow Pipelines와 Airflow, 재학습 주기, 지속 학습을 자동 배포까지 잇는 위험을 다룬다.
 - 태그: AI, Machine Learning, CI/CD, Python, Testing
 - 키워드: ML 파이프라인, CML, Kubeflow Pipelines, 승격 관문
-- 길이: 359줄
+- 길이: 353줄
 - 소제목: 노트북 한 권을 단계로 쪼갠다 / ML의 CI는 코드, 데이터, 모델을 따로 시험한다 / 전체 AUC가 올랐는데 내보내면 안 되는 모델 / PR마다 학습 결과를 붙인다: CML / 학습 파이프라인을 돌리는 곳: Kubeflow Pipelines와 Airflow / 배포 단계는 서빙 방식에 따라 다르다 / 언제 다시 학습하나: 일정과 드리프트 / 지속 학습이 자동 배포까지 가면 위험한 이유 / 파이프라인을 만들고 나서 흔한 실수 / 자동화할수록 관문이 중요해진다 / 면접에서 나올 만한 질문
 - 직접 링크 →: ml-experiment-tracking, ml-model-monitoring-drift, ci-cd-basics, what-is-mlops, test-pyramid-unit-tests, github-actions-workflows, airflow-orchestration, canary-release, blue-green-deployment, model-serving, edge-ai-on-device
 - 키워드 백링크 →: data-quality-checks, github-actions-docker-ecr, data-orchestrators-comparison, smoke-sanity-regression-testing, sd-object-storage-architecture, ml-model-evaluation, llm-evals, code-review-practices, etl-vs-elt, zero-downtime-migrations
@@ -500,7 +500,7 @@
 - 요약: 영어 임베딩 모델을 한국어 위키에 붙였다가 검색이 바닥난 경험에서 출발해 모델을 고르는 다섯 기준, API형과 직접 띄우는 모델, 질문과 문서의 접두어, 정규화와 차원 줄이기를 계산으로 따라간다. 같은 벡터로 하는 분류, 이상 탐지, 추천과 모델 교체 때의 재색인을 pgvector로 확인한다.
 - 태그: AI, Embedding, Search, PostgreSQL, VectorDB
 - 키워드: 임베딩 모델, MTEB, Matryoshka, Sentence Transformers
-- 길이: 420줄
+- 길이: 414줄
 - 소제목: 모델을 고를 때 먼저 보는 다섯 가지 / API로 쓰는 모델과 직접 띄우는 모델 / 질문과 문서는 다르게 넣는다 / 정규화와 거리 재기 / 차원을 줄여도 쓸 만한 벡터 / 내 데이터로 시험지를 만든다 / 같은 벡터로 종류 맞히기 / 무리에서 먼 점을 찾는다 / 좋아한 것의 근처를 추천한다 / 모델을 바꾸면 모든 벡터를 다시 만든다 / 벡터 옆에 모델 이름을 적어 두는 테이블 / 검색이 이상할 때 먼저 의심할 곳 / 지도를 고르는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: vector-db, rag-classic-pipeline, rag-retrieval-quality
 - 키워드 백링크 →: pythagorean-theorem, cold-starts, db-index-design, llm-evals, elasticsearch-inverted-index, self-hosting-llm-inference, db-modeling-normalization
@@ -712,7 +712,7 @@
 - 요약: 지점 일곱 곳을 가장 싸게 잇는 문제에서 출발해 컷 속성과 고리 속성으로 크루스칼과 프림이 왜 맞는지 보고, 같은 지도에서 두 알고리즘을 단계별로 돌린다. 동점일 때 답이 여럿인 경우, 최단 경로 트리와의 차이, 병목 경로와 간선 추가 갱신, 희소·밀집 그래프 실측과 클러스터링까지 다룬다.
 - 태그: Algorithm, Data Structure, JavaScript, Performance
 - 키워드: 최소 신장 트리, 프림 알고리즘, 컷 속성, 최소 병목 경로
-- 길이: 400줄
+- 길이: 394줄
 - 소제목: 고리 없이 모두 잇는 선 n-1개 / 둘로 가르면 가장 싼 다리는 반드시 들어간다 / 싼 선부터 줍는 크루스칼 / 트리를 한 칸씩 키우는 프림 / 같은 비용의 선이 여럿이면 답도 여럿이다 / 최소 신장 트리는 최단 경로 트리가 아니다 / 가장 무거운 선을 가장 가볍게: 병목 경로 / 선 하나가 새로 생기면 / 간선이 적을 때와 꽉 찼을 때 / 현장에서 최소 신장 트리를 만나는 곳 / 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: ds-union-find, greedy-algorithms, ds-heap, shortest-path-algorithms
 - 키워드 백링크 →: router-vs-switch, sd-maps-tiles-routing
@@ -2983,7 +2983,7 @@
 - 태그: Algorithm, JavaScript, Search, Performance
 - 키워드: KMP 알고리즘, 라빈-카프, 보이어-무어, 접미사 배열, 아호-코라식
 - 길이: 442줄
-- 소제목: 한 칸 밀 때마다 처음부터 다시 비교한다 / 이미 맞힌 글자는 다시 보지 않는다 / 실패 함수는 패턴이 자기 자신과 겹치는 길이다 / 글자 대신 숫자를 먼저 비교한다 / 뒤에서부터 비교하면 크게 건너뛴다 / 언어와 도구는 이미 섞어 쓴다 / 같은 텍스트에서 여러 번 찾을 때 / 찾을 단어가 수천 개일 때 / 무엇을 고를까 / 현장에서 검색이 느려질 때 보는 곳 / KMP를 직접 짜 보기 / 면접에서 나올 만한 질문
+- 소제목: 한 칸 밀 때마다 처음부터 다시 비교한다 / 이미 맞힌 글자는 다시 보지 않는다 / 실패 함수는 패턴이 자기 자신과 겹치는 길이다 / 글자 대신 숫자를 먼저 비교한다 / 뒤에서부터 비교하면 크게 건너뛴다 / 언어와 도구는 이미 섞어 쓴다 / 같은 텍스트에서 여러 번 찾을 때 / 찾을 단어가 수천 개일 때 / 상황별로 고르는 알고리즘 한 표 / 현장에서 검색이 느려질 때 보는 곳 / KMP를 직접 짜 보기 / 면접에서 나올 만한 질문
 - 직접 링크 →: big-o-notation, bit-manipulation, ds-hash-map, rsync-algorithm, regex-and-globbing, binary-search, elasticsearch-inverted-index, ds-trie
 - 키워드 백링크 →: db-index, ids-ips, character-encoding-unicode, js-numbers-bigint, event-loop, recursion-backtracking, js-strings-unicode, db-modeling-normalization, core-web-vitals
 - 이 글로 오는 글 ←: ds-trie, leetcode-best-time-to-buy-and-sell-stock, leetcode-extra-characters-in-a-string, leetcode-index-pairs-of-a-string, leetcode-longest-common-prefix, leetcode-longest-palindromic-substring, leetcode-majority-element, leetcode-permutation-in-string, leetcode-replace-words, leetcode-sum-of-prefix-scores-of-strings, leetcode-valid-palindrome
@@ -3251,7 +3251,7 @@
 - 요약: 주문 상태를 실시간으로 바꾸려는 화면에서 시작해 graphql-ws 메시지와 닫기 코드, 서버 두 대에서 반만 가는 이벤트와 Redis pub/sub, 구독자 수만큼 도는 실행, 이벤트 설계를 직접 돌려 본다. 응답을 나눠 받는 @defer·@stream과 라이브 쿼리, 폴링과의 선택 기준도 다룬다.
 - 태그: API, Backend, WebSocket, Redis, Node.js
 - 키워드: GraphQL 구독, graphql-ws, 라이브 쿼리, @defer
-- 길이: 409줄
+- 길이: 407줄
 - 소제목: 구독은 이벤트를 응답으로 바꾼다 / WebSocket 위에서 오가는 메시지 / 서버가 두 대가 되면 이벤트가 반만 간다 / 이벤트 하나에 실행은 구독자 수만큼 / 이벤트에는 무엇을 담을까 / 느린 필드를 나중에 보내는 @defer와 @stream / 라이브 쿼리와 폴링 / 앱에서 구독을 붙이는 모양 / 운영에서 실시간이 조용히 멈출 때 / 계속 받을 것인가, 나눠 받을 것인가 / 면접에서 나올 만한 질문
 - 직접 링크 →: websocket-deep-dive, http-streaming-sse, realtime-communication, graphql-execution-validation, message-queue-basics, streaming-ssr-suspense
 - 키워드 백링크 →: pattern-prototype, graphql-client-caching, n-plus-one-queries, pattern-iterator, rendering-strategies, graphql-basics, k8s-configmap, sd-start-single-server, http-versions, kafka-basics, redis-basics, db-modeling-normalization
@@ -3429,7 +3429,7 @@
 - 요약: VS Code, ESLint, webpack이 기능 대부분을 플러그인으로 두는 구조를 작은 플러그인 호스트로 만들어 본다. 계약과 레지스트리, 훅의 종류, 늦게 깨우기, 판 호환과 peerDependencies, 의존 순서, 워커 격리의 비용, OS 마이크로커널과의 관계까지 다룬다.
 - 태그: Architecture, Design Pattern, Backend, Node.js, JavaScript
 - 키워드: 마이크로커널 아키텍처, 플러그인 아키텍처, 확장점, tapable
-- 길이: 412줄
+- 길이: 408줄
 - 소제목: 코어가 하는 일은 생각보다 적다 / 작은 마크다운 도구로 만들어 보기 / 훅은 부르는 방식이 여러 가지다 / 발견하고, 늦게 깨운다 / 계약의 판을 어떻게 올리나 / 플러그인이 다른 플러그인을 필요로 할 때 / 느린 플러그인 하나가 전체를 멈춘다 / 운영체제의 마이크로커널과 같은 이름인 이유 / 레이어드, 헥사고날과 나란히 놓으면 / 이 구조가 맞지 않는 곳 / 마무리 / 면접에서 나올 만한 질문
 - 직접 링크 →: layered-architecture, hexagonal-architecture, dependency-hell, event-loop, architecture-patterns-overview
 - 키워드 백링크 →: linters-formatters, ds-graph-bfs-dfs, db-transaction-isolation
@@ -3487,7 +3487,7 @@
 - 태그: Authentication, Cookie, Session, Security
 - 키워드: 쿠키 세션, 세션 쿠키, 세션 ID, Set-Cookie, CSRF
 - 길이: 341줄
-- 소제목: 외투 보관소 번호표 / 로그인부터 로그아웃까지 / 쿠키에 붙는 옵션들 / 자동으로 붙는다는 것의 함정, CSRF / 세션을 노리는 공격들 / 서버가 여러 대가 되면 / 배포하고 나니 로그인이 자꾸 풀릴 때 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 외투 보관소 번호표 / 로그인부터 로그아웃까지 / 쿠키에 붙는 옵션들 / 자동으로 붙는다는 것의 함정, CSRF / 세션을 노리는 공격들 / 서버가 여러 대가 되면 / 배포하고 나니 로그인이 자꾸 풀릴 때 / 서버가 들고, 브라우저는 번호표만 / 면접에서 나올 만한 질문
 - 직접 링크 →: proxy-reverse-proxy, cors, token-login
 - 키워드 백링크 →: html-form-http, load-balancer-basics, csrf, kubernetes-ingress, redis-basics, what-happens-google-com
 - 이 글로 오는 글 ←: ai-crawlers-bot-control, authn-vs-authz, backend-engineer-roadmap, blue-green-deployment, browser-fetch, browser-security-model, browser-storage, claude-code-agent-teams, claude-code-cli-and-sessions, claude-code-headless-ci, cors, crawl-budget-faceted-navigation, csrf, edge-caching, enterprise-auth-ldap-kerberos, eventual-consistency, graphql-authorization, graphql-basics, html-form-http, http-caching-cdn, http-message, http-methods, hyperloglog, leetcode-longest-substring-without-repeating, llm-api-integration, load-balancing-algorithms, local-custom-domain, logging-tools-overview, mcp-protocol, mfa-totp, nextjs-route-handlers-proxy, nextjs-server-actions-security, nginx-https-performance, oauth, owasp-top-10-map, passkeys-webauthn, phishing-social-engineering, randomized-algorithms, rollback-strategy, scaling-horizontal-vertical, sd-load-balancer-stateless, security-logging-detection-siem, spa-auth-token-storage, spring-security-architecture, spring-security-jwt-oauth2, ssh-in-practice, sso-saml-oidc, ssrf, system-design-concepts-map, token-login, upper-layers-session-presentation-app, websocket-deep-dive, xss
@@ -3531,7 +3531,7 @@
 - 태그: OAuth, Security, HTTP, Authorization
 - 키워드: OAuth, PKCE, 인가 코드
 - 길이: 367줄
-- 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 콜백에서 막히는 세 가지 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 비밀번호를 넘기면 안 되는 이유 / 등장하는 네 주체 / 버튼을 누르면 일어나는 일 / 인가 요청 주소 뜯어보기 / 토큰은 두 개가 온다 / 비밀을 숨길 수 없는 앱: PKCE / 구현하면서 놓치기 쉬운 것 / 인가 코드 말고 다른 방식들 / 로그인까지 하려면: OpenID Connect / 콜백에서 막히는 세 가지 / 비밀번호 대신 범위와 수명이 정해진 열쇠 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: logging-tools-overview, api-key-hmac-auth, token-login, spring-security-jwt-oauth2, cookie-session-login
 - 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, api-test-automation, authn-vs-authz, backend-engineer-roadmap, frontend-hosting-platforms, github-apps-api, islands-resumability, jwt-key-rotation, local-custom-domain, mcp-protocol, mfa-totp, owasp-top-10-map, react-server-components, sd-notification-system, spa-auth-token-storage, spring-security-jwt-oauth2, sso-saml-oidc, system-design-concepts-map, token-login, zero-trust-architecture
 
@@ -3574,7 +3574,7 @@
 - 태그: Authentication, JWT, Token, Security
 - 키워드: JWT, 리프레시 토큰, 액세스 토큰
 - 길이: 423줄
-- 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / Node에서 서명하고 검증하기 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 401이 쏟아지면 토큰부터 뜯어 본다 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 명단 대신 손목 팔찌 / 로그인하고 API를 부르기까지 / JWT 뜯어보기 / 내용을 바꾸면 어떻게 될까 / 비밀 키 하나냐, 열쇠 한 쌍이냐 / JWT에서 자주 나오는 구멍 / Node에서 서명하고 검증하기 / 한 번 준 토큰은 되돌리기 어렵다 / 토큰은 어디에 둘까 / 쿠키 세션과 나란히 놓고 보면 / 401이 쏟아지면 토큰부터 뜯어 본다 / 서버는 서명만 보고, 회수는 리프레시 토큰이 맡는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: cookie-session-login, pattern-strategy, oauth
 - 키워드 백링크 →: browser-storage, base64, csrf, sd-start-single-server, jwt-key-rotation
 - 이 글로 오는 글 ←: api-gateway-use-cases, api-key-hmac-auth, authn-vs-authz, backend-engineer-roadmap, base64, browser-storage, clock-skew, cookie-session-login, csrf, enterprise-auth-ldap-kerberos, gateway, git-first-hour, git-remote-collaboration, github-actions-docker-ecr, github-apps-api, github-repo-governance, http-message, http-status-codes, jwt-key-rotation, k8s-serviceaccount-tokens, kubeconfig-contexts, mcp-protocol, multi-tenancy-isolation, network-attacks-l2-l3, nextjs-route-handlers-proxy, oauth, opensearch-cluster-operations, owasp-top-10-map, passkeys-webauthn, pattern-strategy, reverse-proxy-lb-api-gateway, sd-load-balancer-stateless, sd-notification-system, secrets-management, security-logging-detection-siem, spa-auth-token-storage, spring-mvc-request-lifecycle, spring-security-architecture, spring-security-jwt-oauth2, sso-saml-oidc, system-design-concepts-map, zero-trust-architecture
@@ -3857,7 +3857,7 @@
 - 태그: Node.js, Database, PostgreSQL, Backend, TypeScript
 - 키워드: 쿼리 빌더, Prisma, Drizzle, Active Record, Data Mapper
 - 길이: 475줄
-- 소제목: 예제 테이블 / 세 층: 드라이버, 쿼리 빌더, ORM / 드라이버: SQL을 내가 쓴다 / 같은 풀에서 트랜잭션을 걸면 / 쿼리 빌더: SQL을 함수로 조립한다 / 직접 해 보기: WHERE 절 조립기 / ORM: 객체를 말하면 SQL이 나온다 / Active Record와 Data Mapper / 마이그레이션은 어디서 시작하나 / 언제 ORM이 독이 되나 / 무엇을 고를까 / 다시 Prisma로 옮기자는 말로 / 면접에서 나올 만한 질문
+- 소제목: 예제 테이블 / 세 층: 드라이버, 쿼리 빌더, ORM / 드라이버: SQL을 내가 쓴다 / 같은 풀에서 트랜잭션을 걸면 / 쿼리 빌더: SQL을 함수로 조립한다 / 직접 해 보기: WHERE 절 조립기 / ORM: 객체를 말하면 SQL이 나온다 / Active Record와 Data Mapper / 마이그레이션은 어디서 시작하나 / 언제 ORM이 독이 되나 / 팀이 SQL을 아는가, CRUD가 대부분인가 / 다시 Prisma로 옮기자는 말로 / 면접에서 나올 만한 질문
 - 직접 링크 →: n-plus-one-queries, db-migration-tools, connection-pool, hexagonal-architecture, zero-downtime-migrations
 - 키워드 백링크 →: postgres-slow-db-triage, k8s-deploy-pipeline-eks, js-template-literals, mongodb-document-model, js-numbers-bigint, ts-declaration-files-modules, pattern-proxy, sql-batch-timeout-pool, sql-query-rewrite
 - 이 글로 오는 글 ←: db-migration-tools, enterprise-application-patterns, fp-functors-monads-js, integration-tests-real-db, js-template-literals, n-plus-one-queries, pattern-abstract-factory, pattern-builder, pattern-singleton, sql-query-rewrite, terraform-testing-policy-scanning
@@ -3969,7 +3969,7 @@
 - 태그: Spring, Java, Database, Backend, MongoDB
 - 키워드: 파생 쿼리, Spring Data JDBC, SimpleJpaRepository, 인터페이스 프로젝션
 - 길이: 433줄
-- 소제목: 예제 테이블 / 인터페이스 뒤에는 프록시가 서 있다 / 메서드 이름이 쿼리가 된다 / 이름이 문장이 되면 @Query로 옮긴다 / Page와 Slice는 count 쿼리 하나 차이다 / 프로젝션: 필요한 열만 읽는다 / Spring Data JDBC: 같은 인터페이스, 다른 철학 / Spring Data MongoDB: 같은 이름, 문서 쿼리 / 무엇을 고르나 / 현장에서 리포지토리가 새는 순간 / 이름 뒤의 실제 쿼리를 본다 / 면접에서 나올 만한 질문
+- 소제목: 예제 테이블 / 인터페이스 뒤에는 프록시가 서 있다 / 메서드 이름이 쿼리가 된다 / 이름이 문장이 되면 @Query로 옮긴다 / Page와 Slice는 count 쿼리 하나 차이다 / 프로젝션: 필요한 열만 읽는다 / Spring Data JDBC: 같은 인터페이스, 다른 철학 / Spring Data MongoDB: 같은 이름, 문서 쿼리 / 같은 겉모습, 다른 저장 경로 / 현장에서 리포지토리가 새는 순간 / 이름 뒤의 실제 쿼리를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: jpa-persistence-context, jpa-entity-relationships, spring-boot-auto-configuration, ddd-tactical-patterns, mongodb-document-model, mongodb-indexes-explain, spring-boot-testing
 - 키워드 백링크 →: spring-boot-4-migration, sql-query-rewrite, optimistic-locking, loading-patterns, ddd-bounded-context, pattern-proxy
 - 이 글로 오는 글 ←: backend-language-comparison
@@ -4228,7 +4228,7 @@
 - 태그: Git, DevOps
 - 키워드: fast-forward, 3-way 병합, detached HEAD, merge base, first-parent
 - 길이: 695줄
-- 소제목: 브랜치는 커밋에 붙은 이름표다 / switch와 checkout은 무엇이 다른가 / HEAD가 브랜치를 떠나면 / fast-forward를 막거나 강제하기 / 곧게 이어지지 않으면 세 스냅샷을 비교한다 / ours가 두 개라서 헷갈리는 병합 전략 / 다 쓴 브랜치는 지운다 / 원격 브랜치와 얼마나 차이 나는지 / 현장에서 병합 히스토리를 읽는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 브랜치는 커밋에 붙은 이름표다 / switch와 checkout은 무엇이 다른가 / HEAD가 브랜치를 떠나면 / fast-forward를 막거나 강제하기 / 곧게 이어지지 않으면 세 스냅샷을 비교한다 / ours가 두 개라서 헷갈리는 병합 전략 / 다 쓴 브랜치는 지운다 / 원격 브랜치와 얼마나 차이 나는지 / 현장에서 병합 히스토리를 읽는 순간 / 브랜치는 이름표, 병합은 이름표 밀기나 세 스냅샷 비교 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-merge-conflict, git-internals-basics, git-staging-area, git-stash-reflog, git-branching-strategy, git-rebase, git-remote-collaboration
 - 이 글로 오는 글 ←: backend-engineer-roadmap, claude-code-parallel-and-scheduled, git-branching-strategy, git-features-map, git-first-hour, git-ignore-config, git-internals-basics, git-merge-conflict, git-rebase, git-remote-collaboration, git-repo-errors, git-stacked-prs, git-staging-area, git-tips-advanced, git-troubleshooting, git-undo, jenkins-argocd-push-pull, monorepo-build-cache, sd-file-sync-conflicts
 
@@ -4269,7 +4269,7 @@
 - 요약: 팀 pre-commit 훅이 어떤 팀원에게는 안 걸리는 이유에서 시작해, .git/hooks가 공유되지 않는 까닭과 core.hooksPath·husky·pre-commit 프레임워크로 나누는 법, 클라이언트 훅과 서버 훅의 차이, --no-verify로 우회되니 CI에서 다시 검사해야 하는 이유를 실제 출력으로 본다.
 - 태그: Git, DevOps, CI/CD
 - 키워드: core.hooksPath, pre-receive 훅, husky 설정, lefthook
-- 길이: 512줄
+- 길이: 508줄
 - 소제목: 훅은 정해진 이름의 실행 파일일 뿐이다 / .git/hooks는 왜 같이 올라가지 않나 / 커밋 한 번, 푸시 한 번에 끼어드는 자리 / pre-commit은 스테이징된 것만 본다 / commit-msg는 메시지 파일 하나를 받는다 / pre-push는 무엇을 어디로 올리는지 표준 입력으로 받는다 / post-checkout은 결과를 바꾸지 못한다 / 팀이 같은 훅을 쓰게 하는 방법 / --no-verify 한 줄이면 끝난다 / 서버 훅: 건너뛸 수 없는 마지막 문 / 훅이 미움받지 않게 운영하기 / 로컬 훅은 도우미, 판정은 서버가 한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-tips-advanced, git-staging-area, git-large-files-secrets, github-repo-governance
 - 키워드 백링크 →: git-branching-strategy, webhooks
@@ -4281,7 +4281,7 @@
 - 태그: Git, DevOps
 - 키워드: .gitignore, includeIf, core.autocrlf
 - 길이: 432줄
-- 소제목: 올리지 않을 파일은 .gitignore로 / 설정은 세 겹으로 쌓인다 / 줄바꿈 문자가 diff 전체를 바꿀 때 / 현장에서 이 규칙들이 문제가 되는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 올리지 않을 파일은 .gitignore로 / 설정은 세 겹으로 쌓인다 / 줄바꿈 문자가 diff 전체를 바꿀 때 / 현장에서 이 규칙들이 문제가 되는 순간 / 추적 전에만 듣고, 마지막 줄이 이긴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-staging-area, git-undo, git-troubleshooting, git-branch-merge
 - 키워드 백링크 →: bash-scripting, db-modeling-normalization
 - 이 글로 오는 글 ←: claude-code-project-structure, git-first-hour, git-internals-basics, git-large-files-secrets, git-repo-errors, git-staging-area, git-troubleshooting, k8s-project-structure, npm-package-publishing, regex-and-globbing
@@ -4292,7 +4292,7 @@
 - 태그: Git, DevOps
 - 키워드: blob 객체, 내용 주소 지정, packfile, annotated tag
 - 길이: 583줄
-- 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 서버 하나에 모든 걸 맡기지 않으려고 / 변경분이 아니라 스냅샷을 찍는다 / 객체 네 가지를 직접 열어 본다 / 해시는 내용에서 나온다 / .git 폴더가 저장소의 전부다 / 현장에서 해시로 "같은가"를 확인하는 순간 / blob·tree·commit, 그리고 브랜치는 파일 하나 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-staging-area, git-ignore-config, git-branch-merge, merkle-tree, git-troubleshooting, git-stash-reflog
 - 키워드 백링크 →: github-actions-docker-ecr, git-tips-advanced, git-branching-strategy, git-first-hour, js-binary-data-typed-arrays, git-large-files-secrets, sd-object-storage-architecture, build-caching
 - 이 글로 오는 글 ←: build-caching, git-branch-merge, git-features-map, git-first-hour, git-large-files-secrets, git-remote-collaboration, git-repo-errors, git-staging-area, hash-hmac-password-hashing, merkle-tree, pattern-facade, pattern-flyweight, pattern-memento
@@ -4314,7 +4314,7 @@
 - 태그: Git, DevOps
 - 키워드: 병합 충돌, rerere, zdiff3
 - 길이: 532줄
-- 소제목: 같은 줄을 둘이 고쳤을 때 / 충돌 중에 Git이 들고 있는 것 / 충돌을 푸는 순서 / 같은 충돌을 두 번 풀지 않게 / 충돌을 덜 만드는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 같은 줄을 둘이 고쳤을 때 / 충돌 중에 Git이 들고 있는 것 / 충돌을 푸는 순서 / 같은 충돌을 두 번 풀지 않게 / 충돌을 덜 만드는 습관 / 충돌은 같은 자리를 양쪽이 고쳤을 때만 생긴다 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branch-merge, git-rebase
 - 키워드 백링크 →: linters-formatters, git-staging-area
 - 이 글로 오는 글 ←: claude-code-parallel-and-scheduled, git-branch-merge, git-features-map, git-first-hour, git-rebase, git-staging-area, git-tips-advanced, sd-file-sync-conflicts
@@ -4325,7 +4325,7 @@
 - 태그: Git, DevOps
 - 키워드: interactive rebase, git rebase, autosquash, pull.rebase
 - 길이: 799줄
-- 소제목: rebase는 커밋을 새로 만든다 / merge로 할지 rebase로 할지 / 다시 적용하다 충돌이 나면 / 커밋을 고르고 합치고 고쳐 쓰기 / 고칠 커밋을 미리 표시해 두기 / 브랜치 일부만 다른 곳으로 / 쌓아 올린 브랜치를 한꺼번에 / pull할 때마다 생기는 병합 커밋 / 공유한 커밋은 다시 쓰지 않는다 / rebase를 잘못했을 때 / 병합 커밋까지 옮겨야 할 때 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: rebase는 커밋을 새로 만든다 / merge로 할지 rebase로 할지 / 다시 적용하다 충돌이 나면 / 커밋을 고르고 합치고 고쳐 쓰기 / 고칠 커밋을 미리 표시해 두기 / 브랜치 일부만 다른 곳으로 / 쌓아 올린 브랜치를 한꺼번에 / pull할 때마다 생기는 병합 커밋 / 공유한 커밋은 다시 쓰지 않는다 / rebase를 잘못했을 때 / 병합 커밋까지 옮겨야 할 때 / 다시 적용해 새 커밋을 만드는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branch-merge, git-branching-strategy, git-merge-conflict, git-stacked-prs, git-remote-collaboration, git-stash-reflog, git-undo
 - 키워드 백링크 →: git-tips-advanced, github-repo-governance, git-staging-area
 - 이 글로 오는 글 ←: git-branch-merge, git-features-map, git-first-hour, git-merge-conflict, git-remote-collaboration, git-stacked-prs, git-troubleshooting
@@ -4369,7 +4369,7 @@
 - 태그: Git, DevOps
 - 키워드: 스테이징 영역, 작업 트리, git add -p
 - 길이: 631줄
-- 소제목: 파일은 세 구역을 오간다 / 파일의 상태는 두 글자로 읽는다 / 커밋하고 히스토리를 읽는 명령 / git diff에 무엇과 무엇을 넣느냐 / 커밋 직전에 인덱스를 보는 습관 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 파일은 세 구역을 오간다 / 파일의 상태는 두 글자로 읽는다 / 커밋하고 히스토리를 읽는 명령 / git diff에 무엇과 무엇을 넣느냐 / 커밋 직전에 인덱스를 보는 습관 / 커밋은 작업 트리가 아니라 인덱스를 찍는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-internals-basics, git-remote-collaboration, git-ignore-config, git-hooks
 - 키워드 백링크 →: git-branch-merge, git-stash-reflog, git-merge-conflict
 - 이 글로 오는 글 ←: backend-engineer-roadmap, git-branch-merge, git-features-map, git-first-hour, git-hooks, git-ignore-config, git-internals-basics, git-large-files-secrets, git-merge-conflict, git-rebase, git-stash-reflog, git-tips-advanced, git-troubleshooting, git-undo, ml-experiment-tracking, pattern-facade, secrets-management
@@ -4413,7 +4413,7 @@
 - 태그: Git, DevOps
 - 키워드: git reset, git revert, git restore, git clean
 - 길이: 595줄
-- 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 비밀 값을 커밋했을 때 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 실수가 어디에 있는지부터 본다 / 파일에서 고친 것을 버린다 / add한 것을 내린다 / 방금 한 커밋을 고친다 / reset은 무엇을 어디까지 옮기나 / 푸시한 커밋은 반대 커밋으로 되돌린다 / 병합을 revert하면 다시 합칠 때 함정이 있다 / 비밀 값을 커밋했을 때 / 실수가 난 자리로 명령을 고른다 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-stash-reflog, git-staging-area, git-troubleshooting
 - 키워드 백링크 →: git-large-files-secrets, git-branch-merge, secrets-management
 - 이 글로 오는 글 ←: argocd-basics, backend-engineer-roadmap, git-features-map, git-first-hour, git-ignore-config, git-large-files-secrets, git-rebase, git-stash-reflog, git-troubleshooting, gitops-argocd-vs-flux, helm-dependencies-oci-gitops, jenkins-argocd-push-pull, k8s-deploy-pipeline-eks, refactoring-code-smells, rollback-strategy
@@ -4445,7 +4445,7 @@
 - 요약: 리뷰 없이 main에 바로 푸시된 한 줄이 장애를 낸 뒤에서 출발해 ruleset과 브랜치 보호, 승인 뒤 새 커밋을 다루는 두 옵션, 이름으로 걸리는 필수 검사의 함정, 마지막 줄이 이기는 CODEOWNERS, 팀 단위 권한, fork PR과 pull_request_target을 본다. 템플릿과 이슈 폼, 라벨과 Projects, Dependabot·secret scanning·code scanning까지 저장소가 대신 지키게 만드는 설정을 정리한다.
 - 태그: Git, DevOps, Security, CI/CD
 - 키워드: CODEOWNERS, 브랜치 보호 규칙, 필수 상태 검사, pull_request_target
-- 길이: 505줄
+- 길이: 499줄
 - 소제목: 규칙은 사람보다 서버가 지킨다 / 브랜치 보호 규칙과 ruleset / 승인 뒤에 커밋이 또 올라오면 / 필수 상태 검사가 영원히 기다리는 이유 / CODEOWNERS는 마지막 줄이 이긴다 / 누가 무엇을 할 수 있나 / 공개 저장소와 비공개 저장소 / PR이 리뷰받기 좋은 모양 / 템플릿과 CONTRIBUTING이 대신 묻는 것 / 라벨, 이슈, Projects 보드로 흐름을 본다 / 저장소가 대신 봐 주는 보안 / 리뷰가 병목이 될 때 / GitLab과 Bitbucket에서는 이름이 다르다 / 그 금요일의 푸시를 다시 막는다면 / 면접에서 나올 만한 질문
 - 직접 링크 →: git-branching-strategy, code-review-practices, git-stacked-prs, git-large-files-secrets, dependency-hell
 - 키워드 백링크 →: github-actions-docker-ecr, github-apps-api, github-pull-request-flow, k8s-deploy-pipeline-eks, rest-api-design, token-login, build-caching, sdlc-models-agile-scrum
@@ -4459,7 +4459,7 @@
 - 태그: Concurrency, Distributed Systems, Architecture, Backend
 - 키워드: 액터 모델, 메일박스, 감독 트리, let it crash
 - 길이: 238줄
-- 소제목: 액터는 상태를 혼자 쥐고 쪽지를 하나씩 읽는다 / 메시지가 흐르는 모습 / let it crash: 고치지 말고 다시 세운다 / 위치 투명성: 같은 코드로 한 대와 여러 대를 / 액터 모델이 조심해야 하는 곳 / Go 채널과 무엇이 다른가 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 액터는 상태를 혼자 쥐고 쪽지를 하나씩 읽는다 / 메시지가 흐르는 모습 / let it crash: 고치지 말고 다시 세운다 / 위치 투명성: 같은 코드로 한 대와 여러 대를 / 액터 모델이 조심해야 하는 곳 / Go 채널과 무엇이 다른가 / 공유하지 않으니 잠글 것도 없다 / 면접에서 나올 만한 질문
 - 직접 링크 →: deadlocks, go-concurrency-basics, race-conditions, backpressure
 - 키워드 백링크 →: abort-controller, tcp-reliability-congestion, mutex-semaphore-monitor, http-methods
 - 이 글로 오는 글 ←: fault-tolerance, sd-email-protocols
@@ -4547,7 +4547,7 @@
 - 태그: Security, Linux, Troubleshooting, Performance
 - 키워드: 버퍼 오버플로, 스택 카나리, use-after-free, ASLR
 - 길이: 299줄
-- 소제목: 스택 프레임에 돌아갈 주소가 적혀 있다 / 힙에서도 비슷한 일이, 다만 다른 모양으로 / 봉인을 붙인다: 스택 카나리 / 데이터에서는 실행하지 않는다: NX / 주소를 숨긴다: ASLR과 PIE / 세 방어가 겹쳐서 하는 일 / 언어가 대신 막는다: 메모리 안전 언어 / 안전 언어에도 구멍이 다시 생기는 자리 / 현장에서 메모리 버그를 좁히는 법 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 스택 프레임에 돌아갈 주소가 적혀 있다 / 힙에서도 비슷한 일이, 다만 다른 모양으로 / 봉인을 붙인다: 스택 카나리 / 데이터에서는 실행하지 않는다: NX / 주소를 숨긴다: ASLR과 PIE / 세 방어가 겹쳐서 하는 일 / 언어가 대신 막는다: 메모리 안전 언어 / 안전 언어에도 구멍이 다시 생기는 자리 / 현장에서 메모리 버그를 좁히는 법 / 방어는 겹겹이, 해법은 언어에서 / 면접에서 나올 만한 질문
 - 직접 링크 →: logic-gates-alu, cpu-instruction-cycle, virtual-memory-paging
 - 키워드 백링크 →: js-execution-context, js-memory-leak, postgres-slow-db-triage, js-var-let-const
 - 이 글로 오는 글 ←: cpu-instruction-cycle
@@ -4936,7 +4936,7 @@
 - 태그: VectorDB, Embedding, AI, Search
 - 키워드: 벡터 DB, 임베딩, HNSW
 - 길이: 394줄
-- 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / pgvector를 붙였는데 결과가 이상할 때 / 벡터 DB 고르기 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 뜻을 좌표로 바꾸기 / 가깝다는 건 어떻게 재나 / 하나하나 다 재면 느리다 / 지름길이 있는 그래프, HNSW / 정확도와 속도를 맞바꾸는 손잡이 / HNSW 말고 다른 인덱스 / 실제로는 어디에 쓰나: RAG / 직접 붙여 볼 때 / pgvector를 붙였는데 결과가 이상할 때 / 벡터 DB 고르기 / 뜻을 좌표로 바꾸고, 가까운 쪽을 따라간다 / 면접에서 나올 만한 질문
 - 직접 링크 →: embedding-models-applications
 - 키워드 백링크 →: rag-retrieval-quality, mongodb-document-model, pythagorean-theorem, db-index-design, elasticsearch-inverted-index, self-hosting-llm-inference, rag-classic-pipeline, db-modeling-normalization
 - 이 글로 오는 글 ←: agent-frameworks-comparison, agent-memory, agentic-rag, ai-search-grounding-geo, db-architecture-by-scale, db-types-overview, elasticsearch-inverted-index, embedding-models-applications, fine-tuning-vs-rag-vs-prompting, go-language-essentials, graph-rag, leetcode-k-closest-points-to-origin, llm-app-security-guardrails, llm-evals, llm-model-selection, llm-observability, ml-fundamentals, ml-model-monitoring-drift, multimodal-llm-apps, pythagorean-theorem, quadtree, rag-classic-pipeline, rag-patterns-overview, rag-retrieval-quality, redis-modules-stack, sd-music-streaming, search-engine-ranking-pagerank, self-hosting-llm-inference, spring-ai-agents, transformer-attention-kv-cache
@@ -6314,7 +6314,7 @@
 - 요약: 웹 서비스를 앱 스토어와 데스크톱에도 내야 하는 상황에서 화면을 누가 그리는지로 선택지를 나눈다. 웹뷰 하이브리드(Capacitor), 브리지에서 JSI로 옮겨 간 React Native, 자체 엔진의 Flutter, 크로미움을 들고 가는 Electron의 프로세스와 IPC, OS 웹뷰를 빌리는 Tauri를 비교하고 Electron에서 XSS가 원격 코드 실행이 되는 길과 막는 법까지 다룬다.
 - 태그: Frontend, Architecture, Security, JavaScript, Browser
 - 키워드: Electron, Tauri, React Native, contextIsolation, Capacitor
-- 길이: 351줄
+- 길이: 345줄
 - 소제목: 웹 서비스를 앱으로도 내야 할 때 / 웹뷰 안에 웹 앱을 넣는 하이브리드 / React Native는 OS 위젯에게 그리게 한다 / Flutter는 자기 붓으로 모든 픽셀을 칠한다 / Electron은 브라우저를 통째로 들고 간다 / Electron 앱에서 XSS가 원격 코드 실행이 되는 길 / Tauri는 OS의 웹뷰를 빌린다 / 데스크톱 앱을 내보낼 때 따라오는 일 / 무엇을 고를지 정하는 질문 / 현장에서 자주 막히는 지점 / 면접에서 나올 만한 질문
 - 직접 링크 →: pwa-install-offline, frontend-monorepo, xss, web-security-headers
 - 키워드 백링크 →: css-flexbox-grid, event-loop, what-happens-google-com
@@ -6458,7 +6458,7 @@
 - 요약: 시안과 화면의 색이 다르게 보이는 상황에서 출발해 hex·rgb·hsl의 관계와 HSL 밝기가 눈에 고르지 않은 이유, oklch와 상대 색 문법으로 단계 색 만들기, P3 색역과 light-dark(), 배경 레이어와 단축 속성의 초기값, 그라데이션을 섞는 색 공간을 Chromium에서 재 본다. background-attachment: fixed가 모바일에서 안 되는 이유와 그림자·윤곽선·opacity·filter가 레이아웃 대신 페인트와 합성, 포함 블록에 주는 영향까지 다룬다.
 - 태그: CSS, Frontend, Browser, Performance, Accessibility
 - 키워드: oklch, 색 공간, Display P3, background-attachment, box-shadow
-- 길이: 400줄
+- 길이: 396줄
 - 소제목: 시안과 화면의 색이 다르다 / hex, rgb, hsl은 같은 색을 다르게 적은 것이다 / HSL의 50%는 눈에 같은 밝기가 아니다 / 눈에 고른 단계 색은 oklch로 만든다 / 넓은 색역 화면에서만 보이는 색 / 다크 모드에서 같은 색이 번져 보인다 / 배경은 여러 겹을 쌓는다 / 그라데이션은 어느 색 공간에서 섞느냐가 중요하다 / 휴대폰에서 background-attachment: fixed가 움직인다 / 테두리, 그림자, 윤곽선은 자리를 차지하나 / 레이아웃은 그대로인데 비싼 속성 / opacity와 filter가 바꾸는 것은 색만이 아니다 / 현장에서 색과 배경 문제를 좁히는 법 / 면접에서 나올 만한 질문
 - 직접 링크 →: css-custom-properties, web-accessibility, css-sticky-scroll-snap, animation-performance, browser-rendering-pipeline, css-position-stacking-context
 - 키워드 백링크 →: frontend-testing-strategy, what-happens-google-com, smoke-sanity-regression-testing, design-system-building, scroll-patterns-overview, parallax-scrollytelling
@@ -6481,7 +6481,7 @@
 - 태그: CSS, Frontend, Browser, Accessibility
 - 키워드: Flexbox, CSS Grid, flex-basis, 서브그리드
 - 길이: 429줄
-- 소제목: 한 방향으로 늘어놓는 flex, 칸을 먼저 긋는 grid / 주축과 교차축 / 아이템 크기가 정해지는 순서 / flex: 1은 1 1 0%다 / 직접 나눠 보기 / 줄어들지 않는 아이템과 min-width: 0 / 줄을 바꾸면 마지막 줄이 늘어난다 / Grid는 트랙을 먼저 정한다 / auto-fill과 auto-fit / 영역에 이름 붙이기 / 서브그리드로 카드 안쪽 줄 맞추기 / 칸에 넣지 않고 단을 따라 흐르는 multi-column / 개발자 도구로 트랙과 남는 공간 보기 / 무엇을 고를까 / 면접에서 나올 만한 질문
+- 소제목: 한 방향으로 늘어놓는 flex, 칸을 먼저 긋는 grid / 주축과 교차축 / 아이템 크기가 정해지는 순서 / flex: 1은 1 1 0%다 / 직접 나눠 보기 / 줄어들지 않는 아이템과 min-width: 0 / 줄을 바꾸면 마지막 줄이 늘어난다 / Grid는 트랙을 먼저 정한다 / auto-fill과 auto-fit / 영역에 이름 붙이기 / 서브그리드로 카드 안쪽 줄 맞추기 / 칸에 넣지 않고 단을 따라 흐르는 multi-column / 개발자 도구로 트랙과 남는 공간 보기 / 내용이 크기를 정하면 flex, 컨테이너가 정하면 grid / 면접에서 나올 만한 질문
 - 직접 링크 →: css-box-model-layout, css-sticky-scroll-snap
 - 키워드 백링크 →: responsive-design, loading-patterns
 - 이 글로 오는 글 ←: cross-platform-apps, css-box-model-layout, css-position-stacking-context, css-typography, frontend-first-steps, frontend-i18n-intl, spacing-sizing-type-scale
@@ -7580,7 +7580,7 @@
 - 태그: React, TypeScript, Performance, Browser, Frontend
 - 키워드: React Router, TanStack Router, 중첩 라우트, 라우트 loader
 - 길이: 563줄
-- 소제목: 주소 하나가 화면 세 겹이 된다 / 어떤 라우트가 이기나 / 컴포넌트가 데이터를 부르면 폭포가 된다 / loader와 action: 데이터를 주소에 붙인다 / 라우트 단위로 코드를 자른다 / 검색 파라미터를 상태로 쓰기 / 들어가기 전에 막는 자리 / 뒤로 가기를 눌렀을 때 스크롤 / React Router의 세 가지 모드 / TanStack Router: 타입이 주소를 안다 / 무엇을 고를까 / 다시 스피너 세 개로 / 면접에서 나올 만한 질문
+- 소제목: 주소 하나가 화면 세 겹이 된다 / 어떤 라우트가 이기나 / 컴포넌트가 데이터를 부르면 폭포가 된다 / loader와 action: 데이터를 주소에 붙인다 / 라우트 단위로 코드를 자른다 / 검색 파라미터를 상태로 쓰기 / 들어가기 전에 막는 자리 / 뒤로 가기를 눌렀을 때 스크롤 / React Router의 세 가지 모드 / TanStack Router: 타입이 주소를 안다 / 서버를 얼마나 쓰고 타입을 얼마나 원하나 / 다시 스피너 세 개로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rendering-csr-spa, react-suspense-error-boundary, react-forms-actions, client-data-cache, code-splitting, spa-auth-token-storage, nextjs-self-hosting-deployment, nextjs-static-dynamic-rendering, react-server-components
 - 키워드 백링크 →: http-caching-cdn, data-fetching-optimization, nextjs-app-router-routing, react-useeffect, rendering-strategies, frontend-hosting-platforms, db-modeling-normalization
 - 이 글로 오는 글 ←: aria-keyboard-focus, code-splitting, frontend-frameworks-compared, frontend-state-architecture, rendering-csr-spa, site-architecture-internal-linking
@@ -7700,8 +7700,8 @@
 - 요약: 상태 관리 라이브러리 회의가 결론 없이 끝나는 이유에서 출발해, 서버 상태를 덜어 낸 뒤 남는 저장소들이 같은 세 함수로 시작한다는 걸 본다. Redux Toolkit과 셀렉터, Zustand 5의 무한 루프와 useShallow, Jotai의 의존 그래프, MobX와 시그널, useSyncExternalStore와 tearing, 팀과 앱 규모별 선택 기준을 다루고 작은 저장소를 직접 만든다.
 - 태그: React, Frontend, Architecture, Performance, JavaScript
 - 키워드: Redux Toolkit, Zustand, Jotai, tearing, useSyncExternalStore
-- 길이: 498줄
-- 소제목: 저장소에 넣기 전에 덜어 낼 것 / 모든 저장소는 세 함수로 시작한다 / Redux: 바뀌는 길을 하나로 만든다 / useSelector는 액션마다 모든 셀렉터를 돈다 / Zustand: 훅 하나로 끝나는 바깥 저장소 / Jotai: 상태를 원자로 쪼개고 의존을 따라간다 / MobX와 시그널: 읽은 것을 기억해 두는 방식 / 렌더링 도중에 저장소가 바뀌면 / 작은 저장소를 직접 만들어 보기 / 무엇을 고를까 / 면접에서 나올 만한 질문
+- 길이: 494줄
+- 소제목: 저장소에 넣기 전에 덜어 낼 것 / 모든 저장소는 세 함수로 시작한다 / Redux: 바뀌는 길을 하나로 만든다 / useSelector는 액션마다 모든 셀렉터를 돈다 / Zustand: 훅 하나로 끝나는 바깥 저장소 / Jotai: 상태를 원자로 쪼개고 의존을 따라간다 / MobX와 시그널: 읽은 것을 기억해 두는 방식 / 렌더링 도중에 저장소가 바뀌면 / 작은 저장소를 직접 만들어 보기 / 서버 상태를 빼고 남은 전역 값부터 센다 / 면접에서 나올 만한 질문
 - 직접 링크 →: client-data-cache, frontend-state-architecture, pattern-observer, js-immutability-react, fp-in-react
 - 키워드 백링크 →: json-crud-http, browser-storage, react-concurrent-transitions, js-memoization, rendering-strategies, code-review-practices, react-memoization-hooks, js-pure-functions, ddd-tactical-patterns, react-rerender, js-primitive-vs-reference
 - 이 글로 오는 글 ←: client-data-cache, fp-in-react, frontend-frameworks-compared, frontend-state-architecture, frontend-testing-strategy, js-immutability-react, pattern-observer, react-concurrent-transitions, react-context, react-custom-hooks-rules, react-fiber-render-commit, react-rerender, react-without-effects, rendering-ssr
@@ -7993,7 +7993,7 @@
 - 태그: SEO, HTTP, Next.js, Nginx, Frontend
 - 키워드: 사이트 이전, 리다이렉트 체인, 주소 변경 도구, 리다이렉트 매핑
 - 길이: 453줄
-- 소제목: 도메인을 옮겼더니 다음 주 유입이 반으로 줄었다 / 3xx가 검색 엔진에 주는 신호 / 모든 구 주소를 홈으로 보내면 생기는 일 / 구 주소와 새 주소를 짝짓는 매핑 표 / 리다이렉트 체인을 한 번에 접기 / curl로 실제 응답을 따라가 보기 / 서버에 리다이렉트를 거는 자리 / 도메인과 프로토콜을 바꿀 때 / 점검 중에는 503과 Retry-After / 지운 페이지는 404인가 410인가 / 이전한 뒤 무엇을 지켜보나 / 다시 정리하면 / 면접에서 나올 만한 질문
+- 소제목: 도메인을 옮겼더니 다음 주 유입이 반으로 줄었다 / 3xx가 검색 엔진에 주는 신호 / 모든 구 주소를 홈으로 보내면 생기는 일 / 구 주소와 새 주소를 짝짓는 매핑 표 / 리다이렉트 체인을 한 번에 접기 / curl로 실제 응답을 따라가 보기 / 서버에 리다이렉트를 거는 자리 / 도메인과 프로토콜을 바꿀 때 / 점검 중에는 503과 Retry-After / 지운 페이지는 404인가 410인가 / 이전한 뒤 무엇을 지켜보나 / 영구면 301, 매핑 표는 빠짐없이 / 면접에서 나올 만한 질문
 - 직접 링크 →: seo-for-spa, http-status-codes, crawl-budget-faceted-navigation, nginx-basics, https-tls, ai-crawlers-bot-control, search-engine-ranking-pagerank
 - 키워드 백링크 →: ab-testing, rendering-strategies, seo-log-file-analysis-search-console, frontend-hosting-platforms, what-happens-google-com, count-min-sketch
 - 이 글로 오는 글 ←: ab-testing, ai-search-grounding-geo, leetcode-happy-number, sd-url-shortener-api-redirect, search-spam-policies-cloaking, seo-log-file-analysis-search-console, site-architecture-internal-linking
@@ -8467,7 +8467,7 @@
 - 태그: WebSocket, HTTP, Network
 - 키워드: WebSocket, Server-Sent Events, 롱 폴링, EventSource
 - 길이: 604줄
-- 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 로컬에선 되는데 서버에 올리면 멈출 때 / 무엇을 고를까 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
+- 소제목: 몇 초마다 다시 묻기: 짧은 폴링 / 대답할 게 생길 때까지 붙잡아 두기: 롱 폴링 / 응답을 끝내지 않고 계속 보내기: SSE / 이벤트 스트림 한 덩어리 뜯어보기 / SSE가 걸려 넘어지는 곳 / HTTP를 벗어나 양방향으로: WebSocket / 업그레이드 요청 뜯어보기 / 서버가 여러 대가 되면 / 로컬에선 되는데 서버에 올리면 멈출 때 / 방향과 빈도가 방식을 정한다 / 다시 주문 화면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: http-versions, cors, resilience-patterns, nginx-reverse-proxy, operational-transform, crdt, websocket-deep-dive, long-polling, server-sent-events
 - 키워드 백링크 →: json-crud-http, reverse-proxy-lb-api-gateway, proxy-reverse-proxy, kafka-to-lake-pipeline, base64, kafka-basics, redis-basics, http-status-codes, backpressure
 - 이 글로 오는 글 ←: api-styles-overview, blue-green-deployment, cdn-edge-anycast, fe-sd-news-feed, frontend-as-distributed-system, frontend-browser-cache, graphql-authorization, graphql-basics, graphql-subscriptions-defer, http-streaming-sse, jenkins-on-kubernetes, jenkins-pipeline-basics, js-binary-data-typed-arrays, js-timers-accuracy, kubectl-essentials, llm-api-integration, load-balancer-basics, load-balancing-algorithms, loading-patterns, long-polling, mcp-protocol, message-queue-basics, networking-essentials-map, nginx-basics, nginx-reverse-proxy, nodejs-debugging-profiling, nodejs-server-runtime, operational-transform, osi-in-practice, queue-based-load-leveling, sd-chat-connections, sd-chat-message-storage, sd-chat-presence, sd-email-protocols, sd-file-sync-conflicts, sd-load-balancer-stateless, sd-maps-location-eta, sd-mq-consumer-groups, sd-nearby-friends, sd-news-feed-retrieval, server-sent-events, serverless-architecture, system-design-study-path, vpc-subnets-route-tables, web-workers, webhooks, websocket-deep-dive
@@ -8500,7 +8500,7 @@
 - 태그: DNS, TCP, TLS, HTTP, Browser
 - 키워드: HTTPS, 3-way handshake, HSTS, 렌더링 파이프라인
 - 길이: 412줄
-- 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 검색어인가, 주소인가 / 이름을 IP로 바꾸기: DNS / 서버와 연결 맺기: TCP와 TLS / 페이지를 요청하고 받기: HTTP / 받은 HTML을 화면에 그리기 / 캐시가 단계를 건너뛰게 해 준다 / 페이지가 안 뜰 때 몇 번째 단계인지 고르기 / 엔터 한 번에 일어나는 일을 한 줄로 이으면 / 면접에서 나올 만한 질문
 - 직접 링크 →: browser-rendering-pipeline, network-troubleshooting-by-layer, osi-in-practice
 - 키워드 백링크 →: http-caching-cdn, nginx-basics, dns, https-tls, hosts-file, webhooks, http-versions, cdn-edge-anycast, http-status-codes, ipv6-basics, first-page-from-power-on, udp-and-quic
 - 이 글로 오는 글 ←: animation-performance, api-gateway-use-cases, api-key-hmac-auth, architecture-docs-c4-adr, aws-core-services-map, aws-s3-in-practice, backend-engineer-roadmap, base64, browser-rendering-pipeline, browser-storage, config-management-tools, container-orchestration-choices, container-supply-chain-security, cookie-session-login, core-web-vitals, cross-platform-apps, csrf, css-color-background, curl-for-debugging, data-center-infrastructure, devops-networking-roadmap, digital-signatures-certificates, dns, eks-cluster-basics, encryption-in-transit, enterprise-auth-ldap-kerberos, firewall-types-ngfw, first-page-from-power-on, frontend-browser-cache, frontend-hosting-platforms, gateway, git-first-hour, git-remote-collaboration, go-language-essentials, helm-dependencies-oci-gitops, hosts-file, html-form-http, http-caching-cdn, http-message, http-methods, http-status-codes, http-streaming-sse, http-versions, https-tls, ids-ips, iptables-basics, iptables-nat, k8s-admission-control, k8s-api-objects, k8s-certificates-pki, k8s-crd, k8s-gateway-api, k8s-multi-cluster, k8s-pod-probes, k8s-project-structure, k8s-service-types, kubernetes-ingress, latency-bandwidth-throughput, layer-link-ethernet-arp, layered-architecture, linux-archive-transfer, linux-package-management, local-custom-domain, mcp-protocol, network-attacks-l2-l3, network-layers-overview, network-monitoring, network-troubleshooting-by-layer, networking-essentials-map, nginx-basics, nginx-https-performance, nginx-reverse-proxy, nodejs-http-clients, opensearch-cluster-operations, osi-in-practice, packet-capture-tcpdump, packet-encapsulation, phishing-social-engineering, ports-and-sockets, proxy-reverse-proxy, pwa-install-offline, resource-hints-loading, reverse-proxy-lb-api-gateway, route53-routing-policies, sd-email-protocols, search-traffic-measurement, seo-for-spa, seo-redirects-site-migration, spa-auth-token-storage, tcp-connection-lifecycle, threat-modeling-stride, timeouts, upper-layers-session-presentation-app, vpc-basics, vpn-ipsec-wireguard, waf, wan-mpls-sd-wan-vrf, web-security-headers, web-server-vs-was, webhooks, wifi-standards-security, youtube-url-to-video
@@ -8534,7 +8534,7 @@
 - 요약: 리전이 죽었는데도 사용자가 옛 IP로 가는 장면에서 시작해 퍼블릭·프라이빗 호스팅 영역, Alias 레코드, 가중치·지연 시간·장애 조치·지리 라우팅, 헬스 체크가 레코드를 빼는 과정을 본다. 감지와 TTL로 전환 시간을 계산하고, 가중치 카나리의 한계와 Resolver 엔드포인트로 하이브리드 DNS를 잇는 법까지 다룬다.
 - 태그: AWS, DNS, Cloud, Network, Resilience
 - 키워드: Route 53, Alias 레코드, 가중치 라우팅, Route 53 Resolver, 호스팅 영역
-- 길이: 415줄
+- 길이: 411줄
 - 소제목: 이름을 담는 상자: 호스팅 영역 / 도메인 꼭대기와 AWS 자원을 가리키는 Alias / 같은 이름에 다른 답을 주는 규칙 / 헬스 체크가 레코드를 빼는 과정 / 전환이 늦어지는 시간을 계산한다 / 가중치 라우팅이 고르는 법 / 가중치로 카나리를 하면 생기는 일 / 회사 데이터센터와 VPC의 DNS를 잇는다 / 장애 중에 답을 확인하는 순서 / 다시 처음 장면으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: dns, failover, multi-region, vpc-basics, health-checks, cdn-edge-anycast, bgp-basics, canary-release, vpn-ipsec-wireguard
 - 키워드 백링크 →: rate-limiting-in-practice, service-mesh, http-versions, security-groups-nacl, osi-in-practice, what-happens-google-com, layer-ip-addressing, udp-and-quic
@@ -8693,7 +8693,7 @@
 - 태그: Network, Load Balancer, Algorithm, Performance
 - 키워드: Power of Two Choices, P2C, 가중 라운드 로빈, least request
 - 길이: 412줄
-- 소제목: 실험 무대: 서버 셋, 요청 2만 개 / 차례대로 돌리면 느린 서버가 무너진다 / 지금 덜 바쁜 서버로 / 모두가 같은 서버를 고를 때 / 둘만 뽑아서 비교하기 / 같은 키는 같은 서버로 / 응답 시간을 보는 방법들 / 무엇을 고를까 / 분배가 이상할 때 확인하는 순서 / 같은 숫자, 다른 부하 / 면접에서 나올 만한 질문
+- 소제목: 실험 무대: 서버 셋, 요청 2만 개 / 차례대로 돌리면 느린 서버가 무너진다 / 지금 덜 바쁜 서버로 / 모두가 같은 서버를 고를 때 / 둘만 뽑아서 비교하기 / 같은 키는 같은 서버로 / 응답 시간을 보는 방법들 / 같은 서버로 가야 하나, 비용이 고르지 않나 / 분배가 이상할 때 확인하는 순서 / 같은 숫자, 다른 부하 / 면접에서 나올 만한 질문
 - 직접 링크 →: load-balancer-basics, nginx-reverse-proxy, consistent-hashing, osi-in-practice
 - 키워드 백링크 →: iptables-nat, realtime-communication, iptables-basics, service-mesh, http-versions, nat-traversal, cookie-session-login, grpc, caching-strategies
 - 이 글로 오는 글 ←: api-gateway-use-cases, canary-release, cdn-edge-anycast, consistent-hashing, devops-networking-roadmap, greedy-algorithms, grpc, latency-bandwidth-throughput, load-balancer-basics, networking-essentials-map, nginx-reverse-proxy, pattern-strategy, reverse-proxy-lb-api-gateway, sd-load-balancer-stateless, system-design-concepts-map
@@ -8781,7 +8781,7 @@
 - 태그: Network, Security, Linux, Troubleshooting, VPN
 - 키워드: IPsec, WireGuard, IKEv2, AllowedIPs
 - 길이: 549줄
-- 소제목: 남의 길 위에 내 전용 통로를 낸다 / 패킷 안에 패킷을 넣는다 / IPsec은 두 단계로 나뉜다 / IPsec이 안 붙을 때 나오는 세 가지 메시지 / NAT를 지나는 법 / WireGuard는 설정할 게 거의 없다 / AllowedIPs가 라우팅과 방화벽을 겸한다 / 무엇을 터널로 보낼 것인가 / 무엇을 고를까 / 현장에서 VPN을 들여다보는 순서 / 결국 감싸고, 열쇠를 나누고, 무엇을 넣을지 정한다 / 면접에서 나올 만한 질문
+- 소제목: 남의 길 위에 내 전용 통로를 낸다 / 패킷 안에 패킷을 넣는다 / IPsec은 두 단계로 나뉜다 / IPsec이 안 붙을 때 나오는 세 가지 메시지 / NAT를 지나는 법 / WireGuard는 설정할 게 거의 없다 / AllowedIPs가 라우팅과 방화벽을 겸한다 / 무엇을 터널로 보낼 것인가 / 사이트 간은 IPsec, 사람 접속은 WireGuard / 현장에서 VPN을 들여다보는 순서 / 결국 감싸고, 열쇠를 나누고, 무엇을 넣을지 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: layer-mtu-fragmentation, sdn-vxlan-overlay, udp-and-quic, layer-ip-routing-icmp, zero-trust-architecture, bgp-basics
 - 키워드 백링크 →: vpc-peering-transit-privatelink, wan-mpls-sd-wan-vrf, browser-fetch, data-mesh-fabric, public-key-key-exchange, webhooks, what-happens-google-com, network-design-three-tier-spine-leaf, routing-protocols-ospf-rip-eigrp, ipv6-basics, sso-saml-oidc, pattern-abstract-factory, dns
 - 이 글로 오는 글 ←: bgp-basics, cloud-deployment-models-multicloud, devops-networking-roadmap, dhcp, docker-network-drivers, layer-mtu-fragmentation, networking-essentials-map, packet-encapsulation, route53-routing-policies, sdn-vxlan-overlay, udp-and-quic, wan-mpls-sd-wan-vrf, wifi-standards-security, zero-trust-architecture
@@ -9263,7 +9263,7 @@
 - 요약: cmd > log 2>&1과 cmd 2>&1 > log의 결과가 다른 이유를 프로세스의 fd 표로 확인하고, 출력·입력 리다이렉션, here document와 here string, 64KiB 파이프 버퍼와 SIGPIPE, 파이프 안 변수가 사라지는 이유를 본다. sudo echo가 Permission denied를 내는 이유, tee와 프로세스 치환, stderr만 따로 모으는 패턴까지 bash 5.2에서 직접 돌린다.
 - 태그: Linux, DevOps, Troubleshooting
 - 키워드: 리다이렉션, here document, here string, 프로세스 치환
-- 길이: 511줄
+- 길이: 507줄
 - 소제목: 프로세스는 번호 붙은 구멍 세 개로 시작한다 / 리다이렉션은 왼쪽부터 표의 칸을 바꾼다 / 출력 리다이렉션은 명령보다 먼저 파일을 연다 / 입력 리다이렉션은 0번을 바꾼다 / here document와 here string / 파이프는 두 프로세스를 동시에 띄운다 / sudo echo가 Permission denied를 내는 이유 / tee로 화면과 파일에 동시에 / 프로세스 치환은 출력을 파일 이름처럼 쓴다 / stderr만 따로 모으는 패턴 / 리다이렉션을 직접 따라가 보기 / 구멍 세 개와 왼쪽부터 / 면접에서 나올 만한 질문
 - 직접 링크 →: bash-scripting, bash-control-flow-functions, linux-network-tuning, linux-systemd-systemctl, bash-expansions-variables
 - 키워드 백링크 →: os-kernel-system-calls, shells-posix-compat, centralized-logging-pipeline
@@ -9343,7 +9343,7 @@
 - 태그: Security, Cookie, HTTP, Browser
 - 키워드: SameSite, 이중 제출 쿠키, 동기화 토큰, Sec-Fetch-Site
 - 길이: 283줄
-- 소제목: 쿠키가 알아서 붙는다는 것의 대가 / Set-Cookie에 붙는 옵션을 뜯어본다 / SameSite가 교차 사이트 요청을 거른다 / 브라우저만 믿지 않는다, 토큰과 Origin 검사 / JSON API와 CORS 사전 요청의 관계 / 실제로 CSRF를 만나는 순간 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 쿠키가 알아서 붙는다는 것의 대가 / Set-Cookie에 붙는 옵션을 뜯어본다 / SameSite가 교차 사이트 요청을 거른다 / 브라우저만 믿지 않는다, 토큰과 Origin 검사 / JSON API와 CORS 사전 요청의 관계 / 실제로 CSRF를 만나는 순간 / 쿠키 설정과 출처 확인을 겹친다 / 면접에서 나올 만한 질문
 - 직접 링크 →: cookie-session-login, cors, xss, http-methods, token-login
 - 키워드 백링크 →: owasp-top-10-map, browser-security-model, what-happens-google-com
 - 이 글로 오는 글 ←: browser-devtools-debugging, browser-security-model, browser-storage, cookie-session-login, cors, eventual-consistency, html-form-http, http-methods, local-custom-domain, nextjs-server-actions-security, owasp-top-10-map, spa-auth-token-storage, spring-security-architecture, spring-security-jwt-oauth2, sso-saml-oidc, ssrf, token-login, waf, websocket-deep-dive, xss
@@ -9398,7 +9398,7 @@
 - 태그: Security, Network, Firewall, Linux
 - 키워드: 차세대 방화벽, 상태 추적 검사, 패킷 필터, TLS 복호화, DMZ
 - 길이: 257줄
-- 소제목: 포트만 보는 가장 단순한 문 (패킷 필터) / 나간 연결을 기억하는 문 (상태 추적) / 요청을 대신 받아 주는 문 (프록시 방화벽) / 앱과 사람까지 보는 문 (차세대 방화벽) / 어디에 세우느냐가 절반이다 (DMZ) / 무엇을 고르나 / 면접에서 나올 만한 질문
+- 소제목: 포트만 보는 가장 단순한 문 (패킷 필터) / 나간 연결을 기억하는 문 (상태 추적) / 요청을 대신 받아 주는 문 (프록시 방화벽) / 앱과 사람까지 보는 문 (차세대 방화벽) / 어디에 세우느냐가 절반이다 (DMZ) / 보는 것이 많을수록 느리고 비싸다 / 면접에서 나올 만한 질문
 - 직접 링크 →: iptables-basics, security-groups-nacl, waf, ids-ips, ddos-protection, proxy-reverse-proxy
 - 키워드 백링크 →: sd-start-single-server, encryption-in-transit, what-happens-google-com, cloud-service-models-shared-responsibility, udp-and-quic
 - 이 글로 오는 글 ←: vpc-subnets-route-tables
@@ -9441,8 +9441,8 @@
 - 요약: 음수 가격 주문에서 시작해 검증과 인코딩의 역할을 나누고, 허용 목록·정규화 후 검증·zod 스키마를 신뢰 경계에 두는 법을 본다. 대량 할당, 프로토타입 오염, ReDoS, 유니코드 혼동 문자를 직접 재현하고 보안을 생각한 API 설계와 검증 실패 응답까지 정리했다.
 - 태그: Security, Backend, TypeScript, Node.js, API
 - 키워드: 입력 검증, 스키마 검증, 혼동 문자
-- 길이: 274줄
-- 소제목: 클라이언트 검증은 친절이지 방어가 아니다 / 경계에서 한 번, 출력에서 한 번 / 허용 목록이 먼저다 / 스키마로 경계를 지킨다 / 입력이 만드는 고전 취약점들 / 눈에 안 보이는 글자: 유니코드 / 보안을 생각한 API 설계 / 정리 / 면접에서 나올 만한 질문
+- 길이: 276줄
+- 소제목: 클라이언트 검증은 친절이지 방어가 아니다 / 경계에서 한 번, 출력에서 한 번 / 허용 목록이 먼저다 / 스키마로 경계를 지킨다 / 입력이 만드는 고전 취약점들 / 눈에 안 보이는 글자: 유니코드 / 보안을 생각한 API 설계 / 들어올 때 검증하고, 나갈 때 인코딩한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: xss, sql-injection, security-testing-sast-dast, path-traversal-file-upload, regex-and-globbing, authn-vs-authz
 - 키워드 백링크 →: character-encoding-unicode, js-prototype-chain, runtime-validation-zod, threat-modeling-stride, api-security-owasp-api-top10, floating-point-numbers, recursion-backtracking, db-modeling-normalization
 - 이 글로 오는 글 ←: ab-testing, agent-reasoning-patterns, api-gateway-use-cases, api-security-owasp-api-top10, api-test-automation, claude-code-models-and-cost, debounce-throttle, fault-tolerance, floating-point-numbers, fp-functors-monads-js, http-streaming-sse, js-destructuring, js-equality-coercion, js-error-handling, js-prototype-chain, js-truthy-falsy-typeof, json-crud-http, k8s-admission-control, k8s-api-objects, k8s-architecture, k8s-certifications, llm-api-integration, llm-app-security-guardrails, model-serving, mongodb-crud-operators, nextjs-route-handlers-proxy, nextjs-server-actions-security, owasp-top-10-map, path-traversal-file-upload, react-forms-actions, runtime-validation-zod, security-principles-cia-defense-in-depth, sql-injection, terraform-testing-policy-scanning, ts-narrowing, ts-type-system-basics, typescript-roadmap, waf, web-security-headers, xss
@@ -9452,7 +9452,7 @@
 - 요약: 같은 네트워크에 붙은 장비들이 서로를 너무 쉽게 믿는 데서 생기는 공격들을 본다. ARP 스푸핑과 중간자, MAC 플러딩, 가짜 DHCP, DNS 위조, 가짜 AP와 재전송을 방어(DAI, 포트 보안, DHCP 스누핑, DNSSEC)와 짝지어 다루고, 클라우드 VPC에서 왜 대부분 막히는지도 짚는다.
 - 태그: Security, Network, TCP/IP
 - 키워드: ARP 스푸핑, MAC 플러딩, 이블 트윈, Dynamic ARP Inspection
-- 길이: 235줄
+- 길이: 231줄
 - 소제목: 아무나 "그 주소 나야"라고 말할 수 있다 (ARP 스푸핑) / 스위치의 기억을 넘치게 만든다 (MAC 플러딩) / 가짜 DHCP 서버가 먼저 대답한다 (DHCP 공격) / 이름 조회의 답을 가로챈다 (DNS 위조) / 가짜 와이파이와 되감기 공격 (가짜 AP·재전송) / 정찰부터 시작한다 (포트 스캔) / 공격과 방어를 한눈에 짝짓기 / 클라우드 VPC에서는 왜 대부분 막혀 있나 / 면접에서 나올 만한 질문
 - 직접 링크 →: layer-link-ethernet-arp, dhcp, dns, zero-trust-architecture, https-tls, token-login, network-flow-logs, security-logging-detection-siem, vlan-basics, security-groups-nacl
 - 키워드 백링크 →: virtualization-hypervisors, what-happens-google-com, vpc-basics
@@ -9475,7 +9475,7 @@
 - 태그: Security, Node.js, Linux, Backend
 - 키워드: 경로 순회, 디렉터리 순회, zip slip, 폴리글랏, 이중 인코딩
 - 길이: 233줄
-- 소제목: 파일 이름 자리를 뜯어본다 / 글자를 막으면 다른 글자로 샌다 / 정규화한 뒤 기준 폴더 안인지 확인한다 / 심볼릭 링크와 TOCTOU / 올리는 쪽: 확장자·MIME·매직 바이트 / 이미지인데 스크립트다: 폴리글랏 / 압축 파일을 풀 때: zip slip / 큰 설계: 서버를 거치지 않게 한다 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 파일 이름 자리를 뜯어본다 / 글자를 막으면 다른 글자로 샌다 / 정규화한 뒤 기준 폴더 안인지 확인한다 / 심볼릭 링크와 TOCTOU / 올리는 쪽: 확장자·MIME·매직 바이트 / 이미지인데 스크립트다: 폴리글랏 / 압축 파일을 풀 때: zip slip / 큰 설계: 서버를 거치지 않게 한다 / 글자를 막지 말고 최종 경로를 본다 / 면접에서 나올 만한 질문
 - 직접 링크 →: input-validation-secure-coding, xss, web-security-headers, sd-video-upload-transcoding
 - 키워드 백링크 →: serverless-limits, os-kernel-system-calls, race-conditions, db-modeling-normalization
 - 이 글로 오는 글 ←: character-encoding-unicode, db-architecture-by-scale, input-validation-secure-coding, linux-fhs-file-commands
@@ -9551,7 +9551,7 @@
 - 태그: Security, DevOps, CI/CD, Testing, Node.js
 - 키워드: SAST, DAST, DevSecOps, shift-left, Semgrep
 - 길이: 240줄
-- 소제목: 도구마다 보는 곳이 다르다 / 소스를 읽는 SAST / 의존성을 보는 SCA / 돌아가는 앱을 찌르는 DAST / 비밀 값을 뒤지는 시크릿 스캔 / 네 도구를 파이프라인에 배치한다 / 무엇을 보고 빌드를 막나 / 스캐너가 0건이면 안전한가 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 도구마다 보는 곳이 다르다 / 소스를 읽는 SAST / 의존성을 보는 SCA / 돌아가는 앱을 찌르는 DAST / 비밀 값을 뒤지는 시크릿 스캔 / 네 도구를 파이프라인에 배치한다 / 무엇을 보고 빌드를 막나 / 스캐너가 0건이면 안전한가 / 왼쪽으로 당겨 네 도구를 겹친다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sql-injection, software-supply-chain-ci-hardening, xss, secrets-management, git-large-files-secrets, authn-vs-authz, threat-modeling-stride, code-review-practices
 - 키워드 백링크 →: vulnerability-management-cve-cvss, web-security-headers, k8s-pod-scheduling
 - 이 글로 오는 글 ←: input-validation-secure-coding, sdlc-models-agile-scrum, software-supply-chain-ci-hardening
@@ -9562,7 +9562,7 @@
 - 태그: Security, DevOps, CI/CD, npm, Node.js
 - 키워드: 공급망 공격, 타이포스쿼팅, SLSA, postinstall, 출처 증명
 - 길이: 241줄
-- 소제목: 코드를 안 불러도 설치만으로 당한다 / 가짜를 심는 네 가지 길 / 잠그고, 확인하고, 범위를 정한다 / 빌드 파이프라인을 잠근다 / 산출물에 출처를 새긴다: SLSA와 Sigstore / 자동 업데이트는 더 위험할까 / SBOM이 막는 것과 못 막는 것 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 코드를 안 불러도 설치만으로 당한다 / 가짜를 심는 네 가지 길 / 잠그고, 확인하고, 범위를 정한다 / 빌드 파이프라인을 잠근다 / 산출물에 출처를 새긴다: SLSA와 Sigstore / 자동 업데이트는 더 위험할까 / SBOM이 막는 것과 못 막는 것 / 잠그고, 확인하고, 범위를 정한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: container-supply-chain-security, dependency-hell, github-actions-docker-ecr, github-repo-governance
 - 키워드 백링크 →: npm-package-publishing, docker-container-basics, frontend-monorepo, security-principles-cia-defense-in-depth, dynamic-programming, security-testing-sast-dast
 - 이 글로 오는 글 ←: claude-code-headless-ci, dependency-hell, js-runtimes-node-deno-bun, npm-package-publishing, phishing-social-engineering, security-compliance-for-developers, security-testing-sast-dast
@@ -9595,7 +9595,7 @@
 - 태그: Security, Architecture, Backend
 - 키워드: 위협 모델링, STRIDE, 신뢰 경계, PASTA, 데이터 흐름도
 - 길이: 182줄
-- 소제목: 위험은 세 가지가 곱해져 나온다 / 데이터가 흐르는 길부터 그린다 / 여섯 글자로 위협을 빠짐없이 센다 / 찾은 위협을 줄 세운다 / STRIDE 말고 다른 길: PASTA / 공격 표면을 따로 센다 / 모델이 낡지 않게 한다 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 위험은 세 가지가 곱해져 나온다 / 데이터가 흐르는 길부터 그린다 / 여섯 글자로 위협을 빠짐없이 센다 / 찾은 위협을 줄 세운다 / STRIDE 말고 다른 길: PASTA / 공격 표면을 따로 센다 / 모델이 낡지 않게 한다 / 느낌 대신 목록으로 / 면접에서 나올 만한 질문
 - 직접 링크 →: rate-limiting-in-practice, xss
 - 키워드 백링크 →: serverless-limits, block-file-object-storage, security-principles-cia-defense-in-depth, what-happens-google-com
 - 이 글로 오는 글 ←: api-security-owasp-api-top10, docker-runtime-security, global-rollout-localization, input-validation-secure-coding, llm-app-security-guardrails, mcp-protocol, owasp-top-10-map, runtime-validation-zod, security-compliance-for-developers, security-principles-cia-defense-in-depth, security-testing-sast-dast
@@ -9605,7 +9605,7 @@
 - 요약: 스캐너가 쏟아낸 수백 건에서 무엇을 먼저 고칠지 정하는 법을 다룬다. CVE·CWE·CVSS 벡터를 읽고 점수를 계산해 보며, EPSS·CISA KEV·도달 가능성으로 실제 위험을 다시 정렬하고, 제로데이 대응과 자동 패치의 회귀 위험, 스캐너의 한계까지 본다.
 - 태그: Security, DevOps, Troubleshooting
 - 키워드: CVSS 벡터, EPSS, CISA KEV, 도달 가능성
-- 길이: 265줄
+- 길이: 263줄
 - 소제목: 구멍에 붙는 이름표: CVE와 CWE / 심각도를 숫자로: CVSS 벡터 읽기 / 점수만 보면 틀리는 이유 / 알려진 취약점과 제로데이 / 패치의 그늘: 자동화와 회귀 / 발견에서 확인까지의 한 바퀴 / 스캐너가 하는 일과 못 하는 일 / 면접에서 나올 만한 질문
 - 직접 링크 →: owasp-top-10-map, canary-release, waf, security-logging-detection-siem, container-supply-chain-security
 - 키워드 백링크 →: docker-container-basics, sql-injection, cloud-service-models-shared-responsibility
@@ -9639,7 +9639,7 @@
 - 태그: Security, Browser, JavaScript, React
 - 키워드: 출력 인코딩, DOMPurify, CSP nonce, Trusted Types, dangerouslySetInnerHTML
 - 길이: 281줄
-- 소제목: 데이터가 코드가 되는 세 가지 길 / 나가는 자리에 맞게 이스케이프한다 / React는 왜 비교적 안전한가, 그리고 어디서 뚫리나 / HTML을 허용해야 한다면 정제한다 / CSP로 주입돼도 실행을 막는다 / 터져도 피해를 줄이는 장치들 / 실제로 XSS를 만나는 순간 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 데이터가 코드가 되는 세 가지 길 / 나가는 자리에 맞게 이스케이프한다 / React는 왜 비교적 안전한가, 그리고 어디서 뚫리나 / HTML을 허용해야 한다면 정제한다 / CSP로 주입돼도 실행을 막는다 / 터져도 피해를 줄이는 장치들 / 실제로 XSS를 만나는 순간 / 자리에 맞게 이스케이프하고 CSP를 깐다 / 면접에서 나올 만한 질문
 - 직접 링크 →: html-form-http, cookie-session-login, csrf
 - 키워드 백링크 →: json-crud-http, owasp-top-10-map, nodejs-web-frameworks, sql-injection, input-validation-secure-coding, code-review-practices, bundler-basics
 - 이 글로 오는 글 ←: browser-security-model, browser-storage, cross-platform-apps, csrf, dom-basics, html-text-semantics, input-validation-secure-coding, js-template-literals, llm-app-security-guardrails, nodejs-web-frameworks, owasp-top-10-map, passkeys-webauthn, path-traversal-file-upload, react-jsx-components, sd-notification-reliability, search-engine-ranking-pagerank, security-testing-sast-dast, seo-for-spa, spa-auth-token-storage, sql-injection, structured-data-json-ld, threat-modeling-stride, waf, web-security-headers
@@ -9888,7 +9888,7 @@
 - 요약: 이미지 업로드를 붙이다 버킷을 퍼블릭으로 여는 실수에서 출발해 요청 판정 순서, 퍼블릭 액세스 차단, 브라우저 직접 업로드(PUT과 POST 정책, CORS), CloudFront OAC, 정적 사이트 호스팅, 멀티파트와 강한 일관성, 요금이 터지는 경우를 다룬다.
 - 태그: Cloud, AWS, Security, Backend, Frontend
 - 키워드: Block Public Access, CloudFront OAC, presigned POST, 멀티파트 업로드
-- 길이: 407줄
+- 길이: 405줄
 - 소제목: 요청 하나가 허용되는 판정 / 퍼블릭 차단은 켜 두고 시작한다 / 브라우저가 S3에 직접 올리게 한다 / PUT URL은 크기를 막지 못한다 / CORS는 버킷에 적는다 / 읽기는 CloudFront를 거쳐서만 / 정적 사이트 호스팅은 두 갈래다 / 큰 파일은 멀티파트로 올린다 / 쓰자마자 읽어도 되나 / 요청 요금이 터지는 경우 / 이미지 업로드를 붙일 때 확인할 것 / 버킷은 닫고, 서명과 CloudFront로 연다 / 면접에서 나올 만한 질문
 - 직접 링크 →: s3-storage-classes-lifecycle, block-file-object-storage, sd-object-storage-architecture, iam-basics, cors, http-caching-cdn, sd-object-storage-versioning-multipart
 - 키워드 백링크 →: serverless-limits, rendering-csr-spa, optimistic-locking, db-consistency-cap, api-key-hmac-auth, what-happens-google-com
@@ -9921,7 +9921,7 @@
 - 요약: 고객 데이터는 사내에 두라는 요구에서 출발해 배포 모델의 차이, 하이브리드의 전용선·신원·이중 운영과 MTU 장애, 사업자를 고르는 기준, 벤더 종속이 생기는 지점과 송신 요금, 멀티 클라우드 가용성을 숫자로 따진다.
 - 태그: Cloud, AWS, Architecture, Network, Resilience
 - 키워드: 하이브리드 클라우드, 멀티 클라우드, 벤더 종속, Direct Connect
-- 길이: 285줄
+- 길이: 283줄
 - 소제목: 누가 하드웨어를 갖고 누가 운영하나 / 프라이빗이 싼 경우와 비싼 경우 / 규제 요구를 다시 읽는다 / 하이브리드에서 실제로 어려운 것: 길 / 하이브리드에서 어려운 것: 신원과 이중 운영 / 하이브리드를 쓰는 흔한 모양 / 하이브리드 장애는 MTU와 경로에서 자주 난다 / 사업자를 고르는 기준 / 벤더 종속은 어디서 생기나 / 멀티 클라우드가 실제로 주는 것 / 가용성은 숫자로 따진다 / 이식성을 위해 표준화하는 것 / 처음 요구에 답하면 / 면접에서 나올 만한 질문
 - 직접 링크 →: multi-region, vpn-ipsec-wireguard, virtualization-hypervisors, cloud-cost-optimization, vpc-peering-transit-privatelink, sso-saml-oidc, disaster-recovery, iac-basics, high-availability
 - 키워드 백링크 →: route53-routing-policies, github-actions-docker-ecr, observability-basics, terraform-basics, failover, k8s-deploy-pipeline-eks, db-type-key-value, docker-container-basics, layer-ip-routing-icmp, sd-object-storage-architecture, kafka-basics, security-groups-nacl, osi-in-practice, layer-ip-addressing, bgp-basics, eks-cluster-basics, vpc-basics, layer-mtu-fragmentation, dns
@@ -9976,7 +9976,7 @@
 - 요약: 태스크가 CannotPullContainerError로 계속 STOPPED가 되던 장면에서 출발해 클러스터와 컨테이너 에이전트, 태스크 정의, 실행 역할과 태스크 역할의 차이, 서비스의 원하는 수·롤링/블루그린 배포, 서비스 오토스케일링, EC2 시작 유형과 Fargate의 차이, EKS와 언제 무엇을 고르는지를 다룬다.
 - 태그: AWS, Container, Cloud, DevOps, Kubernetes
 - 키워드: ECS 태스크 정의, ECS 실행 역할, awsvpc 모드, 용량 공급자
-- 길이: 279줄
+- 길이: 275줄
 - 소제목: 클러스터, 태스크, 서비스가 각각 맡는 일 / 태스크 정의 한 장 읽기 / 권한이 두 종류로 나뉘는 이유 / 서비스가 원하는 수를 유지하고 배포한다 / 스스로 개수를 조절하기: 서비스 오토스케일링 / EC2 시작 유형과 Fargate의 차이 / ECS를 고를까, EKS를 고를까 / 배포가 실패할 때: 서킷 브레이커와 헬스 체크 / 다시 STOPPED 루프로 / 면접에서 나올 만한 질문
 - 직접 링크 →: eks-cluster-basics, docker-container-basics, iam-basics, ec2-instance-types-launch-templates, blue-green-deployment, autoscaling
 - 키워드 백링크 →: vpc-subnets-route-tables, db-type-key-value, cloud-deployment-models-multicloud, container-orchestration-choices, resilience-patterns, rollback-strategy, security-groups-nacl, osi-in-practice, github-actions-docker-ecr, vpc-basics
@@ -10077,7 +10077,7 @@
 - 태그: Docker, Network, Linux, Container, Troubleshooting, Firewall
 - 키워드: macvlan, ipvlan, DOCKER-ISOLATION, default-address-pools
 - 길이: 620줄
-- 소제목: 드라이버는 네임스페이스를 꾸미는 방식이다 / bridge를 손으로 다시 만든다 / host, none, container 모드 / macvlan: 컨테이너가 LAN에 직접 선다 / overlay: 호스트를 넘는 브리지 / 기본 대역이 사내망과 겹칠 때 / 무엇을 고르나 / 장치 하나로 갈리는 성격 / 면접에서 나올 만한 질문
+- 소제목: 드라이버는 네임스페이스를 꾸미는 방식이다 / bridge를 손으로 다시 만든다 / host, none, container 모드 / macvlan: 컨테이너가 LAN에 직접 선다 / overlay: 호스트를 넘는 브리지 / 기본 대역이 사내망과 겹칠 때 / 기본은 사용자 정의 bridge, 나머지는 이유가 분명할 때 / 장치 하나로 갈리는 성격 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-network-volume, iptables-nat, sdn-vxlan-overlay, docker-container-basics, k8s-pod-basics, layer-mtu-fragmentation, k8s-cni-pod-network
 - 키워드 백링크 →: container-orchestration-choices, dockerfile-image-layers, iptables-basics, fp-composition-pipe, eks-cluster-basics, virtualization-hypervisors, vlan-basics, layer-link-ethernet-arp, vpn-ipsec-wireguard, security-groups-nacl, dhcp, layer-ip-routing-icmp, aws-ec2-ubuntu-server-setup, vpc-basics, udp-and-quic, dns
 - 이 글로 오는 글 ←: devops-networking-roadmap, docker-network-volume, gateway-link-redundancy-fhrp-lacp, k8s-cni-pod-network, k8s-learning-roadmap, k8s-network-policy, linux-namespaces-cgroups, router-vs-switch
@@ -10133,7 +10133,7 @@
 - 요약: 서버 50대의 nginx 설정 한 줄을 오늘 안에 바꿔야 하는 상황에서 출발해 에이전트 유무, push와 pull, 선언형 매니페스트와 Ruby 레시피, 모듈 단위로 지켜지는 멱등성을 Ansible·Puppet·Salt 실제 실행으로 비교한다. Terraform과의 경계, 불변 인프라 이후에 남은 자리(골든 이미지, 베어메탈)도 정리한다.
 - 태그: IaC, DevOps, Linux, Automation
 - 키워드: 구성 관리 도구, Puppet, Chef, salt-minion
-- 길이: 398줄
+- 길이: 396줄
 - 소제목: 넷을 가르는 질문 넷 / Ansible: SSH로 들어가 맞추고 떠난다 / Puppet: 에이전트가 30분마다 카탈로그를 받아 간다 / Chef: 레시피는 Ruby 코드다 / Salt: 이벤트 버스 위에 명령과 상태를 함께 얹는다 / 멱등성은 도구가 아니라 모듈이 지킨다 / 50대를 한 번에 바꾸지 않는다 / Terraform과 어디서 갈리나 / 컨테이너와 불변 인프라 이후에 남은 자리 / 결국 같은 질문에 답한다 / 면접에서 나올 만한 질문
 - 직접 링크 →: iac-basics, ansible-network-automation, terraform-basics, terraform-team-workflow-hcp-terragrunt
 - 키워드 백링크 →: k8s-configmap, high-availability, docker-container-basics, security-groups-nacl, what-happens-google-com, vpc-basics, http-methods
@@ -10187,7 +10187,7 @@
 - 요약: 환경마다 깨지는 하드코딩 ID에서 출발해 블록·인자·표현식 구조, optional이 오타를 숨기고 list(any)가 숫자를 문자열로 바꾸는 타입 함정, for 표현식과 splat, 자주 쓰는 함수, dynamic 블록을 아껴 쓰는 이유, templatefile, data source가 읽히는 시점과 Invalid for_each argument, TF_VAR_·TF_LOG·TF_CLI_ARGS를 직접 돌려 본다.
 - 태그: Terraform, IaC, DevOps, AWS
 - 키워드: templatefile, dynamic 블록, TF_CLI_ARGS, Invalid for_each argument
-- 길이: 608줄
+- 길이: 606줄
 - 소제목: 블록, 인자, 표현식 / 타입을 적어 두면 잘못된 값이 plan 전에 걸린다 / for 표현식과 splat / 자주 쓰는 함수 / dynamic 블록은 반복이 필요한 중첩 블록에만 / templatefile로 user_data 만들기 / data source는 plan 때 읽힌다 / 매 plan마다 diff를 만드는 data source / 환경 변수로 Terraform 다루기 / 현장에서 HCL 때문에 막히는 순간 / 값은 묻고, 형태는 적는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-modules-tfvars, terraform-dependency-graph-lifecycle, terraform-network-iac, terraform-state-refactoring-import
 - 키워드 백링크 →: terraform-basics, ec2-instance-types-launch-templates, autoscaling, security-principles-cia-defense-in-depth, security-groups-nacl, layer-ip-addressing, vpc-basics
@@ -10231,7 +10231,7 @@
 - 태그: Terraform, IaC, CI/CD, DevOps, Security
 - 키워드: HCP Terraform, Terragrunt, Atlantis, run task
 - 길이: 420줄
-- 소제목: 노트북에서 apply하면 무엇이 빠지나 / plan 파일은 그 자체로 민감한 산출물이다 / CI에서 직접 돌리기: 무엇을 하든 뼈대는 같다 / HCP Terraform: 실행 장소째로 빌린다 / Atlantis: PR 댓글로 plan과 apply를 시킨다 / Terragrunt: 스택이 늘어날 때 생기는 중복과 순서 / 환경 승격: plan이 아니라 모듈 버전을 옮긴다 / 무엇을 고르나 / 실행 장소를 하나로 모은 뒤 / 면접에서 나올 만한 질문
+- 소제목: 노트북에서 apply하면 무엇이 빠지나 / plan 파일은 그 자체로 민감한 산출물이다 / CI에서 직접 돌리기: 무엇을 하든 뼈대는 같다 / HCP Terraform: 실행 장소째로 빌린다 / Atlantis: PR 댓글로 plan과 apply를 시킨다 / Terragrunt: 스택이 늘어날 때 생기는 중복과 순서 / 환경 승격: plan이 아니라 모듈 버전을 옮긴다 / 운영 여력과 규정이 고른다 / 실행 장소를 하나로 모은 뒤 / 면접에서 나올 만한 질문
 - 직접 링크 →: terraform-basics, network-config-cicd, github-actions-docker-ecr, terraform-modules-tfvars, terraform-testing-policy-scanning, config-management-tools
 - 키워드 백링크 →: ansible-network-automation, jenkins-argocd-push-pull, sso-saml-oidc, vpc-basics, webhooks
 - 이 글로 오는 글 ←: config-management-tools, network-config-cicd, terraform-basics, terraform-state-refactoring-import, terraform-testing-policy-scanning
@@ -10255,7 +10255,7 @@
 - 태그: Kubernetes, Docker, Container, AWS, DevOps
 - 키워드: 컨테이너 오케스트레이션, Docker Swarm, Nomad, Fargate, OpenShift
 - 길이: 478줄
-- 소제목: 서버가 두 대가 되면 생기는 네 가지 일 / 원하는 상태를 적으면 맞춰 주는 루프 / 어디에 놓을지 고르는 일 / 새 버전으로 바꾸는 순서 / Docker Swarm: Compose 파일 그대로 여러 대로 / Nomad: 컨테이너가 아니어도 된다 / ECS와 Fargate: 컨트롤 플레인을 AWS가 갖는다 / Cloud Run: 요청이 올 때만 뜬다 / OpenShift: 쿠버네티스 위에 회사가 필요한 것을 얹었다 / 쿠버네티스가 표준이 된 이유 / 여섯 가지를 나란히 놓으면 / 무엇을 고를까 / 도구보다 먼저 정할 것 / 면접에서 나올 만한 질문
+- 소제목: 서버가 두 대가 되면 생기는 네 가지 일 / 원하는 상태를 적으면 맞춰 주는 루프 / 어디에 놓을지 고르는 일 / 새 버전으로 바꾸는 순서 / Docker Swarm: Compose 파일 그대로 여러 대로 / Nomad: 컨테이너가 아니어도 된다 / ECS와 Fargate: 컨트롤 플레인을 AWS가 갖는다 / Cloud Run: 요청이 올 때만 뜬다 / OpenShift: 쿠버네티스 위에 회사가 필요한 것을 얹었다 / 쿠버네티스가 표준이 된 이유 / 여섯 가지를 나란히 놓으면 / 팀 크기에서 출발하면 갈린다 / 도구보다 먼저 정할 것 / 면접에서 나올 만한 질문
 - 직접 링크 →: docker-compose, k8s-learning-roadmap, k8s-controllers-reconcile, k8s-pod-resources, k8s-pod-scheduling, rolling-deployment, serverless-architecture, k8s-security-context, k8s-crd, k8s-operators, kubeadm-cluster-setup
 - 키워드 백링크 →: k8s-pod-probes, docker-container-basics, kubernetes-ingress, ecs-fargate-task-service, k8s-pod-basics, k8s-configmap, k8s-deployment, k8s-daemonset, k8s-architecture, helm-basics, sd-start-single-server, cold-starts, autoscaling, rollback-strategy, osi-in-practice, redis-basics, what-happens-google-com, local-k8s-kind-minikube, db-type-key-value, eks-cluster-basics, layer-mtu-fragmentation, dns, webhooks
 - 이 글로 오는 글 ←: autoscaling, aws-core-services-map, cloud-cost-optimization, cloud-service-models-shared-responsibility, docker-compose, docker-network-drivers, docker-network-volume, ecs-fargate-task-service, eks-cluster-basics, k8s-certifications, kubeadm-cluster-setup, serverless-architecture
@@ -11834,7 +11834,7 @@
 - 태그: System Design, Cache, CDN, Redis, Scalability
 - 키워드: 캐시 계층, 캐시 히트율
 - 길이: 420줄
-- 소제목: 같은 답을 초당 2,000번 계산한다 / 캐시에 없을 때와 있을 때 / 어떤 데이터를 캐시에 둘까 / 캐시는 언제까지 믿을까: TTL / 메모리가 차면 무엇을 버리나 / 캐시 서버가 멈추는 날 / 사진과 JS 파일은 사용자 가까이에: CDN / CDN에 맡기기 전에 정할 것 / 지금까지 쌓은 구조 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 같은 답을 초당 2,000번 계산한다 / 캐시에 없을 때와 있을 때 / 어떤 데이터를 캐시에 둘까 / 캐시는 언제까지 믿을까: TTL / 메모리가 차면 무엇을 버리나 / 캐시 서버가 멈추는 날 / 사진과 JS 파일은 사용자 가까이에: CDN / CDN에 맡기기 전에 정할 것 / 지금까지 쌓은 구조 / 사본의 수명을 정한 뒤 데이터 센터를 늘린다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-db-replication-intro, sd-multi-datacenter, sd-start-single-server, sd-split-web-and-db, sd-load-balancer-stateless, sd-queue-logging-automation, sd-sharding-intro, caching-strategies, cache-invalidation, redis-memory-eviction, consistent-hashing, redis-replication-sentinel, redis-cluster, edge-caching, cdn-edge-anycast, http-caching-cdn
 - 키워드 백링크 →: redis-basics, high-availability, db-type-key-value, dns
 - 이 글로 오는 글 ←: api-scaling-ladder, backend-engineer-roadmap, caching-concepts-map, edge-caching, frontend-system-design-interview, pattern-iterator, sd-capacity-estimation, sd-db-replication-intro, sd-latency-numbers, sd-load-balancer-stateless, sd-multi-datacenter, sd-music-streaming, sd-queue-logging-automation, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-key-generation, system-design-study-path
@@ -11900,7 +11900,7 @@
 - 태그: System Design, DNS, Distributed Systems, Resilience, Scalability
 - 키워드: GeoDNS, 멀티 데이터 센터, 데이터 센터 장애 조치
 - 길이: 352줄
-- 소제목: 건물 하나에 모든 것을 두면 / 같은 이름에 위치별로 다른 답: GeoDNS / 한쪽이 통째로 멈추면 넘어가기까지 / 넘어간 쪽이 다 받을 수 있나 / 두 곳의 데이터를 맞추는 일 / 양쪽에서 쓰게 하면 생기는 일 / 넘기는 연습과 되돌아오는 길 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 건물 하나에 모든 것을 두면 / 같은 이름에 위치별로 다른 답: GeoDNS / 한쪽이 통째로 멈추면 넘어가기까지 / 넘어간 쪽이 다 받을 수 있나 / 두 곳의 데이터를 맞추는 일 / 양쪽에서 쓰게 하면 생기는 일 / 넘기는 연습과 되돌아오는 길 / 데이터 센터 하나가 사라져도 돈다, 다음은 큐와 로그 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-cache-and-cdn-tier, sd-queue-logging-automation, sd-start-single-server, sd-split-web-and-db, sd-load-balancer-stateless, sd-db-replication-intro, sd-sharding-intro, cdn-edge-anycast, failover, disaster-recovery, idempotency-key, multi-region, eventual-consistency, iac-basics, chaos-engineering
 - 키워드 백링크 →: k8s-deploy-pipeline-eks, autoscaling, vpc-basics, osi-in-practice, dns
 - 이 글로 오는 글 ←: api-scaling-ladder, data-center-infrastructure, multi-region, sd-cache-and-cdn-tier, sd-db-replication-intro, sd-email-storage-search, sd-kv-store-failure-handling, sd-kv-store-partition-replication, sd-latency-numbers, sd-load-balancer-stateless, sd-proximity-service, sd-queue-logging-automation, sd-rate-limiter-design, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, system-design-study-path, youtube-url-to-video
@@ -11911,7 +11911,7 @@
 - 태그: System Design, Messaging, Observability, CI/CD, Redis
 - 키워드: 비즈니스 지표, 로그 중앙 수집, 생산자와 소비자
 - 길이: 404줄
-- 소제목: 사용자가 기다리지 않아도 되는 일 / 큐는 몰리는 순간을 흡수한다 / 웹과 워커를 따로 늘린다 / 수십 대의 로그를 한곳으로 / 숫자로 미리 알아채기 / 사람 손을 덜 타게 / 여기까지 쌓은 구조 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 사용자가 기다리지 않아도 되는 일 / 큐는 몰리는 순간을 흡수한다 / 웹과 워커를 따로 늘린다 / 수십 대의 로그를 한곳으로 / 숫자로 미리 알아채기 / 사람 손을 덜 타게 / 여기까지 쌓은 구조 / 큐·로그·자동화를 한 줄씩, 다음은 샤딩 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-multi-datacenter, sd-sharding-intro, sd-start-single-server, sd-split-web-and-db, sd-load-balancer-stateless, sd-db-replication-intro, sd-cache-and-cdn-tier, message-queue-basics, dead-letter-queue, message-delivery-semantics, kafka-basics, rabbitmq-basics, structured-logging, metrics-types, prometheus-basics, alerting, observability-basics, iac-basics, terraform-basics, autoscaling, ci-cd-basics
 - 키워드 백링크 →: elasticsearch-inverted-index, queue-based-load-leveling, redis-basics
 - 이 글로 오는 글 ←: api-versioning, architecture-docs-c4-adr, mutex-semaphore-monitor, schema-versioning, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-db-replication-intro, sd-load-balancer-stateless, sd-metrics-collection, sd-mq-storage-partitions, sd-multi-datacenter, sd-nearby-friends, sd-news-feed-publishing, sd-notification-system, sd-sharding-intro, sd-split-web-and-db, sd-start-single-server, sd-url-shortener-key-generation, system-design-study-path, websocket-deep-dive
@@ -11922,7 +11922,7 @@
 - 태그: System Design, Database, Scalability, Distributed Systems, PostgreSQL
 - 키워드: 리샤딩, 논리 샤드, scatter-gather
 - 길이: 376줄
-- 소제목: 복제본을 늘려도 쓰기는 줄지 않는다 / 같은 테이블을 네 DB에 나눠 담기 / 샤딩 키를 고르는 두 가지 기준 / 샤딩 키가 없는 질문은 모든 샤드에 묻는다 / 샤드를 넘는 조인 대신 반정규화 / 샤드를 늘리는 일: 리샤딩 / 유명한 식당 하나가 샤드 하나를 태운다 / 샤드마다 번호가 겹치지 않게 / 샤딩 전에 먼저 해 볼 것 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 복제본을 늘려도 쓰기는 줄지 않는다 / 같은 테이블을 네 DB에 나눠 담기 / 샤딩 키를 고르는 두 가지 기준 / 샤딩 키가 없는 질문은 모든 샤드에 묻는다 / 샤드를 넘는 조인 대신 반정규화 / 샤드를 늘리는 일: 리샤딩 / 유명한 식당 하나가 샤드 하나를 태운다 / 샤드마다 번호가 겹치지 않게 / 샤딩 전에 먼저 해 볼 것 / 한 대에서 샤드까지, 다음은 숫자 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-queue-logging-automation, sd-latency-numbers, sd-start-single-server, sd-split-web-and-db, sd-load-balancer-stateless, sd-db-replication-intro, sd-cache-and-cdn-tier, sd-multi-datacenter, db-sharding, cqrs, db-keys-denormalization, distributed-transactions-2pc, saga-pattern, consistent-hashing, redis-cluster, caching-strategies, sd-unique-id-generator, db-partitioning, db-types-overview
 - 키워드 백링크 →: js-numbers-bigint, db-type-key-value, postgres-data-types, sd-news-feed-publishing, db-type-newsql, scaling-horizontal-vertical, redis-basics, microservices, db-modeling-normalization
 - 이 글로 오는 글 ←: api-scaling-ladder, db-performance-map, db-sharding, dynamodb-modeling-capacity, mongodb-document-model, mongodb-replica-set-sharding, sd-autocomplete-data-pipeline, sd-cache-and-cdn-tier, sd-capacity-estimation, sd-db-replication-intro, sd-file-sync-block-upload, sd-hotel-inventory-scaling, sd-kv-store-partition-replication, sd-latency-numbers, sd-leaderboard-scaling, sd-load-balancer-stateless, sd-metrics-collection, sd-multi-datacenter, sd-music-streaming, sd-news-feed-publishing, sd-object-storage-architecture, sd-proximity-service, sd-queue-logging-automation, sd-split-web-and-db, sd-start-single-server, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-wallet-transfer, sql-vs-nosql, system-design-study-path
@@ -12166,7 +12166,7 @@
 - 태그: System Design, Geospatial, Kafka, Distributed Systems, Backend
 - 키워드: 맵 매칭, 도착 예정 시간, 재경로, ETA 예측
 - 길이: 379줄
-- 소제목: 위치를 한 점씩 보내면 / 하루에 들어오는 점의 수 / 쓰기가 몰리는 저장소 / 한 번 받아 여러 곳으로 / GPS 점을 도로 위에 올린다 / 도로 조각마다 지금 속도를 구한다 / 길 안내 요청 하나가 거치는 곳 / 도착 시간은 조각 시간의 합에 예측을 더한다 / 막힌 길을 지나는 사람 찾기 / 새 경로를 앱까지 밀어 주는 길 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 위치를 한 점씩 보내면 / 하루에 들어오는 점의 수 / 쓰기가 몰리는 저장소 / 한 번 받아 여러 곳으로 / GPS 점을 도로 위에 올린다 / 도로 조각마다 지금 속도를 구한다 / 길 안내 요청 하나가 거치는 곳 / 도착 시간은 조각 시간의 합에 예측을 더한다 / 막힌 길을 지나는 사람 찾기 / 새 경로를 앱까지 밀어 주는 길 / 위치 장을 마치며, 다음은 메시지 큐 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-maps-tiles-routing, sd-mq-storage-partitions, sd-proximity-service, sd-nearby-friends, sd-capacity-estimation, sd-kv-store-write-read-path, db-type-wide-column, eventual-consistency, kafka-basics, percentile-latency, sd-chat-connections, websocket-deep-dive
 - 키워드 백링크 →: realtime-communication, pub-sub, db-type-relational, redis-basics, geohash, dns
 - 이 글로 오는 글 ←: sd-maps-tiles-routing, sd-mq-storage-partitions, sd-nearby-friends, sd-proximity-service, system-design-study-path
@@ -12177,7 +12177,7 @@
 - 태그: System Design, Algorithm, Geospatial, CDN
 - 키워드: 지도 타일, 웹 메르카토르, 라우팅 타일, 다익스트라
 - 길이: 429줄
-- 소제목: 세계 지도를 그림 한 장으로 보내면 / 둥근 지구를 네모로 펴기 / 확대 단계마다 넷으로 쪼갠다 / 타일은 미리 그려 CDN에 둔다 / 저장 공간과 비어 있는 바다 / 그림 대신 도형을 보내는 벡터 타일 / 교차로는 점, 도로는 선 / 가까운 곳부터 확정하는 다익스트라 / 목적지 쪽으로 기울이는 A* / 그래프가 크면 타일로 자른다 / 먼 길은 굵은 도로만 본다 / 현장에서 길 찾기가 틀리는 순간 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 세계 지도를 그림 한 장으로 보내면 / 둥근 지구를 네모로 펴기 / 확대 단계마다 넷으로 쪼갠다 / 타일은 미리 그려 CDN에 둔다 / 저장 공간과 비어 있는 바다 / 그림 대신 도형을 보내는 벡터 타일 / 교차로는 점, 도로는 선 / 가까운 곳부터 확정하는 다익스트라 / 목적지 쪽으로 기울이는 A* / 그래프가 크면 타일로 자른다 / 먼 길은 굵은 도로만 본다 / 현장에서 길 찾기가 틀리는 순간 / 고정 속도에서 실시간 속도로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-nearby-friends, sd-maps-location-eta, sd-proximity-service, http-caching-cdn, db-type-graph
 - 키워드 백링크 →: grpc, ds-graph-bfs-dfs, sd-object-storage-architecture, ds-heap
 - 이 글로 오는 글 ←: algorithms-overview, complexity-classes-p-np, data-structures-overview, ds-graph-bfs-dfs, ds-heap, greedy-algorithms, leetcode-cheapest-flights-within-k-stops, leetcode-evaluate-reverse-polish-notation, leetcode-find-city-smallest-neighbors, leetcode-jump-game-ii, leetcode-min-cost-to-connect-all-points, leetcode-network-delay-time, leetcode-path-with-maximum-probability, leetcode-rotting-oranges, leetcode-shortest-path-in-binary-matrix, leetcode-sort-colors, leetcode-study-guide, leetcode-swim-in-rising-water, leetcode-trapping-rain-water, leetcode-word-ladder, minimum-spanning-tree, mutex-semaphore-monitor, routing-protocols-ospf-rip-eigrp, sd-maps-location-eta, sd-nearby-friends, sd-proximity-service, shortest-path-algorithms, system-design-study-path, web-workers
@@ -12254,7 +12254,7 @@
 - 태그: System Design, WebSocket, Redis, Messaging, Geospatial
 - 키워드: 주변 친구, 사용자별 채널, 위치 캐시
 - 길이: 448줄
-- 소제목: 친구 위치를 30초마다 물어보면 / 가게와 달리 계속 움직인다 / 서버가 먼저 밀어 준다 / 구성 요소를 한 바퀴 돈다 / 사용자마다 채널을 하나씩 둔다 / 실제로 퍼뜨려 보기 / 거리는 받는 쪽에서 거른다 / 처음 붙을 때 할 일 / 마지막 위치는 만료와 함께, 이력은 따로 / 친구가 들어오고 나갈 때 / 발행·구독 서버 한 대로는 모자라다 / 채널을 노드에 나누고, 노드를 늘릴 때 / WebSocket 서버를 내릴 때 / 친구가 많은 사람, 모르는 사람 / Redis 말고 다른 선택지 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 친구 위치를 30초마다 물어보면 / 가게와 달리 계속 움직인다 / 서버가 먼저 밀어 준다 / 구성 요소를 한 바퀴 돈다 / 사용자마다 채널을 하나씩 둔다 / 실제로 퍼뜨려 보기 / 거리는 받는 쪽에서 거른다 / 처음 붙을 때 할 일 / 마지막 위치는 만료와 함께, 이력은 따로 / 친구가 들어오고 나갈 때 / 발행·구독 서버 한 대로는 모자라다 / 채널을 노드에 나누고, 노드를 늘릴 때 / WebSocket 서버를 내릴 때 / 친구가 많은 사람, 모르는 사람 / Redis 말고 다른 선택지 / 퍼뜨리기 다음은 지도 그리기 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-proximity-service, sd-maps-tiles-routing, sd-maps-location-eta, sd-chat-connections, sd-chat-presence, realtime-communication, websocket-deep-dive, db-type-wide-column, sd-queue-logging-automation, pub-sub, redis-cluster, service-discovery, consistent-hashing, sd-news-feed-publishing, geohash
 - 키워드 백링크 →: api-scaling-ladder, sd-mq-storage-partitions, kafka-basics, redis-basics, db-type-key-value
 - 이 글로 오는 글 ←: sd-chat-presence, sd-maps-location-eta, sd-maps-tiles-routing, sd-proximity-service, system-design-study-path
@@ -12364,7 +12364,7 @@
 - 태그: System Design, Geospatial, Redis, Cache, Backend
 - 키워드: 주변 검색, 위치 기반 서비스, 반경 검색
 - 길이: 455줄
-- 소제목: 반경 500m 식당을 테이블 하나로 찾으면 / 위도 인덱스와 경도 인덱스는 따로 논다 / 요구 사항과 숫자부터 / 검색 API와 두 서비스 / 칸 색인은 무엇으로 고를까 / 아홉 칸에서 후보를 모아 거리로 거른다 / 칸 길이는 반경으로 정한다 / 색인 테이블은 작아서 나누지 않는다 / 좌표 대신 칸 번호를 캐시 키로 / 가게 정보가 바뀌면 다음 날 반영한다 / 결과가 비거나 너무 많을 때 / 여러 리전에 두고, 위치를 조심해서 다룬다 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 반경 500m 식당을 테이블 하나로 찾으면 / 위도 인덱스와 경도 인덱스는 따로 논다 / 요구 사항과 숫자부터 / 검색 API와 두 서비스 / 칸 색인은 무엇으로 고를까 / 아홉 칸에서 후보를 모아 거리로 거른다 / 칸 길이는 반경으로 정한다 / 색인 테이블은 작아서 나누지 않는다 / 좌표 대신 칸 번호를 캐시 키로 / 가게 정보가 바뀌면 다음 날 반영한다 / 결과가 비거나 너무 많을 때 / 여러 리전에 두고, 위치를 조심해서 다룬다 / 움직이지 않는 가게에서 움직이는 친구로 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-file-sync-conflicts, sd-nearby-friends, sd-maps-tiles-routing, sd-maps-location-eta, geohash, quadtree, sd-capacity-estimation, sd-load-balancer-stateless, sd-db-replication-intro, sd-sharding-intro, caching-strategies, cache-invalidation, sd-multi-datacenter
 - 키워드 백링크 →: db-index, sd-start-single-server, db-types-overview, redis-basics, data-privacy-compliance, dns
 - 이 글로 오는 글 ←: geohash, leetcode-k-closest-points-to-origin, mongodb-indexes-explain, sd-file-sync-block-upload, sd-file-sync-conflicts, sd-maps-location-eta, sd-maps-tiles-routing, sd-nearby-friends, system-design-study-path
@@ -12419,7 +12419,7 @@
 - 태그: System Design, HTTP, Database, Backend
 - 키워드: URL 단축기, 단축 URL
 - 길이: 424줄
-- 소제목: 서버 한 대와 표 하나로 시작하기 / API 모양을 먼저 못 박는다 / 301을 줄까, 302를 줄까 / 하루 864만 개를 만든다면 / 테이블은 키 하나로 찾게 만든다 / 읽기가 쏟아질 때 리다이렉트 경로 / 남의 피싱 링크를 대신 보내 주지 않으려면 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 서버 한 대와 표 하나로 시작하기 / API 모양을 먼저 못 박는다 / 301을 줄까, 302를 줄까 / 하루 864만 개를 만든다면 / 테이블은 키 하나로 찾게 만든다 / 읽기가 쏟아질 때 리다이렉트 경로 / 남의 피싱 링크를 대신 보내 주지 않으려면 / 겉모양은 정해졌고, 남은 건 짧은 키 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, http-status-codes, http-caching-cdn, sd-sharding-intro, sd-capacity-estimation, sd-kv-store-partition-replication, sd-load-balancer-stateless, sd-db-replication-intro, rate-limiting-algorithms
 - 키워드 백링크 →: frontend-testing-strategy, js-numbers-bigint, db-type-key-value, seo-redirects-site-migration, mysql-innodb-basics, sd-start-single-server, db-type-relational, db-replication-sharding, redis-basics
 - 이 글로 오는 글 ←: phishing-social-engineering, sd-unique-id-generator, sd-url-shortener-key-generation, sd-web-crawler-architecture, system-design-concepts-map, system-design-study-path
@@ -12430,7 +12430,7 @@
 - 태그: System Design, Cache, Redis, Backend
 - 키워드: Base62, 62진수, 키 생성 서버
 - 길이: 403줄
-- 소제목: 해시를 잘라 쓰면 생기는 일 / 겹치면 다시 해시하고, 다시 묻는다 / 번호를 62진수로 바꾸기 / 다음 키가 보이는 문제 / 키를 미리 만들어 두는 서버 / 세 방법을 고르는 기준 / 인기 링크는 캐시가 받는다 / 다음 글 / 면접에서 나올 만한 질문
+- 소제목: 해시를 잘라 쓰면 생기는 일 / 겹치면 다시 해시하고, 다시 묻는다 / 번호를 62진수로 바꾸기 / 다음 키가 보이는 문제 / 키를 미리 만들어 두는 서버 / 세 방법을 고르는 기준 / 인기 링크는 캐시가 받는다 / 키 만들기 셋, 다음은 URL 모으기 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-url-shortener-api-redirect, sd-unique-id-generator, sd-web-crawler-architecture, bloom-filter, base64, caching-strategies, cache-invalidation, sd-cache-and-cdn-tier, sd-queue-logging-automation
 - 키워드 백링크 →: db-sharding, http-caching-cdn, js-memoization, redis-basics
 - 이 글로 오는 글 ←: api-key-hmac-auth, sd-unique-id-generator, sd-url-shortener-api-redirect, sd-web-crawler-architecture, system-design-study-path
@@ -12474,7 +12474,7 @@
 - 태그: System Design, Distributed Systems, Transaction, PostgreSQL, Backend
 - 키워드: TC/C, Try-Confirm-Cancel, 빈 취소, 매달린 Try
 - 길이: 542줄
-- 소제목: 지갑 하나, 테이블 하나일 때 / 초당 2만 건이면 DB 한 대로 모자란다 / 커밋 두 번 사이에서 돈이 사라진다 / 2PC: 둘 다 준비시키고 한 번에 커밋한다 / Try-Confirm-Cancel: 먼저 묶어 두고 나중에 확정한다 / 코디네이터가 Try 도중에 죽으면 / 취소가 Try보다 먼저 도착하면 / 사가: 차례로 하고, 실패하면 반대로 되돌린다 / 무엇을 고르나 / 같은 지갑을 다음 글에서 다시 쌓는다 / 면접에서 나올 만한 질문
+- 소제목: 지갑 하나, 테이블 하나일 때 / 초당 2만 건이면 DB 한 대로 모자란다 / 커밋 두 번 사이에서 돈이 사라진다 / 2PC: 둘 다 준비시키고 한 번에 커밋한다 / Try-Confirm-Cancel: 먼저 묶어 두고 나중에 확정한다 / 코디네이터가 Try 도중에 죽으면 / 취소가 Try보다 먼저 도착하면 / 사가: 차례로 하고, 실패하면 반대로 되돌린다 / 2PC·TC/C·사가를 같은 지갑에 붙여 보니 / 같은 지갑을 다음 글에서 다시 쌓는다 / 면접에서 나올 만한 질문
 - 직접 링크 →: sd-payment-reliability, sd-payment-flow, sd-wallet-event-sourcing, sd-stock-exchange-order-book, acid-transactions, idempotency-key, sd-sharding-intro, distributed-transactions-2pc, saga-pattern
 - 키워드 백링크 →: event-driven-architecture, floating-point-numbers, redis-basics, http-methods
 - 이 글로 오는 글 ←: sd-payment-flow, sd-payment-reliability, sd-wallet-event-sourcing, system-design-study-path
@@ -12664,7 +12664,7 @@
 - 태그: Math, Geometry, Algorithm
 - 키워드: 피타고라스 정리, 유클리드 거리, 피타고라스 수
 - 길이: 275줄
-- 소제목: 직각삼각형의 세 변 사이에 있는 규칙 / 삼각형 네 개를 옮겨 보면 / 3, 4, 5 같은 숫자들 / 거꾸로도 성립한다 / 거리 공식이 되기까지 / 이름은 피타고라스지만 / 정리 / 면접에서 나올 만한 질문
+- 소제목: 직각삼각형의 세 변 사이에 있는 규칙 / 삼각형 네 개를 옮겨 보면 / 3, 4, 5 같은 숫자들 / 거꾸로도 성립한다 / 거리 공식이 되기까지 / 이름은 피타고라스지만 / 삼각형 자리만 바꿔도 넓이는 같다 / 면접에서 나올 만한 질문
 - 키워드 백링크 →: floating-point-numbers, vector-db
 - 이 글로 오는 글 ←: embedding-models-applications, leetcode-k-closest-points-to-origin, leetcode-min-cost-to-connect-all-points, ray-casting, vector-db
 
