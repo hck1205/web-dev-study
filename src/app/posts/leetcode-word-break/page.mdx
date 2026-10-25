@@ -3,13 +3,9 @@ import { getPostMetadata } from "@/features/posts";
 export const metadata = getPostMetadata("leetcode-word-break");
 
 <EasyIntro>
-  띄어쓰기를 하나도 안 한 글자 줄이 있다. 예를 들어 sunflower. 단어장에는 sun, sunf, flow, flower, er이 적혀 있다. 이 글자 줄을 단어장에 있는 단어들로만 빈틈없이 잘라 낼 수 있는지 알고 싶다.
+  띄어쓰기를 하나도 안 한 글자 줄 sunflower가 있고, 단어장에는 sun, sunf, flow, flower, er이 적혀 있다. 이 글자 줄을 단어장에 있는 단어들로만 빈틈없이 잘라 낼 수 있는지 알고 싶다. 앞에서부터 sun을 떼면 flower가 남아 성공이지만, sunf를 떼었다면 lower가 남아서 막힌다. 어디서 자르느냐에 따라 성공하기도 하고 막히기도 한다.
 
-  앞에서부터 잘라 본다. sun을 떼면 flower가 남고, flower는 단어장에 있으니 성공이다. 그런데 처음에 sunf를 떼었다면 lower가 남아서 막힌다. 어디서 자르느냐에 따라 성공하기도 하고 막히기도 한다.
-
-  모든 자르는 방법을 하나하나 해 보면 글자가 길어질수록 경우가 끝없이 불어난다. 그래서 글자 줄 위에 칸막이 자리마다 동그라미를 칠 수 있는지 적어 나간다. 맨 앞 자리는 당연히 동그라미다.
-
-  어떤 자리에 동그라미를 치려면, 그보다 앞에 이미 동그라미가 쳐진 자리가 있고, 거기서 지금 자리까지의 글자가 단어장에 있으면 된다. 이렇게 앞에서부터 동그라미를 쳐 나가서 맨 끝 자리에 동그라미가 쳐지면 잘라 낼 수 있는 것이다.
+  모든 자르는 방법을 하나하나 해 보면 글자가 길어질수록 경우가 끝없이 불어난다. 그래서 글자 줄 위에 칸막이 자리마다 동그라미를 칠 수 있는지 적어 나가는데, 맨 앞 자리는 당연히 동그라미다. 어떤 자리에 동그라미를 치려면, 그보다 앞에 이미 동그라미가 쳐진 자리가 있고 거기서 지금 자리까지의 글자가 단어장에 있으면 된다. 이렇게 앞에서부터 쳐 나가서 맨 끝 자리에 동그라미가 쳐지면 잘라 낼 수 있는 것이다.
 </EasyIntro>
 
 [Word Break](https://leetcode.com/problems/word-break/)는 LeetCode 139번이다. 띄어쓰기 없는 문자열이 사전의 단어들로 빈틈없이 나뉘는지 묻는다. 지금까지 본 1차원 DP([계단 오르기](/posts/leetcode-climbing-stairs), [House Robber](/posts/leetcode-house-robber), [Coin Change](/posts/leetcode-coin-change))는 칸이 숫자였는데, 이 문제는 칸이 "문자열의 i번째 자리"다. 계단 오르기의 걸음 크기가 사전의 단어로, 동전 값이 단어 길이로 바뀌었다고 보면 같은 뼈대가 그대로 보인다.
