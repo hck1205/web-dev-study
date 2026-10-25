@@ -1,6 +1,13 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "rw-whatsapp-erlang": 7,
+  "rw-uber-ringpop-cadence": 7,
+  "rw-spotify-event-delivery": 7,
+  "rw-netflix-evcache": 7,
+  "rw-discord-elixir-gateway": 7,
+  "rw-cloudflare-pingora": 7,
+  "rw-airbnb-skipper": 7,
   "rw-uber-doma": 7,
   "rw-stack-overflow-few-servers": 7,
   "rw-segment-goodbye-microservices": 7,

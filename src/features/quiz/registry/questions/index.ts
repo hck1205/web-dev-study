@@ -1,3 +1,10 @@
+import { RW_WHATSAPP_ERLANG } from "./rw-whatsapp-erlang";
+import { RW_UBER_RINGPOP_CADENCE } from "./rw-uber-ringpop-cadence";
+import { RW_SPOTIFY_EVENT_DELIVERY } from "./rw-spotify-event-delivery";
+import { RW_NETFLIX_EVCACHE } from "./rw-netflix-evcache";
+import { RW_DISCORD_ELIXIR_GATEWAY } from "./rw-discord-elixir-gateway";
+import { RW_CLOUDFLARE_PINGORA } from "./rw-cloudflare-pingora";
+import { RW_AIRBNB_SKIPPER } from "./rw-airbnb-skipper";
 import { RW_UBER_DOMA } from "./rw-uber-doma";
 import { RW_STACK_OVERFLOW_FEW_SERVERS } from "./rw-stack-overflow-few-servers";
 import { RW_SEGMENT_GOODBYE_MICROSERVICES } from "./rw-segment-goodbye-microservices";
@@ -1169,6 +1176,13 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  RW_WHATSAPP_ERLANG,
+  RW_UBER_RINGPOP_CADENCE,
+  RW_SPOTIFY_EVENT_DELIVERY,
+  RW_NETFLIX_EVCACHE,
+  RW_DISCORD_ELIXIR_GATEWAY,
+  RW_CLOUDFLARE_PINGORA,
+  RW_AIRBNB_SKIPPER,
   RW_UBER_DOMA,
   RW_STACK_OVERFLOW_FEW_SERVERS,
   RW_SEGMENT_GOODBYE_MICROSERVICES,

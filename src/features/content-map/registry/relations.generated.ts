@@ -2,6 +2,185 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-airbnb-skipper": {
+    "links": [
+      "rw-stripe-idempotency",
+      "rw-uber-ringpop-cadence",
+      "idempotency-key",
+      "sd-payment-reliability",
+      "saga-pattern"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "message-delivery-semantics",
+      "sd-payment-flow",
+      "event-driven-architecture",
+      "db-consistency-cap",
+      "cloud-deployment-models-multicloud",
+      "stream-processing",
+      "sd-video-upload-transcoding",
+      "postgres-architecture",
+      "microservices",
+      "acid-transactions",
+      "db-modeling-normalization",
+      "http-methods",
+      "webhooks"
+    ]
+  },
+  "rw-cloudflare-pingora": {
+    "links": [
+      "rw-cloudflare-outage-regex",
+      "nginx-reverse-proxy",
+      "connection-pool",
+      "idempotency-key",
+      "count-min-sketch"
+    ],
+    "mentions": [
+      "http-message",
+      "tcp-connection-lifecycle",
+      "https-tls",
+      "browser-fetch",
+      "proxy-reverse-proxy",
+      "process-vs-thread",
+      "spring-boot-on-kubernetes",
+      "ds-hash-map",
+      "http-versions",
+      "input-validation-secure-coding",
+      "http-status-codes",
+      "what-happens-google-com",
+      "grpc",
+      "mutex-semaphore-monitor",
+      "first-page-from-power-on"
+    ]
+  },
+  "rw-discord-elixir-gateway": {
+    "links": [
+      "rw-discord-message-storage",
+      "actor-model",
+      "sd-chat-presence",
+      "consistent-hashing",
+      "backpressure",
+      "exponential-backoff-jitter",
+      "circuit-breaker",
+      "mutex-semaphore-monitor",
+      "tail-latency",
+      "garbage-collection",
+      "distributed-tracing",
+      "sd-chat-connections"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "resilience-patterns",
+      "sd-leaderboard-sorted-set",
+      "floating-point-numbers",
+      "js-pure-functions",
+      "grpc",
+      "pub-sub"
+    ]
+  },
+  "rw-netflix-evcache": {
+    "links": [
+      "rw-netflix-cloud-microservices",
+      "rw-netflix-chaos-engineering",
+      "rw-netflix-open-connect",
+      "caching-strategies",
+      "sd-cache-and-cdn-tier",
+      "consistent-hashing",
+      "sd-db-replication-intro",
+      "timeouts",
+      "eventual-consistency",
+      "rw-amazon-dynamo",
+      "consistency-models",
+      "multi-region",
+      "redis-replication-sentinel"
+    ],
+    "mentions": [
+      "db-type-embedded",
+      "db-type-key-value",
+      "autoscaling",
+      "db-sharding",
+      "tail-latency",
+      "clock-skew",
+      "kafka-basics",
+      "vpc-basics",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "rw-spotify-event-delivery": {
+    "links": [
+      "rw-linkedin-kafka",
+      "sd-ad-click-stream-windows",
+      "kafka-vs-rabbitmq-replay",
+      "message-delivery-semantics",
+      "exponential-backoff-jitter",
+      "autoscaling"
+    ],
+    "mentions": [
+      "rw-reading-engineering-blogs",
+      "service-discovery",
+      "rest-api-design",
+      "microservices",
+      "config-management-tools",
+      "pub-sub",
+      "disaster-recovery",
+      "api-versioning",
+      "kafka-basics",
+      "data-privacy-compliance",
+      "data-lake-hdfs",
+      "high-availability",
+      "schema-versioning",
+      "etl-vs-elt",
+      "sli-slo",
+      "dns"
+    ]
+  },
+  "rw-uber-ringpop-cadence": {
+    "links": [
+      "rw-uber-h3-geospatial",
+      "rw-uber-schemaless-docstore",
+      "rw-uber-doma",
+      "saga-pattern",
+      "event-sourcing",
+      "sd-wallet-event-sourcing",
+      "rw-airbnb-skipper",
+      "transactional-outbox",
+      "feature-flags",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "opensearch-cluster-operations",
+      "rw-reading-engineering-blogs",
+      "db-type-wide-column",
+      "microservices",
+      "event-driven-architecture",
+      "api-versioning",
+      "kafka-basics",
+      "go-concurrency-basics"
+    ]
+  },
+  "rw-whatsapp-erlang": {
+    "links": [
+      "rw-discord-elixir-gateway",
+      "sd-chat-connections",
+      "actor-model",
+      "os-kernel-system-calls",
+      "db-sharding",
+      "cache-write-policies",
+      "rw-netflix-cloud-microservices"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "sd-start-single-server",
+      "rw-reading-engineering-blogs",
+      "code-review-practices",
+      "sd-stock-exchange-low-latency",
+      "db-partitioning",
+      "pub-sub",
+      "dns"
+    ]
+  },
   "rw-37signals-cloud-exit": {
     "links": [
       "cloud-cost-optimization",
@@ -130,6 +309,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-mq-storage-partitions",
       "kafka-vs-rabbitmq-replay",
+      "rw-spotify-event-delivery",
       "backpressure",
       "page-cache-disk-io",
       "sd-mq-consumer-groups",
@@ -332,6 +512,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "rw-cloudflare-outage-regex": {
     "links": [
       "rw-reading-engineering-blogs",
+      "rw-cloudflare-pingora",
       "postmortems",
       "cdn-edge-anycast",
       "regex-and-globbing",
@@ -353,6 +534,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "sd-chat-message-storage",
       "db-sharding",
+      "rw-discord-elixir-gateway",
       "db-type-wide-column",
       "rw-twitter-snowflake-timeline",
       "sd-unique-id-generator",
@@ -565,6 +747,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "db-type-key-value",
       "iptables-basics",
+      "rw-netflix-evcache",
       "traffic-shaping-qos",
       "bash-scripting",
       "sd-start-single-server",
@@ -585,6 +768,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "rw-netflix-chaos-engineering",
       "rw-netflix-open-connect",
+      "rw-netflix-evcache",
       "microservices",
       "service-discovery",
       "circuit-breaker",
@@ -676,9 +860,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-uber-doma",
       "rw-airbnb-soa-migration",
       "rw-stripe-idempotency",
+      "rw-airbnb-skipper",
+      "rw-uber-ringpop-cadence",
+      "rw-whatsapp-erlang",
+      "rw-discord-elixir-gateway",
       "rw-figma-multiplayer",
+      "rw-cloudflare-pingora",
       "rw-netflix-open-connect",
       "rw-linkedin-kafka",
+      "rw-spotify-event-delivery",
+      "rw-netflix-evcache",
       "rw-kakaotalk-cache-farm",
       "rw-naver-arcus",
       "sd-interview-framework"
@@ -784,7 +975,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-proximity-service",
       "quadtree",
       "sd-unique-id-generator",
-      "rw-uber-doma"
+      "rw-uber-doma",
+      "rw-uber-ringpop-cadence"
     ],
     "mentions": [
       "rw-reading-engineering-blogs",
@@ -956,6 +1148,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "idempotency-key",
       "sd-payment-reliability",
       "exponential-backoff-jitter",
+      "rw-airbnb-skipper",
       "http-methods"
     ],
     "mentions": [

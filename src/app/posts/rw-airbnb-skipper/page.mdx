@@ -1,0 +1,358 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-airbnb-skipper");
+
+<EasyIntro>
+  집주인이 숙소 보험금을 신청했다고 해 보자. 회사는 신청서를 확인하고, 안전 검사를 하고, 금액을 계산하고, 돈을 보내고, 알림을 보낸다. 그런데 돈을 보내기 직전에 컴퓨터가 꺼지면 어떻게 될까. 다시 켰을 때 처음부터 하면 이미 한 검사를 또 하고, 운이 나쁘면 돈을 두 번 보낸다.
+
+  에어비앤비는 이런 일을 위해 Skipper라는 도구를 만들었다. 숙제 공책에 문제를 하나 풀 때마다 답을 적어 두는 것과 비슷하다. 공책을 다시 펼치면 처음부터 다시 읽되, 답이 적힌 문제는 다시 풀지 않고 적힌 답을 그대로 쓴다. 답이 없는 문제부터 실제로 푼다.
+
+  중간에 더는 갈 수 없는 일이 생기면, 지금까지 한 일을 거꾸로 되돌린다. 잡아 둔 방을 풀고, 받은 돈을 돌려준다. 되돌리는 방법은 일마다 미리 적어 둔다.
+
+  흔히 헷갈리는 점은 이렇게 하면 모든 일이 꼭 한 번만 일어난다고 생각하는 것이다. 문제를 풀고 답을 적기 직전에 공책이 날아가면, 그 문제는 한 번 더 풀린다. 그래서 돈을 보내는 일처럼 두 번 하면 안 되는 일은 두 번 해도 결과가 같게 따로 만들어야 한다.
+</EasyIntro>
+
+이 글은 "실제 서비스 사례" 시리즈에서 에어비앤비가 결제와 보험 같은 여러 단계 흐름을 장애에도 끝까지 가게 만든 방법을 다룬다. 같은 문제를 결제사 쪽에서 멱등 키로 푼 사례는 [Stripe: 멱등 키로 결제를 한 번만 일으키기](/posts/rw-stripe-idempotency)에, 같은 "기록하고 다시 돌리기" 발상을 별도 클러스터로 푼 우버의 엔진은 [Uber Cadence](/posts/rw-uber-ringpop-cadence)에 있다. 멱등 키 저장소를 직접 만드는 일반 방법은 [멱등 키 글](/posts/idempotency-key)에, 결제의 시간 초과·웹훅·대사는 [결제 신뢰성 글](/posts/sd-payment-reliability)에, 단계와 보상으로 나누는 일반 원리는 [사가 패턴 글](/posts/saga-pattern)에 있다. 여기서는 그 설명을 반복하지 않는다.
+
+2026년 4월 에어비앤비 기술 블로그의 Skipper 소개 글은 가상의 장면 하나로 시작한다. 호스트가 숙소 보험금을 청구한다. 시스템은 청구를 검증하고, 신뢰·안전 검사를 돌리고, 견적을 평가하고, 지급을 처리하고, 알림을 보내야 한다. 검증은 통과했지만 지급 전에 서버가 죽는다. 글은 전통적인 구조에서 그다음은 대개 "경우에 따라 다르다"라고 적었다. 시간이 초과되고 손님이 다시 시도해 중복 처리가 일어날 수도 있고, 일부만 바뀐 상태가 다음 단계를 망칠 수도 있다. 몇 분, 몇 시간, 며칠씩 걸리는 흐름이라면 중간에 끊기는 일은 아주 흔하다.
+
+## 이 글이 기대는 자료
+
+에어비앤비가 직접 낸 자료만 썼다. 중심은 [Skipper: Building Airbnb's embedded workflow engine](https://airbnb.tech/infrastructure/skipper-building-airbnbs-embedded-workflow-engine/)(2026년 4월)이고, 에어비앤비 결제 플랫폼의 구조를 설명한 [Pay as a Local](https://airbnb.tech/payments/pay-as-a-local/)(2026년 2월)을 함께 봤다. 둘 다 에어비앤비 기술 블로그(airbnb.tech)의 글이다.
+
+이 시리즈의 처음 계획은 에어비앤비가 2019년 Medium 블로그에 쓴 결제 멱등성 프레임워크 Orpheus 글이었다. 그 글이 있는 Medium은 이 글을 쓰는 환경에서 접근이 막혀 있어 원문을 확인하지 못했다. 그래서 Orpheus의 구조와 숫자는 다루지 않고, 같은 결제 팀이 지금 공개한 자료로 같은 질문, 즉 "결제 흐름이 중간에 죽어도 돈이 두 번 움직이지 않게 하려면"에 답한다.
+
+## 에어비앤비 결제 플랫폼의 모양
+
+Pay as a Local 글(2026년 2월)은 결제 플랫폼을 먼저 소개한다. 에어비앤비 결제 플랫폼은 숙소, 체험, 서비스 같은 핵심 사업에서 결제 로직을 떼어 내도록 설계됐고, 규제받는 결제 대행사(PSP)와 금융 파트너들과 함께 손님의 결제(pay-in)와 호스트 지급(payout)을 조율한다. 결제 장기 아키텍처(Payments LTA)라는 여러 해짜리 재설계로 모놀리스에서 도메인으로 나눈 서비스 구조로 옮겼다고 적었다.
+
+핵심 결제 도메인 아래에는 하위 도메인이 여럿 있다. Pay-in, Payout, Transaction Fulfillment, Processing, Wallet & instruments, Ledger, Incentives & Stored Value, Issuing, Settlement & Reconciliation이다. 그중 Processing이 외부 PSP와 API나 파일로 연동하고 라우팅을 맡는데, 새 PSP를 붙이는 일을 빠르게 하려고 커넥터·플러그인 구조를 택했다.
+
+같은 재설계에서 여러 단계 거래(Multi-Step Transactions, MST)라는 틀도 만들었다. 결제 하나가 여러 단계에 걸쳐 끝나는 경우를 PSP와 상관없는 공통 언어로 적는다. 중간 단계를 Action이라 부르는데, 다른 사이트로 넘기기(redirect), 강한 고객 인증(SCA) 같은 추가 확인, 결제 수단별 흐름이 여기에 든다. PSP가 사용자의 추가 행동이 필요하다고 알리면, 그 PSP의 플러그인이 요청을 `ActionPayload`로 정규화하고 거래 상태를 `ACTION_REQUIRED`로 돌려준다.
+
+지역 결제 수단 20여 개를 붙이면서 흐름은 세 갈래로 정리됐다. 외부 사이트나 앱으로 보냈다가 돌아오는 redirect 흐름(예: Naver Pay), QR 코드나 푸시를 받은 사용자가 밖에서 결제하고 에어비앤비는 웹훅으로 결과를 받는 async 흐름(예: Pix), 카드처럼 에어비앤비 화면에서 바로 처리하는 direct 흐름이다. async 흐름에서는 결제 대행사가 웹훅을 보내 결제 상태를 성공으로 바꾸고 주문을 확정한다.
+
+아래 그림은 Pay as a Local 글의 설명대로 redirect 흐름과 async 흐름을 하나로 그린 것이다. 다음을 누르면 결제 하나가 에어비앤비 밖에 다녀오는 길을 따라간다.
+
+<NetworkTopology
+  width={430}
+  height={280}
+  caption="에어비앤비 결제 플랫폼과 지역 결제 수단의 두 흐름 (2026년 2월 글 기준)"
+  zones={[
+    { id: "pay", label: "에어비앤비 결제 플랫폼", x: 120, y: 15, w: 180, h: 255, tone: "private" },
+    { id: "ext", label: "바깥", x: 310, y: 15, w: 110, h: 255, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "guest", label: "손님", sub: "체크아웃", x: 55, y: 140, icon: "client", w: 90 },
+    { id: "payin", label: "Pay-in", sub: "MST 거래", x: 210, y: 70, icon: "server", w: 100 },
+    { id: "proc", label: "Processing", sub: "PSP 플러그인", x: 210, y: 160, icon: "gateway", w: 110 },
+    { id: "ledger", label: "Ledger", x: 210, y: 240, icon: "db", w: 90 },
+    { id: "psp", label: "지역 PSP", sub: "Naver Pay·Pix", x: 365, y: 110, icon: "internet", w: 100 },
+    { id: "wallet", label: "지갑 앱", sub: "QR·외부 결제", x: 365, y: 220, icon: "client", w: 100 },
+  ]}
+  links={[
+    { from: "guest", to: "payin" },
+    { from: "payin", to: "proc" },
+    { from: "proc", to: "psp" },
+    { from: "psp", to: "wallet" },
+    { from: "proc", to: "ledger" },
+  ]}
+  steps={[
+    { path: ["guest", "payin", "proc", "psp"], packet: "charge", title: "청구를 보낸다", detail: "Processing이 그 PSP의 플러그인으로 요청을 보낸다." },
+    { path: ["psp", "proc", "payin"], packet: "ACTION_REQUIRED", title: "추가 행동이 필요하다는 답", detail: "플러그인이 PSP의 답을 ActionPayload로 정규화한다. redirectUrl이나 QR 코드 데이터가 들어 있다." },
+    { path: ["psp", "wallet"], packet: "QR·redirect", highlight: ["ext"], title: "손님이 밖에서 결제한다", detail: "redirect면 외부 사이트나 앱에 다녀오고, async면 지갑 앱으로 QR을 찍는다. 그동안 서버는 기다린다." },
+    { path: ["psp", "proc"], packet: "웹훅", title: "결과가 비동기로 돌아온다", detail: "async 흐름은 PSP가 웹훅을 보내 결제를 성공으로 바꾼다. redirect 흐름은 돌아온 결과 토큰으로 확정한다." },
+    { path: ["proc", "ledger"], packet: "기록", title: "장부에 남기고 주문을 확정한다", detail: "Ledger는 결제 도메인의 하위 도메인 하나다. 결제가 끝난 뒤 어느 부품이 장부에 쓰는지는 글이 설명하지 않았다. 그림의 선은 이해를 돕는 가정이다." },
+  ]}
+/>
+
+이 그림만 봐도 결제 하나가 "요청 하나, 응답 하나"로 끝나지 않는다는 게 보인다. 사용자가 다른 앱에 다녀오는 동안, 웹훅이 오기까지, 서버는 기다려야 한다. 그 사이에 배포가 일어나고, 파드가 재시작되고, 네트워크가 끊긴다. Skipper 글이 말하는 "지속 실행(durable execution)" 문제가 바로 이것이다.
+
+## 바깥 엔진을 두지 않은 이유
+
+Skipper 글은 만들기 전에 기존 방법들을 오래 평가했다고 적었다. 셋 다 장점이 있었지만 에어비앤비의 제약에 맞지 않았다.
+
+첫째, 외부 오케스트레이션 엔진이다. 글은 이것을 지속 실행의 "업계 표준"이라 부르고, 정확히 한 번(exactly-once) 의미와 검증된 신뢰성을 준다고 인정했다. 하지만 서버 클러스터와 저장 계층, 그리고 그걸 운영할 전문성이 따로 필요하다. 사용자 거래에 직접 영향을 주는 가장 중요한 "Tier 0" 서비스에 새로운 핵심 의존을 더하는 게 문제였다.
+
+오케스트레이션 클러스터가 멈추면 거기 기대는 모든 서비스가 워크플로를 시작하지도 진행하지도 못한다. [Uber Cadence](/posts/rw-uber-ringpop-cadence)가 이런 엔진의 대표적인 예다(Skipper 글은 특정 제품 이름을 들지 않았다).
+
+둘째, 클라우드 관리형 워크플로 서비스다. 운영 부담은 없지만 벤더 종속, 자체 인프라 밖으로 나가는 규제·데이터 처리 요구, 실행 한도가 생기고, 결국 같은 걱정, 즉 외부의 핵심 의존이 남는다.
+
+셋째, 큐 기반으로 직접 만드는 방법이다. 외부 의존은 없지만 팀마다 재시도 로직, 상태 관리, 보상 흐름을 따로 만들고 유지해야 한다.
+
+글이 더 짚은 건 코드의 모양이었다. 여러 단계 흐름을 큐와 임시방편 비동기 배관으로 엮으면 업무 로직이 큐 소비자, 예약 작업, 콜백 엔드포인트, 대사 스크립트로 흩어진다. "이 업무가 실제로 무엇을 하는지" 읽을 수 있는 곳이 코드 어디에도 없다.
+
+게다가 조각마다 업무 규칙과 재시도 백오프, 중복 검사, 시간 초과 처리 같은 인프라 관심사가 뒤엉킨다. 글은 에어비앤비 곳곳의 팀이 같은 문제에 부딪혀 각자 해결책을 만들었는데, 모두 비싸고 테스트하기 어렵고, 멱등성과 부분 실패와 크래시 복구에 관한 같은 엣지 케이스를 매번 다시 발견했다고 적었다.
+
+그래서 요구 사항을 이렇게 정했다.
+
+- 새로운 핵심 의존을 만들지 않는다. Tier 0 서비스에 단일 장애점을 더하지 않는다.
+- 이미 있는 인프라를 쓴다. 서비스가 이미 기대는 데이터베이스를 쓴다.
+- 전담 지원 없이 팀이 스스로 도입할 수 있다.
+- 프로그래밍 모델이 단순하다.
+- 서비스의 확장성을 깎지 않는다.
+
+이 요구가 가리키는 답은 중앙 시스템이 아니라 각 서비스 안에서 도는 라이브러리였다. Skipper는 서비스가 이미 쓰는 MySQL이나 에어비앤비 내부의 Unified Data Store에 상태를 저장하고, 별도의 저장 계층이 없다.
+
+## 워크플로와 액션: 부작용을 한곳에 가둔다
+
+Skipper의 프로그래밍 모델은 둘로 나뉜다. 워크플로(Workflow)는 무엇을 어떤 순서로, 어떤 조건에서 할지 정하는 조율 로직이다. 액션(Action)은 API 호출, DB 갱신, 알림 같은 개별 작업이다. 액션마다 결과가 자동으로 체크포인트되어, 크래시와 재시작을 넘어 살아남는다.
+
+글이 보인 결제 예는 이렇다. 예약을 "청구하고 수락하는" 흐름이다.
+
+```kotlin
+// 1) 평범한 타입 있는 호출처럼 부른다. 워크플로 ID는 "reservation:예약ID"
+val out = workflow<ChargeAndAccept>("reservation:${req.id}").execute(req)
+
+// 2) 워크플로 로직은 평범한 Kotlin처럼 생겼다
+class ChargeAndAccept : Workflow() {
+  private val billing = actions<BillingActions>()
+  private val reservations = actions<ReservationActions>()
+  @StateParam var paymentCaptured = false
+
+  @WorkflowMethod
+  suspend fun execute(r0: Reservation): Reservation {
+    val r1 = billing.charge(r0)          // 지속되는 부작용의 경계
+    waitUntil { paymentCaptured }        // 지속되는 대기 (재시작 뒤에도 이어진다)
+    return reservations.markAccepted(r1)
+  }
+}
+
+// 3) 부작용은 액션에 둔다. 어노테이션 하나로 체크포인트된다
+class BillingActions : Actions() {
+  @Execute(checkpoint = true)
+  suspend fun charge(r: Reservation): Reservation =
+    billingApi.chargeAsync(r.id, r.amount).await()
+}
+```
+
+`waitUntil { paymentCaptured }`가 볼 만하다. 결제 승인이 언제 올지 모르니 기다리는데, 그 기다림이 재시작 뒤에도 이어진다. 바깥 사건은 신호(signal)로 들어온다. 글의 다른 예에서는 `@SignalMethod`가 붙은 메서드가 상태 필드를 바꾸고, `waitUntil` 조건이 그 필드를 본다. 앞에서 본 결제 플랫폼의 async 흐름, 즉 웹훅이 와야 결제가 성공으로 바뀌는 흐름이 이 모양에 그대로 들어맞는다(두 글이 둘을 직접 연결하지는 않았다).
+
+## 체크포인트를 들고 처음부터 다시 돌린다
+
+Skipper의 지속성은 재생(replay)에서 나온다. 글의 설명을 순서대로 옮기면 이렇다. 워크플로가 시작되면 워크플로 메서드를 실행하면서 액션의 결과를 DB에 체크포인트한다. `waitUntil`로 기다려야 하면 지금 상태를 저장하고 워크플로는 잠든다(hibernate). 이때는 계산 자원을 쓰지 않는다. 신호가 오거나, 타이머가 끝나거나, 서비스가 재시작되면 워크플로 메서드를 처음부터 다시 돌린다. 이미 실행한 액션은 다시 실행하지 않고 체크포인트된 결과를 곧바로 돌려준다. 그렇게 멈춘 곳에서 이어 간다.
+
+평상시 비용이 작은 이유도 설명한다. 워크플로가 시작될 때 DB에서 두 가지가 일어난다. 워크플로 인스턴스를 만들고, 지속성 보장용 지연 시간 초과 작업(delayed timeout task)을 예약한다. 그 뒤로 워크플로는 전부 프로세스 안에서 돈다.
+
+액션은 전용 스레드 풀의 메모리 실행 큐에서 평범한 메서드 호출로 돌고, 체크포인트는 묶어서 쓰고, 더 조율할 것 없이 끝까지 갈 수 있다. 프로세스가 중간에 죽으면, 리스 기간이 지난 뒤 영속 스케줄러가 그 워크플로를 집어 재생한다. 정상적으로 끝나면 시간 초과 작업은 아무 일 없이 버려진다.
+
+<SequenceDiagram
+  caption="Skipper의 평상시 경로와 크래시 뒤의 재생 (2026년 4월 글 기준)"
+  actors={[
+    { id: "svc", label: "서비스 (Skipper)" },
+    { id: "db", label: "서비스의 DB" },
+    { id: "psp", label: "결제 API" },
+    { id: "sch", label: "영속 스케줄러" },
+  ]}
+  steps={[
+    { from: "svc", to: "db", label: "인스턴스 + 시간 초과 작업", title: "시작할 때 DB에 두 번 쓴다", detail: "워크플로 인스턴스를 만들고, 크래시에 대비한 지연 시간 초과 작업을 예약한다." },
+    { from: "svc", to: "psp", label: "charge()", title: "액션이 평범한 호출로 돈다", detail: "전용 스레드 풀에서 실행한다. 바깥 엔진에 왕복하지 않는다." },
+    { from: "svc", to: "db", label: "체크포인트 (묶어서)", title: "액션 결과를 남긴다", detail: "결제 결과가 DB에 저장되면 재생 때 다시 청구하지 않는다." },
+    { from: "sch", to: "svc", label: "리스 만료 → 재생", title: "중간에 죽었다면 스케줄러가 집는다", detail: "리스가 끝나도 워크플로가 끝나지 않았으면 다시 돌린다. 체크포인트된 액션은 결과만 돌려준다." },
+    { from: "svc", to: "db", label: "완료", title: "끝나면 시간 초과 작업은 버려진다", detail: "평상시에는 DB 쓰기 몇 번이 추가 비용의 전부다." },
+  ]}
+/>
+
+글은 이것을 외부 오케스트레이션 엔진과 대비했다. 외부 엔진은 액티비티를 부를 때마다 중앙 클러스터와 네트워크 왕복을 한다. 워커가 액티비티를 실행하고, 결과를 저장하려고 클러스터를 다시 부르고, 그 뒤에야 워크플로가 다음으로 간다. 클러스터가 조율자이니 구조상 피할 수 없다. Skipper는 "문제가 생길 때만" 엔진이 끼어든다. 크래시가 나면 재생하고, `waitUntil`이면 잠들고, 오류가 나면 보상한다. 글은 이 덕분에 지연에 민감하고 처리량이 큰 서비스에도 쓸 수 있다고 적었다.
+
+## 상태를 직접 저장하는 재생, 사건을 쌓는 재생
+
+여기서 Cadence와의 차이가 드러난다. Skipper 글은 이렇게 설명한다. 사건 기록 전체를 재생해 상태를 다시 세우는 이벤트 소싱 방식의 오케스트레이션 시스템과 달리, Skipper는 상태 필드를 직접 저장한다. 다시 읽을 사건 로그가 없고, 지금 상태와 체크포인트된 액션 결과만 있다. 그래서 신호가 많거나 기록이 긴 워크플로에서 더 가볍게 돈다. 대신 감사 가능성(auditability)을 일부 내준다고 글은 적었다.
+
+[Uber Cadence](/posts/rw-uber-ringpop-cadence)의 27줄 히스토리처럼 모든 결정과 사건이 남으면, 어떤 워크플로가 언제 무엇을 했는지 끝까지 거슬러 볼 수 있고, 리셋으로 과거 지점에서 다시 갈 수도 있다. Skipper는 그 기록 대신 "지금 상태"와 "끝난 액션의 결과"만 들고 있다. 결제처럼 감사가 중요한 영역이라면 무엇을 따로 기록해야 하는지 스스로 정해야 한다는 뜻이다(이건 두 방식을 견준 내 해석이다. 글은 에어비앤비가 감사 기록을 어떻게 보완하는지 말하지 않았다).
+
+재생한다는 것은 같으니 제약도 같다. 글에 따르면 워크플로 메서드는 결정적이어야 한다. 같은 입력, 같은 체크포인트 결과, 같은 상태 필드가 주어지면 같은 판단을 내리고 같은 순서로 액션을 불러야 한다. API 호출, 시간에 따라 바뀌는 로직, 난수 같은 부작용은 모두 액션에 두고, 워크플로 메서드에 직접 두지 않는다.
+
+## 한 번 더 실행될 수 있다는 것
+
+글의 "우리가 내준 것" 목록에 결제 팀이 가장 주의 깊게 볼 한 줄이 있다. 최소 한 번 실행(at-least-once)이다. 드문 경우, 즉 액션을 실행한 뒤 체크포인트하기 전에 크래시가 나면 액션이 한 번 더 실행될 수 있다. 그래서 글은 "액션은 멱등해야 한다"고 적었다.
+
+<AlgoTrace
+  caption="실행과 체크포인트 사이에서 죽으면 그 액션은 한 번 더 돈다"
+  cells={["charge 실행", "charge 체크포인트", "hold 실행", "hold 체크포인트", "accept 실행"]}
+  memoryLabel="DB에 남은 체크포인트"
+  steps={[
+    { pointer: 0, memory: [], caption: "결제 API로 청구한다. 카드사 쪽에서는 이미 돈이 움직였다." },
+    { pointer: 1, memory: ["charge: 성공"], caption: "결과를 체크포인트한다. 이제 재생해도 다시 청구하지 않는다." },
+    { pointer: 2, memory: ["charge: 성공"], caption: "숙소 일정을 잡는다(hold). 실행은 끝났다." },
+    { pointer: 3, memory: ["charge: 성공"], caption: "체크포인트를 쓰기 직전 프로세스가 죽는다. hold의 결과는 남지 않았다." },
+    { pointer: 2, found: [2], memory: ["charge: 성공"], caption: "재생: charge는 결과만 받고 넘어가지만, hold는 체크포인트가 없어 한 번 더 실행된다." },
+  ]}
+/>
+
+이건 이 시리즈의 [Stripe 멱등 키](/posts/rw-stripe-idempotency)와 바로 이어진다. Skipper는 흐름을 끝까지 이어 주지만, 바깥 세계에 두 번 일어난 일을 막아 주지는 않는다. `charge` 액션이 결제 대행사를 부를 때 같은 청구에 같은 멱등 키를 실어 보내면, 크래시 뒤 두 번째 호출은 결제사 쪽에서 같은 결과로 돌아온다.
+
+키로는 워크플로 ID와 액션 이름처럼 재생해도 바뀌지 않는 값을 쓰는 것이 자연스럽다(키를 어떻게 만드는지는 Skipper 글이 정하지 않았다). [멱등 키 글](/posts/idempotency-key)의 "선점하고, 처리하고, 응답을 저장한다"가 액션 안쪽의 일이 된다.
+
+키를 무엇으로 만드느냐가 전부다. PostgreSQL 16으로 결제사 쪽 청구 표를 흉내 내 봤다. 멱등 키가 기본 키라서 같은 키로는 청구가 한 번만 남는다.
+
+```sql
+CREATE TABLE psp_charges (          -- 결제사 쪽이라고 치자: 멱등 키마다 청구 한 번
+  idempotency_key text PRIMARY KEY,
+  amount int NOT NULL,
+  charged_at timestamptz NOT NULL DEFAULT now()
+);
+-- 첫 실행: 키 = 워크플로 ID + 액션 이름
+INSERT INTO psp_charges (idempotency_key, amount) VALUES ('reservation:R100/charge', 120000)
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING idempotency_key, amount;
+-- 체크포인트 전에 죽었다. 재생하면 같은 키로 다시 부른다
+INSERT INTO psp_charges (idempotency_key, amount) VALUES ('reservation:R100/charge', 120000)
+ON CONFLICT (idempotency_key) DO NOTHING
+RETURNING idempotency_key, amount;
+```
+
+```text
+     idempotency_key     | amount 
+-------------------------+--------
+ reservation:R100/charge | 120000
+(1 row)
+
+ idempotency_key | amount 
+-----------------+--------
+(0 rows)
+```
+
+두 번째 호출은 아무 줄도 넣지 않았다. 재생해도 바뀌지 않는 값(워크플로 ID와 액션 이름)으로 키를 만들었기 때문이다. 같은 일을 액션 안에서 호출할 때마다 새로 만든 무작위 값으로 하면 이렇게 된다.
+
+```sql
+TRUNCATE psp_charges;
+-- 잘못된 키: 호출할 때마다 새로 만든 무작위 값 (재생하면 바뀐다)
+INSERT INTO psp_charges (idempotency_key, amount) VALUES (gen_random_uuid()::text, 120000) ON CONFLICT DO NOTHING;
+INSERT INTO psp_charges (idempotency_key, amount) VALUES (gen_random_uuid()::text, 120000) ON CONFLICT DO NOTHING;
+SELECT count(*) AS charges, sum(amount) AS total FROM psp_charges;
+```
+
+```text
+ charges | total  
+---------+--------
+       2 | 240000
+(1 row)
+```
+
+120,000짜리 예약에 240,000이 청구됐다. 무작위 키를 쓰고 싶다면 그 값을 워크플로 상태 필드나 앞 액션의 체크포인트 결과로 먼저 저장해 두고, 재생할 때는 저장된 값을 꺼내 써야 한다. 워크플로 메서드 안에서 직접 난수를 만들면 결정성 규칙도 어긴다.
+
+이 대목은 [Uber Cadence](/posts/rw-uber-ringpop-cadence)에서도 같다. 엔진이 다르면 장애를 다루는 위치가 달라질 뿐, 바깥 호출의 멱등성은 늘 액션을 만드는 사람의 몫이다.
+
+## 오류의 두 종류와 보상
+
+Skipper는 오류를 둘로 나눈다. 네트워크 시간 초과처럼 일시적인 재시도 가능 오류는 설정한 백오프로 자동 재시도한다. 거절된 카드처럼 영구적인 재시도 불가 오류는 워크플로의 정상 흐름을 멈춘다.
+
+멈추면 어색한 상태가 남는다. 몇몇 액션은 성공했는데 워크플로 전체는 실패했다. 글의 예로는 숙소가 내용 검증과 품질 검사를 통과했는데 사진 심사 제출에서 실패한 경우다. 검증 결과는 이제 일어나지 않을 게시를 위해 해 둔 일이 되어 덩그러니 남는다. 글은 전통적인 구조에서 이런 걸 고아 레코드를 찾는 예약 작업, 밤마다 도는 대사 스크립트, 사람의 손으로 처리하는데, 이런 방법은 깨지기 쉽고 늦고 흐름이 바뀌면서 잊히기 쉽다고 적었다.
+
+그래서 보상을 일급 기능으로 만들었다. `@Compensate` 어노테이션으로 각 액션에 그 효과를 되돌리는 메서드를 짝지어 둔다. 앞선 액션들이 성공한 뒤 어떤 액션이 실패하면, Skipper가 보상 메서드를 거꾸로 실행한다. 잡아 둔 재고를 풀고, 청구한 돈을 환불하고, 바꾼 상태를 되돌려 시스템을 일관된 상태로 돌려놓는다.
+
+개발자는 액션마다 "되돌리기"가 무엇인지만 정하고, 언제 어떤 순서로 되돌릴지는 Skipper가 정한다. 글은 결과를 "분산 트랜잭션 없는 최종 일관성"이라고 불렀다. [사가 패턴 글](/posts/saga-pattern)의 오케스트레이션 사가가 라이브러리의 어노테이션 하나로 들어온 셈이다.
+
+아래 함수는 이 순서를 흉내 낸다. 단계 목록, 실패하는 단계의 위치, 되돌릴 방법이 있는 단계 목록을 받아 실제로 일어나는 일을 차례로 돌려준다.
+
+<CodePlayground
+  caption="실패한 단계 앞의 액션을 거꾸로 보상하기"
+  functionName="compensationPlan"
+  initialCode={`function compensationPlan(steps, failIndex, compensable) {
+  // steps: 차례로 실행할 액션 이름들
+  // failIndex: 재시도할 수 없는 오류가 나는 단계의 위치 (-1이면 모두 성공)
+  // compensable: 되돌리는 메서드(@Compensate)가 있는 액션 이름들
+  // 반환: 일어난 일의 순서. 성공한 액션은 이름, 실패는 "fail:이름", 보상은 "undo:이름"
+  // 실패하면 그 앞에서 성공한 액션 중 보상이 있는 것을 거꾸로 되돌린다
+  return [];
+}`}
+  solution={`function compensationPlan(steps, failIndex, compensable) {
+  const log = [];
+  for (let i = 0; i < steps.length; i++) {
+    if (i === failIndex) {
+      log.push("fail:" + steps[i]);
+      for (let j = i - 1; j >= 0; j--) if (compensable.includes(steps[j])) log.push("undo:" + steps[j]);
+      return log;
+    }
+    log.push(steps[i]);
+  }
+  return log;
+}`}
+  tests={[
+    { label: "모두 성공", args: [["holdInventory", "chargeCard", "confirmBooking", "sendReceipt"], -1, ["holdInventory", "chargeCard", "confirmBooking"]], expected: ["holdInventory", "chargeCard", "confirmBooking", "sendReceipt"] },
+    { label: "예약 확정에서 실패", args: [["holdInventory", "chargeCard", "confirmBooking", "sendReceipt"], 2, ["holdInventory", "chargeCard", "confirmBooking"]], expected: ["holdInventory", "chargeCard", "fail:confirmBooking", "undo:chargeCard", "undo:holdInventory"] },
+    { label: "카드가 거절됨", args: [["holdInventory", "chargeCard", "confirmBooking", "sendReceipt"], 1, ["holdInventory", "chargeCard", "confirmBooking"]], expected: ["holdInventory", "fail:chargeCard", "undo:holdInventory"] },
+    { label: "첫 단계에서 실패", args: [["holdInventory", "chargeCard", "confirmBooking", "sendReceipt"], 0, ["holdInventory", "chargeCard", "confirmBooking"]], expected: ["fail:holdInventory"] },
+    { label: "검증은 되돌릴 게 없다", args: [["validate", "chargeCard", "holdCalendar"], 2, ["chargeCard", "holdCalendar"]], expected: ["validate", "chargeCard", "fail:holdCalendar", "undo:chargeCard"] },
+  ]}
+/>
+
+세 번째 테스트가 결제에서 중요하다. 카드가 거절되면 청구 자체가 일어나지 않았으니 환불할 것이 없고, 잡아 둔 재고만 풀면 된다. 실패한 액션 자신은 보상하지 않는다. 다만 "거절"과 "응답을 못 받음"은 다르다. 시간 초과로 결과를 모르는 청구는 재시도 가능 오류로 다뤄 같은 멱등 키로 다시 물어봐야 하고, 보상(환불)으로 넘어가면 안 된다. 그 구분이 [결제 신뢰성 글](/posts/sd-payment-reliability)에서 말한 "모름" 상태의 처리다.
+
+## 운영에서 나온 숫자와 아직 아픈 곳
+
+글에 따르면 Skipper는 1년 넘게 운영 중이고, 보험, 결제, 미디어, 인프라, 인센티브, 지갑 팀의 15개가 넘는 쓰임을 돌린다. 여러 단계의 청구 처리, 보험 상품 수명 주기 관리, 회복력 있는 거래 조율, 며칠에서 몇 주에 걸친 예약 금융 작업이 예로 나온다.
+
+미디어 팀은 검증, 트랜스코딩, 썸네일 생성으로 이어지는 여러 시간짜리 동영상 처리를 파드 재시작을 견디며 조율하고, 인프라 팀은 Flink 작업 수명 주기 관리에 쓴다. 최대 규모로는 Amazon DynamoDB 위에서 초당 워크플로 10,000개까지 늘었다고 적었다.
+
+얻은 것으로 글은 운영 부담이 크게 준 것을 꼽았다. 팀이 새 인프라, 새 배포 절차, 새 당직 없이 도입한다. MySQL과 내부 UDS를 모두 지원하니 데이터베이스가 맞지 않아 막히는 팀이 없다. 워크플로마다 서비스가 처리하니 한 서비스의 부하가 다른 서비스로 번지지 않는다.
+
+내준 것도 셋을 적었다. 결정성 요구는 이 방식이 처음인 개발자에게 직관적이지 않다. 액션은 드물게 한 번 더 실행될 수 있다. 워크플로 구조를 바꾸면 진행 중인 워크플로가 깨질 수 있어 버전 전략이 필요하다. 그리고 이런 맞바꿈이 내장형 모델에 본래 있는 것이라, 여러 언어 지원이나 서비스를 넘는 조율이 필요한 팀에게는 전용 오케스트레이션 시스템이 더 맞을 수 있다고 적었다.
+
+다시 한다면 고칠 곳으로는 워크플로 변경을 꼽았다. 새 메서드 버전을 만들고, 트래픽을 옮기고, 옛 버전을 걷어 내는 패턴은 있지만, 자동 호환성 검사나 이전 도우미, 런타임 버전 지원 같은 도구가 있으면 나았을 것이라고 했다. 재생된 워크플로를 디버깅하는 것도 사고방식을 바꿔야 한다.
+
+로그의 시각과 호출 순서가 원래 실행이 아니라 재생을 반영하기 때문이다. 재생을 시각화하는 관측 도구가 있으면 좋겠다고 적었다. [Uber Cadence](/posts/rw-uber-ringpop-cadence)의 리플레이어·섀도어와 버전 API 개선이 같은 아픔에 대한 다른 회사의 답이다.
+
+Pay as a Local 글도 같은 결의 운영 이야기를 한다. 카드 결제와 Naver Pay 같은 redirect 흐름은 기술 경로가 완전히 달라서, "결제 성공률" 하나로는 비동기 결제 수단의 건강을 알 수 없다.
+
+그래서 클라이언트, 결제 백엔드, PSP, 웹훅 네 층의 지표를 결제 수단 이름 하나만 설정하면 흘러나오게 만들고, 실패 횟수·비율·시간 창을 묶은 복합 경보("Naver Pay 재개 실패가 30분 동안 5건 넘게, 실패율 20% 넘게")로 트래픽이 적을 때의 거짓 경보를 줄였다. 지역 결제 지갑을 개발자가 직접 쓰기 어려워 내부 PSP 에뮬레이터로 redirect와 async 흐름을 흉내 내고, async 결제에서는 웹훅 발송까지 예약해 준다고 적었다.
+
+## 공개 자료가 말하지 않는 것
+
+이 글의 근거는 에어비앤비가 고른 이야기다. Skipper 글은 만든 팀이 쓴 소개 글이라 장점과 맞바꿈을 깔끔하게 정리했지만, Skipper를 쓰는 동안 실제로 어떤 장애가 있었는지, 액션이 두 번 실행된 일이 운영에서 얼마나 자주 있었는지, 결제 액션의 멱등성을 어떻게 보장하는지는 말하지 않는다.
+
+초당 워크플로 10,000개라는 숫자도 어떤 쓰임에서, 얼마 동안의 최대인지 밝히지 않았다. 글에는 Skipper를 오픈소스로 공개한다는 언급이 없어, 코드로 확인할 수도 없다. 2019년의 Orpheus가 지금 Skipper나 MST와 어떤 관계인지도 이 두 자료로는 알 수 없다.
+
+## 우리 결제 흐름에 엔진을 들일까, 라이브러리를 들일까
+
+Skipper의 선택이 맞는 조건은 글에 적혀 있다. 가장 중요한 서비스에 새로운 핵심 의존을 더하고 싶지 않고, 서비스마다 이미 믿을 만한 데이터베이스가 있고, 언어가 Java/Kotlin 하나로 모여 있고, 흐름이 서비스 하나 안에서 끝난다. 이때 내장형은 클러스터를 운영하지 않고도 지속 실행을 준다.
+
+맞지 않는 조건도 글이 직접 말했다. 여러 언어를 써야 하거나, 흐름 하나가 서비스 여러 개를 가로질러 조율돼야 한다면 전용 엔진이 낫다. 감사 기록이 중요해 모든 결정의 이력을 남겨야 한다면 사건을 쌓는 방식이 맞을 수 있다. 그리고 에어비앤비가 Skipper를 만든 이유 중 하나는 "팀마다 같은 걸 다시 만드는" 규모였다. 결제 흐름이 하나뿐인 팀이 이런 라이브러리를 직접 만들면, 에어비앤비가 피하려던 바로 그 "또 하나의 맞춤 해결책"이 된다.
+
+처음부터 따라 하면 드는 비용은 결정적 코드와 버전 관리다. Skipper 글이 가장 큰 마찰로 꼽은 것이 워크플로 변경이었다. 며칠짜리 결제 흐름이 진행 중일 때 코드를 바꾸는 규칙을 팀이 먼저 갖고 있어야 한다.
+
+작은 팀이 엔진이나 라이브러리 없이도 지금 가져올 만한 것은 두 가지다. 하나는 바깥 세계를 부르는 일(청구, 환불, 지급, 알림)을 하나하나 멱등한 함수로 떼어 두는 습관이다. 같은 요청에 같은 키를 실어 보내고, 결과를 우리 DB에 남긴 뒤 다음으로 간다. 그러면 나중에 무엇을 들이든 그 함수가 그대로 액션이 된다. 다른 하나는 단계마다 "되돌리기"를 미리 적어 두는 것이다. 청구에는 환불, 일정 잡기에는 풀기를 짝지어 두면, 실패했을 때 밤마다 고아 레코드를 찾는 스크립트 대신 정해진 순서로 되돌릴 수 있다.
+
+비슷한 신호가 보이면 이 순서로 본다. 결제가 "처리 중"에서 멈춘 건이 쌓이면, 그 단계에서 무엇을 기다리는지(웹훅인지, 사용자의 외부 앱 결제인지)와 그 기다림이 재시작을 넘어 이어지는지 본다. 같은 손님에게 청구가 두 번 들어갔다면 재시도한 쪽이 같은 멱등 키를 썼는지, 실행과 결과 저장 사이에서 프로세스가 죽은 흔적이 있는지 본다.
+
+배포 직후 오래된 흐름만 실패한다면 진행 중인 워크플로와 바뀐 코드가 어긋났는지 의심한다. 결제 수단마다 흐름이 다르다면, Pay as a Local 글처럼 성공률 하나가 아니라 수단별로 클라이언트·백엔드·PSP·웹훅 지표를 나눠 본다.
+
+## 이 글이 기댄 자료
+
+- [Skipper: Building Airbnb's embedded workflow engine](https://airbnb.tech/infrastructure/skipper-building-airbnbs-embedded-workflow-engine/) — Airbnb, 기술 블로그(Ricardo Gamba, Andriy Sergiyenko), 2026년 4월
+- [Pay as a Local](https://airbnb.tech/payments/pay-as-a-local/) — Airbnb, 기술 블로그(Gerum Haile 외), 2026년 2월
+
+## 면접에서 나올 만한 질문
+
+### 에어비앤비는 왜 외부 워크플로 엔진 대신 내장형 라이브러리를 만들었나요?
+
+Skipper 글 기준으로 가장 중요한 Tier 0 서비스에 새로운 핵심 의존을 더하고 싶지 않았기 때문이다. 외부 엔진은 클러스터와 저장 계층과 운영 전문성이 필요하고, 그 클러스터가 멈추면 기대는 모든 서비스가 워크플로를 시작도 진행도 못 한다. Skipper는 서비스 안에서 돌고 서비스가 이미 쓰는 MySQL이나 내부 저장소에 상태를 둔다. 대가로 여러 언어 지원과 서비스를 넘는 조율을 포기했다.
+
+### Skipper는 크래시 뒤에 어떻게 이어 가나요?
+
+액션 결과를 DB에 체크포인트하고, 시작할 때 지연 시간 초과 작업을 하나 예약해 둔다. 프로세스가 죽어 리스가 끝나면 영속 스케줄러가 워크플로를 집어 워크플로 메서드를 처음부터 다시 돌리는데, 체크포인트된 액션은 다시 실행하지 않고 결과만 돌려준다. 그래서 멈춘 곳에서 이어진다. 평상시에는 DB 쓰기 몇 번만 더해진다.
+
+### 사건을 쌓는 재생과 상태를 저장하는 재생은 무엇이 다른가요?
+
+Cadence 같은 이벤트 소싱 방식은 모든 결정과 사건을 히스토리로 남기고 그걸 다시 읽어 상태를 세운다. Skipper는 상태 필드와 끝난 액션의 결과만 저장해, 다시 읽을 사건 로그가 없다. 그래서 신호가 많거나 오래 사는 워크플로에서 가볍지만, 글이 직접 말하듯 감사 가능성을 일부 내준다. 둘 다 재생하니 워크플로 코드는 결정적이어야 한다.
+
+### 워크플로 엔진이 있으면 결제가 정확히 한 번 일어나나요?
+
+아니다. Skipper는 최소 한 번 실행이라, 액션을 실행한 뒤 체크포인트 전에 죽으면 그 액션이 한 번 더 돈다. 그래서 글은 액션이 멱등해야 한다고 적었다. 결제 액션이라면 같은 청구에 같은 멱등 키를 실어 결제 대행사가 두 번째 요청을 같은 결과로 돌려주게 해야 한다. 엔진은 흐름을 이어 줄 뿐 바깥에 두 번 일어난 일을 막지는 않는다.
+
+### 보상은 어떻게 동작하고, 카드 거절과 시간 초과는 어떻게 다르게 다루나요?
+
+액션마다 되돌리는 메서드를 `@Compensate`로 짝지어 두면, 재시도할 수 없는 오류가 났을 때 앞서 성공한 액션의 보상을 거꾸로 실행한다. 카드 거절은 재시도 불가 오류라 청구가 일어나지 않았으니 앞의 재고 잡기만 푼다. 시간 초과는 결과를 모르는 상태라 재시도 가능 오류로 다뤄 같은 멱등 키로 다시 확인해야 하고, 곧바로 환불로 넘어가면 안 된다.
+
+### Skipper를 운영하며 가장 아팠던 점은 무엇인가요?
+
+글은 워크플로 변경을 가장 큰 마찰로 꼽았다. 구조를 바꾸면 진행 중인 워크플로가 깨질 수 있어 새 메서드 버전을 만들고 트래픽을 옮기고 옛 버전을 걷어 내야 하는데, 자동 호환성 검사 같은 도구가 아쉬웠다. 재생된 워크플로를 디버깅할 때 로그의 시각과 순서가 원래 실행이 아니라 재생을 보여 준다는 점도 적응이 필요했다.
+
+### 결제 하나가 여러 단계에 걸칠 때 에어비앤비는 어떻게 표현하나요?
+
+Pay as a Local 글 기준으로 여러 단계 거래(MST)라는 PSP와 무관한 틀을 만들었다. PSP가 리다이렉트나 강한 고객 인증 같은 추가 행동을 요구하면 그 PSP의 플러그인이 요청을 ActionPayload로 정규화하고 상태를 ACTION_REQUIRED로 돌려준다. 그래서 결제 수단마다 다른 API를 쓰더라도 상위 흐름은 redirect, async, direct 세 갈래로 같은 방식으로 다룬다. async 흐름은 웹훅으로 결과를 받으니 그 사이를 재시작 너머까지 기다릴 수 있어야 한다.
+
+### 우리 서비스에 결제 흐름이 하나뿐이라면 Skipper 같은 라이브러리를 직접 만드나요?
+
+대개 아니다. 에어비앤비가 Skipper를 만든 이유는 여러 팀이 같은 해결책을 따로 만들고 같은 엣지 케이스를 반복해서 겪는 규모였다. 흐름이 하나라면 직접 만든 라이브러리가 또 하나의 맞춤 해결책이 될 뿐이다. 먼저 바깥 호출을 멱등한 함수로 떼어 내고, 단계마다 되돌리기를 정하고, 결과를 DB에 남긴 뒤 다음으로 가는 습관부터 들이는 편이 싸다.
