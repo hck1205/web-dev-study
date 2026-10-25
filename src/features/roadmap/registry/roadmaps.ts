@@ -1417,4 +1417,42 @@ export const ROADMAPS: RoadmapNode[] = [
     requires: ["foundations"],
     items: ["pythagorean-theorem"],
   },
+  // real-world:start (scratchpad/rw_integrate.py가 만든다)
+  {
+    id: "real-world",
+    label: "실제 서비스 사례",
+    description: "국내외 회사가 직접 공개한 아키텍처와 장애 보고서. 설계 사례에서 배운 원리가 실제로 어떻게 쓰였는지 본다.",
+    tier: 2,
+    requires: ["system-design/cases"],
+    items: [
+      {
+        id: "storage",
+        label: "저장소와 데이터",
+        description: "샤딩, 복제, 캐시, 로그. 데이터가 커질 때 회사들이 실제로 고른 저장 구조",
+        items: [
+          "rw-amazon-dynamo",
+          "rw-google-spanner-truetime",
+          "rw-meta-memcache-tao",
+          { checkpoint: "저장소와 데이터 관문" },
+        ],
+      },
+      {
+        id: "structure",
+        label: "구조를 바꾼 선택",
+        description: "모놀리스와 마이크로서비스, 클라우드와 자체 서버. 어느 쪽으로든 옮긴 이유와 대가",
+        items: [
+          "rw-shopify-modular-monolith",
+        ],
+      },
+      {
+        id: "traffic",
+        label: "실시간과 대규모 트래픽",
+        description: "연결을 붙잡고, 메시지를 나르고, 한 번만 처리하기",
+        items: [
+          "rw-stripe-idempotency",
+        ],
+      },
+    ],
+  },
+  // real-world:end
 ];

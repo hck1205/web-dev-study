@@ -2,6 +2,123 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-amazon-dynamo": {
+    "links": [
+      "sd-kv-store-partition-replication",
+      "sd-kv-store-failure-handling",
+      "sd-kv-store-versioning",
+      "tail-latency",
+      "eventual-consistency",
+      "consistent-hashing",
+      "merkle-tree",
+      "clock-skew",
+      "raft-consensus",
+      "db-consistency-cap",
+      "optimistic-locking",
+      "rw-stripe-idempotency"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-type-key-value",
+      "network-partitions",
+      "authn-vs-authz",
+      "db-sharding",
+      "db-type-relational",
+      "mongodb-replica-set-sharding",
+      "vpc-basics",
+      "db-transaction-isolation",
+      "acid-transactions"
+    ]
+  },
+  "rw-google-spanner-truetime": {
+    "links": [
+      "clock-skew",
+      "consistency-models",
+      "db-type-newsql",
+      "db-sharding",
+      "distributed-transactions-2pc",
+      "db-consistency-cap"
+    ],
+    "mentions": [
+      "network-partitions",
+      "db-type-key-value",
+      "db-type-wide-column",
+      "sd-start-single-server",
+      "db-type-relational",
+      "leader-election",
+      "mongodb-document-model",
+      "sd-sharding-intro"
+    ]
+  },
+  "rw-meta-memcache-tao": {
+    "links": [
+      "caching-strategies",
+      "cache-invalidation",
+      "consistent-hashing",
+      "cdc-change-data-capture",
+      "sd-db-replication-intro"
+    ],
+    "mentions": [
+      "exponential-backoff-jitter",
+      "db-type-columnar-olap",
+      "sliding-window-pattern",
+      "ds-hash-map",
+      "sd-start-single-server",
+      "db-sharding",
+      "db-consistency-cap",
+      "sd-sharding-intro",
+      "tcp-reliability-congestion",
+      "db-replication-sharding",
+      "redis-basics",
+      "resilience-patterns",
+      "acid-transactions",
+      "udp-and-quic"
+    ]
+  },
+  "rw-shopify-modular-monolith": {
+    "links": [
+      "modular-monolith",
+      "microservices",
+      "backpressure",
+      "rate-limiting-algorithms",
+      "db-sharding",
+      "resilience-patterns",
+      "mysql-replication-online-ddl",
+      "cdc-change-data-capture",
+      "solid-principles",
+      "ddd-bounded-context",
+      "rw-meta-memcache-tao"
+    ],
+    "mentions": [
+      "redis-basics",
+      "k8s-deploy-pipeline-eks",
+      "sd-split-web-and-db",
+      "disaster-recovery",
+      "api-versioning",
+      "bloom-filter",
+      "coupling-cohesion-principles",
+      "release-cutover-hypercare"
+    ]
+  },
+  "rw-stripe-idempotency": {
+    "links": [
+      "idempotency-key",
+      "sd-payment-reliability",
+      "exponential-backoff-jitter",
+      "http-methods"
+    ],
+    "mentions": [
+      "zero-downtime-migrations",
+      "message-delivery-semantics",
+      "sd-start-single-server",
+      "resilience-patterns",
+      "js-pure-functions",
+      "http-status-codes",
+      "acid-transactions",
+      "dns",
+      "webhooks"
+    ]
+  },
   "leetcode-index-pairs-of-a-string": {
     "links": [
       "leetcode-implement-trie",
@@ -10580,6 +10697,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "airflow-orchestration",
       "sd-start-single-server",
       "db-type-relational",
+      "rw-google-spanner-truetime",
       "http-methods"
     ]
   },
@@ -11585,6 +11703,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "event-driven-architecture",
       "db-type-wide-column",
+      "rw-google-spanner-truetime",
       "page-cache-disk-io",
       "sd-kv-store-write-read-path"
     ]
@@ -12522,6 +12641,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "leader-election"
     ],
     "mentions": [
+      "rw-amazon-dynamo",
       "db-type-wide-column",
       "bloom-filter"
     ]
@@ -12537,6 +12657,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eventual-consistency"
     ],
     "mentions": [
+      "rw-amazon-dynamo",
       "db-type-wide-column",
       "db-type-key-value",
       "db-locking-deadlock",
@@ -12564,6 +12685,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding"
     ],
     "mentions": [
+      "rw-amazon-dynamo",
       "ds-hash-map",
       "sd-start-single-server",
       "tail-latency",
@@ -13962,6 +14084,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "acid-vs-base",
+      "rw-google-spanner-truetime",
       "db-replication-sharding",
       "redis-basics"
     ]
@@ -17380,6 +17503,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "digital-signatures-certificates",
+      "rw-amazon-dynamo",
       "db-type-wide-column",
       "db-type-key-value",
       "sd-kv-store-versioning",
@@ -19100,6 +19224,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rolling-deployment",
+      "rw-amazon-dynamo",
       "osi-in-practice",
       "db-type-wide-column",
       "sd-start-single-server",
@@ -20599,6 +20724,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-replication-sentinel"
     ],
     "mentions": [
+      "rw-amazon-dynamo",
       "db-type-key-value",
       "acid-vs-base",
       "network-partitions",
@@ -21760,6 +21886,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-reverse-proxy"
     ],
     "mentions": [
+      "rw-stripe-idempotency",
       "graphql-basics",
       "json-crud-http",
       "elasticsearch-inverted-index",

@@ -179,6 +179,7 @@ export const COURSES: Course[] = [
       { label: "핵심 개념", roadmaps: ["system-design/concepts"] },
       { label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
       { label: "설계 사례", roadmaps: ["system-design/cases"] },
+      { label: "실제 서비스 사례", roadmaps: ["real-world"] },
       { label: "프런트엔드 시스템 디자인", roadmaps: ["frontend/system-design"] },
     ],
     next: [
