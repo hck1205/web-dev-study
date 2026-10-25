@@ -80,7 +80,7 @@ SET
 (1 row)
 ```
 
-첫 에러가 "권한 없음"이 아니라 "없는 테이블"이라는 점을 기억해 둔다. 스키마에 `USAGE` 권한이 없으면 그 안의 이름을 찾지도 못해서 이렇게 나온다. 테이블이 분명히 있는데 `does not exist`가 나오면 스키마 권한을 의심한다. `session_user`는 처음 로그인한 역할, `current_user`는 지금 권한 검사에 쓰이는 역할이다. 로그에는 둘 다 남길 수 있어서 누가 주인 역할로 무엇을 했는지 추적된다. 멤버십 목록은 `\drg`(16부터)로 본다.
+첫 에러가 "권한 없음"이 아니라 "없는 테이블"인 것을 기억해 둔다. 스키마에 `USAGE` 권한이 없으면 그 안의 이름을 찾지도 못해서 이렇게 나온다. 테이블이 분명히 있는데 `does not exist`가 나오면 스키마 권한을 의심한다. `session_user`는 처음 로그인한 역할, `current_user`는 지금 권한 검사에 쓰이는 역할이다. 로그에는 둘 다 남길 수 있어서 누가 주인 역할로 무엇을 했는지 추적된다. 멤버십 목록은 `\drg`(16부터)로 본다.
 
 ```text
                  List of role grants
@@ -148,7 +148,7 @@ SET
 <ConceptDiagram
   width={400}
   height={320}
-  caption="로그인 역할은 그룹을 통해서만 권한을 받는다"
+  caption="로그인 역할은 그룹에서만 권한을 받는다"
   nodes={[
     { id: "owner", label: "shop_owner", sub: "주인, NOLOGIN", x: 110, y: 50, w: 140 },
     { id: "tables", label: "테이블들", sub: "users, orders …", x: 300, y: 50, w: 140 },

@@ -104,6 +104,6 @@ export const REACT_STATE_MANAGEMENT_LIBRARIES: QuizQuestion[] = [
     answer: 1,
     explanation:
       "드물게 바뀌는 값 몇 개라면 Context의 전체 구독이 문제가 되지 않고, 라이브러리를 더하지 않는 게 가장 싸다. 자주 바뀌는 값이 섞여 렌더링이 보이기 시작할 때 셀렉터가 있는 저장소로 옮긴다.",
-    anchor: "무엇을-고를까",
+    anchor: "서버-상태를-빼고-남은-전역-값부터-센다",
   },
 ];

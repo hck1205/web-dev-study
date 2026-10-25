@@ -467,7 +467,7 @@ PING 10.244.2.2 (10.244.2.2) 1422(1450) bytes of data.
 
 ## 어떤 CNI를 고르나
 
-방식은 결국 셋으로 나뉜다. 노드 사이에 경로를 놓거나(Flannel host-gw, Calico BGP), 터널로 감싸거나(Flannel VXLAN, Calico VXLAN·IP-in-IP, Cilium 터널), 클라우드 망이 Pod 주소를 직접 알게 하거나(AWS VPC CNI, Azure CNI, GKE의 VPC 기반 클러스터). 제품을 고를 때 보는 기준은 다음과 같다.
+방식은 결국 셋으로 나뉜다. 노드 사이에 경로를 놓거나(Flannel host-gw, Calico BGP), 터널로 감싸거나(Flannel VXLAN, Calico VXLAN·IP-in-IP, Cilium 터널), 클라우드 망이 Pod 주소를 직접 알게 하거나(AWS VPC CNI, Azure CNI, GKE의 VPC 기반 클러스터). 제품을 고를 때는 이런 기준을 본다.
 
 - NetworkPolicy가 필요한가. Flannel은 정책을 집행하지 않는다. 정책이 필요하면 Calico나 Cilium을 쓰거나 Flannel 위에 Calico를 정책 전용으로 얹는다(Canal). 정책을 어떻게 집행하는지는 [NetworkPolicy 글](/posts/k8s-network-policy)에서 이어진다.
 - 노드 사이 망을 내가 다룰 수 있나. 온프레미스에서 ToR 스위치와 BGP를 맺을 수 있으면 터널 없는 Calico가 빠르고 투명하다. 망을 못 건드리면 터널이다.

@@ -267,7 +267,7 @@ async function paidOrdersOf(day: string) {
 
 ## 조건부 쓰기로 경쟁을 막는다
 
-DynamoDB에는 유일 제약도, 행 잠금도 없다. 대신 쓰기마다 조건을 걸 수 있고, DynamoDB가 그 항목에 대해 조건 확인과 쓰기를 원자적으로 한다.
+DynamoDB에는 유일 제약도, 행 잠금도 없다. 대신 쓰기마다 조건을 걸 수 있고, DynamoDB가 그 항목의 조건 확인과 쓰기를 원자적으로 한다.
 
 없을 때만 넣기는 `attribute_not_exists`로 한다. 회원 프로필을 같은 키로 두 번 만들려 하면 두 번째가 실패한다. moto로 돌린 결과다.
 

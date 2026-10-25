@@ -286,7 +286,7 @@ MongoServerError[QueryExceededMemoryLimitNoDiskUseAllowed]: PlanExecutor error d
 {"stage":"SORT","memLimit":10485760,"totalDataSizeSorted":16293334,"usedDisk":true,"spills":2}
 ```
 
-막으면 에러, 허용하면 두 번 디스크에 내려 쓰고 끝났다. 문제는 허용이 기본이라는 점이다. 한도를 넘는 집계가 에러 없이 조용히 느려진다. explain이나 느린 쿼리 로그에서 `usedDisk: true`가 보이면 앞에서 더 거르거나, `$sort`가 인덱스를 타게 맨 앞으로 옮기거나, 결과를 미리 계산해 두는 쪽을 생각한다.
+막으면 에러, 허용하면 두 번 디스크에 내려 쓰고 끝났다. 문제는 허용이 기본값이라는 것이다. 한도를 넘는 집계가 에러 없이 조용히 느려진다. explain이나 느린 쿼리 로그에서 `usedDisk: true`가 보이면 앞에서 더 거르거나, `$sort`가 인덱스를 타게 맨 앞으로 옮기거나, 결과를 미리 계산해 두는 쪽을 생각한다.
 
 단계 메모리와 별개로 문서 하나 크기 한도 16MB도 있다. `$group`에서 `$push`로 한 그룹에 문서를 계속 모으거나, `$lookup`의 `as` 배열이 커지면 결과 문서 하나가 16MB를 넘어 에러가 난다. "회원별 주문 전체를 배열로" 같은 집계는 회원이 클수록 터진다.
 

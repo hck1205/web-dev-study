@@ -239,7 +239,7 @@ aws iam create-open-id-connect-provider \
   --client-id-list sts.amazonaws.com
 ```
 
-공급자를 만들 때 예전에는 인증서 지문(thumbprint)을 꼭 넣어야 했지만, 지금 AWS는 GitHub 같은 주요 공급자에 대해서는 자체 신뢰 루트로 확인한다고 안내한다. Terraform이나 오래된 문서에 지문 값이 보이면 그 흔적이다.
+공급자를 만들 때 예전에는 인증서 지문(thumbprint)을 꼭 넣어야 했지만, 지금 AWS는 GitHub 같은 주요 공급자는 자체 신뢰 루트로 확인한다고 안내한다. Terraform이나 오래된 문서에 지문 값이 보이면 그 흔적이다.
 
 ## 신뢰 정책의 sub 조건이 문을 정한다
 
