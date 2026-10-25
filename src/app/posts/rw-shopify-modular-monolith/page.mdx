@@ -1,0 +1,267 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-shopify-modular-monolith");
+
+<EasyIntro>
+  아주 큰 학교 하나를 떠올려 보자. 학생도 선생님도 많아지자 복도가 붐비고, 한 반에서 소란이 나면 온 층이 시끄러워졌다. 이때 고를 수 있는 길은 두 가지다. 학교를 작은 학교 여러 개로 쪼개거나, 한 건물 안에서 반과 층을 잘 나누는 것이다.
+
+  Shopify는 쪼개지 않는 쪽을 골랐다. 코드는 한 건물에 그대로 두되, 주문, 배송, 결제처럼 하는 일마다 방을 나누고 "이 방은 저 방의 정문으로만 들어간다"는 규칙을 정했다. 규칙을 어기는지는 사람이 아니라 검사 도구가 매일 확인한다.
+
+  건물을 쪼개지 않는 대신 운동장은 나눴다. 가게들을 여러 무리로 묶고, 무리마다 자기만의 창고를 따로 줬다. 한 무리의 창고에 불이 나도 다른 무리 가게는 계속 문을 연다. Shopify는 이 무리를 Pod라고 부른다.
+
+  나중에 Shopify는 방을 나누는 일이 생각보다 훨씬 어렵다는 것도 솔직하게 적었다. 이름만 보고 방을 정하면 실제로 함께 일하는 코드와 어긋나서, 규칙을 다 지켜도 방 하나만 따로 떼어 쓸 수 없었다고 한다.
+</EasyIntro>
+
+이 글은 [실제 서비스 사례](/posts/rw-reading-engineering-blogs) 시리즈의 하나다. 모듈러 모놀리스를 업무 단위로 자르고 도구로 경계를 지키는 일반 방법은 [모듈러 모놀리스 글](/posts/modular-monolith)에, 마이크로서비스로 나눌 때의 비용은 [마이크로서비스 글](/posts/microservices)에 있다. 여기서는 Shopify Engineering 블로그가 2017년부터 2024년까지 직접 공개한 글들을 따라가며, Shopify가 코드와 운영 두 축에서 무엇을 골랐고 무엇을 고쳐 썼는지 본다. 같은 Rails 모놀리스에서 다른 길을 간 사례는 [Airbnb SOA 전환 글](/posts/rw-airbnb-soa-migration)에 있다.
+
+## 한 가게의 세일이 같은 샤드의 가게를 모두 내렸다
+
+Shopify Engineering 블로그의 [Surviving Flashes of High-Write Traffic Using Scriptable Load Balancers (Part I)](https://shopify.engineering/surviving-flashes-of-high-write-traffic-using-scriptable-load-balancers-part-i)(Emil Stolarsky, 2017년 2월)는 Shopify의 첫 큰 플래시 세일이 2007년이었다고 적었다. 그 뒤로 판매자들이 예고 없이 슈퍼볼급 트래픽을 보내는 일이 잦아졌다. 대표적인 판매자가 Kylie Cosmetics였다. 판매를 공지하면 고객이 몰려 몇 분 만에 품절되는 일이 7~8일마다 반복됐고, 2016년 2월의 세일은 그 가게뿐 아니라 같은 데이터베이스 샤드에 있던 다른 가게들까지 모두 내렸다.
+
+같은 글은 결제(checkout) 쓰기가 플랫폼 일부를 계속 내린 이유도 설명한다. 체크아웃 세션마다 MySQL에 새 레코드를 만들고, 흐름의 단계마다 같은 레코드를 고쳤다. 쓰기를 하나로 줄이는 리팩터링이 이상적이지만 다음 세일이 바로 다음 주라 시간이 없었다. 그래서 Nginx와 OpenResty Lua로 만든 엣지 계층에 새는 양동이(leaky bucket) 방식의 제한을 넣고, 한도를 넘은 고객은 Nginx에 캐시된 대기 페이지로 보냈다. 기간은 5초였다. 그런데 대기 페이지가 실제로는 줄이 아니라 무작위 재시도라서, 40분짜리 세일에 최대 40분을 기다린 고객이 생겼다고 글은 적었다. 처음 들어온 고객에게 우선권을 주지 않은 영향을 과소평가했다는 반성이다. 일반적인 백프레셔 개념은 [백프레셔 글](/posts/backpressure)에, 새는 양동이 알고리즘은 [요청 수 제한 알고리즘 글](/posts/rate-limiting-algorithms)에 있다.
+
+이 사건은 Shopify가 같은 시기에 두 가지 문제를 안고 있었다는 것을 보여 준다. 하나는 운영 쪽 문제다. 샤드 하나의 장애가 그 샤드의 모든 가게로 번졌다. 다른 하나는 코드 쪽 문제다. 쓰기를 줄이는 리팩터링이 "시간 안에 할 수 없는" 일이었다. Shopify는 두 문제에 서로 다른 답을 냈다. 운영에는 Pod를, 코드에는 모듈러 모놀리스를.
+
+## 샤드로 나눴더니 회복력을 잃었다
+
+[A Pods Architecture To Allow Shopify To Scale](https://shopify.engineering/a-pods-architecture-to-allow-shopify-to-scale)(2018년 3월)는 2015년 이야기로 시작한다. 더 큰 데이터베이스 서버를 사는 것이 더는 불가능해져서 데이터베이스를 샤딩했다. 성능과 확장성은 얻었지만 회복력은 잃었다. 코드 곳곳에 이런 줄이 있었다.
+
+```ruby
+# Pods 글에 실린 예: 모든 샤드를 돌며 같은 일을 한다
+Sharding.with_each_shard do
+  some_action
+end
+```
+
+샤드 하나라도 죽으면 이 동작 전체가 플랫폼 전체에서 멈춘다. 샤드가 늘수록 이 문제가 커질 것이 분명했다. 글에 따르면 2016년에 Shopify는 런타임 구조를 다시 짰다. 샤드로 나누는 일반 방법과 재분배 비용은 [샤딩 글](/posts/db-sharding)에 정리했다. Shopify의 사례는 샤딩만으로는 장애 격리가 되지 않는다는 것을 보여 준다. 데이터를 나눠도 코드가 여러 샤드를 한꺼번에 건드리면, 장애 영향 범위는 여전히 "전체"다.
+
+## 가게 묶음마다 데이터 저장소를 따로 둔 Pod
+
+답은 Pod였다(Kubernetes의 Pod와는 다른 말이다). Pod는 완전히 격리된 데이터 저장소 묶음 위에 사는 가게들의 집합이다. Pod 바깥의 잡 워커, 앱 서버, 로드 밸런서는 공유하지만, 공유 자원도 한 번에 Pod 하나하고만 이야기한다. Pod를 넘나드는 동작은 허용하지 않는다.
+
+여기서 결정적인 규칙은 작업 단위를 Pod 하나에 묶는 것이다. 웹 요청 하나, 지연 작업 하나가 각각 Pod 하나에만 닿는다. 그러면 요청 하나를 처리하는 데 Pod 하나만 살아 있으면 된다. 2021년 9월의 [Shard Balancing](https://shopify.engineering/mysql-database-shard-balancing-terabyte-scale) 글은 Pod를 "MySQL 샤드 하나와 Redis, Memcached 같은 다른 저장소로 이뤄진 Shopify의 격리된 인스턴스"로 설명하고, Shopify의 데이터 모델에서는 가게가 대부분 데이터의 주인이라 가게 소유 테이블마다 `shop_id`를 붙여 샤딩 키로 쓴다고 적었다.
+
+요청이 어느 Pod로 가야 하는지는 로드 밸런서 안의 Sorting Hat이 정한다. 규칙 목록으로 요청을 Pod에 맞추고 헤더를 붙여 맞는 곳으로 보낸다. 앱 서버는 그 헤더를 보고 맞는 데이터 저장소에 연결한다. 아래 그림에서 한 Pod가 죽었을 때 다른 Pod의 가게가 어떻게 되는지 볼 수 있다.
+
+<NetworkTopology
+  caption="Sorting Hat이 요청을 Pod 하나에 묶는다: Pod 1이 죽어도 Pod 2의 가게는 열려 있다"
+  width={400}
+  height={300}
+  zones={[
+    { id: "edge", label: "엣지 / 공유 자원", x: 10, y: 10, w: 380, h: 120, tone: "edge" },
+    { id: "p1", label: "Pod 1", x: 10, y: 145, w: 185, h: 145, tone: "private" },
+    { id: "p2", label: "Pod 2", x: 205, y: 145, w: 185, h: 145, tone: "public" },
+  ]}
+  nodes={[
+    { id: "buyer", label: "구매자", x: 60, y: 45, icon: "client" },
+    { id: "hat", label: "Sorting Hat", sub: "로드 밸런서", x: 200, y: 45, icon: "lb" },
+    { id: "app", label: "앱 서버", sub: "공유", x: 200, y: 105, icon: "server" },
+    { id: "db1", label: "MySQL", sub: "가게 A, B", x: 60, y: 230, icon: "db" },
+    { id: "r1", label: "Redis", x: 150, y: 230, icon: "container" },
+    { id: "db2", label: "MySQL", sub: "가게 C, D", x: 255, y: 230, icon: "db" },
+    { id: "r2", label: "Redis", x: 345, y: 230, icon: "container" },
+  ]}
+  links={[
+    { from: "buyer", to: "hat" },
+    { from: "hat", to: "app", label: "Pod 헤더" },
+    { from: "app", to: "db1" },
+    { from: "app", to: "r1" },
+    { from: "app", to: "db2" },
+    { from: "app", to: "r2" },
+  ]}
+  steps={[
+    { path: ["buyer", "hat"], packet: "GET 가게 C", title: "요청이 로드 밸런서에 닿는다", detail: "Sorting Hat은 규칙 목록으로 이 요청이 어느 Pod의 가게인지 찾는다. 가게 C는 Pod 2에 있다." },
+    { path: ["hat", "app"], packet: "pod: 2", title: "Pod 번호를 헤더에 붙여 넘긴다", detail: "앱 서버는 여러 Pod가 함께 쓰지만, 이 요청을 처리하는 동안에는 헤더에 적힌 Pod 하나에만 연결한다." },
+    { path: ["app", "db2"], packet: "SELECT", highlight: ["r2"], title: "Pod 2의 저장소만 건드린다", detail: "요청 하나가 Pod 하나에만 닿으니, 이 요청에 필요한 건 Pod 2가 살아 있는 것뿐이다." },
+    { path: ["app", "db1"], packet: "SELECT", blocked: true, title: "Pod 1의 MySQL이 죽었다", detail: "Pod 1의 가게 A, B 요청은 실패한다. 2016년 2월처럼 한 가게의 세일이 샤드를 내린 상황이다." },
+    { path: ["buyer", "hat", "app", "db2"], packet: "GET 가게 D", title: "그래도 Pod 2의 가게는 계속 판다", detail: "Pod 사이를 넘나드는 동작을 허용하지 않으니 Pod 1의 장애가 플랫폼 장애로 번지지 않는다. 샤드를 모두 도는 코드가 있었다면 여기서 함께 멈췄을 것이다." },
+  ]}
+/>
+
+이 구조는 일반적인 이름으로 하면 [격벽(bulkhead) 패턴](/posts/resilience-patterns)을 데이터 계층 전체에 적용한 것이다. 배의 칸막이처럼 장애를 한 칸에 가둔다. 차이는 범위다. 스레드 풀이나 연결 풀을 나누는 게 아니라, 가게 묶음마다 MySQL, Redis, Memcached를 통째로 나눴다.
+
+Pod는 재해 복구 단위도 됐다. Pods 글에 따르면 Shopify는 샤딩 전부터 복구용 데이터센터를 두고 있었고, Pod마다 데이터센터 한 쌍을 정해 하나는 활성, 하나는 복구용으로 썼다. Pod Mover라는 도구로 Pod 하나를 복구 데이터센터로 1분 안에 요청이나 작업을 떨어뜨리지 않고 옮겼다고 한다. 데이터센터 하나를 비우는 일은 그 데이터센터에서 활성인 Pod를 하나씩 옮기는 일이 됐다.
+
+## 가게를 Pod 사이로 옮기기
+
+Pod를 나누면 다음 문제가 생긴다. 가게는 가입할 때 아무 샤드에나 배정되는데, 시간이 지나 자원을 많이 쓰는 가게들이 한 샤드에 몰리면 샤드마다 사용량이 벌어진다. Shard Balancing 글은 가장 많이 쓰는 샤드와 가장 적게 쓰는 샤드의 데이터베이스 사용량이 거의 네 배 차이가 났다고 적었고, 옮길 가게 목록을 시뮬레이션해 그 차이를 두 배 가까이로 줄이는 계획을 세웠다고 했다. 같은 날 플래시 세일을 하는 두 가게를 같은 Pod에 두지 않는 것도 배치 기준의 하나로 든다.
+
+옮기는 데는 Shopify가 만든 오픈소스 Ghostferry를 쓴다. 클라우드로 옮길 때 필요해서 만든 MySQL 인스턴스 사이 데이터 복사 도구다. 아래 그림은 글에 나온 가상의 가게 하나를 Pod 1에서 Pod 2로 옮기는 순서다.
+
+<SequenceDiagram
+  caption="가게 하나를 Pod 1에서 Pod 2로 온라인 이동: 일괄 복사, binlog 따라가기, 짧은 컷오버"
+  actors={[
+    { id: "gf", label: "Ghostferry" },
+    { id: "p1", label: "Pod 1 MySQL" },
+    { id: "p2", label: "Pod 2 MySQL" },
+    { id: "ctl", label: "라우팅 표·락" },
+  ]}
+  steps={[
+    { from: "gf", to: "p1", label: "SELECT … FOR UPDATE", title: "가게의 행을 테이블마다 일괄로 읽는다", detail: "shop_id로 그 가게의 행만 고르고, 읽는 동안 원본이 바뀌지 않게 잠그는 읽기를 쓴다. 묶음마다 자기 트랜잭션이다.", payload: "SELECT * FROM orders WHERE shop_id = 1 FOR UPDATE" },
+    { from: "gf", to: "p2", label: "INSERT 묶음", title: "대상 Pod에 그대로 쓴다", detail: "여러 테이블을 스레드 여러 개로 동시에 복사할 수 있다. 이 동안 가게는 여전히 Pod 1에서 손님을 받는다." },
+    { from: "p1", to: "gf", label: "binlog", title: "복사하는 동안 생긴 변경은 binlog로 따라간다", detail: "행 기반 복제로 설정한 binlog에서 이 가게의 변경만 걸러 대상에 다시 적용한다. 다른 가게(shop_id = 2)의 이벤트는 버린다." },
+    { from: "gf", to: "ctl", label: "쓰기 락 요청", title: "밀린 이벤트가 몇 초 수준이면 컷오버에 들어간다", detail: "그 가게에 묶인 요청과 작업은 모두 Redis 기반 다중 읽기·단일 쓰기 락의 읽기 몫을 들고 돈다. 이동 도구는 읽기 몫이 모두 풀리길 기다렸다가 쓰기 몫을 잡는다." },
+    { from: "gf", to: "p2", label: "남은 이벤트", title: "멈춘 지점까지 마저 적용한다", detail: "쓰기가 멈춘 순간의 binlog 좌표를 끝점으로 적고, 그 좌표까지 남은 이벤트를 모두 적용한다. 이 짧은 구간만 다운타임이 생길 수 있다." },
+    { from: "gf", to: "ctl", label: "가게 → Pod 2", title: "라우팅 표를 바꾸고 락을 푼다", detail: "도메인과 Pod 번호를 잇는 표는 샤딩하지 않은 별도 DB에 있다. 표를 바꾼 뒤 락을 풀면 요청이 Pod 2에서 다시 쓴다. Pod 1에 남은 옛 데이터는 검증 뒤에 지운다." },
+  ]}
+/>
+
+이 순서는 일괄 복사와 변경 로그 따라잡기를 합친 온라인 마이그레이션의 전형이다. 같은 생각을 MySQL 스키마 변경에 쓴 도구들은 [MySQL 온라인 DDL 글](/posts/mysql-replication-online-ddl)에, binlog 같은 변경 스트림을 읽는 일반 방법은 [CDC 글](/posts/cdc-change-data-capture)에 있다. Shopify 사례에서 눈여겨볼 곳은 컷오버의 락이다. 데이터 복사만으로는 "복사하는 순간에도 누군가 쓰고 있지 않다"를 보장할 수 없어서, 앱의 모든 작업 단위가 가게 단위 락의 읽기 몫을 잡게 만들었다. 가게 단위로 묶을 수 없는 작업은 비슷한 전역 락을 잡는다.
+
+## 코드는 쪼개지 않기로 했다
+
+운영을 Pod로 나누는 동안 코드에는 다른 문제가 커졌다. Kirsten Westeinde가 쓴 [Deconstructing the Monolith](https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity)(2019년 2월)에 따르면, Shopify는 현존하는 가장 큰 Ruby on Rails 코드베이스 중 하나이고, 10년 넘게 1,000명이 넘는 개발자가 작업해 왔다. 판매자 과금, 서드파티 앱 관리, 상품 수정, 배송 처리가 모두 경계 없이 한 코드베이스에 있었다. 배송비를 계산하는 코드가 결제 코드 옆에 살면서 서로를 부르는 것을 막을 장치가 거의 없었고, 시간이 지나며 결합도가 극도로 높아졌다.
+
+글은 2016년에 모놀리스의 한계에 닿았다고 적었다. 신호는 둘이었다. 하나는 취약성이다. 사소해 보이는 변경이 관계없는 테스트를 줄줄이 깨뜨렸다. 배송비 계산이 세율 계산을 부르고 있으면, 세율 계산을 바꿨을 때 배송비 결과가 바뀌는데 이유가 잘 보이지 않는다. 테스트는 쓰기 어렵고 CI에서 아주 느렸다. 다른 하나는 맥락이다. 배송 팀에 새로 온 개발자는 배송 로직만 알면 돼야 하는데, 실제로는 주문 생성과 결제 처리까지 알아야 첫 기능을 낼 수 있었다.
+
+마이크로서비스를 고르지 않은 이유도 같은 글에 있다. 업계에서 유행했고 겪은 문제를 풀어 주기는 하겠지만, 다른 문제 묶음을 가져온다고 봤다. 서비스마다 테스트·배포 파이프라인과 인프라를 따로 유지해야 하고, 필요한 데이터에 필요한 때 닿지 못할 수 있고, 서비스 사이 호출은 네트워크를 건너 지연이 늘고 호출마다 신뢰성이 떨어진다. 여러 서비스에 걸친 큰 리팩터링은 의존하는 서비스를 모두 고치고 배포를 맞춰야 한다. 그래서 배포 단위를 늘리지 않고 모듈성을 높이는 쪽, 즉 모든 코드가 하나의 앱을 이루되 도메인 사이 경계를 엄격히 지키는 모듈러 모놀리스를 골랐다. 이 선택의 일반적인 형태는 [모듈러 모놀리스 글](/posts/modular-monolith)에서 다뤘다.
+
+## 6,000개 클래스를 스프레드시트로 나눴다
+
+방식은 Componentization이라는 이름이 됐다. 글에 따르면 먼저 핵심 시스템 개발자 전체에게 설문을 돌려 실제 고통 지점을 찾았고, 그 결과로 2017년 초에 작은 팀을 꾸렸다. 프로젝트 이름은 처음엔 "Break-Core-Up-Into-Multiple-Pieces"였다.
+
+첫 작업은 코드 배치였다. 그때까지 코드는 전형적인 Rails 앱처럼 모델, 뷰, 컨트롤러라는 소프트웨어 개념으로 나뉘어 있었다. 이것을 주문, 배송, 재고, 과금 같은 현실의 개념으로 다시 나눴다. 루비 클래스 약 6,000개를 거대한 스프레드시트에 적고 각 클래스가 어느 컴포넌트에 속하는지 손으로 표시했다. 코드는 한 줄도 바꾸지 않았지만 코드베이스 전체를 건드리니 위험했고, 자동 스크립트로 만든 PR 하나로 한 번에 옮겼다. 개발자 전체를 방해하는 일을 한 번으로 줄이려는 선택이었다. 대가도 적혀 있다. GitHub가 파일 이동을 삭제와 생성으로 잘못 기록해 Git 이력의 상당 부분을 GitHub 화면에서 잃었다. `git log --follow`로는 여전히 따라갈 수 있다.
+
+다음은 의존성 격리였다. 컴포넌트마다 공개 API로 경계를 드러내는 인터페이스를 두고, 자기 데이터를 독점하게 했다. 진행 상황은 Wedge라는 사내 도구로 쟀다. CI에서 Ruby tracepoint에 걸어 전체 호출 그래프를 얻고, 컴포넌트 경계를 넘는 호출만 골라 ActiveRecord 연관, 상속 정보와 함께 보냈다. 경계를 넘는 연관은 항상 위반, 호출은 명시적으로 공개된 것만 허용이었다. Wedge는 컴포넌트마다 점수와 위반 목록을 냈다. 2019년 글은 효과의 예로 낡은 세금 엔진을 들었다. 의존성을 격리한 덕분에 완전히 새 세금 계산 시스템으로 바꿀 수 있었다고 한다.
+
+## 호출 그래프에서 상수 참조로: Packwerk
+
+18개월 뒤 Philip Müller가 쓴 [Under Deconstruction: The State of Shopify's Monolith](https://shopify.engineering/shopify-monolith)(2020년 9월)는 "원래 생각은 대체로 유지하지만 세부는 거의 다 바뀌었다"고 적었다. 이 시점에 핵심 모놀리스는 루비 코드 280만 줄이 넘고 커밋이 50만 개였다.
+
+가장 큰 변화는 도구였다. Wedge의 호출 그래프는 데이터가 너무 많아 신호와 잡음을 가르기 어려웠고, 호출이 어느 컴포넌트에서 나왔는지조차 애매한 경우가 있었다. 컴포넌트 A에 정의된 메서드를 컴포넌트 B의 클래스가 상속하고 그 메서드가 C를 부르면, 그 호출은 누구 것인가. 게다가 계측을 붙인 전체 테스트를 돌려야 해서 한 시간이 넘게 걸렸다. 그래서 정적 상수 참조만 보는 Packwerk를 만들었다. `Shop.first`라는 줄에서 `Shop`이라는 상수 참조만 본다. 정적 참조는 개발자가 직접 쓴 것이라 애매함이 적고 고치기 쉽다. 가장 큰 코드베이스 전체를 몇 분 만에 분석해서 PR 흐름에 넣을 수 있었고, 의존성 그래프를 깨는 변경을 병합 전에 막았다.
+
+Packwerk는 2020년 9월에 오픈소스로 나왔다. 지금의 [Packwerk 저장소 README](https://raw.githubusercontent.com/Shopify/packwerk/main/README.md)와 [USAGE 문서](https://raw.githubusercontent.com/Shopify/packwerk/main/USAGE.md)를 보면 사용법은 단순하다. 폴더에 `package.yml`을 두면 패키지가 되고, `enforce_dependencies: true`와 `dependencies:` 목록으로 허용한 의존만 적는다. 선언하지 않은 패키지의 상수를 참조하면 위반이다. 기존 위반은 `bin/packwerk update-todo`로 `package_todo.yml`에 적어 두고, 새 위반만 막는다. `bin/packwerk validate`는 패키지 의존성 그래프에 순환이 없어야 통과한다. README는 Packwerk가 거짓 양성을 피하려고 일부 거짓 음성을 감수하며, Zeitwerk 자동 로더가 읽는 코드의 상수만 알아본다고 밝혀 두었다.
+
+순환 검사가 왜 중요한지는 2020년 글에 나온다. 컴포넌트 의존 그래프를 처음 분석했을 때, 모든 컴포넌트가 다른 컴포넌트의 절반 넘게에 의존할 만큼 빽빽했고 순환이 많았다. 순환 안의 컴포넌트는 하나를 바꾸면 고리 안의 나머지가 모두 깨질 수 있어 따로 이해할 수 없다. Shopify의 중심 엔티티인 `Shop` 클래스는 거의 모든 것이 의존하니, 순환을 피하려면 `Shop`은 거의 아무것에도 의존하면 안 된다. 직접 순환을 찾아보자. 패키지마다 의존하는 패키지 목록을 받아 순환 하나를 찾아 돌려주는 함수다.
+
+<CodePlayground
+  caption="패키지 의존성 그래프에서 순환 찾기"
+  functionName="findCycle"
+  initialCode={`// deps: { 패키지: [의존하는 패키지들] }
+// 순환이 있으면 [시작, ..., 시작] 경로 하나를, 없으면 []를 돌려준다
+// 패키지 이름은 알파벳 순으로 훑는다
+function findCycle(deps) {
+  return [];
+}`}
+  solution={`function findCycle(deps) {
+  const state = {}; // 1: 지금 경로 위, 2: 다 본 노드
+  const stack = [];
+  const names = Object.keys(deps).sort();
+  function dfs(n) {
+    state[n] = 1;
+    stack.push(n);
+    for (const m of [...(deps[n] || [])].sort()) {
+      // 지금 경로 위의 노드로 돌아오면 순환이다
+      if (state[m] === 1) return [...stack.slice(stack.indexOf(m)), m];
+      if (!state[m]) {
+        const c = dfs(m);
+        if (c) return c;
+      }
+    }
+    state[n] = 2;
+    stack.pop();
+    return null;
+  }
+  for (const n of names) {
+    if (!state[n]) {
+      const c = dfs(n);
+      if (c) return c;
+    }
+  }
+  return [];
+}`}
+  tests={[
+    { label: "층이 지켜진 그래프", args: [{ platform: [], shop_identity: ["platform"], merchandising: ["platform", "shop_identity"], online_store: ["merchandising"] }], expected: [] },
+    { label: "서로 의존하는 두 패키지", args: [{ billing: ["shop"], shop: ["billing"] }], expected: ["billing", "shop", "billing"] },
+    { label: "길이 3짜리 고리", args: [{ a: ["b"], b: ["c"], c: ["a"] }], expected: ["a", "b", "c", "a"] },
+    { label: "바닥 패키지가 위를 부름", args: [{ checkouts: ["platform"], delivery: ["checkouts"], platform: ["delivery"] }], expected: ["checkouts", "platform", "delivery", "checkouts"] },
+    { label: "패키지 하나", args: [{ platform: [] }], expected: [] },
+    { label: "자기 자신에게 의존", args: [{ x: ["x"] }], expected: ["x", "x"] },
+  ]}
+/>
+
+네 번째 경우가 실제로 흔한 모양이다. 모두가 기대는 바닥 패키지(`platform`)가 위쪽 패키지를 하나 부르는 순간 고리가 생긴다. 2020년 글은 이런 화살표를 바꾸는 방법으로 책임을 의존하는 쪽 컴포넌트로 옮기거나, `ActiveSupport::Notifications` 같은 발행·구독으로 제어를 뒤집는 것을 들었다. 컴포넌트를 플랫폼, 지원(상품·재고), 프런트엔드 층으로 묶고 층을 넘는 의존부터 정리했다고 한다. 의존 방향을 뒤집는 원리는 [SOLID 원칙 글](/posts/solid-principles)의 의존 역전에 해당한다.
+
+## 2020년에 고쳐 쓴 것들
+
+2020년 글에는 처음 방식에서 바꾼 것이 여럿 적혀 있다. 이 부분이 사례로서 가장 쓸모 있다.
+
+첫째, 인터페이스 일관성 규칙을 줄였다. 컴포넌트끼리 어떻게 부를지 패턴을 많이 만들어 모든 곳에 쓰게 했는데, 돌아보니 개발자의 능력도 동기도 높이지 못했다. 규칙만 늘었고 어려운 문제를 쉽게 만들지 못했으며, 어떤 경우엔 개발자가 문제를 주어진 해법에 맞게 다시 정의해서 모놀리스 상태를 나쁘게 했다.
+
+둘째, 공개 인터페이스만으로는 부족했다. 의존 그래프를 무시하고 인터페이스만 만들면, 많은 곳에서 인터페이스가 기존 제어 흐름에 한 겹 더 얹은 간접층이 됐다. 나쁜 설계가 별도 인터페이스 클래스로 새어 나가 오히려 고치기 어려워졌다.
+
+셋째, 결합도를 낮추는 것만 보다가 응집도를 놓쳤다. 함께 바뀌는 코드가 여러 컴포넌트에 흩어져 있으면, 작은 기능 변경도 여러 컴포넌트를 고쳐야 한다. 그래서 "함께 바뀌는 코드가 함께 사는 정도", 즉 변경 지역성(Change Locality)을 지표로 삼고, PR마다 건드린 컴포넌트 수를 분석해 그 수가 줄어드는지 보기로 했다. 레거시 코드의 응집은 대개 같은 데이터를 다루는 코드끼리 모인 정보 응집이었는데, 데이터베이스 테이블부터 설계하는 Rails 습관에서 나온 것이라 변경 지역성을 해친다고 봤다. [DDD의 경계 맥락](/posts/ddd-bounded-context)이 말하는 경계와 같은 고민이다.
+
+넷째, 컴포넌트를 Rails Engine으로 옮겼다. 처음엔 자체 코드가 많았는데 점점 Engine을 닮아 갔고, Rails가 기본으로 주는 유일한 모듈화 장치이니 Engine에 힘을 싣기로 했다. 컴포넌트를 떼어 내기로 하면 Engine은 독립 앱으로 바꾸기 쉽다. 경계의 계약은 처음엔 dry-schema 기반의 자체 라이브러리로 검사하다가, 2019년에 Stripe가 공개한 정적 타입 검사기 Sorbet으로 바꿨다.
+
+다섯째, 사람의 문제라는 것을 받아들였다. 수백 명이 기능을 더하는 코드베이스를 중앙 팀 하나가 그 흐름을 거슬러 바꿀 수는 없다. 그래서 사내 발표, 문서, 다른 팀에 들어가 함께 일하기, 짝 프로그래밍으로 바꾸려는 사람을 늘렸다. 아키텍처 길드는 2020년 글 시점에 약 400명, 기록된 모임 54번이었다. 글쓴이는 다시 시작한다면 이런 모임을 처음부터 만들겠다고 적었다.
+
+## 2024년의 회고: 이름이 아니라 돌아가는 코드로
+
+[A Packwerk Retrospective](https://shopify.engineering/a-packwerk-retrospective)(Gannon McGibbon, 2024년 2월)는 Packwerk를 만든 팀이 직접 쓴 회고다. 이 글은 이전 글들보다 훨씬 비판적이다.
+
+먼저 프라이버시 검사를 뺀 이야기가 나온다. 초기 Packwerk에는 별도 `app/public` 폴더에 둔 상수만 공개로 보고 나머지 참조를 위반으로 치는 검사가 있었다. 쓰기 쉬워서 인기가 많았지만, 공개하려던 적 없는 문서 없는 공개 코드를 끝없이 만들었고, Packwerk를 원래 목적인 의존 그래프 도구가 아니라 API 설계 도구로 바꿔 놓았다. 그래서 3.0에서 프라이버시 검사를 없앴다. 회고는 프라이버시 검사로 생긴 기술 부채가 아직도 다 갚으려면 멀었다고 적었다. 지금 README도 공개 API 경계를 검사하는 기능은 원래 Packwerk에서 떼어 낸 별도 확장(`packwerk-extensions`)으로 안내한다.
+
+더 큰 문제는 Packwerk가 보지 못하는 것이었다. 패키지를 어떻게 나눌지는 Packwerk가 알려 주지 않는다. 개발자는 이름 같은 의미상 단서로 코드를 묶는 경향이 있는데, 회고의 예로 가게가 사기 가게인지를 담은 "가게 과금 설정" 모델이 이름 때문에 billing 패키지에 들어갔지만, 사기 판별은 과금 요청뿐 아니라 모든 가게 요청에 필요해서 의존 그래프의 바닥으로 옮겨야 했다. `require`나 `autoload`로 읽는 상수, 라우트, 픽스처, 초기화 코드처럼 상수로 참조되지 않는 것도 보지 못한다.
+
+그래서 실제로 돌려 보기로 했다. 의존성이 없어야 할 바닥 패키지에서 핵심만 떼어 "Platform Essentials"라는 패키지를 만들고, 위반 0, 의존 0을 달성했다. 그 과정에서 Packwerk 버그도 찾았다. 위반을 다 고쳐도 오래된 todo가 지워지지 않았는데, 몇 년 동안 아무도 몰랐다는 것은 todo 파일 하나를 끝까지 비운 사용자가 자신들이 처음일 거라는 뜻이었다. 회고는 Packwerk가 문제를 찾아내는 속도가 사용자가 고칠 수 있는 속도를 크게 앞질렀다고 적었다. 그런데 위반 0인 패키지만 올려서 모놀리스를 부팅하자 실패했다. 초기화 코드와 환경 파일, Zeitwerk 밖에서 읽는 코드를 정리해 부팅을 살리고, 그 패키지 테스트만 따로 도는 CI 단계를 만든 뒤에야 정말 분리됐다고 믿을 수 있었다. 의존이 없는 패키지 하나에 몇 달이 걸렸다.
+
+결론은 조직 방식의 전환이다. 처음 컴포넌트는 수천 개 파일을 "Delivery", "Online Store", "Merchandising", "Checkouts" 같은 상거래 도메인 이름의 수십 개 통에 나눈 것이었는데, 도메인 경계는 코드가 실제로 돌아가는 방식과 맞지 않았다. 지금은 컴포넌트를 팀이 도메인을 소유하는 최상위 묶음으로 두고, 그 안의 패키지를 실제 기능 단위로 정의하는 쪽으로 바꾸고 있다고 한다. Shopify는 모놀리스에서 Packwerk를 빼는 것도 논의했지만, 바닥 층에 새 의존이 생기는 것을 막는 데는 여전히 쓸모가 있어 남겨 두었다고 했다.
+
+## 공개된 글이 말하지 않는 것
+
+이 글들은 모두 Shopify가 고른 이야기다. 2019년 글은 마이크로서비스를 고르지 않은 이유를 설명하지만, Shopify가 핵심 모놀리스 바깥에 어떤 서비스들을 따로 두고 있는지는 이 글들에 거의 나오지 않는다. Pods 글은 "나중에 Pod Mover의 구현을 다루겠다"고 했지만 이 글에서 그 후속 글은 확인하지 못했다. 컴포넌트화 작업에 몇 명이 몇 년을 썼는지, 비용이 얼마였는지도 공개되지 않았다. 반대로 2020년과 2024년 글은 실패와 되돌린 결정을 솔직하게 적어서 드물게 쓸모 있는 자료다. 다만 2024년 회고 이후 Shopify 모놀리스가 지금 어떤 모습인지는 이 글이 참고한 자료로는 알 수 없다.
+
+## 우리 Rails 앱에 같은 길을 가져온다면
+
+Shopify의 선택이 맞았던 조건은 분명하다. 1,000명이 넘는 개발자가 10년 넘게 한 코드베이스를 고쳤고, 거의 모든 데이터가 가게 하나에 묶이는 모델이었다. 첫 번째 조건은 모듈러 모놀리스를, 두 번째 조건은 Pod를 가능하게 했다. 가게 하나가 다른 가게의 데이터를 거의 보지 않으니 `shop_id`로 Pod를 나눌 수 있었다. 사용자끼리 촘촘히 엮인 소셜 그래프라면 같은 방법이 통하지 않는다. [Meta의 TAO 글](/posts/rw-meta-memcache-tao)이 그 반대 사례다.
+
+개발자가 수십 명이고 서비스가 하나라면 처음부터 Packwerk와 컴포넌트 구조를 다 들일 필요는 없다. 2019년 글 스스로 초기에는 "아키텍처가 없는 것이 가장 좋은 아키텍처인 경우가 많다"고 했고, 기능을 더하는 속도가 떨어지기 시작할 때가 설계에 투자할 때라고 적었다. 2024년 회고를 보면 도구로 패키지를 이름대로 먼저 나누는 것은 오히려 위험하다. todo 파일이 고칠 수 있는 속도보다 빨리 자라고, 이름과 실제 의존이 어긋나면 고친 위반이 간접층만 늘린다.
+
+지금 가져올 수 있는 것은 두 가지다. 하나는 바닥 층을 먼저 지키는 것이다. 모든 코드가 기대는 기반 코드가 위쪽 코드를 부르지 않게, 그 한 곳에만 의존 검사를 건다. Shopify도 결국 Packwerk의 쓸모를 거기서 찾았다. 다른 하나는 변경 지역성을 재는 것이다. PR마다 건드린 최상위 디렉터리 수를 세어 두면, 경계가 실제로 코드와 맞는지 숫자로 볼 수 있다. 데이터 쪽에서는 모든 테넌트 테이블에 테넌트 키(`shop_id` 같은)를 처음부터 넣어 두는 습관이 나중에 Pod처럼 나눌 수 있는 길을 열어 둔다. "모든 샤드를 돈다" 같은 코드가 생기면 그게 장애 영향 범위를 전체로 만든다는 신호다.
+
+비슷한 신호가 보이면 볼 순서도 정리할 수 있다. 관계없는 테스트가 줄줄이 깨진다면 의존 그래프에서 순환부터 찾는다. 한 테넌트의 트래픽이 다른 테넌트까지 느리게 한다면 그 요청이 몇 개 저장소를 건드리는지, 테넌트 단위로 묶여 있는지 본다. 모듈 경계를 정리하는 작업이 늘 간접층만 늘린다면, 그 경계가 이름을 따라 그은 것인지 실제로 함께 바뀌는 코드를 따라 그은 것인지 다시 본다.
+
+## 이 글이 기댄 자료
+
+- [Surviving Flashes of High-Write Traffic Using Scriptable Load Balancers (Part I)](https://shopify.engineering/surviving-flashes-of-high-write-traffic-using-scriptable-load-balancers-part-i) — Shopify, 엔지니어링 블로그, 2017년 2월
+- [A Pods Architecture To Allow Shopify To Scale](https://shopify.engineering/a-pods-architecture-to-allow-shopify-to-scale) — Shopify, 엔지니어링 블로그, 2018년 3월
+- [Deconstructing the Monolith: Designing Software that Maximizes Developer Productivity](https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity) — Shopify(Kirsten Westeinde), 엔지니어링 블로그, 2019년 2월
+- [Under Deconstruction: The State of Shopify's Monolith](https://shopify.engineering/shopify-monolith) — Shopify(Philip Müller), 엔지니어링 블로그, 2020년 9월
+- [Shard Balancing: Moving Shops Confidently with Zero-Downtime at Terabyte-scale](https://shopify.engineering/mysql-database-shard-balancing-terabyte-scale) — Shopify, 엔지니어링 블로그, 2021년 9월
+- [A Packwerk Retrospective](https://shopify.engineering/a-packwerk-retrospective) — Shopify(Gannon McGibbon), 엔지니어링 블로그, 2024년 2월
+- [Shopify/packwerk README](https://raw.githubusercontent.com/Shopify/packwerk/main/README.md), [USAGE.md](https://raw.githubusercontent.com/Shopify/packwerk/main/USAGE.md) — Shopify, 오픈소스 저장소 문서, 2026년 10월 확인
+
+## 면접에서 나올 만한 질문
+
+### Shopify는 왜 마이크로서비스 대신 모듈러 모놀리스를 골랐나요?
+
+겪던 문제는 경계 없는 결합이었고, 마이크로서비스는 그걸 풀면서 다른 문제를 가져온다고 봤기 때문이다. 2019년 글은 서비스마다 테스트·배포 파이프라인과 인프라를 따로 두는 비용, 필요한 데이터에 바로 닿지 못하는 문제, 네트워크 호출마다 늘어나는 지연과 떨어지는 신뢰성, 여러 서비스에 걸친 리팩터링의 배포 조율을 들었다. 그래서 배포 단위는 하나로 두고 도메인 경계만 엄격히 지키는 쪽을 골랐다.
+
+### Pod는 샤딩과 무엇이 다른가요?
+
+샤딩은 데이터를 나누는 것이고, Pod는 장애를 나누는 것이다. Shopify는 2015년에 샤딩했지만 코드가 모든 샤드를 도는 동작을 하고 있어서 샤드 하나가 죽으면 그 동작이 플랫폼 전체에서 멈췄다. Pod는 가게 묶음마다 MySQL, Redis, Memcached를 통째로 따로 두고, 웹 요청과 작업 하나가 Pod 하나에만 닿게 강제한다. 그래서 요청 하나에는 Pod 하나만 살아 있으면 된다.
+
+### 요청이 어느 Pod로 갈지는 어떻게 정하나요?
+
+로드 밸런서 안의 Sorting Hat이 규칙 목록으로 요청을 Pod에 맞추고 헤더를 붙여 보낸다. 공유 앱 서버는 그 헤더를 보고 해당 Pod의 저장소에만 연결한다. 2021년 글 기준으로는 도메인과 Pod 번호를 잇는 라우팅 표가 샤딩하지 않은 별도 DB에 있고, 가게를 옮기면 이 표를 바꾼다.
+
+### 가게를 다른 Pod로 옮길 때 데이터 손실을 어떻게 막나요?
+
+Ghostferry로 그 가게의 행을 `SELECT … FOR UPDATE`로 일괄 복사하고, 그동안 생긴 변경은 binlog를 따라가며 대상에 적용한다. 밀린 이벤트가 몇 초 수준이 되면 컷오버에 들어가는데, 그 가게의 모든 요청과 작업이 Redis 기반 다중 읽기·단일 쓰기 락의 읽기 몫을 들고 돌기 때문에, 이동 도구가 쓰기 몫을 잡으면 그 가게에 쓰는 작업이 없다는 게 보장된다. 멈춘 지점까지 적용하고 라우팅 표를 바꾼 뒤 락을 푼다.
+
+### Wedge를 버리고 Packwerk를 만든 이유는요?
+
+호출 그래프 분석이 잡음이 많고 느렸기 때문이다. 상속이 끼면 호출이 어느 컴포넌트 것인지도 애매했고, 계측을 붙인 전체 테스트가 한 시간 넘게 걸려 피드백이 늦었다. Packwerk는 정적 상수 참조만 봐서 애매함이 적고, 가장 큰 코드베이스를 몇 분 만에 분석해 PR 단계에서 위반을 막을 수 있었다.
+
+### Packwerk에서 위반을 다 고치면 패키지가 분리된 건가요?
+
+아니다. 2024년 회고에 따르면 위반 0, 의존 0인 패키지만 올려 부팅하자 실패했다. Packwerk는 Zeitwerk가 읽는 상수만 보고, `require`로 읽는 코드나 초기화 코드, 라우트처럼 상수로 참조하지 않는 의존은 보지 못한다. 그래서 Shopify는 실제로 그 패키지만 부팅하고 테스트를 따로 돌리는 CI 단계를 만들고, 돌아가는 코드를 진척의 기준으로 삼았다.
+
+### Packwerk에서 프라이버시 검사를 뺀 이유는요?
+
+쓰기 쉬워서 인기가 많았지만 원래 목적인 의존 그래프 관리에서 주의를 빼앗았기 때문이다. 공개 상수를 `app/public` 폴더에 두게 하자, 공개하려던 적 없는 문서 없는 코드가 끝없이 공개됐고, 개발자들은 의존 관계보다 API 모양에 집중했다. 의존하지 않는 패키지의 공개 API를 쓰는 것도 문제인데 그게 가려졌다. 그래서 3.0에서 뺐다.
+
+### 우리 팀이 개발자 30명이라면 Shopify 방식을 따라 하나요?
+
+전부 따라 하지는 않는다. Shopify 스스로 초기에는 아키텍처가 없는 게 가장 좋은 경우가 많고, 기능 추가 속도가 떨어질 때 설계에 투자하라고 했다. 2024년 회고는 이름대로 패키지를 먼저 나누면 todo가 고치는 속도보다 빨리 자란다고 경고한다. 대신 바닥 기반 코드의 의존만 검사로 지키고, 테넌트 테이블에 테넌트 키를 넣어 두고, PR마다 건드린 모듈 수를 재는 정도는 지금 바로 할 수 있다.

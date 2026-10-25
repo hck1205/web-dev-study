@@ -116,7 +116,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 토픽은 `src/features/topics/registry/topics.ts`의 **트리 하나**가 단일 원천이다. 상단 메뉴(드롭다운·모바일 트리), 라우트(`/topics/...`), 홈의 주제 목록이 모두 여기서 자동으로 만들어진다.
 
-- 최상위: `Programming`(AI › {Agents, Claude Code, LLMOps, Machine Learning, MLOps, Prompt Engineering, RAG}, Algorithms › {Data Structures, For System Design, LeetCode › {Arrays & Hashing, Two Pointers, Sliding Window, Stack, Binary Search, Linked List, Trees, Tries, Heap / Priority Queue, Backtracking, Graphs, Advanced Graphs, 1-D DP, 2-D DP, Greedy, Intervals, Math & Geometry, Bit Manipulation}, Techniques}, Backend › {API Design › GraphQL, Architecture, Auth, Frameworks, Languages, Messaging, Node.js, Spring, Testing}, Common › Git, Computer Science › Computer Architecture, Data Engineering, Design Patterns › {Behavioral, Creational, Principles, Structural}, In Practice, Database › {DB Types, Elasticsearch, MongoDB, MySQL, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, CSS, HTML & A11y, JavaScript › {Basics, Functions, Objects & Arrays, this & OOP, Async, Browser & DOM}, Next.js, Performance, React, Rendering, Security, SEO, System Design, Testing, Tooling, TypeScript}, Network › {Cloud Networking, HTTP, Infrastructure, OSI · TCP/IP, Performance, Wireless}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Cloud, Docker, IaC, Kubernetes › {Config & Storage, EKS, Foundation, Helm, Networking, Operations, Platform, Pod, Security, Workloads}, Nginx, Observability, SRE}, Security › Cryptography, System Design › {기초부터 차근차근, 설계 사례}, UI/UX), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
+- 최상위: `Programming`(AI › {Agents, Claude Code, LLMOps, Machine Learning, MLOps, Prompt Engineering, RAG}, Algorithms › {Data Structures, For System Design, LeetCode › {Arrays & Hashing, Two Pointers, Sliding Window, Stack, Binary Search, Linked List, Trees, Tries, Heap / Priority Queue, Backtracking, Graphs, Advanced Graphs, 1-D DP, 2-D DP, Greedy, Intervals, Math & Geometry, Bit Manipulation}, Techniques}, Backend › {API Design › GraphQL, Architecture, Auth, Frameworks, Languages, Messaging, Node.js, Spring, Testing}, Common › Git, Computer Science › Computer Architecture, Data Engineering, Design Patterns › {Behavioral, Creational, Principles, Structural}, In Practice, Database › {DB Types, Elasticsearch, MongoDB, MySQL, PostgreSQL, Redis, SQL, SQLD}, Frontend › {Architecture, CSS, HTML & A11y, JavaScript › {Basics, Functions, Objects & Arrays, this & OOP, Async, Browser & DOM}, Next.js, Performance, React, Rendering, Security, SEO, System Design, Testing, Tooling, TypeScript}, Network › {Cloud Networking, HTTP, Infrastructure, OSI · TCP/IP, Performance, Wireless}, OS › Linux, Server/Infra › {CI/CD › {ArgoCD, Jenkins}, Cloud, Docker, IaC, Kubernetes › {Config & Storage, EKS, Foundation, Helm, Networking, Operations, Platform, Pod, Security, Workloads}, Nginx, Observability, SRE}, Security › Cryptography, System Design › {기초부터 차근차근, 설계 사례}, UI/UX), `실제 사례`(해외 기업, 국내 기업), `자기개발`(English › 어휘, 과학, 수학, 아이디어, 역사, 인문학)
 - 새 주제를 넣을 때는 성격이 맞는 기존 노드 아래에 둔다. 맞는 곳이 없으면 중간 분류를 새로 만든다(예: ArgoCD·Jenkins를 위해 `Server/Infra › CI/CD` 생성).
 - **하위 메뉴 추가**: 원하는 노드의 `children`에 `{ id, label, description? }`를 중첩한다. 깊이 제한이 없다. 정렬은 모든 레벨에서 라벨 ABC 순으로 자동 적용되므로 순서를 신경 쓰지 않는다.
 - 최상위 토픽 추가도 같은 배열에 항목을 추가하면 된다. `id`는 URL 세그먼트이므로 kebab-case로 쓴다.
@@ -247,6 +247,17 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 - `posts.ts`에 `companies: ["coupang"]`처럼 회사 이름(소문자)을 적는다. 그러면 글 목록과 글 상단에 회사 라벨이 붙고, 같은 이름의 해시태그(`#coupang`)가 자동으로 추가된다. `/tags/coupang`에서 그 회사 글만 모아 보고, 검색창에서 회사 이름으로 찾을 수 있다. `/tags` 맨 위에 회사 목록이 따로 나온다.
 - 본문에는 회사 이야기를 쓰지 않는다. 글은 주제 자체를 설명하고, 회사와의 연결은 라벨이 맡는다. 퀴즈 문제도 다른 글과 똑같이 쓴다.
 
+## 실제 서비스 사례 (`실제 사례` 토픽)
+
+국내외 회사가 직접 공개한 아키텍처·장애를 다루는 시리즈다. 토픽은 `real-world`(입구 글) › `global`(해외 기업) / `korea`(국내 기업), 글 slug는 `rw-`로 시작한다. 로드맵은 최상위 `real-world`(requires `system-design/cases`) 아래 저장소와 데이터 · 구조를 바꾼 선택 · 장애에서 배우기 · 실시간과 대규모 트래픽 네 묶음이고, 큰 로드맵 시스템 디자인·데이터·인프라에 단계로 연결된다.
+
+- **근거는 그 회사가 직접 낸 1차 자료만** 쓴다: 공식 엔지니어링 블로그, 그 회사 엔지니어의 발표 자료, 논문, 공식 저장소·문서, 공식 장애 보고서·정부 발표. 뉴스·요약 글은 길잡이로만 쓴다. 원문을 실제로 열어 읽은 것만 인용하고, 숫자는 원문 그대로 쓴다.
+- 자료마다 발표 시점을 본문에 밝히고, 이후 바뀐 것이 공개되지 않았으면 "지금도 그런지는 공개되지 않았다"고 쓴다. 자료의 사실과 내 추론·계산은 구분해 표시한다.
+- 본문에서 처음 인용할 때 링크를 걸고, 면접 질문 섹션 바로 앞에 `## 이 글이 기댄 자료`(제목·회사·형식·발표 연월)를 둔다.
+- 사례 안에서 쓰인 일반 개념을 짚어 개념 글로 링크하고, "내 서비스라면"에 해당하는 섹션(맞는 규모와 조건, 따라 할 때의 비용, 작은 팀이 지금 가져올 것)을 둔다.
+- 사이트가 자동 접속을 막으면 웹 아카이브나 제3자 변환 서비스로 우회하지 않는다. 같은 회사의 다른 1차 자료를 찾고, 없으면 쓰지 않는다.
+- 새 글을 쓰면 다른 사람이 인용 원문을 다시 열어 숫자·이름·연도를 대조한다.
+
 ## 어휘 사전 (English › 어휘)
 
 고급(C1~C2) 영어 어휘를 공부하는 사전이다. 토픽 `self-development/english/vocabulary`는 `href: "/vocabulary"`로 사전 페이지에 바로 연결된다(토픽에 `href`를 주면 메뉴·토픽 링크가 그 주소로 간다).
@@ -285,7 +296,7 @@ UI는 반드시 디자인 시스템을 거쳐 만든다. 색상·간격·폰트 
 
 ## 학습 로드맵 (`/roadmap`) · 오늘 할 일 (`/study`)
 
-모든 글(1,100편 넘게)을 "완벽히 이해하고 응용할 수 있는 사람"이 되기 위한 학습 시스템이다. 로그인 없이 이 브라우저의 localStorage(`study-progress`)에 기록하고, JSON으로 내보내고 가져온다.
+모든 글(1,200편 가까이)을 "완벽히 이해하고 응용할 수 있는 사람"이 되기 위한 학습 시스템이다. 로그인 없이 이 브라우저의 localStorage(`study-progress`)에 기록하고, JSON으로 내보내고 가져온다.
 
 - **로드맵 데이터**: `features/roadmap/registry/roadmaps.ts`의 트리 하나가 단일 원천이다. 노드의 `items`에 글(slug), 관문(`{ checkpoint }`), 또 다른 로드맵이 **순서대로** 들어간다(로드맵 안의 로드맵, 깊이 제한 없음). 순서가 곧 공부 순서다. `tier`(1 핵심 / 2 실무·면접 / 3 참고)는 로드맵 단위로 주고 글마다 `{ post, tier }`로 덮어쓴다. `requires`는 "먼저 읽어 두면 좋은" 로드맵의 절대 경로(안내용 잠금, 강제 아님). 빌드 시 `validateRoadmaps`가 없는 글·중복·빠진 글·없는 requires를 검사한다.
 - **마스터 4단계**(글마다): 1 읽음(손으로 체크) → 2 설명함(글 끝 "내 말로 설명하기"에 20자 이상 저장) → 3 적용함(그 글 퀴즈 또는 관문에서 80% 이상) → 4 응용함(손으로 체크). 상태는 `features/roadmap/atoms/study-progress`(get/set/reset)로 다룬다.

@@ -234,6 +234,15 @@ export const TOPICS: Topic[] = [
     ],
   },
   {
+    id: "real-world",
+    label: "실제 사례",
+    description: "국내외 회사가 엔지니어링 블로그·발표·논문·장애 보고서로 직접 공개한 아키텍처와 그 뒤의 변화. 글마다 1차 자료와 발표 시점을 밝힌다",
+    children: [
+      { id: "global", label: "해외 기업", description: "Netflix, Discord, Uber, Slack, Shopify, Amazon, Google, Meta, Stripe, Figma, Cloudflare" },
+      { id: "korea", label: "국내 기업", description: "카카오, 우아한형제들, 토스, 쿠팡, 네이버·LINE" },
+    ],
+  },
+  {
     id: "self-development",
     label: "자기개발",
     description: "개발 밖에서 성장하기 위한 기록",

@@ -124,6 +124,7 @@ export const COURSES: Course[] = [
       { label: "복제와 샤딩", roadmaps: ["database/scaling"] },
       { label: "데이터 엔지니어링", roadmaps: ["data-engineering"] },
       { label: "SQLD 시험", roadmaps: ["database/sqld"] },
+      { label: "실제 서비스의 저장소", posts: ["rw-discord-message-storage", "rw-instagram-sharding-ids", "rw-notion-postgres-sharding", "rw-slack-vitess", "rw-uber-schemaless-docstore", "rw-amazon-dynamo", "rw-google-spanner-truetime", "rw-linkedin-kafka"] },
     ],
     next: [
       { course: "system-design", why: "복제, 샤딩, 파이프라인이 설계 사례의 재료가 된다" },
@@ -149,6 +150,7 @@ export const COURSES: Course[] = [
       { label: "관측", roadmaps: ["infra/observability"] },
       { label: "SRE와 장애 대응", roadmaps: ["infra/sre"] },
       { label: "인프라 보안", roadmaps: ["security/infra-security"] },
+      { label: "실제 장애에서 배우기", posts: ["rw-kakao-datacenter-fire", "rw-github-2018-network-partition", "rw-aws-s3-2017-outage", "rw-meta-2021-bgp-outage", "rw-cloudflare-outage-regex", "rw-netflix-chaos-engineering", "rw-google-sre-error-budget"] },
     ],
     next: [
       { course: "security", why: "인프라 보안 다음은 보안 운영과 암호다" },
@@ -179,6 +181,7 @@ export const COURSES: Course[] = [
       { label: "핵심 개념", roadmaps: ["system-design/concepts"] },
       { label: "분산 시스템 알고리즘", roadmaps: ["system-design/algorithms"] },
       { label: "설계 사례", roadmaps: ["system-design/cases"] },
+      { label: "실제 서비스 사례", roadmaps: ["real-world"] },
       { label: "프런트엔드 시스템 디자인", roadmaps: ["frontend/system-design"] },
     ],
     next: [

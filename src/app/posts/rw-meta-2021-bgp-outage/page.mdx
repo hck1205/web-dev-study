@@ -1,0 +1,314 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-meta-2021-bgp-outage");
+
+<EasyIntro>
+  2021년 10월 4일, 페이스북과 인스타그램, 왓츠앱이 전 세계에서 한꺼번에 사라졌다. 앱을 열면 아무것도 뜨지 않았고, 웹 주소를 쳐도 "그런 곳을 찾을 수 없다"는 답만 돌아왔다.
+
+  시작은 정기 점검이었다. 데이터센터들을 잇는 큰 회선 묶음의 남은 용량을 확인하려던 명령이 실수로 회선을 모두 끊어 버렸다. 이런 실수를 막는 검사 도구가 있었는데, 그 도구에 버그가 있어서 명령을 멈추지 못했다.
+
+  더 큰 문제는 그다음에 일어났다. 인터넷에서 이름을 주소로 바꿔 주는 안내소는 자기 뒤의 데이터센터와 연락이 안 되면 "나는 지금 아프다"며 스스로 문을 닫게 만들어져 있었다. 안내소가 한두 곳만 아플 때는 좋은 규칙이다. 손님이 다른 안내소로 가면 되니까. 그런데 이날은 모든 안내소가 동시에 같은 이유로 아팠고, 모두가 한꺼번에 문을 닫았다.
+
+  고치러 가는 길도 막혔다. 엔지니어들이 원격으로 들어가는 길과 평소 쓰는 도구가 모두 같은 회선 위에 있었다. 결국 사람이 직접 데이터센터로 가야 했는데, 보안이 단단한 건물이라 들어가는 데도 시간이 걸렸다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. BGP가 무엇이고 광고를 거두면 어떻게 되는지는 [BGP 기초](/posts/bgp-basics)에서, DNS가 이름을 주소로 바꾸는 과정은 [DNS](/posts/dns)에서, 장애가 났을 때의 대응 순서는 [장애 대응](/posts/production-incidents)에서 다뤘다. 여기서는 Meta가 공개한 글 두 편과, 같은 날 밖에서 이 장애를 지켜본 Cloudflare의 글 한 편만으로 그날을 다시 짚는다.
+
+2021년 10월 4일(미국 시간), Facebook, Instagram, WhatsApp이 동시에 접속되지 않았다. Meta의 Santosh Janardhan은 그날 밤 [Update about the October 4th outage(Engineering at Meta, 2021년 10월)](https://engineering.fb.com/2021/10/04/networking-traffic/outage/)를 올렸고, 다음 날 [More details about the October 4 outage(Engineering at Meta, 2021년 10월)](https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/)로 원인을 더 자세히 설명했다.
+
+Meta의 두 글에는 분 단위 시각이 없다. 그래서 이 글의 시각은 모두 Cloudflare가 자기 네트워크에서 관측해 같은 날 올린 [Understanding how Facebook disappeared from the Internet(Cloudflare 블로그, 2021년 10월)](https://blog.cloudflare.com/october-2021-facebook-outage/)에서 왔다. 이건 Meta 내부의 시각이 아니라 바깥에서 본 BGP 갱신과 DNS 응답의 시각이다. 둘을 섞지 않도록 그림마다 출처를 적었다.
+
+## 백본의 남은 용량을 확인하려던 명령
+
+Meta의 둘째 글은 먼저 망의 모양을 설명한다. 백본은 Meta가 모든 컴퓨팅 시설을 잇기 위해 만든 망으로, 전 세계를 가로지르는 수만 마일의 광케이블로 데이터센터들을 연결한다. 데이터센터는 두 종류다. 수백만 대의 기계가 데이터를 저장하고 무거운 계산을 하는 거대한 건물이 있고, 백본을 바깥 인터넷과 사용자에게 잇는 작은 시설이 있다.
+
+앱에서 피드를 열면 요청은 가까운 작은 시설로 가고, 그 시설이 백본을 거쳐 큰 데이터센터와 직접 이야기한다. 필요한 정보를 큰 데이터센터에서 꺼내 처리한 뒤 다시 망을 거쳐 휴대폰으로 보낸다. 이 사이의 트래픽은 라우터들이 어디로 보낼지 정한다.
+
+엔지니어들은 이 인프라를 유지하려고 자주 백본 일부를 내린다. 광케이블을 고치거나, 용량을 더하거나, 라우터 소프트웨어를 올릴 때다. 이번 장애도 이런 정기 유지보수 중에 시작됐다. 전 세계 백본 용량이 얼마나 남았는지 평가하려는 명령을 실행했는데, 이 명령이 의도와 달리 백본의 연결을 모두 내렸다. 사실상 전 세계 Facebook 데이터센터의 연결이 끊겼다.
+
+Meta는 이런 명령을 감사(audit)해 실수를 막는 시스템을 두고 있었다. 그런데 그 감사 도구에 버그가 있어서 명령을 제대로 막지 못했다. 글은 명령이 정확히 무엇이었는지, 버그가 어떤 종류였는지는 말하지 않는다.
+
+[AWS S3 2017년 장애](/posts/rw-aws-s3-2017-outage)와 시작이 닮았다. 둘 다 정기 작업의 명령 하나였고, 둘 다 사람의 의도와 명령의 결과가 달랐다. 차이는 안전장치의 위치다. AWS는 사고 뒤 "빼고 나면 무엇이 남나"를 보는 가드를 넣었다고 했고, Meta는 그런 가드(감사 도구)가 이미 있었는데 버그로 동작하지 않았다. 가드도 코드이고, 코드는 틀린다.
+
+## DNS 서버가 스스로 문을 닫는 규칙
+
+백본이 끊긴 것만으로도 큰 장애지만, Meta의 글은 이 연결 상실이 둘째 문제를 불러 상황을 더 나쁘게 만들었다고 쓴다.
+
+작은 시설들이 하는 일 하나가 DNS 질의에 답하는 것이다. 이 답은 Meta의 권한 있는 네임서버(authoritative name server)가 하고, 네임서버는 잘 알려진 IP 주소에 있다. 그 IP 주소들은 BGP로 나머지 인터넷에 광고된다. "이 주소 대역은 우리 쪽으로 보내라"고 이웃 망에 알리는 것이다.
+
+안정적으로 돌리려고 Meta의 DNS 서버들은 자기가 데이터센터와 이야기할 수 없으면 그 BGP 광고를 끈다. 데이터센터와 연결이 안 되는 건 망 연결이 건강하지 않다는 신호이기 때문이다. 이번 장애에서는 백본 전체가 운영에서 빠졌다. 그러자 이 위치들이 모두 스스로를 건강하지 않다고 선언하고 BGP 광고를 거뒀다. 그 결과 DNS 서버들은 멀쩡히 돌고 있는데도 닿을 수 없게 됐고, 나머지 인터넷이 Meta의 서버를 찾을 수 없게 됐다.
+
+이 규칙 자체는 흔하고 합리적이다. 여러 곳에서 같은 IP를 광고하는 [애니캐스트](/posts/cdn-edge-anycast) DNS에서는, 한 위치가 아프면 그 위치만 광고를 거두고 나머지 위치가 질의를 받는다. 사용자는 가장 가까운 건강한 위치로 간다. 헬스 체크가 실패한 서버를 로드 밸런서가 풀에서 빼는 것과 같은 생각이다.
+
+문제는 모든 위치가 같은 이유로 동시에 아플 때다. 각 위치는 자기 판단으로 옳게 행동했다. "백본이 안 보이니 나는 아프다." 그런데 모두가 옳게 행동한 결과가 전체의 소멸이었다. 아래 그림에서 다음을 누르면 Meta가 설명한 순서대로 따라갈 수 있다. 장비 배치는 Meta 글의 설명(작은 시설, 백본, 큰 데이터센터)을 그림으로 옮긴 것이고 실제 수나 위치가 아니다.
+
+<NetworkTopology
+  caption="Meta가 설명한 순서: 백본이 끊기자 DNS 서버들이 스스로 광고를 거둔다"
+  width={420}
+  height={320}
+  zones={[
+    { id: "net", label: "바깥 인터넷", x: 10, y: 10, w: 400, h: 80, tone: "neutral" },
+    { id: "edge", label: "작은 시설 (DNS)", x: 10, y: 105, w: 400, h: 85, tone: "edge" },
+    { id: "bb", label: "백본", x: 10, y: 205, w: 400, h: 40, tone: "public" },
+    { id: "dc", label: "큰 데이터센터", x: 10, y: 255, w: 400, h: 60, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 60, y: 50, icon: "client" },
+    { id: "res", label: "리졸버", sub: "1.1.1.1 등", x: 200, y: 50, icon: "dns" },
+    { id: "isp", label: "이웃 망", sub: "BGP", x: 340, y: 50, icon: "internet" },
+    { id: "dnsa", label: "DNS", sub: "위치 A", x: 110, y: 148, icon: "dns" },
+    { id: "dnsb", label: "DNS", sub: "위치 B", x: 300, y: 148, icon: "dns" },
+    { id: "core", label: "백본 라우터", x: 210, y: 225, icon: "router" },
+    { id: "dc", label: "서비스", sub: "피드·메시지", x: 210, y: 287, icon: "server" },
+  ]}
+  links={[
+    { from: "user", to: "res" },
+    { from: "res", to: "isp" },
+    { from: "isp", to: "dnsa", label: "광고" },
+    { from: "isp", to: "dnsb", label: "광고" },
+    { from: "dnsa", to: "core" },
+    { from: "dnsb", to: "core" },
+    { from: "core", to: "dc" },
+  ]}
+  steps={[
+    { path: ["user", "res", "isp", "dnsa"], packet: "DNS?", title: "평소: 리졸버가 가까운 DNS 위치에 묻는다", detail: "DNS 서버의 IP는 여러 위치에서 BGP로 광고된다. 이웃 망은 그 광고를 보고 질의를 가까운 위치로 보낸다." },
+    { path: ["dnsa", "core", "dc"], packet: "check", title: "DNS 서버는 데이터센터와 통하는지 계속 확인한다", detail: "데이터센터와 이야기할 수 없으면 망이 건강하지 않다는 신호로 보고 BGP 광고를 끄게 돼 있다." },
+    { path: ["core"], highlight: ["bb"], title: "유지보수 명령이 백본 연결을 모두 내린다", detail: "백본 용량을 평가하려던 명령이 의도와 달리 모든 연결을 내렸다. 이를 막아야 할 감사 도구는 버그로 명령을 막지 못했다." },
+    { path: ["dnsa", "core"], packet: "check", blocked: true, highlight: ["dnsb"], title: "모든 DNS 위치가 동시에 데이터센터를 잃는다", detail: "위치 하나의 문제가 아니라 백본 전체가 빠졌으니, 모든 위치가 같은 판단을 한다. 나는 건강하지 않다." },
+    { path: ["dnsa", "isp"], packet: "withdraw", highlight: ["dnsb"], title: "모두가 BGP 광고를 거둔다", detail: "규칙대로 각 위치가 광고를 거뒀다. DNS 서버는 여전히 돌고 있지만, 인터넷에서 그 주소로 가는 길이 사라졌다." },
+    { path: ["res", "isp"], packet: "DNS?", blocked: true, title: "리졸버는 네임서버에 닿지 못해 SERVFAIL을 돌려준다", detail: "facebook.com의 주소를 아무도 알려 주지 못한다. 앱과 사람들은 다시 시도하고, 리졸버로 가는 질의가 크게 늘어난다." },
+  ]}
+/>
+
+이 그림의 넷째 단계가 이 글의 중심이다. 헬스 체크 기반의 자동 철회는 "부분 장애를 견디기 위한" 장치다. 전체 장애에서는 같은 장치가 장애를 키운다. 일부만 아플 때 아픈 쪽을 빼는 건 맞지만, 모두가 아플 때 모두를 빼면 남는 게 없다.
+
+## 밖에서 본 그날의 시각
+
+Meta 내부에서 몇 시에 무엇을 했는지는 공개되지 않았다. 대신 Cloudflare는 자기 네트워크와 공개 DNS 리졸버 1.1.1.1에서 본 것을 시각과 함께 적었다. 이 시각은 모두 UTC다.
+
+<SequenceDiagram
+  caption="Cloudflare가 관측한 2021-10-04 UTC 시각 (Meta 내부 시각이 아님)"
+  actors={[
+    { id: "fb", label: "Meta 망 AS32934" },
+    { id: "cf", label: "Cloudflare" },
+    { id: "res", label: "공개 리졸버" },
+    { id: "usr", label: "앱·사용자" },
+  ]}
+  steps={[
+    { from: "fb", to: "cf", label: "15:40 경로 변경 급증", title: "Meta 망에서 BGP 갱신이 쏟아진다", detail: "평소 분 단위로는 조용한 그래프가 15:40쯤 치솟았다. 광고와 철회로 나눠 보면 경로가 철회되고 있었다." },
+    { from: "res", to: "usr", label: "SERVFAIL", title: "facebook.com 이름이 풀리지 않는다", detail: "1.1.1.1에서 facebook.com은 15:50쯤부터 응답하지 못했다. 8.8.8.8 같은 다른 공개 리졸버도 SERVFAIL을 돌려줬다." },
+    { from: "cf", to: "cf", label: "15:51 내부 인시던트", title: "Cloudflare가 자기 리졸버 문제인지 의심한다", detail: "'Facebook DNS lookup returning SERVFAIL'이라는 인시던트를 열었다. 상태 페이지에 올리려다 더 큰 일이라는 걸 알았다." },
+    { from: "cf", to: "fb", label: "15:58 DNS 대역 철회 확인", title: "DNS 대역 경로가 사라진 걸 확인한다", detail: "Meta가 DNS 대역의 경로 광고를 멈췄다. 185.89.218.0/23과 129.134.30.0/23이 라우팅 테이블에 없었다. 다른 Meta 대역은 남아 있었다." },
+    { from: "usr", to: "res", label: "재시도 폭주", title: "질의가 평소의 30배로 늘어난다", detail: "앱은 오류를 받으면 다시 시도하고, 사람은 새로고침하거나 앱을 다시 켠다. Cloudflare는 1.1.1.1의 요청 그래프를 보이며 전 세계 리졸버가 평소의 30배 질의를 받고 있다고 썼다." },
+    { from: "fb", to: "cf", label: "21:00경 BGP 재개", title: "Meta 망에서 BGP 활동이 다시 보인다", detail: "21:00쯤 다시 활동이 시작돼 21:17에 정점을 찍었다." },
+    { from: "res", to: "usr", label: "21:20 응답 재개", title: "facebook.com이 다시 풀린다", detail: "1.1.1.1에서 21:20에 다시 응답했고, 21:28 기준으로 Facebook이 인터넷에 다시 붙었다고 적었다. 서비스가 다 돌아오는 데는 더 걸릴 거라고 덧붙였다." },
+  ]}
+/>
+
+1.1.1.1 기준으로 facebook.com은 15:50쯤부터 21:20까지, 약 5시간 30분 동안 이름이 풀리지 않았다. 서비스 전체가 언제 정상으로 돌아왔는지는 Meta도 Cloudflare도 시각으로 적지 않았다.
+
+Cloudflare 글에는 이 철회를 보여 주는 공개 라우팅 테이블(route-views) 조회 결과가 실려 있다. 아래는 그 글에 나온 출력을 그대로 옮긴 것이다. 내가 돌린 결과가 아니다.
+
+```text
+route-views>show ip bgp 185.89.218.0/23
+% Network not in table
+route-views>
+route-views>show ip bgp 129.134.30.0/23
+% Network not in table
+```
+
+`Network not in table`은 그 대역으로 가는 경로를 이 라우터가 아무 이웃에게서도 받지 못했다는 뜻이다. 같은 글에서 `129.134.30.0`을 조회하면 이를 포함하는 더 큰 대역 `129.134.0.0/17`의 경로가 나온다. Meta의 다른 IP는 여전히 길이 있었지만, 이름을 주소로 바꿔 줄 DNS가 사라지니 쓸모가 없었다고 Cloudflare는 썼다.
+
+## 이름이 안 풀리면 리졸버에서는 무슨 일이 생기나
+
+Cloudflare가 짚은 또 하나는 재시도다. 앱은 오류를 답으로 받아들이지 않고 다시 시도하고, 때로는 공격적으로 한다. 사람도 페이지를 새로고침하고 앱을 껐다 켠다. Cloudflare는 1.1.1.1에서 본 요청 증가 그래프를 싣고, 그 결과 전 세계 리졸버가 평소의 30배 질의를 받고 있다고 썼다. 1.1.1.1에서는 대부분의 질의는 10ms 안에 답했지만, p95와 p99 일부는 응답이 느려졌다. Cloudflare는 TTL이 만료된 항목 때문에 Meta 네임서버까지 가 봐야 했고 거기서 타임아웃이 났을 것으로 봤다.
+
+이 현상을 작은 규모로 직접 재현했다. CoreDNS 1.11 컨테이너 두 개로 권한 서버(`example.test` 구역)와 리졸버를 띄우고, 리졸버는 30초 캐시를 둔다. 그다음 권한 서버를 도커 네트워크에서 떼어 "광고를 거둔" 상태를 흉내 냈다.
+
+```bash
+# 권한 서버(172.30.0.53)와 리졸버(172.30.0.2)를 같은 도커 네트워크에 띄운다
+docker network create --subnet 172.30.0.0/24 dnsnet
+docker run -d --name auth --network dnsnet --ip 172.30.0.53 \
+  -v $PWD/Corefile.auth:/etc/coredns/Corefile -v $PWD/db.example.test:/etc/coredns/db.example.test \
+  coredns/coredns:1.11.3 -conf /etc/coredns/Corefile
+docker run -d --name res --network dnsnet --ip 172.30.0.2 \
+  -v $PWD/Corefile.res:/etc/coredns/Corefile coredns/coredns:1.11.3 -conf /etc/coredns/Corefile
+
+# 권한 서버로 가는 길을 끊는다 (BGP 철회의 흉내)
+docker network disconnect dnsnet auth
+```
+
+리졸버의 설정은 이렇다. `example.test`는 권한 서버로 넘기고, 답은 30초까지 캐시한다.
+
+```text
+.:53 {
+    forward example.test 172.30.0.53
+    cache 30
+    log
+}
+```
+
+길을 끊기 전, 끊은 직후, 30초 뒤에 질의한 결과다.
+
+```text
+$ dig @172.30.0.2 www.example.test   # 평소
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 40017
+www.example.test.	30	IN	A	172.30.0.80
+;; Query time: 0 msec
+
+$ dig @172.30.0.2 www.example.test   # 권한 서버가 사라진 직후 (캐시에 있음)
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 63980
+www.example.test.	30	IN	A	172.30.0.80
+;; Query time: 4 msec
+
+$ dig @172.30.0.2 api.example.test   # 캐시에 없는 이름
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 48274
+;; Query time: 6007 msec
+
+$ dig @172.30.0.2 www.example.test   # 30초 뒤 캐시 만료
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 24196
+;; Query time: 2007 msec
+```
+
+볼 곳은 `status`와 `Query time`이다. 캐시에 있던 이름은 권한 서버가 사라져도 TTL 동안은 답이 나온다. 캐시에 없는 이름은 리졸버가 권한 서버를 기다리다 6초 뒤 SERVFAIL을 준다. 캐시에 있던 이름도 30초가 지나면 똑같이 SERVFAIL이 된다. 그날 전 세계 리졸버에서 일어난 일이 이 모양이다. 처음 몇 분은 캐시 덕에 일부가 버티다가, TTL이 끝나는 대로 하나씩 SERVFAIL로 넘어갔다. 그리고 SERVFAIL마다 몇 초씩 기다린 클라이언트가 다시 묻는다.
+
+리졸버에 낡은 답이라도 돌려주는 설정을 넣으면 결과가 달라진다. CoreDNS의 `cache` 플러그인에는 `serve_stale` 옵션이 있다.
+
+```text
+.:53 {
+    forward example.test 172.30.0.53
+    cache 30 {
+        serve_stale 1h
+    }
+    log
+}
+```
+
+```text
+$ dig @172.30.0.2 www.example.test   # serve_stale 1h, 30초 뒤
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 56615
+www.example.test.	0	IN	A	172.30.0.80
+;; Query time: 0 msec
+
+$ dig @172.30.0.2 api.example.test   # 한 번도 캐시된 적 없는 이름
+;; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 28355
+;; Query time: 6007 msec
+```
+
+TTL이 0으로 찍힌 낡은 답이 돌아왔다. 권한 서버가 잠깐 사라지는 장애에서는 이게 도움이 된다. 다만 Meta 장애에서는 이름이 풀려도 백본이 끊긴 상태라 그 주소로 가 봐야 서비스가 없었을 것이다. 낡은 답은 "권한 서버만 사라진" 장애를 덜어 줄 뿐이다. 이 옵션은 내가 운영하는 리졸버(사내 DNS, 쿠버네티스의 CoreDNS)에 넣을 수 있는 것이지, 1.1.1.1 같은 공개 리졸버의 동작을 바꿀 수는 없다.
+
+## 고치러 가는 길도 같은 망 위에 있었다
+
+Meta의 둘째 글은 복구가 늦어진 이유로 두 장애물을 든다. 첫째, 망이 내려가 있어서 평소 방법으로는 데이터센터에 접근할 수 없었다. 둘째, DNS가 통째로 사라지면서 평소 장애를 조사하고 해결할 때 쓰던 내부 도구 다수가 망가졌다.
+
+주 접근 경로와 대역 외(out-of-band) 접근 경로가 모두 내려가 있어서, 엔지니어를 데이터센터 현장으로 보내 디버깅하고 시스템을 재시작하게 했다. 이것도 시간이 걸렸다. 이 시설들은 물리 보안과 시스템 보안을 높게 설계해서 들어가기 어렵고, 안에 들어가도 라우터와 하드웨어는 물리적으로 접근해도 쉽게 바꿀 수 없게 돼 있다. 사람을 현장에 들여보내고 서버를 만질 수 있게 하는 보안 접근 절차를 켜는 데 시간이 더 들었다. 그다음에야 원인을 확인하고 백본을 다시 올릴 수 있었다.
+
+대역 외 접근은 보통 "본 망이 죽어도 들어갈 수 있는 길"로 만든다. 그런데 그 길조차 내려가 있었다는 건, 대역 외 경로가 본 망과 어딘가에서 같은 것에 기대고 있었다는 뜻으로 읽힌다(Meta 글이 무엇이 겹쳤는지는 말하지 않는다). [S3 2017년 장애](/posts/rw-aws-s3-2017-outage)에서 상태 대시보드가 S3에 기대고 있었던 것과 같은 모양이다. 장애를 고치는 도구는 장애 난 곳과 다른 곳에 있어야 한다.
+
+Meta는 이 대목을 트레이드오프로 정리했다. 무단 접근을 막으려고 시스템을 단단하게 만들어 왔는데, 악의적 공격이 아닌 자기 실수로 난 장애에서 그 단단함이 복구를 늦췄다. 그래도 평소의 훨씬 높은 보안과, 드물기를 바라는 사고에서의 느린 복구를 바꾸는 건 할 만한 거래라고 썼다.
+
+## 한꺼번에 켜면 다시 넘어진다
+
+백본이 데이터센터 리전들 사이에서 다시 연결되자 모든 것이 함께 올라왔다. 하지만 Meta는 서비스를 한 번에 다 켜면 트래픽이 몰려 새로운 장애가 날 수 있다는 걸 알았다. 개별 데이터센터들이 수십 메가와트 범위의 전력 사용 감소를 보고하고 있었고, 그 감소를 갑자기 되돌리면 전기 설비부터 캐시까지 위험해질 수 있었다.
+
+여기서 Meta는 오래 해 온 "storm" 훈련 덕을 봤다고 썼다. storm 훈련은 서비스, 데이터센터, 리전 전체를 내려 큰 시스템 장애를 흉내 내고, 관련된 인프라와 소프트웨어 전부에 스트레스 테스트를 한다. 이 경험으로 서비스를 다시 올리고 늘어나는 부하를 조심스럽게 다룰 자신과 경험이 있었고, 결국 추가적인 시스템 전체 장애 없이 비교적 빨리 돌아왔다. 다만 전 세계 백본이 내려가는 storm을 돌려 본 적은 없었고, 앞으로 이런 상황을 흉내 낼 방법을 찾겠다고 했다.
+
+캐시가 위험해진다는 말은 [캐시 전략](/posts/caching-strategies)에서 다룬 캐시 스탬피드 같은 현상을 떠올리면 이해가 쉽다. 오래 꺼져 있던 시스템이 켜지면 캐시는 비어 있거나 낡아 있고, 몰려든 요청이 한꺼번에 뒤쪽 저장소로 간다. 트래픽을 단계적으로 열어야 하는 이유다. 전력이라는 물리적인 한계까지 언급한 점은 이 규모의 회사에서만 나오는 이야기다.
+
+## 그 뒤 storm 훈련은 어디까지 갔나
+
+2021년 글이 "전 세계 백본을 내리는 storm은 없었다"고 했다면, 2026년 Meta는 [Lights Out, Systems On: Validating Instant Power Loss Readiness(Engineering at Meta, 2026년 6월)](https://engineering.fb.com/2026/06/03/data-center-engineering/lights-out-systems-on-validating-instant-power-loss-readiness/)에서 storm 프로그램의 새 시험을 소개했다. 백본이 아니라 리전 전체의 전력이 예고 없이 끊기는 상황이다. 2021년 장애의 후속이라고 글이 말하지는 않으니, 직접 이어지는 대책으로 읽지는 않는다. 다만 같은 프로그램이 "한 번도 해 보지 않은 큰 장애"를 어떻게 시험하는지 보여 준다.
+
+이 글에서 2021년과 겹치는 대목은 재부팅(bootstrapping) 문제다. 꺼진 리전을 다시 켜려면 수백만 개의 서비스가 한꺼번에 시작해 서로를 스스로 찾아야 한다. 가장 오래 괴롭힌 문제가 순환 의존성이었다고 한다. Meta의 컨테이너 오케스트레이터 Twine에는 Scheduler, Allocator, Broker, Zelos 같은 제어 평면 서비스가 있고, 이게 없으면 리전의 다른 어떤 서비스도 띄울 수 없다. 평소 운영에서는 순환 의존의 위험이 낮지만, 리전 전체를 다시 켤 때는 위험과 영향이 훨씬 크다. 닭과 달걀 문제다. Meta는 제어 평면 서비스 사이의 핵심 시작 의존성을 찾아 CI/CD에서 Belljar 테스트로 계속 검사하고, 그래도 생긴 순환을 끊는 복구 키트를 따로 만들었다고 썼다.
+
+또 하나는 "부메랑" 문제다. 서비스 종료와 복구를 조율하려고 보내는 신호(unavailability event)가 그 신호를 만드는 오케스트레이터의 제어 평면 서비스까지 꺼 버려서, 신호를 받지 못한 서비스가 고아로 남았다. 신호를 만드는 쪽이 같은 신호에 맞은 것이다. 2021년의 DNS 서버들이 "망이 아프면 광고를 거둔다"는 자기 규칙에 모두 맞은 것과 구조가 같다. 보호 장치가 보호해야 할 대상까지 함께 꺼 버리는 경우다.
+
+시험 방법도 적혀 있다. 프로덕션 리전의 전원을 내리는 건 위험이 크니, 새 리전이나 프로덕션 전 리전에서 의존성 같은 문제를 먼저 확인하고, 프로덕션을 복제한 "그림자" 리전에서 시험한 뒤, 가장 새롭고 가장 작은 프로덕션 리전에서 영향 범위를 제한해 시험했다. [카오스 엔지니어링](/posts/chaos-engineering)에서 말하는 "작은 반경에서 시작해 넓혀 간다"의 실제 모습이다.
+
+## 자동 철회 규칙을 다시 짜 본다면
+
+Meta의 글은 DNS 서버의 광고 철회 규칙을 사고 뒤 어떻게 바꿨는지 말하지 않는다. 그러니 아래는 Meta의 대책이 아니라, 이 사고를 보고 내 시스템에 적용해 볼 수 있는 규칙이다.
+
+각 위치가 자기 상태만 보고 광고를 거두면, 모든 위치가 같은 원인으로 아플 때 전부 사라진다. 그래서 흔히 쓰는 보완이 "전체 중 건강한 비율이 기준 아래면 아무도 거두지 않는다"는 규칙이다. 로드 밸런서에서 헬스 체크가 너무 많이 실패하면 오히려 전부에게 트래픽을 보내는 동작(fail-open)과 같은 생각이다. 대부분이 아프다면 그건 개별 위치의 문제가 아니라 공통 원인이고, 빼 봐야 보낼 곳이 없다.
+
+<CodePlayground
+  caption="광고를 거둘지 정하기: 건강한 비율이 기준 아래면 모두 유지"
+  functionName="advertising"
+  initialCode={`// sites: [{ name, backboneOk }] 위치마다 데이터센터와 통하는지
+// minHealthyRatio: 건강한 위치의 비율이 이보다 낮으면 아무도 광고를 거두지 않는다 (0이면 보호 없음)
+// 광고를 계속할 위치 이름 목록을 돌려준다
+function advertising(sites, minHealthyRatio) {
+  return sites.filter((s) => s.backboneOk).map((s) => s.name);
+}`}
+  solution={`function advertising(sites, minHealthyRatio) {
+  const healthy = sites.filter((s) => s.backboneOk).map((s) => s.name);
+  if (healthy.length / sites.length < minHealthyRatio) return sites.map((s) => s.name);
+  return healthy;
+}`}
+  tests={[
+    { label: "한 곳만 아프면 그곳만 뺀다", args: [[{ name: "a", backboneOk: true }, { name: "b", backboneOk: false }, { name: "c", backboneOk: true }, { name: "d", backboneOk: true }], 0.5], expected: ["a", "c", "d"] },
+    { label: "모두 아프면 모두 유지 (보호 있음)", args: [[{ name: "a", backboneOk: false }, { name: "b", backboneOk: false }, { name: "c", backboneOk: false }, { name: "d", backboneOk: false }], 0.5], expected: ["a", "b", "c", "d"] },
+    { label: "모두 아프고 보호가 없으면 아무도 안 남는다", args: [[{ name: "a", backboneOk: false }, { name: "b", backboneOk: false }, { name: "c", backboneOk: false }, { name: "d", backboneOk: false }], 0], expected: [] },
+    { label: "넷 중 셋이 아프면 공통 원인으로 보고 유지", args: [[{ name: "a", backboneOk: true }, { name: "b", backboneOk: false }, { name: "c", backboneOk: false }, { name: "d", backboneOk: false }], 0.5], expected: ["a", "b", "c", "d"] },
+    { label: "절반이 건강하면 아픈 쪽만 뺀다", args: [[{ name: "a", backboneOk: true }, { name: "b", backboneOk: true }, { name: "c", backboneOk: false }, { name: "d", backboneOk: false }], 0.5], expected: ["a", "b"] },
+  ]}
+/>
+
+이 규칙에도 비용이 있다. 넷째 테스트처럼 셋이 정말 따로따로 고장 난 거라면, 아픈 위치로 질의가 계속 간다. 그리고 각 위치가 "다른 위치들이 건강한지"를 알아야 하는데, 그 정보를 주고받는 길이 끊기면 판단 자체가 틀린다. 그래서 실무에서는 이 판단을 각 위치가 아니라 중앙의 제어 평면이 하게 하거나, 한 번에 거둘 수 있는 위치 수에 상한을 두기도 한다. 어느 쪽이든, 자동 철회를 설계할 때 "모두가 동시에 이 조건을 만족하면 어떻게 되나"를 한 번은 물어야 한다.
+
+## 공개된 글이 말하지 않는 것
+
+Meta의 글은 두 편 다 짧다. 실행한 명령이 무엇이었는지, 감사 도구의 버그가 무엇이었는지, 사람이 현장에 도착하기까지 몇 시간이 걸렸는지, 서비스별로 언제 돌아왔는지 모두 없다. 사고 뒤 감사 도구나 DNS 철회 규칙, 대역 외 접근망을 어떻게 바꿨는지도 이 글에서 연 자료에는 없다. 글은 "광범위한 검토 과정이 이미 진행 중"이라고만 썼다.
+
+Cloudflare의 시각은 바깥에서 본 것이다. Cloudflare가 받은 BGP 갱신과 1.1.1.1의 응답을 기준으로 한 시각이라, 다른 망이나 다른 리졸버에서는 몇 분씩 다를 수 있다. 30배라는 질의 증가도 Cloudflare가 1.1.1.1 그래프를 보며 적은 숫자다.
+
+"6시간"이라는 말이 흔히 쓰이지만, 이 글에서 연 자료로 확인되는 건 1.1.1.1 기준으로 facebook.com이 15:50쯤부터 21:20까지 풀리지 않았다는 것뿐이다. 그래서 이 글은 전체 장애 시간을 숫자로 단정하지 않는다.
+
+## 우리 서비스의 DNS와 접근 경로를 점검할 때
+
+이 사고의 직접 원인(전 세계 백본, 자체 BGP)은 대부분의 회사에 없다. 클라우드를 쓰고 DNS는 관리형 서비스에 맡기는 팀이라면 BGP 광고를 직접 거둘 일도 없다. 그래도 같은 구조의 함정은 작은 시스템에도 있다.
+
+자동으로 "나를 빼는" 장치를 찾아본다. 로드 밸런서 헬스 체크, 쿠버네티스 readiness probe, 서비스 디스커버리의 등록 해제가 모두 그렇다. 이 체크가 공통 의존(DB, 캐시, 외부 API)을 함께 보고 있다면, 그 의존이 죽는 순간 모든 인스턴스가 동시에 빠진다. readiness probe가 DB 연결까지 확인하게 만들어서 DB가 잠깐 흔들릴 때 모든 Pod가 서비스에서 빠지는 일이 흔한 실수다. 쿠버네티스 쪽 이야기는 [Pod probe](/posts/k8s-pod-probes)에 있다.
+
+고치러 들어가는 길이 본체와 분리돼 있는지 확인한다. 배스천 서버, VPN, 운영 대시보드, 런북 문서, 온콜 메신저가 모두 같은 DNS와 같은 클라우드 계정에 기대고 있다면, 그 하나가 죽을 때 대응도 멈춘다. 작은 팀이 당장 할 수 있는 건 두 가지다. 주요 서버의 IP를 DNS 없이도 찾을 수 있게 런북에 적어 두고, 운영 연락 수단 하나는 회사 인프라 밖(다른 메신저, 전화)에 둔다.
+
+DNS 레코드의 TTL을 정할 때 장애를 생각한다. TTL이 짧으면 레코드를 빨리 바꿀 수 있지만, 권한 서버가 사라지면 리졸버 캐시도 빨리 비어 장애가 바로 드러난다. TTL이 길면 반대다. 위 실험처럼 내가 운영하는 리졸버에는 낡은 답을 주는 옵션을 넣을 수 있다.
+
+비슷한 신호가 보이면 볼 곳은 이 순서다. 여러 리졸버(1.1.1.1, 8.8.8.8, 사내 DNS)에서 같은 이름이 SERVFAIL이면 내 리졸버가 아니라 권한 서버 쪽이다. `dig +trace`로 어느 단계에서 끊기는지 보고, 권한 서버 IP 대역의 경로가 인터넷에 보이는지는 공개 라우팅 조회(route-views 같은 looking glass)로 확인한다. 이름은 풀리는데 접속이 안 되면 DNS가 아니라 망이나 서비스 쪽이다.
+
+## 이 글이 기댄 자료
+
+- [Update about the October 4th outage](https://engineering.fb.com/2021/10/04/networking-traffic/outage/) — Meta(Santosh Janardhan), 블로그, 2021년 10월
+- [More details about the October 4 outage](https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/) — Meta(Santosh Janardhan), 블로그, 2021년 10월
+- [Understanding how Facebook disappeared from the Internet](https://blog.cloudflare.com/october-2021-facebook-outage/) — Cloudflare(Celso Martinho, Tom Strickx), 외부 관측 블로그, 2021년 10월
+- [Lights Out, Systems On: Validating Instant Power Loss Readiness](https://engineering.fb.com/2026/06/03/data-center-engineering/lights-out-systems-on-validating-instant-power-loss-readiness/) — Meta(Raghu Prabhu, Richard Johnson), 블로그, 2026년 6월
+
+## 면접에서 나올 만한 질문
+
+### 2021년 10월 Meta 장애는 어떻게 시작됐나
+
+백본 용량을 평가하려던 정기 유지보수 명령이 의도와 달리 백본 연결을 모두 내렸다. 이런 명령을 막아야 할 감사 도구가 있었지만 버그 때문에 막지 못했다. 그 결과 전 세계 데이터센터 사이와 인터넷 사이 연결이 끊겼다.
+
+### DNS 서버는 멀쩡히 돌고 있었는데 왜 이름이 안 풀렸나
+
+DNS 서버들이 데이터센터와 통하지 않으면 자기 IP 대역의 BGP 광고를 끄게 설계돼 있었기 때문이다. 백본 전체가 빠지자 모든 위치가 동시에 스스로를 건강하지 않다고 보고 광고를 거뒀다. 인터넷에서 그 주소로 가는 길이 사라졌으니 리졸버는 네임서버에 닿지 못하고 SERVFAIL을 돌려줬다.
+
+### 헬스 체크로 광고를 거두는 설계가 잘못이었나
+
+부분 장애에서는 맞는 설계다. 한 위치가 아프면 그 위치만 빠지고 나머지 애니캐스트 위치가 질의를 받는다. 문제는 모든 위치가 같은 원인으로 동시에 조건을 만족할 때다. 그때는 전체가 한꺼번에 사라진다. 자동 철회에는 "건강한 비율이 기준 아래면 거두지 않는다" 같은 보호나 한 번에 거둘 수 있는 수의 상한을 함께 둬야 한다.
+
+### 복구에 시간이 오래 걸린 이유는
+
+주 접근 경로와 대역 외 접근 경로가 모두 내려가 원격으로 들어갈 수 없었고, DNS가 사라지면서 평소 쓰던 내부 도구도 망가졌다. 엔지니어를 현장에 보냈지만 보안이 높은 시설이라 들어가고 장비를 만질 수 있게 하는 절차에 시간이 더 들었다. Meta는 이를 평소의 높은 보안과 드문 사고의 느린 복구를 바꾼 트레이드오프라고 설명했다.
+
+### 백본이 돌아왔는데 왜 서비스를 한꺼번에 켜지 않았나
+
+갑자기 다 켜면 트래픽이 몰려 새로운 장애가 날 수 있었기 때문이다. 데이터센터들의 전력 사용이 수십 메가와트 범위로 줄어 있었고, 이를 갑자기 되돌리면 전기 설비부터 캐시까지 위험해질 수 있었다. 평소 해 온 storm 훈련 경험으로 부하를 단계적으로 늘렸다.
+
+### 캐시된 DNS 답은 왜 장애를 막지 못했나
+
+리졸버 캐시는 TTL 동안만 답을 들고 있다. TTL이 끝난 이름은 권한 서버에 다시 물어야 하고, 닿지 않으면 SERVFAIL이 된다. 실험에서도 캐시에 있던 이름은 30초 뒤 SERVFAIL로 바뀌었다. serve_stale 같은 옵션으로 낡은 답을 줄 수는 있지만, 백본까지 끊긴 상황이라면 주소를 알아도 서비스에 닿지 못한다.
+
+### 우리 서비스에서 같은 함정은 어디에 있나
+
+자동으로 인스턴스를 빼는 장치가 공통 의존을 함께 보고 있는 곳이다. readiness probe가 DB 연결까지 확인하면 DB가 흔들릴 때 모든 Pod가 동시에 빠진다. 또 배스천, VPN, 런북, 온콜 메신저가 서비스 본체와 같은 DNS와 같은 계정에 기대면 장애 때 고치러 들어갈 수 없다. 체크는 자기 자신만 보게 하고, 접근 경로 하나는 본체 밖에 둔다.

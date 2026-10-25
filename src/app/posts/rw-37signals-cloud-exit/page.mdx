@@ -1,0 +1,351 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-37signals-cloud-exit");
+
+<EasyIntro>
+  매일 같은 길로 출근하는 사람이 있다. 몇 년째 택시를 탔는데, 한 해 택시비를 더해 보니 차를 몇 대 살 수 있는 돈이었다. 그래서 차를 사고, 주차장은 이미 빌려 둔 자리를 쓰기로 했다.
+
+  택시는 언제 어디서든 바로 부를 수 있어서 좋다. 갑자기 친구 열 명을 태워야 하는 날이나, 앞으로 이 동네에 계속 살지 모를 때는 택시가 낫다. 하지만 매일 같은 시간에 같은 길을 가고, 운전할 줄 아는 사람이 이미 있다면 계산이 달라진다.
+
+  이 글은 Basecamp와 HEY를 만드는 회사가 실제로 그 계산을 해서 클라우드에서 나온 이야기다. 서버를 사는 데 든 돈, 줄어든 청구서, 바뀌지 않은 운영팀 인원을 회사가 직접 공개했다.
+
+  흔한 오해는 이 이야기를 "클라우드는 사기다"로 읽는 것이다. 이 회사도 손님이 갑자기 몰리거나 회사가 막 생겼을 때는 클라우드가 맞다고 말한다. 조건이 맞아서 맞았던 계산이다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. 클라우드 청구서를 읽고 줄이는 일반적인 방법은 [클라우드 비용 최적화](/posts/cloud-cost-optimization)에, IaaS·PaaS 같은 모델별로 누가 무엇을 책임지는지는 [클라우드 서비스 모델과 공동 책임](/posts/cloud-service-models-shared-responsibility)에 있다. 이 글은 한 회사가 클라우드를 떠나며 공개한 숫자를 시간 순서로 따라가고, 그 숫자가 성립한 조건을 본다. 같은 시리즈의 [Stack Overflow](/posts/rw-stack-overflow-few-servers)는 반대로 2025년에 데이터센터를 떠나 클라우드로 갔다. 두 글을 같이 읽으면 어느 한쪽이 정답이 아니라는 게 잘 보인다.
+
+## 한 해 320만 달러짜리 청구서
+
+2022년 10월 19일, 37signals의 공동 소유주이자 CTO인 David Heinemeier Hansson(DHH)이 자기 블로그에 [Why we're leaving the cloud](https://world.hey.com/dhh/why-we-re-leaving-the-cloud-654b47e0)를 올렸다. Basecamp는 10년 넘게 한 발을 클라우드에 두고 있었고, 2년 전 출시한 메일 서비스 HEY는 처음부터 클라우드에서만 돌았다. AWS와 Google Cloud를 모두 써 봤고, 가상 머신으로도 Kubernetes로도 돌려 봤다. 그리고 결론을 이렇게 적는다. "Renting computers is (mostly) a bad deal for medium-sized companies like ours with stable growth." 성장이 안정적인 중간 규모 회사에게 컴퓨터를 빌리는 건 (대체로) 손해라는 것이다.
+
+넉 달 뒤인 2023년 2월 21일 글 [We stand to save $7m over five years from our cloud exit](https://world.hey.com/dhh/we-stand-to-save-7m-over-five-years-from-our-cloud-exit-53996caa)에 청구서가 나온다. 2022년 클라우드에 쓴 돈이 320만 달러였다. 그중 100만 달러 조금 안 되는 돈이 S3에 8페타바이트를 여러 리전에 복제해 둔 비용이었고, 나머지 약 230만 달러가 앱 서버, 캐시, DB, 검색 서버 등 전부였다.
+
+이 숫자는 이미 줄인 뒤의 것이었다. 2023년 12월 [The Big Cloud Exit FAQ](https://world.hey.com/dhh/the-big-cloud-exit-faq-20274010)는 그 전 청구서가 320만 달러의 두 배였고, 매달 살피고 협상해서 줄여 온 결과가 320만 달러였다고 쓴다. 약정 할인(reserved instances)과 크기 맞추기를 이미 다 한 상태에서 나온 결정이라는 뜻이다. 약정과 크기 맞추기가 무엇인지는 [클라우드 비용 최적화](/posts/cloud-cost-optimization)의 "크기를 맞추고 나서 약정을 건다" 부분에 있다.
+
+먼저 일러둘 것이 있다. 이 글이 기댄 자료는 대부분 DHH의 블로그와 37signals 개발 블로그다. DHH는 이 결정을 내린 사람이고, 클라우드 이탈을 공개적으로 주장해 온 사람이며, 이때 쓴 배포 도구 Kamal을 만든 사람이다. 자료의 숫자는 회사가 공개한 그대로 옮기되, 주장과 사실은 나눠 읽는다.
+
+## 클라우드가 잘하는 두 끝
+
+이 연재가 클라우드를 통째로 부정하지 않는다는 점부터 보자. 첫 글은 클라우드가 스펙트럼의 두 끝에서 뛰어나다고 쓴다.
+
+한 끝은 앱이 아주 단순하고 트래픽이 적을 때다. 완전 관리형 서비스로 시작하면 정말로 복잡도를 아낀다. Heroku가 연 길이고, 고객이 아직 없을 때 시작하기 좋은 방법이라고 쓴다. 나중에 사용량이 늘어 청구서가 커지는 건 "Good Problem"이라고 덧붙인다.
+
+다른 끝은 부하가 아주 들쭉날쭉할 때다. 평소 사용량이 최대치의 한 조각뿐이거나, 서버가 10대 필요할지 100대 필요할지 모를 때다. DHH는 HEY 출시 때를 예로 든다. 6개월 동안 3만 명을 예상했는데 3주 만에 30만 명이 가입했다. 이럴 때는 클라우드만 한 게 없다고 쓴다.
+
+그리고 37signals는 지금 두 조건 어디에도 해당하지 않는다고 판단했다. 첫 글이 든 조건은 세 가지다. 하드웨어를 사서 여러 해에 걸쳐 감가상각하기 좋은 사업 모델, 대체로 예측할 수 있는 성장, 그리고 Amazon이나 Google 대신 자기 장비를 운영할 수 있는 전문 인력이다. 이 셋이 이 이야기의 전제다. 2023년 FAQ는 기준을 숫자로도 적는다. 평소보다 5~10배 이상의 급증을 자주 겪는다면 클라우드에 맞는 후보일 수 있다고 하고, "buy the baseline, rent the spike", 평소 부하는 사서 감당하고 급증만 빌리는 섞어 쓰기도 소개한다.
+
+## 230만 달러를 84만 달러로 바꾸는 계산
+
+2023년 2월 글의 계산은 단순하다. 지금 클라우드에서 S3를 뺀 230만 달러를 0으로 만들고, 그 대신 드는 돈을 더한다.
+
+- 서버: Dell에 약 60만 달러를 주문한다. 보수적으로 5년에 나눠 상각하면 한 해 12만 달러다. 7년째 돌고 있는 장비도 많다고 덧붙인다.
+- 전력과 대역폭: 이미 두 데이터센터에 랙 8개를 Deft라는 업체에서 빌려 쓰고 있었고, 그 비용이 한 달 약 6만 달러였다. 공간을 일부러 넉넉하게 잡아 둬서 새 서버를 더 넣어도 공간과 전력을 늘릴 필요가 없다. 그래서 한 해 약 72만 달러로 그대로다.
+- 합계: 한 해 84만 달러. 클라우드의 230만 달러와 비교하면 한 해 약 150만 달러를 아낀다. 예상 못 한 비용으로 50만 달러를 떼어 두고도 5년이면 700만 달러다.
+
+아래 코드에 같은 계산을 넣었다. 첫 테스트가 원문의 숫자다.
+
+<CodePlayground
+  caption="37signals의 2023년 2월 계산을 다시 해 보기"
+  functionName="fiveYearMath"
+  initialCode={`function fiveYearMath(p) {
+  // p.cloudPerYear: 없애려는 클라우드 비용(한 해)
+  // p.hardware: 서버 구입비(한 번)
+  // p.years: 상각 기간(년)
+  // p.colocationPerMonth: 랙·전력·대역폭(한 달)
+  // p.extraStaffPerYear: 이 일 때문에 새로 늘어나는 인건비(한 해)
+  // p.buffer: 예상 못 한 비용으로 떼어 둘 돈(전체 기간)
+  // 반환: { ownPerYear, savedPerYear, savedTotal }
+  return {};
+}`}
+  solution={`function fiveYearMath(p) {
+  const hardwarePerYear = p.hardware / p.years;
+  const colocationPerYear = p.colocationPerMonth * 12;
+  const ownPerYear = hardwarePerYear + colocationPerYear + p.extraStaffPerYear;
+  const savedPerYear = p.cloudPerYear - ownPerYear;
+  const savedTotal = savedPerYear * p.years - p.buffer;
+  return { ownPerYear, savedPerYear, savedTotal };
+}`}
+  tests={[
+    { label: "원문 숫자(2023년 2월)", args: [{ cloudPerYear: 2300000, hardware: 600000, years: 5, colocationPerMonth: 60000, extraStaffPerYear: 0, buffer: 500000 }], expected: { ownPerYear: 840000, savedPerYear: 1460000, savedTotal: 6800000 } },
+    { label: "랙을 이미 빌려 쓰고 있어서 추가 비용이 없다고 보면", args: [{ cloudPerYear: 2300000, hardware: 600000, years: 5, colocationPerMonth: 0, extraStaffPerYear: 0, buffer: 500000 }], expected: { ownPerYear: 120000, savedPerYear: 2180000, savedTotal: 10400000 } },
+    { label: "작은 회사 예시(가상의 숫자)", args: [{ cloudPerYear: 120000, hardware: 60000, years: 5, colocationPerMonth: 4000, extraStaffPerYear: 0, buffer: 20000 }], expected: { ownPerYear: 60000, savedPerYear: 60000, savedTotal: 280000 } },
+    { label: "같은 작은 회사가 운영 인력을 한 명 더 뽑아야 하면", args: [{ cloudPerYear: 120000, hardware: 60000, years: 5, colocationPerMonth: 4000, extraStaffPerYear: 100000, buffer: 20000 }], expected: { ownPerYear: 160000, savedPerYear: -40000, savedTotal: -220000 } },
+  ]}
+/>
+
+원문 숫자로 계산하면 680만 달러가 나온다. DHH는 한 해 절감액을 "round numbers"로 150만 달러로 잡고 700만 달러라고 썼다. 반올림 차이다.
+
+두 번째 테스트가 더 흥미롭다. 랙 비용 72만 달러는 클라우드를 떠나지 않아도 이미 내고 있던 돈이다. 이 돈을 "새로 드는 비용"에서 빼면 5년 절감액이 1,000만 달러를 넘는다. 실제로 2024년 10월 글 [Our cloud-exit savings will now top ten million over five years](https://world.hey.com/dhh/our-cloud-exit-savings-will-now-top-ten-million-over-five-years-c7d9b5bd)는 처음 추정보다 절감이 커진 이유로 새 장비를 모두 기존 랙과 전력 한도 안에 넣었다는 점을 든다. 같은 글은 이 계산이 "never fully apples-to-apples"라고 인정한다. 클라우드에만 있고 랙이 하나도 없는 회사라면 랙도 빌려야 한다.
+
+세 번째와 네 번째 테스트는 내가 넣은 가상의 숫자다. 원문 계산에는 인건비 칸이 없다. 운영팀 인원이 그대로였기 때문이다. 작은 회사가 이 일 때문에 사람을 한 명 더 뽑아야 한다면, 같은 공식에서 절감이 손해로 바뀐다. 이 계산에서 가장 큰 변수는 서버값이 아니라 사람이다.
+
+## 상각, 런레이트, 약정: 이 숫자들을 읽는 법
+
+이 연재의 숫자를 읽으려면 회계 용어 세 개를 알아 두면 편하다.
+
+상각(amortization)은 한 번에 낸 큰돈을 쓰는 기간에 나눠 비용으로 잡는 것이다. 서버 60만 달러를 5년에 나누면 한 해 12만 달러다. 기간을 길게 잡을수록 한 해 비용이 작아 보인다. DHH는 5년을 "conservative"라고 하고 7~8년 쓴 서버도 있다고 쓴다. 비교할 때는 같은 기간으로 맞춰야 한다. 클라우드 쪽에도 3년 약정 같은 기간이 있다.
+
+런레이트(run rate)는 지금 한 달 숫자를 12배 한 값이다. 2023년 9월 글의 "연 100만 달러 절감"은 월 18만 달러가 8만 달러 미만이 된 것을 한 해로 늘린 것이다. 실제 한 해 결산이 아니다. 런레이트는 방향을 빨리 보여 주지만, 계절성이나 남은 약정 때문에 실제와 어긋날 수 있다.
+
+약정(reserved instances, savings plans, 장기 스토리지 계약)은 미리 일정 기간 쓰겠다고 약속하고 할인을 받는 것이다. 37signals는 컴퓨트와 관리형 DB·검색에 1년, S3에 4년 약정을 걸어 두었다. 앞에서 본 것처럼 약정은 떠나는 시점을 미룬다. 클라우드와 사내 장비를 비교할 때 흔히 쓰는 말로 하면, 클라우드는 운영비(OpEx), 장비 구입은 자본 지출(CapEx)이다. 약정은 그 사이 어딘가에 있다. 미리 돈을 묶는다는 점에서는 장비 구입과 닮았다.
+
+2023년 4월 글에는 이 세 가지가 한 문장에 들어 있다. 그때 클라우드에 주당 38,000달러를 쓰고 있었다고 쓴다. 주 단위 런레이트다. 그때는 약정이 남아 있었으니, 앱을 옮겨도 그 돈이 바로 줄지는 않았을 것이다.
+
+이 세 용어를 알고 나면 "5년에 1,000만 달러"라는 말을 상각 기간, 런레이트, 남은 약정으로 나눠 다시 읽을 수 있다.
+
+## 청구서가 줄어든 순서
+
+계획이 실제 청구서로 어떻게 이어졌는지는 그 뒤 글들에 숫자로 남아 있다. 아래 그림에서 다음을 누르면 시간 순서로 남은 클라우드 비용이 줄어든다.
+
+<AlgoTrace
+  caption="37signals 클라우드 청구서: 계획에서 S3 탈출까지(각 칸은 그 시점 글의 숫자)"
+  memoryLabel="아직 클라우드에 남은 것"
+  cells={["2022 $3.2M", "2023-02 계획", "2023-06 이전 완료", "2023-09 월 $80K 미만", "2024 $1.3M", "2025 S3 이전"]}
+  steps={[
+    { pointer: 0, memory: ["앱·DB·검색 약 $2.3M", "S3 1M 달러 미만(8PB)"], caption: "2022년 클라우드 비용 320만 달러. 이미 약정과 크기 맞추기로 줄인 숫자다." },
+    { pointer: 1, memory: ["앱·DB·검색 약 $2.3M", "S3 1M 달러 미만(8PB)"], caption: "2023년 2월, 약 60만 달러어치 서버를 주문하기로 하고 5년 700만 달러 절감을 추정했다. S3는 2024년 이후로 미뤘다." },
+    { pointer: 2, found: [0, 1], memory: ["약정 기간 남은 앱·DB 비용", "S3"], caption: "2023년 6월, 일곱 개 앱을 6개월 만에 모두 옮겼다. 하지만 1년 약정이 남아 청구서가 바로 줄지는 않았다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["끝나 가는 약정", "S3"], caption: "2023년 9월, S3를 뺀 클라우드 비용이 월 약 18만 달러에서 8만 달러 미만으로 60% 줄었다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["S3 $1.3M(4년 약정, 약 10PB)"], caption: "2024년, 약정이 모두 끝난 첫해. 남은 130만 달러는 전부 S3다. 2021년에 맺은 4년 약정이 2025년 여름에 끝난다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4], memory: [], caption: "2025년, Pure Storage로 S3 데이터를 옮겼다. 2026년 1월 개발 블로그 팟캐스트는 전송이 10일이 안 걸렸고 원본을 지웠다고 말한다." },
+  ]}
+/>
+
+세 번째 단계가 실무에서 자주 놓치는 부분이다. 2023년 9월 글 [Our cloud exit has already yielded $1m/year in savings](https://world.hey.com/dhh/our-cloud-exit-has-already-yielded-1m-year-in-savings-db358dea)는 앱을 다 옮긴 뒤에도 청구서가 바로 무너지지 않았다고 쓴다. 클라우드 가격을 낮추는 유일한 방법이 1년 이상 미리 약정하는 것이었고, 그 약정이 끝날 때까지는 쓰지 않는 자원 값을 계속 냈다. 같은 이유로 S3는 2021년에 맺은 4년 약정 때문에 2025년 여름까지 남았다. 약정 할인은 싸게 쓰는 방법이면서 떠나는 시점을 정하는 족쇄이기도 하다.
+
+장비값은 계획보다 조금 커졌다. 2023년 2월에는 약 60만 달러, 6월 [We have left the cloud](https://world.hey.com/dhh/we-have-left-the-cloud-251760fb)에는 약 50만 달러, 2024년 10월 글에는 "about $700,000 in the end"로 적혀 있다. 2024년 글은 이 돈을 2023년 하반기에 쌓인 절감으로 이미 다 회수했다고 쓴다. 2024년 클라우드 비용은 320만 달러에서 130만 달러로 줄었고, 한 해 약 200만 달러를 아꼈다.
+
+## 무엇을 샀고 어디에 두었나
+
+2023년 4월 6일 글 [The hardware we need for our cloud exit has arrived](https://world.hey.com/dhh/the-hardware-we-need-for-our-cloud-exit-has-arrived-99d66966)에 장비가 나온다. Dell R7625 서버 20대가 시카고와 버지니아 애시번 두 데이터센터에 같은 날 도착했다. 각 서버에 AMD EPYC 9454(48코어, 96스레드)가 두 개씩 들어 있고, 합치면 vCPU 약 4,000개, 메모리 7,680GB, Gen 4 NVMe 384TB다. 데이터센터마다 캐비닛 4개를 쓴다.
+
+데이터센터를 직접 짓지는 않았다. FAQ는 하이퍼스케일러 같은 극소수 말고는 아무도 데이터센터를 짓지 않는다고 하면서, 전문 업체의 공간을 빌린다고 쓴다. 장비는 Dell에서 데이터센터로 바로 배송되고, Deft의 "white-glove" 직원이 상자를 풀어 랙에 꽂는다. 운영팀은 데이터센터에 거의 가지 않고 전 세계에서 원격으로 일한다. 원문 표현으로 새 IP 주소가 온라인에 뜨는 걸 보는 경험은 클라우드와 비슷하다. 다른 점은 시간이다. 클라우드는 서버 100대를 몇 분 만에 띄우지만, 여기서는 새 서버가 오기까지 몇 주가 걸린다. FAQ는 그 대신 장비를 넉넉하게 사 둬서 갑작스러운 증가를 버틴다고 쓴다.
+
+아래 그림은 2023년 자료에 나온 구성 요소를 요청 하나가 지나는 순서로 그렸다. 서버 대수나 연결 구조의 세부는 자료에 없어서 큰 덩어리만 썼다.
+
+<NetworkTopology
+  width={440}
+  height={290}
+  caption="2023년 이전 뒤 구성(자료에 나온 요소만): Cloudflare → F5 → KVM 위의 Docker 앱"
+  zones={[
+    { id: "chi", label: "Chicago DC", x: 112, y: 8, w: 320, h: 132, tone: "private" },
+    { id: "ash", label: "Ashburn DC", x: 112, y: 150, w: 320, h: 132, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "Users", x: 50, y: 60, icon: "client", w: 84 },
+    { id: "cf", label: "Cloudflare", sub: "CDN·DNS", x: 50, y: 160, icon: "internet", w: 84 },
+    { id: "f5a", label: "F5", sub: "LB", x: 170, y: 74, icon: "lb", w: 70 },
+    { id: "appa", label: "KVM·Docker", sub: "Kamal 배포", x: 274, y: 74, icon: "container", w: 104 },
+    { id: "dba", label: "MySQL 8", sub: "VM", x: 384, y: 74, icon: "db", w: 80 },
+    { id: "f5b", label: "F5", sub: "LB", x: 170, y: 216, icon: "lb", w: 70 },
+    { id: "appb", label: "KVM·Docker", sub: "Kamal 배포", x: 274, y: 216, icon: "container", w: 104 },
+    { id: "dbb", label: "MySQL 8", sub: "replica", x: 384, y: 216, icon: "db", w: 80 },
+  ]}
+  links={[
+    { from: "user", to: "cf" },
+    { from: "cf", to: "f5a" },
+    { from: "cf", to: "f5b", dashed: true },
+    { from: "f5a", to: "appa" },
+    { from: "appa", to: "dba" },
+    { from: "f5b", to: "appb" },
+    { from: "appb", to: "dbb" },
+    { from: "dba", to: "dbb", label: "복제", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "cf"], packet: "GET", title: "앞단은 Cloudflare", detail: "개발 블로그에 따르면 CloudFront와 Route53을 Cloudflare로 바꿨고, Cloudflare가 데이터센터의 F5 로드 밸런서 앞에 선다." },
+    { path: ["cf", "f5a", "appa"], packet: "GET", title: "F5가 앱 호스트 풀로 보낸다", detail: "앱 호스트는 F5에 풀로 등록돼 있다. 그 뒤는 Ruby, Rails, Docker이고 배포는 Kamal이 맡는다." },
+    { path: ["appa", "dba"], packet: "SQL", title: "DB는 컨테이너 밖 VM에서", detail: "RDS 대신 MySQL 8(Percona). 개발 블로그는 MySQL과 postfix 같은 상태 있는 작업은 컨테이너에 넣지 않고 VM에서 돌린다고 쓴다." },
+    { path: ["dba", "dbb"], packet: "repl", highlight: ["ash"], title: "두 번째 데이터센터로 복제", detail: "FAQ는 두 데이터센터가 각각 전체 부하를 감당할 수 있고, 중요한 인프라마다 복제본이 있다고 쓴다. 어떤 방식으로 복제하는지는 자료에 없어서 선 하나로만 그렸다." },
+    { path: ["cf", "f5b", "appb"], packet: "GET", highlight: ["ash"], title: "한쪽이 멈추면 다른 쪽이 받는다", detail: "클라우드에서도 미국 안 두 리전을 썼고, 지금도 지리적으로 떨어진 두 곳을 쓴다. 신뢰성은 대부분 중복에서 나온다는 것이 FAQ의 설명이다." },
+  ]}
+/>
+
+마지막 단계에서 쓰인 일반 개념이 [재해 복구](/posts/disaster-recovery)다. FAQ는 "Reliability is largely a function of redundancy"라고 쓴다. 클라우드에서 두 리전과 리전 안의 중복으로 얻던 것을, 두 데이터센터와 그 안의 중복으로 다시 만든 것이다. 클라우드로 옮긴다고 이 설계가 저절로 생기지 않듯, 클라우드에서 나온다고 사라지지도 않는다.
+
+## Kubernetes를 내려놓은 이유
+
+어떻게 옮겼는지는 37signals 개발 블로그의 2023년 3월 21일 글 [De-cloud and de-k8s — bringing our apps back home](https://dev.37signals.com/bringing-our-apps-back-home/)(Farah Schüller)에 자세하다. 이 앱들은 이미 긴 길을 걸어왔다. 데이터센터에서 AWS ECS로 옮겼고, ECS의 유연성이 아쉬워 Google Cloud의 GKE로 갔다가 네트워크 컨트롤 플레인 장애를 겪고 물러났고, 다시 AWS EKS로 갔다.
+
+글은 가장 작은 앱 Tadalist가 EKS에서 어떻게 생겼는지 보여 준다. VPC 두 개와 피어링, EKS 네임스페이스, 파드마다 Unicorn과 Nginx, Logstash, ALB, RDS. 그리고 그림에 빠진 것을 나열한다. VPN, 피어링, 라우트 테이블, NAT, IAM, 그 주변에 자라난 코드형 인프라. 원문은 "we never realized the promise that the cloud would simplify our life"라고 쓴다.
+
+처음 생각은 벤더가 지원하는 Kubernetes를 자기 하드웨어에서 돌리는 것이었다. 그동안 쌓은 도구를 그대로 쓰고 가리키는 곳만 바꾸면 되니까. 원문은 이게 "very expensive and operationally complicated idea"로 드러나서 곧 접었다고 쓴다. DHH의 2월 글이 말한 "enterprise Kubernetes provider와의 짧은 우회"가 이것이다.
+
+대신 만든 것이 Kamal(처음 이름 mrsk)이다. DHH의 [Introducing Kamal](https://world.hey.com/dhh/introducing-kamal-9330a267)(2023년 2월 28일)은 Kamal을 2005년부터 쓰던 배포 도구 Capistrano의 단순한 절차에 컨테이너의 장점을 합친 것이라고 소개한다. Docker 위에서 돌고, 배포 파이프라인이 클라우드가 아니라 내 컴퓨터에서 돈다. 글은 Kubernetes 위의 HEY 배포가 몇 분 걸렸는데 Kamal로는 20초면 된다고 쓴다. DHH의 글은 움직이는 부품이 훨씬 적다("way fewer moving parts")는 점을 더 큰 이유로 들고, 개발 블로그도 이전 결과를 "fewer moving parts"로 요약한다. 컨테이너 자체는 버리지 않았다는 점이 중요하다. 앱은 몇 년 전 이미 컨테이너로 바뀌어 있었고, 그대로 유지했다. 컨테이너와 오케스트레이터를 나눠 보는 시각은 [Docker 컨테이너 기초](/posts/docker-container-basics)에 있다.
+
+개발 블로그에 적힌 순서도 참고할 만하다. 중요도가 가장 낮고 유료 고객이 없는 Tadalist를 카나리로 먼저 옮겼다. 6주 안에 기반을 만들고 Tadalist를 운영에 올렸고, 다운타임을 일부 감수했다. 그 과정에서 Chef로 KVM 가상 머신 만드는 과정을 다듬어 VM 하나 준비에 걸리던 약 20분을 1분 이내로 줄였다. 다음 Writeboard는 유료 고객이 있어서 DB를 미리 복제해 두고 옮겼고, 전환에 16분이 걸렸으며 다운타임은 없었다. 메일 처리 파이프라인이 있는 Backpack은 NFS 공유와 Redis 기반 잠금으로 바꾸느라 약 3주가 걸렸다. 위험이 작은 것부터 옮기며 근육을 기른 셈이다.
+
+2023년 6월 23일, DHH는 마지막 앱이 집에 돌아왔다고 썼다. 6개월 동안 일곱 개 앱을 옮겼다. 그중 가장 큰 것은 클라우드에서 태어난 HEY로, DB, 캐시 서버, 메일 서비스, 앱 인스턴스를 몇 주에 걸쳐 따로따로 옮겼다. 쓰는 기술은 KVM으로 서버를 VM으로 나누고, Docker로 앱을 돌리고, Kamal로 무중단 배포와 롤백을 하는 것이다.
+
+## Kamal 배포 한 번에 일어나는 일
+
+Kamal이 무엇을 하는지는 공식 문서(이 글을 쓰는 시점 kamal-deploy.org의 2.12.0 문서)에 단계로 나와 있다. `kamal deploy` 한 번은 이런 순서로 돈다.
+
+1. 로컬과 모든 서버에서 Docker 레지스트리에 로그인한다.
+2. 앱 이미지를 빌드해 레지스트리에 올리고, 서버마다 내려받는다.
+3. kamal-proxy가 80, 443 포트에서 트래픽을 받고 있는지 확인한다.
+4. 지금 Git 커밋 해시에 맞는 버전으로 새 컨테이너를 띄운다.
+5. 새 컨테이너가 80번 포트의 `GET /up`에 200 OK로 답하면 kamal-proxy가 트래픽을 그쪽으로 돌린다.
+6. 이전 버전 컨테이너를 멈춘다.
+7. 쓰지 않는 이미지와 멈춘 컨테이너를 지워 디스크가 차지 않게 한다.
+
+무중단이 되는 건 5번 덕분이다. 새 버전이 건강하다고 답하기 전에는 요청이 넘어가지 않는다. 헬스 체크 엔드포인트를 어떻게 설계하는지는 [헬스 체크](/posts/health-checks)에 있다. 문서에 따르면 배포 중 kamal-proxy는 기본으로 1초마다 `/up`을 부르고, 요청마다 5초 타임아웃을 두며, 배포 타임아웃까지 기다린다. 앱이 올라오면 더는 부르지 않는다. 경로와 간격은 설정으로 바꾼다. 아래는 문서의 예를 모은 것이다.
+
+```yaml
+# config/deploy.yml 일부 (Kamal 2 문서의 proxy 설정 예)
+proxy:
+  host: foo.example.com      # 이 호스트로 온 요청만 이 앱으로 보낸다
+  app_port: 3000             # 컨테이너가 여는 포트
+  response_timeout: 10       # 요청 하나를 기다리는 시간(기본 30초)
+  healthcheck:
+    interval: 3              # 배포 중 몇 초마다 확인할지
+    path: /health            # 기본은 /up
+    timeout: 3
+```
+
+```bash
+# 배포: 위 1~7단계를 순서대로 실행한다
+kamal deploy
+
+# 웹 역할 서버에만 배포하고 싶을 때(문서의 --roles 옵션)
+kamal deploy --roles=web
+```
+
+Kamal 문서는 Kubernetes나 Docker Swarm과의 차이를 "imperative commands"로 설명한다. Swarm과 Kubernetes는 원하는 상태를 선언해 두면 컨트롤러가 계속 맞춰 가는 선언형(state reconciliation, [컨트롤러와 조정 루프](/posts/k8s-controllers-reconcile) 참고)이고, Kamal은 Capistrano처럼 "이 서버에서 이 명령을 실행하라"를 차례로 보내는 명령형이다. 무엇이 일어나는지 다 보이는 대신, 서버가 죽었을 때 다른 곳에 자동으로 다시 띄워 주는 일은 하지 않는다. 37signals가 이걸 받아들일 수 있었던 건 서버 대수가 많지 않고, 데이터센터마다 넉넉한 장비와 이중화를 따로 갖췄기 때문이라고 나는 읽는다. 롤링 방식의 일반적인 위험(두 버전 공존, DB 호환성)은 [롤링 배포](/posts/rolling-deployment)에 있다.
+
+## S3의 10페타바이트는 마지막에
+
+S3가 마지막까지 남은 이유는 둘이었다. 2021년부터 맺은 4년 약정, 그리고 데이터의 무게다. 2025년 3월 26일 글 [It's five grand a day to miss our S3 exit](https://world.hey.com/dhh/it-s-five-grand-a-day-to-miss-our-s3-exit-b8293563)은 그때 S3에 한 해 150만 달러 가까이 쓰고 있었고 약정이 6월 30일에 끝난다고 쓴다. 그날을 넘기면 하루 5,000달러를 더 낸다. 대신 두 데이터센터에 합계 18페타바이트짜리 Pure Storage를 들였고, S3 호환 API가 있어서 앱 쪽 교체가 쉬웠다. 장비가 약 150만 달러, 5년 보증과 지원이 100만 달러 조금 못 되며, S3에서만 5년에 거의 500만 달러를 아낀다고 쓴다.
+
+예전 같으면 데이터를 빼는 비용(egress)만 수십만 달러였을 텐데, 이 글에 따르면 AWS가 완전히 떠나는 고객에게 60일 무료 반출 기간을 준다. 2026년 1월 8일 개발 블로그의 팟캐스트 [Moving Mountains of Data off S3](https://dev.37signals.com/moving-mountains-of-data-off-s3/)에서 Jeremy Daer는 이 조건이 생각보다 빡빡했다고 말한다. 정해진 기간 안에 데이터를 모두 뺐다는 걸 증명해야 대역폭 비용을 크레딧으로 돌려받는다. 37signals는 90일을 협상했다.
+
+같은 팟캐스트에 규모와 방법이 나온다. 합계 약 10페타바이트, 지역 복제를 빼면 고유한 데이터가 약 5페타바이트, 수백 개 버킷에 약 50억 개 객체, 평균 크기 약 1.1MB였다. 아래 그림은 그가 설명한 순서를 단계로 옮긴 것이다.
+
+<SequenceDiagram
+  caption="2026년 1월 팟캐스트: 50억 개 객체를 S3에서 옮긴 순서"
+  actors={[
+    { id: "app", label: "앱" },
+    { id: "s3", label: "AWS S3" },
+    { id: "tool", label: "복사 도구" },
+    { id: "pure", label: "Pure Storage" },
+  ]}
+  steps={[
+    { from: "app", to: "pure", label: "dual write", title: "새 파일은 양쪽에 쓴다", detail: "멈추지 않고 옮기려면 옮기는 동안 새로 들어오는 파일을 두 저장소에 함께 써야 한다고 설명한다." },
+    { from: "s3", to: "tool", label: "inventory", title: "목록은 S3 인벤토리 보고서로", detail: "버킷이 이 정도 크기면 목록을 훑는 것만 며칠 걸린다. 하루에 한 번 나오는 인벤토리 보고서를 받아 작업을 나눴다." },
+    { from: "tool", to: "tool", label: "split 10GB", title: "크기가 고른 조각으로 나눈다", detail: "객체 크기를 누적해 약 10GB마다 끊어 작업 하나로 만들었다. 작업마다 관찰하고 다시 돌릴 수 있게 했다." },
+    { from: "tool", to: "pure", label: "rclone copy", title: "워커 여러 대가 병렬로 복사한다", detail: "실제 복사는 rclone이 했다. 버킷 파티션당 GET 초당 5,500건 제한과 회선 대역폭이 병목 후보였다." },
+    { from: "tool", to: "s3", label: "checksum", title: "복사보다 대조가 큰일", detail: "원본의 체크섬과 대상의 체크섬을 맞춰 보고, 빠진 것과 남는 것을 맞춘다. 그는 진짜 핵심이 복사가 아니라 대조와 검증이었다고 말한다." },
+    { from: "app", to: "pure", label: "cutover", title: "전환하고, 마지막에 지운다", detail: "전송은 10일이 안 걸렸다. 검증을 마치고 원본을 지우는 순간이 가장 긴장됐다고 한다." },
+  ]}
+/>
+
+이 단계들은 [무중단 마이그레이션](/posts/zero-downtime-migrations)에서 말하는 이중 쓰기, 채우기, 대조, 전환과 같은 모양이다. DB 스키마가 아니라 객체 저장소에 적용했을 뿐이다. 팟캐스트에는 실무 팁도 있다. AWS 계정을 앱 단위로 일찍, 자주 나눠 두면 나중에 앱 하나씩 떠날 수 있는데, 오래된 앱들은 한 계정을 같이 써서 한꺼번에 옮겨야 했다는 것이다. 무료 반출은 계정 전체를 비워야 받을 수 있으니, 계정 경계가 곧 탈출 단위가 된다.
+
+자료끼리 숫자가 조금씩 다르다. 2025년 3월 글은 옮길 데이터를 거의 6페타바이트로, 팟캐스트는 고유 데이터 약 5페타바이트로 말한다. 3월 글은 40Gbit 회선을 따로 마련했다고 쓰고, 팟캐스트는 100기가비트 회선을 이 작업에 썼다고 말한다. 2024년 10월 글은 남은 S3 비용을 130만 달러로, 2025년 3월 글은 150만 달러 가까이로 적는다. 시점과 세는 방식이 달라서일 것이다. 이 글에서는 각 숫자를 출처와 함께만 썼다.
+
+## 나와서 얻은 것과 여전히 하는 일
+
+비용 말고 공개된 결과는 두 가지다. 하나는 속도다. 2023년 5월 2일 글 [Cloud exit pays off in performance too](https://world.hey.com/dhh/cloud-exit-pays-off-in-performance-too-4c53b697)는 Basecamp Classic의 중간 요청 시간이 67ms에서 19ms로, 평균이 138ms에서 95ms로 줄었다고 쓴다. 원문은 바로 "take these comparisons with a pound of salt"라고 덧붙인다. 깨끗한 실험이 아니라는 것이다. 예전에는 EKS의 c5 인스턴스와 RDS의 r4 인스턴스였고, 지금은 새 EPYC 서버다. 세대가 다른 하드웨어를 비교한 것이라 클라우드라서 느렸다고 읽으면 안 된다.
+
+다른 하나는 가용성이다. 2024년 1월 7일 글 [Keeping the lights on while leaving the cloud](https://world.hey.com/dhh/keeping-the-lights-on-while-leaving-the-cloud-be7c2d67)는 2023년 모든 주요 앱이 가동률 99.99% 이상이었다고 쓴다. 쓰는 기술로 F5, Linux, KVM, Docker, MySQL, Redis, Elasticsearch, Rails를 들며 "boring, basic technologies"를 고른 덕이라고 한다.
+
+그리고 일이 사라지지는 않았다. 2024년 10월 글은 두 데이터센터에서 Basecamp와 HEY 규모의 앱을 돌리는 데 "a substantial and dedicated crew"가 필요하고, 그 일 대부분은 클라우드에서도 해야 했던 일이라고 쓴다. FAQ는 자기 하드웨어 운영에 필요한 전문성의 90%가 클라우드 운영과 같다고도 쓴다. 이 주장에서 봐야 할 말은 "운영팀이 줄지 않았다"가 아니라 "운영팀이 늘지 않았다"다. 클라우드에 있을 때도 그만큼의 사람이 있었다는 뜻이다.
+
+## 이 사례를 "클라우드는 손해"로 읽으면
+
+이 연재는 제목만 보면 클라우드 반대 선언이다. DHH의 말투도 강하다. 하지만 숫자가 성립한 조건을 하나씩 떼어 보면 이야기가 좁아진다.
+
+첫째, 이미 데이터센터와 사람이 있었다. Basecamp는 오래전부터 자체 하드웨어에서도 돌았고, 랙 8개를 이미 빌려 쓰고 있었으며, 그 공간에 새 장비가 들어갔다. 운영팀은 클라우드 시절부터 있었다. 이 조건이 없는 회사는 위 계산의 두 번째 줄(랙 비용 0)이 아니라 첫 번째 줄, 혹은 인건비를 더한 네 번째 줄에서 시작한다.
+
+둘째, 부하가 예측 가능했다. HEY 출시 때처럼 열 배씩 튀는 일이 드문 사업이었다. DHH 스스로 그런 급증이 있으면 클라우드가 맞다고 쓴다.
+
+셋째, 비싼 관리형 서비스를 많이 쓰고 있었다. 첫 글은 HEY 하나가 RDS와 Elasticsearch에 한 해 50만 달러 넘게 쓴다고 했고, 2023년 9월 글은 "Maybe you're not using these expensive services like Aurora/RDS or OpenSearch, like we were"라고 경우가 다를 수 있음을 인정한다.
+
+넷째, 공개된 숫자는 대부분 추정과 런레이트다. 5년 1,000만 달러는 5년이 지나야 확인된다. 장비 교체 주기, 장애 한 번의 비용, 인력의 기회비용은 계산에 없다.
+
+반대로 이 사례가 분명히 보여 주는 것도 있다. 클라우드로 간다고 운영 인력이 저절로 줄지는 않았다는 것, 관리형 서비스와 장기 약정이 떠나는 비용을 키운다는 것, 그리고 Kubernetes 없이도 컨테이너 기반 운영이 가능하다는 것이다. Stack Overflow가 같은 시기에 정반대로 움직인 이유(데이터센터 계약 종료, 테스트 환경을 운영과 같게 만들기 어려움, 서비스 분리)도 각자의 조건에서는 타당했다.
+
+같은 시기에 반대 방향으로 간 두 회사의 조건을 자료에 나온 것만으로 나란히 놓으면 이렇다.
+
+| | 37signals (2022~2025) | Stack Overflow (2025) |
+|---|---|---|
+| 방향 | 클라우드 → 자체 하드웨어 | 자체 데이터센터 → 클라우드 |
+| 계기 | 이미 최적화한 청구서가 연 320만 달러 | 데이터센터 계약 종료(연장 불가) |
+| 이미 가진 것 | 랙 8개, 오래 해 온 자체 운영, 컨테이너화한 앱 | 클라우드로 먼저 옮긴 Teams와 Kubernetes 경험 |
+| 내세운 이득 | 비용, 독립성, 속도 | 운영과 같은 테스트 환경, 서비스 분리와 팀 자율성 |
+| 인력 | 운영팀 그대로라고 공개 | 이전 전담 팀을 처음부터 따로 둠 |
+
+둘 다 "어느 쪽이 싸다"를 앞세우지 않는 부분이 흥미롭다. Stack Overflow는 비용 비교를 내놓지 않았고, 37signals는 비용을 앞세우되 그 조건(이미 있는 랙과 사람)을 함께 적었다. 각자 가진 것에서 출발한 계산이었다.
+
+## 공개 자료가 말하지 않는 것
+
+자료는 결정을 내린 사람이 쓴 것이고, 결정이 옳았다는 흐름이다. 운영팀이 몇 명인지, 인건비가 얼마인지는 나오지 않는다. "팀이 그대로"라는 말은 있지만 그 팀이 이전 과정에서 얼마나 많은 시간을 썼는지, 그 시간에 하지 못한 일이 무엇인지는 없다. 이전 중 장애가 있었는지도 자세히 나오지 않는다. 가동률 99.99%는 회사가 직접 잰 숫자다.
+
+비용 숫자는 런레이트와 추정이 섞여 있다. 2023년 9월의 "연 100만 달러"는 그 달의 청구서를 한 해로 늘린 값이고, "5년 1,000만 달러"는 아직 지나지 않은 5년의 추정이다. 이 글을 쓰는 시점까지 5년 전체의 실제 결산은 공개되지 않았다.
+
+## 우리 서비스의 계산을 해 보려면
+
+이 사례에서 가져올 것은 "나가라"가 아니라 "계산해 보라"다. DHH도 결론을 그렇게 쓴다.
+
+이 선택이 맞는 조건은 위에서 본 그대로다. 클라우드 청구서가 사업에서 의미 있는 크기이고, 부하가 예측 가능하고, 이미 운영 인력이 있고, 관리형 서비스 대신 오픈소스를 직접 돌릴 수 있다. 맞지 않는 조건도 분명하다. 서비스가 막 시작해서 내년에 살아 있을지 모르거나, 청구서가 작아서 절감액이 사람 한 명 값에 못 미치거나, 부하가 평소의 몇 배씩 튀거나, 전 세계 여러 리전에 바로 서버를 띄워야 한다면 클라우드가 맞다.
+
+처음부터 따라 하면 드는 비용도 있다. 랙과 회선 계약, 하드웨어 조달 몇 주, 장비 고장 대응, 그리고 관리형 DB가 해 주던 백업·복제·장애 조치를 직접 맡는 일이다. 37signals는 이 일을 해 온 사람이 이미 있었다.
+
+작은 팀이 지금 당장 할 수 있는 건 두 가지다.
+
+- 위의 계산을 자기 숫자로 한 번 해 본다. 청구서에서 컴퓨트, 관리형 DB, 스토리지, 데이터 전송을 나누고, 각 줄을 "사면 얼마, 사람은 몇 명 더"로 바꿔 본다. 인건비 칸을 비워 두지 않는다.
+- 떠날 수 있는 구조를 미리 만든다. 앱을 컨테이너로 만들고, 관리형 서비스는 표준 프로토콜(MySQL, PostgreSQL, S3 호환 API)로 쓰고, 클라우드 계정을 앱 단위로 나눈다. 37signals가 6개월 만에 옮길 수 있었던 것도, DHH 말로 클라우드에 가려고 미리 컨테이너로 만들어 둔 덕이었다. 그러면 계산 결과가 "나가는 게 낫다"로 나와도 나갈 수 있고, "남는 게 낫다"로 나와도 협상력이 생긴다.
+
+비슷한 신호가 보이면 무엇부터 볼까. 청구서가 커졌다면 먼저 약정과 크기 맞추기가 다 됐는지 본다. 37signals도 그걸 다 한 뒤에 나갔다. 그다음 청구서의 가장 큰 줄이 무엇인지 본다. 컴퓨트라면 상각 계산이 쉽고, 관리형 DB·검색이라면 그걸 직접 운영할 사람이 있는지가 관건이고, 스토리지와 데이터 전송이라면 약정 기간과 반출 조건부터 확인한다. 장기 약정을 새로 맺기 전에는, 그 약정이 끝나는 날이 곧 가장 이른 탈출일이라는 걸 기억해 둔다.
+
+## 이 글이 기댄 자료
+
+- [Leaving the Cloud](https://basecamp.com/cloud-exit) — 37signals, 회사 페이지(연재 모음), 이 글을 쓰는 시점(2026년 10월) 기준 "~$10 million over five years"로 요약
+
+- [Why we're leaving the cloud](https://world.hey.com/dhh/why-we-re-leaving-the-cloud-654b47e0) — 37signals(DHH, CTO), 블로그, 2022년 10월
+- [We stand to save $7m over five years from our cloud exit](https://world.hey.com/dhh/we-stand-to-save-7m-over-five-years-from-our-cloud-exit-53996caa) — 37signals(DHH), 블로그, 2023년 2월
+- [Introducing Kamal](https://world.hey.com/dhh/introducing-kamal-9330a267) — 37signals(DHH), 블로그, 2023년 2월
+- [De-cloud and de-k8s — bringing our apps back home](https://dev.37signals.com/bringing-our-apps-back-home/) — 37signals(Farah Schüller), 개발 블로그, 2023년 3월
+- [The hardware we need for our cloud exit has arrived](https://world.hey.com/dhh/the-hardware-we-need-for-our-cloud-exit-has-arrived-99d66966) — 37signals(DHH), 블로그, 2023년 4월
+- [Cloud exit pays off in performance too](https://world.hey.com/dhh/cloud-exit-pays-off-in-performance-too-4c53b697) — 37signals(DHH), 블로그, 2023년 5월
+- [We have left the cloud](https://world.hey.com/dhh/we-have-left-the-cloud-251760fb) — 37signals(DHH), 블로그, 2023년 6월
+- [Our cloud exit has already yielded $1m/year in savings](https://world.hey.com/dhh/our-cloud-exit-has-already-yielded-1m-year-in-savings-db358dea) — 37signals(DHH), 블로그, 2023년 9월
+- [The Big Cloud Exit FAQ](https://world.hey.com/dhh/the-big-cloud-exit-faq-20274010) — 37signals(DHH), 블로그, 2023년 12월
+- [Keeping the lights on while leaving the cloud](https://world.hey.com/dhh/keeping-the-lights-on-while-leaving-the-cloud-be7c2d67) — 37signals(DHH), 블로그, 2024년 1월
+- [Our cloud-exit savings will now top ten million over five years](https://world.hey.com/dhh/our-cloud-exit-savings-will-now-top-ten-million-over-five-years-c7d9b5bd) — 37signals(DHH), 블로그, 2024년 10월
+- [Kamal 문서: deploy 명령](https://kamal-deploy.org/docs/commands/deploy/)과 [proxy 설정](https://kamal-deploy.org/docs/configuration/proxy/) — 37signals, 공식 문서(2.12.0), 이 글을 쓰는 시점(2026년 10월) 확인
+- [It's five grand a day to miss our S3 exit](https://world.hey.com/dhh/it-s-five-grand-a-day-to-miss-our-s3-exit-b8293563) — 37signals(DHH), 블로그, 2025년 3월
+- [Moving Mountains of Data off S3](https://dev.37signals.com/moving-mountains-of-data-off-s3/) — 37signals(Jeremy Daer 출연), 개발 블로그 팟캐스트 녹취, 2026년 1월
+
+## 면접에서 나올 만한 질문
+
+### 37signals는 왜 클라우드를 떠났나?
+
+성장이 안정적이고 부하가 예측 가능한 중간 규모 회사에게는 컴퓨터를 빌리는 값이 너무 비싸다고 판단했기 때문이다. 2022년 클라우드 비용이 이미 최적화한 뒤에도 320만 달러였고, 그중 S3를 뺀 230만 달러를 서버 구입(약 60만 달러, 5년 상각)과 기존 랙 비용으로 대신하면 한 해 약 150만 달러를 아낀다고 계산했다. 운영팀은 클라우드 시절부터 있었고 늘리지 않았다.
+
+### 그 계산에서 가장 민감한 변수는 무엇인가?
+
+인건비와 이미 있던 시설이다. 37signals는 랙과 운영팀이 이미 있어서 새로 드는 건 장비값 정도였다. 랙을 새로 빌려야 하거나 운영 인력을 한 명이라도 더 뽑아야 하는 작은 회사라면 같은 공식에서 절감이 손해로 바뀔 수 있다. 원문 계산에는 인건비 칸이 아예 없다.
+
+### 앱을 다 옮겼는데 청구서가 바로 줄지 않은 이유는?
+
+약정 할인 때문이다. 클라우드 가격을 낮추려고 1년 이상 미리 약정해 둔 상태라, 약정이 끝날 때까지는 쓰지 않는 자원 값을 계속 냈다. S3는 2021년에 맺은 4년 약정 때문에 2025년 여름까지 남았다. 약정은 싸게 쓰는 방법이면서 떠날 수 있는 가장 이른 날짜를 정한다.
+
+### 클라우드에서 나오면서 Kubernetes도 버린 이유는?
+
+자기 하드웨어 위에서 벤더 지원 Kubernetes를 돌리는 안을 먼저 봤지만 비싸고 운영이 복잡했다. 앱들이 이미 컨테이너로 되어 있었으니, 컨트롤 플레인 없이 Docker 위에서 배포만 해 주는 Kamal을 만들어 썼다. 컨테이너는 유지하고 오케스트레이터만 뺀 것이다. HEY 배포가 몇 분에서 20초 수준으로 줄었다고 공개했다.
+
+### 자체 하드웨어로 가면 신뢰성은 어떻게 지키나?
+
+클라우드에서 하던 것과 같은 방식으로 지킨다. 지리적으로 떨어진 두 데이터센터가 각각 전체 부하를 감당하고, 중요한 인프라마다 복제본을 둔다. 신뢰성은 대부분 중복에서 나온다는 것이 37signals의 설명이고, 2023년 모든 주요 앱의 가동률을 99.99% 이상으로 공개했다. 다만 이 숫자는 회사가 직접 잰 것이다.
+
+### 10페타바이트를 S3에서 옮길 때 가장 어려웠던 것은?
+
+복사보다 대조와 검증이었다. 버킷 목록을 훑는 것만 며칠이 걸려서 S3 인벤토리 보고서로 목록을 받고, 크기가 고른 조각으로 나눠 rclone으로 병렬 복사한 뒤 체크섬으로 맞췄다. 멈추지 않으려면 옮기는 동안 양쪽에 함께 쓰고, 무료 반출을 받으려면 기한 안에 계정을 모두 비워야 했다. 실제 전송은 10일이 안 걸렸다.
+
+### 이 사례를 근거로 "클라우드는 손해"라고 말해도 되나?
+
+조건을 붙여야 한다. 이미 데이터센터 공간과 운영 인력이 있고, 부하가 예측 가능하고, 비싼 관리형 서비스를 많이 쓰던 회사의 계산이다. DHH도 막 시작한 회사나 부하가 크게 튀는 서비스에는 클라우드가 맞다고 쓴다. 같은 시기에 Stack Overflow는 데이터센터 계약이 끝나고 테스트 환경 문제가 있어 반대로 클라우드로 갔다.
+
+### 우리 회사 클라우드 비용이 37signals의 10분의 1이면 같은 선택을 하나?
+
+그대로 따라 하지 않는다. 절감액이 사람 한 명 인건비보다 작아질 가능성이 크기 때문이다. 대신 약정과 크기 맞추기를 먼저 하고, 청구서를 컴퓨트·관리형 서비스·스토리지·전송으로 나눠 "사면 얼마, 사람은 몇 명"으로 바꿔 계산해 본다. 그리고 컨테이너, 표준 프로토콜, 앱 단위 계정으로 떠날 수 있는 구조를 만들어 둔다.

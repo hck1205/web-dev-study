@@ -1,0 +1,365 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-amazon-distributed-computing-manifesto");
+
+<EasyIntro>
+  아주 큰 가게가 있다. 처음에는 직원 모두가 창고 장부 한 권을 같이 보며 일했다. 누구나 장부를 펴서 직접 고쳐 쓸 수 있으니 처음엔 편했다.
+
+  그런데 직원이 많아지자 장부 앞에 줄이 길게 생겼다. 누가 장부 칸을 하나 바꾸면 그 칸을 보던 다른 직원들의 일하는 방법도 다 바꿔야 했다. 장부가 가게 전체의 속도를 정하게 된 것이다.
+
+  그래서 이 가게는 규칙을 바꾸자고 썼다. 장부는 담당 직원만 만지고, 다른 사람은 창구에서 부탁만 한다. 주문서는 한곳에 쌓아 두지 않고, 결제하는 사람, 물건 담는 사람, 포장하는 사람에게 차례로 건네준다.
+
+  이 글은 그 규칙을 적은 1998년 문서를 읽는다. 그리고 25년 뒤 같은 회사가 "모든 걸 쪼개는 게 정답은 아니다"라고 쓴 이유도 함께 본다. 흔한 오해는 이 문서를 마이크로서비스의 시작으로만 읽는 것이다. 문서가 먼저 겨냥한 건 서비스 개수가 아니라 모두가 같이 만지던 데이터였다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. 서비스를 나누는 일반 원리는 [마이크로서비스](/posts/microservices)에, 경계를 업무 언어로 긋는 방법은 [DDD 바운디드 컨텍스트](/posts/ddd-bounded-context)에 있다. SOA라는 말이 어떤 시대에 어떤 도구와 함께 쓰였는지는 [SOAP과 SOA](/posts/soap-and-soa)에 정리했다. 이 글은 Amazon이 1998년에 쓴 내부 문서 하나와, 2023년 같은 회사 CTO가 쓴 글 하나를 나란히 읽는다.
+
+원래 이 자리에는 Prime Video 모니터링 팀이 서버리스 분산 구조를 하나의 프로세스로 합친 이야기를 쓰려고 했다. 그런데 그 글이 실렸던 primevideotech.com은 지금 열리지 않는다. 회사 사이트에서 원문을 확인할 수 없어서 자세한 내용은 다루지 않고, 같은 회사가 그 사례를 어떻게 소개했는지만 뒤에서 짧게 본다.
+
+## 주문량 열 배를 버틸 구조를 찾던 1998년
+
+2022년 11월 16일, Amazon CTO Werner Vogels가 자기 블로그 All Things Distributed에 [The Distributed Computing Manifesto](https://www.allthingsdistributed.com/2022/11/amazon-1998-distributed-computing-manifesto.html)를 공개했다. 1998년 5월 24일에 쓰고 7월 10일에 고친, Amazon 내부 문서다. Vogels는 앞에 소개 글을 붙였고, 그 뒤에 원문 전체를 실었다.
+
+소개 글에 따르면 당시 Amazon은 전형적인 2계층 구조였다. 페이지를 그리는 상태 없는 모놀리스 애플리케이션(이름이 Obidos였다) 하나와, 상품 분류·상품·고객·나라가 늘 때마다 함께 늘어나는 데이터베이스 여러 개다. 이 데이터베이스는 모두가 같이 쓰는 자원이었고, Vogels 표현으로 "eventually became the bottleneck for the pace that we wanted to innovate", 결국 혁신 속도의 병목이 됐다.
+
+선언문 본문은 목표를 이렇게 적는다. "It is clear that we need to create and implement a new architecture if Amazon's processing is to scale to the point where it can support ten times our current order volume." 지금 주문량의 열 배를 받으려면 새 구조가 필요하다는 것이다. 숫자로 적힌 목표는 이것 하나다. 서버 몇 대, 초당 몇 건 같은 숫자는 문서에 없다.
+
+먼저 일러둘 것이 있다. 이 문서는 "이렇게 하자"는 제안서다. 무엇을 어떤 순서로, 얼마나 걸려 실제로 만들었는지는 이 문서와 소개 글에 나오지 않는다. 문서 스스로도 어떤 기술로 만들지는 다루지 않는다고 적는다. Vogels는 소개 글에서 이후 Amazon이 모놀리스에서 서비스 지향 구조로, 마이크로서비스로, 공유 인프라 위의 마이크로서비스로 옮겨 갔다고 쓴다. 이 글에서는 문서가 무엇을 문제로 봤고 무엇을 제안했는지를 읽고, 실제 구현은 추측하지 않는다.
+
+## 앱이 테이블을 직접 읽던 2계층
+
+선언문이 가장 먼저 짚는 건 데이터와 코드가 얽힌 방식이다. 원문은 지금 구조를 "essentially data bound"라고 부른다. 업무를 돌리는 애플리케이션이 데이터베이스에 직접 접근하고, 데이터 모델을 코드 안에 품고 있다. 그래서 기능이 그대로여도 데이터 모델이 바뀌면 애플리케이션을 고쳐야 한다.
+
+운영 모습도 적혀 있다. "much of our database access is ad hoc with a proliferation of Perl scripts that to a very real extent run our business." 데이터베이스 접근 대부분이 그때그때 짠 것이고, 늘어난 Perl 스크립트가 사실상 사업을 돌리고 있다는 말이다.
+
+여러 애플리케이션이 같은 데이터베이스의 테이블을 직접 읽고 쓰는 이 모양을 흔히 공유 데이터베이스 통합이라고 부른다. 처음에는 가장 빠른 연동 방법이다. 테이블 하나만 알면 된다. 하지만 테이블이 사실상 모든 팀 사이의 계약이 되면서, 컬럼 하나를 바꾸려면 그 컬럼을 읽는 모든 스크립트를 찾아야 한다. 선언문은 이 결합이 처리를 데이터 위치에 따라 나누는 것도 어렵게 만든다고 쓴다. 애플리케이션이 데이터 요소 사이의 관계를 직접 알고 있으니, 데이터를 다른 곳으로 옮기면 애플리케이션이 깨진다.
+
+## 첫째 제안: 데이터 앞에 창구를 세운다
+
+선언문의 핵심 개념은 둘이다. 하나는 서비스 기반 모델, 다른 하나는 워크플로 모델이다.
+
+서비스 기반 모델은 표현(클라이언트), 업무 로직, 데이터를 나누는 3계층이다. 원문은 이렇게 쓴다. "The applications (clients) would no longer be able to access the database directly, but only through a well-defined interface that encapsulates the business logic required to perform the function." 애플리케이션은 더 이상 데이터베이스를 직접 만지지 못하고, 업무 로직을 감싼 잘 정의된 인터페이스로만 접근한다. 그러면 클라이언트는 데이터 구조도, 데이터가 어디 있는지도 몰라도 된다. 서비스와 데이터베이스 사이가 바뀌어도 클라이언트는 그대로다.
+
+아래 그림은 그 변화를 한 장으로 줄였다. 왼쪽이 선언문이 말한 1998년의 모습, 오른쪽이 제안한 모습이다. 점이 흐르는 방향을 보면 오른쪽에서는 클라이언트에서 데이터로 가는 길이 모두 서비스를 지난다.
+
+<ConceptDiagram
+  width={440}
+  height={250}
+  caption="선언문의 첫째 제안: 클라이언트가 데이터베이스 대신 서비스 인터페이스를 부른다"
+  nodes={[
+    { id: "app1", label: "Obidos", sub: "웹 앱", x: 60, y: 40, w: 90 },
+    { id: "perl", label: "Perl 스크립트", sub: "여러 개", x: 60, y: 120, w: 100 },
+    { id: "db1", label: "공유 DB", sub: "모두가 직접", x: 60, y: 205, w: 100 },
+    { id: "cli", label: "클라이언트", sub: "웹·내부 도구", x: 300, y: 32, w: 110 },
+    { id: "svcC", label: "고객 서비스", x: 245, y: 120, w: 96 },
+    { id: "svcV", label: "판매자 서비스", x: 370, y: 120, w: 104 },
+    { id: "domC", label: "고객 도메인", sub: "데이터", x: 245, y: 205, w: 96 },
+    { id: "domV", label: "판매자 도메인", sub: "데이터", x: 370, y: 205, w: 104 },
+  ]}
+  edges={[
+    { from: "app1", to: "db1", dashed: true },
+    { from: "perl", to: "db1", dashed: true },
+    { from: "cli", to: "svcC", label: "인터페이스" },
+    { from: "cli", to: "svcV" },
+    { from: "svcC", to: "domC" },
+    { from: "svcV", to: "domV" },
+  ]}
+/>
+
+오른쪽 그림의 서비스 이름은 선언문이 예로 든 데이터 도메인(고객, 판매자, 카탈로그)에서 두 개를 골라 붙였다. 선언문은 서비스 목록을 정하지 않는다.
+
+서비스를 부르는 방식도 둘로 나눈다. 고객 추가나 판매자 정보 조회처럼 바로 답이 오는 일은 동기 호출이다. 워크플로 요소를 다음 단계로 넘기는 일처럼 "잘 줄 세웠다"는 답만 바로 받고 결과는 나중에 받는 일은 비동기다. 비동기 결과를 받는 방법으로 선언문은 폴링과 콜백을 비교한다. 콜백은 요청한 쪽이 끝났을 때 불러 달라고 주소를 남기는 방식인데, 요청한 쪽이 그 사이 사라지면 주소가 쓸모없어진다. 폴링은 끝났는지 주기적으로 물어야 하는 부담이 있다. 선언문은 비동기 서비스에는 폴링이 가장 쓸모 있을 것이라고 본다. 같은 고민이 지금 웹에서 어떤 모양인지는 [롱 폴링](/posts/long-polling)과 [웹훅](/posts/webhooks)에 있다.
+
+선언문은 이 전환에 드는 비용을 숨기지 않는다. 하나는 훨씬 엄격한 소프트웨어 공학이다. 데이터베이스 직접 접근을 시간을 두고 없애야 하고, 서비스와 인터페이스는 "haphazard fashion", 되는대로 만들면 안 된다. 그러지 않으면 지금과 같은 엉킨 모양이 다시 생긴다. 다른 하나는 개발자의 사고방식이다. 지금은 요구사항이 오면 테이블과 컬럼을 바꾸는 것으로 푼다. 앞으로는 데이터 모델링에 더해, 데이터 모델을 드러내지 않는 클라이언트와 서비스 사이의 인터페이스를 설계해야 한다. 원문은 이걸 "something we have never done before"라고 쓴다.
+
+나는 이 대목이 마이크로서비스 논의에서 자주 빠진다고 생각한다. 선언문이 겨냥한 첫 번째 대상은 프로세스 개수가 아니라 데이터 접근 경로였다. 서비스를 여러 개로 나눠도 그 서비스들이 여전히 같은 테이블을 직접 읽는다면, 이 문서가 풀려던 문제는 그대로 남는다. 서비스마다 데이터를 갖는 원칙과 그 대가는 [마이크로서비스](/posts/microservices) 글의 "데이터베이스도 서비스마다" 부분에 있다.
+
+## 둘째 제안: 데이터가 일하는 곳으로 간다
+
+두 번째 개념은 워크플로다. 선언문은 Amazon의 사업이 워크플로 처리에 잘 맞는다고 본다. 이미 주문이 들어와 출고될 때까지 여러 업무가 차례로 손대는 "order pipeline"이 있었다. 문제는 그 주문이 중앙 데이터베이스 한 곳에 머물러 있다는 점이었다. 원문 예시로 `customer_orders`의 condition 속성이 다음에 할 일을 정했다. 일이 늘수록 이 중앙 인스턴스에 몰리는 처리가 감당할 수 없는 수준이 된다.
+
+그래서 선언문은 방향을 뒤집는다. "Instead of processes coming to the data, the data would travel to the process." 처리가 데이터를 찾아오는 대신 데이터가 처리하는 곳으로 간다. 주문 같은 워크플로 요소가 다른 기계에 있는 업무 처리 노드 사이를 옮겨 다니고, 그러려면 요소마다 다음 노드가 일하는 데 필요한 정보를 모두 담고 있어야 한다. 원문은 이것이 메시지 지향 미들웨어에서 일 단위를 메시지로 노드 사이에 보내는 것과 같은 개념이라고 쓴다. 지금 말로는 메시지 기반, 이벤트 기반 구조다. 일반론은 [이벤트 기반 아키텍처](/posts/event-driven-architecture)에 있다.
+
+아래 그림은 선언문 마지막 부분의 물류센터(DC) 주문 처리 설명을 단계로 옮긴 것이다. 원문은 다이어그램으로 보여 주는데, 여기서는 본문 문장에 나온 노드만 골라 썼다. 노드 사이의 순서는 설명을 위해 단순하게 이은 것이고, 원문은 결제와 피킹 목록 처리를 둘 다 집계 큐의 예로 든다.
+
+<SequenceDiagram
+  caption="선언문의 DC 예시: 주문이 노드 사이를 옮겨 다니고, 상태는 추적 테이블에 한 줄씩 남는다"
+  actors={[
+    { id: "req", label: "주문 쪽" },
+    { id: "charge", label: "결제 큐" },
+    { id: "pick", label: "피킹 집계 큐" },
+    { id: "rebin", label: "rebin" },
+    { id: "track", label: "상태 추적 DB" },
+  ]}
+  steps={[
+    { from: "req", to: "charge", label: "insert order", title: "결제할 주문을 결제 서비스의 큐에 넣는다", detail: "선언문은 큐마다 서비스 인터페이스가 있고, 요청한 쪽은 그 인터페이스로 워크플로 요소를 넣는다고 쓴다." },
+    { from: "charge", to: "track", label: "state row", title: "몇몇 노드가 지금 상태를 한 줄 남긴다", detail: "고객 서비스가 주문이 어디쯤인지 알 수 있게, 중앙 DB에 상태 줄을 추가한다. 주문이 끝나면 그 기록은 데이터 웨어하우스로 옮긴다." },
+    { from: "charge", to: "pick", label: "forward", title: "결제가 끝나면 다음 노드로 넘긴다", detail: "자율형이면 결제 노드가 직접 다음으로 넘기고, 지휘형이면 요청한 쪽에 결과를 돌려준다." },
+    { from: "pick", to: "pick", label: "aggregate", title: "피킹 목록은 모아서 만든다", detail: "출고 방법별로 목록을 뽑으려면 주문이 어느 정도 쌓여야 한다. 선언문은 큐와 테이블 성질을 둘 다 가진 이것을 집계 큐라고 부른다." },
+    { from: "pick", to: "rebin", label: "multi-book", title: "여러 권 출고는 늘 picklist에서 rebin으로", detail: "옆 노드와의 관계가 고정돼 있으니 자율형이 어울린다는 원문의 예다." },
+    { from: "rebin", to: "track", label: "state row", title: "다음 단계도 상태를 남긴다", detail: "이 기록은 추적뿐 아니라 주문 파이프라인의 비효율을 보는 데도 쓰인다고 원문은 쓴다." },
+  ]}
+/>
+
+그림 세 번째 단계의 "자율형"과 "지휘형"은 선언문이 직접 던진 질문이다. 각 노드가 업무 규칙을 품고 다음 노드를 스스로 정할지(autonomous), 아니면 조정자가 노드 사이 일을 옮길지(directed). 원문 예시는 신용카드 결제 노드다. 성공한 주문은 다음 노드로, 실패한 주문은 예외 처리 노드로 스스로 보낼 것인가, 아니면 어디서나 부를 수 있는 서비스로 두고 결과를 요청한 쪽에 돌려줄 것인가.
+
+선언문의 판단은 경우마다 다르다. 결제처럼 여러 맥락에서 불리는 일은 지휘형이 맞고, 이웃 노드와의 관계가 고정된 일(여러 권 출고는 늘 picklist에서 rebin으로)은 자율형이 맞다. 지휘형의 장점으로는 노드를 바꿔 끼울 수 있는 블록처럼 쓸 수 있는 유연함을 든다. 이게 지금 사가 패턴에서 말하는 오케스트레이션과 코레오그래피의 선택과 같은 축이다. 두 방식의 장단은 [사가 패턴](/posts/saga-pattern)에 자세히 있다. 1998년 문서에 이미 "어느 한쪽이 정답"이 아니라 "일의 성격에 따라"라는 답이 적혀 있다는 점이 흥미롭다.
+
+분산 워크플로의 이득으로 선언문은 두 가지를 든다. 결제가 병목이면 결제 노드만 늘리면 된다. 그리고 노드가 원격 데이터베이스에 꼭 접근하지 않아도 일할 수 있으니, 데이터베이스 같은 다른 부분이 멈춰도 일부 처리는 계속된다.
+
+## 오래 남는 데이터는 도메인으로 나눈다
+
+모든 데이터가 흘러가는 건 아니다. 선언문은 워크플로 데이터와 다른 종류의 데이터를 구분한다. 고객, 판매자, 카탈로그처럼 오래 남고, 바뀌는 빈도나 시점을 예측하기 어려운 데이터다. 이 데이터는 가용성이 높아야 하고 서로의 관계(고객에게 딸린 주소 같은 것)가 지켜져야 한다.
+
+선언문은 이걸 데이터 도메인으로 나누자고 한다. 고객에 관한 데이터는 한 도메인, 판매자는 다른 도메인, 카탈로그는 또 다른 도메인이다. 클라이언트는 도메인마다 있는 서비스로 접근한다. 그러면 도메인 데이터를 쓰는 쪽 가까이에 복제할 수도 있다. 원문 예시는 고객 도메인을 영국과 독일에 복제해서, 그곳 고객 서비스 조직이 단일 인스턴스의 가용성에 기대지 않고 로컬 저장소로 일하는 것이다. 인터페이스는 같고 접근하는 사본만 다르다.
+
+이 생각은 지금 DDD에서 말하는 바운디드 컨텍스트와 가깝다. 다만 선언문의 기준은 업무 언어보다 "다른 데이터와의 관계"다. 같은 축에서 데이터를 나눈다는 점은 같고, 경계를 어떻게 찾는지는 [DDD 바운디드 컨텍스트](/posts/ddd-bounded-context)가 더 구체적인 도구를 준다. 복제본을 지역마다 두면 생기는 일관성 문제는 [복제와 샤딩](/posts/db-replication-sharding)에 있다.
+
+## 큐, 도메인, 그리고 집계 큐
+
+선언문은 이 두 개념을 물류센터에 적용해 데이터 흐름을 세 가지로 나눈다. 아래 그림에서 다음을 누르면 선언문이 예로 든 데이터가 차례로 분류된다.
+
+<AlgoTrace
+  caption="선언문의 DC 데이터 분류: 흘러가는 것, 오래 남는 것, 모았다가 처리하는 것"
+  memoryLabel="분류 결과"
+  cells={["received_items", "bin_items", "피킹 목록용 출고분", "customer_orders", "고객 정보"]}
+  steps={[
+    { caption: "선언문의 DC 처리 설명에 나오는 데이터들이다. 셋 중 어디에 넣을지 차례로 본다." },
+    { pointer: 0, memory: ["received_items → 큐"], caption: "vreceive가 채우는 입고 품목. 순서대로 하나씩 처리하면 되니 순차 큐에 맞는다." },
+    { pointer: 1, memory: ["received_items → 큐", "bin_items → 도메인"], caption: "재고 정보. DC뿐 아니라 소싱과 고객 지원에서도 필요하니 널리 쓰는 데이터 도메인에 둔다." },
+    { pointer: 2, memory: ["received_items → 큐", "bin_items → 도메인", "출고분 → 집계 큐"], caption: "DC 안에서만 잠깐 쓰지만 하나씩이 아니라 묶어서 처리한다. 출고 방법별 피킹 목록을 뽑으려면 어느 정도 쌓여야 한다." },
+    { pointer: 3, found: [0], memory: ["received_items → 큐", "bin_items → 도메인", "출고분 → 집계 큐", "customer_orders → 워크플로"], caption: "주문은 정해진 상태를 거쳐 노드 사이를 옮겨 다니는 워크플로 요소다." },
+    { pointer: 4, found: [0, 1, 2, 3], memory: ["received_items → 큐", "bin_items → 도메인", "출고분 → 집계 큐", "customer_orders → 워크플로", "고객 정보 → 도메인"], caption: "고객 정보는 오래 남고 관계가 중요하니 도메인이다. 원문은 고객 도메인을 영국·독일에 복제하는 예를 든다." },
+  ]}
+/>
+
+세 번째인 집계 큐가 눈에 띈다. 선언문은 이 데이터가 큐 모델에도 도메인 모델에도 잘 맞지 않는다고 인정하고, 큐와 테이블 성질을 함께 가진 보관소를 따로 이름 붙였다. 하나의 모델로 모든 데이터를 밀어 넣지 않았다는 점이 이 문서의 태도를 잘 보여 준다고 나는 읽는다.
+
+## 흘러가는 주문을 고치려면
+
+데이터가 움직이기 시작하면 새 문제가 생긴다. 선언문은 이걸 "data currency problem"이라고 부른다. 원문 예시는 처리 중인 주문의 배송지를 바꾸고 싶다는 고객이다. 중앙 DB 시절에는 고객 서비스 담당자가 `customer_order`의 주소를 바로 고치면 됐다(출고 대기 레코드가 생기기 전이라면). 워크플로에서는 그 주문이 지금 어느 노드를 지나는지 모른다.
+
+선언문의 제안은 발행·구독(publish and subscribe)이다. 노드들이 특정 이벤트나 예외를 구독하고, 주소 변경 요청은 그 이벤트를 구독한 모든 노드에 메시지로 간다. 동시에 추적 테이블에 "변경 요청됨" 줄을 넣고, 변경을 실제로 반영한 노드가 "반영함" 줄을 또 넣는다. 그러면 변경 요청과 반영 여부가 영구 기록으로 남는다. 노드 대신 워크플로 조정자가 변경을 받아 반영하는 변형도 적혀 있다. 동기 방식(모든 노드가 그 자리에서 반영)도 대안으로 들지만, 모든 노드가 살아 있어야 하니 일시적으로 실패해도 괜찮은 변경에만 쓰라고 한다.
+
+여기서 쓰인 일반 개념이 둘 있다. 하나는 [pub/sub](/posts/pub-sub)이고, 다른 하나는 상태를 덮어쓰지 않고 변화를 줄로 쌓는 기록 방식이다. 상태 변화를 모두 쌓아 두고 거기서 현재를 읽는 방식을 끝까지 밀고 간 것이 [이벤트 소싱](/posts/event-sourcing)이다. 선언문의 추적 테이블은 그보다 훨씬 소박하다. 주문이 진행 중일 때만 운영 DB에 두고, 끝나면 데이터 웨어하우스로 옮긴다.
+
+## 두 장치를 PostgreSQL로 작게 만들어 보기
+
+선언문의 두 장치, "데이터 앞의 창구"와 "상태를 줄로 쌓는 추적 테이블"을 PostgreSQL 16에서 작게 만들어 봤다. Amazon이 이렇게 구현했다는 뜻이 아니다. 선언문의 생각이 지금 도구로 어떤 모양이 되는지 보려는 실험이고, 출력은 실제로 돌린 결과다.
+
+먼저 창구다. 보고서 스크립트용 계정이 고객 테이블을 직접 읽지 못하게 막고, 함수 하나로만 주소를 받게 한다.
+
+```sql
+-- 예제 테이블: 고객 두 명
+CREATE TABLE customers (
+  id      int PRIMARY KEY,
+  name    text NOT NULL,
+  address text NOT NULL
+);
+INSERT INTO customers VALUES (1, 'Kim', 'Seoul'), (2, 'Lee', 'Busan');
+
+CREATE ROLE report_script LOGIN;          -- 선언문의 "Perl 스크립트" 자리
+CREATE SCHEMA api;                         -- 창구만 모아 두는 스키마
+
+-- 창구: 함수 소유자 권한으로 테이블을 읽는다(SECURITY DEFINER)
+CREATE FUNCTION api.customer_address(p_id int) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+$$ SELECT address FROM customers WHERE id = p_id $$;
+
+REVOKE ALL ON customers FROM PUBLIC;                         -- 테이블 직접 접근은 막고
+REVOKE ALL ON FUNCTION api.customer_address(int) FROM PUBLIC;
+GRANT USAGE ON SCHEMA api TO report_script;                  -- 창구만 열어 준다
+GRANT EXECUTE ON FUNCTION api.customer_address(int) TO report_script;
+```
+
+`report_script`로 접속해서 테이블을 직접 읽으면 막히고, 함수로는 읽힌다.
+
+```text
+-- report_script: SELECT address FROM customers WHERE id = 1;
+ERROR:  permission denied for table customers
+
+-- report_script: SELECT api.customer_address(1);
+ customer_address 
+------------------
+ Seoul
+(1 row)
+```
+
+이제 테이블 쪽 사정이 바뀌었다고 하자. 컬럼 이름을 `address`에서 `ship_address`로 바꾸고 함수 본문만 고친다.
+
+```sql
+ALTER TABLE customers RENAME COLUMN address TO ship_address;
+CREATE OR REPLACE FUNCTION api.customer_address(p_id int) RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+$$ SELECT ship_address FROM customers WHERE id = p_id $$;
+```
+
+```text
+-- report_script: SELECT api.customer_address(1);
+ customer_address 
+------------------
+ Seoul
+(1 row)
+```
+
+스크립트는 한 줄도 바뀌지 않았다. 선언문이 말한 "서비스와 데이터베이스 사이가 바뀌어도 클라이언트는 그대로"가 이것이다. 볼 곳은 첫 출력의 `permission denied` 줄이다. 직접 접근이 막혀 있어야 창구가 계약이 된다. 막지 않으면 누군가는 결국 테이블을 직접 읽고, 그때부터 컬럼 이름이 다시 모두의 계약이 된다. 창구가 함수든 HTTP API든 원리는 같다. MySQL 8에서는 저장 프로시저나 뷰에 `SQL SECURITY DEFINER`를 주어 비슷하게 만들 수 있다.
+
+다음은 추적 테이블이다. 상태를 덮어쓰지 않고 바뀔 때마다 한 줄을 더한다. 주문 101은 결제 뒤 배송지 변경 요청을 받아 피킹 단계에서 반영됐고, 102는 결제에서 실패했다.
+
+```sql
+CREATE TABLE order_state_log (
+  id        bigserial PRIMARY KEY,   -- 늘기만 하는 번호. 같은 주문 안의 순서가 된다
+  order_id  int  NOT NULL,
+  state     text NOT NULL,
+  node      text NOT NULL,           -- 어느 처리 노드가 남겼나
+  note      text,
+  at        timestamptz NOT NULL
+);
+CREATE INDEX ON order_state_log (order_id, id);
+
+INSERT INTO order_state_log (order_id, state, node, note, at) VALUES
+ (101, 'charge_queued',    'order',    NULL,                        '2026-10-25 09:00'),
+ (101, 'charged',          'charge',   NULL,                        '2026-10-25 09:02'),
+ (101, 'change_requested', 'cs',       'address: Seoul -> Incheon', '2026-10-25 09:03'),
+ (101, 'change_applied',   'picklist', 'address: Incheon',          '2026-10-25 09:04'),
+ (101, 'picklisted',       'picklist', NULL,                        '2026-10-25 09:10'),
+ (102, 'charge_queued',    'order',    NULL,                        '2026-10-25 09:01'),
+ (102, 'charge_failed',    'charge',   'card declined',             '2026-10-25 09:02');
+
+-- 주문마다 가장 마지막 줄 = 지금 상태
+SELECT DISTINCT ON (order_id) order_id, state, node, at
+FROM order_state_log
+ORDER BY order_id, id DESC;
+```
+
+```text
+ order_id |     state     |   node   |           at           
+----------+---------------+----------+------------------------
+      101 | picklisted    | picklist | 2026-10-25 09:10:00+00
+      102 | charge_failed | charge   | 2026-10-25 09:02:00+00
+(2 rows)
+```
+
+고객 서비스가 "주문이 어디쯤인가"를 물으면 이 쿼리가 답한다. 선언문이 말한 "변경 요청과 반영 여부의 영구 기록"도 같은 테이블에서 나온다.
+
+```sql
+-- 변경 요청마다, 그 뒤에 반영한 노드가 있는가
+SELECT r.order_id, r.note AS requested, a.node AS applied_by
+FROM order_state_log r
+LEFT JOIN order_state_log a
+  ON a.order_id = r.order_id AND a.state = 'change_applied' AND a.id > r.id
+WHERE r.state = 'change_requested';
+```
+
+```text
+ order_id |         requested         | applied_by 
+----------+---------------------------+------------
+      101 | address: Seoul -> Incheon | picklist
+(1 row)
+```
+
+`applied_by`가 비어 있는 줄이 나오면, 요청은 받았는데 아무 노드도 반영하지 못한 주문이다. 사람이 챙겨야 할 목록이 이 쿼리 하나로 나온다. MySQL 8에는 `DISTINCT ON`이 없어서 `ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY id DESC)`로 마지막 줄을 고른다. 이 테이블은 계속 커지므로, 선언문처럼 끝난 주문의 기록은 분석용 저장소로 옮기고 운영 테이블에는 진행 중인 것만 둔다.
+
+## 선언문이 스스로 적어 둔 대가
+
+이 문서를 "분산이 낫다"는 주장으로만 읽으면 중요한 부분을 놓친다. 선언문은 메시지 기반 분산 워크플로의 단점을 직접 적는다.
+
+중앙 데이터베이스 모델에서는 데이터 변경이 시스템 전체에 빠르게 퍼진다. 만료된 신용카드 번호를 바꾸면 그 순간 모든 곳에 반영된다. 메시지 기반 워크플로에서는 요소가 시스템을 지나는 동안 밑에 있는 데이터가 바뀔 수 있다는 걸 설계에 넣어야 한다. 그리고 큐 기반 워크플로에서는 특정 요소가 지금 어떤 상태인지 알기 어렵다. 그래서 바깥 프로세스가 상태 전이를 볼 수 있는 장치를 따로 만들어야 한다. 원문은 이렇게 맺는다. "These issues make correct initial design much more important than in a monolithic system." 모놀리스보다 처음 설계를 바로 하는 일이 훨씬 중요해진다는 것이다.
+
+정리하면 선언문이 받아들인 대가는 즉시 일관성을 잃는 것, 진행 상태가 흩어지는 것, 설계 실수의 비용이 커지는 것, 그리고 더 엄격한 공학 규율이다. 지금 마이크로서비스를 고민하는 팀이 맞닥뜨리는 목록과 거의 같다. 이 대가를 [결과적 일관성](/posts/eventual-consistency)을 전제로 한 설계와 [트랜잭셔널 아웃박스](/posts/transactional-outbox) 같은 도구로 어떻게 다루는지가 그 뒤 25년의 이야기다.
+
+## 25년 뒤: 모놀리스는 공룡이 아니다
+
+2023년 5월 5일, 같은 블로그에 Vogels의 [Monoliths are not dinosaurs](https://www.allthingsdistributed.com/2023/05/monoliths-are-not-dinosaurs.html)가 올라왔다. Prime Video 엔지니어링 팀의 두 글을 예로 든 짧은 글이다. 하나는 Thursday Night Football 라이브 스트리밍을 분산 워크플로 구조로 만든 이야기, 다른 하나는 스트림 모니터링 도구를 분석 끝에 모놀리스로 구현한 이야기다. Vogels는 두 글을 나란히 놓고 "There is no one-size-fits-all"이라고 쓴다. 특정 아키텍처 스타일을 강제하지 않는다는 것이다.
+
+이 글에는 판단 기준이 두 개 있다. 하나는 규모다. "My rule of thumb has been that with every order of magnitude of growth you should revisit your architecture." 규모가 한 자릿수 커질 때마다 구조를 다시 보라는 것이다. 1998년 선언문이 "주문량 열 배"를 목표로 잡은 것과 같은 감각이다.
+
+다른 하나는 합칠지 판단하는 조건이다. 원문 그대로 옮긴다. "if there are a set of services that always contribute to the response, have the exact same scaling and performance requirements, same security vectors, and most importantly, are managed by a single team, it is a worthwhile effort to see if combining them simplifies your architecture." 늘 함께 응답에 참여하고, 확장과 성능 요구가 같고, 보안 측면이 같고, 무엇보다 한 팀이 관리하는 서비스 묶음이라면 합쳐서 단순해지는지 볼 만하다는 것이다.
+
+같은 글은 반대 방향의 예도 든다. Amazon S3는 2006년 출시 때 마이크로서비스 몇 개였는데 300개가 넘는 마이크로서비스로 커졌고, 저장 방식, 정책, 스토리지 클래스를 더할 수 있었던 건 진화할 수 있는 구조 덕분이었다고 쓴다. 그리고 엔지니어 다섯 명인 스타트업은 배포가 쉽고 여러 언어를 배울 필요가 없는 모놀리스를 고를 수 있고, 엔지니어링 팀이 수십 개인 기업과는 필요가 근본적으로 다르다고 덧붙인다.
+
+두 문서를 겹쳐 보면 선이 하나 보인다. 1998년에 나눈 이유는 모두가 함께 만지는 데이터가 열 배 성장을 막았기 때문이다. 2023년에 합쳐도 된다고 한 조건은 그 반대다. 한 팀이 맡고, 늘 같이 움직이고, 요구가 같은 것들이다. 나누는 기준과 합치는 기준이 같은 축 위에 있다. 이 시리즈의 [Segment](/posts/rw-segment-goodbye-microservices)가 한 팀이 같은 일을 하는 서비스 140개를 합친 이야기와도 그대로 겹친다.
+
+## Prime Video 사례를 여기서 자세히 쓰지 않는 이유
+
+Prime Video 모니터링 사례는 2023년에 "Amazon이 마이크로서비스를 버리고 모놀리스로 갔다"는 식의 요약 글로 많이 퍼졌다. 그런데 원문이 실렸던 primevideotech.com은 지금 Amazon의 다른 페이지로 넘어간다. Vogels의 2023년 글에도 이 글을 쓰는 시점에 "Primevideotech.com is no longer available"이라는 안내가 붙어 있다. 이 시리즈는 회사 사이트에서 직접 열어 확인한 자료만 근거로 쓰기 때문에, 그 글이 적었다는 구성 요소, 비용 절감 비율, 한계에 닿은 지점 같은 세부는 여기 옮기지 않는다. 다른 곳에서 그 숫자를 보면 출처가 원문인지, 원문을 옮긴 요약인지부터 확인하길 권한다.
+
+회사가 직접 남긴 자료에서 말할 수 있는 것은 Vogels가 쓴 정도다. 같은 회사 안에서 한 팀은 분산 워크플로를, 다른 팀은 모놀리스를 골랐고, CTO는 둘 다 좋은 예라고 소개했다. "Amazon이 마이크로서비스를 버렸다"는 요약은 이 자료로는 나오지 않는다.
+
+## 공개 자료가 말하지 않는 것
+
+선언문은 제안서이고, 공개한 사람이 그 회사의 CTO다. 소개 글은 당시 엔지니어들이 시대를 앞섰다는 평가로 쓰였다. 제안 가운데 무엇이 그대로 구현됐고 무엇이 버려졌는지, 전환에 몇 년이 걸렸는지, 그 사이 어떤 장애가 있었는지는 나오지 않는다. Vogels도 이 문서가 거의 25년 전 생각이고 그 뒤 요구와 시스템이 크게 바뀌었다고 미리 적어 둔다. 소개 글에는 이후 특정 부분을 깊게 다루는 글을 연재하겠다고 했지만, 이 글을 쓰며 그 연재를 찾지 못했다.
+
+2023년 글은 800단어 남짓한 의견 글이다. 사례의 세부나 숫자를 담고 있지 않다. 그래서 이 글에서도 Amazon의 현재 구조는 단정하지 않는다.
+
+## 우리 시스템에서 공유 DB를 끊기 전에
+
+이 문서에서 가져올 것은 "서비스로 나눠라"보다 "누가 데이터를 직접 만지는지부터 보라"다.
+
+선언문의 처방이 맞는 신호는 문서에 적힌 증상 그대로다. 여러 앱과 스크립트가 같은 테이블을 직접 읽고 쓴다. 컬럼 하나를 바꾸려면 누가 그 컬럼을 쓰는지 찾는 데 며칠이 걸린다. 중앙 DB 하나가 성장 속도를 정하고 있다. 반대로 앱이 하나이고 그 앱만 DB를 만진다면, 데이터 앞에 창구를 세운다는 처방은 이미 지켜지고 있는 셈이다. 그때 서비스를 나누면 선언문이 말한 대가(즉시 일관성 상실, 흩어진 상태, 엄격한 설계)만 먼저 치르게 된다. Vogels의 2023년 기준으로 보면 한 팀이 맡고 늘 함께 바뀌는 코드라면 나눌 이유가 약하다.
+
+처음부터 워크플로와 데이터 도메인을 다 만들 필요는 없다. 작은 팀이 지금 가져올 수 있는 건 두 가지다.
+
+- DB에 직접 붙는 주체의 목록을 만든다. DB 계정을 앱·배치·스크립트마다 따로 주면 누가 어느 테이블을 읽는지 접속 기록으로 볼 수 있다. 공유 계정 하나로 모두가 붙어 있다면 그것부터 나눈다.
+  PostgreSQL이라면 지금 누가 붙어 있는지부터 볼 수 있다. 접속할 때 `application_name`을 넣게 해 두면 계정과 프로그램이 함께 보인다.
+
+  ```sql
+  -- 이 DB에 붙은 클라이언트를 계정·프로그램별로 센다
+  SELECT usename, application_name, count(*)
+  FROM pg_stat_activity
+  WHERE datname = 'shop' AND backend_type = 'client backend'
+  GROUP BY usename, application_name
+  ORDER BY count(*) DESC;
+  ```
+
+  ```text
+      usename    | application_name | count 
+  ---------------+------------------+-------
+   postgres      | psql             |     1
+   report_script | nightly-report   |     1
+  (2 rows)
+  ```
+
+  이건 지금 이 순간의 연결만 보여 주므로, 하루에 한 번 도는 배치는 놓칠 수 있다. 빠짐없이 보려면 `log_connections`를 켜서 접속 로그로 센다.
+- 진행 중인 주문 같은 긴 흐름에는 상태 변화를 줄로 쌓는 테이블을 둔다. 선언문의 추적 테이블처럼 "언제 어떤 상태가 됐고 누가 바꿨나"를 남기면 고객 문의에 답하기도, 나중에 흐름을 쪼개기도 쉬워진다.
+
+비슷한 신호가 보이면 무엇부터 볼까. 배포가 DB 마이그레이션 때문에 자주 막힌다면, 그 테이블을 직접 읽는 다른 코드가 있는지부터 본다. 있다면 서비스를 나누기 전에 그 테이블 앞에 함수나 API 하나를 세워 접근 경로를 하나로 모으는 게 먼저다. 그래야 나중에 정말로 나눌 때 옮길 경계가 생긴다. 규모가 한 자릿수 커졌다면 구조를 다시 보라는 Vogels의 경험칙도 하나의 점검 시점으로 쓸 수 있다.
+
+## 이 글이 기댄 자료
+
+- [The Distributed Computing Manifesto](https://www.allthingsdistributed.com/2022/11/amazon-1998-distributed-computing-manifesto.html) — Amazon(Werner Vogels 공개, 원문은 1998년 Amazon 내부 문서), CTO 블로그, 2022년 11월(원문 1998년 5월 작성·7월 개정)
+- [Monoliths are not dinosaurs](https://www.allthingsdistributed.com/2023/05/monoliths-are-not-dinosaurs.html) — Amazon(Werner Vogels), CTO 블로그, 2023년 5월
+
+## 면접에서 나올 만한 질문
+
+### 1998년 Amazon 선언문이 문제로 본 것은 무엇인가?
+
+애플리케이션이 데이터베이스에 직접 접근하고 데이터 모델을 코드에 품고 있어서, 데이터 모델이 바뀌면 기능이 같아도 앱을 고쳐야 했다는 점이다. 공유 데이터베이스가 혁신 속도의 병목이 됐고, 그대로는 주문량 열 배를 받을 수 없다고 봤다. 데이터 위치에 따라 처리를 나누기도 어려웠다.
+
+### 선언문의 두 핵심 제안을 설명해 보라.
+
+하나는 서비스 기반 모델이다. 표현, 업무 로직, 데이터를 나누고 클라이언트는 데이터베이스 대신 업무 로직을 감싼 인터페이스로만 접근한다. 다른 하나는 워크플로 모델이다. 주문 같은 요소가 중앙 DB에 머무는 대신 필요한 정보를 담고 처리 노드 사이를 옮겨 다닌다. 오래 남는 고객·판매자·카탈로그 데이터는 데이터 도메인으로 나누고 도메인마다 서비스로 접근한다.
+
+### 서비스를 여러 개로 나눴는데 여전히 같은 테이블을 직접 읽는다면?
+
+선언문 관점에서는 문제가 그대로 남은 것이다. 선언문이 겨냥한 건 프로세스 개수가 아니라 데이터 접근 경로였다. 테이블이 서비스들 사이의 숨은 계약이 되어 스키마 변경이 여전히 모두를 묶는다. 서비스마다 자기 데이터를 갖고 다른 서비스는 인터페이스로만 접근해야 나눈 이득이 생긴다.
+
+### 자율형 워크플로와 지휘형 워크플로는 언제 고르나?
+
+일의 성격에 따라 고른다. 선언문은 결제처럼 여러 맥락에서 불리는 일은 지휘형이 맞다고 본다. 노드를 블록처럼 바꿔 끼울 수 있어 유연하다. 여러 권 출고가 늘 picklist에서 rebin으로 가는 것처럼 이웃 관계가 고정된 일은 노드가 다음을 스스로 정하는 자율형이 맞다. 지금 말로는 사가의 오케스트레이션과 코레오그래피 선택이다.
+
+### 데이터를 노드 사이로 옮기면 무엇을 잃나?
+
+즉시 일관성과 상태의 가시성을 잃는다. 중앙 DB에서는 카드 번호를 바꾸면 바로 모든 곳에 반영되지만, 흘러가는 주문은 그 사이 데이터가 바뀔 수 있다는 걸 설계에 넣어야 한다. 주문이 지금 어디 있는지도 따로 기록해야 안다. 선언문은 그래서 처음 설계가 모놀리스보다 훨씬 중요해진다고 쓴다. 대응으로 발행·구독으로 변경을 퍼뜨리고, 상태 변화를 줄로 쌓는 추적 테이블을 둔다.
+
+### Amazon CTO는 2023년에 어떤 조건이면 서비스를 합쳐 볼 만하다고 했나?
+
+늘 함께 응답에 참여하고, 확장과 성능 요구가 같고, 보안 측면이 같고, 무엇보다 한 팀이 관리하는 서비스 묶음이다. 그런 묶음은 합쳐서 구조가 단순해지는지 볼 만하다고 했다. 동시에 S3가 마이크로서비스 몇 개에서 300개 넘게 자란 예를 들며 진화할 수 있는 구조의 가치도 강조했다. 정답 하나가 아니라 규모가 한 자릿수 커질 때마다 다시 보라는 것이다.
+
+### 엔지니어 다섯 명인 팀이 이 선언문을 따라 서비스를 나눠야 하나?
+
+대부분은 아니다. 선언문이 풀려던 건 여러 앱과 스크립트가 공유 DB를 직접 만지며 열 배 성장을 막던 상황이고, Vogels도 다섯 명짜리 스타트업은 모놀리스를 고를 수 있다고 썼다. 대신 앱 밖에서 DB에 직접 붙는 스크립트가 늘지 않게 접근 경로를 하나로 모으고, 긴 흐름에는 상태 기록을 남겨 둔다. 그러면 나중에 나눌 때 경계가 이미 있다.
+
+### "Amazon도 마이크로서비스를 버렸다"는 말을 들으면 어떻게 답하겠나?
+
+회사가 직접 남긴 자료로는 그렇게 말할 수 없다고 답하겠다. CTO 글은 같은 Prime Video 안에서 한 팀은 분산 워크플로를, 다른 팀은 모놀리스를 골랐고 둘 다 좋은 예라고 소개했다. 그리고 원래 사례 글은 회사 사이트에서 더는 열리지 않으니, 퍼진 숫자는 출처부터 확인해야 한다. 결론은 "일의 조건에 따라 고른다"이지 어느 한쪽을 버린 것이 아니다.
