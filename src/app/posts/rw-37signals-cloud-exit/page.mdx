@@ -170,7 +170,7 @@ export const metadata = getPostMetadata("rw-37signals-cloud-exit");
 
 처음 생각은 벤더가 지원하는 Kubernetes를 자기 하드웨어에서 돌리는 것이었다. 그동안 쌓은 도구를 그대로 쓰고 가리키는 곳만 바꾸면 되니까. 원문은 이게 "very expensive and operationally complicated idea"로 드러나서 곧 접었다고 쓴다. DHH의 2월 글이 말한 "enterprise Kubernetes provider와의 짧은 우회"가 이것이다.
 
-대신 만든 것이 Kamal(처음 이름 mrsk)이다. DHH의 [Introducing Kamal](https://world.hey.com/dhh/introducing-kamal-9330a267)(2023년 2월 28일)은 Kamal을 2005년부터 쓰던 배포 도구 Capistrano의 단순한 절차에 컨테이너의 장점을 합친 것이라고 소개한다. Docker 위에서 돌고, 배포 파이프라인이 클라우드가 아니라 내 컴퓨터에서 돈다. 글은 Kubernetes 위의 HEY 배포가 몇 분 걸렸는데 Kamal로는 20초면 된다고 쓴다. 개발 블로그는 컨트롤 플레인이 없어서 "fewer moving parts"라고 표현한다. 컨테이너 자체는 버리지 않았다는 점이 중요하다. 앱은 몇 년 전 이미 컨테이너로 바뀌어 있었고, 그대로 유지했다. 컨테이너와 오케스트레이터를 나눠 보는 시각은 [Docker 컨테이너 기초](/posts/docker-container-basics)에 있다.
+대신 만든 것이 Kamal(처음 이름 mrsk)이다. DHH의 [Introducing Kamal](https://world.hey.com/dhh/introducing-kamal-9330a267)(2023년 2월 28일)은 Kamal을 2005년부터 쓰던 배포 도구 Capistrano의 단순한 절차에 컨테이너의 장점을 합친 것이라고 소개한다. Docker 위에서 돌고, 배포 파이프라인이 클라우드가 아니라 내 컴퓨터에서 돈다. 글은 Kubernetes 위의 HEY 배포가 몇 분 걸렸는데 Kamal로는 20초면 된다고 쓴다. DHH의 글은 움직이는 부품이 훨씬 적다("way fewer moving parts")는 점을 더 큰 이유로 들고, 개발 블로그도 이전 결과를 "fewer moving parts"로 요약한다. 컨테이너 자체는 버리지 않았다는 점이 중요하다. 앱은 몇 년 전 이미 컨테이너로 바뀌어 있었고, 그대로 유지했다. 컨테이너와 오케스트레이터를 나눠 보는 시각은 [Docker 컨테이너 기초](/posts/docker-container-basics)에 있다.
 
 개발 블로그에 적힌 순서도 참고할 만하다. 중요도가 가장 낮고 유료 고객이 없는 Tadalist를 카나리로 먼저 옮겼다. 6주 안에 기반을 만들고 Tadalist를 운영에 올렸고, 다운타임을 일부 감수했다. 그 과정에서 Chef로 KVM 가상 머신 만드는 과정을 다듬어 VM 하나 준비에 걸리던 약 20분을 1분 이내로 줄였다. 다음 Writeboard는 유료 고객이 있어서 DB를 미리 복제해 두고 옮겼고, 전환에 16분이 걸렸으며 다운타임은 없었다. 메일 처리 파이프라인이 있는 Backpack은 NFS 공유와 Redis 기반 잠금으로 바꾸느라 약 3주가 걸렸다. 위험이 작은 것부터 옮기며 근육을 기른 셈이다.
 

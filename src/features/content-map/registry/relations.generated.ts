@@ -2,6 +2,230 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-daangn-feature-platform": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "sd-proximity-service",
+      "model-serving",
+      "cache-write-policies",
+      "dynamodb-modeling-capacity",
+      "cache-invalidation",
+      "cdc-change-data-capture",
+      "sd-mq-consumer-groups",
+      "rw-meta-memcache-tao",
+      "rw-kakaotalk-cache-farm",
+      "rw-netflix-evcache"
+    ],
+    "mentions": [
+      "caching-strategies",
+      "schema-versioning",
+      "db-type-columnar-olap",
+      "db-type-key-value",
+      "container-orchestration-choices",
+      "airflow-orchestration",
+      "http-caching-cdn",
+      "rw-kurly-fulfillment-systems",
+      "data-quality-checks",
+      "rds-aurora-managed-db",
+      "stream-processing",
+      "sd-mq-storage-partitions",
+      "sd-cache-and-cdn-tier",
+      "build-caching",
+      "kafka-basics",
+      "cookie-session-login",
+      "db-partitioning",
+      "etl-vs-elt",
+      "eks-cluster-basics",
+      "dns",
+      "vector-db",
+      "zero-downtime-migrations"
+    ]
+  },
+  "rw-kakaopay-delayed-transfer": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-kakao-datacenter-fire",
+      "rw-kakaotalk-cache-farm",
+      "sd-payment-flow",
+      "kafka-vs-rabbitmq-replay",
+      "cron-jobs",
+      "kafka-basics",
+      "distributed-lock",
+      "blue-green-deployment",
+      "sd-mq-consumer-groups",
+      "pessimistic-locking",
+      "rw-stripe-idempotency"
+    ],
+    "mentions": [
+      "rabbitmq-basics",
+      "saga-pattern",
+      "sql-cte-recursive",
+      "sd-mq-storage-partitions",
+      "redis-basics",
+      "rw-netflix-cloud-microservices",
+      "http-methods"
+    ]
+  },
+  "rw-kurly-fulfillment-systems": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "microservices",
+      "rw-tosspayments-legacy-rewrite",
+      "pattern-adapter",
+      "rw-kakaotalk-cache-farm",
+      "autoscaling",
+      "rw-segment-goodbye-microservices",
+      "microservices-decomposition",
+      "feature-flags",
+      "canary-release",
+      "transactional-outbox",
+      "dead-letter-queue",
+      "modular-monolith"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "spring-cloud-vs-kubernetes",
+      "high-availability",
+      "sqld-group-by-having",
+      "reactive-programming",
+      "rds-aurora-managed-db",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "acid-transactions",
+      "sql-basics",
+      "dns",
+      "on-call"
+    ]
+  },
+  "rw-line-redis-at-scale": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-naver-arcus",
+      "rw-naverpay-order-replication",
+      "redis-high-throughput",
+      "redis-cluster",
+      "redis-replication-sentinel",
+      "rw-daangn-feature-platform",
+      "rw-meta-memcache-tao",
+      "kafka-vs-rabbitmq-replay"
+    ],
+    "mentions": [
+      "exponential-backoff-jitter",
+      "rabbitmq-basics",
+      "reactive-programming",
+      "load-testing-k6",
+      "pub-sub",
+      "kafka-basics",
+      "redis-basics",
+      "mutex-semaphore-monitor",
+      "dns",
+      "vector-db"
+    ]
+  },
+  "rw-naverpay-order-replication": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-naver-arcus",
+      "db-sharding",
+      "cdc-change-data-capture",
+      "transactional-outbox",
+      "stream-processing",
+      "circuit-breaker",
+      "zero-downtime-migrations",
+      "rw-netflix-chaos-engineering",
+      "rw-toss-architecture",
+      "rw-instagram-sharding-ids",
+      "rw-pinterest-mysql-sharding",
+      "rw-discord-message-storage",
+      "rw-notion-postgres-sharding",
+      "leader-election"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "sd-sharding-intro",
+      "db-type-columnar-olap",
+      "resilience-patterns",
+      "kafka-to-lake-pipeline",
+      "mysql-replication-online-ddl",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "sql-batch-timeout-pool",
+      "tcp-reliability-congestion",
+      "postgres-architecture",
+      "db-replication-sharding",
+      "high-availability",
+      "mongodb-document-model",
+      "mutex-semaphore-monitor",
+      "architecture-docs-c4-adr",
+      "dead-letter-queue",
+      "sql-basics"
+    ]
+  },
+  "rw-ohouse-msa-phase1": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "microservices",
+      "autoscaling",
+      "rw-tosspayments-legacy-rewrite",
+      "rw-kurly-fulfillment-systems",
+      "frontend-monorepo",
+      "api-gateway-use-cases",
+      "cookie-session-login",
+      "jwt-key-rotation",
+      "grpc",
+      "argocd-basics",
+      "rw-shopify-modular-monolith",
+      "rw-segment-goodbye-microservices",
+      "modular-monolith"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "json-crud-http",
+      "spring-cloud-vs-kubernetes",
+      "gateway",
+      "reactive-programming",
+      "ab-testing",
+      "service-mesh",
+      "kafka-basics",
+      "oauth",
+      "high-availability",
+      "db-modeling-normalization",
+      "token-login"
+    ]
+  },
+  "rw-tosspayments-legacy-rewrite": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-toss-architecture",
+      "microservices",
+      "sd-payment-flow",
+      "canary-release",
+      "cors",
+      "cache-invalidation",
+      "transactional-outbox",
+      "sd-payment-reliability",
+      "timeouts",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "cloud-deployment-models-multicloud",
+      "pattern-adapter",
+      "hosts-file",
+      "ansible-network-automation",
+      "https-tls",
+      "smoke-sanity-regression-testing",
+      "js-currying-partial",
+      "api-versioning",
+      "kafka-basics",
+      "vpc-basics",
+      "sql-batch-timeout-pool",
+      "db-replication-sharding",
+      "http-versions",
+      "high-availability",
+      "dns"
+    ]
+  },
   "rw-aws-s3-2017-outage": {
     "links": [
       "postmortems",
@@ -828,6 +1052,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-reading-engineering-blogs",
       "rw-kakao-datacenter-fire",
       "rw-kakao-actionbase",
+      "rw-kakaopay-delayed-transfer",
       "rw-naver-arcus",
       "consistent-hashing",
       "caching-strategies",
@@ -852,6 +1077,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-reading-engineering-blogs",
       "consistent-hashing",
       "caching-strategies",
+      "rw-naverpay-order-replication",
+      "rw-line-redis-at-scale",
       "service-discovery",
       "leader-election",
       "cache-invalidation",
@@ -5621,6 +5848,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "serverless-architecture",
       "aws-s3-in-practice",
+      "rw-kurly-fulfillment-systems",
       "sd-object-storage-architecture",
       "db-replication-sharding",
       "caching-strategies"
@@ -8228,6 +8456,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pattern-prototype",
+      "rw-line-redis-at-scale",
       "graphql-client-caching",
       "n-plus-one-queries",
       "pattern-iterator",
@@ -11397,6 +11626,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rabbitmq-basics"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
+      "rw-kurly-fulfillment-systems",
       "pub-sub",
       "js-pure-functions",
       "redis-basics",
@@ -13216,6 +13447,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-queue-basics"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "sd-start-single-server",
       "deadlocks",
       "rolling-deployment",
@@ -13302,6 +13534,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "geohash"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "api-scaling-ladder",
       "sd-mq-storage-partitions",
       "kafka-basics",
@@ -14414,6 +14647,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "sd-interview-framework",
       "sd-url-shortener-api-redirect",
       "leader-election",
@@ -17683,6 +17917,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pub-sub"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "cdn-edge-anycast",
       "db-replication-sharding",
       "kafka-basics",
@@ -18398,6 +18633,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "csrf"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "browser-fetch",
       "os-kernel-system-calls",
       "sd-queue-logging-automation",
@@ -19909,6 +20145,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
+      "rw-kurly-fulfillment-systems",
       "resilience-patterns",
       "redis-basics",
       "sd-email-protocols",
@@ -19926,6 +20164,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "http-caching-cdn",
       "dns"
     ]
@@ -23151,6 +23390,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "server-sent-events"
     ],
     "mentions": [
+      "rw-line-redis-at-scale",
       "json-crud-http",
       "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",

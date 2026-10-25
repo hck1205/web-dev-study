@@ -148,7 +148,7 @@ GitHub 웹에서도 같은 걸 볼 수 있다. 파일 화면의 History 버튼�
 
 ## 설계 문서와 운영 사례가 다른 말을 할 때
 
-한 회사의 자료끼리 어긋날 때도 있다. Actionbase의 [Mutation 문서](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/design/mutation.mdx)는 2025년 12월부터 상태, 인덱스, 개수가 원자적으로 쓰인다고 적었다. 그런데 2026년 2월에 올라온 [HBase Consistency 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/hbase-consistency.mdx)는 HBase 배치 연산이 원자적이지 않아 일부만 쓰일 수 있고, 그래서 정기 검증으로 찾아 고친다고 쓴다.
+한 회사의 자료끼리 어긋날 때도 있다. Actionbase의 [Mutation 문서](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/design/mutation.mdx)는 2026년 1월 5일 판부터 상태, 인덱스, 개수가 원자적으로 쓰인다고 적었다(2025년 12월 첫 판에는 이 문장이 없다). 그런데 2026년 2월에 올라온 [HBase Consistency 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/hbase-consistency.mdx)는 HBase 배치 연산이 원자적이지 않아 일부만 쓰일 수 있고, 그래서 정기 검증으로 찾아 고친다고 쓴다.
 
 이럴 때 어느 쪽을 믿을지는 문서의 성격으로 가린다. 설계 문서는 의도와 기대를 적고, 운영 사례는 겪은 일을 적는다. 겪은 일을 적은 쪽이 대개 실제에 가깝다. 그리고 두 문서가 어긋난다는 사실 자체가 정보다. "원자적"이라는 말이 어떤 범위(행 하나, 배치 하나, 요청 하나)의 원자성인지 따져 봐야 한다는 신호다. 면접에서 사례를 인용할 때도 "설계 문서에는 이렇게, 운영 사례에는 이렇게 나온다"고 말하면 한쪽만 외운 답보다 훨씬 단단하다.
 

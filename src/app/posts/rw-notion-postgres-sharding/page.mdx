@@ -18,7 +18,7 @@ export const metadata = getPostMetadata("rw-notion-postgres-sharding");
 
 2021년 10월 Notion 블로그에 Garrett Fidalgo가 쓴 [Herding elephants: Lessons learned from sharding Postgres at Notion](https://www.notion.com/blog/sharding-postgres-at-notion)은 그해 초 5분간의 예정된 점검으로 시작한다. 공지에는 "안정성과 성능 향상"이라고만 적었지만, 실제로는 PostgreSQL 모놀리스 하나를 여러 대로 나누는 작업의 마지막 단계였다.
 
-글이 밝힌 상황은 이렇다. 이 PostgreSQL 한 대는 5년 동안 네 자릿수의 성장을 버텼고, 2020년 중반에는 사용량이 곧 이 한 대의 능력을 넘으리라는 게 분명해졌다. 당직 엔지니어는 DB CPU 급증으로 자주 깼고, 카탈로그만 바꾸는 단순한 마이그레이션도 안전하다고 장담할 수 없게 됐다.
+글이 밝힌 상황은 이렇다. 이 PostgreSQL 한 대는 5년 동안 네 차수(1만 배)에 이르는 성장을 버텼고, 2020년 중반에는 사용량이 곧 이 한 대의 능력을 넘으리라는 게 분명해졌다. 당직 엔지니어는 DB CPU 급증으로 자주 깼고, 카탈로그만 바꾸는 단순한 마이그레이션도 안전하다고 장담할 수 없게 됐다.
 
 결정적인 계기는 VACUUM이었다. PostgreSQL의 VACUUM이 꾸준히 멈추면서 죽은 튜플(지워졌거나 고쳐져서 더는 보이지 않는 옛 행)이 차지한 공간을 되찾지 못했다. 디스크는 늘리면 된다. 더 무서운 건 트랜잭션 ID 랩어라운드(TXID wraparound)였다. 글의 설명대로라면 PostgreSQL은 기존 데이터를 덮어쓰지 않으려고 이 상황에서 모든 쓰기를 멈춘다. 글은 이것을 제품의 존립을 위협하는 일로 봤다.
 

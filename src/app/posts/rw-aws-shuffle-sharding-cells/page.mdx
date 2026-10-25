@@ -101,7 +101,7 @@ StatefulSearchingShuffleSharder는 사용자가 제공한 저장소에 나눠 �
 
 ## 실습에서 Alpha의 독이 든 요청
 
-2020년 AWS Well-Architected 실습 [Fault Isolation with Shuffle Sharding(AWS, 2020년)](https://github.com/awslabs/aws-well-architected-labs/blob/47365493/content/Reliability/300_Labs/300_Fault_Isolation_with_Shuffle_Sharding/6_impact_of_failures_shuffle_sharding.md)은 같은 생각을 EC2 8대와 고객 8명(Alpha~Hotel)으로 직접 해 보게 한다. 고객은 쿼리 문자열 `name`으로 자기를 밝히고, Application Load Balancer의 리스너 규칙이 고객마다 정해진 타깃 그룹(EC2 2대)으로 보낸다. 요청에 `bug=true`를 붙이면 그 요청을 처리한 인스턴스의 앱이 멈춘다. 독이 든 요청이다. 이 실습은 지금 AWS Workshop Studio로 옮겨져 저장소에서는 지워졌고, 위 링크는 지워지기 전 커밋의 파일이다.
+2020년 AWS Well-Architected 실습 [Fault Isolation with Shuffle Sharding(AWS, 2020년)](https://github.com/awslabs/aws-well-architected-labs/blob/47365493/content/Reliability/300_Labs/300_Fault_Isolation_with_Shuffle_Sharding/6_impact_of_failures_shuffle_sharding.md)은 같은 생각을 EC2 8대와 고객 8명(Alpha~Hotel)으로 직접 해 보게 한다. 고객은 쿼리 문자열 `name`으로 자기를 밝히고, Application Load Balancer의 리스너 규칙이 고객마다 정해진 타깃 그룹(EC2 2대)으로 보낸다. 요청에 `bug=true`를 붙이면 그 요청을 처리한 인스턴스의 앱이 멈춘다. 독이 든 요청이다. 이 실습 문서는 지금 저장소에서 지워졌고, 위 링크는 지워지기 전 커밋의 파일이다.
 
 셔플 샤딩 단계의 배치는 실습 표에 이렇게 적혀 있다. Alpha는 1·2번, Bravo는 2·3번, Charlie는 3·4번, 이런 식으로 한 칸씩 밀려 Hotel은 8·1번이다. 아래에서 다음을 누르면 Alpha가 독이 든 요청을 보낸 뒤 무슨 일이 생기는지 실습의 설명대로 볼 수 있다.
 

@@ -16,7 +16,7 @@ export const metadata = getPostMetadata("rw-kakao-actionbase");
 
 ## 하트 하나에 저장소 세 곳
 
-카카오톡 선물하기에는 위시(wish)가 있다. 받고 싶은 선물을 담아 두는 기능이다. 카카오가 2026년 2월 Actionbase 문서에 올린 [Gift Wish 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-wish.mdx)에 원래 구조가 나온다.
+카카오톡 선물하기에는 위시(wish)가 있다. 받고 싶은 선물을 담아 두는 기능이다. 카카오가 2026년 1월 Actionbase 문서에 올린 [Gift Wish 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-wish.mdx)에 원래 구조가 나온다.
 
 - MySQL이 위시 데이터를 저장하고, 사용자 기준 조회(한 건 조회, 목록, 개수)를 맡았다.
 - Spring Batch가 상품별 역방향 개수(이 상품을 몇 명이 찜했나)를 모았다.
@@ -50,7 +50,7 @@ Actionbase의 설계 목표는 [Core Concepts 문서](https://github.com/kakao/a
 
 읽는 쪽에서 할 수 있는 일도 그만큼 좁다. 한 건 조회, 개수, 정렬된 목록 훑기, 실시간 집계. FAQ는 Neo4j 같은 범용 그래프 질의를 하지 않는다고 분명히 적는다. 질의를 좁힌 대가로 읽기 비용이 부하가 늘어도 평평하게 유지된다는 것이 문서의 주장이다.
 
-전체 구조는 README의 Architecture 절과 [파이프라인 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/engineering/pipeline.mdx)(2026년 2월)를 합치면 아래와 같다. 아래 그림에서 점이 흐르는 방향이 데이터가 흐르는 방향이다.
+전체 구조는 README의 Architecture 절과 [파이프라인 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/engineering/pipeline.mdx)(2026년 1월)를 합치면 아래와 같다. 아래 그림에서 점이 흐르는 방향이 데이터가 흐르는 방향이다.
 
 <ConceptDiagram
   width={400}
@@ -204,7 +204,7 @@ Actionbase는 상태 기반 뮤테이션으로 이걸 푼다. 요청을 "개수�
 
 여기서 공개 자료를 읽을 때 조심할 곳이 하나 나온다. 같은 저장소 안에서 두 문서가 다른 말을 한다.
 
-- Mutation 문서는 6단계에서 "State, 인덱스, 개수가 원자적으로 쓰인다"고 하고, 보장 표에도 "Atomic Writes"를 넣었다. 2025년 12월 첫 커밋부터 있던 문장이다.
+- Mutation 문서는 6단계에서 "State, 인덱스, 개수가 원자적으로 쓰인다"고 하고, 보장 표에도 "Atomic Writes"를 넣었다. 2026년 1월 5일 문서 사이트를 처음 꾸릴 때부터 있던 문장이다(2025년 12월 첫 커밋의 Mutation 문서는 API 예시만 담은 초안이었다).
 - 2026년 2월에 올라온 [HBase Consistency 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/hbase-consistency.mdx)는 "HBase 배치 연산은 원자적이지 않다"고 쓴다. 리전 서버가 중간에 죽거나 네트워크 문제로 일부만 쓰이면 State는 바뀌었는데 Index는 그대로일 수 있다는 것이다.
 
 HBase는 행 하나 안에서의 변경은 원자적으로 처리하지만, 여러 행에 걸친 배치를 하나의 트랜잭션으로 묶어 주지는 않는다. State, Index, Count는 행 키가 서로 다른 별개의 행이고, 해시에 행 종류 코드까지 들어가니 같은 간선의 세 행이 서로 다른 리전, 다른 서버에 놓일 수 있다. 그러니 운영 경험을 담은 뒤쪽 문서가 실제에 더 가깝다고 보는 게 맞을 것이다. 설계 문서는 의도를, 사례 문서는 겪은 일을 적는다.
@@ -271,7 +271,7 @@ Actionbase가 처음 실서비스에 들어간 과정은 단계마다 무엇을 
 
 ## 원천이 아닐 때와 바로 쓰지 않을 때
 
-모든 도입이 위시처럼 원천을 옮기는 일은 아니었다. 2026년 2월에 함께 올라온 두 사례가 다른 모양을 보여 준다.
+모든 도입이 위시처럼 원천을 옮기는 일은 아니었다. 2026년 1월에 함께 올라온 두 사례가 다른 모양을 보여 준다.
 
 [카카오톡 친구 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-friends.mdx)에서 친구 관계는 수십 개로 샤딩된 MySQL에 있었고, 읽기가 많은 질의를 위해 HBase 기반 뷰가 이미 있었다. 그 뷰는 특정 접근 패턴에 맞춰 만들어져 새 질의를 붙이기 어려웠다. 카카오는 기존 시스템을 바꾸지 않고 Debezium으로 MySQL 변경을 잡아 Kafka로 흘리고 Actionbase가 받아 반영하게 했다. Actionbase는 원천이 아니라 읽기 전용 뷰다. 이게 [CDC](/posts/cdc-change-data-capture)로 읽기 모델을 채우는 [CQRS](/posts/cqrs)의 전형이다. 쓰기 경로를 전혀 건드리지 않으니 이전 위험이 없다.
 
@@ -371,8 +371,8 @@ MySQL 8이라면 `ON CONFLICT` 대신 `INSERT ... ON DUPLICATE KEY UPDATE create
 - [Actionbase README](https://github.com/kakao/actionbase) — 카카오, 오픈소스 저장소, 2025년 12월 첫 커밋(이 글은 2026년 10월 판 기준)
 - [Path to Open Source](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/project/path-to-open-source.mdx) — 카카오, 프로젝트 문서, 2026년 1월
 - [Core Concepts](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/design/concepts.mdx), [Mutation](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/design/mutation.mdx), [Encoding](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/internals/encoding.mdx) — 카카오, 설계 문서, 2025년 12월~2026년 1월
-- [Gift Wish](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-wish.mdx), [Gift Recent Views](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-recent-views.mdx), [Friends](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-friends.mdx), [Pipeline](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/engineering/pipeline.mdx) — 카카오, 운영 사례 문서, 2026년 2월
-- [How We Survived](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/index.mdx)와 하위 문서(Shadow Testing, Migration Verification, HBase Consistency, Tests as Contracts) — 카카오, 운영 사례 문서, 2026년 2월
+- [Gift Wish](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-wish.mdx), [Gift Recent Views](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-gift-recent-views.mdx), [Friends](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/use-cases/kakaotalk-friends.mdx), [Pipeline](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/engineering/pipeline.mdx) — 카카오, 운영 사례 문서, 2026년 1월
+- [How We Survived](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/index.mdx)와 하위 문서(Shadow Testing, Migration Verification, HBase Consistency, Tests as Contracts) — 카카오, 운영 사례 문서, 2026년 1~2월
 - [Benchmarks](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/operations/benchmarks.mdx), [FAQ](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/faq.mdx) — 카카오, 운영 문서, 2025년 12월 처음 올라와 2026년 1월 개정
 - [Issue #358: Did We Need a Dedicated Interaction Database — or Did We Overbuild?](https://github.com/kakao/actionbase/issues/358) — 카카오 메인테이너, 저장소 이슈, 2026년 5월(원 토론 2026년 1월)
 

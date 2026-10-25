@@ -1,6 +1,13 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "rw-tosspayments-legacy-rewrite": 7,
+  "rw-ohouse-msa-phase1": 7,
+  "rw-naverpay-order-replication": 7,
+  "rw-line-redis-at-scale": 7,
+  "rw-kurly-fulfillment-systems": 7,
+  "rw-kakaopay-delayed-transfer": 7,
+  "rw-daangn-feature-platform": 7,
   "rw-meta-2021-bgp-outage": 7,
   "rw-google-sre-error-budget": 7,
   "rw-google-borg-kubernetes": 7,

@@ -1,3 +1,10 @@
+import { RW_TOSSPAYMENTS_LEGACY_REWRITE } from "./rw-tosspayments-legacy-rewrite";
+import { RW_OHOUSE_MSA_PHASE1 } from "./rw-ohouse-msa-phase1";
+import { RW_NAVERPAY_ORDER_REPLICATION } from "./rw-naverpay-order-replication";
+import { RW_LINE_REDIS_AT_SCALE } from "./rw-line-redis-at-scale";
+import { RW_KURLY_FULFILLMENT_SYSTEMS } from "./rw-kurly-fulfillment-systems";
+import { RW_KAKAOPAY_DELAYED_TRANSFER } from "./rw-kakaopay-delayed-transfer";
+import { RW_DAANGN_FEATURE_PLATFORM } from "./rw-daangn-feature-platform";
 import { RW_META_2021_BGP_OUTAGE } from "./rw-meta-2021-bgp-outage";
 import { RW_GOOGLE_SRE_ERROR_BUDGET } from "./rw-google-sre-error-budget";
 import { RW_GOOGLE_BORG_KUBERNETES } from "./rw-google-borg-kubernetes";
@@ -1182,6 +1189,13 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  RW_TOSSPAYMENTS_LEGACY_REWRITE,
+  RW_OHOUSE_MSA_PHASE1,
+  RW_NAVERPAY_ORDER_REPLICATION,
+  RW_LINE_REDIS_AT_SCALE,
+  RW_KURLY_FULFILLMENT_SYSTEMS,
+  RW_KAKAOPAY_DELAYED_TRANSFER,
+  RW_DAANGN_FEATURE_PLATFORM,
   RW_META_2021_BGP_OUTAGE,
   RW_GOOGLE_SRE_ERROR_BUDGET,
   RW_GOOGLE_BORG_KUBERNETES,
