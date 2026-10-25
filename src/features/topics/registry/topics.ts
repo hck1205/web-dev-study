@@ -228,6 +228,7 @@ export const TOPICS: Topic[] = [
         children: [
           { id: "fundamentals", label: "기초부터 차근차근", description: "서버 한 대에서 수백만 사용자까지, 어림 계산, 면접 진행법" },
           { id: "case-studies", label: "설계 사례", description: "URL 단축기, 채팅, 뉴스 피드, 결제, 증권 거래소 같은 실제 시스템을 처음부터 설계하기" },
+          { id: "real-world", label: "실제 서비스 사례", description: "국내외 회사가 엔지니어링 블로그·논문·장애 보고서로 공개한 실제 아키텍처와 그 뒤의 변화" },
         ],
       },
       { id: "ui-ux", label: "UI/UX", description: "사용자가 기다리고 고르고 되돌리는 순간의 화면 설계" },
