@@ -1,0 +1,390 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-stack-overflow-few-servers");
+
+<EasyIntro>
+  세계에서 가장 많은 개발자가 찾는 질문 사이트가 있다. 하루에 페이지가 6천만 번 넘게 열리는데, 그 사이트를 돌리는 웹 서버는 열한 대뿐이었다. 서버를 수백 대씩 두는 회사가 많은데 어떻게 그게 가능했을까.
+
+  이건 큰 식당 주방과 비슷하다. 요리사를 백 명 두는 대신, 손이 빠른 요리사 아홉 명이 같은 레시피 책 하나를 보고 모든 손님 음식을 만든다. 자주 나가는 재료는 미리 손질해서 손 닿는 곳에 두고, 무엇이 느린지 매일 시간을 잰다.
+
+  이 회사는 컴퓨터를 아주 크게 사고, 자주 쓰는 답을 메모리에 넣어 두고, 정말 무거운 일만 따로 떼어 냈다. 그리고 모든 페이지가 몇 밀리초 걸리는지 늘 쟀다.
+
+  흔한 오해는 이 이야기를 "서버는 적을수록 좋다"로 읽는 것이다. 사실은 여유를 넉넉히 남긴 큰 서버였고, 다른 회사와 사정이 달라서 맞았던 선택이다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. 모놀리스가 무엇이고 언제 쓰는지는 [모놀리스 아키텍처](/posts/monolith-architecture)와 [모듈러 모놀리스](/posts/modular-monolith)에, 캐시 전략 일반은 [캐시 전략](/posts/caching-strategies)에 있다. 이 글은 그 일반론이 한 회사에서 실제로 어떤 숫자로 나타났는지 본다. 자료를 읽는 태도는 [엔지니어링 블로그를 읽는 법](/posts/rw-reading-engineering-blogs)에 따로 정리했다.
+
+## 하루 2억 900만 요청과 서버 목록
+
+2016년 2월, 당시 Stack Overflow 엔지니어였던 Nick Craver가 자기 블로그에 연재를 시작했다. 첫 글 [Stack Overflow: The Architecture - 2016 Edition](https://nickcraver.com/blog/2016/02/17/stack-overflow-the-architecture-2016-edition/)(2016년 2월 17일)은 하루치 통계로 시작한다. 2016년 2월 9일 하루의 숫자이고, 괄호 안은 2013년 11월 12일과의 차이다.
+
+```text
+209,420,973 (+61,336,090) HTTP requests to our load balancer
+66,294,789 (+30,199,477) of those were page loads
+504,816,843 (+170,244,740) SQL Queries (from HTTP requests alone)
+5,831,683,114 (+5,418,818,063) Redis hits
+17,158,874 (not tracked in 2013) Elastic searches
+3,661,134 (+57,716) Tag Engine requests
+22.71 (-5.29) ms average (19.12 ms in ASP.Net) for 49,180,275 question page renders
+```
+
+바로 아래에 이 일을 해낸 장비가 나온다.
+
+```text
+4 Microsoft SQL Servers (new hardware for 2 of them)
+11 IIS Web Servers (new hardware)
+2 Redis Servers (new hardware)
+3 Tag Engine servers (new hardware for 2 of the 3)
+3 Elasticsearch servers (same)
+4 HAProxy Load Balancers (added 2 to support CloudFlare)
+```
+
+질문 페이지 하나를 그리는 데 평균 22.71ms, 웹 서버는 열한 대다. 이 숫자가 유명해진 이유는 "큰 서비스는 서버가 수백, 수천 대"라는 감각과 어긋나서다. 하지만 이 목록만 보고 "서버 몇 대로 충분하다"고 결론을 내리면 절반만 읽은 셈이다. 이 서버들이 어떤 크기였고 얼마나 여유가 있었는지, 그리고 무엇을 하지 않았는지를 같이 봐야 한다.
+
+먼저 일러둘 것이 있다. 이 글이 기댄 자료는 모두 2016~2019년에 Nick Craver가 쓴 글이다. 그 뒤 2025년에 데이터센터를 떠난 이야기는 회사 블로그 글로 뒷부분에서 따로 본다. 아래에서 현재형으로 쓴 문장도 모두 "그 글이 나온 시점에는"이라는 뜻이다.
+
+## 웹 서버 아홉 대가 모든 사이트를 띄운다
+
+웹 서버 열한 대 가운데 실제 사용자를 받는 건 01번부터 09번까지 아홉 대다. 나머지 두 대(10, 11번)는 개발용과 meta 사이트용이다. 아홉 대가 Stack Overflow뿐 아니라 Stack Exchange 네트워크의 Q&A 사이트를 전부 띄운다.
+
+원문은 이걸 이렇게 적는다. "The primary Q&A Application itself is multi-tenant." 사이트가 수백 개여도 프로세스는 하나이고, 요청이 어느 사이트로 왔는지 보고 그 사이트의 데이터를 쓴다. 이렇게 한 애플리케이션이 여러 고객(여기서는 여러 사이트)을 함께 받는 방식이 멀티테넌시다. 테넌트를 어떻게 나누는지 일반적인 선택지는 [멀티테넌시 격리](/posts/multi-tenancy-isolation)에 있다.
+
+아래 그림은 2016년 글에 나온 구성 요소를 요청 하나가 지나가는 순서로 그렸다. 다음을 누르면 질문 페이지, 태그 페이지, 검색이 각각 어디까지 가는지 보인다.
+
+<NetworkTopology
+  width={440}
+  height={266}
+  caption="2016년 Stack Overflow 주 데이터센터: 웹 서버 한 종류가 모든 사이트를 받는다"
+  zones={[
+    { id: "ny", label: "New York DC", x: 124, y: 8, w: 308, h: 250, tone: "private" },
+  ]}
+  nodes={[
+    { id: "user", label: "Users", x: 58, y: 44, icon: "client", w: 92 },
+    { id: "cf", label: "CloudFlare", sub: "DNS", x: 58, y: 140, icon: "internet", w: 92 },
+    { id: "lb", label: "HAProxy", sub: "x4", x: 196, y: 44, icon: "lb", w: 96 },
+    { id: "web", label: "IIS web", sub: "9 + 2", x: 196, y: 150, icon: "server", w: 96 },
+    { id: "redis", label: "Redis", sub: "x2", x: 360, y: 40, icon: "db", w: 112 },
+    { id: "sql", label: "SQL Server", sub: "x4", x: 360, y: 100, icon: "db", w: 112 },
+    { id: "tag", label: "Tag Engine", sub: "x3", x: 360, y: 160, icon: "server", w: 112 },
+    { id: "es", label: "Elastic", sub: "x3", x: 360, y: 220, icon: "server", w: 112 },
+  ]}
+  links={[
+    { from: "user", to: "cf", label: "DNS", dashed: true },
+    { from: "user", to: "lb" },
+    { from: "lb", to: "web" },
+    { from: "web", to: "redis" },
+    { from: "web", to: "sql" },
+    { from: "web", to: "tag" },
+    { from: "web", to: "es" },
+  ]}
+  steps={[
+    { path: ["user", "cf"], packet: "DNS", title: "먼저 이름을 찾는다", detail: "2016년 글 기준으로 DNS는 CloudFlare가 맡았다. 전 세계 사용자 가까이에 DNS 서버가 있어서다." },
+    { path: ["user", "lb", "web"], packet: "GET /q/1", title: "요청은 웹 서버 한 종류로 모인다", detail: "HAProxy가 TLS를 풀고 아홉 대 중 하나로 보낸다. 어느 Q&A 사이트로 온 요청이든 같은 서버들이 받는다." },
+    { path: ["web", "redis"], packet: "GET key", title: "먼저 메모리, 없으면 Redis", detail: "웹 서버 자기 메모리에 있으면 거기서 끝난다. 없으면 같은 데이터센터의 Redis에 묻는다." },
+    { path: ["web", "sql"], packet: "SELECT", title: "그래도 없으면 SQL Server", detail: "원본은 SQL Server에 있다. Redis는 원본이 아니라서 비어도 다시 채울 수 있다." },
+    { path: ["web", "tag"], packet: "java", title: "태그 목록은 태그 엔진이 답한다", detail: "/questions/tagged/java 같은 페이지는 태그 엔진에 어떤 질문이 맞는지 묻는다." },
+    { path: ["web", "es"], packet: "search", title: "검색과 비슷한 질문은 Elasticsearch", detail: "/search, 관련 질문 계산, 질문을 쓸 때 뜨는 추천이 여기로 간다." },
+    { path: ["web"], highlight: ["ny"], title: "웹 서버 한 대로도 돌았다", detail: "원문은 의도치 않게 한 대로 돌려 본 적이 몇 번 있고 버텼다고 쓴다. 좋은 생각이라는 뜻은 아니라고 덧붙인다." },
+  ]}
+/>
+
+마지막 단계가 이 글에서 가장 많이 인용되는 대목이다. 원문은 "we're down to needing only 1 web server"라고 쓰고, 의도치 않게 몇 번 시험됐다고 한다. 바로 다음 문장이 중요하다. "I'm saying it works. I'm not saying it's a good idea." 돌아간다는 것과 그렇게 운영해도 된다는 건 다르다는 말이다.
+
+그러면 왜 아홉 대를 뒀나. 원문은 웹 계층을 넉넉하게 둔 이유로 "rolling builds, headroom, and redundancy"를 든다. 배포할 때 몇 대를 빼도 버티게(롤링 빌드), 갑자기 몰려도 여유가 있게(헤드룸), 한두 대가 죽어도 괜찮게(이중화). 서버 수는 평소 부하가 아니라 이 세 가지가 정했다. 그리고 원문은 모든 서버와 서비스가 다른 데이터센터(Colorado)에 한 벌 더 있다고 쓴다. "Everything is redundant." 그러니 실제 장비는 위 목록의 두 배쯤이라고 읽는 게 맞다.
+
+## 하루치 숫자를 초 단위로 다시 읽기
+
+하루 2억이라는 숫자는 크게 들리지만, 서버 설계는 초당 얼마를 받느냐로 한다. 아래 코드에 2016년 통계를 넣으면 초당 요청 수, 페이지 로드 하나당 SQL 쿼리 수, 쿼리 하나의 평균 시간이 나온다. 2013년 값은 원문의 괄호 속 차이를 빼서 구했다.
+
+<CodePlayground
+  caption="하루 통계를 초당 숫자와 비율로 바꾸기"
+  functionName="readDay"
+  initialCode={`function readDay(s) {
+  // s.httpRequests: 하루 HTTP 요청 수
+  // s.pageLoads: 그중 페이지 로드 수
+  // s.sqlQueries: 하루 SQL 쿼리 수
+  // s.sqlMs: SQL 쿼리에 쓴 시간 합계(ms)
+  // s.redisHits: 하루 Redis 히트 수
+  // 반올림: requestsPerSec, pageLoadsPerSec는 정수,
+  // sqlPerPageLoad, redisHitsPerRequest는 소수 첫째 자리, msPerSqlQuery는 둘째 자리
+  return {};
+}`}
+  solution={`function readDay(s) {
+  const r = (x, d) => Math.round(x * 10 ** d) / 10 ** d;
+  return {
+    requestsPerSec: r(s.httpRequests / 86400, 0),
+    pageLoadsPerSec: r(s.pageLoads / 86400, 0),
+    sqlPerPageLoad: r(s.sqlQueries / s.pageLoads, 1),
+    msPerSqlQuery: r(s.sqlMs / s.sqlQueries, 2),
+    redisHitsPerRequest: r(s.redisHits / s.httpRequests, 1),
+  };
+}`}
+  tests={[
+    { label: "2016-02-09", args: [{ httpRequests: 209420973, pageLoads: 66294789, sqlQueries: 504816843, sqlMs: 607073066, redisHits: 5831683114 }], expected: { requestsPerSec: 2424, pageLoadsPerSec: 767, sqlPerPageLoad: 7.6, msPerSqlQuery: 1.2, redisHitsPerRequest: 27.8 } },
+    { label: "2013-11-12 (차이를 뺀 값)", args: [{ httpRequests: 148084883, pageLoads: 36095312, sqlQueries: 334572103, sqlMs: 558224585, redisHits: 412865051 }], expected: { requestsPerSec: 1714, pageLoadsPerSec: 418, sqlPerPageLoad: 9.3, msPerSqlQuery: 1.67, redisHitsPerRequest: 2.8 } },
+    { label: "작은 서비스 예시", args: [{ httpRequests: 8640000, pageLoads: 4320000, sqlQueries: 43200000, sqlMs: 21600000, redisHits: 0 }], expected: { requestsPerSec: 100, pageLoadsPerSec: 50, sqlPerPageLoad: 10, msPerSqlQuery: 0.5, redisHitsPerRequest: 0 } },
+  ]}
+/>
+
+결과를 보면 하루 평균으로 초당 약 2,424개 요청이다. 하루 평균이라 피크는 이보다 높고, 원문은 피크 값을 따로 적지 않았다. 그래도 "초당 수천" 규모라는 감은 잡힌다. 웹 서버 아홉 대로 나누면 한 대가 평균 초당 수백 개를 받는다.
+
+더 눈여겨볼 건 두 해 사이의 변화다. 2013년에서 2016년 사이 요청은 41% 늘었는데 페이지 로드당 SQL 쿼리는 9.3개에서 7.6개로 줄었고, 쿼리 하나의 평균 시간도 1.67ms에서 1.2ms로 줄었다. 반대로 HTTP 요청 하나당 Redis 히트는 2.8번에서 27.8번으로 열 배가 됐다. 이 비율은 내가 원문 숫자로 계산한 것이고, SQL 쿼리 수는 원문 표현대로 "HTTP 요청에서 나온 것만"이라 페이지 로드 외 요청도 섞여 있다. 그걸 감안해도 방향은 분명하다. 늘어난 부하를 DB가 아니라 캐시가 받아 냈다.
+
+## 3년 사이 줄어든 시간
+
+같은 통계에는 시간을 어디에 썼는지도 나온다. 하루 동안 각 계층에서 쓴 시간을 모두 더한 값이고, 괄호는 역시 2013년 11월과의 차이다.
+
+```text
+607,073,066 (+48,848,481) ms (168 hours) spent running SQL queries
+10,396,073 (-88,950,843) ms (2.8 hours) spent on Redis hits
+147,018,571 (+14,634,512) ms (40.8 hours) spent on Tag Engine requests
+1,609,944,301 (-1,118,232,744) ms (447 hours) spent processing in ASP.Net
+11.80 (-53.2) ms average (8.81 ms in ASP.Net) for 6,370,076 home page renders
+```
+
+이 표에서 볼 줄은 두 개다. 하나는 ASP.Net 처리 시간이다. 요청이 6,100만 개 늘었는데 웹 앱이 쓴 시간은 하루 약 11억 ms가 줄었다. 홈 페이지 평균 렌더링은 65ms 정도에서 11.80ms가 됐다(11.80에 53.2를 더한 값이 2013년 수치다). 원문은 이 차이를 하나하나 설명하지 않는다. 그 사이 웹 서버를 새 장비로 바꾼 영향도 있겠지만, 요청이 늘었는데 처리 시간 합계가 줄었다는 건 요청 하나에 드는 일이 줄었다는 뜻이다.
+
+다른 하나는 Redis다. 히트는 14배쯤 늘었는데 Redis에 쓴 시간 합계는 오히려 9천만 ms 가까이 줄었다. 원문은 이 변화의 이유를 설명하지 않는다. 클라이언트가 바뀌었거나 재는 방식이 바뀌었을 수도 있어서, 이 숫자로 "Redis 호출 하나가 몇 µs"라고 계산하는 건 피한다. 확실히 말할 수 있는 건 2016년의 Stack Overflow가 하루 168시간어치의 SQL 시간을 쓰면서도 그보다 열 배 많은 Redis 히트를 2.8시간 안에 처리했다는 것이다. 캐시를 늘린 만큼 DB 시간이 같이 늘지 않았다.
+
+이 시간 합계는 요청 수와 함께 봐야 의미가 있다. 평균 시간만 보면 느린 페이지 몇 개가 가려지고, 합계만 보면 트래픽 증가와 코드 악화가 구분되지 않는다. 원문이 요청 수, 시간 합계, 평균을 나란히 적은 이유가 여기 있다고 본다.
+
+## 입구는 CloudFlare와 HAProxy
+
+웹 서버 앞도 짧게 보자. 2016년 글 기준으로 DNS는 CloudFlare에 맡겼다. 원문은 이유를 "they have DNS servers nearer to almost everyone around the world"라고 쓴다. 전 세계 사용자 가까이에 DNS 서버가 있다는 것이다. 그러면서도 자체 DNS 서버를 따로 두고, 만일의 경우 그쪽으로 돌릴 수 있게 했다고 덧붙인다. 장비 목록의 "4 HAProxy Load Balancers (added 2 to support CloudFlare)"를 보면 CloudFlare를 앞에 두면서 HAProxy를 두 대 늘렸다.
+
+HAProxy는 CentOS 7 위의 1.5.15였고, 원문은 이 장비들이 SSL 협상을 더 효율적으로 처리하려고 메모리를 64GB 이상 둔다고 쓴다. 원문은 TLS도 HAProxy에서 끝낸다(terminated)고 쓴다. TLS 세션을 메모리에 더 많이 캐시해 두면 같은 클라이언트가 다시 붙을 때 협상을 빠르고 싸게 재개할 수 있어서 메모리를 넉넉히 뒀다는 설명이다. 로드 밸런서의 역할 일반은 [로드 밸런서 기초](/posts/load-balancer-basics)에 있다. 이 입구가 앞에서 본 요청별 성능 기록(HAProxy 헤더 캡처)을 남기는 자리이기도 하다. 모든 요청이 지나는 한 곳에서 재면 웹 서버 아홉 대의 로그를 따로 모을 필요가 없다.
+
+## 크게 산 SQL Server와 남겨 둔 여유
+
+SQL Server는 네 대가 두 클러스터를 이룬다. 원문은 이렇게 쓴다. "We run 2 SQL Server clusters with AlwaysOn Availability Groups." 그리고 "All replicas are asynchronous." 복제본은 모두 비동기다.
+
+| 클러스터 | 장비 (2016년 2월 기준) | 들어 있는 DB |
+|---|---|---|
+| 1 | Dell R720xd, 384GB RAM, PCIe SSD 4TB, 12코어 x2 | Stack Overflow, Sites, PRIZM, Mobile |
+| 2 | Dell R730xd, 768GB RAM, PCIe SSD 6TB, 8코어 x2 | 그 밖의 모든 것(Talent, Open ID, Chat, 예외 로그, 다른 Q&A 사이트) |
+
+여기서 쓰인 일반 개념이 둘 있다. 하나는 수직 확장, 서버를 늘리는 대신 한 대를 키우는 방식이다. 메모리 384GB짜리 서버를 쓰면 자주 읽는 데이터가 거의 메모리에 올라가고, 샤딩 없이 한 프라이머리가 쓰기를 받을 수 있다. 수직 확장과 수평 확장을 언제 고르는지는 [수평 확장과 수직 확장](/posts/scaling-horizontal-vertical)에 있다.
+
+다른 하나는 비동기 복제다. 프라이머리가 커밋을 확인한 뒤 복제본에 보내므로 쓰기 지연이 늘지 않는 대신, 프라이머리가 갑자기 죽으면 아직 넘어가지 않은 최근 쓰기를 잃을 수 있다. 다른 데이터센터까지 복제하는 구성에서는 동기 복제를 하면 왕복 시간이 쓰기마다 붙는다. 동기·비동기의 차이는 [복제와 샤딩](/posts/db-replication-sharding)에 정리했다. 원문은 왜 비동기를 골랐는지 설명하지 않는다. 쓰기 지연을 늘리지 않으려는 흔한 이유였을 것이라고 짐작할 뿐이다.
+
+부하는 얼마나 됐을까. 한 달 뒤에 나온 [하드웨어 편](https://nickcraver.com/blog/2016/03/29/stack-overflow-the-hardware-2016-edition/)(2016년 3월 29일)에 "our SQL server utilization is almost always at 5–10% CPU"라는 문장이 있다. CPU의 90% 이상이 늘 놀고 있었다는 말이다. 서버 몇 대로 버틴 이야기의 다른 면이 여기 있다. 대수가 적은 대신 한 대 한 대가 크고, 그 큰 서버를 반의반도 쓰지 않았다.
+
+## 캐시는 세 층, 지우라는 신호는 Redis로
+
+2016년 글은 캐시를 "L1/L2 cache system with Redis"라고 부른다. L1은 웹 서버 메모리의 캐시, L2는 Redis다. 3년 뒤 [앱 캐시 편](https://nickcraver.com/blog/2019/08/06/stack-overflow-how-we-do-app-caching/)(2019년 8월 6일)에서 Nick Craver는 같은 구조를 더 자세히 풀면서 CPU 캐시와 헷갈리지 않게 L1/L2라는 이름을 쓰지 않겠다고 한다. 대신 세 가지로 나눈다.
+
+- Global Cache: 웹 서버마다 메모리에 두고, 없으면 Redis에서 가져온다. 모든 사이트가 같이 쓰는 값(상단 바의 숫자 같은 것).
+- Site Cache: 사이트별로 같은 방식. 사이트마다 다른 질문 목록 같은 값.
+- Local Cache: 사이트별, 서버별 메모리에만 두고 Redis는 거치지 않는다. 원문 표현으로 "cheap to fetch, but huge to stream", 원본에서 가져오기는 싼데 크기가 커서 Redis를 한 번 더 거치는 게 손해인 값.
+
+키에는 사이트 번호가 붙는다. 원문 예시는 `prod:1-related-questions:1234`다. 프로세스 하나가 모든 사이트를 띄우니 키 이름으로 사이트를 나눈 것이다. 아래에서 조각을 누르면 각 부분이 하는 일이 나온다. 조각의 뜻은 원문 예시와 설명을 바탕으로 내가 나눈 것이다.
+
+<UrlAnatomy
+  caption="2019년 글의 캐시 키 예시를 조각으로 나누기"
+  separator=""
+  joiner=""
+  params={[
+    { key: "env", display: "prod:", title: "환경", description: "원문 예시의 맨 앞 조각이다. 이름으로 보면 운영 환경을 뜻하는 접두어다." },
+    { key: "site", display: "1-", title: "사이트 번호", description: "프로세스 하나가 수백 사이트를 띄우니 키에 사이트를 넣어야 한다. 번호가 무엇을 가리키는지는 원문 예시에서 사이트 ID라고만 나온다.", required: true },
+    { key: "name", display: "related-questions:", title: "무엇을 담았나", description: "관련 질문 목록이다. 원문의 Site Cache 예시처럼 사이트마다 값이 다르다." },
+    { key: "id", display: "1234", title: "어느 질문의 것인가", description: "질문 번호. 이 질문이 수정되면 무효화 채널에 이 키 전체가 실려 나간다." },
+  ]}
+/>
+
+캐시를 메모리에 두면 서버마다 사본이 생긴다. 질문이 수정되면 아홉 대 모두의 메모리에서 옛 값을 지워야 한다. 여기서 Redis의 pub/sub이 쓰인다. 한 곳이 메시지를 채널에 내면 구독한 모든 곳이 받는 방식이다. pub/sub 일반은 [pub/sub 글](/posts/pub-sub)에 있다. 아래 그림에서 다음을 누르면 WEB01에서 고친 값이 WEB05의 메모리에서 지워지는 순서가 나온다.
+
+<SequenceDiagram
+  caption="2019년 글의 무효화 순서: Redis에서 먼저 지우고, 그다음 알린다"
+  actors={[
+    { id: "w1", label: "WEB01" },
+    { id: "sql", label: "SQL Server" },
+    { id: "redis", label: "Redis" },
+    { id: "w5", label: "WEB05" },
+  ]}
+  steps={[
+    { from: "w1", to: "sql", label: "UPDATE", title: "원본을 고친다", detail: "질문이 수정되면 먼저 SQL Server의 원본을 바꾼다." },
+    { from: "w1", to: "redis", label: "DEL key", title: "Redis 값을 지운다", detail: "다음 단계보다 반드시 먼저 한다. 원문은 DEL이나 UNLINK로 지우거나 새 값으로 덮어쓴다고 쓴다." },
+    { from: "w1", to: "redis", label: "PUBLISH purge", title: "지울 키 이름을 채널에 낸다", detail: "새 값을 실어 보내지 않는다. 어떤 키가 바뀌었는지만 알린다.", payload: "PUBLISH purge-channel \"prod:1-related-questions:1234\"" },
+    { from: "redis", to: "w5", label: "message", title: "구독한 서버가 모두 받는다", detail: "WEB01부터 WEB09까지 같은 채널을 구독하고 있다. 그림에는 WEB05 하나만 그렸다." },
+    { from: "w5", to: "w5", label: "drop local", title: "자기 메모리에서 그 키를 버린다", detail: "새 값을 미리 가져오지 않는다. 그 키를 실제로 찾는 요청이 올 때까지 기다린다." },
+    { from: "w5", to: "redis", label: "GET key", title: "다음 요청이 오면 Redis부터", detail: "Redis에도 없으니 원본으로 간다." },
+    { from: "w5", to: "sql", label: "SELECT", title: "원본에서 새 값을 읽어 다시 채운다", detail: "읽은 값을 Redis와 자기 메모리에 넣는다. 이후 다른 서버는 Redis에서 바로 받는다." },
+  ]}
+/>
+
+원문은 순서를 강조한다. "Order is important, because reversing these would create a race and end up in a re-fetch of the old value sometimes." 알림을 먼저 보내면, WEB05가 메모리를 비우고 Redis에 물었을 때 아직 지워지지 않은 옛 값을 다시 가져와 메모리에 넣을 수 있다. 그러면 그 서버는 옛 값을 계속 보여 준다. 일반적인 캐시 무효화에서 지운 뒤 옛 값이 다시 들어가는 경쟁은 [캐시 무효화](/posts/cache-invalidation) 글이 자세히 다룬다. 이 사례는 그 경쟁이 "메모리 캐시 여러 벌"이라는 모양으로 나타난 경우다.
+
+2019년 글에는 Redis 쪽 숫자도 있다. 2019년 7월 30일 하루, 주 데이터센터의 Redis 인스턴스 전체가 1,586,553,473개 명령을 처리했고 CPU는 평균 2.01%(피크 3.04%)였다. 메모리 256GB 서버에서 96GB 미만을 썼다. 2016년 글도 "160 billion ops a month"에 "every instance is below 2% CPU"라고 썼다. 3년 사이에도 Redis는 거의 놀고 있었다.
+
+같은 글은 이 숫자가 가능한 이유 하나를 짚는다. 같은 LAN 안에서 Redis 왕복이 0.17ms였다. 그리고 바로 경고한다. "Cloud latency will generally be higher, so measure to see your latency." 이 구조를 그대로 가져오려는 사람이 가장 먼저 놓치는 부분이다. 요청 하나에 Redis를 스물몇 번 부르는 설계는 왕복이 0.17ms일 때와 1ms일 때 전혀 다른 결과를 낸다.
+
+## 캐시하지 않기로 한 것
+
+이 사례에서 캐시만큼 중요한 건 캐시를 뺀 자리다. 2019년 글에 따르면 Stack Overflow는 페이지 전체를 저장해 두는 출력 캐시(output cache)를 Q&A 사이트에서 끊었다. 이유는 숫자였다. "about 80% of all questions are visited every two weeks." 질문 대부분이 2주 안에 한 번씩 고르게 읽히니 페이지 캐시의 적중률이 낮았고, 거의 쓰이지 않는 페이지가 메모리를 차지하고 가비지 컬렉션 비용만 늘렸다. 적중률이 높은 RSS 피드 몇 개만 남겼다.
+
+로그인한 사용자에게도 출력 캐시를 쓰지 않는다. 평판 점수처럼 사람마다 다른 값이 페이지에 박혀 있어서, 남의 화면을 보여 주거나 옛 점수를 보여 주게 된다.
+
+그리고 글 전체를 묶는 문장이 이것이다. "Only cache if you need to." 캐시는 복잡도와 버그를 함께 들여온다는 이유다. 같은 글은 Redis가 무엇의 원본도 아니라고 한다. Redis가 날아가면 캐시가 빈 채로 다시 시작해 SQL Server가 한동안 더 바빠지고, 잃는 건 계정 병합 같은 몇 개의 작업 큐 정도라고 쓴다. 캐시를 빼도 서비스가 서는 구조였기에 캐시를 공격적으로 쓸 수 있었다고 나는 읽는다.
+
+## SQL로 하기엔 비싼 일만 따로 뺐다
+
+2016년 글에서 웹 서버 말고 따로 도는 건 세 가지뿐이다.
+
+태그 엔진은 서비스 계층 서버 세 대에서 돈다. `/questions/tagged/java` 같은 페이지에서 어떤 질문이 그 태그 조합에 맞는지 계산하고, 원문 표현으로 "/search 밖의 모든 태그 매칭"을 맡는다. 같은 서버에서 추천에 쓰는 Providence API와 Elasticsearch 색인 작업도 돈다. 서버가 아홉 대가 아니라 세 대인 이유로 원문은 태그 데이터를 세 번 올리면 충분하다고 쓴다. DB에서 글과 태그를 읽어 올리는 일이 싸지 않다는 말도 덧붙인다.
+
+Elasticsearch는 데이터센터마다 세 대짜리 클러스터가 있고, 사이트마다 인덱스가 따로 있다. `/search`, 관련 질문 계산, 질문을 쓸 때 뜨는 추천에 쓴다. 전문 검색을 관계형 DB 대신 역색인으로 하는 이유는 [역색인 글](/posts/elasticsearch-inverted-index)에 있다.
+
+웹소켓은 피크에 동시 연결이 약 50만 개였다. 왜 웹소켓이냐는 물음에 원문은 "They're tremendously more efficient than polling at our scale"이라고 답한다. 이 숫자의 사람들이 몇 초마다 새 알림을 물어보면 그것만으로 요청이 크게 늘었을 것이다.
+
+이 셋에는 공통점이 있다. 각자 데이터를 다루는 방식이 웹 앱과 달랐다. 태그 교집합 계산, 전문 검색, 오래 붙어 있는 연결. 업무 기능(질문, 답변, 투표, 사용자)은 쪼개지 않고 웹 앱 하나에 남았다. 이 설계로 보면 기준은 "팀을 나누려고"가 아니라 "자원 모양이 달라서"였을 것이다. 마이크로서비스로 업무 단위를 나누는 것과는 다른 축의 분리다. 업무 단위로 나누는 쪽의 이야기는 [마이크로서비스](/posts/microservices) 글과 이 시리즈의 [Shopify 모듈러 모놀리스](/posts/rw-shopify-modular-monolith)에 있다.
+
+## 하나를 하루 몇 번씩 배포하는 법
+
+모놀리스를 오래 쓰면 배포가 먼저 아프다는 말이 있다. 세 번째 글 [배포 편](https://nickcraver.com/blog/2016/05/03/stack-overflow-how-we-do-deployment-2016-edition/)(2016년 5월 3일)은 이걸 어떻게 다뤘는지 보여 준다.
+
+저장소는 하나다. 약 15명이 푸시하는 그 저장소에 모든 Q&A 사이트, stackexchange.com, API v2, 모바일 API, 그리고 태그 엔진과 Elasticsearch 색인을 맡는 Stack Server, 웹소켓 서비스인 Socket Server까지 들어 있다. 따로 도는 서비스도 코드는 한곳에 있었던 셈이다. 커밋은 대부분 `master`에 바로 올린다. 개발 환경에는 하루 약 25번, 운영에는 보통 하루 5~10번 배포한다. 첫 푸시부터 운영 반영까지 9분이 안 걸린다고 쓴다.
+
+운영 배포는 웹 서버를 한 대씩 HAProxy에서 빼고, IIS 사이트를 멈추고, 파일을 복사하고, 다시 켜고, HAProxy에 돌려놓는 순서를 반복한다. 원문은 배포 중에 "7 of 9 web servers are typically online"이라고 쓴다. 아래 그림은 이 문장을 두 대씩 빠지는 모양으로 옮겼다. 정확히 두 대씩 묶는지는 원문에 없어서, 7/9라는 숫자에 맞춘 그림이다.
+
+<AlgoTrace
+  caption="롤링 배포: 아홉 대 중 일곱 대는 늘 요청을 받는다"
+  memoryLabel="HAProxy에서 뺀 서버"
+  cells={["WEB01", "WEB02", "WEB03", "WEB04", "WEB05", "WEB06", "WEB07", "WEB08", "WEB09"]}
+  steps={[
+    { caption: "배포 전. 아홉 대가 모두 요청을 받는다." },
+    { pointer: 0, memory: ["WEB01", "WEB02"], caption: "WEB01, 02를 HAProxy에서 뺀다. 남은 일곱 대가 트래픽을 나눠 받는다. 여기서 헤드룸이 쓰인다." },
+    { pointer: 1, found: [0, 1], memory: [], caption: "새 파일을 복사하고 사이트를 켠 뒤 다시 넣는다. 이 순간 두 버전이 함께 요청을 받는다." },
+    { pointer: 3, found: [0, 1], memory: ["WEB03", "WEB04"], caption: "다음 두 대. 사용자 쪽에서는 서버 일곱 대짜리 사이트처럼 보인다." },
+    { pointer: 5, found: [0, 1, 2, 3], memory: ["WEB05", "WEB06"], caption: "앞 서버들은 새 버전으로 돌고 있다. 옛 버전과 새 버전이 섞여 있어도 DB는 둘 다와 맞아야 한다." },
+    { pointer: 7, found: [0, 1, 2, 3, 4, 5], memory: ["WEB07", "WEB08"], caption: "거의 끝났다." },
+    { pointer: 8, found: [0, 1, 2, 3, 4, 5, 6, 7], memory: ["WEB09"], caption: "마지막 한 대." },
+    { found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: [], caption: "아홉 대 모두 새 버전이다. 9분이 안 걸리는 배포의 마지막 단계다." },
+  ]}
+/>
+
+그림 중간에 옛 버전과 새 버전이 함께 도는 시간이 있다. 그래서 DB 마이그레이션 규칙이 따라온다. 원문에 따르면 마이그레이션은 코드보다 먼저 돌고, 여러 번 돌려도 같은 결과가 나오게(멱등하게) 쓴다. 컬럼을 지울 때는 먼저 nullable로 바꿔 두고 실제 삭제는 다음 배포에서 하는 식으로 단계를 나눈다. 되돌리기는 드물고 새 마이그레이션이나 수정으로 앞으로 나간다("roll forward"). 이게 확장-수축(expand-contract) 마이그레이션이다. 원리와 순서는 [무중단 마이그레이션](/posts/zero-downtime-migrations)과 [롤링 배포](/posts/rolling-deployment)에 있다.
+
+배포 글에서 하나 더 볼 것이 있다. 빌드 에이전트(TeamCity)가 웹 계층 서버에서 데이터센터당 11개 돈다. 원문 표현으로 "We have extra compute capacity on our web tier, so…we use it." 여유를 남겨 둔 서버라서 가능한 배치다.
+
+## 잴 수 있어야 고칠 수 있다
+
+이 구조를 버티게 한 건 서버보다 측정 도구라는 게 내 해석이다. 2016년 글이 꼽는 도구는 이렇다.
+
+- MiniProfiler: "Lightweight profiler we run on every page". 모든 페이지에서 도는 가벼운 프로파일러다.
+- Opserver: 대부분의 시스템을 직접 물어보는 모니터링 대시보드.
+- Bosun: Go로 쓴 백엔드 모니터링.
+- Exceptional: 예외 로그.
+- HAProxy 헤더 캡처: 원문 표현으로 "record performance metrics for every single request".
+
+원문은 웹 앱이 쓰는 마이크로 ORM Dapper와 .NET Redis 클라이언트 StackExchange.Redis를 "우리 오픈소스"라고 소개한다. 위에서 계산한 "페이지 로드당 SQL 9.3개 → 7.6개" 같은 변화는 요청마다 SQL 횟수와 시간을 재지 않으면 알 수 없다. 2019년 글도 MiniProfiler로 페이지 단위 Redis 호출을 재 보라고 권한다.
+
+2016년 글에는 "performance is still a feature"라는 문장이 있다. 빠른 것도 기능이라는 말이다. 이 말이 구호로 끝나지 않은 건 요청마다 시간이 남고, 그걸 매일 보는 습관이 있었기 때문일 것이다.
+
+## 2025년, 데이터센터를 떠나다
+
+이 구조에는 뒷이야기가 있다. 2025년 8월 Stack Overflow 블로그에 [Moving the public Stack Overflow sites to the cloud: Part 1](https://stackoverflow.blog/2025/08/28/moving-the-public-stack-overflow-sites-to-the-cloud-part-1/)이 올라왔다. 위에서 본 공개 사이트를 Google Cloud로 옮긴 이야기다.
+
+계기는 마감이었다. 글에 따르면 데이터센터 계약이 2025년 7월 31일에 끝났고, 그 데이터센터 자체가 문을 닫아 연장할 수 없었다. 그 전에 Stack Overflow for Teams를 2021년부터 2023년 사이 Azure로 옮겼는데, 세 번 시도에 3년이 걸렸다고 쓴다.
+
+더 흥미로운 건 옮기기 어려웠던 이유다. 글은 "we had squeezed every bit of performance out of what we had"라고 하면서, 그 최적화가 서비스 분리와 팀 자율성 같은 방식을 받아들이는 데 걸림돌이 됐다고 쓴다. 그리고 앱이 인프라를 알고 있었다고 한다. 초기 설계에서 서버 응답 시간에 대한 기대가 코드에 들어가 있어서, 30ms를 넘는 응답은 사이트 전체에 심각한 문제를 일으킬 수 있었다. 서버 이름부터 지연 시간까지, 수백만 줄 코드 곳곳에 가정이 있었다는 것이다. 앞에서 본 "같은 LAN의 0.17ms"를 전제로 한 설계가 그대로 이전의 가장 큰 위험이 됐다.
+
+그래서 처음 한 일은 부하 테스트였다. 운영과 같은 환경을 Terraform으로 띄우고 반복해서 테스트하며, 데이터센터에서는 보이지 않던 느린 부분을 고쳤다. 처리할 수 있는 초당 요청 수가 데이터센터에서 받던 양을 넉넉히 넘을 때까지 이 과정을 되풀이했다고 쓴다. 글은 데이터센터 시절의 약점도 인정한다. 물리 장비 때문에 테스트 환경을 운영과 같게 만들기 어려웠고, 그래서 테스트 결과가 들쭉날쭉하고, 운영에서 테스트하고, 운영 장애로 이어졌다는 것이다.
+
+옮긴 뒤 구성은 이렇다.
+
+| 2016~2019년 글 | 2025년 글 |
+|---|---|
+| IIS 웹 서버 9대 (+2) | Kubernetes. 옛 .NET Framework 앱은 Windows Kubernetes 클러스터 |
+| SQL Server 물리 서버 4대 | SQL Server를 전용 VM에. 관리형 SQL은 필요한 성능이 나오지 않았다고 쓴다 |
+| Redis 물리 서버 2대, 사이트별 DB | GCP Memorystore(관리형). DB 개수 제한 때문에 키 접두어 방식으로 바꿨다 |
+| Elasticsearch 3대짜리 클러스터 | Elastic Cloud on Kubernetes 오퍼레이터로 직접 운영 |
+| HAProxy 로그, 자체 Traffic Processing Service | 모든 공개 자원을 Cloudflare 뒤에, 로그는 Snowflake |
+| TeamCity | GitHub Actions, 배포는 Octopus Deploy |
+
+SQL Server 대목에 숫자가 있다. DB를 메모리에 올리려면 약 1.5TB가 필요했고, 메모리가 큰 VM(`m3-ultramem-128`, vCPU 128개, 메모리 3.9TB)을 고르면 CPU도 같이 따라왔다. CPU는 필요 없어서 코어 절반을 꺼서 라이선스 비용을 아꼈다고 쓴다. "크게 사서 메모리에 다 올린다"는 2016년의 방식이 클라우드에서도 이어졌다.
+
+같은 해 12월에 다시 실린 [The Great Unracking](https://stackoverflow.blog/2025/12/24/the-great-unracking-saying-goodbye-to-the-servers-at-our-physical-datacenter/)은 마지막 장면을 적는다. 2010년 10월부터 모든 Stack Exchange 사이트가 뉴욕(실제로는 뉴저지) 데이터센터의 물리 서버에서 돌았고, 2025년 7월 2일에 그곳의 서버 약 50대를 랙에서 뺐다. 재해 복구용이던 콜로라도 데이터센터는 6월에 정리했다. 장비는 사용자 개인정보를 지키려고 모두 파쇄하거나 폐기했다.
+
+이 뒷이야기는 앞의 내용을 뒤집지 않는다. 오히려 조건이 바뀌면 답도 바뀐다는 걸 보여 준다. 짧은 왕복과 큰 장비를 전제로 짠 최적화는 그 전제 안에서는 서버 수를 줄였지만, 전제가 바뀌자 옮기는 비용이 됐다. 2025년 글은 이전 자체의 숫자 외에 비용 비교를 내놓지 않는다.
+
+## 이 사례를 잘못 읽는 세 가지 방법
+
+이 연재는 "마이크로서비스 없이도 된다"의 근거로 자주 쓰인다. 틀린 말은 아니지만, 조건을 빼면 다른 이야기가 된다.
+
+첫째, "서버가 적다 = 작은 서버로 버텼다"가 아니다. SQL Server는 메모리 384~768GB였고 CPU는 5~10%만 썼다. Redis도 256GB 서버에서 CPU 2%였다. 대수를 줄이고 한 대를 크게, 그리고 넉넉하게 남겼다. 그리고 다른 데이터센터에 한 벌이 더 있었다.
+
+둘째, "모놀리스면 다 된다"가 아니다. 업무 코드는 하나였지만 태그 엔진, Elasticsearch, 웹소켓처럼 자원 모양이 다른 일은 따로 뺐다. 그리고 그 하나짜리 앱도 측정, 캐시 무효화 규칙, 확장-수축 마이그레이션, 하루 여러 번의 롤링 배포라는 습관 위에서 돌았다. 진흙 덩어리가 된 모놀리스와는 다르다.
+
+셋째, "마이크로서비스는 틀렸다"의 증거가 아니다. 자료로 보면 이 회사의 조건은 이랬다. 제품 하나(Q&A)를 수백 사이트가 같은 코드로 공유한다. 읽기가 많고 같은 데이터를 여러 번 읽는다. 저장소 하나에 약 15명이 푸시한다(배포 글 기준). 같은 LAN 안의 짧은 왕복을 전제로 설계했다. 여러 제품, 수백 명의 팀, 서로 다른 배포 주기가 있는 회사라면 같은 답이 나오지 않는다. 팀과 서비스가 많아질 때의 고민은 [마이크로서비스](/posts/microservices) 글에서 다룬다.
+
+## 공개 자료가 말하지 않는 것
+
+이 연재는 회사 사람이 자기 시스템을 자랑스럽게 소개한 글이다. 잘 돌아간 부분이 중심이고, 버린 시도나 장애, 비용은 거의 나오지 않는다. 하드웨어 편은 사내 장비가 "direct and indirect costs"를 가진다고 쓰지만 금액은 없고, 클라우드와의 비교는 나중으로 미뤘다. 하드웨어를 사고 관리하는 사람이 몇 명이었는지, 데이터센터 두 곳을 유지하는 데 드는 노력이 얼마였는지도 공개되지 않았다. 그래서 이 글에서는 "서버 몇 대가 클라우드보다 싸다" 같은 결론을 내리지 않는다.
+
+2025년 클라우드 이전 글도 마찬가지로 회사가 쓴 글이다. 이전 비용이 얼마였는지, 운영비가 늘었는지 줄었는지는 나오지 않는다. 그래서 "클라우드로 가서 비싸졌다"나 "싸졌다"도 이 자료로는 말할 수 없다.
+
+## 작은 팀이 이 연재에서 가져올 것
+
+서버 대수는 따라 할 대상이 아니다. 가져올 수 있는 건 습관 쪽이다.
+
+이 선택이 맞는 조건은 위에서 본 것과 비슷하다. 읽기가 많고 쓰기는 한 프라이머리가 받을 만하다. 제품이 하나이거나 강하게 묶여 있다. 팀이 저장소 하나로 일해도 서로 막히지 않을 만큼 작다. 네트워크 왕복이 짧다. 반대로 쓰기가 한 대의 한계를 넘거나, 팀마다 배포 주기가 달라 서로를 기다리거나, 일부 기능만 다른 언어·런타임이 필요하면 맞지 않는다.
+
+처음부터 따라 하면 드는 비용도 있다. 큰 장비를 직접 사고 데이터센터 두 곳에 두는 건 장비 관리와 교체를 맡을 사람이 있어야 하는 선택이고, 원문도 그 비용을 숨기지 않았다. 클라우드에서 같은 구조를 흉내 내면 Redis 왕복부터 다르다. 2019년 글이 직접 경고한 부분이다.
+
+지금 당장 가져올 만한 건 두 가지다.
+
+- 요청마다 SQL·캐시 호출 횟수와 시간을 남긴다. MiniProfiler 같은 도구든 APM의 트레이스든, 페이지 하나가 쿼리를 몇 번 하는지 보이게 만든다. 위 계산처럼 "페이지 로드당 쿼리 수"를 시간에 따라 그려 두면 N+1이 들어온 배포가 바로 보인다.
+- 서버 수를 평균 부하가 아니라 "배포 중에 몇 대를 빼도 되나, 한 대가 죽어도 되나"로 정한다. 롤링 배포 중 남은 서버의 CPU가 얼마인지 한 번 재 보면, 지금 대수가 넉넉한지 빠듯한지 알 수 있다.
+
+2025년 글에서 가져올 교훈도 하나 있다. 서버 이름, 응답 시간 같은 인프라 가정을 코드 안에 흩어 두지 않는다. 설정으로 빼 두고, 운영과 같은 모양의 테스트 환경에서 부하 테스트를 돌릴 수 있게 해 둔다. Stack Overflow가 옮기기 전에 가장 먼저 만든 것이 그 부하 테스트였다.
+
+비슷한 신호가 보이면 무엇부터 볼까. "트래픽이 늘어서 서버를 늘려야겠다"는 생각이 들 때, 먼저 페이지당 쿼리 수와 쿼리 평균 시간이 같이 늘었는지 본다. 위 계산의 2013→2016처럼 요청이 늘어도 페이지당 쿼리가 줄었다면 코드와 캐시가 일을 하고 있는 것이다. 반대로 둘 다 늘고 있다면 서버를 늘리기 전에 그 쿼리부터 본다. 캐시를 더할 때는 적중률을 먼저 잰다. Stack Overflow가 출력 캐시를 뺀 이유는 적중률이 낮아서였다.
+
+캐시를 넣을 때는 "Redis가 비면 무엇이 무너지나"를 하나씩 적어 본다. 원본이 따로 있고 다시 채울 수 있다면 공격적으로 써도 된다. 캐시가 유일한 사본이 되는 순간부터는 캐시가 아니라 저장소이고, 그때는 [Redis 영속성과 고가용성](/posts/redis-persistence-ha)을 따로 설계해야 한다.
+
+## 이 글이 기댄 자료
+
+- [Stack Overflow: The Architecture - 2016 Edition](https://nickcraver.com/blog/2016/02/17/stack-overflow-the-architecture-2016-edition/) — Nick Craver(당시 Stack Overflow), 개인 블로그, 2016년 2월
+- [Stack Overflow: The Hardware - 2016 Edition](https://nickcraver.com/blog/2016/03/29/stack-overflow-the-hardware-2016-edition/) — Nick Craver(당시 Stack Overflow), 개인 블로그, 2016년 3월
+- [Stack Overflow: How We Do Deployment - 2016 Edition](https://nickcraver.com/blog/2016/05/03/stack-overflow-how-we-do-deployment-2016-edition/) — Nick Craver(당시 Stack Overflow), 개인 블로그, 2016년 5월
+- [Stack Overflow: How We Do App Caching - 2019 Edition](https://nickcraver.com/blog/2019/08/06/stack-overflow-how-we-do-app-caching/) — Nick Craver(당시 Stack Overflow), 개인 블로그, 2019년 8월
+- [Moving the public Stack Overflow sites to the cloud: Part 1](https://stackoverflow.blog/2025/08/28/moving-the-public-stack-overflow-sites-to-the-cloud-part-1/) — Stack Overflow(Wouter de Kort, Jason Schwanz), 회사 블로그, 2025년 8월
+- [The Great Unracking: Saying goodbye to the servers at our physical datacenter](https://stackoverflow.blog/2025/12/24/the-great-unracking-saying-goodbye-to-the-servers-at-our-physical-datacenter/) — Stack Overflow(Ryan Donovan), 회사 블로그, 2025년 12월 재게시(2025년 7월의 일을 다룬 글)
+
+## 면접에서 나올 만한 질문
+
+### Stack Overflow는 웹 서버 몇 대로 얼마나 받았나?
+
+2016년 2월 기준 웹 서버 11대 중 9대가 운영 트래픽을 받았고, 하루 HTTP 요청 약 2억 900만, 페이지 로드 약 6,600만이었다. 하루 평균으로 초당 약 2,400 요청이다. 원문은 한 대로도 돌아간 적이 있다고 쓰면서, 그게 좋은 생각은 아니라고 덧붙인다. 대수는 배포 중 여유, 순간 부하 여유, 이중화를 위해 정했다.
+
+### 서버 대수가 적었던 이유를 한 문장으로 말하면?
+
+한 대를 크게 사고 넉넉히 남겼으며, 늘어난 읽기를 캐시가 받아 냈기 때문이다. SQL Server는 메모리 384~768GB에 CPU 5~10%였고, 2013→2016년 사이 요청은 늘었지만 페이지 로드당 SQL 쿼리는 줄고 요청당 Redis 히트는 열 배가 됐다. 그리고 그 변화를 요청마다 재는 도구가 있었다.
+
+### 메모리 캐시가 서버마다 있으면 수정된 값은 어떻게 지우나?
+
+Redis 값을 먼저 지우거나 덮어쓰고, 그다음 Redis pub/sub 채널에 키 이름을 낸다. 구독하던 웹 서버들은 자기 메모리에서 그 키를 버리고, 다음 요청 때 Redis나 원본에서 다시 읽는다. 순서를 바꾸면 알림을 받은 서버가 아직 남아 있는 옛 값을 Redis에서 다시 가져와 계속 보여 줄 수 있다.
+
+### 왜 출력 캐시를 쓰지 않았나? 캐시는 많을수록 좋지 않나?
+
+적중률이 낮았기 때문이다. 질문의 약 80%가 2주마다 한 번씩 읽혀서 페이지 캐시가 거의 다시 쓰이지 않았고, 메모리와 가비지 컬렉션 비용만 늘었다. 로그인 사용자는 화면마다 개인 값이 있어 원래 캐시할 수 없다. 캐시는 복잡도와 버그를 들여오니 필요할 때만 쓴다는 게 그 글의 원칙이다.
+
+### 태그 엔진과 Elasticsearch를 따로 뺀 건 마이크로서비스와 무엇이 다른가?
+
+업무 기능이 아니라 자원 모양이 다른 일을 뺐다는 점이 다르다. 태그 교집합 계산, 전문 검색, 오래 붙는 웹소켓 연결은 웹 앱과 데이터를 다루는 방식이 달랐다. 질문, 답변, 사용자 같은 업무 코드는 웹 앱 하나에 남았다. 팀이나 도메인 경계로 나누는 마이크로서비스와는 분리 기준이 다르다.
+
+### 모놀리스 하나를 하루 여러 번 배포하면서 DB 스키마는 어떻게 맞췄나?
+
+마이그레이션을 코드보다 먼저, 멱등하게 돌리고, 지우는 변경은 배포를 나눠 했다. 롤링 배포 중에는 옛 코드와 새 코드가 함께 돌기 때문에 스키마가 두 버전 모두와 맞아야 한다. 되돌리기보다는 새 마이그레이션으로 앞으로 고쳐 나갔다고 원문은 쓴다.
+
+### 우리 서비스가 클라우드에 있고 규모가 10분의 1이면 같은 구조를 따라 하나?
+
+대수나 하드웨어는 따라 하지 않는다. 요청 하나에 캐시를 수십 번 부르는 설계는 같은 LAN에서 0.17ms 왕복을 전제로 했고, 원문도 클라우드에서는 지연을 먼저 재 보라고 경고한다. 가져올 것은 요청마다 쿼리 수와 시간을 재는 습관, 캐시를 빼도 서는 구조, 배포 중 여유로 서버 수를 정하는 방식이다.
+
+### Stack Overflow는 왜 2025년에 클라우드로 옮겼고, 무엇이 가장 어려웠나?
+
+직접적인 계기는 데이터센터 계약이 2025년 7월 31일에 끝나고 그 시설이 문을 닫은 것이다. 가장 큰 위험은 앱이 데이터센터를 전제로 짜여 있었다는 점이다. 30ms를 넘는 응답이 사이트 전체에 문제를 일으킬 수 있을 만큼 짧은 지연을 가정했고, 서버 이름 같은 인프라 정보가 코드 곳곳에 있었다. 그래서 운영과 같은 환경에서 부하 테스트부터 돌려 느린 부분을 고쳤다.
+
+### 이 사례를 근거로 "모놀리스가 마이크로서비스보다 낫다"고 말해도 되나?
+
+아니다. 이 사례는 제품 하나를 수백 사이트가 같은 코드로 공유하고, 읽기가 많고, 저장소 하나에 약 15명이 일하던 조건에서 맞았다. 제품과 팀이 여럿이고 배포 주기가 서로 다르면 다른 답이 나온다. 그리고 같은 회사가 2025년에는 그 최적화가 서비스 분리와 팀 자율성에 걸림돌이 됐다고 직접 썼다. 조건이 바뀌면 같은 회사 안에서도 답이 바뀐다.

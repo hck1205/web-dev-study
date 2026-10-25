@@ -1,6 +1,18 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "rw-uber-doma": 7,
+  "rw-stack-overflow-few-servers": 7,
+  "rw-segment-goodbye-microservices": 7,
+  "rw-pinterest-mysql-sharding": 7,
+  "rw-openai-postgres-scaling": 7,
+  "rw-notion-postgres-sharding": 7,
+  "rw-linkedin-kafka": 7,
+  "rw-facebook-haystack": 7,
+  "rw-dropbox-magic-pocket": 7,
+  "rw-amazon-distributed-computing-manifesto": 7,
+  "rw-airbnb-soa-migration": 7,
+  "rw-37signals-cloud-exit": 7,
   "rw-uber-schemaless-docstore": 7,
   "rw-uber-h3-geospatial": 6,
   "rw-twitter-snowflake-timeline": 7,

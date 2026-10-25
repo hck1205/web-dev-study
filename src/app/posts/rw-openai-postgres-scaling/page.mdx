@@ -1,0 +1,350 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-openai-postgres-scaling");
+
+<EasyIntro>
+  큰 서비스는 데이터를 여러 데이터베이스에 나눠 담는 경우가 많다. 그런데 OpenAI는 오랫동안 글을 쓰는 데이터베이스를 단 하나만 두고, 그 내용을 그대로 베낀 읽기 전용 복사본을 여러 개 붙여 많은 사용자를 받았다.
+
+  도서관에 비유하면 이렇다. 새 책을 들이고 목록을 고치는 사서는 딱 한 명이고, 그 목록을 베낀 안내 데스크가 여러 곳에 있다. 책을 찾는 사람은 아무 안내 데스크에나 물으면 되니 줄이 금방 줄어든다. 하지만 새 책이 한꺼번에 몰려오면 사서 한 명이 감당하지 못하고, 안내 데스크의 목록도 늦게 고쳐진다.
+
+  그래서 OpenAI는 사서가 할 일을 줄였다. 새 책이 많이 들어오는 일은 아예 다른 도서관으로 보내고, 쓸데없이 목록을 고치는 일을 찾아 없애고, 오래 붙잡고 있는 손님은 시간이 지나면 내보냈다. 그리고 한 사람이 너무 비싼 부탁을 한꺼번에 하지 못하게 횟수를 제한했다.
+
+  이 글은 OpenAI 엔지니어가 2025년 PostgreSQL 개발자 컨퍼런스에서 직접 발표한 슬라이드를 따라가며, 무엇을 골랐고 어떤 장애를 겪었는지 살펴본다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. 복제본이 WAL을 받아 따라오는 원리와 복제 지연은 [복제와 샤딩](/posts/db-replication-sharding), PgBouncer와 풀 크기 계산은 [커넥션 풀](/posts/connection-pool)에서 다뤘다. 같은 PostgreSQL에서 반대 방향, 즉 샤딩을 고른 사례로 [Notion](/posts/rw-notion-postgres-sharding)과 [Instagram](/posts/rw-instagram-sharding-ids)이 있다. 이 글은 샤딩하지 않고 버틴 쪽이다.
+
+## 이 글이 기댄 자료가 하나뿐인 이유
+
+먼저 근거를 밝힌다. 이 글은 2025년 5월 14일 PGConf.dev 2025에서 OpenAI의 Bohan Zhang이 발표한 [Scaling Postgres to the next level at OpenAI](https://www.pgevents.ca/events/pgconfdev2025/schedule/session/433-scaling-postgres-to-the-next-level-at-openai/) 세션 소개와, 그 세션 페이지에 올라온 [발표 슬라이드 PDF](https://www.pgevents.ca/events/pgconfdev2025/sessions/session/433/slides/97/Postgres%20Conf%202025%20%28Bohan%29.pdf) 29쪽에 기댄다. OpenAI 공식 블로그에도 PostgreSQL 확장을 다룬 글이 있다고 알려져 있지만, 이 글을 쓰는 환경에서 그 페이지가 열리지 않았다. 열어 보지 못한 자료는 인용하지 않으니, 그 글에 나온다고들 하는 복제본 개수나 사용자 수 같은 숫자는 이 글에 없다. 슬라이드에 없는 숫자도 쓰지 않는다.
+
+슬라이드는 발표용 요점이라 문장마다 이유가 짧다. 그래서 이 글에서는 슬라이드에 적힌 것과 내 해석을 더 엄격히 나눠 쓴다. 해석은 "~로 읽힌다", "~였을 것이다"로 표시한다.
+
+## 프라이머리 하나로 오래 버텼다
+
+슬라이드의 배경 장은 이렇게 시작한다. PostgreSQL은 OpenAI에서 가장 중요한 시스템들의 뼈대이고, PostgreSQL이 멈추면 핵심 기능 여럿을 쓸 수 없게 된다. 과거 PostgreSQL 관련 장애가 ChatGPT 같은 서비스에 큰 영향을 줬다. 그리고 "오랫동안 Azure의 프라이머리 인스턴스 하나로, 샤딩 없이 운영했다. 쓰기 확장의 한계에 부딪히기 전까지는."
+
+구조는 프라이머리 하나에 읽기 복제본 여럿이다. 이 구조에서 쓰기 확장성은 계속 병목으로 남는다고 슬라이드는 쓴다. 대응은 세 가지로 요약된다. 샤딩할 수 있는 쓰기 많은 작업은 다른 시스템으로 옮겼다. 새 테이블과 새 작업은 PostgreSQL에 들이지 않는다. 지금 구조가 기존의 읽기 많은 작업과 앞으로의 성장을 감당할 여유가 있도록 최적화를 많이 했다. 슬라이드의 결론 문장은 "PostgreSQL은 쓰기 많은 작업에는 이상적이지 않다. 하지만 OpenAI의 읽기 많은 작업에서는 아주 잘 확장된다"이다.
+
+쓰기가 왜 문제인지도 슬라이드에 있다. PostgreSQL의 MVCC 설계에서 알려진 문제로 테이블과 인덱스 부풀림(bloat), autovacuum 튜닝의 복잡함, 튜플 복사로 생기는 버전 변화, 인덱스 유지 비용 증가를 든다. 복제본 쪽 문제도 있다. 쓰기가 많으면 보내야 할 WAL이 늘어 복제 지연이 커지고, 복제본 수가 늘수록 더 나빠져 네트워크 대역폭이 병목이 될 수 있다. 행을 고칠 때마다 새 버전이 생기고 VACUUM이 옛 버전을 치우는 구조는 [PostgreSQL MVCC와 VACUUM](/posts/postgres-mvcc-vacuum)에서 다뤘다. 같은 MVCC 문제가 [Notion](/posts/rw-notion-postgres-sharding)에서는 샤딩을 결심하게 만든 신호였다.
+
+## 샤딩하지 않은 다섯 가지 이유
+
+슬라이드 한 장이 통째로 이 질문에 답한다. 옮기면 이렇다.
+
+```text
+· 샤딩할 수 있는 쓰기 많은 작업은 이미 다른 시스템으로 옮겼다
+· PostgreSQL에 새 테이블을 더는 허용하지 않는다. 새 테이블이 필요한 기능은 다른 시스템을 쓴다
+· 지금 작업을 샤딩하는 건 수백 개 애플리케이션 엔드포인트를 옮겨야 해서 어렵다
+· 지금 작업은 읽기가 많고, 꼼꼼히 최적화하면 지금 구조로 충분한 여유가 있다
+· 샤딩은 가까운 우선순위는 아니지만 앞으로의 가능성으로 남아 있다
+```
+
+이 목록은 샤딩을 "안 한다"가 아니라 "쓰기가 많은 부분만 떼어 냈다"는 뜻으로 읽힌다. 쓰기 많은 작업을 어디로 옮겼는지 슬라이드는 "다른 시스템"이라고만 쓰고 이름을 밝히지 않는다. 남은 것은 읽기가 많고, 수백 개 엔드포인트가 기대고 있어 옮기기 비싼 데이터다. 그 데이터에는 쓰기를 줄이고 읽기를 복제본으로 돌리는 쪽이 샤딩보다 싸다는 판단이다.
+
+"새 테이블 금지"는 이 사례에서 가장 강한 규칙이다. 기술이 아니라 정책으로 프라이머리의 쓰기 부하가 더 늘지 않게 막은 것이다. 프라이머리 하나 구조의 한계를 알고, 그 한계에 가까운 쪽으로는 아예 새 짐을 올리지 않는다. 샤딩을 하면 생기는 일(샤드 키 선택, 샤드를 넘는 조인, 이전 작업)은 [DB 샤딩](/posts/db-sharding)에 있다. OpenAI는 그 비용을 지금 치르지 않는 대신, 새 기능을 만드는 팀이 다른 저장소를 고르는 비용을 치른다.
+
+## 프라이머리의 짐을 덜어 낸 방법
+
+슬라이드는 프라이머리 부하를 줄이는 방법을 쓰기와 읽기로 나눈다.
+
+쓰기 쪽은 이렇다. 샤딩할 수 있는 쓰기 많은 작업을 다른 시스템으로 옮긴다. 애플리케이션에서 쓰기 수를 줄인다. 이 과정에서 필요 없는 쓰기를 만드는 애플리케이션 버그도 찾았다. 가능한 곳에서는 지연 쓰기(lazy write)로 쓰기 급증을 고르게 편다. 필드를 백필할 때는 속도 제한을 건다. 큰 테이블에 칸을 추가하고 값을 채우는 백필은 그 자체가 쓰기 폭탄이 될 수 있어서다. 백필을 나눠 돌리는 일반적인 방법은 [무중단 마이그레이션](/posts/zero-downtime-migrations)에 있다.
+
+읽기 쪽은 이렇다. 가능할 때마다 프라이머리의 읽기 쿼리를 복제본으로 옮긴다. 다만 트랜잭션 때문에 옮길 수 없는 읽기가 있으니, 그런 쿼리는 프라이머리에서 효율적이게 만든다. 복제본으로 읽기를 옮길 때 생기는 "방금 쓴 게 안 보인다" 문제와 그 대응은 [복제와 샤딩](/posts/db-replication-sharding)의 "방금 결제한 주문이 안 보인다"에서 다뤘다.
+
+쿼리 자체도 손봤다. 오래 열린 쿼리는 autovacuum을 막고 자원을 잡아먹으니 타임아웃을 건다. 슬라이드가 적은 설정은 `idle_in_transaction_session_timeout`, `statement_timeout`, 그리고 클라이언트 쪽 타임아웃이다. OLTP 쿼리의 안티패턴도 짚는다. 여러 테이블을 잇는 조인이 있었는데 가장 비싼 쿼리는 테이블 12개를 조인했고, 이런 쿼리의 급증이 전에 SEV(심각 장애)로 이어졌다. 그래서 비싼 다중 조인은 애플리케이션 단에서 처리하라고 하고, ORM으로 개발하면 비효율적인 쿼리가 쉽게 생기니 조심해서 쓰라고 덧붙인다. ORM이 만드는 쿼리를 확인하는 습관은 [Node.js ORM과 쿼리 빌더](/posts/nodejs-orm-query-builder)와 [N+1 쿼리](/posts/n-plus-one-queries)에서 다뤘다.
+
+## 쓰는 곳은 하나, 읽는 곳은 여럿
+
+프라이머리가 하나라는 건 단일 장애점이라는 뜻이다. 슬라이드는 이걸 숨기지 않는다. 쓰는 곳이 하나라 그게 죽으면 아무 쓰기도 못 한다. 복제본은 많으니 하나가 죽어도 다른 복제본에서 읽는다. 그리고 가장 중요한 요청 대부분은 읽기 전용이라, 프라이머리가 죽어도 복제본에서 데이터를 가져와 계속 돌 수 있다. 슬라이드는 이 경우를 SEV2로 분류한다.
+
+요청을 우선순위로도 나눈다. 높은 우선순위 요청이 멈추면 사용자에게 훨씬 큰 영향(SEV0)을 주고, 낮은 우선순위 요청은 SEV2다. 그래서 높은 우선순위 요청에는 전용 읽기 복제본을 따로 붙여, 낮은 우선순위 요청 때문에 영향을 받지 않게 한다. 아래 그림에서 다음을 눌러 평소의 흐름과 장애 때의 흐름을 따라가 보자. 복제본 수는 그림을 위해 줄였다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="프라이머리 하나와 읽기 복제본들, 우선순위별로 나눈 복제본 (PGConf.dev 2025 슬라이드)"
+  zones={[
+    { id: "app", label: "애플리케이션", x: 8, y: 20, w: 120, h: 270, tone: "public" },
+    { id: "az", label: "Azure PostgreSQL", x: 140, y: 20, w: 252, h: 270, tone: "private" },
+  ]}
+  nodes={[
+    { id: "hi", label: "높은 우선순위", sub: "SEV0 영향", x: 68, y: 70, icon: "server", w: 104 },
+    { id: "lo", label: "낮은 우선순위", sub: "SEV2 영향", x: 68, y: 230, icon: "server", w: 104 },
+    { id: "pgb", label: "PgBouncer", sub: "연결 풀", x: 68, y: 150, icon: "lb", w: 100 },
+    { id: "pri", label: "프라이머리", sub: "쓰기 하나", x: 210, y: 150, icon: "db", w: 96 },
+    { id: "r1", label: "전용 복제본", sub: "높은 우선순위", x: 330, y: 60, icon: "db", w: 104 },
+    { id: "r2", label: "복제본 A", x: 330, y: 150, icon: "db", w: 90 },
+    { id: "r3", label: "복제본 B", x: 330, y: 240, icon: "db", w: 90 },
+  ]}
+  links={[
+    { from: "hi", to: "pgb" },
+    { from: "lo", to: "pgb" },
+    { from: "pgb", to: "pri" },
+    { from: "pgb", to: "r1" },
+    { from: "pgb", to: "r2" },
+    { from: "pgb", to: "r3" },
+    { from: "pri", to: "r1", label: "WAL", dashed: true },
+    { from: "pri", to: "r2", dashed: true },
+    { from: "pri", to: "r3", dashed: true },
+  ]}
+  steps={[
+    { path: ["lo", "pgb", "pri"], packet: "INSERT", title: "쓰기는 프라이머리 하나로", detail: "모든 쓰기는 프라이머리 하나가 받는다. 그래서 쓰기를 줄이는 일이 이 구조의 첫 과제다." },
+    { path: ["pri", "r2"], packet: "WAL", highlight: ["r1", "r3"], title: "복제본은 WAL을 받아 따라온다", detail: "쓰기가 많을수록 보낼 WAL이 늘고, 복제본이 많을수록 프라이머리의 네트워크 대역폭을 더 쓴다." },
+    { path: ["hi", "pgb", "r1"], packet: "SELECT", title: "높은 우선순위 읽기는 전용 복제본으로", detail: "낮은 우선순위 요청이 몰려도 높은 우선순위 요청이 영향을 받지 않게 복제본을 따로 둔다." },
+    { path: ["lo", "pgb", "r3"], packet: "SELECT", blocked: true, title: "복제본 하나가 죽으면", detail: "슬라이드는 읽기 복제본이 실패하면 PgBouncer가 트래픽을 다른 복제본으로 자동으로 돌린다고 쓴다." },
+    { path: ["lo", "pgb", "r2"], packet: "SELECT", title: "다른 복제본이 받는다", detail: "읽기는 남은 복제본에서 계속된다." },
+    { path: ["hi", "pgb", "pri"], packet: "UPDATE", blocked: true, title: "프라이머리가 죽으면", detail: "쓰기는 모두 멈춘다. 하지만 가장 중요한 요청 대부분이 읽기 전용이라 복제본으로 계속 돌 수 있어, 슬라이드는 이 경우를 SEV2로 본다." },
+  ]}
+/>
+
+이 구조에서 볼 것은 "가장 중요한 요청을 읽기 전용으로 만들어 둔다"는 설계다. 프라이머리 장애를 막을 수 없다면, 프라이머리가 없어도 핵심 기능이 도는 범위를 넓혀 장애의 등급을 낮춘다. 페일오버 자체를 어떻게 하는지는 슬라이드에 없다. 프라이머리를 바꾸는 일반적인 절차는 [페일오버](/posts/failover)에 있다.
+
+## 연결 5,000개 한도와 PgBouncer
+
+연결은 PgBouncer가 맡는다. 슬라이드에 따르면 PgBouncer는 연결을 재사용하게 해 주는 풀로, 연결 지연을 크게 줄인다(약 5ms 대 50ms). 그리고 연결 수를 줄인다. 슬라이드는 이게 프라이머리의 연결 한도가 5,000개라서 중요하다고 쓴다. 읽기 복제본이 실패하면 트래픽을 다른 복제본으로 자동으로 돌리는 것도 PgBouncer 층의 일이다.
+
+연결 한도 5,000개는 앱 서버 수와 곱해 보면 금방 닿는 숫자다. 앱 프로세스가 각자 풀을 열면 "프로세스 수 × 프로세스당 연결"이 곧 DB 연결 수다. 그 계산과 PgBouncer의 transaction 모드가 깨뜨리는 것(세션 변수, prepared statement 등)은 [커넥션 풀](/posts/connection-pool)의 "max_connections 계산서"와 "transaction 모드가 깨뜨리는 것"에 있다. 슬라이드는 PgBouncer를 어떤 모드로 쓰는지는 밝히지 않는다.
+
+연결 자체에도 속도 제한을 건다. 다음 절에서 다룬다.
+
+## 비싼 쿼리 하나가 인스턴스를 내린다
+
+슬라이드의 속도 제한 장은 사건 하나로 시작한다. 프라이머리에서 12개 테이블 조인 같은 비싼 쿼리가 돌고 있었는데, 평소엔 양이 적었다. 그 쿼리 하나가 갑자기 급증하자 인스턴스 전체가 내려갔다. 그래서 속도 제한을 세 층에 건다.
+
+```text
+· 애플리케이션 함수 단위로 속도를 제한해 피크 때 부하를 줄인다
+· 새 연결 생성 속도를 제한해 연결 풀이 바닥나지 않게 한다
+· 지정한 쿼리 다이제스트(쿼리 모양)마다 속도를 제한해 비싼 쿼리의 영향을 묶는다
+```
+
+마지막 줄이 흥미롭다. 사용자나 API 키가 아니라 쿼리의 모양별로 제한한다. 같은 모양의 쿼리를 값만 바꿔 묶은 것이 다이제스트이고, PostgreSQL의 `pg_stat_statements`가 쿼리를 이렇게 묶어 통계를 낸다. 비싼 다이제스트 하나에만 상한을 걸면, 그 쿼리가 몰려도 나머지 쿼리는 그대로 돈다. 아래에서 초 단위 고정 창으로 다이제스트별 상한을 거는 함수를 짜 보자. 슬라이드는 제한 알고리즘을 밝히지 않으니, 이건 생각을 보이기 위한 가장 단순한 형태다. 더 나은 알고리즘(토큰 버킷, 슬라이딩 창)은 [속도 제한 알고리즘](/posts/rate-limiting-algorithms)에 있다.
+
+<CodePlayground
+  caption="쿼리 다이제스트마다 초당 상한 걸기 (고정 창, 개념 예시)"
+  functionName="throttle"
+  initialCode={`function throttle(requests, limits) {
+  // requests: [[timeMs, digest], ...] 시각 순서
+  // limits: { digest: 초당 최대 개수 }  목록에 없는 다이제스트는 제한 없음
+  // 같은 다이제스트를 같은 1초 창(Math.floor(timeMs / 1000)) 안에서 센다
+  // 결과: 요청마다 통과하면 true, 막히면 false
+  return [];
+}`}
+  solution={`function throttle(requests, limits) {
+  const count = new Map();
+  return requests.map(([t, digest]) => {
+    const limit = limits[digest];
+    if (limit === undefined) return true;           // 제한 없는 쿼리
+    const key = digest + "@" + Math.floor(t / 1000); // 다이제스트 + 초 창
+    const n = (count.get(key) || 0) + 1;
+    count.set(key, n);
+    return n <= limit;
+  });
+}`}
+  tests={[
+    { label: "비싼 조인만 초당 2개", args: [[[0, "q_12way_join"], [100, "q_12way_join"], [200, "q_12way_join"], [300, "q_pk_lookup"], [1000, "q_12way_join"]], { q_12way_join: 2 }], expected: [true, true, false, true, true] },
+    { label: "제한 목록이 비면 모두 통과", args: [[[0, "a"], [1, "a"], [2, "a"]], {}], expected: [true, true, true] },
+    { label: "창 경계: 999ms와 1000ms", args: [[[0, "x"], [999, "x"], [1000, "x"], [1999, "x"], [2000, "x"]], { x: 1 }], expected: [true, false, true, false, true] },
+    { label: "상한 0은 차단", args: [[[0, "x"], [10, "y"], [20, "x"], [30, "y"]], { x: 1, y: 0 }], expected: [true, false, false, false] },
+    { label: "요청이 없으면", args: [[], { x: 1 }], expected: [] },
+  ]}
+/>
+
+세 번째 테스트가 고정 창의 약점이다. 999ms와 1000ms는 1ms 차이인데 다른 창에 들어가, 경계 근처에서는 짧은 시간에 상한의 두 배까지 통과할 수 있다. 네 번째 테스트처럼 상한을 0으로 두면 그 쿼리를 막는 스위치가 된다. 슬라이드의 장애 사례에 나오는 "특정 쿼리를 막거나 제한할 수 있게 한다"가 이 스위치다.
+
+## 장애 사례 셋
+
+슬라이드 후반은 실제로 겪은 장애를 원인과 결과, 대응으로 나눠 보여 준다. 그림 형태의 슬라이드라 화살표 순서를 내가 읽어 옮겼다.
+
+### Redis가 빗나가자 생긴 악순환
+
+첫 사례는 캐시에서 시작한다. 다음을 누르며 따라가 보자.
+
+<SequenceDiagram
+  caption="캐시 빗나감이 PostgreSQL 장애로 커지는 악순환 (PGConf.dev 2025 슬라이드의 사례)"
+  actors={[
+    { id: "app", label: "애플리케이션" },
+    { id: "redis", label: "Redis" },
+    { id: "pg", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "app", to: "redis", label: "GET", title: "Redis에 문제가 생긴다", detail: "Redis 쪽 이상으로 캐시 빗나감이 갑자기 는다." },
+    { from: "app", to: "pg", label: "빗나간 만큼 SELECT", title: "빗나간 읽기가 DB로 간다", detail: "캐시가 받던 읽기가 PostgreSQL로 넘어와 DB 부하가 커진다." },
+    { from: "pg", to: "app", label: "느림·타임아웃", title: "DB가 느려진다", detail: "앱의 요청이 느려지거나 타임아웃으로 끝난다." },
+    { from: "app", to: "pg", label: "재시도", title: "재시도가 부하를 더 얹는다", detail: "실패한 요청을 다시 보내면서 요청이 더 늘어난다. 느려짐이 재시도를 부르고 재시도가 느려짐을 키우는 악순환이다." },
+    { from: "app", to: "app", label: "앱 속도 제한", title: "끊는 법 ①: 앱에서 덜 보낸다", detail: "애플리케이션에 속도 제한을 걸고, 과부하일 때는 요청을 버린다." },
+    { from: "app", to: "pg", label: "DB·프록시 속도 제한", title: "끊는 법 ②: DB 앞에서 막는다", detail: "PostgreSQL과 프록시 쪽에도 속도 제한을 둬서, 앞단이 제어를 잃어도 DB가 받는 양에 상한이 있게 한다." },
+  ]}
+/>
+
+이 사례는 PostgreSQL 이야기이면서 캐시 이야기다. 캐시가 읽기의 대부분을 받으면 DB는 그 나머지만 견디게 설계되는데, 캐시가 빠지면 그 차이가 한꺼번에 DB로 온다. 재시도에 지수 백오프와 지터를 넣고 상한을 두는 일반적인 방법은 [지수 백오프와 지터](/posts/exponential-backoff-jitter), 실패가 이어질 때 아예 호출을 끊는 방법은 [서킷 브레이커](/posts/circuit-breaker)에 있다. 슬라이드의 대응은 그중 "속도 제한과 과부하 시 버리기"다.
+
+### 새 기능과 재시도가 밀어 올린 비싼 쿼리
+
+둘째 사례는 앞의 속도 제한 장과 같은 쿼리다. 프라이머리에 비싼 다중 조인 쿼리가 있었고, 새 기능 배포와 재시도로 그 쿼리의 양이 갑자기 늘었다. 프라이머리 CPU가 95%를 넘었고, 프라이머리의 쿼리가 아주 느려져 중요한 서비스에 영향을 줬다. 슬라이드가 적은 대응은 셋이다. 비싼 쿼리를 최적화한다. 특정 쿼리를 막거나 속도를 제한할 수 있게 한다. 읽기 전용 요청에 프라이머리를 쓰지 않아 단일 장애점에 기대지 않게 한다.
+
+### 쓰기 급증 뒤에 남은 복제 지연
+
+셋째 사례가 가장 길다. 쓰기가 크게 급증하자 프라이머리 CPU가 90%를 넘었고, 읽기 복제본의 지연이 10분을 넘었다. 쿼리가 아주 느려지고, 복제본의 읽기는 낡은 데이터를 돌려주고, 새 쓰기를 받지 못해 ChatGPT 서비스에 영향을 줬다. 대응은 애플리케이션을 고쳐 쓰기를 줄이고, 가능한 읽기를 프라이머리 밖으로 옮기고, 쓰지 않는 인덱스를 지워 쓰기 증폭을 줄이는 것이었다.
+
+그런데 이야기가 거기서 끝나지 않는다. 쓰기 쿼리에 속도 제한을 걸자 프라이머리 CPU는 정상으로 돌아왔는데, 복제 지연은 계속 늘었다. 슬라이드가 찾은 원인은 셋이다. 프라이머리의 네트워크 대역폭 포화, 일부 복제본의 디스크 IOPS 포화, WAL sender의 높은 CPU다. 인스턴스 크기와 네트워크 한도를 올리고 네트워크 설정을 조정했다. 그리고 WAL sender의 버그를 고쳤다. 슬라이드는 `async_standbys_wait_for_sync_replication`이 켜져 있을 때의 버그로 WAL sender가 복제본에 WAL을 보내지 않고 과하게 헛돌았다고 쓴다. 이 설정 이름은 슬라이드에 적힌 그대로이고, 이 글은 그 설정이 어디에 있는지(커뮤니티 PostgreSQL인지 관리형 서비스의 것인지)를 확인하지 못했다.
+
+이 사례에서 배울 것은 지표의 순서다. 프라이머리 CPU가 정상이 됐다고 복제가 정상인 건 아니다. 복제 지연은 프라이머리의 CPU, 네트워크, 복제본의 디스크, WAL을 보내는 프로세스 어디서든 생길 수 있고, 하나를 고치면 다음 병목이 드러난다. 복제 지연을 재는 쿼리와 지연이 길어질 때 복제본에서 긴 쿼리가 끊기는 이유는 [복제와 샤딩](/posts/db-replication-sharding)의 "복제본에서 긴 쿼리가 끊긴다"에 있다.
+
+## 스키마 변경은 가벼운 것만, 5초 안에
+
+스키마 변경 규칙도 엄격하다. 슬라이드에 따르면 가벼운 스키마 변경만 허용한다. 새 테이블이나 새 작업은 안 된다. 테이블에 칸을 더하거나 빼는 건 5초 타임아웃을 걸고 허용한다. 테이블을 다시 써야 하는 변경은 허용하지 않는다. 인덱스는 동시(concurrently) 방식으로 만들거나 지운다.
+
+그리고 함정 하나를 짚는다. 대상 테이블에 오래 도는 쿼리(예: 1초 넘게)가 계속 있으면 마이그레이션이 막혀 실패할 수 있다. 그런 쿼리는 애플리케이션에서 고치거나 복제본으로 옮긴다. 슬라이드에는 그런 쿼리를 찾는 SQL이 그대로 있다.
+
+```sql
+SELECT * FROM pg_stat_activity WHERE query like '%table_name%' and
+now() - query_start > interval '1 seconds'
+```
+
+칸 하나 더하는 일이 왜 오래 도는 쿼리에 막히는지, 그리고 왜 타임아웃이 꼭 필요한지는 직접 해 보면 바로 보인다. 다음 절에서 돌려 본다.
+
+## 5초 타임아웃이 막아 주는 것
+
+아래는 이 글을 쓰며 Ubuntu 24.04의 PostgreSQL 16.15에서 실제로 돌린 것이다. 테이블은 내가 만든 예이고 OpenAI의 스키마가 아니다.
+
+```sql
+-- 예제 테이블: 대화 10만 건
+CREATE TABLE conversations (id bigint PRIMARY KEY, user_id bigint NOT NULL, title text);
+INSERT INTO conversations SELECT g, g % 1000, 'chat ' || g FROM generate_series(1, 100000) g;
+ANALYZE conversations;
+```
+
+세션 셋을 연다. 첫째 세션은 트랜잭션 안에서 이 테이블을 읽은 뒤 10초 동안 끝내지 않는다. 오래 도는 리포트 쿼리나, 트랜잭션을 열어 둔 채 다른 일을 하는 코드를 흉내 낸 것이다. 둘째 세션은 타임아웃 없이 칸을 하나 더한다. 셋째 세션은 기본 키로 한 줄을 읽는 아주 가벼운 쿼리다.
+
+```sql
+-- 세션 1: 읽고 나서 트랜잭션을 10초 붙잡는다
+BEGIN; SELECT count(*) FROM conversations; SELECT pg_sleep(10); COMMIT;
+
+-- 세션 2 (1초 뒤): 타임아웃 없이 칸 추가
+ALTER TABLE conversations ADD COLUMN archived boolean;
+
+-- 세션 3 (다시 1초 뒤): 기본 키로 한 줄 읽기
+SELECT title FROM conversations WHERE id = 42;
+
+-- 세션 4: 지금 누가 무엇을 기다리는지 본다
+SELECT pid, state, wait_event_type, wait_event, left(query, 40) AS query
+FROM pg_stat_activity
+WHERE query LIKE '%conversations%' AND pid <> pg_backend_pid()
+ORDER BY query_start;
+```
+
+```text
+ pid  | state  | wait_event_type | wait_event |                  query                   
+------+--------+-----------------+------------+------------------------------------------
+ 9469 | active | Timeout         | PgSleep    | BEGIN; SELECT count(*) FROM conversation
+ 9475 | active | Lock            | relation   | ALTER TABLE conversations ADD COLUMN arc
+ 9481 | active | Lock            | relation   | SELECT title FROM conversations WHERE id
+(3 rows)
+```
+
+볼 줄은 둘째와 셋째다. `ALTER TABLE`은 테이블에 가장 강한 잠금(ACCESS EXCLUSIVE)이 필요해서, 세션 1이 읽으며 잡은 잠금이 풀리기를 기다린다(`wait_event_type = Lock`). 문제는 셋째 줄이다. 기본 키로 한 줄 읽는 쿼리도 `Lock`으로 기다린다. 잠금 대기열에서 먼저 기다리는 `ALTER TABLE` 뒤에 줄을 섰기 때문이다. 칸 하나 더하려던 마이그레이션이, 오래 열린 트랜잭션 하나 때문에 그 테이블의 모든 읽기를 세운다. 트래픽이 많은 테이블이라면 이 몇 초 동안 연결 풀이 바닥난다.
+
+같은 상황에서 `lock_timeout`을 걸면 이렇게 된다.
+
+```sql
+-- 세션 2를 5초 잠금 타임아웃과 함께 다시
+SET lock_timeout = '5s';
+ALTER TABLE conversations ADD COLUMN archived boolean;
+```
+
+```text
+SET
+ERROR:  canceling statement due to lock timeout
+
+real	0m5.059s
+```
+
+마이그레이션은 5초 뒤 실패하고, 뒤에 줄 서 있던 읽기들이 풀려난다. 실패한 마이그레이션은 나중에 다시 하면 된다. 슬라이드의 "5초 타임아웃"이 정확히 어떤 설정인지는 적혀 있지 않지만, 이 실험이 보여 주는 위험을 막는 장치로 읽힌다. 마이그레이션을 막은 원인을 찾을 때 쓰는 쿼리가 슬라이드의 `pg_stat_activity` 쿼리다.
+
+트랜잭션을 열어 둔 채 쉬는 세션은 `idle_in_transaction_session_timeout`이 끊는다.
+
+```sql
+SET idle_in_transaction_session_timeout = '2s';
+BEGIN;
+SELECT count(*) FROM conversations WHERE user_id = 7;
+\! sleep 3
+SELECT 1;
+```
+
+```text
+SET
+BEGIN
+ count 
+-------
+   100
+(1 row)
+
+psql:/tmp/pgnotion7/idle.sql:5: FATAL:  terminating connection due to idle-in-transaction timeout
+psql:/tmp/pgnotion7/idle.sql:5: server closed the connection unexpectedly
+```
+
+트랜잭션 안에서 2초 넘게 아무것도 하지 않자 서버가 연결을 끊었다. 이 실험의 기본값은 셋 다 0, 즉 꺼져 있었다(`SHOW statement_timeout;` 등으로 확인). 설치 기본값 그대로 운영하면 이 보호가 없다.
+
+슬라이드의 "PostgreSQL이 더 잘했으면 하는 것" 장에는 이 타임아웃이 못 잡는 경우도 나온다. 2시간 넘게 `active` 상태인데 대기 이벤트가 `ClientRead`인 쿼리, 즉 클라이언트의 다음 요청을 기다리는 쿼리가 있었다. 상태가 `idle in transaction`이 아니라 `active`라서 `idle_in_transaction_session_timeout`으로 끊기지 않는다. 슬라이드는 이게 버그인지, 아니면 어떻게 자동으로 끊어야 하는지를 커뮤니티에 묻는다.
+
+## PostgreSQL에 바란 것들
+
+같은 장의 나머지 요청도 운영에서 무엇이 아쉬웠는지를 보여 준다. `pg_stat_statements`는 쿼리 다이제스트마다 평균 지연만 주고 p95, p99 같은 백분위를 바로 주지 않는다. 히스토그램과 백분위를 원한다. 칸이나 인덱스 추가·삭제 같은 DDL 이벤트를 PostgreSQL이 기록해 주면 좋겠다. 쓰지 않는 인덱스는 유지 비용과 쓰기 증폭을 늘리니 지우고 싶지만, 위험을 줄이려면 잠시 꺼 두고 성능을 본 뒤 지우고 싶다. PostgreSQL은 인덱스를 끄는 기능이 없어서 지웠다가 필요하면 다시 만들어야 하고, 큰 인덱스는 다시 만드는 데 오래 걸린다. 그리고 기본 설정값이 악명 높게 나쁘니, 휴리스틱 기반의 더 나은 기본값과 작업량에 맞춘 자동 조정을 원한다. 예로 관리형 서비스(AWS RDS, Azure Database for PostgreSQL)의 기본값이 훨씬 낫다는 것과 Google AlloyDB의 적응형 autovacuum 튜닝을 든다.
+
+## 결과로 밝힌 것
+
+슬라이드의 결과 장은 이렇다. Azure PostgreSQL을 초당 수백만 쿼리로 확장해 OpenAI의 중요한 서비스를 받쳤다. 읽기 복제본을 수십 개 더했는데 복제 지연은 늘지 않았다. 지리적으로 흩어진 읽기 복제본에서 낮은 지연을 유지했다. 발표자가 OpenAI에 합류한 뒤 9개월 동안 PostgreSQL이 관련된 SEV-0 장애는 한 번뿐이었다. 앞으로의 성장을 감당할 여유 용량이 있다. 마지막 장의 문장은 "개발자이거나 스타트업을 만든다면 PostgreSQL로 시작하라(읽기 많은 작업이라면)"이다.
+
+## 슬라이드 한 벌이 말하지 않는 것
+
+이 글의 근거는 발표 슬라이드 한 벌이다. 발표자는 자기 팀의 일을 소개하는 사람이고, 슬라이드는 말로 한 설명을 뺀 요점이다. 그래서 빠진 것이 많다. 복제본이 몇 개인지, 인스턴스 크기가 얼마인지, "초당 수백만 쿼리"가 정확히 얼마인지 없다. 쓰기 많은 작업을 어느 시스템으로 옮겼는지, 그 이전에 얼마나 걸렸는지도 없다. 장애 사례는 언제 일어났고 얼마나 오래 갔는지 없이 원인과 대응만 그림으로 있다. "9개월 동안 SEV-0 한 번"은 발표자가 합류한 뒤라는 기간 한정이 붙어 있다. "새 테이블 금지" 규칙이 다른 팀에 어떤 비용을 지웠는지는 회사 안의 이야기라 알 수 없다. 2025년 5월 이후 이 구조가 바뀌었는지, 결국 샤딩을 했는지도 이 자료로는 알 수 없다. 슬라이드 스스로 샤딩을 "앞으로의 가능성"으로 남겨 두었다.
+
+## 우리 서비스의 프라이머리가 숨이 찰 때
+
+OpenAI의 선택이 맞았던 조건은 이렇다. 작업이 읽기 위주이고, 쓰기 많은 부분은 떼어 내 다른 시스템으로 보낼 수 있었고, 남은 데이터에 수백 개 엔드포인트가 기대고 있어 샤딩 비용이 컸다. 관리형 PostgreSQL을 쓰면서 그 서비스 팀의 도움을 받았다(슬라이드에 Azure PostgreSQL 팀에 대한 감사가 있다). 이 조건이면 프라이머리 하나를 지키는 비용이 샤딩보다 싸다.
+
+맞지 않는 조건도 슬라이드가 말한다. 쓰기가 많은 작업에는 PostgreSQL이 이상적이지 않다고 직접 쓴다. 쓰기가 계속 늘어 프라이머리 하나로는 안 되는 서비스, 데이터를 사용자나 팀처럼 깔끔한 키로 나눌 수 있는 서비스라면 [Notion](/posts/rw-notion-postgres-sharding)처럼 샤딩하는 편이 길게 보아 낫다. 처음부터 이 구조를 따라 할 때의 비용도 있다. "새 테이블 금지"는 프라이머리를 지키지만, 새 기능마다 다른 저장소를 골라야 하고 데이터가 여러 시스템에 흩어진다.
+
+작은 팀이 지금 가져올 수 있는 건 설정 몇 줄이다. `statement_timeout`, `idle_in_transaction_session_timeout`을 서비스에 맞게 켜고, 마이그레이션에는 `lock_timeout`을 붙인다. 위 실험처럼 기본값은 모두 꺼져 있다. 인덱스는 `CREATE INDEX CONCURRENTLY`로 만들고, 테이블을 다시 쓰는 변경은 따로 계획한다. 쿼리는 `pg_stat_statements`로 다이제스트별로 보고, 조인이 많은 쿼리와 ORM이 만든 쿼리부터 확인한다. 중요한 화면이 읽기만으로 돌 수 있는지 미리 점검해 두면, 프라이머리 장애 때 무엇이 살아남는지 안다.
+
+비슷한 신호가 보이면 이 순서로 본다. DB가 느려졌을 때 처음 몇 분에 무엇을 볼지는 [DB가 느리다는 연락을 받았을 때](/posts/postgres-slow-db-triage)에 정리해 두었다. 이 사례에 맞춰 덧붙이면 이렇다. 프라이머리 CPU가 갑자기 치솟으면 `pg_stat_statements`에서 호출 수가 급증한 다이제스트를 찾는다. 새 배포나 재시도 폭주가 흔한 원인이다. 복제 지연이 늘면 프라이머리 CPU만 보지 말고 프라이머리의 네트워크 송신량, 복제본의 디스크, WAL을 보내는 프로세스를 차례로 본다. 마이그레이션이 걸리고 갑자기 그 테이블의 쿼리가 다 느려지면, `pg_stat_activity`에서 `wait_event_type = Lock`인 세션과 그 앞에서 오래 열린 트랜잭션을 찾는다. 캐시가 흔들린 직후 DB가 느려지면 재시도가 부하를 키우고 있는지부터 본다.
+
+## 이 글이 기댄 자료
+
+- [Scaling Postgres to the next level at OpenAI (세션 소개)](https://www.pgevents.ca/events/pgconfdev2025/schedule/session/433-scaling-postgres-to-the-next-level-at-openai/) — OpenAI(Bohan Zhang), 컨퍼런스 발표(PGConf.dev 2025), 2025년 5월
+- [Scaling Postgres to the next level at OpenAI (발표 슬라이드 PDF)](https://www.pgevents.ca/events/pgconfdev2025/sessions/session/433/slides/97/Postgres%20Conf%202025%20%28Bohan%29.pdf) — OpenAI(Bohan Zhang), 발표 슬라이드, 2025년 5월
+
+## 면접에서 나올 만한 질문
+
+### OpenAI는 왜 PostgreSQL을 샤딩하지 않았나요?
+
+2025년 발표 기준으로 남은 작업이 읽기 위주이고 샤딩 비용이 컸기 때문이다. 샤딩할 수 있는 쓰기 많은 작업은 이미 다른 시스템으로 옮겼고, 남은 데이터를 샤딩하려면 수백 개 애플리케이션 엔드포인트를 옮겨야 했다. 읽기는 복제본으로 늘릴 수 있으니, 쓰기를 줄이는 최적화로 충분한 여유가 있다고 봤다. 샤딩은 가까운 우선순위가 아닐 뿐 가능성으로 남겨 두었다.
+
+### 프라이머리 하나 구조에서 쓰기 확장의 한계는 어떻게 다뤘나요?
+
+쓰기를 덜어 내는 쪽으로 다뤘다. 쓰기 많은 작업을 다른 시스템으로 옮기고, PostgreSQL에 새 테이블을 금지하고, 애플리케이션의 불필요한 쓰기(버그 포함)를 없애고, 지연 쓰기로 급증을 펴고, 백필에 속도 제한을 걸었다. 쓰지 않는 인덱스를 지워 쓰기 증폭도 줄였다. 쓰기가 많으면 MVCC의 부풀림과 WAL 증가로 복제 지연까지 나빠지기 때문이다.
+
+### 프라이머리가 단일 장애점인데 어떻게 위험을 줄였나요?
+
+프라이머리가 없어도 핵심 기능이 돌게 만들었다. 가장 중요한 요청 대부분을 읽기 전용으로 두어 복제본에서 계속 돌 수 있게 했고, 그래서 프라이머리 장애를 SEV2로 낮췄다. 요청을 우선순위로 나눠 높은 우선순위 요청에는 전용 복제본을 붙였다. 복제본 하나가 죽으면 PgBouncer가 다른 복제본으로 돌린다.
+
+### PgBouncer는 이 구조에서 무엇을 해 주나요?
+
+연결 재사용, 연결 수 절감, 복제본 장애 시 재라우팅이다. 슬라이드에 따르면 연결 지연이 약 50ms에서 5ms로 줄고, 프라이머리의 연결 한도가 5,000개라 연결 수를 줄이는 게 중요했다. 연결 생성 자체에도 속도 제한을 걸어 풀이 바닥나지 않게 했다.
+
+### 비싼 쿼리 하나가 인스턴스를 내리는 걸 어떻게 막나요?
+
+쿼리 다이제스트별 속도 제한과 차단 스위치로 막는다. 12개 테이블 조인처럼 평소 양은 적은 비싼 쿼리가 새 기능과 재시도로 급증하자 프라이머리 CPU가 95%를 넘었다. 그래서 그 쿼리를 최적화하고, 다중 조인은 애플리케이션으로 옮기고, 특정 다이제스트를 제한하거나 막을 수 있게 했다. 읽기 전용 요청은 프라이머리로 보내지 않는다.
+
+### 쓰기 급증을 막았는데도 복제 지연이 계속 늘었다면 무엇을 보나요?
+
+프라이머리 CPU 말고 WAL이 지나는 길 전체를 본다. OpenAI의 사례에서 원인은 프라이머리 네트워크 대역폭 포화, 일부 복제본의 디스크 IOPS 포화, WAL sender의 높은 CPU였다. 인스턴스와 네트워크 한도를 키우고 네트워크를 조정했으며, 특정 설정이 켜졌을 때 WAL sender가 헛도는 버그를 고쳤다. 한 병목을 풀면 다음 병목이 드러난다.
+
+### 칸 하나 추가하는 마이그레이션이 왜 장애가 될 수 있나요?
+
+강한 잠금을 기다리는 동안 그 테이블의 다른 쿼리가 모두 뒤에 줄을 서기 때문이다. 오래 열린 트랜잭션이 테이블을 잡고 있으면 ALTER TABLE이 기다리고, 그 뒤의 기본 키 조회까지 Lock 대기에 걸린다. 그래서 OpenAI는 칸 추가·삭제에 5초 타임아웃을 걸고, 테이블을 다시 쓰는 변경은 허용하지 않고, 마이그레이션을 막는 1초 넘는 쿼리를 pg_stat_activity로 찾아 고친다.
+
+### 우리 서비스가 10분의 1 규모라면 같은 구조를 따라 하나요?
+
+구조보다 습관을 가져온다. 읽기 위주라면 프라이머리 하나와 복제본 몇 개로 오래 갈 수 있다는 건 같은 결론이지만, 새 테이블 금지 같은 정책은 쓰기 한계에 가까워졌을 때의 처방이다. 지금 가져올 것은 statement_timeout, idle_in_transaction_session_timeout, 마이그레이션의 lock_timeout을 켜는 것, 다이제스트별 쿼리 통계를 보는 것, 핵심 화면이 읽기만으로 도는지 점검하는 것이다. 쓰기가 계속 늘고 데이터를 깔끔한 키로 나눌 수 있다면 그때 샤딩을 검토한다.

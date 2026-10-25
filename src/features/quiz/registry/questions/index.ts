@@ -1,3 +1,15 @@
+import { RW_UBER_DOMA } from "./rw-uber-doma";
+import { RW_STACK_OVERFLOW_FEW_SERVERS } from "./rw-stack-overflow-few-servers";
+import { RW_SEGMENT_GOODBYE_MICROSERVICES } from "./rw-segment-goodbye-microservices";
+import { RW_PINTEREST_MYSQL_SHARDING } from "./rw-pinterest-mysql-sharding";
+import { RW_OPENAI_POSTGRES_SCALING } from "./rw-openai-postgres-scaling";
+import { RW_NOTION_POSTGRES_SHARDING } from "./rw-notion-postgres-sharding";
+import { RW_LINKEDIN_KAFKA } from "./rw-linkedin-kafka";
+import { RW_FACEBOOK_HAYSTACK } from "./rw-facebook-haystack";
+import { RW_DROPBOX_MAGIC_POCKET } from "./rw-dropbox-magic-pocket";
+import { RW_AMAZON_DISTRIBUTED_COMPUTING_MANIFESTO } from "./rw-amazon-distributed-computing-manifesto";
+import { RW_AIRBNB_SOA_MIGRATION } from "./rw-airbnb-soa-migration";
+import { RW_37SIGNALS_CLOUD_EXIT } from "./rw-37signals-cloud-exit";
 import { RW_UBER_SCHEMALESS_DOCSTORE } from "./rw-uber-schemaless-docstore";
 import { RW_UBER_H3_GEOSPATIAL } from "./rw-uber-h3-geospatial";
 import { RW_TWITTER_SNOWFLAKE_TIMELINE } from "./rw-twitter-snowflake-timeline";
@@ -1157,6 +1169,18 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  RW_UBER_DOMA,
+  RW_STACK_OVERFLOW_FEW_SERVERS,
+  RW_SEGMENT_GOODBYE_MICROSERVICES,
+  RW_PINTEREST_MYSQL_SHARDING,
+  RW_OPENAI_POSTGRES_SCALING,
+  RW_NOTION_POSTGRES_SHARDING,
+  RW_LINKEDIN_KAFKA,
+  RW_FACEBOOK_HAYSTACK,
+  RW_DROPBOX_MAGIC_POCKET,
+  RW_AMAZON_DISTRIBUTED_COMPUTING_MANIFESTO,
+  RW_AIRBNB_SOA_MIGRATION,
+  RW_37SIGNALS_CLOUD_EXIT,
   RW_UBER_SCHEMALESS_DOCSTORE,
   RW_UBER_H3_GEOSPATIAL,
   RW_TWITTER_SNOWFLAKE_TIMELINE,

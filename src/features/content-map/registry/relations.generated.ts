@@ -2,6 +2,333 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-37signals-cloud-exit": {
+    "links": [
+      "cloud-cost-optimization",
+      "cloud-service-models-shared-responsibility",
+      "rw-stack-overflow-few-servers",
+      "disaster-recovery",
+      "docker-container-basics",
+      "health-checks",
+      "k8s-controllers-reconcile",
+      "rolling-deployment",
+      "zero-downtime-migrations"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "container-orchestration-choices",
+      "opensearch-cluster-operations",
+      "k8s-deploy-pipeline-eks",
+      "rds-aurora-managed-db",
+      "sd-object-storage-architecture",
+      "transactional-outbox",
+      "osi-in-practice",
+      "redis-basics",
+      "config-management-tools",
+      "eks-cluster-basics",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "rw-airbnb-soa-migration": {
+    "links": [
+      "microservices",
+      "api-gateway-use-cases",
+      "rw-uber-doma",
+      "rw-segment-goodbye-microservices",
+      "monolith-architecture",
+      "rw-amazon-distributed-computing-manifesto",
+      "cdc-change-data-capture",
+      "canary-release",
+      "feature-flags",
+      "grpc",
+      "graphql-basics",
+      "n-plus-one-queries",
+      "graphql-authorization"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "graphql-schema-type-system",
+      "rw-reading-engineering-blogs",
+      "db-type-columnar-olap",
+      "gateway",
+      "mysql-replication-online-ddl",
+      "distributed-tracing",
+      "kafka-basics",
+      "git-merge-conflict",
+      "osi-in-practice",
+      "data-privacy-compliance"
+    ]
+  },
+  "rw-amazon-distributed-computing-manifesto": {
+    "links": [
+      "microservices",
+      "ddd-bounded-context",
+      "soap-and-soa",
+      "long-polling",
+      "webhooks",
+      "event-driven-architecture",
+      "saga-pattern",
+      "db-replication-sharding",
+      "pub-sub",
+      "event-sourcing",
+      "eventual-consistency",
+      "transactional-outbox",
+      "rw-segment-goodbye-microservices"
+    ],
+    "mentions": [
+      "data-warehouse-architecture",
+      "s3-storage-classes-lifecycle",
+      "claude-code-plugins-and-channels"
+    ]
+  },
+  "rw-dropbox-magic-pocket": {
+    "links": [
+      "sd-object-storage-durability",
+      "block-file-object-storage",
+      "rw-facebook-haystack",
+      "rw-notion-postgres-sharding",
+      "sd-object-storage-architecture",
+      "sd-file-sync-block-upload",
+      "rw-pinterest-mysql-sharding",
+      "distributed-lock",
+      "rw-37signals-cloud-exit",
+      "s3-storage-classes-lifecycle"
+    ],
+    "mentions": [
+      "service-discovery",
+      "db-type-key-value",
+      "js-memory-leak",
+      "dynamic-programming",
+      "ds-hash-map",
+      "sd-split-web-and-db",
+      "page-cache-disk-io",
+      "tail-latency",
+      "db-index-pitfalls"
+    ]
+  },
+  "rw-facebook-haystack": {
+    "links": [
+      "sd-object-storage-architecture",
+      "page-cache-disk-io",
+      "rw-dropbox-magic-pocket",
+      "sd-cache-and-cdn-tier",
+      "sd-mq-storage-partitions",
+      "s3-storage-classes-lifecycle"
+    ],
+    "mentions": [
+      "rw-reading-engineering-blogs",
+      "data-warehouse-architecture",
+      "os-kernel-system-calls",
+      "ds-hash-map",
+      "linux-disks-filesystems",
+      "postgres-architecture",
+      "data-lake-hdfs"
+    ]
+  },
+  "rw-linkedin-kafka": {
+    "links": [
+      "sd-mq-storage-partitions",
+      "kafka-vs-rabbitmq-replay",
+      "backpressure",
+      "page-cache-disk-io",
+      "sd-mq-consumer-groups",
+      "message-delivery-semantics",
+      "idempotency-key",
+      "sd-mq-replication"
+    ],
+    "mentions": [
+      "caching-strategies",
+      "git-tips-advanced",
+      "rw-reading-engineering-blogs",
+      "data-warehouse-architecture",
+      "schema-versioning",
+      "rabbitmq-basics",
+      "db-type-key-value",
+      "js-memory-leak",
+      "stream-processing",
+      "centralized-logging-pipeline",
+      "distributed-transactions-2pc",
+      "os-kernel-system-calls",
+      "js-pure-functions",
+      "kafka-basics",
+      "postgres-architecture",
+      "resilience-patterns",
+      "data-lake-hdfs",
+      "db-partitioning"
+    ]
+  },
+  "rw-notion-postgres-sharding": {
+    "links": [
+      "db-sharding",
+      "postgres-operations",
+      "rw-pinterest-mysql-sharding",
+      "rw-instagram-sharding-ids",
+      "rw-slack-vitess",
+      "postgres-mvcc-vacuum",
+      "zero-downtime-migrations",
+      "connection-pool",
+      "cdc-change-data-capture"
+    ],
+    "mentions": [
+      "data-warehouse-architecture",
+      "virtualization-hypervisors",
+      "db-migration-tools",
+      "terraform-basics",
+      "db-architecture-by-scale",
+      "db-type-key-value",
+      "sd-latency-numbers",
+      "rw-airbnb-soa-migration",
+      "sd-mq-storage-partitions",
+      "sd-sharding-intro",
+      "transactional-outbox",
+      "scaling-horizontal-vertical",
+      "kafka-basics",
+      "db-replication-sharding",
+      "db-partitioning",
+      "mongodb-document-model",
+      "microservices",
+      "etl-vs-elt"
+    ]
+  },
+  "rw-openai-postgres-scaling": {
+    "links": [
+      "db-replication-sharding",
+      "connection-pool",
+      "rw-notion-postgres-sharding",
+      "rw-instagram-sharding-ids",
+      "postgres-mvcc-vacuum",
+      "db-sharding",
+      "zero-downtime-migrations",
+      "nodejs-orm-query-builder",
+      "n-plus-one-queries",
+      "failover",
+      "rate-limiting-algorithms",
+      "exponential-backoff-jitter",
+      "circuit-breaker",
+      "postgres-slow-db-triage"
+    ],
+    "mentions": [
+      "sql-batch-timeout-pool",
+      "db-architecture-by-scale",
+      "resilience-patterns",
+      "db-index-pitfalls",
+      "redis-basics",
+      "db-transaction-isolation",
+      "mongodb-document-model",
+      "sql-basics"
+    ]
+  },
+  "rw-pinterest-mysql-sharding": {
+    "links": [
+      "db-sharding",
+      "sd-unique-id-generator",
+      "rw-instagram-sharding-ids",
+      "rw-slack-vitess",
+      "rw-discord-message-storage",
+      "db-replication-sharding",
+      "n-plus-one-queries",
+      "db-keys-denormalization",
+      "failover",
+      "service-discovery"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "rw-reading-engineering-blogs",
+      "db-type-wide-column",
+      "mongodb-document-model",
+      "sd-sharding-intro",
+      "redis-basics",
+      "high-availability",
+      "db-modeling-normalization"
+    ]
+  },
+  "rw-segment-goodbye-microservices": {
+    "links": [
+      "microservices",
+      "modular-monolith",
+      "rw-stack-overflow-few-servers",
+      "rw-amazon-distributed-computing-manifesto",
+      "message-queue-basics",
+      "dead-letter-queue",
+      "resilience-patterns",
+      "dependency-hell",
+      "sd-unique-id-generator",
+      "exponential-backoff-jitter",
+      "test-pyramid-unit-tests",
+      "rw-shopify-modular-monolith"
+    ],
+    "mentions": [
+      "rds-aurora-managed-db",
+      "k8s-deploy-pipeline-eks",
+      "rabbitmq-basics",
+      "api-test-automation",
+      "sd-split-web-and-db",
+      "js-memory-leak",
+      "kafka-basics",
+      "redis-basics"
+    ]
+  },
+  "rw-stack-overflow-few-servers": {
+    "links": [
+      "monolith-architecture",
+      "modular-monolith",
+      "caching-strategies",
+      "rw-reading-engineering-blogs",
+      "multi-tenancy-isolation",
+      "load-balancer-basics",
+      "scaling-horizontal-vertical",
+      "db-replication-sharding",
+      "pub-sub",
+      "cache-invalidation",
+      "elasticsearch-inverted-index",
+      "microservices",
+      "rw-shopify-modular-monolith",
+      "zero-downtime-migrations",
+      "rolling-deployment",
+      "redis-persistence-ha"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "terraform-basics",
+      "db-sharding",
+      "js-memory-leak",
+      "load-testing-k6",
+      "page-cache-disk-io",
+      "sd-start-single-server",
+      "db-type-relational",
+      "http-caching-cdn",
+      "disaster-recovery",
+      "redis-basics",
+      "sd-load-balancer-stateless",
+      "sql-query-rewrite",
+      "dns"
+    ]
+  },
+  "rw-uber-doma": {
+    "links": [
+      "microservices",
+      "ddd-bounded-context",
+      "rw-segment-goodbye-microservices",
+      "monolith-architecture",
+      "clean-architecture",
+      "layered-architecture",
+      "api-gateway-use-cases",
+      "plugin-microkernel-architecture",
+      "pattern-strategy",
+      "modular-monolith",
+      "distributed-tracing"
+    ],
+    "mentions": [
+      "rw-reading-engineering-blogs",
+      "owasp-top-10-map",
+      "gateway",
+      "frontend-first-steps",
+      "code-review-practices",
+      "vpc-basics",
+      "etl-vs-elt"
+    ]
+  },
   "rw-cloudflare-outage-regex": {
     "links": [
       "rw-reading-engineering-blogs",
@@ -62,7 +389,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-lock",
       "postgres-mvcc-vacuum",
       "db-sharding",
-      "rw-slack-vitess"
+      "rw-slack-vitess",
+      "rw-pinterest-mysql-sharding",
+      "rw-notion-postgres-sharding"
     ],
     "mentions": [
       "sd-sharding-intro",
@@ -85,9 +414,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-architecture",
       "rw-twitter-snowflake-timeline",
       "clock-skew",
+      "rw-pinterest-mysql-sharding",
       "postgres-mvcc-vacuum",
       "sd-news-feed-publishing",
-      "cache-invalidation"
+      "cache-invalidation",
+      "rw-notion-postgres-sharding"
     ],
     "mentions": [
       "db-type-wide-column",
@@ -325,20 +656,29 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-twitter-snowflake-timeline",
       "rw-discord-message-storage",
       "rw-kakao-actionbase",
+      "rw-segment-goodbye-microservices",
+      "rw-amazon-distributed-computing-manifesto",
+      "rw-37signals-cloud-exit",
+      "rw-stack-overflow-few-servers",
       "rw-shopify-modular-monolith",
       "rw-cloudflare-outage-regex",
       "rw-kakao-datacenter-fire",
       "microservices",
       "rw-instagram-sharding-ids",
       "rw-slack-vitess",
+      "rw-pinterest-mysql-sharding",
+      "rw-notion-postgres-sharding",
       "rw-uber-schemaless-docstore",
       "rw-amazon-dynamo",
       "rw-google-spanner-truetime",
       "rw-meta-memcache-tao",
       "rw-netflix-cloud-microservices",
+      "rw-uber-doma",
+      "rw-airbnb-soa-migration",
       "rw-stripe-idempotency",
       "rw-figma-multiplayer",
       "rw-netflix-open-connect",
+      "rw-linkedin-kafka",
       "rw-kakaotalk-cache-farm",
       "rw-naver-arcus",
       "sd-interview-framework"
@@ -361,6 +701,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-sharding",
       "multi-tenancy-isolation",
       "rw-uber-schemaless-docstore",
+      "rw-pinterest-mysql-sharding",
       "consistent-hashing",
       "mysql-replication-online-ddl",
       "circuit-breaker",
@@ -378,6 +719,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "sd-start-single-server",
       "db-replication-sharding",
+      "rw-airbnb-soa-migration",
       "scaling-horizontal-vertical",
       "db-keys-denormalization",
       "mongodb-document-model",
@@ -419,6 +761,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "clock-skew",
       "elasticsearch-inverted-index",
       "sd-sharding-intro",
+      "rw-pinterest-mysql-sharding",
       "rw-discord-message-storage"
     ],
     "mentions": [
@@ -440,7 +783,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "geohash",
       "sd-proximity-service",
       "quadtree",
-      "sd-unique-id-generator"
+      "sd-unique-id-generator",
+      "rw-uber-doma"
     ],
     "mentions": [
       "rw-reading-engineering-blogs",
@@ -557,6 +901,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-reading-engineering-blogs",
       "caching-strategies",
       "cache-invalidation",
+      "rw-facebook-haystack",
       "consistent-hashing",
       "cdc-change-data-capture",
       "sd-db-replication-intro"
@@ -583,6 +928,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-reading-engineering-blogs",
       "modular-monolith",
       "microservices",
+      "rw-airbnb-soa-migration",
       "backpressure",
       "rate-limiting-algorithms",
       "db-sharding",

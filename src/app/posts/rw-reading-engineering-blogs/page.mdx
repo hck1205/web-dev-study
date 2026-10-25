@@ -158,7 +158,7 @@ GitHub 웹에서도 같은 걸 볼 수 있다. 파일 화면의 History 버튼�
 
 드물게 회사가 이 한계를 스스로 적는 경우가 있다. 카카오는 Actionbase의 [Path to Open Source](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/project/path-to-open-source.mdx)(2026년 1월)에 "여기 보이는 건 살아남은 것"이라고 썼고, 저장소 [이슈 #358](https://github.com/kakao/actionbase/issues/358)(2026년 5월, 원 토론은 1월)의 제목은 "전용 인터랙션 DB가 필요했나, 과하게 만들었나"였다. FAQ에는 아예 "쓰지 말아야 할 때"가 있다. DB 하나로 감당될 때, 운영 경험이 없을 때, 아직 확장의 벽에 닿지 않았을 때.
 
-이런 문장이 있으면 그 자료는 한 단계 더 믿을 만하다. 없다면 독자가 직접 빈칸을 묻는다. 무엇이 실패했나, 얼마 들었나, 무엇을 되돌렸나, 이 구조를 쓰지 않은 팀은 왜 그랬나. 시리즈에는 이 빈칸을 채우는 반대 방향의 사례도 일부러 넣었다. 마이크로서비스를 다시 합친 [Segment](/posts/rw-segment-goodbye-microservices), 분산 구조를 모놀리스로 바꾼 [Prime Video 모니터링](/posts/rw-prime-video-monolith), 클라우드에서 나온 [37signals](/posts/rw-37signals-cloud-exit), 서버 몇 대로 버틴 [Stack Overflow](/posts/rw-stack-overflow-few-servers), 쪼개지 않고 모듈로 나눈 [Shopify](/posts/rw-shopify-modular-monolith)다. 같은 질문에 다른 답을 낸 회사들을 나란히 놓고 읽으면 "무엇이 맞나"보다 "어떤 조건에서 무엇이 맞나"가 보인다.
+이런 문장이 있으면 그 자료는 한 단계 더 믿을 만하다. 없다면 독자가 직접 빈칸을 묻는다. 무엇이 실패했나, 얼마 들었나, 무엇을 되돌렸나, 이 구조를 쓰지 않은 팀은 왜 그랬나. 시리즈에는 이 빈칸을 채우는 반대 방향의 사례도 일부러 넣었다. 마이크로서비스를 다시 합친 [Segment](/posts/rw-segment-goodbye-microservices), 작은 서비스와 모놀리스 사이를 오간 [Amazon](/posts/rw-amazon-distributed-computing-manifesto), 클라우드에서 나온 [37signals](/posts/rw-37signals-cloud-exit), 서버 몇 대로 버틴 [Stack Overflow](/posts/rw-stack-overflow-few-servers), 쪼개지 않고 모듈로 나눈 [Shopify](/posts/rw-shopify-modular-monolith)다. 같은 질문에 다른 답을 낸 회사들을 나란히 놓고 읽으면 "무엇이 맞나"보다 "어떤 조건에서 무엇이 맞나"가 보인다.
 
 ## 장애 보고서는 무엇을 더 보여 주나
 
@@ -279,7 +279,7 @@ GitHub 웹에서도 같은 걸 볼 수 있다. 파일 화면의 History 버튼�
 - 분산 저장소의 원리를 논문으로: [Amazon Dynamo](/posts/rw-amazon-dynamo), [Google Spanner](/posts/rw-google-spanner-truetime), [Meta memcache·TAO](/posts/rw-meta-memcache-tao)
 - 서비스를 쪼개고 다시 묶은 이야기: [Netflix 클라우드 이전](/posts/rw-netflix-cloud-microservices), [Uber DOMA](/posts/rw-uber-doma), [Airbnb](/posts/rw-airbnb-soa-migration), 그리고 앞에서 본 반대 사례들
 - 장애를 줄이는 구조와 운영: [AWS 셔플 샤딩](/posts/rw-aws-shuffle-sharding-cells), [Google SRE 오류 예산](/posts/rw-google-sre-error-budget), [Netflix 카오스 엔지니어링](/posts/rw-netflix-chaos-engineering), [Google Borg에서 Kubernetes로](/posts/rw-google-borg-kubernetes), 앞에서 본 장애 보고서 글들
-- 결제와 정합성: [Stripe 멱등 키](/posts/rw-stripe-idempotency), [Airbnb Orpheus](/posts/rw-airbnb-payments-idempotency), [Uber Cadence](/posts/rw-uber-ringpop-cadence)
+- 결제와 정합성: [Stripe 멱등 키](/posts/rw-stripe-idempotency), [Airbnb Skipper](/posts/rw-airbnb-skipper), [Uber Cadence](/posts/rw-uber-ringpop-cadence)
 - 연결과 전송: [WhatsApp Erlang](/posts/rw-whatsapp-erlang), [Discord 게이트웨이](/posts/rw-discord-elixir-gateway), [Figma 멀티플레이어](/posts/rw-figma-multiplayer), [Cloudflare Pingora](/posts/rw-cloudflare-pingora), [Netflix Open Connect](/posts/rw-netflix-open-connect)
 - 로그와 이벤트: [LinkedIn Kafka](/posts/rw-linkedin-kafka), [Spotify 이벤트 전송](/posts/rw-spotify-event-delivery), [Netflix EVCache](/posts/rw-netflix-evcache)
 - 국내 서비스: [카카오 판교 데이터센터 화재](/posts/rw-kakao-datacenter-fire), [카카오 Actionbase](/posts/rw-kakao-actionbase), [카카오톡](/posts/rw-kakaotalk-cache-farm), [네이버·LINE](/posts/rw-naver-arcus)
