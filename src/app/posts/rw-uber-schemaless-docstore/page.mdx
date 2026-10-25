@@ -1,0 +1,344 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-uber-schemaless-docstore");
+
+<EasyIntro>
+  2014년 초 Uber는 운행 기록을 담던 데이터베이스가 그해 안에 꽉 찰 거라는 계산을 받았다. 운행이 한 달에 20% 가까이 늘고 있었는데, 데이터베이스는 서버 한 대에 모여 있었다.
+
+  Uber가 고른 길은 MySQL 서버 여러 대 위에 얇은 층을 하나 올려 직접 저장소를 만드는 것이었다. 이 저장소는 일기장처럼 동작한다. 한 번 쓴 줄은 고치지 않고, 바뀐 내용이 있으면 새 줄을 아래에 덧붙인다. 가장 아래 줄이 지금의 내용이다.
+
+  덧붙이기만 하니 좋은 점이 생겼다. 같은 줄을 두 번 써도 한 번만 남고, 다른 서비스는 일기장의 새 줄만 따라 읽으면 무슨 일이 생겼는지 알 수 있다. 운행이 끝나면 요금을 청구하는 일도 이 새 줄을 보고 시작한다.
+
+  몇 년 뒤 Uber는 이 일기장이 쓰기 불편하다는 걸 인정했다. 고칠 수 없고 묶어서 처리할 수 없으니 일반적인 서비스에는 맞지 않았다. 그래서 같은 MySQL 바닥 위에 합의 알고리즘을 얹어, 고치기와 묶음 처리를 할 수 있는 새 저장소로 바꿨다.
+</EasyIntro>
+
+이 글은 실제 서비스 사례 시리즈의 하나다. 키를 여러 서버에 나누고 복제하는 일반 설계는 [키-값 저장소 ①](/posts/sd-kv-store-partition-replication)에서, PostgreSQL의 프로세스·메모리 구조는 [PostgreSQL 아키텍처](/posts/postgres-architecture)에서 다뤘다. 여기서는 Uber가 2015~2021년에 직접 공개한 글 여섯 편을 따라, 무엇을 만났고 무엇을 골랐고 그 선택이 몇 년 뒤 어떻게 바뀌었는지를 본다.
+
+자료의 시점이 제각각이라 먼저 정리해 둔다. 2015년 7월 René Schmidt의 [Project Mezzanine 글](https://www.uber.com/blog/mezzanine-codebase-data-migration/)이 2014년의 이전 작업을 회고한다. 2016년 1월 Jakob Holdgaard Thomsen의 Schemaless 3부작이 설계·구조·트리거를 설명한다. 2016년 7월 Evan Klitzke의 ["Why Uber Engineering Switched from Postgres to MySQL"](https://www.uber.com/blog/postgres-to-mysql-migration/)이 PostgreSQL을 떠난 이유를 쓴다. 2021년 2월 Himank Chaudhary 등의 ["Evolving Schemaless into a Distributed SQL Database"](https://www.uber.com/blog/schemaless-sql-database/)가 Docstore로 넘어간 이야기를 한다. 2021년 이후 Docstore가 어떻게 바뀌었는지는 이번에 찾은 자료로는 확인하지 못했다.
+
+## 운행 테이블 하나가 연말을 못 넘긴다
+
+Mezzanine 글의 첫 숫자는 운행 증가율이다. 2014년 초 운행이 한 달에 약 20%씩 늘고 있었고, 그대로 가면 운행 저장소가 그해 말, 어쩌면 더 일찍 저장 용량과 IOPS(초당 디스크 입출력 횟수) 양쪽에서 바닥난다는 결론이 나왔다. 목표일은 트래픽이 많은 날로 꼽히는 핼러윈(10월 31일)이었다.
+
+당시 구조도 적혀 있다. Uber 백엔드는 앱 서버 여러 대와 데이터베이스 하나로 시작한 파이썬 모놀리스였고, ORM으로 SQLAlchemy를 썼다. 2014년 초에는 서비스가 100개 가까이로 늘어 서비스 지향 구조가 됐지만, 데이터 대부분은 여전히 PostgreSQL 인스턴스 하나에 있었다. 그중 운행 데이터가 가장 큰 비중을 차지했고, 가장 빨리 자랐고, IOPS도 가장 많이 썼다.
+
+용량만 문제가 아니었다. 운행 테이블이 너무 커져서 열 하나를 추가하거나 인덱스 하나를 만드는 작업이 서비스 중단으로 이어졌다. 새 기능을 만들 때마다 스키마 변경 때문에 멈춰야 했다는 뜻이다. Schemaless 1부는 쓰기 가용성 문제도 적었다. PostgreSQL 쓰기가 실패하면 운행을 Redis에 버퍼로 넣어 두고 나중에 다시 썼는데, Redis에 있는 동안은 PostgreSQL에서 그 운행을 읽을 수 없어 청구 같은 기능이 멈췄다. Uber가 커지면서 이 Redis 방식도 버티지 못했다.
+
+## 다섯 가지 요구와 버린 후보들
+
+Schemaless 1부는 새 운행 저장소의 요구를 다섯 가지로 적었다.
+
+1. 서버를 더하면 용량이 선형으로 늘어야 한다. 디스크만 늘어나는 게 아니라 응답 시간도 줄어야 한다.
+2. 쓰기 가용성. 쓴 직후에 읽히는 것(read-your-write)보다 쓰기가 실패하지 않는 쪽을 택한다.
+3. 다운스트림에 변경을 알리는 방법. 청구·분석 같은 단계를 한꺼번에 처리하다 하나가 실패하면 전부 다시 해야 했다. Kafka 0.7 기반의 비동기 운행 이벤트 시스템이 있었지만 손실 없이 돌리지 못했다.
+4. 보조 인덱스. PostgreSQL에서 하던 방식대로 운행을 찾을 수 있어야 한다.
+5. 운영 신뢰. 새벽 3시에 저장소가 응답하지 않을 때 빨리 고칠 지식이 팀에 있는가.
+
+Cassandra, Riak, MongoDB 같은 후보를 이 다섯 칸으로 비교한 표도 있다. 이름을 가린 세 후보 모두 노드를 더해 선형으로 늘어나지만, 장애 조치 중에도 쓰기를 받는 것은 일부였다. 변경 알림 기능은 셋 다 없어 애플리케이션에서 만들어야 했다. 인덱스는 있지만 여러 값을 색인하면 모든 노드에 묻는 scatter-gather라 느려진다. 마지막 칸인 운영 신뢰가 결정을 갈랐다. 글은 "이론상 안정적으로 돌 수 있어도 우리가 그 능력을 바로 다 쓸 운영 지식이 있느냐가 컸다"고 적었다. 그리고 2년 넘게 지난 시점(2016년)에는 Cassandra와 Riak을 다른 영역에서 잘 쓰고 있다고 덧붙였다. 후보가 나빴다기보다, 그때 그 팀과 그 일정에 맞지 않았다는 이야기다.
+
+그래서 직접 만들었다. 설계는 FriendFeed에서, 운영 쪽 관점은 Pinterest에서 영감을 받았다고 적었다. 파이썬으로 짰고, 아이디어에서 운영 배포까지 약 5개월이 걸렸다(Mezzanine 글).
+
+## 고치지 않고 덧붙이는 셀
+
+Schemaless의 데이터 모델은 Bigtable과 비슷한 "추가만 하는 희소 3차원 해시 맵"이다. 가장 작은 단위는 셀(cell)이고, 한 번 쓰면 덮어쓰거나 지울 수 없다(2부는 특별한 경우 오래된 기록을 지울 수 있다고 덧붙였다). 셀은 JSON 덩어리이고 세 값으로 찾는다. 행 키(row key, UUID), 열 이름(column name, 문자열), 참조 키(ref key, 정수)다. 셀을 고치고 싶으면 같은 행 키·열 이름에 더 큰 ref key로 새 셀을 쓴다. 가장 큰 ref key의 셀이 최신이다.
+
+운행 하나를 담는 방식이 이 모델의 의도를 보여 준다. 운행 데이터는 한 번에 생기지 않는다. 운행이 끝나면 기본 정보가 생기고, 요금을 청구하고, 실패하면 다른 카드로 다시 청구하고, 나중에 요금을 조정하고, 며칠 뒤 평점이 들어온다. 그래서 운행 저장소(Mezzanine)는 운행 하나의 행에 열을 나눠 둔다.
+
+- `BASE`: 기사·승객·시각 같은 기본 정보. 운행이 끝날 때 보통 한 번 쓴다.
+- `STATUS`: 청구 시도마다 셀 하나. 카드가 거절되면 여러 번 쓰인다.
+- `NOTES`: 기사나 운영 직원이 남긴 메모. `STATUS`와 따로 여러 번 쓰인다.
+- `FARE ADJUSTMENT`: 요금을 조정할 때만 쓴다.
+
+1부는 열을 이렇게 나눈 이유를 "데이터 경합을 피하고 갱신 때 써야 할 양을 줄이려고"라고 적었다. 청구 서비스와 메모 기능이 같은 행을 동시에 고쳐도 서로 다른 열에 덧붙이니 부딪히지 않는다. 같이 바뀌는 데이터를 한 열로 묶고, 열 안의 JSON 모양은 애플리케이션이 정한다. 스키마를 바꿔도 데이터베이스 쪽에서 멈출 일이 없다.
+
+MySQL 테이블로는 어떻게 생겼는지 2부가 보여 준다. Schemaless 샤드 하나가 MySQL 데이터베이스 하나이고, 그 안의 셀 테이블(entity table)은 열이 여섯 개다.
+
+```text
+ Name         Type
+ added_id     int, auto-increment   -- MySQL 기본 키. 넣은 순서
+ row_key      uuid
+ column_name  string
+ ref_key      int
+ body         blob                  -- MessagePack + ZLib으로 압축한 JSON
+ created_at   datetime
+```
+
+기본 키는 `row_key`가 아니라 자동 증가 `added_id`다. 2부는 이렇게 하면 MySQL이 셀을 디스크에 순서대로 쓴다고 적었다. InnoDB는 기본 키 순서로 행을 저장하니(클러스터드 인덱스, [MySQL InnoDB 기초](/posts/mysql-innodb-basics)), 새 셀은 언제나 테이블 끝에 붙는다. 셀을 찾는 용도로는 `(row_key, column_name, ref_key)` 복합 인덱스를 따로 둔다. 압축은 여러 인코딩과 알고리즘을 실험한 끝에 압축 속도와 크기 때문에 MessagePack과 ZLib을 골랐다고 한다.
+
+아래에서 셀 모델의 규칙 두 가지를 직접 짜 볼 수 있다. 같은 (행 키, 열, ref key)는 두 번째부터 거절하고, 행·열마다 가장 큰 ref key의 본문을 돌려준다. 기대값은 같은 함수를 node로 돌려 얻었다.
+
+<CodePlayground
+  caption="덧붙이기만 하는 셀에서 최신 값 고르기"
+  functionName="latestCells"
+  initialCode={`function latestCells(cells) {
+  // cells: [rowKey, column, refKey, body] 배열의 배열 (쓴 순서대로)
+  // 1) 같은 rowKey|column|refKey가 이미 있으면 거절하고 rejected를 1 늘린다
+  // 2) rowKey/column마다 refKey가 가장 큰 셀의 body를 남긴다
+  // 반환: { latest: { "rowKey/column": body, ... }(키 이름 순), rejected }
+  return { latest: {}, rejected: 0 };
+}`}
+  solution={`function latestCells(cells) {
+  const seen = new Set();
+  const latest = {};
+  let rejected = 0;
+  for (const [rowKey, column, refKey, body] of cells) {
+    const id = rowKey + "|" + column + "|" + refKey;
+    if (seen.has(id)) { rejected++; continue; }
+    seen.add(id);
+    const k = rowKey + "/" + column;
+    if (!latest[k] || latest[k].refKey < refKey) latest[k] = { refKey, body };
+  }
+  const out = {};
+  for (const k of Object.keys(latest).sort()) out[k] = latest[k].body;
+  return { latest: out, rejected };
+}`}
+  tests={[
+    { args: [[["trip1", "BASE", 1, "fare 12000"]]], expected: { latest: { "trip1/BASE": "fare 12000" }, rejected: 0 }, label: "셀 하나" },
+    { args: [[["trip1", "STATUS", 1, "card declined"], ["trip1", "STATUS", 2, "billed"]]], expected: { latest: { "trip1/STATUS": "billed" }, rejected: 0 }, label: "더 큰 ref key가 최신" },
+    { args: [[["trip1", "STATUS", 2, "billed"], ["trip1", "STATUS", 1, "card declined"]]], expected: { latest: { "trip1/STATUS": "billed" }, rejected: 0 }, label: "도착 순서가 바뀌어도 같다" },
+    { args: [[["trip1", "BASE", 1, "fare 12000"], ["trip1", "BASE", 1, "fare 99999"]]], expected: { latest: { "trip1/BASE": "fare 12000" }, rejected: 1 }, label: "같은 세 값은 두 번째부터 거절" },
+    { args: [[["trip2", "NOTES", 1, "lost umbrella"], ["trip1", "BASE", 1, "fare 12000"], ["trip1", "STATUS", 1, "card declined"], ["trip1", "STATUS", 1, "card declined"], ["trip1", "STATUS", 2, "billed"]]], expected: { latest: { "trip1/BASE": "fare 12000", "trip1/STATUS": "billed", "trip2/NOTES": "lost umbrella" }, rejected: 1 }, label: "섞인 기록" },
+    { args: [[]], expected: { latest: {}, rejected: 0 }, label: "빈 입력" },
+  ]}
+/>
+
+세 번째 테스트가 Mezzanine 글이 말한 성질이다. 추가만 하는 모델에서는 수정이 멱등(같은 걸 두 번 해도 한 번 한 것과 같다)이고 교환 가능(순서를 바꿔 다시 적용해도 결과가 같다)하다. 글은 이 덕분에 "어떤 순서로 다시 재생해도 같은 결과"가 나온다고 적었다. 멱등성의 일반론은 [멱등 키](/posts/idempotency-key)에서 다뤘다. 이 성질이 아래의 버퍼 쓰기와 트리거를 떠받친다.
+
+## 마스터가 죽어도 쓰기는 받는다
+
+2부의 구조는 두 종류의 노드로 나뉜다. 워커 노드는 클라이언트의 HTTP 요청을 받아 저장 노드들로 펼치고 결과를 모은다. 저장 노드는 데이터를 담는다. 둘을 나눠 따로 늘릴 수 있게 했다. 데이터는 고정된 개수의 샤드로 나누는데, 보통 4,096개로 설정한다. 셀은 행 키로 샤드가 정해지고, 샤드는 저장 클러스터에 배정된다. 클러스터 하나는 마스터 하나와 미니언(복제본) 둘이고, 미니언은 여러 데이터 센터에 흩어 둔다.
+
+샤드 수를 처음에 4,096개로 박아 두고 샤드를 서버 사이로 옮기는 방식은 [샤딩 입문](/posts/sd-sharding-intro)에서 본 논리 샤드 그대로다. Mezzanine 글은 샤드를 MySQL 서버 사이에서 옮겨 부하를 맞추고, 용량은 보통 MySQL 서버 하나를 둘로 나눠 늘린다고 적었다. 해시를 다시 계산하지 않으니 키가 옮겨 다니지 않는다. 다만 행 키에서 샤드 번호를 구하는 함수가 무엇인지는 글에 없다.
+
+읽기는 기본으로 마스터에서 해서 자기가 쓴 것을 바로 본다. 요청마다 미니언에서 읽도록 바꿀 수 있다. 쓰기는 반드시 마스터로 가고, 마스터가 MySQL 비동기 복제로 미니언에 넘긴다. 운영에서 복제 지연은 보통 1초 아래였다고 한다. 워커 노드는 저장 노드 연결에 서킷 브레이커를 달아 문제 있는 노드를 피한다([서킷 브레이커](/posts/circuit-breaker)).
+
+마스터가 죽으면 어떻게 될까. 미니언 하나를 승격하기 전까지 그 샤드는 쓸 수 없다. Schemaless는 여기서 버퍼 쓰기(buffered writes)를 쓴다. 아래 그림에서 다음을 누르면 쓰기 하나가 두 클러스터를 거치는 순서가 그려진다.
+
+<SequenceDiagram
+  caption="Schemaless 버퍼 쓰기 (2016년 2부 기준)"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "w", label: "워커 노드" },
+    { id: "s", label: "보조 마스터" },
+    { id: "p", label: "주 마스터" },
+    { id: "m", label: "주 미니언" },
+  ]}
+  steps={[
+    { from: "c", to: "w", label: "put_cell", title: "셀 하나를 쓴다", detail: "트립 UUID, 열 이름, ref key, JSON 본문을 보낸다. 쓰기는 멱등이라 클라이언트 라이브러리는 실패하면 다른 워커로 그냥 다시 보낸다.", payload: "put_cell(trip_uuid1, STATUS, 2, {is_completed: true})" },
+    { from: "w", to: "s", label: "buffer table", title: "먼저 보조 마스터에 쓴다", detail: "무작위로 고른 다른 클러스터의 마스터에, 일반 테이블이 아닌 버퍼 테이블에 쓴다. 보조 마스터 수는 설정할 수 있다." },
+    { from: "w", to: "p", label: "entity table", title: "그다음 주 마스터에 쓴다", detail: "나중에 읽을 때 찾아갈 곳이다. 두 곳 모두 성공해야 클라이언트에게 성공을 알린다. 최소 두 호스트에 남는다." },
+    { from: "w", to: "c", label: "OK", title: "성공을 돌려준다", detail: "주 마스터가 죽어 있으면 보조 쪽에만 남는다. 이때 Schemaless는 '쓰기는 됐지만 아직 읽을 수 없다'고 클라이언트에게 알려 줄 수 있다." },
+    { from: "p", to: "m", label: "async binlog", title: "주 마스터가 미니언에 복제한다", detail: "MySQL 비동기 복제다. 이 사이에 주 마스터 디스크가 죽으면 이 셀은 주 클러스터에서 사라진다. 그래서 보조 쪽 사본이 필요하다." },
+    { from: "s", to: "m", label: "확인", title: "미니언에 나타나면 버퍼를 지운다", detail: "백그라운드 작업이 주 미니언에 셀이 나타났는지 지켜보다가, 나타나면 보조 마스터의 버퍼 테이블에서 지운다." },
+    { from: "s", to: "p", label: "replay", title: "주 마스터가 돌아오면 다시 넣는다", detail: "같은 (행 키, 열, ref key)가 이미 있으면 거절되니, 몇 번을 다시 넣어도 한 번만 남는다." },
+  ]}
+/>
+
+2부는 이것을 Dynamo나 Cassandra의 힌트 핸드오프(hinted handoff)와 비슷하다고 설명한다. 담당 노드가 죽었을 때 다른 노드가 쓰기를 대신 받아 두었다가 돌려주는 방식이다. 일반론은 [키-값 저장소의 장애 처리](/posts/sd-kv-store-failure-handling)와 [Amazon Dynamo 사례](/posts/rw-amazon-dynamo)에 있다. 다른 점은 Schemaless가 마스터가 살아 있을 때도 항상 두 곳에 쓴다는 것이다. 비동기 복제의 틈, 즉 "마스터가 썼다고 답했는데 미니언에 넘기기 전에 죽는" 경우까지 막으려는 것이다.
+
+대가도 글에 적혀 있다. 주 마스터가 죽은 동안 버퍼에 쌓인 쓰기는 읽을 수 없다. 요구 2번에서 쓴 직후 읽기보다 쓰기 가용성을 택한다고 한 선택이 여기서 드러난다. 반대로 쓰기를 받는 노드가 샤드마다 하나라서, 샤드 안의 쓰기에는 전체 순서가 생긴다. 2부는 "Schemaless의 샤드는 파티션된 셀 변경 로그로 볼 수 있다"고 적었다.
+
+## 셀 로그를 꼬리부터 따라 읽는 트리거
+
+변경 알림(요구 3번)은 그 로그를 그대로 쓴다. 3부가 트리거(triggers)를 설명한다. 셀을 고치지 않고 덧붙이니, 각 샤드의 셀 테이블은 그 자체가 변경 기록이다. API도 두 가지다. `get_cell(row_key, column_key, ref_key)`, `get_cell_latest(row_key, column_key)`처럼 셀을 하나씩 찾는 임의 접근 API와, `get_cells_for_shard(shard_no, location, limit)`처럼 샤드 하나를 위치(added_id나 시각) 다음부터 차례로 읽는 로그 접근 API다. 위치 1000에서 10개를 달라고 하면 셀과 함께 다음 위치 1010을 돌려준다. 파일을 `tail -f`로 따라가거나 Kafka 소비자가 오프셋을 들고 읽는 것과 같은 모양이다. 이 모양은 [CDC(변경 데이터 캡처)](/posts/cdc-change-data-capture)의 한 형태이고, 저장소 자체가 로그라서 별도의 이벤트 발행 단계가 없다.
+
+청구 서비스는 이렇게 쓴다. 파이썬 함수에 `@trigger` 데코레이터를 달고 `BASE` 열을 지정하면, `BASE`에 셀이 새로 쓰일 때마다(운행이 끝날 때마다) 프레임워크가 함수를 부르며 행 키(트립 UUID)를 넘긴다. 함수는 먼저 `STATUS` 열의 최신 셀을 읽어 이미 청구됐는지 본다. 아니면 `BASE`에서 운행 정보를 읽고 카드사에 청구한 뒤, 결과를 `STATUS`에 새 셀로 쓴다. 프레임워크는 셀마다 함수가 "적어도 한 번" 불린다고 보장하니, 함수는 멱등이어야 한다. 앞의 확인 단계가 그 장치다. 전달 보장의 일반론은 [메시지 전달 보장](/posts/message-delivery-semantics)에 있다.
+
+아래 그림은 청구 트리거 워커 하나가 샤드 하나의 셀 로그를 따라 읽는 모습이다.
+
+<AlgoTrace
+  caption="샤드 7의 셀 로그를 따라 읽는 청구 트리거"
+  cells={["1001 trip1 BASE", "1002 trip2 BASE", "1003 trip2 NOTES", "1004 trip1 STATUS", "1005 trip3 BASE", "1006 trip3 STATUS"]}
+  memoryLabel="저장된 오프셋 · 한 일"
+  steps={[
+    { pointer: 0, memory: ["offset 1000"], caption: "워커가 공유 저장소(ZooKeeper 등)에서 이 샤드의 마지막 오프셋 1000을 읽고 1001부터 가져온다. trip1의 BASE다. STATUS가 비어 있으니 청구한다." },
+    { pointer: 1, memory: ["offset 1001", "trip1 청구"], caption: "trip1 청구 결과는 다른 쓰기로 STATUS 열에 덧붙는다. 오프셋을 1001로 올리고, 다음 셀 trip2의 BASE로 간다." },
+    { pointer: 2, memory: ["offset 1002", "trip1 청구", "trip2 청구"], caption: "trip2의 NOTES 셀이다. 청구 트리거는 BASE 열만 구독하니 건너뛴다. 메모 기능을 구독한 다른 클라이언트는 같은 셀을 따로 읽는다." },
+    { pointer: 3, memory: ["offset 1003", "trip1 청구", "trip2 청구"], caption: "trip1의 STATUS 셀이 로그에 나타났다. 앞에서 청구가 쓴 결과다. 청구 트리거는 이 열을 구독하지 않는다." },
+    { pointer: 4, memory: ["offset 1004", "…", "trip3 청구"], caption: "trip3의 BASE를 처리하다 워커가 죽었다고 하자. 저장된 오프셋은 아직 1004다. 리더가 이 샤드를 다른 워커에 넘긴다." },
+    { pointer: 4, found: [4], memory: ["offset 1004", "trip3 STATUS 확인", "이미 청구됨"], caption: "새 워커가 1005를 다시 읽는다. 같은 셀이 두 번 불렸다. 함수가 STATUS를 먼저 보고 이미 청구됐으면 돌아가니 두 번 청구하지 않는다." },
+    { pointer: 5, found: [5], memory: ["offset 1006"], caption: "끝까지 따라왔다. 이 샤드 안에서는 셀이 쓰인 순서대로 처리된다." },
+  ]}
+/>
+
+3부는 이 구조를 어떻게 늘리고 견디게 했는지도 적었다. 트리거를 쓰는 서비스가 호스트 여러 대에서 돌면, 프레임워크가 샤드를 워커 프로세스들에 나눠 준다. 한 샤드는 한 워커만 맡는다. 워커 중 하나가 리더로 뽑혀 배정을 맡고, 워커가 죽으면 그 샤드를 다른 워커에 넘긴다. 진행 상황은 샤드마다 마지막으로 성공한 셀의 added_id로, ZooKeeper나 Schemaless 인스턴스 자체에 저장한다. 그래서 워커는 샤드 수(보통 4,096)까지 늘릴 수 있다. 서버 쪽에는 클라이언트를 추적하는 로직이 없어서 트리거 클라이언트를 얼마든지 붙일 수 있다. ZooKeeper가 죽어도 셀 처리는 계속되고, 다만 그동안 배정을 바꾸거나 워커를 더하고 빼지 못한다. 리더 선출의 일반론은 [리더 선출](/posts/leader-election)에 있다.
+
+순서대로 처리한다는 성질에는 함정이 있다. 어떤 셀이 코드 버그로 계속 실패하면 그 샤드 전체가 멈춘다. 3부는 반복해서 실패하는 셀을 표시해 별도 큐로 빼고 다음 셀로 넘어가게 설정할 수 있고, 표시된 셀이 기준치를 넘으면 트리거를 멈춘다고 적었다. 그 정도면 사람이 고쳐야 하는 구조적 오류라는 판단이다. 다른 메시징 시스템의 데드 레터 큐와 같은 생각이다.
+
+## 인덱스는 늦게 따라오고, 샤드 키가 하나 있다
+
+보조 인덱스(요구 4번)는 JSON 필드 위에 정의한다. 1부의 예로 기사별 운행 인덱스(`driver_partner_index`)는 `BASE` 열의 기사 UUID를 샤드 필드로 삼고, 운행 생성 시각과 도시를 인덱스에 복사해 넣는다(반정규화). 그러면 "이 기사의 이 도시 운행을 이 기간에서" 같은 질의가 샤드 하나만 보고 끝난다. 글은 셀 본문을 직접 조회하지 않을 정보라면 필요할 것 같은 필드를 인덱스에 미리 넣어 두라고 권한다. 저장 공간을 빠른 조회와 맞바꾼다.
+
+제약도 적혀 있다. 인덱스마다 샤드 필드가 하나 있어야 하고, 질의할 때 그 값을 반드시 줘야 한다. 샤드 필드는 분포가 고와야 한다. 1부는 "UUID가 가장 좋고, 도시 ID는 썩 좋지 않고, 상태 값(enum)은 저장에 해롭다"고 적었다. 상태 값이 몇 개뿐이면 인덱스 항목이 샤드 몇 곳에 몰리기 때문이다. 샤드 필드는 바꿀 수 없다(당시 바꿀 수 있게 하는 방법을 찾는 중이라고 했다).
+
+그리고 인덱스는 최종적 일관성이다. 셀과 인덱스 항목은 보통 다른 샤드에 있으니, 둘을 한 트랜잭션으로 묶으려면 2단계 커밋이 필요하고 그 비용이 크다. 그래서 셀을 쓴 뒤 인덱스를 따로 갱신하고, 지연은 "대부분 20ms 훨씬 아래"라고 적었다. 인덱스로 찾은 결과가 잠깐 낡을 수 있다는 뜻이다.
+
+## Mezzanine: 쓰기를 두 곳에 하며 6주 동안 옮겼다
+
+저장소를 만드는 것과 살아 있는 시스템을 옮기는 것은 다른 일이다. Mezzanine 글은 이전 단계를 여섯 개로 적었다. 모든 곳에서 정수 trip ID를 trip UUID로 바꾸기, 새 열 배치 설계, PostgreSQL 데이터를 Schemaless로 채우기(backfill), PostgreSQL과 Schemaless 양쪽에 쓰기(mirrored writes), 모든 쿼리를 Schemaless API로 다시 쓰기, 그리고 검증이다.
+
+첫 단계부터 무거웠다. 원래 코드는 PostgreSQL 자동 증가 ID에 기대고 있었고, SQLAlchemy로 쓴 SQL 쿼리 수백 개를 조인이 없는 Schemaless 질의 API에 맞게 다시 써야 했다. 그래서 `lib/tripstore`라는 층을 만들고 스위치 하나로 PostgreSQL과 Schemaless를 오가게 했다. 쓰기는 양쪽에 거울처럼 하고, 질의는 Schemaless에도 다시 돌려 결과를 뒤에서 비교했다. 이미 바쁜 PostgreSQL에 검증 부하가 얹히니, 확률적으로 일부만 비교해 부하를 조절했다고 한다.
+
+마지막 6주는 샌프란시스코 본사의 "워 룸"에서 했다. 핼러윈 한 달 전, 오전 6시에 모든 팀이 모인 가운데 스위치를 넘겼고, 글의 표현으로는 "아무 일도 일어나지 않았다." 이후 무중단으로 운행 저장소 용량을 한 번 두 배로 늘렸다. 교훈 목록의 첫 줄은 "모든 것에 UUID를 써라"다. 정수 ID로 시작해 크게 성장하면 되돌리는 데 지루한 작업이 많이 든다는 것이다. 또 하나는 "멱등성이 트랜잭션을 대신한다"는 학습 곡선이다.
+
+이 순서는 지금도 데이터베이스를 옮길 때 쓰는 기본 틀이다. 읽기·쓰기 경로를 한 층 뒤로 숨기고, 양쪽에 쓰고, 채우고, 비교하고, 스위치를 넘긴다. 일반적인 무중단 이전 방법은 [MySQL 복제와 온라인 DDL](/posts/mysql-replication-online-ddl)과 [트랜잭셔널 아웃박스](/posts/transactional-outbox)에서도 다룬다.
+
+## PostgreSQL을 떠난 이유, 2016년의 설명
+
+2016년 7월 글은 Schemaless를 MySQL 위에 만든 이유를 PostgreSQL과 비교해 설명한다. 글은 분석이 "다소 오래된 Postgres 9.2 기준"이라고 먼저 밝혔다. 다섯 가지를 들었다.
+
+첫째, 쓰기 증폭. PostgreSQL은 행을 고칠 때 새 튜플을 쓰고, 모든 인덱스가 디스크 위치(ctid)를 직접 가리킨다. 그래서 출생 연도 하나를 고쳐도 기본 키 인덱스와 이름 인덱스까지 새 튜플을 가리키도록 갱신해야 한다. 글의 예로 인덱스가 열두 개인 테이블에서 인덱스 하나에만 걸린 열을 고쳐도 열두 곳을 모두 고친다. InnoDB는 보조 인덱스가 기본 키 값을 가리키니, 바뀐 열의 인덱스만 고친다. 일반 원리는 [PostgreSQL MVCC와 VACUUM](/posts/postgres-mvcc-vacuum)과 [MySQL InnoDB 기초](/posts/mysql-innodb-basics)에 있다.
+
+둘째, 복제 증폭. PostgreSQL 스트리밍 복제는 WAL, 즉 디스크 변경을 그대로 보내니 쓰기 증폭이 네트워크로 이어진다. Uber는 서부 코로케이션에 마스터를, 재해 대비로 동부에 복제본을 두었는데, 대륙 횡단 회선 대역폭이 문제가 됐다. WAL을 파일 저장 서비스에 보관하는 것도 초기 피크 때는 쓰는 속도를 따라가지 못했다. MySQL 바이너리 로그는 "행 X의 시각을 T1에서 T2로" 같은 논리 변경이라 훨씬 작다.
+
+셋째, 데이터 손상. 용량을 늘리려 마스터를 승격하던 중 PostgreSQL 9.2의 버그를 만났다. 복제본이 타임라인 전환을 잘못 따라가 일부 WAL 레코드를 잘못 적용했고, 지워졌어야 할 옛 행 버전이 살아 있어 `WHERE id = 4`가 두 행을 돌려줬다. 복제본마다 손상된 행이 달랐다. 결국 버그를 찾아 새 마스터는 멀쩡하다는 것을 확인하고, 복제본을 모두 새 스냅숏에서 다시 맞췄다. 글은 그 버그가 이미 고쳐졌다고 밝히면서도, 물리 복제라서 이런 종류의 버그가 복제 계층 전체로 퍼질 수 있다는 점을 걱정했다.
+
+넷째, 복제본의 MVCC. 복제본에서 오래 열린 트랜잭션이 WAL 적용을 막고, 일정 시간이 지나면 PostgreSQL이 그 트랜잭션을 죽인다. ORM이 트랜잭션 경계를 가리는 코드(예: 영수증 이메일을 보내는 동안 트랜잭션이 열려 있는 코드)에서 쉽게 터진다고 적었다.
+
+다섯째, 업그레이드. 물리 복제라 다른 메이저 버전 사이에 복제할 수 없다. 9.1에서 9.2로 올리는 데 몇 시간씩 걸리는 `pg_upgrade`와 스냅숏 복원을 거쳤고, 다시 할 엄두를 못 내서 글을 쓴 시점에 레거시 인스턴스는 9.5가 나온 뒤에도 9.2에 머물러 있었다.
+
+여기에 InnoDB 버퍼 풀과 연결 처리를 덧붙였다. 가장 큰 PostgreSQL 복제본은 메모리가 768GB인데 PostgreSQL 프로세스가 실제로 쓰는 RSS는 약 25GB이고 나머지 700GB 남짓은 리눅스 페이지 캐시에 맡긴다. 페이지 캐시를 거치면 `lseek`·`read` 시스템 호출마다 문맥 전환이 생긴다. MySQL은 연결마다 스레드라 연결 1만 개 가까이도 돌리는데, PostgreSQL은 연결마다 프로세스라 활성 연결 수백 개를 넘기기 어려웠고, pgbouncer를 썼지만 `idle in transaction` 연결이 늘어나는 앱 버그로 긴 장애가 났다고 적었다. 프로세스 모델 자체는 [PostgreSQL 아키텍처](/posts/postgres-architecture)에서 다뤘다.
+
+이 글을 읽을 때 두 가지를 같이 본다. 하나는 시점이다. 글이 직접 언급했듯 9.4부터 쓸 수 있던 pglogical이 버전 사이 논리 복제를 했고, 2017년 10월에 나온 PostgreSQL 10부터는 [논리 복제가 본체에 들어가](https://www.postgresql.org/docs/release/10.0/) 다른 메이저 버전 사이 복제가 가능해졌다. 업그레이드 문제의 상당 부분은 그 뒤 사정이 달라졌다. 다른 하나는 글이 다루지 않은 것이다. PostgreSQL은 인덱스가 걸리지 않은 열만 바뀌고 같은 페이지에 빈자리가 있으면 인덱스를 전혀 건드리지 않는 HOT 업데이트를 한다. 글은 이 장치를 언급하지 않는다. 쓰기 증폭이 실제로 얼마나 컸는지는 Uber의 테이블과 갱신 패턴에 달린 문제이고, 글에는 그 측정치가 없다. HOT이 언제 되고 언제 안 되는지는 [PostgreSQL MVCC와 VACUUM](/posts/postgres-mvcc-vacuum)에서 숫자로 봤다.
+
+### 글의 예제 테이블로 직접 재 보기
+
+글의 `users` 예제를 PostgreSQL 16.15(Ubuntu 24.04)에서 그대로 만들어 재 봤다. 인덱스는 글처럼 `(first, last)`와 `birth_year`에 걸고, 인덱스가 없는 `last_seen` 열을 하나 더했다. 10만 행을 넣고 1만 행을 고친 뒤, 고친 행 중 HOT 업데이트(인덱스를 건드리지 않은 갱신)가 몇 개인지 `pg_stat_user_tables`에서 읽었다. 시나리오마다 테이블을 새로 만들었다.
+
+```sql
+-- 글의 users 예제 + 인덱스 없는 열 하나. 페이지마다 10%를 비워 둔다
+CREATE TABLE users (
+  id serial PRIMARY KEY, first text, last text,
+  birth_year integer,          -- 인덱스 있음 (글의 예제에서 고친 열)
+  last_seen timestamptz        -- 인덱스 없음
+) WITH (fillfactor = 90);
+CREATE INDEX ix_users_first_last ON users (first, last);
+CREATE INDEX ix_users_birth_year ON users (birth_year);
+INSERT INTO users (first, last, birth_year, last_seen)
+SELECT 'f' || g, 'l' || g, 1900 + g % 100, now() FROM generate_series(1, 100000) g;
+VACUUM ANALYZE users;
+
+-- 시나리오마다 하나씩 (흩어진 1만 행: id % 10 = 0, 몰린 1만 행: id <= 10000)
+UPDATE users SET birth_year = birth_year + 1 WHERE id % 10 = 0;   -- 인덱스 열, 흩어진 행
+UPDATE users SET last_seen = now() WHERE id % 10 = 0;             -- 인덱스 없는 열, 흩어진 행
+UPDATE users SET last_seen = now() WHERE id <= 10000;             -- 인덱스 없는 열, 몰린 행
+
+SELECT pg_stat_force_next_flush();   -- 통계를 바로 반영한다
+SELECT n_tup_upd, n_tup_hot_upd FROM pg_stat_user_tables WHERE relname = 'users';
+```
+
+```text
+            test             | n_tup_upd | n_tup_hot_upd
+-----------------------------+-----------+---------------
+ E indexed col, ff90, spread |     10000 |             0
+ D plain col, ff90, spread   |     10000 |         10000
+ B plain col, ff90           |     10000 |          1150
+ C plain col, ff70           |     10000 |          4323
+```
+
+(시나리오마다 따로 돌린 결과를 한 표로 모았고, `test` 열은 구분용으로 붙인 이름이다.) 글의 예제처럼 인덱스가 걸린 `birth_year`를 고치면 HOT이 0건이다. 이때는 글의 말대로 새 튜플마다 세 인덱스가 모두 새 항목을 받는다. 인덱스가 없는 열을 흩어진 행에서 고치면 1만 건이 전부 HOT이라 인덱스를 하나도 건드리지 않았다. 같은 열이라도 붙어 있는 1만 행을 한꺼번에 고치면 페이지의 빈자리가 금방 차서 1,150건(fillfactor 90)과 4,323건(fillfactor 70)만 HOT이었다. 그러니 "PostgreSQL은 행을 고칠 때마다 모든 인덱스를 고친다"는 문장은 인덱스 열을 고치거나 페이지에 빈자리가 없을 때 맞고, 그렇지 않으면 맞지 않는다. Uber의 운행 테이블이 어느 쪽이었는지는 글에 없다.
+
+## 5년 뒤: 고칠 수 없는 셀이 짐이 됐다
+
+2021년 2월 글은 Schemaless를 Docstore라는 범용 트랜잭션 데이터베이스로 바꾼 이야기다. 동기는 솔직하게 적혀 있다. 추가만 하는 불변 셀은 시스템을 단순하게 하고 실수를 줄였지만, 시간이 지나며 "제한된 API와 모델링 능력 때문에 범용 데이터베이스로 쓰기 어렵다"는 것을 알게 됐다. 그 빈자리를 채우려고 Cassandra를 들였는데, Cassandra도 문제였다. Uber 규모에서는 운영 성숙도가 모자랐고 원하는 효율이 나오지 않았다. 최종적 일관성 때문에 개발자가 강한 일관성이 없다는 전제로 설계해야 해서 애플리케이션 구조가 복잡해졌다고 적었다. 두 시스템을 다 운영해 본 끝에 Schemaless를 범용 트랜잭션 DB로 키우기로 했다.
+
+설계 방향도 2014년과 반대다. "NoSQL 시스템을 만들고 싶지 않았다." Docstore 테이블은 쓸 때 스키마를 강제하고(schema-on-write), 동시에 스키마가 바뀌어도 서로 다른 스키마의 레코드가 공존할 수 있고 전체 재작성 없이 바뀐다. 기본 키(여러 열 가능)와 별도의 파티션 키가 있고, 행은 기본 키 순서로 저장한다. 테이블마다 다른 열로 파티션한 구체화된 뷰(materialized view)를 둘 수 있다. Schemaless의 반정규화 인덱스가 하던 일을 더 일반적인 이름으로 부른 셈이다. 그 밖에 트랜잭션, 연관(associations), 변경 데이터 캡처를 기능으로 꼽았다.
+
+<NetworkTopology
+  width={420}
+  height={290}
+  caption="Docstore 인스턴스 하나 (2021년 글 기준)"
+  zones={[
+    { id: "q", label: "쿼리 계층 (상태 없음)", x: 8, y: 8, w: 404, h: 64, tone: "edge" },
+    { id: "pa", label: "파티션 A: Raft 그룹", x: 8, y: 92, w: 404, h: 92, tone: "private" },
+    { id: "pb", label: "파티션 B", x: 8, y: 200, w: 300, h: 82, tone: "neutral" },
+  ]}
+  nodes={[
+    { id: "app", label: "Service", x: 60, y: 40, icon: "client" },
+    { id: "qe", label: "Query Engine", x: 220, y: 40, icon: "server" },
+    { id: "cp", label: "Control", sub: "샤드 배치", x: 360, y: 240, icon: "gateway" },
+    { id: "l", label: "Leader", sub: "zone 1", x: 80, y: 140, icon: "db" },
+    { id: "f1", label: "Follower", sub: "zone 2", x: 210, y: 140, icon: "db" },
+    { id: "f2", label: "Follower", sub: "zone 3", x: 340, y: 140, icon: "db" },
+    { id: "b", label: "Leader", sub: "다른 샤드", x: 150, y: 240, icon: "db" },
+  ]}
+  links={[
+    { from: "app", to: "qe" },
+    { from: "qe", to: "l" },
+    { from: "qe", to: "b" },
+    { from: "l", to: "f1", label: "Raft log" },
+    { from: "l", to: "f2" },
+    { from: "cp", to: "b", dashed: true },
+    { from: "cp", to: "f2", dashed: true },
+  ]}
+  steps={[
+    { path: ["app", "qe"], packet: "BEGIN … COMMIT", highlight: ["q"], title: "요청은 상태 없는 쿼리 계층으로", detail: "쿼리 계층은 키로 담당 파티션을 찾아 요청을 보낸다. 상태가 없으니 앞단을 늘리기 쉽다." },
+    { path: ["qe", "l"], packet: "MySQL txn", highlight: ["pa"], title: "쓰기는 파티션의 리더가 시작한다", detail: "파티션은 노드 3~5대이고 노드마다 다른 존에 있다. 리더가 MySQL 트랜잭션을 실행한다. 행 잠금 같은 동시성 제어는 MySQL에 맡긴다." },
+    { path: ["l", "f1"], packet: "log entry", highlight: ["pa"], title: "트랜잭션을 Raft 로그로 복제한다", detail: "복제 단위는 MySQL 트랜잭션 하나다. 합의에 이르러야만 각 노드의 상태 기계가 커밋한다." },
+    { path: ["l", "f2"], packet: "log entry", highlight: ["pa"], title: "과반이 받으면 커밋된다", detail: "모든 노드가 같은 쓰기를 같은 순서로 갖는다. 커밋된 키를 같은 키로 읽으면 그 값이나 그 뒤의 값을 돌려준다." },
+    { path: ["qe", "b"], packet: "다른 키", highlight: ["pb"], title: "다른 파티션은 다른 리더가 맡는다", detail: "일관성은 파티션 단위다. 글은 파티션 수준의 엄격한 직렬화 가능성(strict serializability)을 제공한다고 적었다." },
+    { path: ["cp", "b"], highlight: ["pb"], title: "샤드 배치는 컨트롤 플레인이", detail: "샤드 하나는 수백 GB 규모의 행 묶음이고 통째로 한 파티션에 들어간다. 장애가 나면 컨트롤 플레인이 배치를 바꾼다." },
+  ]}
+/>
+
+저장 바닥은 여전히 MySQL이다. 달라진 것은 복제다. Schemaless는 MySQL 비동기 복제 위에 버퍼 쓰기를 얹었고, Docstore는 파티션마다 Raft 합의를 돌려 MySQL 트랜잭션을 복제 로그의 단위로 삼는다([Raft 합의](/posts/raft-consensus)). 글은 CAP 용어로 Docstore가 가용성보다 일관성을 택한 CP 시스템이라고 적었다. 2016년 1부가 "쓴 직후 읽기보다 쓰기 가용성"을 택했던 것과 정반대다. MySQL 트랜잭션을 그대로 클라이언트에 노출하니 MySQL 트랜잭션의 장점과 제약도 그대로 물려받는다고 덧붙였다.
+
+Docstore 글은 일관성을 파티션 단위로 한정했다. 파티션을 넘는 트랜잭션을 어떻게 다루는지는 이 글에 나오지 않는다. 합의 그룹 위에 전역 순서까지 만든 다른 설계는 [Google Spanner 사례](/posts/rw-google-spanner-truetime)에서 볼 수 있다.
+
+## 여섯 편의 글이 말하지 않는 것
+
+여섯 편 모두 Uber가 고른 이야기다. 2014년에 버린 후보의 이름은 표에서 가려져 있고, 직접 만드는 데 든 인력과 비용, 운영 중에 겪은 장애는 거의 나오지 않는다. 버퍼 쓰기가 실제로 몇 번 데이터를 살렸는지, 트리거 지연이 얼마였는지 같은 숫자도 없다. PostgreSQL 비교 글은 Uber가 겪은 9.2의 문제를 근거로 들었고, HOT 업데이트나 이후 버전의 변화는 다루지 않는다. Docstore 글은 Cassandra를 "Uber 규모에서 운영 성숙도가 부족했다"고만 적고 구체적인 사건은 말하지 않는다. 그리고 Schemaless가 지금도 남아 있는지, Docstore로 얼마나 옮겼는지는 2021년 글에도 나오지 않는다. 그래서 이 글은 "2016년에는 이렇게 설명했고, 2021년에는 이렇게 바꿨다고 설명했다"까지만 말한다.
+
+## MySQL 위에 저장소를 직접 올리기 전에
+
+Schemaless가 풀었던 조건은 분명하다. 한 달 20%씩 자라는 운행 데이터, 서버 한 대의 용량과 IOPS 한계, 스키마 변경 때마다 멈추는 큰 테이블, 쓰기 실패가 곧 매출 손실인 도메인, 그리고 몇 달 안에 끝내야 하는 일정과 MySQL을 잘 아는 팀이다. 이 조건이 다 맞을 때 "MySQL 샤드 + 얇은 라우팅 층 + 추가만 하는 셀"이 합리적이었다. 데이터가 서버 한 대에 들어가고 스키마 변경을 온라인으로 할 수 있다면(지금의 MySQL 8과 PostgreSQL 16은 많은 변경을 잠금 없이 한다) 같은 답이 나오지 않는다. 지금이라면 Vitess처럼 MySQL 샤딩을 대신 해 주는 오픈소스나 관리형 분산 SQL도 후보다. [Slack 사례](/posts/rw-slack-vitess)가 그 길을 갔다.
+
+처음부터 따라 하면 드는 비용도 Uber 글에 이미 적혀 있다. 조인과 트랜잭션이 없는 API에 맞춰 쿼리 수백 개를 다시 써야 했고, "멱등성이 트랜잭션을 대신한다"는 사고방식을 팀 전체가 익혀야 했다. 5년 뒤에는 바로 그 제한 때문에 범용 DB로 다시 바꿨다. 추가만 하는 모델은 운행·결제처럼 시간이 흐르며 사실이 쌓이는 데이터에 잘 맞고, 사용자 프로필처럼 자주 고치는 데이터에는 버전만 쌓인다. 한 저장소로 둘 다 받으려 하면 Docstore가 생긴 이유를 다시 겪는다.
+
+작은 팀이 당장 가져올 수 있는 것은 셋이다. 첫째, 외부에 보이는 ID는 처음부터 UUID(또는 시간 순서가 있는 UUIDv7)로 둔다. Mezzanine의 첫 단계가 정수 ID를 UUID로 바꾸는 일이었다. 둘째, 상태가 여러 번 바뀌는 업무(청구 시도, 정산)는 한 행을 덮어쓰지 말고 시도마다 행을 추가하는 이력 테이블로 둔다. 그러면 재시도가 멱등해지고, 무엇이 언제 일어났는지 남는다. 셋째, 청구처럼 "적어도 한 번" 불리는 처리기는 시작할 때 "이미 했는가"를 먼저 확인하게 짠다. Schemaless 청구 트리거가 `STATUS`를 먼저 읽은 것과 같다.
+
+비슷한 신호가 보이면 먼저 볼 것도 있다. 큰 테이블에 열 하나 추가하는 일이 점검 공지가 된다면 샤딩보다 온라인 DDL 도구와 테이블 분리부터 본다. 복제본이 자꾸 뒤처지면 복제본에서 오래 열린 트랜잭션(ORM이 숨긴 것까지)부터 찾는다. 2016년 글이 말한 증상이다. 연결 수 때문에 PostgreSQL이 버거우면 저장소를 바꾸기 전에 커넥션 풀러와 `idle in transaction` 시간 제한(`idle_in_transaction_session_timeout`)부터 건다. 이벤트 처리 하나가 계속 실패해서 뒤가 다 밀린다면, Schemaless 트리거가 했듯 실패한 항목을 따로 빼는 장치가 있는지 본다.
+
+## 이 글이 기댄 자료
+
+- [Project Mezzanine: The Great Migration](https://www.uber.com/blog/mezzanine-codebase-data-migration/) — Uber(René Schmidt), 엔지니어링 블로그, 2015년 7월
+- [Designing Schemaless, Uber Engineering's Scalable Datastore Using MySQL](https://www.uber.com/blog/schemaless-part-one-mysql-datastore/) — Uber(Jakob Holdgaard Thomsen), 엔지니어링 블로그, 2016년 1월
+- [The Architecture of Schemaless, Uber Engineering's Trip Datastore Using MySQL](https://www.uber.com/blog/schemaless-part-two-architecture/) — Uber, 엔지니어링 블로그, 2016년 1월
+- [Using Triggers On Schemaless, Uber Engineering's Datastore Using MySQL](https://www.uber.com/blog/schemaless-part-three-datastore-triggers/) — Uber, 엔지니어링 블로그, 2016년 1월
+- [Why Uber Engineering Switched from Postgres to MySQL](https://www.uber.com/blog/postgres-to-mysql-migration/) — Uber(Evan Klitzke), 엔지니어링 블로그, 2016년 7월
+- [Evolving Schemaless into a Distributed SQL Database](https://www.uber.com/blog/schemaless-sql-database/) — Uber(Himank Chaudhary, Ovais Tariq, Deba Chatterjee), 엔지니어링 블로그, 2021년 2월
+- [PostgreSQL 10 Release Notes](https://www.postgresql.org/docs/release/10.0/) — PostgreSQL Global Development Group, 릴리스 노트, 2017년 10월
+
+## 면접에서 나올 만한 질문
+
+### Uber는 왜 2014년에 Cassandra 같은 기존 NoSQL 대신 직접 저장소를 만들었나요?
+
+운영 신뢰 때문이라고 Uber는 설명했다. 다섯 가지 요구(선형 확장, 쓰기 가용성, 변경 알림, 보조 인덱스, 운영 신뢰)로 후보를 비교했고, 변경 알림은 어느 후보에도 없었고 인덱스는 scatter-gather라 느렸다. 결정적인 것은 장애가 났을 때 팀이 바로 고칠 수 있느냐였고, MySQL 경험이 있는 팀이 몇 달 안에 끝내야 했다. 2016년 글은 그 뒤 Cassandra와 Riak을 다른 영역에서 잘 쓰고 있다고 덧붙였다.
+
+### Schemaless의 셀은 왜 고치지 않고 덧붙이기만 하나요?
+
+수정을 멱등하고 교환 가능하게 만들기 위해서다. 같은 (행 키, 열, ref key)는 한 번만 들어가니 재시도가 안전하고, 어떤 순서로 다시 적용해도 결과가 같다. 이 성질 덕분에 마스터가 죽었을 때 다른 클러스터에 버퍼로 써 두었다가 다시 넣을 수 있고, 셀 테이블 자체를 변경 로그로 삼아 트리거가 따라 읽을 수 있다. 대가로 자주 고치는 데이터에는 버전만 쌓이고, 범용 DB로 쓰기 어려워졌다.
+
+### 버퍼 쓰기는 무엇을 막나요?
+
+MySQL 비동기 복제의 틈을 막는다. 마스터가 쓰고 미니언에 넘기기 전에 죽으면 그 쓰기는 사라지니, 워커가 무작위 보조 마스터의 버퍼 테이블에 먼저 쓰고 주 마스터에 쓴 뒤 둘 다 성공해야 성공을 알린다. 미니언에 셀이 나타나면 버퍼에서 지운다. Dynamo의 힌트 핸드오프와 비슷하지만 마스터가 살아 있을 때도 항상 두 곳에 쓴다는 점이 다르고, 주 마스터가 죽은 동안 버퍼의 쓰기는 읽을 수 없다.
+
+### Schemaless 트리거는 같은 셀을 두 번 처리할 수 있나요? 그러면 어떻게 하나요?
+
+할 수 있다. 프레임워크는 셀마다 처리 함수를 적어도 한 번 부른다고 보장하고, 워커가 죽으면 저장된 오프셋부터 다시 읽으니 같은 셀이 다시 온다. 그래서 함수가 멱등이어야 하고, 청구 트리거는 `STATUS` 열을 먼저 읽어 이미 청구됐으면 돌아간다. 계속 실패하는 셀은 별도 큐로 빼고 넘어가게 설정할 수 있고, 그런 셀이 기준치를 넘으면 트리거가 멈춘다.
+
+### Uber가 PostgreSQL을 떠난 이유를 지금 그대로 받아들여도 되나요?
+
+시점을 함께 말해야 한다. 2016년 글은 9.2 기준의 쓰기·복제 증폭, 물리 복제에서 퍼진 데이터 손상 버그, 복제본 MVCC, 메이저 버전 업그레이드 문제, 연결당 프로세스를 들었다. 업그레이드 문제는 2017년 PostgreSQL 10에 논리 복제가 들어가며 크게 달라졌고, 글은 조건이 맞으면 인덱스를 건드리지 않는 HOT 업데이트를 다루지 않는다. Uber의 테이블과 갱신 패턴에서 겪은 문제였다는 점을 같이 봐야 한다.
+
+### Docstore는 Schemaless에서 무엇이 바뀌었나요?
+
+불변 셀과 최종적 일관성에서, 스키마를 강제하는 테이블과 파티션 단위 엄격한 직렬화 가능성으로 바뀌었다. 파티션마다 다른 존의 노드 3~5대가 Raft 합의로 MySQL 트랜잭션을 복제하고, 쿼리 계층은 상태가 없고, 컨트롤 플레인이 샤드를 배치한다. 글은 스스로 CP 시스템이라고 했다. 제한된 API 때문에 들였던 Cassandra의 최종적 일관성이 오히려 애플리케이션을 복잡하게 했다는 경험이 이 방향을 정했다.
+
+### 우리 서비스가 Uber 2014년의 10분의 1 규모라면 Schemaless 같은 저장소를 만들어야 하나요?
+
+대개 아니다. 데이터가 서버 몇 대에 들어가고 스키마 변경을 온라인으로 할 수 있다면 관계형 DB 하나와 복제본, 필요하면 테이블 분할로 충분하다. 샤딩이 필요해져도 지금은 Vitess나 관리형 분산 SQL처럼 직접 만들지 않는 길이 있다. 대신 UUID 식별자, 시도마다 행을 추가하는 이력 테이블, 멱등한 처리기처럼 Schemaless가 강제했던 습관은 규모와 상관없이 가져올 만하다.
+
+### Schemaless의 보조 인덱스에서 샤드 필드는 왜 중요한가요?
+
+인덱스 질의가 샤드 하나에서 끝나게 해 주기 때문이다. 질의할 때 샤드 필드 값을 반드시 줘야 하고, 그 값으로 인덱스 항목이 어느 샤드에 있는지 정해진다. 그래서 분포가 고와야 하고, 1부는 UUID가 가장 좋고 도시 ID는 좋지 않으며 상태 값은 해롭다고 적었다. 인덱스는 셀과 다른 샤드에 있어 최종적으로 일관되고, 지연은 대부분 20ms 훨씬 아래였다.

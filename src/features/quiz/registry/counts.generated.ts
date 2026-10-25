@@ -1,6 +1,23 @@
 // 자동 생성 파일이다. 직접 고치지 말고 `pnpm content:index`를 실행한다 (scripts/content-index.cjs).
 // 글 slug → 퀴즈 문제 수. 문제 본문을 번들에 싣지 않고 개수만 보여 줄 때 쓴다.
 export const QUESTION_COUNTS: Record<string, number> = {
+  "rw-uber-schemaless-docstore": 7,
+  "rw-uber-h3-geospatial": 6,
+  "rw-twitter-snowflake-timeline": 7,
+  "rw-toss-architecture": 7,
+  "rw-slack-vitess": 7,
+  "rw-reading-engineering-blogs": 7,
+  "rw-netflix-open-connect": 7,
+  "rw-netflix-cloud-microservices": 7,
+  "rw-netflix-chaos-engineering": 7,
+  "rw-naver-arcus": 7,
+  "rw-kakaotalk-cache-farm": 7,
+  "rw-kakao-datacenter-fire": 7,
+  "rw-kakao-actionbase": 7,
+  "rw-instagram-sharding-ids": 7,
+  "rw-figma-multiplayer": 8,
+  "rw-discord-message-storage": 7,
+  "rw-cloudflare-outage-regex": 7,
   "rw-stripe-idempotency": 6,
   "rw-shopify-modular-monolith": 7,
   "rw-meta-memcache-tao": 7,

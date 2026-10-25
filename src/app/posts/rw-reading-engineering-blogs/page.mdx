@@ -1,0 +1,331 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("rw-reading-engineering-blogs");
+
+<EasyIntro>
+  큰 회사들은 자기 서비스를 어떻게 만들었는지 블로그나 발표로 알려 준다. 개발자는 그 글을 읽고 배우고, 면접에서도 그 이야기를 꺼낸다. 그런데 그 글이 몇 년 전 것이면 지금은 이미 다른 방법을 쓰고 있을 수도 있다.
+
+  여행 안내 책자를 떠올리면 쉽다. 책자에 나온 맛집은 책이 나온 해에는 맞았지만 지금은 문을 닫았을 수 있다. 그래서 책이 언제 나왔는지 먼저 보고, 가기 전에 지금도 하는지 한 번 더 확인한다.
+
+  또 책자에는 좋은 곳만 실린다. 별로였던 곳은 빠진다. 회사 글도 잘된 이야기를 주로 고른다.
+
+  흔히 하는 실수는 유명한 회사가 쓴 방법이니 우리도 똑같이 하면 된다고 생각하는 것이다. 그 회사는 우리보다 몇백 배 큰 문제를 풀려고 그 방법을 골랐다. 우리 문제의 크기가 다르면 답도 달라진다.
+</EasyIntro>
+
+면접에서 "Netflix는 Hystrix로 서킷 브레이커를 두고 장애가 번지지 않게 한다"고 답했다. 면접관이 묻는다. "지금도 그런가요?" Hystrix 저장소 README 첫머리에는 "더 이상 활발히 개발하지 않으며 유지보수 모드"라는 문장이 있다. 이 문장이 README에 들어간 커밋은 2018년 11월이다. 그보다 앞선 글을 읽고 외운 답이라면 이미 몇 년 전에 낡은 셈이다.
+
+이 글은 "실제 서비스 사례" 시리즈의 입구다. 시리즈의 다른 글은 Netflix, Discord, Uber, 카카오 같은 회사가 공개한 아키텍처를 하나씩 읽는다. 그 전에 이 글에서는 그런 자료를 어떻게 읽어야 믿을 수 있는 만큼만 믿는지를 다룬다. 시리즈 글이 지키는 규칙도 여기서 정한다. 근거는 회사가 직접 낸 자료만, 열어서 읽은 것만, 날짜와 함께.
+
+## 회사가 자기 구조를 내보이는 다섯 갈래
+
+회사가 내부 구조를 밖에 알리는 길은 대략 다섯이다. 갈래마다 담기는 것과 빠지는 것이 다르다. 아래 그림은 시스템 자체에서 얼마나 떨어진 자료인지를 거리로 놓은 것이다. 점이 흐르는 방향으로 이야기가 다듬어진다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="시스템에서 멀어질수록 이야기는 매끄러워지고 세부는 줄어든다"
+  nodes={[
+    { id: "sys", label: "실제 시스템", sub: "코드·설정·로그", x: 200, y: 35, w: 130 },
+    { id: "repo", label: "오픈소스·README", sub: "커밋 이력이 남는다", x: 85, y: 115, w: 140 },
+    { id: "pm", label: "장애 보고서", sub: "시각·영향·원인", x: 315, y: 115, w: 130 },
+    { id: "paper", label: "논문", sub: "심사·측정 방법", x: 85, y: 200, w: 120 },
+    { id: "blog", label: "엔지니어링 블로그", sub: "고른 이야기", x: 315, y: 200, w: 150 },
+    { id: "talk", label: "컨퍼런스 발표", sub: "가장 짧은 판", x: 200, y: 270, w: 140 },
+  ]}
+  edges={[
+    { from: "sys", to: "repo", label: "공개" },
+    { from: "sys", to: "pm", label: "사후 분석" },
+    { from: "repo", to: "paper", dashed: true },
+    { from: "pm", to: "blog", dashed: true },
+    { from: "paper", to: "talk" },
+    { from: "blog", to: "talk" },
+  ]}
+/>
+
+오픈소스 저장소와 README는 시스템에 가장 가깝다. 코드가 같이 있고, 무엇이 언제 바뀌었는지가 커밋으로 남는다. 다만 공개된 코드가 사내에서 돌아가는 판과 같다는 보장은 없다. 회사가 직접 "같은 코드"라고 밝힌 경우와 아닌 경우를 구분해서 읽는다.
+
+장애 보고서는 일이 터진 뒤 압박 속에서 나온다. 사고 시각, 영향 범위, 원인, 재발 방지 대책이 적히고, 회사가 고르지 않은 실패가 드러난다. 그래서 블로그보다 덜 다듬어져 있다. 대신 대책이 실제로 이행됐는지는 같은 문서에 없다. 장애 보고서를 쓰는 쪽의 방법은 [포스트모템](/posts/postmortems) 글에서 다뤘다.
+
+논문은 심사를 거치고 측정 방법을 밝혀야 한다. 숫자가 어떤 조건에서 나왔는지 따라가 볼 수 있다. 대신 논문이 나올 즈음의 시스템을 찍은 사진이고, 저자들이 보여 주고 싶은 성질 위주로 쓴다.
+
+엔지니어링 블로그는 가장 많이 읽히고 가장 많이 고른 자료다. 어떤 문제를 풀었는지, 무엇을 골랐는지가 읽기 좋게 정리돼 있다. 같은 이유로 실패한 시도, 비용, 되돌린 결정은 잘 나오지 않는다.
+
+컨퍼런스 발표는 30~40분 안에 끝나야 해서 가장 짧은 판이다. 슬라이드만 보면 화살표 몇 개로 줄어든 구조가 남는다. 뉴스 기사, 요약 블로그, 유튜브 해설은 이 다섯 갈래를 다시 줄인 것이라 원문을 찾는 길잡이로만 쓴다.
+
+## 날짜가 지나면 정답이 바뀐다
+
+시스템은 계속 바뀌는데 글은 쓴 날에 멈춰 있다. 회사가 오픈소스 저장소에 직접 남긴 상태 표시를 몇 개 보면 감이 온다. 아래는 모두 그 저장소 README에서 직접 확인한 것이다.
+
+[Netflix Hystrix](https://github.com/Netflix/Hystrix)의 README는 2018년 11월부터 이렇게 시작한다. 1.5.18이 마지막 릴리스이고, Netflix는 더 이상 이슈를 검토하거나 PR을 합치지 않는다. 기존 애플리케이션에는 계속 쓰지만 관심은 미리 정한 설정이 아니라 실시간 성능에 반응하는 적응형 구현(예: 적응형 동시성 제한)으로 옮겼고, 새 내부 프로젝트에는 resilience4j 같은 활발한 프로젝트를 쓰며 남들에게도 그러길 권하기 시작했다고 적었다. 서킷 브레이커라는 개념이 낡았다는 말은 아니다. README도 그렇게 못 박는다. 바뀐 건 구현과 설정 방식이다. 서킷 브레이커 자체는 [장애가 번지지 않게](/posts/resilience-patterns) 글에서 다룬다.
+
+[Netflix SimianArmy](https://github.com/Netflix/SimianArmy)는 Chaos Monkey가 처음 들어 있던 도구 묶음이다. 2018년 7월 README에 "PROJECT STATUS: RETIRED"가 붙었다. 새 Chaos Monkey는 [별도 저장소](https://github.com/Netflix/chaosmonkey)로 옮겼는데, 2016년 10월 첫 커밋부터 README에 Spinnaker로 앱을 관리해야 쓸 수 있다고 적혀 있다. "Chaos Monkey는 무작위로 인스턴스를 죽인다"는 설명은 그대로 맞지만, 그걸 돌리는 구조는 배포 플랫폼에 붙는 형태로 바뀌었다. 그 뒤의 이야기는 [Netflix 카오스 엔지니어링](/posts/rw-netflix-chaos-engineering) 글이 이어 간다.
+
+[Twitter Snowflake](https://github.com/twitter-archive/snowflake) 저장소는 2014년 5월 README를 바꿔 2010년의 첫 판을 은퇴시켰다. 2010년 판은 Apache Thrift 기반이었고 Finagle보다 먼저 나왔으며, 사내에서 쓰는 Snowflake는 완전히 다시 쓴 것이고 Twitter 내부 인프라에 크게 기댄다고 적었다. 그러니 저장소에 남은 2010년 코드는 "Twitter가 지금 쓰는 ID 생성기"가 아니다. ID의 비트 구성 같은 생각은 남았지만 구현은 다르다. [Twitter 편](/posts/rw-twitter-snowflake-timeline)이 이 부분을 자세히 본다.
+
+[Netflix Conductor](https://github.com/Netflix/conductor)의 README에는 2023년 12월 13일부로 Netflix가 GitHub의 Conductor OSS 유지보수를 그만둔다는 공지가 있다. 사내 포크에 자원을 맞추기 위해서라고 했다. 그 날짜 전에 쓰인 "Netflix는 Conductor로 마이크로서비스 워크플로를 조율한다"는 글은 사내 포크 이야기로는 여전히 맞을 수 있지만, 공개 저장소를 받아 쓰려는 사람에게는 다른 뜻이 된다.
+
+네 사례에 공통점이 있다. 개념은 살아 있고 구현이 바뀌었다. 그래서 사례 글을 읽을 때는 "이 회사는 X를 쓴다"가 아니라 "이 회사는 이 시점에 이 문제를 X로 풀었다"로 기억하는 편이 안전하다. 시리즈의 [Discord 메시지 저장소](/posts/rw-discord-message-storage) 글처럼 같은 회사가 같은 문제의 답을 두 번 바꾼 기록도 있다.
+
+## 같은 문서 안에서도 숫자가 바뀐다
+
+날짜 문제는 몇 년 단위로만 생기지 않는다. 카카오가 GitHub에 공개한 [Actionbase](https://github.com/kakao/actionbase)의 성능 문서는 공개 직후 몇 주 사이에 여러 번 고쳐졌다. 저장소 커밋 이력에 각 판이 남아 있다. 아래에서 다음을 누르면 판이 바뀔 때마다 문서가 말한 숫자가 어떻게 바뀌었는지 볼 수 있다.
+
+<AlgoTrace
+  caption="Actionbase Benchmarks 문서의 판별 숫자 (저장소 커밋 이력)"
+  memoryLabel="그 판이 말한 것"
+  cells={["2025-12-09", "2026-01-05", "2026-01-19"]}
+  steps={[
+    { pointer: 0, memory: ["읽기 초당 수십만 건", "p99 5ms 미만"], caption: "첫 커밋의 판이다. 읽기 처리량을 초당 수십만 건으로, 읽기 지연 p99를 5ms 미만으로 적었다." },
+    { pointer: 1, memory: ["60k+ TPS", "읽기 약 5ms·쓰기 약 20ms", "3개 리전에 3대씩"], caption: "2026년 1월 5일 판이다. 운영 처리량이 60k TPS 이상이 됐고, 노드를 3개 리전에 3대씩 둔다고 적었다." },
+    { pointer: 2, found: [2], memory: ["운영 최대 약 33k RPS", "60k+는 내부 시험", "리전 언급 없음"], caption: "현재 판의 내용이다. 운영 최대는 약 33k RPS(2M RPM)이고, 60k 이상은 내부 시험 값으로 옮겨 갔다. 리전 이야기는 빠졌다." },
+  ]}
+/>
+
+어느 판도 거짓이라고 단정할 수 없다. 첫 판은 측정 방법 없이 대략의 범위를 적었고, 뒤의 판일수록 운영 값과 시험 값을 갈라 적었다. 문서 맨 위에도 "첫 릴리스라 대략의 값"이라고 밝혀 두었다. 문제는 인용하는 쪽이다. 1월 5일 판을 읽은 사람은 "운영에서 60k TPS"라고 말하고, 1월 19일 판을 읽은 사람은 "운영 최대 33k"라고 말한다. 둘 다 출처가 있다. 그래서 숫자는 판의 날짜와 함께 옮겨 적는다.
+
+같은 저장소의 README도 그렇다. 2025년 12월 첫 커밋의 README 첫 줄은 Actionbase를 "고성능 그래프 데이터베이스"라고 소개했고, 지금의 FAQ는 "범용 그래프 데이터베이스가 아니다"라고 쓴다. 이름표가 바뀌면 읽는 사람이 떠올리는 비교 대상(Neo4j 같은 것)도 달라진다. 자세한 구조는 [카카오 Actionbase](/posts/rw-kakao-actionbase) 글에서 다룬다.
+
+## 공개된 코드는 사내에서 도는 코드인가
+
+오픈소스 저장소를 1차 자료로 쓸 때 꼭 확인할 것이 있다. 공개된 코드가 그 회사가 지금 운영하는 코드와 얼마나 같은가. 위에서 본 저장소들은 이 질문에 서로 다르게 답한다.
+
+- Twitter Snowflake: 2014년 README가 "사내에서 쓰는 Snowflake는 완전히 다시 쓴 것"이라고 밝혔다. 공개 코드는 2010년의 첫 판이다.
+- Netflix Conductor: 2023년 12월 공지가 "사내 포크"를 언급한다. 공개 저장소와 사내 판이 갈라졌다는 뜻이다.
+- Netflix Hystrix: 마지막 공개 릴리스 1.5.18을 사내에서 쓰던 마지막 안정 판(1.5.11)과 맞췄다고 적었다. 공개 판과 사내 판을 일부러 맞춘 경우다.
+- 카카오 Actionbase: 2026년 1월 문서가 "사내에서 개발·운영한 그 코드"이고 보안상 민감하거나 조직 고유의 부분만 최소한으로 걷어 냈다고 쓴다. 동시에 대량 적재 파이프라인과 비동기 처리기는 아직 사내에만 있다고 밝힌다.
+
+같은 "오픈소스로 공개했다"라도 무게가 이만큼 다르다. 회사가 명시한 문장이 없으면 공개 코드와 사내 시스템이 같다고 가정하지 않는다. 특히 핵심 부품이 "곧 공개 예정"으로 빠져 있다면, 공개된 부분만으로 전체 구조를 단정하지 않는다.
+
+## 구조 그림 한 장이 숨기는 것
+
+블로그와 README의 구조 그림은 상자 몇 개와 화살표로 줄어든다. 그림은 이해를 돕지만, 그림에 없는 상자가 운영의 대부분일 때가 많다.
+
+Actionbase README의 Architecture 그림은 클라이언트 → Actionbase → HBase·JDBC·Kafka 세 갈래다. 그런데 같은 저장소의 다른 문서를 모으면 상자가 늘어난다. Benchmarks 문서는 Actionbase가 Ingress 9대와 Worker 9대라는 두 종류의 배포로 나뉜다고 쓴다. 최근 본 상품 사례에는 WAL을 읽어 변경을 다시 보내는 Spark Streaming 처리기가, 친구 사례에는 MySQL 변경을 잡는 Debezium이, 섀도 테스트 사례에는 요청을 Kafka로 남기는 Nginx Ingress와 테스트 환경이, 일관성 사례에는 스냅숏을 대조하는 Spark 작업과 수리 큐가 나온다. 그림 한 장에는 이 중 하나도 없다.
+
+그래서 구조 그림을 볼 때는 "이 그림에 없는 상자는 무엇인가"를 같이 묻는다. 배포 단위는 몇 개인가, 비동기로 도는 작업은 무엇인가, 데이터를 검증하거나 되돌리는 경로는 어디 있나. 사례를 면접에서 설명할 때도 이 세 가지를 덧붙이면 그림을 외운 답과 구분된다.
+
+## 저장소 이력으로 옛 판을 꺼내 보기
+
+README나 문서가 저장소에 있으면, 지금 판만 보지 말고 언제 무엇이 바뀌었는지 직접 꺼내 볼 수 있다. 위의 날짜들도 이렇게 확인했다. 큰 저장소라도 파일 내용 없이 커밋 이력만 먼저 받으면 금방 끝난다.
+
+```bash
+# 커밋 이력만 받아 온다. 파일 내용은 필요할 때 그때 내려받는다
+git clone --filter=blob:none https://github.com/Netflix/Hystrix.git
+cd Hystrix
+
+# README에 "maintenance mode"라는 말이 들어가거나 빠진 커밋을 찾는다
+git log -S"maintenance mode" --format='%h %ad %s' --date=short -- README.md
+```
+
+```text
+a7df971c 2018-11-19 Update README.md
+```
+
+`-S`는 그 문자열의 개수가 바뀐 커밋만 골라 준다. 커밋이 하나만 나왔으니 이 문구는 2018년 11월 19일에 들어가 지금까지 남아 있다는 뜻이다. "Netflix가 언제부터 Hystrix를 유지보수 모드로 뒀나"라는 질문에 블로그나 기사 없이 답할 수 있다.
+
+같은 방법으로 문서 하나의 판을 줄 세울 수 있다. 앞에서 본 Actionbase 성능 문서다.
+
+```bash
+# 이 파일을 바꾼 커밋을 모두 본다
+git log --format='%h %ad %s' --date=short -- website/src/content/docs/operations/benchmarks.mdx
+
+# 특정 판의 내용을 꺼내서 처리량 줄만 본다
+git show efb8189:website/src/content/docs/operations/benchmarks.mdx | grep -n "Throughput"
+```
+
+```text
+8238939 2026-01-23 docs: improve Open Source Launch Readiness (#105)
+805ab38 2026-01-19 docs: Align documentation tone with Discussion #32 (#69)
+d6c03f9 2026-01-15 chore: Apply Prettier configuration to the website (#43)
+efb8189 2026-01-05 docs: initialize documentation website for initial open-source release (#6)
+c967cca 2025-12-09 Initial open-source release
+24:- **Throughput**: 60k+ TPS (Read ~5ms, Write ~20ms)
+```
+
+커밋 메시지도 읽을거리다. 숫자가 33k와 내부 시험 60k로 갈라진 1월 19일 커밋의 메시지는 "문서의 어조를 Discussion #32에 맞춘다"였다. 이 토론이 바로 "과하게 만들었나"를 물은 그 글이다(뒤에서 다시 나온다). 숫자가 바뀐 이유가 측정을 새로 해서인지, 표현을 조심스럽게 고쳐서인지는 커밋 메시지만으로는 알 수 없다. 다만 바뀌었다는 사실과 날짜는 확실히 남는다.
+
+GitHub 웹에서도 같은 걸 볼 수 있다. 파일 화면의 History 버튼이 그 파일의 커밋 목록이고, 줄 단위로 언제 바뀌었는지는 Blame 화면에 나온다. 문서 사이트가 저장소에서 만들어지는 경우(요즘 오픈소스 대부분이 그렇다)라면 문서 사이트의 문장도 이렇게 날짜를 확인할 수 있다.
+
+## 설계 문서와 운영 사례가 다른 말을 할 때
+
+한 회사의 자료끼리 어긋날 때도 있다. Actionbase의 [Mutation 문서](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/design/mutation.mdx)는 2025년 12월부터 상태, 인덱스, 개수가 원자적으로 쓰인다고 적었다. 그런데 2026년 2월에 올라온 [HBase Consistency 사례](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/stories/how-we-survived/hbase-consistency.mdx)는 HBase 배치 연산이 원자적이지 않아 일부만 쓰일 수 있고, 그래서 정기 검증으로 찾아 고친다고 쓴다.
+
+이럴 때 어느 쪽을 믿을지는 문서의 성격으로 가린다. 설계 문서는 의도와 기대를 적고, 운영 사례는 겪은 일을 적는다. 겪은 일을 적은 쪽이 대개 실제에 가깝다. 그리고 두 문서가 어긋난다는 사실 자체가 정보다. "원자적"이라는 말이 어떤 범위(행 하나, 배치 하나, 요청 하나)의 원자성인지 따져 봐야 한다는 신호다. 면접에서 사례를 인용할 때도 "설계 문서에는 이렇게, 운영 사례에는 이렇게 나온다"고 말하면 한쪽만 외운 답보다 훨씬 단단하다.
+
+## 성공담만 남는 이유
+
+회사는 잘된 이야기를 고른다. 이상한 일이 아니다. 블로그는 채용과 평판에도 쓰일 테니 실패를 길게 쓸 이유가 적을 것이다. 그 결과 독자가 보는 표본은 살아남은 결정들로 기운다. 실패해서 조용히 버린 구조는 글이 되지 않는다. 이걸 생존 편향(survivorship bias)이라고 부른다.
+
+드물게 회사가 이 한계를 스스로 적는 경우가 있다. 카카오는 Actionbase의 [Path to Open Source](https://github.com/kakao/actionbase/blob/main/website/src/content/docs/project/path-to-open-source.mdx)(2026년 1월)에 "여기 보이는 건 살아남은 것"이라고 썼고, 저장소 [이슈 #358](https://github.com/kakao/actionbase/issues/358)(2026년 5월, 원 토론은 1월)의 제목은 "전용 인터랙션 DB가 필요했나, 과하게 만들었나"였다. FAQ에는 아예 "쓰지 말아야 할 때"가 있다. DB 하나로 감당될 때, 운영 경험이 없을 때, 아직 확장의 벽에 닿지 않았을 때.
+
+이런 문장이 있으면 그 자료는 한 단계 더 믿을 만하다. 없다면 독자가 직접 빈칸을 묻는다. 무엇이 실패했나, 얼마 들었나, 무엇을 되돌렸나, 이 구조를 쓰지 않은 팀은 왜 그랬나. 시리즈에는 이 빈칸을 채우는 반대 방향의 사례도 일부러 넣었다. 마이크로서비스를 다시 합친 [Segment](/posts/rw-segment-goodbye-microservices), 분산 구조를 모놀리스로 바꾼 [Prime Video 모니터링](/posts/rw-prime-video-monolith), 클라우드에서 나온 [37signals](/posts/rw-37signals-cloud-exit), 서버 몇 대로 버틴 [Stack Overflow](/posts/rw-stack-overflow-few-servers), 쪼개지 않고 모듈로 나눈 [Shopify](/posts/rw-shopify-modular-monolith)다. 같은 질문에 다른 답을 낸 회사들을 나란히 놓고 읽으면 "무엇이 맞나"보다 "어떤 조건에서 무엇이 맞나"가 보인다.
+
+## 장애 보고서는 무엇을 더 보여 주나
+
+장애 보고서는 회사가 고르지 않은 실패를 담기 때문에 성공담의 균형추가 된다. 보고서에는 보통 블로그에 없는 것들이 나온다. 분 단위 타임라인, 사람이 내린 판단과 그 판단이 틀린 이유, 자동화가 오히려 일을 키운 순간, 복구가 생각보다 오래 걸린 까닭.
+
+시리즈의 장애 글들이 이 자료를 쓴다. 정규식 하나가 CPU를 채운 [Cloudflare 2019년 7월](/posts/rw-cloudflare-outage-regex), 짧은 네트워크 단절이 긴 혼란이 된 [GitHub 2018년 10월](/posts/rw-github-2018-network-partition), 명령 하나가 서버를 지운 [AWS S3 2017년 2월](/posts/rw-aws-s3-2017-outage), 백본 설정이 DNS까지 끊은 [Meta 2021년 10월](/posts/rw-meta-2021-bgp-outage)이다.
+
+보고서를 읽을 때 몇 가지를 먼저 맞춘다.
+
+- 시간대. 보고서는 UTC로 쓰는 경우가 많고, 국내 보도나 사용자 체감은 한국 시간이다. 두 자료를 맞댈 때 9시간 차이를 빼먹으면 원인과 결과의 순서가 뒤바뀐다.
+- 시작과 감지와 복구의 시각. 문제가 시작된 때, 회사가 알아챈 때, 사용자 영향이 끝난 때, 데이터까지 완전히 정리된 때가 각각 다르다. "몇 시간 장애"라는 숫자가 이 중 어느 구간인지 본다.
+- 영향 범위의 단위. 전체 요청의 몇 퍼센트인지, 특정 리전인지, 특정 기능인지. 같은 장애라도 기사 제목과 보고서 본문의 범위가 다를 때가 많다.
+- 대책이 누구 몫인지. 회사 혼자 할 일인지, 데이터센터 사업자나 클라우드 업체, 규제 기관이 함께 해야 하는 일인지.
+
+장애 보고서에도 한계가 있다. 원인 분석은 회사가 정한 틀(어디까지를 원인으로 볼지)을 따른다. 재발 방지 대책은 약속이지 이행 기록이 아니다. 대책이 실제로 이뤄졌는지는 몇 달 뒤의 후속 자료나 다음 장애 보고서에서나 확인된다. 정부나 규제 기관이 낸 조사 결과가 있으면 회사 발표와 맞대 볼 수 있어서 가장 좋다. [카카오 판교 데이터센터 화재](/posts/rw-kakao-datacenter-fire) 글이 그런 경우로, 과학기술정보통신부의 조사 결과와 카카오의 회고 발표를 나란히 놓고 읽는다.
+
+## 요약 글에서 원문까지 거슬러 올라가기
+
+많은 경우 사례를 처음 만나는 곳은 원문이 아니라 요약이다. 뉴스 기사, 누군가 정리한 블로그, 영상 해설, 면접 준비 자료. 이런 글은 길잡이로는 좋지만, 숫자와 인과는 옮기는 사이에 쉽게 바뀐다. "약 33k RPS"가 "초당 3만 건 이상"이 되고, "내부 시험에서 60k 이상"이 "6만 TPS를 처리한다"가 된다.
+
+거슬러 올라가는 길은 대체로 같다.
+
+- 요약 글이 건 링크를 따라간다. 링크가 없으면 회사 이름과 핵심 용어로 회사 공식 도메인(엔지니어링 블로그, 회사 GitHub 조직)에서 찾는다.
+- 원문을 찾으면 발표 날짜, 쓴 사람의 소속, 글이 다루는 시스템의 범위(전사인가, 한 서비스인가)를 먼저 본다.
+- 원문 안의 숫자가 요약 글의 숫자와 같은지, 단위(초당·분당, 운영·시험, 최대·평균)까지 같은지 맞대 본다.
+- 같은 회사가 같은 주제로 더 늦게 낸 글이나 발표가 있는지 찾는다. 회사 블로그는 대개 태그나 시리즈로 이어 둔다.
+
+국내 회사는 기술 블로그와 함께 자체 컨퍼런스(토스 SLASH, 카카오 if(kakao), 우아한형제들 우아콘, 네이버 DEVIEW 같은 것) 발표가 중요한 1차 자료다. 발표 영상은 슬라이드보다 낫다. 발표자가 말로 붙이는 단서("이건 일부 서비스 얘기고요")가 슬라이드에는 남지 않기 때문이다.
+
+## 사례 글 한 편을 읽는 순서
+
+정리하면, 사례 글 하나를 펼쳤을 때 따라가는 순서가 있다. 아래 그림에서 다음을 누르면 독자가 자료 사이를 오가며 확인하는 흐름이 나온다.
+
+<SequenceDiagram
+  caption="사례 글 한 편을 읽고 믿을 만한 만큼만 남기는 순서"
+  actors={[
+    { id: "me", label: "나" },
+    { id: "post", label: "사례 글" },
+    { id: "repo", label: "저장소·후속 자료" },
+    { id: "team", label: "우리 서비스" },
+  ]}
+  steps={[
+    { from: "me", to: "post", label: "언제·누가", title: "날짜와 출처부터 본다", detail: "발표 연월과 회사 공식 채널인지 확인한다. 요약 글이면 원문 링크를 찾아 원문으로 간다." },
+    { from: "post", to: "me", label: "문제·제약", title: "어떤 문제였는지 적는다", detail: "그 회사가 만난 증상과 숫자, 제약(팀 수, 규모, 기존 시스템)을 뽑는다. 고른 기술 이름보다 이게 먼저다." },
+    { from: "me", to: "repo", label: "지금도?", title: "그 뒤에 바뀌었는지 찾는다", detail: "저장소 README의 상태 표시, 같은 회사의 더 늦은 글, 같은 주제의 후속 발표를 찾는다. 유지보수 모드나 은퇴 공지가 있는지 본다." },
+    { from: "repo", to: "me", label: "판별 숫자", title: "숫자는 판과 함께 남긴다", detail: "규모·지연 숫자는 그 숫자가 실린 판의 날짜와 함께 메모한다. 운영 값인지 시험 값인지도 구분한다." },
+    { from: "me", to: "me", label: "빠진 것", title: "빠진 것을 적는다", detail: "실패, 비용, 되돌린 결정, 이 구조를 쓰지 않은 팀 이야기가 있는지 본다. 없으면 없다고 적는다." },
+    { from: "me", to: "team", label: "규모 비교", title: "우리 조건과 맞대 본다", detail: "같은 문제를 우리가 지금 겪고 있는지, 규모가 몇 배 차이인지, 그 해법의 운영 비용을 감당할 사람이 있는지 본다." },
+  ]}
+/>
+
+이 순서에서 가장 자주 건너뛰는 건 세 번째, 지금도 그런지 찾는 단계다. 오픈소스가 함께 공개된 사례라면 저장소 README 맨 위만 봐도 상당 부분 해결된다. Hystrix, SimianArmy, Snowflake, Conductor 모두 README 첫 화면에 상태가 적혀 있었다.
+
+## 순서대로 한 번 읽어 보기: Hystrix README
+
+위의 순서를 Hystrix README 하나에 그대로 적용해 보자. 지금 새로 만드는 Java 서비스에 서킷 브레이커를 넣으려는데, 팀원이 "Netflix가 만든 Hystrix가 표준 아니냐"고 묻는 상황이다.
+
+첫째, 날짜와 출처. README는 Netflix 공식 GitHub 조직에 있고, 상태 문구는 2018년 11월 커밋으로 들어갔다. 1차 자료이고 날짜도 분명하다.
+
+둘째, 문제와 제약. README의 소개는 원격 시스템, 서비스, 서드파티 라이브러리로 가는 접근 지점을 격리해 연쇄 장애를 막는 지연·장애 내성 라이브러리라고 쓴다. 풀려던 문제는 지금도 같다. 느린 의존성 하나가 호출하는 쪽 자원을 다 잡아먹는 일이다.
+
+셋째, 지금도 그런가. 유지보수 모드다. Netflix는 기존 애플리케이션에는 계속 쓰지만, 관심을 미리 정한 설정이 아니라 실시간 성능에 반응하는 적응형 구현으로 옮겼고, 새 내부 프로젝트에는 resilience4j 같은 활발한 프로젝트를 쓴다고 했다.
+
+넷째, 숫자. 이 README에는 규모 숫자가 없다. 버전 숫자만 있다. 마지막 릴리스는 1.5.18이고, 사내에서 마지막으로 쓰던 안정 판 1.5.11에 맞췄다.
+
+다섯째, 빠진 것. 왜 적응형 쪽으로 옮겼는지, 그 전환에서 무엇이 어려웠는지는 README에 없다. README가 건 Netflix 블로그 글이 그 이야기일 가능성이 있지만, 열어 보기 전에는 그 내용을 근거로 쓰지 않는다.
+
+여섯째, 우리 조건. 우리 서비스는 새 프로젝트다. 만든 회사가 새 프로젝트에는 다른 걸 쓰라고 했으니 Hystrix를 고를 이유가 없다. 대신 Hystrix가 풀려던 문제(격리, 타임아웃, 차단)는 그대로 우리 문제다. 개념은 가져오고 구현은 지금 활발한 것을 고른다.
+
+이걸 메모로 남기면 이렇다.
+
+```text
+자료: Netflix/Hystrix README (상태 문구 2018-11-19 커밋)
+풀려던 문제: 원격 호출 지연이 호출자 자원을 잠식해 연쇄 장애
+지금 상태: 유지보수 모드, 마지막 릴리스 1.5.18
+회사의 현재 방향: 적응형 구현, 새 프로젝트는 resilience4j 등
+숫자: 없음
+빠진 것: 전환 이유의 세부, 전환 비용
+우리 결정: 개념(격리·타임아웃·차단)은 가져오고 라이브러리는 활발한 것으로
+```
+
+이 메모가 있으면 1년 뒤 누군가 "왜 Hystrix를 안 썼어요?"라고 물어도 근거와 날짜로 답할 수 있다.
+
+## 우리 팀이 Netflix 구조를 따라 하고 싶어질 때
+
+작은 팀이 큰 회사의 사례를 읽고 그대로 옮겨 오면 대개 비용만 먼저 온다. 마이크로서비스, 서비스 메시, 카오스 실험, 전용 저장소는 모두 수백 명이 한 시스템을 고칠 때 생기는 문제를 풀려고 나왔다. 그 문제가 없는데 해법만 가져오면 네트워크 호출, 분산 트랜잭션, 운영 도구, 배포 파이프라인이 한꺼번에 늘어난다. 이 비용은 [모놀리스에서 마이크로서비스로](/posts/microservices) 글에서 자세히 다뤘다.
+
+사례가 맞는 조건은 사례 안에 적혀 있다. 그 회사가 처음 만난 증상과 숫자가 그것이다. 우리 서비스에서 같은 증상이 보이는지가 첫 질문이다. 예를 들어 "같은 기능을 여러 팀이 따로 만들고 있다", "테이블 하나가 감당하기 어려울 만큼 커졌다", "배포 하나가 다른 팀 배포를 막는다" 같은 증상이다. 증상이 없으면 그 해법은 아직 필요하지 않다. 카카오의 FAQ와 Hystrix의 README처럼 회사가 직접 "이럴 땐 쓰지 말라", "새 프로젝트에는 다른 걸 써라"라고 적은 문장은 특히 무겁게 읽는다.
+
+작은 팀이 지금 당장 가져올 수 있는 건 기술이 아니라 습관이다.
+
+- 설계 결정을 기록할 때 참고한 사례의 출처와 날짜를 같이 적는다. 나중에 그 사례가 바뀌었는지 다시 확인할 수 있다.
+- 사례에서 기술 이름 대신 "그 회사가 어떤 증상을 보고 결정했나"를 옮겨 적고, 우리 지표에서 같은 증상을 찾아본다.
+- 큰 해법을 들이기 전에 같은 문제를 더 작게 푸는 방법(인덱스, 캐시, 모듈 경계, 작업 큐)을 먼저 시험한다.
+
+결정을 남기는 한 장짜리 기록은 이런 모양이면 충분하다.
+
+```text
+결정: 찜 개수 캐시를 원본 테이블 재계산으로 매일 대조한다
+참고한 사례: 카카오 Actionbase, HBase Consistency 문서 (2026-02 판)
+그 회사의 증상: State·Index·Count가 부분 실패로 어긋남
+우리의 증상: 상품 상세와 목록의 찜 개수가 다르다는 문의
+규모 차이: 우리는 단일 PostgreSQL, 그 회사는 HBase 리전 서버 9대
+가져온 것: "원본에서 다시 셀 수 있게 둔다"는 원칙
+가져오지 않은 것: 전용 저장소, Kafka WAL
+다시 볼 때: 대조에서 어긋난 건수가 매일 0이 아니게 될 때
+```
+
+비슷한 신호가 보이면 무엇부터 볼까. 누군가 "Netflix도 이렇게 한다"며 구조 변경을 제안하면, 그 사례의 날짜와 지금 상태, 그 회사가 겪은 증상, 우리 서비스에서 같은 증상을 보여 주는 지표 세 가지를 먼저 묻는다. 셋 중 하나라도 비어 있으면 결정을 미룬다.
+
+## 이 시리즈를 어떻게 읽나
+
+시리즈 글은 모두 같은 규칙으로 쓴다. 구체적인 주장은 회사가 직접 낸 자료(공식 블로그, 회사 사람이 한 발표, 회사가 낸 논문, 공식 저장소, 공식 장애 보고서나 정부 발표)에 기대고, 직접 열어 본 자료만 인용하며, 자료마다 발표 시점을 본문에 밝힌다. 자료가 말하지 않는 부분은 추론이라고 표시한다. 각 글 끝의 "이 글이 기댄 자료"에 목록이 있다.
+
+주제별로 묶으면 이렇다.
+
+- 저장소를 바꾸고 나눈 이야기: [Discord](/posts/rw-discord-message-storage), [Instagram](/posts/rw-instagram-sharding-ids), [Slack](/posts/rw-slack-vitess), [Pinterest](/posts/rw-pinterest-mysql-sharding), [Notion](/posts/rw-notion-postgres-sharding), [Uber Schemaless](/posts/rw-uber-schemaless-docstore), [카카오 Actionbase](/posts/rw-kakao-actionbase)
+- 분산 저장소의 원리를 논문으로: [Amazon Dynamo](/posts/rw-amazon-dynamo), [Google Spanner](/posts/rw-google-spanner-truetime), [Meta memcache·TAO](/posts/rw-meta-memcache-tao)
+- 서비스를 쪼개고 다시 묶은 이야기: [Netflix 클라우드 이전](/posts/rw-netflix-cloud-microservices), [Uber DOMA](/posts/rw-uber-doma), [Airbnb](/posts/rw-airbnb-soa-migration), 그리고 앞에서 본 반대 사례들
+- 장애를 줄이는 구조와 운영: [AWS 셔플 샤딩](/posts/rw-aws-shuffle-sharding-cells), [Google SRE 오류 예산](/posts/rw-google-sre-error-budget), [Netflix 카오스 엔지니어링](/posts/rw-netflix-chaos-engineering), [Google Borg에서 Kubernetes로](/posts/rw-google-borg-kubernetes), 앞에서 본 장애 보고서 글들
+- 결제와 정합성: [Stripe 멱등 키](/posts/rw-stripe-idempotency), [Airbnb Orpheus](/posts/rw-airbnb-payments-idempotency), [Uber Cadence](/posts/rw-uber-ringpop-cadence)
+- 연결과 전송: [WhatsApp Erlang](/posts/rw-whatsapp-erlang), [Discord 게이트웨이](/posts/rw-discord-elixir-gateway), [Figma 멀티플레이어](/posts/rw-figma-multiplayer), [Cloudflare Pingora](/posts/rw-cloudflare-pingora), [Netflix Open Connect](/posts/rw-netflix-open-connect)
+- 로그와 이벤트: [LinkedIn Kafka](/posts/rw-linkedin-kafka), [Spotify 이벤트 전송](/posts/rw-spotify-event-delivery), [Netflix EVCache](/posts/rw-netflix-evcache)
+- 국내 서비스: [카카오 판교 데이터센터 화재](/posts/rw-kakao-datacenter-fire), [카카오 Actionbase](/posts/rw-kakao-actionbase), [카카오톡](/posts/rw-kakaotalk-cache-farm), [네이버·LINE](/posts/rw-naver-arcus)
+
+글마다 짝이 되는 일반 설계 글이 있다. 사례 글은 원리를 다시 설명하지 않고 그 글로 넘긴다. 원리를 먼저 읽고 사례를 읽어도 되고, 사례를 읽다가 막히는 개념이 나올 때 원리 글로 건너가도 된다. 이 블로그의 [시스템 설계 면접 진행법](/posts/sd-interview-framework) 글에서 말한 "숫자가 가리키는 곳을 판다"는 습관을 사례 글에서는 그 회사가 실제로 판 곳으로 확인하는 셈이다.
+
+## 이 글이 기댄 자료
+
+- [Netflix/Hystrix README](https://github.com/Netflix/Hystrix) — Netflix, 오픈소스 저장소, 유지보수 모드 문구 2018년 11월
+- [Netflix/SimianArmy README](https://github.com/Netflix/SimianArmy) — Netflix, 오픈소스 저장소, 은퇴 표시 2018년 7월
+- [Netflix/chaosmonkey README](https://github.com/Netflix/chaosmonkey) — Netflix, 오픈소스 저장소, 2016년 10월 첫 커밋
+- [twitter-archive/snowflake README](https://github.com/twitter-archive/snowflake) — Twitter, 오픈소스 저장소, 2010년 첫 판, 은퇴 공지 2014년 5월
+- [Netflix/conductor README](https://github.com/Netflix/conductor) — Netflix, 오픈소스 저장소, 유지보수 종료 공지 2023년 12월
+- [kakao/actionbase](https://github.com/kakao/actionbase)의 Benchmarks·Mutation·HBase Consistency·Path to Open Source·FAQ 문서 — 카카오, 오픈소스 저장소 문서, 2025년 12월~2026년 2월(판별 이력은 커밋 기록)
+- [kakao/actionbase Issue #358](https://github.com/kakao/actionbase/issues/358) — 카카오 메인테이너, 저장소 이슈, 2026년 5월
+
+## 면접에서 나올 만한 질문
+
+### 기술 블로그에서 읽은 아키텍처를 면접에서 인용할 때 무엇을 조심하나요?
+
+그 글의 날짜와 지금 상태를 같이 말해야 한다. 시스템은 바뀌는데 글은 쓴 날에 멈춰 있다. Netflix Hystrix는 2018년 11월부터 유지보수 모드이고 Netflix는 새 프로젝트에 다른 라이브러리를 권했다. "이 회사는 X를 쓴다"보다 "이 회사는 몇 년에 이 문제를 X로 풀었고, 지금은 이렇게 바뀌었다"로 말하는 편이 정확하다.
+
+### 블로그, 논문, 장애 보고서 중 무엇을 더 믿나요?
+
+용도에 따라 다르지만, 시스템에 가까운 자료일수록 세부를 믿는다. 코드와 커밋 이력이 있는 저장소가 가장 가깝고, 장애 보고서는 회사가 고르지 않은 실패를 보여 준다. 논문은 측정 방법을 밝히지만 한 시점의 사진이고, 블로그는 읽기 좋게 고른 이야기라 실패와 비용이 잘 빠진다. 가능하면 두 갈래 이상을 맞대 본다.
+
+### 같은 회사의 문서끼리 말이 다르면 어떻게 하나요?
+
+문서의 성격과 날짜로 가린다. 설계 문서는 의도를, 운영 사례 문서는 겪은 일을 적으니 대개 운영 사례가 실제에 가깝다. 카카오 Actionbase는 설계 문서가 원자적 쓰기를 말하고 운영 사례는 HBase 배치가 원자적이지 않아 정기 검증으로 고친다고 쓴다. 이런 어긋남은 "원자적"의 범위를 따져 보라는 신호로 읽는다.
+
+### 공개된 사례가 성공담 위주라는 건 어떻게 보완하나요?
+
+빠진 질문을 직접 묻고, 반대 방향의 사례를 함께 읽는다. 무엇이 실패했나, 비용은 얼마였나, 무엇을 되돌렸나를 자료에서 찾고 없으면 없다고 적는다. Segment나 Prime Video처럼 분산 구조를 다시 합친 사례, 회사가 직접 "쓰지 말아야 할 때"를 적은 문서를 같이 보면 조건이 보인다.
+
+### 문서에 나온 처리량 숫자를 설계 근거로 써도 되나요?
+
+판의 날짜와 운영 값인지 시험 값인지를 확인한 뒤에만 쓴다. Actionbase 성능 문서는 공개 직후 몇 주 사이에 "60k+ TPS"가 운영 값에서 내부 시험 값으로 옮겨 가고, 운영 최대는 약 33k RPS로 고쳐졌다. 숫자 하나만 떼어 오면 출처가 있어도 틀린 근거가 될 수 있다.
+
+### 회사가 오픈소스로 공개한 코드라면 그 회사가 지금 쓰는 시스템이라고 봐도 되나요?
+
+회사가 그렇다고 명시했을 때만 그렇게 본다. Twitter는 공개한 Snowflake가 2010년 첫 판이고 사내 판은 완전히 다시 썼다고 밝혔고, Netflix Conductor는 공개 저장소 유지보수를 끝내며 사내 포크를 언급했다. 반대로 카카오 Actionbase는 사내에서 운영한 코드를 최소한만 걷어 내고 공개했다고 썼지만, 대량 적재 같은 부품은 아직 빠져 있다. 공개 범위와 사내 판의 관계를 확인한 뒤에 인용한다.
+
+### 사례 글의 날짜는 어떻게 확인하나요?
+
+글에 적힌 발표일을 먼저 보고, 저장소가 있으면 커밋 이력으로 확인한다. `git log -S"문구" -- README.md`로 특정 문장이 들어간 커밋을 찾으면 그 상태가 언제부터였는지 나오고, `git show 커밋:파일`로 옛 판을 꺼내 숫자를 비교할 수 있다. Hystrix의 유지보수 모드 문구가 2018년 11월 19일에 들어갔다는 것도 이렇게 확인할 수 있다.
+
+### 우리 서비스가 그 회사의 10분의 1 규모라면 같은 선택을 하나요?
+
+대개 같은 선택을 하지 않는다. 그 해법은 그 회사가 만난 증상을 풀려고 나왔고, 그 증상이 우리에게 없으면 운영 비용만 먼저 온다. 먼저 우리 지표에서 같은 증상이 보이는지 확인하고, 더 작은 해법(인덱스, 캐시, 모듈 경계)으로 먼저 버텨 본다. 가져올 것은 기술 이름이 아니라 그 회사가 결정을 내린 조건과 원칙이다.

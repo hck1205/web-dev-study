@@ -2,8 +2,509 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-cloudflare-outage-regex": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "postmortems",
+      "cdn-edge-anycast",
+      "regex-and-globbing",
+      "feature-flags",
+      "canary-release"
+    ],
+    "mentions": [
+      "https-tls",
+      "db-type-key-value",
+      "os-kernel-system-calls",
+      "sd-start-single-server",
+      "page-cache-disk-io",
+      "what-happens-google-com",
+      "recursion-backtracking",
+      "dns"
+    ]
+  },
+  "rw-discord-message-storage": {
+    "links": [
+      "sd-chat-message-storage",
+      "db-sharding",
+      "db-type-wide-column",
+      "rw-twitter-snowflake-timeline",
+      "sd-unique-id-generator",
+      "caching-strategies",
+      "consistent-hashing"
+    ],
+    "mentions": [
+      "redis-basics",
+      "eventual-consistency",
+      "mongodb-document-model",
+      "js-numbers-bigint",
+      "sd-start-single-server",
+      "db-index-design",
+      "db-type-embedded",
+      "db-consistency-cap",
+      "rw-slack-vitess",
+      "sd-mq-storage-partitions",
+      "transactional-outbox",
+      "db-type-key-value",
+      "grpc",
+      "microservices"
+    ]
+  },
+  "rw-figma-multiplayer": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "crdt",
+      "realtime-communication",
+      "clock-skew",
+      "client-data-cache",
+      "rw-twitter-snowflake-timeline",
+      "multi-tenancy-isolation",
+      "postgres-architecture",
+      "distributed-lock",
+      "postgres-mvcc-vacuum",
+      "db-sharding",
+      "rw-slack-vitess"
+    ],
+    "mentions": [
+      "sd-sharding-intro",
+      "db-type-newsql",
+      "db-type-key-value",
+      "leader-election",
+      "js-numbers-bigint",
+      "db-consistency-cap",
+      "db-replication-sharding",
+      "scaling-horizontal-vertical",
+      "mongodb-document-model",
+      "sdlc-models-agile-scrum"
+    ]
+  },
+  "rw-instagram-sharding-ids": {
+    "links": [
+      "sd-unique-id-generator",
+      "db-sharding",
+      "sd-sharding-intro",
+      "postgres-architecture",
+      "rw-twitter-snowflake-timeline",
+      "clock-skew",
+      "postgres-mvcc-vacuum",
+      "sd-news-feed-publishing",
+      "cache-invalidation"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "db-architecture-by-scale",
+      "redis-basics",
+      "postgres-functions-triggers",
+      "db-replication-sharding",
+      "mongodb-document-model",
+      "js-numbers-bigint",
+      "sd-start-single-server",
+      "db-type-newsql",
+      "http-caching-cdn",
+      "rw-reading-engineering-blogs",
+      "pub-sub"
+    ]
+  },
+  "rw-kakao-actionbase": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-kakao-datacenter-fire",
+      "rw-kakaotalk-cache-farm",
+      "cache-invalidation",
+      "sd-news-feed-publishing",
+      "sql-views-materialized",
+      "cdc-change-data-capture",
+      "eventual-consistency",
+      "idempotency-key",
+      "db-type-wide-column",
+      "cqrs",
+      "zero-downtime-migrations",
+      "transactional-outbox",
+      "canary-release",
+      "kafka-basics",
+      "sd-chat-message-storage"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "kubernetes-ingress",
+      "db-types-overview",
+      "db-type-relational",
+      "db-type-graph",
+      "scaling-horizontal-vertical",
+      "db-index-pitfalls",
+      "redis-basics",
+      "mongodb-document-model",
+      "acid-transactions"
+    ]
+  },
+  "rw-kakao-datacenter-fire": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-kakaotalk-cache-farm",
+      "rw-kakao-actionbase",
+      "disaster-recovery",
+      "high-availability",
+      "sd-multi-datacenter",
+      "leader-election",
+      "raft-consensus",
+      "exponential-backoff-jitter",
+      "circuit-breaker",
+      "bgp-basics",
+      "cdn-edge-anycast",
+      "chaos-engineering"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "k8s-deploy-pipeline-eks",
+      "docker-container-basics",
+      "cloud-deployment-models-multicloud",
+      "resilience-patterns",
+      "kafka-basics",
+      "vpc-basics",
+      "db-type-relational",
+      "redis-basics",
+      "cloud-service-models-shared-responsibility",
+      "db-type-key-value",
+      "sso-saml-oidc",
+      "on-call"
+    ]
+  },
+  "rw-kakaotalk-cache-farm": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-kakao-datacenter-fire",
+      "rw-kakao-actionbase",
+      "rw-naver-arcus",
+      "consistent-hashing",
+      "caching-strategies",
+      "redis-memory-eviction",
+      "k8s-statefulset",
+      "k8s-service-types",
+      "redis-replication-sentinel",
+      "service-discovery",
+      "k8s-controllers-reconcile"
+    ],
+    "mentions": [
+      "redis-basics",
+      "network-partitions",
+      "helm-basics",
+      "kubernetes-ingress",
+      "db-sharding",
+      "dns"
+    ]
+  },
+  "rw-naver-arcus": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "consistent-hashing",
+      "caching-strategies",
+      "service-discovery",
+      "leader-election",
+      "cache-invalidation",
+      "sd-chat-message-storage",
+      "sd-leaderboard-sorted-set",
+      "sd-news-feed-publishing",
+      "redis-high-throughput",
+      "java-jvm-memory-gc",
+      "tcp-reliability-congestion"
+    ],
+    "mentions": [
+      "redis-cluster",
+      "db-type-wide-column",
+      "redis-basics",
+      "sd-mq-consumer-groups",
+      "ds-linked-list",
+      "db-sharding",
+      "event-loop",
+      "bit-manipulation",
+      "build-caching",
+      "dns"
+    ]
+  },
+  "rw-netflix-chaos-engineering": {
+    "links": [
+      "rw-netflix-cloud-microservices",
+      "rw-netflix-open-connect",
+      "chaos-engineering",
+      "resilience-patterns",
+      "canary-release"
+    ],
+    "mentions": [
+      "service-discovery",
+      "db-type-wide-column",
+      "k8s-deploy-pipeline-eks",
+      "db-type-key-value",
+      "iptables-basics",
+      "traffic-shaping-qos",
+      "bash-scripting",
+      "sd-start-single-server",
+      "autoscaling",
+      "service-mesh",
+      "latency-bandwidth-throughput",
+      "production-incidents",
+      "network-config-cicd",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "reverse-proxy-lb-api-gateway",
+      "grpc",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "rw-netflix-cloud-microservices": {
+    "links": [
+      "rw-netflix-chaos-engineering",
+      "rw-netflix-open-connect",
+      "microservices",
+      "service-discovery",
+      "circuit-breaker",
+      "db-consistency-cap",
+      "api-gateway-use-cases",
+      "distributed-tracing",
+      "resilience-patterns",
+      "n-plus-one-queries",
+      "tcp-reliability-congestion",
+      "rate-limiting-algorithms",
+      "backpressure",
+      "spring-cloud-vs-kubernetes"
+    ],
+    "mentions": [
+      "tail-latency",
+      "k8s-service-types",
+      "gateway",
+      "db-type-wide-column",
+      "realtime-communication",
+      "db-type-key-value",
+      "graphql-basics",
+      "kubernetes-ingress",
+      "load-testing-k6",
+      "autoscaling",
+      "deadlocks",
+      "latency-bandwidth-throughput",
+      "db-type-relational",
+      "event-loop",
+      "sd-cache-and-cdn-tier",
+      "scaling-horizontal-vertical",
+      "security-groups-nacl",
+      "redis-basics",
+      "http-status-codes",
+      "mutex-semaphore-monitor",
+      "grpc",
+      "db-modeling-normalization",
+      "dns"
+    ]
+  },
+  "rw-netflix-open-connect": {
+    "links": [
+      "rw-netflix-cloud-microservices",
+      "rw-netflix-chaos-engineering",
+      "http-caching-cdn",
+      "cdn-edge-anycast",
+      "sd-video-streaming-cost",
+      "bgp-basics",
+      "service-discovery"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "what-happens-google-com",
+      "gateway-link-redundancy-fhrp-lacp",
+      "ddos-protection",
+      "ipv6-basics",
+      "layer-ip-routing-icmp",
+      "data-center-infrastructure",
+      "sd-music-streaming",
+      "udp-and-quic",
+      "layer-mtu-fragmentation",
+      "dns"
+    ]
+  },
+  "rw-reading-engineering-blogs": {
+    "links": [
+      "postmortems",
+      "resilience-patterns",
+      "rw-netflix-chaos-engineering",
+      "rw-twitter-snowflake-timeline",
+      "rw-discord-message-storage",
+      "rw-kakao-actionbase",
+      "rw-shopify-modular-monolith",
+      "rw-cloudflare-outage-regex",
+      "rw-kakao-datacenter-fire",
+      "microservices",
+      "rw-instagram-sharding-ids",
+      "rw-slack-vitess",
+      "rw-uber-schemaless-docstore",
+      "rw-amazon-dynamo",
+      "rw-google-spanner-truetime",
+      "rw-meta-memcache-tao",
+      "rw-netflix-cloud-microservices",
+      "rw-stripe-idempotency",
+      "rw-figma-multiplayer",
+      "rw-netflix-open-connect",
+      "rw-kakaotalk-cache-farm",
+      "rw-naver-arcus",
+      "sd-interview-framework"
+    ],
+    "mentions": [
+      "db-sharding",
+      "cdc-change-data-capture",
+      "k8s-deploy-pipeline-eks",
+      "kubernetes-ingress",
+      "service-mesh",
+      "kafka-basics",
+      "db-type-graph",
+      "acid-transactions",
+      "dns"
+    ]
+  },
+  "rw-slack-vitess": {
+    "links": [
+      "sd-sharding-intro",
+      "db-sharding",
+      "multi-tenancy-isolation",
+      "rw-uber-schemaless-docstore",
+      "consistent-hashing",
+      "mysql-replication-online-ddl",
+      "circuit-breaker",
+      "exponential-backoff-jitter",
+      "rate-limiting-in-practice"
+    ],
+    "mentions": [
+      "db-type-newsql",
+      "rw-reading-engineering-blogs",
+      "data-warehouse-architecture",
+      "service-discovery",
+      "db-type-wide-column",
+      "global-rollout-localization",
+      "db-type-key-value",
+      "resilience-patterns",
+      "sd-start-single-server",
+      "db-replication-sharding",
+      "scaling-horizontal-vertical",
+      "db-keys-denormalization",
+      "mongodb-document-model",
+      "microservices",
+      "etl-vs-elt",
+      "db-modeling-normalization",
+      "zero-downtime-migrations"
+    ]
+  },
+  "rw-toss-architecture": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "rw-kakao-datacenter-fire",
+      "kafka-basics",
+      "leader-election",
+      "sd-multi-datacenter",
+      "dead-letter-queue",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "kafka-to-lake-pipeline",
+      "elasticsearch-inverted-index",
+      "db-type-columnar-olap",
+      "gateway",
+      "service-mesh",
+      "vpc-basics",
+      "db-replication-sharding",
+      "redis-basics",
+      "cdc-change-data-capture",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "rw-twitter-snowflake-timeline": {
+    "links": [
+      "sd-unique-id-generator",
+      "sd-news-feed-publishing",
+      "leader-election",
+      "clock-skew",
+      "elasticsearch-inverted-index",
+      "sd-sharding-intro",
+      "rw-discord-message-storage"
+    ],
+    "mentions": [
+      "dbt-transformations",
+      "db-sharding",
+      "db-type-wide-column",
+      "graphql-basics",
+      "js-numbers-bigint",
+      "rw-reading-engineering-blogs",
+      "kafka-basics",
+      "redis-basics",
+      "high-availability",
+      "mongodb-document-model",
+      "pub-sub"
+    ]
+  },
+  "rw-uber-h3-geospatial": {
+    "links": [
+      "geohash",
+      "sd-proximity-service",
+      "quadtree",
+      "sd-unique-id-generator"
+    ],
+    "mentions": [
+      "rw-reading-engineering-blogs",
+      "db-type-key-value",
+      "js-numbers-bigint",
+      "bit-manipulation",
+      "redis-basics",
+      "self-hosting-llm-inference"
+    ]
+  },
+  "rw-uber-schemaless-docstore": {
+    "links": [
+      "sd-kv-store-partition-replication",
+      "postgres-architecture",
+      "mysql-innodb-basics",
+      "idempotency-key",
+      "sd-sharding-intro",
+      "circuit-breaker",
+      "sd-kv-store-failure-handling",
+      "rw-amazon-dynamo",
+      "cdc-change-data-capture",
+      "message-delivery-semantics",
+      "leader-election",
+      "mysql-replication-online-ddl",
+      "transactional-outbox",
+      "postgres-mvcc-vacuum",
+      "raft-consensus",
+      "rw-google-spanner-truetime",
+      "rw-slack-vitess"
+    ],
+    "mentions": [
+      "rw-reading-engineering-blogs",
+      "db-type-columnar-olap",
+      "db-type-wide-column",
+      "db-index",
+      "eventual-consistency",
+      "dead-letter-queue",
+      "db-replication-sharding",
+      "mongodb-document-model",
+      "resilience-patterns",
+      "page-cache-disk-io",
+      "sd-start-single-server",
+      "thread-safety",
+      "distributed-transactions-2pc",
+      "db-sharding",
+      "db-index-design",
+      "db-type-newsql",
+      "db-type-relational",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "sql-batch-timeout-pool",
+      "db-index-pitfalls",
+      "redis-basics",
+      "db-keys-denormalization",
+      "db-transaction-isolation",
+      "microservices",
+      "sql-basics",
+      "db-modeling-normalization",
+      "http-methods"
+    ]
+  },
   "rw-amazon-dynamo": {
     "links": [
+      "rw-reading-engineering-blogs",
       "sd-kv-store-partition-replication",
       "sd-kv-store-failure-handling",
       "sd-kv-store-versioning",
@@ -32,6 +533,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "rw-google-spanner-truetime": {
     "links": [
+      "rw-reading-engineering-blogs",
       "clock-skew",
       "consistency-models",
       "db-type-newsql",
@@ -52,6 +554,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "rw-meta-memcache-tao": {
     "links": [
+      "rw-reading-engineering-blogs",
       "caching-strategies",
       "cache-invalidation",
       "consistent-hashing",
@@ -77,6 +580,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "rw-shopify-modular-monolith": {
     "links": [
+      "rw-reading-engineering-blogs",
       "modular-monolith",
       "microservices",
       "backpressure",
@@ -102,6 +606,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "rw-stripe-idempotency": {
     "links": [
+      "rw-reading-engineering-blogs",
       "idempotency-key",
       "sd-payment-reliability",
       "exponential-backoff-jitter",
@@ -8411,6 +8916,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "iptables-nat",
+      "rw-netflix-cloud-microservices",
       "k8s-architecture",
       "kubernetes-ingress",
       "autoscaling",
@@ -8750,6 +9256,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "os-kernel-system-calls",
       "ds-hash-map",
       "event-loop",
+      "rw-uber-schemaless-docstore",
       "vpc-basics"
     ]
   },
@@ -9115,6 +9622,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mysql-innodb-basics",
+      "rw-uber-schemaless-docstore",
       "os-kernel-system-calls",
       "linux-disks-filesystems",
       "sd-kv-store-write-read-path",
@@ -12281,6 +12789,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cloud-cost-optimization"
     ],
     "mentions": [
+      "rw-netflix-open-connect",
       "packet-encapsulation",
       "shells-posix-compat",
       "sd-music-streaming"
@@ -12320,6 +12829,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "browser-fetch",
       "db-type-key-value",
+      "rw-slack-vitess",
       "redis-basics",
       "dns"
     ]
@@ -12598,6 +13108,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-statefulset",
       "db-index",
+      "rw-reading-engineering-blogs",
       "db-sharding",
       "db-type-key-value",
       "js-numbers-bigint",
@@ -12618,6 +13129,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value"
     ],
     "mentions": [
+      "rw-discord-message-storage",
       "db-type-embedded",
       "page-cache-disk-io",
       "sd-leaderboard-sorted-set",
@@ -12643,6 +13155,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rw-amazon-dynamo",
       "db-type-wide-column",
+      "rw-slack-vitess",
       "bloom-filter"
     ]
   },
@@ -12688,6 +13201,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-amazon-dynamo",
       "ds-hash-map",
       "sd-start-single-server",
+      "rw-slack-vitess",
       "tail-latency",
       "vpc-basics",
       "redis-basics",
@@ -13323,6 +13837,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sd-sharding-intro",
       "acid-vs-base",
+      "rw-slack-vitess",
       "db-type-columnar-olap",
       "db-replication-sharding",
       "dynamodb-modeling-capacity",
@@ -17893,6 +18408,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "lossy-counting"
     ],
     "mentions": [
+      "rw-discord-message-storage",
       "db-type-embedded",
       "ds-hash-map",
       "js-memoization",
@@ -18205,6 +18721,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file",
       "reverse-proxy-lb-api-gateway",
       "k8s-architecture",
+      "rw-netflix-cloud-microservices",
       "autoscaling",
       "osi-in-practice",
       "sql-batch-timeout-pool",
@@ -18230,6 +18747,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types",
       "spring-cloud-vs-kubernetes",
       "iptables-basics",
+      "rw-netflix-cloud-microservices",
       "packet-encapsulation",
       "k8s-architecture",
       "packet-capture-tcpdump",
@@ -20301,6 +20819,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql",
       "db-type-wide-column",
       "db-type-key-value",
+      "rw-slack-vitess",
       "sd-start-single-server",
       "distributed-transactions-2pc",
       "transactional-outbox",
@@ -20757,6 +21276,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-index",
+      "rw-discord-message-storage",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "cdc-change-data-capture"
@@ -20830,6 +21350,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-graph"
     ],
     "mentions": [
+      "rw-discord-message-storage",
       "acid-vs-base",
       "sd-start-single-server",
       "db-sharding",
@@ -21356,6 +21877,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
+      "rw-discord-message-storage",
       "cdc-change-data-capture",
       "transactional-outbox",
       "rabbitmq-basics",
@@ -22334,6 +22856,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "tail-latency",
       "spring-cloud-vs-kubernetes",
+      "rw-netflix-cloud-microservices",
       "reactive-programming",
       "service-mesh",
       "latency-bandwidth-throughput",

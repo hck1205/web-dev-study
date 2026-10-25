@@ -1425,14 +1425,22 @@ export const ROADMAPS: RoadmapNode[] = [
     tier: 2,
     requires: ["system-design/cases"],
     items: [
+      { post: "rw-reading-engineering-blogs", tier: 1 },
       {
         id: "storage",
         label: "저장소와 데이터",
         description: "샤딩, 복제, 캐시, 로그. 데이터가 커질 때 회사들이 실제로 고른 저장 구조",
         items: [
+          "rw-discord-message-storage",
+          "rw-instagram-sharding-ids",
+          "rw-slack-vitess",
+          "rw-uber-schemaless-docstore",
           "rw-amazon-dynamo",
           "rw-google-spanner-truetime",
           "rw-meta-memcache-tao",
+          "rw-kakao-actionbase",
+          "rw-naver-arcus",
+          "rw-kakaotalk-cache-farm",
           { checkpoint: "저장소와 데이터 관문" },
         ],
       },
@@ -1441,7 +1449,20 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "구조를 바꾼 선택",
         description: "모놀리스와 마이크로서비스, 클라우드와 자체 서버. 어느 쪽으로든 옮긴 이유와 대가",
         items: [
+          "rw-netflix-cloud-microservices",
           "rw-shopify-modular-monolith",
+        ],
+      },
+      {
+        id: "incidents",
+        label: "장애에서 배우기",
+        description: "공식 장애 보고서로 다시 그린 타임라인과 그 뒤에 바꾼 것",
+        items: [
+          "rw-kakao-datacenter-fire",
+          "rw-toss-architecture",
+          "rw-cloudflare-outage-regex",
+          "rw-netflix-chaos-engineering",
+          { checkpoint: "장애에서 배우기 관문" },
         ],
       },
       {
@@ -1449,7 +1470,12 @@ export const ROADMAPS: RoadmapNode[] = [
         label: "실시간과 대규모 트래픽",
         description: "연결을 붙잡고, 메시지를 나르고, 한 번만 처리하기",
         items: [
+          "rw-twitter-snowflake-timeline",
+          "rw-figma-multiplayer",
+          "rw-uber-h3-geospatial",
+          "rw-netflix-open-connect",
           "rw-stripe-idempotency",
+          { checkpoint: "실시간과 대규모 트래픽 관문" },
         ],
       },
     ],
