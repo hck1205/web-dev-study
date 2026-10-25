@@ -365,6 +365,111 @@ git log --oneline --graph --all
 
 `ort`는 병합 전략 이름이다. 2.34부터 기본이 되었고, 그 전에는 `recursive`였다. 공통 조상이 여럿인 복잡한 모양에서도 결과가 같고 훨씬 빠르게 동작하도록 다시 만든 것이다. 출력에 이름만 나올 뿐 평소에 고를 일은 거의 없다.
 
+## ours가 두 개라서 헷갈리는 병합 전략
+
+평소엔 ort가 알아서 하지만, 가끔 "충돌 나면 무조건 내 쪽으로" 같은 요구가 생긴다. 이때 이름이 거의 같은 옵션 두 개가 있어서 사고가 난다. `-s ours`는 전략 자체를 바꾸고, `-X ours`는 ort에 넘기는 옵션이다. 둘의 차이를 보려고 main은 상한을 4000으로 올리고 부가세를 10으로 바꿨고, `feature/limit`은 상한을 5000으로 올리면서 `coupon.js`를 새로 만든 상태에서 각각 합쳐 봤다. 그냥 합치면 붙어 있는 두 줄이 한 덩어리로 충돌한다.
+
+```bash
+# 충돌한 덩어리만 우리 쪽으로 고르고, 나머지 변경은 평소처럼 합친다
+git merge -X ours feature/limit
+cat cart.js; ls
+
+# 저쪽 변경을 통째로 버리고 병합 커밋만 만든다
+git merge -s ours feature/limit
+cat cart.js; ls
+```
+
+```text
+Auto-merging cart.js
+Merge made by the 'ort' strategy.
+ coupon.js | 1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 coupon.js
+const LIMIT = 4000;
+const TAX = 10;
+cart.js
+coupon.js
+
+Merge made by the 'ours' strategy.
+const LIMIT = 4000;
+const TAX = 10;
+cart.js
+```
+
+`-X ours`는 충돌한 곳만 우리 쪽을 고르고 충돌 없는 변경은 그대로 받는다. 그래서 `coupon.js`가 들어왔다. `-s ours`는 저쪽 브랜치의 내용을 하나도 보지 않는다. 트리는 main 그대로이고 부모만 둘인 병합 커밋이 생긴다. `git diff HEAD^1 HEAD`를 쳐 보면 아무것도 나오지 않는다. 그런데도 Git은 그 브랜치가 합쳐졌다고 여겨서 `git branch -d`가 통과하고, 나중에 그 브랜치를 다시 합쳐도 이미 들어간 것으로 본다. 옛 릴리스 브랜치를 "이건 버린다"고 기록만 남길 때 쓰는 도구이지, 충돌을 피하는 도구가 아니다.
+
+반대쪽은 비대칭이다. `-X theirs`는 있지만 `-s theirs`는 없다.
+
+```bash
+# 충돌한 덩어리를 저쪽으로 고른다
+git merge -X theirs feature/limit
+cat cart.js
+
+# 이런 전략은 없다
+git merge -s theirs feature/limit
+```
+
+```text
+Auto-merging cart.js
+Merge made by the 'ort' strategy.
+ cart.js   | 4 ++--
+ coupon.js | 1 +
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+ create mode 100644 coupon.js
+const LIMIT = 5000;
+const TAX = 0;
+
+Could not find merge strategy 'theirs'.
+Available strategies are: octopus ours recursive resolve subtree.
+```
+
+`TAX = 0`을 봐야 한다. 부가세는 main만 바꾼 줄인데, 상한 줄과 붙어 있어 한 충돌 덩어리가 되는 바람에 저쪽 값으로 되돌아갔다. `-X`는 줄 하나가 아니라 덩어리 단위로 고른다. "충돌은 다 저쪽으로"라고 편하게 쓰면 내 쪽의 멀쩡한 변경이 조용히 사라질 수 있으니, 쓴 뒤에는 `git diff HEAD^1 HEAD`로 무엇이 바뀌었는지 꼭 본다. 충돌을 하나씩 손으로 푸는 법은 [병합 충돌 글](/posts/git-merge-conflict)에 있다.
+
+### 브랜치 여럿을 한 번에 합치는 octopus
+
+`git merge`에 브랜치를 둘 이상 주면 octopus 전략이 자동으로 골라진다. 부모가 셋 이상인 병합 커밋 하나가 생긴다.
+
+```bash
+# 서로 다른 파일만 고친 브랜치 셋을 한 번에 합친다
+git merge feature/docs feature/lint feature/ci -m "Merge docs, lint, ci"
+git log --oneline --graph -5
+```
+
+```text
+Trying simple merge with feature/docs
+Trying simple merge with feature/lint
+Trying simple merge with feature/ci
+Merge made by the 'octopus' strategy.
+ ci.txt   | 1 +
+ docs.txt | 1 +
+ lint.txt | 1 +
+ 3 files changed, 3 insertions(+)
+ create mode 100644 ci.txt
+ create mode 100644 docs.txt
+ create mode 100644 lint.txt
+*---.   6840132 Merge docs, lint, ci
+|\ \ \  
+| | | * 5756627 ci 추가
+| | * | 9ac6baf lint 추가
+| | |/  
+| * / c768a77 docs 추가
+| |/  
+* / d10e076 상한 4000
+|/  
+```
+
+octopus는 손으로 풀어야 하는 병합에 맞지 않는다. 같은 줄을 고친 브랜치가 끼면 `Simple merge did not work` 뒤에 충돌로 멈추는데, 여러 브랜치가 한꺼번에 섞인 상태라 어느 브랜치 때문인지 가리기 어렵다. 그럴 땐 `git merge --abort`로 되돌리고 하나씩 합친다. 리눅스 커널처럼 서로 겹치지 않는 주제 브랜치를 모아 들이는 곳에서나 쓰고, 보통의 PR 흐름에서는 쓸 일이 거의 없다.
+
+### 곧은 히스토리와 갈래가 있는 히스토리
+
+결국 팀은 둘 중 하나를 고른다. 병합 커밋을 남겨 갈래가 보이는 히스토리로 갈지, rebase나 squash로 한 줄로 펴서 갈지다.
+
+갈래가 있는 히스토리는 일어난 일을 그대로 남긴다. 기능이 어느 PR로 들어왔는지 `--first-parent`와 `--ancestry-path`로 추적할 수 있고, 병합 커밋 하나를 `git revert -m 1`로 되돌리면 기능 전체가 빠진다. 대신 `git log --graph`가 철로처럼 얽히고, `git bisect`가 기능 브랜치 안의 중간 커밋까지 들어가서 빌드가 깨진 커밋을 만나기도 한다.
+
+곧은 히스토리는 읽기 쉽다. `git log` 한 줄 한 줄이 그대로 main의 변화이고, bisect도 곧게 간다. 대가는 다시 쓴다는 점이다. rebase는 커밋 해시를 바꾸므로 이미 다른 사람이 받은 브랜치에 쓰면 꼬이고, squash는 앞에서 본 것처럼 원래 커밋과의 연결을 끊는다. GitHub의 "Require linear history" 규칙을 켜면 병합 커밋이 들어간 푸시를 막는다.
+
+정답은 없고, 히스토리로 무엇을 하려는지에 달렸다. PR 단위로 되돌리고 추적하는 일이 많으면 병합 커밋, 작은 PR을 자주 넣고 한 줄로 읽고 싶으면 squash나 rebase다. 어떻게 펴는지는 [rebase 글](/posts/git-rebase)에, 팀 규칙으로 고르는 기준은 [브랜치 전략 글](/posts/git-branching-strategy)에 있다.
+
 ## 다 쓴 브랜치는 지운다
 
 병합이 끝난 브랜치는 지운다. 이름표만 지우는 것이라 커밋은 병합된 히스토리에 남는다. `-d`는 병합되지 않은 커밋이 있으면 거부하고, `-D`는 묻지 않고 지운다.
@@ -554,7 +659,7 @@ c61bde5 Merge pull request #15 from feature/tax
 
 PR을 squash로 합치는 팀이라면 이 방법은 쓸 수 없다. 기능 브랜치의 커밋이 main에 없으니 main의 커밋 하나가 곧 PR 하나이고, 메시지 끝의 `(#12)` 같은 PR 번호가 유일한 연결 고리가 된다. 어느 쪽을 고를지는 이런 추적이 얼마나 필요한지에 달렸다. 비교는 [브랜치 전략 글](/posts/git-branching-strategy)에 있다.
 
-## 다시 정리하면
+## 브랜치는 이름표, 병합은 이름표 밀기나 세 스냅샷 비교
 
 브랜치는 커밋 해시 하나를 적은 이름표이고, HEAD는 지금 어느 이름표 위에 있는지를 가리킨다. 커밋하면 HEAD의 이름표만 앞으로 간다. 합칠 때 한쪽이 다른 쪽의 조상이면 이름표만 미는 fast-forward로 끝나고, 갈라져 있으면 공통 조상과 양쪽 끝 세 스냅샷을 비교하는 3-way 병합으로 부모가 둘인 커밋을 만든다. 처음의 두 `git merge`가 다르게 끝난 이유가 이것이다. 병합 커밋의 첫 번째 부모를 따라가면 main의 PR 이력이 된다. 같은 줄을 양쪽이 다르게 고쳤을 때 생기는 충돌은 [다음 글](/posts/git-merge-conflict)에서 푼다.
 
@@ -583,3 +688,7 @@ squash merge는 브랜치의 변경을 합친 새 커밋 하나를 만들 뿐, �
 ### 병합 커밋의 첫 번째 부모와 두 번째 부모는 어떻게 다른가요?
 
 첫 번째 부모는 병합을 실행할 때 서 있던 브랜치의 이전 끝이고, 두 번째 부모는 합쳐 들어온 브랜치의 끝이다. `git log --first-parent`는 첫 번째 부모만 따라가서 main에 들어온 기능 단위 히스토리를 보여 준다. 병합을 되돌리는 `git revert -m 1`의 1도 첫 번째 부모를 기준으로 삼아 그쪽으로 되돌리겠다는 뜻이다.
+
+### git merge -s ours와 -X ours는 어떻게 다른가요?
+
+`-s ours`는 병합 전략을 ours로 바꿔서 저쪽 브랜치의 내용을 전혀 반영하지 않고, 트리는 그대로 둔 채 부모가 둘인 병합 커밋만 만든다. `-X ours`는 기본 ort 전략에 주는 옵션이라 충돌 없는 변경은 다 받고, 충돌한 덩어리만 우리 쪽으로 고른다. `-X`는 줄이 아니라 덩어리 단위라서 붙어 있는 줄의 한쪽 변경이 같이 버려질 수 있다. `-X theirs`는 있지만 `-s theirs`는 없다.

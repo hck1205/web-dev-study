@@ -1,0 +1,561 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("react-forms-actions");
+
+<EasyIntro>
+  회원가입 화면을 만들었더니 가입 버튼을 빠르게 두 번 누른 사람의 계정이 두 개 생기고, 눈이 불편한 사람은 무엇이 틀렸는지 듣지 못하는 일이 생긴다. 폼은 칸 몇 개와 버튼 하나처럼 보이지만 챙길 것이 많다.
+
+  폼을 시험지라고 생각하면 쉽다. 학생이 답을 쓰는 동안 선생님이 글자 하나마다 들여다보면 둘 다 지치니, 다 쓰고 냈을 때 한 번에 채점하는 편이 빠르다. 채점 기준표는 하나만 만들어서 학생 책상과 교무실에 똑같이 둔다. 학생 쪽 기준표는 미리 알려 주는 친절이고, 진짜 점수는 교무실에서 다시 매기니 누군가 기준표를 고쳐서 내도 교무실은 속지 않는다. 시험지를 내고 나면 제출 중이라는 표시를 하고, 같은 시험지가 두 번 들어오지 않게 막는다. 결과가 오기 전에 화면에 먼저 반영해 두었다가, 거절당하면 원래대로 돌려놓는 방법도 있다.
+</EasyIntro>
+
+회원가입 폼을 하나 만들었다. 칸은 이메일, 비밀번호, 비밀번호 확인, 나이 네 개다. 배포하고 일주일 동안 이런 일이 생겼다. 같은 이메일로 계정이 두 개 만들어진 사람이 있다. 휴대폰에서 가입 버튼을 두 번 누른 것이다. 화면 낭독기를 쓰는 사용자는 "가입이 안 된다"고만 했다. 빨간 글씨로 "8자 이상"이 떴지만 그 글씨가 어느 칸 이야기인지 들리지 않았다. 그리고 나이 칸에 "20"을 넣었는데 서버 로그에는 `age: "20"`이 문자열로 찍혔다.
+
+```tsx
+function SignupForm() {
+  const [values, setValues] = useState({ email: "", password: "", confirm: "", age: "" });
+  const [error, setError] = useState("");
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (values.password.length < 8) return setError("8자 이상");
+    await fetch("/api/signup", { method: "POST", body: JSON.stringify(values) });
+  }
+  // 칸마다 value={values.email} onChange={...}
+}
+```
+
+틀린 데는 없어 보이는데 구멍이 여럿이다. 이 글은 이 폼을 고치면서 React에서 폼을 다루는 방법을 따라간다. 값을 누가 들고 있을지, 검증 규칙을 어디에 둘지, 에러를 어떻게 알릴지, 제출을 어떻게 한 번으로 만들지, 그리고 React 19가 폼에 더한 액션과 훅이 무엇을 대신해 주는지다.
+
+폼이 HTTP 요청으로 바뀌는 과정(인코딩, `multipart`, PRG)은 [HTML form은 어떻게 HTTP 요청이 되나](/posts/html-form-http)에서 다뤘고, 폼 상태를 앱 전체의 상태 지도에서 어디에 두는지는 [프런트엔드 상태 구조](/posts/frontend-state-architecture)에 있다. 여기서는 그 사이, React 컴포넌트 안에서 일어나는 일을 본다. 예제는 React 19 기준이다.
+
+## 입력값을 누가 들고 있나
+
+입력칸의 값을 들고 있는 쪽은 둘 중 하나다. React의 state가 들고 있고 DOM은 그걸 비추기만 하면 제어 컴포넌트(controlled component), DOM이 들고 있고 React는 필요할 때 읽기만 하면 비제어 컴포넌트다.
+
+```tsx
+// 제어: 값의 원본이 state다
+<input value={email} onChange={(e) => setEmail(e.target.value)} />
+
+// 비제어: 값의 원본이 DOM이다. 처음 값만 정해 준다
+<input name="email" defaultValue="" />
+```
+
+제어 입력에서 글자 하나를 칠 때 일어나는 일을 아래 그림에서 "다음"을 눌러 따라가 보자. 눈여겨볼 곳은 마지막 단계다. React는 렌더가 끝나면 DOM의 값을 state에 맞춰 다시 써 넣는다.
+
+<SequenceDiagram
+  caption="제어 입력: 글자 하나가 state를 한 바퀴 돌아 화면에 다시 찍힌다"
+  actors={[
+    { id: "dom", label: "input (DOM)" },
+    { id: "handler", label: "onChange" },
+    { id: "react", label: "React" },
+  ]}
+  steps={[
+    {
+      from: "dom",
+      to: "handler",
+      label: "input 이벤트",
+      title: "브라우저가 먼저 글자를 넣는다",
+      detail: "사용자가 k를 치면 DOM의 value는 이미 k가 됐다. React의 onChange는 브라우저의 input 이벤트에 붙어 있다.",
+    },
+    {
+      from: "handler",
+      to: "react",
+      label: "setEmail(\"k\")",
+      title: "핸들러가 state를 바꿔 달라고 한다",
+      detail: "이 줄이 없거나 값을 가공해서 넣으면 다음 단계에서 차이가 생긴다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "render",
+      title: "폼 컴포넌트를 다시 렌더링한다",
+      detail: "email state를 가진 컴포넌트와 그 아래가 다시 렌더링된다. 폼 전체 값을 한 state에 두면 칸 하나에 폼 전체가 렌더링된다.",
+    },
+    {
+      from: "react",
+      to: "dom",
+      label: "value = state",
+      title: "DOM 값을 state에 맞춘다",
+      detail: "커밋할 때 DOM의 value를 state와 같게 만든다. setEmail을 안 불렀다면 DOM 값이 이전 값으로 되돌아가서, 글자를 쳐도 칸이 바뀌지 않는다.",
+    },
+  ]}
+/>
+
+마지막 단계 덕분에 제어 입력은 할 수 있는 일이 많다. 전화번호에 하이픈을 끼워 넣고, 숫자가 아닌 글자를 걸러 내고, 값에 따라 다른 칸을 보였다 숨기고, 치는 즉시 검증 결과를 보여 준다. 값이 state에 있으니 다른 컴포넌트와 공유하기도 쉽다.
+
+비용은 렌더링이다. 글자 하나마다 state를 가진 컴포넌트가 다시 렌더링된다. 30칸 폼 전체를 한 state에 두고 칸마다 인라인 `onChange`를 넘겼더니 다섯 글자에 칸 렌더링이 150번 일어난 측정이 [프런트엔드 상태 구조](/posts/frontend-state-architecture)에 있다. 칸이 적은 로그인 폼이라면 신경 쓸 일이 아니다. 칸마다 검증 메시지와 서식이 붙은 긴 폼, 저가형 휴대폰이 주 사용 환경이면 타자가 늦게 따라온다.
+
+제어 입력의 가공에는 한 가지 함정이 더 있다. 한글은 한 글자를 조합하는 동안 input 이벤트가 여러 번 온다. 조합 중인 값을 잘라 내거나 대문자로 바꾸는 식으로 고쳐서 넣으면 조합이 깨지고 글자가 이상하게 들어갈 수 있다. 가공은 `compositionend` 뒤나 blur 때 한다. 조합 이벤트의 순서는 [프런트엔드 시스템 디자인 면접](/posts/frontend-system-design-interview)에서 자동완성으로 따라갔다.
+
+`input type="file"`은 고를 수가 없다. 보안 때문에 스크립트가 파일 입력의 값을 정할 수 없어서 React에서 파일 입력은 늘 비제어다.
+
+## React Hook Form이 빠른 이유
+
+React Hook Form은 비제어 입력을 기본으로 깐다. `register`가 돌려주는 것을 보면 이유가 보인다.
+
+```tsx
+const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<SignupInput>();
+
+register("email");
+// → { name: "email", onChange, onBlur, ref }
+```
+
+`value`가 없다. 대신 `ref`가 있다. 라이브러리는 이 ref로 실제 DOM 요소를 붙잡아 두고, 값은 DOM에 그대로 둔다. `onChange`는 state를 바꾸지 않고 라이브러리 내부 저장소(React 바깥의 평범한 객체)에 값을 적고, 검증이 필요한 시점인지 따진다. 그래서 글자를 쳐도 폼 컴포넌트는 렌더링되지 않는다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="값은 DOM과 바깥 저장소에 있고, 렌더링은 구독한 곳만 일어난다"
+  nodes={[
+    { id: "inputs", label: "input × 30", sub: "ref로 등록", x: 90, y: 50, w: 120 },
+    { id: "control", label: "form control", sub: "React 바깥 객체", x: 290, y: 50, w: 140 },
+    { id: "state", label: "formState", sub: "Proxy", x: 290, y: 150, w: 120 },
+    { id: "watch", label: "useWatch", sub: "한 칸만 구독", x: 90, y: 150, w: 120 },
+    { id: "ui", label: "에러 문구", sub: "읽은 값만 렌더", x: 200, y: 230, w: 130 },
+  ]}
+  edges={[
+    { from: "inputs", to: "control", label: "onChange" },
+    { from: "control", to: "state", label: "검증 결과" },
+    { from: "control", to: "watch", label: "값 알림", dashed: true },
+    { from: "state", to: "ui", label: "errors" },
+  ]}
+/>
+
+렌더링이 필요한 곳은 따로 구독한다. `formState`는 Proxy라서 컴포넌트가 실제로 읽은 속성(`errors`, `isDirty`, `isSubmitting` 등)만 구독한다. `isDirty`를 읽지 않는 컴포넌트는 그 값이 바뀌어도 렌더링되지 않는다. 그래서 구조 분해로 필요한 것만 꺼내 쓰는 게 의미가 있다.
+
+자주 하는 실수는 `watch`다. 폼 꼭대기에서 `watch("country")`로 값을 읽으면 그 칸이 바뀔 때마다 `useForm`을 부른 컴포넌트가 렌더링된다. 다른 칸 값에 따라 무언가를 보여 줘야 한다면 그 부분만 작은 컴포넌트로 떼고 그 안에서 `useWatch({ control, name: "country" })`로 구독한다. 렌더링이 그 컴포넌트 안에서 끝난다.
+
+비제어가 늘 되는 건 아니다. 날짜 선택기나 셀렉트 박스처럼 `value`와 `onChange`만 받는 UI 라이브러리 컴포넌트는 ref로 DOM 값을 읽을 수 없다. 이런 칸은 `Controller`로 감싸서 그 칸만 제어로 둔다. 폼 전체가 아니라 그 칸 하나만 렌더링된다.
+
+검증 시점은 `mode`로 정한다. 기본값은 `onSubmit`이라 처음 제출하기 전에는 조용하고, 한 번 제출한 뒤에는 `reValidateMode`(기본 `onChange`)에 따라 고칠 때마다 다시 검사한다. 입력 중에 빨간 글씨가 계속 뜨면 사용자가 아직 다 치지도 않았는데 꾸중을 듣는 기분이라 `onBlur`나 `onTouched`(처음엔 칸을 떠날 때, 그다음부터는 바꿀 때마다)를 많이 고른다.
+
+## 검증 규칙은 한 곳에 쓴다
+
+처음 코드는 비밀번호 길이를 클라이언트에서만 봤다. 서버는 아무것도 안 봤다. 개발자 도구에서 요청을 다시 보내거나 `curl`을 쓰면 클라이언트 검증은 지나간다. [HTML 폼과 HTTP](/posts/html-form-http)에서 본 대로 브라우저 검증은 친절이고, 안전은 서버가 맡는다.
+
+그렇다고 같은 규칙을 양쪽에 따로 쓰면 언젠가 어긋난다. 클라이언트는 "8자 이상", 서버는 "10자 이상"이 되어, 화면에서는 통과했는데 서버가 거절하는 폼이 생긴다. 그래서 규칙을 스키마 하나로 쓰고 양쪽에서 import한다. TypeScript 쪽에서 많이 쓰는 건 Zod다.
+
+```ts
+// signup.schema.ts — React에도 서버에도 의존하지 않는 파일
+import { z } from "zod";
+
+export const signupSchema = z
+  .object({
+    email: z.string().trim().toLowerCase().email("이메일 형식이 아니다"),
+    password: z.string().min(8, "8자 이상이어야 한다"),
+    confirm: z.string(),
+    // 빈 칸은 숫자 0이 되지 않게 먼저 undefined로 바꾼다
+    age: z.preprocess(
+      (v) => (v === "" ? undefined : v),
+      z.coerce.number().int("숫자로 입력한다").min(14, "14세 이상만 가입할 수 있다").optional(),
+    ),
+  })
+  .refine((v) => v.password === v.confirm, { path: ["confirm"], message: "비밀번호가 서로 다르다" });
+
+export type SignupInput = z.infer<typeof signupSchema>;
+```
+
+처음 폼의 세 번째 문제가 여기서 풀린다. 폼 값은 늘 문자열이다. `FormData`에서 꺼내도, DOM에서 읽어도 `"20"`이다. `z.coerce.number()`가 숫자로 바꾼 뒤 검사한다. 스키마는 검증과 함께 값을 정리(trim, 소문자, 형 변환)해서 돌려주므로, 서버는 검사가 끝난 `data`만 쓰면 된다.
+
+다만 coerce는 조심해서 쓴다. `Number("")`는 0이라서, 빈 칸을 그대로 숫자로 바꾸면 "입력 안 함"이 0으로 둔갑하고 "14세 이상" 에러가 난다. 그래서 위 스키마는 `z.preprocess`로 빈 문자열을 먼저 `undefined`로 바꾼다. Zod 버전에 따라 API 이름도 조금 다르다. Zod 4에서는 `z.email()`처럼 형식 검사기가 최상위로 나왔고, 에러를 칸별로 펼치는 함수도 `error.flatten()`에서 `z.flattenError(error)`로 옮겨 갔다. 쓰는 버전의 문서를 확인한다.
+
+클라이언트에서는 React Hook Form에 리졸버로 꽂는다. 서버에서는 같은 스키마로 다시 검사한다.
+
+```tsx
+// 클라이언트
+const form = useForm<SignupInput>({ resolver: zodResolver(signupSchema), mode: "onTouched" });
+
+// 서버 (Route Handler든 서버 액션이든)
+const parsed = signupSchema.safeParse(Object.fromEntries(formData));
+if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors };
+if (await users.exists(parsed.data.email)) return { fieldErrors: { email: ["이미 가입한 이메일이다"] } };
+```
+
+마지막 줄이 중요하다. "이미 가입한 이메일"처럼 DB를 봐야 아는 검사는 클라이언트 스키마에 넣을 수 없다. 서버만 할 수 있는 검사 결과도 같은 모양(칸 이름 → 메시지)으로 돌려주면, 화면은 어느 쪽에서 온 에러든 같은 자리에 같은 방식으로 보여 준다. React Hook Form이면 받은 에러를 `setError("email", { message })`로 넣는다.
+
+스키마가 하는 일을 손으로 써 보면 감이 잡힌다. 아래 함수는 위 스키마와 같은 규칙으로 값을 검사하고 정리한다. 문자열로 들어온 나이를 숫자로 바꾸고, 칸마다 첫 번째 에러만 남긴다. 이런 함수를 React에도 서버에도 의존하지 않는 파일에 두면 양쪽이 같은 결과를 낸다.
+
+<CodePlayground
+  caption="양쪽에서 같이 쓰는 가입 검증"
+  functionName="validateSignup"
+  initialCode={`function validateSignup(values) {
+  // 값은 모두 문자열로 들어온다 (FormData와 같다)
+  // 검사 순서: email → password → confirm → age, 칸마다 첫 에러만 남긴다
+  // 성공: { ok: true, data: { email, password, age? } }  (email은 trim + 소문자, age는 숫자)
+  // 실패: { ok: false, fieldErrors: { 칸이름: "메시지" } }
+  return { ok: true, data: {} };
+}`}
+  solution={`function validateSignup(values) {
+  const fieldErrors = {};
+  const add = (field, message) => {
+    if (!fieldErrors[field]) fieldErrors[field] = message;
+  };
+  const email = String(values.email ?? "").trim().toLowerCase();
+  const password = String(values.password ?? "");
+  const confirm = String(values.confirm ?? "");
+  const ageText = String(values.age ?? "").trim();
+
+  const [local, domain, ...rest] = email.split("@");
+  const emailOk = rest.length === 0 && Boolean(local) && Boolean(domain) &&
+    domain.includes(".") && !domain.startsWith(".") && !domain.endsWith(".") && !email.includes(" ");
+  if (email === "") add("email", "이메일을 입력한다");
+  else if (!emailOk) add("email", "이메일 형식이 아니다");
+
+  if (password.length < 8) add("password", "8자 이상이어야 한다");
+  if (confirm !== password) add("confirm", "비밀번호가 서로 다르다");
+
+  let age;
+  if (ageText !== "") {
+    age = Number(ageText);
+    if (!Number.isInteger(age)) add("age", "숫자로 입력한다");
+    else if (age < 14) add("age", "14세 이상만 가입할 수 있다");
+  }
+
+  if (Object.keys(fieldErrors).length > 0) return { ok: false, fieldErrors };
+  const data = { email, password };
+  if (age !== undefined) data.age = age;
+  return { ok: true, data };
+}`}
+  tests={[
+    { args: [{ email: " Kim@Example.com ", password: "hunter22!", confirm: "hunter22!", age: "20" }], expected: { ok: true, data: { email: "kim@example.com", password: "hunter22!", age: 20 } }, label: "정리해서 돌려준다" },
+    { args: [{ email: "kim@", password: "short", confirm: "shorts", age: "" }], expected: { ok: false, fieldErrors: { email: "이메일 형식이 아니다", password: "8자 이상이어야 한다", confirm: "비밀번호가 서로 다르다" } }, label: "세 칸이 틀렸다" },
+    { args: [{ email: "", password: "longenough", confirm: "longenough", age: "12" }], expected: { ok: false, fieldErrors: { email: "이메일을 입력한다", age: "14세 이상만 가입할 수 있다" } }, label: "빈 이메일, 나이 미달" },
+    { args: [{ email: "lee@example.com", password: "longenough", confirm: "longenough", age: "열넷" }], expected: { ok: false, fieldErrors: { age: "숫자로 입력한다" } }, label: "숫자가 아닌 나이" },
+    { args: [{ email: "park@example.com", password: "12345678", confirm: "12345678" }], expected: { ok: true, data: { email: "park@example.com", password: "12345678" } }, label: "나이는 선택" },
+    { args: [{ email: "a@b@c.com", password: "12345678", confirm: "12345678", age: "14" }], expected: { ok: false, fieldErrors: { email: "이메일 형식이 아니다" } }, label: "골뱅이가 두 개" },
+  ]}
+/>
+
+## 빨간 글씨는 화면 낭독기에 들리지 않는다
+
+처음 폼의 에러는 폼 아래에 `p` 하나로 떴다. 눈으로 보는 사람은 빨간색과 위치로 어느 칸 이야기인지 짐작한다. 화면 낭독기는 포커스가 있는 칸의 이름과 상태를 읽는데, 그 칸과 에러 문구 사이에 아무 연결이 없으니 읽을 게 없다.
+
+연결은 속성 몇 개로 만든다. 아래 입력칸을 조각별로 눌러 보자.
+
+<UrlAnatomy
+  caption="에러가 있는 칸이 갖춰야 할 속성"
+  base="<input"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "id",
+      display: "id={emailId}",
+      title: "label과 묶는 이름",
+      description: "label의 htmlFor와 같은 값을 준다. 그래야 칸의 이름이 '이메일'로 읽히고 라벨을 눌러도 칸에 포커스가 간다. 같은 폼이 한 화면에 두 번 나올 수 있으니 useId로 만든다.",
+      required: true,
+    },
+    {
+      key: "aria-invalid",
+      display: "aria-invalid={!!error}",
+      title: "이 칸이 틀렸다는 표시",
+      description: "true면 화면 낭독기가 '잘못됨' 같은 상태를 함께 읽는다. 에러가 없을 때는 false로 두거나 속성을 뺀다. CSS에서 [aria-invalid=\"true\"]로 테두리 색을 바꾸면 상태와 모양이 한 곳에서 맞는다.",
+      required: true,
+    },
+    {
+      key: "aria-describedby",
+      display: "aria-describedby={hintId + \" \" + errorId}",
+      title: "설명과 에러 문구를 잇는다",
+      description: "공백으로 id 여러 개를 줄 수 있다. 칸에 포커스가 가면 이름 다음에 이 요소들의 글자를 읽는다. 에러 문구 요소는 에러가 없을 때도 같은 id로 자리를 남겨 두면 연결이 끊기지 않는다.",
+      required: true,
+    },
+    {
+      key: "required",
+      title: "필수 칸",
+      description: "브라우저 검증과 '필수'라는 안내를 함께 준다. 직접 만든 검증만 쓰려면 form에 noValidate를 붙이고 aria-required를 쓴다.",
+    },
+    {
+      key: "autoComplete",
+      display: "autoComplete=\"email\"",
+      title: "자동 완성 힌트",
+      description: "비밀번호 칸에는 new-password를 주면 브라우저와 비밀번호 관리자가 새 비밀번호를 제안한다. 칸이 무엇인지 알려 주는 것도 접근성이다.",
+    },
+  ]}
+/>
+
+```tsx
+function Field({ label, error, hint, ...inputProps }: FieldProps) {
+  const id = useId();
+  const hintId = id + "-hint";
+  const errorId = id + "-error";
+  return (
+    <div>
+      <label htmlFor={id}>{label}</label>
+      <input id={id} aria-invalid={error ? true : undefined} aria-describedby={hintId + " " + errorId} {...inputProps} />
+      <p id={hintId}>{hint}</p>
+      <p id={errorId}>{error}</p>
+    </div>
+  );
+}
+```
+
+제출했는데 틀린 칸이 있으면 첫 번째 틀린 칸으로 포커스를 옮긴다. 화면 낭독기는 포커스가 간 칸의 이름과 에러를 읽고, 눈으로 보는 사용자도 긴 폼에서 스크롤해 찾을 필요가 없다. React Hook Form은 `shouldFocusError`가 기본으로 켜져 있어 이 일을 해 준다. 직접 만들 때는 칸 순서대로 ref를 보고 처음 틀린 칸에 `focus()`를 부른다.
+
+에러 문구 자체를 `role="alert"`로 만들어 바로 읽히게 하는 방법도 있다. 칸마다 붙이면 입력할 때마다 여러 문구가 한꺼번에 소리를 낸다. alert는 제출 뒤 "세 칸을 고쳐야 한다" 같은 요약 하나에만 쓰고, 칸별 문구는 `aria-describedby`로 연결해 포커스가 갈 때 읽히게 두는 편이 덜 시끄럽다. 색만으로 상태를 말하지 않는 것도 같은 이야기다. 빨간 테두리 옆에 문구가 있어야 색을 구별하기 어려운 사용자도 안다.
+
+## 두 번 누르면 두 번 가입된다
+
+휴대폰에서 버튼을 누르고 반응이 없으면 사람은 한 번 더 누른다. 처음 폼은 요청이 가는 동안 아무 표시가 없었고, 두 번째 클릭도 그대로 두 번째 요청이 됐다. 막는 장치는 겹으로 둔다.
+
+첫째, 제출 중에는 버튼을 비활성화하고 문구를 바꾼다. 이 버튼이 폼의 기본 버튼이면 입력칸에서 Enter를 눌러도 제출되지 않는다. HTML 스펙이 기본 버튼이 비활성일 때 암묵적 제출(Enter)을 하지 말라고 정해 두었다. 버튼만 막고 `onKeyDown`으로 Enter를 따로 처리하는 코드가 있다면 거기서 다시 뚫린다.
+
+둘째, 클릭 핸들러가 state로 막는 방식에는 틈이 있다. `setSubmitting(true)`는 다음 렌더링에서야 버튼에 반영되니, 렌더링 전에 들어온 두 번째 클릭은 아직 활성 버튼을 누른다. 렌더링을 기다리지 않는 표시가 필요하면 ref로 "진행 중"을 기록하고 핸들러 첫 줄에서 확인한다. React 19의 액션을 쓰면 뒤에서 볼 `isPending`으로 버튼을 막고, 같은 액션이 두 번 들어와도 동시에 돌지 않고 앞의 것이 끝난 뒤 차례로 돈다. 두 번째 실행은 앞의 결과를 이전 상태로 받으니, 이미 성공했으면 건너뛰게 만들 수 있다.
+
+셋째, 서버가 같은 제출을 한 번만 처리한다. 클라이언트에서 무엇을 막든 네트워크 재시도, 탭 두 개, 뒤로 가기 후 재제출은 남는다. 폼을 열 때 일회용 키를 만들어 숨은 필드로 같이 보내고, 서버는 같은 키를 두 번째로 받으면 처음 결과를 돌려준다. 가입처럼 자연스러운 고유값이 있으면 이메일에 유니크 제약을 거는 것만으로도 두 번째 계정은 생기지 않는다. 키를 어떻게 저장하고 언제 지우는지는 [멱등성 키](/posts/idempotency-key)에 있다.
+
+검색 폼처럼 여러 번 제출하는 게 정상인 폼에서는 반대로 막지 말고 이전 요청을 끊는다. 느린 첫 요청의 응답이 빠른 두 번째 응답보다 늦게 와서 결과를 덮어쓰는 일이 생기기 때문이다. `AbortController`로 이전 요청을 취소하거나, 응답마다 요청 순번을 붙여 최신 것만 반영한다.
+
+## form의 action에 함수를 넘긴다
+
+React 19는 `form`의 `action` 속성에 문자열 주소 대신 함수를 받는다. 제출하면 React가 기본 동작을 막고 그 함수에 `FormData`를 넘긴다. `preventDefault`도, 칸마다 state도 필요 없다.
+
+```tsx
+"use client";
+import { useActionState } from "react";
+import { z } from "zod";
+import { signupSchema } from "./signup.schema";
+
+type SignupState = { fieldErrors?: Record<string, string[]>; values?: Record<string, string>; ok?: boolean };
+
+async function signup(_prev: SignupState, formData: FormData): Promise<SignupState> {
+  const values = Object.fromEntries(formData) as Record<string, string>;
+  const parsed = signupSchema.safeParse(values);
+  if (!parsed.success) return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
+  const res = await fetch("/api/signup", { method: "POST", body: formData });
+  if (!res.ok) return { fieldErrors: await res.json(), values };
+  return { ok: true };
+}
+
+export function SignupForm() {
+  const [state, formAction, isPending] = useActionState(signup, {});
+  return (
+    <form action={formAction}>
+      <Field label="이메일" name="email" defaultValue={state.values?.email} error={state.fieldErrors?.email?.[0]} />
+      {/* ... */}
+      <SubmitButton />
+    </form>
+  );
+}
+```
+
+`useActionState`는 액션 함수와 처음 상태를 받아 `[지금 상태, 폼에 꽂을 액션, 진행 중 여부]`를 돌려준다. 액션 함수는 첫 인자로 이전 상태를, 둘째로 `FormData`를 받는다. 돌려준 값이 다음 상태가 된다. 리듀서와 모양이 같은데 비동기라고 보면 된다. React 19 정식 이전의 canary에서는 `react-dom`의 `useFormState`라는 이름이었다.
+
+액션 하나가 제출되는 과정을 따라가 보자.
+
+<SequenceDiagram
+  caption="form action: 제출부터 다음 상태까지"
+  actors={[
+    { id: "form", label: "form" },
+    { id: "react", label: "React" },
+    { id: "action", label: "signup()" },
+  ]}
+  steps={[
+    {
+      from: "form",
+      to: "react",
+      label: "submit",
+      title: "제출하면 React가 가로챈다",
+      detail: "브라우저의 페이지 이동을 막고, 폼의 칸을 FormData로 모은다. 값은 모두 문자열이고 파일 칸은 File 객체다.",
+    },
+    {
+      from: "react",
+      to: "react",
+      label: "isPending = true",
+      title: "transition 안에서 시작한다",
+      detail: "액션은 자동으로 transition으로 감싸진다. isPending과 useFormStatus의 pending이 바로 true가 되어 버튼을 막을 수 있다.",
+    },
+    {
+      from: "react",
+      to: "action",
+      label: "signup(prev, formData)",
+      title: "액션 함수를 부른다",
+      detail: "이전 상태와 FormData를 넘긴다. 같은 액션을 진행 중에 또 제출하면 앞의 것이 끝날 때까지 줄을 서고, 앞의 결과를 prev로 받는다.",
+      payload: "prev = {}\nformData = email=kim%40example.com&password=...",
+    },
+    {
+      from: "action",
+      to: "react",
+      label: "return state",
+      title: "돌려준 값이 다음 상태가 된다",
+      detail: "검증 실패면 칸별 에러를, 성공이면 ok를 돌려준다. 예외를 던지면 상태가 아니라 가까운 Error Boundary로 간다.",
+      payload: "{ fieldErrors: { password: [\"8자 이상이어야 한다\"] }, values: { ... } }",
+    },
+    {
+      from: "react",
+      to: "form",
+      label: "render + reset",
+      title: "다시 렌더링하고 폼을 비운다",
+      detail: "새 상태로 렌더링한다. 액션이 예외 없이 끝나면 React는 폼의 비제어 칸을 기본값으로 되돌린다. 에러를 상태로 돌려준 경우도 '성공'이라 칸이 비워진다.",
+    },
+  ]}
+/>
+
+마지막 단계가 처음 써 보면 당황하는 지점이다. 검증 에러를 돌려줬는데 사용자가 친 값이 다 사라진다. 액션이 예외 없이 끝났으니 React는 제출이 성공했다고 보고 폼을 초기화한다. 그래서 위 코드는 받은 값을 `values`로 다시 돌려주고, 칸의 `defaultValue`에 넣어 초기화되더라도 친 값으로 돌아오게 했다. 비밀번호처럼 다시 채우면 안 되는 칸은 빼고 돌려준다. 초기화가 아예 싫다면 `onSubmit`에서 `preventDefault`를 하고 `startTransition` 안에서 액션을 직접 부르는 방법도 있다. 반대로 액션 밖에서 원하는 때 초기화하려면 `react-dom`의 `requestFormReset`을 쓴다.
+
+제출 버튼은 따로 컴포넌트로 뗐다. `useFormStatus` 때문이다.
+
+```tsx
+import { useFormStatus } from "react-dom";
+
+function SubmitButton() {
+  const { pending } = useFormStatus(); // 이 컴포넌트를 감싼 form의 상태
+  return <button type="submit" disabled={pending}>{pending ? "가입하는 중…" : "가입"}</button>;
+}
+```
+
+`useFormStatus`는 자기를 감싼 부모 `form`의 제출 상태를 읽는다. `form`을 렌더링하는 컴포넌트에서 부르면 그 위에는 form이 없으니 `pending`은 늘 false다. 디자인 시스템의 버튼 컴포넌트가 폼 안에 놓이기만 하면 props 없이 진행 중 표시를 할 수 있다는 게 장점이다. `pending` 말고도 제출 중인 `data`(FormData), `method`, `action`을 준다.
+
+이 방식의 이점은 코드 양보다 동작에 있다. 진행 중 상태와 순서 보장, 에러 시 Error Boundary 연결을 React가 맡는다. 그리고 `action`이 서버 함수라면 자바스크립트가 아직 로드되지 않았을 때도 폼이 동작한다.
+
+## 서버 액션은 누구나 부를 수 있는 POST다
+
+Next.js App Router에서는 `"use server"`를 붙인 함수를 `action`에 그대로 넘길 수 있다. 위 `signup`을 서버 파일로 옮기면 fetch 줄이 사라지고 DB를 바로 부른다. 하이드레이션 전에 제출하면 브라우저의 일반 POST로 가고, 그 뒤에는 React가 가로채 fetch로 보낸다. 이 부분은 React의 서버 함수 기능을 프레임워크가 구현한 것이라, 동작 세부는 Next.js 버전과 설정을 따른다.
+
+조심할 것은 하나다. 서버 액션은 함수처럼 보이지만 실제로는 공개된 POST 엔드포인트다. 화면에서 버튼을 숨겼다고 못 부르는 게 아니다. 그래서 액션 안에서 스키마 검증과 "이 사용자가 이 일을 해도 되나" 권한 확인을 매번 한다. 요청을 가로채 인자를 바꿔 보내는 실험과 경계 문제는 [React 서버 컴포넌트](/posts/react-server-components)에서 했다. Next.js는 서버 액션 요청 본문을 기본 1MB로 제한한다. 파일을 받으려면 `next.config`의 `serverActions.bodySizeLimit`(버전에 따라 `experimental` 아래에 둔다)을 올리거나, 아래처럼 파일은 다른 길로 보낸다.
+
+## 누르자마자 보이고, 실패하면 돌아간다
+
+댓글을 달면 서버 응답을 기다리지 않고 목록에 바로 보이게 하고 싶다. React 19의 `useOptimistic`이 이 일을 한다. 좋아요 하나를 낙관적으로 바꾸는 기본 예제는 [로딩 패턴](/posts/loading-patterns)에 있으니, 여기서는 폼 액션과 엮어 목록에 항목을 더하는 경우를 본다.
+
+```tsx
+function Comments({ comments, addComment }: Props) {
+  const [failed, setFailed] = useState("");
+  const [shown, addOptimistic] = useOptimistic(
+    comments,
+    (current, text: string) => [...current, { id: "temp-" + current.length, text, sending: true }],
+  );
+
+  async function action(formData: FormData) {
+    const text = String(formData.get("text"));
+    addOptimistic(text);      // 화면에 먼저 보인다
+    try {
+      await addComment(text); // 성공하면 부모가 comments를 새 목록으로 바꾼다
+    } catch {
+      setFailed(text);        // 던지면 Error Boundary로 가니 잡아서 알린다
+    }
+  }
+
+  return (
+    <>
+      <ul>{shown.map((c) => <li key={c.id} style={{ opacity: c.sending ? 0.5 : 1 }}>{c.text}</li>)}</ul>
+      {failed && <p role="alert">올리지 못했다: {failed}</p>}
+      <form action={action}><input name="text" /><SubmitButton /></form>
+    </>
+  );
+}
+```
+
+`useOptimistic(실제 값, 합치는 함수)`은 `[보여 줄 값, 낙관적 변경 추가]`를 돌려준다. 동작을 이해하는 열쇠는 낙관적 값이 실제 값 위에 잠깐 덮인 층이라는 것이다. 진행 중인 액션이 있는 동안에만 그 층이 보이고, 액션이 끝나면 층이 걷힌다. 그 아래 실제 값이 바뀌었으면 바뀐 값이, 안 바뀌었으면 원래 값이 보인다. 아래 그림에서 한 번은 성공하고 한 번은 실패한다.
+
+<AlgoTrace
+  caption="낙관적 값은 실제 값 위에 덮인 층이다. 액션이 끝나면 걷힌다"
+  memoryLabel="화면에 보이는 목록"
+  cells={["처음", "제출 1", "성공", "제출 2", "실패"]}
+  steps={[
+    {
+      pointer: 0,
+      memory: ["안녕"],
+      caption: "실제 comments는 [안녕]이다. 진행 중인 액션이 없으니 보이는 값도 같다.",
+    },
+    {
+      pointer: 1,
+      memory: ["안녕", "반가워 (보내는 중)"],
+      caption: "제출하자 addOptimistic이 '반가워'를 층으로 얹는다. 실제 comments는 아직 [안녕]이다. 흐리게 보여 진행 중임을 알린다.",
+    },
+    {
+      pointer: 2,
+      found: [2],
+      memory: ["안녕", "반가워"],
+      caption: "서버가 저장하고 부모가 comments를 새 목록으로 바꿨다. 액션이 끝나며 층이 걷히고, 그 아래 실제 값에 이미 '반가워'가 있다.",
+    },
+    {
+      pointer: 3,
+      memory: ["안녕", "반가워", "ㅋㅋ (보내는 중)"],
+      caption: "두 번째 댓글도 층으로 먼저 보인다.",
+    },
+    {
+      pointer: 4,
+      memory: ["안녕", "반가워"],
+      caption: "서버가 거절했다. comments는 바뀌지 않았으니 층이 걷히자 원래 목록이 보인다. 되돌리는 코드를 쓰지 않았는데 되돌아갔다. 대신 실패를 알리는 건 직접 해야 한다.",
+    },
+  ]}
+/>
+
+TanStack Query로 낙관적 업데이트를 하면 스냅숏을 떠 두었다가 실패 시 캐시를 되돌리는 코드를 직접 쓴다([화면 데이터 캐시](/posts/client-data-cache)). `useOptimistic`은 캐시를 건드리지 않고 그 컴포넌트 화면에만 층을 얹으니 되돌릴 게 없다. 같은 데이터를 여러 화면이 함께 보여야 한다면 캐시 쪽 방법이 맞고, 폼 하나의 결과를 그 자리에서만 먼저 보여 주면 될 때는 `useOptimistic`이 단순하다.
+
+흔한 실수가 세 가지 있다. 첫째, `addOptimistic`을 액션이나 `startTransition` 밖에서 부르면 React가 개발 모드에서 경고를 띄우고 낙관적 값이 유지되지 않는다. 폼 액션 안은 이미 transition이라 괜찮다. 액션 안에서 예외를 던지면 가까운 Error Boundary로 가니, 위 코드처럼 잡아서 화면에 알린다. 둘째, 실패를 조용히 넘긴다. 층이 걷혀 댓글이 사라지기만 하면 사용자는 썼다고 믿고 떠난다. 실패하면 `failed`처럼 쓴 글을 남겨 두고 다시 보낼 수 있게 한다. 셋째, 임시 id를 그대로 둔다. 성공 후 서버가 준 진짜 id로 바뀐 목록이 와야 key가 맞는다. 임시 id로 만든 항목에 수정, 삭제 버튼을 붙이면 아직 없는 id로 요청이 간다.
+
+## 파일은 늘 비제어다
+
+프로필 사진 칸을 더한다고 하자. 앞에서 말했듯 파일 입력은 비제어라서, 고른 파일은 `FormData`에 `File`로 들어가거나 `e.target.files`로 읽는다.
+
+```tsx
+function AvatarInput() {
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
+  return (
+    <>
+      <input type="file" name="avatar" accept="image/png, image/jpeg"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          setPreview(file ? URL.createObjectURL(file) : null);
+        }} />
+      {preview && <img src={preview} alt="고른 사진 미리 보기" />}
+    </>
+  );
+}
+```
+
+미리 보기는 `URL.createObjectURL`로 만든다. 파일을 읽어 base64로 바꾸는 것보다 빠르고 메모리도 덜 쓰지만, 만든 주소는 `revokeObjectURL`로 풀어 주기 전까지 파일을 붙잡고 있다. 사진을 여러 번 바꾸는 화면에서 이걸 빼먹으면 메모리가 계속 는다. 위 effect는 미리 보기가 바뀌거나 컴포넌트가 사라질 때 이전 주소를 푼다.
+
+`accept`는 선택 창의 힌트일 뿐이라 크기와 형식은 서버가 다시 본다. 업로드 진행률을 보여 주려면 지금은 `XMLHttpRequest`의 `upload.onprogress`를 쓴다. `fetch`에는 업로드 진행 이벤트가 없다. 큰 파일은 폼 제출과 떼어, 고르는 즉시 미리 서명된 URL로 스토리지에 올리고 폼에는 업로드된 파일의 키만 담는 방식이 낫다. 서버 액션의 본문 크기 제한도 피하고, 사용자가 다른 칸을 채우는 동안 업로드가 진행된다. 크기 제한이 여러 층에 걸리는 문제는 [HTML 폼과 HTTP](/posts/html-form-http)에서 다뤘다.
+
+## 여러 단계로 나뉜 폼의 초안은 어디에
+
+가입을 "계정 → 프로필 → 약관" 세 단계로 나눴다. 단계마다 다른 컴포넌트를 보여 주니, 2단계로 넘어가면 1단계 컴포넌트가 사라진다. 비제어 입력이었다면 DOM과 함께 값도 사라진다. 그래서 다단계 폼은 "단계를 넘나드는 동안 초안이 어디에 사나"를 먼저 정한다.
+
+가장 단순한 건 단계들을 감싸는 부모에 초안을 두는 것이다. 각 단계는 자기 칸을 검증한 뒤 "다음"을 누를 때 부모에 값을 합치고, 마지막 단계에서 전체를 한 번에 보낸다. React Hook Form으로 폼 하나를 세 단계에 걸쳐 쓰면 `shouldUnregister`가 기본 false라 칸이 언마운트돼도 값이 남는다. 단계별 검증은 단계마다 스키마를 나누거나(`signupSchema.pick(...)`) `trigger(["email", "password"])`로 그 단계 칸만 검사한다.
+
+몇 단계째인지는 URL에 둔다(`/signup?step=2`). 그래야 뒤로 가기가 앞 단계로 간다. 단, URL만 보고 3단계로 바로 들어온 사람은 앞 단계 값이 없으니, 빠진 값이 있으면 그 단계로 돌려보낸다. 새로고침에도 초안이 남아야 하는 긴 신청서라면 초안을 `sessionStorage`에 써 둔다. 비밀번호 같은 값은 저장하지 않는다. 단계가 서버 저장을 동반한다면(1단계에서 계정 생성) 단계마다 서버에 쓰고, 초안은 서버가 가진다.
+
+전역 스토어에 폼 초안을 넣는 건 대개 과하다. 폼이 사라진 뒤에도 남은 초안이 다음 가입 시도에 섞이고, 칸 하나 바뀔 때마다 스토어 구독자들이 깨어난다.
+
+## 처음 회원가입 폼으로
+
+처음 폼의 문제는 셋이었다. 버튼 두 번에 계정 두 개, 들리지 않는 에러, 문자열로 간 나이. 고친 폼은 칸을 비제어로 두고 `form`의 `action`에 액션을 꽂았다. 진행 중에는 `useFormStatus`로 버튼을 막고, 서버는 이메일 유니크 제약과 일회용 키로 같은 제출을 한 번만 처리한다. 검증 규칙은 스키마 파일 하나에 쓰고 클라이언트와 서버가 같이 쓰며, 스키마가 나이를 숫자로 바꿔 준다. 에러는 `aria-invalid`와 `aria-describedby`로 칸에 연결하고, 제출 뒤에는 첫 틀린 칸으로 포커스를 옮긴다. 폼에서 정할 것은 결국 값을 누가 들고 있는지, 규칙이 어디 사는지, 제출이 몇 번 일어나는지다.
+
+## 면접에서 나올 만한 질문
+
+### 제어 컴포넌트와 비제어 컴포넌트의 차이는 무엇이고, 언제 무엇을 쓰나요?
+
+제어 컴포넌트는 입력값의 원본이 React state이고 DOM은 그 값을 비춘다. 비제어는 DOM이 값을 들고 React는 제출할 때 ref나 FormData로 읽는다. 입력하면서 서식을 바꾸거나 값에 따라 다른 칸을 보여 줘야 하면 제어가 편하고, 칸이 많거나 제출 때만 값이 필요하면 비제어가 렌더링이 적다. 파일 입력은 스크립트가 값을 정할 수 없어서 늘 비제어다.
+
+### React Hook Form은 왜 빠른가요?
+
+`register`가 value 대신 ref를 돌려줘 값을 DOM과 React 바깥 저장소에 두기 때문에, 글자를 쳐도 폼 컴포넌트가 렌더링되지 않는다. 렌더링이 필요한 부분은 따로 구독한다. formState는 Proxy라 읽은 속성만 구독하고, 다른 칸 값을 봐야 하면 useWatch로 그 컴포넌트만 구독한다. 폼 꼭대기에서 watch를 쓰면 이 이점이 사라진다.
+
+### 클라이언트에서 검증했는데 서버에서도 검증해야 하나요? 규칙이 어긋나지 않게 하려면요?
+
+해야 한다. 클라이언트 검증은 개발자 도구나 curl로 우회되니 사용자를 돕는 장치일 뿐이다. 규칙을 Zod 같은 스키마 하나로 쓰고 React와 서버에 의존하지 않는 파일에 두어 양쪽에서 import한다. 이메일 중복처럼 서버만 아는 검사는 같은 모양의 칸별 에러로 돌려줘서 화면이 한 방식으로 보여 주게 한다.
+
+### 폼 에러를 접근성 있게 보여 주려면 무엇을 하나요?
+
+칸에 `aria-invalid`를 주고, 에러 문구 요소의 id를 `aria-describedby`로 연결해 포커스가 가면 함께 읽히게 한다. label은 htmlFor와 useId로 만든 id로 묶는다. 제출 후에는 첫 번째 틀린 칸으로 포커스를 옮기고, 필요하면 요약 하나만 role="alert"로 알린다. 색만으로 상태를 말하지 않고 문구를 함께 둔다.
+
+### 폼 중복 제출은 어떻게 막나요?
+
+겹으로 막는다. 제출 중에는 버튼을 비활성화하는데, 기본 버튼이 비활성이면 Enter 제출도 막힌다. state 반영 전의 두 번째 클릭은 ref나 React 19 액션의 pending과 순서 보장으로 막는다. 그래도 네트워크 재시도나 탭 두 개는 남으니 서버가 유니크 제약이나 멱등성 키로 같은 제출을 한 번만 처리하게 하는 게 마지막 방어선이다.
+
+### React 19의 useActionState와 useFormStatus는 무엇을 해 주나요?
+
+useActionState는 `(이전 상태, FormData) → 다음 상태`인 액션을 받아 현재 상태, form에 꽂을 액션, isPending을 돌려준다. 액션은 transition 안에서 돌고 같은 액션은 순서대로 실행된다. useFormStatus는 자기를 감싼 form의 pending과 제출 데이터를 읽어서, 제출 버튼 같은 자식 컴포넌트가 props 없이 진행 상태를 안다. form을 렌더링하는 컴포넌트 자신에서 부르면 동작하지 않는다.
+
+### form action으로 제출했더니 검증 에러가 나도 입력값이 사라집니다. 왜 그런가요?
+
+액션 함수가 예외 없이 끝나면 React는 제출이 성공했다고 보고 폼의 비제어 칸을 초기화한다. 에러를 상태로 돌려준 것도 예외가 아니라서 초기화된다. 제출된 값을 상태에 같이 돌려주고 칸의 defaultValue로 다시 넣거나, onSubmit에서 기본 동작을 막고 transition 안에서 액션을 직접 부른다. 비밀번호처럼 다시 채우면 안 되는 값은 돌려주지 않는다.
+
+### useOptimistic은 실패했을 때 어떻게 되돌리나요?
+
+되돌리는 코드가 따로 없다. 낙관적 값은 진행 중인 액션이 있는 동안만 실제 값 위에 덮이는 층이고, 액션이 끝나면 걷힌다. 성공해서 실제 값이 바뀌었으면 새 값이, 실패해서 그대로면 원래 값이 보인다. 다만 실패를 알리고 입력을 되살리는 건 직접 해야 하고, addOptimistic은 액션이나 transition 안에서 불러야 한다.

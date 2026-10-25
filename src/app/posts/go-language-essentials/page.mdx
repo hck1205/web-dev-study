@@ -1,0 +1,468 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("go-language-essentials");
+
+<EasyIntro>
+  어떤 프로그램은 컴퓨터에 이것저것 미리 깔아야 돌아가는데, Go로 만든 프로그램은 파일 하나만 옮겨 놓으면 바로 돈다. 그래서 서버를 관리하는 도구들이 Go로 많이 만들어졌다.
+
+  Go를 이삿짐 상자에 비유해 보자. 다른 언어는 상자를 보내면서 "받는 집에 이 가구가 있어야 해요"라는 쪽지를 붙인다. Go는 필요한 가구를 전부 상자 안에 넣어 보내서, 받는 집이 어떤 곳이든 상자만 풀면 된다. 상자를 싸기 전에 어느 집으로 보낼지만 정해 주면 다른 종류의 집에 맞는 상자도 만들어 준다.
+
+  Go는 문제가 생겼을 때 소리를 지르는 대신 결과와 함께 "이런 문제가 있었다"는 쪽지를 같이 돌려준다. 받은 쪽은 쪽지를 꼭 읽고 어떻게 할지 정해야 한다. 또 약속한 일을 할 줄 알면 따로 신청서를 내지 않아도 그 일을 맡길 수 있다는 규칙이 있어서, 부품을 바꿔 끼우기가 쉽다.
+</EasyIntro>
+
+## 바이너리 하나를 복사했을 뿐인데 돌아간다
+
+주문 상태를 조회하는 작은 CLI를 만들어 서버 몇 대에 깔아야 했다. 파이썬으로 짰다면 서버마다 맞는 파이썬 버전과 가상 환경, 의존성을 준비해야 한다. [파이썬 기본기 글](/posts/python-essentials-for-backend)에서 본 그 과정이다. Go로 짠 버전은 빌드한 파일 하나를 `scp`로 올리고 실행 권한만 주면 끝났다. 서버에 Go가 깔려 있지 않아도 된다.
+
+```bash
+# 리눅스용 바이너리를 만든다
+CGO_ENABLED=0 go build -o orderctl .
+
+# 어떤 파일인지 본다
+file orderctl
+
+# 동적 라이브러리에 기대는지 본다
+ldd orderctl
+```
+
+```text
+orderctl: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, BuildID[sha1]=ed470f6456a174199c92b9c2e15bed40caf6d376, with debug_info, not stripped
+	not a dynamic executable
+```
+
+`statically linked`와 `not a dynamic executable`이 이 글의 출발점이다. 런타임, 표준 라이브러리, 서드파티 의존성이 모두 실행 파일 하나 안에 들어갔다. 쿠버네티스, Docker, Terraform, Prometheus, etcd 같은 인프라 도구가 Go로 만들어진 이유가 여기서 많이 설명된다.
+
+이 글은 Go를 처음 쓰는 백엔드·운영 개발자가 먼저 알아야 할 것을 본다. 구조체와 메서드, 선언하지 않아도 만족하는 인터페이스, 예외 대신 값으로 돌려주는 에러, 처음에 한 번은 당하는 nil 인터페이스와 슬라이스 공유 함정, 그리고 모듈과 빌드다. 고루틴과 채널은 [Go 동시성 기본기 글](/posts/go-concurrency-basics)에서 따로 다룬다.
+
+실행 결과는 Ubuntu 24.04 컨테이너의 Go 1.24.7에서 직접 돌린 것이다.
+
+## 구조체와 메서드, 클래스 없이 묶는다
+
+Go에는 클래스와 상속이 없다. 데이터는 구조체(struct)로 묶고, 그 타입에 함수를 붙이면 메서드가 된다.
+
+```go
+package main
+
+import "fmt"
+
+type Order struct {
+	ID     string
+	Qty    int
+	status string // 소문자로 시작하면 패키지 밖에서 보이지 않는다
+}
+
+// 값 리시버: 복사본을 받는다. 읽기만 할 때 쓴다
+func (o Order) Total(unitPrice int) int {
+	return o.Qty * unitPrice
+}
+
+// 포인터 리시버: 원본을 고친다
+func (o *Order) Cancel() {
+	o.status = "canceled"
+}
+
+func main() {
+	o := Order{ID: "A-1", Qty: 3}
+	o.Cancel()
+	fmt.Println(o.Total(1000), o.status)
+}
+```
+
+공개 여부는 키워드가 아니라 이름의 첫 글자로 정한다. `ID`, `Total`처럼 대문자로 시작하면 다른 패키지에서 쓸 수 있고, `status`처럼 소문자면 패키지 안에서만 보인다. 자바의 `public`/`private`보다 단순하지만, 구조체 필드를 소문자로 두면 `encoding/json`도 그 필드를 못 본다는 걸 처음에 자주 놓친다. JSON 응답에 필드가 빠졌다면 첫 글자부터 본다.
+
+리시버를 값으로 받을지 포인터로 받을지는 "원본을 고치나", "구조체가 큰가"로 정한다. 한 타입의 메서드 중 하나라도 포인터 리시버라면 나머지도 포인터로 맞추는 게 관례다. 섞여 있으면 뒤에서 볼 인터페이스 만족 규칙이 헷갈려진다.
+
+상속 대신 임베딩(embedding)을 쓴다. 구조체 안에 다른 타입을 이름 없이 넣으면 그 타입의 필드와 메서드를 바깥 구조체에서 바로 부를 수 있다. 상속처럼 보이지만 "포함"이다. 바깥 타입이 안쪽 타입으로 바뀌어 넘겨지지는 않는다.
+
+## 인터페이스는 선언 없이 만족한다
+
+Go의 인터페이스는 메서드 목록이다. 어떤 타입이 그 메서드를 모두 갖고 있으면 인터페이스를 만족한다. `implements` 같은 선언이 없다.
+
+```go
+type Notifier interface {
+	Notify(msg string) error
+}
+
+type Slack struct{ Channel string }
+
+func (s Slack) Notify(msg string) error {
+	fmt.Printf("[slack #%s] %s\n", s.Channel, msg)
+	return nil
+}
+
+func main() {
+	var n Notifier = Slack{Channel: "ops"} // Slack은 Notifier를 언급한 적이 없다
+	n.Notify("배포 완료")
+}
+```
+
+```text
+[slack #ops] 배포 완료
+```
+
+`Slack`은 `Notifier`라는 이름을 모른다. 그런데도 `Notify` 메서드가 있으니 `Notifier` 자리에 들어간다. 이 성질 덕분에 인터페이스를 쓰는 쪽에서 필요한 만큼만 정의한다. 표준 라이브러리의 `io.Reader`는 `Read(p []byte) (n int, err error)` 메서드 하나뿐인데, 파일, 네트워크 연결, HTTP 응답 본문, gzip 해제기, 메모리 버퍼가 모두 이것을 만족한다. 그래서 "무언가를 읽어 처리하는 함수"를 `io.Reader` 하나로 짜면 어디서 오는 데이터든 받는다.
+
+아래 그림은 인터페이스를 쓰는 함수와, 그것을 모르는 채 만족하는 타입들의 관계다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="화살표는 '메서드가 맞아서 들어갈 수 있다'는 뜻이다. 타입 쪽은 인터페이스를 모른다"
+  nodes={[
+    { id: "fn", label: "Count(r io.Reader)", sub: "쓰는 쪽이 정의", x: 200, y: 40, w: 170, h: 46 },
+    { id: "if", label: "io.Reader", sub: "Read(p []byte)", x: 200, y: 135, w: 130, h: 46 },
+    { id: "f", label: "*os.File", x: 65, y: 235, w: 90, h: 40 },
+    { id: "c", label: "net.Conn", x: 160, y: 235, w: 90, h: 40 },
+    { id: "g", label: "*gzip.Reader", x: 255, y: 235, w: 100, h: 40 },
+    { id: "b", label: "*bytes.Buffer", x: 345, y: 190, w: 100, h: 40 },
+  ]}
+  edges={[
+    { from: "if", to: "fn", label: "인자" },
+    { from: "f", to: "if" },
+    { from: "c", to: "if" },
+    { from: "g", to: "if" },
+    { from: "b", to: "if", dashed: true, label: "테스트용" },
+  ]}
+/>
+
+그림의 점선이 실무에서 가장 많이 쓰는 지점이다. 테스트할 때 진짜 파일 대신 `bytes.Buffer`를 넘기면 된다. 목 객체를 만드는 프레임워크 없이도 의존성을 갈아 끼울 수 있다.
+
+Go 커뮤니티의 관례는 "인터페이스는 받는 쪽에서 작게 정의하고, 함수는 구체 타입을 돌려준다(Accept interfaces, return structs)"이다. 저장소 패키지가 `OrderRepository` 인터페이스를 미리 크게 만들어 두는 자바식 설계보다, 그걸 쓰는 서비스 패키지가 자기에게 필요한 메서드 두 개짜리 인터페이스를 정의하는 쪽이 자연스럽다.
+
+선언이 없으니 실수로 메서드 시그니처가 틀어지면 어디서 깨지는지 늦게 안다. 컴파일 시점에 확인하고 싶으면 이런 한 줄을 둔다.
+
+```go
+// Slack이 Notifier를 만족하지 않으면 여기서 컴파일 오류가 난다
+var _ Notifier = Slack{}
+```
+
+포인터 리시버 규칙도 여기서 걸린다. `Notify`를 `func (s *Slack) Notify(...)`로 바꾸면 `Slack{}` 값은 더 이상 `Notifier`가 아니고 `&Slack{}`만 들어간다. 값의 메서드 집합에는 포인터 리시버 메서드가 들어가지 않기 때문이다. 실제로 빌드하면 이렇게 나온다.
+
+```text
+./main.go:23:19: cannot use Slack{} (value of struct type Slack) as Notifier value in variable declaration: Slack does not implement Notifier (method Notify has pointer receiver)
+```
+
+`method Notify has pointer receiver`가 보이면 `&Slack{}`로 넘기면 된다.
+
+## 에러는 반환값이다
+
+Go에는 try/catch가 없다. 실패할 수 있는 함수는 결과와 함께 `error` 값을 돌려주고, 부른 쪽이 바로 확인한다.
+
+```go
+f, err := os.Open("config.yaml")
+if err != nil {
+	return fmt.Errorf("load config: %w", err)
+}
+defer f.Close()
+```
+
+`if err != nil`이 코드에 정말 많이 나온다. 처음엔 장황해 보이지만, 함수 시그니처만 봐도 어디서 실패할 수 있는지 보이고, 실패를 어떻게 처리할지 그 자리에서 정하게 만든다. 예외가 몇 단계 위로 날아가서 어디서 잡히는지 추적하는 일이 없다.
+
+`error`는 `Error() string` 메서드 하나짜리 인터페이스다. 그래서 에러를 비교하고 분류하는 방법이 따로 있다.
+
+- 센티널 에러: `var ErrNotFound = errors.New("order not found")`처럼 패키지 수준 변수로 두고 같은 값인지 본다. 표준 라이브러리의 `io.EOF`, `fs.ErrNotExist`가 이 방식이다.
+- 에러 타입: 필드를 가진 구조체로 만들어 추가 정보를 담는다. `*fs.PathError`는 실패한 동작과 경로를 갖는다.
+
+1.13부터 에러를 감싸는 표준 방법이 생겼다. `fmt.Errorf`에 `%w`를 쓰면 원래 에러를 안에 품은 새 에러가 된다. 위로 올라가면서 맥락을 덧붙이되, 원인은 잃지 않는다.
+
+```go
+_, err := os.Open("/nope/config.yaml")
+wrapped := fmt.Errorf("load config: %w", err)
+fmt.Println(wrapped)
+fmt.Println("Is ErrNotExist:", errors.Is(wrapped, fs.ErrNotExist))
+
+var pe *fs.PathError
+if errors.As(wrapped, &pe) {
+	fmt.Println("As PathError:", pe.Op, pe.Path)
+}
+
+notWrapped := fmt.Errorf("load config: %v", err) // %v는 문자열로만 이어 붙인다
+fmt.Println("v로 감싸면 Is:", errors.Is(notWrapped, fs.ErrNotExist))
+```
+
+```text
+load config: open /nope/config.yaml: no such file or directory
+Is ErrNotExist: true
+As PathError: open /nope/config.yaml
+v로 감싸면 Is: false
+```
+
+`errors.Is`는 감싼 사슬을 한 겹씩 벗기며 같은 값을 찾고, `errors.As`는 원하는 타입을 찾아 변수에 꺼내 준다. 아래 그림에서 다음을 누르면 `errors.Is`가 사슬을 내려가는 모습이 보인다.
+
+<SequenceDiagram
+  caption="errors.Is는 Unwrap을 따라 한 겹씩 내려간다"
+  actors={[
+    { id: "h", label: "핸들러" },
+    { id: "w2", label: "get order" },
+    { id: "w1", label: "load config" },
+    { id: "pe", label: "*PathError" },
+    { id: "base", label: "ENOENT" },
+  ]}
+  steps={[
+    { from: "h", to: "w2", label: "Is(err, ErrNotExist)", title: "맨 바깥부터 비교한다", detail: "핸들러가 받은 에러는 두 번 감싼 것이다. 맨 바깥 값은 ErrNotExist와 같지 않다.", payload: "get order: load config: open /nope/config.yaml: no such file or directory" },
+    { from: "w2", to: "w1", label: "Unwrap()", title: "%w로 감싼 안쪽을 꺼낸다", detail: "%w로 만든 에러는 Unwrap 메서드로 안쪽 에러를 돌려준다. 여기도 같지 않다." },
+    { from: "w1", to: "pe", label: "Unwrap()", title: "os.Open이 만든 에러에 닿았다", detail: "*fs.PathError는 Op, Path, Err 필드를 가진다. errors.As라면 여기서 멈추고 값을 꺼낸다." },
+    { from: "pe", to: "base", label: "Unwrap()", title: "운영체제의 원인까지 내려간다", detail: "PathError가 품은 건 syscall.ENOENT다. 이 값은 Is 메서드로 fs.ErrNotExist와 같다고 답해서 true가 된다." },
+    { from: "base", to: "h", label: "true", title: "404로 바꿀지 정한다", detail: "핸들러는 문자열을 비교하지 않고도 원인을 안다. 중간에 하나라도 %v로 감쌌다면 사슬이 끊겨 false가 나온다." },
+  ]}
+/>
+
+실무 규칙으로 정리하면 이렇다. 에러 메시지 문자열로 분기하지 않는다(`strings.Contains(err.Error(), "not found")`는 메시지가 바뀌면 조용히 깨진다). 같은 에러를 로그로 남기고 또 위로 반환하지 않는다. 한 에러가 로그에 세 번 찍힌다. 로그는 가장 위에서 한 번 남기고, 아래에서는 맥락을 붙여 반환만 한다.
+
+`panic`도 있지만 "프로그램이 더 진행할 수 없는 버그"에 쓴다. 배열 범위를 벗어나거나 nil 포인터를 따라가면 런타임이 panic을 낸다. HTTP 서버는 요청 하나의 panic이 프로세스 전체를 죽이지 않도록 `net/http`가 핸들러마다 recover해서 로그를 남긴다. 직접 띄운 고루틴 안의 panic은 그렇게 잡아 주는 곳이 없어서 프로세스가 통째로 죽는다.
+
+## nil인데 nil이 아닌 에러
+
+Go를 쓰다 한 번은 당하는 함정이 있다. 검증에 통과했는데 에러가 났다고 나온다.
+
+```go
+type ValidationError struct{ Field string }
+
+func (e *ValidationError) Error() string { return "invalid " + e.Field }
+
+func validate(qty int) error {
+	var verr *ValidationError
+	if qty <= 0 {
+		verr = &ValidationError{Field: "qty"}
+	}
+	return verr // qty가 3이면 nil 포인터를 돌려준다
+}
+
+func main() {
+	err := validate(3)
+	fmt.Println("err == nil:", err == nil)
+	fmt.Printf("%T %v\n", err, err == (*ValidationError)(nil))
+}
+```
+
+```text
+err == nil: false
+*main.ValidationError true
+```
+
+`qty`가 3이니 `verr`는 nil 포인터다. 그런데 `err == nil`은 `false`다. 인터페이스 값은 내부에 "타입"과 "값" 두 칸을 갖는데, nil 포인터를 인터페이스에 담으면 타입 칸에 `*ValidationError`가 채워진다. 인터페이스가 nil이려면 두 칸이 모두 비어 있어야 한다. 그래서 `%T`는 타입을 출력하고, 안의 포인터와 비교하면 nil이 맞다고 나온다.
+
+고치는 방법은 간단하다. 에러가 없으면 구체 타입 변수를 거치지 말고 `return nil`을 직접 쓴다. 에러를 돌려주는 함수의 반환 타입은 구체 타입(`*ValidationError`)이 아니라 `error`로 둔다. 이 버그는 테스트에서 "실패해야 할 때 실패하는가"만 보면 안 잡히고, 성공 경로도 확인해야 잡힌다.
+
+## 슬라이스는 배열을 함께 쓴다
+
+슬라이스(`[]int`)는 배열을 가리키는 작은 구조체다. 시작 주소, 길이(len), 용량(cap) 세 값을 가진다. 슬라이스를 복사하거나 잘라도 이 세 값만 복사될 뿐 배열은 함께 쓴다. 이 사실을 모르면 이런 결과에 놀란다.
+
+```go
+full := []int{1, 2, 3}
+c := full[:2]          // 앞 두 칸만 보는 슬라이스
+c = append(c, 99)      // 용량이 남아 있어 같은 배열의 셋째 칸에 쓴다
+fmt.Println(full, c)
+
+d := append(c, 100)    // 이제 용량이 모자라 새 배열로 옮긴다
+d[0] = -1
+fmt.Println(full, c, d)
+```
+
+```text
+[1 2 99] [1 2 99]
+[1 2 99] [1 2 99] [-1 2 99 100]
+```
+
+첫 줄에서 `full`의 3이 99로 바뀌었다. `c`에 덧붙였을 뿐인데 원본이 망가졌다. 두 번째 `append`는 용량을 넘어서 새 배열을 만들었기 때문에 `d[0]`을 바꿔도 `full`과 `c`는 그대로다. 같은 `append`가 상황에 따라 원본을 공유하기도 하고 안 하기도 한다. 아래 그림에서 배열 칸이 어떻게 덮이는지 따라가 보자.
+
+<AlgoTrace
+  caption="append는 용량이 남으면 같은 배열에 쓰고, 모자라면 새 배열로 옮긴다"
+  memoryLabel="c가 보는 범위 (len/cap)"
+  cells={["1", "2", "3", "새 배열"]}
+  steps={[
+    { pointer: 0, memory: ["full len 3", "cap 3"], caption: "full은 칸 세 개짜리 배열 전체를 본다." },
+    { pointer: 1, memory: ["c len 2", "cap 3"], caption: "c := full[:2]는 같은 배열의 앞 두 칸을 본다. 용량은 끝까지인 3이다." },
+    { pointer: 2, found: [2], memory: ["c len 3", "cap 3"], caption: "append(c, 99): 용량이 남아서 셋째 칸에 그대로 쓴다. full[2]도 99가 된다." },
+    { pointer: 3, memory: ["d len 4", "cap 6"], caption: "append(c, 100): 용량이 모자라 새 배열을 만들고 값을 복사했다. 이제 d는 다른 배열이다." },
+    { pointer: 3, found: [3], memory: ["d len 4", "cap 6", "d[0] = -1"], caption: "d[0]을 바꿔도 원래 배열은 그대로다. 공유는 끊겼다." },
+  ]}
+/>
+
+실무에서 이게 문제가 되는 건 함수가 슬라이스를 받아 덧붙이거나, 큰 슬라이스의 일부를 잘라 오래 들고 있을 때다. 함수 하나가 받은 슬라이스에 `append`하면 호출한 쪽 데이터가 바뀔 수 있다. 같은 `base`에서 두 번 `append`한 슬라이스가 같은 칸을 덮어쓰는 일도 생긴다. 실제로 용량 10짜리 `base`에서 `a := append(base, 1)`, `b := append(base, 2)`를 하면 `a[3]`과 `b[3]`이 둘 다 2가 됐다.
+
+안전하게 쓰는 방법은 두 가지다. 독립된 복사본이 필요하면 `slices.Clone(s)`(1.21부터)를 쓴다. 잘라 낸 슬라이스가 원본 칸을 덮지 않게 하려면 `full[:2:2]`처럼 세 번째 숫자로 용량을 잘라 둔다. 그러면 다음 `append`는 반드시 새 배열로 간다. 큰 파일을 읽어 일부만 잘라 보관하는 코드는 잘라 낸 몇 바이트 때문에 원래 큰 배열 전체가 GC되지 않고 남는다. 이때도 복사해서 들고 있는다.
+
+맵(`map`)은 다른 함정이 있다. 순회 순서가 매번 바뀌도록 일부러 무작위로 되어 있고, 여러 고루틴이 동시에 쓰면 런타임이 `fatal error: concurrent map writes`로 프로세스를 죽인다. 동시성 쪽 이야기는 [Go 동시성 기본기 글](/posts/go-concurrency-basics)에 있다.
+
+## go mod와 go.sum
+
+Go의 의존성은 모듈 단위로 관리한다. 프로젝트 루트의 `go.mod`가 모듈 이름과 의존성을, `go.sum`이 의존성 내용의 해시를 갖는다.
+
+```bash
+# 모듈을 만든다. 이름은 보통 저장소 경로로 짓는다
+go mod init example.com/orderctl
+
+# 코드의 import를 보고 필요한 의존성을 추가하고 안 쓰는 것을 지운다
+go mod tidy
+```
+
+```text
+go: finding module for package github.com/google/uuid
+go: found github.com/google/uuid in github.com/google/uuid v1.6.0
+```
+
+```text
+module example.com/orderctl
+
+go 1.24.7
+
+require github.com/google/uuid v1.6.0
+```
+
+```text
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+```
+
+`go.mod`의 `go 1.24.7` 줄은 이 모듈이 요구하는 최소 Go 버전이다. 1.21부터는 이 줄이 실제 요구 사항이라, 더 낮은 툴체인은 필요한 버전을 내려받거나 빌드를 거부한다.
+
+`go.sum`은 lock 파일과 비슷해 보이지만 역할이 조금 다르다. 어떤 버전을 쓸지는 `go.mod`가 정하고(Go는 최소 버전 선택 방식이라 같은 `go.mod`면 언제 빌드해도 같은 버전을 고른다), `go.sum`은 그 버전의 내용이 바뀌지 않았는지 해시로 확인한다. 처음 받는 모듈의 해시는 공개 체크섬 데이터베이스(`sum.golang.org`)와 대조한다. 누가 같은 태그를 다른 내용으로 다시 올려도 여기서 걸린다. 둘 다 커밋한다.
+
+```bash
+# 내려받아 둔 모듈이 go.sum의 해시와 같은지 확인한다
+go mod verify
+
+# 모듈을 어디서 받고 어디서 해시를 확인하는지 본다
+go env GOPROXY GOSUMDB
+```
+
+```text
+all modules verified
+https://proxy.golang.org,direct
+sum.golang.org
+```
+
+사내 비공개 저장소의 모듈을 받을 때 `410 Gone`이나 체크섬 조회 실패가 나면 공개 프록시와 체크섬 DB에 비공개 경로를 물어본 것이다. `GOPRIVATE=github.com/mycorp/*`를 설정하면 그 경로는 프록시와 체크섬 DB를 건너뛰고 저장소에서 바로 받는다.
+
+빌드된 바이너리에는 어떤 의존성이 어떤 버전으로 들어갔는지가 기록된다. 운영 중인 바이너리에 취약한 버전이 들어 있는지 볼 때 소스 없이도 확인할 수 있다.
+
+```bash
+# 바이너리에 박힌 모듈 정보를 읽는다
+go version -m orderctl
+```
+
+```text
+orderctl: go1.24.7
+	path	example.com/orderctl
+	mod	example.com/orderctl	(devel)
+	dep	github.com/google/uuid	v1.6.0	h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+```
+
+## 정적 링크와 크로스 컴파일
+
+처음의 `statically linked`에는 조건이 하나 붙는다. `CGO_ENABLED=0`을 빼고 같은 코드를 빌드했더니 결과가 달랐다.
+
+```bash
+# 기본 설정으로 빌드한다 (이 환경에서는 CGO_ENABLED=1)
+go build -o orderctl .
+file orderctl
+ldd orderctl
+```
+
+```text
+orderctl: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=5de33272e74227cbf94af544905f5f9e5655f088, with debug_info, not stripped
+	linux-vdso.so.1 (0x00007f5eba2e3000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f5eba000000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007f5eba2e5000)
+```
+
+이번엔 `dynamically linked`이고 libc를 찾는다. 이 CLI가 쓰는 uuid 라이브러리가 `net` 패키지를 import하는데, `net`은 cgo를 쓸 수 있는 환경이면 DNS 조회 등에 시스템 C 라이브러리를 쓰는 구현을 함께 넣는다. `go list -deps .`에 `net`과 `runtime/cgo`가 보였다. `fmt`만 쓰는 hello world는 같은 기본 설정에서도 정적으로 나왔다.
+
+이 차이는 컨테이너에서 증상으로 나타난다. glibc가 있는 빌드 서버에서 기본 설정으로 만든 바이너리를 `scratch`나 Alpine(musl) 이미지에 넣으면 `exec ./orderctl: no such file or directory`가 난다. 파일은 분명 있는데 그 파일이 찾는 동적 링커(`/lib64/ld-linux-x86-64.so.2`)가 없다는 뜻이다. 그래서 컨테이너용 빌드에는 보통 `CGO_ENABLED=0`을 명시한다. 이렇게 하면 `net`은 순수 Go로 짠 DNS 리졸버를 쓴다. SQLite 드라이버처럼 C 코드가 꼭 필요한 의존성이 있다면 cgo를 끌 수 없으니, 그때는 같은 libc를 가진 베이스 이미지를 쓴다.
+
+정적 바이너리라 `FROM scratch`나 distroless 이미지에 파일 하나만 넣을 수 있다.
+
+```dockerfile
+FROM golang:1.24 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /orderctl .
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=build /orderctl /orderctl
+ENTRYPOINT ["/orderctl"]
+```
+
+`-ldflags="-s -w"`는 심볼 표와 디버그 정보를 뺀다. 이 CLI는 2.7MB에서 1.8MB로 줄었다. 대신 그 바이너리로는 스택 추적의 일부 정보와 디버거를 쓰기 어려워진다. `scratch`에는 CA 인증서와 시간대 데이터가 없어서 HTTPS 호출이 `x509: certificate signed by unknown authority`로 실패할 수 있다. distroless static 이미지는 이 둘을 넣어 둔 것이라 더 편하다.
+
+크로스 컴파일은 환경 변수 두 개로 한다. 리눅스 빌드 서버 하나에서 맥과 윈도우용 바이너리를 다 만든다.
+
+```bash
+# 애플 실리콘 맥용
+GOOS=darwin GOARCH=arm64 go build -o orderctl-darwin-arm64 .
+file orderctl-darwin-arm64
+
+# 윈도우용
+GOOS=windows GOARCH=amd64 go build -o orderctl.exe .
+file orderctl.exe
+```
+
+```text
+orderctl-darwin-arm64: Mach-O 64-bit arm64 executable, flags:<|DYLDLINK|PIE>
+orderctl.exe: PE32+ executable (console) x86-64, for MS Windows, 15 sections
+```
+
+다른 운영체제용 SDK나 크로스 컴파일러를 설치하지 않았다. 표준 라이브러리가 운영체제별 구현을 Go로 갖고 있기 때문이다(cgo를 쓰면 이 편리함이 사라지고 대상 플랫폼용 C 컴파일러가 필요해진다). ARM 서버(AWS Graviton)용 이미지도 `GOARCH=arm64` 한 번이면 된다.
+
+## 왜 인프라 도구는 Go로 쓰였나
+
+여기까지 본 성질이 인프라 도구에 딱 맞는다. 운영자가 받는 건 파일 하나라 설치 문서가 짧고, 버전이 다른 런타임끼리 부딪히지 않는다. 여러 OS와 CPU용 배포판을 한 빌드 서버에서 만든다. 시작이 빨라서 CLI가 즉시 응답한다(JVM처럼 데우는 시간이 없다). 고루틴으로 수천 개의 연결과 감시 작업을 가볍게 돌린다. `net/http`, TLS, JSON이 표준 라이브러리에 있어서 서드파티 의존성 없이도 API 서버와 클라이언트를 만든다.
+
+Docker가 2013년에 Go로 나오고 그 위에 쿠버네티스, etcd, Prometheus, Terraform이 Go로 쌓이면서, 이 생태계의 라이브러리(클라이언트 라이브러리, 컨트롤러 프레임워크)도 Go가 가장 두텁다. 쿠버네티스 오퍼레이터를 짜거나 Terraform 프로바이더를 만들 때 Go가 사실상 기본인 이유다. DevOps 일을 한다면 Go를 직접 짜지 않더라도 이런 도구의 소스와 에러 메시지를 읽을 일이 생긴다.
+
+반대로 Go가 덜 맞는 자리도 있다. 제네릭이 1.18에야 들어와서 컬렉션 라이브러리가 다른 언어보다 얇고, 데이터 분석·ML 라이브러리는 파이썬에 비할 바가 못 된다. 언어 선택 전체의 잣대는 [백엔드 언어 고르기 글](/posts/backend-language-comparison)에서 다룬다.
+
+## 현장에서 Go 바이너리를 만나는 순간
+
+컨테이너가 `exec ... no such file or directory`로 바로 죽으면 바이너리가 동적 링크인지 `file`로 본다. `dynamically linked`면 `CGO_ENABLED=0`으로 다시 빌드하거나 베이스 이미지를 바꾼다.
+
+API가 404 대신 500을 내는데 원인이 "파일 없음"이라면 중간 어딘가에서 `%v`나 `errors.New(err.Error())`로 사슬이 끊겼는지 본다. `errors.Is`가 false로 떨어지는 지점을 찾으면 된다.
+
+JSON 응답에 필드가 통째로 빠지면 구조체 필드 이름이 소문자인지 본다. 이름은 대문자로 두고 키 이름은 태그(`json:"order_id"`)로 바꾼다.
+
+`go build`는 되는데 CI에서만 `missing go.sum entry`로 실패하면 누군가 import를 추가하고 `go mod tidy`를 돌리지 않은 것이다. CI에서 `go mod tidy` 후 `git diff --exit-code go.mod go.sum`으로 확인하면 미리 잡는다. 코드 검사는 `go vet ./...`를 기본으로 건다. `Println`에 포맷 문자열을 넣는 실수 같은 것을 잡아 준다.
+
+## 작게 정의하고 값으로 돌려준다
+
+Go는 기능이 적은 언어다. 클래스도 예외도 상속도 없다. 대신 구조체와 메서드, 쓰는 쪽에서 작게 정의하는 인터페이스, 값으로 돌려주고 `%w`로 감싸는 에러, 파일 하나로 끝나는 빌드가 있다. 처음 막히는 곳은 nil 포인터를 담은 인터페이스와 배열을 공유하는 슬라이스 정도다. 이 둘의 정체를 알고, 컨테이너용 빌드에 `CGO_ENABLED=0`을 붙이는 이유를 알면 Go로 짠 서버와 CLI를 무리 없이 읽고 만들 수 있다. 다음은 [고루틴과 채널](/posts/go-concurrency-basics)이다.
+
+## 면접에서 나올 만한 질문
+
+### Go의 인터페이스는 자바의 인터페이스와 무엇이 다른가요?
+
+Go는 타입이 인터페이스를 선언하지 않아도 메서드만 갖고 있으면 만족한다. 그래서 인터페이스를 쓰는 쪽에서 필요한 메서드만 작게 정의하고, 기존 타입이나 표준 라이브러리 타입도 수정 없이 그 자리에 넣을 수 있다. 대신 실수로 시그니처가 어긋나면 늦게 알기 때문에 `var _ Notifier = Slack{}` 같은 컴파일 시점 확인을 둔다.
+
+### Go는 왜 예외 대신 에러를 반환값으로 쓰나요?
+
+실패할 수 있는 지점이 함수 시그니처에 드러나고, 부른 쪽이 그 자리에서 처리 방법을 정하게 하려는 설계다. 예외가 어디까지 날아가 어디서 잡히는지 추적할 필요가 없다. 대신 `if err != nil`이 많아지고, 맥락은 `fmt.Errorf("...: %w", err)`로 감싸 붙인다. 프로그램을 계속할 수 없는 버그에만 panic을 쓴다.
+
+### errors.Is와 errors.As는 언제 쓰고, %w와 %v는 무엇이 다른가요?
+
+`errors.Is`는 감싼 사슬을 벗기며 특정 값(센티널 에러)과 같은지 보고, `errors.As`는 특정 타입의 에러를 찾아 꺼내 필드를 읽게 한다. 사슬은 `%w`로 감쌀 때만 이어진다. `%v`로 감싸면 문자열로만 붙어서 실제로 `errors.Is(err, fs.ErrNotExist)`가 false가 됐다. 그래서 메시지 문자열로 분기하지 말고 사슬을 유지한다.
+
+### nil을 반환했는데 err != nil이 참이 되는 경우는?
+
+nil 포인터를 구체 타입 변수에 담았다가 `error` 인터페이스로 반환하면 그렇다. 인터페이스는 타입과 값 두 칸을 갖고, 둘 다 비어야 nil인데 타입 칸에 `*ValidationError`가 들어가기 때문이다. 에러가 없으면 `return nil`을 직접 쓰고, 반환 타입은 구체 타입이 아니라 `error`로 둔다.
+
+### 슬라이스를 함수에 넘겨 append했더니 원본이 바뀌었습니다. 왜 그런가요?
+
+슬라이스는 배열 주소, 길이, 용량만 담은 값이라 복사해도 같은 배열을 본다. 용량이 남아 있으면 `append`는 그 배열의 다음 칸에 쓰기 때문에 원본의 칸을 덮는다. 용량을 넘으면 새 배열로 옮겨 공유가 끊긴다. 독립된 복사가 필요하면 `slices.Clone`을, 덮어쓰기를 막으려면 `s[:n:n]`처럼 용량을 잘라 둔다.
+
+### Go 바이너리가 Alpine이나 scratch 이미지에서 not found로 실행되지 않는 이유는?
+
+cgo가 켜진 채 빌드되어 glibc 동적 링커를 찾는 바이너리라서다. `net` 패키지처럼 cgo를 쓸 수 있는 패키지를 import하면 기본 설정에서 동적 링크가 된다. `file`로 `dynamically linked`인지 확인하고, `CGO_ENABLED=0`으로 빌드하면 순수 Go 구현을 써서 정적 바이너리가 된다. C 라이브러리가 꼭 필요한 의존성이 있으면 같은 libc를 가진 베이스 이미지를 쓴다.
+
+### go.sum은 무엇을 보장하나요?
+
+어떤 버전을 쓸지는 `go.mod`와 최소 버전 선택이 정하고, `go.sum`은 그 버전의 내용 해시를 적어 내용이 바뀌지 않았음을 보장한다. 처음 받는 모듈은 공개 체크섬 DB와도 대조해서 같은 태그를 다른 내용으로 바꿔치기한 것을 잡는다. 비공개 모듈은 `GOPRIVATE`로 프록시와 체크섬 DB를 건너뛰게 한다.
+
+### 쿠버네티스, Docker, Terraform 같은 도구가 Go로 쓰인 이유는?
+
+의존성 없는 단일 바이너리로 배포되고, 환경 변수만으로 여러 OS와 CPU용으로 크로스 컴파일되며, 시작이 빠르고, 고루틴으로 많은 연결과 감시 작업을 가볍게 돌린다. 네트워크·TLS·JSON이 표준 라이브러리에 있어 서드파티 없이 API 서버와 클라이언트를 만들 수 있다. Docker 이후 이 생태계가 Go로 쌓이면서 클라이언트 라이브러리와 컨트롤러 도구도 Go가 가장 두텁다.

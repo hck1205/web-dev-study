@@ -366,7 +366,7 @@ server.headersTimeout = 66_000; // keepAliveTimeout보다 크게
 
 ## 502와 504가 나는 자리
 
-상태 코드 자체의 뜻은 [HTTP 상태 코드 글](/posts/http-status-codes)에서 봤다. 프록시에서 중요한 건 이 코드를 만드는 게 앱이 아니라 nginx라는 점이다. 앱 로그를 아무리 뒤져도 안 나오는 이유다.
+상태 코드 자체의 뜻은 [HTTP 상태 코드 글](/posts/http-status-codes)에서 봤다. 프록시에서는 이 코드를 만드는 게 앱이 아니라 nginx다. 앱 로그를 아무리 뒤져도 안 나오는 이유다.
 
 - 502 Bad Gateway: 업스트림과 대화가 안 됐다. 연결을 거부당했거나, 연결이 중간에 끊겼거나, 응답이 HTTP가 아니었다.
 - 504 Gateway Timeout: 업스트림이 정해진 시간 안에 응답하지 않았다.
@@ -490,7 +490,7 @@ location /api/reports/ {
 
 WebSocket은 HTTP 요청으로 시작해서 `Upgrade: websocket` 헤더로 "이 연결을 WebSocket으로 바꾸자"고 요청한다. 서버가 `101 Switching Protocols`로 답하면 그 TCP 연결은 양방향 통로가 된다. 동작 원리는 [실시간 통신 글](/posts/realtime-communication)에서 다뤘다.
 
-문제는 `Upgrade`와 `Connection`이 홉 바이 홉(hop-by-hop) 헤더라는 점이다. 연결 한 구간에서만 의미가 있는 헤더라서 프록시는 이걸 다음 구간으로 넘기지 않는다. nginx가 업스트림에 그냥 보내면 앱은 업그레이드 요청을 받지 못하고, 브라우저 콘솔에 `WebSocket connection to 'wss://...' failed`가 뜬다. 그래서 직접 실어 보낸다.
+문제는 `Upgrade`와 `Connection`이 홉 바이 홉(hop-by-hop) 헤더라는 것이다. 연결 한 구간에서만 의미가 있는 헤더라서 프록시는 이걸 다음 구간으로 넘기지 않는다. nginx가 업스트림에 그냥 보내면 앱은 업그레이드 요청을 받지 못하고, 브라우저 콘솔에 `WebSocket connection to 'wss://...' failed`가 뜬다. 그래서 직접 실어 보낸다.
 
 ```nginx
 # http 컨텍스트 (conf.d/websocket-map.conf 같은 파일)

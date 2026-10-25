@@ -317,6 +317,90 @@ printf '%s\n' '.terraform/' '*.tfstate' '*.tfstate.*' 'tfplan' 'crash.log' >> .g
 
 `.terraform.lock.hcl`은 넣는다. 저장한 plan 파일도 넣지 않는다. 바뀔 값이 평문으로 들어 있다.
 
+## sensitive는 화면만 가린다
+
+앞에서 비밀이 state에 평문으로 남는다고 했다. 그러면 `sensitive = true`는 무엇을 해 주는지 직접 확인해 봤다. 비밀번호 변수를 받아 설정 파일을 쓰고, 같은 값을 출력으로 내보내는 코드다(local 프로바이더 2.9.1).
+
+```hcl
+terraform {
+  required_providers {
+    local = { source = "hashicorp/local" }
+  }
+}
+
+variable "db_password" {
+  type      = string
+  sensitive = true
+}
+
+resource "local_file" "app_env" {
+  filename = "${path.module}/app.env"
+  content  = "DB_PASSWORD=${var.db_password}\n"
+}
+
+output "db_password" {
+  value     = var.db_password
+  sensitive = true
+}
+```
+
+```bash
+# 값은 환경 변수로 넘긴다. tfvars 파일에 적어 커밋하지 않는다
+TF_VAR_db_password='example-only-pw' terraform apply
+terraform output
+terraform output -raw db_password
+grep -n 'example-only-pw' terraform.tfstate
+```
+
+```text
+  + resource "local_file" "app_env" {
+      + content              = (sensitive value)
+...
+Changes to Outputs:
+  + db_password = (sensitive value)
+...
+db_password = <sensitive>
+example-only-pw
+8:      "value": "example-only-pw",
+23:            "content": "DB_PASSWORD=example-only-pw\n",
+```
+
+plan과 apply 화면, `terraform output`의 목록에서는 가려졌다. 하지만 `-raw`나 `-json`으로 이름을 찍어 물으면 그대로 나오고, state에는 출력 값과 리소스 속성 두 군데에 평문으로 들어 있다. sensitive는 값이 흘러가는 길에 "화면에 찍지 말라"는 표시를 붙여 주는 기능이다. 그 표시는 함수와 문자열 합치기를 거쳐도 따라가서, `content`처럼 비밀이 섞인 속성도 가려 준다. 표시를 빼먹으면 Terraform이 먼저 멈춘다. 위 코드에서 출력의 `sensitive = true`를 지우면 이렇게 나온다.
+
+```text
+Error: Output refers to sensitive values
+
+  on main.tf line 17:
+  17: output "db_password" {
+```
+
+가리지 못하는 곳도 정리해 두자. state 파일과 `-out`으로 저장한 plan 파일, CI 로그에 남는 `terraform output -json`, `TF_LOG=TRACE`로 켠 디버그 로그, 그리고 `nonsensitive()`로 표시를 일부러 벗긴 값이다. 리소스가 만든 파일(`app.env`)도 당연히 평문이다.
+
+### state에 아예 남기지 않기
+
+Terraform 1.10부터는 값을 state와 plan에 저장하지 않는 길이 생겼다. 변수에 `ephemeral = true`를 주면 그 값은 실행하는 동안에만 메모리에 있고 어디에도 기록되지 않는다. 대신 쓸 수 있는 자리가 제한된다. 위 코드의 변수를 ephemeral로 바꾸고 plan을 돌리면 이렇게 거절된다.
+
+```text
+Error: Invalid use of ephemeral value
+
+  with local_file.app_env,
+  on main.tf line 14, in resource "local_file" "app_env":
+  14:   content  = "DB_PASSWORD=${var.db_password}\n"
+
+Ephemeral values are not valid for "content", because it is not a write-only
+attribute and must be persisted to state.
+```
+
+ephemeral 값을 받을 수 있는 자리는 프로바이더 설정, `locals`, 다른 ephemeral 리소스, 그리고 1.11부터 생긴 write-only 인자다. write-only 인자는 API로 보내기만 하고 state에는 남기지 않는 속성이다. AWS 프로바이더의 `aws_db_instance`라면 `password` 대신 `password_wo`를 쓰고, 값이 바뀌었는지 Terraform이 알 수 없으니 `password_wo_version` 숫자를 올려서 교체를 알린다. 프로바이더 버전마다 지원하는 리소스가 다르니 문서에서 `_wo`가 붙은 인자가 있는지 먼저 본다.
+
+비밀을 코드 밖에서 가져오는 패턴은 셋 정도로 정리된다.
+
+- 비밀을 Terraform이 아예 만지지 않게 한다. RDS는 `manage_master_user_password = true`로 두면 RDS가 비밀번호를 만들어 Secrets Manager에 넣고 교체까지 한다. state에는 비밀의 ARN만 남는다. 가장 깔끔하고, 쓸 수 있으면 이걸 고른다.
+- 저장소에서 ephemeral로 읽는다. `ephemeral "aws_secretsmanager_secret_version"`이나 Vault 프로바이더의 ephemeral 리소스로 읽어 write-only 인자에 넘긴다. 같은 이름의 `data` 소스로 읽으면 결과가 state에 저장되니 바꾸는 의미가 없다.
+- 비밀은 앱이 직접 읽게 한다. Terraform은 Secrets Manager의 비밀 "자리"와 앱 역할의 읽기 권한만 만들고, 값은 사람이 콘솔이나 CLI로 넣거나 교체 Lambda가 넣는다. 앱은 실행 중에 SDK나 [외부 시크릿 연동](/posts/secrets-management#비밀을-한곳에-모으는-저장소)으로 꺼낸다.
+
+그래도 state에는 무언가 남는다. 옛 리소스, 프로바이더가 돌려준 접속 정보, 아직 write-only를 지원하지 않는 리소스의 비밀이다. 그래서 state 버킷은 비밀 저장소와 같은 수준으로 잠근다. S3 백엔드라면 `encrypt = true`에 `kms_key_id`로 고객 관리 KMS 키를 지정해, 버킷을 읽을 수 있어도 키 사용 권한이 없으면 내용을 못 보게 한다. 버킷 정책으로 CI의 apply 역할과 몇 명의 관리자만 읽고 쓰게 하고, 퍼블릭 접근 차단과 버전 관리(되돌리기용), CloudTrail 데이터 이벤트(누가 언제 읽었나)를 켠다. `terraform_remote_state`로 다른 프로젝트의 출력을 읽게 해 주면 그 state 전체를 읽을 권한을 주는 것이니, 나눠 줄 값은 SSM Parameter Store 같은 곳에 따로 내보내는 편이 안전하다.
+
 ## 콘솔에서 고친 것은 drift가 된다
 
 코드와 실제가 어긋난 상태를 drift라고 한다. 장애 대응 중 콘솔에서 보안 그룹을 연 경우가 대표적이다. 실습에서는 Terraform이 만든 파일을 손으로 고쳤다.
@@ -670,3 +754,7 @@ apply나 plan이 시작할 때 잠금 항목을 조건부로 써서, 이미 있�
 ### 이미 콘솔로 만든 리소스를 Terraform으로 관리하려면 어떻게 하나요?
 
 코드에 import 블록을 적고 plan으로 `1 to import`가 나오는지 본 뒤 apply한다. 1.5부터는 `-generate-config-out`으로 리소스 코드 초안을 받을 수 있다. 가져온 뒤 첫 plan이 No changes가 될 때까지 코드를 실제에 맞추는 것이 마무리다. `terraform import` 명령도 있지만 리뷰를 거치지 않고 state를 바로 바꾼다.
+
+### sensitive = true로 표시하면 비밀이 안전한가요?
+
+아니다. sensitive는 plan·apply 화면과 `terraform output` 목록에서 값을 가려 줄 뿐이고, state와 저장한 plan 파일에는 평문으로 남는다. `terraform output -raw`로 물으면 그대로 나온다. state에 남기지 않으려면 1.10부터 생긴 ephemeral 값과 1.11의 write-only 인자(`password_wo` 같은)를 쓰거나, RDS의 `manage_master_user_password`처럼 비밀을 Terraform이 아예 만지지 않게 한다. 그래도 남는 것이 있으니 state 버킷은 KMS 암호화와 좁은 접근 권한으로 비밀 저장소처럼 잠근다.

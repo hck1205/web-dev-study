@@ -1,0 +1,567 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-maximum-depth-of-binary-tree");
+
+<EasyIntro>
+  가족 족보를 떠올려 보자. 맨 위에 할아버지가 있고, 그 아래에 자식들, 또 그 아래에 손주들이 줄줄이 이어진다. 이 문제는 족보가 맨 위부터 몇 세대까지 내려가는지 세는 문제다. 어떤 집안은 손주까지만 있고, 어떤 집안은 증손주, 고손주까지 내려간다. 가장 아래 세대까지 내려가는 줄을 찾아서 그 줄에 몇 명이 있는지 세면 된다. 가장 쉬운 방법은 각 사람에게 "너부터 아래로 몇 세대가 있니?"라고 묻는 것이다. 자식이 없는 사람은 자기 혼자니까 1이라고 답한다. 자식이 있는 사람은 자식들의 대답 중 큰 쪽에 자기 몫 1을 더해서 답한다. 이렇게 아래에서부터 대답이 올라오면 맨 위 할아버지가 마지막에 전체 세대 수를 말하게 된다.
+</EasyIntro>
+
+댓글에 대댓글, 그 아래 대대댓글이 계속 달리는 화면을 만든다면 들여쓰기를 몇 단계까지 허용할지 정해야 한다. 그러려면 지금 데이터에서 가장 깊은 댓글이 몇 단계인지부터 알아야 하는데, 댓글은 트리 모양이라 배열처럼 길이를 바로 읽을 수 없다. 뿌리에서 가장 먼 잎까지 내려가 봐야 안다.
+
+[LeetCode 104. Maximum Depth of Binary Tree](https://leetcode.com/problems/maximum-depth-of-binary-tree/)가 이 계산을 이진 트리에서 하는 문제다. 트리 문제 묶음에서 가장 먼저 나오는 문제이고, 코드는 한 줄로도 끝난다. 그런데 면접관은 그 한 줄을 보고 "재귀 없이 짜 보라", "트리가 한쪽으로 10만 단계 기울면 어떻게 되나", "최소 깊이는 같은 방식으로 되나"를 묻는다. 이 글은 풀이 여섯 개를 차례로 보면서 트리 문제 전체에 쓰이는 두 가지 생각, 위에서 정보를 들고 내려가기와 아래에서 답을 받아 올리기를 정리한다.
+
+이진 트리의 구조와 네 가지 순회는 [이진 트리와 BST 글](/posts/ds-binary-tree-bst)에서, 재귀가 스택을 어떻게 쓰는지는 [재귀와 백트래킹 글](/posts/recursion-backtracking)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 깊이는 길 위의 노드 개수다
+
+이진 트리의 뿌리(root) 노드가 주어진다. 이진 트리는 노드마다 자식이 많아야 둘(왼쪽, 오른쪽)인 트리다. 뿌리에서 출발해 자식이 하나도 없는 노드, 즉 잎(leaf)까지 내려가는 길은 잎의 개수만큼 있다. 그 길 가운데 가장 긴 길에 노드가 몇 개 있는지 돌려주면 된다.
+
+여기서 세는 건 간선(노드 사이 연결선)이 아니라 노드다. 노드가 하나뿐인 트리의 깊이는 1이고, 빈 트리는 0이다. 교과서에 따라 깊이를 간선 수로 정의해서 노드 하나짜리를 0으로 치기도 하는데, 이 문제는 노드 수로 센다. 면접에서 비슷한 문제를 받으면 이 정의부터 확인하는 게 좋다.
+
+제약 조건에서 풀이 선택에 영향을 주는 건 하나다. 노드 수가 0 이상 10^4 이하다. 노드를 전부 한 번씩 봐야 답을 알 수 있으니 O(n)보다 빠를 수는 없고, O(n)이면 충분하다. 대신 트리가 한쪽으로만 이어지면 깊이가 10^4까지 갈 수 있다는 점이 재귀 풀이에서 문제가 된다. 뒤에서 실제로 터뜨려 본다.
+
+이 글 내내 쓸 예시 트리다. LeetCode는 트리를 위에서부터 층마다 왼쪽에서 오른쪽으로 읽은 배열로 적고, 빈 자리는 `null`로 둔다.
+
+```text
+[1, 2, 3, 4, 5, null, 6, null, null, 7]
+
+        1
+      /   \
+     2     3
+    / \     \
+   4   5     6
+      /
+     7
+```
+
+아래 그림에서 다음을 누르면 뿌리에서 잎까지 가는 길이 하나씩 그려진다.
+
+<VectorSpace
+  caption="잎이 셋이면 뿌리에서 잎까지 가는 길도 셋이다"
+  groups={[{ id: "inner", label: "자식이 있는 노드" }, { id: "leaf", label: "잎 노드" }]}
+  points={[
+    { id: "n1", label: "1", x: 200, y: 40, group: "inner" },
+    { id: "n2", label: "2", x: 110, y: 105, group: "inner" },
+    { id: "n3", label: "3", x: 290, y: 105, group: "inner" },
+    { id: "n4", label: "4", x: 60, y: 170, group: "leaf" },
+    { id: "n5", label: "5", x: 160, y: 170, group: "inner" },
+    { id: "n6", label: "6", x: 340, y: 170, group: "leaf" },
+    { id: "n7", label: "7", x: 130, y: 235, group: "leaf" },
+  ]}
+  edges={[["n1", "n2"], ["n1", "n3"], ["n2", "n4"], ["n2", "n5"], ["n3", "n6"], ["n5", "n7"]]}
+  steps={[
+    { showEdges: true, caption: "노드 일곱 개짜리 트리다. 맨 위 1이 뿌리이고 자식이 없는 4, 7, 6이 잎이다." },
+    { showEdges: true, path: ["n1", "n2", "n4"], caption: "1에서 잎 4까지 가는 길에는 노드가 셋 있다. 깊이 3이다." },
+    { showEdges: true, path: ["n1", "n2", "n5", "n7"], caption: "1에서 잎 7까지는 노드가 넷이다. 이 트리에서 가장 긴 길이다." },
+    { showEdges: true, path: ["n1", "n3", "n6"], caption: "1에서 잎 6까지는 셋이다. 세 길 중 가장 긴 것이 4라서 답은 4다." },
+  ]}
+/>
+
+답은 4다. 손으로 셀 때도 우리는 길을 하나씩 따라가며 노드를 세고, 가장 큰 수를 기억해 둔다. 첫 번째 풀이는 이 손 계산을 그대로 옮긴다.
+
+## 뿌리에서 잎까지 길을 모두 적어 두기
+
+모든 길을 실제로 만들어 목록에 담고, 가장 긴 길의 길이를 고른다. 노드를 방문할 때마다 지금까지 내려온 길에 자기를 붙인 새 배열을 만들고, 잎에 도착하면 그 배열을 목록에 넣는다.
+
+```js
+function maxDepth(root) {
+  const paths = [];
+  function walk(node, path) {
+    if (!node) return;
+    path = [...path, node.val]; // 지금까지의 길을 복사하고 나를 붙인다
+    if (!node.left && !node.right) {
+      paths.push(path); // 잎이면 길 하나가 완성된다
+      return;
+    }
+    walk(node.left, path);
+    walk(node.right, path);
+  }
+  walk(root, []);
+
+  let best = 0;
+  for (const p of paths) best = Math.max(best, p.length);
+  return best;
+}
+```
+
+예시 트리에서는 `[1,2,4]`, `[1,2,5,7]`, `[1,3,6]` 세 길이 만들어지고 4가 나온다.
+
+답은 맞지만 낭비가 크다. 노드마다 길 배열을 통째로 복사하니, 깊이 d에 있는 노드에서 d만큼 일을 한다. 전체 시간은 노드마다 자기 깊이를 더한 값이라 트리 높이를 h라 하면 O(n·h)이고, 한쪽으로 기운 트리에서는 h가 n이라 O(n²)이다. 일자로 기운 트리로 재 봤다.
+
+```text
+노드 2000개   58 ms
+노드 4000개  129 ms
+노드 8000개  537 ms
+```
+
+노드가 두 배가 되면 시간이 네 배 가까이 는다. 그리고 생각해 보면 우리가 알고 싶은 건 길의 길이 하나인데, 길에 어떤 노드가 있었는지까지 다 적고 있다. 길이만 들고 다니면 복사할 필요가 없다.
+
+## 내려가면서 깊이를 숫자로 들고 간다
+
+길 배열 대신 "지금 몇 번째 층에 있나"라는 숫자 하나만 넘긴다. 뿌리는 1층이고, 자식에게 내려갈 때마다 1을 더한다. 노드에 도착할 때마다 그 층수를 지금까지 본 최댓값과 비교한다.
+
+```js
+function maxDepth(root) {
+  let best = 0;
+  function dfs(node, depth) {
+    if (!node) return;
+    best = Math.max(best, depth); // 이 노드가 몇 층인지 기록
+    dfs(node.left, depth + 1);
+    dfs(node.right, depth + 1);
+  }
+  dfs(root, 1);
+  return best;
+}
+```
+
+이렇게 위에서 아래로 정보를 들고 내려가는 방식을 탑다운(top-down)이라 부른다. 부모가 아는 것(지금 층수)을 인자로 자식에게 넘기는 구조다. 시간은 노드마다 O(1) 일을 하니 O(n), 공간은 재귀 호출이 쌓이는 깊이만큼이라 O(h)다. 균형 잡힌 트리면 h가 log n 정도, 일자 트리면 n이다.
+
+잎인지 확인하지 않고 모든 노드에서 최댓값을 갱신해도 된다. 가장 깊은 노드는 언제나 잎이라서, 잎이 아닌 노드의 층수는 최댓값을 넘을 수 없다.
+
+이 풀이는 충분히 빠르지만 바깥 변수 `best`를 함수 안에서 고친다. 함수가 값을 돌려주지 않고 바깥 상태를 바꾸니, 같은 함수를 다른 트리에 재사용하거나 결과를 조합하기가 불편하다. 방향을 뒤집으면 바깥 변수가 사라진다.
+
+## 자식에게 물어보고 하나를 더한다
+
+이번에는 아래에서 위로 답을 받아 올린다. 어떤 노드에서 시작하는 트리의 최대 깊이는 이렇게 정해진다.
+
+- 노드가 없으면 0이다.
+- 노드가 있으면 왼쪽 자식 트리의 최대 깊이와 오른쪽 자식 트리의 최대 깊이 중 큰 쪽에 1(자기 자신)을 더한 값이다.
+
+두 번째 줄의 "왼쪽 자식 트리의 최대 깊이"는 원래 문제와 똑같은 질문을 더 작은 트리에 던진 것이다. 그래서 함수가 자기 자신을 부르면 된다. 이렇게 자식들의 답을 받아 내 답을 만드는 방식을 바텀업(bottom-up)이라 부른다. 트리 문제 대부분이 이 모양으로 풀린다.
+
+```js
+function maxDepth(root) {
+  if (root === null) return 0; // 빈 트리의 깊이는 0
+  // 양쪽 자식 트리에게 깊이를 묻고, 큰 쪽에 나 자신 1을 더한다
+  return 1 + Math.max(maxDepth(root.left), maxDepth(root.right));
+}
+```
+
+빈 트리를 0으로 정해 둔 덕분에 잎을 따로 처리할 필요가 없다. 잎은 양쪽 자식이 모두 비어 있으니 `1 + max(0, 0) = 1`이 저절로 나온다. 자식이 하나뿐인 노드도 빈 쪽이 0을 돌려주니 있는 쪽 값이 그대로 올라간다.
+
+아래 그림은 예시 트리에서 함수가 불리고 돌아오는 순서다. 기억 칸은 지금 쌓여 있는 호출들이고, 초록색 칸은 깊이가 확정된 노드다. 칸은 트리를 층 순서대로 펼친 것이다.
+
+<AlgoTrace
+  caption="maxDepth 재귀: 잎에서 1이 올라오고, 부모마다 큰 쪽에 1을 더한다"
+  memoryLabel="호출 스택 (왼쪽이 바닥)"
+  cells={["1", "2", "3", "4", "5", "6", "7"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "뿌리 1에서 시작한다. 왼쪽 자식 2에게 먼저 묻는다." },
+    { pointer: 1, memory: ["1", "2"], caption: "2도 답하려면 자식에게 물어야 한다. 왼쪽 4로 내려간다." },
+    { pointer: 3, found: [3], memory: ["1", "2", "4"], caption: "4는 양쪽이 비어 있다. 1 + max(0, 0) = 1을 돌려준다." },
+    { pointer: 4, found: [3], memory: ["1", "2", "5"], caption: "2가 이번에는 오른쪽 5에게 묻는다. 5는 왼쪽 7에게 묻는다." },
+    { pointer: 6, found: [3, 6], memory: ["1", "2", "5", "7"], caption: "7은 잎이다. 1을 돌려준다. 호출이 네 개 쌓여 있다." },
+    { pointer: 4, found: [3, 4, 6], memory: ["1", "2", "5"], caption: "5는 왼쪽 1, 오른쪽 0을 받았다. 1 + max(1, 0) = 2." },
+    { pointer: 1, found: [1, 3, 4, 6], memory: ["1", "2"], caption: "2는 왼쪽 1, 오른쪽 2를 받았다. 1 + max(1, 2) = 3." },
+    { pointer: 2, found: [1, 3, 4, 6], memory: ["1", "3"], caption: "1이 오른쪽 3에게 묻는다. 3은 왼쪽이 비어 0을 받고 오른쪽 6에게 묻는다." },
+    { pointer: 5, found: [1, 3, 4, 5, 6], memory: ["1", "3", "6"], caption: "6은 잎이라 1을 돌려준다." },
+    { pointer: 2, found: [1, 2, 3, 4, 5, 6], memory: ["1", "3"], caption: "3은 1 + max(0, 1) = 2." },
+    { pointer: 0, found: [0, 1, 2, 3, 4, 5, 6], memory: ["1"], caption: "1은 왼쪽 3, 오른쪽 2를 받았다. 1 + max(3, 2) = 4가 답이다." },
+  ]}
+/>
+
+호출 스택이 가장 높이 쌓인 건 7에 도착했을 때로, 네 개였다. 트리 높이와 같다. 재귀 풀이의 추가 공간이 O(h)인 이유가 이 그림에 그대로 보인다. 시간은 노드마다 한 번 불리고 그 안에서 O(1) 일을 하니 O(n)이다. 빈 자리(`null`)에도 호출이 한 번씩 가지만, 노드가 n개인 이진 트리의 빈 자리는 정확히 n+1개라 차수는 그대로다.
+
+### Python과 Java로 쓰면
+
+```python
+from typing import Optional
+
+class TreeNode:
+    def __init__(self, val=0, left=None, right=None):
+        self.val = val
+        self.left = left
+        self.right = right
+
+def max_depth(root: Optional[TreeNode]) -> int:
+    if root is None:
+        return 0
+    return 1 + max(max_depth(root.left), max_depth(root.right))
+```
+
+```java
+class Solution {
+    public int maxDepth(TreeNode root) {
+        if (root == null) return 0;
+        return 1 + Math.max(maxDepth(root.left), maxDepth(root.right));
+    }
+}
+```
+
+세 언어 모두 코드 모양은 같지만, 트리가 한쪽으로 깊게 기울면 결과가 갈린다. 각 노드가 왼쪽 자식만 갖는 일자 트리를 만들어 돌려 봤다.
+
+```text
+Node.js 22   깊이 10000   10000
+             깊이 100000  RangeError: Maximum call stack size exceeded  (1만 3천 단계 근처에서 넘친다)
+Python 3.13  깊이 5000    RecursionError: maximum recursion depth exceeded
+Java 21      깊이 9000    9000
+             깊이 10000   StackOverflowError  (-Xss16m으로 스택을 늘리면 10만도 통과)
+```
+
+Python이 가장 먼저 무너진다. 기본 재귀 한도가 1000이라서, 문제의 최대 깊이 10^4는커녕 깊이 1000만 넘어도 터진다. `sys.setrecursionlimit(20000)`으로 한도를 올리면 이 환경에서는 통과했지만, 한도를 올리는 건 C 스택이 실제로 버틸 때만 안전하다. 너무 크게 잡으면 예외 대신 프로세스가 통째로 죽는다. Java와 Node.js의 한계는 스레드 스택 크기와 프레임 크기로 정해져서, 같은 코드라도 실행 환경마다 숫자가 다르다.
+
+그래서 재귀 풀이를 내고 나면 "깊이가 아주 깊으면요?"라는 질문이 거의 따라온다. 답은 호출 스택 대신 직접 만든 스택이나 큐를 쓰는 것이다. 다음 두 풀이가 그 답이다.
+
+## 재귀 없이 스택에 층수를 같이 넣는다
+
+재귀가 하던 일을 그대로 손으로 하면 된다. 재귀는 "어느 노드를, 몇 층에서" 처리하던 중이었는지를 호출 스택에 기억했다. 그 두 가지를 짝으로 묶어 배열 스택에 넣는다.
+
+```js
+function maxDepth(root) {
+  if (!root) return 0;
+  const stack = [[root, 1]]; // [노드, 그 노드의 층수]
+  let best = 0;
+  while (stack.length) {
+    const [node, depth] = stack.pop();
+    best = Math.max(best, depth);
+    // 오른쪽을 먼저 넣어야 왼쪽이 먼저 나온다 (재귀와 같은 순서)
+    if (node.right) stack.push([node.right, depth + 1]);
+    if (node.left) stack.push([node.left, depth + 1]);
+  }
+  return best;
+}
+```
+
+탑다운 풀이를 반복문으로 옮긴 모양이다. 시간 O(n), 공간은 스택에 동시에 들어가는 노드 수만큼인데 최악 O(n)이다. 차이는 그 공간이 호출 스택(보통 수 MB로 작다)이 아니라 힙(heap) 메모리에 잡힌다는 것이다. 깊이 10만짜리 일자 트리도 문제없이 돈다.
+
+바텀업 재귀를 반복문으로 옮기는 건 이보다 어렵다. 자식 둘의 답을 다 받은 다음에야 부모를 계산할 수 있어서, 후위 순회를 반복문으로 짜고 노드별 결과를 따로 저장해야 한다. 깊이 문제는 탑다운으로도 충분해서 굳이 그렇게 할 필요가 없다. 반대로 [Binary Tree Maximum Path Sum](/posts/leetcode-binary-tree-maximum-path-sum)처럼 자식의 답이 꼭 필요한 문제는 후위 순회 반복문이 필요해진다.
+
+## 한 층씩 내려가며 층을 센다
+
+깊이를 "층의 개수"로 보면 또 다른 풀이가 나온다. 1층 노드를 전부 보고, 그 자식들인 2층 노드를 전부 보고, 3층을 보는 식으로 층 단위로 내려가다가 더 내려갈 노드가 없을 때 지나온 층 수가 답이다. 층 순서로 훑는 이 방식이 너비 우선 탐색(BFS)이다.
+
+```js
+function maxDepth(root) {
+  if (!root) return 0;
+  let level = [root]; // 지금 층의 노드들
+  let depth = 0;
+  while (level.length) {
+    depth++; // 한 층을 지났다
+    const next = [];
+    for (const node of level) {
+      if (node.left) next.push(node.left);
+      if (node.right) next.push(node.right);
+    }
+    level = next; // 다음 층으로
+  }
+  return depth;
+}
+```
+
+아래 그림에서 기억 칸은 매 바퀴의 "지금 층"이다.
+
+<AlgoTrace
+  caption="층 단위 BFS: 층 배열이 빌 때까지 몇 번 바뀌었나 센다"
+  memoryLabel="지금 층"
+  cells={["1", "2", "3", "4", "5", "6", "7"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1"], caption: "1층에는 뿌리 하나뿐이다. depth = 1." },
+    { pointer: 1, found: [0, 1, 2], memory: ["2", "3"], caption: "1의 자식들이 2층이 된다. depth = 2." },
+    { pointer: 3, found: [0, 1, 2, 3, 4, 5], memory: ["4", "5", "6"], caption: "2와 3의 자식을 모으면 3층은 4, 5, 6이다. depth = 3." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: ["7"], caption: "4와 6은 자식이 없고 5만 7을 내놓는다. depth = 4." },
+    { found: [0, 1, 2, 3, 4, 5, 6], memory: [], caption: "7도 자식이 없어 다음 층이 비었다. 반복이 끝나고 4를 돌려준다." },
+  ]}
+/>
+
+시간은 O(n)이다. 공간은 한 층에 있는 노드 수, 즉 트리의 최대 너비에 비례한다. 꽉 찬 이진 트리라면 마지막 층에 노드의 절반이 몰려 있어서 O(n)이고, 일자 트리라면 층마다 노드가 하나라 O(1)이다. DFS와 공간 특성이 정반대다. DFS는 깊이에, BFS는 너비에 메모리를 쓴다. 넓고 얕은 트리는 DFS가, 좁고 깊은 트리는 BFS가 메모리를 덜 쓴다.
+
+JavaScript에서 큐를 배열 하나로 두고 `shift()`로 앞에서 꺼내는 코드를 자주 본다. 배열의 `shift()`는 뒤 원소를 한 칸씩 당기는 O(n) 연산이라 큐가 길어지면 급격히 느려진다. 꽉 찬 트리로 재 봤다.
+
+```text
+노드 16,383개   shift() 큐   7.0 ms    층 배열 교체  2.1 ms
+노드 65,535개   shift() 큐   2675.8 ms 층 배열 교체  2.2 ms
+```
+
+작은 배열에서는 V8이 빠르게 처리해 주다가 크기가 커지면 갑자기 느려진다. 노드가 10^4개 이하인 이 문제에서는 티가 나지 않지만, 위처럼 층마다 새 배열을 만들거나 머리 인덱스(`head`)를 두고 읽으면 안전하다. Python은 `collections.deque`의 `popleft()`, Java는 `ArrayDeque`의 `poll()`이 O(1)이다.
+
+```python
+from collections import deque
+
+def max_depth(root):
+    if root is None:
+        return 0
+    queue = deque([root])
+    depth = 0
+    while queue:
+        depth += 1
+        for _ in range(len(queue)):  # 이번 층에 있는 노드 수만큼만 꺼낸다
+            node = queue.popleft()
+            if node.left:
+                queue.append(node.left)
+            if node.right:
+                queue.append(node.right)
+    return depth
+```
+
+`for _ in range(len(queue))`가 층을 나누는 장치다. 반복을 시작할 때의 큐 길이가 곧 이번 층의 노드 수라서, 그만큼만 꺼내면 그 뒤에 들어온 노드는 다음 층으로 남는다. 이 패턴은 층별로 노드를 묶어 돌려주는 [Binary Tree Level Order Traversal](/posts/leetcode-binary-tree-level-order-traversal)에서 그대로 다시 쓴다.
+
+## 스택도 큐도 없이 실을 걸어 내려가기
+
+지금까지의 풀이는 모두 O(h)나 O(너비)만큼 추가 공간을 썼다. "추가 공간 O(1)로 할 수 있나"라는 꼬리 질문에는 Morris 순회로 답할 수 있다. 재귀가 스택에 기억하던 "돌아갈 곳"을 트리 안의 빈 포인터에 잠깐 적어 두는 방법이다.
+
+중위 순회에서 어떤 노드 `cur` 바로 앞에 방문하는 노드는 왼쪽 서브트리에서 가장 오른쪽에 있는 노드다. 그 노드의 `right`는 원래 비어 있다. 거기에 `cur`를 가리키는 임시 다리(스레드)를 놓고 왼쪽으로 내려가면, 왼쪽을 다 돈 뒤 그 다리를 타고 `cur`로 돌아올 수 있다. 돌아왔을 때 다리를 치워 트리를 원래대로 돌려놓는다.
+
+깊이를 재려면 하나가 더 필요하다. 다리를 타고 올라올 때 몇 층을 한 번에 올라오는지 알아야 한다. 다리를 찾으러 왼쪽 자식에서 오른쪽으로 걸어간 걸음 수가 바로 그 층 차이다.
+
+```js
+function maxDepth(root) {
+  let cur = root, depth = 0, best = 0;
+  while (cur) {
+    if (!cur.left) {
+      // 왼쪽이 없으면 이 노드를 방문하고 오른쪽(자식 또는 다리)으로 간다
+      depth++;
+      best = Math.max(best, depth);
+      cur = cur.right;
+    } else {
+      // 왼쪽 서브트리의 가장 오른쪽 노드를 찾으며 걸음 수를 센다
+      let pre = cur.left, steps = 1;
+      while (pre.right && pre.right !== cur) {
+        pre = pre.right;
+        steps++;
+      }
+      if (!pre.right) {
+        // 처음 왔다: 돌아올 다리를 놓고 왼쪽으로 내려간다
+        depth++;
+        best = Math.max(best, depth);
+        pre.right = cur;
+        cur = cur.left;
+      } else {
+        // 다리를 타고 돌아왔다: 다리를 치우고, 올라온 층만큼 뺀다
+        pre.right = null;
+        depth -= steps;
+        cur = cur.right;
+      }
+    }
+  }
+  return best;
+}
+```
+
+`depth`는 마지막으로 방문한 노드의 층수다. 다리를 타고 `cur`로 돌아온 순간 `depth`는 `pre`의 층수인데, `pre`는 `cur`보다 정확히 `steps`층 아래에 있다. 그래서 `steps`를 빼면 `cur`의 층수로 맞춰진다. 무작위 트리 5000개로 다른 풀이와 결과를 대조했고, 끝난 뒤 트리 모양이 원래와 같은지도 확인했다.
+
+시간은 O(n)이다. 다리를 찾으러 오른쪽으로 걷는 걸음이 있지만, 각 간선은 다리를 놓을 때 한 번, 치울 때 한 번 정도만 다시 걷기 때문에 전체가 노드 수의 상수 배다. 추가 공간은 변수 몇 개라 O(1)이다.
+
+대가도 분명하다. 순회하는 동안 트리를 잠시 고친다. 다른 스레드가 같은 트리를 읽고 있으면 사이클이 생긴 트리를 보게 되고, 중간에 예외가 나서 빠져나가면 다리가 남은 채로 트리가 망가진다. 읽기 전용이거나 불변(immutable)인 트리에는 쓸 수 없다. 코드도 다른 풀이보다 훨씬 읽기 어렵다. 면접에서는 "O(1) 공간이 정말 필요하면 Morris가 있다"고 존재와 대가를 말할 수 있으면 충분하고, 실무 코드에서 깊이를 재려고 이걸 쓰는 일은 거의 없다.
+
+## 여섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 길 적어 두기 | O(n·h), 최악 O(n²) | O(n·h) | 길 자체가 필요할 때(Binary Tree Paths 같은 문제) |
+| 탑다운 재귀 | O(n) | O(h) 호출 스택 | 층수, 지금까지의 합처럼 위에서 내려줄 정보가 있을 때 |
+| 바텀업 재귀 | O(n) | O(h) 호출 스택 | 기본 답. 코드가 가장 짧고 다른 트리 문제로 넓히기 쉽다 |
+| 반복 DFS (스택) | O(n) | O(h)~O(n) 힙 | 트리가 아주 깊을 수 있을 때, 재귀를 금지할 때 |
+| BFS (층 단위) | O(n) | O(너비) | 층 개념이 필요한 변형(최소 깊이, 층별 묶기)으로 이어질 때 |
+| Morris | O(n) | O(1) | 추가 공간을 정말 쓸 수 없고 트리를 잠시 고쳐도 될 때 |
+
+시간은 다섯 개가 모두 O(n)이라 차이는 공간과 확장성에서 난다. 면접에서는 바텀업 재귀를 먼저 쓰고, 깊이가 깊을 때를 물으면 반복 DFS나 BFS로 옮기는 흐름이 자연스럽다.
+
+## 직접 깊이를 재 보기
+
+아래 칸에서 `maxDepth`를 채워 보자. 입력은 LeetCode처럼 층 순서 배열이고, 위쪽의 `buildTree`가 배열을 실제 트리로 바꿔 준다. 풀이 보기에는 바텀업 재귀가 들어 있다.
+
+<CodePlayground
+  caption="Maximum Depth of Binary Tree"
+  functionName="maxDepth"
+  initialCode={`// 층 순서 배열을 트리로 바꾸는 도우미 (그대로 두면 된다)
+function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function maxDepth(values) {
+  const root = buildTree(values);
+  // root에서 가장 깊은 잎까지 노드 수를 센다
+  return 0;
+}`}
+  solution={`function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function depth(node) {
+  if (node === null) return 0;
+  return 1 + Math.max(depth(node.left), depth(node.right));
+}
+
+function maxDepth(values) {
+  return depth(buildTree(values));
+}`}
+  tests={[
+    { args: [[1, 2, 3, 4, 5, null, 6, null, null, 7]], expected: 4, label: "글의 예시 트리" },
+    { args: [[]], expected: 0, label: "빈 트리" },
+    { args: [[1]], expected: 1, label: "노드 하나" },
+    { args: [[1, 2]], expected: 2, label: "왼쪽 자식 하나" },
+    { args: [[1, null, 2, null, 3, null, 4]], expected: 4, label: "오른쪽으로 기운 일자 트리" },
+    { args: [[3, 9, 20, null, null, 15, 7]], expected: 3, label: "한쪽만 깊은 트리" },
+    { args: [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]], expected: 4, label: "꽉 찬 트리 15개" },
+  ]}
+/>
+
+## 깊이 계산에서 자주 틀리는 곳
+
+### 빈 트리에서 터지는 코드
+
+잎을 기저 사례로 잡으면 빈 트리를 놓친다.
+
+```js
+// 잎에서 멈추는 코드
+function maxDepth(root) {
+  if (!root.left && !root.right) return 1;
+  // ...
+}
+maxDepth(null); // TypeError: Cannot read properties of null (reading 'left')
+```
+
+빈 트리(`[]`)는 LeetCode 입력에 실제로 들어온다. 기저 사례를 "노드가 없으면 0"으로 잡으면 빈 트리와 잎, 자식이 하나뿐인 노드가 모두 한 규칙으로 처리된다.
+
+### 깊이를 간선으로 세는 경우
+
+노드 하나짜리 트리에서 1이 아니라 0을 내면 정의를 간선 기준으로 잡은 것이다. 빈 트리를 -1로 두면 간선 기준 높이가 되고, 0으로 두면 노드 기준 깊이가 된다. 둘 다 흔히 쓰는 정의라서 어느 쪽이 틀렸다기보다 문제가 무엇을 원하는지 확인해야 한다. 바로 아래 [Diameter of Binary Tree](/posts/leetcode-diameter-of-binary-tree)는 답을 간선 수로 요구해서, 이 문제의 함수를 그대로 가져가면 계산 중간에 하나씩 어긋난다.
+
+### 최대를 최소로만 바꾸면 되는 줄 아는 경우
+
+LeetCode 111 Minimum Depth of Binary Tree는 가장 가까운 잎까지의 깊이를 묻는다. `Math.max`를 `Math.min`으로만 바꾸면 틀린다.
+
+```js
+function minDepth(root) {
+  if (!root) return 0;
+  return 1 + Math.min(minDepth(root.left), minDepth(root.right));
+}
+// [1, 2] → 1이 나온다. 정답은 2
+```
+
+`[1, 2]`에서 1은 오른쪽이 비어 있지만 잎이 아니다. 그런데 빈 오른쪽이 0을 돌려주니 `min`이 그걸 골라서, 존재하지 않는 잎까지의 거리를 답으로 낸다. 최대 깊이에서는 빈 쪽의 0이 `max`에서 절대 뽑히지 않아 문제가 없었을 뿐이다. 자식이 한쪽만 있으면 있는 쪽만 봐야 한다.
+
+```js
+function minDepth(root) {
+  if (!root) return 0;
+  if (!root.left) return 1 + minDepth(root.right);
+  if (!root.right) return 1 + minDepth(root.left);
+  return 1 + Math.min(minDepth(root.left), minDepth(root.right));
+}
+// [1, 2] → 2,  [1, null, 2, null, 3] → 3
+```
+
+최소 깊이는 BFS가 더 잘 맞는다. 층 순서로 내려가다가 처음 만난 잎에서 바로 멈추면 되니, 가까운 잎이 위쪽에 있으면 트리 대부분을 보지 않고 끝난다.
+
+### 큰 입력에서만 터지는 재귀
+
+예시 입력으로는 절대 드러나지 않는다. 앞에서 본 것처럼 Python은 깊이 1000 근처에서 `RecursionError`가 난다. 채점 환경마다 스택 크기와 재귀 한도가 달라서 내 컴퓨터에서 통과한 코드가 거기서 터지기도 하고 그 반대도 있다. 실무에서 사용자가 만든 트리(댓글, 폴더, 조직도)를 재귀로 돌릴 때는 깊이 상한을 두거나 반복문으로 바꾼다.
+
+## 면접관이 이어서 묻는 것
+
+### 균형 잡힌 트리인지 확인하라면
+
+LeetCode 110 Balanced Binary Tree다. 모든 노드에서 왼쪽과 오른쪽 높이 차가 1 이하인지 본다. 노드마다 `maxDepth`를 따로 부르면 같은 서브트리 높이를 몇 번씩 다시 재서 최악 O(n²)이 된다. 바텀업 함수가 높이를 돌려주면서, 불균형을 발견하면 -1을 신호로 올려보내면 한 번에 끝난다.
+
+```js
+function isBalanced(root) {
+  function height(node) {
+    if (!node) return 0;
+    const l = height(node.left);
+    if (l === -1) return -1; // 아래에서 이미 깨졌다
+    const r = height(node.right);
+    if (r === -1) return -1;
+    if (Math.abs(l - r) > 1) return -1; // 여기서 깨졌다
+    return 1 + Math.max(l, r);
+  }
+  return height(root) !== -1;
+}
+// [1, 2, 3, 4, 5, null, 6, null, null, 7] → true,  [1, null, 2, null, 3] → false
+```
+
+깊이를 재는 함수가 "높이와 함께 다른 정보도 올려보내는 함수"로 자란 모양이다. 이 확장이 트리 문제의 기본기다.
+
+### 가장 먼 두 노드 사이 거리를 구하라면
+
+[Diameter of Binary Tree](/posts/leetcode-diameter-of-binary-tree)다. 각 노드에서 "왼쪽 높이 + 오른쪽 높이"가 그 노드를 꺾이는 점으로 지나는 가장 긴 길이다. 높이는 지금처럼 돌려주고, 꺾이는 길이의 최댓값은 바깥 변수에 기록한다. 예시 트리의 지름은 간선 5개(7-5-2-1-3-6)다. 같은 구조에서 길이 대신 값의 합을 쓰면 [Binary Tree Maximum Path Sum](/posts/leetcode-binary-tree-maximum-path-sum)이 된다.
+
+### 자식이 여러 개인 트리라면
+
+LeetCode 559 Maximum Depth of N-ary Tree다. `left`, `right` 두 개 대신 `children` 배열을 돌며 최댓값을 구한다. 구조는 같다.
+
+```js
+function maxDepth(root) {
+  if (!root) return 0;
+  let best = 0;
+  for (const child of root.children) best = Math.max(best, maxDepth(child));
+  return 1 + best;
+}
+```
+
+파일 시스템의 폴더 깊이, DOM 트리의 중첩 깊이를 재는 코드가 정확히 이 모양이다.
+
+### 트리가 너무 커서 메모리에 다 못 올린다면
+
+트리가 디스크나 DB에 저장되어 있고 노드를 하나씩 불러와야 한다면, 동시에 메모리에 올라가는 노드 수가 관건이다. DFS는 지금 길에 있는 노드(O(h))만, BFS는 한 층 전체(O(너비))를 들고 있어야 한다. 넓은 트리라면 DFS가 유리하다. 부모 포인터만 있는 표(예: `parent_id` 컬럼)라면 트리를 만들지 않고 SQL 재귀 CTE로 깊이를 잴 수도 있다. 이건 [재귀 CTE 글](/posts/sql-cte-recursive)에서 다룬다.
+
+### 같은 패턴의 다음 문제
+
+트리 패턴의 다음 글은 BST의 성질을 쓰는 [Lowest Common Ancestor of a BST](/posts/leetcode-lowest-common-ancestor-of-bst)와, 이 글의 BFS를 층별 묶기로 넓히는 [Binary Tree Level Order Traversal](/posts/leetcode-binary-tree-level-order-traversal)이다. 같은 바텀업 모양으로 풀리는 문제로 [Invert Binary Tree](/posts/leetcode-invert-binary-tree)도 있다. 문제 전체의 순서는 [LeetCode 공부 가이드](/posts/leetcode-study-guide)에 있다.
+
+## 작은 트리에게 묻고 하나를 더한다
+
+트리의 최대 깊이는 "왼쪽 깊이와 오른쪽 깊이 중 큰 쪽 더하기 1"이고, 빈 트리를 0으로 두면 그 한 줄이 모든 경우를 덮는다. 시간은 어떤 풀이든 O(n)이라 차이는 공간에서 난다. 재귀와 반복 DFS는 깊이만큼, BFS는 너비만큼 메모리를 쓰고, 깊이가 수만 단계면 재귀는 언어별 스택 한계에 걸린다. 자식의 답으로 내 답을 만드는 바텀업 모양을 손에 익혀 두면, 균형 검사나 지름, 경로 합 같은 다음 트리 문제가 같은 틀 위에서 풀린다.
+
+## 면접에서 나올 만한 질문
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+시간은 O(n)이다. 모든 노드를 한 번씩 보고 노드마다 상수 시간 일을 한다. 공간은 재귀 호출 스택이 트리 높이만큼 쌓여 O(h)이고, 균형 트리면 O(log n), 한쪽으로 기운 트리면 O(n)이다. BFS로 풀면 공간이 높이 대신 최대 너비에 비례한다.
+
+### 재귀 대신 반복문으로 짜 보라면요?
+
+두 가지가 있다. 스택에 노드와 그 노드의 층수를 짝으로 넣고 꺼낼 때마다 최댓값을 갱신하는 반복 DFS, 그리고 큐로 층 단위로 내려가며 층 수를 세는 BFS다. 둘 다 O(n) 시간이고, 메모리를 호출 스택이 아니라 힙에 써서 깊은 트리에서도 스택이 넘치지 않는다.
+
+### 트리가 한쪽으로 10만 단계 기울어 있으면 어떻게 되나요?
+
+재귀 풀이는 스택이 넘친다. 이 환경에서 Python은 기본 한도 1000 때문에 5000 깊이에서 이미 `RecursionError`가 났고, Node.js는 1만 3천, Java 기본 스택은 1만 근처에서 넘쳤다. 반복 DFS나 BFS로 바꾸는 게 정석이고, 재귀를 유지해야 하면 Java는 스레드 스택 크기를 늘리고 Python은 한도를 올리되 C 스택이 버티는 범위인지 확인해야 한다.
+
+### 빈 트리를 0으로 두는 이유가 뭔가요?
+
+그래야 잎과 자식이 하나뿐인 노드를 따로 처리하지 않아도 된다. 잎은 `1 + max(0, 0)`으로 1이 되고, 한쪽만 비면 빈 쪽 0이 `max`에서 무시된다. 문제 입력에 빈 트리가 실제로 들어오기도 해서, 잎을 기저 사례로 잡으면 `null`에서 바로 터진다.
+
+### 최소 깊이도 max를 min으로 바꾸면 되나요?
+
+안 된다. 자식이 한쪽만 있는 노드에서 빈 쪽이 0을 돌려주면 `min`이 그걸 골라, 잎이 아닌 노드를 잎처럼 센다. `[1, 2]`에서 정답 2 대신 1이 나온다. 한쪽 자식이 없으면 있는 쪽만 보거나, BFS로 내려가다 처음 만난 잎에서 멈추는 게 맞다.
+
+### 추가 공간 O(1)로 할 수 있나요?
+
+Morris 순회로 가능하다. 왼쪽 서브트리의 가장 오른쪽 노드의 빈 `right`에 현재 노드로 돌아오는 임시 포인터를 걸고 내려갔다가, 돌아올 때 그 포인터를 지운다. 돌아올 때 오른쪽으로 걸었던 걸음 수만큼 층수를 빼면 깊이도 잴 수 있다. 다만 순회 중에 트리를 고치기 때문에 동시에 읽는 코드가 있거나 트리가 불변이면 쓸 수 없다.
+
+### 탑다운과 바텀업은 언제 갈라 쓰나요?
+
+부모에서 자식으로 넘겨야 할 정보(지금 층수, 지금까지의 합, 허용 범위)가 있으면 탑다운이 자연스럽다. 자식들의 결과를 모아야 내 답이 나오는 경우(높이, 균형 여부, 지름)는 바텀업이다. 최대 깊이는 둘 다로 풀리는 드문 문제라 두 방식을 비교해 보기 좋다.

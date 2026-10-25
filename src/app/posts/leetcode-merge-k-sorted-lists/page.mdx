@@ -1,0 +1,567 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-merge-k-sorted-lists");
+
+<EasyIntro>
+  여러 반이 각자 키 순서대로 줄을 서 있다. 이 반들을 모두 합쳐서 키 순서대로 한 줄을 만들고 싶다. 두 반이라면 맨 앞사람 두 명만 비교하면 됐다. 반이 열 개, 백 개가 되면 매번 모든 반의 맨 앞사람을 다 둘러보는 게 힘들어진다. 그래서 각 반의 맨 앞사람만 따로 작은 대기석에 앉혀 둔다. 이 대기석은 신기하게도 언제나 가장 키 작은 사람이 맨 앞자리에 오도록 저절로 정리된다. 그 사람을 새 줄로 보내고, 그 사람이 있던 반의 다음 사람을 대기석에 앉힌다. 이걸 반복하면 아무리 반이 많아도 매번 대기석 맨 앞만 보면 된다. 다른 방법도 있다. 두 반씩 짝지어 합치고, 합친 줄끼리 또 짝지어 합치는 토너먼트처럼 하는 것이다.
+</EasyIntro>
+
+데이터베이스를 샤드 열 개로 나눠 두었는데 "최근 주문 20개"를 보여 줘야 한다. 각 샤드는 자기 주문을 시간순으로 정렬해서 돌려준다. 이제 정렬된 목록 열 개를 하나로 합쳐 앞에서 20개를 잘라야 한다. 두 개를 합치는 법은 안다. 열 개, 천 개라면 어떻게 해야 빠를까.
+
+[LeetCode 23. Merge k Sorted Lists](https://leetcode.com/problems/merge-k-sorted-lists/)가 이 질문이다. [Merge Two Sorted Lists](/posts/leetcode-merge-two-sorted-lists)를 k개로 넓힌 문제인데, 어려움 난이도가 붙은 이유는 "그냥 하나씩 합치면" 느려지기 때문이다. 이 글은 전부 모아 정렬하기, 매번 k개 머리 훑기, 하나씩 차례로 합치기, 최소 힙, 둘씩 짝지어 합치기, 값 범위를 이용한 버킷까지 여섯 풀이를 비교한다. 힙의 동작은 [힙 글](/posts/ds-heap), 둘씩 합치기의 바탕은 [분할 정복 글](/posts/divide-and-conquer)에 있다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 정렬된 리스트 k개를 하나로
+
+정렬된 연결 리스트 k개가 배열 `lists`로 주어진다. 모두 합쳐 하나의 정렬된 연결 리스트를 만들고 머리를 돌려준다.
+
+```text
+lists = [
+  2 → 6 → 9,
+  1 → 3 → 4,
+  5 → 7
+]
+결과:  1 → 2 → 3 → 4 → 5 → 6 → 7 → 9
+```
+
+k는 0에서 10^4, 각 리스트 길이는 0에서 500, 전체 노드 수 N은 많아야 10^4, 값은 -10^4에서 10^4 사이다. `lists` 자체가 빈 배열일 수도 있고, 빈 리스트가 섞여 있을 수도 있다. 이 글에서 복잡도를 말할 때 N은 전체 노드 수, k는 리스트 개수다.
+
+제약을 보면 두 가지 극단이 가능하다. 노드 하나짜리 리스트가 1만 개 있을 수도 있고(k = N = 10^4), 500개짜리 리스트가 20개 있을 수도 있다. 앞쪽 극단에서 O(N·k)는 10^8이라 버티기 어렵다. 풀이의 우열은 대부분 이 극단에서 갈린다.
+
+## 두 개를 합칠 때와 무엇이 달라지나
+
+두 리스트를 합칠 때는 머리 두 개 중 작은 쪽을 고르면 됐다. 아직 쓰지 않은 값 중 가장 작은 것이 반드시 두 머리 중 하나였기 때문이다. 이 성질은 k개에서도 그대로다. 아직 쓰지 않은 값 중 가장 작은 것은 k개 머리 중 하나다.
+
+```text
+머리들: 2(a) 1(b) 5(c)  →  1을 고른다.  b의 다음 머리는 3
+머리들: 2(a) 3(b) 5(c)  →  2를 고른다.  a의 다음 머리는 6
+머리들: 6(a) 3(b) 5(c)  →  3을 고른다.  b의 다음 머리는 4
+...
+```
+
+달라지는 건 "가장 작은 머리 고르기"의 비용이다. 두 개면 비교 한 번이지만 k개면 그냥 훑으면 k - 1번이다. 노드 N개마다 이걸 하면 O(N·k)다. 풀이들은 결국 이 고르기를 얼마나 싸게 하느냐, 또는 고르기 자체를 피하느냐의 차이다.
+
+## 전부 모아서 한 번에 정렬하기
+
+정렬돼 있다는 사실을 잊고, 모든 노드를 배열 하나에 모아 값으로 정렬한 뒤 순서대로 다시 잇는다.
+
+```js
+function mergeKLists(lists) {
+  const nodes = [];
+  for (const head of lists) {
+    for (let n = head; n; n = n.next) nodes.push(n);
+  }
+  nodes.sort((x, y) => x.val - y.val); // 숫자 비교자를 꼭 준다
+
+  // 배열 순서대로 화살표를 다시 잇는다
+  for (let i = 0; i < nodes.length; i++) {
+    nodes[i].next = nodes[i + 1] ?? null;
+  }
+  return nodes[0] ?? null;
+}
+```
+
+시간 O(N log N), 공간 O(N)이다. 이 문제의 크기(N이 1만)에서는 아주 빠르다. 노드 하나짜리 리스트 1만 개로 재 보니 약 7ms였다. 코드도 짧고 틀릴 곳이 거의 없어서, 실제로 이 정도 크기의 데이터를 합쳐야 한다면 이걸 써도 된다.
+
+면접에서는 부족하다. 각 리스트가 이미 정렬돼 있다는 정보를 버렸고, 노드를 전부 메모리에 올려야 한다. 각 리스트가 디스크에 있는 거대한 파일이거나 네트워크로 흘러 들어오는 스트림이라면 "전부 모으기"부터 불가능하다. 이 문제의 본론은 정렬된 입력을 앞에서부터 흘려 읽으며 합치는 방법이다.
+
+## 매번 k개 머리를 훑어 가장 작은 것 고르기
+
+두 리스트 병합을 그대로 넓힌다. 매번 k개 머리를 모두 훑어 가장 작은 것을 찾고, 결과 꼬리에 붙인 뒤, 그 리스트의 머리를 한 칸 옮긴다.
+
+```js
+function mergeKLists(lists) {
+  lists = lists.slice(); // 입력 배열을 바꾸지 않게 복사
+  const dummy = new ListNode();
+  let tail = dummy;
+
+  while (true) {
+    // k개 머리 중 가장 작은 것의 번호를 찾는다
+    let best = -1;
+    for (let i = 0; i < lists.length; i++) {
+      if (lists[i] && (best === -1 || lists[i].val < lists[best].val)) best = i;
+    }
+    if (best === -1) break; // 모든 리스트가 비었다
+
+    tail.next = lists[best];
+    tail = tail.next;
+    lists[best] = lists[best].next; // 그 리스트의 머리를 옮긴다
+  }
+  return dummy.next;
+}
+```
+
+시간은 노드 N개마다 k개를 훑으니 O(N·k), 공간은 O(1)이다. k가 작으면 괜찮다. 리스트 10개짜리라면 노드마다 비교 열 번이라 앞의 정렬 풀이보다 빠를 수도 있다. 하지만 노드 하나짜리 리스트 1만 개에서는 약 330ms가 걸렸다. 빈 리스트가 된 칸도 매번 다시 훑기 때문이다.
+
+훑는 비용을 줄이려면 "k개 중 최솟값"을 매번 처음부터 찾지 않아야 한다. 최솟값을 빠르게 꺼내고, 새 값을 빠르게 넣을 수 있는 자료구조가 있다. 그게 힙이다. 그 전에 하나 더, 두 리스트 병합 함수를 재사용하는 방법을 보자.
+
+## 하나씩 차례로 합치기
+
+[Merge Two Sorted Lists](/posts/leetcode-merge-two-sorted-lists)의 `mergeTwo`가 이미 있다. 결과를 빈 리스트로 시작해서 리스트를 하나씩 차례로 합치면 된다.
+
+```js
+function mergeTwo(a, b) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  while (a && b) {
+    if (a.val <= b.val) { tail.next = a; a = a.next; }
+    else { tail.next = b; b = b.next; }
+    tail = tail.next;
+  }
+  tail.next = a ?? b;
+  return dummy.next;
+}
+
+function mergeKLists(lists) {
+  let result = null;
+  for (const head of lists) result = mergeTwo(result, head); // 쌓아 가며 합친다
+  return result;
+}
+```
+
+공간 O(1)에 코드가 가장 짧다. 그런데 시간이 생각보다 나쁘다. 리스트마다 길이가 N/k라고 하면, i번째 합치기는 지금까지 쌓인 결과(i·N/k개)와 새 리스트를 합치니 그만큼 걷는다. 전부 더하면 N/k · (1 + 2 + … + k) ≈ N·k/2다. 앞쪽 노드들이 합칠 때마다 다시 걸어진다. 노드 하나짜리 1만 개에서 약 160ms였다. 매번 훑기 풀이의 절반쯤인데, 차수는 같은 O(N·k)다.
+
+느린 이유가 분명하다. 결과가 점점 커지는데 그 큰 결과를 매번 다시 걷는다. 비슷한 크기끼리 합치면 이 낭비가 사라진다. 그게 뒤에 나올 둘씩 짝짓기다.
+
+## 머리들을 최소 힙에 넣어 두기
+
+최소 힙(min-heap)은 가장 작은 값을 맨 위에 두는 이진 트리 모양의 자료구조다. 맨 위 값을 꺼내는 데 O(log k), 새 값을 넣는 데 O(log k)가 든다. k개 머리를 힙에 넣어 두면 "가장 작은 머리 고르기"가 훑기 O(k) 대신 O(log k)가 된다.
+
+1. 비어 있지 않은 리스트의 머리를 모두 힙에 넣는다.
+2. 힙에서 가장 작은 노드를 꺼내 결과 꼬리에 붙인다.
+3. 꺼낸 노드에 다음 노드가 있으면 그 노드를 힙에 넣는다.
+4. 힙이 빌 때까지 반복한다.
+
+힙에는 언제나 리스트마다 많아야 하나씩, 즉 k개 이하의 노드만 들어 있다. 리스트 하나가 끝나면 그 자리를 채울 노드가 없으니 힙이 한 칸 작아진다.
+
+아래 그림은 `2→6→9`(a), `1→3→4`(b), `5→7`(c)을 합치는 과정이다. 왼쪽 세 칸이 a, 가운데 세 칸이 b, 오른쪽 두 칸이 c의 노드다. 상자에는 지금 힙에 든 머리들을 작은 순으로 적었고, 괄호는 어느 리스트에서 왔는지다.
+
+<AlgoTrace
+  caption="최소 힙 병합: 가장 작은 머리를 꺼내고, 그 리스트의 다음 노드를 넣는다"
+  memoryLabel="힙에 든 머리 (작은 순)"
+  cells={["2", "6", "9", "1", "3", "4", "5", "7"]}
+  steps={[
+    { memory: ["1(b)", "2(a)", "5(c)"], caption: "세 리스트의 머리를 힙에 넣는다. 맨 위는 1이다." },
+    { pointer: 3, found: [3], memory: ["2(a)", "3(b)", "5(c)"], caption: "1(b)을 꺼내 결과에 붙이고, b의 다음 노드 3을 넣는다." },
+    { pointer: 0, found: [3, 0], memory: ["3(b)", "5(c)", "6(a)"], caption: "2(a)를 꺼낸다. a의 다음 6이 들어온다." },
+    { pointer: 4, found: [3, 0, 4], memory: ["4(b)", "5(c)", "6(a)"], caption: "3(b)을 꺼낸다. b가 연달아 나오면 b의 노드가 계속 들어온다." },
+    { pointer: 5, found: [3, 0, 4, 5], memory: ["5(c)", "6(a)"], caption: "4(b)를 꺼냈다. b가 끝나서 넣을 노드가 없다. 힙이 둘로 줄었다." },
+    { pointer: 6, found: [3, 0, 4, 5, 6], memory: ["6(a)", "7(c)"], caption: "5(c)를 꺼내고 c의 다음 7을 넣는다." },
+    { pointer: 1, found: [3, 0, 4, 5, 6, 1], memory: ["7(c)", "9(a)"], caption: "6(a)을 꺼내고 a의 다음 9를 넣는다." },
+    { pointer: 7, found: [3, 0, 4, 5, 6, 1, 7], memory: ["9(a)"], caption: "7(c)을 꺼냈다. c도 끝났다." },
+    { pointer: 2, found: [3, 0, 4, 5, 6, 1, 7, 2], memory: [], caption: "9(a)를 꺼내면 힙이 빈다. 결과는 1→2→3→4→5→6→7→9다." },
+  ]}
+/>
+
+b가 1, 3, 4를 연달아 내보내는 동안 a와 c는 힙 안에서 기다린다. 힙은 리스트마다 "지금 차례인 노드" 하나씩만 들고 있으니, 리스트가 얼마나 길든 힙 크기는 k를 넘지 않는다.
+
+JavaScript에는 내장 힙이 없어서 직접 만든다. 배열 하나로 완전 이진 트리를 표현하고, 넣을 때는 위로 올리고(sift up) 꺼낼 때는 마지막 원소를 맨 위로 옮겨 아래로 내린다(sift down).
+
+```js
+class MinHeap {
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+
+  push(node) {
+    const a = this.a;
+    a.push(node);
+    let i = a.length - 1;
+    while (i > 0) {                         // 부모보다 작으면 위로 올린다
+      const p = (i - 1) >> 1;
+      if (a[p].val <= a[i].val) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+
+  pop() {
+    const a = this.a;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length) {
+      a[0] = last;                          // 마지막 원소를 맨 위로
+      let i = 0;
+      while (true) {                        // 더 작은 자식과 바꾸며 내린다
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && a[l].val < a[m].val) m = l;
+        if (r < a.length && a[r].val < a[m].val) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function mergeKLists(lists) {
+  const heap = new MinHeap();
+  for (const head of lists) if (head) heap.push(head); // 빈 리스트는 넣지 않는다
+
+  const dummy = new ListNode();
+  let tail = dummy;
+  while (heap.size) {
+    const node = heap.pop();          // 가장 작은 머리
+    tail.next = node;
+    tail = node;
+    if (node.next) heap.push(node.next); // 그 리스트의 다음 노드
+  }
+  return dummy.next;
+}
+```
+
+시간은 노드마다 꺼내기 한 번, 넣기 한 번이라 O(N log k)다. 처음에 k개를 넣는 데 O(k log k)가 들지만 k는 N 이하라 차수에 영향이 없다. 공간은 힙 크기 O(k)다. 노드 하나짜리 1만 개에서 약 14ms였다. 매번 훑기의 330ms에서 크게 줄었다.
+
+`lists`에 빈 리스트(`null`)가 섞여 있으면 힙에 넣지 않는다. 넣으면 `null.val`을 읽다가 터진다. `lists`가 아예 빈 배열이면 힙이 처음부터 비어서 `null`을 돌려준다.
+
+### Python과 Java로 쓰면
+
+Python은 `heapq`가 최소 힙이다. 튜플을 넣으면 첫 원소부터 차례로 비교한다. 여기에 함정이 있다. `(값, 노드)`만 넣으면 값이 같을 때 노드끼리 비교하려다 오류가 난다.
+
+```text
+heapq.heappush(heap, (head.val, head))  # 값이 같은 두 머리를 넣으면
+TypeError: '<' not supported between instances of 'ListNode' and 'ListNode'
+```
+
+값이 같을 때 대신 비교할 숫자를 가운데에 끼워 넣는다. 리스트 번호가 가장 간단하다. 번호는 리스트마다 다르니 노드까지 비교가 내려가는 일이 없다.
+
+```python
+import heapq
+
+def merge_k_lists(lists):
+    heap = []
+    for i, head in enumerate(lists):
+        if head:
+            # (값, 리스트 번호, 노드): 값이 같으면 번호로 비교한다
+            heapq.heappush(heap, (head.val, i, head))
+    dummy = tail = ListNode()
+    while heap:
+        _, i, node = heapq.heappop(heap)
+        tail.next = node
+        tail = node
+        if node.next:
+            heapq.heappush(heap, (node.next.val, i, node.next))
+    return dummy.next
+```
+
+Java는 `PriorityQueue`에 비교자를 넘긴다. 비교자를 `(a, b) -> a.val - b.val`로 쓰는 코드가 많은데, 값이 int 범위 끝에 가까우면 뺄셈이 넘쳐서 부호가 뒤집힌다. `Integer.MIN_VALUE - 1`은 양수 2147483647이 된다. 이 문제의 값은 ±10^4라 괜찮지만, `Integer.compare`를 쓰는 습관이 안전하다.
+
+```java
+import java.util.PriorityQueue;
+
+class Solution {
+    public ListNode mergeKLists(ListNode[] lists) {
+        // 값이 작은 노드가 먼저 나오는 최소 힙. 뺄셈 대신 Integer.compare
+        PriorityQueue<ListNode> heap =
+            new PriorityQueue<>((a, b) -> Integer.compare(a.val, b.val));
+        for (ListNode head : lists) if (head != null) heap.offer(head);
+
+        ListNode dummy = new ListNode(), tail = dummy;
+        while (!heap.isEmpty()) {
+            ListNode node = heap.poll();
+            tail.next = node;
+            tail = node;
+            if (node.next != null) heap.offer(node.next);
+        }
+        return dummy.next;
+    }
+}
+```
+
+Java의 `PriorityQueue`는 비교자만 보니 Python 같은 동점 문제가 없다. `null`을 넣으면 `NullPointerException`이 나니 빈 리스트는 걸러서 넣는다. 세 언어 모두 같은 결과다.
+
+```text
+[[2,6,9],[1,3,4],[5,7]]    → [1, 2, 3, 4, 5, 6, 7, 9]
+[]                         → []
+[[]]                       → []
+[[],[]]                    → []
+[[5]]                      → [5]
+[[1,1,2],[1,3],[]]         → [1, 1, 1, 2, 3]
+[[-3,0],[-10,10],[-5]]     → [-10, -5, -3, 0, 10]
+```
+
+## 토너먼트처럼 둘씩 짝지어 합치기
+
+하나씩 차례로 합치기가 느렸던 건 큰 결과와 작은 리스트를 계속 합쳐서였다. 비슷한 크기끼리 합치면 된다. k개 리스트를 둘씩 짝지어 합치면 k/2개가 되고, 다시 짝지으면 k/4개, 이렇게 log k라운드 만에 하나가 남는다. 스포츠 토너먼트 대진표와 같은 모양이다.
+
+아래 그림은 리스트 네 개를 두 라운드에 합치는 과정이다.
+
+<AlgoTrace
+  caption="둘씩 짝지어 합치기: 라운드마다 리스트 수가 절반이 된다"
+  memoryLabel="남은 리스트"
+  cells={["1→9", "2→6", "3→7", "4→5"]}
+  steps={[
+    { memory: ["0번 = 1→9", "1번 = 2→6", "2번 = 3→7", "3번 = 4→5"], caption: "리스트 네 개에서 시작한다." },
+    { pointer: 0, found: [0, 1], memory: ["0번 = 1→2→6→9", "2번 = 3→7", "3번 = 4→5"], caption: "1라운드. 0번과 1번을 합쳐 0번에 둔다." },
+    { pointer: 2, found: [0, 1, 2, 3], memory: ["0번 = 1→2→6→9", "2번 = 3→4→5→7"], caption: "2번과 3번을 합쳐 2번에 둔다. 리스트가 둘로 줄었다." },
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["0번 = 1→2→3→4→5→6→7→9"], caption: "2라운드. 0번과 2번을 합치면 하나만 남는다." },
+  ]}
+/>
+
+라운드마다 모든 노드가 정확히 한 번씩 병합에 참여한다. 1라운드에서 8개 노드가 한 번씩, 2라운드에서도 8개가 한 번씩 걸어졌다. 라운드가 log k개이니 전체 O(N log k)다. 하나씩 차례로 합칠 때는 1→9가 매번 다시 걸어졌지만, 여기서는 라운드당 한 번뿐이다.
+
+재귀 없이 반복문으로 짜면 추가 공간도 들지 않는다. `step`을 1, 2, 4, …로 키우며 `i`번과 `i + step`번을 합쳐 `i`번에 둔다.
+
+```js
+function mergeKLists(lists) {
+  if (lists.length === 0) return null;
+  lists = lists.slice(); // 입력 배열을 바꾸지 않게 복사
+
+  // step: 짝지을 두 리스트 사이 거리. 1, 2, 4, 8, ...
+  for (let step = 1; step < lists.length; step *= 2) {
+    for (let i = 0; i + step < lists.length; i += step * 2) {
+      lists[i] = mergeTwo(lists[i], lists[i + step]); // 결과는 왼쪽 칸에
+    }
+  }
+  return lists[0];
+}
+```
+
+리스트 수가 홀수면 짝이 없는 마지막 리스트는 그 라운드를 쉬고 다음 라운드에 올라간다. `i + step < lists.length` 조건이 그 처리를 한다. `lists`가 `[null]`처럼 빈 리스트 하나면 반복문을 돌지 않고 `null`을 돌려준다.
+
+시간 O(N log k), 공간은 `lists` 복사본 O(k)를 빼면 O(1)이다. 입력 배열을 바꿔도 된다면 복사도 필요 없다. 노드 하나짜리 1만 개에서 약 6ms로, 이 글의 비교 기반 풀이 중 가장 빨랐다. 힙보다 빠른 이유는 힙 연산(배열 안에서 자리 바꾸기)보다 `mergeTwo`의 단순한 비교와 대입이 상수 비용이 작아서다.
+
+재귀로 쓰면 범위를 반으로 나눠 양쪽을 합친 결과를 다시 합친다. 깊이가 log k라서 k가 1만이어도 14층 정도라 스택 걱정이 없다.
+
+```js
+function mergeKLists(lists, lo = 0, hi = lists.length - 1) {
+  if (lo > hi) return null;          // 빈 범위
+  if (lo === hi) return lists[lo];   // 리스트 하나
+  const mid = (lo + hi) >> 1;
+  return mergeTwo(mergeKLists(lists, lo, mid), mergeKLists(lists, mid + 1, hi));
+}
+```
+
+힙 풀이와 짝짓기 풀이는 시간 차수가 같다. 고르는 기준은 상황이다. 리스트가 모두 손에 있다면 짝짓기가 단순하고 빠르다. 리스트가 스트림이라 앞에서부터 하나씩만 읽을 수 있거나, 전체가 아니라 앞의 몇 개만 필요하다면 힙이 맞다. 힙은 첫 결과를 바로 내놓을 수 있지만 짝짓기는 마지막 라운드가 끝나야 첫 값이 확정된다.
+
+## 값 범위가 좁다는 걸 이용한 버킷
+
+이 문제의 값은 -10^4에서 10^4, 가능한 값이 20001가지뿐이다. 값이 곧 칸 번호가 되는 버킷 2만 1개를 만들고, 노드를 자기 값의 버킷 끝에 매단 뒤, 버킷을 작은 번호부터 이어 붙이면 정렬이 끝난다. 계수 정렬(counting sort)의 연결 리스트 버전이다.
+
+```js
+function mergeKLists(lists) {
+  const OFFSET = 10000;                 // 값 -10^4 → 0번 칸
+  const SIZE = 20001;
+  const heads = new Array(SIZE).fill(null);
+  const tails = new Array(SIZE).fill(null);
+
+  for (const head of lists) {
+    let n = head;
+    while (n) {
+      const next = n.next;
+      n.next = null;                    // 옛 연결을 끊고
+      const b = n.val + OFFSET;
+      if (tails[b]) tails[b].next = n;  // 같은 값 버킷 끝에 매단다
+      else heads[b] = n;
+      tails[b] = n;
+      n = next;
+    }
+  }
+
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (let b = 0; b < SIZE; b++) {      // 작은 값 버킷부터 잇는다
+    if (heads[b]) { tail.next = heads[b]; tail = tails[b]; }
+  }
+  return dummy.next;
+}
+```
+
+시간 O(N + R), 공간 O(R)이다. R은 값 범위(여기서는 20001)다. 비교를 한 번도 하지 않는다. 노드 하나짜리 1만 개에서 약 4ms로 가장 빨랐다.
+
+하지만 값 범위라는 제약에 기댄 풀이다. 값이 64비트 타임스탬프라면 버킷을 만들 수 없고, 값이 정수가 아니면 칸 번호로 쓸 수도 없다. 입력이 이미 정렬돼 있다는 정보도 쓰지 않는다. 면접에서는 "제약상 값 범위가 작으니 O(N + R)도 된다"는 관찰로 덧붙이고, 일반적인 답은 힙이나 짝짓기로 한다.
+
+## 여섯 풀이를 나란히 놓으면
+
+| 풀이 | 시간 | 공간 | 노드 1개 × 1만 리스트 | 언제 고르나 |
+|---|---|---|---|---|
+| 모아서 정렬 | O(N log N) | O(N) | 약 7ms | 데이터가 작고 다 메모리에 있을 때 |
+| 매번 k개 훑기 | O(N·k) | O(1) | 약 330ms | k가 아주 작을 때 |
+| 하나씩 차례로 합치기 | O(N·k) | O(1) | 약 160ms | k가 작고 코드를 짧게 쓰고 싶을 때 |
+| 최소 힙 | O(N log k) | O(k) | 약 14ms | 스트림 입력, 앞의 몇 개만 필요할 때 |
+| 둘씩 짝지어 합치기 | O(N log k) | O(1) | 약 6ms | 리스트가 모두 손에 있을 때. 기본 답 |
+| 값 버킷 | O(N + R) | O(R) | 약 4ms | 값 범위가 작은 정수일 때만 |
+
+시간은 Node.js 22에서 한 번씩 잰 값이라 대략적인 비교로만 본다. 리스트 수가 적고 각 리스트가 길면(예: 1000개짜리 10개) 모든 풀이가 1~3ms 안에 끝나서 차이가 거의 없었다. 차이는 k가 클 때 벌어진다.
+
+면접에서는 "매번 훑으면 O(N·k)라서, 최솟값 고르기를 힙으로 O(log k)로 줄인다"로 시작하고, 이어서 "힙 없이 둘씩 합쳐도 O(N log k)이고 추가 공간이 없다"를 덧붙이면 두 방향을 모두 보여 줄 수 있다. 하나씩 차례로 합치기가 왜 O(N·k)인지 설명하라는 질문도 자주 나온다.
+
+## 직접 합쳐 보기
+
+아래 칸에서 `merge`를 채워 보자. 함수는 배열의 배열을 받아 리스트들을 만들고, 합친 결과를 배열로 돌려준다. `mergeTwo`는 이미 들어 있으니 둘씩 짝지어 합치기로 풀어도 되고, 힙을 직접 만들어도 된다.
+
+<CodePlayground
+  caption="Merge k Sorted Lists: 둘씩 짝지어 합치기"
+  functionName="mergeKLists"
+  initialCode={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  for (let n = head; n; n = n.next) out.push(n.val);
+  return out;
+}
+function mergeTwo(a, b) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  while (a && b) {
+    if (a.val <= b.val) { tail.next = a; a = a.next; }
+    else { tail.next = b; b = b.next; }
+    tail = tail.next;
+  }
+  tail.next = a ?? b;
+  return dummy.next;
+}
+
+function merge(lists) {
+  // 둘씩 짝지어 합치기를 반복해 보자 (step = 1, 2, 4, ...)
+  return null;
+}
+
+function mergeKLists(arrays) {
+  return toArray(merge(arrays.map(build)));
+}`}
+  solution={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  for (let n = head; n; n = n.next) out.push(n.val);
+  return out;
+}
+function mergeTwo(a, b) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  while (a && b) {
+    if (a.val <= b.val) { tail.next = a; a = a.next; }
+    else { tail.next = b; b = b.next; }
+    tail = tail.next;
+  }
+  tail.next = a ?? b;
+  return dummy.next;
+}
+
+function merge(lists) {
+  if (lists.length === 0) return null;
+  for (let step = 1; step < lists.length; step *= 2) {
+    for (let i = 0; i + step < lists.length; i += step * 2) {
+      lists[i] = mergeTwo(lists[i], lists[i + step]);
+    }
+  }
+  return lists[0];
+}
+
+function mergeKLists(arrays) {
+  return toArray(merge(arrays.map(build)));
+}`}
+  tests={[
+    { args: [[[2, 6, 9], [1, 3, 4], [5, 7]]], expected: [1, 2, 3, 4, 5, 6, 7, 9], label: "리스트 셋" },
+    { args: [[]], expected: [], label: "리스트가 하나도 없음" },
+    { args: [[[]]], expected: [], label: "빈 리스트 하나" },
+    { args: [[[], []]], expected: [], label: "빈 리스트 둘" },
+    { args: [[[5]]], expected: [5], label: "노드 하나" },
+    { args: [[[1, 1, 2], [1, 3], []]], expected: [1, 1, 1, 2, 3], label: "중복 값과 빈 리스트" },
+    { args: [[[-3, 0], [-10, 10], [-5]]], expected: [-10, -5, -3, 0, 10], label: "음수" },
+    { args: [[[2], [1]]], expected: [1, 2], label: "뒤쪽이 더 작음" },
+  ]}
+/>
+
+## 빈 리스트와 동점에서 나는 실수
+
+빈 입력이 세 종류라는 걸 놓치기 쉽다. `lists`가 `[]`일 때, `[null]`처럼 빈 리스트 하나일 때, `[null, null]`처럼 여러 개일 때다. 짝짓기 풀이에서 `if (lists.length === 0) return null`을 빼면 JavaScript에서는 `null` 대신 `undefined`가 나가고, Java에서는 `lists[0]`에서 `ArrayIndexOutOfBoundsException`이 난다. 힙 풀이는 빈 리스트를 힙에 넣지 않는 것으로 세 경우를 모두 처리한다.
+
+```js
+// 빈 리스트를 거르지 않은 코드
+for (const head of lists) heap.push(head); // head가 null이면
+// TypeError: Cannot read properties of null (reading 'val')
+```
+
+Python `heapq`의 동점 문제는 앞에서 봤다. `(값, 노드)`만 넣으면 값이 같은 두 머리가 들어오는 순간 `TypeError`가 난다. 테스트 예시에 같은 값이 없으면 로컬에서는 통과하고 제출하면 터지는 종류의 버그다. `ListNode`에 `__lt__`를 정의해서 해결하는 방법도 있지만, LeetCode가 준 클래스를 건드리지 않는 리스트 번호 끼우기가 깔끔하다.
+
+하나씩 차례로 합치기를 짝짓기로 착각하는 실수도 있다. 다음 코드는 둘씩 합치는 것처럼 보이지만 실제로는 왼쪽부터 쌓아 가며 합친다.
+
+```js
+// 짝짓기처럼 보이지만 O(N·k)인 코드
+while (lists.length > 1) {
+  const a = lists.shift(), b = lists.shift();
+  lists.unshift(mergeTwo(a, b)); // 합친 결과를 다시 맨 앞에
+}
+```
+
+합친 결과를 맨 앞에 다시 넣으니 매번 커진 결과가 다음 리스트와 합쳐진다. 짝짓기가 되려면 결과를 맨 뒤에 넣어야 한다(`lists.push`). 그러면 같은 라운드의 리스트들이 먼저 합쳐지고 결과는 다음 라운드에 다시 만난다. 다만 `shift`가 배열 앞을 지우며 O(k)를 쓰니, 앞에서 본 `step` 방식이 더 낫다.
+
+Java 비교자의 뺄셈 오버플로도 같은 부류다. 이 문제 범위에서는 안 터지지만, 값이 타임스탬프나 큰 ID로 바뀌는 순간 정렬 순서가 조용히 틀어진다.
+
+## 면접관이 조건을 바꾸면
+
+### 리스트가 아니라 정렬된 배열 k개라면
+
+힙에 노드 대신 `(값, 배열 번호, 배열 안 위치)`를 넣는다. 꺼낼 때마다 같은 배열의 다음 위치를 넣는다. 연결 리스트와 달리 결과를 담을 새 배열이 필요하니 공간이 O(N)이 된다. 짝짓기도 그대로 되지만 라운드마다 새 배열을 만든다.
+
+### 앞에서 m개만 필요하다면
+
+글 첫머리의 "샤드 열 개에서 최근 주문 20개" 상황이다. 힙 풀이로 m번만 꺼내면 O(k log k + m log k)에 끝난다. 전체를 합칠 필요가 없다. 짝짓기는 마지막 라운드까지 가야 첫 값이 정해지니 이 경우에 불리하다. 샤드마다 앞에서 m개만 받아 오면 된다는 것도 같은 논리에서 나온다. 전체 결과의 앞 m개는 반드시 각 샤드의 앞 m개 안에 있다.
+
+### 리스트가 끝없는 스트림이라면
+
+로그 수집기가 서버 k대에서 시간순으로 흘러 들어오는 로그를 하나로 합쳐 내보내는 상황이다. 힙에 각 스트림의 현재 값 하나씩만 들고 있으면 메모리는 O(k)로 고정되고, 값이 하나 나갈 때마다 그 스트림에서 하나를 더 읽는다. 다만 어떤 스트림에 다음 값이 아직 안 왔다면 그 스트림의 값이 더 작을 수도 있으니 기다려야 한다. 실제 시스템은 이 대기에 시간 제한을 둔다.
+
+### 메모리에 다 안 들어가는 큰 파일을 정렬하라면
+
+외부 정렬(external sort)이다. 파일을 메모리에 들어가는 조각으로 나눠 각각 정렬해서 디스크에 쓰고, 이 정렬된 조각 k개를 이 글의 힙 방식으로 합친다. 각 조각에서 한 번에 한 블록씩만 읽으면 된다. LSM 트리를 쓰는 저장소(RocksDB, Cassandra 등)가 정렬된 파일(SSTable)들을 합치는 컴팩션도 같은 k-way 병합이다.
+
+### 행렬에서 k번째로 작은 값을 찾으라면
+
+LeetCode 378 Kth Smallest Element in a Sorted Matrix는 행마다 정렬된 n×n 행렬에서 k번째 값을 찾는다. 각 행을 정렬된 리스트로 보고, 행의 첫 칸들을 힙에 넣은 뒤 k번 꺼내면 된다. 정렬된 두 배열에서 합이 작은 쌍 k개를 찾는 LeetCode 373 Find K Pairs with Smallest Sums도 같은 모양이다. 힙으로 "k번째"를 다루는 다른 문제로 [Kth Largest Element in an Array](/posts/leetcode-kth-largest-element-in-an-array)가 있다.
+
+### 모든 리스트에서 하나씩 포함하는 가장 짧은 범위를 찾으라면
+
+LeetCode 632 Smallest Range Covering Elements from K Lists다. 힙에 리스트마다 하나씩 넣어 두면 힙 안의 최솟값과, 따로 기록한 최댓값이 "모든 리스트를 하나씩 덮는 범위"가 된다. 최솟값을 꺼내 그 리스트의 다음 값을 넣으며 범위를 갱신한다. 이 글의 힙 병합에 최댓값 변수 하나를 더한 것이다.
+
+## 고르기를 싸게 하거나, 고르기를 피하거나
+
+k개 병합은 "아직 안 쓴 값 중 최솟값은 k개 머리 중 하나"라는 두 리스트 병합의 성질에서 출발한다. 그 최솟값을 매번 훑어 고르면 O(N·k), 힙으로 고르면 O(N log k)다. 고르기 자체를 피하고 둘씩 짝지어 합쳐도, 라운드마다 모든 노드가 한 번씩만 걸어져 O(N log k)가 된다. 하나씩 차례로 합치기가 느린 건 커진 결과를 반복해서 다시 걷기 때문이다. 입력이 다 손에 있으면 짝짓기, 스트림이거나 앞의 몇 개만 필요하면 힙을 고른다.
+
+## 면접에서 나올 만한 질문
+
+### 힙 풀이의 시간과 공간 복잡도는 어떻게 되나요?
+
+시간 O(N log k), 공간 O(k)다. 힙에는 리스트마다 많아야 하나씩, k개 이하의 노드만 들어 있어서 넣기와 꺼내기가 O(log k)다. 노드 N개마다 꺼내기와 넣기를 한 번씩 하니 N log k가 된다.
+
+### 리스트를 하나씩 차례로 합치면 왜 느린가요?
+
+합칠 때마다 지금까지 쌓인 결과 전체를 다시 걷기 때문이다. 각 리스트 길이가 N/k라면 i번째 합치기가 i·N/k만큼 걸어서, 전부 더하면 약 N·k/2, 즉 O(N·k)다. 비슷한 크기끼리 둘씩 짝지어 합치면 라운드마다 노드를 한 번씩만 걸어 O(N log k)가 된다.
+
+### 힙과 둘씩 짝지어 합치기 중 무엇을 고르나요?
+
+시간 차수는 같다. 리스트가 모두 메모리에 있으면 짝짓기가 추가 공간 없이 단순하고 상수 비용도 작다. 입력이 스트림이라 앞에서부터 하나씩만 읽을 수 있거나 앞의 m개만 필요하면 힙이 맞다. 힙은 첫 결과를 바로 내놓지만 짝짓기는 마지막 라운드가 끝나야 첫 값이 확정된다.
+
+### Python에서 heapq에 노드를 넣을 때 주의할 점은?
+
+`(값, 노드)` 튜플만 넣으면 값이 같을 때 노드끼리 비교하다가 `TypeError`가 난다. 값과 노드 사이에 리스트 번호처럼 서로 다른 숫자를 끼워 `(값, 번호, 노드)`로 넣으면 노드까지 비교가 내려가지 않는다. `ListNode`에 `__lt__`를 정의하는 방법도 있다.
+
+### O(N log k)보다 빠르게 할 수 있나요?
+
+비교만으로 합친다면 일반적으로 안 된다. 다만 이 문제처럼 값이 좁은 범위의 정수라면 값을 칸 번호로 쓰는 버킷으로 O(N + R)에 비교 없이 끝낼 수 있다. R은 값 범위다. 값이 큰 정수나 실수라면 쓸 수 없는 제약 기반 풀이다.
+
+### 각 샤드에서 정렬된 결과를 받아 상위 m개만 보여 주려면요?
+
+샤드마다 앞에서 m개씩만 받아 와서 힙으로 m번 꺼내면 된다. 전체의 앞 m개는 반드시 각 샤드의 앞 m개 안에 있기 때문이다. 페이지를 넘길수록 샤드마다 받아야 할 개수가 커지니, 깊은 페이지는 마지막으로 본 값 이후부터 가져오는 커서 방식이 낫다.
+
+### 메모리에 다 안 들어가는 데이터를 정렬하려면 어떻게 하나요?
+
+외부 정렬을 쓴다. 메모리에 들어가는 크기로 잘라 각각 정렬해 디스크에 쓰고, 정렬된 조각 k개를 힙으로 합친다. 각 조각에서 블록 하나씩만 메모리에 올리면 되니 메모리는 k개 블록이면 충분하다. LSM 트리 저장소의 컴팩션도 같은 k-way 병합이다.

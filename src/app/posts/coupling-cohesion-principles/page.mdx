@@ -1,0 +1,432 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("coupling-cohesion-principles");
+
+<EasyIntro>
+  가격을 보여 주는 작은 함수 하나를 고쳤는데, 전혀 상관없어 보이던 관리자 화면이 깨졌다. 두 코드가 서로를 너무 많이 알고 있었기 때문이다.
+
+  코드는 여러 사람이 손을 잡고 서 있는 줄과 비슷하다. 손을 꽉 잡고 있는 사람이 많을수록 한 사람이 움직이면 줄 전체가 흔들린다. 서로 얼마나 꽉 잡고 있는지를 결합도라고 부른다.
+
+  반대로 한 사람이 맡은 일이 하나로 잘 모여 있으면 그 사람만 바꿔도 일이 끝난다. 이렇게 한 덩어리 안의 일이 하나의 목적으로 모여 있는 정도를 응집도라고 부른다.
+
+  좋은 코드는 덩어리끼리는 느슨하게 잡고, 덩어리 안은 단단하게 모인다. 같은 지식을 두 군데 적지 않기, 지금 필요 없는 기능은 만들지 않기, 친구의 친구에게 직접 말 걸지 않기 같은 규칙은 모두 이 두 가지를 지키려고 나온 것이다.
+</EasyIntro>
+
+가격 표시를 바꿔 달라는 요청이 왔다. 해외 결제가 붙으면서 `formatPrice(12000)`이 `"12,000원"` 대신 `"₩12,000"`을 돌려주게 고쳤다. 장바구니와 주문 화면을 열어 확인하고 배포했다. 다음 날 아침, 관리자 화면의 정산 CSV 내보내기가 전부 `NaN`으로 찍힌다는 연락이 왔다.
+
+관리자 화면 코드를 열어 보니 이런 줄이 있었다.
+
+```ts
+// admin/settlement.ts
+const amount = Number(formatPrice(order.total).replaceAll(",", "").replace("원", ""));
+```
+
+표시용 문자열을 다시 숫자로 되돌리고 있었다. 이 코드는 `formatPrice`의 함수 이름도, 인자도 아니고 "돌려주는 문자열이 숫자와 콤마와 원으로만 이루어져 있다"는 사실에 기대고 있었다. `"₩12,000"`에서 콤마와 "원"을 지우면 `"₩12000"`이 남고, `Number("₩12000")`은 `NaN`이다. 기호를 모두 지우는 정규식으로 고쳐도 다음에 `"$9.99"`처럼 소수점이 섞이면 금액이 100배가 된다. 타입 검사도 테스트도 이 의존을 몰랐다.
+
+이 글은 이런 일이 왜 생기는지, 그리고 그걸 줄이려고 사람들이 만든 원칙들(결합도와 응집도, 바뀌는 것 감싸기, 추상에 기대기, 할리우드 원칙, 디미터 법칙, DRY, KISS, YAGNI)을 같은 쇼핑몰 코드 위에서 하나씩 본다. 패턴 이름 하나하나는 [디자인 패턴 개요](/posts/design-patterns-overview)에, 이 원칙들을 코드 한 줄 단위로 옮기는 습관은 [클린 코드](/posts/clean-code-practices)에, 이미 엉킨 코드를 푸는 순서는 [리팩터링](/posts/refactoring-code-smells)에 따로 썼다.
+
+## 서로 아는 것이 많을수록 같이 깨진다
+
+결합도(coupling)는 두 모듈이 서로를 얼마나 알고 있는가다. 함수 이름과 인자만 알면 약하고, 내부 변수나 출력 형식, 호출 순서까지 알면 강하다. 강하게 묶여 있으면 한쪽을 고칠 때 다른 쪽도 고쳐야 하고, 고쳐야 한다는 사실조차 모르면 위의 CSV처럼 운영에서 터진다.
+
+1970년대 구조적 설계(Stevens, Myers, Constantine)에서 결합을 강한 것부터 약한 것 순으로 나눈 분류가 지금도 면접에 그대로 나온다. 이름을 외우는 것보다, 각각이 실제 코드에서 어떤 모습인지 아는 쪽이 쓸모 있다.
+
+```ts
+// 1. 내용 결합: 남의 내부를 직접 만진다. 가장 강하다
+cart._items.push(item);            // Cart가 _items를 배열에서 Map으로 바꾸면 깨진다
+
+// 2. 공통 결합: 여러 모듈이 같은 전역 상태를 읽고 쓴다
+window.__CURRENT_USER__.coupon = c; // 누가 언제 바꿨는지 추적이 안 된다
+
+// 3. 외부 결합: 바깥에서 정한 형식(파일, 프로토콜, 문자열 포맷)을 함께 안다
+Number(formatPrice(total).replaceAll(",", "")); // 위의 정산 버그
+
+// 4. 제어 결합: 플래그를 넘겨 상대의 흐름을 고른다
+renderPrice(total, true, false);   // true는 뭐고 false는 뭔가
+
+// 5. 스탬프 결합: 큰 구조체를 통째로 넘기고 일부만 쓴다
+shippingFee(order);                // 실제로 쓰는 건 order.address.zip 하나
+
+// 6. 자료 결합: 필요한 값만 인자로 주고받는다. 가장 약하다
+shippingFee(zip, weightKg);
+```
+
+외부 결합이 특히 무섭다. 코드 사이에 import 선이 없어서 검색에도 안 걸린다. 정산 화면은 `formatPrice`를 import했지만, 정말 기대고 있던 것은 그 함수의 "출력 모양"이었다. 서로 다른 서비스가 같은 DB 테이블의 컬럼 이름에 기대거나, 프런트엔드가 서버 에러 메시지 문장을 `includes("만료")`로 검사하는 것도 같은 종류다.
+
+제어 결합은 조금 다르다. `renderPrice(total, true, false)`를 부르는 쪽은 `renderPrice` 안에 어떤 갈래가 있는지 알고 그중 하나를 고른다. 갈래가 하나 늘면 부르는 쪽도 바뀐다. 플래그 대신 `renderPriceForReceipt(total)`처럼 함수를 나누거나, 옵션 객체에 이름을 붙이면 적어도 읽을 때 의도가 보인다.
+
+스탬프 결합은 흔하고 대부분 괜찮다. 다만 테스트에서 드러난다. `shippingFee(order)`를 확인하려면 주문 객체 전체를 만들어야 하고, 주문 타입에 필수 필드가 하나 늘면 상관없는 테스트 수십 개가 컴파일 에러를 낸다. TypeScript라면 `Pick<Order, "address">`처럼 함수가 실제로 쓰는 부분만 받게 하면 결합이 그만큼 줄어든다.
+
+## 한 모듈 안은 같은 이유로 바뀌는 것끼리
+
+응집도(cohesion)는 반대 방향의 질문이다. 한 모듈 안에 들어 있는 것들이 하나의 목적으로 묶여 있는가. 응집도가 높으면 요청 하나에 그 모듈 하나만 열면 되고, 낮으면 요청 하나에 여러 모듈을 조금씩 고쳐야 한다.
+
+거의 모든 프로젝트에 있는 `utils.ts`가 가장 낮은 단계인 우연적 응집의 예다.
+
+```ts
+// common/utils.ts — 같이 있는 이유가 "어디 둘지 몰라서"뿐이다
+export function formatPrice(n: number) { /* ... */ }
+export function sleep(ms: number) { /* ... */ }
+export function isValidEmail(s: string) { /* ... */ }
+export function calcShippingFee(zip: string, kg: number) { /* ... */ }
+export function parseJwt(token: string) { /* ... */ }
+```
+
+이 파일은 결제팀, 회원팀, 인증 담당 누구든 아무 이유로나 고친다. 리뷰어도 매번 달라지고, 한 PR에서 고친 파일이 다른 PR과 계속 충돌한다. 분류상으로는 우연적 응집 다음에 논리적 응집(종류가 비슷해서 모음, 예: 모든 검증 함수), 시간적 응집(같은 때 실행되어서 모음, 예: `init()`에 몰아 넣은 설정 코드), 절차적, 통신적, 순차적 응집이 있고, 가장 높은 것이 기능적 응집(하나의 일을 위해 필요한 것만 모음)이다.
+
+현장에서 쓰기 좋은 기준은 단순하다. "이 파일을 고치게 만드는 요청은 누가 보내나?" 답이 한 사람(한 팀, 한 업무 규칙)이면 응집도가 높은 것이고, 여러 사람이면 낮은 것이다. 이 기준은 [클린 코드 글의 액터별로 코드 묶기](/posts/clean-code-practices)와 같은 이야기다.
+
+`utils.ts`를 나누면 이렇게 된다.
+
+```text
+src/
+  features/checkout/shipping/   calcShippingFee, 배송 규칙
+  features/auth/token/          parseJwt
+  common/format/price.ts        formatPrice (표시 전용)
+  common/async/sleep.ts         sleep
+```
+
+나누고 나니 `formatPrice`가 어디 쓰이는지가 다시 보인다. 정산은 표시용 문자열이 아니라 숫자가 필요했으니, 처음부터 `order.total`을 썼어야 한다.
+
+## 결합도를 숫자로 본다
+
+아래 그림은 쇼핑몰 화면 세 개와 공용 모듈 사이의 import 방향이다. 점이 흐르는 방향이 "누가 누구에게 기대는가"다. `format-price`로 들어오는 선이 셋이라, 이 모듈이 바뀌면 세 화면이 흔들린다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="화살표는 import 방향이다. 들어오는 선이 많은 모듈일수록 바꾸기 어렵다"
+  nodes={[
+    { id: "cart", label: "cart-page", x: 70, y: 40, w: 100 },
+    { id: "order", label: "order-page", x: 200, y: 40, w: 100 },
+    { id: "admin", label: "admin-page", x: 330, y: 40, w: 100 },
+    { id: "store", label: "cart-store", sub: "I = 0", x: 70, y: 150, w: 100 },
+    { id: "api", label: "api-client", sub: "I = 0", x: 200, y: 150, w: 100 },
+    { id: "fmt", label: "format-price", sub: "Ca 3 · Ce 1 · I = 0.25", x: 320, y: 150, w: 150 },
+    { id: "cur", label: "currency-table", sub: "I = 0", x: 320, y: 245, w: 130 },
+  ]}
+  edges={[
+    { from: "cart", to: "store" },
+    { from: "cart", to: "api" },
+    { from: "cart", to: "fmt" },
+    { from: "order", to: "store" },
+    { from: "order", to: "api" },
+    { from: "order", to: "fmt" },
+    { from: "admin", to: "fmt" },
+    { from: "fmt", to: "cur" },
+  ]}
+/>
+
+로버트 C. 마틴이 패키지 설계 원칙에서 쓴 지표가 있다. 나에게 기대는 모듈 수를 Ca(afferent, 들어오는 결합), 내가 기대는 모듈 수를 Ce(efferent, 나가는 결합)라 하고, 불안정성 I = Ce / (Ca + Ce)로 계산한다. I가 0이면 남들이 많이 기대고 자기는 아무것도 기대지 않는 모듈(바꾸기 어렵다, 안정적)이고, 1이면 자기만 남에게 기대는 모듈(언제든 바꿔도 아무도 안 깨진다, 불안정)이다.
+
+그림에서 화면들은 I = 1이다. 화면은 자주 바뀌어도 괜찮으니 맞는 자리다. `format-price`는 들어오는 선 3개, 나가는 선 1개라 I = 1 / 4 = 0.25다. 꽤 안정적인 모듈인데, 정작 우리는 이 모듈을 "표시 방식이 바뀌면 고쳐도 되는 것"으로 여겼다. 안정적이어야 할 모듈에 자주 바뀌는 지식(통화 표기)을 넣은 것이 문제의 뿌리다.
+
+마틴의 안정된 의존 원칙(Stable Dependencies Principle)은 "의존은 더 안정적인 쪽을 향해야 한다"고 말한다. 자주 바뀌는 것이 안정적인 것에 기대는 건 괜찮지만, 반대가 되면 작은 변경이 넓게 번진다. 실제 프로젝트에서는 `madge`나 `dependency-cruiser` 같은 도구로 import 그래프를 뽑아 이 숫자를 볼 수 있다. 숫자 자체보다 "들어오는 선이 많은데 자주 바뀌는 파일"을 찾는 데 쓴다. 함께 바뀌는 파일을 git 기록으로 세는 방법은 [마이크로서비스 분해](/posts/microservices-decomposition)에서 다뤘다.
+
+직접 계산해 보자. 간선 목록과 모듈 이름을 받아 불안정성을 소수 둘째 자리까지 돌려준다. 같은 간선이 두 번 나오면 한 번으로 세고, 자기 자신을 가리키는 간선은 무시한다. 선이 하나도 없으면 0을 돌려준다.
+
+<CodePlayground
+  caption="불안정성 I = Ce / (Ca + Ce)"
+  functionName="instability"
+  initialCode={`function instability(edges, name) {
+  // edges: [from, to] 쌍의 배열. from이 to를 import한다
+  // name이 import하는 모듈 수(Ce)와 name을 import하는 모듈 수(Ca)를 센다
+  return 0;
+}`}
+  solution={`function instability(edges, name) {
+  const outgoing = new Set();
+  const incoming = new Set();
+  for (const [from, to] of edges) {
+    if (from === to) continue;
+    if (from === name) outgoing.add(to);
+    if (to === name) incoming.add(from);
+  }
+  const total = outgoing.size + incoming.size;
+  if (total === 0) return 0;
+  return Math.round((outgoing.size / total) * 100) / 100;
+}`}
+  tests={[
+    { args: [[["cart-page", "format-price"], ["order-page", "format-price"], ["admin-page", "format-price"], ["cart-page", "api-client"], ["order-page", "api-client"], ["order-page", "cart-store"], ["cart-page", "cart-store"], ["format-price", "currency-table"]], "format-price"], expected: 0.25, label: "format-price는 0.25" },
+    { args: [[["cart-page", "format-price"], ["order-page", "format-price"], ["admin-page", "format-price"], ["cart-page", "api-client"], ["order-page", "api-client"], ["order-page", "cart-store"], ["cart-page", "cart-store"], ["format-price", "currency-table"]], "cart-page"], expected: 1, label: "화면은 1" },
+    { args: [[["cart-page", "format-price"], ["order-page", "format-price"], ["admin-page", "format-price"], ["cart-page", "api-client"], ["order-page", "api-client"], ["order-page", "cart-store"], ["cart-page", "cart-store"], ["format-price", "currency-table"]], "currency-table"], expected: 0, label: "맨 아래 모듈은 0" },
+    { args: [[["a", "b"], ["a", "b"], ["c", "a"]], "a"], expected: 0.5, label: "중복 간선은 한 번만" },
+    { args: [[["a", "a"], ["a", "b"]], "a"], expected: 1, label: "자기 자신은 무시" },
+    { args: [[["a", "b"]], "nothing"], expected: 0, label: "선이 없으면 0" },
+  ]}
+/>
+
+## 바뀌는 것을 찾아 감싼다
+
+결합을 줄이는 첫 번째 원칙은 "바뀌는 것을 찾아내 바뀌지 않는 것과 떼어 놓아라(encapsulate what varies)"다. 정산 버그로 돌아가 보면, 바뀌는 것은 통화 표기였고 바뀌지 않는 것은 "주문 금액은 원 단위 정수"라는 사실이었다. 이 둘이 `formatPrice` 하나에 섞여 있었고, 정산은 바뀌는 쪽에 기대고 있었다.
+
+```ts
+// 바뀌지 않는 것: 금액은 통화 코드와 최소 단위 정수로 다룬다
+type Money = { currency: "KRW" | "USD"; minor: number }; // USD면 센트
+
+// 바뀌는 것: 사람에게 보여 주는 모양. 한 곳에 가둔다
+export function displayMoney(m: Money, locale = "ko-KR"): string {
+  const digits = m.currency === "KRW" ? 0 : 2;
+  return new Intl.NumberFormat(locale, { style: "currency", currency: m.currency })
+    .format(m.minor / 10 ** digits);
+}
+
+// 정산은 표시와 상관없이 숫자만 쓴다
+const row = [order.id, order.total.currency, order.total.minor].join(",");
+```
+
+`displayMoney`의 출력이 `"₩12,000"`이든 `"12,000원"`이든 정산은 신경 쓰지 않는다. 표시 형식은 이제 정말로 아무 때나 바꿔도 되는 것이 되었다.
+
+바뀌는 축이 "종류"라면 전략 패턴이 같은 원칙의 구현이다. 결제 수단마다 수수료 계산이 다르다면 그 계산을 같은 모양의 함수로 떼어 낸다. 자세한 구조는 [전략 패턴](/posts/pattern-strategy) 글에 있다.
+
+무엇이 바뀔지는 어떻게 아나? 미리 다 맞힐 수는 없다. 경험상 자주 바뀌는 것은 외부 시스템(결제사, 메일 발송사), 표시 형식(언어, 통화, 날짜), 업무 정책(할인율, 등급 기준), 저장 방식이다. 이 넷은 처음부터 한 곳에 모아 두는 편이 거의 항상 이득이고, 그 밖의 것은 실제로 한 번 바뀌었을 때 감싸도 늦지 않다. 이 감각은 뒤에 나올 YAGNI와 이어진다.
+
+## 구현이 아니라 약속에 기댄다
+
+"추상에 대고 프로그래밍하라(program to an interface, not an implementation)"는 GoF 책 서두에 나오는 말이다. 부르는 쪽이 구체 클래스 대신 그 클래스가 지키는 약속(인터페이스, 함수 타입)만 알게 하면, 구현이 바뀌어도 부르는 쪽은 그대로다.
+
+```ts
+// 구체 구현에 기댄 코드
+import { SesClient } from "@aws-sdk/client-ses";
+export async function sendOrderMail(order: Order) {
+  const ses = new SesClient({ region: "ap-northeast-2" }); // 발송사가 바뀌면 여기를 고친다
+  await ses.send(/* ... */);
+}
+
+// 약속에 기댄 코드
+export interface MailSender {
+  send(to: string, subject: string, html: string): Promise<void>;
+}
+export function makeOrderMailer(mailer: MailSender) {
+  return (order: Order) => mailer.send(order.email, "주문 완료", renderOrderMail(order));
+}
+```
+
+두 번째 코드는 테스트에서 `{ send: async () => {} }` 하나로 메일 발송 없이 돌고, 발송사를 바꿀 때 `makeOrderMailer`를 열 필요가 없다. 업무 코드가 약속을 정하고 바깥 기술이 그 약속을 구현하는 방향으로 의존을 뒤집는 구조는 [헥사고날 아키텍처](/posts/hexagonal-architecture)에서 끝까지 밀고 간다.
+
+흔한 실수는 모든 클래스에 인터페이스를 하나씩 붙이는 것이다. 구현이 영원히 하나뿐이고 테스트에서도 진짜를 쓰는 모듈(날짜 포맷, 순수 계산)에 `IPriceFormatter`를 만들면 파일만 두 배가 되고, "정의로 이동"을 누를 때마다 인터페이스에 먼저 떨어진다. 추상은 경계에 둔다. 바깥 세계(네트워크, 디스크, 시간, 외부 SDK)와 만나는 곳, 그리고 실제로 구현이 둘 이상인 곳이다.
+
+## 부르지 말고 불리기를 기다린다
+
+할리우드 원칙은 "우리에게 전화하지 마세요, 우리가 전화할게요"라는 오디션 문구에서 왔다. 내 코드가 흐름을 쥐고 다른 코드를 부르는 대신, 흐름은 바깥(프레임워크)이 쥐고 내 코드는 불릴 자리에 끼워 둔다. 제어의 역전(Inversion of Control)을 짧게 부르는 말이다. 상위 클래스가 순서를 쥐고 하위 클래스의 단계를 부르는 모양은 [템플릿 메서드](/posts/pattern-template-method)에서 자세히 봤다.
+
+라이브러리와 프레임워크를 가르는 기준도 이것이다. 라이브러리는 내가 부르고(`dayjs().format()`), 프레임워크는 나를 부른다. React 컴포넌트를 직접 호출하는 사람은 없다. React가 렌더링할 때 컴포넌트를 부르고, 효과가 필요한 시점에 `useEffect`에 넣어 둔 함수를 부른다. Express는 요청이 오면 등록해 둔 미들웨어를 차례로 부른다.
+
+이게 결합도와 무슨 상관인가. 흐름을 쥔 쪽은 끼워진 쪽의 구체적인 모습을 몰라도 된다. 아래는 주문 완료 후 해야 할 일이 늘 때마다 주문 서비스를 고치는 코드와, 불릴 자리만 열어 두는 코드다.
+
+```ts
+// 주문 서비스가 후속 작업을 전부 안다
+async function completeOrder(id: string) {
+  const order = await repo.markPaid(id);
+  await mailer.sendReceipt(order);
+  await points.add(order.userId, order.total);
+  await analytics.track("order_completed", order); // 요청이 올 때마다 한 줄씩 는다
+}
+
+// 주문 서비스는 "완료됐다"고 알리기만 한다
+type OrderCompleted = (order: Order) => Promise<void>;
+const onCompleted: OrderCompleted[] = [];
+export const subscribeOrderCompleted = (fn: OrderCompleted) => onCompleted.push(fn);
+
+async function completeOrder(id: string) {
+  const order = await repo.markPaid(id);
+  await Promise.allSettled(onCompleted.map((fn) => fn(order))); // 하나가 실패해도 나머지는 돈다
+}
+```
+
+두 번째 모양은 관찰자 패턴이고, 서비스를 넘어가면 이벤트 기반 구조가 된다. 대가도 있다. 주문 완료 후 무슨 일이 일어나는지 `completeOrder`만 봐서는 알 수 없고, 등록한 곳을 찾아다녀야 한다. 후속 작업이 두세 개이고 거의 바뀌지 않는다면 첫 번째 코드가 더 읽기 쉽다. 제어를 뒤집는 것은 "끼워질 것이 계속 늘어나는" 자리에만 쓴다.
+
+## 친구의 친구에게 말 걸지 않는다
+
+디미터 법칙(Law of Demeter)은 1987년 노스이스턴 대학의 Demeter 프로젝트에서 나온 규칙이다. 메서드 안에서는 다음 것에게만 메시지를 보내라. 자기 자신, 인자로 받은 것, 자기가 직접 만든 것, 자기 필드. 줄여서 "가장 가까운 친구하고만 이야기하라"고 한다. 친구가 건네준 객체의 메서드를 또 부르는 순간 친구의 친구에게 말을 건 것이다.
+
+```ts
+// 결제 버튼 핸들러
+function pay(order: Order, amount: number) {
+  if (order.customer.wallet.balance >= amount) {
+    order.customer.wallet.balance -= amount;
+    order.status = "paid";
+  } else {
+    throw new Error("잔액 부족");
+  }
+}
+```
+
+이 함수는 주문이 고객을 갖고, 고객이 지갑을 갖고, 지갑에 `balance` 숫자 필드가 있다는 것을 모두 안다. 지갑이 포인트와 현금을 따로 관리하도록 바뀌거나, 잔액 차감에 로그를 남겨야 하면 이 함수를 비롯해 `wallet.balance`를 만지는 모든 곳을 찾아 고쳐야 한다. 결합도 분류로는 내용 결합에 가깝다.
+
+디미터 법칙과 함께 다니는 말이 "묻지 말고 시켜라(Tell, Don't Ask)"다. 상대의 상태를 꺼내 와서 내가 판단하지 말고, 판단까지 상대에게 시킨다.
+
+```ts
+class Wallet {
+  #balance: number;
+  constructor(balance: number) { this.#balance = balance; }
+  withdraw(amount: number): void {
+    if (this.#balance < amount) throw new InsufficientBalance(this.#balance, amount);
+    this.#balance -= amount;
+  }
+}
+
+class Order {
+  constructor(private customer: Customer, public status: "pending" | "paid" = "pending") {}
+  payWith(amount: number): void {
+    this.customer.charge(amount); // Customer가 자기 지갑에 시킨다
+    this.status = "paid";
+  }
+}
+
+// 핸들러는 주문에게만 말한다
+function pay(order: Order, amount: number) {
+  order.payWith(amount);
+}
+```
+
+아래 그림에서 다음을 누르면 두 방식이 메시지를 어떻게 주고받는지 차례로 보인다. 앞의 네 단계가 묻는 방식, 뒤의 세 단계가 시키는 방식이다.
+
+<SequenceDiagram
+  caption="묻는 쪽은 지갑까지 손을 뻗고, 시키는 쪽은 바로 옆에만 말한다"
+  actors={[
+    { id: "handler", label: "핸들러" },
+    { id: "order", label: "Order" },
+    { id: "customer", label: "Customer" },
+    { id: "wallet", label: "Wallet" },
+  ]}
+  steps={[
+    { from: "handler", to: "order", label: ".customer", title: "묻기: 주문에게 고객을 달라고 한다", detail: "핸들러는 주문 안에 고객이 들어 있다는 사실을 안다. 첫 번째 결합이다." },
+    { from: "handler", to: "customer", label: ".wallet", title: "묻기: 고객에게 지갑을 달라고 한다", detail: "친구(주문)가 건네준 객체에 또 말을 걸었다. 여기서 디미터 법칙을 어긴다." },
+    { from: "handler", to: "wallet", label: ".balance", title: "묻기: 잔액을 꺼내 와 직접 비교한다", detail: "잔액이 충분한지 판단하는 업무 규칙이 핸들러에 있다. 같은 규칙이 환불, 정기 결제 코드에도 복사된다.", payload: "balance 3000 >= amount 2500" },
+    { from: "handler", to: "wallet", label: "balance -= 2500", title: "묻기: 남의 필드를 직접 깎는다", detail: "지갑이 차감 기록을 남기도록 바뀌면 이 줄을 모두 찾아 고쳐야 한다." },
+    { from: "handler", to: "order", label: "payWith(2500)", title: "시키기: 주문에게 결제하라고만 한다", detail: "핸들러가 아는 것은 Order 하나와 메서드 이름 하나다." },
+    { from: "order", to: "customer", label: "charge(2500)", title: "시키기: 주문은 자기 필드인 고객에게 시킨다", detail: "자기 필드에게 말하는 것은 허용된다. 지갑이 어떻게 생겼는지 주문은 모른다." },
+    { from: "customer", to: "wallet", label: "withdraw(2500)", title: "시키기: 잔액 판단은 지갑 안에서 끝난다", detail: "잔액 부족 규칙이 한 곳에만 있다. 포인트와 현금을 나눠도 Wallet만 고치면 된다.", payload: "#balance 3000 → 500" },
+  ]}
+/>
+
+### 점이 여러 개라고 다 위반은 아니다
+
+디미터 법칙을 "점은 하나만"으로 외우면 멀쩡한 코드를 망친다. 아래는 모두 위반이 아니다.
+
+```ts
+// 빌더와 플루언트 API: 매번 같은 객체(또는 같은 종류)를 돌려받는다
+const req = new RequestBuilder().url("/orders").method("POST").timeout(3000).build();
+
+// 배열 메서드 체인: 새 배열을 받아 계속 변환할 뿐, 남의 내부 구조를 따라가지 않는다
+const names = orders.filter((o) => o.paid).map((o) => o.customerName).slice(0, 10);
+
+// 데이터를 담기만 하는 객체(DTO, API 응답, 설정): 감출 행동이 없다
+const city = response.data.shipping.address.city;
+```
+
+기준은 점 개수가 아니라 "무엇을 따라가고 있나"다. 체인이 같은 객체나 같은 타입의 값을 계속 이어 가면 결합이 늘지 않는다. 반면 `order.customer.wallet.balance`는 서로 다른 객체 네 개의 내부 구조를 차례로 알고 있다. 데이터 구조는 원래 구조를 보여 주는 것이 목적이라 법칙의 대상이 아니다. 다만 API 응답 모양이 화면 곳곳에 퍼지면 응답이 바뀔 때 다 깨지니, 응답을 받는 경계에서 화면이 쓸 모양으로 한 번 바꿔 두면 같은 효과를 얻는다.
+
+반대 방향의 실수도 있다. 디미터를 지키려고 `order.getCustomerWalletBalance()` 같은 전달 메서드를 잔뜩 만들면 점은 줄었지만 Order가 지갑의 모든 기능을 다시 노출하는 꼴이 된다. 필요한 것은 전달이 아니라 위의 `payWith`처럼 의도를 담은 메서드다.
+
+## 같은 지식이 두 군데 있으면
+
+DRY(Don't Repeat Yourself)는 《실용주의 프로그래머》(Hunt, Thomas, 1999)에 나온 원칙이다. 원문은 "모든 지식은 시스템 안에서 하나의, 모호하지 않은, 권위 있는 표현을 가져야 한다"이다. 여기서 중요한 단어는 코드가 아니라 지식이다. 같은 모양의 코드가 두 번 나오는 것이 아니라, 같은 사실을 두 군데서 따로 관리하는 것이 문제다.
+
+지식의 중복부터 보자. 비밀번호 규칙이 회원가입 화면과 서버에 따로 적혀 있다.
+
+```ts
+// web/signup-form.ts
+const ok = pw.length >= 8 && /[0-9]/.test(pw);
+
+// api/users/create.ts
+if (pw.length < 10 || !/[0-9]/.test(pw) || !/[A-Za-z]/.test(pw)) throw new BadRequest();
+```
+
+보안팀 요청으로 서버만 10자로 바꿨고, 화면은 8자에서 통과시킨 뒤 서버가 400을 돌려준다. 사용자는 "왜 안 되지"만 보게 된다. 이건 지식이 둘로 갈라진 것이라 합쳐야 한다. 규칙을 스키마 하나로 정의하고 화면과 서버가 같은 것을 쓰거나, 화면은 서버가 돌려준 규칙을 그대로 보여 주게 한다.
+
+이번엔 우연히 모양이 같은 코드다.
+
+```ts
+// 배송: 5만 원 이상이면 무료 배송
+const freeShipping = subtotal >= 50000;
+
+// 적립: 5만 원 이상이면 포인트 2배
+const doublePoints = subtotal >= 50000;
+```
+
+둘을 `isOver50k(subtotal)` 하나로 합치고 싶어진다. 하지만 배송 기준은 물류비가 오르면 바뀌고, 적립 기준은 마케팅 행사 때 바뀐다. 바뀌는 이유와 결정하는 사람이 다르다. 합쳐 놓으면 마케팅이 기준을 3만 원으로 내리는 순간 배송비가 같이 공짜가 되거나, 합친 함수에 `isOver(subtotal, kind)` 같은 갈래가 생긴다. 모양이 같아도 지식이 다르면 중복이 아니다.
+
+### 잘못된 추상화는 중복보다 비싸다
+
+샌디 메츠가 2016년 글에서 정리한 흐름이 있다. 비슷한 코드 두 개를 보고 누군가 공통 함수로 뽑는다. 세 번째 사용처가 조금 다른 동작을 원하자 인자를 하나 더한다. 네 번째가 또 다르자 `if`를 하나 더한다. 몇 달 뒤 그 함수는 이렇게 된다.
+
+```ts
+function renderPriceRow(
+  item: Item,
+  showDiscount = true,
+  isAdmin = false,
+  currency?: string,
+  hideZero = false,
+  legacyMode = false, // 2년 전 정산 화면 때문에 남아 있다
+) { /* 갈래 열두 개 */ }
+```
+
+이 함수를 고치는 사람은 모든 사용처를 이해해야 하고, 아무도 감히 갈래를 지우지 못한다. 메츠의 처방은 "추상이 틀렸다고 느껴지면 각 사용처에 코드를 다시 펼쳐 넣고(inline), 거기서 다시 시작하라"였다. 중복은 나중에 합칠 수 있지만, 잘못 합친 것은 풀기 어렵다.
+
+그래서 많이 쓰는 경험칙이 셋의 규칙(Rule of Three)이다. 처음엔 그냥 쓰고, 두 번째엔 중복을 알아채고 참고, 세 번째에 공통점이 확실해지면 뽑는다. 숫자보다 "같은 이유로 같이 바뀌는가"를 먼저 묻는 게 본질이다.
+
+## 단순하게, 그리고 지금 필요한 만큼
+
+KISS(Keep It Simple, Stupid)는 미 해군과 록히드 엔지니어 켈리 존슨이 퍼뜨린 말로 알려져 있다. 소프트웨어에서는 "같은 일을 하는 방법이 여럿이면 읽는 사람이 가장 덜 놀라는 것을 골라라" 정도로 쓴다. 한 줄짜리 `reduce` 묘기보다 `for` 문 다섯 줄이 나을 때가 많다.
+
+YAGNI(You Aren't Gonna Need It)는 익스트림 프로그래밍(XP)에서 나왔다. "언젠가 필요할 것 같은" 기능을 지금 만들지 말라는 말이다. 마틴 파울러는 미리 만든 기능의 비용을 넷으로 나눴다. 만드는 비용, 진짜 필요한 기능이 늦어지는 비용, 쓰이지 않는 코드를 끌고 다니는 비용, 그리고 막상 필요해졌을 때 예상과 달라서 고치는 비용이다.
+
+```ts
+// "나중에 다른 결제사가 붙을 수도 있으니까"
+interface PaymentGateway { /* 메서드 14개 */ }
+class PaymentGatewayFactory { /* 설정 파일에서 이름을 읽어 고른다 */ }
+class TossGateway implements PaymentGateway { /* 실제 구현은 이것 하나 */ }
+```
+
+결제사가 정말 하나 더 붙을 때 필요한 메서드는 이 14개와 다를 가능성이 크다. 두 번째 결제사의 웹훅 방식, 취소 흐름, 부분 환불 지원 여부를 모르는 상태에서 만든 인터페이스는 대개 첫 번째 결제사의 모양을 그대로 베낀 것이다. 지금은 `TossGateway`만 두고, 업무 코드가 SDK를 직접 부르지 않게만 해 두면 충분하다. 두 번째가 오면 그때 둘을 보고 공통점을 뽑는다.
+
+YAGNI가 "아무것도 미리 생각하지 말라"는 뜻은 아니다. 나중에 바꾸기 아주 비싼 결정은 지금 생각해 둔다. 외부에 공개하는 API의 모양, DB 스키마와 ID 형식, 저장하는 데이터의 단위(금액을 원 단위 정수로 둘지 소수로 둘지)가 그렇다. 기능은 미루고, 되돌리기 어려운 문은 신중히 연다.
+
+## 원칙끼리 부딪치는 자리
+
+이 원칙들은 자주 서로 반대 방향을 가리킨다. 몇 가지 흔한 충돌과, 실무에서 어떻게 정리하는지 적어 둔다.
+
+DRY와 낮은 결합이 부딪친다. 두 서비스의 주문 검증 코드가 비슷하다고 공용 패키지로 뽑으면 지식은 한 곳에 모이지만, 이제 그 패키지를 바꿀 때 두 서비스를 함께 배포해야 한다. 서비스 경계를 넘는 DRY는 결합을 만든다. 같은 회사라도 서로 다른 팀이 배포하는 서비스라면 비슷한 코드를 각자 갖는 편이 나을 때가 많다. 반대로 같은 서비스 안의 업무 규칙은 반드시 한 곳에 둔다.
+
+추상에 기대기와 YAGNI가 부딪친다. 테스트 때문에 경계에는 약속(인터페이스)이 필요하지만, 구현이 하나뿐인 안쪽 모듈에까지 인터페이스를 두는 건 YAGNI 위반이다. 경계에는 두고, 안쪽에는 두지 않는다. 함수형 스타일이라면 인터페이스 대신 함수 타입 하나로 충분하다.
+
+디미터와 단순함이 부딪친다. 데이터를 화면에 뿌리기만 하는 코드에서 `user.profile.address.city`를 피하려고 메서드를 만들면 코드만 늘어난다. 행동이 있는 객체에는 디미터를, 데이터에는 경계 변환을 쓴다.
+
+리뷰에서 이 원칙들을 꺼낼 때 원칙 이름보다 구체적인 질문이 더 잘 통한다. "이 함수의 출력 형식이 바뀌면 누가 깨지나요?", "이 두 코드는 같은 사람이 바꾸나요?", "이 인터페이스의 두 번째 구현은 언제 생기나요?" 같은 질문이 "DRY 위반입니다"보다 대화를 앞으로 보낸다.
+
+정산 CSV 버그를 다시 보면 결국 하나로 모인다. 서로 다른 이유로 바뀌는 것(표시 형식과 금액 계산)이 한 함수에 섞여 있었고, 다른 모듈이 그 섞인 결과의 모양에 기대고 있었다. 덩어리 안은 같은 이유로 바뀌는 것끼리 모으고, 덩어리 사이에는 필요한 것만 알게 한다. 나머지 원칙은 모두 이 두 문장을 지키는 구체적인 방법이다. 이 원칙을 함수와 이름 단위로 옮기는 이야기는 [클린 코드](/posts/clean-code-practices)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 결합도와 응집도를 설명해 주세요.
+
+결합도는 모듈끼리 서로를 알고 있는 정도이고, 응집도는 한 모듈 안의 요소들이 하나의 목적으로 모여 있는 정도다. 좋은 설계는 결합도는 낮고 응집도는 높다. 그래야 변경 요청 하나가 모듈 하나 안에서 끝나고, 그 변경이 다른 모듈로 번지지 않는다.
+
+### 결합도에는 어떤 종류가 있고, 실무에서 가장 위험한 건 무엇인가요?
+
+강한 순서로 내용, 공통, 외부, 제어, 스탬프, 자료 결합이 있다. 실무에서 특히 위험한 건 외부 결합처럼 import 선에 드러나지 않는 결합이다. 표시용 문자열을 다시 파싱하거나 에러 메시지 문장을 검사하는 코드는 타입 검사도 검색도 피해 가서, 출력 형식을 바꾸는 순간 운영에서 터진다.
+
+### DRY를 지켰는데 오히려 코드가 나빠지는 경우가 있나요?
+
+있다. 모양만 같고 바뀌는 이유가 다른 코드를 합치면 잘못된 추상화가 된다. 사용처마다 다른 요구가 생길 때마다 플래그 인자와 분기가 늘어나고, 결국 아무도 고칠 수 없는 함수가 된다. DRY의 대상은 코드 모양이 아니라 지식이므로, 같은 사람이 같은 이유로 바꾸는지를 먼저 묻고, 확실하지 않으면 세 번째 사용처가 나올 때까지 기다린다.
+
+### 디미터 법칙이란 무엇이고, 메서드 체이닝은 위반인가요?
+
+메서드 안에서는 자기 자신, 인자, 직접 만든 객체, 자기 필드에게만 메시지를 보내라는 규칙이다. `order.customer.wallet.balance`처럼 서로 다른 객체의 내부 구조를 차례로 따라가는 것이 위반이다. 빌더나 배열 메서드 체인은 같은 객체나 같은 종류의 값을 이어 갈 뿐이라 위반이 아니고, 행동 없이 데이터만 담은 DTO도 대상이 아니다. 기준은 점 개수가 아니라 몇 개의 서로 다른 내부 구조를 알게 되느냐다.
+
+### Tell, Don't Ask는 디미터 법칙과 어떤 관계인가요?
+
+상대의 상태를 꺼내 와서 내가 판단하지 말고, 판단까지 상대 객체에게 시키라는 원칙이다. 상태를 묻는 코드는 자연스럽게 친구의 친구까지 손을 뻗게 되므로, 시키는 방식으로 바꾸면 디미터 법칙도 함께 지켜진다. 잔액 확인과 차감을 `Wallet.withdraw` 안에 두면 잔액 규칙이 한 곳에만 남는다.
+
+### 할리우드 원칙과 제어의 역전을 예로 들어 설명해 주세요.
+
+내 코드가 흐름을 쥐고 남을 부르는 대신, 흐름은 프레임워크가 쥐고 내 코드는 불릴 자리에 끼워 두는 것이다. React가 컴포넌트와 이펙트를 부르고, Express가 미들웨어를 부르고, DI 컨테이너가 의존성을 넣어 주는 것이 예다. 흐름을 쥔 쪽이 끼워진 쪽의 구체적인 모습을 모르게 되니 결합이 줄지만, 흐름이 코드에 바로 보이지 않는다는 대가가 있다.
+
+### YAGNI를 지키면 확장성이 떨어지지 않나요?
+
+기능은 미루되 되돌리기 비싼 결정은 미리 생각한다. 구현이 하나뿐인 인터페이스나 팩토리를 미리 만들면 두 번째 구현이 왔을 때 대개 모양이 맞지 않아 다시 고치게 된다. 대신 업무 코드가 외부 SDK를 직접 부르지 않게 경계만 정리해 두면 나중에 추상을 뽑기 쉽다. 공개 API 모양, DB 스키마, 금액 단위처럼 바꾸기 어려운 것은 YAGNI의 대상이 아니다.
+
+### 결합도를 실제로 측정하거나 확인하는 방법이 있나요?
+
+코드의 import 그래프에서 들어오는 결합 Ca와 나가는 결합 Ce를 세어 불안정성 I = Ce / (Ca + Ce)를 볼 수 있다. madge나 dependency-cruiser로 그래프와 순환 의존을 뽑고, git 기록에서 자주 함께 바뀌는 파일 쌍을 세면 import에 안 보이는 결합도 드러난다. 숫자 자체보다 "많이 기대지는데 자주 바뀌는 모듈"을 찾는 데 쓴다.

@@ -1,0 +1,548 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-find-median-from-data-stream");
+
+<EasyIntro>
+  반 친구들이 한 명씩 교실에 들어오고, 들어올 때마다 지금 있는 친구들 키의 한가운데 값을 말해야 한다. 한가운데 값은 키 순서로 줄을 세웠을 때 딱 가운데에 서는 친구의 키다. 새 친구가 올 때마다 모두를 다시 줄 세우면 금방 지친다.
+
+  그래서 교실을 두 모둠으로 나눈다. 왼쪽 모둠은 키가 작은 절반, 오른쪽 모둠은 키가 큰 절반이다. 왼쪽 모둠에서는 가장 큰 친구가 맨 앞에 서고, 오른쪽 모둠에서는 가장 작은 친구가 맨 앞에 선다. 두 모둠의 맨 앞 친구가 바로 한가운데 근처에 있는 친구들이다.
+
+  새 친구가 오면 일단 왼쪽 모둠에 넣었다가, 왼쪽에서 가장 큰 친구를 오른쪽으로 보낸다. 오른쪽 모둠이 더 많아지면 오른쪽 맨 앞 친구를 왼쪽으로 돌려보낸다. 이렇게 하면 두 모둠의 인원이 거의 같게 유지되고, 한가운데 값은 두 맨 앞 친구만 보면 바로 나온다.
+</EasyIntro>
+
+[Find Median from Data Stream](https://leetcode.com/problems/find-median-from-data-stream/)은 LeetCode 295번이다. 숫자가 하나씩 들어오는데, 아무 때나 "지금까지 들어온 숫자의 중앙값"을 물을 수 있는 자료구조를 만든다. 난이도는 Hard지만 코드는 짧다. 어려운 건 "두 힙으로 나눈다"는 생각을 떠올리는 일이다.
+
+실무에서 응답 시간의 중앙값을 실시간으로 보여 주는 대시보드가 같은 문제를 푼다. 평균은 느린 요청 몇 개에 크게 흔들리지만 중앙값은 그렇지 않아서 "보통 사용자가 겪는 속도"를 보여 준다. 이 글은 매번 정렬하기, 정렬된 배열에 끼워 넣기, 두 힙, 값 세기 바구니, 그리고 문제의 꼬리 질문인 "값 대부분이 좁은 범위에 있다면"까지 다섯 풀이를 본다. 두 힙의 기본 그림은 [힙 글의 중앙값 부분](/posts/ds-heap#흐르는-숫자의-중앙값)에 있어서, 여기서는 다른 예시와 다른 넣기 방식으로 따라가고 왜 맞는지를 더 따진다. 코드는 Node.js 22, Python 3.13, Java 21에서 돌렸다.
+
+## 넣기와 중앙값 묻기를 섞어서 한다
+
+`MedianFinder` 클래스를 만든다. 메서드는 두 개다.
+
+- `addNum(num)`: 정수 하나를 넣는다.
+- `findMedian()`: 지금까지 넣은 수의 중앙값을 돌려준다. 개수가 홀수면 가운데 값, 짝수면 가운데 두 값의 평균이다.
+
+풀이를 고르는 데 영향을 주는 제약은 이렇다.
+
+- 두 메서드를 합쳐 최대 5 × 10^4번 부른다. 넣을 때마다 중앙값을 물을 수도 있다. 그래서 묻기 한 번에 O(n log n)이 들면 전체가 수십억 번이 된다.
+- 값은 -10^5 이상 10^5 이하다.
+- `findMedian`은 적어도 하나를 넣은 뒤에만 부른다. 빈 상태는 고민하지 않아도 된다.
+- 꼬리 질문이 두 개 붙어 있다. 모든 값이 0 이상 100 이하라면? 값의 99%가 0 이상 100 이하라면?
+
+평균과 달리 중앙값은 합계 하나로 들고 다닐 수 없다. 평균은 합과 개수만 알면 되지만, 중앙값은 "가운데에 누가 서 있나"를 알아야 해서 값들의 순서 정보가 필요하다. 이게 이 문제가 어려운 이유다.
+
+## 들어올 때마다 손으로 줄 세워 본다
+
+이 글 내내 쓰는 입력이다. 값이 하나 들어올 때마다 중앙값을 묻는다.
+
+```text
+6, 2, 9, 4, 4, 11, 1
+```
+
+들어온 값을 정렬해 두고 가운데를 읽으면 이렇다.
+
+```text
+넣은 값   정렬된 상태              중앙값
+6         6                       6
+2         2 6                     (2 + 6) / 2 = 4
+9         2 6 9                   6
+4         2 4 6 9                 (4 + 6) / 2 = 5
+4         2 4 4 6 9               4
+11        2 4 4 6 9 11            (4 + 6) / 2 = 5
+1         1 2 4 4 6 9 11          4
+```
+
+표를 다시 보면 중앙값을 구할 때 쓴 건 항상 가운데 한두 칸이었다. 양 끝의 1이나 11이 정확히 어디 서 있는지는 아무 상관이 없었다. 필요한 건 "작은 절반의 가장 큰 값"과 "큰 절반의 가장 작은 값" 두 개뿐이다. 이 관찰이 두 힙 풀이로 이어진다. 그 전에 느린 풀이부터 본다.
+
+## 물을 때마다 정렬한다
+
+가장 단순하게는 값을 배열에 쌓아 두고, 물을 때마다 정렬해서 가운데를 읽는다.
+
+```js
+class MedianFinder {
+  constructor() { this.a = []; }
+  addNum(num) { this.a.push(num); }      // 넣기는 O(1)
+  findMedian() {
+    const b = [...this.a].sort((x, y) => x - y); // 물을 때마다 전부 정렬
+    const n = b.length;
+    return n % 2 ? b[n >> 1] : (b[n / 2 - 1] + b[n / 2]) / 2;
+  }
+}
+```
+
+넣기는 O(1), 묻기는 O(n log n)이다. 넣을 때마다 묻는 입력이면 전체가 O(n² log n)이다. 실제로 값 2만 5천 개를 넣으며 매번 물었더니 81초가 걸렸다. 5천 개에서도 2.8초였다. 넣기만 많고 묻기가 끝에 한 번이면 쓸 만하지만, 이 문제의 입력에는 맞지 않는다.
+
+복사하지 않고 `this.a`를 그 자리에서 정렬하면 다음 정렬이 이미 거의 정렬된 배열에서 시작해 TimSort가 빨리 끝난다. 그래도 매번 n칸을 훑는 O(n)은 남는다. 그러면 처음부터 정렬된 상태를 유지하는 쪽이 낫다.
+
+## 정렬된 자리에 끼워 넣는다
+
+배열을 항상 정렬된 채로 들고 다니면 중앙값은 가운데 칸을 읽기만 하면 된다. 넣을 자리는 [이분 탐색](/posts/binary-search)으로 O(log n)에 찾는다. 문제는 그 자리에 끼워 넣는 일이다. 뒤의 값을 모두 한 칸씩 밀어야 해서 O(n)이다.
+
+```js
+class MedianFinder {
+  constructor() { this.a = []; }          // 항상 오름차순
+  addNum(num) {
+    const a = this.a;
+    let lo = 0, hi = a.length;
+    while (lo < hi) {                      // num 이상인 첫 자리
+      const m = (lo + hi) >> 1;
+      if (a[m] < num) lo = m + 1;
+      else hi = m;
+    }
+    a.splice(lo, 0, num);                  // 뒤를 한 칸씩 밀고 끼워 넣는다
+  }
+  findMedian() {
+    const a = this.a, n = a.length;
+    return n % 2 ? a[n >> 1] : (a[n / 2 - 1] + a[n / 2]) / 2;
+  }
+}
+```
+
+넣기는 O(n), 묻기는 O(1)이다. 이론으로는 O(n²)인데, 실제로 재 보면 생각보다 빠르다. 2만 5천 개에서 22.6ms로 뒤에서 볼 두 힙과 거의 같았다. `splice`가 미는 일은 메모리 블록 하나를 통째로 옮기는 작업이라 반복문으로 한 칸씩 미는 것보다 훨씬 빠르기 때문이다. 하지만 20만 개로 늘리면 1526ms가 되어 두 힙의 253ms보다 6배 느려졌다. n²이 결국 드러난다.
+
+Python에서는 `bisect.insort`가 같은 일을 한다. 면접에서 "정렬된 리스트 + 이분 탐색"을 말하면 거의 항상 "삽입이 O(n)인데요?"가 따라온다. 그 질문에 대한 답이 다음 풀이다.
+
+## 작은 절반과 큰 절반을 따로 담는다
+
+손으로 풀 때의 관찰을 그대로 자료구조로 만든다. 값을 두 무리로 나눈다.
+
+- `lo`: 작은 절반. 최대 힙이라 맨 위가 작은 절반의 가장 큰 값이다.
+- `hi`: 큰 절반. 최소 힙이라 맨 위가 큰 절반의 가장 작은 값이다.
+
+그리고 두 규칙을 언제나 지킨다.
+
+- 순서 규칙: `lo`의 모든 값은 `hi`의 모든 값보다 작거나 같다. 힙 맨 위끼리만 비교하면 된다.
+- 개수 규칙: `lo`의 개수는 `hi`와 같거나 하나 많다.
+
+두 규칙이 지켜지면 정렬된 배열의 가운데가 `lo` 맨 위와 `hi` 맨 위 사이에 걸쳐 있다. 개수가 홀수면 `lo`가 하나 많으니 `lo` 맨 위가 중앙값이고, 짝수면 두 맨 위의 평균이다.
+
+넣는 방법은 여러 가지가 있다. [힙 글](/posts/ds-heap#흐르는-숫자의-중앙값)에서는 새 값을 `lo` 맨 위와 비교해 어느 쪽에 넣을지 정했다. 여기서는 비교 없이 늘 같은 순서로 움직이는 방법을 쓴다.
+
+1. 새 값을 `lo`에 넣는다.
+2. `lo` 맨 위(작은 절반의 가장 큰 값)를 꺼내 `hi`에 넣는다. 이 한 번의 이동이 순서 규칙을 지켜 준다. 새 값이 아무리 커도 `hi`로 넘어가기 때문이다.
+3. `hi`가 `lo`보다 많아지면 `hi` 맨 위를 꺼내 `lo`에 넣는다. 이건 개수 규칙을 지킨다.
+
+```js
+class Heap {
+  constructor(less) { this.a = []; this.less = less; } // less(x, y)가 참이면 x가 위로 간다
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(x) {
+    const a = this.a;
+    a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!this.less(a[i], a[p])) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+class MedianFinder {
+  constructor() {
+    this.lo = new Heap((x, y) => x > y); // 작은 절반. 최대 힙
+    this.hi = new Heap((x, y) => x < y); // 큰 절반. 최소 힙
+  }
+  addNum(num) {
+    this.lo.push(num);
+    this.hi.push(this.lo.pop());                                   // 순서 규칙
+    if (this.hi.size > this.lo.size) this.lo.push(this.hi.pop());  // 개수 규칙
+  }
+  findMedian() {
+    if (this.lo.size > this.hi.size) return this.lo.peek();
+    return (this.lo.peek() + this.hi.peek()) / 2;
+  }
+}
+```
+
+힙 하나를 비교 함수로 최대 힙도, 최소 힙도 만들 수 있게 했다. 비교 함수가 힙의 성격을 정한다는 이야기는 [힙 글](/posts/ds-heap#비교-함수-하나가-힙의-성격을-정한다)에 있다.
+
+예시를 넣으며 값마다 무엇이 옮겨졌는지 찍어 봤다. 보기 좋게 `lo`는 큰 순서, `hi`는 작은 순서로 늘어놓았다.
+
+```text
+add 6  moved 6  back 6     lo 6        hi            med 6
+add 2  moved 6  back null  lo 2        hi 6          med 4
+add 9  moved 9  back 6     lo 6 2      hi 9          med 6
+add 4  moved 6  back null  lo 4 2      hi 6 9        med 5
+add 4  moved 4  back 4     lo 4 4 2    hi 6 9        med 4
+add 11 moved 11 back null  lo 4 4 2    hi 6 9 11     med 5
+add 1  moved 4  back 4     lo 4 4 2 1  hi 6 9 11     med 4
+```
+
+`moved`는 2단계에서 `lo`가 `hi`로 보낸 값, `back`은 3단계에서 돌아온 값이다. 9가 들어올 때가 재미있다. 9는 `lo`에 들어가자마자 맨 위가 되어 곧장 `hi`로 넘어간다. 그러면 `hi`가 둘이 되어 많아지니, `hi`의 가장 작은 값 6이 `lo`로 돌아온다. 아래 그림에서 다음을 누르며 두 무리가 바뀌는 순간을 따라가 본다.
+
+<AlgoTrace
+  caption="넣기마다 lo에 넣고, lo 맨 위를 hi로 넘기고, 많으면 되돌린다"
+  memoryLabel="lo(작은 절반, 큰 순) | hi(큰 절반, 작은 순)"
+  cells={["6", "2", "9", "4", "4", "11", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["lo: 6", "hi: 비었음", "중앙값 6"], caption: "6이 lo를 거쳐 hi로 갔다가, hi가 많아져 lo로 돌아온다." },
+    { pointer: 1, found: [0, 1], memory: ["lo: 2", "hi: 6", "중앙값 4"], caption: "2를 넣으면 lo 맨 위가 6이 되어 hi로 넘어간다. 개수가 같아 (2 + 6) / 2 = 4." },
+    { pointer: 2, found: [0, 1, 2], memory: ["lo: 6 2", "hi: 9", "중앙값 6"], caption: "9는 곧장 hi로 넘어간다. hi가 둘이 되어 가장 작은 6이 lo로 돌아온다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["lo: 4 2", "hi: 6 9", "중앙값 5"], caption: "4를 넣으면 lo 맨 위 6이 hi로 간다. 둘씩이라 (4 + 6) / 2 = 5." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["lo: 4 4 2", "hi: 6 9", "중앙값 4"], caption: "두 번째 4가 hi로 갔다가 바로 돌아온다. 같은 값은 어느 쪽에 있어도 된다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["lo: 4 4 2", "hi: 6 9 11", "중앙값 5"], caption: "11은 hi로 넘어가고 개수가 같아진다. (4 + 6) / 2 = 5." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6], memory: ["lo: 4 4 2 1", "hi: 6 9 11", "중앙값 4"], caption: "1을 넣으면 lo의 4가 hi로 갔다가 돌아온다. lo가 하나 많아 맨 위 4가 중앙값이다." },
+  ]}
+/>
+
+시간은 넣기 한 번에 힙 연산이 최대 다섯 번(넣기 셋, 꺼내기 둘)이라 O(log n)이고, 묻기는 맨 위 둘만 보니 O(1)이다. 공간은 O(n)이다. 20만 개를 넣으며 매번 물어 253ms였다.
+
+### 왜 이 순서로 하면 규칙이 지켜지나
+
+1단계 직전에는 두 규칙이 모두 지켜지고 있다고 하자. 새 값 x를 `lo`에 넣으면 순서 규칙이 깨질 수 있다. x가 `hi`의 어떤 값보다 클 수 있기 때문이다. 2단계에서 `lo`의 가장 큰 값을 `hi`로 옮긴다. 그 값은 원래 `lo`의 맨 위이거나 x이고, 어느 쪽이든 남은 `lo`의 모든 값보다 크거나 같다. 원래 `lo` 맨 위가 넘어갔다면 그 값은 원래부터 `hi`의 모든 값보다 작거나 같았으니 `hi`의 새 맨 위가 될 뿐이다. 그래서 2단계 뒤에는 순서 규칙이 다시 성립한다.
+
+개수는 2단계에서 `hi`가 하나 늘었다. 원래 `lo`가 `hi`와 같았다면 이제 `hi`가 하나 많으니 3단계에서 `hi`의 가장 작은 값을 `lo`로 돌린다. 이 값은 `hi`에서 가장 작으니 `lo`로 가도 순서 규칙이 깨지지 않는다. 원래 `lo`가 하나 많았다면 2단계 뒤에 개수가 같아져 3단계는 하지 않는다.
+
+이 방식은 값과 맨 위를 비교하는 분기가 없어서 실수할 곳이 적다. 대가로 힙 연산을 한두 번 더 한다. 비교로 넣을 쪽을 고르는 방식은 연산이 적지만 "빈 힙의 맨 위와 비교" 같은 경계를 따로 챙겨야 한다. 어느 쪽을 써도 시간 복잡도는 같다.
+
+## 값의 범위가 0부터 100까지라면
+
+첫 번째 꼬리 질문이다. 값이 101가지뿐이면 값을 칸 번호로 쓰는 개수 배열 하나로 충분하다. 넣기는 그 칸을 1 늘리는 O(1)이다. 중앙값은 작은 칸부터 개수를 누적해서, 누적이 가운데 순번을 넘는 칸을 찾는다. 칸이 101개라 묻기도 상수 시간이다.
+
+```js
+class MedianFinder {
+  constructor() { this.cnt = new Array(101).fill(0); this.n = 0; }
+  addNum(x) { this.cnt[x]++; this.n++; }
+  kth(k) {                                   // 0부터 센 k번째로 작은 값
+    let s = 0;
+    for (let v = 0; v <= 100; v++) {
+      s += this.cnt[v];
+      if (s > k) return v;                   // 누적이 k를 넘는 첫 칸
+    }
+  }
+  findMedian() {
+    const n = this.n;
+    return n % 2 ? this.kth(n >> 1) : (this.kth(n / 2 - 1) + this.kth(n / 2)) / 2;
+  }
+}
+```
+
+그림으로 보면 쉽다. 칸이 101개면 그림에 다 안 들어가니, 값이 0부터 9까지인 작은 경우로 줄였다. 3, 7, 3, 9, 1, 3을 넣었다. 개수가 6이라 0부터 센 2번째와 3번째 값의 평균이 중앙값이다.
+
+<AlgoTrace
+  caption="값:개수 칸을 작은 쪽부터 누적한다 (6개, 순번 2와 3을 찾는다)"
+  memoryLabel="누적 개수"
+  cells={["0:0", "1:1", "2:0", "3:3", "4:0", "5:0", "6:0", "7:1", "8:0", "9:1"]}
+  steps={[
+    { memory: [], caption: "3이 세 번, 1·7·9가 한 번씩 들어왔다. 각자 자기 값의 칸에 개수가 쌓인다." },
+    { pointer: 0, memory: ["누적 0"], caption: "0번 칸은 비었다. 누적은 0이다." },
+    { pointer: 1, memory: ["누적 1"], caption: "1번 칸에서 누적이 1이 된다. 순번 0은 1이다." },
+    { pointer: 2, memory: ["누적 1"], caption: "2번 칸은 비어 있어 누적이 그대로다." },
+    { pointer: 3, found: [3], memory: ["누적 4", "순번 2와 3은 모두 3"], caption: "3번 칸에서 누적이 4가 되어 순번 1부터 3까지 덮는다. 중앙값은 (3 + 3) / 2 = 3이다." },
+  ]}
+/>
+
+모든 값이 0 이상 100 이하인 20만 개를 넣으며 매번 물으니 26ms였다. 같은 입력에서 두 힙은 160ms였다. 묻기마다 101칸을 훑지만, 힙의 비교와 자리 바꾸기보다 싸다. 묻기가 정말 많으면 누적 위치를 따로 기억해 두고 넣을 때마다 조금씩 옮기는 방법도 있지만, 101칸이면 굳이 그럴 필요가 없다.
+
+## 값의 99%만 범위 안이라면
+
+두 번째 꼬리 질문은 조금 더 생각해야 한다. 값의 99%는 0 이상 100 이하이고, 1%만 범위 밖이다. 범위 안의 값은 위처럼 개수 칸에 넣고, 범위 밖의 값은 "0보다 작은 것"과 "100보다 큰 것" 두 목록에 따로 모은다.
+
+여기서 중요한 사실이 하나 있다. 범위 밖이 1%뿐이면 중앙값은 거의 확실히 범위 안에 있다. 중앙값은 정렬했을 때 50% 자리인데, 범위 아래에 깔린 값이 많아야 1%라 50% 자리는 범위 안으로 들어온다. 그래서 범위 밖 목록은 개수만 쓰이고, 그 안의 순서는 실제로 필요할 일이 거의 없다.
+
+```js
+class MedianFinder {
+  constructor() { this.cnt = new Array(101).fill(0); this.inRange = 0; this.below = []; this.above = []; }
+  addNum(x) {
+    if (x < 0) this.below.push(x);
+    else if (x > 100) this.above.push(x);
+    else { this.cnt[x]++; this.inRange++; }
+  }
+  kth(k) {                                   // 0부터 센 k번째로 작은 값
+    if (k < this.below.length) return [...this.below].sort((a, b) => a - b)[k]; // 드물게만 온다
+    k -= this.below.length;
+    if (k < this.inRange) {
+      for (let v = 0; v <= 100; v++) {
+        k -= this.cnt[v];
+        if (k < 0) return v;
+      }
+    }
+    k -= this.inRange;
+    return [...this.above].sort((a, b) => a - b)[k];
+  }
+  findMedian() {
+    const n = this.below.length + this.inRange + this.above.length;
+    return n % 2 ? this.kth(n >> 1) : (this.kth(n / 2 - 1) + this.kth(n / 2)) / 2;
+  }
+}
+```
+
+`[50, 2, 7, -3, 100, 4000, 9]`을 넣으면 -3이 아래 목록에, 4000이 위 목록에 가고 나머지가 칸에 들어간다. 순번 3은 아래 목록의 하나를 빼고 칸에서 2번째(0부터)를 찾는 것이라 2, 7, 9 순서로 세어 9가 나온다. 정렬하면 -3 2 7 9 50 100 4000이라 맞다. 두 힙 풀이와 무작위 입력 500묶음으로 대조해 답이 모두 같았다.
+
+범위 밖 목록을 정렬하는 줄은 "1%"라는 약속이 깨질 때를 대비한 안전망이다. 처음 몇 개가 모두 범위 밖이면 중앙값이 목록 안에 있을 수 있어서다. 그런 경우가 잦다면 목록 대신 두 힙을 써서 범위 밖도 O(log n)에 다룬다.
+
+## 다섯 풀이를 재 보고 고른다
+
+| 풀이 | addNum | findMedian | 공간 | 언제 고르나 |
+|---|---|---|---|---|
+| 물을 때마다 정렬 | O(1) | O(n log n) | O(n) | 묻기가 끝에 한두 번뿐일 때 |
+| 정렬된 배열에 끼워 넣기 | O(n) | O(1) | O(n) | n이 수만 이하이고 코드가 짧아야 할 때 |
+| 두 힙 | O(log n) | O(1) | O(n) | 범위가 없는 일반적인 답. 면접의 기본 |
+| 개수 바구니 | O(1) | O(R) | O(R) | 값이 좁은 범위 R의 정수일 때 |
+| 바구니 + 범위 밖 목록 | O(1) | 보통 O(R) | O(R + 범위 밖 개수) | 대부분이 좁은 범위에 몰려 있을 때 |
+
+실제 측정은 넣을 때마다 물은 시간이다. 정렬은 2만 5천 개에서 81초, 끼워 넣기와 두 힙은 2만 5천 개에서 22ms대로 비슷했다. 20만 개로 늘리면 끼워 넣기가 1526ms, 두 힙이 253ms로 갈렸다. 값이 0 이상 100 이하일 때 개수 바구니는 20만 개에 26ms였다.
+
+## Python과 Java로 옮기기
+
+두 힙 풀이를 옮긴다.
+
+```python
+import heapq
+
+class MedianFinder:
+    def __init__(self):
+        self.lo = []   # 작은 절반. 값에 -를 붙여 최대 힙처럼 쓴다
+        self.hi = []   # 큰 절반. 최소 힙
+
+    def addNum(self, num: int) -> None:
+        heapq.heappush(self.lo, -num)
+        heapq.heappush(self.hi, -heapq.heappop(self.lo))   # 작은 쪽의 가장 큰 값을 큰 쪽으로
+        if len(self.hi) > len(self.lo):
+            heapq.heappush(self.lo, -heapq.heappop(self.hi))  # 개수를 맞춘다
+
+    def findMedian(self) -> float:
+        if len(self.lo) > len(self.hi):
+            return float(-self.lo[0])
+        return (-self.lo[0] + self.hi[0]) / 2
+
+mf = MedianFinder()
+out = []
+for x in [6, 2, 9, 4, 4, 11, 1]:
+    mf.addNum(x)
+    out.append(mf.findMedian())
+print(out)
+mf2 = MedianFinder()
+for x in [-100000, -99999]:
+    mf2.addNum(x)
+print(mf2.findMedian())
+```
+
+```text
+[6.0, 4.0, 6.0, 5.0, 4.0, 5.0, 4.0]
+-99999.5
+```
+
+`heapq`는 최소 힙만 있어서 `lo`에는 `-num`을 넣고, 꺼낼 때와 맨 위를 읽을 때 다시 `-`를 붙인다. 이 부호를 한 군데라도 빼먹으면 `hi`에 음수가 섞여 순서 규칙이 조용히 깨진다. 넣는 줄과 꺼내는 줄을 짝으로 확인한다. 두 번째 입력처럼 음수끼리의 평균도 `/`가 실수 나눗셈이라 -99999.5가 정확히 나온다. `//`를 쓰면 -100000이 나와 틀린다.
+
+```java
+import java.util.*;
+
+class MedianFinder {
+    private final PriorityQueue<Integer> lo = new PriorityQueue<>(Collections.reverseOrder()); // 작은 절반, 최대 힙
+    private final PriorityQueue<Integer> hi = new PriorityQueue<>();                            // 큰 절반, 최소 힙
+
+    public void addNum(int num) {
+        lo.offer(num);
+        hi.offer(lo.poll());                       // 작은 쪽의 가장 큰 값을 큰 쪽으로
+        if (hi.size() > lo.size()) lo.offer(hi.poll());
+    }
+
+    public double findMedian() {
+        if (lo.size() > hi.size()) return lo.peek();
+        return (lo.peek() + (long) hi.peek()) / 2.0; // long으로 더하고 2.0으로 나눈다
+    }
+}
+```
+
+```text
+6.0 4.0 6.0 5.0 4.0 5.0 4.0
+```
+
+`main`에서 Python과 같은 일곱 값을 넣으며 물은 결과다.
+
+Java에는 함정이 두 개 있다. 첫째는 정수 나눗셈이다. `(lo.peek() + hi.peek()) / 2`는 `Integer`가 `int`로 풀려 정수끼리 나누므로 3과 4의 평균이 3이 된다. `2.0`으로 나눠야 3.5다. 둘째는 덧셈 오버플로다. 이 문제는 값이 10^5 이하라 괜찮지만, 값이 `int` 끝까지 올 수 있다면 두 값을 더하는 순간 넘친다. 실제로 `Integer.MAX_VALUE`와 그보다 1 작은 값을 `int`로 더해 2.0으로 나누니 -1.5가 나왔다. 한쪽을 `long`으로 바꿔 더하면 2147483646.5가 나온다.
+
+```text
+3 3.5
+-1.5 2.1474836465E9
+```
+
+## 틀리기 쉬운 자리
+
+### 개수만 맞추고 순서를 맞추지 않는다
+
+개수가 같으면 `lo`에, 아니면 `hi`에 넣는 식으로 번갈아 넣기만 하면 그럴듯해 보인다. 하지만 6, 2, 9를 넣으면 이렇게 된다.
+
+```text
+6 → lo   중앙값 6
+2 → hi   중앙값 (6 + 2) / 2 = 4
+9 → lo   중앙값 9   (정답은 6)
+```
+
+2가 큰 절반에 들어가 버려 순서 규칙이 깨졌다. `lo` 맨 위가 9가 되어 틀린 값이 나온다. 두 번째 줄의 4는 우연히 맞았을 뿐이다. 개수 규칙과 순서 규칙을 모두 챙겨야 하고, 2단계의 "lo 맨 위를 hi로 넘기기"가 순서 규칙을 맡는다.
+
+### 짝수일 때 어느 쪽 맨 위를 쓸지 헷갈린다
+
+개수 규칙을 "`lo`가 같거나 하나 많다"로 정했으면 홀수일 때 `lo` 맨 위가 중앙값이다. 반대로 "`hi`가 같거나 하나 많다"로 정했으면 `hi` 맨 위다. 규칙과 읽는 쪽을 따로 정하면 홀수일 때 엉뚱한 값을 읽는다. 하나를 정했으면 `addNum`과 `findMedian`이 같은 쪽을 보게 한다.
+
+### 정렬 비교 함수를 빼먹는다
+
+물을 때마다 정렬하는 풀이에서 `sort()`만 쓰면 문자열 순서로 정렬되어 -1이 -10보다, 10이 9보다 앞에 온다. 음수와 두 자리 수가 섞인 입력에서 중앙값이 틀린다. 숫자는 항상 `(x, y) => x - y`로 정렬한다.
+
+## 직접 풀어 보기
+
+LeetCode처럼 연산 이름 목록과 인자 목록을 받아 결과 배열을 돌려주는 함수다. `MedianFinder` 클래스만 채우면 된다. 풀이 보기는 두 힙이다.
+
+<CodePlayground
+  caption="Find Median from Data Stream"
+  functionName="medianFinder"
+  initialCode={`class MedianFinder {
+  constructor() {}
+  addNum(num) {}
+  findMedian() {
+    return 0;
+  }
+}
+
+function medianFinder(ops, args) {
+  let mf;
+  const out = [];
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "MedianFinder") { mf = new MedianFinder(); out.push(null); }
+    else if (ops[i] === "addNum") { mf.addNum(args[i][0]); out.push(null); }
+    else out.push(mf.findMedian());
+  }
+  return out;
+}`}
+  solution={`class Heap {
+  constructor(less) { this.a = []; this.less = less; }
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(x) {
+    const a = this.a;
+    a.push(x);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!this.less(a[i], a[p])) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+class MedianFinder {
+  constructor() {
+    this.lo = new Heap((x, y) => x > y);
+    this.hi = new Heap((x, y) => x < y);
+  }
+  addNum(num) {
+    this.lo.push(num);
+    this.hi.push(this.lo.pop());
+    if (this.hi.size > this.lo.size) this.lo.push(this.hi.pop());
+  }
+  findMedian() {
+    if (this.lo.size > this.hi.size) return this.lo.peek();
+    return (this.lo.peek() + this.hi.peek()) / 2;
+  }
+}
+
+function medianFinder(ops, args) {
+  let mf;
+  const out = [];
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i] === "MedianFinder") { mf = new MedianFinder(); out.push(null); }
+    else if (ops[i] === "addNum") { mf.addNum(args[i][0]); out.push(null); }
+    else out.push(mf.findMedian());
+  }
+  return out;
+}`}
+  tests={[
+    { args: [["MedianFinder", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian"], [[], [6], [], [2], [], [9], [], [4], [], [4], [], [11], [], [1], []]], expected: [null, null, 6, null, 4, null, 6, null, 5, null, 4, null, 5, null, 4], label: "기본 예시" },
+    { args: [["MedianFinder", "addNum", "findMedian"], [[], [7], []]], expected: [null, null, 7], label: "값 하나" },
+    { args: [["MedianFinder", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian"], [[], [-5], [], [-1], [], [-3], [], [-2], []]], expected: [null, null, -5, null, -3, null, -3, null, -2.5], label: "음수만" },
+    { args: [["MedianFinder", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian"], [[], [3], [], [3], [], [3], [], [3], []]], expected: [null, null, 3, null, 3, null, 3, null, 3], label: "같은 값만" },
+    { args: [["MedianFinder", "addNum", "findMedian", "addNum", "findMedian"], [[], [100000], [], [-100000], []]], expected: [null, null, 100000, null, 0], label: "양 끝 값" },
+    { args: [["MedianFinder", "addNum", "addNum", "addNum", "addNum", "addNum", "addNum", "addNum", "addNum", "addNum", "addNum", "findMedian"], [[], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], []]], expected: [null, null, null, null, null, null, null, null, null, null, null, 5.5], label: "끝에 한 번만 묻기" },
+    { args: [["MedianFinder", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian", "addNum", "findMedian"], [[], [10], [], [9], [], [8], [], [7], [], [6], [], [5], []]], expected: [null, null, 10, null, 9.5, null, 9, null, 8.5, null, 8, null, 7.5], label: "줄어드는 값" },
+  ]}
+/>
+
+## 면접관이 조건을 바꾸면
+
+### 최근 k개의 중앙값만 필요하다면
+
+창이 밀리면서 오래된 값이 빠져야 한다. 힙은 맨 위가 아닌 값을 빼기 어렵다. 빠질 값을 해시맵에 "지울 예정"으로 적어 두고, 그 값이 맨 위로 올라왔을 때 버리는 지연 삭제를 쓴다. 두 힙의 개수도 "실제로 살아 있는 개수"로 따로 센다. 이 변형이 [Sliding Window Median](/posts/leetcode-sliding-window-median)이다. 정렬된 배열에 끼워 넣고 빼는 O(k) 방식도 k가 작으면 충분하다.
+
+### 중앙값이 아니라 p90이나 p99라면
+
+두 힙의 크기 비율을 1:1이 아니라 9:1이나 99:1로 유지하면 된다. `lo`에 90%를 담으면 `lo` 맨 위가 p90이다. 다만 서비스 모니터링처럼 값이 끝없이 들어오면 모든 값을 들고 있을 수 없다. 그래서 Prometheus의 히스토그램은 값을 정해진 구간 바구니로 세고, t-digest 같은 구조는 오차를 조금 허용하고 메모리를 크게 줄인다. 위의 개수 바구니 풀이를 구간 단위로 넓힌 셈이다.
+
+### 정렬된 배열 두 개의 중앙값이라면
+
+스트림이 아니라 이미 정렬된 배열 두 개가 주어진다. 합치지 않고 양쪽을 나누는 위치를 이분 탐색해 O(log(min(m, n)))에 구한다. "작은 절반과 큰 절반으로 나눈다"는 생각은 같다. [Median of Two Sorted Arrays](/posts/leetcode-median-of-two-sorted-arrays)에서 본다.
+
+### 한 번에 중앙값 하나만 구하면 된다면
+
+값이 다 주어지고 한 번만 물으면 스트림 구조가 필요 없다. 퀵셀렉트로 평균 O(n)에 가운데 순번의 값을 찾는다. [Kth Largest Element in an Array](/posts/leetcode-kth-largest-element-in-an-array)의 풀이에서 k를 n/2로 둔 것과 같다.
+
+### 값을 지우는 연산도 있다면
+
+임의의 값을 지워야 하면 두 힙은 지연 삭제로 버티거나, 순서를 유지하는 균형 이진 탐색 트리로 바꾼다. Java라면 값과 개수를 담은 `TreeMap` 두 개로 같은 두 무리를 만들 수 있다. 넣기, 지우기, 맨 끝 보기가 모두 O(log n)이다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 힙을 두 개 쓰나요?
+
+중앙값을 구하는 데 필요한 건 작은 절반의 가장 큰 값과 큰 절반의 가장 작은 값뿐이기 때문이다. 작은 절반을 최대 힙에, 큰 절반을 최소 힙에 담으면 두 값이 각각 맨 위에 있어 O(1)에 읽는다. 나머지 값들의 순서는 정할 필요가 없어서 넣기도 O(log n)에 끝난다.
+
+### 두 힙이 지켜야 하는 규칙은 무엇인가요?
+
+두 가지다. 작은 쪽의 모든 값이 큰 쪽의 모든 값보다 작거나 같아야 하고, 작은 쪽의 개수가 큰 쪽과 같거나 하나 많아야 한다. 첫 번째는 넣은 값을 작은 쪽에 넣었다가 그 맨 위를 큰 쪽으로 넘겨서 지키고, 두 번째는 큰 쪽이 많아지면 맨 위를 되돌려서 지킨다. 개수만 맞추고 순서를 놓치면 6, 2, 9에서 9가 중앙값으로 나온다.
+
+### 정렬된 배열에 이분 탐색으로 넣으면 안 되나요?
+
+자리 찾기는 O(log n)이지만 끼워 넣을 때 뒤의 값을 밀어야 해서 넣기가 O(n)이다. 실제로 2만 5천 개에서는 두 힙과 비슷했지만 20만 개에서는 6배 느렸다. 메모리 복사가 빨라서 작은 n에서는 쓸 만하다는 점과, n이 커지면 O(n²)이 드러난다는 점을 함께 말한다.
+
+### 모든 값이 0부터 100 사이라면 어떻게 바꾸나요?
+
+길이 101인 개수 배열로 바꾼다. 넣기는 칸 하나를 늘리는 O(1)이고, 중앙값은 작은 칸부터 누적해 가운데 순번을 넘는 칸을 찾아 O(101)이다. 20만 개에서 두 힙보다 6배쯤 빨랐다.
+
+### 값의 99%만 0부터 100 사이라면요?
+
+범위 안은 개수 배열에 세고, 범위 밖은 작은 쪽과 큰 쪽 목록에 따로 모은다. 범위 밖이 1%뿐이면 50% 자리인 중앙값은 거의 항상 범위 안에 있어서, 범위 밖 목록은 개수만 쓰이고 정렬할 일이 거의 없다. 이 가정이 깨지는 경우를 위해 범위 밖도 힙으로 관리해 둘 수 있다.
+
+### Java로 짤 때 조심할 점은요?
+
+평균을 구할 때 `2`가 아니라 `2.0`으로 나눠야 한다. 정수끼리 나누면 3과 4의 평균이 3이 된다. 값이 `int` 끝까지 올 수 있다면 두 값을 `long`으로 더해야 넘치지 않는다. `Integer.MAX_VALUE`끼리 `int`로 더하면 평균이 음수로 나온다.
+
+### 최근 k개의 중앙값으로 바꾸면 무엇이 어려워지나요?
+
+창에서 빠지는 값을 힙에서 지워야 하는데, 힙은 맨 위가 아닌 값을 빨리 지우지 못한다. 그래서 지울 값을 해시맵에 적어 두었다가 맨 위로 올라왔을 때 버리는 지연 삭제를 쓰고, 살아 있는 개수를 따로 세서 균형을 맞춘다. 정렬된 자료구조로 바꾸면 지우기도 O(log k)에 된다.

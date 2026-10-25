@@ -1,0 +1,517 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-construct-tree-from-preorder-inorder");
+
+<EasyIntro>
+  가족사진을 두 번 찍었다고 해 보자. 첫 번째 사진은 "어른이 먼저, 그다음 왼쪽 집안, 그다음 오른쪽 집안" 순서로 줄을 세웠다. 두 번째 사진은 "왼쪽 집안, 어른, 오른쪽 집안" 순서로 줄을 세웠다. 두 사진만 보고 원래 족보를 다시 그리는 게 이 문제다. 첫 번째 사진의 맨 앞 사람은 늘 가장 높은 어른이다. 두 번째 사진에서 그 어른을 찾으면, 그 왼쪽에 선 사람들은 왼쪽 집안이고 오른쪽에 선 사람들은 오른쪽 집안이다. 왼쪽 집안이 몇 명인지 알았으니 첫 번째 사진도 똑같이 나눌 수 있다. 나눈 집안마다 같은 일을 되풀이하면 족보가 전부 다시 그려진다. 두 번째 사진에서 사람을 빨리 찾도록 이름표 위치를 미리 적어 두면 아주 빨라진다.
+</EasyIntro>
+
+트리를 파일이나 네트워크로 보낼 때 노드를 어떤 순서로 줄 세워 보낼지 정해야 한다. 순서 하나만 보내면 모양이 하나로 정해지지 않을 때가 있다. 전위 순서 `[1, 2]`만 받으면 2가 1의 왼쪽 자식인지 오른쪽 자식인지 알 수 없다. 그런데 순서 두 개를 함께 보내면, 값이 모두 다르다는 조건에서 트리가 딱 하나로 정해진다.
+
+[LeetCode 105. Construct Binary Tree from Preorder and Inorder Traversal](https://leetcode.com/problems/construct-binary-tree-from-preorder-and-inorder-traversal/)이 그 복원을 묻는다. 분할 정복(문제를 같은 모양의 작은 문제로 나눠 푸는 방법)을 트리에서 연습하기 좋은 문제이고, 면접에서는 "왜 O(n²)이 되나", "해시맵 없이 할 수 있나", "후위 순서와 중위 순서라면?", "전위와 후위만으로는 왜 안 되나"가 이어진다. 이 글은 배열을 잘라 넘기는 가장 직관적인 풀이부터 스택 하나로 끝내는 풀이까지 다섯 가지를 본다.
+
+네 가지 순회의 정의는 [이진 트리와 BST 글](/posts/ds-binary-tree-bst)에서, 층 순서 배열로 트리를 저장하고 되살리는 방법은 [Serialize and Deserialize Binary Tree 글](/posts/leetcode-serialize-and-deserialize-binary-tree)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 두 줄 세우기로 트리 하나를 되살린다
+
+이진 트리 하나를 전위 순회(preorder: 나 → 왼쪽 가지 → 오른쪽 가지)한 값 배열과 중위 순회(inorder: 왼쪽 가지 → 나 → 오른쪽 가지)한 값 배열이 주어진다. 이 둘로 원래 트리를 만들어 뿌리를 돌려준다.
+
+제약에서 볼 것은 세 가지다. 노드 수는 1개에서 3,000개다. 값은 모두 서로 다르다. 두 배열은 같은 트리에서 나온 올바른 순회 결과다. 값이 모두 다르다는 조건이 있어야 중위 배열에서 뿌리 위치를 하나로 찾을 수 있다. 3,000개면 O(n²)도 900만 번 연산이라 통과는 하지만, 일자 트리에서는 배열 복사까지 겹쳐 느려진다.
+
+이 글에서 쓸 예시다.
+
+```text
+preorder = [1, 2, 4, 5, 3, 6]
+inorder  = [4, 2, 5, 1, 3, 6]
+
+만들어야 할 트리 (층 순서로 [1, 2, 3, 4, 5, null, 6])
+
+        1
+      /   \
+     2     3
+    / \     \
+   4   5     6
+```
+
+손으로 풀어 보자. 전위 순서는 늘 자기 자신부터 적으니 맨 앞의 1이 뿌리다. 중위 배열에서 1을 찾으면 3번 자리다. 중위 순서는 왼쪽 가지를 다 적은 다음 자기를 적으니, 1의 왼쪽에 있는 `[4, 2, 5]`가 왼쪽 가지, 오른쪽에 있는 `[3, 6]`이 오른쪽 가지다. 왼쪽 가지가 3개라는 걸 알았으니 전위 배열도 뿌리 다음 3개 `[2, 4, 5]`가 왼쪽 가지, 나머지 `[3, 6]`이 오른쪽 가지다.
+
+<ConceptDiagram
+  caption="전위 맨 앞이 뿌리, 중위에서 뿌리 위치가 왼쪽 가지 크기를 알려 준다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "pr", label: "1", sub: "전위 맨 앞", x: 60, y: 45, w: 90 },
+    { id: "pl", label: "2 4 5", sub: "전위 왼쪽 3개", x: 200, y: 45, w: 110 },
+    { id: "pp", label: "3 6", sub: "전위 나머지", x: 335, y: 45, w: 90 },
+    { id: "il", label: "4 2 5", sub: "중위 왼쪽 3개", x: 70, y: 205, w: 110 },
+    { id: "ir", label: "1", sub: "중위 3번 자리", x: 200, y: 205, w: 100 },
+    { id: "ip", label: "3 6", sub: "중위 오른쪽", x: 335, y: 205, w: 90 },
+  ]}
+  edges={[
+    { from: "pr", to: "ir", label: "위치 찾기" },
+    { from: "il", to: "pl", label: "개수 3" },
+    { from: "ip", to: "pp", label: "같은 가지", dashed: true },
+  ]}
+/>
+
+이제 왼쪽 가지는 전위 `[2, 4, 5]`, 중위 `[4, 2, 5]`라는 더 작은 같은 문제가 되고, 오른쪽 가지는 전위 `[3, 6]`, 중위 `[3, 6]`이 된다. 같은 일을 반복하면 왼쪽 가지의 뿌리는 2, 그 왼쪽은 4, 오른쪽은 5다. 오른쪽 가지의 뿌리는 3이고 중위에서 3의 왼쪽이 비어 있으니 6은 오른쪽 자식이다. 이 손 계산이 모든 풀이의 뼈대다. 풀이마다 달라지는 건 "중위에서 뿌리를 어떻게 찾나"와 "가지를 어떻게 넘기나"다.
+
+## 배열을 잘라서 넘긴다
+
+손 계산을 그대로 옮기면 배열을 잘라 재귀에 넘기는 코드가 된다.
+
+```js
+function buildTree(preorder, inorder) {
+  if (preorder.length === 0) return null;
+  const rootVal = preorder[0]; // 전위 맨 앞이 뿌리
+  const mid = inorder.indexOf(rootVal); // 중위에서 뿌리 위치 = 왼쪽 가지 크기
+  return {
+    val: rootVal,
+    left: buildTree(preorder.slice(1, mid + 1), inorder.slice(0, mid)),
+    right: buildTree(preorder.slice(mid + 1), inorder.slice(mid + 1)),
+  };
+}
+```
+
+`mid`는 중위 배열에서 뿌리의 위치이자 왼쪽 가지의 노드 수다. 그래서 전위 배열의 왼쪽 가지는 1번부터 `mid`개, 즉 `slice(1, mid + 1)`이다. 이 인덱스 계산이 이 풀이에서 가장 틀리기 쉬운 곳이다.
+
+예시에서 `[1, 2, 3, 4, 5, null, 6]`이 나온다. 코드는 읽기 쉽지만 비용이 크다. 호출마다 `indexOf`가 O(k), `slice` 네 번이 O(k)다(k는 그 가지의 크기). 균형 잡힌 트리면 층마다 합이 O(n)이고 층이 log n개라 O(n log n)이다. 한쪽으로 늘어선 트리면 가지 크기가 n, n-1, n-2, …로 줄어서 O(n²)이다. 공간도 잘라 낸 배열이 재귀 깊이마다 살아 있어서 최악 O(n²)이다.
+
+노드 3,000개짜리 왼쪽 일자 트리(전위 `[1, 2, …, 3000]`, 중위 `[3000, …, 2, 1]`)로 재 보니 약 99ms가 걸렸다. 다음 풀이들은 같은 입력에서 1ms 안팎이었다. 배열 복사부터 없앤다.
+
+## 자르지 않고 경계 인덱스만 넘긴다
+
+배열을 자르는 대신, 지금 다루는 가지가 원래 배열의 어디서 어디까지인지 인덱스로 넘긴다. 전위 배열에서는 가지의 시작 위치 `preL`만 알면 된다. 그 자리가 가지의 뿌리다. 중위 배열에서는 가지의 범위 `[inL, inR]`을 넘긴다.
+
+```js
+function buildTree(preorder, inorder) {
+  function build(preL, inL, inR) {
+    if (inL > inR) return null; // 빈 가지
+    const rootVal = preorder[preL];
+    let mid = inL;
+    while (inorder[mid] !== rootVal) mid++; // 범위 안에서 뿌리를 찾는다
+    const leftSize = mid - inL;
+    return {
+      val: rootVal,
+      left: build(preL + 1, inL, mid - 1),
+      right: build(preL + 1 + leftSize, mid + 1, inR), // 왼쪽 가지 크기만큼 건너뛴다
+    };
+  }
+  return build(0, 0, inorder.length - 1);
+}
+```
+
+이제 복사가 없어 공간은 호출 스택 O(h)다. 그래도 뿌리 찾기는 여전히 범위를 처음부터 훑는다. 왼쪽 일자 트리에서는 뿌리가 늘 범위의 맨 끝에 있어서 매번 끝까지 훑으니 O(n²)이 그대로다. 같은 3,000개 입력에서 약 8ms였다. 복사를 없앤 것만으로 열 배 이상 빨라졌지만 차수는 그대로다.
+
+남은 낭비는 선형 탐색이다. 값이 모두 다르니 값마다 중위 위치를 미리 표로 만들어 두면 O(1)에 찾는다.
+
+## 중위 위치를 표로 만들어 둔다
+
+중위 배열을 한 번 훑어 `값 → 위치` 해시맵을 만든다. 그리고 전위 배열은 앞에서부터 하나씩 꺼내 쓴다. 전위 순서가 "나 → 왼쪽 가지 → 오른쪽 가지"이니, 재귀도 "나를 만들고 → 왼쪽을 만들고 → 오른쪽을 만들면" 꺼내는 순서가 전위 배열과 정확히 맞는다. 그래서 `preL`을 계산할 필요 없이 전역 포인터 하나로 충분하다.
+
+```js
+function buildTree(preorder, inorder) {
+  const pos = new Map(); // 값 → 중위 위치
+  inorder.forEach((v, i) => pos.set(v, i));
+  let pre = 0; // 다음에 꺼낼 전위 위치
+
+  function build(inL, inR) {
+    if (inL > inR) return null; // 이 범위에는 노드가 없다
+    const root = { val: preorder[pre++], left: null, right: null };
+    const mid = pos.get(root.val); // O(1)
+    root.left = build(inL, mid - 1); // 반드시 왼쪽을 먼저
+    root.right = build(mid + 1, inR);
+    return root;
+  }
+  return build(0, inorder.length - 1);
+}
+```
+
+아래 그림은 예시에서 이 함수가 도는 모습이다. 칸은 중위 배열이고, 가리키는 칸은 방금 만든 뿌리의 중위 위치다. 기억 칸은 호출 스택이고 각 칸의 대괄호는 그 호출이 맡은 중위 범위다. 초록 칸은 만들어진 노드다.
+
+<AlgoTrace
+  caption="해시맵 분할 정복: 전위에서 하나 꺼내고, 중위 위치로 범위를 둘로 나눈다"
+  memoryLabel="호출 스택 (왼쪽이 바닥)"
+  cells={["4", "2", "5", "1", "3", "6"]}
+  steps={[
+    { pointer: 3, found: [3], memory: ["1 [0..5]"], caption: "전위에서 1을 꺼낸다. 중위 위치 3. 왼쪽 범위 [0..2], 오른쪽 범위 [4..5]로 나뉜다." },
+    { pointer: 1, found: [1, 3], memory: ["1 [0..5]", "2 [0..2]"], caption: "왼쪽부터. 전위 다음 값 2를 꺼낸다. 중위 위치 1이라 [0..0]과 [2..2]로 나뉜다." },
+    { pointer: 0, found: [0, 1, 3], memory: ["1 [0..5]", "2 [0..2]", "4 [0..0]"], caption: "다음 값 4. 위치 0이라 양쪽 범위가 비어 잎이 된다." },
+    { pointer: 2, found: [0, 1, 2, 3], memory: ["1 [0..5]", "2 [0..2]", "5 [2..2]"], caption: "2의 오른쪽 [2..2]에서 다음 값 5를 꺼낸다. 역시 잎이다. 2의 가지가 완성된다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["1 [0..5]", "3 [4..5]"], caption: "1의 오른쪽 [4..5]에서 다음 값 3을 꺼낸다. 위치 4라 왼쪽 [4..3]은 비어 있다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["1 [0..5]", "3 [4..5]", "6 [5..5]"], caption: "3의 오른쪽 [5..5]에서 6을 꺼낸다. 잎이다." },
+    { pointer: 3, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "모든 호출이 돌아왔다. 결과는 [1, 2, 3, 4, 5, null, 6]이다." },
+  ]}
+/>
+
+전위 배열에서 꺼낸 순서가 1, 2, 4, 5, 3, 6으로 원래 전위 배열과 같다. 재귀가 전위 순서로 노드를 만들기 때문이다. 왼쪽과 오른쪽 호출 순서를 바꾸면 이 맞물림이 깨진다. 뒤의 실수 모음에서 실제로 터뜨려 본다.
+
+해시맵을 만드는 데 O(n), 노드마다 O(1) 일을 하니 시간 O(n)이다. 공간은 해시맵 O(n)과 호출 스택 O(h)다. 이 풀이가 기본 답이다.
+
+### Python과 Java로 쓰면
+
+Python은 딕셔너리 컴프리헨션으로 위치 표를 만들고, 전위 배열은 `iter()`로 감싸 `next()`로 하나씩 꺼내면 전역 포인터가 필요 없다.
+
+```python
+class Solution:
+    def buildTree(self, preorder: List[int], inorder: List[int]) -> Optional[TreeNode]:
+        pos = {v: i for i, v in enumerate(inorder)}  # 값 → 중위 순서 위치
+        it = iter(preorder)  # 전위 순서를 앞에서부터 하나씩 꺼낸다
+
+        def build(lo, hi):
+            if lo > hi:
+                return None
+            root = TreeNode(next(it))
+            mid = pos[root.val]
+            root.left = build(lo, mid - 1)  # 왼쪽을 먼저 만들어야 전위 순서와 맞는다
+            root.right = build(mid + 1, hi)
+            return root
+
+        return build(0, len(inorder) - 1)
+```
+
+```text
+[1, 2, 3, 4, 5, None, 6]
+```
+
+이 문제는 Python에서 재귀 깊이를 꼭 생각해야 한다. 노드가 3,000개인데 기본 재귀 한도는 1000이다. 왼쪽 일자 트리 3,000개를 넣으니 `RecursionError: maximum recursion depth exceeded`가 났고, `sys.setrecursionlimit(10000)`을 먼저 부르니 통과했다. 한도를 올리기 싫다면 뒤의 스택 풀이를 쓴다.
+
+Java는 전위 포인터와 위치 표를 필드로 둔다. 같은 `Solution` 객체로 여러 번 부를 수 있으니 메서드 시작에서 다시 초기화한다.
+
+```java
+class Solution {
+    private Map<Integer, Integer> pos;
+    private int pre; // 다음에 꺼낼 전위 순서 위치. 호출마다 0으로 되돌린다
+    private int[] preorder;
+
+    public TreeNode buildTree(int[] preorder, int[] inorder) {
+        this.preorder = preorder;
+        this.pre = 0;
+        this.pos = new HashMap<>();
+        for (int i = 0; i < inorder.length; i++) pos.put(inorder[i], i);
+        return build(0, inorder.length - 1);
+    }
+
+    private TreeNode build(int lo, int hi) {
+        if (lo > hi) return null;
+        TreeNode root = new TreeNode(preorder[pre++]);
+        int mid = pos.get(root.val);
+        root.left = build(lo, mid - 1);
+        root.right = build(mid + 1, hi);
+        return root;
+    }
+}
+```
+
+```text
+[1, 2, 3, 4, 5, null, 6]
+```
+
+Java는 이 환경의 기본 스택에서 3,000단계 일자 트리도 통과했다. 값 범위가 -3000에서 3000이라 `HashMap<Integer, Integer>` 대신 크기 6001짜리 `int[]` 배열에 `값 + 3000` 자리로 위치를 적으면 박싱 비용 없이 더 빠르다. 값 범위가 좁을 때만 쓰는 요령이다.
+
+## 해시맵 없이 멈출 값을 넘긴다
+
+해시맵을 쓰지 않고도 O(n)이 된다. 생각을 바꿔서, 중위 범위 대신 "여기까지 오면 멈춰라"라는 값 `stop`을 넘긴다.
+
+중위 순서에서 어떤 노드 X의 왼쪽 가지는 X 바로 앞에서 끝난다. 그러니 X의 왼쪽 가지를 만들 때는 "중위 배열에서 X를 만나면 멈춰라"라고 넘기면 된다. X의 오른쪽 가지는 X의 부모가 정한 멈춤 값을 그대로 물려받는다. 전위 포인터 `p`와 중위 포인터 `i` 두 개만 앞으로 움직인다.
+
+```js
+function buildTree(preorder, inorder) {
+  let p = 0; // 다음에 만들 노드 (전위)
+  let i = 0; // 다음에 끝날 노드 (중위)
+  function build(stop) {
+    if (i < inorder.length && inorder[i] === stop) {
+      i++; // stop 노드의 왼쪽 가지가 여기서 끝났다
+      return null;
+    }
+    if (p === preorder.length) return null;
+    const root = { val: preorder[p++], left: null, right: null };
+    root.left = build(root.val); // 내 왼쪽 가지는 중위에서 나를 만나면 끝난다
+    root.right = build(stop); // 오른쪽 가지는 부모의 멈춤 값을 물려받는다
+    return root;
+  }
+  return build(Infinity); // 뿌리는 멈출 값이 없다
+}
+```
+
+예시에서 4를 만들 때 `build(4)`를 부르면 중위 첫 값이 4라 바로 멈추고 `i`가 1로 간다. 4의 오른쪽은 `build(2)`인데 중위 다음 값이 2라 또 멈춘다. 이렇게 중위 배열을 한 칸씩 소비하며 가지가 닫힌다. 노드마다 한 번 만들고 중위 칸마다 한 번 멈추니 시간 O(n), 추가 공간은 호출 스택 O(h)뿐이다.
+
+예시 전체의 호출을 들여쓰기로 찍어 보면 이렇다. 안쪽으로 들어갈수록 깊은 호출이다.
+
+```text
+build(∞) → 1 생성
+  build(1) → 2 생성
+    build(2) → 4 생성
+      build(4) → 중위 4 = stop, null
+      build(2) → 중위 2 = stop, null
+    build(1) → 5 생성
+      build(5) → 중위 5 = stop, null
+      build(1) → 중위 1 = stop, null
+  build(∞) → 3 생성
+    build(3) → 중위 3 = stop, null
+    build(∞) → 6 생성
+      build(6) → 중위 6 = stop, null
+      build(Infinity) → 전위 끝, null
+```
+
+`null`을 돌려주는 줄의 값을 위에서부터 읽으면 4, 2, 5, 1, 3, 6으로 중위 배열과 같다. 가지가 닫히는 순서가 곧 중위 순서다. 마지막 줄은 중위 배열을 다 쓴 뒤라 전위 배열이 끝났다는 조건으로 멈춘다.
+
+멈춤 값으로 `Infinity`를 쓴 건 중위 배열에 절대 없는 값이 필요해서다. 값이 정수인 문제라 안전하다. 위치 표를 만들지 않아서 메모리는 가장 적지만, 왜 맞는지 설명하는 데 시간이 걸린다. 면접에서는 해시맵 풀이를 먼저 쓰고, "추가 공간을 줄여 보라"는 질문에 이 풀이를 꺼내는 순서가 자연스럽다.
+
+## 스택 하나로 왼쪽 등뼈를 따라간다
+
+재귀를 완전히 없애는 방법이다. 전위 배열을 앞에서부터 읽으면, 새 노드는 대부분 직전 노드의 왼쪽 자식이다. 왼쪽으로 계속 내려가는 동안은 그렇다. 언제 오른쪽으로 꺾는지는 중위 배열이 알려 준다. 스택 꼭대기 노드가 중위 배열의 현재 값과 같으면, 그 노드의 왼쪽 가지는 끝났다는 뜻이다.
+
+```js
+function buildTree(preorder, inorder) {
+  const root = { val: preorder[0], left: null, right: null };
+  const stack = [root]; // 아직 오른쪽 자식을 정하지 못한 노드들
+  let i = 0; // 중위 포인터
+  for (let p = 1; p < preorder.length; p++) {
+    let parent = null;
+    // 꼭대기가 중위 현재 값이면 그 노드의 왼쪽 가지가 끝났다. 끝난 만큼 꺼낸다
+    while (stack.length && stack[stack.length - 1].val === inorder[i]) {
+      parent = stack.pop();
+      i++;
+    }
+    const child = { val: preorder[p], left: null, right: null };
+    if (parent) parent.right = child; // 마지막으로 꺼낸 노드의 오른쪽 자식
+    else stack[stack.length - 1].left = child; // 아니면 꼭대기의 왼쪽 자식
+    stack.push(child);
+  }
+  return root;
+}
+```
+
+예시에서 어떻게 도는지 보자. 칸은 전위 배열이고, 가리키는 칸은 이번에 붙이는 노드다.
+
+<AlgoTrace
+  caption="스택 풀이: 중위 값과 꼭대기가 같아지는 순간 오른쪽으로 꺾는다"
+  memoryLabel="스택 (오른쪽이 꼭대기) · 중위 포인터"
+  cells={["1", "2", "4", "5", "3", "6"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["1", "i → 4"], caption: "뿌리 1을 만들어 스택에 넣는다. 중위 포인터는 첫 값 4를 가리킨다." },
+    { pointer: 1, found: [0, 1], memory: ["1", "2", "i → 4"], caption: "꼭대기 1은 4가 아니다. 2를 1의 왼쪽 자식으로 붙인다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["1", "2", "4", "i → 4"], caption: "꼭대기 2도 4가 아니다. 4를 2의 왼쪽 자식으로 붙인다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["1", "5", "i → 5"], caption: "꼭대기 4가 중위 4와 같다. 4, 2를 꺼내며 중위가 4, 2를 지난다. 5는 마지막에 꺼낸 2의 오른쪽 자식이다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["3", "i → 3"], caption: "꼭대기 5가 중위 5와 같다. 5, 1을 꺼낸다. 3은 1의 오른쪽 자식이다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["6", "i → 6"], caption: "꼭대기 3이 중위 3과 같다. 3을 꺼내고 6을 3의 오른쪽에 붙인다. 완성이다." },
+  ]}
+/>
+
+각 노드는 스택에 한 번 들어가고 한 번 나오니 시간 O(n)이다. 공간은 스택 O(h)다. 재귀가 없어서 Python 재귀 한도나 JavaScript 호출 스택을 신경 쓸 필요가 없다. 3,000개 일자 트리도 약 0.7ms에 끝났다.
+
+Python으로 옮겨도 모양이 같다. 재귀가 없으니 앞에서 `RecursionError`가 났던 3,000개 왼쪽 일자 트리도 한도를 건드리지 않고 만들어졌고, 만든 트리의 높이를 재 보니 3000이었다.
+
+```python
+def build_tree(preorder, inorder):
+    root = TreeNode(preorder[0])
+    stack = [root]
+    i = 0
+    for val in preorder[1:]:
+        parent = None
+        while stack and stack[-1].val == inorder[i]:  # 왼쪽 가지가 끝난 노드를 꺼낸다
+            parent = stack.pop()
+            i += 1
+        child = TreeNode(val)
+        if parent:
+            parent.right = child
+        else:
+            stack[-1].left = child
+        stack.append(child)
+    return root
+```
+
+이 풀이의 단점은 읽기 어렵다는 것이다. "꼭대기가 중위 현재 값과 같으면 왼쪽 가지가 끝났다"는 문장을 납득시키려면 중위 순서의 정의로 한 번 더 돌아가야 한다. 재귀가 정말 문제일 때 꺼내는 카드로 두는 편이 좋다.
+
+## 다섯 가지 복원 방법 견주기
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 배열 잘라 넘기기 | 균형 O(n log n), 최악 O(n²) | 최악 O(n²) | 손 계산을 그대로 보여 줄 때. 실제로는 쓰지 않는다 |
+| 인덱스 + 선형 탐색 | 균형 O(n log n), 최악 O(n²) | O(h) | 해시맵을 쓸 수 없는 아주 작은 입력 |
+| 인덱스 + 해시맵 | O(n) | O(n) 표 + O(h) | 기본 답. 설명하기 쉽고 빠르다 |
+| 멈출 값 넘기기 | O(n) | O(h) | 추가 공간을 더 줄이라고 할 때 |
+| 스택 | O(n) | O(h) | 재귀를 쓸 수 없거나 트리가 아주 깊을 때 |
+
+## 두 순회로 트리 되살려 보기
+
+아래 칸에서 `buildTree`를 채워 보자. 두 배열을 받아 트리를 만들고, `toArray`가 층 순서 배열로 바꿔 결과를 비교한다. 일자 트리, 노드 하나, 음수 값이 들어 있다. 풀이 보기에는 해시맵 풀이가 들어 있다.
+
+<CodePlayground
+  caption="Construct Binary Tree from Preorder and Inorder Traversal"
+  functionName="buildTree"
+  initialCode={`// 트리를 층 순서 배열로 바꾸는 도우미 (그대로 두면 된다)
+function toArray(root) {
+  const out = [], queue = [root];
+  let head = 0;
+  while (head < queue.length) {
+    const node = queue[head++];
+    if (node === null) { out.push(null); continue; }
+    out.push(node.val);
+    queue.push(node.left, node.right);
+  }
+  while (out.length && out[out.length - 1] === null) out.pop();
+  return out;
+}
+
+function buildTree(preorder, inorder) {
+  let root = null;
+  // 노드는 { val, left, right } 모양으로 만든다
+  return toArray(root);
+}`}
+  solution={`function toArray(root) {
+  const out = [], queue = [root];
+  let head = 0;
+  while (head < queue.length) {
+    const node = queue[head++];
+    if (node === null) { out.push(null); continue; }
+    out.push(node.val);
+    queue.push(node.left, node.right);
+  }
+  while (out.length && out[out.length - 1] === null) out.pop();
+  return out;
+}
+
+function buildTree(preorder, inorder) {
+  const pos = new Map();
+  inorder.forEach((v, i) => pos.set(v, i));
+  let pre = 0;
+  function build(inL, inR) {
+    if (inL > inR) return null;
+    const root = { val: preorder[pre++], left: null, right: null };
+    const mid = pos.get(root.val);
+    root.left = build(inL, mid - 1);
+    root.right = build(mid + 1, inR);
+    return root;
+  }
+  return toArray(build(0, inorder.length - 1));
+}`}
+  tests={[
+    { args: [[1, 2, 4, 5, 3, 6], [4, 2, 5, 1, 3, 6]], expected: [1, 2, 3, 4, 5, null, 6], label: "글의 예시" },
+    { args: [[1], [1]], expected: [1], label: "노드 하나" },
+    { args: [[1, 2], [2, 1]], expected: [1, 2], label: "왼쪽 자식" },
+    { args: [[1, 2], [1, 2]], expected: [1, null, 2], label: "오른쪽 자식" },
+    { args: [[1, 2, 3, 4], [4, 3, 2, 1]], expected: [1, 2, null, 3, null, 4], label: "왼쪽 일자 트리" },
+    { args: [[-1, -2, 3, 0, 7], [-2, -1, 0, 3, 7]], expected: [-1, -2, 3, null, null, 0, 7], label: "음수 값" },
+    { args: [[5, 3, 1, 0, 2, 4, 8, 7, 9], [0, 1, 2, 3, 4, 5, 7, 8, 9]], expected: [5, 3, 8, 1, 4, 7, 9, 0, 2], label: "노드 아홉 개" },
+  ]}
+/>
+
+## 복원 코드가 어긋나는 자리
+
+### 오른쪽 가지를 먼저 만들기
+
+해시맵 풀이에서 전위 포인터를 공유하면서 `root.right`를 `root.left`보다 먼저 만들면, 오른쪽 가지가 전위 배열에서 왼쪽 가지 몫의 값을 가져간다. 예시에서 뿌리 1의 오른쪽 범위 `[4..5]`에 2가 들어가고, 2의 중위 위치 1로 범위를 나누니 범위가 엉켜 끝나지 않는다. 실제로 돌리면 `RangeError: Maximum call stack size exceeded`가 났다. 전위 포인터를 쓰는 한 만드는 순서는 전위 순서, 즉 나 → 왼쪽 → 오른쪽이어야 한다. 후위와 중위로 만드는 변형에서는 이 순서가 거꾸로 된다.
+
+### 자를 때 하나씩 어긋나기
+
+```js
+left: buildTree(preorder.slice(1, mid), inorder.slice(0, mid)), // mid + 1이어야 한다
+right: buildTree(preorder.slice(mid), inorder.slice(mid + 1)),
+```
+
+왼쪽 가지 크기가 `mid`이니 전위에서는 1번부터 `mid`번까지, `slice(1, mid + 1)`이다. 위처럼 쓰면 전위와 중위 조각의 길이가 서로 달라진다. 오른쪽 조각에 중위에 없는 값이 섞이면 `indexOf`가 -1을 돌려주고, 그 뒤로 범위가 줄지 않아 역시 호출 스택이 넘쳤다. 자른 두 조각의 길이가 늘 같은지 확인하는 습관이 이 실수를 막는다.
+
+### 값이 중복될 때
+
+조건에 "값이 모두 다르다"가 있는 이유다. 전위 `[1, 1]`, 중위 `[1, 1]`은 1의 왼쪽에 1이 달린 트리에서도, 오른쪽에 1이 달린 트리에서도 나온다. 답이 하나로 정해지지 않는다. 실제로 배열 자르기 풀이와 스택 풀이는 `[1, null, 1]`을 냈고, 해시맵 풀이는 맵에 뒤쪽 위치만 남아 범위가 엉켜 `RangeError`가 났다. 중복이 있는 데이터라면 값 대신 노드 고유 번호로 순회 결과를 주고받아야 한다.
+
+### 상태를 초기화하지 않기
+
+Java 필드 `pre`나 JavaScript에서 함수 밖에 둔 포인터를 다음 호출에서 0으로 되돌리지 않으면, 두 번째 호출은 전위 배열 중간부터 읽는다. LeetCode는 같은 객체로 여러 테스트를 돌릴 수 있어서 제출하면 바로 드러난다. 위의 Java 코드가 `buildTree` 안에서 `pre = 0`을 다시 하는 이유다.
+
+### 재귀 깊이
+
+노드 3,000개의 일자 트리는 Python 기본 한도 1000을 넘는다. 앞에서 본 대로 `RecursionError`가 난다. JavaScript와 Java는 이 환경 기본 설정에서 3,000단계는 통과했지만, 같은 코드를 더 큰 데이터에 쓴다면 스택 풀이로 바꾼다.
+
+## 순회 조합을 바꾸는 변형들
+
+### 후위와 중위로 만들라면
+
+LeetCode 106 Construct Binary Tree from Inorder and Postorder Traversal이다. 후위 순회(왼쪽 → 오른쪽 → 나)는 뿌리가 맨 뒤에 있다. 그래서 후위 배열을 뒤에서부터 꺼내고, 만드는 순서도 나 → 오른쪽 → 왼쪽으로 뒤집는다. 뒤에서 꺼내면 나, 오른쪽 가지, 왼쪽 가지 순서로 나오기 때문이다. 나머지는 해시맵 풀이와 같다.
+
+```js
+function buildTree(inorder, postorder) {
+  const pos = new Map();
+  inorder.forEach((v, i) => pos.set(v, i));
+  let post = postorder.length - 1; // 뒤에서부터 꺼낸다
+  function build(inL, inR) {
+    if (inL > inR) return null;
+    const root = { val: postorder[post--], left: null, right: null };
+    const mid = pos.get(root.val);
+    root.right = build(mid + 1, inR); // 뒤에서 꺼내면 오른쪽 가지가 먼저 나온다
+    root.left = build(inL, mid - 1);
+    return root;
+  }
+  return build(0, inorder.length - 1);
+}
+```
+
+예시 트리의 후위 순서는 `[4, 5, 2, 6, 3, 1]`이다. 중위 `[4, 2, 5, 1, 3, 6]`과 함께 넣으면 같은 `[1, 2, 3, 4, 5, null, 6]`이 나왔다.
+
+### 전위와 후위만으로는
+
+LeetCode 889 Construct Binary Tree from Preorder and Postorder Traversal이다. 이 조합만으로는 트리가 하나로 정해지지 않는다. 노드에 자식이 하나뿐일 때 그게 왼쪽인지 오른쪽인지 두 순회 모두 구분하지 못한다. 전위 `[1, 2]`, 후위 `[2, 1]`은 2가 왼쪽 자식인 트리와 오른쪽 자식인 트리에서 똑같이 나온다. 그래서 889는 "가능한 트리 중 아무거나"를 돌려주라고 한다. 모든 노드의 자식이 0개 또는 2개인 꽉 찬 트리라면 하나로 정해진다. 중위 순서는 "나"가 두 가지 사이에 끼어 있어서 왼쪽과 오른쪽을 가를 수 있다. 중위가 꼭 필요한 이유다.
+
+### 전위만으로 BST를 만들라면
+
+LeetCode 1008 Construct Binary Search Tree from Preorder Traversal이다. BST의 중위 순서는 값을 정렬한 것이니, 전위만 있어도 중위를 알 수 있다. 정렬해서 이 글의 풀이를 써도 되지만 O(n log n)이 든다. 이 글의 "멈출 값 넘기기"를 "위쪽 경계 값 넘기기"로 바꾸면 O(n)에 된다. 다음 전위 값이 경계보다 크면 이 가지는 끝난 것이다. [Validate Binary Search Tree](/posts/leetcode-validate-binary-search-tree)에서 범위를 내려보낸 것과 같은 생각이다.
+
+```js
+function bstFromPreorder(preorder) {
+  let i = 0;
+  function build(bound) {
+    if (i === preorder.length || preorder[i] > bound) return null; // 경계를 넘으면 이 가지는 끝
+    const root = { val: preorder[i++], left: null, right: null };
+    root.left = build(root.val); // 왼쪽 가지는 내 값보다 작아야 한다
+    root.right = build(bound);
+    return root;
+  }
+  return build(Infinity);
+}
+```
+
+`[5, 3, 1, 4, 8, 9]`를 넣으면 `[5, 3, 8, 1, 4, null, 9]`가 나왔다. 멈출 값 풀이의 `inorder[i] === stop`이 여기서는 `preorder[i] > bound`로 바뀌었을 뿐이다.
+
+### 직렬화 형식을 고르라면
+
+전위와 중위 두 배열을 보내면 값마다 두 번 보내야 하고, 값이 중복되면 쓸 수 없다. 그래서 실제 직렬화는 빈 자리를 `null`로 표시한 전위 배열 하나나 층 순서 배열 하나를 쓴다. 빈 자리까지 적으면 순서 하나로도 모양이 정해지기 때문이다. 자세한 비교는 [Serialize and Deserialize Binary Tree](/posts/leetcode-serialize-and-deserialize-binary-tree)에 있다.
+
+### 같은 패턴의 다른 문제
+
+트리를 거울상으로 새로 짓는 [Invert Binary Tree](/posts/leetcode-invert-binary-tree)의 첫 번째 풀이가 이 문제의 가장 쉬운 판이다. 분할 정복으로 배열 가운데를 뿌리로 세우는 LeetCode 108 Convert Sorted Array to Binary Search Tree도 같은 틀이다. 높이를 아래에서 올려 보내는 반대 방향 재귀는 [Diameter of Binary Tree](/posts/leetcode-diameter-of-binary-tree)에서 볼 수 있다.
+
+## 뿌리를 찾고 둘로 나눈다
+
+전위 배열의 맨 앞은 뿌리이고, 중위 배열에서 그 뿌리의 위치가 왼쪽 가지의 크기를 알려 준다. 이 두 사실로 문제를 같은 모양의 두 작은 문제로 나누면 트리가 다시 지어진다. 뿌리 위치를 해시맵으로 O(1)에 찾고 배열을 자르지 않고 인덱스만 넘기면 전체 O(n)이다. 재귀가 걱정되면 스택으로, 메모리가 걱정되면 멈출 값을 넘기는 방식으로 바꾼다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 전위와 중위가 함께 필요한가요?
+
+전위는 뿌리가 누구인지 알려 주고, 중위는 뿌리를 기준으로 왼쪽과 오른쪽 가지를 갈라 준다. 전위만으로는 다음 노드가 왼쪽 자식인지 오른쪽 자식인지 알 수 없다. 두 정보를 합쳐야 값이 모두 다를 때 트리가 하나로 정해진다.
+
+### 배열을 잘라 넘기는 풀이는 왜 느린가요?
+
+호출마다 `indexOf`와 `slice`가 그 가지 크기만큼 시간이 든다. 일자 트리에서는 가지 크기가 n, n-1, …로 줄어서 합이 O(n²)이고, 잘라 낸 배열도 깊이마다 살아 있어 공간도 O(n²)까지 간다. 인덱스만 넘기고 해시맵으로 위치를 찾으면 O(n)이 된다.
+
+### 전역 전위 포인터를 쓸 때 왼쪽부터 만들어야 하는 이유는요?
+
+재귀가 노드를 만드는 순서가 전위 배열 순서와 같아야 하기 때문이다. 전위는 나 → 왼쪽 → 오른쪽이라, 왼쪽 가지를 먼저 다 만들어야 포인터가 오른쪽 가지의 뿌리에 닿는다. 오른쪽을 먼저 만들면 왼쪽 가지 값이 오른쪽에 들어가 범위가 엉킨다.
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+해시맵 풀이는 위치 표를 만드는 데 O(n), 노드마다 O(1)이라 전체 O(n)이다. 공간은 표 O(n)과 호출 스택 O(h)다. 멈출 값을 넘기는 풀이와 스택 풀이는 표 없이 O(h) 공간으로 된다.
+
+### 값이 중복되면 어떻게 되나요?
+
+트리가 하나로 정해지지 않는다. 전위와 중위가 모두 `[1, 1]`이면 1의 왼쪽 자식이 1인 트리와 오른쪽 자식이 1인 트리를 구분할 수 없다. 실무에서는 값 대신 노드 고유 번호로 순회 결과를 만들어야 한다.
+
+### 후위와 중위로 바꾸면 무엇이 달라지나요?
+
+후위 배열의 맨 뒤가 뿌리라서 뒤에서부터 꺼낸다. 뒤에서 꺼내면 나 → 오른쪽 가지 → 왼쪽 가지 순서가 되니, 오른쪽 가지를 먼저 만든다. 해시맵과 범위 나누기는 그대로다.
+
+### 전위와 후위만으로도 만들 수 있나요?
+
+일반적으로는 안 된다. 자식이 하나뿐인 노드에서 그 자식이 왼쪽인지 오른쪽인지 두 순회 모두 같은 결과를 낸다. 모든 노드의 자식이 0개나 2개인 꽉 찬 트리라면 하나로 정해진다.

@@ -1,0 +1,432 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-debugging-profiling");
+
+<EasyIntro>
+  어느 날부터 서버의 대답이 백 번에 한 번쯤 거의 반 초씩 늦게 왔는데, 로그에는 에러가 없어서 어디가 느린지 알 수 없었다. 병원에서 원인을 모르는 통증을 찾는 과정과 비슷하다. 먼저 체온과 맥박처럼 몸 전체 상태를 재고, 이상하면 엑스레이를 찍고, 그래도 모르면 더 자세한 검사를 하는데, 처음부터 큰 검사를 하지 않는 건 검사 자체가 몸에 부담을 주기 때문이다. 서버도 같은 순서로 먼저 일을 미루고 있는지 숫자로 재고, 그다음 어떤 일에 시간을 쓰는지 짧게 기록하고, 기억 공간이 이상하면 그 순간의 사진을 찍는다. 사진을 찍는 동안 서버가 잠깐 멈추니 손님이 적을 때 한 대에서만 한다. 검사 장비를 켜 둔 채로 문을 열어 두면 아무나 들어와 서버를 마음대로 움직일 수 있다. 그래서 장비는 안에서만 쓰고 다 쓰면 끈다.
+</EasyIntro>
+
+상품 목록 서비스의 p99가 어느 날 오후부터 40ms에서 400ms로 뛰었다. p50은 그대로였다. 에러율도 그대로, CPU 사용률은 60%쯤으로 조금 올랐을 뿐이다. 로그에는 아무것도 없었다. DB 쿼리 시간을 봤지만 평소와 같았다. 느린 건 Node 프로세스 안쪽이었다.
+
+이런 문제는 로그를 더 찍는다고 풀리지 않는다. 프로세스가 어디에 시간을 쓰는지 직접 봐야 한다. 이 글은 운영 중인 Node 서비스를 들여다보는 순서를 따라간다. 이벤트 루프가 밀리는지 재고, 디버거를 붙이고, CPU 프로파일을 떠서 플레임 그래프를 읽고, 메모리가 이상하면 힙 스냅샷을 뜬다. 마지막으로 APM이 무엇을 대신 보여 주고 무엇은 못 보는지 정리한다. 실행 결과는 모두 Node.js 22.22, Ubuntu 24.04에서 직접 얻었다.
+
+이벤트 루프가 어떤 단계로 돌고 왜 막히는지는 [이벤트 루프 글](/posts/event-loop)에, 스레드 풀과 `worker_threads`는 [Node.js 서버 런타임 글](/posts/nodejs-server-runtime)에, 가비지 컬렉션의 동작과 누수 패턴은 [가비지 컬렉션 글](/posts/garbage-collection)과 [메모리 누수 글](/posts/js-memory-leak)에 있다. 백분위 지연을 읽는 법은 [응답 시간 백분위 글](/posts/percentile-latency)에서 다뤘다.
+
+## 문제를 재현할 작은 서버
+
+들여다볼 대상으로 이 서버를 쓴다. `/catalog`는 요청마다 상품 5000개를 직렬화하고 해시로 ETag를 만든다. `/slugs`는 상품 이름마다 정규식 두 개를 돌린다. `/`는 거의 아무것도 안 한다.
+
+```js
+// app.mjs
+import http from "node:http";
+import { createHash } from "node:crypto";
+
+const products = Array.from({ length: 5000 }, (_, i) => ({ id: i, name: `product-${i}`, tags: ["a", "b", "c"], price: i * 10 }));
+
+function etagOf(body) {
+  return createHash("sha256").update(body).digest("hex").slice(0, 16);
+}
+function renderCatalog() {
+  // 요청마다 큰 배열을 직렬화하고 해시한다
+  const body = JSON.stringify(products);
+  return { body, etag: etagOf(body) };
+}
+function slugify(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+const server = http.createServer((req, res) => {
+  if (req.url === "/catalog") {
+    const { body, etag } = renderCatalog();
+    res.writeHead(200, { etag, "content-type": "application/json" });
+    return res.end(body);
+  }
+  if (req.url === "/slugs") {
+    const out = products.map((p) => slugify(p.name)).join(",");
+    return res.end(out);
+  }
+  res.end("ok");
+});
+server.listen(3100, () => console.log("listening on 3100, pid", process.pid));
+// 종료 신호를 받으면 정상 종료한다. --cpu-prof는 정상 종료할 때만 파일을 쓴다
+for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => server.close(() => process.exit(0)));
+```
+
+부하는 `fetch`로 동시에 10개씩 보내는 작은 스크립트로 줬다. `/catalog`에 부하를 거는 동안, 따로 가벼운 `/`를 40번 불렀다.
+
+```text
+{ requests: 40, p50: '53.9', p99: '396.1' }
+```
+
+아무 일도 안 하는 `/`의 p99가 396ms다. 처음 장면과 같은 그림이다. 가벼운 요청이 무거운 요청 뒤에 줄을 서고 있다.
+
+## 먼저 이벤트 루프가 밀리는지 잰다
+
+Node는 자바스크립트를 한 스레드에서 돌린다. 어떤 요청 처리가 CPU를 50ms 쓰면, 그동안 다른 모든 요청의 콜백이 기다린다. 이 기다림을 숫자로 재는 게 이벤트 루프 지연이다. `perf_hooks`의 `monitorEventLoopDelay`가 내장돼 있다.
+
+```js
+import { monitorEventLoopDelay } from "node:perf_hooks";
+
+const h = monitorEventLoopDelay({ resolution: 10 }); // 10ms마다 타이머를 걸어 늦게 깨어난 만큼 잰다
+h.enable();
+const ms = (ns) => +(ns / 1e6).toFixed(1);
+
+setInterval(() => {
+  console.log(JSON.stringify({ msg: "event_loop_delay", p50: ms(h.percentile(50)), p99: ms(h.percentile(99)), max: ms(h.max) }));
+  h.reset(); // 구간마다 새로 잰다
+}, 3000).unref();
+```
+
+같은 부하에서 3초마다 찍힌 줄이다. 첫 줄은 부하 전, 둘째 줄은 부하 중이다.
+
+```text
+{"msg":"event_loop_delay","p50":10.2,"p99":11.7,"max":33}
+{"msg":"event_loop_delay","p50":14.4,"p99":52.4,"max":55.9}
+```
+
+값은 나노초로 나오고, `resolution`(10ms)이 바닥에 깔려서 한가할 때도 10ms 근처가 찍힌다. 그래서 절댓값보다 평소와의 차이를 본다. 부하 중에 p99가 11.7에서 52.4로 뛰었다. 루프가 한 번에 40ms 넘게 붙잡혀 있다는 뜻이다. CPU 계산이 루프를 막고 있다는 강한 신호다.
+
+반대로 응답은 느린데 이 숫자가 평소와 같다면 루프는 한가하다. 그때는 DB, 외부 API, 커넥션 풀 대기, 스레드 풀 대기처럼 루프 바깥을 의심한다. 외부 호출 쪽은 [Node.js HTTP 클라이언트 글](/posts/nodejs-http-clients)에서 연결과 타임아웃을 다뤘다. 이 지표 하나로 다음에 볼 곳이 반으로 줄어든다. 운영 서비스라면 이 값을 로그 대신 지표(히스토그램이나 게이지)로 내보내 대시보드에 둔다.
+
+## 디버거를 붙인다: --inspect
+
+Node에는 V8 인스펙터가 들어 있다. `--inspect`로 띄우면 Chrome DevTools 프로토콜을 말하는 웹소켓 서버가 열린다.
+
+```bash
+node --inspect app.mjs
+```
+
+```text
+Debugger listening on ws://127.0.0.1:9229/ddb46fe6-68c9-4757-be0c-8b25b96e3c69
+For help, see: https://nodejs.org/en/docs/inspector
+```
+
+크롬 주소창에 `chrome://inspect`를 열면 이 프로세스가 목록에 보이고, "inspect"를 누르면 DevTools가 붙는다. 브레이크포인트, 변수 보기, 콘솔, 그리고 뒤에서 쓸 Performance와 Memory 탭을 그대로 쓴다. VS Code에서는 `launch.json`에 attach 설정을 둔다.
+
+```json
+{
+  "type": "node",
+  "request": "attach",
+  "name": "Attach 9229",
+  "address": "127.0.0.1",
+  "port": 9229
+}
+```
+
+변형이 셋 있다. `--inspect-brk`는 첫 줄에서 멈춘 채로 기다려서, 시작하자마자 죽는 프로그램을 잡을 때 쓴다. `--inspect-wait`는 디버거가 붙을 때까지 기다렸다가 멈추지 않고 실행한다. 주소는 `--inspect=127.0.0.1:9333`처럼 바꾼다.
+
+개발 중에는 이걸로 충분하다. 운영에서는 다시 띄울 수 없는 경우가 많다. 문제가 지금 이 프로세스에서 일어나고 있고, 재시작하면 사라진다.
+
+## 실행 중인 프로세스에 붙는다: SIGUSR1
+
+`--inspect` 없이 띄운 Node 프로세스도 SIGUSR1을 받으면 인스펙터를 연다.
+
+```bash
+# 이미 돌고 있는 node 프로세스에 인스펙터를 켠다
+kill -USR1 26000
+# 열렸는지 확인
+ss -ltnp | grep 9229
+curl -s http://127.0.0.1:9229/json/list
+```
+
+```text
+Debugger listening on ws://127.0.0.1:9229/61338a94-6881-4d29-90ba-db3a5149822c
+For help, see: https://nodejs.org/en/docs/inspector
+LISTEN 0      511        127.0.0.1:9229       0.0.0.0:*    users:(("node",pid=26000,fd=28))
+[ {
+  "description": "node.js instance",
+  ...
+  "title": "app.mjs",
+  "type": "node",
+  "url": "file:///srv/prof/app.mjs",
+  "webSocketDebuggerUrl": "ws://127.0.0.1:9229/61338a94-6881-4d29-90ba-db3a5149822c"
+} ]
+```
+
+첫 두 줄은 프로세스의 stderr에 찍힌다. 9229 포트가 `127.0.0.1`에만 열렸다. 서버는 원격에 있으니 내 노트북에서 붙으려면 SSH 터널을 판다.
+
+```bash
+# 내 노트북 9229 → 서버의 127.0.0.1:9229
+ssh -N -L 9229:127.0.0.1:9229 deploy@app-01
+# 쿠버네티스라면
+kubectl exec order-api-7d9f -- kill -USR1 1
+kubectl port-forward pod/order-api-7d9f 9229:9229
+```
+
+그 뒤에 노트북의 `chrome://inspect`에서 `localhost:9229`로 붙는다. 아래 그림이 그 길이다.
+
+<SequenceDiagram
+  caption="인스펙터는 루프백에만 열고, 밖에서는 터널로 들어간다"
+  actors={[
+    { id: "me", label: "내 노트북" },
+    { id: "ssh", label: "SSH/port-forward" },
+    { id: "node", label: "node (운영)" },
+  ]}
+  steps={[
+    { from: "me", to: "node", label: "kill -USR1 <pid>", title: "신호로 인스펙터를 켠다", detail: "재시작 없이 인스펙터 스레드가 127.0.0.1:9229에서 듣기 시작한다. 프로세스는 계속 요청을 받는다." },
+    { from: "node", to: "node", label: "listen 127.0.0.1:9229", title: "루프백에만 연다", detail: "기본 주소는 127.0.0.1이다. 밖에서는 이 포트에 바로 닿을 수 없어야 한다.", payload: "Debugger listening on ws://127.0.0.1:9229/6133..." },
+    { from: "me", to: "ssh", label: "-L 9229:127.0.0.1:9229", title: "터널을 판다", detail: "노트북의 9229로 들어온 연결을 서버 안의 루프백 9229로 넘긴다. 인증은 SSH나 kubectl이 맡는다." },
+    { from: "ssh", to: "node", label: "WebSocket (CDP)", title: "DevTools가 붙는다", detail: "chrome://inspect에서 localhost:9229로 붙으면 Profiler, Memory 탭을 운영 프로세스에 그대로 쓴다." },
+    { from: "me", to: "node", label: "프로파일 3초", title: "짧게 뜨고 바로 뗀다", detail: "CPU 프로파일은 몇 초면 충분하다. 브레이크포인트는 운영에서 걸지 않는다. 멈추는 순간 그 프로세스의 모든 요청이 멈춘다." },
+  ]}
+/>
+
+<Callout kind="warning">
+인스펙터에 붙은 쪽은 그 프로세스 안에서 아무 코드나 실행할 수 있다. 환경 변수의 DB 비밀번호를 읽고, 파일을 지우고, 셸 명령을 돌릴 수 있다는 뜻이다. `--inspect=0.0.0.0:9229`처럼 모든 주소에 열지 않는다. 컨테이너 포트로 9229를 내보내지도 않는다. 다 쓰면 프로세스를 정상 교체하거나, 최소한 터널을 닫는다. 인스펙터를 한 번 켜면 끄는 신호는 없어서, 그 프로세스가 끝날 때까지 루프백 포트가 열려 있다.
+</Callout>
+
+SIGUSR1이 아예 동작하지 않게 막고 싶은 서비스라면 Node 22.22에는 `--disable-sigusr1` 옵션이 있다. 반대로 컨테이너에서 Node가 PID 1이 아니라 셸 스크립트 아래에서 돌고 있으면 `kill -USR1 1`이 셸에 가서 아무 일도 안 생긴다. `ps`로 node의 PID를 확인하고 그 번호로 보낸다. PID 1과 시그널 이야기는 [리눅스 프로세스와 시그널 글](/posts/linux-processes-signals)에 있다.
+
+## CPU 프로파일을 뜬다
+
+CPU 프로파일러는 정해진 간격(기본 1000마이크로초, 1ms)마다 "지금 어떤 함수들이 호출 스택에 있나"를 기록한다. 이걸 샘플링 프로파일러라고 한다. 함수마다 시간을 재는 게 아니라 사진을 많이 찍어서, 사진에 자주 나온 함수가 시간을 많이 쓴 함수라고 본다.
+
+가장 간단한 방법은 시작할 때 `--cpu-prof`를 주는 것이다. 프로세스가 정상 종료할 때 `.cpuprofile` 파일을 쓴다.
+
+```bash
+node --cpu-prof --cpu-prof-dir=/srv/prof/profiles app.mjs &
+node load.mjs                                   # /catalog 부하
+node load.mjs http://127.0.0.1:3100/slugs 300   # /slugs 부하
+kill -TERM %1                                   # 정상 종료해야 파일이 생긴다
+ls -la /srv/prof/profiles
+```
+
+```text
+-rw------- 1 root root 76519 Oct 23 13:09 CPU.20261023.130859.25794.0.001.cpuprofile
+```
+
+처음에 SIGINT 핸들러 없이 `kill -INT`로 끝냈을 때는 파일이 생기지 않았다. 기본 동작으로 바로 죽으면 프로파일을 쓸 기회가 없다. 앞의 서버 코드에 종료 신호 핸들러를 둔 이유다.
+
+운영 프로세스는 재시작 없이 떠야 한다. DevTools를 붙였다면 Performance 탭의 녹화 버튼이 같은 일을 한다. 코드로 원하는 때에 뜨고 싶으면 `node:inspector/promises`로 자기 자신에게 프로파일러를 건다.
+
+```js
+import { Session } from "node:inspector/promises";
+import { writeFile } from "node:fs/promises";
+
+export async function profileFor(ms) {
+  const session = new Session();
+  session.connect(); // 자기 프로세스의 인스펙터에 붙는다. 포트를 열지 않는다
+  await session.post("Profiler.enable");
+  await session.post("Profiler.start");
+  await new Promise((r) => setTimeout(r, ms));
+  const { profile } = await session.post("Profiler.stop");
+  session.disconnect();
+  const file = `/srv/prof/profiles/ondemand-${process.pid}-${Date.now()}.cpuprofile`;
+  await writeFile(file, JSON.stringify(profile));
+  return file;
+}
+
+process.on("SIGUSR2", async () => console.log("wrote", await profileFor(3000)));
+```
+
+```text
+wrote /srv/prof/profiles/ondemand-26658-1792761003453.cpuprofile
+```
+
+이 방식은 네트워크 포트를 열지 않아서 SIGUSR1보다 안전하다. 관리용 HTTP 엔드포인트로 노출한다면 내부망과 인증 뒤에 둔다.
+
+## 플레임 그래프에서 넓은 칸을 찾는다
+
+`.cpuprofile`은 JSON이라 DevTools의 Performance 탭에 끌어다 놓거나, speedscope 같은 뷰어에 올리면 플레임 그래프로 보인다. 가로축은 시간이 아니라 비율이다. 칸이 넓을수록 그 함수가 스택에 자주 있었다. 세로는 호출 관계라, 아래 칸이 위 칸을 불렀다.
+
+읽을 때 숫자 두 개를 구분해야 한다. self time은 그 함수가 스택 맨 위에 있었던 시간, 곧 자기 몸에서 쓴 시간이다. total time은 스택 어딘가에 있었던 시간이라, 그 함수가 부른 것까지 다 포함한다. `main`이나 HTTP 핸들러는 total이 100%에 가깝지만 self는 거의 0이다. 고칠 곳은 self가 큰 함수다.
+
+프로파일 파일에서 self time 상위를 직접 뽑아 봤다. `nodes`에 호출 스택 나무가, `samples`와 `timeDeltas`에 사진마다 맨 위 노드와 간격이 들어 있다.
+
+```js
+// .cpuprofile에서 함수별 self time 상위 N개를 뽑는다
+import { readFileSync } from "node:fs";
+const prof = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const byId = new Map(prof.nodes.map((n) => [n.id, n]));
+const dt = prof.timeDeltas;
+const self = new Map();
+prof.samples.forEach((id, i) => {
+  const { functionName, url, lineNumber } = byId.get(id).callFrame;
+  const key = `${functionName || "(anonymous)"} ${url.split("/").pop()}:${lineNumber + 1}`;
+  self.set(key, (self.get(key) ?? 0) + (dt[i] ?? 0));
+});
+const total = [...self.values()].reduce((a, b) => a + b, 0);
+for (const [k, v] of [...self].sort((a, b) => b[1] - a[1]).slice(0, Number(process.argv[3] ?? 8)))
+  console.log(`${(v / 1000).toFixed(0).padStart(6)} ms ${((v / total) * 100).toFixed(1).padStart(5)}%  ${k}`);
+```
+
+```bash
+node top.mjs profiles/CPU.20261023.130859.25794.0.001.cpuprofile 10
+```
+
+```text
+   617 ms  28.4%  (idle) :0
+   463 ms  21.3%  renderCatalog app.mjs:9
+   309 ms  14.2%  update hash:132
+   161 ms   7.4%  slugify app.mjs:14
+   122 ms   5.6%  (anonymous) app.mjs:17
+    86 ms   4.0%  (garbage collector) :0
+    85 ms   3.9%  writev :0
+    38 ms   1.8%  RegExp: [^a-z0-9]+ :0
+    27 ms   1.2%  (program) :0
+    27 ms   1.2%  (anonymous) app.mjs:24
+```
+
+`(idle)`은 루프가 일을 기다린 시간이라 문제가 아니다. 그다음이 `renderCatalog` 21%다. 함수 몸에는 `JSON.stringify` 한 줄뿐인데 self가 이렇게 큰 건, V8의 내장 함수인 `JSON.stringify`가 별도 칸 없이 부른 쪽의 self로 잡혔기 때문이다. 그 아래 `update`(해시 계산) 14%가 `etagOf`에서 왔다. 둘을 합치면 `/catalog` 한 요청이 같은 5000개 배열을 매번 직렬화하고 해시하는 데 CPU의 3분의 1 넘게 쓰고 있다. 상품 목록은 바뀔 때만 다시 만들면 된다. 직렬화 결과와 ETag를 캐시하자 이 두 칸이 사라졌다.
+
+`(garbage collector)` 4%도 눈여겨본다. 이 칸이 10%를 넘기 시작하면 요청마다 큰 임시 객체를 만들고 있다는 뜻이다. `RegExp: [^a-z0-9]+`처럼 정규식이 따로 잡히는 경우도 있다. 정규식 하나가 칸 하나를 차지할 만큼 넓다면, 입력에 따라 시간이 폭발하는 패턴(ReDoS)인지 의심한다.
+
+## 직접 해 보기: 샘플에서 self와 total 계산하기
+
+플레임 그래프를 그리는 원리를 짜 보자. 샘플 하나는 바닥(`main`)부터 맨 위까지 함수 이름 배열이고, 샘플 하나가 `intervalMs`만큼의 시간이다. 함수마다 self(맨 위였던 시간)와 total(스택에 있었던 시간)을 구해 `fn` 이름순 배열로 돌려준다. 재귀로 한 스택에 같은 함수가 두 번 나와도 total은 그 샘플에서 한 번만 센다. 빈 스택은 건너뛴다.
+
+<CodePlayground
+  caption="샘플링 프로파일러의 self time과 total time"
+  functionName="selfAndTotal"
+  initialCode={`// samples: [["main", "handler", "renderCatalog"], ...]  (왼쪽이 바닥)
+// 반환: [{ fn, self, total }, ...]  fn 이름순
+function selfAndTotal(samples, intervalMs) {
+  return [];
+}`}
+  solution={`function selfAndTotal(samples, intervalMs) {
+  const acc = new Map();
+  for (const stack of samples) {
+    if (stack.length === 0) continue;
+    for (const fn of new Set(stack)) {
+      if (!acc.has(fn)) acc.set(fn, { fn, self: 0, total: 0 });
+      acc.get(fn).total += intervalMs;
+    }
+    acc.get(stack[stack.length - 1]).self += intervalMs;
+  }
+  return [...acc.values()].sort((a, b) => (a.fn < b.fn ? -1 : 1));
+}`}
+  tests={[
+    {
+      label: "핸들러 아래 두 함수",
+      args: [[["main", "handler", "renderCatalog"], ["main", "handler", "renderCatalog"], ["main", "handler", "etagOf"]], 1],
+      expected: [
+        { fn: "etagOf", self: 1, total: 1 },
+        { fn: "handler", self: 0, total: 3 },
+        { fn: "main", self: 0, total: 3 },
+        { fn: "renderCatalog", self: 2, total: 2 },
+      ],
+    },
+    {
+      label: "간격 10ms",
+      args: [[["main", "a"], ["main"], ["main", "a", "b"]], 10],
+      expected: [
+        { fn: "a", self: 10, total: 20 },
+        { fn: "b", self: 10, total: 10 },
+        { fn: "main", self: 10, total: 30 },
+      ],
+    },
+    { label: "재귀는 한 번만", args: [[["walk", "walk", "walk"], ["walk", "walk"]], 2], expected: [{ fn: "walk", self: 4, total: 4 }] },
+    { label: "빈 스택", args: [[[], ["idle"]], 1], expected: [{ fn: "idle", self: 1, total: 1 }] },
+  ]}
+/>
+
+세 번째 테스트에서 `new Set`을 빼면 `walk`의 total이 10이 되어, 전체 샘플 시간(4ms)보다 커진다. 재귀 함수가 플레임 그래프에서 100%를 넘지 않게 그리려면 이 처리가 필요하다. 그리고 샘플링이라는 특성상 1ms보다 짧게 도는 함수는 운이 없으면 아예 안 잡힌다. 아주 자주 불리는 짧은 함수는 잡히지만 드물게 도는 짧은 함수는 놓친다. 그래서 프로파일은 부하가 있을 때, 몇 초 이상 뜬다.
+
+## 메모리가 늘면 힙 스냅샷을 뜬다
+
+CPU가 아니라 메모리가 문제라면 힙 스냅샷을 본다. 그 순간 힙에 있는 모든 객체와 객체 사이의 참조를 통째로 떠낸 파일이다. 시작할 때 신호를 정해 두면 원할 때 뜰 수 있다.
+
+```bash
+node --heapsnapshot-signal=SIGUSR2 app.mjs &
+kill -USR2 %1
+ls -la /srv/prof/*.heapsnapshot
+```
+
+```text
+-rw------- 1 root root 9597043 Oct 23 13:09 /srv/prof/Heap.20261023.130944.26210.0.001.heapsnapshot
+```
+
+거의 빈 서버인데도 9.6MB다. 운영 서비스의 힙이 1GB라면 스냅샷도 그만한 크기가 된다. 비용이 둘 있다. 스냅샷을 쓰는 동안 메인 스레드가 멈춘다. 그리고 Node 문서는 힙 크기의 두 배쯤 메모리가 더 필요하다고 적는다. 메모리 한도에 가까운 컨테이너에서 뜨면 스냅샷을 뜨다가 OOM으로 죽는다. 그래서 트래픽을 뺀 한 대에서, 한도에 여유가 있을 때 뜬다. `v8.writeHeapSnapshot()`으로 코드에서 뜰 수도 있고, 힙이 한도에 닿기 직전에 자동으로 뜨게 하는 `--heapsnapshot-near-heap-limit=1` 옵션도 있다. 죽기 직전의 모습이 남아서 OOM 원인을 찾을 때 좋다.
+
+누수를 찾을 때는 스냅샷 하나보다 둘의 차이가 중요하다. DevTools의 Memory 탭에서 이렇게 한다.
+
+1. 서비스를 띄우고 잠깐 부하를 줘서 예열한 뒤 첫 스냅샷을 뜬다.
+2. 같은 부하를 몇 분 더 준 뒤 두 번째 스냅샷을 뜬다.
+3. 두 번째 스냅샷에서 보기를 Comparison으로 바꾸고 첫 번째와 비교한다. `# Delta`(늘어난 개수)와 `Size Delta`로 정렬한다.
+4. 계속 늘어난 생성자(예: `Object`, 특정 클래스, `(closure)`)를 펼쳐 Retainers 창을 본다. 무엇이 그 객체를 붙잡고 있는지가 거기 있다. 대개 모듈 수준의 `Map`, 지우지 않은 리스너, 크기 제한 없는 캐시다.
+
+Retainers를 읽는 법과 흔한 누수 모양은 [메모리 누수 글](/posts/js-memory-leak)에서 자세히 다뤘다.
+
+## APM과 OpenTelemetry가 주는 것과 못 주는 것
+
+여기까지는 문제가 생긴 뒤 사람이 붙어서 보는 도구다. APM(Application Performance Monitoring)은 평소에 늘 켜 두고 요청마다 기록을 남긴다. 요즘은 OpenTelemetry의 Node 자동 계측을 많이 쓴다. 앱 코드보다 먼저 계측 코드를 불러오면, `http`, `undici`, `pg`, `express` 같은 모듈을 감싸서 요청마다 구간(span)을 남긴다.
+
+```bash
+# 앱 코드보다 먼저 계측을 불러온다
+npm i @opentelemetry/api @opentelemetry/auto-instrumentations-node
+OTEL_SERVICE_NAME=catalog-api \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+node --require @opentelemetry/auto-instrumentations-node/register app.js
+```
+
+ES 모듈로 된 앱은 모듈 로딩을 가로채는 훅이 따로 필요하다. 쓰는 버전의 OpenTelemetry JS 문서에서 ESM 설정을 확인한다.
+
+이렇게 하면 "이 요청 400ms 중 DB가 20ms, 결제 API가 30ms, 나머지 350ms는 앱 안"처럼 요청 하나의 시간이 어디로 갔는지 폭포 그림으로 보인다. 서비스 여러 개를 건너는 요청도 이어서 본다. 이 그림을 읽는 법은 [분산 추적 글](/posts/distributed-tracing)에 있다.
+
+못 주는 것도 분명하다. 자동 계측은 라이브러리 경계에 span을 만든다. "앱 안 350ms"가 어느 함수인지는 말해 주지 않는다. 그건 CPU 프로파일의 일이다. 그리고 다른 요청이 루프를 붙잡아서 내 요청이 기다린 시간도 내 요청의 span에 그냥 섞여 들어간다. 처음 장면의 가벼운 `/` 요청은 APM에서 "앱 안에서 380ms"로만 보였을 것이다. 범인은 다른 요청인 `/catalog`인데 말이다. 그래서 APM 옆에 이벤트 루프 지연 지표를 같이 둔다. 둘을 겹쳐 보면 "느린 span이 많은 시각에 루프 지연이 튀었다"가 보인다.
+
+계측에는 비용도 있다. 모든 요청에 span을 만들고 보내는 일은 CPU와 메모리를 쓴다. 샘플링 비율을 정하고, 필요 없는 계측(파일 시스템 같은 잡음이 많은 것)은 끈다. 일부 상용 APM은 상시 켜 두는 저비용 CPU 프로파일러를 함께 준다. 그런 도구가 있으면 "그 시각의 플레임 그래프"를 나중에 꺼내 볼 수 있다.
+
+## 운영에서 느려졌을 때 보는 순서
+
+정리하면 이 순서다. 앞 단계가 싸고 안전하니 앞에서부터 본다.
+
+1. 대시보드: p50과 p99가 같이 올랐나, p99만 올랐나. 에러율, CPU, 메모리, 재시작 횟수를 같은 시간축에 놓는다.
+2. 이벤트 루프 지연: 튀었으면 CPU 문제, 그대로면 루프 바깥(DB, 외부 API, 풀 대기)이다.
+3. APM의 폭포 그림: 루프 바깥이면 어느 span이 길어졌는지 본다.
+4. CPU 프로파일: 루프가 막혔으면 한 대에서 몇 초만 뜨고, self time이 큰 칸부터 본다.
+5. 힙: 메모리가 계속 오르면 트래픽을 뺀 한 대에서 스냅샷 두 장을 비교한다. 한도에 여유가 없으면 `--heapsnapshot-near-heap-limit`로 다음 OOM을 기다린다.
+
+하지 말아야 할 것도 있다. 운영 프로세스에 브레이크포인트를 걸지 않는다. 그 순간 모든 요청이 멈춘다. 인스펙터 포트를 바깥에 열지 않는다. 그리고 원인을 모르는 채 인스턴스부터 늘리지 않는다. 루프가 막힌 서비스는 인스턴스를 늘려도 요청 하나하나는 여전히 느리다.
+
+<ConceptDiagram
+  width={400}
+  height={280}
+  caption="증상에서 도구로: 싼 것부터 비싼 것 순서"
+  nodes={[
+    { id: "slow", label: "p99 상승", sub: "대시보드", x: 200, y: 30, w: 120 },
+    { id: "eld", label: "루프 지연", sub: "monitorEventLoopDelay", x: 200, y: 110, w: 170 },
+    { id: "cpu", label: "CPU 프로파일", sub: "self time", x: 80, y: 200, w: 130 },
+    { id: "apm", label: "APM span", sub: "DB, 외부 API", x: 320, y: 200, w: 130 },
+    { id: "heap", label: "힙 스냅샷", sub: "두 장 비교", x: 80, y: 260, w: 120 },
+  ]}
+  edges={[
+    { from: "slow", to: "eld" },
+    { from: "eld", to: "cpu", label: "튀었다" },
+    { from: "eld", to: "apm", label: "그대로" },
+    { from: "cpu", to: "heap", label: "GC 칸이 넓다", dashed: true },
+  ]}
+/>
+
+## 다시 400ms로
+
+처음 서비스의 프로파일은 위의 실험과 거의 같은 모양이었다. 요청마다 수천 개짜리 목록을 직렬화하고 해시하는 칸이 넓게 깔려 있었고, 그 시간 동안 가벼운 요청까지 루프 앞에서 기다렸다. 직렬화 결과를 목록이 바뀔 때만 다시 만들도록 고치자 루프 지연 p99가 평소로 돌아왔고, 가벼운 요청의 p99도 40ms로 내려왔다. 증상이 p99에만 보이고 로그가 조용할 때는 루프 지연으로 방향을 잡고, 프로파일로 칸을 찾는다. 에러 쪽에서 프로세스가 죽는 경우는 [Node.js 에러 처리 글](/posts/nodejs-error-handling)에서 다뤘다.
+
+## 면접에서 나올 만한 질문
+
+### Node 서비스가 느려졌을 때 무엇부터 보나요?
+
+대시보드에서 p50과 p99, 에러율, CPU, 메모리를 같은 시간축에 놓고, 그다음 이벤트 루프 지연을 본다. 루프 지연이 튀었으면 자바스크립트 계산이 루프를 막고 있으니 CPU 프로파일을 뜨고, 그대로면 DB나 외부 API 같은 루프 바깥을 APM span으로 본다. 메모리가 계속 오르면 힙 스냅샷 비교로 간다. 싸고 안전한 단계부터 본다.
+
+### 이벤트 루프 지연은 어떻게 재고 어떻게 읽나요?
+
+`perf_hooks.monitorEventLoopDelay`가 정해진 간격으로 타이머를 걸어 늦게 깨어난 만큼을 히스토그램에 쌓는다. 값에는 `resolution`이 바닥처럼 깔리니 절댓값보다 평소와의 차이를 본다. 실험에서 부하 중 p99가 11.7ms에서 52.4ms로 뛰었고, 이건 루프가 한 번에 40ms 넘게 붙잡혔다는 뜻이다. 응답이 느린데 이 값이 그대로면 원인은 루프 바깥이다.
+
+### 운영 중인 Node 프로세스에 디버거를 붙이려면 어떻게 하나요?
+
+SIGUSR1을 보내면 재시작 없이 인스펙터가 `127.0.0.1:9229`에서 열린다. 원격이면 SSH 터널이나 `kubectl port-forward`로 노트북까지 끌어와 `chrome://inspect`로 붙는다. 붙어서는 프로파일과 스냅샷만 짧게 뜨고 브레이크포인트는 걸지 않는다. 멈추는 순간 그 프로세스의 모든 요청이 멈추기 때문이다.
+
+### --inspect를 0.0.0.0에 열면 왜 위험한가요?
+
+인스펙터에 붙은 쪽은 프로세스 안에서 임의의 코드를 실행할 수 있어서, 환경 변수의 비밀을 읽고 명령을 돌릴 수 있다. 인증도 없다. 그래서 루프백에만 열고 밖에서는 인증이 있는 터널로 들어가며, 컨테이너 포트로 9229를 내보내지 않는다. 한 번 켠 인스펙터는 끄는 신호가 없으니 다 쓰면 프로세스를 교체하고, 필요하면 `--disable-sigusr1`로 아예 막는다.
+
+### 플레임 그래프에서 self time과 total time은 어떻게 다른가요?
+
+self time은 그 함수가 스택 맨 위에 있던 시간이라 자기 몸에서 쓴 시간이고, total time은 스택 어딘가에 있던 시간이라 부른 함수까지 포함한다. 핸들러나 `main`은 total이 크고 self는 거의 0이라, 고칠 곳은 self가 넓은 칸이다. V8 내장 함수인 `JSON.stringify`는 부른 함수의 self로 잡히기도 해서 몸이 짧은 함수가 넓게 보일 수 있다. 재귀는 한 샘플에서 total을 한 번만 센다.
+
+### 힙 스냅샷을 운영에서 뜰 때 주의할 점은?
+
+뜨는 동안 메인 스레드가 멈추고, 힙 크기의 두 배쯤 메모리가 더 필요하다. 메모리 한도에 가까운 컨테이너에서 뜨면 스냅샷을 뜨다 OOM으로 죽는다. 그래서 트래픽을 뺀 한 대에서 뜨고, 누수는 두 장을 Comparison으로 비교해 늘어난 객체의 Retainers를 본다. 한도에 여유가 없으면 `--heapsnapshot-near-heap-limit`로 죽기 직전 모습을 남긴다.
+
+### APM이 있는데 CPU 프로파일이 왜 필요한가요?
+
+APM 자동 계측은 HTTP, DB 같은 라이브러리 경계에 span을 만들어서, 시간이 앱 안에서 쓰였다는 것까지만 알려 준다. 어느 함수인지는 프로파일이 알려 준다. 또 다른 요청이 루프를 막아 기다린 시간도 내 요청의 span에 섞여서, 가벼운 요청이 범인처럼 보일 수 있다. 그래서 APM 옆에 이벤트 루프 지연 지표를 두고, 튀면 프로파일을 뜬다.

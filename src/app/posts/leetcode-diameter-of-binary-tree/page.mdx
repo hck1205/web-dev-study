@@ -1,0 +1,515 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-diameter-of-binary-tree");
+
+<EasyIntro>
+  나뭇가지 끝에 개미가 두 마리 앉아 있다고 해 보자. 한 개미가 다른 개미에게 가려면 가지를 따라 걸어야 하고, 가지 사이를 건너뛸 수는 없다. 이 문제는 나무 위에서 가장 멀리 떨어진 두 개미를 찾고, 그 둘 사이에 가지 마디가 몇 개인지 세는 문제다. 가장 먼 길은 꼭 맨 위 줄기를 지나지 않을 수도 있다. 한쪽 큰 가지 안에서 왼쪽 끝과 오른쪽 끝이 더 멀 때가 있기 때문이다. 그래서 갈라지는 곳마다 "여기서 왼쪽으로 가장 깊이 내려간 길과 오른쪽으로 가장 깊이 내려간 길을 이으면 얼마나 길까"를 재 본다. 그중 가장 긴 값이 답이다. 아래 가지부터 깊이를 재서 위로 알려 주면 한 번만 훑어도 모든 갈림길을 잴 수 있다.
+</EasyIntro>
+
+조직도에서 두 사람이 결재를 주고받으려면 공통 상사까지 올라갔다가 다시 내려와야 한다. 가장 멀리 떨어진 두 사람 사이에 몇 단계가 있는지 알면, 결재가 최악의 경우 몇 번 오가야 하는지 알 수 있다. 네트워크 토폴로지가 트리 모양일 때 가장 먼 두 장비 사이의 홉 수를 재는 것도 같은 계산이다.
+
+[LeetCode 543. Diameter of Binary Tree](https://leetcode.com/problems/diameter-of-binary-tree/)가 이 거리를 이진 트리에서 묻는다. Easy로 분류되지만 처음 풀 때 두 번 틀리기 쉽다. 가장 긴 길이 뿌리를 지난다고 가정하는 것, 그리고 노드 수와 간선 수를 헷갈리는 것이다. 이 글은 모든 노드에서 BFS를 돌리는 느린 풀이부터 한 번의 후위 순회로 끝내는 풀이까지 다섯 가지를 보고, 그 과정에서 "재귀 함수가 돌려주는 값과 구하려는 답이 다를 때" 쓰는 틀을 정리한다.
+
+이 틀은 [Maximum Depth of Binary Tree 글](/posts/leetcode-maximum-depth-of-binary-tree)의 높이 계산 위에 세워진다. 높이 재귀가 낯설면 그 글을 먼저 보는 게 좋다. 같은 틀이 값의 합으로 바뀌면 [Binary Tree Maximum Path Sum 글](/posts/leetcode-binary-tree-maximum-path-sum)이 된다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 가장 먼 두 노드 사이의 간선 수
+
+이진 트리가 주어진다. 트리 안의 아무 두 노드를 골라 그 사이를 잇는 길을 생각한다. 트리에서는 두 노드 사이 길이 딱 하나뿐이다. 이 길 가운데 가장 긴 것의 길이, 즉 지름(diameter)을 돌려준다. 길이는 노드 수가 아니라 간선(노드와 노드를 잇는 선) 수로 센다. 노드가 하나뿐이면 지름은 0이다.
+
+제약에서 볼 것은 노드 수가 1개에서 10^4개라는 것이다. 노드 쌍을 전부 보면 약 5천만 쌍이고, 쌍마다 거리를 재는 비용까지 붙으면 느리다. 그리고 노드가 10^4개면 한쪽으로 늘어선 트리의 깊이도 10^4까지 갈 수 있어서, 재귀 풀이는 언어에 따라 호출 스택 한계에 닿는다. 이건 뒤에서 실제로 재 본다.
+
+이 글에서 쓸 예시 트리다. LeetCode처럼 위층부터 왼쪽에서 오른쪽으로 읽고, 빈 자리는 `null`로 둔다.
+
+```text
+[1, 2, null, 4, 5, 6, null, null, 7]
+
+          1
+         /
+        2
+       / \
+      4   5
+     /     \
+    6       7
+```
+
+뿌리 1에서 가장 깊은 잎까지는 간선 3개(1-2-4-6)다. 그런데 6에서 7까지 가는 길 6-4-2-5-7은 간선이 4개다. 이 길은 뿌리를 지나지 않는다. 답은 4다. 아래 그림에서 다음을 누르면 두 길을 차례로 그린다. 뒤의 두 단계는 세 번째 풀이에서 다시 쓴다.
+
+<VectorSpace
+  caption="가장 긴 길은 뿌리가 아니라 2에서 꺾인다"
+  groups={[{ id: "inner", label: "자식이 있는 노드" }, { id: "leaf", label: "잎 노드" }]}
+  points={[
+    { id: "n1", label: "1", x: 200, y: 35, group: "inner" },
+    { id: "n2", label: "2", x: 150, y: 95, group: "inner" },
+    { id: "n4", label: "4", x: 90, y: 160, group: "inner" },
+    { id: "n5", label: "5", x: 210, y: 160, group: "inner" },
+    { id: "n6", label: "6", x: 50, y: 225, group: "leaf" },
+    { id: "n7", label: "7", x: 250, y: 225, group: "leaf" },
+  ]}
+  edges={[["n1", "n2"], ["n2", "n4"], ["n2", "n5"], ["n4", "n6"], ["n5", "n7"]]}
+  steps={[
+    { showEdges: true, caption: "노드 여섯 개, 간선 다섯 개짜리 트리다. 뿌리 1은 왼쪽 자식 하나뿐이다." },
+    { showEdges: true, path: ["n1", "n2", "n4", "n6"], caption: "뿌리에서 가장 깊은 잎까지는 간선 3개다. 뿌리를 지나는 길 중에는 이게 가장 길다." },
+    { showEdges: true, path: ["n6", "n4", "n2", "n5", "n7"], caption: "6에서 2를 거쳐 7까지는 간선 4개다. 뿌리를 지나지 않는 이 길이 지름이다." },
+    { showEdges: true, path: ["n1", "n2", "n4", "n6"], caption: "아무 노드(여기선 1)에서 가장 먼 노드를 찾으면 6이다. 거리 3짜리 7과 비기지만 먼저 찾은 6을 쓴다." },
+    { showEdges: true, path: ["n6", "n4", "n2", "n5", "n7"], caption: "6에서 다시 가장 먼 노드를 찾으면 7이고 거리 4다. 두 번의 탐색만으로 지름이 나온다." },
+  ]}
+/>
+
+트리 안의 모든 길은 어딘가에서 꺾인다. 길 위에서 가장 높이 있는 노드, 그러니까 두 끝점의 가장 가까운 공통 조상에서 왼쪽 아래와 오른쪽 아래로 갈라진다. 위 그림의 지름은 2에서 꺾였다. 이 관찰이 네 번째 풀이의 출발점이다.
+
+## 모든 노드에서 가장 먼 곳까지 걸어 본다
+
+정의를 그대로 따르면, 노드마다 거기서 가장 먼 노드까지의 거리를 재고 그 최댓값을 고르면 된다. 트리는 부모 방향으로도 걸어갈 수 있어야 하니, 먼저 트리를 양방향 그래프(인접 리스트)로 바꾼다. 그다음 노드마다 BFS를 돌린다. BFS는 가까운 노드부터 한 겹씩 넓혀 가며 거리를 매기는 탐색이다. 자세한 동작은 [그래프 BFS와 DFS 글](/posts/ds-graph-bfs-dfs)에 있다.
+
+```js
+// 트리를 양방향 인접 리스트로 바꾼다. 키는 노드 객체다
+function toGraph(root) {
+  const adj = new Map();
+  const stack = root ? [root] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!adj.has(node)) adj.set(node, []);
+    for (const child of [node.left, node.right]) {
+      if (!child) continue;
+      adj.get(node).push(child); // 부모 → 자식
+      if (!adj.has(child)) adj.set(child, []);
+      adj.get(child).push(node); // 자식 → 부모
+      stack.push(child);
+    }
+  }
+  return adj;
+}
+
+// start에서 가장 먼 노드와 그 거리를 돌려준다
+function bfsFarthest(adj, start) {
+  const dist = new Map([[start, 0]]);
+  const queue = [start];
+  let head = 0, far = start;
+  while (head < queue.length) {
+    const node = queue[head++];
+    if (dist.get(node) > dist.get(far)) far = node;
+    for (const next of adj.get(node)) {
+      if (dist.has(next)) continue; // 이미 거리를 매긴 노드
+      dist.set(next, dist.get(node) + 1);
+      queue.push(next);
+    }
+  }
+  return [far, dist.get(far)];
+}
+
+function diameterOfBinaryTree(root) {
+  const adj = toGraph(root);
+  let best = 0;
+  for (const node of adj.keys()) {
+    best = Math.max(best, bfsFarthest(adj, node)[1]);
+  }
+  return best;
+}
+```
+
+예시 트리에서 4가 나온다. 맞는 답이지만 노드마다 BFS가 O(n)이라 전체는 O(n²)이다. 노드 10^4개짜리 트리로 재 보니 꽉 찬 트리에서 약 24.8초, 한쪽으로 늘어선 트리에서 약 18.8초가 걸렸다. 공간은 그래프와 거리 표로 O(n)이다.
+
+이 풀이를 버려도 그래프로 바꾸는 생각은 남겨 둔다. 세 번째 풀이에서 BFS 두 번으로 줄인다.
+
+## 노드마다 왼쪽 높이와 오른쪽 높이를 다시 잰다
+
+앞에서 본 관찰을 쓰면 BFS 없이도 된다. 모든 길은 어떤 노드에서 꺾인다. 노드 X에서 꺾이는 가장 긴 길은 X의 왼쪽 가지에서 가장 깊이 내려간 길과 오른쪽 가지에서 가장 깊이 내려간 길을 이은 것이다. 그 길이는 왼쪽 가지의 높이와 오른쪽 가지의 높이를 더한 값이다.
+
+여기서 높이는 그 가지의 뿌리에서 가장 깊은 잎까지 노드 수로 센다. 빈 가지는 0이다. X에서 왼쪽 자식으로 내려가는 간선 하나가 왼쪽 가지 높이의 첫 노드 몫과 맞아떨어져서, 두 높이를 더하면 바로 간선 수가 된다. 2에서 꺾이는 길로 확인하면 왼쪽 가지(4, 6)의 높이 2, 오른쪽 가지(5, 7)의 높이 2라서 2 + 2 = 4다.
+
+```js
+function height(node) {
+  if (node === null) return 0;
+  return 1 + Math.max(height(node.left), height(node.right));
+}
+
+function diameterOfBinaryTree(root) {
+  if (root === null) return 0;
+  const through = height(root.left) + height(root.right); // root에서 꺾이는 길
+  return Math.max(
+    through,
+    diameterOfBinaryTree(root.left), // 꺾이는 곳이 왼쪽 가지 안에 있거나
+    diameterOfBinaryTree(root.right) // 오른쪽 가지 안에 있거나
+  );
+}
+```
+
+맞게 동작하지만 `height`가 같은 노드를 여러 번 잰다. 뿌리에서 한 번, 그 자식에서 또 한 번, 손자에서 또 한 번이다. 노드 하나의 높이는 그 노드의 조상 수만큼 다시 계산된다.
+
+그래서 시간은 트리 모양에 따라 달라진다. 균형 잡힌 트리면 조상이 O(log n)개라 O(n log n)이고, 한쪽으로 늘어선 트리면 O(n²)이다. 노드 5,000개짜리 일자 트리에서 약 278ms가 걸렸고, 꽉 찬 트리 10^4개는 2.5ms였다. 10^4개 일자 트리는 시간을 재기도 전에 호출 스택이 넘쳤다. 이 문제는 네 번째 풀이에서 다시 만난다.
+
+이 풀이의 낭비는 분명하다. 같은 높이를 여러 번 잰다. 높이를 표에 저장해 두면(메모이제이션) O(n)이 되는데, 사실 표조차 필요 없다. 높이를 재는 재귀가 이미 모든 노드를 한 번씩 지나가니, 지나가는 김에 지름 후보도 재면 된다. 그게 네 번째 풀이다.
+
+## 아무 데서나 가장 먼 곳, 거기서 다시 가장 먼 곳
+
+다섯 풀이 중 그래프 쪽에서 나온 O(n) 풀이다. 첫 번째 풀이는 노드마다 BFS를 돌렸지만, 사실 두 번이면 된다.
+
+1. 아무 노드 s에서 BFS를 돌려 가장 먼 노드 u를 찾는다.
+2. u에서 다시 BFS를 돌려 가장 먼 노드까지의 거리를 잰다. 그게 지름이다.
+
+```js
+function diameterOfBinaryTree(root) {
+  const adj = toGraph(root); // 첫 번째 풀이의 함수 그대로
+  const [u] = bfsFarthest(adj, root); // 1단계: 뿌리에서 가장 먼 노드
+  return bfsFarthest(adj, u)[1]; // 2단계: 거기서 가장 먼 거리
+}
+```
+
+위 그림의 마지막 두 단계가 이 과정이다. 뿌리 1에서 가장 먼 노드는 6(거리 3)이고, 6에서 가장 먼 노드는 7(거리 4)이다.
+
+왜 u가 지름의 한쪽 끝인지는 짧게 증명할 수 있다. 실제 지름의 두 끝을 a, b라고 하자. s에서 가장 먼 노드 u가 a, b 어느 쪽과도 다르다고 가정한다. s에서 u로 가는 길과 a에서 b로 가는 길이 만나는 경우, 만나는 점에서 u까지가 a나 b까지보다 짧지 않으니 a-b 길의 한쪽을 u 쪽으로 바꿔도 길이가 줄지 않는다. 만나지 않는 경우에도 연결 경로를 끼워 같은 비교를 하면, u를 끝으로 하는 길이 지름보다 짧지 않다. 그래서 u에서 가장 먼 거리가 지름이다. 이 성질은 간선 가중치가 음수가 아닌 트리라면 그대로 성립하고, 음수 가중치가 있거나 트리가 아닌 그래프에서는 깨진다.
+
+시간은 그래프 만들기 O(n), BFS 두 번 O(n)으로 O(n)이다. 공간은 인접 리스트와 거리 표로 O(n)이다. 10^4개 트리에서 20~25ms로 끝났다.
+
+장점은 재귀가 없어서 깊은 트리에서도 안전하고, 트리가 이진 트리가 아니어도, 간선 목록으로 주어져도 그대로 쓸 수 있다는 것이다. 단점은 이진 트리라는 구조를 버리고 그래프로 옮기는 비용이다. 노드마다 Map 항목과 배열을 만들어서 다음 풀이보다 메모리를 훨씬 많이 쓴다.
+
+## 높이를 올려 보내며 지름은 옆에 적어 둔다
+
+두 번째 풀이에서 높이를 반복해서 잰 게 문제였다. 높이 재귀 하나만 돌리고, 각 노드에서 왼쪽 높이와 오른쪽 높이를 받았을 때 그 합을 지름 후보로 바깥 변수에 적어 둔다.
+
+여기서 이 문제의 요점이 나온다. 재귀 함수가 부모에게 돌려주는 값과 우리가 구하려는 답이 다르다. 부모는 "내 자식 가지가 얼마나 깊은가"만 알면 된다. 꺾인 길은 부모 쪽으로 이어질 수 없기 때문이다. 이미 왼쪽과 오른쪽으로 갈라진 길에 부모를 붙이면 세 갈래가 되어 길이 아니다. 그래서 함수는 높이를 돌려주고, 지름은 옆 변수에 따로 모은다.
+
+```js
+function diameterOfBinaryTree(root) {
+  let best = 0; // 지금까지 본 가장 긴 꺾인 길 (간선 수)
+  function depth(node) {
+    if (node === null) return 0;
+    const left = depth(node.left); // 왼쪽 가지 높이
+    const right = depth(node.right); // 오른쪽 가지 높이
+    best = Math.max(best, left + right); // node에서 꺾이는 길
+    return 1 + Math.max(left, right); // 부모에게는 한쪽으로만 내려가는 길을 준다
+  }
+  depth(root);
+  return best;
+}
+```
+
+아래 그림은 예시 트리에서 이 함수가 도는 순서다. 칸은 노드를 층 순서로 펼친 것이고, 기억 칸은 쌓여 있는 호출이다. 초록 칸은 높이가 확정된 노드다.
+
+<AlgoTrace
+  caption="후위 순회 한 번: 높이는 위로 올리고, 지름 후보는 옆에 적는다"
+  memoryLabel="호출 스택 (왼쪽이 바닥)"
+  cells={["1", "2", "4", "5", "6", "7"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "뿌리 1에서 시작한다. 높이를 알려면 왼쪽 자식 2부터 물어야 한다." },
+    { pointer: 4, memory: ["1", "2", "4", "6"], caption: "2, 4를 거쳐 잎 6까지 내려왔다. 6은 왼쪽 0, 오른쪽 0이다." },
+    { pointer: 4, found: [4], memory: ["1", "2", "4"], caption: "6에서 꺾이는 길은 0 + 0 = 0. best = 0. 높이 1을 4에게 돌려준다." },
+    { pointer: 2, found: [2, 4], memory: ["1", "2"], caption: "4는 왼쪽 1, 오른쪽 0. 꺾이는 길 1이라 best = 1. 높이 2를 돌려준다." },
+    { pointer: 5, found: [2, 4, 5], memory: ["1", "2", "5", "7"], caption: "2가 오른쪽 5에게 묻고, 5는 오른쪽 7에게 묻는다. 7은 잎이라 높이 1이다." },
+    { pointer: 3, found: [2, 3, 4, 5], memory: ["1", "2"], caption: "5는 왼쪽 0, 오른쪽 1. 꺾이는 길 1이라 best는 그대로 1. 높이 2를 돌려준다." },
+    { pointer: 1, found: [1, 2, 3, 4, 5], memory: ["1"], caption: "2는 왼쪽 2, 오른쪽 2를 받았다. 2 + 2 = 4라서 best = 4. 높이 3을 돌려준다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "1은 왼쪽 3, 오른쪽 0. 꺾이는 길 3은 best 4보다 짧다. 답은 4다." },
+  ]}
+/>
+
+마지막 단계를 보면, 뿌리 1에서 꺾이는 길은 3밖에 안 된다. 뿌리만 봤다면 3을 답으로 냈을 것이다. best가 4로 바뀐 건 2에서였다. 모든 노드에서 후보를 적어 두는 이유가 여기에 있다.
+
+노드마다 한 번 불리고 그 안에서 상수 시간 일을 하니 시간은 O(n)이다. 추가 공간은 호출 스택 O(h)다. 꽉 찬 10^4개 트리에서 0.8ms로 다섯 풀이 중 가장 빨랐다.
+
+### 깊은 트리에서 재귀가 먼저 터진다
+
+문제는 h다. 노드 10^4개가 한쪽으로 늘어서면 호출이 10^4개 쌓인다. 이 환경의 Node.js 22 기본 설정에서 같은 함수를 돌려 보니 7,000단계는 통과했고 8,000단계부터 `RangeError: Maximum call stack size exceeded`가 났다. `node --stack-size=4000`으로 스택을 늘리면 10^4단계도 1.9ms에 끝났다. 한계는 함수가 처음 불려 아직 최적화되지 않은 상태인지, 지역 변수가 몇 개인지에 따라 달라지니 숫자 자체보다 "제약 상한 근처에서 걸릴 수 있다"는 점을 기억해 둔다. 채점 서버의 스택 설정은 공개된 값이 아니라서, 통과 여부를 장담하려면 다음 풀이처럼 반복문으로 짠다.
+
+### Python과 Java로 쓰면
+
+Python은 안쪽 함수에서 바깥 변수 `best`를 고치려면 `nonlocal`이 필요하다. 빠뜨리면 `best = max(...)` 줄에서 `best`를 지역 변수로 보고 `UnboundLocalError`가 난다.
+
+```python
+class Solution:
+    def diameterOfBinaryTree(self, root: Optional[TreeNode]) -> int:
+        best = 0
+
+        def depth(node):
+            nonlocal best  # 바깥 변수를 고치려면 nonlocal이 필요하다
+            if node is None:
+                return 0
+            left = depth(node.left)
+            right = depth(node.right)
+            best = max(best, left + right)  # 이 노드에서 꺾이는 길의 간선 수
+            return 1 + max(left, right)
+
+        depth(root)
+        return best
+```
+
+```text
+4
+```
+
+Python 기본 재귀 한도는 1000이라 10^4단계 일자 트리에서는 `RecursionError: maximum recursion depth exceeded`가 났다. `sys.setrecursionlimit(20000)`을 먼저 부르면 9999가 나왔다.
+
+Java에는 클로저 안에서 바깥 지역 변수를 고치는 방법이 없어서 필드를 쓴다. 필드는 객체에 남으니 메서드 시작에서 0으로 되돌린다.
+
+```java
+class Solution {
+    private int best; // 필드라서 호출마다 0으로 되돌려야 한다
+
+    public int diameterOfBinaryTree(TreeNode root) {
+        best = 0;
+        depth(root);
+        return best;
+    }
+
+    private int depth(TreeNode node) {
+        if (node == null) return 0;
+        int left = depth(node.left);
+        int right = depth(node.right);
+        best = Math.max(best, left + right);
+        return 1 + Math.max(left, right);
+    }
+}
+```
+
+```text
+4
+```
+
+Java도 이 환경의 기본 스레드 스택에서 10^4단계 일자 트리를 넣으니 `StackOverflowError`가 났다. 필드 대신 `int[] best = new int[1]`을 넘기는 방법도 흔히 쓴다. 정수 오버플로는 걱정할 필요가 없다. 지름은 노드 수보다 작으니 많아야 10^4이다.
+
+## 재귀 없이 후위 순서를 손으로 흉내 낸다
+
+깊이 걱정 없이 같은 계산을 하려면 후위 순회를 스택으로 짠다. 후위 순회는 두 자식을 다 처리한 다음 부모를 처리해야 해서, 스택에서 꺼낸 노드가 "처음 만난 것"인지 "자식을 다 보고 돌아온 것"인지 구분해야 한다. 노드와 함께 방문 표시를 넣는다.
+
+```js
+function diameterOfBinaryTree(root) {
+  const h = new Map([[null, 0]]); // 노드 → 높이. 빈 자리는 0
+  const stack = [[root, false]];
+  let best = 0;
+  while (stack.length) {
+    const [node, visited] = stack.pop();
+    if (node === null) continue;
+    if (visited) {
+      // 두 자식의 높이가 이미 h에 있다
+      const l = h.get(node.left), r = h.get(node.right);
+      best = Math.max(best, l + r);
+      h.set(node, 1 + Math.max(l, r));
+    } else {
+      // 돌아와서 처리할 자기 자신을 먼저 넣고, 그 위에 자식을 넣는다
+      stack.push([node, true], [node.right, false], [node.left, false]);
+    }
+  }
+  return best;
+}
+```
+
+아래 그림은 같은 예시에서 스택이 바뀌는 모습이다. 기억 칸의 오른쪽 끝이 다음에 꺼낼 항목이고, ✓가 붙은 항목은 자식을 다 보고 돌아와 처리할 노드다. 빈 자식(null)은 꺼내자마자 버리므로 그림에서 뺐다.
+
+<AlgoTrace
+  caption="스택 후위 순회: ✓ 표시가 붙은 노드는 두 자식 높이가 준비된 뒤에 꺼내진다"
+  memoryLabel="스택 (오른쪽이 꼭대기)"
+  cells={["1", "2", "4", "5", "6", "7"]}
+  steps={[
+    { pointer: 0, memory: ["1✓", "2"], caption: "1을 처음 꺼냈다. 돌아올 표시 1✓를 넣고 그 위에 자식 2를 넣는다." },
+    { pointer: 1, memory: ["1✓", "2✓", "5", "4"], caption: "2를 열었다. 2✓ 위에 오른쪽 5, 왼쪽 4 순서로 넣어 왼쪽이 먼저 나온다." },
+    { pointer: 4, memory: ["1✓", "2✓", "5", "4✓", "6✓"], caption: "4를 열고 6까지 열었다. 6은 자식이 없어 바로 6✓가 꼭대기에 온다." },
+    { pointer: 4, found: [4], memory: ["1✓", "2✓", "5", "4✓"], caption: "6✓를 꺼낸다. 0 + 0 = 0, 높이 1을 표에 적는다." },
+    { pointer: 2, found: [2, 4], memory: ["1✓", "2✓", "5"], caption: "4✓를 꺼낸다. 표에서 왼쪽 1, 오른쪽 0을 읽어 best = 1, 높이 2." },
+    { pointer: 5, found: [2, 4, 5], memory: ["1✓", "2✓", "5✓"], caption: "5를 열고 7을 열었다가 7✓까지 처리했다. 7의 높이는 1이다." },
+    { pointer: 3, found: [2, 3, 4, 5], memory: ["1✓", "2✓"], caption: "5✓를 꺼낸다. 왼쪽 0, 오른쪽 1이라 best는 그대로 1, 높이 2." },
+    { pointer: 1, found: [1, 2, 3, 4, 5], memory: ["1✓"], caption: "2✓를 꺼낸다. 2 + 2 = 4라서 best = 4, 높이 3." },
+    { pointer: 0, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "1✓를 꺼낸다. 3 + 0 = 3은 4보다 작다. 스택이 비었고 답은 4다." },
+  ]}
+/>
+
+재귀 그림과 초록 칸이 채워지는 순서가 똑같다. 호출 스택이 하던 "자식을 다 보고 돌아오기"를 ✓ 표시가 대신한다. 시간 O(n), 공간은 스택과 높이 표로 O(n)이다. 10^4개 일자 트리도 12.4ms에 9999를 냈다. 재귀 버전보다 코드가 길고 높이 표를 따로 들고 있어야 하니, 면접에서는 재귀를 먼저 쓰고 "깊이가 걱정되면 이렇게 바꾼다"로 보여 주면 된다.
+
+## 다섯 가지 지름 계산 견주기
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 노드에서 BFS | O(n²) | O(n) | 정의를 확인하는 용도. 실제로는 쓰지 않는다 |
+| 노드마다 높이 다시 재기 | 균형 O(n log n), 최악 O(n²) | O(h) | 처음 떠올린 생각을 말로 설명할 때 |
+| BFS 두 번 | O(n) | O(n) | 트리가 간선 목록이나 N진 트리로 주어질 때, 가중치가 있을 때 |
+| 후위 순회 한 번 (재귀) | O(n) | O(h) | 기본 답. 가장 짧고 빠르다 |
+| 후위 순회 한 번 (스택) | O(n) | O(n) | 깊이가 10^4 근처까지 갈 수 있어 재귀가 불안할 때 |
+
+## 지름을 직접 재 보기
+
+아래 칸에서 `diameterOfBinaryTree`를 채워 보자. 입력은 층 순서 배열이고 `buildTree`가 트리로 바꿔 준다. 뿌리를 지나지 않는 지름, 노드 하나, 한쪽으로 늘어선 트리가 들어 있다. 풀이 보기에는 후위 순회 재귀가 들어 있다.
+
+<CodePlayground
+  caption="Diameter of Binary Tree"
+  functionName="diameterOfBinaryTree"
+  initialCode={`// 층 순서 배열을 트리로 바꾸는 도우미 (그대로 두면 된다)
+function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function diameterOfBinaryTree(values) {
+  const root = buildTree(values);
+  // 가장 먼 두 노드 사이의 간선 수를 돌려준다
+  return 0;
+}`}
+  solution={`function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function diameterOfBinaryTree(values) {
+  let best = 0;
+  function depth(node) {
+    if (node === null) return 0;
+    const left = depth(node.left);
+    const right = depth(node.right);
+    best = Math.max(best, left + right);
+    return 1 + Math.max(left, right);
+  }
+  depth(buildTree(values));
+  return best;
+}`}
+  tests={[
+    { args: [[1, 2, null, 4, 5, 6, null, null, 7]], expected: 4, label: "뿌리를 지나지 않는 지름" },
+    { args: [[1]], expected: 0, label: "노드 하나" },
+    { args: [[1, 2]], expected: 1, label: "노드 둘" },
+    { args: [[1, 2, 3]], expected: 2, label: "뿌리에서 꺾이는 길" },
+    { args: [[1, null, 2, null, 3, null, 4]], expected: 3, label: "한쪽으로 늘어선 트리" },
+    { args: [[-5, -3, -8]], expected: 2, label: "음수 값은 상관없다" },
+    { args: [[1, 2, 3, 4, 5, null, null, 6, null, null, 7, 8, null, null, 9]], expected: 6, label: "왼쪽 가지 안에서 꺾이는 긴 길" },
+  ]}
+/>
+
+## 지름 계산이 하나씩 어긋나는 자리
+
+### 뿌리만 보고 끝내기
+
+```js
+function diameterOfBinaryTree(root) {
+  return height(root.left) + height(root.right); // 뿌리에서 꺾이는 길만 본다
+}
+```
+
+예시 트리에서 3이 나온다. 정답은 4다. 꺾이는 곳이 뿌리라는 보장은 없다. 문제 설명에 "이 길은 뿌리를 지날 수도, 지나지 않을 수도 있다"는 말이 들어 있는 이유다. 작은 테스트(`[1, 2, 3]`, `[1, 2, 3, 4, 5]`)에서는 우연히 맞아서 제출 전까지 모르기 쉽다. 뿌리 한쪽이 비어 있는 트리로 꼭 확인한다.
+
+### 노드 수로 세기
+
+```js
+best = Math.max(best, left + right + 1); // 노드 수가 된다
+```
+
+꺾이는 노드까지 세면 길 위의 노드 수다. 예시에서 5가 나온다. 문제는 간선 수를 묻는다. 높이를 노드 수로 세는 정의(빈 가지 0, 잎 1)에서는 `left + right`가 정확히 간선 수다. 높이를 간선 수로 세는 정의(빈 가지 -1, 잎 0)를 쓰면 식이 `left + right + 2`로 바뀐다. 둘 중 하나로 정하고 섞지 않는다.
+
+### 재귀 함수가 지름을 돌려주게 짜기
+
+```js
+function depth(node) {
+  if (!node) return 0;
+  const l = depth(node.left), r = depth(node.right);
+  return Math.max(l + r, 1 + Math.max(l, r)); // 두 가지 뜻을 한 값에 섞었다
+}
+```
+
+예시 트리에서 5가 나온다. 부모는 이 값을 높이로 받아 쓰는데, 2가 꺾인 길 길이 4를 돌려주자 1이 거기에 1을 더해 세 갈래 길을 만들었다. 높이와 지름은 뜻이 다른 두 값이라 두 통로로 나눠야 한다. 하나는 반환값, 하나는 바깥 변수다. 두 값을 꼭 반환값으로만 주고 싶으면 `[높이, 지름]` 쌍을 돌려준다. 바깥 변수가 없어서 같은 함수를 여러 번 불러도 상태가 섞이지 않는다.
+
+```js
+// [이 가지의 높이, 이 가지 안의 지름]을 돌려준다
+function solve(node) {
+  if (node === null) return [0, 0];
+  const [lh, ld] = solve(node.left);
+  const [rh, rd] = solve(node.right);
+  return [1 + Math.max(lh, rh), Math.max(ld, rd, lh + rh)];
+}
+const diameterOfBinaryTree = (root) => solve(root)[1];
+```
+
+예시 트리에서 뿌리의 결과는 `[4, 4]`, 즉 높이 4에 지름 4다. 호출마다 작은 배열을 만드는 비용이 있지만 노드 10^4개에서는 차이가 거의 없다.
+
+### 이전 테스트의 best가 남아 있기
+
+Python에서 `best`를 클래스 변수로 두고 `self.best`를 고치면, 같은 `Solution` 객체로 두 번 부를 때 앞의 값이 남는다. 실제로 예시 트리 다음에 `[1, 2]`를 넣으면 1이 아니라 4가 나왔다. Java 필드도 메서드 시작에서 0으로 되돌리지 않으면 같은 일이 생긴다. JavaScript에서 `best`를 함수 밖 모듈 변수로 두는 것도 마찬가지다. 상태는 함수 호출 안에 가둔다.
+
+## 지름에서 갈라지는 문제들
+
+### 간선마다 길이가 다르다면
+
+간선에 가중치가 있는 트리의 지름도 같은 틀이다. 후위 순회에서 `left + right` 대신 `left + w(왼쪽 간선) + right + w(오른쪽 간선)`을 후보로 쓰고, 높이도 가중치를 더해 올린다. BFS 두 번 풀이는 BFS를 거리 누적 DFS로 바꾸면 된다. 가중치가 음수가 아니어야 두 번 탐색 풀이의 증명이 성립한다.
+
+### 노드 값의 합이 가장 큰 길이라면
+
+[Binary Tree Maximum Path Sum](/posts/leetcode-binary-tree-maximum-path-sum)이다. 높이 대신 "한쪽으로 내려가는 길의 최대 합"을 올려 보내고, 음수 가지는 0으로 잘라 버린다. 틀은 이 글과 같지만, 값이 음수일 수 있어서 빈 트리 기본값과 잘라 내기를 신경 써야 한다.
+
+### 같은 값끼리만 이어진 길이라면
+
+LeetCode 687 Longest Univalue Path다. 자식 값이 내 값과 같을 때만 그 쪽 높이를 이어 붙이고, 다르면 그 쪽을 0으로 둔다. 나머지는 지름 코드와 같다.
+
+### 자식이 여러 개인 트리라면
+
+LeetCode 1522 Diameter of N-Ary Tree(프리미엄 문제)다. 자식 높이 중 가장 큰 두 개를 더한 값이 그 노드에서 꺾이는 길이다. 자식 높이를 정렬하지 않고 첫째, 둘째 최댓값만 들고 가면 O(n)이다.
+
+### 트리가 간선 목록으로 주어진다면
+
+LeetCode 1245 Tree Diameter(프리미엄 문제)가 그렇다. 뿌리가 정해져 있지 않으니 BFS 두 번 풀이가 가장 자연스럽다. 아무 노드에서 시작해도 된다.
+
+### 지름 위의 노드를 실제로 달라면
+
+후위 풀이에서 best를 갱신할 때 그 노드를 함께 적어 두고, 높이를 올릴 때 어느 자식 쪽이 깊었는지도 기록한다. 끝난 뒤 꺾이는 노드에서 양쪽으로 깊은 쪽을 따라 내려가면 길이 나온다. BFS 두 번 풀이라면 두 번째 BFS에서 부모를 기록해 u까지 거꾸로 따라가면 된다.
+
+### 같은 패턴의 다른 문제
+
+LeetCode 110 Balanced Binary Tree는 같은 후위 틀에서 "왼쪽 높이와 오른쪽 높이 차이가 1을 넘는 노드가 있나"를 본다. 높이와 함께 "이미 균형이 깨졌다"는 신호(-1 같은 값)를 올려 보내면 한 번에 끝난다. 이 문제처럼 반환값 하나와 바깥 답 하나를 따로 두는 틀은 [Validate Binary Search Tree](/posts/leetcode-validate-binary-search-tree)에서 범위를 아래로 내려보내는 틀과 짝을 이룬다. 트리를 뒤집는 [Invert Binary Tree](/posts/leetcode-invert-binary-tree)는 같은 순회를 반환값 없이 쓰는 경우다.
+
+## 꺾이는 곳마다 한 번씩 잰다
+
+트리의 모든 길은 한 노드에서 꺾이고, 그 노드에서 꺾이는 가장 긴 길은 왼쪽 높이와 오른쪽 높이의 합이다. 높이를 구하는 재귀는 어차피 모든 노드를 지나가니, 지나가는 김에 그 합을 바깥 변수에 적어 두면 한 번에 끝난다. 부모에게는 높이를, 답에는 꺾인 길을 주는 두 통로를 나누는 게 이 문제에서 가져갈 생각이다.
+
+## 면접에서 나올 만한 질문
+
+### 지름이 뿌리를 지난다고 가정하면 안 되는 이유는요?
+
+가장 긴 길이 한쪽 가지 안에서 꺾일 수 있기 때문이다. 뿌리 한쪽이 비어 있고 다른 쪽 가지 안이 넓게 퍼진 트리가 그렇다. 그래서 모든 노드에서 "여기서 꺾이는 길"을 후보로 재고 최댓값을 고른다.
+
+### 재귀 함수는 높이를 돌려주는데 답은 왜 따로 모으나요?
+
+부모가 쓸 수 있는 건 한쪽으로만 내려가는 길뿐이다. 이미 양쪽으로 갈라진 길에 부모를 붙이면 세 갈래가 되어 길이 아니다. 그래서 반환값은 부모를 위한 높이, 바깥 변수는 답을 위한 꺾인 길로 나눈다.
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+후위 순회 한 번이라 시간 O(n)이다. 추가 공간은 호출 스택 O(h)이고, 균형 트리면 O(log n), 일자 트리면 O(n)이다. 노드마다 높이를 다시 재는 풀이는 일자 트리에서 O(n²)이 된다.
+
+### 노드가 10^4개인데 재귀로 괜찮나요?
+
+장담하기 어렵다. 내가 돌려 본 Node.js 22 기본 설정에서는 8,000단계 일자 트리부터 스택이 넘쳤고, Python은 기본 한도가 1000이다. 확실히 하려면 방문 표시를 함께 넣는 스택으로 후위 순회를 짜거나, 트리를 그래프로 바꿔 BFS를 두 번 돌린다.
+
+### BFS 두 번으로 지름이 나오는 이유는요?
+
+트리에서 아무 노드에서든 가장 먼 노드는 어떤 지름의 한쪽 끝이다. 그 끝에서 다시 가장 먼 노드까지가 지름이 된다. 간선 가중치가 음수가 아닌 트리에서만 성립하고, 사이클이 있는 일반 그래프에서는 맞지 않는다.
+
+### 노드 수로 세라고 하면 어떻게 바꾸나요?
+
+후보를 `left + right + 1`로 바꾸면 된다. 간선 수와 노드 수는 늘 1 차이다. 다만 높이를 노드 수로 셀지 간선 수로 셀지 먼저 정하고, 식을 그 정의에 맞춰야 한다.
+
+### 경로의 가중치 합이 가장 큰 경로로 바꾸면요?
+
+같은 틀에서 높이 대신 한쪽으로 내려가는 길의 최대 합을 올려 보낸다. 값이 음수일 수 있으니 손해인 가지는 0으로 잘라 내고, 답의 초깃값을 0이 아니라 아주 작은 값으로 둔다. Maximum Path Sum 문제가 정확히 이 변형이다.

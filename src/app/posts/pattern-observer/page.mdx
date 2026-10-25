@@ -296,6 +296,56 @@ Error: redis connection lost
 
 경고 문구가 "메모리 누수일 수 있다"인 이유가 있다. 옵서버에서 가장 흔한 누수는 구독만 하고 끊지 않는 것이다. 주체가 관찰자 목록으로 관찰자를 붙잡고 있으니, 관찰자가 화면에서 사라져도 GC가 치우지 못한다. 요청마다 `emitter.on()`을 하고 `off()`를 잊으면 리스너가 요청 수만큼 쌓이고, 10개를 넘는 순간 이 경고가 뜬다. 정말로 리스너가 많이 필요한 주체라면 `setMaxListeners`로 올리면 되지만, 경고를 끄기 전에 리스너가 왜 늘어나는지부터 본다. 브라우저 쪽에서 화면을 떠나도 남는 리스너를 찾는 방법은 [메모리 누수 글](/posts/js-memory-leak#페이지를-떠나도-남는-리스너)에 있다.
 
+경고만 보고는 어디서 리스너를 붙였는지 모른다. `node --trace-warnings app.js`로 띄우면 경고에 스택이 붙는다. 요청 핸들러 안에서 `bus.on("config", ...)`을 부르는 함수를 열한 번 불러 봤더니, 스택의 `EventEmitter.addListener` 바로 아래 줄에 그 핸들러 함수 이름과 줄 번호(`at handle (…/leak.mjs:3:28)`)가 찍혔다. 운영에서는 `process.on("warning", ...)`으로 이 경고를 받아 로그로 보내 두면 누수가 시작된 배포를 찾기 쉽다. 경고는 경고일 뿐이라 리스너는 열한 번째도, 백 번째도 그대로 붙는다.
+
+## 다음 이벤트를 await로 기다리기
+
+콜백 대신 `await`로 이벤트를 받고 싶을 때가 있다. 서버가 `listening`을 낼 때까지 기다리거나, 스트림이 `drain`될 때까지 쓰기를 멈추는 경우다. `node:events`의 `once(emitter, name)`은 다음 한 번을 Promise로 바꿔 준다. 이벤트 인자들이 배열로 오고, 그 사이에 `'error'`가 나면 거부된다.
+
+```js
+import { EventEmitter, once, on } from "node:events";
+
+const orders = new EventEmitter();
+setTimeout(() => orders.emit("paid", { id: 1 }, "card"), 10);
+console.log("once resolved:", JSON.stringify(await once(orders, "paid")));
+
+setTimeout(() => orders.emit("error", new Error("redis connection lost")), 10);
+try { await once(orders, "paid"); } catch (e) { console.log("once rejected:", e.message); }
+```
+
+```text
+once resolved: [{"id":1},"card"]
+once rejected: redis connection lost
+```
+
+두 번째가 중요하다. 앞에서 `'error'` 리스너가 없으면 프로세스가 내려간다고 했는데, `once`는 기다리는 동안 `'error'` 리스너를 잠깐 붙여 두니 그 에러가 거부로 바뀌어 `try...catch`에서 잡힌다.
+
+이벤트를 계속 받으려면 `on(emitter, name)`이 비동기 이터레이터를 돌려준다. `for await`로 돌고, 멈출 때는 `AbortSignal`을 쓴다. 이벤트 세 개를 한꺼번에 내고 루프 안에서 하나에 20ms씩 걸리게 했다.
+
+```js
+const ac = new AbortController();
+setTimeout(() => { for (const id of [2, 3, 4]) orders.emit("paid", { id }); }, 10);
+let n = 0;
+try {
+  for await (const [o] of on(orders, "paid", { signal: ac.signal })) {
+    console.log("for await got", o.id, "listeners:", orders.listenerCount("paid"));
+    await new Promise((r) => setTimeout(r, 20)); // 느린 처리
+    if (++n === 3) ac.abort();
+  }
+} catch (e) { console.log("loop ended:", e.name); }
+console.log("after loop listeners:", orders.listenerCount("paid"));
+```
+
+```text
+for await got 2 listeners: 1
+for await got 3 listeners: 1
+for await got 4 listeners: 1
+loop ended: AbortError
+after loop listeners: 0
+```
+
+첫 이벤트를 처리하는 20ms 동안 나머지 두 개가 이미 왔지만 버려지지 않고 차례로 나왔다. `on`이 안에 큐를 두고 쌓아 두기 때문이다. 대신 이 큐에는 한도가 없다. 이벤트가 처리 속도보다 빨리 오면 큐가 메모리를 계속 먹는다. 그리고 루프를 끝내면 리스너가 0개로 돌아왔다. `break`나 abort로 빠져나와야 리스너가 떨어지니, 신호 없이 무한히 도는 루프를 요청마다 만들면 앞의 누수와 같은 모양이 된다.
+
 ## 하나를 바꿨는데 두 번 알린다
 
 주체의 값 두 개를 이어서 바꾸면 관찰자는 그 사이의 어정쩡한 상태를 본다. 상품 옵션을 "1개 1,000원"에서 "3개 묶음 500원"으로 바꾸는 상황을, 위의 `createStore`에 총액을 찍는 관찰자를 붙여 돌렸다.
@@ -466,6 +516,10 @@ push는 바뀐 내용을 알림에 실어 보내고, pull은 바뀌었다는 사
 ### 옵서버 패턴에서 메모리 누수는 왜 생기나요?
 
 주체가 관찰자 목록으로 관찰자를 강하게 참조하기 때문이다. 관찰자가 더 이상 쓰이지 않아도 구독을 끊지 않으면 GC가 치우지 못하고, 요청이나 화면 전환마다 구독이 쌓인다. Node.js의 `MaxListenersExceededWarning`은 같은 이벤트에 리스너가 10개를 넘을 때 이 가능성을 알려 준다. 구독할 때 받은 해제 함수나 `AbortSignal`로 짝을 맞춰 끊는다.
+
+### EventEmitter의 이벤트를 await로 받을 수 있나요?
+
+`node:events`의 `once`는 다음 한 번을 Promise로 바꾸고, 기다리는 사이에 `'error'`가 오면 거부되어 `try...catch`로 잡힌다. 계속 받으려면 `on`이 돌려주는 비동기 이터레이터를 `for await`로 돈다. `on`은 처리하는 동안 온 이벤트를 한도 없는 큐에 쌓으니 처리 속도가 느리면 메모리가 는다. 루프를 끝내야 리스너가 떨어지므로 `AbortSignal`로 끝낼 시점을 정해 둔다.
 
 ### 알림 도중에 관찰자가 구독을 끊으면 어떤 문제가 생기나요?
 

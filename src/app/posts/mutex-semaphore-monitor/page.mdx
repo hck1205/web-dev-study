@@ -1,0 +1,393 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mutex-semaphore-monitor");
+
+<EasyIntro>
+  여러 사람이 같은 물건을 동시에 쓰려고 하면 차례를 정해 줘야 하고, 프로그램 안의 여러 일꾼에게도 차례를 정해 주는 도구가 몇 가지 있다. 가장 쉬운 비유는 화장실이다. 칸이 하나뿐인 화장실은 열쇠가 하나라서, 열쇠를 가져간 사람만 들어가고 나올 때 그 사람이 직접 열쇠를 돌려놓는데, 이것이 뮤텍스다. 칸이 열 개인 화장실 앞에는 남은 칸 수를 적은 숫자판이 있어서, 숫자가 0이 아니면 들어가며 하나 빼고 나오며 하나 더하는데, 이것이 세마포어다.
+
+  모니터는 화장실 앞에 선 관리인이다. 들어갈 때 문을 지켜 주고, 안이 비어 있지 않으면 대기 의자에 앉혀 두었다가 자리가 나면 깨워 준다. 다만 그사이 다른 사람이 먼저 들어갔을 수도 있어서, 깨어난 사람은 정말 자리가 있는지 다시 한 번 확인해야 한다. 어떤 도구를 쓸지는 한 명만 들어가야 하는지, 몇 명까지 들어가도 되는지, 어떤 조건이 될 때까지 기다려야 하는지에 따라 고른다.
+</EasyIntro>
+
+DB 커넥션 풀의 크기는 10인데 트래픽이 몰려 요청 100개가 동시에 들어온다. 10개는 바로 연결을 받고 90개는 기다린다. 기다리는 요청은 줄을 서야 하고, 연결이 돌아오면 그중 하나가 깨어나야 하고, 너무 오래 기다린 요청은 포기하고 에러를 돌려줘야 한다. 이 몇 줄짜리 요구 사항 안에 동기화 도구가 셋이나 숨어 있다. 개수를 세는 것, 한 번에 하나만 고치게 하는 것, 조건이 될 때까지 잠재워 두는 것이다.
+
+이 글은 그 도구들을 "무엇을 고를까"의 관점으로 본다. 뮤텍스와 세마포어가 무엇이 다른지, 스핀락은 언제 쓰는지, 조건 변수와 모니터가 왜 while 루프를 요구하는지, 읽기-쓰기 락과 공정한 락이 언제 오히려 손해인지를 Java 21, C(glibc), Go 1.24로 직접 돌려 본다. 환경은 Ubuntu 24.04, 4코어 VM이다.
+
+이 주제의 다른 글: 락이 왜 필요한지는 [경쟁 상태 글](/posts/race-conditions)과 [스레드 안전 글](/posts/thread-safety), 락을 잘못 잡아 멈추는 경우는 [데드락 글](/posts/deadlocks), 스레드 자체가 무엇인지는 [프로세스와 스레드 글](/posts/process-vs-thread)에 있다.
+
+## 열쇠 하나와 숫자판 하나
+
+EasyIntro의 화장실 비유를 계속 쓰자. 뮤텍스(mutex, mutual exclusion)는 열쇠가 하나뿐인 칸이다. 한 번에 한 스레드만 임계 구역(critical section, 공유 데이터를 고치는 코드 구간)에 들어간다. 그리고 열쇠를 가져간 스레드만 돌려놓을 수 있다. 뮤텍스와 세마포어는 바로 이 "주인이 있다"는 성질에서 갈린다.
+
+세마포어는 남은 칸 수를 적은 숫자판이다. 1965년 다익스트라가 제안했고, 연산은 둘뿐이다. 들어갈 때 `P`(acquire, wait)로 숫자를 하나 빼는데, 0이면 0이 아닐 때까지 잠든다. 나올 때 `V`(release, signal)로 하나 더하고 잠든 스레드가 있으면 하나 깨운다. 숫자의 처음 값이 동시에 들어갈 수 있는 수다. 처음 값이 1이면 이진 세마포어, 그보다 크면 카운팅 세마포어라고 부른다.
+
+이진 세마포어는 뮤텍스와 똑같아 보인다. 둘 다 한 번에 하나만 통과시킨다. 차이는 주인이다. 세마포어에는 주인이 없어서 아무 스레드나 `release`할 수 있다. 자바로 확인해 보자. 메인 스레드가 락과 세마포어를 둘 다 잡고, 다른 스레드가 풀어 본다.
+
+```java
+ReentrantLock lock = new ReentrantLock();
+Semaphore sem = new Semaphore(1);
+lock.lock(); sem.acquire();                 // 메인 스레드가 둘 다 잡는다
+
+Thread other = new Thread(() -> {
+  sem.release();                            // 다른 스레드가 세마포어를 푼다
+  System.out.println("semaphore released by other thread: permits=" + sem.availablePermits());
+  try { lock.unlock(); }                    // 다른 스레드가 락을 푼다
+  catch (IllegalMonitorStateException e) { System.out.println("lock.unlock() by other thread: " + e); }
+});
+other.start(); other.join();
+
+lock.lock();                                // 메인 스레드가 한 번 더 잡는다
+System.out.println("reentrant hold count=" + lock.getHoldCount());
+```
+
+```bash
+java Owner.java   # JDK 21은 소스 파일을 바로 실행한다
+```
+
+```text
+semaphore released by other thread: permits=1
+lock.unlock() by other thread: java.lang.IllegalMonitorStateException
+reentrant hold count=2
+```
+
+세마포어는 남이 풀어도 군말 없이 숫자를 올린다. 락은 주인이 아니면 예외를 던진다. 마지막 줄은 덤이다. `ReentrantLock`은 이름처럼 재진입이 된다. 이미 쥔 스레드가 다시 `lock()`하면 멈추지 않고 보유 횟수만 2로 올린다.
+
+주인이 없다는 건 단점이자 장점이다. 실수로 엉뚱한 곳에서 `release`를 두 번 부르면 숫자판이 10을 넘어 11이 돼도 아무도 모른다. 파이썬이 `BoundedSemaphore`를 따로 둔 이유다. 처음 값보다 많이 풀면 `ValueError`를 던진다. 반대로 주인이 없어서 "A 스레드가 일을 끝내면 B 스레드에게 알린다" 같은 신호 용도로 쓸 수 있다. 뮤텍스로는 할 수 없는 일이다.
+
+## 커넥션 10개에 요청 100개
+
+처음 상황으로 돌아가자. 커넥션 10개짜리 풀은 처음 값 10인 세마포어 그 자체다. 요청은 커넥션을 쓰기 전에 `acquire`하고 다 쓰면 `release`한다. 아래 그림에서 다음을 누르면 숫자판과 대기 줄이 어떻게 변하는지 볼 수 있다. 칸 수를 줄여 3으로 그렸다.
+
+<AlgoTrace
+  caption="처음 값 3인 세마포어에 다섯 요청이 몰린다"
+  memoryLabel="대기 줄"
+  cells={["A 획득", "B 획득", "C 획득", "D 획득", "E 획득", "A 반납", "B 반납"]}
+  steps={[
+    { pointer: 0, found: [0], memory: [], caption: "숫자판 3에서 2. A가 바로 들어간다." },
+    { pointer: 1, found: [0, 1], memory: [], caption: "숫자판 1. B도 들어간다." },
+    { pointer: 2, found: [0, 1, 2], memory: [], caption: "숫자판 0. C가 마지막 칸을 가져갔다." },
+    { pointer: 3, found: [0, 1, 2], memory: ["D"], caption: "숫자판이 0이라 D는 잠들어 줄을 선다." },
+    { pointer: 4, found: [0, 1, 2], memory: ["D", "E"], caption: "E도 줄 뒤에 선다." },
+    { pointer: 5, found: [0, 1, 2, 3], memory: ["E"], caption: "A가 반납한다. 숫자판을 올리는 대신 줄 맨 앞의 D를 깨워 칸을 넘긴다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4], memory: [], caption: "B가 반납하면 E가 들어간다. 줄이 비었다." },
+  ]}
+/>
+
+실제 풀은 여기에 시간 제한을 더한다. 영원히 기다리게 두면 요청 스레드가 전부 줄에 묶여 서버가 멈추기 때문이다. 자바의 `tryAcquire(시간)`이 그 역할이다. 커넥션을 50ms씩 쓰는 요청 100개를, 250ms까지만 기다리게 해서 돌렸다.
+
+```java
+Semaphore permits = new Semaphore(10);       // 커넥션 10개
+for (int i = 0; i < 100; i++) pool.submit(() -> {
+  if (!permits.tryAcquire(250, TimeUnit.MILLISECONDS)) { timedOut.incrementAndGet(); return null; }
+  try {
+    int n = inUse.incrementAndGet(); peak.accumulateAndGet(n, Math::max);
+    Thread.sleep(50);                        // 쿼리 하나에 50ms
+    inUse.decrementAndGet();
+  } finally {
+    permits.release();                       // 예외가 나도 반드시 돌려준다
+  }
+  return null;
+});
+```
+
+```text
+peak in use=10 timed out=50 elapsed=320ms
+```
+
+동시에 커넥션을 쓴 요청은 끝까지 10개를 넘지 않았다. 50ms씩 10개가 한 번에 지나가니 250ms 동안 대략 다섯 번, 50개가 통과하고 나머지 50개는 시간 제한에 걸려 포기했다. 실제 커넥션 풀의 "connection timeout" 설정이 이 숫자다. 너무 길면 요청이 줄에서 늙어 가고, 너무 짧으면 잠깐의 몰림에도 에러가 난다. 풀 크기를 정하는 법은 [커넥션 풀 글](/posts/connection-pool)에서 다뤘다.
+
+`release`는 반드시 `finally`에 둔다. 쿼리가 예외를 던져 `release`를 건너뛰면 숫자판이 하나씩 영영 줄어든다. 몇 시간 뒤 숫자판이 0이 되면 아무도 커넥션을 못 받는다. 커넥션 누수의 전형적인 모양이다.
+
+Go에는 세마포어 타입이 표준 라이브러리에 없다. 대신 버퍼 있는 채널을 세마포어로 쓴다. 채널에 값을 넣으면 `acquire`, 빼면 `release`다. 확장 패키지 `golang.org/x/sync/semaphore`에는 가중치를 주는 세마포어도 있다.
+
+```go
+sem := make(chan struct{}, 10) // 동시에 10개까지
+for _, job := range jobs {
+	sem <- struct{}{}        // 자리가 날 때까지 막힌다
+	go func() {
+		defer func() { <-sem }() // 끝나면 자리를 돌려준다
+		handle(job)
+	}()
+}
+```
+
+## 순서를 직접 따라가 보기
+
+세마포어의 규칙은 단순하지만 손으로 따라가 보면 확실해진다. 처음 값과 사건 목록을 받아 누가 어떤 순서로 칸을 얻는지 돌려주는 함수를 짜 보자. `"A+"`는 A가 획득을 요청한 것, `"A-"`는 반납이다. 대기 줄은 먼저 온 순서(FIFO)다. 넷째 테스트는 주인이 없다는 성질을 보여 준다. 칸을 쥔 적 없는 X가 반납해도 숫자판은 올라간다.
+
+<CodePlayground
+  caption="세마포어가 칸을 내주는 순서"
+  functionName="grantOrder"
+  initialCode={`function grantOrder(permits, events) {
+  // permits: 처음 값, events: ["A+", "B+", "A-", ...]
+  // 칸을 얻은 순서대로 이름 배열을 돌려준다
+  return [];
+}`}
+  solution={`function grantOrder(permits, events) {
+  let free = permits;
+  const waiting = [];
+  const granted = [];
+  for (const e of events) {
+    const name = e.slice(0, -1);
+    if (e.endsWith("+")) {
+      if (free > 0) { free--; granted.push(name); }
+      else waiting.push(name);
+    } else {
+      if (waiting.length > 0) granted.push(waiting.shift());
+      else free++;
+    }
+  }
+  return granted;
+}`}
+  tests={[
+    { label: "칸 2개에 셋, A 반납", args: [2, ["A+", "B+", "C+", "A-"]], expected: ["A", "B", "C"] },
+    { label: "이진 세마포어", args: [1, ["A+", "B+", "C+", "A-", "B-"]], expected: ["A", "B", "C"] },
+    { label: "칸 3개에 다섯", args: [3, ["A+", "B+", "C+", "D+", "E+", "B-", "A-"]], expected: ["A", "B", "C", "D", "E"] },
+    { label: "주인 없는 반납", args: [0, ["A+", "B+", "X-"]], expected: ["A"] },
+    { label: "반납 뒤 다시 꽉 참", args: [2, ["A+", "A-", "B+", "C+", "D+"]], expected: ["A", "B", "C"] },
+  ]}
+/>
+
+## 기다리는 동안 무엇을 하나: 스핀락과 블로킹 락
+
+락을 못 잡은 스레드가 할 수 있는 일은 두 가지다. 잠들어서 깨워 주기를 기다리거나(블로킹), 잠들지 않고 "이제 됐나?"를 계속 물어보며 돈다(스핀). 잠드는 쪽은 커널에 들어가 컨텍스트 스위칭을 두 번 치러야 한다. 도는 쪽은 그 비용이 없는 대신 기다리는 내내 코어 하나를 태운다.
+
+리눅스의 pthread 뮤텍스는 이 둘을 섞은 futex(fast userspace mutex) 위에 서 있다. 경합이 없으면 사용자 공간에서 원자적 연산(CAS) 한 번으로 잡고 끝난다. 시스템 콜이 없다. 누가 이미 쥐고 있을 때만 `futex(FUTEX_WAIT)` 시스템 콜로 커널에 들어가 잠든다. 그래서 경합이 없는 뮤텍스는 생각보다 훨씬 싸다.
+
+스핀락이 언제 이기는지 재 봤다. 전체 200만 번 락을 잡고 풀며, 락 안에서 공유 변수를 10번(짧게) 또는 2000번(길게) 더한다.
+
+```bash
+gcc -O2 -pthread spin.c -o spin
+./spin 4 mutex 10     # 스레드 4개, 뮤텍스, 짧은 임계 구역
+./spin 4 spin 10      # 스레드 4개, pthread_spin_lock
+./spin 16 mutex 10    # 코어보다 많은 스레드
+./spin 16 spin 10
+./spin 4 mutex 2000   # 긴 임계 구역
+./spin 4 spin 2000
+```
+
+```text
+mutex threads=4 hold=10   wall=0.12s vcsw=647
+spin  threads=4 hold=10   wall=0.24s vcsw=1
+mutex threads=16 hold=10   wall=0.14s vcsw=6175
+spin  threads=16 hold=10   wall=0.62s vcsw=2
+mutex threads=4 hold=2000 wall=9.89s vcsw=225417
+spin  threads=4 hold=2000 wall=18.51s vcsw=1
+```
+
+이 실험에서 스핀락은 한 번도 이기지 못했다. `vcsw`(자발적 문맥 교환)가 1~2라는 건 스핀락 스레드가 한 번도 잠들지 않았다는 뜻이다. 대신 그 시간 내내 돌았다. 스레드가 코어보다 많은 16개일 때는 더 나빠진다. 락을 쥔 스레드가 타임 슬라이스를 다 써서 밀려나면, 나머지 스레드는 아무도 풀어 줄 수 없는 락 앞에서 자기 몫의 시간을 통째로 태운다. 같은 조건에 임계 구역까지 길게 하자(16개, 2000번) 60초가 넘도록 끝나지 않아 끊었다.
+
+그러면 스핀락은 어디에 쓰나. 리눅스 커널 안이다. 커널은 스핀락을 잡는 동안 그 코어의 선점을 끄기 때문에, 쥔 쪽이 밀려나 다들 헛도는 일이 없다. 인터럽트 처리기처럼 잠들 수 없는 곳에서도 스핀락밖에 쓸 수 없다. 사용자 공간에서는 선점을 끌 수 없으니, 임계 구역이 수십 나노초로 아주 짧고 스레드 수가 코어 수 이하로 보장될 때가 아니면 그냥 뮤텍스를 쓴다. 자바의 `synchronized`나 Go의 `sync.Mutex`처럼 잠깐 돌다가 안 되면 잠드는 적응형 구현이 대부분 런타임에 이미 들어 있다.
+
+## 조건이 될 때까지 잠재우기: 조건 변수
+
+뮤텍스는 "한 명씩"만 해결한다. "큐가 비어 있지 않을 때까지 기다린다" 같은 조건 대기는 해결하지 못한다. 락을 쥔 채로 큐가 찰 때까지 돌면 생산자가 락을 못 잡아 영원히 안 찬다. 락을 놓고 잠깐 자다가 다시 잡아 확인하는 식으로 돌면 CPU를 낭비하고 반응도 늦다.
+
+조건 변수(condition variable)가 이 문제를 푼다. 연산은 셋이다. `wait`는 쥐고 있던 락을 놓고 잠드는 일을 원자적으로 한다. 놓는 것과 잠드는 것 사이에 틈이 있으면 그 틈에 온 신호를 놓치기 때문이다. 깨어나면 락을 다시 잡은 뒤에 돌아온다. `signal`(자바의 `notify`)은 기다리는 스레드 하나를, `broadcast`(`notifyAll`)는 전부를 깨운다.
+
+모니터는 락과 조건 변수를 한 객체에 묶은 것이다. 1970년대 호어와 브린치 핸슨이 정리한 개념인데, 자바가 언어에 그대로 넣었다. 자바의 모든 객체는 모니터를 하나씩 갖고 있다. `synchronized`가 모니터의 락을 잡고, 그 안에서 `wait()`와 `notify()`가 모니터의 조건 변수를 쓴다. 락을 안 잡은 채 `wait()`를 부르면 `IllegalMonitorStateException`이 난다. 조건을 확인하는 것과 잠드는 것이 한 락 아래서 일어나야 하기 때문이다.
+
+## 깨어났다고 조건이 맞는 건 아니다
+
+조건 변수를 쓸 때 꼭 지켜야 할 규칙이 하나 있다. 조건은 `if`가 아니라 `while`로 확인한다. 이유를 실험으로 보자. 소비자 둘이 빈 큐 앞에서 기다리고, 생산자가 값 하나를 넣고 `notifyAll()`을 부른다.
+
+```java
+static synchronized Integer takeIf() throws InterruptedException {
+  if (q.isEmpty()) IfWait.class.wait();        // 한 번만 확인한다
+  return q.removeFirst();
+}
+static synchronized Integer takeWhile() throws InterruptedException {
+  while (q.isEmpty()) IfWait.class.wait();     // 깨어날 때마다 다시 확인한다
+  return q.removeFirst();
+}
+static synchronized void put(int v) { q.addLast(v); IfWait.class.notifyAll(); }
+```
+
+```bash
+java IfWait.java      # if로 확인하는 소비자 둘
+java IfWait.java w    # while로 확인하는 소비자 둘
+```
+
+```text
+consumer-1 java.util.NoSuchElementException
+consumer-2 got 1
+alive: c1=false c2=false
+```
+
+```text
+consumer-2 got 1
+alive: c1=true c2=false
+```
+
+`if` 쪽은 둘 다 깨어났고, 먼저 락을 잡은 consumer-2가 값을 가져갔다. 뒤이어 락을 잡은 consumer-1은 조건을 다시 보지 않고 빈 큐에서 꺼내다 예외를 냈다. `while` 쪽은 consumer-1이 깨어나 큐가 빈 것을 다시 확인하고 도로 잠들었다. 그래서 마지막 줄에서 아직 살아 있다(`c1=true`).
+
+깨어난 뒤 조건이 깨지는 길은 셋이다. 첫째, 방금 본 것처럼 여럿이 같이 깨어나 한 명이 먼저 가져간다. 둘째, 자바와 대부분의 언어는 신호를 보낸 쪽이 락을 계속 쥐고 달리고 깨어난 쪽은 나중에 락을 잡는 방식(Mesa 방식)이다. 그 틈에 다른 스레드가 끼어들어 조건을 바꿀 수 있다. 셋째, 아무도 신호를 보내지 않았는데 깨어나는 가짜 깨어남(spurious wakeup)이다. POSIX `pthread_cond_wait` 문서와 자바의 `Object.wait` 문서가 이것이 일어날 수 있다고 명시한다. 구현을 단순하고 빠르게 하려고 허용해 둔 것이다. 셋 다 `while` 하나로 막힌다.
+
+## 생산자와 소비자를 두 숫자판으로
+
+조건 변수 없이 세마포어만으로도 같은 일을 할 수 있다. 크기 N인 버퍼에 숫자판 두 개와 뮤텍스 하나를 둔다. `empty`는 빈칸 수(처음 N), `full`은 찬 칸 수(처음 0)다. 아래 그림에서 버퍼 크기 1로 생산자와 소비자가 번갈아 움직이는 모습을 볼 수 있다.
+
+<SequenceDiagram
+  caption="빈칸 수와 찬 칸 수, 두 숫자판이 서로를 깨운다"
+  actors={[
+    { id: "p", label: "생산자" },
+    { id: "empty", label: "empty (빈칸)" },
+    { id: "full", label: "full (찬 칸)" },
+    { id: "c", label: "소비자" },
+  ]}
+  steps={[
+    { from: "c", to: "full", label: "acquire → 대기", title: "소비자가 먼저 온다", detail: "full이 0이라 소비자는 잠든다. 꺼낼 것이 없으니 기다리는 게 맞다." },
+    { from: "p", to: "empty", label: "acquire 1→0", title: "생산자가 빈칸을 하나 얻는다", detail: "empty가 1에서 0이 된다. 버퍼에 값을 넣는다. 버퍼를 고치는 순간은 뮤텍스로 감싼다." },
+    { from: "p", to: "full", label: "release", title: "찬 칸이 하나 생겼다고 알린다", detail: "full을 올리면서 잠든 소비자를 깨운다. 생산자가 연 숫자판을 소비자가 닫는다. 주인이 없어서 가능한 일이다." },
+    { from: "p", to: "empty", label: "acquire → 대기", title: "생산자가 또 넣으려 한다", detail: "empty가 0이다. 버퍼가 꽉 찼으니 생산자가 잠든다. 이것이 저절로 생기는 백프레셔다." },
+    { from: "c", to: "empty", label: "release", title: "소비자가 꺼내고 빈칸을 돌려준다", detail: "값을 꺼낸 뒤 empty를 올리고, 잠든 생산자가 깨어난다." },
+  ]}
+/>
+
+실무에서는 이걸 직접 짜지 않는다. 자바의 `ArrayBlockingQueue`, Go의 버퍼 있는 채널, 파이썬의 `queue.Queue`가 정확히 이 구조를 안에 담고 있다. 직접 짤 일은 드물지만 면접에서 "세마포어로 생산자-소비자를 풀어 보라"는 질문은 자주 나온다. 숫자판 둘이 서로를 깨우는 구조라는 것만 기억하면 된다. 생산자가 느린 소비자를 기다리게 되는 이 모양은 [백프레셔 글](/posts/backpressure)의 시작점이기도 하다.
+
+식사하는 철학자 문제도 세마포어로 풀린다. 원탁에 철학자 다섯과 포크 다섯이 있고, 각자 왼쪽 포크를 들고 오른쪽 포크를 기다리면 모두가 하나씩 쥔 채 멈춘다. 순환 대기다. 해법은 둘이다. 포크에 번호를 매겨 작은 번호부터 들게 하면 고리가 생기지 않는다. 이건 [데드락 글](/posts/deadlocks)의 락 순서와 같다. 아니면 처음 값 4인 세마포어를 "식탁에 앉을 수 있는 수"로 두어 다섯 명이 한꺼번에 포크를 들지 못하게 한다. 넷 중 적어도 한 명은 포크 두 개를 다 쥘 수 있으니 고리가 닫히지 않는다.
+
+## 읽는 사람이 많을 때: 읽기-쓰기 락
+
+설정 맵처럼 읽기는 초당 수만 번이고 쓰기는 하루 몇 번인 데이터가 있다. 뮤텍스를 쓰면 읽기끼리도 한 줄로 선다. 읽기는 서로 방해하지 않는데 아깝다. 읽기-쓰기 락(RWLock)은 읽는 쪽은 여럿이 같이 들어가고, 쓰는 쪽은 혼자 들어가게 한다. 자바의 `ReentrantReadWriteLock`, Go의 `sync.RWMutex`, 리눅스의 `pthread_rwlock_t`가 있다.
+
+공짜는 아니다. 읽는 사람 수를 세는 카운터를 모든 읽기 스레드가 원자적으로 올리고 내려야 해서, 임계 구역이 아주 짧으면 그 카운터가 있는 캐시 라인을 코어끼리 주고받는 비용이 뮤텍스보다 클 수 있다. 읽기 구간이 짧다면 RWLock으로 바꾸기 전에 재 본다.
+
+조심할 점이 셋 있다. 첫째, 쓰는 쪽의 기아다. 읽는 사람이 끊이지 않으면 쓰는 사람은 영원히 못 들어간다. 그래서 Go의 `RWMutex`는 쓰기를 기다리는 고루틴이 생기면 새로 오는 읽기를 막는다. 이 정책 때문에 생기는 함정이 둘째다. 같은 고루틴이 `RLock`을 쥔 채 다시 `RLock`을 부르면, 그 사이에 쓰기가 줄을 섰을 때 두 번째 `RLock`이 막히고 쓰기는 첫 번째 `RLock`이 풀리기를 기다려 멈춘다. 셋째, 읽기 락을 쓰기 락으로 올리기(upgrade)는 대부분 지원하지 않는다. `ReentrantReadWriteLock`에서 읽기 락을 쥔 채 쓰기 락을 잡으면 자기 자신을 기다리며 멈춘다. 쓰기가 필요하면 읽기 락을 놓고 쓰기 락을 새로 잡은 뒤 조건을 다시 확인한다. 자바의 `StampedLock`은 락 없이 읽고 나중에 그사이 쓰기가 있었는지만 확인하는 낙관적 읽기를 따로 준다.
+
+## 공정함은 처리량으로 산다
+
+락이 풀렸을 때 누가 다음에 잡을까. 기본 락은 대부분 공정하지 않다. 방금 락을 푼 스레드가 바로 다시 잡을 수도 있고, 잠든 스레드를 깨우는 사이에 막 도착한 스레드가 먼저 가져갈 수도 있다(barging). 공정한 락은 기다린 순서대로 넘긴다. 자바 `ReentrantLock(true)`로 비교했다. 스레드 4개가 1초 동안 락을 잡고 풀기를 반복한다.
+
+```text
+fair=false total=21,210,998 per-thread=[3,786,449 5,918,550 5,898,082 5,607,917]
+fair=true  total=4,584,981 per-thread=[1,193,080 1,036,660 1,156,302 1,198,939]
+fair=false total=22,261,985 per-thread=[4,842,024 6,672,656 6,509,513 4,237,792]
+fair=true  total=1,376,030 per-thread=[435,096 307,517 220,468 412,949]
+```
+
+공정한 락의 처리량이 4~16배 떨어졌다. 매번 줄 맨 앞의 잠든 스레드를 깨워 넘겨야 하니, 락을 넘길 때마다 컨텍스트 스위칭이 끼어든다. 불공정한 락은 이미 달리고 있는 스레드가 이어서 잡으니 캐시도 따뜻하고 교환도 적다. 스레드별 숫자를 보면 불공정한 쪽도 이 실험에서는 굶은 스레드가 없었다. 그래서 기본값은 불공정이고, 특정 스레드가 오래 굶는 게 실제로 문제일 때만 공정한 락을 고른다.
+
+## 높은 우선순위가 낮은 쪽을 기다린다: 우선순위 역전
+
+1997년 화성 탐사선 패스파인더가 착륙 뒤 며칠마다 스스로 재부팅됐다. 원인은 우선순위 역전이었다. 낮은 우선순위 작업이 공유 버스의 뮤텍스를 쥐고 있었고, 높은 우선순위 작업이 그 뮤텍스를 기다렸다. 그사이 중간 우선순위 작업이 깨어나 CPU를 차지하자, 낮은 작업은 CPU를 못 받아 락을 못 풀고, 높은 작업은 하염없이 기다렸다. 결국 감시 타이머가 시스템 이상으로 보고 재부팅했다.
+
+해법은 우선순위 상속이다. 높은 우선순위 스레드가 락을 기다리기 시작하면, 락을 쥔 낮은 스레드의 우선순위를 잠시 높은 쪽만큼 올려 준다. 그러면 중간 작업에 밀리지 않고 얼른 락을 풀고 내려온다. 패스파인더는 지구에서 VxWorks 뮤텍스의 우선순위 상속 옵션을 켜서 고쳤다. 리눅스에서는 `pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT)`로 켜고, 커널이 PI futex로 처리한다. 다른 해법인 우선순위 상한(priority ceiling)은 락마다 최대 우선순위를 정해 두고 락을 잡는 순간 그만큼 올린다.
+
+일반 웹 서버에서는 스레드 우선순위를 잘 안 건드리니 직접 마주칠 일은 드물다. 그래도 증상은 비슷하게 나타난다. 중요한 요청이 덜 중요한 배치 작업이 쥔 락을 기다리고, 배치 작업은 CPU를 덜 받는 cgroup에 있어 천천히 돈다. 우선순위가 어떻게 CPU 몫으로 바뀌는지는 [CPU 스케줄링 글](/posts/cpu-scheduling-interrupts)에서 본다.
+
+## 다시 잡을 수 있는 락, 다시 잡으면 멈추는 락
+
+재진입(reentrant) 락은 이미 쥔 스레드가 다시 잡아도 멈추지 않는다. 앞의 실험에서 `getHoldCount()`가 2가 된 것이 그것이다. 잡은 횟수만큼 풀어야 실제로 풀린다. 자바의 `synchronized`와 `ReentrantLock`, 파이썬의 `RLock`이 재진입이 된다. Go의 `sync.Mutex`, 파이썬의 `Lock`, pthread의 기본 뮤텍스는 재진입이 안 되어 같은 스레드가 다시 잡으면 그대로 멈춘다.
+
+재진입은 편해 보이지만 Go는 일부러 넣지 않았다. 락을 잡은 함수가 락을 다시 잡는 함수를 부른다는 건, 바깥 함수가 불변 조건을 잠깐 깬 상태에서 안쪽 함수가 그 깨진 상태를 볼 수 있다는 뜻이기 때문이다. Go에서는 락을 잡는 공개 함수와, 락이 이미 잡혀 있다고 가정하는 내부 함수(`xxxLocked` 같은 이름)를 나눠 짜는 관례가 있다.
+
+## 락이 병목인지 확인하는 법
+
+도구를 잘 골라도 락이 병목이 되는 일은 흔하다. 증상은 대개 이렇다. CPU 사용률은 낮은데 처리량이 안 늘고, 인스턴스를 늘리거나 스레드를 늘려도 그대로다. [프로세스와 스레드 글](/posts/process-vs-thread)에서 본 자발적 문맥 교환(`voluntary_ctxt_switches`)이 빠르게 늘고 있다면 스레드들이 무언가를 기다리며 잠들고 있다는 뜻이다. 그게 락인지 I/O인지는 런타임 도구로 가린다.
+
+Go는 뮤텍스 프로파일이 따로 있다. 고루틴 8개가 공유 캐시를 고치는데, 락을 쥔 채로 100마이크로초짜리 느린 일을 하는 코드를 짰다.
+
+```go
+func handle(i int) {
+	mu.Lock()
+	defer mu.Unlock()
+	cache["hits"]++
+	time.Sleep(100 * time.Microsecond) // 락 안에서 느린 일을 한다
+}
+
+func main() {
+	runtime.SetMutexProfileFraction(1) // 모든 경합을 기록한다. 운영에서는 100 같은 값으로 표본만 뜬다
+	// 고루틴 8개가 handle을 200번씩 부른 뒤 pprof.Lookup("mutex")를 파일로 쓴다
+}
+```
+
+```bash
+time ./gomu                                     # 실행 시간
+go tool pprof -top -nodecount=5 gomu mutex.pprof # 어느 락에서 얼마나 기다렸나
+```
+
+```text
+real	0m1.924s
+user	0m0.075s
+sys	0m0.055s
+Type: delay
+Showing nodes accounting for 13.28s, 100% of 13.28s total
+      flat  flat%   sum%        cum   cum%
+    13.28s   100%   100%     13.28s   100%  sync.(*Mutex).Unlock
+         0     0%   100%     13.28s   100%  main.handle
+         0     0%   100%     13.28s   100%  main.main.func1
+```
+
+실제로 흐른 시간은 1.9초인데 CPU는 0.1초 남짓만 썼다. 나머지는 기다림이다. `Type: delay`가 고루틴들이 락을 기다린 시간의 합인데 13.28초다. 고루틴 8개가 거의 내내 줄을 서 있었다는 뜻이다. 표에 `Unlock`이 찍히는 건 Go가 경합을 락을 푸는 순간에 기록하기 때문이고, `cum` 열을 따라 올라가면 `main.handle`이 범인이다.
+
+느린 일을 락 밖으로 빼고 공유 맵을 고치는 한 줄만 락으로 감쌌다.
+
+```go
+func handle(i int) {
+	time.Sleep(100 * time.Microsecond) // 느린 일은 락 밖에서
+	mu.Lock()
+	cache["hits"]++
+	mu.Unlock()
+}
+```
+
+```text
+real	0m0.224s
+user	0m0.016s
+sys	0m0.008s
+Showing nodes accounting for 162ns, 100% of 162ns total
+```
+
+같은 일을 하는데 8배 넘게 빨라졌고, 기다린 시간은 13초에서 162나노초가 됐다. 락을 다른 도구로 바꾼 게 아니라 임계 구역을 줄였을 뿐이다. 락 문제의 대부분은 도구보다 "락 안에서 무엇을 하느냐"에서 생긴다. 락 안에서 네트워크를 부르거나, 로그를 동기로 쓰거나, 큰 JSON을 직렬화하면 이렇게 된다.
+
+자바라면 `jcmd <pid> Thread.print`로 스레드 덤프를 떠서 `BLOCKED (on object monitor)` 상태 스레드가 어느 객체를 기다리는지 센다. 같은 주소의 `- waiting to lock`이 수십 줄이면 그 모니터가 병목이다. 덤프 읽는 법은 [데드락 글](/posts/deadlocks)에서 자세히 다뤘다. 계속 보고 싶다면 JFR(Java Flight Recorder)의 `jdk.JavaMonitorEnter` 이벤트가 오래 기다린 `synchronized` 진입을 기록한다.
+
+## 상황별로 고르기
+
+처음 질문으로 돌아가 고르는 기준을 정리하면 이렇다.
+
+| 하고 싶은 일 | 고를 도구 | 주의할 점 |
+|---|---|---|
+| 공유 데이터를 한 번에 하나만 고친다 | 뮤텍스 (`synchronized`, `sync.Mutex`) | 임계 구역을 짧게, 잠그는 순서를 하나로 |
+| 동시에 N개까지만 허용한다 | 카운팅 세마포어, 버퍼 채널 | `release`는 `finally`/`defer`에, 대기에 시간 제한 |
+| 조건이 될 때까지 기다린다 | 조건 변수, 모니터의 `wait` | 반드시 `while`로 다시 확인 |
+| 생산자와 소비자를 잇는다 | 블로킹 큐, 채널 | 직접 짜지 말고 표준 구현을 쓴다 |
+| 읽기가 압도적으로 많다 | 읽기-쓰기 락 | 짧은 구간에선 재 보고, 재귀 읽기와 업그레이드 금지 |
+| 아주 짧은 구간, 잠들 수 없음 | 스핀락 | 사용자 공간에서는 거의 쓸 일이 없다 |
+
+이 표가 한 프로세스 안의 이야기라는 것도 기억해 두자. 서버가 여러 대면 메모리 안의 뮤텍스는 아무것도 지키지 못한다. 그때는 DB의 행 잠금이나 Redis 같은 외부 저장소의 락이 필요하고, 그 이야기는 [분산 락 글](/posts/distributed-lock)에 있다.
+
+## 면접에서 나올 만한 질문
+
+### 뮤텍스와 세마포어의 차이는 무엇인가요?
+
+뮤텍스는 한 번에 하나만 들어가게 하는 잠금이고 주인이 있어서 잠근 스레드만 풀 수 있다. 세마포어는 허용 개수를 세는 카운터라 처음 값만큼 동시에 들어갈 수 있고, 주인이 없어서 아무 스레드나 `release`할 수 있다. 그래서 세마포어는 커넥션 풀 같은 개수 제한이나 스레드 사이의 신호에 쓰고, 공유 데이터 보호에는 뮤텍스를 쓴다.
+
+### 이진 세마포어와 뮤텍스는 같은 것 아닌가요?
+
+한 번에 하나만 통과시킨다는 점은 같지만 소유권이 다르다. 이진 세마포어는 다른 스레드가 풀 수 있고, 잘못 두 번 풀면 값이 1을 넘어 둘이 동시에 들어가도 아무도 모른다. 뮤텍스는 주인이 아니면 풀 수 없고 재진입, 우선순위 상속 같은 기능도 소유권이 있어야 가능하다.
+
+### 스핀락은 언제 쓰고 언제 쓰면 안 되나요?
+
+잠드는 비용보다 기다리는 시간이 훨씬 짧고, 락을 쥔 쪽이 밀려나지 않는 곳에서 쓴다. 리눅스 커널은 스핀락을 쥔 동안 선점을 끄니 이 조건이 맞는다. 사용자 공간에서는 쥔 스레드가 선점당하면 나머지가 타임 슬라이스를 통째로 태우고, 스레드가 코어보다 많으면 무너진다. 직접 재 본 실험에서도 스핀락은 뮤텍스보다 2~4배 느렸다.
+
+### 조건 변수의 wait는 왜 while 루프 안에서 불러야 하나요?
+
+깨어났다고 조건이 맞는다는 보장이 없어서다. `notifyAll`로 여럿이 깨어나 먼저 락을 잡은 쪽이 가져갈 수 있고, Mesa 방식이라 신호와 깨어남 사이에 다른 스레드가 끼어들 수 있고, 가짜 깨어남도 명세상 허용된다. `if`로 확인하면 빈 큐에서 꺼내다 예외가 나는 것을 실제로 재현할 수 있었다.
+
+### 모니터란 무엇이고 자바에서는 어떻게 쓰나요?
+
+모니터는 락과 조건 변수를 한 객체에 묶은 동기화 구조다. 자바의 모든 객체가 모니터를 갖고, `synchronized`가 락을, 그 안의 `wait`, `notify`, `notifyAll`이 조건 변수를 쓴다. 락을 안 잡고 `wait`를 부르면 `IllegalMonitorStateException`이 난다. 조건이 여러 개면 `ReentrantLock`의 `newCondition()`으로 조건 변수를 나눠 쓰는 편이 깨우는 대상을 좁힐 수 있다.
+
+### 세마포어로 생산자-소비자 문제를 어떻게 푸나요?
+
+빈칸 수 `empty`(처음 N), 찬 칸 수 `full`(처음 0), 버퍼를 지키는 뮤텍스 하나를 둔다. 생산자는 `empty`를 획득하고 넣은 뒤 `full`을 반납하고, 소비자는 `full`을 획득하고 꺼낸 뒤 `empty`를 반납한다. 버퍼가 차면 생산자가, 비면 소비자가 저절로 잠든다. 실무에서는 `ArrayBlockingQueue`나 채널 같은 표준 구현을 쓴다.
+
+### 우선순위 역전은 무엇이고 어떻게 막나요?
+
+높은 우선순위 스레드가 낮은 스레드가 쥔 락을 기다리는데, 중간 우선순위 스레드가 CPU를 차지해 낮은 스레드가 락을 못 푸는 상황이다. 결과적으로 높은 스레드가 중간 스레드보다 늦게 돈다. 락을 쥔 스레드의 우선순위를 기다리는 쪽만큼 잠시 올려 주는 우선순위 상속으로 막고, 리눅스에서는 `PTHREAD_PRIO_INHERIT`로 켠다.
+
+### 공정한 락을 기본으로 쓰지 않는 이유는요?
+
+락을 넘길 때마다 잠든 스레드를 깨워야 해서 컨텍스트 스위칭이 늘고 캐시도 차가워진다. 자바 `ReentrantLock`으로 재 보면 공정한 쪽 처리량이 4배 넘게 떨어졌다. 불공정한 락도 대개는 굶는 스레드 없이 돌기 때문에, 특정 스레드가 실제로 오래 굶을 때만 공정한 락을 고른다.

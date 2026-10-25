@@ -1,0 +1,475 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("css-box-model-layout");
+
+<EasyIntro>
+  웹 페이지의 모든 요소는 상자다. 글자 하나, 버튼 하나, 사진 하나가 모두 눈에 보이지 않는 네모 상자 안에 들어 있고, 브라우저는 이 상자들을 위에서 아래로 차곡차곡 쌓아 화면을 만든다.
+
+  상자 하나는 택배 상자처럼 여러 겹으로 되어 있다. 가운데에 물건이 있고, 그 둘레에 뽁뽁이가 있고, 그 바깥에 골판지 벽이 있고, 상자끼리는 조금씩 떨어뜨려 놓는다. 이 네 겹을 내용, 안쪽 여백, 테두리, 바깥 여백이라고 부른다.
+
+  상자 너비를 정할 때 물건 칸만 잴지 골판지 벽까지 잴지에 따라 실제 크기가 달라진다. 이걸 헷갈리면 휴대폰 화면보다 상자가 조금 커져서 옆으로 밀리는 일이 생긴다.
+
+  위아래로 놓인 상자의 바깥 여백은 더해지지 않고 큰 쪽 하나만 남기도 한다. 이런 규칙을 알면 여백이 생각보다 좁거나 넓을 때 이유를 바로 찾을 수 있다.
+</EasyIntro>
+
+휴대폰에서 페이지를 열었더니 화면이 옆으로 살짝 밀린다. 손가락으로 왼쪽으로 쓸면 오른쪽에 빈 공간이 조금 보인다. 범인은 카드 하나였다.
+
+```css
+.card {
+  width: 100%;
+  padding: 16px;
+  border: 2px solid;
+}
+```
+
+"너비 100%"라고 썼으니 화면 폭에 딱 맞을 것 같다. 그런데 390px 화면에서 이 카드의 실제 너비는 426px이다. 크로미움 141에서 `document.documentElement.scrollWidth`를 읽으면 426이 나오고, 뷰포트 폭 390보다 36px 넓다. 이 36px이 어디서 왔는지 알려면 CSS가 상자 크기를 재는 방법부터 봐야 한다.
+
+이 글은 요소 하나가 차지하는 상자의 구조(박스 모델)와, 상자들이 별다른 지정 없이 쌓이는 방식(일반 흐름, normal flow)을 다룬다. 측정값은 모두 크로미움 141에서 `getBoundingClientRect`와 `getComputedStyle`로 확인했다. flex와 grid 안에서 크기가 정해지는 규칙은 [Flexbox와 Grid](/posts/css-flexbox-grid)에서 따로 본다.
+
+## 상자 하나는 네 겹이다
+
+브라우저는 모든 요소를 사각형 상자로 그린다. 상자는 안쪽부터 네 겹이다.
+
+- 내용(content): 글자나 이미지가 실제로 놓이는 칸
+- 안쪽 여백(padding): 내용과 테두리 사이. 배경색이 칠해진다
+- 테두리(border): 선
+- 바깥 여백(margin): 다른 상자와의 거리. 항상 투명하다
+
+각 겹의 바깥 경계를 content box, padding box, border box, margin box라고 부른다. 이 이름이 중요한 이유는 CSS 속성마다 기준으로 삼는 겹이 다르기 때문이다. `width`는 기본적으로 content box의 너비다. `background`는 기본적으로 border box까지 칠한다. 뒤에서 볼 `position: absolute`의 기준은 부모의 padding box다. 개발자 도구 Computed 탭 맨 위의 겹친 사각형 그림이 바로 이 네 겹이고, 각 칸에 실제 픽셀 값이 적혀 있다.
+
+## width가 가리키는 겹을 바꾸는 box-sizing
+
+처음 카드로 돌아가자. `box-sizing`의 초깃값은 `content-box`다. 이때 `width: 100%`는 내용 칸이 부모 너비의 100%라는 뜻이고, 안쪽 여백과 테두리는 그 바깥에 더해진다. 390 + 16 × 2 + 2 × 2 = 426px이다.
+
+아래 그림에서 다음을 누르면 같은 선언이 `box-sizing`에 따라 어떻게 다르게 자리 잡는지 볼 수 있다. 테두리 선은 잘 보이게 조금 두껍게 그렸다.
+
+<GeometryMorph
+  caption="바깥 선은 390px 화면, 진한 띠는 테두리, 옅은 칸은 안쪽 여백, 가운데가 내용 칸이다."
+  width={400}
+  height={200}
+  shapes={[{ id: "screen", tone: "outline" }, { id: "border", tone: "accent" }, { id: "padding", tone: "muted" }, { id: "content", tone: "series1" }]}
+  steps={[
+    {
+      title: "content-box: width는 내용 칸이다",
+      detail: "내용 칸이 화면 폭 390px을 그대로 차지한다. 안쪽 여백과 테두리는 그 바깥에 붙는다.",
+      shapes: { screen: [[40, 30], [340, 30], [340, 170], [40, 170]], border: [[28, 60], [352, 60], [352, 140], [28, 140]], padding: [[31, 63], [349, 63], [349, 137], [31, 137]], content: [[40, 75], [340, 75], [340, 125], [40, 125]] },
+      labels: [{ x: 190, y: 104, text: "내용 390px", tone: "text", size: "sm" }],
+      focus: ["content"],
+    },
+    {
+      title: "바깥으로 36px이 삐져나온다",
+      detail: "상자를 화면 왼쪽에 붙이면 오른쪽으로 안쪽 여백 32px과 테두리 4px이 넘친다. 이만큼 가로 스크롤이 생긴다.",
+      shapes: { screen: [[40, 30], [340, 30], [340, 170], [40, 170]], border: [[40, 60], [368, 60], [368, 140], [40, 140]], padding: [[43, 63], [365, 63], [365, 137], [43, 137]], content: [[52, 75], [352, 75], [352, 125], [52, 125]] },
+      labels: [{ x: 190, y: 104, text: "전체 426px", tone: "text", size: "sm" }, { x: 360, y: 158, text: "+36", tone: "accent", size: "sm" }],
+      focus: ["border"],
+    },
+    {
+      title: "border-box: width는 테두리 바깥까지다",
+      detail: "같은 width: 100%가 이제 테두리까지 포함한 너비다. 안쪽 여백과 테두리를 빼고 남은 354px이 내용 칸이 된다.",
+      shapes: { screen: [[40, 30], [340, 30], [340, 170], [40, 170]], border: [[40, 60], [340, 60], [340, 140], [40, 140]], padding: [[43, 63], [337, 63], [337, 137], [43, 137]], content: [[52, 75], [328, 75], [328, 125], [52, 125]] },
+      labels: [{ x: 190, y: 104, text: "내용 354px", tone: "text", size: "sm" }],
+      focus: ["border", "screen"],
+    },
+  ]}
+/>
+
+`box-sizing: border-box`를 주면 `width`가 border box의 너비가 된다. 크로미움에서 같은 카드에 이 한 줄만 더하면 `offsetWidth`가 426에서 390으로 바뀌고 가로 스크롤이 사라진다.
+
+거의 모든 프로젝트가 전체 요소에 border-box를 거는 이유가 이것이다. 디자인 시안의 "너비 320px 카드"는 대개 테두리까지 포함한 크기라서 border-box 쪽이 머릿속 계산과 맞는다.
+
+```css
+*,
+*::before,
+*::after {
+  box-sizing: border-box; /* width·height가 테두리 바깥까지를 가리키게 */
+}
+```
+
+가상 요소를 함께 적는 이유는 `*`가 `::before`, `::after`를 고르지 않기 때문이다. `box-sizing`은 상속되지 않는 속성이라 `html { box-sizing: border-box } *, *::before, *::after { box-sizing: inherit }`처럼 상속을 거는 방식도 쓴다. 외부 위젯 하나만 `content-box`로 되돌려야 할 때 그 위젯의 루트에만 값을 바꾸면 안쪽이 따라오는 장점이 있다.
+
+border-box에도 한계는 있다. 안쪽 여백과 테두리의 합이 `width`보다 크면 내용 칸은 0이 되고, 상자는 그 합만큼 커진다. `width: 20px; padding: 16px`인 border-box 상자는 20px이 아니라 32px이다.
+
+## 블록은 줄을 차지하고 인라인은 줄 안에 들어간다
+
+상자에는 바깥쪽 성격이 있다. `display`가 정한다.
+
+블록 상자(`display: block`, `div`, `p`, `h1` 등의 기본값)는 한 줄을 통째로 차지한다. 위에서 아래로 쌓이고, `width`를 정하지 않으면 부모의 내용 칸 너비를 꽉 채운다.
+
+인라인 상자(`display: inline`, `span`, `a`, `strong` 등의 기본값)는 글자처럼 줄 안에 흘러 들어간다. 그래서 상자 모델의 일부가 다르게 동작한다.
+
+```html
+<span style="width: 200px; height: 100px; padding: 10px; margin: 20px">inline</span>
+```
+
+```text
+offsetWidth  56
+offsetHeight 37
+```
+
+`width`와 `height`는 무시된다. 너비는 글자 폭에 좌우 안쪽 여백 20px을 더한 값이다. 위아래 안쪽 여백과 테두리는 그려지기는 하지만 줄 높이에 영향을 주지 않는다. 배경이 위아래 줄의 글자를 덮을 뿐 줄 간격은 그대로다. 위아래 `margin`은 아예 효과가 없다. 개발자 도구는 이런 선언을 흐리게 표시하고 "인라인 요소에는 효과가 없다"는 안내를 띄운다.
+
+`inline-block`은 둘을 섞은 것이다. 바깥은 인라인처럼 글자 줄에 서지만 안은 블록처럼 `width`, `height`, 위아래 `margin`이 모두 먹는다. 버튼, 배지, 아이콘처럼 줄 안에 놓이면서 크기를 가져야 하는 요소에 쓴다.
+
+### 이미지 밑의 4px 틈
+
+인라인으로 서는 요소는 글자의 기준선(baseline)에 맞춰 선다. `img`의 기본 `display`는 `inline`이라 이미지 아래쪽이 기준선에 놓이고, 기준선 아래에는 g, y 같은 글자의 꼬리가 내려갈 자리가 남는다.
+
+```html
+<div><img style="width: 100px; height: 100px" src="..." /></div>
+<div><img style="width: 100px; height: 100px; display: block" src="..." /></div>
+```
+
+```text
+첫 번째 div 높이  104
+두 번째 div 높이  100
+```
+
+100px짜리 이미지 하나만 넣었는데 부모가 104px이다. 4px은 이 환경의 16px 글꼴에서 기준선 아래 공간이고, 글꼴과 크기에 따라 달라진다. 이미지를 `display: block`으로 바꾸거나 `vertical-align: middle`(또는 `top`, `bottom`)로 기준선에서 떼면 사라진다. 카드 썸네일 아래에 원인 모를 틈이 보이면 대개 이것이다.
+
+## width: auto는 남은 너비를 채운다
+
+블록 상자의 `width: auto`는 "부모의 내용 칸 너비에서 내 좌우 margin, border, padding을 빼고 남은 만큼"이다. 그래서 `width`를 안 쓴 블록에 `margin: 0 16px`을 주면 양쪽에 여백을 두고 딱 맞게 들어간다. 반면 `width: 100%`에 `margin: 0 16px`을 주면 너비가 이미 부모만큼이라 margin만큼 밖으로 밀려난다. 블록의 너비를 꽉 채우고 싶으면 `width: 100%`보다 아무것도 안 쓰는 편이 안전하다.
+
+퍼센트는 포함 블록(containing block)의 크기를 기준으로 한다. 일반 흐름의 요소라면 포함 블록은 가장 가까운 블록 조상의 내용 칸이다. 그런데 높이 퍼센트에는 조건이 붙는다.
+
+```html
+<div style="height: auto">
+  <div style="height: 50%">x</div>
+</div>
+```
+
+```text
+안쪽 div 높이 18
+```
+
+부모 높이가 `auto`면 부모 높이는 자식 높이로 정해진다. 자식이 부모의 50%를 따르면 순환이 생기므로, 명세는 이때 퍼센트 높이를 `auto`로 취급한다. 결과는 글자 한 줄 높이 18px이다. 화면 전체 높이 레이아웃을 `height: 100%`로 만들 때 `html`, `body`부터 모든 조상에 높이를 줘야 했던 이유가 이것이다. 지금은 뷰포트 단위(`100dvh`)나 flex·grid로 높이를 나누는 편이 낫다.
+
+### min과 max가 부딪히면
+
+`min-width`, `max-width`는 `width`에 하한과 상한을 건다. 셋이 서로 맞지 않으면 우선순위가 있다. `max-width`가 `width`를 누르고, `min-width`가 그 둘을 다 누른다.
+
+```html
+<div style="width: 300px">
+  <div style="width: 500px; max-width: 100%; min-width: 400px"></div>
+</div>
+```
+
+```text
+offsetWidth 400
+```
+
+500px은 `max-width: 100%`인 300px으로 줄었다가, `min-width: 400px`에 걸려 다시 400px이 됐다. 부모를 100px 넘는다. "넘치지 말라고 max-width: 100%를 줬는데 넘친다"면 어딘가의 `min-width`를 찾는다. 이미지에 `max-width: 100%; height: auto`를 거는 건 이 상한을 이용해 큰 이미지가 부모보다 커지지 않게 하는 흔한 패턴이다.
+
+## 퍼센트 padding은 부모 너비를 본다
+
+퍼센트에서 가장 의외인 규칙이 있다. `padding`과 `margin`의 퍼센트는 위아래 방향도 포함 블록의 너비를 기준으로 한다.
+
+```html
+<div style="width: 300px">
+  <div style="padding-top: 50%"></div>
+</div>
+```
+
+```text
+안쪽 div 높이 150
+```
+
+높이가 아니라 너비 300px의 50%다. 높이를 기준으로 하면 위에서 본 순환 문제가 생기기 때문에 네 방향 모두 너비를 보게 정했다. 예전에는 이걸로 비율 상자를 만들었다. `padding-top: 56.25%`면 너비 대비 16:9 높이가 된다. 지금은 `aspect-ratio: 16 / 9`가 크롬 88, 파이어폭스 89, 사파리 15부터 지원되어 이 꼼수를 쓸 일이 거의 없다. 다만 오래된 코드에서 이유 모를 `padding-bottom: 75%`를 보면 4:3 상자라고 읽으면 된다.
+
+## 위아래 마진이 하나로 합쳐질 때
+
+이제 일반 흐름에서 가장 많이 헷갈리는 규칙이다. 블록 상자 둘이 위아래로 붙어 있으면 위 상자의 `margin-bottom`과 아래 상자의 `margin-top`이 더해지지 않고 하나로 합쳐진다. 마진 상쇄(margin collapsing)라고 부른다.
+
+```html
+<div style="margin-bottom: 24px">A</div>
+<div style="margin-top: 16px">B</div>
+```
+
+```text
+A와 B 사이 24px
+```
+
+40px이 아니라 24px이다. 둘 중 큰 값만 남는다. 문단(`p`)마다 위아래 마진이 있는데도 문단 사이가 두 배로 벌어지지 않는 건 이 규칙 덕분이다. 글을 위한 규칙이라고 생각하면 이해가 쉽다.
+
+마진이 합쳐지는 경우는 세 가지다. 아래 그림에서 다음을 누르면 하나씩 나온다.
+
+<GeometryMorph
+  caption="진한 상자는 요소, 옅은 띠는 마진, 테두리 선은 부모 상자다."
+  width={400}
+  height={240}
+  shapes={[{ id: "a", tone: "series1" }, { id: "ma", tone: "muted" }, { id: "mb", tone: "series2" }, { id: "b", tone: "series1" }, { id: "parent", tone: "outline" }]}
+  steps={[
+    {
+      title: "더해질 것 같지만",
+      detail: "A의 아래 마진 24px과 B의 위 마진 16px을 그대로 쌓으면 사이가 40px이어야 한다.",
+      shapes: { a: [[80, 20], [320, 20], [320, 70], [80, 70]], ma: [[80, 70], [320, 70], [320, 118], [80, 118]], mb: [[80, 118], [320, 118], [320, 150], [80, 150]], b: [[80, 150], [320, 150], [320, 200], [80, 200]] },
+      labels: [{ x: 340, y: 98, text: "24", size: "sm" }, { x: 340, y: 138, text: "16", size: "sm" }],
+      focus: ["ma", "mb"],
+    },
+    {
+      title: "형제끼리는 큰 쪽만 남는다",
+      detail: "두 마진이 겹쳐서 24px 하나가 된다. B가 16px 마진째로 위로 올라와 A의 마진 안에 들어간다.",
+      shapes: { a: [[80, 20], [320, 20], [320, 70], [80, 70]], ma: [[80, 70], [320, 70], [320, 118], [80, 118]], mb: [[80, 86], [320, 86], [320, 118], [80, 118]], b: [[80, 118], [320, 118], [320, 168], [80, 168]] },
+      labels: [{ x: 340, y: 98, text: "24", size: "sm" }],
+      focus: ["ma", "mb"],
+    },
+    {
+      title: "첫 자식의 마진은 부모 밖으로 샌다",
+      detail: "부모에 위쪽 테두리·안쪽 여백이 없으면 첫 자식의 위 마진이 부모의 위 마진과 합쳐진다. 그 결과 자식이 아니라 부모가 통째로 내려간다.",
+      shapes: { parent: [[60, 90], [340, 90], [340, 200], [60, 200]], mb: [[80, 30], [320, 30], [320, 90], [80, 90]], b: [[80, 90], [320, 90], [320, 140], [80, 140]] },
+      labels: [{ x: 200, y: 62, text: "자식 margin-top 30", size: "sm" }, { x: 200, y: 175, text: "부모 배경", tone: "text", size: "sm" }],
+      focus: ["mb", "parent"],
+    },
+    {
+      title: "부모가 경계를 가지면 안에 남는다",
+      detail: "부모에 padding-top: 1px이나 display: flow-root를 주면 둘 사이에 경계가 생긴다. 마진은 부모 안쪽에서 자식을 밀어낸다.",
+      shapes: { parent: [[60, 30], [340, 30], [340, 200], [60, 200]], mb: [[80, 31], [320, 31], [320, 91], [80, 91]], b: [[80, 91], [320, 91], [320, 141], [80, 141]] },
+      labels: [{ x: 200, y: 175, text: "부모 배경", tone: "text", size: "sm" }],
+      focus: ["parent"],
+    },
+    {
+      title: "빈 블록은 자기 위아래가 합쳐진다",
+      detail: "높이도 내용도 없는 블록의 위 마진 20px과 아래 마진 30px은 서로 합쳐져 30px 하나만 남는다.",
+      shapes: { a: [[80, 20], [320, 20], [320, 70], [80, 70]], ma: [[80, 70], [320, 70], [320, 130], [80, 130]], mb: [[80, 70], [320, 70], [320, 110], [80, 110]], b: [[80, 130], [320, 130], [320, 180], [80, 180]] },
+      labels: [{ x: 340, y: 104, text: "30", size: "sm" }],
+      focus: ["ma"],
+    },
+  ]}
+/>
+
+세 번째 경우가 실무에서 가장 자주 만난다. 크로미움에서 배경색이 있는 `div` 안에 `h2 { margin-top: 30px }`을 넣어 보면, 제목과 배경 위쪽 사이에는 틈이 0이고 대신 `div` 전체가 30px 아래로 내려가 있다. "제목 위에 여백을 줬는데 배경 바깥에 여백이 생긴다"는 증상이 이것이다. 부모에 `padding-top: 1px`만 줘도 자식 위치가 1 + 30 = 31px로 부모 안쪽에 자리 잡는다.
+
+음수 마진도 합쳐진다. 규칙은 "양수 중 가장 큰 값 + 음수 중 가장 작은 값"이다.
+
+```text
+24px  과 -10px          → 14px
+30px, 20px, -5px, -15px → 15px   (부모 아래 30 · 자식 아래 20 · 다음 부모 위 -5 · 다음 자식 위 -15)
+```
+
+두 번째 줄은 부모의 아래 마진, 마지막 자식의 아래 마진, 다음 부모의 위 마진, 그 첫 자식의 위 마진 네 개가 한꺼번에 합쳐진 경우다. 크로미움에서 재 보면 실제로 15px이 나온다.
+
+### 합쳐지지 않는 경우
+
+마진 상쇄는 일반 흐름의 블록 상자끼리, 위아래 방향에서만 일어난다. 아래 중 하나라도 해당하면 합쳐지지 않는다.
+
+- 좌우 마진. 가로 방향은 절대 합쳐지지 않는다.
+- flex 아이템, grid 아이템. `flex-direction: column`으로 세로로 쌓아도 그렇다. 같은 A(아래 24px)와 B(위 16px)를 flex 컨테이너에 넣으면 사이가 40px이다.
+- 부모와 자식 사이에 테두리, 안쪽 여백, 줄 상자(글자)가 끼어 있을 때.
+- 둘 중 하나가 새 블록 서식 맥락(아래 BFC)을 만들 때. 부모가 BFC를 만들면 자식 마진이 부모 밖으로 새지 않는다.
+- `float`, `position: absolute`·`fixed`, `inline-block` 상자.
+
+컴포넌트 기반으로 화면을 만들면 마진 상쇄가 오히려 예측을 어렵게 한다. 컴포넌트 A의 아래 마진과 컴포넌트 B의 위 마진이 어디서 만나는지 각자는 모르기 때문이다. 그래서 요즘 레이아웃은 부모가 `display: flex; flex-direction: column; gap: 24px`이나 grid의 `gap`으로 간격을 정하고, 자식은 바깥 마진을 갖지 않게 만드는 방식을 많이 쓴다. 간격의 주인이 부모 하나라서 합쳐질지 따질 일이 없다.
+
+## 합쳐진 마진을 직접 계산해 보기
+
+위의 규칙을 함수로 옮겨 보자. 한 지점에서 맞닿은 마진 목록을 받아 합쳐진 결과를 돌려준다.
+
+<CodePlayground
+  caption="맞닿은 세로 마진 합치기"
+  functionName="collapse"
+  initialCode={`function collapse(margins) {
+  // 양수 중 가장 큰 값 + 음수 중 가장 작은 값
+  return 0;
+}`}
+  solution={`function collapse(margins) {
+  if (margins.length === 0) return 0;
+  const pos = Math.max(0, ...margins);
+  const neg = Math.min(0, ...margins);
+  return pos + neg;
+}`}
+  tests={[
+    { label: "형제 24와 16", args: [[24, 16]], expected: 24 },
+    { label: "양수와 음수", args: [[24, -10]], expected: 14 },
+    { label: "음수끼리", args: [[-10, -20]], expected: -20 },
+    { label: "빈 블록의 위 20·아래 30", args: [[20, 30]], expected: 30 },
+    { label: "네 개가 한꺼번에", args: [[30, 20, -5, -15]], expected: 15 },
+    { label: "마진 없음", args: [[]], expected: 0 },
+  ]}
+/>
+
+`Math.max(0, ...)`에 0을 넣은 이유는 양수가 하나도 없을 때 양수 쪽 몫을 0으로 두기 위해서다. 음수 쪽도 마찬가지다. 브라우저는 실제로는 어떤 마진들이 서로 맞닿는지를 먼저 찾고 나서 이 계산을 한다. 어려운 쪽은 계산이 아니라 "누가 맞닿았나"를 찾는 일이고, 그 답이 위의 합쳐지지 않는 조건이다.
+
+## 새 블록 서식 맥락 만들기
+
+블록 서식 맥락(BFC, block formatting context)은 블록 상자들이 위아래로 쌓이고 마진이 합쳐지는 규칙이 적용되는 하나의 영역이다. 문서 전체(루트 요소)가 첫 번째 BFC다. 어떤 요소가 새 BFC를 만들면 그 안은 바깥과 분리된 작은 문서처럼 동작한다. 분리된다는 말에 효과 세 가지가 들어 있다.
+
+- 안쪽 마진이 바깥 마진과 합쳐지지 않는다.
+- 안에 있는 float를 높이 계산에 넣는다. float가 상자 밖으로 빠져나가지 않는다.
+- 바깥의 float와 겹치지 않는다. float 옆에 놓이면 남은 폭만큼 좁아진다.
+
+새 BFC를 만드는 조건은 여러 가지다.
+
+- `display: flow-root` (부작용 없이 BFC만 만드는 값)
+- `overflow`가 `visible`, `clip`이 아닌 값 (`hidden`, `auto`, `scroll`)
+- `float`가 `none`이 아님, `position: absolute`·`fixed`
+- `display: inline-block`, `table-cell`, `table-caption`
+- flex 아이템, grid 아이템 (자기 `display`가 flex·grid가 아닐 때)
+- `contain: layout`·`paint`, 다단(`column-count`) 컨테이너
+
+float를 감싸는 예를 크로미움에서 재 봤다.
+
+```html
+<div style="border: 1px solid">
+  <div style="float: left; width: 50px; height: 50px"></div>
+</div>
+<div style="border: 1px solid; display: flow-root">
+  <div style="float: left; width: 50px; height: 50px"></div>
+</div>
+```
+
+```text
+첫 번째 부모 높이  2    (테두리 위아래 1px씩)
+두 번째 부모 높이  52
+```
+
+float는 일반 흐름에서 빠지기 때문에 부모는 자식이 없는 것처럼 높이가 0이 된다. 테두리만 남는다. `display: flow-root`를 주면 부모가 새 BFC가 되어 float를 감싼다. 예전에는 이걸 위해 `::after`에 `clear: both`를 거는 clearfix나 `overflow: hidden`을 썼다. `overflow: hidden`도 BFC를 만들지만, 넘친 그림자와 드롭다운이 잘리고 sticky의 기준까지 바뀌는 부작용이 있다. `flow-root`는 크롬 58, 파이어폭스 53, 사파리 13부터 지원하니 지금은 이쪽을 쓴다.
+
+세 번째 효과도 확인했다. 너비 400px 부모 안에 너비 100px float가 있고 그 뒤에 일반 문단과 `overflow: hidden` 블록을 두었다.
+
+```text
+일반 p              left 0    width 400
+overflow: hidden    left 100  width 300
+```
+
+일반 문단의 상자는 float 밑으로 깔려 400px 전체를 차지하고 글자만 float를 피해 흐른다. 새 BFC를 만든 블록은 상자 자체가 float 옆 남은 300px으로 줄어든다. 왼쪽 아이콘 옆에 본문을 두는 미디어 객체 패턴이 이 성질을 썼다. 지금은 같은 일을 flex로 한다.
+
+## 넘치는 내용을 다루는 overflow
+
+내용이 상자보다 크면 `overflow`가 처리를 정한다.
+
+- `visible`(초깃값): 상자 밖으로 그냥 그린다. 레이아웃은 상자 크기 기준이라 아래 요소와 겹친다.
+- `hidden`: 잘라서 안 보이게 한다. 스크롤바는 없지만 스크롤 컨테이너가 되어 자바스크립트로는 스크롤할 수 있다.
+- `clip`: 잘라서 안 보이게 하고 스크롤 컨테이너도 만들지 않는다.
+- `scroll`: 항상 스크롤바를 둔다.
+- `auto`: 넘칠 때만 스크롤바를 둔다.
+
+`hidden`과 `clip`의 차이가 중요하다. `hidden`은 스크롤 컨테이너를 만들기 때문에 안쪽의 `position: sticky`가 이 상자를 기준으로 붙으려 하고, 결국 화면에 안 붙는다. 이 함정은 [sticky와 scroll-snap](/posts/css-sticky-scroll-snap)에서 자세히 재 봤다. 잘라내기만 원하면 `clip`이 안전하다. 크롬 90, 파이어폭스 81, 사파리 16부터 지원한다.
+
+한쪽 축만 바꿀 때도 함정이 있다.
+
+```text
+overflow-x: hidden 만 준 div → overflow-y 계산값 auto
+overflow-x: clip   만 준 div → overflow-y 계산값 visible
+```
+
+한 축이 `hidden`이나 `auto`인데 다른 축이 `visible`이면, 다른 축도 `auto`로 바뀐다. 가로 스크롤을 막으려고 `overflow-x: hidden`만 줬는데 세로 스크롤바가 생기거나 아래로 펼쳐지던 드롭다운이 잘리는 이유가 이것이다. `clip`은 이렇게 바뀌지 않는다.
+
+### 긴 단어가 상자를 뚫을 때
+
+넘침의 흔한 원인은 띄어쓰기 없는 긴 문자열이다. URL, 이메일, 해시값이 한 단어라 줄을 바꿀 자리가 없다. `overflow-wrap`으로 단어 중간에서도 끊게 할 수 있는데, 값 두 개가 다르게 동작한다.
+
+```text
+너비 200px 블록 안의 긴 URL
+  기본값                      scrollWidth 약 390 (넘친다)
+  overflow-wrap: break-word   200
+  overflow-wrap: anywhere     200
+
+너비 200px flex 컨테이너 안의 긴 URL
+  overflow-wrap: break-word   아이템 너비 약 390
+  overflow-wrap: anywhere     아이템 너비 200
+```
+
+일반 블록에서는 둘 다 끊어 준다. flex 아이템처럼 내용의 최소 너비로 크기를 정하는 곳에서는 `break-word`가 최소 너비 계산에 반영되지 않아 아이템이 URL 길이만큼 넓어진다. `anywhere`는 최소 너비 계산에서도 끊을 수 있다고 보기 때문에 200px에 맞는다. flex 아이템이 줄어들지 않는 문제는 [Flexbox와 Grid](/posts/css-flexbox-grid)에서 `min-width: 0`과 함께 다시 본다.
+
+## 표는 칸 너비를 내용에게 묻는다
+
+`table`은 일반 블록과 크기를 정하는 방식이 다르다. 기본값 `table-layout: auto`에서 브라우저는 모든 행의 모든 칸을 읽어 열마다 최소 폭(가장 긴 단어)과 희망 폭(줄을 안 바꿨을 때)을 구하고, 그걸로 열 너비를 나눈다. 그래서 `width: 100%`를 줘도 어떤 열의 최소 폭 합이 컨테이너보다 크면 표가 그만큼 넓어진다. 맨 아래 행에 긴 URL 하나가 들어오면 그 열 전체가 넓어지고, 행이 수천 개면 이 계산도 그만큼 무겁다.
+
+```css
+.price-table {
+  width: 100%;
+  table-layout: fixed;      /* 열 너비를 첫 행과 col만 보고 정한다 */
+  border-collapse: collapse;
+}
+.price-table th:first-child { width: 8rem; }
+.price-table td {
+  overflow-wrap: anywhere;  /* 고정된 칸 안에서 긴 문자열을 끊는다 */
+}
+```
+
+`table-layout: fixed`는 표에 `width`가 있을 때만 동작한다. 열 너비를 `col` 요소와 첫 행의 칸 너비로만 정하고, 정해 두지 않은 열은 남은 너비를 똑같이 나눈다. 나머지 행의 내용은 계산에 끼지 않으니 데이터가 바뀌어도 열이 들썩이지 않고, 첫 행만 읽으면 그리기 시작할 수 있다. 대신 칸보다 긴 내용은 칸 밖으로 넘치니 `overflow-wrap`이나 말줄임표(`overflow: hidden`, `white-space: nowrap`, `text-overflow: ellipsis`)를 같이 준다.
+
+`border-collapse`는 칸의 테두리를 어떻게 그릴지 정한다. 기본값 `separate`는 칸마다 자기 테두리를 갖고 칸 사이에 `border-spacing`(크롬 기본 스타일 2px)만큼 틈이 있어 이웃 칸의 선이 두 줄로 보인다. `collapse`는 맞닿은 테두리를 한 줄로 합친다. 두 칸의 테두리가 다르면 굵은 쪽이, 굵기가 같으면 스타일 순서(`double`, `solid`, `dashed`, `dotted` …)가 앞인 쪽이 이긴다. `collapse`에서는 표에 `border-radius`와 `padding`이 먹지 않는다. 둥근 모서리 표가 필요하면 `separate`에 `border-spacing: 0`을 주고 바깥 칸에만 테두리를 그린다.
+
+### 모바일에서 표는 감싸서 가로로 스크롤한다
+
+390px 화면에 열이 다섯 개인 표를 억지로 넣으면 글자가 한 줄에 두세 자씩 깨진다. 표는 읽을 만한 최소 폭을 주고, 감싸는 상자에서 가로로 스크롤하게 둔다. 표 자체에 `overflow`를 주면 스크롤이 생기지 않는다.
+
+```html
+<div class="table-scroll" role="region" aria-label="요금제 비교" tabindex="0">
+  <table class="price-table">…</table>
+</div>
+```
+
+```css
+.table-scroll { overflow-x: auto; }
+.table-scroll table { min-width: 36rem; }               /* 이보다 좁아지면 스크롤 */
+.table-scroll th:first-child { position: sticky; left: 0; background: var(--color-bg); }
+```
+
+`tabindex="0"`이 있어야 키보드 사용자가 이 상자에 들어와 화살표로 스크롤할 수 있고, `role`과 `aria-label`은 스크린 리더에 이 영역이 무엇인지 알려 준다. 감싼 상자가 스크롤 컨테이너라서 첫 열의 `position: sticky; left: 0`이 상자 기준으로 붙어, 가로로 넘겨도 행 이름이 남는다. 배경을 주지 않으면 지나가는 칸의 글자가 비쳐 보인다. 감싸지 않고 `table { display: block; overflow-x: auto }`로 처리하는 방법도 있는데, `display`를 바꾸면 일부 브라우저와 스크린 리더 조합에서 표로 읽어 주지 않는다.
+
+## 390px에서 가로 스크롤을 일으킨 상자 찾기
+
+처음 증상으로 돌아가자. 모바일에서 화면이 옆으로 밀리면 어떤 요소가 뷰포트보다 오른쪽으로 삐져나갔는지부터 찾는다. 개발자 도구의 기기 모드를 390px로 맞추고 콘솔에서 아래를 실행한다.
+
+```js
+// 오른쪽 끝이 화면 폭을 넘는 요소를 모두 찾는다
+const vw = document.documentElement.clientWidth;
+[...document.querySelectorAll("body *")]
+  .filter((el) => el.getBoundingClientRect().right > vw)
+  .map((el) => [el, Math.round(el.getBoundingClientRect().right)]);
+```
+
+```text
+[[div.card, 426]]
+```
+
+처음 카드에 실행하면 `div.card`의 오른쪽 끝이 426으로 나온다. 결과가 여러 개면 가장 바깥, 즉 목록 맨 앞쪽의 조상부터 본다. 자식은 대개 부모를 따라 넘친 것이다. 요소를 찾았으면 원인은 거의 네 가지 중 하나다.
+
+- `content-box`에 `width: 100%`와 padding·border. `box-sizing`을 확인한다.
+- `width: 100%`에 좌우 margin. `width`를 지우고 `auto`로 둔다.
+- 띄어쓰기 없는 긴 문자열. `overflow-wrap: anywhere`를 준다.
+- 고정 `width`나 `min-width`. 표, 코드 블록, `100vw`가 흔하다. `100vw`는 세로 스크롤바 폭까지 포함하는 브라우저가 있어 데스크톱에서 스크롤바만큼 넘친다.
+
+원인을 찾는 동안 `* { outline: 1px solid red }`를 잠깐 넣는 방법도 있다. `outline`은 상자 크기에 영향을 주지 않아서 레이아웃을 바꾸지 않고 모든 상자의 경계를 보여 준다. `border`로 하면 테두리 두께만큼 상자가 커져서 오히려 레이아웃이 바뀐다.
+
+`body { overflow-x: hidden }`으로 덮는 건 마지막 수단이다. 스크롤만 숨길 뿐 넘친 상자는 그대로라 오른쪽 내용이 잘리고, 앞에서 본 것처럼 sticky까지 깨뜨릴 수 있다.
+
+## 상자를 읽는 순서
+
+상자 크기가 이상하면 네 겹 중 `width`가 어느 겹을 가리키는지(`box-sizing`), 블록인지 인라인인지, 퍼센트의 기준이 무엇인지를 차례로 본다. 여백이 이상하면 마진이 어디서 맞닿아 합쳐졌는지, 사이에 BFC나 flex가 끼어 상쇄가 끊겼는지를 본다. 개발자 도구 Computed 탭의 상자 그림이 이 질문의 답을 숫자로 보여 준다. 선언끼리의 우선순위는 [캐스케이드와 명시도](/posts/css-cascade-specificity)에서, 일반 흐름 밖으로 상자를 꺼내는 `position`은 [position과 쌓임 맥락](/posts/css-position-stacking-context)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### CSS 박스 모델을 설명해 달라.
+
+모든 요소는 안쪽부터 내용, 안쪽 여백, 테두리, 바깥 여백의 네 겹 상자로 그려진다. 속성마다 기준으로 삼는 겹이 달라서 `width`는 기본적으로 내용 칸, `background`는 테두리까지, 절대 위치의 기준은 부모의 padding box다. 개발자 도구 Computed 탭의 겹친 사각형이 이 네 겹이다.
+
+### content-box와 border-box의 차이는? 왜 전역으로 border-box를 거나?
+
+`content-box`에서 `width`는 내용 칸 너비라서 padding과 border가 바깥에 더해진다. `border-box`에서는 `width`가 테두리 바깥까지라서 padding을 늘려도 전체 크기가 그대로다. `width: 100%`에 padding을 줘도 넘치지 않고 시안의 크기와 맞기 때문에 전역으로 건다. `*`는 가상 요소를 고르지 않으니 `::before`, `::after`도 함께 적는다.
+
+### 마진 상쇄는 언제 일어나고 언제 일어나지 않나?
+
+일반 흐름의 블록 상자끼리 위아래 마진이 맞닿을 때 일어난다. 형제 사이, 부모와 첫·마지막 자식 사이(테두리·padding이 없을 때), 높이 없는 빈 블록의 위아래가 그 경우다. 좌우 마진, flex·grid 아이템, float, 절대 위치, inline-block, 그리고 새 BFC 경계를 넘을 때는 일어나지 않는다.
+
+### 자식의 margin-top이 부모 밖으로 새는 문제는 어떻게 고치나?
+
+부모와 첫 자식의 위 마진이 맞닿아 합쳐진 것이라 둘 사이에 경계를 만들면 된다. 부모에 `padding-top`이나 `border-top`을 주거나, `display: flow-root`로 새 BFC를 만든다. 근본적으로는 부모를 flex·grid로 만들고 `gap`으로 간격을 주면 마진 상쇄 자체가 없다.
+
+### BFC란 무엇이고 어떻게 만들며 어디에 쓰나?
+
+블록이 쌓이고 마진이 합쳐지는 규칙이 적용되는 독립된 영역이다. `display: flow-root`, `overflow: hidden`·`auto`, float, 절대 위치, inline-block, flex·grid 아이템 등이 새 BFC를 만든다. 안의 float를 감싸 부모 높이를 살리고, 안쪽 마진이 바깥과 합쳐지지 않게 하고, 바깥 float와 겹치지 않게 할 때 쓴다. 부작용 없이 만들려면 `flow-root`가 낫다.
+
+### padding-top: 50%는 무엇의 50%인가?
+
+포함 블록의 너비의 50%다. 위아래 padding과 margin도 퍼센트는 너비를 기준으로 한다. 높이를 기준으로 하면 부모 높이가 자식으로 정해지는 순환이 생기기 때문이다. 예전에는 이걸로 16:9 상자(`56.25%`)를 만들었고 지금은 `aspect-ratio`를 쓴다.
+
+### overflow: hidden과 clip은 어떻게 다른가?
+
+둘 다 넘친 부분을 잘라 내지만 `hidden`은 스크롤 컨테이너를 만들고 `clip`은 만들지 않는다. 그래서 `hidden` 안의 sticky는 그 상자를 기준으로 삼아 화면에 붙지 않고, 한 축만 `hidden`이면 다른 축이 `auto`로 바뀐다. 잘라내기만 원하면 `clip`이 부작용이 적다.
+
+### 모바일에서 가로 스크롤이 생긴다. 어떻게 찾고 고치나?
+
+390px 기기 모드에서 `getBoundingClientRect().right`가 뷰포트 폭을 넘는 요소를 콘솔로 찾고, 가장 바깥 조상부터 본다. 원인은 대개 content-box에 `width: 100%`와 padding, `width: 100%`에 좌우 margin, 긴 URL 같은 끊을 수 없는 문자열, 고정 너비다. `body`에 `overflow-x: hidden`을 거는 건 증상만 가리고 sticky를 깨뜨릴 수 있어 마지막 수단이다.

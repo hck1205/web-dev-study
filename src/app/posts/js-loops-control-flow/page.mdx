@@ -1,0 +1,597 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-loops-control-flow");
+
+<EasyIntro>
+  컴퓨터에게 같은 일을 여러 번 시키는 방법을 반복문이라고 한다. 반복문은 여러 가지가 있는데, 운동장 트랙을 도는 것에 비유하면 쉽다.
+
+  어떤 반복문은 트랙을 돌다가 "그만"이라고 외치면 바로 멈춘다. 그런데 forEach라는 반복문은 한 바퀴씩 다른 친구에게 맡겨 버려서, 내가 "그만"이라고 외쳐도 그 친구는 듣지 못하고 끝까지 돈다. 또 for in이라는 반복문은 트랙만 도는 게 아니라 옆 운동장에 있는 물건까지 하나하나 세어 버린다. 그래서 물건 목록을 셀 때는 for of를 쓰는 편이 안전하다. 갈림길에서 어느 쪽으로 갈지 정하는 switch도 문을 닫지 않으면 다음 방까지 그대로 들어가 버린다. 어떤 반복문과 갈림길이 어떻게 움직이는지 알면 엉뚱하게 계속 도는 실수를 줄일 수 있다.
+</EasyIntro>
+
+주문 목록에서 결제 실패가 처음 나온 곳까지만 처리하고 멈추려고 이렇게 썼다.
+
+```js
+orders.forEach((order) => {
+  if (order.status === "failed") break;
+  process(order);
+});
+```
+
+저장하자마자 에디터가 빨간 줄을 긋는다. Node에서 실행하면 바로 문법 에러다.
+
+```text
+SyntaxError: Illegal break statement
+```
+
+그래서 `break`를 `return`으로 바꿨다. 에러는 사라졌는데 실패한 주문 뒤의 주문까지 계속 처리된다. 같은 주에 다른 코드에서도 문제가 났다. 업로드를 하나씩 기다리려고 `forEach(async ...)` 안에 `await`를 넣었는데, "전부 끝" 로그가 업로드보다 먼저 찍힌다.
+
+둘 다 `forEach`가 반복문이 아니라 함수 호출이라서 생긴다. 이 글은 자바스크립트의 반복문과 분기문을 하나씩 짚으면서 "언제 무엇을 고르나"에 답한다. 출력은 모두 Node 22에서 돌린 결과다.
+
+async 함수 자체가 어떻게 멈췄다 돌아오는지는 [async/await 글](/posts/js-async-await)에, `for...of`가 부르는 `Symbol.iterator` 규약은 [이터레이터와 제너레이터 글](/posts/js-iterators-generators)에 있다. `map`·`filter`·`reduce`의 쓰임은 [배열 변환 메서드 글](/posts/js-array-transform)에서 다뤘다. 여기서는 흐름을 멈추고, 건너뛰고, 가르는 문법에 집중한다.
+
+## forEach는 반복문이 아니라 콜백을 부르는 함수다
+
+`for`, `while`, `for...of`는 문(statement)이다. 문 안에서 쓰는 `break`와 `continue`는 그 문을 감싼 반복을 직접 멈추거나 건너뛴다. `forEach`는 배열 메서드다. 배열 요소마다 내가 넘긴 함수를 한 번씩 부를 뿐이다. 콜백 안은 별개의 함수 본문이라서 `break`가 가리킬 반복문이 없다. 그래서 문법 에러가 난다.
+
+`return`은 콜백 한 번을 끝낼 뿐이다. 다음 요소에서 forEach가 콜백을 다시 부른다. 결과적으로 `continue`처럼 동작한다.
+
+```js
+const seen = [];
+[1, 2, 3].forEach((n) => {
+  if (n === 2) return;   // 이번 콜백만 끝난다
+  seen.push(n);
+});
+console.log(seen);
+```
+
+```text
+[ 1, 3 ]
+```
+
+중간에 멈추고 싶다면 길이 세 가지다. 첫째, `for...of`로 바꾸고 `break`를 쓴다. 둘째, 멈추는 메서드를 쓴다. `some`은 콜백이 참을 돌려주면, `every`는 거짓을 돌려주면 그 자리에서 멈춘다. `find`와 `findIndex`도 찾는 순간 멈춘다.
+
+```js
+const visited = [];
+[1, 2, 3, 4].some((n) => {
+  visited.push(n);
+  return n === 2;   // 참을 돌려주면 여기서 멈춘다
+});
+console.log(visited);
+```
+
+```text
+[ 1, 2 ]
+```
+
+셋째로 예외를 던져 빠져나오는 방법도 있지만, 흐름 제어를 예외로 하면 진짜 에러와 구분하기 어렵다. 쓰지 않는 편이 낫다.
+
+## await를 넣으면 forEach는 기다리지 않는다
+
+업로드 문제도 같은 원인이다. 시간이 다른 작업 세 개를 `forEach`와 `for...of`로 돌려 봤다.
+
+```js
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const log = [];
+[30, 10, 20].forEach(async (ms) => {
+  await wait(ms);
+  log.push(ms);
+});
+log.push("forEach 끝");
+await wait(50);
+console.log(log);
+
+const log2 = [];
+for (const ms of [30, 10, 20]) {
+  await wait(ms);
+  log2.push(ms);
+}
+log2.push("for...of 끝");
+console.log(log2);
+```
+
+```text
+[ 'forEach 끝', 10, 20, 30 ]
+[ 30, 10, 20, 'for...of 끝' ]
+```
+
+`forEach` 쪽은 "끝"이 맨 앞이고, 나머지는 짧은 순서대로 들어왔다. 세 콜백이 동시에 출발했고 forEach는 아무것도 기다리지 않았다는 뜻이다. `for...of` 쪽은 넣은 순서대로 하나씩 끝난 뒤 "끝"이 찍혔다. 아래 그림에서 다음을 누르면 forEach가 콜백이 돌려준 Promise를 어떻게 흘려보내는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="forEach는 async 콜백이 돌려준 Promise를 받자마자 버리고 다음으로 간다"
+  actors={[
+    { id: "loop", label: "forEach" },
+    { id: "cb", label: "async 콜백" },
+    { id: "timer", label: "타이머" },
+  ]}
+  steps={[
+    {
+      from: "loop",
+      to: "cb",
+      label: "콜백(30)",
+      title: "첫 요소로 콜백을 부른다",
+      detail: "콜백은 wait(30)을 만들고 await에서 멈춘다. 멈춘 async 함수는 그 자리에서 대기 중인 Promise를 돌려준다.",
+    },
+    {
+      from: "cb",
+      to: "loop",
+      label: "Promise",
+      title: "forEach는 반환값을 버린다",
+      detail: "forEach의 명세는 콜백 결과를 쓰지 않는다. Promise가 끝나길 기다릴 방법이 없으니 바로 다음 요소로 간다.",
+    },
+    {
+      from: "loop",
+      to: "cb",
+      label: "콜백(10), 콜백(20)",
+      title: "나머지도 한꺼번에 출발한다",
+      detail: "두 번째, 세 번째 콜백도 같은 식으로 출발하고 멈춘다. 타이머 세 개가 거의 동시에 걸린다.",
+    },
+    {
+      from: "loop",
+      to: "loop",
+      label: "'forEach 끝'",
+      title: "반복이 끝났다고 착각한다",
+      detail: "forEach가 돌아오고 다음 줄이 실행된다. 업로드는 아직 하나도 끝나지 않았다.",
+    },
+    {
+      from: "timer",
+      to: "cb",
+      label: "10 → 20 → 30ms",
+      title: "짧은 작업부터 끝난다",
+      detail: "타이머가 끝나는 순서대로 콜백이 이어서 실행된다. 그래서 로그 순서가 10, 20, 30이다. 한 콜백이 실패해도 forEach 바깥의 try/catch는 잡지 못한다.",
+    },
+  ]}
+/>
+
+하나씩 기다려야 하면 `for...of` 안에서 `await`를 쓴다. 동시에 보내도 되면 `Promise.all(items.map(async ...))`로 모아서 기다린다. 둘 중 무엇을 고를지, 동시에 몇 개까지 보낼지는 async/await 글에서 시간까지 재 가며 다뤘으니 여기서는 규칙만 남긴다. `forEach`에는 async 콜백을 넘기지 않는다. ESLint를 쓴다면 `@typescript-eslint/no-misused-promises`가 이 실수를 잡아 준다.
+
+## for, while, do...while: 조건을 언제 검사하나
+
+가장 오래된 세 반복문은 조건을 언제 검사하느냐만 다르다.
+
+```js
+for (let i = 0; i < 3; i++) { /* 초기화 → 조건 → 본문 → 증감 → 조건 … */ }
+
+let n = 0;
+while (n < 3) { n++; }      // 조건이 먼저. 처음부터 거짓이면 0번
+
+let m = 0;
+do { m++; } while (false);  // 본문이 먼저. 조건이 거짓이어도 1번
+console.log(m);
+```
+
+```text
+1
+```
+
+`do...while`은 "일단 한 번은 해 보고 결과를 보고 다시 할지 정한다"는 흐름에 맞다. 예를 들어 다음 페이지 커서가 있는 동안 API를 다시 부르는 코드가 그렇다. 첫 요청은 커서 없이 무조건 한 번 보낸다.
+
+```js
+let cursor;
+do {
+  const page = await fetchPage(cursor);
+  save(page.items);
+  cursor = page.nextCursor;
+} while (cursor);
+```
+
+`for`는 반복 횟수가 정해진 인덱스 루프에, `while`은 "조건이 될 때까지"처럼 횟수를 모르는 루프에 쓴다. 셋 모두 조건이 끝내 거짓이 되지 않으면 탭이 멈춘다. 브라우저는 무한 루프를 끊어 주지 않고, 시간이 지나면 "페이지 응답 없음" 창을 띄울 뿐이다. 서버라면 이벤트 루프가 통째로 막혀 다른 요청까지 응답하지 못한다.
+
+`for` 머리에서 `let`으로 만든 변수는 반복마다 새로 만들어진다. 그래서 루프 안에서 만든 클로저가 각자 다른 `i`를 기억한다. `var`로 바꾸면 모든 클로저가 같은 `i` 하나를 본다.
+
+```js
+const a = []; for (var k = 0; k < 3; k++) a.push(() => k);
+const b = []; for (let j = 0; j < 3; j++) b.push(() => j);
+console.log(a.map((f) => f()), b.map((f) => f()));
+```
+
+```text
+[ 3, 3, 3 ] [ 0, 1, 2 ]
+```
+
+왜 이렇게 되는지는 [var, let, const 글](/posts/js-var-let-const)에서 반복마다 새 상자가 생기는 과정으로 따라갔다.
+
+## for...in은 키를 세고, 물려받은 것까지 센다
+
+`for...in`과 `for...of`는 한 단어 차이라 헷갈린다. `for...in`은 객체의 열거 가능한 속성 이름(키)을 문자열로 돌려준다. 자기 속성만이 아니라 프로토타입 체인을 따라 올라가며 물려받은 열거 가능한 속성까지 돈다. `for...of`는 이터러블이 내주는 값을 돈다.
+
+배열에 두 가지를 다 써 봤다. 배열에 직접 붙인 속성 하나, 누군가 `Array.prototype`에 덧붙인 메서드 하나가 있다.
+
+```js
+const arr = ["a", "b", "c"];
+arr.extra = "x";
+Array.prototype.last = function () { return this[this.length - 1]; };
+
+for (const k in arr) console.log("in:", k, typeof k);
+for (const v of arr) console.log("of:", v);
+```
+
+```text
+in: 0 string
+in: 1 string
+in: 2 string
+in: extra string
+in: last string
+of: a
+of: b
+of: c
+```
+
+`for...in`이 준 인덱스는 숫자가 아니라 문자열 `"0"`이다. `k + 1`을 하면 `"01"`이 된다. 배열에 붙인 `extra`도, 프로토타입에 붙은 `last`도 나왔다. 오래된 라이브러리나 폴리필이 프로토타입을 고치면 이런 일이 실제로 생긴다. `for...of`는 배열의 값만 순서대로 줬다.
+
+일반 객체에서 키 순서도 확인해 봤다. 키를 넣은 순서는 `b`, `2`, `a`, `1`이고, 열거 불가능한 속성 하나와 프로토타입에서 물려받은 속성 하나가 있다.
+
+```js
+const base = { shared: 1 };
+const obj = Object.create(base);
+obj.b = 2; obj[2] = "two"; obj.a = 1; obj[1] = "one";
+Object.defineProperty(obj, "hidden", { value: 3, enumerable: false });
+
+const keys = [];
+for (const k in obj) keys.push(k + (Object.hasOwn(obj, k) ? "" : "(상속)"));
+console.log(keys);
+console.log(Object.keys(obj));
+```
+
+```text
+[ '1', '2', 'b', 'a', 'shared(상속)' ]
+[ '1', '2', 'b', 'a' ]
+```
+
+아래 그림은 이 `for...in`이 키를 꺼내는 순서를 한 칸씩 따라간다.
+
+<AlgoTrace
+  caption="for...in은 자기 키(정수 키 먼저, 나머지는 넣은 순서)를 다 돈 뒤 프로토타입으로 올라간다"
+  memoryLabel="꺼낸 키"
+  cells={["1", "2", "b", "a", "hidden", "shared"]}
+  steps={[
+    { pointer: 0, memory: ["1"], caption: "정수처럼 생긴 키가 먼저 나온다. 넣은 순서와 상관없이 작은 수부터다." },
+    { pointer: 1, memory: ["1", "2"], caption: "\"2\"도 정수 키라 문자열 키보다 앞선다." },
+    { pointer: 2, memory: ["1", "2", "b"], caption: "그다음은 문자열 키를 넣은 순서대로 꺼낸다. b를 먼저 넣었다." },
+    { pointer: 3, memory: ["1", "2", "b", "a"], caption: "a가 뒤에 들어왔으니 뒤에 나온다. 여기까지가 Object.keys와 같다." },
+    { pointer: 4, memory: ["1", "2", "b", "a"], caption: "hidden은 enumerable이 false라서 건너뛴다. 키는 있지만 열거되지 않는다." },
+    { pointer: 5, found: [5], memory: ["1", "2", "b", "a", "shared"], caption: "자기 키를 다 돌면 프로토타입으로 올라가 shared를 꺼낸다. Object.keys에는 없던 키다." },
+  ]}
+/>
+
+정수 키 먼저, 문자열 키는 넣은 순서라는 규칙은 ES2015에서 객체의 자기 키 순서로 정해졌다. `Object.keys`와 `for...in`까지 이 순서를 지키도록 명세에 못 박은 것은 ES2020부터다. 그 전에도 주요 엔진은 대부분 같은 순서로 돌았다. 객체 키 순서와 속성 설명자는 [객체 메서드 글](/posts/js-object-methods)에, 물려받은 속성을 찾는 원리는 [프로토타입 체인 글](/posts/js-prototype-chain)에 있다.
+
+정리하면 `for...in`은 배열에 쓰지 않는다. 객체의 키를 돌고 싶으면 `Object.keys`, `Object.entries`를 `for...of`와 함께 쓰는 쪽이 낫다. 자기 속성만 주고, 물려받은 속성을 거르는 `hasOwn` 검사가 필요 없다.
+
+```js
+for (const [key, value] of Object.entries({ a: 1, b: 2 })) {
+  console.log(key, value);
+}
+```
+
+```text
+a 1
+b 2
+```
+
+반대로 일반 객체에 `for...of`를 바로 쓰면 이터러블이 아니라서 에러가 난다.
+
+```js
+const config = { a: 1 };
+for (const v of config) {}
+```
+
+```text
+TypeError: config is not iterable
+```
+
+`for...of`가 받는 것은 `Symbol.iterator`를 가진 값이다. 배열, 문자열, `Map`, `Set`, `arguments`, `NodeList`, 제너레이터, `Uint8Array` 같은 TypedArray가 그렇다. TypedArray로 바이트를 다루는 법은 [ArrayBuffer와 TypedArray 글](/posts/js-binary-data-typed-arrays)에 있다. 문자열을 `for...of`로 돌면 이모지 같은 서로게이트 쌍을 한 글자로 묶어 준다. 같은 `"가👍"`를 `for...in`으로 돌면 키가 `"0"`, `"1"`, `"2"` 세 개 나온다. 이모지가 16비트 칸 두 개를 차지하기 때문인데, 자세한 이야기는 [문자열과 유니코드 글](/posts/js-strings-unicode)에 있다.
+
+구멍 난 배열(sparse array)에서는 셋이 또 다르게 군다.
+
+```js
+const sparse = [1, , 3];
+const a1 = []; for (const i in sparse) a1.push(i);
+const a2 = []; for (const v of sparse) a2.push(v);
+const a3 = []; sparse.forEach((v) => a3.push(v));
+console.log(a1, a2, a3);
+```
+
+```text
+[ '0', '2' ] [ 1, undefined, 3 ] [ 1, 3 ]
+```
+
+`for...in`과 `forEach`는 빈칸을 건너뛰고, `for...of`는 빈칸을 `undefined`로 준다. `new Array(3)`처럼 만든 배열에 `forEach`를 돌렸는데 아무 일도 일어나지 않는 이유가 이것이다.
+
+## break, continue, 그리고 레이블
+
+`break`는 가장 가까운 반복문이나 `switch`를 끝내고, `continue`는 가장 가까운 반복문의 이번 회차를 건너뛴다. 중첩 루프에서 바깥 루프까지 한 번에 빠져나오고 싶을 때는 레이블(label)을 쓴다. 문 앞에 `이름:`을 붙이고 `break 이름`으로 가리킨다.
+
+영화관 좌석 표에서 값 3이 처음 나오는 칸을 찾는 코드다.
+
+```js
+const grid = [[1, 2], [3, 4], [5, 6]];
+let found = null, checks = 0;
+
+outer: for (let r = 0; r < grid.length; r++) {
+  for (let c = 0; c < grid[r].length; c++) {
+    checks++;
+    if (grid[r][c] === 3) {
+      found = [r, c];
+      break outer;   // 안쪽만이 아니라 바깥 for까지 끝낸다
+    }
+  }
+}
+console.log(found, checks);
+```
+
+```text
+[ 1, 0 ] 3
+```
+
+세 칸만 보고 멈췄다. 레이블 없이 `break`만 썼다면 안쪽 루프만 끝나고 바깥 루프가 다음 줄을 계속 돌았을 것이다. `continue`에도 레이블을 줄 수 있다. 아래는 줄마다 짝수가 처음 나오면 그 줄의 나머지를 버리고 다음 줄로 넘어간다.
+
+```js
+const odd = [];
+rows: for (const row of grid) {
+  for (const v of row) {
+    if (v % 2 === 0) continue rows;
+    odd.push(v);
+  }
+}
+console.log(odd);
+```
+
+```text
+[ 1, 3, 5 ]
+```
+
+레이블은 오래된 문법이고 쓰는 곳이 드물어서 리뷰에서 낯설어하는 사람이 많다. 중첩 루프를 함수로 빼고 찾는 즉시 `return`하는 쪽이 대개 더 읽기 쉽다. 함수로 빼기 어려운 짧은 탐색에서만 레이블을 고려한다. 레이블은 콜백 경계를 넘지 못한다. `forEach` 콜백 안에서 바깥 레이블로 `break`할 수 없다.
+
+아래에서 직접 짜 볼 수 있다. 극장 좌석 줄들에서 빈자리(`"O"`)가 `need`개 연달아 있는 첫 위치를 `[줄, 시작 칸]`으로 돌려주고, 없으면 `null`을 돌려준다. 찾자마자 두 루프를 모두 멈춰야 한다.
+
+<CodePlayground
+  caption="연속 빈자리 찾기: 찾는 즉시 두 루프를 모두 멈춘다"
+  functionName="findSeat"
+  initialCode={`function findSeat(rows, need) {
+  // rows: [["O", "X", ...], ...]  "O"는 빈자리, "X"는 찬 자리
+  // need개 연속 빈자리의 첫 위치를 [줄, 칸]으로 돌려준다
+  let found = null;
+  rows.forEach((row, r) => {
+    // forEach 안에서는 바깥까지 멈출 수 없다
+  });
+  return found;
+}`}
+  solution={`function findSeat(rows, need) {
+  let found = null;
+  search: for (let r = 0; r < rows.length; r++) {
+    let run = 0;
+    for (let c = 0; c < rows[r].length; c++) {
+      if (rows[r][c] === "X") { run = 0; continue; }
+      run++;
+      if (run === need) {
+        found = [r, c - need + 1];
+        break search;
+      }
+    }
+  }
+  return found;
+}`}
+  tests={[
+    { args: [[["O", "O", "X", "O"], ["O", "O", "O", "O"]], 3], expected: [1, 0], label: "첫 줄엔 3칸이 없다" },
+    { args: [[["X", "O", "O", "X", "O", "O", "O"]], 2], expected: [0, 1], label: "먼저 나온 2칸을 고른다" },
+    { args: [[["O", "X"], ["X", "O"]], 2], expected: null, label: "줄을 넘어 이어 세지 않는다" },
+    { args: [[["O", "O", "O"]], 1], expected: [0, 0], label: "한 칸이면 첫 칸" },
+    { args: [[], 1], expected: null, label: "빈 극장" },
+    { args: [[["X", "O", "O", "O", "O"], ["O", "O", "O", "O", "O"]], 4], expected: [0, 1], label: "첫 줄 끝에 딱 맞는 4칸" },
+  ]}
+/>
+
+세 번째 테스트가 함정이다. 줄이 바뀔 때 연속 개수 `run`을 0으로 돌려놓지 않으면 첫 줄 끝 칸과 둘째 줄 첫 칸이 이어진 것처럼 세어진다.
+
+## switch는 ===로 비교하고, break가 없으면 아래로 흘러간다
+
+`switch`는 괄호 안의 값을 `case` 값과 `===`(엄격 비교)로 맞춘다. 형 변환을 하지 않는다.
+
+```js
+function label(code) {
+  switch (code) {
+    case 1: return "one";
+    case "2": return "two-string";
+    default: return "default";
+  }
+}
+console.log(label("1"), label(2), label("2"), label(NaN));
+```
+
+```text
+default default two-string default
+```
+
+URL 쿼리나 `input.value`, `dataset`에서 온 값은 문자열이다. `case 1:`로 비교하면 영영 맞지 않는다. 숫자로 바꾸고 넘기거나 `case` 값을 문자열로 맞춘다. `NaN`은 자기 자신과도 `===`로 같지 않아서 `case NaN:`은 절대 맞지 않는다. `==`와 `===`가 언제 갈리는지는 [==와 === 글](/posts/js-equality-coercion)에 있다.
+
+또 하나는 fall-through다. 맞는 `case`를 찾으면 그 아래 코드를 `break`나 `return`을 만날 때까지 차례로 실행한다. 다음 `case` 줄은 멈추는 지점이 아니라 그냥 입구 표시다. 이 성질을 일부러 쓰면 "위 등급은 아래 등급 권한을 다 가진다" 같은 규칙을 짧게 쓸 수 있다.
+
+```js
+function perms(role) {
+  const out = [];
+  switch (role) {
+    case "admin":  out.push("delete");   // break 없음: 아래로 흘러간다
+    case "editor": out.push("write");
+    case "viewer": out.push("read"); break;
+    default:       out.push("none");
+  }
+  return out;
+}
+console.log(perms("admin"), perms("editor"), perms("guest"));
+```
+
+```text
+[ 'delete', 'write', 'read' ] [ 'write', 'read' ] [ 'none' ]
+```
+
+아래 그림에서 `perms("admin")`이 어떤 줄을 지나가는지 볼 수 있다.
+
+<AlgoTrace
+  caption="switch는 맞는 case에서 들어가 break를 만날 때까지 아래로 흘러간다"
+  memoryLabel="out"
+  cells={["case admin", "case editor", "case viewer", "break", "default"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["delete"], caption: "role === \"admin\"이 맞아 여기서 들어간다. delete를 넣는다." },
+    { pointer: 1, memory: ["delete", "write"], caption: "break가 없어 editor 줄도 실행된다. case 값은 다시 비교하지 않는다." },
+    { pointer: 2, memory: ["delete", "write", "read"], caption: "viewer 줄도 지나며 read를 넣는다." },
+    { pointer: 3, memory: ["delete", "write", "read"], caption: "break를 만나 switch를 빠져나온다. default는 실행되지 않는다." },
+  ]}
+/>
+
+문제는 의도하지 않은 fall-through다. `break` 하나를 빠뜨리면 아래 `case`가 같이 실행되는데, 에러가 나지 않아서 늦게 발견된다. ESLint의 `no-fallthrough` 규칙(recommended에 포함)은 주석 없이 흘러가는 `case`를 경고한다. 일부러 흘러가게 할 때는 `// falls through` 주석을 붙여 의도를 남긴다. TypeScript에는 `noFallthroughCasesInSwitch` 옵션이 있다.
+
+`case` 안에서 `let`이나 `const`를 쓸 때도 조심한다. `switch` 전체가 블록 하나라서 `case`마다 같은 이름을 선언하면 충돌한다.
+
+```js
+switch (1) {
+  case 1: let x = 1; break;
+  case 2: let x = 2; break;
+}
+```
+
+```text
+SyntaxError: Identifier 'x' has already been declared
+```
+
+선언이 다른 `case`에 있으면 TDZ에도 걸린다. `case 1`에서 `let y`를 선언하고 `case 2`로 들어가 `y`에 값을 넣으면 `ReferenceError: Cannot access 'y' before initialization`이 난다. 해결은 `case`마다 중괄호로 블록을 따로 여는 것이다. `case 1: { const x = 1; break; }`처럼 쓰면 각 블록이 자기 변수를 가진다.
+
+범위 조건에는 `switch (true)`라는 관용구가 있다. `case score >= 90:`처럼 각 `case`에 불리언 식을 쓰고 `true`와 맞는 첫 줄로 들어간다. 동작은 하지만 `if`/`else if`보다 나을 게 없고 처음 보는 사람을 멈칫하게 한다. 범위 조건은 `if`로 쓴다.
+
+## if/else, 객체 조회, 일찍 돌아가기 중에 고르기
+
+분기가 많아지면 어떤 모양으로 쓸지 고민이 된다. 기준을 상황별로 나눠 본다.
+
+값 하나를 여러 고정 값과 비교해 다른 값을 고르기만 한다면 객체나 `Map` 조회가 짧다.
+
+```js
+const STATUS_LABEL = {
+  paid: "결제 완료",
+  refunded: "환불됨",
+  failed: "결제 실패",
+};
+const label = STATUS_LABEL[order.status] ?? "알 수 없음";
+```
+
+다만 일반 객체는 프로토타입을 물려받는다. 바깥에서 들어온 문자열로 조회하면 이상한 값이 나올 수 있다.
+
+```js
+console.log(STATUS_LABEL["toString"], Object.hasOwn(STATUS_LABEL, "toString"));
+console.log(new Map([["paid", "결제 완료"]]).get("toString"));
+```
+
+```text
+[Function: toString] false
+undefined
+```
+
+`?? "알 수 없음"`도 이 경우는 막지 못한다. 키가 사용자 입력에서 온다면 `Object.hasOwn`으로 먼저 확인하거나, `Object.create(null)`로 프로토타입 없는 객체를 만들거나, `Map`을 쓴다. `Map`과 객체의 차이는 [Map, Set, WeakMap 글](/posts/js-map-set-weak)에 있다. TypeScript에서는 `Record<OrderStatus, string>`으로 타입을 주면 상태를 하나 추가했을 때 빠진 라벨을 컴파일러가 잡아 준다. `switch`로 쓸 때 같은 역할을 하는 `never` 완전성 검사는 [TypeScript 타입 좁히기 글](/posts/ts-narrowing)에서 다뤘다.
+
+이 라벨을 언어마다 바꿔야 하는 날이 오면 조회 테이블이 그대로 번역 사전이 된다. 그 이야기는 [프런트엔드 국제화 글](/posts/frontend-i18n-intl)에서 이어 간다.
+
+분기마다 하는 일이 여러 줄이고 서로 다르면 `switch`나 `if`가 낫다. 조회 테이블에 함수를 넣을 수도 있지만, 함수 하나에 한 줄짜리라면 굳이 객체로 감쌀 이유가 없다.
+
+조건이 겹겹이 쌓여 들여쓰기가 깊어지면, 안 되는 경우를 먼저 걸러 내고 일찍 `return`한다. 예외 경우를 위에서 정리하고 나면 아래 본문은 "정상 흐름" 하나만 남는다.
+
+```js
+// 전
+function ship(order) {
+  if (order) {
+    if (order.paid) {
+      if (order.items.length > 0) {
+        return createShipment(order);
+      }
+    }
+  }
+  return null;
+}
+
+// 후
+function ship(order) {
+  if (!order) return null;
+  if (!order.paid) return null;
+  if (order.items.length === 0) return null;
+  return createShipment(order);
+}
+```
+
+분기 수를 재는 순환 복잡도와 ESLint 규칙으로 팀에 정착시키는 법은 [클린 코드 글](/posts/clean-code-practices)에 있다.
+
+## 블록, 삼항 연산자, 쉼표 연산자
+
+중괄호로 감싼 `{ ... }`는 블록문이다. `if`나 `for` 없이 블록만 써도 된다. 블록 안에서 `let`·`const`로 만든 이름은 블록 밖에서 보이지 않는다. `if` 뒤에 중괄호를 생략하면 바로 다음 문 하나만 조건에 묶인다. 나중에 한 줄을 더 넣었다가 조건 밖으로 새는 실수가 흔해서, 대부분의 팀은 `curly` 규칙으로 항상 중괄호를 쓰게 한다.
+
+삼항 연산자 `조건 ? A : B`는 문이 아니라 식이다. 값을 돌려주니 변수에 바로 넣거나 JSX 안에서 쓸 수 있다. `if`는 식이 아니라서 JSX 중괄호 안에 쓸 수 없다. 그래서 React 코드에서는 삼항을 자주 본다. 다만 삼항을 중첩하면 금방 읽기 어려워진다. 두 단계를 넘어가면 변수로 빼거나 함수로 나누고 일찍 돌아가기를 쓴다. `&&`로 조건부 렌더링을 할 때 `0`이 화면에 새는 문제는 [단락 평가 글](/posts/js-short-circuit)에서 다뤘다.
+
+쉼표 연산자는 식 여러 개를 왼쪽부터 평가하고 마지막 값을 돌려준다. 거의 유일하게 자연스러운 자리는 `for` 머리에서 변수 두 개를 함께 움직일 때다.
+
+```js
+const pairs = [];
+let i, j;
+for (i = 0, j = 4; i < j; i++, j--) pairs.push([i, j]);
+console.log(pairs);
+
+const x = (1, 2, 3);
+console.log(x);
+```
+
+```text
+[ [ 0, 4 ], [ 1, 3 ] ]
+3
+```
+
+양 끝에서 가운데로 좁혀 오는 투 포인터가 이 모양이다. `for` 머리의 `let i = 0, j = 4`에 들어간 쉼표는 연산자가 아니라 선언을 나누는 구분자다. 증감 칸의 `i++, j--`가 쉼표 연산자다. 그 밖의 곳에서 쉼표 연산자를 쓰면 대개 압축기가 만든 코드처럼 보인다. 화살표 함수에서 `() => (log(x), x)`처럼 쓰는 요령도 있지만 리뷰에서 한 번 더 설명해야 한다면 그냥 두 줄로 쓴다.
+
+## 배열 메서드냐 for 루프냐
+
+마지막으로 자주 나오는 질문이 성능이다. 정수 1천만 개를 더하는 일을 방법별로 다섯 번씩 돌린 평균이다. Node 22, 4코어 Xeon 2.1GHz 컨테이너에서 쟀고 돌릴 때마다 몇십 퍼센트씩 흔들렸다.
+
+```text
+for        27.6ms 495000000
+for...of   100.0ms 495000000
+forEach    56.6ms 495000000
+reduce     56.9ms 495000000
+for...in   2442.1ms 495000000
+```
+
+인덱스 `for`가 가장 빨랐고, `forEach`와 `reduce`가 두 배쯤, `for...of`는 이 실행에서 그보다 느렸다. `for...of`는 엔진이 이터레이터 호출을 얼마나 걷어 내느냐에 따라 결과가 크게 달라져서 버전과 코드 모양에 민감하다. 눈여겨볼 숫자는 `for...in`이다. 1천만 개 키를 문자열로 만들고 프로토타입까지 확인하느라 백 배 가까이 느리다.
+
+이 숫자로 "항상 for를 쓴다"는 결론을 내리면 곤란하다. 요소 하나에 수십 나노초 차이라서, 배열이 수천 개 이하이고 루프 안에서 DOM을 만지거나 네트워크를 부른다면 차이가 보이지 않는다. 평소에는 의도가 잘 드러나는 쪽을 고른다. 새 배열을 만들면 `map`, 고르면 `filter`, 찾으면 `find`, 중간에 멈추거나 `await`를 하나씩 해야 하면 `for...of`다. 프로파일러에서 실제로 그 루프가 뜨거운 구간으로 잡힐 때, 그리고 요소가 수십만 개 이상일 때 인덱스 `for`로 바꾼다. 측정은 [성능 지표 측정 글](/posts/performance-metrics-measurement)처럼 실제 환경에서 한다.
+
+## 처음 코드로 돌아가면
+
+실패한 주문에서 멈추는 코드는 `for...of`와 `break`로, 업로드를 하나씩 기다리는 코드는 `for...of`와 `await`로 바꾸면 끝난다. `forEach`는 요소마다 콜백을 부르는 함수일 뿐이라 멈출 수도, 기다릴 수도 없다. 반복문을 고를 때는 무엇을 돌지(키인가 값인가), 중간에 멈추는지, 비동기를 기다리는지를 먼저 묻는다. 분기는 값 비교만 하면 조회 테이블, 하는 일이 다르면 `switch`나 `if`, 예외 경우가 많으면 일찍 돌아가기로 쓴다.
+
+## 면접에서 나올 만한 질문
+
+### for...in과 for...of는 무엇이 다른가요?
+
+`for...in`은 객체의 열거 가능한 속성 이름을 문자열로 돌고, 프로토타입 체인에서 물려받은 열거 가능한 속성까지 포함한다. `for...of`는 `Symbol.iterator`를 가진 이터러블이 내주는 값을 돈다. 그래서 배열에는 `for...of`를 쓰고, 객체의 키와 값이 필요하면 `Object.entries`를 `for...of`로 돈다. 배열에 `for...in`을 쓰면 인덱스가 문자열로 나오고 프로토타입에 붙은 속성까지 섞일 수 있다.
+
+### forEach 안에서 break를 쓰면 어떻게 되나요? 중간에 멈추려면요?
+
+`forEach`의 콜백은 별개의 함수라서 `break`가 가리킬 반복문이 없고 `SyntaxError: Illegal break statement`가 난다. `return`은 그 회차 콜백만 끝내서 `continue`처럼 동작한다. 멈춰야 하면 `for...of`와 `break`로 바꾸거나, 조건을 만나면 멈추는 `some`, `every`, `find`를 쓴다.
+
+### forEach에 async 콜백을 넘기면 왜 기다리지 않나요?
+
+`forEach`는 콜백의 반환값을 버린다. async 콜백은 `await`에서 멈추며 Promise를 돌려주는데, forEach는 그 Promise를 기다리지 않고 바로 다음 요소로 가서 모든 작업이 동시에 출발하고 forEach는 곧바로 끝난다. 콜백 안의 에러도 바깥 try/catch가 잡지 못한다. 순서대로면 `for...of`와 `await`, 동시에 해도 되면 `Promise.all`과 `map`을 쓴다.
+
+### switch 문에서 주의할 점은 무엇인가요?
+
+비교가 `===`라서 문자열 `"1"`은 `case 1`과 맞지 않고, `NaN`은 어떤 `case`와도 맞지 않는다. `break`가 없으면 아래 `case`로 흘러가는 fall-through가 일어나는데, 의도한 게 아니면 조용한 버그가 된다. `switch` 전체가 블록 하나라 `case`마다 같은 이름을 `let`으로 선언하면 충돌하므로 `case`마다 중괄호를 쓴다. ESLint의 `no-fallthrough`나 TypeScript의 `noFallthroughCasesInSwitch`로 잡을 수 있다.
+
+### 중첩 루프에서 바깥 루프까지 한 번에 빠져나오려면 어떻게 하나요?
+
+바깥 반복문 앞에 레이블을 붙이고 `break 레이블`을 쓰면 된다. `continue 레이블`은 바깥 루프의 다음 회차로 넘어간다. 다만 레이블은 낯선 문법이라, 중첩 루프를 함수로 빼고 찾는 즉시 `return`하는 쪽이 보통 더 읽기 쉽다. 레이블은 콜백 경계를 넘지 못해서 `forEach` 안에서는 쓸 수 없다.
+
+### if/else 대신 객체 조회를 쓰는 기준은 무엇인가요?
+
+값 하나를 고정된 값들과 비교해 다른 값을 고르기만 할 때 조회 테이블이 짧고 읽기 좋다. 분기마다 하는 일이 여러 줄이고 다르면 `switch`나 `if`가 낫다. 일반 객체는 프로토타입 속성을 물려받아 `"toString"` 같은 키로 함수가 나올 수 있어서, 키가 외부 입력이면 `Map`이나 `Object.hasOwn` 검사를 쓴다. TypeScript에서는 `Record<유니온, 값>`으로 빠진 키를 컴파일 시점에 잡는다.
+
+### 배열 메서드와 for 루프 중 무엇이 빠른가요? 무엇을 써야 하나요?
+
+Node 22에서 1천만 개를 더해 보면 인덱스 `for`가 `forEach`나 `reduce`보다 두 배쯤 빨랐고 `for...in`은 백 배 가까이 느렸다. 하지만 요소 하나에 수십 나노초 차이라 수천 개 정도에서는 보이지 않고, 엔진 버전에 따라 순위도 바뀐다. 평소에는 의도가 드러나는 메서드를 쓰고, 프로파일러가 그 루프를 병목으로 가리킬 때만 인덱스 `for`로 바꾼다. 어떤 경우든 배열에 `for...in`은 쓰지 않는다.
+
+### 루프 안에서 만든 클로저가 모두 같은 값을 보는 이유는요?
+
+`var`는 함수 전체에 변수 하나만 만들어서 루프 안의 클로저가 모두 같은 변수를 기억하고, 루프가 끝난 뒤 그 값을 읽는다. `for` 머리에서 `let`으로 선언하면 반복마다 새 바인딩이 생기고 이전 값이 복사되어 클로저마다 자기 값을 가진다. 그래서 `var`는 `[3, 3, 3]`, `let`은 `[0, 1, 2]`가 나온다.

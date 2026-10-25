@@ -1,0 +1,482 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-cli-process");
+
+<EasyIntro>
+  명령어 프로그램은 우체국 창구 직원과 비슷하다. 손님이 내미는 신청서가 있고, 창구 뒤로 들어오는 소포가 있고, 직원은 처리한 결과를 내보내는 창구와 손님에게 직접 말을 거는 창구를 따로 쓴다. 결과물 창구로는 다음 직원이 받아서 계속 처리할 소포만 내보내야 한다. 거기에 "잠시만 기다려 주세요" 같은 말을 섞어 보내면 다음 직원이 소포를 열다가 헷갈리니, 사람에게 하는 말은 다른 창구로 한다.
+
+  다음 직원이 일을 일찍 끝내고 창구를 닫아 버렸는데 계속 소포를 밀어 넣으면 직원은 크게 놀라 소리를 지른다. 받을 사람이 없으면 조용히 일을 마치면 된다. 일을 끝낼 때는 잘 끝났는지 숫자 하나로 알리는데, 0이면 잘됐다는 뜻이고 다른 숫자면 문제가 있었다는 뜻이다. 다음 사람은 이 숫자만 보고 다음 일을 할지 말지 정한다.
+</EasyIntro>
+
+사내 배포 스크립트를 Node로 옮겼다. 혼자 터미널에서 돌릴 때는 멀쩡했다. 그런데 CI에서 `node deploy.mjs status | grep -q "api ok"`로 상태를 확인하는 줄을 넣자, 검사는 통과했는데 로그 끝에 이런 게 찍혔다.
+
+```text
+node:events:497
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: write EPIPE
+    at afterWriteDispatched (node:internal/stream_base_commons:159:15)
+    at writeGeneric (node:internal/stream_base_commons:150:3)
+    at Socket._writeGeneric (node:net:966:11)
+    ...
+  errno: -32,
+  code: 'EPIPE',
+  syscall: 'write'
+}
+```
+
+같은 주에 다른 문제도 두 개 나왔다. CI 로그에 `^[[32mok^[[39m` 같은 깨진 글자가 섞였고, 출력을 `| tee deploy.log`로 받으면 파일 끝이 중간에서 잘려 있었다. 셋 다 원인이 같다. 스크립트가 "터미널에 붙어 있다"고 가정했는데 실제로는 파이프에 붙어 있었다.
+
+이 글은 Node로 명령줄 도구를 만들 때 프로세스가 바깥과 주고받는 것들을 차례로 본다. 인자(argv), 표준 입력과 출력, 환경 변수와 작업 디렉터리, 종료 코드다. 종료 코드의 의미와 `uncaughtException`은 [Node.js 에러 처리 글](/posts/nodejs-error-handling)에서, 스트림의 배압과 `pipeline`은 [Node.js 파일과 스트림 글](/posts/nodejs-fs-streams)에서 다뤘다. 실행 결과는 모두 Node.js 22.22, 리눅스(bash)에서 직접 돌린 것이다.
+
+## 프로세스가 바깥과 주고받는 다섯 가지
+
+명령줄 도구는 결국 함수 하나와 같다. 입력을 받고, 결과를 내고, 성공했는지 알린다. 다만 그 입력과 출력이 운영체제가 정해 둔 통로로 오간다.
+
+<ConceptDiagram
+  width={420}
+  height={300}
+  caption="CLI는 다섯 통로로 셸과 이야기한다. stdout만 다음 명령으로 흘러간다"
+  nodes={[
+    { id: "shell", label: "셸", sub: "bash, CI 러너", x: 70, y: 150, w: 100 },
+    { id: "node", label: "node deploy.mjs", sub: "process 객체", x: 230, y: 150, w: 140 },
+    { id: "argv", label: "argv", sub: "인자 문자열 배열", x: 130, y: 40, w: 120 },
+    { id: "env", label: "env, cwd", sub: "물려받는 값", x: 330, y: 40, w: 120 },
+    { id: "out", label: "stdout", sub: "다음 명령으로", x: 360, y: 150, w: 100 },
+    { id: "err", label: "stderr", sub: "사람 눈으로", x: 330, y: 260, w: 110 },
+    { id: "code", label: "종료 코드", sub: "0이면 성공", x: 130, y: 260, w: 110 },
+  ]}
+  edges={[
+    { from: "shell", to: "node", label: "stdin" },
+    { from: "argv", to: "node" },
+    { from: "env", to: "node" },
+    { from: "node", to: "out" },
+    { from: "node", to: "err" },
+    { from: "node", to: "code", dashed: true },
+  ]}
+/>
+
+인자와 환경 변수, 작업 디렉터리는 프로세스가 시작할 때 한 번 받는다. 표준 입력(stdin)과 표준 출력(stdout), 표준 에러(stderr)는 파일 디스크립터 0, 1, 2번으로 열려 있는 통로다. 이 통로가 터미널에 붙었는지, 파이프에 붙었는지, 파일에 붙었는지는 프로세스를 띄운 쪽이 정한다. 같은 스크립트라도 어디에 붙었는지에 따라 동작이 달라지는 이유가 여기에 있다.
+
+## 인자는 문자열 배열로 온다
+
+`process.argv`에는 앞의 두 칸이 늘 정해져 있다. 첫 칸은 node 실행 파일 경로, 둘째 칸은 실행한 스크립트 경로다. 사용자가 넘긴 인자는 셋째 칸부터다.
+
+```js
+// argv.mjs
+console.log(process.argv);
+console.log(process.execArgv);
+```
+
+`node --env-file=.env argv.mjs x`처럼 Node 자체 옵션을 앞에 주면 그건 `argv`가 아니라 `execArgv`로 간다. 스크립트 이름 뒤에 쓴 것만 `argv`에 남는다. `node -e`로 코드를 바로 실행하면 스크립트 경로 칸이 없어서 한 칸이 당겨진다.
+
+```bash
+node -e 'console.log(process.argv)' -- a b
+```
+
+```text
+[ '/opt/node22/bin/node', 'a', 'b' ]
+```
+
+그래서 인자는 보통 `process.argv.slice(2)`로 자른다. 자른 뒤에도 남은 건 그냥 문자열 배열이다. `--env=prod`와 `--env prod`와 `-e prod`가 같은 뜻이라는 건 누군가 해석해 줘야 한다. Node 18.3부터 내장된 `util.parseArgs`가 그 일을 한다(20.0에서 안정 단계가 됐다).
+
+```js
+// args.mjs
+import { parseArgs } from "node:util";
+
+try {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,               // 옵션이 아닌 인자(서비스 이름)를 허용한다
+    options: {
+      env: { type: "string", short: "e", default: "staging" },
+      "dry-run": { type: "boolean" },
+      tag: { type: "string", multiple: true },  // --tag a --tag b → 배열
+    },
+  });
+  console.log(values, positionals);
+} catch (err) {
+  console.error(err.code, err.message);
+  process.exitCode = 2;                   // 사용법 오류는 관례상 2
+}
+```
+
+```bash
+node args.mjs api -e prod --dry-run --tag a --tag b
+node args.mjs api --env=prod --force; echo "exit=$?"
+node args.mjs --env; echo "exit=$?"
+```
+
+```text
+[Object: null prototype] {
+  env: 'prod',
+  'dry-run': true,
+  tag: [ 'a', 'b' ]
+} [ 'api' ]
+ERR_PARSE_ARGS_UNKNOWN_OPTION Unknown option '--force'. To specify a positional argument starting with a '-', place it at the end of the command after '--', as in '-- "--force"
+exit=2
+ERR_PARSE_ARGS_INVALID_OPTION_VALUE Option '-e, --env <value>' argument missing
+exit=2
+```
+
+모르는 옵션을 넣으면 기본적으로 에러가 난다(`strict: true`가 기본값). 오타 난 `--dyr-run`이 조용히 무시되고 진짜 배포가 나가는 사고를 막아 준다. 반환값이 `null` 프로토타입 객체라는 것도 볼 만하다. `values.toString` 같은 상속 속성이 끼어들 틈이 없다.
+
+`parseArgs`는 파싱만 한다. 하위 명령(`deploy status`, `deploy rollback`), 자동 `--help`, 필수 인자 검사까지 원하면 commander 같은 라이브러리를 쓴다.
+
+```js
+import { Command } from "commander";
+
+const program = new Command("deploy");
+program
+  .command("rollback")
+  .argument("<service>", "되돌릴 서비스")
+  .option("-e, --env <name>", "대상 환경", "staging")
+  .action(async (service, opts) => {
+    // service는 문자열, opts는 { env: "staging" } 꼴
+  });
+
+await program.parseAsync();   // action이 async면 parseAsync로 기다린다
+```
+
+`parse()`를 쓰면 async action이 끝나기 전에 다음 줄로 넘어가서, 뒤에서 정리 코드를 돌리는 구조일 때 순서가 꼬인다. action이 Promise를 돌려주면 `parseAsync()`를 쓴다.
+
+파서가 하는 일을 직접 만들어 보면 규칙이 손에 잡힌다. 아래 함수는 `--key=value`, `--flag`, `--no-flag`, 묶인 짧은 옵션(`-vf`), 그리고 "여기부터는 옵션이 아니다"를 뜻하는 `--`를 처리한다. 값을 받는 짧은 옵션(`-e prod`)은 일부러 뺐다.
+
+<CodePlayground
+  caption="argv를 플래그와 위치 인자로 나누기"
+  functionName="parseFlags"
+  initialCode={`function parseFlags(argv) {
+  const flags = {};
+  const positionals = [];
+  // "--" 뒤는 전부 위치 인자다
+  return { flags, positionals };
+}`}
+  solution={`function parseFlags(argv) {
+  const flags = {};
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--") { positionals.push(...argv.slice(i + 1)); break; }
+    if (a.startsWith("--")) {
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      if (eq >= 0) flags[body.slice(0, eq)] = body.slice(eq + 1);
+      else if (body.startsWith("no-")) flags[body.slice(3)] = false;
+      else flags[body] = true;
+    } else if (a.startsWith("-") && a.length > 1) {
+      for (const ch of a.slice(1)) flags[ch] = true;
+    } else positionals.push(a);
+  }
+  return { flags, positionals };
+}`}
+  tests={[
+    { args: [["deploy", "api", "--env=prod", "--dry-run"]], expected: { flags: { env: "prod", "dry-run": true }, positionals: ["deploy", "api"] }, label: "--key=value와 불리언" },
+    { args: [["deploy", "--no-color", "-vf"]], expected: { flags: { color: false, v: true, f: true }, positionals: ["deploy"] }, label: "--no-와 묶인 짧은 옵션" },
+    { args: [["grep", "--", "--force", "x"]], expected: { flags: {}, positionals: ["grep", "--force", "x"] }, label: "-- 뒤는 위치 인자" },
+    { args: [[]], expected: { flags: {}, positionals: [] }, label: "인자 없음" },
+  ]}
+/>
+
+셸이 먼저 한 번 해석한다는 것도 잊지 않는다. 따옴표는 셸이 벗기고, `*.log`는 셸이 파일 이름들로 펼친 뒤에 Node에 넘긴다. 윈도우의 cmd는 와일드카드를 펼치지 않아서 같은 명령이 다르게 동작한다. 크로스 플랫폼 도구라면 패턴을 문자열로 받아 `fs.glob`(Node 22부터, 실험적)이나 라이브러리로 직접 펼친다.
+
+## stdin이 터미널인지 파이프인지
+
+입력을 파이프로 받는 도구는 먼저 "지금 누가 입력을 주고 있나"를 확인한다. 아무것도 파이프로 넘기지 않고 실행하면 stdin이 터미널에 붙어 있어서, 프로그램은 사용자가 무언가 칠 때까지 영원히 기다린다. 사용자는 멈춘 줄 안다.
+
+```js
+// stdin.mjs — 호스트 목록을 파이프로 받는다
+import { text } from "node:stream/consumers";
+import { styleText } from "node:util";
+
+if (process.stdin.isTTY) {
+  console.error("입력을 파이프로 넘겨 주세요: cat hosts.txt | node stdin.mjs");
+  process.exit(2);
+}
+const hosts = (await text(process.stdin)).split("\n").filter(Boolean);
+for (const h of hosts) console.log(styleText("green", "ok") + " " + h);
+console.error(`stdout isTTY=${process.stdout.isTTY} hasColors=${process.stdout.hasColors?.()}`);
+```
+
+`isTTY`는 그 스트림이 터미널일 때만 `true`이고, 파이프나 파일이면 `true`가 아니라 아예 `undefined`다. `=== false`로 비교하면 늘 거짓이 되니 참·거짓으로만 본다. `stream/consumers`의 `text()`는 스트림을 끝까지 읽어 문자열 하나로 돌려준다. 입력이 수 GB일 수 있으면 이렇게 통째로 읽지 말고 `readline`의 `for await (const line of rl)`로 한 줄씩 처리한다.
+
+## stdout은 데이터, stderr는 사람에게
+
+위 스크립트는 결과 줄은 `console.log`(stdout)로, 안내 문구는 `console.error`(stderr)로 보냈다. 이 구분이 CLI에서 가장 중요한 약속이다. 파이프는 stdout만 다음 명령으로 넘기고 stderr는 그대로 터미널에 남긴다.
+
+```js
+// log.mjs
+console.error("[info] 서비스 목록을 불러오는 중");
+console.log(JSON.stringify([{ name: "api", version: "1.4.2" }, { name: "worker", version: "1.4.1" }]));
+```
+
+```bash
+node log.mjs | python3 -c "import json,sys; print([s['name'] for s in json.load(sys.stdin)])"
+node log.mjs 2>/dev/null | wc -c   # stderr를 버리면 JSON만 남는다
+```
+
+```text
+[info] 서비스 목록을 불러오는 중
+['api', 'worker']
+71
+```
+
+안내 문구는 화면에 보이면서도 JSON 파서에는 닿지 않았다. 만약 안내 문구를 `console.log`로 찍었다면 파서는 `[info]`에서 깨졌을 것이다. 진행 상황, 경고, 디버그 로그는 stderr, 다음 명령이 읽을 결과는 stdout. 이 규칙을 지키면 사용자가 `2>/dev/null`로 소음을 끄고 결과만 받을 수 있다. 대화형 질문을 던질 때도 질문 문구는 stderr로 내보낸다. 아래 프롬프트 예제가 `output: process.stderr`인 이유다.
+
+## 파이프에 붙은 stdout은 기다려 주지 않는다
+
+`| tee deploy.log`로 받은 로그가 잘린 이유는 Node의 stdout이 붙은 대상에 따라 동기·비동기가 다르기 때문이다. 리눅스에서 파일과 터미널로의 쓰기는 동기이고, 파이프로의 쓰기는 아래 실험처럼 비동기다. 윈도우는 조합이 달라서, 다른 OS를 지원하는 도구라면 Node 문서 process 절의 "A note on process I/O"를 확인한다.
+
+비동기라는 건 `write()`가 "커널 버퍼에 넣을 때까지 내가 들고 있겠다"며 바로 돌아온다는 뜻이다. 받는 쪽이 느리면 Node 안에 쓰지 못한 데이터가 쌓인다. 그 상태에서 `process.exit()`를 부르면 쌓인 데이터는 그냥 사라진다. 100바이트 줄 2만 개(200만 바이트)를 쓰고 끝내는 스크립트로 확인했다. 받는 쪽은 1초 늦게 읽기 시작한다.
+
+```js
+// big.mjs
+const line = "x".repeat(99) + "\n";
+for (let i = 0; i < 20000; i++) process.stdout.write(line);
+if (process.argv[2] === "exit") process.exit(0);
+```
+
+```bash
+node big.mjs exit | (sleep 1; wc -c)   # 파이프 + process.exit
+node big.mjs | (sleep 1; wc -c)        # 파이프 + 자연 종료
+node big.mjs exit > out.txt; wc -c < out.txt   # 파일 + process.exit
+```
+
+```text
+64000
+2000000
+2000000
+```
+
+파이프에 `process.exit()`를 쓴 경우만 64,000바이트에서 잘렸다. 리눅스 파이프 버퍼(기본 64KiB)에 들어간 만큼만 살아남고 나머지 190만 바이트는 Node 메모리에서 함께 사라졌다. 같은 코드가 파일로 리다이렉트하면 멀쩡하다. 쓰기가 동기라서 `write()`가 끝났을 때 이미 커널에 넘어가 있기 때문이다. 터미널에서 직접 실행할 때도 동기라서, 개발자 손에서는 이 버그가 절대 재현되지 않는다.
+
+해법은 [에러 처리 글](/posts/nodejs-error-handling)에서 본 것과 같다. 끝내야 할 때 `process.exit()` 대신 `process.exitCode = 1`을 적고 함수가 자연스럽게 끝나게 둔다. 이벤트 루프는 쓰기가 다 빠질 때까지 프로세스를 살려 둔다. 큰 출력을 만드는 도구라면 `write()`가 `false`를 돌려줄 때 `drain` 이벤트를 기다려야 메모리에 출력이 무한정 쌓이지 않는다. 이 배압은 [스트림 글](/posts/nodejs-fs-streams)의 `pipeline`이 대신 처리해 준다.
+
+## 받는 쪽이 먼저 끝나면 EPIPE
+
+처음 장면의 EPIPE는 반대 방향의 문제다. `grep -q`는 찾는 줄을 보자마자 종료한다. `head -2`도 두 줄을 받으면 끝난다. 받는 쪽이 사라진 파이프에 쓰면 커널은 쓰기를 거절하고 EPIPE(errno 32)를 돌려준다. Node는 이걸 stdout 스트림의 `error` 이벤트로 올리고, 아무도 듣지 않으면 잡히지 않은 에러로 프로세스가 죽는다.
+
+아래 그림에서 다음을 누르면 이 순서를 따라갈 수 있다.
+
+<SequenceDiagram
+  caption="받는 쪽이 일찍 끝나면 다음 write가 EPIPE를 맞는다"
+  actors={[
+    { id: "node", label: "node deploy" },
+    { id: "pipe", label: "파이프" },
+    { id: "head", label: "head -2" },
+    { id: "shell", label: "셸" },
+  ]}
+  steps={[
+    { from: "node", to: "pipe", label: "line 0, line 1", title: "Node가 줄을 쓴다", detail: "stdout은 파이프의 쓰는 쪽에 붙어 있다. 리눅스에서 파이프 쓰기는 비동기라 write는 바로 돌아온다." },
+    { from: "pipe", to: "head", label: "두 줄 읽음", title: "head가 원하는 만큼 읽는다", detail: "head -2는 두 줄을 받으면 자기 일을 다 했다." },
+    { from: "head", to: "shell", label: "exit 0", title: "head가 먼저 끝난다", detail: "head가 종료하면서 파이프의 읽는 쪽이 닫힌다. 이제 이 파이프를 읽을 프로세스가 없다." },
+    { from: "node", to: "pipe", label: "line 2", title: "Node는 계속 쓴다", detail: "Node는 head가 끝난 걸 모른다. 다음 줄을 쓰려고 write 시스템 콜을 부른다." },
+    { from: "pipe", to: "node", label: "EPIPE", title: "커널이 쓰기를 거절한다", detail: "읽는 쪽이 없는 파이프라 커널이 EPIPE를 돌려준다. Node는 이걸 stdout의 error 이벤트로 올린다.", payload: "Error: write EPIPE\n  errno: -32, code: 'EPIPE', syscall: 'write'" },
+    { from: "node", to: "shell", label: "exit 1 + 스택", title: "듣는 사람이 없으면 죽는다", detail: "error 리스너가 없으면 잡히지 않은 에러가 되어 스택 트레이스를 찍고 종료 코드 1로 끝난다. 리스너에서 EPIPE를 정상 종료로 처리하면 조용히 0으로 끝난다." },
+  ]}
+/>
+
+C로 짠 전통적인 유닉스 도구는 이때 SIGPIPE 시그널을 받고 조용히 죽는다. Node는 SIGPIPE를 무시하도록 설정해서 시그널 대신 에러로 받는다. 그래서 출력을 파이프로 넘길 법한 도구라면 EPIPE를 직접 받아 준다.
+
+```js
+// fix.mjs — 받는 쪽이 끝났으면 조용히 끝낸다
+process.stdout.on("error", (err) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;                 // 다른 에러는 그대로 터뜨린다
+});
+let i = 0;
+setInterval(() => console.log(`line ${i++}`), 1);
+```
+
+```bash
+node fix.mjs | head -2; echo "codes=${PIPESTATUS[@]}"
+```
+
+```text
+line 0
+line 1
+codes=0 0
+```
+
+리스너가 없을 때는 같은 명령의 `PIPESTATUS`가 `1 0`이었다. 여기서는 `process.exit(0)`를 써도 괜찮다. 받는 사람이 이미 없으니 잘려 나갈 출력도 의미가 없다. `set -o pipefail`을 켠 CI 스크립트에서는 이 1 하나가 단계 전체를 실패로 만든다.
+
+## 색과 진행 막대는 터미널일 때만
+
+CI 로그에 섞인 `^[[32m`은 ANSI 색 코드다. 터미널은 이걸 초록색으로 그리지만, 파일이나 로그 수집기에는 글자 그대로 남는다. 앞의 `stdin.mjs`는 Node 22에 들어온 `util.styleText`로 색을 칠했는데, 붙은 대상에 따라 결과가 달랐다. `cat -v`로 제어 문자를 보이게 했다.
+
+```bash
+printf 'web-1\nweb-2\n' | node stdin.mjs | cat -v              # stdout이 파이프
+printf 'web-1\n' | FORCE_COLOR=1 node stdin.mjs | cat -v       # 강제로 켠다
+printf 'web-1\n' | NO_COLOR=1 node stdin.mjs | cat -v          # 강제로 끈다
+script -qc "printf 'web-1\n' | node stdin.mjs" /dev/null | cat -v   # 가짜 터미널
+```
+
+```text
+ok web-1
+ok web-2
+stdout isTTY=undefined hasColors=undefined
+^[[32mok^[[39m web-1
+stdout isTTY=undefined hasColors=undefined
+ok web-1
+stdout isTTY=undefined hasColors=undefined
+^[[32mok^[[39m web-1^M
+stdout isTTY=true hasColors=true^M
+```
+
+`hasColors()`는 터미널 스트림(`tty.WriteStream`)에만 있는 메서드라 파이프에서는 `undefined`가 찍혔다. `styleText`는 기본으로 대상 스트림이 색을 지원하는지 확인하고, 파이프면 색 코드를 빼고 글자만 낸다. `FORCE_COLOR`와 `NO_COLOR` 환경 변수도 존중한다. 이 확인(`validateStream` 옵션, 기본값 켜짐)은 22.13부터 들어갔고 그 전 버전의 `styleText`는 무조건 색 코드를 붙였다. chalk 같은 라이브러리는 오래전부터 같은 판단(supports-color)을 해 왔다. 직접 `\x1b[32m`을 문자열에 박는 코드가 CI 로그를 더럽히는 주범이다.
+
+진행 막대는 더 까다롭다. cli-progress나 ora 같은 진행 표시는 `\r`(줄 처음으로)과 커서 이동 코드로 같은 줄을 다시 그린다. 파이프로 가면 이 다시 그리기가 줄마다 쌓여 로그가 수천 줄이 된다. 그래서 진행 막대는 `process.stderr.isTTY`일 때만 켜고, 아니면 "10% 완료" 같은 줄을 가끔 한 번씩 찍는다. figlet으로 그리는 큰 글자 배너도 같은 원칙으로, 터미널에서 사람이 볼 때만 의미가 있다.
+
+## 대화형 프롬프트는 입력이 없을 때를 대비한다
+
+"prod에 배포할까요?"처럼 사람에게 확인을 받는 질문은 내장 `readline/promises`로 충분하다. 더 화려한 선택 목록이 필요하면 `@inquirer/prompts`나 prompts 패키지를 쓴다. 어느 쪽이든 문제는 사람이 없을 때다.
+
+```js
+// ask.mjs
+import * as readline from "node:readline/promises";
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+const answer = await rl.question("prod에 배포할까요? (y/N) ");
+rl.close();
+console.log(`answer=${JSON.stringify(answer)}`);
+```
+
+```bash
+echo y | node ask.mjs            # 파이프로 답을 넣는다
+node ask.mjs < /dev/null; echo "exit=$?"   # 입력이 아예 없다 (CI와 같은 상황)
+```
+
+```text
+prod에 배포할까요? (y/N) answer="y"
+prod에 배포할까요? (y/N) Warning: Detected unsettled top-level await at file:///.../ask.mjs:3
+const answer = await rl.question("prod에 배포할까요? (y/N) ");
+               ^
+
+
+
+exit=13
+```
+
+입력이 닫히자 `question()`의 Promise가 영원히 풀리지 않았고, 할 일이 없어진 Node는 "끝나지 않은 최상위 await"라며 종료 코드 13으로 끝났다(경로는 줄였다). CI에서 이 13을 처음 보면 무슨 일인지 알기 어렵다. 그래서 확인 질문이 있는 도구는 두 가지를 같이 둔다. `--yes` 같은 플래그로 질문을 건너뛰게 하고, `process.stdin.isTTY`가 아니면 질문하지 않고 "확인이 필요한 작업이라 --yes가 필요하다"는 메시지와 함께 2로 끝낸다.
+
+## 환경 변수와 작업 디렉터리
+
+`process.env`는 부모 프로세스에게서 물려받은 환경 변수다. 값은 언제나 문자열이라 `process.env.RETRIES`는 `"3"`이고, 없는 변수는 `undefined`다. `"false"`도 참으로 평가되니 불리언은 직접 비교한다.
+
+로컬에서 `.env` 파일을 읽는 일은 오래 dotenv 패키지의 몫이었다. Node 20.6부터는 런타임이 직접 읽는다.
+
+```bash
+printf 'API_URL=https://api.example.com\nTOKEN="abc def"\n# c\n' > .env
+node --env-file=.env -e 'console.log(process.env.API_URL, JSON.stringify(process.env.TOKEN))'
+API_URL=override node --env-file=.env -e 'console.log(process.env.API_URL)'
+node --env-file=.env.missing argv.mjs
+node --env-file-if-exists=.nope -e 'console.log("ok")'
+node -e 'process.loadEnvFile(".env"); console.log(process.env.TOKEN)'
+```
+
+```text
+https://api.example.com "abc def"
+override
+node: .env.missing: not found
+.nope not found. Continuing without it.
+ok
+abc def
+```
+
+둘째 줄이 중요하다. 이미 셸에 있는 환경 변수가 `.env` 파일 값보다 이긴다. CI나 쿠버네티스가 주입한 값을 로컬 파일이 덮어쓰지 않으니 안전한 방향이다. 파일이 없으면 `--env-file`은 바로 실패하고, 22.9에 들어온 `--env-file-if-exists`는 경고만 남기고 계속한다. 코드 안에서 읽고 싶으면 `process.loadEnvFile()`을 쓴다. dotenv는 여러 파일의 병합이나 변수 확장(`$OTHER` 참조)이 필요할 때 여전히 쓸 만하다. 비밀값이 든 `.env`는 저장소에 올리지 않는다.
+
+작업 디렉터리는 헷갈리기 쉽다. `process.cwd()`는 "명령을 실행한 위치"고, 스크립트 파일이 있는 위치가 아니다.
+
+```bash
+# where.mjs: cwd와 import.meta.dirname을 찍는다 (아래 출력의 경로는 줄였다)
+cd /tmp && node ~/b40lab/cli/where.mjs
+```
+
+```text
+cwd=/tmp
+dir=/tmp/claude-0/.../b40lab/cli
+```
+
+사용자가 넘긴 상대 경로(`./config.yml`)는 `cwd` 기준으로 풀고, 도구가 함께 배포하는 템플릿 파일은 `import.meta.dirname`(Node 20.11부터, CommonJS의 `__dirname`) 기준으로 푼다. 둘을 섞으면 "내 폴더에서는 되는데 다른 폴더에서 실행하면 파일을 못 찾는다"가 된다.
+
+## 종료 코드와 Ctrl+C
+
+종료 코드는 셸과 CI가 읽는 유일한 성공 신호다. 관례는 0이 성공, 1이 일반 실패, 2가 사용법 오류다. 앞의 `parseArgs` 예제가 잘못된 인자에 2를 쓴 것도 이 관례다. `grep`처럼 "찾지 못함"을 1로 알리는 도구도 있어서, 실패의 종류를 숫자로 나누면 호출하는 스크립트가 분기하기 쉽다.
+
+사용자가 Ctrl+C를 누르면 프로세스는 SIGINT를 받는다. 리스너가 없으면 Node는 시그널로 끝나고 셸은 128 + 2 = 130으로 보여 준다. 임시 파일이나 반쯤 올린 배포를 정리해야 하면 `process.on("SIGINT", ...)`로 받아서 정리한 뒤 `process.exitCode = 130`으로 끝낸다. 리스너를 달면 기본 종료가 사라지니, 정리 뒤에 직접 끝내지 않으면 Ctrl+C가 먹히지 않는 도구가 된다.
+
+## 개발 루프: --watch와 nodemon
+
+CLI를 만드는 동안은 파일을 고칠 때마다 다시 실행하고 싶다. Node 18.11부터 `node --watch script.mjs`가 내장되어, 실행한 스크립트와 그 스크립트가 import한 파일이 바뀌면 프로세스를 다시 띄운다. 22에서 실험 딱지가 떨어졌다. import 그래프 밖의 파일(설정 YAML 같은 것)은 `--watch-path=./config`로 따로 지정하고, 화면을 지우지 않으려면 `--watch-preserve-output`을 붙인다.
+
+nodemon은 같은 일을 오래 해 온 도구다. 확장자 필터, 재시작 지연, 무시할 경로 같은 설정이 더 세밀하고, Node가 아닌 명령(`nodemon --exec python app.py`)도 감시할 수 있다. 새 프로젝트라면 내장 `--watch`로 시작하고 부족할 때 nodemon을 들인다.
+
+## bin 필드로 명령어가 된다
+
+스크립트를 `node deploy.mjs`가 아니라 `deploy`로 부르게 하려면 `package.json`의 `bin` 필드에 명령 이름과 파일을 적고, 파일 첫 줄에 셔뱅(`#!/usr/bin/env node`)을 쓴다.
+
+```json
+{ "name": "deploy-tool", "version": "1.0.0", "type": "module", "bin": { "deploy": "./bin/deploy.js" } }
+```
+
+이 패키지를 다른 프로젝트에 설치하면 npm이 `node_modules/.bin`에 링크를 만든다. `npx deploy`와 `npm run` 스크립트는 이 폴더를 PATH 앞에 붙여서 실행한다.
+
+```bash
+npm i ../tool            # 로컬 패키지를 설치한다
+ls -l node_modules/.bin/ # 링크가 생겼는지 본다
+npx deploy a b
+npm run -s deploy -- --dry-run   # scripts.deploy = "deploy --env prod"
+```
+
+```text
+lrwxrwxrwx 1 root root 28 Oct 24 00:00 deploy -> ../deploy-tool/bin/deploy.js
+deploy [ 'a', 'b' ]
+deploy [ '--env', 'prod', '--dry-run' ]
+```
+
+`npm run` 뒤의 `--`는 "여기부터는 npm 옵션이 아니라 스크립트에 넘길 인자"라는 뜻이다. 빼먹으면 `--dry-run`을 npm이 가져가 버린다. `npm i -g`로 전역 설치하면 PATH에 바로 생기지만, 사람마다 버전이 달라지니 팀 도구는 프로젝트 `devDependencies`에 넣고 `npx`로 부르는 편이 재현하기 쉽다.
+
+마지막으로 전역 변수 하나. 브라우저에서 최상위 `var`는 `window`의 속성이 되지만, Node 모듈에서는 그 파일 안에만 산다.
+
+```bash
+echo 'var a = 1; console.log(globalThis.a, typeof window, typeof global, global === globalThis)' > g.cjs && node g.cjs
+```
+
+```text
+undefined undefined object true
+```
+
+Node의 전역 객체는 `global`이고 지금은 `globalThis`와 같다. 설정을 여러 파일에서 나눠 쓰려고 `global.config = ...`처럼 전역에 붙이는 코드는 테스트에서 상태가 새어 나가는 원인이 된다. 모듈로 export하고 import하는 편이 낫다.
+
+## 파이프 끝의 다른 프로그램을 생각한다
+
+처음 장면의 세 가지 문제는 한 문장으로 정리된다. 내 도구의 stdout 끝에는 사람이 아니라 다른 프로그램이 있을 수 있다. 그 프로그램을 위해 결과만 stdout으로 내고, 사람에게 하는 말과 색과 진행 막대는 stderr와 TTY일 때로 미루고, 끝낼 때는 출력이 다 빠질 때까지 기다리고, 받는 쪽이 먼저 떠나면 조용히 물러난다. 이 네 가지를 지키면 같은 스크립트가 터미널에서도 CI에서도 똑같이 믿을 만하게 돈다.
+
+## 면접에서 나올 만한 질문
+
+### 로그를 stderr로 보내야 하는 이유는 무엇인가요?
+
+파이프는 stdout만 다음 명령으로 넘기기 때문이다. 결과는 stdout, 진행 상황·경고·디버그 로그는 stderr로 나눠야 `node tool | jq`처럼 이어 붙일 때 파서가 안내 문구에서 깨지지 않는다. 사용자도 `2>/dev/null`로 소음만 끄고 결과를 받을 수 있다. 대화형 질문 문구도 같은 이유로 stderr에 쓴다.
+
+### process.exit()가 stdout 출력을 잘라 먹는 이유는 무엇인가요?
+
+리눅스에서 파이프로 가는 stdout 쓰기는 비동기라서, `write()`는 데이터를 Node 안에 들고 바로 돌아온다. 그 상태에서 `process.exit()`를 부르면 아직 커널로 못 넘긴 데이터가 함께 사라진다. 실제로 200만 바이트 중 파이프 버퍼만큼인 64,000바이트만 남았다. 파일과 터미널로의 쓰기는 동기라 개발자 터미널에서는 재현되지 않는다. `process.exitCode`를 적고 자연스럽게 끝나게 두면 해결된다.
+
+### `node tool | head -1`에서 EPIPE가 나는 이유와 대응은?
+
+`head`가 한 줄을 읽고 먼저 끝나면 파이프의 읽는 쪽이 닫히고, 그다음 쓰기에 커널이 EPIPE를 돌려준다. Node는 SIGPIPE를 무시하도록 되어 있어서 이걸 stdout의 `error` 이벤트로 받고, 리스너가 없으면 스택 트레이스와 함께 종료 코드 1로 죽는다. stdout에 `error` 리스너를 달아 EPIPE면 0으로 끝내면 된다.
+
+### 출력이 터미널인지 파이프인지 어떻게 알고, 왜 알아야 하나요?
+
+`process.stdout.isTTY`가 `true`면 터미널이고, 파이프나 파일이면 `undefined`다. 색 코드와 진행 막대의 다시 그리기는 터미널에서만 의미가 있고 파일이나 CI 로그에는 깨진 글자와 수천 줄로 남는다. `util.styleText`나 chalk는 이 판단을 대신 해 주고 `NO_COLOR`, `FORCE_COLOR`도 존중한다. 입력 쪽도 `stdin.isTTY`로 확인해야 파이프 입력을 기다리며 멈춘 것처럼 보이는 일을 막는다.
+
+### 대화형 프롬프트가 있는 CLI를 CI에서 돌리면 어떤 일이 생기나요?
+
+입력이 닫혀 있으면 질문의 Promise가 풀리지 않는다. 할 일이 없어진 Node는 끝나지 않은 최상위 await로 보고 종료 코드 13으로 끝난다. 그래서 `--yes` 같은 플래그로 질문을 건너뛰게 하고, stdin이 TTY가 아니면 질문 대신 필요한 플래그를 알려 주며 2로 끝내게 만든다.
+
+### process.cwd()와 import.meta.dirname은 어떻게 다른가요?
+
+`process.cwd()`는 사용자가 명령을 실행한 디렉터리고, `import.meta.dirname`은 그 스크립트 파일이 있는 디렉터리다. 사용자가 넘긴 상대 경로는 cwd 기준으로, 도구가 같이 배포하는 템플릿이나 기본 설정 파일은 스크립트 위치 기준으로 푼다. 섞으면 특정 폴더에서만 동작하는 도구가 된다.
+
+### --env-file과 dotenv는 무엇이 다르고, 값이 겹치면 무엇이 이기나요?
+
+Node 20.6부터 `--env-file`로 런타임이 `.env`를 직접 읽어서 패키지가 필요 없다. 이미 프로세스 환경에 있는 변수가 파일 값보다 이기므로, CI나 쿠버네티스가 주입한 값이 로컬 파일에 덮이지 않는다. 파일이 없으면 실패하니 선택적으로 읽으려면 `--env-file-if-exists`를 쓴다. 여러 파일 병합이나 변수 확장이 필요하면 dotenv 계열을 쓴다.

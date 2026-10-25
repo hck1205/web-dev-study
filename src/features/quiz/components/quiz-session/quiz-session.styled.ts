@@ -31,3 +31,24 @@ export const Sources = styled.div`
     color: ${color.accent};
   }
 `;
+
+/** 글 목록은 접어 두고 제목 줄만 보인다. 토픽이 크면 글이 수백 편이라 펼쳐 두면 시작 버튼이 화면 밖으로 밀린다 */
+export const SourcesToggle = styled.details`
+  summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary::before {
+    content: "▸";
+    margin-right: 0.375rem;
+  }
+  &[open] summary::before {
+    content: "▾";
+  }
+`;

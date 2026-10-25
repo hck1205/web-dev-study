@@ -1,0 +1,390 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-binary-data-typed-arrays");
+
+<EasyIntro>
+  컴퓨터 안의 사진이나 소리는 결국 0부터 255까지의 작은 숫자들이 길게 늘어선 줄이고, 이 숫자 하나를 바이트라고 부른다. 자바스크립트는 글자와 숫자는 잘 다뤘지만 이런 바이트 줄을 다루는 데는 서툴렀고, 그래서 생긴 것이 ArrayBuffer다. 칸이 정해진 빈 달걀판이라고 생각하면 되는데, 달걀판은 그 자체로는 아무것도 보여 주지 않고 안경을 쓰고 들여다봐야 한다. 어떤 안경은 한 칸씩 보고, 어떤 안경은 네 칸을 묶어 큰 숫자 하나로 읽는다. 여러 안경이 같은 달걀판을 함께 볼 수 있어서 한 안경으로 칸을 바꾸면 다른 안경에도 바로 보이지만, 모르고 쓰면 엉뚱한 칸을 고쳐 버린다. 네 칸을 묶어 읽을 때 앞에서부터 읽을지 뒤에서부터 읽을지도 정해야 하는데, 순서를 반대로 읽으면 640이 20억이 된다. 이 글은 그 달걀판과 안경을 어떻게 다루는지 이야기한다.
+</EasyIntro>
+
+프로필 사진 업로드에서 가로세로 4000픽셀이 넘는 사진은 미리 막고 싶었다. 서버까지 올려 보내고 거절하면 사용자가 큰 파일을 다 올릴 때까지 기다려야 한다. 이미지를 통째로 디코딩하지 않고 파일 앞부분 몇 바이트만 읽으면 크기를 알 수 있다는 이야기를 듣고 PNG 헤더를 열었다.
+
+첫 시도는 `Uint32Array`로 읽는 것이었다. 640×480 그림인데 가로가 2147614720으로 나왔다.
+
+```js
+const buf = await file.slice(0, 24).arrayBuffer();
+console.log(new Uint32Array(buf.slice(16, 24)));
+```
+
+```text
+Uint32Array(2) [ 2147614720, 3758161920 ]
+```
+
+숫자가 틀린 게 아니라 읽는 순서가 반대였다. 이 글은 이 버그에서 시작해 자바스크립트가 바이트를 다루는 세 가지 도구 `ArrayBuffer`, TypedArray, `DataView`의 관계를 보고, 엔디언, 같은 버퍼를 여러 뷰가 공유할 때의 함정, `Blob`·`File`과 오가는 법, 워커로 넘기기, `SharedArrayBuffer`에 교차 출처 격리가 필요한 이유까지 따라간다. 출력은 Node 22에서 돌렸다. 브라우저 전용 API(`File`, `WebSocket`)는 같은 명세를 따르는 Node의 `Blob`이나 설명으로 대신했다.
+
+## 바이트 상자 하나에 안경 여러 개
+
+`ArrayBuffer`는 길이가 정해진 바이트 덩어리다. 직접 읽거나 쓸 수 없다. `buf[0]`은 `undefined`다. 내용을 보려면 뷰(view)를 씌워야 한다. 뷰는 두 종류다.
+
+TypedArray는 같은 크기의 숫자가 촘촘히 늘어선 배열처럼 버퍼를 본다. `Uint8Array`는 한 칸을 0~255 정수로, `Int16Array`는 두 칸을 부호 있는 16비트 정수로, `Float64Array`는 여덟 칸을 실수 하나로 본다. 이름 그대로 부호(Int/Uint), 비트 수, 정수냐 실수냐(Float)가 타입에 박혀 있다. Node 22 기준으로 열한 가지가 있고(ES2025에 `Float16Array`가 더해졌다), 64비트 정수는 `BigInt64Array`처럼 BigInt로 다룬다.
+
+`DataView`는 타입이 정해지지 않은 뷰다. 원하는 위치에서 원하는 크기로, 원하는 바이트 순서로 하나씩 꺼낸다. 파일 헤더나 네트워크 패킷처럼 필드마다 크기가 다른 구조를 읽을 때 쓴다.
+
+<ConceptDiagram
+  width={400}
+  height={250}
+  caption="ArrayBuffer는 바이트만 갖고, 읽는 방식은 그 위에 씌운 뷰가 정한다"
+  nodes={[
+    { id: "buf", label: "ArrayBuffer", sub: "바이트 8개", x: 200, y: 200, w: 150 },
+    { id: "u8", label: "Uint8Array", sub: "1칸 = 숫자 1개", x: 70, y: 50, w: 120 },
+    { id: "u16", label: "Uint16Array", sub: "2칸 = 숫자 1개", x: 200, y: 50, w: 120 },
+    { id: "dv", label: "DataView", sub: "위치·크기·순서 지정", x: 330, y: 50, w: 130 },
+    { id: "blob", label: "Blob / File", sub: "읽기 전용 덩어리", x: 60, y: 200, w: 110 },
+    { id: "net", label: "fetch·WebSocket", x: 340, y: 200, w: 120 },
+  ]}
+  edges={[
+    { from: "u8", to: "buf", label: "같은 메모리" },
+    { from: "u16", to: "buf" },
+    { from: "dv", to: "buf" },
+    { from: "blob", to: "buf", label: "arrayBuffer()", dashed: true },
+    { from: "net", to: "buf", label: "응답 바이트", dashed: true },
+  ]}
+/>
+
+세 뷰가 한 버퍼를 가리킨다는 것은 직접 확인할 수 있다. `Uint16Array`로 값 하나를 쓰고 `Uint8Array`로 읽었다.
+
+```js
+const buf = new ArrayBuffer(8);
+const bytes = new Uint8Array(buf);
+const words = new Uint16Array(buf);
+
+words[0] = 0x1234;
+console.log(bytes[0].toString(16), bytes[1].toString(16));
+```
+
+```text
+34 12
+```
+
+0x1234를 썼는데 바이트로 보니 `34`가 앞에 있다. 첫 시도가 틀린 이유가 여기 있다.
+
+## 엔디언: 바이트를 놓는 순서
+
+여러 바이트로 된 숫자를 메모리에 놓을 때 큰 자리 바이트를 앞에 두는 방식을 빅 엔디언(big-endian), 작은 자리 바이트를 앞에 두는 방식을 리틀 엔디언(little-endian)이라고 한다. x86과 대부분의 ARM 기기는 리틀 엔디언이다.
+
+```js
+console.log(new Uint8Array(new Uint32Array([1]).buffer));
+```
+
+```text
+Uint8Array(4) [ 1, 0, 0, 0 ]
+```
+
+숫자 1을 썼더니 첫 바이트가 1이다. 리틀 엔디언이라는 뜻이다. TypedArray는 항상 그 기기의 바이트 순서로 읽고 쓴다. 명세가 순서를 정하지 않고 플랫폼에 맡긴다. 그런데 PNG, JPEG 마커, TCP/IP 헤더처럼 파일과 네트워크의 많은 형식은 빅 엔디언으로 적혀 있다. 그래서 `Uint32Array`로 PNG 너비를 읽으면 순서가 뒤집힌다. 아래 그림에서 다음을 누르면 너비 칸의 네 바이트 `00 00 02 80`을 두 방식으로 합치는 과정을 볼 수 있다.
+
+<AlgoTrace
+  caption="같은 네 바이트도 앞에서부터 쌓느냐 뒤에서부터 쌓느냐에 따라 640이 되기도 21억이 되기도 한다"
+  memoryLabel="합친 값"
+  cells={["00", "00", "02", "80"]}
+  steps={[
+    { pointer: 0, memory: ["BE: 0x00"], caption: "빅 엔디언은 첫 바이트를 가장 큰 자리로 둔다. 지금까지 0이다." },
+    { pointer: 1, memory: ["BE: 0x0000"], caption: "둘째 바이트도 0이다. 앞 값을 한 바이트 왼쪽으로 밀고 붙인다." },
+    { pointer: 2, memory: ["BE: 0x000002"], caption: "셋째 바이트 02가 붙는다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: ["BE: 0x00000280 = 640"], caption: "마지막 80까지 붙이면 0x280, 즉 640이다. PNG가 뜻한 값이다." },
+    { pointer: 3, memory: ["BE: 640", "LE: 0x80020000"], caption: "리틀 엔디언은 거꾸로, 마지막 바이트 80을 가장 큰 자리로 본다." },
+    { pointer: 0, found: [0, 1, 2, 3], memory: ["BE: 640", "LE: 2147614720"], caption: "그래서 Uint32Array는 2147614720을 읽었다. 숫자는 맞고 순서가 틀렸다." },
+  ]}
+/>
+
+`DataView`의 `getUint32(offset, littleEndian)`은 두 번째 인자로 순서를 고른다. 생략하면 빅 엔디언이다. 기본값이 TypedArray와 반대라서 헷갈리는데, 네트워크와 파일 형식을 읽으라고 만든 도구라 그쪽 관례를 따랐다고 보면 된다.
+
+```js
+const view = new DataView(buf);
+console.log(view.getUint32(16), view.getUint32(20));               // 빅 엔디언
+console.log(view.getUint32(16, true), view.getUint32(20, true));   // 리틀 엔디언
+```
+
+```text
+640 480
+2147614720 3758161920
+```
+
+규칙은 단순하다. 기기 안에서만 쓰는 숫자 배열(오디오 샘플, WebGL 정점)은 TypedArray로 다룬다. 바깥에서 온 형식을 읽거나 바깥으로 내보낼 바이트를 만들 때는 `DataView`로 순서를 명시한다. 정수 하나에서 비트를 꺼내는 시프트와 마스크는 [비트 연산 글](/posts/bit-manipulation)에서 다뤘다.
+
+## PNG 헤더 24바이트 읽기
+
+PNG 파일의 앞 24바이트는 형식이 정해져 있다. 파이썬으로 640×480짜리 빨간 PNG를 만들고 앞부분을 덤프했다.
+
+```text
+0000000 89 50 4e 47 0d 0a 1a 0a 00 00 00 0d 49 48 44 52
+0000016 00 00 02 80 00 00 01 e0 08 02 00 00 00 ba b3 4b
+```
+
+아래 조각을 하나씩 눌러 보면 각 바이트가 무엇인지 나온다.
+
+<UrlAnatomy
+  caption="PNG 파일의 앞 29바이트: 서명, 첫 청크의 길이와 이름, 그리고 IHDR의 너비·높이"
+  joiner=" "
+  params={[
+    { key: "sig", display: "89 50 4E 47 0D 0A 1A 0A", title: "PNG 서명 (0~7)", description: "모든 PNG가 이 8바이트로 시작한다. 50 4E 47은 ASCII로 PNG다. 0D 0A와 1A 0A는 줄바꿈을 바꿔 버리는 전송 과정을 거치면 깨지도록 일부러 넣은 값이라, 파일이 손상됐는지 바로 알 수 있다.", required: true },
+    { key: "len", display: "00 00 00 0D", title: "청크 길이 (8~11)", description: "다음 청크 데이터가 13바이트라는 뜻이다. 빅 엔디언 32비트 정수다." },
+    { key: "type", display: "49 48 44 52", title: "청크 이름 (12~15)", description: "ASCII로 IHDR이다. 이미지 헤더 청크이고 PNG 명세상 반드시 맨 처음에 온다.", code: "new TextDecoder().decode(bytes.subarray(12, 16))  // 'IHDR'" },
+    { key: "w", display: "00 00 02 80", title: "너비 (16~19)", description: "빅 엔디언으로 읽으면 640이다. DataView.getUint32(16)으로 꺼낸다.", required: true },
+    { key: "h", display: "00 00 01 E0", title: "높이 (20~23)", description: "빅 엔디언으로 480이다. 크기만 알면 되는 일은 여기까지 읽고 끝낸다.", required: true },
+    { key: "rest", display: "08 02 00 00 00", title: "비트 깊이, 색 형식 등 (24~28)", description: "08은 채널당 8비트, 02는 RGB(트루컬러)다. 나머지 세 바이트는 압축·필터·인터레이스 방식이다." },
+  ]}
+/>
+
+브라우저에서는 `File`이 `Blob`을 상속하므로 `slice`로 앞부분만 잘라 `arrayBuffer()`로 읽을 수 있다. 파일 전체를 메모리에 올리지 않는다. Node 22에도 같은 `Blob`이 있어 그대로 돌려 봤다.
+
+```js
+const blob = new Blob([fileBytes], { type: "image/png" });  // 브라우저라면 input.files[0]
+const buf = await blob.slice(0, 24).arrayBuffer();
+const bytes = new Uint8Array(buf);
+const view = new DataView(buf);
+
+console.log(buf.byteLength);
+console.log([...bytes.subarray(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join(" "));
+console.log(new TextDecoder().decode(bytes.subarray(12, 16)));
+console.log(view.getUint32(16), view.getUint32(20));
+```
+
+```text
+24
+89 50 4e 47 0d 0a 1a 0a
+IHDR
+640 480
+```
+
+이 검사는 사용자 편의를 위한 것이다. 확장자나 `file.type`은 사용자가 바꿀 수 있고, 헤더도 조작할 수 있다. 서버는 받은 파일을 다시 검사하고, 크기 제한도 서버에서 다시 건다.
+
+아래에서 직접 짜 볼 수 있다. 바이트 배열을 받아 PNG면 `{ width, height }`를, 아니면 `null`을 돌려준다. 두 번째 테스트는 너비가 70000이라 16비트로 읽으면 틀린다.
+
+<CodePlayground
+  caption="PNG 헤더에서 크기 읽기"
+  functionName="pngSize"
+  initialCode={`function pngSize(bytes) {
+  // bytes: 0~255 숫자 배열 (파일 앞부분)
+  const u8 = Uint8Array.from(bytes);
+  // 1) 24바이트보다 짧으면 null
+  // 2) 서명 89 50 4E 47 0D 0A 1A 0A가 아니면 null
+  // 3) 12~15가 "IHDR"인지 확인
+  // 4) 16, 20에서 빅 엔디언 32비트로 너비·높이를 읽는다
+  return null;
+}`}
+  solution={`function pngSize(bytes) {
+  const u8 = Uint8Array.from(bytes);
+  if (u8.length < 24) return null;
+
+  const SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < SIG.length; i++) {
+    if (u8[i] !== SIG[i]) return null;
+  }
+
+  const type = String.fromCharCode(...u8.subarray(12, 16));
+  if (type !== "IHDR") return null;
+
+  // 뷰가 버퍼의 일부일 수 있으니 offset과 length를 함께 넘긴다
+  const view = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+}`}
+  tests={[
+    { args: [[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 2, 128, 0, 0, 1, 224]], expected: { width: 640, height: 480 }, label: "640×480 PNG" },
+    { args: [[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 1, 17, 112, 0, 0, 0, 1]], expected: { width: 70000, height: 1 }, label: "너비 70000은 네 바이트 다 써야 한다" },
+    { args: [[137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 2, 128]], expected: null, label: "20바이트뿐이면 null" },
+    { args: [[255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]], expected: null, label: "JPEG는 null" },
+  ]}
+/>
+
+## 숫자가 칸에 안 맞으면 조용히 잘린다
+
+TypedArray는 칸 크기가 정해져 있어서 넘치는 값을 넣어도 에러를 내지 않는다. 정수 타입은 비트를 잘라 내 한 바퀴 돌린다.
+
+```js
+console.log(new Uint8Array([255, 256, 257, -1, 3.7]));
+console.log(new Int8Array([127, 128, 200]));
+console.log(new Uint8ClampedArray([255, 256, -1, 3.5, 4.5]));
+```
+
+```text
+Uint8Array(5) [ 255, 0, 1, 255, 3 ]
+Int8Array(3) [ 127, -128, -56 ]
+Uint8ClampedArray(5) [ 255, 255, 0, 4, 4 ]
+```
+
+256은 0이 되고 -1은 255가 된다. 소수는 버린다. 밝기를 더하다 256을 넘기면 흰색이 갑자기 검은색이 되는 버그가 여기서 나온다. `Uint8ClampedArray`는 범위를 넘으면 0이나 255에 붙여 두고, 소수는 가장 가까운 정수로 반올림하되 딱 절반이면 짝수 쪽으로 보낸다. 그래서 3.5는 4, 4.5도 4다. 캔버스의 `ImageData.data`가 이 타입이다.
+
+일반 배열처럼 보여도 다른 점이 많다. 길이가 고정이라 `push`가 없고, 범위 밖 인덱스에 써도 무시된다. 숫자가 아닌 값은 숫자로 바뀌어 `"abc"`는 `NaN`이 된다. `Array.isArray`는 `false`다. `sort()`는 숫자 순서로 정렬한다. 일반 배열의 `sort()`가 문자열로 비교해 `[10, 100, 9]`를 만드는 것과 다르다. `JSON.stringify`는 배열이 아니라 `{"0":1,"1":2}` 같은 객체로 바꾼다. JSON으로 보내려면 `Array.from`으로 먼저 바꾼다.
+
+```js
+console.log(new Uint8Array([10, 9, 100]).sort(), [10, 9, 100].sort());
+console.log(JSON.stringify(new Uint8Array([1, 2])), JSON.stringify(Array.from(new Uint8Array([1, 2]))));
+```
+
+```text
+Uint8Array(3) [ 9, 10, 100 ] [ 10, 100, 9 ]
+{"0":1,"1":2} [1,2]
+```
+
+## 같은 버퍼를 보는 뷰는 서로를 바꾼다
+
+`subarray`와 `slice`는 이름이 비슷하지만 하는 일이 반대다. `subarray`는 같은 버퍼의 일부를 보는 새 뷰를 만든다. `slice`는 그 범위를 새 버퍼에 복사한다.
+
+```js
+const buf = new ArrayBuffer(8);
+const bytes = new Uint8Array(buf);
+const part = bytes.subarray(2, 4);
+const copy = bytes.slice(2, 4);
+
+part[0] = 99;   // 원본 bytes[2]가 바뀐다
+copy[1] = 77;   // 원본은 그대로다
+console.log(bytes[2], bytes[3], part.byteOffset, copy.byteOffset, part.buffer === buf, copy.buffer === buf);
+```
+
+```text
+99 0 2 0 true false
+```
+
+일반 배열의 `slice`는 사본을 준다. 그 습관으로 `subarray`를 쓰고 결과를 고치면 원본이 같이 바뀐다. 반대로 큰 파일에서 일부만 잘라 보관할 때 `subarray`를 쓰면, 몇 바이트만 필요해도 원본 버퍼 전체가 메모리에 붙잡혀 있다.
+
+뷰를 만들 때 위치와 크기도 맞아야 한다. 4바이트 타입의 뷰는 시작 위치가 4의 배수여야 하고, 버퍼 길이도 4의 배수여야 한다.
+
+```js
+new Uint32Array(buf, 1);
+new Uint32Array(new ArrayBuffer(6));
+```
+
+```text
+RangeError: start offset of Uint32Array should be a multiple of 4
+RangeError: byte length of Uint32Array should be a multiple of 4
+```
+
+파일 형식의 필드는 정렬되어 있지 않은 경우가 많다. 그래서 헤더는 정렬 제한이 없는 `DataView`로 읽는다.
+
+Node에서 자주 밟는 함정도 있다. 작은 `Buffer`는 8KB짜리 공용 풀에서 잘라 쓴다. `buf.buffer`를 그대로 뷰로 씌우면 다른 데이터까지 딸려 온다.
+
+```js
+const b = Buffer.from("hello");
+console.log(b.byteLength, b.buffer.byteLength, b.byteOffset);
+console.log(new Uint8Array(b.buffer).length, new Uint8Array(b.buffer, b.byteOffset, b.byteLength).length);
+```
+
+```text
+5 8192 2448
+8192 5
+```
+
+5바이트짜리인데 `.buffer`는 8192바이트이고 내 데이터는 2448번째부터 있다. 그래서 뷰의 `.buffer`를 다른 함수에 넘길 때는 `byteOffset`과 `byteLength`를 함께 넘긴다. 위 실습의 풀이가 `new DataView(u8.buffer, u8.byteOffset, u8.byteLength)`로 쓴 이유다. 브라우저에서도 `subarray`로 만든 뷰는 같은 문제를 일으킨다.
+
+## Blob, 문자열, 네트워크와 오가기
+
+바이트가 들어오고 나가는 길은 대부분 정해져 있다.
+
+| 출발 | 도착 | 쓰는 것 |
+|---|---|---|
+| `File`·`Blob` | `ArrayBuffer` | `await blob.arrayBuffer()`, 일부만이면 `blob.slice(a, b)` 먼저 |
+| TypedArray·`ArrayBuffer` | `Blob` | `new Blob([bytes], { type })` |
+| 문자열 | UTF-8 바이트 | `new TextEncoder().encode(s)` |
+| UTF-8 바이트 | 문자열 | `new TextDecoder().decode(bytes)` |
+| `fetch` 응답 | `ArrayBuffer` | `await res.arrayBuffer()` |
+| `WebSocket` 메시지 | `ArrayBuffer` | `ws.binaryType = "arraybuffer"` (기본값은 `"blob"`) |
+
+`TextEncoder`는 항상 UTF-8로 바꾼다. `"가A"`는 4바이트 `[234, 176, 128, 65]`가 된다. `TextDecoder`는 깨진 바이트를 만나면 기본적으로 에러 대신 �로 바꾼다. 중간에 잘린 한글 두 바이트를 넣으면 �가 나온다. 데이터 오류를 알아채야 한다면 `new TextDecoder("utf-8", { fatal: true })`로 만들어 예외를 받는다. 스트림을 조각조각 받는다면 `decode(chunk, { stream: true })`로 넘겨야 조각 경계에 걸린 글자가 깨지지 않는다. 인코딩 자체는 [문자 인코딩 글](/posts/character-encoding-unicode)에서 바이트 단위로 따라갔다.
+
+`WebSocket`에서 바이너리 메시지를 받을 때 `binaryType`을 바꾸지 않으면 `Blob`으로 온다. `Blob`은 읽으려면 `await`가 한 번 더 필요해서, 메시지가 빠르게 오는 게임이나 실시간 시세에서는 순서를 맞추기 번거롭다. 받는 즉시 파싱할 거라면 `"arraybuffer"`로 바꾼다.
+
+`Blob`에서 바로 `Uint8Array`를 주는 `blob.bytes()`는 Node 22에 있지만 비교적 최근에 들어온 API라 오래된 브라우저에는 없다. 지원 범위를 확인하고, 아니면 `new Uint8Array(await blob.arrayBuffer())`를 쓴다.
+
+## 워커로 넘길 때는 복사하거나 옮긴다
+
+`postMessage`나 `structuredClone`은 기본적으로 버퍼를 복사한다. 수십 MB 이미지를 워커로 보낼 때마다 복사하면 메인 스레드가 그만큼 멈춘다. 복사 대신 소유권을 옮기는 것이 Transferable이다. 옮긴 쪽의 버퍼는 길이 0으로 떨어져 나간다(detached).
+
+```js
+const big = new ArrayBuffer(16);
+const moved = structuredClone(big, { transfer: [big] });
+console.log(big.byteLength, moved.byteLength, big.detached);
+new Uint8Array(big);
+```
+
+```text
+0 16 true
+TypeError: Cannot perform Construct on a detached ArrayBuffer
+```
+
+옮긴 뒤 원래 버퍼를 쓰면 에러가 나거나 빈 값이 나온다. 워커에 넘긴 뒤 메인에서 미리보기를 그리던 코드가 갑자기 빈 화면을 그리는 증상이 이것이다. 뷰 하나만 보내도 아래 버퍼 전체가 함께 간다는 점도 기억한다. 8바이트 버퍼의 4번째부터 2바이트만 보는 뷰를 `structuredClone`했더니, 받은 쪽 뷰의 `byteOffset`은 4, 버퍼는 8바이트 그대로였다. 큰 버퍼의 일부만 보내려면 `slice`로 잘라 새 버퍼를 만든 뒤 그것을 옮긴다.
+
+같은 버퍼를 다른 스레드로 넘길 때 실제 시간이 얼마나 줄어드는지, 메시지 복사 비용은 어떻게 재는지는 [Web Worker 글](/posts/web-workers)에서 크로미움으로 재 봤다. 구조화된 복제가 무엇을 복사하는지는 [얕은 복사와 깊은 복사 글](/posts/js-shallow-deep-copy)에 있다.
+
+ES2024에는 `ArrayBuffer`를 키우거나 옮기는 기능도 들어왔다. `buf.transfer(newLength)`는 새 버퍼로 옮기면서 크기를 바꾸고 원래 버퍼를 떼어 낸다. `new ArrayBuffer(4, { maxByteLength: 16 })`로 만들면 `resize`로 키울 수 있고, 길이를 정하지 않고 만든 뷰는 커진 길이를 따라간다. Node 22에서 `resize(12)` 뒤 뷰 길이가 12로 바뀌었다. 지원 범위는 비교적 최근 엔진이니 오래된 사파리를 지원해야 하면 확인한다.
+
+## SharedArrayBuffer는 왜 헤더가 있어야 켜지나
+
+`SharedArrayBuffer`는 옮기지도 복사하지도 않고 여러 스레드가 같은 메모리를 동시에 본다. 워커 여러 개가 큰 배열을 나눠 계산하거나, WebAssembly 스레드를 쓸 때 필요하다. 동시에 쓰는 값은 `Atomics`로 읽고 써야 순서가 보장된다.
+
+2018년 Spectre 취약점이 알려지면서 브라우저들은 `SharedArrayBuffer`를 한동안 껐다. 공유 메모리에 카운터를 계속 올리는 워커를 두면 아주 정밀한 타이머를 만들 수 있고, 그 타이머로 CPU 캐시 타이밍을 재서 같은 프로세스에 있는 다른 출처의 데이터를 추측할 수 있었기 때문이다. 다시 켤 때 붙은 조건이 교차 출처 격리(cross-origin isolation)다. 페이지가 아래 두 헤더를 보내야 `crossOriginIsolated`가 `true`가 되고 `SharedArrayBuffer`를 만들 수 있다.
+
+```text
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+COOP는 다른 출처의 창과 브라우징 컨텍스트 그룹을 나누고, COEP는 허락하지 않은 다른 출처 리소스를 페이지에 불러오지 못하게 한다. 같은 프로세스에 남의 데이터가 들어오지 않게 막은 뒤에야 정밀 타이머를 허용하는 셈이다. 대신 대가가 있다. CORP나 CORS 헤더가 없는 외부 이미지, 광고, 임베드가 막히고, 팝업으로 연 결제·로그인 창과 `window.opener`로 통신하던 흐름이 끊긴다. 크롬 계열은 외부 리소스를 쿠키 없이 불러오는 `COEP: credentialless`를 지원해 부담을 줄였지만 모든 브라우저가 지원하지는 않는다. 헤더 설정과 부작용은 [웹 보안 헤더 글](/posts/web-security-headers)에서 다뤘다.
+
+## 일반 배열 대신 TypedArray를 쓸 때
+
+메모리부터 쟀다. 원소 100만 개를 담은 뒤 GC를 돌리고 늘어난 양을 봤다. `node --expose-gc`로 돌렸다.
+
+```text
+Array (실수 1e6)               heap 7.6MB arrayBuffers 0.0MB
+Array (작은 정수 1e6)            heap 7.6MB arrayBuffers 0.0MB
+Array (섞인 값 1e6)             heap 15.3MB arrayBuffers 0.0MB
+Float64Array(1e6)            heap 0.0MB arrayBuffers 7.6MB
+Uint8Array(1e6)              heap 0.0MB arrayBuffers 1.0MB
+```
+
+의외로 실수만 담은 일반 배열과 `Float64Array`가 같다. V8은 같은 종류의 숫자만 든 배열을 내부적으로 촘촘한 실수 배열로 저장하기 때문이다. 문자열이 섞이면 원소마다 포인터와 따로 할당된 숫자 객체가 생겨 두 배가 됐다. 그리고 `Uint8Array`는 원소 하나에 1바이트라 8분의 1이다. 이 측정은 V8과 Node 22 기준이고, 엔진의 내부 표현은 버전에 따라 바뀔 수 있다.
+
+그래서 기준은 "숫자 배열이면 TypedArray"가 아니다. 다음 중 하나면 TypedArray를 쓴다. 값의 범위가 작아서 1·2·4바이트 칸이면 충분할 때(픽셀, 오디오, 센서 값). 바이트 그대로 바깥과 주고받을 때(파일, 소켓, WebGL, WebAssembly, 캔버스). 워커로 옮기거나 공유해야 할 때. 일반 배열은 V8이 원소 종류를 보고 표현을 바꾸는데, 중간에 `undefined`나 문자열 하나가 섞이면 느린 표현으로 떨어지고 다시 돌아오지 않는다. TypedArray는 타입이 고정이라 이런 일이 없고, 엔진이 최적화하기 쉽다.
+
+반대로 길이가 자주 바뀌거나, 여러 타입이 섞이거나, `map`·`filter` 결과를 JSON으로 보내야 하면 일반 배열이 편하다. TypedArray의 `map`은 같은 타입의 TypedArray를 돌려줘서 `Uint8Array`의 200에 `x * 2`를 하면 400이 아니라 144가 된다. TypedArray도 이터러블이라 `for...of`로 돌 수 있고, 중간에 멈추는 반복문 고르기는 [반복문과 분기 글](/posts/js-loops-control-flow)에 있다.
+
+## 현장에서 바이너리가 말썽일 때
+
+증상과 첫 확인 지점을 묶어 두면 빠르다. 숫자가 터무니없이 크면 엔디언부터 본다. 값이 0 근처로 돌아가면 칸이 작아서 넘친 것이다. 뷰를 넘겼는데 받는 쪽 길이가 이상하게 크면 `.buffer`만 넘기고 `byteOffset`을 빼먹었다. 워커로 넘긴 뒤 메인 쪽 데이터가 비면 transfer로 떼어 낸 버퍼를 다시 쓰고 있다. `SharedArrayBuffer is not defined`가 나오면 개발자 도구 콘솔에서 `crossOriginIsolated`를 확인하고, 응답 헤더에 COOP·COEP가 있는지 네트워크 탭에서 본다. 한글이 �로 바뀌면 조각 경계에서 디코딩했는지 본다.
+
+## 다시 2147614720으로
+
+처음 버그는 빅 엔디언으로 적힌 PNG 너비를 리틀 엔디언 기기의 `Uint32Array`로 읽어서 생겼다. `DataView.getUint32(16)`로 바꾸면 640이 나온다. `ArrayBuffer`는 바이트만 갖고, 해석은 뷰가 한다. 뷰는 같은 메모리를 공유하므로 `subarray`와 `slice`, `.buffer`와 `byteOffset`을 구분해야 한다. 바깥 형식은 `DataView`로 순서를 명시하고, 큰 데이터는 복사 대신 옮기고, 공유가 필요하면 교차 출처 격리를 먼저 준비한다.
+
+## 면접에서 나올 만한 질문
+
+### ArrayBuffer, TypedArray, DataView는 어떤 관계인가요?
+
+`ArrayBuffer`는 길이가 고정된 바이트 덩어리이고 직접 읽고 쓸 수 없다. TypedArray는 그 위에 같은 크기의 숫자가 늘어선 배열로 보는 뷰이고, `DataView`는 위치와 크기, 바이트 순서를 하나씩 정해 읽는 뷰다. 여러 뷰가 같은 버퍼를 공유할 수 있어서 한 뷰로 쓴 값이 다른 뷰에서도 보인다.
+
+### 엔디언이 무엇이고 자바스크립트에서 언제 문제가 되나요?
+
+여러 바이트 숫자를 놓는 순서다. 큰 자리를 앞에 두면 빅 엔디언, 작은 자리를 앞에 두면 리틀 엔디언이다. TypedArray는 기기의 순서(대부분 리틀 엔디언)를 쓰는데 PNG나 네트워크 헤더는 빅 엔디언이 많아서, `Uint32Array`로 읽으면 640이 2147614720처럼 뒤집힌다. 외부 형식은 `DataView`의 `getUint32(offset, littleEndian)`으로 순서를 명시해 읽는다.
+
+### subarray와 slice의 차이는요?
+
+`subarray`는 같은 버퍼의 일부를 보는 새 뷰라서 고치면 원본도 바뀌고, 원본 버퍼 전체를 메모리에 붙잡는다. `slice`는 그 범위를 새 버퍼로 복사한다. 일반 배열의 `slice`가 사본을 주는 습관으로 `subarray`를 쓰면 원본이 망가지는 버그가 생긴다.
+
+### 뷰의 .buffer를 다른 함수에 넘길 때 무엇을 조심하나요?
+
+뷰가 버퍼 전체를 보지 않을 수 있어서 `byteOffset`과 `byteLength`를 함께 넘겨야 한다. Node의 작은 `Buffer`는 8KB 공용 풀에서 잘라 쓰기 때문에 5바이트 `Buffer`의 `.buffer`가 8192바이트이고 오프셋이 2448인 식이다. `subarray`로 만든 뷰도 같은 문제를 일으킨다.
+
+### 큰 ArrayBuffer를 워커에 보낼 때 어떻게 하나요?
+
+`postMessage(data, [buffer])`처럼 transfer 목록에 넣으면 복사하지 않고 소유권을 옮긴다. 옮긴 쪽 버퍼는 길이 0의 detached 상태가 되어 다시 쓰면 에러가 나거나 빈 값이 된다. 뷰를 보내도 아래 버퍼 전체가 함께 가므로 일부만 보내려면 `slice`로 잘라 옮긴다.
+
+### SharedArrayBuffer를 쓰려면 왜 COOP와 COEP 헤더가 필요한가요?
+
+공유 메모리로 정밀한 타이머를 만들 수 있어서 Spectre 같은 캐시 타이밍 공격에 쓰일 수 있기 때문이다. `Cross-Origin-Opener-Policy: same-origin`과 `Cross-Origin-Embedder-Policy: require-corp`로 다른 출처의 창과 리소스를 프로세스에서 떼어 낸 페이지, 즉 `crossOriginIsolated`가 참인 페이지에서만 허용한다. 대신 CORP·CORS 없는 외부 리소스와 팝업 통신이 막히는 부작용이 있다.
+
+### 일반 배열과 TypedArray는 메모리와 성능이 어떻게 다른가요?
+
+실수만 든 일반 배열은 V8이 촘촘한 실수 배열로 저장해서 `Float64Array`와 메모리가 비슷하고, 100만 개에 둘 다 약 7.6MB였다. 값이 섞이면 포인터와 숫자 객체 때문에 두 배로 늘었고, `Uint8Array`는 1바이트 칸이라 1MB였다. TypedArray는 타입과 길이가 고정이라 엔진이 느린 표현으로 떨어질 일이 없고, 바이트 그대로 파일·소켓·WebGL·워커와 주고받을 수 있다는 점이 더 큰 장점이다.
+
+### Uint8Array에 256을 넣으면 어떻게 되나요? 캔버스 픽셀은요?
+
+정수 TypedArray는 넘치는 비트를 잘라서 256은 0, -1은 255가 되고 에러는 나지 않는다. 캔버스 `ImageData.data`는 `Uint8ClampedArray`라서 범위를 넘으면 0이나 255에 붙고, 소수는 반올림하되 딱 절반이면 짝수로 보낸다. 밝기를 더하다 흰색이 검은색으로 뒤집히는 버그는 `Uint8Array`를 썼을 때 생긴다.

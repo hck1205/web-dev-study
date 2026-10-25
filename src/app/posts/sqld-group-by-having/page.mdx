@@ -568,7 +568,7 @@ SELECT COUNT(*), COUNT(comm), SUM(sal), AVG(sal), MAX(sal) FROM emp WHERE deptno
 (1 row)
 ```
 
-`WHERE`를 통과한 행이 하나도 없는데 결과는 한 행이다. `GROUP BY`가 없으면 테이블 전체가 한 묶음이고, 그 묶음은 비어 있어도 존재한다. `COUNT`는 0을, 나머지 집계는 NULL을 돌려준다. 합계가 0이 아니라 NULL이라는 점이 함정이다. 화면에 0을 보여 주려면 `NVL(SUM(sal), 0)`으로 감싼다. `SUM(NVL(sal, 0))`은 행이 아예 없으니 여전히 NULL이다.
+`WHERE`를 통과한 행이 하나도 없는데 결과는 한 행이다. `GROUP BY`가 없으면 테이블 전체가 한 묶음이고, 그 묶음은 비어 있어도 존재한다. `COUNT`는 0을, 나머지 집계는 NULL을 돌려준다. 합계가 0이 아니라 NULL이라는 게 함정이다. 화면에 0을 보여 주려면 `NVL(SUM(sal), 0)`으로 감싼다. `SUM(NVL(sal, 0))`은 행이 아예 없으니 여전히 NULL이다.
 
 `GROUP BY`를 붙이면 달라진다.
 

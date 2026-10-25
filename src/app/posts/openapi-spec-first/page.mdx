@@ -1,0 +1,403 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("openapi-spec-first");
+
+<EasyIntro>
+  식당 메뉴판에 "김치찌개 8천 원"이라고 적혀 있는데 주방에서는 이미 된장찌개로 바꿨다면, 손님은 메뉴판을 믿고 주문했다가 엉뚱한 음식을 받는다. 서버와 화면을 만드는 사람 사이에서도 서버가 돌려주는 데이터의 모양이 문서와 달라지면 문서를 믿고 만든 화면이 깨진다.
+
+  OpenAPI는 이 메뉴판을 기계가 읽을 수 있는 정해진 형식으로 쓰는 약속이다. 어떤 주소에 무엇을 보내면 어떤 모양의 답이 오는지를 파일 하나에 적어 둔다. 기계가 읽을 수 있으니 보기 좋은 문서 화면을 만들고, 진짜 서버가 없어도 가짜 답을 주는 서버를 띄우고, 화면 쪽 코드의 타입까지 만들어 낼 수 있다. 가장 중요한 건 메뉴판과 주방을 계속 맞춰 두는 일이다. 메뉴판을 먼저 쓰고 주방이 그대로 만드는 방법도 있고, 주방이 만든 음식을 보고 메뉴판을 자동으로 찍어 내는 방법도 있다. 어느 쪽이든 둘이 어긋나는 순간을 사람이 아니라 기계가 잡게 만드는 것이 목표다.
+</EasyIntro>
+
+주문 상세 화면이 배포 직후 "0원"을 보여 주기 시작했다. 백엔드 팀 위키의 API 문서에는 응답 필드가 `totalPrice`로 적혀 있었다. 실제 서버는 리팩터링 중에 `total_price`로 바뀌어 있었고, 주문 상태에는 문서에 없던 `REFUNDED`도 섞여 나왔다. 프런트엔드 코드는 문서를 믿고 `order.totalPrice ?? 0`을 쓰고 있었으니 에러도 나지 않고 조용히 0을 그렸다.
+
+문서가 틀렸다는 걸 누구도 몰랐던 이유는 간단하다. 위키의 문서는 사람이 손으로 고치는 글이라 코드와 아무 연결이 없다. 이 글은 API 계약을 기계가 읽는 파일(OpenAPI 명세)로 바꾸고, 그 파일 하나로 문서·린트·목 서버·코드 생성·응답 검증을 엮어서 이런 어긋남을 배포 전에 잡는 과정을 따라간다. 문서를 먼저 쓰는 스펙 우선과 코드에서 문서를 뽑는 코드 우선을 비교하고, 문서 도구와 Postman이 어디에 들어가는지도 정리한다.
+
+이 주제의 다른 글: 자원 이름·상태 코드·에러 형식 같은 설계 원칙은 [REST API 설계](/posts/rest-api-design)에, 옛 스키마와 새 스키마를 비교해 깨는 변경을 잡고 옛 버전을 끝내는 과정은 [API 버전 관리](/posts/api-versioning)에 있다. 여기서는 그 계약을 파일로 쓰고 도구로 지키는 쪽을 본다. 예제는 OpenAPI 3.1, Spectral CLI 6.17, Prism 5.16, openapi-typescript 7.13, TypeScript 5.9, FastAPI 0.161로 직접 돌렸다.
+
+## 계약을 파일 하나에 적는다
+
+OpenAPI는 HTTP API를 설명하는 형식이다. 원래 이름은 Swagger였고, 2015년에 명세가 OpenAPI Initiative(리눅스 재단 산하)로 넘어가면서 2017년의 3.0부터 OpenAPI라는 이름을 쓴다. 지금도 "Swagger"라고 하면 대개 Swagger UI 같은 도구 이름을 뜻한다. 2021년에 나온 3.1은 스키마 부분을 JSON Schema 2020-12와 맞췄다. 이 글은 3.1을 기준으로 한다.
+
+위 장면의 주문 조회 API를 OpenAPI로 쓰면 이렇다.
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Orders API
+  version: 1.2.0            # API 문서의 버전. openapi 필드(명세 형식의 버전)와 다르다
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /orders/{orderId}:
+    get:
+      operationId: getOrder  # 코드 생성기가 함수 이름으로 쓴다
+      summary: 주문 하나 조회
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 주문
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+              example:
+                id: ord_1001
+                status: PAID
+                totalPrice: 32000
+                memo: null
+        "404":
+          description: 없는 주문
+components:
+  schemas:
+    Order:
+      type: object
+      required: [id, status, totalPrice]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [PAID, CANCELED]
+        totalPrice:
+          type: integer
+          minimum: 0
+        memo:
+          type: [string, "null"]   # 3.1 방식. 3.0에서는 nullable: true
+```
+
+문서의 뼈대를 그림으로 보면 아래와 같다. `paths` 아래에 주소와 메서드(오퍼레이션)가 있고, 응답의 모양은 `components`에 한 번 정의한 스키마를 `$ref`로 가리킨다. 같은 `Order`를 주문 목록과 주문 생성 응답에서도 다시 쓰기 때문이다.
+
+<ConceptDiagram
+  caption="OpenAPI 문서의 뼈대: 오퍼레이션이 공용 스키마를 $ref로 가리킨다"
+  width={400}
+  height={300}
+  nodes={[
+    { id: "doc", label: "openapi.yaml", sub: "openapi: 3.1.0", x: 200, y: 32, w: 150 },
+    { id: "info", label: "info", sub: "제목·버전", x: 50, y: 115, w: 88 },
+    { id: "servers", label: "servers", sub: "기본 주소", x: 148, y: 115, w: 88 },
+    { id: "paths", label: "paths", sub: "주소 목록", x: 248, y: 115, w: 88 },
+    { id: "comp", label: "components", sub: "공용 정의", x: 350, y: 115, w: 96 },
+    { id: "op", label: "get", sub: "operationId", x: 220, y: 195, w: 110 },
+    { id: "resp", label: "responses", sub: "200 · 404", x: 220, y: 270, w: 110 },
+    { id: "schemas", label: "schemas", sub: "Order", x: 348, y: 195, w: 96 },
+    { id: "sec", label: "securitySchemes", sub: "인증 방식", x: 340, y: 270, w: 116 },
+  ]}
+  edges={[
+    { from: "doc", to: "info" },
+    { from: "doc", to: "servers" },
+    { from: "doc", to: "paths" },
+    { from: "doc", to: "comp" },
+    { from: "paths", to: "op", label: "/orders/{id}" },
+    { from: "op", to: "resp" },
+    { from: "comp", to: "schemas" },
+    { from: "comp", to: "sec", dashed: true },
+    { from: "resp", to: "schemas", label: "$ref", dashed: true },
+  ]}
+/>
+
+3.0에서 3.1로 넘어올 때 가장 자주 부딪히는 차이는 `null`이다. 3.0은 JSON Schema의 일부만 따르면서 `nullable: true`라는 자체 키워드를 썼다. 3.1은 JSON Schema를 그대로 따라서 `type: [string, "null"]`로 쓴다. 3.0용 도구에 3.1 문서를 넣으면 이 부분에서 에러가 나거나 조용히 무시하니, 쓰려는 도구가 3.1을 읽는지 먼저 확인한다. 3.1에는 서버가 먼저 보내는 요청을 적는 최상위 `webhooks`도 생겼다.
+
+`info.version`과 `openapi`를 헷갈리는 일도 많다. `openapi: 3.1.0`은 "이 파일은 OpenAPI 3.1 형식으로 쓰였다"는 뜻이고, `info.version: 1.2.0`은 우리 API 문서의 버전이다. 우리 API를 고쳤으면 `info.version`을 올린다.
+
+## 스펙을 먼저 쓸까, 코드에서 뽑을까
+
+이 파일을 누가 만드느냐에 따라 두 갈래로 나뉜다.
+
+코드 우선(code-first)은 서버 코드의 타입과 어노테이션에서 문서를 자동으로 만든다. Spring이라면 springdoc-openapi가 컨트롤러와 DTO를 읽어 `/v3/api-docs`에 문서를, `/swagger-ui.html`에 화면을 띄운다. FastAPI는 따로 설정하지 않아도 `/openapi.json`과 `/docs`가 생긴다. 위와 같은 주문 API를 FastAPI로 만들고 생성된 문서를 꺼내 봤다.
+
+```python
+from typing import Literal
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Orders API", version="1.2.0")
+
+class Order(BaseModel):
+    id: str
+    status: Literal["PAID", "CANCELED"]
+    total_price: int = Field(ge=0)
+    memo: str | None = None
+
+@app.get("/orders/{order_id}", response_model=Order)
+def get_order(order_id: str):
+    ...
+
+spec = app.openapi()   # 서버를 띄우면 /openapi.json으로 나가는 바로 그 문서
+```
+
+```text
+3.1.0
+{
+  "properties": {
+    "id": { "type": "string", "title": "Id" },
+    "status": { "type": "string", "enum": ["PAID", "CANCELED"], "title": "Status" },
+    "total_price": { "type": "integer", "minimum": 0.0, "title": "Total Price" },
+    "memo": { "anyOf": [{ "type": "string" }, { "type": "null" }], "title": "Memo" }
+  },
+  "type": "object",
+  "required": ["id", "status", "total_price"],
+  "title": "Order"
+}
+['200', '422']
+```
+
+보기 좋게 줄을 합친 것 말고는 실제 출력 그대로다. 몇 가지가 눈에 띈다. 파이썬 필드 이름 `total_price`가 그대로 API 계약이 됐다. 코드를 리팩터링하다 필드 이름을 바꾸면 계약도 같이 바뀐다. 문서에는 응답이 `200`과 FastAPI가 자동으로 붙인 검증 실패 `422`뿐이고, 실제로 낼 `404`는 없다. 코드가 `HTTPException(404)`를 던져도 문서 생성기는 그걸 모른다. 코드 우선은 응답의 모양(타입)은 정확하지만 동작(어떤 상황에 어떤 상태 코드를 내는지)은 사람이 어노테이션으로 적어 줘야 한다.
+
+스펙 우선(spec-first, design-first)은 순서를 뒤집는다. OpenAPI 파일을 먼저 쓰고 PR로 리뷰한 뒤, 프런트엔드와 백엔드가 그 파일을 보고 동시에 만든다. 이름 하나, 상태 코드 하나를 코드보다 먼저 합의하니 위 장면처럼 리팩터링이 계약을 몰래 바꾸는 일이 줄어든다.
+
+둘 중 무엇을 고를지는 누가 API를 쓰느냐로 갈린다. 한 팀이 서버와 화면을 다 만들고 API가 자주 바뀐다면 코드 우선이 빠르다. 문서를 따로 관리하는 비용이 없다. API를 여러 팀이나 외부 파트너가 쓰고, 한 번 공개하면 바꾸기 어렵다면 스펙 우선이 낫다. 계약을 먼저 합의해야 기다리지 않고 병렬로 만들 수 있다. 실무에서는 섞어 쓰는 경우도 많다. 코드에서 뽑은 문서를 CI에서 저장소에 커밋된 스펙과 비교해, 둘이 다르면 빌드를 멈추는 식이다. 그러면 코드 우선의 편리함을 유지하면서 계약이 바뀌는 순간을 PR에서 드러낼 수 있다.
+
+## 스펙 하나로 돌아가는 개발 흐름
+
+스펙 우선으로 일하면 OpenAPI 파일 하나가 여러 도구의 입력이 된다. 아래 그림에서 다음을 누르면 PR 한 번이 어떤 단계를 거치는지 따라갈 수 있다.
+
+<SequenceDiagram
+  caption="스펙 우선 흐름: 파일 하나가 린트, 목 서버, 타입, 응답 검증으로 이어진다"
+  actors={[
+    { id: "dev", label: "API 설계자" },
+    { id: "ci", label: "CI" },
+    { id: "fe", label: "프런트엔드" },
+    { id: "mock", label: "목 서버" },
+    { id: "be", label: "백엔드" },
+  ]}
+  steps={[
+    { from: "dev", to: "ci", label: "PR: openapi.yaml", title: "스펙부터 고친다", detail: "새 필드나 새 상태 코드를 코드보다 먼저 OpenAPI 파일에 적고 PR을 연다. 리뷰어는 코드가 아니라 계약을 본다." },
+    { from: "ci", to: "ci", label: "spectral lint", title: "규칙을 기계가 본다", detail: "이름 규칙, 예시가 스키마와 맞는지, 에러 응답에 본문이 있는지를 린터가 검사한다. 에러가 있으면 PR이 막힌다.", payload: "npx spectral lint openapi.yaml" },
+    { from: "ci", to: "dev", label: "깨는 변경 경고", title: "옛 스펙과 비교한다", detail: "main의 스펙과 비교해 필드 삭제나 필수 파라미터 추가 같은 깨는 변경을 찾아 알린다. 자세한 판단은 API 버전 관리 글에 있다." },
+    { from: "fe", to: "mock", label: "GET /orders/1", title: "서버 없이 화면을 만든다", detail: "병합된 스펙으로 목 서버를 띄운다. 백엔드 구현을 기다리지 않고 화면을 붙인다." },
+    { from: "mock", to: "fe", label: "예시 응답", title: "스펙의 예시가 돌아온다", detail: "목 서버는 스펙에 적힌 example을 응답으로 준다. 프런트 타입도 같은 스펙에서 생성한다.", payload: "{\"id\":\"ord_1001\",\"status\":\"PAID\",\"totalPrice\":32000}" },
+    { from: "be", to: "ci", label: "구현 PR", title: "백엔드가 계약대로 만든다", detail: "구현이 끝나면 테스트에서 실제 응답을 스펙으로 검증한다. 필드 이름이 다르면 여기서 걸린다." },
+    { from: "ci", to: "be", label: "응답 검증 결과", title: "어긋남은 배포 전에 드러난다", detail: "검증 프록시나 테스트가 스펙과 다른 응답을 찾아 실패시킨다. 문서와 코드가 다른 채로 배포되지 않는다." },
+  ]}
+/>
+
+이제 각 단계를 실제로 돌려 본다.
+
+## 린트로 규칙을 기계에 맡긴다
+
+Spectral은 OpenAPI 파일을 검사하는 린터다. 기본 규칙 묶음(`spectral:oas`)에 우리 팀 규칙을 더할 수 있다. 저장소 루트에 `.spectral.yaml`을 둔다.
+
+```yaml
+extends: ["spectral:oas"]
+rules:
+  info-contact: off              # 기본 규칙 중 우리에게 필요 없는 것은 끈다
+  operation-tags: off
+  property-camel-case:           # 응답 필드는 camelCase
+    description: 응답 필드 이름은 camelCase로 쓴다
+    severity: error
+    given: "$.components.schemas..properties"
+    then:
+      field: "@key"
+      function: casing
+      functionOptions:
+        type: camel
+  error-response-needs-content:  # 4xx 응답에도 본문 스키마가 있어야 한다
+    description: 4xx 응답에는 본문 스키마가 있어야 한다
+    severity: warn
+    given: "$.paths.*.*.responses[?(@property.match(/^4/))]"
+    then:
+      field: content
+      function: truthy
+```
+
+`given`은 JSONPath로 검사할 위치를 고르고, `then`은 그 위치에 적용할 함수다. 위 스펙에서 두 군데를 일부러 틀리게 바꿔 돌려 봤다. 예시의 `status`를 `REFUNDED`로, 스키마의 `memo`를 `order_memo`로 바꿨다.
+
+```bash
+npx spectral lint bad.yaml      # 린트 실행
+echo "exit=$?"                  # CI가 보는 종료 코드
+```
+
+```text
+bad.yaml
+  2:6   warning  info-description              Info "description" must be present and non-empty string.                                                    info
+  9:9   warning  operation-description         Operation "description" must be present and non-empty string.                                               paths./orders/{orderId}.get
+ 27:25    error  oas3-valid-media-example      "status" property must be equal to one of the allowed values: "PAID", "CANCELED". Did you mean "CANCELED"?  paths./orders/{orderId}.get.responses[200].content.application/json.example.status
+ 30:15  warning  error-response-needs-content  4xx 응답에는 본문 스키마가 있어야 한다                                                                                     paths./orders/{orderId}.get.responses[404]
+ 46:20    error  property-camel-case           응답 필드 이름은 camelCase로 쓴다                                                                                     components.schemas.Order.properties.order_memo
+
+✖ 5 problems (2 errors, 3 warnings, 0 infos, 0 hints)
+exit=1
+```
+
+파일 경로만 짧게 줄였다. 볼 곳은 셋째 열의 `error`와 마지막 줄의 종료 코드다. 예시 값이 스키마의 enum과 맞지 않는다는 것(`oas3-valid-media-example`)은 기본 규칙이 잡았고, snake_case 필드는 우리가 더한 규칙이 잡았다. 에러가 하나라도 있으면 종료 코드가 1이라 CI가 PR을 막는다. 경고만 있는 원래 스펙은 종료 코드가 0이었다. 경고도 막고 싶으면 `--fail-severity=warn`을 준다.
+
+예시를 검사하는 규칙이 생각보다 중요하다. 예시는 문서 화면에 그대로 보이고, 아래 목 서버가 응답으로 돌려주는 값이다. 예시가 스키마와 어긋나면 프런트엔드는 실제로는 올 수 없는 값으로 화면을 만든다.
+
+린트가 할 수 없는 일도 있다. 린트는 파일 하나만 본다. 어제의 스펙과 오늘의 스펙을 비교해 필드가 지워졌는지, 필수 파라미터가 늘었는지는 oasdiff 같은 비교 도구가 맡는다(`oasdiff breaking base.yaml revision.yaml` 형태로 쓴다). 무엇이 깨는 변경인지, 그걸 어떻게 배포 전에 막는지는 [API 버전 관리](/posts/api-versioning) 글에서 자세히 다뤘다.
+
+## 서버 없이 응답을 받아 보는 목 서버
+
+Prism은 OpenAPI 파일을 읽어 그 계약대로 답하는 HTTP 서버를 띄운다. 백엔드가 아직 없어도 프런트엔드가 진짜 HTTP 요청으로 화면을 만들 수 있다.
+
+```bash
+npx prism mock openapi.yaml -p 4010                        # 목 서버 실행
+curl -s localhost:4010/orders/ord_1                        # 기본: 스펙의 example을 돌려준다
+curl -s -H 'Prefer: dynamic=true' localhost:4010/orders/abc  # 스키마로 값을 지어낸다
+curl -si -H 'Prefer: code=404' localhost:4010/orders/abc   # 원하는 상태 코드를 고른다
+curl -s localhost:4010/order/abc                           # 스펙에 없는 주소
+```
+
+```text
+{"id":"ord_1001","status":"PAID","totalPrice":32000,"memo":null}
+
+{"id":"tempor ut ipsum pariatur","memo":"nulla incididunt proident","status":"PAID","totalPrice":94494748}
+
+HTTP/1.1 404 Not Found
+...
+Content-Length: 0
+
+{"type":"https://stoplight.io/prism/errors#NO_PATH_MATCHED_ERROR","title":"Route not resolved, no path matched","status":404,"detail":"The route /order/abc hasn't been found in the specification file"}
+```
+
+기본 응답은 스펙에 적은 `example`이다. 예시가 없거나 `Prefer: dynamic=true`를 주면 스키마를 보고 그럴듯한 값을 지어낸다. 무작위 문자열과 9천만 원짜리 주문이 나왔지만 타입과 enum, `minimum`은 지킨다. 화면이 긴 문자열이나 큰 숫자에서 깨지는지 볼 때 쓸 만하다. `Prefer: code=404`로 에러 화면도 만들 수 있다. 다만 우리 스펙의 404에는 본문이 없어서 빈 응답이 왔다. 린트가 "4xx 응답에 본문이 없다"고 경고한 바로 그 부분이다. 스펙이 비어 있으면 목 서버도 비어 있다.
+
+목 서버의 한계도 분명하다. Prism은 상태가 없다. `POST /orders`로 주문을 만든 뒤 `GET`으로 조회해도 방금 만든 주문이 나오지 않는다. 페이지 이동, 권한에 따라 다른 응답, 동시성 같은 동작은 흉내 내지 못한다. 그래서 목 서버는 화면을 붙이는 초기 단계와 데모에 쓰고, 컴포넌트 테스트에서는 요청을 가로채는 MSW 같은 도구로 시나리오를 직접 짠다. MSW 핸들러가 실제 API와 어긋나는 문제는 [프런트엔드 테스트 전략](/posts/frontend-testing-strategy)에서 다뤘다. 핸들러의 응답 타입을 아래에서 만들 생성 타입으로 묶으면 그 어긋남도 컴파일러가 잡는다.
+
+## 실제 응답이 계약과 같은지 검증하기
+
+처음 장면의 진짜 문제는 문서와 서버가 달랐다는 것이다. Prism은 목 서버 말고 검증 프록시 모드도 있다. 클라이언트와 실제 서버 사이에 서서 요청을 그대로 넘기고, 돌아온 응답을 스펙과 비교한다. 처음 장면처럼 `total_price`와 `REFUNDED`를 돌려주는 서버를 띄우고 그 앞에 프록시를 세워 봤다.
+
+```bash
+node server.cjs &                                                 # 5000번: 스펙과 다르게 답하는 서버
+npx prism proxy openapi.yaml http://localhost:5000 -p 4011 --errors  # 어긋나면 에러로 바꿔 답한다
+curl -si localhost:4011/orders/ord_1001
+```
+
+```text
+HTTP/1.1 500 Internal Server Error
+sl-violations: [{"location":["response","body"],"severity":"Error","code":"required","message":"Response body must have required property 'totalPrice'"},{"location":["response","body","status"],"severity":"Error","code":"enum","message":"Response body property status must be equal to one of the allowed values: PAID, CANCELED"}]
+content-type: application/problem+json
+...
+```
+
+응답 헤더 몇 줄을 줄였다. `sl-violations` 헤더가 어긋난 곳을 정확히 짚는다. 필수 필드 `totalPrice`가 없고, `status`가 enum에 없는 값이다. `--errors`를 빼면 원래 응답을 그대로 넘기고 위반 사항은 로그와 헤더로만 알린다. E2E 테스트나 스테이징 환경의 트래픽을 이 프록시로 한 번 통과시키기만 해도, 문서와 서버가 어긋난 곳이 드러난다.
+
+같은 검증을 서버 안에서 할 수도 있다. Node라면 express-openapi-validator 같은 미들웨어가 요청과 응답을 스펙으로 검사하고, 통합 테스트에서 응답 본문을 스펙의 스키마로 검증하는 방법도 흔하다. 스펙에서 임의의 요청을 대량으로 만들어 서버를 두드려 보는 속성 기반 테스트 도구(Schemathesis 등)도 있다. 어느 방법이든 검증이 사람의 기억이 아니라 CI에 있어야 한다. 서버 쪽 통합 테스트를 실제 DB로 돌리는 방법은 [통합 테스트](/posts/integration-tests-real-db) 글에 있다.
+
+## 스펙에서 클라이언트 타입 만들기
+
+스펙에서 코드를 생성하면 프런트엔드가 응답 모양을 손으로 타입에 옮겨 적지 않아도 된다. openapi-typescript는 스펙을 TypeScript 타입으로 바꾼다.
+
+```bash
+npx openapi-typescript openapi.yaml -o schema.d.ts   # 스펙 → 타입 정의 파일
+```
+
+```ts
+export interface components {
+    schemas: {
+        Order: {
+            id: string;
+            /** @enum {string} */
+            status: "PAID" | "CANCELED";
+            totalPrice: number;
+            memo?: string | null;
+        };
+    };
+    // ...
+}
+```
+
+`required`에 없는 `memo`는 선택 필드(`?`)가 되고, `[string, "null"]`은 `string | null`이 됐다. 이 타입을 쓰는 코드에서 처음 장면의 실수를 흉내 내 봤다.
+
+```ts
+import type { components } from "./schema";
+type Order = components["schemas"]["Order"];
+
+function label(order: Order): string {
+  switch (order.status) {
+    case "PAID": return `결제 완료 ${order.totalPrice}원`;
+    case "CANCELED": return "취소됨";
+  }
+}
+function memoLength(order: Order) {
+  return order.memo.length;       // null일 수 있는 값
+}
+function oldField(order: Order) {
+  return order.total_price;       // 계약에 없는 이름
+}
+```
+
+```text
+client.ts(11,10): error TS18049: 'order.memo' is possibly 'null' or 'undefined'.
+client.ts(14,16): error TS2551: Property 'total_price' does not exist on type '{ id: string; status: "PAID" | "CANCELED"; totalPrice: number; memo?: string | null | undefined; }'. Did you mean 'totalPrice'?
+```
+
+더 쓸모 있는 건 스펙이 바뀔 때다. 스펙의 enum에 `REFUNDED`를 더하고 타입을 다시 생성한 뒤 같은 코드를 컴파일하면 `label` 함수에서 에러가 난다.
+
+```text
+client.ts(4,31): error TS2366: Function lacks ending return statement and return type does not include 'undefined'.
+```
+
+`switch`가 `REFUNDED`를 처리하지 않아 끝까지 내려갈 수 있다는 뜻이다. [API 버전 관리](/posts/api-versioning) 글에서 옛 앱을 하얗게 만든 그 enum 추가가, 스펙과 생성 타입을 거치면 컴파일 에러로 미리 보인다. 물론 이미 배포된 옛 앱은 다시 컴파일되지 않으니, 서버 쪽 변경 관리는 여전히 필요하다.
+
+생성기는 크게 두 종류다. openapi-typescript처럼 타입만 만들고 호출은 얇은 fetch 래퍼(openapi-fetch 등)로 하는 쪽과, OpenAPI Generator처럼 언어별 클라이언트 함수와 모델 클래스를 통째로 만드는 쪽이다. React 쪽에는 orval처럼 TanStack Query 훅까지 만들어 주는 도구도 있다. 타입만 만드는 쪽은 생성물이 작고 런타임 의존성이 거의 없다. 통째로 만드는 쪽은 여러 언어를 지원하지만 생성된 코드의 모양을 우리 코드 규칙에 맞추기 어렵다.
+
+생성물을 저장소에 커밋할지도 정해야 한다. 커밋하면 PR에서 계약 변경이 타입 변경으로 눈에 보이고 빌드가 생성기에 의존하지 않는다. 대신 스펙만 고치고 다시 생성하는 걸 잊을 수 있으니, CI에서 다시 생성해 보고 차이가 있으면 실패시킨다. 커밋하지 않으면 빌드할 때마다 생성하므로 어긋날 일은 없지만 IDE에서 타입을 보려면 생성 단계를 먼저 돌려야 한다.
+
+## 문서 화면과 API 클라이언트 고르기
+
+OpenAPI 파일이 있으면 문서 화면은 도구가 그려 준다. 무엇을 고를지는 누가 읽느냐로 정한다.
+
+- Swagger UI: 가장 널리 쓰인다. 화면에서 바로 요청을 보내 보는 "Try it out"이 있어 내부 개발자용으로 편하다. FastAPI의 `/docs`, springdoc의 `/swagger-ui.html`이 이것이다.
+- Redoc: 왼쪽 목차, 가운데 설명, 오른쪽 예시의 세 칸 화면이다. 읽기 좋아서 외부에 공개하는 레퍼런스 문서에 많이 쓴다. 정적 HTML 하나로 만들 수 있다.
+- Stoplight: 스펙을 화면에서 편집하는 디자인 도구와 문서 호스팅을 함께 준다. Spectral과 Prism을 만든 곳이라 스펙 우선 흐름과 잘 맞는다.
+- ReadMe: 스펙을 올리면 레퍼런스와 함께 가이드 문서, 변경 이력, 요청 기록 같은 기능을 묶어 주는 호스팅 서비스다. 외부 개발자를 상대하는 공개 API에서 고른다.
+
+어느 도구든 화면에 보이는 건 결국 스펙의 `description`, `summary`, `example`이다. 도구를 바꿔도 내용이 좋아지지는 않는다. 각 필드에 단위(원, 밀리초)와 빈 값의 뜻을 적고, 에러 응답에도 예시를 넣는 것이 도구 고르기보다 효과가 크다.
+
+Postman은 성격이 조금 다르다. Postman 컬렉션은 "실제로 보낼 요청들"의 묶음이다. 환경 변수로 토큰과 주소를 바꾸고, 요청 전후에 스크립트를 돌려 응답을 검사하고, 여러 요청을 순서대로 이어 시나리오를 만든다. OpenAPI가 "무엇이 가능한가"를 적은 계약이라면 컬렉션은 "이렇게 써 본다"는 실행 기록에 가깝다. Postman은 OpenAPI 파일을 가져와 컬렉션을 만들 수 있으니, 계약은 OpenAPI로 관리하고 컬렉션은 거기서 만들어 쓰는 쪽이 어긋남이 적다. 컬렉션을 원본으로 두고 손으로 고치기 시작하면 위키 문서와 같은 문제가 다시 생긴다. 컬렉션 실행은 CLI(Newman 등)로 CI에 넣을 수 있다.
+
+<Callout kind="warning">
+  Swagger UI나 `/openapi.json`을 운영 환경에 그대로 열어 두면, 내부용 관리 API와 파라미터 이름까지 누구나 볼 수 있는 지도가 된다. 공개 API가 아니라면 운영에서는 문서 경로를 끄거나 인증 뒤에 둔다. FastAPI는 `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`로, springdoc은 `springdoc.api-docs.enabled=false`와 `springdoc.swagger-ui.enabled=false`로 끈다. 스펙의 `securitySchemes`는 인증 방식을 설명할 뿐 실제로 막아 주지 않는다는 점도 기억한다.
+</Callout>
+
+## 스펙이 있어도 어긋나는 곳
+
+OpenAPI를 도입했는데도 문서와 서버가 다시 어긋나는 경우는 대개 이렇다.
+
+스펙이 저장소 밖에 있다. 디자인 도구나 위키에만 있고 코드 저장소에 없으면, 코드 변경 PR에서 스펙이 같이 바뀌지 않는다. 스펙은 서버 코드와 같은 저장소(또는 모든 소비자가 참조하는 하나의 저장소)에 두고 코드와 같은 PR에서 고친다.
+
+스펙은 있는데 검증이 없다. 린트와 비교만 돌리고 실제 응답을 스펙으로 검사하지 않으면, 스펙은 "의도"일 뿐 "사실"이 아니다. 위의 검증 프록시나 응답 검증 테스트 중 하나는 CI에 있어야 한다.
+
+`additionalProperties`를 정하지 않았다. 기본적으로 JSON Schema는 정의하지 않은 필드를 허용한다. 그래서 서버가 `total_price`를 더 내보내도 `totalPrice`만 같이 있으면 검증을 통과한다. 내부 필드(비밀번호 해시, 내부 메모)가 응답에 새어 나가는 걸 막고 싶다면, 응답 스키마에 `additionalProperties: false`를 주거나 서버에서 응답 DTO를 명시적으로 만든다. 반대로 요청 스키마를 너무 엄격하게 잡으면 클라이언트가 필드 하나를 더 보냈다고 400이 나서 하위 호환이 깨진다. 응답은 엄격하게 검사하고 요청은 너그럽게 받는 쪽이 흔하다.
+
+`oneOf`와 상속을 과하게 쓴다. 다형 응답을 `oneOf`와 `discriminator`로 표현할 수는 있지만 코드 생성기마다 해석이 달라서, 어떤 생성기는 쓸모없는 타입을 만든다. 생성기를 바꾸기 전에 작은 예제로 결과를 먼저 본다.
+
+`operationId`를 비워 둔다. 생성기는 이걸 함수 이름으로 쓰는데, 없으면 주소와 메서드로 이름을 지어서 `getOrdersOrderIdGet` 같은 이름이 나오고 주소가 바뀌면 함수 이름도 바뀐다. Spectral 기본 규칙에도 `operationId`를 요구하는 규칙이 있다.
+
+문서와 서버가 어긋났다는 것은 대개 계약을 지키는 장치가 사람에게 있었다는 뜻이다. OpenAPI의 가치는 파일 형식 자체보다, 그 파일이 린터·목 서버·생성 타입·검증 프록시의 공통 입력이 되어 어긋남을 기계가 잡게 만든다는 데 있다. 처음 장면의 "0원"은 생성 타입이 있었으면 컴파일에서, 검증 프록시가 있었으면 스테이징에서 잡혔을 것이다.
+
+## 면접에서 나올 만한 질문
+
+### OpenAPI와 Swagger는 어떤 관계인가요?
+
+OpenAPI는 HTTP API를 기계가 읽을 수 있게 기술하는 명세 형식이고, 원래 이름이 Swagger였다. 2015년에 명세가 OpenAPI Initiative로 넘어가 3.0부터 OpenAPI라는 이름을 쓴다. 지금 Swagger는 주로 Swagger UI, Swagger Editor 같은 도구 이름이다. 3.1부터는 스키마 부분이 JSON Schema 2020-12와 맞춰졌다.
+
+### 스펙 우선과 코드 우선은 각각 언제 고르나요?
+
+여러 팀이나 외부 파트너가 쓰고 한 번 공개하면 바꾸기 어려운 API라면 스펙 우선이 낫다. 계약을 먼저 합의하면 프런트와 백엔드가 병렬로 만들고, 리팩터링이 계약을 몰래 바꾸는 일이 줄어든다. 한 팀이 양쪽을 다 만들고 자주 바뀐다면 코드 우선이 빠르다. 다만 코드 우선은 응답 모양은 정확해도 404 같은 동작은 문서에 빠지기 쉬워서, 생성된 스펙을 커밋된 스펙과 CI에서 비교하는 식으로 보완한다.
+
+### 문서와 실제 API가 어긋나는 걸 어떻게 막나요?
+
+스펙을 코드와 같은 저장소에 두고 같은 PR에서 고치며, 실제 응답을 스펙으로 검증하는 단계를 CI에 둔다. Prism 같은 검증 프록시를 E2E 트래픽 앞에 세우거나, 통합 테스트에서 응답을 스펙 스키마로 검사한다. 클라이언트는 스펙에서 생성한 타입을 써서 이름이나 enum이 바뀌면 컴파일 에러로 드러나게 한다. 응답 스키마에는 `additionalProperties: false`를 고려해 정의하지 않은 필드가 새어 나가는 것도 잡는다.
+
+### Spectral 같은 린터와 oasdiff 같은 비교 도구는 무엇이 다른가요?
+
+린터는 스펙 파일 하나가 규칙을 지키는지 본다. 이름 규칙, 예시가 스키마와 맞는지, 에러 응답에 본문이 있는지 같은 것이다. 비교 도구는 옛 스펙과 새 스펙을 비교해 필드 삭제, 필수 파라미터 추가 같은 깨는 변경을 찾는다. 둘은 서로를 대신하지 못해서 CI에 둘 다 둔다.
+
+### 목 서버는 어디까지 믿을 수 있나요?
+
+스펙의 예시나 스키마로 응답하므로 화면을 붙이는 초기 단계, 데모, 에러 화면 만들기에는 충분하다. 하지만 상태가 없어서 만든 데이터를 다시 조회하거나 권한·페이지·동시성에 따라 달라지는 동작은 흉내 내지 못한다. 스펙에 404 본문이 없으면 목 서버도 빈 응답을 준다. 그래서 목 서버는 실제 서버와의 계약 검증으로 반드시 보완한다.
+
+### 스펙에서 생성한 클라이언트 코드는 커밋하나요?
+
+둘 다 가능하고 트레이드오프가 있다. 커밋하면 계약 변경이 PR에서 타입 변경으로 보이고 빌드가 생성기에 의존하지 않지만, 다시 생성하는 걸 잊을 수 있어 CI에서 재생성 후 차이를 검사해야 한다. 커밋하지 않으면 항상 최신이지만 빌드와 IDE가 생성 단계에 의존한다. 어느 쪽이든 생성물은 손으로 고치지 않는다.
+
+### Swagger UI를 운영 환경에 열어 두면 무엇이 문제인가요?
+
+내부 관리 API까지 포함한 전체 엔드포인트와 파라미터 목록이 공격자에게 지도로 주어진다. 문서 화면의 "Try it out"으로 요청을 보내기도 쉽다. 공개 API가 아니라면 운영에서는 문서와 스펙 경로를 끄거나 인증 뒤에 둔다. 스펙의 `securitySchemes`는 설명일 뿐 접근을 막아 주지 않는다.

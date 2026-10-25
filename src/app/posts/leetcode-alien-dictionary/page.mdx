@@ -1,0 +1,562 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-alien-dictionary");
+
+<EasyIntro>
+  외계인이 쓰는 사전 한 권을 주웠다고 해 보자. 글자 모양은 우리 알파벳과 같은데, 무엇이 앞이고 무엇이 뒤인지 순서가 다르다. 사전은 그 순서대로 단어를 늘어놓았으니, 단어 둘을 앞에서부터 읽어 가다 처음으로 달라지는 글자를 보면 어느 글자가 먼저인지 하나 알 수 있다. 이런 단서를 모으면 "이 글자는 저 글자보다 앞"이라는 약속이 여러 개 생긴다. 그다음은 줄 서기 놀이와 같다. 앞에 와야 할 사람이 아무도 없는 친구부터 줄에 세우고, 그 친구가 줄에 들어가면 그 친구를 기다리던 다른 친구가 들어갈 차례가 된다. 모두 줄에 섰으면 그게 외계 글자의 순서다. 서로가 서로를 먼저 세워 달라고 하는 친구들이 있으면 줄을 끝낼 수 없고, 그 사전은 앞뒤가 맞지 않는 사전이다.
+</EasyIntro>
+
+외계 언어의 사전에서 단어 몇 개를 순서대로 뽑아 왔다. 그 언어의 글자 순서를 알아내라는 문제다. 처음 보면 문자열 문제 같지만, 단어를 비교해 얻은 "a가 b보다 앞" 같은 규칙을 화살표로 그리면 방향 그래프가 되고, 남는 일은 그 그래프를 한 줄로 세우는 위상 정렬이다.
+
+[LeetCode 269. Alien Dictionary](https://leetcode.com/problems/alien-dictionary/) (프리미엄 문제)는 Hard다. 어려운 건 위상 정렬이 아니라 단어에서 규칙을 뽑는 부분이다. 그래서 이 글은 규칙을 어떻게 뽑는지, 어디서 틀리는지에 시간을 많이 쓴다. 위상 정렬 자체는 [Course Schedule](/posts/leetcode-course-schedule)과 [Course Schedule II](/posts/leetcode-course-schedule-ii)에서 자세히 다뤘고, 그래프 탐색의 기본은 [BFS·DFS 글의 줄 세우기 절](/posts/ds-graph-bfs-dfs#먼저-할-일부터-줄-세우기)에 있다. 풀이는 순열을 전부 시험하는 것부터 다섯 가지를 짠다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 단어 목록에서 글자 순서를 거꾸로 읽어 낸다
+
+`words`는 외계 언어의 사전 순서로 이미 정렬된 단어 목록이다. 글자는 영어 소문자만 쓰이지만 순서는 우리 알파벳과 다르다. 단어에 나온 글자를 외계 순서대로 늘어놓은 문자열을 돌려준다. 목록이 어떤 순서로도 정렬될 수 없는 모순이면 빈 문자열을 돌려준다. 답이 여럿이면 아무거나 하나 내면 된다.
+
+풀이를 고를 때 보는 조건은 이렇다.
+
+- 단어는 100개 이하, 단어 길이도 100 이하다. 전체 글자 수는 많아야 1만 개라 한 번 훑는 데 부담이 없다.
+- 글자 종류는 소문자 26개가 전부다. 그래프의 노드가 26개를 넘지 않는다는 뜻이고, 26 × 26 표를 써도 된다.
+- 사전 순서는 우리가 아는 사전과 같은 규칙을 따른다. 앞에서부터 비교해 처음 다른 글자로 순서가 정해지고, 한 단어가 다른 단어의 앞부분 전체와 같으면 짧은 쪽이 먼저다. 그래서 `"ab"`는 `"abc"`보다 앞이어야 한다.
+
+이 글에서 쓸 예시는 단어 다섯 개다.
+
+```text
+cab
+cad
+ad
+db
+dc
+```
+
+손으로 풀어 보자. 이웃한 두 단어를 앞에서부터 읽다가 처음 달라지는 자리를 찾는다.
+
+- `cab`와 `cad`는 셋째 글자에서 갈린다. b가 d보다 앞이다.
+- `cad`와 `ad`는 첫 글자에서 갈린다. c가 a보다 앞이다.
+- `ad`와 `db`도 첫 글자에서 갈린다. a가 d보다 앞이다.
+- `db`와 `dc`는 둘째 글자에서 갈린다. b가 c보다 앞이다.
+
+규칙 네 개를 모으면 b는 c와 d보다 앞, c는 a보다 앞, a는 d보다 앞이다. b 앞에 와야 하는 글자는 없으니 b가 맨 앞이다. 그다음 c, a, d 순서로 놓으면 모든 규칙이 맞는다. 답은 `"bcad"`다.
+
+손으로 푼 과정에 이미 두 단계가 들어 있다. 단어 쌍에서 규칙을 뽑는 단계, 그리고 규칙을 지키며 글자를 한 줄로 세우는 단계다. 아래 풀이들은 이 두 단계를 각각 얼마나 영리하게 하느냐로 갈린다.
+
+## 글자를 줄 세우는 모든 방법을 시험한다
+
+가장 단순한 생각은 이렇다. 글자 순서를 하나 정해 보고, 그 순서로 단어 목록이 정렬돼 있는지 확인한다. 맞으면 답이고 아니면 다음 순서를 시험한다. 글자를 나열하는 모든 방법, 곧 순열을 다 만들어 보면 답이 있을 때 반드시 찾는다.
+
+```js
+function alienOrder(words) {
+  const letters = [...new Set(words.join(""))];
+
+  // rank[글자] = 그 글자의 자리. 이 순서로 words가 정렬돼 있는지 본다
+  const ok = (rank) => {
+    for (let i = 0; i + 1 < words.length; i++) {
+      const a = words[i], b = words[i + 1];
+      let j = 0;
+      while (j < a.length && j < b.length && a[j] === b[j]) j++;
+      if (j === a.length || j === b.length) {
+        if (a.length > b.length) return false; // 긴 단어가 접두사보다 앞에 있다
+        continue;
+      }
+      if (rank[a[j]] > rank[b[j]]) return false;
+    }
+    return true;
+  };
+
+  const used = new Array(letters.length).fill(false), cur = [];
+  let found = null;
+  const go = () => {
+    if (found !== null) return;
+    if (cur.length === letters.length) {
+      const rank = {};
+      cur.forEach((c, i) => (rank[c] = i));
+      if (ok(rank)) found = cur.join("");
+      return;
+    }
+    for (let i = 0; i < letters.length; i++) {
+      if (used[i]) continue;
+      used[i] = true; cur.push(letters[i]);
+      go();
+      cur.pop(); used[i] = false;
+    }
+  };
+  go();
+  return found ?? "";
+}
+```
+
+예시는 글자가 c, a, b, d 네 개라 순열이 24개뿐이고, 13번째 순열 `bcad`에서 멈췄다. 순열을 만드는 방법은 [Permutations](/posts/leetcode-permutations)에서 다룬 백트래킹 그대로다.
+
+시간은 글자가 k개일 때 순열 k!개에 확인 비용 O(C)를 곱한 O(k! · C)다. C는 전체 글자 수다. 글자 26개가 다 나오면 26!은 약 4 × 10^26이라 영원히 끝나지 않는다. 모순인 입력에서는 순열을 전부 다 본 뒤에야 빈 문자열을 낸다.
+
+이 풀이가 느린 이유는 단어에 이미 적혀 있는 정보를 쓰지 않고 순서를 짐작만 하기 때문이다. 단어를 비교하면 "b가 d보다 앞" 같은 규칙을 바로 읽을 수 있다. 규칙을 먼저 모으고, 규칙에 맞게 세우면 짐작할 필요가 없다.
+
+## 모든 단어 쌍에서 규칙을 모은다
+
+사전 순서는 목록 전체에 걸쳐 성립한다. 그러니 i번째 단어와 j번째 단어(i가 j보다 앞)를 비교해도 규칙이 나온다. 처음엔 모든 쌍을 비교해야 빠뜨리는 규칙이 없을 것 같다.
+
+규칙을 모은 다음에는 줄을 세운다. 아직 줄에 서지 않은 글자 중에서 "나보다 앞에 와야 하는 글자"가 모두 줄에 선 글자를 찾아 세운다. 그런 글자가 하나도 없는데 남은 글자가 있으면, 남은 글자끼리 서로를 기다리는 고리가 있다는 뜻이라 빈 문자열을 낸다.
+
+```js
+function alienOrder(words) {
+  const letters = [...new Set(words.join(""))];
+  // before.get(v): v보다 앞에 와야 하는 글자들
+  const before = new Map(letters.map((c) => [c, new Set()]));
+
+  for (let i = 0; i < words.length; i++) {
+    for (let j = i + 1; j < words.length; j++) {
+      const a = words[i], b = words[j];
+      let k = 0;
+      while (k < a.length && k < b.length && a[k] === b[k]) k++;
+      if (k === a.length || k === b.length) {
+        if (a.length > b.length) return "";
+        continue;
+      }
+      before.get(b[k]).add(a[k]);
+    }
+  }
+
+  const placed = new Set();
+  let order = "";
+  while (order.length < letters.length) {
+    // 앞에 와야 할 글자가 전부 줄에 선 글자를 하나 찾는다
+    const next = letters.find(
+      (c) => !placed.has(c) && [...before.get(c)].every((p) => placed.has(p))
+    );
+    if (next === undefined) return ""; // 남은 글자가 서로를 기다린다
+    placed.add(next);
+    order += next;
+  }
+  return order;
+}
+```
+
+규칙을 모으는 데 쌍이 n(n - 1) / 2개이고 쌍마다 최대 L글자를 비교하니 O(n² · L)이다. n = 100, L = 100이면 쌍이 4,950개, 비교가 많아야 50만 번이라 통과는 한다. 줄 세우기는 k번 반복하고 매번 글자 k개의 앞 글자 집합을 다 보니 O(k³)이다. k가 26이라 1만 7천 번쯤이다.
+
+통과는 하지만 쌍 비교의 대부분은 헛일이다. 예시에서 `cab`와 `dc`를 비교하면 "c가 d보다 앞"이 나온다. 그런데 이 규칙은 이미 "c가 a보다 앞"과 "a가 d보다 앞"에서 따라 나온다. 멀리 떨어진 쌍이 주는 규칙은 이웃한 쌍의 규칙을 이어 붙이면 다 나온다.
+
+## 이웃한 두 단어만 비교해도 충분하다
+
+왜 이웃한 쌍만으로 충분한지 짚어 보자. 이웃한 쌍에서 나온 규칙을 모두 지키는 글자 순서가 하나 있다고 하자. 그 순서로 보면 1번 단어는 2번 단어보다 앞이고, 2번은 3번보다 앞이고, 계속 그렇다. 사전 순서는 이어 붙일 수 있는 관계라서(1이 2보다 앞이고 2가 3보다 앞이면 1이 3보다 앞) 목록 전체가 그 순서로 정렬돼 있다. 그러니 멀리 떨어진 쌍의 규칙도 저절로 지켜진다. 이웃한 쌍만 보면 비교가 n - 1번으로 준다.
+
+한 쌍에서 쓸 수 있는 규칙은 처음 달라지는 글자 하나뿐이다. `cab`와 `cad`가 셋째 글자에서 갈렸다면 그 뒤의 글자는 순서와 아무 관계가 없다. 우리 사전에서도 `apple`이 `banana`보다 앞이라고 p가 a보다 앞인 건 아니다.
+
+아래 그림은 예시의 이웃한 쌍 네 개에서 규칙을 뽑는 과정이다. 칸은 단어 다섯 개이고, 아래에 모은 규칙을 `앞→뒤`로 적었다.
+
+<AlgoTrace
+  caption="이웃한 두 단어에서 처음 다른 글자로 규칙을 하나씩 뽑는다"
+  memoryLabel="모은 규칙 (앞→뒤)"
+  cells={["cab", "cad", "ad", "db", "dc"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "이웃한 두 단어를 차례로 비교한다. 먼저 cab와 cad다." },
+    { pointer: 1, found: [0], memory: ["b→d"], caption: "cab와 cad는 셋째 글자에서 갈린다. b가 d보다 앞이다." },
+    { pointer: 2, found: [1], memory: ["b→d", "c→a"], caption: "cad와 ad는 첫 글자에서 갈린다. c가 a보다 앞이다." },
+    { pointer: 3, found: [2], memory: ["b→d", "c→a", "a→d"], caption: "ad와 db도 첫 글자에서 갈린다. a가 d보다 앞이다." },
+    { pointer: 4, found: [3], memory: ["b→d", "c→a", "a→d", "b→c"], caption: "db와 dc는 둘째 글자에서 갈린다. b가 c보다 앞이다." },
+    { pointer: 4, found: [0, 1, 2, 3, 4], memory: ["b→d", "c→a", "a→d", "b→c"], caption: "쌍 네 개에서 규칙 네 개를 얻었다. 이제 이 규칙대로 글자를 세운다." },
+  ]}
+/>
+
+규칙을 화살표로 그리면 이런 방향 그래프가 된다. 화살표는 "앞에 와야 하는 글자 → 뒤에 와야 하는 글자"다.
+
+<ConceptDiagram
+  caption="예시에서 뽑은 규칙 그래프. 화살표가 가리키는 쪽이 뒤에 온다"
+  width={400}
+  height={200}
+  nodes={[
+    { id: "b", label: "b", sub: "맨 앞", x: 50, y: 100, w: 64, h: 44 },
+    { id: "c", label: "c", x: 160, y: 50, w: 56, h: 40 },
+    { id: "a", label: "a", x: 260, y: 50, w: 56, h: 40 },
+    { id: "d", label: "d", sub: "맨 뒤", x: 350, y: 150, w: 64, h: 44 },
+  ]}
+  edges={[
+    { from: "b", to: "c" },
+    { from: "c", to: "a" },
+    { from: "a", to: "d" },
+    { from: "b", to: "d" },
+  ]}
+/>
+
+이제 문제는 방향 그래프의 위상 정렬, 곧 "모든 화살표가 왼쪽에서 오른쪽을 향하게 노드를 한 줄로 놓기"가 됐다. 위상 정렬은 DFS로도, 진입 차수를 세는 BFS로도 O(노드 + 간선)에 끝난다. 다음 두 풀이가 그 둘이다.
+
+## 다 끝난 글자부터 적고 뒤집는 DFS
+
+DFS로 한 글자에서 화살표를 따라 끝까지 내려가면, 더 내려갈 곳이 없는 글자, 곧 가장 뒤에 와야 하는 글자에서 먼저 돌아온다. 돌아오는 순서대로 적으면(후위 순서) 뒤에 올 글자부터 적히니, 마지막에 뒤집으면 앞에서부터의 순서가 된다.
+
+고리는 색 세 가지로 찾는다. 아직 안 본 글자는 흰색, 지금 내려가는 길 위에 있는 글자는 회색, 다 끝난 글자는 검정이다. 회색 글자를 다시 만나면 내 길로 돌아온 것이니 고리다. 이 방법의 자세한 이유는 [Course Schedule의 세 가지 색 절](/posts/leetcode-course-schedule#세-가지-색으로-칠하는-dfs)에 있다.
+
+```js
+function alienOrder(words) {
+  // 1. 글자마다 "나보다 뒤에 와야 하는 글자" 집합을 만든다
+  const graph = new Map();
+  for (const w of words) for (const c of w) if (!graph.has(c)) graph.set(c, new Set());
+  for (let i = 0; i + 1 < words.length; i++) {
+    const a = words[i], b = words[i + 1];
+    const len = Math.min(a.length, b.length);
+    let j = 0;
+    while (j < len && a[j] === b[j]) j++;
+    if (j === len) {
+      if (a.length > b.length) return "";
+      continue;
+    }
+    graph.get(a[j]).add(b[j]);
+  }
+
+  // 2. 세 가지 색 DFS. 없음: 흰색, 1: 회색(지금 길 위), 2: 검정(끝남)
+  const state = new Map();
+  const post = [];
+  const dfs = (u) => {
+    state.set(u, 1);
+    for (const v of graph.get(u)) {
+      if (state.get(v) === 1) return false;                // 내 길로 돌아왔다: 고리
+      if (state.get(v) === undefined && !dfs(v)) return false;
+    }
+    state.set(u, 2);
+    post.push(u); // 뒤에 올 글자를 다 적은 뒤에 나를 적는다
+    return true;
+  };
+  for (const c of graph.keys()) {
+    if (state.get(c) === undefined && !dfs(c)) return "";
+  }
+  return post.reverse().join("");
+}
+```
+
+예시에서 DFS는 c에서 시작해 c → a → d로 내려간다. d에서 갈 곳이 없으니 d가 먼저 적히고, a, c 순서로 돌아오며 적힌다. 다음으로 아직 안 본 b에서 시작하는데, b의 이웃 d와 c는 이미 검정이라 b가 바로 적힌다. 후위 순서는 `d a c b`이고 뒤집으면 `bcad`다. 답이 여럿인 입력에서는 칸의 알고리즘과 다른 답이 나오기도 한다. `["bca", "bcd", "ab", "ad", "d"]`에서 이 DFS는 `cbad`를, 다음 절의 칸의 알고리즘은 `bcad`를 낸다. 둘 다 맞는 답이다.
+
+규칙을 뽑는 데 전체 글자 수만큼 O(C), DFS는 노드 k개와 간선 E개를 한 번씩 보니 O(k + E)다. 간선은 이웃한 쌍마다 많아야 하나라서 E는 n - 1 이하이고, 글자 쌍이 26 × 26가지라 676도 넘지 않는다. 전체는 O(C)다. 재귀 깊이는 글자 수 26을 넘지 않아 스택 걱정은 없다.
+
+이 풀이의 약점은 고리 검사와 순서 만들기가 재귀 안에 얽혀 있다는 것이다. 회색 검사를 빼먹으면 고리가 있어도 그럴듯한 문자열을 내놓는다. 앞에 올 글자 수를 세는 방식은 고리 판정이 "다 적었나"로 단순해진다.
+
+## 앞설 글자가 없는 것부터 꺼내는 칸의 알고리즘
+
+손으로 줄을 세울 때 한 일을 그대로 옮긴 방법이다. 글자마다 "나보다 앞에 와야 하는 글자 수", 곧 진입 차수(indegree, 나에게 들어오는 화살표 수)를 센다. 진입 차수가 0인 글자는 기다릴 게 없으니 바로 적는다. 글자 하나를 적으면 그 글자가 가리키던 글자들의 진입 차수가 하나씩 준다. 0이 된 글자는 이제 적을 수 있으니 큐에 넣는다. 이걸 칸(Kahn)의 알고리즘이라고 부른다.
+
+```js
+function alienOrder(words) {
+  // 1. 글자마다 "나보다 뒤에 와야 하는 글자" 집합을 만든다
+  const graph = new Map();
+  for (const w of words) for (const c of w) if (!graph.has(c)) graph.set(c, new Set());
+  for (let i = 0; i + 1 < words.length; i++) {
+    const a = words[i], b = words[i + 1];
+    const len = Math.min(a.length, b.length);
+    let j = 0;
+    while (j < len && a[j] === b[j]) j++;
+    if (j === len) {
+      if (a.length > b.length) return ""; // "abc" 다음에 "ab"가 올 수 없다
+      continue;                           // 한쪽이 접두사면 알 수 있는 게 없다
+    }
+    graph.get(a[j]).add(b[j]);            // 처음 다른 글자 하나만 규칙이 된다
+  }
+
+  // 2. 앞에 와야 하는 글자 수(진입 차수)를 센다
+  const indegree = new Map([...graph.keys()].map((c) => [c, 0]));
+  for (const nexts of graph.values()) {
+    for (const v of nexts) indegree.set(v, indegree.get(v) + 1);
+  }
+
+  // 3. 앞에 올 글자가 없는 것부터 꺼내 적는다
+  const queue = [...graph.keys()].filter((c) => indegree.get(c) === 0);
+  let order = "";
+  for (let head = 0; head < queue.length; head++) {
+    const u = queue[head];
+    order += u;
+    for (const v of graph.get(u)) {
+      indegree.set(v, indegree.get(v) - 1);
+      if (indegree.get(v) === 0) queue.push(v);
+    }
+  }
+
+  // 4. 다 못 적었으면 고리가 있다
+  return order.length === graph.size ? order : "";
+}
+```
+
+그래프에 모든 글자를 먼저 넣는 첫 줄이 중요하다. 규칙에 한 번도 등장하지 않는 글자도 답에 들어가야 하기 때문이다. 고리 판정은 마지막 줄 하나다. 고리 위의 글자들은 서로를 기다려서 진입 차수가 끝까지 0이 되지 않고, 그래서 적힌 글자 수가 전체보다 적다.
+
+아래 그림은 예시 그래프에서 이 코드가 큐를 어떻게 쓰는지 따라간 것이다. 칸은 그래프에 들어간 순서대로 놓은 글자이고, 초록 칸이 적은 글자다. 실제 코드에 로그를 찍어 나온 순서 그대로다.
+
+<AlgoTrace
+  caption="칸의 알고리즘. 진입 차수가 0이 된 글자가 큐에 들어가고, 꺼낸 순서가 답이다"
+  memoryLabel="큐"
+  cells={["c", "a", "b", "d"]}
+  steps={[
+    { memory: ["b"], caption: "진입 차수는 c 1, a 1, b 0, d 2다. 0인 b만 큐에 들어간다." },
+    { pointer: 2, found: [2], memory: ["c"], caption: "b를 꺼내 적는다. b가 가리키는 d는 1로, c는 0으로 줄어 c가 큐에 들어간다." },
+    { pointer: 0, found: [2, 0], memory: ["a"], caption: "c를 꺼내 적는다. a가 0이 되어 큐에 들어간다." },
+    { pointer: 1, found: [2, 0, 1], memory: ["d"], caption: "a를 꺼내 적는다. 마지막으로 d가 0이 된다." },
+    { pointer: 3, found: [2, 0, 1, 3], memory: [], caption: "d를 꺼내 적는다. 네 글자를 다 적었으니 고리가 없고 답은 bcad다." },
+  ]}
+/>
+
+두 번째 단계에서 d의 진입 차수가 2에서 1로만 준다는 점을 보자. d는 b뿐 아니라 a도 기다리고 있어서, b가 적혔다고 바로 적을 수 없다. a가 적힌 네 번째 단계에서야 0이 된다.
+
+규칙 뽑기 O(C), 진입 차수 세기와 큐 처리 O(k + E)로 전체 O(C)다. 공간은 그래프 O(k + E)이고, 글자가 26개뿐이라 사실상 상수다.
+
+### Python과 Java로 쓰면
+
+Python은 `zip`과 `for ... else`로 규칙 뽑기가 짧아진다. `for`가 `break` 없이 끝나면 `else`로 들어가는데, 처음 다른 글자를 못 찾았다는 뜻이니 그때 접두사 검사를 한다. 딕셔너리는 넣은 순서를 지키지만 `set`은 아니다. 글자 집합의 순회 순서는 실행할 때마다 바뀔 수 있어서(문자열 해시가 실행마다 달라진다) 답이 여럿인 입력에서는 실행마다 다른 정답이 나올 수 있다. 어느 것이든 맞는 답이다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def alien_order(words: List[str]) -> str:
+    graph = {c: set() for w in words for c in w}  # dict는 넣은 순서를 지킨다
+    for a, b in zip(words, words[1:]):
+        for x, y in zip(a, b):
+            if x != y:
+                graph[x].add(y)  # 처음 다른 글자 하나만 규칙이 된다
+                break
+        else:  # break 없이 끝났다: 한쪽이 다른 쪽의 접두사
+            if len(a) > len(b):
+                return ""
+
+    indegree = {c: 0 for c in graph}
+    for nexts in graph.values():
+        for v in nexts:
+            indegree[v] += 1
+
+    queue = deque(c for c in graph if indegree[c] == 0)
+    order = []
+    while queue:
+        u = queue.popleft()
+        order.append(u)
+        for v in graph[u]:
+            indegree[v] -= 1
+            if indegree[v] == 0:
+                queue.append(v)
+    return "".join(order) if len(order) == len(graph) else ""
+
+
+print(alien_order(["cab", "cad", "ad", "db", "dc"]))
+print(repr(alien_order(["abc", "ab"])))
+print(repr(alien_order(["z", "x", "z"])))
+```
+
+```text
+bcad
+''
+''
+```
+
+Java는 글자가 소문자뿐이라 `c - 'a'`로 0~25 번호를 붙이고 26 × 26 불리언 표로 그래프를 만든다. 표를 쓰면 같은 규칙이 여러 번 나와도 한 칸이라 진입 차수가 두 번 세지지 않는다. 그 대신 칸을 처음 켤 때만 진입 차수를 올리는 검사를 꼭 붙인다. 문자열 끝에 글자를 붙일 때는 `String`의 `+=` 대신 `StringBuilder`를 쓴다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public String alienOrder(String[] words) {
+        boolean[] seen = new boolean[26];
+        boolean[][] next = new boolean[26][26]; // next[u][v]: u가 v보다 앞
+        int[] indegree = new int[26];
+        int total = 0;
+        for (String w : words)
+            for (char c : w.toCharArray())
+                if (!seen[c - 'a']) { seen[c - 'a'] = true; total++; }
+
+        for (int i = 0; i + 1 < words.length; i++) {
+            String a = words[i], b = words[i + 1];
+            int len = Math.min(a.length(), b.length()), j = 0;
+            while (j < len && a.charAt(j) == b.charAt(j)) j++;
+            if (j == len) {
+                if (a.length() > b.length()) return "";
+                continue;
+            }
+            int u = a.charAt(j) - 'a', v = b.charAt(j) - 'a';
+            if (!next[u][v]) { next[u][v] = true; indegree[v]++; } // 같은 규칙은 한 번만 센다
+        }
+
+        ArrayDeque<Integer> queue = new ArrayDeque<>();
+        for (int c = 0; c < 26; c++) if (seen[c] && indegree[c] == 0) queue.offer(c);
+        StringBuilder order = new StringBuilder();
+        while (!queue.isEmpty()) {
+            int u = queue.poll();
+            order.append((char) ('a' + u));
+            for (int v = 0; v < 26; v++) {
+                if (next[u][v] && --indegree[v] == 0) queue.offer(v);
+            }
+        }
+        return order.length() == total ? order.toString() : "";
+    }
+}
+```
+
+```text
+bcad
+[]
+[]
+```
+
+Java 판은 시작 큐에 글자를 a부터 z 순으로 넣고, JavaScript와 Python 판은 단어에 처음 나온 순서로 넣는다. 그래서 답이 여럿인 입력에서는 같은 칸의 알고리즘인데도 다른 정답이 나온다. `["ba", "bc"]`에서 규칙은 "a가 c보다 앞" 하나이고, JavaScript 판은 `bac`, Java 판은 `abc`를 낸다. b는 어떤 규칙에도 묶이지 않아 어디에 와도 되니 둘 다 맞다.
+
+## 답이 여럿이면 알파벳 순으로 앞선 것을 고른다
+
+LeetCode는 맞는 순서 중 아무거나 받아 주지만, 실제로 쓸 코드라면 같은 입력에 늘 같은 답을 내야 한다. 테스트를 쓰기도 쉬워진다. 칸의 알고리즘에서 큐 대신 "지금 적을 수 있는 글자 중 우리 알파벳으로 가장 앞선 것"을 꺼내면, 가능한 답 중 알파벳 순으로 가장 앞선 문자열이 나온다.
+
+```js
+function alienOrder(words) {
+  const has = new Array(26).fill(false);
+  const next = Array.from({ length: 26 }, () => new Array(26).fill(false));
+  const code = (c) => c.charCodeAt(0) - 97;
+  for (const w of words) for (const c of w) has[code(c)] = true;
+
+  for (let i = 0; i + 1 < words.length; i++) {
+    const a = words[i], b = words[i + 1];
+    const len = Math.min(a.length, b.length);
+    let j = 0;
+    while (j < len && a[j] === b[j]) j++;
+    if (j === len) {
+      if (a.length > b.length) return "";
+      continue;
+    }
+    next[code(a[j])][code(b[j])] = true; // 2차원 표라 같은 규칙이 두 번 세지지 않는다
+  }
+
+  const indegree = new Array(26).fill(0);
+  let total = 0;
+  for (let u = 0; u < 26; u++) {
+    if (has[u]) total++;
+    for (let v = 0; v < 26; v++) if (next[u][v]) indegree[v]++;
+  }
+
+  const done = new Array(26).fill(false);
+  let order = "";
+  while (order.length < total) {
+    // 지금 적을 수 있는 글자 중 알파벳 순으로 가장 앞선 것을 고른다
+    let u = -1;
+    for (let c = 0; c < 26; c++) {
+      if (has[c] && !done[c] && indegree[c] === 0) { u = c; break; }
+    }
+    if (u === -1) return ""; // 남은 글자가 모두 서로를 기다린다: 고리
+    done[u] = true;
+    order += String.fromCharCode(97 + u);
+    for (let v = 0; v < 26; v++) if (next[u][v]) indegree[v]--;
+  }
+  return order;
+}
+```
+
+매번 26칸을 훑어 고르니 고르기만 O(26 · k)이고, 글자 종류가 많은 일반 그래프라면 최소 힙에 진입 차수 0인 노드를 넣어 O((k + E) log k)로 바꾼다. 앞에서 DFS는 `cbad`, 칸의 알고리즘은 `bcad`를 냈던 `["bca", "bcd", "ab", "ad", "d"]`에서 이 판은 `bacd`를 낸다. 처음에 적을 수 있는 글자는 b와 c인데 b가 알파벳으로 앞서서 b를 고르고, 그다음 a가 풀리자 a와 c 중 a를 고른다.
+
+"매번 가장 작은 것을 고르면 전체가 가장 작아지나"가 궁금할 수 있다. 첫 글자를 더 작게 만들 방법이 없고, 첫 글자를 정한 뒤 남은 문제도 같은 모양이라 매번 그렇게 고르면 된다. 이 탐욕 선택은 정답 문자열이 사전순으로 가장 앞서는 것을 보장한다. 다만 "자리 번호가 작은 노드를 최대한 앞에" 같은 다른 기준에는 이 방법이 맞지 않는 경우가 있으니 기준을 정확히 읽어야 한다.
+
+## 외계 글자 순서를 직접 구해 보기
+
+빈 함수를 채워 테스트를 돌려 보자. 테스트가 정답 하나와 비교하려면 답이 하나로 정해져야 해서, 여기서는 답이 여럿이면 알파벳 순으로 가장 앞선 것을 내도록 정했다. 접두사 모순, 고리, 규칙에 안 나오는 글자, 같은 규칙이 두 번 나오는 경우를 넣어 두었다.
+
+<CodePlayground
+  caption="Alien Dictionary (답이 여럿이면 알파벳 순으로 가장 앞선 것)"
+  functionName="alienOrder"
+  initialCode={"function alienOrder(words) {\n  // words: 외계 사전 순서로 정렬된 단어 목록\n  // 글자 순서를 문자열로, 모순이면 \"\"\n  // 답이 여럿이면 알파벳 순으로 가장 앞선 것을 낸다\n  return \"\";\n}"}
+  solution={"function alienOrder(words) {\n  const has = new Array(26).fill(false);\n  const next = Array.from({ length: 26 }, () => new Array(26).fill(false));\n  const code = (c) => c.charCodeAt(0) - 97;\n  for (const w of words) for (const c of w) has[code(c)] = true;\n  for (let i = 0; i + 1 < words.length; i++) {\n    const a = words[i], b = words[i + 1];\n    const len = Math.min(a.length, b.length);\n    let j = 0;\n    while (j < len && a[j] === b[j]) j++;\n    if (j === len) {\n      if (a.length > b.length) return \"\";\n      continue;\n    }\n    next[code(a[j])][code(b[j])] = true; // 2차원 표라 같은 규칙이 두 번 세지지 않는다\n  }\n  const indegree = new Array(26).fill(0);\n  let total = 0;\n  for (let u = 0; u < 26; u++) {\n    if (has[u]) total++;\n    for (let v = 0; v < 26; v++) if (next[u][v]) indegree[v]++;\n  }\n  const done = new Array(26).fill(false);\n  let order = \"\";\n  while (order.length < total) {\n    // 지금 적을 수 있는 글자 중 알파벳 순으로 가장 앞선 것을 고른다\n    let u = -1;\n    for (let c = 0; c < 26; c++) {\n      if (has[c] && !done[c] && indegree[c] === 0) { u = c; break; }\n    }\n    if (u === -1) return \"\"; // 남은 글자가 모두 서로를 기다린다: 고리\n    done[u] = true;\n    order += String.fromCharCode(97 + u);\n    for (let v = 0; v < 26; v++) if (next[u][v]) indegree[v]--;\n  }\n  return order;\n}\n"}
+  tests={[
+    { label: "글의 예시", args: [["cab", "cad", "ad", "db", "dc"]], expected: "bcad" },
+    { label: "긴 단어가 접두사보다 앞", args: [["abc", "ab"]], expected: "" },
+    { label: "z와 x가 서로 앞", args: [["z", "x", "z"]], expected: "" },
+    { label: "단어 하나", args: [["z"]], expected: "z" },
+    { label: "규칙에 안 나오는 글자 a", args: [["ab", "ac"]], expected: "abc" },
+    { label: "첫 차이 뒤는 무시", args: [["ba", "ab"]], expected: "ba" },
+    { label: "같은 규칙이 두 번", args: [["ab", "ac", "bb", "bc"]], expected: "abc" },
+    { label: "답이 여럿", args: [["bca", "bcd", "ab", "ad", "d"]], expected: "bacd" },
+    { label: "같은 단어 두 번", args: [["ab", "ab"]], expected: "ab" },
+  ]}
+/>
+
+## 다섯 풀이가 하는 일의 양
+
+n은 단어 수, L은 단어 길이, C는 전체 글자 수(n · L 이하), k는 글자 종류(26 이하), E는 규칙 수다.
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 순열 전부 시험 | O(k! · C) | O(k) | 고르지 않는다. 글자가 다섯 개 안팎일 때 답을 검증하는 용도 |
+| 모든 쌍 + 매번 찾기 | O(n² · L + k³) | O(k²) | 이웃한 쌍이면 된다는 걸 떠올리기 전의 출발점 |
+| 세 가지 색 DFS | O(C + k + E) | O(k + E) | 재귀가 편하고 고리 위치까지 알고 싶을 때 |
+| 칸의 알고리즘 | O(C + k + E) | O(k + E) | 기본값. 고리 판정이 "다 적었나" 한 줄이다 |
+| 알파벳 순 가장 앞선 답 | O(C + 26 · k) | O(26²) | 같은 입력에 같은 답이 필요할 때, 테스트를 쓸 때 |
+
+DFS와 칸의 알고리즘은 시간이 같고, 둘 다 실제 일은 단어를 한 번 훑는 O(C)가 대부분이다. 면접에서는 칸의 알고리즘으로 짜고 "이웃한 쌍만 보면 되는 이유"와 "접두사 모순"을 먼저 말하는 게 좋다. 이 문제에서 면접관이 보는 건 위상 정렬보다 그 두 가지다.
+
+## 첫 차이 하나, 접두사 하나에서 틀린다
+
+가장 흔한 실수는 처음 다른 글자를 찾은 뒤에도 비교를 멈추지 않는 것이다. 같은 자리의 글자가 다를 때마다 규칙을 넣으면 없는 규칙이 생긴다.
+
+```js
+// 틀린 코드: 다른 글자를 모두 규칙으로 넣는다
+for (let j = 0; j < Math.min(a.length, b.length); j++) {
+  if (a[j] !== b[j]) graph.get(a[j]).add(b[j]);
+}
+```
+
+`["ba", "ab"]`에서 맞는 규칙은 "b가 a보다 앞" 하나라 답은 `"ba"`다. 그런데 이 코드는 둘째 자리에서 "a가 b보다 앞"까지 넣어 고리를 만들고 빈 문자열을 낸다. 처음 다른 글자를 찾으면 바로 `break`한다.
+
+두 번째는 접두사 모순을 놓치는 것이다. `["abc", "ab"]`는 어떤 글자 순서로도 성립할 수 없다. 짧은 `"ab"`가 앞이어야 하기 때문이다. 처음 다른 글자가 없다고 그냥 넘어가면 규칙이 하나도 없으니 `"abc"`를 낸다. 다른 글자를 못 찾았는데 앞 단어가 더 길면 바로 빈 문자열을 돌려준다. 반대로 `["ab", "abc"]`나 같은 단어가 두 번 나오는 `["ab", "ab"]`는 정상이다.
+
+세 번째는 글자를 규칙에서만 모으는 것이다. 그래프에 노드를 넣는 일을 규칙을 넣을 때 같이 하면 규칙에 안 나온 글자가 빠진다. `["ab", "ac"]`에서 규칙은 "b가 c보다 앞"뿐이고 a는 어디에도 안 나온다. 답은 a를 포함한 `"abc"` 같은 문자열이어야 하는데 이 코드는 `"bc"`를 낸다. 모든 단어의 모든 글자를 먼저 그래프에 넣는다.
+
+네 번째는 같은 규칙이 여러 번 나올 때 진입 차수와 간선 수가 어긋나는 것이다.
+
+```js
+// 틀린 코드: 간선은 Set이라 한 번만 들어가는데 진입 차수는 나올 때마다 올린다
+graph.get(a[j]).add(b[j]);
+indegree.set(b[j], indegree.get(b[j]) + 1);
+```
+
+`["ab", "ac", "bb", "bc"]`에서는 "b가 c보다 앞"이 두 번 나온다. c의 진입 차수는 2가 되는데 b를 적을 때 c는 한 번만 줄어 1에서 멈춘다. c를 영영 적지 못하니 고리가 없는데도 빈 문자열을 낸다. 간선을 집합으로 모으고 진입 차수는 다 모은 뒤 집합에서 세거나, 간선도 중복을 허락하는 배열로 두어 둘을 같이 세야 한다.
+
+## 외계 사전에 다른 질문을 던지면
+
+### 순서가 하나뿐인지 물으면
+
+칸의 알고리즘을 돌리다가 큐에 글자가 두 개 이상 들어 있는 순간이 한 번이라도 있으면 그 둘의 순서를 바꿔도 되니 답이 여럿이다. 끝까지 큐에 하나씩만 있었다면 답은 하나뿐이다. 예시는 큐가 매번 한 글자라서 `bcad` 하나뿐이다. 이 아이디어는 LeetCode 444. Sequence Reconstruction(프리미엄 문제)에서 그대로 쓰인다.
+
+### 주어진 순서로 정렬돼 있는지만 확인하라면
+
+글자 순서가 주어지고 단어 목록이 그 순서로 정렬돼 있는지 묻는 문제는 LeetCode 953. Verifying an Alien Dictionary다. 글자마다 자리 번호를 매기고 이웃한 쌍을 비교하면 된다. 이 글 첫 풀이의 `ok` 함수가 바로 그 일을 한다.
+
+### 고리를 이루는 글자를 알려 달라면
+
+세 가지 색 DFS에서 회색 글자를 다시 만난 순간, 재귀 스택에서 그 글자부터 지금 글자까지가 고리다. 지금 내려가는 길을 배열로 들고 다니면 꺼낼 수 있다. 칸의 알고리즘으로는 진입 차수가 끝까지 0이 되지 않은 글자들이 고리이거나 고리 뒤에 걸린 글자라서 고리 자체만 골라내기는 어렵다.
+
+### 단어가 하나씩 계속 추가되면
+
+새 단어가 맨 뒤에 붙는다면 새로 생기는 규칙은 마지막 단어와의 쌍 하나뿐이다. 그 규칙 u → v를 넣기 전에 v에서 u로 갈 수 있는지 DFS로 확인하면 고리가 생기는지 알 수 있다. 글자가 26개뿐이라 한 번 확인이 아주 싸다.
+
+### 비슷한 문제
+
+- [Course Schedule](/posts/leetcode-course-schedule): 위상 정렬이 가능한지만 묻는다.
+- [Course Schedule II](/posts/leetcode-course-schedule-ii): 순서를 하나 돌려준다. 이 문제의 뒷부분과 같다.
+- LeetCode 953. Verifying an Alien Dictionary: 순서가 주어졌을 때 확인만 한다.
+- LeetCode 1203. Sort Items by Groups Respecting Dependencies: 그룹 단위와 항목 단위로 위상 정렬을 두 번 한다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제를 그래프로 바꾸면 무엇을 묻는 건가
+
+글자가 노드이고, 단어 비교에서 나온 "u가 v보다 앞"이 u에서 v로 가는 간선이다. 그러면 모든 간선 방향을 지키는 노드 나열, 곧 위상 정렬을 구하는 문제가 된다. 위상 정렬이 없으면, 곧 고리가 있거나 접두사 모순이 있으면 빈 문자열이다.
+
+### 왜 이웃한 두 단어만 비교해도 되나
+
+사전 순서는 이어 붙일 수 있는 관계라서다. 이웃한 쌍의 규칙을 모두 지키는 순서라면 1번이 2번보다, 2번이 3번보다 앞이고, 그래서 목록 전체가 정렬된다. 멀리 떨어진 쌍의 규칙은 이웃한 쌍 규칙의 사슬에서 따라 나오니 따로 볼 필요가 없다. 비교가 n(n - 1) / 2번에서 n - 1번으로 준다.
+
+### 한 쌍에서 규칙을 하나만 뽑는 이유는
+
+사전 순서는 처음 다른 글자에서 결정되고 그 뒤 글자는 순서에 영향을 주지 않기 때문이다. 뒤 글자까지 규칙으로 넣으면 없는 규칙이 생긴다. `["ba", "ab"]`에서 뒤 글자까지 넣으면 a와 b가 서로 앞이 되는 고리가 생겨 빈 문자열을 내지만 맞는 답은 `"ba"`다.
+
+### 빈 문자열을 내야 하는 경우는 무엇인가
+
+두 가지다. 하나는 규칙 사이에 고리가 있는 경우로, 칸의 알고리즘에서 적은 글자 수가 전체보다 적으면 알 수 있다. 다른 하나는 `["abc", "ab"]`처럼 처음 다른 글자가 없는데 앞 단어가 더 긴 경우다. 이건 규칙으로 표현되지 않아서 그래프만 보면 놓친다. 규칙을 뽑는 단계에서 바로 걸러야 한다.
+
+### DFS와 칸의 알고리즘 중 무엇을 쓰나
+
+시간은 둘 다 O(C)라 같다. 칸의 알고리즘은 고리 판정이 "다 적었나" 한 줄이고 재귀가 없어서 실수가 적어 기본으로 고른다. DFS는 후위 순서를 뒤집어야 하고 회색 검사를 빼먹기 쉽지만, 고리가 어디인지 알아내야 할 때는 지금 걷는 길이 스택에 남아 있어 유리하다.
+
+### 시간과 공간 복잡도는
+
+규칙을 뽑을 때 모든 단어의 글자를 한 번씩 보니 O(C)다. 그래프는 노드가 많아야 26개, 간선이 많아야 min(n - 1, 26 × 26)개라 위상 정렬은 사실상 상수 시간이다. 공간도 글자 집합과 그래프만 들고 있어 O(1)에 가깝고, 일반적으로 쓰면 O(k + E)다.
+
+### 답이 여럿일 때 늘 같은 답을 내려면
+
+칸의 알고리즘에서 큐 대신 최소 힙(글자가 26개뿐이면 26칸 훑기)을 써서 적을 수 있는 글자 중 우리 알파벳으로 가장 앞선 것을 꺼낸다. 그러면 가능한 답 중 사전순으로 가장 앞선 문자열이 나온다. 매번 첫 글자를 가장 작게 고르는 탐욕이 전체를 가장 작게 만들기 때문이다.

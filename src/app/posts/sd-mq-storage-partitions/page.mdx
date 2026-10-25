@@ -97,7 +97,7 @@ export const metadata = getPostMetadata("sd-mq-storage-partitions");
 
 키는 "이 메시지가 누구 것인가"를 나타낸다. 주문이면 사용자 ID다. 키-값 저장소의 키와 달리 겹쳐도 되고 없어도 된다. 키는 뒤에서 파티션을 고를 때 쓴다.
 
-Node로 이 형식대로 쓰고 읽는 로그를 만들었다. 핵심은 `append` 하나다.
+Node로 이 형식대로 쓰고 읽는 로그를 만들었다. 중요한 건 `append` 하나다.
 
 ```js
 // seglog.js (발췌)

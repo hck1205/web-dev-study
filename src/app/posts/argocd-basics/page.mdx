@@ -606,32 +606,32 @@ ArgoCD는 git에서 만든 매니페스트와 클러스터를 비교하는 contr
 
 ### ArgoCD의 refresh와 sync는 무엇이 다른가요?
 
-refresh는 git과 클러스터를 다시 비교해 상태 표시만 바꾸고, sync는 그 차이를 클러스터에 실제로 적용합니다. 기본적으로 git은 120초 주기에 최대 60초 지터를 더해 읽고, 웹훅을 걸면 푸시 즉시 새로 고칩니다. hard refresh는 repo-server의 매니페스트 캐시까지 무시하고 다시 렌더링하는 것으로, 같은 커밋인데 결과가 달라질 수 있을 때만 씁니다.
+refresh는 git과 클러스터를 다시 비교해 상태 표시만 바꾸고, sync는 그 차이를 클러스터에 실제로 적용한다. 기본적으로 git은 120초 주기에 최대 60초 지터를 더해 읽고, 웹훅을 걸면 푸시 즉시 새로 고친다. hard refresh는 repo-server의 매니페스트 캐시까지 무시하고 다시 렌더링하는 것으로, 같은 커밋인데 결과가 달라질 수 있을 때만 쓴다.
 
 ### Synced인데 서비스가 안 뜨는 건 어떻게 설명하나요?
 
-동기화 상태와 건강 상태가 다른 질문이기 때문입니다. Synced는 git의 매니페스트대로 객체가 들어갔다는 뜻이고, 그 객체가 제 역할을 하는지는 Healthy, Progressing, Degraded 같은 건강 상태가 말합니다. Deployment라면 쿠버네티스가 남긴 Progressing·Available 조건을 읽어 판단하므로, 기한을 넘기면 Synced이면서 Degraded가 됩니다.
+동기화 상태와 건강 상태가 다른 질문이기 때문이다. Synced는 git의 매니페스트대로 객체가 들어갔다는 뜻이고, 그 객체가 제 역할을 하는지는 Healthy, Progressing, Degraded 같은 건강 상태가 말한다. Deployment라면 쿠버네티스가 남긴 Progressing·Available 조건을 읽어 판단하므로, 기한을 넘기면 Synced이면서 Degraded가 된다.
 
 ### selfHeal을 켜 두면 장애 중에 무엇을 조심해야 하나요?
 
-kubectl로 replicas를 늘리거나 rollout undo를 하면 watch로 바로 감지되어 몇 초 안에 git 값으로 되돌아갑니다. 그래서 장애 대응은 git 커밋이나 git revert로 하고, 급하면 해당 Application의 자동 동기화를 잠시 끕니다. HPA처럼 계속 바뀌는 필드는 git에서 빼거나 ignoreDifferences로 비켜 줍니다.
+kubectl로 replicas를 늘리거나 rollout undo를 하면 watch로 바로 감지되어 몇 초 안에 git 값으로 되돌아간다. 그래서 장애 대응은 git 커밋이나 git revert로 하고, 급하면 해당 Application의 자동 동기화를 잠시 끈다. HPA처럼 계속 바뀌는 필드는 git에서 빼거나 ignoreDifferences로 비켜 준다.
 
 ### ignoreDifferences만 넣었는데 동기화 때 값이 되돌아가는 이유는요?
 
-ignoreDifferences는 비교에서만 그 필드를 빼고, 동기화할 때는 git의 매니페스트를 통째로 적용하기 때문입니다. 실제로 replicas를 무시하게 해 둬도 다른 변경으로 동기화가 일어나자 2로 돌아갔습니다. 적용할 때도 live 값을 지키려면 `RespectIgnoreDifferences=true` 동기화 옵션을 함께 켭니다.
+ignoreDifferences는 비교에서만 그 필드를 빼고, 동기화할 때는 git의 매니페스트를 통째로 적용하기 때문이다. 실제로 replicas를 무시하게 해 둬도 다른 변경으로 동기화가 일어나자 2로 돌아갔다. 적용할 때도 live 값을 지키려면 `RespectIgnoreDifferences=true` 동기화 옵션을 함께 켠다.
 
 ### sync wave와 hook은 각각 언제 쓰나요?
 
-hook은 동기화의 특정 단계에만 실행되는 리소스로, 마이그레이션 Job을 PreSync에, 스모크 테스트를 PostSync에 두는 식으로 씁니다. wave는 같은 단계 안의 순서로, 숫자가 작은 것부터 적용하고 앞 wave가 건강해질 때까지 기다립니다. hook Job은 `hook-delete-policy`를 정해 두지 않으면 다음 동기화가 이름 충돌로 실패하고, 본 리소스 하나가 건강해지지 않으면 PostSync가 시작하지 않는다는 점을 같이 말합니다.
+hook은 동기화의 특정 단계에만 실행되는 리소스로, 마이그레이션 Job을 PreSync에, 스모크 테스트를 PostSync에 두는 식으로 쓴다. wave는 같은 단계 안의 순서로, 숫자가 작은 것부터 적용하고 앞 wave가 건강해질 때까지 기다린다. hook Job은 `hook-delete-policy`를 정해 두지 않으면 다음 동기화가 이름 충돌로 실패하고, 본 리소스 하나가 건강해지지 않으면 PostSync가 시작하지 않는다는 점을 같이 말한다.
 
 ### 고친 커밋을 올렸는데 ArgoCD가 계속 예전 커밋을 재시도하면 어떻게 하나요?
 
-이미 시작한 동기화 작업은 그 커밋에 묶여 있어서 재시도를 다 쓸 때까지 새 커밋으로 넘어가지 않습니다. 급하면 terminate-op으로 작업을 끊고 다시 동기화합니다. 또 자동 동기화는 한 번 실패한 커밋을 다시 시도하지 않으므로, git 밖의 설정만 고쳤다면 손으로 한 번 동기화하거나 새 커밋을 올려야 합니다.
+이미 시작한 동기화 작업은 그 커밋에 묶여 있어서 재시도를 다 쓸 때까지 새 커밋으로 넘어가지 않는다. 급하면 terminate-op으로 작업을 끊고 다시 동기화한다. 또 자동 동기화는 한 번 실패한 커밋을 다시 시도하지 않으므로, git 밖의 설정만 고쳤다면 손으로 한 번 동기화하거나 새 커밋을 올려야 한다.
 
 ### app-of-apps와 ApplicationSet은 어떻게 고르나요?
 
-같은 구조가 환경이나 클러스터마다 반복되면 생성기로 찍어 내는 ApplicationSet이, 서비스마다 설정이 제각각이고 수가 적으면 Application YAML을 폴더에 두는 app-of-apps가 맞습니다. ApplicationSet이 만든 Application에는 리소스 finalizer가 붙어서, 생성기 결과에서 빠지면 리소스까지 지워집니다. 그래서 운영에서는 `preserveResourcesOnDeletion`이나 `create-update` 정책으로 지우는 동작을 막아 둡니다.
+같은 구조가 환경이나 클러스터마다 반복되면 생성기로 찍어 내는 ApplicationSet이, 서비스마다 설정이 제각각이고 수가 적으면 Application YAML을 폴더에 두는 app-of-apps가 맞다. ApplicationSet이 만든 Application에는 리소스 finalizer가 붙어서, 생성기 결과에서 빠지면 리소스까지 지워진다. 그래서 운영에서는 `preserveResourcesOnDeletion`이나 `create-update` 정책으로 지우는 동작을 막아 둔다.
 
 ### AppProject는 무엇을 막아 주나요?
 
-Application이 가져올 수 있는 저장소, 배포할 수 있는 클러스터와 네임스페이스, 만들 수 있는 리소스 종류를 제한합니다. controller가 넓은 권한으로 돌기 때문에 이 울타리가 없으면 git에 쓸 수 있는 사람이 사실상 클러스터 관리자가 됩니다. 목적지가 어긋나면 Application 전체가 InvalidSpecError가 되고, 리소스 종류가 막히면 그 리소스만 SyncFailed가 됩니다.
+Application이 가져올 수 있는 저장소, 배포할 수 있는 클러스터와 네임스페이스, 만들 수 있는 리소스 종류를 제한한다. controller가 넓은 권한으로 돌기 때문에 이 울타리가 없으면 git에 쓸 수 있는 사람이 사실상 클러스터 관리자가 된다. 목적지가 어긋나면 Application 전체가 InvalidSpecError가 되고, 리소스 종류가 막히면 그 리소스만 SyncFailed가 된다.

@@ -1,0 +1,514 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-reverse-nodes-in-k-group");
+
+<EasyIntro>
+  기차 한 대가 칸 여덟 개를 달고 서 있다. 역무원이 앞에서부터 세 칸씩 묶어서, 묶음마다 칸의 순서를 거꾸로 바꾸라고 한다. 1, 2, 3번 칸은 3, 2, 1번 순서로, 4, 5, 6번 칸은 6, 5, 4번 순서로 바꾼다. 마지막에 남은 7, 8번 칸은 세 칸이 안 되니 그대로 둔다. 묶음 하나를 뒤집는 건 어렵지 않다. 까다로운 건 뒤집은 묶음을 앞 묶음과 뒤 묶음에 다시 연결하는 일이다. 뒤집으면 맨 앞 칸이 맨 뒤로 가기 때문에, 연결 고리를 잡을 칸이 바뀐다. 그래서 묶음을 뒤집기 전에 앞 묶음의 마지막 칸과 다음 묶음의 첫 칸을 미리 기억해 둔다. 뒤집고 나서 그 두 칸에 새 머리와 새 꼬리를 이어 주면 기차가 끊기지 않는다.
+</EasyIntro>
+
+연결 리스트 뒤집기는 세 포인터로 금방 짠다. 그런데 리스트 전체가 아니라 "k개씩 끊어서 각각 뒤집어라"가 되면 갑자기 Hard 문제가 된다. 뒤집는 코드는 같은데, 뒤집은 조각을 앞뒤 조각과 다시 잇는 이음매에서 화살표가 꼬인다.
+
+[LeetCode 25. Reverse Nodes in k-Group](https://leetcode.com/problems/reverse-nodes-in-k-group/)이 그 문제다. 값만 바꾸기, 노드 배열로 다시 잇기, 스택, 재귀, 그리고 추가 공간 없이 제자리에서 하는 두 가지 방법(그룹을 뒤집고 이음매 잇기, 그룹 앞으로 하나씩 끼워 넣기)까지 여섯 가지로 푼다. 뒤집기 자체는 [Reverse Linked List](/posts/leetcode-reverse-linked-list)에서 자세히 다뤘으니, 이 글은 이음매에 집중한다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## k개씩 끊어서 각각 뒤집는다
+
+연결 리스트의 머리 `head`와 양의 정수 `k`가 주어진다. 앞에서부터 노드를 k개씩 묶어 묶음마다 순서를 뒤집는다. 마지막에 k개가 안 되는 노드가 남으면 그대로 둔다. 노드의 값을 바꾸면 안 되고, 노드 자체를 다시 이어야 한다.
+
+```text
+1 → 2 → 3 → 4 → 5 → 6 → 7 → 8,  k = 3   →   3 → 2 → 1 → 6 → 5 → 4 → 7 → 8
+1 → 2 → 3 → 4 → 5,  k = 2               →   2 → 1 → 4 → 3 → 5
+1 → 2,  k = 3                           →   1 → 2     (k개가 안 되니 그대로)
+```
+
+노드는 1개에서 5000개, `k`는 1 이상이고 노드 수 이하다. 5000개라 어떤 O(n) 풀이도 빠르다. 이 문제의 후속 질문은 "추가 메모리 O(1)로 할 수 있나"다. 그리고 `k = 1`이면 아무것도 바뀌지 않고, `k`가 노드 수와 같으면 전체 뒤집기가 된다. 이 두 끝도 같은 코드가 처리해야 한다.
+
+## 뒤집은 조각의 앞과 뒤가 바뀐다
+
+`1→2→3→4→5→6→7→8`, `k = 3`의 첫 묶음 `1→2→3`을 뒤집어 보자. 묶음 안에서는 `3→2→1`이 된다. 문제는 바깥과의 연결이다.
+
+```text
+뒤집기 전:   [앞쪽] → 1 → 2 → 3 → 4 …
+뒤집은 뒤:   [앞쪽] → 3 → 2 → 1 → 4 …
+```
+
+이어야 할 화살표는 두 개다. 앞쪽에서 묶음으로 들어오는 화살표는 원래 1을 가리켰는데 이제 3을 가리켜야 한다. 묶음에서 나가는 화살표는 원래 3에서 4로 나갔는데 이제 1에서 4로 나가야 한다. 묶음의 첫 노드와 끝 노드가 자리를 바꿨기 때문이다.
+
+그래서 묶음 하나를 처리할 때 붙잡아 둘 노드가 넷이다.
+
+- `groupPrev`: 묶음 바로 앞 노드. 첫 묶음이면 앞 노드가 없으니 더미를 둔다.
+- `first`: 뒤집기 전 묶음의 첫 노드(1). 뒤집은 뒤에는 묶음의 끝이 된다.
+- `kth`: 뒤집기 전 묶음의 k번째 노드(3). 뒤집은 뒤에는 묶음의 머리가 된다.
+- `groupNext`: 묶음 바로 뒤 노드(4).
+
+뒤집은 다음 `groupPrev.next = kth`, `first.next = groupNext`가 되면 이음매가 맞는다. 그리고 다음 묶음의 `groupPrev`는 방금 묶음의 끝, 곧 `first`다. 이 네 노드만 놓치지 않으면 어떤 풀이든 맞게 나온다.
+
+## 값만 꺼내서 뒤집어 넣기
+
+먼저 규칙을 어기는 풀이부터 본다. 값을 배열에 꺼내 k개씩 뒤집고, 노드에 다시 써 넣는다. 화살표는 하나도 건드리지 않으니 이음매 문제가 아예 없다.
+
+```js
+function reverseKGroup(head, k) {
+  const vals = [];
+  for (let p = head; p; p = p.next) vals.push(p.val);
+
+  // 온전한 묶음만 뒤집는다. i + k가 길이를 넘으면 남은 묶음이다
+  for (let i = 0; i + k <= vals.length; i += k) {
+    let l = i, r = i + k - 1;
+    while (l < r) { [vals[l], vals[r]] = [vals[r], vals[l]]; l++; r--; }
+  }
+
+  let i = 0;
+  for (let p = head; p; p = p.next) p.val = vals[i++]; // 값만 다시 써 넣는다
+  return head;
+}
+```
+
+출력은 맞는다. 시간 O(n), 공간 O(n)이다. 하지만 문제는 노드의 값을 바꾸지 말라고 한다. 실제로도 노드가 값 하나가 아니라 큰 데이터를 들고 있거나, 다른 곳에서 노드를 참조하고 있다면 값을 바꾸는 건 다른 결과를 낸다. 노드 3을 들고 있던 코드가 갑자기 값 1을 보게 된다. 이 풀이는 "결과가 이런 모양"이라는 걸 확인하는 용도로만 쓴다.
+
+## 노드를 배열에 담아 순서대로 다시 잇기
+
+값 대신 노드를 배열에 담으면 규칙을 지킬 수 있다. 원하는 결과 순서대로 노드를 새 배열에 줄 세운 다음, 앞에서부터 `next`를 다시 건다.
+
+```js
+function reverseKGroup(head, k) {
+  const nodes = [];
+  for (let p = head; p; p = p.next) nodes.push(p);
+
+  const order = [];
+  for (let i = 0; i < nodes.length; i += k) {
+    if (i + k <= nodes.length) {
+      for (let j = i + k - 1; j >= i; j--) order.push(nodes[j]); // 온전한 묶음은 거꾸로
+    } else {
+      for (let j = i; j < nodes.length; j++) order.push(nodes[j]); // 남은 것은 그대로
+    }
+  }
+  for (let i = 0; i < order.length; i++) order[i].next = order[i + 1] ?? null;
+  return order[0] ?? null;
+}
+```
+
+이음매를 따로 생각할 필요가 없다. 모든 노드의 `next`를 처음부터 다시 걸기 때문이다. 마지막 노드의 `next`를 `null`로 끊는 것도 `?? null`이 해 준다. 시간 O(n), 공간 O(n)이다. 노드 5000개라 메모리도 크지 않다. 면접에서 시간이 부족하면 이 풀이로 맞는 답을 먼저 내는 것도 방법이다. 남은 질문은 배열 없이 할 수 있느냐다.
+
+## 스택에 k개 쌓았다가 꺼내기
+
+배열 전체가 아니라 한 묶음만 담으면 공간이 O(k)로 준다. 노드를 k개 스택에 쌓고, 꺼내면서 결과 리스트의 꼬리에 붙인다. 스택에서는 마지막에 넣은 노드가 먼저 나오니 꺼내는 순서가 곧 뒤집힌 순서다.
+
+```js
+function reverseKGroup(head, k) {
+  const dummy = new ListNode(0);
+  let tail = dummy, p = head;
+  while (p) {
+    const stack = [];
+    let q = p;
+    while (q && stack.length < k) { stack.push(q); q = q.next; }
+    if (stack.length < k) {       // k개가 안 되면 남은 것을 그대로 붙이고 끝
+      tail.next = p;
+      break;
+    }
+    while (stack.length) {        // 꺼내는 순서가 뒤집힌 순서다
+      tail.next = stack.pop();
+      tail = tail.next;
+    }
+    tail.next = null;             // 일단 끊는다. 다음 묶음이 이어 붙는다
+    p = q;
+  }
+  return dummy.next;
+}
+```
+
+`tail.next = null`로 매번 끊는 이유가 있다. 묶음의 마지막으로 꺼낸 노드(원래 첫 노드, 1)는 아직 원래의 `next`(2)를 가리키고 있다. 끊지 않고 다음 묶음이 없으면 `1→2`, `2→1`이 서로를 가리키는 고리가 남는다. 남은 노드가 있으면 다음 바퀴에서 `tail.next`가 다시 걸리니 문제없다.
+
+시간 O(n), 공간 O(k)다. `k`가 노드 수와 같으면 결국 O(n)이다. 묶음마다 스택에 넣고 꺼내니 노드마다 두 번 손이 간다.
+
+## 첫 묶음만 뒤집고 나머지는 재귀에 맡기기
+
+"첫 k개를 뒤집고, 그 뒤는 같은 문제"라고 보면 재귀가 자연스럽다. 먼저 k개가 있는지 세어 본다. 없으면 그대로 돌려준다. 있으면 나머지를 재귀로 처리한 결과를 받아 두고, 첫 k개를 뒤집으면서 끝을 그 결과에 이어 붙인다.
+
+```js
+function reverseKGroup(head, k) {
+  let p = head;
+  for (let i = 0; i < k; i++) {
+    if (!p) return head;          // k개가 안 되면 그대로
+    p = p.next;
+  }
+  // 첫 k개를 뒤집는다. prev를 나머지의 결과로 시작하면 이음매가 저절로 맞는다
+  let prev = reverseKGroup(p, k), cur = head;
+  for (let i = 0; i < k; i++) {
+    const next = cur.next;
+    cur.next = prev;
+    prev = cur;
+    cur = next;
+  }
+  return prev;                    // 원래 k번째 노드가 새 머리
+}
+```
+
+이 풀이의 요령은 뒤집기의 `prev` 시작값이다. 보통 리스트 전체를 뒤집을 때는 `prev = null`로 시작해서 첫 노드가 `null`을 가리키게 된다. 여기서는 `prev`를 "나머지를 처리한 리스트의 머리"로 시작한다. 그러면 첫 노드(1)가 뒤집힐 때 곧바로 다음 묶음의 새 머리(6)를 가리키게 되고, 바깥쪽 이음매가 따로 필요 없다. 앞쪽 이음매는 이 함수의 반환값을 받는 쪽이 맡는다.
+
+시간 O(n), 공간은 콜 스택이 묶음 수만큼, O(n/k)다. `k`가 크면 깊이가 얕지만 `k = 1`이면 노드 수만큼 깊어진다. Node.js에서 `k = 1`, 노드 5000개는 됐다. Python은 기본 재귀 한도가 1000이라 노드 900개는 됐지만 5000개에서 `RecursionError`가 났다. 제약 안의 입력에서 터지니 Python 제출용으로는 맞지 않는다.
+
+## 그룹을 뒤집고 이음매를 다시 잇는다
+
+재귀가 콜 스택에 맡긴 일을 반복문으로 직접 하면 추가 공간이 O(1)이 된다. 처음에 정리한 네 노드를 그대로 쓴다.
+
+1. `groupPrev`에서 k칸 걸어 `kth`를 찾는다. 가는 도중 `null`을 만나면 남은 노드가 k개보다 적으니 멈춘다.
+2. `groupNext = kth.next`를 잡아 둔다.
+3. `groupPrev.next`부터 `groupNext` 앞까지 뒤집는다. 이때 `prev`를 `groupNext`로 시작해서, 뒤집힌 묶음의 끝(`first`)이 곧바로 `groupNext`를 가리키게 한다. 재귀 풀이의 요령을 그대로 가져온 것이다.
+4. `first = groupPrev.next`를 잡고(아직 바꾸기 전이라 원래 첫 노드다), `groupPrev.next = kth`로 앞쪽 이음매를 잇는다.
+5. `groupPrev = first`로 옮겨 다음 묶음으로 간다.
+
+```js
+function reverseKGroup(head, k) {
+  const dummy = new ListNode(0, head);
+  let groupPrev = dummy;              // 지금 묶음의 바로 앞 노드
+
+  while (true) {
+    // 1) 묶음의 k번째 노드를 찾는다. 모자라면 끝
+    let kth = groupPrev;
+    for (let i = 0; i < k && kth; i++) kth = kth.next;
+    if (!kth) break;
+
+    // 2) 묶음 바로 뒤 노드를 잡아 둔다
+    const groupNext = kth.next;
+
+    // 3) 묶음 안을 뒤집는다. prev를 groupNext로 시작하면 뒤쪽 이음매가 맞는다
+    let prev = groupNext, cur = groupPrev.next;
+    while (cur !== groupNext) {
+      const next = cur.next;
+      cur.next = prev;
+      prev = cur;
+      cur = next;
+    }
+
+    // 4) 앞쪽 이음매: 묶음 앞이 새 머리(kth)를 가리키게 한다
+    const first = groupPrev.next;     // 뒤집기 전 첫 노드 = 이제 묶음의 끝
+    groupPrev.next = kth;
+
+    // 5) 다음 묶음의 앞 노드는 방금 묶음의 끝이다
+    groupPrev = first;
+  }
+  return dummy.next;
+}
+```
+
+아래 그림은 `1→2→3→4→5→6→7→8`, `k = 3`을 이 코드로 따라간 것이다. D는 더미다. 화살표 표시가 지금 보는 노드, 초록 칸이 자리가 확정된 노드다. 칸의 순서는 원래 리스트 순서 그대로이고, 바뀐 연결은 오른쪽에 적었다.
+
+<AlgoTrace
+  caption="k = 3: kth를 찾고, 묶음 안을 뒤집고, 앞뒤 이음매를 잇는다"
+  memoryLabel="포인터와 리스트"
+  cells={["D", "1", "2", "3", "4", "5", "6", "7", "8"]}
+  steps={[
+    { pointer: 3, memory: ["groupPrev = D", "kth = 3", "groupNext = 4"], caption: "D에서 세 칸 걸어 3을 찾는다. 첫 묶음은 1, 2, 3이다." },
+    { pointer: 1, memory: ["prev = 4로 시작", "1.next = 4"], caption: "1을 뒤집는다. prev가 4라서 1이 바로 4를 가리킨다." },
+    { pointer: 3, memory: ["2.next = 1", "3.next = 2"], caption: "2와 3도 뒤집는다. 묶음 안은 3→2→1→4다." },
+    { found: [1, 2, 3], memory: ["D.next = 3", "리스트 = 3→2→1→4→5→6→7→8", "groupPrev = 1"], caption: "D가 3을 가리키게 하고, 묶음의 끝 1이 다음 묶음의 앞이 된다." },
+    { pointer: 6, found: [1, 2, 3], memory: ["groupPrev = 1", "kth = 6", "groupNext = 7"], caption: "1에서 세 칸 걸어 6을 찾는다. 둘째 묶음은 4, 5, 6이다." },
+    { found: [1, 2, 3, 4, 5, 6], memory: ["4.next = 7", "1.next = 6", "리스트 = 3→2→1→6→5→4→7→8"], caption: "뒤집고 이음매를 이었다. 다음 앞 노드는 4다." },
+    { pointer: 8, found: [1, 2, 3, 4, 5, 6, 7, 8], memory: ["groupPrev = 4", "kth = null"], caption: "4에서 세 칸을 못 간다. 7, 8은 그대로 두고 끝낸다." },
+  ]}
+/>
+
+각 노드는 `kth`를 찾을 때 한 번, 뒤집을 때 한 번 지나간다. 마지막 남은 묶음은 세어 보기만 한다. 시간 O(n), 추가 공간 O(1)이다.
+
+`first`를 잡는 위치가 중요하다. `groupPrev.next = kth`를 하기 전에 잡아야 원래 첫 노드가 나온다. 순서를 바꾸면 `first`가 `kth`가 되어 버린다. 그리고 `groupPrev`를 `first`가 아니라 `kth`로 옮기는 실수도 흔하다. 둘 다 뒤의 "이음매가 어긋나는 코드"에서 실제로 돌려 본다.
+
+### Python과 Java로 쓰면
+
+Python은 여러 대입을 한 줄에 쓸 수 있어서 뒤집기가 짧다. 다만 `cur.next, prev, cur = prev, cur, cur.next`는 오른쪽을 모두 계산한 뒤 왼쪽을 앞에서부터 대입하기 때문에 왼쪽의 순서가 중요하다. `cur.next`를 맨 앞에 둬야 `cur`가 바뀌기 전의 노드에 대입된다. `prev, cur, cur.next = …`처럼 쓰면 이미 옮겨 간 `cur`의 `next`를 바꿔서 틀린다.
+
+```python
+class Solution:
+    def reverseKGroup(self, head: Optional[ListNode], k: int) -> Optional[ListNode]:
+        dummy = ListNode(0, head)
+        group_prev = dummy
+        while True:
+            kth = group_prev                   # 그룹의 k번째 노드를 찾는다
+            for _ in range(k):
+                kth = kth.next
+                if kth is None:
+                    return dummy.next          # k개가 안 남았으면 그대로 둔다
+            group_next = kth.next
+            prev, cur = group_next, group_prev.next   # 뒤집은 그룹의 끝이 다음 그룹을 가리키게
+            while cur is not group_next:
+                cur.next, prev, cur = prev, cur, cur.next
+            first = group_prev.next            # 뒤집기 전 첫 노드 = 이제 그룹의 끝
+            group_prev.next = kth
+            group_prev = first
+```
+
+Java는 자바스크립트 코드와 줄 단위로 같다.
+
+```java
+class Solution {
+    public ListNode reverseKGroup(ListNode head, int k) {
+        ListNode dummy = new ListNode(0, head);
+        ListNode groupPrev = dummy;
+        while (true) {
+            ListNode kth = groupPrev;
+            for (int i = 0; i < k && kth != null; i++) kth = kth.next;
+            if (kth == null) break;                    // k개가 안 남았다
+            ListNode groupNext = kth.next;
+            ListNode prev = groupNext, cur = groupPrev.next;
+            while (cur != groupNext) {                 // 그룹 안만 뒤집는다
+                ListNode next = cur.next;
+                cur.next = prev;
+                prev = cur;
+                cur = next;
+            }
+            ListNode first = groupPrev.next;           // 이제 그룹의 끝
+            groupPrev.next = kth;                      // 앞 그룹과 새 머리를 잇는다
+            groupPrev = first;
+        }
+        return dummy.next;
+    }
+}
+```
+
+세 언어로 같은 입력을 돌린 결과다.
+
+```text
+[1,2,3,4,5,6,7,8], k=3  →  [3, 2, 1, 6, 5, 4, 7, 8]
+[1,2,3,4,5], k=2        →  [2, 1, 4, 3, 5]
+[1,2], k=3              →  [1, 2]
+[1], k=1                →  [1]
+```
+
+## 그룹 앞으로 하나씩 끼워 넣기
+
+추가 공간 O(1)로 가는 길이 하나 더 있다. 묶음을 통째로 뒤집는 대신, 묶음의 첫 노드 뒤에 있는 노드를 하나씩 떼어 묶음 맨 앞으로 옮긴다. `1→2→3`에서 2를 떼어 맨 앞에 끼우면 `2→1→3`, 다시 1 뒤의 3을 떼어 맨 앞에 끼우면 `3→2→1`이다. k-1번 옮기면 묶음이 뒤집힌다.
+
+이 방법은 묶음의 첫 노드(`cur`)가 움직이면서도 언제나 묶음의 끝에 남는다는 성질을 쓴다. `cur`의 `next`가 계속 다음에 옮길 노드를 가리키고, 다 옮기고 나면 다음 묶음의 첫 노드를 가리킨다. 이음매가 옮길 때마다 저절로 맞춰진다.
+
+```js
+function reverseKGroup(head, k) {
+  let n = 0;
+  for (let p = head; p; p = p.next) n++;   // 온전한 묶음이 몇 개인지 알려고 길이를 센다
+
+  const dummy = new ListNode(0, head);
+  let pre = dummy;                         // 묶음 바로 앞 노드
+  while (n >= k) {
+    const cur = pre.next;                  // 묶음의 첫 노드. 끝까지 묶음의 끝에 남는다
+    for (let i = 1; i < k; i++) {
+      const move = cur.next;               // cur 바로 뒤 노드를 떼어
+      cur.next = move.next;
+      move.next = pre.next;                // 묶음 맨 앞에 끼운다
+      pre.next = move;
+    }
+    pre = cur;                             // 다음 묶음의 앞 노드
+    n -= k;
+  }
+  return dummy.next;
+}
+```
+
+아래 그림이 같은 예시를 이 방법으로 따라간 것이다. 화살표 표시가 떼어 옮기는 노드다.
+
+<AlgoTrace
+  caption="k = 3: 묶음 첫 노드 뒤의 노드를 하나씩 떼어 묶음 맨 앞에 끼운다"
+  memoryLabel="리스트"
+  cells={["1", "2", "3", "4", "5", "6", "7", "8"]}
+  steps={[
+    { pointer: 0, memory: ["pre = D", "cur = 1", "1→2→3→4→5→6→7→8"], caption: "첫 묶음의 첫 노드 1을 cur로 잡는다." },
+    { pointer: 1, memory: ["2를 맨 앞으로", "2→1→3→4→5→6→7→8"], caption: "1 뒤의 2를 떼어 D 바로 뒤에 끼운다." },
+    { pointer: 2, found: [0, 1, 2], memory: ["3을 맨 앞으로", "3→2→1→4→5→6→7→8"], caption: "1 뒤의 3도 떼어 맨 앞에 끼운다. 첫 묶음이 끝났다." },
+    { pointer: 4, found: [0, 1, 2], memory: ["pre = 1", "cur = 4", "5를 맨 앞으로", "3→2→1→5→4→6→7→8"], caption: "둘째 묶음. 1 뒤가 묶음 앞이다. 4 뒤의 5를 옮긴다." },
+    { pointer: 5, found: [0, 1, 2, 3, 4, 5], memory: ["6을 맨 앞으로", "3→2→1→6→5→4→7→8"], caption: "6을 옮기면 둘째 묶음도 뒤집혔다." },
+    { found: [0, 1, 2, 3, 4, 5, 6, 7], memory: ["남은 노드 2개 < k", "3→2→1→6→5→4→7→8"], caption: "남은 7, 8은 k개가 안 되니 그대로 둔다." },
+  ]}
+/>
+
+시간 O(n), 추가 공간 O(1)이다. 길이를 한 번 세는 대신 매 묶음마다 `kth`를 찾을 필요가 없다. 옮기는 동작 하나가 화살표 세 개를 바꾸는 일이라 짧은 코드로 외우기 좋다. 같은 동작이 LeetCode 92 Reverse Linked List II(구간 뒤집기)의 대표 풀이이기도 하다.
+
+## 여섯 풀이를 나란히 세우면
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 값만 뒤집어 넣기 | O(n) | O(n) | 결과 모양 확인용. 값을 바꾸지 말라는 조건을 어긴다 |
+| 노드 배열로 다시 잇기 | O(n) | O(n) | 빨리 맞는 답이 필요할 때. 이음매 걱정이 없다 |
+| 스택에 k개씩 | O(n) | O(k) | 뒤집기를 스택으로 설명하고 싶을 때 |
+| 첫 묶음 뒤집고 재귀 | O(n) | O(n/k) 콜 스택 | 코드가 짧다. k = 1이면 깊어져 Python에서 터진다 |
+| 그룹 뒤집고 이음매 잇기 | O(n) | O(1) | 기본 답. 네 노드만 붙잡으면 된다 |
+| 그룹 앞으로 끼워 넣기 | O(n) | O(1) | 화살표 세 개짜리 동작 하나로 끝내고 싶을 때 |
+
+면접에서는 처음에 "붙잡을 노드는 묶음 앞, 묶음 첫 노드, k번째 노드, 묶음 뒤 넷"이라고 말하고 시작하면 설명이 깔끔해진다. 시간이 부족하면 노드 배열 풀이를 먼저 내고 O(1)로 넘어간다.
+
+## 묶음을 직접 뒤집어 보기
+
+아래 칸에서 `reverse`를 채워 보자. 함수는 배열과 `k`를 받아 연결 리스트를 만들고, 묶음마다 뒤집은 결과를 배열로 돌려준다. `k = 1`, `k`가 길이와 같은 경우, `k`가 길이보다 긴 경우가 테스트에 들어 있다.
+
+<CodePlayground
+  caption="Reverse Nodes in k-Group: 묶음을 뒤집고 이음매 잇기"
+  functionName="reverseKGroup"
+  initialCode={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  let guard = 0;
+  for (let n = head; n && guard < 100; n = n.next, guard++) out.push(n.val);
+  return out;
+}
+
+function reverse(head, k) {
+  // groupPrev, kth, groupNext, first 네 노드를 붙잡는다
+  return head;
+}
+
+function reverseKGroup(arr, k) {
+  return toArray(reverse(build(arr), k));
+}`}
+  solution={`function ListNode(val, next) {
+  this.val = val ?? 0;
+  this.next = next ?? null;
+}
+function build(arr) {
+  const dummy = new ListNode();
+  let tail = dummy;
+  for (const v of arr) tail = tail.next = new ListNode(v);
+  return dummy.next;
+}
+function toArray(head) {
+  const out = [];
+  let guard = 0;
+  for (let n = head; n && guard < 100; n = n.next, guard++) out.push(n.val);
+  return out;
+}
+
+function reverse(head, k) {
+  const dummy = new ListNode(0, head);
+  let groupPrev = dummy;
+  while (true) {
+    let kth = groupPrev;
+    for (let i = 0; i < k && kth; i++) kth = kth.next;
+    if (!kth) break;
+    const groupNext = kth.next;
+    let prev = groupNext, cur = groupPrev.next;
+    while (cur !== groupNext) {
+      const next = cur.next;
+      cur.next = prev;
+      prev = cur;
+      cur = next;
+    }
+    const first = groupPrev.next;
+    groupPrev.next = kth;
+    groupPrev = first;
+  }
+  return dummy.next;
+}
+
+function reverseKGroup(arr, k) {
+  return toArray(reverse(build(arr), k));
+}`}
+  tests={[
+    { args: [[1, 2, 3, 4, 5, 6, 7, 8], 3], expected: [3, 2, 1, 6, 5, 4, 7, 8], label: "두 묶음, 둘 남음" },
+    { args: [[1, 2, 3, 4, 5], 2], expected: [2, 1, 4, 3, 5], label: "k = 2" },
+    { args: [[1, 2, 3, 4, 5, 6], 3], expected: [3, 2, 1, 6, 5, 4], label: "남는 노드 없음" },
+    { args: [[1, 2, 3], 1], expected: [1, 2, 3], label: "k = 1" },
+    { args: [[1, 2, 3], 3], expected: [3, 2, 1], label: "k가 길이와 같다" },
+    { args: [[1], 1], expected: [1], label: "노드 하나" },
+    { args: [[1, 2], 3], expected: [1, 2], label: "k가 길이보다 길다" },
+    { args: [[1, 2, 3, 4, 5, 6, 7], 7], expected: [7, 6, 5, 4, 3, 2, 1], label: "전체 뒤집기" },
+  ]}
+/>
+
+실습 칸의 `toArray`는 노드 100개까지만 읽는다. 이음매를 잘못 이어 고리가 생겨도 멈추게 하려는 장치다.
+
+## 이음매가 어긋나는 코드
+
+이 문제의 오답은 거의 모두 묶음 경계에서 나온다. 직접 돌려 본 틀린 코드 세 개다.
+
+### 뒤집을 때 prev를 null로 시작하면
+
+리스트 전체 뒤집기 코드를 그대로 가져와 `let prev = null`로 시작한 경우다.
+
+```text
+[1,2,3,4,5,6,7,8], k=3  →  [3, 2, 1]
+[1,2,3,4,5], k=2        →  [2, 1]
+```
+
+첫 묶음의 끝 노드 1이 `null`을 가리키게 되어 리스트가 첫 묶음에서 끊긴다. 뒤 묶음들은 뒤집히긴 했는데 아무도 가리키지 않아 사라졌다. `prev = null`로 쓰려면 뒤집은 뒤 `first.next = groupNext`를 따로 이어야 한다. `prev`를 `groupNext`로 시작하면 그 줄이 필요 없다.
+
+### 다음 묶음의 앞 노드를 kth로 옮기면
+
+5단계에서 `groupPrev = kth`로 쓴 경우다. 뒤집기 전에는 `kth`가 묶음의 끝이었으니 맞아 보이지만, 뒤집은 뒤에는 `kth`가 묶음의 머리다.
+
+```text
+[1,2,3,4,5,6,7,8], k=3  →  [3, 4, 5, 6, 7, 8, 1, 2]
+[1,2,3,4,5], k=2        →  [2, 3, 4, 5, 1]
+```
+
+다음 바퀴가 3 뒤에서, 곧 이미 뒤집은 2와 1을 포함해 다시 묶음을 잡는다. 그 뒤로 이음매가 계속 엉켜 전혀 다른 순서가 나온다. 묶음의 끝은 뒤집기 전의 첫 노드 `first`다. 이걸 `groupPrev.next = kth`보다 먼저 잡아 둬야 한다.
+
+### 남은 노드 수를 확인하지 않으면
+
+`kth`를 찾다가 리스트 끝에서 멈추고 그대로 뒤집으면, 마지막에 남은 묶음까지 뒤집힌다.
+
+```text
+[1,2,3,4,5,6,7,8], k=3  →  [3, 2, 1, 6, 5, 4, 8, 7]   (7, 8은 그대로여야 한다)
+[1,2,3,4,5], k=2        →  [2, 1, 4, 3, 5]             (마지막이 하나라 우연히 맞다)
+```
+
+남은 노드가 하나면 뒤집어도 같아서 두 번째 예시는 맞게 나온다. 이런 예시로만 확인하면 놓친다. 남은 노드가 둘 이상, k보다 적은 입력을 꼭 넣어 본다. 뒤집기 전에 k칸 걸어 `null`을 만나는지 먼저 확인하는 게 정답이다.
+
+## 묶음 규칙이 바뀌면
+
+### 남은 묶음도 뒤집으라면
+
+마지막에 k개가 안 되는 노드도 뒤집으라는 변형이다. `kth`를 찾을 때 `null`에서 멈추는 대신, 리스트 끝에 닿으면 거기까지를 묶음으로 본다. `[1..8]`, k = 3이면 `[3,2,1,6,5,4,8,7]`이다. 앞에서 본 "확인하지 않는" 오답 코드가 바로 이 변형의 정답이다. 문제 조건을 정확히 읽는 게 그만큼 중요하다.
+
+### 뒤에서부터 k개씩 묶으라면
+
+남는 노드가 앞쪽에 오도록 뒤에서부터 묶는 변형이다. 길이 n을 먼저 세고, 앞에서 `n % k`개를 건너뛴 뒤 그 자리부터 이 글의 풀이를 그대로 돌린다. `[1..8]`, k = 3이면 앞의 1, 2는 그대로 두고 `[1,2,5,4,3,8,7,6]`이 된다. 리스트를 뒤집고, 앞에서부터 k개씩 처리하고, 다시 뒤집어도 되지만 길이를 세는 쪽이 짧다.
+
+### 짝지어 바꾸라면
+
+LeetCode 24 Swap Nodes in Pairs는 이 문제의 `k = 2`다. 이 글의 코드에 `k = 2`를 넣으면 그대로 풀린다. 전용 풀이는 `a = groupPrev.next`, `b = a.next`를 잡고 `a.next = b.next`, `b.next = a`, `groupPrev.next = b`로 화살표 세 개만 바꾼다.
+
+### 한 구간만 뒤집으라면
+
+LeetCode 92 Reverse Linked List II는 left번째부터 right번째까지만 뒤집는다. 묶음이 하나뿐인 이 문제라고 보면 된다. left-1칸 걸어 `pre`를 잡고, 앞에서 본 "앞으로 끼워 넣기"를 right-left번 한다. `[1,2,3,4,5,6]`에서 2번째부터 5번째까지면 `[1,5,4,3,2,6]`이 나온다.
+
+### 묶음 크기가 1, 2, 3, …으로 늘어나면
+
+LeetCode 2074 Reverse Nodes in Even Length Groups는 묶음 크기가 1, 2, 3, …으로 늘고, 길이가 짝수인 묶음만 뒤집는다. 마지막 묶음은 실제 남은 길이로 짝홀을 판단한다. 묶음을 잡는 규칙만 바뀔 뿐, "묶음 앞, 묶음 첫 노드, 묶음 끝, 묶음 뒤"를 붙잡고 뒤집는 틀은 같다. 이 틀은 [Reorder List](/posts/leetcode-reorder-list)의 "자르고, 뒤집고, 잇기"를 묶음마다 되풀이하는 것이기도 하다.
+
+## 네 노드를 붙잡고 뒤집는다
+
+k개씩 뒤집기가 어려운 건 뒤집기 때문이 아니라, 뒤집으면 묶음의 첫 노드와 끝 노드가 자리를 바꿔서 앞뒤 이음매가 달라지기 때문이다. 묶음 앞(`groupPrev`), k번째 노드(`kth`), 묶음 뒤(`groupNext`), 원래 첫 노드(`first`) 넷을 먼저 붙잡고, `prev`를 `groupNext`로 시작해 묶음 안을 뒤집은 다음 `groupPrev.next = kth`, `groupPrev = first`로 넘어가면 O(n) 시간, O(1) 공간에 끝난다. 뒤집기 전에 k개가 남았는지 확인하는 것만 잊지 않으면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 이 문제에서 가장 까다로운 부분은 무엇인가요?
+
+묶음 하나를 뒤집는 것보다, 뒤집은 묶음을 앞뒤와 다시 잇는 부분이다. 뒤집으면 원래 첫 노드가 끝이 되고 k번째 노드가 머리가 된다. 그래서 묶음 앞 노드, k번째 노드, 묶음 뒤 노드, 원래 첫 노드를 뒤집기 전에 붙잡아 두고, 뒤집은 뒤 앞 노드가 새 머리를, 새 끝이 묶음 뒤를 가리키게 한다.
+
+### 추가 공간 O(1)로 어떻게 하나요?
+
+더미를 머리 앞에 두고, 묶음마다 k칸 걸어 k번째 노드를 찾은 뒤 묶음 안만 세 포인터로 뒤집는다. 뒤집을 때 `prev`를 묶음 뒤 노드로 시작하면 뒤쪽 이음매가 저절로 맞고, 앞쪽은 `groupPrev.next = kth`로 잇는다. 다음 묶음의 앞 노드는 원래 첫 노드다. 노드마다 두 번 지나가니 시간 O(n)이다.
+
+### 마지막에 k개가 안 남으면 어떻게 처리하나요?
+
+뒤집기 전에 k칸을 걸어 보고, 도중에 `null`을 만나면 반복을 끝내 그대로 둔다. 이 확인 없이 뒤집으면 남은 묶음까지 뒤집힌다. 남은 노드가 하나면 뒤집어도 같아서 실수가 드러나지 않으니, 남은 노드가 둘 이상인 입력으로 확인해야 한다.
+
+### 더미 노드는 왜 필요한가요?
+
+첫 묶음도 다른 묶음과 똑같이 "앞 노드"를 갖게 하려고다. 첫 묶음이 뒤집히면 리스트의 머리가 바뀌는데, 더미가 있으면 `groupPrev.next = kth`로 다른 묶음과 같은 코드로 처리하고 마지막에 `dummy.next`를 돌려주면 된다. 더미가 없으면 첫 묶음의 새 머리를 따로 기억하는 분기가 필요하다.
+
+### 재귀로 풀면 어떤 문제가 있나요?
+
+첫 k개를 뒤집고 나머지를 재귀로 처리하는 코드는 짧지만, 콜 스택이 묶음 수 n/k만큼 쌓인다. `k = 1`이면 노드 수만큼 깊어져서, Python은 기본 재귀 한도 1000 때문에 노드 5000개에서 `RecursionError`가 났다. 추가 공간 O(1)이라는 후속 요구도 맞추지 못한다.
+
+### k = 2라면 더 단순하게 쓸 수 있나요?
+
+Swap Nodes in Pairs가 그 경우다. 두 노드 a, b를 잡고 `a.next = b.next`, `b.next = a`, 앞 노드의 `next = b`로 화살표 세 개만 바꾼 뒤 앞 노드를 a로 옮긴다. 일반 풀이에 k = 2를 넣어도 맞지만, 전용 풀이가 읽기 쉽다.
+
+### 시간 복잡도가 O(nk)가 아닌 이유는 무엇인가요?
+
+묶음마다 k칸 걷고 k개를 뒤집으니 묶음 하나에 O(k)지만, 묶음이 n/k개라서 합치면 O(n)이다. 노드 하나가 k번째 찾기에서 한 번, 뒤집기에서 한 번 지나갈 뿐이다. 마지막에 남은 노드는 세어 보기만 해서 O(k)가 더해질 뿐이다.

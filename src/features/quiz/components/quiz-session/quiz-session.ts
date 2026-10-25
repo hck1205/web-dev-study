@@ -1,11 +1,11 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { findTopicByKey, topicCrumbs, topicKey } from "@/features/topics/registry";
 import { useQuizRunner } from "../../hooks/use-quiz-runner";
 import { questionsForTopic } from "../../registry";
-import { sourcePosts } from "./quiz-session.utils";
+import { pickQuestions, QUIZ_LIMIT, sourcePosts } from "./quiz-session.utils";
 
 export function useQuizSession() {
   const params = useParams<{ path?: string[] }>();
@@ -13,7 +13,15 @@ export function useQuizSession() {
   const found = findTopicByKey(key);
   const questions = useMemo(() => questionsForTopic(key), [key]);
   const sources = useMemo(() => sourcePosts(questions), [questions]);
-  const runner = useQuizRunner({ questions });
+  // 큰 토픽은 QUIZ_LIMIT개만 뽑아 낸다. 다시 시작할 때마다 새로 뽑는다.
+  const [round, setRound] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- round가 바뀔 때마다 다시 뽑는 것이 목적이다
+  const picked = useMemo(() => pickQuestions(questions), [questions, round]);
+  const runner = useQuizRunner({ questions: picked });
+  const start = useCallback(() => {
+    runner.start();
+    setRound((value) => value + 1);
+  }, [runner]);
 
   // 다음 문제·결과로 넘어가면 카드가 화면 위쪽에서 시작하도록 맨 위로 올린다.
   useEffect(() => {
@@ -25,7 +33,10 @@ export function useQuizSession() {
     label: found?.topic.label ?? "",
     crumbs: found ? topicCrumbs(found) : [],
     questions,
+    picked: picked.length,
+    sampled: picked.length < questions.length,
+    limit: QUIZ_LIMIT,
     sources,
-    runner,
+    runner: { ...runner, start },
   };
 }

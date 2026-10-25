@@ -1,0 +1,508 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-coin-change");
+
+<EasyIntro>
+  가게에 1원, 4원, 5원짜리 동전만 있고 8원을 거슬러 줄 때 동전을 가장 적게 쓰고 싶다. 큰 동전부터 집으면 5원 하나와 1원 세 개로 네 개인데, 4원 두 개면 두 개로 끝난다. 큰 것부터 집는 방법이 늘 맞지는 않는다는 뜻이다.
+
+  그래서 작은 금액부터 차례로 답을 적어 두는 표를 만든다. 6원을 만들 때는 마지막에 낸 동전이 1원이었으면 앞에서 5원을, 4원이었으면 2원을, 5원이었으면 1원을 만든 것이니, 표에서 그 세 칸을 보고 가장 적은 쪽에 하나를 더하면 된다. 이렇게 한 칸씩 채우면 8원 칸에 2가 적힌다. 칸마다 앞의 칸 몇 개만 보면 되니 금액이 만 원이어도 금방 끝난다. 아무리 해도 못 만드는 금액은 칸을 비워 두었다가 마지막에 못 만든다고 알려 주면 된다.
+</EasyIntro>
+
+[Coin Change](https://leetcode.com/problems/coin-change/)는 LeetCode 322번이다. 동전 종류와 금액이 주어지고, 그 금액을 만드는 최소 동전 수를 묻는다. [계단 오르기](/posts/leetcode-climbing-stairs)와 [House Robber](/posts/leetcode-house-robber)는 바로 앞 한두 칸만 봤는데, 이 문제는 동전 종류만큼 여러 칸 앞을 본다. 그리고 "만들 수 없음"이라는 답이 처음 등장한다. 이 두 가지 때문에 초기값과 경계에서 틀리는 사람이 많다.
+
+[동적 계획법 글](/posts/dynamic-programming)에서 이 문제를 DP의 출발점으로 썼다. 거기서는 동전 [1, 3, 4]로 탐욕이 틀리는 것과 재귀 호출이 폭발하는 것을 보였고, 메모와 표로 줄이는 과정을 짧게 다뤘다. 이 글은 같은 이야기를 반복하지 않고 그다음을 판다. 탐욕이 "못 만든다"고 거짓말하는 경우, 메모 재귀가 스택을 넘기는 입력, 반복문 순서를 바꿔도 되는 이유와 안 되는 문제, 최단 경로로 보는 BFS, 가지치기 DFS가 어떤 입력에서 무너지는지, 금액이 10^9일 때까지 본다. 코드는 Node.js 22, Python 3, Java 21에서 직접 돌렸다.
+
+## 최소 개수로 금액을 맞추기
+
+서로 다른 양의 정수 동전 종류 `coins`와 금액 `amount`가 주어진다. 동전은 종류마다 무한히 쓸 수 있다. 합이 정확히 `amount`가 되도록 동전을 고를 때 쓰는 동전 개수의 최솟값을 돌려준다. 어떻게 해도 만들 수 없으면 -1을 돌려준다.
+
+풀이 선택에 영향을 주는 제약은 이렇다.
+
+- 동전 종류는 1개 이상 12개 이하다.
+- 동전 하나의 값은 1 이상 2^31 - 1 이하다. 아주 큰 동전이 들어올 수 있다.
+- `amount`는 0 이상 10^4 이하다. 0이면 동전을 하나도 안 써서 답은 0이다.
+
+`amount`가 10^4이고 동전이 12종이라 `amount × 동전 수`는 12만 남짓이다. 금액마다 동전을 하나씩 대 보는 O(amount × k) 풀이가 넉넉히 들어간다. 반대로 동전 조합을 직접 늘어놓는 풀이는 조합 수가 지수라 안 된다. 동전 값이 2^31 - 1까지라는 조건은 Java에서 덧셈 오버플로를 부르는 함정이다.
+
+## 8원을 손으로 맞춰 본다
+
+글 끝까지 쓸 예시는 동전 [1, 4, 5], 금액 8이다.
+
+큰 동전부터 집으면 5를 하나 쓰고 남은 3을 1 세 개로 채워 4개다. 4를 두 개 쓰면 2개다. 답은 2다.
+
+조금 더 체계적으로 보자. 8원을 만드는 모든 방법은 "마지막에 어떤 동전을 냈나"로 나뉜다.
+
+```text
+마지막이 1원 → 앞에서 7원을 만들었다 → (7원의 최소) + 1
+마지막이 4원 → 앞에서 4원을 만들었다 → (4원의 최소) + 1
+마지막이 5원 → 앞에서 3원을 만들었다 → (3원의 최소) + 1
+```
+
+4원의 최소는 1(4원 하나)이라 가운데 줄이 2가 된다. 7원의 최소는 3(5+1+1), 3원의 최소도 3(1+1+1)이라 나머지 두 줄은 4다. 그래서 8원의 최소는 2다. "마지막 동전으로 나누기"는 [계단 오르기](/posts/leetcode-climbing-stairs)에서 마지막 걸음으로 나눴던 것과 같은 생각이고, 걸음 크기가 동전 값으로 바뀌었을 뿐이다. 차이는 방법의 수를 더하는 대신 최솟값을 고른다는 것이다.
+
+이걸 식으로 쓴다. `best(a)`를 "a원을 만드는 최소 동전 수"라 하면
+
+```text
+best(0) = 0
+best(a) = min over c in coins, c ≤ a 인 것만: best(a - c) + 1
+         만들 수 있는 c가 하나도 없으면 best(a) = 불가능
+```
+
+## 큰 동전부터 집으면 틀린다
+
+탐욕이 틀리는 예는 [동적 계획법 글](/posts/dynamic-programming)과 위에서 봤다. 그런데 탐욕에는 더 나쁜 실패가 있다. 답이 있는데 "못 만든다"고 말하는 것이다.
+
+```js
+function greedy(coins, amount) {
+  const sorted = [...coins].sort((a, b) => b - a); // 큰 동전부터
+  let count = 0;
+  for (const c of sorted) {
+    count += Math.floor(amount / c); // 이 동전을 최대한 많이
+    amount %= c;
+  }
+  return amount === 0 ? count : -1;
+}
+```
+
+동전 [186, 419, 83, 408], 금액 6249를 넣으면 탐욕은 -1을 낸다. 419를 14개(5866) 쓰고, 남은 383에서 408은 못 쓰니 186을 두 개 쓰고, 마지막 11원을 83으로 못 채운 채 끝나기 때문이다. 실제 답은 20개다. 큰 동전을 최대한 많이 쓰는 결정을 한 번 내리면 되돌아가지 않으니, 그 결정이 막다른 길이어도 다른 길을 찾아보지 않는다.
+
+그럼 거스름돈 기계는 왜 탐욕을 쓸까. 실제 화폐 단위는 탐욕이 항상 최적이 되도록 만들어져 있다. 한국 동전·지폐 단위([10, 50, 100, 500])로 1760원을 탐욕으로 만들면 7개고 DP로 구해도 7개다. 미국 센트([1, 5, 10, 25])로 63센트도 둘 다 6개다. 이런 단위 체계를 정준(canonical) 동전 체계라고 부른다. 임의의 동전 집합이 들어오는 이 문제에서는 그 보장이 없다. 탐욕이 언제 통하는지의 일반론은 [그리디 알고리즘 글](/posts/greedy-algorithms)에 있다.
+
+## 마지막 동전을 하나씩 다 대 본다
+
+점화식을 그대로 재귀로 짜면 이렇다.
+
+```js
+function coinChange(coins, amount) {
+  function best(a) {
+    if (a === 0) return 0;          // 다 맞췄다
+    if (a < 0) return Infinity;     // 넘쳤다. 이 길은 불가능
+    let min = Infinity;
+    for (const c of coins) min = Math.min(min, best(a - c) + 1); // 마지막 동전이 c인 경우
+    return min;
+  }
+  const r = best(amount);
+  return r === Infinity ? -1 : r;
+}
+```
+
+"불가능"을 `Infinity`로 표시하면 `Infinity + 1`도 `Infinity`라 `min`에서 자연스럽게 밀려난다. 호출 수를 세서 시간과 함께 찍었다.
+
+```text
+naive 20 9061 2.7ms
+naive 30 512809 14.6ms
+naive 40 29003641 334.4ms
+naive 45 218121205 2324.3ms
+```
+
+금액이 5 늘 때마다 호출이 7~8배씩 는다. 금액 45에서 2초가 넘는다. 10^4은 말할 것도 없다. 호출 나무의 깊이는 최대 `amount`(1원짜리만 쓸 때)이고 가지는 동전 종류 수 k만큼이라 시간은 대략 O(k^amount)다. 같은 금액을 여러 갈래에서 다시 묻기 때문이다. 8원으로 가는 길에 4원은 "8 - 4"로도, "8 - 1 - 1 - 1 - 1"로도, "8 - 1 - 1 - 1 - 1 - 4 + …"로도 나온다. 서로 다른 질문은 0원부터 `amount`원까지 `amount + 1`개뿐이다.
+
+## 금액마다 답을 적어 두면
+
+같은 금액을 다시 물으면 장부에서 읽는다.
+
+```js
+function coinChange(coins, amount) {
+  const memo = new Map(); // a -> a원의 최소 동전 수 (불가능이면 Infinity)
+  function best(a) {
+    if (a === 0) return 0;
+    if (a < 0) return Infinity;
+    if (memo.has(a)) return memo.get(a);
+    let min = Infinity;
+    for (const c of coins) min = Math.min(min, best(a - c) + 1);
+    memo.set(a, min);     // 불가능(Infinity)도 그대로 적어 둔다
+    return min;
+  }
+  const r = best(amount);
+  return r === Infinity ? -1 : r;
+}
+```
+
+금액마다 본문이 한 번, 본문 안에서 동전 k개를 보니 시간 O(amount × k), 장부 공간 O(amount)다.
+
+장부에 "불가능"도 적는 게 중요하다. 불가능한 금액을 적지 않고 넘어가면, 동전 [2]처럼 홀수 금액이 전부 불가능한 입력에서 같은 홀수 금액을 계속 다시 계산한다. `Map`을 쓰면 `has`로 "안 구함"과 "구했는데 불가능"이 구분된다.
+
+그런데 이 풀이에는 이 문제의 제약 안에서 터지는 입력이 있다. 동전에 1원이 있고 금액이 10^4이면 `best(10000) → best(9999) → … → best(0)`까지 재귀가 만 단계 내려간다. Node.js 22 기본 설정에서 동전 [1, 2, 5], 금액 10000을 넣었더니 `RangeError: Maximum call stack size exceeded`가 났다. Python도 `lru_cache` 재귀로 같은 입력을 넣으면 기본 한도 1000에 걸려 `RecursionError`가 난다. LeetCode 채점 환경은 스택을 넉넉히 주는 경우가 많아 통과하기도 하지만, 면접에서 이 위험을 짚으면 바텀업으로 넘어갈 이유가 분명해진다.
+
+## 0원부터 표를 채운다
+
+재귀를 뒤집어 0원부터 채운다. `dp[a]`를 a원의 최소 동전 수로 두고, a를 1부터 올리며 동전마다 "마지막이 이 동전이면"을 대 본다.
+
+```js
+function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity); // dp[a]: a원의 최소 동전 수
+  dp[0] = 0;                                       // 0원은 동전 0개
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      // 마지막에 c를 냈다면 앞에서 a - c원을 만들었어야 한다
+      if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}
+```
+
+동전 [1, 4, 5], 금액 8로 표가 채워지는 모습이다. 칸 이름은 금액이고, 기억 칸에는 그 금액을 만들 때 대 본 후보가 들어간다.
+
+<AlgoTrace
+  caption="dp 표 채우기 (동전 1, 4, 5 / 금액 8)"
+  memoryLabel="후보: 마지막 동전 → 앞 금액의 dp + 1"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7", "8"]}
+  steps={[
+    { pointer: 0, memory: ["dp[0] = 0"], caption: "0원은 동전이 필요 없다. 여기서부터 쌓는다." },
+    { pointer: 1, memory: ["1 → dp[0]+1 = 1"], caption: "1원. 1원 동전만 낼 수 있다. dp[1] = 1." },
+    { pointer: 2, memory: ["1 → dp[1]+1 = 2"], caption: "2원. 여전히 1원뿐이다. dp[2] = 2." },
+    { pointer: 3, memory: ["1 → dp[2]+1 = 3"], caption: "3원. dp[3] = 3." },
+    { pointer: 4, memory: ["1 → dp[3]+1 = 4", "4 → dp[0]+1 = 1"], caption: "4원. 4원 동전이 처음 들어온다. 1이 이긴다." },
+    { pointer: 5, memory: ["1 → dp[4]+1 = 2", "4 → dp[1]+1 = 2", "5 → dp[0]+1 = 1"], caption: "5원. 5원 동전 하나면 된다. dp[5] = 1." },
+    { pointer: 6, memory: ["1 → dp[5]+1 = 2", "4 → dp[2]+1 = 3", "5 → dp[1]+1 = 2"], caption: "6원. 5 + 1로 2개다." },
+    { pointer: 7, memory: ["1 → dp[6]+1 = 3", "4 → dp[3]+1 = 4", "5 → dp[2]+1 = 3"], caption: "7원. 3개다." },
+    { pointer: 8, found: [4, 8], memory: ["1 → dp[7]+1 = 4", "4 → dp[4]+1 = 2", "5 → dp[3]+1 = 4"], caption: "8원. 4원을 마지막으로 내고 앞의 4원도 4원 하나. 답은 2." }
+  ]}
+/>
+
+마지막 단계에서 탐욕이 고른 길(마지막이 5원, 앞이 3원)은 4개로 밀려나고, 4원을 마지막으로 낸 길이 2개로 이긴다. 표는 모든 후보를 다 대 보니 탐욕처럼 한 길에 갇히지 않는다.
+
+시간 O(amount × k), 공간 O(amount)다. 재귀가 없으니 스택 걱정도 없다. 메모 재귀가 스택을 넘긴 동전 [1, 2, 5], 금액 10000도 새 프로세스에서 10ms 안쪽에 2000을 냈다. 이 풀이가 기본 답이다.
+
+`c <= a` 확인을 빼면 어떻게 될까. JavaScript에서 `dp[-1]`은 `undefined`이고 `undefined + 1`은 `NaN`이다. `Math.min(Infinity, NaN)`은 `NaN`이라 그 칸이 오염되고, 그 칸을 참조하는 뒤 칸도 줄줄이 `NaN`이 된다. 실제로 확인 없이 `Math.min`으로 쓴 코드는 [1, 4, 5], 8에서 `NaN`을 냈다. 위 코드처럼 `<` 비교로 쓰면 `NaN`과의 비교가 항상 거짓이라 오염은 안 되지만, 그건 우연에 기대는 것이다. 범위 확인을 명시적으로 쓴다.
+
+### 이 점화식이 왜 최솟값을 보장하나
+
+a원을 만드는 최적의 동전 묶음이 있다고 하자. 그 묶음에서 아무 동전 c를 하나 빼면 a - c원을 만드는 묶음이 남는다. 이 남은 묶음은 a - c원의 최적이어야 한다. 더 적은 동전으로 a - c원을 만드는 방법이 있다면, 거기에 c를 더해 a원을 더 적게 만들 수 있으니 처음 묶음이 최적이라는 가정과 모순이다. 그래서 최적해의 동전 수는 어떤 c로 계산한 `dp[a - c] + 1`과 같고, 모든 c를 대 보는 점화식이 그걸 놓치지 않는다. 동전을 무한히 쓸 수 있어서 c를 뺀 나머지 문제가 원래와 같은 모양으로 남는다는 점이 이 증명이 성립하는 조건이다.
+
+### 어떤 동전을 썼는지 되짚기
+
+동전 목록까지 돌려 달라고 하면, 칸마다 "마지막에 낸 동전"을 따로 적어 둔다.
+
+```js
+function coinChangeWithCoins(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  const last = new Array(amount + 1).fill(-1); // last[a]: a원을 만들 때 마지막에 낸 동전
+  dp[0] = 0;
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      if (c <= a && dp[a - c] + 1 < dp[a]) {
+        dp[a] = dp[a - c] + 1;
+        last[a] = c;
+      }
+    }
+  }
+  if (dp[amount] === Infinity) return null;
+  const used = [];
+  for (let a = amount; a > 0; a -= last[a]) used.push(last[a]); // 마지막 동전을 떼며 거슬러 간다
+  return used;
+}
+```
+
+예시에서 `last`는 `[-1, 1, 1, 1, 4, 5, 1, 1, 4]`이고, 8에서 4를 떼면 4, 거기서 4를 떼면 0이라 `[4, 4]`가 나왔다. 추가 공간은 O(amount)뿐이다.
+
+### 표를 가장 큰 동전 크기만큼만 들고 있기
+
+계단 오르기와 House Robber는 앞의 두 칸만 봐서 변수 두 개로 줄였다. 이 문제는 `dp[a]`가 `dp[a - c]`를 보니, 가장 멀리 보는 칸이 가장 큰 동전 C만큼 앞이다. 그래서 크기 C + 1인 원형 버퍼만 있으면 된다. 금액을 넘는 동전은 쓸 수 없으니 미리 빼고 C를 고른다.
+
+```js
+function coinChange(coins, amount) {
+  if (amount === 0) return 0;
+  const usable = coins.filter((c) => c <= amount); // 금액보다 큰 동전은 못 쓴다
+  if (usable.length === 0) return -1;
+  const W = Math.max(...usable) + 1;               // 가장 멀리 보는 칸까지의 거리 + 1
+  const buf = new Array(W).fill(Infinity);         // buf[a % W]가 dp[a]
+  buf[0] = 0;
+  for (let a = 1; a <= amount; a++) {
+    let best = Infinity;
+    for (const c of usable) {
+      if (c <= a && buf[(a - c) % W] + 1 < best) best = buf[(a - c) % W] + 1;
+    }
+    buf[a % W] = best;                             // C+1칸 전 값을 덮어쓴다
+  }
+  return buf[amount % W] === Infinity ? -1 : buf[amount % W];
+}
+```
+
+공간이 O(min(amount, C))가 된다. 동전이 [1, 2, 5]면 금액이 10^4이어도 버퍼는 6칸이다. 무작위 입력 5000개에서 원래 표 풀이와 답이 같았다. 다만 이렇게 줄이면 앞의 되짚기(어떤 동전을 썼나)는 못 하고, 동전 중 하나가 금액에 가까우면 줄어드는 게 없다. 면접에서 "공간을 줄일 수 있나"를 물으면 "가장 큰 동전만큼 줄일 수 있지만 보통은 O(amount) 표로 충분하다"고 답한다.
+
+## 바깥 반복문을 동전으로 바꿔도 될까
+
+위 코드는 바깥이 금액, 안쪽이 동전이다. 바꿔 써도 될까.
+
+```js
+function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity);
+  dp[0] = 0;
+  for (const c of coins) {               // 바깥: 동전
+    for (let a = c; a <= amount; a++) {  // 안쪽: 금액 (c부터 시작하니 범위 확인이 필요 없다)
+      if (dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}
+```
+
+이 문제에서는 똑같은 답이 나온다. 무작위로 만든 입력 3000개에서 두 순서의 답이 모두 같았다. 동전 바깥 순서는 "동전 c까지만 쓸 수 있을 때의 최솟값"을 동전을 하나씩 늘려 가며 고쳐 쓰는 것이다. 안쪽 반복이 작은 금액부터 올라가니 `dp[a - c]`에는 이미 c를 몇 개 쓴 결과가 들어 있어서 같은 동전을 여러 번 쓰는 것도 반영된다. 이게 [배낭 문제](/posts/dynamic-programming)에서 말하는 "무한 배낭"의 정방향 순회다. 0/1 배낭처럼 물건을 한 번만 쓰려면 금액을 거꾸로 돌아야 한다.
+
+최솟값에서는 순서가 상관없지만, 방법의 수를 셀 때는 순서가 답을 바꾼다. 같은 동전 [1, 4, 5], 금액 8로 덧셈 버전을 돌려 봤다.
+
+```text
+동전 바깥 (조합, LeetCode 518): 4
+금액 바깥 (순서가 다른 것도 따로, LeetCode 377): 11
+```
+
+동전 바깥이면 동전을 쓰는 순서가 고정돼서 `4+4`, `4+1+1+1+1`, `5+1+1+1`, `1×8` 네 조합을 한 번씩만 센다. 금액 바깥이면 "4+1+1+1+1"과 "1+4+1+1+1"을 따로 센다. 최솟값은 어떤 순서로 세든 같은 묶음이 같은 개수라 영향을 받지 않는다. 조합 세기는 [Coin Change II](/posts/leetcode-coin-change-ii)에서 따로 다룬다.
+
+## 금액을 정점으로 보면 최단 경로다
+
+표 풀이를 그래프로 다시 보자. 0원부터 `amount`원까지의 금액을 정점으로 두고, 금액 v에서 동전 c를 하나 더 내면 v + c로 가는 간선을 긋는다. 그러면 "최소 동전 수"는 0에서 `amount`까지 가는 최단 경로의 간선 수다. 간선 가중치가 모두 1이라 [BFS](/posts/ds-graph-bfs-dfs)로 구할 수 있다.
+
+```js
+function coinChange(coins, amount) {
+  if (amount === 0) return 0;
+  const seen = new Uint8Array(amount + 1); // 이미 도달한 금액
+  seen[0] = 1;
+  let frontier = [0];                      // 지금 단계(동전 수)에서 도달한 금액들
+  let steps = 0;
+  while (frontier.length) {
+    steps++;                               // 동전 하나를 더 낸다
+    const next = [];
+    for (const v of frontier) {
+      for (const c of coins) {
+        const w = v + c;
+        if (w === amount) return steps;    // 처음 닿은 단계가 최소 동전 수
+        if (w < amount && !seen[w]) {
+          seen[w] = 1;
+          next.push(w);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return -1;                               // 더 갈 곳이 없는데 못 닿았다
+}
+```
+
+예시에서 BFS가 퍼지는 모습이다.
+
+<AlgoTrace
+  caption="BFS: 동전 하나씩 더 내며 닿는 금액 넓히기"
+  memoryLabel="이번 단계에 새로 닿은 금액"
+  cells={["0", "1", "2", "3", "4", "5", "6", "7", "8"]}
+  steps={[
+    { pointer: 0, memory: ["0"], caption: "출발은 0원이다. 동전을 하나도 안 냈다." },
+    { pointer: 0, found: [1, 4, 5], memory: ["1", "4", "5"], caption: "동전 1개. 0에 1, 4, 5를 더하면 1, 4, 5원에 닿는다." },
+    { pointer: 1, found: [2, 6], memory: ["2", "6"], caption: "동전 2개. 1원에서 2, 5(이미 닿음), 6원으로 간다." },
+    { pointer: 4, found: [8], memory: ["2", "6", "8"], caption: "4원에서 4를 더하니 8원이다. 동전 2개 단계에서 처음 닿았으니 답은 2." }
+  ]}
+/>
+
+BFS는 같은 동전 수 단계를 한꺼번에 넓히니, 목표에 처음 닿는 순간이 곧 최솟값이다. 답이 작으면(큰 동전으로 금방 닿으면) 표 전체를 다 채우지 않고 일찍 끝난다는 장점이 있다. 동전 [1, 2, 5000], 금액 10000이면 두 번째 단계에서 끝난다. 답이 크면 이 장점이 사라져서, 동전 12종에 금액 9999(답 245)처럼 거의 모든 금액을 방문하는 입력에서는 표와 BFS가 둘 다 몇 밀리초로 비슷했다. 최악에는 모든 금액을 한 번씩 방문하고 금액마다 동전 k개를 보니 표와 같은 O(amount × k)이고, 방문 표시와 큐 때문에 공간 O(amount)다.
+
+Java로 옮길 때 `w = v + c`가 함정이다. 동전이 2^31 - 1까지라 `v + c`가 `int`를 넘어 음수가 되고, 그 음수가 `w < amount`를 통과해 배열 인덱스로 쓰이면 예외가 난다. `long`으로 더하거나 `c > amount - v`로 먼저 걸러낸다.
+
+## 큰 동전부터 깊이 파고 잘라 내기
+
+탐욕을 버리지 않고 고치는 길도 있다. 큰 동전부터 "몇 개 쓸지"를 정해 내려가되, 많이 쓰는 경우부터 시도하고, 지금까지 찾은 최솟값보다 동전이 많아지는 가지는 잘라 낸다(분기 한정, branch and bound).
+
+```js
+function coinChange(coins, amount) {
+  const sorted = [...coins].sort((a, b) => b - a);
+  let best = Infinity;
+  function go(i, rem, count) {
+    if (rem === 0) { best = Math.min(best, count); return; }
+    if (i === sorted.length) return;
+    const c = sorted[i];
+    // 이 동전을 가능한 한 많이 쓰는 것부터, 이미 찾은 답보다 많아지면 멈춘다
+    for (let k = Math.floor(rem / c); k >= 0 && count + k < best; k--) {
+      go(i + 1, rem - k * c, count + k);
+    }
+  }
+  go(0, amount, 0);
+  return best === Infinity ? -1 : best;
+}
+```
+
+첫 시도가 탐욕과 같은 길이라 보통 좋은 답을 일찍 찾고, 그 뒤로 대부분의 가지가 잘린다. 동전 12종, 금액 9999(답 245)에서 0.1ms가 안 걸렸다. LeetCode에서도 이 풀이가 표보다 빠르게 채점되는 경우가 많다.
+
+문제는 답이 없을 때다. 잘라 낼 기준(`best`)이 끝까지 `Infinity`라 가지치기가 전혀 일어나지 않는다. 짝수 동전 [2, 4, 6, 8, 10, 12]에 홀수 금액을 넣어 봤다.
+
+```text
+dfs amount=51 answer=-1 calls=4674 0.8ms | dp answer=-1 0.12ms
+dfs amount=101 answer=-1 calls=107291 3.1ms | dp answer=-1 0.10ms
+dfs amount=201 answer=-1 calls=3782496 37.0ms | dp answer=-1 0.23ms
+dfs amount=401 answer=-1 calls=174799434 1330.0ms | dp answer=-1 0.58ms
+dfs amount=601 answer=-1 calls=1777816127 17843.1ms | dp answer=-1 1.27ms
+```
+
+금액 601에서 18초다. 표는 1ms다. 최악 시간이 지수라서, 평균이 빠르다는 이유로 기본 답으로 내기는 위험하다. 면접에서 이 풀이를 말한다면 "답이 없는 입력에서 무너진다"를 함께 말해야 한다. 홀짝처럼 미리 불가능을 걸러내는 장치(모든 동전의 최대공약수로 금액이 나눠지는지 확인)를 붙이면 이 입력은 막지만, 그것으로 모든 최악을 막지는 못한다.
+
+## Python과 Java로 옮길 때
+
+```python
+from typing import List
+
+class Solution:
+    def coinChange(self, coins: List[int], amount: int) -> int:
+        INF = amount + 1                      # 동전은 최대 amount개라 amount+1은 "불가능"
+        dp = [0] + [INF] * amount             # dp[a]: a원을 만드는 최소 동전 수
+        for a in range(1, amount + 1):
+            for c in coins:
+                if c <= a and dp[a - c] + 1 < dp[a]:
+                    dp[a] = dp[a - c] + 1
+        return dp[amount] if dp[amount] != INF else -1
+```
+
+"불가능"을 `amount + 1`로 둔 이유는, 1원짜리만 써도 동전이 `amount`개를 넘을 수 없어서 `amount + 1`은 실제 답이 될 수 없는 값이기 때문이다. `float('inf')`를 써도 되지만 정수 리스트에 실수가 섞인다. 예시 입력에서 2, `[2]`와 3에서 -1, 금액 0에서 0, [186, 419, 83, 408]과 6249에서 20이 나왔다. Python은 반복문이 느린 편이라 금액 10^4 × 동전 12종 = 12만 번에 10ms 안팎이 걸렸다. 그래도 제한 안이다.
+
+```java
+import java.util.Arrays;
+
+class Solution {
+    public int coinChange(int[] coins, int amount) {
+        int INF = amount + 1;                 // Integer.MAX_VALUE를 쓰면 +1에서 넘친다
+        int[] dp = new int[amount + 1];       // dp[a]: a원을 만드는 최소 동전 수
+        Arrays.fill(dp, INF);
+        dp[0] = 0;
+        for (int a = 1; a <= amount; a++) {
+            for (int c : coins) {
+                if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+            }
+        }
+        return dp[amount] == INF ? -1 : dp[amount];
+    }
+}
+```
+
+Java에서 가장 흔한 실수는 "불가능"을 `Integer.MAX_VALUE`로 두는 것이다. `dp[a - c]`가 `MAX_VALUE`일 때 `+ 1`이 넘쳐서 `-2147483648`이 되고, 이게 `min`에서 이긴다. 실제로 그렇게 짠 코드에 `[2]`, 3을 넣었더니 -1이 아니라 `-2147483648`이 나왔다. `amount + 1`을 쓰거나, 더하기 전에 `dp[a - c] != MAX_VALUE`를 확인한다. 동전 값이 2^31 - 1까지라 `c <= a` 비교를 `a - c >= 0`으로 바꿔 써도 `int` 범위에서는 안전하지만, 반대 방향 덧셈(`a + c`)은 넘친다는 걸 기억해 둔다.
+
+## 풀이들을 나란히 놓으면
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 큰 동전부터 탐욕 | O(k log k) | O(k) | 화폐 단위처럼 정준 체계라는 보장이 있을 때만 |
+| 마지막 동전 재귀 | 지수 | O(amount) 스택 | 점화식 확인용 |
+| 탑다운 메모 | O(amount × k) | O(amount) + 스택 | 옮기기 쉽지만 1원 동전 + 큰 금액에서 스택이 넘친다 |
+| 바텀업 표 | O(amount × k) | O(amount) | 기본 답. 동전 목록 되짚기도 쉽다 |
+| 원형 버퍼 표 | O(amount × k) | O(min(amount, C)) | 큰 동전이 작고 메모리를 아껴야 할 때. 되짚기는 못 한다 |
+| 금액 그래프 BFS | O(amount × k) | O(amount) | 답(동전 수)이 작아 일찍 끝날 때 빠르다 |
+| 분기 한정 DFS | 최악 지수 | O(k) 스택 | 평균은 매우 빠르지만 답이 없는 입력에서 무너진다 |
+
+## 틀리기 쉬운 자리
+
+### 불가능을 0으로 초기화하는 경우
+
+표를 0으로 채우면 "아직 못 만듦"과 "0개로 만듦"이 구분되지 않는다. 0으로 채우고 `dp[a] || Infinity`처럼 땜질한 코드는 `[2]`, 3에서 -1 대신 1을 냈다. 3원을 만들 수 없는데 `dp[1]`이 0으로 남아 있어 "1원 + 2원 = 1개"로 계산했다. 불가능은 실제 답이 될 수 없는 값(`Infinity`, `amount + 1`)으로 둔다.
+
+### 마지막에 불가능 값을 -1로 바꾸지 않는 경우
+
+`return dp[amount]`로 끝내면 불가능한 입력에서 `Infinity`나 `amount + 1`이 그대로 나간다. 범위 확인 없이 `Math.min`으로 쓴 버전이 `NaN`을 내는 것과 함께, 불가능 입력을 테스트에 꼭 넣는다.
+
+### amount가 0인 경우
+
+동전을 하나도 안 쓰면 되니 답은 0이다. BFS 풀이는 첫 단계부터 `steps`를 1로 올리니 맨 앞에서 0을 따로 돌려줘야 한다. 표 풀이는 `dp[0] = 0`이 그대로 답이 된다.
+
+### 동전 종류가 하나인 경우
+
+[5]와 10000이면 2000, [2]와 3이면 -1이다. 탐욕도 맞는 유일한 경우지만, 나머지 연산 하나로 끝난다는 이유로 따로 처리할 필요는 없다.
+
+## 직접 풀어 보기
+
+빈 함수를 채워서 실행해 보자. 불가능한 입력과 금액 0도 들어 있다.
+
+<CodePlayground
+  caption="Coin Change"
+  functionName="coinChange"
+  initialCode={`function coinChange(coins, amount) {
+  // amount를 만드는 최소 동전 수. 만들 수 없으면 -1
+  return -1;
+}`}
+  solution={`function coinChange(coins, amount) {
+  const dp = new Array(amount + 1).fill(Infinity); // dp[a]: a원의 최소 동전 수
+  dp[0] = 0;
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount];
+}`}
+  tests={[
+    { args: [[1, 4, 5], 8], expected: 2, label: "탐욕이 틀리는 예시" },
+    { args: [[2], 3], expected: -1, label: "만들 수 없음" },
+    { args: [[1], 0], expected: 0, label: "금액 0" },
+    { args: [[186, 419, 83, 408], 6249], expected: 20, label: "탐욕은 -1을 낸다" },
+    { args: [[3, 7], 5], expected: -1, label: "동전보다 작은 사이 금액" },
+    { args: [[1, 2147483647], 2], expected: 2, label: "아주 큰 동전" },
+    { args: [[1, 2, 5], 10000], expected: 2000, label: "최대 금액" }
+  ]}
+/>
+
+## 면접관이 조건을 바꾸면
+
+### 만드는 방법의 수를 세라면
+
+최솟값 대신 덧셈이다. 순서를 무시한 조합의 수는 동전을 바깥 반복문에 둔다([Coin Change II](/posts/leetcode-coin-change-ii), 518번). 순서가 다른 것도 따로 세면 금액을 바깥에 둔다(Combination Sum IV, 377번). 앞에서 본 대로 [1, 4, 5], 8에서 4와 11이 나온다. 개수가 커지니 나머지를 묻는 경우가 많다.
+
+### 동전마다 개수 제한이 있다면
+
+각 동전을 최대 몇 개만 쓸 수 있으면 유한 배낭이 된다. 개수만큼 같은 동전을 따로 넣고 0/1 배낭처럼 금액을 거꾸로 돌면 되고, 개수가 크면 1, 2, 4, … 묶음으로 쪼개(이진 분할) 물건 수를 로그로 줄인다.
+
+### 금액이 10^9처럼 크다면
+
+표를 10^9칸 만들 수는 없다. 이때 쓰는 성질이 있다. 최적해에서 가장 큰 동전 C가 아닌 동전은 C개 미만이다. C개 이상이면 그중 몇 개의 합이 C의 배수가 되는 묶음이 반드시 있고(비둘기집 원리), 그 묶음을 C짜리 몇 개로 바꾸면 동전이 줄어들기 때문이다. 그래서 큰 동전이 아닌 동전의 합은 C² 미만이고, 표는 C²칸까지만 채운 뒤 나머지를 C로 채운다.
+
+```js
+function coinChangeHuge(coins, amount) {
+  const C = Math.max(...coins);
+  const L = Math.min(amount, C * C);        // 큰 동전이 아닌 것들의 합은 C² 미만
+  const dp = new Array(L + 1).fill(Infinity);
+  dp[0] = 0;
+  for (let a = 1; a <= L; a++)
+    for (const c of coins) if (c <= a && dp[a - c] + 1 < dp[a]) dp[a] = dp[a - c] + 1;
+  let best = Infinity;
+  for (let r = amount % C; r <= L; r += C) {  // 나머지 r은 작은 동전들로, 나머지는 C로
+    if (dp[r] < Infinity) best = Math.min(best, dp[r] + (amount - r) / C);
+  }
+  return best === Infinity ? -1 : best;
+}
+```
+
+무작위 입력 5000개에서 일반 표 풀이와 답이 모두 같았고, [1, 4, 5]와 10^9에서 `200000000`이 나왔다. 시간은 O(C² × k)라 큰 동전이 작을 때 쓸 수 있다.
+
+### 동전 목록까지 돌려 달라면
+
+표 옆에 "마지막에 낸 동전" 배열을 두고 거꾸로 따라간다. 앞의 되짚기 절과 같다. BFS로 풀었다면 금액마다 어디서 왔는지(부모)를 적어 둔다.
+
+### 탐욕으로 풀어도 되는 동전 체계인지 판정하라면
+
+어떤 동전 체계가 정준인지는 반례가 나올 수 있는 범위(가장 큰 두 동전의 합 근처)까지 탐욕과 DP를 비교해 보면 확인할 수 있다. 다항 시간 판정법(Kozen–Zaks, Pearson)도 알려져 있다. 면접에서는 "작은 범위에서 DP와 비교해 본다"까지 말하면 충분하다.
+
+비슷한 문제로는 [Coin Change II](/posts/leetcode-coin-change-ii), Combination Sum IV(377), Perfect Squares(279, 동전이 제곱수인 Coin Change), Minimum Cost For Tickets(983), [Word Break](/posts/leetcode-word-break)(동전 대신 단어로 문자열을 덮는 같은 뼈대)가 있다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 탐욕으로 안 되나요?
+
+임의의 동전 집합에서는 큰 동전을 최대한 쓰는 선택이 뒤의 더 좋은 조합을 막을 수 있다. [1, 4, 5]와 8에서 탐욕은 4개, 답은 2개다. 더 나쁘게는 [186, 419, 83, 408]과 6249처럼 답이 있는데 -1을 내기도 한다. 화폐 단위처럼 정준 체계가 보장될 때만 탐욕이 최적이다.
+
+### 점화식과 시간 복잡도를 설명해 보세요.
+
+a원을 만드는 마지막 동전이 c라면 앞에서 a - c원을 최소로 만들었어야 하니 `dp[a] = min(dp[a - c] + 1)`이다. 0원부터 `amount`까지 칸마다 동전 k개를 보니 O(amount × k) 시간, O(amount) 공간이다. 이 문제 최대 입력이 10^4 × 12라 넉넉하다.
+
+### 초기값을 무엇으로 두나요?
+
+`dp[0] = 0`, 나머지는 실제 답이 될 수 없는 값이다. JavaScript와 Python은 `Infinity`나 `amount + 1`, Java는 `amount + 1`을 쓴다. Java에서 `Integer.MAX_VALUE`를 쓰면 `+ 1`에서 넘쳐 음수가 이기는 버그가 나고, 0으로 채우면 "못 만듦"과 "0개"가 섞인다.
+
+### 메모 재귀와 바텀업 중 무엇을 쓰나요?
+
+바텀업을 쓴다. 복잡도는 같지만 메모 재귀는 1원 동전과 금액 10^4에서 재귀가 만 단계 내려가 Node.js 기본 스택과 Python 재귀 한도를 넘는다. 바텀업은 스택을 쓰지 않고 동전 목록 되짚기도 쉽다.
+
+### 반복문 순서를 바꿔도 되나요?
+
+최솟값 문제에서는 바꿔도 된다. 동전을 바깥에 두고 금액을 작은 쪽부터 올리면 같은 동전을 여러 번 쓰는 경우가 반영돼 같은 답이 나온다. 방법의 수를 셀 때는 달라서, 동전 바깥이면 조합(518번), 금액 바깥이면 순서까지 구분한 수(377번)가 된다.
+
+### BFS로도 풀 수 있나요?
+
+있다. 금액을 정점, 동전 하나를 가중치 1인 간선으로 보면 최소 동전 수는 0에서 `amount`까지의 최단 경로다. 최악 복잡도는 표와 같지만 답이 작으면 일찍 끝난다. Java에서는 `v + c`가 `int`를 넘을 수 있으니 조심한다.
+
+### 가지치기 DFS가 더 빠르다던데 왜 기본 답이 아닌가요?
+
+평균은 빠르지만 최악이 지수라서다. 잘라 낼 기준이 되는 "지금까지의 최솟값"이 답이 없는 입력에서는 끝까지 생기지 않아 가지치기가 일어나지 않는다. 짝수 동전에 홀수 금액 601을 넣었더니 18초가 걸렸고, 표 풀이는 1ms였다.

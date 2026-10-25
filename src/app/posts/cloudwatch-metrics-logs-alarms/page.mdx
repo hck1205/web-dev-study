@@ -1,0 +1,367 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("cloudwatch-metrics-logs-alarms");
+
+<EasyIntro>
+  아파트 관리실에는 건물 곳곳의 계기판이 모여 있어서 전기 사용량, 물탱크 수위, 엘리베이터 위치가 화면에 뜬다. 그런데 관리실은 각 집 안까지는 들여다보지 못한다. 그래서 집마다 작은 기록기를 달아 두면, 기록기가 관리실로 숫자를 보내 준다.
+
+  관리실은 숫자를 지켜보다가 정해 둔 선을 여러 번 연달아 넘으면 경보를 울린다. 기록기가 고장 나서 숫자가 안 오면 어떻게 할지도 미리 정해야 한다. 아무 소식이 없는 걸 괜찮다는 뜻으로 볼지, 위험하다는 뜻으로 볼지가 다르다. 경보가 울리면 담당자에게 전화하거나 자동으로 문을 닫는 장치를 움직인다. 이 글은 AWS 안의 관리실인 CloudWatch가 숫자와 기록을 모으고 경보를 울리는 방법을 다룬다.
+</EasyIntro>
+
+새벽에 주문 API가 느려졌다는 연락을 받고 CloudWatch 콘솔을 열었다. EC2 인스턴스의 CPU 사용률은 30%대로 평온하다. 네트워크도 평소와 같다. 그런데 서버에 SSH로 들어가 보니 Java 프로세스가 메모리를 거의 다 쓰고 있고, 커널 로그에는 OOM killer가 다른 프로세스를 죽인 흔적이 있다. 메모리 그래프를 찾으려고 지표 목록을 뒤졌지만 `MemoryUtilization` 같은 이름은 어디에도 없다.
+
+없는 게 맞다. EC2 기본 지표에는 메모리 사용률과 디스크 사용량이 들어 있지 않다. 이 글은 이 장면에서 출발해 CloudWatch의 세 부품인 지표(metrics), 로그(logs), 경보(alarms)를 차례로 보고, 경보가 울린 뒤에 반응하는 EventBridge까지 잇는다. 서버 쪽 명령은 Ubuntu 24.04 기준이다.
+
+이 환경에는 AWS 계정이 없어서 콘솔과 API의 실제 출력은 싣지 않았다. 명령과 설정 파일은 AWS 문서의 형식대로 쓰고, 경보 평가처럼 계산으로 확인할 수 있는 것은 직접 돌려 본 결과만 적었다. 요금은 글을 쓰는 시점의 us-east-1 공시가 기준이라 리전과 시점에 따라 다르다.
+
+로그를 어디서부터 보는지는 [로그 도구 한눈에 보기](/posts/logging-tools-overview)에서, 지표·로그·트레이스가 각각 어떤 질문에 답하는지는 [관측 가능성 기본](/posts/observability-basics)에서 다룬다.
+
+## 기본 지표는 하이퍼바이저가 보는 것까지만
+
+EC2의 기본 지표는 인스턴스 밖, 하이퍼바이저와 AWS 인프라가 볼 수 있는 것들이다. CPU 사용률(`CPUUtilization`), 네트워크 입출력, 상태 검사(`StatusCheckFailed`), 그리고 EBS 볼륨의 읽기·쓰기 양(`AWS/EBS` 네임스페이스) 같은 것이다. 하이퍼바이저는 가상 머신에 CPU 시간을 얼마나 줬는지는 알지만, 게스트 OS 안에서 그 메모리를 누가 얼마나 쓰는지, 파일 시스템이 몇 퍼센트 찼는지는 모른다. 그래서 메모리와 디스크 사용률은 OS 안에서 누군가 재서 보내야 한다.
+
+주기도 기억해 둔다. 기본 모니터링은 5분마다 한 점이고, 상세 모니터링을 켜면(추가 요금) 1분마다 한 점이 된다. 5분 간격 그래프에서는 2분짜리 CPU 급증이 평균에 묻혀 거의 보이지 않는다. Auto Scaling이 CPU를 보고 늘어나야 하는 인스턴스라면 상세 모니터링을 켜는 편이 반응이 빠르다.
+
+CloudWatch는 지표를 영원히 원래 해상도로 두지 않는다. 시간이 지날수록 점을 합쳐 굵게 남긴다.
+
+- 1분보다 촘촘한 고해상도 점(1초 등)은 3시간
+- 1분 점은 15일
+- 5분 점은 63일
+- 1시간 점은 455일(약 15개월)
+
+그래서 한 달 전 장애를 다시 보면 1분 그래프가 아니라 5분 그래프만 남아 있다. 오래 두고 자세히 봐야 하는 지표라면 [Prometheus](/posts/prometheus-basics) 같은 별도 저장소나 S3로 내보내는 경로를 따로 둔다.
+
+## CloudWatch Agent로 메모리와 디스크를 올린다
+
+OS 안에서 재서 보내는 역할을 CloudWatch Agent가 한다. 에이전트는 메모리, 디스크, 프로세스, 네트워크 같은 OS 지표를 모아 `CWAgent` 네임스페이스의 사용자 지정 지표로 보내고, 지정한 로그 파일을 CloudWatch Logs로 올린다.
+
+먼저 인스턴스에 IAM 역할을 붙인다. 에이전트는 키 파일 대신 인스턴스 역할의 임시 자격 증명을 쓴다. AWS 관리형 정책 `CloudWatchAgentServerPolicy`가 지표와 로그를 쓰는 데 필요한 권한을 담고 있다. 서버를 처음 받아 세팅하는 순서는 [EC2 Ubuntu 서버 첫 세팅](/posts/aws-ec2-ubuntu-server-setup)에 있다.
+
+```bash
+# 1) 에이전트 패키지를 받아 설치한다 (Ubuntu, x86_64)
+wget https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+sudo dpkg -i -E ./amazon-cloudwatch-agent.deb
+
+# 2) 설정 파일을 둔다 (아래 JSON)
+sudo nano /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+# 3) 설정을 읽어 에이전트를 시작한다
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+  -a fetch-config -m ec2 -s \
+  -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+
+# 4) 돌고 있는지, 에러가 없는지 본다
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a status
+sudo tail -n 50 /opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log
+```
+
+설정 파일은 이 정도로 시작한다. 메모리 사용률과 루트 디스크 사용률을 1분마다 보내고, 앱 로그 파일 하나를 로그 그룹으로 올린다.
+
+```json
+{
+  "agent": { "metrics_collection_interval": 60 },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}",
+      "AutoScalingGroupName": "${aws:AutoScalingGroupName}"
+    },
+    "aggregation_dimensions": [["AutoScalingGroupName"]],
+    "metrics_collected": {
+      "mem": { "measurement": ["mem_used_percent"] },
+      "disk": {
+        "measurement": ["used_percent"],
+        "resources": ["/"],
+        "ignore_file_system_types": ["sysfs", "devtmpfs", "tmpfs", "overlay"]
+      }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          {
+            "file_path": "/var/log/orders/app.log",
+            "log_group_name": "/orders/app",
+            "log_stream_name": "{instance_id}",
+            "retention_in_days": 30
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+몇 줄은 이유가 있다. `append_dimensions`는 모든 지표에 인스턴스 ID 같은 차원을 붙인다. `aggregation_dimensions`는 인스턴스 ID를 뺀 Auto Scaling 그룹 단위 합계를 따로 만들어서, 인스턴스가 바뀌어도 이어지는 그래프와 경보를 걸 수 있게 한다. `disk`의 `ignore_file_system_types`를 빼면 tmpfs와 컨테이너 overlay 마운트마다 지표가 생겨 지표 수가 불어난다. `retention_in_days`를 주지 않으면 로그 그룹은 기본값인 "만료 없음"으로 만들어진다.
+
+에이전트가 뜨고 몇 분 지나면 콘솔의 `CWAgent` 네임스페이스에 `mem_used_percent`와 `disk_used_percent`가 보인다. 안 보이면 거의 항상 둘 중 하나다. 인스턴스 역할에 권한이 없거나(에이전트 로그에 `AccessDenied`), 설정 JSON이 틀렸다(`fetch-config` 단계에서 에러).
+
+## 지표 하나는 이름과 차원의 조합이다
+
+에이전트가 보낸 것도, 앱이 직접 보낸 것도 CloudWatch에서는 사용자 지정 지표다. 지표는 네임스페이스, 지표 이름, 차원(dimension)으로 식별된다. 차원은 이름-값 쌍이고 지표 하나에 30개까지 붙일 수 있다. 여기서 비용과 직결되는 규칙이 하나 있다. 이름이 같아도 차원 값의 조합이 다르면 다른 지표로 센다.
+
+```bash
+# 결제 API의 지연 시간을 사용자 지정 지표로 보낸다
+aws cloudwatch put-metric-data \
+  --namespace "Shop/Api" \
+  --metric-name Latency \
+  --unit Milliseconds \
+  --dimensions Service=payments,Endpoint=/charge,StatusCode=200 \
+  --value 182
+```
+
+`Service` 10개, `Endpoint` 30개, `StatusCode` 5개를 차원으로 쓰면 조합이 최대 1,500개다. 사용자 지정 지표는 지표 하나에 한 달 0.30달러(처음 1만 개 구간)라 1,500개면 한 달에 450달러다. 여기에 누군가 디버깅하려고 `InstanceId`를 차원으로 넣었고 인스턴스가 20대라면 조합은 3만 개가 된다. 1만 개까지는 0.30달러, 그다음 구간은 0.10달러라 3,000 + 2,000 = 한 달 5,000달러다. 인스턴스가 Auto Scaling으로 바뀔 때마다 새 ID가 새 지표를 만든다(요금은 시간 단위로 나눠 매겨지지만 지표 수는 계속 늘어난다). 사용자 ID처럼 값이 끝없는 것을 차원에 넣으면 그 순간 감당할 수 없게 된다. 이건 CloudWatch만의 문제가 아니고 모든 시계열 저장소의 [카디널리티 폭발](/posts/db-type-time-series)이다.
+
+그래서 차원에는 경보를 걸고 그래프를 나눠 볼 값만 넣는다. 요청 하나하나의 세부(사용자, 주문 번호)는 로그에 남기고, 지표로는 묶은 값을 보낸다.
+
+람다나 컨테이너처럼 `put-metric-data`를 자주 부르기 부담스러운 곳에서는 임베디드 지표 형식(Embedded Metric Format, EMF)을 쓴다. 정해진 모양의 JSON 로그 한 줄을 쓰면 CloudWatch Logs가 그 안에서 지표를 뽑아 준다. 로그 한 줄에 지표와 맥락(주문 번호 같은 고차원 값)을 함께 두고, 지표로는 `_aws.CloudWatchMetrics`에 선언한 차원만 쓴다.
+
+```json
+{
+  "_aws": {
+    "Timestamp": 1761264000000,
+    "CloudWatchMetrics": [
+      {
+        "Namespace": "Shop/Api",
+        "Dimensions": [["Service", "Endpoint"]],
+        "Metrics": [{ "Name": "Latency", "Unit": "Milliseconds" }]
+      }
+    ]
+  },
+  "Service": "payments",
+  "Endpoint": "/charge",
+  "Latency": 182,
+  "orderId": "ord_8f2a",
+  "traceId": "1-6720a1b0-3f1c2d4e5a6b7c8d9e0f1a2b"
+}
+```
+
+`orderId`는 차원으로 선언하지 않았으니 지표 수를 늘리지 않고, 로그 검색에서는 그대로 쓸 수 있다.
+
+## 로그 그룹과 Logs Insights
+
+CloudWatch Logs는 로그 그룹(앱이나 서비스 단위)과 그 안의 로그 스트림(인스턴스나 컨테이너 단위)으로 나뉜다. Lambda는 함수마다 `/aws/lambda/함수이름` 그룹을 자동으로 만들고, ECS는 태스크 정의의 `awslogs` 설정대로 쓴다.
+
+비용은 세 군데서 나온다. 들어오는 양(수집, GB당 0.50달러), 쌓아 둔 양(보관, GB·월당 0.03달러), Logs Insights로 훑은 양(GB당 0.005달러)이다. 대개 수집이 가장 크다. 디버그 로그를 운영에서 켜 둔 채 하루 100GB를 보내면 수집만 하루 50달러다. 자주 검색하지 않는 로그는 수집 단가가 낮은 Infrequent Access 로그 클래스로 보낼 수 있지만, 지표 필터 같은 일부 기능을 쓸 수 없으니 용도를 보고 고른다. 보관 기간은 로그 그룹마다 정하고, 오래 둬야 하는 감사 로그는 S3로 내보낸다.
+
+Logs Insights는 로그 그룹을 골라 쿼리로 묻는다. JSON 로그는 필드를 자동으로 알아보므로 [구조화 로그](/posts/structured-logging)로 남기면 바로 필드 이름으로 거를 수 있다. 처음 장면처럼 느려진 시각에 어떤 엔드포인트가 느렸는지 볼 때 이렇게 쓴다.
+
+```text
+fields @timestamp, path, latency_ms, status
+| filter service = "orders" and status >= 500
+| stats count(*) as errors, pct(latency_ms, 99) as p99 by path, bin(5m)
+| sort errors desc
+| limit 20
+```
+
+`bin(5m)`으로 5분 단위로 묶고, `pct`로 백분위를 낸다. 쿼리 비용은 훑은 양이라 시간 범위를 좁히고 로그 그룹을 꼭 필요한 것만 고르는 게 가장 큰 절약이다. 기본적인 쿼리 문법은 [로그 도구 한눈에 보기](/posts/logging-tools-overview)에서 다뤘다.
+
+## 로그에서 지표를 뽑는 지표 필터
+
+로그 줄 수는 지표로 보고 싶을 때가 많다. 예를 들어 앱이 결제 실패를 로그로만 남긴다면, "결제 실패가 5분에 20건을 넘으면 알림"을 걸려면 그 줄 수가 지표여야 한다. 지표 필터(metric filter)는 로그 그룹에 들어오는 줄마다 패턴을 맞춰 보고, 맞으면 지표에 값을 더한다.
+
+```bash
+# /orders/app 로그 그룹에서 level=ERROR이고 event=payment_failed인 줄을 센다
+aws logs put-metric-filter \
+  --log-group-name /orders/app \
+  --filter-name payment-failed \
+  --filter-pattern '{ $.level = "ERROR" && $.event = "payment_failed" }' \
+  --metric-transformations \
+      metricName=PaymentFailed,metricNamespace=Shop/Orders,metricValue=1,defaultValue=0
+```
+
+`metricValue=1`은 맞는 줄마다 1을 더하라는 뜻이고, `defaultValue=0`은 맞는 줄이 없는 기간에 0을 기록하라는 뜻이다. 이 값을 빼면 실패가 없던 구간은 0이 아니라 "데이터 없음"이 되어, 뒤에서 볼 경보의 결측 데이터 처리가 개입한다.
+
+지표 필터를 쓸 때 놓치기 쉬운 점이 둘 있다. 하나는 소급하지 않는다는 것이다. 만든 뒤에 들어오는 로그에만 적용되고, 지난 로그로 과거 그래프를 채우지 않는다. 지난 일은 Logs Insights로 따로 센다. 다른 하나는 로그 형식이 바뀌면 조용히 0이 된다는 것이다. 개발자가 `event` 필드 이름을 `type`으로 바꾸는 순간 필터는 아무것도 맞추지 못하고, 경보는 영원히 OK다. 중요한 경보는 로그 형식을 바꾸는 PR의 검토 목록에 넣는다.
+
+## 경보는 세 가지 상태를 오간다
+
+경보는 지표 하나(또는 지표 식)를 주기마다 보고 상태를 정한다. 상태는 셋이다. 기준 안이면 `OK`, 기준을 넘으면 `ALARM`, 판단할 데이터가 모자라면 `INSUFFICIENT_DATA`. 막 만든 경보는 데이터가 쌓일 때까지 `INSUFFICIENT_DATA`로 시작한다.
+
+판단 기준은 세 숫자로 정한다. 기간(period)은 점 하나를 만드는 시간 폭이다. 평가 기간 수(N, `EvaluationPeriods`)는 최근 몇 개의 점을 볼지다. 경보 데이터 포인트 수(M, `DatapointsToAlarm`)는 그중 몇 개가 넘어야 울릴지다. "N개 중 M개"로 읽는다. 1분 기간, 3개 중 2개면 최근 3분 중 2분이 넘을 때 울린다. 한 번 튄 점에는 반응하지 않고, 잠깐씩 끊기는 문제는 놓치지 않으려는 타협이다. [Prometheus 알림의 for](/posts/alerting)가 "조건이 계속 버텨야 하는 시간"이라면, M/N은 "창 안에서 몇 번이나"를 센다는 점이 다르다.
+
+아래 그림은 메모리 사용률 경보(기준 90%, 1분 기간, 3개 중 2개)가 점을 하나씩 받으며 상태를 바꾸는 과정이다. 오른쪽 칸이 지금 보고 있는 최근 3개의 창이다. 마지막 세 칸은 에이전트가 죽어 데이터가 오지 않는 구간이고, 이 경보는 결측 데이터를 "넘지 않음"으로 보도록 설정되어 있다.
+
+<AlgoTrace
+  caption="3개 중 2개 경보. 에이전트가 죽자 빈칸이 정상으로 채워져 경보가 풀린다"
+  memoryLabel="최근 3개 창"
+  cells={["72", "95", "60", "93", "96", "빈칸", "빈칸", "빈칸"]}
+  steps={[
+    { pointer: 0, memory: ["72 정상"], caption: "첫 점 72%. 기준 90% 아래라 OK다." },
+    { pointer: 1, memory: ["72 정상", "95 초과"], caption: "95%가 한 번 넘었다. 3개 중 1개라 아직 OK다." },
+    { pointer: 2, memory: ["72 정상", "95 초과", "60 정상"], caption: "창이 찼다. 넘은 건 1개뿐이라 OK. 한 번 튄 것에는 울리지 않는다." },
+    { pointer: 3, memory: ["95 초과", "60 정상", "93 초과"], found: [1, 3], caption: "72가 창에서 빠지고 93이 들어왔다. 3개 중 2개가 넘어 ALARM이 된다." },
+    { pointer: 4, memory: ["60 정상", "93 초과", "96 초과"], found: [3, 4], caption: "96%. 여전히 2개가 넘어 ALARM이 유지된다." },
+    { pointer: 5, memory: ["93 초과", "96 초과", "빈칸→정상"], caption: "OOM으로 에이전트가 죽어 점이 오지 않는다. 빈칸을 정상으로 채워도 아직 2개라 ALARM." },
+    { pointer: 6, memory: ["96 초과", "빈칸→정상", "빈칸→정상"], caption: "빈칸이 하나 더 정상으로 채워지자 넘은 게 1개가 되어 OK로 돌아간다. 서버는 더 나빠졌는데 경보는 풀렸다." },
+    { pointer: 7, memory: ["빈칸→정상", "빈칸→정상", "빈칸→정상"], caption: "데이터가 하나도 없는데 계속 OK다. 결측을 정상으로 본 설정이 장애를 가렸다." },
+  ]}
+/>
+
+## 데이터가 오지 않을 때 경보는 무엇을 믿나
+
+그림의 끝이 실제로 흔한 사고다. 결측 데이터 처리(`TreatMissingData`)는 점이 비었을 때 그 칸을 어떻게 볼지 정하는 설정이고, 네 가지 값이 있다.
+
+- `missing`(기본값): 빈칸을 판단에서 뺀다. 창 전체가 비면 `INSUFFICIENT_DATA`가 된다.
+- `notBreaching`: 빈칸을 기준 안으로 본다. 오류 건수처럼 "없으면 0"인 지표에 맞는다.
+- `breaching`: 빈칸을 기준 초과로 본다. 하트비트처럼 "와야 정상"인 지표에 맞는다.
+- `ignore`: 빈칸이면 지금 상태를 그대로 둔다.
+
+어떤 값이 맞는지는 지표가 비는 이유에 달려 있다. 지표 필터의 오류 건수는 오류가 없으면 점이 안 생기니(`defaultValue`를 안 줬다면) `notBreaching`이 맞다. 반대로 에이전트가 보내는 메모리 사용률이 비는 건 에이전트나 서버가 죽었다는 뜻이라, `notBreaching`으로 두면 위 그림처럼 장애가 커질수록 경보가 풀린다. 이런 지표는 `breaching`으로 두거나, 기본값 `missing`으로 두고 `INSUFFICIENT_DATA`에도 알림 동작을 걸어 둔다. 경보의 동작은 상태마다 따로 걸 수 있다(`--alarm-actions`, `--ok-actions`, `--insufficient-data-actions`).
+
+아래 함수로 네 가지 설정이 같은 점들을 어떻게 다르게 판정하는지 직접 돌려 볼 수 있다. 실제 CloudWatch는 일부만 빈 창에서 더 앞의 점을 끌어와 보는 등 세부 규칙이 더 있고, 여기서는 "최근 N칸, 빈칸 처리, M개 이상이면 ALARM"만 남긴 단순한 모형이다.
+
+<CodePlayground
+  caption="N개 중 M개 경보와 결측 데이터 처리 (단순 모형)"
+  functionName="evaluateAlarm"
+  initialCode={`// points: 기간마다의 값. 데이터가 없으면 null
+// threshold보다 크면 '초과'. 최근 n칸만 본다
+// treat: "missing" | "notBreaching" | "breaching" | "ignore"
+//   breaching이면 null을 초과로, notBreaching이면 정상으로 바꾼다
+//   missing·ignore는 null을 판단에서 뺀다
+// 남은 칸이 하나도 없으면 missing은 "INSUFFICIENT_DATA", ignore는 prev(지금 상태)
+// 초과가 m개 이상이면 "ALARM", 아니면 "OK"
+function evaluateAlarm(points, threshold, n, m, treat, prev) {
+  return "OK";
+}`}
+  solution={`function evaluateAlarm(points, threshold, n, m, treat, prev) {
+  const win = points.slice(-n).map((v) => {
+    if (v !== null) return v > threshold ? "B" : "G";
+    if (treat === "breaching") return "B";
+    if (treat === "notBreaching") return "G";
+    return null;
+  });
+  const present = win.filter((x) => x !== null);
+  if (present.length === 0) return treat === "ignore" ? prev : "INSUFFICIENT_DATA";
+  const breaches = present.filter((x) => x === "B").length;
+  return breaches >= m ? "ALARM" : "OK";
+}`}
+  tests={[
+    { label: "5개 중 3개가 연달아 넘었다", args: [[70, 95, 96, 97, 40], 90, 5, 3, "missing", "OK"], expected: "ALARM" },
+    { label: "띄엄띄엄 3개가 넘어도 울린다", args: [[95, 40, 96, 40, 97], 90, 5, 3, "missing", "OK"], expected: "ALARM" },
+    { label: "다 비면 missing은 판단 불가", args: [[null, null, null, null, null], 90, 5, 3, "missing", "OK"], expected: "INSUFFICIENT_DATA" },
+    { label: "다 비면 ignore는 상태 유지", args: [[null, null, null, null, null], 90, 5, 3, "ignore", "ALARM"], expected: "ALARM" },
+    { label: "죽은 서버: breaching은 울린다", args: [[95, null, 96, null, null], 90, 5, 3, "breaching", "OK"], expected: "ALARM" },
+    { label: "죽은 서버: notBreaching은 풀린다", args: [[95, null, 96, null, null], 90, 5, 3, "notBreaching", "ALARM"], expected: "OK" },
+  ]}
+/>
+
+CLI로 경보를 만들면 이 숫자들이 그대로 옵션이 된다. 아래는 Auto Scaling 그룹 단위 메모리 사용률 경보다. 성공하면 아무것도 출력하지 않는다.
+
+```bash
+# ASG 전체의 메모리 사용률 평균이 90%를 3분 중 2분 넘으면 SNS로 알린다
+aws cloudwatch put-metric-alarm \
+  --alarm-name orders-memory-high \
+  --namespace CWAgent \
+  --metric-name mem_used_percent \
+  --dimensions Name=AutoScalingGroupName,Value=orders-asg \
+  --statistic Average \
+  --period 60 \
+  --evaluation-periods 3 \
+  --datapoints-to-alarm 2 \
+  --threshold 90 \
+  --comparison-operator GreaterThanThreshold \
+  --treat-missing-data breaching \
+  --alarm-actions arn:aws:sns:us-east-1:111122223333:oncall \
+  --ok-actions arn:aws:sns:us-east-1:111122223333:oncall
+```
+
+경보가 많아지면 묶는 장치도 있다. 복합 경보(composite alarm)는 여러 경보의 상태를 `ALARM(a) AND ALARM(b)` 같은 규칙으로 엮어 하나의 알림을 낸다. "오류율이 높다"와 "지연이 길다"가 동시에 울릴 때만 사람을 깨우는 식이다. 고정 기준을 정하기 어려운 지표에는 과거 패턴으로 예상 범위를 그리는 이상 탐지(anomaly detection) 경보를 쓸 수 있다. 무엇에 알림을 걸지(증상에 걸고 원인은 대시보드로)는 [알림 설계](/posts/alerting)에서 다룬다.
+
+## 경보 다음에 일어나는 일: SNS와 EventBridge
+
+경보가 상태를 바꾸면 할 수 있는 일은 몇 가지로 정해져 있다. SNS 주제에 알리기, Auto Scaling 정책 실행, EC2 인스턴스 동작(중지, 종료, 재부팅, 복구), Systems Manager 작업 만들기. 여기서 더 복잡한 반응이 필요하면 EventBridge를 거친다.
+
+EventBridge는 AWS 서비스들이 내는 이벤트를 받아 규칙에 맞는 것을 대상(Lambda, SQS, SNS, Step Functions 등)으로 보내는 이벤트 버스다. 예전 이름이 CloudWatch Events였고, 같은 기능이 이름을 바꿔 넓어졌다. CloudWatch 경보도 상태가 바뀔 때마다 `CloudWatch Alarm State Change` 이벤트를 기본 이벤트 버스에 낸다. 그래서 경보에 직접 동작을 걸지 않아도, 규칙 하나로 여러 경보의 상태 변화를 받아 처리할 수 있다.
+
+아래 그림은 메모리 경보가 울린 뒤 알림과 자동 조치가 갈라지는 흐름이다.
+
+<SequenceDiagram
+  caption="에이전트의 점 하나가 경보를 바꾸고, EventBridge 규칙이 반응하기까지"
+  actors={[
+    { id: "agent", label: "CW Agent" },
+    { id: "cw", label: "CloudWatch" },
+    { id: "eb", label: "EventBridge" },
+    { id: "fn", label: "Lambda" },
+    { id: "sns", label: "SNS" },
+  ]}
+  steps={[
+    { from: "agent", to: "cw", label: "mem_used_percent", title: "점을 보낸다", detail: "에이전트가 1분마다 메모리 사용률을 CWAgent 네임스페이스로 보낸다.", payload: "mem_used_percent = 93.4\nAutoScalingGroupName = orders-asg" },
+    { from: "cw", to: "cw", label: "3개 중 2개", title: "경보가 창을 평가한다", detail: "최근 3분 중 2분이 90%를 넘어 OK에서 ALARM으로 바뀐다." },
+    { from: "cw", to: "sns", label: "alarm action", title: "경보에 걸어 둔 동작", detail: "경보에 직접 걸어 둔 SNS 주제로 알림이 간다. 당번의 메신저와 메일로 퍼진다." },
+    { from: "cw", to: "eb", label: "State Change", title: "상태 변화 이벤트를 낸다", detail: "같은 순간 기본 이벤트 버스에도 상태 변화 이벤트가 나간다. 이전 상태와 이유가 함께 담긴다.", payload: "detail-type: CloudWatch Alarm State Change\ndetail.state.value: ALARM\ndetail.previousState.value: OK" },
+    { from: "eb", to: "fn", label: "규칙 일치", title: "규칙이 대상을 부른다", detail: "이름이 orders-로 시작하는 경보가 ALARM이 되면 Lambda를 부르는 규칙이 맞는다." },
+    { from: "fn", to: "fn", label: "힙 덤프·티켓", title: "자동 조치를 한다", detail: "Lambda가 Systems Manager로 해당 인스턴스의 힙 덤프를 뜨고 티켓에 경보 링크를 남긴다. 재시작 같은 위험한 동작은 사람이 확인하게 둔다." },
+  ]}
+/>
+
+규칙의 이벤트 패턴은 이벤트 JSON의 모양을 그대로 따라 적는다. 아래 패턴은 `orders-`로 시작하는 경보가 ALARM이 됐을 때만 맞는다.
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "alarmName": [{ "prefix": "orders-" }],
+    "state": { "value": ["ALARM"] }
+  }
+}
+```
+
+EventBridge는 경보 말고도 쓸 데가 많다. EC2 인스턴스 상태 변화(`EC2 Instance State-change Notification`), ECS 태스크 중지, Auto Scaling 인스턴스 교체처럼 지표로는 안 보이는 사건을 이벤트로 받는다. "누가 보안 그룹을 바꿨다" 같은 API 호출은 CloudTrail을 거쳐 이벤트로 들어온다. 정해진 시각에 무언가를 돌리는 예약 작업은 예전에는 EventBridge 규칙의 schedule 식으로 만들었고, 지금은 시간대와 일회성 예약을 지원하는 EventBridge Scheduler를 권한다.
+
+대상이 실패할 때도 생각해 둔다. EventBridge는 대상 호출이 실패하면 정해진 횟수와 시간 동안 재시도하고, 그래도 안 되면 버린다. 대상에 [데드 레터 큐](/posts/dead-letter-queue)를 붙여 두지 않으면 버려진 이벤트는 흔적 없이 사라진다.
+
+## Prometheus·Grafana와 같이 쓸 때
+
+CloudWatch만으로 다 할 수 있는 팀도 있지만, 쿠버네티스나 여러 클라우드를 쓰면 Prometheus와 Grafana가 같이 들어오는 경우가 많다. 둘은 대신하는 관계보다 나눠 맡는 관계에 가깝다.
+
+CloudWatch가 유리한 곳은 AWS 관리형 서비스의 지표다. RDS, ALB, SQS, Lambda의 지표는 설정 없이 CloudWatch에 쌓이고, 다른 데서는 얻기 어렵다. IAM 권한, 경보에서 Auto Scaling·EventBridge로 바로 잇는 것도 AWS 안에서는 CloudWatch가 가장 짧다.
+
+Prometheus가 유리한 곳은 앱과 쿠버네티스 지표다. 라벨이 많은 지표를 CloudWatch 사용자 지정 지표로 보내면 앞에서 계산한 것처럼 차원 조합마다 요금이 붙는다. Prometheus는 저장소를 직접 운영하는 대신 시계열 수에 요금이 붙지 않는다(Amazon Managed Service for Prometheus는 수집한 샘플 수로 과금한다). PromQL은 비율, 백분위, 여러 지표의 결합을 CloudWatch의 지표 식보다 자유롭게 쓸 수 있다.
+
+흔히 보는 조합은 이렇다. AWS 서비스 지표는 CloudWatch에 두고, 앱·쿠버네티스 지표는 Prometheus에 두고, Grafana에서 두 데이터 소스를 한 대시보드에 올린다([Grafana 대시보드](/posts/grafana-dashboards)). 이때 놓치기 쉬운 비용이 하나 있다. Grafana가 CloudWatch 지표를 그릴 때마다 `GetMetricData` API를 부르는데, 이건 요청한 지표 수만큼 요금이 붙는다. 패널이 많은 대시보드를 30초 자동 새로고침으로 여러 사람이 켜 두면 이 요금이 생각보다 커진다. 새로고침 간격을 늘리거나, CloudWatch 지표 스트림(Metric Streams)으로 필요한 지표만 밀어내 Prometheus 쪽 저장소에 넣는 방법이 있다.
+
+## CloudWatch를 운영하며 자주 하는 실수
+
+- 기본 지표만 믿는다. 처음 장면처럼 메모리와 디스크는 에이전트 없이는 안 보인다. 새 인스턴스 템플릿에 에이전트 설치와 경보를 함께 넣어 둔다.
+- 로그 그룹 보관 기간을 정하지 않는다. 기본값이 "만료 없음"이라 몇 년 치 디버그 로그가 쌓여 보관 요금이 수집 요금을 따라잡는다. 로그 그룹을 코드(Terraform 등)로 만들면서 보관 기간을 필수로 둔다.
+- 차원에 인스턴스 ID나 요청 단위 값을 넣는다. 지표 수와 요금이 그 값의 종류만큼 늘어난다. 그룹 단위 차원(`AutoScalingGroupName`)으로 경보를 걸고, 세부는 로그로 본다.
+- 결측 데이터를 아무 생각 없이 `notBreaching`으로 둔다. 하트비트·에이전트 지표가 끊기면 경보가 풀린다. 지표가 비는 이유를 먼저 따져 설정을 고른다.
+- 지표 필터를 만들고 로그 형식이 바뀐 걸 모른다. 경보가 몇 달째 OK인데 실제로는 아무것도 세지 않고 있었다. 필터가 맞추는 로그가 정말 있는지 주기적으로 확인하거나, `defaultValue=0`을 주고 "한동안 계속 0"도 의심한다.
+- 경보 기간을 너무 짧게 잡아 기본 모니터링 지표에 1분 경보를 건다. 5분마다 한 점인 지표에 1분 기간 경보를 걸면 대부분의 칸이 비어 결측 처리에 휘둘린다. 기간은 지표가 들어오는 주기 이상으로 잡는다.
+
+## 면접에서 나올 만한 질문
+
+### EC2에서 메모리 사용률이 CloudWatch 기본 지표에 없는 이유는?
+
+기본 지표는 하이퍼바이저와 AWS 인프라가 인스턴스 밖에서 볼 수 있는 것만 담기 때문이다. CPU 시간이나 네트워크 양은 밖에서 알 수 있지만, 게스트 OS 안의 메모리 사용이나 파일 시스템 사용률은 OS 안에서 재야 한다. CloudWatch Agent를 설치하고 인스턴스 역할에 `CloudWatchAgentServerPolicy`를 붙여 `mem_used_percent`, `disk_used_percent`를 사용자 지정 지표로 보낸다.
+
+### 기본 모니터링과 상세 모니터링의 차이는?
+
+기본 모니터링은 5분마다, 상세 모니터링은 1분마다 점을 만든다. 5분 평균에서는 짧은 급증이 묻혀서 Auto Scaling이나 경보 반응이 늦어진다. 상세 모니터링은 추가 요금이 있으니 스케일링이나 빠른 경보가 필요한 인스턴스에 켠다. 지표는 시간이 지나면 1분 점은 15일, 5분 점은 63일, 1시간 점은 455일만 남는다.
+
+### 사용자 지정 지표 요금이 갑자기 늘었다면 무엇을 보나?
+
+차원 조합 수를 먼저 본다. CloudWatch는 이름이 같아도 차원 값 조합이 다르면 다른 지표로 세고 지표마다 월 요금을 매긴다. 누군가 인스턴스 ID나 사용자 ID 같은 값을 차원에 넣었거나, 에이전트가 tmpfs·overlay 마운트까지 디스크 지표를 만들고 있을 수 있다. 차원은 경보와 그래프 분할에 필요한 값만 남기고, 세부 값은 로그나 EMF의 비차원 필드로 옮긴다.
+
+### 경보의 "N개 중 M개"는 왜 쓰나?
+
+한 번 튄 점에는 반응하지 않으면서, 잠깐씩 끊기는 문제는 놓치지 않으려는 타협이다. 기간이 점 하나의 폭이고, 최근 N개의 점 중 M개가 기준을 넘으면 ALARM이 된다. M=N이면 계속 넘어야 하고, M을 줄이면 띄엄띄엄 넘는 것도 잡는다. 경보 상태는 OK, ALARM, INSUFFICIENT_DATA 셋이고, 상태마다 다른 동작을 걸 수 있다.
+
+### TreatMissingData는 어떻게 고르나?
+
+지표가 비는 이유에 따라 고른다. 오류 건수처럼 아무 일이 없으면 점이 안 생기는 지표는 notBreaching이 맞다. 에이전트가 보내는 메모리 지표나 하트비트처럼 와야 정상인 지표가 비면 서버가 죽었다는 뜻이라 breaching으로 두거나, 기본값 missing에 INSUFFICIENT_DATA 알림을 건다. 하트비트 지표를 notBreaching으로 두면 서버가 죽을수록 경보가 풀리는 사고가 난다.
+
+### 지표 필터를 쓸 때 주의할 점은?
+
+소급하지 않아서 만든 뒤에 들어온 로그만 센다. 과거 구간은 Logs Insights로 따로 세야 한다. 로그 형식이 바뀌면 패턴이 아무것도 맞추지 못하고 조용히 0이 되므로, 중요한 경보에 쓰이는 필드 이름은 바꿀 때 함께 확인한다. 맞는 줄이 없을 때 0을 남기려면 `defaultValue`를 준다.
+
+### CloudWatch 경보와 EventBridge는 어떻게 나눠 쓰나?
+
+경보에는 SNS 알림, Auto Scaling, EC2 동작처럼 정해진 동작을 직접 건다. 그 밖의 반응은 경보가 내는 상태 변화 이벤트를 EventBridge 규칙으로 받아 Lambda나 Step Functions로 보낸다. 규칙 하나로 여러 경보를 패턴으로 묶을 수 있고, EC2 상태 변화나 CloudTrail API 호출처럼 지표가 아닌 사건에도 같은 방식으로 반응한다. 대상 호출이 계속 실패하면 이벤트가 버려지니 DLQ를 붙인다.
+
+### Prometheus를 쓰는데 CloudWatch도 필요한가?
+
+대개 둘 다 쓴다. RDS, ALB, SQS, Lambda 같은 AWS 관리형 서비스의 지표는 CloudWatch에서 가장 쉽게 얻고, 경보에서 Auto Scaling이나 EventBridge로 잇기도 짧다. 라벨이 많은 앱·쿠버네티스 지표는 차원 조합마다 요금이 붙는 CloudWatch보다 Prometheus가 싸고 PromQL로 다루기 좋다. Grafana에 둘을 함께 올릴 때는 CloudWatch 패널이 GetMetricData 요금을 만든다는 점을 기억한다.

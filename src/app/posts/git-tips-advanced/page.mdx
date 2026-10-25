@@ -5,14 +5,16 @@ export const metadata = getPostMetadata("git-tips-advanced");
 <EasyIntro>
   두 달 전에는 통과하던 테스트가 깨졌는데 그 사이에 커밋이 200개 쌓였다. 하나씩 꺼내 확인하면 최악의 경우 199번이다.
 
-  Git에는 이런 일을 대신해 주는 도구가 여럿 있다. 범위를 반씩 잘라 가며 처음 깨진 커밋을 여덟 번 만에 찾는 bisect, 다른 갈래의 커밋 하나만 복사해 오는 cherry-pick, 하던 일을 치우지 않고 옆 폴더에서 다른 갈래를 꺼내 쓰는 worktree, 이 줄을 누가 왜 바꿨는지 캐는 blame, 이미 지워진 코드가 언제 사라졌는지 찾는 검색, 커밋 전에 규칙을 검사하는 훅 같은 것들이다. 큰 서랍장에서 필요한 서랍을 알고 여는 것과 같아서, 어느 서랍에 무엇이 있는지만 알면 된다.
+  Git에는 이런 일을 대신해 주는 도구가 여럿 있다. 범위를 반씩 잘라 가며 처음 깨진 커밋을 여덟 번 만에 찾는 bisect, 다른 갈래의 커밋 하나만 복사해 오는 cherry-pick, 하던 일을 치우지 않고 옆 폴더에서 다른 갈래를 꺼내 쓰는 worktree, 이 줄을 누가 왜 바꿨는지 캐는 blame, 이미 지워진 코드가 언제 사라졌는지 찾는 검색, 커밋을 파일로 떠서 주고받는 패치 같은 것들이다. 큰 서랍장에서 필요한 서랍을 알고 여는 것과 같아서, 어느 서랍에 무엇이 있는지만 알면 된다.
 
-  도구를 알면 "느낌으로 찾기"가 "순서대로 좁히기"로 바뀐다. 다만 훅처럼 내 컴퓨터에서만 도는 검사는 건너뛸 수 있어서, 꼭 지켜야 할 규칙은 서버 쪽에서 한 번 더 검사한다.
+  도구를 알면 "느낌으로 찾기"가 "순서대로 좁히기"로 바뀐다. 서랍을 다 외울 필요는 없고, 이런 일에는 이런 서랍이 있다는 것만 기억해 두면 필요할 때 꺼내 쓸 수 있다.
 </EasyIntro>
 
 장바구니 합계 테스트가 깨졌다. 두 달 전에 태그를 붙인 v2.3.0에서는 통과했다. 그 뒤로 커밋이 200개 가까이 쌓였고, 이름만 봐서는 어느 커밋이 범인인지 알 수 없다. 하나씩 checkout해서 테스트를 돌리면 최악의 경우 199번이다.
 
-Git에는 이런 일을 대신해 주는 도구가 있다. 이 글은 그중 실무에서 자주 꺼내는 것들을 모았다. 버그가 들어온 커밋을 반씩 잘라 찾는 bisect, 커밋 하나만 옮기는 cherry-pick, 브랜치를 바꾸지 않고 다른 폴더에서 일하는 worktree, 코드의 내력을 캐는 blame과 pickaxe, 커밋 전에 규칙을 검사하는 훅, 파일마다 다른 규칙을 주는 `.gitattributes`, 서브모듈과 subtree, 그리고 켜 두면 편한 설정들이다.
+Git에는 이런 일을 대신해 주는 도구가 있다. 이 글은 그중 실무에서 자주 꺼내는 것들을 모았다. 버그가 들어온 커밋을 반씩 잘라 찾는 bisect, 커밋 하나만 옮기는 cherry-pick, 브랜치를 바꾸지 않고 다른 폴더에서 일하는 worktree, 코드의 내력을 캐는 blame과 pickaxe, 커밋을 패치 파일로 주고받는 format-patch와 am, 파일마다 다른 규칙을 주는 `.gitattributes`, 서브모듈과 subtree, 그리고 켜 두면 편한 설정들이다.
+
+커밋 전에 규칙을 검사하는 훅은 다룰 것이 많아서 [Git 훅 글](/posts/git-hooks)로 따로 뺐다. pre-commit이 인덱스만 봐야 하는 이유, `core.hooksPath`와 husky로 팀이 같은 훅을 쓰게 하는 법, `--no-verify`로 건너뛸 수 없는 서버 훅까지 거기서 이어 간다.
 
 기준은 Ubuntu 24.04의 Git 2.43이다. 22.04의 2.34에는 없는 기능은 버전을 함께 적었다. 출력은 모두 직접 만든 저장소에서 실행한 결과다.
 
@@ -286,6 +288,78 @@ git cherry-pick --abort
 
 `-n`(`--no-commit`)은 변경만 작업 폴더에 적용하고 커밋은 하지 않는다. 여러 커밋을 하나로 묶어 가져올 때 쓴다. 머지 커밋을 cherry-pick하려면 어느 부모 기준의 diff인지 `-m 1`처럼 정해 줘야 한다. cherry-pick은 같은 변경을 담은 다른 커밋을 만드는 것이라, 나중에 두 브랜치를 합치면 Git이 대개 같은 변경으로 알아보지만 그 사이에 같은 줄이 또 바뀌었다면 충돌이 날 수 있다. 자주 cherry-pick해야 한다면 브랜치 전략이 맞지 않는다는 신호일 수 있다. 그 이야기는 [브랜치 전략 글](/posts/git-branching-strategy)에 있다.
 
+## 커밋을 파일로 주고받는 format-patch와 am
+
+cherry-pick은 같은 저장소 안, 혹은 fetch할 수 있는 원격의 커밋을 가져온다. 상대 저장소에 접근할 수 없으면 쓸 수 없다. 망이 분리된 고객사 서버에 수정 하나를 넘기거나, 리눅스 커널처럼 메일링 리스트로 기여를 받는 프로젝트가 이런 경우다. 이때는 커밋을 파일로 떠서 보낸다.
+
+`git format-patch`는 커밋 하나마다 패치 파일 하나를 만든다. 아래는 Jisoo가 `fix/qty` 브랜치에 커밋 둘을 하고 main 이후의 것을 뜬 결과다.
+
+```bash
+# main에 없고 지금 브랜치에만 있는 커밋을 하나씩 파일로 만든다
+git format-patch main -o ../outbox
+
+# 첫 번째 파일 열어 보기
+cat ../outbox/0001-fix-cart-multiply-price-by-qty.patch
+```
+
+```text
+../outbox/0001-fix-cart-multiply-price-by-qty.patch
+../outbox/0002-feat-coupon-add-max-coupon.patch
+
+From 54d29e1f88d5eab2011723272c86bd11e94d55c4 Mon Sep 17 00:00:00 2001
+From: Jisoo <jisoo@example.com>
+Date: Sat, 24 Oct 2026 00:34:53 +0000
+Subject: [PATCH 1/2] fix(cart): multiply price by qty
+
+---
+ cart.js | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cart.js b/cart.js
+index 750f6e8..0dd63bc 100644
+--- a/cart.js
++++ b/cart.js
+@@ -1,3 +1,3 @@
+ function total(items) {
+-  return items.reduce((s, i) => s + i.price, 0);
++  return items.reduce((s, i) => s + i.price * i.qty, 0);
+ }
+-- 
+2.43.0
+```
+
+파일이 메일 한 통 모양이다. `From:`이 작성자, `Subject:`가 커밋 메시지 첫 줄, `---` 아래가 diff다. 첫 줄의 `Mon Sep 17 00:00:00 2001`은 실제 날짜가 아니라 메일함 형식을 맞추려는 고정 문자열이니 신경 쓰지 않는다. 마지막 커밋 하나만 뜨려면 `git format-patch -1 HEAD`, 범위를 정하려면 `A..B`를 준다.
+
+받는 쪽은 적용하기 전에 먼저 들어가는지 본다. `git apply --check`는 아무것도 바꾸지 않고 적용 가능 여부만 종료 코드로 알려 준다. `--stat`은 무엇이 바뀔지 요약한다.
+
+```bash
+# 적용되는지만 확인한다 (파일을 바꾸지 않는다)
+git apply --check ../outbox/*.patch
+
+# 작성자와 메시지까지 살려 커밋으로 만든다
+git am ../outbox/*.patch
+git log --format='%h %an / %cn  %s' -3
+```
+
+```text
+Applying: fix(cart): multiply price by qty
+Applying: feat(coupon): add max coupon
+c94495d Jisoo / Matt  feat(coupon): add max coupon
+3465cd8 Jisoo / Matt  fix(cart): multiply price by qty
+7660683 Matt / Matt  feat(cart): add total
+```
+
+`--check`가 조용히 끝나면 종료 코드 0, 적용된다는 뜻이다. `git am`으로 만든 커밋은 작성자(`%an`)가 Jisoo로 남고 커미터(`%cn`)만 적용한 Matt가 된다. 같은 파일을 `git apply`로 적용하면 diff만 작업 트리에 들어가고 커밋은 생기지 않는다. 메시지와 작성자가 필요 없는 임시 diff라면 그쪽이 맞다.
+
+받는 쪽이 그 사이에 같은 줄을 고쳤다면 `--check`가 먼저 알려 준다.
+
+```text
+error: patch failed: cart.js:1
+error: cart.js: patch does not apply
+```
+
+이 상태에서 `git am`을 하면 첫 패치에서 멈추고 `--continue`, `--skip`, `--abort` 중 하나를 고르라고 한다. 패치 파일에는 diff의 `index 750f6e8..0dd63bc` 줄이 있어서, 받는 저장소에 그 원본 blob이 있다면 `git am -3`이 3-way 병합으로 다시 시도한다. 그래도 충돌하면 평소처럼 충돌 표시가 남으니 풀고 `git add` 뒤 `git am --continue`를 한다. 포기하려면 `git am --abort`로 시작 전으로 돌아간다. 패치 파일을 메일 클라이언트로 붙여 넣다가 줄 끝 공백이나 탭이 바뀌면 적용되지 않는 일이 흔해서, 파일 그대로 첨부하거나 `git send-email`로 보낸다.
+
 ## 브랜치를 바꾸지 않고 다른 폴더에서 일한다
 
 기능 작업이 반쯤 되어 커밋하기 애매한 상태인데 급한 핫픽스 요청이 들어왔다. stash로 치우고 브랜치를 바꾸면 `node_modules`나 빌드 캐시가 그 브랜치에 맞지 않아 다시 설치해야 하기도 한다. `git worktree`는 같은 저장소의 다른 브랜치를 다른 폴더에 동시에 꺼낸다. clone을 하나 더 하는 것과 달리 `.git`의 객체와 브랜치를 함께 쓰니 디스크도 덜 들고, 한쪽에서 만든 커밋이 다른 쪽에서 바로 보인다.
@@ -511,148 +585,6 @@ git shortlog -sne --no-merges HEAD -- src/cart/
 
 한 사람이 이메일을 여러 개 써서 따로 세어진다면 저장소 루트의 `.mailmap`에 `Matt <matt@example.com> <matt@old-company.example>`처럼 적어 하나로 묶는다. 커밋 수는 기여의 크기가 아니다. 사람을 평가하는 데 쓰는 숫자가 아니라 누구에게 물어볼지 찾는 숫자로 쓴다.
 
-## 커밋 전에 규칙을 검사하는 훅
-
-훅(hook)은 Git이 특정 시점에 실행하는 스크립트다. `.git/hooks/` 폴더에 정해진 이름의 실행 파일을 두면 된다. `git init`을 하면 예제가 `.sample` 확장자로 들어 있다.
-
-```bash
-ls .git/hooks
-```
-
-```text
-applypatch-msg.sample
-commit-msg.sample
-fsmonitor-watchman.sample
-post-update.sample
-pre-applypatch.sample
-pre-commit.sample
-pre-merge-commit.sample
-pre-push.sample
-pre-rebase.sample
-pre-receive.sample
-prepare-commit-msg.sample
-push-to-checkout.sample
-sendemail-validate.sample
-update.sample
-```
-
-어느 훅이 언제 도는지 커밋 하나와 푸시 하나를 따라가며 본다.
-
-<SequenceDiagram
-  caption="커밋과 푸시 사이에 훅이 끼어드는 자리"
-  actors={[
-    { id: "dev", label: "개발자" },
-    { id: "git", label: "로컬 git" },
-    { id: "hook", label: "로컬 훅" },
-    { id: "server", label: "원격 서버" },
-  ]}
-  steps={[
-    {
-      from: "dev",
-      to: "git",
-      label: "git commit",
-      title: "커밋을 시작한다",
-      detail: "메시지를 쓰기 전에 먼저 스테이징된 내용을 검사할 기회가 온다.",
-    },
-    {
-      from: "git",
-      to: "hook",
-      label: "pre-commit",
-      title: "pre-commit: 내용 검사",
-      detail: "린트, 포맷, 비밀 값 검사처럼 빨리 끝나는 것을 돌린다. 0이 아닌 값으로 끝나면 커밋이 만들어지지 않는다.",
-      payload: "npx lint-staged",
-    },
-    {
-      from: "git",
-      to: "hook",
-      label: "commit-msg",
-      title: "commit-msg: 메시지 검사",
-      detail: "메시지가 담긴 파일 경로를 인자로 받는다. 형식이 틀리면 거부한다. prepare-commit-msg는 이보다 앞서 메시지 기본값(예: 브랜치 이름의 이슈 번호)을 채우는 데 쓴다.",
-      payload: "$1 = .git/COMMIT_EDITMSG",
-    },
-    {
-      from: "hook",
-      to: "dev",
-      label: "post-commit",
-      title: "커밋이 만들어진다",
-      detail: "post-commit은 결과를 바꿀 수 없고 알림 같은 뒷일에만 쓴다.",
-    },
-    {
-      from: "dev",
-      to: "hook",
-      label: "pre-push",
-      title: "pre-push: 밀기 전 마지막 검사",
-      detail: "어느 원격으로 무엇을 미는지 받는다. 테스트처럼 오래 걸리는 검사는 커밋마다가 아니라 여기서 돌린다.",
-    },
-    {
-      from: "git",
-      to: "server",
-      label: "push",
-      title: "서버 훅이 최종 판정한다",
-      detail: "서버의 pre-receive, update 훅이나 GitHub의 브랜치 보호 규칙은 클라이언트가 건너뛸 수 없다. 로컬 훅은 --no-verify로 건너뛸 수 있으니 꼭 지켜야 할 규칙은 서버와 CI에 둔다.",
-    },
-  ]}
-/>
-
-Conventional Commits 형식을 강제하는 commit-msg 훅을 직접 만들어 본다. `.git/hooks`는 저장소에 커밋되지 않으니, 팀이 같이 쓰려면 저장소 안 폴더에 두고 Git이 그 폴더를 훅 폴더로 쓰게 한다(`core.hooksPath`, 2.9+).
-
-```bash
-# 저장소 안에 훅 폴더를 만든다
-mkdir -p .githooks
-cat > .githooks/commit-msg <<'EOF'
-#!/bin/sh
-# commit-msg 훅: 첫 줄이 Conventional Commits 형식인지 검사한다
-msg_file="$1"
-first_line=$(head -n 1 "$msg_file")
-
-# Merge, Revert, fixup!/squash! 커밋은 Git이 만든 메시지라 통과시킨다
-case "$first_line" in
-  "Merge "*|"Revert "*|"fixup! "*|"squash! "*) exit 0 ;;
-esac
-
-pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9-]+\))?!?: .{1,72}$'
-if ! printf '%s\n' "$first_line" | grep -Eq "$pattern"; then
-  echo "commit-msg: 첫 줄이 Conventional Commits 형식이 아니다" >&2
-  echo "  받은 메시지: $first_line" >&2
-  echo "  예) feat(cart): add coupon field" >&2
-  exit 1
-fi
-EOF
-
-# 실행 권한을 주고, 이 폴더를 훅 폴더로 쓴다
-chmod +x .githooks/commit-msg
-git config core.hooksPath .githooks
-```
-
-형식이 틀린 메시지로 커밋하면 거부된다.
-
-```bash
-git commit -m "update stuff"
-```
-
-```text
-commit-msg: 첫 줄이 Conventional Commits 형식이 아니다
-  받은 메시지: update stuff
-  예) feat(cart): add coupon field
-```
-
-종료 코드는 1이고 커밋은 만들어지지 않았다. 형식을 맞추면 통과한다.
-
-```bash
-git commit -m "feat(cart): add coupon field"
-```
-
-```text
-[main (root-commit) 593f63f] feat(cart): add coupon field
- 2 files changed, 18 insertions(+)
- create mode 100755 .githooks/commit-msg
- create mode 100644 a
-```
-
-`create mode 100755`가 실행 권한까지 저장소에 기록됐다는 표시다. 권한이 없으면 Git은 훅을 조용히 건너뛰고 `hint: The '.githooks/commit-msg' hook was ignored because it's not set as executable.`이라는 안내만 낸다. 급할 때는 `git commit --no-verify`로 pre-commit과 commit-msg를 건너뛸 수 있다. 그래서 훅은 편의 장치이고, 반드시 지켜야 할 규칙은 CI에서 한 번 더 검사한다.
-
-`core.hooksPath`는 clone할 때마다 각자 설정해야 한다. JavaScript 프로젝트에서는 husky가 `npm install` 때 이 설정을 자동으로 해 주고, lefthook은 YAML 하나로 훅을 정의하고 여러 검사를 병렬로 돌린다. 둘 다 하는 일은 결국 이 훅 폴더를 채우는 것이다. 커밋 메시지 규칙 자체는 [브랜치 전략 글](/posts/git-branching-strategy)에서 다뤘다.
-
 ## 파일마다 다른 규칙을 주는 .gitattributes
 
 `.gitattributes`는 경로 패턴마다 Git이 파일을 어떻게 다룰지 정한다. 저장소에 커밋되니 모두에게 같은 규칙이 적용된다.
@@ -865,7 +797,7 @@ git config --list --show-origin
 
 ## 도구를 꺼낼 때를 아는 것
 
-처음 상황으로 돌아가면, 200개 커밋에서 범인을 찾는 데 bisect run으로 테스트 여덟 번이 걸렸고, `git log -L`로 그 함수의 역사를 보니 원인이 바로 보였다. 고친 커밋을 운영 중인 릴리스 브랜치로 보낼 때는 cherry-pick -x를, 작업 중에 끼어든 핫픽스는 worktree를 쓰면 된다. 훅과 `.gitattributes`, 설정 몇 줄은 이런 일이 애초에 덜 생기게 해 준다.
+처음 상황으로 돌아가면, 200개 커밋에서 범인을 찾는 데 bisect run으로 테스트 여덟 번이 걸렸고, `git log -L`로 그 함수의 역사를 보니 원인이 바로 보였다. 고친 커밋을 운영 중인 릴리스 브랜치로 보낼 때는 cherry-pick -x를, 작업 중에 끼어든 핫픽스는 worktree를 쓰면 된다. 메일이나 사내망 너머로 커밋을 넘겨야 할 때는 format-patch와 am이 있고, `.gitattributes`와 설정 몇 줄은 이런 일이 애초에 덜 생기게 해 준다.
 
 ## 면접에서 나올 만한 질문
 
@@ -889,9 +821,9 @@ good으로 알려 준 커밋과 bad로 알려 준 커밋 사이의 가운데 커
 
 blame은 지금 있는 줄만 다루니 `git log -S "문자열"`을 쓴다. 그 문자열의 등장 횟수가 바뀐 커밋, 즉 생기거나 사라진 커밋을 찾아 준다. 같은 줄 안의 수정까지 찾으려면 정규식으로 diff를 거르는 `-G`를 쓰고, 함수 하나의 변천은 `git log -L :함수명:파일`로 본다.
 
-### Git 훅으로 커밋 규칙을 강제하면 충분한가요?
+### git format-patch와 git am, git apply는 어떻게 다른가요?
 
-충분하지 않다. 로컬 훅은 `.git/hooks`에 있어서 저장소에 커밋되지 않고, `--no-verify`로 언제든 건너뛸 수 있다. 팀 공유는 `core.hooksPath`나 husky, lefthook으로 하되, 반드시 지켜야 할 규칙은 CI와 서버 쪽(브랜치 보호 규칙, pre-receive 훅)에서 한 번 더 검사한다. 로컬 훅은 빨리 알려 주는 편의 장치로 본다.
+format-patch는 커밋마다 작성자, 날짜, 메시지, diff를 담은 메일 형식의 패치 파일을 만든다. git am은 그 파일을 읽어 작성자와 메시지까지 살린 커밋으로 다시 만들고, git apply는 diff만 작업 트리에 적용할 뿐 커밋하지 않는다. 받기 전에 `git apply --check`로 적용되는지 먼저 보고, am이 실패하면 `-3`으로 3-way 병합을 시도하거나 `--abort`로 되돌린다.
 
 ### 서브모듈과 subtree는 어떻게 다른가요?
 

@@ -1,0 +1,586 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("linux-disks-filesystems");
+
+<EasyIntro>
+  새 공책을 하나 샀다고 해 보자. 공책을 가방에 넣었다고 바로 글을 쓸 수 있는 건 아니다. 표지에 이름을 붙이고, 칸을 나누고, 맨 앞에 목차 쪽을 만들어야 나중에 어디에 무엇을 적었는지 찾을 수 있다.
+
+  컴퓨터에 새 디스크를 붙일 때도 똑같다. 디스크를 꽂으면 컴퓨터는 "빈 공책이 하나 생겼네" 하고 알아채기만 한다. 사람이 칸을 나누고(파티션), 목차 쪽을 만들고(파일 시스템), 책장의 어느 칸에 꽂을지 정해 줘야(마운트) 비로소 파일을 저장할 수 있다.
+
+  목차 쪽에는 파일마다 번호표가 하나씩 있다. 번호표에는 파일이 공책의 몇 쪽에 있는지, 누가 주인인지 적혀 있다. 그런데 번호표 수가 처음에 정해져 있어서, 작은 파일을 아주 많이 만들면 쪽은 남았는데 번호표가 떨어지는 일이 생긴다.
+
+  이 글은 디스크를 붙이고 쓰기까지의 순서를 따라가면서, 공간이 남았는데 꽉 찼다고 나오는 이상한 상황이 왜 생기는지 함께 살펴본다.
+</EasyIntro>
+
+데이터가 늘어서 EC2 인스턴스에 100GiB짜리 EBS 볼륨을 하나 더 붙였다. 콘솔에서 "연결됨"을 확인하고 서버에 들어가 `df -h`를 쳤는데 새 디스크가 보이지 않는다. 볼륨이 잘못 붙은 건 아니다. `df`는 마운트된 파일 시스템만 보여 주고, 새 볼륨은 아직 파일 시스템도 마운트 지점도 없는 날것의 블록 장치라서 안 보이는 것이다.
+
+디스크 하나가 파일을 담기까지는 층이 네 개 있다. 블록 장치, 파티션, 파일 시스템, 마운트다. 이 글은 이 층을 아래에서 위로 하나씩 쌓고, 볼륨을 키울 때 세 층을 모두 키워야 하는 이유, LVM이 그 사이에 끼는 자리, 그리고 파일 이름 뒤에 숨은 inode까지 본다. 끝으로 "공간이 남았는데 No space left on device", "df와 du가 다르다"처럼 현장에서 자주 만나는 증상을 직접 재현한다.
+
+기준은 Ubuntu 24.04(e2fsprogs 1.47, xfsprogs 6.x)다. 실습은 클라우드 볼륨 대신 루프 디바이스(파일을 디스크처럼 쓰는 장치)로 했다. 그래서 장치 이름이 `/dev/loop0`이지만, EC2에서는 같은 자리에 `/dev/nvme1n1`이 온다. 명령과 출력 형식은 같다. 디스크에 쓴 데이터가 언제 실제로 내려가는지는 [페이지 캐시 글](/posts/page-cache-disk-io)에서, 파일 권한은 [파일 권한 글](/posts/linux-files-permissions)에서 다룬다.
+
+## 디스크가 파일을 담기까지 네 층
+
+아래 그림은 새 볼륨이 `/data` 아래의 파일이 되기까지 거치는 층이다. 화살표를 따라 점이 흐르는 방향이 "무엇 위에 무엇을 올리나"다.
+
+<ConceptDiagram
+  width={400}
+  height={330}
+  caption="블록 장치 위에 파티션 표, 그 위에 파일 시스템, 마지막으로 디렉터리 트리에 붙인다. LVM을 쓰면 파티션과 파일 시스템 사이에 한 층이 더 낀다."
+  nodes={[
+    { id: "dev", label: "블록 장치", sub: "/dev/nvme1n1", x: 200, y: 40, w: 160 },
+    { id: "part", label: "파티션", sub: "GPT · /dev/nvme1n1p1", x: 200, y: 115, w: 170 },
+    { id: "lvm", label: "LVM (선택)", sub: "PV → VG → LV", x: 330, y: 190, w: 120 },
+    { id: "fs", label: "파일 시스템", sub: "ext4 · XFS", x: 200, y: 215, w: 150 },
+    { id: "mnt", label: "마운트 지점", sub: "/data", x: 200, y: 295, w: 150 },
+  ]}
+  edges={[
+    { from: "dev", to: "part", label: "sgdisk" },
+    { from: "part", to: "fs", label: "mkfs" },
+    { from: "part", to: "lvm", dashed: true },
+    { from: "lvm", to: "fs", dashed: true },
+    { from: "fs", to: "mnt", label: "mount" },
+  ]}
+/>
+
+블록 장치는 "512바이트나 4KiB 단위로 읽고 쓸 수 있는 큰 배열"일 뿐이다. 어디서부터 어디까지가 한 덩어리인지 적은 것이 파티션 표, 그 덩어리 안에서 "이 이름의 파일은 몇 번 블록에 있다"를 관리하는 것이 파일 시스템이다. 마운트는 그 파일 시스템을 디렉터리 트리의 한 자리에 꽂는 일이다. `df`가 보는 건 맨 위층이라 새 볼륨이 안 보였던 것이다.
+
+## lsblk로 장치부터 찾는다
+
+`lsblk`는 커널이 아는 블록 장치를 나무 모양으로 보여 준다. 실습에서 256MiB짜리 파일을 루프 디바이스로 붙였다.
+
+```bash
+# 256MiB짜리 빈 파일을 디스크처럼 붙인다 (실습용. EC2라면 콘솔에서 볼륨을 붙이는 단계다)
+truncate -s 256M disk1.img
+sudo losetup -fP --show disk1.img
+
+# 커널이 아는 블록 장치를 본다
+lsblk
+```
+
+```text
+/dev/loop0
+NAME  MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+loop0   7:0    0   256M  0 loop 
+vda   254:0    0   256G  0 disk /
+...
+```
+
+`loop0`은 있는데 아래에 아무것도 없고 `MOUNTPOINTS`도 비어 있다. 이게 "붙었지만 아직 쓸 수 없다"의 모습이다. `vda`처럼 장치 이름 바로 옆에 마운트 지점이 있으면 파티션 없이 장치 전체를 파일 시스템으로 쓰는 경우다.
+
+EC2의 Nitro 인스턴스는 EBS를 NVMe로 붙인다. 콘솔에서 `/dev/sdf`로 붙여도 서버 안에서는 `nvme1n1`처럼 보이고, 붙인 순서나 재부팅에 따라 번호가 바뀔 수 있다. 어느 장치가 어느 볼륨인지는 `/dev/disk/by-id/` 아래 링크 이름에 볼륨 ID가 들어 있어서 그걸로 맞춘다.
+
+```bash
+# nvme-Amazon_Elastic_Block_Store_vol0abc... 처럼 볼륨 ID가 이름에 들어 있다
+ls -l /dev/disk/by-id/ | grep -i elastic
+# 크기·모델·시리얼로 한 번 더 확인한다
+lsblk -o NAME,SIZE,MODEL,SERIAL
+```
+
+이름이 바뀔 수 있다는 사실이 뒤에서 fstab에 장치 이름 대신 UUID를 적는 이유가 된다.
+
+## 파티션 표는 GPT로 만든다
+
+파티션 표 형식은 두 가지다. 예전의 MBR은 주 파티션이 네 개까지고 2TiB를 넘는 디스크를 다 쓰지 못한다. GPT는 기본으로 파티션 128개, 사실상 크기 제한이 없고, 디스크 끝에 표의 사본을 한 벌 더 둔다. 새 디스크라면 GPT를 고른다.
+
+```bash
+# 파티션 1번을 처음부터 끝까지(0:0), 리눅스 파일 시스템 형식(8300)으로 만든다
+sudo sgdisk -n 1:0:0 -t 1:8300 -c 1:data /dev/loop0
+# 커널에 새 파티션 표를 다시 읽게 한다
+sudo partprobe /dev/loop0
+lsblk /dev/loop0
+sudo sgdisk -p /dev/loop0
+```
+
+```text
+Creating new GPT entries in memory.
+The operation has completed successfully.
+NAME      MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+loop0       7:0    0  256M  0 loop 
+└─loop0p1 259:0    0  255M  0 part 
+Disk /dev/loop0: 524288 sectors, 256.0 MiB
+Sector size (logical/physical): 512/512 bytes
+...
+First usable sector is 34, last usable sector is 524254
+Partitions will be aligned on 2048-sector boundaries
+Total free space is 2014 sectors (1007.0 KiB)
+
+Number  Start (sector)    End (sector)  Size       Code  Name
+   1            2048          524254   255.0 MiB   8300  data
+```
+
+파티션이 2048번 섹터(1MiB)에서 시작한다. 앞쪽 34섹터는 GPT 표가 쓰고, 나머지는 SSD나 클라우드 스토리지의 내부 블록 경계에 맞추려고 비워 둔다. 끝이 524254인 것도 디스크 끝에 표의 사본이 있어서다. 대화형으로 하고 싶으면 `fdisk`나 `parted`를 써도 결과는 같다.
+
+데이터 전용 볼륨이라면 파티션 없이 `/dev/nvme1n1` 전체에 바로 파일 시스템을 만들어도 된다. 다만 파티션을 하나 두면 다른 도구가 "빈 디스크"로 착각하지 않고, 뒤에서 볼 `growpart` 같은 확장 절차가 루트 볼륨과 똑같아져서 팀에서는 보통 파티션을 만든다.
+
+파티션만 만들고 바로 마운트하면 이렇게 실패한다.
+
+```text
+mount: /mnt/data: wrong fs type, bad option, bad superblock on /dev/loop0p1, missing codepage or helper program, or other error.
+```
+
+칸은 나눴지만 그 칸 안에 목차(파일 시스템)가 아직 없다.
+
+## ext4와 XFS 중 하나를 고른다
+
+```bash
+# ext4 파일 시스템을 만들고 라벨을 data로 붙인다
+sudo mkfs.ext4 -L data /dev/loop0p1
+sudo blkid /dev/loop0p1
+```
+
+```text
+mke2fs 1.47.0 (5-Feb-2023)
+Creating filesystem with 65275 4k blocks and 65280 inodes
+Filesystem UUID: 285fc09a-7ffb-4c30-bc37-785215fd1e2d
+Superblock backups stored on blocks: 
+	32768
+
+Allocating group tables: 0/2   done                            
+Writing inode tables: 0/2   done                            
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: 0/2   done
+
+/dev/loop0p1: LABEL="data" UUID="285fc09a-7ffb-4c30-bc37-785215fd1e2d" BLOCK_SIZE="4096" TYPE="ext4" PARTLABEL="data" PARTUUID="aeadeda3-9af2-4c9c-a356-1be1e6f24621"
+```
+
+출력에서 볼 곳은 세 군데다. 블록 크기가 4KiB라 65275블록이 255MiB다. inode가 65280개로 이 순간 정해졌다(뒤에서 이 숫자가 문제를 만든다). 슈퍼블록(파일 시스템의 설계도)의 사본이 32768번 블록에 있어서 앞쪽이 깨져도 `e2fsck -b 32768`로 살릴 수 있다. 저널 4096블록은 크래시가 나도 메타데이터가 반쯤 쓰인 채로 남지 않게 하는 기록장이다(저널이 하는 일은 [페이지 캐시 글](/posts/page-cache-disk-io)에서 다뤘다).
+
+같은 일을 XFS로 하면 이렇다. XFS는 300MiB보다 작은 파일 시스템을 만들지 못해서 600MiB 장치에서 했다.
+
+```bash
+sudo mkfs.xfs -L logs /dev/loop3
+```
+
+```text
+meta-data=/dev/loop3             isize=512    agcount=4, agsize=38400 blks
+         =                       crc=1        finobt=1, sparse=1, rmapbt=1
+         =                       reflink=1    bigtime=1 inobtcount=1 nrext64=0
+data     =                       bsize=4096   blocks=153600, imaxpct=25
+log      =internal log           bsize=4096   blocks=16384, version=2
+```
+
+`agcount=4`는 디스크를 독립된 할당 그룹 네 개로 나눴다는 뜻이다. 여러 스레드가 서로 다른 그룹에 동시에 쓸 수 있어서 큰 파일과 병렬 쓰기에 강하다. `imaxpct=25`는 "공간의 25%까지 inode로 쓸 수 있다"는 상한이다. ext4처럼 inode 수를 미리 정하지 않고 필요할 때 만든다.
+
+둘의 차이 중 운영에서 실제로 갈리는 건 이 정도다.
+
+| | ext4 | XFS |
+|---|---|---|
+| 기본으로 쓰는 곳 | Ubuntu, Debian | RHEL, Rocky, Amazon Linux 2023 |
+| inode 수 | mkfs 때 고정 | 필요할 때 만든다 |
+| 키우기 | 마운트한 채로 `resize2fs` | 마운트한 채로 `xfs_growfs` |
+| 줄이기 | 마운트를 풀고 `resize2fs` | 안 된다 |
+| 복구 도구 | `e2fsck` | `xfs_repair` |
+
+줄일 수 없다는 건 실제로 해 보면 분명하다.
+
+```bash
+# 마운트된 XFS를 100000블록으로 줄여 본다
+sudo xfs_growfs -D 100000 /mnt/logs
+```
+
+```text
+[EXPERIMENTAL] try to shrink unused space 100000, old size is 230400
+xfs_growfs: XFS_IOC_FSGROWFSDATA xfsctl failed: Invalid argument
+```
+
+작은 파일이 아주 많을 디렉터리(메일 스풀, 세션 파일, 캐시)라면 inode가 모자랄 일이 없는 XFS가 편하고, 나중에 줄일 가능성이 있으면 ext4가 낫다. 대부분의 웹 서버 데이터 볼륨은 배포판 기본값을 따라가도 된다.
+
+## df가 보여 주는 크기가 만든 크기보다 작다
+
+255MiB 파티션에 ext4를 만들고 마운트했다.
+
+```bash
+sudo mkdir -p /mnt/data
+sudo mount /dev/loop0p1 /mnt/data
+df -h /mnt/data
+df -i /mnt/data
+```
+
+```text
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop0p1    223M   24K  205M   1% /mnt/data
+Filesystem     Inodes IUsed IFree IUse% Mounted on
+/dev/loop0p1    65280    11 65269    1% /mnt/data
+```
+
+255MiB가 223MiB가 됐고, 쓴 게 없는데 쓸 수 있는 건 205MiB다. 32MiB는 inode 표와 저널, 그룹 정보 같은 메타데이터가 미리 가져갔다. `Size`와 `Avail`의 차이 18MiB는 ext4가 root 전용으로 남겨 두는 예약 블록이다.
+
+```bash
+sudo tune2fs -l /dev/loop0p1 | grep -E "Block count|Reserved block count"
+```
+
+```text
+Block count:              65275
+Reserved block count:     3263
+```
+
+3263 ÷ 65275 = 5%다. 루트 파일 시스템이 일반 사용자 프로세스로 꽉 차도 root가 로그인해서 치울 자리를 남겨 두는 장치다. 데이터만 담는 1TiB 볼륨이라면 50GiB가 놀고 있는 셈이라 `sudo tune2fs -m 1 /dev/nvme1n1p1`로 1%까지 줄이기도 한다. 루트 볼륨에서는 그대로 둔다.
+
+## 마운트는 fstab에 UUID로 적는다
+
+`mount`로 붙인 건 재부팅하면 사라진다. 부팅 때마다 붙이려면 `/etc/fstab`에 한 줄을 적는다. 칸은 여섯 개다.
+
+```text
+# 장치                                      마운트 지점  형식  옵션             dump  fsck 순서
+UUID=285fc09a-7ffb-4c30-bc37-785215fd1e2d  /data        ext4  defaults,nofail  0     2
+```
+
+첫 칸에 `/dev/nvme1n1p1`을 적지 않는 이유는 앞에서 봤다. NVMe 번호는 붙인 순서에 따라 바뀔 수 있고, 바뀌면 엉뚱한 디스크가 `/data`에 붙거나 아무것도 안 붙는다. UUID는 파일 시스템을 만들 때 생기는 값이라 장치 이름이 바뀌어도 그대로다. 마지막 칸은 부팅 때 fsck를 돌리는 순서로, 루트가 1, 나머지가 2, 검사하지 않으면 0이다. XFS는 부팅 때 fsck를 하지 않으니 0으로 둔다.
+
+`nofail`이 이 줄에서 가장 중요한 옵션이다. 없으면 이 디스크를 찾지 못했을 때 부팅이 멈추고 emergency 모드에 빠진다. EBS를 떼어 냈거나 스냅숏으로 다시 만든 볼륨이라 UUID가 달라졌을 때 흔히 생긴다. 클라우드 서버는 콘솔에 키보드를 대기 어려워서, 데이터 디스크에는 `nofail`을 붙이고 앱 쪽에서 `/data`가 비었는지 확인하는 편이 낫다. 왜 부팅이 멈추는지는 [부팅 과정 글](/posts/linux-boot-process)에서 systemd가 fstab을 읽는 방식으로 따라간다.
+
+<Callout kind="warning">
+fstab을 고친 뒤 확인 없이 재부팅하면 안 된다. 한 줄이 틀려도 원격 서버가 부팅 중에 멈출 수 있다. 아래 두 명령을 모두 돌려 보고 재부팅한다. 이미 멈췄다면 EC2는 시리얼 콘솔이나, 루트 볼륨을 다른 인스턴스에 붙여 fstab을 고치는 방법으로 되돌린다.
+</Callout>
+
+검사는 두 가지를 같이 한다. 일부러 틀린 줄 두 개를 넣은 파일로 해 봤다. 둘째 줄은 없는 UUID, 셋째 줄은 `noatime`을 `noatme`으로 잘못 쳤다.
+
+```bash
+# 1) 문법과 장치 존재 여부를 검사한다
+sudo findmnt --verify --tab-file fstab.bad
+# 2) 실제로 다 붙여 본다 (이미 붙은 것은 건너뛴다)
+sudo mount -a --fstab fstab.bad
+# 3) 옵션 오류의 자세한 이유는 커널 로그에 남는다
+sudo dmesg | tail -3
+```
+
+```text
+0 parse errors, 1 error, 0 warnings
+/mnt/backup
+   [E] unreachable on boot required source: UUID=11111111-2222-3333-4444-555555555555
+mount: /mnt/backup: can't find UUID=11111111-2222-3333-4444-555555555555.
+mount: /mnt/logs: wrong fs type, bad option, bad superblock on /dev/loop3, missing codepage or helper program, or other error.
+       dmesg(1) may have more information after failed mount system call.
+[ 2299.764345] xfs: Unknown parameter 'noatme'
+```
+
+`findmnt --verify`는 없는 UUID는 잡았지만 옵션 오타는 지나쳤다. 옵션은 파일 시스템 드라이버가 마운트할 때 판단하기 때문이다. 그래서 `mount -a`까지 돌려야 하고, `wrong fs type, bad option`이라는 뭉뚱그린 메시지의 진짜 이유는 `dmesg`에 있다. 평소에 실제 `/etc/fstab`을 검사할 때는 `--tab-file` 없이 `sudo findmnt --verify`, `sudo mount -a`를 친다.
+
+마운트된 상태는 `findmnt`로 본다. `findmnt /data`는 장치, 형식, 실제 적용된 옵션을 한 줄로 보여 주고, `findmnt -T /data/uploads/a.jpg`는 그 파일이 어느 파일 시스템에 있는지 알려 준다.
+
+## 볼륨을 키우면 세 층을 차례로 키운다
+
+`/data`가 90%를 넘어서 EBS 볼륨을 100GiB에서 200GiB로 늘렸다. 콘솔에서 크기를 바꾸면 끝일 것 같지만 `df`는 그대로다. 블록 장치만 커졌고, 그 위의 파티션과 파일 시스템은 여전히 옛 크기를 기억한다. 아래 그림에서 단계를 넘기면 어느 층이 언제 커지는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="볼륨 크기를 바꾸면 블록 장치만 커진다. 파티션과 파일 시스템은 사람이 차례로 늘려야 한다."
+  actors={[
+    { id: "ops", label: "운영자" },
+    { id: "dev", label: "블록 장치" },
+    { id: "part", label: "파티션" },
+    { id: "fs", label: "파일 시스템" },
+  ]}
+  steps={[
+    { from: "ops", to: "dev", label: "modify-volume", title: "볼륨을 키운다", detail: "EBS 크기를 바꾸면 서버를 끄지 않아도 커널이 새 크기를 본다. lsblk의 디스크 줄만 커진다.", payload: "loop0 512M\n└─loop0p1 255M" },
+    { from: "ops", to: "part", label: "growpart", title: "파티션 끝을 옮긴다", detail: "파티션 표의 끝 섹터를 디스크 끝으로 옮긴다. 시작 섹터는 그대로라 데이터는 움직이지 않는다.", payload: "CHANGED: partition=1 start=2048 old: size=522207 new: size=1046495" },
+    { from: "ops", to: "fs", label: "resize2fs", title: "파일 시스템을 늘린다", detail: "새로 생긴 블록에 그룹 정보와 inode 표를 만들고 여유 공간에 넣는다. XFS는 xfs_growfs를 쓴다." },
+    { from: "fs", to: "ops", label: "df 223M → 463M", title: "df가 바뀐다", detail: "이제야 df에 늘어난 크기가 보인다. 세 단계 중 하나라도 빠지면 그 층에서 멈춘다." },
+  ]}
+/>
+
+실습에서 이미지 파일을 512MiB로 늘리고 같은 순서를 밟았다.
+
+```bash
+# (실습용) 루프 디바이스에 커진 크기를 알린다. EBS라면 콘솔이나 CLI로 볼륨을 키우는 단계다
+truncate -s 512M disk1.img && sudo losetup -c /dev/loop0
+lsblk /dev/loop0
+
+# 1) 파티션을 디스크 끝까지 늘린다 (cloud-guest-utils 패키지)
+sudo growpart /dev/loop0 1
+# 2) 파일 시스템을 파티션 끝까지 늘린다
+sudo resize2fs /dev/loop0p1      # XFS라면 sudo xfs_growfs /data (장치가 아니라 마운트 지점)
+df -h /mnt/data
+```
+
+```text
+NAME      MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+loop0       7:0    0  512M  0 loop 
+└─loop0p1 259:0    0  255M  0 part /mnt/data
+CHANGED: partition=1 start=2048 old: size=522207 end=524254 new: size=1046495 end=1048542
+resize2fs 1.47.0 (5-Feb-2023)
+Resizing the filesystem on /dev/loop0p1 to 130811 (4k) blocks.
+The filesystem on /dev/loop0p1 is now 130811 (4k) blocks long.
+
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop0p1    463M   36K  427M   1% /mnt/data
+```
+
+실제 서버에서는 마운트한 채로 `resize2fs`가 바로 늘린다. 이 실습 환경은 마운트된 파일 시스템의 크기 변경 호출을 막아 두어서, 마운트를 풀고 `e2fsck -f` 뒤에 돌린 출력이다. 결과 줄은 같다. 같은 실습 환경에서 XFS는 마운트한 채로 `xfs_growfs`가 됐다(`data blocks changed from 153600 to 230400`).
+
+순서를 거꾸로 하면 안 된다. 파일 시스템이 파티션보다 커질 수는 없어서 `resize2fs`를 먼저 치면 "이미 최대 크기"라며 아무 일도 하지 않는다. `growpart`를 두 번 치면 `NOCHANGE: partition 1 is size 1046495. it cannot be grown`이 나오며 끝난다. 줄일 때는 반대로 파일 시스템을 먼저 줄이고 파티션을 줄이는데, EBS는 볼륨을 줄일 수 없어서 새 볼륨에 복사하는 수밖에 없다. 또 EBS는 한 번 크기를 바꾸면 같은 볼륨을 다시 바꾸기까지 기다려야 하는 시간이 있다(AWS 문서 기준 6시간). 그러니 아슬아슬하게 늘리지 말고 넉넉하게 한 번에 늘린다.
+
+## LVM은 디스크와 파일 시스템 사이에 한 층을 더 둔다
+
+파티션은 디스크 한 장 안에서만 움직인다. 디스크 두 장을 합쳐 하나의 `/data`로 쓰거나, 파일 시스템을 지우지 않고 다른 디스크로 옮기려면 LVM(Logical Volume Manager)을 쓴다. 이름 셋만 알면 된다.
+
+- PV(물리 볼륨): LVM에 넘겨준 디스크나 파티션. 4MiB짜리 조각(PE)으로 잘린다.
+- VG(볼륨 그룹): PV 여러 장을 합친 저장 공간 통.
+- LV(논리 볼륨): VG에서 필요한 만큼 떼어 낸 가상 디스크. 그 위에 파일 시스템을 만든다.
+
+PV와 VG는 실습 환경에서 만들어졌다.
+
+```bash
+sudo pvcreate /dev/loop2 /dev/loop3      # 두 장치를 PV로 만든다
+sudo vgcreate vgdata /dev/loop2          # 하나로 VG를 만든다
+sudo vgextend vgdata /dev/loop3          # 나중에 디스크를 한 장 더 넣는다
+sudo vgs
+sudo pvs
+sudo vgdisplay vgdata | grep -E "PE Size|Total PE"
+```
+
+```text
+  Volume group "vgdata" successfully extended
+  VG     #PV #LV #SN Attr   VSize VFree
+  vgdata   2   0   0 wz--n- 1.16g 1.16g
+  PV         VG     Fmt  Attr PSize   PFree  
+  /dev/loop2 vgdata lvm2 a--  596.00m 596.00m
+  /dev/loop3 vgdata lvm2 a--  596.00m 596.00m
+  PE Size               4.00 MiB
+  Total PE              298
+```
+
+600MiB 장치가 596MiB PV가 된 건 앞쪽에 LVM 메타데이터를 두기 때문이다. LV는 커널의 device-mapper가 있어야 만들어지는데 이 실습 커널에는 없어서 `lvcreate`가 `Failure to communicate with kernel device-mapper driver`로 멈췄다. 그래서 LV부터는 명령과 의미만 적는다. 일반 Ubuntu 서버와 EC2 커널에는 device-mapper가 들어 있다.
+
+```bash
+# VG에서 400MiB를 떼어 LV를 만들고 그 위에 파일 시스템을 만든다
+sudo lvcreate -n lvapp -L 400M vgdata
+sudo mkfs.ext4 /dev/vgdata/lvapp
+# LV를 키우면서 파일 시스템까지 한 번에 늘린다 (-r = --resizefs)
+sudo lvextend -r -L +200M /dev/vgdata/lvapp
+# VG의 남은 공간을 모두 준다
+sudo lvextend -r -l +100%FREE /dev/vgdata/lvapp
+```
+
+`lvextend -r`은 LV를 늘린 뒤 파일 시스템 종류를 보고 `resize2fs`나 `xfs_growfs`를 알아서 불러 준다. 앞 절의 세 단계가 "VG에 PV 추가 → `lvextend -r`" 두 단계로 줄어든다. 디스크를 갈아 끼울 때는 새 PV를 VG에 넣고 `pvmove /dev/old`로 PE를 옮긴 뒤 `vgreduce`로 옛 디스크를 뺀다. 그동안 파일 시스템은 마운트된 채다.
+
+LVM 스냅숏은 "지금 이 순간의 LV"를 얼려 두는 기능이다. 만들 때 데이터를 복사하지 않고, 원본 블록이 바뀌기 직전에 옛 내용을 스냅숏 공간으로 옮겨 둔다(copy-on-write). 그래서 만들기는 순식간이지만 두 가지를 조심한다. 원본에 쓰기가 많을수록 스냅숏 공간이 빨리 차고, 다 차면 스냅숏이 무효가 된다. 또 스냅숏이 있는 동안에는 모든 쓰기가 옛 블록 복사를 한 번 더 하니 느려진다. DB 백업처럼 잠깐 얼려 두고 복사한 뒤 바로 지우는 용도로 쓴다.
+
+```bash
+# 원본 변화분 1GiB까지 담을 수 있는 스냅숏을 만든다
+sudo lvcreate -s -n lvapp-snap -L 1G /dev/vgdata/lvapp
+sudo lvs     # Data% 칸이 스냅숏 공간이 찬 비율이다. 100%가 되면 못 쓴다
+sudo lvremove /dev/vgdata/lvapp-snap
+```
+
+클라우드에서는 LVM이 꼭 필요하지 않은 경우가 많다. EBS는 볼륨 자체를 키울 수 있고 스냅숏도 스토리지 쪽에서 찍는다. 그래도 인스턴스 스토어 여러 장을 하나로 묶거나, 온프레미스처럼 디스크를 계속 추가하는 서버에서는 LVM이 제 몫을 한다. RHEL 계열 설치 프로그램은 루트까지 LVM으로 잡는 경우가 많아서 `lsblk`에 `rhel-root` 같은 `lvm` 줄이 보인다.
+
+## 파일 이름 뒤에는 inode 번호가 있다
+
+파일 시스템 안에서 파일의 본체는 이름이 아니라 inode다. inode에는 크기, 소유자, 권한, 시간, 그리고 데이터가 들어 있는 블록 위치가 적혀 있다. 이름은 inode에 들어 있지 않다. 디렉터리가 "이름 → inode 번호" 표일 뿐이다.
+
+```bash
+cd /mnt/data
+echo "v1" > config.yml
+ls -li config.yml                 # 맨 앞 숫자가 inode 번호
+stat -c '%n inode=%i links=%h size=%s' config.yml
+```
+
+```text
+13 -rw-r--r-- 1 root root 3 Oct 23 19:03 config.yml
+config.yml inode=13 links=1 size=3
+```
+
+이 구조를 알면 몇 가지 동작이 설명된다. 같은 파일 시스템 안의 `mv`는 데이터를 옮기지 않고 디렉터리 표의 줄만 바꿔서 10GiB 파일도 순식간에 끝난다. 다른 파일 시스템으로 `mv`하면 복사한 뒤 지운다. 디렉터리에 `w` 권한만 있으면 남의 파일도 지울 수 있는 것도, 지우기가 파일이 아니라 디렉터리 표를 고치는 일이라서다. 그리고 `rm`은 표에서 줄을 지우고 inode의 링크 수를 하나 줄일 뿐이다. 데이터는 링크 수가 0이 되고, 그 파일을 열어 둔 프로세스도 없을 때 비로소 풀린다. 이 두 조건이 뒤의 "df와 du가 다르다"를 만든다.
+
+## 하드 링크와 심볼릭 링크
+
+하드 링크는 같은 inode를 가리키는 이름을 하나 더 만드는 것, 심볼릭 링크는 "저 경로로 가라"는 글자를 담은 작은 파일을 새로 만드는 것이다.
+
+```bash
+ln config.yml hard.yml            # 하드 링크: 같은 inode 13에 이름 하나 추가
+ln -s config.yml soft.yml         # 심볼릭 링크: 경로 글자를 담은 새 inode
+ls -li config.yml hard.yml soft.yml
+mv config.yml config.old          # 원래 이름을 바꿔 본다
+cat hard.yml
+cat soft.yml
+```
+
+```text
+13 -rw-r--r-- 2 root root  3 Oct 23 19:03 config.yml
+13 -rw-r--r-- 2 root root  3 Oct 23 19:03 hard.yml
+14 lrwxrwxrwx 1 root root 10 Oct 23 19:03 soft.yml -> config.yml
+v1
+cat: soft.yml: No such file or directory
+```
+
+하드 링크 쪽은 inode 번호가 13으로 같고 링크 수가 2가 됐다. 어느 쪽이 "원본"이랄 것도 없이 둘 다 같은 파일의 이름이다. 심볼릭 링크는 새 inode 14를 받았고 크기 10은 `config.yml`이라는 글자 수다. 원래 이름을 바꾸자 하드 링크는 그대로 읽히고 심볼릭 링크는 끊겼다.
+
+하드 링크에는 제약이 둘 있다.
+
+```text
+$ ln /mnt/data/hard.yml /tmp/hard.yml
+ln: failed to create hard link '/tmp/hard.yml' => '/mnt/data/hard.yml': Invalid cross-device link
+$ ln d d2
+ln: d: hard link not allowed for directory
+```
+
+inode 번호는 파일 시스템 안에서만 뜻이 있어서 다른 파일 시스템에는 걸 수 없다. 디렉터리에 하드 링크를 허락하면 트리에 고리가 생겨 `find`나 `du`가 끝나지 않을 수 있어서 막아 둔다. 심볼릭 링크는 이런 제약이 없는 대신 대상이 사라지면 끊긴다.
+
+실무에서 심볼릭 링크를 가장 많이 쓰는 곳은 배포다. `releases/2026-10-23/`에 새 버전을 풀고 `current` 링크만 바꾸면 웹 서버 설정은 그대로 둔 채 버전이 바뀌고, 되돌릴 때도 링크만 옛 디렉터리로 돌리면 된다. 이때 `ln -sfn new current`는 "지우고 새로 만들기"라 아주 짧은 순간 `current`가 없다. 끊김 없이 바꾸려면 임시 이름으로 링크를 만든 뒤 `mv -T current.tmp current`로 이름을 바꾼다. `rename`은 원자적이라 중간 상태가 없다. 하드 링크는 백업 도구가 바뀌지 않은 파일을 복사하지 않고 링크만 걸어 공간을 아낄 때(`rsync --link-dest`) 쓴다.
+
+## 공간이 남았는데 No space left on device
+
+세션 파일을 쌓는 서버에서 이런 일이 생긴다. `df -h`는 여유가 넉넉한데 파일을 만들면 실패한다. 실습으로 inode를 64개만 준 작은 ext4를 만들고 파일을 채웠다.
+
+```bash
+# inode를 64개만 갖는 16MiB 파일 시스템을 만든다 (재현용)
+sudo mkfs.ext4 -q -N 64 /dev/loop1 && sudo mount /dev/loop1 /mnt/small
+# 세션 파일 45개, 캐시 파일 5개를 만든다 ...
+echo hello > /mnt/small/new.txt
+df -h /mnt/small
+df -i /mnt/small
+```
+
+```text
+bash: /mnt/small/new.txt: No space left on device
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop1       12M   32K   11M   1% /mnt/small
+Filesystem     Inodes IUsed IFree IUse% Mounted on
+/dev/loop1         64    64     0  100% /mnt/small
+```
+
+용량은 1%만 썼는데 inode는 100%다. 파일 하나가 아무리 작아도 inode 하나를 쓰고, ext4의 inode 수는 mkfs 때 정해져서 늘릴 수 없다. 기본값은 16KiB마다 하나(`/etc/mke2fs.conf`의 `inode_ratio = 16384`)라서 평균 파일 크기가 그보다 훨씬 작은 디렉터리가 오래 쌓이면 이렇게 된다. `ENOSPC`라는 같은 오류 번호를 쓰니 메시지만 보고는 둘을 구분할 수 없다. 그래서 디스크가 꽉 찼다는 말을 들으면 `df -h`와 `df -i`를 항상 같이 본다.
+
+어디에 파일이 몰렸는지는 `du --inodes`로 센다.
+
+```bash
+# 디렉터리별 inode 수를 세고 많은 순으로 본다 (-x: 다른 파일 시스템으로 넘어가지 않는다)
+sudo du --inodes -x -d1 /mnt/small | sort -n
+```
+
+```text
+1	/mnt/small/lost+found
+6	/mnt/small/cache
+46	/mnt/small/sess
+55	/mnt/small
+```
+
+`sess`가 범인이다. 합계가 55인데 `IUsed`가 64인 건 ext4가 내부용으로 앞번호 inode 열 개 남짓을 미리 잡아 두기 때문이다. 고치는 길은 세 가지다. 오래된 세션을 지우는 정리 작업을 둔다(근본 원인). 당장 급하면 그 디렉터리를 다른 볼륨으로 옮긴다. 다시 만들 수 있다면 `mkfs.ext4 -i 4096`처럼 inode를 촘촘하게 주거나 XFS로 만든다. PHP 세션, 메일 큐, 빌드 캐시, 작은 썸네일이 자주 이 문제를 낸다.
+
+## df와 du가 다른 이유
+
+반대 방향의 이상함도 있다. `df`는 꽉 찼다는데 `du`로 다 더해 보면 한참 모자란다. 둘은 세는 방법이 다르다. `df`는 파일 시스템의 슈퍼블록에 적힌 "사용 중인 블록 수"를 읽고, `du`는 디렉터리 트리를 돌면서 보이는 파일의 크기를 더한다. 트리에서 보이지 않는데 블록은 쓰고 있는 것이 있으면 둘이 갈린다.
+
+가장 흔한 경우는 지웠지만 아직 열려 있는 파일이다. 로그 파일을 프로세스가 열어 둔 채로 `rm`했다.
+
+```bash
+# 150MiB 로그를 만들고, 다른 프로세스가 그 파일을 쓰기용으로 열어 둔다
+dd if=/dev/zero of=app/app.log bs=1M count=150 status=none
+(exec 3>>app/app.log; sleep 600) &
+rm app/app.log
+df -h /mnt/data
+du -sh /mnt/data
+# 링크 수가 1 미만(=지워짐)인데 열려 있는 파일을 찾는다
+sudo lsof -nP +L1 /mnt/data | grep -E "COMMAND|app.log"
+```
+
+```text
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop0p1    463M  151M  277M  36% /mnt/data
+32K	/mnt/data
+COMMAND    PID     USER   FD   TYPE DEVICE  SIZE/OFF NLINK    NODE NAME
+sleep    12480     root    3w   REG  259,0 157286400     0      15 /mnt/data/app/app.log (deleted)
+```
+
+`du`는 32K, `df`는 151M이다. 이름은 사라졌지만(`NLINK 0`) PID 12480이 3번 파일 디스크립터로 쥐고 있어서 블록이 풀리지 않았다. 아래 그림은 `rm`과 블록 해제가 어떻게 따로 일어나는지 보여 준다.
+
+<SequenceDiagram
+  caption="rm은 이름만 지운다. 블록은 마지막으로 연 프로세스가 닫을 때 풀린다."
+  actors={[
+    { id: "app", label: "앱 프로세스" },
+    { id: "dir", label: "디렉터리" },
+    { id: "ino", label: "inode 15" },
+    { id: "ops", label: "운영자" },
+  ]}
+  steps={[
+    { from: "app", to: "ino", label: "open(O_APPEND)", title: "앱이 로그를 연다", detail: "커널은 열린 파일 표에 이 inode를 걸어 둔다. 앱은 이름이 아니라 fd 3으로 쓴다." },
+    { from: "ops", to: "dir", label: "rm app.log", title: "이름을 지운다", detail: "디렉터리 표에서 app.log 줄이 빠지고 inode 15의 링크 수가 0이 된다. du는 이제 이 파일을 못 본다." },
+    { from: "dir", to: "ino", label: "links = 0", title: "블록은 그대로다", detail: "열려 있는 fd가 있어서 커널은 블록을 풀지 않는다. df는 여전히 151M을 쓴다고 센다.", payload: "sleep 12480 3w ... NLINK 0 ... (deleted)" },
+    { from: "ops", to: "ino", label: ": > /proc/12480/fd/3", title: "열린 채로 비운다", detail: "프로세스를 멈출 수 없으면 fd로 크기를 0으로 자른다. 블록이 바로 풀린다." },
+    { from: "app", to: "ino", label: "close", title: "닫히면 inode도 풀린다", detail: "프로세스를 재시작하거나 파일을 다시 열게 하면 마지막 참조가 사라져 inode까지 회수된다." },
+  ]}
+/>
+
+```bash
+# 프로세스를 죽이지 않고 그 파일을 0바이트로 자른다
+sudo sh -c ': > /proc/12480/fd/3'
+df -h /mnt/data
+```
+
+```text
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop0p1    463M   36K  427M   1% /mnt/data
+```
+
+근본적으로는 로그를 `rm`으로 지우지 않는다. logrotate의 기본 방식은 파일 이름을 바꾸고 새 파일을 만든 뒤 앱에 시그널을 보내 다시 열게 하는 것이고, 시그널을 못 받는 앱이면 `copytruncate`로 복사한 뒤 원본을 0으로 자른다(그 사이 몇 줄이 빠질 수 있다). 설정은 [EC2 서버 첫 설정 글](/posts/aws-ec2-ubuntu-server-setup)의 logrotate 부분에 있다.
+
+둘째 경우는 마운트에 가려진 파일이다. `/data/uploads`에 파일이 쌓인 뒤에 같은 자리에 다른 볼륨을 마운트하면 원래 파일은 가려져 `du`에 안 보이지만 공간은 그대로 쓴다.
+
+```bash
+# uploads에 80MiB가 있는 상태에서 다른 파일 시스템을 그 위에 마운트한다
+sudo mount /dev/loop1 /mnt/data/uploads
+df -h /mnt/data ; du -sh -x /mnt/data
+# bind 마운트로 가려지기 전의 모습을 다른 자리에서 본다
+sudo mount --bind /mnt/data /mnt/peek && du -sh /mnt/peek/uploads
+```
+
+```text
+/dev/loop0p1    463M   81M  347M  19% /mnt/data
+32K	/mnt/data
+81M	/mnt/peek/uploads
+```
+
+`--bind`로 같은 파일 시스템을 다른 자리에 한 번 더 붙이면 그 위에 얹힌 마운트 없이 원래 내용이 보인다. 부팅 때 볼륨이 늦게 붙어서 앱이 빈 `/data`에 먼저 쓰기 시작한 경우가 이렇게 숨는다. 셋째는 앞에서 본 예약 블록이다. 일반 사용자에게는 `Avail`이 0인데 `Use%`는 95%에서 멈춘 것처럼 보인다.
+
+## 디스크 경보가 울렸을 때 보는 순서
+
+"디스크가 찼다"는 알림을 받으면 이 순서로 좁힌다.
+
+```bash
+df -h                                  # 1) 어느 파일 시스템인가. 용량인가
+df -i                                  # 2) 아니면 inode인가
+sudo du -xh -d1 /var | sort -h | tail  # 3) 그 안에서 어느 디렉터리가 큰가 (-x로 다른 볼륨 제외)
+sudo du --inodes -x -d1 /var | sort -n | tail   # 3') inode라면 파일 개수로
+sudo lsof -nP +L1                      # 4) du 합계가 df보다 한참 작으면, 지웠는데 열린 파일
+findmnt --real                         # 5) 엉뚱한 자리에 마운트가 얹혀 있지 않은가
+```
+
+자주 하는 실수도 이 순서 안에 있다. 큰 로그를 `rm`하고 공간이 안 돌아와서 당황한다(4번). `du -sh /`를 `-x` 없이 돌려 `/proc`과 다른 볼륨까지 헤맨다. 볼륨을 키우고 `growpart`를 빼먹어 `resize2fs`가 아무 일도 안 한다. fstab에 장치 이름을 적었다가 인스턴스 타입을 바꾼 뒤 엉뚱한 디스크가 붙는다. 루트 볼륨이 꽉 차면 journald, 패키지 업데이트, DB까지 줄줄이 실패하니 앱 데이터와 로그는 처음부터 별도 볼륨에 두는 편이 안전하다.
+
+## 층을 알면 증상이 읽힌다
+
+디스크는 블록 장치, 파티션, 파일 시스템, 마운트의 네 층이고 각 층은 따로 커지고 따로 실패한다. 그리고 파일의 본체는 이름이 아니라 inode다. `df`에 안 보이면 위층이 비었고, 키웠는데 그대로면 중간층을 빠뜨렸고, 남았는데 꽉 찼다면 inode를 보고, `df`와 `du`가 다르면 이름 없이 남은 inode를 찾는다. 서버가 부팅하면서 fstab을 어떻게 읽는지는 [부팅 과정 글](/posts/linux-boot-process)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 새 디스크를 붙였는데 df에 안 보인다. 무엇을 해야 하나?
+
+`df`는 마운트된 파일 시스템만 보여 주니 아직 위층이 없는 것이다. `lsblk`로 장치를 찾고(EBS라면 by-id의 볼륨 ID로 확인), GPT 파티션을 만들고, `mkfs`로 파일 시스템을 만들고, 마운트한 뒤 `/etc/fstab`에 UUID와 `nofail`로 적는다. 적은 뒤에는 `findmnt --verify`와 `mount -a`로 검사하고 재부팅한다.
+
+### fstab에 /dev/nvme1n1 대신 UUID를 적는 이유는?
+
+NVMe 장치 번호는 붙인 순서나 재부팅, 인스턴스 타입 변경에 따라 바뀔 수 있어서다. 바뀌면 다른 디스크가 그 자리에 붙거나 부팅이 멈춘다. UUID는 파일 시스템을 만들 때 정해지는 값이라 장치 이름과 상관없이 같은 파일 시스템을 가리킨다. 라벨(`LABEL=`)이나 `/dev/disk/by-id`도 같은 목적으로 쓴다.
+
+### EBS 볼륨을 키웠는데 df가 그대로다. 왜인가?
+
+블록 장치만 커졌고 파티션과 파일 시스템은 옛 크기를 기억하고 있어서다. `growpart`로 파티션 끝을 옮기고, ext4면 `resize2fs`, XFS면 `xfs_growfs`로 파일 시스템을 늘려야 한다. 둘 다 마운트한 채로 할 수 있다. LVM이면 `pvresize` 뒤에 `lvextend -r`이 파일 시스템까지 늘린다.
+
+### ext4와 XFS는 어떻게 고르나?
+
+배포판 기본값(Ubuntu는 ext4, RHEL 계열은 XFS)을 따르는 경우가 많고, 갈리는 지점은 줄이기와 inode다. ext4는 오프라인으로 줄일 수 있지만 inode 수가 mkfs 때 고정된다. XFS는 줄일 수 없지만 inode를 필요할 때 만들고, 할당 그룹 덕에 큰 파일과 병렬 쓰기에 강하다. 작은 파일이 아주 많으면 XFS나 inode를 촘촘히 준 ext4를 고른다.
+
+### 하드 링크와 심볼릭 링크의 차이는?
+
+하드 링크는 같은 inode에 이름을 하나 더 붙이는 것이라 원래 이름을 지우거나 바꿔도 내용이 그대로 읽히고, 같은 파일 시스템 안에서만, 파일에만 걸 수 있다. 심볼릭 링크는 대상 경로를 글자로 담은 별도 파일이라 파일 시스템과 디렉터리를 넘나들 수 있지만 대상이 사라지면 끊긴다. 배포에서 `current` 링크를 바꿔 버전을 전환하는 데 심볼릭 링크를 쓴다.
+
+### df는 여유가 있는데 No space left on device가 난다. 무엇을 보나?
+
+`df -i`로 inode가 다 찼는지 본다. ext4는 inode 수가 고정이라 작은 파일이 많이 쌓이면 용량이 남아도 새 파일을 못 만든다. `du --inodes -x`로 파일이 몰린 디렉터리를 찾아 정리하고, 다시 만들 수 있다면 inode를 더 주거나 XFS를 쓴다. 일반 사용자라면 5% 예약 블록에 막힌 것일 수도 있다.
+
+### df와 du의 숫자가 크게 다르다. 원인은?
+
+`df`는 파일 시스템이 쓰고 있는 블록을 세고, `du`는 트리에서 보이는 파일만 더하기 때문이다. 가장 흔한 원인은 지웠지만 프로세스가 열어 둔 파일로, `lsof +L1`로 찾고 프로세스를 재시작하거나 `/proc/PID/fd/N`을 비운다. 다른 볼륨에 가려진 마운트 지점 아래 파일도 같은 차이를 만드는데, bind 마운트로 들여다보면 보인다.
+
+### LVM 스냅숏은 어떻게 동작하고 무엇을 조심하나?
+
+만들 때 복사하지 않고, 원본 블록이 바뀌기 직전에 옛 내용을 스냅숏 공간으로 옮기는 copy-on-write 방식이다. 그래서 순식간에 만들어지지만, 원본에 쓰기가 많으면 스냅숏 공간이 차서 무효가 되고, 있는 동안 쓰기 성능이 떨어진다. 잠깐 얼려 두고 백업을 뜬 뒤 바로 지우는 용도로 쓰고, `lvs`의 Data%를 지켜본다.

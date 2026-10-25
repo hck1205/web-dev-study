@@ -492,28 +492,28 @@ FROM pick_a a JOIN pick_b b USING (student_id);
 
 ### ROWS와 RANGE 프레임은 어떻게 다른가요?
 
-`ROWS`는 행 개수로, `RANGE`는 `ORDER BY` 값의 차이로 창을 정합니다. 결제가 없는 날은 행이 없으니 `ROWS BETWEEN 6 PRECEDING`은 최근 7건이고, `RANGE BETWEEN interval '6 days' PRECEDING`은 달력 기준 최근 7일입니다. 동점 행이 있으면 `RANGE`의 `CURRENT ROW`는 동점 전체를 포함하고 `ROWS`는 지금 행 하나만 포함합니다.
+`ROWS`는 행 개수로, `RANGE`는 `ORDER BY` 값의 차이로 창을 정한다. 결제가 없는 날은 행이 없으니 `ROWS BETWEEN 6 PRECEDING`은 최근 7건이고, `RANGE BETWEEN interval '6 days' PRECEDING`은 달력 기준 최근 7일이다. 동점 행이 있으면 `RANGE`의 `CURRENT ROW`는 동점 전체를 포함하고 `ROWS`는 지금 행 하나만 포함한다.
 
 ### GROUPS 프레임은 언제 쓰나요?
 
-같은 값끼리 묶은 덩어리 개수로 창을 정할 때 씁니다. "직전 두 개 날짜의 수강 신청"처럼 서로 다른 값의 개수를 물을 때 맞고, PostgreSQL 11부터 됩니다. MySQL 8은 `GROUPS`와 `EXCLUDE`를 지원하지 않습니다.
+같은 값끼리 묶은 덩어리 개수로 창을 정할 때 쓴다. "직전 두 개 날짜의 수강 신청"처럼 서로 다른 값의 개수를 물을 때 맞고, PostgreSQL 11부터 된다. MySQL 8은 `GROUPS`와 `EXCLUDE`를 지원하지 않는다.
 
 ### 윈도우 함수 쿼리가 느립니다. 실행 계획에서 무엇을 보나요?
 
-`WindowAgg` 아래의 `Sort`부터 봅니다. 창 정의가 다르면 정렬이 여러 번 붙으니 같은 창으로 합칠 수 있는지 보고, 창의 `PARTITION BY`와 `ORDER BY` 순서와 같은 인덱스를 만들면 정렬이 사라집니다. `Sort Method`에 `Disk`가 보이면 `work_mem`을 넘은 것인데, 정렬 자체를 없애는 쪽이 보통 효과가 큽니다.
+`WindowAgg` 아래의 `Sort`부터 본다. 창 정의가 다르면 정렬이 여러 번 붙으니 같은 창으로 합칠 수 있는지 보고, 창의 `PARTITION BY`와 `ORDER BY` 순서와 같은 인덱스를 만들면 정렬이 사라진다. `Sort Method`에 `Disk`가 보이면 `work_mem`을 넘은 것인데, 정렬 자체를 없애는 쪽이 보통 효과가 크다.
 
 ### 그룹별 상위 N개를 윈도우 함수로 구할 때 주의할 점은요?
 
-윈도우 함수는 `WHERE`에 못 쓰니 서브쿼리로 감싸고 바깥에서 `rn <= N`으로 거릅니다. PostgreSQL 15부터는 이 모양을 `Run Condition`으로 바꿔서 조건이 거짓이 된 뒤의 행을 만들지 않고, 파티션이 없으면 아예 읽기를 멈춥니다. `rn IN (1, 2, 3)`처럼 쓰면 이 최적화를 못 받아 전체에 번호를 붙인 뒤 버립니다. 그룹 수가 적고 그룹마다 행이 많으면 `LATERAL`과 인덱스가 더 빠를 수 있습니다.
+윈도우 함수는 `WHERE`에 못 쓰니 서브쿼리로 감싸고 바깥에서 `rn <= N`으로 거른다. PostgreSQL 15부터는 이 모양을 `Run Condition`으로 바꿔서 조건이 거짓이 된 뒤의 행을 만들지 않고, 파티션이 없으면 아예 읽기를 멈춘다. `rn IN (1, 2, 3)`처럼 쓰면 이 최적화를 못 받아 전체에 번호를 붙인 뒤 버린다. 그룹 수가 적고 그룹마다 행이 많으면 `LATERAL`과 인덱스가 더 빠를 수 있다.
 
 ### ROW_NUMBER로 중복을 제거했는데 실행할 때마다 지워지는 행이 다를 수 있나요?
 
-있습니다. `ORDER BY`에 동점이 있으면 어느 행이 1번이 될지 정해져 있지 않아서 실행 계획이 바뀌면 결과도 바뀝니다. 실제로 30만 행에서 인덱스를 끄고 같은 쿼리를 돌리자 2만 명 중 713명이 다른 행을 받았습니다. `ORDER BY` 끝에 기본 키처럼 고유한 컬럼을 붙여 순서를 완전히 정합니다.
+있다. `ORDER BY`에 동점이 있으면 어느 행이 1번이 될지 정해져 있지 않아서 실행 계획이 바뀌면 결과도 바뀐다. 실제로 30만 행에서 인덱스를 끄고 같은 쿼리를 돌리자 2만 명 중 713명이 다른 행을 받았다. `ORDER BY` 끝에 기본 키처럼 고유한 컬럼을 붙여 순서를 완전히 정한다.
 
 ### "나를 뺀 평균"은 어떻게 구하나요?
 
-프레임을 파티션 전체(`ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`)로 잡고 `EXCLUDE CURRENT ROW`를 붙입니다. `EXCLUDE`는 프레임 절의 일부라서 프레임을 적어야 쓸 수 있습니다. 동점 행까지 빼려면 `EXCLUDE GROUP`, 동점 중 자기 자신만 남기려면 `EXCLUDE TIES`를 씁니다.
+프레임을 파티션 전체(`ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`)로 잡고 `EXCLUDE CURRENT ROW`를 붙인다. `EXCLUDE`는 프레임 절의 일부라서 프레임을 적어야 쓸 수 있다. 동점 행까지 빼려면 `EXCLUDE GROUP`, 동점 중 자기 자신만 남기려면 `EXCLUDE TIES`를 쓴다.
 
 ### 같은 OVER 절을 여러 번 쓰면 어떻게 정리하나요?
 
-`WINDOW w AS (PARTITION BY ... ORDER BY ...)`로 이름을 붙이고 각 함수에서 `OVER w`로 부릅니다. 복사한 정의 중 하나만 고쳐서 숫자가 서로 다른 기준으로 계산되는 실수를 막고, 같은 창이니 정렬도 한 번만 합니다. 집계 함수의 `FILTER (WHERE ...)`도 `OVER w` 앞에 그대로 붙일 수 있습니다.
+`WINDOW w AS (PARTITION BY ... ORDER BY ...)`로 이름을 붙이고 각 함수에서 `OVER w`로 부른다. 복사한 정의 중 하나만 고쳐서 숫자가 서로 다른 기준으로 계산되는 실수를 막고, 같은 창이니 정렬도 한 번만 한다. 집계 함수의 `FILTER (WHERE ...)`도 `OVER w` 앞에 그대로 붙일 수 있다.

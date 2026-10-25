@@ -1,0 +1,529 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-search-suggestions-system");
+
+<EasyIntro>
+  쇼핑 앱 검색창에 글자를 하나 칠 때마다 아래에 상품 이름 세 개가 뜬다고 해 보자. 친 글자로 시작하는 이름 중에서 가나다순으로 가장 앞에 오는 세 개를 보여 주는 것이다. 글자를 칠 때마다 상품 목록 전체를 처음부터 다시 뒤지면 상품이 많을 때 느리다. 그래서 상품 이름을 미리 가나다순으로 줄 세워 둔다. 줄 선 목록에서는 같은 글자로 시작하는 이름이 모두 붙어 있어서, 그 덩어리의 맨 앞 세 개만 보면 된다. 글자를 하나 더 칠수록 덩어리는 좁아지기만 하니, 양쪽 끝에서 안 맞는 이름을 하나씩 밀어내면 된다. 아니면 이름을 글자 서랍에 나눠 넣으면서 서랍마다 앞쪽 세 개를 미리 적어 두면, 칠 때마다 서랍을 한 칸 열기만 하면 된다.
+</EasyIntro>
+
+검색창에 `b`를 치면 `bake`, `ball`, `band`가 뜨고, `ba`를 치면 그대로, `bar`를 치면 `bar` 하나만 남는다. 글자를 칠 때마다 "지금까지 친 글자로 시작하는 상품 중 사전 순으로 앞의 세 개"를 보여 주는 것, 이게 [LeetCode 1268. Search Suggestions System](https://leetcode.com/problems/search-suggestions-system/)이다.
+
+트라이 패턴에 들어 있지만, 재 보면 트라이가 가장 빠르지는 않다. 정렬 한 번에 이진 탐색이나 투 포인터를 쓰는 풀이가 더 짧고 빠르다. 그런데 실제 자동완성 서비스는 트라이를 쓴다. 이 글은 매번 다 거르는 풀이부터 정렬 후 거르기, 이진 탐색, 투 포인터, 트라이와 DFS, 노드마다 상위 3개를 적어 둔 트라이까지 여섯 가지를 보고, 왜 문제와 서비스에서 답이 갈리는지 따져 본다. 트라이 자체는 [Implement Trie](/posts/leetcode-implement-trie)에서, 자동완성 서비스 설계는 [트라이로 만드는 자동완성](/posts/sd-autocomplete-trie)에서 다룬다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 글자를 칠 때마다 앞의 세 개
+
+입력은 상품 이름 배열 `products`와 검색어 `searchWord`다. `searchWord`의 앞부분을 한 글자씩 늘려 가며, 그 앞부분으로 시작하는 상품 중 사전 순으로 앞의 세 개(세 개보다 적으면 있는 만큼)를 고른다. 앞부분마다 고른 목록을 모아 돌려준다.
+
+- 상품 수는 1,000 이하, 상품 이름 글자 수의 합은 2 × 10^4 이하.
+- 검색어 길이는 1,000 이하. 모두 소문자이고 상품 이름은 서로 다르다.
+
+크기가 작아서 어떤 풀이든 통과한다. 검색어가 1,000글자까지 갈 수 있다는 점은 기억해 두자. 앞부분이 1,000개라서, 앞부분마다 상품 전체를 훑으면 100만 번 남짓이 된다. 그래도 통과는 하지만, 면접에서는 "상품이 1억 개이고 사람들이 1초에 수만 번 친다면"으로 넘어간다.
+
+이 글에서 쓸 예시다.
+
+```text
+products   = [bake, bat, ball, band, bar, cab]
+searchWord = "bark"
+답         = [[bake, ball, band], [bake, ball, band], [bar], []]
+```
+
+손으로 해 보자. 사전 순으로 정렬하면 `bake, ball, band, bar, bat, cab`이다.
+
+- `b`: `b`로 시작하는 건 앞의 다섯 개. 그중 앞의 세 개 `bake, ball, band`.
+- `ba`: 역시 다섯 개가 다 `ba`로 시작한다. 같은 세 개.
+- `bar`: `bar` 하나뿐이다. `bat`은 셋째 글자가 다르다.
+- `bark`: 하나도 없다. 빈 목록이다.
+
+마지막 앞부분이 빈 목록이라는 게 중요하다. 맞는 상품이 없어도 앞부분마다 목록 하나씩은 꼭 넣는다. 그리고 한 번 비면, 그 뒤 앞부분도 모두 빈다. `bark`로 시작하는 게 없으면 `barks`로 시작하는 것도 없다.
+
+## 칠 때마다 전부 거르고 정렬하기
+
+정의 그대로 한다. 앞부분마다 맞는 상품을 걸러 정렬하고 앞의 세 개를 자른다.
+
+```js
+function suggestedProducts(products, searchWord) {
+  const res = [];
+  for (let k = 1; k <= searchWord.length; k++) {
+    const p = searchWord.slice(0, k); // 지금까지 친 글자
+    res.push(products.filter((w) => w.startsWith(p)).sort().slice(0, 3));
+  }
+  return res;
+}
+```
+
+검색어 길이를 m, 상품 수를 n, 상품 이름 최대 길이를 L이라 하자. 앞부분 m개마다 걸러 내는 데 O(n·L), 걸러진 것을 정렬하는 데 최악 O(n log n · L)이라 O(m · n log n · L)이다. 공간은 걸러진 목록 O(n)이다.
+
+JS에서 문자열 배열의 `sort()`는 비교 함수 없이도 사전 순이다. 원소를 문자열로 바꿔 UTF-16 코드 단위로 비교하는데, 원소가 이미 소문자 문자열이라 그게 곧 사전 순이다. 숫자 배열이었다면 함정이지만 여기서는 괜찮다.
+
+낭비는 앞부분마다 정렬을 다시 한다는 것이다. 상품 순서는 검색어와 상관없이 정해져 있다. 한 번만 정렬해 두면 된다.
+
+## 한 번 정렬하고 앞에서부터 거르기
+
+상품을 미리 정렬해 두면, 앞에서부터 훑다가 맞는 것 세 개를 찾는 순간 멈출 수 있다. 정렬돼 있으니 처음 만나는 세 개가 곧 사전 순 앞의 세 개다.
+
+```js
+function suggestedProducts(products, searchWord) {
+  const sorted = [...products].sort(); // 원본을 건드리지 않게 복사해서 정렬한다
+  const res = [];
+  for (let k = 1; k <= searchWord.length; k++) {
+    const p = searchWord.slice(0, k);
+    const out = [];
+    for (const w of sorted) {
+      if (w.startsWith(p)) {
+        out.push(w);
+        if (out.length === 3) break; // 세 개 찾으면 끝
+      }
+    }
+    res.push(out);
+  }
+  return res;
+}
+```
+
+정렬 O(n log n · L) 한 번에, 앞부분마다 최악 O(n·L)이라 O(n log n · L + m·n·L)이다. 맞는 상품이 목록 뒤쪽에 몰려 있거나 아예 없으면 매번 끝까지 훑는다. `bark`처럼 맞는 게 없는 앞부분에서 상품 전체를 훑고 빈손으로 나온다.
+
+정렬된 배열에는 더 좋은 성질이 있다. 같은 앞부분으로 시작하는 상품은 한 덩어리로 붙어 있다. `ba`로 시작하는 `bake, ball, band, bar, bat`이 연달아 있고, 그 앞뒤에는 `ba`로 시작하는 게 하나도 없다. 덩어리의 시작만 바로 찾으면 훑을 필요가 없다.
+
+## 덩어리의 시작을 이진 탐색으로 찾기
+
+앞부분 `p`로 시작하는 상품들의 덩어리는, 정렬된 배열에서 "`p`보다 크거나 같은 첫 위치"에서 시작한다. `p`로 시작하는 문자열은 모두 `p` 이상이고, `p`보다 작은 문자열은 `p`로 시작할 수 없기 때문이다. 이 첫 위치는 [이진 탐색](/posts/binary-search)의 lower bound로 O(log n)번 비교에 찾는다.
+
+찾은 위치부터 세 칸을 보면서, `p`로 시작하는지 하나씩 확인한다. 덩어리가 세 개보다 짧으면 그 뒤는 `p`로 시작하지 않는다.
+
+```js
+function suggestedProducts(products, searchWord) {
+  const sorted = [...products].sort();
+  // target 이상인 첫 위치. 범위는 [lo, hi)
+  const lowerBound = (target) => {
+    let lo = 0, hi = sorted.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const res = [];
+  for (let k = 1; k <= searchWord.length; k++) {
+    const p = searchWord.slice(0, k);
+    const start = lowerBound(p);
+    const out = [];
+    for (let i = start; i < Math.min(start + 3, sorted.length); i++) {
+      if (sorted[i].startsWith(p)) out.push(sorted[i]); // 덩어리 안인지 하나씩 확인
+      else break;
+    }
+    res.push(out);
+  }
+  return res;
+}
+```
+
+앞부분마다 이진 탐색 O(log n)번 비교, 비교 한 번에 최대 O(L)이라 O(m · L log n)이다. 정렬까지 O(n log n · L + m · L log n). 공간은 정렬된 복사본 O(n)이다.
+
+`bar`를 예로 들면, `bar` 이상인 첫 위치는 `bar` 자신(3번)이다. 3번 `bar`는 맞고, 4번 `bat`은 `bar`로 시작하지 않으니 멈춘다. `bark` 이상인 첫 위치는 `bat`(4번)인데, `bat`이 `bark`로 시작하지 않으니 바로 빈 목록이다.
+
+### Python과 Java로 쓰면
+
+Python은 `bisect_left`가 lower bound다. 슬라이스 `products[i:i + 3]`는 배열 끝을 넘어도 오류 없이 있는 만큼만 준다.
+
+```python
+from bisect import bisect_left
+from typing import List
+
+class Solution:
+    def suggestedProducts(self, products: List[str], searchWord: str) -> List[List[str]]:
+        products = sorted(products)
+        res, prefix = [], ""
+        for ch in searchWord:
+            prefix += ch
+            i = bisect_left(products, prefix)  # prefix 이상인 첫 위치
+            res.append([w for w in products[i:i + 3] if w.startswith(prefix)])
+        return res
+```
+
+리스트 축약에서 `if`로 거르면 중간에 멈추지 않지만, 세 칸뿐이라 상관없다. 덩어리는 연속이라 맞지 않는 칸 뒤에 다시 맞는 칸이 나오지도 않는다.
+
+Java는 `Arrays.binarySearch`가 있지만 값이 없을 때 `-(삽입 위치) - 1`을 돌려줘서 한 번 더 바꿔야 한다. lower bound를 직접 쓰는 편이 읽기 쉽다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public List<List<String>> suggestedProducts(String[] products, String searchWord) {
+        String[] sorted = products.clone();
+        Arrays.sort(sorted); // String은 사전 순으로 정렬된다
+        List<List<String>> res = new ArrayList<>();
+        StringBuilder prefix = new StringBuilder();
+        for (int k = 0; k < searchWord.length(); k++) {
+            prefix.append(searchWord.charAt(k));
+            String p = prefix.toString();
+            int lo = 0, hi = sorted.length;
+            while (lo < hi) { // p 이상인 첫 위치
+                int mid = (lo + hi) >>> 1;
+                if (sorted[mid].compareTo(p) < 0) lo = mid + 1; else hi = mid;
+            }
+            List<String> out = new ArrayList<>();
+            for (int i = lo; i < Math.min(lo + 3, sorted.length) && sorted[i].startsWith(p); i++)
+                out.add(sorted[i]);
+            res.add(out);
+        }
+        return res;
+    }
+}
+```
+
+`(lo + hi) >>> 1`은 부호 없는 시프트라 `lo + hi`가 `int` 범위를 넘어도 바른 가운데를 준다. 이 문제 크기에서는 넘을 일이 없지만 이진 탐색을 쓸 때 습관으로 두면 좋다. `products.clone()`으로 복사해 정렬한 건 입력 배열을 바꾸지 않으려는 것이다. 세 언어 모두 예시에 같은 답을 냈다.
+
+## 덩어리를 양쪽에서 좁혀 오기
+
+이진 탐색은 앞부분마다 처음부터 다시 찾는다. 그런데 앞부분이 한 글자 길어지면 덩어리는 이전 덩어리 안에서 좁아지기만 한다. `ba`의 덩어리 안에 `bar`의 덩어리가 들어 있다. 그러니 덩어리의 양 끝 `lo`, `hi`를 들고, 글자가 하나 늘 때마다 양쪽에서 안쪽으로 밀어 넣으면 된다.
+
+`k`번째 글자 `c`가 들어왔을 때:
+
+1. `sorted[lo]`의 `k`번째 글자가 `c`가 아니면 `lo`를 한 칸 오른쪽으로 민다. 맞을 때까지 반복한다.
+2. `sorted[hi]`도 같은 방식으로 왼쪽으로 민다.
+3. `lo`부터 많아야 세 개, `hi`를 넘지 않게 잘라 담는다.
+
+이전 글자들은 덩어리 안에서 이미 다 맞으니 `k`번째 글자 하나만 비교하면 된다. 이 방식은 [투 포인터](/posts/two-pointers-pattern)의 "양 끝에서 좁혀 오기"와 같다.
+
+아래 그림에서 다음을 누르면 `bark`를 한 글자씩 친다. 강조된 칸이 지금 덩어리 `[lo, hi]`, 화살표가 `lo`다.
+
+<AlgoTrace
+  caption="글자가 하나 늘 때마다 덩어리의 양 끝을 안쪽으로 민다"
+  memoryLabel="추천 목록"
+  cells={["bake", "ball", "band", "bar", "bat", "cab"]}
+  steps={[
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["bake", "ball", "band"], caption: "b를 쳤다. lo는 bake에서 그대로다. hi는 cab의 첫 글자가 c라 한 칸 밀려 bat에 선다. 앞의 세 개를 담는다." },
+    { pointer: 0, found: [0, 1, 2, 3, 4], memory: ["bake", "ball", "band"], caption: "ba. 둘째 글자가 모두 a라 양 끝이 움직이지 않는다." },
+    { pointer: 3, found: [3], memory: ["bar"], caption: "bar. lo는 bake, ball, band를 지나 bar에서, hi는 bat을 지나 bar에서 멈춘다." },
+    { pointer: 4, memory: [], caption: "bark. bar에는 넷째 글자가 없어 lo가 hi를 넘는다. 덩어리가 비어 빈 목록이다." },
+  ]}
+/>
+
+```js
+function suggestedProducts(products, searchWord) {
+  const sorted = [...products].sort();
+  let lo = 0, hi = sorted.length - 1; // 지금 덩어리 [lo, hi]
+  const res = [];
+  for (let k = 0; k < searchWord.length; k++) {
+    const c = searchWord[k];
+    // k번째 글자가 c가 아닌 상품을 양쪽에서 밀어낸다
+    // 상품이 k글자 이하라 k번째 글자가 없으면 undefined라서 c와 다르다
+    while (lo <= hi && sorted[lo][k] !== c) lo++;
+    while (lo <= hi && sorted[hi][k] !== c) hi--;
+    res.push(sorted.slice(lo, Math.min(lo + 3, hi + 1)));
+  }
+  return res;
+}
+```
+
+`lo`는 오른쪽으로만, `hi`는 왼쪽으로만 움직이니 검색어를 다 쳐도 둘이 합쳐 n번 넘게 움직이지 않는다. 비교는 글자 하나라 O(1)이다. 그래서 정렬을 빼면 O(n + m)이다. 정렬까지 O(n log n · L + n + m). 이 문제에서 가장 빠른 풀이다.
+
+JS에서는 `sorted[lo][k]`가 범위를 넘으면 `undefined`가 나와서 길이 확인 없이도 맞게 돈다. Java에서 `charAt(k)`는 범위를 넘으면 `StringIndexOutOfBoundsException`을 던진다. `sorted[lo].length() <= k ||`를 조건 앞에 붙여야 한다. Python의 `w[k]`도 `IndexError`가 나니 `len(w) <= k or`가 필요하다.
+
+## 트라이로 내려가서 DFS로 세 개 찾기
+
+이제 트라이 패턴으로 보자. 상품으로 트라이를 만들고, 검색어를 한 글자씩 따라 내려간다. 지금 노드 아래가 곧 그 앞부분으로 시작하는 상품들이다. 그 아래를 글자 순서(a부터 z)로 DFS 하면 사전 순으로 상품이 나온다. 세 개를 찾으면 멈춘다.
+
+```js
+function suggestedProducts(products, searchWord) {
+  const root = { next: {}, end: false };
+  for (const w of products) {
+    let node = root;
+    for (const ch of w) node = node.next[ch] ??= { next: {}, end: false };
+    node.end = true;
+  }
+  const res = [];
+  let node = root, prefix = "";
+  for (const ch of searchWord) {
+    prefix += ch;
+    node = node && node.next[ch]; // 한 번 끊기면 계속 undefined
+    const out = [];
+    const dfs = (nd, word) => {
+      if (out.length === 3) return;
+      if (nd.end) out.push(word); // 자기가 상품이면 자식들보다 앞이다
+      for (const c of Object.keys(nd.next).sort()) { // 글자 순서로 내려가야 사전 순이다
+        dfs(nd.next[c], word + c);
+        if (out.length === 3) return;
+      }
+    };
+    if (node) dfs(node, prefix);
+    res.push(out);
+  }
+  return res;
+}
+```
+
+DFS에서 자기 노드의 끝 표시를 자식보다 먼저 확인한다는 점이 중요하다. `ab`는 `abc`보다 사전 순으로 앞이다. 앞부분이 그 자신보다 먼저 오기 때문이다. 그리고 자식을 글자 순서로 돌아야 한다. JS 객체의 키 순서는 넣은 순서라서 `Object.keys`를 그냥 돌면 상품을 넣은 순서가 나온다. 그래서 `sort()`를 붙였다. 26칸 배열 노드라면 0부터 25까지 돌면 저절로 글자 순서다.
+
+DFS는 세 개를 찾으면 멈추지만, 세 개가 되기 전에 끝 표시 없는 긴 사슬을 지날 수 있다. 앞부분마다 최악 O(지나는 노드 수)라 상품이 길고 공유가 적으면 느려진다. 앞부분마다 같은 DFS를 다시 하는 것도 낭비다.
+
+## 노드마다 앞의 세 개를 적어 두기
+
+DFS가 찾는 "이 노드 아래 사전 순 앞의 세 개"는 검색어와 상관없이 노드마다 정해져 있다. 그러니 트라이를 만들 때 노드마다 적어 둔다.
+
+방법은 간단하다. 상품을 사전 순으로 정렬한 뒤 차례로 넣는다. 넣으면서 지나는 노드마다 목록 `top`에 아직 세 개가 안 됐으면 이 상품을 붙인다. 사전 순으로 넣으니 노드에 먼저 도착하는 세 개가 곧 그 노드의 사전 순 앞의 세 개다.
+
+```js
+function suggestedProducts(products, searchWord) {
+  const sorted = [...products].sort(); // 사전 순으로 넣으면 먼저 온 3개가 답이다
+  const root = { next: {}, top: [] };
+  for (const w of sorted) {
+    let node = root;
+    for (const ch of w) {
+      node = node.next[ch] ??= { next: {}, top: [] };
+      if (node.top.length < 3) node.top.push(w); // 이 앞부분의 앞의 세 개
+    }
+  }
+  const res = [];
+  let node = root;
+  for (const ch of searchWord) {
+    node = node ? node.next[ch] : undefined; // 한 번 끊기면 끝까지 없다
+    res.push(node ? node.top : []);
+  }
+  return res;
+}
+```
+
+검색어를 칠 때 하는 일은 노드 한 칸 내려가서 목록을 읽는 것뿐이다. 아래 그림이 그 모습이다. 기억 칸은 지금 노드의 `top`이다.
+
+<AlgoTrace
+  caption="검색어를 한 글자 칠 때마다 노드를 한 칸 내려가 적어 둔 목록을 읽는다"
+  memoryLabel="노드의 top"
+  cells={["b", "a", "r", "k"]}
+  steps={[
+    { pointer: 0, memory: ["bake", "ball", "band"], caption: "b 노드. 정렬 순으로 bake, ball, band가 먼저 지나가며 적혔다. bar와 bat은 자리가 없었다." },
+    { pointer: 1, memory: ["bake", "ball", "band"], caption: "ba 노드. 같은 세 개가 같은 순서로 적혀 있다." },
+    { pointer: 2, memory: ["bar"], caption: "bar 노드. 이 노드를 지나간 상품은 bar 하나다." },
+    { pointer: 3, found: [0, 1, 2, 3], memory: [], caption: "bar 아래에 k가 없다. 노드가 끊겼으니 빈 목록을 넣는다. 더 쳐도 계속 빈다." },
+  ]}
+/>
+
+만드는 데 정렬 O(n log n · L)과 넣기 O(글자 수 합)이다. 검색은 글자 하나에 O(1)이라 앞부분 m개에 O(m)이다. 답을 담는 비용을 빼면 그렇다. 공간은 노드 수 × (자식 + 목록 세 칸)이다. 목록이 문자열을 복사하지 않고 같은 문자열을 가리키니 노드마다 참조 세 개만큼 든다.
+
+### Python과 Java로 쓰면
+
+Python은 딕셔너리 노드에 목록을 `"#"` 키로 둔다.
+
+```python
+from typing import List
+
+class Solution:
+    def suggestedProducts(self, products: List[str], searchWord: str) -> List[List[str]]:
+        root = {}
+        for w in sorted(products):
+            node = root
+            for ch in w:
+                node = node.setdefault(ch, {"#": []})  # "#"에 이 앞부분의 상위 3개를 둔다
+                if len(node["#"]) < 3:
+                    node["#"].append(w)
+        res, node = [], root
+        for ch in searchWord:
+            node = node.get(ch) if node is not None else None
+            res.append(node["#"] if node is not None else [])
+        return res
+```
+
+Java는 26칸 배열 노드에 `List<String>`을 둔다.
+
+```java
+class Solution {
+    private static class Node {
+        Node[] next = new Node[26];
+        List<String> top = new ArrayList<>(3); // 이 앞부분의 사전 순 상위 3개
+    }
+
+    public List<List<String>> suggestedProducts(String[] products, String searchWord) {
+        String[] sorted = products.clone();
+        Arrays.sort(sorted);
+        Node root = new Node();
+        for (String w : sorted) {
+            Node node = root;
+            for (int i = 0; i < w.length(); i++) {
+                int c = w.charAt(i) - 'a';
+                if (node.next[c] == null) node.next[c] = new Node();
+                node = node.next[c];
+                if (node.top.size() < 3) node.top.add(w);
+            }
+        }
+        List<List<String>> res = new ArrayList<>();
+        Node node = root;
+        for (int i = 0; i < searchWord.length(); i++) {
+            node = node == null ? null : node.next[searchWord.charAt(i) - 'a'];
+            res.add(node == null ? new ArrayList<>() : node.top);
+        }
+        return res;
+    }
+}
+```
+
+세 언어 모두 예시와 `[ab, abc, abd, abe, a]`, `abc`에 `[[a, ab, abc], [ab, abc, abd], [abc]]`를 냈다. 결과에 노드의 목록을 그대로 넣었으니, 받은 쪽에서 결과 목록을 고치면 트라이 안의 목록도 바뀐다. 트라이를 한 번 쓰고 버리는 이 문제에서는 괜찮지만, 트라이를 계속 쓰는 서비스라면 복사해서 돌려준다.
+
+## 문제에서는 정렬이, 서비스에서는 트라이가 이긴다
+
+여섯 풀이를 크기를 바꿔 가며 Node.js 22에서 재 보았다. 상품 이름은 무작위다.
+
+```text
+                         상품 1,000개      상품 10만 개       상품 10만 개
+                         a·b, 검색어 1,000  26글자, 검색어 20   a·b, 검색어 20
+매번 거르고 정렬             9.9ms            28.1ms              92.9ms
+정렬 후 앞에서 거르기         8.2ms            77.5ms              90.0ms
+정렬 + 이진 탐색             1.7ms            37.6ms              61.5ms
+정렬 + 투 포인터             0.6ms            42.2ms              56.8ms
+트라이 + DFS                 4.9ms           252.5ms             140.5ms
+트라이 + 노드마다 top         9.7ms           276.9ms             154.0ms
+```
+
+검색어 하나만 처리하는 이 문제에서는 트라이가 오히려 느리다. 상품 10만 개짜리 트라이를 만드는 데 노드를 수십만 개 만들어야 하고, 그 비용이 검색 몇십 번으로는 돌아오지 않는다. 26글자 무작위 상품에서는 매번 거르는 풀이도 빨랐는데, 첫 글자에서 대부분이 걸러져 정렬할 게 거의 없어서다.
+
+자동완성 서비스는 상황이 반대다. 트라이를 한 번 만들어 두고 검색을 끝없이 받는다. 상품 10만 개에서 검색어 1만 개(앞부분 6만 개)를 처리하도록 바꿔 재 보았다.
+
+```text
+정렬 43.0ms  + 앞부분마다 이진 탐색 33.1ms
+트라이 만들기 262.1ms + 앞부분마다 노드 한 칸 20.2ms
+```
+
+만드는 비용은 트라이가 6배 크지만, 검색은 트라이가 빠르다. 검색이 많을수록 차이가 벌어진다. 그리고 더 중요한 이유가 있다. 실제 추천은 사전 순이 아니라 검색 횟수 같은 점수 순이다. 정렬된 배열의 덩어리 맨 앞 세 개는 사전 순일 뿐이라 점수 순 상위 3개를 주지 못한다. 트라이는 노드마다 점수 순 상위 k개를 적어 두면 같은 구조로 해결한다. 이 설계는 [자동완성 글의 노드마다 상위 5개 절](/posts/sd-autocomplete-trie#노드마다-상위-5개를-적어-둔다)에서 자세히 본다.
+
+## 여섯 풀이를 비용으로 정리하면
+
+n은 상품 수, L은 상품 이름 최대 길이, m은 검색어 길이다. 정렬 비용 O(n log n · L)은 "정렬"이 붙은 풀이에 모두 더해진다.
+
+| 풀이 | 검색 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 매번 거르고 정렬 | O(m · n log n · L) | O(n) | 확인용 |
+| 정렬 후 앞에서 거르기 | O(m·n·L) | O(n) | 가장 단순하게 짤 때 |
+| 정렬 + 이진 탐색 | O(m · L log n) | O(n) | 앞부분이 따로따로 들어올 때 |
+| 정렬 + 투 포인터 | O(n + m) | O(n) | 이 문제의 가장 빠른 답 |
+| 트라이 + DFS | 앞부분마다 지나는 노드 수 | O(글자 수 합) | 노드에 목록을 둘 메모리가 없을 때 |
+| 트라이 + 노드마다 top | O(m) | O(글자 수 합) | 검색이 많을 때, 점수 순 추천으로 넓힐 때 |
+
+## 칠 때마다 세 개 추천하기
+
+정렬 + 투 포인터든 트라이든 테스트는 같다. 맞는 상품이 없는 앞부분이 들어 있다.
+
+<CodePlayground
+  caption="Search Suggestions System: 앞부분마다 사전 순 앞의 세 개"
+  functionName="suggestedProducts"
+  initialCode={`function suggestedProducts(products, searchWord) {
+  // searchWord의 앞부분마다, 그 앞부분으로 시작하는 상품 중
+  // 사전 순으로 앞의 세 개를 담은 목록을 돌려준다
+  return [];
+}`}
+  solution={`function suggestedProducts(products, searchWord) {
+  const sorted = [...products].sort();
+  const root = { next: {}, top: [] };
+  for (const w of sorted) {
+    let node = root;
+    for (const ch of w) {
+      node = node.next[ch] ??= { next: {}, top: [] };
+      if (node.top.length < 3) node.top.push(w);
+    }
+  }
+  const res = [];
+  let node = root;
+  for (const ch of searchWord) {
+    node = node ? node.next[ch] : undefined;
+    res.push(node ? node.top : []);
+  }
+  return res;
+}`}
+  tests={[
+    { label: "글의 예시", args: [["bake", "bat", "ball", "band", "bar", "cab"], "bark"], expected: [["bake", "ball", "band"], ["bake", "ball", "band"], ["bar"], []] },
+    { label: "상품 하나와 같은 검색어", args: [["apple"], "apple"], expected: [["apple"], ["apple"], ["apple"], ["apple"], ["apple"]] },
+    { label: "첫 글자부터 없다", args: [["apple"], "b"], expected: [[]] },
+    { label: "앞부분이 자기보다 먼저", args: [["ab", "abc", "abd", "abe", "a"], "abc"], expected: [["a", "ab", "abc"], ["ab", "abc", "abd"], ["abc"]] },
+    { label: "검색어가 상품보다 길다", args: [["zz"], "zzz"], expected: [["zz"], ["zz"], []] },
+    { label: "세 개보다 적다", args: [["a", "aa", "aaa"], "aa"], expected: [["a", "aa", "aaa"], ["aa", "aaa"]] },
+  ]}
+/>
+
+## 정렬을 빼먹거나 끊긴 노드를 계속 따라가면
+
+노드마다 `top`을 적는 풀이에서 가장 흔한 실수는 상품을 정렬하지 않고 넣는 것이다.
+
+```js
+for (const w of products) { // 정렬하지 않았다
+  // ... 지나는 노드마다 top.length < 3이면 push
+}
+// [bake, bat, ball, band, bar, cab], "bark"
+// -> [[bake, bat, ball], [bake, bat, ball], [bar], []]
+// (정답은 [[bake, ball, band], ...])
+```
+
+`top`에는 "먼저 도착한 세 개"가 들어간다. 입력 순서대로 넣으면 `bat`이 `ball`, `band`보다 먼저 도착해 자리를 차지한다. 사전 순으로 넣어야 먼저 도착한 세 개가 사전 순 앞의 세 개가 된다. 정렬하지 않고 넣으려면 노드마다 목록을 정렬된 상태로 유지하며 넷째가 되면 가장 뒤의 것을 버려야 한다.
+
+두 번째는 노드가 끊긴 뒤에도 계속 따라가는 것이다.
+
+```js
+for (const ch of searchWord) {
+  node = node.next[ch]; // node가 undefined가 된 다음 글자에서 터진다
+  res.push(node ? node.top : []);
+}
+// "bark"는 통과하지만 "barks"에서
+// TypeError: Cannot read properties of undefined (reading 'next')
+```
+
+`bark`에서 `k`가 없어 `node`가 `undefined`가 되고, 마지막 글자라 그대로 끝나서 통과한다. 한 글자만 더 있으면 `undefined.next`에서 터진다. 예시 검색어가 끊기는 자리에서 끝나면 이 버그를 놓친다. 위 테스트의 "검색어가 상품보다 길다"가 끊긴 뒤 한 글자 더 가는지 본다.
+
+그 밖에 조심할 것들이다.
+
+- 이진 탐색 풀이에서 찾은 위치부터 세 칸을 확인 없이 자르면 덩어리 밖의 상품이 섞인다. 예시에서 `bar`에 `[bar, bat, cab]`, `bark`에 `[bat, cab]`이 나온다. 칸마다 `startsWith`로 확인한다.
+- 맞는 상품이 없는 앞부분에서 목록을 건너뛰면 결과 길이가 검색어 길이보다 짧아진다. 빈 목록이라도 앞부분마다 하나씩 넣는다.
+- 트라이 + DFS에서 자식을 넣은 순서대로 돌면 사전 순이 깨진다. 글자 순서로 돈다.
+
+## 점수 순이거나 한글이 섞이면
+
+### 사전 순이 아니라 검색 횟수 순으로 추천하라면
+
+정렬된 배열 풀이들은 쓸 수 없다. 덩어리 안의 순서가 사전 순이기 때문이다. 트라이는 상품을 점수 순으로 정렬해서 넣기만 바꾸면 노드마다 점수 순 상위 3개가 적힌다. 점수가 계속 바뀐다면 노드의 목록을 갱신해야 하는데, 이 비용 때문에 실제 서비스는 목록을 주기적으로 다시 만든다. [자동완성 설계 글](/posts/sd-autocomplete-trie)에서 그 흐름을 다룬다.
+
+### 상품이 계속 추가된다면
+
+트라이 + 노드마다 top은 새 상품이 지나는 노드마다 목록에 끼워 넣고 넷째를 버리면 된다. 노드 하나에 O(3)이라 상품 하나에 O(L)이다. 정렬된 배열은 끼워 넣을 때마다 뒤를 밀어야 해서 O(n)이다.
+
+### 한글을 친다면
+
+한글은 치는 동안 글자가 바뀐다. `ㄱ`, `가`, `강`처럼 마지막 글자가 계속 다른 글자로 바뀌어서, 앞부분이 한 글자씩 늘어난다는 이 문제의 전제가 깨진다. 보통 자모로 풀어서 트라이를 만든다. 이 문제도 [자동완성 글의 한글 절](/posts/sd-autocomplete-trie#한글은-치는-동안-글자가-바뀐다)에 있다.
+
+### 상위 3개가 아니라 k개라면
+
+`top.length < 3`의 3을 k로 바꾸면 된다. 공간이 노드마다 k칸이라 k가 크면 메모리가 커진다. 그때는 노드에 목록 대신 "정렬된 배열에서 이 앞부분 덩어리가 시작하는 위치"만 적어 두고, 거기서 k개를 읽는 방법도 있다. 정렬 풀이와 트라이를 섞은 셈이다.
+
+### 비슷한 문제
+
+- [Implement Trie](/posts/leetcode-implement-trie) (208): 트라이의 `startsWith`가 이 문제의 "지금 노드".
+- [Sum of Prefix Scores of Strings](/posts/leetcode-sum-of-prefix-scores-of-strings) (2416): 노드에 목록 대신 지나간 단어 수를 둔다.
+- [Longest Common Prefix](/posts/leetcode-longest-common-prefix) (14): 정렬하면 같은 앞부분끼리 붙는 성질을 쓴다.
+- [Binary Search](/posts/leetcode-binary-search) (704): lower bound의 바탕.
+- 642. Design Search Autocomplete System (프리미엄 문제): 검색 횟수 순 추천에 새 검색어 추가까지 하는 설계 문제다.
+
+## 덩어리는 좁아지기만 한다
+
+정렬하면 같은 앞부분으로 시작하는 상품이 한 덩어리로 붙고, 글자를 칠수록 덩어리는 이전 덩어리 안에서 좁아진다. 그래서 투 포인터로 양 끝을 밀어 넣으면 이 문제에서 가장 빠르다. 트라이는 노드마다 앞의 세 개를 적어 두면 글자 하나에 노드 한 칸으로 답하고, 검색이 많거나 점수 순으로 넓힐 때 진가가 드러난다.
+
+## 면접에서 나올 만한 질문
+
+### 정렬하면 왜 이진 탐색이나 투 포인터를 쓸 수 있나요?
+
+사전 순으로 정렬하면 같은 앞부분으로 시작하는 문자열이 한 덩어리로 붙기 때문이다. 덩어리는 "앞부분 이상인 첫 위치"에서 시작하니 lower bound로 찾을 수 있고, 앞부분이 길어지면 덩어리가 이전 덩어리 안에서 좁아지니 양 끝을 안쪽으로만 밀면 된다. 그 맨 앞 세 개가 답이다.
+
+### 트라이 풀이의 시간 복잡도는요?
+
+만드는 데 정렬 O(n log n · L)과 넣기 O(글자 수 합)이고, 검색은 글자 하나에 노드 한 칸이라 O(m)이다. 노드마다 상위 3개를 미리 적어 두기 때문에 검색할 때 DFS가 필요 없다. 공간은 노드 수에 노드마다 참조 세 개다.
+
+### 왜 상품을 정렬한 뒤 트라이에 넣나요?
+
+노드의 목록에 "먼저 도착한 세 개"를 적기 때문이다. 사전 순으로 넣으면 먼저 도착한 세 개가 곧 사전 순 앞의 세 개다. 입력 순서대로 넣으면 `bat`이 `ball`보다 먼저 자리를 차지해 틀린다.
+
+### 이 문제에서 트라이가 가장 빠른가요?
+
+아니다. 검색어 하나만 처리하는 문제에서는 정렬 + 투 포인터가 가장 빠르다. 상품 10만 개에서 트라이는 만드는 데만 250ms 넘게 걸렸고 투 포인터는 정렬까지 40~60ms였다. 트라이는 만들어 두고 검색을 많이 받을 때 빠르다.
+
+### 실제 자동완성은 왜 트라이를 쓰나요?
+
+추천이 사전 순이 아니라 검색 횟수 같은 점수 순이기 때문이다. 정렬된 배열의 덩어리 맨 앞은 사전 순이라 점수 순 상위를 주지 못한다. 트라이는 노드마다 점수 순 상위 k개를 적어 두면 검색어 한 글자에 노드 한 칸으로 답하고, 검색이 아무리 많아도 비용이 상품 수와 상관없다.
+
+### 맞는 상품이 없는 앞부분은 어떻게 되나요?
+
+빈 목록을 넣는다. 결과는 검색어 길이만큼이어야 한다. 한 번 비면 그 뒤 앞부분도 모두 비니, 트라이에서는 노드가 끊긴 뒤 `undefined`를 계속 들고 가며 빈 목록을 넣고, 투 포인터에서는 `lo`가 `hi`를 넘은 채로 빈 조각을 자른다.

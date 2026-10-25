@@ -1,0 +1,438 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("frontend-frameworks-compared");
+
+<EasyIntro>
+  React, Vue, Svelte, Solid, Angular는 모두 화면을 그려 주는 도구다. 값 하나가 바뀌면 화면의 어느 부분을 다시 그릴지 알아내는 방법이 저마다 다르다. 교실 게시판을 떠올리면 쉽다. 어떤 반장은 내용이 하나 바뀔 때마다 게시판 전체를 새 종이에 다시 써 보고, 옛 종이와 비교해서 달라진 칸만 고치는데, 이게 React의 방식이다.
+
+  다른 반장은 칸마다 "이 칸은 누구 점수를 보고 쓴 것"이라고 이름표를 붙여 두고, 점수가 바뀌면 그 칸만 바로 고치는데, Solid와 Svelte가 이렇게 한다. Vue는 그 중간쯤으로, 반마다 이름표를 붙이고 바뀐 반의 게시판만 다시 써 본다. 다시 써 보는 방식은 규칙이 단순하고, 이름표 방식은 고치는 양이 적어서 어느 쪽이 더 낫다고 딱 잘라 말하기는 어렵다. 이 글은 같은 화면을 다섯 도구로 만들어 놓고 버튼 한 번에 무엇이 다시 실행되는지 직접 세어 본다.
+</EasyIntro>
+
+새 프로젝트 기술 회의에서 "React 말고 Svelte는 어때요? 더 빠르다던데"라는 말이 나왔다. 누군가 "Solid는 가상 DOM이 없어서 더 빠르대요"라고 거들고, 다른 사람은 "Angular는 대기업이 많이 쓰잖아요"라고 한다. 대화가 길어지는데 정작 "빠르다"가 무엇이 빠르다는 건지는 아무도 말하지 않는다.
+
+다섯 프레임워크가 정말로 다른 곳은 한 군데다. 상태 값 하나가 바뀌었을 때 어떤 코드를 다시 실행해서 화면의 어느 부분을 고치느냐. 이 글은 같은 화면, 버튼 하나와 그 값을 두 배로 보여 주는 문단과 글자 세 개짜리 목록을 React, Vue, Svelte, Solid로 만들고 버튼을 한 번 눌렀을 때 무엇이 다시 실행되는지 직접 셌다. 버전은 React 19.3.1, Vue 3.5.44, Svelte 5.57.2, Solid 1.9.17이고 Chromium 141에서 돌렸다. Angular는 설치해서 재지 않았고, 공식 문서에 적힌 동작으로 설명한다.
+
+React 안쪽에서 리렌더가 왜 일어나고 어떻게 줄이는지는 [React 리렌더](/posts/react-rerender)에서, 일을 쪼개는 내부 구조는 [Fiber와 렌더·커밋](/posts/react-fiber-render-commit)에서 다뤘다. 여기서는 다른 프레임워크와 나란히 놓고 차이만 본다.
+
+## 버튼 한 번에 다시 실행되는 코드를 세어 봤다
+
+화면은 이렇게 생겼다. 버튼에는 `count`가, 그 아래 문단에는 `count * 2`가 보인다. 목록은 `a`, `b`, `c` 세 줄이고 `count`와 상관이 없다. 각 프레임워크에서 컴포넌트 함수와 목록 항목 컴포넌트가 몇 번 실행되는지 카운터를 달았다.
+
+```text
+React initial {"app":1,"item":3} after click {"app":1,"item":3}
+Vue initial {"setup":1,"render":1,"item":3} after click {"setup":0,"render":1,"item":0}
+Svelte script runs initial 1 after click 0 text 2
+Solid initial {"comp":1,"effect":1,"item":3} after click {"comp":0,"effect":1,"item":0} p 2
+```
+
+봐야 할 것은 "after click" 쪽이다.
+
+- React는 `App` 함수가 한 번 더 돌았고, `count`와 상관없는 목록 항목 셋도 다시 돌았다. `memo`를 쓰지 않았기 때문이다.
+- Vue는 부모의 render 함수만 다시 돌았다. `setup`은 다시 돌지 않았고, props가 그대로인 목록 항목도 건너뛰었다.
+- Svelte는 컴포넌트 스크립트가 다시 돌지 않았다. 그런데 화면의 문단은 `2`로 바뀌었다.
+- Solid도 컴포넌트 함수가 다시 돌지 않았다. `count`를 읽는 효과 하나만 다시 돌았다.
+
+같은 화면인데 다시 실행되는 단위가 "컴포넌트 트리 아래 전부", "그 컴포넌트 하나", "그 값을 쓰는 자리 하나"로 다르다. 아래 그림에서 다음을 누르면 프레임워크마다 버튼 클릭 뒤에 다시 실행된 칸이 밝아진다.
+
+<AlgoTrace
+  caption="버튼 한 번 클릭 뒤 다시 실행된 단위"
+  memoryLabel="다시 실행된 것"
+  cells={["App 함수", "버튼 글자", "두 배 문단", "항목 a", "항목 b", "항목 c"]}
+  steps={[
+    {
+      caption: "처음 그릴 때는 다섯 프레임워크 모두 모든 칸을 한 번씩 만든다.",
+      memory: [],
+    },
+    {
+      pointer: 0,
+      found: [0, 1, 2, 3, 4, 5],
+      memory: ["App", "Item a", "Item b", "Item c"],
+      caption: "React: App이 다시 돌고 자식 컴포넌트도 전부 다시 호출된다. 그다음 새 트리와 옛 트리를 비교해 바뀐 글자 두 곳만 DOM에 쓴다.",
+    },
+    {
+      pointer: 0,
+      found: [0, 1, 2],
+      memory: ["render()"],
+      caption: "Vue: count를 읽은 컴포넌트의 render만 다시 돈다. 목록 항목은 props가 같아 건너뛴다. 비교는 이 컴포넌트 안에서만 한다.",
+    },
+    {
+      pointer: 1,
+      found: [1, 2],
+      memory: ["set_text(count)", "set_text(double)"],
+      caption: "Svelte: 컴파일러가 만들어 둔 갱신 코드 한 덩이가 돈다. 컴포넌트 스크립트는 다시 실행되지 않는다.",
+    },
+    {
+      pointer: 1,
+      found: [1, 2],
+      memory: ["text 효과", "memo 효과"],
+      caption: "Solid: count를 구독한 효과만 돈다. 컴포넌트 함수는 처음 한 번 실행되고 끝났다.",
+    },
+  ]}
+/>
+
+React가 일을 더 많이 했지만, 그렇다고 DOM을 더 많이 건드린 건 아니다. 다섯 모두 실제로 바꾼 DOM은 글자 두 곳이다. 차이는 "어디를 바꿀지 알아내는 데 든 자바스크립트 일"에 있다. 이 점을 놓치면 "React는 화면 전체를 다시 그린다" 같은 틀린 말을 하게 된다.
+
+## React: 다시 실행하고 비교한다
+
+React의 규칙은 하나다. 상태가 바뀌면 그 상태를 가진 컴포넌트 함수를 다시 부르고, 그 함수가 돌려준 새 트리를 옛 트리와 비교해서 다른 곳만 DOM에 반영한다. 가상 DOM이라고 부르는 건 이 "함수가 돌려준 트리"다.
+
+```jsx
+function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <div>
+      <button onClick={() => setCount(count + 1)}>{count}</button>
+      <p>{count * 2}</p>
+      <ul>{["a", "b", "c"].map((t) => <Item key={t} t={t} />)}</ul>
+    </div>
+  );
+}
+```
+
+React는 어떤 값을 어느 자리에서 읽었는지 모른다. 그래서 컴포넌트 전체를 다시 실행해 봐야 결과를 안다. 대신 규칙이 단순하다. 화면은 상태의 함수이고, 함수는 매번 처음부터 다시 돈다. 렌더링 중에 무엇을 읽든 결과가 맞다. 조건문, 반복문, 일반 자바스크립트 함수를 아무 데나 써도 된다.
+
+치르는 값은 쓸데없는 실행이다. 위 측정에서 `Item` 셋이 다시 돈 게 그것이다. 이걸 줄이는 도구가 `memo`, `useMemo`, `useCallback`이고, 이제는 컴파일러가 이 메모이제이션을 자동으로 넣어 준다([메모이제이션 훅](/posts/react-memoization-hooks)). React의 방향은 "다시 실행 모델은 지키고, 다시 실행을 건너뛰는 일을 자동화한다"이다.
+
+## Vue: 읽은 것을 기록하고 컴포넌트 단위로 다시 그린다
+
+Vue의 `ref`와 `reactive`는 값을 프록시(Proxy)로 감싼다. 프록시는 객체의 읽기와 쓰기를 가로채는 자바스크립트 기능이다. render 함수가 `count.value`를 읽는 순간 Vue는 "이 컴포넌트의 render가 count를 읽었다"고 적어 둔다. 나중에 `count.value`에 쓰면 적어 둔 목록을 보고 그 컴포넌트의 render만 다시 예약한다.
+
+```js
+const Counter = {
+  setup() {
+    const count = ref(0);                         // 프록시로 감싼 값
+    const double = computed(() => count.value * 2);
+    return () => h("div", [                       // render 함수. count를 읽은 걸 Vue가 기억한다
+      h("button", { onClick: () => count.value++ }, count.value),
+      h("p", double.value),
+      h("ul", ["a", "b", "c"].map((t) => h(Item, { t, key: t }))),
+    ]);
+  },
+};
+```
+
+`setup`은 처음 한 번만 돈다. 상태를 만드는 코드와 화면을 만드는 코드가 나뉘어 있어서다. render가 다시 돌면 그 컴포넌트 안에서는 가상 DOM을 만들어 비교한다. 자식 컴포넌트는 props가 그대로면 건너뛴다. React처럼 `memo`를 붙이지 않아도 자식이 다시 돌지 않은 이유다. 게다가 템플릿 문법(`.vue` 파일)을 쓰면 컴파일러가 "이 노드는 절대 안 바뀐다", "이 노드는 글자만 바뀐다" 같은 표시를 붙여 비교할 양을 더 줄인다.
+
+반응성이 프록시에 걸려 있어서 생기는 실수도 있다. `const { count } = reactive(state)`처럼 구조 분해하면 프록시가 아닌 평범한 값을 꺼낸 것이라 추적이 끊긴다. `toRefs`로 꺼내야 한다. 또 Vue는 3.6에서 가상 DOM 없이 Solid처럼 자리별로 갱신하는 Vapor 모드를 실험하고 있다. 아직 기본값이 아니니 쓰려면 릴리스 상태를 확인해야 한다.
+
+## Svelte: 컴파일러가 갱신 코드를 미리 쓴다
+
+Svelte는 실행 전에 컴파일러가 컴포넌트를 평범한 자바스크립트로 바꾼다. 같은 화면을 Svelte 5의 룬(rune) 문법으로 쓰고 컴파일 결과를 그대로 뽑았다.
+
+```svelte
+<script>
+  let count = $state(0);
+  let items = $state(["a", "b", "c"]);
+  const double = $derived(count * 2);
+</script>
+<button onclick={() => count++}>{count}</button>
+<p>{double}</p>
+<ul>{#each items as item}<li>{item}</li>{/each}</ul>
+```
+
+```js
+// svelte/compiler로 compile한 결과 중 일부 (Svelte 5.57.2)
+var root_1 = $.from_html(`<button> </button> <p> </p> <ul></ul>`, 1);
+
+export default function Counter($$anchor) {
+	let count = $.state(0);
+	let items = $.proxy(["a", "b", "c"]);
+	const double = $.derived(() => $.get(count) * 2);
+	// ... 요소를 찾아 text, text_1 변수에 담는다
+	$.template_effect(() => {
+		$.set_text(text, $.get(count));
+		$.set_text(text_1, $.get(double));
+	});
+	$.delegated('click', button, () => $.update(count));
+}
+```
+
+정적인 마크업은 HTML 문자열 하나로 뽑혀 한 번에 복제된다. 바뀔 수 있는 자리는 `set_text(text, ...)`처럼 "어느 노드에 무엇을 쓸지"가 이미 코드로 적혀 있다. 그래서 실행 중에 트리를 비교할 필요가 없다. 컴포넌트 함수는 처음 한 번 돌고, 이후에는 `template_effect`만 다시 돈다.
+
+Svelte 3·4는 `let` 변수에 대입하는 문장을 컴파일러가 찾아 갱신을 넣는 방식이었다. 파일 경계를 넘거나 배열을 `push`로 바꾸면 추적이 놓쳤다. Svelte 5는 `$state`가 실행 중에 동작하는 시그널을 만들도록 바꿨다. 컴파일러는 그대로 일을 미리 하고, 의존성 추적은 시그널이 맡는다. 결과적으로 Svelte 5는 "컴파일러 + 시그널"이다.
+
+## Solid와 Angular Signals: 값을 구독한 자리만 다시 돈다
+
+Solid는 JSX를 쓰지만 동작은 React와 정반대다. 컴포넌트 함수는 처음 한 번만 실행되는 설치 코드다. `createSignal`이 돌려준 읽기 함수를 어떤 효과 안에서 부르면, 그 효과가 시그널을 구독한다. 값이 바뀌면 구독한 효과만 다시 돈다.
+
+```jsx
+function Counter() {
+  const [count, setCount] = createSignal(0);
+  const double = createMemo(() => count() * 2);   // count를 구독한다
+  return (
+    <div>
+      <button onClick={() => setCount(count() + 1)}>{count()}</button>
+      <p>{double()}</p>                           {/* 이 글자 노드만 double을 구독한다 */}
+    </div>
+  );
+}
+```
+
+Solid의 JSX 컴파일러는 `{count()}`를 "이 텍스트 노드를 갱신하는 작은 효과"로 바꾼다. 그래서 React에서 익숙한 습관이 여기서는 버그가 된다. `const { label } = props`처럼 props를 구조 분해하면, 분해하는 순간 값을 한 번 읽고 끝이라 나중에 바뀌어도 화면이 안 바뀐다. 조건부 렌더링도 `if`문 대신 `<Show>`, 반복은 `<For>`를 쓴다. 컴포넌트 함수가 다시 돌지 않으니 함수 몸통의 `if`는 처음 한 번만 평가되기 때문이다.
+
+아래 그림은 이 구독 관계를 그린 것이다. 점이 흐르는 방향으로 값이 전파된다. `count`를 바꾸면 그 아래에 연결된 효과만 깨어난다.
+
+<ConceptDiagram
+  caption="시그널은 읽은 쪽을 기억해 두고 바뀌면 그쪽만 깨운다"
+  width={420}
+  height={260}
+  nodes={[
+    { id: "count", label: "count", sub: "시그널", x: 110, y: 40, w: 110 },
+    { id: "items", label: "items", sub: "시그널", x: 320, y: 40, w: 110 },
+    { id: "double", label: "double", sub: "memo", x: 210, y: 130, w: 110 },
+    { id: "btn", label: "버튼 글자", sub: "효과", x: 70, y: 220, w: 110 },
+    { id: "p", label: "문단 글자", sub: "효과", x: 210, y: 220, w: 110 },
+    { id: "li", label: "목록", sub: "효과", x: 350, y: 220, w: 100 },
+  ]}
+  edges={[
+    { from: "count", to: "btn" },
+    { from: "count", to: "double" },
+    { from: "double", to: "p" },
+    { from: "items", to: "li" },
+  ]}
+/>
+
+Angular는 오래 다른 길을 걸었다. Zone.js라는 라이브러리가 `setTimeout`, `addEventListener`, `Promise` 같은 비동기 API를 감싸 두고, 어떤 비동기 작업이든 끝나면 "뭔가 바뀌었을 수 있다"며 변경 감지를 돌린다. 변경 감지는 컴포넌트 트리를 위에서부터 훑으며 템플릿의 바인딩 값을 이전 값과 비교한다. 무엇이 바뀌었는지 몰라서 다 보는 방식이다. `OnPush` 전략을 주면 입력이 바뀌거나 이벤트가 난 컴포넌트만 보게 줄일 수 있었다.
+
+아래 그림에서 다음을 누르면 Zone.js가 있을 때 클릭 하나가 변경 감지로 이어지는 길과, 시그널로 바꾼 뒤 그 길이 얼마나 짧아지는지 차례로 볼 수 있다.
+
+<SequenceDiagram
+  caption="Zone.js 기반 변경 감지와 시그널 기반 갱신"
+  actors={[
+    { id: "user", label: "사용자" },
+    { id: "zone", label: "Zone.js" },
+    { id: "ng", label: "Angular" },
+    { id: "tree", label: "컴포넌트 트리" },
+  ]}
+  steps={[
+    {
+      from: "user",
+      to: "zone",
+      label: "click",
+      title: "감싼 리스너가 먼저 받는다",
+      detail: "Zone.js가 addEventListener를 감싸 두었기 때문에 핸들러 실행 전후를 알 수 있다.",
+    },
+    {
+      from: "zone",
+      to: "ng",
+      label: "작업 끝남",
+      title: "무엇이 바뀌었는지는 모른다",
+      detail: "핸들러가 끝나면 Zone.js는 뭔가 바뀌었을 수 있다고만 알린다. 어느 값인지는 모른다.",
+    },
+    {
+      from: "ng",
+      to: "tree",
+      label: "전체 확인",
+      title: "위에서부터 바인딩을 비교한다",
+      detail: "기본 전략은 루트부터 모든 컴포넌트의 템플릿 바인딩을 이전 값과 비교한다. OnPush면 표시된 가지만 본다.",
+    },
+    {
+      from: "user",
+      to: "ng",
+      label: "count.set()",
+      title: "시그널이면 바뀐 값을 안다",
+      detail: "zoneless에서는 시그널에 쓰는 순간 Angular가 그 시그널을 읽은 템플릿을 표시한다.",
+      payload: "count = signal(0);\ninc() { this.count.update(v => v + 1); }",
+    },
+    {
+      from: "ng",
+      to: "tree",
+      label: "표시된 곳만",
+      title: "읽은 컴포넌트만 다시 확인한다",
+      detail: "변경 감지는 돌지만 표시된 컴포넌트만 확인한다. 비동기 작업이 끝났다는 이유만으로 트리를 훑지 않는다.",
+    },
+  ]}
+/>
+
+Angular 16부터 `signal`, `computed`, `effect`가 들어왔고, 이후 버전에서 Zone.js 없이 시그널 변경으로 필요한 곳만 확인하는 zoneless 방식이 실험을 거쳐 안정화됐다. Angular 21부터는 새 프로젝트가 기본으로 zoneless로 만들어진다. 버전마다 안정화 범위가 달라서 기존 프로젝트를 옮길 때는 공식 업데이트 가이드를 확인해야 한다. Zone.js를 빼면 번들이 줄고, 서드파티 라이브러리가 일으킨 쓸데없는 변경 감지도 사라진다.
+
+같은 카운터를 Angular로 쓰면 이렇다. 시그널과 DI가 한 컴포넌트에 같이 보인다.
+
+```ts
+@Component({
+  selector: "app-counter",
+  template: `
+    <button (click)="inc()">{{ count() }}</button>
+    <p>{{ double() }}</p>
+  `,
+})
+export class Counter {
+  private readonly log = inject(LogService);   // 생성자 대신 inject로 서비스를 받는다
+  count = signal(0);
+  double = computed(() => this.count() * 2);
+  inc() {
+    this.count.update((v) => v + 1);
+    this.log.info("clicked");
+  }
+}
+```
+
+Angular가 다른 넷과 가장 다른 점은 반응성보다 구조다. 라우터, 폼, HTTP 클라이언트, 테스트 도구가 하나로 들어 있고, 의존성 주입(DI)이 중심에 있다. 서비스 클래스를 `inject(UserService)`로 받아 쓰고, 주입기가 계층으로 있어 같은 서비스를 앱 전체에서 하나로 쓸지 컴포넌트마다 새로 만들지를 설정으로 정한다. 큰 팀이 같은 모양으로 코드를 쓰게 만드는 데 강하다. 대신 배울 개념이 많다.
+
+## 시그널을 직접 만들어 보기
+
+시그널 구현의 뼈대는 생각보다 짧다. 읽을 때 "지금 실행 중인 효과"를 구독자로 적고, 쓸 때 구독자를 다시 실행한다. 효과는 다시 실행하기 전에 옛 구독을 모두 지운다. 그래야 조건에 따라 읽는 시그널이 바뀌어도 맞게 따라간다.
+
+아래 `createSignal`과 `createEffect`는 추적을 하지 않는 껍데기다. 효과는 처음 한 번만 돈다. `simulate`가 돌려주는 로그는 효과가 실행될 때마다 한 줄씩 쌓인다. 효과는 `flag`가 참이면 `a`를, 거짓이면 `b`를 읽는다. 세 번째 테스트처럼 읽지 않은 `b`를 바꿨을 때 효과가 돌면 안 되고, 네 번째처럼 `flag`가 바뀐 뒤에는 `b`만 따라가야 한다.
+
+<CodePlayground
+  caption="시그널과 효과 만들기"
+  functionName="simulate"
+  initialCode={`function createSignal(value) {
+  const read = () => value;
+  const write = (next) => { value = next; };
+  return [read, write];
+}
+
+function createEffect(fn) {
+  fn();
+}
+
+function simulate(ops) {
+  const log = [];
+  const [flag, setFlag] = createSignal(true);
+  const [a, setA] = createSignal(1);
+  const [b, setB] = createSignal(100);
+  createEffect(() => { log.push(flag() ? "a=" + a() : "b=" + b()); });
+  const setters = { flag: setFlag, a: setA, b: setB };
+  for (const [name, val] of ops) setters[name](val);
+  return log;
+}`}
+  solution={`let current = null;
+
+function createSignal(value) {
+  const subscribers = new Set();
+  const read = () => {
+    if (current) { subscribers.add(current); current.deps.add(subscribers); }
+    return value;
+  };
+  const write = (next) => {
+    if (Object.is(next, value)) return;
+    value = next;
+    [...subscribers].forEach((effect) => effect.run());
+  };
+  return [read, write];
+}
+
+function createEffect(fn) {
+  const effect = {
+    deps: new Set(),
+    run() {
+      effect.deps.forEach((subs) => subs.delete(effect));
+      effect.deps.clear();
+      const prev = current;
+      current = effect;
+      try { fn(); } finally { current = prev; }
+    },
+  };
+  effect.run();
+}
+
+function simulate(ops) {
+  const log = [];
+  const [flag, setFlag] = createSignal(true);
+  const [a, setA] = createSignal(1);
+  const [b, setB] = createSignal(100);
+  createEffect(() => { log.push(flag() ? "a=" + a() : "b=" + b()); });
+  const setters = { flag: setFlag, a: setA, b: setB };
+  for (const [name, val] of ops) setters[name](val);
+  return log;
+}`}
+  tests={[
+    { label: "처음 한 번 실행", args: [[]], expected: ["a=1"] },
+    { label: "읽은 a를 바꾸면 다시 실행", args: [[["a", 2]]], expected: ["a=1", "a=2"] },
+    { label: "읽지 않은 b는 무시", args: [[["b", 5]]], expected: ["a=1"] },
+    { label: "flag가 바뀌면 구독이 b로 옮겨 간다", args: [[["flag", false], ["a", 3], ["b", 7]]], expected: ["a=1", "b=100", "b=7"] },
+    { label: "같은 값이면 실행하지 않는다", args: [[["a", 1]]], expected: ["a=1"] },
+    { label: "다시 a로 돌아오기", args: [[["flag", false], ["flag", true], ["b", 9], ["a", 4]]], expected: ["a=1", "b=100", "a=1", "a=4"] },
+  ]}
+/>
+
+이 30줄에 시그널 방식의 장단점이 다 보인다. 갱신은 정확하다. 읽은 것만 다시 돈다. 대신 구독 관계를 담는 `Set`이 시그널과 효과마다 생기고, 효과가 돌 때마다 구독을 지웠다 다시 단다. 화면을 처음 만들 때 이 그래프를 다 짓는 비용이 든다. 실제 라이브러리는 여기에 갱신 묶기(batch), 중복 실행을 막는 위상 정렬, 효과 정리 함수를 더 얹는다. React 밖의 상태 저장소가 같은 아이디어를 어떻게 쓰는지는 [상태 관리 라이브러리](/posts/react-state-management-libraries)의 MobX와 시그널 부분에 이어진다.
+
+## 시그널이 가상 DOM보다 빠른가
+
+자주 나오는 질문인데 "무엇을 재느냐"에 따라 답이 다르다.
+
+값 하나가 바뀌고 그 값을 쓰는 자리가 몇 군데뿐인 경우라면 시그널 쪽이 일을 적게 한다. 위 측정처럼 React는 컴포넌트 함수와 자식을 다시 돌리고 비교하는데, Solid는 텍스트 노드 하나를 고친다. 큰 표에서 셀 하나가 1초에 여러 번 바뀌는 대시보드라면 이 차이가 실제로 느껴진다.
+
+반대로 화면을 처음 만들 때는 시그널 쪽도 일을 한다. 구독 그래프를 짓고 효과를 등록해야 한다. 목록 전체를 새 데이터로 갈아 끼우는 경우는 어느 방식이든 거의 모든 노드를 새로 만들어야 해서 차이가 줄어든다. 공개된 js-framework-benchmark 같은 측정에서 Solid와 Svelte가 순수 자바스크립트에 가깝고 React가 그보다 뒤에 있는 건 사실이지만, 대부분의 업무 화면에서 사람이 느끼는 속도는 네트워크와 데이터 양, 그리고 쓸데없는 리렌더를 얼마나 방치했느냐가 더 크게 정한다.
+
+번들 크기도 비교해 봤다. 각 프레임워크로 버튼 하나짜리 카운터만 만들어 esbuild 0.28로 압축하고 gzip한 크기다.
+
+```bash
+# r = react + react-dom, v = vue(render 함수), s = svelte, so = solid(h 함수)
+for f in r v s so; do
+  printf "%-10s raw %7d  gzip %6d\n" $f $(wc -c < out-$f.js) $(gzip -9c out-$f.js | wc -c)
+done
+```
+
+```text
+r          raw  222826  gzip  68894
+v          raw   65858  gzip  25994
+s          raw   50940  gzip  19074
+so         raw   19640  gzip   7619
+```
+
+이 숫자는 "런타임의 기본 크기"에 가깝다. 앱이 커지면 프레임워크 런타임보다 앱 코드와 라이브러리가 훨씬 커진다. Svelte는 컴포넌트마다 갱신 코드를 펼쳐 쓰니 컴포넌트 수가 많아질수록 증가 폭이 다른 넷과 다르다. 첫 화면 크기에 민감한 페이지라면 이 표보다 [코드 스플리팅](/posts/code-splitting)과 [아일랜드 아키텍처](/posts/islands-resumability)가 더 큰 차이를 만든다.
+
+## 메타 프레임워크가 얹는 것
+
+프레임워크는 컴포넌트와 반응성까지만 정한다. 실제 서비스에는 그 위에 라우팅, 데이터 불러오기, 서버 렌더링, 빌드 설정이 필요하다. 이걸 묶어 주는 게 메타 프레임워크다.
+
+- Next.js(React): 파일 기반 라우팅, 서버 컴포넌트, 페이지마다 정적·동적·스트리밍 렌더링을 고르는 기능([Next.js 정적·동적 렌더링](/posts/nextjs-static-dynamic-rendering)).
+- Nuxt(Vue): 파일 기반 라우팅과 자동 import, 서버 엔진 Nitro로 여러 배포 대상에 맞춘다.
+- SvelteKit(Svelte): `+page.svelte`와 `+page.server.ts`로 화면과 서버 데이터를 나란히 두고, 어댑터로 배포 대상을 바꾼다.
+- TanStack Start(React, Solid): 타입이 안전한 TanStack Router 위에 서버 함수와 SSR을 얹는다. 규칙을 덜 강요하고 Vite 기반이다.
+- Astro: 특정 프레임워크에 묶이지 않는다. 기본은 정적 HTML이고, 상호작용이 필요한 조각만 React든 Svelte든 섬으로 살린다.
+- Angular는 SSR과 라우터를 공식 패키지로 제공하고, Solid에는 SolidStart가 있다.
+
+메타 프레임워크를 고르는 일은 사실상 "HTML을 어디서 언제 만들 것인가"를 고르는 일이다. CSR, SSR, SSG, 스트리밍의 차이는 [렌더링 전략](/posts/rendering-strategies)에서 페이지 종류별로 비교했다. 프레임워크를 바꾸지 않아도 메타 프레임워크의 렌더링 설정만으로 첫 화면 속도가 크게 달라지는 경우가 많다.
+
+## 팀은 무엇을 보고 고르나
+
+성능 숫자보다 먼저 보는 것들이 있다.
+
+사람과 생태계가 첫째다. 채용 시장에서 구할 수 있는 개발자, 사내에 이미 있는 디자인 시스템과 공용 라이브러리, 쓰려는 서드파티(지도, 에디터, 차트)의 지원 여부가 프레임워크 차이보다 오래 영향을 준다. React가 많이 쓰이는 이유는 성능이 아니라 이 생태계 때문이다. 서버 컴포넌트, React Native, 수많은 라이브러리가 같은 모델 위에 있다.
+
+팀의 규모와 규칙 선호가 둘째다. 여러 팀이 한 코드베이스를 오래 고치는 곳이라면 구조가 정해진 Angular의 DI와 공식 도구가 장점이 된다. 작은 팀이 빠르게 만들고 바꾸는 곳이라면 Svelte나 Vue처럼 문법이 가볍고 템플릿이 HTML에 가까운 쪽이 학습 비용이 적다.
+
+갱신이 잦은 화면의 비중이 셋째다. 실시간 시세, 협업 편집기, 큰 표처럼 작은 값이 자주 바뀌는 화면이 핵심이라면 세밀한 갱신을 하는 Solid나 Svelte, 시그널 기반 Angular가 기본값으로 유리하다. React로도 상태를 잘게 나누고 바깥 저장소의 셀렉터를 쓰면 같은 결과를 낼 수 있지만, 그만큼 신경을 써야 한다.
+
+옮겨 타는 비용도 계산해야 한다. 프레임워크를 바꾸면 컴포넌트, 상태 관리, 테스트, 빌드가 다 바뀐다. 한 번에 갈아엎기보다 새 화면만 다른 프레임워크로 만들어 경계에서 붙이는 방식이 현실적이고, 그 경계는 [Web Components](/posts/web-components-shadow-dom)나 [마이크로 프런트엔드](/posts/micro-frontends)로 만든다.
+
+다섯 프레임워크의 차이를 한 문장으로 줄이면 "바뀐 값을 화면의 어느 자리로 연결하는 일을 언제 하느냐"다. React는 매번 다시 실행해서 알아내고, Vue는 컴포넌트마다 읽은 걸 적어 두고, Svelte는 컴파일할 때 미리 써 두고, Solid와 Angular Signals는 값마다 구독자를 들고 있다. 이 그림이 머리에 있으면 새 프레임워크가 나와도 "이건 어느 쪽인가"부터 물어볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 가상 DOM은 무엇이고 왜 쓰나?
+
+화면을 자바스크립트 객체 트리로 표현한 것이다. 상태가 바뀌면 컴포넌트를 다시 실행해 새 트리를 만들고, 옛 트리와 비교해 다른 곳만 실제 DOM에 반영한다. 화면을 "상태의 함수"로 단순하게 쓰면서도 DOM 조작은 최소로 하려는 장치다. 가상 DOM 자체가 DOM 직접 조작보다 빠른 건 아니고, 매번 전체를 다시 그리는 단순한 방식을 감당할 만하게 만드는 것이 목적이다.
+
+### React와 Vue의 반응성은 어떻게 다른가?
+
+React는 무엇을 읽었는지 추적하지 않아서 상태가 바뀌면 그 컴포넌트와 자식을 다시 실행하고 비교한다. Vue는 프록시로 읽기를 가로채 어느 컴포넌트가 어떤 값을 읽었는지 기록하고, 값이 바뀌면 그 컴포넌트의 render만 다시 돈다. 그래서 Vue는 props가 같은 자식을 `memo` 없이도 건너뛴다. 대신 Vue는 구조 분해 같은 동작에서 추적이 끊기는 함정이 있다.
+
+### Svelte는 왜 가상 DOM이 없어도 되나?
+
+컴파일러가 빌드 시점에 "이 값이 바뀌면 이 노드의 글자를 바꾼다"는 갱신 코드를 직접 써 두기 때문이다. 실행 중에는 트리를 비교하지 않고 그 코드만 돈다. Svelte 5부터는 `$state` 룬이 실행 중 시그널을 만들어, 파일 경계나 배열 변경처럼 컴파일러가 놓치던 경우도 추적한다.
+
+### 시그널이란 무엇이고 Solid는 어떻게 동작하나?
+
+읽을 때 지금 실행 중인 효과를 구독자로 기록하고, 값을 쓸 때 그 구독자만 다시 실행하는 반응형 값이다. Solid의 컴포넌트 함수는 처음 한 번만 실행되고, JSX의 각 동적 자리가 작은 효과가 되어 해당 시그널을 구독한다. 그래서 props를 구조 분해하거나 함수 몸통에서 `if`로 분기하면 처음 값으로 굳어 버리는 실수가 생긴다.
+
+### 시그널이 가상 DOM보다 항상 빠른가?
+
+아니다. 값 하나가 바뀌어 몇 자리만 고치면 되는 갱신에서는 시그널이 일을 훨씬 적게 한다. 하지만 처음 그릴 때 구독 그래프를 만드는 비용이 있고, 목록을 통째로 바꾸는 경우는 차이가 줄어든다. 실제 서비스 체감 속도는 네트워크, 데이터 양, 방치된 리렌더가 더 크게 정하므로 갱신 패턴을 보고 판단한다.
+
+### Angular의 Zone.js와 zoneless는 무엇이 다른가?
+
+Zone.js는 비동기 API를 감싸 두고 어떤 비동기 작업이 끝나든 컴포넌트 트리 전체의 변경 감지를 돌린다. 무엇이 바뀌었는지 모르니 다 확인하는 방식이다. zoneless는 시그널처럼 Angular가 아는 경로로 값이 바뀔 때만 필요한 곳을 확인해서, 쓸데없는 감지와 Zone.js 번들을 없앤다. Angular 21부터 새 프로젝트의 기본값이다.
+
+### 왜 React를 골랐나? 다른 프레임워크로 바꾸자는 의견에는 어떻게 답하나?
+
+성능 숫자보다 생태계와 사람을 먼저 본다고 답한다. React는 채용, 라이브러리, 서버 컴포넌트와 네이티브까지 같은 모델로 이어지는 점이 강하고, 쓸데없는 리렌더는 상태 분리와 컴파일러로 줄일 수 있다. 다만 작은 값이 자주 바뀌는 화면이 핵심이거나 번들 크기가 결정적인 페이지라면 Svelte나 Solid를 그 부분에만 쓰는 방안도 검토한다고 말한다.
+
+### 메타 프레임워크는 무엇을 해 주나?
+
+컴포넌트 프레임워크 위에 라우팅, 데이터 불러오기, 서버 렌더링 방식, 빌드와 배포 설정을 얹는다. Next.js, Nuxt, SvelteKit, TanStack Start가 각각 React, Vue, Svelte, React·Solid 위의 도구이고, Astro는 여러 프레임워크를 섬으로 섞는다. 고르는 기준은 결국 페이지마다 HTML을 어디서 언제 만들지다.

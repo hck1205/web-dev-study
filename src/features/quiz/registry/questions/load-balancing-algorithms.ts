@@ -89,6 +89,6 @@ export const LOAD_BALANCING_ALGORITHMS: QuizQuestion[] = [
     answer: 2,
     explanation:
       "gRPC는 HTTP/2 연결 하나를 오래 쓰는데 기본 Service는 연결이 맺어질 때 한 번만 Pod를 고르는 L4 방식이다. 알고리즘을 바꾸거나 Pod를 늘려도 이미 맺은 연결은 그대로라 쏠림이 남는다. 요청마다 고르는 층으로 옮겨야 한다.",
-    anchor: "무엇을-고를까",
+    anchor: "같은-서버로-가야-하나-비용이-고르지-않나",
   },
 ];

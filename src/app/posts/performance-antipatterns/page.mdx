@@ -1,0 +1,418 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("performance-antipatterns");
+
+<EasyIntro>
+  손님이 조금만 늘었는데 가게가 갑자기 엉망이 될 때가 있다. 손님이 두 배가 됐을 뿐인데 기다리는 시간은 열 배가 된다. 일하는 사람이 거의 쉴 틈 없이 바빠지면 줄이 순식간에 길어지기 때문이다.
+
+  식당 주방을 생각해 보자. 요리사가 주문 하나마다 냉장고를 백 번씩 열고 닫거나, 필요 없는 재료까지 몽땅 꺼내 오거나, 칼을 쓸 때마다 새로 사 온다면 평소에는 그럭저럭 돌아가도 손님이 몰리는 점심시간에는 무너진다. 프로그램도 똑같다. 평소에는 티가 안 나던 나쁜 습관이 사람이 몰릴 때 한꺼번에 드러난다.
+
+  이런 나쁜 습관에는 자주 보이는 모양이 있다. 이 글은 느린 서버에서 반복해서 보이는 열 가지 모양을 모아서, 어떤 증상으로 알아보고 어떻게 고치는지 정리한다. 마지막에는 일부러 사람을 몰리게 하는 시험으로 그 습관을 찾아내는 순서를 적는다.
+</EasyIntro>
+
+광고가 나간 날 트래픽이 평소의 두 배가 됐다. 서버는 오토스케일링으로 늘어났는데 응답 시간은 평균 40ms에서 400ms가 됐다. 두 배를 받았는데 열 배가 느리다. 서버를 더 붙여도 크게 나아지지 않는다. 대시보드를 열면 DB CPU는 90%를 넘고, 앱 서버 CPU는 30%인데 요청 처리 스레드는 다 차 있다.
+
+이런 서비스를 뜯어 보면 원인이 대개 처음 보는 버그가 아니다. 반복문 안의 쿼리, 요청마다 새로 만드는 HTTP 클라이언트, 요청 스레드에서 도는 PDF 생성처럼 어디선가 본 적 있는 모양이다. Microsoft의 클라우드 설계 문서는 이런 모양에 이름을 붙여 성능 안티패턴으로 묶어 두었다. 이 글은 그중 자주 만나는 열 가지를 증상, 확인 방법, 고치는 법으로 정리하고, 마지막에 부하 테스트로 찾아내는 순서를 적는다. 측정은 Node 22와 PostgreSQL 16으로 같은 머신 안에서 했다.
+
+이 글은 지도 역할을 한다. 하나하나 깊게 들어가는 글은 따로 있다. 반복문 안의 쿼리는 [N+1 쿼리](/posts/n-plus-one-queries), 커넥션 비용은 [커넥션 풀](/posts/connection-pool), 재시도가 장애를 키우는 과정은 [재시도](/posts/retries), 드문 느림이 커지는 과정은 [꼬리 지연](/posts/tail-latency)에서 다룬다.
+
+## 두 배를 받았는데 열 배가 느린 이유
+
+먼저 처음 장면의 숫자부터 설명한다. 서버를 줄 서는 창구 하나로 보면, 일이 들어오는 속도와 처리하는 속도의 비율이 사용률이다. 창구가 요청 하나를 20ms에 처리하면 1초에 50개를 처리할 수 있다. 1초에 25개가 오면 사용률은 50%다.
+
+요청이 무작위로 오는 단순한 창구(대기열 이론의 M/M/1 모델)에서 평균 응답 시간은 처리 시간을 1 - 사용률로 나눈 값이다. 사용률 47.5%면 20 ÷ 0.525 ≈ 38ms, 두 배인 95%면 20 ÷ 0.05 = 400ms다. 트래픽 두 배가 응답 열 배가 되는 건 이 나눗셈 때문이다. 사용률이 100%에 가까워질수록 분모가 0으로 가면서 대기 시간이 폭발한다.
+
+<CodePlayground
+  caption="사용률에 따른 평균 응답 시간 (M/M/1)"
+  functionName="responseTime"
+  initialCode={`// serviceMs: 요청 하나 처리 시간, rps: 초당 도착하는 요청 수
+// 사용률 = rps * serviceMs / 1000
+// 평균 응답 시간 = serviceMs / (1 - 사용률), 소수 첫째 자리로 반올림
+// 사용률이 1 이상이면 줄이 끝없이 길어지므로 null
+function responseTime(serviceMs, rps) {
+  return serviceMs;
+}`}
+  solution={`function responseTime(serviceMs, rps) {
+  const rho = (rps * serviceMs) / 1000;
+  if (rho >= 1) return null;
+  return Math.round((serviceMs / (1 - rho)) * 10) / 10;
+}`}
+  tests={[
+    { label: "사용률 47.5%", args: [20, 23.75], expected: 38.1 },
+    { label: "두 배, 95%", args: [20, 47.5], expected: 400 },
+    { label: "90%", args: [20, 45], expected: 200 },
+    { label: "100%", args: [20, 50], expected: null },
+    { label: "한가할 때", args: [10, 0], expected: 10 },
+  ]}
+/>
+
+실제 서버는 창구가 여러 개라 이 식보다 덜 가파르지만 모양은 같다. 그래서 안티패턴은 두 갈래로 아프다. 처리 시간을 늘리거나(20ms가 60ms가 되면 같은 트래픽에서 사용률이 세 배다), 공유 자원 하나에 일을 몰아 그 자원의 사용률만 먼저 100%에 닿게 한다. 평소 사용률 30%에서는 둘 다 티가 거의 안 난다. 트래픽이 몰리는 날에만 보인다.
+
+## 증상에서 거꾸로 찾아가기
+
+안티패턴은 이름보다 증상으로 먼저 만난다. 아래 그림은 대시보드에서 자주 보는 증상과, 그 뒤에 있을 가능성이 큰 모양을 이은 것이다.
+
+<ConceptDiagram
+  caption="증상에서 의심할 안티패턴으로"
+  width={400}
+  height={340}
+  nodes={[
+    { id: "dbcpu", label: "DB CPU만 높다", x: 90, y: 30, w: 150 },
+    { id: "appcpu", label: "앱 CPU 높고 p99 튐", x: 90, y: 100, w: 160 },
+    { id: "lowcpu", label: "CPU 낮은데 느림", x: 90, y: 170, w: 150 },
+    { id: "bytes", label: "응답·네트워크 바이트 큼", x: 90, y: 240, w: 180 },
+    { id: "spike", label: "장애 뒤 요청 급증", x: 90, y: 300, w: 160 },
+    { id: "busydb", label: "바쁜 DB · 캐시 없음", x: 310, y: 30, w: 160 },
+    { id: "busyfe", label: "바쁜 프런트엔드", x: 310, y: 100, w: 140 },
+    { id: "wait", label: "동기 I/O · 수다 I/O", sub: "매번 새 클라이언트", x: 310, y: 170, w: 160 },
+    { id: "fetch", label: "불필요한 데이터", x: 310, y: 240, w: 140 },
+    { id: "storm", label: "재시도 폭주", x: 310, y: 300, w: 120 },
+  ]}
+  edges={[
+    { from: "dbcpu", to: "busydb" },
+    { from: "appcpu", to: "busyfe" },
+    { from: "lowcpu", to: "wait" },
+    { from: "bytes", to: "fetch" },
+    { from: "spike", to: "storm" },
+    { from: "bytes", to: "busydb", dashed: true },
+  ]}
+/>
+
+여기서 "앱 CPU"와 "DB CPU"를 따로 보는 습관이 중요하다. 둘 다 높을 때와 하나만 높을 때 의심할 곳이 다르다. CPU가 낮은데 느리면 대개 무언가를 기다리고 있다는 뜻이다. 커넥션, 락, 네트워크 왕복, 스레드 풀 자리 같은 것을.
+
+## 1. 바쁜 데이터베이스
+
+DB에 데이터 일이 아닌 일까지 몰아넣은 모양이다. 주문 목록을 HTML이나 큰 JSON 문자열로 조립하는 저장 프로시저, 쿼리 안에서 하는 무거운 문자열 가공과 암호화, 트리거 안에서 연쇄적으로 도는 비즈니스 규칙 같은 것들. 처음에는 "데이터 옆에서 하니 빠르다"는 이유로 시작한다. 실제로 트래픽이 적을 때는 빠르다.
+
+문제는 DB가 가장 늘리기 어려운 자원이라는 것이다. 앱 서버는 10대로 늘리면 끝이지만, 쓰기를 받는 주 DB는 보통 한 대다. 거기에 CPU를 쓰는 일을 올려 두면 트래픽이 늘 때 DB부터 사용률 100%에 닿고, 모든 서비스가 같이 느려진다.
+
+확인은 DB 쪽 통계로 한다. PostgreSQL이라면 `pg_stat_statements` 확장을 켜 두고 총 실행 시간 순으로 본다.
+
+```sql
+-- 누적 실행 시간이 가장 큰 쿼리 10개 (pg_stat_statements가 켜져 있어야 한다)
+SELECT calls,
+       round(total_exec_time) AS total_ms,
+       round(mean_exec_time, 2) AS mean_ms,
+       rows,
+       left(query, 60) AS query
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 10;
+```
+
+위쪽에 함수 호출이나 `string_agg`, `jsonb_build_object` 같은 가공이 잔뜩 들어간 쿼리가 있다면 의심한다. 고치는 방향은 "거르고 모으는 일은 DB에, 꾸미고 계산하는 일은 앱에"다. 반대로 너무 멀리 가서 행을 전부 앱으로 가져와 거르면 다음에 볼 불필요한 데이터 가져오기가 된다. DB 안의 로직을 언제 쓰는 게 맞는지는 [함수, 프로시저, 트리거](/posts/postgres-functions-triggers)에서 다룬다.
+
+## 2. 바쁜 프런트엔드
+
+여기서 프런트엔드는 브라우저가 아니라 요청을 받는 서버, 그러니까 웹 계층이다. 요청을 처리하는 스레드에서 PDF 생성, 이미지 리사이즈, 큰 JSON 파싱, 대량 암호 해시처럼 무거운 일을 하는 모양이다.
+
+Node에서는 특히 바로 드러난다. 요청 처리가 한 스레드의 이벤트 루프에서 돌아서, 한 요청이 CPU를 붙잡으면 다른 모든 요청이 기다린다. 300ms짜리 계산을 하는 `/report` 요청 5개를 동시에 보내고, 그동안 가벼운 `/health`를 50ms마다 20번 불러 응답 시간을 쟀다. 한 번은 계산을 요청 처리 함수 안에서, 한 번은 워커 스레드로 넘겨서 돌렸다.
+
+```text
+inline  /health p50 1.0 ms  max 1519.7 ms
+worker  /health p50 1.2 ms  max 9.2 ms
+```
+
+계산을 요청 안에서 하면 `/health` 하나가 1.5초를 기다렸다. 300ms 계산 다섯 개가 줄줄이 끝날 때까지 이벤트 루프가 다른 일을 못 한 것이다. 워커로 넘기면 같은 계산을 하는 동안에도 `/health`는 10ms 안이었다. 이벤트 루프가 막히는 원리는 [이벤트 루프](/posts/event-loop) 글에 있다.
+
+실험에서 워커로 넘긴 쪽은 이런 모양이다. 계산은 별도 스레드에서 돌고, 요청 처리 함수는 결과를 기다리는 동안 이벤트 루프를 놓아준다.
+
+```ts
+import http from "node:http";
+import { Worker } from "node:worker_threads";
+
+// 프로세스가 뜰 때 워커를 한 번 만든다(요청마다 만들면 6번 안티패턴이 된다)
+const worker = new Worker(new URL("./report-worker.js", import.meta.url));
+
+function renderReport(input: unknown): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (out: Buffer) => { cleanup(); resolve(out); };
+    const onError = (e: Error) => { cleanup(); reject(e); };
+    const cleanup = () => { worker.off("message", onMessage); worker.off("error", onError); };
+    worker.on("message", onMessage);
+    worker.on("error", onError);
+    worker.postMessage(input);
+  });
+}
+
+http.createServer(async (req, res) => {
+  if (req.url === "/report") {
+    const pdf = await renderReport({ month: "2026-09" }); // 이벤트 루프는 그동안 다른 요청을 받는다
+    res.end(pdf);
+  } else res.end("ok");
+}).listen(3000);
+```
+
+실제로는 워커 하나에 요청을 하나씩 매기는 이 코드 대신 워커 여러 개짜리 풀(`piscina` 같은 라이브러리)을 쓰고, 풀의 대기열 길이에 한도를 둔다. 워커 수는 CPU 코어 수보다 많아 봐야 소용이 없다.
+
+스레드가 여러 개인 서버(Java의 Tomcat 같은)에서도 모양은 같다. 덜 극적일 뿐이다. 무거운 요청이 스레드 풀 200개 중 150개를 차지하면 나머지 요청이 줄을 선다. 고치는 방향은 두 가지다. 바로 답할 필요가 없는 일은 큐로 넘기고 202로 답한다. 이 방식은 [큐로 부하 받아 내기](/posts/queue-based-load-leveling)에서 자세히 다룬다. 바로 답해야 하는 계산은 별도 워커 풀이나 별도 서비스로 떼서 웹 계층과 따로 늘린다.
+
+## 3. 동기 I/O
+
+I/O가 끝날 때까지 스레드를 붙잡고 기다리는 모양이다. 바쁜 프런트엔드와 비슷해 보이지만 증상이 다르다. CPU는 한가한데 느리다. 스레드가 일을 하는 게 아니라 기다리고 있기 때문이다.
+
+Node에서는 요청 처리 중에 `fs.readFileSync`, `execSync`, `zlib.gzipSync` 같은 `Sync` 함수를 부르는 게 대표적이다. 이벤트 루프 전체가 그동안 멈춘다. 스레드 풀 서버에서는 외부 API를 블로킹으로 부르는 게 대표적이다. 외부 API가 평소 50ms에서 5초로 느려지면, 스레드 하나가 붙잡히는 시간이 100배가 되고 스레드 풀 200개가 금방 다 찬다. CPU 사용률은 낮은데 새 요청은 받지도 못한다.
+
+Node에서 같은 일을 하는 두 줄을 나란히 놓으면 차이가 선명하다.
+
+```ts
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+
+// 나쁜 예: 파일을 다 읽을 때까지 이 프로세스의 모든 요청이 멈춘다
+app.get("/template", (req, res) => res.send(readFileSync("./big-template.html")));
+
+// 나은 예: 읽는 동안 이벤트 루프가 다른 요청을 처리한다
+app.get("/template", async (req, res) => res.send(await readFile("./big-template.html")));
+
+// 가장 나은 예: 바뀌지 않는 파일이면 시작할 때 한 번 읽어 메모리에 둔다
+const template = readFileSync("./big-template.html"); // 시작 시점의 Sync는 괜찮다
+app.get("/template", (req, res) => res.send(template));
+```
+
+마지막 줄처럼 `Sync` 함수 자체가 나쁜 건 아니다. 서버가 요청을 받기 전, 시작할 때 한 번 부르는 건 문제가 없다. 요청 경로 안에서 부를 때가 문제다.
+
+고치는 길은 여러 갈래다.
+
+- 비동기 I/O를 쓴다. Node는 `Sync`가 붙지 않은 함수, Java는 논블로킹 클라이언트나 가상 스레드(Java 21부터 정식). 가상 스레드는 블로킹 코드를 그대로 두고도 스레드를 아주 많이 만들 수 있게 해 준다. 다만 Java 21~23에서는 `synchronized` 블록 안에서 블로킹하면 운반 스레드가 붙잡히는(pinning) 문제가 있었고, Java 24에서 대부분 풀렸다.
+- 기다림에 끝을 정한다. 외부 호출마다 타임아웃을 둔다. 5초를 기다리는 대신 500ms에서 포기하면 스레드가 붙잡히는 시간도 그만큼 줄어든다. [타임아웃](/posts/timeouts) 글을 참고한다.
+- 칸막이를 친다. 느려지기 쉬운 외부 호출에는 따로 작은 스레드 풀을 줘서, 그 풀이 다 차도 나머지 요청은 돌게 한다(벌크헤드).
+
+비동기로 바꿨다고 끝은 아니다. 비동기는 스레드를 아낄 뿐, 느린 의존성은 여전히 느리다. 기다리는 요청이 메모리에 무한히 쌓이지 않게 동시 요청 수에 한도를 둬야 한다.
+
+## 4. 수다스러운 I/O
+
+작은 요청을 여러 번 주고받는 모양이다. 상품 1,000개를 화면에 그리려고 쿼리를 1,000번 보내거나, 마이크로서비스 A가 B에게 사용자 정보를 한 명씩 묻는다. 요청 하나하나는 빠른데 왕복 시간이 쌓인다.
+
+<SequenceDiagram
+  caption="같은 데이터를 1,000번 왕복으로 받느냐, 한 번에 받느냐"
+  actors={[
+    { id: "app", label: "앱 서버" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "app", to: "db", label: "id = 1", title: "하나씩 묻는다", detail: "반복문 안에서 상품 하나마다 쿼리를 보낸다. 쿼리 실행은 0.05ms인데 왕복이 따로 붙는다." },
+    { from: "db", to: "app", label: "1 row", title: "하나씩 받는다", detail: "응답이 와야 다음 쿼리를 보낸다. 같은 데이터센터 안 왕복이 0.5ms만 돼도 1,000번이면 0.5초다." },
+    { from: "app", to: "db", label: "id = 2 … 1000", title: "999번 더", detail: "DB는 한가하다. 시간은 대부분 네트워크 왕복과 드라이버의 쿼리 준비에 쓰인다." },
+    { from: "app", to: "db", label: "id = ANY($1)", title: "한 번에 묻는다", detail: "id 목록을 배열로 넘겨 쿼리 하나로 받는다. 왕복은 한 번이다." },
+    { from: "db", to: "app", label: "1000 rows", title: "한 번에 받는다", detail: "응답이 커지지만 왕복 비용은 한 번만 낸다." },
+  ]}
+/>
+
+같은 머신 안, 유닉스 소켓으로 붙은 psql에서 두 방식을 비교했다. 왕복이 가장 싼 환경인데도 차이가 난다.
+
+```sql
+-- chatty.sql: 이런 줄이 1,000개
+SELECT id, name, price FROM products WHERE id = 1;
+SELECT id, name, price FROM products WHERE id = 2;
+-- ...
+
+-- batch.sql: 한 줄
+SELECT id, name, price FROM products WHERE id = ANY(ARRAY(SELECT generate_series(1, 1000)));
+```
+
+```text
+chatty 197 ms
+batch 65 ms
+```
+
+psql을 띄우는 시간이 양쪽에 똑같이 들어 있으니 차이 130ms 정도가 쿼리 1,000번의 왕복 비용이다. 한 번에 0.13ms꼴이다. 실제 서비스에서 앱과 DB가 다른 서버에 있으면 왕복이 0.3~1ms쯤 되고, 클라우드에서 가용 영역이 다르면 더 길다. 1ms면 1,000번에 1초다.
+
+ORM의 지연 로딩이 이 모양을 몰래 만드는 가장 흔한 범인이고, 찾는 법과 고치는 법은 [N+1 쿼리](/posts/n-plus-one-queries)에 자세히 있다. 서비스 사이라면 목록을 받는 배치 API(`GET /users?ids=1,2,3`)를 만들거나, GraphQL 서버라면 DataLoader로 한 틱 안의 요청을 모은다. 반대 방향의 실수도 있다. 묶는 게 좋다고 응답 하나에 모든 것을 담으면 다음 모양이 된다.
+
+코드에서는 대개 이런 모양으로 나타난다.
+
+```ts
+// 나쁜 예: 주문 하나마다 상품을 따로 묻는다 (주문 100개면 쿼리 101번)
+const orders = await db.query("SELECT id, product_id FROM orders WHERE user_id = $1", [userId]);
+for (const o of orders.rows) {
+  const p = await db.query("SELECT name, price FROM products WHERE id = $1", [o.product_id]);
+  o.product = p.rows[0];
+}
+
+// 고친 예: 필요한 id를 모아 한 번에 묻고, 메모리에서 붙인다 (쿼리 2번)
+const ids = [...new Set(orders.rows.map((o) => o.product_id))];
+const products = await db.query("SELECT id, name, price FROM products WHERE id = ANY($1)", [ids]);
+const byId = new Map(products.rows.map((p) => [p.id, p]));
+for (const o of orders.rows) o.product = byId.get(o.product_id);
+```
+
+조인 하나로 끝낼 수도 있다. 두 번 묻기와 조인 중에서는, 한쪽 행이 크고 여러 번 반복되면(주문 1만 개가 같은 상품 10개를 가리키면) 두 번 묻는 쪽이 전송량이 적다.
+
+## 5. 불필요한 데이터 가져오기
+
+필요한 것보다 많이 가져오는 모양이다. 열 세 개만 쓰는데 `SELECT *`로 큰 텍스트 열까지 받거나, 전체를 받아서 앱에서 거르거나, 페이지 없이 목록 전체를 내려보낸다.
+
+상품 테이블에 2,000자짜리 설명 열을 넣고 1,000줄을 두 방식으로 받아 응답 크기를 쟀다.
+
+```sql
+SELECT * FROM products WHERE id <= 1000;                -- 설명까지 전부
+SELECT id, name, price FROM products WHERE id <= 1000;  -- 화면에 쓰는 열만
+```
+
+```text
+2014679
+13679
+```
+
+같은 1,000줄인데 2MB와 13KB로, 약 147배 차이다. 이 바이트는 DB의 디스크 읽기, 네트워크, 앱 메모리, JSON 직렬화를 모두 지나간다. PostgreSQL은 행이 약 2KB를 넘으면 큰 값을 압축하거나 TOAST라는 별도 공간으로 옮기는데, 그렇게 밖으로 나간 열은 고르지 않으면 읽지도 않는다. 이번 실험의 설명 열은 같은 글자의 반복이라 `pg_column_size`로 보니 디스크에서는 35바이트로 압축돼 있었다. 그래도 응답에는 풀린 2,000바이트가 실린다. 디스크에서 작다고 네트워크에서도 작은 게 아니다.
+
+증상은 응답 크기와 네트워크 사용량에서 보인다. 앱 서버의 송신 바이트가 요청 수보다 빨리 늘거나, 앱에서 `.filter()`로 버리는 행이 대부분이라면 의심한다. 고치는 법은 단순하다. 쓰는 열만 고르고, 거르기와 집계와 페이지 나누기는 DB에서 한다. 바쁜 DB를 피하려다 여기로 넘어오지 않게 균형을 잡는다. 거르고 모으는 일은 DB가 가장 잘한다.
+
+## 6. 매번 새로 만드는 클라이언트
+
+HTTP 클라이언트, DB 커넥션 풀, 클라우드 SDK 클라이언트처럼 재사용하라고 만든 객체를 요청마다 새로 만드는 모양이다. 이런 객체는 안에 커넥션을 들고 있어서, 새로 만들면 TCP 연결과 TLS 핸드셰이크를 매번 다시 한다.
+
+Node에서 같은 로컬 서버에 요청 2,000개를 순서대로 보냈다. 요청마다 `http.Agent`를 새로 만든 경우와 keep-alive Agent 하나를 공유한 경우다.
+
+```js
+// 나쁜 예: 요청마다 새 Agent → 새 TCP 연결
+http.get({ port, path: "/", agent: new http.Agent({ keepAlive: false }) }, onRes);
+
+// 좋은 예: 프로세스에 하나, 연결을 재사용
+const shared = new http.Agent({ keepAlive: true, maxSockets: 10 });
+http.get({ port, path: "/", agent: shared }, onRes);
+```
+
+```text
+new Agent per request        2000 req  1615 ms  avg 0.807 ms  new TCP connections: 2000
+shared keepAlive Agent       2000 req  546 ms  avg 0.259 ms  new TCP connections: 1
+```
+
+로컬이라 TLS도 없고 왕복도 거의 없는데 세 배 차이가 났다. 실제 외부 API라면 TCP 핸드셰이크 한 번 왕복에 TLS 1.3 핸드셰이크 한 번 왕복이 더 붙어서 차이가 훨씬 커진다. 그리고 숫자보다 무서운 게 있다. 새 연결을 만들 때마다 닫힌 연결이 `TIME_WAIT` 상태로 남는다. 위 실행 한 번 뒤에 `ss -Htan state time-wait | wc -l`로 세 보니 `TIME_WAIT` 소켓이 2,000개쯤 늘었다. 트래픽이 많은 서버에서는 이게 임시 포트를 바닥내고 "connect: cannot assign requested address" 같은 에러로 이어진다. 이 한도는 [리눅스 네트워크 한도](/posts/linux-network-tuning)에서 다룬다.
+
+.NET의 `HttpClient`를 `using`으로 매번 만들었다가 소켓이 고갈되는 사례가 유명해서 이 안티패턴의 대표 예로 자주 나온다. 언어는 달라도 규칙은 같다. 클라이언트와 풀은 프로세스가 시작될 때 한 번 만들고 공유한다. 서버리스 함수라면 핸들러 밖, 모듈 최상단에 둬서 같은 실행 환경이 재사용될 때 연결도 재사용되게 한다. Node 클라이언트별 연결 관리는 [Node.js의 HTTP](/posts/nodejs-http-clients)에, DB 커넥션 쪽은 [커넥션 풀](/posts/connection-pool)에 있다.
+
+서버리스에서 자주 보는 실수와 고친 모양이다.
+
+```ts
+import { Pool } from "pg";
+
+// 나쁜 예: 호출마다 풀을 만들고 닫는다. 호출마다 새 TCP·TLS 연결과 인증이 붙는다
+export async function handlerBad(event: { id: string }) {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const r = await pool.query("SELECT name FROM products WHERE id = $1", [event.id]);
+  await pool.end();
+  return r.rows[0];
+}
+
+// 나은 예: 모듈 최상단에 한 번. 같은 실행 환경이 재사용되는 동안 연결도 재사용된다
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 2 });
+export async function handler(event: { id: string }) {
+  const r = await pool.query("SELECT name FROM products WHERE id = $1", [event.id]);
+  return r.rows[0];
+}
+```
+
+서버리스에서는 `max`를 작게 둔다. 실행 환경이 100개 뜨면 풀도 100개라서, 풀 하나에 10개씩이면 DB 연결이 1,000개가 된다. 그 앞에 RDS Proxy나 PgBouncer 같은 연결 중계기를 두는 것도 이 때문이다.
+
+## 7. 저장소 하나에 다 넣기
+
+주문, 세션, 감사 로그, 업로드 파일, 분석용 이벤트를 모두 같은 관계형 DB에 넣는 모양이다. 처음에는 저장소가 하나라 편하다. 그런데 이 데이터들은 읽고 쓰는 방식이 전혀 다르다. 주문은 트랜잭션이 필요한 작은 쓰기, 로그는 끝없이 쌓이는 추가 쓰기, 파일은 큰 바이너리, 분석은 전체를 훑는 큰 읽기다.
+
+한곳에 모으면 서로 방해한다. 분석 쿼리가 버퍼 캐시를 밀어내 주문 조회가 디스크로 가고, 로그 테이블이 커져서 백업과 복원이 몇 시간씩 걸리고, 바이너리 파일 때문에 DB 디스크가 비싼 등급으로 계속 커진다. 증상은 "관련 없어 보이는 기능 때문에 핵심 기능이 느려진다"는 것이다.
+
+고치는 방향은 접근 방식별로 저장소를 나누는 것이다. 파일은 객체 저장소에 두고 DB에는 경로만, 세션과 캐시는 Redis에, 로그는 로그 저장소에, 분석은 읽기 복제본이나 별도 분석 DB로 보낸다. 다만 저장소가 늘면 운영할 것도 늘고 트랜잭션으로 묶을 수 없는 경계도 생긴다. 작은 서비스는 한 DB로 시작하는 게 맞고, 언제 무엇부터 떼어 낼지는 [규모에 따른 DB 구조](/posts/db-architecture-by-scale)에서 다룬다.
+
+## 8. 캐시 없음
+
+자주 바뀌지 않는 같은 데이터를 매번 원본에서 다시 읽는 모양이다. 상품 카테고리 목록, 환율, 설정값, 인기 글 목록 같은 것들. `pg_stat_statements`에서 `calls`가 압도적으로 많은 쿼리가 거의 같은 결과를 돌려주고 있다면 의심한다.
+
+이 모양은 혼자보다 다른 모양과 함께 아프다. 바쁜 DB에 캐시까지 없으면 같은 무거운 가공을 매번 반복한다. 고치는 기본은 캐시 어사이드(앱이 캐시를 먼저 보고, 없으면 DB에서 읽어 넣는)다. 전략과 함정은 [캐시 전략](/posts/caching-strategies)에, 언제 지울지는 [캐시 무효화](/posts/cache-invalidation)에 있다.
+
+캐시를 붙일 때 생기는 새 문제도 미리 알아 둔다. 인기 키 하나가 만료되는 순간 수백 요청이 동시에 DB로 가는 현상, 캐시가 통째로 날아갔을 때 DB가 그 부하를 못 버티는 현상이다. 캐시가 없어지면 DB가 버틸 수 있는지를 부하 테스트로 한 번은 확인한다.
+
+## 9. 시끄러운 이웃
+
+공유 자원을 쓰는 사용자 하나가 너무 많이 써서 다른 사용자를 느리게 만드는 모양이다. SaaS의 큰 고객, 같은 노드에 올라간 다른 팀의 배치 Pod, 같은 DB를 쓰는 리포트 작업이 이웃이 된다. 전체 지표로는 "그냥 느리다"로만 보여서, 사용자별로 쪼개 봐야 드러난다.
+
+쿠버네티스라면 Pod에 `requests`와 `limits`를 줘서 CPU와 메모리를 나누고([Pod 리소스](/posts/k8s-pod-resources)), 애플리케이션 수준에서는 고객별 요청 수와 동시 실행 수에 한도를 둔다. 고객 단위 격리 전체는 [멀티 테넌시](/posts/multi-tenancy-isolation)에서 다룬다.
+
+## 10. 재시도 폭주
+
+의존 서비스가 잠깐 실패했을 때 모든 호출자가 동시에 다시 보내서, 원인이 사라진 뒤에도 장애가 이어지는 모양이다. 계층마다 세 번씩 재시도하면 맨 아래는 한 요청에 27번을 맞는다. 증상은 뚜렷하다. 장애 직후 의존 서비스로 가는 요청 수가 평소의 몇 배로 튀고, 에러율이 내려가지 않는다.
+
+고치는 장치는 재시도를 한 계층에서만 하기, 지터 섞인 지수 백오프, 전체 요청 대비 재시도 비율에 상한을 두는 재시도 예산, 서킷 브레이커다. 계산과 실험은 [재시도](/posts/retries)와 [지수 백오프와 지터](/posts/exponential-backoff-jitter)에 있다.
+
+## 부하 테스트로 범인을 재현하는 순서
+
+열 가지를 알아도 운영에서 처음 보면 무엇인지 헷갈린다. 그래서 트래픽이 몰리기 전에 일부러 몰아 보고 찾는다. 부하 도구 사용법은 [k6 부하 테스트](/posts/load-testing-k6)에 있고, 여기서는 안티패턴을 찾는 순서만 적는다.
+
+1. 기준선을 잰다. 운영과 비슷한 데이터 양(빈 DB에서는 N+1도 빠르다)으로 평소 트래픽을 걸고 p50, p99, 처리량, 그리고 자원별 사용률을 기록한다.
+2. 도착률을 계단식으로 올린다. 동시 사용자 수가 아니라 초당 요청 수를 정해서 올려야 서버가 느려질 때 부하도 함께 줄어드는 착시를 피한다. p99가 꺾여 올라가는 지점, 이른바 무릎을 찾는다.
+3. 무릎에서 어떤 자원이 먼저 찼는지 본다. 자원마다 사용률, 포화(대기열 길이), 에러를 함께 본다. DB CPU면 1번이나 8번, 앱 CPU면 2번, 둘 다 낮고 스레드·커넥션 대기가 길면 3, 4, 6번, 네트워크 바이트면 5번을 먼저 의심한다.
+4. 프로파일과 쿼리 통계로 좁힌다. 앱은 CPU 프로파일이나 플레임 그래프(Node는 [디버깅과 프로파일링](/posts/nodejs-debugging-profiling)), DB는 `pg_stat_statements`의 총 실행 시간 상위, 요청 하나 안의 쿼리 수는 분산 트레이스의 스팬 수로 센다. 요청 하나에 DB 스팬이 300개 달려 있으면 4번이다.
+5. 하나만 고치고 같은 테스트를 다시 돌린다. 여러 개를 한꺼번에 고치면 무엇이 효과였는지 모른다. 무릎이 오른쪽으로 옮겨 갔는지, 다음에 먼저 차는 자원이 무엇인지 본다.
+6. 장애를 넣어 본다. 의존 서비스를 20초 끊었다 살리고 요청 수를 본다. 회복 뒤에도 의존 서비스로 가는 요청이 평소보다 몇 배 많으면 10번이다.
+
+서버 한 대 안에서 무엇이 찼는지 빠르게 보는 명령은 [리눅스 성능 점검 60초](/posts/linux-performance-triage)에 정리돼 있다.
+
+2번 단계의 계단식 도착률은 k6로 이렇게 적는다. 동시 사용자 수 대신 초당 요청 수를 정하는 `ramping-arrival-rate` 실행기를 쓴다.
+
+```js
+import http from "k6/http";
+import { check } from "k6";
+
+export const options = {
+  scenarios: {
+    find_knee: {
+      executor: "ramping-arrival-rate", // 초당 요청 수를 정해서 올린다
+      startRate: 50,
+      timeUnit: "1s",
+      preAllocatedVUs: 200,
+      maxVUs: 1000,                    // 서버가 느려져도 도착률을 지키려면 VU가 더 필요하다
+      stages: [
+        { target: 100, duration: "2m" },
+        { target: 200, duration: "2m" },
+        { target: 400, duration: "2m" },
+        { target: 800, duration: "2m" },
+      ],
+    },
+  },
+  thresholds: {
+    http_req_duration: ["p(99)<500"],   // 이 선을 넘는 계단이 무릎 근처다
+    http_req_failed: ["rate<0.01"],
+  },
+};
+
+export default function () {
+  const res = http.get(`${__ENV.BASE_URL}/orders?user=${Math.ceil(Math.random() * 10000)}`);
+  check(res, { "status 200": (r) => r.status === 200 });
+}
+```
+
+사용자 id를 무작위로 고르는 줄이 중요하다. 같은 사용자만 계속 부르면 DB와 캐시가 같은 페이지만 읽어서, 8번 캐시 없음이나 5번 불필요한 데이터 가져오기가 숨는다. 결과를 읽는 법, 부하 생성기가 먼저 지치는 경우는 k6 글에 있다.
+
+## 모양을 알면 대시보드가 읽힌다
+
+성능 안티패턴은 평소 사용률에서는 숨어 있다가, 사용률이 높아지는 날 대기 시간의 나눗셈을 타고 한꺼번에 드러난다. 그래서 하나씩 외우기보다 증상과 이어 두는 편이 쓸모 있다. DB만 바쁘면 일을 DB에 몰았거나 캐시가 없고, CPU가 한가한데 느리면 무언가를 기다리고 있고, 바이트가 크면 너무 많이 가져오고 있다. 그리고 모든 판단은 운영 규모의 데이터로 돌린 부하 테스트에서 재현한 뒤에 한다.
+
+## 면접에서 나올 만한 질문
+
+### 트래픽이 두 배가 됐는데 응답 시간이 열 배가 되는 이유는 뭔가요?
+
+대기 시간이 사용률에 선형이 아니기 때문이다. 단순한 대기열 모델에서 평균 응답 시간은 처리 시간 ÷ (1 - 사용률)이라, 사용률 47.5%에서 95%로 가면 분모가 0.525에서 0.05로 줄어 응답이 열 배쯤 된다. 그래서 병목 자원의 사용률을 평소에 낮게 유지하고, 처리 시간을 늘리거나 한 자원에 일을 몰아 사용률을 끌어올리는 안티패턴을 없애야 한다.
+
+### N+1 같은 수다스러운 I/O는 어떻게 찾고 고치나요?
+
+요청 하나에 달린 쿼리나 외부 호출 수를 센다. 분산 트레이스에서 요청 하나에 DB 스팬이 수백 개 달려 있거나, ORM 쿼리 로그에서 같은 모양의 쿼리가 id만 바뀌며 반복되면 그 모양이다. 고칠 때는 `id = ANY($1)`이나 조인, 즉시 로딩으로 한 번에 가져오고, 서비스 사이라면 배치 API나 DataLoader로 묶는다. 왕복 비용은 쿼리 실행 시간과 별개로 붙어서, 1ms 왕복이면 1,000번에 1초가 된다.
+
+### HTTP 클라이언트나 DB 커넥션을 요청마다 만들면 무엇이 문제인가요?
+
+연결마다 TCP와 TLS 핸드셰이크를 다시 하니 지연이 늘고, 닫힌 연결이 `TIME_WAIT`로 남아 임시 포트를 소진한다. 로컬 실험에서도 요청마다 새 Agent를 만들면 2,000번에 2,000개의 연결이 생기고 공유 keep-alive Agent보다 세 배 느렸다. 클라이언트와 풀은 프로세스 시작 시 한 번 만들어 공유하고, 서버리스에서는 핸들러 밖에 둔다.
+
+### 바쁜 데이터베이스와 불필요한 데이터 가져오기는 어떻게 균형을 잡나요?
+
+거르고 모으고 정렬하고 페이지를 나누는 일은 DB에, 꾸미고 변환하고 계산하는 일은 앱에 둔다. 저장 프로시저에서 문자열과 JSON을 조립하면 늘리기 어려운 DB의 CPU를 쓰고, 반대로 전체 행을 앱으로 가져와 거르면 디스크와 네트워크와 메모리를 낭비한다. `SELECT *` 대신 쓰는 열만 고르는 것도 같은 균형의 일부다.
+
+### 동기 I/O가 문제라면 전부 비동기로 바꾸면 해결되나요?
+
+스레드가 붙잡히는 문제는 해결되지만 느린 의존성 자체는 그대로다. 비동기로 바꾸면 기다리는 요청이 스레드 대신 메모리에 쌓이니, 타임아웃과 동시 요청 수 한도가 함께 있어야 한다. Java라면 가상 스레드로 블로킹 코드를 크게 고치지 않고 스레드 수 한계를 피할 수 있지만, 버전에 따라 `synchronized` 안의 블로킹이 운반 스레드를 붙잡는 문제가 있었다.
+
+### 재시도 폭주는 어떻게 알아보고 막나요?
+
+의존 서비스가 잠깐 실패한 뒤 그 서비스로 가는 요청 수가 평소의 몇 배로 튀고, 원인이 사라져도 에러율이 내려가지 않으면 재시도 폭주다. 재시도를 한 계층에서만 하고, 지터 섞인 지수 백오프로 시점을 흩고, 재시도 비율에 예산을 두고, 서킷 브레이커로 실패가 계속되면 아예 보내지 않게 한다.
+
+### 성능 문제를 부하 테스트로 재현할 때 순서는 어떻게 되나요?
+
+운영 규모 데이터로 기준선을 잰 뒤, 동시 사용자 수가 아니라 도착률을 계단식으로 올려 p99가 꺾이는 무릎을 찾는다. 무릎에서 어떤 자원이 먼저 찼는지 사용률과 대기열 길이로 보고, 프로파일과 쿼리 통계와 트레이스로 원인을 좁힌다. 한 번에 하나만 고치고 같은 테스트를 다시 돌려 무릎이 옮겨 갔는지 확인하고, 마지막으로 의존 서비스를 끊었다 살려 재시도 폭주까지 본다.

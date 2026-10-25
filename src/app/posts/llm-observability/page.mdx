@@ -1,0 +1,359 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("llm-observability");
+
+<EasyIntro>
+  챗봇이 어제부터 이상한 답을 한다는 연락이 왔다. 그런데 그 손님이 무엇을 물었고, 챗봇이 어떤 자료를 보고, 어떤 도구를 써서 그렇게 답했는지 아무도 모른다. 남아 있는 건 "답이 이상했다"는 말뿐이다.
+
+  이럴 때 필요한 건 비행기의 블랙박스 같은 기록이다. 블랙박스는 비행 중에 무슨 일이 언제 있었는지 차례대로 남겨서, 사고가 나면 그 순간을 다시 볼 수 있게 해 준다.
+
+  챗봇도 손님 질문 하나마다 기록을 남긴다. 어떤 안내문을 붙였는지, 인공지능에게 몇 글자를 보냈는지, 어떤 도구를 불렀고 무엇을 돌려받았는지, 얼마나 걸렸고 돈이 얼마 들었는지를 한 줄로 이어서 적는다.
+
+  기록에는 손님 전화번호 같은 비밀이 섞일 수 있어서 가려서 적는다. 이렇게 남겨 두면 "어제부터"라는 말이 나왔을 때 어제 무엇이 바뀌었는지 찾아볼 수 있다.
+</EasyIntro>
+
+상담 팀에서 메시지가 온다. "어제부터 환불 문의에 답이 이상해요. 예전엔 영업일 기준 3~5일이라고 했는데 지금은 '정책을 확인할 수 없다'고 해요." 개발자 세 명이 모여 같은 질문을 넣어 보는데, 두 번은 제대로 답하고 한 번은 이상하게 답한다. 어제 무엇이 바뀌었나 물어보니 프롬프트를 조금 고친 사람, 환불 정책 문서를 새 위키로 옮긴 사람, 모델을 최신 별칭으로 바꾼 사람이 각자 있다. 셋 다 "내 변경은 상관없을 것"이라고 한다.
+
+로그에는 HTTP 200과 응답 시간만 있다. 그 요청에 어떤 시스템 프롬프트 버전이 붙었는지, 모델이 어떤 도구를 불렀고 도구가 무엇을 돌려줬는지, 실제로 응답한 모델 버전이 무엇인지 남아 있지 않다. 재현이 안 되는 버그를 추측으로 고치는 수밖에 없다.
+
+일반 웹 서비스였다면 [분산 추적](/posts/distributed-tracing)으로 풀었을 문제다. LLM 기능도 같은 도구로 풀되, 남겨야 할 것이 조금 다르다. 같은 입력에도 출력이 매번 다르니 입력과 출력 자체가 증거이고, 한 요청 안에서 모델 호출과 도구 호출이 몇 번씩 오가고, 요청마다 비용이 토큰 수로 달라진다. 이 글은 요청 하나를 span 나무로 남기는 구조, OpenTelemetry의 GenAI 시맨틱 컨벤션, 토큰·비용·지연 지표, 프롬프트 버전 태깅, 본문을 남길 때의 개인정보 처리, 그리고 Langfuse·LangSmith·Helicone·OpenLLMetry가 데이터를 모으는 방식의 차이를 본다. 관측 가능성의 일반 개념은 [관측 가능성 글](/posts/observability-basics)에 있다.
+
+## 요청 하나를 나무로 남긴다
+
+LLM 기능의 요청 하나는 안에서 여러 번 왔다 갔다 한다. 에이전트가 모델을 부르고, 모델이 도구를 고르고, 서버가 도구를 실행해 결과를 다시 모델에 넣고, 모델이 답한다. RAG라면 그 앞에 검색이 끼고, 답한 뒤 출력 검증이 붙는다. 이 한 바퀴를 trace 하나로, 각 단계를 span 하나로 남긴다. 아래 그림에서 다음을 누르면 span이 하나씩 열리고 닫히는 순서를 따라간다.
+
+<SequenceDiagram
+  caption="에이전트 span 아래에 모델 호출과 도구 호출이 자식으로 붙는다"
+  actors={[
+    { id: "app", label: "에이전트" },
+    { id: "llm", label: "모델 API" },
+    { id: "tool", label: "도구" },
+    { id: "otel", label: "수집기" },
+  ]}
+  steps={[
+    { from: "app", to: "app", label: "invoke_agent", title: "뿌리 span을 연다", detail: "사용자 질문 하나가 trace 하나다. 대화 ID, 가명 처리한 사용자 ID, 에이전트 이름을 여기에 붙인다.", payload: "gen_ai.conversation.id = conv_8812" },
+    { from: "app", to: "llm", label: "chat (1)", title: "첫 모델 호출", detail: "요청 모델, max_tokens, temperature, 프롬프트 버전을 속성으로 남긴다. 응답이 오면 토큰 수와 종료 이유를 더한다.", payload: "finish_reasons = [tool_use]" },
+    { from: "llm", to: "app", label: "tool_use", title: "모델이 도구를 고른다", detail: "모델은 get_refund_policy를 부르라고 답했다. 이 호출은 아직 span이 아니다. 실행하는 쪽이 span을 연다." },
+    { from: "app", to: "tool", label: "execute_tool", title: "도구 실행 span", detail: "도구 이름, 호출 ID, 걸린 시간, 결과 크기를 남긴다. 결과가 비었는지가 장애 분석에서 가장 자주 쓰이는 정보다.", payload: "gen_ai.tool.name = get_refund_policy" },
+    { from: "app", to: "llm", label: "chat (2)", title: "결과를 넣어 다시 부른다", detail: "두 번째 호출은 첫 호출보다 입력 토큰이 많다. 도구 결과가 붙었기 때문이다. 같은 부모 아래 형제 span이 된다." },
+    { from: "app", to: "otel", label: "span 내보내기", title: "끝난 span을 모아 보낸다", detail: "span은 끝날 때마다 배치로 수집기에 간다. 수집기가 trace ID로 나무를 다시 맞춘다." },
+  ]}
+/>
+
+이름과 속성을 아무렇게나 붙여도 trace는 된다. 그런데 팀마다 `llm.model`, `model_name`, `ai.model.id`처럼 제각각 붙이면 대시보드와 경보를 서비스마다 따로 만들어야 하고, 도구를 바꿀 때 다 다시 짠다. 그래서 이름을 맞추는 약속이 생겼다.
+
+## GenAI 시맨틱 컨벤션: 이름을 미리 맞춰 둔다
+
+OpenTelemetry에는 HTTP나 DB span에 어떤 속성 이름을 쓸지 정한 시맨틱 컨벤션이 있다. 생성형 AI 쪽도 `gen_ai.*`로 시작하는 컨벤션이 있다. 2026년 10월 기준 아직 개발(development) 단계라 이름이 바뀌어 왔고, 최근에는 본 저장소에서 별도 저장소(semantic-conventions-genai)로 옮겨 가는 중이다. 예를 들어 공급사를 나타내던 `gen_ai.system`은 `gen_ai.provider.name`으로 바뀌었다. 그러니 쓰기 전에 지금 쓰는 계측 라이브러리가 어느 판을 따르는지 확인한다.
+
+큰 틀은 안정적이다. span 이름은 `{작업} {대상}` 모양이고, 작업 이름이 `gen_ai.operation.name`에 들어간다.
+
+```text
+invoke_agent support-bot           에이전트 한 번 실행
+chat claude-sonnet-5-5             채팅형 모델 호출 한 번
+execute_tool get_refund_policy     도구 실행 한 번
+embeddings text-embedding-x        임베딩 호출
+```
+
+직접 찍어 봤다. 가짜 모델(첫 호출은 도구를 부르고, 두 번째 호출은 답한다)을 두고 OpenTelemetry JS SDK 2.12.0으로 span을 만든 뒤, 메모리에 모은 span을 나무 모양으로 출력했다.
+
+```js
+// trace.mjs 중 모델 호출 부분
+async function chat(turn, promptVersion) {
+  return tracer.startActiveSpan("chat claude-sonnet-5-5", { kind: SpanKind.CLIENT }, async (span) => {
+    span.setAttributes({
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "claude-sonnet-5-5",
+      "gen_ai.request.max_tokens": 1024,
+      "gen_ai.request.temperature": 0.3,
+      "app.prompt.version": promptVersion, // 컨벤션 밖의 값은 우리 접두사로
+    });
+    const r = await callModel(turn);
+    span.setAttributes({
+      "gen_ai.response.id": r.id,
+      "gen_ai.response.model": r.model,
+      "gen_ai.response.finish_reasons": [r.stop],
+      "gen_ai.usage.input_tokens": r.input,
+      "gen_ai.usage.output_tokens": r.output,
+      "gen_ai.usage.cache_read.input_tokens": r.cacheRead,
+    });
+    span.end();
+    return r;
+  });
+}
+```
+
+```text
+$ node trace.mjs
+trace 0c5ed6502c2424beb42a3f2831ab1f53
+invoke_agent support-bot             +   0ms  1216ms
+  chat claude-sonnet-5-5             +   1ms   422ms  in=2841 out=64 finish=tool_use
+  execute_tool get_refund_policy     + 424ms   180ms
+  chat claude-sonnet-5-5             + 604ms   611ms  in=3390 out=212 finish=end_turn
+```
+
+1.2초 중 모델 호출 두 번이 1초를 쓰고, 도구는 0.18초다. 두 번째 호출의 입력이 549토큰 늘어난 건 도구 결과와 첫 답이 대화에 붙었기 때문이다. 이 한 화면으로 "왜 느린가", "왜 비싼가"의 첫 답이 나온다.
+
+span 하나의 속성은 이렇게 생겼다. 조각을 눌러 보면 각 값을 어디에 쓰는지 나온다.
+
+<UrlAnatomy
+  caption="chat span 하나에 붙은 속성 (실습 값)"
+  base="chat claude-sonnet-5-5"
+  separator="  "
+  joiner="  "
+  params={[
+    { key: "gen_ai.request.model", value: "claude-sonnet-5-5", display: "request.model", title: "요청한 모델", description: "코드에 적은 모델 이름이다. 별칭(alias)을 쓰면 실제로 돈 버전과 다를 수 있다." },
+    { key: "gen_ai.response.model", value: "claude-sonnet-5-5", display: "response.model", title: "실제로 응답한 모델", description: "공급사가 응답에 적어 준 모델 이름이다. 별칭이 새 버전을 가리키게 바뀐 날을 찾을 때 이 값의 변화를 본다." },
+    { key: "app.prompt.version", value: "support@2026-10-23", display: "prompt.version", title: "프롬프트 버전", description: "컨벤션 밖의 값이라 우리 접두사를 붙였다. 프롬프트를 고친 날 전후로 trace를 나눠 비교하는 기준이 된다." },
+    { key: "gen_ai.usage.input_tokens", value: "2841", display: "input_tokens=2841", title: "입력 토큰", description: "컨벤션은 캐시에서 읽은 토큰까지 포함한 전체 입력을 적으라고 한다. 공급사 응답의 필드 의미가 다를 수 있어 계측 코드에서 맞춘다." },
+    { key: "gen_ai.usage.cache_read.input_tokens", value: "2048", display: "cache_read=2048", title: "캐시에서 읽은 입력", description: "프롬프트 캐시에 맞은 토큰이다. 이 비율이 갑자기 떨어지면 프롬프트 앞부분이 요청마다 바뀌고 있다는 신호다." },
+    { key: "gen_ai.usage.output_tokens", value: "64", display: "output_tokens=64", title: "출력 토큰", description: "보통 입력보다 단가가 몇 배 비싸다. 비용 이상은 출력 쪽에서 먼저 찾는다." },
+    { key: "gen_ai.response.finish_reasons", value: "tool_use", display: "finish=tool_use", title: "종료 이유", description: "max_tokens면 답이 잘린 것이다. 이상한 답 제보에서 가장 먼저 보는 값 중 하나다." },
+  ]}
+/>
+
+입력 토큰 숫자는 특히 조심한다. 컨벤션은 `gen_ai.usage.input_tokens`에 캐시 토큰까지 포함한 전체를 적으라고 한다. 그런데 공급사 API마다 응답의 의미가 다르다. Anthropic Messages API의 `usage.input_tokens`는 캐시에서 읽거나 캐시에 쓴 토큰을 뺀 나머지이고 캐시 쪽은 `cache_read_input_tokens`, `cache_creation_input_tokens`에 따로 온다. OpenAI의 `prompt_tokens`는 캐시 토큰을 포함하고 그중 캐시분을 `cached_tokens`로 따로 알려 준다. 응답 값을 그대로 옮기면 공급사에 따라 합계가 틀린다. 계측 코드에서 한 번 맞춰 둔다.
+
+## 본문은 남기되 가려서, 따로 남긴다
+
+일반 서비스의 추적은 요청 본문을 거의 남기지 않는다. LLM은 다르다. 같은 입력에도 출력이 매번 달라서, 그때 무엇이 들어가고 무엇이 나왔는지가 없으면 재현이 안 된다. 컨벤션도 입력·출력 메시지(`gen_ai.input.messages`, `gen_ai.output.messages`), 시스템 지시, 도구 인자와 결과를 담는 속성을 정해 두었다. 동시에 이 속성들은 개인정보가 들어 있을 가능성이 높다고 경고하고, 기본으로 켜지 말고 선택해서 켜라고 한다.
+
+그래서 본문은 다음 원칙으로 다룬다.
+
+- 기본은 끈다. 메타데이터(모델, 토큰, 지연, 종료 이유, 프롬프트 버전, 도구 이름)는 항상 남기고, 본문은 환경 변수나 설정으로 켠다. 많은 계측 라이브러리가 본문 수집을 따로 끄고 켜는 옵션을 둔다.
+- 켤 때는 가린 뒤에 남긴다. 메일·전화번호·카드 번호 같은 형식이 정해진 값은 수집기로 보내기 전에, 애플리케이션 안에서 가린다. 수집기(OTel Collector)의 처리기에서 한 번 더 지울 수 있지만, 그건 네트워크를 이미 건넌 뒤다. 가리는 방법은 [LLM 앱 보안 글](/posts/llm-app-security-guardrails)의 개인정보 절에 있다.
+- 저장소를 나눈다. span 속성에는 짧은 메타데이터만 두고, 긴 본문은 접근 권한이 좁고 보존 기간이 짧은 저장소에 두고 trace ID로 잇는 방식이 흔하다. 본문이 수만 토큰이면 span 크기 한도에 걸려 잘리거나 버려지기도 한다.
+- 보존 기간을 정한다. 메타데이터는 몇 달, 본문은 며칠~몇 주처럼 다르게 둔다. 평가 세트로 옮길 사례는 그 전에 골라 가린 채로 옮긴다.
+
+사용자 ID는 원래 값 대신 가명 값을 쓴다. 내부 사용자 ID를 HMAC한 값을 span에 남기면 "이 사용자의 지난주 요청"은 찾을 수 있고, 추적 저장소가 새어도 누구인지는 모른다.
+
+## 프롬프트 버전과 설정을 태그로 남긴다
+
+처음 장면에서 가장 아쉬운 건 "어제 무엇이 바뀌었나"에 답할 데이터가 없다는 것이다. LLM 기능의 동작을 바꾸는 것은 코드 배포만이 아니다. 프롬프트, 모델 별칭이 가리키는 버전, 도구 설명, 검색 대상 문서, temperature 같은 설정이 모두 답을 바꾼다. 이걸 모두 span 속성으로 남겨야 변경 전후를 나눠 볼 수 있다.
+
+```ts
+// 요청마다 "이 답을 만든 조건"을 한 묶음으로 붙인다
+span.setAttributes({
+  "app.prompt.version": prompt.version,         // support@2026-10-23
+  "app.prompt.hash": prompt.sha256.slice(0, 12), // 버전을 안 올리고 고친 경우를 잡는다
+  "app.tools.version": toolsManifest.version,
+  "app.retrieval.index": "policies@2026-10-22",  // 어느 색인을 검색했나
+  "app.release": process.env.GIT_SHA,
+});
+```
+
+해시를 따로 두는 이유가 있다. 사람이 버전 번호를 올리는 걸 잊고 프롬프트를 고치는 일이 생긴다. 실제 본문의 해시를 같이 남기면 같은 버전 이름 아래 두 가지 프롬프트가 섞인 걸 바로 안다. 프롬프트를 코드처럼 버전 관리하는 방법은 [시스템 프롬프트 설계 글](/posts/system-prompt-design)에서 다뤘다. Langfuse나 LangSmith 같은 도구는 프롬프트를 자기 저장소에 버전으로 관리하고 그 버전을 trace에 자동으로 잇는 기능을 준다.
+
+이렇게 남겨 두면 처음 장면은 쿼리 몇 번으로 풀린다.
+
+1. "환불" 문의 trace를 어제 전후로 나눠 `app.prompt.version`, `gen_ai.response.model`, `app.retrieval.index`별로 이상 답 비율을 센다.
+2. 이상한 답이 나온 trace를 열어 보니 `execute_tool get_refund_policy` span의 결과 크기가 2바이트(`[]`)다. 정책 문서를 새 위키로 옮기면서 도구가 보던 경로가 비었다.
+3. 같은 질문인데 두 번은 맞게 답한 건, 그 trace들에서 모델이 도구를 부르지 않고 대화 앞부분에 남은 예시를 보고 답했기 때문이다. 세 사람 중 원인은 문서를 옮긴 사람이었고, 증상을 가린 건 모델의 운이었다.
+
+도구 결과가 비어도 오류가 아니라서 HTTP 로그로는 절대 안 보이는 장애다. span에 결과 크기나 건수를 남겨 두는 습관이 이런 걸 잡는다.
+
+## 토큰, 비용, 지연은 지표로 본다
+
+trace는 요청 하나를 깊게 보는 도구이고, 추세는 지표로 본다. 컨벤션은 클라이언트 쪽 지표 이름도 정해 두었다.
+
+```text
+gen_ai.client.token.usage                 히스토그램, gen_ai.token.type=input|output 으로 나눈다
+gen_ai.client.operation.duration          호출 한 번이 걸린 시간
+gen_ai.client.operation.time_to_first_chunk   스트리밍에서 첫 조각까지 걸린 시간
+```
+
+LLM에서 지연은 하나로 보면 안 된다. 사용자가 느끼는 건 첫 글자가 나올 때까지의 시간(TTFT)이고, 전체 시간은 출력 길이에 거의 비례한다. 전체 시간 p95가 올랐는데 TTFT는 그대로라면 모델이 느려진 게 아니라 답이 길어진 것이다. 둘을 나눠 보고, 출력 토큰당 시간도 함께 본다. 스트리밍 응답이 왜 TTFT를 줄이는지는 [LLM API 연동 글](/posts/llm-api-integration)에서 봤다.
+
+비용은 공급사 청구서가 한 달 뒤에 알려 주니, 우리 쪽에서 토큰 수로 바로 계산해 지표로 만든다. 캐시 토큰이 단가가 다르다는 게 함정이다. 아래 함수를 직접 고쳐 보자. 단가는 100만 토큰당 달러로 받는 예시 값이고, 실제 단가는 공급사 가격표에서 가져온다.
+
+<CodePlayground
+  caption="토큰 사용량으로 호출 한 번의 비용 계산하기"
+  functionName="estimateCost"
+  initialCode={`// usage.input은 캐시 토큰까지 포함한 전체 입력 (GenAI 컨벤션 기준)\n// price는 100만 토큰당 달러: { input, output, cacheRead, cacheWrite }\nfunction estimateCost(usage, price) {\n  return 0;\n}`}
+  solution={`function estimateCost(usage, price) {\n  const cacheRead = usage.cacheRead ?? 0;\n  const cacheWrite = usage.cacheWrite ?? 0;\n  const fresh = usage.input - cacheRead - cacheWrite;\n  const usd =\n    (fresh * price.input +\n      cacheRead * price.cacheRead +\n      cacheWrite * price.cacheWrite +\n      usage.output * price.output) / 1e6;\n  return Number(usd.toFixed(6));\n}`}
+  tests={[
+    { label: "첫 호출 (캐시 2048 읽음)", args: [{ input: 2841, output: 64, cacheRead: 2048 }, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }], expected: 0.003953 },
+    { label: "두 번째 호출", args: [{ input: 3390, output: 212, cacheRead: 2048 }, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }], expected: 0.00782 },
+    { label: "캐시 없이", args: [{ input: 2841, output: 64 }, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }], expected: 0.009483 },
+    { label: "캐시에 처음 쓸 때", args: [{ input: 2841, output: 64, cacheWrite: 2048 }, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }], expected: 0.011019 },
+    { label: "토큰 0", args: [{ input: 0, output: 0 }, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }], expected: 0 },
+  ]}
+/>
+
+같은 계산으로 하루치를 어림해 봤다. 대화 하나가 위의 두 호출이고 하루 2만 대화라면, 캐시가 맞을 때 하루 약 235달러, 캐시가 하나도 안 맞으면 약 457달러다. 캐시 적중률이 떨어지는 것만으로 비용이 두 배가 된다. 그래서 `cache_read` 비율을 지표로 따로 둔다. 이 비율이 갑자기 떨어지면 프롬프트 앞부분에 요청마다 바뀌는 값(현재 시각, 요청 ID)이 들어갔다는 신호인 경우가 많다.
+
+비용 지표는 레이블을 고르는 게 중요하다. 기능, 모델, 프롬프트 버전, 테넌트 정도로 나누면 "어느 기능이 돈을 쓰나"에 답이 된다. 사용자 ID나 대화 ID를 지표 레이블로 쓰면 시계열이 폭발한다. 사용자별 사용량은 trace나 로그에서 집계하고, 지표에는 넣지 않는다. 레이블이 시계열을 늘리는 원리는 [관측 가능성 글](/posts/observability-basics)에서 계산해 봤다.
+
+경보는 이런 것들을 건다.
+
+- 출력 토큰 p95가 평소의 두 배를 넘는다. 프롬프트 변경으로 답이 길어졌거나, 에이전트가 루프를 돈다.
+- 대화당 모델 호출 수가 늘었다. 도구 결과가 이상해서 모델이 같은 도구를 반복해 부르는 경우가 많다.
+- `finish_reason=max_tokens` 비율이 올랐다. 답이 잘리고 있다.
+- 시간당 비용이 예산 선을 넘는다. 남용이나 무한 루프를 빨리 잡는다.
+
+## 검색과 가드레일도 같은 나무에 단다
+
+모델 호출과 도구 실행만 남기면 RAG와 가드레일이 구멍으로 남는다. 답이 틀린 원인은 모델보다 검색에 있는 경우가 많고, 답이 안 나온 원인은 가드레일에 있는 경우가 많다.
+
+검색은 별도 span으로 둔다. 컨벤션에도 `retrieval` 작업 이름과 검색 질의(`gen_ai.retrieval.query.text`), 데이터 원천(`gen_ai.data_source.id`) 같은 속성이 있다. 실무에서 꼭 남길 것은 돌려받은 문서의 ID와 점수, 그리고 몇 개였는지다. 본문 전체를 넣지 않아도 ID만 있으면 나중에 그 문서를 열어 볼 수 있다.
+
+```ts
+await tracer.startActiveSpan("retrieval policies", async (span) => {
+  const hits = await vectorStore.search(query, { k: 5, tenant });
+  span.setAttributes({
+    "gen_ai.operation.name": "retrieval",
+    "gen_ai.data_source.id": "policies@2026-10-22",
+    "app.retrieval.hit_count": hits.length,
+    "app.retrieval.doc_ids": hits.map((h) => h.id),         // ["refund#3", "refund#1", ...]
+    "app.retrieval.top_score": hits[0]?.score ?? 0,
+  });
+  span.end();
+  return hits;
+});
+```
+
+`hit_count=0`이나 `top_score`가 평소보다 크게 낮은 trace를 모으면 색인이 비었거나 임베딩 모델이 바뀐 날을 찾을 수 있다. 검색 품질 자체를 재는 지표는 [RAG 검색 품질 글](/posts/rag-retrieval-quality)에 있다.
+
+가드레일과 출력 검증도 span으로 남기고, 무엇에 걸렸는지와 걸린 뒤 어떻게 했는지(거절, 다시 쓰기, 그대로 통과)를 속성으로 둔다. 분류기 점수의 분포를 지표로 만들면, 새 모델로 바꾼 뒤 오탐이 늘었는지 바로 보인다. 가드레일을 어디에 두는지는 [LLM 앱 보안 글](/posts/llm-app-security-guardrails)에서 다뤘다.
+
+## 헛도는 에이전트를 trace에서 찾는다
+
+에이전트 기능에서 비용 폭탄은 대개 루프에서 나온다. 도구가 애매한 오류를 돌려주면 모델은 같은 인자로 같은 도구를 다시 부르고, 최대 반복 횟수까지 그걸 되풀이한다. 응답은 결국 나오니까 오류율 지표에는 안 잡히고, 청구서에서야 보인다.
+
+trace가 있으면 잡는 방법이 간단하다. 한 trace 안의 도구 span을 순서대로 훑으면서 "도구 이름 + 인자 해시"를 세고, 같은 묶음이 세 번째 나오면 표시한다. 아래 그림에서 다음을 누르면 실제로 그 순서대로 훑는다.
+
+<AlgoTrace
+  caption="같은 도구를 같은 인자로 세 번 부르면 루프로 본다"
+  memoryLabel="본 호출 (이름·인자 해시 ×횟수)"
+  cells={["chat", "get_order a1f", "chat", "get_order a1f", "chat", "search_faq 9c2", "chat", "get_order a1f"]}
+  steps={[
+    { caption: "trace 하나의 자식 span을 시작 시각 순으로 늘어놓았다. 모델 호출은 건너뛰고 도구 실행만 센다." },
+    { pointer: 1, memory: ["get_order a1f ×1"], caption: "get_order를 인자 해시 a1f로 처음 불렀다. 결과는 'timeout, retry later' 문자열이었다." },
+    { pointer: 3, memory: ["get_order a1f ×2"], caption: "같은 인자로 다시 불렀다. 모델이 '나중에 다시'를 바로 다시 하라는 뜻으로 읽었다." },
+    { pointer: 5, memory: ["get_order a1f ×2", "search_faq 9c2 ×1"], caption: "다른 도구로 돌아가 보지만 답을 찾지 못한다." },
+    { pointer: 7, found: [1, 3, 7], memory: ["get_order a1f ×3", "search_faq 9c2 ×1"], caption: "같은 묶음이 세 번째다. trace에 app.agent.loop_suspected=true를 붙이고 지표로 센다. 원인은 도구 오류 문구였다." },
+  ]}
+/>
+
+이 검사는 수집 뒤에 배치로 돌려도 되고, 에이전트 루프 안에서 바로 돌려 세 번째 호출을 실행 전에 끊을 수도 있다. 끊었다면 그 사실도 span에 남긴다. 고치는 곳은 대개 도구 쪽이다. 일시적인 실패는 도구 안에서 재시도하고, 모델에게는 다음에 무엇을 하면 되는지 담은 오류를 돌려준다. 그 방법은 [에이전트 도구 설계 글](/posts/agent-tool-design)에 있다.
+
+trace당 모델 호출 수와 도구 호출 수를 히스토그램 지표로 두면 루프는 추세로도 보인다. 평소 대화당 모델 호출이 2~3번인데 p99가 최대 반복 횟수에 붙어 있다면, 어딘가에서 헛돌고 있다.
+
+## 사용자 피드백을 trace에 붙인다
+
+LLM 기능의 품질 신호 중 가장 싼 것은 사용자의 좋아요·싫어요다. 이 신호가 trace와 이어져 있어야 "싫어요가 붙은 답이 어떤 조건에서 나왔나"를 볼 수 있다. 서버가 응답과 함께 trace ID를 돌려주고, 화면의 피드백 버튼이 그 ID를 다시 보낸다.
+
+```ts
+// 응답 헤더나 본문에 trace ID를 실어 보낸다
+const traceId = trace.getActiveSpan()?.spanContext().traceId;
+return Response.json({ answer, traceId });
+
+// 피드백 API는 trace ID에 점수를 붙인다 (도구마다 "score", "feedback" 같은 이름의 API가 있다)
+await feedbackStore.add({ traceId, value: -1, comment: "환불 기간이 빠짐" });
+```
+
+싫어요가 붙은 trace는 샘플링에서 무조건 남기고, 사람이 검토한 뒤 [LLM 평가 글](/posts/llm-evals)의 평가 세트로 옮긴다. 운영의 기록이 다음 배포의 시험지가 되는 고리다.
+
+## 데이터를 모으는 세 가지 방식
+
+도구는 많지만 데이터를 모으는 방식은 세 갈래다. 이걸 먼저 가르면 고르기가 쉽다. 아래 그림에서 점이 흐르는 방향이 데이터가 가는 길이다.
+
+<ConceptDiagram
+  caption="SDK 계측과 OTel 계측은 앱 안에서, 프록시는 앱과 모델 API 사이에서 모은다"
+  width={420}
+  height={280}
+  nodes={[
+    { id: "app", label: "앱 코드", sub: "에이전트·도구", x: 90, y: 60, w: 120 },
+    { id: "sdk", label: "전용 SDK", sub: "Langfuse·LangSmith", x: 90, y: 160, w: 140 },
+    { id: "otel", label: "OTel 계측", sub: "OpenLLMetry 등", x: 250, y: 160, w: 130 },
+    { id: "proxy", label: "프록시", sub: "Helicone 등", x: 330, y: 60, w: 110 },
+    { id: "api", label: "모델 API", x: 330, y: 250, w: 100 },
+    { id: "store", label: "추적 저장소", sub: "UI·평가·대시보드", x: 140, y: 250, w: 140 },
+  ]}
+  edges={[
+    { from: "app", to: "sdk", label: "데코레이터" },
+    { from: "app", to: "otel", label: "자동 계측" },
+    { from: "app", to: "proxy", label: "base URL 변경" },
+    { from: "proxy", to: "api" },
+    { from: "sdk", to: "store" },
+    { from: "otel", to: "store", label: "OTLP" },
+    { from: "proxy", to: "store", dashed: true },
+  ]}
+/>
+
+전용 SDK 계측. Langfuse와 LangSmith가 대표적이다. 함수에 데코레이터나 래퍼를 씌워 그 함수의 입력·출력·시간을 span으로 남긴다. LLM 화면에 맞춘 UI(대화 보기, 프롬프트 버전 비교, 점수와 평가 실행)가 강점이다. LangSmith는 LangChain·LangGraph와 붙이기가 가장 쉽고, Langfuse는 오픈소스라 직접 띄울 수 있다. 두 도구 모두 최근 판에서는 OpenTelemetry로 들어오는 span도 받는다.
+
+OpenTelemetry 계측. OpenLLMetry(Traceloop)는 OpenAI·Anthropic SDK, 벡터 DB, LangChain 같은 라이브러리를 자동 계측해서 OTel span으로 내보낸다. 장점은 표준이라는 것이다. 이미 HTTP·DB 추적을 OTel로 하고 있다면, 모델 호출 span이 같은 trace의 자식으로 붙는다. "느린 요청의 원인이 DB인가 모델인가"를 한 폭포 그림에서 본다. 내보낼 곳도 Jaeger·Tempo·Datadog·Langfuse처럼 OTLP를 받는 곳이면 어디든 된다.
+
+프록시. Helicone 같은 도구는 앱과 모델 API 사이에 선다. 코드는 SDK의 base URL을 프록시 주소로 바꾸고 인증 헤더 하나를 더하는 정도라 붙이기가 가장 빠르다. 사용자 ID나 기능 이름도 요청 헤더로 넘긴다. 대신 프록시는 모델 API로 가는 요청만 본다. 도구 실행, 검색, 앱 안의 로직은 보이지 않아서 처음 장면의 "도구 결과가 비었다"는 못 잡는다. 그리고 모든 요청이 한 홉을 더 지나니, 프록시가 느려지거나 멈추면 기능이 같이 멈춘다. 캐싱이나 속도 제한 같은 게이트웨이 기능이 따라오는 건 장점이다.
+
+OTel로 갈 때 설정은 일반 서비스와 같다. SDK를 시작하고, 내보낼 곳을 환경 변수로 정한다. 자동 계측 라이브러리를 쓰면 모델 SDK 호출이 저절로 span이 되고, 위에서 손으로 만든 에이전트·도구 span과 같은 trace에 붙는다.
+
+```bash
+# 표준 OTel 환경 변수. 받는 쪽이 OTLP를 지원하면 어디든 같다
+export OTEL_SERVICE_NAME=support-bot
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+export OTEL_TRACES_SAMPLER=parentbased_traceidratio
+export OTEL_TRACES_SAMPLER_ARG=0.2   # 머리 샘플링 20%, 오류·피드백은 수집기에서 꼬리 샘플링으로 살린다
+node --import ./otel.mjs server.mjs
+```
+
+본문 수집 옵션의 이름은 계측 라이브러리마다 다르다(파이썬 공식 계측은 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` 같은 환경 변수를 쓴다). 운영에 올리기 전에 기본값이 켜짐인지 꺼짐인지 꼭 확인한다. 본문이 켜진 채 들어가 개인정보가 추적 저장소에 몇 주씩 쌓인 걸 나중에 알게 되는 일이 생긴다.
+
+실무에서는 섞는다. 앱 전체 추적은 OTel로 하고, LLM 전용 화면이 필요하면 OTLP를 받는 Langfuse 같은 곳으로 GenAI span만 보낸다. 고를 때 볼 것은 셀프 호스팅이 필요한가(개인정보 때문에 본문을 외부로 못 보내는가), 이미 OTel 기반 관측 스택이 있는가, 평가·프롬프트 관리까지 한 도구에서 하고 싶은가 정도다.
+
+## 다 남길 수 없을 때 고르는 법
+
+LLM span은 일반 span보다 무겁다. 본문을 켜면 span 하나가 수십 KB가 된다. 트래픽이 많으면 다 남기기 어렵다. [분산 추적 글의 샘플링](/posts/distributed-tracing)이 그대로 적용되는데, LLM 쪽에서 꼭 남길 것은 따로 있다.
+
+- 오류, 타임아웃, `max_tokens`로 잘린 응답
+- 가드레일이나 출력 검증에 걸린 응답
+- 사용자가 싫어요를 누른 응답(피드백은 나중에 오니, 본문 저장소는 피드백이 올 수 있는 기간 동안은 지우지 않는다)
+- 새 프롬프트 버전이나 새 모델로 바뀐 직후의 일정 기간
+
+나머지는 메타데이터만 전부 남기고 본문은 일부만 남기는 식으로 나눈다. 토큰과 비용 지표는 샘플링 전에 계산해야 숫자가 맞는다. trace를 10%만 남기면서 비용을 trace에서 합산하면 청구서와 열 배 차이가 난다.
+
+## 붙이고 나서 자주 하는 실수
+
+스트리밍 응답에서 span을 너무 일찍 닫는다. 스트림을 연 순간 span을 끝내면 지연이 수십 ms로 찍히고 토큰 수가 비어 있다. 마지막 조각과 사용량 정보를 받은 뒤에 닫는다. 사용자가 중간에 끊으면 그 사실(취소됨)도 속성으로 남긴다.
+
+도구 span을 모델 호출 span의 자식으로 단다. 도구는 모델이 실행하는 게 아니라 앱이 실행한다. 모델 호출이 끝난 뒤 앱이 도구를 실행하니, 둘은 에이전트 span 아래의 형제다. 자식으로 달면 모델 호출 시간이 도구 시간만큼 부풀어 보인다.
+
+재시도를 숨긴다. SDK가 429나 5xx에서 자동으로 재시도하면 span 하나에 시도가 세 번 들어 있을 수 있다. 시도마다 span을 따로 남기거나 시도 횟수를 속성으로 남겨야 "공급사가 느리다"와 "우리가 제한에 걸렸다"를 가른다.
+
+본문을 로그와 trace 양쪽에 남긴다. 가리는 규칙을 한쪽에만 적용하고 다른 쪽에는 원문이 남는 일이 흔하다. 본문이 지나는 길을 하나로 정한다.
+
+## 재현할 수 있어야 고칠 수 있다
+
+LLM 관측성은 새로운 기술이라기보다 분산 추적에 몇 가지를 더한 것이다. 요청을 에이전트·모델 호출·도구 실행 span의 나무로 남기고, 이름은 GenAI 컨벤션에 맞추고, 그 답을 만든 조건(프롬프트 버전, 실제 모델, 색인 버전)을 속성으로 붙인다. 토큰과 비용은 캐시까지 맞춰 지표로 보고, 본문은 가린 뒤 따로 짧게 남긴다. 이렇게 해 두면 "어제부터 이상하다"는 말이 왔을 때 추측 대신 변경 전후 trace를 나란히 놓고 볼 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### LLM 기능의 추적은 일반 API 추적과 무엇이 다른가요?
+
+구조는 같고 남길 것이 다르다. 같은 입력에도 출력이 달라서 입력·출력 본문이 재현의 증거가 되고, 한 요청 안에서 모델 호출과 도구 실행이 여러 번 오가며, 비용이 요청마다 토큰 수로 달라진다. 그래서 에이전트 span 아래 모델 호출과 도구 실행을 형제 span으로 두고, 토큰·종료 이유·프롬프트 버전·실제 응답 모델을 속성으로 남기고, 본문은 개인정보를 가린 뒤 선택적으로 남긴다.
+
+### OpenTelemetry GenAI 시맨틱 컨벤션을 왜 따르나요?
+
+이름이 맞아야 대시보드와 경보를 한 번 만들어 모든 서비스에 쓰고, 계측 라이브러리나 저장소를 바꿔도 다시 짜지 않는다. `gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens` 같은 이름과 `chat {모델}` 같은 span 이름 규칙이 있다. 다만 아직 개발 단계라 `gen_ai.system`이 `gen_ai.provider.name`으로 바뀌는 식의 변화가 있어서, 쓰는 라이브러리가 어느 판을 따르는지 확인한다.
+
+### 프롬프트와 응답 본문을 추적에 남겨도 되나요?
+
+남기되 기본은 끄고, 켤 때는 가린 뒤 따로 남긴다. 메타데이터는 항상 남기고, 본문은 애플리케이션 안에서 개인정보를 마스킹한 뒤 접근 권한이 좁고 보존 기간이 짧은 저장소에 두고 trace ID로 잇는다. 사용자 ID도 HMAC 같은 가명 값을 쓴다. 로그와 trace 양쪽에 본문이 남으면 가리는 규칙이 한쪽에서 빠지기 쉬우니 길을 하나로 정한다.
+
+### 어제부터 답이 이상하다는 제보가 오면 추적에서 무엇부터 보나요?
+
+답을 바꿀 수 있는 조건별로 trace를 나눈다. 프롬프트 버전과 해시, 실제 응답 모델, 검색 색인 버전, 배포 SHA를 변경 시점 전후로 비교하고, 이상 답이 나온 trace에서 종료 이유와 도구 결과 크기를 본다. 도구 결과가 비었거나 `max_tokens`로 잘린 것은 HTTP 로그에서는 성공으로 보이는 장애라 span 속성이 있어야만 보인다.
+
+### LLM 비용은 어떻게 추적하나요?
+
+청구서를 기다리지 않고 응답의 토큰 수에 단가를 곱해 지표로 만든다. 캐시에서 읽은 토큰과 캐시에 쓴 토큰은 단가가 달라서 따로 센다. 공급사마다 입력 토큰 필드에 캐시분이 포함되는지가 달라 계측에서 맞춘다. 레이블은 기능·모델·프롬프트 버전·테넌트 정도로 두고 사용자 ID는 넣지 않으며, 샘플링 전에 계산해야 합계가 맞는다.
+
+### Helicone 같은 프록시 방식과 SDK·OTel 계측은 어떻게 고르나요?
+
+프록시는 base URL만 바꾸면 돼서 가장 빨리 붙고 캐싱·속도 제한도 따라오지만, 모델 API로 가는 요청만 보여서 도구 실행이나 검색은 보이지 않고 장애 지점이 하나 늘어난다. SDK나 OTel 계측은 앱 안에서 모든 단계를 span으로 남긴다. 이미 OTel 기반 관측 스택이 있으면 OpenLLMetry 같은 OTel 계측으로 기존 trace에 모델 span을 붙이고, LLM 전용 화면과 평가가 필요하면 Langfuse·LangSmith 같은 곳으로 보낸다.
+
+### 스트리밍 응답은 계측할 때 무엇을 조심하나요?
+
+span을 스트림이 끝나고 사용량 정보를 받은 뒤에 닫아야 한다. 스트림을 연 순간 닫으면 지연이 짧게 찍히고 토큰 수가 비어 버린다. 지연은 첫 조각까지 시간과 전체 시간을 나눠 남겨서, 전체 시간이 늘었을 때 모델이 느려진 건지 답이 길어진 건지 가른다. 사용자가 중간에 끊으면 취소 여부도 속성으로 남긴다.

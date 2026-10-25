@@ -1,0 +1,538 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-course-schedule-ii");
+
+<EasyIntro>
+  학교에서 어떤 과목은 다른 과목을 먼저 들어야만 들을 수 있다. 이번에는 모든 과목을 들을 수 있는지만 묻는 게 아니라, 실제로 어떤 순서로 들으면 되는지 시간표를 하나 적어 내라고 한다. 방법은 간단하다. 지금 바로 들을 수 있는 과목, 즉 먼저 들어야 할 과목이 하나도 남지 않은 과목을 골라 시간표에 적는다. 그 과목을 듣고 나면 그 과목을 기다리던 다른 과목들의 숙제가 하나씩 줄어든다. 숙제가 다 없어진 과목은 다시 바로 들을 수 있는 과목이 된다. 이걸 반복해서 모든 과목을 적으면 그게 답이다. 도중에 들을 수 있는 과목이 하나도 없는데 아직 못 들은 과목이 남았다면, 과목들이 서로를 먼저 들으라고 기다리는 고리가 있다는 뜻이라 빈 시간표를 낸다.
+</EasyIntro>
+
+[Course Schedule](/posts/leetcode-course-schedule)에서는 "모든 과목을 들을 수 있나"만 물었다. [LeetCode 210. Course Schedule II](https://leetcode.com/problems/course-schedule-ii/)는 한 걸음 더 간다. 들을 수 있다면 실제로 듣는 순서를 하나 돌려 달라고 한다. 그래프 말로 하면 위상 정렬(모든 선이 앞에서 뒤로 향하도록 점을 한 줄로 세운 것)을 직접 만드는 문제다.
+
+고리를 찾는 원리, 세 가지 색 DFS가 왜 필요한지, 진입 차수 BFS가 왜 고리를 알아내는지는 앞 글에서 다 다뤘다. 이 글은 그걸 반복하지 않고 "순서"에서 새로 생기는 질문만 본다. DFS로 순서를 만들면 왜 뒤집어야 하나, 들어가자마자 적으면 왜 틀리나, 답이 여러 개일 때 내 답이 맞는지 어떻게 확인하나, 답을 하나로 정하려면 무엇을 바꾸나. 풀이는 매번 다시 훑기, 틀리는 전위 순서, 후위 순서 뒤집기, 선을 거꾸로 그은 DFS, 칸의 알고리즘, 스택 DFS, 최소 힙까지 일곱 가지다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 듣는 순서를 하나 적어 낸다
+
+과목은 `0`부터 `numCourses - 1`까지다. `prerequisites`의 쌍 `[a, b]`는 "a를 들으려면 b를 먼저 들어야 한다"는 뜻이다. 모든 과목을 듣는 순서를 배열로 돌려준다. 순서가 여러 개면 아무거나 하나를 돌려주고, 불가능하면 빈 배열을 돌려준다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- 과목은 최대 2,000개, 쌍은 최대 V · (V - 1)개까지 가능하다. O(V + E)로 풀어야 한다.
+- 선수 관계가 하나도 없는 과목도 답에 들어가야 한다. 쌍에 한 번도 나오지 않는 과목을 빠뜨리기 쉽다.
+- 답이 하나로 정해지지 않는다. 채점기는 내 배열이 모든 선수 관계를 지키는지 확인한다. 그래서 다른 사람의 답과 내 답이 달라도 둘 다 맞을 수 있다.
+
+이 글의 예시는 과목 여섯 개다. 번호를 일부러 섞어 두었다. 번호 순서대로 들으면 안 된다는 게 보이게 하려고서다.
+
+```text
+numCourses = 6
+prerequisites = [[4,3], [4,0], [1,4], [5,4], [2,1], [2,5]]
+
+3 프로그래밍 기초 ─┐
+                   ├→ 4 자료구조 ─┬→ 1 알고리즘 ──┐
+0 이산수학 ────────┘              └→ 5 데이터베이스 ┴→ 2 졸업 작품
+```
+
+3과 0은 선수 과목이 없어서 처음부터 들을 수 있다. 4는 둘을 다 들어야 하고, 1과 5는 4 다음, 2는 1과 5를 다 들어야 한다. `[0, 3, 4, 1, 5, 2]`도 맞고 `[3, 0, 4, 5, 1, 2]`도 맞다. 번호순 `[0, 1, 2, 3, 4, 5]`는 틀리다. 1(알고리즘)을 4(자료구조)보다 먼저 듣기 때문이다.
+
+아래 그림에서 다음을 누르면 맞는 순서 하나를 따라 과목을 듣는다. 선은 "먼저 들을 과목 → 다음 과목"이다.
+
+<VectorSpace
+  caption="여섯 과목의 선수 관계. 선은 왼쪽에서 오른쪽으로만 흐른다"
+  width={400}
+  height={260}
+  groups={[{ id: "start", label: "선수 과목 없음" }, { id: "after", label: "선수 과목 있음" }]}
+  points={[
+    { id: "c3", label: "3 기초", x: 50, y: 70, group: "start" },
+    { id: "c0", label: "0 이산수학", x: 50, y: 190, group: "start" },
+    { id: "c4", label: "4 자료구조", x: 160, y: 130, group: "after" },
+    { id: "c1", label: "1 알고리즘", x: 260, y: 60, group: "after" },
+    { id: "c5", label: "5 DB", x: 260, y: 200, group: "after" },
+    { id: "c2", label: "2 졸업 작품", x: 360, y: 130, group: "after", labelAt: "left" },
+  ]}
+  edges={[["c3", "c4"], ["c0", "c4"], ["c4", "c1"], ["c4", "c5"], ["c1", "c2"], ["c5", "c2"]]}
+  steps={[
+    { caption: "선수 관계 여섯 개. 3과 0은 들어오는 선이 없어서 바로 들을 수 있다.", showEdges: true },
+    { caption: "0과 3을 먼저 듣는다. 둘 사이의 순서는 상관없다.", showEdges: true, path: ["c0", "c3"] },
+    { caption: "둘을 다 들으면 4로 들어오는 선이 모두 풀린다.", showEdges: true, path: ["c0", "c3", "c4"] },
+    { caption: "4 다음에는 1과 5가 풀린다. 1을 먼저 듣는다.", showEdges: true, path: ["c0", "c3", "c4", "c1"] },
+    { caption: "5까지 들으면 2로 들어오는 선이 모두 풀린다.", showEdges: true, path: ["c0", "c3", "c4", "c1", "c5"] },
+    { caption: "2를 마지막으로 듣는다. 순서는 0, 3, 4, 1, 5, 2다.", showEdges: true, path: ["c0", "c3", "c4", "c1", "c5", "c2"] },
+  ]}
+/>
+
+## 들을 수 있는 과목을 매번 모아 적는다
+
+손으로 시간표를 짜는 방법을 그대로 옮기면 이렇다. 아직 안 들은 과목 중 선수 과목을 다 들은 과목을 모두 찾아 시간표에 적는다. 이걸 과목이 다 적힐 때까지 반복한다. 한 바퀴를 돌았는데 새로 적은 과목이 없으면 고리가 있는 것이니 빈 배열이다.
+
+```js
+function findOrder(numCourses, prerequisites) {
+  const taken = new Uint8Array(numCourses);
+  const order = [];
+  while (order.length < numCourses) {
+    // 아직 안 들은 선수 과목이 있는 과목을 표시한다
+    const blocked = new Uint8Array(numCourses);
+    for (const [a, b] of prerequisites) if (!taken[b]) blocked[a] = 1;
+    let progress = false;
+    for (let c = 0; c < numCourses; c++) {
+      if (!taken[c] && !blocked[c]) {
+        taken[c] = 1;
+        order.push(c);
+        progress = true;
+      }
+    }
+    if (!progress) return [];   // 들을 수 있는 과목이 없는데 남았다: 고리
+  }
+  return order;
+}
+```
+
+예시에서는 네 바퀴 만에 `[0, 3, 4, 1, 5, 2]`가 나온다. 첫 바퀴에 0과 3, 둘째에 4, 셋째에 1과 5, 넷째에 2다. 이 풀이에는 좋은 성질이 하나 있다. 바퀴 하나가 "한 학기에 들을 수 있는 과목 묶음"이다. 바퀴 수가 곧 최소 학기 수라서, 뒤에서 볼 변형 문제를 거의 그대로 푼다.
+
+문제는 바퀴마다 쌍 전체를 다시 훑는다는 것이다. 과목이 한 줄로 이어져 있으면 바퀴마다 하나씩만 적으니 V바퀴가 돌고, 시간이 O(V · (V + E))가 된다. "i를 들으려면 i + 1을 먼저"인 2,000과목 사슬에서 2,000바퀴가 돌고 32.49ms가 걸렸다. 뒤의 풀이들은 같은 입력을 1ms 안에 끝낸다. 매 바퀴 다시 세는 "아직 안 들은 선수 과목 수"를 과목마다 들고 있으면 낭비가 사라진다. 그게 칸의 알고리즘인데, 그 전에 DFS로 순서를 만드는 길을 먼저 보자.
+
+## 들어가자마자 적으면 순서가 틀린다
+
+DFS로 그래프를 훑으면 모든 과목을 한 번씩 방문한다. 그 방문 순서를 그대로 답으로 내면 어떨까. 0에서 출발해 "0을 들으면 열리는 과목"으로 내려가니, 먼저 들을 과목이 먼저 적힐 것 같다.
+
+```js
+// 틀린 풀이: 방문하는 순간(전위 순서) 적는다
+function findOrder(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => []);
+  for (const [a, b] of prerequisites) graph[b].push(a);
+  const seen = new Uint8Array(numCourses);
+  const order = [];
+  const go = (u) => {
+    seen[u] = 1;
+    order.push(u);              // 들어가자마자 적는다
+    for (const v of graph[u]) if (!seen[v]) go(v);
+  };
+  for (let c = 0; c < numCourses; c++) if (!seen[c]) go(c);
+  return order;
+}
+```
+
+예시에서 `[0, 4, 1, 2, 5, 3]`이 나온다. 4(자료구조)를 3(프로그래밍 기초)보다 먼저 듣는다. 틀렸다. 0에서 4로 내려갈 때, 4에게 선수 과목이 하나 더(3) 있다는 걸 이 코드는 모른다. 선을 따라 내려가는 건 "0 다음에 4를 들어도 된다"가 아니라 "0이 4보다 먼저다"만 말해 줄 뿐이다. 4로 들어오는 다른 선은 아직 안 봤다.
+
+가장 작은 반례는 과목 셋이다. `[[2, 0], [2, 1]]`이면 2는 0과 1을 모두 먼저 들어야 하는데, 이 코드는 `[0, 2, 1]`을 돌려준다. 그리고 고리도 못 찾는다. 고리 예시를 넣어도 여섯 과목을 다 적은 배열이 나온다. 방문했는지만 보고 지금 길 위에 있는지는 보지 않기 때문이다.
+
+## 다 끝난 과목부터 적고 뒤집는다
+
+방향을 바꿔 생각한다. DFS에서 과목 u의 탐색이 끝나는 순간, 즉 u에서 갈 수 있는 과목을 모두 훑고 돌아오는 순간에 u를 적는다. 이걸 후위 순서라고 한다. 후위 순서에서는 u보다 나중에 들어야 할 과목이 모두 u보다 먼저 적힌다. u에서 선을 따라 갈 수 있는 과목은 u의 탐색이 끝나기 전에 끝나거나, 이미 예전에 끝나 있기 때문이다. 그래서 후위 순서는 "나중 과목부터"이고, 뒤집으면 듣는 순서가 된다.
+
+고리 검사는 앞 글의 세 가지 색을 그대로 쓴다. 회색(지금 길 위)을 다시 만나면 고리다.
+
+```js
+function findOrder(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => []);
+  for (const [a, b] of prerequisites) graph[b].push(a);    // 먼저 → 나중
+  const state = new Uint8Array(numCourses);   // 0 흰색, 1 회색(길 위), 2 검은색(끝남)
+  const post = [];
+  const visit = (u) => {
+    if (state[u] === 1) return false;          // 길 위로 돌아왔다: 고리
+    if (state[u] === 2) return true;           // 이미 끝난 과목
+    state[u] = 1;
+    for (const v of graph[u]) if (!visit(v)) return false;
+    state[u] = 2;
+    post.push(u);                              // 나중 과목을 다 적은 뒤에 나를 적는다
+    return true;
+  };
+  for (let c = 0; c < numCourses; c++) if (!visit(c)) return [];
+  return post.reverse();                       // 나중 과목부터 적었으니 뒤집는다
+}
+```
+
+아래 그림은 예시에서 이 DFS가 과목을 끝내는 순서를 따라간 것이다. 초록 칸이 끝난 과목이고, 아래 칸이 후위 순서로 적은 목록이다.
+
+<AlgoTrace
+  caption="DFS가 끝나는 순서대로 적는다. 다 적은 뒤 뒤집으면 듣는 순서다"
+  memoryLabel="후위 순서 (먼저 끝난 과목부터)"
+  cells={["0", "1", "2", "3", "4", "5"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "0에서 시작해 0 → 4 → 1 → 2로 내려간다. 넷 다 회색이다." },
+    { pointer: 2, found: [2], memory: ["2"], caption: "2는 다음 과목이 없다. 가장 먼저 끝난다." },
+    { pointer: 1, found: [2, 1], memory: ["2", "1"], caption: "1로 돌아오면 1도 끝난다." },
+    { pointer: 5, found: [2, 1, 5], memory: ["2", "1", "5"], caption: "4의 다음 과목 5로 간다. 5의 다음 과목 2는 이미 끝났으니 5도 끝난다." },
+    { pointer: 4, found: [2, 1, 5, 4], memory: ["2", "1", "5", "4"], caption: "4의 다음 과목을 다 봤다. 4가 끝난다." },
+    { pointer: 0, found: [2, 1, 5, 4, 0], memory: ["2", "1", "5", "4", "0"], caption: "0까지 끝난다. 1, 2는 이미 끝났으니 바깥 반복은 3으로 간다." },
+    { pointer: 3, found: [2, 1, 5, 4, 0, 3], memory: ["2", "1", "5", "4", "0", "3"], caption: "3의 다음 과목 4는 이미 끝났다. 3이 마지막으로 끝난다." },
+    { found: [0, 1, 2, 3, 4, 5], memory: ["3", "0", "4", "5", "1", "2"], caption: "뒤집으면 3, 0, 4, 5, 1, 2다. 모든 선이 앞에서 뒤로 향한다." },
+  ]}
+/>
+
+마지막 단계를 앞의 틀린 풀이와 비교해 보자. 전위 순서에서 문제였던 4와 3의 관계가 여기서는 맞다. 3은 4보다 나중에 끝났고, 뒤집으니 앞에 온다. 3이 4보다 나중에 끝난 이유는, 3을 방문할 때 4가 이미 검은색이었기 때문이다. 4가 먼저 끝나 있었든 3의 아래에서 끝났든, u → v 선이 있으면 v는 언제나 u보다 먼저 끝난다. 이 한 문장이 후위 순서 뒤집기가 맞는 이유다.
+
+시간 O(V + E), 공간은 그래프 O(V + E)와 재귀 깊이 O(V)다. Python은 과목 2,000개 사슬에서 기본 재귀 한도에 걸린다는 것을 [앞 글](/posts/leetcode-course-schedule)에서 확인했다. 이 풀이를 Python으로 쓰려면 한도를 올리거나 뒤의 스택 DFS로 쓴다.
+
+### 선을 거꾸로 그으면 뒤집지 않아도 된다
+
+뒤집는 이유는 선을 "먼저 → 나중"으로 그었기 때문이다. 처음부터 "나중 → 먼저", 즉 과목에서 그 과목의 선수 과목으로 선을 그으면 후위 순서가 바로 답이다. 과목 u의 탐색이 끝나는 순간에는 u의 선수 과목이 모두 이미 적혀 있다.
+
+```js
+function findOrder(numCourses, prerequisites) {
+  const need = Array.from({ length: numCourses }, () => []);
+  for (const [a, b] of prerequisites) need[a].push(b);     // a를 들으려면 b가 필요하다
+  const state = new Uint8Array(numCourses);
+  const order = [];
+  const visit = (u) => {
+    if (state[u] === 1) return false;
+    if (state[u] === 2) return true;
+    state[u] = 1;
+    for (const v of need[u]) if (!visit(v)) return false;   // 선수 과목부터 끝낸다
+    state[u] = 2;
+    order.push(u);                                          // 선수 과목을 다 들은 뒤에 나를 듣는다
+    return true;
+  };
+  for (let c = 0; c < numCourses; c++) if (!visit(c)) return [];
+  return order;
+}
+```
+
+예시에서 `[0, 3, 4, 1, 5, 2]`가 나온다. "이 과목을 들으려면 무엇이 필요한가"를 거꾸로 따라가는 재귀라서, 빌드 도구가 의존성을 해결하는 방식과 생김새가 같다. `make`가 목표를 만들기 전에 그 목표가 의존하는 파일부터 만드는 것과 같은 순서다. 결과는 같으니 둘 중 헷갈리지 않는 쪽을 고르면 된다. 면접에서는 "선 방향을 어느 쪽으로 그었으니 뒤집는다/안 뒤집는다"를 말로 설명할 수 있어야 한다.
+
+## 꺼낸 순서가 그대로 답인 칸의 알고리즘
+
+진입 차수(아직 안 들은 선수 과목 수)를 과목마다 세어 두고, 0인 과목을 큐에 넣어 하나씩 꺼낸다. 꺼낼 때마다 그 과목을 기다리던 과목의 진입 차수를 하나 줄이고, 0이 되면 큐에 넣는다. 앞 글에서는 꺼낸 과목 수만 셌다. 이번에는 꺼낸 순서를 그대로 돌려준다. 원리는 같아서, 처음의 "매번 다시 훑기"가 바퀴마다 다시 세던 숫자를 들고 다니는 것뿐이다.
+
+```js
+function findOrder(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => []);
+  const indeg = new Int32Array(numCourses);    // 아직 안 들은 선수 과목 수
+  for (const [a, b] of prerequisites) {
+    graph[b].push(a);
+    indeg[a]++;
+  }
+  const order = [];                            // 결과 배열이 곧 큐다
+  for (let c = 0; c < numCourses; c++) if (indeg[c] === 0) order.push(c);
+  for (let head = 0; head < order.length; head++) {
+    const u = order[head];                     // 큐에서 꺼낸다 = 듣는다
+    for (const v of graph[u]) {
+      if (--indeg[v] === 0) order.push(v);     // 마지막 선수 과목이 풀렸다
+    }
+  }
+  return order.length === numCourses ? order : [];   // 다 못 들었으면 고리
+}
+```
+
+결과 배열을 큐로 같이 쓰는 게 이 코드의 요령이다. 큐에서 꺼낸 순서가 듣는 순서이고, 꺼낸 과목을 지우지 않으니 큐 배열이 그대로 답이 된다. 따로 `order`를 만들어 복사할 필요가 없다.
+
+아래 그림은 예시를 이 풀이로 따라간 것이다. 초록 칸이 들은 과목, 아래 칸은 큐에서 아직 꺼내지 않은 과목이다.
+
+<AlgoTrace
+  caption="진입 차수가 0인 과목을 꺼낸 순서가 답이다"
+  memoryLabel="큐 (지금 들을 수 있는 과목)"
+  cells={["0", "1", "2", "3", "4", "5"]}
+  steps={[
+    { memory: ["0", "3"], caption: "선수 과목 수는 0번부터 0, 1, 2, 0, 2, 1이다. 0인 0과 3이 큐에 들어간다." },
+    { pointer: 0, found: [0], memory: ["3"], caption: "0을 듣는다. 4의 남은 수가 1로 준다." },
+    { pointer: 3, found: [0, 3], memory: ["4"], caption: "3을 듣는다. 4의 남은 수가 0이 되어 큐에 들어간다." },
+    { pointer: 4, found: [0, 3, 4], memory: ["1", "5"], caption: "4를 들으면 1과 5가 함께 풀린다." },
+    { pointer: 1, found: [0, 3, 4, 1], memory: ["5"], caption: "1을 듣는다. 2는 아직 5가 남아 남은 수 1이다." },
+    { pointer: 5, found: [0, 3, 4, 1, 5], memory: ["2"], caption: "5를 들으면 2가 풀린다." },
+    { pointer: 2, found: [0, 1, 2, 3, 4, 5], memory: [], caption: "2를 듣는다. 여섯 과목을 다 들었다. 답은 0, 3, 4, 1, 5, 2다." },
+  ]}
+/>
+
+고리 예시로 `[3, 1]`(3을 들으려면 1이 먼저)을 더하면 3 → 4 → 1 → 3이 고리가 된다. 처음 큐에는 0만 들어가고, 0을 들어도 4의 남은 수가 1(3)로 남는다. 큐가 바로 비고, 들은 과목이 하나뿐이라 빈 배열을 돌려준다. 이때 `order`에는 `[0]`이 들어 있지만 그걸 돌려주면 안 된다. 일부만 들은 시간표는 답이 아니다.
+
+과목마다 큐에 한 번, 선마다 진입 차수를 한 번 줄이니 시간 O(V + E), 공간 O(V + E)다. 재귀가 없어 어떤 언어에서도 깊이 걱정이 없다. 이 문제의 기본 답이다.
+
+### Python과 Java로 쓰면
+
+Python은 `deque`로 큐를 쓰고 꺼낸 과목을 `order`에 모은다. 재귀가 없으니 한도를 올릴 필요가 없다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def find_order(num_courses: int, prerequisites: List[List[int]]) -> List[int]:
+    graph = [[] for _ in range(num_courses)]
+    indeg = [0] * num_courses
+    for a, b in prerequisites:
+        graph[b].append(a)  # b를 들으면 a의 선수 과목 하나가 풀린다
+        indeg[a] += 1
+    queue = deque(c for c in range(num_courses) if indeg[c] == 0)
+    order = []
+    while queue:
+        u = queue.popleft()
+        order.append(u)  # 꺼낸 순서가 듣는 순서
+        for v in graph[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    return order if len(order) == num_courses else []
+
+
+print(find_order(6, [[4, 3], [4, 0], [1, 4], [5, 4], [2, 1], [2, 5]]))
+print(find_order(6, [[4, 3], [4, 0], [1, 4], [5, 4], [2, 1], [2, 5], [3, 1]]))
+print(find_order(3, []))
+```
+
+```text
+[0, 3, 4, 1, 5, 2]
+[]
+[0, 1, 2]
+```
+
+Java는 결과가 `int[]`라서 크기가 정해진 배열을 큐로 같이 쓰기 좋다. `head`와 `tail` 두 인덱스로 넣고 꺼낸다. 고리가 있으면 `null`이 아니라 길이 0인 배열 `new int[0]`을 돌려준다. `null`을 돌려주면 채점기에서 `NullPointerException`이 난다.
+
+```java
+import java.util.ArrayList;
+import java.util.List;
+
+class Solution {
+    public int[] findOrder(int numCourses, int[][] prerequisites) {
+        List<List<Integer>> graph = new ArrayList<>();
+        for (int i = 0; i < numCourses; i++) graph.add(new ArrayList<>());
+        int[] indeg = new int[numCourses];
+        for (int[] p : prerequisites) {
+            graph.get(p[1]).add(p[0]);   // p[1]을 들으면 p[0]의 선수 과목 하나가 풀린다
+            indeg[p[0]]++;
+        }
+        int[] order = new int[numCourses];   // 결과 배열을 큐로 같이 쓴다
+        int tail = 0;
+        for (int c = 0; c < numCourses; c++) if (indeg[c] == 0) order[tail++] = c;
+        for (int head = 0; head < tail; head++) {
+            for (int v : graph.get(order[head])) {
+                if (--indeg[v] == 0) order[tail++] = v;
+            }
+        }
+        return tail == numCourses ? order : new int[0];
+    }
+}
+```
+
+```text
+[0, 3, 4, 1, 5, 2]
+[]
+[0, 1, 2]
+```
+
+`List<Integer>`에서 꺼낸 `v`는 자동으로 `int`로 풀린다. 과목이 2,000개라 박싱 비용은 신경 쓸 정도가 아니지만, 정점이 수십만 개라면 인접 리스트를 `int[]` 배열 두 개(시작 위치와 이어진 정점)로 펴서 쓰는 방법도 있다.
+
+## 재귀 없이 후위 순서를 만들려면
+
+DFS 순서가 필요한데 그래프가 깊으면 스택을 직접 쓴다. 앞 글의 "재귀 없이 세 가지 색을 칠하려면"과 같은 코드에서, 과목을 검은색으로 바꾸는 줄 옆에 `post.push(u)` 하나만 더한다.
+
+```js
+function findOrder(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => []);
+  for (const [a, b] of prerequisites) graph[b].push(a);
+  const state = new Uint8Array(numCourses);
+  const next = new Int32Array(numCourses);      // 과목마다 다음에 볼 이웃의 위치
+  const post = [];
+  for (let s = 0; s < numCourses; s++) {
+    if (state[s] !== 0) continue;
+    const stack = [s];
+    state[s] = 1;
+    while (stack.length > 0) {
+      const u = stack[stack.length - 1];
+      if (next[u] < graph[u].length) {
+        const v = graph[u][next[u]++];
+        if (state[v] === 1) return [];          // 고리
+        if (state[v] === 0) { state[v] = 1; stack.push(v); }
+      } else {
+        state[u] = 2;
+        post.push(u);                           // 이웃을 다 봤다 = 끝났다
+        stack.pop();
+      }
+    }
+  }
+  return post.reverse();
+}
+```
+
+재귀 버전과 똑같이 `[3, 0, 4, 5, 1, 2]`가 나온다. 이웃을 한꺼번에 스택에 넣는 BFS식 코드로는 "다 봤다"는 순간을 알 수 없어서 후위 순서를 만들 수 없다. 이웃을 하나씩 내려가는 이 모양이어야 한다.
+
+## 답이 여럿일 때 하나로 정하려면
+
+칸의 알고리즘에서 큐가 하는 일은 "지금 들을 수 있는 과목"을 모아 두는 것뿐이다. 그중 무엇을 먼저 꺼내든 답은 맞다. 그래서 큐를 다른 자료구조로 바꾸면 다른 정답이 나온다.
+
+```text
+큐 (먼저 들어온 것부터)        0, 3, 4, 1, 5, 2
+최소 힙 (번호가 작은 것부터)   0, 3, 4, 1, 5, 2
+후위 순서 뒤집기               3, 0, 4, 5, 1, 2
+```
+
+예시에서는 큐와 힙의 결과가 우연히 같다. 차이가 나는 건 동시에 풀린 과목이 들어온 순서와 번호 순서가 다를 때다. 문제가 "가능한 순서 중 사전순으로 가장 앞선 것"을 요구하면 최소 힙을 쓴다. 들을 수 있는 과목 중 번호가 가장 작은 것을 늘 먼저 들으면 사전순으로 가장 앞선 순서가 된다. 꺼낼 때마다 O(log V)가 붙어 O(V log V + E)다. JavaScript에는 기본 힙이 없어서 직접 짜야 하고, Python은 `heapq`, Java는 `PriorityQueue<Integer>`를 쓴다.
+
+"순서가 하나뿐인가"도 같은 자리에서 알 수 있다. 칸의 알고리즘을 돌리는 동안 큐에 과목이 둘 이상 동시에 있던 순간이 한 번이라도 있으면 순서가 여럿이다. 둘 중 어느 쪽을 먼저 들어도 되기 때문이다. 큐 크기가 끝까지 1이었다면 순서는 하나뿐이다. LeetCode 444. Sequence Reconstruction(프리미엄 문제)이 이 판별을 묻는다.
+
+## 내 답이 맞는지 확인하는 함수
+
+답이 여럿인 문제는 테스트를 짜기가 까다롭다. 기대값 배열과 정확히 같은지 비교하면, 맞는 다른 순서를 틀렸다고 한다. 채점기가 하는 것처럼 "이 순서가 모든 선수 관계를 지키는가"를 직접 검사하는 함수를 두면 된다.
+
+```js
+function isValidOrder(numCourses, prerequisites, order) {
+  if (order.length !== numCourses) return false;
+  const pos = new Array(numCourses).fill(-1);
+  order.forEach((c, i) => { pos[c] = i; });           // 과목마다 몇 번째로 듣는지
+  if (pos.includes(-1)) return false;                 // 빠진 과목이 있다(중복이 있다는 뜻이기도 하다)
+  return prerequisites.every(([a, b]) => pos[b] < pos[a]);   // 선수 과목이 앞에 있다
+}
+```
+
+O(V + E)로 순서를 검사한다. 이 글의 풀이들을 과목 1~8개짜리 무작위 그래프 3,000개(그중 약 30%는 고리를 일부러 넣었다)에 돌려 이 함수로 검사했더니, 전위 순서 풀이를 뺀 여섯 풀이가 모두 통과했다. 실무에서도 쓸모가 있다. 배포 순서나 마이그레이션 순서를 만들어 주는 코드를 고쳤다면, 기대 배열을 하드코딩한 테스트 대신 이런 검사 함수로 속성 기반 테스트를 짜는 편이 리팩터링에 덜 깨진다.
+
+## 2,000과목 사슬에서 재 보면
+
+"i를 들으려면 i + 1을 먼저"로 이은 2,000과목 사슬이다. 번호가 큰 과목부터 들어야 해서, 번호순으로 훑는 풀이에 가장 불리하다. 세 번씩 돌려 가장 빠른 값을 적었다. Node.js 22다.
+
+```text
+매번 다시 훑기          32.49ms   (2,000바퀴)
+칸의 알고리즘            0.79ms
+선을 거꾸로 그은 DFS     0.63ms
+스택 DFS                 0.99ms
+최소 힙                  0.84ms
+```
+
+O(V + E) 풀이는 모두 1ms 안이다. 문제 조건의 최대 크기에서 이 차이는 의미가 없고, 고르는 기준은 재귀 깊이와 순서에 대한 요구다.
+
+## 순서 만들기 일곱 가지
+
+V는 과목 수, E는 선수 관계 수다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 매번 다시 훑기 | O(V · (V + E)) | O(V) | 학기별 묶음을 설명할 때. 사슬에서 느리다 |
+| 전위 순서로 적기 | O(V + E) | O(V) | 틀린다. 다른 선수 과목을 모르고, 고리도 못 찾는다 |
+| 후위 순서 뒤집기 | O(V + E) | O(V + E) | DFS로 풀 때. 선 방향과 뒤집기를 설명할 수 있어야 한다 |
+| 선을 거꾸로 그은 DFS | O(V + E) | O(V + E) | 의존성 해결처럼 "필요한 것부터" 생각할 때 |
+| 칸의 알고리즘 | O(V + E) | O(V + E) | 기본 답. 재귀가 없고 꺼낸 순서가 답이다 |
+| 스택 DFS | O(V + E) | O(V + E) | DFS 순서가 필요한데 그래프가 깊을 때 |
+| 최소 힙 칸의 알고리즘 | O(V log V + E) | O(V + E) | 사전순으로 가장 앞선 순서를 요구할 때 |
+
+아래에서 직접 짜 볼 수 있다. 테스트는 답이 하나뿐인 입력(과목이 한 줄로 이어진 경우)과 고리가 있는 입력으로 골랐다. 순서가 여럿인 입력은 위의 검사 함수로 확인하면 된다. 선수 관계가 없는 테스트 하나만 순서 상관없이 비교한다.
+
+<CodePlayground
+  caption="Course Schedule II: 듣는 순서 하나 돌려주기"
+  functionName="findOrder"
+  initialCode={`function findOrder(numCourses, prerequisites) {
+  // prerequisites[i] = [a, b]: a를 들으려면 b를 먼저 들어야 한다
+  // 모든 과목을 듣는 순서 하나를 돌려준다. 불가능하면 []
+  return [];
+}`}
+  solution={`function findOrder(numCourses, prerequisites) {
+  const graph = Array.from({ length: numCourses }, () => []);
+  const indeg = new Int32Array(numCourses);
+  for (const [a, b] of prerequisites) {
+    graph[b].push(a);
+    indeg[a]++;
+  }
+  const order = [];
+  for (let c = 0; c < numCourses; c++) if (indeg[c] === 0) order.push(c);
+  for (let head = 0; head < order.length; head++) {
+    const u = order[head];
+    for (const v of graph[u]) {
+      if (--indeg[v] === 0) order.push(v);
+    }
+  }
+  return order.length === numCourses ? order : [];
+}`}
+  tests={[
+    { label: "과목 하나", args: [1, []], expected: [0] },
+    { label: "한 줄 사슬", args: [4, [[1, 0], [2, 1], [3, 2]]], expected: [0, 1, 2, 3] },
+    { label: "번호가 거꾸로인 사슬", args: [4, [[0, 1], [1, 2], [2, 3]]], expected: [3, 2, 1, 0] },
+    { label: "건너뛰는 선이 있어도 한 줄", args: [4, [[2, 0], [1, 2], [3, 1], [3, 0]]], expected: [0, 2, 1, 3] },
+    { label: "서로가 선수 과목", args: [2, [[0, 1], [1, 0]]], expected: [] },
+    { label: "자기 자신이 선수 과목", args: [1, [[0, 0]]], expected: [] },
+    { label: "글의 고리 예시", args: [6, [[4, 3], [4, 0], [1, 4], [5, 4], [2, 1], [2, 5], [3, 1]]], expected: [] },
+    { label: "선수 관계 없음 (순서 무관)", args: [3, []], expected: [0, 1, 2], compare: "unordered" },
+  ]}
+/>
+
+## 빈 배열, 빠진 과목, 거꾸로 된 순서
+
+가장 흔한 실수는 쌍에 나오는 과목만 그래프에 넣는 것이다. 객체나 `Map`으로 그래프를 만들면 특히 그렇다.
+
+```js
+const graph = new Map();
+for (const [a, b] of prerequisites) {
+  if (!graph.has(b)) graph.set(b, []);
+  graph.get(b).push(a);
+}
+// numCourses = 3, [[1, 0]] -> 2번 과목이 어디에도 없다
+```
+
+선수 관계가 없는 과목 2는 어느 쌍에도 나오지 않아서, 진입 차수 0인 과목을 `graph`의 키에서 찾으면 2가 빠진다. 답의 길이가 2라 고리가 있다고 판정하거나, 2를 빼고 돌려준다. 과목은 반드시 `0`부터 `numCourses - 1`까지 모두 훑는다.
+
+두 번째는 쌍의 방향을 뒤집는 것이다. `[a, b]`를 `a → b`로 그으면 앞 글의 문제는 답이 그대로라 실수가 숨는다. 이 문제에서는 순서가 정확히 거꾸로 나온다.
+
+```js
+for (const [a, b] of prerequisites) { graph[a].push(b); indeg[b]++; }  // 거꾸로 그었다
+// 예시 -> [2, 1, 5, 4, 3, 0]. 졸업 작품을 가장 먼저 듣는다
+```
+
+반대로 DFS 후위 순서에서는 선을 "나중 → 먼저"로 그었으면 뒤집지 않아야 한다. 선 방향과 뒤집기는 짝이다. 하나만 바꾸면 순서가 거꾸로 나온다.
+
+세 번째는 고리가 있을 때 지금까지 모은 순서를 돌려주는 것이다. 칸의 알고리즘의 `order`에는 고리 바깥의 과목이 들어 있다. 길이가 `numCourses`인지 확인하고, 아니면 빈 배열을 돌려준다. DFS에서도 고리를 찾는 순간 `post`가 아니라 `[]`를 돌려준다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 선수 관계가 없으면 아무 순서나 맞다. `[0, 1, 2]`가 가장 자연스럽다.
+- 자기 자신이 선수 과목인 `[0, 0]`은 고리다. 진입 차수가 영원히 1로 남는다.
+- 같은 쌍이 두 번 들어오는 실제 데이터라도 칸의 알고리즘은 맞는다. 진입 차수를 두 번 세고 두 번 줄이기 때문이다. 다만 위상 정렬을 "이미 넣은 과목인지"로 거르는 코드를 섞으면 깨질 수 있으니 진입 차수만 믿는다.
+- 전위 순서는 고리 검사도 함께 놓친다. 세 가지 색 없이 방문 표시 하나로는 고리를 볼 수 없다.
+
+## 순서 문제가 바뀌면
+
+### 한 학기에 여러 과목을 들을 수 있을 때 최소 학기 수
+
+칸의 알고리즘을 겹 단위로 돌린다. 지금 큐에 있는 과목을 한 학기에 모두 듣고, 그 학기에 새로 풀린 과목이 다음 학기다. 겹의 수가 최소 학기 수이고, 그래프에서 가장 긴 경로의 정점 수와 같다. 처음의 "매번 다시 훑기"가 바퀴 단위로 한 일과 같은 그림인데, 진입 차수를 들고 있어서 O(V + E)다. LeetCode 1136. Parallel Courses(프리미엄 문제)다.
+
+### 과목마다 걸리는 시간이 다르다면
+
+LeetCode 2050. Parallel Courses III다. 과목을 동시에 몇 개든 들을 수 있을 때, 모든 과목을 마치는 최소 시간을 묻는다. 위상 순서대로 훑으며 `finish[v] = max(finish[v], finish[u] + time[v])`를 갱신한다. 위상 정렬 위의 [동적 계획법](/posts/dynamic-programming)이고, 가장 긴 경로를 구하는 것과 같다. 일정 관리에서 말하는 임계 경로다.
+
+### 가능한 순서를 모두 달라면
+
+칸의 알고리즘의 큐에 있는 과목 중 하나를 고르고, 진입 차수를 줄이고, 재귀하고, 되돌린다. [백트래킹](/posts/recursion-backtracking)이다. 순서의 수가 최악에 V!이라 작은 입력에서만 된다.
+
+### 과목에 그룹이 있다면
+
+LeetCode 1203. Sort Items by Groups Respecting Dependencies(Hard)는 같은 그룹의 항목이 붙어 있어야 한다. 그룹끼리의 그래프와 그룹 안 항목끼리의 그래프를 따로 만들어 위상 정렬을 두 번 한다.
+
+### 순서 규칙을 데이터에서 뽑아야 한다면
+
+[Alien Dictionary](/posts/leetcode-alien-dictionary)(269, 프리미엄 문제)는 사전순으로 정렬된 단어 목록에서 글자 사이의 순서를 뽑아 그래프를 만들고 위상 정렬한다. 그래프를 만드는 단계가 어렵고, 위상 정렬은 이 글의 코드 그대로다.
+
+### 비슷한 문제
+
+- [Course Schedule](/posts/leetcode-course-schedule) (207): 순서 없이 가능 여부만 묻는다.
+- [Alien Dictionary](/posts/leetcode-alien-dictionary) (269, 프리미엄 문제): 글자 순서를 위상 정렬로 복원한다.
+- [Redundant Connection](/posts/leetcode-redundant-connection) (684): 무방향 그래프의 고리는 유니온 파인드로 찾는다.
+- [Reconstruct Itinerary](/posts/leetcode-reconstruct-itinerary) (332): 후위 순서를 뒤집어 경로를 만드는 또 다른 문제다.
+- 1136\. Parallel Courses(프리미엄 문제), 2050. Parallel Courses III, 444. Sequence Reconstruction(프리미엄 문제).
+
+## 꺼낸 순서를 그대로 내면 된다
+
+듣는 순서는 선수 과목이 다 풀린 과목을 하나씩 꺼낸 순서다. 진입 차수를 세어 두고 0인 과목을 큐에서 꺼내 적으면 그게 답이고, 다 못 적었으면 고리가 있으니 빈 배열을 낸다. DFS로 만들고 싶다면 들어갈 때가 아니라 끝날 때 적고, 선을 "먼저 → 나중"으로 그었으면 뒤집는다. 답이 여럿이라는 사실을 잊지 말고, 확인은 기대값 비교가 아니라 모든 선수 관계를 지키는지로 한다.
+
+## 면접에서 나올 만한 질문
+
+### Course Schedule과 무엇이 다른가요?
+
+앞 문제는 고리가 있는지만 물었고, 이 문제는 고리가 없을 때 실제 순서를 돌려 달라고 한다. 칸의 알고리즘이라면 꺼낸 과목 수 대신 꺼낸 순서를 돌려주면 되고, DFS라면 끝나는 순서를 모아 뒤집는다. 고리가 있으면 일부만 모인 순서가 아니라 빈 배열을 돌려준다.
+
+### DFS로 순서를 만들 때 왜 뒤집나요?
+
+후위 순서는 과목의 탐색이 끝나는 순간 적으니, 그 과목에서 선을 따라 갈 수 있는 나중 과목이 모두 먼저 적힌다. 그래서 후위 순서는 "나중 과목부터"이고 뒤집으면 듣는 순서다. 선을 처음부터 "과목 → 선수 과목"으로 그으면 후위 순서가 바로 답이라 뒤집지 않는다.
+
+### 방문하는 순간 적으면 왜 틀리나요?
+
+어떤 과목에 처음 도착했을 때, 그 과목으로 들어오는 다른 선을 아직 보지 않았기 때문이다. 과목 셋에 `[[2, 0], [2, 1]]`이면 0에서 2로 내려가 `[0, 2, 1]`을 적는데, 2는 1도 먼저 들어야 한다. 방문 표시 하나만 쓰니 고리도 찾지 못한다.
+
+### 답이 여러 개인데 어떻게 확인하나요?
+
+과목마다 몇 번째로 듣는지 위치를 적고, 모든 쌍 `[a, b]`에서 b의 위치가 a보다 앞인지 본다. 길이가 과목 수와 같고 빠진 과목이 없는지도 확인한다. O(V + E)라서 테스트에서 기대 배열을 비교하는 대신 이 검사로 바꾸면, 맞는 다른 순서를 틀렸다고 하지 않는다.
+
+### 사전순으로 가장 앞선 순서를 원하면요?
+
+칸의 알고리즘의 큐를 최소 힙으로 바꾼다. 지금 들을 수 있는 과목 중 번호가 가장 작은 것을 늘 먼저 꺼내면 사전순으로 가장 앞선 순서가 나온다. 꺼낼 때마다 O(log V)가 붙어 O(V log V + E)다.
+
+### 순서가 하나뿐인지 어떻게 알 수 있나요?
+
+칸의 알고리즘을 돌리는 동안 큐에 과목이 둘 이상 동시에 있던 순간이 있으면 순서가 여럿이다. 그 둘은 어느 쪽을 먼저 들어도 되기 때문이다. 큐 크기가 끝까지 1이면 순서가 하나뿐이고, 그때 순서 안의 이웃한 두 과목은 모두 선으로 이어져 있다.
+
+### 시간과 공간 복잡도는요?
+
+칸의 알고리즘과 DFS 모두 과목마다 한 번, 선마다 한 번 보니 시간 O(V + E)다. 공간은 인접 리스트 O(V + E)에 진입 차수나 색 배열 O(V)다. 재귀 DFS는 호출 스택이 최악에 O(V)라서 Python에서는 2,000개 사슬에서 기본 한도에 걸린다.

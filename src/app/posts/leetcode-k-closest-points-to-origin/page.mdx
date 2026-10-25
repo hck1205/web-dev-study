@@ -1,0 +1,540 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-k-closest-points-to-origin");
+
+<EasyIntro>
+  동네 지도 한가운데에 우리 집이 있고, 지도 곳곳에 편의점이 일곱 군데 찍혀 있다. 집에서 가장 가까운 편의점 세 곳을 골라야 한다. 자를 대고 편의점마다 거리를 잰 다음, 가까운 순서로 모두 줄 세워 앞의 셋을 고르면 확실하다.
+
+  그런데 편의점이 만 군데라면 만 군데를 다 줄 세우기는 번거롭다. 손바닥에 세 곳만 적을 수 있는 쪽지가 있다고 해 보자. 편의점을 하나씩 보면서 쪽지에 적힌 곳 중 가장 먼 곳보다 더 가까우면, 그 먼 곳을 지우고 새 편의점을 적는다.
+
+  끝까지 보고 나면 쪽지에는 가장 가까운 세 곳만 남는다. 쪽지가 작아서 가장 먼 곳을 찾는 일도 금방 끝난다. 거리를 잴 때 제곱근까지 계산하지 않아도 된다는 것도 이 글에서 같이 본다. 멀고 가까운 순서만 알면 되기 때문이다.
+</EasyIntro>
+
+[K Closest Points to Origin](https://leetcode.com/problems/k-closest-points-to-origin/)은 LeetCode 973번이다. 평면 위의 점 여러 개 중 원점 (0, 0)에 가장 가까운 점 k개를 고른다. 겉모습은 기하 문제지만 속은 [Kth Largest Element in an Array](/posts/leetcode-kth-largest-element-in-an-array)와 같은 "상위 k개 고르기"다. 비교 기준이 값에서 거리로 바뀌었을 뿐이다.
+
+이 글은 그 글에서 본 힙과 퀵셀렉트를 이 문제에 맞게 옮기고, 이 문제에서만 생기는 것들을 더 본다. 제곱근을 왜 안 써도 되는지, 거리 값으로 이분 탐색하는 풀이, 좌표가 커질 때의 정수 오버플로, 그리고 "가까운 가게 찾기" 같은 실제 서비스에서는 이 풀이를 그대로 쓰지 않는 이유다. 힙 자체의 동작은 [힙 글](/posts/ds-heap)에 있다. 코드는 Node.js 22, Python 3.13, Java 21에서 돌렸다.
+
+## 원점에서 가까운 점 k개
+
+점 목록 `points`가 주어진다. 각 점은 `[x, y]`다. 원점에서 가까운 점 k개를 돌려주며, 순서는 상관없다. 거리는 보통의 직선거리(유클리드 거리), 즉 x² + y²의 제곱근이다.
+
+풀이를 고르는 데 영향을 주는 제약은 이렇다.
+
+- k는 1 이상 n 이하이고 n은 최대 10^4다. O(n²)도 1억 번이라 아슬아슬하지만, 그럴 이유가 없다.
+- 좌표는 -10^4 이상 10^4 이하다. 그래서 x² + y²은 최대 2 × 10^8이고 32비트 정수에 들어간다. 이 숫자가 Java에서 중요해진다.
+- 답은 순서를 빼면 하나로 정해진다. 즉 k번째와 k+1번째 점의 거리가 같아 답이 갈리는 입력은 없다.
+
+## 지도에 찍어 놓고 손으로 고른다
+
+이 글 내내 쓰는 예시다. 점마다 이름을 붙였다.
+
+```text
+A(1, 3)  B(-2, 2)  C(3, -3)  D(-1, -1)  E(4, 1)  F(-3, -4)  G(2, 0)
+k = 3
+```
+
+거리의 제곱을 먼저 구한다. A는 1 + 9 = 10, B는 4 + 4 = 8, C는 9 + 9 = 18, D는 1 + 1 = 2, E는 16 + 1 = 17, F는 9 + 16 = 25, G는 4 + 0 = 4다. 작은 순서로 D(2), G(4), B(8)이 답이다.
+
+아래 그림은 점을 지도에 찍은 것이다. 다음을 누르면 원점을 중심으로 원이 점점 커지면서 점을 하나씩 삼킨다. 원 안에 세 점이 들어오는 순간이 답이다.
+
+<VectorSpace
+  caption="원점에서 원을 키우면 가까운 점부터 들어온다 (k = 3)"
+  query={{ label: "원점", x: 200, y: 130, labelAt: "left" }}
+  points={[
+    { id: "A", label: "A (1,3)", x: 225, y: 55 },
+    { id: "B", label: "B (-2,2)", x: 150, y: 80 },
+    { id: "C", label: "C (3,-3)", x: 275, y: 205 },
+    { id: "D", label: "D (-1,-1)", x: 175, y: 155 },
+    { id: "E", label: "E (4,1)", x: 300, y: 105 },
+    { id: "F", label: "F (-3,-4)", x: 125, y: 230 },
+    { id: "G", label: "G (2,0)", x: 250, y: 130 },
+  ]}
+  steps={[
+    { caption: "점 일곱 개가 있다. 한 칸은 25px이고 위쪽이 y가 큰 쪽이다." },
+    { query: true, caption: "원점에서 출발한다. 거리 제곱은 A 10, B 8, C 18, D 2, E 17, F 25, G 4다." },
+    { query: true, radius: 35, neighbors: ["D"], caption: "반지름을 √2까지 키우면 D가 먼저 들어온다." },
+    { query: true, radius: 50, neighbors: ["D", "G"], caption: "반지름 2에서 G가 들어온다." },
+    { query: true, radius: 71, neighbors: ["D", "G", "B"], caption: "반지름 √8에서 B가 들어와 세 개가 찼다. D, G, B가 답이다." },
+  ]}
+/>
+
+손으로 풀 때 나는 제곱근을 한 번도 계산하지 않았다. √10과 √8 중 어느 쪽이 큰지는 10과 8을 비교하면 알 수 있다. 제곱근은 0 이상에서 커지는 함수라 순서를 바꾸지 않기 때문이다. 그러니 모든 풀이에서 거리 대신 거리의 제곱으로 비교한다. 계산이 빨라지고, 실수(부동소수점) 오차도 생기지 않는다.
+
+## 거리순으로 다 줄 세운다
+
+먼저 떠오르는 답이다. 거리 제곱 순으로 정렬하고 앞의 k개를 자른다.
+
+```js
+const dist = ([x, y]) => x * x + y * y; // 제곱근은 순서를 바꾸지 않으니 생략한다
+
+function kClosest(points, k) {
+  return [...points].sort((a, b) => dist(a) - dist(b)).slice(0, k);
+}
+
+console.log(kClosest([[1, 3], [-2, 2], [3, -3], [-1, -1], [4, 1], [-3, -4], [2, 0]], 3));
+```
+
+```text
+[ [ -1, -1 ], [ 2, 0 ], [ -2, 2 ] ]
+```
+
+시간은 O(n log n), 공간은 복사본 O(n)이다. 비교할 때마다 `dist`를 두 번 부르는 게 아까워 보여서, 거리를 미리 계산해 `[거리, 점]` 쌍으로 만든 뒤 정렬하는 것과 비교해 봤다. 점 100만 개에서 1629ms와 1586ms로 거의 차이가 없었다. 곱셈 두 번은 싸고, 비싼 건 정렬의 비교 횟수 자체다. 반대로 비교 함수에서 `Math.hypot`으로 진짜 거리를 구하면 3789ms로 두 배 넘게 느려졌다.
+
+이 풀이로 충분히 통과하지만, k가 작을 때 n개 전부의 순서를 정하는 건 낭비다. 가장 가까운 3개를 위해 1만 개를 줄 세울 필요는 없다.
+
+## 크기 k인 최대 힙에 가까운 점만 남긴다
+
+[Kth Largest](/posts/leetcode-kth-largest-element-in-an-array#크기-k인-바구니에-큰-것만-남긴다)에서는 큰 값 k개를 남기려고 최소 힙을 썼다. 여기서는 반대로 가까운 점 k개를 남겨야 하니 최대 힙이다. 힙 맨 위에는 "지금 남긴 점 중 가장 먼 점"이 있다. 새 점이 그보다 가까우면 맨 위를 버리고 새 점을 넣는다. 아니면 그냥 지나간다.
+
+어떤 힙을 쓸지 헷갈리면 이렇게 기억한다. 힙 맨 위에는 "다음에 버릴 후보"가 와야 한다. 가까운 것을 남기려면 버릴 후보는 가장 먼 것이고, 그래서 최대 힙이다.
+
+```js
+class MaxHeap {                          // 원소는 [거리², 점]. 거리가 큰 것이 위
+  constructor() { this.a = []; }
+  get size() { return this.a.length; }
+  peek() { return this.a[0]; }
+  push(item) {
+    const a = this.a;
+    a.push(item);
+    let i = a.length - 1;
+    while (i > 0) {                      // 부모보다 멀면 위로 올린다
+      const p = (i - 1) >> 1;
+      if (a[p][0] >= a[i][0]) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {                         // 자식 중 먼 쪽과 바꾸며 내려간다
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < a.length && a[l][0] > a[m][0]) m = l;
+        if (r < a.length && a[r][0] > a[m][0]) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
+function kClosest(points, k) {
+  const heap = new MaxHeap();
+  for (const p of points) {
+    const d = p[0] * p[0] + p[1] * p[1];
+    if (heap.size < k) heap.push([d, p]);   // 아직 k개가 안 찼다
+    else if (d < heap.peek()[0]) {          // 가장 먼 점보다 가까우면 바꾼다
+      heap.pop();
+      heap.push([d, p]);
+    }
+  }
+  return heap.a.map(([, p]) => p);
+}
+```
+
+예시를 넣고 점마다 힙에 든 거리 제곱을 찍어 봤다. 배열 맨 앞이 힙 맨 위다.
+
+```text
+[1,3] 10 [10]
+[-2,2] 8 [10,8]
+[3,-3] 18 [18,8,10]
+[-1,-1] 2 [10,8,2]
+[4,1] 17 [10,8,2]
+[-3,-4] 25 [10,8,2]
+[2,0] 4 [8,2,4]
+```
+
+C(18)가 들어와 세 개가 찬 직후 맨 위는 C다. 그다음 D(2)가 오자 C가 밀려나고 A(10)가 맨 위로 온다. E와 F는 맨 위 A보다 멀어서 들어오지도 못한다. 마지막에 G(4)가 A를 밀어낸다. 아래 그림에서 한 칸씩 따라가 본다.
+
+<AlgoTrace
+  caption="k = 3: 최대 힙 맨 위가 남긴 점 중 가장 먼 점이다"
+  memoryLabel="최대 힙 (점:거리², 맨 왼쪽이 맨 위)"
+  cells={["A:10", "B:8", "C:18", "D:2", "E:17", "F:25", "G:4"]}
+  steps={[
+    { pointer: 0, memory: ["A:10"], caption: "A를 넣는다. 아직 세 개가 안 찼다." },
+    { pointer: 1, memory: ["A:10", "B:8"], caption: "B를 넣는다. A가 더 멀어서 맨 위에 그대로 있다." },
+    { pointer: 2, memory: ["C:18", "B:8", "A:10"], caption: "C를 넣어 세 개가 찼다. 가장 먼 C가 맨 위로 올라간다." },
+    { pointer: 3, memory: ["A:10", "B:8", "D:2"], caption: "D(2)는 C(18)보다 가깝다. C를 버리고 D를 넣는다. 새 맨 위는 A다." },
+    { pointer: 4, memory: ["A:10", "B:8", "D:2"], caption: "E(17)는 맨 위 A(10)보다 멀다. 넣지 않고 지나간다." },
+    { pointer: 5, memory: ["A:10", "B:8", "D:2"], caption: "F(25)도 멀어서 지나간다. 비교 한 번으로 끝난다." },
+    { pointer: 6, found: [1, 3, 6], memory: ["B:8", "D:2", "G:4"], caption: "G(4)가 A를 밀어낸다. 남은 B, D, G가 답이다." },
+  ]}
+/>
+
+시간은 O(n log k)다. 점마다 맨 위와 한 번 비교하고, 바꿀 때만 O(log k)가 든다. 공간은 O(k)다. 먼저 넣고 크기가 k를 넘으면 빼는 방식도 맞지만, 맨 위와 먼저 비교하면 E나 F처럼 먼 점은 힙을 건드리지도 않는다. 대부분의 점이 비교 한 번에 탈락하니 k가 작으면 아주 빠르다.
+
+이 풀이의 진짜 장점은 점을 한 번만 앞에서 뒤로 읽는다는 것이다. 점이 파일이나 네트워크로 하나씩 들어와도 크기 k인 힙만 들고 있으면 된다. 한계는 k가 n에 가까울 때다. k = n/2면 O(n log n)이 되어 정렬과 비슷해진다.
+
+## 전부 힙에 넣고 k번 꺼낸다
+
+방향을 다시 뒤집어, 모든 점을 최소 힙에 넣고 가까운 순서로 k번 꺼내는 방법도 있다. 배열 전체를 한 번에 힙으로 만드는 heapify가 O(n)이라 시간은 O(n + k log n)이다.
+
+```js
+function kClosest(points, k) {
+  const a = points.map((p) => [p[0] * p[0] + p[1] * p[1], p]), n = a.length;
+  const down = (i, size) => {           // 자식 중 가까운 쪽과 바꾸며 내린다
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < size && a[l][0] < a[m][0]) m = l;
+      if (r < size && a[r][0] < a[m][0]) m = r;
+      if (m === i) return;
+      [a[m], a[i]] = [a[i], a[m]];
+      i = m;
+    }
+  };
+  for (let i = (n >> 1) - 1; i >= 0; i--) down(i, n); // O(n) heapify
+  const res = [];
+  let size = n;
+  for (let t = 0; t < k; t++) {
+    res.push(a[0][1]);                  // 가장 가까운 점을 꺼낸다
+    a[0] = a[--size];
+    down(0, size);
+  }
+  return res;
+}
+```
+
+이 풀이는 결과가 가까운 순서로 나온다는 덤이 있다. 문제는 순서를 요구하지 않지만, "가까운 순서로 보여 달라"는 변형에서는 정렬을 따로 하지 않아도 된다. 대신 n개를 모두 메모리에 올려야 하고 공간이 O(n)이다. heapify가 n개를 모두 건드리기 때문에 k가 작을 때는 크기 k 힙보다 훨씬 느리다.
+
+## 거리로 나눠서 가까운 쪽만 남긴다
+
+k가 클 때도 빠른 방법은 퀵셀렉트다. 기준 거리 하나를 골라 점들을 "더 가깝다, 같다, 더 멀다" 세 무리로 나눈다. 가까운 무리와 같은 무리를 합친 개수가 k를 넘는지 보고, 답의 경계가 있는 무리만 남겨 다시 나눈다. 경계가 정해지면 배열의 앞 k칸이 그대로 답이다.
+
+나누는 방법은 [Kth Largest 글의 3-way 분할](/posts/leetcode-kth-largest-element-in-an-array#같은-값은-한가운데에-모은다)과 같다. 다른 점은 두 가지다. 비교 기준이 거리 제곱이라 미리 계산해 쌍으로 들고 다닌다. 그리고 k번째 하나가 아니라 앞의 k개 전체를 돌려준다.
+
+```js
+function kClosest(points, k) {
+  const a = points.map((p) => [p[0] * p[0] + p[1] * p[1], p]); // [거리², 점]
+  const target = k - 1;                // 오름차순 인덱스 k - 1까지가 답
+  let lo = 0, hi = a.length - 1;
+  while (lo < hi) {
+    const pivot = a[lo + Math.floor(Math.random() * (hi - lo + 1))][0];
+    let lt = lo, i = lo, gt = hi;
+    while (i <= gt) {
+      if (a[i][0] < pivot) {             // 더 가까운 점은 앞으로
+        [a[lt], a[i]] = [a[i], a[lt]];
+        lt++; i++;
+      } else if (a[i][0] > pivot) {      // 더 먼 점은 뒤로. 가져온 칸은 다시 본다
+        [a[i], a[gt]] = [a[gt], a[i]];
+        gt--;
+      } else {
+        i++;
+      }
+    }
+    if (target < lt) hi = lt - 1;        // 경계가 가까운 무리 안에 있다
+    else if (target > gt) lo = gt + 1;   // 경계가 먼 무리 안에 있다
+    else break;                          // 경계가 같은 거리 무리 안이다
+  }
+  return a.slice(0, k).map(([, p]) => p);
+}
+```
+
+`break`로 빠져나왔을 때 앞의 k칸이 답인 이유가 궁금할 수 있다. 분할을 거칠 때마다 lo 앞쪽에는 "남은 범위의 모든 점보다 가까운 점"만, hi 뒤쪽에는 "더 먼 점"만 쌓인다. 마지막 분할에서 target이 같은 거리 무리에 들어왔으면 target까지는 모두 기준 거리 이하이고 그 뒤는 모두 이상이다. 그래서 인덱스 0부터 k - 1까지가 가장 가까운 k개다. 그 안의 순서는 섞여 있지만 문제는 순서를 묻지 않는다.
+
+시간은 평균 O(n), 최악 O(n²)이다. 무작위 기준값이 최악을 사실상 막고, 같은 거리의 점이 많은 입력은 3-way 분할이 막는다. 거리 제곱이 같은 점은 생각보다 흔하다. (3, 4), (4, 3), (-3, 4), (5, 0)은 모두 25다. 공간은 쌍 배열 O(n)이다. k가 커져도 크게 느려지지 않는 게 힙과의 차이다.
+
+## 거리의 문턱값을 이분 탐색한다
+
+조금 다른 방향도 있다. 답은 "어떤 거리 d 이하인 점들"이다. 반지름 d를 정하면 그 원 안에 든 점의 개수를 O(n)에 셀 수 있고, d가 커질수록 개수는 줄지 않는다. 그러면 "원 안의 점이 k개 이상이 되는 가장 작은 d"를 이분 탐색으로 찾을 수 있다. 위 그림에서 원을 키운 것을 한 번에 하나씩이 아니라 반씩 건너뛰며 하는 셈이다. 이런 "답의 값으로 이분 탐색하기"는 [Koko Eating Bananas](/posts/leetcode-koko-eating-bananas)와 같은 모양이고, 기본기는 [이분 탐색 글](/posts/binary-search)에 있다.
+
+```js
+function kClosest(points, k) {
+  const ds = points.map(([x, y]) => x * x + y * y);
+  let lo = 0, hi = 0;
+  for (const d of ds) if (d > hi) hi = d;   // 가장 먼 거리²
+  while (lo < hi) {                          // 원 안의 점이 k개 이상인 가장 작은 반지름²
+    const mid = Math.floor((lo + hi) / 2);
+    let c = 0;
+    for (const d of ds) if (d <= mid) c++;
+    if (c >= k) hi = mid;
+    else lo = mid + 1;
+  }
+  const res = [];
+  for (let i = 0; i < points.length; i++) if (ds[i] < lo) res.push(points[i]);   // 확실히 안쪽
+  for (let i = 0; i < points.length && res.length < k; i++) if (ds[i] === lo) res.push(points[i]); // 경계에서 모자란 만큼
+  return res;
+}
+```
+
+예시로 보면 거리 제곱은 0부터 25 사이다. 가운데 12에서 세면 A, B, D, G 네 개라 범위를 0~12로 줄인다. 6에서는 D, G 두 개라 7~12, 9에서는 B가 들어와 세 개라 7~9, 8에서도 세 개라 7~8, 7에서는 두 개라 8로 끝난다. 반지름 제곱 8 이하인 D, G, B가 답이다.
+
+경계를 두 번에 나눠 모으는 이유는 같은 거리의 점이 여러 개일 수 있어서다. 문턱 거리와 같은 점이 세 개인데 두 개만 필요하면, 문턱보다 안쪽을 먼저 다 담고 문턱과 같은 점은 모자란 만큼만 담는다. 이 문제는 답이 하나로 정해진다고 약속했지만, 변형에서는 이렇게 처리해야 개수가 맞는다.
+
+시간은 O(n log D)다. D는 가장 큰 거리 제곱으로 이 문제에서 최대 2 × 10^8이라 log D는 28 정도다. 즉 n을 28번 정도 훑는다. 정렬보다 상수가 크지만 최악이 없다. 아래 측정에서는 k가 클 때 가장 빨랐다. 단점은 좌표가 실수면 반지름을 정수로 쪼갤 수 없어 반복 횟수를 따로 정해야 한다는 것이다.
+
+## 100만 개로 늘려 재 봤다
+
+문제의 n은 1만이라 어느 풀이든 몇 ms에 끝난다. 차이를 보려고 좌표가 -10^4 이상 10^4 이하인 무작위 점 100만 개를 만들어 다섯 번씩 돌린 가장 빠른 시간이다.
+
+```text
+k        정렬        크기k최대힙   전부힙+k번   퀵셀렉트    거리이분탐색
+10       1604.07ms    10.19ms     315.29ms    189.48ms    112.26ms
+500000   1736.81ms  1765.10ms    2335.63ms    405.62ms    223.78ms
+```
+
+k가 작으면 크기 k 힙이 압도적이다. 점 대부분이 맨 위와 한 번 비교하고 탈락한다. k가 크면 힙의 장점이 사라지고, k와 상관없이 거의 일정한 퀵셀렉트와 거리 이분 탐색이 앞선다. 정렬은 1.6초로 가장 느렸는데, 비교 함수를 부르는 비용이 100만 개에서 크게 쌓인다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 정렬 | O(n log n) | O(n) | 첫 답, 결과를 거리순으로 줘야 할 때 |
+| 크기 k 최대 힙 | O(n log k) | O(k) | k가 작거나 점이 흘러 들어올 때. 면접의 기본 답 |
+| 전부 최소 힙에 넣고 k번 | O(n + k log n) | O(n) | 가까운 순서로 k개를 꺼내야 할 때 |
+| 3-way 퀵셀렉트 | 평균 O(n), 최악 O(n²) | O(n) | 점이 모두 메모리에 있고 k가 클 때 |
+| 거리 이분 탐색 | O(n log D) | O(n) | 거리가 범위가 정해진 정수이고 최악을 피하고 싶을 때 |
+
+## Python과 Java로 옮기기
+
+가장 많이 쓰는 크기 k 힙과, k가 커도 빠른 퀵셀렉트를 옮긴다.
+
+```python
+import heapq
+import random
+from typing import List
+
+class Solution:
+    def kClosest(self, points: List[List[int]], k: int) -> List[List[int]]:
+        heap = []                                   # (-거리², x, y). 부호를 뒤집어 최대 힙처럼 쓴다
+        for x, y in points:
+            d = x * x + y * y
+            if len(heap) < k:
+                heapq.heappush(heap, (-d, x, y))
+            elif d < -heap[0][0]:                   # 지금 가장 먼 점보다 가까우면 바꾼다
+                heapq.heapreplace(heap, (-d, x, y))
+        return [[x, y] for _, x, y in heap]
+
+    def kClosestSelect(self, points: List[List[int]], k: int) -> List[List[int]]:
+        a = [(x * x + y * y, x, y) for x, y in points]
+        lo, hi, target = 0, len(a) - 1, k - 1
+        while lo < hi:
+            pivot = a[random.randint(lo, hi)][0]
+            lt, i, gt = lo, lo, hi
+            while i <= gt:
+                if a[i][0] < pivot:
+                    a[lt], a[i] = a[i], a[lt]
+                    lt += 1
+                    i += 1
+                elif a[i][0] > pivot:
+                    a[i], a[gt] = a[gt], a[i]
+                    gt -= 1
+                else:
+                    i += 1
+            if target < lt:
+                hi = lt - 1
+            elif target > gt:
+                lo = gt + 1
+            else:
+                break
+        return [[x, y] for _, x, y in a[:k]]
+
+s = Solution()
+pts = [[1, 3], [-2, 2], [3, -3], [-1, -1], [4, 1], [-3, -4], [2, 0]]
+print(sorted(s.kClosest(pts, 3)), sorted(s.kClosestSelect(pts, 3)))
+print(heapq.nsmallest(3, pts, key=lambda p: p[0] ** 2 + p[1] ** 2))
+print(s.kClosest([[5, 5]], 1), sorted(s.kClosest([[1, 0], [0, 1], [3, 3]], 2)))
+```
+
+```text
+[[-2, 2], [-1, -1], [2, 0]] [[-2, 2], [-1, -1], [2, 0]]
+[[-1, -1], [2, 0], [-2, 2]]
+[[5, 5]] [[0, 1], [1, 0]]
+```
+
+`heapq`는 최소 힙만 있어서 거리에 `-`를 붙여 넣으면 가장 먼 점이 맨 위에 온다. 튜플을 넣을 때 두 번째 이후 원소도 비교에 쓰인다는 점을 알아 둔다. 거리가 같으면 x, y를 비교하는데, 이건 정수라 괜찮다. 점 대신 비교할 수 없는 객체를 넣으면 `TypeError`가 나서, 그럴 때는 `(-d, i, obj)`처럼 순번을 가운데에 끼운다. 한 줄로는 `heapq.nsmallest(k, points, key=...)`가 같은 일을 한다.
+
+```java
+import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
+
+class Solution {
+    public int[][] kClosest(int[][] points, int k) {
+        // 거리가 큰 점이 위로 오는 최대 힙
+        PriorityQueue<int[]> heap = new PriorityQueue<>((a, b) -> Integer.compare(dist(b), dist(a)));
+        for (int[] p : points) {
+            heap.offer(p);
+            if (heap.size() > k) heap.poll();      // 가장 먼 점을 버린다
+        }
+        return heap.toArray(new int[0][]);
+    }
+
+    public int[][] kClosestSelect(int[][] points, int k) {
+        int[][] a = points.clone();                  // 바깥 배열만 복사한다. 점 배열은 공유
+        int lo = 0, hi = a.length - 1, target = k - 1;
+        while (lo < hi) {
+            int pivot = dist(a[ThreadLocalRandom.current().nextInt(lo, hi + 1)]);
+            int lt = lo, i = lo, gt = hi;
+            while (i <= gt) {
+                int d = dist(a[i]);
+                if (d < pivot) swap(a, lt++, i++);
+                else if (d > pivot) swap(a, i, gt--);
+                else i++;
+            }
+            if (target < lt) hi = lt - 1;
+            else if (target > gt) lo = gt + 1;
+            else break;
+        }
+        return Arrays.copyOfRange(a, 0, k);
+    }
+
+    private static int dist(int[] p) { return p[0] * p[0] + p[1] * p[1]; } // 최대 2 * 10^8이라 int에 들어간다
+    private static void swap(int[][] a, int i, int j) { int[] t = a[i]; a[i] = a[j]; a[j] = t; }
+}
+```
+
+```text
+[[-2, 2], [-1, -1], [2, 0]] [[-2, 2], [-1, -1], [2, 0]]
+```
+
+`main`에서 두 결과를 좌표 순으로 정렬해 찍었다.
+
+Java에서 비교자는 `Integer.compare(dist(b), dist(a))`처럼 쓴다. 이 문제는 거리가 최대 2 × 10^8이라 `dist(b) - dist(a)`로 빼도 넘치지 않지만, 습관을 들여 두면 범위가 바뀌었을 때 안전하다. `int[][]`의 `clone()`은 바깥 배열만 복사하는 얕은 복사다. 점 배열의 자리만 바꾸고 안의 값은 건드리지 않으니 여기서는 충분하다. `heap.toArray(new int[0][])`는 힙 안의 순서 그대로 꺼내므로 거리순이 아니다.
+
+## 좌표가 커지면 제곱이 넘친다
+
+좌표가 10^4 이하라 괜찮았지만, 면접에서 "좌표가 5만이면?"이라고 바꿔 물으면 Java의 `int` 곱셈이 넘친다.
+
+```java
+int[] big = {50000, 50000};
+System.out.println(big[0] * big[0] + big[1] * big[1]);             // 705032704
+System.out.println((long) big[0] * big[0] + (long) big[1] * big[1]); // 5000000000
+```
+
+50000² × 2 = 50억은 `int` 최댓값(약 21억)을 넘어서 엉뚱한 양수가 나왔다. 음수가 아니라서 더 알아채기 어렵다. 곱하기 전에 `long`으로 바꿔야 한다. `(long) (x * x)`처럼 곱한 뒤에 바꾸면 이미 넘친 값이 바뀔 뿐이다. JavaScript는 숫자가 64비트 실수라 2^53까지는 정수가 정확하니 이 문제에서는 걱정 없다. Python은 정수 크기에 제한이 없다.
+
+## 틀리기 쉬운 자리
+
+### 최소 힙에 넣고 크기 k를 유지한다
+
+가까운 점을 원하니 최소 힙을 써야 할 것 같다. 그런데 최소 힙의 맨 위는 가장 가까운 점이다. 크기가 k를 넘을 때 맨 위를 버리면 가장 가까운 점부터 버리게 되어, 끝에는 가장 먼 k개가 남는다. 크기를 유지하는 힙에서는 "버릴 후보"가 맨 위에 와야 한다. 가까운 것을 남기려면 최대 힙이다.
+
+### Math.max에 큰 배열을 펼친다
+
+이분 탐색 풀이에서 처음에 `Math.max(...ds)`로 가장 먼 거리를 구했다. 1만 개에서는 문제가 없었는데, 100만 개로 재려고 하자 이렇게 멈췄다.
+
+```text
+RangeError: Maximum call stack size exceeded
+```
+
+배열을 펼치면 원소 하나하나가 함수 인자가 되어 콜 스택에 올라간다. 이 환경(Node.js 22, 기본 스택 크기)에서는 12만 개까지 되고 13만 개부터 넘쳤다. 한계는 엔진과 스택 크기 설정에 따라 다르다. 큰 배열은 반복문이나 `reduce`로 최댓값을 구한다.
+
+### 정렬 비교자에서 실제 거리를 구한다
+
+`Math.sqrt`나 `Math.hypot`으로 비교해도 답은 맞는다. 하지만 비교마다 제곱근을 구해 두 배 넘게 느려지고, 실수 비교라 아주 가까운 두 거리가 같게 나오거나 뒤집힐 여지가 생긴다. 정수 좌표라면 거리 제곱이 정확하고 빠르다.
+
+### 결과가 거리순이라고 믿는다
+
+크기 k 힙에서 꺼낸 배열은 힙 순서이고, 퀵셀렉트 결과는 섞여 있다. 문제는 순서를 요구하지 않지만, 호출한 쪽이 "가장 가까운 것이 맨 앞"이라고 가정하면 틀린다. 순서가 필요하면 k개만 따로 정렬한다. O(k log k)다.
+
+## 직접 풀어 보기
+
+빈 함수에 풀이를 채우고 실행해 본다. 답의 순서는 상관없어서 `unordered`로 비교한다. 풀이 보기는 크기 k 최대 힙이다.
+
+<CodePlayground
+  caption="K Closest Points to Origin"
+  functionName="kClosest"
+  initialCode={`function kClosest(points, k) {
+  // 원점에서 가까운 점 k개를 돌려준다. 순서는 상관없다
+  return [];
+}`}
+  solution={`function kClosest(points, k) {
+  const heap = []; // [거리², 점]을 담는 최대 힙
+  const up = (i) => {
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p][0] >= heap[i][0]) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  };
+  const down = (i) => {
+    for (;;) {
+      const l = 2 * i + 1, r = l + 1;
+      let m = i;
+      if (l < heap.length && heap[l][0] > heap[m][0]) m = l;
+      if (r < heap.length && heap[r][0] > heap[m][0]) m = r;
+      if (m === i) return;
+      [heap[m], heap[i]] = [heap[i], heap[m]];
+      i = m;
+    }
+  };
+  for (const p of points) {
+    const d = p[0] * p[0] + p[1] * p[1];
+    if (heap.length < k) {
+      heap.push([d, p]);
+      up(heap.length - 1);
+    } else if (d < heap[0][0]) {
+      heap[0] = [d, p]; // 가장 먼 점 자리에 새 점을 넣고 내린다
+      down(0);
+    }
+  }
+  return heap.map(([, p]) => p);
+}`}
+  tests={[
+    { args: [[[1, 3], [-2, 2], [3, -3], [-1, -1], [4, 1], [-3, -4], [2, 0]], 3], expected: [[-1, -1], [2, 0], [-2, 2]], compare: "unordered", label: "기본 예시" },
+    { args: [[[5, 5]], 1], expected: [[5, 5]], compare: "unordered", label: "점 하나" },
+    { args: [[[1, 0], [0, 1], [3, 3]], 2], expected: [[1, 0], [0, 1]], compare: "unordered", label: "거리가 같은 두 점" },
+    { args: [[[0, 0], [9, 9], [-9, -9]], 1], expected: [[0, 0]], compare: "unordered", label: "원점 위의 점" },
+    { args: [[[2, 2], [-1, 4], [3, -5]], 3], expected: [[2, 2], [-1, 4], [3, -5]], compare: "unordered", label: "k = n" },
+    { args: [[[-10000, -10000], [10000, 9999], [1, 1]], 2], expected: [[10000, 9999], [1, 1]], compare: "unordered", label: "큰 좌표" },
+    { args: [[[3, 4], [0, 6], [1, 1], [-2, 1]], 2], expected: [[1, 1], [-2, 1]], compare: "unordered", label: "먼 점이 먼저 들어온다" },
+  ]}
+/>
+
+마지막 테스트는 먼 점 두 개가 먼저 힙을 채운 뒤 가까운 점 두 개가 차례로 밀어내는 입력이다. 처음 k개를 그대로 답으로 내는 실수를 잡는다.
+
+## 면접관이 조건을 바꾸면
+
+### 원점이 아니라 내 위치에서 가까운 점이면
+
+기준점 (px, py)를 빼서 (x - px)² + (y - py)²로 비교하면 된다. 풀이는 그대로다. 맨해튼 거리로 같은 일을 하는 문제가 LeetCode 1779번 Find Nearest Point That Has the Same X or Y Coordinate다.
+
+### 점이 계속 들어오면
+
+크기 k 최대 힙을 계속 들고 있는다. 새 점이 맨 위보다 가까우면 바꾼다. 한 점에 O(log k)다. 값으로 같은 일을 하는 문제가 [Kth Largest Element in a Stream](/posts/leetcode-kth-largest-element-in-a-stream)이다.
+
+### 점은 그대로인데 질문이 수없이 들어오면
+
+질문마다 기준점과 k가 다르면 매번 n개를 훑는 O(n)도 비싸다. 이럴 때는 점을 미리 공간 색인에 넣어 둔다. 평면을 4등분해 나가는 [쿼드트리](/posts/quadtree), 좌표를 문자열 접두어로 바꾸는 [지오해시](/posts/geohash), 축을 번갈아 자르는 k-d 트리 같은 것이다. 주변 칸만 뒤져 후보를 줄인 뒤 그 안에서 크기 k 힙을 쓴다. "주변 맛집 찾기"를 설계하는 [근처 장소 찾기 설계 글](/posts/sd-proximity-service)이 이 구조를 쓴다. 2차원이 아니라 수백 차원의 임베딩에서 가까운 것을 찾는 일은 [벡터 DB 글](/posts/vector-db)의 근사 최근접 탐색으로 넘어간다.
+
+### 지구 위의 위도와 경도라면
+
+평면 거리가 아니다. 위도가 높아질수록 경도 1도의 실제 거리가 짧아지기 때문이다. 짧은 거리에서는 경도 차이에 cos(위도)를 곱해 평면처럼 근사하고, 정확히는 하버사인 공식으로 구 위의 거리를 구한다. 순서만 비교하면 되는 점은 같다.
+
+### 가까운 순서로 정렬해서 달라면
+
+크기 k 힙에서 k개를 꺼내 뒤집거나, 퀵셀렉트 뒤에 앞의 k개만 정렬한다. O(n + k log k)다. 처음부터 최소 힙에 모두 넣고 k번 꺼내는 풀이는 이미 정렬된 순서로 나온다.
+
+## 면접에서 나올 만한 질문
+
+### 거리를 구할 때 제곱근을 계산하나요?
+
+계산하지 않는다. 제곱근은 0 이상에서 커지는 함수라 거리 제곱의 순서와 거리의 순서가 같다. 정수 좌표면 거리 제곱이 정확한 정수라 실수 오차도 없고, 재 보면 정렬 비교자에서 `Math.hypot`을 쓴 것보다 두 배 넘게 빠르다.
+
+### 가까운 점을 남기는데 왜 최대 힙을 쓰나요?
+
+힙 크기를 k로 유지하려면 넘칠 때마다 "버릴 점"을 바로 알아야 하는데, 가까운 k개를 남길 때 버릴 점은 그중 가장 먼 점이다. 최대 힙 맨 위가 그 점이라 O(1)에 확인하고 O(log k)에 바꾼다. 최소 힙으로 크기를 유지하면 가장 가까운 점부터 버리게 된다.
+
+### 힙 풀이와 퀵셀렉트 중 무엇을 고르나요?
+
+k가 작거나 점이 흘러 들어오면 크기 k 힙이다. O(n log k)이고 메모리는 O(k)다. 점이 모두 메모리에 있고 k가 크면 퀵셀렉트가 평균 O(n)이라 빠르다. 실제로 100만 개에서 k = 10이면 힙이 10ms, k = 50만이면 퀵셀렉트가 406ms로 힙의 1765ms보다 훨씬 빨랐다.
+
+### 퀵셀렉트가 끝나면 왜 앞의 k개가 답인가요?
+
+분할할 때마다 남은 범위 앞쪽에는 더 가까운 점만, 뒤쪽에는 더 먼 점만 쌓이기 때문이다. 경계 인덱스 k - 1이 기준 거리와 같은 무리에 들어오면 그 앞은 모두 기준 이하, 뒤는 모두 기준 이상이다. 그래서 0부터 k - 1까지가 가장 가까운 k개이고, 그 안의 순서만 섞여 있다.
+
+### 좌표가 더 커지면 무엇이 문제인가요?
+
+거리 제곱이 32비트 정수를 넘는다. 좌표가 5만이면 5만² × 2 = 50억이라 Java `int`로 계산하면 705032704 같은 엉뚱한 값이 나온다. 곱하기 전에 `long`으로 바꿔야 한다. JavaScript는 2^53까지 정확하고 Python은 제한이 없다.
+
+### 같은 점 집합에 질문이 많이 들어오면요?
+
+질문마다 n개를 훑지 않도록 점을 쿼드트리, k-d 트리, 지오해시 같은 공간 색인에 미리 넣는다. 기준점 주변 칸만 뒤져 후보를 줄이고, 후보가 k개보다 적으면 범위를 넓힌다. 후보 안에서는 똑같이 크기 k 힙으로 고른다.
+
+### 거리 이분 탐색 풀이는 언제 쓰나요?
+
+거리 제곱이 정수이고 범위가 정해져 있을 때 쓸 수 있다. 원 안의 점 개수가 반지름에 따라 줄지 않으니, 개수가 k 이상인 가장 작은 반지름을 이분 탐색한다. O(n log D)로 최악이 없고 입력을 섞지 않는다. 경계 거리와 같은 점은 모자란 만큼만 담아야 개수가 맞는다.

@@ -1,0 +1,499 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-redundant-connection");
+
+<EasyIntro>
+  마을 여섯 곳이 길로 이어져 있다. 원래는 어느 마을에서 어느 마을로 가는 길이 딱 하나씩만 있도록 길을 깔았는데, 누군가 길을 하나 더 깔았다. 그 바람에 마을 몇 곳을 빙 둘러 한 바퀴 돌 수 있는 고리가 생겼다. 길 하나를 없애서 다시 원래처럼 만들고 싶다. 길을 깐 순서대로 하나씩 다시 깔아 본다고 생각하면 쉽다. 길을 깔 때마다 양쪽 마을이 이미 다른 길로 이어져 있는지 확인한다. 이미 이어져 있는데 또 깔면 고리가 생기니, 그 길이 바로 없애야 할 길이다. 마을마다 대장 마을을 정해 두고 같은 대장 아래에 있는지만 보면, 이 확인을 아주 빨리 할 수 있다.
+</EasyIntro>
+
+나무(트리) 모양의 네트워크에 선을 하나 더 꽂으면 고리가 생긴다. 고리가 생긴 네트워크에서 어느 선을 뽑아야 다시 나무가 되는지 찾는 문제가 [LeetCode 684. Redundant Connection](https://leetcode.com/problems/redundant-connection/)이다. 정답 풀이는 유니온 파인드 열 줄이고, 그 원리와 기본 코드는 [유니온 파인드 글](/posts/ds-union-find)의 "고리를 만드는 첫 간선"에서 이미 다뤘다.
+
+이 글은 그다음 질문들을 본다. 유니온 파인드가 처음 만난 간선이 왜 "가장 나중에 나온 답"과 같은가. 유니온 파인드 없이 푼다면 무엇이 있고, 각각 어떤 입력에서 느려지나. 고리 위의 정점을 직접 찾아내는 DFS와 잎을 깎아 내는 방법은 어떻게 동작하나. 풀이는 간선을 하나씩 빼 보기, 이을 때마다 길 찾기, 유니온 파인드, 고리 찾기 DFS, 잎 깎기까지 다섯 가지다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 나무에 더해진 간선 하나
+
+정점은 `1`부터 `n`까지다. 원래 정점 n개짜리 나무(모든 정점이 이어져 있고 고리가 없는 그래프, 간선이 정확히 n - 1개)가 있었고, 여기에 간선 하나가 더해졌다. 그 결과 간선 n개가 목록 `edges`로 주어진다. 지우면 다시 나무가 되는 간선을 돌려준다. 그런 간선이 여럿이면 목록에서 가장 나중에 나온 것을 돌려준다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- n은 1,000 이하다. O(n²)은 100만 번이라 통과하고, O(n log n)이나 거의 선형이면 넉넉하다.
+- 간선은 무방향이고, 같은 간선이 두 번 나오지 않으며, 자기 자신으로 가는 간선도 없다. 그래서 고리는 정점이 셋 이상이다.
+- 그래프는 하나로 이어져 있다. 나무에 간선 하나를 더한 것이라 고리는 정확히 하나다.
+
+마지막 조건이 생각보다 중요하다. 고리가 하나뿐이니 "지우면 나무가 되는 간선"은 정확히 그 고리 위의 간선들이다. 고리 바깥의 간선을 지우면 그래프가 둘로 끊어지고, 고리 위의 간선을 지우면 고리만 풀린다. 그래서 문제는 "고리 위의 간선 중 목록에서 가장 나중 것"을 묻는다.
+
+이 글의 예시는 정점 여섯 개다.
+
+```text
+edges = [[1,2], [2,3], [1,4], [4,5], [3,5], [5,6]]
+
+    1 ─── 2
+    │      \
+    4       3
+     \     /
+      5 ──┘
+      │
+      6
+```
+
+고리는 1 - 2 - 3 - 5 - 4 - 1이다. 고리 위의 간선은 `[1,2]`, `[2,3]`, `[1,4]`, `[4,5]`, `[3,5]` 다섯 개이고, 어느 것을 지워도 나무가 된다. `[5,6]`은 지우면 6이 떨어져 나가니 답이 아니다. 고리 위 간선 중 목록에서 가장 나중에 나온 `[3,5]`가 답이다.
+
+아래 그림에서 다음을 누르면 간선을 목록 순서대로 이어 보며 고리가 언제 닫히는지 본다.
+
+<VectorSpace
+  caption="정점 여섯 개, 간선 여섯 개. 다섯 번째 간선 [3,5]가 고리를 닫는다"
+  width={400}
+  height={260}
+  groups={[{ id: "cycle", label: "고리 위 정점" }, { id: "tree", label: "고리 밖 정점" }]}
+  points={[
+    { id: "v1", label: "1", x: 90, y: 60, group: "cycle" },
+    { id: "v2", label: "2", x: 220, y: 40, group: "cycle" },
+    { id: "v3", label: "3", x: 300, y: 120, group: "cycle" },
+    { id: "v4", label: "4", x: 90, y: 170, group: "cycle" },
+    { id: "v5", label: "5", x: 220, y: 200, group: "cycle" },
+    { id: "v6", label: "6", x: 340, y: 230, group: "tree", labelAt: "left" },
+  ]}
+  edges={[["v1", "v2"], ["v2", "v3"], ["v1", "v4"], ["v4", "v5"], ["v3", "v5"], ["v5", "v6"]]}
+  steps={[
+    { caption: "간선 여섯 개를 모두 그린 그래프. 정점 여섯 개에 간선이 여섯 개라 고리가 하나 있다.", showEdges: true },
+    { caption: "앞의 네 간선 [1,2], [2,3], [1,4], [4,5]만 이으면 3 - 2 - 1 - 4 - 5 한 줄이다. 아직 고리가 없다.", showEdges: true, path: ["v3", "v2", "v1", "v4", "v5"] },
+    { caption: "다섯 번째 [3,5]는 이미 이어진 3과 5를 또 잇는다. 이 간선이 고리를 닫는다.", showEdges: true, path: ["v3", "v2", "v1", "v4", "v5", "v3"] },
+    { caption: "[5,6]은 6을 새로 붙일 뿐이다. 지우면 6이 떨어져 나가니 답이 될 수 없다.", showEdges: true, path: ["v5", "v6"] },
+    { caption: "고리 위 간선 다섯 개 중 목록에서 가장 나중에 나온 [3,5]가 답이다.", showEdges: true, path: ["v3", "v5"] },
+  ]}
+/>
+
+## 간선을 하나씩 빼고 나무인지 확인한다
+
+문제 문장을 그대로 따르는 풀이부터 보자. "지우면 나무가 되는 간선 중 가장 나중 것"이니, 목록의 뒤에서부터 간선을 하나씩 빼 보고 남은 그래프가 나무인지 확인한다. 처음으로 나무가 되는 간선이 답이다.
+
+남은 간선은 n - 1개이니, 나무인지는 "모든 정점이 이어져 있는가"만 보면 된다. 정점 n개, 간선 n - 1개인 그래프는 이어져 있으면 고리가 없다. 정점 1에서 BFS를 해서 n개를 모두 만나는지 센다.
+
+```js
+function findRedundantConnection(edges) {
+  const n = edges.length;
+  for (let skip = n - 1; skip >= 0; skip--) {      // 뒤에서부터 하나씩 빼 본다
+    const graph = Array.from({ length: n + 1 }, () => []);
+    edges.forEach(([a, b], i) => {
+      if (i !== skip) { graph[a].push(b); graph[b].push(a); }
+    });
+    const seen = new Uint8Array(n + 1);
+    seen[1] = 1;
+    const queue = [1];
+    for (let head = 0; head < queue.length; head++) {
+      for (const v of graph[queue[head]]) {
+        if (!seen[v]) { seen[v] = 1; queue.push(v); }
+      }
+    }
+    if (queue.length === n) return edges[skip];    // 다 이어졌다 = 나무다
+  }
+  return [];
+}
+```
+
+예시에서는 마지막 `[5,6]`을 빼면 6이 떨어져서 실패하고, 그다음 `[3,5]`를 빼면 여섯 정점이 모두 이어져서 답이 된다. BFS 두 번이다.
+
+시간은 간선을 뺄 때마다 그래프를 새로 만들고 BFS를 하니 O(n) × O(n) = O(n²)이다. 가장 나쁜 건 고리가 목록 맨 앞에 있고 뒤로 긴 꼬리가 붙은 입력이다. `[1,2]`, `[2,3]`, `[1,3]` 삼각형 뒤에 3 - 4 - 5 - ... - 1000 한 줄이 이어지면, 꼬리 간선 997개를 하나씩 빼 볼 때마다 그래프가 끊어진다. 정점 방문이 500,497번, 120.96ms가 걸렸다. n이 1,000이라 통과는 하지만, 매번 그래프를 처음부터 다시 만드는 게 낭비다.
+
+## 이을 때마다 이미 길이 있는지 찾는다
+
+순서를 뒤집어 보자. 간선을 목록 순서대로 하나씩 그래프에 넣는다. 넣기 전에, 두 끝 a와 b 사이에 이미 길이 있는지 DFS로 찾는다. 길이 있으면 이 간선은 그 길과 함께 고리를 만든다. 처음으로 그런 간선이 답이다.
+
+```js
+function findRedundantConnection(edges) {
+  const n = edges.length;
+  const graph = Array.from({ length: n + 1 }, () => []);
+  for (const [a, b] of edges) {
+    // 지금까지 넣은 간선만으로 a에서 b에 갈 수 있는가
+    const seen = new Uint8Array(n + 1);
+    seen[a] = 1;
+    const stack = [a];
+    let reachable = false;
+    while (stack.length > 0) {
+      const u = stack.pop();
+      if (u === b) { reachable = true; break; }
+      for (const v of graph[u]) {
+        if (!seen[v]) { seen[v] = 1; stack.push(v); }
+      }
+    }
+    if (reachable) return [a, b];                 // 이미 이어져 있다: 이 간선이 고리를 닫는다
+    graph[a].push(b);
+    graph[b].push(a);
+  }
+  return [];
+}
+```
+
+이 풀이는 "가장 나중에 나온 답"을 찾지 않고 "처음으로 고리를 닫는 간선"을 찾는다. 그런데 둘은 늘 같은 간선이다. 고리를 닫는 순간을 생각해 보자. 그 간선 e를 넣기 전에는 고리가 없었고, e가 고리를 처음 만들었다. 그 고리 위의 다른 간선들은 모두 e보다 먼저 넣은 간선이다. 그래프에 고리는 하나뿐이니, 고리 위의 간선 중 목록에서 가장 나중 것이 e다. 문제의 "가장 나중"이라는 말은 이 풀이 방식을 염두에 두고 붙인 조건처럼 보인다.
+
+시간은 간선마다 지금까지의 그래프를 DFS하니 최악 O(n²)이다. 이번에는 앞 풀이와 반대로, 긴 줄 1 - 2 - ... - 1000을 먼저 깔고 마지막에 `[1, 1000]`으로 닫는 입력이 가장 나쁘다. 간선마다 지금까지 깐 줄을 끝까지 훑어서 방문이 500,500번, 6.16ms였다. 앞 풀이가 0.34ms에 끝낸 입력이다. 두 O(n²) 풀이는 서로 다른 입력에서 무너진다.
+
+낭비는 "a와 b가 이미 이어져 있나"를 매번 그래프를 걸어서 확인하는 데 있다. 이 질문에만 빠르게 답하는 자료구조가 있다.
+
+## 같은 대표 아래 있으면 그 간선이 범인이다
+
+유니온 파인드는 정점마다 "내 대표가 누구인지"를 들고 있다가, `find`로 대표를 찾고 `union`으로 두 묶음을 합친다. 앞 풀이의 "a에서 b로 길이 있나"는 "a와 b의 대표가 같은가"로 바뀐다. 이어져 있는 정점끼리는 같은 묶음이기 때문이다.
+
+```js
+function findRedundantConnection(edges) {
+  const n = edges.length;
+  const parent = Array.from({ length: n + 1 }, (_, i) => i);   // 처음엔 자기가 대표
+  const size = new Array(n + 1).fill(1);
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];   // 경로 절반 압축: 한 칸씩 건너뛰며 올라간다
+      x = parent[x];
+    }
+    return x;
+  };
+  for (const [a, b] of edges) {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) return [a, b];      // 이미 같은 묶음: 고리를 닫는 간선
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;                   // 작은 묶음을 큰 묶음 밑에 붙인다
+    size[ra] += size[rb];
+  }
+  return [];
+}
+```
+
+아래 그림은 예시를 이 풀이로 따라간 것이다. 칸은 목록의 간선이고, 아래 칸은 지금 묶음들이다.
+
+<AlgoTrace
+  caption="간선을 순서대로 union한다. 양끝의 대표가 같은 첫 간선이 답이다"
+  memoryLabel="묶음"
+  cells={["1-2", "2-3", "1-4", "4-5", "3-5", "5-6"]}
+  steps={[
+    { memory: ["1", "2", "3", "4", "5", "6"], caption: "처음엔 정점마다 혼자 묶음이다." },
+    { pointer: 0, memory: ["12", "3", "4", "5", "6"], caption: "1과 2의 대표가 다르다. 합친다." },
+    { pointer: 1, memory: ["123", "4", "5", "6"], caption: "2-3도 다른 묶음이라 합친다." },
+    { pointer: 2, memory: ["1234", "5", "6"], caption: "1-4로 4가 들어온다." },
+    { pointer: 3, memory: ["12345", "6"], caption: "4-5로 5까지 한 묶음이다. 아직 고리는 없다." },
+    { pointer: 4, found: [4], memory: ["12345", "6"], caption: "3과 5의 대표가 같다. 이미 이어진 둘을 또 잇는 간선이다. 답은 [3,5]." },
+  ]}
+/>
+
+마지막 간선 `[5,6]`은 보지도 않고 끝난다. 앞에서 증명한 대로 처음 고리를 닫은 간선이 곧 답이라서다. 간선 하나에 `find` 두 번이고, 경로 압축과 크기 합치기를 함께 쓰면 `find`가 O(α(n))이라 사실상 상수다. 전체 시간 O(n · α(n)), 공간 O(n)이다. 앞의 두 나쁜 입력에서 모두 0.3~0.5ms였다.
+
+`find`를 재귀 한 줄 `parent[x] === x ? x : (parent[x] = find(parent[x]))`로 쓰는 사람이 많다. 크기 합치기를 함께 쓰면 나무 높이가 log₂ n으로 묶여서 재귀도 안전하다. 크기 합치기를 빼먹고 재귀 `find`를 쓰면 한 줄로 늘어진 나무에서 깊이가 n까지 간다. 이 문제의 n은 1,000이라 터지지 않지만, Python 기본 재귀 한도가 1,000이라 아슬아슬하다. 반복문 버전이 마음 편하다.
+
+### Python과 Java로 쓰면
+
+Python은 리스트 두 개로 `parent`와 `size`를 들고, `find`를 안쪽 함수로 둔다. 반복문이라 재귀 한도와 상관없다.
+
+```python
+from typing import List
+
+
+def find_redundant_connection(edges: List[List[int]]) -> List[int]:
+    n = len(edges)
+    parent = list(range(n + 1))
+    size = [1] * (n + 1)
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # 경로 절반 압축
+            x = parent[x]
+        return x
+
+    for a, b in edges:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return [a, b]  # 이미 이어진 두 정점을 또 잇는다: 고리를 닫는 간선
+        if size[ra] < size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra  # 작은 묶음을 큰 묶음 밑에
+        size[ra] += size[rb]
+    return []
+
+
+print(find_redundant_connection([[1, 2], [2, 3], [1, 4], [4, 5], [3, 5], [5, 6]]))
+print(find_redundant_connection([[1, 2], [1, 3], [2, 3]]))
+```
+
+```text
+[3, 5]
+[2, 3]
+```
+
+Java는 `parent`와 `size`를 필드로 두고 `find`를 메서드로 뺀다. 답으로 입력 배열의 간선 `e`를 그대로 돌려줘도 된다. 새 배열을 만들 필요가 없다.
+
+```java
+class Solution {
+    private int[] parent, size;
+
+    private int find(int x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];   // 경로 절반 압축
+            x = parent[x];
+        }
+        return x;
+    }
+
+    public int[] findRedundantConnection(int[][] edges) {
+        int n = edges.length;
+        parent = new int[n + 1];
+        size = new int[n + 1];
+        for (int i = 0; i <= n; i++) { parent[i] = i; size[i] = 1; }
+        for (int[] e : edges) {
+            int ra = find(e[0]), rb = find(e[1]);
+            if (ra == rb) return e;          // 고리를 닫는 첫 간선
+            if (size[ra] < size[rb]) { int t = ra; ra = rb; rb = t; }
+            parent[rb] = ra;
+            size[ra] += size[rb];
+        }
+        return new int[0];
+    }
+}
+```
+
+```text
+[3, 5]
+[2, 3]
+```
+
+정점 번호가 1부터라서 세 언어 모두 배열을 `n + 1` 칸으로 잡았다. `n` 칸으로 잡으면 정점 `n`에서 Python은 `IndexError`, Java는 `ArrayIndexOutOfBoundsException`이 난다. JavaScript는 뒤에서 보듯 우연히 통과한다.
+
+## 고리 위의 정점을 DFS로 직접 찾는다
+
+유니온 파인드는 "고리가 닫히는 순간"을 잡지만, 고리가 어떤 정점들로 이루어졌는지는 알려 주지 않는다. 면접관이 "고리 전체를 보여 달라"고 하면 다른 방법이 필요하다.
+
+그래프 전체를 만든 뒤 DFS를 한 번 한다. 무방향 그래프의 DFS에서 "지금 길 위에 있는 정점"을 다시 만나면 고리를 찾은 것이다. 단, 방금 지나온 부모 정점으로 돌아가는 건 고리가 아니라 같은 간선을 거꾸로 본 것이니 건너뛴다. 고리를 찾으면 부모를 따라 거슬러 올라가며 고리 위 정점을 표시한다. 마지막으로 목록을 뒤에서부터 보며 양끝이 모두 고리 위에 있는 첫 간선을 돌려준다.
+
+```js
+function findRedundantConnection(edges) {
+  const n = edges.length;
+  const graph = Array.from({ length: n + 1 }, () => []);
+  for (const [a, b] of edges) { graph[a].push(b); graph[b].push(a); }
+  const parent = new Int32Array(n + 1).fill(-1);
+  const state = new Uint8Array(n + 1);         // 0 아직, 1 지금 길 위, 2 끝남
+  const next = new Int32Array(n + 1);          // 정점마다 다음에 볼 이웃의 위치
+  const onCycle = new Uint8Array(n + 1);
+  const stack = [1];
+  parent[1] = 0;
+  state[1] = 1;
+  let found = false;
+  while (stack.length > 0 && !found) {
+    const u = stack[stack.length - 1];
+    if (next[u] < graph[u].length) {
+      const v = graph[u][next[u]++];
+      if (v === parent[u]) continue;           // 지나온 간선을 거꾸로 본 것
+      if (state[v] === 1) {                    // 길 위의 정점을 다시 만났다: 고리
+        onCycle[v] = 1;
+        for (let x = u; x !== v; x = parent[x]) onCycle[x] = 1;   // u에서 v까지 거슬러 오른다
+        found = true;
+      } else if (state[v] === 0) {
+        state[v] = 1;
+        parent[v] = u;
+        stack.push(v);
+      }
+    } else {
+      state[u] = 2;                            // 이웃을 다 봤다
+      stack.pop();
+    }
+  }
+  for (let i = n - 1; i >= 0; i--) {           // 뒤에서부터 양끝이 고리 위인 간선
+    const [a, b] = edges[i];
+    if (onCycle[a] && onCycle[b]) return edges[i];
+  }
+  return [];
+}
+```
+
+예시에서 DFS는 1 → 2 → 3 → 5로 내려간다. 5의 이웃 중 4로 가고, 4의 이웃 1이 길 위에 있으니 고리다. 4에서 부모를 따라 5, 3, 2를 거쳐 1까지 표시하면 고리 위 정점은 1, 2, 3, 4, 5다. 목록을 뒤에서 보면 `[5,6]`은 6이 고리 밖이고, `[3,5]`는 양끝이 고리 위라 답이다.
+
+여기서 하나를 따져야 한다. "양끝이 고리 위에 있는 간선"이 꼭 "고리 위의 간선"일까. 고리 위의 두 정점을 잇는데 고리에 속하지 않는 간선이 있다면, 그 간선과 고리의 한쪽 호가 또 하나의 고리를 만든다. 고리는 하나뿐이니 그런 간선은 없다. 그래서 이 검사가 맞다. 고리가 둘 이상일 수 있는 일반 그래프라면 이 검사는 틀린다.
+
+재귀가 아니라 스택으로 쓴 건 고리를 찾는 순간 깔끔하게 멈추기 위해서다. 시간 O(n), 공간 O(n)이다. 유니온 파인드처럼 α가 붙지 않는 진짜 선형이지만, 그래프를 만들고 DFS를 하는 상수가 커서 실제로는 유니온 파인드보다 조금 느렸다. 대신 고리 전체를 얻는다.
+
+## 잎을 깎아 내면 고리만 남는다
+
+DFS의 부모 추적이 번거롭다면 더 단순한 방법이 있다. 연결된 정점이 하나뿐인 정점, 즉 잎을 그래프에서 지운다. 잎을 지우면 그 이웃의 차수(이어진 간선 수)가 하나 줄고, 그 이웃이 새 잎이 될 수 있다. 이걸 잎이 없을 때까지 반복하면 고리 위의 정점만 남는다. 고리 위의 정점은 고리 안에서만 이웃이 둘이라 차수가 2 밑으로 떨어지지 않기 때문이다.
+
+```js
+function findRedundantConnection(edges) {
+  const n = edges.length;
+  const graph = Array.from({ length: n + 1 }, () => []);
+  const deg = new Int32Array(n + 1);
+  for (const [a, b] of edges) {
+    graph[a].push(b); graph[b].push(a);
+    deg[a]++; deg[b]++;
+  }
+  const queue = [];
+  for (let v = 1; v <= n; v++) if (deg[v] === 1) queue.push(v);   // 처음 잎들
+  const removed = new Uint8Array(n + 1);
+  for (let head = 0; head < queue.length; head++) {
+    const u = queue[head];
+    removed[u] = 1;                                  // 잎을 지운다
+    for (const v of graph[u]) {
+      if (!removed[v] && --deg[v] === 1) queue.push(v);   // 이웃이 새 잎이 됐다
+    }
+  }
+  for (let i = n - 1; i >= 0; i--) {                 // 남은 정점 = 고리
+    const [a, b] = edges[i];
+    if (!removed[a] && !removed[b]) return edges[i];
+  }
+  return [];
+}
+```
+
+예시에서 처음 잎은 6 하나다. 6을 지우면 5의 차수가 3에서 2가 되어 잎이 아니다. 큐가 비고 1, 2, 3, 4, 5가 남는다. 고리 위 정점이 정확히 남았다.
+
+이 코드는 [Course Schedule](/posts/leetcode-course-schedule)의 칸의 알고리즘과 생김새가 같다. 방향 그래프에서는 진입 차수 0인 정점을 지웠고, 무방향 그래프에서는 차수 1인 정점을 지운다. 방향 그래프에서 끝까지 남은 정점이 고리에 걸린 정점이었듯이, 여기서도 남은 정점이 고리다. 시간 O(n), 공간 O(n)이고, 재귀도 부모 추적도 없다. 2만 정점의 긴 줄 입력에서는 다섯 풀이 중 가장 빨랐다(6.74ms).
+
+같은 "잎 깎기"는 나무의 중심을 찾는 LeetCode 310. Minimum Height Trees에서도 쓴다. 바깥 잎부터 한 겹씩 깎아 마지막에 남는 한두 정점이 중심이다.
+
+## 두 가지 나쁜 입력으로 재 보면
+
+n = 1,000에서, 앞에서 본 두 입력으로 세 번씩 돌려 가장 빠른 값을 적었다. "삼각형 먼저"는 고리가 목록 맨 앞에 있고 긴 꼬리가 뒤에 붙은 입력, "줄 먼저"는 긴 줄을 먼저 깔고 마지막 간선이 고리를 닫는 입력이다. Node.js 22다.
+
+```text
+                     삼각형 먼저            줄 먼저
+하나씩 빼 보기        120.96ms (50만 방문)    0.34ms
+이을 때마다 길 찾기     0.35ms                6.16ms (50만 방문)
+유니온 파인드           0.30ms                0.53ms
+고리 찾기 DFS           0.71ms                0.81ms
+잎 깎기                 0.92ms                0.50ms
+```
+
+두 O(n²) 풀이는 서로 반대 입력에서 무너진다. 빼 보기는 답이 목록 앞쪽에 있을 때, 길 찾기는 고리가 늦게 닫힐 때 느리다. 나머지 셋은 입력과 상관없이 1ms 안이다. 이 결과를 검증하려고 정점 3~12개짜리 무작위 "나무 + 간선 하나" 5,000개를 만들어 다섯 풀이를 돌렸는데, 답이 모두 같았다.
+
+## 고리를 닫는 간선 찾기 다섯 가지
+
+정점 수와 간선 수가 모두 n이다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 뒤에서부터 하나씩 빼 보기 | O(n²) | O(n) | 문제를 그대로 옮긴 첫 답. 답이 앞쪽이면 느리다 |
+| 이을 때마다 길 찾기 | O(n²) | O(n) | 유니온 파인드를 모를 때. 고리가 늦게 닫히면 느리다 |
+| 유니온 파인드 | O(n · α(n)) | O(n) | 기본 답. 간선이 하나씩 들어오는 스트림에도 맞다 |
+| 고리 찾기 DFS | O(n) | O(n) | 고리를 이루는 정점과 순서까지 필요할 때 |
+| 잎 깎기 | O(n) | O(n) | 고리 위 정점 집합만 필요할 때. 코드가 단순하다 |
+
+아래에서 직접 짜 볼 수 있다. [유니온 파인드 글](/posts/ds-union-find)의 연습 칸과 겹치지 않게 테스트를 새로 골랐다.
+
+<CodePlayground
+  caption="Redundant Connection: 지우면 나무가 되는 간선"
+  functionName="findRedundantConnection"
+  initialCode={`function findRedundantConnection(edges) {
+  // 정점은 1..n (n = edges.length), 간선은 무방향
+  // 지우면 나무가 되는 간선 중 목록에서 가장 나중 것을 돌려준다
+  return [];
+}`}
+  solution={`function findRedundantConnection(edges) {
+  const n = edges.length;
+  const parent = Array.from({ length: n + 1 }, (_, i) => i);
+  const size = new Array(n + 1).fill(1);
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];
+      x = parent[x];
+    }
+    return x;
+  };
+  for (const [a, b] of edges) {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) return [a, b];
+    if (size[ra] < size[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;
+    size[ra] += size[rb];
+  }
+  return [];
+}`}
+  tests={[
+    { label: "글의 예시", args: [[[1, 2], [2, 3], [1, 4], [4, 5], [3, 5], [5, 6]]], expected: [3, 5] },
+    { label: "삼각형 하나", args: [[[1, 2], [1, 3], [2, 3]]], expected: [2, 3] },
+    { label: "고리가 앞, 꼬리가 뒤", args: [[[1, 2], [2, 3], [3, 1], [3, 4], [4, 5]]], expected: [3, 1] },
+    { label: "정점 번호가 뒤섞임", args: [[[2, 3], [5, 2], [1, 5], [4, 2], [4, 1]]], expected: [4, 1] },
+    { label: "꼬리부터 깔린다", args: [[[1, 5], [3, 4], [3, 5], [4, 5], [2, 4]]], expected: [4, 5] },
+    { label: "큰 바퀴의 마지막 간선", args: [[[1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [1, 6]]], expected: [1, 6] },
+  ]}
+/>
+
+## 0번 정점, 같은 대표, 고리 밖 간선
+
+가장 흔한 실수는 정점 번호가 1부터라는 걸 잊는 것이다.
+
+```js
+const parent = Array.from({ length: n }, (_, i) => i);   // 0..n-1만 있다
+// 정점 n에서 parent[n]은 undefined다
+```
+
+JavaScript에서는 이 코드가 오히려 통과한다. 직접 돌려 보니 글의 예시와 테스트 여섯 개에서 답이 모두 맞았다. `find(n)`이 `undefined`를 돌려주고, `parent[undefined] = rb`가 배열에 `"undefined"`라는 속성을 하나 만들면서, `undefined`가 정점 n의 대표 노릇을 우연히 해 주기 때문이다. 같은 코드를 Python으로 옮기면 `IndexError`, Java로 옮기면 `ArrayIndexOutOfBoundsException`이 난다. 운으로 통과한 코드는 언어를 바꾸거나 배열을 `Int32Array`로 바꾸는 순간 깨진다(`new Int32Array(n)`으로 바꿨더니 삼각형 `[[1,2],[1,3],[2,3]]`에서 빈 배열이 나왔다). 배열은 처음부터 `n + 1` 칸으로 잡는다.
+
+두 번째는 대표가 아니라 정점끼리 비교하거나 정점을 직접 붙이는 것이다.
+
+```js
+if (parent[a] === parent[b]) return [a, b];   // 대표가 아니라 바로 위 부모만 비교했다
+parent[a] = b;                                 // 대표가 아니라 정점 a를 옮겼다
+```
+
+첫 줄은 a와 b가 같은 묶음이어도 바로 위 부모가 다르면 놓친다. 둘째 줄은 a가 원래 속한 묶음에서 a만 떼어 내 b 쪽으로 옮기는 셈이라, a 밑에 있던 정점들의 연결 정보가 깨진다. 늘 `find`로 대표를 구한 뒤 대표끼리 비교하고 대표를 붙인다.
+
+세 번째는 고리 찾기 DFS에서 부모를 건너뛰지 않는 것이다. 무방향 그래프에서는 간선 a - b가 a의 이웃 목록과 b의 이웃 목록에 모두 들어 있다. a에서 b로 내려간 뒤 b의 이웃 a를 보면 a는 길 위에 있다. 부모를 건너뛰지 않으면 첫 간선부터 고리로 판정한다. 방향 그래프의 세 가지 색 DFS를 그대로 가져오면 생기는 실수다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 잎 깎기와 DFS 풀이에서 "양끝이 고리 위인 간선"은 목록 뒤에서부터 찾아야 한다. 앞에서부터 찾으면 고리 위의 첫 간선 `[1,2]`를 돌려준다.
+- 답은 간선 `[a, b]`를 입력에 나온 순서 그대로 돌려준다. `[b, a]`로 뒤집으면 채점기가 틀렸다고 본다.
+- 고리 밖 간선을 지워도 간선 수는 n - 1개가 되지만 나무가 아니다. 빼 보기 풀이에서 "간선 수가 n - 1이면 나무"라고만 보면 `[5,6]`을 답으로 낸다. 이어져 있는지를 꼭 본다.
+
+## 다른 모양으로 나오는 고리 문제
+
+### 간선에 방향이 있다면
+
+LeetCode 685. Redundant Connection II(Hard)다. 뿌리가 있는 방향 나무에 간선 하나가 더해진다. 이번에는 두 가지 경우가 생긴다. 더한 간선이 어떤 정점에 두 번째 부모를 만들거나, 뿌리로 들어가는 간선이 되어 방향 고리를 만든다. 부모가 둘인 정점이 있으면 그 두 간선이 후보이고, 나중 후보를 빼고 유니온 파인드로 고리가 남는지 본다. 고리가 남으면 앞 후보가 답이다. 부모가 둘인 정점이 없으면 이 글의 풀이 그대로다.
+
+### 그래프가 나무인지 판별하라면
+
+LeetCode 261. Graph Valid Tree(프리미엄 문제)다. 간선 수가 정확히 n - 1인지 먼저 보고, 유니온 파인드로 간선을 넣다가 같은 대표가 나오면 `false`, 끝까지 넣으면 `true`다. 간선 수가 n - 1이고 고리가 없으면 저절로 모두 이어져 있다.
+
+### 고리가 여럿일 수 있다면
+
+나무에 간선 하나를 더한 게 아니라 아무 그래프라면, 고리를 모두 없애는 데 지울 간선 수는 "간선 수 - (정점 수 - 연결 요소 수)"다. 유니온 파인드에서 같은 대표가 나온 간선의 수를 세면 그 값이다. LeetCode 1319. Number of Operations to Make Network Connected가 이 값을 쓴다. 남는 간선이 연결 요소를 잇는 데 충분한지 본다. 연결 요소를 세는 법은 [Number of Connected Components](/posts/leetcode-number-of-connected-components)에 있다.
+
+### 가장 싼 간선을 지우라면
+
+간선에 비용이 붙고, 고리를 없애면서 남은 비용 합을 가장 크게 하라면 비싼 간선부터 유니온 파인드에 넣는다. 같은 대표가 나오는 간선이 버릴 간선이다. 크루스칼 알고리즘을 거꾸로 돌린 것이고, [최소 신장 트리 글](/posts/minimum-spanning-tree)과 같은 원리다.
+
+### 비슷한 문제
+
+- [Number of Connected Components in an Undirected Graph](/posts/leetcode-number-of-connected-components) (323, 프리미엄 문제): 같은 유니온 파인드로 묶음 수를 센다.
+- [Course Schedule](/posts/leetcode-course-schedule) (207): 방향 그래프의 고리. 유니온 파인드로는 풀 수 없다.
+- [Min Cost to Connect All Points](/posts/leetcode-min-cost-to-connect-all-points) (1584): 크루스칼에서 고리를 만드는 간선을 버린다.
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 격자에서 유니온 파인드로 묶음을 센다.
+- 685\. Redundant Connection II, 261. Graph Valid Tree(프리미엄 문제), 1319. Number of Operations to Make Network Connected, 310. Minimum Height Trees.
+
+## 처음 고리를 닫는 간선이 가장 나중 간선이다
+
+나무에 간선 하나를 더하면 고리가 정확히 하나 생기고, 지우면 나무가 되는 간선은 그 고리 위의 간선들이다. 간선을 목록 순서대로 이으면서 양끝이 이미 이어져 있는 첫 간선을 찾으면, 그게 고리 위에서 가장 나중에 나온 간선이라 바로 답이다. "이미 이어져 있나"는 유니온 파인드의 대표 비교로 거의 상수 시간에 답한다. 고리 전체가 필요하면 DFS로 거슬러 오르거나, 잎을 깎아 남는 정점을 본다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 유니온 파인드를 쓰나요?
+
+간선을 하나씩 이으면서 "두 끝이 이미 이어져 있나"를 계속 물어야 하기 때문이다. 그래프를 걸어서 확인하면 간선마다 O(n)이라 O(n²)이 되는데, 유니온 파인드는 두 끝의 대표가 같은지만 보니 경로 압축과 크기 합치기를 함께 쓰면 거의 상수 시간이다. 전체가 O(n · α(n))이다.
+
+### 처음 고리를 닫는 간선이 왜 "가장 나중에 나온 답"과 같나요?
+
+그 간선을 넣기 전에는 고리가 없었고, 그 간선이 만든 고리의 나머지 간선은 모두 그보다 먼저 넣은 것이다. 그래프에 고리는 하나뿐이니 고리 위 간선 중 목록에서 가장 나중이 바로 그 간선이다. 그래서 끝까지 보지 않고 처음 만난 순간 돌려줘도 된다.
+
+### 고리 밖 간선은 왜 답이 될 수 없나요?
+
+고리 밖 간선을 지우면 그 간선 양쪽이 끊어져 그래프가 둘로 나뉜다. 간선 수는 n - 1이 되지만 이어져 있지 않으니 나무가 아니다. 예시의 `[5,6]`을 지우면 정점 6이 떨어져 나간다.
+
+### 고리를 이루는 정점을 모두 알려 달라면요?
+
+DFS로 지금 길 위의 정점을 다시 만나는 순간 부모를 따라 거슬러 올라가며 표시하거나, 차수 1인 잎을 큐로 계속 지워서 남는 정점을 본다. 둘 다 O(n)이다. 유니온 파인드는 고리가 닫히는 간선은 알려 주지만 고리 위 정점은 알려 주지 않는다.
+
+### 무방향 그래프에서 DFS로 고리를 찾을 때 주의할 점은요?
+
+간선이 양쪽 이웃 목록에 다 들어 있어서, 방금 지나온 부모로 돌아가는 것을 고리로 착각하기 쉽다. 부모 정점은 건너뛰어야 한다. 방향 그래프처럼 색 세 가지가 필요하지는 않고, 방문 표시와 부모만 있으면 된다.
+
+### 간선에 방향이 있으면 어떻게 달라지나요?
+
+685번처럼 어떤 정점의 부모가 둘이 되거나, 방향 고리가 생기는 두 경우를 나눠야 한다. 부모가 둘인 정점이 있으면 그 두 간선이 후보이고, 나중 후보를 빼고도 고리가 남는지 유니온 파인드로 확인해 둘 중 하나를 고른다. 방향을 무시한 유니온 파인드만으로는 어느 간선을 지울지 정하지 못한다.
+
+### 크기 합치기 없이 재귀 find를 쓰면 어떻게 되나요?
+
+나무가 한 줄로 늘어질 수 있어서 `find`의 재귀 깊이가 n까지 간다. 이 문제는 n이 1,000이라 대부분 버티지만 Python 기본 재귀 한도와 거의 같다. 크기 합치기를 쓰면 높이가 log₂ n으로 묶이고, 반복문 `find`로 쓰면 깊이 걱정이 아예 없다.

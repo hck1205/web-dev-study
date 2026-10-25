@@ -2,6 +2,8198 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "leetcode-index-pairs-of-a-string": {
+    "links": [
+      "leetcode-implement-trie",
+      "string-search-algorithms",
+      "leetcode-extra-characters-in-a-string",
+      "leetcode-replace-words",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-merge-intervals",
+      "leetcode-word-search-ii"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-palindrome-pairs": {
+    "links": [
+      "leetcode-implement-trie",
+      "leetcode-longest-palindromic-substring",
+      "leetcode-valid-palindrome",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": [
+      "js-strings-unicode"
+    ]
+  },
+  "leetcode-search-suggestions-system": {
+    "links": [
+      "leetcode-implement-trie",
+      "sd-autocomplete-trie",
+      "binary-search",
+      "two-pointers-pattern",
+      "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-longest-common-prefix",
+      "leetcode-binary-search"
+    ],
+    "mentions": []
+  },
+  "leetcode-alien-dictionary": {
+    "links": [
+      "leetcode-course-schedule",
+      "leetcode-course-schedule-ii",
+      "ds-graph-bfs-dfs",
+      "leetcode-permutations"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-bitwise-and-of-numbers-range": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "leetcode-single-number",
+      "leetcode-power-of-two",
+      "leetcode-counting-bits",
+      "layer-ip-addressing",
+      "leetcode-longest-common-prefix",
+      "leetcode-single-number-ii",
+      "leetcode-missing-number",
+      "leetcode-reverse-bits"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "security-groups-nacl",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-candy": {
+    "links": [
+      "greedy-algorithms",
+      "ds-graph-bfs-dfs",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-ipo",
+      "leetcode-trapping-rain-water",
+      "leetcode-product-of-array-except-self"
+    ],
+    "mentions": []
+  },
+  "leetcode-coin-change-ii": {
+    "links": [
+      "leetcode-coin-change",
+      "dynamic-programming",
+      "leetcode-climbing-stairs",
+      "leetcode-word-break",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-target-sum",
+      "leetcode-combination-sum"
+    ],
+    "mentions": [
+      "js-memoization",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-construct-tree-from-preorder-inorder": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-validate-binary-search-tree",
+      "leetcode-invert-binary-tree",
+      "leetcode-diameter-of-binary-tree"
+    ],
+    "mentions": [
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-count-primes": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-powx-n",
+      "ds-union-find",
+      "leetcode-happy-number"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "ds-hash-map",
+      "floating-point-numbers",
+      "sd-email-protocols"
+    ]
+  },
+  "leetcode-detect-squares": {
+    "links": [
+      "ds-hash-map",
+      "leetcode-rotate-image",
+      "leetcode-spiral-matrix",
+      "leetcode-two-sum"
+    ],
+    "mentions": []
+  },
+  "leetcode-distinct-subsequences": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-subsets",
+      "leetcode-coin-change-ii",
+      "leetcode-interleaving-string",
+      "leetcode-edit-distance",
+      "leetcode-regular-expression-matching"
+    ],
+    "mentions": [
+      "js-memoization",
+      "ds-array-matrix",
+      "recursion-backtracking",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-excel-sheet-column-number": {
+    "links": [
+      "leetcode-plus-one",
+      "leetcode-multiply-strings",
+      "leetcode-reverse-integer",
+      "leetcode-powx-n"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-extra-characters-in-a-string": {
+    "links": [
+      "leetcode-word-break",
+      "dynamic-programming",
+      "ds-trie",
+      "leetcode-implement-trie",
+      "leetcode-replace-words",
+      "string-search-algorithms",
+      "leetcode-index-pairs-of-a-string",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-find-city-smallest-neighbors": {
+    "links": [
+      "shortest-path-algorithms",
+      "leetcode-network-delay-time",
+      "ds-graph-bfs-dfs",
+      "leetcode-path-with-maximum-probability"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing",
+      "ds-heap"
+    ]
+  },
+  "leetcode-interleaving-string": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-edit-distance",
+      "ds-graph-bfs-dfs",
+      "leetcode-distinct-subsequences",
+      "leetcode-regular-expression-matching",
+      "leetcode-unique-paths"
+    ],
+    "mentions": [
+      "js-memoization",
+      "ds-array-matrix",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-ipo": {
+    "links": [
+      "ds-heap",
+      "greedy-algorithms",
+      "leetcode-gas-station",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-task-scheduler",
+      "leetcode-meeting-rooms-ii"
+    ],
+    "mentions": []
+  },
+  "leetcode-merge-triplets-to-form-target-triplet": {
+    "links": [
+      "greedy-algorithms",
+      "bit-manipulation",
+      "dynamic-programming",
+      "leetcode-hand-of-straights",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-ipo",
+      "leetcode-jump-game"
+    ],
+    "mentions": [
+      "http-methods"
+    ]
+  },
+  "leetcode-missing-number": {
+    "links": [
+      "leetcode-single-number",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-linked-list-cycle",
+      "leetcode-single-number-ii",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls"
+    ]
+  },
+  "leetcode-my-calendar-i": {
+    "links": [
+      "leetcode-meeting-rooms",
+      "interval-problems-pattern",
+      "binary-search",
+      "leetcode-car-pooling",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-insert-interval",
+      "leetcode-interval-list-intersections",
+      "leetcode-employee-free-time"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "segment-tree-fenwick",
+      "sd-hotel-double-booking",
+      "postgres-data-types"
+    ]
+  },
+  "leetcode-path-with-maximum-probability": {
+    "links": [
+      "leetcode-network-delay-time",
+      "shortest-path-algorithms",
+      "ds-heap",
+      "leetcode-swim-in-rising-water",
+      "leetcode-cheapest-flights-within-k-stops",
+      "leetcode-find-city-smallest-neighbors"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "ds-graph-bfs-dfs",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-plus-one": {
+    "links": [
+      "leetcode-multiply-strings",
+      "leetcode-add-two-numbers",
+      "bit-manipulation",
+      "recursion-backtracking",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "redis-basics",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-power-of-two": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-bitwise-and-of-numbers-range",
+      "leetcode-powx-n",
+      "leetcode-single-number",
+      "leetcode-missing-number",
+      "leetcode-reverse-integer"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "ds-hash-map",
+      "floating-point-numbers",
+      "segment-tree-fenwick",
+      "logic-gates-alu",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-reverse-integer": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-plus-one",
+      "leetcode-add-two-numbers",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers",
+      "leetcode-missing-number",
+      "leetcode-power-of-two"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-shortest-path-in-binary-matrix": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "shortest-path-algorithms",
+      "leetcode-word-ladder",
+      "leetcode-swim-in-rising-water",
+      "leetcode-rotting-oranges"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-single-number-ii": {
+    "links": [
+      "leetcode-single-number",
+      "ds-hash-map",
+      "leetcode-missing-number",
+      "leetcode-majority-element",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-stock-with-cooldown": {
+    "links": [
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "dynamic-programming",
+      "leetcode-house-robber"
+    ],
+    "mentions": [
+      "js-memoization"
+    ]
+  },
+  "leetcode-sum-of-prefix-scores-of-strings": {
+    "links": [
+      "leetcode-implement-trie",
+      "string-search-algorithms",
+      "monotonic-stack-pattern",
+      "leetcode-longest-common-prefix",
+      "leetcode-search-suggestions-system",
+      "leetcode-largest-rectangle-in-histogram"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque",
+      "sd-autocomplete-trie",
+      "core-web-vitals"
+    ]
+  },
+  "leetcode-target-sum": {
+    "links": [
+      "leetcode-partition-equal-subset-sum",
+      "dynamic-programming",
+      "leetcode-two-sum",
+      "leetcode-coin-change-ii",
+      "leetcode-subsets"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-memoization",
+      "recursion-backtracking"
+    ]
+  },
+  "leetcode-valid-parenthesis-string": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "js-memoization",
+      "ds-stack-queue-deque",
+      "leetcode-generate-parentheses",
+      "leetcode-hand-of-straights",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-candy",
+      "leetcode-ipo"
+    ],
+    "mentions": [
+      "postgres-query-planner"
+    ]
+  },
+  "leetcode-sudoku-solver": {
+    "links": [
+      "leetcode-n-queens",
+      "leetcode-valid-sudoku",
+      "recursion-backtracking",
+      "bit-manipulation",
+      "leetcode-subsets",
+      "leetcode-word-search"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-add-two-numbers": {
+    "links": [
+      "ds-linked-list",
+      "leetcode-reverse-linked-list",
+      "leetcode-multiply-strings"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-binary-tree-right-side-view": {
+    "links": [
+      "leetcode-binary-tree-level-order-traversal",
+      "ds-graph-bfs-dfs",
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-serialize-and-deserialize-binary-tree"
+    ],
+    "mentions": []
+  },
+  "leetcode-car-pooling": {
+    "links": [
+      "leetcode-meeting-rooms-ii",
+      "interval-problems-pattern",
+      "ds-heap",
+      "leetcode-meeting-rooms",
+      "leetcode-my-calendar-i",
+      "leetcode-merge-intervals",
+      "leetcode-employee-free-time",
+      "leetcode-interval-list-intersections"
+    ],
+    "mentions": [
+      "segment-tree-fenwick",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-copy-list-with-random-pointer": {
+    "links": [
+      "leetcode-clone-graph"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "ds-linked-list",
+      "pattern-prototype"
+    ]
+  },
+  "leetcode-course-schedule-ii": {
+    "links": [
+      "leetcode-course-schedule",
+      "dynamic-programming",
+      "recursion-backtracking",
+      "leetcode-alien-dictionary",
+      "leetcode-redundant-connection",
+      "leetcode-reconstruct-itinerary"
+    ],
+    "mentions": [
+      "ds-union-find",
+      "ds-graph-bfs-dfs",
+      "sd-video-upload-transcoding"
+    ]
+  },
+  "leetcode-design-twitter": {
+    "links": [
+      "ds-heap",
+      "leetcode-merge-k-sorted-lists",
+      "sd-news-feed-publishing",
+      "binary-search",
+      "sd-news-feed-retrieval",
+      "leetcode-kth-largest-element-in-a-stream",
+      "leetcode-lru-cache"
+    ],
+    "mentions": [
+      "db-sharding"
+    ]
+  },
+  "leetcode-diameter-of-binary-tree": {
+    "links": [
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-binary-tree-maximum-path-sum",
+      "ds-graph-bfs-dfs",
+      "leetcode-validate-binary-search-tree",
+      "leetcode-invert-binary-tree"
+    ],
+    "mentions": [
+      "js-memoization",
+      "js-closures"
+    ]
+  },
+  "leetcode-employee-free-time": {
+    "links": [
+      "leetcode-merge-intervals",
+      "leetcode-merge-k-sorted-lists",
+      "interval-problems-pattern",
+      "ds-heap",
+      "leetcode-meeting-rooms",
+      "leetcode-interval-list-intersections",
+      "leetcode-my-calendar-i",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-car-pooling",
+      "leetcode-insert-interval"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "two-pointers-pattern",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-find-first-last-position-sorted-array": {
+    "links": [
+      "binary-search",
+      "leetcode-binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-capacity-to-ship-packages-within-d-days",
+      "db-index",
+      "leetcode-time-based-key-value-store",
+      "leetcode-search-a-2d-matrix",
+      "leetcode-find-minimum-in-rotated-sorted-array"
+    ],
+    "mentions": [
+      "sql-filtering-operators",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-find-peak-element": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-find-first-last-position-sorted-array",
+      "leetcode-koko-eating-bananas"
+    ],
+    "mentions": [
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-hand-of-straights": {
+    "links": [
+      "leetcode-jump-game",
+      "leetcode-gas-station",
+      "greedy-algorithms",
+      "ds-hash-map",
+      "ds-heap",
+      "sorting-algorithms",
+      "leetcode-merge-triplets-to-form-target-triplet",
+      "leetcode-valid-parenthesis-string",
+      "leetcode-candy",
+      "leetcode-ipo",
+      "leetcode-partition-labels"
+    ],
+    "mentions": []
+  },
+  "leetcode-interval-list-intersections": {
+    "links": [
+      "interval-problems-pattern",
+      "two-pointers-pattern",
+      "leetcode-meeting-rooms",
+      "leetcode-employee-free-time",
+      "binary-search",
+      "leetcode-merge-intervals",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-insert-interval",
+      "leetcode-my-calendar-i",
+      "leetcode-merge-two-sorted-lists"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-letter-combinations-of-a-phone-number": {
+    "links": [
+      "leetcode-subsets-ii",
+      "leetcode-combination-sum",
+      "recursion-backtracking",
+      "leetcode-subsets",
+      "leetcode-n-queens",
+      "ds-trie",
+      "leetcode-generate-parentheses",
+      "leetcode-permutations"
+    ],
+    "mentions": []
+  },
+  "leetcode-longest-palindromic-substring": {
+    "links": [
+      "leetcode-valid-palindrome",
+      "two-pointers-pattern",
+      "dynamic-programming",
+      "leetcode-palindrome-partitioning",
+      "leetcode-longest-common-subsequence",
+      "string-search-algorithms",
+      "leetcode-palindrome-pairs"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "big-o-notation",
+      "binary-search"
+    ]
+  },
+  "leetcode-lru-cache": {
+    "links": [
+      "ds-linked-list",
+      "caching-concepts-map",
+      "redis-memory-eviction",
+      "leetcode-reverse-linked-list",
+      "virtual-memory-paging"
+    ],
+    "mentions": [
+      "js-memoization",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "leetcode-maximum-product-subarray": {
+    "links": [
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "dynamic-programming",
+      "leetcode-subarray-product-less-than-k",
+      "sliding-window-pattern",
+      "leetcode-product-of-array-except-self",
+      "leetcode-house-robber"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-multiply-strings": {
+    "links": [
+      "recursion-backtracking",
+      "big-o-notation",
+      "leetcode-plus-one",
+      "leetcode-add-two-numbers",
+      "leetcode-powx-n",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "divide-and-conquer",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-number-of-connected-components": {
+    "links": [
+      "leetcode-number-of-islands",
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "leetcode-redundant-connection",
+      "leetcode-max-area-of-island",
+      "ds-hash-map",
+      "leetcode-clone-graph"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-palindrome-partitioning": {
+    "links": [
+      "leetcode-subsets",
+      "leetcode-combination-sum",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "bit-manipulation",
+      "leetcode-longest-palindromic-substring",
+      "leetcode-word-break",
+      "leetcode-valid-palindrome"
+    ],
+    "mentions": [
+      "js-memoization",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-partition-equal-subset-sum": {
+    "links": [
+      "leetcode-coin-change",
+      "dynamic-programming",
+      "leetcode-coin-change-ii",
+      "recursion-backtracking",
+      "leetcode-target-sum",
+      "binary-search"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "complexity-classes-p-np",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-redundant-connection": {
+    "links": [
+      "ds-union-find",
+      "leetcode-course-schedule",
+      "leetcode-number-of-connected-components",
+      "minimum-spanning-tree",
+      "leetcode-min-cost-to-connect-all-points",
+      "leetcode-number-of-islands"
+    ],
+    "mentions": []
+  },
+  "leetcode-reorganize-string": {
+    "links": [
+      "ds-heap",
+      "greedy-algorithms",
+      "recursion-backtracking",
+      "leetcode-task-scheduler",
+      "leetcode-last-stone-weight"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls"
+    ]
+  },
+  "leetcode-reverse-nodes-in-k-group": {
+    "links": [
+      "leetcode-reverse-linked-list",
+      "leetcode-reorder-list"
+    ],
+    "mentions": [
+      "ds-linked-list"
+    ]
+  },
+  "leetcode-rotting-oranges": {
+    "links": [
+      "leetcode-number-of-islands",
+      "leetcode-max-area-of-island",
+      "ds-graph-bfs-dfs",
+      "shortest-path-algorithms",
+      "leetcode-pacific-atlantic-water-flow",
+      "leetcode-word-ladder",
+      "leetcode-shortest-path-in-binary-matrix"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-sliding-window-median": {
+    "links": [
+      "leetcode-find-median-from-data-stream",
+      "sliding-window-pattern",
+      "binary-search",
+      "segment-tree-fenwick",
+      "leetcode-sliding-window-maximum",
+      "leetcode-kth-largest-element-in-a-stream"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "elk-stack-basics"
+    ]
+  },
+  "leetcode-validate-binary-search-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-construct-tree-from-preorder-inorder",
+      "leetcode-diameter-of-binary-tree"
+    ],
+    "mentions": []
+  },
+  "ai-crawlers-bot-control": {
+    "links": [
+      "ai-search-grounding-geo",
+      "sd-web-crawler-politeness-dedup",
+      "rate-limiting-in-practice",
+      "waf",
+      "mcp-protocol",
+      "crawl-budget-faceted-navigation"
+    ],
+    "mentions": [
+      "bit-manipulation",
+      "ipv6-basics",
+      "layer-ip-addressing",
+      "cookie-session-login",
+      "dns"
+    ]
+  },
+  "crawl-budget-faceted-navigation": {
+    "links": [
+      "seo-for-spa",
+      "sd-web-crawler-politeness-dedup",
+      "nextjs-route-handlers-proxy",
+      "scroll-triggered-intersection-observer",
+      "search-engine-ranking-pagerank"
+    ],
+    "mentions": [
+      "seo-log-file-analysis-search-console",
+      "sd-latency-numbers",
+      "loading-patterns",
+      "client-data-cache",
+      "cookie-session-login",
+      "dns"
+    ]
+  },
+  "search-spam-policies-cloaking": {
+    "links": [
+      "seo-for-spa",
+      "structured-data-json-ld",
+      "ab-testing",
+      "seo-log-file-analysis-search-console",
+      "seo-redirects-site-migration",
+      "search-engine-ranking-pagerank",
+      "search-traffic-measurement"
+    ],
+    "mentions": [
+      "nextjs-static-dynamic-rendering",
+      "code-review-practices",
+      "count-min-sketch",
+      "db-modeling-normalization",
+      "rendering-strategies"
+    ]
+  },
+  "search-traffic-measurement": {
+    "links": [
+      "seo-log-file-analysis-search-console",
+      "product-analytics-funnels",
+      "web-security-headers",
+      "ai-search-grounding-geo",
+      "search-spam-policies-cloaking",
+      "ab-testing"
+    ],
+    "mentions": [
+      "seo-for-spa",
+      "regex-and-globbing",
+      "what-happens-google-com"
+    ]
+  },
+  "leetcode-capacity-to-ship-packages-within-d-days": {
+    "links": [
+      "leetcode-koko-eating-bananas",
+      "binary-search",
+      "greedy-algorithms",
+      "dynamic-programming",
+      "leetcode-binary-search",
+      "recursion-backtracking",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "ds-array-matrix",
+      "complexity-classes-p-np"
+    ]
+  },
+  "leetcode-combination-sum-ii": {
+    "links": [
+      "leetcode-combination-sum",
+      "leetcode-subsets-ii",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "leetcode-target-sum",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-permutations",
+      "leetcode-coin-change-ii"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-decode-ways": {
+    "links": [
+      "leetcode-climbing-stairs",
+      "dynamic-programming",
+      "leetcode-word-break",
+      "recursion-backtracking",
+      "leetcode-letter-combinations-of-a-phone-number",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": []
+  },
+  "leetcode-house-robber-ii": {
+    "links": [
+      "leetcode-house-robber",
+      "dynamic-programming",
+      "leetcode-gas-station"
+    ],
+    "mentions": [
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-invert-binary-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-binary-tree-maximum-path-sum",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-validate-binary-search-tree",
+      "leetcode-diameter-of-binary-tree",
+      "leetcode-binary-tree-right-side-view",
+      "leetcode-construct-tree-from-preorder-inorder"
+    ],
+    "mentions": [
+      "ds-array-matrix",
+      "js-destructuring",
+      "pattern-prototype"
+    ]
+  },
+  "leetcode-kth-largest-element-in-a-stream": {
+    "links": [
+      "leetcode-kth-largest-element-in-an-array",
+      "ds-heap",
+      "binary-search",
+      "leetcode-sliding-window-median",
+      "leetcode-find-median-from-data-stream",
+      "leetcode-k-closest-points-to-origin",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-last-stone-weight"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-last-stone-weight": {
+    "links": [
+      "ds-heap",
+      "binary-search",
+      "dynamic-programming",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-task-scheduler",
+      "leetcode-reorganize-string",
+      "leetcode-kth-largest-element-in-a-stream"
+    ],
+    "mentions": []
+  },
+  "leetcode-max-area-of-island": {
+    "links": [
+      "leetcode-number-of-islands",
+      "ds-graph-bfs-dfs",
+      "leetcode-rotting-oranges",
+      "ds-union-find",
+      "ds-heap",
+      "leetcode-pacific-atlantic-water-flow",
+      "leetcode-number-of-connected-components"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-meeting-rooms-ii": {
+    "links": [
+      "leetcode-meeting-rooms",
+      "interval-problems-pattern",
+      "ds-heap",
+      "leetcode-car-pooling",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-my-calendar-i",
+      "leetcode-employee-free-time",
+      "leetcode-merge-intervals",
+      "leetcode-interval-list-intersections",
+      "leetcode-minimum-interval-to-include-each-query",
+      "leetcode-task-scheduler"
+    ],
+    "mentions": [
+      "ds-array-matrix",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-next-greater-element-i": {
+    "links": [
+      "leetcode-daily-temperatures",
+      "monotonic-stack-pattern",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-car-fleet",
+      "leetcode-remove-k-digits",
+      "leetcode-two-sum"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-remove-nth-node-from-end-of-list": {
+    "links": [
+      "ds-linked-list",
+      "leetcode-linked-list-cycle",
+      "leetcode-reorder-list",
+      "leetcode-lru-cache"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-subsets-ii": {
+    "links": [
+      "leetcode-subsets",
+      "recursion-backtracking",
+      "leetcode-combination-sum",
+      "leetcode-combination-sum-ii",
+      "leetcode-permutations"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-time-based-key-value-store": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "ds-hash-map",
+      "ds-binary-tree-bst",
+      "postgres-mvcc-vacuum",
+      "leetcode-find-first-last-position-sorted-array",
+      "leetcode-lru-cache"
+    ],
+    "mentions": [
+      "db-type-key-value",
+      "ds-linked-list",
+      "sql-filtering-operators",
+      "db-transaction-isolation"
+    ]
+  },
+  "ai-search-grounding-geo": {
+    "links": [
+      "seo-for-spa",
+      "search-engine-ranking-pagerank",
+      "ai-crawlers-bot-control",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "structured-data-json-ld"
+    ],
+    "mentions": [
+      "sd-web-crawler-politeness-dedup",
+      "seo-redirects-site-migration",
+      "llm-app-security-guardrails",
+      "ai-coding-agents",
+      "nextjs-static-dynamic-rendering",
+      "pub-sub",
+      "rendering-strategies",
+      "vector-db"
+    ]
+  },
+  "habit-features-progress-reminders": {
+    "links": [
+      "behavior-design-models",
+      "pwa-install-offline",
+      "product-analytics-funnels",
+      "ab-testing"
+    ],
+    "mentions": [
+      "alerting",
+      "redis-basics"
+    ]
+  },
+  "search-engine-ranking-pagerank": {
+    "links": [
+      "seo-for-spa",
+      "elasticsearch-inverted-index",
+      "rag-retrieval-quality",
+      "crawl-budget-faceted-navigation"
+    ],
+    "mentions": [
+      "core-web-vitals",
+      "xss",
+      "search-traffic-measurement",
+      "site-architecture-internal-linking",
+      "graph-rag",
+      "loading-patterns",
+      "search-spam-policies-cloaking",
+      "ai-search-grounding-geo",
+      "structured-data-json-ld",
+      "image-optimization",
+      "db-modeling-normalization",
+      "vector-db"
+    ]
+  },
+  "seo-log-file-analysis-search-console": {
+    "links": [
+      "seo-for-spa",
+      "linux-grep-awk-sed",
+      "dns",
+      "ai-crawlers-bot-control",
+      "crawl-budget-faceted-navigation",
+      "seo-redirects-site-migration",
+      "site-architecture-internal-linking",
+      "search-traffic-measurement"
+    ],
+    "mentions": [
+      "sd-web-crawler-politeness-dedup",
+      "bit-manipulation",
+      "http-status-codes",
+      "ipv6-basics",
+      "layer-ip-addressing"
+    ]
+  },
+  "site-architecture-internal-linking": {
+    "links": [
+      "seo-log-file-analysis-search-console",
+      "seo-for-spa",
+      "seo-redirects-site-migration",
+      "react-client-routing",
+      "search-engine-ranking-pagerank",
+      "structured-data-json-ld",
+      "crawl-budget-faceted-navigation"
+    ],
+    "mentions": [
+      "rendering-csr-spa",
+      "character-encoding-unicode",
+      "ds-graph-bfs-dfs",
+      "k8s-deploy-pipeline-eks",
+      "loading-patterns",
+      "js-strings-unicode",
+      "db-modeling-normalization"
+    ]
+  },
+  "structured-data-json-ld": {
+    "links": [
+      "seo-for-spa",
+      "xss",
+      "ai-search-grounding-geo"
+    ],
+    "mentions": [
+      "graph-rag",
+      "search-spam-policies-cloaking"
+    ]
+  },
+  "leetcode-4sum": {
+    "links": [
+      "leetcode-3sum",
+      "two-pointers-pattern",
+      "binary-search",
+      "leetcode-two-sum",
+      "leetcode-two-sum-ii",
+      "leetcode-boats-to-save-people"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-asteroid-collision": {
+    "links": [
+      "leetcode-car-fleet",
+      "ds-stack-queue-deque",
+      "leetcode-daily-temperatures",
+      "leetcode-evaluate-reverse-polish-notation",
+      "ds-heap",
+      "leetcode-valid-parentheses",
+      "leetcode-last-stone-weight",
+      "leetcode-remove-k-digits"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-boats-to-save-people": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-two-sum-ii",
+      "greedy-algorithms",
+      "leetcode-container-with-most-water",
+      "bit-manipulation",
+      "leetcode-3sum",
+      "leetcode-4sum",
+      "leetcode-jump-game",
+      "leetcode-gas-station"
+    ],
+    "mentions": [
+      "complexity-classes-p-np",
+      "floating-point-numbers",
+      "sorting-algorithms",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-encode-and-decode-strings": {
+    "links": [
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "character-encoding-unicode",
+      "tcp-connection-lifecycle",
+      "http-streaming-sse",
+      "grpc",
+      "base64"
+    ],
+    "mentions": [
+      "redis-basics"
+    ]
+  },
+  "leetcode-majority-element": {
+    "links": [
+      "leetcode-top-k-frequent-elements",
+      "bit-manipulation",
+      "leetcode-two-sum",
+      "segment-tree-fenwick",
+      "binary-search",
+      "leetcode-contains-duplicate"
+    ],
+    "mentions": [
+      "lossy-counting",
+      "string-search-algorithms",
+      "sql-aggregation-pitfalls",
+      "divide-and-conquer",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-max-consecutive-ones-iii": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-minimum-size-subarray-sum",
+      "leetcode-fruit-into-baskets",
+      "leetcode-longest-repeating-character-replacement"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-remove-k-digits": {
+    "links": [
+      "monotonic-stack-pattern",
+      "greedy-algorithms",
+      "leetcode-sliding-window-maximum",
+      "leetcode-daily-temperatures",
+      "leetcode-asteroid-collision",
+      "leetcode-next-greater-element-i"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-search-a-2d-matrix": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-find-first-last-position-sorted-array",
+      "leetcode-search-in-rotated-sorted-array"
+    ],
+    "mentions": [
+      "sql-filtering-operators",
+      "big-o-notation",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-subarray-product-less-than-k": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-minimum-size-subarray-sum",
+      "leetcode-maximum-product-subarray",
+      "dynamic-programming"
+    ],
+    "mentions": [
+      "floating-point-numbers",
+      "message-delivery-semantics",
+      "sql-filtering-operators",
+      "sorting-algorithms"
+    ]
+  },
+  "behavior-design-models": {
+    "links": [
+      "habit-features-progress-reminders",
+      "product-analytics-funnels",
+      "ab-testing"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "loading-patterns",
+      "code-review-practices",
+      "data-privacy-compliance"
+    ]
+  },
+  "bi-semantic-layer": {
+    "links": [
+      "data-warehouse-architecture",
+      "dbt-transformations",
+      "data-catalog-lineage",
+      "reverse-etl",
+      "data-mesh-fabric"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "db-sharding",
+      "db-type-columnar-olap",
+      "etl-vs-elt"
+    ]
+  },
+  "core-component-api-design": {
+    "links": [
+      "design-system-building",
+      "react-component-patterns",
+      "html-form-validation",
+      "aria-keyboard-focus",
+      "react-forms-actions",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "custom-form-controls",
+      "frontend-testing-strategy",
+      "architecture-patterns-overview",
+      "css-position-stacking-context",
+      "html-semantics"
+    ]
+  },
+  "custom-form-controls": {
+    "links": [
+      "html-form-validation",
+      "aria-keyboard-focus",
+      "design-system-building"
+    ],
+    "mentions": [
+      "web-components-shadow-dom",
+      "frontend-testing-strategy",
+      "css-sticky-scroll-snap",
+      "client-data-cache",
+      "html-semantics",
+      "web-accessibility",
+      "postgres-query-planner"
+    ]
+  },
+  "data-catalog-lineage": {
+    "links": [
+      "dbt-transformations",
+      "data-privacy-compliance",
+      "reverse-etl",
+      "data-quality-checks",
+      "data-warehouse-architecture",
+      "ml-experiment-tracking",
+      "what-is-mlops"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "opensearch-cluster-operations",
+      "schema-versioning",
+      "docker-container-basics",
+      "data-orchestrators-comparison",
+      "ds-graph-bfs-dfs",
+      "bi-semantic-layer",
+      "airflow-orchestration",
+      "data-lake-hdfs",
+      "db-type-relational",
+      "stream-processing",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "shells-posix-compat",
+      "cloud-service-models-shared-responsibility",
+      "etl-vs-elt"
+    ]
+  },
+  "data-engineering-lifecycle": {
+    "links": [
+      "data-quality-checks",
+      "data-privacy-compliance",
+      "etl-vs-elt",
+      "cdc-change-data-capture",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "data-lake-hdfs",
+      "data-warehouse-architecture",
+      "olap-star-schema",
+      "spark-basics",
+      "airflow-orchestration",
+      "cron-jobs"
+    ],
+    "mentions": [
+      "db-sharding",
+      "ab-testing",
+      "bash-scripting",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "dbt-transformations",
+      "zero-downtime-migrations"
+    ]
+  },
+  "data-orchestrators-comparison": {
+    "links": [
+      "airflow-orchestration",
+      "etl-vs-elt",
+      "dbt-transformations",
+      "cron-jobs",
+      "data-quality-checks",
+      "data-catalog-lineage",
+      "lambda-kappa-architecture"
+    ],
+    "mentions": [
+      "serverless-architecture",
+      "bash-scripting",
+      "db-type-columnar-olap",
+      "python-essentials-for-backend",
+      "code-review-practices",
+      "sd-mq-storage-partitions",
+      "js-pure-functions",
+      "zero-downtime-migrations"
+    ]
+  },
+  "data-quality-checks": {
+    "links": [
+      "etl-vs-elt",
+      "data-warehouse-architecture",
+      "schema-versioning",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "data-lake-hdfs",
+      "sql-basics",
+      "sd-payment-reliability",
+      "alerting",
+      "postgres-getting-started",
+      "dbt-transformations",
+      "zero-downtime-migrations"
+    ]
+  },
+  "design-system-adoption-governance": {
+    "links": [
+      "design-system-building",
+      "core-component-api-design",
+      "spacing-sizing-type-scale",
+      "product-analytics-funnels"
+    ],
+    "mentions": [
+      "dependency-hell",
+      "smoke-sanity-regression-testing",
+      "code-review-practices"
+    ]
+  },
+  "edge-ai-on-device": {
+    "links": [
+      "self-hosting-llm-inference",
+      "model-serving",
+      "deep-learning-basics",
+      "fine-tuning-vs-rag-vs-prompting",
+      "canary-release",
+      "feature-flags",
+      "ml-model-monitoring-drift",
+      "ml-experiment-tracking",
+      "ml-pipelines-ci-cd"
+    ],
+    "mentions": [
+      "llm-basics-for-developers",
+      "animation-performance"
+    ]
+  },
+  "icon-system-svg": {
+    "links": [
+      "bundler-basics",
+      "ui-overlays-tooltip-dropdown-toast",
+      "spacing-sizing-type-scale"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "css-custom-properties",
+      "html-semantics",
+      "web-font-optimization",
+      "code-splitting",
+      "web-accessibility",
+      "count-min-sketch"
+    ]
+  },
+  "ml-pipelines-ci-cd": {
+    "links": [
+      "ml-experiment-tracking",
+      "ml-model-monitoring-drift",
+      "ci-cd-basics",
+      "what-is-mlops",
+      "test-pyramid-unit-tests",
+      "github-actions-workflows",
+      "airflow-orchestration",
+      "canary-release",
+      "blue-green-deployment",
+      "model-serving",
+      "edge-ai-on-device"
+    ],
+    "mentions": [
+      "data-quality-checks",
+      "github-actions-docker-ecr",
+      "data-orchestrators-comparison",
+      "smoke-sanity-regression-testing",
+      "sd-object-storage-architecture",
+      "ml-model-evaluation",
+      "llm-evals",
+      "code-review-practices",
+      "etl-vs-elt",
+      "zero-downtime-migrations"
+    ]
+  },
+  "reverse-etl": {
+    "links": [
+      "dbt-transformations",
+      "etl-vs-elt",
+      "data-quality-checks",
+      "retries",
+      "message-delivery-semantics",
+      "data-privacy-compliance",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "db-type-columnar-olap",
+      "resilience-patterns",
+      "cloud-service-models-shared-responsibility",
+      "db-modeling-normalization",
+      "zero-downtime-migrations"
+    ]
+  },
+  "seo-redirects-site-migration": {
+    "links": [
+      "seo-for-spa",
+      "http-status-codes",
+      "crawl-budget-faceted-navigation",
+      "nginx-basics",
+      "https-tls",
+      "ai-crawlers-bot-control",
+      "search-engine-ranking-pagerank"
+    ],
+    "mentions": [
+      "ab-testing",
+      "rendering-strategies",
+      "seo-log-file-analysis-search-console",
+      "frontend-hosting-platforms",
+      "what-happens-google-com",
+      "count-min-sketch"
+    ]
+  },
+  "spacing-sizing-type-scale": {
+    "links": [
+      "design-system-building",
+      "css-typography",
+      "responsive-design",
+      "design-system-adoption-governance"
+    ],
+    "mentions": [
+      "css-flexbox-grid",
+      "css-styling-approaches",
+      "css-custom-properties",
+      "smoke-sanity-regression-testing",
+      "web-accessibility"
+    ]
+  },
+  "ui-overlays-tooltip-dropdown-toast": {
+    "links": [
+      "css-position-stacking-context",
+      "aria-keyboard-focus",
+      "frontend-system-design-interview",
+      "core-component-api-design"
+    ],
+    "mentions": [
+      "html-semantics",
+      "web-accessibility",
+      "js-closures"
+    ]
+  },
+  "ux-laws-cognitive-load": {
+    "links": [
+      "product-analytics-funnels",
+      "ux-research-usability-testing",
+      "html-form-validation",
+      "custom-form-controls",
+      "spacing-sizing-type-scale",
+      "loading-patterns",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "data-privacy-compliance",
+      "behavior-design-models",
+      "web-accessibility"
+    ]
+  },
+  "ux-research-usability-testing": {
+    "links": [
+      "ux-laws-cognitive-load",
+      "product-analytics-funnels"
+    ],
+    "mentions": [
+      "ab-testing"
+    ]
+  },
+  "leetcode-car-fleet": {
+    "links": [
+      "monotonic-stack-pattern",
+      "sorting-algorithms",
+      "leetcode-daily-temperatures",
+      "leetcode-next-greater-element-i",
+      "leetcode-asteroid-collision",
+      "leetcode-merge-intervals"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "floating-point-numbers",
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-evaluate-reverse-polish-notation": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "ds-stack-queue-deque",
+      "recursion-backtracking",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-min-stack",
+      "monotonic-stack-pattern"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "nodejs-web-frameworks",
+      "sql-aggregation-pitfalls",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-fruit-into-baskets": {
+    "links": [
+      "sliding-window-pattern",
+      "binary-search",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-max-consecutive-ones-iii",
+      "leetcode-permutation-in-string"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-longest-consecutive-sequence": {
+    "links": [
+      "ds-hash-map",
+      "ds-union-find",
+      "leetcode-contains-duplicate",
+      "sliding-window-pattern",
+      "leetcode-merge-intervals",
+      "leetcode-longest-increasing-subsequence",
+      "leetcode-two-sum",
+      "leetcode-top-k-frequent-elements"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "dynamic-programming",
+      "binary-search",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-minimum-size-subarray-sum": {
+    "links": [
+      "sliding-window-pattern",
+      "ds-array-matrix",
+      "binary-search",
+      "monotonic-stack-pattern",
+      "leetcode-sliding-window-maximum",
+      "leetcode-subarray-product-less-than-k",
+      "leetcode-max-consecutive-ones-iii"
+    ],
+    "mentions": []
+  },
+  "leetcode-move-zeroes": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-sort-colors",
+      "leetcode-remove-duplicates-from-sorted-array"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "ds-array-matrix",
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-permutation-in-string": {
+    "links": [
+      "sliding-window-pattern",
+      "recursion-backtracking",
+      "leetcode-minimum-window-substring",
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-valid-anagram",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": [
+      "string-search-algorithms"
+    ]
+  },
+  "leetcode-product-of-array-except-self": {
+    "links": [
+      "leetcode-trapping-rain-water",
+      "leetcode-candy",
+      "leetcode-study-guide",
+      "ds-array-matrix",
+      "segment-tree-fenwick",
+      "leetcode-maximum-product-subarray",
+      "leetcode-two-sum",
+      "leetcode-contains-duplicate",
+      "leetcode-top-k-frequent-elements"
+    ],
+    "mentions": [
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-remove-duplicates-from-sorted-array": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-move-zeroes",
+      "binary-search",
+      "sorting-algorithms",
+      "ds-linked-list",
+      "leetcode-3sum",
+      "leetcode-contains-duplicate",
+      "leetcode-boats-to-save-people"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-sort-colors": {
+    "links": [
+      "two-pointers-pattern",
+      "sorting-algorithms",
+      "leetcode-move-zeroes",
+      "ds-linked-list",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "sd-maps-tiles-routing",
+      "js-destructuring",
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-valid-sudoku": {
+    "links": [
+      "leetcode-contains-duplicate",
+      "ds-hash-map",
+      "bit-manipulation",
+      "leetcode-sudoku-solver",
+      "leetcode-two-sum",
+      "leetcode-n-queens",
+      "leetcode-set-matrix-zeroes"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
+  "data-mesh-fabric": {
+    "links": [
+      "data-warehouse-architecture",
+      "data-engineering-lifecycle",
+      "cdc-change-data-capture",
+      "data-catalog-lineage",
+      "data-quality-checks",
+      "ddd-bounded-context",
+      "microservices-decomposition"
+    ],
+    "mentions": [
+      "elasticsearch-inverted-index",
+      "db-sharding",
+      "microservices",
+      "graph-rag",
+      "db-type-columnar-olap",
+      "schema-versioning",
+      "sli-slo"
+    ]
+  },
+  "data-warehouse-architecture": {
+    "links": [
+      "etl-vs-elt",
+      "olap-star-schema",
+      "db-type-columnar-olap",
+      "data-lake-hdfs",
+      "event-driven-architecture",
+      "data-quality-checks"
+    ],
+    "mentions": [
+      "db-sharding",
+      "bi-semantic-layer",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "sd-mq-storage-partitions",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "acid-transactions",
+      "db-keys-denormalization",
+      "dbt-transformations",
+      "db-modeling-normalization"
+    ]
+  },
+  "dbt-transformations": {
+    "links": [
+      "etl-vs-elt",
+      "data-warehouse-architecture",
+      "data-catalog-lineage",
+      "olap-star-schema",
+      "cdc-change-data-capture",
+      "data-quality-checks",
+      "airflow-orchestration"
+    ],
+    "mentions": [
+      "reverse-etl",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "ds-graph-bfs-dfs"
+    ]
+  },
+  "etl-vs-elt": {
+    "links": [
+      "spark-basics",
+      "data-lake-hdfs",
+      "airflow-orchestration",
+      "kafka-to-lake-pipeline",
+      "db-type-columnar-olap",
+      "data-privacy-compliance",
+      "cdc-change-data-capture",
+      "clock-skew",
+      "data-quality-checks",
+      "schema-versioning",
+      "data-warehouse-architecture"
+    ],
+    "mentions": [
+      "db-sharding",
+      "data-catalog-lineage",
+      "mysql-replication-online-ddl",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "floating-point-numbers",
+      "kafka-basics",
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "dbt-transformations",
+      "http-methods",
+      "zero-downtime-migrations",
+      "webhooks"
+    ]
+  },
+  "lambda-kappa-architecture": {
+    "links": [
+      "batch-processing",
+      "stream-processing",
+      "sd-ad-click-stream-windows",
+      "data-quality-checks",
+      "kafka-to-lake-pipeline",
+      "data-lake-hdfs",
+      "cdc-change-data-capture",
+      "etl-vs-elt",
+      "data-engineering-lifecycle",
+      "data-warehouse-architecture"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "centralized-logging-pipeline",
+      "sd-ad-click-exactly-once",
+      "sd-object-storage-architecture",
+      "kafka-basics",
+      "db-type-columnar-olap",
+      "bi-semantic-layer",
+      "code-review-practices",
+      "postgres-architecture",
+      "shells-posix-compat",
+      "zero-downtime-migrations"
+    ]
+  },
+  "ml-experiment-tracking": {
+    "links": [
+      "ml-model-evaluation",
+      "git-large-files-secrets",
+      "ml-pipelines-ci-cd",
+      "canary-release",
+      "ml-model-monitoring-drift"
+    ],
+    "mentions": [
+      "ab-testing",
+      "floating-point-numbers",
+      "long-polling",
+      "git-staging-area",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
+  "ml-model-monitoring-drift": {
+    "links": [
+      "ml-model-evaluation",
+      "ml-fundamentals",
+      "observability-basics",
+      "model-serving",
+      "explainable-ai-shap-lime",
+      "prometheus-basics",
+      "metrics-types",
+      "alerting",
+      "canary-release",
+      "ml-pipelines-ci-cd",
+      "ml-experiment-tracking",
+      "llm-observability"
+    ],
+    "mentions": [
+      "data-quality-checks",
+      "data-warehouse-architecture",
+      "llm-evals",
+      "linux-performance-triage",
+      "vector-db"
+    ]
+  },
+  "model-serving": {
+    "links": [
+      "what-is-mlops",
+      "self-hosting-llm-inference",
+      "fastapi-basics",
+      "deep-learning-basics",
+      "canary-release",
+      "ab-testing",
+      "explainable-ai-shap-lime"
+    ],
+    "mentions": [
+      "dbt-transformations",
+      "observability-basics",
+      "edge-ai-on-device",
+      "data-warehouse-architecture",
+      "ml-experiment-tracking",
+      "db-type-key-value",
+      "docker-container-basics",
+      "airflow-orchestration",
+      "ml-fundamentals",
+      "cold-starts",
+      "autoscaling",
+      "event-loop",
+      "llm-evals",
+      "cloud-deployment-models-multicloud",
+      "input-validation-secure-coding",
+      "code-review-practices",
+      "distributed-tracing",
+      "kafka-basics",
+      "redis-basics",
+      "grpc",
+      "db-modeling-normalization",
+      "dns",
+      "fine-tuning-vs-rag-vs-prompting"
+    ]
+  },
+  "product-analytics-funnels": {
+    "links": [
+      "ab-testing",
+      "browser-fetch",
+      "data-privacy-compliance"
+    ],
+    "mentions": [
+      "k8s-batch-kueue"
+    ]
+  },
+  "what-is-mlops": {
+    "links": [
+      "deep-learning-basics",
+      "model-serving",
+      "explainable-ai-shap-lime",
+      "data-lake-hdfs",
+      "airflow-orchestration",
+      "canary-release",
+      "k8s-gpu-dra",
+      "llm-evals"
+    ],
+    "mentions": [
+      "data-quality-checks",
+      "ml-pipelines-ci-cd",
+      "ml-experiment-tracking",
+      "docker-container-basics",
+      "bash-scripting",
+      "sd-object-storage-architecture",
+      "ci-cd-basics",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
+  "leetcode-cheapest-flights-within-k-stops": {
+    "links": [
+      "leetcode-network-delay-time",
+      "shortest-path-algorithms",
+      "leetcode-find-city-smallest-neighbors",
+      "leetcode-path-with-maximum-probability"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "js-memoization",
+      "sd-maps-tiles-routing",
+      "ds-heap",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-counting-bits": {
+    "links": [
+      "leetcode-number-of-1-bits",
+      "dynamic-programming",
+      "bit-manipulation",
+      "leetcode-climbing-stairs",
+      "leetcode-power-of-two",
+      "leetcode-single-number",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-numbers-bigint",
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-happy-number": {
+    "links": [
+      "leetcode-linked-list-cycle",
+      "ds-hash-map",
+      "bit-manipulation",
+      "dynamic-programming",
+      "leetcode-powx-n"
+    ],
+    "mentions": [
+      "seo-redirects-site-migration",
+      "ds-linked-list",
+      "js-memoization",
+      "sql-aggregation-pitfalls",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-min-cost-to-connect-all-points": {
+    "links": [
+      "minimum-spanning-tree",
+      "ds-union-find",
+      "leetcode-network-delay-time",
+      "leetcode-redundant-connection",
+      "leetcode-number-of-connected-components"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "ds-graph-bfs-dfs",
+      "segment-tree-fenwick",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-minimum-interval-to-include-each-query": {
+    "links": [
+      "interval-problems-pattern",
+      "ds-heap",
+      "ds-union-find",
+      "segment-tree-fenwick",
+      "leetcode-merge-intervals",
+      "leetcode-insert-interval",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-meeting-rooms",
+      "leetcode-merge-k-sorted-lists",
+      "leetcode-task-scheduler"
+    ],
+    "mentions": [
+      "binary-search"
+    ]
+  },
+  "leetcode-number-of-1-bits": {
+    "links": [
+      "bit-manipulation",
+      "logic-gates-alu",
+      "leetcode-counting-bits",
+      "leetcode-power-of-two",
+      "leetcode-single-number",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "js-numbers-bigint",
+      "cpu-pipelining-branch-prediction",
+      "redis-basics",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-powx-n": {
+    "links": [
+      "divide-and-conquer",
+      "bit-manipulation",
+      "floating-point-numbers",
+      "js-numbers-bigint",
+      "leetcode-climbing-stairs",
+      "binary-search",
+      "leetcode-happy-number"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-regular-expression-matching": {
+    "links": [
+      "leetcode-longest-common-subsequence",
+      "leetcode-edit-distance",
+      "recursion-backtracking",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
+      "leetcode-word-break"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "js-memoization",
+      "two-pointers-pattern",
+      "regex-and-globbing",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-reverse-bits": {
+    "links": [
+      "bit-manipulation",
+      "leetcode-number-of-1-bits",
+      "two-pointers-pattern",
+      "leetcode-reverse-integer",
+      "leetcode-single-number",
+      "leetcode-counting-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "divide-and-conquer",
+      "cpu-pipelining-branch-prediction"
+    ]
+  },
+  "leetcode-set-matrix-zeroes": {
+    "links": [
+      "leetcode-rotate-image",
+      "leetcode-spiral-matrix"
+    ],
+    "mentions": [
+      "js-shallow-deep-copy"
+    ]
+  },
+  "leetcode-sum-of-two-integers": {
+    "links": [
+      "logic-gates-alu",
+      "bit-manipulation",
+      "leetcode-reverse-integer",
+      "leetcode-single-number",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-reverse-bits"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "ds-linked-list",
+      "floating-point-numbers"
+    ]
+  },
+  "leetcode-swim-in-rising-water": {
+    "links": [
+      "shortest-path-algorithms",
+      "ds-union-find",
+      "binary-search",
+      "leetcode-network-delay-time",
+      "minimum-spanning-tree",
+      "leetcode-path-with-maximum-probability"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "claude-code-agent-teams": {
+    "links": [
+      "multi-agent-systems",
+      "claude-code-parallel-and-scheduled",
+      "claude-code-extensions",
+      "claude-code-models-and-cost",
+      "network-troubleshooting-by-layer",
+      "claude-code-hooks-deep-dive"
+    ],
+    "mentions": [
+      "claude-code-project-structure",
+      "system-prompt-design",
+      "git-tips-advanced",
+      "api-test-automation",
+      "claude-code-context-window",
+      "cookie-session-login",
+      "mcp-protocol"
+    ]
+  },
+  "explainable-ai-shap-lime": {
+    "links": [
+      "deep-learning-basics",
+      "model-serving",
+      "ab-testing",
+      "llm-evals",
+      "what-is-mlops"
+    ],
+    "mentions": [
+      "ml-fundamentals",
+      "css-box-model-layout",
+      "data-privacy-compliance",
+      "sdlc-models-agile-scrum"
+    ]
+  },
+  "ml-model-evaluation": {
+    "links": [
+      "ml-fundamentals",
+      "llm-evals",
+      "ab-testing"
+    ],
+    "mentions": []
+  },
+  "leetcode-burst-balloons": {
+    "links": [
+      "leetcode-unique-paths",
+      "leetcode-longest-common-subsequence",
+      "dynamic-programming",
+      "greedy-algorithms",
+      "leetcode-permutations",
+      "leetcode-edit-distance",
+      "leetcode-regular-expression-matching"
+    ],
+    "mentions": [
+      "bit-manipulation",
+      "js-memoization"
+    ]
+  },
+  "leetcode-longest-increasing-subsequence": {
+    "links": [
+      "dynamic-programming",
+      "leetcode-climbing-stairs",
+      "leetcode-house-robber",
+      "leetcode-coin-change",
+      "leetcode-word-break",
+      "binary-search",
+      "leetcode-binary-search",
+      "bit-manipulation",
+      "leetcode-longest-common-subsequence"
+    ],
+    "mentions": [
+      "segment-tree-fenwick"
+    ]
+  },
+  "leetcode-meeting-rooms": {
+    "links": [
+      "interval-problems-pattern",
+      "leetcode-merge-intervals",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-my-calendar-i",
+      "leetcode-employee-free-time",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-insert-interval",
+      "leetcode-car-pooling"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "sd-hotel-double-booking"
+    ]
+  },
+  "leetcode-reconstruct-itinerary": {
+    "links": [
+      "recursion-backtracking",
+      "ds-graph-bfs-dfs",
+      "leetcode-network-delay-time",
+      "leetcode-min-cost-to-connect-all-points"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-rotate-image": {
+    "links": [
+      "ds-array-matrix",
+      "leetcode-spiral-matrix",
+      "leetcode-set-matrix-zeroes"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls"
+    ]
+  },
+  "leetcode-single-number": {
+    "links": [
+      "bit-manipulation",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-single-number-ii",
+      "leetcode-missing-number",
+      "leetcode-linked-list-cycle",
+      "leetcode-contains-duplicate",
+      "leetcode-number-of-1-bits",
+      "leetcode-counting-bits",
+      "leetcode-reverse-bits",
+      "leetcode-sum-of-two-integers"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-spiral-matrix": {
+    "links": [
+      "leetcode-rotate-image",
+      "leetcode-set-matrix-zeroes"
+    ],
+    "mentions": []
+  },
+  "leetcode-word-break": {
+    "links": [
+      "leetcode-climbing-stairs",
+      "leetcode-house-robber",
+      "leetcode-coin-change",
+      "dynamic-programming",
+      "ds-trie",
+      "leetcode-implement-trie",
+      "ds-graph-bfs-dfs",
+      "leetcode-word-search-ii",
+      "leetcode-extra-characters-in-a-string",
+      "leetcode-decode-ways",
+      "leetcode-palindrome-partitioning"
+    ],
+    "mentions": [
+      "sql-filtering-operators",
+      "recursion-backtracking"
+    ]
+  },
+  "claude-code-hooks-deep-dive": {
+    "links": [
+      "claude-code-extensions",
+      "claude-code-project-structure",
+      "claude-code-models-and-cost"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "agent-tool-design",
+      "system-prompt-design",
+      "mcp-protocol"
+    ]
+  },
+  "claude-code-plugins-and-channels": {
+    "links": [
+      "claude-code-extensions",
+      "claude-code-hooks-deep-dive",
+      "claude-code-models-and-cost"
+    ],
+    "mentions": [
+      "claude-code-project-structure",
+      "system-prompt-design",
+      "tsconfig-strict",
+      "js-numbers-bigint",
+      "debounce-throttle",
+      "js-runtimes-node-deno-bun",
+      "mcp-protocol",
+      "webhooks"
+    ]
+  },
+  "deep-learning-basics": {
+    "links": [
+      "llm-basics-for-developers",
+      "transformer-attention-kv-cache",
+      "k8s-gpu-dra",
+      "fine-tuning-vs-rag-vs-prompting",
+      "model-serving",
+      "floating-point-numbers",
+      "what-is-mlops",
+      "explainable-ai-shap-lime"
+    ],
+    "mentions": [
+      "n-plus-one-queries",
+      "ml-experiment-tracking",
+      "ml-fundamentals",
+      "postgres-architecture",
+      "self-hosting-llm-inference",
+      "cpu-pipelining-branch-prediction",
+      "db-modeling-normalization"
+    ]
+  },
+  "llm-app-security-guardrails": {
+    "links": [
+      "llm-basics-for-developers",
+      "ai-coding-agents",
+      "owasp-top-10-map",
+      "context-engineering",
+      "llm-observability",
+      "xss",
+      "web-security-headers",
+      "agent-tool-design",
+      "system-prompt-design",
+      "mcp-protocol",
+      "ml-model-evaluation",
+      "data-privacy-compliance",
+      "rate-limiting-algorithms",
+      "llm-evals"
+    ],
+    "mentions": [
+      "sql-injection",
+      "input-validation-secure-coding",
+      "smoke-sanity-regression-testing",
+      "threat-modeling-stride",
+      "security-principles-cia-defense-in-depth",
+      "vector-db",
+      "fine-tuning-vs-rag-vs-prompting",
+      "rag-classic-pipeline"
+    ]
+  },
+  "llm-observability": {
+    "links": [
+      "distributed-tracing",
+      "observability-basics",
+      "llm-app-security-guardrails",
+      "system-prompt-design",
+      "llm-api-integration",
+      "rag-retrieval-quality",
+      "agent-tool-design",
+      "llm-evals"
+    ],
+    "mentions": [
+      "llm-basics-for-developers",
+      "agent-frameworks-comparison",
+      "agentic-rag",
+      "embedding-models-applications",
+      "data-privacy-compliance",
+      "vector-db",
+      "rag-classic-pipeline"
+    ]
+  },
+  "ml-fundamentals": {
+    "links": [
+      "ml-model-evaluation",
+      "embedding-models-applications",
+      "llm-evals",
+      "ab-testing"
+    ],
+    "mentions": [
+      "vector-db"
+    ]
+  },
+  "leetcode-binary-tree-maximum-path-sum": {
+    "links": [
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-diameter-of-binary-tree",
+      "dynamic-programming",
+      "ds-hash-map",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "js-memoization",
+      "complexity-classes-p-np"
+    ]
+  },
+  "leetcode-climbing-stairs": {
+    "links": [
+      "dynamic-programming",
+      "recursion-backtracking",
+      "big-o-notation",
+      "leetcode-study-guide",
+      "leetcode-coin-change",
+      "leetcode-house-robber",
+      "leetcode-coin-change-ii",
+      "sliding-window-pattern",
+      "leetcode-decode-ways"
+    ],
+    "mentions": [
+      "js-classes",
+      "js-memoization",
+      "divide-and-conquer",
+      "floating-point-numbers",
+      "js-destructuring",
+      "js-closures"
+    ]
+  },
+  "leetcode-coin-change": {
+    "links": [
+      "leetcode-climbing-stairs",
+      "leetcode-house-robber",
+      "dynamic-programming",
+      "greedy-algorithms",
+      "leetcode-coin-change-ii",
+      "ds-graph-bfs-dfs",
+      "leetcode-word-break"
+    ],
+    "mentions": []
+  },
+  "leetcode-course-schedule": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "leetcode-course-schedule-ii",
+      "dynamic-programming",
+      "ds-union-find",
+      "leetcode-redundant-connection",
+      "leetcode-alien-dictionary",
+      "leetcode-clone-graph"
+    ],
+    "mentions": [
+      "spring-ioc-di"
+    ]
+  },
+  "leetcode-edit-distance": {
+    "links": [
+      "dynamic-programming",
+      "leetcode-longest-common-subsequence",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
+      "leetcode-regular-expression-matching"
+    ],
+    "mentions": [
+      "js-memoization"
+    ]
+  },
+  "leetcode-gas-station": {
+    "links": [
+      "greedy-algorithms",
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "two-pointers-pattern",
+      "ds-heap"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-house-robber": {
+    "links": [
+      "leetcode-climbing-stairs",
+      "dynamic-programming",
+      "greedy-algorithms",
+      "bit-manipulation",
+      "leetcode-longest-increasing-subsequence",
+      "leetcode-stock-with-cooldown",
+      "leetcode-house-robber-ii",
+      "ds-binary-tree-bst",
+      "binary-search"
+    ],
+    "mentions": []
+  },
+  "leetcode-insert-interval": {
+    "links": [
+      "interval-problems-pattern",
+      "leetcode-merge-intervals",
+      "binary-search",
+      "leetcode-employee-free-time",
+      "leetcode-my-calendar-i",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-interval-list-intersections"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst"
+    ]
+  },
+  "leetcode-jump-game-ii": {
+    "links": [
+      "leetcode-jump-game",
+      "ds-graph-bfs-dfs",
+      "leetcode-sliding-window-maximum",
+      "shortest-path-algorithms",
+      "interval-problems-pattern"
+    ],
+    "mentions": [
+      "sliding-window-pattern",
+      "js-memoization",
+      "sd-maps-tiles-routing",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-jump-game": {
+    "links": [
+      "greedy-algorithms",
+      "dynamic-programming",
+      "recursion-backtracking",
+      "ds-graph-bfs-dfs",
+      "interval-problems-pattern",
+      "leetcode-jump-game-ii",
+      "sliding-window-pattern"
+    ],
+    "mentions": [
+      "js-memoization"
+    ]
+  },
+  "leetcode-longest-common-subsequence": {
+    "links": [
+      "leetcode-edit-distance",
+      "leetcode-distinct-subsequences",
+      "leetcode-interleaving-string",
+      "dynamic-programming",
+      "leetcode-unique-paths",
+      "leetcode-longest-increasing-subsequence",
+      "binary-search",
+      "greedy-algorithms",
+      "leetcode-longest-palindromic-substring"
+    ],
+    "mentions": [
+      "js-memoization",
+      "two-pointers-pattern",
+      "divide-and-conquer",
+      "bit-manipulation",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-merge-intervals": {
+    "links": [
+      "leetcode-insert-interval",
+      "leetcode-meeting-rooms",
+      "interval-problems-pattern",
+      "ds-graph-bfs-dfs",
+      "ds-union-find",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-car-pooling",
+      "leetcode-merge-two-sorted-lists",
+      "leetcode-interval-list-intersections",
+      "leetcode-employee-free-time",
+      "leetcode-partition-labels"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "ds-array-matrix",
+      "js-shallow-deep-copy"
+    ]
+  },
+  "leetcode-network-delay-time": {
+    "links": [
+      "shortest-path-algorithms",
+      "ds-heap",
+      "leetcode-cheapest-flights-within-k-stops",
+      "ds-graph-bfs-dfs",
+      "leetcode-path-with-maximum-probability",
+      "leetcode-swim-in-rising-water",
+      "leetcode-find-city-smallest-neighbors"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-non-overlapping-intervals": {
+    "links": [
+      "interval-problems-pattern",
+      "greedy-algorithms",
+      "leetcode-merge-intervals",
+      "leetcode-meeting-rooms",
+      "bit-manipulation",
+      "leetcode-longest-increasing-subsequence",
+      "dynamic-programming",
+      "binary-search",
+      "leetcode-my-calendar-i",
+      "leetcode-meeting-rooms-ii",
+      "leetcode-insert-interval",
+      "leetcode-minimum-interval-to-include-each-query"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "js-memoization"
+    ]
+  },
+  "leetcode-pacific-atlantic-water-flow": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "leetcode-number-of-islands",
+      "dynamic-programming",
+      "leetcode-trapping-rain-water",
+      "leetcode-rotting-oranges",
+      "leetcode-swim-in-rising-water"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-partition-labels": {
+    "links": [
+      "leetcode-jump-game",
+      "interval-problems-pattern",
+      "leetcode-merge-intervals",
+      "bit-manipulation",
+      "monotonic-stack-pattern",
+      "ds-hash-map"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-unique-paths": {
+    "links": [
+      "dynamic-programming",
+      "recursion-backtracking",
+      "leetcode-word-search",
+      "leetcode-longest-common-subsequence"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "js-memoization",
+      "sql-aggregation-pitfalls"
+    ]
+  },
+  "leetcode-word-ladder": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "recursion-backtracking",
+      "leetcode-number-of-islands",
+      "shortest-path-algorithms",
+      "leetcode-network-delay-time",
+      "leetcode-edit-distance",
+      "leetcode-rotting-oranges",
+      "leetcode-course-schedule",
+      "leetcode-shortest-path-in-binary-matrix"
+    ],
+    "mentions": [
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "claude-code-cli-and-sessions": {
+    "links": [
+      "claude-code-fundamentals-map",
+      "claude-code-project-structure",
+      "claude-code-context-window",
+      "claude-code-extensions",
+      "claude-code-headless-ci"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "linux-files-permissions",
+      "cookie-session-login",
+      "mcp-protocol"
+    ]
+  },
+  "claude-code-headless-ci": {
+    "links": [
+      "claude-code-cli-and-sessions",
+      "claude-code-project-structure",
+      "claude-code-extensions",
+      "github-actions-workflows",
+      "llm-api-integration",
+      "claude-code-models-and-cost",
+      "software-supply-chain-ci-hardening",
+      "agent-frameworks-comparison"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "llm-app-security-guardrails",
+      "bash-scripting",
+      "http-status-codes",
+      "cookie-session-login",
+      "mcp-protocol"
+    ]
+  },
+  "claude-code-models-and-cost": {
+    "links": [
+      "claude-code-context-window",
+      "claude-code-extensions",
+      "llm-model-selection",
+      "claude-code-plugins-and-channels",
+      "transformer-attention-kv-cache",
+      "claude-code-agent-teams"
+    ],
+    "mentions": [
+      "observability-basics",
+      "claude-code-project-structure",
+      "system-prompt-design",
+      "js-numbers-bigint",
+      "sli-slo",
+      "input-validation-secure-coding",
+      "mcp-protocol",
+      "dns"
+    ]
+  },
+  "fine-tuning-vs-rag-vs-prompting": {
+    "links": [
+      "system-prompt-design",
+      "context-engineering",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "llm-api-integration",
+      "embedding-models-applications",
+      "llm-evals",
+      "postgres-architecture",
+      "self-hosting-llm-inference",
+      "ml-fundamentals",
+      "vector-db",
+      "llm-basics-for-developers"
+    ]
+  },
+  "leetcode-clone-graph": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "js-shallow-deep-copy",
+      "leetcode-number-of-islands",
+      "leetcode-copy-list-with-random-pointer",
+      "leetcode-course-schedule"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "pattern-prototype"
+    ]
+  },
+  "leetcode-find-median-from-data-stream": {
+    "links": [
+      "ds-heap",
+      "binary-search",
+      "leetcode-sliding-window-median",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "sql-aggregation-pitfalls",
+      "big-o-notation",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-longest-common-prefix": {
+    "links": [
+      "leetcode-implement-trie",
+      "binary-search",
+      "leetcode-replace-words",
+      "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-search-suggestions-system"
+    ],
+    "mentions": [
+      "string-search-algorithms",
+      "divide-and-conquer",
+      "db-modeling-normalization",
+      "core-web-vitals"
+    ]
+  },
+  "leetcode-merge-k-sorted-lists": {
+    "links": [
+      "leetcode-merge-two-sorted-lists",
+      "ds-heap",
+      "divide-and-conquer",
+      "leetcode-kth-largest-element-in-an-array"
+    ],
+    "mentions": [
+      "db-type-wide-column",
+      "message-delivery-semantics",
+      "db-type-embedded",
+      "ds-linked-list",
+      "centralized-logging-pipeline",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-n-queens": {
+    "links": [
+      "leetcode-permutations",
+      "leetcode-sudoku-solver",
+      "recursion-backtracking",
+      "bit-manipulation",
+      "leetcode-word-search",
+      "leetcode-generate-parentheses",
+      "leetcode-combination-sum",
+      "leetcode-subsets"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "logic-gates-alu"
+    ]
+  },
+  "leetcode-number-of-islands": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "leetcode-rotting-oranges",
+      "ds-union-find",
+      "leetcode-max-area-of-island",
+      "leetcode-pacific-atlantic-water-flow",
+      "leetcode-number-of-connected-components",
+      "leetcode-word-search"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "leetcode-replace-words": {
+    "links": [
+      "leetcode-implement-trie",
+      "leetcode-longest-common-prefix",
+      "leetcode-index-pairs-of-a-string",
+      "ds-trie",
+      "leetcode-extra-characters-in-a-string",
+      "leetcode-word-break"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "string-search-algorithms"
+    ]
+  },
+  "leetcode-serialize-and-deserialize-binary-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-construct-tree-from-preorder-inorder",
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-validate-binary-search-tree",
+      "bit-manipulation",
+      "leetcode-binary-tree-maximum-path-sum",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "grpc",
+      "js-execution-context",
+      "redis-basics"
+    ]
+  },
+  "leetcode-task-scheduler": {
+    "links": [
+      "greedy-algorithms",
+      "ds-heap",
+      "leetcode-reorganize-string",
+      "cpu-scheduling-interrupts"
+    ],
+    "mentions": []
+  },
+  "leetcode-word-search": {
+    "links": [
+      "leetcode-number-of-islands",
+      "recursion-backtracking",
+      "ds-graph-bfs-dfs",
+      "leetcode-word-search-ii",
+      "ds-trie",
+      "leetcode-max-area-of-island",
+      "leetcode-pacific-atlantic-water-flow",
+      "leetcode-n-queens",
+      "leetcode-sudoku-solver"
+    ],
+    "mentions": [
+      "js-memoization",
+      "big-o-notation"
+    ]
+  },
+  "agent-frameworks-comparison": {
+    "links": [
+      "ai-coding-agents",
+      "llm-api-integration",
+      "multi-agent-systems",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality",
+      "claude-code-headless-ci",
+      "mcp-protocol"
+    ],
+    "mentions": [
+      "observability-basics",
+      "llm-observability",
+      "system-prompt-design",
+      "spring-ai-agents",
+      "llm-app-security-guardrails",
+      "transformer-attention-kv-cache",
+      "agentic-rag",
+      "db-type-embedded",
+      "agent-tool-design",
+      "postgres-architecture",
+      "pattern-abstract-factory",
+      "vector-db"
+    ]
+  },
+  "agent-memory": {
+    "links": [
+      "llm-api-integration",
+      "spring-ai-agents",
+      "rag-classic-pipeline",
+      "vector-db",
+      "claude-code-context-window",
+      "llm-evals",
+      "agent-tool-design",
+      "agent-reasoning-patterns"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "data-privacy-compliance",
+      "llm-app-security-guardrails",
+      "redis-basics",
+      "dns"
+    ]
+  },
+  "agent-reasoning-patterns": {
+    "links": [
+      "llm-api-integration",
+      "prompt-reasoning-techniques",
+      "agentic-rag",
+      "agent-tool-design",
+      "llm-evals",
+      "agent-memory",
+      "llm-model-selection"
+    ],
+    "mentions": [
+      "multi-agent-systems",
+      "system-prompt-design",
+      "spring-ai-agents",
+      "input-validation-secure-coding",
+      "sd-video-upload-transcoding",
+      "rag-classic-pipeline"
+    ]
+  },
+  "agent-tool-design": {
+    "links": [
+      "llm-api-integration",
+      "mcp-protocol",
+      "agent-reasoning-patterns",
+      "idempotency-key",
+      "llm-evals",
+      "agent-memory",
+      "llm-model-selection"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "spring-ai-agents",
+      "llm-app-security-guardrails",
+      "agentic-rag",
+      "smoke-sanity-regression-testing",
+      "resilience-patterns",
+      "js-strict-mode",
+      "ssrf",
+      "http-methods"
+    ]
+  },
+  "context-engineering": {
+    "links": [
+      "system-prompt-design",
+      "llm-basics-for-developers",
+      "claude-code-context-window",
+      "rag-classic-pipeline"
+    ],
+    "mentions": [
+      "llm-api-integration",
+      "agent-memory",
+      "llm-evals"
+    ]
+  },
+  "embedding-models-applications": {
+    "links": [
+      "vector-db",
+      "rag-classic-pipeline",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "cold-starts",
+      "db-index-design",
+      "llm-evals",
+      "elasticsearch-inverted-index",
+      "self-hosting-llm-inference",
+      "db-modeling-normalization"
+    ]
+  },
+  "interval-problems-pattern": {
+    "links": [
+      "greedy-algorithms",
+      "leetcode-study-guide",
+      "leetcode-merge-intervals",
+      "leetcode-insert-interval",
+      "leetcode-non-overlapping-intervals",
+      "leetcode-meeting-rooms",
+      "ds-heap",
+      "two-pointers-pattern",
+      "leetcode-minimum-interval-to-include-each-query",
+      "segment-tree-fenwick"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-study-guide": {
+    "links": [
+      "algorithms-overview",
+      "big-o-notation",
+      "two-pointers-pattern",
+      "sliding-window-pattern",
+      "monotonic-stack-pattern",
+      "leetcode-two-sum",
+      "ds-hash-map",
+      "binary-search",
+      "ds-linked-list",
+      "ds-binary-tree-bst",
+      "ds-trie",
+      "ds-heap",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "ds-graph-bfs-dfs",
+      "shortest-path-algorithms",
+      "minimum-spanning-tree",
+      "greedy-algorithms",
+      "interval-problems-pattern",
+      "bit-manipulation"
+    ],
+    "mentions": [
+      "js-numbers-bigint",
+      "sql-aggregation-pitfalls",
+      "sd-maps-tiles-routing",
+      "js-array-mutation"
+    ]
+  },
+  "llm-model-selection": {
+    "links": [
+      "llm-basics-for-developers",
+      "self-hosting-llm-inference",
+      "llm-evals",
+      "prompt-reasoning-techniques",
+      "agent-tool-design",
+      "agent-reasoning-patterns"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "llm-api-integration",
+      "code-review-practices",
+      "fine-tuning-vs-rag-vs-prompting",
+      "vector-db"
+    ]
+  },
+  "monotonic-stack-pattern": {
+    "links": [
+      "ds-stack-queue-deque",
+      "leetcode-study-guide",
+      "big-o-notation",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-sliding-window-maximum",
+      "sliding-window-pattern",
+      "leetcode-valid-parentheses",
+      "leetcode-min-stack",
+      "leetcode-generate-parentheses",
+      "leetcode-daily-temperatures",
+      "leetcode-trapping-rain-water",
+      "two-pointers-pattern"
+    ],
+    "mentions": [
+      "recursion-backtracking"
+    ]
+  },
+  "multi-agent-systems": {
+    "links": [
+      "ai-coding-agents",
+      "agentic-rag",
+      "agent-reasoning-patterns",
+      "agent-frameworks-comparison",
+      "claude-code-extensions",
+      "claude-code-context-window",
+      "llm-api-integration",
+      "claude-code-parallel-and-scheduled",
+      "distributed-tracing",
+      "llm-evals",
+      "agent-tool-design"
+    ],
+    "mentions": [
+      "observability-basics",
+      "llm-observability",
+      "system-prompt-design",
+      "git-tips-advanced",
+      "transformer-attention-kv-cache",
+      "code-review-practices"
+    ]
+  },
+  "sliding-window-pattern": {
+    "links": [
+      "leetcode-study-guide",
+      "leetcode-minimum-window-substring",
+      "big-o-notation",
+      "leetcode-longest-substring-without-repeating",
+      "monotonic-stack-pattern",
+      "leetcode-sliding-window-maximum",
+      "dynamic-programming",
+      "rate-limiting-algorithms",
+      "percentile-latency",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "two-pointers-pattern",
+      "ds-array-matrix"
+    ],
+    "mentions": [
+      "tcp-reliability-congestion"
+    ]
+  },
+  "system-prompt-design": {
+    "links": [
+      "llm-basics-for-developers",
+      "context-engineering",
+      "llm-api-integration",
+      "rag-classic-pipeline",
+      "fine-tuning-vs-rag-vs-prompting"
+    ],
+    "mentions": [
+      "llm-app-security-guardrails",
+      "llm-evals",
+      "code-review-practices"
+    ]
+  },
+  "two-pointers-pattern": {
+    "links": [
+      "leetcode-study-guide",
+      "ds-array-matrix",
+      "sliding-window-pattern",
+      "leetcode-valid-palindrome",
+      "leetcode-two-sum-ii",
+      "leetcode-3sum",
+      "leetcode-container-with-most-water",
+      "ds-linked-list",
+      "leetcode-linked-list-cycle",
+      "leetcode-reorder-list",
+      "sorting-algorithms",
+      "interval-problems-pattern",
+      "leetcode-two-sum",
+      "leetcode-trapping-rain-water",
+      "monotonic-stack-pattern",
+      "leetcode-median-of-two-sorted-arrays"
+    ],
+    "mentions": [
+      "binary-search",
+      "ds-stack-queue-deque"
+    ]
+  },
+  "leetcode-binary-tree-level-order-traversal": {
+    "links": [
+      "ds-binary-tree-bst",
+      "ds-graph-bfs-dfs",
+      "leetcode-maximum-depth-of-binary-tree",
+      "leetcode-binary-tree-right-side-view",
+      "leetcode-rotting-oranges",
+      "leetcode-word-ladder",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-linked-list"
+    ]
+  },
+  "leetcode-combination-sum": {
+    "links": [
+      "leetcode-subsets",
+      "recursion-backtracking",
+      "leetcode-coin-change-ii",
+      "leetcode-combination-sum-ii",
+      "leetcode-subsets-ii",
+      "leetcode-coin-change",
+      "greedy-algorithms",
+      "leetcode-permutations",
+      "leetcode-letter-combinations-of-a-phone-number",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-target-sum"
+    ],
+    "mentions": [
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-design-add-and-search-words": {
+    "links": [
+      "leetcode-implement-trie",
+      "ds-trie",
+      "leetcode-word-search-ii",
+      "leetcode-search-suggestions-system"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "js-memoization"
+    ]
+  },
+  "leetcode-implement-trie": {
+    "links": [
+      "leetcode-design-add-and-search-words",
+      "leetcode-word-search-ii",
+      "leetcode-replace-words",
+      "ds-trie",
+      "binary-search",
+      "leetcode-sum-of-prefix-scores-of-strings",
+      "leetcode-search-suggestions-system",
+      "sd-autocomplete-trie",
+      "leetcode-longest-common-prefix"
+    ],
+    "mentions": [
+      "process-vs-thread",
+      "layer-ip-routing-icmp",
+      "ds-hash-map"
+    ]
+  },
+  "leetcode-k-closest-points-to-origin": {
+    "links": [
+      "leetcode-kth-largest-element-in-an-array",
+      "ds-heap",
+      "leetcode-koko-eating-bananas",
+      "binary-search",
+      "leetcode-kth-largest-element-in-a-stream",
+      "quadtree",
+      "geohash",
+      "sd-proximity-service",
+      "vector-db"
+    ],
+    "mentions": [
+      "pythagorean-theorem",
+      "floating-point-numbers",
+      "js-shallow-deep-copy",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-kth-largest-element-in-an-array": {
+    "links": [
+      "ds-heap",
+      "randomized-algorithms",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-kth-largest-element-in-a-stream",
+      "leetcode-find-median-from-data-stream",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-k-closest-points-to-origin"
+    ],
+    "mentions": [
+      "sql-interview-problems",
+      "sorting-algorithms",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-linked-list-cycle": {
+    "links": [
+      "ds-linked-list",
+      "ds-hash-map",
+      "leetcode-reverse-linked-list",
+      "leetcode-happy-number",
+      "leetcode-reorder-list"
+    ],
+    "mentions": [
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-lowest-common-ancestor-of-bst": {
+    "links": [
+      "ds-binary-tree-bst",
+      "leetcode-maximum-depth-of-binary-tree",
+      "balanced-search-trees",
+      "ds-union-find",
+      "leetcode-validate-binary-search-tree",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-serialize-and-deserialize-binary-tree",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-maximum-depth-of-binary-tree": {
+    "links": [
+      "ds-binary-tree-bst",
+      "recursion-backtracking",
+      "leetcode-binary-tree-maximum-path-sum",
+      "leetcode-binary-tree-level-order-traversal",
+      "leetcode-diameter-of-binary-tree",
+      "sql-cte-recursive",
+      "leetcode-lowest-common-ancestor-of-bst",
+      "leetcode-invert-binary-tree",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "dom-basics",
+      "sqld-top-n-hierarchical-pivot"
+    ]
+  },
+  "leetcode-merge-two-sorted-lists": {
+    "links": [
+      "leetcode-merge-k-sorted-lists",
+      "leetcode-reorder-list",
+      "ds-linked-list",
+      "sorting-algorithms",
+      "divide-and-conquer",
+      "leetcode-reverse-linked-list"
+    ],
+    "mentions": [
+      "js-array-mutation"
+    ]
+  },
+  "leetcode-permutations": {
+    "links": [
+      "leetcode-subsets",
+      "leetcode-combination-sum",
+      "recursion-backtracking",
+      "leetcode-n-queens",
+      "leetcode-permutation-in-string",
+      "leetcode-course-schedule"
+    ],
+    "mentions": [
+      "sliding-window-pattern",
+      "ds-graph-bfs-dfs",
+      "js-destructuring"
+    ]
+  },
+  "leetcode-reorder-list": {
+    "links": [
+      "leetcode-linked-list-cycle",
+      "leetcode-reverse-linked-list",
+      "leetcode-merge-two-sorted-lists",
+      "two-pointers-pattern",
+      "leetcode-reverse-nodes-in-k-group"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-reverse-linked-list": {
+    "links": [
+      "leetcode-reorder-list",
+      "leetcode-reverse-nodes-in-k-group",
+      "ds-linked-list",
+      "recursion-backtracking",
+      "leetcode-linked-list-cycle",
+      "leetcode-merge-two-sorted-lists",
+      "leetcode-add-two-numbers"
+    ],
+    "mentions": [
+      "js-execution-context"
+    ]
+  },
+  "leetcode-subsets": {
+    "links": [
+      "leetcode-combination-sum",
+      "leetcode-permutations",
+      "leetcode-n-queens",
+      "recursion-backtracking",
+      "leetcode-subsets-ii",
+      "dynamic-programming",
+      "bit-manipulation",
+      "leetcode-partition-equal-subset-sum",
+      "leetcode-generate-parentheses",
+      "leetcode-combination-sum-ii",
+      "leetcode-letter-combinations-of-a-phone-number"
+    ],
+    "mentions": [
+      "big-o-notation",
+      "test-design-techniques"
+    ]
+  },
+  "leetcode-word-search-ii": {
+    "links": [
+      "leetcode-word-search",
+      "leetcode-implement-trie",
+      "recursion-backtracking",
+      "leetcode-design-add-and-search-words",
+      "leetcode-number-of-islands",
+      "leetcode-palindrome-pairs"
+    ],
+    "mentions": [
+      "ds-trie",
+      "ds-graph-bfs-dfs"
+    ]
+  },
+  "aws-core-services-map": {
+    "links": [
+      "iam-basics",
+      "cloud-service-models-shared-responsibility",
+      "multi-region",
+      "vpc-basics",
+      "vpc-subnets-route-tables",
+      "security-groups-nacl",
+      "ec2-instance-types-launch-templates",
+      "aws-ec2-ubuntu-server-setup",
+      "rds-aurora-managed-db",
+      "aws-s3-in-practice",
+      "high-availability",
+      "route53-routing-policies",
+      "cloudwatch-metrics-logs-alarms",
+      "cloud-cost-optimization",
+      "terraform-basics"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "vpc-peering-transit-privatelink",
+      "db-type-key-value",
+      "container-orchestration-choices",
+      "sd-object-storage-architecture",
+      "sd-start-single-server",
+      "db-replication-sharding",
+      "security-principles-cia-defense-in-depth",
+      "disaster-recovery",
+      "osi-in-practice",
+      "what-happens-google-com",
+      "sso-saml-oidc",
+      "github-actions-docker-ecr",
+      "eks-cluster-basics"
+    ]
+  },
+  "frontend-first-steps": {
+    "links": [
+      "html-semantics",
+      "css-cascade-specificity",
+      "css-box-model-layout",
+      "css-flexbox-grid",
+      "dom-basics",
+      "event-delegation",
+      "browser-rendering-pipeline",
+      "browser-devtools-debugging",
+      "bundler-basics",
+      "js-es-modules",
+      "frontend-frameworks-compared",
+      "react-jsx-components",
+      "responsive-design",
+      "javascript-roadmap"
+    ],
+    "mentions": []
+  },
+  "git-first-hour": {
+    "links": [
+      "git-internals-basics",
+      "git-staging-area",
+      "git-ignore-config",
+      "git-large-files-secrets",
+      "git-remote-collaboration",
+      "git-merge-conflict",
+      "git-rebase",
+      "git-troubleshooting",
+      "git-branch-merge",
+      "github-pull-request-flow",
+      "git-undo"
+    ],
+    "mentions": [
+      "token-login",
+      "code-review-practices",
+      "what-happens-google-com"
+    ]
+  },
+  "github-pull-request-flow": {
+    "links": [
+      "git-first-hour",
+      "git-remote-collaboration",
+      "github-repo-governance",
+      "code-review-practices",
+      "git-branching-strategy",
+      "git-stacked-prs"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "git-tips-advanced"
+    ]
+  },
+  "go-language-essentials": {
+    "links": [
+      "python-essentials-for-backend",
+      "go-concurrency-basics",
+      "backend-language-comparison"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "terraform-basics",
+      "db-type-embedded",
+      "what-happens-google-com",
+      "db-type-key-value",
+      "dns",
+      "vector-db"
+    ]
+  },
+  "llm-evals": {
+    "links": [
+      "rag-retrieval-quality",
+      "llm-basics-for-developers",
+      "ai-coding-agents",
+      "llm-api-integration",
+      "prompt-reasoning-techniques"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "agentic-rag",
+      "ab-testing",
+      "smoke-sanity-regression-testing",
+      "agent-tool-design",
+      "rag-classic-pipeline",
+      "vector-db"
+    ]
+  },
+  "multimodal-llm-apps": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "llm-evals",
+      "rag-retrieval-quality",
+      "rag-classic-pipeline",
+      "self-hosting-llm-inference"
+    ],
+    "mentions": [
+      "agent-frameworks-comparison",
+      "system-prompt-design",
+      "llm-app-security-guardrails",
+      "sd-start-single-server",
+      "vector-db"
+    ]
+  },
+  "os-kernel-system-calls": {
+    "links": [
+      "process-vs-thread",
+      "virtual-memory-paging",
+      "cpu-scheduling-interrupts",
+      "page-cache-disk-io",
+      "linux-namespaces-cgroups",
+      "nodejs-server-runtime",
+      "seccomp-apparmor",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "cpu-pipelining-branch-prediction",
+      "k8s-security-context",
+      "redis-basics"
+    ]
+  },
+  "prompt-reasoning-techniques": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-evals",
+      "rag-retrieval-quality"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof",
+      "llm-api-integration",
+      "postgres-query-planner",
+      "rag-classic-pipeline",
+      "db-modeling-normalization"
+    ]
+  },
+  "python-essentials-for-backend": {
+    "links": [
+      "fastapi-basics",
+      "backend-language-comparison",
+      "dependency-hell",
+      "go-language-essentials",
+      "bash-scripting"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "docker-container-basics",
+      "js-memory-leak",
+      "runtime-validation-zod",
+      "event-loop"
+    ]
+  },
+  "self-hosting-llm-inference": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "llm-evals",
+      "k8s-gpu-dra",
+      "multimodal-llm-apps"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "api-scaling-ladder",
+      "load-testing-k6",
+      "transformer-attention-kv-cache",
+      "osi-in-practice",
+      "fine-tuning-vs-rag-vs-prompting",
+      "rag-classic-pipeline",
+      "vector-db"
+    ]
+  },
+  "transformer-attention-kv-cache": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration"
+    ],
+    "mentions": [
+      "rag-classic-pipeline",
+      "self-hosting-llm-inference",
+      "system-prompt-design",
+      "sliding-window-pattern",
+      "fine-tuning-vs-rag-vs-prompting",
+      "db-modeling-normalization",
+      "dns",
+      "vector-db"
+    ]
+  },
+  "leetcode-3sum": {
+    "links": [
+      "leetcode-two-sum-ii",
+      "two-pointers-pattern",
+      "ds-hash-map",
+      "leetcode-container-with-most-water"
+    ],
+    "mentions": [
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-best-time-to-buy-and-sell-stock": {
+    "links": [
+      "ds-array-matrix",
+      "greedy-algorithms",
+      "dynamic-programming",
+      "sliding-window-pattern",
+      "leetcode-longest-substring-without-repeating",
+      "two-pointers-pattern",
+      "leetcode-sliding-window-maximum"
+    ],
+    "mentions": [
+      "string-search-algorithms",
+      "divide-and-conquer",
+      "sorting-algorithms",
+      "monotonic-stack-pattern"
+    ]
+  },
+  "leetcode-binary-search": {
+    "links": [
+      "binary-search",
+      "recursion-backtracking",
+      "sorting-algorithms",
+      "big-o-notation",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "sql-aggregation-pitfalls",
+      "sql-filtering-operators",
+      "bit-manipulation"
+    ]
+  },
+  "leetcode-container-with-most-water": {
+    "links": [
+      "two-pointers-pattern",
+      "leetcode-trapping-rain-water",
+      "leetcode-two-sum-ii",
+      "leetcode-largest-rectangle-in-histogram",
+      "binary-search",
+      "monotonic-stack-pattern",
+      "sliding-window-pattern"
+    ],
+    "mentions": [
+      "ds-union-find",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-contains-duplicate": {
+    "links": [
+      "leetcode-two-sum",
+      "ds-hash-map",
+      "sliding-window-pattern",
+      "leetcode-valid-anagram",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-group-anagrams",
+      "leetcode-linked-list-cycle"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "sorting-algorithms",
+      "js-memory-leak",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "js-array-mutation",
+      "bloom-filter"
+    ]
+  },
+  "leetcode-daily-temperatures": {
+    "links": [
+      "monotonic-stack-pattern",
+      "ds-stack-queue-deque",
+      "big-o-notation",
+      "ds-hash-map",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-trapping-rain-water"
+    ],
+    "mentions": [
+      "segment-tree-fenwick",
+      "sd-latency-numbers",
+      "message-delivery-semantics",
+      "binary-search"
+    ]
+  },
+  "leetcode-find-minimum-in-rotated-sorted-array": {
+    "links": [
+      "leetcode-binary-search",
+      "leetcode-search-in-rotated-sorted-array",
+      "binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-generate-parentheses": {
+    "links": [
+      "leetcode-valid-parentheses",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "leetcode-subsets",
+      "leetcode-permutations",
+      "leetcode-combination-sum",
+      "leetcode-n-queens",
+      "monotonic-stack-pattern"
+    ],
+    "mentions": [
+      "ds-graph-bfs-dfs",
+      "ds-binary-tree-bst",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-group-anagrams": {
+    "links": [
+      "leetcode-valid-anagram",
+      "ds-hash-map",
+      "leetcode-top-k-frequent-elements",
+      "leetcode-contains-duplicate"
+    ],
+    "mentions": [
+      "sorting-algorithms",
+      "big-o-notation",
+      "db-modeling-normalization"
+    ]
+  },
+  "leetcode-koko-eating-bananas": {
+    "links": [
+      "leetcode-binary-search",
+      "binary-search",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
+    ],
+    "mentions": []
+  },
+  "leetcode-largest-rectangle-in-histogram": {
+    "links": [
+      "leetcode-daily-temperatures",
+      "monotonic-stack-pattern",
+      "leetcode-trapping-rain-water",
+      "leetcode-container-with-most-water"
+    ],
+    "mentions": [
+      "segment-tree-fenwick",
+      "js-execution-context",
+      "two-pointers-pattern",
+      "divide-and-conquer",
+      "ds-stack-queue-deque",
+      "big-o-notation",
+      "sorting-algorithms"
+    ]
+  },
+  "leetcode-longest-repeating-character-replacement": {
+    "links": [
+      "leetcode-longest-substring-without-repeating",
+      "binary-search",
+      "leetcode-minimum-window-substring"
+    ],
+    "mentions": [
+      "sliding-window-pattern"
+    ]
+  },
+  "leetcode-longest-substring-without-repeating": {
+    "links": [
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "binary-search",
+      "sliding-window-pattern",
+      "ds-hash-map",
+      "leetcode-longest-repeating-character-replacement",
+      "leetcode-minimum-window-substring"
+    ],
+    "mentions": [
+      "js-strings-unicode",
+      "sql-filtering-operators",
+      "big-o-notation",
+      "cookie-session-login"
+    ]
+  },
+  "leetcode-median-of-two-sorted-arrays": {
+    "links": [
+      "leetcode-binary-search",
+      "leetcode-koko-eating-bananas",
+      "sorting-algorithms",
+      "two-pointers-pattern",
+      "leetcode-merge-two-sorted-lists",
+      "ds-heap",
+      "leetcode-merge-k-sorted-lists",
+      "leetcode-find-median-from-data-stream",
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "leetcode-search-in-rotated-sorted-array",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "binary-search",
+      "ds-linked-list",
+      "sql-aggregation-pitfalls",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-min-stack": {
+    "links": [
+      "ds-stack-queue-deque",
+      "leetcode-valid-parentheses",
+      "binary-search",
+      "ds-heap",
+      "leetcode-sliding-window-maximum",
+      "monotonic-stack-pattern",
+      "leetcode-daily-temperatures"
+    ],
+    "mentions": [
+      "ds-linked-list",
+      "big-o-notation"
+    ]
+  },
+  "leetcode-minimum-window-substring": {
+    "links": [
+      "leetcode-longest-substring-without-repeating",
+      "leetcode-longest-repeating-character-replacement",
+      "binary-search",
+      "leetcode-sliding-window-maximum"
+    ],
+    "mentions": [
+      "sliding-window-pattern",
+      "sql-filtering-operators",
+      "ds-array-matrix",
+      "monotonic-stack-pattern"
+    ]
+  },
+  "leetcode-search-in-rotated-sorted-array": {
+    "links": [
+      "leetcode-find-minimum-in-rotated-sorted-array",
+      "binary-search",
+      "leetcode-binary-search",
+      "leetcode-koko-eating-bananas",
+      "leetcode-median-of-two-sorted-arrays",
+      "leetcode-study-guide"
+    ],
+    "mentions": [
+      "big-o-notation"
+    ]
+  },
+  "leetcode-sliding-window-maximum": {
+    "links": [
+      "leetcode-minimum-window-substring",
+      "ds-heap",
+      "ds-stack-queue-deque",
+      "leetcode-best-time-to-buy-and-sell-stock",
+      "leetcode-longest-substring-without-repeating",
+      "monotonic-stack-pattern",
+      "sliding-window-pattern"
+    ],
+    "mentions": [
+      "sql-interview-problems",
+      "ds-binary-tree-bst",
+      "segment-tree-fenwick",
+      "ds-array-matrix",
+      "dynamic-programming"
+    ]
+  },
+  "leetcode-top-k-frequent-elements": {
+    "links": [
+      "ds-heap",
+      "sorting-algorithms",
+      "leetcode-contains-duplicate",
+      "leetcode-valid-anagram",
+      "leetcode-kth-largest-element-in-an-array",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": [
+      "count-min-sketch",
+      "ds-linked-list",
+      "big-o-notation",
+      "divide-and-conquer"
+    ]
+  },
+  "leetcode-trapping-rain-water": {
+    "links": [
+      "leetcode-container-with-most-water",
+      "two-pointers-pattern",
+      "dynamic-programming",
+      "monotonic-stack-pattern",
+      "ds-heap",
+      "shortest-path-algorithms",
+      "leetcode-largest-rectangle-in-histogram",
+      "leetcode-daily-temperatures"
+    ],
+    "mentions": [
+      "ds-stack-queue-deque",
+      "ds-array-matrix",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "leetcode-two-sum-ii": {
+    "links": [
+      "leetcode-two-sum",
+      "two-pointers-pattern",
+      "ds-hash-map",
+      "binary-search",
+      "leetcode-3sum"
+    ],
+    "mentions": [
+      "ds-binary-tree-bst",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-two-sum": {
+    "links": [
+      "ds-hash-map",
+      "big-o-notation",
+      "leetcode-study-guide",
+      "two-pointers-pattern",
+      "sorting-algorithms",
+      "leetcode-two-sum-ii",
+      "binary-search",
+      "leetcode-3sum",
+      "leetcode-contains-duplicate",
+      "leetcode-group-anagrams"
+    ],
+    "mentions": []
+  },
+  "leetcode-valid-anagram": {
+    "links": [
+      "leetcode-group-anagrams",
+      "leetcode-two-sum",
+      "js-strings-unicode",
+      "sliding-window-pattern"
+    ],
+    "mentions": [
+      "message-delivery-semantics",
+      "floating-point-numbers",
+      "db-modeling-normalization"
+    ]
+  },
+  "leetcode-valid-palindrome": {
+    "links": [
+      "two-pointers-pattern",
+      "recursion-backtracking",
+      "big-o-notation",
+      "dynamic-programming",
+      "leetcode-reverse-linked-list",
+      "leetcode-two-sum-ii",
+      "leetcode-3sum"
+    ],
+    "mentions": [
+      "js-strings-unicode",
+      "ds-linked-list",
+      "string-search-algorithms",
+      "ds-array-matrix"
+    ]
+  },
+  "leetcode-valid-parentheses": {
+    "links": [
+      "ds-stack-queue-deque",
+      "recursion-backtracking",
+      "leetcode-daily-temperatures",
+      "leetcode-largest-rectangle-in-histogram",
+      "dynamic-programming",
+      "leetcode-generate-parentheses",
+      "monotonic-stack-pattern",
+      "leetcode-min-stack"
+    ],
+    "mentions": [
+      "pattern-interpreter",
+      "js-execution-context",
+      "ds-array-matrix",
+      "big-o-notation"
+    ]
+  },
+  "linux-archive-transfer": {
+    "links": [
+      "rsync-algorithm",
+      "linux-files-permissions",
+      "bash-scripting",
+      "shell-redirection-pipes",
+      "ssh-in-practice",
+      "linux-package-management",
+      "vim-for-servers"
+    ],
+    "mentions": [
+      "youtube-url-to-video",
+      "linux-disks-filesystems",
+      "ports-and-sockets",
+      "what-happens-google-com"
+    ]
+  },
+  "linux-package-management": {
+    "links": [
+      "digital-signatures-certificates",
+      "aws-ec2-ubuntu-server-setup",
+      "dockerfile-image-layers",
+      "linux-archive-transfer",
+      "vim-for-servers"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "python-essentials-for-backend",
+      "what-happens-google-com"
+    ]
+  },
+  "shells-posix-compat": {
+    "links": [
+      "shell-environment-startup",
+      "bash-scripting",
+      "linux-grep-awk-sed",
+      "linux-package-management",
+      "linux-archive-transfer"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "linux-boot-process",
+      "bash-expansions-variables",
+      "shell-redirection-pipes"
+    ]
+  },
+  "vim-for-servers": {
+    "links": [
+      "linux-systemd-systemctl",
+      "linux-grep-awk-sed",
+      "linux-users-groups-sudo",
+      "shell-environment-startup",
+      "cron-jobs",
+      "linux-archive-transfer",
+      "linux-package-management"
+    ],
+    "mentions": [
+      "docker-compose",
+      "nginx-basics",
+      "fp-composition-pipe",
+      "aws-ec2-ubuntu-server-setup"
+    ]
+  },
+  "config-management-tools": {
+    "links": [
+      "iac-basics",
+      "ansible-network-automation",
+      "terraform-basics",
+      "terraform-team-workflow-hcp-terragrunt"
+    ],
+    "mentions": [
+      "k8s-configmap",
+      "high-availability",
+      "docker-container-basics",
+      "security-groups-nacl",
+      "what-happens-google-com",
+      "vpc-basics",
+      "http-methods"
+    ]
+  },
+  "data-center-infrastructure": {
+    "links": [
+      "network-design-three-tier-spine-leaf",
+      "multi-region",
+      "gateway-link-redundancy-fhrp-lacp",
+      "cloud-cost-optimization",
+      "security-compliance-for-developers",
+      "bgp-basics",
+      "sd-object-storage-durability",
+      "high-availability",
+      "sd-multi-datacenter",
+      "vpc-basics"
+    ],
+    "mentions": [
+      "k8s-pod-scheduling",
+      "cloud-deployment-models-multicloud",
+      "ec2-instance-types-launch-templates",
+      "rest-api-design",
+      "virtualization-hypervisors",
+      "sd-start-single-server",
+      "osi-in-practice",
+      "client-data-cache",
+      "what-happens-google-com",
+      "data-lake-hdfs",
+      "sql-query-rewrite"
+    ]
+  },
+  "data-privacy-compliance": {
+    "links": [
+      "structured-logging",
+      "encryption-at-rest",
+      "postgres-roles-security",
+      "event-sourcing",
+      "global-rollout-localization",
+      "ml-experiment-tracking",
+      "data-quality-checks",
+      "security-logging-detection-siem",
+      "k8s-audit-logging"
+    ],
+    "mentions": [
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "dns"
+    ]
+  },
+  "docker-local-dev-workflow": {
+    "links": [
+      "docker-compose",
+      "dockerfile-image-layers",
+      "docker-network-volume",
+      "nodejs-debugging-profiling",
+      "integration-tests-real-db",
+      "docker-runtime-security"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "fp-composition-pipe",
+      "docker-commands-workflow",
+      "osi-in-practice",
+      "frontend-monorepo",
+      "frontend-build-tooling",
+      "db-modeling-normalization"
+    ]
+  },
+  "frontend-hosting-platforms": {
+    "links": [
+      "rendering-strategies",
+      "aws-s3-in-practice",
+      "cdn-edge-anycast",
+      "nextjs-self-hosting-deployment",
+      "cloud-service-models-shared-responsibility",
+      "rendering-csr-spa",
+      "http-caching-cdn",
+      "code-splitting",
+      "cold-starts",
+      "serverless-limits",
+      "route53-routing-policies",
+      "https-tls",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "dockerfile-image-layers",
+      "s3-storage-classes-lifecycle",
+      "islands-resumability",
+      "react-server-components",
+      "http-status-codes",
+      "dns",
+      "what-happens-google-com",
+      "oauth"
+    ]
+  },
+  "linux-fhs-file-commands": {
+    "links": [
+      "linux-files-permissions",
+      "linux-disks-filesystems",
+      "hosts-file",
+      "linux-processes-signals",
+      "linux-network-tuning",
+      "linux-systemd-systemctl",
+      "linux-grep-awk-sed",
+      "bash-expansions-variables",
+      "path-traversal-file-upload",
+      "shell-redirection-pipes"
+    ],
+    "mentions": [
+      "aws-ec2-ubuntu-server-setup",
+      "page-cache-disk-io",
+      "os-kernel-system-calls",
+      "client-data-cache"
+    ]
+  },
+  "phishing-social-engineering": {
+    "links": [
+      "sd-email-protocols",
+      "mfa-totp",
+      "digital-signatures-certificates",
+      "passkeys-webauthn",
+      "encryption-at-rest",
+      "web-security-headers",
+      "software-supply-chain-ci-hardening",
+      "security-incident-response",
+      "data-privacy-compliance"
+    ],
+    "mentions": [
+      "owasp-top-10-map",
+      "sd-url-shortener-api-redirect",
+      "python-essentials-for-backend",
+      "network-attacks-l2-l3",
+      "dynamic-programming",
+      "what-happens-google-com",
+      "cookie-session-login",
+      "cloud-service-models-shared-responsibility",
+      "dns"
+    ]
+  },
+  "security-compliance-for-developers": {
+    "links": [
+      "security-logging-detection-siem",
+      "security-incident-response",
+      "cis-benchmark-kube-bench",
+      "iam-basics",
+      "secrets-management",
+      "k8s-audit-logging",
+      "structured-logging",
+      "backup-strategy",
+      "vulnerability-management-cve-cvss",
+      "terraform-testing-policy-scanning",
+      "threat-modeling-stride",
+      "multi-region",
+      "cloud-service-models-shared-responsibility",
+      "software-supply-chain-ci-hardening",
+      "security-principles-cia-defense-in-depth"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "terraform-basics",
+      "data-privacy-compliance",
+      "code-review-practices",
+      "security-groups-nacl",
+      "sso-saml-oidc",
+      "on-call"
+    ]
+  },
+  "terraform-team-workflow-hcp-terragrunt": {
+    "links": [
+      "terraform-basics",
+      "network-config-cicd",
+      "github-actions-docker-ecr",
+      "terraform-modules-tfvars",
+      "terraform-testing-policy-scanning",
+      "config-management-tools"
+    ],
+    "mentions": [
+      "ansible-network-automation",
+      "jenkins-argocd-push-pull",
+      "sso-saml-oidc",
+      "vpc-basics",
+      "webhooks"
+    ]
+  },
+  "claim-check-sequential-convoy": {
+    "links": [
+      "message-queue-basics",
+      "kafka-basics",
+      "dead-letter-queue",
+      "s3-storage-classes-lifecycle",
+      "encryption-at-rest",
+      "message-delivery-semantics",
+      "idempotency-key",
+      "transactional-outbox"
+    ],
+    "mentions": [
+      "serverless-architecture",
+      "aws-s3-in-practice",
+      "sd-object-storage-architecture",
+      "db-replication-sharding",
+      "caching-strategies"
+    ]
+  },
+  "cloudwatch-metrics-logs-alarms": {
+    "links": [
+      "logging-tools-overview",
+      "observability-basics",
+      "prometheus-basics",
+      "aws-ec2-ubuntu-server-setup",
+      "db-type-time-series",
+      "structured-logging",
+      "alerting",
+      "dead-letter-queue",
+      "grafana-dashboards"
+    ],
+    "mentions": [
+      "serverless-architecture",
+      "virtual-memory-paging",
+      "terraform-basics",
+      "virtualization-hypervisors",
+      "security-groups-nacl"
+    ]
+  },
+  "css-typography": {
+    "links": [
+      "web-font-optimization",
+      "css-cascade-specificity",
+      "responsive-design",
+      "css-flexbox-grid",
+      "web-accessibility",
+      "html-text-semantics"
+    ],
+    "mentions": [
+      "html-semantics"
+    ]
+  },
+  "html-media-embed": {
+    "links": [
+      "image-optimization",
+      "core-web-vitals",
+      "cors",
+      "aria-keyboard-focus",
+      "browser-security-model",
+      "web-security-headers",
+      "lazy-loading-strategies",
+      "sd-video-streaming-cost",
+      "youtube-url-to-video",
+      "html-text-semantics"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "http-status-codes",
+      "shells-posix-compat",
+      "web-accessibility",
+      "sd-music-streaming"
+    ]
+  },
+  "html-text-semantics": {
+    "links": [
+      "html-semantics",
+      "css-typography",
+      "xss",
+      "web-accessibility",
+      "html-media-embed"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "seo-for-spa",
+      "code-review-practices"
+    ]
+  },
+  "iot-mobile-wireless-links": {
+    "links": [
+      "wifi-standards-security",
+      "wifi-design-channels-roaming",
+      "pub-sub",
+      "latency-bandwidth-throughput",
+      "https-tls"
+    ],
+    "mentions": [
+      "js-strings-unicode"
+    ]
+  },
+  "k8s-multi-cluster": {
+    "links": [
+      "k8s-architecture",
+      "eks-cluster-basics",
+      "argocd-basics",
+      "k8s-cluster-upgrade",
+      "k8s-controllers-reconcile",
+      "k8s-coredns",
+      "service-mesh",
+      "route53-routing-policies",
+      "cdn-edge-anycast",
+      "multi-region",
+      "disaster-recovery",
+      "prometheus-basics"
+    ],
+    "mentions": [
+      "vpc-peering-transit-privatelink",
+      "canary-release",
+      "k8s-service-types",
+      "kubernetes-ingress",
+      "gateway",
+      "lighthouse-explained",
+      "terraform-basics",
+      "docker-container-basics",
+      "k8s-admission-control",
+      "cilium-ebpf",
+      "k8s-labels-selectors",
+      "osi-in-practice",
+      "what-happens-google-com",
+      "cloud-service-models-shared-responsibility",
+      "layer-ip-addressing",
+      "db-type-key-value",
+      "https-tls",
+      "k8s-hpa",
+      "vpc-basics",
+      "dns",
+      "webhooks"
+    ]
+  },
+  "linters-formatters": {
+    "links": [
+      "frontend-build-tooling",
+      "code-review-practices",
+      "tsconfig-strict"
+    ],
+    "mentions": [
+      "github-repo-governance",
+      "js-equality-coercion",
+      "bundler-basics",
+      "react-custom-hooks-rules"
+    ]
+  },
+  "mongodb-security": {
+    "links": [
+      "mongodb-document-model",
+      "mongodb-replica-set-sharding",
+      "postgres-roles-security",
+      "encryption-in-transit",
+      "encryption-at-rest"
+    ],
+    "mentions": [
+      "secrets-management",
+      "kubernetes-ingress",
+      "authn-vs-authz",
+      "security-principles-cia-defense-in-depth",
+      "security-groups-nacl",
+      "symmetric-encryption-aes"
+    ]
+  },
+  "pattern-null-object": {
+    "links": [
+      "design-patterns-overview",
+      "pattern-strategy",
+      "pattern-singleton",
+      "js-optional-chaining-nullish",
+      "fp-functors-monads-js",
+      "js-error-handling",
+      "clean-code-practices",
+      "pattern-state",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-array-transform",
+      "js-pure-functions",
+      "oop-four-pillars"
+    ]
+  },
+  "redis-modules-stack": {
+    "links": [
+      "redis-basics",
+      "mongodb-security",
+      "redis-persistence-ha",
+      "elasticsearch-inverted-index",
+      "vector-db",
+      "bloom-filter",
+      "count-min-sketch",
+      "valkey-vs-redis",
+      "redis-memory-eviction",
+      "redis-cluster"
+    ],
+    "mentions": [
+      "db-type-time-series",
+      "opensearch-cluster-operations",
+      "db-locking-deadlock",
+      "event-loop",
+      "db-transaction-isolation",
+      "rag-classic-pipeline"
+    ]
+  },
+  "ts-decorators": {
+    "links": [
+      "pattern-decorator",
+      "ts-classes-access-modifiers",
+      "nodejs-web-frameworks",
+      "linters-formatters",
+      "frontend-build-tooling"
+    ],
+    "mentions": [
+      "tsconfig-strict",
+      "pattern-proxy",
+      "spring-ioc-di",
+      "js-object-methods",
+      "fp-composition-pipe",
+      "js-first-class-callbacks",
+      "bundler-basics",
+      "design-patterns-overview"
+    ]
+  },
+  "wan-mpls-sd-wan-vrf": {
+    "links": [
+      "vpn-ipsec-wireguard",
+      "bgp-basics",
+      "traffic-shaping-qos",
+      "vlan-basics",
+      "layer-mtu-fragmentation",
+      "vpc-peering-transit-privatelink",
+      "zero-trust-architecture"
+    ],
+    "mentions": [
+      "cloud-deployment-models-multicloud",
+      "layer-ip-routing-icmp",
+      "layer-ip-addressing",
+      "what-happens-google-com",
+      "cloud-service-models-shared-responsibility",
+      "routing-protocols-ospf-rip-eigrp",
+      "sdn-vxlan-overlay",
+      "first-page-from-power-on",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "wifi-design-channels-roaming": {
+    "links": [
+      "wifi-standards-security",
+      "iot-mobile-wireless-links"
+    ],
+    "mentions": [
+      "enterprise-auth-ldap-kerberos"
+    ]
+  },
+  "wifi-standards-security": {
+    "links": [
+      "wifi-design-channels-roaming",
+      "iot-mobile-wireless-links",
+      "first-page-from-power-on",
+      "layer-link-ethernet-arp",
+      "vlan-basics",
+      "network-attacks-l2-l3",
+      "nat-traversal",
+      "https-tls",
+      "vpn-ipsec-wireguard"
+    ],
+    "mentions": [
+      "enterprise-auth-ldap-kerberos",
+      "what-happens-google-com",
+      "dhcp",
+      "dns"
+    ]
+  },
+  "actor-model": {
+    "links": [
+      "deadlocks",
+      "go-concurrency-basics",
+      "race-conditions",
+      "backpressure"
+    ],
+    "mentions": [
+      "abort-controller",
+      "tcp-reliability-congestion",
+      "mutex-semaphore-monitor",
+      "http-methods"
+    ]
+  },
+  "backend-language-comparison": {
+    "links": [
+      "go-concurrency-basics",
+      "java-jvm-memory-gc",
+      "nodejs-server-runtime",
+      "cold-starts",
+      "spring-data-repositories",
+      "nodejs-cli-process",
+      "nodejs-debugging-profiling"
+    ],
+    "mentions": [
+      "js-async-await",
+      "dockerfile-image-layers",
+      "k8s-pod-resources",
+      "fastapi-basics",
+      "react-state-snapshot-batching",
+      "autoscaling",
+      "garbage-collection",
+      "deadlocks",
+      "latency-bandwidth-throughput",
+      "event-loop",
+      "js-memory-leak",
+      "model-serving",
+      "code-review-practices",
+      "spring-boot-auto-configuration",
+      "spring-ioc-di",
+      "connection-pool",
+      "gateway"
+    ]
+  },
+  "cross-platform-apps": {
+    "links": [
+      "pwa-install-offline",
+      "frontend-monorepo",
+      "xss",
+      "web-security-headers"
+    ],
+    "mentions": [
+      "css-flexbox-grid",
+      "event-loop",
+      "what-happens-google-com"
+    ]
+  },
+  "css-color-background": {
+    "links": [
+      "css-custom-properties",
+      "web-accessibility",
+      "css-sticky-scroll-snap",
+      "animation-performance",
+      "browser-rendering-pipeline",
+      "css-position-stacking-context"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "what-happens-google-com",
+      "smoke-sanity-regression-testing",
+      "design-system-building",
+      "scroll-patterns-overview",
+      "parallax-scrollytelling"
+    ]
+  },
+  "elasticsearch-bulk-indexing": {
+    "links": [
+      "elasticsearch-inverted-index",
+      "optimistic-locking",
+      "backpressure",
+      "elasticsearch-mapping",
+      "elk-stack-basics",
+      "elasticsearch-snapshot-dr"
+    ],
+    "mentions": [
+      "sd-mq-storage-partitions",
+      "http-streaming-sse",
+      "resilience-patterns",
+      "page-cache-disk-io",
+      "cdc-change-data-capture",
+      "http-methods"
+    ]
+  },
+  "elasticsearch-snapshot-dr": {
+    "links": [
+      "backup-strategy",
+      "elasticsearch-inverted-index",
+      "elasticsearch-bulk-indexing",
+      "elasticsearch-mapping",
+      "elk-stack-basics",
+      "opensearch-cluster-operations",
+      "disaster-recovery"
+    ],
+    "mentions": [
+      "s3-storage-classes-lifecycle",
+      "sd-mq-storage-partitions",
+      "sd-object-storage-architecture",
+      "sd-split-web-and-db",
+      "db-replication-sharding",
+      "on-call"
+    ]
+  },
+  "frontend-i18n-intl": {
+    "links": [
+      "global-rollout-localization",
+      "js-loops-control-flow",
+      "nextjs-route-handlers-proxy",
+      "seo-for-spa",
+      "nextjs-static-dynamic-rendering",
+      "hydration",
+      "css-flexbox-grid"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof",
+      "nextjs-app-router-routing",
+      "code-splitting",
+      "rendering-strategies",
+      "ts-narrowing",
+      "react-server-components",
+      "db-modeling-normalization"
+    ]
+  },
+  "git-hooks": {
+    "links": [
+      "git-tips-advanced",
+      "git-staging-area",
+      "git-large-files-secrets",
+      "github-repo-governance"
+    ],
+    "mentions": [
+      "git-branching-strategy",
+      "webhooks"
+    ]
+  },
+  "github-apps-api": {
+    "links": [
+      "github-repo-governance",
+      "webhooks",
+      "oauth",
+      "secrets-management",
+      "rate-limiting-in-practice",
+      "graphql-basics",
+      "graphql-pagination-connections",
+      "api-pagination-sorting",
+      "npm-package-publishing"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "rest-api-design",
+      "token-login",
+      "resilience-patterns",
+      "http-caching-cdn"
+    ]
+  },
+  "js-binary-data-typed-arrays": {
+    "links": [
+      "bit-manipulation",
+      "character-encoding-unicode",
+      "web-workers",
+      "js-shallow-deep-copy",
+      "web-security-headers",
+      "js-loops-control-flow"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "cpu-pipelining-branch-prediction",
+      "js-numbers-bigint",
+      "cors"
+    ]
+  },
+  "js-loops-control-flow": {
+    "links": [
+      "js-async-await",
+      "js-iterators-generators",
+      "js-array-transform",
+      "js-var-let-const",
+      "js-object-methods",
+      "js-prototype-chain",
+      "js-binary-data-typed-arrays",
+      "js-strings-unicode",
+      "js-equality-coercion",
+      "js-map-set-weak",
+      "ts-narrowing",
+      "frontend-i18n-intl",
+      "clean-code-practices",
+      "js-short-circuit",
+      "performance-metrics-measurement"
+    ],
+    "mentions": [
+      "linters-formatters",
+      "js-function-forms",
+      "event-loop",
+      "two-pointers-pattern",
+      "tcp-reliability-congestion",
+      "bundler-basics",
+      "js-closures",
+      "js-hoisting-tdz"
+    ]
+  },
+  "memory-safety-buffer-overflow": {
+    "links": [
+      "logic-gates-alu",
+      "cpu-instruction-cycle",
+      "virtual-memory-paging"
+    ],
+    "mentions": [
+      "js-execution-context",
+      "js-memory-leak",
+      "postgres-slow-db-triage",
+      "js-var-let-const"
+    ]
+  },
+  "nodejs-cli-process": {
+    "links": [
+      "nodejs-error-handling",
+      "nodejs-fs-streams"
+    ],
+    "mentions": [
+      "js-async-await",
+      "os-kernel-system-calls",
+      "centralized-logging-pipeline",
+      "event-loop"
+    ]
+  },
+  "npm-package-publishing": {
+    "links": [
+      "semantic-versioning",
+      "dependency-hell",
+      "js-es-modules",
+      "git-large-files-secrets",
+      "pattern-singleton",
+      "frontend-monorepo"
+    ],
+    "mentions": [
+      "tsconfig-strict",
+      "github-actions-docker-ecr",
+      "git-ignore-config",
+      "build-caching",
+      "container-supply-chain-security",
+      "linters-formatters",
+      "bash-scripting",
+      "code-splitting",
+      "software-supply-chain-ci-hardening",
+      "ds-graph-bfs-dfs",
+      "js-pure-functions",
+      "api-versioning"
+    ]
+  },
+  "reactive-programming": {
+    "links": [
+      "debounce-throttle",
+      "js-memory-leak",
+      "pattern-observer",
+      "client-data-cache",
+      "backpressure",
+      "spring-mvc-request-lifecycle",
+      "java-jvm-memory-gc"
+    ],
+    "mentions": [
+      "deadlocks",
+      "event-loop",
+      "code-review-practices",
+      "abort-controller",
+      "kafka-basics"
+    ]
+  },
+  "sdlc-models-agile-scrum": {
+    "links": [
+      "tdd-bdd-atdd",
+      "ci-cd-basics",
+      "git-branching-strategy",
+      "test-design-techniques",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "security-testing-sast-dast",
+      "k8s-deploy-pipeline-eks",
+      "smoke-sanity-regression-testing",
+      "latency-bandwidth-throughput",
+      "code-review-practices"
+    ]
+  },
+  "spring-data-repositories": {
+    "links": [
+      "jpa-persistence-context",
+      "jpa-entity-relationships",
+      "spring-boot-auto-configuration",
+      "ddd-tactical-patterns",
+      "mongodb-document-model",
+      "mongodb-indexes-explain",
+      "spring-boot-testing"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "sql-query-rewrite",
+      "optimistic-locking",
+      "loading-patterns",
+      "ddd-bounded-context",
+      "pattern-proxy"
+    ]
+  },
+  "uml-diagrams": {
+    "links": [
+      "architecture-docs-c4-adr",
+      "coupling-cohesion-principles",
+      "oop-four-pillars",
+      "ddd-tactical-patterns",
+      "distributed-tracing",
+      "pattern-state"
+    ],
+    "mentions": [
+      "jpa-entity-relationships",
+      "ddd-bounded-context",
+      "resilience-patterns"
+    ]
+  },
+  "ai-coding-agents": {
+    "links": [
+      "claude-code-fundamentals-map",
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "claude-code-context-window",
+      "claude-code-project-structure",
+      "claude-code-extensions",
+      "code-review-practices",
+      "git-large-files-secrets",
+      "mcp-protocol",
+      "claude-code-parallel-and-scheduled"
+    ],
+    "mentions": [
+      "js-async-await",
+      "system-prompt-design",
+      "llm-app-security-guardrails",
+      "tdd-bdd-atdd",
+      "thread-safety",
+      "agent-tool-design"
+    ]
+  },
+  "aws-s3-in-practice": {
+    "links": [
+      "s3-storage-classes-lifecycle",
+      "block-file-object-storage",
+      "sd-object-storage-architecture",
+      "iam-basics",
+      "cors",
+      "http-caching-cdn",
+      "sd-object-storage-versioning-multipart"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "rendering-csr-spa",
+      "optimistic-locking",
+      "db-consistency-cap",
+      "api-key-hmac-auth",
+      "what-happens-google-com"
+    ]
+  },
+  "block-file-object-storage": {
+    "links": [
+      "virtualization-hypervisors",
+      "aws-s3-in-practice",
+      "s3-storage-classes-lifecycle",
+      "sd-object-storage-architecture",
+      "page-cache-disk-io",
+      "backup-strategy",
+      "k8s-pv-pvc",
+      "rds-aurora-managed-db"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "db-type-wide-column",
+      "ec2-instance-types-launch-templates",
+      "k8s-cri-cni-csi",
+      "optimistic-locking",
+      "db-replication-sharding",
+      "sd-start-single-server",
+      "latency-bandwidth-throughput",
+      "db-type-embedded",
+      "linux-disks-filesystems",
+      "kafka-basics",
+      "security-groups-nacl",
+      "vpc-basics",
+      "message-queue-basics"
+    ]
+  },
+  "cloud-deployment-models-multicloud": {
+    "links": [
+      "multi-region",
+      "vpn-ipsec-wireguard",
+      "virtualization-hypervisors",
+      "cloud-cost-optimization",
+      "vpc-peering-transit-privatelink",
+      "sso-saml-oidc",
+      "disaster-recovery",
+      "iac-basics",
+      "high-availability"
+    ],
+    "mentions": [
+      "route53-routing-policies",
+      "github-actions-docker-ecr",
+      "observability-basics",
+      "terraform-basics",
+      "failover",
+      "k8s-deploy-pipeline-eks",
+      "db-type-key-value",
+      "docker-container-basics",
+      "layer-ip-routing-icmp",
+      "sd-object-storage-architecture",
+      "kafka-basics",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "layer-ip-addressing",
+      "bgp-basics",
+      "eks-cluster-basics",
+      "vpc-basics",
+      "layer-mtu-fragmentation",
+      "dns"
+    ]
+  },
+  "complexity-classes-p-np": {
+    "links": [
+      "big-o-notation",
+      "bit-manipulation",
+      "dynamic-programming",
+      "shortest-path-algorithms",
+      "ds-graph-bfs-dfs",
+      "max-flow-bipartite-matching",
+      "minimum-spanning-tree"
+    ],
+    "mentions": [
+      "sd-interview-framework",
+      "js-array-transform",
+      "message-delivery-semantics",
+      "binary-search",
+      "sd-maps-tiles-routing",
+      "sd-video-upload-transcoding",
+      "recursion-backtracking"
+    ]
+  },
+  "container-orchestration-choices": {
+    "links": [
+      "docker-compose",
+      "k8s-learning-roadmap",
+      "k8s-controllers-reconcile",
+      "k8s-pod-resources",
+      "k8s-pod-scheduling",
+      "rolling-deployment",
+      "serverless-architecture",
+      "k8s-security-context",
+      "k8s-crd",
+      "k8s-operators",
+      "kubeadm-cluster-setup"
+    ],
+    "mentions": [
+      "k8s-pod-probes",
+      "docker-container-basics",
+      "kubernetes-ingress",
+      "ecs-fargate-task-service",
+      "k8s-pod-basics",
+      "k8s-configmap",
+      "k8s-deployment",
+      "k8s-daemonset",
+      "k8s-architecture",
+      "helm-basics",
+      "sd-start-single-server",
+      "cold-starts",
+      "autoscaling",
+      "rollback-strategy",
+      "osi-in-practice",
+      "redis-basics",
+      "what-happens-google-com",
+      "local-k8s-kind-minikube",
+      "db-type-key-value",
+      "eks-cluster-basics",
+      "layer-mtu-fragmentation",
+      "dns",
+      "webhooks"
+    ]
+  },
+  "divide-and-conquer": {
+    "links": [
+      "sorting-algorithms",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "randomized-algorithms",
+      "quadtree",
+      "ds-heap",
+      "percentile-latency"
+    ],
+    "mentions": [
+      "binary-search",
+      "http-status-codes"
+    ]
+  },
+  "enterprise-auth-ldap-kerberos": {
+    "links": [
+      "sso-saml-oidc",
+      "https-tls",
+      "cookie-session-login",
+      "token-login",
+      "clock-skew",
+      "zero-trust-architecture"
+    ],
+    "mentions": [
+      "packet-capture-tcpdump",
+      "sql-injection",
+      "webhooks",
+      "what-happens-google-com",
+      "vlan-basics",
+      "udp-and-quic"
+    ]
+  },
+  "js-runtimes-node-deno-bun": {
+    "links": [
+      "nodejs-server-runtime",
+      "nodejs-web-frameworks",
+      "bundler-basics",
+      "dependency-hell"
+    ],
+    "mentions": [
+      "js-memory-leak",
+      "software-supply-chain-ci-hardening",
+      "cold-starts",
+      "floating-point-numbers"
+    ]
+  },
+  "kubeadm-cluster-setup": {
+    "links": [
+      "k8s-architecture",
+      "k8s-certificates-pki",
+      "k8s-cluster-upgrade",
+      "k8s-cni-pod-network",
+      "k8s-rbac",
+      "raft-consensus",
+      "k8s-etcd-backup",
+      "k8s-node-maintenance",
+      "eks-cluster-basics",
+      "local-k8s-kind-minikube"
+    ],
+    "mentions": [
+      "k8s-pod-disruption-budget",
+      "gateway-link-redundancy-fhrp-lacp",
+      "iptables-nat",
+      "k8s-daemonset",
+      "k8s-configmap",
+      "osi-in-practice",
+      "cors",
+      "iptables-basics",
+      "container-orchestration-choices",
+      "health-checks",
+      "k8s-coredns",
+      "kubernetes-ingress",
+      "cilium-ebpf",
+      "k8s-pod-scheduling",
+      "db-type-key-value",
+      "aws-ec2-ubuntu-server-setup",
+      "dns"
+    ]
+  },
+  "max-flow-bipartite-matching": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "complexity-classes-p-np"
+    ],
+    "mentions": []
+  },
+  "multi-tenancy-isolation": {
+    "links": [
+      "postgres-roles-security",
+      "multi-region",
+      "rate-limiting-in-practice",
+      "performance-antipatterns",
+      "connection-pool",
+      "rate-limiting-algorithms",
+      "queue-based-load-leveling",
+      "cloud-cost-optimization",
+      "zero-downtime-migrations"
+    ],
+    "mentions": [
+      "rendering-ssr",
+      "data-warehouse-architecture",
+      "db-architecture-by-scale",
+      "gateway",
+      "sd-object-storage-architecture",
+      "iam-basics",
+      "db-replication-sharding",
+      "sql-batch-timeout-pool",
+      "db-transaction-isolation",
+      "redis-basics",
+      "cloud-service-models-shared-responsibility",
+      "mutex-semaphore-monitor",
+      "sd-load-balancer-stateless",
+      "token-login"
+    ]
+  },
+  "netconf-restconf-yang": {
+    "links": [
+      "ansible-network-automation",
+      "network-config-cicd",
+      "network-monitoring",
+      "terraform-network-iac"
+    ],
+    "mentions": [
+      "grpc",
+      "http-methods",
+      "terraform-basics",
+      "db-type-time-series",
+      "vlan-basics",
+      "bgp-basics",
+      "acid-transactions",
+      "layer-mtu-fragmentation"
+    ]
+  },
+  "performance-antipatterns": {
+    "links": [
+      "n-plus-one-queries",
+      "connection-pool",
+      "retries",
+      "tail-latency",
+      "postgres-functions-triggers",
+      "event-loop",
+      "queue-based-load-leveling",
+      "timeouts",
+      "linux-network-tuning",
+      "nodejs-http-clients",
+      "db-architecture-by-scale",
+      "caching-strategies",
+      "cache-invalidation",
+      "k8s-pod-resources",
+      "multi-tenancy-isolation",
+      "exponential-backoff-jitter",
+      "load-testing-k6",
+      "nodejs-debugging-profiling",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "https-tls",
+      "api-scaling-ladder",
+      "graphql-basics",
+      "microservices",
+      "resilience-patterns",
+      "java-jvm-memory-gc",
+      "sd-object-storage-architecture",
+      "sd-start-single-server",
+      "autoscaling",
+      "db-type-relational",
+      "db-replication-sharding",
+      "pattern-proxy",
+      "vpc-basics",
+      "sql-batch-timeout-pool",
+      "ports-and-sockets",
+      "postgres-architecture",
+      "redis-basics",
+      "cloud-service-models-shared-responsibility",
+      "sd-db-replication-intro",
+      "sd-load-balancer-stateless",
+      "postgres-getting-started",
+      "sql-query-rewrite"
+    ]
+  },
+  "plugin-microkernel-architecture": {
+    "links": [
+      "layered-architecture",
+      "hexagonal-architecture",
+      "dependency-hell",
+      "event-loop",
+      "architecture-patterns-overview"
+    ],
+    "mentions": [
+      "linters-formatters",
+      "ds-graph-bfs-dfs",
+      "db-transaction-isolation"
+    ]
+  },
+  "queue-based-load-leveling": {
+    "links": [
+      "message-queue-basics",
+      "backpressure",
+      "dead-letter-queue",
+      "performance-antipatterns",
+      "retries",
+      "transactional-outbox",
+      "long-polling",
+      "webhooks",
+      "server-sent-events",
+      "bullmq-job-queue",
+      "autoscaling",
+      "k8s-hpa",
+      "ds-heap",
+      "multi-tenancy-isolation",
+      "kafka-basics",
+      "message-delivery-semantics",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "rabbitmq-basics",
+      "pub-sub",
+      "latency-bandwidth-throughput",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "resilience-patterns",
+      "caching-strategies",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "randomized-algorithms": {
+    "links": [
+      "sorting-algorithms",
+      "divide-and-conquer",
+      "ds-hash-map"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "js-numbers-bigint",
+      "sd-latency-numbers",
+      "ab-testing",
+      "stream-processing",
+      "bloom-filter",
+      "cookie-session-login"
+    ]
+  },
+  "s3-storage-classes-lifecycle": {
+    "links": [
+      "aws-s3-in-practice",
+      "block-file-object-storage",
+      "cloud-cost-optimization",
+      "sd-object-storage-versioning-multipart",
+      "backup-strategy",
+      "multi-region",
+      "disaster-recovery"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "queue-based-load-leveling",
+      "centralized-logging-pipeline",
+      "data-privacy-compliance",
+      "aws-core-services-map"
+    ]
+  },
+  "soap-and-soa": {
+    "links": [
+      "rest-api-design",
+      "grpc",
+      "api-test-automation",
+      "sso-saml-oidc",
+      "enterprise-system-integration",
+      "event-driven-architecture",
+      "microservices",
+      "api-gateway-use-cases"
+    ],
+    "mentions": [
+      "ddd-bounded-context",
+      "gateway",
+      "character-encoding-unicode",
+      "reverse-proxy-lb-api-gateway",
+      "service-mesh",
+      "floating-point-numbers",
+      "http-status-codes",
+      "sd-email-protocols"
+    ]
+  },
+  "terraform-dependency-graph-lifecycle": {
+    "links": [
+      "terraform-basics",
+      "terraform-modules-tfvars",
+      "terraform-network-iac",
+      "terraform-testing-policy-scanning",
+      "terraform-state-refactoring-import",
+      "terraform-hcl-expressions-data-sources",
+      "iac-basics",
+      "ansible-network-automation"
+    ],
+    "mentions": [
+      "service-discovery",
+      "k8s-deploy-pipeline-eks",
+      "ec2-instance-types-launch-templates",
+      "iam-basics",
+      "autoscaling",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "vpc-basics",
+      "db-modeling-normalization",
+      "dns"
+    ]
+  },
+  "terraform-hcl-expressions-data-sources": {
+    "links": [
+      "terraform-modules-tfvars",
+      "terraform-dependency-graph-lifecycle",
+      "terraform-network-iac",
+      "terraform-state-refactoring-import"
+    ],
+    "mentions": [
+      "terraform-basics",
+      "ec2-instance-types-launch-templates",
+      "autoscaling",
+      "security-principles-cia-defense-in-depth",
+      "security-groups-nacl",
+      "layer-ip-addressing",
+      "vpc-basics"
+    ]
+  },
+  "terraform-state-refactoring-import": {
+    "links": [
+      "terraform-basics",
+      "terraform-modules-tfvars",
+      "terraform-dependency-graph-lifecycle",
+      "terraform-hcl-expressions-data-sources"
+    ],
+    "mentions": [
+      "terraform-team-workflow-hcp-terragrunt",
+      "s3-storage-classes-lifecycle",
+      "db-type-key-value",
+      "iam-basics",
+      "network-config-cicd",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "terraform-testing-policy-scanning": {
+    "links": [
+      "terraform-network-iac",
+      "network-config-cicd",
+      "terraform-hcl-expressions-data-sources",
+      "terraform-dependency-graph-lifecycle",
+      "terraform-modules-tfvars",
+      "cloud-cost-optimization"
+    ],
+    "mentions": [
+      "terraform-basics",
+      "terraform-team-workflow-hcp-terragrunt",
+      "github-repo-governance",
+      "dockerfile-image-layers",
+      "test-pyramid-unit-tests",
+      "docker-container-basics",
+      "nodejs-orm-query-builder",
+      "smoke-sanity-regression-testing",
+      "sd-split-web-and-db",
+      "iam-basics",
+      "input-validation-secure-coding",
+      "api-versioning",
+      "security-groups-nacl",
+      "layer-ip-addressing",
+      "vpc-basics"
+    ]
+  },
+  "virtualization-hypervisors": {
+    "links": [
+      "linux-namespaces-cgroups",
+      "block-file-object-storage",
+      "virtual-memory-paging",
+      "high-availability",
+      "docker-container-basics",
+      "cold-starts"
+    ],
+    "mentions": [
+      "ec2-instance-types-launch-templates",
+      "multi-tenancy-isolation",
+      "k8s-security-context",
+      "os-kernel-system-calls",
+      "security-groups-nacl",
+      "eks-cluster-basics",
+      "vpc-basics",
+      "layer-link-ethernet-arp"
+    ]
+  },
+  "web-server-vs-was": {
+    "links": [
+      "nginx-basics",
+      "nginx-reverse-proxy",
+      "proxy-reverse-proxy",
+      "process-vs-thread",
+      "nginx-https-performance",
+      "java-jvm-memory-gc",
+      "load-balancer-basics"
+    ],
+    "mentions": [
+      "streaming-ssr-suspense",
+      "osi-in-practice",
+      "os-kernel-system-calls",
+      "kubernetes-ingress",
+      "reverse-proxy-lb-api-gateway",
+      "sd-start-single-server",
+      "deadlocks",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "what-happens-google-com",
+      "go-concurrency-basics",
+      "dns"
+    ]
+  },
+  "docker-runtime-security": {
+    "links": [
+      "linux-namespaces-cgroups",
+      "k8s-security-context",
+      "k8s-pod-security-admission",
+      "seccomp-apparmor",
+      "dockerfile-image-layers"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "proxy-reverse-proxy",
+      "linux-files-permissions",
+      "os-kernel-system-calls",
+      "threat-modeling-stride",
+      "security-principles-cia-defense-in-depth"
+    ]
+  },
+  "ec2-instance-types-launch-templates": {
+    "links": [
+      "cloud-cost-optimization",
+      "aws-ec2-ubuntu-server-setup",
+      "ecs-fargate-task-service",
+      "ansible-network-automation"
+    ],
+    "mentions": [
+      "config-management-tools",
+      "sd-start-single-server",
+      "autoscaling",
+      "security-groups-nacl",
+      "vim-for-servers",
+      "ipv6-basics"
+    ]
+  },
+  "ecs-fargate-task-service": {
+    "links": [
+      "eks-cluster-basics",
+      "docker-container-basics",
+      "iam-basics",
+      "ec2-instance-types-launch-templates",
+      "blue-green-deployment",
+      "autoscaling"
+    ],
+    "mentions": [
+      "vpc-subnets-route-tables",
+      "db-type-key-value",
+      "cloud-deployment-models-multicloud",
+      "container-orchestration-choices",
+      "resilience-patterns",
+      "rollback-strategy",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "github-actions-docker-ecr",
+      "vpc-basics"
+    ]
+  },
+  "input-validation-secure-coding": {
+    "links": [
+      "xss",
+      "sql-injection",
+      "security-testing-sast-dast",
+      "path-traversal-file-upload",
+      "regex-and-globbing",
+      "authn-vs-authz"
+    ],
+    "mentions": [
+      "character-encoding-unicode",
+      "js-prototype-chain",
+      "runtime-validation-zod",
+      "threat-modeling-stride",
+      "api-security-owasp-api-top10",
+      "floating-point-numbers",
+      "recursion-backtracking",
+      "db-modeling-normalization"
+    ]
+  },
+  "path-traversal-file-upload": {
+    "links": [
+      "input-validation-secure-coding",
+      "xss",
+      "web-security-headers",
+      "sd-video-upload-transcoding"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "os-kernel-system-calls",
+      "race-conditions",
+      "db-modeling-normalization"
+    ]
+  },
+  "security-testing-sast-dast": {
+    "links": [
+      "sql-injection",
+      "software-supply-chain-ci-hardening",
+      "xss",
+      "secrets-management",
+      "git-large-files-secrets",
+      "authn-vs-authz",
+      "threat-modeling-stride",
+      "code-review-practices"
+    ],
+    "mentions": [
+      "vulnerability-management-cve-cvss",
+      "web-security-headers",
+      "k8s-pod-scheduling"
+    ]
+  },
+  "software-supply-chain-ci-hardening": {
+    "links": [
+      "container-supply-chain-security",
+      "dependency-hell",
+      "github-actions-docker-ecr",
+      "github-repo-governance"
+    ],
+    "mentions": [
+      "npm-package-publishing",
+      "docker-container-basics",
+      "frontend-monorepo",
+      "security-principles-cia-defense-in-depth",
+      "dynamic-programming",
+      "security-testing-sast-dast"
+    ]
+  },
+  "threat-modeling-stride": {
+    "links": [
+      "rate-limiting-in-practice",
+      "xss"
+    ],
+    "mentions": [
+      "serverless-limits",
+      "block-file-object-storage",
+      "security-principles-cia-defense-in-depth",
+      "what-happens-google-com"
+    ]
+  },
+  "api-security-owasp-api-top10": {
+    "links": [
+      "owasp-top-10-map",
+      "authn-vs-authz",
+      "ssrf",
+      "rate-limiting-in-practice",
+      "cors",
+      "web-security-headers",
+      "api-versioning",
+      "encryption-in-transit",
+      "graphql-schema-type-system"
+    ],
+    "mentions": [
+      "k8s-deploy-pipeline-eks",
+      "api-styles-overview",
+      "graphql-basics",
+      "input-validation-secure-coding",
+      "sd-payment-flow",
+      "threat-modeling-stride",
+      "code-review-practices",
+      "js-pure-functions",
+      "db-types-overview",
+      "runtime-validation-zod",
+      "webhooks"
+    ]
+  },
+  "bash-expansions-variables": {
+    "links": [
+      "bash-scripting",
+      "shell-redirection-pipes",
+      "bash-control-flow-functions",
+      "linux-grep-awk-sed"
+    ],
+    "mentions": [
+      "nginx-basics",
+      "shells-posix-compat",
+      "js-array-transform"
+    ]
+  },
+  "cloud-service-models-shared-responsibility": {
+    "links": [
+      "cloud-cost-optimization",
+      "aws-ec2-ubuntu-server-setup",
+      "ssrf",
+      "security-incident-response",
+      "serverless-limits",
+      "cold-starts",
+      "serverless-architecture",
+      "iam-basics"
+    ],
+    "mentions": [
+      "container-orchestration-choices",
+      "cloud-deployment-models-multicloud",
+      "security-compliance-for-developers",
+      "rds-aurora-managed-db",
+      "db-type-key-value",
+      "docker-container-basics",
+      "linux-boot-process",
+      "aws-core-services-map",
+      "virtualization-hypervisors",
+      "backup-strategy",
+      "autoscaling",
+      "security-principles-cia-defense-in-depth",
+      "mfa-totp",
+      "security-groups-nacl",
+      "vpc-basics",
+      "sso-saml-oidc",
+      "eks-cluster-basics",
+      "on-call"
+    ]
+  },
+  "firewall-types-ngfw": {
+    "links": [
+      "iptables-basics",
+      "security-groups-nacl",
+      "waf",
+      "ids-ips",
+      "ddos-protection",
+      "proxy-reverse-proxy"
+    ],
+    "mentions": [
+      "sd-start-single-server",
+      "encryption-in-transit",
+      "what-happens-google-com",
+      "cloud-service-models-shared-responsibility",
+      "udp-and-quic"
+    ]
+  },
+  "github-actions-workflows": {
+    "links": [
+      "github-actions-docker-ecr",
+      "ci-cd-basics",
+      "github-repo-governance",
+      "yaml-for-k8s",
+      "build-caching",
+      "security-incident-response"
+    ],
+    "mentions": [
+      "webhooks"
+    ]
+  },
+  "linux-boot-process": {
+    "links": [
+      "linux-systemd-systemctl",
+      "linux-processes-signals",
+      "linux-disks-filesystems"
+    ],
+    "mentions": [
+      "virtualization-hypervisors",
+      "client-data-cache",
+      "encryption-at-rest"
+    ]
+  },
+  "linux-disks-filesystems": {
+    "links": [
+      "page-cache-disk-io",
+      "linux-files-permissions",
+      "linux-boot-process",
+      "aws-ec2-ubuntu-server-setup"
+    ],
+    "mentions": [
+      "process-vs-thread",
+      "os-kernel-system-calls",
+      "ec2-instance-types-launch-templates",
+      "dockerfile-image-layers"
+    ]
+  },
+  "linux-users-groups-sudo": {
+    "links": [
+      "linux-files-permissions",
+      "aws-ec2-ubuntu-server-setup",
+      "hash-hmac-password-hashing",
+      "linux-systemd-systemctl"
+    ],
+    "mentions": [
+      "ssh-in-practice",
+      "docker-container-basics",
+      "iptables-nat",
+      "shell-environment-startup",
+      "postgres-architecture"
+    ]
+  },
+  "network-attacks-l2-l3": {
+    "links": [
+      "layer-link-ethernet-arp",
+      "dhcp",
+      "dns",
+      "zero-trust-architecture",
+      "https-tls",
+      "token-login",
+      "network-flow-logs",
+      "security-logging-detection-siem",
+      "vlan-basics",
+      "security-groups-nacl"
+    ],
+    "mentions": [
+      "virtualization-hypervisors",
+      "what-happens-google-com",
+      "vpc-basics"
+    ]
+  },
+  "nextjs-app-router-routing": {
+    "links": [
+      "nextjs-static-dynamic-rendering",
+      "react-server-components",
+      "nextjs-route-handlers-proxy",
+      "streaming-ssr-suspense",
+      "react-suspense-error-boundary",
+      "react-reconciliation-keys",
+      "nextjs-caching-layers",
+      "nextjs-parallel-intercepting-routes"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "rendering-csr-spa",
+      "rendering-strategies",
+      "n-plus-one-queries",
+      "shells-posix-compat"
+    ]
+  },
+  "nextjs-caching-layers": {
+    "links": [
+      "nextjs-static-dynamic-rendering",
+      "rendering-ssg-isr",
+      "nextjs-server-actions-security",
+      "nextjs-route-handlers-proxy"
+    ],
+    "mentions": [
+      "react-server-components",
+      "nextjs-app-router-routing",
+      "rendering-strategies",
+      "sd-start-single-server",
+      "js-memoization",
+      "redis-basics",
+      "js-closures",
+      "js-primitive-vs-reference",
+      "count-min-sketch",
+      "webhooks"
+    ]
+  },
+  "nextjs-parallel-intercepting-routes": {
+    "links": [
+      "nextjs-app-router-routing",
+      "aria-keyboard-focus",
+      "nextjs-caching-layers",
+      "nextjs-static-dynamic-rendering",
+      "streaming-ssr-suspense",
+      "nextjs-route-handlers-proxy"
+    ],
+    "mentions": [
+      "react-server-components",
+      "frontend-testing-strategy",
+      "rendering-strategies",
+      "react-suspense-error-boundary",
+      "http-status-codes"
+    ]
+  },
+  "nextjs-route-handlers-proxy": {
+    "links": [
+      "http-status-codes",
+      "express-middleware",
+      "authn-vs-authz",
+      "nextjs-server-actions-security",
+      "nextjs-caching-layers",
+      "server-sent-events",
+      "web-security-headers"
+    ],
+    "mentions": [
+      "nextjs-static-dynamic-rendering",
+      "nextjs-self-hosting-deployment",
+      "design-system-adoption-governance",
+      "proxy-reverse-proxy",
+      "ab-testing",
+      "rendering-strategies",
+      "js-memoization",
+      "input-validation-secure-coding",
+      "react-server-components",
+      "cookie-session-login",
+      "count-min-sketch",
+      "token-login",
+      "webhooks"
+    ]
+  },
+  "nextjs-server-actions-security": {
+    "links": [
+      "react-server-components",
+      "react-forms-actions",
+      "csrf",
+      "nextjs-route-handlers-proxy",
+      "authn-vs-authz",
+      "rate-limiting-in-practice",
+      "nextjs-caching-layers"
+    ],
+    "mentions": [
+      "proxy-reverse-proxy",
+      "rendering-strategies",
+      "input-validation-secure-coding",
+      "js-memoization",
+      "code-review-practices",
+      "rolling-deployment",
+      "k8s-pod-scheduling",
+      "cookie-session-login",
+      "js-closures"
+    ]
+  },
+  "security-incident-response": {
+    "links": [
+      "production-incidents",
+      "postmortems",
+      "secrets-management",
+      "on-call",
+      "github-actions-docker-ecr",
+      "github-actions-workflows",
+      "iam-basics",
+      "security-groups-nacl",
+      "cloud-service-models-shared-responsibility",
+      "backup-strategy"
+    ],
+    "mentions": [
+      "git-large-files-secrets",
+      "data-privacy-compliance",
+      "sd-start-single-server",
+      "autoscaling",
+      "osi-in-practice"
+    ]
+  },
+  "security-logging-detection-siem": {
+    "links": [
+      "structured-logging",
+      "centralized-logging-pipeline",
+      "k8s-audit-logging",
+      "secrets-management"
+    ],
+    "mentions": [
+      "token-login",
+      "network-flow-logs",
+      "bloom-filter",
+      "osi-in-practice",
+      "cookie-session-login",
+      "ssrf",
+      "ansible-network-automation",
+      "acid-transactions",
+      "db-modeling-normalization"
+    ]
+  },
+  "shell-redirection-pipes": {
+    "links": [
+      "bash-scripting",
+      "bash-control-flow-functions",
+      "linux-network-tuning",
+      "linux-systemd-systemctl",
+      "bash-expansions-variables"
+    ],
+    "mentions": [
+      "os-kernel-system-calls",
+      "shells-posix-compat",
+      "centralized-logging-pipeline"
+    ]
+  },
+  "vulnerability-management-cve-cvss": {
+    "links": [
+      "owasp-top-10-map",
+      "canary-release",
+      "waf",
+      "security-logging-detection-siem",
+      "container-supply-chain-security"
+    ],
+    "mentions": [
+      "docker-container-basics",
+      "sql-injection",
+      "cloud-service-models-shared-responsibility"
+    ]
+  },
+  "bash-control-flow-functions": {
+    "links": [
+      "bash-scripting",
+      "shell-environment-startup",
+      "regex-and-globbing",
+      "linux-files-permissions",
+      "linux-grep-awk-sed",
+      "secrets-management"
+    ],
+    "mentions": [
+      "shell-redirection-pipes",
+      "bash-expansions-variables",
+      "js-scope-lexical",
+      "shells-posix-compat"
+    ]
+  },
+  "bgp-basics": {
+    "links": [
+      "route53-routing-policies",
+      "layer-ip-routing-icmp",
+      "cdn-edge-anycast",
+      "vpn-ipsec-wireguard",
+      "k8s-service-types",
+      "k8s-cni-pod-network"
+    ],
+    "mentions": [
+      "cloud-deployment-models-multicloud",
+      "browser-fetch",
+      "network-design-three-tier-spine-leaf",
+      "routing-protocols-ospf-rip-eigrp",
+      "ddos-protection",
+      "vlan-basics",
+      "ipv6-basics",
+      "vpc-basics",
+      "dns"
+    ]
+  },
+  "gateway-link-redundancy-fhrp-lacp": {
+    "links": [
+      "routing-protocols-ospf-rip-eigrp",
+      "load-balancer-basics",
+      "high-availability",
+      "leader-election",
+      "network-design-three-tier-spine-leaf",
+      "router-vs-switch"
+    ],
+    "mentions": [
+      "layer-link-ethernet-arp",
+      "vpc-subnets-route-tables",
+      "browser-fetch",
+      "docker-network-drivers",
+      "packet-capture-tcpdump",
+      "layer-ip-routing-icmp",
+      "sd-start-single-server",
+      "cdn-edge-anycast",
+      "dhcp",
+      "vlan-basics",
+      "ipv6-basics"
+    ]
+  },
+  "mongodb-aggregation-pipeline": {
+    "links": [
+      "mongodb-document-model",
+      "mongodb-indexes-explain",
+      "mongodb-replica-set-sharding"
+    ],
+    "mentions": [
+      "db-index-design",
+      "db-type-relational"
+    ]
+  },
+  "mongodb-indexes-explain": {
+    "links": [
+      "mongodb-document-model",
+      "elasticsearch-inverted-index",
+      "geohash",
+      "mongodb-aggregation-pipeline",
+      "mongodb-replica-set-sharding"
+    ],
+    "mentions": [
+      "opensearch-cluster-operations",
+      "sd-proximity-service",
+      "postgres-query-planner",
+      "db-index-design",
+      "db-type-relational",
+      "db-replication-sharding",
+      "quadtree",
+      "dns"
+    ]
+  },
+  "mongodb-replica-set-sharding": {
+    "links": [
+      "mongodb-document-model",
+      "db-replication-sharding",
+      "idempotency-key",
+      "disaster-recovery",
+      "mongodb-indexes-explain",
+      "mongodb-aggregation-pipeline"
+    ],
+    "mentions": [
+      "sd-sharding-intro",
+      "scaling-horizontal-vertical",
+      "vpc-basics",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "network-design-three-tier-spine-leaf": {
+    "links": [
+      "router-vs-switch",
+      "routing-protocols-ospf-rip-eigrp",
+      "gateway-link-redundancy-fhrp-lacp",
+      "sdn-vxlan-overlay",
+      "high-availability",
+      "vpc-peering-transit-privatelink",
+      "vpc-basics",
+      "vpc-subnets-route-tables"
+    ],
+    "mentions": [
+      "layer-ip-routing-icmp",
+      "bgp-basics",
+      "leader-election",
+      "microservices",
+      "sd-object-storage-durability",
+      "cdn-edge-anycast",
+      "load-balancer-basics",
+      "vlan-basics",
+      "layer-ip-addressing",
+      "udp-and-quic",
+      "dns"
+    ]
+  },
+  "nextjs-self-hosting-deployment": {
+    "links": [
+      "code-splitting",
+      "dockerfile-image-layers",
+      "nextjs-static-dynamic-rendering",
+      "rendering-csr-spa",
+      "rendering-ssg-isr",
+      "frontend-error-tracking",
+      "otel-collector-pipeline",
+      "distributed-tracing",
+      "js-memory-leak",
+      "garbage-collection",
+      "streaming-ssr-suspense",
+      "k8s-pod-lifecycle"
+    ],
+    "mentions": [
+      "nextjs-route-handlers-proxy",
+      "observability-basics",
+      "docker-commands-workflow",
+      "k8s-pod-resources",
+      "nextjs-parallel-intercepting-routes",
+      "rendering-strategies",
+      "frontend-hosting-platforms",
+      "proxy-reverse-proxy",
+      "cpu-cache-hierarchy",
+      "cache-invalidation",
+      "autoscaling",
+      "service-mesh",
+      "rolling-deployment",
+      "react-server-components",
+      "osi-in-practice",
+      "redis-basics",
+      "frontend-monorepo",
+      "js-runtimes-node-deno-bun",
+      "frontend-build-tooling",
+      "js-closures"
+    ]
+  },
+  "postgres-slow-db-triage": {
+    "links": [
+      "sql-query-tuning",
+      "db-locking-deadlock",
+      "linux-performance-triage",
+      "postgres-mvcc-vacuum",
+      "nodejs-debugging-profiling",
+      "cilium-ebpf"
+    ],
+    "mentions": [
+      "pessimistic-locking",
+      "sd-latency-numbers",
+      "os-kernel-system-calls",
+      "page-cache-disk-io",
+      "linux-systemd-systemctl",
+      "db-replication-sharding",
+      "postgres-getting-started"
+    ]
+  },
+  "react-client-routing": {
+    "links": [
+      "rendering-csr-spa",
+      "react-suspense-error-boundary",
+      "react-forms-actions",
+      "client-data-cache",
+      "code-splitting",
+      "spa-auth-token-storage",
+      "nextjs-self-hosting-deployment",
+      "nextjs-static-dynamic-rendering",
+      "react-server-components"
+    ],
+    "mentions": [
+      "http-caching-cdn",
+      "data-fetching-optimization",
+      "nextjs-app-router-routing",
+      "react-useeffect",
+      "rendering-strategies",
+      "frontend-hosting-platforms",
+      "db-modeling-normalization"
+    ]
+  },
+  "route53-routing-policies": {
+    "links": [
+      "dns",
+      "failover",
+      "multi-region",
+      "vpc-basics",
+      "health-checks",
+      "cdn-edge-anycast",
+      "bgp-basics",
+      "canary-release",
+      "vpn-ipsec-wireguard"
+    ],
+    "mentions": [
+      "rate-limiting-in-practice",
+      "service-mesh",
+      "http-versions",
+      "security-groups-nacl",
+      "osi-in-practice",
+      "what-happens-google-com",
+      "layer-ip-addressing",
+      "udp-and-quic"
+    ]
+  },
+  "routing-protocols-ospf-rip-eigrp": {
+    "links": [
+      "layer-ip-routing-icmp",
+      "router-vs-switch",
+      "shortest-path-algorithms",
+      "network-design-three-tier-spine-leaf",
+      "cdn-edge-anycast",
+      "gateway-link-redundancy-fhrp-lacp"
+    ],
+    "mentions": [
+      "iptables-basics",
+      "bgp-basics",
+      "layer-ip-addressing",
+      "sd-maps-tiles-routing",
+      "security-groups-nacl",
+      "vlan-basics",
+      "ipv6-basics",
+      "sd-email-protocols",
+      "sd-video-streaming-cost",
+      "layer-mtu-fragmentation",
+      "dns"
+    ]
+  },
+  "security-principles-cia-defense-in-depth": {
+    "links": [
+      "owasp-top-10-map",
+      "zero-trust-architecture",
+      "authn-vs-authz",
+      "encryption-in-transit",
+      "encryption-at-rest",
+      "hash-hmac-password-hashing",
+      "ddos-protection",
+      "backup-strategy",
+      "high-availability",
+      "k8s-security-context",
+      "security-groups-nacl",
+      "sql-injection",
+      "k8s-audit-logging",
+      "iam-basics",
+      "postgres-roles-security",
+      "k8s-rbac",
+      "linux-namespaces-cgroups",
+      "seccomp-apparmor",
+      "k8s-network-policy",
+      "secrets-management",
+      "waf"
+    ],
+    "mentions": [
+      "gateway",
+      "k8s-deploy-pipeline-eks",
+      "threat-modeling-stride",
+      "sd-start-single-server",
+      "ssrf",
+      "os-kernel-system-calls",
+      "input-validation-secure-coding",
+      "sso-saml-oidc"
+    ]
+  },
+  "shell-environment-startup": {
+    "links": [
+      "bash-control-flow-functions",
+      "bash-scripting",
+      "secrets-management",
+      "linux-files-permissions",
+      "cron-jobs",
+      "linux-systemd-systemctl"
+    ],
+    "mentions": [
+      "k8s-configmap",
+      "docker-container-basics",
+      "linux-users-groups-sudo",
+      "ds-hash-map",
+      "python-essentials-for-backend",
+      "shells-posix-compat"
+    ]
+  },
+  "ts-classes-access-modifiers": {
+    "links": [
+      "js-classes",
+      "ts-type-system-basics",
+      "ts-enum-vs-union",
+      "pattern-template-method",
+      "tsconfig-strict",
+      "pattern-strategy",
+      "design-patterns-overview"
+    ],
+    "mentions": [
+      "nodejs-web-frameworks",
+      "spring-ioc-di",
+      "react-suspense-error-boundary",
+      "character-encoding-unicode",
+      "oop-four-pillars"
+    ]
+  },
+  "browser-devtools-debugging": {
+    "links": [
+      "js-memory-leak",
+      "nodejs-debugging-profiling",
+      "frontend-error-tracking",
+      "abort-controller",
+      "frontend-browser-cache",
+      "curl-for-debugging",
+      "js-closures",
+      "js-microtask-macrotask",
+      "core-web-vitals",
+      "dom-basics",
+      "performance-metrics-measurement",
+      "react-rerender",
+      "browser-storage",
+      "pwa-install-offline"
+    ],
+    "mentions": [
+      "logging-tools-overview",
+      "https-tls",
+      "csrf",
+      "event-loop",
+      "race-conditions",
+      "dns"
+    ]
+  },
+  "character-encoding-unicode": {
+    "links": [
+      "js-strings-unicode",
+      "postgres-data-types",
+      "mysql-innodb-basics",
+      "http-message",
+      "html-form-http",
+      "base64"
+    ],
+    "mentions": [
+      "path-traversal-file-upload",
+      "bash-scripting",
+      "upper-layers-session-presentation-app",
+      "bit-manipulation",
+      "db-modeling-normalization"
+    ]
+  },
+  "cpu-scheduling-interrupts": {
+    "links": [
+      "process-vs-thread",
+      "mutex-semaphore-monitor",
+      "k8s-pod-resources",
+      "linux-namespaces-cgroups",
+      "tail-latency",
+      "linux-performance-triage"
+    ],
+    "mentions": [
+      "virtual-memory-paging",
+      "ds-binary-tree-bst",
+      "k8s-architecture",
+      "virtualization-hypervisors",
+      "os-kernel-system-calls"
+    ]
+  },
+  "floating-point-numbers": {
+    "links": [
+      "js-numbers-bigint",
+      "postgres-data-types",
+      "process-vs-thread"
+    ],
+    "mentions": [
+      "js-binary-data-typed-arrays",
+      "sd-latency-numbers",
+      "input-validation-secure-coding",
+      "postgres-query-planner"
+    ]
+  },
+  "html-form-validation": {
+    "links": [
+      "html-form-http",
+      "react-forms-actions",
+      "js-numbers-bigint"
+    ],
+    "mentions": [
+      "sd-payment-flow",
+      "frontend-state-architecture"
+    ]
+  },
+  "js-error-handling": {
+    "links": [
+      "nodejs-error-handling",
+      "frontend-error-tracking",
+      "js-numbers-bigint",
+      "react-suspense-error-boundary",
+      "js-async-await",
+      "fp-functors-monads-js"
+    ],
+    "mentions": [
+      "js-promise-combinators",
+      "linters-formatters",
+      "event-loop",
+      "input-validation-secure-coding",
+      "http-status-codes",
+      "js-hoisting-tdz"
+    ]
+  },
+  "js-numbers-bigint": {
+    "links": [
+      "floating-point-numbers",
+      "js-equality-coercion",
+      "js-error-handling"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "js-binary-data-typed-arrays",
+      "sd-latency-numbers",
+      "bit-manipulation",
+      "js-truthy-falsy-typeof"
+    ]
+  },
+  "js-strings-unicode": {
+    "links": [
+      "js-template-literals",
+      "js-equality-coercion",
+      "character-encoding-unicode",
+      "js-iterators-generators",
+      "js-primitive-vs-reference",
+      "js-array-mutation"
+    ],
+    "mentions": [
+      "js-spread-rest"
+    ]
+  },
+  "mutex-semaphore-monitor": {
+    "links": [
+      "race-conditions",
+      "thread-safety",
+      "deadlocks",
+      "process-vs-thread",
+      "connection-pool",
+      "backpressure",
+      "cpu-scheduling-interrupts",
+      "distributed-lock"
+    ],
+    "mentions": [
+      "sd-queue-logging-automation",
+      "os-kernel-system-calls",
+      "cpu-cache-hierarchy",
+      "sd-maps-tiles-routing",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "go-concurrency-basics"
+    ]
+  },
+  "process-vs-thread": {
+    "links": [
+      "mutex-semaphore-monitor",
+      "cpu-scheduling-interrupts",
+      "race-conditions",
+      "thread-safety",
+      "nodejs-server-runtime",
+      "virtual-memory-paging",
+      "cpu-cache-hierarchy",
+      "deadlocks",
+      "linux-processes-signals",
+      "scaling-horizontal-vertical",
+      "nginx-basics",
+      "java-jvm-memory-gc",
+      "go-concurrency-basics",
+      "linux-namespaces-cgroups",
+      "k8s-pod-resources"
+    ],
+    "mentions": [
+      "browser-security-model",
+      "os-kernel-system-calls",
+      "cpu-pipelining-branch-prediction",
+      "event-loop",
+      "sql-batch-timeout-pool",
+      "redis-basics",
+      "backend-language-comparison"
+    ]
+  },
+  "pwa-install-offline": {
+    "links": [
+      "frontend-browser-cache",
+      "browser-storage",
+      "browser-devtools-debugging"
+    ],
+    "mentions": [
+      "nextjs-app-router-routing",
+      "lighthouse-explained",
+      "what-happens-google-com",
+      "dns"
+    ]
+  },
+  "runtime-validation-zod": {
+    "links": [
+      "ts-type-system-basics",
+      "ts-narrowing",
+      "react-forms-actions",
+      "browser-storage",
+      "express-middleware",
+      "frontend-error-tracking",
+      "web-security-headers",
+      "openapi-spec-first",
+      "ts-declaration-files-modules",
+      "ts-enum-vs-union"
+    ],
+    "mentions": [
+      "html-form-http",
+      "client-data-cache",
+      "input-validation-secure-coding",
+      "threat-modeling-stride",
+      "react-suspense-error-boundary",
+      "frontend-performance-map",
+      "api-versioning",
+      "webhooks"
+    ]
+  },
+  "ts-declaration-files-modules": {
+    "links": [
+      "tsconfig-strict",
+      "js-es-modules",
+      "ts-type-system-basics",
+      "ts-enum-vs-union",
+      "runtime-validation-zod"
+    ],
+    "mentions": [
+      "js-iife-module-pattern",
+      "frontend-monorepo"
+    ]
+  },
+  "ts-enum-vs-union": {
+    "links": [
+      "ts-type-system-basics",
+      "tsconfig-strict",
+      "ts-narrowing",
+      "runtime-validation-zod",
+      "ts-generics",
+      "js-immutability-react",
+      "ts-utility-mapped-types"
+    ],
+    "mentions": [
+      "js-truthy-falsy-typeof",
+      "js-spread-rest",
+      "linters-formatters",
+      "ts-declaration-files-modules",
+      "bit-manipulation",
+      "frontend-build-tooling"
+    ]
+  },
+  "dynamodb-modeling-capacity": {
+    "links": [
+      "db-type-key-value",
+      "optimistic-locking",
+      "elasticsearch-query-dsl"
+    ],
+    "mentions": [
+      "sd-sharding-intro",
+      "iam-basics",
+      "db-locking-deadlock",
+      "db-consistency-cap",
+      "db-type-relational",
+      "resilience-patterns",
+      "sd-mq-storage-partitions",
+      "postgres-operations",
+      "db-modeling-normalization",
+      "dns",
+      "zero-downtime-migrations"
+    ]
+  },
+  "elasticsearch-aggregations": {
+    "links": [
+      "elasticsearch-mapping",
+      "hyperloglog",
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "resilience-patterns",
+      "postgres-architecture"
+    ]
+  },
+  "elasticsearch-mapping": {
+    "links": [
+      "elasticsearch-inverted-index",
+      "elasticsearch-aggregations",
+      "opensearch-cluster-operations"
+    ],
+    "mentions": [
+      "elasticsearch-bulk-indexing",
+      "resilience-patterns",
+      "page-cache-disk-io",
+      "transactional-outbox"
+    ]
+  },
+  "elasticsearch-query-dsl": {
+    "links": [
+      "elasticsearch-inverted-index"
+    ],
+    "mentions": [
+      "elasticsearch-mapping",
+      "opensearch-cluster-operations",
+      "sql-filtering-operators"
+    ]
+  },
+  "jpa-entity-relationships": {
+    "links": [
+      "jpa-persistence-context",
+      "n-plus-one-queries",
+      "db-modeling-normalization"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "js-execution-context",
+      "pattern-proxy",
+      "sql-query-rewrite"
+    ]
+  },
+  "jpa-persistence-context": {
+    "links": [
+      "n-plus-one-queries",
+      "jpa-entity-relationships",
+      "spring-transactional-propagation",
+      "optimistic-locking",
+      "sql-batch-timeout-pool"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "caching-strategies",
+      "pattern-proxy",
+      "redis-basics",
+      "sql-query-rewrite"
+    ]
+  },
+  "mongodb-crud-operators": {
+    "links": [
+      "mongodb-document-model",
+      "elasticsearch-inverted-index",
+      "api-pagination-sorting",
+      "optimistic-locking",
+      "idempotency-key"
+    ],
+    "mentions": [
+      "sql-query-rewrite",
+      "mongodb-indexes-explain",
+      "input-validation-secure-coding",
+      "db-index-design",
+      "mongodb-replica-set-sharding",
+      "dns"
+    ]
+  },
+  "oop-four-pillars": {
+    "links": [
+      "solid-principles",
+      "race-conditions",
+      "js-classes",
+      "js-closures",
+      "pattern-strategy",
+      "pattern-template-method",
+      "pattern-decorator",
+      "design-patterns-overview",
+      "ts-narrowing",
+      "spring-ioc-di"
+    ],
+    "mentions": [
+      "coupling-cohesion-principles",
+      "js-prototype-chain",
+      "ts-classes-access-modifiers",
+      "sd-payment-reliability",
+      "pattern-visitor"
+    ]
+  },
+  "postgres-query-planner": {
+    "links": [
+      "sql-query-tuning",
+      "db-index-pitfalls",
+      "postgres-operations",
+      "connection-pool",
+      "postgres-mvcc-vacuum"
+    ],
+    "mentions": [
+      "db-architecture-by-scale",
+      "dynamic-programming",
+      "ds-hash-map",
+      "db-index-design",
+      "sql-batch-timeout-pool",
+      "postgres-getting-started"
+    ]
+  },
+  "rds-aurora-managed-db": {
+    "links": [
+      "postgres-operations",
+      "failover",
+      "db-replication-sharding",
+      "connection-pool",
+      "serverless-limits",
+      "backup-strategy",
+      "cloud-cost-optimization",
+      "dynamodb-modeling-capacity"
+    ],
+    "mentions": [
+      "service-discovery",
+      "process-vs-thread",
+      "route53-routing-policies",
+      "virtualization-hypervisors",
+      "postgres-slow-db-triage",
+      "page-cache-disk-io",
+      "mysql-replication-online-ddl",
+      "http-caching-cdn",
+      "api-versioning",
+      "security-groups-nacl",
+      "vpc-basics",
+      "sql-batch-timeout-pool",
+      "postgres-architecture",
+      "dns"
+    ]
+  },
+  "solid-principles": {
+    "links": [
+      "oop-four-pillars",
+      "pattern-strategy",
+      "spring-ioc-di",
+      "clean-architecture",
+      "hexagonal-architecture",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "code-review-practices",
+      "sd-payment-reliability",
+      "sd-email-protocols",
+      "coupling-cohesion-principles"
+    ]
+  },
+  "spring-mvc-request-lifecycle": {
+    "links": [
+      "spring-ioc-di",
+      "spring-boot-auto-configuration",
+      "java-jvm-memory-gc",
+      "connection-pool",
+      "spring-security-architecture",
+      "http-status-codes",
+      "rest-api-design",
+      "spring-transactional-propagation"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "nodejs-web-frameworks",
+      "deadlocks",
+      "upper-layers-session-presentation-app",
+      "sql-batch-timeout-pool",
+      "cors",
+      "token-login"
+    ]
+  },
+  "spring-security-architecture": {
+    "links": [
+      "spring-mvc-request-lifecycle",
+      "authn-vs-authz",
+      "cookie-session-login",
+      "token-login",
+      "web-security-headers",
+      "spring-transactional-propagation",
+      "csrf",
+      "spring-security-jwt-oauth2",
+      "spring-ioc-di"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "base64",
+      "mfa-totp"
+    ]
+  },
+  "spring-transactional-propagation": {
+    "links": [
+      "spring-ioc-di",
+      "acid-transactions",
+      "db-transaction-isolation",
+      "jpa-persistence-context",
+      "connection-pool",
+      "transactional-outbox"
+    ],
+    "mentions": [
+      "spring-boot-4-migration",
+      "mysql-innodb-basics",
+      "db-replication-sharding",
+      "spring-boot-auto-configuration",
+      "sql-batch-timeout-pool"
+    ]
+  },
+  "balanced-search-trees": {
+    "links": [
+      "ds-binary-tree-bst",
+      "ds-hash-map",
+      "binary-search",
+      "db-index",
+      "sd-leaderboard-sorted-set",
+      "segment-tree-fenwick"
+    ],
+    "mentions": [
+      "db-type-embedded",
+      "ds-linked-list",
+      "mysql-innodb-basics",
+      "db-sharding",
+      "redis-basics"
+    ]
+  },
+  "clean-code-practices": {
+    "links": [
+      "coupling-cohesion-principles",
+      "refactoring-code-smells",
+      "cqrs"
+    ],
+    "mentions": [
+      "linters-formatters",
+      "solid-principles",
+      "clean-architecture",
+      "js-optional-chaining-nullish",
+      "js-function-forms",
+      "js-pure-functions",
+      "redis-basics"
+    ]
+  },
+  "coupling-cohesion-principles": {
+    "links": [
+      "design-patterns-overview",
+      "clean-code-practices",
+      "refactoring-code-smells",
+      "microservices-decomposition",
+      "pattern-strategy",
+      "hexagonal-architecture",
+      "pattern-template-method"
+    ],
+    "mentions": [
+      "modular-monolith",
+      "webhooks"
+    ]
+  },
+  "css-custom-properties": {
+    "links": [
+      "css-styling-approaches",
+      "design-system-building",
+      "css-cascade-specificity",
+      "animation-performance",
+      "css-performance",
+      "web-components-shadow-dom"
+    ],
+    "mentions": [
+      "micro-frontend-integration-patterns",
+      "css-color-background"
+    ]
+  },
+  "frontend-frameworks-compared": {
+    "links": [
+      "react-rerender",
+      "react-fiber-render-commit",
+      "react-memoization-hooks",
+      "react-state-management-libraries",
+      "code-splitting",
+      "islands-resumability",
+      "nextjs-static-dynamic-rendering",
+      "rendering-strategies",
+      "web-components-shadow-dom",
+      "micro-frontends"
+    ],
+    "mentions": [
+      "react-client-routing",
+      "cross-platform-apps",
+      "spring-ioc-di",
+      "js-memoization",
+      "ds-graph-bfs-dfs",
+      "js-destructuring"
+    ]
+  },
+  "graphql-execution-validation": {
+    "links": [
+      "graphql-schema-type-system",
+      "graphql-basics",
+      "graphql-operations-syntax",
+      "abort-controller",
+      "graphql-subscriptions-defer"
+    ],
+    "mentions": [
+      "observability-basics",
+      "n-plus-one-queries",
+      "event-loop",
+      "distributed-tracing",
+      "sql-query-rewrite"
+    ]
+  },
+  "graphql-operations-syntax": {
+    "links": [
+      "graphql-schema-type-system",
+      "graphql-basics",
+      "graphql-subscriptions-defer",
+      "graphql-execution-validation"
+    ],
+    "mentions": [
+      "graphql-client-caching",
+      "js-template-literals",
+      "client-data-cache"
+    ]
+  },
+  "graphql-pagination-connections": {
+    "links": [
+      "api-pagination-sorting",
+      "graphql-schema-type-system",
+      "graphql-execution-validation",
+      "graphql-basics",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "graphql-client-caching",
+      "n-plus-one-queries",
+      "postgres-reporting-sql",
+      "loading-patterns",
+      "api-versioning",
+      "sql-query-rewrite",
+      "db-modeling-normalization"
+    ]
+  },
+  "graphql-schema-type-system": {
+    "links": [
+      "graphql-basics",
+      "graphql-operations-syntax",
+      "graphql-pagination-connections",
+      "api-versioning",
+      "graphql-execution-validation"
+    ],
+    "mentions": [
+      "graphql-client-caching",
+      "postgres-data-types",
+      "js-numbers-bigint",
+      "sql-query-rewrite",
+      "db-modeling-normalization"
+    ]
+  },
+  "graphql-subscriptions-defer": {
+    "links": [
+      "websocket-deep-dive",
+      "http-streaming-sse",
+      "realtime-communication",
+      "graphql-execution-validation",
+      "message-queue-basics",
+      "streaming-ssr-suspense"
+    ],
+    "mentions": [
+      "pattern-prototype",
+      "graphql-client-caching",
+      "n-plus-one-queries",
+      "pattern-iterator",
+      "rendering-strategies",
+      "graphql-basics",
+      "k8s-configmap",
+      "sd-start-single-server",
+      "http-versions",
+      "kafka-basics",
+      "redis-basics",
+      "db-modeling-normalization"
+    ]
+  },
+  "load-testing-k6": {
+    "links": [
+      "percentile-latency",
+      "connection-pool",
+      "tail-latency",
+      "retries",
+      "ci-cd-basics",
+      "autoscaling",
+      "sd-capacity-estimation",
+      "sli-slo"
+    ],
+    "mentions": [
+      "https-tls",
+      "os-kernel-system-calls",
+      "api-scaling-ladder",
+      "smoke-sanity-regression-testing",
+      "latency-bandwidth-throughput",
+      "event-loop",
+      "js-memory-leak",
+      "code-review-practices",
+      "sql-batch-timeout-pool",
+      "http-status-codes"
+    ]
+  },
+  "minimum-spanning-tree": {
+    "links": [
+      "ds-union-find",
+      "greedy-algorithms",
+      "ds-heap",
+      "shortest-path-algorithms"
+    ],
+    "mentions": [
+      "router-vs-switch",
+      "sd-maps-tiles-routing"
+    ]
+  },
+  "refactoring-code-smells": {
+    "links": [
+      "coupling-cohesion-principles",
+      "clean-code-practices",
+      "pattern-strategy"
+    ],
+    "mentions": [
+      "git-undo",
+      "ddd-tactical-patterns",
+      "oop-four-pillars"
+    ]
+  },
+  "segment-tree-fenwick": {
+    "links": [
+      "ds-array-matrix",
+      "balanced-search-trees",
+      "ds-heap",
+      "ds-binary-tree-bst",
+      "sd-leaderboard-sorted-set"
+    ],
+    "mentions": [
+      "sd-latency-numbers",
+      "sql-filtering-operators",
+      "db-type-time-series",
+      "redis-basics"
+    ]
+  },
+  "shortest-path-algorithms": {
+    "links": [
+      "ds-graph-bfs-dfs",
+      "sd-maps-tiles-routing",
+      "greedy-algorithms",
+      "ds-heap",
+      "router-vs-switch",
+      "ds-stack-queue-deque",
+      "dynamic-programming",
+      "minimum-spanning-tree"
+    ],
+    "mentions": [
+      "routing-protocols-ospf-rip-eigrp"
+    ]
+  },
+  "spring-boot-testing": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "integration-tests-real-db",
+      "spring-boot-4-migration",
+      "spring-ioc-di"
+    ],
+    "mentions": [
+      "web-server-vs-was",
+      "reactive-programming",
+      "db-index-design",
+      "spring-boot-auto-configuration",
+      "http-status-codes"
+    ]
+  },
+  "spring-security-jwt-oauth2": {
+    "links": [
+      "token-login",
+      "oauth",
+      "jwt-key-rotation",
+      "csrf",
+      "authn-vs-authz",
+      "spring-boot-auto-configuration",
+      "rate-limiting-in-practice",
+      "cookie-session-login",
+      "sso-saml-oidc"
+    ],
+    "mentions": [
+      "spring-security-architecture",
+      "spring-boot-4-migration",
+      "web-server-vs-was",
+      "base64",
+      "mfa-totp"
+    ]
+  },
+  "web-components-shadow-dom": {
+    "links": [
+      "css-styling-approaches",
+      "micro-frontend-integration-patterns",
+      "css-cascade-specificity",
+      "css-custom-properties",
+      "event-propagation",
+      "react-forms-actions",
+      "hydration",
+      "aria-keyboard-focus",
+      "react-component-patterns",
+      "design-system-building"
+    ],
+    "mentions": [
+      "micro-frontends",
+      "icon-system-svg",
+      "event-delegation",
+      "dom-basics",
+      "rendering-strategies",
+      "ts-declaration-files-modules",
+      "css-performance"
+    ]
+  },
+  "api-key-hmac-auth": {
+    "links": [
+      "oauth",
+      "password-attacks-credential-stuffing",
+      "hash-hmac-password-hashing",
+      "secrets-management",
+      "rate-limiting-in-practice",
+      "jwt-key-rotation",
+      "clock-skew",
+      "idempotency-key",
+      "webhooks",
+      "encryption-in-transit"
+    ],
+    "mentions": [
+      "gateway",
+      "base64",
+      "digital-signatures-certificates",
+      "token-login",
+      "redis-basics",
+      "what-happens-google-com",
+      "soap-and-soa",
+      "sd-url-shortener-key-generation",
+      "https-tls",
+      "db-modeling-normalization"
+    ]
+  },
+  "api-test-automation": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "api-versioning",
+      "smoke-sanity-regression-testing",
+      "integration-tests-real-db",
+      "sit-uat-testing",
+      "test-design-techniques"
+    ],
+    "mentions": [
+      "spring-security-jwt-oauth2",
+      "openapi-spec-first",
+      "ci-cd-basics",
+      "tdd-bdd-atdd",
+      "js-array-transform",
+      "input-validation-secure-coding",
+      "load-testing-k6",
+      "http-status-codes",
+      "oauth",
+      "soap-and-soa",
+      "cors",
+      "http-methods"
+    ]
+  },
+  "architecture-docs-c4-adr": {
+    "links": [
+      "hexagonal-architecture",
+      "layered-architecture",
+      "distributed-tracing",
+      "ddd-tactical-patterns",
+      "enterprise-application-patterns",
+      "ddd-bounded-context",
+      "clean-architecture"
+    ],
+    "mentions": [
+      "modular-monolith",
+      "github-repo-governance",
+      "uml-diagrams",
+      "sd-queue-logging-automation",
+      "rabbitmq-basics",
+      "pub-sub",
+      "kafka-basics",
+      "security-groups-nacl",
+      "db-types-overview",
+      "redis-basics",
+      "what-happens-google-com"
+    ]
+  },
+  "bit-manipulation": {
+    "links": [
+      "logic-gates-alu",
+      "linux-files-permissions",
+      "recursion-backtracking",
+      "dynamic-programming",
+      "sd-unique-id-generator",
+      "bloom-filter",
+      "feature-flags"
+    ],
+    "mentions": [
+      "db-index",
+      "sd-latency-numbers",
+      "js-numbers-bigint",
+      "floating-point-numbers",
+      "segment-tree-fenwick",
+      "js-destructuring"
+    ]
+  },
+  "code-review-practices": {
+    "links": [
+      "github-repo-governance",
+      "git-stacked-prs",
+      "idempotency-key",
+      "race-conditions",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "architecture-docs-c4-adr",
+      "sql-query-rewrite"
+    ]
+  },
+  "ddd-tactical-patterns": {
+    "links": [
+      "ddd-bounded-context",
+      "enterprise-application-patterns",
+      "db-keys-denormalization",
+      "mvc-pattern",
+      "cqrs",
+      "transactional-outbox",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "db-sharding",
+      "floating-point-numbers",
+      "js-strict-mode"
+    ]
+  },
+  "enterprise-application-patterns": {
+    "links": [
+      "ddd-tactical-patterns",
+      "mvc-pattern",
+      "hexagonal-architecture",
+      "n-plus-one-queries",
+      "clean-architecture",
+      "architecture-docs-c4-adr"
+    ],
+    "mentions": [
+      "nodejs-orm-query-builder",
+      "jpa-persistence-context",
+      "js-spread-rest",
+      "api-security-owasp-api-top10",
+      "ddd-bounded-context",
+      "pattern-proxy"
+    ]
+  },
+  "github-repo-governance": {
+    "links": [
+      "git-branching-strategy",
+      "code-review-practices",
+      "git-stacked-prs",
+      "git-large-files-secrets",
+      "dependency-hell"
+    ],
+    "mentions": [
+      "github-actions-docker-ecr",
+      "github-apps-api",
+      "github-pull-request-flow",
+      "k8s-deploy-pipeline-eks",
+      "rest-api-design",
+      "token-login",
+      "build-caching",
+      "sdlc-models-agile-scrum"
+    ]
+  },
+  "graphql-authorization": {
+    "links": [
+      "graphql-basics",
+      "authn-vs-authz",
+      "hexagonal-architecture",
+      "graphql-client-caching"
+    ],
+    "mentions": [
+      "api-security-owasp-api-top10",
+      "graphql-subscriptions-defer",
+      "n-plus-one-queries",
+      "realtime-communication",
+      "rest-api-design",
+      "base64",
+      "js-pure-functions",
+      "iam-basics",
+      "redis-basics",
+      "cookie-session-login",
+      "sql-query-rewrite"
+    ]
+  },
+  "graphql-client-caching": {
+    "links": [
+      "graphql-basics",
+      "client-data-cache",
+      "api-pagination-sorting",
+      "graphql-authorization"
+    ],
+    "mentions": [
+      "nextjs-app-router-routing",
+      "graphql-schema-type-system",
+      "rendering-strategies",
+      "loading-patterns",
+      "db-type-relational",
+      "db-modeling-normalization"
+    ]
+  },
+  "llm-api-integration": {
+    "links": [
+      "llm-basics-for-developers",
+      "mcp-protocol",
+      "spring-ai-agents",
+      "rag-classic-pipeline",
+      "http-streaming-sse",
+      "server-sent-events",
+      "resilience-patterns",
+      "rate-limiting-in-practice",
+      "agent-tool-design",
+      "llm-model-selection"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "json-crud-http",
+      "system-prompt-design",
+      "rest-api-design",
+      "self-hosting-llm-inference",
+      "input-validation-secure-coding",
+      "llm-evals",
+      "cookie-session-login",
+      "db-modeling-normalization"
+    ]
+  },
+  "llm-basics-for-developers": {
+    "links": [
+      "llm-api-integration",
+      "mcp-protocol",
+      "rag-classic-pipeline",
+      "claude-code-context-window"
+    ],
+    "mentions": [
+      "system-prompt-design",
+      "llm-app-security-guardrails",
+      "ai-coding-agents",
+      "llm-evals",
+      "prompt-reasoning-techniques",
+      "floating-point-numbers",
+      "self-hosting-llm-inference"
+    ]
+  },
+  "mcp-protocol": {
+    "links": [
+      "llm-basics-for-developers",
+      "llm-api-integration",
+      "claude-code-project-structure",
+      "spring-ai-agents",
+      "server-sent-events",
+      "oauth"
+    ],
+    "mentions": [
+      "realtime-communication",
+      "system-prompt-design",
+      "api-styles-overview",
+      "ssrf",
+      "ai-coding-agents",
+      "spring-security-jwt-oauth2",
+      "token-login",
+      "agent-tool-design",
+      "threat-modeling-stride",
+      "security-principles-cia-defense-in-depth",
+      "what-happens-google-com",
+      "cookie-session-login",
+      "dns"
+    ]
+  },
+  "nodejs-debugging-profiling": {
+    "links": [
+      "event-loop",
+      "nodejs-server-runtime",
+      "garbage-collection",
+      "js-memory-leak",
+      "percentile-latency",
+      "nodejs-http-clients",
+      "linux-processes-signals",
+      "distributed-tracing",
+      "nodejs-error-handling"
+    ],
+    "mentions": [
+      "observability-basics",
+      "realtime-communication",
+      "bash-scripting",
+      "ssh-in-practice",
+      "regex-and-globbing",
+      "js-es-modules",
+      "sql-batch-timeout-pool",
+      "http-caching-cdn"
+    ]
+  },
+  "nodejs-error-handling": {
+    "links": [
+      "js-promises",
+      "express-middleware",
+      "nodejs-http-clients",
+      "structured-logging",
+      "nodejs-fs-streams",
+      "linux-processes-signals",
+      "resilience-patterns",
+      "nodejs-debugging-profiling"
+    ],
+    "mentions": [
+      "k8s-pod-lifecycle",
+      "js-callback-hell",
+      "browser-devtools-debugging",
+      "virtual-memory-paging",
+      "json-crud-http",
+      "k8s-architecture",
+      "centralized-logging-pipeline",
+      "event-loop",
+      "os-kernel-system-calls",
+      "nodejs-cli-process",
+      "osi-in-practice",
+      "connection-pool",
+      "http-methods"
+    ]
+  },
+  "nodejs-fs-streams": {
+    "links": [
+      "backpressure",
+      "nodejs-error-handling",
+      "garbage-collection",
+      "nodejs-server-runtime",
+      "nodejs-http-clients"
+    ],
+    "mentions": [
+      "os-kernel-system-calls",
+      "regex-and-globbing",
+      "http-streaming-sse",
+      "event-loop",
+      "js-es-modules",
+      "http-status-codes",
+      "debounce-throttle"
+    ]
+  },
+  "nodejs-http-clients": {
+    "links": [
+      "browser-fetch",
+      "timeouts",
+      "tcp-connection-lifecycle",
+      "nodejs-fs-streams",
+      "nodejs-error-handling",
+      "abort-controller",
+      "resilience-patterns",
+      "nodejs-debugging-profiling"
+    ],
+    "mentions": [
+      "what-happens-google-com",
+      "https-tls",
+      "js-memory-leak",
+      "sd-payment-flow",
+      "osi-in-practice",
+      "http-status-codes",
+      "js-runtimes-node-deno-bun",
+      "http-methods",
+      "dns"
+    ]
+  },
+  "nodejs-orm-query-builder": {
+    "links": [
+      "n-plus-one-queries",
+      "db-migration-tools",
+      "connection-pool",
+      "hexagonal-architecture",
+      "zero-downtime-migrations"
+    ],
+    "mentions": [
+      "postgres-slow-db-triage",
+      "k8s-deploy-pipeline-eks",
+      "js-template-literals",
+      "mongodb-document-model",
+      "js-numbers-bigint",
+      "ts-declaration-files-modules",
+      "pattern-proxy",
+      "sql-batch-timeout-pool",
+      "sql-query-rewrite"
+    ]
+  },
+  "nodejs-web-frameworks": {
+    "links": [
+      "express-middleware",
+      "nodejs-server-runtime",
+      "fastapi-basics",
+      "api-key-hmac-auth",
+      "spring-ioc-di",
+      "serverless-limits",
+      "cold-starts",
+      "xss",
+      "rendering-ssr",
+      "hexagonal-architecture"
+    ],
+    "mentions": [
+      "ts-decorators",
+      "linux-processes-signals",
+      "event-loop",
+      "code-review-practices",
+      "js-runtimes-node-deno-bun",
+      "runtime-validation-zod",
+      "frontend-build-tooling"
+    ]
+  },
+  "openapi-spec-first": {
+    "links": [
+      "rest-api-design",
+      "api-versioning",
+      "frontend-testing-strategy",
+      "integration-tests-real-db"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "fastapi-basics",
+      "api-test-automation",
+      "http-status-codes",
+      "npm-package-publishing"
+    ]
+  },
+  "password-attacks-credential-stuffing": {
+    "links": [
+      "hash-hmac-password-hashing",
+      "mfa-totp",
+      "passkeys-webauthn",
+      "rate-limiting-in-practice",
+      "rate-limiting-algorithms",
+      "api-key-hmac-auth",
+      "ddos-protection"
+    ],
+    "mentions": [
+      "hyperloglog",
+      "sliding-window-pattern",
+      "redis-basics",
+      "http-status-codes",
+      "sso-saml-oidc"
+    ]
+  },
+  "regex-and-globbing": {
+    "links": [
+      "linux-grep-awk-sed",
+      "bash-scripting",
+      "git-ignore-config",
+      "recursion-backtracking",
+      "big-o-notation",
+      "structured-logging"
+    ],
+    "mentions": [
+      "centralized-logging-pipeline",
+      "sd-latency-numbers",
+      "bash-expansions-variables",
+      "event-loop"
+    ]
+  },
+  "smoke-sanity-regression-testing": {
+    "links": [
+      "test-design-techniques",
+      "test-pyramid-unit-tests",
+      "sit-uat-testing",
+      "ci-cd-basics",
+      "api-test-automation",
+      "tdd-bdd-atdd"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "build-caching",
+      "code-splitting",
+      "dependency-hell",
+      "k8s-deploy-pipeline-eks",
+      "osi-in-practice",
+      "frontend-monorepo"
+    ]
+  },
+  "string-search-algorithms": {
+    "links": [
+      "big-o-notation",
+      "bit-manipulation",
+      "ds-hash-map",
+      "rsync-algorithm",
+      "regex-and-globbing",
+      "binary-search",
+      "elasticsearch-inverted-index",
+      "ds-trie"
+    ],
+    "mentions": [
+      "db-index",
+      "ids-ips",
+      "character-encoding-unicode",
+      "js-numbers-bigint",
+      "event-loop",
+      "recursion-backtracking",
+      "js-strings-unicode",
+      "db-modeling-normalization",
+      "core-web-vitals"
+    ]
+  },
+  "tdd-bdd-atdd": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "test-design-techniques",
+      "smoke-sanity-regression-testing",
+      "api-test-automation"
+    ],
+    "mentions": [
+      "message-delivery-semantics"
+    ]
+  },
+  "test-design-techniques": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "smoke-sanity-regression-testing",
+      "tdd-bdd-atdd"
+    ],
+    "mentions": [
+      "sit-uat-testing",
+      "api-test-automation",
+      "floating-point-numbers"
+    ]
+  },
+  "twelve-factor-app": {
+    "links": [
+      "dependency-hell",
+      "k8s-configmap",
+      "secrets-management",
+      "feature-flags",
+      "dockerfile-image-layers",
+      "helm-basics",
+      "sd-load-balancer-stateless",
+      "k8s-hpa",
+      "k8s-pod-lifecycle",
+      "rolling-deployment",
+      "docker-compose",
+      "integration-tests-real-db",
+      "structured-logging",
+      "observability-basics",
+      "db-migration-tools",
+      "k8s-job-cronjob"
+    ],
+    "mentions": [
+      "k8s-statefulset",
+      "centralized-logging-pipeline",
+      "iptables-nat",
+      "helm-dependencies-oci-gitops",
+      "message-queue-basics",
+      "docker-container-basics",
+      "spring-ioc-di",
+      "sd-payment-flow",
+      "sd-object-storage-architecture",
+      "db-type-embedded",
+      "kafka-basics",
+      "redis-basics",
+      "cloud-service-models-shared-responsibility",
+      "frontend-monorepo"
+    ]
+  },
+  "aria-keyboard-focus": {
+    "links": [
+      "html-semantics",
+      "web-accessibility",
+      "frontend-system-design-interview",
+      "css-sticky-scroll-snap",
+      "rendering-csr-spa"
+    ],
+    "mentions": [
+      "react-client-routing",
+      "frontend-testing-strategy",
+      "smoke-sanity-regression-testing"
+    ]
+  },
+  "browser-security-model": {
+    "links": [
+      "cors",
+      "csrf",
+      "xss",
+      "spa-auth-token-storage",
+      "web-security-headers",
+      "web-workers",
+      "owasp-top-10-map",
+      "browser-storage"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "frontend-testing-strategy",
+      "cpu-pipelining-branch-prediction",
+      "html-form-http",
+      "cookie-session-login"
+    ]
+  },
+  "css-box-model-layout": {
+    "links": [
+      "css-flexbox-grid",
+      "css-sticky-scroll-snap",
+      "css-cascade-specificity",
+      "css-position-stacking-context"
+    ],
+    "mentions": []
+  },
+  "css-cascade-specificity": {
+    "links": [
+      "css-performance",
+      "css-box-model-layout",
+      "css-position-stacking-context"
+    ],
+    "mentions": [
+      "micro-frontend-integration-patterns",
+      "css-custom-properties"
+    ]
+  },
+  "css-flexbox-grid": {
+    "links": [
+      "css-box-model-layout",
+      "css-sticky-scroll-snap"
+    ],
+    "mentions": [
+      "responsive-design",
+      "loading-patterns"
+    ]
+  },
+  "css-position-stacking-context": {
+    "links": [
+      "css-box-model-layout",
+      "css-sticky-scroll-snap",
+      "css-cascade-specificity",
+      "css-flexbox-grid"
+    ],
+    "mentions": [
+      "ui-overlays-tooltip-dropdown-toast",
+      "event-propagation",
+      "design-system-building"
+    ]
+  },
+  "css-styling-approaches": {
+    "links": [
+      "css-performance",
+      "design-system-building",
+      "css-custom-properties",
+      "bundler-basics",
+      "css-cascade-specificity"
+    ],
+    "mentions": [
+      "nextjs-app-router-routing",
+      "responsive-design",
+      "rendering-strategies",
+      "smoke-sanity-regression-testing"
+    ]
+  },
+  "design-system-building": {
+    "links": [
+      "css-styling-approaches",
+      "design-system-adoption-governance",
+      "css-color-background",
+      "semantic-versioning",
+      "frontend-monorepo"
+    ],
+    "mentions": [
+      "css-performance",
+      "frontend-testing-strategy",
+      "aria-keyboard-focus",
+      "web-accessibility",
+      "react-component-patterns",
+      "rendering-strategies",
+      "css-custom-properties",
+      "smoke-sanity-regression-testing"
+    ]
+  },
+  "frontend-build-tooling": {
+    "links": [
+      "bundler-basics",
+      "code-splitting",
+      "tsconfig-strict",
+      "js-map-set-weak",
+      "js-iterators-generators",
+      "frontend-error-tracking"
+    ],
+    "mentions": [
+      "dependency-hell",
+      "pattern-iterator",
+      "docker-container-basics",
+      "js-optional-chaining-nullish",
+      "linters-formatters",
+      "react-useeffect",
+      "js-function-forms",
+      "js-es-modules",
+      "frontend-monorepo",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "frontend-testing-strategy": {
+    "links": [
+      "test-pyramid-unit-tests",
+      "client-data-cache",
+      "ci-cd-basics"
+    ],
+    "mentions": [
+      "frontend-browser-cache",
+      "design-system-building",
+      "react-state-management-libraries",
+      "linters-formatters",
+      "smoke-sanity-regression-testing",
+      "html-semantics",
+      "web-accessibility",
+      "sd-payment-flow",
+      "event-loop",
+      "js-pure-functions",
+      "react-custom-hooks-rules"
+    ]
+  },
+  "html-semantics": {
+    "links": [
+      "web-accessibility",
+      "aria-keyboard-focus",
+      "dom-basics",
+      "html-form-http",
+      "hydration",
+      "seo-for-spa"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "icon-system-svg",
+      "linters-formatters",
+      "nodejs-web-frameworks",
+      "rendering-strategies",
+      "code-review-practices"
+    ]
+  },
+  "js-iterators-generators": {
+    "links": [
+      "pattern-iterator",
+      "js-destructuring",
+      "js-spread-rest",
+      "js-map-set-weak",
+      "js-execution-context",
+      "frontend-build-tooling",
+      "js-promise-combinators",
+      "http-streaming-sse",
+      "frontend-state-architecture"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "js-async-await",
+      "js-promises",
+      "spark-basics",
+      "bundler-basics"
+    ]
+  },
+  "js-map-set-weak": {
+    "links": [
+      "js-memory-leak",
+      "js-memoization",
+      "js-prototype-chain",
+      "js-equality-coercion",
+      "js-immutability-react",
+      "js-object-methods",
+      "pattern-iterator",
+      "ds-hash-map",
+      "bundler-basics",
+      "js-shallow-deep-copy"
+    ],
+    "mentions": [
+      "web-workers",
+      "spring-ioc-di",
+      "pattern-prototype",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-component-patterns": {
+    "links": [
+      "typescript-in-react",
+      "react-rerender",
+      "pattern-decorator",
+      "frontend-system-design-interview",
+      "design-patterns-overview"
+    ],
+    "mentions": [
+      "react-suspense-error-boundary",
+      "react-context",
+      "aria-keyboard-focus",
+      "react-custom-hooks-rules",
+      "js-pure-functions"
+    ]
+  },
+  "react-concurrent-transitions": {
+    "links": [
+      "react-rerender",
+      "react-fiber-render-commit",
+      "debounce-throttle",
+      "react-suspense-error-boundary"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "event-loop",
+      "bit-manipulation",
+      "core-web-vitals"
+    ]
+  },
+  "react-context": {
+    "links": [
+      "react-rerender",
+      "fp-in-react",
+      "react-memoization-hooks",
+      "react-custom-hooks-rules",
+      "react-server-components"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "rendering-strategies",
+      "css-custom-properties",
+      "frontend-state-architecture",
+      "frontend-monorepo"
+    ]
+  },
+  "react-custom-hooks-rules": {
+    "links": [
+      "react-context",
+      "react-memoization-hooks",
+      "client-data-cache",
+      "hydration",
+      "test-pyramid-unit-tests"
+    ],
+    "mentions": [
+      "react-state-management-libraries",
+      "fp-in-react",
+      "react-concurrent-transitions",
+      "react-useeffect",
+      "ds-linked-list",
+      "rendering-strategies",
+      "race-conditions",
+      "http-status-codes",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-fiber-render-commit": {
+    "links": [
+      "react-rerender",
+      "react-reconciliation-keys",
+      "event-loop",
+      "react-concurrent-transitions"
+    ],
+    "mentions": [
+      "react-useref-layout-effect",
+      "web-workers",
+      "react-useeffect",
+      "ds-graph-bfs-dfs",
+      "react-state-management-libraries",
+      "cpu-instruction-cycle",
+      "ds-linked-list",
+      "core-web-vitals"
+    ]
+  },
+  "react-forms-actions": {
+    "links": [
+      "html-form-http",
+      "frontend-state-architecture",
+      "frontend-system-design-interview",
+      "idempotency-key",
+      "react-server-components",
+      "loading-patterns",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "react-suspense-error-boundary",
+      "nextjs-app-router-routing",
+      "input-validation-secure-coding",
+      "rendering-strategies",
+      "js-destructuring",
+      "resilience-patterns",
+      "http-methods"
+    ]
+  },
+  "react-jsx-components": {
+    "links": [
+      "react-rerender",
+      "xss",
+      "react-state-snapshot-batching",
+      "typescript-in-react",
+      "js-short-circuit",
+      "react-useeffect",
+      "js-pure-functions"
+    ],
+    "mentions": [
+      "react-memoization-hooks",
+      "js-object-methods",
+      "react-concurrent-transitions",
+      "pattern-decorator",
+      "js-strict-mode",
+      "js-es-modules",
+      "js-destructuring",
+      "js-truthy-falsy-typeof",
+      "frontend-build-tooling",
+      "js-closures"
+    ]
+  },
+  "react-memoization-hooks": {
+    "links": [
+      "react-rerender",
+      "js-memoization",
+      "js-closures"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-memory-leak",
+      "react-state-snapshot-batching",
+      "react-useeffect",
+      "http-caching-cdn",
+      "js-immutability-react",
+      "react-custom-hooks-rules",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-reconciliation-keys": {
+    "links": [
+      "react-rerender",
+      "react-fiber-render-commit"
+    ],
+    "mentions": [
+      "dynamic-programming",
+      "pattern-decorator",
+      "react-useeffect",
+      "ds-linked-list",
+      "sdlc-models-agile-scrum"
+    ]
+  },
+  "react-state-management-libraries": {
+    "links": [
+      "client-data-cache",
+      "frontend-state-architecture",
+      "pattern-observer",
+      "js-immutability-react",
+      "fp-in-react"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "browser-storage",
+      "react-concurrent-transitions",
+      "js-memoization",
+      "rendering-strategies",
+      "code-review-practices",
+      "react-memoization-hooks",
+      "js-pure-functions",
+      "ddd-tactical-patterns",
+      "react-rerender",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-state-snapshot-batching": {
+    "links": [
+      "react-jsx-components",
+      "js-closures",
+      "js-immutability-react",
+      "react-rerender",
+      "fp-in-react",
+      "react-without-effects",
+      "frontend-state-architecture",
+      "react-useeffect"
+    ],
+    "mentions": [
+      "js-pure-functions"
+    ]
+  },
+  "react-suspense-error-boundary": {
+    "links": [
+      "streaming-ssr-suspense",
+      "hydration",
+      "client-data-cache",
+      "code-splitting",
+      "react-concurrent-transitions"
+    ],
+    "mentions": [
+      "rendering-strategies",
+      "react-state-snapshot-batching",
+      "react-useref-layout-effect",
+      "sdlc-models-agile-scrum"
+    ]
+  },
+  "react-useeffect": {
+    "links": [
+      "react-state-snapshot-batching",
+      "react-jsx-components",
+      "react-without-effects",
+      "js-closures",
+      "react-rerender",
+      "abort-controller",
+      "js-memory-leak",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "js-function-forms",
+      "race-conditions",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "react-useref-layout-effect": {
+    "links": [
+      "js-closures",
+      "react-memoization-hooks",
+      "typescript-in-react",
+      "browser-rendering-pipeline",
+      "hydration"
+    ],
+    "mentions": [
+      "dom-basics",
+      "react-useeffect",
+      "design-system-adoption-governance",
+      "react-concurrent-transitions",
+      "react-state-snapshot-batching",
+      "js-function-forms",
+      "rendering-strategies",
+      "js-pure-functions",
+      "react-custom-hooks-rules",
+      "core-web-vitals"
+    ]
+  },
+  "react-without-effects": {
+    "links": [
+      "react-useeffect",
+      "fp-in-react",
+      "react-rerender",
+      "react-state-snapshot-batching",
+      "client-data-cache"
+    ],
+    "mentions": [
+      "react-memoization-hooks",
+      "k8s-pod-resources",
+      "react-concurrent-transitions",
+      "react-state-management-libraries",
+      "rendering-strategies",
+      "race-conditions"
+    ]
+  },
+  "responsive-design": {
+    "links": [
+      "image-optimization"
+    ],
+    "mentions": [
+      "nextjs-app-router-routing",
+      "css-sticky-scroll-snap",
+      "js-numbers-bigint",
+      "css-custom-properties",
+      "web-accessibility"
+    ]
+  },
+  "seo-for-spa": {
+    "links": [
+      "rendering-csr-spa",
+      "html-semantics",
+      "aria-keyboard-focus",
+      "sd-web-crawler-politeness-dedup",
+      "image-optimization",
+      "rendering-strategies",
+      "rendering-ssg-isr",
+      "rendering-ssr",
+      "xss"
+    ],
+    "mentions": [
+      "html-form-http",
+      "nextjs-app-router-routing",
+      "k8s-deploy-pipeline-eks",
+      "structured-data-json-ld",
+      "frontend-hosting-platforms",
+      "nextjs-static-dynamic-rendering",
+      "crawl-budget-faceted-navigation",
+      "search-spam-policies-cloaking",
+      "http-status-codes",
+      "what-happens-google-com"
+    ]
+  },
+  "spa-auth-token-storage": {
+    "links": [
+      "token-login",
+      "cookie-session-login",
+      "oauth",
+      "browser-storage",
+      "csrf",
+      "xss",
+      "frontend-as-distributed-system",
+      "gateway",
+      "browser-security-model",
+      "web-security-headers"
+    ],
+    "mentions": [
+      "client-data-cache",
+      "json-crud-http",
+      "what-happens-google-com",
+      "cors",
+      "js-closures"
+    ]
+  },
+  "ts-conditional-infer": {
+    "links": [
+      "ts-utility-mapped-types",
+      "ts-generics",
+      "tsconfig-strict",
+      "js-map-set-weak",
+      "ts-narrowing"
+    ],
+    "mentions": [
+      "js-object-methods",
+      "js-spread-rest",
+      "js-promises",
+      "js-template-literals",
+      "js-primitive-vs-reference"
+    ]
+  },
+  "web-accessibility": {
+    "links": [
+      "html-semantics",
+      "aria-keyboard-focus",
+      "animation-performance",
+      "lighthouse-explained"
+    ],
+    "mentions": [
+      "frontend-testing-strategy",
+      "design-system-building",
+      "count-min-sketch"
+    ]
+  },
+  "web-workers": {
+    "links": [
+      "core-web-vitals",
+      "event-loop",
+      "frontend-browser-cache",
+      "js-shallow-deep-copy",
+      "web-security-headers",
+      "thread-safety"
+    ],
+    "mentions": [
+      "json-crud-http",
+      "react-useeffect",
+      "browser-storage",
+      "realtime-communication",
+      "browser-rendering-pipeline",
+      "spring-ioc-di",
+      "sd-maps-tiles-routing"
+    ]
+  },
   "kafka-to-lake-pipeline": {
     "links": [
       "data-lake-hdfs",
@@ -32,6 +8224,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-to-lake-pipeline"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "sd-object-storage-architecture",
       "db-type-embedded",
       "js-pure-functions",
@@ -65,11 +8258,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "db-partitioning",
       "sd-start-single-server",
+      "mongodb-replica-set-sharding",
       "stream-processing",
       "kafka-basics",
       "postgres-architecture",
+      "linux-archive-transfer",
+      "etl-vs-elt",
       "cdc-change-data-capture"
     ]
   },
@@ -79,6 +8276,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "service-discovery",
       "k8s-service-types",
       "k8s-coredns",
+      "spring-boot-4-migration",
       "spring-boot-auto-configuration",
       "k8s-configmap",
       "argocd-basics",
@@ -90,7 +8288,6 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "circuit-breaker",
       "service-mesh",
       "timeouts",
-      "spring-boot-4-migration",
       "spring-boot-on-kubernetes",
       "spring-boot-observability",
       "spring-ai-agents"
@@ -119,8 +8316,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-cloud-vs-kubernetes"
     ],
     "mentions": [
+      "mcp-protocol",
+      "system-prompt-design",
       "api-styles-overview",
       "resilience-patterns",
+      "agent-tool-design",
       "redis-basics",
       "vector-db"
     ]
@@ -132,7 +8332,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "web-security-headers",
-      "ds-linked-list"
+      "virtualization-hypervisors",
+      "browser-security-model",
+      "ds-linked-list",
+      "floating-point-numbers"
     ]
   },
   "cpu-cache-hierarchy": {
@@ -156,18 +8359,27 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "logic-gates-alu",
       "cpu-cache-hierarchy",
       "cpu-pipelining-branch-prediction",
+      "packet-capture-tcpdump",
+      "js-binary-data-typed-arrays",
       "virtual-memory-paging"
     ],
     "mentions": [
+      "cpu-scheduling-interrupts",
+      "memory-safety-buffer-overflow",
       "sd-latency-numbers",
-      "ds-hash-map"
+      "virtualization-hypervisors",
+      "ds-hash-map",
+      "bit-manipulation"
     ]
   },
   "logic-gates-alu": {
     "links": [
       "cpu-instruction-cycle"
     ],
-    "mentions": []
+    "mentions": [
+      "floating-point-numbers",
+      "bit-manipulation"
+    ]
   },
   "aws-ec2-ubuntu-server-setup": {
     "links": [
@@ -183,13 +8395,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "virtual-memory-paging",
       "terraform-basics",
+      "linux-users-groups-sudo",
       "ansible-network-automation",
       "proxy-reverse-proxy",
+      "virtualization-hypervisors",
       "page-cache-disk-io",
       "sd-start-single-server",
       "js-memory-leak",
+      "linux-disks-filesystems",
       "dockerfile-image-layers",
       "layer-ip-addressing",
+      "rds-aurora-managed-db",
       "vpc-basics",
       "dns"
     ]
@@ -208,11 +8424,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "k8s-pod-troubleshooting",
       "k8s-pod-lifecycle",
+      "docker-runtime-security",
       "k8s-pv-pvc",
       "k8s-statefulset",
       "dockerfile-image-layers",
       "k8s-daemonset",
       "realtime-communication",
+      "block-file-object-storage",
       "k8s-security-context",
       "helm-basics",
       "kubernetes-ingress",
@@ -236,9 +8454,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-troubleshooting",
       "jenkins-pipeline-basics",
       "git-branch-merge",
+      "github-repo-governance",
       "cache-write-policies",
       "git-undo",
       "helm-dependencies-oci-gitops",
+      "security-principles-cia-defense-in-depth",
       "github-actions-docker-ecr",
       "vpc-basics",
       "webhooks"
@@ -258,9 +8478,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hosts-file",
       "k8s-daemonset",
       "docker-container-basics",
+      "docker-runtime-security",
       "k8s-security-context",
       "helm-basics",
       "k8s-node-maintenance",
+      "os-kernel-system-calls",
+      "shells-posix-compat",
       "k8s-certifications",
       "webhooks"
     ]
@@ -302,6 +8525,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-daemonset",
       "docker-container-basics",
       "k8s-architecture",
+      "os-kernel-system-calls",
       "linux-processes-signals",
       "linux-files-permissions",
       "osi-in-practice",
@@ -324,6 +8548,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-security-context",
       "helm-basics",
       "authn-vs-authz",
+      "os-kernel-system-calls",
       "linux-files-permissions",
       "osi-in-practice",
       "local-k8s-kind-minikube",
@@ -339,8 +8564,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "structured-logging"
     ],
     "mentions": [
+      "elasticsearch-snapshot-dr",
       "observability-basics",
+      "elasticsearch-query-dsl",
       "sd-object-storage-architecture",
+      "db-type-relational",
+      "bi-semantic-layer",
+      "elasticsearch-mapping",
       "kafka-basics",
       "http-status-codes"
     ]
@@ -378,6 +8608,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-statefulset",
       "garbage-collection",
+      "data-privacy-compliance",
+      "web-accessibility",
       "kafka-basics",
       "osi-in-practice",
       "grpc"
@@ -392,10 +8624,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction",
       "caching-strategies",
       "cache-invalidation",
-      "tail-latency"
+      "tail-latency",
+      "hyperloglog"
     ],
     "mentions": [
+      "observability-basics",
       "linux-processes-signals",
+      "os-kernel-system-calls",
       "ds-hash-map",
       "event-loop",
       "vpc-basics"
@@ -410,6 +8645,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "caching-strategies"
     ],
     "mentions": [
+      "redis-modules-stack",
       "nginx-basics",
       "db-migration-tools",
       "ds-hash-map",
@@ -435,6 +8671,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
       "elasticsearch-inverted-index",
       "grpc",
       "centralized-logging-pipeline",
@@ -478,6 +8715,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "retries"
     ],
     "mentions": [
+      "spring-boot-testing",
       "rest-api-design",
       "js-classes",
       "db-migration-tools"
@@ -491,7 +8729,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "rolling-deployment",
-      "sql-batch-timeout-pool"
+      "sql-batch-timeout-pool",
+      "character-encoding-unicode"
     ]
   },
   "spring-ioc-di": {
@@ -541,7 +8780,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "digital-signatures-certificates",
       "encryption-at-rest"
     ],
-    "mentions": []
+    "mentions": [
+      "js-numbers-bigint"
+    ]
   },
   "symmetric-encryption-aes": {
     "links": [
@@ -574,6 +8815,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "error-budgets"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "graphql-basics",
       "sd-split-web-and-db",
       "sli-slo",
@@ -599,6 +8841,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "spa-auth-token-storage",
       "realtime-communication",
       "resilience-patterns",
       "cors",
@@ -619,7 +8863,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-storage"
     ],
     "mentions": [
+      "react-state-management-libraries",
+      "react-forms-actions",
+      "react-client-routing",
+      "frontend-testing-strategy",
+      "react-memoization-hooks",
       "loading-patterns",
+      "ddd-tactical-patterns",
       "db-modeling-normalization"
     ]
   },
@@ -643,11 +8893,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "loading-patterns"
     ],
     "mentions": [
+      "frontend-i18n-intl",
       "html-form-http",
       "http-caching-cdn",
+      "frontend-testing-strategy",
+      "html-semantics",
       "sd-split-web-and-db",
       "lossy-counting",
       "sd-cache-and-cdn-tier",
+      "postgres-query-planner",
       "gateway"
     ]
   },
@@ -666,9 +8920,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "iptables-nat",
       "vpc-subnets-route-tables",
+      "os-kernel-system-calls",
       "k8s-architecture",
       "sd-start-single-server",
+      "shell-environment-startup",
       "sql-batch-timeout-pool",
+      "linux-users-groups-sudo",
       "udp-and-quic",
       "dns"
     ]
@@ -682,8 +8939,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iac-basics"
     ],
     "mentions": [
+      "bash-expansions-variables",
       "ansible-network-automation",
-      "postgres-operations"
+      "postgres-operations",
+      "shell-redirection-pipes",
+      "shells-posix-compat"
     ]
   },
   "ssh-in-practice": {
@@ -704,6 +8964,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "iptables-nat",
       "cookie-session-login",
+      "linux-archive-transfer",
       "dns"
     ]
   },
@@ -721,8 +8982,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "linux-namespaces-cgroups",
+      "virtualization-hypervisors",
+      "os-kernel-system-calls",
       "pattern-prototype",
-      "redis-basics"
+      "redis-basics",
+      "block-file-object-storage"
     ]
   },
   "page-cache-disk-io": {
@@ -734,8 +8998,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mysql-innodb-basics",
+      "os-kernel-system-calls",
+      "linux-disks-filesystems",
       "sd-kv-store-write-read-path",
       "message-queue-basics",
+      "block-file-object-storage",
       "acid-transactions"
     ]
   },
@@ -751,7 +9018,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc"
     ],
     "mentions": [
+      "process-vs-thread",
+      "virtualization-hypervisors",
+      "js-numbers-bigint",
       "ds-hash-map",
+      "linux-disks-filesystems",
+      "bit-manipulation",
       "redis-basics"
     ]
   },
@@ -802,7 +9074,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "waf"
     ],
     "mentions": [
-      "hash-hmac-password-hashing"
+      "password-attacks-credential-stuffing",
+      "threat-modeling-stride",
+      "hash-hmac-password-hashing",
+      "input-validation-secure-coding",
+      "code-review-practices"
     ]
   },
   "web-security-headers": {
@@ -814,8 +9090,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy",
       "cpu-pipelining-branch-prediction",
       "rendering-strategies",
+      "input-validation-secure-coding",
       "what-happens-google-com"
     ]
   },
@@ -830,6 +9109,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cookie-session-login",
       "html-form-http",
       "token-login",
+      "shells-posix-compat",
+      "cloud-service-models-shared-responsibility",
       "sli-slo",
       "db-modeling-normalization"
     ]
@@ -844,7 +9125,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cookie-session-login",
+      "password-attacks-credential-stuffing",
       "oauth",
+      "bit-manipulation",
       "db-modeling-normalization"
     ]
   },
@@ -857,8 +9140,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "xss"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "base64",
-      "digital-signatures-certificates"
+      "digital-signatures-certificates",
+      "bit-manipulation"
     ]
   },
   "stream-processing": {
@@ -873,6 +9158,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "kafka-to-lake-pipeline",
       "k8s-statefulset",
+      "sliding-window-pattern",
       "js-array-transform",
       "message-delivery-semantics",
       "db-type-embedded",
@@ -898,6 +9184,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-subqueries-exists-lateral",
       "db-type-relational",
       "db-keys-denormalization",
+      "dbt-transformations",
       "db-modeling-normalization"
     ]
   },
@@ -943,6 +9230,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-storage",
       "json-crud-http",
       "js-template-literals",
+      "linters-formatters",
+      "input-validation-secure-coding",
+      "react-custom-hooks-rules",
       "js-destructuring",
       "frontend-monorepo",
       "js-closures"
@@ -959,10 +9249,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-roadmap"
     ],
     "mentions": [
+      "react-useeffect",
       "rendering-strategies",
+      "react-useref-layout-effect",
       "js-function-forms",
+      "react-custom-hooks-rules",
       "js-destructuring",
-      "js-hoisting-tdz"
+      "js-hoisting-tdz",
+      "oop-four-pillars"
     ]
   },
   "tsconfig-strict": {
@@ -975,11 +9269,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-in-react"
     ],
     "mentions": [
+      "npm-package-publishing",
+      "css-styling-approaches",
+      "react-jsx-components",
       "js-classes",
       "js-function-forms",
+      "ts-declaration-files-modules",
       "js-strict-mode",
       "js-pure-functions",
-      "js-destructuring"
+      "js-destructuring",
+      "runtime-validation-zod",
+      "frontend-build-tooling"
     ]
   },
   "ts-utility-mapped-types": {
@@ -991,6 +9291,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "typescript-in-react"
     ],
     "mentions": [
+      "ts-conditional-infer",
       "js-template-literals",
       "db-types-overview"
     ]
@@ -1005,7 +9306,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-binary-tree-bst",
       "ds-graph-bfs-dfs"
     ],
-    "mentions": []
+    "mentions": [
+      "regex-and-globbing",
+      "js-strict-mode"
+    ]
   },
   "binary-search": {
     "links": [
@@ -1019,7 +9323,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "api-scaling-ladder",
-      "sql-filtering-operators"
+      "load-testing-k6",
+      "sql-filtering-operators",
+      "floating-point-numbers",
+      "bit-manipulation"
     ]
   },
   "sorting-algorithms": {
@@ -1034,6 +9341,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "binary-search"
     ],
     "mentions": [
+      "randomized-algorithms",
       "ds-linked-list",
       "db-index-design"
     ]
@@ -1052,7 +9360,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-numbers-bigint",
+      "input-validation-secure-coding",
       "js-function-forms",
+      "code-review-practices",
       "js-pure-functions",
       "js-destructuring"
     ]
@@ -1062,11 +9373,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ts-type-system-basics",
       "ts-utility-mapped-types",
       "typescript-in-react",
+      "ts-conditional-infer",
       "ts-narrowing"
     ],
     "mentions": [
       "browser-storage",
       "js-function-forms",
+      "ts-declaration-files-modules",
       "js-destructuring"
     ]
   },
@@ -1081,7 +9394,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-prototype-chain",
-      "js-destructuring"
+      "input-validation-secure-coding",
+      "runtime-validation-zod",
+      "ts-declaration-files-modules",
+      "js-destructuring",
+      "frontend-build-tooling"
     ]
   },
   "algorithms-overview": {
@@ -1103,6 +9420,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "sliding-window-pattern",
+      "shortest-path-algorithms",
+      "js-numbers-bigint",
+      "bit-manipulation",
       "sd-maps-tiles-routing",
       "bloom-filter"
     ]
@@ -1119,9 +9440,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "algorithms-overview"
     ],
     "mentions": [
+      "minimum-spanning-tree",
+      "complexity-classes-p-np",
+      "shortest-path-algorithms",
       "ds-array-matrix",
       "sd-maps-tiles-routing",
-      "recursion-backtracking"
+      "recursion-backtracking",
+      "postgres-query-planner"
     ]
   },
   "dynamic-programming": {
@@ -1137,7 +9462,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "algorithms-overview"
     ],
     "mentions": [
-      "elasticsearch-inverted-index"
+      "elasticsearch-inverted-index",
+      "js-numbers-bigint",
+      "complexity-classes-p-np",
+      "divide-and-conquer",
+      "shortest-path-algorithms"
     ]
   },
   "performance-metrics-measurement": {
@@ -1160,7 +9489,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-browser-cache",
+      "frontend-testing-strategy",
       "browser-fetch",
+      "nextjs-app-router-routing",
       "dns"
     ]
   },
@@ -1173,6 +9504,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "frontend-browser-cache",
+      "frontend-testing-strategy",
       "ab-testing",
       "http-versions",
       "waf"
@@ -1182,9 +9514,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "core-web-vitals",
       "resource-hints-loading",
-      "lazy-loading-strategies"
+      "lazy-loading-strategies",
+      "structured-data-json-ld"
     ],
     "mentions": [
+      "seo-for-spa",
       "loading-patterns",
       "pattern-proxy"
     ]
@@ -1202,6 +9536,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bundler-basics"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "https-tls",
       "js-pure-functions",
       "cors",
@@ -1221,7 +9556,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
-      "js-hoisting-tdz"
+      "npm-package-publishing",
+      "react-jsx-components",
+      "js-hoisting-tdz",
+      "frontend-build-tooling"
     ]
   },
   "frontend-performance-map": {
@@ -1254,6 +9592,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "pattern-proxy"
     ]
   },
@@ -1276,6 +9615,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "streaming-ssr-suspense",
+      "frontend-testing-strategy",
       "sql-query-rewrite"
     ]
   },
@@ -1286,6 +9626,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "frontend-performance-map",
       "scroll-triggered-intersection-observer",
       "image-optimization",
+      "html-media-embed",
       "hydration",
       "rendering-performance-optimization",
       "islands-resumability",
@@ -1293,6 +9634,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy",
       "browser-rendering-pipeline",
       "rendering-strategies",
       "pattern-proxy"
@@ -1311,8 +9654,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "web-components-shadow-dom",
+      "react-suspense-error-boundary",
       "http-caching-cdn",
+      "react-useeffect",
+      "frontend-testing-strategy",
       "rendering-strategies",
+      "css-custom-properties",
+      "design-system-building",
       "microservices",
       "cors"
     ]
@@ -1324,7 +9673,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resource-hints-loading"
     ],
     "mentions": [
+      "react-suspense-error-boundary",
       "frontend-monorepo",
+      "frontend-testing-strategy",
       "lazy-loading-strategies",
       "code-splitting",
       "js-es-modules",
@@ -1347,7 +9698,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branch-merge",
       "tsconfig-strict",
       "dependency-hell",
-      "git-remote-collaboration"
+      "git-remote-collaboration",
+      "npm-package-publishing"
     ]
   },
   "frontend-monorepo": {
@@ -1360,9 +9712,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branching-strategy"
     ],
     "mentions": [
+      "github-repo-governance",
       "build-caching",
       "tsconfig-strict",
       "http-caching-cdn",
+      "ts-declaration-files-modules",
       "api-versioning",
       "js-hoisting-tdz",
       "microservices"
@@ -1375,8 +9729,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "cors",
+      "frontend-testing-strategy",
       "resource-hints-loading",
+      "icon-system-svg",
       "http-versions",
+      "css-typography",
       "dns"
     ]
   },
@@ -1388,8 +9745,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "css-styling-approaches",
+      "nextjs-app-router-routing",
+      "css-cascade-specificity",
+      "frontend-testing-strategy",
       "lighthouse-explained",
       "rendering-strategies",
+      "css-custom-properties",
       "animation-performance",
       "http-versions",
       "bloom-filter",
@@ -1407,7 +9769,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization"
     ],
     "mentions": [
+      "react-memoization-hooks",
       "json-crud-http",
+      "react-state-management-libraries",
+      "react-custom-hooks-rules",
       "fp-composition-pipe",
       "js-primitive-vs-reference"
     ]
@@ -1421,7 +9786,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "fp-in-react"
     ],
-    "mentions": []
+    "mentions": [
+      "input-validation-secure-coding",
+      "nodejs-orm-query-builder"
+    ]
   },
   "fp-composition-pipe": {
     "links": [
@@ -1457,6 +9825,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rendering-strategies",
       "js-function-forms",
+      "js-runtimes-node-deno-bun",
       "js-closures"
     ]
   },
@@ -1476,12 +9845,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "frontend-testing-strategy",
       "opensearch-cluster-operations",
       "cookie-session-login",
       "k8s-pod-resources",
       "sd-start-single-server",
+      "linux-disks-filesystems",
       "osi-in-practice",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
       "dns"
     ]
   },
@@ -1500,6 +9872,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "rendering-ssr",
       "opensearch-cluster-operations",
+      "elasticsearch-aggregations",
       "sd-payment-flow",
       "http-methods",
       "dns"
@@ -1520,10 +9893,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "frontend-testing-strategy",
       "browser-fetch",
       "cpu-instruction-cycle",
       "rendering-strategies",
+      "react-suspense-error-boundary",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
       "bundler-basics"
     ]
   },
@@ -1539,6 +9915,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop"
     ],
     "mentions": [
+      "css-color-background",
+      "frontend-testing-strategy",
+      "css-custom-properties",
+      "smoke-sanity-regression-testing",
+      "html-semantics",
       "loading-patterns"
     ]
   },
@@ -1557,6 +9938,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-csr-spa"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "rendering-strategies",
       "packet-encapsulation",
       "js-es-modules",
@@ -1590,6 +9972,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-methods",
       "resilience-patterns",
       "service-mesh",
+      "input-validation-secure-coding",
       "build-caching",
       "vpc-basics",
       "osi-in-practice",
@@ -1628,6 +10011,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-tips-advanced"
     ],
     "mentions": [
+      "github-pull-request-flow",
       "github-actions-docker-ecr"
     ]
   },
@@ -1666,7 +10050,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pessimistic-locking",
+      "nodejs-web-frameworks",
       "http-caching-cdn",
+      "load-testing-k6",
       "sd-object-storage-architecture",
       "event-loop",
       "osi-in-practice",
@@ -1721,6 +10107,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bloom-filter"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "js-memoization",
       "sd-autocomplete-trie"
     ]
@@ -1733,6 +10120,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map"
     ],
     "mentions": [
+      "minimum-spanning-tree",
       "ds-linked-list",
       "big-o-notation"
     ]
@@ -1748,6 +10136,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-graph"
     ],
     "mentions": [
+      "shortest-path-algorithms",
+      "linters-formatters",
       "dom-basics",
       "binary-search",
       "recursion-backtracking",
@@ -1763,7 +10153,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs"
     ],
     "mentions": [
+      "nodejs-web-frameworks",
       "js-memory-leak",
+      "string-search-algorithms",
       "ds-hash-map",
       "big-o-notation"
     ]
@@ -1797,6 +10189,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-leaderboard-sorted-set"
     ],
     "mentions": [
+      "balanced-search-trees",
       "cpu-instruction-cycle",
       "page-cache-disk-io",
       "ds-linked-list",
@@ -1822,6 +10215,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-latency-numbers",
       "db-sharding",
       "event-loop",
+      "two-pointers-pattern",
       "big-o-notation"
     ]
   },
@@ -1843,6 +10237,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "data-structures-overview"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "sd-latency-numbers",
       "centralized-logging-pipeline",
       "js-memory-leak"
@@ -1884,6 +10279,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "cpu-cache-hierarchy",
       "js-prototype-chain",
+      "sliding-window-pattern",
+      "two-pointers-pattern",
+      "segment-tree-fenwick",
       "js-memoization"
     ]
   },
@@ -1913,6 +10311,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "kafka-basics",
       "http-status-codes",
       "ssrf",
+      "mcp-protocol",
       "sql-query-rewrite",
       "gateway"
     ]
@@ -1931,10 +10330,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "long-polling"
     ],
     "mentions": [
+      "nodejs-fs-streams",
       "browser-fetch",
       "elasticsearch-inverted-index",
       "json-crud-http",
       "rendering-strategies",
+      "self-hosting-llm-inference",
+      "nodejs-http-clients",
+      "input-validation-secure-coding",
       "http-status-codes",
       "what-happens-google-com",
       "grpc"
@@ -1944,12 +10347,19 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "api-styles-overview",
       "rest-api-design",
+      "graphql-schema-type-system",
+      "graphql-operations-syntax",
       "n-plus-one-queries",
       "websocket-deep-dive",
       "http-streaming-sse",
+      "graphql-subscriptions-defer",
+      "graphql-execution-validation",
       "client-data-cache",
+      "graphql-client-caching",
       "api-versioning",
-      "grpc"
+      "grpc",
+      "graphql-pagination-connections",
+      "graphql-authorization"
     ],
     "mentions": [
       "edge-caching",
@@ -1995,8 +10405,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
+      "claude-code-hooks-deep-dive",
+      "system-prompt-design",
+      "linters-formatters",
       "git-tips-advanced",
-      "postgres-architecture"
+      "postgres-architecture",
+      "mcp-protocol"
     ]
   },
   "claude-code-parallel-and-scheduled": {
@@ -2010,6 +10424,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "docker-compose",
       "git-branch-merge",
+      "github-repo-governance",
       "postgres-architecture"
     ]
   },
@@ -2020,7 +10435,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-parallel-and-scheduled"
     ],
     "mentions": [
-      "postgres-architecture"
+      "claude-code-hooks-deep-dive",
+      "system-prompt-design",
+      "claude-code-plugins-and-channels",
+      "linux-disks-filesystems",
+      "postgres-architecture",
+      "mcp-protocol"
     ]
   },
   "claude-code-extensions": {
@@ -2031,7 +10451,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-remote-collaboration",
-      "osi-in-practice"
+      "system-prompt-design",
+      "claude-code-plugins-and-channels",
+      "agent-tool-design",
+      "code-review-practices",
+      "osi-in-practice",
+      "mcp-protocol"
     ]
   },
   "claude-code-project-structure": {
@@ -2042,9 +10467,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "claude-code-fundamentals-map"
     ],
     "mentions": [
+      "mcp-protocol",
       "git-ignore-config",
       "git-tips-advanced",
-      "fp-composition-pipe"
+      "ai-coding-agents",
+      "fp-composition-pipe",
+      "linux-fhs-file-commands",
+      "shell-redirection-pipes"
     ]
   },
   "kafka-vs-rabbitmq-replay": {
@@ -2145,6 +10574,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "redis-cluster",
+      "mongodb-replica-set-sharding",
       "db-type-wide-column",
       "db-type-key-value",
       "airflow-orchestration",
@@ -2182,12 +10612,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-disruption-budget",
+      "elasticsearch-aggregations",
+      "elasticsearch-bulk-indexing",
       "k8s-statefulset",
+      "rest-api-design",
       "sd-mq-storage-partitions",
       "resilience-patterns",
       "sd-object-storage-architecture",
       "db-types-overview",
-      "http-status-codes"
+      "http-status-codes",
+      "what-happens-google-com",
+      "token-login"
     ]
   },
   "jenkins-pipeline-basics": {
@@ -2198,6 +10633,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks"
     ],
     "mentions": [
+      "github-apps-api",
+      "github-actions-workflows",
+      "github-repo-governance",
       "realtime-communication",
       "docker-container-basics",
       "jenkins-on-kubernetes",
@@ -2301,6 +10739,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "sql-basics",
       "page-cache-disk-io",
       "distributed-transactions-2pc",
@@ -2335,9 +10774,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-resources",
+      "load-testing-k6",
+      "os-kernel-system-calls",
       "abort-controller",
       "tail-latency",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "js-closures"
     ]
   },
@@ -2361,7 +10803,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postmortems"
     ],
     "mentions": [
+      "etl-vs-elt",
       "http-status-codes",
+      "shells-posix-compat",
       "dns"
     ]
   },
@@ -2376,6 +10820,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-deploy-pipeline-eks",
+      "js-numbers-bigint",
+      "site-architecture-internal-linking",
       "http-status-codes",
       "webhooks"
     ]
@@ -2391,8 +10837,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-strategy"
     ],
     "mentions": [
+      "data-privacy-compliance",
+      "character-encoding-unicode",
       "k8s-deploy-pipeline-eks",
+      "threat-modeling-stride",
       "rendering-strategies",
+      "js-strings-unicode",
       "db-modeling-normalization"
     ]
   },
@@ -2417,7 +10867,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-versioning"
     ],
     "mentions": [
-      "http-status-codes"
+      "character-encoding-unicode",
+      "http-status-codes",
+      "linux-archive-transfer"
     ]
   },
   "parallax-scrollytelling": {
@@ -2429,7 +10881,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "animation-performance"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "dom-basics",
+      "web-accessibility",
       "browser-rendering-pipeline"
     ]
   },
@@ -2444,6 +10898,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "loading-patterns"
     ],
     "mentions": [
+      "react-useeffect",
+      "frontend-testing-strategy",
       "css-sticky-scroll-snap",
       "animation-performance",
       "pattern-proxy",
@@ -2460,6 +10916,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "html-semantics",
       "pattern-proxy"
     ]
   },
@@ -2470,7 +10928,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "scroll-triggered-intersection-observer",
-      "animation-performance"
+      "animation-performance",
+      "css-position-stacking-context"
     ]
   },
   "scroll-patterns-overview": {
@@ -2487,7 +10946,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle",
       "core-web-vitals"
     ],
-    "mentions": []
+    "mentions": [
+      "web-accessibility"
+    ]
   },
   "fastapi-basics": {
     "links": [
@@ -2499,11 +10960,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-pod-lifecycle"
     ],
     "mentions": [
+      "python-essentials-for-backend",
+      "load-testing-k6",
       "spring-ioc-di",
       "autoscaling",
       "event-loop",
       "sql-batch-timeout-pool",
-      "http-status-codes"
+      "http-status-codes",
+      "backend-language-comparison",
+      "runtime-validation-zod"
     ]
   },
   "express-middleware": {
@@ -2524,7 +10989,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "web-security-headers",
       "js-pure-functions",
       "osi-in-practice",
-      "http-status-codes"
+      "http-status-codes",
+      "runtime-validation-zod"
     ]
   },
   "nodejs-server-runtime": {
@@ -2535,6 +11001,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "fastapi-basics",
       "monolith-architecture",
       "thread-safety",
+      "process-vs-thread",
       "sd-load-balancer-stateless",
       "websocket-deep-dive",
       "k8s-pod-resources",
@@ -2546,10 +11013,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "autoscaling",
+      "code-review-practices",
       "race-conditions",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "mutex-semaphore-monitor",
       "recursion-backtracking",
       "dns"
     ]
@@ -2563,6 +11032,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vector-db"
     ],
     "mentions": [
+      "embedding-models-applications",
+      "llm-evals",
       "kafka-basics",
       "on-call"
     ]
@@ -2577,6 +11048,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "embedding-models-applications",
+      "llm-evals",
+      "agent-reasoning-patterns",
+      "agent-tool-design",
+      "security-principles-cia-defense-in-depth",
       "kafka-basics",
       "vector-db",
       "on-call"
@@ -2593,6 +11069,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "ds-graph-bfs-dfs",
+      "embedding-models-applications",
       "sqld-top-n-hierarchical-pivot",
       "db-modeling-normalization",
       "vector-db",
@@ -2610,14 +11087,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-versioning"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "github-actions-docker-ecr",
       "postgres-connections-pg-hba",
       "sql-insert-update-delete",
+      "nodejs-orm-query-builder",
       "event-loop",
       "osi-in-practice",
       "db-index-design",
       "ports-and-sockets",
       "http-status-codes",
+      "api-test-automation",
       "ipv6-basics",
       "postgres-getting-started"
     ]
@@ -2632,9 +11112,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "bash-control-flow-functions",
       "event-loop",
       "microservices",
-      "db-type-embedded"
+      "db-type-embedded",
+      "code-review-practices",
+      "react-custom-hooks-rules"
     ]
   },
   "first-page-from-power-on": {
@@ -2687,6 +11171,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "http-status-codes",
       "dns",
+      "shells-posix-compat",
       "authn-vs-authz",
       "ipv6-basics"
     ]
@@ -2700,7 +11185,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
+      "embedding-models-applications",
+      "smoke-sanity-regression-testing",
       "db-index-design",
+      "llm-evals",
+      "web-accessibility",
       "kafka-basics",
       "db-modeling-normalization",
       "on-call"
@@ -2714,7 +11203,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "agentic-rag"
     ],
     "mentions": [
-      "kafka-basics"
+      "embedding-models-applications",
+      "llm-evals",
+      "kafka-basics",
+      "fine-tuning-vs-rag-vs-prompting",
+      "llm-basics-for-developers"
     ]
   },
   "caching-concepts-map": {
@@ -2825,6 +11318,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-injection"
     ],
     "mentions": [
+      "web-accessibility",
       "postgres-getting-started"
     ]
   },
@@ -2845,12 +11339,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-sourcing",
       "transactional-outbox",
       "saga-pattern",
+      "nat-traversal",
+      "crdt",
       "cold-starts"
     ],
     "mentions": [
+      "high-availability",
       "k8s-deploy-pipeline-eks",
       "js-memory-leak",
       "schema-versioning",
+      "architecture-docs-c4-adr",
       "db-modeling-normalization",
       "on-call",
       "webhooks"
@@ -2993,6 +11491,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "transactional-outbox"
     ],
     "mentions": [
+      "data-privacy-compliance",
       "resilience-patterns",
       "http-methods"
     ]
@@ -3009,7 +11508,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "js-array-transform",
+      "load-testing-k6",
       "sd-start-single-server",
+      "dynamodb-modeling-capacity",
       "sd-mq-storage-partitions",
       "redis-basics"
     ]
@@ -3051,6 +11552,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "sd-start-single-server",
       "event-loop",
+      "os-kernel-system-calls",
       "cpu-cache-hierarchy",
       "page-cache-disk-io",
       "kafka-basics"
@@ -3064,7 +11566,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "percentile-latency"
     ],
     "mentions": [
-      "ds-linked-list"
+      "ds-linked-list",
+      "floating-point-numbers"
     ]
   },
   "sd-wallet-event-sourcing": {
@@ -3100,6 +11603,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "event-driven-architecture",
+      "floating-point-numbers",
       "redis-basics",
       "http-methods"
     ]
@@ -3138,6 +11642,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-notification-reliability"
     ],
     "mentions": [
+      "serverless-architecture",
+      "https-tls",
+      "what-happens-google-com",
+      "actor-model",
       "db-modeling-normalization"
     ]
   },
@@ -3224,7 +11732,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics"
     ],
     "mentions": [
+      "data-warehouse-architecture",
       "db-type-wide-column",
+      "sliding-window-pattern",
       "data-lake-hdfs",
       "stream-processing",
       "olap-star-schema",
@@ -3251,6 +11761,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture",
       "db-type-relational",
       "kafka-basics",
+      "shells-posix-compat",
       "webhooks"
     ]
   },
@@ -3283,6 +11794,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "autoscaling",
       "db-type-relational",
       "sd-mq-storage-partitions",
+      "cloud-service-models-shared-responsibility",
       "webhooks"
     ]
   },
@@ -3299,6 +11811,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-sharding",
       "db-type-wide-column",
+      "aws-s3-in-practice",
+      "s3-storage-classes-lifecycle",
       "js-memory-leak",
       "db-type-embedded",
       "page-cache-disk-io",
@@ -3317,6 +11831,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "merkle-tree"
     ],
     "mentions": [
+      "aws-s3-in-practice",
       "page-cache-disk-io",
       "tail-latency",
       "vpc-basics",
@@ -3340,11 +11855,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-file-sync-block-upload"
     ],
     "mentions": [
+      "s3-storage-classes-lifecycle",
       "js-memory-leak",
       "sd-start-single-server",
       "db-type-embedded",
       "db-type-relational",
-      "db-replication-sharding"
+      "db-replication-sharding",
+      "linux-disks-filesystems"
     ]
   },
   "sd-mq-replication": {
@@ -3361,6 +11878,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pub-sub",
+      "mongodb-replica-set-sharding",
       "rolling-deployment",
       "vpc-basics",
       "rendering-strategies"
@@ -3496,6 +12014,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "db-types-overview",
       "redis-basics",
+      "data-privacy-compliance",
       "dns"
     ]
   },
@@ -3528,6 +12047,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-optional-chaining-nullish",
       "js-short-circuit",
       "js-es-modules",
+      "ts-decorators",
+      "bundler-basics",
+      "frontend-build-tooling",
       "js-this-binding",
       "js-call-apply-bind",
       "js-prototype-chain",
@@ -3555,6 +12077,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
+      "pattern-iterator",
+      "react-state-snapshot-batching",
       "core-web-vitals"
     ]
   },
@@ -3567,6 +12091,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-propagation"
     ],
     "mentions": [
+      "nodejs-http-clients",
+      "frontend-testing-strategy",
       "js-pure-functions",
       "http-status-codes",
       "js-closures"
@@ -3584,6 +12110,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "json-crud-http",
       "http-versions",
       "event-loop",
@@ -3636,6 +12163,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "packet-encapsulation",
+      "shells-posix-compat",
       "sd-music-streaming"
     ]
   },
@@ -3652,6 +12180,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-queue-basics"
     ],
     "mentions": [
+      "aws-s3-in-practice",
+      "s3-storage-classes-lifecycle",
       "sd-autocomplete-trie",
       "monorepo-build-cache",
       "sd-start-single-server",
@@ -3694,6 +12224,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sd-start-single-server",
       "db-type-relational",
+      "mongodb-replica-set-sharding",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
@@ -3717,6 +12248,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "osi-in-practice",
+      "os-kernel-system-calls",
       "sd-start-single-server",
       "redis-basics",
       "db-type-key-value"
@@ -3755,10 +12287,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-trie"
     ],
     "mentions": [
+      "character-encoding-unicode",
       "sd-start-single-server",
       "lossy-counting",
       "global-rollout-localization",
       "osi-in-practice",
+      "vim-for-servers",
       "db-modeling-normalization"
     ]
   },
@@ -3842,7 +12376,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "http-versions",
       "token-login",
-      "oauth"
+      "oauth",
+      "pwa-install-offline"
     ]
   },
   "sd-web-crawler-politeness-dedup": {
@@ -3854,6 +12389,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bloom-filter"
     ],
     "mentions": [
+      "search-engine-ranking-pagerank",
       "db-type-key-value",
       "client-data-cache",
       "http-caching-cdn",
@@ -3918,7 +12454,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-algorithms"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "js-numbers-bigint",
       "db-type-key-value",
+      "seo-redirects-site-migration",
       "mysql-innodb-basics",
       "sd-start-single-server",
       "db-type-relational",
@@ -3942,6 +12481,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "db-sharding",
       "db-type-key-value",
+      "js-numbers-bigint",
+      "floating-point-numbers",
+      "bit-manipulation",
       "high-availability"
     ]
   },
@@ -4046,6 +12588,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "waf"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "proxy-reverse-proxy",
       "autoscaling",
       "redis-basics"
@@ -4079,6 +12622,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-cache-and-cdn-tier"
     ],
     "mentions": [
+      "load-testing-k6",
       "multi-region",
       "redis-basics"
     ]
@@ -4129,6 +12673,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-types-overview"
     ],
     "mentions": [
+      "js-numbers-bigint",
       "db-type-key-value",
       "postgres-data-types",
       "sd-news-feed-publishing",
@@ -4165,6 +12710,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "elasticsearch-inverted-index",
+      "queue-based-load-leveling",
       "redis-basics"
     ]
   },
@@ -4239,6 +12785,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-architecture-by-scale",
+      "rds-aurora-managed-db",
       "leader-election",
       "mysql-replication-online-ddl",
       "postgres-operations",
@@ -4335,8 +12882,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "virtual-memory-paging",
       "sd-interview-framework",
       "high-availability",
+      "load-testing-k6",
       "sd-object-storage-architecture",
-      "db-replication-sharding"
+      "db-replication-sharding",
+      "postgres-query-planner"
     ]
   },
   "sql-interview-problems": {
@@ -4379,6 +12928,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-mvcc-vacuum",
       "sqld-group-by-having",
       "sqld-window-functions",
+      "shells-posix-compat",
       "sql-basics"
     ]
   },
@@ -4426,8 +12976,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "frontend-testing-strategy",
       "sd-autocomplete-trie",
       "test-pyramid-unit-tests",
+      "input-validation-secure-coding",
       "pattern-proxy"
     ]
   },
@@ -4440,6 +12992,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "debounce-throttle"
     ],
     "mentions": [
+      "frontend-testing-strategy",
       "js-optional-chaining-nullish",
       "js-closures"
     ]
@@ -4454,6 +13007,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "frontend-testing-strategy",
       "micro-frontend-integration-patterns",
       "js-function-forms"
     ]
@@ -4470,7 +13024,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "frontend-testing-strategy"
+    ]
   },
   "system-design-concepts-map": {
     "links": [
@@ -4559,6 +13115,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "web-security-headers",
       "cpu-pipelining-branch-prediction",
+      "react-useeffect",
       "js-function-forms",
       "clock-skew"
     ]
@@ -4586,6 +13143,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-closures"
     ],
     "mentions": [
+      "react-useeffect",
       "cpu-instruction-cycle",
       "js-function-forms",
       "js-strict-mode"
@@ -4599,6 +13157,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-status-codes",
       "iam-basics",
       "k8s-rbac",
+      "seccomp-apparmor",
       "zero-trust-architecture",
       "high-availability",
       "fault-tolerance",
@@ -4607,6 +13166,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "jwt-key-rotation"
     ],
     "mentions": [
+      "api-security-owasp-api-top10",
       "rate-limiting-in-practice",
       "gateway",
       "clock-skew",
@@ -4643,6 +13203,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "acid-vs-base",
       "db-type-columnar-olap",
       "db-replication-sharding",
+      "dynamodb-modeling-capacity",
       "sd-mq-storage-partitions",
       "scaling-horizontal-vertical",
       "redis-basics",
@@ -4739,6 +13300,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "tsconfig-strict",
+      "linters-formatters",
       "js-classes",
       "js-es-modules",
       "js-destructuring",
@@ -4755,6 +13317,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "pattern-factory-method",
+      "react-suspense-error-boundary",
       "js-strict-mode"
     ]
   },
@@ -4770,8 +13333,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-spread-rest"
     ],
     "mentions": [
+      "js-loops-control-flow",
       "rendering-strategies",
+      "input-validation-secure-coding",
       "js-es-modules",
+      "runtime-validation-zod",
       "js-primitive-vs-reference"
     ]
   },
@@ -4786,6 +13352,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization"
     ],
     "mentions": [
+      "react-useeffect",
       "js-classes",
       "js-function-forms",
       "js-strict-mode",
@@ -4805,8 +13372,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "js-object-methods",
       "js-execution-context",
+      "js-loops-control-flow",
       "event-delegation",
       "js-classes",
+      "react-suspense-error-boundary",
       "spring-ioc-di",
       "js-es-modules",
       "js-destructuring",
@@ -4854,12 +13423,18 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "latency-bandwidth-throughput",
       "network-layers-overview",
       "osi-in-practice",
+      "wifi-standards-security",
+      "wan-mpls-sd-wan-vrf",
+      "block-file-object-storage",
+      "sdn-vxlan-overlay",
       "network-troubleshooting-by-layer",
       "packet-capture-tcpdump"
     ],
     "mentions": [
       "vpc-subnets-route-tables",
-      "layer-mtu-fragmentation"
+      "layer-mtu-fragmentation",
+      "bgp-basics",
+      "vpc-basics"
     ]
   },
   "packet-encapsulation": {
@@ -4915,8 +13490,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "packet-capture-tcpdump",
       "sd-start-single-server",
+      "gateway-link-redundancy-fhrp-lacp",
+      "network-design-three-tier-spine-leaf",
       "dhcp",
       "ipv6-basics",
+      "bgp-basics",
       "vpc-basics",
       "udp-and-quic",
       "dns"
@@ -4957,6 +13535,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-columnar-olap",
+      "coupling-cohesion-principles",
       "cdc-change-data-capture",
       "sql-query-rewrite"
     ]
@@ -4974,6 +13553,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-driven-architecture"
     ],
     "mentions": [
+      "ddd-tactical-patterns",
       "monolith-architecture",
       "db-locking-deadlock",
       "http-status-codes"
@@ -4990,6 +13570,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "tsconfig-strict",
+      "ddd-tactical-patterns",
+      "linters-formatters",
+      "react-custom-hooks-rules",
       "http-status-codes"
     ]
   },
@@ -5008,7 +13591,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-currying-partial",
       "pattern-proxy",
       "http-status-codes",
-      "grpc"
+      "ddd-tactical-patterns",
+      "grpc",
+      "frontend-testing-strategy"
     ]
   },
   "js-es-modules": {
@@ -5021,11 +13606,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-ssr"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy",
       "rendering-strategies",
       "http-versions",
       "js-strict-mode",
       "js-destructuring",
-      "cors"
+      "cors",
+      "sdlc-models-agile-scrum"
     ]
   },
   "js-short-circuit": {
@@ -5036,7 +13624,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-template-literals"
     ],
     "mentions": [
-      "js-pure-functions"
+      "cross-platform-apps",
+      "react-useeffect",
+      "linters-formatters",
+      "js-pure-functions",
+      "ddd-tactical-patterns",
+      "react-custom-hooks-rules"
     ]
   },
   "js-optional-chaining-nullish": {
@@ -5048,7 +13641,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache"
     ],
     "mentions": [
-      "bundler-basics"
+      "bundler-basics",
+      "react-memoization-hooks",
+      "react-state-snapshot-batching",
+      "runtime-validation-zod"
     ]
   },
   "js-template-literals": {
@@ -5061,7 +13657,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "hydration",
       "graphql-basics",
-      "rendering-strategies"
+      "nodejs-orm-query-builder",
+      "rendering-strategies",
+      "floating-point-numbers"
     ]
   },
   "js-memoization": {
@@ -5077,8 +13675,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection"
     ],
     "mentions": [
+      "react-memoization-hooks",
       "json-crud-http",
       "rendering-strategies",
+      "react-useeffect",
       "dynamic-programming",
       "spring-ioc-di",
       "redis-basics",
@@ -5100,6 +13700,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "js-strict-mode",
+      "react-concurrent-transitions",
+      "react-state-snapshot-batching",
       "test-pyramid-unit-tests",
       "js-es-modules",
       "http-methods"
@@ -5113,6 +13715,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "ts-conditional-infer",
       "fp-composition-pipe",
       "js-function-forms",
       "js-spread-rest",
@@ -5132,8 +13735,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "browser-fetch",
       "js-strict-mode",
+      "linters-formatters",
       "rendering-strategies",
-      "js-function-forms"
+      "js-function-forms",
+      "ddd-tactical-patterns"
     ]
   },
   "js-immutability-react": {
@@ -5146,7 +13751,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-object-methods"
     ],
     "mentions": [
+      "react-memoization-hooks",
+      "process-vs-thread",
+      "react-state-management-libraries",
       "js-memory-leak",
+      "react-useeffect",
       "js-memoization",
       "js-function-forms",
       "db-modeling-normalization"
@@ -5161,7 +13770,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "js-binary-data-typed-arrays",
       "browser-storage",
+      "js-map-set-weak",
+      "react-useeffect",
       "db-types-overview",
       "spring-ioc-di"
     ]
@@ -5172,6 +13784,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-spread-rest",
       "js-prototype-chain",
       "js-array-transform",
+      "pattern-singleton",
+      "js-iterators-generators",
       "js-strict-mode",
       "js-classes",
       "js-immutability-react",
@@ -5179,6 +13793,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "js-binary-data-typed-arrays",
+      "js-loops-control-flow",
+      "js-map-set-weak",
       "pattern-proxy",
       "spring-ioc-di",
       "js-es-modules"
@@ -5195,6 +13812,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-timers-accuracy",
+      "css-color-background",
+      "frontend-testing-strategy",
+      "smoke-sanity-regression-testing",
+      "web-accessibility",
       "parallax-scrollytelling"
     ]
   },
@@ -5204,7 +13825,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "spring-animation",
       "animation-performance"
     ],
-    "mentions": []
+    "mentions": [
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy"
+    ]
   },
   "spring-animation": {
     "links": [
@@ -5221,7 +13845,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "view-transitions-shared-element",
       "animation-performance"
     ],
-    "mentions": []
+    "mentions": [
+      "web-accessibility"
+    ]
   },
   "serverless-architecture": {
     "links": [
@@ -5235,11 +13861,18 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nextjs-static-dynamic-rendering"
     ],
     "mentions": [
+      "dynamodb-modeling-capacity",
       "dead-letter-queue",
+      "nextjs-route-handlers-proxy",
+      "queue-based-load-leveling",
       "realtime-communication",
       "message-queue-basics",
       "db-type-key-value",
+      "docker-container-basics",
+      "container-orchestration-choices",
+      "route53-routing-policies",
       "message-delivery-semantics",
+      "bash-scripting",
       "kafka-basics",
       "resilience-patterns",
       "http-methods"
@@ -5283,6 +13916,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-architecture",
+      "data-privacy-compliance",
       "cdc-change-data-capture"
     ]
   },
@@ -5324,6 +13958,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "mongodb-document-model",
+      "mongodb-replica-set-sharding",
       "db-type-wide-column",
       "db-type-key-value",
       "acid-vs-base",
@@ -5349,9 +13984,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memory-leak"
     ],
     "mentions": [
+      "actor-model",
       "timeouts",
+      "route53-routing-policies",
       "k8s-architecture",
       "event-loop",
+      "input-validation-secure-coding",
+      "security-principles-cia-defense-in-depth",
       "osi-in-practice",
       "db-type-key-value",
       "http-methods"
@@ -5378,7 +14017,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "timeouts",
+      "gateway-link-redundancy-fhrp-lacp",
       "k8s-deploy-pipeline-eks",
+      "js-numbers-bigint",
       "reverse-proxy-lb-api-gateway",
       "vpc-basics",
       "osi-in-practice",
@@ -5400,7 +14041,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-classes",
       "react-rerender"
     ],
-    "mentions": []
+    "mentions": [
+      "react-useeffect",
+      "react-state-snapshot-batching"
+    ]
   },
   "js-first-class-callbacks": {
     "links": [
@@ -5420,7 +14064,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "retries"
     ],
     "mentions": [
-      "js-spread-rest"
+      "js-spread-rest",
+      "react-state-snapshot-batching",
+      "react-useeffect"
     ]
   },
   "js-function-forms": {
@@ -5436,9 +14082,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-destructuring"
     ],
     "mentions": [
+      "frontend-build-tooling",
+      "linters-formatters",
       "js-classes",
       "js-es-modules",
-      "js-truthy-falsy-typeof"
+      "js-truthy-falsy-typeof",
+      "ddd-tactical-patterns"
     ]
   },
   "sql-aggregation-pitfalls": {
@@ -5497,7 +14146,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-array-mutation"
     ],
     "mentions": [
-      "js-execution-context"
+      "js-execution-context",
+      "ddd-tactical-patterns"
     ]
   },
   "js-destructuring": {
@@ -5510,7 +14160,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "linters-formatters",
       "pattern-iterator",
+      "js-loops-control-flow",
+      "input-validation-secure-coding",
+      "react-useeffect",
       "js-pure-functions",
       "js-primitive-vs-reference"
     ]
@@ -5580,9 +14234,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "browser-devtools-debugging",
+      "linters-formatters",
       "js-function-forms",
       "js-truthy-falsy-typeof",
-      "js-destructuring"
+      "js-destructuring",
+      "sdlc-models-agile-scrum"
     ]
   },
   "js-promises": {
@@ -5599,7 +14256,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "api-styles-overview",
       "rendering-strategies",
       "js-function-forms",
-      "http-status-codes"
+      "http-status-codes",
+      "ddd-tactical-patterns"
     ]
   },
   "js-callback-hell": {
@@ -5614,7 +14272,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "abort-controller"
     ],
     "mentions": [
+      "nodejs-error-handling",
       "json-crud-http",
+      "react-state-snapshot-batching",
       "message-delivery-semantics",
       "js-function-forms"
     ]
@@ -5632,8 +14292,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-basics",
       "graphql-basics",
+      "nodejs-web-frameworks",
       "sd-start-single-server",
       "http-caching-cdn",
+      "react-custom-hooks-rules",
       "sql-batch-timeout-pool",
       "http-status-codes",
       "what-happens-google-com"
@@ -5653,6 +14315,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-graph-bfs-dfs",
       "rabbitmq-basics",
       "microservices",
+      "linters-formatters",
+      "ts-classes-access-modifiers",
       "pattern-proxy",
       "kafka-basics",
       "frontend-monorepo",
@@ -5675,6 +14339,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "micro-frontends"
     ],
     "mentions": [
+      "queue-based-load-leveling",
       "build-caching",
       "db-replication-sharding",
       "osi-in-practice",
@@ -5691,6 +14356,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-es-modules"
     ],
     "mentions": [
+      "linters-formatters",
       "js-function-forms",
       "code-splitting"
     ]
@@ -5707,6 +14373,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
+      "linters-formatters",
       "js-function-forms",
       "js-es-modules"
     ]
@@ -5724,6 +14391,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-rerender"
     ],
     "mentions": [
+      "frontend-testing-strategy",
+      "linters-formatters",
+      "react-useeffect",
       "js-function-forms"
     ]
   },
@@ -5738,6 +14408,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "cross-platform-apps",
+      "input-validation-secure-coding",
+      "js-numbers-bigint",
       "ts-narrowing",
       "js-destructuring"
     ]
@@ -5750,8 +14423,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-optional-chaining-nullish"
     ],
     "mentions": [
+      "floating-point-numbers",
       "sql-injection",
-      "js-template-literals"
+      "js-template-literals",
+      "linters-formatters",
+      "js-numbers-bigint",
+      "runtime-validation-zod",
+      "react-useeffect",
+      "input-validation-secure-coding"
     ]
   },
   "js-primitive-vs-reference": {
@@ -5766,7 +14445,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-immutability-react",
       "js-array-mutation"
     ],
-    "mentions": []
+    "mentions": [
+      "react-useeffect",
+      "react-memoization-hooks",
+      "ddd-tactical-patterns"
+    ]
   },
   "ddos-protection": {
     "links": [
@@ -5789,10 +14472,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-monitoring"
     ],
     "mentions": [
+      "sliding-window-pattern",
       "layer-link-ethernet-arp",
       "sql-injection",
       "packet-capture-tcpdump",
       "https-tls",
+      "bgp-basics",
       "cilium-ebpf",
       "vpc-basics",
       "dns",
@@ -5905,6 +14590,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-basics",
       "cron-jobs",
       "centralized-logging-pipeline",
+      "os-kernel-system-calls",
       "sd-object-storage-architecture",
       "sdn-vxlan-overlay",
       "grpc",
@@ -5976,17 +14662,22 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "observability-basics",
+      "container-orchestration-choices",
+      "kubeadm-cluster-setup",
       "k8s-statefulset",
       "gateway",
       "iptables-basics",
       "cron-jobs",
       "microservices",
+      "multi-tenancy-isolation",
+      "input-validation-secure-coding",
       "cilium-ebpf",
       "ci-cd-basics",
       "autoscaling",
       "dynamic-programming",
       "client-data-cache",
       "db-type-key-value",
+      "vim-for-servers",
       "linux-performance-triage",
       "dns",
       "webhooks"
@@ -6009,7 +14700,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "db-locking-deadlock",
-      "http-status-codes"
+      "http-status-codes",
+      "shells-posix-compat"
     ]
   },
   "prometheus-basics": {
@@ -6057,6 +14749,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-configmap",
       "docker-container-basics",
       "helm-basics",
+      "linux-archive-transfer",
+      "multi-tenancy-isolation",
       "rollback-strategy",
       "local-k8s-kind-minikube",
       "eks-cluster-basics",
@@ -6090,6 +14784,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-api-objects",
       "k8s-configmap",
       "docker-container-basics",
+      "s3-storage-classes-lifecycle",
+      "smoke-sanity-regression-testing",
       "cron-jobs",
       "helm-basics",
       "k8s-labels-selectors",
@@ -6110,6 +14806,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cri-cni-csi",
       "k8s-architecture",
       "helm-basics",
+      "nodejs-web-frameworks",
       "iam-basics",
       "base64",
       "sd-object-storage-architecture",
@@ -6134,6 +14831,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-coredns",
       "packet-capture-tcpdump",
       "db-type-key-value",
+      "os-kernel-system-calls",
       "sdn-vxlan-overlay",
       "osi-in-practice",
       "ddos-protection",
@@ -6307,6 +15005,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-hpa",
       "kubectl-essentials",
       "kubernetes-ingress",
+      "kubeadm-cluster-setup",
       "service-mesh",
       "what-happens-google-com",
       "layer-ip-addressing",
@@ -6364,6 +15063,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
+      "input-validation-secure-coding",
       "container-supply-chain-security",
       "authn-vs-authz",
       "what-happens-google-com",
@@ -6391,6 +15091,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-service-types",
       "k8s-architecture",
       "kubernetes-ingress",
+      "linux-archive-transfer",
       "postgres-architecture",
       "postgres-operations",
       "local-k8s-kind-minikube",
@@ -6448,6 +15149,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cron-jobs",
       "k8s-coredns",
       "helm-basics",
+      "ec2-instance-types-launch-templates",
       "rollback-strategy",
       "k8s-pod-scheduling",
       "local-k8s-kind-minikube",
@@ -6469,6 +15171,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-statefulset",
       "k8s-pod-basics",
       "docker-container-basics",
+      "virtualization-hypervisors",
       "centralized-logging-pipeline",
       "local-k8s-kind-minikube"
     ]
@@ -6580,7 +15283,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "page-cache-disk-io",
       "velero-backup",
       "local-k8s-kind-minikube",
-      "grpc"
+      "grpc",
+      "rds-aurora-managed-db"
     ]
   },
   "k8s-gateway-api": {
@@ -6623,6 +15327,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ds-hash-map",
       "layer-ip-addressing",
       "layer-ip-routing-icmp",
+      "postgres-query-planner",
       "udp-and-quic",
       "dns"
     ]
@@ -6666,6 +15371,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "k8s-coredns",
       "security-groups-nacl",
+      "queue-based-load-leveling",
       "local-k8s-kind-minikube",
       "vpc-basics"
     ]
@@ -6752,7 +15458,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "seccomp-apparmor",
       "docker-container-basics",
+      "docker-runtime-security",
       "k8s-architecture",
+      "os-kernel-system-calls",
+      "js-numbers-bigint",
       "local-k8s-kind-minikube"
     ]
   },
@@ -6977,6 +15686,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-container-basics",
       "cron-jobs",
       "kubernetes-ingress",
+      "input-validation-secure-coding",
       "db-locking-deadlock",
       "what-happens-google-com",
       "local-k8s-kind-minikube",
@@ -7066,6 +15776,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns",
       "dhcp",
       "cilium-ebpf",
+      "bgp-basics",
       "on-call"
     ]
   },
@@ -7119,6 +15830,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "service-mesh",
       "iptables-nat",
+      "code-review-practices",
       "security-groups-nacl",
       "osi-in-practice",
       "client-data-cache",
@@ -7166,6 +15878,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "garbage-collection"
     ],
     "mentions": [
+      "docker-runtime-security",
       "virtual-memory-paging",
       "k8s-pod-basics",
       "docker-commands-workflow",
@@ -7176,7 +15889,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "page-cache-disk-io",
       "sql-aggregation-pitfalls",
+      "os-kernel-system-calls",
+      "linux-disks-filesystems",
       "osi-in-practice",
+      "mutex-semaphore-monitor",
       "layer-ip-routing-icmp"
     ]
   },
@@ -7193,11 +15909,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-api-objects",
+      "config-management-tools",
+      "terraform-state-refactoring-import",
       "bash-scripting",
       "disaster-recovery",
       "rollback-strategy",
       "security-groups-nacl",
       "osi-in-practice",
+      "cloud-service-models-shared-responsibility",
+      "github-actions-docker-ecr",
       "vpc-basics",
       "http-methods",
       "dns"
@@ -7211,7 +15931,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "secrets-management"
     ],
     "mentions": [
+      "frontend-first-steps",
+      "cross-platform-apps",
       "graphql-basics",
+      "linters-formatters",
+      "software-supply-chain-ci-hardening",
+      "linux-disks-filesystems",
       "dockerfile-image-layers",
       "frontend-monorepo",
       "js-hoisting-tdz"
@@ -7225,6 +15950,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-dependencies-oci-gitops"
     ],
     "mentions": [
+      "frontend-first-steps",
       "helm-basics",
       "frontend-monorepo"
     ]
@@ -7254,6 +15980,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "health-checks",
       "db-type-key-value",
       "kubernetes-ingress",
+      "input-validation-secure-coding",
       "cilium-ebpf",
       "page-cache-disk-io",
       "osi-in-practice",
@@ -7267,9 +15994,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "vpc-subnets-route-tables",
       "vpc-peering-transit-privatelink",
       "k8s-pod-resources",
+      "queue-based-load-leveling",
       "network-flow-logs"
     ],
     "mentions": [
+      "s3-storage-classes-lifecycle",
+      "aws-core-services-map",
       "serverless-architecture",
       "opensearch-cluster-operations",
       "k8s-node-autoscaling-karpenter",
@@ -7277,13 +16007,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "docker-container-basics",
       "rest-api-design",
+      "container-orchestration-choices",
       "centralized-logging-pipeline",
       "sd-start-single-server",
       "k8s-node-maintenance",
+      "iam-basics",
       "kafka-basics",
       "postgres-architecture",
       "redis-basics",
       "high-availability",
+      "message-queue-basics",
+      "rds-aurora-managed-db",
       "github-actions-docker-ecr",
       "vpc-basics"
     ]
@@ -7299,8 +16033,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "serverless-architecture",
       "db-architecture-by-scale",
+      "aws-s3-in-practice",
       "db-type-key-value",
       "rest-api-design",
+      "rds-aurora-managed-db",
       "iam-basics",
       "db-type-relational",
       "resilience-patterns",
@@ -7386,9 +16122,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "timeouts"
     ],
     "mentions": [
+      "nodejs-http-clients",
       "browser-fetch",
       "docker-container-basics",
       "iptables-basics",
+      "code-review-practices",
       "tail-latency",
       "network-config-cicd",
       "vpc-basics",
@@ -7410,12 +16148,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "db-type-wide-column",
+      "data-privacy-compliance",
+      "route53-routing-policies",
       "db-type-key-value",
       "sd-multi-datacenter",
       "db-replication-sharding",
       "distributed-tracing",
       "osi-in-practice",
       "redis-basics",
+      "cloud-service-models-shared-responsibility",
+      "bgp-basics",
       "postgres-architecture",
       "dns"
     ]
@@ -7435,16 +16177,18 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-architecture-by-scale",
       "browser-fetch",
+      "rds-aurora-managed-db",
       "rest-api-design",
       "distributed-lock",
       "security-groups-nacl",
+      "vpc-basics",
       "osi-in-practice",
       "sql-batch-timeout-pool",
       "postgres-architecture",
+      "dns",
+      "data-center-infrastructure",
       "db-type-key-value",
-      "vpc-basics",
-      "layer-link-ethernet-arp",
-      "dns"
+      "layer-link-ethernet-arp"
     ]
   },
   "backup-strategy": {
@@ -7458,6 +16202,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "multi-region"
     ],
     "mentions": [
+      "aws-core-services-map",
+      "linux-fhs-file-commands",
       "bash-scripting",
       "sd-object-storage-architecture",
       "postgres-architecture",
@@ -7507,7 +16253,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "serverless-architecture",
+      "aws-core-services-map",
+      "security-principles-cia-defense-in-depth",
       "http-status-codes",
+      "cloud-service-models-shared-responsibility",
+      "linux-archive-transfer",
       "sso-saml-oidc"
     ]
   },
@@ -7523,8 +16273,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics"
     ],
     "mentions": [
+      "twelve-factor-app",
       "k8s-architecture",
       "bash-scripting",
+      "postgres-slow-db-triage",
       "git-staging-area",
       "sql-batch-timeout-pool",
       "high-availability",
@@ -7614,7 +16366,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [
       "http-caching-cdn",
       "cdn-edge-anycast",
-      "cache-invalidation"
+      "cache-invalidation",
+      "iot-mobile-wireless-links",
+      "cloud-deployment-models-multicloud"
     ],
     "mentions": [
       "nginx-https-performance",
@@ -7661,7 +16415,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "sql-batch-timeout-pool",
       "http-status-codes",
-      "dns"
+      "dns",
+      "load-testing-k6"
     ]
   },
   "ssrf": {
@@ -7674,6 +16429,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "csrf",
       "race-conditions",
+      "security-principles-cia-defense-in-depth",
       "layer-ip-addressing",
       "ipv6-basics",
       "cookie-session-login",
@@ -7689,7 +16445,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "owasp-top-10-map",
-      "upper-layers-session-presentation-app"
+      "upper-layers-session-presentation-app",
+      "input-validation-secure-coding",
+      "security-principles-cia-defense-in-depth"
     ]
   },
   "xss": {
@@ -7701,7 +16459,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "owasp-top-10-map",
+      "nodejs-web-frameworks",
       "sql-injection",
+      "input-validation-secure-coding",
+      "code-review-practices",
       "bundler-basics"
     ]
   },
@@ -7715,6 +16476,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "owasp-top-10-map",
+      "browser-security-model",
       "what-happens-google-com"
     ]
   },
@@ -7733,6 +16495,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "html-form-http",
+      "input-validation-secure-coding",
       "what-happens-google-com",
       "https-tls",
       "vpc-basics",
@@ -7752,6 +16515,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nginx-basics",
       "nginx-reverse-proxy",
       "k8s-configmap",
+      "data-privacy-compliance",
+      "network-attacks-l2-l3",
       "k8s-architecture",
       "packet-capture-tcpdump",
       "reverse-proxy-lb-api-gateway",
@@ -7776,9 +16541,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-mvcc-vacuum",
+      "data-warehouse-architecture",
+      "data-privacy-compliance",
+      "virtualization-hypervisors",
       "mysql-innodb-basics",
       "linux-files-permissions",
       "optimistic-locking",
+      "etl-vs-elt",
       "vpc-basics",
       "db-modeling-normalization"
     ]
@@ -7842,6 +16611,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "docker-container-basics",
       "realtime-communication",
+      "smoke-sanity-regression-testing",
       "reverse-proxy-lb-api-gateway",
       "proxy-reverse-proxy",
       "autoscaling",
@@ -7908,8 +16678,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "dependency-hell",
       "git-internals-basics",
+      "linters-formatters",
       "js-strict-mode",
-      "frontend-monorepo"
+      "frontend-monorepo",
+      "postgres-query-planner"
     ]
   },
   "ci-cd-basics": {
@@ -7924,14 +16696,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "canary-release",
       "blue-green-deployment",
-      "git-branching-strategy"
+      "git-branching-strategy",
+      "github-actions-workflows",
+      "jenkins-pipeline-basics",
+      "jenkins-argocd-push-pull"
     ],
     "mentions": [
+      "docker-container-basics",
       "ab-testing",
       "security-groups-nacl",
       "osi-in-practice",
+      "cloud-service-models-shared-responsibility",
       "frontend-monorepo",
-      "dns"
+      "dns",
+      "on-call"
     ]
   },
   "structured-logging": {
@@ -8016,11 +16794,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "linux-processes-signals",
       "network-partitions",
+      "load-testing-k6",
       "sd-object-storage-architecture",
       "sd-start-single-server",
       "cpu-cache-hierarchy",
       "sql-batch-timeout-pool",
       "redis-basics",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "dns"
     ]
@@ -8039,13 +16819,18 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "backpressure"
     ],
     "mentions": [
+      "serverless-architecture",
+      "container-orchestration-choices",
       "k8s-architecture",
       "k8s-pod-lifecycle",
+      "load-testing-k6",
       "event-loop",
       "vpc-basics",
       "osi-in-practice",
       "sql-batch-timeout-pool",
-      "message-queue-basics"
+      "queue-based-load-leveling",
+      "message-queue-basics",
+      "on-call"
     ]
   },
   "backpressure": {
@@ -8058,6 +16843,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "reactive-programming",
       "tail-latency",
       "rabbitmq-basics",
       "latency-bandwidth-throughput",
@@ -8078,6 +16864,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "java-jvm-memory-gc",
       "event-loop",
       "sql-batch-timeout-pool",
+      "backend-language-comparison",
       "layer-mtu-fragmentation"
     ]
   },
@@ -8130,6 +16917,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking",
       "k8s-pod-probes",
       "k8s-deploy-pipeline-eks",
+      "nodejs-orm-query-builder",
+      "code-review-practices",
       "rolling-deployment",
       "sql-basics"
     ]
@@ -8148,6 +16937,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "db-architecture-by-scale",
       "graphql-basics",
+      "nodejs-orm-query-builder",
+      "code-review-practices",
       "vpc-basics",
       "sql-batch-timeout-pool",
       "redis-basics"
@@ -8161,9 +16952,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "python-essentials-for-backend",
       "web-security-headers",
+      "web-workers",
+      "load-testing-k6",
       "ds-linked-list",
       "consistency-models",
+      "backend-language-comparison",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "acid-transactions"
     ]
@@ -8179,11 +16975,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pessimistic-locking"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "k8s-pod-probes",
       "java-jvm-memory-gc",
       "event-loop",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics"
     ]
   },
@@ -8202,11 +17000,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-advanced-sql",
+      "os-kernel-system-calls",
+      "load-testing-k6",
+      "react-state-snapshot-batching",
       "sd-start-single-server",
       "db-locking-deadlock",
+      "code-review-practices",
       "sql-batch-timeout-pool",
       "redis-basics",
       "resilience-patterns",
+      "mutex-semaphore-monitor",
       "go-concurrency-basics",
       "http-methods"
     ]
@@ -8240,6 +17043,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "backend-language-comparison",
       "reverse-proxy-lb-api-gateway",
       "http-versions",
       "event-loop",
@@ -8266,6 +17070,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-fetch",
+      "os-kernel-system-calls",
       "sd-queue-logging-automation",
       "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
@@ -8283,7 +17088,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "terraform-basics"
     ],
     "mentions": [
+      "terraform-state-refactoring-import",
+      "github-actions-workflows",
       "bash-scripting",
+      "terraform-team-workflow-hcp-terragrunt",
       "yaml-for-k8s",
       "vpc-subnets-route-tables",
       "iptables-basics",
@@ -8301,6 +17109,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "terraform-basics",
       "security-groups-nacl",
+      "data-center-infrastructure",
       "vlan-basics",
       "vpc-basics",
       "http-methods"
@@ -8334,6 +17143,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-queue-logging-automation",
       "kafka-basics",
       "http-status-codes",
+      "api-test-automation",
       "webhooks"
     ]
   },
@@ -8396,10 +17206,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-architecture",
       "pessimistic-locking",
+      "linux-processes-signals",
       "postgres-advanced-sql",
+      "os-kernel-system-calls",
       "message-delivery-semantics",
       "sd-start-single-server",
       "autoscaling",
+      "shell-redirection-pipes",
+      "shell-environment-startup",
       "linux-files-permissions",
       "postgres-architecture",
       "local-k8s-kind-minikube",
@@ -8422,7 +17236,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "quadtree": {
     "links": [
       "geohash",
-      "ray-casting"
+      "ray-casting",
+      "vector-db"
     ],
     "mentions": [
       "js-execution-context",
@@ -8445,7 +17260,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-mq-storage-partitions",
       "sd-proximity-service",
       "db-index-design",
-      "redis-basics"
+      "redis-basics",
+      "self-hosting-llm-inference"
     ]
   },
   "distributed-tracing": {
@@ -8464,6 +17280,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "gateway",
       "rabbitmq-basics",
       "tcp-connection-lifecycle",
+      "nodejs-http-clients",
       "event-loop",
       "kafka-basics",
       "http-status-codes"
@@ -8482,6 +17299,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-tracing"
     ],
     "mentions": [
+      "route53-routing-policies",
       "vpc-basics",
       "osi-in-practice",
       "tcp-connection-lifecycle",
@@ -8491,6 +17309,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "eks-cluster-basics",
       "ports-and-sockets",
       "local-custom-domain",
+      "virtualization-hypervisors",
       "dhcp",
       "layer-ip-routing-icmp",
       "packet-encapsulation",
@@ -8520,6 +17339,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-network-tuning",
       "local-custom-domain",
       "event-loop",
+      "web-accessibility",
       "ports-and-sockets",
       "http-status-codes",
       "layer-ip-routing-icmp",
@@ -8547,7 +17367,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "traffic-shaping-qos",
       "sd-file-sync-block-upload"
     ],
-    "mentions": []
+    "mentions": [
+      "linux-archive-transfer"
+    ]
   },
   "merkle-tree": {
     "links": [
@@ -8561,7 +17383,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column",
       "db-type-key-value",
       "sd-kv-store-versioning",
-      "build-caching"
+      "build-caching",
+      "load-testing-k6"
     ]
   },
   "crdt": {
@@ -8576,6 +17399,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "js-memory-leak",
       "db-consistency-cap",
+      "redis-basics",
       "http-methods"
     ]
   },
@@ -8585,7 +17409,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "eventual-consistency"
     ],
-    "mentions": []
+    "mentions": [
+      "mongodb-replica-set-sharding"
+    ]
   },
   "clock-skew": {
     "links": [
@@ -8598,7 +17424,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-newsql"
     ],
     "mentions": [
+      "spring-security-architecture",
       "network-monitoring",
+      "virtualization-hypervisors",
       "ipv6-basics",
       "sd-latency-numbers",
       "sd-kv-store-versioning",
@@ -8632,6 +17460,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "security-groups-nacl",
       "postgres-architecture",
       "redis-basics",
+      "gateway-link-redundancy-fhrp-lacp",
       "db-type-key-value",
       "postgres-getting-started",
       "dns"
@@ -8655,6 +17484,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mongodb-document-model",
       "sd-kv-store-failure-handling",
       "consistency-models",
+      "mongodb-replica-set-sharding",
       "sd-kv-store-versioning",
       "sql-batch-timeout-pool",
       "mysql-replication-online-ddl",
@@ -8672,8 +17502,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-iterator"
     ],
     "mentions": [
+      "react-state-management-libraries",
       "fp-in-react",
       "js-promises",
+      "react-useeffect",
+      "ddd-tactical-patterns",
       "rendering-strategies",
       "design-patterns-overview"
     ]
@@ -8699,6 +17532,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-state"
     ],
     "mentions": [
+      "react-state-snapshot-batching",
+      "nodejs-web-frameworks",
       "js-pure-functions",
       "cqrs",
       "design-patterns-overview"
@@ -8709,6 +17544,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-factory-method"
     ],
     "mentions": [
+      "js-iterators-generators",
       "sd-cache-and-cdn-tier",
       "kafka-basics"
     ]
@@ -8722,6 +17558,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-admission-control",
       "mongodb-document-model",
+      "linters-formatters",
       "ts-narrowing",
       "js-short-circuit",
       "js-closures"
@@ -8734,7 +17571,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-interpreter"
     ],
     "mentions": [
-      "ts-narrowing"
+      "linters-formatters",
+      "ts-narrowing",
+      "oop-four-pillars"
     ]
   },
   "pattern-template-method": {
@@ -8744,6 +17583,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "json-crud-http",
+      "code-review-practices",
       "design-patterns-overview"
     ]
   },
@@ -8763,6 +17603,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "express-middleware",
       "sorting-algorithms",
       "ab-testing",
+      "runtime-validation-zod",
+      "nodejs-web-frameworks",
       "spring-ioc-di",
       "redis-basics",
       "js-closures",
@@ -8780,8 +17622,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "client-data-cache",
+      "uml-diagrams",
       "ts-narrowing",
-      "js-pure-functions"
+      "js-pure-functions",
+      "claude-code-plugins-and-channels"
     ]
   },
   "k8s-deploy-pipeline-eks": {
@@ -8809,6 +17653,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "bash-scripting",
       "k8s-pod-basics",
       "git-undo",
+      "s3-storage-classes-lifecycle",
       "argocd-basics",
       "k8s-architecture",
       "helm-basics",
@@ -8904,13 +17749,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "hyperloglog": {
     "links": [
       "bloom-filter",
+      "bit-manipulation",
       "lossy-counting",
       "count-min-sketch"
     ],
     "mentions": [
       "ds-hash-map",
       "redis-basics",
-      "cookie-session-login"
+      "cookie-session-login",
+      "shells-posix-compat"
     ]
   },
   "bloom-filter": {
@@ -8946,6 +17793,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "operational-transform",
+      "ddd-tactical-patterns",
       "bullmq-job-queue",
       "redis-basics",
       "microservices",
@@ -8963,6 +17811,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "spring-security-architecture",
+      "react-suspense-error-boundary",
       "express-middleware",
       "fp-composition-pipe",
       "ds-linked-list",
@@ -8985,6 +17835,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "jpa-persistence-context",
       "json-crud-http",
       "resilience-patterns",
       "http-versions",
@@ -9021,8 +17872,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "base64",
       "k8s-cri-cni-csi",
       "ipv6-basics",
+      "container-orchestration-choices",
       "k8s-architecture",
       "helm-basics",
+      "ec2-instance-types-launch-templates",
       "k8s-node-maintenance",
       "iam-basics",
       "ssrf",
@@ -9047,6 +17900,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "docker-container-basics",
+      "ec2-instance-types-launch-templates",
       "security-groups-nacl",
       "ipv6-basics",
       "vpc-basics"
@@ -9059,11 +17913,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iac-basics",
       "ansible-network-automation",
       "git-large-files-secrets",
+      "secrets-management",
       "distributed-lock",
       "k8s-deploy-pipeline-eks"
     ],
     "mentions": [
+      "terraform-state-refactoring-import",
       "json-crud-http",
+      "terraform-team-workflow-hcp-terragrunt",
       "dependency-hell",
       "db-type-key-value",
       "bash-scripting",
@@ -9081,10 +17938,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "proxy-reverse-proxy",
+      "aws-ec2-ubuntu-server-setup",
+      "os-kernel-system-calls",
       "centralized-logging-pipeline",
       "sd-start-single-server",
+      "bash-expansions-variables",
+      "linux-disks-filesystems",
       "osi-in-practice",
-      "http-status-codes"
+      "http-status-codes",
+      "shells-posix-compat"
     ]
   },
   "linux-systemd-systemctl": {
@@ -9099,7 +17961,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-deploy-pipeline-eks",
       "k8s-architecture",
       "bash-scripting",
-      "client-data-cache"
+      "event-loop",
+      "client-data-cache",
+      "data-center-infrastructure"
     ]
   },
   "linux-processes-signals": {
@@ -9115,23 +17979,33 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow",
       "k8s-pod-resources",
       "docker-container-basics",
+      "os-kernel-system-calls",
+      "nodejs-debugging-profiling",
+      "js-numbers-bigint",
       "spring-boot-on-kubernetes",
       "bash-scripting",
+      "postgres-slow-db-triage",
+      "shell-environment-startup",
       "osi-in-practice",
       "client-data-cache"
     ]
   },
   "linux-files-permissions": {
     "links": [
+      "k8s-security-context",
       "docker-network-volume",
       "dockerfile-image-layers",
-      "k8s-security-context",
       "linux-processes-signals"
     ],
     "mentions": [
       "k8s-pod-multicontainer",
+      "docker-runtime-security",
+      "linux-users-groups-sudo",
       "k8s-architecture",
       "bash-scripting",
+      "os-kernel-system-calls",
+      "linux-disks-filesystems",
+      "shell-environment-startup",
       "linux-systemd-systemctl"
     ]
   },
@@ -9149,7 +18023,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "passkeys-webauthn",
       "high-availability",
+      "cloud-deployment-models-multicloud",
+      "rds-aurora-managed-db",
       "authn-vs-authz",
+      "security-principles-cia-defense-in-depth",
+      "code-review-practices",
+      "cloud-service-models-shared-responsibility",
       "sso-saml-oidc",
       "https-tls",
       "vpc-basics",
@@ -9170,7 +18049,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "waf",
       "owasp-top-10-map",
       "vpc-subnets-route-tables",
+      "load-testing-k6",
       "reverse-proxy-lb-api-gateway",
+      "os-kernel-system-calls",
       "falco-runtime-security",
       "layer-ip-addressing",
       "what-happens-google-com",
@@ -9247,6 +18128,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "batch-processing"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "stream-processing",
       "transactional-outbox",
       "js-pure-functions",
@@ -9356,7 +18238,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-transaction-isolation",
       "db-replication-sharding",
       "acid-transactions",
-      "dead-letter-queue"
+      "dead-letter-queue",
+      "http-methods"
     ]
   },
   "distributed-transactions-2pc": {
@@ -9397,6 +18280,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "helm-basics",
       "cold-starts",
       "kafka-basics",
+      "queue-based-load-leveling",
       "local-k8s-kind-minikube"
     ]
   },
@@ -9420,6 +18304,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "canary-release",
       "k8s-service-types",
       "k8s-pv-pvc",
+      "route53-routing-policies",
       "kubernetes-ingress",
       "service-mesh",
       "local-k8s-kind-minikube"
@@ -9532,6 +18417,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs",
       "security-groups-nacl",
       "local-k8s-kind-minikube",
+      "bgp-basics",
       "vpc-basics",
       "udp-and-quic"
     ]
@@ -9565,6 +18451,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cilium-ebpf",
       "grpc",
       "layer-ip-routing-icmp",
+      "bgp-basics",
       "first-page-from-power-on",
       "udp-and-quic",
       "layer-link-ethernet-arp"
@@ -9581,10 +18468,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network"
     ],
     "mentions": [
+      "container-orchestration-choices",
       "dockerfile-image-layers",
       "iptables-basics",
       "fp-composition-pipe",
       "eks-cluster-basics",
+      "virtualization-hypervisors",
       "vlan-basics",
       "layer-link-ethernet-arp",
       "vpn-ipsec-wireguard",
@@ -9607,9 +18496,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
+      "js-map-set-weak",
       "js-object-methods",
       "js-strict-mode",
-      "js-es-modules"
+      "js-es-modules",
+      "ddd-tactical-patterns"
     ]
   },
   "pattern-facade": {
@@ -9624,8 +18515,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "https-tls",
+      "aws-s3-in-practice",
       "clean-architecture",
       "git-staging-area",
+      "linters-formatters",
       "dns"
     ]
   },
@@ -9642,7 +18535,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-composite"
     ],
     "mentions": [
+      "ts-decorators",
       "browser-fetch",
+      "nodejs-web-frameworks",
+      "code-review-practices",
       "js-first-class-callbacks",
       "resilience-patterns",
       "http-methods"
@@ -9660,7 +18556,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-execution-context",
       "typescript-in-react",
       "ds-graph-bfs-dfs",
-      "ts-narrowing"
+      "ts-narrowing",
+      "code-review-practices",
+      "oop-four-pillars"
     ]
   },
   "dead-letter-queue": {
@@ -9713,12 +18611,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "backpressure",
       "microservices",
       "postgres-mvcc-vacuum",
+      "transactional-outbox",
+      "postgres-functions-triggers",
       "redis-persistence-ha",
       "redis-memory-eviction",
       "bullmq-job-queue"
     ],
     "mentions": [
-      "transactional-outbox",
       "autoscaling",
       "db-index-design",
       "resilience-patterns",
@@ -9747,10 +18646,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cri-cni-csi",
       "k8s-architecture",
       "cloud-cost-optimization",
+      "postgres-slow-db-triage",
       "centralized-logging-pipeline",
       "k8s-node-maintenance",
       "vpc-basics",
       "local-k8s-kind-minikube",
+      "rds-aurora-managed-db",
       "eks-cluster-basics"
     ]
   },
@@ -9787,18 +18688,22 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-secret",
       "k8s-pod-multicontainer",
       "helm-chart-templates",
+      "spring-cloud-vs-kubernetes",
+      "feature-flags",
+      "secrets-management",
       "k8s-pv-pvc"
     ],
     "mentions": [
-      "spring-cloud-vs-kubernetes",
       "k8s-pod-basics",
       "helm-dependencies-oci-gitops",
       "k8s-architecture",
       "helm-basics",
+      "db-type-key-value",
+      "autoscaling",
       "latency-bandwidth-throughput",
+      "sql-batch-timeout-pool",
       "sd-email-protocols",
-      "local-k8s-kind-minikube",
-      "db-type-key-value"
+      "local-k8s-kind-minikube"
     ]
   },
   "pattern-bridge": {
@@ -9812,6 +18717,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-cri-cni-csi",
       "observability-basics",
+      "cross-platform-apps",
       "k8s-architecture",
       "sql-batch-timeout-pool",
       "grpc"
@@ -9829,6 +18735,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-facade"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
+      "solid-principles",
       "hexagonal-architecture",
       "js-function-forms",
       "http-status-codes",
@@ -9849,6 +18757,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-basics",
       "js-prototype-chain",
+      "js-numbers-bigint",
       "db-types-overview",
       "spring-ioc-di",
       "js-immutability-react",
@@ -9866,7 +18775,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-object-methods",
+      "nodejs-orm-query-builder",
       "resilience-patterns",
+      "runtime-validation-zod",
       "http-methods"
     ]
   },
@@ -9916,6 +18827,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "browser-fetch",
       "reverse-proxy-lb-api-gateway",
       "packet-capture-tcpdump",
+      "nodejs-http-clients",
       "deadlocks",
       "what-happens-google-com",
       "grpc",
@@ -9929,16 +18841,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations",
       "circuit-breaker",
       "distributed-lock",
+      "failover",
       "postgres-connections-pg-hba"
     ],
     "mentions": [
       "pessimistic-locking",
       "postgres-roles-security",
       "postgres-mvcc-vacuum",
+      "serverless-limits",
       "db-migration-tools",
       "db-architecture-by-scale",
       "encryption-in-transit",
       "https-tls",
+      "postgres-slow-db-triage",
+      "rds-aurora-managed-db",
       "autoscaling",
       "latency-bandwidth-throughput",
       "db-replication-sharding",
@@ -10032,25 +18948,31 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "tcp-connection-lifecycle",
       "health-checks",
       "k8s-pod-probes",
-      "cdn-edge-anycast"
+      "cdn-edge-anycast",
+      "reverse-proxy-lb-api-gateway"
     ],
     "mentions": [
       "k8s-pod-lifecycle",
+      "gateway-link-redundancy-fhrp-lacp",
       "iptables-nat",
       "owasp-top-10-map",
       "vpc-subnets-route-tables",
       "docker-container-basics",
       "realtime-communication",
       "browser-fetch",
-      "reverse-proxy-lb-api-gateway",
+      "layer-ip-routing-icmp",
       "sd-start-single-server",
       "layer-link-ethernet-arp",
       "http-versions",
       "rolling-deployment",
       "security-groups-nacl",
+      "vpc-basics",
       "redis-basics",
       "client-data-cache",
-      "grpc"
+      "network-design-three-tier-spine-leaf",
+      "grpc",
+      "bgp-basics",
+      "udp-and-quic"
     ]
   },
   "pattern-abstract-factory": {
@@ -10062,6 +18984,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-pod-probes",
       "test-pyramid-unit-tests",
+      "nodejs-orm-query-builder",
       "sql-batch-timeout-pool",
       "design-patterns-overview"
     ]
@@ -10076,8 +18999,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "pattern-prototype"
     ],
     "mentions": [
+      "react-jsx-components",
       "js-object-methods",
-      "sd-email-protocols"
+      "solid-principles",
+      "oop-four-pillars",
+      "code-review-practices",
+      "sd-email-protocols",
+      "plugin-microkernel-architecture"
     ]
   },
   "pattern-singleton": {
@@ -10093,8 +19021,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-architecture",
       "hexagonal-architecture",
       "cron-jobs",
+      "nodejs-orm-query-builder",
+      "nodejs-web-frameworks",
+      "react-state-snapshot-batching",
       "spring-ioc-di",
       "thread-safety",
+      "code-review-practices",
       "js-es-modules",
       "leader-election",
       "sql-batch-timeout-pool"
@@ -10129,8 +19061,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "resilience-patterns"
     ],
     "mentions": [
+      "uml-diagrams",
+      "solid-principles",
       "spring-ioc-di",
+      "refactoring-code-smells",
+      "code-review-practices",
       "sql-batch-timeout-pool",
+      "plugin-microkernel-architecture",
       "js-closures"
     ]
   },
@@ -10166,6 +19103,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "db-type-wide-column",
       "sd-start-single-server",
+      "mongodb-replica-set-sharding",
       "vpc-basics",
       "redis-basics",
       "caching-strategies"
@@ -10179,6 +19117,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "distributed-lock"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "zero-downtime-migrations",
       "db-architecture-by-scale",
       "mysql-innodb-basics",
@@ -10218,13 +19157,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-cni-pod-network"
     ],
     "mentions": [
+      "virtualization-hypervisors",
       "eks-cluster-basics",
       "packet-capture-tcpdump",
       "layer-link-ethernet-arp",
+      "network-design-three-tier-spine-leaf",
       "cilium-ebpf",
       "security-groups-nacl",
+      "routing-protocols-ospf-rip-eigrp",
       "ipv6-basics",
       "layer-ip-routing-icmp",
+      "bgp-basics",
       "router-vs-switch",
       "udp-and-quic"
     ]
@@ -10235,13 +19178,19 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sdn-vxlan-overlay",
       "udp-and-quic",
       "layer-ip-routing-icmp",
-      "zero-trust-architecture"
+      "zero-trust-architecture",
+      "bgp-basics"
     ],
     "mentions": [
+      "vpc-peering-transit-privatelink",
+      "wan-mpls-sd-wan-vrf",
       "browser-fetch",
+      "data-mesh-fabric",
       "public-key-key-exchange",
       "webhooks",
       "what-happens-google-com",
+      "network-design-three-tier-spine-leaf",
+      "routing-protocols-ospf-rip-eigrp",
       "ipv6-basics",
       "sso-saml-oidc",
       "pattern-abstract-factory",
@@ -10258,6 +19207,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "packet-capture-tcpdump",
       "router-vs-switch",
+      "data-center-infrastructure",
       "dhcp",
       "layer-ip-routing-icmp",
       "udp-and-quic",
@@ -10362,6 +19312,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "tail-latency",
       "redis-cluster",
+      "redis-modules-stack",
+      "sliding-window-pattern",
       "backpressure",
       "redis-basics"
     ]
@@ -10378,7 +19330,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "osi-in-practice",
       "realtime-communication",
       "http-versions",
-      "ddos-protection"
+      "ddos-protection",
+      "bgp-basics"
     ]
   },
   "security-groups-nacl": {
@@ -10408,8 +19361,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs"
     ],
     "mentions": [
+      "cloud-deployment-models-multicloud",
       "db-sharding",
       "ports-and-sockets",
+      "cloud-service-models-shared-responsibility",
       "layer-ip-addressing",
       "iptables-nat",
       "github-actions-docker-ecr",
@@ -10424,16 +19379,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "iptables-nat",
       "connection-pool",
       "vpc-peering-transit-privatelink",
-      "k8s-cni-pod-network"
+      "k8s-cni-pod-network",
+      "firewall-types-ngfw",
+      "zero-trust-architecture"
     ],
     "mentions": [
       "browser-fetch",
       "db-type-key-value",
       "iptables-basics",
+      "sd-start-single-server",
       "redis-basics",
       "ipv6-basics",
       "layer-ip-addressing",
       "realtime-communication",
+      "bgp-basics",
       "github-actions-docker-ecr",
       "eks-cluster-basics"
     ]
@@ -10450,10 +19409,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-flow-logs"
     ],
     "mentions": [
+      "route53-routing-policies",
       "layer-ip-routing-icmp",
       "terraform-basics",
       "iptables-basics",
       "ipv6-basics",
+      "virtualization-hypervisors",
       "ssrf",
       "layer-link-ethernet-arp",
       "what-happens-google-com",
@@ -10472,6 +19433,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "realtime-communication",
       "rest-api-design",
       "code-splitting",
+      "core-component-api-design",
       "animation-patterns"
     ],
     "mentions": [
@@ -10495,6 +19457,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "semantic-versioning",
       "docker-container-basics",
       "fp-composition-pipe",
+      "ts-declaration-files-modules",
       "api-versioning",
       "redis-basics",
       "what-happens-google-com",
@@ -10545,7 +19508,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "k8s-project-structure",
       "k8s-pod-basics",
-      "k8s-architecture"
+      "k8s-architecture",
+      "nodejs-web-frameworks"
     ]
   },
   "helm-basics": {
@@ -10722,7 +19686,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "streaming-ssr-suspense",
       "react-server-components"
     ],
-    "mentions": []
+    "mentions": [
+      "nextjs-app-router-routing"
+    ]
   },
   "islands-resumability": {
     "links": [
@@ -10736,6 +19702,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "scroll-triggered-intersection-observer",
       "js-es-modules",
       "streaming-ssr-suspense",
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy",
       "rendering-strategies",
       "js-closures"
     ]
@@ -10750,7 +19718,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "nextjs-static-dynamic-rendering"
     ],
     "mentions": [
-      "pattern-proxy"
+      "nextjs-app-router-routing",
+      "pattern-proxy",
+      "sdlc-models-agile-scrum"
     ]
   },
   "streaming-ssr-suspense": {
@@ -10763,9 +19733,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "core-web-vitals"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
       "proxy-reverse-proxy",
       "http-versions",
-      "http-status-codes"
+      "react-suspense-error-boundary",
+      "http-status-codes",
+      "claude-code-plugins-and-channels",
+      "sdlc-models-agile-scrum"
     ]
   },
   "hydration": {
@@ -10778,6 +19752,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "react-server-components"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
+      "frontend-testing-strategy",
+      "react-useeffect",
       "count-min-sketch"
     ]
   },
@@ -10790,6 +19767,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "hydration"
     ],
     "mentions": [
+      "nextjs-app-router-routing",
+      "nextjs-self-hosting-deployment",
       "page-cache-disk-io",
       "autoscaling",
       "react-server-components",
@@ -10812,6 +19791,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "docker-container-basics",
+      "react-state-management-libraries",
+      "seo-for-spa",
       "proxy-reverse-proxy",
       "osi-in-practice",
       "http-status-codes",
@@ -10831,9 +19812,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "data-fetching-optimization",
+      "react-client-routing",
+      "frontend-testing-strategy",
       "lighthouse-explained",
       "hydration",
+      "react-useeffect",
       "nginx-basics",
+      "seo-for-spa",
+      "frontend-hosting-platforms",
       "nextjs-static-dynamic-rendering",
       "http-status-codes"
     ]
@@ -10858,6 +19844,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-roles-security"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "db-architecture-by-scale",
       "encryption-in-transit",
       "postgres-operations",
@@ -10875,6 +19862,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-basics"
     ],
     "mentions": [
+      "process-vs-thread",
       "valkey-vs-redis",
       "vpc-basics"
     ]
@@ -10887,6 +19875,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "process-vs-thread",
       "leader-election"
     ]
   },
@@ -10936,6 +19925,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-rebase"
     ],
     "mentions": [
+      "linters-formatters",
       "git-staging-area"
     ]
   },
@@ -10994,9 +19984,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-internals-basics",
       "git-remote-collaboration",
       "git-ignore-config",
-      "git-tips-advanced"
+      "git-hooks"
     ],
     "mentions": [
+      "git-branch-merge",
       "git-stash-reflog",
       "git-merge-conflict"
     ]
@@ -11037,16 +20028,20 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "packet-capture-tcpdump",
       "iptables-basics",
       "https-tls",
-      "proxy-reverse-proxy"
+      "proxy-reverse-proxy",
+      "latency-bandwidth-throughput",
+      "dhcp"
     ],
     "mentions": [
       "what-happens-google-com",
       "docker-container-basics",
       "curl-for-debugging",
       "sd-start-single-server",
+      "divide-and-conquer",
       "security-groups-nacl",
       "http-status-codes",
       "first-page-from-power-on",
+      "udp-and-quic",
       "dns"
     ]
   },
@@ -11076,10 +20071,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "owasp-top-10-map",
       "docker-container-basics",
       "realtime-communication",
+      "route53-routing-policies",
       "reverse-proxy-lb-api-gateway",
       "sd-start-single-server",
       "service-mesh",
       "http-versions",
+      "os-kernel-system-calls",
       "security-groups-nacl",
       "what-happens-google-com",
       "encryption-in-transit",
@@ -11119,7 +20116,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-driven-architecture",
       "distributed-transactions-2pc",
       "sql-batch-timeout-pool",
-      "postgres-getting-started"
+      "postgres-getting-started",
+      "mutex-semaphore-monitor"
     ]
   },
   "sql-batch-timeout-pool": {
@@ -11131,6 +20129,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "connection-pool"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "pessimistic-locking",
       "postgres-mvcc-vacuum",
       "db-architecture-by-scale",
@@ -11153,6 +20152,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "mysql-innodb-basics",
       "loading-patterns",
       "db-index-design",
+      "code-review-practices",
+      "nodejs-orm-query-builder",
       "sql-subqueries-exists-lateral",
       "sql-joins-in-practice",
       "pattern-proxy",
@@ -11193,7 +20194,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "mysql-innodb-basics",
       "sd-start-single-server",
-      "sd-mq-storage-partitions"
+      "sd-mq-storage-partitions",
+      "postgres-query-planner"
     ]
   },
   "db-index-pitfalls": {
@@ -11241,6 +20243,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "sqld-group-by-having",
+      "code-review-practices",
       "postgres-getting-started"
     ]
   },
@@ -11258,6 +20261,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "linux-network-tuning",
       "vpc-subnets-route-tables",
       "browser-fetch",
+      "os-kernel-system-calls",
       "iptables-basics",
       "reverse-proxy-lb-api-gateway",
       "ddos-protection",
@@ -11322,6 +20326,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "elasticsearch-inverted-index",
       "vpc-subnets-route-tables",
+      "os-kernel-system-calls",
       "iptables-basics",
       "postgres-getting-started",
       "linux-systemd-systemctl",
@@ -11352,6 +20357,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "youtube-url-to-video",
       "grpc",
       "first-page-from-power-on",
+      "aws-s3-in-practice",
+      "character-encoding-unicode",
       "packet-encapsulation",
       "packet-capture-tcpdump",
       "http-versions",
@@ -11410,10 +20417,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "ipv6-basics"
     ],
     "mentions": [
+      "network-attacks-l2-l3",
       "vpc-peering-transit-privatelink",
+      "gateway-link-redundancy-fhrp-lacp",
       "docker-container-basics",
+      "virtualization-hypervisors",
       "router-vs-switch",
       "what-happens-google-com",
+      "dhcp",
       "load-balancer-basics",
       "vpc-basics"
     ]
@@ -11433,8 +20444,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "k8s-network-policy",
       "docker-container-basics",
       "vpc-subnets-route-tables",
+      "sd-latency-numbers",
       "k8s-cni-pod-network",
       "ssrf",
+      "python-essentials-for-backend",
+      "bit-manipulation",
       "nat-traversal",
       "security-groups-nacl",
       "vpc-basics",
@@ -11527,7 +20541,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding",
       "cpu-pipelining-branch-prediction",
       "acid-transactions",
-      "db-index-design"
+      "db-index-design",
+      "etl-vs-elt"
     ]
   },
   "db-type-newsql": {
@@ -11588,6 +20603,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "acid-vs-base",
       "network-partitions",
       "mongodb-document-model",
+      "mongodb-replica-set-sharding",
       "sd-kv-store-versioning",
       "leader-election",
       "redis-basics",
@@ -11641,6 +20657,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-time-series",
       "mysql-innodb-basics",
       "db-type-key-value",
+      "rds-aurora-managed-db",
       "ds-hash-map",
       "sqld-top-n-hierarchical-pivot",
       "page-cache-disk-io",
@@ -11668,6 +20685,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-wide-column"
     ],
     "mentions": [
+      "dynamodb-modeling-capacity",
       "raft-consensus",
       "ds-hash-map",
       "page-cache-disk-io",
@@ -11726,12 +20744,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-replication-sharding"
     ],
     "mentions": [
+      "process-vs-thread",
       "postgres-connections-pg-hba",
       "db-architecture-by-scale",
       "virtual-memory-paging",
       "sd-mq-storage-partitions",
       "page-cache-disk-io",
       "mysql-innodb-basics",
+      "db-index-design",
+      "bit-manipulation",
       "db-type-relational",
       "acid-transactions"
     ]
@@ -11746,6 +20767,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postgres-operations"
     ],
     "mentions": [
+      "postgres-slow-db-triage",
       "mysql-innodb-basics",
       "db-index-design",
       "distributed-transactions-2pc"
@@ -11762,11 +20784,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "db-index",
       "pessimistic-locking",
+      "rds-aurora-managed-db",
       "virtual-memory-paging",
       "db-migration-tools",
       "db-architecture-by-scale",
+      "block-file-object-storage",
+      "postgres-slow-db-triage",
+      "load-testing-k6",
       "page-cache-disk-io",
       "ds-hash-map",
+      "linux-disks-filesystems",
       "linux-files-permissions",
       "db-type-relational",
       "postgres-getting-started",
@@ -11806,7 +20833,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics",
       "db-locking-deadlock",
       "db-index-design",
-      "postgres-data-types"
+      "postgres-data-types",
+      "oop-four-pillars"
     ]
   },
   "postgres-jsonb-search": {
@@ -11845,6 +20873,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-basics"
     ],
     "mentions": [
+      "floating-point-numbers",
       "race-conditions",
       "sql-select-where-null",
       "postgres-architecture"
@@ -11882,6 +20911,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "github-actions-docker-ecr",
       "git-tips-advanced",
       "git-branching-strategy",
+      "git-first-hour",
+      "js-binary-data-typed-arrays",
       "git-large-files-secrets",
       "sd-object-storage-architecture",
       "build-caching"
@@ -11894,6 +20925,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-staging-area",
       "git-stash-reflog",
       "git-branching-strategy",
+      "git-rebase",
       "git-remote-collaboration"
     ],
     "mentions": []
@@ -11910,6 +20942,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-tips-advanced",
+      "github-repo-governance",
       "git-staging-area"
     ]
   },
@@ -11935,6 +20968,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "github-actions-docker-ecr",
+      "github-repo-governance",
       "git-stash-reflog",
       "token-login",
       "what-happens-google-com",
@@ -11946,9 +20980,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-branch-merge",
       "git-remote-collaboration",
       "git-tips-advanced",
+      "git-hooks",
       "semantic-versioning"
     ],
     "mentions": [
+      "github-pull-request-flow",
+      "github-repo-governance",
       "k8s-deploy-pipeline-eks",
       "ab-testing",
       "api-versioning",
@@ -11969,11 +21006,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "git-ignore-config",
       "dependency-hell",
       "git-staging-area",
-      "git-stash-reflog"
+      "git-stash-reflog",
+      "shells-posix-compat"
     ]
   },
   "git-tips-advanced": {
     "links": [
+      "git-hooks",
       "git-branching-strategy",
       "git-troubleshooting",
       "claude-code-parallel-and-scheduled",
@@ -11981,6 +21020,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "git-branch-merge",
+      "github-repo-governance",
+      "git-staging-area",
       "dockerfile-image-layers"
     ]
   },
@@ -12008,7 +21049,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "sqld-group-by-having",
-      "sqld-correlated-subquery"
+      "sqld-correlated-subquery",
+      "web-accessibility"
     ]
   },
   "sqld-rollup-cube-grouping-sets": {
@@ -12032,6 +21074,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index",
       "ds-graph-bfs-dfs",
       "sqld-group-by-having",
+      "regex-and-globbing",
       "sql-cte-recursive",
       "sql-case-when",
       "js-closures"
@@ -12046,6 +21089,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sqld-data-modeling"
     ],
     "mentions": [
+      "floating-point-numbers",
       "postgres-getting-started"
     ]
   },
@@ -12057,6 +21101,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "postgres-data-types",
+      "data-quality-checks",
       "db-type-relational",
       "db-keys-denormalization",
       "sql-basics"
@@ -12070,6 +21115,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "json-crud-http",
       "db-keys-denormalization",
+      "uml-diagrams",
       "http-status-codes",
       "sql-basics"
     ]
@@ -12145,6 +21191,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-consistency-cap",
       "prometheus-basics",
       "db-architecture-by-scale",
+      "rds-aurora-managed-db",
       "mysql-innodb-basics",
       "sd-start-single-server",
       "page-cache-disk-io",
@@ -12179,6 +21226,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "opensearch-cluster-operations",
       "db-type-columnar-olap",
       "postgres-mvcc-vacuum",
+      "data-warehouse-architecture",
       "db-migration-tools",
       "db-sharding",
       "db-type-wide-column",
@@ -12189,6 +21237,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "message-delivery-semantics",
       "kafka-to-lake-pipeline",
       "page-cache-disk-io",
+      "sd-start-single-server",
+      "distributed-transactions-2pc",
       "db-type-relational",
       "db-type-graph",
       "http-caching-cdn",
@@ -12198,7 +21248,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-batch-timeout-pool",
       "postgres-operations",
       "postgres-jsonb-search",
+      "path-traversal-file-upload",
       "db-partitioning",
+      "sql-query-rewrite",
       "sql-basics"
     ]
   },
@@ -12224,7 +21276,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index"
     ],
     "mentions": [
-      "ds-hash-map"
+      "postgres-slow-db-triage",
+      "ds-hash-map",
+      "postgres-getting-started"
     ]
   },
   "nginx-basics": {
@@ -12237,6 +21291,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "aws-ec2-ubuntu-server-setup",
       "linux-systemd-systemctl",
       "realtime-communication",
+      "os-kernel-system-calls",
       "proxy-reverse-proxy",
       "linux-processes-signals",
       "event-loop",
@@ -12306,6 +21361,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-persistence-ha"
     ],
     "mentions": [
+      "process-vs-thread",
       "virtual-memory-paging",
       "ds-hash-map",
       "ds-linked-list",
@@ -12322,6 +21378,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "redis-memory-eviction"
     ],
     "mentions": [
+      "process-vs-thread",
       "virtual-memory-paging",
       "page-cache-disk-io",
       "sd-start-single-server",
@@ -12357,6 +21414,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "redis-basics": {
     "links": [
+      "redis-high-throughput",
       "message-queue-basics",
       "redis-memory-eviction",
       "network-troubleshooting-by-layer",
@@ -12374,10 +21432,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "pub-sub",
       "db-type-relational",
+      "os-kernel-system-calls",
       "kafka-basics",
       "db-transaction-isolation",
       "mysql-innodb-basics",
       "acid-transactions",
+      "vpc-basics",
       "dns"
     ]
   },
@@ -12388,6 +21448,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "http-caching-cdn",
       "redis-persistence-ha",
       "redis-memory-eviction",
+      "count-min-sketch",
       "osi-in-practice"
     ],
     "mentions": [
@@ -12402,6 +21463,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-start-single-server",
       "js-memoization",
       "cold-starts",
+      "lossy-counting",
       "tail-latency",
       "db-replication-sharding",
       "high-availability",
@@ -12418,6 +21480,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "browser-storage",
+      "nextjs-app-router-routing",
+      "web-workers",
       "resource-hints-loading",
       "realtime-communication",
       "js-pure-functions",
@@ -12438,9 +21502,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "http-caching-cdn",
       "browser-storage",
+      "react-state-snapshot-batching",
+      "react-useeffect",
       "rendering-performance-optimization",
       "js-memoization",
-      "loading-patterns"
+      "loading-patterns",
+      "react-state-management-libraries"
     ]
   },
   "json-crud-http": {
@@ -12456,13 +21523,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "cors",
       "js-prototype-chain",
       "optimistic-locking",
+      "input-validation-secure-coding",
+      "character-encoding-unicode",
       "loading-patterns",
       "upper-layers-session-presentation-app",
+      "floating-point-numbers",
       "spring-ioc-di",
       "api-versioning",
       "client-data-cache",
       "resilience-patterns",
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "runtime-validation-zod"
     ]
   },
   "big-o-notation": {
@@ -12471,6 +21542,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sql-query-rewrite"
     ],
     "mentions": [
+      "nodejs-debugging-profiling",
       "ds-binary-tree-bst",
       "sorting-algorithms",
       "js-execution-context",
@@ -12478,6 +21550,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-memoization",
       "sql-filtering-operators",
       "event-loop",
+      "regex-and-globbing",
       "ds-array-matrix"
     ]
   },
@@ -12489,6 +21562,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-compose"
     ],
     "mentions": [
+      "container-orchestration-choices",
+      "docker-runtime-security",
       "nginx-basics",
       "iptables-basics",
       "k8s-cni-pod-network",
@@ -12516,6 +21591,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "k8s-pod-probes",
+      "container-orchestration-choices",
       "iptables-basics",
       "fp-composition-pipe",
       "proxy-reverse-proxy",
@@ -12533,6 +21609,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-commands-workflow"
     ],
     "mentions": [
+      "process-vs-thread",
+      "docker-runtime-security",
+      "nodejs-cli-process",
       "virtual-memory-paging",
       "linux-namespaces-cgroups",
       "k8s-pod-resources",
@@ -12540,7 +21619,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rest-api-design",
       "fp-composition-pipe",
       "k8s-security-context",
+      "virtualization-hypervisors",
       "bash-scripting",
+      "os-kernel-system-calls",
+      "mutex-semaphore-monitor",
       "grpc",
       "linux-processes-signals",
       "aws-ec2-ubuntu-server-setup",
@@ -12553,6 +21635,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "docker-network-volume"
     ],
     "mentions": [
+      "frontend-first-steps",
       "k8s-pod-probes",
       "github-actions-docker-ecr",
       "docker-compose",
@@ -12659,6 +21742,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "reverse-proxy-lb-api-gateway",
       "kubernetes-ingress",
       "base64",
+      "claude-code-plugins-and-channels",
+      "linux-archive-transfer",
       "image-optimization",
       "first-page-from-power-on",
       "db-modeling-normalization"
@@ -12703,6 +21788,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "webhooks",
       "service-mesh",
       "http-versions",
+      "web-server-vs-was",
       "public-key-key-exchange",
       "encryption-in-transit",
       "symmetric-encryption-aes",
@@ -12748,12 +21834,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "network-troubleshooting-by-layer"
     ],
     "mentions": [
+      "nodejs-http-clients",
       "html-form-http",
       "client-data-cache",
       "json-crud-http",
+      "react-useeffect",
+      "js-binary-data-typed-arrays",
       "frontend-browser-cache",
+      "frontend-hosting-platforms",
       "rendering-csr-spa",
       "race-conditions",
+      "claude-code-plugins-and-channels",
       "debounce-throttle",
       "dns"
     ]
@@ -12773,6 +21864,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "grpc",
+      "openapi-spec-first",
       "n-plus-one-queries",
       "api-versioning",
       "base64",
@@ -12783,6 +21875,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-index-design",
       "http-message",
       "http-versions",
+      "floating-point-numbers",
       "redis-basics",
       "sql-query-rewrite"
     ]
@@ -12809,6 +21902,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-locking-deadlock",
       "http-versions",
       "osi-in-practice",
+      "claude-code-plugins-and-channels",
       "what-happens-google-com",
       "dns"
     ]
@@ -12842,6 +21936,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "js-timers-accuracy"
     ],
     "mentions": [
+      "web-workers",
       "dom-basics",
       "js-es-modules",
       "osi-in-practice"
@@ -12852,6 +21947,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "client-data-cache",
       "redis-memory-eviction",
+      "vulnerability-management-cve-cvss",
       "dom-basics",
       "js-memoization",
       "js-function-forms",
@@ -12859,6 +21955,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "event-loop",
       "spring-ioc-di",
       "js-strict-mode",
+      "frontend-build-tooling",
       "js-closures",
       "layer-mtu-fragmentation",
       "dns"
@@ -12870,10 +21967,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "micro-frontend-integration-patterns"
     ],
     "mentions": [
+      "web-components-shadow-dom",
+      "react-suspense-error-boundary",
+      "css-styling-approaches",
+      "github-repo-governance",
       "build-caching",
       "rendering-csr-spa",
       "k8s-deploy-pipeline-eks",
       "microservices",
+      "css-custom-properties",
+      "design-system-building",
       "data-fetching-optimization",
       "js-es-modules",
       "frontend-monorepo",
@@ -12882,10 +21985,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   },
   "ab-testing": {
     "links": [
-      "http-caching-cdn"
+      "http-caching-cdn",
+      "search-spam-policies-cloaking",
+      "seo-redirects-site-migration"
     ],
     "mentions": [
+      "seo-for-spa",
       "rendering-strategies",
+      "input-validation-secure-coding",
       "bloom-filter",
       "db-modeling-normalization",
       "core-web-vitals"
@@ -12900,7 +22007,10 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "performance-metrics-measurement",
+      "seo-for-spa",
       "resource-hints-loading",
+      "frontend-testing-strategy",
+      "web-workers",
       "lighthouse-explained",
       "browser-rendering-pipeline",
       "ab-testing",
@@ -12918,9 +22028,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "js-es-modules",
+      "react-client-routing",
+      "nextjs-app-router-routing",
       "debounce-throttle",
+      "frontend-hosting-platforms",
       "http-versions",
-      "rendering-strategies"
+      "rendering-strategies",
+      "sdlc-models-agile-scrum"
     ]
   },
   "mvc-pattern": {
@@ -12928,8 +22042,12 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-locking-deadlock"
     ],
     "mentions": [
+      "spring-mvc-request-lifecycle",
       "client-data-cache",
+      "enterprise-application-patterns",
+      "nodejs-web-frameworks",
       "pattern-observer",
+      "code-review-practices",
       "js-pure-functions",
       "pattern-proxy",
       "http-status-codes",
@@ -12939,12 +22057,17 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "http-caching-cdn": {
     "links": [
       "what-happens-google-com",
-      "cdn-edge-anycast"
+      "cdn-edge-anycast",
+      "aws-s3-in-practice"
     ],
     "mentions": [
       "http-message",
+      "s3-storage-classes-lifecycle",
+      "k8s-deploy-pipeline-eks",
       "frontend-browser-cache",
+      "sd-object-storage-architecture",
       "http-versions",
+      "linux-disks-filesystems",
       "pattern-proxy",
       "redis-basics",
       "cookie-session-login",
@@ -12958,6 +22081,8 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "opensearch-cluster-operations"
     ],
     "mentions": [
+      "elasticsearch-bulk-indexing",
+      "elasticsearch-mapping",
       "db-index",
       "cdc-change-data-capture",
       "rag-retrieval-quality",
@@ -12975,11 +22100,15 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "sd-sharding-intro",
+      "mongodb-replica-set-sharding",
       "acid-vs-base",
+      "mongodb-indexes-explain",
+      "js-numbers-bigint",
       "sd-start-single-server",
       "distributed-transactions-2pc",
       "db-index-design",
       "db-type-relational",
+      "floating-point-numbers",
       "db-replication-sharding",
       "db-modeling-normalization"
     ]
@@ -12990,7 +22119,16 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rendering-strategies"
     ],
     "mentions": [
+      "react-context",
+      "react-useref-layout-effect",
       "core-web-vitals",
+      "react-memoization-hooks",
+      "react-suspense-error-boundary",
+      "react-jsx-components",
+      "react-useeffect",
+      "react-concurrent-transitions",
+      "react-state-management-libraries",
+      "react-state-snapshot-batching",
       "js-memoization",
       "js-function-forms",
       "js-pure-functions",
@@ -13014,6 +22152,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     ],
     "mentions": [
       "http-caching-cdn",
+      "nextjs-app-router-routing",
       "lighthouse-explained",
       "lossy-counting",
       "http-status-codes",
@@ -13035,6 +22174,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "modular-monolith",
       "serverless-architecture",
       "observability-basics",
+      "queue-based-load-leveling",
       "ddd-bounded-context",
       "db-type-columnar-olap",
       "cdc-change-data-capture",
@@ -13067,11 +22207,13 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "client-data-cache",
       "tail-latency",
       "spring-cloud-vs-kubernetes",
+      "reactive-programming",
       "service-mesh",
       "latency-bandwidth-throughput",
       "backpressure",
       "osi-in-practice",
       "sql-batch-timeout-pool",
+      "mutex-semaphore-monitor",
       "grpc",
       "http-methods"
     ]
@@ -13079,13 +22221,14 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "dns": {
     "links": [
       "what-happens-google-com",
+      "cdn-edge-anycast",
       "hosts-file"
     ],
     "mentions": [
+      "route53-routing-policies",
       "http-versions",
       "digital-signatures-certificates",
       "sd-email-protocols",
-      "cdn-edge-anycast",
       "sql-batch-timeout-pool",
       "udp-and-quic",
       "ipv6-basics"
@@ -13099,6 +22242,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "proxy-reverse-proxy",
       "local-custom-domain",
       "http-versions",
+      "web-server-vs-was",
       "linux-files-permissions",
       "what-happens-google-com",
       "ipv6-basics",
@@ -13183,9 +22327,11 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "csrf",
       "fp-composition-pipe",
       "http-versions",
+      "web-server-vs-was",
       "what-happens-google-com",
       "cookie-session-login",
       "oauth",
+      "frontend-build-tooling",
       "first-page-from-power-on",
       "dns"
     ]
@@ -13193,6 +22339,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "pythagorean-theorem": {
     "links": [],
     "mentions": [
+      "floating-point-numbers",
       "vector-db"
     ]
   },
@@ -13235,6 +22382,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
   "token-login": {
     "links": [
       "cookie-session-login",
+      "pattern-strategy",
       "oauth"
     ],
     "mentions": [
@@ -13249,16 +22397,23 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "links": [],
     "mentions": [
       "logging-tools-overview",
+      "api-key-hmac-auth",
       "token-login",
+      "spring-security-jwt-oauth2",
       "cookie-session-login"
     ]
   },
   "vector-db": {
-    "links": [],
+    "links": [
+      "embedding-models-applications"
+    ],
     "mentions": [
       "rag-retrieval-quality",
+      "mongodb-document-model",
       "pythagorean-theorem",
       "db-index-design",
+      "elasticsearch-inverted-index",
+      "self-hosting-llm-inference",
       "rag-classic-pipeline",
       "db-modeling-normalization"
     ]

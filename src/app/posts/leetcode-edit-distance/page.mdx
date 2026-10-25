@@ -1,0 +1,504 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-edit-distance");
+
+<EasyIntro>
+  칠판에 sunday라고 적혀 있는데 saturday로 고쳐야 한다. 지우개와 분필로 할 수 있는 일은 글자 하나 지우기, 끼워 넣기, 다른 글자로 바꾸기 세 가지고, 가장 적은 횟수로 고치는 방법을 찾는 문제다. 아무렇게나 고쳐 보면 횟수가 들쭉날쭉해서 가장 적은지 알 수 없다.
+
+  그래서 큰 표를 그린다. 가로에는 바꾸고 싶은 단어를, 세로에는 지금 단어를 한 글자씩 적고, 칸마다 "여기까지 고치는 데 드는 가장 적은 횟수"를 적는다. 두 글자가 같으면 고칠 필요가 없으니 왼쪽 위 칸 숫자를 그대로 가져오고, 다르면 위, 왼쪽, 왼쪽 위 칸 중 가장 작은 숫자에 1을 더한다. 오른쪽 아래 칸까지 채우면 그 숫자가 답이다. sunday를 saturday로 바꾸는 데는 세 번이면 된다.
+</EasyIntro>
+
+검색창에 오타를 내면 "이것을 찾으셨나요?"가 뜬다. 맞춤법 검사기는 틀린 단어와 사전의 단어가 얼마나 다른지 숫자로 재야 하고, 가장 흔한 잣대가 편집 거리(레벤슈타인 거리)다. [LeetCode 72. Edit Distance](https://leetcode.com/problems/edit-distance/)는 이 숫자를 직접 구하는 문제다.
+
+편집 거리가 무엇이고 데이터베이스에서 어떻게 쓰이는지는 [동적 계획법 글의 "두 단어 사이의 거리"](/posts/dynamic-programming#두-단어-사이의-거리)에서 PostgreSQL 예제와 함께 다뤘다. 이 글은 문제 풀이에 집중한다. 왜 점화식의 세 칸이 각각 지우기·넣기·바꾸기인지, 그 증명, 재귀부터 한 줄 DP까지 다섯 풀이, 실제로 어떤 편집을 했는지 되짚는 법, 거리가 k 이하인지만 빠르게 보는 띠 DP까지 본다. 표를 채우는 틀은 [Longest Common Subsequence](/posts/leetcode-longest-common-subsequence)와 같아서 그 글을 먼저 보면 더 쉽다. 코드는 모두 Node.js 22, Python 3, Java 21에서 돌렸다.
+
+## 세 가지 연산, 가장 적은 횟수
+
+문자열 `word1`과 `word2`가 주어진다. `word1`에 다음 연산을 써서 `word2`로 만들 때 필요한 최소 연산 수를 돌려준다.
+
+- 글자 하나 넣기
+- 글자 하나 지우기
+- 글자 하나를 다른 글자로 바꾸기
+
+두 문자열의 길이는 0 이상 500 이하이고 영어 소문자만 있다. 길이 0이 허용된다는 점을 꼭 챙긴다. 빈 문자열에서 "abc"를 만들려면 넣기 3번, "abc"를 빈 문자열로 만들려면 지우기 3번이다. 길이 500이면 칸은 25만 개 남짓이라 O(mn)이면 넉넉하다.
+
+연산의 방향은 신경 쓰지 않아도 된다. word1에 넣는 것은 word2에서 지우는 것과 같고, 바꾸기는 어느 쪽에서 해도 바꾸기다. 그래서 편집 거리는 두 문자열을 바꿔 넣어도 같다. 이 대칭을 뒤에서 공간을 줄일 때 쓴다.
+
+## sunday를 saturday로 고쳐 보기
+
+예시로 `word1 = "sunday"`, `word2 = "saturday"`를 쓴다. 길이가 6과 8이라 적어도 두 글자는 넣어야 한다.
+
+```text
+s - - u n d a y
+s a t u r d a y
+```
+
+이렇게 맞춰 놓으면 할 일이 보인다. s 뒤에 a와 t를 넣고(2번), n을 r로 바꾼다(1번). 나머지 s, u, d, a, y는 그대로 둔다. 모두 3번이다. 2번으로는 안 된다. 길이 차이 때문에 넣기만 2번이 필요한데, 넣기만으로는 n이 r이 될 수 없다.
+
+사람은 두 단어를 위아래로 놓고 같은 글자를 줄 맞춰 세운 다음 나머지를 고친다. 이 "줄 맞추기"를 정렬(alignment)이라고 부른다. 정렬의 각 열은 넷 중 하나다. 위아래가 같으면 그대로, 다르면 바꾸기, 위에만 글자가 있으면 지우기, 아래에만 있으면 넣기. 편집 거리는 같지 않은 열의 개수를 가장 적게 만드는 정렬을 찾는 문제다.
+
+## 마지막 글자로 경우를 나눈다
+
+정렬의 마지막 열만 본다. `word1`의 앞 i글자를 `word2`의 앞 j글자로 바꾸는 최소 횟수를 `d(i, j)`라고 하자. 마지막 열은 네 가지 중 하나다.
+
+- 두 마지막 글자가 같고 그대로 둔다. 남은 일은 `d(i-1, j-1)`이다.
+- 두 마지막 글자를 바꾸기로 맞춘다. `d(i-1, j-1) + 1`이다.
+- `word1`의 마지막 글자를 지운다. `d(i-1, j) + 1`이다.
+- `word2`의 마지막 글자를 넣는다. `d(i, j-1) + 1`이다.
+
+이 넷이 모든 정렬의 마지막 열을 빠짐없이 덮는다. 그러니 `d(i, j)`는 이 넷 중 최솟값이다. 바닥은 `d(0, j) = j`(j번 넣기), `d(i, 0) = i`(i번 지우기)다.
+
+<ConceptDiagram
+  caption="칸 하나는 세 칸에서 온다. 화살표 이름이 그 걸음의 편집이다"
+  width={400}
+  height={230}
+  nodes={[
+    { id: "dg", label: "dp[i-1][j-1]", sub: "왼쪽 위", x: 100, y: 50, w: 130 },
+    { id: "up", label: "dp[i-1][j]", sub: "위", x: 300, y: 50, w: 130 },
+    { id: "lf", label: "dp[i][j-1]", sub: "왼쪽", x: 100, y: 180, w: 130 },
+    { id: "me", label: "dp[i][j]", sub: "지금 칸", x: 300, y: 180, w: 130 },
+  ]}
+  edges={[
+    { from: "dg", to: "me", label: "같으면 +0, 다르면 바꾸기 +1" },
+    { from: "up", to: "me", label: "지우기 +1" },
+    { from: "lf", to: "me", label: "넣기 +1" },
+  ]}
+/>
+
+한 가지 더 짚는다. 마지막 글자가 같을 때는 나머지 셋을 볼 필요 없이 `d(i-1, j-1)`이 답이다. 같은 글자를 그대로 두는 것이 지우거나 넣는 것보다 나쁠 수 없기 때문이다. 이웃한 칸의 값은 많아야 1 차이가 나서(`d(i-1, j) ≥ d(i-1, j-1) - 1`), 지우기 경로 `d(i-1, j) + 1`도 `d(i-1, j-1)`보다 작아질 수 없다. 넷의 최솟값을 그대로 계산해도 결과는 같다. 길이 8 이하 무작위 문자열 5000쌍에서 두 방식이 한 번도 다르지 않았다. 지름길 쪽이 비교를 덜 할 뿐이다.
+
+## 셋으로 갈라지는 재귀
+
+점화식을 그대로 옮긴다. 여기서는 앞에서부터 보는 방향으로, `go(i, j)`를 "word1의 i번째부터와 word2의 j번째부터의 편집 거리"로 둔다.
+
+```js
+function minDistance(word1, word2) {
+  function go(i, j) {
+    if (i === word1.length) return word2.length - j;   // word1이 끝났다: 남은 word2를 모두 넣는다
+    if (j === word2.length) return word1.length - i;   // word2가 끝났다: 남은 word1을 모두 지운다
+    if (word1[i] === word2[j]) return go(i + 1, j + 1); // 같으면 그대로 둔다
+    return 1 + Math.min(
+      go(i + 1, j),      // word1[i] 지우기
+      go(i, j + 1),      // word2[j] 넣기
+      go(i + 1, j + 1),  // word1[i]를 word2[j]로 바꾸기
+    );
+  }
+  return go(0, 0);
+}
+console.log(minDistance("sunday", "saturday")); // 3
+```
+
+바닥 두 줄이 중요하다. 한쪽이 끝났을 때 0을 돌려주면 남은 글자를 처리하는 비용이 빠진다. 앞의 LCS에서는 한쪽이 끝나면 0이 맞았지만, 여기서는 남은 글자 수가 비용이다.
+
+글자가 전혀 안 맞으면 매번 세 갈래다. 겹치는 글자가 없는 같은 길이 문자열로 호출 수를 세어 봤다.
+
+```text
+길이 7   호출 72,958번       3 ms
+길이 9   호출 2,193,844번    23 ms
+길이 11  호출 67,570,078번   725 ms
+```
+
+길이가 2 늘 때마다 30배쯤이다. 시간은 O(3^(m+n))로 본다. 길이 500은 상상할 수도 없다. 원인은 LCS 때와 같다. "지우고 넣기"와 "넣고 지우기"가 같은 `(i+1, j+1)`로 가고, 바꾸기도 같은 칸으로 간다. 한 칸에 세 갈래가 모이니 겹침이 LCS보다 더 심하다.
+
+## 칸마다 한 번만 계산한다
+
+상태 `(i, j)`는 `(m+1) × (n+1)`개뿐이다. 메모 표를 붙인다.
+
+```js
+function minDistance(word1, word2) {
+  const m = word1.length, n = word2.length;
+  const memo = Array.from({ length: m }, () => new Array(n).fill(-1)); // -1 = 아직 모름
+  function go(i, j) {
+    if (i === m) return n - j;
+    if (j === n) return m - i;
+    if (memo[i][j] !== -1) return memo[i][j];
+    const res = word1[i] === word2[j]
+      ? go(i + 1, j + 1)
+      : 1 + Math.min(go(i + 1, j), go(i, j + 1), go(i + 1, j + 1));
+    return (memo[i][j] = res);
+  }
+  return go(0, 0);
+}
+```
+
+편집 거리 0은 흔한 답이라(두 문자열의 뒷부분이 같을 때) "모름" 표시는 반드시 `-1`이어야 한다. 시간 O(mn), 공간 O(mn)에 재귀 깊이 O(m+n)이다. 깊이는 최대 1000쯤이라 JavaScript는 괜찮고, Python은 기본 재귀 한도 1000에 걸릴 수 있어 `sys.setrecursionlimit`을 올리거나 반복문으로 바꾼다.
+
+## 표를 채우고 거꾸로 읽는다
+
+`dp[i][j]`를 "word1의 앞 i글자를 word2의 앞 j글자로 바꾸는 최소 횟수"로 두고 왼쪽 위부터 채운다. 0번 줄은 0, 1, 2, …(넣기), 0번 칸도 0, 1, 2, …(지우기)다.
+
+```js
+function minDistance(word1, word2) {
+  const m = word1.length, n = word2.length;
+  // 0번 줄은 j번 넣기, 0번 칸은 i번 지우기
+  const dp = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = word1[i - 1] === word2[j - 1]
+        ? dp[i - 1][j - 1]                                          // 같으면 그대로
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]); // 지우기, 넣기, 바꾸기
+  return dp[m][n];
+}
+```
+
+sunday와 saturday의 표는 이렇다.
+
+```text
+    ε s a t u r d a y
+ε   0 1 2 3 4 5 6 7 8
+s   1 0 1 2 3 4 5 6 7
+u   2 1 1 2 2 3 4 5 6
+n   3 2 2 2 3 3 4 5 6
+d   4 3 3 3 3 4 3 4 5
+a   5 4 3 4 4 4 4 3 4
+y   6 5 4 4 5 5 5 4 3
+```
+
+몇 칸을 읽어 본다. s 줄 s 칸이 0인 건 "s"를 "s"로 바꾸는 데 아무것도 안 든다는 뜻이다. s 줄 t 칸 2는 "s"를 "sat"로 바꾸려면 a, t를 넣어 2번이라는 뜻이다. u 줄 u 칸은 2다. "su"를 "satu"로 만들려면 a와 t를 넣는다. d 줄 d 칸이 3으로 돌아오는 건 "sund"와 "saturd"의 거리가 3이라는 것이고, 그 뒤 a, y가 같아 3이 오른쪽 아래까지 이어진다.
+
+시간 O(mn), 공간 O(mn)이다.
+
+### 어떤 편집을 했는지 되짚기
+
+"몇 번"뿐 아니라 "무엇을"도 묻는 경우가 많다. 오른쪽 아래에서 출발해, 지금 값이 어느 칸에서 왔는지 따라간다.
+
+```js
+function editScript(word1, word2) {
+  const m = word1.length, n = word2.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = word1[i - 1] === word2[j - 1] ? dp[i - 1][j - 1] : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+  let i = m, j = n;
+  const out = [];
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && word1[i - 1] === word2[j - 1]) { out.push(`keep ${word1[i - 1]}`); i--; j--; }
+    else if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + 1) { out.push(`replace ${word1[i - 1]}->${word2[j - 1]}`); i--; j--; }
+    else if (i > 0 && dp[i][j] === dp[i - 1][j] + 1) { out.push(`delete ${word1[i - 1]}`); i--; }
+    else { out.push(`insert ${word2[j - 1]}`); j--; }
+  }
+  return out.reverse();
+}
+console.log(editScript("sunday", "saturday").join(", "));
+```
+
+```text
+keep s, insert a, insert t, keep u, replace n->r, keep d, keep a, keep y
+```
+
+손으로 맞춘 정렬과 같다. 반복 조건이 `i > 0 && j > 0`이 아니라 `i > 0 || j > 0`인 것에 주의한다. 한쪽이 먼저 0에 닿아도 다른 쪽에 남은 글자를 지우거나 넣어야 편집이 완성된다. 최솟값이 여러 칸에서 같이 나오면 확인하는 순서에 따라 다른 (하지만 똑같이 짧은) 편집이 나온다. `git diff`가 바뀐 줄을 보여 주는 것도 같은 되짚기다. 다만 diff는 바꾸기 없이 넣기와 지우기만 쓰고, 표를 다 채우는 대신 Myers 알고리즘으로 차이가 작을 때 빠르게 찾는다.
+
+## 배열 하나로 줄이기
+
+칸 하나가 위, 왼쪽, 왼쪽 위만 보니 LCS처럼 배열 하나와 `diag` 변수로 줄인다. 편집 거리에서 다른 점은 0번 칸이다. LCS는 0번 칸이 늘 0이었는데 여기서는 i번째 줄의 0번 칸이 i다. 줄을 시작할 때 `diag`에 윗줄 0번 칸을 옮겨 담고, `dp[0]`을 i로 바꿔야 한다.
+
+```js
+function minDistance(word1, word2) {
+  if (word1.length < word2.length) [word1, word2] = [word2, word1]; // 대칭이라 바꿔도 된다
+  const n = word2.length;
+  const dp = Array.from({ length: n + 1 }, (_, j) => j);   // 0번 줄: j번 넣기
+  for (let i = 1; i <= word1.length; i++) {
+    let diag = dp[0];                 // 왼쪽 위 = 윗줄의 0번 칸
+    dp[0] = i;                        // 이번 줄 0번 칸: i번 지우기
+    for (let j = 1; j <= n; j++) {
+      const up = dp[j];               // 덮어쓰기 전 = 위
+      dp[j] = word1[i - 1] === word2[j - 1]
+        ? diag                        // 같으면 왼쪽 위 그대로
+        : 1 + Math.min(up, dp[j - 1], diag); // 지우기(위), 넣기(왼쪽), 바꾸기(왼쪽 위)
+      diag = up;
+    }
+  }
+  return dp[n];
+}
+```
+
+아래 그림은 sunday를 한 글자씩 읽으며 saturday 쪽 배열을 덮어쓰는 과정이다. 초록 칸은 글자가 같아 왼쪽 위 값을 그대로 가져온 자리다.
+
+<AlgoTrace
+  caption="sunday → saturday. 줄마다 배열 하나를 덮어쓴다"
+  memoryLabel="dp 배열 (ε s a t u r d a y)"
+  cells={["ε", "s", "a", "t", "u", "r", "d", "a", "y"]}
+  steps={[
+    { pointer: 0, memory: ["0", "1", "2", "3", "4", "5", "6", "7", "8"], caption: "빈 문자열에서 앞 j글자를 만들려면 j번 넣는다." },
+    { pointer: 1, found: [1], memory: ["1", "0", "1", "2", "3", "4", "5", "6", "7"], caption: "s 줄. 0번 칸은 1(지우기). s가 같아 왼쪽 위 0을 가져온다." },
+    { pointer: 4, found: [4], memory: ["2", "1", "1", "2", "2", "3", "4", "5", "6"], caption: "u 줄. u가 같은 칸은 왼쪽 위 2. su → satu는 넣기 둘이다." },
+    { pointer: 5, memory: ["3", "2", "2", "2", "3", "3", "4", "5", "6"], caption: "n 줄. 같은 글자가 없다. r 칸은 왼쪽 위 2에 바꾸기 1을 더해 3이다." },
+    { pointer: 6, found: [6], memory: ["4", "3", "3", "3", "3", "4", "3", "4", "5"], caption: "d 줄. d가 같아 왼쪽 위 3을 가져온다." },
+    { pointer: 7, found: [2, 7], memory: ["5", "4", "3", "4", "4", "4", "4", "3", "4"], caption: "a 줄. a가 두 번 맞는다. 뒤쪽 a 칸이 3이다." },
+    { pointer: 8, found: [8], memory: ["6", "5", "4", "4", "5", "5", "5", "4", "3"], caption: "y 줄. y가 같아 3. 마지막 칸 3이 답이다." },
+  ]}
+/>
+
+시간 O(mn), 공간 O(min(m, n))이다. 앞 절처럼 편집 순서를 되짚을 수는 없다.
+
+`dp[0] = i`를 빼먹으면 0번 칸이 줄마다 0으로 남는다. `("abc", "x")`의 답은 3인데 1이 나온다. 0번 칸이 "지금까지 지운 횟수"를 기억하지 못하니 word1의 앞 글자를 공짜로 지운 셈이 된다. sunday와 saturday에서는 우연히 3이 맞게 나와서 이 예시만으로는 못 잡는다.
+
+## 거리가 k 이하인지만 알면 될 때
+
+맞춤법 검사기는 사전의 단어마다 정확한 거리가 필요하지 않다. "거리가 2 이하인가"만 알면 후보에 넣을지 정할 수 있다. 이때는 표 전체를 채울 필요가 없다.
+
+거리가 k 이하인 정렬은 표에서 대각선으로부터 k칸 넘게 벗어날 수 없다. `|i - j|`가 k를 넘는 칸에 가려면 넣기나 지우기만 k번 넘게 해야 하기 때문이다. 그래서 `|i - j| ≤ k`인 띠 안의 칸만 계산하고, 줄 하나가 통째로 k를 넘으면 바로 멈춘다(값은 아래로 내려가며 줄어들지 않는다).
+
+```js
+// 거리가 k 이하면 그 거리를, 넘으면 k + 1을 돌려준다
+function editDistanceWithin(a, b, k) {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > k) return k + 1;           // 길이 차이만으로 이미 k를 넘는다
+  const INF = k + 1;
+  let prev = new Array(n + 1).fill(INF);
+  for (let j = 0; j <= Math.min(n, k); j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = new Array(n + 1).fill(INF);
+    if (i <= k) cur[0] = i;
+    const lo = Math.max(1, i - k), hi = Math.min(n, i + k);   // 띠 안의 칸만
+    let rowMin = cur[0];
+    for (let j = lo; j <= hi; j++) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j], cur[j - 1], prev[j - 1]);
+      if (cur[j] > INF) cur[j] = INF;
+      rowMin = Math.min(rowMin, cur[j]);
+    }
+    if (rowMin > k) return k + 1;                   // 이 줄 전체가 k를 넘으면 더 볼 필요 없다
+    prev = cur;
+  }
+  return Math.min(prev[n], k + 1);
+}
+console.log(editDistanceWithin("sunday", "saturday", 3), editDistanceWithin("sunday", "saturday", 2)); // 3 3
+```
+
+k = 3이면 정확한 거리 3, k = 2이면 "2를 넘는다"는 뜻의 3이 나온다. 길이 8 이하 무작위 문자열과 k 2만 쌍으로 표 전체 결과와 비교했고 모두 같았다.
+
+시간은 O(k · min(m, n))이다. 단어 길이가 10이고 k가 2면 칸 100개 대신 50개 남짓만 본다. 띠 안에서도 이 코드는 새 줄 배열을 길이 n + 1로 만들어서 공간은 O(n)이지만, 띠 너비만큼만 담도록 인덱스를 옮기면 O(k)로도 된다. PostgreSQL의 `levenshtein_less_equal`, Lucene의 퍼지 검색이 기대는 생각이 이것이다. Lucene은 한발 더 나가 "거리가 k 이하인 모든 문자열"을 받아들이는 오토마톤을 만들어 색인 위를 훑는다.
+
+면접에서 이 풀이까지 갈 일은 드물지만, "단어 사전 10만 개에서 오타 후보를 찾으려면?" 같은 설계 질문에서 쓸 수 있다.
+
+## Python의 동시 대입과 Java의 Math.min
+
+```python
+class Solution:
+    def minDistance(self, word1: str, word2: str) -> int:
+        if len(word1) < len(word2):
+            word1, word2 = word2, word1           # word2를 짧은 쪽으로
+        n = len(word2)
+        dp = list(range(n + 1))                  # 빈 문자열 → word2의 앞 j글자: j번 넣기
+        for i, ch in enumerate(word1, 1):
+            diag, dp[0] = dp[0], i               # 왼쪽 위를 챙기고, 0번 칸은 i번 지우기
+            for j in range(1, n + 1):
+                up = dp[j]
+                if ch == word2[j - 1]:
+                    dp[j] = diag                 # 같으면 비용 없이 대각선
+                else:
+                    dp[j] = 1 + min(up, dp[j - 1], diag)  # 지우기, 넣기, 바꾸기
+                diag = up
+        return dp[n]
+
+s = Solution()
+print(s.minDistance("sunday", "saturday"), s.minDistance("", "abc"), s.minDistance("abc", "x"))
+```
+
+```text
+3 3 3
+```
+
+`diag, dp[0] = dp[0], i`는 오른쪽을 먼저 다 계산하고 왼쪽에 넣으니, `diag`에는 바뀌기 전의 `dp[0]`이 들어간다. 두 줄로 나눠 쓸 때는 순서를 꼭 지킨다. `enumerate(word1, 1)`은 1부터 번호를 매겨 i가 곧 "앞 i글자"가 된다.
+
+```java
+class Solution {
+    public int minDistance(String word1, String word2) {
+        if (word1.length() < word2.length()) { String t = word1; word1 = word2; word2 = t; }
+        char[] a = word1.toCharArray(), b = word2.toCharArray();
+        int n = b.length;
+        int[] dp = new int[n + 1];
+        for (int j = 0; j <= n; j++) dp[j] = j;     // 빈 문자열에서 j번 넣기
+        for (int i = 1; i <= a.length; i++) {
+            int diag = dp[0];
+            dp[0] = i;                               // i번 지우기
+            for (int j = 1; j <= n; j++) {
+                int up = dp[j];
+                dp[j] = a[i - 1] == b[j - 1]
+                    ? diag
+                    : 1 + Math.min(up, Math.min(dp[j - 1], diag)); // Math.min은 인자 두 개
+                diag = up;
+            }
+        }
+        return dp[n];
+    }
+
+    public static void main(String[] args) {
+        Solution s = new Solution();
+        System.out.println(s.minDistance("sunday", "saturday") + " " + s.minDistance("", "abc") + " " + s.minDistance("abc", "x"));
+    }
+}
+```
+
+```text
+3 3 3
+```
+
+Java의 `Math.min`은 인자를 두 개만 받아서 셋 중 최솟값은 중첩해서 쓴다. 빈 문자열이 들어오면 `n = 0`이라 안쪽 반복이 돌지 않고 `dp[0]`에 지운 횟수가 남는다. 답은 많아야 500이라 `int`면 충분하다.
+
+## 거리를 재는 다섯 가지 방법
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 재귀 | O(3^(m+n)) | O(m+n) | 점화식을 말로 정리할 때만 |
+| 메모이제이션 | O(mn) | O(mn) | 재귀로 생각하는 게 편할 때 |
+| 2차원 표 | O(mn) | O(mn) | 편집 순서까지 보여 줘야 할 때 |
+| 배열 하나 | O(mn) | O(min(m, n)) | 거리만 필요할 때의 기본 답 |
+| 띠 DP (k 이하 판정) | O(k · min(m, n)) | O(n), 줄이면 O(k) | 정확한 값 대신 "k 이하인가"만 필요할 때 |
+
+## 자주 나오는 버그
+
+### 바닥을 0으로 채우는 경우
+
+LCS 표를 쓰던 손버릇으로 0번 줄과 칸을 0으로 두면 빈 문자열 쪽 비용이 사라진다.
+
+```js
+const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0)); // 틀림
+// ("abc", "") → 0 (답 3), ("ab", "xab") → 0 (답 1)
+```
+
+`("ab", "xab")`은 x를 넣어야 하는데 0이 나온다. 0번 칸이 0이면 word2 앞쪽의 x를 공짜로 건너뛴 셈이다. 바닥 값은 "빈 문자열과의 거리 = 길이"라는 뜻을 말로 정해 두면 실수하지 않는다.
+
+### 한쪽이 끝났을 때 0을 돌려주는 경우
+
+재귀에서 `if (i === m || j === n) return 0;`으로 쓰면 같은 버그다. 남은 글자 수를 돌려준다.
+
+### LCS로 계산하는 경우
+
+"편집 거리 = m + n - 2 × LCS"는 바꾸기를 허용하지 않을 때만 맞다. sunday와 saturday의 LCS는 5(s, u, d, a, y)라 이 식은 4를 주는데 답은 3이다. n을 지우고 r을 넣는 두 번을 바꾸기 한 번으로 줄일 수 있기 때문이다. 바꾸기의 비용을 2로 두면 정확히 이 식과 같아진다. 같은 표에서 바꾸기 비용을 2로 바꿔 돌려 보면 4가 나온다.
+
+### 최솟값에 1을 더하는 위치
+
+`Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]) + 1`을 글자가 같을 때도 쓰면 같은 글자마다 1이 더해진다. 같으면 왼쪽 위 그대로, 다르면 셋의 최솟값 + 1이다. 굳이 한 식으로 쓰려면 `min(위 + 1, 왼쪽 + 1, 왼쪽 위 + (같으면 0, 다르면 1))`이다.
+
+### 한 줄 DP의 0번 칸
+
+앞에서 본 `dp[0] = i` 누락이다. `("abc", "x")`에서 1이 나온다. 공간 최적화를 하면 표 버전과 무작위 입력으로 비교해 보는 습관이 이런 실수를 잡는다.
+
+## 배열 하나로 직접 풀어 보기
+
+아래 칸에 한 줄 DP를 써 보자. 빈 문자열, 같은 문자열, 한쪽이 한 글자인 경우, 500글자짜리 입력을 넣었다.
+
+<CodePlayground
+  caption="Edit Distance"
+  functionName="minDistance"
+  initialCode={`function minDistance(word1, word2) {
+  // 넣기, 지우기, 바꾸기로 word1을 word2로 만드는 최소 횟수
+  return 0;
+}`}
+  solution={`function minDistance(word1, word2) {
+  if (word1.length < word2.length) [word1, word2] = [word2, word1];
+  const n = word2.length;
+  const dp = Array.from({ length: n + 1 }, (_, j) => j); // 0번 줄: j번 넣기
+  for (let i = 1; i <= word1.length; i++) {
+    let diag = dp[0]; // 왼쪽 위
+    dp[0] = i; // i번 지우기
+    for (let j = 1; j <= n; j++) {
+      const up = dp[j];
+      dp[j] = word1[i - 1] === word2[j - 1] ? diag : 1 + Math.min(up, dp[j - 1], diag);
+      diag = up;
+    }
+  }
+  return dp[n];
+}`}
+  tests={[
+    { args: ["sunday", "saturday"], expected: 3, label: "sunday → saturday" },
+    { args: ["", ""], expected: 0, label: "둘 다 빈 문자열" },
+    { args: ["", "abc"], expected: 3, label: "빈 문자열에서 만들기" },
+    { args: ["abc", ""], expected: 3, label: "모두 지우기" },
+    { args: ["abc", "abc"], expected: 0, label: "같은 문자열" },
+    { args: ["abc", "x"], expected: 3, label: "한 글자로" },
+    { args: ["ab", "xab"], expected: 1, label: "앞에 하나 넣기" },
+    { args: ["recieve", "receive"], expected: 2, label: "두 글자 순서 바뀜" },
+    { args: ["abcdefghij".repeat(50), "jihgfedcba".repeat(50)], expected: 402, label: "500글자 두 개" },
+  ]}
+/>
+
+## 연산이 바뀌면 표도 바뀐다
+
+### 이웃한 두 글자 맞바꾸기도 1번으로 치면
+
+"recieve"와 "receive"는 i와 e의 자리만 바뀌었는데 레벤슈타인 거리는 2다. 실제 오타는 이런 경우가 많아서, 이웃한 두 글자 맞바꾸기를 연산 하나로 치는 변형을 쓴다. 표에 칸 하나를 더 보면 된다.
+
+```js
+function osaDistance(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, (_, i) =>
+    Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        dp[i][j] = Math.min(dp[i][j], dp[i - 2][j - 2] + 1);        // 이웃한 두 글자 맞바꾸기
+    }
+  return dp[m][n];
+}
+console.log(osaDistance("recieve", "receive")); // 1
+```
+
+이 코드는 정확히는 "제한된 다메라우-레벤슈타인"(OSA)이다. 맞바꾼 글자를 다시 편집하지 않는다는 제약이 있어서 `("ca", "abc")`가 3으로 나온다. 제약 없는 다메라우-레벤슈타인은 c, a를 맞바꾼 뒤 b를 끼워 2로 계산한다. 면접에서 이 차이까지 물을 일은 드물지만, 검색 엔진의 퍼지 매칭 설정에서 "transpositions" 옵션이 바로 이 연산이다.
+
+### 연산마다 비용이 다르면
+
+넣기, 지우기, 바꾸기의 비용을 따로 받으면 점화식의 +1이 각 비용으로 바뀌고, 0번 줄과 칸도 `j × 넣기 비용`, `i × 지우기 비용`이 된다. 바꾸기 비용을 2로 두면 sunday와 saturday가 4가 되어 앞의 LCS 식과 일치한다. 자판에서 가까운 글자끼리는 바꾸기 비용을 낮게 주는 식으로 맞춤법 검사기를 다듬기도 한다.
+
+### 정확히 한 번 차이인지
+
+LeetCode 161. One Edit Distance(프리미엄 문제)는 두 문자열의 편집 거리가 정확히 1인지 묻는다. 표가 필요 없다. 처음으로 다른 자리를 찾고, 길이가 같으면 그 뒤가 같은지(바꾸기 한 번), 길이가 1 차이면 긴 쪽에서 한 글자를 건너뛴 뒤가 같은지(넣기나 지우기 한 번) 본다. O(n)이다.
+
+```js
+function isOneEditDistance(s, t) {
+  if (s.length > t.length) [s, t] = [t, s];
+  if (t.length - s.length > 1) return false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== t[i]) {
+      return s.length === t.length
+        ? s.slice(i + 1) === t.slice(i + 1)   // 바꾸기 한 번
+        : s.slice(i) === t.slice(i + 1);      // t에서 한 글자 지우기
+    }
+  }
+  return t.length - s.length === 1;          // 앞이 모두 같으면 t 끝 글자 하나 차이여야 한다
+}
+console.log(isOneEditDistance("cat", "cut"), isOneEditDistance("cat", "cast"), isOneEditDistance("cat", "cat")); // true true false
+```
+
+마지막 줄이 함정이다. 같은 문자열은 거리 0이라 `false`여야 한다.
+
+### 같은 틀의 다른 문제
+
+넣기·지우기만 있으면 [Longest Common Subsequence](/posts/leetcode-longest-common-subsequence)로 바뀌고, 부분 수열로 몇 번 나오는지 세면 [Distinct Subsequences](/posts/leetcode-distinct-subsequences), 두 문자열을 엮어 세 번째를 만들 수 있는지 보면 [Interleaving String](/posts/leetcode-interleaving-string)이다. 두 문자열을 가로세로에 놓고 "마지막 글자를 어떻게 처리했나"로 나누는 생각이 모두 같다. 글자 대신 패턴을 맞추는 [Regular Expression Matching](/posts/leetcode-regular-expression-matching)도 같은 표에서 `*`의 처리만 더해진다.
+
+## 면접에서 나올 만한 질문
+
+### 점화식의 세 칸이 각각 무엇을 뜻하나요?
+
+`dp[i][j]`가 word1의 앞 i글자를 word2의 앞 j글자로 바꾸는 최소 횟수일 때, 위 칸 `dp[i-1][j]`에서 오면 word1의 i번째 글자를 지운 것이고, 왼쪽 칸 `dp[i][j-1]`에서 오면 word2의 j번째 글자를 넣은 것이다. 왼쪽 위 `dp[i-1][j-1]`에서 오면 두 마지막 글자를 맞춘 것으로, 같으면 비용 0, 다르면 바꾸기 1이다. 정렬의 마지막 열이 이 넷 중 하나라서 모든 경우를 덮는다.
+
+### 글자가 같으면 왜 왼쪽 위만 보나요?
+
+같은 글자를 그대로 두는 게 다른 선택보다 나쁠 수 없기 때문이다. 이웃한 칸의 값은 많아야 1 차이라서 지우기나 넣기로 돌아가는 경로는 왼쪽 위 값보다 작아질 수 없다. 넷의 최솟값을 그대로 계산해도 결과는 같고, 지름길은 비교를 줄일 뿐이다.
+
+### 공간을 줄이면 무엇을 조심하나요?
+
+배열 하나와 왼쪽 위를 담는 `diag`로 O(min(m, n))이 된다. LCS와 달리 0번 칸이 줄마다 i로 바뀌므로, 줄 시작에서 윗줄 0번 칸을 `diag`에 옮기고 `dp[0] = i`로 갱신해야 한다. 이걸 빼면 `("abc", "x")`에서 1이 나온다. 표가 없으니 편집 순서는 되짚을 수 없다.
+
+### 실제로 어떤 편집을 했는지 알려면요?
+
+표 전체를 채운 뒤 오른쪽 아래에서 거꾸로 따라간다. 글자가 같으면 왼쪽 위로, 값이 왼쪽 위 + 1이면 바꾸기, 위 + 1이면 지우기, 왼쪽 + 1이면 넣기다. 한쪽 인덱스가 먼저 0이 돼도 다른 쪽이 0이 될 때까지 계속해야 남은 넣기나 지우기가 빠지지 않는다.
+
+### 사전 10만 단어에서 오타 후보를 빨리 찾으려면요?
+
+단어마다 O(mn) 표를 다 채우지 않는다. 거리 k 이하만 필요하면 대각선 띠 안만 계산하고 줄 최솟값이 k를 넘으면 바로 멈추는 띠 DP로 O(k · 길이)에 끝낸다. 길이 차이가 k를 넘는 단어는 계산 없이 버린다. 더 크게는 trigram 인덱스로 후보를 먼저 줄이거나, Lucene처럼 거리 k 오토마톤으로 색인을 훑는다.
+
+### LCS와는 어떤 관계인가요?
+
+같은 표, 같은 채우는 순서이고 max가 min으로, "버리기"가 "비용 1"로 바뀐 것이다. 바꾸기를 허용하지 않으면 편집 거리는 정확히 `m + n - 2 × LCS`다. 바꾸기를 허용하면 지우기 + 넣기 두 번을 한 번으로 줄일 수 있어 이 식보다 작아질 수 있고, sunday와 saturday가 그 예다(식은 4, 답은 3).
+
+### 이웃한 글자 맞바꾸기도 한 번으로 치려면요?
+
+`dp[i-2][j-2] + 1`을 후보에 더하는 칸 하나가 늘어난다. 두 글자가 서로 엇갈려 같을 때만 쓴다. 이렇게 만든 OSA 거리는 맞바꾼 글자를 다시 편집하지 않는다는 제약이 있어 제약 없는 다메라우-레벤슈타인과 값이 다를 수 있다. "recieve"와 "receive"가 레벤슈타인으로 2, OSA로 1이다.

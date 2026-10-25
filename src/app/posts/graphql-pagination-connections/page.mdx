@@ -1,0 +1,408 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("graphql-pagination-connections");
+
+<EasyIntro>
+  긴 목록을 조금씩 끊어서 받을 때, "앞에서 몇 개 건너뛰고 3개 줘"라고 부탁하면 문제가 생긴다. 그사이에 맨 앞에 새 글이 하나 끼어들면 줄 전체가 한 칸씩 밀려서, 이미 본 글이 다음 묶음에 또 나온다.
+
+  그래서 "몇 개 건너뛰기" 대신 책갈피를 쓴다. 서버가 묶음을 줄 때 마지막 글 자리에 책갈피를 끼워 함께 주고, 다음에는 "이 책갈피 다음부터 3개 줘"라고 부탁한다. 앞에 글이 끼어들어도 책갈피 자리는 그대로라서 같은 글이 두 번 나오지 않는다.
+
+  책갈피에는 무엇이 적혀 있는지 받는 쪽이 몰라도 된다. 서버만 읽을 수 있게 알쏭달쏭한 글자로 바꿔 주면, 나중에 서버가 책갈피 만드는 방법을 바꿔도 받는 쪽은 아무것도 고칠 필요가 없다. 묶음과 함께 "뒤에 더 있다" 같은 안내도 같이 받아서, 화면은 언제 멈출지 안다.
+</EasyIntro>
+
+피드 화면에 무한 스크롤을 붙였다. 스크롤이 바닥에 닿으면 다음 3개를 더 받는다. 처음 만든 스키마는 이랬다.
+
+```graphql
+type Query { postsOffset(offset: Int = 0, limit: Int = 3): [Post!]! }
+```
+
+첫 페이지를 받고, 사용자가 글을 읽는 사이에 새 글 9번이 올라왔다. 그리고 스크롤이 바닥에 닿아 두 번째 페이지를 받았다.
+
+```text
+{ postsOffset(offset: 0, limit: 3) { id } }
+{"data":{"postsOffset":[{"id":"8"},{"id":"7"},{"id":"6"}]}}
+
+(새 글 9번이 맨 앞에 들어온다)
+
+{ postsOffset(offset: 3, limit: 3) { id } }
+{"data":{"postsOffset":[{"id":"6"},{"id":"5"},{"id":"4"}]}}
+```
+
+6번이 두 번 나왔다. 새 글이 맨 앞에 끼면서 목록 전체가 한 칸씩 밀렸고, "앞에서 3개 건너뛰기"가 가리키는 자리가 바뀌었다. 반대로 앞쪽 글이 지워지면 글 하나를 영영 못 보고 건너뛴다. 피드처럼 앞에 계속 무언가 쌓이는 목록에서 offset은 이렇게 어긋난다.
+
+SQL에서 이 문제와 키셋(커서) 페이지네이션으로 푸는 법은 [API 페이지네이션과 정렬](/posts/api-pagination-sorting)에서 PostgreSQL로 자세히 다뤘다. 이 글은 GraphQL 쪽, 즉 그 커서를 스키마에 어떻게 담는지를 본다. GraphQL 생태계에는 이걸 위한 사실상의 표준이 있다. Relay가 정한 Cursor Connections 명세다. 데모는 Node.js 22와 graphql-js 16.14로 돌렸다. 스키마 설계 전반은 [GraphQL 스키마 설계](/posts/graphql-schema-type-system)에 있다.
+
+## 목록 대신 커넥션을 돌려준다
+
+커넥션은 목록 필드를 한 겹 감싼 타입이다.
+
+```graphql
+type Query {
+  posts(first: Int, after: String, last: Int, before: String): PostConnection!
+}
+
+type PostConnection {
+  edges: [PostEdge!]!
+  pageInfo: PageInfo!
+}
+
+type PostEdge {
+  cursor: String!
+  node: Post!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+```
+
+이름 규칙이 명세에 정해져 있다. 타입 이름이 `Connection`으로 끝나고, `edges`와 `pageInfo` 필드를 가진다. 엣지(edge) 타입은 `cursor`와 `node`를 가진다. `PageInfo`는 네 필드를 가진다. 이 규칙을 지키면 Relay, Apollo Client, urql 같은 클라이언트가 이름만 보고 페이지를 이어 붙이는 코드를 대신 해 준다.
+
+같은 데이터를 커넥션으로 받으면 이렇게 온다.
+
+```graphql
+{ posts(first: 3) { edges { cursor node { id } } pageInfo { hasNextPage hasPreviousPage endCursor } } }
+```
+
+```text
+{"data":{"posts":{"edges":[{"cursor":"UG9zdDo4","node":{"id":"8"}},{"cursor":"UG9zdDo3","node":{"id":"7"}},{"cursor":"UG9zdDo2","node":{"id":"6"}}],"pageInfo":{"hasNextPage":true,"hasPreviousPage":false,"endCursor":"UG9zdDo2"}}}}
+```
+
+응답의 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="커넥션 응답의 조각"
+  base="posts"
+  separator=" { "
+  joiner=" , "
+  params={[
+    { key: "edges", display: "edges: [ { cursor, node } … ]", title: "엣지 목록", description: "페이지에 담긴 항목들이다. 항목마다 node(실제 글)와 cursor(그 자리의 책갈피)를 함께 준다. 목록을 한 겹 더 감싼 이유는 cursor처럼 항목 자체가 아니라 '목록 안의 자리'에 붙는 값을 둘 곳이 필요해서다.", code: "{\"cursor\":\"UG9zdDo4\",\"node\":{\"id\":\"8\"}}", required: true },
+    { key: "cursor", display: "cursor: \"UG9zdDo2\"", title: "불투명한 커서", description: "클라이언트는 이 문자열을 해석하지 않고 다음 요청의 after에 그대로 돌려준다. 데모는 Post:6을 base64로 감쌌다. 서버가 나중에 안에 담는 값을 바꿔도 클라이언트 코드는 그대로다.", code: "atob(\"UG9zdDo2\") === \"Post:6\"" },
+    { key: "node", display: "node: Post", title: "실제 항목", description: "엣지가 가리키는 객체다. 보통 Node 인터페이스를 구현해서 id 하나로 다시 조회할 수도 있다." },
+    { key: "pageInfo", display: "pageInfo: { hasNextPage, endCursor … }", title: "다음 요청을 위한 정보", description: "더 있는지(hasNextPage), 다음 요청에 넣을 커서(endCursor)가 여기 있다. 무한 스크롤은 hasNextPage가 false가 되면 멈춘다.", code: "{\"hasNextPage\":true,\"hasPreviousPage\":false,\"endCursor\":\"UG9zdDo2\"}", required: true },
+  ]}
+/>
+
+엣지 한 겹이 번거로워 보일 수 있다. `nodes: [Post!]!`를 바로 주면 되지 않을까. 엣지가 있는 이유는 "목록 안의 이 자리"에 붙는 정보 때문이다. 커서가 대표적이고, 관계 자체의 속성도 있다. 친구 목록의 엣지에 `friendsSince`(언제 친구가 됐나)를 두거나, 검색 결과 엣지에 `score`(얼마나 맞는가)나 `highlight`를 두는 식이다. 이건 회원 객체의 속성이 아니라 "나와 이 회원의 관계"나 "이 검색과 이 글의 관계"의 속성이다.
+
+그래서 실무에서는 둘 다 두는 경우가 많다. GitHub GraphQL API의 커넥션은 `edges`와 함께 `nodes` 단축 필드를 둔다. 커서가 필요 없는 화면은 `nodes`로 짧게 받고, 페이지를 넘기는 화면은 `pageInfo.endCursor`만 쓴다.
+
+## 인자 네 개와 pageInfo
+
+명세는 앞으로 넘기는 인자 `first`·`after`와 뒤로 넘기는 인자 `last`·`before`를 정한다. 서버가 하는 일은 두 단계다.
+
+먼저 커서로 범위를 자른다. `after`가 있으면 그 커서의 엣지와 그 앞을 모두 버리고, `before`가 있으면 그 커서의 엣지와 그 뒤를 모두 버린다. 다음으로 개수로 자른다. `first`가 있으면 앞에서부터 그 개수만, `last`가 있으면 뒤에서부터 그 개수만 남긴다.
+
+`hasNextPage`와 `hasPreviousPage`에는 비대칭이 있다. 명세는 `first`로 앞으로 넘길 때 `hasNextPage`를 정확히 계산하라고 한다. 자르기 전 범위가 `first`보다 길었으면 참이다. 반대 방향인 `hasPreviousPage`는 앞으로 넘길 때 "효율적으로 알 수 있으면 참을, 아니면 거짓을 돌려줘도 된다"고 한다. 뒤로 넘길 때는 반대다. 그래서 `first`/`after`로 받은 페이지의 `hasPreviousPage: false`를 "앞에 아무것도 없다"로 믿으면 안 되는 서버도 있다. 데모 서버는 메모리 데이터라 양쪽을 다 계산했다.
+
+이제 같은 상황을 커서로 다시 해 보자. 첫 페이지의 `endCursor`는 `UG9zdDo2`(글 6번 자리)였다. 그사이에 9번이 맨 앞에 들어왔다.
+
+```text
+{ posts(first: 3, after: "UG9zdDo2") { edges { node { id } } pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } }
+{"data":{"posts":{"edges":[{"node":{"id":"5"}},{"node":{"id":"4"}},{"node":{"id":"3"}}],"pageInfo":{"hasNextPage":true,"hasPreviousPage":true,"startCursor":"UG9zdDo1","endCursor":"UG9zdDoz"}}}}
+
+{ posts(first: 3, after: "UG9zdDoz") { edges { node { id } } pageInfo { hasNextPage endCursor } } }
+{"data":{"posts":{"edges":[{"node":{"id":"2"}},{"node":{"id":"1"}}],"pageInfo":{"hasNextPage":false,"endCursor":"UG9zdDox"}}}}
+```
+
+6번 다음인 5번부터 이어졌다. 새 글이 앞에 들어와도 "6번 다음"이라는 기준은 바뀌지 않는다. 마지막 페이지는 2개만 오고 `hasNextPage: false`라 스크롤이 멈춘다. 9번은 이 흐름에서 보이지 않는다. 피드 위쪽의 새 글은 "새 글 1개" 배너를 띄워 따로 받는 것이 보통이다. 아래 그림에서 offset과 커서가 같은 상황을 어떻게 다르게 겪는지 단계별로 보자.
+
+<AlgoTrace
+  caption="새 글이 맨 앞에 들어왔을 때 offset과 커서"
+  cells={["9 (새 글)", "8", "7", "6", "5", "4", "3"]}
+  memoryLabel="두 번째 페이지"
+  steps={[
+    { pointer: 1, found: [1, 2, 3], memory: [], caption: "첫 페이지로 8, 7, 6을 받았다. 이때 9번은 아직 없다. 커서는 6번 자리를 기억한다." },
+    { pointer: 0, found: [1, 2, 3], memory: [], caption: "사용자가 읽는 사이에 9번이 맨 앞에 들어온다. 목록 전체가 한 칸씩 밀린다." },
+    { pointer: 3, found: [3, 4, 5], memory: ["offset: 6, 5, 4"], caption: "offset 3은 '앞에서 셋을 건너뛰라'는 뜻이다. 9, 8, 7을 건너뛰고 6부터 준다. 6번이 또 나온다." },
+    { pointer: 4, found: [4, 5, 6], memory: ["offset: 6, 5, 4", "after 6: 5, 4, 3"], caption: "after 커서는 '6번 다음'이라는 뜻이다. 앞에 무엇이 끼든 5번부터 이어진다." },
+  ]}
+/>
+
+## 다음 페이지를 이어 받는 흐름
+
+무한 스크롤 한 바퀴를 클라이언트, GraphQL 서버, DB 사이에서 따라가 보자. 서버 안쪽 SQL은 정렬 키를 비교하는 키셋 조건이다.
+
+<SequenceDiagram
+  caption="무한 스크롤에서 커넥션을 이어 받는 흐름"
+  actors={[
+    { id: "ui", label: "피드 화면" },
+    { id: "gql", label: "GraphQL 서버" },
+    { id: "db", label: "DB" },
+  ]}
+  steps={[
+    { from: "ui", to: "gql", label: "posts(first: 3)", title: "첫 페이지를 받는다", detail: "after 없이 first만 보낸다. 화면이 실제로 쓸 개수보다 크게 잡을 이유는 없다.", payload: "query Feed($after: String) {\n  posts(first: 3, after: $after) {\n    edges { node { id title } }\n    pageInfo { hasNextPage endCursor }\n  }\n}" },
+    { from: "gql", to: "db", label: "LIMIT 4", title: "하나를 더 묻는다", detail: "hasNextPage를 알려고 first보다 하나 더(4개) 가져온다. 4개가 오면 뒤에 더 있다는 뜻이고, 응답에는 3개만 싣는다.", payload: "SELECT id, title FROM posts\nORDER BY id DESC LIMIT 4" },
+    { from: "gql", to: "ui", label: "edges + endCursor", title: "커서와 함께 돌려준다", detail: "마지막 항목의 커서가 endCursor다. 클라이언트는 이 값을 해석하지 않고 보관만 한다.", payload: "\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"UG9zdDo2\"}" },
+    { from: "ui", to: "gql", label: "after: endCursor", title: "바닥에 닿으면 이어서 묻는다", detail: "같은 문서에 변수만 바꿔 보낸다. 문서가 같으니 서버의 검증 캐시도 맞는다." },
+    { from: "gql", to: "db", label: "WHERE id < 6", title: "커서를 풀어 조건으로 바꾼다", detail: "커서 안의 정렬 키로 범위를 자른다. 인덱스를 타므로 몇 페이지째든 비용이 같다.", payload: "SELECT id, title FROM posts\nWHERE id < 6 ORDER BY id DESC LIMIT 4" },
+    { from: "gql", to: "ui", label: "hasNextPage: false", title: "끝에 닿으면 멈춘다", detail: "마지막 페이지에서 hasNextPage가 false로 온다. 화면은 더 묻지 않고 '끝' 표시를 한다." },
+  ]}
+/>
+
+"하나 더 가져오기"는 `hasNextPage`를 싸게 계산하는 흔한 방법이다. `COUNT`를 따로 돌리지 않아도 된다. 실제 정렬은 `id` 하나가 아니라 `created_at DESC, id DESC` 같은 복합 키인 경우가 많고, 그러면 커서에도 두 값이 다 들어가야 한다. 정렬 키 끝에 유일한 열을 붙이는 이유와 행 비교 조건은 [API 페이지네이션과 정렬](/posts/api-pagination-sorting)에 있다.
+
+## 커서를 불투명하게 만드는 이유
+
+데모의 커서 `UG9zdDo2`는 `Post:6`을 base64로 감싼 것이다. 숨긴 게 아니다. 누구나 `atob`으로 풀 수 있다. 명세가 커서를 불투명(opaque)하게 다루라고 할 때의 뜻은 "클라이언트가 커서의 내용에 기대지 말라"는 약속이다. base64는 그 약속을 눈에 보이게 하는 장치일 뿐이다.
+
+이 약속이 있어야 서버가 커서 안의 내용을 바꿀 수 있다. 처음에는 `id`만 담다가 정렬을 `created_at, id`로 바꾸면 커서에 두 값을 넣어야 한다. 클라이언트가 커서를 `"6"`처럼 숫자로 보고 직접 만들어 보내고 있었다면 이 변경이 클라이언트를 깨뜨린다. 커서가 처음부터 알 수 없는 문자열이면 서버만 바꾸면 된다.
+
+같은 이유로 커서 타입은 `String`이다. `ID`나 `Int`가 아니다. 커서는 식별자가 아니라 목록 안의 자리다. 같은 글이라도 정렬 기준이 다르면 커서가 다르다.
+
+불투명하다고 안전한 것은 아니다. 클라이언트는 커서를 바꿔서 보낼 수 있다. 서버는 받은 커서를 믿지 말고 검사한다. 형식이 틀리면 거절하고, 커서 안의 값은 SQL에 문자열로 이어 붙이지 말고 바인딩 파라미터로 넘긴다. 커서에 권한과 관련된 값(다른 사용자 id, 필터 조건)이 들어간다면 서명을 붙여 위조를 막는다. 서명 방법은 [API 페이지네이션과 정렬](/posts/api-pagination-sorting)의 "커서에 담을 것과 지킬 것"에 있다.
+
+잘못된 커서를 받았을 때 데모 서버는 이렇게 답했다.
+
+```text
+{ posts(first: 2, after: "aGVsbG8=") { edges { node { id } } } }
+{"errors":[{"message":"잘못된 커서","locations":[{"line":1,"column":3}],"path":["posts"]}],"data":null}
+```
+
+`aGVsbG8=`은 `hello`다. `posts`가 `PostConnection!`이라 에러 하나가 `data` 전체를 지웠다. 이 쿼리에 다른 최상위 필드가 있었다면 같이 사라졌을 것이다. 최상위 커넥션 필드는 nullable로 두고, 잘못된 커서는 `GraphQLError`에 `extensions: { code: "BAD_USER_INPUT" }`을 붙여 던지면 클라이언트가 "처음부터 다시 받기"로 분기할 수 있다. non-null이 에러를 어디까지 올리는지는 [GraphQL 실행 엔진 안쪽](/posts/graphql-execution-validation)에 있다.
+
+### 정렬과 필터가 바뀌면 커서도 버린다
+
+커서는 특정 정렬과 필터 위의 자리다. "최신순" 목록에서 받은 커서를 "인기순" 요청에 넣으면 엉뚱한 자리가 된다. 서버가 커서 안에 정렬 기준까지 담아 두고 요청의 `orderBy`와 다르면 거절하는 편이 안전하다. 클라이언트도 정렬이나 필터를 바꾸면 쌓아 둔 페이지와 커서를 버리고 첫 페이지부터 다시 받는다. 뒤에서 볼 클라이언트 캐시의 `keyArgs`가 이 구분을 해 준다.
+
+## 뒤로 넘기는 페이지
+
+채팅방은 가장 최근 메시지 20개를 먼저 보여 주고, 위로 스크롤하면 더 오래된 메시지를 받는다. 정렬을 오래된 순으로 둔다면 이게 `last`·`before`다. 최근 쪽 끝에서 `last: 20`으로 받고, 위로 올라가면 `last: 20, before: startCursor`로 그 앞을 받는다. 데모에서 5번 앞의 두 개를 받아 봤다.
+
+```text
+{ posts(last: 2, before: "UG9zdDo1") { edges { node { id } } pageInfo { hasNextPage hasPreviousPage } } }
+{"data":{"posts":{"edges":[{"node":{"id":"7"}},{"node":{"id":"6"}}],"pageInfo":{"hasNextPage":true,"hasPreviousPage":true}}}}
+```
+
+뒤로 받아도 엣지의 순서는 목록 원래 순서(7, 6)다. 명세가 그렇게 정한다. `last`로 받았다고 뒤집어서 주지 않는다. SQL로는 정렬을 뒤집어 `LIMIT`으로 가져온 뒤 메모리에서 다시 뒤집어 돌려준다.
+
+`first`와 `last`를 한 요청에 같이 주는 것은 명세상 금지는 아니지만 "권장하지 않는다". 결과가 직관적이지 않고 구현마다 다르게 해석하기 쉽다. 서버가 이 조합을 거절하는 편이 낫다. 그리고 `first`와 `last` 둘 다 없는 요청도 막는다. 개수 없이 커넥션 전체를 달라는 요청이 되기 때문이다. GitHub GraphQL API도 커넥션마다 `first`나 `last`를 요구하고 값은 1~100으로 제한한다. 이 상한은 [GraphQL 기초](/posts/graphql-basics)에서 본 비용 계산의 재료가 된다. `first: 100` 아래 `first: 100`이면 객체가 1만 개다.
+
+## totalCount는 공짜가 아니다
+
+"전체 1,234개" 같은 숫자를 화면에 보여 주고 싶어 커넥션에 `totalCount`를 더하는 경우가 많다. 명세에는 없는 확장 필드다. 문제는 비용이다. 커서 페이지는 인덱스로 필요한 만큼만 읽지만, 전체 개수는 조건에 맞는 행을 모두 세야 한다. 테이블이 크고 필터가 복잡하면 페이지 조회보다 개수 세기가 훨씬 느리다. PostgreSQL에서 `COUNT(*)`가 왜 느린지, 근사치로 대신하는 법은 [API 페이지네이션과 정렬](/posts/api-pagination-sorting)의 "전체 개수와 페이지 번호가 꼭 필요할 때"에 있다.
+
+GraphQL에서는 이 비용을 "물을 때만" 내게 만들 수 있다. 커넥션 리졸버가 페이지와 개수를 한꺼번에 계산하지 말고, `totalCount`를 별도 리졸버로 둔다.
+
+```js
+const resolvers = {
+  Query: {
+    // 페이지 조회에 필요한 인자만 담아 커넥션 객체를 넘긴다
+    posts: (_, args) => ({ args }),
+  },
+  PostConnection: {
+    edges: async ({ args }) => loadPage(args),       // 키셋 조회
+    pageInfo: async ({ args }) => loadPageInfo(args), // LIMIT first+1
+    totalCount: async ({ args }) => countPosts(args.filter), // 물을 때만 돈다
+  },
+};
+```
+
+무한 스크롤 쿼리는 `totalCount`를 고르지 않으니 `COUNT`가 한 번도 돌지 않는다. 숫자가 필요한 관리자 화면만 그 값을 치른다. 다만 이렇게 나누면 `edges`와 `pageInfo`가 같은 조회를 두 번 할 수 있으니, 같은 요청 안에서는 결과를 한 번만 계산해 나눠 쓰게 메모이즈한다(커넥션 객체에 Promise를 들고 다니면 된다). 비용 계산에도 `totalCount`에 더 큰 가중치를 준다.
+
+## 중첩된 커넥션은 부모마다 잘라야 한다
+
+GraphQL에서만 유난히 자주 만나는 경우가 있다. 커넥션 안에 또 커넥션이 있는 쿼리다.
+
+```graphql
+{ users(first: 3) { edges { node { name posts(first: 3) { edges { node { title } } } } } } }
+```
+
+회원 3명의 최근 글 3개씩, 모두 9개가 필요하다. `User.posts` 리졸버가 회원마다 쿼리를 하나씩 보내면 [GraphQL 기초](/posts/graphql-basics)에서 본 N+1이 된다. 그래서 DataLoader로 회원 id를 모아 한 번에 묻고 싶어진다. 그런데 `IN`에 `LIMIT`을 그대로 붙이면 틀린다. PostgreSQL 16에 회원 1,000명, 글 20만 개를 넣고 돌려 봤다.
+
+```sql
+-- 회원 1, 2, 3의 글을 한꺼번에 묻고 LIMIT 2를 붙였다 (회원마다 2개를 바랐다)
+SELECT author_id, id FROM posts
+WHERE author_id IN (1, 2, 3)
+ORDER BY created_at DESC, id DESC LIMIT 2;
+```
+
+```text
+ author_id |   id
+-----------+--------
+         1 | 200000
+         3 | 199002
+(2 rows)
+```
+
+`LIMIT`은 결과 전체에 걸리니 회원마다가 아니라 합쳐서 잘린다. 2번 회원의 글은 하나도 없다. 부모마다 따로 잘라야 한다. 방법은 둘이다. 윈도 함수로 회원별 순번을 매기는 방법과, `LATERAL`로 회원마다 작은 쿼리를 도는 방법이다. 인덱스는 `(author_id, created_at DESC, id DESC)`로 만들어 두었다.
+
+```sql
+-- 윈도 함수: 회원 글을 모두 읽어 순번을 매긴 뒤 3개씩 남긴다
+EXPLAIN ANALYZE SELECT author_id, id, created_at FROM (
+  SELECT p.*, row_number() OVER (PARTITION BY author_id ORDER BY created_at DESC, id DESC) AS rn
+  FROM posts p WHERE author_id IN (1, 2, 3)
+) t WHERE rn <= 3;
+```
+
+```text
+ Subquery Scan on t  (cost=1239.36..1258.70 rows=595 width=24) (actual time=0.510..0.563 rows=9 loops=1)
+   ->  WindowAgg  (cost=1239.36..1252.75 rows=595 width=64) (actual time=0.509..0.561 rows=9 loops=1)
+         Run Condition: (row_number() OVER (?) <= 3)
+         ->  Sort  (cost=1239.36..1240.85 rows=595 width=24) (actual time=0.502..0.522 rows=600 loops=1)
+               Sort Key: p.author_id, p.created_at DESC, p.id DESC
+               Sort Method: quicksort  Memory: 53kB
+               ->  Bitmap Heap Scan on posts p  (cost=17.86..1211.94 rows=595 width=24) (actual time=0.051..0.285 rows=600 loops=1)
+                     Recheck Cond: (author_id = ANY ('{1,2,3}'::bigint[]))
+                     Heap Blocks: exact=201
+                     ->  Bitmap Index Scan on posts_author_created  (cost=0.00..17.71 rows=595 width=0) (actual time=0.034..0.034 rows=600 loops=1)
+                           Index Cond: (author_id = ANY ('{1,2,3}'::bigint[]))
+ Planning Time: 0.095 ms
+ Execution Time: 0.592 ms
+```
+
+```sql
+-- LATERAL: 회원마다 인덱스를 따라 3개만 읽는다
+EXPLAIN ANALYZE SELECT u.id AS author_id, p.id, p.created_at
+FROM unnest(ARRAY[1, 2, 3]::bigint[]) AS u(id)
+CROSS JOIN LATERAL (
+  SELECT id, created_at FROM posts
+  WHERE author_id = u.id ORDER BY created_at DESC, id DESC LIMIT 3
+) p;
+```
+
+```text
+ Nested Loop  (cost=0.42..35.74 rows=9 width=24) (actual time=0.024..0.036 rows=9 loops=1)
+   ->  Function Scan on unnest u  (cost=0.00..0.03 rows=3 width=8) (actual time=0.005..0.006 rows=3 loops=1)
+   ->  Limit  (cost=0.42..11.87 rows=3 width=16) (actual time=0.007..0.009 rows=3 loops=3)
+         ->  Index Only Scan using posts_author_created on posts  (cost=0.42..763.91 rows=200 width=16) (actual time=0.007..0.008 rows=3 loops=3)
+               Index Cond: (author_id = u.id)
+               Heap Fetches: 9
+ Planning Time: 0.110 ms
+ Execution Time: 0.051 ms
+```
+
+둘 다 9개를 돌려주지만 읽은 양이 다르다. 윈도 함수 쪽은 `Sort`의 `rows=600`을 보자. 세 회원의 글 600개를 모두 읽어 정렬한 뒤 9개만 남겼다. 회원 한 명의 글이 수만 개면 이 숫자가 그대로 커진다. LATERAL 쪽은 `Index Only Scan ... rows=3 loops=3`이다. 회원마다 인덱스에서 3개씩만 읽었다. 실행 시간도 0.592ms와 0.051ms로 열 배 넘게 차이 난다. 회원마다 글 수가 많을수록 LATERAL이 유리하다. MySQL 8도 8.0.14부터 `LATERAL`을 지원한다.
+
+이렇게 묶을 때는 두 가지를 지킨다. 같은 배치 안의 부모들이 같은 인자(`first`, `after`, 정렬)를 쓸 때만 묶는다. 인자가 다르면 DataLoader 키에 인자까지 넣어 따로 묶는다. 그리고 안쪽 커넥션의 `after`는 부모마다 다른 커서다. 실제 화면에서 안쪽 커넥션을 넘기는 일은 대개 그 부모 하나를 다시 조회하면서 일어나니, 안쪽 커넥션의 다음 페이지는 부모 하나만 대상으로 받는 쿼리로 처리하는 편이 단순하다.
+
+## 직접 짜 보는 커넥션
+
+명세의 자르기 규칙을 함수로 짜 보자. 이미 정렬된 id 배열과 인자 객체를 받아 `edges`와 `pageInfo`를 돌려준다. 커서는 `btoa("Post:" + id)`다. `hasPreviousPage`와 `hasNextPage`는 데이터가 메모리에 있으니 양쪽 다 정확히 계산한다. 커서로 자른 범위 바깥에 항목이 있거나, 개수로 잘라 낸 항목이 있으면 참이다.
+
+<CodePlayground
+  caption="Relay 커넥션 자르기"
+  functionName="paginate"
+  initialCode={`function paginate(ids, args) {
+  // ids: 이미 정렬된 id 배열 (예: [8, 7, 6, 5, 4, 3, 2, 1])
+  // args: { first?, after?, last?, before? }  커서는 btoa("Post:" + id)
+  // 반환: { edges: [{ cursor, node: id }],
+  //         pageInfo: { hasPreviousPage, hasNextPage, startCursor, endCursor } }
+  return { edges: [], pageInfo: { hasPreviousPage: false, hasNextPage: false, startCursor: null, endCursor: null } };
+}`}
+  solution={`function paginate(ids, args) {
+  const { first, after, last, before } = args;
+  const enc = (id) => btoa("Post:" + id);
+  const dec = (c) => Number(atob(c).slice(5));
+  // 1) 커서로 범위를 자른다 [start, end)
+  let start = 0, end = ids.length;
+  if (after != null) { const i = ids.indexOf(dec(after)); if (i >= 0) start = i + 1; }
+  if (before != null) { const i = ids.indexOf(dec(before)); if (i >= 0) end = i; }
+  // 2) 개수로 자른다
+  let s = start, e = end;
+  if (first != null && e - s > first) e = s + first;
+  if (last != null && e - s > last) s = e - last;
+  const edges = ids.slice(s, e).map((id) => ({ cursor: enc(id), node: id }));
+  return {
+    edges,
+    pageInfo: {
+      hasPreviousPage: last != null ? s > start : start > 0,
+      hasNextPage: first != null ? e < end : end < ids.length,
+      startCursor: edges.length ? edges[0].cursor : null,
+      endCursor: edges.length ? edges[edges.length - 1].cursor : null,
+    },
+  };
+}`}
+  tests={[
+    { label: "first: 3", args: [[8, 7, 6, 5, 4, 3, 2, 1], { first: 3 }], expected: { edges: [{ cursor: "UG9zdDo4", node: 8 }, { cursor: "UG9zdDo3", node: 7 }, { cursor: "UG9zdDo2", node: 6 }], pageInfo: { hasPreviousPage: false, hasNextPage: true, startCursor: "UG9zdDo4", endCursor: "UG9zdDo2" } } },
+    { label: "first: 3, after 3번", args: [[8, 7, 6, 5, 4, 3, 2, 1], { first: 3, after: "UG9zdDoz" }], expected: { edges: [{ cursor: "UG9zdDoy", node: 2 }, { cursor: "UG9zdDox", node: 1 }], pageInfo: { hasPreviousPage: true, hasNextPage: false, startCursor: "UG9zdDoy", endCursor: "UG9zdDox" } } },
+    { label: "last: 2, before 5번", args: [[8, 7, 6, 5, 4, 3, 2, 1], { last: 2, before: "UG9zdDo1" }], expected: { edges: [{ cursor: "UG9zdDo3", node: 7 }, { cursor: "UG9zdDo2", node: 6 }], pageInfo: { hasPreviousPage: true, hasNextPage: true, startCursor: "UG9zdDo3", endCursor: "UG9zdDo2" } } },
+    { label: "last: 3 (끝에서 셋)", args: [[8, 7, 6, 5, 4, 3, 2, 1], { last: 3 }], expected: { edges: [{ cursor: "UG9zdDoz", node: 3 }, { cursor: "UG9zdDoy", node: 2 }, { cursor: "UG9zdDox", node: 1 }], pageInfo: { hasPreviousPage: true, hasNextPage: false, startCursor: "UG9zdDoz", endCursor: "UG9zdDox" } } },
+    { label: "마지막 항목 뒤", args: [[8, 7, 6, 5, 4, 3, 2, 1], { first: 2, after: "UG9zdDox" }], expected: { edges: [], pageInfo: { hasPreviousPage: true, hasNextPage: false, startCursor: null, endCursor: null } } },
+  ]}
+/>
+
+셋째 테스트에서 뒤로 받은 엣지가 7, 6 순서인 것을 확인하자. 그리고 마지막 테스트처럼 빈 페이지에서는 `startCursor`와 `endCursor`가 null이다. 그래서 `PageInfo`의 두 커서 필드는 nullable이다. 이걸 `String!`으로 두면 빈 목록을 받는 순간 앞에서 본 null 전파가 일어난다.
+
+실제 서버에서는 `ids.indexOf` 대신 커서 안의 정렬 키로 `WHERE` 조건을 만든다. 그 차이 때문에 커서가 가리키던 항목이 지워져도 문제없이 이어진다. 메모리 구현은 지워진 커서를 못 찾으면 처음부터 시작해 버리지만, `WHERE id < 6`은 6번이 지워졌어도 5번부터 준다.
+
+## 클라이언트 캐시가 페이지를 이어 붙이는 법
+
+무한 스크롤에서 둘째 페이지를 받으면 화면에는 첫 페이지와 둘째 페이지가 이어져 보여야 한다. 그런데 정규화 캐시는 기본으로 필드를 인자별로 따로 저장한다. `posts(first: 3)`과 `posts(first: 3, after: "UG9zdDo2")`는 다른 캐시 항목이라, 둘째 페이지를 받으면 화면이 둘째 페이지로 바뀌어 버린다. 그래서 커넥션 필드에는 "이 둘은 같은 목록의 조각이니 이어 붙여라"는 규칙을 따로 준다.
+
+Apollo Client는 타입 정책에 `relayStylePagination()` 도우미를 준다.
+
+```ts
+import { InMemoryCache } from "@apollo/client";
+import { relayStylePagination } from "@apollo/client/utilities";
+
+const cache = new InMemoryCache({
+  typePolicies: {
+    Query: {
+      fields: {
+        // orderBy, filter가 다르면 다른 목록, first/after는 같은 목록의 조각
+        posts: relayStylePagination(["orderBy", "filter"]),
+      },
+    },
+  },
+});
+```
+
+인자 배열이 `keyArgs`다. 여기 적은 인자가 다르면 다른 목록으로, 나머지(`first`, `after`, `last`, `before`)는 같은 목록의 페이지로 본다. 앞에서 "정렬이나 필터가 바뀌면 커서를 버린다"고 한 것을 캐시가 해 주는 셈이다. 이걸 빠뜨리면 인기순 목록 뒤에 최신순 페이지가 이어 붙는다.
+
+Relay는 프래그먼트에 `@connection(key: "Feed_posts")` 디렉티브를 붙이고 `usePaginationFragment` 훅으로 `loadNext(3)`를 부른다. 커서를 꺼내 다음 변수를 만드는 일까지 Relay가 한다. urql은 Graphcache의 `relayPagination()`이 같은 역할을 한다. 어느 도구든 스키마가 커넥션 명세의 이름을 지켜야 동작한다.
+
+이어 붙인 목록에 새 항목을 넣는 일은 따로 해야 한다. 글을 새로 쓴 뒤 뮤테이션 결과로 새 글을 받아도, 캐시는 그 글이 피드 커넥션의 맨 앞에 들어가야 하는지 모른다. Apollo에서는 `cache.modify`로 엣지를 앞에 붙이고, Relay에서는 뮤테이션에 `@prependEdge(connections: $connections)`를 붙인다. 이게 귀찮으면 뮤테이션 뒤에 첫 페이지를 다시 받는다. 클라이언트 캐시 전반의 원리는 [클라이언트 데이터 캐시](/posts/client-data-cache)에 있다.
+
+## 커넥션이 과한 곳
+
+모든 목록을 커넥션으로 만들 필요는 없다. 상품의 옵션(색상 세 개, 사이즈 다섯 개)처럼 크기가 작고 정해진 목록은 `[ProductOption!]!`로 충분하다. 커넥션은 엣지와 pageInfo를 한 겹 더 감싸서 쿼리가 길어지고 응답도 커진다.
+
+기준은 "이 목록이 끝없이 커질 수 있는가"다. 사용자가 만드는 데이터(글, 댓글, 주문, 알림)는 커질 수 있으니 처음부터 커넥션으로 만든다. 맨 목록으로 시작했다가 나중에 커넥션으로 바꾸면 필드 타입이 바뀌는 깨는 변경이다. 새 필드(`postsConnection`)를 더하고 옛 필드에 `@deprecated`를 붙이는 수밖에 없다.
+
+페이지 번호가 꼭 필요한 화면(관리자 표, "3페이지로 가기")은 커넥션과 잘 안 맞는다. 커서는 순서대로 넘기는 데 맞춘 방식이라 임의의 페이지로 바로 가지 못한다. 그런 화면은 `offset`·`limit`과 `totalCount`를 가진 별도 필드를 두고, 데이터가 바뀌면 어긋날 수 있다는 점을 받아들인다.
+
+## 운영에서 목록이 이상할 때
+
+"같은 글이 두 번 나온다"는 신고는 먼저 offset을 쓰는 곳인지 본다. 커넥션인데도 그렇다면 정렬 키가 유일하지 않은 경우가 많다. `created_at`만으로 정렬하면 같은 시각의 글들 사이에서 커서가 가리키는 자리가 흔들린다. 정렬과 커서에 `id`를 덧붙인다.
+
+"스크롤이 끝나지 않는다"는 `hasNextPage`가 계속 참으로 오는 경우다. "하나 더 가져오기" 없이 `edges.length === first`로 계산하면, 정확히 `first`개 남았을 때 빈 페이지를 한 번 더 받는다. 끝나긴 하지만 요청이 하나 더 나간다. 반대로 항상 참을 돌려주는 버그는 끝없이 빈 페이지를 받는다. 클라이언트는 빈 페이지를 받으면 멈추는 방어 코드를 둔다.
+
+"다른 사람 글이 섞여 나온다"는 캐시 문제를 의심한다. 공유 캐시에 사용자별 목록을 올렸거나, 클라이언트 캐시의 `keyArgs`에 필터 인자가 빠졌다. 응답의 엣지 커서를 풀어 보면 서버가 어떤 범위를 줬는지 알 수 있다. 불투명한 커서도 디버깅할 때는 열어 본다.
+
+## 자리를 가리키는 책갈피
+
+GraphQL에서 커질 수 있는 목록은 Relay 커넥션으로 감싼다. `first`·`after`로 앞으로, `last`·`before`로 뒤로 넘기고, 서버는 커서로 범위를 자른 뒤 개수로 자른다. 커서는 목록 안의 자리를 가리키는 불투명한 문자열이라, 앞에 항목이 끼어들어도 겹치지 않고 서버는 커서 내용을 마음대로 바꿀 수 있다. 다만 불투명이 보안은 아니니 서버가 검사한다. `hasNextPage`는 하나 더 가져오기로 싸게 계산하고, `totalCount`는 물을 때만 돌게 따로 둔다. 클라이언트 캐시는 `keyArgs`로 같은 목록의 조각과 다른 목록을 구분해 페이지를 이어 붙인다.
+
+## 면접에서 나올 만한 질문
+
+### GraphQL에서 offset 페이지네이션 대신 커서를 쓰는 이유는 무엇인가요?
+
+offset은 "앞에서 몇 개 건너뛰기"라서, 그사이에 앞쪽에 항목이 추가되면 목록이 밀려 같은 항목이 다음 페이지에 또 나오고, 삭제되면 하나를 건너뛴다. 커서는 "이 항목 다음"이라는 자리를 가리키므로 앞쪽이 바뀌어도 이어지는 위치가 그대로다. 서버에서도 커서 안의 정렬 키로 인덱스 범위를 바로 찾아 몇 페이지째든 비용이 같다. 피드나 채팅처럼 계속 쌓이는 목록에 맞다.
+
+### Relay 커넥션 명세의 구조를 설명해 주세요.
+
+커넥션 타입은 `edges`와 `pageInfo`를 가지고, 엣지는 `cursor`와 `node`를 가진다. `pageInfo`는 `hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`를 가진다. 인자는 앞으로 넘기는 `first`·`after`와 뒤로 넘기는 `last`·`before`다. 이 이름 규칙을 지키면 Relay, Apollo, urql 같은 클라이언트가 페이지를 이어 붙이는 코드를 대신 해 준다.
+
+### edges와 node로 한 겹 더 감싸는 이유는 무엇인가요?
+
+커서처럼 항목 자체가 아니라 "목록 안의 자리"에 붙는 값을 둘 곳이 필요해서다. 친구가 된 날짜, 검색 점수처럼 관계 자체의 속성도 엣지에 둔다. 이런 값은 node 객체의 속성이 아니기 때문이다. 커서가 필요 없는 화면을 위해 `nodes` 단축 필드를 함께 두는 API도 있다.
+
+### 커서를 불투명하게 만드는 이유는요? base64면 안전한가요?
+
+클라이언트가 커서 내용에 기대지 않게 해서, 서버가 정렬 키를 바꾸거나 커서에 값을 더해도 클라이언트가 깨지지 않게 하려는 것이다. base64는 그 약속을 보여 주는 표시일 뿐 누구나 풀 수 있으니 보안 장치가 아니다. 서버는 받은 커서의 형식을 검사하고, 값은 바인딩 파라미터로 넘기며, 권한과 관련된 값이 들어가면 서명으로 위조를 막는다.
+
+### hasNextPage는 어떻게 계산하나요?
+
+`first`보다 하나 더 가져와서 그만큼 왔으면 참으로 하고, 응답에는 `first`개만 싣는 방법이 흔하다. COUNT를 따로 돌리지 않아도 된다. 명세는 `first`로 넘길 때 `hasNextPage`를 정확히 계산하게 하고, 반대 방향의 `hasPreviousPage`는 효율적으로 알 수 없으면 false를 돌려줘도 된다고 한다. 그래서 앞으로 넘긴 페이지의 hasPreviousPage를 그대로 믿으면 안 되는 서버도 있다.
+
+### totalCount를 커넥션에 넣을 때 주의할 점은요?
+
+전체 개수는 조건에 맞는 행을 모두 세야 해서 페이지 조회보다 훨씬 비쌀 수 있다. 그래서 커넥션 리졸버가 개수를 미리 계산하지 않고, `totalCount`를 별도 리졸버로 두어 쿼리가 그 필드를 고를 때만 세게 한다. 비용 계산에서도 가중치를 크게 주고, 큰 테이블이라면 근사치나 캐시된 값을 쓰는 것도 고려한다.
+
+### 클라이언트 캐시에서 페이지를 이어 붙이려면 무엇이 필요한가요?
+
+정규화 캐시는 필드를 인자별로 따로 저장하므로, `after`만 다른 요청을 같은 목록의 조각으로 합치라는 규칙이 필요하다. Apollo는 `relayStylePagination(keyArgs)`, Relay는 `@connection(key)`와 `usePaginationFragment`, urql은 `relayPagination()`이 그 일을 한다. keyArgs에 정렬·필터 인자를 넣어야 서로 다른 목록이 섞이지 않는다. 새 항목을 만든 뒤에는 캐시의 커넥션에 엣지를 직접 붙이거나 첫 페이지를 다시 받는다.

@@ -7,7 +7,7 @@ export const Root = styled("button", omitProps("on"))<{ on: boolean }>`
   display: inline-flex;
   gap: ${space[1]};
   align-items: center;
-  height: 2.25rem;
+  height: 2.75rem;
   padding: 0 ${space[3]};
   border: 1px solid ${({ on }) => (on ? color.accent : color.border)};
   border-radius: ${radius.full};

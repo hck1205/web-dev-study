@@ -1,0 +1,507 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-search-in-rotated-sorted-array");
+
+<EasyIntro>
+  책꽂이에 번호 순서대로 꽂혀 있던 책을 누가 앞쪽 몇 권만 빼서 맨 뒤에 꽂아 두었다. 그래서 번호가 쭉 커지다가 한 군데에서 갑자기 작은 번호로 돌아간다. 이 책꽂이에서 원하는 번호의 책을 빨리 찾고 싶다. 가운데 책을 하나 뽑아 보면 재미있는 사실이 있다. 가운데를 기준으로 왼쪽 무리와 오른쪽 무리 중 적어도 한쪽은 번호가 순서대로 꽂혀 있다. 순서대로 꽂힌 쪽은 양 끝 번호만 보면 찾는 책이 그 안에 있는지 바로 알 수 있다. 있으면 그쪽으로 가고, 없으면 반대쪽으로 간다. 이렇게 매번 책꽂이를 절반씩 지워 나가면 책이 아무리 많아도 몇 번 만에 찾는다.
+</EasyIntro>
+
+[LeetCode 33. Search in Rotated Sorted Array](https://leetcode.com/problems/search-in-rotated-sorted-array/)는 이분 탐색 문제 중 면접에서 가장 자주 나오는 편이다. 정렬이 깨진 배열에서도 절반을 버릴 근거를 찾을 수 있는지 본다. 처음 풀 때 나는 조건문을 네 갈래로 쓰다가 부등호 하나(`<`와 `<=`)를 잘못 골라 두 칸짜리 배열에서 틀렸다. 이 글은 그 부등호가 왜 그 자리에 와야 하는지까지 따라간다.
+
+문제를 내 말로 풀면 이렇다. 서로 다른 정수가 오름차순으로 정렬된 배열을 어떤 위치에서 회전했다. 앞쪽 일부를 떼어 뒤에 붙였다는 뜻이다. 이 배열에서 `target`의 인덱스를 찾고, 없으면 `-1`을 돌려준다. O(log n)이어야 한다.
+
+예시는 앞 글 [Find Minimum in Rotated Sorted Array](/posts/leetcode-find-minimum-in-rotated-sorted-array)와 같은 배열을 쓴다.
+
+```text
+index   0   1   2   3   4   5   6   7
+nums   12  17  25  31  -4   1   3   8
+```
+
+여기서 3을 찾으면 6, 25를 찾으면 2, 10을 찾으면 `-1`이다.
+
+풀이를 고르는 데 영향을 주는 제약은 이렇다.
+
+- 길이는 1 이상 5000 이하다. 빈 배열은 없다.
+- 값이 모두 서로 다르다. 같은 값이 있으면 어느 쪽이 정렬됐는지 판단이 깨진다. 그 변형(81번)은 뒤에서 본다.
+- 회전하지 않은 배열(회전 횟수 0)도 들어온다.
+
+[이분 탐색 글](/posts/binary-search)의 "정렬이 반쯤 깨진 배열에서" 절에서 이 문제의 한 번에 찾는 풀이를 짧게 보였다. 여기서는 풀이 다섯 가지를 차례로 짜 보고, 각 조건문의 부등호가 어디서 오는지, 어떤 입력에서 틀리는지를 실제로 돌려 본다. 실행 결과는 Node.js 22, Python 3, OpenJDK에서 돌린 값이다.
+
+## 가운데로 자르면 한쪽은 반드시 정렬돼 있다
+
+회전된 배열은 오름차순 덩어리 두 개가 이어 붙은 모양이다. 예시는 `[12, 17, 25, 31]`과 `[-4, 1, 3, 8]`이다. 값이 뚝 떨어지는 곳(31 → -4)은 딱 한 군데다.
+
+이 배열을 아무 데서나 둘로 자르면, 떨어지는 곳은 잘린 두 조각 중 한쪽에만 들어간다. 떨어지는 곳이 없는 조각은 처음부터 끝까지 오름차순이다. 그러니 가운데로 자르면 적어도 한쪽 절반은 반드시 정렬돼 있다. 둘 다 정렬된 경우(배열이 회전하지 않았거나, 떨어지는 곳이 정확히 경계에 걸린 경우)도 있다.
+
+정렬된 쪽이 어느 쪽인지는 양 끝만 보면 안다. 왼쪽 절반 `[lo, mid]`에서 `nums[lo] <= nums[mid]`면 그 안에 떨어지는 곳이 없다. 떨어지는 곳이 있다면 왼쪽 끝 값이 가운데 값보다 커야 하기 때문이다(왼쪽 덩어리 값은 전부 오른쪽 덩어리 값보다 크다).
+
+손으로 3을 찾아보자.
+
+1. 0~7번의 가운데는 3번(31)이다. 3이 아니다. 왼쪽 끝 12가 31 이하이니 왼쪽 절반 12~31은 정렬돼 있다. 3은 12 이상 31 미만이 아니다. 그러니 왼쪽 절반에는 없다. 오른쪽으로 간다.
+2. 4~7번의 가운데는 5번(1)이다. 왼쪽 끝 -4가 1 이하라 4~5번(-4, 1)이 정렬돼 있다. 3은 -4 이상 1 미만이 아니다. 오른쪽으로 간다.
+3. 6~7번의 가운데는 6번(3)이다. 찾았다.
+
+여기서 하는 판단은 늘 "정렬된 쪽의 범위 안에 target이 있나"뿐이다. 정렬되지 않은 쪽은 범위를 양 끝으로 판단할 수 없으니 건드리지 않는다. 정렬된 쪽에 없으면 반대쪽에 있을 수밖에 없다는 소거법이다.
+
+## 처음부터 훑기
+
+비교 기준으로 쓸 가장 단순한 풀이부터 둔다.
+
+```js
+function search(nums, target) {
+  return nums.indexOf(target); // 앞에서부터 하나씩. 없으면 -1
+}
+```
+
+시간 O(n), 공간 O(1)이다. 길이 5000이면 이것도 금방 끝나서 LeetCode 채점은 통과한다. 하지만 문제가 O(log n)을 요구했고, 회전된 배열이라는 구조를 하나도 쓰지 않았다. 이 풀이의 쓸모는 아래 빠른 풀이들이 맞는지 확인하는 기준이다. 글 끝에서 무작위 배열 3만 개로 다섯 풀이를 이 결과와 맞춰 본다.
+
+## 꺾이는 곳을 먼저 찾고, 조각 하나에서 찾는다
+
+회전 배열을 정렬된 조각 두 개로 나눌 수 있다면, 각 조각은 평범한 이분 탐색으로 찾을 수 있다. 나누는 기준은 최솟값의 자리다. 그 자리는 [153번 글](/posts/leetcode-find-minimum-in-rotated-sorted-array)의 풀이로 O(log n)에 구한다.
+
+```js
+function findPivot(nums) {            // 최솟값의 인덱스 (153번)
+  let lo = 0, hi = nums.length - 1;
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (nums[mid] > nums[hi]) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+function binarySearch(nums, lo, hi, target) { // 닫힌 구간 [lo, hi]에서 평범한 이분 탐색
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (nums[mid] === target) return mid;
+    if (nums[mid] < target) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+
+function search(nums, target) {
+  const n = nums.length, k = findPivot(nums);   // k: 오른쪽 덩어리의 시작
+  if (target >= nums[k] && target <= nums[n - 1]) {
+    return binarySearch(nums, k, n - 1, target); // 오른쪽 덩어리 [k, n-1]
+  }
+  return binarySearch(nums, 0, k - 1, target);   // 왼쪽 덩어리 [0, k-1]
+}
+```
+
+예시에서 `findPivot`은 4를 돌려준다. 3은 -4 이상 8 이하이니 4~7번에서 찾고, 25는 그 범위 밖이니 0~3번에서 찾는다. 회전하지 않은 배열이면 `k = 0`이라 오른쪽 덩어리가 배열 전체가 되고, 왼쪽은 `[0, -1]`이라는 빈 구간이 된다. 따로 처리할 필요가 없다.
+
+시간은 O(log n) 두 번이라 O(log n), 공간 O(1)이다. 정답이고 면접에서도 충분히 좋은 답이다. 문제를 이미 아는 두 문제(최솟값 찾기, 이분 탐색)로 쪼갰다는 점에서 설명하기 쉽다.
+
+이 풀이는 파이썬과 자바에서 특히 짧아진다. 조각 안은 평범한 정렬 배열이라 표준 라이브러리의 이분 탐색을 범위만 주고 그대로 쓸 수 있기 때문이다.
+
+```python
+from bisect import bisect_left
+
+def search(nums, target):
+    lo, hi = 0, len(nums) - 1
+    while lo < hi:                                  # 최솟값의 자리 k (153번)
+        mid = (lo + hi) // 2
+        if nums[mid] > nums[hi]:
+            lo = mid + 1
+        else:
+            hi = mid
+    k, n = lo, len(nums)
+    if nums[k] <= target <= nums[n - 1]:            # 오른쪽 조각 [k, n-1]
+        left, right = k, n
+    else:                                           # 왼쪽 조각 [0, k-1]
+        left, right = 0, k
+    i = bisect_left(nums, target, left, right)      # 조각 안에서 lower bound
+    return i if i < right and nums[i] == target else -1
+```
+
+```java
+static int search(int[] nums, int target) {
+    int lo = 0, hi = nums.length - 1;
+    while (lo < hi) {                               // 최솟값의 자리 k (153번)
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] > nums[hi]) lo = mid + 1; else hi = mid;
+    }
+    int k = lo, n = nums.length;
+    int from = 0, to = k;                            // 왼쪽 조각 [0, k)
+    if (nums[k] <= target && target <= nums[n - 1]) { from = k; to = n; } // 오른쪽 조각 [k, n)
+    int r = Arrays.binarySearch(nums, from, to, target); // 조각 안은 정렬돼 있다
+    return r >= 0 ? r : -1;
+}
+```
+
+```text
+python: [6, 2, -1, 0, 7, 4, 3] 1 -1 2
+java:   6 2 -1 0 7 4 3 1 -1 2
+```
+
+예시의 일곱 값, `[3, 1]`에서 1, `[1]`에서 0, 회전하지 않은 `[-4, 1, 3, 8]`에서 3을 찾은 결과다. `bisect_left(nums, x, lo, hi)`와 `Arrays.binarySearch(nums, from, to, x)`는 둘 다 끝을 포함하지 않는 반열린 범위를 받는다. 자바는 범위 안에서 못 찾으면 `-(들어갈 자리) - 1`을 돌려주니 음수면 `-1`로 바꾼다.
+
+한계는 두 가지다. 배열을 두 번 훑는다(이분 탐색 두 번). 그리고 target이 어느 덩어리에 속하는지 고르는 조건(`nums[k]` 이상 `nums[n - 1]` 이하)을 따로 맞게 써야 한다. 이 조건을 `target >= nums[0]`으로 바꿔 써도 되는데, 회전하지 않은 배열에서 왼쪽 덩어리가 비어 있다는 걸 놓치면 틀린다.
+
+## 회전을 풀어서 보는 가상 인덱스
+
+꺾이는 곳 k를 알면 배열을 실제로 다시 붙이지 않고도 "회전 전 배열"처럼 읽을 수 있다. 회전 전 i번 칸은 지금 `(i + k) % n`번 칸에 있다. 그래서 0부터 n - 1까지 평범한 이분 탐색을 하되, 값을 읽을 때만 자리를 바꿔 읽는다.
+
+```js
+function search(nums, target) {
+  const n = nums.length, k = findPivot(nums);
+  let lo = 0, hi = n - 1;                 // 회전 전 배열의 인덱스로 탐색한다
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    const real = (mid + k) % n;           // 회전 전 mid번 칸이 지금 있는 자리
+    if (nums[real] === target) return real;
+    if (nums[real] < target) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+```
+
+3을 찾을 때 움직임을 찍어 봤다. `k = 4`다.
+
+```text
+mid=3 real=7 value=8  -> 8 > 3, hi = 2
+mid=1 real=5 value=1  -> 1 < 3, lo = 2
+mid=2 real=6 value=3  -> 찾았다. 실제 자리 6을 돌려준다
+```
+
+회전 전 배열 `[-4, 1, 3, 8, 12, 17, 25, 31]`에서 3번 칸(8), 1번 칸(1), 2번 칸(3)을 차례로 본 것과 같다. 시간 O(log n), 공간 O(1)이다. 조각을 고르는 조건이 없어져서 코드의 갈래가 줄었다.
+
+이 방법은 회전 배열 말고도 쓸모가 있다. 원형 버퍼처럼 "시작 위치만 다른 정렬 배열"을 다룰 때 시작 위치를 더해 나머지 연산을 하면 복사 없이 정렬 배열로 다룰 수 있다. 다만 여전히 꺾이는 곳을 먼저 찾는 이분 탐색이 한 번 더 필요하다. 한 번의 탐색으로 끝낼 수는 없을까.
+
+## 정렬된 절반을 골라 한 번에 찾는다
+
+첫 절에서 손으로 했던 방법이다. 꺾이는 곳을 따로 구하지 않고, 매번 가운데로 잘라 정렬된 절반을 판단한다. 이 문제의 정석 풀이다.
+
+```js
+function search(nums, target) {
+  let lo = 0, hi = nums.length - 1;       // 닫힌 구간 [lo, hi]
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (nums[mid] === target) return mid;
+    if (nums[lo] <= nums[mid]) {          // 왼쪽 절반 [lo, mid]가 정렬돼 있다
+      if (nums[lo] <= target && target < nums[mid]) hi = mid - 1; // 왼쪽 범위 안
+      else lo = mid + 1;                                            // 아니면 오른쪽
+    } else {                              // 오른쪽 절반 [mid, hi]가 정렬돼 있다
+      if (nums[mid] < target && target <= nums[hi]) lo = mid + 1;  // 오른쪽 범위 안
+      else hi = mid - 1;                                            // 아니면 왼쪽
+    }
+  }
+  return -1;
+}
+```
+
+조건마다 부등호가 다른 이유가 있다.
+
+- `nums[lo] <= nums[mid]`의 `<=`: 구간이 한두 칸이면 lo와 mid가 같은 칸이다. 한 칸짜리 왼쪽 절반은 당연히 정렬돼 있으니 참이 나와야 한다. `<`로 쓰면 이 경우를 "오른쪽이 정렬됐다"로 잘못 판단한다.
+- `nums[lo] <= target`의 `<=`: 왼쪽 끝 값도 범위에 들어간다. target이 `nums[lo]`와 같으면 왼쪽에 있다.
+- `target < nums[mid]`의 `<`: `nums[mid] === target`은 이미 위에서 확인했다. 그래서 등호를 빼도 되고, 빼야 뜻이 분명하다.
+- 오른쪽도 같은 이유로 `nums[mid] < target`, `target <= nums[hi]`다.
+
+아래 그림은 이 코드가 예시에서 3을 찾는 과정이다. 오른쪽 상자에 지금 정렬된 쪽과 그 범위를 적었다.
+
+<AlgoTrace
+  caption="정렬된 절반을 골라 3 찾기"
+  memoryLabel="판단"
+  cells={["12", "17", "25", "31", "-4", "1", "3", "8"]}
+  steps={[
+    { memory: ["lo 0", "hi 7"], caption: "후보는 여덟 칸 전부다." },
+    { pointer: 3, memory: ["mid 3 = 31", "왼쪽 12~31 정렬", "3은 밖 → lo = 4"], caption: "12가 31 이하라 왼쪽 절반은 정렬돼 있다. 3은 12 이상 31 미만이 아니니 왼쪽에는 없다." },
+    { pointer: 5, memory: ["mid 5 = 1", "왼쪽 -4~1 정렬", "3은 밖 → lo = 6"], caption: "4~5번(-4, 1)이 정렬된 쪽이다. 3은 그 범위를 넘으니 오른쪽으로 간다." },
+    { pointer: 6, memory: ["mid 6 = 3"], caption: "6~7번의 가운데 6번이 3이다." },
+    { found: [6], memory: ["답 6"], caption: "세 번 비교해서 찾았다. 꺾이는 곳(4번)은 한 번도 따로 찾지 않았다." },
+  ]}
+/>
+
+이번엔 오른쪽 절반이 정렬된 경우를 보자. 두 칸만 회전한 `[25, 31, -4, 1, 3, 8, 12, 17]`에서 31을 찾는다.
+
+<AlgoTrace
+  caption="오른쪽이 정렬됐는데 target은 왼쪽에 있을 때"
+  memoryLabel="판단"
+  cells={["25", "31", "-4", "1", "3", "8", "12", "17"]}
+  steps={[
+    { pointer: 3, memory: ["mid 3 = 1", "25 > 1", "왼쪽은 꺾여 있다"], caption: "왼쪽 끝 25가 가운데 1보다 크다. 꺾이는 곳이 왼쪽 절반에 있다. 그러니 오른쪽 1~17이 정렬된 쪽이다." },
+    { pointer: 3, memory: ["오른쪽 1~17", "31은 밖 → hi = 2"], caption: "31은 1보다 크고 17 이하인 범위에 없다. 정렬된 쪽에 없으니 꺾인 왼쪽에 있다." },
+    { pointer: 1, memory: ["lo 0", "hi 2", "mid 1 = 31"], caption: "0~2번의 가운데 1번이 31이다." },
+    { found: [1], memory: ["답 1"], caption: "두 번 만에 찾았다. 꺾인 쪽으로 갈 때도 근거는 정렬된 쪽의 범위였다." },
+  ]}
+/>
+
+없는 값 10을 찾으면 mid가 31, 1, 3, 8을 차례로 보고 `lo = 8`, `hi = 7`이 되어 `-1`을 돌려준다. 매번 정렬된 쪽의 범위에 10이 없어서 반대쪽으로 갔고, 마지막엔 구간이 비었다.
+
+시간 O(log n), 공간 O(1)이다. 반복마다 mid를 빼고 한쪽 절반만 남기니 구간이 절반 이하로 준다. 꺾이는 곳을 찾는 탐색이 따로 없으니 앞 풀이보다 비교 횟수도 적다.
+
+### 파이썬과 자바로 옮기면
+
+```python
+from typing import List
+
+class Solution:
+    def search(self, nums: List[int], target: int) -> int:
+        lo, hi = 0, len(nums) - 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if nums[mid] == target:
+                return mid
+            if nums[lo] <= nums[mid]:                 # 왼쪽 절반 [lo, mid]가 정렬돼 있다
+                if nums[lo] <= target < nums[mid]:    # 파이썬은 비교를 이어 쓸 수 있다
+                    hi = mid - 1
+                else:
+                    lo = mid + 1
+            else:                                     # 오른쪽 절반 [mid, hi]가 정렬돼 있다
+                if nums[mid] < target <= nums[hi]:
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+        return -1
+```
+
+파이썬은 `a <= x < b`처럼 비교를 이어 쓰면 `a <= x and x < b`로 읽는다. 범위 판단이 수식처럼 읽혀서 실수가 줄어든다. 자바와 JavaScript에서 `a <= x < b`라고 쓰면 앞의 비교 결과(true/false)를 b와 비교하게 되어 전혀 다른 뜻이 된다. 자바는 컴파일 에러가 나서 바로 알 수 있지만, JavaScript는 `true`를 1로 바꿔 비교해서 조용히 틀린다.
+
+```java
+class Solution {
+    public int search(int[] nums, int target) {
+        int lo = 0, hi = nums.length - 1;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (nums[mid] == target) return mid;
+            if (nums[lo] <= nums[mid]) {                       // 왼쪽 절반이 정렬돼 있다
+                if (nums[lo] <= target && target < nums[mid]) hi = mid - 1;
+                else lo = mid + 1;
+            } else {                                           // 오른쪽 절반이 정렬돼 있다
+                if (nums[mid] < target && target <= nums[hi]) lo = mid + 1;
+                else hi = mid - 1;
+            }
+        }
+        return -1;
+    }
+}
+```
+
+예시에서 3, 25, 10, 12, 8, -4, 31을 찾고, `[3, 1]`에서 1, `[1]`에서 0을 찾은 결과다. 세 언어가 같다.
+
+```text
+6 2 -1 0 7 4 3 1 -1
+```
+
+## 같은 쪽이 아니면 무한대로 본다
+
+한 번에 찾는 방법이 하나 더 있다. 생각을 바꿔서, 회전 배열을 "target이 속한 덩어리만 남기고 나머지는 무한대로 바꾼 정렬 배열"로 본다.
+
+target이 왼쪽 덩어리(첫 값 이상)에 있다고 하자. 그러면 오른쪽 덩어리 칸들은 볼 필요가 없으니 전부 `+∞`로 본다. 그러면 배열은 `[12, 17, 25, 31, +∞, +∞, +∞, +∞]`처럼 정렬된다. target이 오른쪽 덩어리(첫 값 미만)에 있으면 왼쪽 덩어리를 `-∞`로 보고 `[-∞, -∞, -∞, -∞, -4, 1, 3, 8]`이 된다. 둘 다 정렬 배열이니 평범한 이분 탐색을 한다. 실제로 배열을 바꾸지 않고, mid의 값을 읽을 때만 바꿔 읽는다.
+
+```js
+function search(nums, target) {
+  let lo = 0, hi = nums.length - 1;
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    let v;
+    if ((nums[mid] >= nums[0]) === (target >= nums[0])) {
+      v = nums[mid];                               // 같은 덩어리: 값 그대로
+    } else {
+      v = target < nums[0] ? -Infinity : Infinity; // 다른 덩어리: 무한대로 본다
+    }
+    if (v === target) return mid;
+    if (v < target) lo = mid + 1; else hi = mid - 1;
+  }
+  return -1;
+}
+```
+
+3을 찾으면 3은 첫 값 12보다 작으니 오른쪽 덩어리에 있다. 왼쪽 덩어리 칸은 `-∞`로 읽는다.
+
+```text
+mid=3 raw=31 v=-Infinity -> -∞ < 3, lo = 4
+mid=5 raw=1  v=1         -> 1 < 3, lo = 6
+mid=6 raw=3  v=3         -> 찾았다
+```
+
+그림으로 보면 이 풀이가 보는 배열은 이렇다. 칸에 적힌 값은 실제 값이 아니라 mid에서 읽는 값이다.
+
+<AlgoTrace
+  caption="3과 다른 덩어리는 -∞로 읽는다"
+  memoryLabel="읽은 값"
+  cells={["-∞", "-∞", "-∞", "-∞", "-4", "1", "3", "8"]}
+  steps={[
+    { memory: ["3 < 12", "오른쪽 덩어리"], caption: "3은 첫 값 12보다 작으니 오른쪽 덩어리에 있다. 왼쪽 덩어리 칸은 -∞로 읽는다." },
+    { pointer: 3, memory: ["31 → -∞", "lo = 4"], caption: "3번 칸은 실제로 31이지만 다른 덩어리라 -∞다. 3보다 작으니 오른쪽으로 간다." },
+    { pointer: 5, memory: ["1", "lo = 6"], caption: "5번은 같은 덩어리라 값 1 그대로다. 3보다 작다." },
+    { pointer: 6, found: [6], memory: ["3", "답 6"], caption: "6번이 3이다. 정렬된 배열에서 평범하게 찾은 것과 같은 움직임이다." },
+  ]}
+/>
+
+시간 O(log n), 공간 O(1)이다. 조건이 "같은 덩어리인가" 하나로 줄어서 네 갈래 조건문보다 실수할 곳이 적다는 사람도 있다. 대신 "왜 무한대로 바꿔도 되는가"를 설명할 수 있어야 한다. 자바라면 `Infinity` 대신 `Integer.MIN_VALUE`, `Integer.MAX_VALUE`를 쓰는데, target이 그 값과 같을 수 있으면 `v === target`이 잘못 참이 될 수 있으니 값 범위를 확인한다. 이 문제의 값은 -10^4~10^4라 상관없다.
+
+## 다섯 풀이 비교
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 처음부터 훑기 | O(n) | O(1) | 검증용 기준. O(log n) 조건이 없을 때 |
+| 꺾이는 곳 찾기 + 조각에서 이분 탐색 | O(log n) | O(1) | 아는 문제 두 개로 쪼개 설명하고 싶을 때 |
+| 가상 인덱스 `(i + k) % n` | O(log n) | O(1) | 회전 전 배열처럼 다루고 싶을 때, 원형 버퍼 |
+| 정렬된 절반 고르기 | O(log n) | O(1) | 정석. 한 번의 탐색으로 끝난다 |
+| 다른 덩어리를 무한대로 보기 | O(log n) | O(1) | 조건을 하나로 줄이고 싶을 때. 이유를 설명할 수 있어야 한다 |
+
+면접에서는 정렬된 절반 풀이를 쓰는 게 보통이고, 막히면 꺾이는 곳 찾기 + 조각 풀이로 돌아가도 충분히 좋은 답이다. 시간 복잡도가 같기 때문이다.
+
+## 이렇게 짜면 틀린다
+
+### `nums[lo] < nums[mid]`로 정렬 여부를 판단한다
+
+```js
+if (nums[lo] < nums[mid]) { /* 왼쪽 정렬 */ } else { /* 오른쪽 정렬 */ }
+```
+
+`[3, 1]`에서 1을 찾아 보자. `lo = 0`, `hi = 1`, `mid = 0`이다. `nums[0] < nums[0]`은 거짓이라 오른쪽 `[0, 1]`이 정렬됐다고 본다. 실제로는 3, 1이라 정렬되지 않았다. 그 상태로 "1이 3 초과 1 이하인가"를 물으니 거짓, `hi = -1`이 되어 `-1`을 돌려준다. 1은 1번 칸에 있는데 놓쳤다. 직접 돌려 보니 다섯 풀이는 1을 냈고 이 코드만 `-1`을 냈다.
+
+mid가 lo와 같아지는 두 칸 상황에서 왼쪽 절반은 칸 하나라 정렬돼 있다. `<=`여야 이 경우를 맞게 판단한다.
+
+### 범위 판단에서 등호를 빼먹는다
+
+```js
+if (nums[lo] < target && target < nums[mid]) hi = mid - 1; // nums[lo] === target이면?
+```
+
+target이 정렬된 쪽의 왼쪽 끝 값과 같으면 범위 밖으로 판단해 반대쪽으로 간다. 예시에서 12(0번)를 찾으면 첫 비교에서 왼쪽 12~31이 정렬됐는데 "12 초과 31 미만"이 거짓이라 오른쪽으로 가서 못 찾는다. 오른쪽 범위의 `target <= nums[hi]`도 같은 이유로 등호가 필요하다.
+
+### 정렬되지 않은 쪽의 범위로 판단한다
+
+```js
+if (target >= nums[mid] && target <= nums[hi]) lo = mid + 1; // 오른쪽이 꺾여 있다면?
+```
+
+꺾인 쪽은 양 끝 값이 범위를 나타내지 않는다. `[12, 17, 25, 31, -4, 1, 3, 8]`의 3~7번(31, -4, 1, 3, 8)을 보면 양 끝이 31과 8인데, 그 사이 값은 -4부터 8까지와 31이다. 양 끝으로 범위를 판단하면 엉뚱한 쪽으로 간다. 판단은 늘 정렬된 쪽으로만 한다.
+
+### 꺾이는 곳 풀이에서 조각 고르는 조건을 잘못 쓴다
+
+```js
+if (target >= nums[0]) return binarySearch(nums, 0, k - 1, target);
+return binarySearch(nums, k, n - 1, target);
+```
+
+회전한 배열에서는 맞는다. 그런데 회전하지 않은 `[-4, 1, 3, 8]`에서는 `k = 0`이라 왼쪽 조각이 빈 구간 `[0, -1]`이다. 모든 target이 `nums[0]` 이상이니 늘 빈 구간에서 찾고 `-1`을 돌려준다. 위의 풀이처럼 오른쪽 조각의 범위(`nums[k]` 이상 `nums[n - 1]` 이하)로 고르면 이 문제가 없다.
+
+### 맞는지 확인하는 법
+
+회전 문제는 회전 횟수와 target을 모두 바꿔 가며 넣어야 경계 버그가 보인다. 길이 1~8의 서로 다른 값 배열을 무작위로 만들고, 무작위로 돌리고, 범위 안팎의 target으로 3만 번 넣어 `indexOf`와 비교했다.
+
+```js
+for (let t = 0; t < 30000; t++) {
+  const n = 1 + Math.floor(Math.random() * 8);
+  const set = new Set();
+  while (set.size < n) set.add(Math.floor(Math.random() * 40) - 20); // 서로 다른 값
+  const sorted = [...set].sort((a, b) => a - b);
+  const r = Math.floor(Math.random() * n);
+  const a = [...sorted.slice(r), ...sorted.slice(0, r)];             // r칸 회전
+  const target = Math.floor(Math.random() * 44) - 22;                // 범위 밖도 섞는다
+  for (const f of solutions) {
+    if (f(a, target) !== a.indexOf(target)) { console.log("BAD", f.name, a, target); process.exit(); }
+  }
+}
+console.log("random ok");
+```
+
+```text
+random ok
+```
+
+이 글의 다섯 풀이는 모두 통과했고, `<`로 판단하는 코드를 같은 검사에 넣으면 금방 두 칸짜리 반례가 나온다. 면접장에서는 `[3, 1]`에서 1과 3을 찾는 두 경우만 손으로 따라가 봐도 부등호 실수의 대부분이 드러난다.
+
+## 직접 풀어 보기
+
+테스트에는 회전하지 않은 배열, 한 칸, 두 칸(양쪽 값 모두), 덩어리의 양 끝 값이 들어 있다. `[3, 1]`에서 1을 찾는 테스트가 `<=` 실수를 잡는다.
+
+<CodePlayground
+  caption="LeetCode 33. Search in Rotated Sorted Array"
+  functionName="search"
+  initialCode={"function search(nums, target) {\n  let lo = 0, hi = nums.length - 1;\n  // 가운데로 자르면 한쪽은 정렬돼 있다. 어느 쪽인지 판단하고,\n  // target이 그 범위 안에 있는지로 갈 쪽을 정한다\n  return -1;\n}"}
+  solution={"function search(nums, target) {\n  let lo = 0, hi = nums.length - 1;\n  while (lo <= hi) {\n    const mid = lo + Math.floor((hi - lo) / 2);\n    if (nums[mid] === target) return mid;\n    if (nums[lo] <= nums[mid]) {          // 왼쪽 절반이 정렬돼 있다\n      if (nums[lo] <= target && target < nums[mid]) hi = mid - 1;\n      else lo = mid + 1;\n    } else {                              // 오른쪽 절반이 정렬돼 있다\n      if (nums[mid] < target && target <= nums[hi]) lo = mid + 1;\n      else hi = mid - 1;\n    }\n  }\n  return -1;\n}"}
+  tests={[{"label":"3은 6번","args":[[12,17,25,31,-4,1,3,8],3],"expected":6},{"label":"25는 2번","args":[[12,17,25,31,-4,1,3,8],25],"expected":2},{"label":"없는 값 10","args":[[12,17,25,31,-4,1,3,8],10],"expected":-1},{"label":"왼쪽 덩어리 첫 값","args":[[12,17,25,31,-4,1,3,8],12],"expected":0},{"label":"오른쪽 덩어리 첫 값","args":[[12,17,25,31,-4,1,3,8],-4],"expected":4},{"label":"오른쪽 정렬, 왼쪽에 있음","args":[[25,31,-4,1,3,8,12,17],31],"expected":1},{"label":"회전 안 됨","args":[[-4,1,3,8,12,17,25,31],17],"expected":5},{"label":"한 칸, 없음","args":[[1],0],"expected":-1},{"label":"한 칸, 있음","args":[[5],5],"expected":0},{"label":"두 칸의 오른쪽","args":[[3,1],1],"expected":1},{"label":"두 칸의 왼쪽","args":[[3,1],3],"expected":0}]}
+/>
+
+## 면접관이 이어서 묻는 것
+
+### 같은 값이 있어도 된다면 (81. Search in Rotated Sorted Array II)
+
+81번은 같은 값을 허용하고, 인덱스 대신 있는지 없는지(true/false)를 묻는다. 같은 값이 있으면 `nums[lo] === nums[mid] === nums[hi]`인 경우가 생기고, 이때는 어느 쪽이 정렬됐는지 알 수 없다. `[1, 0, 1, 1, 1]`에서 0을 찾으면 33번 코드는 `nums[0] <= nums[2]`(1 ≤ 1)라 왼쪽이 정렬됐다고 보고 오른쪽으로 가서 `-1`을 돌려준다. 0은 1번 칸에 있다.
+
+양 끝과 가운데가 모두 같으면 양 끝을 한 칸씩 줄인다. 가운데에 같은 값이 남아 있으니 끝을 버려도 target을 잃지 않는다(target이 그 값이었다면 이미 `nums[mid] === target`에서 찾았다).
+
+```python
+def search(nums, target):
+    lo, hi = 0, len(nums) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if nums[mid] == target:
+            return True
+        if nums[lo] == nums[mid] == nums[hi]:   # 어느 쪽이 정렬됐는지 모른다
+            lo += 1
+            hi -= 1
+        elif nums[lo] <= nums[mid]:
+            if nums[lo] <= target < nums[mid]: hi = mid - 1
+            else: lo = mid + 1
+        else:
+            if nums[mid] < target <= nums[hi]: lo = mid + 1
+            else: hi = mid - 1
+    return False
+```
+
+```text
+True False True True
+```
+
+`[2, 5, 6, 0, 0, 1, 2]`에서 0과 3, `[1, 0, 1, 1, 1]`에서 0, 1이 잔뜩 있는 배열 속 13을 찾은 결과다. 중복이 적은 값 0~3짜리 배열로 3만 번 무작위 검사도 통과했다. 거의 모든 값이 같으면 양 끝이 한 칸씩만 줄어 최악 O(n)이다. 같은 이유로 [153번의 중복 변형(154번)](/posts/leetcode-find-minimum-in-rotated-sorted-array)도 최악 O(n)이다.
+
+### 회전 횟수를 알려 준다면
+
+꺾이는 곳 k를 바로 아니까 `findPivot`이 필요 없다. 가상 인덱스 풀이에서 `(mid + k) % n`으로 읽으면 이분 탐색 한 번이다.
+
+### 처음 나오는 자리, 들어갈 자리를 묻는다면
+
+값이 서로 다르면 처음 나오는 자리는 곧 찾은 자리다. 들어갈 자리(없을 때 넣으면 정렬이 유지되는 자리)는 회전 배열에서 뜻이 애매하다. 그래서 꺾이는 곳 k로 두 조각을 나누고, target이 속할 조각에서 lower bound를 구한다. 이렇게 조각으로 나누는 풀이가 변형에 더 잘 버틴다.
+
+### 배열이 두 번 이상 회전됐다면
+
+정렬 배열을 몇 번을 회전하든 결과는 한 번 회전한 것과 같다. k칸 회전을 두 번 하면 2k칸 회전이다. 그래서 같은 코드가 그대로 동작한다. 다만 "정렬된 배열 두 개를 이어 붙였다"처럼 덩어리 사이 값의 크기 관계가 깨진 입력이면 회전 배열이 아니라 이 풀이들이 모두 성립하지 않는다.
+
+### 비슷한 문제
+
+- 153. Find Minimum in Rotated Sorted Array: 꺾이는 곳 찾기. [앞 글](/posts/leetcode-find-minimum-in-rotated-sorted-array).
+- 81. Search in Rotated Sorted Array II: 위에서 본 중복 변형.
+- 704. Binary Search: 조각 안에서 쓰는 평범한 이분 탐색. [704 글](/posts/leetcode-binary-search).
+- 1095. Find in Mountain Array: 올라갔다 내려오는 배열에서 꼭대기를 찾고, 오르막과 내리막에서 각각 이분 탐색한다. 꺾이는 곳 + 조각 풀이와 같은 구조다.
+
+답의 범위에서 찾는 [Koko Eating Bananas](/posts/leetcode-koko-eating-bananas)와 두 배열을 자르는 [Median of Two Sorted Arrays](/posts/leetcode-median-of-two-sorted-arrays)도 이 패턴이다. 패턴 전체 순서는 [LeetCode 공부 가이드](/posts/leetcode-study-guide)에 있다.
+
+## 버릴 근거는 정렬된 쪽에서 나온다
+
+회전 배열은 전체가 정렬되지 않았지만, 가운데로 자르면 한쪽은 반드시 정렬돼 있다. 정렬된 쪽은 양 끝으로 범위를 알 수 있으니 target이 그 안에 있는지 바로 판단하고, 없으면 반대쪽으로 간다. 정렬되지 않은 쪽은 범위를 판단할 수 없으니 판단에 쓰지 않는다. 부등호는 두 칸 상황에서 정해진다. mid가 lo와 같아지면 왼쪽 절반이 한 칸이라 정렬된 것으로 봐야 하니 `nums[lo] <= nums[mid]`이고, 정렬된 쪽의 양 끝 값도 범위에 넣는다. 같은 값이 허용되면 이 판단이 깨져 최악 O(n)이 된다.
+
+## 면접에서 나올 만한 질문
+
+### 정렬이 깨졌는데 어떻게 O(log n)에 찾을 수 있나요?
+
+가운데로 자르면 꺾이는 곳은 한쪽 절반에만 있어서 다른 쪽은 반드시 오름차순이기 때문이다. 정렬된 쪽은 양 끝 값으로 범위를 알 수 있으니 target이 그 안에 있는지 바로 판단한다. 있으면 그쪽, 없으면 반대쪽으로 가서 매번 절반을 버린다. 그래서 비교가 log n번이다.
+
+### 왼쪽이 정렬됐는지 판단할 때 왜 `nums[lo] <= nums[mid]`처럼 등호를 넣나요?
+
+구간이 한두 칸이면 mid가 lo와 같아져서 왼쪽 절반이 칸 하나가 되기 때문이다. 칸 하나는 정렬된 것이니 참이 나와야 한다. `<`로 쓰면 이때 오른쪽이 정렬됐다고 잘못 판단해서, `[3, 1]`에서 1을 찾으면 `-1`을 돌려준다. 값이 서로 다르니 lo와 mid가 다른 칸인데 값이 같은 경우는 없다.
+
+### 꺾이는 곳을 먼저 찾는 풀이와 한 번에 찾는 풀이 중 무엇이 낫나요?
+
+시간 복잡도는 둘 다 O(log n)이고 공간도 O(1)이다. 꺾이는 곳 풀이는 이분 탐색을 두 번 하지만, 최솟값 찾기와 평범한 이분 탐색이라는 아는 문제 두 개로 쪼개져서 설명과 검증이 쉽고 변형(들어갈 자리, 회전 횟수가 주어진 경우)에 잘 버틴다. 한 번에 찾는 풀이는 비교가 적고 코드가 짧지만 부등호 네 개를 정확히 써야 한다.
+
+### 같은 값이 허용되면 무엇이 달라지나요?
+
+`nums[lo]`, `nums[mid]`, `nums[hi]`가 모두 같을 때 어느 쪽이 정렬됐는지 알 수 없다. `[1, 0, 1, 1, 1]`처럼 왼쪽이 꺾였는데도 양 끝과 가운데가 같아 보인다. 이때는 양 끝을 한 칸씩 줄이는 수밖에 없어서 최악 O(n)이 된다. 81번 문제가 이 변형이다.
+
+### target이 정렬된 쪽의 범위에 없을 때 반대쪽으로 가도 되는 근거는 무엇인가요?
+
+정렬된 쪽은 양 끝 사이의 값만 담고 있으니, 범위 밖의 target은 그쪽에 있을 수 없다. 배열 안에 있다면 남은 반대쪽에 있을 수밖에 없다. 반대쪽이 꺾여 있어도 상관없다. 다음 반복에서 그 쪽을 다시 반으로 자르면 또 한쪽이 정렬돼 있기 때문이다.
+
+### 다른 덩어리를 무한대로 바꿔 읽어도 되는 이유는 무엇인가요?
+
+target이 왼쪽 덩어리에 있다면 오른쪽 덩어리 칸은 어차피 답이 아니고, 그 칸들이 모두 배열 뒤쪽에 몰려 있다. 그 칸을 `+∞`로 읽으면 배열이 `[왼쪽 덩어리, +∞, …]`라는 정렬 배열이 되고 답의 위치는 바뀌지 않는다. 오른쪽 덩어리에 있으면 앞쪽을 `-∞`로 읽는다. 그래서 평범한 이분 탐색을 그대로 쓸 수 있다. 실제 배열은 바꾸지 않고 mid를 읽을 때만 바꾼다.
+
+### 이 문제를 무작위 테스트로 검증한다면 무엇을 바꿔 가며 넣나요?
+
+배열 길이(특히 1, 2, 3), 회전 횟수(0부터 n - 1까지), target(덩어리의 양 끝 값, 가운데 값, 범위 밖의 값)이다. 느리지만 틀릴 수 없는 `indexOf`의 결과와 비교한다. 경계 버그는 구간이 두세 칸일 때 나니 길이를 작게 잡고 많이 돌리는 쪽이 효과적이다.

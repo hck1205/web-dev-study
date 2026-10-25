@@ -1,0 +1,552 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-number-of-islands");
+
+<EasyIntro>
+  모눈종이에 바다와 땅을 칠해 놓은 지도가 있다. 땅 칸끼리 위아래나 옆으로 붙어 있으면 같은 섬이고, 대각선으로만 닿으면 다른 섬이다. 섬이 몇 개인지 세려면 지도를 왼쪽 위부터 한 칸씩 훑는다. 아직 세지 않은 땅을 만나면 섬 하나를 새로 센 다음, 그 땅과 이어진 땅을 전부 찾아서 물감으로 덮어 바다로 만든다. 이렇게 하면 같은 섬을 두 번 세는 일이 없다. 덮어 둔 섬은 다시 훑을 때 그냥 바다로 보이기 때문이다. 이어진 땅을 찾는 방법은 둘이다. 한 방향으로 끝까지 가 보는 방법과, 가까운 칸부터 물결처럼 한 겹씩 넓혀 가는 방법이다. 섬이 아주 크면 첫 번째 방법은 컴퓨터가 기억할 것이 너무 많아져서 멈출 수 있으니 두 번째 방법이 안전하다.
+</EasyIntro>
+
+그래프 문제를 처음 풀 때 대부분 이 문제를 만난다. 지도처럼 생긴 격자에서 섬의 개수를 세는 문제인데, 격자라서 그래프처럼 안 보인다. 칸 하나를 점으로, 붙어 있는 두 칸을 선으로 보면 그대로 그래프가 된다. 섬 하나는 서로 이어진 땅 칸 덩어리, 그래프 말로는 연결 요소(서로 오갈 수 있는 점들의 묶음)다.
+
+[LeetCode 200. Number of Islands](https://leetcode.com/problems/number-of-islands/)는 Medium이지만 아이디어는 하나뿐이다. 땅을 만나면 그 섬 전체를 지운다. 이 글은 처음 떠오르는 틀린 세기 방법부터 시작해 재귀 DFS, 재귀가 터지는 입력, BFS, 스택으로 바꾼 DFS, 유니온 파인드까지 다섯 가지를 보고, 입력을 건드리면 안 될 때와 면접에서 이어지는 변형을 정리한다. BFS와 DFS 자체는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에서 다뤘으니 여기서는 이 문제에 쓰는 방법만 본다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 붙어 있는 땅을 하나로 센다
+
+입력은 `"1"`(땅)과 `"0"`(물)로 채운 2차원 격자다. 위아래 양옆으로 붙은 땅은 같은 섬이고, 대각선으로만 닿는 땅은 다른 섬이다. 격자 바깥은 모두 물이라고 본다. 섬의 개수를 돌려준다.
+
+풀이에 영향을 주는 조건은 두 가지다.
+
+- 격자는 최대 300 × 300, 칸이 9만 개다. 칸마다 상수 번만 보면 충분하고, 칸 하나에서 격자 전체를 다시 훑는 O((mn)²)은 81억 번이라 안 된다.
+- 칸 값은 숫자가 아니라 글자 `"1"`, `"0"`이다. `grid[r][c] === 1`로 비교하면 항상 거짓이다.
+
+이 글에서 쓸 예시는 4 × 5 격자다.
+
+```text
+1 1 0 0 1
+1 0 0 1 1
+0 0 1 0 0
+1 0 0 0 1
+```
+
+손으로 세 보자. 왼쪽 위 세 칸 `(0,0) (0,1) (1,0)`이 첫 섬이다. 오른쪽 위 세 칸 `(0,4) (1,4) (1,3)`이 두 번째 섬이다. 가운데 `(2,2)`는 위아래 양옆이 모두 물이라 혼자 섬이다. `(1,3)`과 대각선으로 닿아 있지만 대각선은 이어진 것으로 치지 않는다. 아래 줄 양 끝 `(3,0)`과 `(3,4)`도 각각 섬이다. 답은 5다.
+
+아래 그림에서 다음을 누르면 섬을 하나씩 짚어 준다. 진한 점이 땅, 옅은 점이 물이고, 선은 붙어 있는 땅끼리만 그었다.
+
+<VectorSpace
+  caption="4 × 5 격자. 위아래 양옆으로 붙은 땅만 한 섬이다"
+  width={400}
+  height={260}
+  groups={[{ id: "land", label: "땅 (1)" }, { id: "sea", label: "물 (0)" }]}
+  points={[
+    { id: "p00", label: "1", x: 60, y: 40, group: "land" },
+    { id: "p01", label: "1", x: 130, y: 40, group: "land" },
+    { id: "p02", label: "0", x: 200, y: 40, group: "sea" },
+    { id: "p03", label: "0", x: 270, y: 40, group: "sea" },
+    { id: "p04", label: "1", x: 340, y: 40, group: "land", labelAt: "left" },
+    { id: "p10", label: "1", x: 60, y: 100, group: "land" },
+    { id: "p11", label: "0", x: 130, y: 100, group: "sea" },
+    { id: "p12", label: "0", x: 200, y: 100, group: "sea" },
+    { id: "p13", label: "1", x: 270, y: 100, group: "land" },
+    { id: "p14", label: "1", x: 340, y: 100, group: "land", labelAt: "left" },
+    { id: "p20", label: "0", x: 60, y: 160, group: "sea" },
+    { id: "p21", label: "0", x: 130, y: 160, group: "sea" },
+    { id: "p22", label: "1", x: 200, y: 160, group: "land" },
+    { id: "p23", label: "0", x: 270, y: 160, group: "sea" },
+    { id: "p24", label: "0", x: 340, y: 160, group: "sea", labelAt: "left" },
+    { id: "p30", label: "1", x: 60, y: 220, group: "land" },
+    { id: "p31", label: "0", x: 130, y: 220, group: "sea" },
+    { id: "p32", label: "0", x: 200, y: 220, group: "sea" },
+    { id: "p33", label: "0", x: 270, y: 220, group: "sea" },
+    { id: "p34", label: "1", x: 340, y: 220, group: "land", labelAt: "left" },
+  ]}
+  edges={[["p00", "p01"], ["p00", "p10"], ["p04", "p14"], ["p13", "p14"]]}
+  steps={[
+    { caption: "선은 위아래 양옆으로 붙은 땅끼리만 있다. 선으로 이어진 덩어리가 섬이다.", showEdges: true },
+    { caption: "첫 섬: (1,0)에서 (0,0)을 거쳐 (0,1)까지 세 칸.", showEdges: true, path: ["p10", "p00", "p01"] },
+    { caption: "두 번째 섬: (0,4), (1,4), (1,3) 세 칸.", showEdges: true, path: ["p04", "p14", "p13"] },
+    { caption: "(2,2)는 (1,3)과 대각선으로만 닿는다. 혼자 섬이다.", showEdges: true, path: ["p22"] },
+    { caption: "아래 줄 양 끝도 각각 혼자 섬이다. 모두 다섯 개.", showEdges: true, path: ["p30"] },
+    { caption: "(3,4)가 다섯 번째 섬이다.", showEdges: true, path: ["p34"] },
+  ]}
+/>
+
+## 위와 왼쪽만 보고 세면 하나가 남는다
+
+처음 이 문제를 보면 그래프 탐색 없이 세는 방법이 먼저 떠오른다. 격자를 왼쪽 위부터 훑으니, 섬의 "첫 칸"만 세면 되지 않을까. 첫 칸은 위와 왼쪽이 모두 물인 땅이다. 위나 왼쪽에 땅이 있으면 이미 센 섬에 붙어 있는 칸일 테니 건너뛴다.
+
+```js
+// 틀린 풀이: 위와 왼쪽이 물인 땅을 섬의 시작으로 센다
+function numIslands(grid) {
+  let count = 0;
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[0].length; c++) {
+      if (grid[r][c] !== "1") continue;
+      const up = r > 0 && grid[r - 1][c] === "1";
+      const left = c > 0 && grid[r][c - 1] === "1";
+      if (!up && !left) count++; // 위도 왼쪽도 물이면 새 섬이라고 본다
+    }
+  }
+  return count;
+}
+```
+
+예시 격자에 돌리면 5가 아니라 6이 나온다. 범인은 `(1,3)`이다. 위 `(0,3)`도 물이고 왼쪽 `(1,2)`도 물이라 새 섬으로 세지만, 실제로는 오른쪽 `(1,4)`를 거쳐 `(0,4)`와 이어진 같은 섬이다. 섬이 아래로 내려왔다가 왼쪽으로 꺾어 들어오면 "첫 칸"이 두 개 생긴다. 더 단순한 반례는 U자 모양이다.
+
+```text
+1 0 1
+1 1 1     답 1, 이 풀이 2
+```
+
+위쪽 두 기둥이 각각 첫 칸으로 세어지고, 아래 줄에서 합쳐진다는 사실을 이 풀이는 모른다. 지나온 칸만 보고는 나중에 합쳐질지 알 수 없다. 섬 하나를 끝까지 따라가 보는 탐색이 필요한 이유다. 이 생각은 버리지 말고 기억해 두자. 합쳐질 때 개수를 하나 빼 주면 고칠 수 있고, 그게 뒤에 나올 유니온 파인드 풀이다.
+
+## 땅을 밟으면 섬 전체를 가라앉힌다
+
+격자를 훑다가 땅을 만나면 섬 개수를 하나 올린다. 그리고 그 칸에서 출발해 이어진 땅을 모두 찾아 `"0"`으로 바꾼다. 섬 하나를 통째로 바다에 가라앉히는 셈이다. 그러면 훑기를 계속하다가 같은 섬의 다른 칸을 만나도 이미 물이라 다시 세지 않는다.
+
+이어진 땅을 찾는 가장 짧은 코드는 재귀 DFS(깊이 우선 탐색, 한 방향으로 갈 수 있는 데까지 가 본 뒤 돌아오는 탐색)다.
+
+```js
+function numIslands(grid) {
+  const m = grid.length, n = grid[0].length;
+  const sink = (r, c) => {
+    // 격자 밖이거나 물(또는 이미 가라앉힌 칸)이면 멈춘다
+    if (r < 0 || r >= m || c < 0 || c >= n || grid[r][c] !== "1") return;
+    grid[r][c] = "0";          // 먼저 가라앉혀야 이웃이 다시 이 칸으로 오지 않는다
+    sink(r + 1, c);
+    sink(r - 1, c);
+    sink(r, c + 1);
+    sink(r, c - 1);
+  };
+  let count = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] === "1") {
+        count++;      // 아직 안 가라앉은 땅 = 새 섬
+        sink(r, c);   // 이 섬 전체를 지운다
+      }
+    }
+  }
+  return count;
+}
+```
+
+`grid[r][c] = "0"`을 재귀 호출보다 먼저 쓰는 게 중요하다. 순서를 바꿔 네 방향을 먼저 부르면, 오른쪽 칸이 다시 왼쪽(지금 칸)을 부르고, 지금 칸은 아직 땅이라 또 오른쪽을 부른다. 두 칸이 서로를 끝없이 부르다 스택이 넘친다. 방문 표시는 "들어가자마자" 한다.
+
+시간은 O(m · n)이다. 바깥 이중 반복이 칸마다 한 번씩 보고, `sink`는 땅 칸마다 한 번만 실제로 일한다(한 번 `"0"`이 된 칸은 바로 돌아간다). 한 칸에서 네 방향을 부르니 호출 수는 최대 4 · m · n이지만 상수 배다. 추가 공간은 재귀 깊이인데, 이게 최악에 O(m · n)이다.
+
+## 9만 칸짜리 섬에서 스택이 넘친다
+
+재귀 깊이가 왜 칸 수만큼 깊어질까. 300 × 300 격자가 전부 땅이라고 해 보자. `(0,0)`에서 아래로 내려가는 호출이 먼저 일어나서 `(299,0)`까지 300단계가 쌓인다. 거기서 오른쪽으로 한 칸 가면 다시 위로 올라가는 호출이 이어진다. 결국 격자를 뱀처럼 지그재그로 훑으며 9만 칸을 한 줄로 이어 놓은 길이 되고, 재귀가 한 번도 돌아오지 않은 채 9만 단계를 쌓는다.
+
+직접 돌려 보면 세 언어 모두 기본 설정에서 넘친다.
+
+```text
+Node.js 22   RangeError: Maximum call stack size exceeded
+Python 3.13  RecursionError: maximum recursion depth exceeded
+Java 21      StackOverflowError
+```
+
+Python은 기본 재귀 한도가 1,000이라 32 × 32 꽉 찬 섬에서 벌써 걸린다. `sys.setrecursionlimit(100000)`으로 한도를 올릴 수는 있지만, 한도는 파이썬이 세는 숫자일 뿐이고 실제 C 스택이 먼저 바닥나면 예외도 없이 프로세스가 죽을 수 있다. JavaScript와 Java의 스택 크기는 실행 환경 설정에 따라 다르다. 채점 서버가 스택을 넉넉히 잡아 두어 통과하는 경우도 있지만, 그 크기를 내가 알 수 없으니 기댈 일이 못 된다.
+
+면접에서 재귀 DFS로 답했다면 "섬이 격자 전체만큼 크면 재귀 깊이가 칸 수만큼 깊어진다"를 스스로 말하는 게 좋다. 그리고 재귀를 쓰지 않는 방법으로 넘어간다.
+
+## 큐로 한 겹씩 번지게 하는 BFS
+
+재귀 대신 큐(먼저 넣은 것을 먼저 꺼내는 줄)를 쓰면 호출 스택이 쌓이지 않는다. 땅을 만나면 그 칸을 가라앉히고 큐에 넣는다. 큐에서 칸을 하나 꺼낼 때마다 네 방향 이웃 중 땅인 칸을 가라앉히고 큐에 넣는다. 큐가 비면 섬 하나가 끝난 것이다. 출발 칸에서 한 칸 떨어진 땅, 두 칸 떨어진 땅 순서로 물결처럼 번지는 BFS(너비 우선 탐색)다.
+
+```js
+function numIslands(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let count = 0;
+  const queue = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== "1") continue;
+      count++;
+      grid[r][c] = "0";              // 큐에 넣는 순간 가라앉힌다
+      queue.length = 0;
+      queue.push([r, c]);
+      // shift()는 배열을 한 칸씩 당겨서 O(k)라 head 인덱스로 꺼낸다
+      for (let head = 0; head < queue.length; head++) {
+        const [cr, cc] = queue[head];
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === "1") {
+            grid[nr][nc] = "0";
+            queue.push([nr, nc]);
+          }
+        }
+      }
+    }
+  }
+  return count;
+}
+```
+
+여기서도 순서가 중요하다. 칸을 큐에 넣을 때 가라앉혀야 한다. 꺼낼 때 가라앉히면, 아직 큐에서 기다리는 칸을 다른 이웃이 또 큐에 넣는다. 결과는 맞지만 같은 칸이 큐에 여러 번 들어간다. 300 × 300 전부 땅인 격자에서 세어 보니 넣을 때 표시하면 9만 번, 꺼낼 때 표시하면 179,401번 큐에 넣었다. 두 배 가까이 헛일이다.
+
+JavaScript에는 큐 자료구조가 따로 없다. `queue.shift()`로 꺼내면 배열 앞을 비우느라 원소를 모두 한 칸씩 당기므로, 큐가 길어지면 꺼낼 때마다 느려진다. 위 코드처럼 `head` 인덱스를 앞으로 옮기며 읽으면 꺼내기가 O(1)이다.
+
+시간은 O(m · n), 공간은 큐 크기만큼이다. BFS의 큐에는 "지금 번지고 있는 물결의 가장자리"만 들어 있다. 300 × 300 꽉 찬 격자를 모서리에서 번지게 하면 큐가 가장 길 때도 300칸, 대각선 한 줄이었다. 다만 위 코드는 꺼낸 칸을 배열에서 지우지 않으니 섬 크기만큼 메모리를 쓴다. 정말 줄이고 싶다면 꺼낸 앞부분을 주기적으로 잘라 내거나 원형 큐를 쓴다.
+
+아래 그림은 2 × 5 격자에서 이 풀이를 한 단계씩 따라간 것이다. 칸은 윗줄 다섯 칸, 아랫줄 다섯 칸 순서로 놓았다. 초록 칸이 가라앉힌 땅, 아래 칸이 큐다.
+
+```text
+1 1 0 1 0
+0 1 0 0 1     답 3
+```
+
+<AlgoTrace
+  caption="2 × 5 격자를 BFS로 훑기. 앞 다섯 칸이 윗줄, 뒤 다섯 칸이 아랫줄이다"
+  memoryLabel="큐"
+  cells={["1", "1", "0", "1", "0", "0", "1", "0", "0", "1"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["(0,0)"], caption: "(0,0)이 땅이다. 섬 수를 1로 올리고, 가라앉힌 뒤 큐에 넣는다." },
+    { pointer: 0, found: [0, 1], memory: ["(0,1)"], caption: "(0,0)을 꺼내 네 방향을 본다. 오른쪽 (0,1)만 땅이라 가라앉히고 넣는다." },
+    { pointer: 1, found: [0, 1, 6], memory: ["(1,1)"], caption: "(0,1)을 꺼내면 아래 (1,1)이 땅이다." },
+    { pointer: 6, found: [0, 1, 6], memory: [], caption: "(1,1) 주변엔 남은 땅이 없다. 큐가 비어 첫 섬이 끝났다." },
+    { pointer: 2, found: [0, 1, 6], memory: [], caption: "훑기로 돌아온다. (0,1)은 이미 0이라 건너뛰고 (0,2)는 물이다." },
+    { pointer: 3, found: [0, 1, 6, 3], memory: ["(0,3)"], caption: "(0,3)에서 새 땅을 만난다. 섬 수 2." },
+    { pointer: 3, found: [0, 1, 6, 3], memory: [], caption: "(0,3)의 이웃은 모두 물이다. 한 칸짜리 섬이다." },
+    { pointer: 8, found: [0, 1, 6, 3], memory: [], caption: "(0,4)부터 (1,3)까지는 물이거나 이미 가라앉힌 칸이다." },
+    { pointer: 9, found: [0, 1, 6, 3, 9], memory: ["(1,4)"], caption: "(1,4)에서 세 번째 섬. 위 (0,4)는 물이다." },
+    { pointer: 9, found: [0, 1, 6, 3, 9], memory: [], caption: "격자를 다 훑었다. 답은 3이다." },
+  ]}
+/>
+
+다섯 번째 단계가 이 풀이의 요점이다. `(0,1)`은 원래 땅이었지만 첫 섬을 가라앉힐 때 `"0"`이 되어서, 훑기가 거기 닿았을 때는 물로 보인다. 같은 섬을 두 번 세지 않는 이유가 이 한 줄이다.
+
+### Python과 Java로 쓰면
+
+Python은 `collections.deque`가 양쪽 끝 넣고 빼기를 O(1)에 해 준다. `list.pop(0)`은 JavaScript의 `shift()`처럼 O(k)이니 쓰지 않는다. 재귀를 쓰지 않으니 재귀 한도도 신경 쓸 필요가 없다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def num_islands(grid: List[List[str]]) -> int:
+    m, n = len(grid), len(grid[0])
+    count = 0
+    for r in range(m):
+        for c in range(n):
+            if grid[r][c] != "1":
+                continue
+            count += 1
+            grid[r][c] = "0"  # 큐에 넣는 순간 가라앉힌다
+            queue = deque([(r, c)])
+            while queue:
+                cr, cc = queue.popleft()
+                for nr, nc in ((cr + 1, cc), (cr - 1, cc), (cr, cc + 1), (cr, cc - 1)):
+                    if 0 <= nr < m and 0 <= nc < n and grid[nr][nc] == "1":
+                        grid[nr][nc] = "0"
+                        queue.append((nr, nc))
+    return count
+
+
+grid = [list(s) for s in ["11001", "10011", "00100", "10001"]]
+print(num_islands(grid))
+big = [["1"] * 300 for _ in range(300)]
+print(num_islands(big))
+```
+
+```text
+5
+1
+```
+
+300 × 300 꽉 찬 격자를 Python으로 돌리면 60ms쯤 걸렸다. 같은 입력에서 재귀 버전은 `RecursionError`로 멈췄다.
+
+Java는 `char[][]`라서 비교도 `'1'` 글자 리터럴로 한다. 큐는 `ArrayDeque`를 쓴다. `LinkedList`도 `Queue`를 구현하지만 노드마다 객체를 만들어서 더 느리고, `Stack` 클래스는 오래된 동기화 클래스라 쓰지 않는다.
+
+```java
+import java.util.ArrayDeque;
+
+class Solution {
+    public int numIslands(char[][] grid) {
+        int m = grid.length, n = grid[0].length, count = 0;
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        ArrayDeque<int[]> queue = new ArrayDeque<>();
+        for (int r = 0; r < m; r++) {
+            for (int c = 0; c < n; c++) {
+                if (grid[r][c] != '1') continue;
+                count++;
+                grid[r][c] = '0';               // 큐에 넣는 순간 가라앉힌다
+                queue.add(new int[]{r, c});
+                while (!queue.isEmpty()) {
+                    int[] cur = queue.poll();
+                    for (int[] d : dirs) {
+                        int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                        if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] == '1') {
+                            grid[nr][nc] = '0';
+                            queue.add(new int[]{nr, nc});
+                        }
+                    }
+                }
+            }
+        }
+        return count;
+    }
+}
+```
+
+```text
+5
+1
+```
+
+같은 꽉 찬 격자를 Java 재귀 버전으로 돌렸을 때는 `StackOverflowError`가 났다. JVM은 `-Xss` 옵션으로 스레드 스택을 키울 수 있지만 채점 환경에서는 그 옵션을 줄 수 없다.
+
+## 재귀를 스택 배열로 바꾸면 DFS가 된다
+
+BFS 코드에서 큐를 스택(나중에 넣은 것을 먼저 꺼내는 더미)으로 바꾸면 그대로 DFS가 된다. 재귀 DFS가 호출 스택에 쌓던 것을 내가 만든 배열에 쌓는 셈이라, 깊이 제한이 사라진다. JavaScript 배열의 `push`와 `pop`은 끝에서 일어나서 둘 다 O(1)이다.
+
+```js
+function numIslands(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let count = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== "1") continue;
+      count++;
+      grid[r][c] = "0";
+      const stack = [[r, c]];
+      while (stack.length > 0) {
+        const [cr, cc] = stack.pop();   // 끝에서 꺼낸다: 가장 최근에 찾은 칸부터
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === "1") {
+            grid[nr][nc] = "0";
+            stack.push([nr, nc]);
+          }
+        }
+      }
+    }
+  }
+  return count;
+}
+```
+
+이 문제에서는 BFS와 DFS 중 무엇을 써도 답이 같다. 섬 하나에 속한 칸을 "모두" 지우기만 하면 되고, 어떤 순서로 지우는지는 상관없다. 순서가 중요해지는 건 최단 거리를 물을 때다. 그때는 가까운 칸부터 보는 BFS만 맞다. 예를 들어 [Rotting Oranges](/posts/leetcode-rotting-oranges)처럼 "몇 분 뒤에 다 번지나"를 물으면 BFS의 층 수가 곧 답이다.
+
+시간 O(m · n), 공간은 최악에 스택이 O(m · n)까지 커진다. 같은 300 × 300 꽉 찬 격자에서 재 보니 스택은 가장 길 때 44,851칸까지 커졌다. 큐(300칸)의 150배다. 이웃을 넣어 놓고 가장 최근 것만 따라가니, 넣고 꺼내지 않은 칸이 계속 쌓인다. 그래도 힙 메모리라서 호출 스택처럼 몇만 단계에서 터지지는 않는다.
+
+## 합쳐질 때마다 하나씩 빼는 유니온 파인드
+
+앞의 틀린 풀이를 다시 떠올려 보자. 땅 칸을 하나씩 섬으로 세고, 붙어 있는 두 땅이 아직 다른 섬으로 세어져 있으면 합치면서 개수를 하나 뺀다. 이걸 빠르게 해 주는 자료구조가 유니온 파인드(서로소 집합)다. 칸마다 "내 대표가 누구인지"를 적어 두고, `find`로 대표를 찾고, `union`으로 두 묶음의 대표를 하나로 합친다. 자세한 원리는 [유니온 파인드 글](/posts/ds-union-find)에 있다.
+
+```js
+function numIslands(grid) {
+  const m = grid.length, n = grid[0].length;
+  const parent = new Int32Array(m * n);  // 칸 (r, c)는 r * n + c 번으로 본다
+  const rank = new Uint8Array(m * n);
+  let count = 0;
+  for (let i = 0; i < m * n; i++) {
+    parent[i] = i;                                   // 처음엔 자기 자신이 대표
+    if (grid[Math.floor(i / n)][i % n] === "1") count++; // 땅 칸 하나하나를 섬으로 센다
+  }
+  const find = (x) => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]];  // 경로 절반 압축: 한 칸씩 건너뛰며 올라간다
+      x = parent[x];
+    }
+    return x;
+  };
+  const union = (a, b) => {
+    let ra = find(a), rb = find(b);
+    if (ra === rb) return;             // 이미 같은 섬
+    if (rank[ra] < rank[rb]) [ra, rb] = [rb, ra];
+    parent[rb] = ra;                   // 낮은 나무를 높은 나무 밑에 붙인다
+    if (rank[ra] === rank[rb]) rank[ra]++;
+    count--;                           // 두 섬이 하나가 됐다
+  };
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== "1") continue;
+      // 아래와 오른쪽만 보면 모든 이웃 쌍을 한 번씩 본다
+      if (r + 1 < m && grid[r + 1][c] === "1") union(r * n + c, (r + 1) * n + c);
+      if (c + 1 < n && grid[r][c + 1] === "1") union(r * n + c, r * n + c + 1);
+    }
+  }
+  return count;
+}
+```
+
+U자 격자에서 이 풀이는 땅 5칸을 5로 세고, 붙어 있는 땅 쌍 네 개를 차례로 합치며 4를 뺀다. 답 1이다. 고리 모양처럼 이미 같은 섬인 두 칸이 또 붙어 있으면 `find` 결과가 같아서 빼지 않는다. 틀린 풀이가 놓친 "나중에 합쳐지는 일"을 `union`이 처리한다.
+
+경로 압축과 랭크를 함께 쓰면 `find` 한 번이 사실상 상수 시간, 정확히는 O(α(mn))이다. α는 아커만 함수의 역함수로, 현실에서 다룰 수 있는 어떤 입력 크기에서도 4를 넘지 않는다. 전체 시간은 O(m · n · α(mn)), 공간은 `parent`와 `rank` 배열로 O(m · n)이다. 입력 격자를 바꾸지 않는다는 장점도 있다.
+
+이 문제 하나만 보면 BFS보다 코드가 길다. 유니온 파인드가 빛나는 건 땅이 하나씩 추가되는 상황이다. "칸을 하나 땅으로 바꿀 때마다 섬 개수를 알려 달라"는 질문(LeetCode 305. Number of Islands II, 프리미엄 문제)에 BFS로 답하면 추가할 때마다 격자 전체를 다시 훑는다. 유니온 파인드는 새 땅을 `count++` 하고 네 이웃과 `union`만 하면 된다.
+
+## 입력을 바꾸면 안 된다면
+
+지금까지의 풀이 중 세 개는 `grid`를 `"0"`으로 덮어써서 방문을 표시했다. LeetCode에서는 문제가 없지만, 실무 코드에서 남이 넘긴 배열을 몰래 바꾸는 함수는 버그를 부른다. 같은 지도를 다른 화면에서도 쓰고 있다면 섬이 다 사라진다. 면접에서도 "입력을 바꿔도 되나요?"를 먼저 묻는 습관이 좋다.
+
+안 된다고 하면 방문 표시를 따로 둔다.
+
+```js
+const seen = new Uint8Array(m * n);        // 0 = 아직, 1 = 방문함
+const isNewLand = (r, c) => grid[r][c] === "1" && seen[r * n + c] === 0;
+// grid[nr][nc] = "0" 대신 seen[nr * n + nc] = 1
+```
+
+2차원 배열 `Array.from({ length: m }, () => new Array(n).fill(false))`도 되지만, 1차원 `Uint8Array` 하나가 메모리도 적고 빠르다. 추가 공간 O(m · n)이 생긴다. 다른 방법은 `"1"` 대신 `"2"`처럼 다른 표시로 덮었다가 끝나고 `"1"`로 되돌리는 것인데, 중간에 예외가 나면 되돌리지 못해 위험하다. 유니온 파인드는 원래 입력을 읽기만 한다.
+
+## 네 입력으로 재 보면
+
+300 × 300 격자 세 가지에서 네 풀이를 다섯 번씩 돌려 가장 빠른 값을 적었다. Node.js 22다.
+
+```text
+입력                       재귀 DFS      BFS     스택 DFS   유니온 파인드
+전부 땅 (섬 1개)           RangeError    9.1ms     12.7ms       3.2ms
+무작위 50% (섬 5,341개)      4.3ms       5.4ms      4.8ms       2.9ms
+체스판 (섬 45,000개)          2.1ms       4.7ms      2.8ms       1.0ms
+```
+
+모두 몇 ms 안이라 시간 차이는 의미가 크지 않다. 9만 칸이면 어떤 O(m · n) 풀이든 빠르다. 눈여겨볼 건 첫 줄이다. 섬이 작고 많은 입력에서는 재귀가 오히려 빠르지만, 섬 하나가 격자를 다 덮으면 재귀만 실패한다. 유니온 파인드가 빠른 건 좌표 배열 `[r, c]`를 만들지 않고 `Int32Array` 인덱스만 다뤄서다. BFS도 좌표를 `r * n + c` 숫자 하나로 넣으면 비슷하게 빨라진다.
+
+## 섬 세기 다섯 가지 비교
+
+격자는 m × n이다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 위·왼쪽만 보고 세기 | O(m · n) | O(1) | 틀린다. U자 모양에서 섬을 더 센다 |
+| 재귀 DFS로 가라앉히기 | O(m · n) | O(m · n) 호출 스택 | 섬이 작다고 보장될 때. 코드가 가장 짧다 |
+| BFS로 가라앉히기 | O(m · n) | O(m · n) 큐 | 기본 답. 재귀 한도 걱정이 없다 |
+| 스택 DFS로 가라앉히기 | O(m · n) | O(m · n) 스택 | BFS와 같다. 재귀 코드를 그대로 옮기고 싶을 때 |
+| 유니온 파인드 | O(m · n · α) | O(m · n) | 입력을 바꾸면 안 될 때, 땅이 하나씩 추가될 때 |
+
+아래에서 직접 짜 볼 수 있다. 격자 칸은 글자 `"1"`, `"0"`이다.
+
+<CodePlayground
+  caption="Number of Islands: 섬 개수 세기"
+  functionName="numIslands"
+  initialCode={`function numIslands(grid) {
+  // grid: "1"(땅)과 "0"(물)로 된 2차원 배열
+  // 위아래 양옆으로 이어진 땅 덩어리의 개수를 돌려준다
+  return 0;
+}`}
+  solution={`function numIslands(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let count = 0;
+  const queue = [];
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== "1") continue;
+      count++;
+      grid[r][c] = "0";
+      queue.length = 0;
+      queue.push([r, c]);
+      for (let head = 0; head < queue.length; head++) {
+        const [cr, cc] = queue[head];
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === "1") {
+            grid[nr][nc] = "0";
+            queue.push([nr, nc]);
+          }
+        }
+      }
+    }
+  }
+  return count;
+}`}
+  tests={[
+    { label: "글의 예시", args: [[["1", "1", "0", "0", "1"], ["1", "0", "0", "1", "1"], ["0", "0", "1", "0", "0"], ["1", "0", "0", "0", "1"]]], expected: 5 },
+    { label: "물 한 칸", args: [[["0"]]], expected: 0 },
+    { label: "땅 한 칸", args: [[["1"]]], expected: 1 },
+    { label: "U자 모양은 섬 하나", args: [[["1", "0", "1"], ["1", "1", "1"]]], expected: 1 },
+    { label: "대각선은 이어지지 않는다", args: [[["1", "0", "1"], ["0", "1", "0"], ["1", "0", "1"]]], expected: 5 },
+    { label: "한 줄", args: [[["1", "1", "0", "1", "0", "1"]]], expected: 3 },
+    { label: "한 열", args: [[["1"], ["1"], ["0"], ["1"]]], expected: 2 },
+  ]}
+/>
+
+## 글자 1과 숫자 1, 그리고 경계 검사
+
+가장 흔한 실수는 숫자와 글자를 헷갈리는 것이다. LeetCode의 이 문제는 칸이 `"1"` 글자다.
+
+```js
+if (grid[r][c] === 1) count++; // 항상 거짓. 어떤 격자든 0을 돌려준다
+```
+
+`==`로 바꾸면 우연히 통과하지만, 가라앉힐 때 `grid[r][c] = 0`(숫자)을 넣으면 같은 배열에 글자와 숫자가 섞인다. 처음부터 `"1"`, `"0"`으로 맞춘다. Java에서는 `grid[r][c] == 1`이 글자 코드 1과 비교하는 것이라 역시 항상 거짓이다. `'1'`이라고 써야 한다.
+
+두 번째는 경계 검사 순서다.
+
+```js
+if (grid[r][c] !== "1" || r < 0 || r >= m) return; // r이 -1이면 grid[-1]이 undefined라 터진다
+```
+
+JavaScript에서 `grid[-1]`은 `undefined`이고 거기서 `[c]`를 읽으면 `TypeError`다. 범위 검사를 먼저 쓰고 값 검사를 나중에 쓴다. `||`는 앞이 참이면 뒤를 읽지 않는다. Python은 `grid[-1]`이 마지막 행을 뜻해서 오류 없이 엉뚱한 칸을 읽으니 더 찾기 어렵다.
+
+세 번째는 앞에서 본 방문 표시 시점이다. 재귀 DFS에서는 호출보다 먼저, BFS에서는 큐에 넣을 때 표시한다. 그 밖에 이 문제에서 조심할 것들이다.
+
+- 빈 격자. LeetCode는 m, n이 1 이상이라 `grid[0].length`가 안전하지만, 일반 함수라면 `if (grid.length === 0) return 0`을 먼저 둔다.
+- 대각선까지 이어진 것으로 보면 테스트의 체스판 격자가 1이 된다. 방향 배열에 무엇이 들어 있는지 확인한다.
+- 행마다 길이가 다른 격자(들쭉날쭉 배열)라면 `n`을 `grid[0].length` 하나로 잡으면 안 된다. 이 문제는 직사각형이 보장된다.
+
+## 섬 문제가 바뀌면
+
+### 가장 큰 섬의 넓이를 구하라면
+
+섬을 가라앉힐 때 지운 칸 수를 세어 돌려주고, 그 최댓값을 기록하면 된다. BFS라면 큐에 넣은 횟수가 곧 넓이다. [Max Area of Island](/posts/leetcode-max-area-of-island)(695)가 이 문제다.
+
+### 대각선도 이어진 것으로 본다면
+
+방향 배열에 `[1, 1], [1, -1], [-1, 1], [-1, -1]` 네 개를 더한다. 나머지 코드는 같다. 유니온 파인드라면 아래·오른쪽에 더해 오른쪽 아래, 왼쪽 아래 두 방향을 본다. 그래야 모든 이웃 쌍을 한 번씩 본다.
+
+### 격자가 너무 커서 메모리에 다 못 올린다면
+
+한 행씩 읽어 들인다고 하자. 유니온 파인드를 쓰면 지금 행과 바로 위 행만 있으면 된다. 위 행의 대표 번호와 지금 행을 이어 붙이고, 위 행에서 아래로 이어지지 않은 대표는 "끝난 섬"으로 세고 잊는다. 메모리가 O(n)이 된다. BFS는 섬이 아래로 계속 이어지면 이미 지나간 행으로 돌아가야 해서 이 방식에 맞지 않는다.
+
+### 모양이 다른 섬이 몇 종류인가
+
+섬마다 출발 칸 기준으로 상대 좌표를 모으거나, DFS 방향 순서("아래, 오른쪽, 되돌아옴...")를 문자열로 기록한 뒤 집합에 넣어 센다. 되돌아오는 시점도 함께 적어야 모양이 다른 섬이 같은 문자열로 겹치지 않는다. LeetCode 694. Number of Distinct Islands(프리미엄 문제)다.
+
+### 섬이 하나씩 생기면
+
+앞에서 말한 LeetCode 305. Number of Islands II(프리미엄 문제)다. 유니온 파인드로 새 땅마다 개수를 하나 올리고, 네 이웃과 합칠 때마다 하나씩 뺀다. 연산 하나가 거의 상수 시간이다.
+
+### 비슷한 문제
+
+- [Max Area of Island](/posts/leetcode-max-area-of-island) (695): 섬마다 칸 수를 센다.
+- [Pacific Atlantic Water Flow](/posts/leetcode-pacific-atlantic-water-flow) (417): 같은 격자 탐색을 바다 쪽 가장자리에서 거꾸로 시작한다.
+- [Rotting Oranges](/posts/leetcode-rotting-oranges) (994): 여러 출발점에서 동시에 BFS를 하고 층 수를 센다.
+- [Number of Connected Components in an Undirected Graph](/posts/leetcode-number-of-connected-components) (323, 프리미엄 문제): 격자가 아닌 일반 그래프에서 연결 요소를 센다.
+- [Word Search](/posts/leetcode-word-search) (79): 같은 격자 DFS인데 칸을 덮었다가 되돌린다. 이 문제는 되돌리지 않는다.
+- 130\. Surrounded Regions, 1254. Number of Closed Islands: 가장자리에 닿은 땅을 먼저 지우고 나머지를 센다.
+
+## 만나면 지운다
+
+격자의 칸을 점으로, 붙은 칸을 선으로 보면 섬은 연결 요소이고, 섬 세기는 연결 요소 세기다. 훑다가 땅을 만나면 하나를 세고 그 섬 전체를 가라앉혀 다시 세지 않게 만든다. 가라앉히는 방법은 DFS든 BFS든 상관없지만, 섬이 격자만큼 커질 수 있으니 재귀 대신 큐나 스택을 쓰는 게 안전하다. 방문 표시는 들어가는 순간, 큐에 넣는 순간에 한다. 땅이 계속 추가되거나 입력을 건드리면 안 되면 유니온 파인드로 합쳐질 때마다 하나씩 뺀다.
+
+## 면접에서 나올 만한 질문
+
+### 시간 복잡도가 왜 O(m · n)인가요?
+
+칸마다 바깥 반복에서 한 번 보고, 땅 칸은 가라앉힐 때 한 번 더 본다. 한 번 `"0"`이 된 칸은 다시 탐색에 들어가지 않으니 칸마다 상수 번만 일한다. 한 칸에서 네 방향을 보지만 4는 상수라 O(m · n)이다. 섬이 몇 개든 전체 일의 양은 같다.
+
+### BFS와 DFS 중 무엇을 고르나요?
+
+이 문제에서는 섬의 칸을 모두 지우기만 하면 되니 어느 쪽이든 답이 같다. 다만 재귀 DFS는 섬이 격자 전체만큼 크면 재귀가 9만 단계까지 깊어져서 Node, Python, Java 기본 설정에서 모두 스택이 넘쳤다. 그래서 큐를 쓰는 BFS나 직접 만든 스택을 쓰는 DFS를 고른다. 최단 거리가 필요한 변형이라면 BFS만 맞다.
+
+### 방문 표시를 큐에서 꺼낼 때 하면 어떻게 되나요?
+
+답은 맞지만 같은 칸이 큐에 여러 번 들어간다. 큐에서 기다리는 동안 다른 이웃이 그 칸을 또 넣기 때문이다. 꽉 찬 300 × 300 격자에서 세어 보니 9만 번이면 될 것을 179,401번 넣었다. 큐에 넣는 순간 표시해야 칸마다 정확히 한 번 들어간다.
+
+### 입력 격자를 바꾸지 않고 풀 수 있나요?
+
+방문 여부를 담는 `Uint8Array`(m · n칸)를 따로 두면 된다. 추가 공간 O(m · n)이 생긴다. 유니온 파인드는 원래 격자를 읽기만 하고 `parent` 배열로 섬을 관리해서 입력을 건드리지 않는다. 실무에서는 남이 넘긴 배열을 바꾸지 않는 쪽이 기본이다.
+
+### 유니온 파인드는 언제 쓰나요?
+
+땅이 하나씩 추가되면서 매번 섬 개수를 물을 때 쓴다. BFS는 추가할 때마다 격자를 다시 훑어야 하지만, 유니온 파인드는 새 칸을 하나 세고 이웃과 합칠 때마다 하나 빼면 끝이다. 경로 압축과 랭크를 쓰면 연산 하나가 O(α(n))으로 사실상 상수다. 행 단위로 읽는 아주 큰 격자도 위 행과 지금 행만 들고 처리할 수 있다.
+
+### 위와 왼쪽만 보고 세는 방법은 왜 틀리나요?
+
+섬이 아래에서 합쳐지는 모양을 모르기 때문이다. U자 모양에서는 위쪽 두 기둥이 각각 "위와 왼쪽이 물인 땅"이라 섬 두 개로 세어지는데, 아래 줄에서 하나로 이어진다. 지나온 칸만 보고는 나중에 합쳐질지 알 수 없다. 합쳐질 때 하나를 빼 주는 유니온 파인드가 이 생각을 고친 풀이다.

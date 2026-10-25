@@ -89,16 +89,16 @@ export const GIT_TIPS_ADVANCED: QuizQuestion[] = [
   {
     id: "git-tips-advanced-7",
     post: "git-tips-advanced",
-    question: "commit-msg 훅으로 Conventional Commits를 강제했는데 형식이 틀린 커밋이 main에 들어왔다. 가장 그럴듯한 이유와 대책은?",
+    question: "접근할 수 없는 저장소에 커밋 두 개를 작성자와 메시지까지 그대로 넘기려 한다. 받는 쪽이 git format-patch로 만든 파일을 적용할 때 알맞은 명령은?",
     choices: [
-      "훅은 merge 커밋에만 실행되기 때문이다. pre-push로 옮긴다",
-      "commit-msg 훅은 메시지를 볼 수 없기 때문이다. pre-commit으로 옮긴다",
-      "로컬 훅은 --no-verify로 건너뛰거나 설정하지 않은 사람이 있을 수 있다. CI나 서버 쪽에서 한 번 더 검사한다",
-      "훅 파일 이름에 .sh 확장자가 없어서다",
+      "git apply로 적용한다. 작성자와 메시지까지 커밋으로 만들어 준다",
+      "git am으로 적용한다. 패치마다 원래 작성자와 메시지를 살린 커밋이 생긴다",
+      "git cherry-pick에 패치 파일 경로를 준다",
+      "git apply --check로 적용한다. 적용하면서 충돌도 표시해 준다",
     ],
-    answer: 2,
+    answer: 1,
     explanation:
-      "로컬 훅은 저장소에 커밋되지 않고 사람마다 설정해야 하며, --no-verify로 언제든 건너뛸 수 있다. 그래서 반드시 지켜야 할 규칙은 CI의 commitlint나 브랜치 보호 규칙, 서버 훅에서 강제한다. commit-msg 훅은 메시지 파일 경로를 인자로 받아 메시지를 읽는다.",
-    anchor: "커밋-전에-규칙을-검사하는-훅",
+      "format-patch 파일은 메일 형식이라 작성자, 메시지, diff가 들어 있고 git am이 이를 읽어 커밋으로 다시 만든다. git apply는 diff만 작업 트리에 적용하고 커밋하지 않으며, --check는 아무것도 바꾸지 않고 적용 가능 여부만 알려 준다.",
+    anchor: "커밋을-파일로-주고받는-format-patch와-am",
   },
 ];

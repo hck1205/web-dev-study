@@ -219,3 +219,11 @@ export const Review = styled.p`
   color: ${color.textSubtle};
   font-size: ${font.size.xs};
 `;
+
+/** "지금 단계:"와 단계 표시가 한 덩어리로 줄바꿈되게 묶는다 */
+export const StageLine = styled.span`
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: ${space[1]} ${space[2]};
+  align-items: center;
+`;

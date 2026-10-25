@@ -16,7 +16,7 @@ export const metadata = getPostMetadata("pattern-command");
 
 ## 요청을 객체로 만들면 생기는 자리
 
-커맨드에는 네 역할이 나온다. 실제 일을 할 줄 아는 Receiver(문서), 그 일을 언제 할지 정하는 Invoker(버튼, 단축키, 실행 기록), 둘 사이에서 "무엇을 누구에게 할지"를 담는 Command, 그리고 Command를 만들어 Invoker에 건네는 Client다. 핵심은 Invoker가 Receiver를 모른다는 것이다. 버튼은 문서가 무엇인지 모르고 `execute()`만 부른다.
+커맨드에는 네 역할이 나온다. 실제 일을 할 줄 아는 Receiver(문서), 그 일을 언제 할지 정하는 Invoker(버튼, 단축키, 실행 기록), 둘 사이에서 "무엇을 누구에게 할지"를 담는 Command, 그리고 Command를 만들어 Invoker에 건네는 Client다. 여기서 Invoker는 Receiver를 모른다. 버튼은 문서가 무엇인지 모르고 `execute()`만 부른다.
 
 <ConceptDiagram
   width={400}

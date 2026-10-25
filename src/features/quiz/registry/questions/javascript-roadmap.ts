@@ -79,4 +79,19 @@ export const JAVASCRIPT_ROADMAP: QuizQuestion[] = [
       "abort는 신호를 받아 듣는 작업만 멈춘다. 요청 함수까지 신호가 전달됐는지, 못 넘기면 setState 직전에 signal.aborted를 확인하는지를 그 글에서 다룬다. 디바운스는 요청 수를 줄일 뿐 응답 순서를 보장하지 않는다.",
     anchor: "이-증상이면-이-글부터",
   },
+  {
+    id: "javascript-roadmap-7",
+    post: "javascript-roadmap",
+    question: "Node 22에서 ES2025의 Set.prototype.union은 있는데 Promise.try는 undefined였다. 여기서 끌어낼 판단으로 맞는 것은?",
+    choices: [
+      "ES2025가 아직 Stage 3이라 둘 다 쓰면 안 된다",
+      "판 단위가 아니라 기능 단위로 대상 런타임의 지원을 확인하고, 없는 함수는 폴리필로 채운다",
+      "트랜스파일러의 target을 ES2025로 올리면 Promise.try가 생긴다",
+      "Node는 ECMAScript를 따르지 않으니 브라우저 기준으로만 판단한다",
+    ],
+    answer: 1,
+    explanation:
+      "같은 판의 기능도 엔진이 들어온 시기가 달라서, 판 이름보다 기능 하나하나를 확인해야 한다. Promise.try는 문법이 아니라 함수라서 target을 바꿔 풀어 쓸 수 없고 폴리필이 필요하다.",
+    anchor: "08-최신-문법",
+  },
 ];

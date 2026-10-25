@@ -1,0 +1,505 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-encode-and-decode-strings");
+
+<EasyIntro>
+  친구에게 단어 여러 개를 보내야 하는데, 보낼 수 있는 건 긴 종이 띠 한 장뿐이다. 단어들을 띠에 이어 적으면 받는 친구는 어디서 한 단어가 끝나고 다음 단어가 시작하는지 알 수 없다.
+
+  처음엔 단어 사이에 쉼표를 찍으면 되겠다고 생각한다. 그런데 보낼 단어 안에 쉼표가 들어 있으면, 친구는 그 쉼표에서 단어가 끝난 줄 알고 잘못 자른다.
+
+  더 좋은 방법은 단어 앞에 그 단어의 글자 수를 먼저 적는 것이다. 다섯 글자짜리 단어라면 숫자 5를 적고, 숫자가 끝났다는 표시를 하나 찍은 다음 단어를 적는다.
+
+  받는 친구는 숫자를 읽고 표시를 지나서, 딱 그 글자 수만큼만 읽는다. 단어 안에 무슨 글자가 들어 있든 상관없다. 몇 글자를 읽을지 이미 알고 있으니 내용을 들여다볼 필요가 없기 때문이다.
+</EasyIntro>
+
+[Encode and Decode Strings](https://leetcode.com/problems/encode-and-decode-strings/)(프리미엄 문제)는 LeetCode 271번 Medium 문제다. 문자열 여러 개를 문자열 하나로 합쳤다가 다시 원래대로 되돌리는 함수 두 개를 만든다. 알고리즘보다 설계 문제에 가깝다. 그래서 면접에서 자주 나온다. 구분자를 어떻게 고르는지, 내용에 구분자가 섞이면 어떻게 하는지, 빈 문자열과 빈 목록을 어떻게 구별하는지를 따라가다 보면 네트워크 프로토콜이 메시지 경계를 정하는 방식과 같은 답에 닿는다.
+
+이 글은 풀이를 다섯 가지 놓는다. 구분자로 잇기, 이스케이프, 길이 접두, 고정 폭 길이 머리, 내장 직렬화다. 비슷하게 "모양을 잃지 않게 적는" 문제로는 [Serialize and Deserialize Binary Tree](/posts/leetcode-serialize-and-deserialize-binary-tree)가 있다. 코드는 모두 Node.js 22, Python 3.13, Java 21에서 직접 돌렸다.
+
+## 문자열 여러 개를 띠 하나에 싣는다
+
+함수 두 개를 만든다.
+
+- `encode(strs)`는 문자열 목록을 받아 문자열 하나를 돌려준다.
+- `decode(s)`는 그 문자열을 받아 원래 목록을 그대로 돌려준다.
+
+조건은 `decode(encode(strs))`가 언제나 `strs`와 똑같아야 한다는 것 하나다. 풀이를 고르는 데 영향을 주는 약속이 몇 개 더 있다.
+
+- 문자열에는 256가지 ASCII 문자 어느 것이든 들어올 수 있다. 쉼표, `#`, 숫자, 줄바꿈, 널 문자까지 전부다. "이 글자는 안 나오겠지"라는 가정을 쓸 수 없다.
+- 빈 문자열이 들어올 수 있다. 목록이 아예 비는 경우는 제약상 나오지 않을 수 있지만, 실제로 주고받는 형식이라면 빈 목록도 구별돼야 하니 함께 다룬다.
+- 두 함수는 상태를 갖지 않아야 한다. 전역 변수에 원래 목록을 숨겨 두고 꺼내는 식은 안 된다. encode한 결과는 네트워크를 건너 다른 기계에서 decode된다고 생각하면 된다.
+- `eval`이나 언어의 직렬화 함수에 기대지 말라고 한다. 이 제약은 뒤에서 다시 본다.
+
+목록 길이와 문자열 길이가 모두 수백 정도로 작아서 성능이 문제가 되지는 않는다. 정확성이 전부다.
+
+## 쉼표를 찍으면 어디서 깨지나
+
+가장 먼저 떠오르는 건 구분자로 잇고 구분자로 자르는 방법이다.
+
+```js
+const encode = (strs) => strs.join(",");
+const decode = (s) => s.split(",");
+
+console.log(decode(encode(["hi", "there"])));
+console.log(decode(encode(["a,b", "c"])));
+console.log(decode(encode([])));
+```
+
+```text
+[ 'hi', 'there' ]
+[ 'a', 'b', 'c' ]
+[ '' ]
+```
+
+두 군데서 깨진다.
+
+첫째, 내용에 구분자가 들어 있으면 그 자리에서 잘린다. `"a,b"`는 `"a"`와 `"b"`가 됐다. 쉼표 대신 아무리 드문 글자를 골라도 256가지 문자가 다 나올 수 있으니 소용없다. 널 문자 `\u0000`을 구분자로 쓰는 풀이를 종종 보는데, 문제 조건에서는 널 문자도 내용에 들어올 수 있다.
+
+둘째, 빈 목록 `[]`과 빈 문자열 하나짜리 목록 `[""]`이 둘 다 `""`로 인코딩된다. 서로 다른 입력이 같은 결과를 내면 decode는 둘 중 하나를 틀릴 수밖에 없다. JavaScript의 `"".split(",")`은 `[""]`을 돌려주니 빈 목록이 틀린다. 구분자 방식에서 이 문제는 구분자를 무엇으로 고르든 남는다. 문자열 n개 사이에 구분자가 n-1개라서, 0개와 1개가 모두 구분자 0개로 같아 보이기 때문이다.
+
+이 두 결함이 다음 풀이들의 출발점이다. 내용과 구분자를 구별할 방법이 필요하고, 문자열 개수가 결과에 드러나야 한다.
+
+## 구분자를 이스케이프하기
+
+내용에 구분자가 섞이면 그 글자를 다른 모양으로 바꿔 적는다. 이걸 이스케이프라고 한다. JSON이 문자열 안의 `"`를 `\"`로 적는 것과 같다.
+
+규칙을 정한다. 이스케이프 문자는 `/`다.
+
+- 내용의 `/`는 `//`로 적는다.
+- 문자열 하나가 끝날 때마다 `/:`를 붙인다.
+
+decode는 왼쪽부터 읽다가 `/`를 만나면 바로 다음 글자를 본다. `/`면 내용의 `/` 한 글자이고, `:`면 문자열의 끝이다. 내용의 `/`는 모두 `//`로 바뀌었으니 `/` 뒤에 `:`가 오는 경우는 끝 표시뿐이다.
+
+```js
+function encode(strs) {
+  let out = "";
+  for (const s of strs) out += s.replaceAll("/", "//") + "/:"; // 내용의 / 는 두 번, 끝에 /:
+  return out;
+}
+
+function decode(s) {
+  const res = [];
+  let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "/") {
+      if (s[i + 1] === "/") cur += "/";       // "//" → 내용의 / 한 글자
+      else { res.push(cur); cur = ""; }       // "/:" → 문자열 하나 끝
+      i++;                                    // 짝이 되는 다음 글자까지 건너뛴다
+    } else {
+      cur += s[i];
+    }
+  }
+  return res;
+}
+
+const e = encode(["a/", ":"]);
+console.log(JSON.stringify(e), decode(e));
+console.log(decode(encode([])), decode(encode([""])));
+```
+
+```text
+"a///::/:" [ 'a/', ':' ]
+[] [ '' ]
+```
+
+`["a/", ":"]`은 이스케이프를 시험하기 좋은 입력이다. 첫 문자열 끝이 `/`라서 이스케이프된 `//` 바로 뒤에 끝 표시 `/:`가 붙어 `///:`가 된다. 두 번째 문자열은 `:` 한 글자라 끝 표시의 `:`와 헷갈리기 쉽다. 아래 그림에서 decode가 이 여덟 글자를 어떻게 읽는지 보자.
+
+<AlgoTrace
+  caption="이스케이프 decode: / 를 만나면 다음 글자를 같이 본다"
+  memoryLabel="만드는 중인 문자열과 결과"
+  cells={["a", "/", "/", "/", ":", ":", "/", ":"]}
+  steps={[
+    { pointer: 0, memory: ["cur = \"a\"", "res = []"], caption: "0번 a는 평범한 글자다. 만드는 중인 문자열에 붙인다." },
+    { pointer: 1, memory: ["cur = \"a/\"", "res = []"], caption: "1번이 / 다. 다음 2번도 / 라서 둘을 합쳐 내용의 / 한 글자로 읽는다." },
+    { pointer: 3, memory: ["cur = \"\"", "res = [\"a/\"]"], caption: "3번이 / 고 다음 4번이 : 다. 문자열 하나가 끝났다. a/ 를 결과에 넣는다." },
+    { pointer: 5, memory: ["cur = \":\"", "res = [\"a/\"]"], caption: "5번의 : 는 앞에 / 가 없으니 평범한 글자다." },
+    { pointer: 6, memory: ["cur = \"\"", "res = [\"a/\", \":\"]"], caption: "6번 / 와 7번 : 가 끝 표시다. 두 번째 문자열 : 를 넣는다." },
+    { found: [0, 5], memory: ["res = [\"a/\", \":\"]"], caption: "원래 목록이 그대로 돌아왔다. 내용의 글자는 0번과 5번뿐이었다." },
+  ]}
+/>
+
+빈 목록과 빈 문자열도 구별된다. `[]`은 `""`, `[""]`은 `"/:"`다. 문자열마다 끝 표시가 하나씩 붙으니 문자열 개수가 결과에 그대로 드러난다. 구분자가 "사이에" 들어가던 앞 풀이와 달리 끝 표시는 "뒤에" 붙는다는 게 차이다.
+
+시간은 encode와 decode 모두 전체 글자 수를 L이라 할 때 O(L)이다. 결과 길이는 최악일 때 내용이 전부 `/`면 두 배가 된다.
+
+이 풀이의 약점은 decode가 글자를 하나씩 다 들여다봐야 한다는 점이다. 문자열 하나를 꺼내려면 그 안의 모든 글자를 검사해야 하고, 중간부터 읽거나 문자열을 건너뛸 수 없다. 규칙이 하나만 어긋나도(예를 들어 `replaceAll` 대신 첫 `/`만 바꾸는 `replace`를 쓰면) 조용히 다른 결과가 나온다. 내용을 아예 보지 않아도 되는 방법이 있다.
+
+## 길이를 먼저 적는다
+
+문자열마다 앞에 길이를 적는다. 길이 숫자가 어디서 끝나는지 알려 주려고 `#`를 하나 찍고, 그 뒤에 내용을 적는다. `"hi"`는 `2#hi`, 빈 문자열은 `0#`이다. 이렇게 길이를 앞에 붙이는 방식을 길이 접두(length prefix)라고 부른다.
+
+decode는 이렇게 읽는다.
+
+1. 지금 자리 `i`에서 시작해 처음 나오는 `#`를 찾는다. 그 자리를 `j`라 한다.
+2. `i`부터 `j` 앞까지가 길이 숫자다.
+3. `j + 1`부터 길이만큼이 내용이다. 내용 안에 `#`나 숫자가 있어도 상관없다. 몇 글자를 가져갈지 이미 안다.
+4. 다음 문자열은 내용이 끝난 바로 다음 자리에서 시작한다.
+
+```js
+function encode(strs) {
+  let out = "";
+  for (const s of strs) out += s.length + "#" + s; // 길이#내용
+  return out;
+}
+
+function decode(s) {
+  const res = [];
+  let i = 0;
+  while (i < s.length) {
+    const j = s.indexOf("#", i);           // 길이 숫자가 끝나는 자리
+    const len = Number(s.slice(i, j));
+    res.push(s.slice(j + 1, j + 1 + len));  // 길이만큼만 가져간다
+    i = j + 1 + len;                        // 다음 문자열의 시작
+  }
+  return res;
+}
+
+const e = encode(["hi", "", "#3"]);
+console.log(JSON.stringify(e), decode(e));
+console.log(decode(encode([])), decode(encode([""])));
+```
+
+```text
+"2#hi0#2##3" [ 'hi', '', '#3' ]
+[] [ '' ]
+```
+
+1단계에서 "처음 나오는 `#`"가 길이의 끝이라고 믿어도 되는 이유가 이 풀이의 급소다. `i`는 언제나 어떤 문자열의 맨 앞, 즉 길이 숫자의 첫 자리를 가리킨다. 길이는 숫자로만 이뤄져 있으니 `i`에서 처음 만나는 `#`는 반드시 길이 뒤에 찍은 그 `#`다. 내용 속의 `#`는 그보다 뒤에 있고, decode는 내용을 길이로 건너뛰기 때문에 그 `#`를 찾을 일이 없다.
+
+아래 그림은 `["hi", "", "#3"]`을 인코딩한 열 글자를 decode가 읽는 모습이다. 세 번째 문자열 `#3`이 `#`와 숫자로만 이뤄져 있어 일부러 헷갈리게 골랐다.
+
+<AlgoTrace
+  caption="길이 접두 decode: 숫자를 읽고, 그만큼만 가져간다"
+  memoryLabel="읽은 길이와 결과"
+  cells={["2", "#", "h", "i", "0", "#", "2", "#", "#", "3"]}
+  steps={[
+    { pointer: 0, memory: ["i = 0"], caption: "0번에서 시작한다. 여기는 항상 길이 숫자의 첫 자리다." },
+    { pointer: 1, memory: ["i = 0, j = 1", "len = 2"], caption: "처음 나오는 # 는 1번이다. 그 앞의 2가 길이다." },
+    { pointer: 3, found: [2, 3], memory: ["len = 2", "res = [\"hi\"]"], caption: "2번부터 두 글자 hi 를 가져간다. 다음 문자열은 4번에서 시작한다." },
+    { pointer: 5, memory: ["i = 4, j = 5", "len = 0", "res = [\"hi\", \"\"]"], caption: "4번의 0이 길이다. 0글자를 가져가니 빈 문자열이다. 다음은 6번이다." },
+    { pointer: 7, memory: ["i = 6, j = 7", "len = 2"], caption: "6번의 2가 길이고, 7번 # 가 길이의 끝이다." },
+    { pointer: 9, found: [8, 9], memory: ["len = 2", "res = [\"hi\", \"\", \"#3\"]"], caption: "8번부터 두 글자 #3 을 그대로 가져간다. 안에 든 # 와 3은 들여다보지 않는다." },
+    { memory: ["res = [\"hi\", \"\", \"#3\"]"], caption: "i가 10이 되어 끝났다. 내용 글자는 한 번도 검사하지 않았다." },
+  ]}
+/>
+
+시간은 O(L)이다. encode는 글자를 한 번씩 복사하고, decode도 길이 숫자를 읽고 내용을 잘라 오는 일을 글자마다 한 번씩만 한다. 결과 길이는 원래 글자 수에 문자열마다 "길이 자릿수 + 1"이 더해진다. 길이 200 이하면 문자열당 많아야 4글자가 늘어난다.
+
+이스케이프와 비교하면 장점이 분명하다. decode가 내용을 검사하지 않으니 규칙이 단순하고, 길이를 보고 문자열 하나를 통째로 건너뛸 수 있다. 결과 크기도 내용에 따라 출렁이지 않는다. 그래서 이 방식이 이 문제의 기본 답이다.
+
+## 고정 폭 길이 머리
+
+길이 접두에서 `#`가 하는 일은 "길이 숫자가 여기서 끝난다"를 알려 주는 것뿐이다. 길이를 항상 같은 자릿수로 적으면 `#`도 필요 없다. 네 자리로 정하면 `"hi"`는 `0002hi`, 빈 문자열은 `0000`이다.
+
+```js
+function encode(strs) {
+  let out = "";
+  for (const s of strs) out += String(s.length).padStart(4, "0") + s; // 길이를 네 자리로
+  return out;
+}
+
+function decode(s) {
+  const res = [];
+  for (let i = 0; i < s.length; ) {
+    const len = Number(s.slice(i, i + 4)); // 앞 네 글자가 항상 길이다
+    res.push(s.slice(i + 4, i + 4 + len));
+    i += 4 + len;
+  }
+  return res;
+}
+
+const e = encode(["hi", "", "#3"]);
+console.log(JSON.stringify(e), decode(e));
+```
+
+```text
+"0002hi00000002#3" [ 'hi', '', '#3' ]
+```
+
+decode가 `#`를 찾을 필요 없이 언제나 네 글자를 읽으면 된다. 대신 길이가 9999를 넘는 문자열은 담지 못한다. 상한을 먼저 정해야 한다는 게 이 방식의 대가다. 짧은 문자열이 많으면 문자열마다 네 글자씩 붙어 길이 접두보다 결과가 길어진다.
+
+실제 이진 프로토콜이 이 방식을 많이 쓴다. 숫자를 글자로 적지 않고 4바이트 정수로 적으면 길이 머리 하나로 약 42억 바이트까지 담는다. 텍스트 문자열로 푸는 이 문제에서는 같은 생각을 문자 네 개로 흉내 낸 셈이다.
+
+## 언어의 직렬화에 맡기면
+
+실무에서라면 대부분 이렇게 한다.
+
+```js
+const encode = (strs) => JSON.stringify(strs);
+const decode = (s) => JSON.parse(s);
+
+const e = encode(["hi", "", "#3", "a\"b"]);
+console.log(e, decode(e));
+```
+
+```text
+["hi","","#3","a\"b"] [ 'hi', '', '#3', 'a"b' ]
+```
+
+JSON은 문자열을 `"`로 감싸고 안의 `"`와 `\`, 제어 문자를 이스케이프한다. 앞에서 직접 만든 이스케이프 풀이를 표준으로 정해 둔 것이다. 바퀴를 다시 만들 이유가 없는 상황이면 이게 맞는 답이다.
+
+문제가 이 방법을 막는 건 면접에서 보려는 게 바로 "경계를 어떻게 표시하나"이기 때문이다. 면접에서 JSON을 먼저 말하는 건 좋다. 다만 "그건 안 된다고 하면요?"가 바로 이어지니, 길이 접두로 넘어갈 준비를 해 둔다.
+
+## Python과 Java로 옮기기
+
+길이 접두 풀이를 옮겼다.
+
+```python
+from typing import List
+
+class Codec:
+    def encode(self, strs: List[str]) -> str:
+        # 문자열마다 "길이#내용"
+        return "".join(f"{len(s)}#{s}" for s in strs)
+
+    def decode(self, s: str) -> List[str]:
+        res, i = [], 0
+        while i < len(s):
+            j = s.index("#", i)          # 길이 숫자가 끝나는 자리
+            n = int(s[i:j])
+            res.append(s[j + 1 : j + 1 + n])
+            i = j + 1 + n
+        return res
+
+c = Codec()
+e = c.encode(["hi", "", "#3"])
+print(repr(e), c.decode(e))
+print(c.decode(c.encode([])), c.decode(c.encode([""])))
+```
+
+```text
+'2#hi0#2##3' ['hi', '', '#3']
+[] ['']
+```
+
+Python에서는 문자열에 `+=`를 반복하는 것보다 조각을 모아 `"".join`으로 한 번에 붙이는 게 관례다. CPython은 `+=`를 어느 정도 최적화해 주지만 보장된 동작은 아니다. `s.index`는 못 찾으면 예외를 던지고, `s.find`는 -1을 돌려준다. 올바르게 인코딩된 입력이면 `#`가 반드시 있으니 어느 쪽이든 괜찮다.
+
+```java
+import java.util.*;
+
+public class Codec {
+    public String encode(List<String> strs) {
+        StringBuilder sb = new StringBuilder();
+        for (String s : strs) sb.append(s.length()).append('#').append(s); // 길이#내용
+        return sb.toString();
+    }
+
+    public List<String> decode(String s) {
+        List<String> res = new ArrayList<>();
+        int i = 0;
+        while (i < s.length()) {
+            int j = s.indexOf('#', i);                 // 길이 숫자가 끝나는 자리
+            int n = Integer.parseInt(s.substring(i, j));
+            res.add(s.substring(j + 1, j + 1 + n));
+            i = j + 1 + n;
+        }
+        return res;
+    }
+
+    public static void main(String[] args) {
+        Codec c = new Codec();
+        String e = c.encode(Arrays.asList("hi", "", "#3"));
+        System.out.println(e + " " + c.decode(e));
+        System.out.println(c.decode(c.encode(new ArrayList<>())) + " " + c.decode(c.encode(Arrays.asList(""))).size());
+    }
+}
+```
+
+```text
+2#hi0#2##3 [hi, , #3]
+[] 1
+```
+
+Java에서 문자열을 반복문 안에서 `+`로 이어 붙이면 매번 새 문자열을 만들어 O(L²)까지 갈 수 있다. `StringBuilder`를 쓴다. `substring(a, b)`는 JavaScript의 `slice`와 같이 b를 포함하지 않는다. 출력에서 빈 문자열은 `[hi, , #3]`처럼 쉼표 사이 빈칸으로 보여서, 목록 출력만 보면 구별이 어렵다. 두 번째 줄에서 `size()`를 찍은 이유다.
+
+## 다섯 풀이를 나란히 놓고 보면
+
+| 풀이 | encode·decode 시간 | 추가로 붙는 글자 | 언제 고르나 |
+|---|---|---|---|
+| 구분자로 잇기 | O(L) | 문자열 사이마다 1 | 내용에 구분자가 절대 안 나올 때만. 이 문제에서는 틀린다 |
+| 이스케이프 | O(L) | 끝마다 2 + 내용의 `/` 수 | 길이를 미리 알 수 없는 흐름을 보낼 때 |
+| 길이 접두 `길이#내용` | O(L) | 문자열마다 자릿수 + 1 | 기본 답 |
+| 고정 폭 길이 머리 | O(L) | 문자열마다 4 | 길이 상한이 정해진 이진 프로토콜 |
+| JSON 같은 직렬화 | O(L) | 따옴표·쉼표·이스케이프 | 실무. 이 문제에서는 금지 |
+
+`ab#/:,0123` 열 글자로만 된 0~20글자 문자열 10만 개(총 1,000,175글자)로, 다섯 번씩 돌린 가장 빠른 시간이다.
+
+```text
+풀이          encode    decode    결과 길이
+이스케이프    22.69ms   36.51ms   1300164
+길이 접두      4.88ms   21.33ms   1252654
+고정 폭        7.22ms   12.71ms   1400175
+JSON           4.44ms    9.15ms   1300176
+```
+
+이스케이프는 `replaceAll`과 글자 단위 검사 때문에 가장 느리다. 고정 폭은 `#`를 찾지 않아서 decode가 길이 접두보다 빠르지만 결과가 가장 길다. JSON이 가장 빠른 건 엔진 안에서 C++로 돌기 때문이다. 직접 짠 코드끼리만 보면 길이 접두가 결과 크기와 속도 모두 무난하다.
+
+## 틀리기 쉬운 자리
+
+### #로 split한다
+
+길이 접두를 decode하면서 `s.split("#")`부터 하면 내용 속의 `#`에서도 잘린다. `"2#hi0#2##3"`을 `#`로 자르면 `["2", "hi0", "2", "", "3"]`이 된다. 길이와 내용의 경계가 다 섞여 버려 복구할 수 없다. `#`는 길이 숫자의 끝을 찾을 때만, 그것도 지금 자리에서 처음 나오는 것만 쓴다.
+
+### 길이를 한 글자로 읽는다
+
+```js
+function decodeOneDigit(s) {
+  const res = [];
+  let i = 0;
+  while (i < s.length) {
+    const len = Number(s[i]);              // 길이가 한 자리라고 가정했다
+    res.push(s.slice(i + 2, i + 2 + len));
+    i += 2 + len;
+  }
+  return res;
+}
+console.log(decodeOneDigit("12#abcdefghijkl1#x"));
+```
+
+```text
+[ '#', '' ]
+```
+
+열두 글자짜리 문자열은 길이가 두 자리다. 첫 글자 1만 읽으니 한 글자 `#`를 가져가고, 그다음부터는 내용 한가운데를 길이로 읽어 `NaN`이 되면서 반복문이 멈췄다. 예외도 나지 않고 틀린 결과를 조용히 돌려준다. 짧은 문자열로만 테스트하면 잡히지 않는 버그라, 길이 10 이상인 문자열을 테스트에 꼭 넣는다.
+
+### 빈 목록과 빈 문자열 하나
+
+`[]`, `[""]`, `["", ""]`은 모두 다른 입력이다. 길이 접두에서는 `""`, `"0#"`, `"0#0#"`으로 달라진다. 구분자 방식에서는 `[]`과 `[""]`이 같은 결과가 된다. decode를 `if (s === "") return [""]`처럼 짜면 빈 목록이 틀린다.
+
+### 언어마다 길이의 단위가 다르다
+
+같은 이모지 하나의 길이가 언어마다 다르다.
+
+```text
+JavaScript  "😀".length          2   (UTF-16 코드 단위)
+Java        "😀".length()        2   (UTF-16 코드 단위)
+Python      len("😀")            1   (코드 포인트)
+UTF-8 바이트                     4
+```
+
+Python 쪽은 앞의 `Codec`으로 직접 확인했다.
+
+```python
+print(repr(c.encode(["😀"])), len("😀"), len("😀".encode("utf-8")))
+```
+
+```text
+'1#😀' 1 4
+```
+
+encode와 decode가 같은 언어 안에 있으면 문제가 없다. 서로 다른 언어 사이라면 깨진다. Python이 만든 `"1#😀2#ab"`를 JavaScript로 decode하면 `[ '\ud83d', '' ]`이 나온다. 길이 1을 UTF-16 한 칸으로 읽어 이모지의 앞쪽 반만 가져가고, 남은 반쪽부터 길이 숫자로 읽다가 망가진 것이다. 실제 네트워크로 보낼 때는 문자열을 UTF-8 바이트로 바꾼 뒤 바이트 수를 길이로 적는 게 보통이다. 글자 수와 바이트 수가 왜 다른지는 [문자 인코딩 글](/posts/character-encoding-unicode)에 있다.
+
+## 직접 풀어 보기
+
+아래 칸에 `encode`와 `decode`를 직접 써 보자. 채점 함수 `roundTrip`은 encode 결과가 문자열인지 확인한 뒤 decode해서 원래 목록과 비교한다. 빈 목록, 빈 문자열, `#`와 숫자가 섞인 내용, 쉼표와 `/`, 한글과 이모지, 길이가 두 자리인 문자열을 넣었다.
+
+<CodePlayground
+  caption="Encode and Decode Strings"
+  functionName="roundTrip"
+  initialCode={`function encode(strs) {
+  // 문자열 목록 → 문자열 하나
+  return "";
+}
+
+function decode(s) {
+  // 문자열 하나 → 원래 목록
+  return [];
+}
+
+// 채점용: 고치지 않는다
+function roundTrip(strs) {
+  const s = encode(strs);
+  if (typeof s !== "string") throw new Error("encode는 문자열을 돌려줘야 한다");
+  return decode(s);
+}`}
+  solution={`function encode(strs) {
+  let out = "";
+  for (const s of strs) out += s.length + "#" + s; // 길이#내용
+  return out;
+}
+
+function decode(s) {
+  const res = [];
+  let i = 0;
+  while (i < s.length) {
+    const j = s.indexOf("#", i);           // 길이 숫자가 끝나는 자리
+    const len = Number(s.slice(i, j));
+    res.push(s.slice(j + 1, j + 1 + len));
+    i = j + 1 + len;
+  }
+  return res;
+}
+
+// 채점용: 고치지 않는다
+function roundTrip(strs) {
+  const s = encode(strs);
+  if (typeof s !== "string") throw new Error("encode는 문자열을 돌려줘야 한다");
+  return decode(s);
+}`}
+  tests={[
+    { args: [["hi", "", "#3"]], expected: ["hi", "", "#3"], label: "# 와 숫자가 든 내용" },
+    { args: [[]], expected: [], label: "빈 목록" },
+    { args: [[""]], expected: [""], label: "빈 문자열 하나" },
+    { args: [["", ""]], expected: ["", ""], label: "빈 문자열 둘" },
+    { args: [["a,b", "c"]], expected: ["a,b", "c"], label: "쉼표" },
+    { args: [["a/", ":"]], expected: ["a/", ":"], label: "/ 와 :" },
+    { args: [["12#", "#", "3#abc"]], expected: ["12#", "#", "3#abc"], label: "길이처럼 생긴 내용" },
+    { args: [["abcdefghijkl", "x"]], expected: ["abcdefghijkl", "x"], label: "두 자리 길이" },
+    { args: [["한글", "😀"]], expected: ["한글", "😀"], label: "한글과 이모지" },
+  ]}
+/>
+
+## 실제 프로토콜은 경계를 이렇게 정한다
+
+이 문제가 면접에 나오는 진짜 이유는 여기 있다. TCP는 바이트를 순서대로 흘려보낼 뿐 "메시지 하나가 여기서 끝난다"를 알려 주지 않는다. 보낸 쪽에서 두 번 쓴 데이터가 받는 쪽에서 한 번에 읽힐 수도, 세 번에 나눠 읽힐 수도 있다. 그래서 TCP 위의 모든 프로토콜은 이 문제의 답 중 하나를 고른다. TCP의 동작은 [TCP 연결의 일생](/posts/tcp-connection-lifecycle)에 있다.
+
+- HTTP/1.1은 본문 길이를 `Content-Length` 헤더로 먼저 알려 준다. 길이 접두다. 길이를 미리 모르면 `Transfer-Encoding: chunked`로 조각마다 16진수 길이와 줄바꿈을 붙인다. 이것도 조각 단위의 길이 접두다. 조각 경계가 왜 메시지 경계가 아닌지는 [HTTP 스트리밍 글](/posts/http-streaming-sse)에서 실제 바이트로 봤다.
+- HTTP 헤더는 줄바꿈 `\r\n`으로 줄을 나누고, 빈 줄로 헤더의 끝을 알린다. 구분자 방식이다. 헤더 값에 줄바꿈이 들어가면 안 되는 이유다. 사용자 입력을 그대로 헤더에 넣었다가 줄바꿈으로 헤더를 끼워 넣는 공격(헤더 인젝션)이 바로 앞의 "쉼표를 찍으면 깨지는" 문제와 같은 구조다.
+- Redis의 통신 규약 RESP는 문자열을 `$5\r\nhello\r\n`처럼 보낸다. `$` 뒤에 길이, 줄바꿈, 내용이다. 이 문제의 `5#hello`와 거의 같은 모양이다.
+- gRPC가 쓰는 Protocol Buffers는 길이를 가변 길이 정수로 적어 짧은 길이에는 바이트를 적게 쓴다. 고정 폭과 `#` 방식의 중간쯤이다. 메시지마다 앞에 붙는 gRPC 머리는 압축 여부 1바이트와 4바이트 길이로 된 고정 폭이다. 자세한 건 [gRPC 글](/posts/grpc)에 있다.
+
+정리하면 구분자 방식은 사람이 읽기 좋지만 내용에 제약이 생기고, 길이 접두는 내용을 가리지 않는 대신 길이를 먼저 알아야 한다. 길이를 미리 모르면 조각으로 나눠 조각마다 길이를 붙인다. 면접에서 이 연결까지 말하면 "알고리즘 문제를 풀었다"에서 "프로토콜을 설계할 줄 안다"로 평가가 바뀐다.
+
+## 조건이 바뀌면
+
+### 목록이 아주 커서 한 번에 못 담는다면
+
+encode 결과를 통째로 만들지 않고 문자열 하나씩 `길이#내용`을 흘려보내면 된다. decode도 흐름에서 길이를 읽고 그만큼 기다렸다가 문자열 하나를 내놓는다. 길이 접두는 문자열 하나만 메모리에 있으면 되니 흐름 처리에 잘 맞는다. 이스케이프 방식은 끝 표시가 올 때까지 계속 읽어야 해서 문자열 하나가 아주 길면 버퍼가 커진다.
+
+### 중첩된 목록이라면
+
+`[["a", "b"], [], ["c"]]`처럼 목록 안의 목록이라면 같은 방식을 재귀로 쓴다. 바깥 목록의 원소 하나를 "안쪽 목록을 encode한 문자열"로 보고 그 앞에 길이를 붙인다. 바깥 decode가 길이만큼 잘라 낸 조각을 다시 안쪽 decode에 넘긴다. 트리를 문자열로 바꾸는 [Serialize and Deserialize Binary Tree](/posts/leetcode-serialize-and-deserialize-binary-tree)도 "모양을 잃지 않게 빈자리까지 적는다"는 같은 생각에서 출발한다.
+
+### 결과를 사람이 읽거나 URL에 넣어야 한다면
+
+이진 데이터를 글자로 바꿔야 하면 Base64 같은 인코딩을 한 번 더 씌운다. 원래 크기가 4/3배로 늘어난다. 이유와 동작은 [Base64 글](/posts/base64)에 있다. 이 문제의 결과를 URL 쿼리에 넣는다면 `#`가 URL에서 조각 식별자를 뜻하니 퍼센트 인코딩이 필요하다.
+
+## 면접에서 나올 만한 질문
+
+### 구분자로 이으면 안 되나요?
+
+내용에 어떤 문자든 들어올 수 있으면 구분자가 내용에 섞여 잘못 잘린다. 드문 문자를 골라도 256가지 문자가 다 나올 수 있다는 조건에서는 소용없다. 또 문자열 사이에만 구분자가 들어가니 빈 목록과 빈 문자열 하나짜리 목록이 같은 결과가 된다.
+
+### 길이 접두에서 내용 안의 #는 왜 문제가 되지 않나요?
+
+decode는 언제나 문자열의 맨 앞, 즉 길이 숫자의 첫 자리에서 출발한다. 길이는 숫자로만 되어 있으니 거기서 처음 만나는 #는 반드시 길이 뒤에 찍은 것이다. 그다음 내용은 길이만큼 통째로 잘라 가져가서 안의 #를 검사할 일이 없다.
+
+### 이스케이프와 길이 접두 중 무엇을 고르나요?
+
+길이를 미리 알 수 있으면 길이 접두가 낫다. decode가 내용을 보지 않아 규칙이 단순하고, 문자열을 통째로 건너뛸 수 있고, 결과 크기가 내용에 따라 출렁이지 않는다. 길이를 미리 모르는 흐름이라면 이스케이프나 끝 표시가 필요하고, HTTP chunked처럼 조각마다 길이를 붙이는 절충도 있다.
+
+### 시간과 공간 복잡도는요?
+
+전체 글자 수를 L, 문자열 수를 n이라 하면 encode와 decode 모두 O(L + n)이다. 결과 길이는 L에 문자열마다 길이 자릿수와 # 하나가 더해진다. Java에서는 StringBuilder를 써야 반복 이어 붙이기가 O(L²)로 늘지 않는다.
+
+### 빈 문자열과 빈 목록은 어떻게 구별되나요?
+
+길이 접두는 문자열마다 머리를 붙이니 빈 문자열도 `0#`라는 흔적을 남긴다. 빈 목록은 빈 결과, 빈 문자열 하나는 `0#`, 둘은 `0#0#`이라 셋이 모두 다르다. 개수가 결과에 드러나는 방식이면 이 구별이 저절로 된다.
+
+### 다른 언어 사이에서 주고받으면 무엇을 조심하나요?
+
+길이의 단위를 맞춰야 한다. JavaScript와 Java는 UTF-16 코드 단위, Python은 코드 포인트로 길이를 세서 이모지 하나가 2와 1로 다르다. 실제로 보낼 때는 UTF-8 바이트로 바꾼 뒤 바이트 수를 길이로 적는 게 안전하다.
+
+### 이 문제가 실무와 어떻게 이어지나요?
+
+TCP는 메시지 경계를 알려 주지 않는 바이트 흐름이라, 그 위의 프로토콜은 모두 경계를 정해야 한다. HTTP의 Content-Length와 chunked, Redis RESP의 `$길이`, gRPC의 4바이트 길이 머리가 모두 길이 접두다. HTTP 헤더는 줄바꿈 구분자를 쓰고, 그래서 헤더 값의 줄바꿈이 인젝션 공격이 된다.

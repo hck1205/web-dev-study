@@ -1,0 +1,415 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("nodejs-http-clients");
+
+<EasyIntro>
+  우리 서버가 다른 회사 서버에 물어볼 일이 많아지는 시간이면 답이 몇 초씩 늦게 돌아왔는데, 상대 서버는 빠르다고 하니 우리 쪽에서만 느린 셈이었다. 서버끼리 대화하려면 먼저 전화를 걸어 연결해야 하고, "여보세요"를 주고받는 데도 시간이 든다. 물어볼 때마다 전화를 끊고 다시 걸면 그 인사 시간이 매번 붙지만, 한 번 건 전화를 끊지 않고 다음 질문에도 쓰면 인사는 한 번이면 된다.
+
+  그런데 상대가 길게 대답하는 중에 우리가 듣지 않고 딴 일을 하면 그 전화는 계속 통화 중으로 남는다. 다음 질문을 하려면 새 전화를 또 걸어야 하고, 통화 중인 전화가 쌓이면 결국 줄이 막힌다. 상대가 아예 대답을 안 할 때 얼마나 기다릴지 정해 두지 않으면 몇 분씩 수화기를 들고 서 있게 된다. 그래서 서버끼리 대화할 때는 전화를 다시 쓰고, 대답을 끝까지 듣고, 기다릴 시간을 미리 정해 둔다.
+</EasyIntro>
+
+결제 대행사 API를 부르는 코드가 평소에는 80ms면 돌아왔다. 점심 시간에 주문이 몰리자 그 호출의 p99가 3초를 넘었다. 대행사 쪽 대시보드는 평소와 같은 응답 시간을 보여 줬다. 늦어진 건 우리 서버 안이었다. 노드 한 대에 붙어서 `ss`를 찍어 보니 대행사 IP로 가는 연결이 수백 개 열려 있었고, 그 옆에 TIME-WAIT 상태 소켓이 수천 개 쌓여 있었다.
+
+원인을 쫓다 보면 Node.js의 HTTP 클라이언트가 연결을 어떻게 만들고 다시 쓰는지, 응답을 읽지 않으면 무슨 일이 생기는지, 기다림에 한도를 어디서 거는지를 다 보게 된다. 이 글은 내장 `http` 모듈과 `fetch`(undici)를 직접 돌려 보며 그 셋을 따라가고, axios·got·ky가 그 위에 무엇을 얹었는지 비교한다. 기준은 Node.js 22.22(내장 undici 6.23)다.
+
+브라우저의 `fetch`를 쓸 때 주의할 점(500이어도 성공하는 Promise, 한 번만 읽히는 본문, 취소)은 [브라우저 fetch 글](/posts/browser-fetch)에서 다뤘다. 계층마다 걸린 타임아웃의 원리는 [타임아웃 글](/posts/timeouts)에, 연결이 닫힐 때 TIME_WAIT가 남는 이유는 [TCP 연결의 일생 글](/posts/tcp-connection-lifecycle)에 있다. 여기서는 서버에서 클라이언트로 HTTP를 쓸 때의 이야기다.
+
+## 서버를 만들면 요청과 응답이 스트림으로 온다
+
+클라이언트를 보기 전에 받는 쪽을 먼저 보자. `node:http`로 만든 서버는 요청을 Readable 스트림, 응답을 Writable 스트림으로 준다.
+
+```js
+import http from "node:http";
+
+const server = http.createServer(async (req, res) => {
+  let bytes = 0;
+  for await (const chunk of req) bytes += chunk.length; // 요청 본문도 스트림이다
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify({ method: req.method, url: req.url, bytes }));
+});
+server.listen(3006);
+```
+
+```bash
+# 1MB 본문을 POST하고 요청·응답 헤더를 본다
+head -c 1000000 /dev/zero > zero.bin
+curl -sv -X POST --data-binary @zero.bin http://127.0.0.1:3006/upload
+```
+
+```text
+> POST /upload HTTP/1.1
+> Host: 127.0.0.1:3006
+> User-Agent: curl/8.5.0
+> Accept: */*
+> Content-Length: 1000000
+> Content-Type: application/x-www-form-urlencoded
+>
+< HTTP/1.1 200 OK
+< content-type: application/json
+< Date: Fri, 23 Oct 2026 12:59:38 GMT
+< Connection: keep-alive
+< Keep-Alive: timeout=5
+< Transfer-Encoding: chunked
+<
+{"method":"POST","url":"/upload","bytes":1000000}
+```
+
+응답 헤더의 `Connection: keep-alive`와 `Keep-Alive: timeout=5`를 본다. Node 서버는 기본으로 연결을 열어 두고, 5초 동안 다음 요청이 없으면 닫는다. 이 값이 `server.keepAliveTimeout`이다. 서버의 다른 기본값도 찍어 보면 이렇다.
+
+```text
+{
+  requestTimeout: 300000,
+  headersTimeout: 60000,
+  keepAliveTimeout: 5000,
+  timeout: 0,
+  maxHeadersCount: null
+}
+```
+
+요청 전체는 5분(`requestTimeout`), 헤더는 1분(`headersTimeout`) 안에 다 와야 한다. 느리게 조금씩 보내서 연결을 붙잡는 공격(slowloris)을 막는 값이다. 앞에 로드 밸런서를 두면 `keepAliveTimeout`이 문제가 된다. 로드 밸런서가 유휴 연결을 60초 들고 있는데 Node가 5초에 닫으면, 로드 밸런서가 막 닫힌 연결에 요청을 보내 502가 난다. Node 쪽 값을 로드 밸런서 유휴 시간보다 길게 잡는다. 자세한 장면은 [타임아웃 글](/posts/timeouts)에 있다.
+
+본문을 `for await`로 읽는 위 코드는 크기 제한이 없다. 실제 서버라면 읽으면서 바이트를 세다가 한도를 넘으면 413으로 끊는다. 스트림을 다루는 법은 [Node.js 파일과 스트림 글](/posts/nodejs-fs-streams)에서 봤다.
+
+## 연결을 다시 쓰는 일: Agent와 keep-alive
+
+HTTP 요청을 하나 보내려면 먼저 TCP 연결이 있어야 한다. 연결을 새로 만들면 3-way handshake로 왕복 한 번(RTT)이 들고, HTTPS면 TLS 핸드셰이크로 TLS 1.3 기준 왕복이 한 번 더 든다. 요청이 끝난 뒤 연결을 닫지 않고 두었다가 다음 요청에 쓰면 이 비용이 사라진다. 이게 keep-alive다.
+
+Node의 `http` 클라이언트에서 연결을 관리하는 건 `http.Agent`다. 목적지(호스트와 포트)마다 열린 소켓 목록과 기다리는 요청 목록을 들고 있다. Node 19부터 기본 에이전트 `http.globalAgent`가 keep-alive를 켠 채로 나온다. 다만 직접 만드는 `new http.Agent()`는 지금도 `keepAlive`가 `false`다. 옵션을 안 주고 에이전트를 만들면 기본 에이전트보다 나빠진다.
+
+```bash
+node -e 'console.log(require("node:http").globalAgent.options)'
+```
+
+```text
+[Object: null prototype] {
+  keepAlive: true,
+  scheduling: 'lifo',
+  timeout: 5000,
+  proxyEnv: undefined,
+  noDelay: true,
+  path: null
+}
+```
+
+`timeout: 5000`은 놀고 있는 소켓을 5초 뒤에 닫는다는 뜻이다. 서버의 `keepAliveTimeout` 기본값과 같다. `scheduling: 'lifo'`는 가장 최근에 쓴 소켓을 먼저 꺼내 쓴다는 뜻이라, 오래 논 소켓은 자연스럽게 닫히게 둔다.
+
+정말 다시 쓰는지 서버에서 `connection` 이벤트를 세어 봤다. 같은 서버에 요청 200개를 차례로 보낸다.
+
+```js
+const get = (agent) => new Promise((resolve, reject) => {
+  http.get("http://127.0.0.1:3000/", { agent }, (res) => { res.resume(); res.on("end", resolve); })
+    .on("error", reject);
+});
+for (let i = 0; i < 200; i++) await get(undefined);                               // globalAgent
+for (let i = 0; i < 200; i++) await get(new http.Agent({ keepAlive: false }));    // 매번 새 연결
+```
+
+```text
+globalAgent      { connections: 1, ms: 481 }
+keepAlive:false  { connections: 200, ms: 434 }
+```
+
+기본 에이전트는 연결 하나로 200개를 다 보냈고, keep-alive를 끄면 200개를 새로 열었다. 시간 차이는 거의 없다. 같은 기계 안(loopback)이라 RTT가 0.1ms도 안 되기 때문이다. 실제 네트워크에서는 RTT가 수십 ms라 이야기가 달라진다. 그리고 꺼 둔 쪽은 흔적을 남긴다.
+
+```text
+199 sockets in TIME-WAIT
+```
+
+닫힌 연결마다 TIME-WAIT 소켓이 60초 동안 남는다. 같은 목적지로 초당 수천 개씩 새 연결을 만들면 출발지 포트(기본 범위 약 28,000개)가 모자라 `EADDRNOTAVAIL`이 나기 시작한다. 처음 장면에서 쌓여 있던 TIME-WAIT 수천 개가 이것이었다.
+
+아래 그림은 keep-alive가 있을 때와 없을 때 요청 두 개가 지나가는 길이다.
+
+<SequenceDiagram
+  caption="연결을 다시 쓰면 두 번째 요청부터 핸드셰이크가 사라진다"
+  actors={[
+    { id: "app", label: "앱 코드" },
+    { id: "agent", label: "Agent 풀" },
+    { id: "api", label: "결제 API" },
+  ]}
+  steps={[
+    { from: "app", to: "agent", label: "요청 1", title: "빈 풀에서 시작한다", detail: "이 목적지로 열린 소켓이 없다. 에이전트가 새 연결을 만든다." },
+    { from: "agent", to: "api", label: "SYN, TLS", title: "연결 비용을 낸다", detail: "TCP 핸드셰이크 1 RTT, TLS 1.3 핸드셰이크 1 RTT가 요청 앞에 붙는다.", payload: "RTT 20ms라면 40ms" },
+    { from: "api", to: "agent", label: "200 + 본문", title: "응답을 끝까지 읽는다", detail: "본문을 다 읽어야 소켓이 다음 요청을 받을 수 있는 상태가 된다." },
+    { from: "agent", to: "agent", label: "소켓 반납", title: "닫지 않고 풀에 돌려 둔다", detail: "keepAlive가 켜져 있으면 소켓은 놀고 있는 목록으로 간다. 5초 안에 다음 요청이 없으면 닫는다." },
+    { from: "app", to: "agent", label: "요청 2", title: "놀고 있는 소켓을 꺼낸다", detail: "핸드셰이크 없이 바로 요청을 쓴다. 왕복 한 번이면 끝난다." },
+    { from: "agent", to: "api", label: "GET /v1/pay", title: "핸드셰이크가 없다", detail: "keepAlive가 꺼져 있었다면 여기서 또 SYN과 TLS를 보냈고, 닫힌 소켓은 TIME-WAIT로 남았다." },
+  ]}
+/>
+
+## 응답을 읽지 않으면 연결이 돌아오지 않는다
+
+연결을 다시 쓰려면 이전 응답이 끝까지 읽혀야 한다. HTTP/1.1에서는 한 연결 위에서 응답 바이트가 차례로 흐르니, 앞 응답의 본문이 다 빠지기 전에는 다음 응답을 받을 수 없다. 그래서 상태 코드만 보고 본문을 버려 두면 그 연결은 "사용 중"으로 남는다.
+
+`http` 모듈에서 이게 얼마나 쉽게 서비스를 세우는지 보자. 목적지당 소켓을 2개로 제한한 에이전트로 요청 세 개를 보내고, 응답 본문은 읽지 않는다.
+
+```js
+const agent = new http.Agent({ keepAlive: true, maxSockets: 2 });
+for (let i = 1; i <= 3; i++) {
+  const t = performance.now();
+  http.get("http://127.0.0.1:3002/", { agent }, (res) => {
+    console.log(`request ${i}: status ${res.statusCode} after ${Math.round(performance.now() - t)}ms`);
+    // res를 읽지 않는다
+  });
+}
+```
+
+```text
+request 1: status 200 after 17ms
+request 2: status 200 after 15ms
+{ sockets: 2, waiting: 1 }
+```
+
+2초를 기다려도 세 번째 요청은 출발조차 못 했다. 소켓 두 개가 읽히지 않은 본문을 품고 있고, 세 번째는 에이전트의 대기열에 있다. 상태 코드만 확인하는 헬스 체크 코드, 에러 응답이면 본문을 무시하고 `return`하는 코드가 이 모양이 된다. 본문이 필요 없으면 `res.resume()`으로 흘려 버린다.
+
+내장 `fetch`는 조금 다르게 망가진다. undici는 기본으로 목적지당 연결 수에 한도가 없어서, 사용 중인 연결이 안 돌아오면 그냥 새 연결을 연다.
+
+```js
+// 20번 차례로 부른다. 응답 객체는 배열에 들고 있는다
+for (let i = 0; i < 20; i++) { const r = await fetch(url); await r.text(); keep.push(r); }
+for (let i = 0; i < 20; i++) { const r = await fetch(url); keep.push(r); }            // 본문을 안 읽는다
+for (let i = 0; i < 20; i++) { const r = await fetch(url); await r.body.cancel(); keep.push(r); }
+```
+
+```text
+fetch + text()   { connections: 2 }
+fetch, no body   { connections: 18 }
+body.cancel()    { connections: 21 }
+```
+
+본문을 읽은 쪽은 연결 두 개로 끝났다. 읽지 않은 쪽은 18개를 열었다. 읽지 않은 응답은 가비지 컬렉션이 응답 객체를 치울 때에야 연결이 정리되는데, 언제 치울지는 알 수 없다. 처음 장면에서 대행사로 열린 연결 수백 개가 이것이었다. 에러 응답일 때 상태 코드만 보고 본문을 버리는 분기가 있었다.
+
+`body.cancel()`은 연결을 정리하긴 하지만 다시 쓰지는 않았다. 읽다 만 바이트가 소켓에 남았을 수 있으니 소켓을 닫아 버리기 때문이다. 그래서 응답이 작으면 끝까지 읽고(`await res.text()`나 `arrayBuffer()`), 크고 필요 없는 응답이면 `cancel()`로 연결을 포기한다. 둘 다 안 하는 게 최악이다.
+
+## fetch는 undici다
+
+Node 18부터 전역 `fetch`가 있고, Node 21부터 실험 딱지가 떨어졌다. 이 `fetch`의 속은 undici라는 HTTP 클라이언트다. `http` 모듈과 코드를 공유하지 않는 별도 구현이라, `http.Agent` 설정은 `fetch`에 아무 영향을 주지 않는다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="같은 Node 프로세스 안에 연결 풀이 두 벌 있다"
+  nodes={[
+    { id: "fetch", label: "fetch()", sub: "내장", x: 80, y: 40, w: 110 },
+    { id: "axios", label: "axios", sub: "http 어댑터", x: 320, y: 40, w: 110 },
+    { id: "disp", label: "Dispatcher", sub: "undici Agent", x: 80, y: 150, w: 130 },
+    { id: "hagent", label: "http.Agent", sub: "globalAgent", x: 320, y: 150, w: 130 },
+    { id: "req", label: "http.request", sub: "got도 여기", x: 200, y: 96, w: 110 },
+    { id: "sock", label: "TCP 소켓", sub: "목적지별", x: 200, y: 258, w: 120 },
+  ]}
+  edges={[
+    { from: "fetch", to: "disp" },
+    { from: "axios", to: "req" },
+    { from: "req", to: "hagent" },
+    { from: "disp", to: "sock" },
+    { from: "hagent", to: "sock" },
+  ]}
+/>
+
+연결이 실패했을 때 에러 모양도 다르다. `fetch`는 무엇이 잘못됐든 `TypeError: fetch failed`를 던지고, 진짜 이유는 `cause`에 넣는다.
+
+```js
+await fetch("http://127.0.0.1:3999/orders"); // 아무도 듣지 않는 포트
+```
+
+```text
+TypeError: fetch failed
+{
+  code: 'ECONNREFUSED',
+  errno: -111,
+  syscall: 'connect',
+  address: '127.0.0.1',
+  port: 3999
+}
+```
+
+없는 호스트면 `cause.code`가 `ENOTFOUND`, `syscall`이 `getaddrinfo`다. 로그에 `err.message`만 남기면 모든 네트워크 에러가 `fetch failed` 한 줄로 뭉개진다. `cause`까지 남겨야 한다. 시스템 에러의 `code`를 읽는 법은 [Node.js 에러 처리 글](/posts/nodejs-error-handling)에서 다뤘다.
+
+그리고 브라우저와 똑같이 4xx·5xx는 거부가 아니다. `res.ok`를 직접 봐야 한다.
+
+## 기다림에 한도를 건다
+
+`fetch`에 `timeout` 옵션은 없다. 그럼 영원히 기다릴까. 그렇지는 않다. undici의 기본 에이전트에는 단계별 한도가 있다. 내장된 것과 같은 버전인 undici 6.23 패키지 소스에서 기본값을 찾아봤다.
+
+```bash
+grep -n "300e3\|4e3 :" node_modules/undici/lib/dispatcher/client.js
+grep -n "timeout == null ? 10e3" node_modules/undici/lib/core/connect.js
+```
+
+```text
+229:    this[kKeepAliveDefaultTimeout] = keepAliveTimeout == null ? 4e3 : keepAliveTimeout
+238:    this[kBodyTimeout] = bodyTimeout != null ? bodyTimeout : 300e3
+239:    this[kHeadersTimeout] = headersTimeout != null ? headersTimeout : 300e3
+86:  timeout = timeout == null ? 10e3 : timeout
+```
+
+연결(TCP와 TLS)은 10초, 요청을 보낸 뒤 응답 헤더가 오기까지는 5분, 본문 조각 사이의 간격도 5분, 놀고 있는 연결은 4초 뒤에 닫는다.
+
+대행사가 응답을 안 주면 요청은 5분을 기다린다. 사용자는 그보다 훨씬 먼저 떠나고, 그 5분 동안 연결과 메모리와 요청 처리 자리가 묶인다. 그래서 요청마다 전체 시간 한도를 건다. `AbortSignal.timeout`이 가장 간단하다.
+
+```js
+// 3초 뒤에 응답하는 /slow를 1초 한도로 부른다
+await fetch("http://127.0.0.1:3003/slow", { signal: AbortSignal.timeout(1000) });
+```
+
+```text
+TimeoutError | The operation was aborted due to timeout | 1005 ms
+AbortError | This operation was aborted | 501 ms
+```
+
+첫 줄이 `AbortSignal.timeout`, 둘째 줄이 `AbortController`로 0.5초에 직접 취소한 경우다. 에러 이름이 `TimeoutError`와 `AbortError`로 갈린다. 사용자가 취소한 건지 시간이 다 된 건지 이 이름으로 구분해서, 앞의 것은 조용히 넘기고 뒤의 것은 지표로 센다. 신호는 본문을 읽는 동안에도 살아 있어서, 헤더가 빨리 와도 `await res.json()`이 한도를 넘기면 거기서 끊긴다. 여러 신호를 합치는 `AbortSignal.any`와 취소를 아래 함수까지 넘기는 설계는 [AbortController 글](/posts/abort-controller)에 있다.
+
+단계별 한도를 직접 바꾸고 싶으면 undici 패키지를 설치해서 전역 디스패처를 바꾼다. 헤더 한도를 2초로 줄이고 응답하지 않는 `/hang`을 불러 봤다.
+
+```js
+import { Agent, setGlobalDispatcher } from "undici"; // npm i undici@6
+setGlobalDispatcher(new Agent({ headersTimeout: 2000, bodyTimeout: 2000, connections: 10 }));
+await fetch("http://127.0.0.1:3004/hang");
+```
+
+```text
+fetch failed | HeadersTimeoutError UND_ERR_HEADERS_TIMEOUT | 2521 ms
+```
+
+2초 한도인데 2.5초에 끊겼다. undici는 성능 때문에 타이머를 거칠게 돌려서 수백 ms쯤 늦게 끊길 수 있다. 정밀한 한도가 필요하면 `AbortSignal.timeout`을 함께 건다. `connections: 10`은 목적지당 연결 수 한도다. 기본값은 무제한이라, 앞 절처럼 연결이 새면 끝없이 늘어난다. 한도를 두면 새는 대신 대기열에서 기다리니 문제가 지표로 드러난다.
+
+`http.request` 쪽은 `timeout` 옵션이 있지만 이름과 달리 "소켓이 이만큼 조용하면 `timeout` 이벤트를 낸다"는 뜻이다. 요청을 끝내 주지 않으니 이벤트에서 직접 `req.destroy()`를 불러야 한다. 이것도 `signal` 옵션을 주는 편이 단순하다.
+
+## 연결 비용을 계산해 보기
+
+RTT가 길수록 keep-alive의 값이 커진다. 요청 `n`개를 차례로 보낼 때 걸리는 시간을 계산해 보자. 새 연결은 TCP 핸드셰이크 1 RTT에, TLS 1.3이면 1 RTT, TLS 1.2면 2 RTT가 더 든다. 요청 하나는 1 RTT다. keep-alive면 연결은 한 번만 만든다. DNS 조회와 서버 처리 시간은 뺀다.
+
+<CodePlayground
+  caption="차례로 보낸 요청 n개의 시간(ms)"
+  functionName="sequentialTime"
+  initialCode={`// tls: "none" | "tls13" | "tls12"
+function sequentialTime(n, rtt, keepAlive, tls) {
+  return 0;
+}`}
+  solution={`function sequentialTime(n, rtt, keepAlive, tls) {
+  const setup = 1 + ({ none: 0, tls13: 1, tls12: 2 })[tls];
+  const conns = keepAlive ? 1 : n;
+  return (conns * setup + n) * rtt;
+}`}
+  tests={[
+    { label: "10개, keep-alive, 평문", args: [10, 20, true, "none"], expected: 220 },
+    { label: "10개, 매번 연결, 평문", args: [10, 20, false, "none"], expected: 400 },
+    { label: "10개, keep-alive, TLS 1.3", args: [10, 20, true, "tls13"], expected: 240 },
+    { label: "10개, 매번 연결, TLS 1.3", args: [10, 20, false, "tls13"], expected: 600 },
+    { label: "10개, 매번 연결, TLS 1.2", args: [10, 20, false, "tls12"], expected: 800 },
+    { label: "1개, TLS 1.2, 먼 서버", args: [1, 50, false, "tls12"], expected: 200 },
+    { label: "100개, 같은 존 RTT 2ms", args: [100, 2, false, "tls13"], expected: 600 },
+  ]}
+/>
+
+RTT 20ms인 HTTPS API를 열 번 부르면 keep-alive 하나로 240ms가 600ms가 된다. 같은 존 안이라 RTT가 2ms여도 100번이면 400ms가 더 든다. 여기에 TLS 핸드셰이크의 CPU 비용(키 교환과 인증서 검증)이 양쪽에 얹힌다. 처음 장면처럼 연결이 새서 매번 새로 열게 되면 p99가 뛰는 이유가 이 숫자다.
+
+## fetch 위에 얇은 래퍼 하나
+
+라이브러리 없이 내장 `fetch`로 가기로 했다면, 앞의 함정을 한곳에서 막는 래퍼를 둔다. 전체 한도, `res.ok` 검사, 에러 응답에서도 본문 소비, `cause`를 살린 에러가 들어간다.
+
+```ts
+export class HttpError extends Error {
+  constructor(readonly status: number, readonly body: string, url: string) {
+    super(`HTTP ${status} from ${url}`);
+    this.name = "HttpError";
+  }
+}
+
+export async function getJson<T>(url: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<T> {
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 3_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+
+  const res = await fetch(url, { signal, headers: { accept: "application/json" } });
+  if (!res.ok) {
+    // 에러여도 본문을 읽어서 연결을 돌려준다. 로그에 남길 앞부분만 쓴다
+    const body = (await res.text()).slice(0, 500);
+    throw new HttpError(res.status, body, url);
+  }
+  return (await res.json()) as T;
+}
+```
+
+`AbortSignal.any`는 Node 20.3부터 있다. 부르는 쪽의 취소 신호와 이 함수의 시간 한도를 합친다. 네트워크 에러는 그대로 `TypeError: fetch failed`로 올라가니, 받는 쪽에서 `err.cause?.code`로 재시도 여부를 정한다. 재시도를 이 함수 안에 넣는다면 GET처럼 멱등한 요청에만, 횟수 제한과 지수 백오프를 함께 둔다. 그 원칙은 [장애가 번지지 않게 글](/posts/resilience-patterns)에서 다뤘다.
+
+## axios, got, ky는 무엇을 얹었나
+
+셋 다 결국 위의 두 길 중 하나를 탄다. 고를 때는 무엇을 대신 해 주는지, 어디서 돌아가는지를 본다.
+
+axios는 Node에서 기본으로 `http` 모듈 어댑터를 쓴다. 그래서 연결은 `http.Agent`가 관리하고, keep-alive나 연결 수를 바꾸려면 `httpAgent`, `httpsAgent` 옵션에 에이전트를 넘긴다. 1.7부터 `adapter: "fetch"`를 고를 수도 있다. 요청·응답 인터셉터로 인증 헤더를 붙이거나 토큰을 갱신하기 편하고, 2xx가 아니면 기본으로 거부한다(`validateStatus`). 브라우저와 Node에서 같은 코드가 돌아서 프런트엔드와 공유하는 API 클라이언트에 많이 쓴다. 대신 `timeout` 기본값이 0, 곧 한도 없음이다. 인스턴스를 만들 때 꼭 정한다.
+
+```ts
+import axios from "axios";
+import https from "node:https";
+
+export const payClient = axios.create({
+  baseURL: "https://api.pay.example.com",
+  timeout: 3_000, // 기본은 0(무제한)
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 50 }),
+});
+
+payClient.interceptors.response.use(undefined, (err) => {
+  // err.code: ECONNABORTED(타임아웃), ECONNRESET 등. err.response가 있으면 HTTP 에러다
+  return Promise.reject(err);
+});
+```
+
+got은 Node 전용이다. `http` 모듈 위에서 재시도, 단계별 타임아웃(`lookup`, `connect`, `secureConnect`, `response` 등), 훅, 페이지네이션을 제공한다. 재시도가 기본으로 켜져 있고, 멱등한 메서드와 408·429·5xx 같은 상태 코드에만 몇 번 다시 보낸다. 12 버전부터 ESM 전용이라 CommonJS 프로젝트에서는 `require`로 못 불러온다.
+
+ky는 `fetch` 위의 얇은 껍질이다. 브라우저, Node, Deno, Bun에서 똑같이 돌고, 2xx가 아니면 `HTTPError`로 거부하며, 재시도와 타임아웃 기본값이 있다. Node에서 쓰면 연결 관리는 undici가 한다.
+
+기본값은 버전마다 바뀌니 도입할 때 그 버전 문서에서 재시도 횟수와 대상, 타임아웃을 확인한다. 특히 재시도가 기본으로 켜진 라이브러리는 POST를 다시 보내지 않는지 본다. 결제처럼 두 번 실행되면 안 되는 요청은 멱등성 키를 붙이거나 재시도를 끈다.
+
+정리하면 이렇게 고른다. 의존성 없이 가고 싶고 Node 18 이상이면 내장 `fetch`에 `AbortSignal.timeout`과 작은 래퍼(`res.ok` 검사, 본문 소비, 재시도)를 둔다. 브라우저와 코드를 나누고 인터셉터가 필요하면 axios. Node 전용 서버에서 재시도와 단계별 타임아웃을 손으로 짜기 싫으면 got. fetch 문법 그대로 편의만 얹고 싶으면 ky다. 어느 쪽이든 타임아웃, 연결 수 한도, 본문 소비는 내가 확인한다.
+
+## 현장에서 HTTP 클라이언트를 의심하는 순간
+
+외부 API 호출이 느려졌는데 상대는 정상이라고 할 때 이 순서로 본다.
+
+```bash
+# 1. 목적지별 연결 상태 개수: ESTAB이 계속 늘면 연결이 새고 있다
+ss -tan dst 203.0.113.10 | awk 'NR>1 {print $1}' | sort | uniq -c
+# 2. TIME-WAIT가 수천 개면 keep-alive가 꺼졌거나 연결을 다시 못 쓰고 있다
+ss -tan state time-wait | wc -l
+# 3. 출발지 포트 범위 (기본 32768~60999)
+cat /proc/sys/net/ipv4/ip_local_port_range
+```
+
+ESTAB이 시간이 갈수록 늘기만 하면 응답 본문을 안 읽는 코드가 있다. 에러 분기에서 `return`하기 전에 본문을 읽거나 `cancel()`하는지 본다. TIME-WAIT가 많으면 keep-alive가 꺼진 에이전트나 요청마다 새 에이전트를 만드는 코드를 찾는다. 요청 함수 안에서 `new https.Agent()`나 `axios.create()`를 부르면 매번 풀이 새로 생겨서 다시 쓸 연결이 없다.
+
+연결 수는 적당한데 느리면 풀 한도에 걸려 대기열에서 기다리는 중일 수 있다. `maxSockets`나 undici의 `connections`를 너무 작게 잡았는지 본다. 반대로 한도를 크게 풀면 상대 서버가 우리를 레이트 리밋으로 막는다. 상대가 허락한 동시 연결 수에 맞춘다.
+
+응답 시간이 계속 정확히 5분 근처에서 끊긴다면 그건 undici의 `headersTimeout` 기본값이다. 내 코드에 한도가 없다는 뜻이다.
+
+## 다시 점심 시간의 3초로
+
+원인은 두 가지였다. 에러 응답일 때 본문을 읽지 않고 반환하는 분기 때문에 연결이 돌아오지 않았고, undici는 한도 없이 새 연결을 계속 열었다. 매번 TCP와 TLS 핸드셰이크를 하느라 느려졌고, 닫힌 연결은 TIME-WAIT로 쌓였다. 본문을 소비하고, 목적지당 연결 수에 한도를 두고, 요청마다 `AbortSignal.timeout(3000)`을 걸자 p99가 평소 수준으로 돌아왔다. 연결을 다시 쓰고, 응답을 끝까지 읽고, 기다림에 한도를 건다. HTTP 클라이언트가 무엇이든 이 셋은 직접 확인한다. 이 호출이 어디서 시간을 쓰는지 운영 중에 재 보는 법은 [Node.js 디버깅과 프로파일링 글](/posts/nodejs-debugging-profiling)에서 이어 간다.
+
+## 면접에서 나올 만한 질문
+
+### HTTP keep-alive는 무엇이고 왜 쓰나요?
+
+요청이 끝난 TCP 연결을 닫지 않고 다음 요청에 다시 쓰는 것이다. 새 연결마다 드는 TCP 핸드셰이크 1 RTT와 TLS 핸드셰이크(TLS 1.3 기준 1 RTT)를 없애고, 닫힌 연결이 남기는 TIME-WAIT 소켓도 줄인다. Node 19부터 `http.globalAgent`가 keep-alive를 켠 채로 나오고, 놀고 있는 소켓은 5초 뒤 닫는다.
+
+### keep-alive를 끄면 무엇이 늘어나나요?
+
+요청마다 핸드셰이크 시간과 TLS CPU 비용이 붙고, 닫힌 연결이 TIME-WAIT로 60초씩 남는다. 실험에서 요청 200개를 keep-alive 없이 보내자 TIME-WAIT 소켓이 199개 남았다. 같은 목적지로 많이 보내면 출발지 포트가 모자라 `EADDRNOTAVAIL`이 난다. RTT가 긴 HTTPS일수록 시간 차이가 커진다.
+
+### fetch 응답 body를 소비하지 않으면 어떻게 되나요?
+
+본문이 빠지기 전에는 그 연결을 다음 요청에 쓸 수 없어서 연결이 사용 중으로 남는다. undici는 목적지당 연결 수에 기본 한도가 없으니 새 연결을 계속 열고, 실험에서 20번 부르자 연결이 18개 생겼다. 정리는 응답 객체가 가비지 컬렉션될 때나 일어난다. 작으면 끝까지 읽고, 필요 없으면 `body.cancel()`로 연결을 포기한다.
+
+### Node의 fetch에는 타임아웃이 없나요?
+
+`timeout` 옵션은 없지만 undici 기본 에이전트에 연결 10초, 응답 헤더 5분, 본문 조각 간격 5분 한도가 있다. 5분은 서비스에는 너무 길어서 요청마다 `AbortSignal.timeout(ms)`으로 전체 한도를 건다. 시간이 다 되면 `TimeoutError`, 직접 취소하면 `AbortError`로 이름이 갈린다. 단계별 값을 바꾸려면 undici의 `Agent`를 전역 디스패처로 설정한다.
+
+### http.Agent 설정이 fetch에도 적용되나요?
+
+적용되지 않는다. 내장 `fetch`는 undici라는 별도 구현이라 `http.Agent`와 다른 연결 풀을 쓴다. axios와 got은 기본으로 `http` 모듈을 타니 `http.Agent` 설정을 따른다. 같은 프로세스에 풀이 두 벌 있을 수 있어서 연결 수와 keep-alive를 양쪽에서 따로 확인한다.
+
+### axios, got, ky는 어떻게 고르나요?
+
+axios는 브라우저와 Node에서 같은 코드가 돌고 인터셉터가 편하지만 `timeout` 기본값이 0이라 꼭 정해야 한다. got은 Node 전용이고 재시도와 단계별 타임아웃이 기본으로 있으며 12부터 ESM 전용이다. ky는 `fetch` 위의 얇은 래퍼라 어디서나 돌고 Node에서는 undici를 탄다. 재시도가 기본인 라이브러리는 POST 같은 비멱등 요청을 다시 보내지 않는지 확인한다.
+
+### 외부 API 호출이 느릴 때 클라이언트 쪽에서 무엇을 보나요?
+
+`ss`로 목적지별 연결 상태를 센다. ESTAB이 계속 늘면 본문을 안 읽어 연결이 새는 것이고, TIME-WAIT가 많으면 keep-alive가 꺼졌거나 요청마다 에이전트를 새로 만드는 것이다. 연결 수가 한도에 붙어 있으면 대기열에서 기다리는 중이다. 응답이 정확히 5분에서 끊기면 내 코드에 타임아웃이 없어서 undici 기본값에 걸린 것이다.

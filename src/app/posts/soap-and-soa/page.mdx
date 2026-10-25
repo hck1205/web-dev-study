@@ -1,0 +1,370 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("soap-and-soa");
+
+<EasyIntro>
+  학교에서 다른 반에 부탁할 일이 있으면 정해진 신청서 양식에 적어 봉투에 넣어 보낸다. 신청서에는 칸마다 무엇을 적어야 하는지 정해져 있고, 봉투 겉에는 누가 보냈는지와 확인 도장을 찍는 자리가 따로 있다. 양식이 엄격해서 귀찮지만, 받는 쪽은 늘 같은 모양의 신청서를 받으니 실수가 적다.
+
+  SOAP은 프로그램끼리 이런 봉투와 신청서를 주고받는 약속이다. 어떤 부탁을 할 수 있고 칸마다 무엇을 적는지는 미리 만든 설명서 한 장에 다 적혀 있어서, 그 설명서만 있으면 프로그램이 신청서 쓰는 코드를 자동으로 만들어 준다. 은행이나 관공서처럼 오래되고 꼼꼼한 곳에서 아직 많이 쓴다.
+
+  예전 회사들은 여러 프로그램 사이에 모든 봉투를 대신 받아 옮겨 주는 큰 우체국을 하나 두었다. 처음엔 편했지만 모든 일이 그 우체국을 거치다 보니 우체국이 바빠지고, 우체국 담당자만 일을 고칠 수 있게 되었다. 요즘 많이 쓰는 방식은 우체국은 배달만 하게 두고, 일은 각 반이 스스로 처리하게 한다.
+</EasyIntro>
+
+은행과 계좌 조회 연동을 하게 됐다. 담당자에게 API 문서를 달라고 했더니 PDF 한 장과 `AccountService.wsdl`이라는 XML 파일이 왔다. PDF에는 "SOAP 1.1, document/literal, WS-Security UsernameToken 적용"이라고만 적혀 있다. 엔드포인트도 하나뿐이고, URL에 자원 이름도 없다. REST만 다뤄 본 사람에게는 어디서부터 읽어야 할지 막막한 문서다.
+
+SOAP(Simple Object Access Protocol)은 1990년대 말에 나와 2000년대 기업 시스템 연동의 표준이 된 메시지 형식이다. XML로 된 봉투에 요청을 담아 보내고, 어떤 연산이 있고 메시지가 어떤 모양인지는 WSDL(Web Services Description Language)이라는 계약 파일에 적는다. 같은 시기에 "시스템을 서비스 단위로 나눠 네트워크로 엮자"는 SOA(Service-Oriented Architecture, 서비스 지향 아키텍처)가 유행했고, SOAP은 그 SOA를 구현하는 주된 수단이었다.
+
+이 글은 받은 WSDL을 읽는 법에서 시작해 봉투의 구조, curl로 직접 보내 보기, Fault, WSDL로 코드 만들기, WS-Security를 따라간다. 뒤에서는 SOA와 ESB가 무슨 문제를 풀려 했고 왜 무거워졌는지, 마이크로서비스가 무엇을 다르게 했는지를 본다. 실험은 WSDL을 직접 쓰고 node로 작은 SOAP 서버를 띄운 뒤 curl과 파이썬 zeep 4.3.3 클라이언트로 불러서 했다. 서버는 직접 짠 것이라 오류 처리 방식은 실제 제품마다 다를 수 있다. REST 설계는 [REST API 설계 글](/posts/rest-api-design), gRPC는 [gRPC 글](/posts/grpc)에서 다뤘다.
+
+## 봉투 하나에 담기는 것
+
+SOAP 메시지는 늘 같은 뼈대를 갖는다. 가장 바깥이 `Envelope`, 그 안에 선택 사항인 `Header`, 그리고 실제 내용이 들어가는 `Body`다. 아래 그림에서 조각을 누르면 각 부분이 무엇인지 볼 수 있다.
+
+<UrlAnatomy
+  caption="SOAP 1.1 요청 봉투의 조각"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "env", display: "<soap:Envelope xmlns:soap=\"…/soap/envelope/\">", title: "봉투", description: "SOAP 메시지의 가장 바깥 요소다. 네임스페이스가 SOAP 버전을 정한다. 1.1은 schemas.xmlsoap.org/soap/envelope/, 1.2는 www.w3.org/2003/05/soap-envelope다. 버전이 어긋나면 서버가 바로 거절한다.", code: "xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"", required: true },
+    { key: "header", display: "<soap:Header>…</soap:Header>", title: "머리글", description: "본문과 별개로 따라가는 정보다. 인증 토큰, 타임스탬프, 서명, 거래 ID 같은 것을 넣는다. WS-Security가 여기에 들어간다. 없어도 되지만 연동 규격이 요구하면 빈 요소라도 넣는다." },
+    { key: "body", display: "<soap:Body>", title: "본문", description: "실제로 부르는 연산의 메시지가 들어간다. document/literal 방식이면 WSDL 스키마에 정의된 요소 하나가 그대로 들어간다.", required: true },
+    { key: "op", display: "<acc:GetBalanceRequest>…</acc:GetBalanceRequest>", title: "연산 메시지", description: "WSDL의 types에 정의된 요소다. 네임스페이스(acc)가 WSDL의 targetNamespace와 정확히 같아야 한다. 요소 이름과 순서도 스키마를 따른다.", code: "<acc:accountNo>110-234-567890</acc:accountNo>", required: true },
+    { key: "close", display: "</soap:Body></soap:Envelope>", title: "닫기", description: "XML이라 여는 요소마다 닫는 요소가 있어야 한다. 하나라도 빠지면 서버는 연산을 보기도 전에 파싱 단계에서 Fault를 낸다." },
+  ]}
+/>
+
+REST와 가장 먼저 다른 점은 무엇을 부르는지가 URL이 아니라 봉투 안에 있다는 것이다. 모든 연산이 같은 주소(`/account`)로 POST된다. HTTP는 봉투를 나르는 운송 수단일 뿐이고, 메서드도 상태 코드도 크게 의미를 갖지 않는다. 실제로 SOAP은 HTTP 말고 SMTP나 메시지 큐 위로도 보낼 수 있게 설계됐다.
+
+## WSDL 한 장이 계약이다
+
+받은 WSDL은 위에서부터 다섯 부분으로 읽는다. 실험에 쓴 WSDL을 줄여서 보면 이렇다.
+
+```xml
+<definitions targetNamespace="http://bank.example.com/account" ...>
+  <!-- 1. types: 메시지 안에 들어갈 요소의 모양 (XML 스키마) -->
+  <types>
+    <xsd:schema targetNamespace="http://bank.example.com/account">
+      <xsd:element name="GetBalanceRequest">
+        <xsd:complexType><xsd:sequence>
+          <xsd:element name="accountNo" type="xsd:string"/>
+        </xsd:sequence></xsd:complexType>
+      </xsd:element>
+      <xsd:element name="GetBalanceResponse"> ... balance: xsd:decimal ... </xsd:element>
+    </xsd:schema>
+  </types>
+
+  <!-- 2. message: 연산이 주고받는 메시지 -->
+  <message name="GetBalanceInput"><part name="body" element="tns:GetBalanceRequest"/></message>
+
+  <!-- 3. portType: 연산 목록 (인터페이스) -->
+  <portType name="AccountPortType">
+    <operation name="GetBalance">
+      <input message="tns:GetBalanceInput"/>
+      <output message="tns:GetBalanceOutput"/>
+    </operation>
+  </portType>
+
+  <!-- 4. binding: 그 인터페이스를 어떤 형식으로 실어 보내나 -->
+  <binding name="AccountBinding" type="tns:AccountPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="GetBalance">
+      <soap:operation soapAction="http://bank.example.com/account/GetBalance"/>
+      <input><soap:body use="literal"/></input>
+    </operation>
+  </binding>
+
+  <!-- 5. service: 실제 주소 -->
+  <service name="AccountService">
+    <port name="AccountPort" binding="tns:AccountBinding">
+      <soap:address location="http://localhost:8089/account"/>
+    </port>
+  </service>
+</definitions>
+```
+
+`types`와 `message`는 데이터, `portType`은 함수 목록, `binding`은 전송 형식, `service`는 주소다. 인터페이스(무엇을 할 수 있나)와 바인딩(어떻게 보내나)과 주소(어디로 보내나)가 따로 적혀 있어서, 같은 인터페이스를 SOAP 1.1과 1.2로 동시에 열 수도 있다.
+
+`binding`의 `style="document"`와 `use="literal"`은 흔히 document/literal이라고 부르는 조합이다. 본문에 스키마 요소를 그대로 넣는다는 뜻이다. 오래된 시스템에서는 rpc/encoded를 만나기도 하는데, 메시지 모양이 스키마로 검증되지 않아 호환성 문제가 많았다. WS-I Basic Profile이 encoded를 금지하면서 document/literal이 사실상 표준이 됐다.
+
+WSDL을 사람이 다 읽을 필요는 없다. 도구가 읽어 준다. zeep에 WSDL 주소를 주면 연산과 메시지 모양을 정리해 보여 준다.
+
+```bash
+python -m zeep http://localhost:8089/account?wsdl   # WSDL을 읽어 연산 목록을 출력
+```
+
+```text
+Bindings:
+     Soap11Binding: {http://bank.example.com/account}AccountBinding
+
+Service: AccountService
+     Port: AccountPort (Soap11Binding: {http://bank.example.com/account}AccountBinding)
+         Operations:
+            GetBalance(accountNo: xsd:string) -> accountNo: xsd:string, balance: xsd:decimal, currency: xsd:string
+```
+
+마지막 줄이 함수 시그니처다. `accountNo` 문자열을 받아 잔액(`xsd:decimal`)과 통화를 돌려준다. 받은 WSDL을 처음 열면 이 출력부터 보는 게 빠르다. `Soap11Binding`으로 SOAP 버전도 바로 확인된다.
+
+## curl로 직접 보내 본다
+
+코드를 만들기 전에 요청 하나를 손으로 보내 보면 연동 문제의 절반이 정리된다. 요청 봉투를 파일로 만든다.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+               xmlns:acc="http://bank.example.com/account">
+  <soap:Header/>
+  <soap:Body>
+    <acc:GetBalanceRequest>
+      <acc:accountNo>110-234-567890</acc:accountNo>
+    </acc:GetBalanceRequest>
+  </soap:Body>
+</soap:Envelope>
+```
+
+SOAP 1.1은 `Content-Type: text/xml`과 `SOAPAction` 헤더를 함께 보낸다. `SOAPAction` 값은 WSDL의 `soapAction` 속성을 따옴표째 넣는다.
+
+```bash
+# SOAP 1.1 요청: Content-Type과 SOAPAction 헤더가 둘 다 필요하다
+curl -s -i -X POST http://localhost:8089/account \
+  -H 'Content-Type: text/xml; charset=utf-8' \
+  -H 'SOAPAction: "http://bank.example.com/account/GetBalance"' \
+  --data-binary @req.xml
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: text/xml; charset=utf-8
+Date: Fri, 23 Oct 2026 19:28:38 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetBalanceResponse xmlns="http://bank.example.com/account">
+      <accountNo>110-234-567890</accountNo>
+      <balance>1250000.00</balance>
+      <currency>KRW</currency>
+    </GetBalanceResponse>
+  </soap:Body>
+</soap:Envelope>
+```
+
+응답도 같은 봉투다. 요청에서는 `acc:` 접두사를 썼고 응답은 기본 네임스페이스(`xmlns="..."`)를 썼는데, XML에서는 둘이 같은 이름이다. 접두사는 아무 글자나 되고, 실제로 비교하는 건 네임스페이스 URI다. 연동 중에 "요소를 못 찾는다"는 에러가 나면 대개 접두사가 아니라 URI가 한 글자 다르다.
+
+SOAP 1.2라면 헤더가 바뀐다. `Content-Type: application/soap+xml; charset=utf-8; action="..."`처럼 액션이 Content-Type의 매개변수로 들어가고, `SOAPAction` 헤더는 쓰지 않는다. 봉투 네임스페이스도 `http://www.w3.org/2003/05/soap-envelope`로 바뀐다. 1.1 서버에 1.2 봉투를 보내면 버전 불일치 Fault가 온다.
+
+## 실패는 Fault로 온다
+
+없는 계좌를 조회해 봤다.
+
+```text
+HTTP/1.1 500 Internal Server Error
+Content-Type: text/xml; charset=utf-8
+
+<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <soap:Fault>
+      <faultcode>soap:Client</faultcode>
+      <faultstring>Account not found</faultstring>
+      <detail>
+        <e:AccountFault xmlns:e="http://bank.example.com/account">
+          <e:code>ACC-404</e:code>
+        </e:AccountFault>
+      </detail>
+    </soap:Fault>
+  </soap:Body>
+</soap:Envelope>
+```
+
+SOAP 1.1 규격은 Fault를 HTTP 500으로 돌려주라고 한다. 클라이언트 잘못이어도 500이다. 그래서 상태 코드만 보고 "서버 장애"로 분류하면 안 되고, `faultcode`를 읽어야 한다. `soap:Client`는 요청이 잘못됐다는 뜻이라 같은 요청을 다시 보내도 결과가 같다. `soap:Server`는 서버 쪽 문제라 재시도할 여지가 있다. 1.2에서는 이름이 `Sender`, `Receiver`로 바뀌고 `Code`·`Reason` 요소로 구조가 달라진다. 업무 오류 코드(`ACC-404`)는 `detail` 안에 연동 규격이 정한 모양으로 들어온다.
+
+현실의 시스템은 규격을 다 지키지 않는다. 업무 오류를 HTTP 200에 담고 본문 안의 결과 코드로 알리는 곳도 흔하다. 연동 테스트에서 "200이면 성공"으로 검사하면 이런 실패를 다 놓친다. 응답 본문의 어느 노드를 검사해야 하는지는 [API 테스트 자동화 글](/posts/api-test-automation)에서 다뤘다.
+
+## WSDL에서 코드를 만든다
+
+손으로 봉투를 조립하는 건 확인용이고, 실제 코드는 WSDL에서 만든다. 언어마다 도구가 있다. 자바는 JAX-WS의 `wsimport`나 Apache CXF의 `wsdl2java`, .NET은 `dotnet-svcutil`이 WSDL을 읽어 클래스와 스텁을 만든다. 파이썬 zeep은 코드를 생성하지 않고 실행 중에 WSDL을 읽어 함수를 만든다. 아래 그림은 생성된 스텁을 거쳐 호출 하나가 오가는 과정이다.
+
+<SequenceDiagram
+  caption="WSDL에서 만든 스텁으로 SOAP 연산 하나 부르기"
+  actors={[
+    { id: "app", label: "우리 서비스" },
+    { id: "stub", label: "생성된 스텁" },
+    { id: "bank", label: "은행 SOAP" },
+  ]}
+  steps={[
+    { from: "app", to: "stub", label: "GetBalance(accountNo)", title: "함수처럼 부른다", detail: "WSDL의 portType이 함수 목록이 됐다. 인자 이름과 타입도 스키마에서 왔다." },
+    { from: "stub", to: "stub", label: "봉투 조립", title: "스키마대로 XML을 만든다", detail: "네임스페이스, 요소 순서, 타입 변환을 스텁이 맡는다. 헤더에 WS-Security 토큰도 여기서 붙인다." },
+    { from: "stub", to: "bank", label: "POST /account", title: "SOAPAction과 함께 보낸다", detail: "주소는 WSDL의 soap:address가 기본값이다. 운영에서는 설정으로 덮어쓴다.", payload: "SOAPAction: \"http://bank.example.com/account/GetBalance\"" },
+    { from: "bank", to: "stub", label: "200 GetBalanceResponse", title: "응답 봉투가 온다", detail: "Fault라면 500과 Fault 본문이 온다." },
+    { from: "stub", to: "app", label: "Decimal('1250000.00')", title: "타입이 맞춰진 값을 돌려준다", detail: "xsd:decimal이 부동소수점이 아닌 Decimal로 왔다. Fault는 예외로 바뀐다." },
+  ]}
+/>
+
+zeep으로 실제로 불러 보면 이렇다.
+
+```python
+from zeep import Client
+from zeep.exceptions import Fault
+
+c = Client("http://localhost:8089/account?wsdl")
+r = c.service.GetBalance(accountNo="110-234-567890")
+print(r)
+print(type(r.balance).__name__, r.balance)
+try:
+    c.service.GetBalance(accountNo="999-000-000000")
+except Fault as f:
+    print("Fault:", f.message, f.code)
+```
+
+```text
+{
+    'accountNo': '110-234-567890',
+    'balance': Decimal('1250000.00'),
+    'currency': 'KRW'
+}
+Decimal 1250000.00
+Fault: Account not found soap:Client
+```
+
+잔액이 `Decimal`로 온 것에 주목한다. 스키마에 `xsd:decimal`이라고 적혀 있으니 도구가 정확한 십진수로 바꿨다. JSON으로 금액을 주고받으면 숫자가 부동소수점으로 읽히는 문제를 따로 신경 써야 하는데, SOAP은 타입이 계약에 있어서 이런 부분이 엄격하다. 이 엄격함이 금융·공공 연동에서 SOAP이 오래 살아남은 이유 중 하나다.
+
+계약이 먼저 있고 코드를 만드는 방식을 contract-first라고 한다. 반대로 서버 코드에 어노테이션을 붙여 WSDL을 자동으로 뽑는 code-first도 있는데, 코드를 조금 고쳤다가 WSDL이 바뀌어 상대편 생성 코드가 깨지는 일이 잦다. 바깥 기관과 맞물리는 연동이면 WSDL을 버전 관리하고, 바꿀 때는 요소를 추가만 하는 식으로 호환을 지킨다. 같은 생각을 gRPC는 `.proto`로, REST는 OpenAPI로 한다.
+
+## 봉투에 붙이는 보안, WS-Security
+
+PDF에 적힌 "WS-Security UsernameToken"은 인증 정보를 HTTP 헤더가 아니라 SOAP `Header` 안에 넣는다는 뜻이다. 형식은 이렇다.
+
+```xml
+<soap:Header>
+  <wsse:Security xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
+                 xmlns:wsu="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
+    <wsu:Timestamp>
+      <wsu:Created>...</wsu:Created>
+      <wsu:Expires>...</wsu:Expires>
+    </wsu:Timestamp>
+    <wsse:UsernameToken>
+      <wsse:Username>partner01</wsse:Username>
+      <wsse:Password Type="...#PasswordDigest">...</wsse:Password>
+      <wsse:Nonce>...</wsse:Nonce>
+      <wsu:Created>...</wsu:Created>
+    </wsse:UsernameToken>
+  </wsse:Security>
+</soap:Header>
+```
+
+PasswordDigest 방식은 비밀번호 대신 `Base64(SHA-1(nonce + created + password))`를 보낸다. 서버는 같은 계산으로 비교하고, 같은 nonce가 다시 오거나 created가 너무 오래되면 거절해서 재전송을 막는다. 연동이 안 될 때 가장 흔한 원인은 두 서버의 시계가 몇 분 어긋나 Timestamp가 만료로 판정되는 것이다. 에러 메시지가 "인증 실패"로만 나와서 비밀번호를 몇 번이고 다시 확인하게 되는데, 먼저 양쪽 서버 시간을 맞춰 본다.
+
+WS-Security는 여기에 XML 서명과 XML 암호화를 더할 수 있다. 메시지의 특정 요소(본문, Timestamp)에 서명해서 중간에 바뀌지 않았음을 보장하고, 일부 요소만 암호화할 수도 있다. TLS는 두 지점 사이의 통로를 보호하지만, WS-Security는 메시지 자체에 붙어서 중간 시스템(ESB 같은)을 여러 번 거쳐도 끝까지 따라간다. 이게 메시지 수준 보안이 필요했던 이유다. 요즘 연동은 대부분 TLS(필요하면 상호 TLS)에 UsernameToken이나 서명 정도를 얹는다.
+
+XML이라서 생기는 위험도 있다. XML 파서가 외부 엔티티를 풀도록 설정되어 있으면, 공격자가 `DOCTYPE`에 서버 파일 경로를 적어 보내 내용을 읽어 가는 XXE(XML External Entity) 공격이 된다. SOAP 서버와 클라이언트 모두 DTD 처리를 끈다. 서명된 요소를 다른 위치로 옮겨 검증을 속이는 XML 서명 감싸기 공격도 있는데, SAML에서 같은 문제가 나온다. [SSO 글](/posts/sso-saml-oidc)에서 다뤘다.
+
+## REST와 무엇이 다른가
+
+SOAP은 연산 중심이다. `GetBalance`, `TransferFunds`처럼 동사로 된 함수를 부른다. REST는 자원 중심이라 `/accounts/110-234-567890/balance`라는 자원을 GET으로 읽는다. 이 차이에서 나머지가 따라 나온다.
+
+REST는 HTTP 자체를 쓴다. 메서드가 의미를 갖고, GET은 캐시되고, 상태 코드가 결과를 말한다. SOAP은 HTTP를 운송 수단으로만 써서 모든 요청이 POST이고, 결과는 봉투 안에서 말한다. 그래서 SOAP 응답은 HTTP 캐시나 CDN의 도움을 받기 어렵다.
+
+SOAP은 계약이 강하다. WSDL과 XML 스키마로 타입과 필수 요소가 정해지고, 도구가 그대로 코드를 만든다. 서명, 신뢰성 있는 전달(WS-ReliableMessaging), 분산 트랜잭션(WS-AtomicTransaction) 같은 기업용 규격도 WS-* 이름으로 쌓여 있다. 대가는 무게다. 같은 정보가 JSON보다 몇 배 크고, 파싱이 느리고, 브라우저에서 직접 부르기 불편하고, 규격이 많아 구현마다 해석이 갈린다.
+
+그래서 새로 만드는 공개 API는 REST가, 내부 서비스 간 고성능 호출은 gRPC가 주로 쓰인다. SOAP을 새로 고를 일은 드물지만 만날 일은 많다. 은행, 보험, 공공기관, 오래된 ERP와 연동하면 상대가 SOAP이고, 우리가 바꿀 수 없다. 그럴 때는 SOAP을 우리 코드 깊숙이 들이지 않고 경계의 어댑터 하나에 가둔다. 어댑터가 봉투를 다루고 바깥으로는 우리 도메인 객체만 내보낸다. 이 경계 설계는 [벤더·레거시 시스템 연동 글](/posts/enterprise-system-integration)에 자세히 있다.
+
+## SOA와 ESB가 풀려던 문제
+
+2000년대 초 큰 회사의 사정은 이랬다. 회계, 인사, 고객 관리, 주문 시스템이 각각 다른 벤더 제품이고 서로 다른 언어와 데이터 형식을 쓴다. 시스템끼리 필요할 때마다 일대일로 연결하다 보니 연결선이 n(n−1)/2개로 늘어났다. 시스템이 10개면 45개다. 하나를 바꾸면 어디가 깨질지 아무도 모른다.
+
+SOA는 각 시스템의 기능을 네트워크로 부를 수 있는 서비스로 내놓고, 다른 시스템이 그 서비스를 재사용하게 하자는 생각이었다. "고객 조회"는 고객 시스템이 서비스로 한 번 내놓고, 주문·회계·콜센터가 다 그걸 부른다. 서비스 계약은 WSDL로 적었다.
+
+그 연결을 한곳으로 모은 것이 ESB(Enterprise Service Bus)다. 모든 시스템이 ESB에만 연결하고, ESB가 메시지를 받아 목적지로 보낸다. 아래 그림에서 점은 모든 메시지가 가운데 버스를 거쳐 가는 흐름을 보여 준다.
+
+<ConceptDiagram
+  width={440}
+  height={300}
+  caption="ESB 구조. 시스템은 버스에만 연결하고, 라우팅·형식 변환·프로토콜 변환·조율이 모두 버스 안에 있다."
+  nodes={[
+    { id: "esb", label: "ESB", sub: "라우팅·변환·조율", x: 220, y: 150, w: 150, h: 60 },
+    { id: "crm", label: "고객 관리", sub: "SOAP", x: 80, y: 45, w: 110 },
+    { id: "erp", label: "ERP 회계", sub: "벤더 API", x: 360, y: 45, w: 110 },
+    { id: "order", label: "주문", sub: "SOAP", x: 70, y: 255, w: 100 },
+    { id: "legacy", label: "메인프레임", sub: "고정 길이 파일", x: 220, y: 268, w: 130 },
+    { id: "web", label: "웹 포털", sub: "HTTP", x: 370, y: 255, w: 100 },
+  ]}
+  edges={[
+    { from: "crm", to: "esb", arrow: "both" },
+    { from: "erp", to: "esb", arrow: "both" },
+    { from: "order", to: "esb", arrow: "both" },
+    { from: "legacy", to: "esb", arrow: "both" },
+    { from: "web", to: "esb", arrow: "both" },
+  ]}
+/>
+
+연결선이 시스템 수만큼으로 줄었다. ESB는 여기에 기능을 얹었다. 주문 시스템의 XML을 회계 시스템 형식으로 바꾸고(변환), 메시지 내용을 보고 어느 시스템으로 보낼지 정하고(라우팅), SOAP 요청을 메인프레임의 파일 형식이나 메시지 큐로 바꾸고(프로토콜 변환), "주문 접수 → 재고 확인 → 결제 → 회계 기록" 같은 여러 단계를 BPEL 같은 언어로 엮었다(조율). 처음에는 이게 깔끔해 보였다.
+
+## ESB가 무거워진 이유
+
+문제는 업무 규칙이 점점 버스 안으로 들어갔다는 것이다. 변환과 조율이 ESB에 있으니 "VIP 고객이면 재고 확인을 건너뛴다" 같은 규칙도 자연스럽게 ESB 흐름에 들어갔다. 몇 년 지나면 진짜 업무 로직의 상당 부분이 서비스가 아니라 버스 설정에 있게 된다.
+
+그러면 몇 가지 일이 생긴다. ESB는 보통 통합 전담 팀 하나가 관리하니, 어느 팀이든 연동을 조금 바꾸려면 그 팀의 일정에 줄을 서야 한다. 모든 흐름이 같은 버스에 배포되니 한 흐름을 고치면 전체를 다시 배포하고 전체를 다시 테스트한다. 버스가 멈추면 회사 전체 연동이 멈춘다. 모든 시스템이 통하는 공통 데이터 모델(canonical data model)을 만들려다 모든 부서의 요구를 담은 거대한 스키마가 되고, 필드 하나 바꾸는 데 회의가 몇 번씩 열린다. 비싼 상용 ESB 제품에 묶이는 것도 부담이었다.
+
+SOA라는 생각 자체가 틀렸다기보다, 서비스를 재사용 가능한 단위로 나누자는 목표를 중앙 집중된 인프라로 구현한 방식이 조직의 병목이 됐다. 서비스 경계는 나눴는데 그 사이의 연결과 규칙은 오히려 한곳에 더 단단히 묶였다.
+
+## 마이크로서비스는 무엇을 바꿨나
+
+마이크로서비스도 시스템을 네트워크로 부르는 서비스로 나눈다는 점에서 SOA의 후손이다. 2014년 제임스 루이스와 마틴 파울러가 정리한 글에서 핵심 차이로 꼽은 말이 "smart endpoints and dumb pipes"다. 똑똑한 건 서비스이고, 그 사이의 통로는 멍청해야 한다.
+
+통로는 HTTP나 단순한 메시지 브로커로 메시지를 나르기만 한다. 변환, 라우팅 판단, 업무 규칙은 그 메시지를 보내고 받는 서비스가 각자 가진다. 조율이 필요하면 중앙 엔진 대신 서비스들이 이벤트를 주고받으며 각자 반응하거나(코레오그래피), 조율 역할을 맡은 서비스 하나가 직접 한다. 이 방식은 [이벤트 기반 아키텍처 글](/posts/event-driven-architecture)에서 이어진다.
+
+데이터도 서비스가 소유한다. 공통 데이터 모델 대신 각 서비스가 자기 경계(바운디드 컨텍스트) 안에서 자기 모델을 갖고, 다른 서비스와는 계약된 메시지로만 주고받는다. 그리고 서비스마다 팀이 따로 있어 따로 배포한다. ESB 시절에 통합 팀이 쥐고 있던 연결과 규칙의 소유권이 각 서비스 팀으로 흩어진 것이다. 그 대가로 분산 트랜잭션, 데이터 일관성, 운영 복잡도가 생기는데, 이건 [마이크로서비스 글](/posts/microservices)에서 다뤘다.
+
+조심할 함정이 하나 있다. 마이크로서비스 앞에 두는 API 게이트웨이나 서비스 메시에 요청 변환, 업무 분기, 여러 서비스 조합 로직을 계속 넣다 보면 그게 다시 ESB가 된다. 게이트웨이는 인증, 속도 제한, 라우팅처럼 업무와 상관없는 공통 관심사만 맡는 게 원래 목적이다. 그 경계는 [API 게이트웨이 활용 글](/posts/api-gateway-use-cases)에 있다.
+
+## 현장에서 SOAP 연동이 깨질 때
+
+SOAP 연동에서 반복해서 보는 증상과 먼저 확인할 곳을 정리해 둔다.
+
+- 개발 환경에서는 되는데 운영에서 연결이 안 된다. WSDL의 `soap:address`가 상대 회사 내부 주소나 개발 서버를 가리키는 경우가 많다. 생성된 스텁은 이 주소를 기본값으로 쓰니, 엔드포인트를 설정으로 덮어쓰고 WSDL은 로컬 파일로 들고 있는다. 운영 중에 WSDL을 원격에서 매번 받아 오면 상대 서버가 느릴 때 우리 서비스 기동까지 느려진다.
+- 요청은 갔는데 "요소를 찾을 수 없다"는 Fault가 온다. 네임스페이스 URI의 끝 슬래시, 대소문자, `elementFormDefault`(자식 요소에도 네임스페이스를 붙이는지) 차이가 대부분이다. curl로 상대가 준 예제 요청을 그대로 보내서 되는지 먼저 확인하고, 되면 우리 스텁이 만든 봉투와 한 글자씩 비교한다.
+- 인증만 계속 실패한다. WS-Security Timestamp 만료, 서버 시간 차이, PasswordText와 PasswordDigest 혼동을 본다.
+- 한글이 깨진다. 오래된 시스템이 EUC-KR로 응답하는데 XML 선언과 Content-Type의 charset이 서로 다른 경우가 있다. 어느 쪽을 믿을지 파서 설정을 확인한다.
+- 장애 분석을 하려는데 무엇이 오갔는지 모른다. 봉투 원문을 요청·응답 모두 로그에 남긴다. 계좌번호, 주민번호, 비밀번호 같은 값은 요소 단위로 가려서 남긴다.
+- 상대 시스템이 느려서 우리 스레드가 다 묶인다. SOAP 클라이언트의 기본 타임아웃은 라이브러리마다 다르고 무제한인 경우도 있다. 연결과 읽기 타임아웃을 따로 명시하고, 타임아웃 후에는 요청이 처리됐는지 모르는 상태로 다뤄 조회로 확인한다.
+
+## 봉투와 계약, 그리고 버스
+
+SOAP은 XML 봉투와 WSDL 계약으로 시스템 사이 호출을 엄격하게 맞추는 방식이다. 연산과 타입이 계약에 다 있어 코드를 만들어 쓰고, Fault와 WS-Security처럼 HTTP 바깥의 규칙을 봉투 안에 담는다. SOA는 그 서비스들을 재사용하려 했고, ESB는 연결을 한곳에 모았지만 업무 규칙까지 끌어안으며 조직의 병목이 됐다. 마이크로서비스는 통로를 단순하게 두고 규칙과 데이터를 서비스 팀에 돌려줬다. 오늘 SOAP을 만나면 대개 바꿀 수 없는 상대 쪽이니, 경계의 어댑터에 가두고 curl로 먼저 확인하는 습관이 가장 쓸모 있다.
+
+## 면접에서 나올 만한 질문
+
+### SOAP 메시지는 어떻게 생겼나요?
+
+XML 봉투(Envelope) 안에 선택 사항인 Header와 필수인 Body가 들어간다. Header에는 인증 토큰, 타임스탬프, 서명 같은 부가 정보를, Body에는 WSDL 스키마에 정의된 연산 메시지를 넣는다. 실패하면 Body에 Fault 요소가 온다. 무엇을 부르는지가 URL이 아니라 봉투 안에 있어서 모든 연산이 같은 주소로 POST된다.
+
+### WSDL에는 무엇이 들어 있나요?
+
+메시지 모양(types, XML 스키마), 연산이 주고받는 메시지(message), 연산 목록(portType), 전송 방식(binding), 실제 주소(service)가 들어 있다. 인터페이스와 전송 형식과 주소가 분리되어 있어 같은 인터페이스를 여러 방식으로 열 수 있다. 도구가 이걸 읽어 클라이언트 코드를 만들고, 타입도 스키마대로 맞춰 준다.
+
+### SOAP과 REST는 어떻게 다르고 언제 무엇을 고르나요?
+
+SOAP은 연산 중심이고 HTTP를 운송 수단으로만 써서 모든 요청이 POST이고 결과는 봉투 안에서 말한다. REST는 자원 중심이고 HTTP 메서드와 상태 코드, 캐시를 그대로 쓴다. SOAP은 WSDL 계약과 WS-* 보안·신뢰성 규격이 강점이지만 무겁고 브라우저 친화적이지 않다. 새 공개 API는 REST, 내부 고성능 호출은 gRPC를 고르고, SOAP은 은행·공공처럼 상대가 정한 연동에서 어댑터로 감싸 쓴다.
+
+### SOAP Fault는 어떻게 처리해야 하나요?
+
+SOAP 1.1은 Fault를 HTTP 500으로 보내서 클라이언트 잘못도 500이다. 상태 코드가 아니라 faultcode를 보고, Client면 재시도해도 소용없으니 요청을 고치고, Server면 재시도를 고려한다. 업무 오류 코드는 detail 안에 온다. 실제 시스템은 업무 오류를 200에 담기도 해서 본문 결과 코드도 함께 검사해야 한다.
+
+### WS-Security는 TLS와 무엇이 다른가요?
+
+TLS는 두 지점 사이의 통로를 보호하고, WS-Security는 메시지 자체에 토큰·서명·암호화를 붙인다. 그래서 중간 시스템을 여러 번 거쳐도 서명과 암호화가 끝까지 따라가고, 메시지 일부만 서명하거나 암호화할 수 있다. UsernameToken PasswordDigest는 nonce와 생성 시각을 섞은 해시를 보내 재전송을 막는데, 서버 시간이 어긋나면 인증이 실패한다.
+
+### SOA와 ESB는 무엇을 풀려 했고 왜 무거워졌나요?
+
+시스템끼리 일대일로 엮어 연결선이 폭발하던 문제를, 기능을 재사용 가능한 서비스로 내놓고 ESB 한곳으로 연결을 모아 풀려 했다. ESB가 변환·라우팅·조율을 맡으면서 업무 규칙까지 버스 안으로 들어갔고, 통합 팀 하나가 모든 변경의 병목이 되고 버스 전체를 함께 배포하고 테스트해야 했다. 공통 데이터 모델은 모든 부서의 요구를 담느라 바꾸기 어려워졌다.
+
+### SOA와 마이크로서비스의 차이는 무엇인가요?
+
+둘 다 시스템을 네트워크 서비스로 나누지만, SOA는 흔히 ESB처럼 똑똑한 중앙 통로에 변환과 조율과 규칙을 모았고, 마이크로서비스는 통로를 단순하게 두고 규칙을 서비스 안에 둔다(smart endpoints, dumb pipes). 데이터도 공통 모델 대신 서비스마다 소유하고, 팀마다 따로 배포한다. SOA의 목표가 재사용이었다면 마이크로서비스의 목표는 독립 배포와 팀 자율성에 가깝다.
+
+### API 게이트웨이가 ESB처럼 되는 건 어떻게 막나요?
+
+게이트웨이에는 인증, 속도 제한, 라우팅, TLS 종료처럼 업무와 상관없는 공통 관심사만 둔다. 요청 본문 변환, 업무 분기, 여러 서비스를 엮는 조합 로직이 게이트웨이에 쌓이기 시작하면 다시 중앙 팀의 병목이 된다. 조합이 필요하면 화면별 BFF나 담당 서비스가 맡게 하고, 게이트웨이 설정은 각 서비스 팀이 자기 경로만 바꿀 수 있게 나눈다.

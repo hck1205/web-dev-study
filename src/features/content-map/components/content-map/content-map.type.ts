@@ -8,9 +8,18 @@ export interface MapPost {
 
 export interface MapSection {
   key: string;
-  /** "Programming › Database › SQL" */
+  /** "Database › SQL" (최상위 토픽 이름은 그룹 제목에 있으므로 뺀다) */
   label: string;
   href: string;
   depth: number;
   posts: MapPost[];
+}
+
+/** 최상위 토픽 하나. 접혀 있다가 펼치면 그 아래 섹션을 렌더링한다 */
+export interface MapGroup {
+  key: string;
+  label: string;
+  href: string;
+  count: number;
+  sections: MapSection[];
 }

@@ -1,4 +1,4 @@
-import type { Checkpoint, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier } from "./types";
+import type { Checkpoint, Course, FlatCheckpoint, FlatRoadmap, PostItem, PostPlacement, RoadmapItem, RoadmapNode, Tier } from "./types";
 
 export const isRoadmap = (item: RoadmapItem): item is RoadmapNode => typeof item === "object" && "items" in item;
 export const isCheckpoint = (item: RoadmapItem): item is Checkpoint => typeof item === "object" && "checkpoint" in item;
@@ -86,4 +86,39 @@ export function validateRoadmaps(flat: FlatRoadmap[], allSlugs: string[]) {
   }
   const missing = allSlugs.filter((slug) => !seen.has(slug));
   if (missing.length) throw new Error(`[roadmap] 로드맵에 빠진 글 ${missing.length}편: ${missing.join(", ")}`);
+}
+
+/** 직무별 경로가 가리키는 로드맵이 모두 있는지, 경로 id가 겹치지 않는지 검사한다 */
+export function validateCourses(courses: Course[], flat: FlatRoadmap[]) {
+  const keys = new Set(flat.map((roadmap) => roadmapKey(roadmap.path)));
+  const placed = new Set(flat.flatMap((roadmap) => roadmap.posts));
+  const ids = new Set(courses.map((course) => course.id));
+  if (ids.size !== courses.length) throw new Error("큰 로드맵 id가 겹친다");
+  for (const course of courses) {
+    for (const stage of course.stages) {
+      if (!stage.roadmaps?.length && !stage.posts?.length) throw new Error(`큰 로드맵 ${course.id}의 "${stage.label}"이 비어 있다`);
+      for (const key of stage.roadmaps ?? []) {
+        if (!keys.has(key)) throw new Error(`큰 로드맵 ${course.id}의 "${stage.label}"이 없는 로드맵을 가리킨다: ${key}`);
+      }
+      for (const slug of stage.posts ?? []) {
+        if (!placed.has(slug)) throw new Error(`큰 로드맵 ${course.id}의 "${stage.label}"에 로드맵에 없는 글이 있다: ${slug}`);
+      }
+    }
+    for (const link of course.next) {
+      if (!ids.has(link.course) || link.course === course.id) throw new Error(`큰 로드맵 ${course.id}의 next가 잘못됐다: ${link.course}`);
+    }
+  }
+  // 지도는 한 방향 흐름이어야 층을 나눌 수 있다. next가 돌아오는 고리를 만들면 막는다
+  const nextOf = new Map(courses.map((course) => [course.id, course.next.map((link) => link.course)]));
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+  const visit = (id: string, trail: string[]) => {
+    if (done.has(id)) return;
+    if (visiting.has(id)) throw new Error(`큰 로드맵 next가 고리를 만든다: ${[...trail, id].join(" → ")}`);
+    visiting.add(id);
+    for (const to of nextOf.get(id) ?? []) visit(to, [...trail, id]);
+    visiting.delete(id);
+    done.add(id);
+  };
+  for (const course of courses) visit(course.id, []);
 }

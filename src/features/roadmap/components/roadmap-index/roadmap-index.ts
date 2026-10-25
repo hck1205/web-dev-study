@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { getPostBySlug, postHref } from "@/features/posts/registry";
+import { POSTS, getPostBySlug, postHref } from "@/features/posts/registry";
 import { useGetStudyProgress } from "../../atoms/study-progress";
-import { nextSlugs, roadmapStats, tierStats, topGraph } from "../../hooks/use-roadmap-stats";
-import { TOP_ROADMAPS, placementOf, roadmapHref } from "../../registry";
+import { courseGraph, courseStats, nextSlugs, roadmapStats, tierStats, topGraph } from "../../hooks/use-roadmap-stats";
+import { COURSES, TOP_ROADMAPS, courseHref, placementOf, roadmapHref } from "../../registry";
 
 const TIER_LABELS = { 1: "핵심", 2: "실무·면접", 3: "참고" } as const;
 
@@ -42,7 +42,21 @@ export function useRoadmapIndex() {
       };
     });
 
-    return { tiers, tierLabels: TIER_LABELS, next, roadmaps, graph: topGraph(progress) };
+    const courses = COURSES.map((course) => {
+      const stats = courseStats(course, progress);
+      return { id: course.id, label: course.label, description: course.description, href: courseHref(course.id), total: stats.total, stageCount: course.stages.length };
+    });
+
+    return {
+      tiers,
+      tierLabels: TIER_LABELS,
+      next,
+      roadmaps,
+      courses,
+      courseGraph: courseGraph(progress),
+      graph: topGraph(progress),
+      postCount: POSTS.length,
+    };
   }, [progress]);
   return { ...data, view, setView };
 }

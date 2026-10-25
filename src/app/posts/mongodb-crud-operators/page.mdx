@@ -1,0 +1,598 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("mongodb-crud-operators");
+
+<EasyIntro>
+  옷 가게 창고에 상자가 있고, 상자마다 옷이 여러 벌 들어 있다고 해 보자. 빨간색 L 사이즈 옷이 든 상자를 찾아 달라고 했는데, 빨간 M 한 벌과 파란 L 한 벌이 든 상자까지 같이 나왔다. 상자 안 어딘가에 빨간 옷이 있고, 어딘가에 L 옷이 있기만 하면 맞다고 본 것이다.
+
+  MongoDB에서 배열을 찾을 때도 똑같은 일이 생긴다. 조건 두 개를 따로따로 걸면 각 조건이 서로 다른 옷에 맞아도 상자가 뽑힌다. 한 벌이 두 조건을 다 맞춰야 한다면 "한 벌을 집어서 둘 다 확인해"라는 뜻의 연산자를 써야 한다.
+
+  고칠 때도 비슷하다. 상자를 통째로 바꾸는 대신 그 안의 옷 한 벌만 바꾸는 방법이 있고, 여러 사람이 동시에 없으면 새 상자를 만들라고 하면 상자가 두 개 생길 수 있다. 이 글은 이렇게 찾고, 고치고, 한꺼번에 넣을 때 헷갈리는 자리를 하나씩 확인해 본다.
+</EasyIntro>
+
+상품 문서에 옵션 배열이 있다. 색과 사이즈가 짝으로 들어 있다.
+
+```js
+{ _id: 1, name: "기본 티셔츠", variants: [ { color: "red", size: "M" }, { color: "blue", size: "L" } ] }
+```
+
+"빨강이면서 L인 옵션이 있는 상품"을 찾으려고 이렇게 썼다.
+
+```js
+db.products.find({ "variants.color": "red", "variants.size": "L" })
+```
+
+결과에 기본 티셔츠가 나온다. 이 상품에는 빨강 L이 없다. 빨강 M과 파랑 L이 있을 뿐이다. 쿼리가 틀린 게 아니라 MongoDB가 원래 이렇게 읽는다. 이 글은 이 장면에서 출발해 find의 연산자, projection, 커서, 그리고 업데이트 연산자와 upsert, bulkWrite가 실제로 어떻게 동작하는지 따라간다. 모든 출력은 MongoDB 8.0(mongosh 2.x, Node.js 드라이버 6.x)에서 직접 돌려 얻은 것이다. 문서를 어떻게 나눌지(내장과 참조), 인덱스 순서, write concern은 [MongoDB 문서 모델 글](/posts/mongodb-document-model)에서 다뤘다. 여기서는 그렇게 만든 컬렉션에 무엇을 어떻게 묻고 쓰는지를 본다.
+
+글 끝까지 쓸 예제 컬렉션은 이 네 개다.
+
+```js
+db.products.insertMany([
+  { _id: 1, name: "기본 티셔츠", price: 19000, tags: ["cotton", "basic"],
+    variants: [ { color: "red", size: "M", stock: 3 }, { color: "blue", size: "L", stock: 0 } ], ratings: [2, 8] },
+  { _id: 2, name: "오버핏 티셔츠", price: 29000, tags: ["cotton", "oversize"],
+    variants: [ { color: "red", size: "L", stock: 5 } ], ratings: [4] },
+  { _id: 3, name: "린넨 셔츠", price: 49000, tags: ["linen"],
+    variants: [ { color: "white", size: "L", stock: 2 }, { color: "red", size: "S", stock: 1 } ], ratings: [5, 5, 3] },
+  { _id: 4, name: "후드 집업", price: "59000", tags: [], variants: [], discount: null },
+])
+```
+
+4번 상품의 가격이 문자열 `"59000"`인 건 일부러 넣은 실수다. 스키마 검증 없이 여러 서비스가 쓰는 컬렉션에서는 이런 문서가 실제로 섞인다.
+
+## 조건은 원소마다 따로 맞는다
+
+배열 필드에 조건을 걸면 MongoDB는 "배열 원소 중 하나라도 이 조건에 맞으면 문서가 맞다"로 읽는다. 조건이 두 개면 두 조건을 각각 따로 이 규칙으로 검사한다. 빨강 조건은 0번 원소가, L 조건은 1번 원소가 만족해도 문서는 통과한다.
+
+아래 그림에서 기본 티셔츠의 옵션 두 개를 훑으며 두 방식이 어떻게 갈리는지 보자.
+
+<AlgoTrace
+  caption="기본 티셔츠 옵션 배열에 red + L 조건 걸기"
+  memoryLabel="맞은 조건"
+  cells={["red · M", "blue · L"]}
+  steps={[
+    { caption: "점 표기법(variants.color, variants.size)은 조건마다 배열 전체를 따로 훑는다." },
+    { pointer: 0, memory: ["color=red ✓"], caption: "color 조건: 0번 원소가 red다. color 조건은 여기서 끝난다." },
+    { pointer: 1, memory: ["color=red ✓", "size=L ✓"], caption: "size 조건: 0번은 M이라 넘어가고 1번이 L이다. 두 조건이 다 맞았으니 문서가 뽑힌다." },
+    { caption: "이번에는 $elemMatch. 원소 하나를 집어서 두 조건을 한꺼번에 본다." },
+    { pointer: 0, memory: ["0번: red ✓ L ✗"], caption: "0번 원소는 red지만 M이다. 이 원소는 탈락." },
+    { pointer: 1, memory: ["0번: red ✓ L ✗", "1번: red ✗ L ✓"], caption: "1번 원소는 L이지만 blue다. 이것도 탈락. 두 조건을 다 맞춘 원소가 없으니 문서도 빠진다." },
+  ]}
+/>
+
+실제로 돌려 보면 차이가 그대로 나온다.
+
+```js
+// 조건이 원소마다 따로 맞는다
+db.products.find({ "variants.color": "red", "variants.size": "L" }, { name: 1 })
+// 한 원소가 두 조건을 다 맞춰야 한다
+db.products.find({ variants: { $elemMatch: { color: "red", size: "L" } } }, { name: 1 })
+```
+
+```text
+[ { _id: 1, name: '기본 티셔츠' }, { _id: 2, name: '오버핏 티셔츠' }, { _id: 3, name: '린넨 셔츠' } ]
+[ { _id: 2, name: '오버핏 티셔츠' } ]
+```
+
+점 표기법은 세 개를 돌려준다. 린넨 셔츠도 white L과 red S가 있어서 같이 걸렸다. `$elemMatch`는 진짜로 빨강 L이 있는 오버핏 티셔츠 하나만 돌려준다.
+
+숫자 배열의 범위 조건에서도 같은 일이 생긴다. 평점 배열에서 "3보다 크고 5보다 작은 평점이 있는 상품"을 찾으면 이렇게 된다.
+
+```js
+db.products.find({ ratings: { $gt: 3, $lt: 5 } }, { name: 1, ratings: 1 })
+db.products.find({ ratings: { $elemMatch: { $gt: 3, $lt: 5 } } }, { name: 1, ratings: 1 })
+```
+
+```text
+[ { _id: 1, ratings: [ 2, 8 ] }, { _id: 2, ratings: [ 4 ] }, { _id: 3, ratings: [ 5, 5, 3 ] } ]
+[ { _id: 2, ratings: [ 4 ] } ]
+```
+
+`[2, 8]`은 4가 하나도 없는데 걸렸다. 8이 `$gt: 3`을, 2가 `$lt: 5`를 맞췄기 때문이다. 범위 하나를 한 원소에 걸고 싶으면 `$elemMatch`로 묶는다.
+
+그러면 언제 `$elemMatch`가 필요 없을까. 조건이 하나뿐이면 결과가 같다. `{ "variants.color": "red" }`와 `{ variants: { $elemMatch: { color: "red" } } }`는 같은 문서를 돌려준다. 원소 하나에 조건이 둘 이상 걸릴 때만 차이가 난다. 인덱스도 짚어 둘 만하다. `{ "variants.color": 1, "variants.size": 1 }` 같은 멀티키 인덱스가 있어도, 점 표기법으로 두 조건을 따로 걸면 MongoDB는 두 범위를 한 원소로 묶어 좁힐 수 없다. `$elemMatch`로 쓰면 같은 원소 조건이라는 걸 알기 때문에 인덱스 범위를 겹쳐서 더 좁게 읽는다.
+
+직접 규칙을 짜 보면 차이가 더 분명해진다. 아래 함수는 상품 배열과 조건을 받아 맞는 상품 id를 돌려준다. `elemMatch`가 false면 점 표기법처럼, true면 `$elemMatch`처럼 동작하게 고쳐 보자.
+
+<CodePlayground
+  caption="점 표기법과 $elemMatch 흉내 내기"
+  functionName="findIds"
+  initialCode={`function findIds(products, cond, elemMatch) {
+  const keys = Object.keys(cond);
+  // elemMatch가 false: 조건마다 아무 원소나 맞으면 된다
+  // elemMatch가 true: 원소 하나가 모든 조건을 맞춰야 한다
+  return [];
+}`}
+  solution={`function findIds(products, cond, elemMatch) {
+  const keys = Object.keys(cond);
+  return products
+    .filter((p) =>
+      elemMatch
+        ? p.variants.some((v) => keys.every((k) => v[k] === cond[k]))
+        : keys.every((k) => p.variants.some((v) => v[k] === cond[k]))
+    )
+    .map((p) => p.id);
+}`}
+  tests={[
+    { label: "점 표기법 red + L", args: [[{ id: 1, variants: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }, { id: 2, variants: [{ color: "red", size: "L" }] }, { id: 3, variants: [{ color: "white", size: "L" }, { color: "red", size: "S" }] }, { id: 4, variants: [] }], { color: "red", size: "L" }, false], expected: [1, 2, 3] },
+    { label: "$elemMatch red + L", args: [[{ id: 1, variants: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }, { id: 2, variants: [{ color: "red", size: "L" }] }, { id: 3, variants: [{ color: "white", size: "L" }, { color: "red", size: "S" }] }, { id: 4, variants: [] }], { color: "red", size: "L" }, true], expected: [2] },
+    { label: "조건 하나면 같다", args: [[{ id: 1, variants: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }, { id: 2, variants: [{ color: "red", size: "L" }] }, { id: 3, variants: [{ color: "white", size: "L" }, { color: "red", size: "S" }] }, { id: 4, variants: [] }], { color: "blue" }, true], expected: [1] },
+    { label: "점 표기법 white + S", args: [[{ id: 1, variants: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }, { id: 2, variants: [{ color: "red", size: "L" }] }, { id: 3, variants: [{ color: "white", size: "L" }, { color: "red", size: "S" }] }, { id: 4, variants: [] }], { color: "white", size: "S" }, false], expected: [3] },
+    { label: "$elemMatch white + S", args: [[{ id: 1, variants: [{ color: "red", size: "M" }, { color: "blue", size: "L" }] }, { id: 2, variants: [{ color: "red", size: "L" }] }, { id: 3, variants: [{ color: "white", size: "L" }, { color: "red", size: "S" }] }, { id: 4, variants: [] }], { color: "white", size: "S" }, true], expected: [] },
+  ]}
+/>
+
+## 비교 연산자는 타입부터 본다
+
+`$eq`, `$gt`, `$gte`, `$lt`, `$lte`, `$ne`는 이름 그대로다. `{ price: 19000 }`처럼 값만 쓰면 `$eq`와 같다. 헷갈리는 건 타입이 섞였을 때다.
+
+```js
+db.products.find({ price: { $gte: 20000 } }, { name: 1, price: 1 })
+db.products.find({ price: { $type: "string" } }, { name: 1, price: 1 })
+```
+
+```text
+[ { _id: 2, name: '오버핏 티셔츠', price: 29000 }, { _id: 3, name: '린넨 셔츠', price: 49000 } ]
+[ { _id: 4, name: '후드 집업', price: '59000' } ]
+```
+
+59,000원짜리 후드 집업이 "2만 원 이상"에 안 나온다. MongoDB의 비교 연산자는 같은 타입끼리만 비교한다(type bracketing). 숫자 20000과 문자열 "59000"은 비교 대상이 아니라서 조건이 거짓이 된다. 오류도 경고도 없다. 그래서 가격 필터에서 상품이 조용히 빠지는 증상이 나오면 `$type`으로 타입이 다른 문서부터 찾는다. 정렬할 때는 반대로 타입 사이에 정해진 순서(숫자가 문자열보다 앞)가 있어서, 섞인 문서가 목록 맨 끝에 몰려 나온다.
+
+`null`도 두 갈래로 읽힌다.
+
+```js
+db.products.find({ discount: null }, { name: 1 })               // 값이 null이거나 필드가 없음
+db.products.find({ discount: { $exists: true } }, { name: 1 })  // 필드가 있음 (값이 null이어도)
+```
+
+```text
+[ { _id: 1, ... }, { _id: 2, ... }, { _id: 3, ... }, { _id: 4, name: '후드 집업' } ]
+[ { _id: 4, name: '후드 집업' } ]
+```
+
+`{ discount: null }`은 필드가 아예 없는 문서까지 전부 잡는다. "할인을 일부러 비워 둔 상품"만 원하면 `{ discount: { $type: "null" } }`로 쓰고, "할인 필드가 있는 상품"이면 `$exists`를 쓴다.
+
+`$ne`와 `$nin`은 배열에서 의도와 반대로 읽히기 쉽다.
+
+```js
+db.products.find({ "variants.color": { $ne: "red" } }, { name: 1 })
+db.products.find({ tags: { $nin: ["cotton"] } }, { name: 1 })
+```
+
+```text
+[ { _id: 4, name: '후드 집업' } ]
+[ { _id: 3, name: '린넨 셔츠' }, { _id: 4, name: '후드 집업' } ]
+```
+
+"빨강이 아닌 옵션이 있는 상품"을 기대했다면 1번(파랑 L)과 3번(흰색 L)이 나와야 한다. 하지만 배열에서 `$ne`는 "어떤 원소도 red가 아니다"로 읽힌다. 그래서 옵션이 아예 없는 후드 집업 하나만 남았다. 정말 "빨강이 아닌 원소가 하나라도 있는" 문서를 원하면 `{ variants: { $elemMatch: { color: { $ne: "red" } } } }`로 쓴다. 그리고 `$ne`, `$nin`은 인덱스로 범위를 좁히기 어려워서 큰 컬렉션에서는 대부분을 읽게 된다는 것도 알아 둔다.
+
+## 논리 연산자와 정규식
+
+`$and`, `$or`, `$nor`, `$not`이 있다. 필드를 여러 개 나란히 쓰면 이미 AND라서 `$and`를 직접 쓸 일은 적다. 꼭 필요한 경우가 두 가지 있다.
+
+하나는 `$or`를 두 번 걸 때다. 쿼리는 객체라서 `$or` 키를 두 번 쓸 수 없다. 이럴 때 `$and`로 감싼다.
+
+```js
+db.products.find({ $and: [
+  { $or: [ { price: { $lt: 30000 } }, { tags: "linen" } ] },
+  { $or: [ { "variants.size": "L" }, { tags: "basic" } ] },
+] }, { name: 1 })
+```
+
+다른 하나는 같은 필드에 조건을 두 번 쓸 때다. 이건 실제로 사고가 나는 자리다.
+
+```js
+db.products.find({ price: { $lt: 30000 }, price: { $gt: 20000 } }, { name: 1 })
+```
+
+```text
+[ { _id: 2, name: '오버핏 티셔츠' }, { _id: 3, name: '린넨 셔츠' } ]
+```
+
+3만 원 미만이라고 썼는데 49,000원짜리 린넨 셔츠가 나왔다. 자바스크립트 객체에서 같은 키를 두 번 쓰면 뒤의 것이 앞의 것을 덮어쓴다. 서버에 도착한 쿼리는 `{ price: { $gt: 20000 } }` 하나뿐이다. 같은 필드 조건은 `{ price: { $gt: 20000, $lt: 30000 } }`처럼 한 객체에 모으거나 `$and`로 나눈다. 조건을 코드로 조립하는 검색 API에서 특히 자주 생긴다.
+
+`$or`와 `$in`은 같은 필드라면 `$in`이 낫다. `{ tags: { $in: ["linen", "basic"] } }`는 인덱스 범위 몇 개로 끝나고, `$or`는 가지마다 따로 계획을 세운다. `$or`는 서로 다른 필드를 묶을 때 쓰고, 이때는 가지마다 쓸 인덱스가 있어야 컬렉션 전체를 훑지 않는다.
+
+`$nor`는 "어느 것도 아닌"이다. 위 `$or` 결과(1번, 3번)를 뒤집으면 2번과 4번이 나온다. `$not`은 연산자 하나를 뒤집는다. `{ name: { $not: { $regex: "티셔츠$" } } }`는 이름이 티셔츠로 끝나지 않는 상품이다.
+
+정규식은 앞을 고정했는지가 성능을 가른다. `name`에 인덱스를 만들고 `^린넨`을 explain으로 보면 인덱스 범위가 이렇게 잡힌다.
+
+```js
+db.products.createIndex({ name: 1 })
+db.products.find({ name: { $regex: "^린넨" } }).explain("executionStats")
+```
+
+```text
+indexBounds: { name: [ '["린넨", "린넩")', '[/^린넨/, /^린넨/]' ] }
+```
+
+"린넨"부터 "린넩" 직전까지만 읽는다. 대소문자를 무시하는 `i` 옵션을 붙이거나 앞에 고정 글자가 없는 `/셔츠/` 같은 정규식은 이 범위를 만들 수 없어서 인덱스 전체나 컬렉션 전체를 읽는다. 상품명 부분 검색이 필요해지면 정규식 대신 검색 엔진을 붙이는 게 맞다. 그 이유는 [역색인 글](/posts/elasticsearch-inverted-index)에 있다.
+
+## 배열 통째로 묻기: $all과 $size
+
+`$in`은 "이 중 하나라도", `$all`은 "이걸 전부 가진"이다. `{ tags: { $all: ["cotton", "basic"] } }`는 두 태그를 다 가진 기본 티셔츠만 돌려준다. 순서는 상관없다.
+
+`$size`는 원소 개수가 정확히 그 수인 배열을 찾는다. 범위는 안 된다.
+
+```js
+db.products.find({ tags: { $size: 0 } }, { name: 1 })      // 후드 집업
+db.products.find({ tags: { $size: { $gt: 1 } } })
+```
+
+```text
+MongoServerError: Failed to parse $size. Expected a number in: $size: { $gt: 1 }
+```
+
+"태그가 두 개 이상인 상품"이 필요하면 `{ "tags.1": { $exists: true } }`처럼 두 번째 원소가 있는지로 묻거나, 쓸 때마다 `tagCount` 필드를 같이 올려 두고 그 필드에 인덱스를 건다. `$size`는 인덱스를 쓰지 못하니 자주 묻는 개수라면 필드로 빼는 쪽이 낫다.
+
+## 필요한 필드만 받기: projection
+
+find의 두 번째 인자가 projection이다. `{ name: 1 }`이면 name과 `_id`만 온다. 상품 목록 화면에 리뷰 배열까지 전부 받아 오면 네트워크와 드라이버 역직렬화 비용을 그대로 낸다.
+
+포함(1)과 제외(0)는 섞을 수 없다. 예외는 `_id: 0` 하나뿐이다.
+
+```js
+db.products.find({}, { name: 1, price: 0 })
+```
+
+```text
+MongoServerError: Cannot do exclusion on field price in inclusion projection
+```
+
+배열을 잘라 받는 연산자도 있다.
+
+```js
+db.products.find({ _id: 3 }, { name: 1, ratings: { $slice: 2 }, _id: 0 })   // 앞의 두 개만
+db.products.find({ _id: 3 }, { name: 1, variants: { $elemMatch: { color: "red" } } })  // 맞는 첫 원소만
+db.products.find({ "variants.color": "red" }, { "variants.$": 1 })          // 쿼리에 맞은 첫 원소만
+```
+
+```text
+[ { name: '린넨 셔츠', ratings: [ 5, 5 ] } ]
+[ { _id: 3, name: '린넨 셔츠', variants: [ { color: 'red', size: 'S', stock: 1 } ] } ]
+[ { _id: 1, variants: [ { color: 'red', size: 'M', stock: 3 } ] }, { _id: 2, ... }, { _id: 3, variants: [ { color: 'red', size: 'S', stock: 1 } ] } ]
+```
+
+셋 다 "첫 번째 하나"만 돌려준다는 데 주의한다. 맞는 원소가 여러 개면 나머지는 버려진다. 맞는 원소를 모두 받고 싶으면 집계의 `$filter`를 쓴다. 그리고 projection은 서버가 문서를 읽은 뒤 자르는 일이라 디스크에서 읽는 양은 그대로다. 줄어드는 건 보내는 양이다. 읽는 양까지 줄이려면 필요한 필드가 전부 인덱스에 들어 있는 커버드 쿼리가 돼야 한다.
+
+## 커서는 sort, skip, limit 순서로 돈다
+
+`find()`는 문서를 바로 주지 않고 커서를 준다. 드라이버가 101개(첫 배치 기본값)를 먼저 받고, 그다음부터는 16MB 안쪽 배치로 `getMore`를 보내 이어 받는다. 이 커서에 붙이는 `sort`, `skip`, `limit`은 적은 순서와 상관없이 항상 정렬 → 건너뛰기 → 자르기 순으로 적용된다.
+
+```js
+db.products.find({}, { name: 1 }).limit(2).skip(1).sort({ _id: -1 })
+```
+
+```text
+[ { _id: 3, name: '린넨 셔츠' }, { _id: 2, name: '오버핏 티셔츠' } ]
+```
+
+limit을 먼저 썼지만 `_id` 내림차순으로 정렬한 뒤 하나 건너뛰고 두 개를 받았다. 집계 파이프라인의 `$skip`, `$limit`은 적은 순서대로 도는 것과 다르다.
+
+깊은 페이지는 skip이 비싸다. 주문 20만 건을 넣고 `createdAt` 인덱스를 만든 뒤 페이지마다 explain을 봤다.
+
+```js
+for (let i = 1; i <= 200000; i++) docs.push({ _id: i, userId: i % 1000, total: (i * 7919) % 100000,
+  createdAt: new Date(Date.UTC(2026, 0, 1) + i * 60000) });
+db.orders.insertMany(docs);
+db.orders.createIndex({ createdAt: -1 });
+
+db.orders.find().sort({ createdAt: -1 }).skip(0).limit(20).explain("executionStats")
+db.orders.find().sort({ createdAt: -1 }).skip(150000).limit(20).explain("executionStats")
+db.orders.find({ createdAt: { $lt: lastSeen } }).sort({ createdAt: -1 }).limit(20).explain("executionStats")
+```
+
+`executionStats`에서 나온 값만 추리면 이렇다.
+
+```text
+skip(0)       nReturned: 20  totalKeysExamined: 20      totalDocsExamined: 20  executionTimeMillis: 2
+skip(150000)  nReturned: 20  totalKeysExamined: 150020  totalDocsExamined: 20  executionTimeMillis: 122
+range         nReturned: 20  totalKeysExamined: 20      totalDocsExamined: 20  executionTimeMillis: 0
+```
+
+봐야 할 줄은 `totalKeysExamined`다. skip 15만은 인덱스 키를 15만 개 넘긴 뒤에 20개를 준다. 문서까지 읽지는 않아서 docs는 20이지만, 페이지가 깊어질수록 키를 넘기는 시간이 선형으로 는다. 앞 페이지 마지막 값을 기억해 두고 `createdAt < 마지막 값`으로 범위를 거는 방식(키셋 페이지네이션)은 몇 페이지째든 20개만 읽는다. 정렬 값이 같은 문서가 여럿이면 경계에서 빠지거나 겹치므로 `{ createdAt: -1, _id: -1 }`처럼 유일한 필드를 정렬 끝에 붙인다. 페이지 설계 전반은 [페이지네이션 글](/posts/api-pagination-sorting)에서 다뤘다.
+
+정렬에 인덱스가 없으면 어떻게 될까. `total`로 정렬하면 이렇다.
+
+```text
+sort({ total: 1 }).limit(20)  nReturned: 20  totalKeysExamined: 0  totalDocsExamined: 200000  executionTimeMillis: 139
+```
+
+20개를 받으려고 20만 건을 다 읽어 메모리에서 정렬했다. 메모리 정렬은 100MB를 넘기면 디스크에 임시 파일을 쓰는데, 6.0부터 `allowDiskUseByDefault`가 기본으로 켜져 있어서 오류 없이 느려지기만 한다. 그 전 버전에서는 한도를 넘기면 쿼리가 실패했다. 어느 쪽이든 explain에 `SORT` 단계가 보이면 정렬 순서에 맞는 인덱스가 없다는 신호다.
+
+## 개수 세기는 두 가지다
+
+```js
+db.orders.countDocuments({})       // 200000, 53ms
+db.orders.estimatedDocumentCount() // 200000, 2ms
+```
+
+`countDocuments`는 조건에 맞는 문서를 실제로 세는 집계다. 조건을 줄 수 있고 정확하다. `estimatedDocumentCount`는 컬렉션 메타데이터에 적힌 개수를 읽는다. 조건을 줄 수 없고 빠르다. 대신 깨끗하지 않게 종료된 뒤나, 샤드 클러스터에서 청크를 옮기는 중에 남은 고아 문서가 있으면 실제와 다를 수 있다. 예전의 `count()`는 deprecated다.
+
+화면에 "전체 1,234,567건"을 띄우려고 매 요청 `countDocuments`를 부르면, 조건이 넓을수록 그 요청이 목록 조회보다 느려진다. 정확한 숫자가 꼭 필요한지부터 따진다. "1만 건 이상"처럼 `limit`을 걸어 세거나, 전체 개수는 추정치로 보여 주는 화면이 많다.
+
+## 업데이트 연산자로 필요한 칸만 바꾼다
+
+`updateOne`의 두 번째 인자는 바꿀 내용이 아니라 바꾸는 방법이다. 아래 그림에서 조각을 눌러 보자.
+
+<UrlAnatomy
+  caption="updateOne 한 번에 담긴 조각들"
+  base="db.products.updateOne"
+  separator="("
+  joiner=", "
+  params={[
+    {
+      key: "filter",
+      display: "{ _id: 2 }",
+      title: "어떤 문서를",
+      description: "find와 같은 쿼리다. 여러 개가 맞아도 updateOne은 첫 번째 하나만 고친다. 고칠 대상을 정확히 하나로 좁히려면 _id나 유니크 인덱스 필드로 거는 게 안전하다.",
+      code: "{ _id: 2 }",
+      required: true,
+    },
+    {
+      key: "update",
+      display: "{ $set, $inc, $push }",
+      title: "어떻게 바꿀지",
+      description: "업데이트 연산자 묶음이다. $set은 값을 정하고, $inc는 더하고, $push는 배열 끝에 붙인다. 문서 하나 안의 변경은 한꺼번에 원자적으로 적용된다.",
+      code: "{ $set: { \"variants.0.stock\": 4 }, $inc: { soldCount: 1 }, $push: { tags: \"best\" } }",
+      required: true,
+    },
+    {
+      key: "options",
+      display: "{ upsert, arrayFilters }",
+      title: "선택 사항",
+      description: "upsert: true면 맞는 문서가 없을 때 새로 만든다. arrayFilters는 배열 안에서 고칠 원소를 고른다. writeConcern도 여기서 준다.",
+      code: "{ upsert: false }",
+    },
+  ]}
+/>
+
+```js
+db.products.updateOne({ _id: 2 }, { $set: { "variants.0.stock": 4 }, $inc: { soldCount: 1 }, $push: { tags: "best" } })
+```
+
+```text
+{ acknowledged: true, insertedId: null, matchedCount: 1, modifiedCount: 1, upsertedCount: 0 }
+```
+
+`soldCount` 필드가 없었는데 `$inc`가 1로 만들었다. `$inc`는 없는 필드를 0에서 시작한다. 응답에서 볼 것은 `matchedCount`와 `modifiedCount`다. 같은 태그를 `$addToSet`으로 한 번 더 넣으면 이렇게 나온다.
+
+```text
+{ acknowledged: true, insertedId: null, matchedCount: 1, modifiedCount: 0, upsertedCount: 0 }
+```
+
+문서는 찾았지만 이미 "best"가 있어서 바뀐 게 없다. 앱에서 `modifiedCount === 0`을 실패로 처리하면 이런 경우를 오류로 착각한다. "대상이 없음"은 `matchedCount`가 0일 때다.
+
+연산자 없이 문서를 통째로 넘기면 MongoDB는 거절한다.
+
+```js
+db.products.updateOne({ _id: 2 }, { price: 1 })
+```
+
+```text
+MongoInvalidArgumentError: Update document requires atomic operators
+```
+
+예전 `update()`는 이 경우 문서를 `{ price: 1 }`로 갈아 끼웠다. 실수로 나머지 필드가 날아가는 사고가 잦아서 `updateOne`/`updateMany`는 연산자를 강제하고, 통째로 바꾸는 건 `replaceOne`으로 분리했다.
+
+배열이 끝없이 커지는 것도 막아야 한다. 문서 하나는 16MB를 넘을 수 없고, 그 전에 배열이 커질수록 원소 하나 붙일 때마다 문서 전체를 다시 쓰는 비용이 커진다. 최근 평점 세 개만 남기려면 `$push`에 `$each`와 `$slice`를 같이 준다.
+
+```js
+db.products.updateOne({ _id: 3 }, { $push: { ratings: { $each: [1, 4], $slice: -3 } } })
+// [5, 5, 3] 에 1, 4를 붙이고 뒤에서 3개만 남긴다
+```
+
+```text
+{ _id: 3, ratings: [ 3, 1, 4 ] }
+```
+
+## 배열 안의 원소 하나 고치기
+
+배열 원소를 고치는 위치 연산자는 세 가지다.
+
+`$`는 쿼리에 맞은 첫 원소다.
+
+```js
+db.products.updateOne({ _id: 1, "variants.color": { $in: ["red", "blue"] } }, { $inc: { "variants.$.stock": 10 } })
+```
+
+```text
+{ _id: 1, variants: [ { color: 'red', size: 'M', stock: 13 }, { color: 'blue', size: 'L', stock: 0 } ] }
+```
+
+red와 blue가 둘 다 맞았지만 첫 번째인 red만 10이 늘었다. 여러 원소를 고친다고 생각하고 쓰면 조용히 하나만 바뀐다.
+
+`$[]`는 모든 원소다. `{ $inc: { "variants.$[].stock": 1 } }`은 린넨 셔츠의 두 옵션 재고를 각각 1씩 올렸다(2 → 3, 1 → 2).
+
+`$[이름]`과 `arrayFilters`는 조건에 맞는 원소 전부다. 재고가 0인 옵션에 품절 표시를 붙여 보자.
+
+```js
+db.products.updateOne(
+  { _id: 1 },
+  { $set: { "variants.$[v].soldOut": true } },
+  { arrayFilters: [ { "v.stock": { $lte: 0 } } ] },  // v는 위에서 쓴 이름
+)
+```
+
+```text
+{ _id: 1, variants: [ { color: 'red', size: 'M', stock: 13 }, { color: 'blue', size: 'L', stock: 0, soldOut: true } ] }
+```
+
+filter(첫 인자)는 어떤 문서를 고칠지, arrayFilters는 그 문서 안에서 어떤 원소를 고칠지 고른다. 둘을 헷갈려 arrayFilters 조건을 filter에만 쓰면, 문서는 골라지지만 `$`가 첫 원소 하나만 고치는 앞의 장면으로 돌아간다.
+
+## 읽고 고치는 대신 한 번에
+
+선착순 쿠폰이 한 장 남았다. 앱에서 남은 수를 읽고, 0보다 크면 1을 빼서 저장하는 코드를 짜면 두 요청이 동시에 0보다 크다는 걸 읽고 둘 다 쿠폰을 받는다. 읽기와 쓰기 사이에 틈이 있어서다.
+
+조건을 쓰기 자체에 넣으면 틈이 없어진다. 문서 하나에 대한 갱신은 원자적이기 때문이다.
+
+```js
+db.coupons.insertOne({ _id: "WELCOME", remaining: 1 })
+db.coupons.findOneAndUpdate(
+  { _id: "WELCOME", remaining: { $gt: 0 } },  // 남은 게 있을 때만
+  { $inc: { remaining: -1 } },
+  { returnDocument: "after" },                 // 바뀐 뒤 문서를 돌려받는다
+)
+// 같은 명령을 한 번 더
+```
+
+```text
+{ _id: 'WELCOME', remaining: 0 }
+null
+```
+
+두 번째 요청은 조건에 맞는 문서가 없어서 `null`을 받는다. 앱은 `null`이면 "소진"으로 처리하면 된다. `updateOne`으로도 같은 효과를 낼 수 있지만(`matchedCount`로 판단), `findOneAndUpdate`는 바뀐 문서를 같이 돌려줘서 남은 수나 발급 번호를 한 번에 받을 수 있다. `returnDocument`의 기본값은 `"before"`라서 바뀌기 전 문서가 온다. 이 기본값 때문에 화면에 한 박자 늦은 값이 보이는 실수가 흔하다. 여러 문서에 걸친 조건이 필요하면 이 방법으로는 안 되고 트랜잭션이나 [낙관적 잠금](/posts/optimistic-locking)으로 간다.
+
+## upsert가 두 번 동시에 오면
+
+장바구니는 사용자마다 하나다. "없으면 만들고 있으면 열람 수를 올린다"를 upsert로 쓰면 코드가 짧다.
+
+```js
+db.carts.updateOne(
+  { userId: 42 },
+  { $setOnInsert: { items: [] }, $inc: { opens: 1 } },  // $setOnInsert는 새로 만들 때만 적용된다
+  { upsert: true },
+)
+```
+
+첫 호출은 `upsertedCount: 1`, 두 번째는 `matchedCount: 1`로 기존 문서를 고친다. 문제는 처음 두 요청이 동시에 올 때다. 아래 그림에서 단계를 넘겨 보자.
+
+<SequenceDiagram
+  caption="유니크 인덱스가 없을 때 upsert 두 개가 겹치면"
+  actors={[
+    { id: "a", label: "요청 A" },
+    { id: "db", label: "MongoDB" },
+    { id: "b", label: "요청 B" },
+  ]}
+  steps={[
+    { from: "a", to: "db", label: "upsert userId 42", title: "A가 문서를 찾는다", detail: "userId 42인 장바구니가 아직 없다. A는 새 문서를 넣기로 한다." },
+    { from: "b", to: "db", label: "upsert userId 42", title: "B도 거의 동시에 찾는다", detail: "A의 삽입이 아직 끝나지 않아 B도 문서를 못 찾는다. B도 새 문서를 넣기로 한다." },
+    { from: "db", to: "a", label: "upserted 1", title: "A가 넣었다", detail: "userId 42 문서가 하나 생겼다." },
+    { from: "db", to: "b", label: "upserted 1", title: "B도 넣었다", detail: "userId를 유일하게 막는 장치가 없으니 두 번째 문서도 들어간다. 이제 사용자 42의 장바구니가 둘이다.", payload: "{ userId: 42, opens: 1 }\n{ userId: 42, opens: 1 }" },
+    { from: "a", to: "db", label: "unique index", title: "유니크 인덱스가 있으면", detail: "B의 삽입은 중복 키 오류(E11000)에 걸린다. 서버는 조건이 유니크 인덱스 필드의 동등 비교면 그 upsert를 스스로 다시 시도해 기존 문서를 고친다." },
+  ]}
+/>
+
+Node.js 드라이버로 사용자 300명에게 같은 upsert를 8개씩 동시에 보내 봤다.
+
+```js
+for (let u = 0; u < 300; u++) {
+  await Promise.allSettled(Array.from({ length: 8 }, () =>
+    col.updateOne({ userId: u }, { $setOnInsert: { items: [] }, $inc: { opens: 1 } }, { upsert: true })));
+}
+```
+
+```text
+{ withIndex: false, docs: 491, usersWithDup: 141, dupKeyErrors: 0 }
+{ withIndex: true,  docs: 300, usersWithDup: 0,   dupKeyErrors: 0 }
+```
+
+인덱스가 없을 때는 300명 중 141명이 장바구니를 두 개 이상 갖게 됐고 문서가 491개 생겼다. 숫자는 돌릴 때마다 다르지만 겹침은 매번 생긴다. `createIndex({ userId: 1 }, { unique: true })`를 건 뒤에는 정확히 300개였고, 앱이 받은 중복 키 오류도 0건이었다. 4.2부터 서버가 중복 키로 실패한 upsert를 한 번 더 돌려 주기 때문이다. 다만 이 자동 재시도는 쿼리 조건이 그 유니크 인덱스 필드에 대한 동등 비교이고, 업데이트가 그 필드를 바꾸지 않을 때만 일어난다. 조건에 다른 필드나 범위가 섞이면 E11000이 앱까지 올라오니, 그때는 앱에서 한 번 더 시도한다.
+
+한 줄로 정리하면 upsert는 "찾기"와 "넣기"를 원자적으로 묶어 주지 않는다. 중복을 막는 건 유니크 인덱스다. 이 원리는 RDB의 `INSERT ... ON CONFLICT`가 유니크 제약을 요구하는 것과 같다.
+
+## 여러 건 쓰기: insertMany와 bulkWrite
+
+한 건씩 보내면 건마다 왕복이 든다. 여러 건을 한 번에 보내는 게 `insertMany`와 `bulkWrite`다. 여기서 정할 것이 `ordered`다. 중간에 하나가 실패하면 어떻게 되는지가 갈린다.
+
+```js
+await t.insertMany([{ _id: 1 }, { _id: 2 }, { _id: 1 }, { _id: 3 }, { _id: 4 }], { ordered: true })
+await t.insertMany([{ _id: 1 }, { _id: 2 }, { _id: 1 }, { _id: 3 }, { _id: 4 }], { ordered: false })
+```
+
+세 번째 문서가 `_id` 중복이다. 둘 다 오류를 던지는데, 오류 안에 담긴 결과가 다르다.
+
+```text
+{ ordered: true,  code: 11000, insertedCount: 2, writeErrors: [ { index: 2, code: 11000 } ], inDb: [ 1, 2 ] }
+{ ordered: false, code: 11000, insertedCount: 4, writeErrors: [ { index: 2, code: 11000 } ], inDb: [ 1, 2, 3, 4 ] }
+```
+
+`ordered: true`(기본값)는 실패한 지점에서 멈춘다. 앞의 두 개는 이미 들어갔고 뒤의 두 개는 시도도 안 했다. 롤백되지 않는다는 게 중요하다. `ordered: false`는 실패한 것만 건너뛰고 끝까지 간다. 서버가 순서를 지킬 필요가 없어서 병렬로 처리할 여지도 생긴다.
+
+어느 쪽을 고를까. 서로 기대는 작업(앞의 insert가 있어야 뒤의 update가 맞는 경우)이면 ordered가 맞다. 로그 적재나 대량 이관처럼 각 건이 독립이면 unordered로 보내고 `writeErrors`의 `index`로 실패한 건만 다시 보낸다. 둘 중 무엇이든 "전부 아니면 전무"가 필요하면 트랜잭션 안에서 실행해야 한다.
+
+`bulkWrite`는 종류가 다른 쓰기를 한 번에 섞는다.
+
+```js
+await t.insertOne({ _id: 1, qty: 1 });
+await t.bulkWrite([
+  { insertOne: { document: { _id: 2, qty: 1 } } },
+  { updateOne: { filter: { _id: 1 }, update: { $inc: { qty: 1 } } } },
+  { insertOne: { document: { _id: 1, qty: 9 } } },   // 중복
+  { deleteOne: { filter: { _id: 2 } } },
+], { ordered: false });
+```
+
+```text
+{ name: 'MongoBulkWriteError', insertedCount: 1, matchedCount: 1, modifiedCount: 1, deletedCount: 1,
+  writeErrors: [ { index: 2, code: 11000 } ] }
+```
+
+드라이버는 오류를 던지지만, 오류 객체의 결과에는 성공한 세 건이 그대로 들어 있다. `catch`에서 "전부 실패"로 처리하고 재시도하면 이미 성공한 `$inc`가 한 번 더 적용된다. 재시도할 때는 `writeErrors`에 있는 index만 다시 보내고, 같은 작업을 두 번 해도 결과가 같도록(`$set`이나 upsert처럼) 짜 두는 게 안전하다. 이 생각은 [멱등성 키 글](/posts/idempotency-key)과 같다.
+
+한 묶음에 넣을 수 있는 작업 수는 서버 기준 10만 개(`maxWriteBatchSize`)이고, 드라이버가 넘치면 알아서 나눠 보낸다. 다만 너무 큰 묶음은 한 번에 메모리를 많이 쓰고 실패하면 다시 보낼 양도 크니, 보통 몇백에서 몇천 건 단위로 끊어 보낸다. 네트워크가 잠깐 끊긴 경우는 드라이버의 retryable writes(기본 켜짐)가 한 번 다시 보내 준다.
+
+## 지우기 전에 같은 조건으로 먼저 센다
+
+`deleteOne`과 `deleteMany`는 find와 같은 쿼리를 받는다. 실수는 조건 쪽에서 난다. 위에서 본 것처럼 `{ discount: null }`은 필드가 없는 문서까지, 배열의 `$ne`는 생각과 반대로 잡는다. 코드에서 조건 객체를 조립하다 값이 `undefined`가 되면 드라이버가 그 키를 빼 버려 `{}`가 되기도 한다. `deleteMany({})`는 컬렉션 전부를 지운다.
+
+그래서 운영 데이터를 지울 때는 순서를 지킨다.
+
+```js
+const filter = { price: { $type: "string" } };
+db.products.countDocuments(filter)    // 1 : 몇 건인지 먼저 본다
+db.products.find(filter, { name: 1 }) // 어떤 문서인지 눈으로 본다
+db.products.deleteMany(filter)        // 같은 filter 변수로 지운다
+```
+
+```text
+{ acknowledged: true, deletedCount: 1 }
+```
+
+`deletedCount`가 센 숫자와 같은지 확인하고 끝낸다. 컬렉션을 통째로 비울 거면 `deleteMany({})`보다 `drop()`이 빠르다. 문서를 하나씩 지우며 인덱스도 하나씩 고치는 대신 파일을 버리기 때문이다(인덱스와 검증 규칙도 같이 사라지니 다시 만들어야 한다). 오래된 로그처럼 시간이 지나면 지울 데이터는 TTL 인덱스에 맡기는 쪽이 낫다.
+
+## 느린 쿼리를 만났을 때 보는 순서
+
+쿼리가 느리다는 이야기를 들으면 같은 쿼리에 `explain("executionStats")`를 붙여 본다. 이 글에서 본 숫자 세 개를 순서대로 본다.
+
+먼저 `nReturned`와 `totalKeysExamined`, `totalDocsExamined`의 비율이다. 20개를 돌려주는 데 키를 15만 개 넘겼다면 skip이나 넓은 범위가 원인이다. 문서를 20만 개 읽었다면 쓸 인덱스가 없다(`COLLSCAN`). 다음은 계획에 `SORT` 단계가 있는지다. 있으면 정렬 순서에 맞는 인덱스가 없다. 마지막으로 쿼리 모양을 다시 읽는다. 배열 조건을 `$elemMatch` 없이 걸었는지, `$ne`나 앞이 열린 정규식이 있는지, 같은 키를 두 번 써서 조건이 사라졌는지, 숫자와 문자열이 섞였는지. 인덱스 필드 순서를 정하는 ESR 규칙은 [문서 모델 글](/posts/mongodb-document-model)에 정리했다.
+
+평소에 잡아 두려면 프로파일러를 켜 둔다. `db.setProfilingLevel(1, { slowms: 100 })`이면 100ms를 넘긴 작업이 `system.profile`에 남고, 서버 로그에도 `Slow query`로 찍힌다. 로그에 `planSummary: COLLSCAN`이 반복해서 보이면 그 쿼리부터 본다.
+
+## 다시 빨강 L로
+
+처음 장면은 배열 조건이 원소마다 따로 맞기 때문에 생겼다. 원소 하나에 두 조건이 걸리면 `$elemMatch`로 묶는다. 쓰기도 같은 감각으로 보면 된다. `$`는 맞은 첫 원소 하나만 고치고, upsert는 찾기와 넣기를 묶어 주지 않으며, ordered bulk는 실패해도 앞의 것을 되돌리지 않는다. MongoDB가 문장을 어떻게 읽는지 알고 나면, 엉뚱한 결과의 대부분은 쿼리 모양에서 바로 보인다.
+
+## 면접에서 나올 만한 질문
+
+### 배열 필드에 조건 두 개를 걸었는데 엉뚱한 문서가 나왔다. 왜 그런가?
+
+배열에 거는 조건은 원소 중 하나라도 맞으면 참이고, 조건이 여러 개면 각 조건이 서로 다른 원소에 맞아도 된다. 그래서 빨강 M과 파랑 L이 있는 상품이 "빨강이면서 L"에 걸린다. 숫자 배열의 `$gt`·`$lt` 범위도 같은 이유로 범위 밖 값만 가진 배열이 걸린다. 한 원소가 모든 조건을 맞춰야 하면 `$elemMatch`로 묶는다.
+
+### $elemMatch가 필요한 경우와 필요 없는 경우는?
+
+원소 하나에 조건이 둘 이상 걸릴 때 필요하다. 객체 배열의 여러 필드 조건이나, 숫자 배열의 범위 조건이 그렇다. 조건이 하나면 점 표기법과 결과가 같아서 필요 없다. 멀티키 복합 인덱스가 있을 때 `$elemMatch`로 쓰면 같은 원소 조건이라는 걸 플래너가 알아서 인덱스 범위를 더 좁게 잡는다.
+
+### skip으로 깊은 페이지를 읽으면 왜 느린가? 대안은?
+
+skip은 건너뛸 만큼의 인덱스 키나 문서를 실제로 넘겨야 해서, 15만 건을 건너뛰면 20개를 받으려고 키 15만 개를 읽는다. 페이지가 깊을수록 선형으로 느려진다. 앞 페이지 마지막 정렬 값을 기억해 범위 조건으로 다음 페이지를 읽는 키셋 방식이면 몇 페이지째든 읽는 양이 같다. 경계가 흔들리지 않게 `_id` 같은 유일 필드를 정렬 끝에 붙인다.
+
+### countDocuments와 estimatedDocumentCount의 차이는?
+
+`countDocuments`는 조건을 받아 맞는 문서를 실제로 세는 집계라서 정확하지만 컬렉션이 크면 느리다. `estimatedDocumentCount`는 메타데이터의 개수를 읽어 조건 없이 빠르게 답하지만, 비정상 종료 뒤나 샤드 클러스터의 고아 문서 때문에 실제와 다를 수 있다. 화면의 전체 건수처럼 대략이면 되는 곳에는 추정치나 상한을 둔 세기를 쓴다.
+
+### upsert 두 개가 동시에 오면 어떻게 되나?
+
+유니크 인덱스가 없으면 두 요청이 모두 문서를 못 찾고 둘 다 삽입해서 중복 문서가 생긴다. 실험에서 300명 중 141명이 장바구니를 두 개 이상 가졌다. 유니크 인덱스를 걸면 두 번째 삽입은 중복 키 오류가 나고, 4.2부터는 조건이 그 인덱스 필드의 동등 비교일 때 서버가 스스로 재시도해 기존 문서를 고친다. 결국 중복을 막는 장치는 upsert가 아니라 유니크 인덱스다.
+
+### 위치 연산자 $, $[], arrayFilters는 어떻게 다른가?
+
+`$`는 쿼리에 맞은 첫 원소 하나만, `$[]`는 배열의 모든 원소를, `$[이름]`과 `arrayFilters`는 조건에 맞는 원소 전부를 고친다. 여러 원소가 맞는데 `$`를 쓰면 첫 하나만 바뀌는 실수가 흔하다. filter는 어떤 문서를 고칠지, arrayFilters는 그 문서 안에서 어떤 원소를 고칠지 고른다.
+
+### bulkWrite에서 ordered와 unordered는 실패했을 때 어떻게 다른가?
+
+ordered는 실패한 작업에서 멈추고 그 뒤는 실행하지 않는다. unordered는 실패한 것만 건너뛰고 나머지를 끝까지 실행한다. 둘 다 이미 성공한 작업을 되돌리지 않으니, 오류 객체의 결과와 `writeErrors`의 index를 보고 실패한 건만 다시 보내야 한다. 전부 아니면 전무가 필요하면 트랜잭션 안에서 실행한다.
+
+### 같은 필드에 조건을 두 번 썼더니 필터가 안 먹었다. 원인은?
+
+쿼리는 객체라서 `{ price: { $lt: 30000 }, price: { $gt: 20000 } }`처럼 같은 키를 두 번 쓰면 뒤의 것이 앞을 덮어쓰고 서버에는 하나만 간다. 같은 필드 조건은 한 객체에 `$gt`와 `$lt`를 함께 쓰거나 `$and` 배열로 나눈다. `$or`를 두 번 쓸 때도 같은 이유로 `$and`로 감싼다.

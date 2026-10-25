@@ -1,0 +1,541 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-rotting-oranges");
+
+<EasyIntro>
+  상자 안에 귤이 칸칸이 놓여 있고, 몇 개는 이미 곰팡이가 피었다. 곰팡이는 1분마다 바로 옆에 붙은 귤로 옮겨 간다. 위아래와 양옆만 옮겨 가고, 빈칸은 건너뛰지 못한다. 상자 안의 귤이 모두 곰팡이 귤이 되기까지 몇 분이 걸리는지 알고 싶다. 연못에 돌을 여러 개 동시에 던졌다고 생각하면 쉽다. 돌마다 물결이 한 겹씩 퍼지고, 어떤 귤에 처음 닿은 물결이 그 귤이 상하는 시각이다. 그래서 곰팡이 귤 전부를 한꺼번에 출발점으로 두고, 1분에 한 겹씩 넓혀 가며 센다. 빈칸에 막혀 물결이 끝내 닿지 못하는 귤이 있으면 영원히 다 상하지 않으니 그때는 마이너스 1을 답한다.
+</EasyIntro>
+
+격자에서 무언가가 번져 나가는 문제는 생김새가 다양하다. 불이 번지고, 바이러스가 퍼지고, 물이 차오른다. 질문은 늘 같다. 다 번지려면 몇 단계가 걸리나. [LeetCode 994. Rotting Oranges](https://leetcode.com/problems/rotting-oranges/)는 그 질문을 귤 상자로 묻는다.
+
+[섬 개수 세기](/posts/leetcode-number-of-islands)와 [가장 큰 섬](/posts/leetcode-max-area-of-island)에서는 BFS든 DFS든 답이 같았다. 칸을 모두 지우기만 하면 됐기 때문이다. 이 문제는 다르다. "몇 분"은 거리이고, 거리는 가까운 칸부터 한 겹씩 넓히는 BFS만 바로 준다. 게다가 출발점이 여럿이다. 이 글은 매분 격자를 다시 훑는 시뮬레이션부터 시작해, 귤마다 가장 가까운 곰팡이를 찾는 풀이, 출발점을 한 큐에 모두 넣는 다중 출발 BFS 두 가지, 그리고 왜 DFS가 이 문제에서 헛일을 하는지까지 다섯 풀이를 본다. BFS가 최단 거리를 주는 이유는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 1분에 한 칸씩 옆으로 번진다
+
+격자 칸에는 세 가지 값이 있다. `0`은 빈칸, `1`은 멀쩡한 귤, `2`는 곰팡이 귤이다. 1분이 지날 때마다 곰팡이 귤의 위아래 양옆에 붙은 멀쩡한 귤이 곰팡이 귤이 된다. 멀쩡한 귤이 하나도 남지 않을 때까지 걸리는 최소 시간(분)을 돌려준다. 끝까지 멀쩡한 귤이 남으면 `-1`이다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- m, n은 10 이하다. 칸이 많아야 100개라서 느린 풀이도 통과한다. 그래서 이 문제는 "통과하느냐"보다 "번지는 시간을 제대로 세느냐"가 어렵다. 면접에서는 격자가 커지면 어떻게 되는지도 같이 묻는다.
+- 처음부터 멀쩡한 귤이 없으면 답은 0이다. 곰팡이 귤이 하나도 없어도 멀쩡한 귤이 없으면 0이다.
+- 곰팡이 귤이 여러 개면 동시에 번진다. 한 귤에 두 방향에서 곰팡이가 닿으면 먼저 닿은 시각이 그 귤이 상하는 시각이다.
+
+이 글의 예시는 3 × 4 상자다.
+
+```text
+2 1 1 0
+1 1 0 1
+0 1 1 1
+```
+
+손으로 따라가 보자. 1분 뒤 `(0,0)`의 오른쪽 `(0,1)`과 아래 `(1,0)`이 상한다. 2분 뒤 `(0,2)`와 `(1,1)`이 상한다. `(1,2)`가 빈칸이라 곰팡이는 오른쪽으로 바로 못 가고 아래로 돌아간다. 3분에 `(2,1)`, 4분에 `(2,2)`, 5분에 `(2,3)`, 6분에 마지막 귤 `(1,3)`이 상한다. 답은 6이다.
+
+아래 그림에서 다음을 누르면 곰팡이가 번지는 길을 1분씩 따라간다. 선은 위아래 양옆으로 붙은 귤끼리만 그었다.
+
+<VectorSpace
+  caption="3 × 4 상자. 빈칸을 돌아가느라 마지막 귤까지 6분이 걸린다"
+  width={400}
+  height={260}
+  groups={[{ id: "rot", label: "곰팡이 귤 (2)" }, { id: "fresh", label: "멀쩡한 귤 (1)" }, { id: "empty", label: "빈칸 (0)" }]}
+  points={[
+    { id: "p00", label: "2", x: 70, y: 50, group: "rot" },
+    { id: "p01", label: "1", x: 160, y: 50, group: "fresh" },
+    { id: "p02", label: "1", x: 250, y: 50, group: "fresh" },
+    { id: "p03", label: "0", x: 340, y: 50, group: "empty", labelAt: "left" },
+    { id: "p10", label: "1", x: 70, y: 130, group: "fresh" },
+    { id: "p11", label: "1", x: 160, y: 130, group: "fresh" },
+    { id: "p12", label: "0", x: 250, y: 130, group: "empty" },
+    { id: "p13", label: "1", x: 340, y: 130, group: "fresh", labelAt: "left" },
+    { id: "p20", label: "0", x: 70, y: 210, group: "empty" },
+    { id: "p21", label: "1", x: 160, y: 210, group: "fresh" },
+    { id: "p22", label: "1", x: 250, y: 210, group: "fresh" },
+    { id: "p23", label: "1", x: 340, y: 210, group: "fresh", labelAt: "left" },
+  ]}
+  edges={[["p00", "p01"], ["p00", "p10"], ["p01", "p02"], ["p01", "p11"], ["p10", "p11"], ["p11", "p21"], ["p21", "p22"], ["p22", "p23"], ["p23", "p13"]]}
+  steps={[
+    { caption: "0분. 곰팡이 귤은 (0,0) 하나다. 선은 곰팡이가 건너갈 수 있는 길이다.", showEdges: true, path: ["p00"] },
+    { caption: "1분. (0,1)과 (1,0)이 동시에 상한다. 그림은 (0,1) 쪽 길만 따라간다.", showEdges: true, path: ["p00", "p01"] },
+    { caption: "2분. (1,1)과 (0,2)가 상한다. (1,2)가 빈칸이라 오른쪽으로는 막혔다.", showEdges: true, path: ["p00", "p01", "p11"] },
+    { caption: "3분. 아래 (2,1)로 돌아 내려간다.", showEdges: true, path: ["p00", "p01", "p11", "p21"] },
+    { caption: "4분, 5분. 아랫줄을 따라 (2,2), (2,3)이 차례로 상한다.", showEdges: true, path: ["p00", "p01", "p11", "p21", "p22", "p23"] },
+    { caption: "6분. 마지막 (1,3)이 상한다. 가장 먼 귤까지의 거리 6이 답이다.", showEdges: true, path: ["p00", "p01", "p11", "p21", "p22", "p23", "p13"] },
+  ]}
+/>
+
+마지막 장면이 이 문제를 다시 말해 준다. 답은 "곰팡이 귤에서 가장 먼 멀쩡한 귤까지의 거리"다. 거리는 빈칸을 피해 위아래 양옆으로만 걸은 칸 수이고, 곰팡이 귤이 여럿이면 그중 가장 가까운 것까지의 거리다.
+
+## 매분 상자 전체를 다시 훑는다
+
+문제를 읽은 그대로 옮기는 게 먼저 떠오른다. 1분마다 상자 전체를 훑어서, 옆에 곰팡이 귤이 있는 멀쩡한 귤을 모두 찾는다. 찾은 귤을 한꺼번에 상하게 하고 1분을 더한다. 멀쩡한 귤이 없어지면 끝이고, 아직 남았는데 이번 1분에 상한 귤이 하나도 없으면 영원히 안 상하니 `-1`이다.
+
+```js
+function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let minutes = 0;
+  while (true) {
+    const toRot = [];   // 이번 1분에 상할 귤. 다 찾은 뒤에 한꺼번에 바꾼다
+    let fresh = 0;
+    for (let r = 0; r < m; r++) {
+      for (let c = 0; c < n; c++) {
+        if (grid[r][c] !== 1) continue;
+        fresh++;
+        for (const [dr, dc] of DIRS) {
+          const nr = r + dr, nc = c + dc;
+          if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 2) {
+            toRot.push([r, c]);
+            break;
+          }
+        }
+      }
+    }
+    if (fresh === 0) return minutes;      // 다 상했다
+    if (toRot.length === 0) return -1;    // 남았는데 더 번지지 않는다
+    for (const [r, c] of toRot) grid[r][c] = 2;
+    minutes++;
+  }
+}
+```
+
+`toRot`에 모았다가 훑기가 끝난 뒤에 바꾸는 게 이 풀이의 요점이다. 훑으면서 바로 `grid[r][c] = 2`로 바꾸면 어떻게 될까. 왼쪽 위부터 훑으니, 방금 상하게 한 귤이 같은 훑기 안에서 오른쪽과 아래 귤을 또 상하게 한다. 곰팡이가 1분에 여러 칸을 달려간다. 예시에서 그렇게 짜면 6이 아니라 2가 나온다. 첫 훑기에서 `(0,1)`, `(0,2)`, `(1,0)`, `(1,1)`, `(2,1)`, `(2,2)`, `(2,3)`이 줄줄이 상하고, 둘째 훑기에서 `(1,3)`이 상하기 때문이다. 시간이 흐르는 문제에서는 "이번 단계의 변화"와 "다음 단계의 상태"를 섞지 않아야 한다.
+
+시간은 1분마다 m · n칸을 훑고, 최악에는 귤이 한 줄로 늘어서서 m · n분 가까이 걸리니 O((mn)²)이다. 10 × 10 뱀 모양 격자(아래에서 다시 쓴다)에서 54분이 걸리고 칸을 5,500번 훑었다. 50 × 50으로 키우면 1,274분에 3,187,500번이다. 이미 상한 귤과 빈칸을 매분 다시 보는 게 낭비다. 1분 전에 새로 상한 귤의 옆만 보면 충분하다.
+
+## 귤마다 가장 가까운 곰팡이까지 잰다
+
+앞에서 본 대로 답은 "가장 먼 귤까지의 거리"다. 그러면 멀쩡한 귤마다 BFS로 가장 가까운 곰팡이 귤까지의 거리를 재고, 그 최댓값을 답으로 하면 된다. 어떤 귤에서 곰팡이 귤에 닿지 못하면 `-1`이다.
+
+```js
+function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let answer = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      // 이 귤에서 출발해 가장 가까운 곰팡이 귤을 찾는 BFS
+      const dist = new Int32Array(m * n).fill(-1);
+      dist[r * n + c] = 0;
+      const queue = [r * n + c];
+      let found = -1;
+      for (let head = 0; head < queue.length && found < 0; head++) {
+        const cur = queue[head];
+        const cr = Math.floor(cur / n), cc = cur % n;
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr, nc = cc + dc;
+          if (nr < 0 || nr >= m || nc < 0 || nc >= n) continue;
+          const id = nr * n + nc;
+          if (dist[id] >= 0 || grid[nr][nc] === 0) continue;   // 이미 봤거나 빈칸
+          dist[id] = dist[cur] + 1;
+          if (grid[nr][nc] === 2) { found = dist[id]; break; }  // BFS라 처음 만난 게 가장 가깝다
+          queue.push(id);
+        }
+      }
+      if (found < 0) return -1;            // 어떤 곰팡이도 닿지 못한다
+      answer = Math.max(answer, found);
+    }
+  }
+  return answer;
+}
+```
+
+BFS는 가까운 칸부터 보니, 처음 만난 곰팡이 귤이 가장 가까운 곰팡이 귤이다. 그래서 찾는 즉시 멈춘다. 곰팡이가 동시에 번진다는 조건이 "가장 가까운 것까지의 거리"로 자연스럽게 바뀐다.
+
+이 풀이의 장점은 왜 답이 거리인지가 코드에 그대로 드러난다는 것이다. 단점은 귤마다 BFS를 새로 한다는 것이다. 귤이 k개면 BFS가 k번이라 최악 O((mn)²)이다. 뱀 모양 50 × 50에서 53.92ms로 시뮬레이션보다도 느렸다. 같은 길을 귤마다 다시 걷는다. 방향을 뒤집으면 된다. 귤에서 곰팡이를 찾지 말고, 곰팡이에서 귤로 한 번에 퍼뜨린다.
+
+## 곰팡이 귤을 모두 한 큐에 넣고 출발한다
+
+BFS는 보통 출발점이 하나다. 여기서는 처음부터 상한 귤을 전부 큐에 넣고 시작한다. 이걸 다중 출발 BFS라고 부른다. 큐에서 한 겹을 꺼내 처리하는 것이 1분이다. 그 겹의 귤마다 옆의 멀쩡한 귤을 상하게 하고 다음 겹에 넣는다. 멀쩡한 귤 수를 미리 세어 두고 상할 때마다 하나씩 빼면, 마지막에 0인지로 `-1`을 가린다.
+
+```js
+function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let queue = [];
+  let fresh = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] === 2) queue.push([r, c]);   // 출발점 전부
+      else if (grid[r][c] === 1) fresh++;
+    }
+  }
+  let minutes = 0;
+  // 멀쩡한 귤이 남아 있고, 번질 곰팡이가 있는 동안만 1분씩 흘려보낸다
+  while (queue.length > 0 && fresh > 0) {
+    const next = [];                              // 이번 1분에 새로 상한 귤 = 다음 겹
+    for (const [r, c] of queue) {
+      for (const [dr, dc] of DIRS) {
+        const nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) {
+          grid[nr][nc] = 2;                       // 넣는 순간 상하게 한다
+          fresh--;
+          next.push([nr, nc]);
+        }
+      }
+    }
+    queue = next;
+    minutes++;
+  }
+  return fresh === 0 ? minutes : -1;
+}
+```
+
+출발점을 모두 넣고 시작해도 최단 거리가 맞는 이유가 있다. 상자 바깥에 가짜 칸 하나를 두고, 그 칸에서 모든 곰팡이 귤로 길이 0인 선이 나 있다고 생각해 보자. 가짜 칸에서 출발한 평범한 BFS의 첫 겹이 곧 처음 곰팡이 귤 전부다. 그래서 다중 출발 BFS는 "가장 가까운 곰팡이 귤까지의 거리"를 모든 칸에 한 번에 준다. 앞 풀이가 귤마다 따로 하던 BFS를 한 번으로 합친 것이다.
+
+`next` 배열을 따로 두는 것이 앞의 시뮬레이션에서 본 "이번 1분과 다음 1분을 섞지 않기"와 같은 장치다. 이번 겹을 다 처리하기 전에는 새로 상한 귤이 번지지 않는다.
+
+아래 그림은 2 × 5 상자에서 이 풀이를 따라간 것이다. 앞 다섯 칸이 윗줄, 뒤 다섯 칸이 아랫줄이고, 초록 칸이 곰팡이 귤이다. 곰팡이 귤이 양쪽 끝에 하나씩 있다.
+
+```text
+2 1 1 0 1
+0 0 1 1 2     답 2
+```
+
+<AlgoTrace
+  caption="곰팡이 귤 두 개를 한 큐에 넣고 1분에 한 겹씩 번지게 한다"
+  memoryLabel="큐 (이번 1분에 번질 곰팡이 귤)"
+  cells={["2", "1", "1", "0", "1", "0", "0", "1", "1", "2"]}
+  steps={[
+    { found: [0, 9], memory: ["(0,0)", "(1,4)"], caption: "처음 곰팡이 귤 둘을 모두 큐에 넣는다. 멀쩡한 귤은 5개." },
+    { pointer: 0, found: [0, 9, 1], memory: ["(1,4)"], caption: "1분째. (0,0)이 오른쪽 (0,1)을 상하게 한다. 남은 귤 4개." },
+    { pointer: 9, found: [0, 9, 1, 4, 8], memory: ["(0,1)", "(0,4)", "(1,3)"], caption: "같은 1분에 (1,4)가 위 (0,4)와 왼쪽 (1,3)을 상하게 한다. 남은 귤 2개. 이 셋이 다음 겹이다." },
+    { pointer: 1, found: [0, 9, 1, 4, 8, 2], memory: ["(0,4)", "(1,3)"], caption: "2분째. (0,1)이 (0,2)를 상하게 한다." },
+    { pointer: 8, found: [0, 9, 1, 4, 8, 2, 7], memory: ["(0,2)", "(1,2)"], caption: "(0,4)는 옆이 빈칸뿐이다. (1,3)이 (1,2)를 상하게 한다. 남은 귤 0개." },
+    { found: [0, 9, 1, 4, 8, 2, 7], memory: [], caption: "멀쩡한 귤이 없으니 반복을 멈춘다. 2분이 답이다." },
+  ]}
+/>
+
+다섯 번째 단계에서 `(1,2)`는 위의 `(0,2)`와 오른쪽 `(1,3)` 양쪽에서 곰팡이가 닿을 수 있다. `(0,2)`도 같은 2분에 상했지만 다음 겹에 들어간 귤이라 이번 1분에는 번지지 않는다. `(1,2)`를 상하게 한 건 이번 겹의 `(1,3)`이고, 시각은 어느 쪽이든 2분이다. 그리고 마지막 단계의 반복 조건이 중요하다. 다음 겹 `(0,2)`, `(1,2)`가 큐에 남아 있지만 `fresh`가 0이라 멈춘다. 이 조건이 없으면 한 바퀴 더 돌아 3이 나온다.
+
+칸마다 큐에 한 번만 들어가고, 꺼낼 때 네 방향을 본다. 시간 O(m · n), 공간은 큐가 최악에 O(m · n)이다. 뱀 모양 50 × 50에서 1.48ms였다. 시뮬레이션의 20분의 1이다.
+
+### Python과 Java로 쓰면
+
+Python은 `deque` 하나를 쓰고, 한 겹의 크기를 `len(queue)`로 먼저 고정해 그만큼만 꺼낸다. 반복 중에 큐에 새 귤이 들어와도 `range(len(queue))`는 시작할 때 값으로 정해져서 이번 겹만 처리한다.
+
+```python
+from collections import deque
+from typing import List
+
+
+def oranges_rotting(grid: List[List[int]]) -> int:
+    m, n = len(grid), len(grid[0])
+    queue = deque()
+    fresh = 0
+    for r in range(m):
+        for c in range(n):
+            if grid[r][c] == 2:
+                queue.append((r, c))  # 처음부터 상한 귤이 모두 출발점
+            elif grid[r][c] == 1:
+                fresh += 1
+    minutes = 0
+    while queue and fresh > 0:
+        for _ in range(len(queue)):  # 지금 큐에 있는 것만 이번 1분에 처리한다
+            r, c = queue.popleft()
+            for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+                if 0 <= nr < m and 0 <= nc < n and grid[nr][nc] == 1:
+                    grid[nr][nc] = 2  # 넣는 순간 상하게 한다
+                    fresh -= 1
+                    queue.append((nr, nc))
+        minutes += 1
+    return minutes if fresh == 0 else -1
+
+
+print(oranges_rotting([[2, 1, 1, 0], [1, 1, 0, 1], [0, 1, 1, 1]]))
+print(oranges_rotting([[2, 1, 0, 1]]))
+print(oranges_rotting([[0, 2]]))
+```
+
+```text
+6
+-1
+0
+```
+
+Java도 같은 모양이다. `for (int size = queue.size(); size > 0; size--)`처럼 크기를 변수에 먼저 받아야 한다. `for (int i = 0; i < queue.size(); i++)`라고 쓰면 반복 중에 꺼내면 줄고 넣으면 느는 크기를 매번 다시 읽어서 겹 구분이 무너진다. 그렇게 짠 코드가 `[[2,0,1,1],[2,0,1,1],[1,0,1,2]]`에서 정답 3 대신 4를, `[[1,1,1,1],[0,1,1,1],[2,1,1,1]]`에서 정답 5 대신 4를 돌려줬다. 글의 예시에서는 우연히 6이 맞게 나와서 더 찾기 어렵다.
+
+```java
+import java.util.ArrayDeque;
+
+class Solution {
+    public int orangesRotting(int[][] grid) {
+        int m = grid.length, n = grid[0].length, fresh = 0;
+        ArrayDeque<int[]> queue = new ArrayDeque<>();
+        for (int r = 0; r < m; r++) {
+            for (int c = 0; c < n; c++) {
+                if (grid[r][c] == 2) queue.add(new int[]{r, c});
+                else if (grid[r][c] == 1) fresh++;
+            }
+        }
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        int minutes = 0;
+        while (!queue.isEmpty() && fresh > 0) {
+            for (int size = queue.size(); size > 0; size--) {   // 이번 1분에 처리할 개수를 먼저 고정한다
+                int[] cur = queue.poll();
+                for (int[] d : dirs) {
+                    int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                    if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] == 1) {
+                        grid[nr][nc] = 2;
+                        fresh--;
+                        queue.add(new int[]{nr, nc});
+                    }
+                }
+            }
+            minutes++;
+        }
+        return fresh == 0 ? minutes : -1;
+    }
+}
+```
+
+```text
+6
+-1
+0
+```
+
+## 겹을 나누지 않고 시각을 칸에 적는다
+
+겹마다 반복을 나누는 대신, 칸마다 "상한 시각"을 적어 두는 방법도 있다. 처음 곰팡이 귤의 시각은 0이고, 귤 `u`가 옆 귤 `v`를 상하게 하면 `v`의 시각은 `u`의 시각 + 1이다. 큐 하나를 처음부터 끝까지 흘려보내고, 마지막으로 시각이 적힌 값이 답이다.
+
+```js
+function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const time = new Int32Array(m * n).fill(-1);   // -1이면 아직 안 상했다
+  const queue = [];
+  let fresh = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] === 2) { time[r * n + c] = 0; queue.push(r * n + c); }
+      else if (grid[r][c] === 1) fresh++;
+    }
+  }
+  let last = 0;
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head];
+    const r = Math.floor(cur / n), c = cur % n;
+    for (const [dr, dc] of DIRS) {
+      const nr = r + dr, nc = c + dc;
+      if (nr < 0 || nr >= m || nc < 0 || nc >= n) continue;
+      const id = nr * n + nc;
+      if (grid[nr][nc] !== 1 || time[id] >= 0) continue;
+      time[id] = time[cur] + 1;     // 옆 귤은 나보다 1분 늦게 상한다
+      last = time[id];              // BFS라 시각은 줄지 않는다. 마지막 값이 최댓값
+      fresh--;
+      queue.push(id);
+    }
+  }
+  return fresh === 0 ? last : -1;
+}
+```
+
+`last`에 그냥 덮어써도 최댓값이 되는 건 BFS가 시각 순서대로 큐에 넣기 때문이다. 큐에는 늘 시각이 t인 칸들 뒤에 t + 1인 칸들이 붙어 있고, 그 순서가 뒤집히지 않는다.
+
+이 방식은 입력 격자를 바꾸지 않는다. `time` 배열이 방문 표시를 겸한다. 그리고 답만이 아니라 귤마다 상한 시각이 남는다. "각 칸까지 가장 가까운 곰팡이까지의 거리를 모두 돌려 달라"는 변형(LeetCode 542. 01 Matrix)이 이 코드에서 `time` 배열을 돌려주는 것으로 끝난다. 시간과 공간은 앞 풀이와 같은 O(m · n)이다.
+
+## DFS로 시각을 덮어쓰면 같은 칸을 수천 번 본다
+
+DFS로도 풀 수는 있다. 곰팡이 귤마다 DFS를 하면서 칸에 도착 시각을 적고, 이미 적힌 시각이 지금보다 작거나 같으면 멈춘다. 더 빠른 시각을 찾으면 덮어쓰고 계속 간다.
+
+```js
+function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const time = new Int32Array(m * n).fill(1e9);
+  const go = (r, c, t) => {
+    if (r < 0 || r >= m || c < 0 || c >= n || grid[r][c] === 0) return;
+    const id = r * n + c;
+    if (t > 0 && grid[r][c] === 2) return;   // 다른 곰팡이 귤의 자리. 거기서 따로 출발한다
+    if (time[id] <= t) return;               // 이미 더 빠르거나 같은 시각으로 왔다
+    time[id] = t;                            // 더 빠른 길을 찾았으니 덮어쓴다
+    go(r + 1, c, t + 1); go(r - 1, c, t + 1); go(r, c + 1, t + 1); go(r, c - 1, t + 1);
+  };
+  for (let r = 0; r < m; r++)
+    for (let c = 0; c < n; c++) if (grid[r][c] === 2) go(r, c, 0);
+  let answer = 0;
+  for (let r = 0; r < m; r++)
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] !== 1) continue;
+      if (time[r * n + c] === 1e9) return -1;
+      answer = Math.max(answer, time[r * n + c]);
+    }
+  return answer;
+}
+```
+
+답은 맞다. 문제는 DFS가 먼저 찾는 길이 짧은 길이 아니라는 것이다. 한 방향으로 끝까지 가며 멀리 돌아간 시각을 적고, 나중에 더 짧은 길이 그 칸에 닿으면 덮어쓰고 그 뒤를 전부 다시 걷는다. 곰팡이 귤 하나가 모서리에 있는 꽉 찬 격자에서 `go` 호출 수를 세어 봤다.
+
+```text
+10 × 10 꽉 찬 상자    호출 8,501번    (칸 100개)
+50 × 50 꽉 찬 상자    호출 6,012,501번 (칸 2,500개)
+```
+
+칸 수의 2,400배를 일했다. 10 × 10 제약 안에서는 통과하지만, BFS가 칸마다 한 번에 끝내는 일을 몇 번이고 고쳐 쓰는 셈이다. 게다가 재귀라서 뱀 모양 200 × 200 상자에서는 `RangeError`로 멈췄다. 거리를 묻는 문제에서 DFS를 쓰면 "먼저 도착한 것이 가장 빠르다"는 보장이 사라지고, 그 보장을 덮어쓰기로 메우느라 비용을 치른다. 가중치가 없는 격자의 최단 거리는 BFS다.
+
+## 귤이 한 줄로 늘어선 상자로 재 보면
+
+다섯 풀이를 가장 느리게 만드는 입력은 귤이 뱀처럼 한 줄로 이어진 상자다. 짝수 행은 귤로 가득 차 있고, 홀수 행은 빈칸이되 한쪽 끝 한 칸만 귤이라 다음 행으로 이어진다. 곰팡이는 `(0,0)` 하나다. 세 번씩 돌려 가장 빠른 값을 적었다.
+
+```text
+                      10 × 10 (54분)   50 × 50 (1,274분)   200 × 200 (20,099분)
+매분 다시 훑기          2.16ms           32.12ms             (생략)
+귤마다 BFS              7.68ms           53.92ms             (생략)
+겹으로 나누는 BFS       0.06ms            1.48ms              3.19ms
+시각을 적는 BFS         0.05ms            1.18ms              2.16ms
+DFS로 덮어쓰기          0.04ms            0.22ms              RangeError
+```
+
+뱀 모양에서는 길이 하나뿐이라 DFS가 덮어쓸 일이 없어서 가장 빠르다. 앞의 꽉 찬 상자에서 600만 번 호출한 것과 정반대다. 입력 모양에 따라 수천 배씩 달라지는 풀이는 믿고 쓰기 어렵다. 두 BFS는 어떤 모양에서도 칸 수에 비례한다.
+
+## 번지는 시간 구하기 다섯 가지
+
+칸 수를 N = m · n이라 하자.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 매분 다시 훑기 | O(N²) | O(N) | 문제를 그대로 옮긴 첫 답. 바뀔 귤을 모았다가 한꺼번에 바꿔야 한다 |
+| 귤마다 가장 가까운 곰팡이 BFS | O(N²) | O(N) | 답이 거리라는 걸 설명할 때. 실제로 쓰지는 않는다 |
+| 겹으로 나누는 다중 출발 BFS | O(N) | O(N) | 기본 답. 1분 = 한 겹이 코드에 그대로 보인다 |
+| 시각을 적는 다중 출발 BFS | O(N) | O(N) | 입력을 바꾸면 안 될 때, 칸마다 시각이 필요할 때 |
+| DFS로 시각 덮어쓰기 | 최악 O(N²) 이상 | O(N) 호출 스택 | 쓰지 않는다. 같은 칸을 수천 번 고쳐 쓴다 |
+
+아래에서 직접 짜 볼 수 있다. `0`은 빈칸, `1`은 멀쩡한 귤, `2`는 곰팡이 귤이다.
+
+<CodePlayground
+  caption="Rotting Oranges: 귤이 모두 상하기까지 걸리는 시간"
+  functionName="orangesRotting"
+  initialCode={`function orangesRotting(grid) {
+  // 0: 빈칸, 1: 멀쩡한 귤, 2: 곰팡이 귤
+  // 1분마다 곰팡이 귤의 위아래 양옆 귤이 상한다
+  // 모두 상하는 데 걸리는 최소 시간, 불가능하면 -1
+  return -1;
+}`}
+  solution={`function orangesRotting(grid) {
+  const m = grid.length, n = grid[0].length;
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let queue = [];
+  let fresh = 0;
+  for (let r = 0; r < m; r++) {
+    for (let c = 0; c < n; c++) {
+      if (grid[r][c] === 2) queue.push([r, c]);
+      else if (grid[r][c] === 1) fresh++;
+    }
+  }
+  let minutes = 0;
+  while (queue.length > 0 && fresh > 0) {
+    const next = [];
+    for (const [r, c] of queue) {
+      for (const [dr, dc] of DIRS) {
+        const nr = r + dr, nc = c + dc;
+        if (nr >= 0 && nr < m && nc >= 0 && nc < n && grid[nr][nc] === 1) {
+          grid[nr][nc] = 2;
+          fresh--;
+          next.push([nr, nc]);
+        }
+      }
+    }
+    queue = next;
+    minutes++;
+  }
+  return fresh === 0 ? minutes : -1;
+}`}
+  tests={[
+    { label: "글의 예시", args: [[[2, 1, 1, 0], [1, 1, 0, 1], [0, 1, 1, 1]]], expected: 6 },
+    { label: "곰팡이가 양쪽 끝에", args: [[[2, 1, 1, 0, 1], [0, 0, 1, 1, 2]]], expected: 2 },
+    { label: "빈칸 하나", args: [[[0]]], expected: 0 },
+    { label: "멀쩡한 귤 하나, 곰팡이 없음", args: [[[1]]], expected: -1 },
+    { label: "곰팡이 귤만 있다", args: [[[0, 2]]], expected: 0 },
+    { label: "빈칸에 막힌 귤", args: [[[2, 1, 0, 1]]], expected: -1 },
+    { label: "구석의 고립된 귤", args: [[[2, 1, 1], [0, 1, 1], [1, 0, 1]]], expected: -1 },
+    { label: "반대쪽 구석에서 퍼진다", args: [[[1, 1, 1], [1, 1, 1], [1, 1, 2]]], expected: 4 },
+  ]}
+/>
+
+## 1분을 더 세거나, 멀쩡한 귤을 잊거나
+
+가장 흔한 실수는 반복을 큐가 빌 때까지 돌리는 것이다.
+
+```js
+while (queue.length > 0) {   // fresh > 0 조건이 없다
+  // ... 한 겹 처리 ...
+  minutes++;
+}
+```
+
+마지막 귤을 상하게 한 겹을 처리한 뒤에도 큐에는 그 귤들이 들어 있다. 반복이 한 번 더 돌아 아무것도 상하게 하지 못한 채 1분을 더한다. 예시에서 6 대신 7이 나온다. 곰팡이 귤 하나만 있는 `[[2]]`에서는 0 대신 1이 나온다. 반복 조건에 `fresh > 0`을 넣거나, 끝나고 `minutes - 1`을 돌려주되 처음부터 귤이 없는 경우를 따로 0으로 처리한다. 앞쪽이 덜 헷갈린다.
+
+두 번째는 앞에서 본 같은 1분 안의 연쇄다. 시뮬레이션에서 훑으며 바로 바꾸거나, BFS에서 한 겹과 다음 겹을 구분하지 않고 시간을 세면 곰팡이가 1분에 여러 칸을 달린다. 예시가 6이 아니라 2로 나왔다. 겹 구분은 `next` 배열, `len(queue)`를 먼저 고정한 반복, 또는 칸에 적은 시각 셋 중 하나로 한다.
+
+세 번째는 끝에 멀쩡한 귤이 남았는지 확인하지 않는 것이다. 빈칸으로 둘러싸인 귤은 BFS가 끝내 닿지 못한다. `fresh` 수를 세어 두고 마지막에 0인지 보면 상자를 다시 훑지 않아도 된다.
+
+그 밖에 이 문제에서 조심할 것들이다.
+
+- 멀쩡한 귤이 처음부터 없으면 곰팡이 귤이 있든 없든 0이다. `[[0]]`, `[[0, 2]]` 모두 0이다.
+- 곰팡이 귤이 없는데 멀쩡한 귤이 있으면 `-1`이다. 큐가 처음부터 비어 반복이 안 돌고, `fresh`가 남아 `-1`이 된다.
+- 대각선으로는 번지지 않는다. 테스트의 "구석의 고립된 귤" `(2,0)`은 `(1,1)`과 대각선으로만 닿아서 끝까지 멀쩡하다.
+- JavaScript에서 `queue.shift()`로 꺼내면 꺼낼 때마다 배열을 당기느라 O(k)다. 이 문제는 칸이 100개라 상관없지만, 격자가 커지면 `head` 인덱스나 `next` 배열을 쓴다.
+
+## 번지는 문제가 바뀌면
+
+### 칸마다 상한 시각을 모두 달라면
+
+시각을 적는 BFS의 `time` 배열을 그대로 돌려준다. LeetCode 542. 01 Matrix는 "모든 칸에서 가장 가까운 0까지의 거리"를 묻는데, 0 칸을 모두 출발점으로 넣은 다중 출발 BFS 하나로 끝난다. 286. Walls and Gates(프리미엄 문제)도 문들을 모두 출발점으로 넣는 같은 모양이다.
+
+### 가장 가까운 곰팡이에서 가장 먼 빈칸을 찾으라면
+
+LeetCode 1162. As Far from Land as Possible이다. 땅을 모두 출발점으로 넣고 BFS를 돌려 마지막으로 닿은 바다 칸의 거리를 돌려준다. 이 문제의 `last`와 같은 값이다.
+
+### 귤마다 상하는 데 걸리는 시간이 다르다면
+
+선마다 걸리는 시간이 1로 같지 않으면 BFS의 "먼저 꺼낸 것이 먼저 도착한 것"이 깨진다. 다중 출발 [다익스트라](/posts/shortest-path-algorithms)로 바꾼다. 처음 곰팡이 귤을 모두 시각 0으로 힙에 넣고, 시각이 가장 작은 칸부터 꺼낸다. 걸리는 시간이 0 아니면 1뿐이라면 덱의 앞뒤에 넣는 0-1 BFS로 O(N)을 지킬 수 있다.
+
+### 불이 번지는 동안 사람이 탈출해야 한다면
+
+LeetCode 2258. Escape the Spreading Fire 같은 문제다. 먼저 불(곰팡이)에 다중 출발 BFS를 돌려 칸마다 불이 닿는 시각을 적는다. 그다음 사람의 BFS에서 "내가 도착하는 시각이 불보다 빠른 칸"만 지나가게 한다. 두 번의 BFS로 나누는 것이 요령이다.
+
+### 격자가 아주 크다면
+
+격자가 10⁴ × 10⁴처럼 커져도 다중 출발 BFS는 O(N)이다. 대신 좌표 배열을 칸마다 만들면 메모리가 커지니 `r * n + c` 숫자 하나로 넣고, 방문 표시는 `Uint8Array`로 한다. 큐에는 한 겹만 들어 있으니 겹으로 나누는 버전은 큐 메모리가 겹의 크기로 줄어든다.
+
+### 비슷한 문제
+
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 같은 격자 BFS지만 거리가 필요 없다.
+- [Max Area of Island](/posts/leetcode-max-area-of-island) (695): 섬마다 칸 수를 센다.
+- [Pacific Atlantic Water Flow](/posts/leetcode-pacific-atlantic-water-flow) (417): 가장자리 칸을 모두 출발점으로 넣는 다중 출발 탐색이다.
+- [Word Ladder](/posts/leetcode-word-ladder) (127): 격자가 아닌 그래프에서 BFS 층 수로 최단 거리를 구한다.
+- [Shortest Path in Binary Matrix](/posts/leetcode-shortest-path-in-binary-matrix) (1091): 대각선까지 8방향으로 가는 격자 최단 거리.
+- 542\. 01 Matrix, 1162. As Far from Land as Possible, 286. Walls and Gates(프리미엄 문제).
+
+## 물결이 마지막 귤에 닿는 순간
+
+곰팡이가 동시에 번진다는 말을 그래프로 옮기면 "모든 곰팡이 귤에서 출발한 BFS"이고, 답은 가장 먼 귤까지의 거리다. 처음 곰팡이 귤을 전부 한 큐에 넣고, 한 겹을 처리할 때마다 1분을 센다. 이번 겹과 다음 겹을 섞지 않고, 멀쩡한 귤이 남지 않으면 바로 멈추고, 끝에 귤이 남았으면 `-1`이다. 거리를 묻는 순간 DFS는 먼저 찾은 길이 가장 짧다는 보장을 잃으니, 가중치 없는 격자에서는 BFS를 고른다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 BFS인가요? DFS로는 안 되나요?
+
+답이 곰팡이 귤에서 가장 먼 귤까지의 최단 거리라서다. BFS는 가까운 칸부터 보니 처음 닿은 시각이 곧 가장 빠른 시각이다. DFS는 먼 길로 먼저 도착한 시각을 적었다가 더 짧은 길을 찾을 때마다 덮어써야 해서, 50 × 50 꽉 찬 상자에서 칸 수의 2,400배를 호출했다. 재귀라서 큰 격자에서는 스택도 넘친다.
+
+### 곰팡이 귤이 여러 개면 어떻게 하나요?
+
+처음부터 상한 귤을 모두 큐에 넣고 한 번의 BFS를 돌린다. 모든 곰팡이 귤과 길이 0으로 이어진 가짜 출발점 하나에서 BFS를 하는 것과 같아서, 칸마다 가장 가까운 곰팡이 귤까지의 거리가 나온다. 곰팡이 귤마다 BFS를 따로 하면 최솟값을 맞추느라 여러 번 훑어야 한다.
+
+### 1분을 어떻게 세나요?
+
+큐의 한 겹이 1분이다. 겹을 시작할 때 큐 크기를 고정하거나 다음 겹을 `next` 배열에 따로 모아서, 이번 1분에 상한 귤이 같은 1분 안에 또 번지지 않게 한다. 칸에 상한 시각을 적는 방식이라면 겹을 나누지 않고 마지막에 적힌 시각이 답이다.
+
+### 답을 하나 더 세는 실수는 왜 생기나요?
+
+큐가 빌 때까지 반복하면, 마지막 귤을 상하게 한 겹이 큐에 남아 한 바퀴를 더 돈다. 아무것도 상하지 않았는데 1분이 더해진다. 반복 조건에 "멀쩡한 귤이 남았는가"를 함께 넣으면 정확히 멈춘다. 곰팡이 귤만 있는 `[[2]]`에서 0이 나오는지로 확인할 수 있다.
+
+### -1은 어떻게 판단하나요?
+
+처음에 멀쩡한 귤 수를 세어 두고, 상하게 할 때마다 하나씩 뺀다. BFS가 끝났는데 남아 있으면 어떤 곰팡이도 닿지 못한 귤이 있다는 뜻이라 `-1`이다. 상자를 한 번 더 훑지 않아도 된다. 멀쩡한 귤이 처음부터 없으면 곰팡이가 없어도 0이다.
+
+### 시간과 공간 복잡도는요?
+
+칸마다 큐에 한 번 들어가고 꺼낼 때 네 방향을 보니 O(m · n)이다. 공간은 큐와 방문 표시로 O(m · n)이다. 매분 상자를 다시 훑는 시뮬레이션은 한 줄로 늘어선 귤에서 O((mn)²)이 되고, 50 × 50 뱀 모양 상자에서 칸을 318만 번 훑었다.
+
+### 상하는 데 걸리는 시간이 귤마다 다르면요?
+
+BFS는 모든 선의 길이가 같을 때만 먼저 꺼낸 것이 먼저 도착한 것이다. 길이가 다르면 처음 곰팡이 귤을 모두 시각 0으로 넣은 다중 출발 다익스트라를 쓴다. 시간이 0 또는 1뿐이면 0-1 BFS로 선형 시간을 지킬 수 있다.

@@ -1,0 +1,571 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("web-server-vs-was");
+
+<EasyIntro>
+  웹사이트 하나가 돌아가려면 손님을 맞는 쪽과 실제로 일을 하는 쪽이 필요하다. 그림이나 글처럼 이미 만들어 둔 파일을 내주는 일은 웹 서버가 맡고, 로그인이나 주문처럼 그때그때 계산해야 하는 일은 애플리케이션 서버가 맡는다.
+
+  식당으로 치면 웹 서버는 입구의 안내 직원이고 애플리케이션 서버는 주방의 요리사다. 안내 직원은 손님 수십 명을 한꺼번에 상대할 수 있지만 요리사는 몇 명뿐이라 한 사람에게 오래 붙잡히면 다른 주문이 밀린다.
+
+  주문을 아주 천천히 불러 주는 손님이 몇 명만 와도 요리사가 모두 그 앞에 서 있게 된다. 이때 안내 직원이 주문을 끝까지 받아 적은 다음 한 번에 주방에 넘겨 주면 요리사는 바로 요리를 시작할 수 있다. 이 글은 이 장면을 실제 프로그램으로 재현하고, 웹 서버마다 손님을 맞는 방식이 어떻게 다른지 살펴본다.
+</EasyIntro>
+
+Spring Boot 앱은 `java -jar`만 하면 내장 Tomcat이 8080에서 요청을 받는다. 브라우저로 열어 보면 잘 된다. 그런데 배포 문서를 찾아보면 거의 모두 앞에 nginx를 하나 더 세운다. Tomcat도 HTTP를 받는 서버인데 왜 또 서버를 두는지, 둘이 각자 무엇을 맡는지 궁금해서 직접 띄워 보기로 했다.
+
+이 글에서 돌린 환경은 Ubuntu 24.04 LTS 한 대다. nginx는 Ubuntu 저장소의 1.24.0, Apache는 같은 저장소의 2.4.58, Tomcat은 Maven Central의 `tomcat-embed-core` 11.0.27을 Java 21로 띄웠고, Caddy는 공식 릴리스 2.10.2 바이너리를 받았다. 출력은 모두 이 환경에서 받은 것이고, 긴 실습 디렉터리 경로만 `…`로 줄였다.
+
+nginx 설정 파일을 읽는 법은 [Nginx 기본](/posts/nginx-basics), `proxy_pass`와 헤더·응답 버퍼링은 [Nginx 리버스 프록시](/posts/nginx-reverse-proxy), 프록시라는 개념 자체는 [프록시와 리버스 프록시](/posts/proxy-reverse-proxy)에서 다뤘다. 여기서는 "웹 서버와 애플리케이션 서버가 왜 갈라졌고 무엇을 나눠 맡나"만 본다.
+
+## WAS라는 말이 가리키는 것
+
+한국 개발 문서에서 흔히 쓰는 WAS(Web Application Server)는 원래 자바 진영에서 나온 말이다. 자바 EE(지금의 Jakarta EE) 명세를 전부 구현한 제품, 그러니까 서블릿에 더해 트랜잭션 관리(JTA), 메시징(JMS), EJB까지 제공하는 서버를 애플리케이션 서버라고 불렀다. WildFly, WebLogic, WebSphere, 국산 JEUS가 여기 든다.
+
+Tomcat은 엄밀히 말하면 그보다 좁은 서블릿 컨테이너다. HTTP 요청을 받아 자바 객체(`HttpServletRequest`)로 바꿔 주고, 내가 짠 서블릿을 스레드에 태워 실행하고, 결과를 다시 HTTP 응답으로 돌려준다. Jetty와 Undertow도 같은 자리에 있다. Spring Boot가 내장하는 것도 이 셋 중 하나이고 기본값이 Tomcat이다. 실무에서 "WAS"라고 하면 대개 이 서블릿 컨테이너를 뜻한다.
+
+웹 서버는 HTTP 연결을 받아 정해진 규칙대로 응답하는 프로그램이다. 디스크의 파일을 그대로 내주는 일(정적 콘텐츠)은 혼자 끝내고, 계산이 필요한 요청(동적 콘텐츠)은 뒤에 있는 프로그램에 넘긴다. nginx, Apache httpd, Caddy, IIS가 여기 든다.
+
+그런데 이 구분은 제품 종류보다 역할로 보는 편이 맞다. Tomcat도 정적 파일을 내줄 수 있고(`DefaultServlet`), nginx도 Lua나 njs로 로직을 돌릴 수 있다. 둘을 갈라 놓는 건 "무엇을 할 수 있나"가 아니라 "연결 하나를 얼마나 싸게 붙잡고 있을 수 있나"다. 이 차이는 뒤에서 실험으로 본다.
+
+## 요청 하나가 두 서버를 지나는 길
+
+nginx를 앞에 두는 흔한 구성에서 요청은 두 갈래로 나뉜다. 아래 그림에서 다음을 누르면 정적 파일 요청과 API 요청이 각각 어디까지 가는지 보인다.
+
+<NetworkTopology
+  width={420}
+  height={230}
+  caption="정적 파일은 nginx에서 끝나고, API만 Tomcat까지 간다"
+  zones={[
+    { id: "host", label: "서버 한 대", x: 110, y: 20, w: 300, h: 190, tone: "private" },
+  ]}
+  nodes={[
+    { id: "cl", label: "브라우저", sub: "HTTPS", x: 50, y: 115, icon: "client", w: 84 },
+    { id: "ng", label: "nginx", sub: ":443", x: 175, y: 115, icon: "gateway", w: 84 },
+    { id: "fs", label: "정적 파일", sub: "/static/", x: 175, y: 185, icon: "server", w: 84 },
+    { id: "tc", label: "Tomcat", sub: "127.0.0.1:8080", x: 290, y: 70, icon: "container", w: 104 },
+    { id: "db", label: "DB", sub: "PostgreSQL", x: 360, y: 160, icon: "db", w: 84 },
+  ]}
+  links={[
+    { from: "cl", to: "ng" },
+    { from: "ng", to: "fs" },
+    { from: "ng", to: "tc", label: "HTTP" },
+    { from: "tc", to: "db" },
+  ]}
+  steps={[
+    { path: ["cl", "ng"], packet: "TLS", title: "TLS는 nginx에서 풀린다", detail: "인증서와 개인 키는 nginx만 가진다. 뒤쪽 Tomcat은 같은 서버 안에서 평문 HTTP로 받는다." },
+    { path: ["cl", "ng", "fs"], packet: "GET app.js", title: "정적 파일은 nginx가 바로 내준다", detail: "디스크의 파일을 커널이 소켓으로 바로 복사한다. JVM은 이 요청이 왔는지도 모른다." },
+    { path: ["cl", "ng", "tc", "db"], packet: "POST /orders", title: "API만 Tomcat까지 간다", detail: "nginx가 요청을 다 받은 뒤 Tomcat에 넘긴다. Tomcat 스레드 하나가 서블릿을 돌리고 DB를 부른다." },
+    { path: ["tc", "ng", "cl"], packet: "201", title: "응답도 nginx가 대신 흘려보낸다", detail: "Tomcat은 응답을 nginx에 빨리 넘기고 스레드를 돌려받는다. 느린 회선으로 보내는 일은 nginx 몫이다." },
+  ]}
+/>
+
+이 그림에서 Tomcat이 하는 일은 서블릿을 돌리는 것뿐이다. TLS, 정적 파일, 느린 클라이언트 상대는 모두 앞에서 끝난다. 하나씩 실제로 확인해 본다.
+
+## 정적 파일은 커널이 바로 보낸다
+
+먼저 nginx가 정적 파일을 어떻게 내주는지 본다. 200KB짜리 `app.js`를 하나 만들고 `sendfile on;`을 켠 뒤, nginx worker 프로세스에 `strace`를 붙여 요청 하나에 어떤 시스템 콜이 나가는지 찍었다.
+
+```bash
+# nginx worker 프로세스 번호를 찾아 시스템 콜을 지켜본다
+W=$(pgrep -f "^nginx: worker")
+sudo strace -p "$W" -e trace=recvfrom,openat,fstat,writev,sendfile
+
+# 다른 터미널에서 요청 하나
+curl -s -o /dev/null -w "%{http_code} %{size_download}\n" http://127.0.0.1:8090/static/app.js
+```
+
+```text
+recvfrom(6, "GET /static/app.js HTTP/1.1\r\nHos"..., 1024, 0, NULL, NULL) = 90
+openat(AT_FDCWD, "/…/html/static/app.js", O_RDONLY|O_NONBLOCK) = 8
+fstat(8, {st_mode=S_IFREG|0644, st_size=200000, ...}) = 0
+writev(6, [{iov_base="HTTP/1.1 200 OK\r\nServer: nginx/1"..., iov_len=253}], 1) = 253
+sendfile(6, 8, [0] => [200000], 200000) = 200000
+recvfrom(6, "", 1024, 0, NULL, NULL)    = 0
+```
+
+```text
+200 200000
+```
+
+요청을 읽고(`recvfrom`), 파일을 열고(`openat`), 크기를 보고(`fstat`), 헤더 253바이트를 쓴 다음, 본문 20만 바이트는 `sendfile` 한 번으로 끝난다. `sendfile`은 파일 디스크립터 8번의 내용을 소켓 6번으로 커널 안에서 바로 복사하는 시스템 콜이라 nginx 프로세스 메모리로 파일을 읽어 들이지 않는다. 이 요청 하나에 nginx가 한 일은 시스템 콜 여섯 번이다.
+
+공정하게 말하면 Tomcat도 NIO 커넥터에서 sendfile을 쓴다. `DefaultServlet`은 48KB 이상인 파일을 sendfile로 넘기는 설정(`sendfileSize`)이 기본으로 들어 있다. 그러니 "Tomcat은 정적 파일이 느리다"는 말은 반만 맞다. 차이는 보내는 방법보다 그 요청이 Tomcat 안에서 무엇을 차지하느냐에 있고, 그 이야기를 하려면 Tomcat 안쪽 구조를 봐야 한다.
+
+## Tomcat 안에서 요청은 스레드 하나를 차지한다
+
+Tomcat은 크게 두 부분으로 나뉜다. 앞쪽의 커넥터(Coyote)가 소켓을 받고 HTTP를 해석하고, 뒤쪽의 서블릿 엔진(Catalina)이 내 코드를 실행한다. 기본 커넥터인 NIO는 연결을 받는 스레드(acceptor)와 소켓이 읽을 준비가 됐는지 지켜보는 스레드(poller)를 따로 두고, 요청이 들어오면 실행기 스레드 풀(`http-nio-8080-exec-N`)에서 스레드 하나를 꺼내 서블릿을 돌린다.
+
+연결을 기다리는 것 자체는 싸다. NIO 커넥터는 연결 수천 개(`maxConnections`, 기본 8192)를 poller 하나로 지켜볼 수 있다. 비싼 건 서블릿이 도는 동안이다. 그동안 스레드 하나가 그 요청에 묶이고, 스레드 수는 `maxThreads`(기본 200)로 정해져 있다. 스레드가 다 차면 새 요청은 큐에서 기다리고, 운영체제의 연결 대기열(`acceptCount`, 기본 100)까지 차면 연결을 거절한다.
+
+Spring Boot에서는 이 값들을 `application.properties`로 바꾼다.
+
+```properties
+# 내장 Tomcat 스레드 풀과 연결 한도 (Spring Boot 3.x 속성 이름)
+server.tomcat.threads.max=200
+server.tomcat.threads.min-spare=10
+server.tomcat.max-connections=8192
+server.tomcat.accept-count=100
+```
+
+여기서 놓치기 쉬운 것이 하나 있다. 서블릿 안에서 요청 본문을 읽는 동안에도 스레드는 묶여 있다. 클라이언트가 본문을 천천히 보내면 서블릿 스레드는 다음 바이트가 올 때까지 그냥 기다린다. 이걸 확인하려고 스레드를 일부러 4개로 줄인 Tomcat을 띄웠다.
+
+```java
+// App.java: 스레드 4개짜리 내장 Tomcat
+Tomcat t = new Tomcat();
+Connector c = new Connector("HTTP/1.1");
+c.setPort(8080);
+c.setProperty("maxThreads", "4");
+c.setProperty("minSpareThreads", "4");
+t.setConnector(c);
+Context ctx = t.addContext("", new File(".").getAbsolutePath());
+
+// POST /upload: 본문을 끝까지 읽고 걸린 시간을 찍는다
+Tomcat.addServlet(ctx, "upload", new HttpServlet() {
+  protected void doPost(HttpServletRequest q, HttpServletResponse r) throws IOException {
+    long t0 = System.currentTimeMillis();
+    byte[] b = q.getInputStream().readAllBytes();
+    System.out.println(Thread.currentThread().getName() + " read " + b.length
+        + " bytes in " + (System.currentTimeMillis() - t0) + "ms");
+    r.getWriter().println("ok " + b.length);
+  }
+});
+ctx.addServletMappingDecoded("/upload", "upload");
+
+// GET /hello: 바로 답한다
+Tomcat.addServlet(ctx, "hello", new HttpServlet() {
+  protected void doGet(HttpServletRequest q, HttpServletResponse r) throws IOException {
+    r.getWriter().println("hello from " + Thread.currentThread().getName());
+  }
+});
+ctx.addServletMappingDecoded("/hello", "hello");
+t.start();
+```
+
+느린 클라이언트는 파이썬으로 만들었다. 헤더는 한 번에 보내고, 1000바이트 본문을 100바이트씩 1초 간격으로 흘린다. 휴대폰 회선이 나쁜 사용자가 사진을 올리는 모습을 과장한 것이다.
+
+```python
+# slow.py: 본문을 1초에 100바이트씩 보내는 업로드 n개
+import socket, sys, threading, time
+port, n = int(sys.argv[1]), int(sys.argv[2])
+
+def slow():
+    s = socket.create_connection(("127.0.0.1", port))
+    s.sendall(b"POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n")
+    for _ in range(10):
+        s.sendall(b"x" * 100)
+        time.sleep(1)
+    s.recv(4096)
+    s.close()
+
+ts = [threading.Thread(target=slow) for _ in range(n)]
+[t.start() for t in ts]
+[t.join() for t in ts]
+```
+
+## 느린 업로드 네 개로 Tomcat을 세운다
+
+느린 업로드 4개를 Tomcat에 직접 붙이고, 1초 뒤에 아무 일도 안 하는 `/hello`를 하나 보냈다.
+
+```bash
+# 느린 업로드 4개를 Tomcat에 직접 보내고, 1초 뒤 /hello 응답 시간을 잰다
+python3 slow.py 8080 4 &
+sleep 1
+curl -s -o /dev/null -w "direct /hello: %{http_code} %{time_total}s\n" http://127.0.0.1:8080/hello
+wait
+```
+
+```text
+direct /hello: 200 8.040702s
+```
+
+1밀리초면 끝날 요청이 8초 걸렸다. Tomcat 로그를 보면 이유가 보인다.
+
+```text
+http-nio-8080-exec-3 read 1000 bytes in 9002ms
+http-nio-8080-exec-2 read 1000 bytes in 8999ms
+http-nio-8080-exec-1 read 1000 bytes in 9001ms
+http-nio-8080-exec-4 read 1000 bytes in 9006ms
+```
+
+스레드 네 개가 모두 본문 1000바이트를 읽느라 9초씩 붙잡혀 있었다. `/hello`는 그동안 큐에서 기다리다가 업로드 하나가 끝나 스레드가 풀린 뒤에야 처리됐다. 아래 그림에서 다음을 누르면 스레드 칸이 하나씩 차고 `/hello`가 줄 서는 순서가 보인다.
+
+<AlgoTrace
+  caption="maxThreads=4인 Tomcat에 느린 업로드 4개가 들어올 때"
+  memoryLabel="대기 큐"
+  cells={["exec-1", "exec-2", "exec-3", "exec-4"]}
+  steps={[
+    { pointer: 0, caption: "첫 업로드의 헤더가 도착하자 exec-1이 서블릿을 맡는다. 본문은 아직 100바이트뿐이다." },
+    { pointer: 3, caption: "나머지 세 업로드도 exec-2, 3, 4를 하나씩 차지한다. 네 스레드 모두 다음 100바이트를 기다리며 멈춰 있다." },
+    { pointer: 3, memory: ["GET /hello"], caption: "1초 뒤 /hello가 온다. 빈 스레드가 없어서 큐에서 기다린다. CPU는 거의 놀고 있다." },
+    { pointer: 3, memory: ["GET /hello"], caption: "8초가 더 지나도록 아무것도 바뀌지 않는다. 스레드는 일하는 게 아니라 기다리는 중이다." },
+    { found: [2], memory: [], caption: "9초째 exec-3의 업로드가 끝나 스레드가 풀리고, /hello가 그 자리에서 1ms 만에 끝난다. 사용자가 본 시간은 8초다." },
+  ]}
+/>
+
+이 상태에서 스레드 덤프를 뜨면 스레드가 무엇을 기다리는지 그대로 나온다.
+
+```bash
+# 자바 프로세스의 스레드 덤프에서 exec 스레드 하나만 본다
+jstack "$(pgrep -f 'App$')" | grep -A10 '"http-nio-8080-exec-1"'
+```
+
+```text
+"http-nio-8080-exec-1" #25 [24205] daemon prio=5 os_prio=0 cpu=83.74ms elapsed=176.43s tid=0x00007f2de0455260 nid=24205 in Object.wait()  [0x00007f2db5afa000]
+   java.lang.Thread.State: TIMED_WAITING (on object monitor)
+	at java.lang.Object.wait0(java.base@21.0.12.1/Native Method)
+	- waiting on <0x000000073778ce98> (a java.util.concurrent.Semaphore)
+	at java.lang.Object.wait(java.base@21.0.12.1/Object.java:366)
+	at org.apache.tomcat.util.net.NioEndpoint$NioSocketWrapper.fillReadBuffer(NioEndpoint.java:1718)
+	- locked <0x000000073778ce98> (a java.util.concurrent.Semaphore)
+	at org.apache.tomcat.util.net.NioEndpoint$NioSocketWrapper.read(NioEndpoint.java:1618)
+	at org.apache.coyote.http11.Http11InputBuffer.fill(Http11InputBuffer.java:783)
+	at org.apache.coyote.http11.Http11InputBuffer$SocketInputBuffer.doRead(Http11InputBuffer.java:836)
+```
+
+`TIMED_WAITING` 상태로 `NioSocketWrapper.read` 안에 있다. 소켓에서 다음 바이트를 기다린다는 뜻이다. 운영 중인 서비스가 갑자기 느려졌는데 CPU는 낮고 exec 스레드가 전부 이 모양이면, 코드가 아니라 클라이언트 쪽 입출력을 의심한다. 같은 덤프에서 스레드가 JDBC 소켓 읽기에 걸려 있으면 DB를 기다리는 것이니 원인이 다르다.
+
+일부러 느리게 보내는 공격(slowloris, 그리고 본문을 천천히 보내는 변형인 slow POST)이 노리는 것이 이 지점이다. 스레드 몇 개만 붙잡으면 서버 전체가 멈춘다. 공격이 아니어도 지하철에서 사진을 올리는 사용자 몇 명이 같은 일을 한다.
+
+## nginx가 본문을 다 받은 뒤에 넘긴다
+
+이번에는 같은 Tomcat 앞에 nginx를 세웠다. 설정은 최소한이다.
+
+```nginx
+# 실습용 nginx.conf 중 http 블록
+http {
+    sendfile on;
+    upstream app { server 127.0.0.1:8080; keepalive 8; }
+
+    server {
+        listen 8090;
+        location /static/ { root html; }
+        location / {
+            proxy_pass http://app;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+}
+```
+
+같은 실험을 8090(nginx)으로 돌렸다.
+
+```bash
+python3 slow.py 8090 4 &
+sleep 1
+curl -s -o /dev/null -w "via nginx /hello: %{http_code} %{time_total}s\n" http://127.0.0.1:8090/hello
+wait
+```
+
+```text
+via nginx /hello: 200 0.002159s
+```
+
+```text
+http-nio-8080-exec-3 read 1000 bytes in 0ms
+http-nio-8080-exec-4 read 1000 bytes in 1ms
+http-nio-8080-exec-1 read 1000 bytes in 0ms
+http-nio-8080-exec-2 read 1000 bytes in 0ms
+```
+
+`/hello`는 2밀리초에 끝났고, Tomcat이 본문을 읽는 데 걸린 시간은 0~1밀리초로 줄었다. 업로드 자체는 여전히 9초 걸렸지만 그 9초를 기다린 건 nginx다. nginx는 기본값(`proxy_request_buffering on`)으로 클라이언트에게서 본문을 끝까지 받아 둔 다음에야 업스트림에 연결을 열고 한 번에 넘긴다. 아래 그림이 그 순서다.
+
+<SequenceDiagram
+  caption="요청 버퍼링이 켜져 있으면 Tomcat 스레드는 마지막 순간에만 쓰인다"
+  actors={[
+    { id: "c", label: "느린 클라이언트" },
+    { id: "n", label: "nginx" },
+    { id: "t", label: "Tomcat 스레드" },
+  ]}
+  steps={[
+    { from: "c", to: "n", label: "헤더 + 100B", title: "헤더와 본문 첫 조각", detail: "Content-Length: 1000을 보고 nginx가 본문을 모으기 시작한다. Tomcat에는 아직 아무것도 가지 않는다." },
+    { from: "c", to: "n", label: "100B × 9 (9초)", title: "nginx가 9초를 기다린다", detail: "nginx는 이벤트 루프에서 이 소켓을 지켜볼 뿐이라 연결 하나가 묶여도 다른 요청을 계속 처리한다.", payload: "client_body_buffer_size 8k (x86-64 기본)\n넘치면 client_body_temp_path에 임시 파일" },
+    { from: "n", to: "t", label: "POST 1000B", title: "다 모이면 한 번에 넘긴다", detail: "같은 서버 안의 빠른 연결로 본문 전체를 보낸다. Tomcat은 0ms 만에 다 읽는다." },
+    { from: "t", to: "n", label: "200 ok", title: "스레드는 바로 풀린다", detail: "응답도 nginx 버퍼로 넘어가고 스레드는 풀로 돌아간다." },
+    { from: "n", to: "c", label: "200 ok", title: "응답 전달은 nginx 몫", detail: "클라이언트가 응답을 천천히 받아도 Tomcat과는 상관없다. 이쪽은 proxy_buffering이 맡는다." },
+  ]}
+/>
+
+nginx는 연결 하나를 기다리는 데 스레드를 쓰지 않는다. worker 프로세스 하나가 epoll로 소켓 수천 개를 지켜보다가 데이터가 온 소켓만 처리한다. 느린 클라이언트가 9초를 끌어도 nginx 입장에서는 소켓 하나에 작은 버퍼가 하나 붙어 있을 뿐이다. 연결을 오래 들고 있어도 싼 쪽이 연결을 상대하고, 연결 하나에 스레드 하나가 드는 쪽은 짧게만 쓰게 한다. 앞에 웹 서버를 두는 가장 큰 이유가 이것이다.
+
+확인 삼아 요청 버퍼링을 끄고 다시 돌렸다.
+
+```nginx
+location / {
+    proxy_pass http://app;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_request_buffering off;   # 받는 대로 바로 Tomcat에 흘려보낸다
+}
+```
+
+```text
+via nginx, buffering off /hello: 200 8.030185s
+```
+
+```text
+http-nio-8080-exec-1 read 1000 bytes in 9001ms
+http-nio-8080-exec-3 read 1000 bytes in 9001ms
+http-nio-8080-exec-2 read 1000 bytes in 9001ms
+http-nio-8080-exec-4 read 1000 bytes in 9003ms
+```
+
+nginx를 거쳐도 다시 8초다. nginx가 앞에 있다는 사실만으로 보호되는 게 아니라 버퍼링이 보호한다. 수 GB짜리 파일을 받아 바로 스토리지로 흘려보내는 업로드 API처럼 디스크에 임시 파일을 쌓기 싫은 경로에서는 이 옵션을 끄기도 하는데, 그 경로에는 앱 쪽에 비동기 처리나 별도 스레드 풀을 두는 대책이 함께 있어야 한다.
+
+본문이 `client_body_buffer_size`(메모리 페이지 두 장 크기, x86-64에서 기본 8k)보다 크면 nginx는 `client_body_temp_path`에 임시 파일로 쓴다. 업로드가 많은 서비스라면 그 디렉터리가 있는 디스크의 여유와 속도도 신경 쓴다. 크기 상한은 `client_max_body_size`(기본 1m)이고, 넘으면 Tomcat까지 가지도 않고 nginx가 413을 돌려준다. 응답 쪽 버퍼링(`proxy_buffering`)과 스트리밍 때 끄는 법은 [Nginx 리버스 프록시](/posts/nginx-reverse-proxy) 글에 있다.
+
+## Apache는 연결을 다루는 방식을 고를 수 있다
+
+Apache httpd는 nginx보다 오래된 웹 서버이고, 연결을 프로세스와 스레드에 어떻게 나눠 줄지를 MPM(Multi-Processing Module)이라는 모듈로 고른다. 세 가지가 있다.
+
+- prefork: 연결 하나에 프로세스 하나. 스레드가 없어서 스레드에 안전하지 않은 모듈(예전 `mod_php`)과 함께 쓰던 방식이다. 프로세스가 무거워 동시 연결이 수백 개를 넘기기 어렵다.
+- worker: 프로세스 여러 개가 각자 스레드를 여럿 둔다. 연결 하나에 스레드 하나라서 keep-alive로 놀고 있는 연결도 스레드를 붙잡는다.
+- event: worker와 같은 구조에, 놀고 있는 keep-alive 연결과 응답을 다 쓴 뒤 정리하는 일을 리스너 스레드 하나가 맡는다. 일꾼 스레드는 실제로 요청을 처리할 때만 쓰인다.
+
+Ubuntu 24.04의 apache2 패키지는 event가 기본이다.
+
+```bash
+# Apache 설치 후 MPM 확인 (Ubuntu 24.04)
+sudo apt install apache2
+apache2ctl -V | head -9
+a2query -M
+```
+
+```text
+Server version: Apache/2.4.58 (Ubuntu)
+Server built:   2026-10-08T19:58:01
+Server's Module Magic Number: 20120211:129
+Server loaded:  APR 1.7.2, APR-UTIL 1.6.3, PCRE 10.42 2022-12-11
+Compiled using: APR 1.7.2, APR-UTIL 1.6.3, PCRE 10.42 2022-12-11
+Architecture:   64-bit
+Server MPM:     event
+  threaded:     yes (fixed thread count)
+    forked:     yes (variable process count)
+```
+
+```text
+event
+```
+
+기본 설정은 `/etc/apache2/mods-available/mpm_event.conf`에 있다.
+
+```text
+StartServers            2
+MinSpareThreads         25
+MaxSpareThreads         75
+ThreadLimit             64
+ThreadsPerChild         25
+MaxRequestWorkers       150
+MaxConnectionsPerChild  0
+```
+
+자식 프로세스 2개로 시작하고 각자 스레드 25개를 둔다. 동시에 처리할 수 있는 요청은 `MaxRequestWorkers` 150개다. 실제로 띄워서 프로세스와 스레드 수(NLWP)를 세 보면 nginx와 모양이 확연히 다르다.
+
+```bash
+# 프로세스마다 스레드 수(NLWP)를 본다
+ps -o pid,ppid,user,nlwp,cmd -C apache2
+ps -o pid,ppid,user,nlwp,cmd -C nginx
+```
+
+```text
+  PID  PPID USER     NLWP CMD
+27038     1 root        1 apache2 -k start
+27040 27038 www-data   27 apache2 -k start
+27041 27038 www-data   27 apache2 -k start
+```
+
+```text
+  PID  PPID USER     NLWP CMD
+24311     1 root        1 nginx: master process nginx -p /…/ng -c nginx.conf
+25553 24311 root        1 nginx: worker process
+```
+
+Apache 자식 프로세스는 스레드 27개(일꾼 25개 + 리스너 + 메인)를 갖고, nginx worker는 스레드 하나다. 실습 설정이 `worker_processes 1`이라 worker가 하나이고, 보통은 `auto`로 CPU 코어 수만큼 띄운다. Apache event도 keep-alive 대기는 싸게 처리하지만 요청을 처리하는 동안, 본문을 읽는 시간까지 포함해 일꾼 스레드 하나를 쓴다. 그래서 Apache 앞에서도 느린 요청 대책으로 `mod_reqtimeout`(헤더·본문을 받는 최소 속도와 시간 제한)을 켜 둔다. 프로세스와 스레드 모델의 일반론은 [프로세스와 스레드](/posts/process-vs-thread) 글이 다룬다.
+
+그래도 Apache가 여전히 쓰이는 이유가 있다. 모듈 생태계가 넓고(`mod_security`, `mod_auth_*`), 설정을 디렉터리별로 쪼갤 수 있고, 오래된 PHP 호스팅 환경이 대부분 Apache 위에 있다. 그 디렉터리별 설정이 바로 `.htaccess`다.
+
+## .htaccess는 요청마다 디렉터리를 거슬러 올라간다
+
+`.htaccess`는 서버 설정을 고칠 권한이 없는 사용자가 자기 디렉터리에 파일 하나를 두어 리다이렉트나 접근 제한을 거는 장치다. 공유 호스팅에서는 편하지만, 켜 두면 요청마다 대가를 낸다. 경로의 모든 디렉터리에서 그 파일이 있는지 확인해야 하기 때문이다.
+
+`/var/www/html`에 `AllowOverride All`을 준 상태에서, `/a/b/c/page.html` 요청 하나를 `strace`로 지켜봤다.
+
+```apache
+# /etc/apache2/conf-enabled/zz-lab.conf (실습용)
+<Directory /var/www/html>
+    AllowOverride All
+</Directory>
+```
+
+```bash
+# Apache를 단일 프로세스(-X)로 띄워 파일 관련 시스템 콜을 기록한다
+sudo bash -c 'source /etc/apache2/envvars; strace -f -e trace=openat,newfstatat -o ap.txt apache2 -X' &
+curl -s http://127.0.0.1:8081/a/b/c/page.html
+grep -E "htaccess|page.html" ap.txt
+```
+
+```text
+newfstatat(AT_FDCWD, "/var/www/html/a/b/c/page.html", {st_mode=S_IFREG|0644, st_size=3, ...}, 0) = 0
+openat(AT_FDCWD, "/var/www/html/.htaccess", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/var/www/html/a/.htaccess", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/var/www/html/a/b/.htaccess", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/var/www/html/a/b/c/.htaccess", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+openat(AT_FDCWD, "/var/www/html/a/b/c/page.html/.htaccess", O_RDONLY|O_CLOEXEC) = -1 ENOTDIR (Not a directory)
+openat(AT_FDCWD, "/var/www/html/a/b/c/page.html", O_RDONLY|O_CLOEXEC) = 10
+```
+
+`.htaccess`는 하나도 없는데 파일 하나를 내주기 전에 다섯 번 열어 보려 했다. 파일 이름 뒤에 `/.htaccess`를 붙인 시도까지 있다. 파일이 있으면 매번 읽고 해석까지 한다. 서버 설정은 시작할 때 한 번 읽지만 `.htaccess`는 요청마다 읽는다. 깊은 경로에 요청이 몰리는 사이트에서는 이 시스템 콜이 그대로 쌓인다.
+
+실습 설정 파일을 지우고 다시 돌리면 `.htaccess`를 찾는 줄이 0개가 된다. Ubuntu 기본 `apache2.conf`는 `/var/www/`에 `AllowOverride None`을 걸어 두기 때문이다.
+
+```bash
+grep -c htaccess ap2.txt
+grep -A3 "<Directory /var/www/>" /etc/apache2/apache2.conf
+```
+
+```text
+0
+<Directory /var/www/>
+	Options Indexes FollowSymLinks
+	AllowOverride None
+	Require all granted
+```
+
+서버 설정을 고칠 수 있다면 `.htaccess`에 쓸 규칙은 가상 호스트의 `<Directory>` 블록으로 옮기고 `AllowOverride None`으로 둔다. nginx에는 처음부터 이런 디렉터리별 설정 파일이 없다. 모든 규칙이 시작할 때 읽는 설정에 있어야 하고, 바꾸면 `nginx -t && systemctl reload nginx`로 다시 읽힌다.
+
+## Caddy는 인증서를 스스로 받는다
+
+Caddy는 Go로 짠 웹 서버이고, 사이트 이름만 적으면 HTTPS를 알아서 켜는 것으로 알려져 있다. nginx에서는 certbot을 따로 설치해 인증서를 받고 갱신 타이머를 확인해야 하는데([Nginx HTTPS·성능·보안 설정](/posts/nginx-https-performance)), Caddy는 그 일이 서버 안에 들어 있다.
+
+같은 Tomcat 앞에 Caddy를 세우는 설정은 이 정도다. 실습이라 포트만 바꿨다.
+
+```text
+# Caddyfile
+{
+	http_port 8088
+	https_port 8443
+	skip_install_trust
+}
+
+localhost {
+	handle /static/* {
+		root * ../ng/html
+		file_server
+	}
+	reverse_proxy 127.0.0.1:8080
+}
+```
+
+```bash
+./caddy run --config Caddyfile
+```
+
+로그에서 인증서 관련 줄만 골랐다.
+
+```text
+{"level":"info","logger":"http","msg":"enabling automatic TLS certificate management","domains":["localhost"]}
+{"level":"info","logger":"tls.obtain","msg":"obtaining certificate","identifier":"localhost"}
+{"level":"info","logger":"tls.obtain","msg":"certificate obtained successfully","identifier":"localhost","issuer":"local"}
+```
+
+```bash
+# Caddy가 만든 로컬 CA로 검증하며 요청
+curl -s --cacert data/caddy/pki/authorities/local/root.crt https://localhost:8443/hello
+
+# 받은 인증서를 열어 본다
+openssl x509 -in data/caddy/certificates/local/localhost/localhost.crt -noout -issuer -dates -ext subjectAltName
+```
+
+```text
+hello from http-nio-8080-exec-3
+```
+
+```text
+issuer=CN = Caddy Local Authority - ECC Intermediate
+notBefore=Oct 23 19:23:58 2026 GMT
+notAfter=Oct 24 07:23:58 2026 GMT
+X509v3 Subject Alternative Name: critical
+    DNS:localhost
+```
+
+`localhost`처럼 공인 인증서를 받을 수 없는 이름에는 Caddy가 자기 로컬 CA를 만들고 12시간짜리 인증서를 찍어 준다(로그의 `"issuer":"local"`). 공개 도메인을 적으면 같은 자리에서 ACME 프로토콜로 Let's Encrypt나 ZeroSSL에 인증서를 요청하고, 만료 전에 알아서 갱신한다. 그러려면 그 도메인의 DNS가 이 서버를 가리키고 80이나 443 포트가 밖에서 열려 있어야 한다. 로그의 `enabling automatic HTTP->HTTPS redirects` 줄처럼 HTTP를 HTTPS로 돌리는 리다이렉트도 기본으로 켜진다.
+
+설정이 짧은 대신 세밀한 조정이 필요하면 JSON 설정이나 플러그인으로 내려가야 한다. 작은 서비스, 사이드 프로젝트, 사내 도구처럼 인증서 관리가 귀찮은 곳에서 자주 고른다.
+
+## IIS는 Windows 서버의 자리
+
+IIS(Internet Information Services)는 Windows Server에 들어 있는 웹 서버다. 구조가 리눅스 쪽과 조금 다르다. HTTP 연결은 커널 모드 드라이버 HTTP.sys가 먼저 받고, 요청을 사이트별 애플리케이션 풀의 작업자 프로세스(`w3wp.exe`)로 넘긴다. 풀마다 프로세스가 따로라 사이트 하나가 죽어도 다른 사이트는 버틴다.
+
+.NET 앱을 올릴 때는 ASP.NET Core Module이 IIS와 앱을 잇는다. 앱을 IIS 작업자 프로세스 안에서 돌리는 in-process 방식과, 앱이 자기 서버(Kestrel)를 따로 띄우고 IIS가 앞에서 프록시하는 out-of-process 방식이 있다. 후자는 nginx와 Tomcat을 나눈 모양과 같다. 리눅스 서버만 다루는 팀이라면 IIS를 만날 일은 드물고, 사내 Windows 인프라나 오래된 ASP.NET 서비스에서 만난다.
+
+## 다섯 서버를 나란히 놓으면
+
+여기까지 본 것을 한 표로 모았다. 비교가 목적이라 표로 쓴다.
+
+| 서버 | 연결을 다루는 방식 | 잘하는 일 | 자주 만나는 곳 |
+|---|---|---|---|
+| nginx | worker 프로세스마다 이벤트 루프 하나 | 정적 파일, TLS 종료, 리버스 프록시, 버퍼링 | 리눅스 서버 앞단, Ingress 컨트롤러 |
+| Apache httpd | MPM으로 선택 (prefork·worker·event) | 모듈, 디렉터리별 설정, PHP 호스팅 | 오래된 서비스, 공유 호스팅 |
+| Caddy | Go 런타임의 고루틴 | 자동 HTTPS, 짧은 설정 | 작은 서비스, 사내 도구 |
+| IIS | HTTP.sys + 애플리케이션 풀 프로세스 | Windows 인증, .NET 연동 | Windows Server |
+| Tomcat | NIO 커넥터 + 요청당 실행기 스레드 | 서블릿·Spring 앱 실행 | 자바 백엔드 |
+
+Caddy 줄의 고루틴은 연결마다 가벼운 실행 단위를 하나씩 붙이는 방식이라 연결을 오래 들고 있어도 nginx처럼 싸다. 반대로 Tomcat의 요청당 스레드는 운영체제 스레드라 개수가 곧 한도다.
+
+## 내장 Tomcat만으로 운영해도 될 때
+
+꼭 nginx를 둬야 하는 건 아니다. 앞단의 역할을 다른 무언가가 이미 하고 있으면 nginx는 한 단계를 더할 뿐이다.
+
+- 클라우드 L7 로드 밸런서가 TLS를 끝내고, 정적 파일은 CDN과 객체 스토리지에서 나가는 구성
+- 쿠버네티스에서 Ingress 컨트롤러(대개 nginx나 Envoy)가 이미 앞에 있는 구성
+- 사내망 안에서만 다른 서비스가 부르는 내부 API
+
+이때 확인할 것이 있다. 앞단이 느린 클라이언트의 요청 본문을 어떻게 다루는지는 제품마다 다르다. 받는 대로 흘려보내는 프록시라면 위 실험의 8초가 그대로 재현된다. 직접 느린 업로드를 걸어 보고 Tomcat 로그의 읽기 시간을 확인하는 게 가장 확실하다.
+
+자바 21 이상에서 Spring Boot 3.2 이상을 쓰면 `spring.threads.virtual.enabled=true`로 요청마다 가상 스레드를 쓰게 할 수 있다. 기다리는 동안 운영체제 스레드를 내놓기 때문에 "스레드 4개가 묶여 전체가 멈춘다"는 장면은 훨씬 덜 일어난다. 다만 이 글에서는 가상 스레드로 같은 실험을 돌려 보지 않았고, 가상 스레드는 DB 커넥션 풀 같은 다른 한도를 대신 드러내기 쉽다. 가상 스레드가 무엇을 바꾸는지는 [JVM 메모리와 스레드](/posts/java-jvm-memory-gc)에서 다룬다.
+
+nginx를 두면 TLS 종료 지점이 바뀌므로 앱은 원래 요청이 HTTPS였는지, 클라이언트 IP가 무엇인지를 헤더로 받아야 한다. Spring Boot에서는 `server.forward-headers-strategy=native`(또는 `framework`)로 `X-Forwarded-*`를 읽게 하고, nginx 쪽 헤더 설정은 [Nginx 리버스 프록시](/posts/nginx-reverse-proxy)를 따른다. 이걸 빼먹으면 로그인 후 리다이렉트가 `http://`로 가는 증상이 나온다.
+
+## 장애 때 어느 서버를 먼저 볼까
+
+두 서버가 겹쳐 있으면 같은 증상도 어느 쪽에서 났는지부터 가른다.
+
+- nginx가 504를 돌려주는데 Tomcat 로그에는 그 요청이 늦게 찍히거나 아예 없다: Tomcat 스레드가 다 찼을 가능성이 크다. `jstack`으로 exec 스레드가 무엇을 기다리는지 본다. 소켓 읽기면 클라이언트나 업스트림 입출력, JDBC면 DB다.
+- nginx가 502를 돌려준다: Tomcat이 연결을 거절했거나 죽었다. `ss -ltnp | grep 8080`으로 떠 있는지부터 본다.
+- 413은 nginx의 `client_max_body_size`에서 끝났다. Tomcat 로그에 없는 게 정상이다.
+- 정적 파일만 느리다: Tomcat과 상관없다. nginx `error.log`의 권한 오류나 디스크 I/O를 본다.
+
+nginx 접근 로그에 `$request_time`과 `$upstream_response_time`을 함께 남겨 두면 이 구분이 숫자로 된다. 전체 시간은 긴데 업스트림 시간이 짧으면 클라이언트 쪽(느린 회선, 큰 업로드)이고, 둘이 같이 길면 앱 쪽이다.
+
+## 연결을 맡는 쪽과 일을 맡는 쪽
+
+웹 서버와 애플리케이션 서버를 나누는 기준은 연결 하나를 붙잡고 있는 비용이다. nginx나 Caddy처럼 연결을 싸게 들고 있을 수 있는 쪽이 TLS, 정적 파일, 느린 클라이언트를 맡고, 요청 하나에 스레드 하나가 드는 Tomcat은 다 받은 요청을 짧게 처리하는 데만 쓴다. 이 분담은 nginx를 둔다고 저절로 생기는 게 아니라 버퍼링이 켜져 있어야 생긴다. 다음에 볼 만한 것은 이 앞단이 여러 대로 늘어날 때의 [로드 밸런서](/posts/load-balancer-basics)다.
+
+## 면접에서 나올 만한 질문
+
+### 웹 서버와 WAS는 무엇이 다른가요?
+
+웹 서버는 HTTP 연결을 받아 정적 파일을 내주고 동적 요청은 뒤로 넘기는 역할이고, WAS는 그 동적 요청을 받아 애플리케이션 코드를 실행하는 역할이다. 자바에서는 Tomcat 같은 서블릿 컨테이너가 HTTP를 서블릿 객체로 바꿔 스레드에서 실행한다. 다만 Tomcat도 정적 파일을 내줄 수 있어서, 제품 종류보다 연결을 얼마나 싸게 붙잡을 수 있는지로 역할을 나누는 게 정확하다.
+
+### Spring Boot에 내장 Tomcat이 있는데 왜 앞에 nginx를 두나요?
+
+느린 클라이언트로부터 Tomcat 스레드를 지키고, TLS와 정적 파일을 앞에서 끝내기 위해서다. 스레드 4개짜리 Tomcat에 느린 업로드 4개를 직접 보내면 다른 요청이 8초 기다렸지만, nginx를 앞에 두면 nginx가 본문을 다 받은 뒤 넘겨서 2밀리초에 끝났다. 앞단 로드 밸런서나 Ingress가 같은 일을 하고 있다면 nginx를 빼도 된다.
+
+### Tomcat의 스레드 풀이 고갈되면 어떤 일이 생기고, 앞단 버퍼링은 무엇을 막나요?
+
+maxThreads만큼 스레드가 모두 서블릿을 돌리는 중이면 새 요청은 큐에서 기다리고, acceptCount까지 차면 연결이 거절된다. 서블릿이 요청 본문을 읽는 동안에도 스레드가 묶이기 때문에, 본문을 천천히 보내는 클라이언트 몇 명만으로 고갈될 수 있다. 앞단의 요청 버퍼링은 본문 수신을 웹 서버가 대신 기다리게 해서, Tomcat 스레드가 다 받은 요청만 짧게 처리하게 한다. 응답 버퍼링은 반대 방향으로 느린 수신을 막아 준다.
+
+### nginx가 Apache보다 동시 연결에 강한 이유는 무엇인가요?
+
+nginx는 worker 프로세스 몇 개가 각자 이벤트 루프로 소켓 수천 개를 지켜보고, 데이터가 온 소켓만 처리하기 때문이다. Apache는 MPM에 따라 연결이나 요청 하나에 프로세스나 스레드 하나를 쓴다. event MPM은 keep-alive 대기를 리스너 스레드에 맡겨 차이를 줄였지만, 요청을 처리하는 동안에는 여전히 일꾼 스레드를 쓴다.
+
+### Apache의 prefork, worker, event MPM은 각각 언제 쓰나요?
+
+prefork는 스레드에 안전하지 않은 모듈을 써야 할 때, 대표적으로 예전 mod_php 환경에서 쓴다. worker는 프로세스마다 스레드를 여럿 두어 메모리를 아끼지만 놀고 있는 keep-alive 연결도 스레드를 붙잡는다. event는 그 대기를 리스너 스레드가 맡아서 지금 Ubuntu의 기본값이고, 특별한 이유가 없으면 event를 쓴다.
+
+### .htaccess가 느린 이유는 무엇인가요?
+
+AllowOverride가 켜져 있으면 Apache는 요청마다 경로의 모든 디렉터리에서 .htaccess 파일을 찾고, 있으면 읽고 해석하기 때문이다. /a/b/c/page.html 하나를 내주기 전에 파일이 하나도 없는데도 다섯 번 열어 보는 것을 strace로 확인했다. 서버 설정을 고칠 수 있다면 규칙을 Directory 블록으로 옮기고 AllowOverride None으로 둔다.
+
+### Caddy의 자동 HTTPS는 어떻게 동작하나요?
+
+사이트 블록에 도메인 이름을 적으면 Caddy가 ACME로 Let's Encrypt나 ZeroSSL에 인증서를 요청하고, 만료 전에 스스로 갱신하고, HTTP를 HTTPS로 돌리는 리다이렉트까지 켠다. 그러려면 DNS가 그 서버를 가리키고 80이나 443 포트가 밖에서 열려 있어야 한다. localhost처럼 공인 인증서를 받을 수 없는 이름은 Caddy가 로컬 CA를 만들어 짧은 인증서를 찍어 준다.

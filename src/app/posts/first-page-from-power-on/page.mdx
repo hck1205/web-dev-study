@@ -580,7 +580,7 @@ curl: (60) SSL: no alternative certificate subject name matches target host name
 | TLS | curl `(60)`, 브라우저 인증서 경고 | 핸드셰이크 중 7바이트 alert | `openssl s_client -servername` |
 | HTTP | 4xx, 5xx 페이지 | 정상과 같은 모양 | 서버 로그 |
 
-여섯 칸을 차례로 확인하는 순서를 코드로 옮겨 볼 수 있다. 아래 함수는 관찰한 사실을 받아 처음으로 실패한 칸의 이름을 돌려준다. 앞 칸이 실패하면 뒤 칸은 볼 필요가 없다는 점, 그리고 같은 curl `(6)`도 주소가 없으면 DHCP 문제라는 점이 핵심이다.
+여섯 칸을 차례로 확인하는 순서를 코드로 옮겨 볼 수 있다. 아래 함수는 관찰한 사실을 받아 처음으로 실패한 칸의 이름을 돌려준다. 앞 칸이 실패하면 뒤 칸은 볼 필요가 없고, 같은 curl `(6)`도 주소가 없으면 DHCP 문제로 본다. 이 두 가지가 함수의 전부다.
 
 <CodePlayground
   caption="처음으로 멈춘 칸 고르기"

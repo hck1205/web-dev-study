@@ -1,0 +1,453 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("icon-system-svg");
+
+<EasyIntro>
+  앱 화면의 돋보기, 휴지통 같은 작은 그림을 아이콘이라고 하고, 웹에서는 보통 SVG라는 형식으로 그린다. SVG는 점과 선을 좌표로 적어 둔 그림이라 크게 키워도 깨지지 않는다.
+
+  아이콘을 도장이라고 생각해 보자. 도장 300개가 든 상자를 통째로 들고 다니면 무겁고, 오늘 찍을 도장 세 개만 골라 들고 나가면 가볍다. 아이콘도 쓸 것만 골라 담아야 웹 페이지가 빨리 열린다. 도장의 모양도 맞춰야 해서, 같은 크기의 바둑판 위에 같은 굵기의 선으로 그리기로 약속한다. 그리고 그림만 있는 버튼에는 이름을 붙여서, 화면을 소리로 듣는 사람에게 이 버튼이 삭제라는 걸 글자로 알려 준다. 반대로 꾸미기용 그림은 읽지 않게 숨긴다.
+</EasyIntro>
+
+번들 분석기를 열었더니 아이콘 패키지 하나가 수백 KB를 차지하고 있었다. 화면에서 쓰는 아이콘은 스무 개 남짓인데 패키지에 든 1,500개가 전부 실려 있었다. 원인을 따라가 보니 이런 코드 한 줄이었다.
+
+```tsx
+import * as Icons from "lucide-react";
+
+export function Icon({ name }: { name: keyof typeof Icons }) {
+  const Cmp = Icons[name] as React.ComponentType;
+  return <Cmp />;
+}
+```
+
+이름을 문자열로 받아 고르는 편한 래퍼다. 편한 만큼 번들러는 어떤 아이콘을 쓸지 빌드할 때 알 수 없어서 전부 넣는다. 이 글은 아이콘을 어떻게 싣느냐(아이콘 폰트, SVG 스프라이트, 인라인 컴포넌트), 어떻게 그리느냐(그리드, 선 굵기, 크기), 어떻게 이름 붙이고 읽히게 하느냐(이름 규칙, 접근 가능한 이름, 예약 아이콘)를 차례로 본다. 측정은 lucide-react 0.460.0과 esbuild, SVGO 4.1.0, Chromium 141에서 했다. 트리 셰이킹의 원리 자체는 [번들러 기초](/posts/bundler-basics)에 있다.
+
+## 1,500개를 실은 import 한 줄
+
+같은 패키지에서 아이콘 세 개를 쓰는 코드를 세 가지로 써서 esbuild로 묶었다(react는 외부로 빼고 minify).
+
+```tsx
+// named.jsx: 이름을 정해서 가져온다
+import { Search, Trash2, ArrowLeft } from "lucide-react";
+
+// star.jsx: 전부 가져와서 문자열로 고른다
+import * as Icons from "lucide-react";
+export const Icon = Icons[window.ICON];
+
+// dyn.jsx: 패키지가 내보내는 icons 객체에서 고른다
+import { icons } from "lucide-react";
+export const pick = (n) => icons[n];
+```
+
+```text
+named 1955 bytes, gzip 1030
+star 602421 bytes, gzip 141230
+dyn 490854 bytes, gzip 117286
+```
+
+이름을 정해 가져오면 2KB가 안 된다. 문자열로 고르는 두 방식은 600KB, 490KB다. 패키지의 `package.json`에는 `"sideEffects": false`가 있고 ESM 빌드도 있어서, 트리 셰이킹이 될 조건은 다 갖췄다. 깨진 건 내 코드다. `Icons[name]`처럼 실행해 봐야 아는 키로 꺼내면 번들러는 어떤 export도 버릴 수 없다.
+
+서버에서 받은 이름으로 아이콘을 골라야 하는 경우(CMS의 메뉴 설정 같은)도 있다. 그때는 쓸 수 있는 아이콘을 직접 적은 작은 지도를 만든다.
+
+```tsx
+import { Home, Search, Settings, User } from "lucide-react";
+
+const MENU_ICONS = { home: Home, search: Search, settings: Settings, user: User } as const;
+type MenuIconName = keyof typeof MENU_ICONS;
+
+export function MenuIcon({ name }: { name: MenuIconName }) {
+  const Cmp = MENU_ICONS[name];
+  return <Cmp aria-hidden="true" size={20} />;
+}
+```
+
+허용 목록이 곧 번들 목록이 된다. 서버가 목록에 없는 이름을 보내면 타입 단계에서 막히고, 런타임에서는 기본 아이콘으로 떨어뜨린다.
+
+개발 모드는 이야기가 또 다르다. 개발 서버는 보통 트리 셰이킹을 하지 않아서, 배럴 파일(모든 아이콘을 re-export하는 `index.js`)을 거치면 1,500개 모듈을 하나하나 읽는다. 첫 화면이 몇 초씩 걸리는 원인이 되기도 한다. Next.js의 `optimizePackageImports`는 배럴 import를 개별 파일 import로 바꿔 주고, 문서에 적힌 기본 대상 목록에 lucide-react 같은 아이콘 패키지가 들어 있다. 다른 패키지는 `next.config.ts`에 직접 넣는다.
+
+## 아이콘을 싣는 세 가지 방법
+
+방법은 크게 셋이다. 무엇이 다른지 기준별로 놓고 보자.
+
+| 기준 | 아이콘 폰트 | SVG 스프라이트(`use`) | 인라인 SVG 컴포넌트 |
+|---|---|---|---|
+| 그리는 방식 | 글자로 렌더링 | 벡터 | 벡터 |
+| 쓰는 것만 싣기 | 폰트 서브셋을 따로 만들어야 | 빌드에서 쓰는 것만 모아야 | import한 것만(트리 셰이킹) |
+| 캐시 | 폰트 파일 하나 | 외부 파일이면 한 번 | JS 번들과 함께 |
+| 색 | 한 가지(`color`) | `currentColor`, CSS 변수 | 부분마다 자유롭게 |
+| 실패할 때 | 네모·빈칸·엉뚱한 글자 | 아이콘만 빈다 | 거의 없다 |
+
+아이콘 폰트는 아이콘을 글자로 만든 폰트다. 유니코드의 사용자 영역(Private Use Area, U+E000부터) 칸에 그림을 넣고 CSS의 `content`로 그 글자를 찍는다. 예전에 많이 썼지만 지금은 새로 고를 이유가 적다. 글자로 렌더링하니 운영체제의 글꼴 다듬기에 따라 가장자리가 흐려지고 정수 픽셀에 맞지 않는다. 폰트가 늦게 오거나 광고 차단기가 막으면 네모 상자나 빈칸이 뜬다. 난독증 사용자를 위해 글꼴을 강제로 바꾸는 설정이나 확장 프로그램이 아이콘까지 바꿔 버린다. 접근성 문제도 있다. 아래에서 다시 본다.
+
+SVG 스프라이트는 아이콘들을 `symbol`로 한 파일에 모아 두고 `use`로 불러 쓰는 방식이다.
+
+```html
+<!-- sprite.svg -->
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="trash" viewBox="0 0 24 24">
+    <path fill="none" stroke="currentColor" stroke-width="2" d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+  </symbol>
+</svg>
+
+<!-- 쓰는 곳 -->
+<svg class="icon" aria-hidden="true"><use href="/sprite.svg#trash"></use></svg>
+```
+
+외부 파일로 두면 브라우저가 한 번 받아 캐시하고 페이지마다 다시 받지 않는다. 문서마다 경로 데이터가 반복되지 않으니 HTML도 가볍다. 대신 몇 가지 제약이 있다. `use`가 가리키는 외부 파일은 같은 출처(origin)에 있어야 한다. CDN 도메인에 올리면 불러오지 못한다. `use`로 복제된 그림은 닫힌 그림자 트리 안에 있어서, 바깥 CSS로 안쪽 `path`를 고를 수 없다. 색은 상속되는 속성과 `currentColor`, CSS 변수로만 넘긴다. 그리고 쓰지 않는 아이콘까지 스프라이트에 넣으면 폰트와 같은 문제가 생기니, 빌드 단계에서 실제로 쓰는 아이콘만 모으는 도구(Vite·webpack 플러그인)를 쓴다.
+
+인라인 SVG 컴포넌트는 아이콘 하나가 React 컴포넌트 하나다. import한 것만 실리고, props로 크기와 굵기를 바꾸고, 부분마다 색을 다르게 칠할 수도 있다. 대신 아이콘의 경로 데이터가 JS 번들에 들어가고, 서버 렌더링을 하면 HTML에도 한 번 더 들어간다. 같은 아이콘이 목록 줄마다 100번 나오면 HTML에 경로가 100번 찍힌다. React 서버 컴포넌트에서 그리면 JS 쪽 비용은 사라지고 HTML만 남는다.
+
+고르는 기준을 짧게 하면 이렇다. React 앱에서 아이콘이 수십 개 정도면 인라인 컴포넌트가 가장 단순하다. 한 화면에 같은 아이콘이 수백 번 나오거나(표, 지도 마커) 여러 프레임워크가 같은 아이콘을 나눠 써야 하면 외부 스프라이트가 낫다. 아이콘 폰트는 이미 쓰고 있는 레거시를 옮길 때까지 유지하는 정도로 둔다.
+
+## 그려 온 SVG를 컴포넌트로 바꾸는 길
+
+디자인 도구에서 내보낸 SVG를 그대로 쓰면 쓰레기가 많다. 일러스트레이터 형식으로 내보낸 휴지통 아이콘 하나를 SVGO로 줄이고 컴포넌트로 바꿔 봤다. 아래 그림의 단계를 하나씩 따라가 보자.
+
+<ConceptDiagram
+  caption="디자이너의 SVG가 화면의 아이콘이 되기까지"
+  width={420}
+  height={360}
+  nodes={[
+    { id: "fig", label: "디자인 도구", sub: "24×24 프레임", x: 110, y: 40, w: 150 },
+    { id: "raw", label: "trash.svg", sub: "1,058 B", x: 310, y: 40, w: 130 },
+    { id: "svgo", label: "SVGO", sub: "정리·currentColor", x: 310, y: 140, w: 150 },
+    { id: "svgr", label: "svgr", sub: "React 컴포넌트", x: 110, y: 240, w: 150 },
+    { id: "sprite", label: "스프라이트 빌드", sub: "symbol 모음", x: 310, y: 240, w: 150 },
+    { id: "app", label: "앱 화면", sub: "Icon 컴포넌트", x: 210, y: 330, w: 150 },
+  ]}
+  edges={[
+    { from: "fig", to: "raw", label: "내보내기" },
+    { from: "raw", to: "svgo" },
+    { from: "svgo", to: "svgr" },
+    { from: "svgo", to: "sprite", dashed: true },
+    { from: "svgr", to: "app" },
+    { from: "sprite", to: "app", dashed: true },
+  ]}
+/>
+
+원본은 1,058바이트였다. XML 선언, 생성기 주석, 빈 `defs`, `id="Page-1"` 같은 그룹, 소수점 여섯 자리 좌표, 하드코딩된 색 `#1F2937`이 들어 있었다. SVGO 기본 설정만 돌리면 이렇게 된다.
+
+```text
+1.033 KiB - 73.2% = 0.277 KiB
+```
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><title>icon/trash</title><g fill="none" fill-rule="evenodd" stroke="#1f2937" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g></svg>
+```
+
+경로 세 개가 하나로 합쳐지고 좌표가 짧아졌다. 그래도 아이콘 시스템에 넣기엔 세 가지가 남았다. `width`와 `height`가 박혀 있어 크기를 CSS로 바꾸기 번거롭다. `title`에 디자인 파일의 레이어 이름(`icon/trash`)이 남아서, 그대로 두면 스크린리더가 이걸 읽는다. 색이 고정돼 있어 다크 모드에서 안 보인다. SVGO 4부터는 `viewBox`와 `title`을 지우는 플러그인이 기본 묶음에서 빠졌다. 그래서 아이콘용 설정을 따로 둔다.
+
+```js
+// svgo.config.mjs
+export default {
+  multipass: true,
+  plugins: [
+    "preset-default",
+    "removeDimensions",                                 // width·height 대신 viewBox만
+    "removeTitle",                                      // 이름은 컴포넌트에서 붙인다
+    { name: "convertColors", params: { currentColor: true } }, // 색을 글자색에 맡긴다
+  ],
+};
+```
+
+```text
+1.033 KiB - 79.8% = 0.209 KiB
+```
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+```
+
+214바이트가 됐다. `currentColor`는 "이 요소의 `color` 값을 써라"라는 뜻이라, 버튼의 글자색을 바꾸면 아이콘 색도 따라 바뀐다. 다크 모드 토큰도 글자색 하나로 해결된다. `viewBox`는 반드시 남긴다. 이게 없으면 크기를 바꿀 때 그림이 따라 커지지 않고 잘린다.
+
+이 파일을 svgr에 넣으면 React 컴포넌트가 나온다. `titleProp`과 `svgProps`로 `aria-hidden`을 함께 줬더니 이런 코드가 나왔다.
+
+```tsx
+const TrashIcon = ({ title, titleId, ...props }: SVGProps<SVGSVGElement> & SVGRProps) =>
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+       aria-labelledby={titleId} {...props}>
+    {title ? <title id={titleId}>{title}</title> : null}
+    <path fill="none" stroke="currentColor" strokeWidth={2} d="M3 6h18m-2 0v14..." />
+  </svg>;
+```
+
+여기에 함정이 하나 있다. `aria-hidden="true"`를 고정으로 넣어 놓고 `title`도 받는다. title을 넘겨도 `aria-hidden` 때문에 접근성 트리에서 통째로 빠지니 이름은 영영 읽히지 않는다. 도구 옵션을 조합할 때는 생성된 코드를 한 번 열어 본다. 아이콘 시스템에서는 대개 아이콘 자체에 이름을 붙이지 않고 항상 숨긴 뒤, 이름은 그 아이콘을 담은 버튼이나 링크에 붙이는 쪽이 단순하다. 다음 절이 그 이야기다.
+
+## 아이콘에는 이름이 없다, 버튼에 있다
+
+아이콘이 하는 일은 둘 중 하나다. 옆에 글자가 있어 꾸미기만 하는 장식 아이콘이거나, 글자 없이 혼자 뜻을 전하는 의미 있는 아이콘이다. Chromium의 접근성 트리로 여러 경우를 덤프했다.
+
+```text
+button ""                       <- svg(aria-hidden)만 든 버튼
+button "삭제"                    <- aria-label="삭제" + svg(aria-hidden)
+button "삭제"                    <- svg(aria-hidden) + 글자 "삭제"
+image "경고"                     <- svg role="img" aria-label="경고"
+image "경고2"                    <- svg 안에 title
+image ""                        <- 아무것도 없는 svg
+button "" e900                  <- 아이콘 폰트 span만 든 버튼
+button "저장"                    <- 아이콘 폰트(aria-hidden) + 글자
+```
+
+첫 줄이 가장 흔한 버그다. 아이콘만 있는 닫기·삭제 버튼에 이름이 없다. 스크린리더는 "버튼"이라고만 읽는다. 여섯째 줄도 눈여겨볼 만하다. 아무 표시 없는 `svg`는 Chromium에서 이름 없는 `image`로 트리에 남는다. 장식 아이콘은 `aria-hidden="true"`로 확실히 빼야 한다.
+
+일곱째 줄의 `e900`은 아이콘 폰트가 찍은 사용자 영역 글자의 코드다. CSS `content`로 넣은 글자도 버튼 내용으로 계산돼서, 버튼 이름이 사람이 읽을 수 없는 글자 하나가 됐다. 아이콘 폰트를 쓰는 곳에서는 아이콘 `span`에 `aria-hidden`을 꼭 붙인다.
+
+규칙으로 정리하면 이렇다.
+
+- 장식 아이콘: `aria-hidden="true"`. 이름은 옆의 글자가 맡는다.
+- 아이콘만 있는 버튼·링크: 아이콘은 숨기고, 버튼에 `aria-label`을 주거나 화면에 안 보이는 글자(visually hidden)를 넣는다.
+- 버튼 밖에서 혼자 뜻을 전하는 아이콘(표 안의 경고 표시): `svg`에 `role="img"`와 `aria-label`.
+
+버튼의 이름이 어디서 오는지는 정해진 순서가 있다(접근 가능한 이름 계산, accname). 같은 덤프에서 이름의 출처까지 찍어 봤다.
+
+```text
+button "삭제" attribute:title
+button "휴지통으로 옮기기" relatedElement:aria-labelledby attribute:aria-label(superseded)
+button "닫기" attribute:aria-label contents(superseded)
+button "검색" contents
+button "설정" contents
+```
+
+아래 그림은 이 순서를 한 칸씩 따라간다. 앞에서 이름을 찾으면 뒤는 보지 않는다.
+
+<AlgoTrace
+  caption="아이콘 버튼의 이름을 찾는 순서"
+  memoryLabel="찾은 이름"
+  cells={["aria-labelledby", "aria-label", "내용(글자·svg)", "title 속성"]}
+  steps={[
+    { pointer: 0, memory: [], caption: "가리키는 요소가 있으면 그 글자가 이름이다. 이 버튼에는 없다." },
+    { pointer: 1, memory: [], caption: "aria-label을 본다. 이 버튼에는 없다." },
+    { pointer: 2, memory: [], caption: "내용을 본다. svg가 aria-hidden이라 아무것도 없다." },
+    { pointer: 3, found: [3], memory: ["삭제"], caption: "title=\"삭제\"를 이름으로 쓴다. 마지막 수단이라 이걸 믿지 않는다." },
+    { pointer: 0, found: [0], memory: ["휴지통으로 옮기기"], caption: "다른 버튼: aria-labelledby가 있으면 aria-label은 무시된다." },
+    { pointer: 1, found: [1], memory: ["닫기"], caption: "aria-label=\"닫기\"가 보이는 글자 '취소'를 덮어쓴다. 음성 명령 사용자는 '취소 클릭'이라고 말해도 못 누른다." },
+  ]}
+/>
+
+마지막 단계가 실무에서 자주 부딪히는 문제다. 화면에 "취소"라고 보이는데 `aria-label`을 "닫기"로 주면, 보이는 글자와 들리는 이름이 달라진다. WCAG 2.5.3(Label in Name)은 보이는 글자가 이름 안에 들어 있으라고 요구한다. 글자가 보이는 버튼에는 aria-label을 붙이지 않는 게 기본이다.
+
+`title` 속성은 마우스를 올리면 뜨는 툴팁이지만, 터치와 키보드에서는 보이지 않고 이름으로도 맨 마지막에야 쓰인다. 아이콘 버튼에는 aria-label로 이름을 주고, 보이는 툴팁이 필요하면 따로 만든다. 툴팁을 접근성 있게 만드는 법은 [툴팁, 드롭다운, 토스트](/posts/ui-overlays-tooltip-dropdown-toast)에서 다룬다.
+
+## 24칸 바둑판과 같은 굵기의 선
+
+아이콘이 한 화면에 섞여도 한 가족으로 보이려면 그리는 규칙이 같아야 한다. 많은 아이콘 세트가 24×24 그리드에서 출발한다. Material Symbols는 24dp 안에 2dp 여백을 두고 20dp 안에 그림을 넣는다. lucide는 24칸에 선 굵기 2, 둥근 선 끝(`stroke-linecap="round"`)이 기본값이다.
+
+정할 것은 대개 이렇다.
+
+- 그리드 크기와 안전 여백(예: 24칸, 사방 2칸)
+- 선 굵기 하나, 선 끝과 모서리 모양(둥글게 또는 각지게)
+- 채움 아이콘과 선 아이콘을 섞을지. 섞는다면 선택된 상태만 채움처럼 규칙을 정한다
+- 키라인: 원은 지름 20, 정사각형은 18처럼 모양마다 다른 크기. 원은 같은 크기의 사각형보다 작아 보여서 조금 크게 그린다
+- 픽셀 맞춤: 수평·수직 선의 좌표를 정수나 .5에 맞춰 1배 화면에서 흐리지 않게
+
+그리드를 정했으면 크기도 정해진 값만 쓴다. 이 블로그처럼 16, 20, 24, 32를 토큰으로 두고 글자 크기와 짝을 지어 둔다. 본문 16px 글자 옆은 16 또는 20, 버튼 안은 20, 내비게이션은 24 같은 식이다. 간격과 글자 크기 단계를 함께 정하는 법은 [간격·크기·타이포그래피 단계](/posts/spacing-sizing-type-scale)에 있다.
+
+```css
+:root {
+  --icon-sm: 1rem;     /* 16px */
+  --icon-md: 1.25rem;  /* 20px */
+  --icon-lg: 1.5rem;   /* 24px */
+}
+
+.icon {
+  inline-size: var(--icon-md);
+  block-size: var(--icon-md);
+  flex-shrink: 0;       /* flex 안에서 찌그러지지 않게 */
+  vertical-align: middle;
+}
+```
+
+크기를 바꾸면 선 굵기도 같이 변한다. 24칸에 굵기 2로 그린 아이콘을 16px로 줄이면 실제 굵기는 2 × 16 / 24 = 1.33px이고, 32px로 키우면 2.67px이다. 같은 화면에서 16px 아이콘은 가늘고 32px 아이콘은 굵어 보인다. 화면 굵기를 맞추려면 `stroke-width`를 거꾸로 계산해 넣는다. lucide의 `absoluteStrokeWidth` prop이 정확히 이 계산(굵기 × 24 / 크기)을 한다. CSS만으로 하려면 `vector-effect: non-scaling-stroke`를 쓰는데, 이건 viewBox 확대와 상관없이 선을 화면 픽셀 기준으로 그린다. 직접 계산해 보자.
+
+<CodePlayground
+  caption="화면에서 굵기가 같아 보이게 stroke-width 계산하기"
+  functionName="strokeFor"
+  initialCode={`// targetPx: 화면에서 보이길 원하는 선 굵기(px)
+// grid: 아이콘을 그린 viewBox 크기 (예: 24)
+// size: 실제로 그릴 크기(px)
+// 넣어야 할 stroke-width를 소수 둘째 자리까지 반올림해서 돌려준다.
+function strokeFor(targetPx, grid, size) {
+  return targetPx;
+}`}
+  solution={`function strokeFor(targetPx, grid, size) {
+  return Math.round((targetPx * grid / size) * 100) / 100;
+}`}
+  tests={[
+    { args: [2, 24, 16], expected: 3, label: "16px에서 2px로 보이려면" },
+    { args: [2, 24, 24], expected: 2, label: "원래 크기면 그대로" },
+    { args: [1.5, 24, 20], expected: 1.8, label: "20px에서 1.5px" },
+    { args: [2, 24, 32], expected: 1.5, label: "키우면 가늘게 넣는다" },
+    { args: [1, 20, 16], expected: 1.25, label: "20칸 그리드" },
+    { args: [2, 24, 18], expected: 2.67, label: "나눠떨어지지 않는 크기" },
+  ]}
+/>
+
+다만 굵기를 무조건 맞추는 게 정답은 아니다. 아이콘을 작게 그리면 선 사이 간격도 줄어서, 굵기를 그대로 두면 16px에서 선끼리 붙어 뭉개진다. 그래서 큰 아이콘 세트는 크기별로 다른 그림(16용, 24용)을 따로 그리기도 한다. 크기를 두세 개로 묶어 두면 이런 조정도 할 만해진다.
+
+## 컴포넌트 하나로 규칙을 묶는다
+
+그리드, 크기, 접근성 규칙을 사람마다 기억하게 하면 언젠가 빠진다. 아이콘 컴포넌트 하나에 넣어 둔다. 아래는 그 컴포넌트가 그리는 `svg`의 속성을 조각으로 나눈 것이다.
+
+<UrlAnatomy
+  caption="아이콘 컴포넌트가 붙이는 속성들"
+  base="<svg"
+  separator=" "
+  joiner=" "
+  params={[
+    {
+      key: "viewBox",
+      value: "\"0 0 24 24\"",
+      title: "그리드는 viewBox가 정한다",
+      description: "width, height 대신 viewBox만 두고 크기는 CSS로 준다. viewBox가 없으면 크기를 바꿀 때 그림이 따라 커지지 않고 잘린다.",
+      required: true,
+    },
+    {
+      key: "fill",
+      value: "\"none\"",
+      title: "선 아이콘은 채우지 않는다",
+      description: "SVG의 fill 기본값은 검정이다. 선 아이콘에서 fill을 지우면 닫힌 모양이 까맣게 칠해진다.",
+    },
+    {
+      key: "stroke",
+      value: "\"currentColor\"",
+      title: "색은 글자색을 따른다",
+      description: "버튼의 color를 바꾸면 아이콘도 바뀐다. hover, disabled, 다크 모드가 글자색 토큰 하나로 해결된다.",
+      required: true,
+    },
+    {
+      key: "stroke-width",
+      value: "\"2\"",
+      title: "굵기는 세트 전체가 하나",
+      description: "크기마다 화면 굵기를 맞추려면 굵기 × 그리드 ÷ 크기로 바꿔 넣거나 vector-effect: non-scaling-stroke를 쓴다.",
+    },
+    {
+      key: "aria-hidden",
+      value: "\"true\"",
+      title: "기본은 숨긴다",
+      description: "아무 표시 없는 svg는 이름 없는 image로 접근성 트리에 남는다. 이름은 아이콘이 아니라 버튼이나 링크에 붙인다.",
+      required: true,
+    },
+    {
+      key: "focusable",
+      value: "\"false\"",
+      title: "옛 브라우저용",
+      description: "예전 IE와 구형 Edge는 svg에 Tab 포커스를 줬다. 지금 브라우저에는 필요 없지만 남겨 두어도 해가 없다.",
+    },
+  ]}
+/>
+
+```tsx
+import type { SVGProps } from "react";
+
+const SIZE = { sm: 16, md: 20, lg: 24 } as const;
+
+type IconProps = SVGProps<SVGSVGElement> & {
+  size?: keyof typeof SIZE;
+  /** 버튼 밖에서 혼자 뜻을 전할 때만 준다 */
+  label?: string;
+  children: React.ReactNode; // path들
+};
+
+export function Icon({ size = "md", label, children, ...rest }: IconProps) {
+  const px = SIZE[size];
+  const a11y = label
+    ? { role: "img", "aria-label": label }
+    : { "aria-hidden": true as const };
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={px}
+      height={px}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={(2 * 24) / px} // 크기와 상관없이 화면 굵기 2px
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...a11y}
+      {...rest}
+    >
+      {children}
+    </svg>
+  );
+}
+
+export function IconButton({ label, icon, ...rest }: {
+  label: string;
+  icon: React.ReactNode;
+} & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button type="button" aria-label={label} {...rest}>
+      {icon}
+    </button>
+  );
+}
+```
+
+`IconButton`이 `label`을 필수 prop으로 받으면 이름 없는 아이콘 버튼은 타입 검사에서 걸린다. 리뷰에서 매번 잡는 것보다 확실하다. 이 블로그의 디자인 시스템에도 `IconButton`이 같은 이유로 따로 있다. 아이콘 버튼은 그림이 20px이어도 누르는 영역은 44px 이상이 되게 버튼 쪽에 padding을 준다.
+
+## 이름은 모양으로, 찾기는 키워드로
+
+아이콘이 200개를 넘으면 "그 휴지통 아이콘 이름이 뭐였지"가 일이 된다. 이름은 뜻이 아니라 모양으로 짓는다. `delete`가 아니라 `trash`, `back`이 아니라 `arrow-left`다. 뜻으로 지으면 같은 모양을 다른 뜻으로 쓰고 싶을 때 이름이 거짓말을 하고, 한 뜻에 모양이 여러 개(`delete`, `delete-2`)가 생긴다. 변형은 접미사로 붙인다. `arrow-left`, `arrow-left-circle`, `trash-filled`처럼 기본 이름 뒤에 모양 차이를 쓴다.
+
+뜻은 검색 키워드로 따로 단다. lucide도 아이콘마다 태그 목록을 둔다. 디자인 시스템 문서의 아이콘 검색이 이름과 키워드를 같이 보면, "삭제"를 쳐서 `trash`를 찾고, "설정"을 쳐서 `settings`와 `sliders`를 함께 본다.
+
+```ts
+// icons.meta.ts
+export const ICON_META = {
+  trash: { keywords: ["삭제", "지우기", "delete", "remove", "bin"] },
+  "arrow-left": { keywords: ["뒤로", "이전", "back", "previous"] },
+  x: { keywords: ["닫기", "취소", "close", "dismiss"] },
+} as const;
+```
+
+## 예약된 아이콘은 다른 뜻으로 쓰지 않는다
+
+어떤 아이콘은 사용자가 이미 뜻을 외우고 있다. 휴지통은 삭제, X는 닫기, 왼쪽 화살표는 뒤로 가기, 돋보기는 검색, 톱니바퀴는 설정이다. 이런 아이콘을 예약 아이콘으로 정해 두고 그 뜻으로만 쓴다.
+
+어기면 사고가 난다. 필터를 초기화하는 버튼에 휴지통을 쓰면, 사용자는 저장해 둔 필터가 지워질까 봐 누르지 않는다. 반대로 진짜 삭제 버튼에 X를 쓰면 창을 닫으려던 사용자가 데이터를 지운다. 같은 화면에 X가 "닫기"와 "목록에서 빼기"로 동시에 나오면 무엇이 위험한지 구분할 수 없다.
+
+규칙은 디자인 시스템 문서에 표로 남긴다. 아이콘 이름, 예약된 뜻, 쓰지 말아야 할 곳, 대신 쓸 아이콘이다. 그리고 뜻이 덜 굳은 아이콘(별, 하트, 깃발)은 글자를 같이 쓴다. 별이 즐겨찾기인지 평점인지는 서비스마다 다르다. 아이콘만으로 뜻이 통한다고 믿는 것보다 글자를 붙이는 쪽이 대부분 안전하다.
+
+## 아이콘이 문제일 때 보는 곳
+
+증상에서 거꾸로 찾아가면 대개 이렇다.
+
+- 번들이 갑자기 커졌다: 번들 분석기에서 아이콘 패키지를 찾고, `import *`나 문자열 키로 고르는 코드를 찾는다.
+- 아이콘이 다크 모드에서 안 보인다: 경로에 색이 박혀 있다. SVGO의 `convertColors`로 `currentColor`를 넣었는지 본다.
+- 크기를 바꿨는데 잘린다: `viewBox`가 지워졌다.
+- 스프라이트 아이콘만 안 뜬다: `use`의 외부 파일이 다른 출처에 있다. DevTools 콘솔에 막힌 요청이 찍힌다.
+- 스크린리더가 "버튼"이라고만 읽는다: DevTools의 Accessibility 패널에서 버튼 이름이 비었는지 본다. 아이콘 폰트면 이상한 글자가 이름으로 들어가 있다.
+- 아이콘과 글자가 위아래로 어긋난다: `inline-flex`와 `align-items: center`로 감싸고, 아이콘에 `flex-shrink: 0`을 준다.
+
+## 아이콘 하나에 담긴 약속
+
+아이콘 시스템은 그림 모음이 아니라 몇 개의 약속이다. 쓰는 것만 이름으로 import해 싣고, SVGO로 크기와 색을 비운 그림을 컴포넌트에 넣고, 그리드와 굵기와 크기 토큰을 하나로 맞추고, 아이콘은 숨긴 채 이름은 버튼에 붙인다. 이름은 모양으로 짓고 뜻은 키워드로 찾게 하며, 사람들이 이미 외운 뜻은 바꾸지 않는다. 이 약속을 사람이 아니라 컴포넌트와 타입이 지키게 만들면 아이콘이 300개가 돼도 흐트러지지 않는다.
+
+## 면접에서 나올 만한 질문
+
+### 아이콘 폰트, SVG 스프라이트, 인라인 SVG는 무엇이 다른가요?
+
+아이콘 폰트는 글자로 렌더링해서 흐려지거나 폰트가 안 오면 네모가 뜨고, 색은 한 가지이며 접근성 트리에 이상한 글자가 이름으로 들어간다. 스프라이트는 외부 파일 하나로 캐시되고 HTML이 가볍지만 같은 출처 제약이 있고 안쪽을 CSS로 고를 수 없다. 인라인 컴포넌트는 import한 것만 실리고 자유롭게 꾸밀 수 있지만 경로가 JS와 SSR HTML에 들어간다. 새로 만들면 인라인 컴포넌트, 같은 아이콘이 수백 번 반복되면 스프라이트를 고른다.
+
+### 아이콘 패키지가 번들을 크게 키우는 이유는 무엇인가요?
+
+대부분 패키지 문제가 아니라 import 방식 문제다. 측정해 보니 이름을 정한 import 세 개는 2KB가 안 됐고, `import *`로 받아 문자열 키로 고르면 600KB가 됐다. 번들러는 실행해 봐야 아는 키를 보고 어떤 export도 버릴 수 없다. 동적으로 골라야 하면 쓸 아이콘만 적은 허용 목록 객체를 만든다.
+
+### 아이콘만 있는 버튼은 어떻게 접근 가능하게 만드나요?
+
+아이콘은 `aria-hidden="true"`로 숨기고 버튼에 `aria-label`이나 화면에 안 보이는 글자로 이름을 준다. 아무 표시 없는 svg는 이름 없는 image로 남고, 아이콘 폰트는 사용자 영역 글자가 이름이 되니 둘 다 숨겨야 한다. `title` 속성은 이름 계산의 마지막 수단이고 터치·키보드에서 안 보이니 이름으로 쓰지 않는다.
+
+### aria-label을 쓰면 안 되는 경우가 있나요?
+
+보이는 글자가 있는 버튼이다. aria-label이 내용을 덮어써서 보이는 "취소"와 들리는 "닫기"가 달라지면, 음성 명령 사용자가 보이는 글자로 부를 수 없다. WCAG 2.5.3이 보이는 글자가 이름에 들어가라고 요구하는 이유다. aria-labelledby가 있으면 aria-label은 무시된다는 순서도 알아 둔다.
+
+### 아이콘 크기를 바꾸면 선 굵기는 어떻게 되나요?
+
+viewBox 기준으로 그린 선은 함께 커지고 작아진다. 24칸에 굵기 2인 아이콘은 16px에서 1.33px, 32px에서 2.67px가 된다. 화면 굵기를 맞추려면 굵기 × 그리드 ÷ 크기로 stroke-width를 바꾸거나 `vector-effect: non-scaling-stroke`를 쓴다. 너무 작은 크기에서는 선끼리 붙으니 크기별 그림을 따로 두기도 한다.
+
+### SVG를 아이콘으로 넣기 전에 무엇을 정리하나요?
+
+SVGO로 주석, 빈 그룹, 긴 좌표를 지우고 경로를 합친다. 아이콘용으로는 width·height를 지우고 viewBox만 남기고, 디자인 파일의 레이어 이름이 든 title을 지우고, 색을 `currentColor`로 바꾼다. SVGO 4부터는 viewBox와 title을 지우는 플러그인이 기본 묶음에 없어서 설정으로 정한다. svgr로 컴포넌트를 만들면 생성된 코드의 aria 속성이 서로 충돌하지 않는지 본다.
+
+### 아이콘 이름은 어떻게 짓고, 예약 아이콘은 무엇인가요?
+
+이름은 뜻이 아니라 모양으로 짓고(`trash`, `arrow-left`), 뜻은 검색 키워드로 따로 단다. 그래야 같은 모양이 다른 뜻으로 쓰일 때 이름이 거짓말을 하지 않는다. 예약 아이콘은 휴지통·X·뒤로 화살표·돋보기처럼 사용자가 뜻을 외운 아이콘이고, 그 뜻으로만 쓴다. 필터 초기화에 휴지통을 쓰면 사용자는 데이터가 지워질까 봐 누르지 않는다.

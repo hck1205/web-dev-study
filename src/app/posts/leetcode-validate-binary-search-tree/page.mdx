@@ -1,0 +1,509 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-validate-binary-search-tree");
+
+<EasyIntro>
+  도서관 책장을 떠올려 보자. 사서가 가운데 책 한 권을 정하고, 그 책보다 번호가 작은 책은 모두 왼쪽 칸에, 큰 책은 모두 오른쪽 칸에 꽂는다. 왼쪽 칸 안에서도 다시 가운데 책을 정해 똑같이 나눈다. 이렇게 꽂혀 있으면 책을 찾을 때 절반씩 건너뛸 수 있다. 이 문제는 책장이 정말 이 규칙대로 꽂혀 있는지 검사하는 문제다. 바로 옆 책끼리만 비교하면 안 된다. 왼쪽 칸 깊숙한 곳에 가운데 책보다 큰 책이 숨어 있을 수 있기 때문이다. 그래서 칸을 내려갈 때마다 "이 칸에는 몇 번부터 몇 번까지만 들어올 수 있다"는 쪽지를 함께 들고 간다. 쪽지 범위를 벗어난 책이 하나라도 나오면 규칙이 깨진 책장이다.
+</EasyIntro>
+
+BST(이진 탐색 트리)에 값을 넣고 지우는 코드를 직접 짜면, 테스트에서 가장 먼저 확인하고 싶은 건 "연산 뒤에도 트리가 여전히 BST인가"다. 삭제에서 후계자 노드를 잘못 옮기면 트리 모양은 멀쩡해 보이는데 탐색이 엉뚱한 쪽으로 내려간다. 그 깨짐을 잡아내는 검사기가 이 문제다.
+
+[LeetCode 98. Validate Binary Search Tree](https://leetcode.com/problems/validate-binary-search-tree/)는 트리 문제 중에서 첫 시도에 틀리는 사람이 유난히 많다. 이유는 두 가지다. 바로 아래 자식만 비교하고 끝내는 것, 그리고 경계값으로 `Integer.MIN_VALUE` 같은 값을 쓰는 것이다. 이 글은 틀린 풀이부터 보고, 느린 풀이에서 빠른 풀이까지 여섯 가지를 차례로 본다. 크게 보면 두 갈래다. 위에서 허용 범위를 내려보내는 방법과, 중위 순회로 펼쳐 정렬됐는지 보는 방법이다.
+
+BST의 정의와 탐색·삽입·삭제는 [이진 트리와 BST 글](/posts/ds-binary-tree-bst)에서, BST의 크기 관계를 이용해 내려가는 문제는 [Lowest Common Ancestor of a BST 글](/posts/leetcode-lowest-common-ancestor-of-bst)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 왼쪽 가지 전체가 작고 오른쪽 가지 전체가 커야 한다
+
+이진 트리의 뿌리가 주어진다. 이 트리가 BST인지 판정해 `true`나 `false`를 돌려준다. 여기서 BST는 모든 노드에서 다음이 성립하는 트리다.
+
+- 왼쪽 가지에 있는 모든 노드의 값이 그 노드보다 작다.
+- 오른쪽 가지에 있는 모든 노드의 값이 그 노드보다 크다.
+- 왼쪽 가지와 오른쪽 가지도 각각 BST다.
+
+"작다"와 "크다"는 엄격한 비교다. 같은 값이 있으면 BST가 아니다. 그리고 "왼쪽 자식"이 아니라 "왼쪽 가지 전체"다. 손자, 증손자까지 모두 조건에 걸린다.
+
+제약에서 볼 것은 두 가지다. 노드 수가 1개에서 10^4개라서 O(n²)은 피하고 싶고, 일자 트리면 깊이도 10^4까지 간다. 노드 값은 32비트 정수 전체 범위, 즉 -2^31부터 2^31 - 1까지다. 이 두 번째 조건이 경계값 실수를 끌어낸다.
+
+이 글에서 쓸 두 트리다. 왼쪽은 BST이고, 오른쪽은 한 칸만 바꿔 BST가 아니게 만든 것이다.
+
+```text
+[8, 4, 12, 2, 6, 10, 14]        [8, 4, 12, 2, 9, 10, 14]
+
+         8                               8
+       /   \                           /   \
+      4     12                        4     12
+     / \   /  \                      / \   /  \
+    2   6 10   14                   2   9 10   14
+```
+
+오른쪽 트리에서 9는 부모 4보다 크니 4의 오른쪽 자식 자리로는 맞다. 하지만 9는 뿌리 8의 왼쪽 가지 안에 있으니 8보다 작아야 한다. 9가 들어갈 수 있는 범위는 4보다 크고 8보다 작은 곳이다. 아래 그림은 노드마다 허용되는 범위를 적은 것이다. 화살표 위 글자는 내려갈 때 범위의 어느 쪽 끝이 바뀌는지다.
+
+<ConceptDiagram
+  caption="내려갈수록 범위가 좁아진다. 9는 (4, 8) 칸에 들어갈 수 없다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "n8", label: "8", sub: "(-∞, ∞)", x: 200, y: 35, w: 90 },
+    { id: "n4", label: "4", sub: "(-∞, 8)", x: 105, y: 120, w: 90 },
+    { id: "n12", label: "12", sub: "(8, ∞)", x: 295, y: 120, w: 90 },
+    { id: "n2", label: "2", sub: "(-∞, 4)", x: 50, y: 210, w: 80 },
+    { id: "n9", label: "9 위반", sub: "(4, 8)", x: 150, y: 210, w: 80 },
+    { id: "n10", label: "10", sub: "(8, 12)", x: 250, y: 210, w: 80 },
+    { id: "n14", label: "14", sub: "(12, ∞)", x: 350, y: 210, w: 80 },
+  ]}
+  edges={[
+    { from: "n8", to: "n4", label: "위 = 8" },
+    { from: "n8", to: "n12", label: "아래 = 8" },
+    { from: "n4", to: "n2", label: "위 = 4" },
+    { from: "n4", to: "n9", label: "아래 = 4" },
+    { from: "n12", to: "n10" },
+    { from: "n12", to: "n14" },
+  ]}
+/>
+
+왼쪽 자식으로 내려가면 위쪽 끝이 부모 값으로 바뀌고, 오른쪽 자식으로 내려가면 아래쪽 끝이 부모 값으로 바뀐다. 바뀌지 않은 쪽 끝은 조상에게서 그대로 물려받는다. 9가 걸린 이유는 위쪽 끝 8이 할아버지에게서 물려받은 값이기 때문이다. 부모만 봐서는 이 8을 알 수 없다.
+
+## 바로 아래 자식만 비교하면 놓치는 것
+
+처음 떠올리기 쉬운 코드는 이렇다. 노드마다 왼쪽 자식이 작은지, 오른쪽 자식이 큰지만 확인하고 아래로 내려간다.
+
+```js
+function isValidBST(root) {
+  if (root === null) return true;
+  if (root.left && root.left.val >= root.val) return false;
+  if (root.right && root.right.val <= root.val) return false;
+  return isValidBST(root.left) && isValidBST(root.right); // 틀렸다
+}
+```
+
+두 예시 트리에서 모두 `true`가 나온다. 오른쪽 트리는 BST가 아닌데도 그렇다. 4와 9, 8과 4를 각각 비교하면 둘 다 문제가 없기 때문이다. `[5, 1, 6, null, null, 3, 7]`도 마찬가지로 `true`가 나오는데, 3이 뿌리 5의 오른쪽 가지에 있으니 BST가 아니다.
+
+이 코드는 부모-자식 관계만 보는데, BST 조건은 조상-자손 관계 전체에 걸린다. 고치는 방법은 두 가지다. 가지 전체의 최댓값과 최솟값을 직접 구하거나(다음 풀이), 조상에게서 물려받은 범위를 들고 내려가거나(다섯 번째 풀이).
+
+## 노드마다 왼쪽 최댓값과 오른쪽 최솟값을 구한다
+
+정의를 그대로 옮긴다. "왼쪽 가지의 모든 값이 작다"는 말은 "왼쪽 가지의 최댓값이 작다"와 같다. 오른쪽도 마찬가지로 최솟값만 보면 된다.
+
+```js
+function maxOf(node) {
+  if (node === null) return -Infinity; // 빈 가지는 어떤 비교도 통과하게
+  return Math.max(node.val, maxOf(node.left), maxOf(node.right));
+}
+function minOf(node) {
+  if (node === null) return Infinity;
+  return Math.min(node.val, minOf(node.left), minOf(node.right));
+}
+
+function isValidBST(root) {
+  if (root === null) return true;
+  if (maxOf(root.left) >= root.val) return false; // 왼쪽 가지 전체가 작은가
+  if (minOf(root.right) <= root.val) return false; // 오른쪽 가지 전체가 큰가
+  return isValidBST(root.left) && isValidBST(root.right);
+}
+```
+
+이번에는 오른쪽 트리에서 `false`가 나온다. 뿌리 8에서 왼쪽 가지의 최댓값을 구하면 9가 나오고, 9는 8보다 크기 때문이다.
+
+맞는 답이지만 같은 가지를 여러 번 훑는다. 노드마다 자기 아래 가지 전체를 훑으니, 노드 하나가 그 조상 수만큼 다시 읽힌다. 균형 트리에서는 O(n log n), 일자 트리에서는 O(n²)이다. 노드 5,000개짜리 일자 BST에서 약 230ms가 걸렸다. 공간은 호출 스택 O(h)다.
+
+여기서 다음 생각이 두 갈래로 나온다. 최댓값과 최솟값을 아래에서 한 번만 계산해 올려 보내면 O(n)이 된다(여섯 번째 풀이). 아니면 BST의 다른 성질, 중위 순회 결과가 정렬돼 있다는 점을 쓴다(다음 풀이).
+
+## 중위 순회로 펼치면 정렬된 줄이 나온다
+
+중위 순회(inorder)는 왼쪽 가지 → 나 → 오른쪽 가지 순서로 노드를 읽는다. BST에서는 왼쪽 가지가 모두 나보다 작고 오른쪽이 모두 크니, 이 순서로 읽으면 값이 오름차순으로 나온다. 거꾸로, 중위 순회 결과가 엄격하게 오름차순이면 그 트리는 BST다. 두 조건은 서로 같은 말이다.
+
+```js
+function isValidBST(root) {
+  const vals = [];
+  (function walk(node) {
+    if (node === null) return;
+    walk(node.left);
+    vals.push(node.val); // 중위 순서로 값을 모은다
+    walk(node.right);
+  })(root);
+  for (let i = 1; i < vals.length; i++) {
+    if (vals[i - 1] >= vals[i]) return false; // 같거나 줄어들면 BST가 아니다
+  }
+  return true;
+}
+```
+
+두 예시 트리를 중위 순회로 읽으면 이렇다.
+
+```text
+[8, 4, 12, 2, 6, 10, 14]  →  2, 4, 6, 8, 10, 12, 14   오름차순, BST다
+[8, 4, 12, 2, 9, 10, 14]  →  2, 4, 9, 8, 10, 12, 14   9 다음에 8, BST가 아니다
+```
+
+시간은 순회 O(n)과 비교 O(n)으로 O(n)이다. 공간은 값 배열 O(n)과 호출 스택 O(h)다.
+
+장점은 이해하기 쉽다는 것이다. 단점은 두 가지다. 값 배열 전체를 만들 필요가 없는데 만든다. 그리고 앞부분에서 이미 깨진 걸 발견해도 끝까지 순회한 다음에야 확인한다.
+
+## 직전 값 하나만 들고 다닌다
+
+정렬됐는지 확인하는 데 필요한 건 바로 앞 값 하나뿐이다. 배열 대신 `prev` 변수에 직전에 본 값을 들고 다니고, 새 값이 그보다 크지 않으면 바로 멈춘다.
+
+```js
+function isValidBST(root) {
+  let prev = -Infinity; // 중위 순서로 직전에 본 값
+  function walk(node) {
+    if (node === null) return true;
+    if (!walk(node.left)) return false; // 왼쪽에서 이미 깨졌으면 바로 끝
+    if (node.val <= prev) return false;
+    prev = node.val;
+    return walk(node.right);
+  }
+  return walk(root);
+}
+```
+
+시간 O(n), 공간 호출 스택 O(h)다. 값 배열이 사라졌고, 깨진 곳을 만나는 즉시 `false`가 위로 전달된다.
+
+`prev`의 초깃값을 `-Infinity`로 둔 것이 JavaScript에서는 안전하다. 어떤 정수보다 작기 때문이다. 같은 생각을 Java에서 `int prev = Integer.MIN_VALUE`로 옮기면, 트리의 가장 작은 값이 정확히 -2^31인 경우 첫 비교에서 `false`가 나온다. 이건 뒤의 실수 모음에서 다시 본다.
+
+## 스택으로 중위 순회를 멈출 수 있게 한다
+
+재귀 중위 순회를 반복문으로 바꾸면 호출 스택 걱정이 없어지고, 깨진 곳에서 그냥 `return false`로 빠져나오면 된다. 왼쪽으로 끝까지 내려가며 스택에 쌓고, 하나 꺼내 처리하고, 그 노드의 오른쪽 가지로 옮겨 같은 일을 한다.
+
+```js
+function isValidBST(root) {
+  const stack = [];
+  let node = root, prev = -Infinity;
+  while (node !== null || stack.length > 0) {
+    while (node !== null) { // 왼쪽 끝까지 내려가며 쌓는다
+      stack.push(node);
+      node = node.left;
+    }
+    node = stack.pop(); // 아직 처리 안 한 노드 중 가장 작은 값
+    if (node.val <= prev) return false;
+    prev = node.val;
+    node = node.right; // 이제 오른쪽 가지 차례
+  }
+  return true;
+}
+```
+
+아래 그림은 BST가 아닌 오른쪽 예시에서 이 코드가 도는 모습이다. 칸은 노드를 층 순서로 펼친 것이고, 기억 칸은 스택과 `prev` 값이다. 초록 칸은 순서 검사를 통과한 노드다.
+
+<AlgoTrace
+  caption="스택 중위 순회: 꺼낸 값이 직전 값보다 커야 통과한다"
+  memoryLabel="스택 (오른쪽이 꼭대기) · prev"
+  cells={["8", "4", "12", "2", "9", "10", "14"]}
+  steps={[
+    { pointer: 3, memory: ["8", "4", "2", "prev = -∞"], caption: "뿌리에서 왼쪽 끝까지 내려가며 8, 4, 2를 쌓았다." },
+    { pointer: 3, found: [3], memory: ["8", "4", "prev = 2"], caption: "2를 꺼낸다. -∞보다 크니 통과. 2의 오른쪽은 비어 있다." },
+    { pointer: 1, found: [1, 3], memory: ["8", "prev = 4"], caption: "4를 꺼낸다. 2보다 크니 통과. 이제 4의 오른쪽 가지 9로 간다." },
+    { pointer: 4, found: [1, 3], memory: ["8", "9", "prev = 4"], caption: "9에서 왼쪽 끝까지 내려가며 쌓는다. 9는 왼쪽이 없어 9 하나만 쌓인다." },
+    { pointer: 4, found: [1, 3, 4], memory: ["8", "prev = 9"], caption: "9를 꺼낸다. 4보다 크니 통과. 지역적으로는 문제없어 보인다." },
+    { pointer: 0, found: [1, 3, 4], memory: ["prev = 9"], caption: "8을 꺼낸다. 직전 값 9보다 작다. 정렬이 깨졌으니 false를 돌려준다." },
+  ]}
+/>
+
+12, 10, 14는 보지도 않고 끝났다. 깨진 곳을 발견하는 순간 멈추는 게 이 풀이의 장점이다. 시간은 최악 O(n), 공간은 스택 O(h)다. 스택은 힙 배열이라 10^4단계 일자 트리도 문제없이 돌았다(4.2ms).
+
+## 위에서 허용 범위를 좁혀 내려보낸다
+
+이번에는 처음 그림의 생각을 코드로 옮긴다. 각 노드에 "이 자리에 들어올 수 있는 값의 범위" `(low, high)`를 함께 넘긴다. 뿌리는 `(-∞, ∞)`이다. 왼쪽 자식으로 갈 때는 위쪽 끝을 내 값으로 바꾸고, 오른쪽 자식으로 갈 때는 아래쪽 끝을 내 값으로 바꾼다.
+
+```js
+function isValidBST(root) {
+  // node 값은 low보다 크고 high보다 작아야 한다 (양쪽 모두 엄격한 비교)
+  function check(node, low, high) {
+    if (node === null) return true;
+    if (node.val <= low || node.val >= high) return false;
+    return (
+      check(node.left, low, node.val) && // 왼쪽 가지는 내 값보다 작아야 한다
+      check(node.right, node.val, high) // 오른쪽 가지는 내 값보다 커야 한다
+    );
+  }
+  return check(root, -Infinity, Infinity);
+}
+```
+
+아래 그림은 같은 오른쪽 예시에서 범위가 내려가는 모습이다. 기억 칸은 호출 스택이고, 각 칸의 괄호가 그 노드에 넘어간 범위다.
+
+<AlgoTrace
+  caption="범위 내려보내기: 9는 (4, 8) 범위를 벗어난다"
+  memoryLabel="호출 스택과 범위 (왼쪽이 바닥)"
+  cells={["8", "4", "12", "2", "9", "10", "14"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["8 (-∞, ∞)"], caption: "뿌리 8은 범위 제한이 없다. 통과." },
+    { pointer: 1, found: [0, 1], memory: ["8 (-∞, ∞)", "4 (-∞, 8)"], caption: "왼쪽으로 내려가며 위쪽 끝이 8이 된다. 4는 8보다 작으니 통과." },
+    { pointer: 3, found: [0, 1, 3], memory: ["8 (-∞, ∞)", "4 (-∞, 8)", "2 (-∞, 4)"], caption: "다시 왼쪽이라 위쪽 끝이 4로 줄어든다. 2는 통과하고 잎이라 돌아온다." },
+    { pointer: 4, found: [0, 1, 3], memory: ["8 (-∞, ∞)", "4 (-∞, 8)", "9 (4, 8)"], caption: "4의 오른쪽으로 가며 아래쪽 끝이 4가 된다. 위쪽 끝 8은 뿌리에게서 물려받은 값이다." },
+    { pointer: 4, found: [0, 1, 3], memory: ["8 (-∞, ∞)", "4 (-∞, 8)"], caption: "9는 8보다 작아야 하는데 크다. false가 4로 올라간다." },
+    { pointer: 0, found: [0, 1, 3], memory: [], caption: "&&가 짧게 끊겨 12 쪽은 내려가지 않는다. 답은 false다." },
+  ]}
+/>
+
+노드마다 비교 두 번이라 시간 O(n), 공간은 호출 스택 O(h)다. 깨진 곳에서 바로 멈추는 것도 앞 풀이와 같다. 이 풀이를 기본 답으로 고르는 이유는 BST의 정의를 가장 직접적으로 코드에 옮겼기 때문이다. "조상들이 정한 범위 안에 있어야 한다"는 문장이 함수 인자에 그대로 보인다. 중위 순회 풀이는 "중위 순서가 정렬돼 있으면 BST다"라는 성질을 한 번 거쳐야 맞는 이유를 설명할 수 있다.
+
+### 깊은 트리에서 재귀가 넘치는 지점
+
+노드 10^4개짜리 일자 BST(오른쪽으로만 1, 2, 3, …)를 Node.js 22 기본 설정에서 이 함수에 넣어 보니, 7,000단계는 통과하고 8,000단계부터 `RangeError: Maximum call stack size exceeded`가 났다. 문제의 상한이 10^4이니 이 환경 기준으로는 아슬아슬하다. 확실히 하려면 앞의 스택 중위 순회를 쓰거나, 노드와 범위를 함께 스택에 넣어 반복문으로 바꾼다. 균형 잡힌 10^4개 트리는 높이가 14라 0.7ms에 끝났다.
+
+### Python과 Java로 쓰면
+
+Python은 `low < node.val < high`처럼 비교를 이어 쓸 수 있고, `math.inf`가 어떤 정수보다 크다. 정수와 실수 무한대를 비교해도 문제가 없다.
+
+```python
+import math
+
+class Solution:
+    def isValidBST(self, root: Optional[TreeNode]) -> bool:
+        def check(node, low, high):
+            if node is None:
+                return True
+            if not (low < node.val < high):  # 비교를 이어 쓸 수 있다
+                return False
+            return check(node.left, low, node.val) and check(node.right, node.val, high)
+
+        return check(root, -math.inf, math.inf)
+```
+
+```text
+[8, 4, 12, 2, 6, 10, 14]        → True
+[8, 4, 12, 2, 9, 10, 14]        → False
+[2, 2]                          → False
+[-2147483648, None, 2147483647] → True
+```
+
+Python 기본 재귀 한도 1000에 걸리는 깊은 트리라면 스택 중위 순회를 그대로 옮기면 된다. 같은 네 입력에서 같은 결과가 나왔다.
+
+Java는 경계값이 핵심이다. 노드 값이 `int` 전체 범위를 쓰니, 경계로 `Integer.MIN_VALUE`와 `Integer.MAX_VALUE`를 쓰면 노드 값이 정확히 그 값일 때 틀린다. 경계를 `long`으로 넓힌다.
+
+```java
+class Solution {
+    public boolean isValidBST(TreeNode root) {
+        return check(root, Long.MIN_VALUE, Long.MAX_VALUE); // int 범위 밖의 경계
+    }
+
+    private boolean check(TreeNode node, long low, long high) {
+        if (node == null) return true;
+        if (node.val <= low || node.val >= high) return false;
+        return check(node.left, low, node.val) && check(node.right, node.val, high);
+    }
+}
+```
+
+`int` 경계 버전과 나란히 돌린 결과다. 왼쪽이 `long` 경계, 오른쪽이 `int` 경계다.
+
+```text
+[8, 4, 12, 2, 6, 10, 14]          true  true
+[8, 4, 12, 2, 9, 10, 14]          false false
+[2, 2]                            false false
+[2147483647]                      true  false
+[-2147483648, null, 2147483647]   true  false
+```
+
+노드 하나짜리 `[2147483647]`도 BST인데 `int` 경계 버전은 `false`를 낸다. `2147483647 >= Integer.MAX_VALUE`가 참이기 때문이다. `long` 대신 `Integer` 객체 경계를 `null`로 두고 "제한 없음"으로 해석하는 방법도 많이 쓴다.
+
+## 아래에서 최솟값과 최댓값을 올려 보낸다
+
+두 번째 풀이의 낭비를 없애는 다른 방법이다. 가지마다 최솟값과 최댓값을 다시 훑지 말고, 후위 순회로 아래에서 한 번만 계산해 올린다. 함수가 `[BST인가, 가지 최솟값, 가지 최댓값]`을 돌려준다.
+
+```js
+function isValidBST(root) {
+  function info(node) {
+    if (node === null) return [true, Infinity, -Infinity]; // 빈 가지: 어떤 비교도 통과
+    const [lok, lmin, lmax] = info(node.left);
+    if (!lok) return [false, 0, 0];
+    const [rok, rmin, rmax] = info(node.right);
+    if (!rok) return [false, 0, 0];
+    if (lmax >= node.val || rmin <= node.val) return [false, 0, 0];
+    // 이 가지의 최솟값은 왼쪽 끝, 최댓값은 오른쪽 끝에서 온다
+    return [true, Math.min(lmin, node.val), Math.max(rmax, node.val)];
+  }
+  return info(root)[0];
+}
+```
+
+빈 가지가 `[true, Infinity, -Infinity]`를 돌려주는 게 요령이다. 최솟값이 무한대, 최댓값이 마이너스 무한대라서 부모의 `lmax >= node.val`, `rmin <= node.val` 비교를 항상 통과한다. 빈 가지를 따로 처리하는 분기가 필요 없다.
+
+시간 O(n), 공간 O(h)다. 이 문제만 놓고 보면 범위 풀이보다 길고, 아래에서 위로 올라오느라 깨진 곳을 발견하는 시점도 늦다. 그래도 이 틀은 알아 둘 만하다. LeetCode 1373 Maximum Sum BST in Binary Tree처럼 "BST인 가지 가운데 합이 가장 큰 것"을 찾는 문제에서는 자식 정보를 받아야 판단할 수 있어서, 위에서 범위를 내려보내는 방법으로는 풀 수 없다.
+
+## 여섯 가지 검사 견주기
+
+틀린 풀이(자식만 비교)는 빼고 맞는 풀이 여섯 개다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 노드마다 가지 최댓값·최솟값 | 균형 O(n log n), 최악 O(n²) | O(h) | 정의를 확인할 때. 실제로는 쓰지 않는다 |
+| 중위 순회 → 배열 | O(n) | O(n) | 정렬 성질을 설명할 때, 값 목록이 어차피 필요할 때 |
+| 중위 순회 + prev (재귀) | O(n) | O(h) | 짧은 코드로 정렬 성질을 쓰고 싶을 때 |
+| 중위 순회 + 스택 | O(n), 깨지면 바로 멈춤 | O(h) 힙 | 깊이가 10^4 근처까지 갈 수 있을 때 |
+| 범위 내려보내기 | O(n), 깨지면 바로 멈춤 | O(h) | 기본 답. 정의가 코드에 그대로 보인다 |
+| 후위로 최솟값·최댓값 올리기 | O(n) | O(h) | 가지별 BST 여부를 모아 다른 답을 구할 때 |
+
+## BST 판정기 직접 짜 보기
+
+아래 칸에서 `isValidBST`를 채워 보자. 입력은 층 순서 배열이고 `buildTree`가 트리로 바꿔 준다. 손자 노드에서 깨지는 트리, 같은 값, 32비트 정수 끝값이 들어 있다. 풀이 보기에는 범위 내려보내기가 들어 있다.
+
+<CodePlayground
+  caption="Validate Binary Search Tree"
+  functionName="isValidBST"
+  initialCode={`// 층 순서 배열을 트리로 바꾸는 도우미 (그대로 두면 된다)
+function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function isValidBST(values) {
+  const root = buildTree(values);
+  // 모든 노드에서 왼쪽 가지 전체가 작고 오른쪽 가지 전체가 큰지 확인한다
+  return false;
+}`}
+  solution={`function buildTree(values) {
+  if (!values.length || values[0] === null) return null;
+  const root = { val: values[0], left: null, right: null };
+  const queue = [root];
+  let head = 0, i = 1;
+  while (i < values.length) {
+    const node = queue[head++];
+    if (values[i] !== null && values[i] !== undefined) {
+      node.left = { val: values[i], left: null, right: null };
+      queue.push(node.left);
+    }
+    i++;
+    if (i < values.length && values[i] !== null) {
+      node.right = { val: values[i], left: null, right: null };
+      queue.push(node.right);
+    }
+    i++;
+  }
+  return root;
+}
+
+function check(node, low, high) {
+  if (node === null) return true;
+  if (node.val <= low || node.val >= high) return false;
+  return check(node.left, low, node.val) && check(node.right, node.val, high);
+}
+
+function isValidBST(values) {
+  return check(buildTree(values), -Infinity, Infinity);
+}`}
+  tests={[
+    { args: [[8, 4, 12, 2, 6, 10, 14]], expected: true, label: "꽉 찬 BST" },
+    { args: [[8, 4, 12, 2, 9, 10, 14]], expected: false, label: "손자 9가 뿌리보다 크다" },
+    { args: [[5, 1, 6, null, null, 3, 7]], expected: false, label: "오른쪽 가지 안의 3" },
+    { args: [[2, 2]], expected: false, label: "같은 값은 안 된다" },
+    { args: [[1]], expected: true, label: "노드 하나" },
+    { args: [[2147483647]], expected: true, label: "int 최댓값 하나" },
+    { args: [[-2147483648, null, 2147483647]], expected: true, label: "int 양 끝값" },
+    { args: [[3, null, 2]], expected: false, label: "오른쪽 자식이 더 작다" },
+  ]}
+/>
+
+## 경계값과 중복에서 무너지는 코드
+
+### 같은 값을 허용하기
+
+```js
+if (node.val < low || node.val > high) return false; // 같은 값을 통과시킨다
+```
+
+범위 비교를 엄격하지 않게 쓰면 `[2, 2]`와 `[2, 1, 2]`에서 `true`가 나온다. 이 문제의 BST는 중복을 허용하지 않는다. 실무 BST는 같은 키를 한쪽(보통 오른쪽)에 몰아넣거나, 노드에 개수를 세는 칸을 두기도 한다. 면접에서 BST 문제를 받으면 "중복 값은 어떻게 다루나요"를 먼저 물어보는 게 좋다. 중위 순회 풀이에서는 `vals[i - 1] >= vals[i]`의 `>=`가 같은 역할을 한다.
+
+### 경계로 int 끝값 쓰기
+
+앞에서 Java로 본 실수다. 경계를 `Integer.MIN_VALUE`, `Integer.MAX_VALUE`로 두면 노드 값이 그 값과 같을 때 "범위 밖"으로 판정한다. 이 문제의 테스트에는 `[2147483647]` 같은 입력이 실제로 들어 있어서, 이 실수는 제출하면 바로 드러난다. C++도 같고, JavaScript와 Python은 무한대를 쓸 수 있어서 이 문제가 없다. `prev` 변수를 쓰는 중위 순회 풀이에서도 초깃값을 `Integer.MIN_VALUE`로 두면 같은 실수가 된다. "아직 본 값 없음"을 `null`이나 별도 플래그로 표현한다.
+
+```java
+Integer prev = null; // 아직 본 값이 없다
+// ...
+if (prev != null && node.val <= prev) return false;
+prev = node.val;
+```
+
+### 자식끼리만 비교하기
+
+처음에 본 실수다. 노드 셋짜리 테스트로는 절대 드러나지 않는다. 깊이 3 이상에서 손자가 할아버지 쪽 범위를 넘는 트리, 예를 들어 `[8, 4, 12, 2, 9, 10, 14]`로 확인한다.
+
+### 범위를 한쪽만 바꾸지 않기
+
+```js
+return check(node.left, low, node.val) && check(node.right, low, high); // 오른쪽 아래 끝을 안 바꿨다
+```
+
+오른쪽으로 내려갈 때 아래쪽 끝을 내 값으로 바꾸지 않으면 오른쪽 자식이 나보다 작아도 통과한다. `[3, null, 2]`가 `true`로 나온다. 왼쪽은 위쪽 끝을, 오른쪽은 아래쪽 끝을 바꾼다. 바뀌는 쪽은 늘 "내 값" 하나뿐이다.
+
+### 전역 prev가 남기
+
+중위 순회 풀이에서 `prev`를 함수 밖에 두면 두 번째 호출에서 앞 트리의 마지막 값이 남아 있다. 앞 트리가 14로 끝났다면 다음 트리의 첫 값 2가 14보다 작아 `false`가 된다. 상태는 함수 호출 안에 둔다.
+
+## BST 검사에서 이어지는 문제들
+
+### 추가 공간을 O(1)로 하라면
+
+Morris 중위 순회를 쓴다. 각 노드의 왼쪽 가지에서 가장 오른쪽 노드의 빈 `right` 포인터를 잠시 그 노드로 걸어 두고, 돌아올 때 그 실을 따라 올라온다. 스택도 재귀도 없이 중위 순서로 노드를 읽을 수 있어서 `prev` 비교를 그대로 붙이면 O(1) 공간이다. 단, 실을 다 풀기 전에 `false`로 빠져나오면 트리가 고쳐진 채로 남는다. 끝까지 돌며 실을 풀고 답을 마지막에 돌려주거나, 트리를 고쳐도 되는지 먼저 확인해야 한다.
+
+### BST에서 k번째로 작은 값을 구하라면
+
+LeetCode 230 Kth Smallest Element in a BST다. 스택 중위 순회에서 k번째로 꺼낸 노드가 답이다. 이 글의 스택 코드에서 비교 대신 카운터를 세면 된다. 시간은 O(h + k)로, 전체를 볼 필요가 없다.
+
+### 두 노드가 잘못 바뀌어 있다면
+
+LeetCode 99 Recover Binary Search Tree다. BST에서 두 노드의 값이 서로 바뀌어 있을 때 되돌린다. 중위 순회에서 "직전 값보다 작은" 지점이 한 번 또는 두 번 나오는데, 첫 지점의 앞 노드와 마지막 지점의 뒤 노드를 바꾸면 된다. 이 글의 `prev` 비교를 "멈추지 않고 기록하기"로 바꾼 문제다.
+
+### 가지 가운데 BST인 것만 골라 답을 구하라면
+
+앞에서 말한 LeetCode 1373 Maximum Sum BST in Binary Tree다. 여섯 번째 풀이의 `[BST인가, 최솟값, 최댓값]`에 합을 하나 더 얹어 올린다.
+
+### 중복을 허용하는 BST라면
+
+정의를 먼저 정한다. "왼쪽은 작거나 같고 오른쪽은 크다"라면 범위 풀이에서 왼쪽 비교만 느슨하게 바꾼다. 이때 중위 순회는 "줄어들지 않음"이 되는데, 같은 값이 오른쪽에 있어도 줄어들지 않는 건 같아서 중위 순회만으로는 정의를 구분할 수 없다. 이런 경우엔 범위 풀이가 정확하다.
+
+### 같은 패턴의 다음 문제
+
+BST의 크기 관계로 한쪽 가지만 내려가는 [Lowest Common Ancestor of a BST](/posts/leetcode-lowest-common-ancestor-of-bst), 중위 순서와 전위 순서로 트리를 다시 짓는 [Construct Binary Tree from Preorder and Inorder Traversal](/posts/leetcode-construct-tree-from-preorder-inorder)이 이어진다. 위에서 정보를 내려보내는 이 글의 틀과, 아래에서 높이를 올려 보내는 [Diameter of Binary Tree](/posts/leetcode-diameter-of-binary-tree)의 틀을 나란히 놓고 보면 트리 재귀가 두 방향으로 정리된다.
+
+## 조상이 정한 범위를 끝까지 지킨다
+
+BST 조건은 부모와 자식 사이가 아니라 조상과 모든 자손 사이에 걸린다. 그래서 노드마다 조상들이 정한 범위를 들고 내려가 그 안에 있는지 보거나, 중위 순서로 펼쳐 정렬됐는지 본다. 둘 다 O(n)이고, 엄격한 비교와 경계값만 조심하면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 부모와 자식만 비교하면 왜 안 되나요?
+
+BST 조건은 가지 전체에 걸리기 때문이다. `[8, 4, 12, 2, 9]`에서 9는 부모 4보다 커서 오른쪽 자식으로는 맞지만, 뿌리 8의 왼쪽 가지 안이라 8보다 작아야 한다. 부모만 보면 할아버지가 정한 위쪽 끝 8을 알 수 없다.
+
+### 범위 풀이와 중위 순회 풀이 중 무엇을 고르나요?
+
+둘 다 O(n) 시간, O(h) 공간이라 성능 차이는 없다. 범위 풀이는 정의가 코드에 그대로 드러나고 중복 허용 같은 변형에도 정확하게 맞출 수 있다. 중위 순회는 k번째 원소나 잘못 바뀐 두 노드 찾기처럼 정렬 순서가 필요한 변형으로 이어 가기 좋다.
+
+### 중위 순회 결과가 정렬돼 있으면 정말 BST인가요?
+
+그렇다. 엄격한 오름차순이면 각 노드의 왼쪽 가지 값은 모두 그 노드보다 앞에 나오니 작고, 오른쪽 가지 값은 모두 뒤에 나오니 크다. 반대로 BST면 중위 순회가 오름차순이 된다. 두 조건이 서로 같은 말이다.
+
+### Java에서 경계를 Integer.MIN_VALUE로 두면 어떻게 되나요?
+
+노드 값이 정확히 int 끝값일 때 틀린다. `[2147483647]`은 BST인데 `2147483647 >= Integer.MAX_VALUE`가 참이라 false가 나온다. 경계를 long으로 넓히거나, Integer 객체를 null로 두고 제한 없음으로 해석한다.
+
+### 시간과 공간 복잡도는 어떻게 되나요?
+
+모든 노드를 많아야 한 번씩 보니 시간 O(n)이다. 공간은 재귀든 명시적 스택이든 트리 높이 O(h)이고, 균형 트리면 O(log n), 일자 트리면 O(n)이다. 깨진 곳에서 바로 멈추니 실제로는 더 빨리 끝날 때가 많다.
+
+### 노드가 10^4개면 재귀로 충분한가요?
+
+환경에 따라 다르다. 내가 돌려 본 Node.js 22 기본 설정에서는 일자 트리 8,000단계부터 스택이 넘쳤다. 안전하게 하려면 스택 중위 순회나, 노드와 범위를 함께 넣는 반복문으로 바꾼다.
+
+### 중복 값을 허용하는 BST라면 어떻게 바꾸나요?
+
+먼저 같은 값이 어느 쪽에 가는지 정의를 확인한다. 왼쪽에 둔다면 범위 풀이에서 왼쪽 쪽 비교만 엄격하지 않게 바꾼다. 중위 순회는 같은 값이 어느 쪽에 있든 줄어들지 않는 순서가 되어 정의를 구분하지 못하니 범위 풀이가 더 정확하다.

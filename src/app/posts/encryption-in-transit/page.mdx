@@ -175,7 +175,7 @@ orders.pem: OK
   ]}
 />
 
-이제 payments 서버를 Node로 띄운다. 핵심은 `requestCert`와 `rejectUnauthorized` 두 옵션이고, 인증서가 맞더라도 신원별 허용 목록을 따로 본다.
+이제 payments 서버를 Node로 띄운다. 볼 곳은 `requestCert`와 `rejectUnauthorized` 두 옵션이고, 인증서가 맞더라도 신원별 허용 목록을 따로 본다.
 
 ```js
 import https from "node:https";

@@ -515,6 +515,21 @@ CPU가 한 코어를 꽉 채웠다. `SLOWLOG GET`으로 느린 명령(큰 키에
 
 네트워크 출력이 링크 한도에 붙었다. 큰 값이다. `instantaneous_output_kbps`가 높으면 `--bigkeys`로 큰 키를 찾아 값을 줄이거나 압축하고, 필요한 필드만 읽게 바꾼다.
 
+### 원인을 보려고 MONITOR를 켜면 더 느려진다
+
+이때 "무슨 명령이 들어오는지 보자"며 `redis-cli MONITOR`를 켜는 경우가 많다. `MONITOR`는 서버가 처리하는 모든 명령을 시각·클라이언트 주소와 함께 문자열로 만들어 그 연결로 다시 내보낸다. 명령 하나마다 출력 버퍼 쓰기가 하나 더 붙는 셈이다. 같은 기계에서 `GET`을 재 봤다.
+
+```text
+MONITOR 없음   -c 50          약 100,000~116,000 req/s
+MONITOR 1개    -c 50          약  77,000~ 82,000 req/s
+MONITOR 없음   -c 50 -P 16    약 818,000~931,000 req/s
+MONITOR 1개    -c 50 -P 16    약 380,000~395,000 req/s
+```
+
+파이프라인을 써서 처리량이 높은 서버일수록 손해가 커서 절반 아래로 떨어졌다. 모니터 연결은 일반 클라이언트로 분류되고 일반 클라이언트의 `client-output-buffer-limit` 기본값은 0(무제한)이라, 화면이 출력을 늦게 읽으면 끊기지 않고 출력 버퍼만 계속 불어난다(`CLIENT LIST`의 `omem`). 바쁜 운영 서버에서는 켜지 않거나, 몇 초만 켜고 바로 끈다.
+
+대신 쓸 것이 있다. 느린 명령은 `SLOWLOG GET`이 실행 시간과 인자를 남긴다(기본 10ms 넘는 것만, `slowlog-log-slower-than`). 이벤트 단위의 지연은 `CONFIG SET latency-monitor-threshold 10`을 걸어 두고 `LATENCY LATEST`, `LATENCY DOCTOR`로 본다. 8억 번째 비트를 켜는 `SETBIT` 하나([HyperLogLog 글](/posts/hyperloglog)의 비트맵 함정)를 넣자 `LATENCY DOCTOR`가 `command: 1 latency spikes (average 58ms ...)`로 짚어 냈다. 누가 보내는지는 `CLIENT LIST`의 `addr`, `cmd`(그 연결의 마지막 명령), `idle`로 좁힌다. 명령의 흐름 자체가 필요하면 서버가 아니라 앱 쪽에서 본다. 클라이언트 라이브러리의 명령 훅이나 OpenTelemetry 계측으로 명령 이름·키 접두사·소요 시간을 남기면 서버에 부담을 주지 않고 "어느 API가 어떤 명령을 몇 번 부르는지"까지 보인다.
+
 Redis 한 대의 한계는 대부분 명령이 아니라 왕복과 시스템 콜에서 온다. 그래서 먼저 한 번에 실어 보내는 양을 늘리고(파이프라인, MGET), 연결을 오래 쓰고, 그래도 코어가 모자라면 그때 스레드와 샤드를 늘린다. 순서를 거꾸로 하면 서버를 늘려도 앱은 여전히 왕복을 기다린다.
 
 ## 면접에서 나올 만한 질문

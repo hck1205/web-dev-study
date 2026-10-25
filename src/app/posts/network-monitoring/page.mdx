@@ -271,7 +271,7 @@ net.netfilter.nf_conntrack_max = 262144
 
 `timewait 271`이 서버 쪽에 있다. TIME_WAIT는 연결을 먼저 끊은 쪽에 남는데, Python의 `http.server`는 HTTP/1.0처럼 응답 후 서버가 먼저 끊어서 서버에 쌓였다. 같은 시각 클라이언트의 `ss -s`는 `timewait 82`였다. 어느 쪽에 쌓이는지 알면 "TIME_WAIT가 많다"는 경고가 어느 쪽 코드의 문제인지 바로 안다.
 
-TIME_WAIT 자체는 정상 상태다. 문제가 되는 건 클라이언트 쪽에서 같은 목적지로 나가는 임시 포트를 다 써 버릴 때다. 목적지 하나(IP·포트)에 대해 쓸 수 있는 포트는 `net.ipv4.ip_local_port_range` 기본값 32768~60999, 28,232개다. TIME_WAIT가 60초 머무니 같은 목적지로 초당 470개 넘게 새 연결을 열면 포트가 바닥난다. 이때 증상은 `connect()`의 `EADDRNOTAVAIL`(Cannot assign requested address)이다. 대책은 연결 재사용(keep-alive와 [커넥션 풀](/posts/connection-pool))이 먼저다.
+TIME_WAIT 자체는 정상 상태다. 문제가 되는 건 클라이언트 쪽에서 같은 목적지로 나가는 임시 포트를 다 써 버릴 때다. 목적지 하나(IP·포트)에 쓸 수 있는 포트는 `net.ipv4.ip_local_port_range` 기본값 32768~60999, 28,232개다. TIME_WAIT가 60초 머무니 같은 목적지로 초당 470개 넘게 새 연결을 열면 포트가 바닥난다. 이때 증상은 `connect()`의 `EADDRNOTAVAIL`(Cannot assign requested address)이다. 대책은 연결 재사용(keep-alive와 [커넥션 풀](/posts/connection-pool))이 먼저다.
 
 conntrack은 표 크기가 정해져 있다. 300 / 262,144로 0.1%라 여유가 있다. 표가 꽉 차면 새 연결의 첫 패킷이 버려지는데, 이것도 앱 로그에는 남지 않고 커널 로그(`dmesg`)에 `table full, dropping packet`만 찍힌다. 원리와 대처는 [iptables 기본 글](/posts/iptables-basics)에서 봤다. 모니터링에서 할 일은 비율을 그리는 것이다. 개수만 그리면 한도가 서버마다 달라 기준선을 잡기 어렵다. `conntrack -S`의 `drop`, `insert_failed`, `early_drop`이 0이 아니면 이미 버리기 시작한 것이다.
 

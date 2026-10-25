@@ -1,0 +1,270 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("ec2-instance-types-launch-templates");
+
+<EasyIntro>
+  작은 가게에서 아르바이트를 뽑는다고 하자. 점심에만 바쁘고 나머지 시간엔 한가하다면, 종일 힘센 사람을 두는 건 돈 낭비다. 대신 평소엔 쉬엄쉬엄 일하다가 바쁠 때만 잠깐 전력으로 뛰는 사람을 두면 싸게 버틴다. 다만 이 사람에게는 "전력 질주 쿠폰"이 정해진 수만큼만 있어서, 쿠폰을 다 쓰면 다시 쉬엄쉬엄으로 돌아간다.
+
+  클라우드에서 서버 한 대를 빌리는 일이 이것과 비슷하다. 작고 싼 서버는 평소 성능이 낮게 묶여 있고, 바쁠 때만 잠깐 빨라지는 쿠폰을 쌓아 두며, 쿠폰이 떨어지면 오후 내내 느려진다. 서버 이름에는 크기와 성격이 적혀 있고, 서버를 만드는 틀과 새로 켜질 때 할 일을 적은 메모, 서버와 함께 사라지는 디스크와 따로 남는 디스크가 있다. 이 글은 아르바이트를 몇 명, 얼마나 세게, 어떤 조건으로 뽑느냐를 정하는 일을 다룬다.
+</EasyIntro>
+
+금요일 오후마다 `t3.micro`로 띄운 API 서버가 느려졌다. 아침엔 멀쩡한데 점심 지나면 응답이 1초, 2초로 밀린다. CPU 사용률 그래프를 보면 오전에 20~30%를 오가다가 오후에 100%에 붙어 있다. 코드를 바꾼 것도 없고 트래픽이 폭증한 것도 아닌데 왜 느려질까.
+
+답은 인스턴스 이름의 `t`에 있었다. T 계열은 "버스트형"이라, 평소에는 성능을 낮게 묶어 두고 CPU 크레딧이라는 쿠폰을 쌓다가 바쁠 때만 쿠폰을 써서 빨라진다. 오후 내내 바쁜 워크로드가 쿠폰을 다 쓰면 기준선(baseline) 아래로 묶여 버린다. 서버가 느린 게 아니라 쿠폰이 떨어진 것이다.
+
+이 글은 EC2를 고르고 띄우는 일을 처음부터 따라간다. 인스턴스 이름 읽는 법, 버스트 크레딧 계산, AMI를 굽는 이유, user data가 언제 도는지, 시작 템플릿 버전, 그리고 EBS와 인스턴스 스토어의 수명 차이까지다. 구매 옵션(온디맨드·예약·Savings Plans·스팟)과 비용 최적화는 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에 있으니 여기서는 짧게만 짚는다. 서버를 받은 뒤 OS를 처음 설정하는 일은 [새 EC2 Ubuntu 서버의 첫 한 시간](/posts/aws-ec2-ubuntu-server-setup)에, 컨테이너로 올리는 [ECS와 Fargate](/posts/ecs-fargate-task-service)는 따로 있다.
+
+클라우드 계정 출력을 지어낼 수 없으니, AWS CLI·콘솔이 내는 형식은 "형식은 이렇다"로 짧게만 보이고 계산은 실제로 돌린 값으로 쓴다.
+
+## 인스턴스 이름에 성격이 적혀 있다
+
+`m7g.xlarge` 같은 이름은 아무렇게나 붙은 게 아니다. 조각마다 뜻이 있다. 조각을 눌러 보면 각각이 무엇을 정하는지 나온다.
+
+<UrlAnatomy
+  caption="인스턴스 이름 m7gd.xlarge를 조각내면"
+  base=""
+  separator=""
+  joiner=""
+  params={[
+    { key: "m", title: "패밀리: 용도", description: "용도별 묶음을 한 글자로 나타낸다. m은 범용(CPU·메모리 균형), c는 컴퓨트(CPU 많음), r는 메모리 많음, t는 버스트형, g·p는 GPU, i는 스토리지(로컬 NVMe 많음)다.", required: true },
+    { key: "7", title: "세대", description: "숫자가 클수록 최신 하드웨어다. 세대가 올라가면 같은 크기에서 보통 성능이 오르고 가격 대비 효율이 좋아진다. 새 세대가 나오면 옮기는 것만으로 싸지기도 한다.", required: true },
+    { key: "g", title: "프로세서·부가 속성", description: "g는 AWS Graviton(ARM) CPU, i는 인텔, a는 AMD다. 추가로 n은 네트워크 강화, e는 메모리·스토리지 확장을 뜻한다. 비어 있으면 그 세대의 기본 프로세서다." },
+    { key: "d", title: "로컬 인스턴스 스토어", description: "d가 붙으면 인스턴스에 로컬 NVMe SSD(인스턴스 스토어)가 딸려 온다. 빠르지만 인스턴스가 멈추면 사라지는 디스크다." },
+    { key: "xlarge", title: "크기", description: "nano·micro·small·medium·large·xlarge·2xlarge…로 커진다. 한 단계 올라갈 때마다 대개 vCPU·메모리·네트워크·가격이 2배가 된다. 이름이 같으면 크기만 다를 뿐 성격은 같다.", required: true },
+  ]}
+/>
+
+이름만 읽어도 "범용 7세대 Graviton에 로컬 SSD가 달린 xlarge"임을 안다. 성격을 알면 고르기가 쉬워진다. CPU를 많이 쓰면 c 계열, 캐시·DB처럼 메모리가 많이 필요하면 r 계열, x86 바이너리 의존성이 없으면 Graviton(g)이 같은 성능에 더 싸다. 비용에 가장 크게 영향을 주는 선택은 "세대를 최신으로, 아키텍처를 Graviton으로" 둘이다.
+
+## 버스트 크레딧이 쌓이고 떨어지는 셈
+
+T 계열로 돌아가자. **기준선 성능**과 **크레딧** 두 가지만 알면 된다. 1 CPU 크레딧은 "vCPU 하나를 1분 동안 100%로 쓸 수 있는 양"이다. 인스턴스는 시간당 정해진 수의 크레딧을 번다. 기준선은 그 벌이를 그냥 쓰면 유지되는 사용률이다. 기준선보다 적게 쓰면 크레딧이 쌓이고, 더 쓰면 쌓인 크레딧을 꺼내 쓴다.
+
+기준선 계산은 간단하다. vCPU당 기준선(%) = 시간당 버는 크레딧 ÷ (vCPU 수 × 60). `t3.micro`는 시간당 12 크레딧을 벌고 vCPU가 2개다. 12 ÷ (2 × 60) = 0.1, 즉 vCPU당 10%다. 쌓을 수 있는 크레딧 상한은 "시간당 벌이 × 24"라, `t3.micro`는 288개까지만 쌓인다. 남아도 더는 안 쌓인다.
+
+| 인스턴스 | vCPU | 시간당 크레딧 | vCPU당 기준선 | 최대 적립 |
+|---|---|---|---|---|
+| t3.nano | 2 | 6 | 5% | 144 |
+| t3.micro | 2 | 12 | 10% | 288 |
+| t3.small | 2 | 24 | 20% | 576 |
+| t3.medium | 2 | 24 | 20% | 576 |
+
+이 셈을 코드로 돌려 보면 왜 금요일 오후에 느려졌는지 눈에 보인다. 가득 찬 288 크레딧으로 시작해 한 시간 내내 2 vCPU를 100%로 쓰면 어떻게 될까.
+
+<CodePlayground
+  caption="버스트 크레딧 잔고 시뮬레이션 — 분마다 벌고 쓰고, 상한과 0에서 멈춘다"
+  functionName="burstBalance"
+  initialCode={`// creditsPerHour: 시간당 버는 크레딧, vcpus: vCPU 수
+// startBalance: 시작 잔고, usagePct: CPU 사용률(%), minutes: 지속 분
+// 1 크레딧 = vCPU 1개를 1분간 100% 사용
+// 분마다: 잔고 += (버는 양) - (쓰는 양), 상한은 creditsPerHour*24, 바닥은 0
+function burstBalance(creditsPerHour, vcpus, startBalance, usagePct, minutes) {
+  return startBalance;
+}`}
+  solution={`function burstBalance(creditsPerHour, vcpus, startBalance, usagePct, minutes) {
+  const earnPerMin = creditsPerHour / 60;
+  const spendPerMin = vcpus * (usagePct / 100);
+  const maxBalance = creditsPerHour * 24;
+  let bal = startBalance;
+  for (let i = 0; i < minutes; i++) {
+    bal = bal + earnPerMin - spendPerMin;
+    if (bal > maxBalance) bal = maxBalance;
+    if (bal < 0) bal = 0;
+  }
+  return Math.round(bal * 100) / 100;
+}`}
+  tests={[
+    { args: [12, 2, 288, 100, 60], expected: 180, label: "t3.micro 가득 찬 뒤 100%로 1시간" },
+    { args: [12, 2, 100, 10, 60], expected: 100, label: "기준선(10%)으로 돌면 잔고 그대로" },
+    { args: [12, 2, 10, 100, 60], expected: 0, label: "잔고 10에서 100%로 쓰면 바닥" },
+    { args: [24, 2, 0, 5, 120], expected: 36, label: "t3.small을 5%로 2시간 두면 쌓인다" },
+  ]}
+/>
+
+가득 찬 288에서 100%로 한 시간을 쓰면 분당 1.8씩 줄어 180이 남는다. 두어 시간 더 그러면 0에 닿고, 그때부터 **표준 모드**에서는 기준선(2 vCPU × 10% = 20% 상당)으로 묶인다. 금요일 오후의 느림이 이것이다.
+
+<AlgoTrace
+  caption="크레딧 잔고가 바닥나며 기준선으로 묶이는 과정 (t3.micro, 100% 사용)"
+  memoryLabel="크레딧 잔고"
+  cells={["0분 (가득)", "60분", "120분", "160분", "그 이후"]}
+  steps={[
+    { pointer: 0, memory: ["288"], caption: "가득 찬 288 크레딧. 100% 성능으로 돈다" },
+    { pointer: 1, memory: ["180"], caption: "분당 1.8씩 줄어 한 시간 뒤 180. 아직 100%" },
+    { pointer: 2, memory: ["72"], caption: "두 시간 뒤 72. 여전히 전력" },
+    { pointer: 3, found: [3], memory: ["0"], caption: "약 160분 만에 바닥. 표준 모드면 여기서 기준선으로 묶인다" },
+    { pointer: 4, found: [4], memory: ["0"], caption: "이후 CPU는 20%에 붙박인다. 응답이 밀리기 시작" },
+  ]}
+/>
+
+해법은 셋이다. 첫째, 워크로드가 꾸준히 바쁘면 T 계열이 애초에 안 맞으니 `m`·`c` 같은 고정 성능 계열로 옮긴다. 둘째, 가끔만 튀면 **unlimited 모드**를 켠다. 크레딧이 떨어져도 묶지 않고 성능을 내 주되, 번 것보다 더 쓴 만큼(서플러스)에 vCPU-시간당 추가 요금을 매긴다. T3는 기본이 unlimited라, 모르는 사이 서플러스 요금이 붙기도 한다. 셋째, `CPUCreditBalance`·`CPUSurplusCreditBalance` 지표를 지켜본다.
+
+```bash
+# 크레딧 잔고 지표를 CloudWatch에서 본다 (형식 예시)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EC2 --metric-name CPUCreditBalance \
+  --dimensions Name=InstanceId,Value=i-0abc123 \
+  --statistics Average --period 300 \
+  --start-time 2026-10-23T12:00:00Z --end-time 2026-10-23T18:00:00Z
+```
+
+잔고가 오후마다 0을 치면 T 계열이 안 맞거나 unlimited가 필요하다는 신호다.
+
+## AMI는 서버를 찍어 내는 틀이다
+
+인스턴스를 띄우려면 "무엇으로 부팅할지"를 정해야 한다. 그게 AMI(Amazon Machine Image)다. AMI는 루트 볼륨의 스냅샷에 더해, 어떤 블록 장치를 붙일지(블록 장치 매핑)와 누가 쓸 수 있는지(실행 권한)를 담은 틀이다. 같은 AMI로 띄운 인스턴스는 같은 디스크 내용으로 시작한다.
+
+AMI를 왜 직접 굽나(custom AMI). 부팅할 때마다 패키지를 설치하고 설정을 내려받으면 시작이 느리고, 설치 중에 외부 저장소가 죽으면 부팅이 실패한다. 미리 설치·설정을 다 해 둔 **골든 AMI**를 구워 두면 부팅이 몇 초로 빨라지고, 오토스케일링으로 수십 대가 동시에 뜰 때도 각자 설치하느라 몰리지 않는다. 대신 보안 패치가 나오면 AMI를 다시 구워야 하고, 이미지가 금세 낡는다. 그래서 실무에서는 "부팅 시 설치"와 "골든 AMI" 사이를 섞는다. 자주 안 바뀌는 무거운 것(런타임, 에이전트)은 AMI에 굽고, 자주 바뀌는 것(앱 코드, 설정)은 부팅 때 가져온다.
+
+```bash
+# 돌고 있는 인스턴스에서 AMI를 굽는다 (형식 예시)
+aws ec2 create-image --instance-id i-0abc123 \
+  --name "web-golden-2026-10-23" --no-reboot
+# 출력: { "ImageId": "ami-0abc..." }
+```
+
+<Callout kind="tip">
+`--no-reboot`는 이미지를 굽는 동안 인스턴스를 멈추지 않아 서비스가 안 끊기지만, 파일 시스템이 쓰기 중이던 데이터는 일관되지 않게 찍힐 수 있다. 데이터가 중요하면 잠깐 재부팅하거나 애플리케이션을 정지시킨 뒤 굽는다.
+</Callout>
+
+## user data는 첫 부팅에 한 번만 돈다
+
+AMI가 "무엇으로 시작할지"라면, user data는 "시작한 뒤 무엇을 할지" 적는 메모다. 인스턴스를 띄울 때 스크립트를 넘기면, 안에서 도는 **cloud-init**이 그걸 root로 실행한다. 패키지 설치, 설정 주입, 앱 시작 같은 걸 여기 넣는다.
+
+```bash
+#!/bin/bash
+# user data 예시: 부팅하면서 nginx를 설치하고 켠다
+apt-get update -y
+apt-get install -y nginx
+systemctl enable --now nginx
+echo "booted at $(date)" > /var/www/html/index.html
+```
+
+여기서 꼭 알아야 할 함정이 하나 있다. 이 스크립트는 **첫 부팅에만** 돈다. 인스턴스를 멈췄다 켜거나 재부팅해도 다시 실행되지 않는다. cloud-init이 인스턴스마다 "이미 실행했다"는 표시를 `/var/lib/cloud/instances/`에 남겨 두고, 인스턴스 ID가 그대로면 건너뛰기 때문이다.
+
+<ConceptDiagram
+  width={440}
+  height={250}
+  caption="user data가 두 번째 부팅에 안 도는 이유"
+  nodes={[
+    { id: "boot1", label: "첫 부팅", sub: "새 인스턴스 ID", x: 110, y: 50, w: 150 },
+    { id: "run", label: "user data 실행", sub: "root로 한 번", x: 330, y: 50, w: 150 },
+    { id: "mark", label: "실행 기록 남김", sub: "/var/lib/cloud/instances", x: 220, y: 140, w: 200 },
+    { id: "boot2", label: "재부팅·재시작", sub: "같은 인스턴스 ID", x: 110, y: 210, w: 150 },
+    { id: "skip", label: "건너뜀", sub: "이미 했다고 판단", x: 330, y: 210, w: 150 },
+  ]}
+  edges={[
+    { from: "boot1", to: "run" },
+    { from: "run", to: "mark" },
+    { from: "mark", to: "boot2", dashed: true, label: "ID 비교" },
+    { from: "boot2", to: "skip" },
+  ]}
+/>
+
+매 부팅마다 돌게 하려면 cloud-config의 `cloud_final_modules`에 `[scripts-user, always]`를 주거나 MIME 멀티파트의 `#cloud-config`로 `scripts-per-boot`에 스크립트를 두면 된다. 하지만 대개는 매 부팅 스크립트를 쓰기보다 user data를 짧고 멱등하게(여러 번 돌아도 같은 결과) 유지하고, 무거운 설정은 AMI나 구성 관리 도구([Ansible](/posts/ansible-network-automation) 등)로 옮기는 편이 안전하다. user data가 길어질수록 부팅이 느리고 실패 지점이 늘어난다.
+
+디버깅은 로그로 한다. user data가 안 먹은 것 같으면 인스턴스 안에서 cloud-init 로그를 본다.
+
+```bash
+# user data 실행 로그 (실제 경로)
+sudo cat /var/log/cloud-init-output.log   # 스크립트의 stdout/stderr
+sudo cloud-init status --long             # 완료·실패 상태
+```
+
+## 시작 템플릿은 띄우는 방법을 버전으로 고정한다
+
+인스턴스를 띄울 때마다 AMI, 타입, 키 페어, 보안 그룹, user data, IAM 역할, 태그를 손으로 고르면 실수가 난다. 이걸 한 묶음으로 저장한 게 **시작 템플릿(launch template)**이다. 오토스케일링 그룹, `run-instances`, 스팟 요청이 모두 템플릿을 가리키게 하면 같은 방법으로 뜬다.
+
+시작 템플릿은 **버전**을 가진다. 한번 만든 버전은 바뀌지 않고, 바꾸려면 새 버전을 만든다. 오토스케일링 그룹이 `$Latest`를 가리키면 새 버전을 만드는 순간부터 새로 뜨는 인스턴스가 그걸 쓰고, `$Default`를 가리키면 기본으로 지정한 버전만 쓴다. 운영에서는 `$Default`를 가리키게 해서 "새 버전을 만들되, 검증 전까지는 기본을 바꾸지 않는" 식으로 롤아웃을 통제한다.
+
+```bash
+# 기존 템플릿에서 AMI만 바꾼 새 버전을 만든다 (형식 예시)
+aws ec2 create-launch-template-version \
+  --launch-template-id lt-0abc \
+  --source-version 3 \
+  --launch-template-data '{"ImageId":"ami-0new..."}'
+# 검증 뒤 기본 버전을 올린다
+aws ec2 modify-launch-template --launch-template-id lt-0abc --default-version 4
+```
+
+<Callout kind="note">
+"시작 구성(launch configuration)"이라는 옛 방식이 있었지만 변경 불가·버전 없음이라 지금은 쓰지 않는다. 신규는 전부 시작 템플릿으로 간다.
+</Callout>
+
+## 디스크는 수명이 다르다: EBS와 인스턴스 스토어
+
+인스턴스에 붙는 디스크는 성격이 둘로 갈린다. 이 차이를 모르면 "재부팅했더니 데이터가 사라졌다"를 겪는다.
+
+**EBS(Elastic Block Store)**는 네트워크로 붙는 볼륨이다. 인스턴스와 따로 존재해서, 인스턴스를 멈췄다 켜도 데이터가 남고, 인스턴스를 떼어 다른 인스턴스에 붙일 수도 있다. 스냅샷으로 백업한다. 대부분의 서버 데이터는 여기 둔다.
+
+**인스턴스 스토어**(이름에 `d`가 붙은 타입에 딸려 오는 로컬 NVMe)는 호스트 하드웨어에 물리적으로 붙은 디스크다. 매우 빠르지만 임시다. 인스턴스를 **멈추거나(stop) 종료하면(terminate) 사라진다.** 하드웨어 장애로 다른 호스트로 옮겨 가도 사라진다. 단, 단순 **재부팅(reboot)** 으로는 사라지지 않는다. 캐시, 임시 스크래치, 스풀처럼 잃어도 되는 데이터에만 쓴다.
+
+| 상황 | EBS 볼륨 | 인스턴스 스토어 |
+|---|---|---|
+| 재부팅 | 남음 | 남음 |
+| 중지(stop) 후 시작 | 남음 | 사라짐 |
+| 종료(terminate) | 설정에 따라(기본: 루트는 삭제) | 사라짐 |
+| 다른 인스턴스에 재부착 | 가능 | 불가 |
+
+EBS에도 함정이 있다. 루트 볼륨은 기본적으로 `DeleteOnTermination=true`라, 인스턴스를 종료하면 루트 볼륨도 함께 지워진다. 데이터를 담은 추가 볼륨은 이 값을 `false`로 두어 인스턴스가 사라져도 남게 한다.
+
+## 탄력적 IP와 공인 IPv4 요금
+
+인스턴스에 고정 공인 IP가 필요하면 **탄력적 IP(Elastic IP)**를 할당해 붙인다. 예전에는 "붙어서 쓰고 있으면 공짜, 할당만 해 두고 안 쓰면 유료"였다. 그런데 2024년 2월부터 AWS는 **쓰고 있든 아니든 모든 공인 IPv4 주소에 시간당 요금**(us-east-1 기준 약 $0.005/시간, 한 달 약 $3.6)을 매긴다. 탄력적 IP뿐 아니라 인스턴스에 자동 할당되는 공인 IPv4도 포함이다.
+
+그래서 요즘은 "인스턴스마다 공인 IP를 주던 습관"을 되돌아보게 됐다. 바깥에서 직접 닿을 필요가 없는 인스턴스는 공인 IP 없이 사설 서브넷에 두고, 바깥 접속은 로드 밸런서나 NAT를 앞에 두는 구성이 비용 면에서도 유리하다. 공인 IP가 꼭 필요한 입구만 탄력적 IP로 고정한다. IPv6로 옮길 수 있으면 IPv6 주소에는 이 요금이 없다. 자세한 비용 셈은 [클라우드 비용 줄이기](/posts/cloud-cost-optimization)에 있다.
+
+## 타입을 바꾸는 순서와 흔한 실수
+
+인스턴스 타입은 한 번 정하고 끝나는 게 아니다. 지표를 보고 바꾼다. 볼 숫자는 CPU 사용률의 p95(평균이 아니라 위쪽), 메모리 사용률, 네트워크·EBS 처리량이다. 메모리 사용률은 기본 EC2 지표에 없어서 CloudWatch 에이전트를 깔아야 보인다. 평균 CPU 10%에 메모리도 남으면 한 단계 작게, p95 CPU가 늘 80%를 넘으면 크게 또는 c 계열로 옮긴다.
+
+타입 변경은 EBS 기반 인스턴스라면 멈추고(stop) 타입을 바꾸고 다시 켜면 된다. 이때 걸리는 실수가 몇 가지 있다. 첫째, 멈추는 순간 인스턴스 스토어 데이터가 사라진다. 둘째, 탄력적 IP를 붙이지 않았다면 공인 IP가 바뀐다. 셋째, x86 AMI로 띄운 인스턴스를 Graviton 타입으로 바꿀 수는 없다. 아키텍처가 다르면 ARM용 AMI로 새로 띄워야 한다. 넷째, 오래된 AMI는 최신 세대가 요구하는 ENA·NVMe 드라이버가 없어 부팅이 안 될 수 있다.
+
+```bash
+# 타입 변경 순서 (형식 예시)
+aws ec2 stop-instances --instance-ids i-0abc123
+aws ec2 wait instance-stopped --instance-ids i-0abc123
+aws ec2 modify-instance-attribute --instance-id i-0abc123 --instance-type "{\"Value\": \"m7i.large\"}"
+aws ec2 start-instances --instance-ids i-0abc123
+```
+
+오토스케일링 그룹이라면 하나씩 손으로 바꾸지 않는다. 시작 템플릿에 새 버전을 만들어 타입을 바꾸고 인스턴스 새로 고침(instance refresh)으로 차례로 교체한다. 손으로 바꾼 인스턴스는 다음 스케일 아웃 때 옛 템플릿으로 다시 뜨기 때문이다.
+
+## 다시 금요일 오후로
+
+처음 문제로 돌아가자. `t3.micro`가 오후마다 느려진 것은 서버가 약해서가 아니라 버스트 크레딧이 떨어져 기준선으로 묶였기 때문이다. 오후 내내 바쁜 워크로드였으니 T 계열이 애초에 안 맞았다. 고정 성능 계열(`m` 또는 `c`)로 옮기거나, 튀는 구간이 짧으면 unlimited 모드와 크레딧 지표 감시로 넘긴다.
+
+인스턴스 하나를 띄우는 데 들어가는 결정을 정리하면 이렇다. 이름으로 성격(패밀리·세대·프로세서·크기)을 고르고, 버스트가 맞는지 따지고, 부팅을 빠르게 할 만큼 AMI에 굽고, user data는 짧고 멱등하게 두고(첫 부팅에만 돈다는 걸 잊지 않고), 띄우는 방법은 시작 템플릿 버전으로 고정하고, 데이터는 수명이 긴 EBS에, 임시 데이터만 인스턴스 스토어에 둔다. 이 틀을 잡아 두면 서버 한 대든 오토스케일링 수십 대든 같은 방식으로 재현된다.
+
+## 면접에서 나올 만한 질문
+
+### m7g.xlarge 같은 인스턴스 이름은 어떻게 읽나
+
+앞 글자가 패밀리(용도), 숫자가 세대, 그 뒤 글자가 프로세서·부가 속성(g=Graviton, i=인텔, a=AMD, n=네트워크 강화, d=로컬 인스턴스 스토어 등), 점 뒤가 크기다. m7g.xlarge는 범용 7세대 Graviton의 xlarge다. 성격을 알면 CPU 바운드엔 c, 메모리 바운드엔 r, x86 의존성이 없으면 더 싼 Graviton을 고르는 식으로 정할 수 있다.
+
+### 버스트형 인스턴스의 CPU 크레딧은 어떻게 작동하나
+
+1 크레딧은 vCPU 하나를 1분간 100%로 쓰는 양이다. 인스턴스는 시간당 정해진 크레딧을 벌고, 기준선(= 시간당 벌이 ÷ (vCPU×60))보다 적게 쓰면 쌓이고 더 쓰면 꺼내 쓴다. 적립 상한은 시간당 벌이의 24배다. 표준 모드에서 크레딧이 떨어지면 기준선 성능으로 묶이고, unlimited 모드에서는 성능을 계속 내 주되 번 것보다 더 쓴 만큼 추가 요금이 붙는다.
+
+### t3.micro가 오후마다 느려지는데 원인을 어떻게 짚나
+
+꾸준히 바쁜 워크로드가 버스트 크레딧을 소진해 기준선으로 묶인 경우가 흔하다. CloudWatch의 CPUCreditBalance가 특정 시각마다 0에 닿는지, CPUSurplusCreditBalance가 쌓이는지 본다. 잔고가 반복해서 0이면 T 계열이 안 맞는 신호다. 고정 성능 계열로 옮기거나, 짧게만 튀면 unlimited로 넘기고 서플러스 요금을 감시한다.
+
+### 골든 AMI를 굽는 것과 부팅 시 설치하는 것의 트레이드오프는
+
+골든 AMI는 설치·설정을 미리 끝내 두어 부팅이 빠르고, 대량으로 뜰 때 외부 저장소에 몰리지 않으며, 설치 실패로 부팅이 깨질 일이 적다. 대신 보안 패치마다 다시 구워야 해서 이미지가 금세 낡고 빌드 파이프라인이 필요하다. 실무에서는 섞는다. 자주 안 바뀌는 무거운 것(런타임, 에이전트)은 AMI에 굽고, 앱 코드·설정처럼 자주 바뀌는 것은 부팅 때 가져온다.
+
+### user data가 두 번째 부팅에 안 도는 이유는
+
+cloud-init이 인스턴스마다 실행 기록을 /var/lib/cloud/instances/에 남기고, 인스턴스 ID가 그대로면 "이미 했다"고 판단해 건너뛰기 때문이다. user data는 기본적으로 첫 부팅에만 한 번 돈다. 매 부팅 돌리려면 cloud-config의 cloud_final_modules에 always를 주거나 scripts-per-boot를 쓴다. 다만 보통은 user data를 짧고 멱등하게 두고 무거운 설정은 AMI나 구성 관리로 옮기는 편이 안전하다.
+
+### 시작 템플릿의 $Latest와 $Default 차이는
+
+시작 템플릿은 불변 버전을 쌓는다. 오토스케일링 그룹이 $Latest를 가리키면 새 버전을 만드는 즉시 새 인스턴스가 그 버전을 쓰고, $Default를 가리키면 기본으로 지정한 버전만 쓴다. 운영에서는 $Default를 가리키게 해서 새 버전을 만들어 검증한 뒤 기본 버전을 올리는 식으로 롤아웃을 통제한다.
+
+### EBS 볼륨과 인스턴스 스토어의 수명 차이는
+
+EBS는 네트워크로 붙는 독립 볼륨이라 인스턴스를 멈췄다 켜도 데이터가 남고 다른 인스턴스에 재부착할 수 있다. 인스턴스 스토어는 호스트에 물리적으로 붙은 로컬 디스크라 빠르지만, 중지·종료·하드웨어 교체 시 사라진다(재부팅으로는 유지). 영속 데이터는 EBS에, 캐시·임시 데이터만 인스턴스 스토어에 둔다. 참고로 EBS 루트 볼륨은 기본이 DeleteOnTermination=true라 추가 데이터 볼륨은 이 값을 false로 둔다.
+
+### 탄력적 IP는 요금이 어떻게 되나
+
+2024년 2월부터 AWS는 쓰고 있든 아니든 모든 공인 IPv4 주소에 시간당 요금(us-east-1 기준 약 $0.005/시간)을 매긴다. 탄력적 IP뿐 아니라 자동 할당 공인 IPv4도 포함이다. 그래서 바깥에서 직접 닿을 필요 없는 인스턴스는 공인 IP 없이 사설 서브넷에 두고 로드 밸런서·NAT를 앞세우며, 공인 IP가 필요한 입구만 탄력적 IP로 고정하는 구성이 비용에 유리하다. IPv6에는 이 요금이 없다.

@@ -1,0 +1,421 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("solid-principles");
+
+<EasyIntro>
+  학교 축제 준비를 한 사람이 다 맡았다고 해 보자. 무대 순서도, 간식 예산도, 안내 방송 문구도 그 사람 공책 한 권에 적혀 있다. 예산 담당 선생님이 간식비 계산법을 바꿔 달라고 해서 공책을 고쳤는데, 같은 숫자를 보던 무대 순서표가 함께 틀어진다.
+
+  SOLID는 이런 일을 줄이려고 코드를 나누는 다섯 가지 요령이다. 부탁하는 사람이 다르면 공책을 나누고, 새 일이 생기면 기존 쪽을 고치기보다 새 쪽을 끼워 넣을 수 있게 하고, 대신 들어가는 사람은 원래 사람이 하던 약속을 그대로 지키게 하고, 쓰지도 않는 일을 떠맡기지 않고, 중요한 계획이 자잘한 도구에 매이지 않게 한다.
+
+  다섯 가지를 모두 끝까지 지키면 공책이 너무 잘게 쪼개져서 어디에 뭐가 있는지 찾기 힘들어진다. 그래서 바뀌는 일이 실제로 생겼을 때, 그 바뀌는 자리를 기준으로 나누는 것이 가장 쓸모 있다.
+</EasyIntro>
+
+주문 서비스에 "간편결제 추가"라는 일감이 왔다. 결제 승인 코드만 붙이면 될 줄 알았는데, PR을 올려 보니 파일 다섯 개가 바뀌어 있다. 결제, 환불, 영수증, 수수료, 정산 리포트에 같은 `if (method === ...)`가 하나씩 있었기 때문이다. 리뷰어는 "환불 쪽은 테스트가 없네요"라고 하고, 테스트를 쓰려니 `OrderService`가 생성자에서 PostgreSQL 클라이언트와 SMTP 클라이언트를 직접 만들어서 DB 없이는 객체를 만들 수도 없다.
+
+이런 코드에 붙는 처방이 SOLID다. 로버트 마틴이 2000년 무렵 정리한 객체 지향 설계 원칙 다섯 개에 마이클 페더스가 앞 글자를 따 붙인 이름이다. 단일 책임(SRP), 개방-폐쇄(OCP), 리스코프 치환(LSP), 인터페이스 분리(ISP), 의존성 역전(DIP). 이 글은 다섯 원칙을 따로따로 외우는 대신 위의 주문 서비스 하나에 순서대로 적용한다. 원칙마다 어겼을 때 실제로 어떤 증상이 나오는지, 그리고 지나치게 지켰을 때 무엇을 잃는지 함께 본다.
+
+원칙들은 캡슐화, 추상화, 다형성 위에 서 있다. 그 개념이 낯설면 [객체 지향의 네 기둥 글](/posts/oop-four-pillars)을 먼저 보면 된다. 예제는 TypeScript이고, 출력은 모두 Node.js 22와 TypeScript 컴파일러로 직접 돌린 결과다.
+
+## 고칠 곳이 다섯 군데인 서비스
+
+출발점은 이 클래스다. 실제로는 1,200줄쯤 되는 파일을 줄여 놓은 모양이다.
+
+```ts
+class OrderService {
+  private db = new PgClient(process.env.DATABASE_URL);    // DB를 직접 만든다
+  private mailer = new SmtpMailer("smtp.internal:25");    // 메일도 직접 만든다
+
+  async placeOrder(cmd: PlaceOrder) { /* 가격 계산, 쿠폰, 결제, 저장, 메일 */ }
+  async cancelOrder(id: number)     { /* 상태 확인, 환불, 저장, 메일 */ }
+  receipt(order: Order)             { /* CS팀이 문구를 관리하는 고객 영수증 */ }
+  settlement(order: Order)          { /* 재무팀이 기준을 정하는 정산 금액 */ }
+  async monthlyReport(month: string){ /* 경영지원팀이 받는 엑셀 리포트 */ }
+}
+```
+
+증상은 이미 나와 있다. 결제 수단을 하나 더하면 여러 메서드의 분기를 고쳐야 하고, 테스트하려면 진짜 DB와 메일 서버가 필요하고, 서로 다른 팀의 요청이 한 파일에서 부딪힌다. 이제 원칙 하나씩 이 클래스를 고친다.
+
+## 단일 책임: 바꾸라고 하는 사람이 하나여야 한다
+
+단일 책임 원칙(SRP)은 흔히 "클래스는 한 가지 일만 해야 한다"로 알려져 있는데, 이 말은 기준이 모호하다. 주문 처리는 한 가지 일인가, 여러 가지 일인가. 마틴은 나중에 『클린 아키텍처』에서 이렇게 고쳐 말했다. 모듈은 오직 하나의 액터(actor)에게만 책임져야 한다. 액터는 그 코드를 바꿔 달라고 요구하는 사람들의 무리다. 클래스가 변경되는 이유가 하나뿐이어야 한다는 말은, 변경을 요구하는 쪽이 하나뿐이어야 한다는 뜻이다.
+
+`OrderService`의 `receipt`는 CS팀이, `settlement`는 재무팀이 바꾸라고 한다. 둘이 한 클래스에 있으면 무슨 일이 생기는지 보자. 두 메서드는 "할인 후 금액"을 구하는 비공개 메서드를 함께 쓴다.
+
+```ts
+private netAmount(o: Order): number {
+  const gross = o.items.reduce((s, i) => s + i.price * i.qty, 0);
+  return gross - o.couponOff;
+}
+
+receipt(o: Order): string {          // CS팀: 고객 영수증
+  const net = this.netAmount(o);
+  return `주문 ${won(net)} - 포인트 ${won(o.pointUsed)} = 카드 결제 ${won(net - o.pointUsed)}`;
+}
+
+settlement(o: Order): number {       // 재무팀: 정산 매출
+  return this.netAmount(o);
+}
+```
+
+재무팀이 요청한다. "포인트는 회사가 낸 돈이라 정산 매출에서 빼 주세요." 개발자는 정산 금액이 `netAmount`에서 나오는 걸 보고 거기에 `- o.pointUsed`를 더한다. 정산 테스트는 통과한다. 12,000원짜리 두 개와 5,000원짜리 하나, 쿠폰 3,000원, 포인트 4,000원인 주문으로 바꾸기 전과 후를 돌려 본다.
+
+```text
+변경 전 | 영수증: 주문 26,000원 - 포인트 4,000원 = 카드 결제 22,000원 | 정산: 26,000원
+변경 후 | 영수증: 주문 22,000원 - 포인트 4,000원 = 카드 결제 18,000원 | 정산: 22,000원
+```
+
+정산은 원하는 대로 22,000원이 됐다. 그런데 고객 영수증의 카드 결제 금액이 18,000원으로 바뀌었다. 실제로 카드에서 빠져나간 돈은 22,000원인데. 아무도 영수증을 건드리지 않았고, 영수증 테스트가 없었다면 고객 문의가 들어온 뒤에야 안다. 아래 그림에서 다음을 누르면 요청 하나가 어디까지 번지는지 따라간다.
+
+<AlgoTrace
+  caption="재무팀 요청 하나가 CS팀 영수증까지 바꾸는 길"
+  memoryLabel="바뀐 값"
+  cells={["재무팀 요청", "netAmount", "settlement()", "receipt()", "고객 영수증"]}
+  steps={[
+    { pointer: 0, memory: ["포인트 제외"], caption: "재무팀은 정산 매출에서 포인트를 빼 달라고 한다. 영수증 이야기는 없었다." },
+    { pointer: 1, memory: ["포인트 제외", "26,000 → 22,000"], caption: "개발자는 정산이 쓰는 공용 계산을 고친다. 같은 클래스 안의 비공개 메서드라 영향 범위가 작아 보인다." },
+    { pointer: 2, found: [2], memory: ["포인트 제외", "26,000 → 22,000", "정산 22,000 OK"], caption: "정산은 원하는 값이 된다. 재무팀 테스트도 통과한다." },
+    { pointer: 3, memory: ["포인트 제외", "26,000 → 22,000", "정산 22,000 OK", "영수증 주문 22,000"], caption: "영수증도 같은 계산을 쓰고 있었다. 주문 금액이 22,000원으로 바뀐다." },
+    { pointer: 4, memory: ["포인트 제외", "26,000 → 22,000", "정산 22,000 OK", "영수증 주문 22,000", "카드 18,000 (실제 22,000)"], caption: "포인트를 또 빼서 카드 결제가 18,000원으로 찍힌다. 다른 팀의 화면이 조용히 틀렸다." },
+  ]}
+/>
+
+고치는 방법은 액터마다 코드를 나누는 것이다. 정산 계산은 `SettlementCalculator`로, 영수증은 `ReceiptFormatter`로 옮긴다. 둘이 같은 계산을 쓰는 것처럼 보여도, 바뀌는 이유가 다르면 코드를 일부러 따로 둔다. 중복을 없애려고 합친 공용 함수가 서로 다른 액터를 묶어 버리는 것, 이것이 이 원칙이 막으려는 사고다. 그래서 SRP를 지키다 보면 "같아 보이는 코드 두 벌"을 그대로 두는 일이 생긴다. 지금은 같아도 앞으로 다르게 바뀔 코드라면 중복이 아니다.
+
+아래 코드는 재무팀 요청을 공용 계산에 넣은 상태다. 첫 테스트가 실패한다. 영수증과 정산이 각자 계산을 갖도록 나눠서 세 테스트를 모두 통과시켜 보자. `run`은 `[영수증 주문 금액, 영수증 카드 결제 금액, 정산 매출]`을 돌려준다.
+
+<CodePlayground
+  caption="액터마다 계산을 나눠 영수증 금액 되돌리기"
+  functionName="run"
+  initialCode={`// 영수증과 정산이 함께 쓰는 계산. 재무팀 요청으로 포인트를 뺐다
+function netAmount(order) {
+  const gross = order.items.reduce((s, i) => s + i.price * i.qty, 0);
+  return gross - order.couponOff - order.pointUsed;
+}
+
+// CS팀: 영수증의 주문 금액과 카드 결제 금액
+function receipt(order) {
+  const net = netAmount(order);
+  return { orderAmount: net, card: net - order.pointUsed };
+}
+
+// 재무팀: 정산 매출 (포인트 제외)
+function settlement(order) {
+  return netAmount(order);
+}
+
+function run(order) {
+  const r = receipt(order);
+  return [r.orderAmount, r.card, settlement(order)];
+}`}
+  solution={`function grossAmount(order) {
+  return order.items.reduce((s, i) => s + i.price * i.qty, 0);
+}
+
+// CS팀 것: 고객이 본 주문 금액은 쿠폰만 뺀 값
+function receipt(order) {
+  const orderAmount = grossAmount(order) - order.couponOff;
+  return { orderAmount, card: orderAmount - order.pointUsed };
+}
+
+// 재무팀 것: 정산 매출은 쿠폰과 포인트를 모두 뺀 값
+function settlement(order) {
+  return grossAmount(order) - order.couponOff - order.pointUsed;
+}
+
+function run(order) {
+  const r = receipt(order);
+  return [r.orderAmount, r.card, settlement(order)];
+}`}
+  tests={[
+    { label: "쿠폰 3천, 포인트 4천", args: [{ items: [{ price: 12000, qty: 2 }, { price: 5000, qty: 1 }], couponOff: 3000, pointUsed: 4000 }], expected: [26000, 22000, 22000] },
+    { label: "할인 없음", args: [{ items: [{ price: 9900, qty: 1 }], couponOff: 0, pointUsed: 0 }], expected: [9900, 9900, 9900] },
+    { label: "포인트로 전액", args: [{ items: [{ price: 30000, qty: 1 }], couponOff: 5000, pointUsed: 25000 }], expected: [25000, 0, 0] },
+  ]}
+/>
+
+풀이에서도 `grossAmount`는 함께 쓴다. 상품 가격 합계는 어느 팀이 바꾸라고 해도 함께 바뀌어야 하는 사실이라서다. 나누는 기준은 "같은 코드인가"가 아니라 "같은 이유로 바뀌는가"다.
+
+SRP는 응집도(cohesion)와 같은 이야기를 다른 쪽에서 한 것이다. 응집도는 모듈 안의 것들이 얼마나 같은 목적으로 묶여 있는지를 말하는데, SRP는 그 "같은 목적"의 기준을 "같은 사람이 바꾸라고 하는가"로 잡아 준다. 함께 바뀌는 것은 모으고, 따로 바뀌는 것은 떼어 놓는다.
+
+과하게 지키면 반대 증상이 나온다. 메서드 하나마다 클래스를 만들면 "한 가지 일"을 하는 클래스가 서른 개 생기고, 주문 하나가 어떻게 처리되는지 보려면 서른 개를 오가야 한다. 바꾸라고 하는 사람이 같으면 한 클래스에 있어도 된다. 나누는 시점은 실제로 서로 다른 팀의 요청이 한 파일에서 부딪히기 시작할 때로 잡는 편이 현실적이다.
+
+## 개방-폐쇄: 새 기능은 새 코드로 붙인다
+
+개방-폐쇄 원칙(OCP)은 버트런드 마이어가 1988년에 쓴 말이다. 소프트웨어는 확장에는 열려 있고 수정에는 닫혀 있어야 한다. 새 기능을 넣을 때 기존 코드를 고치지 않고 새 코드를 더하는 것으로 끝낼 수 있어야 한다는 뜻이다.
+
+처음의 간편결제 PR이 이 원칙을 어긴 모습이다. 결제 수단마다 갈라지는 코드가 다섯 파일에 있었다. 결제 수단을 `Payment` 모양 하나로 묶고 구현을 파일 하나씩에 두는 방법은 [객체 지향의 네 기둥 글](/posts/oop-four-pillars)과 [전략 패턴 글](/posts/pattern-strategy)에서 봤다. 여기서는 그 결과가 변경 범위에 어떻게 나타나는지 숫자로 본다. 같은 기능을 두 구조에 각각 넣고 `git diff --stat`을 봤다.
+
+```bash
+# 결제 수단마다 if로 갈라지는 구조에 kakaopay를 더한 뒤
+git diff --cached --stat
+```
+
+```text
+ src/checkout.ts   | 1 +
+ src/fee.ts        | 1 +
+ src/receipt.ts    | 1 +
+ src/refund.ts     | 1 +
+ src/settlement.ts | 1 +
+ 5 files changed, 5 insertions(+)
+```
+
+```bash
+# Payment 인터페이스와 구현 파일, 등록 표로 나눈 구조에 같은 기능을 더한 뒤
+git diff --cached --stat
+```
+
+```text
+ src/payments/kakaopay.ts | 9 +++++++++
+ src/payments/registry.ts | 3 ++-
+ 2 files changed, 11 insertions(+), 1 deletion(-)
+```
+
+바뀐 줄 수는 오히려 늘었다. OCP가 줄여 주는 건 줄 수가 아니라 기존 파일을 여는 횟수다. 앞의 구조는 이미 잘 돌던 결제·환불·정산 파일 다섯 개를 열었고, 그중 하나를 빠뜨려도 컴파일러가 알려 주지 않는다. 뒤의 구조는 새 파일 하나를 더하고 등록 표 한 줄만 고쳤다. 기존 결제 수단의 코드는 건드리지 않았으니 그 테스트를 다시 의심할 이유도 없다. `Payment` 인터페이스에 메서드가 다섯 개 있으니, 새 구현이 하나를 빠뜨리면 컴파일이 멈춘다.
+
+"수정에 닫혀 있다"는 말을 문자 그대로 받아들이면 안 된다. 등록 표는 수정했다. 무언가를 고르는 코드는 어딘가에 반드시 남는다. 그 고르는 코드를 한 곳에 모으고, 나머지는 바뀌지 않게 하는 것이 이 원칙이 실제로 하는 일이다.
+
+OCP의 비용은 예측이다. 확장 지점(인터페이스)은 "앞으로 이 방향으로 늘어날 것"이라는 짐작 위에 세운다. 결제 수단이 늘 거라는 짐작은 맞았지만, 만약 실제로 늘어난 게 "결제 수단마다 하는 일"이었다면 이 구조는 새 일마다 구현 파일을 전부 열어야 한다. 이 긴장은 [객체 지향의 네 기둥 글](/posts/oop-four-pillars)의 마지막 부분에서 `switch`와 비교했다. 그래서 확장 지점은 처음부터 만들기보다, 같은 방향의 변경이 두 번째로 왔을 때 만드는 편이 덜 틀린다.
+
+## 리스코프 치환: 대신 들어가도 약속을 지켜야 한다
+
+바바라 리스코프가 1987년에 제시한 원칙이다. 상위 타입의 객체를 하위 타입의 객체로 바꿔도 프로그램이 올바르게 동작해야 한다. "하위 타입은 상위 타입이다"를 문법이 아니라 동작으로 따지라는 말이다. OCP가 동작하려면 이 원칙이 먼저 지켜져야 한다. `Payment` 자리에 새 구현을 꽂아도 `Checkout`이 그대로 돌아야 기존 코드를 안 고칠 수 있다.
+
+가장 유명한 예는 정사각형과 직사각형이다. 수학에서는 정사각형이 직사각형의 한 종류니까 `Square extends Rectangle`이 자연스러워 보인다.
+
+```ts
+class Rectangle {
+  width = 0;
+  height = 0;
+  setWidth(w: number) { this.width = w; }
+  setHeight(h: number) { this.height = h; }
+  area() { return this.width * this.height; }
+}
+
+class Square extends Rectangle {
+  override setWidth(w: number) { this.width = w; this.height = w; }
+  override setHeight(h: number) { this.width = h; this.height = h; }
+}
+
+// Rectangle을 받는 쪽: 너비 5, 높이 4로 맞추면 넓이는 20이라고 믿는다
+function resizeBanner(r: Rectangle) {
+  r.setWidth(5);
+  r.setHeight(4);
+  return r.area();
+}
+
+console.log("Rectangle:", resizeBanner(new Rectangle()));
+console.log("Square:   ", resizeBanner(new Square()));
+```
+
+```text
+Rectangle: 20
+Square:    16
+```
+
+타입 검사는 통과한다. `Square`는 `Rectangle`의 모든 메서드를 가지고 있다. 그런데 `Rectangle`을 쓰는 쪽은 "너비를 바꿔도 높이는 그대로"라는 약속을 믿고 있었고, `Square`는 그 약속을 깼다. 문제는 `Square`가 아니라 "너비와 높이를 따로 바꿀 수 있다"는 동작을 가진 상위 타입이다. 값을 바꾸지 않는(불변) 도형이라면 정사각형이 직사각형의 하위 타입이어도 문제가 없다. LSP는 타입 이름이 아니라 그 타입이 약속한 동작에 대한 원칙이다.
+
+실무에서 더 자주 보는 위반은 이런 모양이다. 상위 타입이 약속한 메서드를 하위 타입이 예외로 막거나, 조용히 다르게 처리한다. 장바구니 저장소 인터페이스에 구현이 셋 있다고 하자. 메모리 구현, 10개까지만 저장하는 "최적화" 구현, 점검 중에 쓰는 읽기 전용 구현이다. 셋 다 `CartStore`를 구현하니 타입으로는 구분이 안 된다. 이럴 때 쓰는 것이 계약 테스트(contract test)다. 인터페이스가 약속하는 동작을 테스트 하나로 쓰고, 그 테스트를 모든 구현에 똑같이 돌린다.
+
+```ts
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+// MemoryCartStore, CappedCartStore(10개까지만), ReadOnlyCartStore(save에서 throw)는 위 설명대로 CartStore를 구현했다
+
+// 같은 계약 테스트를 모든 구현에 돌린다
+for (const make of [() => new MemoryCartStore(), () => new CappedCartStore(), () => new ReadOnlyCartStore()]) {
+  const name = make().constructor.name;
+  test(`${name}: 저장한 것을 그대로 돌려준다`, () => {
+    const store = make();
+    const items = Array.from({ length: 12 }, (_, i) => `item-${i}`);
+    store.save("u1", items);
+    assert.deepEqual(store.get("u1"), items);
+  });
+}
+```
+
+```bash
+# Node.js 내장 테스트 러너로 돌린다
+node --test --test-reporter=spec store-contract.test.ts
+```
+
+```text
+✔ MemoryCartStore: 저장한 것을 그대로 돌려준다 (1.899283ms)
+✖ CappedCartStore: 저장한 것을 그대로 돌려준다 (2.446784ms)
+✖ ReadOnlyCartStore: 저장한 것을 그대로 돌려준다 (0.176484ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 1
+ℹ fail 2
+```
+
+10개로 자르는 구현은 12개를 넣으면 10개만 돌려주고, 읽기 전용 구현은 `save`에서 예외를 던진다. 둘 다 `CartStore` 자리에 넣으면 그 자리를 쓰던 코드가 깨진다. 계약을 바꿀 수도 있다. "저장소는 최대 10개까지 저장할 수 있다"를 인터페이스 문서와 계약 테스트에 적고, 쓰는 쪽이 그걸 알고 쓰게 하면 그건 위반이 아니다. 읽기 전용은 아예 `ReadableCartStore`라는 더 좁은 모양으로 떼어 내는 편이 낫다. 이건 바로 다음 원칙과 이어진다.
+
+리스코프와 지넷 윙이 1994년에 이 원칙을 형식으로 정리할 때 쓴 규칙도 알아 두면 꼬리 질문에 답하기 좋다. 하위 타입은 선행 조건을 더 강하게 만들면 안 된다(상위가 받던 입력을 거절하면 안 된다). 후행 조건을 더 약하게 만들면 안 된다(상위가 보장하던 결과를 덜 보장하면 안 된다). 상위 타입의 불변식을 지켜야 한다. 정사각형은 "너비를 바꾸면 너비만 바뀐다"는 후행 조건을 약하게 만들었고, 읽기 전용 저장소는 `save`의 선행 조건을 "절대 부르지 마라"로 강하게 만들었다.
+
+## 인터페이스 분리: 쓰지 않는 메서드에 매이지 않게
+
+주문 취소 유스케이스에 테스트를 붙이려 한다. 취소는 주문을 찾고, 상태를 바꾸고, 저장하면 끝이다. 저장소의 메서드 두 개만 쓴다. 그런데 저장소 인터페이스는 이렇게 생겼다.
+
+```ts
+type Order = { id: number; status: string };
+
+interface OrderRepository {
+  findById(id: number): Promise<Order | null>;
+  save(order: Order): Promise<void>;
+  findByUser(userId: number, page: number): Promise<Order[]>;
+  searchForAdmin(query: string): Promise<Order[]>;
+  monthlySalesReport(month: string): Promise<Uint8Array>;
+  exportCsv(from: Date, to: Date): Promise<string>;
+}
+
+// 주문 취소 테스트용 가짜. 실제로 필요한 건 두 메서드뿐이다
+class FakeOrderRepository implements OrderRepository {
+  orders = new Map<number, Order>();
+  async findById(id: number) { return this.orders.get(id) ?? null; }
+  async save(order: Order) { this.orders.set(order.id, order); }
+}
+```
+
+```text
+isp.ts(13,7): error TS2420: Class 'FakeOrderRepository' incorrectly implements interface 'OrderRepository'.
+  Type 'FakeOrderRepository' is missing the following properties from type 'OrderRepository': findByUser, searchForAdmin, monthlySalesReport, exportCsv
+```
+
+취소 테스트를 쓰려면 관리자 검색과 월간 리포트까지 가짜로 만들어야 한다. 더 나쁜 건 변경이 번지는 방향이다. 경영지원팀이 리포트 형식을 바꿔 `monthlySalesReport`의 시그니처가 바뀌면, 리포트를 전혀 쓰지 않는 취소 유스케이스와 그 가짜 객체까지 다시 컴파일하고 고쳐야 한다. 인터페이스 분리 원칙(ISP)은 클라이언트가 자기가 쓰지 않는 메서드에 의존하지 않게 하라는 것이다.
+
+```ts
+interface OrderReader   { findById(id: number): Promise<Order | null>; }
+interface OrderWriter   { save(order: Order): Promise<void>; }
+interface OrderSearch   { findByUser(userId: number, page: number): Promise<Order[]>;
+                          searchForAdmin(query: string): Promise<Order[]>; }
+interface SalesReporting{ monthlySalesReport(month: string): Promise<Uint8Array>;
+                          exportCsv(from: Date, to: Date): Promise<string>; }
+
+class CancelOrder {
+  constructor(private readonly orders: OrderReader & OrderWriter) {}   // 필요한 것만 받는다
+}
+
+// 실제 PostgreSQL 구현은 전부 구현해도 된다. 나눈 건 쓰는 쪽에서 보는 모양이다
+class PgOrderRepository implements OrderReader, OrderWriter, OrderSearch, SalesReporting { /* ... */ }
+```
+
+구현 클래스를 쪼갤 필요는 없다. 쪼개는 건 쓰는 쪽이 보는 모양이다. 이 분리도 액터를 따른다. 리포트는 경영지원팀의, 검색은 관리자 화면의 요구로 바뀐다. 그래서 ISP는 인터페이스 쪽에서 본 SRP라고도 한다.
+
+과하게 지키면 메서드 하나짜리 인터페이스가 수십 개 생겨 이름 짓기와 조립이 일이 된다. 쓰는 쪽이 늘 함께 쓰는 메서드는 한 인터페이스에 둔다. TypeScript는 구조적 타입이라 `Pick<OrderRepository, "findById" | "save">`처럼 쓰는 쪽에서 필요한 부분만 골라 받는 방법도 있다. 미리 쪼개 두지 않아도 되는 셈이다.
+
+## 의존성 역전: 정책이 도구에 매이지 않게
+
+마지막 증상이 남았다. `OrderService`가 생성자에서 `new PgClient(...)`를 한다. 주문 규칙(정책)을 담은 코드가 PostgreSQL 드라이버(도구)를 직접 안다. DB 없이 테스트할 수 없고, 드라이버를 바꾸면 주문 규칙 파일을 고쳐야 한다.
+
+의존성 역전 원칙(DIP)은 두 문장이다. 상위 수준 모듈은 하위 수준 모듈에 의존하면 안 되고, 둘 다 추상에 의존해야 한다. 추상은 세부에 의존하면 안 되고, 세부가 추상에 의존해야 한다. 여기서 "역전"은 소스 코드의 의존 방향이 실행 흐름과 반대가 된다는 뜻이다. 그림으로 보는 게 빠르다.
+
+<ConceptDiagram
+  caption="호출은 오른쪽으로 가지만 import 화살표는 모두 정책 쪽을 향한다"
+  width={400}
+  height={250}
+  nodes={[
+    { id: "svc", label: "CancelOrder", sub: "주문 정책", x: 90, y: 50, w: 140 },
+    { id: "port", label: "OrderReader/Writer", sub: "정책이 정한 모양", x: 90, y: 190, w: 160 },
+    { id: "pg", label: "PgOrderRepository", sub: "PostgreSQL 세부", x: 300, y: 190, w: 160 },
+    { id: "main", label: "main.ts", sub: "조립", x: 300, y: 50, w: 120 },
+  ]}
+  edges={[
+    { from: "svc", to: "port", label: "import" },
+    { from: "pg", to: "port", label: "implements" },
+    { from: "main", to: "pg", label: "new" },
+    { from: "main", to: "svc", label: "new(repo)" },
+  ]}
+/>
+
+`CancelOrder`는 `OrderReader`와 `OrderWriter`만 import한다. `PgOrderRepository`가 그 인터페이스를 구현한다. 그래서 PostgreSQL 쪽 코드가 주문 정책 쪽을 import하고, 반대 방향의 import는 없다. 중요한 건 인터페이스의 주인이다. 인터페이스는 DB 패키지가 아니라 정책 쪽 모듈(예: `domain/` 또는 `application/` 폴더)에 둔다. 정책이 "나는 이런 모양이 필요하다"고 정하고, 세부가 그 모양에 맞춘다. 인터페이스를 `infra/postgres/` 폴더에 두면 이름만 인터페이스일 뿐 정책이 여전히 DB 쪽을 import하게 된다.
+
+실행할 때는 흐름이 반대로 간다. 아래 그림에서 다음을 누르면 요청 하나가 들어와 DB까지 가는 순서가 보인다.
+
+<SequenceDiagram
+  caption="실행 흐름은 정책에서 세부로 간다"
+  actors={[
+    { id: "main", label: "main.ts" },
+    { id: "uc", label: "CancelOrder" },
+    { id: "port", label: "OrderWriter" },
+    { id: "pg", label: "PgOrderRepository" },
+    { id: "db", label: "PostgreSQL" },
+  ]}
+  steps={[
+    { from: "main", to: "pg", label: "new Pg...(pool)", title: "조립하는 곳이 세부를 만든다", detail: "구체 클래스를 아는 곳은 프로그램 시작점 한 곳뿐이다. 여기서 DB 연결 풀도 만든다." },
+    { from: "main", to: "uc", label: "new CancelOrder(repo)", title: "정책에 꽂아 준다", detail: "CancelOrder는 받은 객체가 PostgreSQL인지 메모리 가짜인지 모른다. 테스트에서는 여기에 가짜를 넣는다." },
+    { from: "uc", to: "port", label: "save(order)", title: "정책은 모양대로 부른다", detail: "코드상으로는 인터페이스의 메서드를 부른다. 취소 규칙을 검사한 뒤 저장을 요청한다." },
+    { from: "port", to: "pg", label: "동적 디스패치", title: "실제 구현으로 간다", detail: "실행 중에는 꽂혀 있는 PgOrderRepository의 save가 돈다." },
+    { from: "pg", to: "db", label: "UPDATE orders ...", title: "세부가 SQL을 보낸다", detail: "SQL, 트랜잭션, 드라이버 오류 처리는 모두 이 클래스 안에 있다. 정책 쪽은 이걸 모른다.", payload: "UPDATE orders SET status = 'cancelled' WHERE id = $1" },
+  ]}
+/>
+
+이걸 의존성 주입(DI)과 헷갈리기 쉽다. DI는 객체가 필요한 것을 스스로 만들지 않고 바깥에서 받는 기법이다. 생성자로 받든, 컨테이너가 넣어 주든 상관없다. DIP는 의존의 방향과 추상의 주인에 대한 원칙이다. 둘은 따로 성립한다. `constructor(private db: PgClient)`처럼 구체 클래스를 생성자로 받으면 DI는 했지만 DIP는 아니다. 정책이 여전히 `PgClient`를 import한다. 반대로 컨테이너 없이 `main.ts`에서 손으로 `new`해서 넣어도 DIP는 지켜진다. 보통은 DIP로 방향을 정하고, DI로 그 구현을 꽂는다. 스프링이 이 "꽂는 일"을 어떻게 대신하는지는 [IoC 컨테이너와 DI 글](/posts/spring-ioc-di)에 있다.
+
+이 방향을 시스템 전체로 넓힌 것이 [클린 아키텍처](/posts/clean-architecture)의 의존 규칙과 [헥사고날 아키텍처](/posts/hexagonal-architecture)의 포트와 어댑터다. 원 하나, 육각형 하나가 결국 이 그림을 크게 그린 것이다.
+
+과하게 지키면 이렇게 된다. 모든 클래스 앞에 인터페이스를 하나씩 세운다. 구현이 하나뿐이고 바뀔 일도 없는 `PriceFormatter`에 `IPriceFormatter`를 만들면, 코드 탐색은 매번 인터페이스에서 끊기고 얻는 건 없다. 의존을 뒤집을 대상은 바뀔 가능성이 큰 것, 테스트에서 바꿔 끼워야 하는 것이다. DB, 외부 API, 메일, 시계, 난수 같은 프로그램 바깥과 닿는 경계가 대표적이다. 순수한 계산 코드는 구체 클래스를 바로 써도 된다.
+
+## 이미 커진 서비스에 들이는 순서
+
+새로 짜는 코드라면 처음부터 나눠 쓰면 되지만, 대개는 1,200줄짜리 `OrderService`를 물려받는다. 한 번에 다섯 원칙을 다 적용하려 들면 큰 리팩터링 PR이 생기고, 리뷰도 배포도 무서워진다. 순서를 정해 조금씩 간다.
+
+먼저 누가 이 파일을 바꾸는지 기록에서 찾는다. 커밋 메시지에 범위(scope)를 붙이는 팀이라면 이렇게 센다. 아래는 실험용 저장소에서 돌린 출력이다.
+
+```bash
+# order-service.ts를 바꾼 커밋의 범위(feat(settlement): ... 의 settlement)를 센다
+git log --format='%s' -- src/order-service.ts \
+  | sed -E 's/^[a-z]+\(([a-z]+)\).*/\1/; t; s/.*/(scope 없음)/' \
+  | sort | uniq -c | sort -rn
+```
+
+```text
+      3 settlement
+      2 report
+      2 receipt
+      1 (scope 없음)
+```
+
+정산, 리포트, 영수증이 한 파일을 번갈아 바꾸고 있다. 액터가 셋이라는 뜻이고, 떼어 낼 후보도 그 셋이다. 범위를 안 쓰는 팀이면 `git shortlog -sn HEAD -- 파일`로 사람 단위로 보고, 그 사람이 어느 팀인지 맞춰 본다.
+
+다음으로 떼어 낼 부분의 지금 동작을 테스트로 고정한다. 동작이 맞는지 틀리는지 따지지 않고, 지금 나오는 값을 그대로 기대값으로 적는 테스트다(characterization test). 그래야 옮기는 동안 동작이 바뀌었는지 안다. 그다음 액터 하나씩 클래스로 옮기고(SRP), 옮긴 클래스가 DB나 메일을 직접 만들고 있으면 그 자리만 인터페이스로 받게 바꾼다(DIP). 결제 수단 분기는 다음 결제 수단이 실제로 들어올 때 인터페이스로 묶는다(OCP). 테스트 피라미드에서 이 단위 테스트들이 어디에 서는지는 [테스트 피라미드 글](/posts/test-pyramid-unit-tests)에 있다.
+
+옮기는 동안 기존 `OrderService`의 메서드는 지우지 않고 새 클래스를 부르는 한 줄짜리로 남겨 둔다. 부르는 쪽 코드를 한꺼번에 바꾸지 않아도 되니 PR이 작아지고, 문제가 생기면 그 한 줄만 되돌리면 된다.
+
+## 원칙을 언제 꺼내나
+
+다섯 원칙을 다시 보면 모두 "변경"에 대한 이야기다. SRP는 바꾸라는 사람이 다른 코드를 떼어 놓고, OCP는 새 기능이 기존 파일을 열지 않게 하고, LSP는 바꿔 끼운 구현이 약속을 지키게 하고, ISP는 남의 변경에 휘말리지 않게 하고, DIP는 정책이 도구의 변경에 흔들리지 않게 한다. 그래서 변경이 없는 곳에 원칙을 적용하면 비용만 남는다.
+
+코드 리뷰에서 원칙 이름보다 쓸모 있는 건 증상이다. 한 PR이 서로 다른 팀의 요구를 동시에 건드린다(SRP). 기능 하나에 이미 잘 돌던 파일 여러 개를 연다(OCP). `instanceof`로 하위 타입을 검사하는 분기가 보이거나, 하위 클래스가 `throw new Error("not supported")`를 던진다(LSP). 테스트 가짜 객체에 빈 메서드가 줄줄이 있다(ISP). 정책 코드 파일 맨 위에 DB 드라이버나 HTTP 클라이언트 import가 있다(DIP). 이런 증상이 두 번째로 보일 때가 손댈 때다.
+
+처음의 `OrderService`는 결국 이렇게 나뉜다. 결제 수단은 `Payment` 구현으로, 정산과 영수증은 각자의 클래스로, 주문 취소는 필요한 저장소 모양만 받는 유스케이스로, DB와 메일은 바깥의 어댑터로. 간편결제를 붙이는 PR은 새 파일 하나와 등록 한 줄이 되고, 취소 테스트는 DB 없이 돈다.
+
+## 면접에서 나올 만한 질문
+
+### SOLID 원칙을 간단히 설명해 주세요.
+
+변경에 강한 객체 지향 설계를 위한 다섯 원칙이다. 단일 책임은 모듈이 한 액터에게만 책임지게 하고, 개방-폐쇄는 새 기능을 기존 코드 수정 없이 새 코드로 더하게 한다. 리스코프 치환은 하위 타입이 상위 타입의 동작 약속을 지키게 하고, 인터페이스 분리는 쓰지 않는 메서드에 의존하지 않게 하며, 의존성 역전은 정책이 세부가 아니라 정책 쪽이 정한 추상에 의존하게 한다.
+
+### 단일 책임 원칙의 "책임"은 무엇을 기준으로 나누나요?
+
+"한 가지 일"이 아니라 변경을 요구하는 액터 기준으로 나눈다. 영수증은 CS팀, 정산은 재무팀이 바꾸라고 한다면 같은 계산을 쓰더라도 코드를 따로 둔다. 둘이 공용 함수를 쓰면 재무팀 요청으로 그 함수를 고쳤을 때 영수증 금액까지 조용히 바뀐다. 응집도와 같은 이야기로, 함께 바뀌는 것은 모으고 따로 바뀌는 것은 떼어 놓는 기준을 준다.
+
+### 개방-폐쇄 원칙을 지키면 정말 기존 코드를 안 고치나요?
+
+아니다. 무엇을 고를지 정하는 코드(등록 표, 팩토리)는 어딘가에 남고 거기는 고친다. 원칙이 줄이는 건 줄 수가 아니라 이미 잘 돌던 파일을 여는 횟수다. 결제 수단을 if로 나누던 구조는 간편결제 하나에 파일 다섯 개를 고쳤고, 인터페이스로 나눈 구조는 새 파일 하나와 등록 한 줄로 끝났다. 확장 지점은 변경 방향을 짐작해 세우는 것이라, 같은 방향의 변경이 두 번째로 올 때 만드는 편이 덜 틀린다.
+
+### 리스코프 치환 원칙 위반의 예를 들고, 어떻게 잡아내나요?
+
+정사각형이 직사각형을 상속해 너비와 높이를 함께 바꾸면, 너비 5·높이 4를 설정하고 넓이 20을 기대하던 코드가 16을 받는다. 타입은 맞아도 "너비만 바뀐다"는 동작 약속을 깼다. 상위 메서드를 예외로 막는 읽기 전용 구현이나 조용히 값을 자르는 구현도 같은 위반이다. 인터페이스의 동작을 계약 테스트로 쓰고 모든 구현에 똑같이 돌리면 타입 검사가 못 잡는 위반을 잡는다. 선행 조건 강화, 후행 조건 약화, 불변식 위반이 판단 기준이다.
+
+### 인터페이스 분리 원칙을 지키면 구현 클래스도 쪼개야 하나요?
+
+아니다. 쪼개는 건 쓰는 쪽이 보는 모양이다. 주문 취소는 `OrderReader & OrderWriter`만 받고, 실제 PostgreSQL 구현 클래스는 검색과 리포트 인터페이스까지 모두 구현해도 된다. 그러면 취소 테스트의 가짜 객체는 두 메서드만 구현하면 되고, 리포트 시그니처가 바뀌어도 취소 쪽은 영향을 받지 않는다. TypeScript라면 `Pick`으로 필요한 부분만 골라 받을 수도 있다.
+
+### 의존성 역전 원칙과 의존성 주입은 무엇이 다른가요?
+
+DIP는 의존의 방향과 추상의 주인에 대한 원칙이고, DI는 필요한 객체를 바깥에서 받는 기법이다. 생성자로 `PgClient` 같은 구체 클래스를 받으면 DI는 했지만 정책이 여전히 DB 쪽을 import하니 DIP는 아니다. 컨테이너 없이 `main`에서 손으로 조립해도 인터페이스를 정책 쪽에 두고 세부가 구현하면 DIP는 지켜진다. 보통 DIP로 방향을 정하고 DI로 구현을 꽂는다.
+
+### SOLID를 과하게 적용하면 어떤 문제가 생기나요?
+
+구현이 하나뿐인 인터페이스, 메서드 하나짜리 클래스와 인터페이스가 쏟아져 코드를 따라가기 어려워진다. 확장 지점을 미리 세우면 실제 변경이 다른 방향으로 왔을 때 오히려 고칠 곳이 늘어난다. 원칙은 모두 변경에 대한 것이라 변경이 없는 곳에는 비용만 남는다. 서로 다른 팀의 요구가 한 파일에서 부딪히거나, 같은 방향의 변경이 반복되거나, 테스트에서 바꿔 끼워야 하는 경계가 생길 때 적용한다.

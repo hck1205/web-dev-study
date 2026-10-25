@@ -34,7 +34,7 @@ export const metadata = getPostMetadata("k8s-architecture");
 - **kube-proxy**: Service의 가상 IP로 온 트래픽이 실제 Pod로 가도록 노드의 iptables나 nftables 규칙을 만든다. CNI가 이 일을 대신하는 구성(Cilium 등)도 있다.
 - **컨테이너 런타임**: containerd나 CRI-O. kubelet과 CRI라는 gRPC 규약으로 이야기한다.
 
-이 구조에서 가장 중요한 규칙은 "API 서버만 etcd에 닿는다"이다. 스케줄러와 컨트롤러는 서로 직접 부르지 않는다. 모두 API 서버를 통해 오브젝트를 읽고(watch), 바꾸고(update), 그 변화를 다른 부품이 다시 watch로 받는다. 아래 그림에서 다음을 누르면 요청 하나가 이 길을 따라 퍼지는 모습을 볼 수 있다.
+이 구조에서 가장 중요한 규칙은 "API 서버만 etcd에 닿는다"이다. 스케줄러와 컨트롤러는 서로 직접 부르지 않는다. 모두 API 서버로 오브젝트를 읽고(watch), 바꾸고(update), 그 변화를 다른 부품이 다시 watch로 받는다. 아래 그림에서 다음을 누르면 요청 하나가 이 길을 따라 퍼지는 모습을 볼 수 있다.
 
 <NetworkTopology
   caption="부품들은 서로 부르지 않고, API 서버를 거쳐 오브젝트로 이야기한다"

@@ -1,0 +1,362 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("k8s-multi-cluster");
+
+<EasyIntro>
+  빵집이 장사가 잘돼서 지점을 여러 곳에 냈다고 해 보자. 가게 하나를 끝없이 키우는 대신 동네마다 작은 가게를 두면, 한 지점에 불이 나도 다른 지점은 문을 연다.
+
+  그런데 지점이 많아지면 새 일이 생긴다. 새 메뉴를 내면 모든 지점에 같은 레시피를 보내야 하고, 어느 지점이 어떤 레시피를 쓰는지 한눈에 알아야 한다.
+
+  가게 자체를 여는 일도 문서로 정해 둔다. 몇 평짜리 가게에 오븐 몇 대를 두는지 적어 두면, 본사가 그 문서대로 새 지점을 차려 준다.
+
+  어떤 지점에는 케이크 담당이 없어서 옆 지점에 주문을 넘겨야 할 때도 있다. 손님은 그냥 가까운 지점에 가고, 그 지점이 문을 닫았으면 다음으로 가까운 곳으로 안내받는다. 이 글은 쿠버네티스 클러스터가 이렇게 여러 개가 됐을 때 배포하고, 서로 부르고, 장애를 나누는 방법을 다룬다.
+</EasyIntro>
+
+처음에는 클러스터가 하나였다. 개발용을 따로 떼고, 스테이징을 만들고, 해외 사용자가 늘어 미국과 유럽 리전에 운영 클러스터를 하나씩 더 올렸다. 어느 날 아침 터미널에서 컨텍스트 목록을 띄우니 이렇게 나온다.
+
+```bash
+# kubeconfig에 등록된 컨텍스트 목록을 본다
+kubectl config get-contexts
+```
+
+```text
+CURRENT   NAME         CLUSTER      AUTHINFO           NAMESPACE
+*         dev-apne2    dev-apne2    dev-apne2-admin    shop
+          prod-apne2   prod-apne2   prod-apne2-admin   shop
+          prod-euw1    prod-euw1    prod-euw1-admin    shop
+          prod-use1    prod-use1    prod-use1-admin    shop
+          stg-apne2    stg-apne2    stg-apne2-admin    shop
+```
+
+다섯 개뿐인데도 벌써 위험하다. `*`가 붙은 줄이 지금 명령이 날아갈 곳이고, 그건 터미널 탭마다 기억해야 하는 숨은 상태다. 운영 클러스터에 `kubectl delete`를 칠 생각이 아니었는데 직전에 `use-context`를 바꿔 둔 걸 잊는 사고는 흔하다. 그래서 여러 클러스터를 다루는 팀은 명령마다 `--context`를 붙이는 습관부터 들인다.
+
+```bash
+# 현재 컨텍스트를 바꾸지 않고, 이 명령만 prod-use1로 보낸다
+kubectl --context prod-use1 -n shop get deploy
+
+# 지금 이 터미널이 어디를 보고 있는지 확인한다
+kubectl config current-context
+```
+
+이 글은 클러스터가 여럿이 된 다음의 일을 따라간다. 왜 나누는지, 같은 앱을 여러 곳에 어떻게 내려보내는지, 클러스터 자체를 어떻게 선언하는지, 클러스터 사이로 서비스를 어떻게 부르는지, 사용자를 어느 클러스터로 보내는지. 실습 환경에 클러스터 여러 개를 띄울 자원이 없어서 kubeconfig 조작만 직접 돌렸고, 나머지는 공식 문서의 리소스 형식대로 적었다.
+
+클러스터 하나를 이해하는 글은 따로 있다. 컨트롤 플레인 구성은 [쿠버네티스 아키텍처](/posts/k8s-architecture)에서, EKS 클러스터를 만드는 법은 [EKS 클러스터 기본](/posts/eks-cluster-basics)에서, ApplicationSet의 기초는 [ArgoCD 기본](/posts/argocd-basics)에서 다룬다.
+
+## 하나로 버티다가 나누게 되는 순간
+
+클러스터를 나누는 이유는 대부분 "한 번에 같이 망가지는 범위"를 줄이고 싶어서다. 클러스터 하나는 컨트롤 플레인 하나, etcd 하나, CNI 하나, 어드미션 웹훅 묶음 하나를 공유한다. 이 중 하나가 고장 나면 그 위의 모든 앱이 같이 흔들린다.
+
+실제로 나누게 되는 계기는 이런 것들이다.
+
+- 장애 격리: 잘못된 어드미션 웹훅이 모든 Pod 생성을 막거나, CNI 업그레이드가 실패하거나, 누군가 클러스터 범위 리소스(CRD, ClusterRole)를 지우면 클러스터 전체가 영향을 받는다. 운영과 개발이 같은 클러스터면 개발 실수가 운영을 멈춘다.
+- 리전과 지연: 컨트롤 플레인과 노드가 리전을 넘어 흩어지면 etcd 합의와 kubelet 하트비트가 리전 사이 지연을 그대로 맞는다. 쿠버네티스는 클러스터 하나를 한 리전(여러 존) 안에 두는 것을 전제로 만들어졌다.
+- 규제와 데이터 위치: 유럽 사용자의 개인정보는 유럽 안에서만 처리해야 하는 식의 요구가 있으면, 네임스페이스로 나누는 것보다 클러스터를 따로 두는 편이 증명하기 쉽다. 감사에서 "이 클러스터의 노드는 전부 eu-west-1에 있다"고 말할 수 있기 때문이다.
+- 업그레이드 위험: 쿠버네티스는 마이너 버전을 한 칸씩만 올릴 수 있고, 그 사이 사라지는 API가 있다([클러스터 업그레이드](/posts/k8s-cluster-upgrade)). 클러스터가 여럿이면 스테이징 → 작은 운영 클러스터 → 큰 운영 클러스터 순으로 올리며 문제를 먼저 발견할 수 있다.
+- 크기 한계: 쿠버네티스 공식 문서의 대규모 클러스터 기준은 노드 5,000대, Pod 15만 개, 노드당 Pod 110개다. 이 숫자 근처로 가기 전에 etcd 크기, API 서버의 watch 부하, 스케줄러 처리량이 먼저 아파진다.
+- 팀과 권한: 서로 다른 조직이 클러스터 관리자 권한을 따로 가져야 하거나, 노드 커널 설정처럼 네임스페이스로 나눌 수 없는 것을 다르게 가져가야 할 때.
+
+반대로 나누면 잃는 것도 분명하다. 컨트롤 플레인 비용이 클러스터 수만큼 든다(EKS는 클러스터마다 시간당 요금이 붙는다). 모니터링, 인증서, 애드온(CNI, CSI, 인그레스 컨트롤러, cert-manager) 버전을 클러스터마다 맞춰야 한다. 노드를 클러스터끼리 나눠 쓰지 못하니 여유 자원이 흩어져 전체 사용률이 떨어진다. 같은 클러스터 안이면 `Service` 이름 하나로 부르던 것이 클러스터를 넘으면 별도의 장치가 필요해진다. 이 글의 나머지가 그 장치들이다.
+
+## 같은 앱을 여러 클러스터에 내려보내기
+
+클러스터가 다섯 개면 배포도 다섯 번이다. 손으로 다섯 번 `kubectl apply`를 하면 언젠가 하나를 빼먹고, 클러스터마다 버전이 조금씩 달라지는 표류(drift)가 생긴다. 그래서 "어떤 클러스터에 무엇이 떠야 하는지"를 한곳에 선언하고, 도구가 그 선언을 각 클러스터에 맞춘다.
+
+방법은 크게 두 갈래다. 중앙의 도구가 각 클러스터 API 서버에 직접 접속해 리소스를 밀어 넣는 push 방식과, 각 클러스터에 에이전트를 두고 에이전트가 중앙에서 자기 몫을 가져가는 pull 방식이다. 아래 그림에서 왼쪽이 push, 오른쪽이 pull이다. 점이 흐르는 방향이 연결을 여는 쪽이다.
+
+<ConceptDiagram
+  width={400}
+  height={300}
+  caption="push는 허브가 각 클러스터 API에 접속하고, pull은 각 클러스터의 에이전트가 허브에 접속한다"
+  nodes={[
+    { id: "git", label: "git 저장소", sub: "원하는 상태", x: 200, y: 36, w: 140 },
+    { id: "argo", label: "ArgoCD", sub: "관리 클러스터", x: 100, y: 120, w: 130 },
+    { id: "hub", label: "Fleet·OCM 허브", sub: "관리 클러스터", x: 300, y: 120, w: 140 },
+    { id: "c1", label: "prod-apne2", sub: "API 서버", x: 55, y: 240, w: 100 },
+    { id: "c2", label: "prod-use1", sub: "API 서버", x: 150, y: 240, w: 90 },
+    { id: "a1", label: "에이전트", sub: "prod-euw1", x: 255, y: 240, w: 90 },
+    { id: "a2", label: "에이전트", sub: "edge-01", x: 350, y: 240, w: 90 },
+  ]}
+  edges={[
+    { from: "argo", to: "git", label: "읽기" },
+    { from: "hub", to: "git", label: "읽기" },
+    { from: "argo", to: "c1", label: "push" },
+    { from: "argo", to: "c2" },
+    { from: "a1", to: "hub", label: "pull" },
+    { from: "a2", to: "hub" },
+  ]}
+/>
+
+push 방식의 대표가 ArgoCD다. 관리용 클러스터 하나에 ArgoCD를 두고 나머지 클러스터를 등록한다. 등록된 클러스터는 ArgoCD 네임스페이스의 Secret 한 장이고, 그 Secret에 붙인 라벨이 뒤에서 배포 대상을 고르는 기준이 된다.
+
+```bash
+# kubeconfig의 컨텍스트를 ArgoCD에 클러스터로 등록한다
+# (대상 클러스터에 argocd-manager ServiceAccount와 권한을 만든다)
+argocd cluster add prod-use1 --name prod-use1 --label env=prod --label region=use1
+
+# 등록된 클러스터 목록과 연결 상태를 본다
+argocd cluster list
+```
+
+등록된 클러스터는 이런 Secret으로 남는다. 인증 정보가 들어가는 `config`는 생략했다. EKS라면 장기 토큰 대신 IAM 역할을 쓰는 `awsAuthConfig`를 넣는 편이 낫다.
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-prod-use1
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster   # 이 라벨이 있어야 클러스터로 인식한다
+    env: prod
+    region: use1
+stringData:
+  name: prod-use1
+  server: https://prod-use1.example.internal:6443
+  # config: 인증 정보(JSON). 여기서는 생략
+```
+
+이제 ApplicationSet의 클러스터 생성기가 라벨로 클러스터를 골라 클러스터마다 Application을 하나씩 찍어 낸다. git 폴더 생성기와 원리는 같고, 변수가 폴더 대신 클러스터 Secret에서 나온다.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: shop
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]   # 라벨이 빠진 클러스터면 조용히 넘어가지 말고 에러
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            env: prod                       # env=prod 라벨이 붙은 클러스터만
+  template:
+    metadata:
+      name: 'shop-{{.name}}'
+    spec:
+      project: shop
+      source:
+        repoURL: https://github.com/acme/shop-deploy.git
+        targetRevision: main
+        path: 'overlays/{{index .metadata.labels "region"}}'   # 리전별 overlay
+      destination:
+        server: '{{.server}}'
+        namespace: shop
+      syncPolicy:
+        automated:
+          selfHeal: true
+```
+
+새 리전에 클러스터를 만들고 `env=prod` 라벨로 등록하면, 아무것도 고치지 않아도 그 클러스터에 shop이 배포된다. 편한 만큼 위험도 같은 자리에 있다. 라벨 셀렉터를 고치다 실수하면 생성기가 빈 목록을 돌려주고, ApplicationSet은 그만큼의 Application을 지운다. [ArgoCD 기본](/posts/argocd-basics)에서 본 `preserveResourcesOnDeletion`은 여러 클러스터에서 더 중요해진다.
+
+push 방식의 약점은 연결 방향이다. ArgoCD가 모든 클러스터 API 서버에 닿아야 하니, API 서버를 사설망에만 열어 둔 클러스터나 공장·매장 같은 엣지 클러스터에는 길을 뚫어야 한다. 그리고 ArgoCD가 모든 클러스터의 관리자 자격을 쥐고 있으니, 관리 클러스터가 털리면 전부가 털린다.
+
+pull 방식은 이 방향을 뒤집는다. Rancher Fleet은 각 클러스터의 에이전트가 허브에 접속해 자기에게 배정된 묶음(Bundle)을 가져가 적용한다. Open Cluster Management(OCM)도 허브와 각 클러스터의 klusterlet 에이전트로 같은 구조를 만든다. 엣지 클러스터는 바깥으로 나가는 연결만 있으면 되고, 허브는 각 클러스터의 관리자 자격을 직접 들고 있지 않아도 된다. 대신 지금 각 클러스터가 어떤 상태인지는 에이전트가 보고해 줘야만 안다. 에이전트가 죽으면 허브 화면에서는 마지막으로 보고된 상태가 그대로 보인다.
+
+### 한 번에 다 내보내지 않는다
+
+여러 클러스터에 같은 것을 자동으로 맞춰 주는 도구는, 잘못된 것도 모든 클러스터에 똑같이 맞춰 준다. 클러스터를 나눈 이유가 장애 격리였는데, 배포 하나가 다섯 클러스터를 동시에 망가뜨리면 나눈 의미가 사라진다.
+
+그래서 운영에서는 배포를 파도처럼 나눈다. 스테이징 → 트래픽이 적은 운영 클러스터 하나 → 나머지 순으로, 단계 사이에 오류율을 보고 넘어간다. 방법은 몇 가지다.
+
+- git에서 나눈다: overlay를 클러스터 그룹별로 두고, 새 이미지 태그를 그룹마다 따로 올리는 PR로 낸다. 가장 단순하고 도구에 기대지 않는다.
+- ApplicationSet의 Progressive Syncs: `strategy.type: RollingSync`에 단계별 라벨 조건을 적으면 앞 단계 Application이 Healthy가 된 뒤에 다음 단계를 동기화한다. 컨트롤러 설정으로 켜야 하는 기능이고 버전마다 성숙도가 달라서, 쓰는 버전의 문서를 확인하고 들인다.
+- Fleet의 롤아웃 설정이나 별도 배포 도구(Argo Rollouts, Flagger)로 클러스터 안의 카나리를 함께 건다.
+
+## 클러스터 자체를 선언하는 Cluster API
+
+앱은 git으로 선언하는데 클러스터는 콘솔에서 클릭하거나 스크립트로 만들면, 클러스터마다 노드 크기와 버전과 네트워크 설정이 조금씩 달라진다. Cluster API(CAPI)는 클러스터 자체를 쿠버네티스 리소스로 선언한다. 관리 클러스터에 `Cluster`, `MachineDeployment` 같은 리소스를 만들면, CAPI 컨트롤러와 인프라 공급자(AWS용 CAPA, Azure용 CAPZ, vSphere용 CAPV 등)가 그걸 보고 실제 VM과 로드 밸런서를 만든다. [컨트롤러가 원하는 상태로 맞추는](/posts/k8s-controllers-reconcile) 방식을 클러스터 단위로 넓힌 것이다.
+
+```bash
+# 관리 클러스터에 CAPI 코어와 AWS 공급자를 설치한다
+clusterctl init --infrastructure aws
+
+# 템플릿으로 새 워크로드 클러스터의 매니페스트를 만든다
+clusterctl generate cluster prod-euw1 \
+  --kubernetes-version v1.33.4 \
+  --control-plane-machine-count 3 \
+  --worker-machine-count 3 > prod-euw1.yaml
+
+# 관리 클러스터에 적용하면 컨트롤러가 VM과 컨트롤 플레인을 만든다
+kubectl --context mgmt apply -f prod-euw1.yaml
+
+# 만들어진 클러스터의 kubeconfig를 꺼낸다
+clusterctl get kubeconfig prod-euw1 > prod-euw1.kubeconfig
+```
+
+생성된 매니페스트의 중심은 `Cluster` 하나다. 컨트롤 플레인을 어떻게 만들지(`controlPlaneRef`)와 인프라를 어디에 만들지(`infrastructureRef`)를 다른 리소스로 가리킨다. 아래는 구조만 보이게 줄인 것이다. API 버전은 CAPI 릴리스마다 다르니(v1.11부터 v1beta2가 들어왔다) `clusterctl generate`가 만들어 준 것을 그대로 쓴다.
+
+```yaml
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: prod-euw1
+  namespace: fleet
+  labels:
+    env: prod            # 이 라벨로 ArgoCD 등록, 애드온 배포 대상을 고른다
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks: ["192.168.0.0/16"]
+  controlPlaneRef:       # 컨트롤 플레인 3대: KubeadmControlPlane
+    kind: KubeadmControlPlane
+    name: prod-euw1-control-plane
+  infrastructureRef:     # VPC·서브넷·로드 밸런서: AWSCluster
+    kind: AWSCluster
+    name: prod-euw1
+```
+
+이렇게 해 두면 클러스터 업그레이드도 선언이 된다. `KubeadmControlPlane`의 `version`을 올리면 컨트롤러가 새 버전 머신을 하나 만들고 옛 머신을 하나 지우는 식으로 컨트롤 플레인을 갈아 끼운다. 노드도 `MachineDeployment`의 버전을 바꾸면 Deployment가 Pod를 굴리듯 머신을 굴린다. ClusterClass를 쓰면 "운영 클러스터 표준"을 한 번 정의하고 클러스터마다 변수만 다르게 줄 수 있다.
+
+조심할 것은 관리 클러스터다. 워크로드 클러스터의 생명줄이 관리 클러스터에 있으니, 관리 클러스터는 작고 단단하게 두고 앱을 올리지 않는다. 관리 클러스터가 잠깐 죽어도 워크로드 클러스터는 계속 돈다. 만들어진 VM과 컨트롤 플레인은 그대로이고, 새로 만들거나 고치는 일만 멈춘다. 다만 관리 클러스터의 리소스를 잃으면 어떤 VM이 어느 클러스터 것인지의 기록도 같이 잃으니 `clusterctl move`나 etcd 백업으로 옮기고 지킬 방법을 정해 둔다. EKS·GKE 같은 관리형 클러스터만 쓴다면 CAPI 대신 Terraform이나 Crossplane으로 선언하는 팀도 많다. 같은 질문(클러스터를 코드로 남기는가)에 대한 다른 답이다.
+
+## 다른 클러스터의 서비스를 이름으로 부르기
+
+결제 서비스는 데이터 위치 때문에 유럽 클러스터에만 있고, 주문 서비스는 모든 클러스터에 있다고 하자. 미국 클러스터의 주문 서비스가 결제를 부르려면 유럽 클러스터의 결제 서비스 주소를 알아야 한다. 클러스터 안이었다면 `payments.shop.svc.cluster.local`로 끝났을 일이다([CoreDNS](/posts/k8s-coredns)).
+
+쿠버네티스 SIG Multicluster가 정한 Multi-Cluster Services API(MCS API)는 이걸 리소스 두 개로 약속한다. 서비스를 내보내는 쪽 클러스터에 `ServiceExport`를 만들면, 같은 묶음(ClusterSet)의 다른 클러스터에 `ServiceImport`가 생기고 `clusterset.local` 이름이 풀린다. API 자체는 약속일 뿐이고, 실제로 엔드포인트를 퍼뜨리고 길을 이어 주는 건 구현체다. GKE의 Multi-cluster Services, Submariner의 Lighthouse, Cilium ClusterMesh, AWS Cloud Map MCS 컨트롤러 같은 것들이다. 구현체마다 API 그룹이 다를 수 있다(GKE는 `net.gke.io`를 쓴다).
+
+```yaml
+# 유럽 클러스터: shop/payments 서비스를 ClusterSet에 내보낸다
+apiVersion: multicluster.x-k8s.io/v1alpha1
+kind: ServiceExport
+metadata:
+  name: payments      # 같은 네임스페이스의 같은 이름 Service를 내보낸다
+  namespace: shop
+```
+
+아래 그림은 내보내기부터 미국 클러스터의 호출까지를 단계로 보여 준다. 다음을 누르면 화살표가 차례로 그려진다.
+
+<SequenceDiagram
+  caption="ServiceExport 하나로 다른 클러스터에서 clusterset.local 이름이 풀리기까지"
+  actors={[
+    { id: "eu", label: "유럽 클러스터" },
+    { id: "mcs", label: "MCS 구현체" },
+    { id: "us", label: "미국 클러스터" },
+    { id: "app", label: "주문 Pod" },
+  ]}
+  steps={[
+    { from: "eu", to: "eu", label: "ServiceExport", title: "내보낸다고 표시한다", detail: "유럽 클러스터의 shop 네임스페이스에 payments라는 ServiceExport를 만든다. Service 자체는 손대지 않는다." },
+    { from: "eu", to: "mcs", label: "엔드포인트", title: "구현체가 엔드포인트를 모은다", detail: "구현체의 컨트롤러가 내보낸 서비스의 엔드포인트(Pod IP나 게이트웨이 주소)를 읽어 ClusterSet 전체에 퍼뜨린다." },
+    { from: "mcs", to: "us", label: "ServiceImport", title: "다른 클러스터에 가져오기가 생긴다", detail: "미국 클러스터의 같은 네임스페이스 shop에 ServiceImport payments가 생기고, EndpointSlice가 함께 만들어진다.", payload: "kind: ServiceImport\nspec:\n  type: ClusterSetIP\n  ports:\n  - port: 443" },
+    { from: "app", to: "us", label: "DNS 질의", title: "새 이름으로 묻는다", detail: "주문 Pod가 clusterset.local 이름을 묻는다. cluster.local 이름은 여전히 자기 클러스터 안의 서비스만 가리킨다.", payload: "payments.shop.svc.clusterset.local" },
+    { from: "us", to: "app", label: "ClusterSet IP", title: "가져온 서비스의 주소를 받는다", detail: "구현체가 붙여 둔 DNS 플러그인이 ServiceImport의 IP를 돌려준다. 같은 서비스를 여러 클러스터가 내보냈다면 엔드포인트가 합쳐져 있다." },
+    { from: "app", to: "eu", label: "HTTPS", title: "클러스터를 넘어 호출한다", detail: "Pod 네트워크가 직접 이어져 있으면 Pod IP로, 아니면 게이트웨이나 터널을 거쳐 유럽의 결제 Pod에 닿는다." },
+  ]}
+/>
+
+여기서 MCS API가 기대하는 전제가 하나 있다. 네임스페이스 동일성(namespace sameness)이다. ClusterSet 안의 모든 클러스터에서 같은 이름의 네임스페이스는 같은 주인, 같은 의미를 가져야 한다. 미국 클러스터의 `shop`과 유럽 클러스터의 `shop`이 다른 팀 것이면, 내보낸 서비스가 엉뚱한 팀의 서비스와 섞인다. 클러스터를 처음 만들 때부터 네임스페이스 이름 규칙을 클러스터 전체에서 맞춰 두는 이유다.
+
+두 번째 전제는 네트워크다. 엔드포인트가 Pod IP라면 클러스터 사이에 Pod 대역이 겹치지 않고 서로 라우팅되어야 한다. VPC 피어링이나 Transit Gateway로 묶은 같은 클라우드 안이면 가능하지만, 처음부터 Pod CIDR을 클러스터마다 다르게 잡지 않았다면 나중에 맞추기가 거의 불가능하다. 겹친다면 Submariner의 Globalnet처럼 주소를 바꿔 주는 기능이나 게이트웨이를 거치는 구조를 쓴다.
+
+## 메시를 클러스터 너머로 넓히면
+
+이미 서비스 메시를 쓰고 있다면 클러스터 사이 연결을 메시에 맡길 수도 있다. [서비스 메시](/posts/service-mesh)에서 본 사이드카(또는 ambient 모드의 ztunnel)가 다른 클러스터의 엔드포인트까지 알게 하면, 앱은 평소처럼 서비스 이름을 부르고 메시가 어느 클러스터로 보낼지 정한다.
+
+Istio를 예로 들면 정할 것이 셋이다.
+
+- 컨트롤 플레인 배치: 클러스터마다 istiod를 두는 multi-primary와, 한 클러스터의 istiod가 다른 클러스터까지 관리하는 primary-remote가 있다. multi-primary는 컨트롤 플레인 장애가 클러스터 안에 갇히고, primary-remote는 운영할 istiod가 하나라 단순하지만 primary가 죽으면 remote 클러스터의 설정 갱신이 멈춘다.
+- 신뢰: 클러스터마다 인증서를 따로 찍으면 서로의 mTLS 인증서를 믿지 못한다. 모든 클러스터의 Istio CA가 같은 루트 CA 아래의 중간 CA를 쓰게 맞춘다.
+- 네트워크: Pod끼리 직접 닿지 않는 다른 네트워크라면 클러스터마다 east-west 게이트웨이를 두고, 다른 클러스터로 가는 요청은 그 게이트웨이(기본 포트 15443)를 거쳐 들어간다. 각 istiod가 다른 클러스터의 엔드포인트를 읽을 수 있도록 `istioctl create-remote-secret`으로 상대 API 서버 접근 정보를 넣어 준다.
+
+메시를 넓혔을 때 얻는 가장 큰 것은 지역 우선 장애 조치(locality failover)다. 평소에는 같은 존, 같은 리전의 엔드포인트로 보내고, 그곳의 엔드포인트가 이상치 감지(outlier detection)로 빠지면 다음 리전으로 넘긴다. 아래 그림의 단계를 넘기면 서울 클러스터의 결제 Pod가 빠졌을 때 요청이 도쿄로 넘어가는 경로가 그려진다.
+
+<NetworkTopology
+  width={400}
+  height={300}
+  caption="평소에는 같은 클러스터로, 그곳 엔드포인트가 빠지면 east-west 게이트웨이를 거쳐 다른 리전으로"
+  zones={[
+    { id: "seoul", label: "prod-apne2 (서울)", x: 8, y: 20, w: 184, h: 270, tone: "private" },
+    { id: "tokyo", label: "prod-apne1 (도쿄)", x: 208, y: 20, w: 184, h: 270, tone: "private" },
+  ]}
+  nodes={[
+    { id: "order", label: "주문 Pod", sub: "사이드카", x: 70, y: 80, icon: "container" },
+    { id: "pay1", label: "결제 Pod", sub: "서울", x: 70, y: 230, icon: "container" },
+    { id: "ew1", label: "E-W GW", sub: ":15443", x: 150, y: 160, icon: "gateway" },
+    { id: "ew2", label: "E-W GW", sub: ":15443", x: 250, y: 160, icon: "gateway" },
+    { id: "pay2", label: "결제 Pod", sub: "도쿄", x: 330, y: 230, icon: "container" },
+  ]}
+  links={[
+    { from: "order", to: "pay1" },
+    { from: "order", to: "ew1", dashed: true },
+    { from: "ew1", to: "ew2", label: "mTLS" },
+    { from: "ew2", to: "pay2" },
+  ]}
+  steps={[
+    { path: ["order", "pay1"], packet: "POST", title: "평소에는 같은 리전으로", detail: "지역 우선 라우팅이 켜져 있으면 사이드카는 같은 리전의 결제 엔드포인트를 먼저 고른다. 리전 사이 지연과 전송 요금이 들지 않는다." },
+    { path: ["order", "pay1"], packet: "POST", blocked: true, title: "서울 결제 Pod가 5xx를 낸다", detail: "연속 오류가 이상치 감지 기준을 넘으면 사이드카가 그 엔드포인트를 잠시 빼 둔다. 이상치 감지가 없으면 장애 조치도 일어나지 않는다.", payload: "outlierDetection:\n  consecutive5xxErrors: 5\n  interval: 10s\n  baseEjectionTime: 30s" },
+    { path: ["order", "ew1", "ew2", "pay2"], packet: "POST", highlight: ["tokyo"], title: "다음 리전으로 넘어간다", detail: "같은 리전에 건강한 엔드포인트가 없으니 도쿄의 엔드포인트를 고른다. 요청은 양쪽 east-west 게이트웨이를 거쳐 mTLS로 들어간다." },
+    { path: ["pay2"], highlight: ["ew2", "pay2"], title: "도쿄가 두 리전 몫을 받는다", detail: "서울의 결제 트래픽이 전부 도쿄로 온다. 도쿄의 결제 Pod와 DB가 그만큼을 감당할 여유가 없으면 장애가 옮겨 갈 뿐이다." },
+  ]}
+/>
+
+마지막 단계가 실무에서 자주 놓치는 부분이다. 장애 조치는 트래픽을 옮겨 줄 뿐 용량을 만들어 주지 않는다. 두 리전이 각각 60%로 돌고 있었다면, 한쪽이 빠지는 순간 남은 쪽은 120%를 받는다. HPA와 노드 오토스케일러가 따라오는 몇 분 동안 버틸 여유를 평소에 남겨 두거나, 장애 조치 대상 리전의 최소 레플리카를 넉넉히 잡아 둔다.
+
+MCS API와 메시 멀티 클러스터 중 무엇을 고를지는 이미 가진 것에 달려 있다. 메시를 쓰지 않는데 클러스터 사이 호출 몇 개가 필요하다면 MCS 구현체가 가볍다. 이미 메시로 mTLS와 재시도 정책을 관리하고 있다면 메시를 넓히는 편이 정책을 한곳에 둔다. 둘 다 클러스터 사이 Pod 대역, 인증서 신뢰, DNS라는 같은 숙제를 남긴다.
+
+## 사용자를 어느 클러스터로 보낼까
+
+클러스터 사이 호출이 서비스끼리의 이야기라면, 바깥 사용자를 어느 클러스터로 보낼지는 그 앞단의 이야기다. 리전마다 클러스터가 있으면 보통 리전마다 로드 밸런서가 하나씩 있고, 그 위에서 사용자를 고른다.
+
+- DNS 기반: Route 53의 지연 시간 기반 라우팅과 헬스 체크로 가까운 리전의 로드 밸런서 주소를 답한다. 바뀐 답이 리졸버 캐시를 거쳐 퍼지는 시간이 있다. 이 시간 계산은 [Route 53 라우팅 정책](/posts/route53-routing-policies)에서 자세히 다룬다.
+- 애니캐스트 기반: AWS Global Accelerator나 GCP의 글로벌 외부 로드 밸런서처럼 고정 IP 하나를 여러 리전에서 광고하고, 클라우드의 백본이 가까운 리전으로 보낸다. DNS 캐시를 기다리지 않으니 장애 조치가 빠르다([CDN과 애니캐스트](/posts/cdn-edge-anycast)).
+- 쿠버네티스 쪽에서 묶기: GKE의 멀티 클러스터 Gateway처럼 Gateway API 리소스 하나로 여러 클러스터의 서비스를 한 로드 밸런서 뒤에 두는 방식도 있다. 클러스터를 넘는 Gateway는 아직 클라우드마다 구현이 달라서, 쓰는 클라우드의 지원 범위를 먼저 본다.
+
+어느 쪽이든 앞단의 헬스 체크가 무엇을 보는지가 중요하다. 로드 밸런서가 살아 있는지만 보면, 클러스터 안의 앱이 전부 503을 내도 그 리전으로 계속 보낸다. 헬스 체크 경로는 그 리전에서 핵심 기능이 실제로 되는지를 반영하되, 의존성 하나가 잠깐 느려졌다고 리전 전체가 빠지지 않도록 너무 깊게 엮지 않는다.
+
+그리고 데이터가 따라오는지 확인한다. 사용자를 도쿄로 넘겼는데 그 사용자의 세션과 DB가 서울에만 있으면, 앱은 떴어도 기능은 죽어 있다. 상태를 어디에 두고 리전 사이에 어떻게 복제할지는 클러스터보다 큰 질문이라 [멀티 리전](/posts/multi-region)과 [재해 복구](/posts/disaster-recovery)에서 이어 간다.
+
+## 여러 클러스터에서 생기는 장애와 실수
+
+클러스터를 나눠도 같이 망가지는 길은 남아 있다. 겪기 쉬운 것들을 증상과 함께 적어 둔다.
+
+같은 변경이 모든 클러스터에 한꺼번에 나간다. 앞에서 본 대로 ApplicationSet이나 Fleet이 잘못된 매니페스트를 모든 운영 클러스터에 동시에 맞춘다. 증상은 "모든 리전에서 같은 시각에 같은 에러"다. 클러스터를 나눈 이유를 지키려면 배포를 단계로 나눠야 한다.
+
+공유 의존성이 하나다. 클러스터는 다섯 개인데 이미지 레지스트리, 인증서 발급, 외부 DNS, 시크릿 저장소, 관리 클러스터가 하나씩이면 그게 진짜 단일 장애점이다. 레지스트리가 죽으면 이미 떠 있는 Pod는 괜찮지만, 노드가 바뀌거나 스케일 아웃할 때 모든 클러스터에서 동시에 `ImagePullBackOff`가 난다. 레지스트리 복제(리전별 미러)와 풀스루 캐시를 둔다.
+
+클러스터마다 애드온 버전이 다르다. 어떤 클러스터의 인그레스 컨트롤러만 옛 버전이라 같은 매니페스트가 거기서만 다르게 동작한다. 애드온도 앱처럼 git과 ApplicationSet으로 배포해 클러스터 목록과 버전을 한 화면에서 보게 한다.
+
+관측이 클러스터마다 끊긴다. 지표와 로그가 클러스터마다 따로 쌓이면 "전체 리전 오류율"을 한 번에 볼 수 없다. Prometheus를 클러스터마다 두고 remote_write로 한곳(Thanos, Mimir 등)에 모으는 구조는 [Prometheus 기본](/posts/prometheus-basics)에 있다. 이때 모든 시계열에 `cluster` 라벨을 붙여야 어느 클러스터 이야기인지 구분된다. 처음에 이 라벨을 빼먹으면 서로 다른 클러스터의 같은 이름 Pod가 한 시계열로 섞인다.
+
+컨텍스트를 헷갈린다. 맨 처음 장면이다. 명령마다 `--context`를 쓰고, 셸 프롬프트에 현재 컨텍스트를 띄우고, 운영 클러스터의 사람 계정 권한은 읽기 위주로 둔다. 쓰기는 GitOps 경로로만 가게 하면 실수할 기회 자체가 줄어든다.
+
+## 큰 클러스터 하나와 작은 클러스터 여럿 사이
+
+정답은 둘 중 하나가 아니라 그 사이 어딘가다. 큰 클러스터 하나에 네임스페이스로 팀을 나누면 자원 사용률이 높고 운영할 대상이 적다. 대신 컨트롤 플레인과 클러스터 범위 리소스의 장애가 모두에게 번지고, 업그레이드를 한 번에 해야 한다. 작은 클러스터를 여럿 두면 장애와 업그레이드가 갇히고 규제를 증명하기 쉽다. 대신 컨트롤 플레인 비용, 애드온 관리, 클러스터 사이 연결이라는 고정비가 클러스터 수만큼 늘어난다.
+
+그래서 흔히 보는 모양은 "리전마다, 환경마다 하나씩"이다. 운영과 비운영을 나누고, 리전을 나누고, 그 안에서는 네임스페이스로 팀을 나눈다. 정말 격리가 필요한 것(결제처럼 규제가 있는 서비스, 멀티테넌트 SaaS의 큰 고객)만 클러스터를 따로 뗀다. 클러스터 수가 늘기 시작하면 그때부터는 클러스터를 손으로 만들지 않도록 Cluster API나 Terraform으로 선언하고, 배포를 ApplicationSet이나 Fleet으로 묶고, 관측을 한곳에 모으는 일을 먼저 한다. 클러스터를 나누는 비용 대부분은 클러스터 자체가 아니라 이 공통 작업을 안 했을 때 생긴다.
+
+## 면접에서 나올 만한 질문
+
+### 쿠버네티스 클러스터를 여러 개로 나누는 이유는?
+
+장애가 번지는 범위를 줄이려는 게 가장 크다. 클러스터 하나는 컨트롤 플레인, etcd, CNI, 어드미션 웹훅을 공유해서 그중 하나가 고장 나면 모든 앱이 흔들린다. 그 밖에 리전 사이 지연, 데이터 위치 규제, 업그레이드를 단계적으로 하고 싶은 것, 노드 5,000대 같은 크기 한계, 팀별 관리자 권한 분리가 이유가 된다.
+
+### 큰 클러스터 하나와 작은 클러스터 여럿 중 무엇을 고르나?
+
+정답은 그 사이다. 큰 클러스터는 사용률이 높고 운영 대상이 적지만 장애와 업그레이드를 한 번에 맞는다. 작은 클러스터는 격리가 좋지만 컨트롤 플레인 비용, 애드온 버전 관리, 클러스터 사이 연결이 클러스터 수만큼 든다. 보통 환경과 리전 단위로 나누고 그 안은 네임스페이스로 나누며, 규제나 격리가 꼭 필요한 것만 따로 뗀다.
+
+### 여러 클러스터에 같은 앱을 어떻게 배포하나?
+
+원하는 상태를 git에 한 번 선언하고 도구가 각 클러스터에 맞추게 한다. ArgoCD는 클러스터를 Secret으로 등록하고 ApplicationSet의 클러스터 생성기가 라벨로 대상을 골라 클러스터마다 Application을 만든다. 이건 중앙이 각 API 서버에 접속하는 push 방식이고, Fleet이나 OCM은 각 클러스터의 에이전트가 허브에서 가져가는 pull 방식이라 엣지나 사설망 클러스터에 맞는다.
+
+### 자동으로 모든 클러스터에 맞춰 주면 생기는 위험은?
+
+잘못된 변경도 모든 클러스터에 동시에 나간다. 클러스터를 나눈 이유가 장애 격리였는데 배포 하나가 전부를 망가뜨리면 의미가 없어진다. 그래서 스테이징, 작은 운영 클러스터, 나머지 순으로 단계를 나눠 내보내고 단계 사이에 오류율을 본다. 생성기의 셀렉터가 비면 Application이 지워지는 위험도 있어 삭제를 막는 설정을 둔다.
+
+### Cluster API는 무엇을 해 주나?
+
+클러스터 자체를 쿠버네티스 리소스로 선언하게 해 준다. 관리 클러스터에 Cluster, KubeadmControlPlane, MachineDeployment를 만들면 컨트롤러와 인프라 공급자가 VM과 컨트롤 플레인을 만들고, 버전 필드를 올리면 머신을 굴려 업그레이드한다. 관리 클러스터가 죽어도 워크로드 클러스터는 계속 돌지만 생성과 변경은 멈추므로 관리 클러스터를 작고 단단하게 두고 백업한다.
+
+### 다른 클러스터의 서비스는 어떻게 부르나?
+
+MCS API를 쓰면 내보내는 쪽에 ServiceExport를 만들고, 다른 클러스터에 ServiceImport가 생겨 `서비스.네임스페이스.svc.clusterset.local`로 부른다. API는 약속이고 실제 동작은 GKE MCS, Submariner, Cilium ClusterMesh 같은 구현체가 한다. 전제는 클러스터 사이에 같은 이름 네임스페이스가 같은 의미를 갖는 것과, Pod 대역이 겹치지 않거나 게이트웨이를 거치는 네트워크 경로가 있는 것이다.
+
+### 메시 멀티 클러스터로 리전 장애 조치를 하면 끝인가?
+
+트래픽은 옮겨지지만 용량은 따라오지 않는다. 지역 우선 라우팅은 이상치 감지로 엔드포인트가 빠져야 다음 리전으로 넘기고, 넘어간 리전은 두 리전 몫을 받는다. 평소 각 리전이 60%로 돌았다면 남은 쪽은 120%가 되니, 오토스케일러가 따라오는 동안 버틸 여유를 남겨 둔다. 세션과 DB가 원래 리전에만 있으면 앱은 떠도 기능은 죽으니 데이터 복제도 함께 봐야 한다.
+
+### 클러스터를 나눴는데도 모든 리전이 같이 장애가 났다면 어디를 보나?
+
+공유하고 있는 것을 먼저 본다. 같은 시각에 나간 배포, 하나뿐인 이미지 레지스트리·인증서 발급·외부 DNS·시크릿 저장소, 관리 클러스터가 후보다. 증상이 모든 클러스터에서 같은 시각에 같은 에러라면 대개 이 중 하나다. 지표에 `cluster` 라벨이 붙어 있어야 리전별로 갈라 보며 시작 시점을 비교할 수 있다.

@@ -104,6 +104,6 @@ export const VPN_IPSEC_WIREGUARD: QuizQuestion[] = [
     answer: 2,
     explanation:
       "AWS는 연결 하나에 터널 두 개를 주고 한쪽을 점검하는 동안 다른 쪽으로 넘어가게 설계했다. 두 터널을 모두 올리고 BGP나 정적 경로로 장애 조치가 되게 해야 점검 때 끊기지 않는다.",
-    anchor: "무엇을-고를까",
+    anchor: "사이트-간은-ipsec-사람-접속은-wireguard",
   },
 ];

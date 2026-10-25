@@ -1,0 +1,404 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("aws-s3-in-practice");
+
+<EasyIntro>
+  사진 올리기 기능을 만들면 사진을 어딘가에 보관해야 하고, 많이들 S3라는 인터넷 창고를 쓴다. 이때 가장 조심할 것은 창고 문을 누구에게 얼마나 열어 주느냐다. 보관함이 줄지어 있는 건물을 떠올려 보자. 귀찮아서 건물 정문을 활짝 열어 두면 누구나 들어와 남의 보관함까지 들여다볼 수 있다.
+
+  그래서 정문은 잠가 두고, 물건을 맡기러 온 사람에게는 관리실이 "이 칸에, 5분 안에, 한 번만" 쓸 수 있는 일회용 출입증을 만들어 준다. 출입증이 있으면 관리실을 거치지 않고 보관함까지 바로 가서 물건을 넣는다. 물건을 보여 줄 때는 건물 앞에 전시장을 따로 두고, 전시장 직원만 건물 안으로 들어가게 한다. 이렇게 하면 건물 문은 계속 잠겨 있으면서도 사진을 올리고 보여 주는 일이 다 된다.
+</EasyIntro>
+
+프로필 이미지 업로드를 붙이는 중이다. 백엔드가 파일을 받아 S3에 넣고, 이미지 주소를 `https://my-app-uploads.s3.ap-northeast-2.amazonaws.com/avatars/42.jpg`로 내려 주기로 했다. 그런데 브라우저에서 열면 `AccessDenied`가 난다. 검색해 보니 "퍼블릭 액세스 차단을 끄고 버킷 정책에 `Principal: "*"`를 넣으라"는 답이 나온다. 그대로 했더니 이미지는 보인다. 다음 날 콘솔의 버킷 목록에 빨간 "퍼블릭" 표시가 붙어 있고, 보안 담당자에게서 메시지가 온다.
+
+이 길은 여러 문제를 한꺼번에 만든다. 버킷의 모든 객체가 인터넷에 열리고, 키 이름만 맞히면 남의 파일도 받을 수 있고, 이미지를 S3에서 직접 내려받으니 전송 요금이 비싸고 느리다. 이 글은 S3 요청 하나가 허용되는 판정 순서, 퍼블릭 차단과 버킷 정책, 백엔드를 거치지 않고 브라우저가 직접 올리는 presigned URL과 CORS, CloudFront OAC로만 읽게 하는 구성, 정적 사이트 호스팅, 멀티파트 업로드와 일관성, 요청 요금이 터지는 경우를 순서대로 본다.
+
+계정 없이 쓴 글이라 AWS CLI는 명령과 공식 문서의 형식만 보이고 출력을 지어내지 않는다. presigned URL은 AWS 문서의 예제 자격 증명으로 서명 과정을 Node로 직접 계산했고, 같은 코드로 문서의 테스트 벡터 서명값이 그대로 나오는 것을 확인했다. 코드는 AWS SDK for JavaScript v3 기준이다.
+
+이 주제의 다른 글: 스토리지 클래스와 수명 주기, 버전 관리의 비용은 [S3 운영: 스토리지 클래스와 수명 주기](/posts/s3-storage-classes-lifecycle)에서, 블록·파일 스토리지와의 차이는 [블록, 파일, 객체 스토리지](/posts/block-file-object-storage)에서, S3 같은 저장소를 직접 만드는 내부 구조는 [객체 저장소 설계 ①](/posts/sd-object-storage-architecture)에서 다룬다.
+
+## 요청 하나가 허용되는 판정
+
+S3에 들어오는 요청은 여러 정책을 거쳐 허용인지 거부인지 판정된다. 판정에 끼는 것은 네 가지다.
+
+- IAM 정책: 사용자나 역할에 붙는다. "이 역할은 이 버킷의 `uploads/` 아래에 PutObject를 할 수 있다"처럼 누가 무엇을 할 수 있는지 적는다.
+- 버킷 정책: 버킷에 붙는 리소스 정책이다. "이 버킷에는 이 CloudFront 배포만 GetObject를 할 수 있다"처럼 이 버킷에 누가 들어올 수 있는지 적는다. 다른 계정이나 AWS 서비스에 권한을 줄 때 쓴다.
+- 퍼블릭 액세스 차단(Block Public Access): 계정과 버킷에 거는 안전장치다. 정책이 인터넷 전체에 무언가를 허용하려 해도 이 스위치가 켜져 있으면 막는다.
+- 객체 소유권(Object Ownership)과 ACL: 예전 방식의 객체별 권한이다. 2023년 4월부터 새 버킷은 ACL이 꺼진 상태(`BucketOwnerEnforced`)로 만들어지고 퍼블릭 차단도 켜져 있다. 새로 만드는 버킷에서는 ACL을 쓰지 않는다.
+
+판정 규칙은 IAM 전체와 같다. 어디서든 명시적 Deny가 하나라도 걸리면 거부다. Deny가 없을 때, 같은 계정 안의 요청은 IAM 정책이나 버킷 정책 중 한쪽만 허용해도 통과한다. 다른 계정의 요청은 양쪽(그 계정의 IAM 정책과 이 버킷의 정책)이 모두 허용해야 통과한다. 그 위에 퍼블릭 차단이 "인터넷 전체 허용"을 걸러 낸다. 정책 판정 순서 전체는 [IAM 기본](/posts/iam-basics)에서 다뤘다.
+
+<ConceptDiagram
+  width={420}
+  height={330}
+  caption="Deny가 먼저 이기고, 같은 계정이면 한쪽 허용으로, 다른 계정이면 양쪽 허용으로 통과한다"
+  nodes={[
+    { id: "req", label: "요청", sub: "누가 · 무엇을 · 어디에", x: 210, y: 35, w: 150 },
+    { id: "deny", label: "명시적 Deny?", sub: "IAM · 버킷 정책", x: 210, y: 110, w: 150 },
+    { id: "bpa", label: "퍼블릭 차단", sub: "Principal * 거름", x: 210, y: 185, w: 140 },
+    { id: "same", label: "같은 계정", sub: "IAM 또는 버킷 허용", x: 100, y: 265, w: 150 },
+    { id: "cross", label: "다른 계정", sub: "IAM 그리고 버킷 허용", x: 320, y: 265, w: 160 },
+    { id: "no", label: "거부", x: 370, y: 110, w: 70 },
+  ]}
+  edges={[
+    { from: "req", to: "deny" },
+    { from: "deny", to: "no", label: "있음" },
+    { from: "deny", to: "bpa", label: "없음" },
+    { from: "bpa", to: "same" },
+    { from: "bpa", to: "cross" },
+  ]}
+/>
+
+처음 이야기의 `AccessDenied`는 이 판정의 결과다. 브라우저에서 이미지 주소를 열면 서명 없는 익명 요청이 간다. 익명 요청을 허용하는 정책이 없으니 거부된다. 고치는 방법은 익명 요청을 허용하는 게 아니라, 익명 요청이 S3에 직접 가지 않게 하는 것이다.
+
+## 퍼블릭 차단은 켜 두고 시작한다
+
+퍼블릭 액세스 차단은 스위치 네 개다.
+
+- `BlockPublicAcls`: 객체나 버킷에 퍼블릭 ACL을 새로 붙이는 요청을 거절한다.
+- `IgnorePublicAcls`: 이미 붙어 있는 퍼블릭 ACL을 무시한다.
+- `BlockPublicPolicy`: `Principal: "*"`처럼 퍼블릭 접근을 허용하는 버킷 정책을 저장하는 것 자체를 거절한다.
+- `RestrictPublicBuckets`: 이미 퍼블릭 정책이 있는 버킷이라도 AWS 서비스와 같은 계정의 주체만 들어오게 한다.
+
+계정 수준에서 넷 다 켜 두면 실수로 버킷 하나를 여는 일이 원천적으로 막힌다. 정말 퍼블릭이어야 하는 버킷이 생기면 그때 그 버킷만 예외로 다룬다. 아래 구성대로 가면 그런 버킷은 거의 필요 없다.
+
+```bash
+# 계정 전체의 퍼블릭 차단 상태. 네 값이 모두 true인지 본다
+aws s3control get-public-access-block --account-id 123456789012
+
+# 버킷 하나의 퍼블릭 차단을 넷 다 켠다
+aws s3api put-public-access-block --bucket my-app-uploads \
+  --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+
+# 지금 이 버킷이 퍼블릭으로 판정되는지 S3에 묻는다
+aws s3api get-bucket-policy-status --bucket my-app-uploads
+```
+
+`get-bucket-policy-status`는 응답에 `"IsPublic": true` 또는 `false`가 담긴 `PolicyStatus`를 돌려준다. 계정 전체에서 밖으로 열린 버킷을 찾을 때는 IAM Access Analyzer의 외부 접근 결과를 본다. 다른 계정이나 인터넷에 열린 버킷이 항목으로 올라온다.
+
+## 브라우저가 S3에 직접 올리게 한다
+
+이제 업로드를 다시 짠다. 백엔드가 파일 바이트를 받아 S3에 다시 올리면 서버가 큰 파일을 메모리나 디스크에 들고 있어야 하고, 업로드 시간 동안 연결을 잡고, 대역폭을 두 번 쓴다. 서버리스라면 요청 크기 한도(Lambda는 6MB)에 바로 걸린다. 그래서 흔히 쓰는 구성은 백엔드가 "이 키에, 몇 분 동안, PUT 한 번"을 허락하는 서명된 URL을 만들어 주고, 브라우저가 그 URL로 S3에 바로 올리는 것이다. 이것이 presigned URL이다.
+
+아래 그림에서 다음을 누르면 업로드 한 번의 흐름이 보인다.
+
+<SequenceDiagram
+  caption="presigned URL로 브라우저가 S3에 직접 올리는 흐름"
+  actors={[
+    { id: "browser", label: "브라우저" },
+    { id: "api", label: "백엔드 API" },
+    { id: "s3", label: "S3" },
+  ]}
+  steps={[
+    { from: "browser", to: "api", label: "POST /uploads", title: "업로드 허락을 받는다", detail: "로그인한 사용자가 파일 이름, 크기, 형식을 보낸다. 백엔드는 여기서 크기와 형식을 1차로 거른다.", payload: "{ \"type\": \"image/jpeg\", \"size\": 482113 }" },
+    { from: "api", to: "api", label: "SigV4 서명", title: "URL은 백엔드가 혼자 만든다", detail: "키를 서버가 정하고(uploads/u42/랜덤.jpg), 자기 자격 증명으로 서명한다. S3에 요청을 보내지 않는 순수 계산이라 빠르다." },
+    { from: "api", to: "browser", label: "200 { url, key }", title: "서명된 URL을 돌려준다", detail: "만료 5분짜리 URL과 키를 준다. 이 URL을 가진 사람은 그 키에 그 시간 동안 PUT할 수 있다." },
+    { from: "browser", to: "s3", label: "OPTIONS (preflight)", title: "브라우저가 먼저 묻는다", detail: "다른 출처로 PUT을 보내니 브라우저가 CORS 사전 요청을 보낸다. 버킷 CORS 설정에 이 출처와 PUT이 없으면 여기서 막힌다." },
+    { from: "browser", to: "s3", label: "PUT 파일 바이트", title: "S3로 바로 올린다", detail: "S3가 서명과 만료를 확인하고 객체를 저장한다. 백엔드 서버는 파일 바이트를 전혀 만지지 않는다.", payload: "200 OK\nETag: \"9b2cf535f27731c974343645a3985328\"" },
+    { from: "browser", to: "api", label: "POST /uploads/complete", title: "다 올렸다고 알린다", detail: "키를 다시 보낸다. 백엔드는 HeadObject로 실제 크기와 형식을 확인한 뒤 DB에 기록한다. S3 이벤트 알림으로 대신 받아도 된다." },
+  ]}
+/>
+
+백엔드 코드는 짧다. `getSignedUrl`은 네트워크 요청 없이 서명만 계산한다.
+
+```ts
+// app/api/uploads/route.ts — 업로드용 presigned URL을 만든다
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { randomUUID } from "node:crypto";
+
+const s3 = new S3Client({ region: "ap-northeast-2" });
+const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_BYTES = 5 * 1024 * 1024;
+
+export async function createUploadUrl(userId: string, type: string, size: number) {
+  if (!ALLOWED.has(type) || size > MAX_BYTES) throw new Error("invalid file");
+  // 키는 서버가 정한다. 사용자가 보낸 파일 이름을 그대로 쓰지 않는다
+  const key = `uploads/${userId}/${randomUUID()}`;
+  const url = await getSignedUrl(
+    s3,
+    new PutObjectCommand({ Bucket: "my-app-uploads", Key: key, ContentType: type }),
+    { expiresIn: 300 }, // 초 단위. 5분
+  );
+  return { url, key };
+}
+```
+
+```ts
+// 브라우저 — 받은 URL로 파일을 그대로 PUT한다
+async function upload(file: File) {
+  const res = await fetch("/api/uploads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: file.type, size: file.size }),
+  });
+  const { url, key } = await res.json();
+  const put = await fetch(url, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
+  if (!put.ok) throw new Error(`upload failed: ${put.status}`);
+  await fetch("/api/uploads/complete", { method: "POST", body: JSON.stringify({ key }) });
+}
+```
+
+URL이 어떻게 생겼는지 보면 무엇이 서명되는지 알 수 있다. 아래는 AWS 문서의 예제 키(`AKIAIOSFODNN7EXAMPLE`)로 서울 리전 버킷에 대한 5분짜리 PUT URL을 직접 계산한 것이다. 조각을 눌러 보면 뜻이 나온다.
+
+<UrlAnatomy
+  caption="presigned PUT URL 한 줄 뜯어보기"
+  base="https://photo-uploads.s3.ap-northeast-2.amazonaws.com/uploads/u42/a1b2.jpg"
+  params={[
+    { key: "X-Amz-Algorithm", value: "AWS4-HMAC-SHA256", title: "서명 방식", description: "Signature Version 4다. HMAC-SHA256을 날짜, 리전, 서비스 순서로 겹쳐 서명 키를 만든다.", required: true },
+    { key: "X-Amz-Credential", value: "AKIAIOSFODNN7EXAMPLE%2F20261023%2Fap-northeast-2%2Fs3%2Faws4_request", display: "X-Amz-Credential=AKIA…/20261023/ap-northeast-2/s3/aws4_request", title: "누가, 어디에 서명했나", description: "액세스 키 ID와 날짜, 리전, 서비스가 들어간다. 비밀 키는 URL에 없다. 리전이 버킷과 다르면 서명이 맞지 않는다.", required: true },
+    { key: "X-Amz-Date", value: "20261023T091500Z", title: "서명한 시각", description: "UTC 기준이다. 서버 시계가 크게 틀어져 있으면 만료 계산이 어긋나 RequestTimeTooSkewed나 만료 에러가 난다.", required: true },
+    { key: "X-Amz-Expires", value: "300", title: "유효 시간 (초)", description: "서명 시각부터 300초 동안만 쓸 수 있다. SigV4는 최대 7일(604800초)이다. 역할의 임시 자격 증명으로 서명했다면 그 세션이 끝나는 시각에 함께 끝난다.", required: true },
+    { key: "X-Amz-SignedHeaders", value: "host", title: "서명에 묶인 헤더", description: "여기 적힌 헤더는 요청 때 똑같이 보내야 한다. content-type이 들어가 있으면 브라우저가 보낸 Content-Type이 서명 때 값과 달라도 403 SignatureDoesNotMatch가 난다." },
+    { key: "X-Amz-Signature", value: "139edd721af9aa60aa04fe453595df5cad1f2bc17801858f29bd50c90287e62c", display: "X-Amz-Signature=139edd72…87e62c", title: "서명", description: "메서드, 경로, 쿼리, 서명된 헤더를 묶은 문자열을 서명 키로 HMAC한 값이다. 키 이름이나 메서드를 하나라도 바꾸면 S3가 다시 계산한 값과 달라져 거부된다.", required: true },
+  ]}
+/>
+
+이 URL에서 기억할 점이 셋 있다.
+
+첫째, URL이 곧 권한이다. 만료 전에는 누구든 이 URL로 그 키에 PUT할 수 있다. 그래서 만료를 짧게(업로드는 수 분) 잡고, 키는 서버가 정하고, URL을 로그에 남기지 않는다.
+
+둘째, 서명 주체의 권한을 그대로 빌린다. URL을 만든 역할에 그 키의 `s3:PutObject` 권한이 없으면 URL은 만들어지지만 S3에서 403이 난다. 그리고 그 역할의 임시 자격 증명이 만료되면 URL의 `X-Amz-Expires`가 남아 있어도 함께 죽는다. Lambda나 ECS 작업 역할로 하루짜리 다운로드 URL을 만들었는데 몇 시간 만에 `ExpiredToken`이 나는 이유가 이것이다.
+
+셋째, SDK가 무엇을 서명에 넣는지 버전마다 다르다. `ContentType`을 넣으면 `content-type`이 서명된 헤더에 들어가 브라우저가 정확히 같은 값을 보내야 하는 경우가 있다. 2025년 초 JavaScript SDK v3가 기본으로 체크섬을 붙이도록 바뀐 뒤, 브라우저에서 presigned PUT이 403으로 깨졌다는 보고가 많았다. 그럴 때는 클라이언트 설정에서 체크섬 계산을 필요할 때만 하도록(`requestChecksumCalculation: "WHEN_REQUIRED"`) 바꾸고, 만든 URL의 `X-Amz-SignedHeaders`를 직접 열어 확인한다.
+
+## PUT URL은 크기를 막지 못한다
+
+presigned PUT에는 약점이 하나 있다. 서명은 "이 키에 PUT해도 된다"까지만 보장하고, 몇 바이트를 올리는지는 기본으로 묶지 않는다. 백엔드에서 `size`를 확인했어도 브라우저가 URL만 받아 5GB를 올릴 수 있다. 완료 후 HeadObject로 확인해 지우는 방법도 있지만, 이미 올라간 뒤다.
+
+크기와 형식을 S3가 업로드 시점에 막게 하려면 presigned POST(브라우저 폼 업로드 정책)를 쓴다. 정책 문서에 조건을 적어 서명하면 S3가 조건에 맞지 않는 업로드를 거절한다.
+
+```ts
+import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+
+// 5MB 이하, image/로 시작하는 형식, 정해진 키만 허용하는 업로드 정책
+const { url, fields } = await createPresignedPost(s3, {
+  Bucket: "my-app-uploads",
+  Key: `uploads/${userId}/${randomUUID()}`,
+  Conditions: [
+    ["content-length-range", 1, 5 * 1024 * 1024],
+    ["starts-with", "$Content-Type", "image/"],
+  ],
+  Fields: { "Content-Type": type },
+  Expires: 300,
+});
+// 브라우저는 fields를 FormData에 먼저 넣고 file을 마지막에 넣어 url로 POST한다
+```
+
+정리하면, 크기 제한이 중요하면 POST 정책, 단순함이 중요하고 크기를 나중에 검사해도 되면 PUT이다. 어느 쪽이든 "이미지라고 했으니 이미지겠지"는 믿지 않는다. 업로드 완료 후 별도 작업(S3 이벤트 → Lambda)에서 실제 파일 시그니처를 확인하고 썸네일을 만들면서 메타데이터를 벗겨 낸다. 사진의 EXIF에는 촬영 위치가 들어 있기도 하다.
+
+## CORS는 버킷에 적는다
+
+브라우저가 `https://app.example.com`에서 `https://my-app-uploads.s3.ap-northeast-2.amazonaws.com`으로 PUT을 보내면 출처가 다르니 CORS 사전 요청이 먼저 간다. S3는 버킷의 CORS 설정을 보고 답한다. 설정이 없으면 브라우저 콘솔에 CORS 에러만 보이고, 서버 쪽에는 아무 로그도 없어서 한참 헤맨다. CORS가 무엇을 막는지는 [CORS](/posts/cors)에서 다뤘다.
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://app.example.com"],
+    "AllowedMethods": ["PUT", "POST"],
+    "AllowedHeaders": ["content-type", "x-amz-*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+```bash
+# 위 내용을 cors.json으로 저장해 적용한다. 기존 설정을 통째로 바꾼다
+aws s3api put-bucket-cors --bucket my-app-uploads --cors-configuration "{\"CORSRules\": $(cat cors.json)}"
+aws s3api get-bucket-cors --bucket my-app-uploads   # 적용됐는지 확인한다
+```
+
+흔한 실수는 이렇다. `AllowedOrigins`에 `*`를 넣으면 개발은 편하지만 아무 사이트에서나 내 URL로 올리는 걸 브라우저가 막지 않는다(URL이 새면 어차피 쓰이지만, 굳이 문을 넓힐 이유는 없다). 로컬 개발 출처(`http://localhost:3000`)는 개발용 버킷에만 넣는다. 멀티파트 업로드를 브라우저에서 하면서 `ExposeHeaders`에 `ETag`를 빼먹으면, 응답에 ETag가 있어도 자바스크립트가 읽지 못해 마지막 Complete 단계에서 실패한다.
+
+## 읽기는 CloudFront를 거쳐서만
+
+이제 올린 이미지를 보여 줄 차례다. 버킷을 열지 않고 CloudFront 배포를 앞에 둔다. CloudFront가 OAC(Origin Access Control)로 서명한 요청만 버킷이 받게 하면, 사용자는 CloudFront 주소로만 이미지를 받을 수 있고 S3 주소로 직접 가면 403이 난다.
+
+<NetworkTopology
+  caption="사용자는 엣지에서 받고, 버킷은 CloudFront의 서명된 요청만 받는다"
+  width={460}
+  height={300}
+  zones={[
+    { id: "aws", label: "AWS 리전 ap-northeast-2", x: 250, y: 20, w: 195, h: 260, tone: "private" },
+    { id: "edge", label: "CloudFront 엣지", x: 120, y: 20, w: 120, h: 140, tone: "edge" },
+  ]}
+  nodes={[
+    { id: "user", label: "사용자", x: 50, y: 90, icon: "client" },
+    { id: "cf", label: "CloudFront", sub: "OAC 서명", x: 180, y: 90, icon: "lb" },
+    { id: "s3", label: "S3 버킷", sub: "퍼블릭 차단", x: 360, y: 90, icon: "db" },
+    { id: "attacker", label: "직접 접근", sub: "서명 없음", x: 50, y: 230, icon: "internet" },
+  ]}
+  links={[
+    { from: "user", to: "cf" },
+    { from: "cf", to: "s3", label: "SigV4" },
+    { from: "attacker", to: "s3", dashed: true },
+  ]}
+  steps={[
+    { path: ["user", "cf"], packet: "GET", title: "사용자는 엣지에 묻는다", detail: "이미지 주소는 CloudFront 도메인이다. 엣지에 캐시돼 있으면 여기서 바로 답하고 S3까지 가지 않는다." },
+    { path: ["user", "cf", "s3"], packet: "GET", title: "캐시에 없으면 오리진으로", detail: "CloudFront가 OAC로 SigV4 서명을 붙여 S3에 요청한다. 버킷 정책은 이 배포 ARN에서 온 요청만 허용한다." },
+    { path: ["s3", "cf", "user"], packet: "200", title: "응답은 엣지에 남는다", detail: "다음 사용자는 엣지 캐시에서 받는다. S3 요청 수와 S3에서 인터넷으로 나가는 전송 요금이 함께 준다." },
+    { path: ["attacker", "s3"], packet: "GET", blocked: true, title: "S3로 직접 오면 막힌다", detail: "서명 없는 익명 요청은 허용하는 정책이 없어 403이다. 퍼블릭 차단도 켜져 있으니 실수로 열릴 일도 없다." },
+  ]}
+/>
+
+버킷 정책은 이렇게 쓴다. CloudFront 서비스 주체에게 읽기를 주되, 조건으로 내 배포의 ARN만 허용한다. 조건을 빼면 다른 계정의 CloudFront 배포도 내 버킷을 오리진으로 쓸 수 있다.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontOAC",
+      "Effect": "Allow",
+      "Principal": { "Service": "cloudfront.amazonaws.com" },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::my-app-uploads/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "arn:aws:cloudfront::123456789012:distribution/E2EXAMPLE123"
+        }
+      }
+    },
+    {
+      "Sid": "DenyInsecureTransport",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": ["arn:aws:s3:::my-app-uploads", "arn:aws:s3:::my-app-uploads/*"],
+      "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+    }
+  ]
+}
+```
+
+두 번째 문장은 HTTP(평문)로 오는 요청을 모두 거부한다. 서비스 주체와 조건이 붙은 정책이라 퍼블릭으로 판정되지 않아서, 퍼블릭 차단을 켠 채로 저장된다.
+
+예전 방식인 OAI(Origin Access Identity)도 아직 동작하지만, AWS는 OAC를 권한다. OAC는 SSE-KMS로 암호화한 객체를 읽을 수 있고, 모든 리전에서 되고, 업로드(PUT)도 오리진으로 보낼 수 있다. KMS로 암호화한 버킷이라면 KMS 키 정책에도 CloudFront 서비스 주체의 `kms:Decrypt`를 같은 조건으로 넣어야 한다. 이걸 빠뜨리면 버킷 정책은 맞는데 403이 난다.
+
+로그인한 사용자만 봐야 하는 파일(유료 강의, 영수증)이라면 CloudFront 서명된 URL이나 서명된 쿠키를 함께 쓴다. S3 presigned GET URL로 바로 내려줄 수도 있지만, 그러면 캐시를 못 쓰고 S3 전송 요금을 그대로 낸다. CloudFront 캐시가 어떻게 동작하는지는 [HTTP 캐시와 CDN](/posts/http-caching-cdn)에서 다뤘다.
+
+## 정적 사이트 호스팅은 두 갈래다
+
+S3로 정적 사이트(React 빌드 결과물, 문서 사이트)를 띄우는 방법도 두 가지다.
+
+S3의 웹 사이트 엔드포인트(`http://버킷.s3-website.ap-northeast-2.amazonaws.com`)는 인덱스 문서, 에러 문서, 리디렉션 규칙을 지원한다. 대신 HTTP만 되고, 버킷을 퍼블릭으로 열어야 한다. 이 엔드포인트는 OAC로 보호할 수 없다.
+
+권하는 쪽은 CloudFront + 일반 S3 엔드포인트 + OAC다. HTTPS와 내 도메인 인증서를 붙이고, 버킷은 닫아 둔다. 대신 웹 사이트 엔드포인트가 해 주던 일을 CloudFront에서 다시 한다. 루트 경로는 기본 루트 객체(`index.html`)로 설정한다. SPA의 클라이언트 라우팅(`/settings/profile`을 새로 고침)은 S3에 그 키가 없어서 403이 오니, CloudFront 사용자 지정 오류 응답으로 403·404를 `/index.html` 200으로 바꾸거나, CloudFront Functions로 확장자 없는 경로를 `/index.html`로 바꿔 보낸다. 앞쪽 방법은 진짜 없는 이미지도 200 HTML로 바꿔 버리니, 경로 규칙이 분명하면 함수 쪽이 깔끔하다.
+
+배포할 때는 파일 이름에 해시가 붙은 정적 자산(`main.3f9a1c.js`)에 긴 캐시를, `index.html`에는 짧은 캐시나 `no-cache`를 준다. 그래야 새 배포가 바로 보이고 무효화(invalidation) 요청을 매번 날리지 않아도 된다.
+
+```bash
+# 해시가 붙은 자산은 1년 캐시, index.html은 매번 확인하게 올린다
+aws s3 sync ./dist s3://my-site-bucket --exclude index.html \
+  --cache-control "public,max-age=31536000,immutable"
+aws s3 cp ./dist/index.html s3://my-site-bucket/index.html \
+  --cache-control "no-cache"
+```
+
+## 큰 파일은 멀티파트로 올린다
+
+PUT 한 번으로 올릴 수 있는 객체는 5GB까지다. 그보다 크면 멀티파트 업로드가 필수이고, 100MB가 넘으면 권장된다. 파일을 조각(파트)으로 나눠 따로 올리고 마지막에 합친다. 파트는 마지막 것을 빼고 5MiB 이상이어야 하고, 업로드 하나에 파트는 10,000개까지다. 그래서 파트 크기를 정할 때는 파일 크기를 10,000으로 나눈 값보다 크게 잡는다.
+
+파트 크기를 정하는 계산을 직접 해 보자. 보통 8MiB처럼 원하는 크기를 먼저 정하고, 그 크기로는 10,000개를 넘는 큰 파일일 때만 키운다. 파일 크기와 원하는 파트 크기(MiB)를 받아 실제로 쓸 파트 크기와 파트 수를 돌려주는 함수다.
+
+<CodePlayground
+  caption="파트 크기 고르기: 5MiB 이상, 10,000개 이하"
+  functionName="choosePartSize"
+  initialCode={`// fileMiB: 파일 크기(MiB), preferredMiB: 원하는 파트 크기(MiB)
+// 규칙: 파트는 5MiB 이상, 파트 수는 10,000개 이하. 파트 크기는 MiB 단위 정수로 올린다
+// 반환: { partSizeMiB, parts } (파일이 작아도 parts는 최소 1)
+function choosePartSize(fileMiB, preferredMiB) {
+  return { partSizeMiB: preferredMiB, parts: 0 };
+}`}
+  solution={`function choosePartSize(fileMiB, preferredMiB) {
+  const MIN = 5, MAX_PARTS = 10000;
+  const needed = Math.ceil(fileMiB / MAX_PARTS);
+  const partSizeMiB = Math.max(MIN, preferredMiB, needed);
+  return { partSizeMiB, parts: Math.max(1, Math.ceil(fileMiB / partSizeMiB)) };
+}`}
+  tests={[
+    { label: "300MiB 동영상, 8MiB 원함", args: [300, 8], expected: { partSizeMiB: 8, parts: 38 } },
+    { label: "3MiB 파일, 8MiB 원함", args: [3, 8], expected: { partSizeMiB: 8, parts: 1 } },
+    { label: "100GiB 백업, 8MiB 원함", args: [102400, 8], expected: { partSizeMiB: 11, parts: 9310 } },
+    { label: "1TiB 덤프, 8MiB 원함", args: [1048576, 8], expected: { partSizeMiB: 105, parts: 9987 } },
+    { label: "1TiB 덤프, 128MiB 원함", args: [1048576, 128], expected: { partSizeMiB: 128, parts: 8192 } },
+    { label: "4MiB를 원해도 최소 5MiB", args: [50000, 4], expected: { partSizeMiB: 5, parts: 10000 } },
+  ]}
+/>
+
+8MiB로는 100GiB 파일이 12,800조각이 되어 한도를 넘으니 11MiB로 키워야 한다. 큰 파일을 다루는 도구가 파트 크기를 넉넉히(64~128MiB) 잡는 이유다. 반대로 모바일에서는 파트가 작을수록 끊겼을 때 다시 보낼 양이 적으니 최소에 가깝게 잡는다.
+
+멀티파트의 이점은 크기만이 아니다. 파트를 병렬로 올려 처리량을 높이고, 하나가 실패하면 그 파트만 다시 올린다. 모바일 네트워크에서 300MB 동영상을 올리다 끊겨도 처음부터가 아니라 끊긴 파트부터 이어 간다.
+
+브라우저에서 하려면 순서가 이렇다. 백엔드가 `CreateMultipartUpload`로 업로드 ID를 받고, 파트 번호마다 `UploadPart` presigned URL을 만들어 준다. 브라우저는 파트마다 PUT하고 응답의 `ETag`를 모은다. 다 올리면 백엔드가 파트 번호와 ETag 목록으로 `CompleteMultipartUpload`를 부른다. 앞에서 본 CORS의 `ExposeHeaders: ETag`가 여기서 필요하다. 그리고 끝나지 않은 업로드 조각은 보이지 않는 곳에 남아 요금을 내니 수명 주기 규칙으로 치운다. 그 규칙은 [S3 운영](/posts/s3-storage-classes-lifecycle)에서 봤다. 합친 객체의 ETag가 왜 `-파트수`로 끝나는지 같은 내부 이야기는 [객체 저장소 설계 ③](/posts/sd-object-storage-versioning-multipart)에 있다.
+
+## 쓰자마자 읽어도 되나
+
+S3는 2020년 12월부터 강한 읽기 일관성을 준다. PUT이 성공한 직후의 GET은 새 객체를, 덮어쓴 직후의 GET은 새 내용을, DELETE 직후의 GET은 404를 받는다. LIST도 바로 반영된다. 그 전에는 덮어쓰기와 삭제가 잠깐 늦게 보일 수 있어서, 옛 글에 남은 "S3는 최종 일관성이니 잠시 기다려라"는 이제 맞지 않는다.
+
+그런데 앱에서는 여전히 옛 이미지가 보이는 일이 생긴다. S3가 아니라 앞단의 캐시 때문이다. 프로필 사진을 같은 키(`avatars/42.jpg`)에 덮어쓰면 CloudFront 엣지와 브라우저 캐시에는 옛 사진이 캐시 시간만큼 남는다. 무효화를 날려도 브라우저 캐시는 못 지운다. 그래서 바뀌는 파일은 키에 버전이나 해시를 넣는다(`avatars/42/7f3c.jpg`). 새 키는 캐시에 없으니 바로 보이고, 옛 키는 수명 주기로 지운다.
+
+동시 쓰기에는 S3가 잠금을 주지 않는다. 같은 키에 두 요청이 동시에 PUT하면 마지막에 끝난 것이 남는다. 덮어쓰기를 막아야 하면 2024년에 생긴 조건부 쓰기를 쓴다. `If-None-Match: *`로 "없을 때만 만든다", `If-Match: <ETag>`로 "내가 읽은 그 버전일 때만 바꾼다"를 S3가 확인하고, 조건이 틀리면 412로 거절한다.
+
+## 요청 요금이 터지는 경우
+
+S3 요금은 보관만이 아니다. 요청과 전송에서 예상 밖으로 터지는 경우가 몇 가지 있다.
+
+S3에서 인터넷으로 나가는 전송은 GB당 0.09달러 수준이다(첫 100GB는 매달 무료). 인기 있는 이미지를 S3 주소로 직접 내려주면 이게 쌓인다. CloudFront를 앞에 두면 S3에서 CloudFront로 가는 전송은 무료이고, CloudFront에서 나가는 요금도 대개 더 싸며 캐시 덕에 S3 요청 수도 준다.
+
+이벤트 고리도 위험하다. S3 업로드 이벤트로 Lambda가 썸네일을 만들어 같은 버킷의 같은 접두사에 저장하면, 그 저장이 다시 이벤트를 일으켜 끝없이 돈다. 몇 분 만에 객체 수백만 개와 Lambda 호출 수백만 번이 청구된다. 원본과 결과물은 다른 버킷이나 겹치지 않는 접두사(`uploads/` → `thumbs/`)에 두고, 이벤트 필터에 원본 접두사만 건다.
+
+작은 객체를 매우 많이 다루는 일(로그를 줄마다 객체로, 매분 LIST로 버킷 전체 훑기)은 보관료보다 요청 요금이 커진다. 이 계산은 [S3 운영](/posts/s3-storage-classes-lifecycle)에서 했다.
+
+한때는 남이 내 버킷 이름으로 요청을 퍼부어도 403 요청 요금을 내가 냈다. 2024년에 AWS가 정책을 바꿔, 내 계정이나 조직 밖에서 온 인증 실패 요청에는 요금을 받지 않는다. 그래도 버킷 이름은 추측하기 어렵게 짓고, 이름에 회사 내부 정보를 넣지 않는다.
+
+## 이미지 업로드를 붙일 때 확인할 것
+
+처음 이야기의 기능을 이 글의 구성으로 다시 만들면 체크할 것은 이렇다.
+
+- 버킷과 계정의 퍼블릭 차단 네 개가 모두 켜져 있다. 객체 소유권은 `BucketOwnerEnforced`(ACL 꺼짐)다.
+- 업로드는 presigned URL(크기 제한이 필요하면 POST 정책), 만료는 수 분, 키는 서버가 정한다.
+- 버킷 CORS에는 내 앱 출처와 필요한 메서드만, 멀티파트를 쓰면 `ExposeHeaders: ETag`까지 넣는다.
+- 읽기는 CloudFront + OAC로, 버킷 정책의 조건에 배포 ARN을 박고 HTTP는 Deny한다.
+- 업로드 완료 후 파일 형식과 크기를 다시 확인하는 작업이 있고, 결과물은 원본과 다른 접두사에 둔다.
+- 바뀌는 파일은 키에 버전을 넣어 캐시 문제를 피한다.
+- 미완료 멀티파트 정리와 옛 객체 만료 규칙이 걸려 있다.
+
+## 버킷은 닫고, 서명과 CloudFront로 연다
+
+S3를 앱에 붙일 때 버킷 자체를 여는 일은 거의 없다. 올리기는 서버가 짧게 서명해 준 URL로 브라우저가 직접 하고, 읽기는 CloudFront가 OAC로 서명한 요청만 받는다. 그 사이에서 판정은 명시적 Deny가 먼저 이기고, 퍼블릭 차단이 실수를 막는다. 비용과 보관 기간 쪽은 [S3 운영](/posts/s3-storage-classes-lifecycle)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### IAM 정책과 버킷 정책은 어떻게 다르고, 둘이 부딪히면 어떻게 되나요?
+
+IAM 정책은 사용자나 역할에 붙어 그 주체가 무엇을 할 수 있는지 적고, 버킷 정책은 버킷에 붙어 누가 이 버킷에 들어올 수 있는지 적는다. 어디서든 명시적 Deny가 있으면 거부다. Deny가 없으면 같은 계정 요청은 둘 중 하나만 허용해도 되고, 다른 계정 요청은 양쪽이 모두 허용해야 한다. 그 위에서 퍼블릭 액세스 차단이 인터넷 전체 허용을 걸러 낸다.
+
+### 브라우저에서 S3로 직접 업로드하게 하려면 어떻게 하나요?
+
+백엔드가 로그인과 파일 정보를 확인한 뒤 키를 정하고, 그 키에 대한 짧은 만료의 presigned PUT URL이나 POST 정책을 서명해 준다. 브라우저는 그 URL로 S3에 바로 올리고, 버킷에는 내 출처를 허용하는 CORS 설정이 있어야 한다. 업로드가 끝나면 백엔드가 HeadObject나 S3 이벤트로 실제 크기와 형식을 확인한다. 서버가 파일 바이트를 만지지 않아 확장과 비용에 유리하다.
+
+### presigned URL의 만료가 남았는데 403 ExpiredToken이 나는 이유는요?
+
+URL을 역할의 임시 자격 증명으로 서명했기 때문이다. presigned URL은 서명한 주체의 권한과 자격 증명을 그대로 빌리므로, 세션 토큰이 만료되면 URL의 만료 시간과 상관없이 함께 무효가 된다. 긴 만료가 필요하면 그만큼 긴 세션으로 서명하거나, 짧게 만들고 필요할 때 다시 발급한다. SigV4 presigned URL의 최대 만료는 7일이다.
+
+### presigned PUT과 POST 정책은 언제 각각 쓰나요?
+
+PUT은 단순해서 fetch 한 번이면 되지만 업로드 크기를 서명으로 묶지 못한다. POST 정책은 content-length-range, 키 접두사, Content-Type 같은 조건을 서명해 S3가 업로드 시점에 거절하게 할 수 있다. 크기 제한이 중요하면 POST, 아니면 PUT을 쓰고 완료 후 검사한다. 어느 쪽이든 파일 내용 검증은 따로 한다.
+
+### CloudFront OAC는 무엇이고 왜 쓰나요?
+
+CloudFront가 S3 오리진에 요청할 때 SigV4로 서명하게 하고, 버킷 정책이 그 배포에서 온 요청만 허용하게 하는 방식이다. 버킷은 퍼블릭 차단을 켠 채로 두고 사용자는 CloudFront로만 파일을 받는다. 예전 OAI보다 SSE-KMS 객체, 모든 리전, PUT을 지원해서 AWS가 권한다. 버킷 정책 조건에 배포 ARN을 꼭 넣어 다른 배포가 쓰지 못하게 한다.
+
+### S3는 쓰자마자 읽으면 새 내용이 보이나요?
+
+2020년 12월부터 그렇다. PUT, 덮어쓰기, DELETE 직후의 GET과 LIST 모두 강한 일관성을 준다. 그래도 옛 내용이 보인다면 CloudFront나 브라우저 캐시 때문이니, 바뀌는 파일은 키에 버전이나 해시를 넣는다. 동시 쓰기는 마지막 것이 이기고 잠금이 없으니, 덮어쓰기를 막으려면 If-None-Match·If-Match 조건부 쓰기를 쓴다.
+
+### 멀티파트 업로드는 언제 쓰고 무엇을 조심하나요?
+
+5GB 넘는 객체는 필수이고 100MB 넘으면 권장된다. 파트를 병렬로 올려 빠르고, 실패한 파트만 다시 올릴 수 있다. 파트는 마지막을 빼고 5MiB 이상, 최대 10,000개라 파트 크기를 파일 크기에 맞춰 정한다. 브라우저에서 하면 CORS에 ETag 노출이 필요하고, 끝나지 않은 업로드 조각이 요금을 내니 AbortIncompleteMultipartUpload 규칙을 건다.
+
+### S3 비용이 예상보다 크게 나오는 흔한 원인은요?
+
+S3 주소로 직접 내려주는 인터넷 전송, 업로드 이벤트가 같은 접두사에 결과를 써서 생기는 무한 루프, 작은 객체의 대량 요청과 반복 LIST, 지워지지 않는 이전 버전과 멀티파트 조각이 흔하다. CloudFront를 앞에 두고, 이벤트 필터와 접두사를 나누고, 객체를 묶고, 수명 주기 규칙을 건다.

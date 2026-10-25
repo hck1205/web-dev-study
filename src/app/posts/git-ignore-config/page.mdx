@@ -400,7 +400,7 @@ D  dist/app.js
 
 줄바꿈 문제는 PR diff가 파일 전체를 바꾼 것으로 나올 때 의심한다. `git diff --ignore-cr-at-eol`로 봐서 차이가 사라지면 줄바꿈뿐이다. 저장소에 `.gitattributes`를 넣고 `git add --renormalize .`로 한 번에 정리하는 과정은 [문제 해결 글](/posts/git-troubleshooting)에서 실제 출력으로 따라간다. 정규화 커밋은 기능 변경과 섞지 않는다.
 
-## 다시 정리하면
+## 추적 전에만 듣고, 마지막 줄이 이긴다
 
 `.gitignore`는 아직 추적하지 않는 파일에만 듣고, 위에서부터 맞춰 보다 마지막으로 맞은 줄이 결정한다. 이미 인덱스에 들어간 파일은 `git rm --cached`로 빼야 하고, 무엇이 왜 무시되는지는 `check-ignore -v`, 무엇이 잘못 추적되는지는 `ls-files -ci`로 묻는다. 설정은 system, global, local 순서로 읽혀 나중 값이 이기고, 어느 파일에서 왔는지는 `--show-origin`이 알려 준다. 줄바꿈은 개인 설정보다 저장소의 `.gitattributes`로 고정한다. 다음은 이 커밋들 위에서 [브랜치가 어떻게 움직이고 합쳐지는지](/posts/git-branch-merge) 볼 차례다.
 

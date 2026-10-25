@@ -32,17 +32,18 @@ export const Brand = styled(Link)`
   font-size: ${font.size.lg};
   letter-spacing: -0.03em;
   text-decoration: none;
+  white-space: nowrap;
 
   &:hover {
     color: ${color.text};
   }
 `;
 
-// 모바일: 햄버거 패널 / tablet 이상: 가로 메뉴
+// 모바일·태블릿: 햄버거 패널 / desktop 이상: 가로 메뉴 (태블릿 폭에는 항목 7개가 한 줄에 안 들어간다)
 export const DesktopNav = styled.nav`
   display: none;
 
-  ${media.tablet} {
+  ${media.desktop} {
     display: flex;
     gap: 0.25rem;
     margin-right: 0.5rem;
@@ -52,7 +53,7 @@ export const DesktopNav = styled.nav`
 export const MobileOnly = styled.div`
   display: contents;
 
-  ${media.tablet} {
+  ${media.desktop} {
     display: none;
   }
 `;
@@ -61,11 +62,12 @@ const navItemStyle = `
   display: inline-flex;
   gap: 0.25rem;
   align-items: center;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0 0.875rem;
   border: 0;
   cursor: pointer;
   font-family: inherit;
+  white-space: nowrap;
 `;
 
 export const NavLink = styled(Link, omitProps("active"))<{ active: boolean }>`
@@ -129,7 +131,7 @@ export const DropdownPanel = styled.div`
 export const PanelAll = styled(Link)`
   display: flex;
   align-items: center;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   margin-bottom: 0.25rem;
   padding: 0 0.75rem;
   border-bottom: 1px solid ${color.border};

@@ -1,0 +1,539 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-word-ladder");
+
+<EasyIntro>
+  글자 하나만 바꿔서 다른 단어로 건너가는 놀이가 있다. cold에서 시작해 한 번에 한 글자씩 바꾸되, 바꿀 때마다 진짜 있는 단어여야 한다. cold, cord, card, ward, warm처럼 하면 차가운 말이 따뜻한 말이 된다. 가장 적은 단어로 건너가는 길을 찾고 싶다. 아무 길이나 끝까지 가 보면 너무 오래 걸린다. 그래서 연못에 돌을 던졌을 때 물결이 퍼지듯 찾는다. 처음엔 한 글자만 바꿔 갈 수 있는 단어를 모두 적고, 다음엔 거기서 한 글자를 더 바꿔 갈 수 있는 단어를 모두 적는다. 이렇게 한 겹씩 넓혀 가다 목표 단어에 처음 닿은 순간의 겹 수가 가장 짧은 길이다. 양쪽 끝에서 동시에 물결을 퍼뜨려 가운데서 만나게 하면 훨씬 적게 찾고도 답이 나온다.
+</EasyIntro>
+
+루이스 캐럴이 만든 단어 놀이 가운데 "더블릿"이 있다. 단어 하나에서 시작해 한 번에 한 글자씩 바꾸며 다른 단어로 건너가는데, 중간 단어도 모두 사전에 있는 단어여야 한다. cold에서 warm으로 가는 식이다. 사람이 하면 머리를 굴려야 하지만, 컴퓨터에게는 정해진 질문이다. 단어를 점으로, 한 글자 차이를 선으로 보면 가장 짧은 길 찾기가 된다.
+
+[LeetCode 127. Word Ladder](https://leetcode.com/problems/word-ladder/)가 이 놀이다. Hard 문제지만 어려운 부분은 탐색 자체가 아니라 "한 글자 차이인 단어"를 빨리 찾는 일이다. 이 글은 모든 길을 다 가 보는 백트래킹부터 시작해, 단어 쌍을 전부 비교해 그래프를 만드는 BFS, 글자를 하나씩 바꿔 보는 BFS, 와일드카드 통으로 묶는 BFS, 양쪽에서 함께 넓히는 양방향 BFS까지 다섯 가지를 보고, 일부러 만든 입력에서 시간을 잰다. BFS가 왜 최단 거리를 보장하는지는 [그래프와 BFS·DFS 글](/posts/ds-graph-bfs-dfs)에서 다뤘다. 실행 결과는 Node.js 22, Python 3.13, Java 21에서 돌린 값이다.
+
+## 한 글자씩 바꿔 건너가는 사다리
+
+시작 단어 `beginWord`, 목표 단어 `endWord`, 단어 목록 `wordList`가 주어진다. 시작 단어에서 한 번에 한 글자씩 바꿔 목표 단어까지 가는데, 바꿔서 나온 단어는 모두 목록에 있어야 한다. 시작 단어는 목록에 없어도 된다. 가장 짧은 사다리에 들어간 단어 수(시작과 목표 포함)를 돌려주고, 갈 수 없으면 0을 돌려준다.
+
+풀이에 영향을 주는 조건은 이렇다.
+
+- 목록은 최대 5,000단어, 단어 길이는 최대 10, 모두 소문자이고 길이가 같다.
+- 답은 바꾼 횟수가 아니라 단어 수다. cold에서 warm까지 네 번 바꾸면 답은 5다.
+- 목표 단어가 목록에 없으면 바로 0이다. 마지막 단어도 목록에 있어야 하기 때문이다.
+
+이 글에서 쓸 예시는 이렇다.
+
+```text
+beginWord = cold
+endWord   = warm
+wordList  = [cord, card, ward, warm, worm, word, wore, core, corm]
+
+cold → cord → card → ward → warm   단어 5개
+cold → cord → word → ward → warm   단어 5개
+cold → cord → corm → worm → warm   단어 5개
+```
+
+손으로 찾아보면 5보다 짧은 길은 없다. cold와 warm은 네 글자가 모두 다르니 적어도 네 번은 바꿔야 하고, 단어로는 다섯 개다. 같은 길이의 길이 여러 개라 어느 걸 찾든 답은 5다.
+
+아래 그림은 한 글자 차이인 단어끼리 선을 그은 그래프다. 다음을 누르면 가장 짧은 길 몇 개를 보여 준다.
+
+<VectorSpace
+  caption="한 글자 차이인 단어끼리 이은 그래프. 왼쪽에서 오른쪽으로 cold에서 멀어진다"
+  width={400}
+  height={260}
+  groups={[{ id: "end", label: "시작과 목표" }, { id: "word", label: "목록의 단어" }]}
+  points={[
+    { id: "cold", label: "cold", x: 40, y: 130, group: "end" },
+    { id: "cord", label: "cord", x: 120, y: 130, group: "word" },
+    { id: "word", label: "word", x: 200, y: 40, group: "word" },
+    { id: "card", label: "card", x: 200, y: 100, group: "word" },
+    { id: "core", label: "core", x: 200, y: 160, group: "word" },
+    { id: "corm", label: "corm", x: 200, y: 220, group: "word" },
+    { id: "ward", label: "ward", x: 280, y: 60, group: "word" },
+    { id: "wore", label: "wore", x: 280, y: 140, group: "word" },
+    { id: "worm", label: "worm", x: 280, y: 210, group: "word" },
+    { id: "warm", label: "warm", x: 360, y: 130, group: "end", labelAt: "left" },
+  ]}
+  edges={[["cold", "cord"], ["cord", "word"], ["cord", "card"], ["cord", "core"], ["cord", "corm"], ["word", "ward"], ["word", "wore"], ["word", "worm"], ["card", "ward"], ["core", "corm"], ["core", "wore"], ["corm", "worm"], ["ward", "warm"], ["wore", "worm"], ["worm", "warm"]]}
+  steps={[
+    { caption: "한 글자만 다른 단어끼리 선을 그었다. 단어 사다리는 이 그래프의 가장 짧은 길이다.", showEdges: true },
+    { caption: "cold에서 한 글자만 바꿔 갈 수 있는 단어는 cord 하나뿐이다.", showEdges: true, path: ["cold", "cord"] },
+    { caption: "BFS가 처음 닿는 길: cold, cord, word, ward, warm. 단어 다섯 개.", showEdges: true, path: ["cold", "cord", "word", "ward", "warm"] },
+    { caption: "같은 길이의 다른 길도 있다. card를 거치든 corm을 거치든 답은 5다.", showEdges: true, path: ["cold", "cord", "corm", "worm", "warm"] },
+    { caption: "양방향 BFS는 warm 쪽에서 넓힌 worm이 cold 쪽 물결의 corm과 만나서 끝난다.", showEdges: true, path: ["warm", "worm", "corm"] },
+  ]}
+/>
+
+## 모든 사다리를 다 올라 본다
+
+가장 먼저 떠오르는 건 [백트래킹](/posts/recursion-backtracking)이다. 지금 단어에서 한 글자 차이인 단어로 하나씩 건너가 보고, 목표에 닿으면 길이를 기록한다. 이미 쓴 단어는 다시 쓰지 않는다(쓰면 같은 자리를 맴돈다). 지금까지의 길이가 기록보다 길어지면 더 갈 필요가 없으니 돌아선다.
+
+```js
+function oneLetterApart(a, b) {
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i] && ++diff > 1) return false; // 두 글자째 다르면 바로 그만
+  }
+  return diff === 1;
+}
+
+function ladderLength(beginWord, endWord, wordList) {
+  const words = [...new Set(wordList)];
+  if (!words.includes(endWord)) return 0;
+  let best = Infinity;
+  const used = new Set([beginWord]);
+  const go = (w, len) => {
+    if (len >= best) return;                 // 이미 찾은 길보다 길다
+    if (w === endWord) { best = len; return; }
+    for (const x of words) {
+      if (!used.has(x) && oneLetterApart(w, x)) {
+        used.add(x);
+        go(x, len + 1);
+        used.delete(x);                      // 다른 길에서 다시 쓸 수 있게 되돌린다
+      }
+    }
+  };
+  go(beginWord, 1);
+  return best === Infinity ? 0 : best;
+}
+```
+
+예시에서는 바로 5가 나온다. 문제는 단어가 촘촘하게 이어진 목록이다. 글자 `a`, `b`, `c`로 만들 수 있는 다섯 글자 단어 243개를 모두 목록에 넣고 `aaaaa`에서 `ccccc`로 가 보면, 재귀를 190만 번 넘게 부르고 2.4초가 걸렸다. 가지치기를 해도 처음 찾은 길이 길면 그 길이까지의 모든 길을 다 걸어 본다. 단어가 늘면 길의 수는 지수적으로 늘어난다.
+
+이 풀이가 놓친 것은 BFS의 성질이다. 가장 짧은 길만 원한다면 모든 길을 걸어 볼 필요가 없다. 가까운 단어부터 한 겹씩 넓히면, 목표에 처음 닿는 순간이 곧 가장 짧은 길이다.
+
+## 단어 쌍을 전부 비교해 그래프를 만든다
+
+BFS를 하려면 단어마다 "한 글자 차이인 이웃"이 필요하다. 가장 곧은 방법은 모든 단어 쌍을 비교해서 인접 리스트를 미리 만드는 것이다. 그러고 나면 [Number of Islands](/posts/leetcode-number-of-islands)의 격자 BFS와 같은 모양이 된다. 거리를 같이 적어 두고, 큐에 넣을 때 방문 표시를 한다.
+
+```js
+function ladderLength(beginWord, endWord, wordList) {
+  const words = [...new Set([beginWord, ...wordList])];
+  if (!words.includes(endWord)) return 0;
+  const index = new Map(words.map((w, i) => [w, i]));
+  const adj = words.map(() => []);
+  for (let i = 0; i < words.length; i++) {
+    for (let j = i + 1; j < words.length; j++) {
+      if (oneLetterApart(words[i], words[j])) { adj[i].push(j); adj[j].push(i); }
+    }
+  }
+  const dist = new Int32Array(words.length);   // 0이면 아직 안 감, 아니면 단어 수
+  const start = index.get(beginWord), goal = index.get(endWord);
+  dist[start] = 1;
+  const queue = [start];
+  for (let head = 0; head < queue.length; head++) {
+    const u = queue[head];
+    if (u === goal) return dist[u];
+    for (const v of adj[u]) {
+      if (dist[v] === 0) { dist[v] = dist[u] + 1; queue.push(v); }
+    }
+  }
+  return 0;
+}
+```
+
+단어가 N개, 길이가 L이면 쌍 비교에 O(N² · L), BFS에 O(N + E)가 든다. E는 선의 수다. 5,000단어면 쌍이 1,250만 개다. 비교 함수가 두 글자째 다르면 바로 그만두니 실제로는 L배까지 가지 않지만, 쌍의 수는 줄지 않는다. 열 글자 무작위 단어 5,000개에 길이 31짜리 사다리를 숨긴 입력에서 150ms가 걸렸다. 통과는 하지만, 정작 BFS가 본 단어는 그중 31개뿐이었다. 그래프의 대부분을 쓰지도 않을 선을 만드는 데 시간을 썼다.
+
+## 글자를 하나씩 바꿔 보며 이웃을 찾는다
+
+이웃을 미리 다 만들지 말고, 필요할 때 만든다. 단어의 글자 하나를 `a`부터 `z`까지 바꿔 보고, 그렇게 만든 후보가 목록(해시 집합)에 있으면 이웃이다. 단어 하나의 후보는 L · 25개다. 다섯 글자 단어면 125개, 열 글자면 250개다. N이 5,000이면 쌍 비교(단어 하나에 4,999번)보다 훨씬 적다.
+
+방문 표시는 목록 집합에서 단어를 지우는 것으로 대신한다. 큐에 넣는 순간 지우면 다른 단어가 같은 단어를 다시 찾지 못한다. 거리는 층 단위로 센다. 지금 층의 단어를 모두 처리하고 다음 층으로 넘어갈 때 하나를 더한다.
+
+```js
+function ladderLength(beginWord, endWord, wordList) {
+  const dict = new Set(wordList);
+  if (!dict.has(endWord)) return 0;            // 목표가 목록에 없으면 갈 수 없다
+  const ALPHA = "abcdefghijklmnopqrstuvwxyz";
+  dict.delete(beginWord);
+  let level = [beginWord];
+  let count = 1;                               // 지금 층까지의 단어 수
+  while (level.length > 0) {
+    const next = [];
+    for (const w of level) {
+      if (w === endWord) return count;
+      const chars = w.split("");
+      for (let i = 0; i < chars.length; i++) {
+        const orig = chars[i];
+        for (const c of ALPHA) {
+          if (c === orig) continue;
+          chars[i] = c;
+          const cand = chars.join("");
+          if (dict.has(cand)) {
+            dict.delete(cand);                 // 큐에 넣는 순간 지운다 = 방문 표시
+            next.push(cand);
+          }
+        }
+        chars[i] = orig;                       // 다음 자리로 가기 전에 되돌린다
+      }
+    }
+    level = next;
+    count++;
+  }
+  return 0;
+}
+```
+
+시간은 O(N · L · 26 · L)이다. 단어마다 후보 26 · L개를 만들고, 후보 하나를 만들고 해시하는 데 O(L)이 든다. L이 10 이하라 사실상 O(N)에 가깝다. 공간은 집합과 층 배열로 O(N · L)이다. 앞의 무작위 입력에서 2.1ms가 걸렸다. BFS가 닿은 31개 단어에서만 후보를 만들었기 때문이다.
+
+아래 그림은 예시를 이 풀이로 따라간 것이다. 위 칸은 단어를 찾은 순서대로 놓았고, 초록 칸이 지금까지 큐에 넣은(목록에서 지운) 단어, 아래 칸이 다음 층이다.
+
+<AlgoTrace
+  caption="층 단위 BFS로 cold에서 warm까지. 찾은 단어는 목록에서 지운다"
+  memoryLabel="이번 층"
+  cells={["cold", "cord", "word", "card", "core", "corm", "ward", "wore", "worm", "warm"]}
+  steps={[
+    { pointer: 0, found: [0], memory: ["cold"], caption: "1층은 시작 단어 cold 하나다. 목록에서 cold를 지운다." },
+    { pointer: 0, found: [0, 1], memory: ["cord"], caption: "cold의 글자를 하나씩 a부터 z까지 바꿔 본다. 목록에 있는 건 cord뿐이다. 2층." },
+    { pointer: 1, found: [0, 1, 2, 3, 4, 5], memory: ["word", "card", "core", "corm"], caption: "cord에서 word, card, core, corm으로 간다. 3층." },
+    { pointer: 2, found: [0, 1, 2, 3, 4, 5, 6, 7, 8], memory: ["ward", "wore", "worm"], caption: "word에서 ward, wore, worm이 나온다. card, core, corm의 이웃은 이미 지워져 새로 나오지 않는다." },
+    { pointer: 6, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], memory: ["warm"], caption: "ward의 d를 m으로 바꾸면 warm이다. 5층." },
+    { pointer: 9, found: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], memory: [], caption: "warm을 꺼내면 목표다. 단어 다섯 개, 답은 5." },
+  ]}
+/>
+
+네 번째 단계를 보자. card의 c를 w로 바꾸면 ward인데, ward는 그 전에 word에서 이미 찾아 목록에서 지웠다. 큐에 넣는 순간 지우지 않고 꺼낼 때 지운다면, ward가 다음 층에 두 번 들어간다. 답은 맞지만 같은 단어의 후보를 두 번 만든다. 단어가 촘촘한 입력에서는 이 중복이 층마다 불어난다.
+
+## 와일드카드 통으로 이웃을 묶는다
+
+후보를 26번씩 만드는 대신, 한 글자를 `*`로 가린 모양으로 단어를 묶어 둘 수도 있다. `cord`는 `*ord`, `c*rd`, `co*d`, `cor*` 네 통에 들어간다. `card`도 `c*rd` 통에 들어가니, 같은 통에 있는 단어끼리는 한 글자 차이다. 통을 미리 만들어 두면 이웃 찾기는 내 단어의 통 L개를 여는 것으로 끝난다.
+
+```js
+function ladderLength(beginWord, endWord, wordList) {
+  if (!wordList.includes(endWord)) return 0;
+  const L = beginWord.length;
+  const buckets = new Map();                   // "c*rd" -> [cord, card]
+  for (const w of new Set([beginWord, ...wordList])) {
+    for (let i = 0; i < L; i++) {
+      const key = w.slice(0, i) + "*" + w.slice(i + 1);
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(w);
+    }
+  }
+  const seen = new Set([beginWord]);
+  let level = [beginWord], count = 1;
+  while (level.length > 0) {
+    const next = [];
+    for (const w of level) {
+      if (w === endWord) return count;
+      for (let i = 0; i < L; i++) {
+        const key = w.slice(0, i) + "*" + w.slice(i + 1);
+        for (const x of buckets.get(key)) {
+          if (!seen.has(x)) { seen.add(x); next.push(x); }
+        }
+        buckets.set(key, []);                  // 이 통의 단어는 모두 큐에 들어갔다
+      }
+    }
+    level = next;
+    count++;
+  }
+  return 0;
+}
+```
+
+통을 만드는 데 O(N · L²)이 든다. 단어마다 열쇠 L개, 열쇠 하나를 만드는 데 O(L)이다. 탐색도 같은 크기다. 마지막 `buckets.set(key, [])` 한 줄이 중요하다. 통을 한 번 열면 그 안의 단어는 모두 이번 층이나 그 전에 큐에 들어갔으니, 다시 열 필요가 없다. 이 줄이 없으면 같은 통을 여러 단어가 반복해서 열어서, 큰 통이 많은 입력에서 느려진다.
+
+이 풀이는 알파벳이 클 때 강하다. 글자 바꾸기 풀이는 알파벳 크기만큼 후보를 만드니, 유니코드 한글 음절(1만 개가 넘는다)처럼 알파벳이 크면 감당할 수 없다. 통 풀이는 알파벳 크기와 상관없다. 반대로 통을 미리 다 만들어야 해서, BFS가 단어 몇 개만 보고 끝나는 입력에서는 손해다. 무작위 입력에서 20.8ms로, 글자 바꾸기(2.1ms)보다 열 배쯤 느렸다.
+
+## 양쪽 끝에서 물결을 함께 퍼뜨린다
+
+한쪽에서만 넓히면 층이 깊어질수록 물결이 커진다. 한 단어에 이웃이 b개라면 d층까지 b^d개쯤을 본다. 시작과 목표 양쪽에서 동시에 넓혀 가운데서 만나게 하면, 각각 d/2층만 가면 된다. b^(d/2) + b^(d/2)는 b^d보다 훨씬 작다. 이게 양방향 BFS다.
+
+규칙은 세 가지다.
+
+1. 시작 쪽 물결 `front`와 목표 쪽 물결 `back`을 집합으로 둔다.
+2. 둘 중 작은 쪽을 한 층 넓힌다. 큰 쪽을 넓히면 후보가 더 많이 생긴다.
+3. 넓히다가 만든 후보가 반대쪽 물결에 있으면 두 물결이 만난 것이다. 지금까지의 단어 수에 하나를 더해 돌려준다.
+
+```js
+function ladderLength(beginWord, endWord, wordList) {
+  const dict = new Set(wordList);
+  if (!dict.has(endWord)) return 0;
+  const ALPHA = "abcdefghijklmnopqrstuvwxyz";
+  let front = new Set([beginWord]), back = new Set([endWord]);
+  dict.delete(beginWord);
+  dict.delete(endWord);
+  let count = 1;                                   // 두 물결 사이 길의 단어 수
+  while (front.size > 0 && back.size > 0) {
+    if (front.size > back.size) [front, back] = [back, front]; // 작은 쪽을 넓힌다
+    const next = new Set();
+    for (const w of front) {
+      const chars = w.split("");
+      for (let i = 0; i < chars.length; i++) {
+        const orig = chars[i];
+        for (const c of ALPHA) {
+          if (c === orig) continue;
+          chars[i] = c;
+          const cand = chars.join("");
+          if (back.has(cand)) return count + 1;    // 두 물결이 만났다
+          if (dict.has(cand)) { dict.delete(cand); next.add(cand); }
+        }
+        chars[i] = orig;
+      }
+    }
+    front = next;
+    count++;
+  }
+  return 0;                                        // 한쪽 물결이 말랐다: 이어지지 않는다
+}
+```
+
+예시에서 따라가 보면 이렇다. cold 쪽에서 cord로 넓히고(`count` 2), 다음엔 cord 하나와 warm 하나 중 크기가 같으니 cord를 넓혀 word, card, core, corm을 얻는다(`count` 3). 이제 시작 쪽이 네 개, 목표 쪽이 warm 하나라 warm을 넓혀 worm, ward를 얻는다(`count` 4). 다시 목표 쪽(두 개)이 작으니 넓히는데, worm의 w를 c로 바꾼 corm이 시작 쪽 물결에 있다. `count + 1`인 5를 돌려준다.
+
+복잡도의 최악은 한쪽 BFS와 같다. 하지만 실제로 보는 단어 수가 크게 줄어든다. 글자 `a`부터 `e`로 만든 다섯 글자 단어 3,125개를 모두 넣고 `aaaaa`에서 `eeeee`까지 가는 촘촘한 입력에서, 한쪽 BFS는 3,125개를 모두 큐에 넣었고 양방향 BFS는 689개만 넣었다. 시간은 70.7ms와 4.6ms였다.
+
+한 가지 조심할 점이 있다. 두 물결이 만나는지를 "후보를 만들 때" 확인해야 한다. 다음 층을 다 만든 뒤 두 집합의 교집합을 보는 방식도 맞지만, 만나는 즉시 멈추지 못한다. 목표 단어를 `dict`에서 미리 지워 두는 건 헛걸음을 막기 위해서다. 지우지 않으면 목표 쪽 물결이 worm에서 다시 넓힐 때 warm으로 되돌아와 새 단어처럼 넣는다. 답은 같지만 이미 본 단어를 또 본다.
+
+### Python과 Java로 쓰면
+
+Python은 문자열이 불변이라 `w[:i] + c + w[i + 1:]`로 후보를 만든다. 글자 목록 `ascii_lowercase`는 `string` 모듈에 있다. 촘촘한 3,125단어 입력에서 1ms 남짓 걸렸다.
+
+```python
+from string import ascii_lowercase
+from typing import List
+
+
+def ladder_length(begin_word: str, end_word: str, word_list: List[str]) -> int:
+    words = set(word_list)
+    if end_word not in words:
+        return 0
+    front, back = {begin_word}, {end_word}
+    words.discard(begin_word)
+    words.discard(end_word)
+    steps = 1
+    while front and back:
+        if len(front) > len(back):
+            front, back = back, front  # 작은 쪽 물결을 넓힌다
+        nxt = set()
+        for w in front:
+            for i in range(len(w)):
+                for c in ascii_lowercase:
+                    if c == w[i]:
+                        continue
+                    cand = w[:i] + c + w[i + 1:]
+                    if cand in back:      # 두 물결이 만났다
+                        return steps + 1
+                    if cand in words:
+                        words.remove(cand)
+                        nxt.add(cand)
+        front = nxt
+        steps += 1
+    return 0
+
+
+L = ["cord", "card", "ward", "warm", "worm", "word", "wore", "core", "corm"]
+print(ladder_length("cold", "warm", L), ladder_length("cold", "warn", L))
+```
+
+```text
+5 0
+```
+
+`words.remove`는 없는 원소에 `KeyError`를 내고, `discard`는 조용히 넘어간다. 시작 단어는 목록에 없을 수 있으니 `discard`를 쓴다.
+
+Java는 `char[]`의 한 칸을 바꿔 `new String(chars)`로 후보를 만들고, 다음 자리로 가기 전에 되돌린다. `Set.remove`가 지웠는지를 `boolean`으로 알려 줘서 확인과 삭제를 한 번에 한다.
+
+```java
+import java.util.*;
+
+class Solution {
+    public int ladderLength(String beginWord, String endWord, List<String> wordList) {
+        Set<String> words = new HashSet<>(wordList);
+        if (!words.contains(endWord)) return 0;
+        Set<String> front = new HashSet<>(), back = new HashSet<>();
+        front.add(beginWord);
+        back.add(endWord);
+        words.remove(beginWord);
+        words.remove(endWord);
+        int steps = 1;
+        while (!front.isEmpty() && !back.isEmpty()) {
+            if (front.size() > back.size()) { Set<String> t = front; front = back; back = t; }
+            Set<String> next = new HashSet<>();
+            for (String w : front) {
+                char[] chars = w.toCharArray();
+                for (int i = 0; i < chars.length; i++) {
+                    char orig = chars[i];
+                    for (char c = 'a'; c <= 'z'; c++) {
+                        if (c == orig) continue;
+                        chars[i] = c;
+                        String cand = new String(chars);
+                        if (back.contains(cand)) return steps + 1;   // 두 물결이 만났다
+                        if (words.remove(cand)) next.add(cand);      // 있으면 지우고 다음 물결로
+                    }
+                    chars[i] = orig;                                 // 한 글자씩 되돌린다
+                }
+            }
+            front = next;
+            steps++;
+        }
+        return 0;
+    }
+}
+```
+
+```text
+5 0
+```
+
+Java에서 `String`을 `==`로 비교하면 내용이 아니라 객체를 비교한다. 위 코드는 `contains`와 `remove`가 `equals`로 비교하니 문제없지만, `w == endWord` 같은 비교를 쓰면 같은 글자여도 거짓이 나올 수 있다.
+
+## 두 입력으로 재 보면
+
+백트래킹을 뺀 네 풀이를 두 입력에서 세 번씩 돌려 가장 빠른 값을 적었다. Node.js 22다.
+
+```text
+입력                                          쌍 비교    글자 바꾸기   와일드카드 통   양방향
+촘촘함: a~e 다섯 글자 3,125개, 답 6            79.4ms       70.7ms          6.6ms        4.6ms
+듬성함: 무작위 열 글자 5,000개, 답 31          150.6ms        2.1ms         20.8ms        2.3ms
+```
+
+두 입력에서 1등이 다르다. 촘촘한 입력에서는 단어마다 이웃이 20개씩이라 한쪽 BFS가 목록 전체를 훑는다. 글자 바꾸기는 그 3,125개마다 후보 125개를 만들어서 느렸고, 통 풀이는 통을 한 번씩만 열어서 빨랐다. 양방향은 애초에 689개만 봐서 가장 빨랐다. 듬성한 입력에서는 사다리 위의 단어만 이웃이 있어서 BFS가 31개만 보고 끝난다. 그러면 미리 전체를 준비하는 쌍 비교와 통 풀이가 손해다.
+
+양방향 BFS는 두 입력 모두에서 1등이거나 1등과 비슷했다. 기본 답으로 고르는 이유다.
+
+## 다섯 풀이를 목록 모양으로 고르면
+
+N은 단어 수, L은 단어 길이, 26은 알파벳 크기다.
+
+| 풀이 | 시간 | 추가 공간 | 언제 고르나 |
+|---|---|---|---|
+| 모든 길 백트래킹 | 지수 시간 | O(N) | 쓰지 않는다. 모든 최단 경로를 나열할 때도 BFS로 거리를 먼저 구한다 |
+| 쌍 비교로 그래프 만들기 + BFS | O(N² · L) | O(N + E) | 같은 목록에 질문이 아주 많아 그래프를 한 번 만들어 둘 때 |
+| 글자 바꾸기 BFS | O(N · 26 · L²) | O(N · L) | 코드가 짧다. 목록이 듬성할 때 빠르다 |
+| 와일드카드 통 BFS | O(N · L²) | O(N · L²) | 알파벳이 클 때, 목록이 촘촘할 때 |
+| 양방향 BFS | O(N · 26 · L²), 실제로는 훨씬 적게 | O(N · L) | 기본 답 |
+
+아래에서 직접 짜 볼 수 있다.
+
+<CodePlayground
+  caption="Word Ladder: 가장 짧은 사다리의 단어 수"
+  functionName="ladderLength"
+  initialCode={`function ladderLength(beginWord, endWord, wordList) {
+  // 한 번에 한 글자씩 바꿔 beginWord에서 endWord까지 간다
+  // 바꾼 단어는 모두 wordList에 있어야 한다
+  // 가장 짧은 사다리의 단어 수(시작과 끝 포함), 없으면 0
+  return 0;
+}`}
+  solution={`function ladderLength(beginWord, endWord, wordList) {
+  const dict = new Set(wordList);
+  if (!dict.has(endWord)) return 0;
+  const ALPHA = "abcdefghijklmnopqrstuvwxyz";
+  let front = new Set([beginWord]), back = new Set([endWord]);
+  dict.delete(beginWord);
+  dict.delete(endWord);
+  let count = 1;
+  while (front.size > 0 && back.size > 0) {
+    if (front.size > back.size) [front, back] = [back, front];
+    const next = new Set();
+    for (const w of front) {
+      const chars = w.split("");
+      for (let i = 0; i < chars.length; i++) {
+        const orig = chars[i];
+        for (const c of ALPHA) {
+          if (c === orig) continue;
+          chars[i] = c;
+          const cand = chars.join("");
+          if (back.has(cand)) return count + 1;
+          if (dict.has(cand)) { dict.delete(cand); next.add(cand); }
+        }
+        chars[i] = orig;
+      }
+    }
+    front = next;
+    count++;
+  }
+  return 0;
+}`}
+  tests={[
+    { label: "글의 예시", args: ["cold", "warm", ["cord", "card", "ward", "warm", "worm", "word", "wore", "core", "corm"]], expected: 5 },
+    { label: "목표가 목록에 없다", args: ["cold", "warn", ["cord", "card", "ward", "warm", "worm", "word", "wore", "core", "corm"]], expected: 0 },
+    { label: "바로 옆 단어", args: ["cold", "cord", ["cord", "card", "ward", "warm", "worm", "word", "wore", "core", "corm"]], expected: 2 },
+    { label: "한 글자 단어", args: ["a", "c", ["a", "b", "c"]], expected: 2 },
+    { label: "두 번 바꾼다", args: ["ab", "cd", ["ad", "cd"]], expected: 3 },
+    { label: "이어지지 않는다", args: ["hot", "dog", ["hot", "dog"]], expected: 0 },
+    { label: "시작 단어가 목록에 있다", args: ["lost", "cast", ["lost", "most", "mist", "cost", "cast"]], expected: 3 },
+  ]}
+/>
+
+## 단어 수와 바꾼 횟수, 그리고 지우는 시점
+
+가장 흔한 실수는 단어 수 대신 바꾼 횟수를 돌려주는 것이다.
+
+```js
+let steps = 0;                     // 0에서 시작했다
+// ... 같은 BFS ...
+if (w === endWord) return steps;   // cold -> warm에서 4를 돌려준다 (정답 5)
+```
+
+문제는 사다리에 들어간 단어 수를 묻는다. 시작 단어 하나만 있는 층이 이미 1이다. 테스트의 "바로 옆 단어"가 2인지 확인하면 이 실수를 잡는다.
+
+두 번째는 목표 단어가 목록에 있는지 먼저 보지 않는 것이다. 이 검사를 빼도 BFS가 목표를 못 찾고 0을 돌려주니 답은 맞다. 하지만 목록 전체를 다 훑은 뒤에야 0을 돌려준다. 양방향 BFS에서는 검사가 빠지면 목표 쪽 물결을 목록에 없는 단어로 시작하게 되어, 틀린 답이 나온다.
+
+```js
+// 양방향 BFS에서 if (!dict.has(endWord)) return 0을 뺐다
+ladderLength("cold", "warn", ["cord", "card", "ward", "warm", "worm", "word", "wore", "core", "corm"]);
+// -> 5 (정답 0. warn은 목록에 없다)
+```
+
+목표 쪽 물결이 목록에 없는 warn에서 출발해 ward로 건너오니, cold, cord, word, ward, warn처럼 존재하지 않는 마지막 칸을 밟은 사다리가 만들어진다.
+
+세 번째는 앞에서 본 지우는 시점이다. 단어를 꺼낼 때 지우면 같은 단어가 같은 층에 여러 번 들어간다. 큐에 넣을 때 지운다. 그 밖에 이 문제에서 조심할 것들이다.
+
+- 시작 단어가 목록에 있는 경우. 지우지 않으면 다음 층에서 시작 단어로 되돌아오는 길이 생긴다. 답은 맞지만 헛걸음이다. 테스트의 "시작 단어가 목록에 있다"가 이 경우다.
+- 같은 단어로 바꾸는 후보(`c === orig`)를 건너뛰지 않으면, 지금 단어가 집합에 남아 있을 때 자기 자신을 이웃으로 찾는다. 처음에 지워 두면 문제없지만 건너뛰는 편이 안전하다.
+- `chars[i] = orig`로 되돌리는 줄을 빼면 다음 자리를 바꿀 때 앞자리가 `z`로 바뀐 채라 엉뚱한 후보를 만든다.
+
+## 사다리 문제가 바뀌면
+
+### 가장 짧은 사다리를 모두 돌려 달라면
+
+LeetCode 126. Word Ladder II다. BFS로 층을 넓히되, 단어마다 "이 단어로 오는 앞 층 단어들"을 모두 기록한다. 같은 층에서 여러 단어가 한 단어로 올 수 있으니 방문 표시는 층이 끝날 때 한꺼번에 한다. 목표에 닿은 층에서 멈춘 뒤, 기록을 거꾸로 따라가며 백트래킹으로 길을 모은다. 처음부터 백트래킹으로 모든 길을 걸으면 앞에서 본 지수 시간에 걸린다. BFS로 "최단 거리 안에 있는 길"만 남겨 둔 뒤에 나열하는 게 요점이다.
+
+### 바꾸는 비용이 글자마다 다르다면
+
+모든 선의 길이가 1이 아니게 되니 BFS가 최단 거리를 보장하지 못한다. [다익스트라](/posts/shortest-path-algorithms)로 바꾼다. 큐 대신 최소 힙에서 지금까지 비용이 가장 작은 단어를 꺼낸다. [Network Delay Time](/posts/leetcode-network-delay-time)이 같은 틀이다.
+
+### 글자를 넣거나 빼는 것도 한 걸음이라면
+
+이웃의 정의만 바뀐다. 후보를 만들 때 글자 바꾸기에 더해 자리마다 글자 하나 넣기(26 · (L + 1)개), 글자 하나 빼기(L개)를 함께 만든다. 단어 길이가 서로 달라지니 와일드카드 통은 길이별로 따로 만들어야 한다. 두 단어 사이의 이런 편집 횟수 자체를 구하는 건 [Edit Distance](/posts/leetcode-edit-distance)다.
+
+### 같은 목록에 질문이 수천 번 들어온다면
+
+질문마다 BFS를 새로 돌리면 O(질문 수 · N · 26 · L²)이다. 그래프를 한 번 만들어 두고(통 풀이로 인접 리스트를 뽑아 두고) 질문마다 양방향 BFS만 돌린다. 목록이 크게 바뀌지 않고 질문이 아주 많다면, 단어 쌍 사이 거리를 미리 전부 구해 두는 것도 선택지다. 5,000단어면 2,500만 쌍이라 메모리와 맞바꾸는 셈이다.
+
+### 비슷한 문제
+
+- [Number of Islands](/posts/leetcode-number-of-islands) (200): 격자 위의 BFS. 이웃이 상하좌우로 정해져 있다.
+- [Rotting Oranges](/posts/leetcode-rotting-oranges) (994): 층 단위 BFS에서 층 수가 답이다.
+- [Course Schedule](/posts/leetcode-course-schedule) (207): 같은 그래프 탐색이지만 최단 거리가 아니라 고리를 묻는다.
+- [Shortest Path in Binary Matrix](/posts/leetcode-shortest-path-in-binary-matrix) (1091): 격자에서 BFS로 최단 경로를 구한다.
+- 433\. Minimum Genetic Mutation: 알파벳이 A, C, G, T 네 글자인 같은 문제다.
+
+## 이웃을 빨리 찾고, 양쪽에서 넓힌다
+
+단어를 점으로, 한 글자 차이를 선으로 보면 사다리는 가장 짧은 길이고, 선의 길이가 모두 같으니 BFS가 답이다. 모든 길을 걷는 백트래킹은 지수 시간이고, BFS는 목표에 처음 닿는 층에서 멈춘다. 이 문제에서 실제로 시간을 정하는 건 이웃을 찾는 방법이다. 단어 쌍을 다 비교하면 N²이고, 글자를 하나씩 바꿔 해시 집합에 물어보면 단어마다 26 · L번이며, 와일드카드 통으로 묶으면 알파벳 크기와 상관없어진다. 여기에 양쪽 끝에서 작은 쪽 물결만 넓히는 양방향 BFS를 더하면 보는 단어 수가 크게 줄어든다. 단어 수를 세는지 바꾼 횟수를 세는지, 큐에 넣을 때 지우는지만 지키면 된다.
+
+## 면접에서 나올 만한 질문
+
+### 왜 BFS를 쓰나요?
+
+단어 사이의 한 걸음이 모두 비용 1이라, 가까운 단어부터 한 층씩 넓히는 BFS는 목표에 처음 닿은 층이 곧 최단 거리다. DFS나 백트래킹은 처음 찾은 길이 가장 짧다는 보장이 없어서 모든 길을 걸어야 하고, 촘촘한 243단어 입력에서 재귀를 190만 번 불렀다. 비용이 다르면 다익스트라로 바꾼다.
+
+### 이웃을 어떻게 찾나요?
+
+단어의 글자 하나를 `a`부터 `z`까지 바꿔 보고 해시 집합에 있는지 확인한다. 단어 하나에 후보 25 · L개라, 5,000단어를 모두 쌍으로 비교하는 것보다 훨씬 적다. 알파벳이 크거나 목록이 촘촘하면 한 글자를 `*`로 가린 모양을 열쇠로 단어를 미리 묶어 두는 통 방식을 쓴다.
+
+### 시간 복잡도는요?
+
+글자 바꾸기 BFS는 단어마다 후보 26 · L개를 만들고, 후보 하나를 만들고 해시하는 데 O(L)이 들어 O(N · 26 · L²)이다. 통 방식은 O(N · L²)이다. 쌍 비교로 그래프를 만들면 O(N² · L)이 먼저 든다. L이 10 이하라 실제로는 N에 거의 비례한다.
+
+### 양방향 BFS는 왜 빠른가요?
+
+한쪽에서 d층을 넓히면 이웃이 b개일 때 b^d개쯤을 보지만, 양쪽에서 d/2층씩 넓히면 b^(d/2)의 두 배만 본다. 그리고 매번 작은 쪽 물결을 넓혀서 후보 수를 줄인다. 촘촘한 3,125단어 입력에서 한쪽 BFS는 3,125개를 모두 큐에 넣었고, 양방향은 689개만 넣고 끝났다. 최악의 복잡도는 같다.
+
+### 방문한 단어는 언제 지우나요?
+
+큐(다음 층)에 넣는 순간 목록에서 지운다. 꺼낼 때 지우면 같은 층의 다른 단어가 같은 단어를 또 찾아 중복으로 넣는다. 예시에서 ward는 word와 card 양쪽에서 나오는데, 넣을 때 지워야 한 번만 들어간다. 모든 최단 경로를 구하는 Word Ladder II는 예외로, 같은 층 안에서는 여러 부모를 허용하고 층이 끝날 때 지운다.
+
+### 목표 단어가 목록에 없으면 어떻게 되나요?
+
+바로 0을 돌려준다. 사다리의 마지막 단어도 목록에 있어야 하기 때문이다. 한쪽 BFS는 이 검사를 빼도 결국 0이 나오지만 목록을 다 훑은 뒤다. 양방향 BFS에서 빼면 목록에 없는 목표에서 물결을 시작해 예시의 warn에서 5 같은 틀린 답이 나온다.

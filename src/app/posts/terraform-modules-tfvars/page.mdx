@@ -565,6 +565,42 @@ providers.
 
 이럴 때는 `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64`로 필요한 플랫폼 해시를 모두 채운다.
 
+`required_version`은 범위를 막아 줄 뿐 같은 버전을 깔아 주지는 않는다. 한 사람은 1.16, 다른 사람은 1.17로 apply하면 state의 `terraform_version`이 오락가락하고, 새 버전이 state 형식을 올리면 옛 버전 쪽이 읽지 못한다. 팀 전체의 CLI를 한 버전에 맞추는 흔한 방법이 tfenv와 저장소 루트의 `.terraform-version` 파일이다. 같은 일을 하는 tenv, asdf·mise 같은 범용 버전 관리자도 이 파일을 읽는다.
+
+```bash
+# tfenv 3.2.2. 저장소에 버전 파일을 두면 그 폴더의 terraform이 그 버전이 된다
+echo "1.16.6" > .terraform-version
+terraform version
+```
+
+```text
+tfenv: version '1.16.6' is not installed (set by /home/me/infra/.terraform-version). Installing now as TFENV_AUTO_INSTALL==true
+...
+tfenv: Installation of terraform v1.16.6 successful. To make this your default version, run 'tfenv use 1.16.6'
+Terraform v1.16.6
+on linux_amd64
+```
+
+`terraform`이 tfenv의 껍데기라서 처음 부를 때 그 버전을 받아 깔고 실행한다. 버전 파일과 `required_version`이 어긋나면 init에서 막힌다. 버전 파일을 `1.9.8`로 바꿔 보면 이렇게 나온다.
+
+```text
+Error: Unsupported Terraform Core version
+
+  on versions.tf line 2, in terraform:
+   2:   required_version = ">= 1.10, < 2.0"
+
+This configuration does not support Terraform version 1.9.8.
+```
+
+파일에 숫자 대신 `latest-allowed`나 `min-required`를 적으면 tfenv가 `required_version`을 읽어 범위 안의 가장 새 버전이나 가장 낮은 버전을 고른다. 다만 그러면 새 릴리스가 나오는 날 모두의 버전이 저절로 바뀌니, 운영 저장소에는 정확한 숫자를 적는다. CI도 같은 파일을 읽게 한다. `hashicorp/setup-terraform` 액션의 `terraform_version`에 이 파일 내용을 넘기면 로컬과 CI가 어긋날 일이 없다.
+
+프로바이더를 올리는 흐름도 정해 두면 사고가 준다.
+
+1. 한 사람이 브랜치에서 `terraform init -upgrade`를 돌린다. 범위 안의 새 버전이 잡히고 `.terraform.lock.hcl`이 바뀐다. 다른 플랫폼을 쓰는 사람이 있으면 바로 `terraform providers lock -platform=...`으로 해시를 채운다.
+2. 바뀐 잠금 파일과 함께 환경마다 plan을 돌려 본다. 프로바이더가 기본값을 바꿨으면 코드는 그대로인데 `~` 줄이 생긴다.
+3. 잠금 파일 변경을 PR로 리뷰받고 머지한다. CVE나 버그 픽스가 아니면 몇 주에 한 번 묶어서 올린다.
+4. CI는 `terraform init -lockfile=readonly`로 돈다. 잠금 파일과 다른 버전을 고르려 하면 파일을 고치지 않고 실패하니, 누군가 잠금 파일 없이 범위만 넓힌 PR이 몰래 버전을 올리는 일을 막는다.
+
 ## 레지스트리 모듈을 감싸서 쓴다
 
 VPC와 EKS는 직접 다 짜기보다 `terraform-aws-modules` 모듈을 쓰는 경우가 많다. 수년간 쌓인 엣지 케이스(AZ별 NAT, IPv6, EKS 접근 항목, 노드 그룹 시작 템플릿)가 들어 있다. `source` 주소는 세 조각으로 읽는다.

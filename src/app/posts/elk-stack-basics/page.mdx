@@ -535,6 +535,30 @@ FROM logs-nginx-default | WHERE http.response.status_code >= 500
 
 (다섯 줄 중 셋만 옮겼다.) 시간 칸이 UTC 15시부터 시작한다. 파이프라인이 `@timestamp`를 로그 시각으로 바로잡았기 때문이다. 처음처럼 받은 시각으로 남았다면 2만 줄이 모두 같은 몇 초에 몰렸을 것이다. 작은 함정 하나도 있었다. `STATS first = MIN(@timestamp)`처럼 `first`를 이름으로 쓰면 `parsing_exception`이 난다. 예약어라서다.
 
+### SQL과 EQL은 언제 쓰나
+
+ES|QL 말고도 질의 언어가 둘 더 있다. 둘 다 basic 라이선스에 들어 있다. 이번 실습 클러스터에서는 돌리지 않았으니 모양만 적는다.
+
+Elasticsearch SQL은 이름 그대로 SQL로 묻는 `_sql` API다. BI 도구나 JDBC·ODBC 드라이버로 붙여야 할 때, SQL만 아는 사람에게 열어 줄 때 쓴다. 인덱스 이름에 `-`가 있으면 큰따옴표로 감싼다.
+
+```json
+POST _sql?format=txt
+{ "query": "SELECT \"http.response.status_code\" AS code, COUNT(*) AS n FROM \"logs-nginx-default\" WHERE \"http.response.status_code\" >= 500 GROUP BY code ORDER BY n DESC" }
+```
+
+같은 본문을 `POST _sql/translate`로 보내면 실행하지 않고, 이 SQL이 바뀐 Query DSL(`bool`·`range` 필터와 `composite` 집계)을 돌려준다. SQL은 결국 DSL로 바뀌어 돈다는 걸 눈으로 확인하는 도구라, 느린 SQL을 디버깅하거나 앱 코드에 넣을 DSL을 뽑을 때 쓸모가 있다. 다만 SQL처럼 보여도 관계형 DB가 아니다. 인덱스 사이 `JOIN`이 없고, `text` 필드는 그대로 묶거나 정렬하지 못해 `keyword` 하위 필드가 있어야 한다. 새로 짜는 분석 질의라면 ES|QL 쪽이 더 많은 걸 한다.
+
+EQL(Event Query Language)은 보안 쪽에서 나온 언어로, "이 일이 일어난 다음 저 일이 일어났나"처럼 사건의 순서를 묻는다. ES|QL이나 SQL로는 행 사이의 순서를 표현하기 어려운데, EQL은 `sequence`로 한 번에 쓴다. 같은 사용자가 로그인에 실패한 뒤 5분 안에 성공한 경우를 찾으면 이렇다.
+
+```json
+GET logs-auth-*/_eql/search
+{
+  "query": "sequence by user.name with maxspan=5m [authentication where event.outcome == \"failure\"] [authentication where event.outcome == \"success\"]"
+}
+```
+
+응답의 `hits.sequences`에 조건에 맞는 사건 묶음이 시간 순서로 들어 있다. EQL은 기본으로 `@timestamp`와 `event.category` 필드를 본다(`authentication`이 그 값이다). 그래서 ECS 형식으로 들어온 보안·감사 로그에는 바로 쓰지만, 이 글의 nginx 로그처럼 `event.category`가 없는 데이터에는 파이프라인에서 그 필드를 채우거나 `event_category_field`를 바꿔 줘야 한다. 정리하면 대시보드의 거르기는 KQL, 집계와 가공은 ES|QL, 외부 SQL 도구 연결은 SQL, 사건 순서 탐지는 EQL이다.
+
 ## Loki와 비교하면
 
 ELK 대신 Loki를 고르는 팀도 많다. 색인형과 레이블형의 크기와 질의 비용 차이는 [중앙 로그 파이프라인 글](/posts/centralized-logging-pipeline)에서 같은 로그로 재 봤으니, 여기서는 고를 때 따지는 것만 적는다.

@@ -1,0 +1,421 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("refactoring-code-smells");
+
+<EasyIntro>
+  오래 쓴 방은 물건이 아무렇게나 쌓여서 무엇이 어디 있는지 아무도 모른다. 그렇다고 이사하듯 전부 버리고 새로 사면 돈도 시간도 많이 들고, 꼭 필요했던 물건까지 버리게 된다.
+
+  리팩터링은 방을 통째로 바꾸지 않고, 물건 하나씩 제자리를 찾아 옮기는 정리다. 방에서 할 수 있는 일은 그대로지만 찾기가 쉬워진다.
+
+  정리를 시작하기 전에 먼저 방 사진을 찍어 둔다. 물건을 하나 옮길 때마다 사진과 비교해서, 쓰던 물건이 사라지지 않았는지 확인한다. 코드에서는 지금 동작을 그대로 기록해 둔 테스트가 그 사진이다.
+
+  냄새가 나는 곳부터 손댄다. 한 서랍에 온갖 물건이 섞여 있거나, 같은 물건이 여기저기 흩어져 있는 곳이다. 한 번에 조금씩 옮기고, 옮길 때마다 확인하면 방은 매일 쓰면서도 조금씩 깨끗해진다.
+</EasyIntro>
+
+주문 처리 함수 `processOrder`가 812줄이다. 결제, 재고, 쿠폰, 포인트, 영수증 문구, 관리자 알림이 한 함수에 들어 있고, 마지막으로 크게 고친 사람은 이미 퇴사했다. 테스트는 없다. 이번에 "포인트 적립률을 등급마다 다르게"라는 요청이 왔는데, 팀원 모두 그 함수를 열어 보고 조용히 닫았다. 누구도 이 함수의 모든 동작을 설명하지 못한다.
+
+이럴 때 두 가지 유혹이 있다. 하나는 필요한 곳에 `if` 하나만 슬쩍 끼워 넣고 도망치는 것, 다른 하나는 "이건 답이 없다, 새로 짜자"고 하는 것이다. 첫 번째는 함수를 813줄로 만들고, 두 번째는 대개 몇 달 뒤 원래 함수가 하던 일 중 문서에 없던 것들을 하나씩 다시 발견하는 것으로 끝난다.
+
+이 글은 그 사이의 길, 리팩터링을 다룬다. 지금 동작을 테스트로 먼저 묶고, 냄새가 나는 곳을 찾고, 정해진 기법으로 작게 옮기고, 커밋을 잘게 나눈다. 무엇을 향해 옮기는지(결합은 낮게, 응집은 높게)는 [결합도와 응집도](/posts/coupling-cohesion-principles)에, 이름과 함수 크기, 복잡도 같은 목표 모양은 [클린 코드](/posts/clean-code-practices)에 썼다.
+
+## 동작은 그대로 두고 구조만 바꾼다
+
+마틴 파울러의 《리팩터링》은 리팩터링을 "겉으로 드러나는 동작을 바꾸지 않으면서 코드의 내부 구조를 바꿔, 이해하기 쉽고 고치기 싸게 만드는 일"이라고 정의한다. 여기서 중요한 조건은 앞부분이다. 동작이 바뀌면 리팩터링이 아니다.
+
+그래서 "리팩터링하면서 버그도 고쳤다"는 말은 엄밀히는 두 가지 일을 한 것이다. 켄트 벡은 이걸 두 개의 모자로 설명했다. 기능을 더하는 모자를 쓰고 있을 때는 구조를 바꾸지 않고, 리팩터링 모자를 쓰고 있을 때는 동작을 바꾸지 않는다. 모자는 자주 바꿔 써도 되지만, 한 번에 하나만 쓴다. 두 가지가 한 커밋에 섞이면 테스트가 깨졌을 때 구조를 잘못 옮긴 건지 기능을 잘못 넣은 건지 알 수 없다.
+
+"동작"은 어디까지인가. 함수의 반환값과 던지는 에러, DB에 쓰는 내용, 외부로 보내는 요청과 로그 형식까지가 보통 포함된다. 실행 시간과 메모리는 대개 포함하지 않지만, 성능이 계약인 코드(초당 수만 번 도는 경로)라면 측정도 함께 한다.
+
+## 손대기 전에 지금 동작을 찍어 둔다
+
+리팩터링에는 테스트가 필요하다. 그런데 레거시 코드는 대개 테스트가 없고, 테스트를 쓰려 해도 "올바른 동작"이 무엇인지 아무도 모른다. 마이클 페더스는 《레거시 코드 활용 전략》에서 이 문제를 특성화 테스트(characterization test)로 푼다. 올바른 동작이 아니라 지금의 동작을 기록하는 테스트다. 코드가 지금 무엇을 하든, 그게 맞든 틀리든, 그대로 적어 둔다.
+
+812줄짜리를 그대로 옮길 수는 없으니 핵심만 남긴 축소판으로 해 보자. 상품 종류마다 할인 규칙이 다르고, 포인트를 적립하고, 영수증 문자열을 만든다.
+
+```js
+// receipt.js — 아무도 건드리지 않으려는 함수의 축소판
+export function receipt(order) {
+  let total = 0;
+  let points = 0;
+  let lines = [];
+  for (const it of order.items) {
+    let amt = 0;
+    if (it.kind === "book") {
+      amt = it.price * it.qty;
+      if (it.qty >= 3) amt = amt * 0.9;
+    } else if (it.kind === "food") {
+      amt = it.price * it.qty;
+      if (order.member === "vip") amt = amt - 500 * it.qty;
+    } else {
+      amt = it.price * it.qty;
+    }
+    points += Math.floor(amt / 1000);
+    if (it.kind === "book" && it.qty >= 5) points += 10;
+    lines.push(`${it.name} x${it.qty}: ${amt}`);
+    total += amt;
+  }
+  if (order.member === "vip") points = points * 2;
+  lines.push(`합계: ${total}`);
+  lines.push(`적립: ${points}`);
+  return lines.join("\n");
+}
+```
+
+먼저 이 함수의 갈래를 하나씩 지나는 입력을 만든다. 책 1권, 책 3권(할인), 책 5권(보너스 포인트), vip의 음식, 기타 상품, 아주 싼 음식, 빈 주문. 그리고 지금 출력을 파일에 기록한다. 이렇게 기록한 출력을 골든 마스터라고도 부른다.
+
+```js
+// record.js — 지금 출력을 그대로 기록한다
+import { writeFileSync } from "node:fs";
+import { receipt } from "./receipt.js";
+import { cases } from "./cases.js";
+writeFileSync("golden.json", JSON.stringify(cases.map((c) => receipt(c)), null, 2));
+console.log(`기록한 출력 ${cases.length}개`);
+```
+
+```bash
+# Node 22에서 기록하고 내용을 본다
+node record.js
+cat golden.json
+```
+
+```text
+기록한 출력 7개
+[
+  "리팩터링 x1: 35000\n합계: 35000\n적립: 35",
+  "노트 x3: 4050\n합계: 4050\n적립: 4",
+  "커피 x2: 8000\n펜 x1: 999\n합계: 8999\n적립: 16",
+  "만화 x5: 22050\n합계: 22050\n적립: 64",
+  "빵 x1: 300\n합계: 300\n적립: 0",
+  "껌 x2: -400\n합계: -400\n적립: -2",
+  "합계: 0\n적립: 0"
+]
+```
+
+여섯 번째 줄을 보자. vip가 300원짜리 껌 두 개를 사면 개당 500원이 빠져 합계가 -400원이고 포인트가 -2점이다. 분명히 버그다. 하지만 특성화 테스트는 이걸 그대로 기록한다. 지금 고치면 안 된다. 이 동작에 기대는 정산 코드가 어딘가 있을 수도 있고, 무엇보다 지금은 리팩터링 모자를 쓰고 있다. 따로 이슈로 적어 두고, 리팩터링이 끝난 뒤 기능 모자를 쓰고 고친다. 특성화 테스트를 쓰다 보면 이렇게 아무도 몰랐던 동작이 꼭 하나씩 나온다. 그것만으로도 가치가 있다.
+
+```js
+// receipt.test.js — 기록과 같은지 비교한다
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { receipt } from "./receipt.js";
+import { cases } from "./cases.js";
+
+const golden = JSON.parse(readFileSync(new URL("./golden.json", import.meta.url)));
+
+cases.forEach((order, i) => {
+  test(`특성화 #${i}`, () => {
+    assert.equal(receipt(order), golden[i]);
+  });
+});
+```
+
+입력을 몇 개 만들어야 하나? 분기를 하나도 빠뜨리지 않을 만큼이다. 커버리지 도구(`node --test --experimental-test-coverage`, Vitest의 `--coverage`)로 리팩터링할 함수의 분기가 모두 지나가는지 확인하면 빠진 입력이 보인다. 출력이 크거나 무작위 값(시각, UUID)이 섞여 있으면 기록 전에 그 부분을 고정하거나 지운다. Jest와 Vitest의 스냅샷 테스트(`toMatchSnapshot`)도 같은 일을 하는 도구다.
+
+## 냄새가 나는 자리
+
+파울러와 벡은 "언제 리팩터링하나"를 규칙 대신 냄새(code smell)라는 말로 설명했다. 냄새는 버그가 아니다. 지금은 잘 돌지만 다음 변경이 비싸질 거라는 신호다. 《리팩터링》 2판 목록에서 실무에서 자주 맡는 것들만 골랐다.
+
+긴 함수. 가장 흔하다. 주석으로 단락을 나눠 둔 함수라면 그 주석이 곧 뽑아낼 함수의 이름이다.
+
+기능 욕심(feature envy). 어떤 함수가 자기 데이터보다 남의 데이터를 더 많이 만진다. `order.customer.wallet.balance`를 여러 번 읽는 함수는 지갑 쪽으로 옮겨 가고 싶어 한다.
+
+산탄총 수술(shotgun surgery). 변경 하나에 여러 파일을 조금씩 고쳐야 한다. "상품 종류 하나 추가"에 가격, 포인트, 영수증, 관리자 화면 네 곳을 고친다면 이 냄새다. 반대 방향인 뒤엉킨 변경(divergent change)은 한 파일이 서로 다른 이유로 계속 바뀌는 것이다.
+
+기본형 집착(primitive obsession). 금액, 전화번호, 통화, 상태를 모두 `number`와 `string`으로 다룬다. 위 코드의 `"vip"` 문자열과 `amt`가 그렇다. 원과 센트를 헷갈리거나 `"VIP"`와 `"vip"`를 비교하는 버그가 여기서 나온다.
+
+긴 매개변수 목록과 데이터 뭉치(data clumps). `(start, end, timezone)`이 늘 함께 다니면 한 덩어리로 묶고 싶은 것이다.
+
+반복되는 switch. 같은 `kind`로 갈라지는 `if`나 `switch`가 여러 함수에 있다. 산탄총 수술의 흔한 원인이다.
+
+아래 그림은 냄새(위)와 그걸 다루는 대표 기법(아래)을 잇는다. 점이 흐르는 방향으로 읽으면 된다. 한 냄새에 기법이 여럿, 한 기법이 여러 냄새에 쓰인다.
+
+<ConceptDiagram
+  width={400}
+  height={260}
+  caption="냄새에서 기법으로. 함수 추출은 거의 모든 냄새의 첫 단계다"
+  nodes={[
+    { id: "long", label: "긴 함수", x: 55, y: 40, w: 84 },
+    { id: "envy", label: "기능 욕심", x: 150, y: 40, w: 84 },
+    { id: "shotgun", label: "산탄총 수술", x: 250, y: 40, w: 96 },
+    { id: "prim", label: "기본형 집착", x: 350, y: 40, w: 92 },
+    { id: "extract", label: "함수 추출", x: 70, y: 205, w: 96 },
+    { id: "move", label: "함수 옮기기", x: 170, y: 140, w: 100 },
+    { id: "poly", label: "조건부 → 다형성", x: 275, y: 205, w: 130 },
+    { id: "obj", label: "값 객체 도입", x: 345, y: 140, w: 100 },
+  ]}
+  edges={[
+    { from: "long", to: "extract" },
+    { from: "envy", to: "move" },
+    { from: "envy", to: "extract", dashed: true },
+    { from: "shotgun", to: "poly" },
+    { from: "shotgun", to: "move", dashed: true },
+    { from: "prim", to: "obj" },
+    { from: "prim", to: "poly", dashed: true },
+  ]}
+/>
+
+냄새 목록을 체크리스트처럼 돌리면 안 된다. 리팩터링은 지금 하려는 변경이 그 냄새 때문에 비싸질 때 한다. 안 바뀌는 코드에서 나는 냄새는 그냥 둬도 된다. 812줄짜리라도 5년 동안 한 번도 안 바뀌었고 앞으로도 안 바뀔 거라면 건드릴 이유가 없다.
+
+## 한 걸음씩 옮기고 매번 확인한다
+
+리팩터링의 리듬은 아래와 같다. 테스트가 초록인 상태에서 시작해, 컴파일과 테스트가 다시 초록이 될 만큼만 바꾸고, 초록이면 커밋한다. 빨강이면 고치려 들지 말고 되돌린다. 한 걸음이 작으니 되돌려도 잃는 게 적다. 아래 그림에서 다음을 누르면 한 바퀴가 돈다.
+
+<SequenceDiagram
+  caption="초록에서 시작해 초록으로 끝나는 한 걸음. 빨강이면 고치지 말고 되돌린다"
+  actors={[
+    { id: "dev", label: "개발자" },
+    { id: "code", label: "코드" },
+    { id: "test", label: "특성화 테스트" },
+    { id: "git", label: "git" },
+  ]}
+  steps={[
+    { from: "dev", to: "test", label: "node --test", title: "시작 전에 초록인지 본다", detail: "출발점이 빨강이면 내 변경이 깨뜨린 건지 원래 깨져 있던 건지 구분할 수 없다.", payload: "pass 7 · fail 0" },
+    { from: "dev", to: "code", label: "함수 추출", title: "작게 하나만 바꾼다", detail: "가격 계산 블록을 amountFor로 뺀다. 이름을 바꾸거나 규칙을 다듬는 건 다음 걸음으로 미룬다." },
+    { from: "dev", to: "test", label: "node --test", title: "바로 다시 돌린다", detail: "몇 초 안에 끝나는 테스트여야 이 리듬이 유지된다. 느리면 리팩터링할 모듈의 테스트만 골라 돌린다.", payload: "pass 7 · fail 0" },
+    { from: "dev", to: "git", label: "commit", title: "초록이면 바로 커밋한다", detail: "구조만 바꾼 커밋이라 리뷰어는 동작이 안 바뀌었다는 것만 확인하면 된다.", payload: "refactor: 상품 가격 계산을 amountFor로 추출" },
+    { from: "dev", to: "code", label: "포인트 계산 수정", title: "다음 걸음에서 실수한다", detail: "음수 금액이면 포인트를 0으로 막는 줄을 슬쩍 넣었다. 동작을 바꾼 것이다." },
+    { from: "test", to: "dev", label: "fail 1", title: "테스트가 바로 알려 준다", detail: "기록해 둔 -2점과 다르다는 실패가 난다. 고친 지 몇 초밖에 안 돼서 원인이 분명하다.", payload: "+ 적립: 0\n- 적립: -2" },
+    { from: "dev", to: "git", label: "git restore", title: "고치지 말고 되돌린다", detail: "마지막 커밋으로 돌아가 초록에서 다시 시작한다. 버그 수정은 리팩터링이 끝난 뒤 따로 한다." },
+  ]}
+/>
+
+축소판에 실제로 적용해 보자. 걸음마다 테스트를 돌렸고, 최종 모양은 이렇다.
+
+```js
+// 1. 조건부 로직을 다형성으로: 종류별 가격 계산을 표로 뺐다
+const pricing = new Map([
+  ["book", (it) => (it.qty >= 3 ? it.price * it.qty * 0.9 : it.price * it.qty)],
+  ["food", (it, member) => it.price * it.qty - (member === "vip" ? 500 * it.qty : 0)],
+]);
+const basePrice = (it) => it.price * it.qty;
+
+// 2. 함수 추출: 상품 하나의 금액
+function amountFor(it, member) {
+  return (pricing.get(it.kind) ?? basePrice)(it, member);
+}
+
+// 3. 함수 추출: 상품 하나의 포인트
+function pointsFor(it, amount) {
+  const bonus = it.kind === "book" && it.qty >= 5 ? 10 : 0;
+  return Math.floor(amount / 1000) + bonus;
+}
+
+// 4. 반복문 쪼개기: 금액, 합계, 포인트, 문구를 따로 계산한다
+export function receipt(order) {
+  const rows = order.items.map((it) => ({ it, amount: amountFor(it, order.member) }));
+  const total = rows.reduce((sum, r) => sum + r.amount, 0);
+  const basePoints = rows.reduce((sum, r) => sum + pointsFor(r.it, r.amount), 0);
+  const points = order.member === "vip" ? basePoints * 2 : basePoints;
+  return [
+    ...rows.map(({ it, amount }) => `${it.name} x${it.qty}: ${amount}`),
+    `합계: ${total}`,
+    `적립: ${points}`,
+  ].join("\n");
+}
+```
+
+```bash
+# 사람이 읽기 좋은 spec 형식으로 결과를 본다
+node --test --test-reporter=spec
+```
+
+```text
+✔ 특성화 #0 (1.074401ms)
+✔ 특성화 #1 (2.454911ms)
+✔ 특성화 #2 (0.214088ms)
+✔ 특성화 #3 (0.107966ms)
+✔ 특성화 #4 (0.182029ms)
+✔ 특성화 #5 (0.172344ms)
+✔ 특성화 #6 (0.089323ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+```
+
+종류별 규칙은 `Map`에 담았다. 평범한 객체 `{ book: ..., food: ... }`로 두면 `kind`에 `"toString"`이 들어왔을 때 프로토타입의 함수가 찾아진다. 이 함정은 [전략 패턴](/posts/pattern-strategy)에서 실제로 돌려 봤다. 클래스 계층으로 다형성을 만들어도 되지만, 계산 하나뿐인 전략이라면 함수 표가 더 가볍다.
+
+반복문 쪼개기(split loop)를 보면 "반복을 세 번 돌리면 느리지 않나?"라는 질문이 나온다. 상품 수십 개짜리 주문에서는 차이를 잴 수 없다. 파울러의 조언도 같다. 먼저 구조를 깨끗하게 하고, 측정해서 정말 느린 곳이 나오면 그때 최적화한다. 구조가 깨끗해야 최적화할 자리도 보인다.
+
+새 상품 종류를 더하려면 이제 `pricing`에 한 줄을 넣으면 된다. 맨 처음의 요청(등급별 포인트 적립률)도 `points`를 계산하는 한 줄만 바꾸면 되는 모양이 되었다. 켄트 벡의 말로는 "변경을 쉽게 만들고(어려울 수 있다), 그다음 쉬운 변경을 하라." 기능을 넣기 직전에 하는 이런 정리를 준비 리팩터링(preparatory refactoring)이라고 부른다.
+
+### 테스트가 잡아 준 실수
+
+걸음 중간에 일부러 "개선"을 하나 넣어 봤다. 음수 금액에서 포인트가 음수가 되는 게 이상해 보여서 `Math.floor(Math.max(0, amount) / 1000)`으로 바꿨다.
+
+```text
+✖ failing tests:
+
+test at receipt.test.js:10:3
+✖ 특성화 #5 (2.239218ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+
+  + '껌 x2: -400\n합계: -400\n적립: 0'
+  - '껌 x2: -400\n합계: -400\n적립: -2'
+                               ^
+```
+
+`+`가 지금 결과, `-`가 기록해 둔 결과다. 의도는 좋았지만 동작이 바뀌었고, 특성화 테스트는 정확히 그걸 잡았다. 이 수정은 따로 이슈로 빼고, 지금은 되돌린다.
+
+## IDE에게 맡길 수 있는 걸음
+
+이름 바꾸기, 함수 추출, 변수 인라인, 파일로 옮기기 같은 기계적인 걸음은 손으로 하지 말고 도구에게 맡긴다. VS Code에서 TypeScript라면 기호 위에서 F2(이름 바꾸기), 코드를 선택하고 명령 팔레트의 "Refactor..."(기본 단축키 Ctrl+Shift+R)에서 "Extract to function"이나 "Move to a new file"을 고를 수 있다. JetBrains IDE는 이 메뉴가 더 넓다. 도구는 문자열 치환이 아니라 구문 트리와 타입 정보로 참조를 찾으니, 다른 파일의 같은 이름 변수를 잘못 바꾸지 않는다.
+
+그래도 도구가 못 보는 참조가 있다. `obj[key]`처럼 문자열로 접근하는 속성, JSON과 API 응답의 필드 이름, 테스트에서 `vi.mock("./path")`로 적은 경로, 로그 대시보드가 기대는 메시지, Spring처럼 이름으로 찾는 빈과 리플렉션. 이름을 바꾼 뒤에는 `tsc --noEmit`과 테스트를 돌리고, 문자열 검색(`rg "oldName"`)으로 한 번 더 훑는다.
+
+## 커밋은 작게, 리팩터링과 기능은 따로
+
+리팩터링 커밋과 기능 커밋을 섞지 않으면 리뷰가 쉬워진다. 리뷰어는 리팩터링 커밋에서 "동작이 그대로인가"만, 기능 커밋에서 "새 동작이 맞나"만 본다.
+
+```text
+refactor: 특성화 테스트 추가 (receipt 7개 경로)
+refactor: 상품 가격 계산을 amountFor로 추출
+refactor: 포인트 계산을 pointsFor로 추출
+refactor: 반복문을 금액·합계·포인트로 나눔
+refactor: 종류별 가격 규칙을 Map으로 옮김
+feat: 등급별 포인트 적립률
+fix: vip 음식 할인이 상품가보다 클 때 음수가 되는 문제
+```
+
+이 순서면 `feat` 커밋의 diff는 몇 줄이다. 문제가 생기면 `git revert`로 기능만 되돌릴 수 있고, `git bisect`로 원인 커밋을 찾을 때도 커밋 하나의 범위가 작다. PR을 나눌 수 있다면 리팩터링 PR을 먼저 올려 머지하고, 기능 PR을 그 위에 올린다.
+
+## 테스트를 끼울 틈, 이음새
+
+특성화 테스트를 쓰려는데 함수 안에서 DB를 직접 부르고, `Date.now()`를 읽고, 결제사 SDK를 `new` 한다면 테스트를 돌릴 수가 없다. 페더스는 이럴 때 이음새(seam)를 찾으라고 한다. 이음새는 그 자리의 코드를 고치지 않고도 동작을 바꿀 수 있는 곳이다.
+
+```js
+// 이음새가 없다: 테스트에서 DB와 시간을 바꿀 방법이 없다
+export async function closeDailySales() {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await pool.query("SELECT ... WHERE day = $1", [today]);
+  // ...
+}
+
+// 매개변수 이음새: 기본값은 진짜, 테스트에서는 가짜를 넣는다
+export async function closeDailySales({ now = () => new Date(), query = (sql, p) => pool.query(sql, p) } = {}) {
+  const today = now().toISOString().slice(0, 10);
+  const rows = await query("SELECT ... WHERE day = $1", [today]);
+  // ...
+}
+```
+
+호출하는 기존 코드는 인자 없이 부르니 그대로 돈다. 테스트만 `closeDailySales({ now: () => new Date("2026-01-31T00:00:00Z"), query: fakeQuery })`로 부른다. 이것 말고도 모듈 이음새(테스트 러너의 모듈 모킹으로 import를 바꿔 끼움), 하위 클래스로 메서드 하나만 덮어쓰기 같은 방법이 있다. 이음새를 만드는 변경 자체는 테스트 없이 해야 하니, IDE의 자동 리팩터링처럼 안전한 걸음으로만 한다.
+
+새 기능을 넣어야 하는데 기존 함수를 묶을 시간이 없다면 새싹 메서드(sprout method)를 쓴다. 새 로직은 테스트가 있는 새 함수로 따로 쓰고, 레거시 함수에는 그 함수를 부르는 한 줄만 넣는다. 레거시는 한 줄만 늘고, 새 코드는 처음부터 테스트를 갖는다.
+
+## 고쳐 쓸까, 새로 쓸까
+
+"이건 리팩터링으로는 안 된다, 재작성하자"는 말이 나올 때 따져 볼 것들이 있다. 재작성하는 동안에도 기존 시스템은 계속 바뀐다. 새 시스템은 출시되는 날까지 아무 가치도 주지 않는다. 그리고 기존 코드의 이상한 분기 상당수는 누군가의 장애 대응이 남긴 흔적이라, 새 코드는 그 장애를 다시 겪으며 같은 분기를 다시 얻는다. 넷스케이프 6가 이 이야기의 단골 예로, 조엘 스폴스키가 "절대 하지 말아야 할 일"이라는 글에서 다뤘다.
+
+재작성이 맞는 경우도 있다. 기반 기술이 더는 지원되지 않을 때(지원이 끝난 프레임워크, 사라진 런타임), 요구 사항이 완전히 바뀌어 기존 구조가 아무것도 맞지 않을 때, 그리고 대상이 충분히 작을 때다. 이때도 한 번에 바꾸지 말고 교살자 무화과(strangler fig) 방식으로, 새 코드가 기존 기능을 하나씩 가져가고 기존 코드는 점점 말라 죽게 한다. 경계에 라우터나 프록시를 두고 기능 단위로 트래픽을 옮기면 언제든 되돌릴 수 있다.
+
+## 일정이 없다는 말에 답하는 법
+
+"리팩터링할 시간을 달라"는 요청은 대개 통과되지 않는다. 기획자 입장에서는 2주 동안 아무 기능도 안 나오는 일정이기 때문이다. 실무에서 잘 통하는 방법은 리팩터링을 따로 팔지 않는 것이다.
+
+보이 스카우트 규칙은 "캠프장을 처음 왔을 때보다 깨끗하게 해 두고 떠나라"다. 기능을 넣으러 들어간 파일에서 이름 하나, 함수 하나만 정리하고 나온다. 위의 준비 리팩터링도 같은 생각이다. 기능 일정 안에 "이 기능을 넣기 쉽게 만드는 정리"를 포함시키고, 견적에도 그만큼 넣는다. 따로 승인받을 일이 아니라 일하는 방식이다.
+
+규모가 커서 따로 일정이 필요하다면 비용을 숫자로 말한다. "이 모듈에 기능 하나 넣을 때마다 평균 4일 걸렸고 그중 이틀이 영향 범위 확인이었다", "지난 분기 장애 5건 중 3건이 이 함수에서 났다". 리팩터링 그 자체가 아니라 다음 기능이 얼마나 빨라지는지, 장애가 얼마나 줄어드는지를 판다.
+
+## 직접 해 보는 리팩터링
+
+아래 코드는 글의 축소판과 같은 레거시 함수다(템플릿 문자열 대신 `+`로 이었다). 테스트 일곱 개는 위에서 기록한 골든 마스터 그대로이고, 지금 모두 통과한다. 함수 추출, 조건부를 표로 바꾸기, 반복문 쪼개기를 해 보자. 한 걸음마다 실행해서 초록인지 확인한다. 껌 테스트의 -2점을 "고치고" 싶어져도 참는다.
+
+<CodePlayground
+  caption="초록을 유지한 채 구조만 바꾸기"
+  functionName="receipt"
+  initialCode={`function receipt(order) {
+  let total = 0;
+  let points = 0;
+  let lines = [];
+  for (const it of order.items) {
+    let amt = 0;
+    if (it.kind === "book") {
+      amt = it.price * it.qty;
+      if (it.qty >= 3) amt = amt * 0.9;
+    } else if (it.kind === "food") {
+      amt = it.price * it.qty;
+      if (order.member === "vip") amt = amt - 500 * it.qty;
+    } else {
+      amt = it.price * it.qty;
+    }
+    points += Math.floor(amt / 1000);
+    if (it.kind === "book" && it.qty >= 5) points += 10;
+    lines.push(it.name + " x" + it.qty + ": " + amt);
+    total += amt;
+  }
+  if (order.member === "vip") points = points * 2;
+  lines.push("합계: " + total);
+  lines.push("적립: " + points);
+  return lines.join("\\n");
+}`}
+  solution={`const pricing = new Map([
+  ["book", (it) => (it.qty >= 3 ? it.price * it.qty * 0.9 : it.price * it.qty)],
+  ["food", (it, member) => it.price * it.qty - (member === "vip" ? 500 * it.qty : 0)],
+]);
+const basePrice = (it) => it.price * it.qty;
+
+function amountFor(it, member) {
+  return (pricing.get(it.kind) ?? basePrice)(it, member);
+}
+
+function pointsFor(it, amount) {
+  const bonus = it.kind === "book" && it.qty >= 5 ? 10 : 0;
+  return Math.floor(amount / 1000) + bonus;
+}
+
+function receipt(order) {
+  const rows = order.items.map((it) => ({ it, amount: amountFor(it, order.member) }));
+  const total = rows.reduce((sum, r) => sum + r.amount, 0);
+  const basePoints = rows.reduce((sum, r) => sum + pointsFor(r.it, r.amount), 0);
+  const points = order.member === "vip" ? basePoints * 2 : basePoints;
+  return [
+    ...rows.map(({ it, amount }) => it.name + " x" + it.qty + ": " + amount),
+    "합계: " + total,
+    "적립: " + points,
+  ].join("\\n");
+}`}
+  tests={[
+    { args: [{ member: "basic", items: [{ kind: "book", name: "리팩터링", price: 35000, qty: 1 }] }], expected: "리팩터링 x1: 35000\n합계: 35000\n적립: 35", label: "책 1권" },
+    { args: [{ member: "basic", items: [{ kind: "book", name: "노트", price: 1500, qty: 3 }] }], expected: "노트 x3: 4050\n합계: 4050\n적립: 4", label: "책 3권 10% 할인" },
+    { args: [{ member: "vip", items: [{ kind: "food", name: "커피", price: 4500, qty: 2 }, { kind: "etc", name: "펜", price: 999, qty: 1 }] }], expected: "커피 x2: 8000\n펜 x1: 999\n합계: 8999\n적립: 16", label: "vip 음식과 기타" },
+    { args: [{ member: "vip", items: [{ kind: "book", name: "만화", price: 4900, qty: 5 }] }], expected: "만화 x5: 22050\n합계: 22050\n적립: 64", label: "책 5권 보너스, vip 2배" },
+    { args: [{ member: "basic", items: [{ kind: "food", name: "빵", price: 300, qty: 1 }] }], expected: "빵 x1: 300\n합계: 300\n적립: 0", label: "천 원 미만은 0점" },
+    { args: [{ member: "vip", items: [{ kind: "food", name: "껌", price: 300, qty: 2 }] }], expected: "껌 x2: -400\n합계: -400\n적립: -2", label: "지금 동작 그대로: 음수" },
+    { args: [{ member: "basic", items: [] }], expected: "합계: 0\n적립: 0", label: "빈 주문" },
+  ]}
+/>
+
+812줄짜리 함수 앞에서 할 일은 결국 세 가지다. 지금 동작을 테스트로 찍어 두고, 다음 변경을 비싸게 만드는 냄새가 어디인지 찾고, 초록에서 초록으로 가는 작은 걸음으로만 옮긴다. 동작을 바꾸고 싶은 마음이 들면 그건 리팩터링이 끝난 뒤의 일로 미룬다.
+
+## 면접에서 나올 만한 질문
+
+### 리팩터링이란 무엇이고, 그냥 코드를 고치는 것과 무엇이 다른가요?
+
+겉으로 드러나는 동작은 그대로 두고 내부 구조만 바꿔 이해하기 쉽고 고치기 싸게 만드는 일이다. 동작이 바뀌면 리팩터링이 아니라 기능 변경이나 버그 수정이다. 그래서 리팩터링 커밋과 기능 커밋을 나누고, 리팩터링 중에 발견한 버그는 따로 적어 두었다가 나중에 고친다.
+
+### 테스트가 없는 레거시 코드는 어떻게 리팩터링하나요?
+
+먼저 특성화 테스트로 지금 동작을 기록한다. 올바른 동작이 아니라 현재 출력을 그대로 기록하는 테스트라, 버그처럼 보이는 동작도 일단 적어 둔다. 테스트를 붙일 수 없을 만큼 의존이 얽혀 있으면 매개변수 기본값이나 모듈 모킹으로 이음새를 만들고, 이 단계는 IDE 자동 리팩터링처럼 안전한 걸음으로만 한다.
+
+### 자주 만나는 코드 냄새와 대응 기법을 말해 주세요.
+
+긴 함수에는 함수 추출, 남의 데이터를 더 많이 만지는 기능 욕심에는 함수 옮기기, 변경 하나에 여러 곳을 고치는 산탄총 수술에는 흩어진 분기를 한곳으로 모으는 조건부 로직의 다형성 전환, 금액이나 상태를 원시 타입으로 다루는 기본형 집착에는 값 객체 도입을 쓴다. 다만 냄새는 버그가 아니라 신호라서, 바뀌지 않는 코드라면 냄새가 나도 둔다.
+
+### 리팩터링 중에 버그를 발견하면 어떻게 하나요?
+
+그 자리에서 고치지 않고 이슈로 적어 둔 뒤 리팩터링을 끝낸다. 고치면 동작이 바뀌어 특성화 테스트가 깨지고, 깨진 이유가 구조 실수인지 의도한 수정인지 구분할 수 없게 된다. 그 동작에 기대는 다른 코드가 있을 수도 있다. 리팩터링이 끝난 뒤 별도 커밋으로 테스트 기대값과 함께 고친다.
+
+### 리팩터링과 재작성은 어떻게 판단하나요?
+
+기본은 리팩터링이다. 재작성은 출시 전까지 가치를 주지 않고, 기존 코드에 쌓인 장애 대응을 다시 겪게 만든다. 기반 기술이 지원 종료됐거나 요구 사항이 완전히 바뀌었거나 대상이 작을 때만 재작성을 고르고, 그때도 교살자 무화과 방식으로 기능 단위로 옮겨 언제든 되돌릴 수 있게 한다.
+
+### 일정이 빠듯해 리팩터링할 시간이 없다고 하면 어떻게 설득하나요?
+
+리팩터링을 따로 일정으로 팔기보다 기능 작업 안에 넣는다. 기능을 넣기 직전에 그 기능을 쉽게 만드는 준비 리팩터링을 하고, 손댄 파일은 조금이라도 깨끗하게 두고 나오는 보이 스카우트 규칙을 지킨다. 큰 작업이 필요하면 기능 하나당 걸린 시간, 그 모듈에서 난 장애 수처럼 숫자로 비용을 보여 준다.
+
+### 이음새(seam)란 무엇인가요?
+
+그 자리의 코드를 고치지 않고도 동작을 바꿀 수 있는 곳이다. 함수 안에서 시간이나 DB를 직접 부르면 테스트에서 바꿀 방법이 없으니, 기본값이 있는 매개변수로 받게 하면 기존 호출은 그대로 두고 테스트만 가짜를 넣을 수 있다. 모듈 모킹이나 하위 클래스로 메서드 하나만 덮어쓰는 것도 이음새다.

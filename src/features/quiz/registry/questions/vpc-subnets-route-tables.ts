@@ -91,4 +91,19 @@ export const VPC_SUBNETS_ROUTE_TABLES: QuizQuestion[] = [
       "NAT 게이트웨이는 350초 동안 패킷이 없는 연결을 표에서 지우고, 그 뒤 들어오는 패킷에 RST를 돌려준다. TCP keepalive를 350초보다 짧게 두면 연결이 표에서 지워지지 않는다. 55,000개 한도는 새 연결이 실패하는 증상이다.",
     anchor: "nat-게이트웨이에서-터지는-것들",
   },
+  {
+    id: "vpc-subnets-route-tables-7",
+    post: "vpc-subnets-route-tables",
+    question: "온프레미스 DMZ를 VPC로 옮길 때 권장되는 모양은?",
+    choices: [
+      "웹 서버에 공인 IP를 주고 퍼블릭 서브넷에 둔 뒤 보안 그룹을 0.0.0.0/0으로 연다",
+      "프라이빗 서브넷은 안전하니 그 안의 보안 그룹은 VPC 대역 전체에 연다",
+      "퍼블릭 서브넷에는 ALB와 NAT 게이트웨이만 두고, 서버는 프라이빗 서브넷에서 ALB 보안 그룹의 요청만 받는다",
+      "DMZ 개념은 클라우드에 없으니 서브넷을 하나만 쓴다",
+    ],
+    answer: 2,
+    explanation:
+      "퍼블릭 서브넷이 DMZ 자리지만 바깥 연결은 ALB가 받고 서버는 프라이빗에 둬서 공인 IP 없이 운영한다. 프라이빗이라고 VPC 대역 전체를 열면 한 대가 뚫렸을 때 전부 닿으니, 보안 그룹끼리 참조해 역할 단위로 좁게 연다.",
+    anchor: "경계-dmz-세그멘테이션이-vpc에서-바뀐-모습",
+  },
 ];

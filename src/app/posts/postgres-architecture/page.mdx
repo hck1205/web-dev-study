@@ -256,7 +256,7 @@ SELECT count(*) FROM orders WHERE status = 'shipped';
  Execution Time: 60.302 ms
 ```
 
-`Buffers:` 줄의 `hit`는 작업대에서 찾은 페이지, `read`는 작업대에 없어서 파일에서 읽어 온 페이지 수다. 두 번째에도 거의 다 `read`다. 테이블 크기가 `shared_buffers`의 1/4을 넘으면 순차 스캔은 작업대 전체를 쓰지 않고 256KB짜리 작은 고리(ring buffer)만 돌려 쓴다. 큰 테이블 한 번 훑는다고 다른 테이블이 작업대에서 밀려나지 않게 하려는 장치다. 그런데 `read`인데도 40MB를 60ms에 읽었다. 디스크가 아니라 OS 페이지 캐시에서 온 것이다. `read`가 곧 디스크 I/O는 아니라는 점을 기억해 두면 실행 계획을 읽을 때 덜 속는다.
+`Buffers:` 줄의 `hit`는 작업대에서 찾은 페이지, `read`는 작업대에 없어서 파일에서 읽어 온 페이지 수다. 두 번째에도 거의 다 `read`다. 테이블 크기가 `shared_buffers`의 1/4을 넘으면 순차 스캔은 작업대 전체를 쓰지 않고 256KB짜리 작은 고리(ring buffer)만 돌려 쓴다. 큰 테이블 한 번 훑는다고 다른 테이블이 작업대에서 밀려나지 않게 하려는 장치다. 그런데 `read`인데도 40MB를 60ms에 읽었다. 디스크가 아니라 OS 페이지 캐시에서 온 것이다. `read`가 곧 디스크 I/O는 아니라는 것을 기억해 두면 실행 계획을 읽을 때 덜 속는다.
 
 `shared_buffers`를 1GB로 올리고(`ALTER SYSTEM SET shared_buffers = '1GB'` 뒤 재시작) 같은 실험을 했다.
 
@@ -338,7 +338,76 @@ sudo ls -l /var/lib/postgresql/16/pg3/base/16384/ | grep -E " 16404| 16411"
 
 `16404`가 테이블 본체(heap)다. 옆의 `_fsm`(free space map)은 페이지마다 빈자리가 얼마나 있는지 적은 지도로, `INSERT`가 넣을 페이지를 고를 때 본다. `_vm`(visibility map)은 "이 페이지의 행은 모두가 볼 수 있다"는 표시를 페이지당 비트로 적은 지도로, VACUUM이 건너뛸 페이지를 고르고 Index Only Scan이 힙 방문을 생략할 때 쓴다. 다음 글에서 다시 나온다. 테이블이 1GB를 넘으면 `16404.1`, `16404.2`처럼 1GB 단위 조각 파일로 나뉜다.
 
-인덱스는 테이블과 완전히 다른 파일(`16411`)이다. 인덱스 안에는 정렬된 키와 그 행의 위치(`ctid`)만 있고, 행 자체는 힙에 있다. 그래서 인덱스로 찾은 다음에도 힙을 한 번 더 간다. 이 이야기는 [인덱스 글](/posts/db-index)에 자세히 있다. MySQL InnoDB는 테이블이 곧 기본 키 B-tree라는 점이 다르다.
+인덱스는 테이블과 완전히 다른 파일(`16411`)이다. 인덱스 안에는 정렬된 키와 그 행의 위치(`ctid`)만 있고, 행 자체는 힙에 있다. 그래서 인덱스로 찾은 다음에도 힙을 한 번 더 간다. 이 이야기는 [인덱스 글](/posts/db-index)에 자세히 있다. MySQL InnoDB는 테이블이 곧 기본 키 B-tree라서 다르다.
+
+## 카탈로그에 직접 묻기
+
+위에서 파일 경로를 물어본 `pg_class`는 시스템 카탈로그다. PostgreSQL은 테이블, 컬럼, 인덱스, 스키마 정보를 자기 테이블에 넣어 두고, psql의 `\d`도 결국 이 테이블들을 조회한다(`psql -E`로 띄우면 `\d`가 보내는 쿼리가 그대로 찍힌다). 자주 쓰는 건 넷이다. `pg_class`는 테이블·인덱스·시퀀스 같은 릴레이션 한 줄씩, `pg_namespace`는 스키마, `pg_attribute`는 컬럼, `pg_index`는 인덱스가 어느 테이블의 어느 컬럼에 걸렸는지를 담는다.
+
+어느 테이블이 디스크를 얼마나 쓰는지는 `pg_class`와 `pg_namespace`를 이어 본다. 이름이 같은 테이블이 다른 스키마에 있을 수 있어서 스키마로 거른다.
+
+```sql
+SELECT c.relname, c.relkind, c.reltuples::bigint AS est_rows, c.relpages,
+       pg_size_pretty(pg_relation_size(c.oid))       AS self,   -- 본체 파일만
+       pg_size_pretty(pg_total_relation_size(c.oid)) AS total   -- 인덱스·TOAST·fsm·vm 포함
+FROM pg_class AS c
+JOIN pg_namespace AS n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relname IN ('books', 'books_pkey', 'orders', 'orders_pkey')
+ORDER BY pg_total_relation_size(c.oid) DESC;
+```
+
+```text
+   relname   | relkind | est_rows | relpages |    self    | total
+-------------+---------+----------+----------+------------+-------
+ orders      | r       |   700000 |     5148 | 40 MB      | 55 MB
+ orders_pkey | i       |   700000 |     1922 | 15 MB      | 15 MB
+ books       | r       |        3 |        1 | 8192 bytes | 64 kB
+ books_pkey  | i       |        3 |        2 | 16 kB      | 16 kB
+(4 rows)
+```
+
+`relkind`의 `r`은 테이블, `i`는 인덱스다. `reltuples`와 `relpages`는 실제로 세는 값이 아니라 마지막 `VACUUM`·`ANALYZE`가 적어 둔 추정치다. 플래너가 행 수를 짐작할 때 쓰는 바로 그 숫자라, 대량 적재 직후 여기가 0이면 계획이 엉뚱해진다. `orders`의 `total`이 `self`보다 15MB 큰 건 기본 키 인덱스 몫이다. `books`는 본체가 한 페이지인데 64kB다. 기본 키 인덱스 16kB에 TOAST 테이블의 인덱스, fsm·vm 파일이 붙어서다.
+
+컬럼은 `pg_attribute`에 있다. `attnum`이 0 이하인 줄은 `ctid` 같은 시스템 컬럼이고, `ALTER TABLE ... DROP COLUMN`으로 지운 컬럼은 줄이 남은 채 `attisdropped`만 참이 되니 둘 다 거른다.
+
+```sql
+SELECT a.attnum, a.attname, format_type(a.atttypid, a.atttypmod) AS type, a.attnotnull
+FROM pg_attribute AS a
+WHERE a.attrelid = 'books'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY a.attnum;
+```
+
+```text
+ attnum |   attname   |  type   | attnotnull
+--------+-------------+---------+------------
+      1 | book_id     | bigint  | t
+      2 | title       | text    | t
+      3 | price       | integer | t
+      4 | stock       | integer | t
+      5 | description | text    | f
+(5 rows)
+```
+
+`'books'::regclass`는 이름을 OID로 바꿔 주는 형 변환이라, 조인 없이 테이블 하나를 짚을 때 편하다. 인덱스 정의는 `pg_index`에서 읽는다. 설명하려고 `orders`에 `(user_id, created_at)` 인덱스를 잠깐 만들고 조회했다.
+
+```sql
+SELECT i.indexrelid::regclass AS index, i.indisprimary AS pk, i.indisunique AS uniq, i.indkey,
+       pg_get_indexdef(i.indexrelid) AS def
+FROM pg_index AS i
+WHERE i.indrelid = 'orders'::regclass;
+```
+
+```text
+          index          | pk | uniq | indkey |                                           def
+-------------------------+----+------+--------+-----------------------------------------------------------------------------------------
+ orders_pkey             | t  | t    | 1      | CREATE UNIQUE INDEX orders_pkey ON public.orders USING btree (order_id)
+ orders_user_created_idx | f  | f    | 2 4    | CREATE INDEX orders_user_created_idx ON public.orders USING btree (user_id, created_at)
+(2 rows)
+```
+
+`indkey`의 `2 4`는 컬럼 번호(`attnum`)다. `orders`의 2번 `user_id`, 4번 `created_at` 순서로 걸린 복합 인덱스라는 뜻이고, `pg_get_indexdef`가 그걸 다시 `CREATE INDEX` 문장으로 풀어 준다. 운영 DB에서 인덱스를 다른 환경에 옮겨 만들 때 이 문장을 그대로 쓴다.
+
+같은 정보를 SQL 표준의 `information_schema`로도 볼 수 있다. `information_schema.columns`는 MySQL에서도 같은 이름으로 돌아가서 여러 DB를 다루는 도구가 즐겨 쓴다. 대신 표준에 없는 것은 없다. 인덱스를 보여 주는 뷰가 없고, 크기·`reltuples`·TOAST·`relfilenode` 같은 PostgreSQL 고유 정보도 없다. 카탈로그 위에 겹겹이 만든 뷰라 객체가 많은 DB에서는 느려질 수 있고, 현재 역할이 권한을 가진 객체만 보여 준다. 그래서 이식성이 필요한 스크립트는 `information_schema`, 운영 진단은 `pg_catalog`로 나눠 쓴다.
 
 ## 8KB 페이지 한 장의 구조
 

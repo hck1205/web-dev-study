@@ -250,6 +250,68 @@ is AOP proxy = true
 
 `@Async`, `@Cacheable`, `@Retryable`, 메서드 보안(`@PreAuthorize`)도 같은 프록시 방식이라 같은 함정을 그대로 가진다. "어노테이션이 안 먹는다"는 증상을 보면 먼저 그 호출이 프록시를 지났는지 본다.
 
+## 같은 프록시에 내 코드를 끼워 넣는 AOP
+
+`@Transactional`이 하는 일, 곧 "메서드 앞뒤에 무언가를 끼워 넣는 일"을 직접 만들 수도 있다. 이게 AOP(관점 지향 프로그래밍)다. 실행 시간 측정, 감사 로그, 권한 확인처럼 여러 클래스에 똑같이 붙는 관심사를 한곳에 모은다. 용어가 셋 나온다.
+
+조인 포인트(join point)는 끼워 넣을 수 있는 실행 지점이다. 스프링 AOP는 프록시로 동작하니 조인 포인트가 "빈의 메서드 실행" 하나뿐이다. 포인트컷(pointcut)은 그중 어디에 끼울지 고르는 식이다. `execution(* demo..*Service.*(..))`처럼 메서드 모양으로 고르거나, `@annotation(demo.aop.Timed)`처럼 어노테이션으로 고른다. 어드바이스(advice)는 거기서 실제로 실행할 코드이고, 언제 실행하느냐에 따라 `@Before`, `@AfterReturning`, `@AfterThrowing`, `@After`, `@Around`로 나뉜다. 포인트컷과 어드바이스를 묶은 클래스가 애스펙트(aspect)다.
+
+Spring Boot 4에서는 `spring-boot-starter-aspectj`(3.x까지는 `spring-boot-starter-aop`)를 넣고 `@Aspect`를 붙인 빈을 만들면 된다. `@Timed`라는 어노테이션을 만들고 애스펙트 둘을 붙여 봤다.
+
+```java
+@Aspect @Component @Order(1)
+class LoggingAspect {
+  @Pointcut("@annotation(demo.aop.Timed)")
+  void timed() {}                       // 포인트컷에 이름을 붙여 재사용한다
+
+  @Before("timed()")
+  void before(JoinPoint jp) { System.out.println("  [log  @Order(1)] before " + jp.getSignature().toShortString()); }
+
+  @AfterThrowing(pointcut = "timed()", throwing = "ex")
+  void failed(Exception ex) { System.out.println("  [log  @Order(1)] threw " + ex.getClass().getSimpleName()); }
+}
+
+@Aspect @Component @Order(2)
+class TimingAspect {
+  @Around("@annotation(demo.aop.Timed)")
+  Object time(ProceedingJoinPoint pjp) throws Throwable {
+    System.out.println("  [time @Order(2)] start");
+    try { return pjp.proceed(); }       // proceed()를 불러야 원본 메서드가 실행된다
+    finally { System.out.println("  [time @Order(2)] end"); }
+  }
+}
+
+@Service
+class OrderService {
+  @Timed public void place(String id) { System.out.println("    place " + id); }
+  public void placeTwice() { this.place("B-1"); this.place("B-2"); }
+  @Timed public void cancel(String id) { if (id.isEmpty()) throw new IllegalArgumentException("empty id"); }
+}
+```
+
+```text
+--- orders.place("A-1")
+  [log  @Order(1)] before OrderService.place(..)
+  [time @Order(2)] start
+    place A-1
+  [time @Order(2)] end
+--- orders.placeTwice() (안에서 this.place)
+    place B-1
+    place B-2
+--- orders.cancel("") 예외
+  [log  @Order(1)] before OrderService.cancel(..)
+  [time @Order(2)] start
+  [time @Order(2)] end
+  [log  @Order(1)] threw IllegalArgumentException
+caller caught: empty id
+```
+
+순서부터 보자. `@Order` 숫자가 작은 애스펙트가 바깥 껍질이다. 들어갈 때는 `@Order(1)`의 `@Before`가 먼저 돌고, 나올 때는 `@Order(2)`의 `finally`가 끝난 뒤에야 `@Order(1)`의 `@AfterThrowing`이 돈다. 양파처럼 감싼다고 보면 된다. 이 순서는 `@Transactional`과 섞일 때 중요하다. 트랜잭션 어드바이저의 순서는 기본이 가장 낮은 우선순위(가장 안쪽)라서, 재시도 애스펙트에 `@Order`를 주지 않으면 같은 우선순위끼리 순서가 정해지지 않는다. 재시도가 트랜잭션 바깥에서 돌아야 매번 새 트랜잭션으로 다시 시도하니, 재시도 쪽에 더 작은 숫자를 준다.
+
+`@Around`는 `proceed()`를 부르지 않으면 원본이 아예 실행되지 않고, 반환값을 돌려주지 않으면 호출한 쪽은 null을 받는다. `@AfterThrowing`은 예외를 지켜볼 뿐 삼키지 않아서, 예외는 그대로 호출한 쪽까지 올라갔다(`caller caught`).
+
+그리고 `placeTwice()`에서는 어떤 어드바이스도 돌지 않았다. 앞 절의 `this.save()`와 똑같다. 애스펙트도 같은 프록시에 붙으니 프록시가 못 거는 자리가 그대로 이어진다. 같은 클래스 안의 호출, `private`·`final` 메서드, `@PostConstruct` 안의 호출, 그리고 `new`로 직접 만든 객체처럼 컨테이너가 모르는 객체다. 생성자나 필드 접근에 끼워 넣어야 하거나 이런 자리까지 잡아야 하면 컴파일·로드 시점에 바이트코드를 고치는 AspectJ 위빙으로 가야 한다. 포인트컷을 넓게 쓰는 것도 조심한다. `execution(* *(..))`처럼 모든 메서드를 고르면 자동 구성이 만든 빈까지 프록시가 되어 시작이 느려지고, `final` 클래스인 남의 빈에 걸려 시작이 실패하기도 한다.
+
 ## 서로를 생성자로 원하면 시작하지 않는다
 
 주문 서비스가 쿠폰 서비스를 쓰고, 쿠폰 서비스가 주문 서비스를 쓴다고 해 보자. 둘 다 생성자 주입이면 컨테이너는 어느 쪽도 먼저 만들 수 없다. 주문을 만들려면 쿠폰이 있어야 하고, 쿠폰을 만들려면 주문이 있어야 한다.

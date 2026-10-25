@@ -57,7 +57,7 @@ async function placeOrderSync(user) {
     { id: "api", label: "우리 서버" },
   ]}
   steps={[
-    { from: "app", to: "apns", label: "등록", title: "알림 허용 후 등록한다", detail: "사용자가 알림을 허용하면 앱이 운영체제를 통해 APNs에 등록한다." },
+    { from: "app", to: "apns", label: "등록", title: "알림 허용 후 등록한다", detail: "사용자가 알림을 허용하면 앱이 운영체제를 거쳐 APNs에 등록한다." },
     { from: "apns", to: "app", label: "디바이스 토큰", title: "기기 주소를 받는다", detail: "이 앱과 이 기기 조합을 가리키는 토큰이다. 앱을 다시 깔거나 기기를 복원하면 바뀔 수 있다." },
     { from: "app", to: "api", label: "PUT /devices", title: "토큰을 우리 서버에 올린다", detail: "로그인한 사용자 번호와 함께 올린다. 앱이 켜질 때마다 올려서 바뀐 토큰을 따라간다.", payload: "{ platform: \"ios\", token: \"a1f0…e9\", app_version: \"5.2.0\" }" },
     { from: "api", to: "apns", label: "POST /3/device/a1f0…", title: "보낼 때는 토큰을 주소로 쓴다", detail: "알림 본문과 함께 토큰을 경로에 넣어 APNs에 보낸다. 인증은 애플에서 받은 키로 만든 JWT로 한다." },

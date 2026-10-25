@@ -1,0 +1,553 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("js-map-set-weak");
+
+<EasyIntro>
+  물건마다 이름표를 붙여 서랍에 넣는다고 생각해 보자. 평범한 자바스크립트 객체라는 서랍은 이름표에 꼭 글자만 쓰게 해서, 숫자 1을 붙여도 글자 "1"로 바꾸고 물건 자체를 이름표로 쓰면 모든 물건에 똑같은 글자를 적어 서로 섞어 버린다.
+
+  Map이라는 서랍은 이름표에 무엇이든 그대로 붙일 수 있고, 넣은 순서도 기억해서 꺼낼 때 그 순서대로 나온다. Set은 이름표만 모아 두는 서랍이라 같은 것을 두 번 넣어도 하나만 남는다.
+
+  WeakMap은 이름표로 쓴 물건을 아무도 쓰지 않게 되면 서랍 칸이 저절로 비워지는 서랍이다. 그래서 화면에서 사라진 버튼에 붙여 둔 메모가 쓸데없이 남지 않는다. 대신 언제 비워질지 알 수 없어서 칸이 몇 개인지 세거나 하나씩 꺼내 볼 수는 없다.
+
+  무엇을 이름표로 쓸지와 언제 비워야 하는지를 보고 서랍을 고르면 된다.
+</EasyIntro>
+
+주문 목록에서 행마다 체크박스를 두고, 체크된 행을 객체에 기록했다. 행 객체를 그대로 키로 썼다. 첫 행을 체크했더니 두 번째 행도 체크된 것으로 나온다.
+
+```js
+const rows = [{ id: 1, name: "주문A" }, { id: 2, name: "주문B" }];
+const checked = {};
+checked[rows[0]] = true;
+console.log(Object.keys(checked), checked[rows[1]]);
+```
+
+```text
+[ '[object Object]' ] true
+```
+
+키가 하나뿐이고 그 이름이 `'[object Object]'`다. 객체의 키 자리에 객체를 넣으면 문자열로 바뀌는데, 평범한 객체는 모두 같은 문자열 `'[object Object]'`가 된다. 모든 행이 한 칸을 같이 쓴 것이다. 같은 일을 `Map`으로 하면 이렇다.
+
+```js
+const m = new Map();
+m.set(rows[0], true);
+console.log(m.get(rows[0]), m.get(rows[1]), m.size);
+```
+
+```text
+true undefined 1
+```
+
+이 글은 키와 값을 짝으로 담는 네 가지 도구, `Map`, `Set`, `WeakMap`, `WeakSet`과 약한 참조 `WeakRef`를 본다. 평범한 객체를 사전처럼 쓸 때 무엇이 깨지는지에서 출발해 `Map`의 키 비교와 순서, 실제 속도, 새 `Set` 메서드, 키를 약하게 잡는다는 말의 뜻과 그 대가, 직렬화까지 따라간다. 출력은 Node.js 22.22에서 실제로 돌린 결과다.
+
+이 주제의 다른 글: `WeakMap`으로 메모리 누수를 고치는 사례와 힙 스냅샷 읽기는 [메모리 누수 찾기](/posts/js-memory-leak)에, 객체를 키로 쓰는 메모이제이션 캐시의 메모리 측정은 [메모이제이션](/posts/js-memoization)에 있다. 여기서는 같은 측정을 되풀이하지 않고, 자료구조 자체의 규칙과 고르는 기준을 본다.
+
+## 객체의 키는 결국 문자열이다
+
+객체의 속성 키는 문자열이나 심볼만 될 수 있다. 다른 값을 넣으면 문자열로 바꾼다. 숫자 1과 문자열 `"1"`이 같은 칸이 되는 이유다.
+
+```js
+const o = {};
+o[1] = "number";
+o["1"] = "string";
+o[true] = "bool";
+console.log(o, Object.keys(o).length);
+
+const m2 = new Map([[1, "number"], ["1", "string"], [true, "bool"]]);
+console.log(m2.size, m2.get(1), m2.get("1"));
+```
+
+```text
+{ '1': 'string', true: 'bool' } 2
+3 number string
+```
+
+객체는 칸이 둘이고, `Map`은 셋이다. 서버가 숫자 ID를 주고 URL 쿼리에서는 문자열 ID를 꺼내는 화면에서 이 차이가 버그를 숨기거나 드러낸다. 객체 사전은 `cart[7]`과 `cart["7"]`을 같은 칸으로 봐서 우연히 맞게 돈다. `Map`은 둘을 다른 키로 보니 `cart.get(searchParams.get("id"))`가 `undefined`를 준다. 이럴 땐 `Map`을 탓하지 말고 키의 타입을 한쪽으로 맞춘다. TypeScript로 `Map<number, Item>`이라고 적어 두면 문자열을 넣는 순간 검사에서 걸린다.
+
+처음 장면의 체크박스를 단계별로 다시 보자. 아래 그림에서 다음을 누르면 키가 어떻게 바뀌어 한 칸에 모이는지 보인다.
+
+<AlgoTrace
+  caption="객체 키 자리에 들어간 값은 문자열로 바뀐다"
+  memoryLabel="checked 객체의 칸"
+  cells={["rows[0]", "rows[1]", "1", "\"1\""]}
+  steps={[
+    { pointer: 0, memory: ["'[object Object]': true"], caption: "checked[rows[0]] = true. 행 객체가 String()을 거쳐 '[object Object]'가 된다." },
+    { pointer: 1, found: [0, 1], memory: ["'[object Object]': true"], caption: "checked[rows[1]]을 읽는다. 이것도 '[object Object]'라 첫 행의 칸을 그대로 읽는다. 체크된 적 없는데 true다." },
+    { pointer: 2, memory: ["'[object Object]': true", "'1': 'number'"], caption: "숫자 1을 키로 넣는다. 문자열 '1'로 바뀌어 저장된다." },
+    { pointer: 3, found: [2, 3], memory: ["'[object Object]': true", "'1': 'string'"], caption: "문자열 \"1\"을 넣으면 같은 칸을 덮어쓴다. 숫자와 문자열을 구분할 방법이 없다." },
+  ]}
+/>
+
+객체를 키로 쓰고 싶어서 `JSON.stringify(row)`를 키로 만드는 코드도 종종 보인다. 내용이 같은 두 객체가 같은 칸이 되는 것을 원한다면 맞는 선택이지만, 속성 순서가 다르면 다른 문자열이 되고, 객체가 클수록 매번 직렬화하는 비용을 치른다. "이 객체 자체"를 키로 쓰고 싶다면 `Map`이 답이다.
+
+## __proto__와 물려받은 이름들
+
+객체 사전에는 키가 문자열로 바뀌는 것 말고도 함정이 있다. 객체는 빈 상태로 시작하지 않는다. `Object.prototype`에서 `toString`, `valueOf`, `hasOwnProperty` 같은 이름을 물려받고, `__proto__`라는 특별한 접근자도 함께 받는다. 사용자가 입력한 단어의 빈도를 세는 코드에 그런 단어가 들어오면 이렇게 된다.
+
+```js
+const counts = {};
+for (const w of ["toString", "__proto__", "valueOf", "hello"]) {
+  counts[w] = (counts[w] || 0) + 1;
+}
+console.log(counts, Object.keys(counts));
+```
+
+```text
+{
+  toString: 'function toString() { [native code] }1',
+  valueOf: 'function valueOf() { [native code] }1',
+  hello: 1
+} [ 'toString', 'valueOf', 'hello' ]
+```
+
+`counts["toString"]`은 처음부터 물려받은 함수라 `|| 0`이 동작하지 않고, 함수에 1을 더해 문자열이 됐다. `__proto__`는 아예 사라졌다. `counts.__proto__ = 1`은 속성을 만드는 대신 프로토타입을 바꾸려는 setter를 불렀고, 숫자는 프로토타입이 될 수 없어서 조용히 무시됐다. 사용자 입력이 키가 되는 사전(태그, 검색어, 헤더 이름, 번역 키)이라면 이런 단어는 언젠가 들어온다.
+
+`JSON.parse`에서 온 객체는 또 다르게 움직인다.
+
+```js
+const fromJson = JSON.parse('{"__proto__": {"isAdmin": true}}');
+console.log(Object.keys(fromJson), fromJson.isAdmin);
+
+const assigned = Object.assign({}, fromJson);
+console.log(Object.keys(assigned), assigned.isAdmin);
+```
+
+```text
+[ '__proto__' ] undefined
+[] true
+```
+
+`JSON.parse`는 `__proto__`를 평범한 자기 속성으로 만든다. 그런데 그 객체를 `Object.assign`으로 다른 객체에 옮기는 순간 대입이 일어나며 setter가 불리고, 새 객체의 프로토타입이 `{ isAdmin: true }`로 바뀌었다. 키 목록은 비었는데 `isAdmin`이 `true`다. 바깥에서 온 JSON을 깊게 합치는 함수가 이 구멍으로 `Object.prototype` 자체를 오염시키는 공격이 [프로토타입 오염](/posts/js-prototype-chain)이다.
+
+객체로 사전을 꼭 만들어야 한다면 프로토타입이 없는 객체로 시작한다.
+
+```js
+const dict = Object.create(null);
+dict["__proto__"] = 1;
+console.log(Object.keys(dict), "valueOf" in {}, "valueOf" in dict);
+```
+
+```text
+[ '__proto__' ] true false
+```
+
+물려받은 이름이 하나도 없어서 `__proto__`도 평범한 키가 된다. `Object.groupBy`가 돌려주는 객체가 이렇게 프로토타입 없이 만들어진다. 다만 이런 객체는 `toString`이 없어서 템플릿 문자열에 넣으면 에러가 나고, 여전히 키는 문자열만 된다. 사용자 입력이 키가 되고, 키를 자주 넣고 빼는 사전이라면 처음부터 `Map`이 낫다. `Map`에는 물려받은 키라는 개념이 없다. `get`, `set`이 메서드이고 데이터는 따로 들어 있어서, `"__proto__"`든 `"toString"`이든 그냥 문자열 키다.
+
+## Map은 키를 있는 그대로 비교한다
+
+`Map`은 키를 바꾸지 않고, 두 키가 같은지를 SameValueZero라는 규칙으로 본다. `===`와 거의 같고, 차이는 `NaN`을 자기 자신과 같다고 본다는 것 하나다. 같음 비교 알고리즘 넷의 차이는 [==와 ===](/posts/js-equality-coercion)에서 다뤘다.
+
+```js
+const m = new Map();
+m.set(NaN, "nan").set(0, "zero");
+console.log(m.get(NaN), m.get(-0), m.size);
+console.log([NaN].indexOf(NaN), [NaN].includes(NaN));
+console.log(new Set([NaN, NaN, 0, -0, "0"]));
+```
+
+```text
+nan zero 2
+-1 true
+Set(3) { NaN, 0, '0' }
+```
+
+`NaN`으로 넣은 값을 `NaN`으로 꺼낼 수 있고, `0`과 `-0`은 같은 키다. `indexOf`는 `===`를 써서 `NaN`을 못 찾고, `includes`와 `Map`, `Set`은 SameValueZero라 찾는다.
+
+객체와 배열은 참조로 비교한다. 내용이 같아도 다른 객체면 다른 키다. 좌표를 키로 쓰려다 가장 많이 하는 실수가 이것이다.
+
+```js
+const grid = new Map();
+grid.set([1, 2], "벽");
+console.log(grid.get([1, 2]), grid.size);
+
+const key = (x, y) => `${x},${y}`;
+grid.set(key(1, 2), "벽");
+console.log(grid.get(key(1, 2)));
+```
+
+```text
+undefined 1
+벽
+```
+
+`[1, 2]`를 쓸 때마다 새 배열이 생기니 넣은 키와 찾는 키가 다르다. 값으로 비교되는 복합 키가 필요하면 문자열로 이어 붙이거나(구분자가 값 안에 들어갈 수 없을 때만), `Map` 안에 `Map`을 두는 방식(`grid.get(x)?.get(y)`)을 쓴다. 키로 쓸 객체를 한 곳에서만 만들고 계속 같은 참조를 쓰는 경우라면 객체 키가 그대로 맞다. 앞의 체크박스처럼 렌더링마다 같은 행 객체를 다시 쓰는 경우다.
+
+React 상태에 `Map`을 둘 때도 이 참조 비교가 걸린다. `prev.set(id, true)` 후 같은 `Map`을 돌려주면 React는 같은 객체라고 보고 다시 그리지 않는다. `new Map(prev).set(id, true)`처럼 새 `Map`을 만들어 돌려준다. 이유는 [React 상태를 불변으로 바꾸기](/posts/js-immutability-react)와 같다.
+
+## 넣은 순서가 곧 도는 순서다
+
+`Map`과 `Set`은 키를 넣은 순서를 기억하고 그 순서대로 돈다. 객체는 정수처럼 생긴 키를 먼저 숫자 순으로 세우고, 나머지 문자열 키를 넣은 순서로 둔다. 이 규칙은 [객체 메서드](/posts/js-object-methods)에서 자세히 봤다.
+
+```js
+const ord = { b: 1, 10: "x", a: 2, 2: "y" };
+console.log(Object.keys(ord));
+console.log([...new Map([["b", 1], [10, "x"], ["a", 2], [2, "y"]]).keys()]);
+```
+
+```text
+[ '2', '10', 'b', 'a' ]
+[ 'b', 10, 'a', 2 ]
+```
+
+서버가 정해 준 순서(인기순 상품 ID 같은)를 객체에 담으면 ID 순으로 다시 정렬돼 버린다. 순서가 의미 있는 사전이라면 `Map`이나 배열을 쓴다.
+
+이미 있는 키에 다시 `set`하면 값만 바뀌고 자리는 그대로다. 자리를 맨 뒤로 옮기려면 지웠다가 다시 넣는다.
+
+```js
+const order = new Map([["a", 1], ["b", 2], ["c", 3]]);
+order.set("a", 10);
+console.log([...order.keys()]);
+order.delete("a");
+order.set("a", 10);
+console.log([...order.keys()]);
+```
+
+```text
+[ 'a', 'b', 'c' ]
+[ 'b', 'c', 'a' ]
+```
+
+이 성질 하나로 LRU 캐시를 만들 수 있다. 쓸 때마다 지웠다 다시 넣으면 맨 앞이 가장 오래 안 쓴 키가 된다. 구현과 테스트는 [메모리 누수 찾기](/posts/js-memory-leak)에 있다. 돌고 있는 `Map`에 키를 넣고 빼면 그 반복에도 영향을 준다는 점은 [이터레이터 패턴](/posts/pattern-iterator)에서 봤다.
+
+`Map`은 이터러블이라 `for (const [k, v] of map)`으로 바로 돌고, `new Map(Object.entries(obj))`와 `Object.fromEntries(map)`으로 객체와 오갈 수 있다. ES2024부터는 `Map.groupBy(items, fn)`이 있어서, 그룹 키가 객체이거나 숫자와 문자열을 구분해야 할 때 `Object.groupBy` 대신 쓴다.
+
+## 얼마나 빠른가
+
+"객체가 더 빠르다", "Map이 더 빠르다"는 말이 둘 다 돈다. 일이 무엇이냐에 따라 다르다. 세션처럼 키가 계속 들어오고 오래된 키는 빠지는 상황을 흉내 내서, 문자열 키를 100만 번 넣으면서 1000개 전의 키를 하나씩 지웠다. 한 번 데운 뒤 잰 값이다.
+
+```js
+// object
+const o = {};
+for (let i = 0; i < N; i++) { o["s" + i] = i; if (i >= 1000) delete o["s" + (i - 1000)]; }
+// Map
+const m = new Map();
+for (let i = 0; i < N; i++) { m.set("s" + i, i); if (i >= 1000) m.delete("s" + (i - 1000)); }
+```
+
+```text
+object: 추가·삭제 100만 번                1071.1 ms 1000
+Map:    추가·삭제 100만 번                 229.6 ms 1000
+```
+
+두 번 돌렸을 때 객체는 1.07~1.35초, `Map`은 0.23~0.28초였다. V8은 속성 이름이 몇 개로 고정된 객체를 숨은 클래스(shape)로 다뤄 아주 빠르게 읽는다. 대신 이렇게 키가 계속 바뀌고 `delete`가 섞이면 그 최적화를 버리고 느린 사전 모드로 바꾼다. `Map`은 처음부터 키가 자주 바뀌는 해시 표로 설계됐다. 반대로 `{ id, name, price }`처럼 모양이 정해진 레코드는 객체가 맞다. 키를 데이터로 다루면 `Map`, 키가 코드에 적힌 필드 이름이면 객체라고 기억하면 된다. 해시 표가 어떻게 상수 시간에 찾는지는 [해시 맵](/posts/ds-hash-map)에 있다.
+
+`Set`이 크게 이기는 곳은 "들어 있나" 확인이다. 1만 개 ID 목록에 1만 번 물었다.
+
+```text
+array.includes 1만 개 × 1만 번           114.1 ms 1429
+set.has        1만 개 × 1만 번             0.5 ms 1429
+```
+
+`includes`는 매번 앞에서부터 훑고(원소 수에 비례), `Set.has`는 해시로 바로 찾는다. 수백 배 차이다. 화면에서 "선택된 ID인가"를 행마다 묻는 코드가 `selectedIds.includes(row.id)`라면, 행이 수천 개일 때 렌더링마다 수천만 번 비교를 한다. `new Set(selectedIds)`를 한 번 만들어 두고 `has`로 묻는다. 반대로 원소가 열 개 남짓이면 `Set`을 만드는 비용이 더 클 수 있으니 습관적으로 바꿀 필요는 없다.
+
+## Set으로 겹치는 것과 빠진 것 찾기
+
+`Set`은 값만 모아 두는 `Map`이다. 같은 값은 한 번만 들어가고(SameValueZero 기준), 넣은 순서대로 돈다. 가장 흔한 쓰임은 `[...new Set(ids)]`로 순서를 지키며 중복을 지우는 것이다.
+
+두 집합을 비교하는 일은 오랫동안 손으로 짰다. `a.filter((x) => b.has(x))` 같은 식이다. ES2025부터 `Set`에 집합 연산 메서드가 생겼다. 크롬 122, 파이어폭스 127, 사파리 17, Node.js 22부터 쓸 수 있다. 내 기술과 공고의 요구 기술을 비교해 보자.
+
+```js
+const mine = new Set(["react", "ts", "css"]);
+const job = new Set(["react", "ts", "graphql"]);
+console.log(mine.union(job));
+console.log(mine.intersection(job));
+console.log(job.difference(mine));
+console.log(mine.symmetricDifference(job));
+console.log(new Set(["react"]).isSubsetOf(mine), mine.isSupersetOf(new Set(["ts"])), mine.isDisjointFrom(new Set(["go"])));
+```
+
+```text
+Set(4) { 'react', 'ts', 'css', 'graphql' }
+Set(2) { 'react', 'ts' }
+Set(1) { 'graphql' }
+Set(2) { 'css', 'graphql' }
+true true true
+```
+
+`union`은 합집합, `intersection`은 교집합, `difference`는 차집합(공고에는 있고 나에게는 없는 것), `symmetricDifference`는 한쪽에만 있는 것이다. 모두 원본을 바꾸지 않고 새 `Set`을 돌려준다. 아래 세 메서드는 참거짓을 준다.
+
+인자 쪽은 꼭 `Set`이 아니어도 된다. `size`, `has()`, `keys()`가 있는 "집합처럼 생긴" 객체면 받는다. 그래서 `Map`을 넣으면 키를 기준으로 계산한다. 배열은 `size`가 없어서 받지 않는다.
+
+```js
+const stock = new Map([["react", 3], ["vue", 1]]);
+console.log(mine.intersection(stock));
+mine.union(["vue"]);
+```
+
+```text
+Set(1) { 'react' }
+TypeError: The .size property is NaN
+```
+
+배열과 계산하려면 `new Set(arr)`로 감싼다. 구형 브라우저를 지원해야 하면 core-js에 폴리필이 있고, 대상 브라우저 설정에 따라 빌드 도구가 넣어 준다. 그 설정은 [번들러 기초](/posts/bundler-basics)에서 다뤘다.
+
+## WeakMap은 키를 붙잡지 않는다
+
+`Map`에 객체를 키로 넣으면 `Map`이 그 객체를 붙잡는다. 다른 곳에서 아무도 그 객체를 쓰지 않아도 `Map`에 들어 있다는 이유로 가비지 컬렉터가 치우지 못한다. `WeakMap`은 키를 약하게 잡는다. 키 객체에 닿는 길이 `WeakMap` 말고는 없으면, 키와 그 값이 함께 치워진다.
+
+한 가지 더 중요한 성질이 있다. 값이 키를 다시 가리켜도 키를 살려 두지 못한다. DOM 노드에 메타데이터를 붙이면서 그 메타데이터 안에 노드를 다시 넣어 두는 일은 흔하다. 화면에서 사라질 노드 5만 개로 Map과 WeakMap을 각각 시험했다. 저장소 자체는 끝까지 살아 있게 붙잡아 두었다.
+
+```js
+// node --expose-gc 로 실행한다
+for (const Store of [Map, WeakMap]) {
+  const meta = new Store();
+  keep.push(meta); // 저장소 자체는 계속 살아 있다
+  global.gc(); const before = process.memoryUsage().heapUsed;
+  for (let i = 0; i < 50_000; i++) {
+    const node = { id: i, children: new Array(50).fill(i) }; // 화면에서 사라질 노드
+    meta.set(node, { owner: node, renderedAt: i });          // 값이 키를 다시 가리킨다
+  }
+  global.gc();
+  console.log(Store.name.padEnd(7), "남은 메모리", mb(process.memoryUsage().heapUsed - before));
+}
+```
+
+```text
+Map     남은 메모리 26.9MB
+WeakMap 남은 메모리 2.0MB
+```
+
+`Map`은 노드 5만 개를 모두 붙잡았다. `WeakMap`에 남은 2MB는 노드가 아니라, 5만 칸까지 늘어났던 `WeakMap` 내부의 표가 바로 줄어들지 않고 남은 몫으로 보인다. 값이 키를 가리키는데도 둘 다 치워진 이유는 `WeakMap`의 항목이 "키가 살아 있을 때만 값도 산다"는 규칙(에페메론, ephemeron)으로 관리되기 때문이다. 값에서 키로 가는 참조는 키를 살리는 근거로 치지 않는다. 아래 그림이 그 순서다.
+
+<SequenceDiagram
+  caption="키 객체에 닿는 길이 사라지면 WeakMap의 항목도 함께 치워진다"
+  actors={[
+    { id: "comp", label: "컴포넌트" },
+    { id: "node", label: "DOM 노드" },
+    { id: "wm", label: "WeakMap" },
+    { id: "gc", label: "GC" },
+  ]}
+  steps={[
+    { from: "comp", to: "node", label: "만들고 붙인다", title: "노드가 문서에 붙는다", detail: "문서 트리가 노드를 가리키고 있으니 노드는 살아 있다." },
+    { from: "comp", to: "wm", label: "set(node, meta)", title: "노드를 키로 메타데이터를 단다", detail: "meta 안에는 node를 다시 가리키는 owner 필드도 있다.", payload: "wm.set(node, { owner: node, tooltip })" },
+    { from: "comp", to: "node", label: "remove()", title: "화면에서 지운다", detail: "문서 트리에서 떨어졌고, 컴포넌트도 더는 node 변수를 들고 있지 않다." },
+    { from: "gc", to: "node", label: "닿는 길 확인", title: "루트에서 노드로 가는 길이 없다", detail: "WeakMap의 키 참조와 meta.owner는 둘 다 노드를 살리는 근거가 아니다. 노드는 쓰레기다." },
+    { from: "gc", to: "wm", label: "항목 제거", title: "키와 값이 함께 사라진다", detail: "키가 치워졌으니 그 항목의 값 meta도 치워진다. Map이었다면 둘 다 영원히 남았다." },
+  ]}
+/>
+
+이 성질이 맞는 자리는 "남의 객체에 내 데이터를 덧붙이는" 곳이다. DOM 노드별 측정값이나 툴팁 상태, 라이브러리가 받은 사용자 객체에 붙이는 내부 정보, 객체를 인자로 받는 함수의 결과 캐시가 그렇다. 노드가 사라질 때 메타데이터를 손으로 지우는 코드를 쓸 필요가 없다. 지우는 걸 잊어서 생기는 누수의 실제 사례와 찾는 법은 [메모리 누수 찾기](/posts/js-memory-leak)에 있다.
+
+클래스의 비공개 필드도 같은 장치로 흉내 낼 수 있다. 실제로 트랜스파일러가 `#balance`를 지원하지 않는 브라우저용으로 바꿀 때 `WeakMap`을 쓴다. esbuild 0.28로 `--target=chrome70` 변환한 결과다.
+
+```js
+// 원본
+class Account {
+  #balance = 0;
+  deposit(n) { this.#balance += n; return this.#balance; }
+}
+```
+
+```text
+var _balance;
+class Account {
+  constructor() {
+    __privateAdd(this, _balance, 0);
+  }
+  deposit(n) {
+    __privateSet(this, _balance, __privateGet(this, _balance) + n);
+    return __privateGet(this, _balance);
+  }
+}
+_balance = new WeakMap();
+```
+
+인스턴스를 키로, 비공개 값을 값으로 담는다. 바깥에서는 `_balance`에 닿을 수 없고, 인스턴스가 사라지면 값도 사라진다. 지금은 모든 주요 브라우저가 `#` 필드를 지원하니 직접 이렇게 짤 일은 없다.
+
+키 자리에는 객체만 들어간다. 원시값은 언제든 같은 값을 새로 만들 수 있어서 "아무도 안 쓰게 됐다"는 순간이 없기 때문이다. ES2023부터는 `Symbol.for`로 등록하지 않은 심볼도 키가 될 수 있다.
+
+```js
+const wm = new WeakMap();
+wm.set("id-1", 1);              // TypeError: Invalid value used as weak map key
+wm.set(Symbol("local"), "ok");  // 된다
+wm.set(Symbol.for("shared"), 1); // TypeError: Invalid value used as weak map key
+```
+
+`WeakSet`은 같은 규칙의 집합이다. 값 없이 "이 객체를 이미 봤다"는 표시만 남긴다. 깊은 복사나 직렬화 함수에서 순환 참조를 만나 무한히 도는 걸 막을 때, 이미 방문한 객체를 `WeakSet`에 넣어 두는 식으로 쓴다. 함수가 끝나 `WeakSet`이 버려지면 표시도 따라 사라진다.
+
+<Callout kind="warning" title="WeakMap이 값을 지켜 주지는 않는다">
+키가 살아 있는 한 값도 산다. 키 객체를 전역 배열이나 이벤트 리스너가 계속 붙잡고 있다면 `WeakMap`에 넣어 봐야 아무것도 치워지지 않는다. 반대로 값을 다른 곳에서도 쓰고 있다면, 항목이 사라져도 그 값은 다른 참조 때문에 남는다.
+</Callout>
+
+## 셀 수도, 돌 수도 없는 이유
+
+`WeakMap`에는 `size`도, `keys()`도, `forEach`도 없다. `Map`에 있던 `clear()`도 없다.
+
+```js
+console.log(typeof wm.size, typeof wm.keys, typeof wm.clear);
+```
+
+```text
+undefined undefined undefined
+```
+
+빠뜨린 게 아니라 일부러 뺐다. GC가 언제 도는지는 엔진마다, 실행할 때마다 다르다. `size`를 읽을 수 있다면 같은 코드가 어떤 때는 3을, 어떤 때는 2를 내놓는다. GC의 타이밍이 프로그램 결과로 새어 나오는 셈이다. 그러면 브라우저마다 다른 동작이 생기고, 엔진은 GC 방식을 바꿀 때마다 웹 호환성을 걱정해야 한다. 그래서 `WeakMap`은 "이 키를 내가 갖고 있을 때만 값을 꺼낼 수 있는" 구조로 만들어졌다. 키를 들고 있다는 건 그 키가 살아 있다는 뜻이니, `get`의 결과는 GC 타이밍과 상관없이 항상 같다.
+
+그러니 "붙여 둔 메타데이터를 전부 돌면서 정리"하거나 "캐시에 몇 개 들었나 세기"가 필요하다면 `WeakMap`이 아니다. `Map`에 크기 제한(LRU)이나 만료 시간을 두는 쪽이 맞다.
+
+## WeakRef와 FinalizationRegistry는 마지막 수단
+
+`WeakRef`는 객체 하나를 약하게 가리키는 상자다. `deref()`를 부르면 객체가 살아 있을 때는 그 객체를, 치워졌으면 `undefined`를 준다. `FinalizationRegistry`는 등록한 객체가 치워진 뒤에 콜백을 불러 주는 장치다. 둘 다 ES2021에 들어왔고, 제안서와 MDN이 함께 "되도록 쓰지 말라"고 적어 둔 드문 API다. 왜 그런지 직접 보자.
+
+```js
+// node --expose-gc 로 실행한다
+let user = { name: "민지" };
+const ref = new WeakRef(user);
+user = null;
+global.gc();
+console.log("같은 작업 안에서 deref:", ref.deref());
+setTimeout(() => {
+  global.gc();
+  console.log("다음 작업에서 deref:", ref.deref());
+}, 0);
+```
+
+```text
+같은 작업 안에서 deref: { name: '민지' }
+다음 작업에서 deref: undefined
+```
+
+`user = null`과 GC 직후에도 `deref()`가 객체를 돌려줬다. 명세는 `WeakRef`를 만들거나 `deref()`한 객체를 그 동기 작업이 끝날 때까지 살려 두도록 정해 두었다. 한 함수 안에서 `deref()`를 두 번 했는데 처음엔 있고 다음엔 없는 일을 막으려는 것이다. 그래서 `deref()`한 결과는 변수에 담아 그 작업 안에서만 쓰고, 다음 작업에서는 다시 `deref()`한다.
+
+`FinalizationRegistry`의 콜백은 더 믿을 수 없다. 함수 안에서 만든 임시 객체를 등록하고, 한 번은 GC를 억지로 돌리고 한 번은 그냥 실행했다.
+
+```js
+const registry = new FinalizationRegistry((label) => console.log("치워짐:", label));
+(function () { registry.register({ big: new Array(1e5).fill(1) }, "임시 객체"); })();
+global.gc(); // 두 번째 실행에서는 이 줄을 뺐다
+console.log("gc 직후 동기 코드");
+setTimeout(() => console.log("다음 태스크"), 0);
+setTimeout(() => console.log("100ms 뒤"), 100);
+```
+
+```text
+gc 직후 동기 코드
+치워짐: 임시 객체
+다음 태스크
+100ms 뒤
+```
+
+```text
+gc 직후 동기 코드
+다음 태스크
+100ms 뒤
+```
+
+GC를 억지로 돌렸을 때만 콜백이 왔다. 그냥 실행하면 힙에 여유가 있어 GC가 돌지 않았고, 프로그램이 끝날 때까지 콜백은 오지 않았다. 프로그램이 끝날 때 남은 콜백을 불러 주지도 않는다. 그래서 파일 닫기, 구독 해제, 서버에 "이 자원 반납"을 알리는 일처럼 반드시 해야 하는 정리를 여기에 맡기면 안 된다. 정리는 `dispose()`나 effect의 정리 함수로 명시적으로 한다.
+
+남는 쓰임은 좁다. 큰 디코딩 결과(이미지 비트맵, 파싱한 대용량 문서)를 `Map<string, WeakRef<T>>`에 담아, 메모리에 여유가 있는 동안만 다시 쓰고 치워졌으면 다시 만드는 캐시가 대표적이다. 이때 `FinalizationRegistry`는 치워진 항목의 키를 `Map`에서 지우는 청소 보조로만 쓴다. 콜백이 안 와도 `deref()`가 `undefined`를 주면 다시 만들면 되니, 결과가 틀리지 않는다.
+
+## JSON으로 보내면 빈 객체가 된다
+
+`Map`과 `Set`을 상태로 들고 있다가 서버로 보내거나 `localStorage`에 저장할 때 데이터가 사라진다.
+
+```js
+console.log(JSON.stringify({ m: new Map([["a", 1]]), s: new Set([1, 2]) }));
+```
+
+```text
+{"m":{},"s":{}}
+```
+
+`JSON.stringify`는 객체의 열거 가능한 자기 속성만 적는데, `Map`과 `Set`의 데이터는 속성이 아니라 내부 슬롯에 들어 있다. 에러도 없이 빈 객체가 된다. 보낼 때는 배열로 바꾸고, 받을 때 다시 만든다.
+
+```js
+const m = new Map([["a", 1], [2, { deep: true }]]);
+console.log(JSON.stringify([...m]));
+console.log(JSON.stringify(Object.fromEntries(m)));
+console.log(new Map(JSON.parse(JSON.stringify([...m]))));
+```
+
+```text
+[["a",1],[2,{"deep":true}]]
+{"2":{"deep":true},"a":1}
+Map(2) { 'a' => 1, 2 => { deep: true } }
+```
+
+`[...m]`로 만든 `[키, 값]` 배열은 키의 타입(숫자 2)과 순서를 지킨다. `Object.fromEntries`는 키를 문자열로 바꾸고 정수 키를 앞으로 세운다. 앞에서 본 객체의 규칙이 그대로 돌아온 것이다. 키가 문자열뿐이고 순서가 상관없을 때만 객체로 바꾼다. 상태 관리 도구의 저장 미들웨어나 개발 도구가 `Map`을 제대로 보여 주지 못하는 것도 같은 이유라, 저장할 상태는 배열이나 평범한 객체로 두고 `Map`은 계산할 때 만드는 편이 다루기 쉽다.
+
+같은 프로세스 안에서 복사하거나 `postMessage`로 Web Worker에 보낼 때는 구조화된 복제(structured clone)가 쓰인다. 이건 `Map`과 `Set`을 그대로 복사한다. `WeakMap`과 `WeakSet`은 복사하지 못한다.
+
+```js
+const c = structuredClone({ m, s: new Set([1]) });
+console.log(c, c.m !== m);
+structuredClone(new WeakMap());
+```
+
+```text
+{ m: Map(2) { 'a' => 1, 2 => { deep: true } }, s: Set(1) { 1 } } true
+DataCloneError: #<WeakMap> could not be cloned.
+```
+
+복사본의 객체 키는 원본 키가 아니라 키의 복사본이다. `structuredClone(new Map([[objKey, "x"]])).get(objKey)`는 `undefined`다. 키 객체도 같이 복사돼 다른 참조가 되었기 때문이다. 복사 깊이와 복사되지 않는 것들은 [얕은 복사와 깊은 복사](/posts/js-shallow-deep-copy)에서 다뤘다.
+
+## 연습: 장바구니에서 바뀐 것 찾기
+
+이전 장바구니와 새 장바구니를 받아 추가된 상품, 빠진 상품, 수량이 바뀐 상품의 `id`를 돌려주는 함수를 만들어 보자. 추가와 변경은 새 장바구니 순서로, 빠진 것은 이전 장바구니 순서로 낸다. `id`는 숫자일 수도 문자열일 수도 있고, 숫자 1과 문자열 `"1"`은 다른 상품이다. `includes`나 `find`로 매번 훑지 말고 `Map`을 써서 한 번씩만 돌게 해 보자.
+
+<CodePlayground
+  caption="diffCart: 추가, 삭제, 수량 변경을 한 번에"
+  functionName="diffCart"
+  initialCode={`function diffCart(before, after) {
+  // before, after: [{ id, qty }, ...]
+  // 돌려줄 값: { added: [id...], removed: [id...], changed: [id...] }
+  return { added: [], removed: [], changed: [] };
+}`}
+  solution={`function diffCart(before, after) {
+  const prev = new Map(before.map((item) => [item.id, item.qty]));
+  const added = [];
+  const changed = [];
+  for (const { id, qty } of after) {
+    if (!prev.has(id)) added.push(id);
+    else if (prev.get(id) !== qty) changed.push(id);
+    prev.delete(id); // 확인한 것은 지운다. 끝까지 남은 것이 빠진 상품이다
+  }
+  return { added, removed: [...prev.keys()], changed };
+}`}
+  tests={[
+    { label: "추가 하나, 삭제 하나, 변경 하나", args: [[{ id: 1, qty: 1 }, { id: 2, qty: 1 }], [{ id: 2, qty: 3 }, { id: 3, qty: 1 }]], expected: { added: [3], removed: [1], changed: [2] } },
+    { label: "그대로면 모두 빈 배열", args: [[{ id: 1, qty: 1 }], [{ id: 1, qty: 1 }]], expected: { added: [], removed: [], changed: [] } },
+    { label: "빈 장바구니에서 시작", args: [[], [{ id: "a", qty: 1 }, { id: "b", qty: 2 }]], expected: { added: ["a", "b"], removed: [], changed: [] } },
+    { label: "숫자 1과 문자열 \"1\"은 다른 상품", args: [[{ id: 1, qty: 1 }], [{ id: "1", qty: 1 }]], expected: { added: ["1"], removed: [1], changed: [] } },
+    { label: "빠진 것은 이전 순서대로", args: [[{ id: 5, qty: 1 }, { id: 4, qty: 1 }, { id: 3, qty: 1 }], []], expected: { added: [], removed: [5, 4, 3], changed: [] } },
+  ]}
+/>
+
+같은 함수를 객체 사전으로 짜면 네 번째 테스트가 깨진다. `prev[1]`과 `prev["1"]`이 같은 칸이라 "변경 없음"으로 판단한다. 다섯 번째 테스트도 객체라면 `Object.keys`가 `['3', '4', '5']`처럼 문자열로, 숫자 순으로 꺼내 실패한다. 처음의 체크박스 버그와 뿌리가 같다.
+
+## 고르는 기준
+
+필드 이름이 코드에 적혀 있는 레코드는 객체다. 키가 데이터이고, 문자열이 아닌 키가 섞이거나, 사용자 입력이 키가 되거나, 자주 넣고 빼거나, 순서가 의미 있으면 `Map`이다. "들어 있나"를 자주 묻거나 두 목록을 비교하면 `Set`이다. 내 것이 아닌 객체에 데이터를 덧붙이고 그 객체와 함께 사라지게 하려면 `WeakMap`, 표시만 남기면 `WeakSet`이다. `WeakRef`와 `FinalizationRegistry`는 치워져도 결과가 틀리지 않는 캐시에만, 그것도 다른 방법이 없을 때 쓴다.
+
+## 면접에서 나올 만한 질문
+
+### Map과 일반 객체는 무엇이 다른가요?
+
+`Map`은 키를 바꾸지 않고 어떤 값이든 키로 받으며 SameValueZero로 비교하지만, 객체는 키를 문자열이나 심볼로 바꾼다. `Map`은 넣은 순서대로 돌고 `size`가 있으며 물려받은 키가 없다. 객체는 정수 같은 키를 먼저 세우고, `toString`이나 `__proto__` 같은 이름과 부딪힌다. 키를 자주 넣고 빼는 일에서는 `Map`이 빨랐다. 100만 번 넣고 지우는 데 객체가 1초 넘게, `Map`은 0.2초대였다. 모양이 정해진 레코드는 객체가 맞다.
+
+### Map의 키는 어떻게 비교되나요? NaN이나 배열을 키로 쓰면요?
+
+SameValueZero로 비교한다. `===`와 같되 `NaN`을 자기 자신과 같다고 보고, `0`과 `-0`은 같은 키다. 객체와 배열은 참조로 비교해서 `map.set([1, 2], v)` 후 `map.get([1, 2])`는 새 배열이라 `undefined`다. 값으로 비교되는 복합 키가 필요하면 문자열로 이어 붙이거나 중첩 `Map`을 쓴다.
+
+### 객체를 사전으로 쓰면 어떤 보안 문제가 생기나요?
+
+키가 사용자 입력이면 `__proto__`가 문제다. 대입하면 속성이 아니라 프로토타입 setter가 불리고, `JSON.parse`로 만든 객체를 `Object.assign`이나 깊은 병합으로 옮기면 대상의 프로토타입이 바뀐다. 병합 함수가 `Object.prototype`까지 내려가면 모든 객체에 속성이 생기는 프로토타입 오염이 된다. `Object.create(null)`로 프로토타입 없는 객체를 쓰거나, 처음부터 `Map`을 쓰고, 병합할 때 `__proto__`·`constructor`·`prototype` 키를 거른다.
+
+### Set은 언제 배열 대신 쓰나요?
+
+포함 여부를 자주 묻거나 중복을 없앨 때다. `includes`는 원소 수에 비례해 훑고 `Set.has`는 해시로 바로 찾아서, 1만 개 목록에 1만 번 물었을 때 114ms 대 0.5ms였다. 두 목록을 비교할 때는 ES2025의 `union`, `intersection`, `difference` 같은 메서드를 쓸 수 있고, 인자로 `size`·`has`·`keys`를 가진 객체(예를 들어 `Map`)도 받는다. 원소가 몇 개 안 되면 굳이 바꿀 필요는 없다.
+
+### WeakMap은 Map과 무엇이 다르고 어디에 쓰나요?
+
+키를 약하게 잡아서, 키 객체에 닿는 길이 `WeakMap`밖에 없으면 키와 값이 함께 치워진다. 값이 키를 다시 가리켜도 키를 살려 두지 못한다. 키는 객체나 등록되지 않은 심볼만 되고, `size`와 순회가 없다. DOM 노드에 붙이는 메타데이터, 남의 객체에 덧붙이는 내부 정보, 객체 인자를 받는 함수의 결과 캐시처럼 그 객체와 수명을 같이해야 하는 데이터에 쓴다.
+
+### WeakMap은 왜 순회하거나 크기를 알 수 없나요?
+
+GC가 언제 도는지가 프로그램 결과로 새어 나오지 않게 하려고 일부러 뺐다. `size`나 `keys()`가 있으면 같은 코드가 실행할 때마다, 브라우저마다 다른 값을 내놓게 된다. 키를 들고 있어야만 값을 꺼낼 수 있게 만들면, 키를 들고 있다는 사실이 곧 키가 살아 있다는 뜻이라 `get`의 결과가 GC 타이밍과 상관없이 같다.
+
+### WeakRef와 FinalizationRegistry를 정리 작업에 쓰면 안 되는 이유는요?
+
+GC가 언제 돌지, 돌기는 할지 보장되지 않기 때문이다. 실험에서 GC를 억지로 돌리지 않으면 `FinalizationRegistry` 콜백은 프로그램이 끝날 때까지 오지 않았고, 끝날 때 몰아서 불러 주지도 않는다. 파일 닫기나 구독 해제는 명시적으로 해야 한다. `deref()`한 객체는 그 동기 작업이 끝날 때까지 살아 있도록 정해져 있으니, 결과를 변수에 담아 그 안에서 쓰고 다음 작업에서는 다시 확인한다.
+
+### Map을 JSON으로 보내거나 저장하면 어떻게 되나요?
+
+`JSON.stringify`는 열거 가능한 자기 속성만 적는데 `Map`의 데이터는 내부 슬롯에 있어서 에러 없이 `{}`가 된다. `[...map]`으로 `[키, 값]` 배열을 만들어 보내고 `new Map(배열)`로 되살리면 키의 타입과 순서가 지켜진다. `Object.fromEntries`는 키를 문자열로 바꾸고 순서를 바꿀 수 있다. 같은 프로세스 안의 복사나 `postMessage`는 구조화된 복제라 `Map`과 `Set`을 그대로 옮기지만 `WeakMap`은 `DataCloneError`가 난다.

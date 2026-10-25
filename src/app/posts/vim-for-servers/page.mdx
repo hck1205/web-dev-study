@@ -1,0 +1,343 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("vim-for-servers");
+
+<EasyIntro>
+  보통 글쓰기 프로그램은 자판을 누르면 바로 글자가 써지지만 vim은 다르다. 처음 켜면 글자를 쓰는 상태가 아니라 리모컨을 든 상태라서, 자판은 글자가 아니라 "한 줄 지워", "다음 단어로 가" 같은 버튼이다. 글자를 쓰려면 리모컨을 내려놓고 연필을 드는 버튼을 눌러야 하고, 다 쓰면 다시 리모컨을 든다. 이 상태를 모드라고 부르고, 지금 어느 모드인지 모르면 아무리 눌러도 원하는 일이 안 된다.
+
+  처음 vim을 만나면 나가는 법조차 몰라 당황하는데, 나가는 것도 리모컨 상태에서 명령을 적어야 하기 때문이다. 익숙해지면 손을 자판에서 떼지 않고 고치고, 찾고, 바꿀 수 있어서 이 방식이 빠르다. 이 글은 서버에서 설정 파일 하나를 고치고 안전하게 나오는 데 필요한 만큼만 다룬다.
+</EasyIntro>
+
+SSH로 들어간 서버에서 nginx 설정의 도메인 하나를 바꿔야 한다. `nano`를 쳤더니 `command not found`다. 최소 설치 이미지나 컨테이너에는 `vi` 하나만 있는 경우가 많다. `vi app.conf`로 열고 고치려고 타자를 쳤더니 글자는 안 써지고 커서가 이리저리 튄다. 그만두려고 `q`를 누르고, `Ctrl+C`를 눌러도 화면 아래에 이상한 안내만 뜬다.
+
+vim이 고장 난 게 아니다. 지금 "글자를 쓰는 상태"가 아니라는 것만 알면 된다. 이 글은 모드라는 발상과 서버에서 꼭 필요한 최소 명령, 검색과 치환, 권한 없는 파일을 저장하는 법, 스왑 파일 경고 읽기, `git commit`과 `crontab -e`가 여는 편집기 바꾸기를 다룬다. 기준은 Ubuntu 24.04의 vim 9.1이다. 22.04는 vim 8.2인데 이 글의 명령은 모두 같다. 화면 출력은 이 머신에서 vim을 가상 터미널에 띄워 받아 낸 것이다.
+
+## 리모컨을 든 상태로 시작한다
+
+vim은 1976년 Bill Joy가 만든 `vi`를 이은 편집기다. 그 시절 터미널은 화살표 키도 마우스도 없었고 회선은 느렸다. 그래서 글자 키 자체를 명령으로 쓰는 방식이 나왔다. `x`는 글자 지우기, `dd`는 줄 지우기, `w`는 다음 단어로 가기다. 이 키들을 명령으로 쓰려면 "지금은 명령을 받는 중"인 상태와 "지금은 글자를 받는 중"인 상태를 나눠야 했다. 이게 모드다.
+
+<ConceptDiagram
+  caption="vim의 모드: 모든 길은 일반 모드를 거친다. 헷갈리면 Esc로 돌아온다"
+  width={600}
+  height={340}
+  nodes={[
+    { id: "normal", label: "일반 모드", sub: "키 = 명령, 시작 상태", x: 300, y: 170, w: 170 },
+    { id: "insert", label: "입력 모드", sub: "-- INSERT --", x: 100, y: 60, w: 150 },
+    { id: "cmd", label: "명령줄 모드", sub: ":w  :q  :%s", x: 500, y: 60, w: 150 },
+    { id: "visual", label: "비주얼 모드", sub: "범위 고르기", x: 100, y: 290, w: 150 },
+    { id: "search", label: "검색", sub: "/단어  ?단어", x: 500, y: 290, w: 150 },
+  ]}
+  edges={[
+    { from: "normal", to: "insert", label: "i a o", arrow: "both" },
+    { from: "normal", to: "cmd", label: ": 입력, Enter", arrow: "both" },
+    { from: "normal", to: "visual", label: "v V", arrow: "both" },
+    { from: "normal", to: "search", label: "/ ?", arrow: "both" },
+  ]}
+/>
+
+- 일반 모드(normal): vim을 켜면 여기다. 키를 누르면 명령이 실행된다. 다른 모드에서 `Esc`를 누르면 언제나 여기로 돌아온다.
+- 입력 모드(insert): 글자가 써진다. 화면 아래에 `-- INSERT --`가 보인다. 일반 모드에서 `i`(커서 앞에), `a`(커서 뒤에), `o`(아래에 새 줄)로 들어간다.
+- 명령줄 모드(command-line): 일반 모드에서 `:`를 누르면 화면 맨 아래에 커서가 간다. 저장, 종료, 치환 같은 명령을 적고 `Enter`를 누른다.
+- 비주얼 모드(visual): `v`(글자 단위)나 `V`(줄 단위)로 범위를 골라 한꺼번에 지우거나 복사한다.
+
+헷갈리면 `Esc`를 두어 번 누른다. 일반 모드에서 `Esc`는 아무 일도 하지 않으니 안전하다.
+
+## 저장하고 나오는 다섯 가지
+
+처음에 막히는 곳은 늘 나가는 법이다. 모두 일반 모드에서 `:`로 시작한다.
+
+```text
+:w          저장
+:q          종료 (바꾼 게 있으면 거부한다)
+:wq         저장하고 종료 (:x 도 같다. 바꾼 게 없으면 파일을 다시 쓰지 않는다)
+:q!         바꾼 것을 버리고 종료
+ZZ          :x 와 같다 (일반 모드에서 대문자 Z 두 번)
+```
+
+`:q`를 쳤는데 `E37: No write since last change (add ! to override)`가 뜨면 바꾼 내용이 있다는 뜻이다. 저장하려면 `:wq`, 버리려면 `:q!`다. 실수로 이상한 걸 잔뜩 쳤다면 `:q!`로 나가서 다시 열면 원래 파일 그대로다. 저장하기 전까지 파일은 바뀌지 않는다.
+
+## 설정 한 줄을 고치는 데 필요한 만큼
+
+외울 명령은 많지 않다. 설정 파일 하나를 고치는 데는 이 정도면 충분하다.
+
+```text
+이동      h j k l  (왼, 아래, 위, 오른. 화살표도 된다)
+          w  b     (다음 단어, 이전 단어)
+          0  $     (줄 맨 앞, 줄 맨 끝)
+          gg  G    (파일 맨 위, 맨 아래)   42G 또는 :42  (42번 줄로)
+지우기    x        (글자 하나)
+          dd       (줄 하나)  3dd (세 줄)
+          dw       (단어 하나)  D (커서부터 줄 끝까지)
+바꾸기    cw       (단어를 지우고 입력 모드로)
+          r        (글자 하나를 다음에 누른 글자로)
+복사      yy       (줄 복사)  p (아래에 붙이기)
+되돌리기  u        (되돌리기)  Ctrl+r (다시 하기)
+반복      .        (방금 한 변경을 한 번 더)
+```
+
+규칙이 보인다. `d`(지우기), `c`(바꾸기), `y`(복사)는 동사이고 `w`(단어), `$`(줄 끝), `G`(파일 끝)는 범위다. `dw`는 "단어를 지워라", `d$`는 "줄 끝까지 지워라", `yG`는 "파일 끝까지 복사해라"다. 앞에 숫자를 붙이면 횟수가 된다. 몇 개만 알아도 조합으로 많은 일을 한다.
+
+nginx 설정에서 `server_name`의 도메인을 바꾸는 과정을 키 하나하나로 따라가 보자. 다음을 누르면 지금 누른 키가 튀어나오고, 그 키를 누른 뒤의 모드가 아래에 쌓인다.
+
+<AlgoTrace
+  caption="server_name 한 줄 고치기: 키를 누를 때마다 모드가 바뀐다"
+  cells={["vim app.conf", "/server_name", "w", "cW", "new.example.com;", "Esc", ":wq"]}
+  memoryLabel="지금 모드"
+  steps={[
+    { caption: "셸에서 파일을 연다. 아직 아무 키도 누르지 않았다." },
+    { pointer: 0, memory: ["일반"], caption: "vim은 일반 모드로 시작한다. 여기서 타자를 치면 글자가 아니라 명령이 된다." },
+    { pointer: 1, memory: ["일반", "검색"], caption: "/를 누르면 화면 아래에서 찾을 말을 받는다. Enter를 치면 첫 server_name 앞으로 커서가 가고 일반 모드로 돌아온다." },
+    { pointer: 2, memory: ["일반", "검색", "일반"], caption: "w로 다음 단어, 즉 old.example.com의 첫 글자로 간다." },
+    { pointer: 3, memory: ["일반", "검색", "일반", "입력"], caption: "cW는 공백 앞까지를 한 덩어리로 지우고 입력 모드로 들어간다. old.example.com; 이 통째로 지워진다. 소문자 cw였다면 점에서 끊겨 old만 지웠다." },
+    { pointer: 4, memory: ["일반", "검색", "일반", "입력"], caption: "새 값을 친다. 입력 모드라 이제야 글자가 써진다." },
+    { pointer: 5, memory: ["일반", "검색", "일반", "입력", "일반"], caption: "Esc로 일반 모드로 돌아온다. 화면 아래 -- INSERT -- 가 사라진다." },
+    { pointer: 6, found: [6], memory: ["일반", "검색", "일반", "입력", "일반", "명령줄"], caption: ":wq로 저장하고 나온다. 바꾸기 전에 nginx -t로 문법을 확인하는 건 별개의 일이다." },
+  ]}
+/>
+
+설정을 고친 뒤에는 서비스가 그 파일을 다시 읽게 해야 한다. `sudo nginx -t`로 문법을 보고 `sudo systemctl reload nginx`로 다시 읽힌다. 서비스를 다루는 법은 [systemd와 systemctl 글](/posts/linux-systemd-systemctl)에 있다.
+
+## 찾고, 한꺼번에 바꾼다
+
+일반 모드에서 `/단어`를 치고 `Enter`를 누르면 아래로 찾는다. `n`은 다음, `N`은 이전이다. `?단어`는 위로 찾는다. 커서 아래 단어를 바로 찾으려면 `*`를 누른다. 찾는 말은 정규식이라 `.`은 아무 글자 하나다. 점 자체를 찾으려면 `\.`로 쓴다.
+
+같은 말을 여러 곳에서 바꿀 때는 치환 명령을 쓴다. 조각을 눌러 각 부분이 무엇을 정하는지 보자.
+
+<UrlAnatomy
+  caption="치환 명령 한 줄: 어디서, 무엇을, 무엇으로, 어떻게"
+  base=":"
+  separator=""
+  joiner=""
+  params={[
+    { key: "range", display: "%", title: "범위", description: "% 는 파일 전체다. 생략하면 지금 줄만 바꾼다. 10,20 은 10~20번 줄, 비주얼 모드로 고른 뒤 : 를 누르면 '<,'> 가 자동으로 들어간다.", required: true },
+    { key: "cmd", display: "s", title: "치환 명령", description: "substitute의 s다. 구분자는 / 가 보통이지만 경로를 바꿀 때는 s#/var/log#/data/log#g 처럼 다른 글자를 써서 / 를 이스케이프하지 않아도 된다.", required: true },
+    { key: "pattern", display: "/old\\.example\\.com", title: "찾을 말 (정규식)", description: "점은 아무 글자 하나라서 \\. 으로 써야 점 자체다. 그냥 쓰면 oldXexampleYcom 같은 줄도 바뀐다.", required: true },
+    { key: "replacement", display: "/new.example.com", title: "바꿀 말", description: "바꿀 말 쪽의 점은 그냥 점이다. & 는 찾은 말 전체를 뜻하니 글자 & 를 넣으려면 \\& 로 쓴다." },
+    { key: "flags", display: "/gc", title: "플래그", description: "g는 한 줄에 여러 번 나와도 모두 바꾼다(없으면 줄마다 첫 번째만). c는 하나씩 물어본다(y/n/a/q). 운영 설정이라면 c를 붙여 하나씩 보고 바꾼다. n은 바꾸지 않고 몇 개인지만 센다." },
+  ]}
+/>
+
+같은 치환을 화면 없이 돌려서 결과를 확인했다. `-es`는 vim을 화면 없는 명령 모드로 띄운다. 여러 서버에서 같은 수정을 할 때 쓸 수 있지만, 그 정도면 `sed -i`가 더 흔하다([grep·awk·sed 글](/posts/linux-grep-awk-sed)).
+
+```bash
+cp app.conf a2.conf
+vim -u NONE -es -c '%s/old\.example\.com/new.example.com/g' -c '%s/127\.0\.0\.1:8080/app:9000/g' -c 'wq' a2.conf
+diff app.conf a2.conf
+```
+
+```text
+3c3
+<     server_name old.example.com;
+---
+>     server_name new.example.com;
+5c5
+<         proxy_pass http://127.0.0.1:8080;
+---
+>         proxy_pass http://app:9000;
+```
+
+`-u NONE`은 설정 파일(`~/.vimrc`)을 읽지 않게 한다. 남의 서버에서 이상한 플러그인이 끼어들지 않게 할 때도 쓴다.
+
+## 권한이 없는 파일을 열어 버렸을 때
+
+`/etc/nginx/...`를 `sudo` 없이 열어서 한참 고쳤다. 저장하려니 막힌다. 일반 사용자로 root 파일을 열고 고쳐 봤다. `:w`와 `:w!`를 따로 시도한 두 번의 화면을 이어 붙였다.
+
+```text
+W10: Warning: Changing a readonly file
+:w
+E45: 'readonly' option is set (add ! to override)
+:w!
+"app.conf" E212: Can't open file for writing
+```
+
+첫 줄의 `W10`은 처음 고치려는 순간 뜬다. 읽기 전용으로 열렸다는 경고다. 그래도 계속 고칠 수 있고, `:w`에서 `E45`로 막힌다. `:w!`로 밀어붙여도 파일 시스템 권한이 없으니 `E212`로 실패한다. 고친 내용은 아직 버퍼에 있다. 이걸 살리는 방법이 있다.
+
+```text
+:w !sudo tee % > /dev/null
+```
+
+`:w !명령`은 버퍼 내용을 파일이 아니라 그 명령의 표준 입력으로 보낸다. `%`는 지금 파일 이름이다. 그러니 "버퍼를 `sudo tee app.conf`에 흘려 넣어라", 곧 root 권한의 `tee`가 대신 파일에 쓰라는 뜻이다. `> /dev/null`은 `tee`가 화면에도 찍는 내용을 버린다. 저장이 끝나면 vim이 이렇게 묻는다.
+
+```text
+W12: Warning: File "app.conf" has changed and the buffer was changed in Vim as well
+See ":help W12" for more info.
+[O]K, (L)oad File, Load File (a)nd Options:
+```
+
+vim 입장에서는 디스크의 파일이 바깥에서 바뀌었기 때문이다. 방금 내가 쓴 것이니 `L`로 다시 읽으면 된다. 이 방법은 vim에서는 되지만 Neovim에서는 `sudo`가 비밀번호를 물을 터미널이 없어 잘 안 된다.
+
+처음부터 제대로 하는 방법은 `sudoedit`(`sudo -e`)다.
+
+```bash
+# 파일을 임시 사본으로 복사해 내 권한으로 편집기를 띄우고, 저장하면 root가 원본에 덮어쓴다
+sudoedit /etc/nginx/sites-available/app.conf
+```
+
+편집기 자체는 root로 돌지 않는다. `sudo vim`은 편집기 전체를 root로 띄우니 그 안에서 `:!sh`로 root 셸을 열 수 있다. sudoers에서 특정 파일 편집만 허용할 때 `sudo vim` 대신 `sudoedit`를 허용하는 이유다. sudo 권한 설계는 [사용자, 그룹, sudo 글](/posts/linux-users-groups-sudo)에서 다뤘다.
+
+## 스왑 파일 경고를 읽는다
+
+파일을 열었더니 화면 가득 경고가 뜬다. 다른 사람이 같은 파일을 열고 있거나, 지난번 편집이 비정상으로 끝났다는 뜻이다. vim은 편집하는 동안 바뀐 내용을 `.app.conf.swp` 같은 스왑 파일에 계속 적어 둔다. SSH가 끊기거나 vim이 죽어도 이 파일로 살릴 수 있게 하려는 것이다. 다른 vim이 열고 있는 파일을 root의 홈 디렉터리에서 다시 열어 봤다.
+
+```text
+E325: ATTENTION
+Found a swap file by the name ".app.conf.swp"
+owned by: root   dated: Sat Oct 24 00:21:15 2026
+file name: ~root/app.conf
+modified: YES
+user name: root   host name: vm
+process ID: 10585 (STILL RUNNING)
+While opening file "app.conf"
+dated: Sat Oct 24 00:20:44 2026
+(1) Another program may be editing the same file.  If this is the case,
+    be careful not to end up with two different instances of the same
+    file when making changes.  Quit, or continue with caution.
+(2) An edit session for this file crashed.
+    If this is the case, use ":recover" or "vim -r app.conf"
+    to recover the changes (see ":help recovery").
+    If you did this already, delete the swap file ".app.conf.swp"
+    to avoid this message.
+Swap file ".app.conf.swp" already exists!
+[O]pen Read-Only, (E)dit anyway, (R)ecover, (Q)uit, (A)bort:
+```
+
+볼 곳은 `process ID` 줄이다. `(STILL RUNNING)`이 붙어 있으면 지금 누군가(다른 SSH 세션의 나일 수도 있다) 이 파일을 열고 있다. 이때 `E`로 같이 고치면 나중에 저장한 쪽이 앞사람의 변경을 덮어쓴다. `Q`로 나가서 `ps -fp 10585`로 누가 열었는지 보거나, 읽기만 할 거면 `O`를 고른다.
+
+그 vim 프로세스를 강제로 죽인 뒤 다시 열면 이렇게 바뀐다(가운데 줄은 줄였다).
+
+```text
+process ID: 11002
+...
+Swap file ".app.conf.swp" already exists!
+[O]pen Read-Only, (E)dit anyway, (R)ecover, (D)elete it, (Q)uit, (A)bort:
+```
+
+`STILL RUNNING`이 없어졌고 `(D)elete it`이 생겼다. 편집하던 프로세스가 이미 없으니 지난 편집이 비정상 종료된 것이다. `modified: YES`면 저장 안 한 내용이 스왑 파일에 있으니 `R`로 살려서 확인하고 저장한 뒤, 다음에 다시 열 때 `D`로 스왑 파일을 지운다. `modified: no`면 살릴 게 없으니 바로 `D`를 고른다.
+
+## git commit과 crontab -e가 여는 편집기
+
+`git commit`을 쳤더니 낯선 편집기가 뜨거나, `crontab -e`가 nano를 띄워 당황하는 일도 흔하다. 이 명령들은 정해진 순서로 환경 변수를 보고 편집기를 고른다. git은 `GIT_EDITOR` → `core.editor` 설정 → `VISUAL` → `EDITOR` → 빌드할 때 정한 기본값 순이다. git 설정이 없는 깨끗한 환경에서 확인했다.
+
+```bash
+# git이 고를 편집기를 출력만 한다
+env -u GIT_EDITOR -u VISUAL -u EDITOR git var GIT_EDITOR
+env -u GIT_EDITOR -u VISUAL EDITOR=nano git var GIT_EDITOR
+env -u GIT_EDITOR EDITOR=nano VISUAL=vim git var GIT_EDITOR
+```
+
+```text
+editor
+nano
+vim
+```
+
+아무것도 없으면 `editor`다. Ubuntu에서 `/usr/bin/editor`는 alternatives 링크라서 시스템이 정한 기본 편집기(이 머신에서는 nano)를 가리킨다. `VISUAL`이 `EDITOR`보다 앞선다. 원래 `VISUAL`은 화면 편집기, `EDITOR`는 줄 편집기용이었던 흔적이다. 둘 다 같은 값으로 두면 헷갈릴 일이 없다.
+
+```bash
+# 나만: ~/.profile에 넣는다 (자식 프로세스가 물려받아야 하니 export)
+echo 'export EDITOR=vim VISUAL=vim' >> ~/.profile
+# git만
+git config --global core.editor "vim"
+# 시스템 기본 편집기 (editor 링크) 바꾸기
+sudo update-alternatives --config editor
+# crontab -e 에서 처음 한 번 묻는 선택을 다시 하기 (~/.selected_editor에 기록)
+select-editor
+```
+
+환경 변수를 `.profile`에 두는 이유는 [셸 환경과 시작 파일 글](/posts/shell-environment-startup)에 있다. `crontab -e`는 `VISUAL`·`EDITOR`가 없으면 Debian 계열의 `sensible-editor`를 거쳐 `select-editor`로 고른 값을 쓴다. 크론 문법은 [크론 잡 글](/posts/cron-jobs)에 있다.
+
+## YAML을 고칠 때 보이지 않는 탭
+
+서버에서 가장 자주 고치는 파일 중 하나가 YAML(Docker Compose, Kubernetes 매니페스트, CI 설정)이다. YAML은 들여쓰기에 탭을 허용하지 않는다. 그런데 화면에서 탭과 공백은 똑같이 보인다. 줄 하나에 탭이 섞인 compose 파일을 만들어 읽어 봤다.
+
+```bash
+cat -A compose.yaml     # 탭은 ^I, 줄 끝은 $ 로 보여 준다
+python3 -c 'import yaml; yaml.safe_load(open("compose.yaml"))'
+```
+
+```text
+services:$
+  web:$
+^Iimage: nginx:1.27$
+    ports:$
+      - "80:80"$
+yaml.scanner.ScannerError: while scanning for the next token
+found character '\t' that cannot start any token
+  in "compose.yaml", line 3, column 1
+```
+
+vim 안에서는 `:set list`로 같은 표시를 켠다. 탭이 `^I`로, 줄 끝이 `$`로 보인다. `:set nolist`로 끈다. 탭을 공백으로 바꾸는 명령은 `:retab`인데, 탭 하나를 몇 칸으로 볼지(`tabstop`)를 먼저 맞춰야 한다. 처음에 `tabstop=2`로 바꿨더니 `image`가 두 칸 들여쓰기가 되어 `web`과 같은 층으로 올라갔다. 문법 오류는 사라졌지만 뜻이 바뀐 것이라 더 위험하다. `tabstop=4`로 다시 했다.
+
+```bash
+vim -u NONE -es -c 'set expandtab tabstop=4' -c 'retab' -c 'wq' compose.yaml
+cat -A compose.yaml
+python3 -c 'import yaml; print(yaml.safe_load(open("compose.yaml")))'
+```
+
+```text
+services:$
+  web:$
+    image: nginx:1.27$
+    ports:$
+      - "80:80"$
+{'services': {'web': {'image': 'nginx:1.27', 'ports': ['80:80']}}}
+```
+
+이제 `image`와 `ports`가 모두 `web` 아래에 있다. 앞으로 탭이 안 들어가게 하려면 `:set expandtab`(탭 키를 공백으로)을 켜 둔다. 서버에 둘 만한 `~/.vimrc`는 짧게 이 정도다.
+
+```text
+set number          " 줄 번호
+set expandtab       " 탭 키를 공백으로
+set shiftwidth=2    " >> 와 자동 들여쓰기 폭
+set tabstop=4       " 이미 있는 탭은 4칸으로 보이게
+set hlsearch        " 찾은 말 강조 (:noh 로 끈다)
+syntax on
+```
+
+다른 데서 복사한 블록을 붙여 넣었더니 줄마다 들여쓰기가 계단처럼 밀리는 일도 있다. 터미널이 붙여 넣기를 타자처럼 한 글자씩 보내서 자동 들여쓰기가 매 줄 겹쳐 적용되는 것이다. vim 8 이후는 대부분의 터미널에서 붙여 넣기를 알아보는 기능(bracketed paste)이 있어서 덜 생기지만, 오래된 터미널이나 `tmux` 설정에 따라 다시 나타난다. 그럴 때는 붙여 넣기 전에 `:set paste`, 끝나면 `:set nopaste`를 친다.
+
+## nano와 emacs는 언제
+
+nano는 모드가 없다. 열면 바로 글자가 써지고, 화면 아래에 단축키가 적혀 있다(`^O` 저장, `^X` 종료, `^W` 찾기, `^K` 줄 잘라내기. `^`는 Ctrl이다). Ubuntu 서버에는 기본으로 깔려 있고 시스템 기본 편집기이기도 하다. 설정 몇 줄 고치는 일이면 nano가 가장 덜 헷갈린다. 줄 번호로 가려면 `Ctrl+_`, 줄 번호를 보며 열려면 `nano -l`이다.
+
+vim을 익혀 둘 이유는 어디에나 있다는 것이다. POSIX가 `vi`를 표준 유틸리티로 정해 두어서, BusyBox만 든 컨테이너에도 대개 `vi`는 있다. 반대로 nano는 없을 수 있다. 처음 연습은 `vimtutor`(vim에 들어 있는 30분짜리 따라 하기)가 가장 빠르다.
+
+emacs는 vim처럼 오래된 강력한 편집기지만 모드 대신 `Ctrl`·`Alt` 조합 키를 쓴다(`C-x C-s` 저장, `C-x C-c` 종료). 편집기라기보다 Lisp로 확장하는 작업 환경에 가깝다. 서버에 기본으로 깔려 있지 않은 경우가 많아서 운영에서 만날 일은 적다. bash의 기본 줄 편집 키(`Ctrl+a` 줄 앞, `Ctrl+e` 줄 끝, `Ctrl+r` 이전 명령 찾기)가 emacs 방식이라 손에 익혀 두면 셸에서 쓸모가 있다. `set -o vi`로 바꾸면 셸 줄 편집도 vi 방식이 된다.
+
+## 다시 그 서버에서
+
+`vi app.conf`로 열고, `/server_name`으로 찾아가 `cW`로 바꾸고, `Esc` 후 `:wq`. 권한이 없었다면 `:w !sudo tee % > /dev/null`, 다음부터는 `sudoedit`. 막히면 `Esc`를 누르고 `:q!`로 나가면 아무것도 바뀌지 않는다. vim은 "키가 명령인 상태"에서 시작한다는 것 하나만 기억하면 나머지는 조합이다. 같은 Linux 토픽에서 고친 파일을 다른 서버로 옮기는 일은 [tar와 압축, 파일 옮기기](/posts/linux-archive-transfer)에서, 편집기 패키지를 까는 일은 [패키지 관리자 글](/posts/linux-package-management)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### vim의 모드는 왜 있나요?
+
+글자 키 자체를 명령으로 쓰기 위해서다. 일반 모드에서는 `dd`, `w`, `x`처럼 키가 편집 명령이 되고, 입력 모드에서만 글자가 써진다. 화살표나 마우스 없이 느린 터미널에서 적은 키로 편집하려던 vi의 설계를 이었다. 덕분에 `d`(동사)와 `w`(범위)처럼 조합으로 명령을 만들 수 있다.
+
+### vim에서 저장하지 않고 나가려면요? 저장하고 나가려면요?
+
+일반 모드에서 `:q!`는 바꾼 것을 버리고 나가고, `:wq`나 `:x`, `ZZ`는 저장하고 나간다. `:q`만 치면 바꾼 내용이 있을 때 E37로 거부한다. 입력 모드라서 명령이 안 먹으면 먼저 `Esc`로 일반 모드로 돌아온다.
+
+### 파일 전체에서 문자열을 바꾸려면 어떻게 하나요?
+
+`:%s/찾을말/바꿀말/g`다. `%`는 파일 전체, `g`는 한 줄의 모든 일치, `c`를 붙이면 하나씩 확인한다. 찾을 말은 정규식이라 도메인이나 IP의 점은 `\.`로 써야 한다. 경로를 바꿀 때는 `s#/a#/b#g`처럼 구분자를 바꾸면 이스케이프가 줄어든다.
+
+### 권한 없이 연 파일을 고쳤습니다. 내용을 잃지 않고 저장하려면요?
+
+`:w !sudo tee % > /dev/null`로 버퍼를 root 권한의 tee에 흘려 넣어 파일에 쓰게 한다. 끝나면 파일이 바깥에서 바뀌었다는 W12 경고가 뜨니 다시 읽는다. 처음부터는 `sudoedit`가 낫다. 편집기는 내 권한으로 돌고 저장할 때만 root가 원본에 쓰므로, `sudo vim`처럼 편집기 안에서 root 셸을 열 길이 없다.
+
+### E325 스왑 파일 경고가 떴습니다. 어떻게 판단하나요?
+
+`process ID` 줄에 `STILL RUNNING`이 있으면 다른 세션이 지금 편집 중이니 같이 고치지 말고 나가거나 읽기 전용으로 연다. 없으면 지난 편집이 비정상 종료된 것이고, `modified: YES`면 `R`로 복구해 확인한 뒤 저장하고 스왑 파일을 지운다. 살릴 게 없으면 `D`로 지운다.
+
+### git commit이 원하지 않는 편집기를 엽니다. 어떻게 바꾸나요?
+
+git은 `GIT_EDITOR`, `core.editor`, `VISUAL`, `EDITOR` 순으로 보고 없으면 기본값을 쓴다. Ubuntu의 기본값은 alternatives로 정해지는 `editor` 링크다. 나만 바꾸려면 `~/.profile`에 `EDITOR`와 `VISUAL`을 export하고, git만이면 `git config --global core.editor`를 쓴다. `git var GIT_EDITOR`로 무엇이 골라지는지 확인할 수 있다.
+
+### vim으로 YAML을 고친 뒤 `found character '\t'` 오류가 납니다. 어떻게 고치나요?
+
+들여쓰기에 탭이 들어간 것이다. YAML은 탭 들여쓰기를 허용하지 않는데 화면에서는 공백과 똑같이 보인다. `:set list`나 `cat -A`로 `^I`를 찾고, `tabstop`을 원래 의도한 폭에 맞춘 뒤 `:retab`으로 공백으로 바꾼다. 폭을 틀리게 잡으면 오류는 사라져도 키가 다른 층으로 옮겨 뜻이 바뀌니, 고친 뒤 파서로 구조를 다시 확인한다. 앞으로는 `expandtab`을 켜 둔다.
+
+### 서버에서 nano 대신 vi를 알아야 하는 이유는요?
+
+vi는 POSIX 표준 유틸리티라 최소 설치 이미지나 BusyBox 컨테이너에도 대개 있지만 nano는 없을 수 있다. 설정 몇 줄 고치는 데는 nano가 더 쉬우니 있으면 써도 된다. 다만 저장, 종료, 찾기, 치환, 되돌리기 정도의 vi 명령은 어디서든 쓸 수 있게 익혀 둔다.

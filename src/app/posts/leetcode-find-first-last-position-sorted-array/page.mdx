@@ -1,0 +1,502 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("leetcode-find-first-last-position-sorted-array");
+
+<EasyIntro>
+  키 순서대로 줄을 선 친구들 가운데 키가 똑같이 140cm인 친구들이 몇 명 붙어 서 있다고 해 보자. 그 친구들이 줄의 몇 번째부터 몇 번째까지인지 알고 싶다. 한 명을 찾는 건 가운데부터 보며 반씩 줄여 가면 금방이다. 그런데 처음 찾은 친구가 무리의 한가운데일 수도 있어서, 거기서 양옆으로 한 명씩 확인하면 무리가 클 때 오래 걸린다. 그래서 질문을 바꾼다. "140cm 이상인 첫 친구는 어디 서 있나"와 "140cm보다 큰 첫 친구는 어디 서 있나"를 각각 반씩 줄이며 찾는다. 첫 번째 자리가 무리의 시작이고, 두 번째 자리 바로 앞이 무리의 끝이다. 무리가 아무리 커도 몇 번만 보면 양 끝이 나온다.
+</EasyIntro>
+
+[LeetCode 34. Find First and Last Position of Element in Sorted Array](https://leetcode.com/problems/find-first-and-last-position-of-element-in-sorted-array/)는 "있나 없나"만 묻던 이분 탐색에 "같은 값이 여러 개면 어디서 어디까지인가"를 묻는다. 보통의 이분 탐색은 값을 찾으면 바로 멈추는데, 그 자리가 같은 값 무리의 어디쯤인지는 알려 주지 않는다. 이 문제는 그 한 가지 차이를 어떻게 메우느냐다.
+
+문제를 내 말로 풀면 이렇다. 오름차순(같은 값 허용)으로 정렬된 정수 배열 `nums`와 `target`이 주어진다. `target`이 처음 나오는 인덱스와 마지막으로 나오는 인덱스를 `[처음, 마지막]`으로 돌려준다. 없으면 `[-1, -1]`이다.
+
+풀이를 정하는 조건은 이렇다.
+
+- 배열 길이는 0 이상 10^5 이하다. 빈 배열이 들어온다.
+- 문제가 O(log n)을 요구한다. 같은 값이 10만 개 있을 수 있어서, 하나 찾고 양옆으로 번지는 방법은 최악에 O(n)이라 요구 조건을 못 맞춘다.
+- 값과 target은 -10^9 이상 10^9 이하다. `target + 1`이 자바 `int`를 넘지 않는다는 뜻인데, 이 조건이 없어지면 생기는 일을 뒤에서 본다.
+
+lower bound와 upper bound의 정의는 [이분 탐색 글](/posts/binary-search)의 "같은 값이 여러 개면 경계도 두 개다" 절에서, 반열린 구간을 쓰는 이유는 [LeetCode 704 글](/posts/leetcode-binary-search)에서 다뤘다. 여기서는 그 둘을 이 문제에 맞춰 쓰고, 다른 풀이들이 어디서 무너지는지를 본다. 실행 결과는 Node.js 22, Python 3.13, OpenJDK에서 돌린 값이다.
+
+## 같은 값이 줄지어 있을 때 양 끝
+
+예시 하나로 끝까지 간다.
+
+```text
+번호 :  0  1  2  3  4  5  6  7
+값   :  1  3  3  3  5  7  7  9
+```
+
+- target 3: 1번부터 3번까지 있다. `[1, 3]`.
+- target 7: `[5, 6]`.
+- target 9: 하나뿐이면 처음과 끝이 같다. `[7, 7]`.
+- target 4: 3과 5 사이라 없다. `[-1, -1]`.
+- target 0이나 10: 배열 범위 밖이라 없다. `[-1, -1]`.
+
+정렬된 배열에서 같은 값은 반드시 한 덩어리로 붙어 있다. 그래서 답은 "덩어리의 왼쪽 끝"과 "오른쪽 끝" 두 경계다. 이걸 참거짓 줄로 바꿔 보면 경계 찾기라는 게 분명해진다.
+
+```text
+값          :  1  3  3  3  5  7  7  9
+3 이상인가  :  F  T  T  T  T  T  T  T    → 처음 T: 1번
+3보다 큰가  :  F  F  F  F  T  T  T  T    → 처음 T: 4번, 그 앞이 3번
+```
+
+위 줄의 처음 T는 "3 이상이 처음 나오는 자리", 아래 줄의 처음 T는 "3보다 큰 값이 처음 나오는 자리"다. 앞의 것을 lower bound, 뒤의 것을 upper bound라고 부른다. 둘 다 F가 이어지다 T로 한 번만 바뀌니 각각 이분 탐색으로 찾을 수 있다. 3의 범위는 `[lower bound, upper bound - 1]`, 즉 `[1, 3]`이다.
+
+4를 같은 방식으로 보면 "4 이상"의 처음 T도 4번(값 5), "4보다 큰"의 처음 T도 4번이다. 두 경계가 같은 자리면 그 사이에 4가 하나도 없다는 뜻이다. lower bound 자리의 값이 target과 다른지만 보면 "없음"을 판정할 수 있다.
+
+## 앞에서부터 훑어 처음과 끝을 적는다
+
+가장 단순한 풀이는 왼쪽부터 보며 target을 처음 만난 자리와 마지막으로 만난 자리를 적는 것이다.
+
+```js
+function searchRange(nums, target) {
+  let first = -1, last = -1;
+  for (let i = 0; i < nums.length; i++) {
+    if (nums[i] === target) {
+      if (first === -1) first = i; // 처음 만난 자리
+      last = i;                     // 만날 때마다 갱신
+    } else if (nums[i] > target) {
+      break;                        // 정렬돼 있으니 더 가 봐야 없다
+    }
+  }
+  return [first, last];
+}
+```
+
+`nums[i] > target`에서 멈추는 건 정렬을 조금 쓴 것이다. 그래도 target이 배열 뒤쪽에 있으면 거의 다 본다. 시간은 O(n), 공간은 O(1)이다. 정렬이라는 정보를 "언제 멈출지"에만 쓰고 "어디부터 볼지"에는 쓰지 않았다.
+
+## 하나를 찾은 뒤 양옆으로 번진다
+
+다음으로 떠오르는 건 보통 이분 탐색으로 target 하나를 찾고, 거기서 왼쪽과 오른쪽으로 같은 값이 이어지는 동안 넓혀 가는 방법이다.
+
+```js
+function searchRange(nums, target) {
+  let lo = 0, hi = nums.length - 1, hit = -1;
+  while (lo <= hi) {                       // 704번과 같은 보통 이분 탐색
+    const mid = (lo + hi) >>> 1;
+    if (nums[mid] === target) { hit = mid; break; }
+    if (nums[mid] < target) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  if (hit === -1) return [-1, -1];
+  let l = hit, r = hit;
+  while (l > 0 && nums[l - 1] === target) l--;               // 왼쪽으로 번진다
+  while (r < nums.length - 1 && nums[r + 1] === target) r++; // 오른쪽으로 번진다
+  return [l, r];
+}
+```
+
+예시에서 3을 찾으면 첫 mid가 3번이라 바로 찾고, 왼쪽으로 2번, 1번까지 번진 뒤 0번(값 1)에서 멈춘다. 오른쪽은 4번(값 5)에서 바로 멈춘다. 답 `[1, 3]`이다.
+
+시간은 O(log n + k)다. k는 target의 개수다. 같은 값이 몇 개 없으면 사실상 O(log n)이라 실무에서는 충분할 때가 많다. 하지만 배열 전체가 target이면 k = n이라 O(n)이 되고, 문제의 요구를 못 맞춘다. 면접관은 바로 "배열이 전부 같은 값이면?"을 묻는다.
+
+## 찾아도 멈추지 않고 한쪽으로 더 간다
+
+번지는 대신 이분 탐색을 두 번 하되, target을 찾았을 때 멈추지 않는다. 처음 자리를 찾을 때는 찾은 mid를 후보로 적어 두고 왼쪽 절반을 계속 본다. 그 왼쪽에 또 target이 있을 수 있기 때문이다. 마지막 자리를 찾을 때는 오른쪽 절반을 계속 본다.
+
+```js
+function findBound(nums, target, isFirst) {
+  let lo = 0, hi = nums.length - 1, ans = -1; // 닫힌 구간 [lo, hi]
+  while (lo <= hi) {
+    const mid = lo + ((hi - lo) >> 1);
+    if (nums[mid] === target) {
+      ans = mid;                 // 후보로 적어 두고
+      if (isFirst) hi = mid - 1; // 처음 자리: 더 왼쪽에 또 있나 본다
+      else lo = mid + 1;         // 마지막 자리: 더 오른쪽에 또 있나 본다
+    } else if (nums[mid] < target) {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans; // 한 번도 못 찾았으면 -1
+}
+
+function searchRange(nums, target) {
+  return [findBound(nums, target, true), findBound(nums, target, false)];
+}
+```
+
+target 3의 처음 자리를 찾는 과정이다.
+
+<AlgoTrace
+  caption="처음 자리 찾기: 3을 찾아도 왼쪽을 계속 본다"
+  memoryLabel="[lo, hi]와 후보"
+  cells={["1", "3", "3", "3", "5", "7", "7", "9"]}
+  steps={[
+    { memory: ["lo 0", "hi 7", "ans -1"], caption: "배열 전체에서 3이 처음 나오는 자리를 찾는다." },
+    { pointer: 3, memory: ["mid 3: 값 3", "ans = 3", "hi = 2"], caption: "3을 찾았다. 적어 두지만 멈추지 않는다. 왼쪽에 3이 더 있을 수 있다." },
+    { pointer: 1, memory: ["mid 1: 값 3", "ans = 1", "hi = 0"], caption: "왼쪽 절반에서 또 3이다. 후보를 1로 당기고 더 왼쪽을 본다." },
+    { pointer: 0, memory: ["mid 0: 값 1", "1 < 3", "lo = 1"], caption: "1은 3보다 작다. 이제 lo가 hi를 넘었다." },
+    { found: [1], memory: ["lo 1 > hi 0", "처음 자리 1"], caption: "마지막으로 적어 둔 후보 1이 처음 자리다." },
+  ]}
+/>
+
+마지막 자리는 같은 함수가 반대로 움직인다.
+
+<AlgoTrace
+  caption="마지막 자리 찾기: 3을 찾아도 오른쪽을 계속 본다"
+  memoryLabel="[lo, hi]와 후보"
+  cells={["1", "3", "3", "3", "5", "7", "7", "9"]}
+  steps={[
+    { memory: ["lo 0", "hi 7", "ans -1"], caption: "이번에는 3이 마지막으로 나오는 자리를 찾는다." },
+    { pointer: 3, memory: ["mid 3: 값 3", "ans = 3", "lo = 4"], caption: "3이다. 적어 두고 오른쪽에 더 있는지 본다." },
+    { pointer: 5, memory: ["mid 5: 값 7", "7 > 3", "hi = 4"], caption: "7은 크다. 5번부터 오른쪽은 버린다." },
+    { pointer: 4, memory: ["mid 4: 값 5", "5 > 3", "hi = 3"], caption: "5도 크다. lo 4가 hi 3을 넘었다." },
+    { found: [3], memory: ["lo 4 > hi 3", "마지막 자리 3"], caption: "후보 3이 마지막 자리다. 답은 [1, 3]." },
+  ]}
+/>
+
+각 탐색이 O(log n)이라 전체 O(log n)이다. 배열 전체가 target이어도 매번 절반을 버리니 느려지지 않는다. 공간은 O(1)이다.
+
+이 풀이는 704번 코드에서 `return mid`를 "적어 두고 한쪽으로 계속"으로 바꾼 것이라 처음 떠올리기 쉽다. 면접에서 많이 나오는 답이기도 하다. 다만 `isFirst` 플래그 하나로 두 방향을 다루다 보니 분기가 세 갈래다. 같은 일을 분기 두 갈래짜리 함수 하나로 할 수 있다.
+
+## 경계 두 개를 lower bound 하나로
+
+처음 절의 참거짓 줄로 돌아가자. 처음 자리는 "target 이상인 첫 자리"(lower bound)이고, 마지막 자리는 "target보다 큰 첫 자리"(upper bound)의 바로 앞이다. 둘 다 반열린 구간 `[lo, hi)`에서 "조건이 F면 오른쪽, T면 왼쪽"으로 좁히는 같은 틀이고, 비교 연산자 하나만 다르다.
+
+```js
+// x 이상이 처음 나오는 자리 (lower bound). 없으면 nums.length
+function lowerBound(nums, x) {
+  let lo = 0, hi = nums.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (nums[mid] < x) lo = mid + 1; // mid는 x보다 작다: 답은 mid 오른쪽
+    else hi = mid;                   // mid는 x 이상: mid도 후보
+  }
+  return lo;
+}
+
+// x보다 큰 첫 자리 (upper bound). 없으면 nums.length
+function upperBound(nums, x) {
+  let lo = 0, hi = nums.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (nums[mid] <= x) lo = mid + 1; // 차이는 이 부등호 하나
+    else hi = mid;
+  }
+  return lo;
+}
+
+function searchRange(nums, target) {
+  const first = lowerBound(nums, target);
+  // 끝까지 갔거나 그 자리 값이 target이 아니면 target은 없다
+  if (first === nums.length || nums[first] !== target) return [-1, -1];
+  return [first, upperBound(nums, target) - 1];
+}
+```
+
+예시에서 `lowerBound(3)`은 mid 4(값 5), 2(값 3), 1(값 3), 0(값 1)을 거쳐 1을 낸다. `upperBound(3)`은 mid 4(값 5), 2(값 3), 3(값 3)을 거쳐 4를 낸다. 답은 `[1, 4 - 1] = [1, 3]`이다. lower bound가 어떻게 좁혀 가는지는 이분 탐색 글에 단계별 그림이 있다.
+
+이 풀이가 앞 풀이보다 나은 점은 셋이다. 분기가 둘뿐이라 틀릴 곳이 적다. "찾았나"를 루프 안에서 따지지 않으니 루프가 항상 log n번 돌고 끝난다. 그리고 두 함수가 이 문제 밖에서도 그대로 쓰인다. 값의 개수는 `upperBound - lowerBound`, 정렬을 유지하며 끼워 넣을 자리는 `lowerBound`, 범위 질문 `[a, b]`는 `lowerBound(a)`부터 `upperBound(b) - 1`까지다.
+
+`upperBound` 대신 `lowerBound(target + 1) - 1`로 마지막 자리를 구하는 코드도 많다. 정수 배열에서는 "target보다 큰 첫 자리"와 "target + 1 이상인 첫 자리"가 같기 때문이다. 함수 하나로 끝나서 짧지만, 정수가 아니거나 target + 1이 넘치는 상황에서는 틀린다. "경계를 확인하지 않으면" 절에서 실제로 틀리는 입력을 본다.
+
+### 조건 함수 하나로 두 경계를 다 찾는다
+
+lower bound와 upper bound는 "어떤 조건이 처음 참이 되는 자리"라는 같은 질문에 조건만 다르게 넣은 것이다. 그러면 조건을 함수로 받는 이분 탐색 하나만 있으면 된다.
+
+```js
+// [lo, hi)에서 pred가 처음 true가 되는 자리. 전부 false면 hi
+function firstTrue(lo, hi, pred) {
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (pred(mid)) hi = mid; // mid가 true: mid도 후보
+    else lo = mid + 1;       // mid가 false: 답은 오른쪽
+  }
+  return lo;
+}
+
+function searchRange(nums, target) {
+  const n = nums.length;
+  const first = firstTrue(0, n, (i) => nums[i] >= target);
+  if (first === n || nums[first] !== target) return [-1, -1];
+  // 마지막 자리 탐색은 first부터 시작해도 된다
+  const after = firstTrue(first, n, (i) => nums[i] > target);
+  return [first, after - 1];
+}
+```
+
+`nums[i] >= target`이 처음 참인 자리가 lower bound, `nums[i] > target`이 처음 참인 자리가 upper bound다. 두 번째 탐색을 `first`부터 시작한 건 작은 최적화다. upper bound는 lower bound보다 앞에 있을 수 없으니 그 앞은 볼 필요가 없다. 복잡도는 그대로 O(log n)이고, 같은 값 무리가 배열 뒤쪽에 있을 때 비교 한두 번을 아끼는 정도다.
+
+이 `firstTrue` 틀이 손에 붙으면 이분 탐색 문제 대부분이 "조건을 무엇으로 줄까"로 바뀐다. [Koko 글](/posts/leetcode-koko-eating-bananas)의 "속도 k로 h시간 안에 되나", [1011번 글](/posts/leetcode-capacity-to-ship-packages-within-d-days)의 "용량 c로 days일 안에 되나"도 같은 함수에 조건만 바꿔 넣으면 된다. 조건이 F에서 T로 한 번만 바뀐다는 것만 확인하면 된다.
+
+### 네 풀이를 무작위 배열로 맞춰 보기
+
+훑기 풀이를 채점관으로 두고 네 풀이의 답을 비교했다. 값을 0~5로 좁혀서 중복이 많이 생기게 하고, 빈 배열과 범위 밖 target도 섞었다.
+
+```js
+const { linear, expand, twoSearch, searchRange } = require("./sol.js");
+
+let mismatch = 0;
+for (let it = 0; it < 20000; it++) {
+  const n = Math.floor(Math.random() * 10);                     // 빈 배열도 나온다
+  const nums = Array.from({ length: n }, () => Math.floor(Math.random() * 6))
+    .sort((a, b) => a - b);                                       // 0~5라 중복이 많다
+  const target = Math.floor(Math.random() * 8) - 1;               // -1~6: 범위 밖도 섞는다
+  const answers = [linear, expand, twoSearch, searchRange].map((f) => JSON.stringify(f(nums, target)));
+  if (new Set(answers).size > 1) mismatch++;
+}
+console.log("mismatch", mismatch, "/ 20000");
+```
+
+```text
+mismatch 0 / 20000
+```
+
+위의 `firstTrue` 버전도 같은 방식으로 2만 번 비교해 어긋남이 없었다. 앞에서 본 실수를 넣어 다섯 번씩 돌려 보면, lower bound 자리 값 확인을 빼면 세 번 안에, 찾자마자 멈추면 열다섯 번 안에 어긋나는 입력이 나왔다. 닫힌 구간에서 `hi = mid`를 쓰면 중복이 있는 첫 입력에서 루프가 끝나지 않는다. 값 범위를 좁혀 중복을 일부러 많이 만드는 게 이 문제 테스트의 요령이다.
+
+### 파이썬과 자바로 옮기면
+
+파이썬은 `bisect_left`가 lower bound, `bisect_right`가 upper bound다. 직접 짤 필요가 없다.
+
+```python
+from bisect import bisect_left, bisect_right
+from typing import List
+
+class Solution:
+    def searchRange(self, nums: List[int], target: int) -> List[int]:
+        first = bisect_left(nums, target)          # target 이상이 처음 나오는 자리
+        if first == len(nums) or nums[first] != target:
+            return [-1, -1]                        # target이 없다
+        last = bisect_right(nums, target) - 1      # target보다 큰 첫 자리의 바로 앞
+        return [first, last]
+```
+
+`nums.index(3)`과 `nums.count(3)`으로 `[i, i + count - 1]`을 만드는 짧은 코드도 답은 맞는다(예시에서 1과 3). 하지만 두 메서드 모두 앞에서부터 훑는 O(n)이라 이 문제의 요구를 못 맞춘다. 면접에서 쓰면 "그건 O(n)이다"가 돌아온다.
+
+자바는 두 함수를 직접 짠다.
+
+```java
+class Solution {
+    public int[] searchRange(int[] nums, int target) {
+        int first = lowerBound(nums, target);
+        if (first == nums.length || nums[first] != target) return new int[]{-1, -1};
+        return new int[]{first, upperBound(nums, target) - 1};
+    }
+
+    // target 이상이 처음 나오는 자리
+    private int lowerBound(int[] a, int x) {
+        int lo = 0, hi = a.length;
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (a[mid] < x) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+
+    // target보다 큰 첫 자리
+    private int upperBound(int[] a, int x) {
+        int lo = 0, hi = a.length;
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (a[mid] <= x) lo = mid + 1;
+            else hi = mid;
+        }
+        return lo;
+    }
+}
+```
+
+예시에 3, 7, 9, 1, 4, 0, 10과 빈 배열을 넣으면 세 언어 모두 같은 답이 나온다.
+
+```text
+[1, 3] [5, 6] [7, 7] [0, 0] [-1, -1] [-1, -1] [-1, -1]   빈 배열 [-1, -1]
+```
+
+### 자바 Arrays.binarySearch는 아무 자리나 준다
+
+자바에는 `Arrays.binarySearch`가 있지만 이 문제에는 바로 못 쓴다. 문서가 "같은 값이 여러 개면 어느 것을 찾을지 보장하지 않는다"고 적어 두었다. 실제로 돌려 보면 이렇다.
+
+```text
+Arrays.binarySearch([3,3,3,3,3,3,3], 3) → 3
+Arrays.binarySearch([1,3,3,3,5,7,7,9], 3) → 3
+Arrays.binarySearch([1,3,3,3,5,7,7,9], 4) → -5
+```
+
+두 경우 모두 가운데 근처의 3번을 줬고, 처음 자리(0번, 1번)가 아니다. 없을 때는 `-(끼워 넣을 자리) - 1`을 돌려준다. 4의 끼워 넣을 자리가 4번이라 -5다. 이 음수 규칙으로 lower bound를 얻을 수는 있지만, 값이 있을 때는 여전히 아무 자리나 준다. 그래서 이 문제는 직접 짠 lower/upper bound가 정답이다. C++이라면 `std::equal_range`가 정확히 이 두 경계를 한 번에 준다.
+
+## 10만 개가 전부 같은 값이면
+
+네 풀이를 두 종류의 입력으로 쟀다. 길이 10만 배열에 질문 1만 개를 던졌다.
+
+- all 7: 배열 전체가 7이고, 질문도 전부 7이다. 같은 값이 가장 많은 최악이다.
+- random: 0~49999 사이 무작위 값 10만 개를 정렬한 배열이고, 질문도 무작위다. 값 하나가 평균 두 번쯤 나온다.
+
+```text
+all 7   linear       2387.4 ms
+all 7   expand       1721.8 ms
+all 7   twoSearch    4.7 ms
+all 7   searchRange  8.2 ms
+random  linear       1419.1 ms
+random  expand       11.4 ms
+random  twoSearch    6.2 ms
+random  searchRange  5.5 ms
+```
+
+번지는 풀이(expand)는 무작위 입력에서는 이분 탐색 둘과 거의 같다. 같은 값이 두세 개뿐이라 번질 거리가 없어서다. 그런데 전부 같은 값이면 질문마다 10만 칸을 번지니 1.7초, 약 370배 느리다. 이분 탐색 두 풀이는 두 입력 모두에서 몇 ms다. "평소에는 빠른데 특정 입력에서만 느린" 코드가 실무에서 가장 찾기 어려운 성능 문제가 된다. 이 측정이 O(log n + k)와 O(log n)의 차이를 그대로 보여 준다.
+
+twoSearch와 searchRange 사이의 몇 ms 차이는 실행할 때마다 순서가 바뀌는 크기라 의미를 두지 않는다.
+
+## 범위 찾기 네 가지를 견주면
+
+| 풀이 | 시간 | 공간 | 언제 고르나 |
+|---|---|---|---|
+| 앞에서부터 훑기 | O(n) | O(1) | 배열이 아주 작거나 한 번만 물을 때. 채점관 |
+| 하나 찾고 번지기 | O(log n + k) | O(1) | 같은 값이 적다는 게 보장될 때 |
+| 찾아도 계속 가는 탐색 두 번 | O(log n) | O(1) | 704번 코드에서 바로 고쳐 쓰고 싶을 때 |
+| lower bound + upper bound | O(log n) | O(1) | 기본 답. 개수·삽입 위치·범위 질문까지 같은 함수로 |
+
+k는 target의 개수다. 아래 두 줄은 시간 복잡도가 같고, 차이는 코드 모양과 재사용성이다. 면접에서는 둘 중 익숙한 쪽을 쓰되, 다른 하나도 말로 설명할 수 있으면 좋다.
+
+## 경계를 확인하지 않으면 엉뚱한 범위가 나온다
+
+### lower bound 자리의 값을 확인하지 않는다
+
+`[lowerBound(target), upperBound(target) - 1]`을 그대로 돌려주면 target이 없을 때 이상한 범위가 나온다.
+
+```text
+target 4  → [4, 3]
+target 0  → [0, -1]
+target 10 → [8, 7]
+target 3  → [1, 3]
+```
+
+없는 값에서는 두 경계가 같은 자리라 `[i, i - 1]`처럼 끝이 시작보다 앞선 범위가 된다. 길이 0인 범위라 수학적으로는 맞는 말이지만, 이 문제는 `[-1, -1]`을 원한다. 10은 lower bound가 배열 길이 8이라 `nums[8]`을 읽으면 범위 밖이다. 자바·파이썬이면 예외가 나고, 자바스크립트는 `undefined`가 나온다. 그래서 `first === nums.length`를 먼저 확인하고, 그다음 `nums[first] !== target`을 확인한다. 순서를 바꾸면 범위 밖을 먼저 읽는다.
+
+### 찾았을 때 mid를 남긴 채 닫힌 구간을 돈다
+
+"찾아도 계속 가는" 풀이에서 `hi = mid - 1` 대신 `hi = mid`로 쓰는 실수다. 닫힌 구간 `[lo, hi]`에서 lo와 hi가 같아지면 mid도 같아서 구간이 더 줄지 않는다.
+
+```js
+if (nums[mid] === target) { ans = mid; hi = mid; } // mid를 버리지 않았다
+```
+
+예시에서 3의 처음 자리를 찾으면 lo 1, hi 1에서 영원히 돈다. 실제로 20번 넘게 돌아도 끝나지 않았다. 닫힌 구간에서는 본 칸을 반드시 버려야 하고(`mid - 1`, `mid + 1`), mid를 후보로 남기는 일은 `ans` 변수가 맡는다. 반열린 구간 lower bound에서 `hi = mid`가 맞는 건 구간 정의가 다르기 때문이다. 이 차이는 [704 글의 실수 절](/posts/leetcode-binary-search)에 자세히 있다.
+
+### 찾자마자 멈춘다
+
+704번 코드를 그대로 쓰면 찾은 자리가 처음도 끝도 아닐 수 있다. 예시에서 3을 찾으면 첫 mid가 3번이라 3번을 돌려준다. 3은 1번부터 있는데 말이다. `[3, 3, 3, 3, 3, 3, 3]`이면 3번, 7을 찾으면 5번이 나온다. 우연히 맞는 입력이 많아서 테스트가 적으면 통과해 버린다. 같은 값이 세 개 이상 있고 그 무리가 가운데에 걸리지 않는 입력을 꼭 넣는다.
+
+### target + 1을 믿는다
+
+`lowerBound(target + 1) - 1`로 마지막 자리를 구하면 정수 배열에서는 맞는다. 하지만 두 가지 상황에서 틀린다.
+
+정수가 아니면 "target보다 큰 첫 자리"와 "target + 1 이상인 첫 자리"가 다르다. `[1.5, 1.5, 2.0, 2.5]`에서 1.5의 마지막 자리를 구하면 이렇다.
+
+```text
+lowerBound(1.5 + 1) - 1 → 2   (2.0까지 포함했다)
+upperBound(1.5) - 1     → 1   (정답)
+```
+
+자바에서 target이 `Integer.MAX_VALUE`면 `target + 1`이 `Integer.MIN_VALUE`로 넘친다. `[5, MAX, MAX]`에서 MAX의 범위를 구해 봤다.
+
+```text
+upperBound 방식 → [1, 2]
+target + 1 방식 → [1, -1]
+```
+
+`lowerBound(MIN_VALUE)`는 0이라 마지막 자리가 -1이 됐다. 이 문제는 값이 10^9 이하라 넘치지 않지만, 제약이 다른 문제로 옮겨 쓰면 이 코드가 조용히 틀린다. upper bound를 따로 두는 게 안전하다.
+
+### 빈 배열
+
+`nums.length - 1`이 -1이 되어도 위 코드들은 루프를 안 돌고 `[-1, -1]`을 낸다. 그런데 "하나 찾고 번지기"를 `nums[0]`부터 확인하는 식으로 짜면 빈 배열에서 `undefined`를 비교하게 된다. 이 문제는 길이 0이 실제로 들어오니 테스트에 꼭 넣는다.
+
+## 처음과 끝을 직접 찾아보자
+
+빈 함수를 채워 보자. 테스트에는 빈 배열, 전부 같은 값, 원소 하나, 배열 범위 밖 값, 사이 값, 음수가 있다. lower bound 자리를 확인하지 않으면 "사이 값 4"에서 `[4, 3]`이 나와 걸린다.
+
+<CodePlayground
+  caption="LeetCode 34. Find First and Last Position of Element in Sorted Array"
+  functionName="searchRange"
+  initialCode={"function searchRange(nums, target) {\n  // 처음 자리와 마지막 자리를 O(log n)에\n  return [-1, -1];\n}"}
+  solution={"function searchRange(nums, target) {\n  // x 이상이 처음 나오는 자리 (lower bound)\n  const lowerBound = (x) => {\n    let lo = 0, hi = nums.length;\n    while (lo < hi) {\n      const mid = (lo + hi) >>> 1;\n      if (nums[mid] < x) lo = mid + 1;\n      else hi = mid;\n    }\n    return lo;\n  };\n  // x보다 큰 첫 자리 (upper bound)\n  const upperBound = (x) => {\n    let lo = 0, hi = nums.length;\n    while (lo < hi) {\n      const mid = (lo + hi) >>> 1;\n      if (nums[mid] <= x) lo = mid + 1;\n      else hi = mid;\n    }\n    return lo;\n  };\n  const first = lowerBound(target);\n  if (first === nums.length || nums[first] !== target) return [-1, -1];\n  return [first, upperBound(target) - 1];\n}"}
+  tests={[{"label":"예시: 3","args":[[1,3,3,3,5,7,7,9],3],"expected":[1,3]},{"label":"두 개: 7","args":[[1,3,3,3,5,7,7,9],7],"expected":[5,6]},{"label":"맨 끝 하나: 9","args":[[1,3,3,3,5,7,7,9],9],"expected":[7,7]},{"label":"맨 앞 하나: 1","args":[[1,3,3,3,5,7,7,9],1],"expected":[0,0]},{"label":"사이 값 4","args":[[1,3,3,3,5,7,7,9],4],"expected":[-1,-1]},{"label":"모두보다 작다","args":[[1,3,3,3,5,7,7,9],0],"expected":[-1,-1]},{"label":"모두보다 크다","args":[[1,3,3,3,5,7,7,9],10],"expected":[-1,-1]},{"label":"빈 배열","args":[[],0],"expected":[-1,-1]},{"label":"전부 같은 값","args":[[2,2,2,2,2],2],"expected":[0,4]},{"label":"원소 하나, 없다","args":[[5],4],"expected":[-1,-1]},{"label":"음수","args":[[-8,-3,-3,0,4],-3],"expected":[1,2]}]}
+/>
+
+## 개수, 삽입 위치, 범위 질문으로 넓히면
+
+### target이 몇 개인가
+
+`upperBound(target) - lowerBound(target)`이다. 예시에서 3은 4 - 1 = 3개다. 없으면 두 경계가 같아 0이 나오니 따로 확인할 필요도 없다. O(log n)이라 같은 값이 수백만 개여도 바로 센다. 2089. Find Target Indices After Sorting Array처럼 "정렬 후 target이 차지하는 인덱스 목록"을 묻는 문제도 이 두 경계 사이를 돌려주면 된다.
+
+### 없으면 들어갈 자리 (35. Search Insert Position)
+
+`lowerBound(target)` 그 자체다. 예시에 4를 넣으면 4번(5 앞), 3을 넣으면 1번(같은 값 무리 앞)이다. 같은 값 무리 뒤에 넣고 싶으면 `upperBound`를 쓴다. 정렬된 배열에 값을 끼워 넣으며 순서를 지키는 작업은 대부분 이 둘 중 하나다. 다만 배열에 실제로 끼워 넣는 `splice`는 O(n)이라, 넣기가 잦으면 균형 트리 같은 구조가 필요하다.
+
+### 값의 범위 [a, b]에 든 원소
+
+`lowerBound(a)`부터 `upperBound(b) - 1`까지다. 예시에서 `[3, 7]`은 1번부터 6번까지, 6개다. DB가 정렬된 인덱스로 `WHERE price BETWEEN 3 AND 7`을 처리하는 방식이 바로 이것이다. 인덱스에서 시작 경계를 찾고, 끝 경계까지 순서대로 읽는다. [DB 인덱스 글](/posts/db-index)에서 B-트리 위에서 같은 일이 어떻게 일어나는지 볼 수 있다.
+
+### 시간 기록에서 "그 시각 이하의 마지막 기록"
+
+`upperBound(t) - 1`이다. 같은 시각에 기록이 여러 개면 그중 마지막을 준다. 이 한 줄이 [LeetCode 981. Time Based Key-Value Store](/posts/leetcode-time-based-key-value-store)의 `get` 전부다.
+
+### 같은 배열에 질문이 아주 많이 온다면
+
+배열이 바뀌지 않고 질문이 수백만 번 온다면, 한 번 훑으며 값마다 범위를 적어 두는 방법도 있다.
+
+```js
+// 한 번 훑으며 값마다 [처음, 마지막]을 적어 둔다: O(n) 준비, 질문당 O(1)
+function buildRanges(nums) {
+  const ranges = new Map();
+  for (let i = 0; i < nums.length; i++) {
+    const r = ranges.get(nums[i]);
+    if (r) r[1] = i;                 // 이미 본 값: 마지막 자리만 늘린다
+    else ranges.set(nums[i], [i, i]);
+  }
+  return ranges;
+}
+const ranges = buildRanges([1, 3, 3, 3, 5, 7, 7, 9]);
+const ask = (t) => ranges.get(t) ?? [-1, -1];
+// ask(3) → [1, 3], ask(7) → [5, 6], ask(4) → [-1, -1]
+```
+
+질문 하나가 O(1)이 되는 대신 서로 다른 값 개수만큼 메모리를 더 쓴다. 예시는 다섯 개라 작지만, 값이 전부 다르면 n개다. 배열에 값이 하나라도 들어오거나 빠지면 뒤쪽 범위가 모두 밀려서 다시 만들어야 한다. 그리고 "있는 값"에만 답할 수 있다. 개수 세기는 되지만 "4가 들어갈 자리", "3 이상 7 이하인 원소" 같은 질문에는 쓸모가 없다. 이분 탐색은 메모리를 더 쓰지 않고 그런 질문까지 다 받는다. 질문 패턴이 "정확한 값의 범위"뿐이고 배열이 고정이라는 게 확실할 때만 고른다.
+
+### 정렬된 배열에서 과반인지 확인하기
+
+1150. Check If a Number Is Majority Element in a Sorted Array(프리미엄 문제)는 target이 절반을 넘게 나오는지 묻는다. 개수를 두 경계로 세서 n / 2와 비교하면 된다. 더 줄이면, 과반이라면 `lowerBound(target) + ⌊n / 2⌋` 자리의 값도 target이어야 하니 경계 하나와 비교 한 번으로 끝난다.
+
+### 비슷한 문제
+
+- [LeetCode 704. Binary Search](/posts/leetcode-binary-search): 같은 값이 없을 때의 원형이다.
+- [LeetCode 74. Search a 2D Matrix](/posts/leetcode-search-a-2d-matrix): 펼친 번호 위에서 lower bound를 쓰면 행렬에서 "들어갈 자리"까지 구할 수 있다.
+- [LeetCode 153. Find Minimum in Rotated Sorted Array](/posts/leetcode-find-minimum-in-rotated-sorted-array): 값이 아니라 "회전 경계"를 같은 lower bound 틀로 찾는다.
+- 658. Find K Closest Elements: lower bound로 x 근처를 찾은 뒤 양쪽으로 창을 넓히거나, 창의 시작점을 이분 탐색한다.
+
+## 같은 값의 묶음은 두 경계로 표현한다
+
+정렬된 배열에서 같은 값은 한 덩어리로 붙어 있고, 덩어리는 "target 이상이 시작되는 곳"과 "target보다 큰 값이 시작되는 곳" 두 경계로 정해진다. 두 경계 모두 참거짓이 한 번만 바뀌는 줄이라 이분 탐색으로 O(log n)에 찾는다. 하나를 찾고 번지는 방법은 평소에는 빠르지만 같은 값이 많은 입력에서 O(n)으로 무너진다. lower bound와 upper bound를 손에 익혀 두면 개수 세기, 끼워 넣을 자리, 범위 질문이 모두 같은 두 함수로 풀린다.
+
+## 면접에서 나올 만한 질문
+
+### 하나를 찾은 뒤 양옆으로 넓히면 왜 안 되나요?
+
+답은 맞지만 시간이 O(log n + k)라서, 같은 값이 k = n개면 O(n)이 된다. 문제가 O(log n)을 요구하니 최악의 입력에서 요구를 못 맞춘다. 길이 10만 배열이 전부 같은 값일 때 재 보면 이분 탐색 두 번보다 수백 배 느렸다. 같은 값이 적다는 게 보장된다면 실무에서는 쓸 만하다.
+
+### lower bound와 upper bound는 무엇이고 이 문제에서 어떻게 쓰나요?
+
+lower bound는 target 이상이 처음 나오는 자리, upper bound는 target보다 큰 값이 처음 나오는 자리다. target의 범위는 `[lower bound, upper bound - 1]`이다. lower bound 자리가 배열 끝이거나 그 값이 target이 아니면 target이 없으니 `[-1, -1]`을 돌려준다. 두 함수는 비교 연산자 `<`와 `<=` 하나만 다르다.
+
+### 시간 복잡도는 어떻게 되나요?
+
+이분 탐색을 두 번 하니 O(log n)이다. 각 탐색이 매번 구간을 절반으로 줄이고, 같은 값이 얼마나 많든 상관없이 log n번 안팎에서 끝난다. 길이 10만이면 탐색당 비교 17번 안팎이다. 공간은 O(1)이다.
+
+### 마지막 자리를 lowerBound(target + 1) - 1로 구해도 되나요?
+
+정수 배열이고 target + 1이 넘치지 않으면 된다. 하지만 실수 배열에서는 target과 target + 1 사이의 값까지 포함해 틀리고, 자바에서 target이 `Integer.MAX_VALUE`면 target + 1이 음수로 넘쳐 엉뚱한 답이 나온다. upper bound를 따로 짜면 두 경우 모두 안전하다.
+
+### 자바의 Arrays.binarySearch나 파이썬 bisect를 써도 되나요?
+
+파이썬 `bisect_left`와 `bisect_right`는 정확히 lower bound와 upper bound라 그대로 쓰면 된다. 자바 `Arrays.binarySearch`는 같은 값이 여러 개일 때 어느 자리를 줄지 보장하지 않아서 처음과 끝을 구할 수 없다. 실제로 `[1, 3, 3, 3, ...]`에서 3을 찾으면 처음 자리 1이 아니라 3을 줬다. 그래서 자바는 직접 짠다.
+
+### 찾았을 때 멈추지 않는 풀이에서 무한 루프가 나는 경우는?
+
+닫힌 구간 `[lo, hi]`에서 target을 찾았을 때 `hi = mid`처럼 mid를 버리지 않으면, lo와 hi가 같아진 뒤 구간이 더 줄지 않아 끝나지 않는다. 닫힌 구간에서는 본 칸을 반드시 `mid - 1`이나 `mid + 1`로 버리고, 후보는 따로 변수에 적어 둔다. mid를 남기는 `hi = mid`는 반열린 구간 `[lo, hi)`와 짝이다.
+
+### 이 두 경계가 실무에서는 어디에 쓰이나요?
+
+정렬된 데이터에서 개수 세기, 범위 조회, 끼워 넣을 자리 찾기에 그대로 쓰인다. DB가 정렬된 인덱스로 `BETWEEN`이나 `>=` 조건을 처리할 때 시작 경계를 찾고 끝 경계까지 읽는 것, 시계열에서 "이 시각 이하의 마지막 기록"을 찾는 것이 모두 lower/upper bound다.

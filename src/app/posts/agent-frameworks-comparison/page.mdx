@@ -1,0 +1,396 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("agent-frameworks-comparison");
+
+<EasyIntro>
+  레고로 집을 만든다고 해 보자. 낱개 블록으로 처음부터 쌓을 수도 있고, 지붕이나 창문이 이미 붙어 있는 큰 조각 세트를 살 수도 있다. 큰 조각을 쓰면 금방 그럴듯한 집이 나오지만, 창문 위치를 조금 바꾸고 싶을 때 조각 안이 어떻게 생겼는지 몰라 애를 먹는다.
+
+  인공지능에게 일을 시키는 프로그램도 비슷하다. 인공지능에게 묻고, 도구를 써 달라고 하면 써 주고, 결과를 다시 알려 주는 일을 되풀이하는 뼈대는 몇십 줄이면 직접 짤 수 있다. 할 일이 많아지면 그 위에 큰 조각 세트 같은 도구 모음을 쓰는데, 세트마다 잘하는 기능이 다르다. 어느 세트든 안에서 인공지능에게 무슨 말을 보내는지 볼 수 있어야 고장이 났을 때 고칠 수 있다. 이 글은 세트마다 무엇을 대신해 주는지, 언제 직접 쌓는 게 나은지를 비교한다.
+</EasyIntro>
+
+사내 문서로 질문에 답하는 봇을 만들 때 처음엔 프레임워크부터 들였다. 예제 코드 열 줄로 문서를 읽어 들이고 질문을 던지니 답이 나왔다. 문제는 답이 이상할 때였다. 검색된 문서가 맞는데 답이 엉뚱했다. 모델에 실제로 어떤 프롬프트가 갔는지 보려고 했는데, 프롬프트가 라이브러리 안쪽 기본값으로 숨어 있어서 소스를 몇 겹 따라 들어가야 했다. 결국 모델 SDK로 직접 다시 짰고, 프롬프트를 한 줄 고치자 해결됐다.
+
+몇 달 뒤 반대 상황을 만났다. 직접 짠 50줄짜리 에이전트 루프가 잘 돌고 있었는데, 환불 같은 작업 앞에서 사람 승인을 받고, 서버가 재시작돼도 하던 일을 이어 가야 한다는 요구가 생겼다. 상태 저장, 중단과 재개, 재시도를 직접 붙이다 보니 루프가 300줄이 됐다. 이번에는 프레임워크로 옮길지 고민이 됐다.
+
+이 글은 그 고민을 위한 비교다. 직접 짠 루프가 이미 하는 일을 먼저 보고, LangChain·LangGraph, LlamaIndex·Haystack, CrewAI·AutoGen, smolagents·Agno, 그리고 OpenAI Agents SDK·Claude Agent SDK·Google ADK가 각각 어느 층을 대신해 주는지 같은 예제(주문 조회 후 환불)로 놓고 본다. 에이전트 루프 자체는 [AI 코딩 에이전트는 어떻게 일하나](/posts/ai-coding-agents)와 [LLM API를 서비스에 붙이기](/posts/llm-api-integration), 에이전트를 여러 개 엮는 구조는 [멀티 에이전트](/posts/multi-agent-systems)에서 다뤘다.
+
+프레임워크는 버전이 빨리 바뀐다. 아래 API 이름은 2026년 하반기 기준이고, 글에서 실제로 돌린 것은 LangGraph 1.2(langchain-core 1.7)와 Claude Agent SDK 0.3이다. 나머지는 공식 문서의 개념 수준으로만 적었다.
+
+## 직접 짠 루프가 이미 하는 일
+
+비교하려면 기준이 있어야 한다. 모델 SDK만 쓰는 에이전트 루프의 뼈대는 이렇다. 실제 모델 대신 대화를 보고 다음 행동을 고르는 가짜 모델을 넣었다.
+
+```js
+const tools = {
+  get_order: ({ id }) => ORDERS[id] ?? { error: "not_found" },
+  refund: ({ id, amount }) => ({ refund_id: "R-" + id, amount }),
+};
+
+function runAgent(question, maxSteps) {
+  const messages = [{ role: "user", content: question }];
+  const used = [];
+  for (let step = 1; step <= maxSteps; step++) {
+    const out = fakeModel(messages);            // 실제로는 SDK의 messages.create(...)
+    if (out.answer) return { stop: "answered", steps: step, tools: used, answer: out.answer };
+    used.push(out.tool);
+    const result = tools[out.tool](out.args);   // 도구 실행은 내 코드가 한다
+    messages.push({ role: "assistant", tool: out.tool, args: out.args });
+    messages.push({ role: "tool", name: out.tool, content: result });
+  }
+  return { stop: "max_steps", steps: maxSteps, tools: used };
+}
+```
+
+Node 22로 돌린 실제 출력이다.
+
+```text
+{"stop":"answered","steps":3,"tools":["get_order","refund"],"answer":"A-100 환불 접수: R-A-100"}
+{"stop":"max_steps","steps":1,"tools":["get_order"]}
+{"stop":"answered","steps":2,"tools":["get_order"],"answer":"Z-9 주문을 찾지 못했다"}
+```
+
+이 스무 줄이 하는 일을 꼽아 보면 프레임워크가 무엇을 대신하는지 보인다. 대화 기록을 쌓는다. 모델의 출력이 답인지 도구 호출인지 가른다. 도구를 이름으로 찾아 실행하고 결과를 대화에 붙인다. 걸음 수 상한으로 멈춘다. 빠진 것은 이런 것들이다. 도구 인자 검증, 도구 오류 처리, 모델 API 재시도, 스트리밍, 사람 승인, 상태 저장과 재개, 추적. 프레임워크를 고르는 일은 결국 "빠진 것 중 무엇을 남이 만든 것으로 쓸까"를 정하는 일이다.
+
+뼈대를 직접 완성해 보자. 가짜 모델과 도구는 이미 들어 있다. `runAgent`의 루프만 채우면 된다.
+
+<CodePlayground
+  caption="도구 호출 루프 직접 짜기"
+  functionName="runAgent"
+  initialCode={`const ORDERS = { "A-100": { status: "delivered", amount: 32000 } };
+const tools = {
+  get_order: ({ id }) => ORDERS[id] ?? { error: "not_found" },
+  refund: ({ id, amount }) => ({ refund_id: "R-" + id, amount }),
+};
+// 가짜 모델: 대화를 보고 { tool, args } 또는 { answer }를 돌려준다
+function fakeModel(messages) {
+  const last = messages[messages.length - 1];
+  const id = messages[0].content.split(" ")[0];
+  if (last.role === "user") return { tool: "get_order", args: { id } };
+  if (last.role === "tool" && last.name === "get_order") {
+    if (last.content.error) return { answer: id + " 주문을 찾지 못했다" };
+    return { tool: "refund", args: { id, amount: last.content.amount } };
+  }
+  return { answer: id + " 환불 접수: " + last.content.refund_id };
+}
+
+// 답이 나오면 { stop: "answered", steps, tools, answer }
+// 상한에 걸리면 { stop: "max_steps", steps: maxSteps, tools }
+function runAgent(question, maxSteps) {
+  const messages = [{ role: "user", content: question }];
+  const used = [];
+  // 여기를 채운다
+  return { stop: "max_steps", steps: maxSteps, tools: used };
+}`}
+  solution={`const ORDERS = { "A-100": { status: "delivered", amount: 32000 } };
+const tools = {
+  get_order: ({ id }) => ORDERS[id] ?? { error: "not_found" },
+  refund: ({ id, amount }) => ({ refund_id: "R-" + id, amount }),
+};
+function fakeModel(messages) {
+  const last = messages[messages.length - 1];
+  const id = messages[0].content.split(" ")[0];
+  if (last.role === "user") return { tool: "get_order", args: { id } };
+  if (last.role === "tool" && last.name === "get_order") {
+    if (last.content.error) return { answer: id + " 주문을 찾지 못했다" };
+    return { tool: "refund", args: { id, amount: last.content.amount } };
+  }
+  return { answer: id + " 환불 접수: " + last.content.refund_id };
+}
+
+function runAgent(question, maxSteps) {
+  const messages = [{ role: "user", content: question }];
+  const used = [];
+  for (let step = 1; step <= maxSteps; step++) {
+    const out = fakeModel(messages);
+    if (out.answer) return { stop: "answered", steps: step, tools: used, answer: out.answer };
+    used.push(out.tool);
+    const result = tools[out.tool](out.args);
+    messages.push({ role: "assistant", tool: out.tool, args: out.args });
+    messages.push({ role: "tool", name: out.tool, content: result });
+  }
+  return { stop: "max_steps", steps: maxSteps, tools: used };
+}`}
+  tests={[
+    { label: "조회 후 환불", args: ["A-100 환불해 줘", 5], expected: { stop: "answered", steps: 3, tools: ["get_order", "refund"], answer: "A-100 환불 접수: R-A-100" } },
+    { label: "상한 1에서 멈춤", args: ["A-100 환불해 줘", 1], expected: { stop: "max_steps", steps: 1, tools: ["get_order"] } },
+    { label: "없는 주문", args: ["Z-9 환불해 줘", 5], expected: { stop: "answered", steps: 2, tools: ["get_order"], answer: "Z-9 주문을 찾지 못했다" } },
+  ]}
+/>
+
+## 프레임워크마다 맡는 층이 다르다
+
+에이전트 프레임워크를 한 줄로 세워 비교하면 헷갈린다. 맡는 층이 다르기 때문이다. 아래 그림처럼 층을 나눠 놓고 보면 정리가 된다. 점이 흐르는 방향이 요청이 내려가는 순서다.
+
+<ConceptDiagram
+  width={420}
+  height={340}
+  caption="에이전트 앱의 층과 각 층을 주로 맡는 도구"
+  nodes={[
+    { id: "app", label: "내 앱", sub: "API·화면·권한", x: 210, y: 30, w: 150 },
+    { id: "multi", label: "역할·팀", sub: "CrewAI·AutoGen", x: 90, y: 110, w: 140 },
+    { id: "state", label: "상태·재개", sub: "LangGraph", x: 330, y: 110, w: 140 },
+    { id: "loop", label: "도구 호출 루프", sub: "공급사 SDK·smolagents", x: 210, y: 190, w: 190 },
+    { id: "rag", label: "검색 파이프라인", sub: "LlamaIndex·Haystack", x: 90, y: 270, w: 160 },
+    { id: "model", label: "모델 API", sub: "SDK 직접 호출", x: 330, y: 270, w: 140 },
+    { id: "trace", label: "추적", x: 380, y: 30, w: 70 },
+  ]}
+  edges={[
+    { from: "app", to: "multi" },
+    { from: "app", to: "state" },
+    { from: "multi", to: "loop" },
+    { from: "state", to: "loop" },
+    { from: "loop", to: "rag", label: "도구로" },
+    { from: "loop", to: "model" },
+    { from: "loop", to: "trace", dashed: true },
+  ]}
+/>
+
+가장 아래는 모델 API다. Anthropic, OpenAI, Google의 SDK가 요청 하나를 보내고 받는다. 그 위가 도구 호출 루프로, 앞의 스무 줄이다. 공급사들이 내놓은 에이전트 SDK와 smolagents 같은 가벼운 프레임워크가 주로 이 층이다. 루프 위에 상태 저장과 중단·재개를 얹는 층이 있고, LangGraph가 대표적이다. 에이전트 여러 개에 역할을 나눠 주는 층에는 CrewAI와 AutoGen이 있다. 검색 파이프라인은 옆 갈래다. 문서를 자르고, 임베딩하고, 찾고, 다시 순위를 매기는 일을 LlamaIndex와 Haystack이 맡고, 에이전트 입장에서는 도구 하나로 붙는다.
+
+이렇게 보면 "LangGraph와 LlamaIndex 중 무엇을 쓰나"는 질문이 이상하다는 걸 알 수 있다. 둘은 경쟁하기보다 층이 다르고, 실제로 함께 쓰는 경우도 많다. 물론 경계는 흐리다. 프레임워크들은 서로의 층으로 기능을 넓혀 왔다. LlamaIndex에도 에이전트와 워크플로가 있고, LangChain에도 문서 로더와 검색기가 있다. 그래도 각자 처음 풀려고 한 문제, 그래서 가장 잘 다듬어진 층은 위 그림과 같다.
+
+## LangChain과 LangGraph: 체인에서 상태 그래프로
+
+LangChain은 2022년에 프롬프트, 모델, 출력 파서를 사슬(체인)로 잇는 라이브러리로 시작했다. 모델 제공사를 바꿔 끼우는 공통 인터페이스, 문서 로더, 벡터 저장소 연결처럼 부품이 많다는 게 장점이었고, 부품이 많아 추상화가 깊다는 게 비판이었다. 같은 팀이 내놓은 LangGraph는 에이전트를 노드와 간선으로 된 상태 기계로 짠다. 2025년 10월 두 라이브러리가 1.0이 됐고, LangChain 1.0의 에이전트(`create_agent`)는 LangGraph 위에서 돈다.
+
+LangGraph가 대신해 주는 것은 상태와 체크포인트다. 앞의 환불 예제를 LangGraph로 옮기고, 도구 노드 앞에서 멈춰 사람 승인을 받게 했다. 모델은 앞과 같은 가짜 함수다.
+
+```python
+from typing import TypedDict, Annotated
+import operator
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import InMemorySaver
+
+class State(TypedDict):
+    messages: Annotated[list, operator.add]   # 노드가 돌려준 메시지를 이어 붙인다
+    pending: dict | None                       # 실행 대기 중인 도구 호출
+
+def route(state: State):
+    return "tools" if state["pending"] else END
+
+g = StateGraph(State)
+g.add_node("agent", agent)      # 가짜 모델: 다음 도구 호출이나 답을 고른다
+g.add_node("tools", tools)      # pending의 도구를 실행하고 결과를 messages에 붙인다
+g.add_edge(START, "agent")
+g.add_conditional_edges("agent", route, ["tools", END])
+g.add_edge("tools", "agent")
+app = g.compile(checkpointer=InMemorySaver(), interrupt_before=["tools"])
+
+cfg = {"configurable": {"thread_id": "ticket-7"}}
+app.invoke({"messages": [{"role": "user", "content": "A-100 환불해 줘"}], "pending": None}, cfg)
+s = app.get_state(cfg); print("1) next:", s.next, "pending:", s.values["pending"])
+app.invoke(None, cfg)   # 사람이 조회를 승인하고 이어 간다
+s = app.get_state(cfg); print("2) next:", s.next, "pending:", s.values["pending"])
+app.invoke(None, cfg)   # 환불도 승인
+s = app.get_state(cfg); print("3) next:", s.next, "last:", s.values["messages"][-1])
+```
+
+Python 3.13, LangGraph 1.2.17에서 돌린 실제 출력이다. 마지막에 체크포인트 기록도 찍었다.
+
+```text
+1) next: ('tools',) pending: {'tool': 'get_order', 'args': {'id': 'A-100'}}
+2) next: ('tools',) pending: {'tool': 'refund', 'args': {'id': 'A-100', 'amount': 32000}}
+3) next: () last: {'role': 'assistant', 'content': 'A-100 환불을 접수했다'}
+checkpoints: 7
+  step 5 next ()
+  step 4 next ('agent',)
+  step 3 next ('tools',)
+  step 2 next ('agent',)
+  step 1 next ('tools',)
+  step 0 next ('agent',)
+  step -1 next ('__start__',)
+```
+
+`invoke`가 끝날 때마다 그래프는 다음에 실행할 노드(`next`) 앞에서 멈춰 있다. 1번에서는 주문 조회를, 2번에서는 환불 32,000원을 실행하기 직전이다. 여기서 사람이 `pending`을 보고 승인하면 `invoke(None, cfg)`로 이어 가고, 거절하면 상태를 고쳐 넣는다. 체크포인트는 노드 하나가 끝날 때마다 쌓여 일곱 개가 됐다. 이 기록으로 특정 단계로 되돌아가 다른 입력으로 다시 돌리는 것(LangGraph 문서가 time travel이라 부르는 기능)도 된다.
+
+아래 그림은 이 흐름을 주고받는 메시지로 그렸다. 사람이 끼어드는 자리와 체크포인트가 쌓이는 자리를 눈여겨보자.
+
+<SequenceDiagram
+  caption="도구 앞에서 멈추고, 승인받고, 이어 가는 그래프"
+  actors={[
+    { id: "api", label: "내 서버" },
+    { id: "graph", label: "그래프" },
+    { id: "ckpt", label: "체크포인트" },
+    { id: "human", label: "상담원" },
+  ]}
+  steps={[
+    { from: "api", to: "graph", label: "invoke(질문)", title: "티켓 7번으로 시작한다", detail: "thread_id가 대화 하나를 가리키는 열쇠다.", payload: "thread_id: ticket-7" },
+    { from: "graph", to: "ckpt", label: "저장", title: "agent 노드가 끝나면 상태를 저장한다", detail: "다음 노드가 tools라 interrupt_before에 걸려 멈춘다.", payload: "next: ('tools',)  pending: get_order A-100" },
+    { from: "api", to: "human", label: "승인 요청", title: "서버는 대기 중인 호출을 보여 준다", detail: "그래프는 아무것도 들고 있지 않다. 상태는 체크포인트에만 있다." },
+    { from: "human", to: "api", label: "승인", title: "조회를 승인한다", detail: "몇 초 뒤일 수도, 다음 날일 수도 있다." },
+    { from: "api", to: "graph", label: "invoke(None)", title: "같은 thread_id로 이어 간다", detail: "체크포인트에서 상태를 읽어 tools부터 실행한다." },
+    { from: "graph", to: "ckpt", label: "저장", title: "다음 정지 지점은 환불 직전", detail: "돈이 나가는 호출이라 사람이 한 번 더 본다.", payload: "pending: refund A-100 32000" },
+  ]}
+/>
+
+주의할 점이 있다. 예제의 `InMemorySaver`는 이름 그대로 프로세스 메모리에 저장한다. 서버가 재시작되면 상태가 사라지니, 실제로 재개가 필요하면 SQLite나 PostgreSQL에 저장하는 체크포인터를 쓴다. 그리고 멈춘 사이에 도구 쪽 세상이 바뀔 수 있다. 승인을 기다리는 동안 주문이 이미 취소됐다면, 이어 가기 전에 도구가 상태를 다시 확인해야 한다. 최근 버전은 노드 안에서 `interrupt()`를 부르고 `Command(resume=...)`로 값을 넘겨 이어 가는 방식도 권한다. 위의 컴파일 옵션 방식보다 승인 화면에 넘길 값을 노드가 직접 정할 수 있다.
+
+LangGraph를 쓸 만한 신호는 분명하다. 대기·승인·재개가 있는 긴 작업, 분기가 많은 흐름, 실패한 단계부터 다시 돌려야 하는 작업이다. 반대로 질문 하나에 도구 몇 번이면 끝나는 봇이라면 그래프와 상태 타입을 정의하는 수고가 이득보다 크다.
+
+## LlamaIndex와 Haystack: 검색 파이프라인이 먼저다
+
+LlamaIndex와 Haystack은 에이전트보다 "문서를 모델에게 먹이는 일"에서 출발했다. 문서 로딩, 청크 나누기, 임베딩, 벡터 저장소, 검색, 리랭킹, 답 생성까지 RAG의 단계를 부품으로 준다. 각 단계가 무엇을 하는지는 [기본 RAG](/posts/rag-classic-pipeline)와 [RAG 검색 품질](/posts/rag-retrieval-quality)에서 직접 짜며 봤다.
+
+둘의 성격은 조금 다르다. LlamaIndex는 `VectorStoreIndex.from_documents(...)`에서 `as_query_engine()`으로 이어지는 짧은 경로가 강점이다. 몇 줄로 RAG가 돈다. 대신 처음에 겪은 일처럼 그 몇 줄 안에 청크 크기, 검색 개수, 답변 프롬프트의 기본값이 숨어 있다. 문서가 많고 형식이 다양할 때 쓰는 파서와 인덱스 종류가 풍부하고, 요즘은 이벤트 기반 워크플로와 에이전트도 함께 제공한다.
+
+Haystack(deepset)은 2.x부터 부품(component)을 파이프라인에 넣고 입출력을 `connect`로 명시적으로 잇는다. 검색기 출력이 프롬프트 빌더의 어느 입력으로 가는지 코드에 다 드러나서 처음 쓰기엔 장황하지만 숨는 게 적다. 파이프라인을 YAML로 직렬화해 배포하는 운영 쪽 기능에 신경을 쓴다.
+
+RAGFlow는 결이 또 다르다. 라이브러리라기보다 문서 파싱과 RAG를 화면에서 구성하는 오픈소스 서버다. PDF 표나 스캔 문서 파싱을 직접 짜기 싫을 때 서비스로 띄워 놓고 API로 붙인다.
+
+이 층의 도구를 고를 때 질문은 "에이전트가 필요하냐"가 아니라 "검색 파이프라인을 내가 얼마나 손댈 거냐"다. 청크 전략과 리랭킹을 계속 실험할 거라면 단계가 드러나는 쪽(Haystack, 혹은 직접 구현)이 낫고, 일단 돌아가는 RAG가 빨리 필요하면 LlamaIndex의 짧은 경로가 낫다. 어느 쪽이든 검색은 에이전트에게 도구 하나로 붙인다. 에이전트 루프는 다른 층에서 고르면 된다.
+
+## CrewAI와 AutoGen: 역할을 나눈 에이전트들
+
+CrewAI는 에이전트마다 역할(role), 목표(goal), 배경(backstory)을 주고, 작업(task)을 배정해 크루(crew)로 돌린다. 작업은 차례로(sequential) 돌리거나, 관리자 에이전트가 나눠 주는 계층형(hierarchical)으로 돌린다. "조사원", "작성자", "검토자"처럼 사람 팀을 흉내 내는 구성을 몇 줄로 만든다. 이벤트로 단계를 잇는 Flows로 더 정해진 흐름도 짤 수 있다.
+
+AutoGen은 Microsoft 연구 조직에서 나온 프레임워크로, 에이전트끼리 대화하게 두는 그룹 채팅 구성이 유명했다. 2025년 초 0.4에서 메시지 기반 구조로 크게 다시 짜였고, 같은 해 10월 Microsoft가 AutoGen과 Semantic Kernel을 합친 Microsoft Agent Framework를 내놓으면서 새 기능은 그쪽으로 옮겨 가는 흐름이다. 새로 시작한다면 어느 쪽을 쓸지 공식 안내를 먼저 확인하는 게 맞다.
+
+이 층의 도구는 데모가 인상적이다. 역할 셋이 서로 말을 주고받으며 보고서를 쓴다. 그런데 [멀티 에이전트](/posts/multi-agent-systems)에서 본 비용과 실패가 그대로 따라온다. 역할마다 모델 호출이 곱해지고, 역할 사이에 넘기는 말이 모호하면 서로 일을 미루거나 겹친다. 그리고 backstory 같은 필드는 결국 시스템 프롬프트에 들어가는 글이다. 프레임워크가 그 글을 어떤 틀로 감싸 보내는지 알아야 결과를 고칠 수 있다.
+
+## smolagents와 Agno: 가볍게, 코드로 행동하기
+
+Hugging Face의 smolagents는 이름처럼 작다. 핵심 루프를 짧은 코드로 유지하는 게 목표다. 특이한 점은 기본 에이전트(`CodeAgent`)가 도구 호출을 JSON이 아니라 파이썬 코드로 낸다는 것이다. 모델이 `order = get_order("A-100")` 다음 줄에 `refund(order["id"], order["amount"])`를 쓰면, 도구 호출 두 번과 그 사이의 값 전달이 한 번에 끝난다. JSON 도구 호출로는 두 바퀴가 드는 일이다. 대신 모델이 쓴 코드를 실행하니 샌드박스가 필수다. smolagents는 원격 샌드박스나 컨테이너에서 돌리는 실행기를 고르게 해 둔다. JSON 방식의 `ToolCallingAgent`도 있다.
+
+Agno(예전 이름 Phidata)는 가벼운 에이전트 정의에 메모리, 지식(검색), 저장소, 팀 구성을 붙이는 쪽이다. 에이전트를 API 서버로 띄우는 런타임도 함께 준다.
+
+이 층은 앞의 스무 줄 루프와 가장 가깝다. 그래서 "직접 짜는 것과 무엇이 다르냐"가 고르는 기준이 된다. 모델 제공사를 자주 바꾸거나, 코드로 행동하는 방식이 맞는 작업(데이터 처리, 계산이 많은 조사)이면 쓸 만하다.
+
+## 공급사 SDK: OpenAI Agents SDK, Claude Agent SDK, Google ADK
+
+모델 회사들도 직접 에이전트 SDK를 낸다. 자기 모델과 도구에 맞춰 다듬어져 있고, 버전 변화가 모델 출시와 함께 간다.
+
+OpenAI Agents SDK(2025년 3월)는 에이전트, 실행기(Runner), 핸드오프, 가드레일, 추적을 기본 부품으로 준다. 핸드오프를 도구처럼 모델에게 보여 주고, 추적이 기본으로 켜져 OpenAI 대시보드에서 볼 수 있다. 같은 해 10월에는 흐름을 화면에서 그리는 Agent Builder, 채팅 화면 부품 ChatKit 등을 묶어 AgentKit이라 불렀다.
+
+Python 판의 모양은 대략 이렇다. API 키가 없어 이 코드는 돌려 보지 않았고, 구조만 보려는 것이다.
+
+```python
+from agents import Agent, Runner, function_tool
+
+@function_tool
+def get_order(order_id: str) -> dict:
+    """주문 상태와 금액을 조회한다."""
+    return ORDERS[order_id]
+
+refund_agent = Agent(
+    name="Refund",
+    instructions="환불 정책에 맞으면 환불을 접수한다. 금액은 조회한 값만 쓴다.",
+    tools=[get_order],
+)
+triage = Agent(
+    name="Triage",
+    instructions="문의를 읽고 맞는 담당에게 넘긴다.",
+    handoffs=[refund_agent],   # 모델에게는 transfer_to_refund 같은 도구로 보인다
+)
+result = Runner.run_sync(triage, "A-100 환불해 줘")
+print(result.final_output)
+```
+
+루프는 `Runner`가 돌리고, 도구 정의는 함수의 타입 힌트와 독스트링에서 만들어진다. 독스트링이 곧 모델이 읽는 도구 설명이라서 편하면서도 무섭다. 함수 주석을 고치면 프롬프트가 바뀐다.
+
+Claude Agent SDK는 원래 Claude Code SDK였다가 2025년 9월에 이름이 바뀌었다. Claude Code를 돌리는 하네스를 라이브러리로 쓰는 것이라 파일 읽기·쓰기, 셸 실행, 권한 확인, 훅, 서브에이전트, MCP, 컨텍스트 압축이 이미 들어 있다. 코딩이나 파일 작업처럼 컴퓨터 위에서 일하는 에이전트를 만들 때 가장 적게 짜고 시작한다. TypeScript와 Python으로 쓰고, CLI의 비대화형 모드와 같은 엔진이다. 스크립트와 CI에서 쓰는 모습은 [Claude Code를 스크립트와 CI에서](/posts/claude-code-headless-ci)에서 실제 출력으로 봤다.
+
+앞의 루프 예제와 비교하려고 같은 크기의 일을 시켜 봤다. `work/math.js`에 `return a - b;`로 잘못 쓴 `add` 함수를 두고 고치게 했다.
+
+```js
+import { query } from "@anthropic-ai/claude-agent-sdk";
+
+for await (const msg of query({
+  prompt: "math.js의 add 버그를 고쳐 줘",
+  options: {
+    cwd: new URL("./work", import.meta.url).pathname,
+    model: "haiku",
+    allowedTools: ["Read", "Edit"],   // 묻지 않고 허용할 도구
+    maxTurns: 6,                      // 루프 상한
+    persistSession: false,            // 세션 기록을 디스크에 남기지 않는다
+  },
+})) {
+  if (msg.type === "assistant") {
+    for (const c of msg.message.content)
+      if (c.type === "tool_use") console.log("tool_use", c.name);
+  }
+  if (msg.type === "result") console.log("result", msg.subtype, "turns", msg.num_turns, "cost", msg.total_cost_usd.toFixed(4));
+}
+```
+
+`@anthropic-ai/claude-agent-sdk` 0.3.310, Node 22에서 돌린 실제 출력이다.
+
+```text
+tool_use Bash
+tool_use Read
+tool_use Edit
+result success turns 4 cost 0.0089
+```
+
+파일은 `return a + b;`로 고쳐졌다. 내가 짠 것은 도구 목록과 상한뿐이다. 파일 읽기·수정 도구, 대화 관리, 비용 집계가 SDK 안에 있다. 첫 줄의 `Bash`는 허용 목록에 없어서 실행되지 않고 거부됐다. 권한 확인이 하네스에 들어 있다는 뜻이다. 묻는 자리에 내 코드를 끼우려면 `canUseTool` 콜백을 넘긴다. 앞의 스무 줄 루프와 비교하면, 직접 짠 루프는 무엇을 보내는지 다 보이지만 도구를 전부 내가 만들어야 하고, SDK는 도구와 권한이 다 있지만 시스템 프롬프트가 내 것이 아니다.
+
+Google ADK(Agent Development Kit, 2025년 4월)는 모델을 부르는 에이전트(`LlmAgent`)에 차례·병렬·반복 실행용 워크플로 에이전트를 조합한다. Gemini에 맞춰져 있지만 다른 모델도 붙고, 만든 에이전트를 Vertex AI의 관리형 런타임(Agent Engine)에 배포하는 길이 이어져 있다. Vertex AI Agent Builder는 그 배포·운영 쪽을 묶은 제품군 이름이다.
+
+공급사 SDK의 장점은 모델의 새 기능(도구 검색, 프롬프트 캐싱, 추론 설정, 서버 쪽 도구)이 가장 먼저 들어온다는 것이다. 단점은 반대로 그 회사 모델에 기운다는 것이다. 다른 모델도 붙일 수 있게 열어 둔 SDK가 많지만, 추적·배포·대시보드까지 쓰기 시작하면 옮기기 어려워진다.
+
+## 추상화가 숨기는 프롬프트
+
+처음의 RAG 봇 이야기로 돌아가자. 프레임워크를 쓸 때 가장 먼저 확인할 것은 "모델에 실제로 간 요청을 볼 수 있나"다. 어느 프레임워크든 결국 모델 API에 텍스트와 도구 정의를 보낸다. 그 사이에 프레임워크가 넣는 기본 시스템 프롬프트, 도구 설명의 틀, 검색 결과를 끼워 넣는 서식, 대화가 길 때 잘라 내는 규칙이 있다. 이게 보이지 않으면 답이 이상할 때 고칠 방법이 없다.
+
+확인하는 방법은 세 가지다. 프레임워크의 디버그 로깅이나 추적 연동(LangSmith, Langfuse, 공급사 대시보드)을 켜서 호출마다 보낸 메시지를 본다. 그게 안 되면 모델 클라이언트에 HTTP 요청 로깅을 걸거나, 로컬 프록시를 거치게 해서 실제 요청 본문을 본다. 마지막으로 중요한 프롬프트는 기본값에 맡기지 않고 내가 쓴 템플릿을 명시적으로 넘긴다. 업그레이드하며 기본 프롬프트가 바뀌어도 내 서비스의 답이 바뀌지 않게 하려는 것이다.
+
+디버깅 난이도는 층이 깊을수록 올라간다. 스택 트레이스가 프레임워크 내부로 열 줄씩 들어가면, 내 코드의 문제인지 프레임워크의 문제인지 가리기 어렵다. 그래서 처음 도입할 때 일부러 실패를 만들어 본다. 도구가 예외를 던지면 무엇이 보이나, 모델이 없는 도구 이름을 부르면 어떻게 되나, 걸음 수 상한에 걸리면 어떤 값이 돌아오나. 이 셋을 확인해 두면 운영 중에 덜 당황한다.
+
+## 잠김과 버전 변화 속도
+
+에이전트 프레임워크는 2023년부터 해마다 큰 개편을 겪었다. LangChain은 1.0까지 여러 번 구조를 바꿨고, AutoGen은 0.4에서 다시 짜인 뒤 다른 프레임워크로 흐름이 넘어갔고, Claude Code SDK는 이름이 바뀌었다. 예제 코드를 검색하면 지금은 없는 API가 절반이다.
+
+잠김(lock-in)은 두 겹이다. 하나는 코드 잠김이다. 프레임워크의 상태 타입, 도구 데코레이터, 메모리 클래스가 내 코드 곳곳에 퍼지면 바꾸기 어렵다. 다른 하나는 운영 잠김이다. 추적, 배포, 평가를 그 회사의 클라우드 제품으로 하기 시작하면 코드보다 이쪽이 더 단단히 묶인다.
+
+줄이는 방법은 경계를 두는 것이다. 도구 구현은 프레임워크와 상관없는 평범한 함수로 쓰고 얇은 어댑터로 감싼다. 도구를 [MCP](/posts/mcp-protocol) 서버로 빼 두면 어떤 프레임워크든 같은 도구를 붙인다. 프롬프트는 내 저장소의 파일로 둔다. 상태는 내 DB 스키마에 저장하고, 프레임워크의 체크포인트는 실행을 이어 가는 용도로만 쓴다. 추적은 OpenTelemetry처럼 중립적인 형식으로 내보낼 수 있는지 본다. 이렇게 해 두면 프레임워크를 바꿀 때 바뀌는 건 루프와 오케스트레이션 코드뿐이다.
+
+## SDK로 시작하고, 다시 만들기 시작하면 프레임워크로
+
+정답은 없지만 순서는 있다.
+
+처음에는 모델 SDK로 직접 짠다. 도구 몇 개짜리 봇이나 요청 하나에 도구를 몇 번 부르는 기능은 앞의 스무 줄에 재시도와 인자 검증을 붙이면 충분하다. 프롬프트와 요청이 그대로 보이고, 의존성이 적다.
+
+직접 짠 코드가 이런 걸 다시 만들기 시작하면 프레임워크를 볼 때다.
+
+- 사람 승인, 대기, 재시작 후 재개, 실패 단계부터 다시 돌리기 → LangGraph 같은 상태 그래프
+- 파일과 셸을 다루는 에이전트, 권한·훅·서브에이전트가 필요 → Claude Agent SDK
+- 핸드오프와 가드레일, OpenAI 모델 중심 → OpenAI Agents SDK
+- Gemini와 Vertex AI에 배포할 계획 → Google ADK
+- 검색 파이프라인을 빨리 세우기 → LlamaIndex, 단계를 드러내 놓고 실험하기 → Haystack
+- 역할 나눈 팀 구성을 빠르게 시험 → CrewAI(비용과 실패를 같이 잰다)
+- 코드로 행동하는 작은 에이전트 → smolagents(샌드박스 필수)
+
+고르기 전에 두세 개를 같은 과제로 하루씩 짜 본다. 볼 것은 기능 목록이 아니라 실패했을 때의 모습이다. 실제로 보낸 프롬프트를 볼 수 있나, 도구 오류가 어디까지 올라오나, 재개가 정말 되나, 업그레이드 안내(마이그레이션 문서)가 성실한가. 그리고 프레임워크가 무엇이든 도구, 프롬프트, 상태는 내 쪽에 둔다.
+
+## 면접에서 나올 만한 질문
+
+### 에이전트 프레임워크 없이 직접 루프를 짜도 되나요?
+
+된다. 대부분의 시작은 그게 낫다. 대화를 쌓고, 모델 출력이 답인지 도구 호출인지 가르고, 도구를 실행해 결과를 붙이고, 걸음 수 상한으로 멈추는 일이 수십 줄이다. 프롬프트가 그대로 보이고 의존성이 적다. 사람 승인, 재개, 실패 단계 재실행 같은 요구가 생겨 루프가 그걸 다시 만들기 시작하면 프레임워크를 검토한다.
+
+### LangChain과 LangGraph는 어떻게 다른가요?
+
+LangChain은 모델, 프롬프트, 로더, 검색기 같은 부품과 공통 인터페이스를 주는 라이브러리이고, LangGraph는 에이전트를 노드와 간선의 상태 기계로 짜는 런타임이다. LangGraph는 체크포인트가 있어서 노드마다 상태를 저장하고, 특정 노드 앞에서 멈춰 사람 승인을 받고, 같은 thread_id로 이어 갈 수 있다. 1.0 이후 LangChain의 에이전트도 LangGraph 위에서 돈다.
+
+### LangGraph로 사람 승인 단계를 넣으면 어떤 점을 조심해야 하나요?
+
+체크포인터를 영속 저장소로 써야 한다. 메모리 체크포인터는 재시작하면 상태가 사라진다. 그리고 승인을 기다리는 동안 바깥 상태가 바뀔 수 있으니, 이어 갈 때 도구가 주문 상태 같은 전제를 다시 확인해야 한다. 돈이 나가는 쓰기 도구는 멱등 키를 둬서 재개나 재시도로 두 번 실행되지 않게 한다.
+
+### LlamaIndex와 LangGraph 중 무엇을 써야 하나요?
+
+맡는 층이 달라서 둘 중 하나를 고르는 질문이 아니다. LlamaIndex는 문서 로딩부터 검색, 답 생성까지의 RAG 파이프라인이 중심이고, LangGraph는 에이전트의 흐름과 상태가 중심이다. 검색을 LlamaIndex로 만들어 LangGraph 에이전트의 도구로 붙이는 식으로 함께 쓰기도 한다. 고를 때는 검색 파이프라인을 얼마나 손댈지, 흐름에 대기와 재개가 있는지를 따로 본다.
+
+### 프레임워크가 프롬프트를 숨겨서 생기는 문제는 무엇이고 어떻게 대응하나요?
+
+프레임워크가 넣는 기본 시스템 프롬프트, 검색 결과 서식, 대화 자르기 규칙이 보이지 않으면 답이 이상할 때 원인을 못 찾는다. 업그레이드로 기본값이 바뀌면 코드는 그대로인데 답이 달라진다. 추적 연동이나 HTTP 요청 로깅으로 실제 요청을 보고, 중요한 프롬프트는 기본값에 맡기지 않고 내 템플릿을 명시적으로 넘긴다.
+
+### 공급사 에이전트 SDK를 쓰면 무엇을 얻고 무엇을 잃나요?
+
+모델의 새 기능이 가장 먼저 들어오고 그 모델에 맞게 다듬어진 루프와 추적을 바로 쓴다. Claude Agent SDK라면 파일·셸 도구, 권한, 훅, 서브에이전트까지 들어 있다. 대신 그 회사 모델과 대시보드, 배포 제품에 기운다. 도구를 평범한 함수나 MCP 서버로 두고 프롬프트와 상태를 내 쪽에 두면 옮길 때 바꿀 범위가 줄어든다.
+
+### 에이전트 프레임워크의 잠김은 어떻게 줄이나요?
+
+경계를 둔다. 도구 구현은 프레임워크와 무관한 함수로 쓰고 얇은 어댑터로 감싸거나 MCP 서버로 뺀다. 프롬프트는 저장소의 파일로, 업무 상태는 내 DB에 둔다. 추적은 OpenTelemetry 같은 중립 형식으로 내보낸다. 그러면 프레임워크를 바꿀 때 루프와 오케스트레이션 코드만 바뀐다.
+
+### smolagents의 CodeAgent처럼 코드로 행동하는 방식의 장단점은 무엇인가요?
+
+도구 호출 여러 번과 그 사이의 값 전달, 반복, 계산을 코드 한 덩어리로 내니 바퀴 수가 줄고 복잡한 처리에 강하다. 대신 모델이 쓴 임의 코드를 실행하므로 프롬프트 주입이 곧 코드 실행이 될 수 있다. 네트워크와 파일 접근을 막은 샌드박스에서만 돌리고, 쓸 수 있는 함수와 모듈을 제한해야 한다.

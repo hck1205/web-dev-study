@@ -1,0 +1,408 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("dynamodb-modeling-capacity");
+
+<EasyIntro>
+  큰 창고에 물건이 수천만 개 있다고 해 보자. 상자마다 붙은 번호만 알면 직원이 그 선반으로 곧장 가서 꺼내 온다. 그런데 "빨간 물건 다 가져와"라고 하면 직원은 창고의 모든 선반을 처음부터 끝까지 훑어야 한다.
+
+  DynamoDB는 이 창고처럼 번호로 꺼내는 일을 아주 빠르게 하는 데이터베이스다. 대신 훑는 일은 느리고, 훑은 만큼 돈을 낸다. 물건이 적을 때는 훑어도 금방 끝나니 문제가 안 보이다가, 창고가 커지면 시간과 돈이 같이 불어난다.
+
+  그래서 DynamoDB를 쓸 때는 어떤 질문을 자주 할지 먼저 적고, 그 질문에 맞게 번호를 붙인다. 빨간 물건을 자주 찾을 거라면 처음부터 빨간 물건만 모아 둔 선반 목록을 하나 더 만들어 둔다. 직원 한 명이 한꺼번에 들 수 있는 양에도 한계가 있어서, 한 선반에만 일이 몰리지 않게 나눠 두는 것도 중요하다.
+</EasyIntro>
+
+관리자 페이지에 "오늘 결제된 주문" 목록이 있었다. 처음 만들 때는 주문 테이블에 항목이 몇천 개라 이렇게 짰다.
+
+```bash
+# 테이블 전체를 읽고, 그중 오늘 결제된 것만 남긴다
+aws dynamodb scan \
+  --table-name Shop \
+  --filter-expression "#s = :paid AND begins_with(created_at, :today)" \
+  --expression-attribute-names '{"#s":"status"}' \
+  --expression-attribute-values '{":paid":{"S":"paid"},":today":{"S":"2026-10-23"}}'
+```
+
+잘 돌았다. 1년 뒤 항목이 5,000만 개(평균 1KB)가 되자 이 화면이 몇 분씩 걸렸고, 청구서의 DynamoDB 읽기 요금이 다른 항목을 다 합친 것보다 커졌다. 대시보드가 1분마다 이 목록을 새로 고치고 있었다.
+
+계산해 보면 놀랄 일도 아니다. Scan은 필터와 상관없이 테이블 전체를 읽는다. 50GB를 4KB 단위로 읽으면 약 1,220만 단위이고, 최종 일관성 읽기라 절반인 약 610만 읽기 요청 단위(RRU)다. 미국 동부 리전 온디맨드 가격(100만 RRU당 0.125달러)으로 한 번에 약 0.76달러, 1분마다 하루 1,440번이면 하루 약 1,100달러다. 한 번에 최대 1MB씩 돌려주니 끝까지 읽는 데 요청이 약 4만 7천 번 오간다.
+
+DynamoDB에서는 이게 설계 실수다. 키-값 저장소가 왜 키 하나로 빠르고 잘 늘어나는지, 파티션 키와 정렬 키, 단일 테이블 설계의 기본 모양은 [키-값 저장소 글](/posts/db-type-key-value)에 있다. 이 글은 그 다음 질문을 다룬다. 접근 패턴을 어떻게 키와 인덱스로 옮기는지, 용량은 어떻게 세는지, 어디서 한도에 부딪히는지, 변경을 어떻게 흘려보내는지.
+
+## 스키마는 키에만 있다
+
+DynamoDB의 테이블은 항목(item)의 모음이고, 항목은 속성(attribute)의 모음이다. 관계형 DB의 행과 열과 비슷해 보이지만, 테이블을 만들 때 정하는 건 기본 키뿐이다. 나머지 속성은 항목마다 달라도 된다.
+
+```bash
+# 테이블을 만들 때는 키 속성만 선언한다
+aws dynamodb create-table \
+  --table-name Shop \
+  --attribute-definitions AttributeName=PK,AttributeType=S AttributeName=SK,AttributeType=S \
+  --key-schema AttributeName=PK,KeyType=HASH AttributeName=SK,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
+```
+
+기본 키는 둘 중 하나다. 파티션 키 하나만 쓰는 단순 키, 또는 파티션 키와 정렬 키를 합친 복합 키. 파티션 키는 해시해서 항목을 둘 파티션을 정하고, 정렬 키는 같은 파티션 키 안에서 순서를 정한다. 키 이름을 `PK`, `SK`처럼 일반적으로 지어 두는 이유는 한 테이블에 회원, 주문, 상품 같은 여러 종류의 항목을 섞어 담기 때문이다.
+
+읽는 방법은 세 가지뿐이다. `GetItem`은 기본 키 전체로 항목 하나를 꺼낸다. `Query`는 파티션 키 하나를 정확히 주고 정렬 키 조건(`=`, `<`, `BETWEEN`, `begins_with` 등)으로 범위를 읽는다. `Scan`은 테이블이나 인덱스 전체를 읽는다. 앞의 둘은 데이터가 아무리 커져도 읽는 양이 결과 크기에 비례하고, Scan만 테이블 크기에 비례한다.
+
+## 필터는 읽은 뒤에 거른다
+
+처음 장면이 비쌌던 이유를 그림으로 보자. 아래는 Scan에 필터를 건 요청이 항목을 하나씩 읽어 가는 모습이다. 다음을 누르면 읽은 크기(비용이 되는 값)와 남긴 항목이 따로 쌓인다.
+
+<AlgoTrace
+  caption="Scan + FilterExpression: 읽는 건 전부, 돌려주는 건 일부"
+  cells={["paid 10/22", "paid 10/23", "cancel 10/23", "paid 10/21", "ready 10/23", "paid 10/23"]}
+  memoryLabel="읽은 양 / 결과"
+  steps={[
+    { pointer: 0, memory: ["읽음 1KB"], caption: "첫 항목을 읽는다. 어제 주문이라 결과에서 빠지지만 1KB는 이미 읽었다." },
+    { pointer: 1, found: [1], memory: ["읽음 2KB", "결과 1건"], caption: "오늘 결제된 주문이다. 결과에 남는다." },
+    { pointer: 2, found: [1], memory: ["읽음 3KB", "결과 1건"], caption: "취소된 주문이다. 버리지만 읽은 양은 늘었다." },
+    { pointer: 3, found: [1], memory: ["읽음 4KB", "결과 1건"], caption: "이틀 전 주문이다. 읽은 양이 4KB가 됐다. 여기까지가 읽기 한 단위다." },
+    { pointer: 4, found: [1], memory: ["읽음 5KB", "결과 1건"], caption: "결제 전 주문이다. 버린다." },
+    { pointer: 5, found: [1, 5], memory: ["읽음 6KB", "결과 2건"], caption: "6KB를 읽고 2건을 돌려준다. 응답의 ScannedCount는 6, Count는 2다. 요금은 6KB만큼 나간다." },
+  ]}
+/>
+
+`FilterExpression`은 DynamoDB가 항목을 읽은 다음 응답을 보내기 전에 거르는 단계다. 읽은 양은 줄지 않는다. `Limit`도 거르기 전에 적용되어서, `Limit 10`에 필터를 걸면 10개를 읽고 그중 맞는 것만 돌려준다. 그래서 결과가 0건인데 `LastEvaluatedKey`가 있어 다음 페이지를 또 불러야 하는 응답도 나온다. 응답의 `Count`와 `ScannedCount` 차이가 크면 필터가 할 일을 키가 해야 한다는 신호다.
+
+해결은 "오늘 결제된 주문"이라는 질문을 키로 만드는 것이다. 다음 절에서 본다.
+
+## 접근 패턴을 먼저 적는다
+
+관계형 DB에서는 테이블을 정규화해 두고 질문은 나중에 SQL로 짠다. DynamoDB는 반대다. 질문 목록을 먼저 적고, 각 질문이 `GetItem`이나 `Query` 한 번으로 끝나도록 키를 짓는다. 쇼핑몰 주문 쪽 질문을 적으면 이렇다.
+
+```text
+#  질문                                 어디서        키 조건
+1  회원 정보                            테이블        PK = USER#42, SK = PROFILE
+2  회원의 최근 주문 20건                테이블        PK = USER#42, SK begins_with ORDER#  (역순)
+3  주문 번호로 주문 하나                테이블        PK = ORDER#9006, SK = ORDER#9006
+4  주문의 상품 줄들                     테이블        PK = ORDER#9006, SK begins_with LINE#
+5  상태별·날짜별 주문 (관리자 목록)     GSI1          GSI1PK = STATUS#paid#2026-10-23, GSI1SK = created_at
+6  상품의 재고                          테이블        PK = PRODUCT#7, SK = STOCK
+```
+
+5번이 처음 장면의 질문이다. 주문 항목에 `GSI1PK = "STATUS#paid#2026-10-23"`과 `GSI1SK = "2026-10-23T09:12:03Z#9006"` 속성을 같이 쓰고, 그 두 속성을 키로 하는 보조 인덱스(GSI1)를 만든다. 그러면 관리자 목록은 Scan이 아니라 이렇게 된다.
+
+```bash
+# 오늘 결제된 주문만, 최근 것부터 50건
+aws dynamodb query \
+  --table-name Shop \
+  --index-name GSI1 \
+  --key-condition-expression "GSI1PK = :k" \
+  --expression-attribute-values '{":k":{"S":"STATUS#paid#2026-10-23"}}' \
+  --no-scan-index-forward \
+  --limit 50
+```
+
+읽는 양이 결과 50건만큼으로 줄었다. 테이블이 5,000만 개든 5억 개든 같다.
+
+파티션 키에 날짜를 넣은 데는 이유가 있다. `STATUS#paid` 하나로만 묶으면 결제된 주문 전부가 한 파티션 키에 몰린다. 하루 단위로 나누면 날마다 다른 키가 되어 쓰기가 흩어진다. 그래도 하루 주문이 아주 많으면 그날의 키 하나가 뜨거워지는데, 이건 아래 핫 파티션 절에서 다시 본다.
+
+상태가 `ready`에서 `paid`로 바뀌면 앱이 `GSI1PK`도 같이 바꿔 써야 한다. GSI 키 값이 바뀐 쓰기는 인덱스 쪽에서 옛 항목 삭제와 새 항목 추가, 두 번의 쓰기로 처리된다. 상태가 자주 바뀌는 속성을 GSI 키로 쓰면 쓰기 비용이 그만큼 붙는다.
+
+## 정렬 키는 글자 순서로 정렬된다
+
+정렬 키가 문자열이면 숫자가 아니라 글자 순서로 정렬된다. 주문 번호를 그대로 붙이면 순서가 엉킨다.
+
+```text
+정렬 결과(문자열):  ORDER#10  <  ORDER#100  <  ORDER#9
+자릿수를 맞추면:    ORDER#000009  <  ORDER#000010
+```
+
+`ORDER#9`가 `ORDER#100`보다 뒤에 온다. 숫자를 정렬 키에 넣을 때는 자릿수를 0으로 채워 맞추거나, 위 표처럼 ISO 8601 시각(`2026-10-23T09:12:03Z`)을 앞에 둔다. ISO 형식은 큰 단위부터 적혀 있어서 문자열 순서가 곧 시간 순서다. 시각은 UTC로 통일한다. 서버마다 다른 시간대로 쓰면 "오늘"의 경계가 어긋나고, 처음 장면의 `STATUS#paid#2026-10-23` 같은 키가 서로 다른 날을 가리키게 된다.
+
+정렬 키를 아예 숫자 타입(N)으로 선언하면 숫자 순서로 정렬되지만, 그러면 `ORDER#` 같은 접두사를 붙일 수 없다. 한 파티션에 여러 종류의 항목을 섞는 설계에서는 문자열 정렬 키와 고정 자릿수가 보통 더 편하다.
+
+## LSI와 GSI는 다른 물건이다
+
+보조 인덱스는 두 종류다. 이름은 비슷한데 동작이 꽤 다르다.
+
+로컬 보조 인덱스(LSI)는 파티션 키는 테이블과 같고 정렬 키만 다르다. "회원 42의 주문을 날짜순이 아니라 금액순으로"처럼 같은 파티션 안을 다른 순서로 읽는다. 테이블과 같은 파티션에 저장되어 강한 일관성 읽기를 쓸 수 있고, 용량도 테이블과 나눠 쓴다. 대신 테이블을 만들 때만 정의할 수 있고(나중에 추가 불가), 테이블당 5개까지다. 그리고 LSI가 하나라도 있으면 같은 파티션 키 값을 가진 항목 묶음(item collection)이 테이블과 인덱스를 합쳐 10GB를 넘을 수 없다. 넘으면 그 파티션 키로는 더 쓰지 못한다. 한 회원이 엄청나게 많은 항목을 갖는 설계라면 LSI가 시한폭탄이 된다.
+
+글로벌 보조 인덱스(GSI)는 파티션 키와 정렬 키를 마음대로 고른다. 사실상 테이블을 다른 키로 복사해 둔 별도 테이블이다. 언제든 추가하고 지울 수 있고(추가하면 기존 데이터를 채우는 백필이 돈다), 기본 한도는 테이블당 20개다. 다만 몇 가지를 기억한다.
+
+- 테이블에서 GSI로 비동기로 복제된다. 그래서 GSI 읽기는 최종 일관성뿐이다. 강한 일관성을 요청하면 거절된다.
+- GSI 키 값은 유일하지 않아도 된다. 같은 `GSI1PK`, `GSI1SK`를 가진 항목이 여럿일 수 있다. 유일성을 지켜 주지 않으니 "이메일 중복 가입 막기"를 GSI로 할 수 없다. 이건 아래 조건부 쓰기에서 푼다.
+- 프로젝션(projection)으로 인덱스에 복사할 속성을 고른다. `KEYS_ONLY`는 키만, `INCLUDE`는 고른 속성만, `ALL`은 전부다. 인덱스에 없는 속성이 필요하면 테이블을 한 번 더 읽어야 하니, 목록 화면에 필요한 속성은 `INCLUDE`로 넣어 둔다. `ALL`은 편하지만 저장 공간과 쓰기 비용이 테이블만큼 든다.
+- 프로비저닝 모드에서 GSI의 쓰기 용량이 모자라면 테이블 쓰기까지 막힌다(back pressure). GSI 용량을 테이블보다 작게 잡았다가 테이블 쓰기가 스로틀되는 일이 흔하다.
+
+앞에서 GSI에 강한 일관성 읽기를 요청하면 어떻게 되는지 파이썬의 DynamoDB 모의 라이브러리 moto로 확인해 봤다. moto는 실제 DynamoDB가 아니지만 오류 코드와 메시지를 AWS와 같게 흉내 낸다.
+
+```text
+ValidationException: Consistent reads are not supported on global secondary indexes
+```
+
+## 읽기·쓰기 용량을 세는 법
+
+DynamoDB의 요금과 한도는 모두 용량 단위로 센다. 규칙만 알면 손으로 계산된다.
+
+- 읽기 용량 단위(RCU) 1은 4KB까지의 항목 하나를 강한 일관성으로 1초에 한 번 읽는 양이다. 최종 일관성은 그 절반, 트랜잭션 읽기는 두 배다.
+- 쓰기 용량 단위(WCU) 1은 1KB까지의 항목 하나를 1초에 한 번 쓰는 양이다. 트랜잭션 쓰기는 두 배다.
+- 크기는 올림한다. 4.1KB 항목은 읽기 2단위, 1.5KB 항목은 쓰기 2단위다.
+- `GetItem`과 `BatchGetItem`은 항목마다 올림한다. `Query`와 `Scan`은 읽은 항목 크기를 모두 더한 뒤 한 번 올림한다.
+
+마지막 규칙 때문에 1KB짜리 항목 10개를 `GetItem`으로 하나씩 읽으면 10단위, `Query` 한 번으로 읽으면 10KB를 올림해 3단위다. 같은 파티션에 모아 두고 Query로 읽으라는 단일 테이블 설계가 비용에서도 이득인 이유다. 아래에서 직접 계산해 볼 수 있다.
+
+<CodePlayground
+  caption="읽기 용량 단위 계산: GetItem은 항목마다, Query는 합쳐서 올림"
+  functionName="readCapacity"
+  initialCode={`function readCapacity(itemSizesBytes, mode, isQuery) {
+  // mode: "strong"(1배) | "eventual"(0.5배) | "transactional"(2배)
+  // isQuery가 true면 크기를 모두 더한 뒤 4096바이트 단위로 올림
+  // false면(GetItem/BatchGetItem) 항목마다 4096바이트 단위로 올림해서 더한다
+  return 0;
+}`}
+  solution={`function readCapacity(itemSizesBytes, mode, isQuery) {
+  const factor = { strong: 1, eventual: 0.5, transactional: 2 }[mode];
+  const blocks = isQuery
+    ? Math.ceil(itemSizesBytes.reduce((a, b) => a + b, 0) / 4096)
+    : itemSizesBytes.reduce((a, b) => a + Math.ceil(b / 4096), 0);
+  return blocks * factor;
+}`}
+  tests={[
+    { args: [[1000], "strong", false], expected: 1, label: "1KB 하나, 강한 일관성" },
+    { args: [[1000], "eventual", false], expected: 0.5, label: "1KB 하나, 최종 일관성" },
+    { args: [[5000], "strong", false], expected: 2, label: "5KB는 두 단위" },
+    { args: [[1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000], "strong", false], expected: 10, label: "1KB x10, GetItem" },
+    { args: [[1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000], "strong", true], expected: 3, label: "1KB x10, Query" },
+    { args: [[1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000], "eventual", true], expected: 1.5, label: "1KB x10, Query 최종 일관성" },
+    { args: [[4096, 4097], "transactional", false], expected: 6, label: "4KB와 4KB+1바이트, 트랜잭션" },
+  ]}
+/>
+
+운영 계산은 이렇게 한다. 주문 쓰기가 초당 300건이고 항목이 2.5KB면 쓰기마다 3단위라 900 WCU다. GSI 하나가 주문을 `INCLUDE`로 복사하고 그 크기가 1KB 안쪽이면 GSI에 300 WCU가 더 든다. 상품 상세 조회가 초당 1,200건, 항목 6KB, 최종 일관성이면 읽기마다 2단위의 절반이라 1,200 RCU다.
+
+항목 크기를 줄이는 게 그대로 비용을 줄인다. 속성 이름도 크기에 들어가서, `customer_shipping_address_line_1` 같은 긴 이름을 수천만 항목에 반복하면 그만큼 낸다. 자주 읽는 작은 속성과 가끔 읽는 큰 속성(상품 설명, 리뷰 본문)을 다른 항목으로 나누면 목록 화면의 읽기가 싸진다.
+
+## 온디맨드와 프로비저닝
+
+용량 모드는 테이블마다 고른다.
+
+온디맨드는 요청한 만큼 낸다. 미리 정할 것이 없고, 이전 최고 트래픽의 두 배까지는 바로 받는다. 새 테이블은 문서 기준으로 초당 쓰기 4,000, 읽기 12,000 요청 단위 정도까지 바로 받는다. 30분 안에 이전 최고치의 두 배를 넘는 급증은 스로틀될 수 있다. 큰 행사 전에는 웜 처리량(warm throughput)을 미리 올려 두거나, 테이블에 최대 처리량 한도를 걸어 예상 못 한 폭주가 청구서로 번지지 않게 막을 수 있다.
+
+프로비저닝은 초당 RCU·WCU를 미리 정하고 그만큼 시간당 요금을 낸다. 자동 조정(auto scaling)으로 사용률 목표(예: 70%)를 정하면 범위 안에서 늘였다 줄인다. 자동 조정은 CloudWatch 지표를 보고 몇 분 뒤에 움직여서 갑자기 튀는 트래픽은 따라가지 못한다. 그 틈을 버스트 용량이 메운다. 쓰지 않은 용량을 최대 5분(300초)치 모아 두었다가 잠깐 넘는 요청에 쓴다. 이것도 보장이 아니라 여유분이다.
+
+고르는 기준은 트래픽 모양이다. 새 서비스, 들쭉날쭉한 트래픽, 하루 대부분 놀다가 잠깐 쓰는 배치 테이블에는 온디맨드가 맞다. 하루 종일 꾸준하고 예측 가능한 트래픽은 프로비저닝이 같은 처리량에서 훨씬 싸다(예약 용량까지 사면 더 싸다). 처음엔 온디맨드로 시작해 트래픽 모양을 본 다음, 사용량이 평평하면 프로비저닝으로 옮기는 순서가 무난하다.
+
+## 용량이 어디로 새는지 본다
+
+청구서가 늘었을 때 어느 요청이 용량을 쓰는지 모르면 고칠 수 없다. 요청마다 `ReturnConsumedCapacity`를 주면 그 요청이 쓴 용량을 응답에 같이 돌려준다.
+
+```bash
+# 이 Query가 테이블과 인덱스에서 각각 몇 단위를 썼는지 본다
+aws dynamodb query \
+  --table-name Shop \
+  --index-name GSI1 \
+  --key-condition-expression "GSI1PK = :k" \
+  --expression-attribute-values '{":k":{"S":"STATUS#paid#2026-10-23"}}' \
+  --return-consumed-capacity INDEXES
+```
+
+응답의 `ConsumedCapacity`에 전체 `CapacityUnits`와 테이블·인덱스별 몫이 나온다. 개발 중에 주요 API마다 한 번씩 찍어 두면, 위의 계산과 실제가 맞는지 확인되고 어느 화면이 비싼지도 보인다. 운영에서는 애플리케이션 로그에 이 값을 남겨 API별로 모아 보는 방법도 있다.
+
+테이블 단위로는 CloudWatch의 `ConsumedReadCapacityUnits`, `ConsumedWriteCapacityUnits`를 본다. 프로비저닝 모드라면 `ProvisionedReadCapacityUnits`와 나란히 놓고, 사용량이 늘 설정의 절반도 안 되면 설정을 줄이고, 자주 붙어 있으면 자동 조정 범위를 넓힌다. GSI도 같은 지표가 인덱스별로 따로 나오니 GSI 쓰기 용량이 테이블보다 먼저 바닥나는지 같이 본다.
+
+용량 말고 저장 요금도 있다. GSI를 `ALL`로 만들면 저장도 그만큼 늘고, TTL로 지우지 않은 오래된 항목은 계속 낸다. 자주 읽지 않는 큰 테이블은 Standard-IA 테이블 클래스로 바꾸면 저장 단가가 내려가는 대신 읽기·쓰기 단가가 오른다. 저장 요금이 처리량 요금보다 큰 테이블에서 따져 볼 만하다.
+
+## 파티션 하나가 견디는 양
+
+테이블의 용량이 아무리 커도 항목은 결국 파티션에 들어 있다. 파티션 하나는 초당 최대 3,000 RCU와 1,000 WCU를 처리하고, 데이터는 약 10GB까지 담는다. 이걸 넘으면 DynamoDB가 파티션을 쪼갠다. 그런데 쪼개도 해결이 안 되는 경우가 있다. 파티션 키 하나로 요청이 몰릴 때다.
+
+처음 장면의 GSI를 다시 보자. 블랙프라이데이에 결제가 초당 3,000건 들어오면 그날의 `STATUS#paid#2026-11-27` 키 하나로 GSI 쓰기가 초당 3,000번 몰린다. 파티션 하나의 1,000 WCU를 넘는다. 키가 하나라 쪼갤 수도 없다. 같은 키에 몰린 요청은 같은 정렬 키 범위로도 나눠지지 않으니 스로틀된다.
+
+이럴 때 쓰기 샤딩을 한다. 파티션 키 끝에 0부터 N-1까지의 접미사를 붙여 키를 N개로 나눈다.
+
+```text
+GSI1PK = STATUS#paid#2026-11-27#0
+GSI1PK = STATUS#paid#2026-11-27#1
+GSI1PK = STATUS#paid#2026-11-27#2
+         (주문 번호 % 3 으로 접미사를 고른다)
+```
+
+초당 3,000 WCU를 1,000짜리 키 셋으로 나눈 것이다. 대신 읽을 때는 N개 키를 모두 Query해서 합쳐야 한다(scatter-gather). 접미사를 무작위로 고르면 쓰기는 고르게 퍼지지만 특정 주문을 찾을 때 어느 키인지 모른다. 주문 번호의 해시처럼 계산할 수 있는 값으로 고르면 하나만 찾을 때는 키 하나로 바로 간다.
+
+DynamoDB도 스스로 돕는다. 적응형 용량(adaptive capacity)은 다른 파티션이 남긴 용량을 뜨거운 파티션에 먼저 몰아 주고, 계속 뜨거운 파티션은 정렬 키 범위로 쪼개기도 한다(split for heat). 그래서 웬만한 쏠림은 알아서 넘어간다. 하지만 파티션 키 하나의 한도(3,000 RCU, 1,000 WCU) 자체는 넘지 못한다. 읽기가 한 키에 몰리는 경우(인기 상품 상세)는 샤딩보다 앞에 캐시를 두는 편이 쉽다. DynamoDB 전용 인메모리 캐시인 DAX나 애플리케이션 앞단 캐시가 그 읽기를 받아 준다.
+
+핫 파티션은 증상으로 먼저 알아챈다. 테이블 전체 사용률은 낮은데 `ThrottledRequests`나 `WriteThrottleEvents`가 생긴다. 이게 전형적인 신호다. 어느 키인지는 CloudWatch Contributor Insights for DynamoDB를 켜면 가장 많이 접근된 키와 가장 많이 스로틀된 키 순위로 보인다. 켜 두면 별도 요금이 붙으니 문제 있는 테이블에 켜고 원인을 찾은 뒤 꺼도 된다.
+
+## 400KB와 1MB
+
+크기 한도 두 개를 기억한다. 항목 하나는 속성 이름과 값을 합쳐 최대 400KB다. 넘기면 쓰기가 거절된다(`Item size has exceeded the maximum allowed size`). 주문 하나에 상품 줄을 리스트로 계속 붙이는 설계는 언젠가 이 한도에 닿는다. 앞의 접근 패턴 표처럼 상품 줄을 `LINE#` 항목으로 나눠 같은 파티션에 두면 한도도 피하고, 줄 하나만 바꿀 때 쓰기 비용도 줄어든다. 이미지나 긴 본문은 S3에 두고 경로만 넣는다.
+
+Query와 Scan은 한 번에 최대 1MB를 읽고 멈춘다. 필터를 거르기 전 기준이다. 결과가 더 있으면 `LastEvaluatedKey`를 돌려주고, 다음 요청의 `ExclusiveStartKey`로 넘겨 이어 읽는다. 이 값이 없을 때까지 반복해야 전부다. 첫 페이지만 읽고 끝내는 코드가 테스트 데이터에서는 멀쩡하다가 운영에서 결과가 잘리는 실수가 흔하다.
+
+페이지를 끝까지 읽는 코드는 이렇게 생긴다. AWS SDK for JavaScript v3의 문서 클라이언트(속성 타입 표기를 자동으로 바꿔 주는 래퍼) 기준이다.
+
+```ts
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+
+const doc = DynamoDBDocumentClient.from(new DynamoDBClient({}));
+
+// 오늘 결제된 주문을 1MB 페이지 단위로 끝까지 읽는다
+async function paidOrdersOf(day: string) {
+  const items: Record<string, unknown>[] = [];
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const page = await doc.send(
+      new QueryCommand({
+        TableName: "Shop",
+        IndexName: "GSI1",
+        KeyConditionExpression: "GSI1PK = :k",
+        ExpressionAttributeValues: { ":k": `STATUS#paid#${day}` },
+        ExclusiveStartKey: startKey,
+      }),
+    );
+    items.push(...(page.Items ?? []));
+    startKey = page.LastEvaluatedKey; // 없으면 마지막 페이지
+  } while (startKey);
+  return items;
+}
+```
+
+화면에 "다음 페이지" 버튼을 둘 때는 `LastEvaluatedKey`를 그대로 클라이언트에 커서로 넘긴다. 이 값에는 키 속성 값이 들어 있어서, 내부 키 구조를 감추고 싶으면 서버에서 암호화하거나 서명해서 넘긴다. 페이지 번호로 바로 건너뛰는 방법은 없다. 100페이지째를 보려면 앞의 99페이지를 다 읽어야 하니, 화면을 "더 보기" 방식으로 만든다.
+
+정말 테이블 전체를 읽어야 하는 일(내보내기, 마이그레이션)은 병렬 Scan으로 한다. `TotalSegments`로 테이블을 몇 조각으로 나눌지 정하고, 작업자마다 다른 `Segment` 번호로 자기 조각만 읽는다. 빨라지는 만큼 순간 용량도 그만큼 쓰니, 운영 트래픽이 도는 테이블에서는 `Limit`과 속도 조절을 같이 건다. 분석용 전체 내보내기라면 테이블 용량을 전혀 쓰지 않는 S3 내보내기(PITR 기반 export)가 더 낫다.
+
+배치 API에도 한도가 있다. `BatchWriteItem`은 한 번에 25개, `BatchGetItem`은 100개까지다. 그리고 일부만 처리되고 나머지를 `UnprocessedItems`(`UnprocessedKeys`)로 돌려줄 수 있다. 오류가 아니라 정상 응답이라 무시하기 쉽다. 남은 것을 지수 백오프로 다시 보내는 코드를 꼭 넣는다.
+
+## 조건부 쓰기로 경쟁을 막는다
+
+DynamoDB에는 유일 제약도, 행 잠금도 없다. 대신 쓰기마다 조건을 걸 수 있고, DynamoDB가 그 항목의 조건 확인과 쓰기를 원자적으로 한다.
+
+없을 때만 넣기는 `attribute_not_exists`로 한다. 회원 프로필을 같은 키로 두 번 만들려 하면 두 번째가 실패한다. moto로 돌린 결과다.
+
+```bash
+# 같은 키의 항목이 없을 때만 넣는다
+aws dynamodb put-item \
+  --table-name Shop \
+  --item '{"PK":{"S":"USER#42"},"SK":{"S":"PROFILE"},"email":{"S":"b@x.com"}}' \
+  --condition-expression "attribute_not_exists(PK)"
+```
+
+```text
+An error occurred (ConditionalCheckFailedException) when calling the PutItem operation: The conditional request failed
+```
+
+이메일 중복을 막으려면 GSI로는 안 된다고 했다. 대신 이메일을 키로 하는 항목을 하나 더 쓴다. `PK = EMAIL#b@x.com`인 항목과 회원 항목을 `TransactWriteItems`로 묶어, 둘 다 `attribute_not_exists` 조건을 건다. 이메일이 이미 있으면 트랜잭션 전체가 취소된다. 트랜잭션은 최대 100개 항목까지 묶이고 용량을 두 배로 쓴다.
+
+낙관적 잠금은 버전 속성으로 한다. 읽을 때 받은 `version`을 조건에 넣고 쓸 때 1 올린다. 그 사이 누가 먼저 바꿨으면 버전이 달라 실패하고, 앱은 다시 읽고 다시 시도한다. 원리는 [낙관적 잠금 글](/posts/optimistic-locking)과 같다.
+
+```bash
+# 내가 읽은 버전이 2일 때만 재고를 1 빼고 버전을 올린다
+aws dynamodb update-item \
+  --table-name Shop \
+  --key '{"PK":{"S":"PRODUCT#7"},"SK":{"S":"STOCK"}}' \
+  --update-expression "SET stock = stock - :one, version = version + :one" \
+  --condition-expression "version = :v" \
+  --expression-attribute-values '{":one":{"N":"1"},":v":{"N":"2"}}' \
+  --return-values-on-condition-check-failure ALL_OLD
+```
+
+마지막 옵션을 주면 실패할 때 지금 저장된 항목을 오류와 함께 돌려준다. moto에서 버전이 이미 3인 항목에 돌리면 실패와 함께 `stock`이 1, `version`이 3인 지금 항목이 돌아온다. 다시 읽는 요청 한 번을 아낀다.
+
+조건이 실패한 쓰기도 쓰기 용량을 쓴다. 경쟁이 심한 키에 조건부 쓰기를 마구 재시도하면 실패한 시도까지 요금이 나가고, 그 키가 핫 파티션이 된다. 재고 차감처럼 한 키에 경쟁이 몰리는 곳은 재시도 횟수를 제한하고 백오프를 둔다.
+
+## Streams와 TTL로 변경을 흘린다
+
+DynamoDB Streams를 켜면 테이블의 모든 변경(추가, 수정, 삭제)이 순서 있는 기록으로 남는다. 기록은 24시간 보관되고, 같은 항목의 변경은 일어난 순서대로, 한 번씩 나타난다. 무엇을 담을지는 보기 유형으로 정한다. `KEYS_ONLY`, `NEW_IMAGE`, `OLD_IMAGE`, `NEW_AND_OLD_IMAGES`.
+
+주로 Lambda가 이 기록을 읽어 다른 곳으로 보낸다. 주문이 바뀔 때마다 검색 인덱스를 갱신하거나, 집계 항목을 더하거나, 알림을 보낸다. 아래 그림은 주문 상태 변경 하나가 검색 엔진까지 가는 길이다.
+
+<SequenceDiagram
+  caption="쓰기는 테이블에서 끝나고, 나머지는 스트림을 따라 나중에 일어난다"
+  actors={[
+    { id: "api", label: "주문 API" },
+    { id: "ddb", label: "Shop 테이블" },
+    { id: "stream", label: "Streams" },
+    { id: "fn", label: "Lambda" },
+    { id: "search", label: "검색 엔진" },
+  ]}
+  steps={[
+    { from: "api", to: "ddb", label: "UpdateItem", title: "주문 상태를 paid로 바꾼다", detail: "API는 테이블에 쓰고 바로 응답한다. 검색 엔진이나 집계는 기다리지 않는다.", payload: "SET status = paid, GSI1PK = STATUS#paid#2026-10-23" },
+    { from: "ddb", to: "stream", label: "MODIFY 기록", title: "변경 기록이 스트림 샤드에 쌓인다", detail: "보기 유형이 NEW_AND_OLD_IMAGES면 바뀌기 전과 후의 항목이 모두 담긴다. 같은 항목의 변경은 순서가 지켜진다." },
+    { from: "fn", to: "stream", label: "폴링", title: "Lambda가 묶음으로 가져간다", detail: "이벤트 소스 매핑이 샤드를 읽어 배치 크기만큼 모아 함수를 부른다. 샤드 하나 안에서는 순서대로 처리한다." },
+    { from: "fn", to: "search", label: "색인", title: "검색 엔진 문서를 갱신한다", detail: "실패하면 같은 배치를 다시 받는다. 재시도로 같은 변경이 두 번 갈 수 있으니 색인 쪽은 버전 값으로 덮어써도 안전하게 만든다." },
+    { from: "fn", to: "fn", label: "실패 격리", title: "계속 실패하는 기록은 따로 뺀다", detail: "한 기록이 계속 실패하면 그 샤드 전체가 막힌다. 재시도 횟수와 실패 기록을 보낼 곳(SQS 등)을 정해 두고, 배치를 반으로 쪼개 재시도하는 옵션을 켠다." },
+  ]}
+/>
+
+스트림 기록은 24시간 뒤 사라지니, Lambda가 하루 넘게 막혀 있으면 변경을 잃는다. `IteratorAge` 지표(가장 오래된 처리 안 된 기록의 나이)가 늘어나고 있으면 소비자가 밀리고 있다는 뜻이다. 더 오래 보관하거나 여러 소비자가 같은 변경을 읽어야 하면 Kinesis Data Streams로 내보내는 옵션이 있다. 이쪽은 보관 기간을 늘릴 수 있지만 같은 기록이 중복으로 올 수 있다. 검색 엔진 쪽 질의는 [Elasticsearch Query DSL 글](/posts/elasticsearch-query-dsl)에서 이어서 볼 수 있다.
+
+TTL은 항목의 특정 숫자 속성(Unix 초)을 만료 시각으로 보고, 지난 항목을 백그라운드에서 지운다. 세션, 장바구니, 임시 토큰, 오래된 로그에 쓴다. TTL 삭제는 쓰기 용량을 쓰지 않는다. 다만 만료 즉시 지워지지 않고 보통 며칠 안에 지워지니, 읽을 때 만료 시각을 조건으로 한 번 더 확인한다.
+
+```bash
+# expires_at 속성(Unix 초)을 TTL로 쓴다
+aws dynamodb update-time-to-live \
+  --table-name Shop \
+  --time-to-live-specification "Enabled=true, AttributeName=expires_at"
+```
+
+속성 값이 숫자 타입이 아니거나 밀리초로 들어가 있으면 조용히 무시되어 아무것도 지워지지 않는다. JavaScript의 `Date.now()`는 밀리초라서 1000으로 나눠 넣어야 한다. 5년 이상 지난 값도 무시된다.
+
+TTL로 지워진 항목도 스트림에 삭제 기록으로 나오고, 사람이 지운 것과는 기록의 `userIdentity`(주체가 DynamoDB 서비스)로 구분된다. 만료된 주문을 지우면서 S3에 보관하는 흐름을 이 구분으로 만든다.
+
+## 테이블 하나냐 여러 개냐
+
+단일 테이블 설계가 늘 정답은 아니다. 장점은 분명하다. 관련된 항목을 같은 파티션에 모아 Query 한 번으로 화면을 그리고, 테이블이 하나라 용량과 경보, 백업 설정을 한곳에서 관리한다. 위 접근 패턴 표에서 주문과 상품 줄을 한 번에 읽은 것이 그 예다.
+
+대가도 있다. 키 이름이 `PK`, `SK`, `GSI1PK`처럼 추상적이라 콘솔에서 데이터를 눈으로 읽기 어렵다. 새 질문이 생기면 키를 다시 짓거나 GSI를 추가하고 기존 항목을 채워 넣는 마이그레이션이 필요하다. 항목 종류마다 트래픽 모양이 아주 다르면(조회가 폭주하는 상품, 조용한 회원 정보) 한 테이블의 용량 설정이 어느 쪽에도 안 맞는다. 분석 쪽으로 내보낼 때 항목 종류를 다시 갈라야 한다.
+
+그래서 기준을 이렇게 잡는다. 함께 읽는 항목(주문과 주문 줄)은 같은 테이블, 같은 파티션에 둔다. 함께 읽지 않고 트래픽과 수명이 다른 데이터(세션, 이벤트 로그, 집계)는 테이블을 나눈다. 팀이 DynamoDB를 처음 쓴다면 엔티티마다 테이블을 두고 시작해서, 함께 읽어야 하는 것이 보일 때 합치는 쪽이 실수가 적다.
+
+관계형 DB에서 옮겨 오는 경우에는 테이블 구조를 그대로 옮기지 않는다. 지금 애플리케이션이 실제로 날리는 쿼리 목록(PostgreSQL이면 `pg_stat_statements` 상위 쿼리)에서 접근 패턴 표를 먼저 만든다. 조인으로 하던 것은 같은 파티션에 모으거나 필요한 속성을 복사해 두고(비정규화), 집계는 Streams로 별도 항목에 미리 더해 둔다. 임의 조건으로 검색하는 화면(관리자 검색, 여러 필터 조합)은 DynamoDB가 잘하는 일이 아니니 스트림으로 검색 엔진에 복사해서 그쪽에서 푼다.
+
+## 백업과 복구는 새 테이블로
+
+시점 복구(PITR)를 켜면 최근 35일(복구 기간은 1~35일로 줄일 수 있다) 안의 아무 초로나 되돌릴 수 있다. 성능에 영향이 없고 켜 두는 것만으로 동작하니 운영 테이블에는 켜 둔다. 따로 언제든 뜨는 온디맨드 백업도 있고, 지울 때까지 남는다.
+
+복원은 언제나 새 테이블로 만들어진다. 지금 테이블을 덮어쓰지 않는다. 그리고 새 테이블에는 몇 가지가 따라오지 않는다. 자동 조정 정책, IAM 정책, CloudWatch 경보, 태그, 스트림 설정, TTL 설정, 그리고 PITR 설정 자체다. 복원 뒤에 다시 켜야 한다. 앱이 테이블 이름을 설정에서 읽게 해 두면 새 테이블로 바꿔 끼우기가 쉽다. 복원 시간은 테이블 크기에 따라 길어서, 큰 테이블은 몇 시간이 걸릴 수 있다.
+
+## 로컬에서 테스트하기
+
+AWS는 DynamoDB Local이라는 내려받는 버전을 준다. Java로 돌거나 Docker 이미지로 띄우고, SDK와 CLI의 엔드포인트만 바꾸면 같은 API로 쓴다.
+
+```bash
+# DynamoDB Local을 띄운다 (8000번 포트, 데이터는 메모리에)
+docker run -d -p 8000:8000 amazon/dynamodb-local -jar DynamoDBLocal.jar -inMemory -sharedDb
+
+# 같은 명령에 엔드포인트만 붙인다
+aws dynamodb list-tables --endpoint-url http://localhost:8000
+```
+
+`-sharedDb`를 빼면 자격 증명과 리전 조합마다 다른 데이터베이스 파일을 만든다. 테스트에서 만든 테이블이 CLI에서 안 보이면 이것 때문인 경우가 많다.
+
+로컬 버전은 API와 표현식 문법, 조건 실패 같은 동작을 확인하는 데 좋지만 운영과 같지는 않다. 프로비저닝 용량과 스로틀은 흉내 내지 않고, 파티션 분할도 없고, 성능은 노트북 성능이다. 그래서 핫 파티션이나 용량 계산은 로컬에서 검증되지 않는다. 이 글의 오류 메시지를 확인할 때 쓴 moto도 같은 한계가 있다. 단위 테스트는 로컬이나 모의 라이브러리로, 용량과 지연은 실제 AWS의 스테이징 테이블에서 부하를 걸어 본다.
+
+## 질문이 먼저, 키가 다음
+
+다시 처음 장면으로 돌아가면, 관리자 목록이 비쌌던 건 DynamoDB가 느려서가 아니라 질문을 키로 옮기지 않았기 때문이다. 질문을 적고, 각 질문이 Query 한 번이 되도록 키와 GSI를 짓고, 한 키에 몰리는 양이 파티션 한도를 넘지 않는지 계산하고, 변경은 스트림으로 흘려보낸다. 적어 두지 않은 질문이 새로 생기면 SQL 한 줄로 끝나지 않는다는 대가가 남는다. 그 대가가 크다고 느껴지면 관계형 DB가 맞는 일이다.
+
+## 면접에서 나올 만한 질문
+
+### Query와 Scan은 무엇이 다르고, Scan은 언제 써도 되나요?
+
+Query는 파티션 키 하나를 정확히 주고 그 안을 정렬 키 조건으로 읽어서 읽는 양이 결과 크기에 비례한다. Scan은 테이블 전체를 읽어 테이블 크기에 비례하고, 필터는 읽은 뒤에 걸려 비용을 줄이지 못한다. Scan은 전체 내보내기, 일회성 마이그레이션, 아주 작은 테이블처럼 정말 전체가 필요할 때만 쓴다. 운영 경로의 Scan은 키 설계가 질문을 못 따라가고 있다는 신호다.
+
+### GSI와 LSI의 차이는요?
+
+LSI는 테이블과 파티션 키가 같고 정렬 키만 다르며, 테이블을 만들 때만 정의하고, 강한 일관성 읽기가 되며, 같은 파티션 키의 항목 묶음이 10GB를 넘을 수 없다. GSI는 키를 자유롭게 고르는 별도 테이블처럼 동작하고, 언제든 추가할 수 있지만 비동기라 최종 일관성 읽기만 되며, 자기 용량을 갖고 그 용량이 모자라면 테이블 쓰기까지 막는다. 대부분의 보조 접근 패턴은 GSI로 푼다.
+
+### RCU와 WCU는 어떻게 계산하나요?
+
+RCU 1은 4KB까지 강한 일관성 읽기 초당 1회, 최종 일관성은 절반, 트랜잭션은 두 배다. WCU 1은 1KB까지 쓰기 초당 1회, 트랜잭션은 두 배다. 크기는 올림하고, GetItem은 항목마다, Query와 Scan은 합친 크기로 한 번 올림한다. 그래서 1KB 항목 10개를 GetItem으로 읽으면 10, Query로 읽으면 3이다.
+
+### 온디맨드와 프로비저닝 중 무엇을 고르나요?
+
+트래픽이 예측 어렵거나 들쭉날쭉하면 온디맨드, 꾸준하고 예측 가능하면 프로비저닝이 싸다. 온디맨드는 이전 최고치의 두 배까지 바로 받지만 그보다 빠른 급증은 스로틀될 수 있어 웜 처리량을 미리 올려 둔다. 프로비저닝 자동 조정은 몇 분 늦게 따라와서 급증은 버스트 용량(최대 5분치)으로만 버틴다. 보통 온디맨드로 시작해 트래픽 모양을 본 뒤 옮긴다.
+
+### 핫 파티션은 어떻게 알아채고 푸나요?
+
+테이블 전체 사용률은 낮은데 스로틀이 생기면 의심한다. Contributor Insights로 가장 많이 접근되거나 스로틀된 키를 찾는다. 파티션 키 하나는 초당 3,000 RCU와 1,000 WCU를 넘지 못하고 적응형 용량도 이 한도는 못 넘기니, 쓰기가 몰리는 키는 접미사로 N개로 나누는 쓰기 샤딩을 하고 읽을 때 N개를 모아 합친다. 읽기가 몰리는 키는 DAX나 앞단 캐시로 받는다.
+
+### 이메일 중복 가입은 어떻게 막나요?
+
+GSI는 유일성을 보장하지 않고 비동기라 막을 수 없다. 이메일을 파티션 키로 하는 항목을 따로 두고, 회원 항목과 함께 `TransactWriteItems`로 묶어 둘 다 `attribute_not_exists` 조건을 건다. 이미 있으면 트랜잭션 전체가 취소된다. 트랜잭션은 용량을 두 배로 쓰니 이런 곳에만 쓴다.
+
+### Streams로 검색 인덱스를 갱신할 때 주의할 점은요?
+
+기록은 24시간만 남으니 소비자가 밀리면 변경을 잃는다. `IteratorAge`를 경보로 건다. Lambda는 실패한 배치를 다시 받으니 같은 변경이 두 번 갈 수 있고, 한 기록이 계속 실패하면 그 샤드가 막힌다. 색인 쪽은 버전으로 멱등하게 덮어쓰고, 재시도 횟수와 실패 기록을 보낼 곳을 정해 둔다.

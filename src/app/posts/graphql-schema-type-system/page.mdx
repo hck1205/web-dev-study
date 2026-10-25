@@ -1,0 +1,495 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("graphql-schema-type-system");
+
+<EasyIntro>
+  GraphQL 서버는 먼저 설계도를 그린다. 상품에는 이름과 가격이 있고, 리뷰에는 글쓴이가 있다는 식으로 어떤 칸에 어떤 종류의 값이 들어가는지 정해 둔다. 요청이 오면 서버는 이 설계도에 맞는 값만 내보낸다.
+
+  설계도에는 "이 칸은 절대 비면 안 된다"는 표시를 붙일 수 있다. 이 표시는 약속이라서, 서버가 그 칸을 채우지 못하면 약속을 어긴 칸을 감싼 더 큰 상자를 통째로 비운다. 표시를 너무 많이 붙이면 작은 빈칸 하나 때문에 화면 전체가 사라진다.
+
+  설계도에는 "여기에는 상품이 올 수도 있고 사람이 올 수도 있다"는 자리도 만들 수 있고, 날짜처럼 서버가 직접 모양을 정하는 값도 만들 수 있다. 좋은 설계도는 화면 하나의 모양을 베끼지 않고, 상품과 리뷰와 사람이 실제로 어떻게 이어져 있는지를 그린다.
+</EasyIntro>
+
+상품 상세 화면이 갑자기 하얗게 비었다는 문의가 왔다. 다른 상품은 멀쩡하고 이 상품만 그렇다. 서버 로그에는 예외가 하나도 없고 응답 상태도 200이다. 응답 본문을 열어 보니 이렇게 와 있었다.
+
+```text
+{"errors":[{"message":"Cannot return null for non-nullable field Review.author.","locations":[{"line":1,"column":41}],"path":["product","reviews",1,"author"]}],"data":null}
+```
+
+리뷰 두 개 중 하나를 쓴 회원이 탈퇴했을 뿐이다. 그런데 `data`가 통째로 null이다. 상품 이름도, 멀쩡한 첫 리뷰도 없다. 스키마는 이랬다.
+
+```graphql
+type Query { product(id: ID!): Product! }
+type Product { id: ID! name: String! reviews: [Review!]! }
+type Review { id: ID! body: String! author: User! }
+type User { id: ID! nickname: String! }
+```
+
+느낌표 네 개가 줄줄이 이어져 있다. `author`가 null이 되자 그 null이 `Review`로, `[Review!]!`로, `Product!`로 올라가 결국 `data`까지 지웠다. `author`와 `product`의 느낌표만 떼고 같은 쿼리를 보내면 이렇게 온다.
+
+```text
+{"data":{"product":{"name":"무선 키보드","reviews":[{"body":"좋다","author":{"nickname":"kim"}},{"body":"타건감 최고","author":null}]}}}
+```
+
+화면은 "탈퇴한 회원"이라고 그리면 된다. 스키마의 타입 선언 하나가 장애의 크기를 정한 셈이다. 이 글은 GraphQL 타입 시스템을 하나씩 돌려 보며, 어떤 타입을 어디에 써야 하는지를 정리한다. 데모는 Node.js 22와 graphql-js 16.14로 돌렸다. GraphQL이 무엇이고 리졸버와 N+1이 어떻게 생기는지는 [GraphQL 기초](/posts/graphql-basics)에 있으니 여기서는 스키마 쪽만 본다.
+
+## 타입은 몇 가지 재료를 조합해 만든다
+
+GraphQL 스키마에 나오는 타입은 종류가 많지 않다. 값을 담는 쪽부터 보면 이렇다.
+
+스칼라(scalar)는 더 쪼갤 수 없는 값이다. 기본으로 `Int`(32비트 부호 있는 정수), `Float`(배정밀도 실수), `String`, `Boolean`, `ID` 다섯 개가 있고, 직접 만들 수도 있다. 열거형(enum)은 정해진 이름 중 하나만 오는 스칼라다. 객체 타입(object)은 필드 묶음이고, 필드마다 타입과 인자를 가진다. 쿼리는 객체 타입의 필드를 골라 내려가다가 스칼라나 열거형에서 멈춘다. 스칼라에서 끝나지 않는 쿼리는 검증을 통과하지 못한다.
+
+그 위에 감싸는 타입이 둘 있다. 리스트 `[T]`와 non-null `T!`이다. 이 둘은 다른 타입을 감싸기만 하고 스스로 이름이 없다. `[Review!]!`는 "Review를 non-null로 감싸고, 그걸 리스트로 감싸고, 다시 non-null로 감싼 것"이다.
+
+나머지 셋은 여러 타입을 하나의 자리에 묶는다. 인터페이스(interface)는 여러 객체 타입이 공통으로 가진 필드를 정하고, 유니언(union)은 "이 중 하나"만 정한다. 입력 객체(input)는 인자로 받을 때만 쓰는 객체다.
+
+이 재료들이 어떻게 이어지는지 그림으로 보자. 점이 흐르는 방향이 "이 타입은 저 타입을 담을 수 있다"는 방향이다.
+
+<ConceptDiagram
+  caption="스키마의 타입 재료와 이어지는 방향"
+  width={640}
+  height={320}
+  nodes={[
+    { id: "obj", label: "객체 타입", sub: "Product, Review", x: 320, y: 60, w: 150 },
+    { id: "iface", label: "인터페이스", sub: "Node", x: 110, y: 60 },
+    { id: "union", label: "유니언", sub: "SearchResult", x: 530, y: 60, w: 130 },
+    { id: "wrap", label: "리스트 · non-null", sub: "[T], T!", x: 320, y: 170, w: 160 },
+    { id: "scalar", label: "스칼라", sub: "Int, ID, DateTime", x: 190, y: 270, w: 150 },
+    { id: "enum", label: "열거형", sub: "Status", x: 450, y: 270 },
+    { id: "input", label: "입력 객체", sub: "인자 전용", x: 110, y: 170 },
+  ]}
+  edges={[
+    { from: "obj", to: "iface", label: "implements", dashed: true },
+    { from: "union", to: "obj", label: "멤버" },
+    { from: "obj", to: "wrap", label: "필드 타입" },
+    { from: "wrap", to: "scalar" },
+    { from: "wrap", to: "enum" },
+    { from: "wrap", to: "obj", dashed: true },
+    { from: "input", to: "scalar", label: "필드" },
+  ]}
+/>
+
+입력 객체에서 객체 타입으로 가는 선이 없다는 점을 기억해 두자. 출력용 타입과 입력용 타입은 서로 섞이지 않는다. 이유는 뒤에서 본다.
+
+## 느낌표가 붙는 네 자리
+
+목록 필드는 느낌표를 붙일 자리가 두 군데라서 조합이 네 가지다. `[String]`, `[String!]`, `[String]!`, `[String!]!`이다. 같은 값 `["x", null, "z"]`를 네 필드에 돌려주고, 이번에는 목록을 감싼 `wrap` 객체가 nullable일 때 결과를 찍었다.
+
+```text
+a [String]    {"wrap":{"a":["x",null,"z"]}}
+b [String!]   {"wrap":{"b":null}}   Cannot return null for non-nullable field Wrap.b. path=["wrap","b",1]
+c [String]!   {"wrap":{"c":["x",null,"z"]}}
+d [String!]!  {"wrap":null}         Cannot return null for non-nullable field Wrap.d. path=["wrap","d",1]
+```
+
+원소 하나가 null일 때, 안쪽 느낌표가 있으면(`b`, `d`) 그 원소를 null로 둘 수 없으니 목록 자체가 null이 된다. 바깥 느낌표까지 있으면(`d`) 목록도 null이 될 수 없으니 한 단계 더 올라가 `wrap`이 null이 된다. 에러의 `path`가 `["wrap","d",1]`로 끝나는 것을 보자. 문제가 시작된 곳은 1번 원소다. 지워진 범위와 원인이 생긴 곳이 다르다.
+
+이번에는 리졸버가 목록 대신 null을 돌려줬다.
+
+```text
+nulllist a {"wrap":{"a":null}}
+nulllist b {"wrap":{"b":null}}
+nulllist c {"wrap":null}  Cannot return null for non-nullable field Wrap.c.
+nulllist d {"wrap":null}  Cannot return null for non-nullable field Wrap.d.
+```
+
+정리하면 바깥 느낌표는 "목록이 없을 수는 없다", 안쪽 느낌표는 "목록 안에 빈칸이 없다"는 약속이다. 그리고 약속을 어기면 null은 nullable인 가장 가까운 조상에서 멈춘다. 처음 장면에서 `data`까지 지워진 것은 그 길에 멈출 곳이 하나도 없었기 때문이다. 아래 그림에서 단계를 넘기며 null이 어디까지 올라가는지 보자.
+
+<AlgoTrace
+  caption="Review.author 하나가 null일 때 올라가는 길"
+  cells={["data", "product: Product!", "reviews: [Review!]!", "[1]: Review!", "author: User!"]}
+  memoryLabel="null을 받은 자리"
+  steps={[
+    { pointer: 4, memory: ["author"], caption: "탈퇴한 회원이라 author 리졸버가 null을 돌려준다. 그런데 타입은 User!다." },
+    { pointer: 3, memory: ["author", "reviews[1]"], caption: "author를 null로 둘 수 없으니 그 부모인 1번 리뷰 객체가 null을 받는다." },
+    { pointer: 2, memory: ["author", "reviews[1]", "reviews"], caption: "원소 타입이 Review!라 1번 칸을 비울 수 없다. 목록 전체가 null이 되려 한다." },
+    { pointer: 1, memory: ["author", "reviews[1]", "reviews", "product"], caption: "목록도 [ ]!라 null이 될 수 없다. product가 null을 받는다." },
+    { pointer: 0, found: [0], memory: ["author", "reviews[1]", "reviews", "product", "data"], caption: "product도 Product!다. 멈출 곳이 없어서 data 전체가 null이 된다." },
+  ]}
+/>
+
+이 규칙을 직접 짜 보면 머리에 남는다. 타입 문자열과 리졸버가 돌려준 값을 받아서, 그 필드가 최종적으로 어떤 값이 되는지 돌려주는 함수다. null이 이 필드를 넘어 부모까지 올라가야 하면 `"BUBBLE"`을 돌려준다.
+
+<CodePlayground
+  caption="목록과 non-null 조합에서 null이 멈추는 곳"
+  functionName="complete"
+  initialCode={`function complete(type, value) {
+  // type: "String", "String!", "[String!]", "[[Int!]!]" 같은 문자열
+  // value: 리졸버가 돌려준 값 (null, 문자열, 배열)
+  // 반환: 이 필드에 실제로 들어갈 값. null이 부모로 올라가야 하면 "BUBBLE"
+  return value;
+}`}
+  solution={`function complete(type, value) {
+  const BUBBLE = "BUBBLE";
+  const go = (t, v) => {
+    if (t.endsWith("!")) {
+      const r = go(t.slice(0, -1), v);
+      // 안에서 null이 나오면 여기서 멈출 수 없다
+      return r === null || r === BUBBLE ? BUBBLE : r;
+    }
+    if (v === null) return null;
+    if (t.startsWith("[")) {
+      const inner = t.slice(1, -1);
+      const out = [];
+      for (const item of v) {
+        const r = go(inner, item);
+        if (r === BUBBLE) return null; // 원소가 못 멈추면 목록이 null을 받는다
+        out.push(r);
+      }
+      return out;
+    }
+    return v;
+  };
+  return go(type, value);
+}`}
+  tests={[
+    { label: "String, null", args: ["String", null], expected: null },
+    { label: "String!, null", args: ["String!", null], expected: "BUBBLE" },
+    { label: "[String], 원소 하나 null", args: ["[String]", ["x", null, "z"]], expected: ["x", null, "z"] },
+    { label: "[String!], 원소 하나 null", args: ["[String!]", ["x", null, "z"]], expected: null },
+    { label: "[String]!, 목록이 null", args: ["[String]!", null], expected: "BUBBLE" },
+    { label: "[String!]!, 원소 하나 null", args: ["[String!]!", ["x", null, "z"]], expected: "BUBBLE" },
+    { label: "[[Int!]], 안쪽 목록에 null", args: ["[[Int!]]", [[1, null], [2]]], expected: [null, [2]] },
+    { label: "[[Int!]!], 안쪽 목록에 null", args: ["[[Int!]!]", [[1, null], [2]]], expected: null },
+    { label: "[String!]!, 빈 목록", args: ["[String!]!", []], expected: [] },
+  ]}
+/>
+
+일곱째와 여덟째 테스트를 graphql-js에 그대로 넣어 보면 `{"a":[null,[2]]}`와 `{"b":null}`이 나온다. 함수가 실행기와 같은 결론을 낸다. 마지막 테스트도 눈여겨볼 만하다. `[String!]!`라도 빈 목록은 아무 문제가 없다. "결과가 없음"은 null이 아니라 빈 목록으로 표현하면 된다.
+
+## 열거형은 오타를 실행 전에 막는다
+
+정렬 기준을 문자열 인자로 받으면 `"price_desc"`, `"PRICE-DESC"`, `"priceDesc"`가 다 들어온다. 서버는 그걸 하나하나 맞춰 보거나 조용히 기본값으로 돌린다. 열거형으로 받으면 검증 단계에서 막힌다.
+
+```graphql
+enum ProductSort { PRICE_ASC PRICE_DESC NEWEST }
+type Query { products(first: Int = 10, sort: ProductSort = NEWEST): [Product!]! }
+```
+
+쿼리 문서 안에서 열거형 값은 따옴표 없이 쓴다. 따옴표를 붙이면 문자열 리터럴이라 거절된다. 변수로 보낼 때는 JSON이니 문자열로 보낸다.
+
+```text
+{ products(first: 1, sort: PRICE_DESC) { id name } }
+{"data":{"products":[{"id":"2","name":"공책"}]}}
+
+{ products(first: 1, sort: "PRICE_DESC") { id } }
+{"errors":[{"message":"Enum \"ProductSort\" cannot represent non-enum value: \"PRICE_DESC\". Did you mean the enum value \"PRICE_DESC\" or \"PRICE_ASC\"?","locations":[{"line":1,"column":28}]}]}
+
+query($s: ProductSort) { products(first: 1, sort: $s) { id } }   variables: {"s":"PRICE_DESC"}
+{"data":{"products":[{"id":"2"}]}}
+```
+
+나도 처음엔 둘째 경우에서 한참 헤맸다. 에러가 "PRICE_DESC를 쓰라"고 하는데 이미 PRICE_DESC를 썼으니까. 문서 안의 `"PRICE_DESC"`는 열거형 값이 아니라 문자열이라는 뜻이다.
+
+응답 쪽 열거형에는 함정이 하나 있다. 서버가 `Status`에 `DISCONTINUED`를 새로 더하면 스키마 비교 도구는 대개 "위험한 변경"으로만 표시한다. 기존 쿼리는 그대로 검증을 통과하기 때문이다. 그런데 클라이언트 코드가 `switch (status)`로 `ON_SALE`과 `SOLD_OUT`만 처리하고 있었다면, 처음 보는 값에서 화면이 깨진다. 코드 생성기로 TypeScript 유니언 타입을 만들어 쓰는 팀이라면 특히 그렇다. 응답 열거형에 값을 더할 때는 클라이언트에 기본 분기가 있는지 먼저 본다.
+
+열거형 이름과 서버 내부 값은 달라도 된다. graphql-js에서는 `values: { ON_SALE: { value: 1 } }`처럼 DB에 저장된 숫자 코드를 연결할 수 있고, 리졸버는 1을 돌려주고 응답에는 `ON_SALE`이 나간다. 스키마가 DB 표현을 그대로 드러내지 않게 하는 장치다.
+
+## 같은 자리에 다른 타입이 올 때
+
+검색 결과에 상품과 회원이 섞여 나온다고 하자. 필드 하나의 타입이 "상품 또는 회원"이어야 한다. GraphQL은 이걸 두 가지로 표현한다.
+
+```graphql
+interface Node { id: ID! }
+type Product implements Node { id: ID! name: String! price: Int! }
+type User implements Node { id: ID! nickname: String! }
+union SearchResult = Product | User
+
+type Query {
+  node(id: ID!): Node
+  search(text: String!): [SearchResult!]!
+}
+```
+
+인터페이스는 공통 필드를 약속한다. `Node`를 구현한 타입은 반드시 `id: ID!`를 가진다. 그래서 `node` 필드에서는 어떤 타입이 올지 몰라도 `id`를 바로 물을 수 있다. 유니언은 멤버 목록만 정하고 공통 필드를 약속하지 않는다. 그래서 `search` 결과에 바로 `id`를 물으면 검증에서 막힌다. 실제로 둘 다 `id`를 갖고 있어도 그렇다.
+
+```text
+{ search(text:"a") { id } }
+{"errors":[{"message":"Cannot query field \"id\" on type \"SearchResult\". Did you mean to use an inline fragment on \"Node\", \"Product\", or \"User\"?","locations":[{"line":1,"column":22}]}]}
+
+{ node(id:"1") { __typename id } }
+{"data":{"node":{"__typename":"Product","id":"1"}}}
+```
+
+유니언에서는 `... on Product`처럼 인라인 프래그먼트로 타입마다 필드를 고른다. 그리고 `__typename`을 함께 받는다. 응답 JSON만 봐서는 이 객체가 상품인지 회원인지 알 수 없으니, 클라이언트가 분기하려면 이 필드가 꼭 필요하다.
+
+```graphql
+{ search(text: "a") { __typename ... on Product { id name price } ... on User { id nickname } } }
+```
+
+```text
+{"data":{"search":[{"__typename":"Product","id":"1","name":"연필","price":500},{"__typename":"User","id":"7","nickname":"kim"}]}}
+```
+
+`__typename`은 모든 객체 타입에 자동으로 있는 메타 필드다. Apollo Client나 urql 같은 정규화 캐시는 `__typename`과 `id`를 붙여 `Product:1` 같은 캐시 키를 만든다. 그래서 이 클라이언트들은 쿼리를 보낼 때 선택 집합마다 `__typename`을 알아서 끼워 넣는다. 프래그먼트 문법 자체는 [GraphQL 쿼리 문법](/posts/graphql-operations-syntax)에서 자세히 본다.
+
+서버는 추상 타입 자리에 온 값이 실제로 어떤 타입인지 알아야 한다. graphql-js에서는 인터페이스와 유니언에 `resolveType`을 달거나 객체 타입마다 `isTypeOf`를 단다. 데모에서는 데이터에 `kind` 필드를 두고 `resolveType: (o) => o.kind`로 이름을 돌려줬다. 이 함수를 빼먹으면 실행 중에 `Abstract type "Node" must resolve to an Object type at runtime for field "Query.node"` 에러가 나고 그 필드가 null이 된다. DB 행 하나로 어느 타입인지 판별할 수 없는 설계라면 여기서 막힌다.
+
+### 인터페이스 대신 유니언을 쓰는 때
+
+공통 필드가 실제로 있고, 클라이언트가 그 공통 필드만으로도 화면을 그릴 수 있으면 인터페이스가 낫다. 피드에 글, 사진, 영상이 섞여 나오는데 모두 작성자와 작성 시각을 보여 준다면 `interface FeedItem { author: User! createdAt: DateTime! }`가 맞다. 새 타입을 더해도 공통 필드만 쓰던 클라이언트는 그대로 돈다.
+
+유니언은 멤버끼리 공통점이 없거나, 공통 필드를 억지로 만들면 의미가 흐려질 때 쓴다. 대표적인 예가 뮤테이션 결과다.
+
+```graphql
+type ValidationError { field: String! message: String! }
+type OutOfStock { productId: ID! remaining: Int! }
+union PlaceOrderResult = Order | ValidationError | OutOfStock
+
+type Mutation { placeOrder(input: PlaceOrderInput!): PlaceOrderResult! }
+```
+
+`errors` 배열은 "예상하지 못한 실패"를 담기에 좋지만, 재고 부족처럼 화면이 분기해야 하는 결과를 담기에는 문자열 메시지뿐이라 빈약하다. 결과를 유니언으로 두면 클라이언트가 `... on OutOfStock { remaining }`으로 남은 수량까지 받아 "2개만 남았다"를 그릴 수 있고, 어떤 경우가 있는지 스키마에 드러난다. 대신 새 멤버를 더하면 그 멤버를 모르는 클라이언트는 `__typename`만 받게 되니 기본 분기를 둬야 한다는 점은 열거형과 같다.
+
+둘을 섞을 수도 있다. 유니언 멤버들이 모두 같은 인터페이스를 구현하게 하고(`ValidationError`와 `OutOfStock`이 `interface UserError { message: String! }`을 구현), 클라이언트는 `... on UserError { message }` 하나로 모르는 에러까지 메시지를 띄운다.
+
+## 입력은 따로 선언한다
+
+인자가 많아지면 입력 객체로 묶는다.
+
+```graphql
+input CreateProductInput { name: String! price: Int! }
+type Mutation { createProduct(input: CreateProductInput!): Product! }
+```
+
+입력 객체의 필드는 스칼라, 열거형, 다른 입력 객체만 될 수 있다. 출력용 `Product`를 인자로 쓸 수는 없다. 처음엔 같은 모양을 두 번 쓰는 게 번거로워 보이지만, 둘은 담는 것이 다르다. `Product`에는 `id`, `createdAt`, `reviews`처럼 서버가 정하거나 계산하는 필드가 있고, 리졸버와 인자를 가진 필드도 있다. 입력에는 그런 것이 있을 수 없다. 또 출력 타입은 서로를 가리키는 고리를 만들 수 있지만 입력 값은 유한한 JSON이어야 한다. 그래서 명세가 두 세계를 나눴다.
+
+입력 객체는 검증 단계에서 모양을 본다. 필수 필드가 빠지거나 모르는 필드가 오면 실행 전에 거절된다.
+
+```text
+mutation { createProduct(input: { name: "펜" }) { id } }
+{"errors":[{"message":"Field \"CreateProductInput.price\" of required type \"Int!\" was not provided.","locations":[{"line":1,"column":33}]}]}
+
+mutation { createProduct(input: { name: "펜", price: 1, color: "red" }) { id } }
+{"errors":[{"message":"Field \"color\" is not defined by type \"CreateProductInput\".","locations":[{"line":1,"column":56}]}]}
+```
+
+REST에서 JSON 본문의 모르는 필드는 조용히 무시되기 쉬운데, GraphQL은 이걸 기본으로 막는다. 클라이언트가 필드 이름을 틀리면 바로 알 수 있다.
+
+입력 쪽 느낌표는 출력 쪽과 반대로 생각한다. 출력 필드의 `!`는 서버의 약속이고, 입력 필드의 `!`는 클라이언트에게 하는 요구다. 그래서 바꿀 때 깨지는 방향도 반대다. 출력에 `!`를 붙이는 건 기존 클라이언트에게 안전하고, 입력에 `!`를 붙이면 그 값을 안 보내던 기존 요청이 모두 실패한다. 수정용 입력(`UpdateProductInput`)은 대부분의 필드를 nullable로 두고, "보내지 않음"과 "null로 지우기"를 구분해야 하면 리졸버에서 키가 있는지 따로 본다. graphql-js는 변수로 보내지 않은 필드를 인자 객체에서 아예 빼고, 명시적으로 null을 보낸 필드는 null로 넣어 준다.
+
+## 스칼라는 경계에서 값을 바꾼다
+
+스칼라 값은 서버를 드나들 때 두 번 바뀐다. 리졸버가 돌려준 값은 응답으로 나가기 전에 직렬화(serialize)되고, 클라이언트가 보낸 값은 리졸버에 닿기 전에 해석된다. 해석은 다시 두 갈래다. 변수로 온 JSON 값은 `parseValue`, 쿼리 문서에 직접 적힌 리터럴은 `parseLiteral`을 거친다. 명세에서는 이 과정을 coercion(강제 변환)이라고 부른다.
+
+기본 스칼라부터 보자. 리졸버가 엉뚱한 타입을 돌려줄 때 응답 쪽에서 일어나는 일이다.
+
+```text
+Int     리졸버 "500"           -> {"data":{"a":500}}
+Int     리졸버 3000000000      -> Int cannot represent non 32-bit signed integer value: 3000000000
+Int     리졸버 1.0             -> {"data":{"c":1}}
+String  리졸버 42              -> {"data":{"d":"42"}}
+Boolean 리졸버 "false"         -> Boolean cannot represent a non boolean value: "false"
+Float   리졸버 "1.5"           -> {"data":{"g":1.5}}
+```
+
+출력 쪽은 꽤 너그럽다. 숫자 문자열은 숫자로, 숫자는 문자열로 바꿔 준다. 하지만 `Int`는 32비트를 넘으면 에러다. 금액(원 단위 매출 합계)이나 큰 정수 ID를 `Int`로 선언했다가 21억을 넘는 날 그 필드만 null이 되는 일이 실제로 생긴다. `"false"` 문자열은 `Boolean`이 받아 주지 않는다. 받아 줬다면 참으로 읽혔을 테니 다행인 쪽이다.
+
+입력 쪽은 엄격하다. 클라이언트가 보내는 값은 스키마가 정한 모양과 정확히 맞아야 한다.
+
+```text
+{ products(first: 3.5) { id } }
+Int cannot represent non-integer value: 3.5
+
+query($n: Int) { products(first: $n) { id } }   variables: {"n":"3"}
+Variable "$n" got invalid value "3"; Int cannot represent non-integer value: "3"
+
+query($n: [Int]) { many(ns: $n) }   variables: {"n":5}
+{"data":{"many":"[5]"}}
+```
+
+출력에서는 `"500"`을 받아 줬는데 입력에서는 `"3"`을 거절한다. 서버가 내보내는 값은 서버 코드가 책임지니 조금 봐주고, 들어오는 값은 신뢰할 수 없으니 조금도 봐주지 않는다는 방향이다. 마지막 줄은 의외일 수 있다. 목록 자리에 값 하나를 보내면 원소 하나짜리 목록으로 바꿔 준다. 명세의 리스트 입력 규칙이다.
+
+커스텀 스칼라는 이 세 함수를 직접 쓴다. 날짜를 문자열로 주고받는 `DateTime`을 만들었다.
+
+```js
+import { GraphQLScalarType, Kind, GraphQLError } from "graphql";
+
+const DateTime = new GraphQLScalarType({
+  name: "DateTime",
+  // 응답으로 나갈 때: 리졸버의 Date를 ISO 문자열로
+  serialize(v) {
+    if (v instanceof Date) return v.toISOString();
+    throw new GraphQLError("DateTime은 Date 객체만 내보낸다");
+  },
+  // 변수로 들어올 때: JSON 문자열을 Date로
+  parseValue(v) {
+    const d = typeof v === "string" ? new Date(v) : null;
+    if (!d || isNaN(d)) throw new GraphQLError(`DateTime 형식이 아니다: ${JSON.stringify(v)}`);
+    return d;
+  },
+  // 쿼리 문서에 직접 적혔을 때: AST 노드를 Date로
+  parseLiteral(ast) {
+    if (ast.kind !== Kind.STRING) throw new GraphQLError("DateTime은 문자열 리터럴로 쓴다");
+    const d = new Date(ast.value);
+    if (isNaN(d)) throw new GraphQLError("DateTime 형식이 아니다");
+    return d;
+  },
+});
+```
+
+리졸버는 항상 `Date` 객체를 받고 `Date` 객체를 돌려준다. 문자열 처리는 경계에서 끝난다.
+
+```text
+query($d: DateTime!) { since(at: $d) }   variables: {"d":"2026-10-23T09:00:00+09:00"}
+{"data":{"since":"true 2026-10-23T00:00:00.000Z"}}
+
+query($d: DateTime!) { since(at: $d) }   variables: {"d":"어제"}
+Variable "$d" got invalid value "어제"; DateTime 형식이 아니다: "어제"
+
+{ since(at: 1700000000) }
+DateTime은 문자열 리터럴로 쓴다
+```
+
+`since` 리졸버는 받은 값이 `Date`인지(`true`)와 그 ISO 문자열을 돌려주게 했다. 서울 시각으로 보낸 값이 UTC로 바뀌어 리졸버에 들어왔다. 아래 그림에서 값 하나가 클라이언트에서 리졸버를 거쳐 다시 응답으로 나가는 길을 따라가 보자.
+
+<SequenceDiagram
+  caption="DateTime 값이 서버를 드나드는 길"
+  actors={[
+    { id: "c", label: "클라이언트" },
+    { id: "s", label: "스칼라 DateTime" },
+    { id: "r", label: "리졸버" },
+  ]}
+  steps={[
+    { from: "c", to: "s", label: "variables", title: "변수로 문자열이 온다", detail: "JSON에는 날짜 타입이 없으니 문자열로 보낸다. 실행 전에 변수 타입(DateTime!)과 맞춰 본다.", payload: "{\"d\":\"2026-10-23T09:00:00+09:00\"}" },
+    { from: "s", to: "s", label: "parseValue", title: "경계에서 Date로 바꾼다", detail: "형식이 틀리면 여기서 거절된다. 리졸버는 한 번도 불리지 않는다.", payload: "Date(2026-10-23T00:00:00.000Z)" },
+    { from: "s", to: "r", label: "args.at", title: "리졸버는 Date만 본다", detail: "문자열 파싱이나 시간대 처리를 리졸버마다 반복하지 않는다." },
+    { from: "r", to: "s", label: "Date", title: "리졸버도 Date를 돌려준다", detail: "DB에서 읽은 timestamptz를 그대로 Date로 넘긴다." },
+    { from: "s", to: "s", label: "serialize", title: "응답으로 나가기 전에 문자열로", detail: "어느 리졸버에서 왔든 같은 ISO 8601 형식으로 나간다. 형식이 한곳에서 정해진다.", payload: "\"2026-10-01T00:00:00.000Z\"" },
+    { from: "s", to: "c", label: "data", title: "클라이언트는 문자열을 받는다", detail: "코드 생성기에 이 스칼라를 string으로 매핑해 두면 클라이언트 타입도 맞는다." },
+  ]}
+/>
+
+커스텀 스칼라를 쓸 때 놓치기 쉬운 것이 있다. 클라이언트 도구는 스칼라 이름만 알 뿐 형식은 모른다. `scalar DateTime`만 적혀 있으면 코드 생성기는 이걸 `any`나 `unknown`으로 만든다. 그래서 `scalar DateTime @specifiedBy(url: "https://www.rfc-editor.org/rfc/rfc3339")`처럼 형식 명세 주소를 붙이고, 클라이언트 코드 생성 설정에 매핑을 적는다. 그리고 `Email`, `URL`, `PositiveInt`처럼 검증을 스칼라로 올리면 편하지만, 스칼라가 수십 개로 늘면 클라이언트마다 매핑을 다 맞춰야 한다. 정말 경계에서 바꿔야 하는 값(날짜, 큰 정수, 금액)만 스칼라로 만들고 나머지 검증은 리졸버나 도메인 계층에 두는 편이 관리가 쉽다.
+
+## ID가 문자열로 나가는 이유
+
+데모의 상품 id는 DB에서 숫자 1로 나온다. 그런데 응답에는 `"id":"1"`로 찍힌다. 변수로 숫자 1을 보내도 리졸버는 문자열 `"1"`을 받는다.
+
+```text
+query($id: ID!) { product(id: $id) { id } }   variables: {"id":1}
+  resolver got id "1" string
+{"data":{"product":{"id":"1"}}}
+
+query($id: ID!) { product(id: $id) { id } }   variables: {"id":1.5}
+Variable "$id" got invalid value 1.5; ID cannot represent value: 1.5
+```
+
+명세는 `ID`를 "문자열과 같은 방식으로 직렬화되는 고유 식별자"로 정한다. 입력으로는 문자열과 정수를 받지만, 나갈 때는 항상 문자열이다. 이유는 두 가지다.
+
+첫째, ID는 불투명해야 한다. 클라이언트가 id로 산술을 하거나 크기를 비교하면 안 된다. 서버는 나중에 숫자 id를 UUID로, 또는 `Product:1`을 base64로 감싼 전역 id로 바꿀 수 있어야 한다. 타입이 처음부터 문자열이면 이 변경이 클라이언트에게 보이지 않는다. Relay 스타일의 `node(id:)` 조회가 이 성질에 기대고 있다. 전역 id 하나만 보고 어떤 타입의 몇 번인지 서버가 풀 수 있게 만든다.
+
+둘째, JSON 숫자는 큰 정수를 안전하게 나르지 못한다. 자바스크립트의 Number는 2의 53제곱 넘어서부터 정수를 정확히 표현하지 못한다. 64비트 정수 id(스노플레이크 id처럼 시각을 앞에 붙인 id는 금방 이 범위를 넘는다)를 숫자로 내보내면 브라우저에서 끝자리가 바뀐다. 문자열이면 그런 일이 없다. graphql-js에서 BigInt 값 `9007199254740993n`을 리졸버가 그대로 돌려주자 `ID cannot represent value`로 거절됐다. 큰 정수는 리졸버에서 `.toString()`으로 넘긴다.
+
+같은 이유로 클라이언트 코드에서 `id === 1` 같은 비교를 쓰면 항상 거짓이 된다. 코드 생성기가 `ID`를 `string`으로 매핑하는 것도 이 때문이다.
+
+## 화면이 아니라 도메인을 그린다
+
+GraphQL을 처음 도입할 때 흔히 하는 실수는 화면을 그대로 타입으로 옮기는 것이다.
+
+```graphql
+# 화면을 베낀 스키마
+type ProductDetailPage {
+  productName: String
+  priceText: String
+  reviewCount: Int
+  top3Reviews: [ReviewCard]
+  sellerNameAndGrade: String
+}
+```
+
+이 타입은 상세 화면 하나에만 맞는다. 장바구니 화면이 상품 이름과 가격을 원하면 `CartPage`를 또 만든다. 화면마다 엔드포인트를 만들던 REST의 문제를 스키마로 옮긴 것뿐이다. `priceText`처럼 표시용으로 가공된 값은 다른 클라이언트(앱, 다른 언어)가 다시 쓰지 못한다.
+
+GraphQL 공식 문서가 "그래프로 생각하라(thinking in graphs)"고 말하는 지점이 여기다. 타입은 도메인의 사물이고, 필드는 그 사물의 속성이거나 다른 사물로 가는 관계다.
+
+```graphql
+type Product implements Node {
+  id: ID!
+  name: String!
+  price: Money!
+  seller: Seller!
+  reviews(first: Int = 10, after: String): ReviewConnection!
+  reviewSummary: ReviewSummary!
+}
+type Money { amount: String! currency: Currency! }
+```
+
+몇 가지가 달라졌다. `authorId: ID` 대신 `seller: Seller!`처럼 관계를 객체로 드러낸다. 외래 키는 서버 내부 사정이고, 클라이언트는 관계를 따라 내려가고 싶어 한다. 가격은 표시 문자열이 아니라 금액과 통화를 가진 타입이다. 금액은 소수 오차를 피하려고 문자열(또는 커스텀 스칼라)로 둔다. 리뷰는 무한히 커질 수 있는 목록이라 처음부터 페이지 인자를 받는 커넥션으로 만든다. 맨 목록 `[Review!]!`로 시작하면 나중에 인자를 더할 때 응답 모양이 바뀌어 깨는 변경이 된다. 커넥션 모양은 [GraphQL 페이지네이션](/posts/graphql-pagination-connections)에서 다룬다.
+
+이렇게 그린 스키마는 상세 화면, 장바구니, 판매자 페이지가 같은 타입을 서로 다른 깊이로 걷는다. 화면이 늘어도 타입은 잘 안 늘어난다.
+
+뮤테이션은 반대로 구체적으로 짓는다. `updateProduct(input: { status: SOLD_OUT })`처럼 모든 걸 받는 범용 수정보다 `markProductSoldOut(id:)`, `changeProductPrice(id:, price:)`처럼 업무 동작 이름을 쓰는 편이 권한 검사와 로그, 이벤트 발행을 동작별로 나누기 쉽다. 이 차이는 CRUD를 그대로 드러내는 REST 설계와 업무 동작을 드러내는 설계의 차이와 같다.
+
+## null을 어디에 허용할까
+
+처음 장면으로 돌아가자. 느낌표를 어디에 붙여야 했을까. 내가 쓰는 기준은 이렇다.
+
+객체 자신의 속성 중 그 객체가 존재하는 한 항상 있는 값, 즉 `id`, `name`, `createdAt`에는 붙인다. 이 값들은 같은 DB 행에서 함께 나오니 하나만 실패할 일이 거의 없다. 클라이언트는 이 필드마다 null 처리를 하지 않아도 된다.
+
+다른 테이블, 다른 서비스, 권한 검사를 거치는 관계에는 붙이지 않는다. `Review.author`는 회원이 탈퇴하거나, 회원 서비스가 잠깐 죽거나, 보는 사람에게 권한이 없으면 null이 될 수 있다. 여기에 `!`를 붙이면 그 실패가 위로 번진다. 처음 장면이 정확히 이 경우였다.
+
+최상위 필드(`Query.product`)는 nullable로 둔다. "없는 id"를 null로 답할 수 있고, 같은 쿼리의 다른 최상위 필드가 실패해도 이 필드는 살아남는다. 최상위 필드에 `!`를 붙이면 그 필드 하나의 실패가 `data` 전체를 지운다.
+
+목록은 `[T!]!`를 기본으로 둔다. 목록이 없을 때는 빈 목록을 돌려주면 되고, 원소 하나가 null인 목록은 클라이언트가 다루기 어렵다. 다만 원소마다 따로 가져오는 목록(id 목록을 받아 여러 서비스에서 채우는 `nodes(ids:)` 같은 필드)은 하나가 실패해도 나머지를 살리도록 `[T]!`로 둔다.
+
+그리고 느낌표는 떼기보다 붙이기가 쉽다는 점을 기억한다. 응답 필드에서 `!`를 떼면 null을 처리하지 않던 클라이언트 코드가 깨질 수 있다. 처음에 nullable로 두고 운영하며 정말 항상 있는 값만 non-null로 올리는 편이 안전하다.
+
+이 원칙에는 대가가 있다. nullable 필드가 많으면 클라이언트 코드에 `?.`와 null 분기가 늘어난다. "에러 때문에 null일 수 있지만 의미상으로는 항상 있는 값"을 따로 표시하자는 제안(semantic nullability, `@semanticNonNull` 같은 디렉티브)이 GraphQL 작업 그룹에서 논의되고 있다. 2026년 현재 명세에 들어간 것은 아니고 일부 클라이언트(Relay 등)가 실험적으로 지원하는 단계라, 쓰려면 서버와 클라이언트 도구가 모두 지원하는지 확인해야 한다.
+
+<Callout kind="warning">
+운영 중인 스키마에서 응답 필드의 `!`를 떼거나 입력 필드에 `!`를 붙이는 것은 둘 다 깨는 변경이다. 스키마 비교 도구(graphql-inspector 같은)를 CI에 넣어 이 두 변경을 배포 전에 막는다. 스키마 진화 전반은 [API 버전 관리](/posts/api-versioning)에 있다.
+</Callout>
+
+## 스키마 리뷰에서 자주 걸리는 것
+
+스키마 변경 PR을 볼 때 내가 먼저 찾는 것들이다.
+
+금액이나 큰 수가 `Int`로 선언돼 있다. 32비트라 21억에서 터진다. 금액은 문자열이나 `Money` 타입으로, 큰 정수 id는 `ID`로 둔다.
+
+상태를 Boolean 여러 개로 나눴다. `isSoldOut`, `isHidden`, `isDeleted`가 함께 있으면 셋 다 참인 경우를 누가 정의하는지 모호하다. 서로 배타적인 상태는 열거형 하나로 묶는다.
+
+외래 키를 그대로 내보낸다. `sellerId: ID!`만 있으면 클라이언트가 판매자 이름을 얻으려고 쿼리를 또 보낸다. 관계 필드 `seller: Seller`를 둔다. 외래 키가 꼭 필요하면 관계 필드와 함께 둔다.
+
+목록에 페이지 인자가 없다. 지금은 10개라도 1년 뒤에는 1만 개일 수 있다. 커질 수 있는 목록은 처음부터 커넥션으로 만든다.
+
+유니언 멤버나 응답 열거형에 값을 더한다. 검증은 통과하지만 클라이언트의 분기가 깨질 수 있다. 클라이언트에 기본 분기가 있는지 확인하고, 필요하면 새 값을 내보내기 전에 클라이언트를 먼저 배포한다.
+
+필드 이름이 화면 용어다. `top3Reviews`, `bannerText` 같은 이름은 화면이 바뀌면 같이 바뀐다. `reviews(first: 3, orderBy: HELPFUL)`처럼 도메인 이름에 인자를 붙인다.
+
+## 느낌표는 장애의 반경을 정한다
+
+GraphQL 타입 시스템은 몇 가지 재료(스칼라, 열거형, 객체, 리스트, non-null, 인터페이스, 유니언, 입력 객체)의 조합이다. 그중 가장 조심할 것은 non-null이다. null은 non-null을 만나면 nullable인 가장 가까운 조상까지 올라가므로, 느낌표의 위치가 실패 하나가 지우는 범위를 정한다. 스칼라는 서버 경계에서 값을 바꾸는 자리이고, ID는 불투명한 문자열로 나간다. 그리고 스키마는 화면이 아니라 도메인의 그래프를 그려야 화면이 늘어도 버틴다. 이 타입들을 쿼리에서 어떻게 골라 쓰는지는 [GraphQL 쿼리 문법](/posts/graphql-operations-syntax)에서, 실행기가 이 타입을 따라 결과를 만드는 순서는 [GraphQL 실행 엔진 안쪽](/posts/graphql-execution-validation)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### GraphQL 타입 시스템을 구성하는 타입에는 무엇이 있나요?
+
+스칼라, 열거형, 객체 타입, 인터페이스, 유니언, 입력 객체가 이름 있는 타입이고, 리스트와 non-null은 다른 타입을 감싸는 래퍼다. 기본 스칼라는 Int(32비트), Float, String, Boolean, ID 다섯 개이고 커스텀 스칼라를 만들 수 있다. 쿼리는 객체 타입의 필드를 따라 내려가다가 스칼라나 열거형에서 끝나야 한다. 입력 객체는 인자로만 쓰고 출력 타입과 섞이지 않는다.
+
+### `[String!]`, `[String]!`, `[String!]!`는 어떻게 다른가요?
+
+바깥 느낌표는 목록 자체가 null이 될 수 없다는 뜻이고, 안쪽 느낌표는 원소가 null이 될 수 없다는 뜻이다. `[String!]`에서 원소 하나가 null이면 목록 전체가 null이 되고, `[String!]!`라면 목록도 null이 될 수 없으니 그 부모 객체까지 null이 된다. `[String]!`는 원소 null은 허용하지만 목록이 null이면 부모로 올라간다. 결과가 없으면 null 대신 빈 목록을 돌려주는 것이 보통이라 `[T!]!`를 기본으로 쓴다.
+
+### non-null 필드를 어디에 붙여야 하나요?
+
+객체가 존재하는 한 항상 있는 자기 속성(id, 이름, 생성 시각)에는 붙이고, 다른 서비스나 권한 검사를 거치는 관계 필드와 최상위 필드에는 붙이지 않는다. null은 non-null을 만나면 nullable인 가장 가까운 조상까지 올라가므로, 실패할 수 있는 필드에 느낌표를 붙이면 그 실패가 화면 전체를 지운다. 응답 필드에서 느낌표를 떼는 건 깨는 변경이라 처음엔 nullable로 두고 확신이 생기면 올리는 편이 안전하다.
+
+### 인터페이스와 유니언의 차이는 무엇이고, 유니언은 언제 쓰나요?
+
+인터페이스는 구현 타입들이 공통 필드를 가진다고 약속하므로 추상 타입 자리에서 공통 필드를 바로 물을 수 있다. 유니언은 멤버 목록만 정하고 공통 필드를 약속하지 않아서, 필드를 고르려면 반드시 `... on 타입` 프래그먼트를 써야 한다. 멤버끼리 공통점이 없을 때, 특히 뮤테이션 결과를 `Order | ValidationError | OutOfStock`처럼 성공과 예상된 실패로 나눌 때 유니언을 쓴다. 두 경우 모두 클라이언트는 `__typename`으로 실제 타입을 구분한다.
+
+### `__typename`은 왜 필요한가요?
+
+응답 JSON에는 타입 정보가 없어서, 인터페이스나 유니언 자리에 온 객체가 어떤 타입인지 클라이언트가 알려면 `__typename`을 받아야 한다. 정규화 캐시는 `__typename`과 `id`를 합쳐 `Product:1` 같은 캐시 키를 만들기 때문에 Apollo Client나 urql은 선택 집합마다 이 필드를 자동으로 넣는다. 서버 쪽에서는 `resolveType`이나 `isTypeOf`로 실제 타입을 정해 줘야 하고, 빠지면 실행 중 에러가 난다.
+
+### ID 스칼라는 왜 문자열로 직렬화되나요?
+
+명세가 ID를 불투명한 식별자로 정의하고 문자열과 같은 방식으로 직렬화하도록 정했기 때문이다. 클라이언트가 id로 계산이나 비교를 하지 않게 해서, 서버가 숫자 id를 UUID나 전역 id로 바꿔도 클라이언트가 깨지지 않는다. 또 JSON 숫자는 2의 53제곱을 넘는 정수를 자바스크립트에서 정확히 표현하지 못해 64비트 id의 끝자리가 바뀔 수 있는데, 문자열이면 그 문제가 없다. 입력으로는 정수도 받아 주지만 리졸버에는 문자열로 들어온다.
+
+### 커스텀 스칼라는 어떻게 동작하고, 만들 때 주의할 점은요?
+
+serialize, parseValue, parseLiteral 세 함수로 서버 경계에서 값을 바꾼다. 응답으로 나갈 때 serialize, 변수로 들어올 때 parseValue, 쿼리 문서에 직접 적혔을 때 parseLiteral이 불리고, 형식이 틀리면 실행 전에 거절된다. 클라이언트 도구는 스칼라의 형식을 모르니 `@specifiedBy`로 형식 명세를 밝히고 코드 생성 매핑을 맞춰야 한다. 날짜, 금액, 큰 정수처럼 경계에서 꼭 바꿔야 하는 값만 스칼라로 만들고, 일반 검증까지 스칼라로 올리지는 않는다.
+
+### 스키마를 화면에 맞춰 설계하면 왜 안 되나요?
+
+화면을 베낀 타입은 그 화면 하나에만 맞아서, 화면이 늘 때마다 타입도 늘고 표시용으로 가공된 값은 다른 클라이언트가 다시 쓰지 못한다. 타입을 도메인의 사물로, 필드를 속성과 관계로 그리면 여러 화면이 같은 타입을 서로 다른 깊이로 걷는다. 외래 키 대신 관계 필드를 드러내고, 커질 수 있는 목록은 처음부터 페이지 인자를 받는 커넥션으로 만든다. 뮤테이션은 반대로 범용 수정보다 업무 동작 단위로 짓는다.

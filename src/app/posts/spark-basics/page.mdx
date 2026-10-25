@@ -197,6 +197,62 @@ stage가 잡히는 순서를 드라이버 쪽에서 보면 이렇다.
 
 마지막 단계가 흔한 사고다. 수천만 줄짜리 DataFrame에 `collect()`나 `toPandas()`를 부르면 결과가 드라이버 한 대로 몰린다. `spark.driver.maxResultSize`(기본 1g)를 넘으면 작업이 실패하고, 그보다 드라이버 메모리가 먼저 차면 드라이버가 죽는다. 큰 결과는 `write`로 파일에 쓰고, 눈으로 볼 것만 `limit` 뒤에 가져온다.
 
+## MapReduce는 잡마다 결과를 내려놓았다
+
+셔플은 Spark가 새로 만든 개념이 아니다. 하둡 MapReduce가 이미 맵, 셔플, 리듀스의 세 마디로 일을 나눴다. 맵은 입력 조각 하나를 읽어 (키, 값) 쌍을 내놓고, 셔플은 그 쌍을 키로 정렬해 같은 키를 같은 리듀서로 보내고, 리듀스는 같은 키의 값들을 합친다. 하둡 스트리밍은 맵과 리듀스를 아무 프로그램으로나 쓰게 해 주는데, 그 모양을 셸 파이프로 그대로 흉내 낼 수 있다. 셔플 자리에 `sort`가 들어간다.
+
+```python
+# mapper.py: 입력 ad_id,country,cost → 출력 ad_id \t 1 (한국 클릭만)
+import sys
+for line in sys.stdin:
+    ad_id, country, cost = line.rstrip("\n").split(",")
+    if country == "KR":
+        print(f"{ad_id}\t1")
+```
+
+```python
+# reducer.py: 입력은 키로 정렬돼 있다. 같은 키가 이어지는 동안 더하고, 키가 바뀌면 내보낸다
+import sys
+current, total = None, 0
+for line in sys.stdin:
+    key, value = line.rstrip("\n").split("\t")
+    if key != current:
+        if current is not None:
+            print(f"{current}\t{total}")
+        current, total = key, 0
+    total += int(value)
+if current is not None:
+    print(f"{current}\t{total}")
+```
+
+```bash
+# 잡 1: 맵 → 셔플(정렬) → 리듀스. 결과는 파일로 내려놓는다
+python3 mapper.py < clicks.csv | sort -k1,1 | python3 reducer.py > job1-out.tsv
+cat job1-out.tsv
+
+# 잡 2: 잡 1의 결과 파일을 다시 읽어 클릭 수 상위 3개를 뽑는다
+sort -t$'\t' -k2,2nr job1-out.tsv | head -3
+```
+
+```text
+15	12
+210	293
+458	176
+77	56
+903	88
+210	293
+458	176
+903	88
+```
+
+클릭 1000줄로 돌린 결과다. 키를 글자로 정렬해서 15, 210, 458, 77, 903 순서로 나온다. 리듀서가 "키가 바뀌면 내보낸다"만으로 일할 수 있는 건 셔플이 같은 키를 붙여 줬기 때문이다.
+
+눈여겨볼 곳은 `job1-out.tsv`다. MapReduce 잡 하나는 맵 한 번과 리듀스 한 번으로 끝난다. "광고별로 세고, 그중 상위 3개" 같은 두 마디짜리 일은 잡 두 개를 이어 붙여야 하고, 잡 사이의 결과는 HDFS에 파일로 쓴다. HDFS는 블록마다 기본 세 벌을 복제하니, 중간 결과 하나를 쓸 때마다 디스크 쓰기 세 번과 네트워크 복사가 따라온다. 다음 잡은 그걸 다시 디스크에서 읽는다. 맵의 출력도 리듀서가 가져가기 전까지 로컬 디스크에 쌓인다. 게다가 태스크마다 JVM을 새로 띄웠다. 열 번 반복하는 머신러닝 학습이면 같은 입력을 열 번 디스크에서 읽고, 결과를 열 번 HDFS에 쓴다.
+
+Spark도 셔플 경계에서는 로컬 디스크에 쓴다. 앞 절에서 본 셔플 파일이 그것이다. 달라진 건 나머지다. 여러 마디의 일이 잡 하나의 DAG로 표현되고, 셔플이 없는 구간은 한 태스크 안에서 메모리로 이어 처리된다. 잡 사이에 HDFS를 거치지 않으니 복제 비용도 없다. 반복해 쓸 데이터는 `cache()`로 익스큐터 메모리에 올려 두고, 익스큐터는 작업 내내 살아 있는 JVM이라 태스크마다 프로세스를 띄우지 않는다. 장애 복구도 바뀌었다. MapReduce는 HDFS에 내려놓은 결과가 복구 지점이었다. Spark는 lineage를 따라 잃어버린 파티션만 다시 계산한다.
+
+그래도 MapReduce가 남긴 생각은 그대로다. 같은 키를 한곳으로 모으는 셔플이 가장 비싸고, 셔플 전에 맵 쪽에서 미리 더해 두면(MapReduce의 combiner, Spark의 partial agg) 건너가는 양이 준다. 지금 하둡 클러스터에 새로 MapReduce 잡을 짜는 일은 드물지만, Spark 계획에서 `Exchange` 한 줄이 왜 비싼지는 이 구조로 설명된다. 저장 쪽인 HDFS는 [데이터 레이크와 HDFS](/posts/data-lake-hdfs)에서 다룬다.
+
 ## 파티션 수가 태스크 수다
 
 태스크 하나는 파티션 하나를 처리한다. 그러니 파티션 수가 병렬성의 상한이고, 파티션 크기가 태스크 하나의 일감이다. 같은 클릭 10만 줄을 파일 1만 개, 파일 하나, Parquet 파일 셋으로 읽어 `count()`했다.
@@ -350,6 +406,51 @@ null 키는 내부 조인에서 어차피 짝이 없으니 조인 전에 걸러 
 ```
 
 결과는 같고 여덟 배 넘게 느리다. 계획의 `BatchEvalPython`이 JVM과 Python 사이를 오가는 자리다. 이 연산은 코드 생성 덩어리 `*(1)`과 `*(2)`를 갈라 놓기도 한다. `F.when`, `F.regexp_extract`, `F.date_trunc`처럼 내장 함수로 되는 일은 내장 함수로 한다. 꼭 Python이 필요하면 Arrow로 묶음째 넘기는 `pandas_udf`를 먼저 검토한다. Spark 3.5부터는 일반 Python UDF에도 Arrow 최적화 옵션이 있지만, 버전마다 기본값과 동작이 달라서 쓰는 버전에서 확인해야 한다. 그리고 버전 이야기를 하나 더 하면, Spark 4.0부터 ANSI SQL 모드가 기본으로 켜져서 0으로 나누기나 잘못된 형 변환이 null 대신 오류를 낸다. 3.x에서 잘 돌던 작업이 4.0에서 실패한다면 이것부터 의심한다.
+
+## 익스큐터는 누가 띄워 주나
+
+로컬 모드에서는 JVM 하나가 다 했지만, 실제 클러스터에서는 익스큐터를 띄울 서버와 메모리를 누군가 나눠 줘야 한다. 그게 처음 그림의 클러스터 관리자다. Spark가 붙는 관리자는 세 가지다. Spark에 들어 있는 standalone(마스터 하나와 워커 여러 대), 하둡의 YARN, 그리고 쿠버네티스다. Mesos 지원은 3.2에서 지원 중단 예고가 붙었고 4.0에서 빠졌다. 관리자가 바뀌어도 Spark 코드는 그대로고, `spark-submit --master`에 주는 값과 자원 설정만 달라진다.
+
+하둡 클러스터에서 가장 오래 쓰인 건 YARN이다. 역할이 셋으로 나뉜다. ResourceManager는 클러스터 전체에 하나 있으면서 어느 노드에 메모리와 코어가 얼마나 남았는지 알고, 큐별로 자원을 나눠 준다. NodeManager는 노드마다 하나씩 떠서 자기 노드의 자원을 보고하고, 컨테이너(메모리·코어 한도가 걸린 프로세스)를 띄우고 감시한다. ApplicationMaster는 애플리케이션마다 하나씩 생기는 대리인으로, ResourceManager에게 "이런 크기의 컨테이너가 몇 개 필요하다"고 요청한다. Spark에서는 이 ApplicationMaster가 익스큐터 컨테이너를 받아 온다.
+
+아래 그림은 cluster 모드로 제출했을 때의 순서다. 다음을 누르면 드라이버가 어디에 자리 잡는지 볼 수 있다.
+
+<SequenceDiagram
+  caption="YARN cluster 모드: 드라이버는 ApplicationMaster 컨테이너 안에서 돈다"
+  actors={[
+    { id: "cli", label: "spark-submit" },
+    { id: "rm", label: "ResourceManager" },
+    { id: "nm", label: "NodeManager" },
+    { id: "am", label: "AM + 드라이버" },
+  ]}
+  steps={[
+    { from: "cli", to: "rm", label: "앱 제출", title: "jar와 설정을 넘기고 제출한다", detail: "제출한 쪽은 여기서 할 일이 끝난다. 노트북을 닫아도 작업은 계속된다." },
+    { from: "rm", to: "nm", label: "AM 컨테이너", title: "ApplicationMaster 자리를 하나 잡는다", detail: "남은 자원이 있는 노드의 NodeManager에게 첫 컨테이너를 띄우게 한다." },
+    { from: "nm", to: "am", label: "실행", title: "그 컨테이너 안에서 드라이버가 뜬다", detail: "cluster 모드라 내 main 함수가 이 컨테이너에서 돈다." },
+    { from: "am", to: "rm", label: "익스큐터 요청", title: "익스큐터 컨테이너를 요청한다", detail: "개수와 크기(메모리 + 오버헤드, 코어)를 적어 보낸다. 큐에 자원이 없으면 여기서 기다린다." },
+    { from: "rm", to: "am", label: "할당", title: "어느 노드에 줄지 알려 준다", detail: "가능하면 입력 데이터가 있는 노드를 고른다." },
+    { from: "am", to: "nm", label: "익스큐터 실행", title: "각 노드에서 익스큐터를 띄운다", detail: "익스큐터는 뜨자마자 드라이버에 등록하고 태스크를 받는다." },
+  ]}
+/>
+
+client 모드에서는 드라이버가 `spark-submit`을 친 그 기계(보통 게이트웨이 서버나 노트북 서버)에서 돌고, ApplicationMaster는 익스큐터를 요청하는 일만 한다. `spark-shell`, `pyspark`, 주피터처럼 결과를 바로 봐야 하는 대화형 작업은 client 모드밖에 없다. 대신 그 기계가 꺼지거나 네트워크가 끊기면 작업이 같이 죽고, 익스큐터가 드라이버로 보내는 결과와 셔플 상태 보고가 클러스터 밖으로 오간다. Airflow 같은 스케줄러가 매일 돌리는 작업은 cluster 모드로 낸다.
+
+```bash
+# 매일 도는 집계: 드라이버도 클러스터 안에서 돈다
+spark-submit --master yarn --deploy-mode cluster --queue etl \
+  --num-executors 10 --executor-memory 4g --executor-cores 4 \
+  daily_clicks.py 2026-10-23
+
+# 쿠버네티스: 드라이버가 파드로 뜨고, 드라이버가 API 서버에 익스큐터 파드를 만든다
+spark-submit --master k8s://https://k8s-api.internal:6443 --deploy-mode cluster \
+  --conf spark.kubernetes.container.image=registry.internal/spark-py:4.0.1 \
+  --conf spark.kubernetes.authenticate.driver.serviceAccountName=spark \
+  local:///opt/app/daily_clicks.py 2026-10-23
+```
+
+YARN에서 자주 걸리는 건 컨테이너 크기 계산이다. 컨테이너 하나는 `--executor-memory`만큼이 아니라 여기에 `spark.executor.memoryOverhead`(기본은 익스큐터 메모리의 10%와 384MB 중 큰 값)를 더한 크기로 요청된다. 4g면 4096 + 409.6 ≈ 4506MB이고, YARN은 요청을 `yarn.scheduler.minimum-allocation-mb`(기본 1024)의 배수로 올려서 실제로는 5120MB를 잡는다. 노드에 메모리가 64GB 남았어도 이 크기로는 12개만 들어간다. 요청이 `yarn.scheduler.maximum-allocation-mb`보다 크면 아예 받지 못한다. 그리고 Python 워커나 네이티브 라이브러리가 힙 밖에서 메모리를 쓰다가 컨테이너 한도를 넘으면 NodeManager가 익스큐터를 죽이고, 로그에 `Container killed by YARN for exceeding ... memory limits`와 함께 오버헤드를 늘리라는 문구가 남는다. 힙을 늘리기보다 `spark.executor.memoryOverhead`를 올리는 게 맞는 처방인 경우가 많다.
+
+쿠버네티스에서는 같은 계산이 파드의 메모리 요청과 한도가 되고, 넘으면 `OOMKilled`로 보인다. 드라이버 파드의 서비스 계정에 파드를 만들고 지울 권한이 없으면 익스큐터가 하나도 뜨지 않으니 RBAC부터 본다. 작업량에 따라 익스큐터 수를 늘리고 줄이는 동적 할당(`spark.dynamicAllocation.enabled`)은 YARN에서는 외부 셔플 서비스를, 쿠버네티스에서는 셔플 추적(`spark.dynamicAllocation.shuffleTracking.enabled`)을 함께 켜야 익스큐터를 줄일 때 셔플 파일을 잃지 않는다. 하둡 없이 시작하는 팀은 쿠버네티스나 관리형 서비스(EMR, Dataproc, Databricks)로 가고, 이미 HDFS와 YARN이 있는 곳은 YARN에 큐를 나눠 쓴다.
 
 ## 느린 Spark 작업을 받으면
 

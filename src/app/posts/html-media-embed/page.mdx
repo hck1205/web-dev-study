@@ -1,0 +1,360 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("html-media-embed");
+
+<EasyIntro>
+  웹 페이지에는 글과 그림뿐 아니라 영상과 소리, 지도처럼 다른 회사가 만든 화면도 끼워 넣을 수 있다. 영상은 video, 소리는 audio, 남의 화면은 iframe이라는 태그로 넣는다. iframe은 내 방 벽에 낸 창문과 비슷해서, 창문 너머로 이웃집이 보이지만 내 집이 아니라서 마음대로 들어가거나 고칠 수 없다. 창문을 많이 낼수록 난방비가 많이 드는 것처럼, 남의 화면을 많이 넣을수록 페이지가 무거워진다. 영상은 소리가 나는 채로 저절로 재생되지 않는데, 갑자기 소리가 나면 놀라니까 브라우저가 막기 때문이다. 소리를 끄면 저절로 재생할 수 있고, 귀가 안 들리는 사람을 위한 자막도 붙일 수 있다. 이 글은 이런 규칙들이 왜 생겼고 어떻게 맞춰 쓰는지 살펴본다.
+</EasyIntro>
+
+## 모바일에서 안 도는 배경 영상과 무거운 지도
+
+랜딩 페이지 맨 위에 배경 영상을 깔았다. PC 크롬에서는 잘 돈다. 그런데 휴대폰에서 열면 첫 프레임에 멈춰 있고, 콘솔에는 이런 오류가 찍힌다.
+
+```text
+Uncaught (in promise) NotAllowedError: play() failed because the user didn't interact with the document first.
+```
+
+같은 페이지 아래쪽에는 매장 위치를 보여 주는 지도를 iframe으로 넣었다. 사람들은 대부분 그 아래까지 스크롤하지 않는데, 지도는 첫 화면부터 자기 문서와 스크립트, 타일 이미지를 받는다.
+
+두 문제는 모두 "남의 것을 내 문서에 넣는다"는 점에서 같다. 영상은 브라우저가 소리를 낼지 말지 결정권을 갖고, iframe은 다른 출처의 문서가 내 페이지 안에서 따로 돈다. 이 글은 `video`, `audio`, `iframe`을 쓸 때 브라우저와 맞춰야 하는 규칙을 실험으로 확인한다. 실험은 Playwright에 딸린 Chromium 141에서 했다. 구글 크롬과는 코덱 지원이 다르니 그 부분은 따로 짚는다.
+
+## video 하나에 파일 여러 개
+
+브라우저마다 재생할 수 있는 영상 형식이 다르다. 그래서 `video`에는 `src` 하나 대신 `source`를 여러 개 넣고 브라우저가 고르게 한다.
+
+```html
+<video controls width="1280" height="720" poster="/intro-poster.jpg">
+  <source src="/intro.av1.mp4" type='video/mp4; codecs="av01.0.05M.08"'>
+  <source src="/intro.webm" type='video/webm; codecs="vp9"'>
+  <source src="/intro.h264.mp4" type='video/mp4; codecs="avc1.42E01E"'>
+  <p>이 브라우저는 영상을 재생하지 못한다. <a href="/intro.h264.mp4">파일로 받기</a></p>
+</video>
+```
+
+`type`이 중요하다. 브라우저는 위에서부터 `type`을 보고 "재생할 수 있을 것 같은" 첫 번째를 고른다. `type`이 없으면 일단 파일을 받아 봐야 알기 때문에, 못 트는 파일을 내려받고 나서야 다음으로 넘어간다. `video/mp4`만 적는 것보다 `codecs`까지 적어야 정확하다. 같은 MP4라도 안에 든 코덱이 H.264인지 AV1인지에 따라 재생 여부가 다르기 때문이다. 맨 아래의 `p`는 `video`를 아예 모르는 브라우저에서만 보인다.
+
+브라우저가 무엇을 틀 수 있는지는 `canPlayType`으로 물어본다. 답은 `"probably"`, `"maybe"`, `""`(못 튼다) 셋 중 하나다. 실험한 Chromium의 답은 이랬다.
+
+```text
+video/mp4; codecs="avc1.42E01E"      ""          (H.264)
+video/webm; codecs="vp9"             "probably"
+video/mp4; codecs="av01.0.05M.08"    "probably"  (AV1)
+application/vnd.apple.mpegurl        ""          (HLS)
+```
+
+H.264가 빈 문자열인 건 오픈 소스 Chromium 빌드가 특허 코덱을 빼고 배포되기 때문이다. 구글 크롬, 엣지, 사파리는 H.264를 튼다. 이런 차이 때문에 가장 널리 재생되는 H.264를 맨 아래 안전망으로 두고, 압축률이 좋은 AV1과 VP9를 위에 둔다. 아래 그림은 이 Chromium이 위 마크업에서 파일을 고르는 순서다.
+
+<AlgoTrace
+  caption="source를 위에서부터 훑어 처음 '틀 수 있음'이 나오는 곳에서 멈춘다"
+  memoryLabel="판단"
+  cells={["H.264 mp4", "VP9 webm", "AV1 mp4"]}
+  steps={[
+    { pointer: 0, memory: ["H.264 → \"\""], caption: "순서를 바꿔 H.264를 맨 위에 두었다고 하자. 이 Chromium은 빈 문자열을 돌려주니 받지 않고 건너뛴다." },
+    { pointer: 1, found: [1], memory: ["H.264 → \"\"", "VP9 → probably"], caption: "VP9는 probably다. 여기서 멈추고 이 파일만 받는다. 아래의 AV1은 더 작아도 보지 않는다." },
+    { pointer: 2, memory: ["H.264 → \"\"", "VP9 → probably", "AV1 → 확인 안 함"], caption: "그래서 순서가 곧 우선순위다. 작고 새로운 형식을 위에, 가장 널리 재생되는 형식을 아래에 둔다." },
+  ]}
+/>
+
+같은 규칙을 함수로 옮겨 보자. `support`는 `canPlayType`이 돌려줄 답을 미리 적어 둔 표다. 표에 없는 형식은 빈 문자열로 본다.
+
+<CodePlayground
+  caption="source 고르기 흉내 내기"
+  functionName="pickSource"
+  initialCode={`// sources: [{ src, type? }] 순서대로
+// support: { [type]: "probably" | "maybe" | "" } (없으면 "")
+// 고를 src를 돌려준다. type이 없으면 받아 봐야 아니 일단 그 src를 고른다. 없으면 null.
+function pickSource(sources, support) {
+  return null;
+}`}
+  solution={`function pickSource(sources, support) {
+  for (const s of sources) {
+    if (!s.type) return s.src;                       // 형식을 모르니 받아 본다
+    if ((support[s.type] ?? "") !== "") return s.src; // maybe도 시도한다
+  }
+  return null;
+}`}
+  tests={[
+    {
+      label: "AV1이 맨 위",
+      args: [
+        [
+          { src: "a.av1.mp4", type: 'video/mp4; codecs="av01.0.05M.08"' },
+          { src: "a.webm", type: 'video/webm; codecs="vp9"' },
+          { src: "a.mp4", type: 'video/mp4; codecs="avc1.42E01E"' },
+        ],
+        { 'video/mp4; codecs="av01.0.05M.08"': "probably", 'video/webm; codecs="vp9"': "probably", 'video/mp4; codecs="avc1.42E01E"': "" },
+      ],
+      expected: "a.av1.mp4",
+    },
+    {
+      label: "H.264를 못 트는 브라우저",
+      args: [
+        [
+          { src: "a.mp4", type: 'video/mp4; codecs="avc1.42E01E"' },
+          { src: "a.webm", type: 'video/webm; codecs="vp9"' },
+        ],
+        { 'video/webm; codecs="vp9"': "probably", 'video/mp4; codecs="avc1.42E01E"': "" },
+      ],
+      expected: "a.webm",
+    },
+    {
+      label: "고를 게 없다",
+      args: [[{ src: "a.mp4", type: 'video/mp4; codecs="avc1.42E01E"' }], { 'video/mp4; codecs="avc1.42E01E"': "" }],
+      expected: null,
+    },
+    {
+      label: "type이 없는 source",
+      args: [[{ src: "a.mov" }, { src: "a.webm", type: 'video/webm; codecs="vp9"' }], { 'video/webm; codecs="vp9"': "probably" }],
+      expected: "a.mov",
+    },
+    {
+      label: "maybe도 고른다",
+      args: [[{ src: "a.ogv", type: "video/ogg" }, { src: "a.webm", type: 'video/webm; codecs="vp9"' }], { "video/ogg": "maybe", 'video/webm; codecs="vp9"': "probably" }],
+      expected: "a.ogv",
+    },
+  ]}
+/>
+
+마지막 테스트처럼 `maybe`도 시도 대상이라, 코덱을 빼고 `video/mp4`만 적으면 일단 받아 보고 실패하는 경우가 생긴다. 그래서 `codecs`를 적는 게 낫다. 실제로 쓰는 코덱 문자열은 인코더 출력에서 확인한다(`ffprobe`나 `MP4Box -info`로 프로파일과 레벨을 본다).
+
+## 자동 재생은 브라우저가 허락해야 돈다
+
+예전에는 페이지를 열자마자 소리 나는 광고가 흔했다. 그래서 브라우저들이 자동 재생을 제한한다. 규칙은 브라우저마다 조금씩 다르지만 공통점은 같다. 소리 없는(`muted`) 자동 재생은 허락하고, 소리 있는 자동 재생은 사용자가 그 페이지와 상호작용한 뒤에만 허락한다. 크롬은 여기에 더해 사용자가 그 사이트에서 미디어를 자주 봤는지(미디어 참여 지수, MEI)도 본다.
+
+Playwright는 기본으로 자동 재생 제한을 풀어 둔다. 그래서 크롬의 기본 동작에 가깝게 `--autoplay-policy=document-user-activation-required`로 띄우고 같은 영상을 두 가지로 넣어 봤다.
+
+```html
+<video src="/v.webm" autoplay></video>                    <!-- 소리 있음 -->
+<video src="/v.webm" autoplay muted playsinline></video>  <!-- 소리 없음 -->
+<script>
+  addEventListener("load", async () => {
+    try { await audio.play(); } catch (e) { console.log(e.name, e.message); }
+  });
+</script>
+```
+
+```text
+소리 있는 autoplay    paused: true   (멈춰 있음)
+muted playsinline     paused: false  (재생 중)
+스크립트의 play()     NotAllowedError: play() failed because the user didn't interact with the document first.
+```
+
+아래 그림에서 단계를 넘기며 `play()`를 불렀을 때 브라우저 안에서 무슨 판단이 일어나는지 따라가 보자.
+
+<SequenceDiagram
+  caption="play()를 부르면 브라우저가 정책을 보고 약속(Promise)을 지키거나 깬다"
+  actors={[
+    { id: "page", label: "페이지 코드" },
+    { id: "el", label: "video 요소" },
+    { id: "policy", label: "자동 재생 정책" },
+  ]}
+  steps={[
+    { from: "page", to: "el", label: "video.play()", title: "재생을 요청한다", detail: "play()는 바로 재생되는 게 아니라 Promise를 돌려준다. 결과는 나중에 온다." },
+    { from: "el", to: "policy", label: "소리 있음?", title: "정책에 물어본다", detail: "소리가 나는지, 사용자가 이 페이지를 눌렀거나 키를 친 적이 있는지 본다. 크롬은 사이트별 미디어 참여 지수도 본다." },
+    { from: "policy", to: "el", label: "거절", title: "상호작용이 없으면 거절한다", detail: "영상은 첫 프레임에 멈춘 채로 남는다. 이 상태에서 화면에는 오류가 보이지 않는다." },
+    { from: "el", to: "page", label: "reject(NotAllowedError)", title: "Promise가 거부된다", detail: "catch하지 않으면 콘솔에 Uncaught (in promise)가 찍힌다. 에러 수집기에 이 오류가 쌓이는 이유다.", payload: "NotAllowedError: play() failed because\nthe user didn't interact with the document first." },
+    { from: "page", to: "el", label: "muted = true; play()", title: "소리를 끄고 다시 요청한다", detail: "소리 없는 재생은 허락된다. 화면에 소리 켜기 버튼을 따로 보여 준다." },
+    { from: "el", to: "page", label: "resolve()", title: "재생이 시작된다", detail: "사용자가 소리 켜기를 누르면 그 클릭이 상호작용이 되어 muted를 풀어도 계속 재생된다." },
+  ]}
+/>
+
+실무에서 이 정책에 맞추는 방법은 정해져 있다.
+
+- 배경 영상처럼 소리가 필요 없는 영상은 `autoplay muted playsinline loop`를 함께 쓴다. React에서는 `muted` 속성이 초기 HTML에 반영되지 않던 문제가 오래 있었으니, 서버 렌더링 결과에 `muted`가 실제로 찍혔는지 확인한다.
+- `playsinline`은 아이폰 사파리에서 영상이 전체 화면으로 튀어나가지 않고 그 자리에서 재생되게 한다. iOS 10부터 이 속성이 있어야 소리 없는 인라인 자동 재생이 된다.
+- 스크립트로 `play()`를 부를 때는 반드시 Promise를 받아 실패를 처리한다. 실패하면 재생 버튼을 보여 준다.
+- 소리가 있어야 하는 영상은 자동 재생을 포기하고 사용자가 누르게 한다. 그 클릭 안에서 부른 `play()`는 허락된다.
+
+```js
+const video = document.querySelector("video");
+try {
+  await video.play();
+} catch (err) {
+  if (err.name === "NotAllowedError") {
+    video.muted = true;                 // 소리를 끄고 다시
+    await video.play().catch(() => showPlayButton());
+    showUnmuteButton();
+  }
+}
+```
+
+움직임에 민감한 사용자를 생각하면 배경 영상은 `prefers-reduced-motion: reduce`일 때 재생하지 않는 편이 낫다. 5초 넘게 자동으로 움직이는 영상에는 멈출 방법이 있어야 한다는 WCAG 기준(2.2.2)도 있다.
+
+## 받기 시작하는 시점: preload와 poster
+
+`preload`는 페이지를 열었을 때 영상을 얼마나 미리 받을지 알려 주는 힌트다. 같은 Chromium에서 영상 요청이 나가는지 서버 로그로 확인했다.
+
+```text
+preload="none"       요청 없음
+preload="metadata"   GET /v-meta.webm  Range: bytes=0-
+```
+
+`none`은 누르기 전까지 아무것도 받지 않고, `metadata`는 길이와 크기를 알 만큼만 받으려고 요청을 시작한다. `auto`는 끝까지 받아도 된다는 뜻이다. 이름처럼 힌트일 뿐이라 브라우저가 회선 상태나 절약 모드에 따라 무시할 수 있다. 크롬은 지정하지 않으면 `metadata`처럼 동작한다. 영상이 여러 개 있는 목록 페이지라면 `none`과 `poster`를 함께 써서 첫 화면 대역폭을 아낀다.
+
+`poster`는 재생 전에 보여 줄 그림이다. 없으면 브라우저가 첫 프레임을 받아 그 자리에 그리는데, `preload="none"`이면 받지 않으니 빈 검은 상자가 된다. `poster` 이미지는 LCP 후보가 될 수 있어서, 첫 화면의 큰 영상이라면 poster를 가볍게 만들고 이미지 최적화 규칙을 똑같이 적용한다. 이미지 쪽 이야기는 [이미지 최적화](/posts/image-optimization)에 있다.
+
+## 자리부터 잡아 두기
+
+영상은 메타데이터가 오기 전까지 자기 크기를 모른다. 크기를 모르면 브라우저는 기본 크기로 그렸다가 메타데이터가 오면 다시 그리고, 그 아래 내용이 밀린다. 이게 CLS(누적 레이아웃 이동)다. 폭 390px 화면에서 `width: 100%; height: auto`를 준 요소들의 높이를 메타데이터가 오기 전에 쟀다(응답을 일부러 보내지 않았다).
+
+```text
+video, width·height 속성 없음                       390 × 150
+video width="320" height="180"                      390 × 219   (16:9로 자리 잡음)
+iframe width="560" height="315" + height: auto      394 × 154   (비율 반영 안 됨)
+iframe + aspect-ratio: 16 / 9                       390 × 219
+```
+
+`video`는 `img`처럼 `width`, `height` 속성을 비율(`aspect-ratio`)로 바꿔 쓴다. 그래서 속성만 적어 두면 CSS로 폭을 바꿔도 16:9 자리를 미리 잡는다. 속성이 없으면 기본값 150px 높이로 시작해서 나중에 219px로 늘어난다. `iframe`은 이 변환을 하지 않는다. 속성을 적어도 `height: auto`면 기본 150px(테두리 포함 154px)로 돌아간다. 임베드 iframe에는 CSS `aspect-ratio`를 직접 준다.
+
+```css
+.embed { width: 100%; aspect-ratio: 16 / 9; border: 0; }
+```
+
+CLS를 재고 줄이는 방법은 [Core Web Vitals](/posts/core-web-vitals)에서 이어진다.
+
+## 자막은 track과 WebVTT로
+
+영상에 대사가 있다면 자막이 있어야 한다. 귀가 안 들리는 사람뿐 아니라 지하철에서 소리를 끄고 보는 사람도 쓴다. WCAG AA는 녹화된 영상의 자막(1.2.2)을 요구한다. `video` 안에 `track`을 넣는다.
+
+```html
+<video controls src="/intro.webm" crossorigin="anonymous">
+  <track kind="captions" srclang="ko" label="한국어" src="/intro.ko.vtt" default>
+  <track kind="subtitles" srclang="en" label="English" src="/intro.en.vtt">
+</video>
+```
+
+`kind`는 뜻이 다르다. `subtitles`는 소리는 들리지만 언어를 모르는 사람을 위한 번역, `captions`는 소리를 못 듣는 사람을 위해 효과음과 화자까지 적은 자막이다. `descriptions`는 화면 내용을 글로 설명하고, `chapters`는 구간 목록이다. `default`는 처음부터 켤 트랙이다.
+
+자막 파일은 WebVTT 형식이다. 첫 줄이 `WEBVTT`이고, 빈 줄로 나눈 덩어리(큐)마다 시각과 글자가 있다.
+
+```text
+WEBVTT
+
+00:00:00.000 --> 00:00:01.500
+안녕하세요
+
+00:00:01.500 --> 00:00:03.000 line:10% align:start
+<v 진행자>두 번째 자막
+```
+
+아래 그림에서 시각 줄의 조각을 하나씩 눌러 보자.
+
+<UrlAnatomy
+  caption="WebVTT 큐의 시각 줄 읽기"
+  separator=""
+  joiner=" "
+  params={[
+    { key: "start", display: "00:00:01.500", title: "시작 시각", description: "시:분:초.밀리초. 시가 0이면 01.500처럼 분부터 써도 된다. 소수점은 마침표다. SRT처럼 쉼표를 쓰면 이 큐를 읽지 못한다.", required: true },
+    { key: "arrow", display: "-->", title: "화살표", description: "앞뒤에 공백이 있어야 한다. 이 줄이 큐의 시각 줄이라는 표시다.", required: true },
+    { key: "end", display: "00:00:03.000", title: "끝 시각", description: "이 시각에 자막이 사라진다. 시작보다 뒤여야 한다.", required: true },
+    { key: "line", display: "line:10%", title: "세로 위치", description: "화면 위에서 10% 자리에 띄운다. 화면 아래에 이미 글자가 있는 장면에서 자막을 위로 올릴 때 쓴다." },
+    { key: "align", display: "align:start", title: "정렬", description: "줄 안에서 글자를 시작 쪽으로 붙인다. 기본값은 center다." },
+  ]}
+/>
+
+같은 파일을 Chromium에 넣고 `track.cues`를 읽으니 큐 두 개가 `[0, 1.5, "안녕하세요"]`, `[1.5, 3, "<v 진행자>두 번째 자막"]`으로 들어왔고, 두 번째 큐의 `line`은 10, `align`은 start였다. 자막이 안 뜰 때 흔한 원인 세 가지도 같은 실험에서 확인했다.
+
+```text
+같은 출처의 .vtt                                  load
+다른 출처의 .vtt, video에 crossorigin 없음          error
+다른 출처의 .vtt, crossorigin + CORS 헤더 있음       load
+첫 줄 WEBVTT 없음(text/plain로 응답)                 error
+```
+
+자막 파일이 CDN처럼 다른 출처에 있으면 `video`에 `crossorigin` 속성을 주고, 그 서버가 `Access-Control-Allow-Origin`을 보내야 한다. CORS 자체는 [CORS](/posts/cors)에 있다. 응답의 `Content-Type`은 `text/vtt`로 맞춘다.
+
+`controls`를 주면 브라우저 기본 컨트롤이 나오고, 키보드로 재생·탐색·음량을 다룰 수 있다. 직접 컨트롤을 만든다면 버튼은 `button`으로, 탐색 막대는 `input type="range"`로 만들어 키보드와 스크린리더가 다룰 수 있게 한다. 이 부분은 [ARIA와 키보드·포커스](/posts/aria-keyboard-focus)의 규칙을 그대로 따른다.
+
+## audio는 화면 없는 video다
+
+`audio`는 화면이 없을 뿐 `video`와 같은 API를 쓴다. `source`로 형식을 여러 개 주고(`audio/mpeg`, `audio/ogg; codecs=opus`, `audio/mp4`), 자동 재생 정책도 똑같이 받는다. `controls`가 없으면 아무것도 보이지 않으니, 숨긴 `audio`를 스크립트로 틀 때는 앞의 `play()` 실패 처리를 꼭 넣는다. 팟캐스트처럼 대사가 있는 소리에는 대본(transcript)을 함께 둔다. `audio`의 `track`은 브라우저가 그려 주지 않으니 대본을 페이지 글로 쓰는 편이 확실하다.
+
+## 남의 페이지를 넣는 iframe
+
+`iframe`은 다른 문서를 내 페이지 안에 넣는다. 지도, 동영상 플레이어, 결제창, 광고가 이렇게 들어온다. 그 문서는 자기 출처의 권한으로 따로 돈다. 그래서 설정은 대부분 "얼마나 덜 줄까"다.
+
+```html
+<iframe
+  src="https://maps.example.com/embed?place=store-12"
+  title="매장 위치 지도"
+  loading="lazy"
+  width="560" height="315"
+  style="width: 100%; height: auto; aspect-ratio: 16 / 9; border: 0"
+  allow="fullscreen"
+  referrerpolicy="strict-origin-when-cross-origin"
+  sandbox="allow-scripts allow-same-origin allow-popups">
+</iframe>
+```
+
+- `title`: 스크린리더가 "프레임, 매장 위치 지도"로 읽는다. 없으면 무슨 프레임인지 알 수 없다.
+- `loading="lazy"`: 화면에 가까워질 때 받는다. 높이 8000px 아래에 둔 iframe은 첫 로드에 요청이 없다가 스크롤로 다가가자 요청이 나갔다. 3000px 아래에 두었을 때는 처음부터 받았다. Chromium은 화면에서 일정 거리 안쪽이면 미리 받고, 그 거리는 회선 속도에 따라 달라진다(이 실험에서는 3000px은 안쪽, 8000px은 바깥이었다). 첫 화면에 있는 iframe에는 쓰지 않는다.
+- `allow`: 카메라, 마이크, 위치, 전체 화면, 자동 재생 같은 기능을 iframe에 넘겨줄지 정한다(Permissions Policy). 다른 출처 iframe은 기본으로 이런 기능을 쓰지 못하니, 플레이어가 자동 재생을 하려면 `allow="autoplay"`가 필요하다.
+- `sandbox`: 값 없이 쓰면 스크립트, 폼 제출, 팝업, 같은 출처 취급을 모두 막는다. 실험에서 `sandbox`만 준 iframe의 스크립트는 돌지 않았고, `sandbox="allow-scripts"`를 준 iframe은 돌았다. 필요한 것만 하나씩 연다. `allow-scripts`와 `allow-same-origin`을 같은 출처 문서에 함께 주면 안의 스크립트가 sandbox를 스스로 풀 수 있다. 세부는 [브라우저 보안 모델](/posts/browser-security-model)의 sandbox 절에 있다.
+
+반대로 내 페이지가 남의 iframe에 들어가는 걸 막는 건 응답 헤더의 일이다. `Content-Security-Policy: frame-ancestors`와 `X-Frame-Options`는 [웹 보안 헤더](/posts/web-security-headers)에서 다룬다.
+
+유튜브 같은 영상 임베드는 iframe 하나가 플레이어 스크립트와 광고까지 줄줄이 받는다. 그래서 처음에는 썸네일과 재생 버튼만 그린 가벼운 껍데기(파사드)를 두고, 누를 때 진짜 iframe으로 바꾼다. 이 방법과 측정 결과는 [지연 로딩 전략](/posts/lazy-loading-strategies)의 "영상 플레이어는 껍데기만 먼저"에 있다. 파사드를 쓰면 사용자가 두 번 누르지 않게 iframe 주소에 자동 재생 파라미터를 붙이고 `allow="autoplay"`를 준다. 클릭 직후라 자동 재생 정책도 통과한다.
+
+## 파일 하나로 안 될 때: HLS와 MSE
+
+`video src="intro.mp4"`는 파일 하나를 처음부터 받는 방식이다. 서버가 `Range` 요청을 지원하면 중간으로 건너뛸 수도 있다(206 Partial Content). 짧은 소개 영상, 배경 영상은 이걸로 충분하다.
+
+긴 영상이나 라이브는 다르다. 회선이 느려지면 화질을 낮추고, 빨라지면 높여야 한다. 이건 영상을 몇 초짜리 조각으로 나누고 화질별 목록을 만든 HLS나 DASH의 일이다. 사파리는 `video src="master.m3u8"`로 HLS를 직접 튼다. 실험한 Chromium은 HLS에 빈 문자열을 돌려줬다. 이런 브라우저에서는 hls.js나 dash.js, Shaka Player 같은 라이브러리가 조각을 받아 MSE(Media Source Extensions)로 `video`에 밀어 넣는다. 아이폰 사파리는 오래 MSE가 없었고, iOS 17.1부터 전력 관리를 더한 ManagedMediaSource가 들어왔다. 실험한 Chromium은 `MediaSource`만 있고 `ManagedMediaSource`는 없었다.
+
+그래서 기능 검사 순서는 이렇다. 브라우저 이름으로 가르지 않는다.
+
+```js
+if (video.canPlayType("application/vnd.apple.mpegurl")) {
+  video.src = "/master.m3u8";               // 직접 재생
+} else if ("MediaSource" in window || "ManagedMediaSource" in window) {
+  const hls = new Hls();                    // hls.js가 MSE로 재생
+  hls.loadSource("/master.m3u8");
+  hls.attachMedia(video);
+}
+```
+
+조각과 목록을 어떻게 만들고 CDN 비용을 어떻게 줄이는지는 [동영상 서비스 설계 ②](/posts/sd-video-streaming-cost)에, 브라우저가 영상 조각을 받아 오는 네트워크 흐름은 [youtube.com을 입력하고 영상이 나오기까지](/posts/youtube-url-to-video)에 있다. DRM(EME)이 필요한 유료 콘텐츠도 이 MSE 위에서 돈다.
+
+## 영상이 안 나올 때 보는 순서
+
+1. 콘솔에 `NotAllowedError`가 있나. 자동 재생 정책이다. `muted`, `playsinline`, 클릭 안에서 `play()`를 확인한다.
+2. Network 패널에서 영상 요청이 나갔나. 안 나갔다면 `preload="none"`이거나, 모든 `source`의 `type`이 빈 문자열이라 고를 게 없었던 것이다. 콘솔에서 `canPlayType`을 직접 불러 본다.
+3. 요청이 나갔는데 실패했나. 상태 코드, `Content-Type`(`video/mp4`가 `application/octet-stream`으로 오면 일부 브라우저가 거부한다), 탐색할 때 206이 오는지 본다.
+4. 받았는데 안 나오나. 크롬의 `chrome://media-internals`에서 디코더 오류와 선택된 코덱을 본다. H.264 프로파일이 너무 높거나 오디오 코덱만 지원되지 않는 경우가 있다.
+5. 자막이 안 나오나. 앞의 세 가지, 즉 `crossorigin`과 CORS 헤더, `WEBVTT` 첫 줄, `text/vtt` 응답을 본다.
+
+임베드 iframe이 안 뜰 때는 콘솔의 `Refused to display ... in a frame` 메시지가 상대 서버의 `frame-ancestors`나 `X-Frame-Options` 때문인지, 내 페이지의 CSP `frame-src`가 막은 것인지부터 가른다. 앞은 상대가 허락해야 풀리고, 뒤는 내 설정을 고치면 된다. 문단 안의 글자를 담는 태그는 [글을 담는 태그들](/posts/html-text-semantics)에서 이어진다.
+
+## 면접에서 나올 만한 질문
+
+### 배경 영상이 모바일에서 자동 재생되지 않습니다. 원인과 해결은요?
+
+브라우저 자동 재생 정책 때문이다. 소리 있는 자동 재생은 사용자가 페이지와 상호작용한 뒤에만 허락되고, 소리 없는 자동 재생은 허락된다. 그래서 `autoplay muted playsinline`을 함께 쓰고, iOS에서는 `playsinline`이 없으면 전체 화면으로 가거나 재생되지 않는다. 스크립트로 `play()`를 부를 때는 Promise의 `NotAllowedError`를 받아 재생 버튼을 보여 준다.
+
+### video에 source를 여러 개 두는 이유와 순서는 어떻게 정하나요?
+
+브라우저마다 재생할 수 있는 코덱이 달라서다. 브라우저는 위에서부터 `type`을 보고 재생할 수 있을 것 같은 첫 파일만 받으니, 압축률이 좋은 AV1·VP9를 위에, 가장 널리 재생되는 H.264를 아래에 둔다. `type`에 `codecs`까지 적어야 받아 보기 전에 정확히 거를 수 있다.
+
+### preload 값은 어떻게 고르나요?
+
+`none`은 누를 때까지 받지 않고, `metadata`는 길이와 크기만, `auto`는 미리 많이 받아도 된다는 힌트다. 영상이 많은 목록은 `none`에 `poster`를 함께 써서 첫 화면 대역폭을 아끼고, 곧 재생할 주인공 영상만 `metadata`나 `auto`로 둔다. 힌트라서 브라우저가 회선 상태에 따라 무시할 수 있다.
+
+### 영상과 임베드가 CLS를 일으키지 않게 하려면요?
+
+`video`는 `width`, `height` 속성을 비율로 바꿔 쓰니 속성만 적어 두면 메타데이터 전에 자리를 잡는다. `iframe`은 이 변환이 없어서 CSS `aspect-ratio`를 직접 줘야 한다. 측정에서 속성만 둔 iframe은 `height: auto`일 때 150px로 돌아갔다.
+
+### 자막이 같은 출처에서는 뜨는데 CDN으로 옮기니 안 뜹니다. 왜 그런가요?
+
+다른 출처의 `track` 파일은 CORS로 받기 때문이다. `video`에 `crossorigin` 속성을 주고 CDN이 `Access-Control-Allow-Origin`을 보내야 한다. 둘 중 하나가 빠지면 `track`에서 error 이벤트가 난다. 파일 첫 줄의 `WEBVTT`와 `text/vtt` 응답도 함께 확인한다.
+
+### iframe의 sandbox와 allow는 무엇이 다른가요?
+
+`sandbox`는 iframe 문서가 할 수 있는 기본 동작(스크립트, 폼, 팝업, 같은 출처 취급)을 막고 필요한 것만 다시 연다. `allow`는 카메라, 위치, 전체 화면, 자동 재생 같은 강력한 기능을 iframe에 넘겨줄지 정하는 Permissions Policy다. 같은 출처 문서에 `allow-scripts`와 `allow-same-origin`을 함께 주면 안의 스크립트가 sandbox를 풀 수 있다.
+
+### 유튜브 임베드 때문에 페이지가 느립니다. 어떻게 하나요?
+
+첫 화면 밖이면 `loading="lazy"`로 미루고, 더 나아가 썸네일과 재생 버튼만 그린 파사드를 두었다가 누를 때 진짜 iframe으로 바꾼다. 파사드를 누른 뒤에는 자동 재생 파라미터와 `allow="autoplay"`로 한 번만 누르게 한다. 클릭 직후라 자동 재생 정책도 통과한다.
+
+### video src에 mp4를 넣는 것과 HLS 플레이어를 쓰는 것은 언제 갈리나요?
+
+짧은 영상은 파일 하나와 Range 요청으로 충분하다. 긴 영상, 라이브, 회선에 따라 화질을 바꿔야 하는 서비스는 조각과 화질별 목록을 쓰는 HLS·DASH가 필요하다. 사파리는 HLS를 직접 틀고, 다른 브라우저는 hls.js 같은 라이브러리가 MSE로 재생하니 `canPlayType`과 `MediaSource` 기능 검사로 분기한다.

@@ -1,0 +1,349 @@
+import { getPostMetadata } from "@/features/posts";
+
+export const metadata = getPostMetadata("reactive-programming");
+
+<EasyIntro>
+  수도관을 떠올려 보자. 물은 한쪽에서 계속 흘러 들어오고, 우리는 관 중간에 거름망이나 밸브를 달아서 흘러가는 물을 바꾼다. 물을 한 컵씩 떠서 옮기지 않고, 관에 장치를 달아 두기만 하면 나머지는 물이 알아서 지나간다.
+
+  리액티브 프로그래밍은 데이터를 이런 물줄기로 보는 방식이다. 키보드 입력, 서버 응답, 클릭 같은 것들이 시간에 따라 하나씩 흘러온다. 프로그래머는 "짧은 건 걸러라", "잠깐 멈출 때만 보내라", "새 물이 오면 예전 물은 버려라" 같은 장치를 관에 단다.
+
+  관은 누군가 수도꼭지를 틀어야, 그러니까 구독해야 비로소 물이 흐른다. 다 쓰고 나면 꼭지를 잠가야 물이 새지 않는다. 받는 쪽이 감당할 만큼만 보내 달라고 말하는 밸브도 있는데, 이것 덕분에 넘쳐서 터지는 일을 막는다. 대신 관이 길고 복잡해지면 물이 어디서 막혔는지 찾기가 어려워진다.
+</EasyIntro>
+
+검색창에 `rea`까지 치면 추천 목록이 뜨는 화면을 만들었다. 글자마다 요청을 보냈더니 서버 로그에 요청이 쏟아졌고, 가끔 입력창에는 `rea`가 있는데 목록은 `r`의 결과로 바뀌었다. 짧은 검색어일수록 결과가 많아서 서버가 늦게 답했고, 그 늦은 응답이 최신 결과를 덮어쓴 것이다.
+
+고치는 방법 자체는 [디바운스와 스로틀](/posts/debounce-throttle) 글에 정리돼 있다. 멈췄을 때만 보내고, 새 요청을 보내기 전에 이전 요청을 취소한다. 문제는 코드 모양이다. 타이머 변수, 마지막 검색어 변수, `AbortController`, 응답이 왔을 때 아직 유효한지 확인하는 `if`가 핸들러 여기저기에 흩어진다. 기능이 하나 늘 때마다 변수가 하나씩 늘어난다.
+
+리액티브 프로그래밍은 이 문제를 다르게 본다. 입력 이벤트를 "시간 위에 놓인 값의 흐름"으로 보고, 그 흐름에 연산자를 건다. 이 글은 RxJS 7.8과 Project Reactor 3.7로 그 방식을 따라가고, 서버 쪽에서 Reactive Streams 표준과 백프레셔가 어떻게 들어가는지, 그리고 WebFlux를 고를 때 흔히 하는 오해까지 본다. 예제 출력은 Node 22와 OpenJDK 21에서 직접 돌린 결과다.
+
+## 값 하나가 아니라 값의 흐름
+
+보통 함수는 값 하나를 돌려준다. `Promise`는 나중에 올 값 하나를 돌려준다. 그런데 키보드 입력은 하나가 아니다. 시간에 따라 0개, 1개, 수백 개가 오고, 언젠가 끝날 수도 있고 에러로 끝날 수도 있다. 이걸 담는 그릇이 RxJS의 `Observable`, Reactor의 `Flux`(0~N개)와 `Mono`(0~1개)다.
+
+흐름이 보낼 수 있는 신호는 세 가지뿐이다. 값(`next`), 정상 끝(`complete`), 에러(`error`). 끝 신호는 둘 중 하나만, 그것도 한 번만 온다. 이 규칙이 단순해서 연산자를 레고처럼 이어 붙일 수 있다. `map`은 값마다 모양을 바꾸고, `filter`는 조건에 안 맞는 값을 버리고, `debounceTime`은 일정 시간 조용할 때만 마지막 값을 내보낸다. 각 연산자는 흐름 하나를 받아 새 흐름을 돌려준다.
+
+검색창을 이렇게 쓰면 이렇다.
+
+```ts
+import { fromEvent, map, filter, debounceTime, distinctUntilChanged, switchMap } from "rxjs";
+
+const input = document.querySelector<HTMLInputElement>("#q")!;
+
+const results$ = fromEvent(input, "input").pipe(
+  map(() => input.value.trim()),       // 이벤트 → 검색어
+  filter((q) => q.length >= 2),        // 한 글자는 무시
+  debounceTime(300),                   // 300ms 조용할 때만
+  distinctUntilChanged(),              // 직전과 같은 검색어면 건너뜀
+  switchMap((q) => searchApi(q)),      // 새 검색어가 오면 이전 요청은 버림
+);
+
+const sub = results$.subscribe((list) => render(list));
+```
+
+흩어져 있던 타이머, 마지막 값, 취소 로직이 연산자 이름 하나씩으로 줄었다. 앞의 네 줄은 Node에서 입력을 흉내 내 그대로 돌려 봤다. 0ms부터 80ms 간격으로 `r`, `re`, `rea`, `reac`를 치고, 700ms에 `reac ` (뒤에 공백), 1200ms에 `react`를 쳤다.
+
+```text
+ 543ms 검색: "reac"
+1501ms 검색: "react"
+```
+
+검색은 두 번만 나갔다. `r`는 `filter`가, 연달아 친 글자는 `debounceTime`이 걸렀다. 700ms의 `reac `는 `trim()` 뒤 `reac`가 되어 직전과 같으니 `distinctUntilChanged`가 버렸다.
+
+## 낡은 응답을 버리는 연산자, switchMap
+
+가장 중요한 줄은 마지막 `switchMap`이다. 검색어 하나가 요청 하나(또 다른 흐름)로 바뀌는데, 흐름 안에서 흐름이 생기면 "여러 개가 동시에 살아 있을 때 어떻게 할지"를 골라야 한다. RxJS는 이 선택을 연산자 이름으로 드러낸다.
+
+- `mergeMap`: 다 살려 두고, 도착하는 대로 내보낸다.
+- `switchMap`: 새 값이 오면 이전 안쪽 흐름을 구독 해제(취소)하고 새 것으로 갈아탄다.
+- `concatMap`: 앞의 것이 끝날 때까지 다음 것을 줄 세운다.
+- `exhaustMap`: 진행 중인 게 있으면 새 값을 무시한다.
+
+`r`(300ms 걸림), `re`(200ms), `rea`(50ms)를 30ms 간격으로 보내고 `mergeMap`과 `switchMap`을 비교했다.
+
+```text
+mergeMap  결과(rea)
+mergeMap  결과(re)
+mergeMap  결과(r)
+switchMap 결과(rea)
+```
+
+`mergeMap`은 세 결과를 도착 순서대로 내보내서 화면에 마지막으로 남는 건 가장 늦게 온 `r`의 결과다. 처음에 본 버그가 그대로 재현된다. `switchMap`은 `re`가 들어오는 순간 `r` 요청을, `rea`가 들어오는 순간 `re` 요청을 버려서 결과 하나만 남는다. 아래 그림에서 다음을 누르면 키 입력마다 "지금 살아 있는 요청"이 어떻게 바뀌는지 볼 수 있다.
+
+<AlgoTrace
+  caption="switchMap: 새 검색어가 오면 살아 있던 요청을 버린다"
+  memoryLabel="살아 있는 요청"
+  cells={["r @0", "re @30", "rea @60", "응답 rea @110", "응답 re @230", "응답 r @300"]}
+  steps={[
+    { pointer: 0, memory: ["r"], caption: "r를 쳤다. r 요청을 구독한다." },
+    { pointer: 1, memory: ["re"], caption: "re가 왔다. r 요청을 구독 해제하고 re로 갈아탄다." },
+    { pointer: 2, memory: ["rea"], caption: "rea가 왔다. re 요청도 버린다. 남은 건 rea 하나." },
+    { pointer: 3, found: [3], memory: [], caption: "rea 응답이 도착해 화면에 그린다. 안쪽 흐름이 끝났다." },
+    { pointer: 4, memory: [], caption: "re 응답은 이미 구독 해제된 뒤라 아무도 받지 않는다." },
+    { pointer: 5, found: [3], memory: [], caption: "r 응답도 버려진다. 화면에는 rea 결과만 남는다." },
+  ]}
+/>
+
+"취소"의 실제 의미는 연산자가 안쪽 흐름의 구독을 끊는다는 것이다. RxJS의 `ajax`나 `fromFetch`는 구독 해제 때 실제 HTTP 요청도 중단한다. 반면 `from(fetch(url))`처럼 이미 시작된 `Promise`를 감싼 흐름은 구독을 끊어도 응답이 화면에 안 쓰일 뿐 네트워크 요청은 끝까지 간다. 서버 부하까지 줄이려면 구독 해제와 요청 중단이 연결된 소스를 써야 한다.
+
+고르는 기준은 상황이다. 검색 자동 완성처럼 최신 것만 의미 있으면 `switchMap`, 저장 요청처럼 순서가 중요하고 하나도 잃으면 안 되면 `concatMap`, 결제 버튼 연타처럼 진행 중에 들어온 걸 무시해야 하면 `exhaustMap`이다. 저장 요청에 `switchMap`을 쓰면 앞의 저장이 취소돼 데이터가 사라질 수 있다. 습관처럼 `switchMap`을 쓰는 게 가장 흔한 실수다.
+
+직접 규칙을 구현해 보자. 요청마다 보낸 시각과 걸린 시간이 있을 때, 화면에 실제로 그려지는 결과의 순서를 돌려준다. `"merge"`는 도착 순서대로 모두, `"switch"`는 다음 요청이 나가기 전에 도착한 것만 그린다.
+
+<CodePlayground
+  caption="mergeMap과 switchMap에서 화면에 그려지는 결과"
+  functionName="shownResults"
+  initialCode={`function shownResults(requests, mode) {
+  // requests: [{ q, at, delay }] 보낸 순서대로, 도착 시각은 at + delay
+  // mode: "merge" | "switch"
+  // 화면에 그려지는 검색어를 그려지는 순서대로 돌려준다
+  return [];
+}`}
+  solution={`function shownResults(requests, mode) {
+  const arrivals = requests.map((r, i) => ({ q: r.q, i, arrive: r.at + r.delay }));
+  let shown = arrivals;
+  if (mode === "switch") {
+    shown = arrivals.filter((a) => {
+      const next = requests[a.i + 1];
+      return !next || a.arrive < next.at;
+    });
+  }
+  return shown.sort((x, y) => x.arrive - y.arrive || x.i - y.i).map((a) => a.q);
+}`}
+  tests={[
+    { label: "merge: 늦은 r가 마지막", args: [[{ q: "r", at: 0, delay: 300 }, { q: "re", at: 30, delay: 200 }, { q: "rea", at: 60, delay: 50 }], "merge"], expected: ["rea", "re", "r"] },
+    { label: "switch: 최신 것만", args: [[{ q: "r", at: 0, delay: 300 }, { q: "re", at: 30, delay: 200 }, { q: "rea", at: 60, delay: 50 }], "switch"], expected: ["rea"] },
+    { label: "겹치지 않으면 둘 다 같다", args: [[{ q: "a", at: 0, delay: 50 }, { q: "ab", at: 100, delay: 50 }], "switch"], expected: ["a", "ab"] },
+    { label: "merge: 중간 것이 먼저 도착", args: [[{ q: "a", at: 0, delay: 100 }, { q: "ab", at: 50, delay: 10 }, { q: "abc", at: 200, delay: 10 }], "merge"], expected: ["ab", "a", "abc"] },
+    { label: "switch: 겹친 a만 버린다", args: [[{ q: "a", at: 0, delay: 100 }, { q: "ab", at: 50, delay: 10 }, { q: "abc", at: 200, delay: 10 }], "switch"], expected: ["ab", "abc"] },
+    { label: "요청이 없다", args: [[], "switch"], expected: [] },
+  ]}
+/>
+
+## 구독하기 전에는 아무 일도 없다
+
+리액티브 흐름은 기본적으로 게으르다. 파이프라인을 만드는 건 수도관을 설치하는 일이고, `subscribe()`가 꼭지를 트는 일이다. 구독하지 않으면 HTTP 요청도, 타이머도 시작되지 않는다. Reactor에서 `repository.save(user)`가 돌려준 `Mono`를 아무도 구독하지 않아 저장이 안 되는 버그가 여기서 나온다. 컨트롤러가 그 `Mono`를 반환하면 WebFlux가 구독하지만, 중간에 반환값을 버리면 저장은 일어나지 않는다.
+
+같은 이유로 구독할 때마다 일이 처음부터 다시 일어난다. 이런 흐름을 콜드(cold)라고 한다. HTTP 요청을 감싼 `Observable`을 두 컴포넌트가 각각 구독하면 요청이 두 번 나간다. 여러 구독자가 하나의 실행을 나눠 보게 하려면 `share()`로 핫(hot)하게 바꾼다.
+
+```ts
+let calls = 0;
+const req$ = new Observable<string>((sub) => {
+  const n = ++calls;
+  console.log(`  HTTP 요청 #${n} 시작`);
+  const id = setTimeout(() => { sub.next(`응답 #${n}`); sub.complete(); }, 50);
+  return () => clearTimeout(id);       // 구독 해제 때 정리
+});
+
+req$.subscribe((v) => console.log("  A", v));
+req$.subscribe((v) => console.log("  B", v));
+// 그다음 calls를 0으로 되돌리고 req$.pipe(share())를 두 번 구독
+```
+
+```text
+[cold] 구독 두 번
+  HTTP 요청 #1 시작
+  HTTP 요청 #2 시작
+  A 응답 #1
+  B 응답 #2
+[share] 구독 두 번
+  HTTP 요청 #1 시작
+  A 응답 #1
+  B 응답 #1
+```
+
+핫 흐름은 구독자와 상관없이 값이 흐르는 쪽에 가깝다. 마우스 움직임, 웹소켓 메시지, Kafka 토픽처럼 원래부터 계속 흐르는 소스가 그렇다. 핫 흐름에 늦게 구독하면 이미 지나간 값은 못 받는다. 지난 값이 필요하면 `shareReplay(1)`(Reactor는 `replay`, `cache`)로 마지막 값을 기억하게 한다. 다만 `shareReplay`는 기본 설정에서 구독자가 모두 떠나도 원본 구독을 유지하므로, 끝나지 않는 흐름에 쓰면 계속 살아 있다. `refCount: true`를 주면 마지막 구독자가 떠날 때 원본도 끊긴다.
+
+## 꼭지를 잠그지 않으면 새는 것
+
+`subscribe()`는 `Subscription`을 돌려주고, `unsubscribe()`를 부르면 흐름 안의 타이머·소켓·리스너가 정리된다. 위 코드의 `return () => clearTimeout(id)`가 그 정리 함수다. 10ms마다 값을 내는 `interval`을 35ms 뒤에 해제했다.
+
+```text
+  tick 0
+  tick 1
+  tick 2
+  해제, closed = true
+```
+
+`complete`나 `error`로 끝난 흐름은 알아서 정리되지만, `interval`, `fromEvent`, 웹소켓처럼 끝나지 않는 흐름은 누군가 끊어야 한다. React라면 `useEffect`의 정리 함수에서 끊는다. 이걸 빠뜨리면 화면을 떠난 뒤에도 콜백이 돌아 이미 사라진 상태를 건드리고, 리스너가 쌓여 [메모리 누수](/posts/js-memory-leak)가 된다. 옵서버 목록이 구독자를 붙잡아 생기는 누수는 [옵서버 패턴](/posts/pattern-observer) 글에서 본 것과 같은 구조다. 리액티브 라이브러리는 옵서버 패턴에 "끝"과 "에러"라는 신호, 그리고 합성할 수 있는 연산자를 더한 것이라고 봐도 된다.
+
+```ts
+useEffect(() => {
+  const sub = results$.subscribe(setResults);
+  return () => sub.unsubscribe();      // 화면을 떠나면 끊는다
+}, []);
+```
+
+여러 구독을 한 번에 끊고 싶으면 `takeUntil(destroy$)`를 파이프 끝에 붙이는 방식도 많이 쓴다. `takeUntil`이 파이프 중간에 있으면 그 뒤에 오는 `switchMap`의 안쪽 흐름은 끊기지 않을 수 있어서, 보통 마지막에 둔다.
+
+React 앱에서 RxJS를 꼭 써야 하는지는 따로 따져 본다. 서버 데이터를 가져와 캐시하는 일은 TanStack Query 같은 도구가 키 단위로 낡은 응답을 버리고 구독 정리도 대신 해 주니, 검색 자동 완성 정도라면 RxJS 없이도 충분하다([클라이언트 데이터 캐시](/posts/client-data-cache) 참고). RxJS가 빛나는 건 이벤트 여러 개를 시간 기준으로 엮을 때다. 드래그 시작부터 끝까지의 좌표, 웹소켓 재연결과 재시도, 여러 입력이 모두 유효할 때만 저장하기처럼 "언제"가 로직의 중심인 화면이다.
+
+## 서버에서는 받는 쪽이 양을 정한다
+
+브라우저의 RxJS는 밀어내기(push) 방식이다. 소스가 값을 내면 구독자는 받아야 한다. 구독자가 느리면 `debounceTime`, `throttleTime`, `sampleTime`, `bufferTime`처럼 값을 버리거나 묶는 연산자로 줄인다. RxJS에는 "몇 개만 보내 달라"는 약속 자체가 없다.
+
+서버는 사정이 다르다. DB 커서에서 100만 행을 읽어 느린 클라이언트에게 보낼 때 다 밀어내면 메모리가 터진다. 그래서 JVM 진영은 2015년에 Reactive Streams라는 작은 규약을 만들었다. 인터페이스는 넷이다. `Publisher`(내보내는 쪽), `Subscriber`(받는 쪽), 둘 사이의 계약인 `Subscription`, 둘을 겸하는 `Processor`. Java 9의 `java.util.concurrent.Flow`가 같은 모양이고, Project Reactor, RxJava 2 이후, Akka Streams가 이 규약을 따라 서로 이어 붙일 수 있다.
+
+핵심 규칙은 하나다. 구독자가 `request(n)`으로 요청한 개수보다 많이 `onNext`를 보내면 안 된다. 신호가 오가는 순서를 아래 그림에서 다음을 눌러 따라가 보자.
+
+<SequenceDiagram
+  caption="Reactive Streams: 구독자가 request(n)으로 받을 만큼만 요청한다"
+  actors={[
+    { id: "pub", label: "Publisher" },
+    { id: "sub", label: "Subscriber" },
+  ]}
+  steps={[
+    { from: "sub", to: "pub", label: "subscribe()", title: "구독", detail: "구독자가 발행자에게 구독을 요청한다. 아직 값은 하나도 흐르지 않는다." },
+    { from: "pub", to: "sub", label: "onSubscribe(s)", title: "계약서 전달", detail: "발행자는 Subscription을 건넨다. 구독자는 이걸로 양을 요청하거나 취소한다." },
+    { from: "sub", to: "pub", label: "request(2)", title: "두 개만", detail: "구독자가 지금 처리할 수 있는 만큼, 두 개를 요청한다.", payload: "s.request(2)" },
+    { from: "pub", to: "sub", label: "onNext(1), onNext(2)", title: "요청한 만큼만", detail: "발행자는 두 개를 보내고 멈춘다. 세 번째 값이 준비돼 있어도 보내지 않는다." },
+    { from: "sub", to: "pub", label: "request(2)", title: "다 처리했으니 더", detail: "구독자가 두 개를 다 처리한 뒤 다시 두 개를 요청한다. 속도를 받는 쪽이 정한다." },
+    { from: "pub", to: "sub", label: "onNext(3..5), onComplete", title: "끝", detail: "값이 다 떨어지면 onComplete로 끝을 알린다. 에러였다면 onError가 대신 온다." },
+  ]}
+/>
+
+Reactor의 `BaseSubscriber`로 이 순서를 직접 찍어 봤다. 구독할 때 2개를 요청하고, 2개를 받을 때마다 2개를 더 요청한다.
+
+```java
+Flux.range(1, 5)
+    .doOnRequest(n -> System.out.println("request(" + n + ")"))
+    .subscribe(new BaseSubscriber<Integer>() {
+        int got = 0;
+        protected void hookOnSubscribe(Subscription s) { request(2); }
+        protected void hookOnNext(Integer v) {
+            System.out.println("onNext " + v);
+            if (++got % 2 == 0) request(2);
+        }
+        protected void hookOnComplete() { System.out.println("onComplete"); }
+    });
+```
+
+```text
+request(2)
+onNext 1
+onNext 2
+request(2)
+onNext 3
+onNext 4
+request(2)
+onNext 5
+onComplete
+```
+
+평소에는 이렇게 손으로 요청하지 않는다. `subscribe(System.out::println)`처럼 쓰면 구독자가 `request(Long.MAX_VALUE)`, 사실상 "제한 없이"를 보낸다. 대신 연산자가 중간에서 양을 조절한다. `limitRate(4)`를 걸면 위로 가는 요청이 이렇게 바뀐다.
+
+```text
+upstream request(4)
+upstream request(3)
+upstream request(3)
+upstream request(3)
+```
+
+처음에 4개를 받고, 그중 75%(3개)를 처리할 때마다 3개씩 채운다. 한 번에 몰아서 받지 않고 조금씩 당겨서 위쪽(DB 드라이버, 네트워크)이 한꺼번에 일하지 않게 한다.
+
+요청을 따를 수 없는 소스도 있다. `Flux.interval`처럼 시계에 맞춰 값을 내는 핫 소스는 구독자가 느리다고 시간을 멈출 수 없다. 이럴 때는 넘치는 몫을 어떻게 할지 연산자로 정한다. `onBackpressureBuffer`(쌓기, 상한을 꼭 준다), `onBackpressureDrop`(버리기), `onBackpressureLatest`(최신 하나만). 1ms마다 값을 내고 소비자는 값마다 10ms씩 걸리게 해서 200개를 흘렸다.
+
+```text
+seen=26 dropped=174
+```
+
+200개 중 26개만 처리하고 174개를 버렸다. 이 숫자는 돌릴 때마다 조금씩 달라진다. 버리지 않으면 이 차이가 메모리에 쌓인다. 쌓기·버리기·늦추기를 고르는 기준과 TCP, Node 스트림에서 같은 원리가 반복되는 모습은 [백프레셔](/posts/backpressure) 글에서 자세히 다뤘다.
+
+## WebFlux가 빠르다는 오해
+
+Spring WebFlux는 Reactor 위에서 돌고, 기본 서버는 Netty다. Reactor Netty는 기본으로 CPU 코어 수(최소 4개)만큼의 이벤트 루프 스레드로 모든 연결을 처리한다. 요청마다 스레드 하나를 붙잡는 [Spring MVC의 톰캣 스레드 모델](/posts/spring-mvc-request-lifecycle)과 반대다. 기다리는 동안 스레드를 쥐고 있지 않으니, 느린 외부 API를 수천 개 동시에 기다려도 스레드 수가 늘지 않는다.
+
+여기서 "WebFlux가 MVC보다 빠르다"는 말이 나오는데, 반만 맞다. 요청 하나의 응답 시간은 거의 같다. 계산이 많은 API라면 오히려 연산자 체인과 스케줄러 전환 비용만큼 조금 느릴 수 있다. 리액티브가 얻는 건 적은 스레드로 많은 동시 대기를 버티는 능력, 그러니까 처리량과 자원 효율이다. 대부분의 시간이 I/O 대기인 서비스에서만 이득이 크다.
+
+그리고 이 이득에는 전제가 있다. 이벤트 루프 스레드에서는 절대로 블로킹하면 안 된다. 스레드 하나짜리 스케줄러를 이벤트 루프 삼아 요청 다섯 개를 동시에 처리했다. 한 번은 100ms를 논블로킹으로 기다리고(`Mono.delay`), 한 번은 블로킹으로 기다렸다(`Thread.sleep`). JDBC 호출이나 동기 HTTP 클라이언트가 바로 이런 블로킹이다.
+
+```text
+논블로킹 대기(Mono.delay 100ms)
+  req1 끝  101ms [loop-1]
+  req2 끝  102ms [loop-1]
+  req3 끝  102ms [loop-1]
+  req4 끝  103ms [loop-1]
+  req5 끝  103ms [loop-1]
+블로킹 호출(Thread.sleep 100ms)
+  req1 끝  101ms [loop-1]
+  req2 끝  202ms [loop-1]
+  req3 끝  303ms [loop-1]
+  req4 끝  405ms [loop-1]
+  req5 끝  506ms [loop-1]
+```
+
+논블로킹이면 다섯 요청이 한 스레드에서 함께 기다려 103ms에 모두 끝난다. 블로킹이 하나라도 들어가면 스레드가 잠든 동안 다른 요청은 줄을 서서, 다섯 번째는 506ms가 걸렸다. 실제 Netty는 코어 수만큼 루프가 있지만, 루프 하나에 연결 수백 개가 묶여 있으니 블로킹 호출 하나가 그 연결 전부를 멈춘다. 증상은 "CPU는 놀고 있는데 응답이 느리고, 스레드 덤프를 뜨면 `reactor-http-nio-*` 스레드가 `socketRead`나 `sleep`에 걸려 있다"는 모양으로 나타난다.
+
+피할 수 없는 블로킹 호출은 블로킹 전용 스레드 풀로 보낸다.
+
+```java
+Mono.fromCallable(() -> legacyClient.fetch(id))   // 블로킹 호출
+    .subscribeOn(Schedulers.boundedElastic());    // 이벤트 루프 대신 별도 풀에서
+```
+
+개발 중에는 BlockHound 같은 도구를 붙이면 논블로킹 스레드에서 블로킹 호출이 일어날 때 예외로 알려 준다. DB까지 논블로킹으로 가려면 JDBC 대신 R2DBC 드라이버가 필요하고, JPA처럼 블로킹을 전제로 한 라이브러리는 함께 쓰기 어렵다. 이 생태계 제약이 WebFlux 도입을 망설이게 하는 가장 현실적인 이유다.
+
+## 가상 스레드 이후 리액티브가 설 자리
+
+Java 21에서 정식 기능이 된 가상 스레드는 같은 문제를 다른 방향에서 푼다. 블로킹 호출을 만나면 JVM이 가상 스레드를 운영체제 스레드에서 떼어 내고, 응답이 오면 다시 붙인다. 코드는 평범한 동기 코드 그대로 쓰는데, 기다리는 비용은 리액티브처럼 싸다. Spring Boot 3.2부터는 `spring.threads.virtual.enabled=true` 한 줄로 톰캣 요청 처리를 가상 스레드로 바꿀 수 있다. 자세한 동작과 주의점(고정 pinning, 스레드 로컬)은 [JVM 메모리와 스레드](/posts/java-jvm-memory-gc) 글에 있다.
+
+"요청마다 외부 API 몇 개를 기다리는 일반적인 서버"라면 이제 가상 스레드가 더 단순한 답인 경우가 많다. 스택 트레이스가 그대로 읽히고, JPA와 JDBC를 그대로 쓰고, 팀원 누구나 코드를 읽는다.
+
+그래도 리액티브가 여전히 맞는 곳이 있다. 첫째, 데이터가 정말로 흐름인 경우다. 웹소켓·SSE로 끝없이 내보내는 이벤트, Kafka 소비, 여러 소스를 합치고 창(window)으로 묶는 처리처럼 "시간에 따라 오는 값"을 다루는 일은 연산자가 코드보다 훨씬 짧다. 둘째, 백프레셔가 필요한 경우다. 가상 스레드는 기다림을 싸게 만들 뿐 "받는 쪽이 느리니 덜 보내라"는 신호를 주지 않는다. 셋째, 브라우저의 UI 이벤트처럼 스레드 개념이 없는 환경이다. RxJS는 처음부터 이쪽을 위한 도구였다.
+
+## 디버깅이 어려운 이유
+
+리액티브 코드를 처음 운영하면 스택 트레이스에서 당황한다. 에러가 난 지점에 내 코드는 없고 `FluxMap$MapSubscriber.onNext`, `MonoFlatMap$FlatMapMain` 같은 연산자 내부 클래스가 수십 줄 찍힌다. 파이프라인을 "조립"한 곳과 값이 실제로 흐르며 "실행"되는 곳이 다르기 때문이다. 조립은 애플리케이션 시작 때 끝나고, 실행은 다른 스레드에서 한참 뒤에 일어난다.
+
+Reactor는 몇 가지 장치를 준다. `checkpoint("주문 조회")`를 파이프 중간에 넣으면 에러가 그 지점을 지났을 때 스택 트레이스에 이름이 붙는다. `Hooks.onOperatorDebug()`는 모든 연산자의 조립 위치를 기록하지만 비용이 커서 운영에는 쓰지 않는다. 운영에서는 `reactor-tools`의 `ReactorDebugAgent`가 바이트코드 단계에서 같은 정보를 더 싸게 남긴다. `log()` 연산자는 그 지점을 지나는 `onSubscribe`, `request`, `onNext`, `cancel` 신호를 모두 찍어서, "왜 값이 안 오지"를 볼 때 첫 번째로 붙여 볼 만하다.
+
+에러 처리도 자리를 잘 골라야 한다. 흐름은 `error` 신호 하나로 끝나기 때문에, 검색 파이프라인 안쪽 요청이 한 번 실패하면 바깥 흐름까지 끝나서 그 뒤로는 검색창이 아무 반응도 하지 않는다. 실패를 안쪽 흐름에서 잡아 값으로 바꿔야 바깥 흐름이 살아남는다.
+
+```ts
+switchMap((q) =>
+  searchApi(q).pipe(
+    catchError(() => of([])),     // 안쪽에서 잡는다. 바깥 흐름은 계속 산다
+  ),
+),
+```
+
+`catchError`를 `switchMap` 바깥, 파이프 맨 끝에 두면 에러는 잡히지만 그 시점에 원래 흐름은 이미 끝났다. 검색창이 "한 번 에러 나면 죽는" 증상의 대부분이 이 위치 문제다.
+
+마지막으로 팀의 문제가 있다. 연산자 수십 개의 의미를 다 알아야 코드를 읽을 수 있다. 연산자 선택 하나(`mergeMap`과 `switchMap`)로 동작이 크게 바뀌는데, 코드 리뷰에서 그 차이를 알아보는 사람이 적으면 버그가 숨어든다. 도입할지는 팀이 이 비용을 질 만큼 흐름 문제가 많은지로 정한다.
+
+## 흐름에 장치를 다는 방식
+
+리액티브 프로그래밍은 시간에 따라 오는 값을 흐름 하나로 보고, 걸러 내기·묶기·갈아타기 같은 연산자를 그 흐름에 거는 방식이다. 흐름은 구독할 때 시작되고, 구독을 끊어야 정리된다. 서버에서는 Reactive Streams의 `request(n)`이 받는 쪽이 속도를 정하게 해 준다. 이벤트 루프에서 블로킹하지 않는다는 전제를 지킬 때만 적은 스레드로 많은 대기를 버틸 수 있고, 단순한 요청·응답 서버라면 가상 스레드가 더 쉬운 길일 수 있다.
+
+## 면접에서 나올 만한 질문
+
+### 리액티브 프로그래밍이란 무엇인가요?
+
+시간에 따라 비동기로 들어오는 값을 하나의 흐름(스트림)으로 보고, 그 흐름에 `map`, `filter`, `switchMap` 같은 연산자를 걸어 선언적으로 처리하는 방식이다. 흐름은 값, 완료, 에러 세 가지 신호만 보내서 연산자를 자유롭게 이어 붙일 수 있다. 콜백 안에 흩어지던 타이머, 취소, 순서 처리 로직을 연산자 이름으로 드러낼 수 있다는 게 장점이다.
+
+### mergeMap, switchMap, concatMap, exhaustMap은 언제 각각 쓰나요?
+
+값 하나가 안쪽 흐름으로 바뀔 때 겹치는 흐름을 어떻게 다룰지의 차이다. 최신 결과만 의미 있는 검색 자동 완성은 이전 것을 취소하는 `switchMap`, 순서를 지키며 하나도 잃으면 안 되는 저장은 `concatMap`, 진행 중 입력을 무시해야 하는 제출 버튼은 `exhaustMap`, 전부 병렬로 돌려도 되면 `mergeMap`을 쓴다. 저장 요청에 `switchMap`을 쓰면 앞의 저장이 취소될 수 있다는 점이 흔한 실수다.
+
+### 콜드 스트림과 핫 스트림의 차이는 무엇인가요?
+
+콜드는 구독할 때마다 소스 실행이 처음부터 새로 일어나고, 핫은 구독자와 상관없이 하나의 실행을 여럿이 나눠 본다. HTTP 요청을 감싼 `Observable`은 콜드라서 두 번 구독하면 요청도 두 번 나간다. `share()`나 `shareReplay`로 핫하게 바꿀 수 있고, 핫 흐름에 늦게 구독하면 지나간 값은 받지 못한다.
+
+### 구독을 해제하지 않으면 어떤 문제가 생기나요?
+
+`interval`, DOM 이벤트, 웹소켓처럼 끝나지 않는 흐름은 계속 살아서 콜백을 부르고, 그 콜백이 잡고 있는 객체도 해제되지 않아 메모리 누수가 된다. 화면을 떠난 컴포넌트의 상태를 건드리는 버그도 생긴다. React에서는 `useEffect` 정리 함수에서 `unsubscribe()`하거나, `takeUntil`을 파이프 끝에 붙여 한 번에 끊는다.
+
+### Reactive Streams의 백프레셔는 어떻게 동작하나요?
+
+구독자가 `Subscription.request(n)`으로 받을 수 있는 개수를 알리고, 발행자는 그 개수를 넘겨서 `onNext`를 보내지 못하는 규약이다. 속도를 받는 쪽이 정하므로 느린 소비자 때문에 메모리가 넘치지 않는다. 요청을 따를 수 없는 시계 기반 소스에는 `onBackpressureBuffer`, `Drop`, `Latest`로 넘치는 몫의 처리 방법을 정한다. RxJS에는 이 규약이 없어서 `throttle`, `debounce` 같은 손실 연산자로 줄인다.
+
+### WebFlux로 바꾸면 API가 빨라지나요?
+
+요청 하나의 응답 시간은 거의 그대로이고, 계산 위주라면 오히려 조금 느릴 수 있다. 얻는 건 적은 이벤트 루프 스레드로 많은 동시 I/O 대기를 버티는 처리량이다. 다만 이벤트 루프에서 JDBC나 동기 HTTP 같은 블로킹 호출이 하나라도 있으면 그 루프에 묶인 요청이 전부 줄을 서므로, `boundedElastic`으로 옮기거나 R2DBC 같은 논블로킹 드라이버를 써야 한다.
+
+### Java 21 가상 스레드가 나온 뒤에도 리액티브가 필요한가요?
+
+일반적인 요청·응답 서버라면 가상 스레드가 동기 코드 그대로 대기 비용을 줄여 주므로 더 단순한 선택인 경우가 많다. 하지만 가상 스레드는 백프레셔 신호를 주지 않고, 끝없는 이벤트 흐름을 합치고 창으로 묶는 처리에는 연산자가 여전히 편하다. 그래서 스트리밍, 메시지 소비, UI 이벤트 처리처럼 데이터 자체가 흐름인 곳에서는 리액티브가 계속 쓰인다.
+
+### 리액티브 코드는 왜 디버깅이 어렵고, 어떻게 대응하나요?
+
+파이프라인을 조립하는 곳과 실제로 실행되는 곳(시점, 스레드)이 달라서 스택 트레이스에 연산자 내부 클래스만 찍히기 때문이다. Reactor에서는 `checkpoint()`로 지점에 이름을 붙이고, 운영에서는 `ReactorDebugAgent`로 조립 위치를 남기며, `log()`로 구독·요청·취소 신호를 직접 본다. 에러 하나가 흐름 전체를 끝내므로 `catchError`나 `onErrorResume`을 안쪽 흐름에 두는 것도 중요하다.
