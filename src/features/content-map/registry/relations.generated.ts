@@ -2,6 +2,147 @@
 import type { PostRelations } from "./types";
 
 export const POST_RELATIONS: Record<string, PostRelations> = {
+  "rw-aws-s3-2017-outage": {
+    "links": [
+      "postmortems",
+      "disaster-recovery",
+      "rw-aws-shuffle-sharding-cells",
+      "sd-object-storage-architecture",
+      "rw-github-2018-network-partition",
+      "circuit-breaker",
+      "multi-region"
+    ],
+    "mentions": [
+      "cloud-service-models-shared-responsibility",
+      "frontend-hosting-platforms",
+      "rest-api-design",
+      "resilience-patterns",
+      "ansible-network-automation",
+      "dns",
+      "on-call"
+    ]
+  },
+  "rw-aws-shuffle-sharding-cells": {
+    "links": [
+      "multi-tenancy-isolation",
+      "fault-tolerance",
+      "rw-aws-s3-2017-outage",
+      "ddos-protection",
+      "retries",
+      "backpressure",
+      "consistent-hashing",
+      "zero-downtime-migrations",
+      "rate-limiting-algorithms"
+    ],
+    "mentions": [
+      "cloud-service-models-shared-responsibility",
+      "sd-sharding-intro",
+      "chaos-engineering",
+      "route53-routing-policies",
+      "high-availability",
+      "k8s-deploy-pipeline-eks",
+      "load-testing-k6",
+      "sd-start-single-server",
+      "sd-mq-storage-partitions",
+      "transactional-outbox",
+      "scaling-horizontal-vertical",
+      "vpc-basics",
+      "dns",
+      "disaster-recovery",
+      "udp-and-quic"
+    ]
+  },
+  "rw-github-2018-network-partition": {
+    "links": [
+      "rw-reading-engineering-blogs",
+      "network-partitions",
+      "failover",
+      "service-discovery",
+      "cdn-edge-anycast",
+      "raft-consensus",
+      "db-consistency-cap",
+      "production-incidents",
+      "backup-strategy",
+      "sd-db-replication-intro",
+      "webhooks",
+      "chaos-engineering"
+    ],
+    "mentions": [
+      "frontend-hosting-platforms",
+      "leader-election",
+      "db-type-key-value",
+      "kafka-to-lake-pipeline",
+      "mysql-replication-online-ddl",
+      "db-replication-sharding",
+      "disaster-recovery",
+      "sql-query-rewrite",
+      "layer-link-ethernet-arp",
+      "dns"
+    ]
+  },
+  "rw-google-borg-kubernetes": {
+    "links": [
+      "k8s-pod-basics",
+      "k8s-controllers-reconcile",
+      "k8s-labels-selectors",
+      "virtualization-hypervisors",
+      "k8s-pod-resources",
+      "k8s-pod-probes",
+      "k8s-pod-multicontainer",
+      "k8s-cni-pod-network",
+      "k8s-statefulset",
+      "k8s-hpa",
+      "k8s-daemonset",
+      "k8s-api-objects",
+      "k8s-crd",
+      "helm-dependencies-oci-gitops",
+      "k8s-deployment"
+    ],
+    "mentions": [
+      "service-discovery",
+      "autoscaling",
+      "iac-basics",
+      "leader-election",
+      "osi-in-practice",
+      "sdn-vxlan-overlay",
+      "dns"
+    ]
+  },
+  "rw-google-sre-error-budget": {
+    "links": [
+      "sli-slo",
+      "error-budgets",
+      "canary-release",
+      "chaos-engineering",
+      "rw-netflix-chaos-engineering",
+      "postmortems"
+    ],
+    "mentions": [
+      "load-testing-k6",
+      "postgres-query-planner"
+    ]
+  },
+  "rw-meta-2021-bgp-outage": {
+    "links": [
+      "bgp-basics",
+      "dns",
+      "production-incidents",
+      "rw-aws-s3-2017-outage",
+      "cdn-edge-anycast",
+      "caching-strategies",
+      "chaos-engineering",
+      "k8s-pod-probes"
+    ],
+    "mentions": [
+      "owasp-top-10-map",
+      "service-discovery",
+      "k8s-coredns",
+      "layer-ip-routing-icmp",
+      "http-caching-cdn",
+      "osi-in-practice",
+      "on-call"
+    ]
+  },
   "rw-airbnb-skipper": {
     "links": [
       "rw-stripe-idempotency",
@@ -270,6 +411,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "sd-object-storage-architecture",
       "sd-file-sync-block-upload",
       "rw-pinterest-mysql-sharding",
+      "rw-aws-shuffle-sharding-cells",
       "distributed-lock",
       "rw-37signals-cloud-exit",
       "s3-storage-classes-lifecycle"
@@ -846,6 +988,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-stack-overflow-few-servers",
       "rw-shopify-modular-monolith",
       "rw-cloudflare-outage-regex",
+      "rw-github-2018-network-partition",
+      "rw-aws-s3-2017-outage",
+      "rw-meta-2021-bgp-outage",
       "rw-kakao-datacenter-fire",
       "microservices",
       "rw-instagram-sharding-ids",
@@ -859,6 +1004,9 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rw-netflix-cloud-microservices",
       "rw-uber-doma",
       "rw-airbnb-soa-migration",
+      "rw-aws-shuffle-sharding-cells",
+      "rw-google-sre-error-budget",
+      "rw-google-borg-kubernetes",
       "rw-stripe-idempotency",
       "rw-airbnb-skipper",
       "rw-uber-ringpop-cadence",
@@ -900,6 +1048,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "rate-limiting-in-practice"
     ],
     "mentions": [
+      "rw-github-2018-network-partition",
       "db-type-newsql",
       "rw-reading-engineering-blogs",
       "data-warehouse-architecture",
@@ -11886,6 +12035,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "zero-downtime-migrations"
     ],
     "mentions": [
+      "rw-github-2018-network-partition",
       "db-migration-tools",
       "sql-batch-timeout-pool",
       "cdc-change-data-capture",
@@ -17330,6 +17480,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "db-type-key-value",
       "sd-multi-datacenter",
       "db-replication-sharding",
+      "rw-aws-shuffle-sharding-cells",
       "distributed-tracing",
       "osi-in-practice",
       "redis-basics",
@@ -17490,6 +17641,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
       "postmortems"
     ],
     "mentions": [
+      "rw-google-sre-error-budget",
       "k8s-deploy-pipeline-eks",
       "zero-downtime-migrations"
     ]
@@ -18630,6 +18782,7 @@ export const POST_RELATIONS: Record<string, PostRelations> = {
     "mentions": [
       "sql-batch-timeout-pool",
       "elasticsearch-inverted-index",
+      "rw-github-2018-network-partition",
       "k8s-statefulset",
       "db-type-wide-column",
       "browser-fetch",

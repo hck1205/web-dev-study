@@ -1,3 +1,9 @@
+import { RW_META_2021_BGP_OUTAGE } from "./rw-meta-2021-bgp-outage";
+import { RW_GOOGLE_SRE_ERROR_BUDGET } from "./rw-google-sre-error-budget";
+import { RW_GOOGLE_BORG_KUBERNETES } from "./rw-google-borg-kubernetes";
+import { RW_GITHUB_2018_NETWORK_PARTITION } from "./rw-github-2018-network-partition";
+import { RW_AWS_SHUFFLE_SHARDING_CELLS } from "./rw-aws-shuffle-sharding-cells";
+import { RW_AWS_S3_2017_OUTAGE } from "./rw-aws-s3-2017-outage";
 import { RW_WHATSAPP_ERLANG } from "./rw-whatsapp-erlang";
 import { RW_UBER_RINGPOP_CADENCE } from "./rw-uber-ringpop-cadence";
 import { RW_SPOTIFY_EVENT_DELIVERY } from "./rw-spotify-event-delivery";
@@ -1176,6 +1182,12 @@ import { ZERO_TRUST_ARCHITECTURE } from "./zero-trust-architecture";
 
 /** 글 하나에 파일 하나. 새 글을 쓰면 여기에 한 줄 추가한다. */
 export const QUESTION_SETS = [
+  RW_META_2021_BGP_OUTAGE,
+  RW_GOOGLE_SRE_ERROR_BUDGET,
+  RW_GOOGLE_BORG_KUBERNETES,
+  RW_GITHUB_2018_NETWORK_PARTITION,
+  RW_AWS_SHUFFLE_SHARDING_CELLS,
+  RW_AWS_S3_2017_OUTAGE,
   RW_WHATSAPP_ERLANG,
   RW_UBER_RINGPOP_CADENCE,
   RW_SPOTIFY_EVENT_DELIVERY,
